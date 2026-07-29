@@ -43,6 +43,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -154,11 +155,22 @@ TEST(DepthTsdfSurfaceBuilderTest, UsesLargestComponentRelativeCleanupByDefault)
     EXPECT_FLOAT_EQ(options.maximumInvalidNearestPixelRecoveryInverseDepthSpread, 0.0f);
     EXPECT_FALSE(options.enableCrossViewConsensusDepth);
     EXPECT_FLOAT_EQ(options.maximumCrossViewConsensusInverseDepthSpread, 0.02f);
+    EXPECT_FALSE(options.enableCrossViewAnchoredSurfaceRecovery);
+    EXPECT_FLOAT_EQ(
+        options.crossViewAnchoredMinimumObservationWeight, 0.30f);
+    EXPECT_EQ(options.crossViewAnchoredMinimumSupportedCorners, 2);
+    EXPECT_EQ(options.crossViewAnchoredMinimumCellVotes, 1);
+    EXPECT_EQ(options.crossViewAnchoredGrowthPasses, 2);
     EXPECT_FALSE(options.enableGeometrySingleViewNeighborhoodGuard);
     EXPECT_EQ(options.minimumGeometrySingleViewNeighborCount, 2);
     EXPECT_EQ(options.geometrySingleViewGrowthPasses, 2);
     EXPECT_FLOAT_EQ(options.maximumGeometrySingleViewNeighborTsdfDelta, 0.35f);
     EXPECT_FLOAT_EQ(options.truncationVoxels, 7.5f);
+    EXPECT_FALSE(options.enableUncertaintyAdaptiveTruncation);
+    EXPECT_FLOAT_EQ(options.uncertaintyAdaptiveScale, 0.40f);
+    EXPECT_FLOAT_EQ(options.uncertaintyAdaptiveActivationRatio, 1.20f);
+    EXPECT_FLOAT_EQ(
+        options.uncertaintyAdaptiveMaximumTruncationVoxels, 12.0f);
     EXPECT_FALSE(options.enableSupportMaskFreeSpaceCarving);
     EXPECT_FALSE(options.fillSmallBoundaryHoles);
     EXPECT_EQ(options.boundarySmoothingIterations, 0);
@@ -260,6 +272,37 @@ TEST(DepthTsdfSurfaceBuilderTest, InvalidNearestPixelRecoveryCanBeDisabled)
 
     EXPECT_FALSE(sample.valid);
     EXPECT_TRUE(sample.rejectedInvalidNearestPixelRecovery);
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
+     SamplingPreservesCrossViewRepairedDepthProvenance)
+{
+    const cv::Mat depth(2, 2, CV_32FC1, cv::Scalar(2.0f));
+    auto frame = makeSamplingFrame(depth);
+    frame.crossViewRepairedMask =
+        cv::Mat(depth.size(), CV_8UC1, cv::Scalar(0));
+    frame.crossViewRepairedMask.at<std::uint8_t>(0, 1) = 255;
+
+    const auto native = xjw::mesh::DepthTsdfSurfaceBuilder::sampleObservation(
+        frame,
+        frame.depthValidMask,
+        cv::Point2d(0.0, 0.0),
+        0.25f,
+        false,
+        0.02f);
+    const auto repaired =
+        xjw::mesh::DepthTsdfSurfaceBuilder::sampleObservation(
+            frame,
+            frame.depthValidMask,
+            cv::Point2d(1.0, 0.0),
+            0.25f,
+            false,
+            0.02f);
+
+    ASSERT_TRUE(native.valid);
+    ASSERT_TRUE(repaired.valid);
+    EXPECT_FALSE(native.usedCrossViewRepairedDepth);
+    EXPECT_TRUE(repaired.usedCrossViewRepairedDepth);
 }
 
 TEST(DepthTsdfSurfaceBuilderTest, QualityTriangulationReducesInteriorAmbiguityCracks)
@@ -1631,6 +1674,44 @@ TEST(DepthTsdfSurfaceBuilderTest, RobustFrameWeightingSuppressesLowTailOutlier)
         1);
 }
 
+TEST(DepthTsdfSurfaceBuilderTest,
+     UncertaintyAdaptiveTruncationExpandsFusionBandFromDepthSpread)
+{
+    QVector<xjw::mesh::DepthTsdfFrame> frames =
+        makeSyntheticPlaneFrames(false);
+    for (xjw::mesh::DepthTsdfFrame &frame : frames)
+    {
+        frame.inverseDepthRelativeSpread = cv::Mat(
+            frame.depth.size(), CV_32FC1, cv::Scalar(0.20f));
+    }
+
+    xjw::mesh::DepthTsdfOptions options;
+    options.resolution = 32;
+    options.truncationVoxels = 2.0f;
+    options.surfaceSupportBandVoxels = 2.0f;
+    options.enableUncertaintyAdaptiveTruncation = true;
+    options.uncertaintyAdaptiveScale = 0.40f;
+    options.uncertaintyAdaptiveActivationRatio = 1.0f;
+    options.uncertaintyAdaptiveMaximumTruncationVoxels = 12.0f;
+    options.uncertaintyAdaptiveMinimumSampleCount = 64;
+    options.calculateVertexColors = false;
+    options.availableMemoryBytes = 256ull * 1024ull * 1024ull;
+
+    const auto result =
+        xjw::mesh::DepthTsdfSurfaceBuilder::build(frames, options);
+
+    ASSERT_TRUE(result.ok) << result.errorMessage.toStdString();
+    EXPECT_TRUE(
+        result.statistics.effectiveUncertaintyAdaptiveTruncation);
+    EXPECT_GE(result.statistics.uncertaintyAdaptiveSampleCount, 64u);
+    EXPECT_GT(result.statistics.uncertaintyAdaptiveP90Voxels, 0.0f);
+    EXPECT_GT(result.statistics.effectiveTruncationVoxels, 2.0f);
+    EXPECT_LE(result.statistics.effectiveTruncationVoxels, 12.0f);
+    EXPECT_FLOAT_EQ(
+        result.statistics.effectiveSurfaceSupportBandVoxels,
+        result.statistics.effectiveTruncationVoxels);
+}
+
 TEST(DepthFusionFramePolicyTest, RejectsRemovalThatCreatesOrbitalCoverageGap)
 {
     std::vector<xjw::mesh::DepthFusionView> views;
@@ -1650,6 +1731,15 @@ TEST(DepthFusionFramePolicyTest, RejectsRemovalThatCreatesOrbitalCoverageGap)
     ASSERT_TRUE(complete.valid);
     EXPECT_NEAR(complete.medianAngularSpacingDegrees, 45.0, 0.5);
     EXPECT_NEAR(complete.maximumAngularGapRatio, 1.0, 0.05);
+    EXPECT_FALSE(complete.significantGap);
+    EXPECT_TRUE(std::all_of(
+        complete.frameRoles.cbegin(),
+        complete.frameRoles.cend(),
+        [](const auto &assignment)
+        {
+            return assignment.role ==
+                xjw::mesh::OrbitalFrameRole::NormalSector;
+        }));
 
     weights[3] = 0.0f;
     EXPECT_TRUE(xjw::mesh::DepthFusionFramePolicy::canRejectWithoutCoverageGap(
@@ -1663,6 +1753,66 @@ TEST(DepthFusionFramePolicyTest, RejectsRemovalThatCreatesOrbitalCoverageGap)
     EXPECT_GT(adjacent_gap.maximumAngularGapRatio, 2.0);
     EXPECT_FALSE(xjw::mesh::DepthFusionFramePolicy::canRejectWithoutCoverageGap(
         views, weights, 4, 2.0, 5));
+}
+
+TEST(DepthFusionFramePolicyTest, IdentifiesGapBoundaryAndOppositeFrames)
+{
+    constexpr int kViewCount = 12;
+    constexpr double kOrdinarySpacingDegrees = 313.0 / 11.0;
+    std::vector<xjw::mesh::DepthFusionView> views;
+    std::vector<float> weights(kViewCount, 1.0f);
+    for (int index = 0; index < kViewCount; ++index)
+    {
+        const double angle_degrees =
+            kOrdinarySpacingDegrees * static_cast<double>(index);
+        const double angle =
+            angle_degrees * 3.14159265358979323846 / 180.0;
+        xjw::mesh::DepthFusionView view;
+        view.frameIndex = index;
+        view.refIndex = 100 + index;
+        view.cameraCenter = {std::cos(angle), std::sin(angle), 0.0};
+        views.push_back(view);
+    }
+
+    const auto coverage =
+        xjw::mesh::DepthFusionFramePolicy::evaluateOrbitalCoverage(
+            views, weights, 1.5);
+
+    ASSERT_TRUE(coverage.valid);
+    EXPECT_TRUE(coverage.significantGap);
+    EXPECT_NEAR(
+        coverage.medianAngularSpacingDegrees,
+        kOrdinarySpacingDegrees,
+        0.5);
+    EXPECT_NEAR(coverage.maximumAngularGapDegrees, 47.0, 0.5);
+    EXPECT_GT(coverage.maximumAngularGapRatio, 1.5);
+    const std::set<int> boundary_refs{
+        coverage.gapStartRefIndex,
+        coverage.gapEndRefIndex
+    };
+    EXPECT_EQ(boundary_refs, (std::set<int>{100, 111}));
+    EXPECT_GE(coverage.gapOppositeRefIndex, 104);
+    EXPECT_LE(coverage.gapOppositeRefIndex, 107);
+    EXPECT_EQ(
+        std::count_if(
+            coverage.frameRoles.cbegin(),
+            coverage.frameRoles.cend(),
+            [](const auto &assignment)
+            {
+                return assignment.role ==
+                    xjw::mesh::OrbitalFrameRole::GapBoundary;
+            }),
+        2);
+    EXPECT_EQ(
+        std::count_if(
+            coverage.frameRoles.cbegin(),
+            coverage.frameRoles.cend(),
+            [](const auto &assignment)
+            {
+                return assignment.role ==
+                    xjw::mesh::OrbitalFrameRole::GapOpposite;
+            }),
+        1);
 }
 
 TEST(DepthMeshCompletenessTest, RejectsAClosedLookingMeshThatExplainsOnlyHalfTheDepth)
@@ -2429,9 +2579,39 @@ TEST(DepthTsdfSurfaceBuilderTest, SeparatesSupportDepthValidAndConfidenceRejecti
     EXPECT_TRUE(statistics.contains(
         QStringLiteral("orbital_maximum_angular_gap_ratio")));
     EXPECT_TRUE(statistics.contains(
+        QStringLiteral("orbital_significant_angular_gap")));
+    EXPECT_TRUE(statistics.contains(
+        QStringLiteral("orbital_gap_start_ref_index")));
+    EXPECT_TRUE(statistics.contains(
+        QStringLiteral("orbital_gap_end_ref_index")));
+    EXPECT_TRUE(statistics.contains(
+        QStringLiteral("orbital_gap_opposite_ref_index")));
+    EXPECT_TRUE(statistics.contains(
+        QStringLiteral("orbital_frame_roles")));
+    EXPECT_TRUE(statistics.contains(
+        QStringLiteral("effective_orbital_gap_boundary_recovery")));
+    EXPECT_TRUE(statistics.contains(
+        QStringLiteral("orbital_gap_boundary_recovery_candidate_count")));
+    EXPECT_TRUE(statistics.contains(
+        QStringLiteral("orbital_gap_boundary_recovery_accepted_count")));
+    EXPECT_TRUE(statistics.contains(
         QStringLiteral("support_mask_free_space_surface_veto_count")));
     EXPECT_TRUE(statistics.contains(
+        QStringLiteral("effective_uncertainty_adaptive_truncation")));
+    EXPECT_TRUE(statistics.contains(
+        QStringLiteral("uncertainty_adaptive_p90_voxels")));
+    EXPECT_TRUE(statistics.contains(
+        QStringLiteral("uncertainty_adaptive_added_voxels")));
+    EXPECT_TRUE(statistics.contains(
         QStringLiteral("depth_completeness_median_frame_recall")));
+    EXPECT_TRUE(statistics.contains(
+        QStringLiteral("depth_completeness_gap_boundary_available")));
+    EXPECT_TRUE(statistics.contains(
+        QStringLiteral("depth_completeness_gap_boundary_gate_passed")));
+    EXPECT_TRUE(statistics.contains(
+        QStringLiteral("depth_completeness_gap_boundary_minimum_recall")));
+    EXPECT_TRUE(statistics.contains(
+        QStringLiteral("depth_completeness_gap_boundary_frames")));
     EXPECT_TRUE(statistics.contains(
         QStringLiteral("effective_visibility_constrained_final_hole_fill")));
     EXPECT_TRUE(statistics.contains(
@@ -3771,6 +3951,31 @@ TEST(MeshWorkflowSettingsTest, DepthTsdfSupportThresholdIsConfigurable)
     EXPECT_EQ(options.boundarySmoothingIterations, 1);
 }
 
+TEST(MeshWorkflowSettingsTest,
+     DepthTsdfUncertaintyAdaptiveTruncationIsConfigurable)
+{
+    const QJsonObject settings{
+        {QStringLiteral("tsdfUncertaintyAdaptiveTruncation"), true},
+        {QStringLiteral("tsdfUncertaintyAdaptiveScale"), 0.65},
+        {QStringLiteral("tsdfUncertaintyAdaptiveActivationRatio"), 1.35},
+        {QStringLiteral(
+             "tsdfUncertaintyAdaptiveMaximumTruncationVoxels"), 14.0},
+        {QStringLiteral(
+             "tsdfUncertaintyAdaptiveMaximumSamplesPerFrame"), 4096},
+        {QStringLiteral("tsdfUncertaintyAdaptiveMinimumSampleCount"), 256}};
+
+    const auto options =
+        xjw::mesh::workflow::depthTsdfOptionsFromSettings(settings, 384);
+
+    EXPECT_TRUE(options.enableUncertaintyAdaptiveTruncation);
+    EXPECT_FLOAT_EQ(options.uncertaintyAdaptiveScale, 0.65f);
+    EXPECT_FLOAT_EQ(options.uncertaintyAdaptiveActivationRatio, 1.35f);
+    EXPECT_FLOAT_EQ(
+        options.uncertaintyAdaptiveMaximumTruncationVoxels, 14.0f);
+    EXPECT_EQ(options.uncertaintyAdaptiveMaximumSamplesPerFrame, 4096);
+    EXPECT_EQ(options.uncertaintyAdaptiveMinimumSampleCount, 256);
+}
+
 TEST(MeshWorkflowSettingsTest, DepthTsdfObservationEdgeGatesAreConfigurable)
 {
     const QJsonObject settings{
@@ -3792,6 +3997,13 @@ TEST(MeshWorkflowSettingsTest, DepthTsdfObservationEdgeGatesAreConfigurable)
         {QStringLiteral("tsdfOpenMeshSmoothingFeatureAngleDegrees"), 110.0},
         {QStringLiteral("tsdfOpenMeshNotificationInterval"), 2048},
         {QStringLiteral("tsdfContourBandZeroCrossingSupport"), true},
+        {QStringLiteral("tsdfCrossViewAnchoredSurfaceRecovery"), true},
+        {QStringLiteral(
+             "tsdfCrossViewAnchoredMinimumObservationWeight"), 0.35},
+        {QStringLiteral(
+             "tsdfCrossViewAnchoredMinimumSupportedCorners"), 3},
+        {QStringLiteral("tsdfCrossViewAnchoredMinimumCellVotes"), 2},
+        {QStringLiteral("tsdfCrossViewAnchoredGrowthPasses"), 3},
         {QStringLiteral("tsdfGeometryZeroCrossingCellSheets"), true},
         {QStringLiteral("tsdfMinimumGeometryZeroCrossingSheetCells"), 7},
         {QStringLiteral("tsdfMinimumGeometryZeroCrossingSheetAnchorCells"), 4},
@@ -3835,6 +4047,12 @@ TEST(MeshWorkflowSettingsTest, DepthTsdfObservationEdgeGatesAreConfigurable)
     EXPECT_FLOAT_EQ(options.openMeshSmoothingFeatureAngleDegrees, 110.0f);
     EXPECT_EQ(options.openMeshNotificationInterval, 2048);
     EXPECT_TRUE(options.enableContourBandZeroCrossingSupport);
+    EXPECT_TRUE(options.enableCrossViewAnchoredSurfaceRecovery);
+    EXPECT_FLOAT_EQ(
+        options.crossViewAnchoredMinimumObservationWeight, 0.35f);
+    EXPECT_EQ(options.crossViewAnchoredMinimumSupportedCorners, 3);
+    EXPECT_EQ(options.crossViewAnchoredMinimumCellVotes, 2);
+    EXPECT_EQ(options.crossViewAnchoredGrowthPasses, 3);
     EXPECT_TRUE(options.enableGeometryZeroCrossingCellSheets);
     EXPECT_EQ(options.minimumGeometryZeroCrossingSheetCells, 7);
     EXPECT_EQ(options.minimumGeometryZeroCrossingSheetAnchorCells, 4);
@@ -4294,9 +4512,20 @@ TEST(MeshWorkflowSettingsTest,
     EXPECT_EQ(options.simplifyTargetFaces, 60000);
     EXPECT_FLOAT_EQ(options.truncationVoxels, 7.5f);
     EXPECT_FLOAT_EQ(options.surfaceSupportBandVoxels, 7.5f);
+    EXPECT_TRUE(options.enableUncertaintyAdaptiveTruncation);
+    EXPECT_FLOAT_EQ(options.uncertaintyAdaptiveScale, 0.40f);
+    EXPECT_FLOAT_EQ(options.uncertaintyAdaptiveActivationRatio, 1.20f);
+    EXPECT_FLOAT_EQ(
+        options.uncertaintyAdaptiveMaximumTruncationVoxels, 12.0f);
     EXPECT_FALSE(options.allowInvalidNearestPixelRecovery);
     EXPECT_FLOAT_EQ(options.maximumInvalidNearestPixelRecoveryInverseDepthSpread, 0.01f);
     EXPECT_FALSE(options.enableGeometryZeroCrossingRecovery);
+    EXPECT_FALSE(options.enableCrossViewAnchoredSurfaceRecovery);
+    EXPECT_FLOAT_EQ(
+        options.crossViewAnchoredMinimumObservationWeight, 0.25f);
+    EXPECT_EQ(options.crossViewAnchoredMinimumSupportedCorners, 2);
+    EXPECT_EQ(options.crossViewAnchoredMinimumCellVotes, 1);
+    EXPECT_EQ(options.crossViewAnchoredGrowthPasses, 2);
     EXPECT_FALSE(options.enableGeometryZeroCrossingCellSheets);
     EXPECT_FALSE(options.enableContourBandZeroCrossingSupport);
     EXPECT_TRUE(options.enableAdaptiveTgvRegularization);
@@ -4317,6 +4546,7 @@ TEST(MeshWorkflowSettingsTest,
     EXPECT_TRUE(options.enableRobustFrameQualityWeighting);
     EXPECT_FALSE(options.enableRobustFrameQualityRejection);
     EXPECT_TRUE(options.enableOrbitalFrameCoverageProtection);
+    EXPECT_TRUE(options.enableOrbitalGapBoundaryRecovery);
     EXPECT_TRUE(options.enableSurfaceEvidenceFreeSpaceVeto);
     EXPECT_TRUE(options.enableDepthCompletenessDiagnostics);
     EXPECT_TRUE(options.enforceDepthCompletenessGate);
@@ -4370,9 +4600,11 @@ TEST(MeshWorkflowSettingsTest, OrbitalHighDetailPolicyPreservesExplicitOverrides
         {QStringLiteral("simplifyTargetFaces"), 60000},
         {QStringLiteral("tsdfTruncationVoxels"), 8.0},
         {QStringLiteral("tsdfSurfaceSupportBandVoxels"), 6.0},
+        {QStringLiteral("tsdfUncertaintyAdaptiveTruncation"), false},
         {QStringLiteral("tsdfAllowInvalidNearestPixelRecovery"), false},
         {QStringLiteral("tsdfMaximumInvalidNearestPixelRecoveryInverseDepthSpread"), 0.02},
         {QStringLiteral("tsdfGeometryZeroCrossingRecovery"), false},
+        {QStringLiteral("tsdfCrossViewAnchoredSurfaceRecovery"), false},
         {QStringLiteral("tsdfGeometryZeroCrossingCellSheets"), false},
         {QStringLiteral("tsdfContourBandZeroCrossingSupport"), false},
         {QStringLiteral("tsdfAdaptiveTgvRegularization"), false},
@@ -4382,6 +4614,7 @@ TEST(MeshWorkflowSettingsTest, OrbitalHighDetailPolicyPreservesExplicitOverrides
         {QStringLiteral("tsdfRobustFrameQualityWeighting"), false},
         {QStringLiteral("tsdfRobustFrameQualityRejection"), false},
         {QStringLiteral("tsdfOrbitalFrameCoverageProtection"), false},
+        {QStringLiteral("tsdfOrbitalGapBoundaryRecovery"), false},
         {QStringLiteral("tsdfSurfaceEvidenceFreeSpaceVeto"), false},
         {QStringLiteral("tsdfDepthCompletenessDiagnostics"), false},
         {QStringLiteral("tsdfEnforceDepthCompletenessGate"), false}
@@ -4392,9 +4625,11 @@ TEST(MeshWorkflowSettingsTest, OrbitalHighDetailPolicyPreservesExplicitOverrides
 
     EXPECT_FLOAT_EQ(options.truncationVoxels, 8.0f);
     EXPECT_FLOAT_EQ(options.surfaceSupportBandVoxels, 6.0f);
+    EXPECT_FALSE(options.enableUncertaintyAdaptiveTruncation);
     EXPECT_FALSE(options.allowInvalidNearestPixelRecovery);
     EXPECT_FLOAT_EQ(options.maximumInvalidNearestPixelRecoveryInverseDepthSpread, 0.02f);
     EXPECT_FALSE(options.enableGeometryZeroCrossingRecovery);
+    EXPECT_FALSE(options.enableCrossViewAnchoredSurfaceRecovery);
     EXPECT_FALSE(options.enableGeometryZeroCrossingCellSheets);
     EXPECT_FALSE(options.enableContourBandZeroCrossingSupport);
     EXPECT_FALSE(options.enableAdaptiveTgvRegularization);
@@ -4404,6 +4639,7 @@ TEST(MeshWorkflowSettingsTest, OrbitalHighDetailPolicyPreservesExplicitOverrides
     EXPECT_FALSE(options.enableRobustFrameQualityWeighting);
     EXPECT_FALSE(options.enableRobustFrameQualityRejection);
     EXPECT_FALSE(options.enableOrbitalFrameCoverageProtection);
+    EXPECT_FALSE(options.enableOrbitalGapBoundaryRecovery);
     EXPECT_FALSE(options.enableSurfaceEvidenceFreeSpaceVeto);
     EXPECT_FALSE(options.enableDepthCompletenessDiagnostics);
     EXPECT_FALSE(options.enforceDepthCompletenessGate);

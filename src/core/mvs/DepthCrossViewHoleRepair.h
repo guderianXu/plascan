@@ -3,6 +3,8 @@
 #include "Camera.h"
 #include "DepthAnchoredHoleInterpolator.h"
 
+#include <QJsonObject>
+
 #include <opencv2/core.hpp>
 
 #include <cstdint>
@@ -66,5 +68,8 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
     cv::Mat *sourceInverseDepthSquaredSum = nullptr,
     const Camera *referenceCamera = nullptr,
     const cv::Mat *guideGray = nullptr);
+
+QJsonObject crossViewHoleRepairStatsToJson(
+    const CrossViewHoleRepairStats &stats);
 
 } // namespace xjw::mvs

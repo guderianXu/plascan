@@ -313,18 +313,35 @@ bool LayerRenderer::addStitchedImagePair(const QString &pathA,
                                          QGraphicsPixmapItem **outB,
                                          int gap)
 {
-    if (!_scene) return false;
+    const QImage imageA = loadImageForDisplay(pathA, _currentProjectPath);
+    const QImage imageB = loadImageForDisplay(pathB, _currentProjectPath);
+    return addStitchedImagePair(imageA, imageB, pathA, pathB, outA, outB, gap);
+}
 
-    LOG_DEBUG(QStringLiteral("addStitchedImagePair: %1 <-> %2").arg(pathA, pathB));
+bool LayerRenderer::addStitchedImagePair(const QImage &imageA,
+                                         const QImage &imageB,
+                                         const QString &sourcePathA,
+                                         const QString &sourcePathB,
+                                         QGraphicsPixmapItem **outA,
+                                         QGraphicsPixmapItem **outB,
+                                         int gap)
+{
+    if (!_scene || imageA.isNull() || imageB.isNull())
+    {
+        return false;
+    }
+
+    LOG_DEBUG(QStringLiteral("addStitchedImagePair: %1 <-> %2")
+                  .arg(sourcePathA, sourcePathB));
 
     // clear existing image layers (we expect caller to manage state)
     // We'll add both images using addImageLayer then reposition the second.
     const int before = _layers.size();
-    if (!addImageLayer(pathA, 0)) return false;
+    if (!addImageLayer(imageA, 0)) return false;
     QGraphicsPixmapItem *itemA = nullptr;
     if (!_layers.isEmpty()) itemA = _layers.last();
 
-    if (!addImageLayer(pathB, 0)) {
+    if (!addImageLayer(imageB, 0)) {
         // cleanup the first if second failed
         if (itemA) {
             _scene->removeItem(itemA);
@@ -352,7 +369,14 @@ bool LayerRenderer::addStitchedImagePair(const QString &pathA,
     if (outA) *outA = itemA;
     if (outB) *outB = itemB;
 
-    xjw::gui::views::recordStitchedImagePairDebug(_scene, _currentProjectPath, pathA, pathB, itemA, itemB, gap);
+    xjw::gui::views::recordStitchedImagePairDebug(
+        _scene,
+        _currentProjectPath,
+        sourcePathA,
+        sourcePathB,
+        itemA,
+        itemB,
+        gap);
     return true;
 }
 

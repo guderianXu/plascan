@@ -821,6 +821,120 @@ int bitCount(std::uint16_t value)
     return count;
 }
 
+struct DepthUncertaintyBandEstimate
+{
+    std::uint64_t sampleCount = 0;
+    float p90Voxels = 0.0f;
+};
+
+DepthUncertaintyBandEstimate estimateDepthUncertaintyBand(
+    const QVector<DepthTsdfFrame> &frames,
+    const DepthTsdfOptions &options,
+    float maximum_voxel_size)
+{
+    DepthUncertaintyBandEstimate estimate;
+    if (!options.enableUncertaintyAdaptiveTruncation ||
+        !std::isfinite(maximum_voxel_size) ||
+        maximum_voxel_size <= std::numeric_limits<float>::epsilon())
+    {
+        return estimate;
+    }
+
+    const int maximum_samples_per_frame =
+        std::max(256, options.uncertaintyAdaptiveMaximumSamplesPerFrame);
+    std::vector<float> uncertainty_voxels;
+    uncertainty_voxels.reserve(
+        static_cast<std::size_t>(frames.size()) *
+        static_cast<std::size_t>(maximum_samples_per_frame));
+    for (const DepthTsdfFrame &frame : frames)
+    {
+        if (frame.depth.type() != CV_32FC1 ||
+            frame.inverseDepthRelativeSpread.type() != CV_32FC1 ||
+            frame.depth.size() != frame.inverseDepthRelativeSpread.size())
+        {
+            continue;
+        }
+        const bool use_confidence =
+            frame.confidence.type() == CV_32FC1 &&
+            frame.confidence.size() == frame.depth.size();
+        const bool use_depth_valid =
+            frame.depthValidMask.type() == CV_8UC1 &&
+            frame.depthValidMask.size() == frame.depth.size();
+        const bool use_support =
+            frame.supportMask.type() == CV_8UC1 &&
+            frame.supportMask.size() == frame.depth.size();
+        const int pixel_count = frame.depth.rows * frame.depth.cols;
+        const int sampling_step = std::max(
+            1,
+            static_cast<int>(std::ceil(std::sqrt(
+                static_cast<double>(pixel_count) /
+                static_cast<double>(maximum_samples_per_frame)))));
+        const int sampling_offset = sampling_step / 2;
+        for (int row = sampling_offset; row < frame.depth.rows;
+             row += sampling_step)
+        {
+            const float *depth_row = frame.depth.ptr<float>(row);
+            const float *spread_row =
+                frame.inverseDepthRelativeSpread.ptr<float>(row);
+            const float *confidence_row =
+                use_confidence ? frame.confidence.ptr<float>(row) : nullptr;
+            const std::uint8_t *depth_valid_row =
+                use_depth_valid ? frame.depthValidMask.ptr<std::uint8_t>(row)
+                                : nullptr;
+            const std::uint8_t *support_row =
+                use_support ? frame.supportMask.ptr<std::uint8_t>(row)
+                            : nullptr;
+            for (int column = sampling_offset; column < frame.depth.cols;
+                 column += sampling_step)
+            {
+                if ((depth_valid_row && depth_valid_row[column] == 0) ||
+                    (support_row && support_row[column] == 0) ||
+                    (confidence_row &&
+                     confidence_row[column] < options.minimumConfidence))
+                {
+                    continue;
+                }
+                const float depth = depth_row[column];
+                const float relative_spread = spread_row[column];
+                if (!std::isfinite(depth) || depth <= 0.0f ||
+                    !std::isfinite(relative_spread) ||
+                    relative_spread <= 0.0f)
+                {
+                    continue;
+                }
+                if (options.maximumObservationInverseDepthSpread > 0.0f &&
+                    relative_spread >
+                        options.maximumObservationInverseDepthSpread)
+                {
+                    continue;
+                }
+                const float uncertainty =
+                    depth * relative_spread / maximum_voxel_size;
+                if (std::isfinite(uncertainty) && uncertainty > 0.0f)
+                {
+                    uncertainty_voxels.push_back(uncertainty);
+                }
+            }
+        }
+    }
+    estimate.sampleCount = uncertainty_voxels.size();
+    if (estimate.sampleCount <
+        static_cast<std::uint64_t>(
+            std::max(64, options.uncertaintyAdaptiveMinimumSampleCount)))
+    {
+        return estimate;
+    }
+    const std::size_t p90_index = static_cast<std::size_t>(
+        std::floor(0.90 * static_cast<double>(
+            uncertainty_voxels.size() - 1)));
+    std::nth_element(
+        uncertainty_voxels.begin(),
+        uncertainty_voxels.begin() + static_cast<std::ptrdiff_t>(p90_index),
+        uncertainty_voxels.end());
+    estimate.p90Voxels = uncertainty_voxels[p90_index];
+    return estimate;
+}
+
 std::uint16_t globalGeometrySourceMask(const DepthTsdfFrame &frame,
                                        std::uint16_t local_mask)
 {
@@ -1115,6 +1229,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::validateAllocation(
     }
     if (options.enableSurfacePatchSupport ||
         options.enableContourBandZeroCrossingSupport ||
+        options.enableCrossViewAnchoredSurfaceRecovery ||
         options.enableGlobalImplicitRegularization ||
         options.enableAdaptiveTgvRegularization)
     {
@@ -1123,7 +1238,10 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::validateAllocation(
             options.enableContourBandZeroCrossingSupport ? 4u : 3u;
         if (!checkedMultiply(result.layout.sampleCount,
                              sizeof(std::uint16_t) * 2u +
-                                 sizeof(float) * float_field_count,
+                                 sizeof(float) * float_field_count +
+                                 (options.enableCrossViewAnchoredSurfaceRecovery
+                                      ? sizeof(std::uint8_t)
+                                      : 0u),
                              &evidence_bytes) ||
             result.layout.requiredBytes >
                 std::numeric_limits<std::uint64_t>::max() - evidence_bytes)
@@ -1574,6 +1692,10 @@ DepthTsdfObservationSample DepthTsdfSurfaceBuilder::sampleObservation(
                                         sample->geometrySupportCount,
                                         sample->inverseDepthRelativeSpread,
                                         &sample->usedCrossViewConsensusDepth);
+        sample->usedCrossViewRepairedDepth =
+            frame.crossViewRepairedMask.type() == CV_8UC1 &&
+            frame.crossViewRepairedMask.size() == frame.depth.size() &&
+            frame.crossViewRepairedMask.at<std::uint8_t>(row, column) != 0;
         sample->confidence = confidence;
         sample->contributingPixelCount = 1;
         sample->failure = DepthTsdfObservationFailure::None;
@@ -1598,6 +1720,7 @@ DepthTsdfObservationSample DepthTsdfSurfaceBuilder::sampleObservation(
         float inverseDepthRelativeSpread = 0.0f;
         bool nearest = false;
         bool usedCrossViewConsensusDepth = false;
+        bool usedCrossViewRepairedDepth = false;
     };
     std::array<Candidate, 4> candidates{};
     int candidate_count = 0;
@@ -1678,6 +1801,10 @@ DepthTsdfObservationSample DepthTsdfSurfaceBuilder::sampleObservation(
                                               candidate.geometrySupportCount,
                                               candidate.inverseDepthRelativeSpread,
                                               &candidate.usedCrossViewConsensusDepth);
+            candidate.usedCrossViewRepairedDepth =
+                frame.crossViewRepairedMask.type() == CV_8UC1 &&
+                frame.crossViewRepairedMask.size() == frame.depth.size() &&
+                frame.crossViewRepairedMask.at<std::uint8_t>(row, column) != 0;
             candidate.nearest = row == nearest_row && column == nearest_column;
         }
     }
@@ -1761,6 +1888,8 @@ DepthTsdfObservationSample DepthTsdfSurfaceBuilder::sampleObservation(
         first_evidence = false;
         result.usedCrossViewConsensusDepth = result.usedCrossViewConsensusDepth ||
             candidate.usedCrossViewConsensusDepth;
+        result.usedCrossViewRepairedDepth = result.usedCrossViewRepairedDepth ||
+            candidate.usedCrossViewRepairedDepth;
         ++result.contributingPixelCount;
     }
     if (depth_weight_sum <= 0.0f || spatial_weight_sum <= 0.0f ||
@@ -2479,14 +2608,75 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             rejected_frame_ref_indices.push_back(frames[frame_index].refIndex);
         }
     }
-    const std::vector<float> final_frame_quality_weights(
+    std::vector<float> final_frame_quality_weights(
         effective_frame_quality_weights.cbegin(),
         effective_frame_quality_weights.cend());
-    const OrbitalCoverageStatistics orbital_coverage =
+    OrbitalCoverageStatistics orbital_coverage =
         options.enableOrbitalFrameCoverageProtection
         ? DepthFusionFramePolicy::evaluateOrbitalCoverage(
               fusion_views, final_frame_quality_weights)
         : OrbitalCoverageStatistics{};
+    QVector<int> gap_quality_floor_ref_indices;
+    if (options.enableOrbitalGapBoundaryRecovery &&
+        orbital_coverage.significantGap)
+    {
+        for (const OrbitalFrameRoleAssignment &assignment :
+             orbital_coverage.frameRoles)
+        {
+            if (assignment.frameIndex < 0 ||
+                assignment.frameIndex >= effective_frame_quality_weights.size() ||
+                effective_frame_quality_weights[assignment.frameIndex] <= 0.0f)
+            {
+                continue;
+            }
+            float minimum_multiplier = 0.0f;
+            if (assignment.role == OrbitalFrameRole::GapBoundary)
+            {
+                minimum_multiplier = std::clamp(
+                    options.orbitalGapBoundaryMinimumQualityMultiplier,
+                    0.05f,
+                    1.0f);
+            }
+            else if (assignment.role == OrbitalFrameRole::GapOpposite)
+            {
+                minimum_multiplier = std::clamp(
+                    options.orbitalGapOppositeMinimumQualityMultiplier,
+                    0.05f,
+                    1.0f);
+            }
+            if (minimum_multiplier <= 0.0f)
+            {
+                continue;
+            }
+            const float minimum_weight =
+                raw_frame_quality_weights[assignment.frameIndex] *
+                minimum_multiplier;
+            if (effective_frame_quality_weights[assignment.frameIndex] + 1.0e-6f <
+                minimum_weight)
+            {
+                effective_frame_quality_weights[assignment.frameIndex] =
+                    minimum_weight;
+                gap_quality_floor_ref_indices.push_back(assignment.refIndex);
+            }
+        }
+        final_frame_quality_weights.assign(
+            effective_frame_quality_weights.cbegin(),
+            effective_frame_quality_weights.cend());
+        orbital_coverage = DepthFusionFramePolicy::evaluateOrbitalCoverage(
+            fusion_views, final_frame_quality_weights);
+    }
+    QJsonArray orbital_frame_roles;
+    for (const OrbitalFrameRoleAssignment &assignment :
+         orbital_coverage.frameRoles)
+    {
+        orbital_frame_roles.append(QJsonObject{
+            {QStringLiteral("frame_index"), assignment.frameIndex},
+            {QStringLiteral("ref_index"), assignment.refIndex},
+            {QStringLiteral("azimuth_degrees"), assignment.azimuthDegrees},
+            {QStringLiteral("role"),
+             QString::fromLatin1(orbitalFrameRoleId(assignment.role))}
+        });
+    }
     result.statistics.effectiveRobustFrameQualityRejection =
         robust_frame_quality_rejection_enabled;
     result.statistics.robustFrameQualityRejectedFrameCount =
@@ -2514,6 +2704,24 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         orbital_coverage.maximumAngularGapDegrees;
     result.statistics.orbitalMaximumAngularGapRatio =
         orbital_coverage.maximumAngularGapRatio;
+    result.statistics.orbitalSignificantAngularGap =
+        orbital_coverage.significantGap;
+    result.statistics.orbitalGapStartRefIndex =
+        orbital_coverage.gapStartRefIndex;
+    result.statistics.orbitalGapEndRefIndex =
+        orbital_coverage.gapEndRefIndex;
+    result.statistics.orbitalGapOppositeRefIndex =
+        orbital_coverage.gapOppositeRefIndex;
+    result.statistics.orbitalFrameRoles = orbital_frame_roles;
+    result.statistics.effectiveOrbitalGapBoundaryRecovery =
+        options.enableOrbitalGapBoundaryRecovery &&
+        orbital_coverage.significantGap;
+    result.statistics.orbitalGapQualityFloorFrameCount =
+        gap_quality_floor_ref_indices.size();
+    result.statistics.orbitalGapQualityFloorRefIndices =
+        gap_quality_floor_ref_indices;
+    result.statistics.effectiveOrbitalGapBoundaryMinimumObservationWeight =
+        options.orbitalGapBoundaryMinimumObservationWeight;
     for (int frame_index = 0;
          frame_index < effective_frame_quality_weights.size();
          ++frame_index)
@@ -2701,11 +2909,45 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         orbital_coverage.maximumAngularGapDegrees;
     result.statistics.orbitalMaximumAngularGapRatio =
         orbital_coverage.maximumAngularGapRatio;
+    result.statistics.orbitalSignificantAngularGap =
+        orbital_coverage.significantGap;
+    result.statistics.orbitalGapStartRefIndex =
+        orbital_coverage.gapStartRefIndex;
+    result.statistics.orbitalGapEndRefIndex =
+        orbital_coverage.gapEndRefIndex;
+    result.statistics.orbitalGapOppositeRefIndex =
+        orbital_coverage.gapOppositeRefIndex;
+    result.statistics.orbitalFrameRoles = orbital_frame_roles;
+    result.statistics.effectiveOrbitalGapBoundaryRecovery =
+        options.enableOrbitalGapBoundaryRecovery &&
+        orbital_coverage.significantGap;
+    result.statistics.orbitalGapQualityFloorFrameCount =
+        gap_quality_floor_ref_indices.size();
+    result.statistics.orbitalGapQualityFloorRefIndices =
+        gap_quality_floor_ref_indices;
+    result.statistics.effectiveOrbitalGapBoundaryMinimumObservationWeight =
+        options.orbitalGapBoundaryMinimumObservationWeight;
     if (!result.ok)
     {
         return result;
     }
     result.ok = false;
+    std::vector<std::uint8_t> orbital_gap_boundary_frames(
+        static_cast<std::size_t>(frames.size()), 0);
+    if (result.statistics.effectiveOrbitalGapBoundaryRecovery)
+    {
+        for (const OrbitalFrameRoleAssignment &assignment :
+             orbital_coverage.frameRoles)
+        {
+            if (assignment.role == OrbitalFrameRole::GapBoundary &&
+                assignment.frameIndex >= 0 &&
+                assignment.frameIndex < frames.size())
+            {
+                orbital_gap_boundary_frames[static_cast<std::size_t>(
+                    assignment.frameIndex)] = 1;
+            }
+        }
+    }
     if (options.progress)
     {
         options.progress(QStringLiteral("正在融合置信度加权 TSDF..."), 5);
@@ -2720,6 +2962,8 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
     std::vector<std::uint16_t> minimumInverseDepthSpread;
     std::vector<float> surfaceTsdfWeightedSum;
     std::vector<float> surfaceObservationWeight;
+    std::vector<std::uint8_t> crossViewRepairedSurfaceWeight;
+    std::vector<float> orbitalGapBoundaryObservationWeight;
     std::vector<float> contourBandObservationWeight;
     std::vector<DepthVisibilityHistogram> visibilityHistograms;
     try
@@ -2733,8 +2977,10 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         support.assign(static_cast<std::size_t>(result.layout.sampleCount), 0);
         if (options.enableSurfacePatchSupport ||
             options.enableContourBandZeroCrossingSupport ||
+            options.enableCrossViewAnchoredSurfaceRecovery ||
             options.enableGlobalImplicitRegularization ||
-            options.enableAdaptiveTgvRegularization)
+            options.enableAdaptiveTgvRegularization ||
+            result.statistics.effectiveOrbitalGapBoundaryRecovery)
         {
             geometrySourceMask.assign(
                 static_cast<std::size_t>(result.layout.sampleCount), 0);
@@ -2745,6 +2991,16 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 static_cast<std::size_t>(result.layout.sampleCount), 0.0f);
             surfaceObservationWeight.assign(
                 static_cast<std::size_t>(result.layout.sampleCount), 0.0f);
+            if (options.enableCrossViewAnchoredSurfaceRecovery)
+            {
+                crossViewRepairedSurfaceWeight.assign(
+                    static_cast<std::size_t>(result.layout.sampleCount), 0);
+            }
+            if (result.statistics.effectiveOrbitalGapBoundaryRecovery)
+            {
+                orbitalGapBoundaryObservationWeight.assign(
+                    static_cast<std::size_t>(result.layout.sampleCount), 0.0f);
+            }
             if (options.enableContourBandZeroCrossingSupport)
             {
                 contourBandObservationWeight.assign(
@@ -2769,11 +3025,42 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
     const float maximum_voxel_size = std::max({result.layout.voxelSize[0],
                                                result.layout.voxelSize[1],
                                                result.layout.voxelSize[2]});
-    const float effective_truncation_voxels = std::max(1.0f, options.truncationVoxels);
-    const float effective_surface_support_band_voxels =
+    const float base_truncation_voxels =
+        std::max(1.0f, options.truncationVoxels);
+    const DepthUncertaintyBandEstimate uncertainty_band =
+        estimateDepthUncertaintyBand(
+            retained_frames, options, maximum_voxel_size);
+    const bool uncertainty_adaptation_available =
+        options.enableUncertaintyAdaptiveTruncation &&
+        uncertainty_band.p90Voxels >
+            base_truncation_voxels *
+                std::max(
+                    1.0f, options.uncertaintyAdaptiveActivationRatio);
+    const float adaptive_maximum_truncation_voxels = std::max(
+        base_truncation_voxels,
+        options.uncertaintyAdaptiveMaximumTruncationVoxels);
+    const float uncertainty_adaptive_added_voxels =
+        uncertainty_adaptation_available
+        ? std::max(0.0f, options.uncertaintyAdaptiveScale) *
+              uncertainty_band.p90Voxels
+        : 0.0f;
+    const float effective_truncation_voxels = std::clamp(
+        base_truncation_voxels + uncertainty_adaptive_added_voxels,
+        base_truncation_voxels,
+        adaptive_maximum_truncation_voxels);
+    const float base_surface_support_band_voxels =
         options.surfaceSupportBandVoxels > 0.0f
-        ? std::clamp(options.surfaceSupportBandVoxels, 0.5f, effective_truncation_voxels)
-        : effective_truncation_voxels;
+        ? std::clamp(
+              options.surfaceSupportBandVoxels,
+              0.5f,
+              base_truncation_voxels)
+        : base_truncation_voxels;
+    const float effective_surface_support_band_voxels =
+        std::clamp(
+            base_surface_support_band_voxels +
+                uncertainty_adaptive_added_voxels,
+            base_surface_support_band_voxels,
+            effective_truncation_voxels);
     const float truncation = maximum_voxel_size * effective_truncation_voxels;
     const float surface_support_distance =
         maximum_voxel_size * effective_surface_support_band_voxels;
@@ -2782,7 +3069,9 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         ? std::max({result.layout.voxelSize[0],
                     result.layout.voxelSize[1],
                     result.layout.voxelSize[2]}) *
-              std::max(options.truncationVoxels, options.maximumFreeSpaceVoxels)
+              std::max(
+                  effective_truncation_voxels,
+                  options.maximumFreeSpaceVoxels)
         : std::numeric_limits<float>::infinity();
     unsigned long long integratedVoxelUpdates = 0;
     unsigned long long rejectedProjectionCount = 0;
@@ -2971,8 +3260,10 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                             observation.geometrySupportCount);
                         if (options.enableSurfacePatchSupport ||
                             options.enableContourBandZeroCrossingSupport ||
+                            options.enableCrossViewAnchoredSurfaceRecovery ||
                             options.enableGlobalImplicitRegularization ||
-                            options.enableAdaptiveTgvRegularization)
+                            options.enableAdaptiveTgvRegularization ||
+                            result.statistics.effectiveOrbitalGapBoundaryRecovery)
                         {
                             geometrySourceMask[index] = static_cast<std::uint16_t>(
                                 geometrySourceMask[index] |
@@ -2998,6 +3289,29 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                                 surfaceTsdfWeightedSum[index] +=
                                     normalized * observationWeight;
                                 surfaceObservationWeight[index] += observationWeight;
+                            }
+                            if (!crossViewRepairedSurfaceWeight.empty() &&
+                                observation.usedCrossViewRepairedDepth)
+                            {
+                                const int quantized_weight =
+                                    static_cast<int>(std::lround(
+                                        std::clamp(
+                                            observationWeight, 0.0f, 1.0f) *
+                                        255.0f));
+                                crossViewRepairedSurfaceWeight[index] =
+                                    static_cast<std::uint8_t>(std::max(
+                                        static_cast<int>(
+                                            crossViewRepairedSurfaceWeight[index]),
+                                        quantized_weight));
+                            }
+                            if (!orbitalGapBoundaryObservationWeight.empty() &&
+                                orbital_gap_boundary_frames[
+                                    static_cast<std::size_t>(frame_index)] != 0)
+                            {
+                                orbitalGapBoundaryObservationWeight[index] =
+                                    std::max(
+                                        orbitalGapBoundaryObservationWeight[index],
+                                        observationWeight);
                             }
                             if (contour_band_evidence &&
                                 !contourBandObservationWeight.empty())
@@ -3127,6 +3441,16 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         options.enableContourBandZeroCrossingSupport;
     result.statistics.effectiveGeometryZeroCrossingRecovery =
         options.enableGeometryZeroCrossingRecovery;
+    result.statistics.effectiveCrossViewAnchoredSurfaceRecovery =
+        options.enableCrossViewAnchoredSurfaceRecovery;
+    result.statistics.effectiveCrossViewAnchoredMinimumObservationWeight =
+        options.crossViewAnchoredMinimumObservationWeight;
+    result.statistics.effectiveCrossViewAnchoredMinimumSupportedCorners =
+        options.crossViewAnchoredMinimumSupportedCorners;
+    result.statistics.effectiveCrossViewAnchoredMinimumCellVotes =
+        options.crossViewAnchoredMinimumCellVotes;
+    result.statistics.effectiveCrossViewAnchoredGrowthPasses =
+        options.crossViewAnchoredGrowthPasses;
     result.statistics.effectiveGeometryZeroCrossingCellSheets =
         options.enableGeometryZeroCrossingCellSheets;
     result.statistics
@@ -3176,13 +3500,28 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         options.minimumSurfacePatchWeightRatio;
     result.statistics.effectiveMinimumDistinctCameraSupport =
         options.minimumDistinctCameraSupport;
+    result.statistics.effectiveUncertaintyAdaptiveTruncation =
+        uncertainty_adaptation_available;
+    result.statistics.uncertaintyAdaptiveSampleCount =
+        uncertainty_band.sampleCount;
+    result.statistics.uncertaintyAdaptiveP90Voxels =
+        uncertainty_band.p90Voxels;
+    result.statistics.uncertaintyAdaptiveAddedVoxels =
+        effective_truncation_voxels - base_truncation_voxels;
+    result.statistics.effectiveUncertaintyAdaptiveScale =
+        options.uncertaintyAdaptiveScale;
+    result.statistics.effectiveUncertaintyAdaptiveActivationRatio =
+        options.uncertaintyAdaptiveActivationRatio;
+    result.statistics.effectiveUncertaintyAdaptiveMaximumTruncationVoxels =
+        options.uncertaintyAdaptiveMaximumTruncationVoxels;
     result.statistics.effectiveTruncationVoxels =
         effective_truncation_voxels;
     result.statistics.effectiveSurfaceSupportBandVoxels =
         effective_surface_support_band_voxels;
     result.statistics.effectiveMaximumFreeSpaceVoxels =
         options.maximumFreeSpaceVoxels > 0.0f
-        ? std::max(options.truncationVoxels, options.maximumFreeSpaceVoxels)
+        ? std::max(
+              effective_truncation_voxels, options.maximumFreeSpaceVoxels)
         : 0.0f;
     result.statistics.effectiveMinimumSupportMaskFreeSpaceViews = std::clamp(
         options.minimumSupportMaskFreeSpaceViews, 1, 16);
@@ -3201,10 +3540,16 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
     std::vector<std::uint8_t> supported(static_cast<std::size_t>(result.layout.sampleCount), 0);
     std::vector<std::uint8_t> adaptiveTgvExtractionSupport;
     std::vector<std::size_t> guarded_geometry_single_view_candidates;
+    std::vector<std::size_t> orbital_gap_boundary_recovery_candidates;
     if (options.enableGeometrySingleViewNeighborhoodGuard)
     {
         guarded_geometry_single_view_candidates.reserve(
             static_cast<std::size_t>(result.layout.sampleCount / 32));
+    }
+    if (result.statistics.effectiveOrbitalGapBoundaryRecovery)
+    {
+        orbital_gap_boundary_recovery_candidates.reserve(
+            static_cast<std::size_t>(result.layout.sampleCount / 64));
     }
     for (std::size_t index = 0; index < supported.size(); ++index)
     {
@@ -3250,7 +3595,79 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         {
             ++result.statistics.rejectedAccumulatedWeightCount;
         }
+        if (!sample_supported &&
+            result.statistics.effectiveOrbitalGapBoundaryRecovery &&
+            support[index] == 1 &&
+            !orbitalGapBoundaryObservationWeight.empty() &&
+            orbitalGapBoundaryObservationWeight[index] > 1.0e-6f)
+        {
+            ++result.statistics.orbitalGapBoundarySingleObservationCount;
+            const float maximum_spread = std::min(
+                options.maximumBoundaryRecoveryInverseDepthSpread,
+                options.maximumCrossViewConsensusInverseDepthSpread);
+            if (orbitalGapBoundaryObservationWeight[index] <
+                options.orbitalGapBoundaryMinimumObservationWeight)
+            {
+                ++result.statistics.orbitalGapBoundaryRejectedWeightCount;
+            }
+            else if (maximumGeometrySupportCount[index] <
+                     options.minimumBoundaryRecoveryGeometrySupport)
+            {
+                ++result.statistics
+                      .orbitalGapBoundaryRejectedGeometrySupportCount;
+            }
+            else if (bitCount(geometrySourceMask[index]) <
+                     std::max(2, options.minimumSurfacePatchSourceCount))
+            {
+                ++result.statistics.orbitalGapBoundaryRejectedSourceCount;
+            }
+            else if (minimumInverseDepthSpread[index] ==
+                         std::numeric_limits<std::uint16_t>::max() ||
+                     maximum_spread <= 0.0f ||
+                     static_cast<float>(minimumInverseDepthSpread[index]) /
+                             100000.0f >
+                         maximum_spread)
+            {
+                ++result.statistics.orbitalGapBoundaryRejectedSpreadCount;
+            }
+            else if (surfaceObservationWeight[index] <= 1.0e-6f ||
+                     weight[index] <= 1.0e-6f ||
+                     surfaceObservationWeight[index] / weight[index] <
+                         options.minimumSurfacePatchWeightRatio ||
+                     std::fabs(tsdf[index]) >
+                         options.maximumSurfacePatchAbsoluteTsdf)
+            {
+                ++result.statistics.orbitalGapBoundaryRejectedFieldCount;
+            }
+            else
+            {
+                orbital_gap_boundary_recovery_candidates.push_back(index);
+            }
+        }
         result.statistics.supportedSampleCount += supported[index] != 0;
+    }
+    if (result.statistics.effectiveOrbitalGapBoundaryRecovery &&
+        !orbital_gap_boundary_recovery_candidates.empty())
+    {
+        const int accepted_count = growGeometryVerifiedSingleViewSamples(
+            result.layout,
+            tsdf,
+            orbital_gap_boundary_recovery_candidates,
+            options.minimumGeometrySingleViewNeighborCount,
+            options.geometrySingleViewGrowthPasses,
+            options.maximumGeometrySingleViewNeighborTsdfDelta,
+            &supported);
+        result.statistics.orbitalGapBoundaryRecoveryCandidateCount =
+            orbital_gap_boundary_recovery_candidates.size();
+        result.statistics.orbitalGapBoundaryRecoveryAcceptedCount =
+            accepted_count;
+        result.statistics.orbitalGapBoundaryRecoveryRejectedCount =
+            orbital_gap_boundary_recovery_candidates.size() -
+            static_cast<std::size_t>(accepted_count);
+        result.statistics.singleViewSupportedSampleCount += accepted_count;
+        result.statistics.geometryVerifiedSingleViewSupportedSampleCount +=
+            accepted_count;
+        result.statistics.supportedSampleCount += accepted_count;
     }
     if (options.enableGeometrySingleViewNeighborhoodGuard &&
         !guarded_geometry_single_view_candidates.empty())
@@ -3276,6 +3693,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
     if ((options.enableSurfacePatchSupport ||
          options.enableContourBandZeroCrossingSupport ||
          options.enableGeometryZeroCrossingRecovery ||
+         options.enableCrossViewAnchoredSurfaceRecovery ||
          options.enableGlobalImplicitRegularization ||
          options.enableAdaptiveTgvRegularization) &&
         !geometrySourceMask.empty())
@@ -3557,6 +3975,94 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             if (recovered_this_pass == 0)
             {
                 break;
+            }
+        }
+        if (options.enableCrossViewAnchoredSurfaceRecovery &&
+            !crossViewRepairedSurfaceWeight.empty())
+        {
+            std::vector<std::uint8_t> repaired_eligible(supported.size(), 0);
+            const int minimum_repaired_weight = std::clamp(
+                static_cast<int>(std::ceil(
+                    std::clamp(
+                        options.crossViewAnchoredMinimumObservationWeight,
+                        0.0f,
+                        1.0f) *
+                    255.0f)),
+                1,
+                255);
+            const int minimum_geometry_support = std::max(
+                2, options.minimumBoundaryRecoveryGeometrySupport);
+            const float maximum_repaired_spread = std::min(
+                options.maximumBoundaryRecoveryInverseDepthSpread,
+                options.maximumSurfacePatchInverseDepthSpread);
+            for (std::size_t index = 0; index < supported.size(); ++index)
+            {
+                if (crossViewRepairedSurfaceWeight[index] == 0)
+                {
+                    continue;
+                }
+                ++result.statistics.crossViewAnchoredObservedSampleCount;
+                const std::uint16_t spread_value =
+                    minimumInverseDepthSpread[index];
+                const bool eligible =
+                    supported[index] == 0 &&
+                    support[index] > 0 &&
+                    crossViewRepairedSurfaceWeight[index] >=
+                        minimum_repaired_weight &&
+                    maximumGeometrySupportCount[index] >=
+                        minimum_geometry_support &&
+                    bitCount(geometrySourceMask[index]) >=
+                        minimum_source_count &&
+                    maximum_repaired_spread > 0.0f &&
+                    spread_value != std::numeric_limits<std::uint16_t>::max() &&
+                    static_cast<float>(spread_value) / 100000.0f <=
+                        maximum_repaired_spread &&
+                    surfaceObservationWeight[index] > 1.0e-6f &&
+                    weight[index] > 1.0e-6f &&
+                    surfaceObservationWeight[index] / weight[index] >=
+                        minimum_surface_weight_ratio &&
+                    std::fabs(surface_candidate_tsdf[index]) <=
+                        maximum_absolute_tsdf;
+                repaired_eligible[index] = eligible;
+                result.statistics.crossViewAnchoredEligibleSampleCount +=
+                    eligible;
+            }
+
+            const int growth_passes = std::clamp(
+                options.crossViewAnchoredGrowthPasses, 1, 4);
+            for (int pass = 0; pass < growth_passes; ++pass)
+            {
+                const std::vector<std::uint8_t> supported_before_recovery =
+                    supported;
+                const DepthTsdfZeroCrossingRecoveryStatistics recovery =
+                    recoverGeometryVerifiedZeroCrossingSamples(
+                        result.layout,
+                        surface_candidate_tsdf,
+                        weight,
+                        geometrySourceMask,
+                        repaired_eligible,
+                        options.crossViewAnchoredMinimumSupportedCorners,
+                        options.crossViewAnchoredMinimumCellVotes,
+                        &supported);
+                result.statistics.crossViewAnchoredCandidateSampleCount +=
+                    recovery.candidateSampleCount;
+                result.statistics.crossViewAnchoredRecoveredSampleCount +=
+                    recovery.recoveredSampleCount;
+                ++result.statistics.crossViewAnchoredExecutedGrowthPassCount;
+                if (recovery.recoveredSampleCount == 0)
+                {
+                    break;
+                }
+                result.statistics.supportedSampleCount +=
+                    recovery.recoveredSampleCount;
+                for (std::size_t index = 0; index < supported.size(); ++index)
+                {
+                    if (supported_before_recovery[index] == 0 &&
+                        supported[index] != 0)
+                    {
+                        tsdf[index] = surface_candidate_tsdf[index];
+                    }
+                }
             }
         }
         std::vector<std::uint8_t> eligible;
@@ -5779,7 +6285,6 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             DepthMeshCompleteness::evaluate(
                 result.mesh, frames, completeness_options);
         result.statistics.depthCompletenessAvailable = completeness.available;
-        result.statistics.depthCompletenessGatePassed = completeness.gatePassed;
         result.statistics.depthCompletenessTolerance = completeness.tolerance;
         result.statistics.depthCompletenessSampledPointCount =
             completeness.sampledDepthPointCount;
@@ -5800,15 +6305,90 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             result.statistics.depthCompletenessFrameRecalls.push_back(
                 frame.recall);
         }
-        if (options.enforceDepthCompletenessGate &&
-            (!completeness.available || !completeness.gatePassed))
+        std::unordered_map<int, QString> orbital_role_by_ref_index;
+        for (const QJsonValue &value : result.statistics.orbitalFrameRoles)
         {
+            const QJsonObject role_object = value.toObject();
+            orbital_role_by_ref_index.emplace(
+                role_object.value(QStringLiteral("ref_index")).toInt(-1),
+                role_object.value(QStringLiteral("role")).toString());
+        }
+        double gap_boundary_minimum_recall = 1.0;
+        for (const DepthMeshFrameCompleteness &frame : completeness.frames)
+        {
+            const auto role_it = orbital_role_by_ref_index.find(frame.refIndex);
+            if (role_it == orbital_role_by_ref_index.end() ||
+                role_it->second != QStringLiteral("gap_boundary"))
+            {
+                continue;
+            }
+            result.statistics.depthCompletenessGapBoundaryAvailable = true;
+            result.statistics.depthCompletenessGapBoundaryRefIndices.push_back(
+                frame.refIndex);
+            result.statistics.depthCompletenessGapBoundaryFrameRecalls.push_back(
+                frame.recall);
+            gap_boundary_minimum_recall = std::min(
+                gap_boundary_minimum_recall, frame.recall);
+        }
+        if (result.statistics.depthCompletenessGapBoundaryAvailable)
+        {
+            result.statistics.depthCompletenessGapBoundaryMinimumRecall =
+                gap_boundary_minimum_recall;
+            result.statistics.depthCompletenessGapBoundaryGatePassed =
+                gap_boundary_minimum_recall + 1.0e-9 >=
+                options.minimumDepthCompletenessP10Recall;
+        }
+        result.statistics.depthCompletenessGatePassed =
+            completeness.gatePassed &&
+            result.statistics.depthCompletenessGapBoundaryGatePassed;
+        if (options.enforceDepthCompletenessGate &&
+            (!completeness.available ||
+             !result.statistics.depthCompletenessGatePassed))
+        {
+            std::vector<DepthMeshFrameCompleteness> worst_frames(
+                completeness.frames.cbegin(),
+                completeness.frames.cend());
+            std::sort(
+                worst_frames.begin(),
+                worst_frames.end(),
+                [](const DepthMeshFrameCompleteness &lhs,
+                   const DepthMeshFrameCompleteness &rhs)
+                {
+                    return lhs.recall < rhs.recall;
+                });
+            QStringList worst_labels;
+            const int worst_count = std::min(
+                3, static_cast<int>(worst_frames.size()));
+            for (int index = 0; index < worst_count; ++index)
+            {
+                const DepthMeshFrameCompleteness &frame =
+                    worst_frames[static_cast<std::size_t>(index)];
+                QString role;
+                const auto role_it =
+                    orbital_role_by_ref_index.find(frame.refIndex);
+                if (role_it != orbital_role_by_ref_index.end())
+                {
+                    role = role_it->second;
+                }
+                worst_labels.push_back(
+                    role.isEmpty()
+                        ? QStringLiteral("%1=%2%")
+                              .arg(frame.refIndex)
+                              .arg(100.0 * frame.recall, 0, 'f', 1)
+                        : QStringLiteral("%1=%2%[%3]")
+                              .arg(frame.refIndex)
+                              .arg(100.0 * frame.recall, 0, 'f', 1)
+                              .arg(role));
+            }
             result.errorMessage = QStringLiteral(
                 "TSDF 深度观测完整性质量门未通过：中位召回率=%1，"
-                "P10 召回率=%2，最低召回率=%3。模型可能存在整侧缺失或大面积空洞。")
+                "P10 召回率=%2，最低召回率=%3；最差视角=%4。"
+                "模型可能存在整侧缺失或大面积空洞。")
                                       .arg(completeness.medianFrameRecall, 0, 'f', 4)
                                       .arg(completeness.p10FrameRecall, 0, 'f', 4)
-                                      .arg(completeness.minimumFrameRecall, 0, 'f', 4);
+                                      .arg(completeness.minimumFrameRecall, 0, 'f', 4)
+                                      .arg(worst_labels.join(
+                                          QStringLiteral(", ")));
             return result;
         }
     }
@@ -5843,17 +6423,50 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
     {
         orbital_coverage_protected_ref_indices.append(ref_index);
     }
+    QJsonArray orbital_gap_quality_floor_ref_indices;
+    for (const int ref_index : statistics.orbitalGapQualityFloorRefIndices)
+    {
+        orbital_gap_quality_floor_ref_indices.append(ref_index);
+    }
     QJsonArray depth_completeness_frames;
+    std::unordered_map<int, QString> orbital_role_by_ref_index;
+    for (const QJsonValue &value : statistics.orbitalFrameRoles)
+    {
+        const QJsonObject role_object = value.toObject();
+        orbital_role_by_ref_index.emplace(
+            role_object.value(QStringLiteral("ref_index")).toInt(-1),
+            role_object.value(QStringLiteral("role")).toString());
+    }
     const int completeness_frame_count = std::min(
         statistics.depthCompletenessRefIndices.size(),
         statistics.depthCompletenessFrameRecalls.size());
     for (int index = 0; index < completeness_frame_count; ++index)
     {
-        depth_completeness_frames.append(QJsonObject{
+        QJsonObject frame_object{
             {QStringLiteral("ref_index"),
              statistics.depthCompletenessRefIndices[index]},
             {QStringLiteral("recall"),
              statistics.depthCompletenessFrameRecalls[index]}
+        };
+        const auto role_it = orbital_role_by_ref_index.find(
+            statistics.depthCompletenessRefIndices[index]);
+        if (role_it != orbital_role_by_ref_index.end())
+        {
+            frame_object.insert(QStringLiteral("orbital_role"), role_it->second);
+        }
+        depth_completeness_frames.append(frame_object);
+    }
+    QJsonArray depth_completeness_gap_boundary_frames;
+    const int gap_boundary_frame_count = std::min(
+        statistics.depthCompletenessGapBoundaryRefIndices.size(),
+        statistics.depthCompletenessGapBoundaryFrameRecalls.size());
+    for (int index = 0; index < gap_boundary_frame_count; ++index)
+    {
+        depth_completeness_gap_boundary_frames.append(QJsonObject{
+            {QStringLiteral("ref_index"),
+             statistics.depthCompletenessGapBoundaryRefIndices[index]},
+            {QStringLiteral("recall"),
+             statistics.depthCompletenessGapBoundaryFrameRecalls[index]}
         });
     }
     QJsonArray component_face_counts;
@@ -6011,6 +6624,32 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
         {QStringLiteral("geometry_zero_crossing_recovered_sample_count"),
          static_cast<double>(
              statistics.geometryZeroCrossingRecoveredSampleCount)},
+        {QStringLiteral("effective_cross_view_anchored_surface_recovery"),
+         statistics.effectiveCrossViewAnchoredSurfaceRecovery},
+        {QStringLiteral("cross_view_anchored_observed_sample_count"),
+         static_cast<double>(
+             statistics.crossViewAnchoredObservedSampleCount)},
+        {QStringLiteral("cross_view_anchored_eligible_sample_count"),
+         static_cast<double>(
+             statistics.crossViewAnchoredEligibleSampleCount)},
+        {QStringLiteral("cross_view_anchored_candidate_sample_count"),
+         static_cast<double>(
+             statistics.crossViewAnchoredCandidateSampleCount)},
+        {QStringLiteral("cross_view_anchored_recovered_sample_count"),
+         static_cast<double>(
+             statistics.crossViewAnchoredRecoveredSampleCount)},
+        {QStringLiteral("cross_view_anchored_executed_growth_pass_count"),
+         statistics.crossViewAnchoredExecutedGrowthPassCount},
+        {QStringLiteral(
+             "effective_cross_view_anchored_minimum_observation_weight"),
+         statistics.effectiveCrossViewAnchoredMinimumObservationWeight},
+        {QStringLiteral(
+             "effective_cross_view_anchored_minimum_supported_corners"),
+         statistics.effectiveCrossViewAnchoredMinimumSupportedCorners},
+        {QStringLiteral("effective_cross_view_anchored_minimum_cell_votes"),
+         statistics.effectiveCrossViewAnchoredMinimumCellVotes},
+        {QStringLiteral("effective_cross_view_anchored_growth_passes"),
+         statistics.effectiveCrossViewAnchoredGrowthPasses},
         {QStringLiteral("effective_geometry_zero_crossing_cell_sheets"),
          statistics.effectiveGeometryZeroCrossingCellSheets},
         {QStringLiteral(
@@ -6197,6 +6836,53 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          statistics.orbitalMaximumAngularGapDegrees},
         {QStringLiteral("orbital_maximum_angular_gap_ratio"),
          statistics.orbitalMaximumAngularGapRatio},
+        {QStringLiteral("orbital_significant_angular_gap"),
+         statistics.orbitalSignificantAngularGap},
+        {QStringLiteral("orbital_gap_start_ref_index"),
+         statistics.orbitalGapStartRefIndex},
+        {QStringLiteral("orbital_gap_end_ref_index"),
+         statistics.orbitalGapEndRefIndex},
+        {QStringLiteral("orbital_gap_opposite_ref_index"),
+         statistics.orbitalGapOppositeRefIndex},
+        {QStringLiteral("orbital_frame_roles"),
+         statistics.orbitalFrameRoles},
+        {QStringLiteral("effective_orbital_gap_boundary_recovery"),
+         statistics.effectiveOrbitalGapBoundaryRecovery},
+        {QStringLiteral("orbital_gap_quality_floor_frame_count"),
+         statistics.orbitalGapQualityFloorFrameCount},
+        {QStringLiteral("orbital_gap_quality_floor_ref_indices"),
+         orbital_gap_quality_floor_ref_indices},
+        {QStringLiteral("orbital_gap_boundary_recovery_candidate_count"),
+         static_cast<double>(
+             statistics.orbitalGapBoundaryRecoveryCandidateCount)},
+        {QStringLiteral("orbital_gap_boundary_recovery_accepted_count"),
+         static_cast<double>(
+             statistics.orbitalGapBoundaryRecoveryAcceptedCount)},
+        {QStringLiteral("orbital_gap_boundary_recovery_rejected_count"),
+         static_cast<double>(
+             statistics.orbitalGapBoundaryRecoveryRejectedCount)},
+        {QStringLiteral("orbital_gap_boundary_single_observation_count"),
+         static_cast<double>(
+             statistics.orbitalGapBoundarySingleObservationCount)},
+        {QStringLiteral("orbital_gap_boundary_rejected_weight_count"),
+         static_cast<double>(
+             statistics.orbitalGapBoundaryRejectedWeightCount)},
+        {QStringLiteral(
+             "orbital_gap_boundary_rejected_geometry_support_count"),
+         static_cast<double>(
+             statistics.orbitalGapBoundaryRejectedGeometrySupportCount)},
+        {QStringLiteral("orbital_gap_boundary_rejected_source_count"),
+         static_cast<double>(
+             statistics.orbitalGapBoundaryRejectedSourceCount)},
+        {QStringLiteral("orbital_gap_boundary_rejected_spread_count"),
+         static_cast<double>(
+             statistics.orbitalGapBoundaryRejectedSpreadCount)},
+        {QStringLiteral("orbital_gap_boundary_rejected_field_count"),
+         static_cast<double>(
+             statistics.orbitalGapBoundaryRejectedFieldCount)},
+        {QStringLiteral(
+             "effective_orbital_gap_boundary_minimum_observation_weight"),
+         statistics.effectiveOrbitalGapBoundaryMinimumObservationWeight},
         {QStringLiteral("effective_surface_patch_support"),
          statistics.effectiveSurfacePatchSupport},
         {QStringLiteral("effective_minimum_surface_patch_observation_weight"),
@@ -6217,6 +6903,21 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          statistics.effectiveMinimumSurfacePatchWeightRatio},
         {QStringLiteral("effective_minimum_distinct_camera_support"),
          statistics.effectiveMinimumDistinctCameraSupport},
+        {QStringLiteral("effective_uncertainty_adaptive_truncation"),
+         statistics.effectiveUncertaintyAdaptiveTruncation},
+        {QStringLiteral("uncertainty_adaptive_sample_count"),
+         static_cast<double>(statistics.uncertaintyAdaptiveSampleCount)},
+        {QStringLiteral("uncertainty_adaptive_p90_voxels"),
+         statistics.uncertaintyAdaptiveP90Voxels},
+        {QStringLiteral("uncertainty_adaptive_added_voxels"),
+         statistics.uncertaintyAdaptiveAddedVoxels},
+        {QStringLiteral("effective_uncertainty_adaptive_scale"),
+         statistics.effectiveUncertaintyAdaptiveScale},
+        {QStringLiteral("effective_uncertainty_adaptive_activation_ratio"),
+         statistics.effectiveUncertaintyAdaptiveActivationRatio},
+        {QStringLiteral(
+             "effective_uncertainty_adaptive_maximum_truncation_voxels"),
+         statistics.effectiveUncertaintyAdaptiveMaximumTruncationVoxels},
         {QStringLiteral("effective_truncation_voxels"),
          statistics.effectiveTruncationVoxels},
         {QStringLiteral("effective_surface_support_band_voxels"),
@@ -6776,6 +7477,14 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          statistics.depthCompletenessMedianFrameRecall},
         {QStringLiteral("depth_completeness_frames"),
          depth_completeness_frames},
+        {QStringLiteral("depth_completeness_gap_boundary_available"),
+         statistics.depthCompletenessGapBoundaryAvailable},
+        {QStringLiteral("depth_completeness_gap_boundary_gate_passed"),
+         statistics.depthCompletenessGapBoundaryGatePassed},
+        {QStringLiteral("depth_completeness_gap_boundary_minimum_recall"),
+         statistics.depthCompletenessGapBoundaryMinimumRecall},
+        {QStringLiteral("depth_completeness_gap_boundary_frames"),
+         depth_completeness_gap_boundary_frames},
         {QStringLiteral("boundary_attribution_edge_count"),
          static_cast<double>(statistics.boundaryAttributionEdgeCount)},
         {QStringLiteral("boundary_attribution_no_observation_edge_count"),

@@ -308,8 +308,12 @@ TEST(MvsSceneClassifierTest, RecommendsSceneAwareSourceViewPool)
     EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::AerialTerrain, 2, 3, 9), 8);
     EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::AerialTerrain, 4, 3, 9), 6);
     EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::OrbitalObject, 2, 3, 16), 6);
+    EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::OrbitalObject, 2, 3, 12), 4);
+    EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::OrbitalObject, 2, 7, 12), 4);
+    EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::OrbitalObject, 1, 8, 12), 4);
     EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::OrbitalObject, 4, 3, 16), 4);
     EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::OrbitalObject, 2, 6, 16), 6);
+    EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::OrbitalObject, 2, 8, 16), 6);
     EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::AerialTerrain, 2, 3, 5), 4);
     EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::AerialTerrain, 2, 10, 16), 10);
 }
@@ -317,11 +321,31 @@ TEST(MvsSceneClassifierTest, RecommendsSceneAwareSourceViewPool)
 TEST(MvsSceneClassifierTest, AllowsWiderObjectRingBaselines)
 {
     using xjw::mvs::MvsSceneProfile;
+    using xjw::mvs::adaptiveMvsSourceMaximumAngleDeg;
     using xjw::mvs::recommendedMvsSourceMaximumAngleDeg;
 
     EXPECT_FLOAT_EQ(recommendedMvsSourceMaximumAngleDeg(MvsSceneProfile::OrbitalObject, 4), 47.0f);
     EXPECT_FLOAT_EQ(recommendedMvsSourceMaximumAngleDeg(MvsSceneProfile::OrbitalObject, 6), 70.0f);
     EXPECT_FLOAT_EQ(recommendedMvsSourceMaximumAngleDeg(MvsSceneProfile::AerialTerrain), 35.0f);
+    EXPECT_NEAR(
+        adaptiveMvsSourceMaximumAngleDeg(
+            MvsSceneProfile::OrbitalObject,
+            4,
+            {28.0f, 28.5f, 56.0f, 56.5f, 84.0f}),
+        59.325f,
+        1.0e-4f);
+    EXPECT_FLOAT_EQ(
+        adaptiveMvsSourceMaximumAngleDeg(
+            MvsSceneProfile::OrbitalObject,
+            4,
+            {28.0f, 47.0f, 57.0f, 75.0f}),
+        70.0f);
+    EXPECT_FLOAT_EQ(
+        adaptiveMvsSourceMaximumAngleDeg(
+            MvsSceneProfile::AerialTerrain,
+            4,
+            {12.0f, 24.0f, 40.0f, 55.0f}),
+        35.0f);
 }
 
 TEST(DepthPyramidPropagationTest, PreservesDepthStepAndExpandsLowConfidenceRadius)
@@ -1299,6 +1323,52 @@ TEST(DepthGeometryConsistencyTest, BuildsSourceAndInverseDepthEvidence)
     EXPECT_EQ(evidence.supportCount.at<std::uint16_t>(0, 2), 2);
 }
 
+TEST(DepthGeometryConsistencyTest, ReportsNativeRepairAndSupportBaseline)
+{
+    const cv::Mat depth =
+        (cv::Mat_<float>(2, 4) <<
+            2.0f, 2.0f, 2.0f, 0.0f,
+            3.0f, 3.0f, 3.0f, 3.0f);
+    const cv::Mat support =
+        (cv::Mat_<std::uint16_t>(2, 4) <<
+            1, 2, 3, 0,
+            4, 5, 6, 2);
+    const cv::Mat spread =
+        (cv::Mat_<float>(2, 4) <<
+            0.001f, 0.002f, 0.003f, 0.0f,
+            0.004f, 0.005f, 0.006f, 0.007f);
+    const cv::Mat repaired =
+        (cv::Mat_<std::uint8_t>(2, 4) <<
+            0, 255, 0, 0,
+            0, 255, 0, 0);
+    const cv::Mat region(2, 4, CV_8UC1, cv::Scalar(255));
+
+    const QJsonObject json =
+        xjw::mvs::geometryEvidenceDiagnosticsToJson(
+            depth, support, spread, repaired, region);
+
+    ASSERT_TRUE(json.value(QStringLiteral("valid_inputs")).toBool());
+    EXPECT_EQ(json.value(QStringLiteral("mask_pixel_count")).toInt(), 8);
+    EXPECT_EQ(json.value(QStringLiteral("valid_pixel_count")).toInt(), 7);
+    EXPECT_EQ(
+        json.value(QStringLiteral("native_valid_pixel_count")).toInt(), 5);
+    EXPECT_EQ(
+        json.value(QStringLiteral("repaired_valid_pixel_count")).toInt(), 2);
+    const QJsonObject histogram = json.value(
+        QStringLiteral("geometry_support_histogram")).toObject();
+    EXPECT_EQ(histogram.value(QStringLiteral("support_0")).toInt(), 1);
+    EXPECT_EQ(histogram.value(QStringLiteral("support_2")).toInt(), 2);
+    EXPECT_EQ(histogram.value(QStringLiteral("support_5_plus")).toInt(), 2);
+    EXPECT_NEAR(
+        json.value(QStringLiteral("inverse_depth_spread_p50")).toDouble(),
+        0.004,
+        1.0e-6);
+    EXPECT_NEAR(
+        json.value(QStringLiteral("inverse_depth_spread_p95")).toDouble(),
+        0.0067,
+        1.0e-6);
+}
+
 TEST(DepthFrameQualityGateTest, MakesOrbitalConsistencyLossAuxiliaryBeforeCollapse)
 {
     xjw::mvs::DepthFrameQualityInput input;
@@ -1747,6 +1817,33 @@ TEST(MvsPipelineTest, FusionDepthPostprocessReportsConfidenceAndLocalOutliers)
     EXPECT_FLOAT_EQ(depth.at<float>(0, 0), 0.0f);
     EXPECT_FLOAT_EQ(depth.at<float>(3, 3), 0.0f);
     EXPECT_FLOAT_EQ(confidence.at<float>(3, 3), 0.0f);
+}
+
+TEST(MvsPipelineTest, DepthFrameReleasePreservesSourceSelectionDiagnostics)
+{
+    xjw::mvs::DepthFrameResult result;
+    result.sourceViewIndices = {1, 3};
+    result.requestedSourceViewCount = 6;
+    result.sourceViewShortfall = 4;
+    result.sourceViewShortfallReason = "pair_geometry_verification_failed";
+    xjw::mvs::MvsSourcePlanEntry entry;
+    entry.viewIndex = 1;
+    entry.verifiedPairGeometry = true;
+    entry.verificationStatus =
+        xjw::mvs::MvsSourceVerificationStatus::Verified;
+    result.sourceViewPlan.push_back(entry);
+    result.depthMap = QSharedPointer<cv::Mat>::create(
+        cv::Mat(4, 4, CV_32F, cv::Scalar(1.0f)));
+
+    result.releasePixelStorage();
+
+    EXPECT_FALSE(result.depthMap);
+    EXPECT_EQ(result.requestedSourceViewCount, 6);
+    EXPECT_EQ(result.sourceViewShortfall, 4);
+    EXPECT_EQ(result.sourceViewShortfallReason,
+              "pair_geometry_verification_failed");
+    ASSERT_EQ(result.sourceViewPlan.size(), 1);
+    EXPECT_TRUE(result.sourceViewPlan.front().verifiedPairGeometry);
 }
 
 TEST(MvsPipelineTest, FusionDepthPostprocessRaisesThresholdForLowConfidenceFullCoverage)

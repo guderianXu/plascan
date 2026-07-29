@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <set>
@@ -64,6 +65,20 @@ MvsSourcePlanEntry makeEntry(const MvsSourceCandidate &candidate,
     entry.baselineScore = std::clamp(candidate.baselineScore, 0.0f, 1.0f);
     entry.knownOverlap = candidate.knownOverlap;
     entry.verifiedPairGeometry = candidate.verifiedPairGeometry;
+    entry.verificationStatus = candidate.verifiedPairGeometry
+        ? MvsSourceVerificationStatus::Verified
+        : candidate.verificationStatus;
+    entry.pairTotalMatches = std::max(0, candidate.pairTotalMatches);
+    entry.pairInlierRatio = entry.pairTotalMatches > 0
+        ? std::clamp(
+              static_cast<float>(entry.geometricInliers) /
+                  static_cast<float>(entry.pairTotalMatches),
+              0.0f,
+              1.0f)
+        : 0.0f;
+    entry.pairCoverageScore =
+        std::clamp(candidate.pairCoverageScore, 0.0f, 1.0f);
+    entry.verificationReason = candidate.verificationReason;
     entry.tier = candidate.verifiedPairGeometry
         ? MvsSourceTier::VerifiedPair
         : MvsSourceTier::TrackGeometryBackfill;
@@ -250,6 +265,9 @@ std::vector<MvsSourcePlanEntry> sequenceFallbackEntries(const MvsSourcePlannerOp
             entry.sequenceDistance = delta;
             entry.sequenceFallback = true;
             entry.tier = MvsSourceTier::SequenceFallback;
+            entry.verificationStatus =
+                MvsSourceVerificationStatus::SequenceFallback;
+            entry.verificationReason = "no_geometry_candidate";
             entry.score = -static_cast<float>(delta);
             entry.sourceQualityScore = std::clamp(0.10f / static_cast<float>(delta), 0.0f, 1.0f);
             entries.push_back(entry);
@@ -288,6 +306,11 @@ MvsSourcePlan planMvsSourceViews(const std::vector<MvsSourceCandidate> &candidat
         if (entry.viewIndex == options.refIndex)
         {
             plan.rejected.push_back({entry, MvsSourceRejectReason::Self});
+            continue;
+        }
+        if (entry.verificationStatus == MvsSourceVerificationStatus::Failed)
+        {
+            plan.rejected.push_back({entry, MvsSourceRejectReason::LowQuality});
             continue;
         }
         if (isAngleOutlier(entry, options))
@@ -382,7 +405,9 @@ MvsSourcePlan planMvsSourceViewsVerifiedFirst(
     remaining.reserve(candidates.size());
     for (const MvsSourceCandidate &candidate : candidates)
     {
-        if (selectedViews.find(candidate.viewIndex) == selectedViews.end())
+        if (selectedViews.find(candidate.viewIndex) == selectedViews.end()
+            && candidate.verificationStatus !=
+                MvsSourceVerificationStatus::Failed)
         {
             remaining.push_back(candidate);
         }
@@ -412,7 +437,10 @@ MvsSourcePlan planMvsSourceViewsVerifiedFirst(
         entry.tier = MvsSourceTier::TrackGeometryBackfill;
         result.selected.push_back(entry);
     }
-    result.rejected = std::move(backfill.rejected);
+    result.rejected.insert(
+        result.rejected.end(),
+        std::make_move_iterator(backfill.rejected.begin()),
+        std::make_move_iterator(backfill.rejected.end()));
     result.usedSequenceFallback = false;
     result.sourceViewShortfall = std::max(
         0,
@@ -453,7 +481,10 @@ std::vector<MvsSourcePairQuality> filterMvsSourcePairQualitiesForImages(
 
         auto it = bestByPair.find(key);
         if (it == bestByPair.end()
-            || quality.geometricInliers > it->second.geometricInliers)
+            || quality.geometricInliers > it->second.geometricInliers
+            || (quality.geometricInliers == it->second.geometricInliers
+                && quality.hasVerificationStatistics
+                && !it->second.hasVerificationStatistics))
         {
             bestByPair[key] = quality;
         }
@@ -480,6 +511,32 @@ QJsonObject mvsSourcePlanEntryToJson(const MvsSourcePlanEntry &entry)
     object.insert(QStringLiteral("sequence_distance"), entry.sequenceDistance);
     object.insert(QStringLiteral("known_overlap"), entry.knownOverlap);
     object.insert(QStringLiteral("verified_pair_geometry"), entry.verifiedPairGeometry);
+    QString verificationStatus = QStringLiteral("not_requested");
+    if (entry.verificationStatus == MvsSourceVerificationStatus::Verified)
+    {
+        verificationStatus = QStringLiteral("verified");
+    }
+    else if (entry.verificationStatus == MvsSourceVerificationStatus::Failed)
+    {
+        verificationStatus = QStringLiteral("failed");
+    }
+    else if (entry.verificationStatus ==
+             MvsSourceVerificationStatus::MissingStatistics)
+    {
+        verificationStatus = QStringLiteral("missing_statistics");
+    }
+    else if (entry.verificationStatus ==
+             MvsSourceVerificationStatus::SequenceFallback)
+    {
+        verificationStatus = QStringLiteral("sequence_fallback");
+    }
+    object.insert(QStringLiteral("verification_status"), verificationStatus);
+    object.insert(QStringLiteral("pair_total_matches"), entry.pairTotalMatches);
+    object.insert(QStringLiteral("pair_inlier_ratio"), entry.pairInlierRatio);
+    object.insert(QStringLiteral("pair_coverage_score"), entry.pairCoverageScore);
+    object.insert(
+        QStringLiteral("verification_reason"),
+        QString::fromStdString(entry.verificationReason));
     object.insert(QStringLiteral("sequence_fallback"), entry.sequenceFallback);
     QString sourceTier = QStringLiteral("verified_pair");
     if (entry.tier == MvsSourceTier::TrackGeometryBackfill)

@@ -50,6 +50,10 @@ struct DepthFrameResult
     bool depthFlippedZ = false;
     Camera cameraModel;  ///< 与输出深度栅格严格对应的正深度、零畸变工作相机
     std::vector<int> sourceViewIndices;  ///< PatchMatch 实际使用的源视图下标，用于限制一致性检查范围
+    std::vector<MvsSourcePlanEntry> sourceViewPlan; ///< 实际源视图的可审计几何选择依据
+    int requestedSourceViewCount = 0; ///< 选择阶段请求的源视图数，不随缓存释放丢失
+    int sourceViewShortfall = 0; ///< 请求数与实际可用源视图数之差
+    std::string sourceViewShortfallReason; ///< 源视图不足的主要原因
     QSharedPointer<cv::Mat> depthMap;    ///< 深度图 (CV_32F)
     QSharedPointer<cv::Mat> confidence;  ///< 置信图 (CV_32F)
     QSharedPointer<cv::Mat> normalMap;   ///< 最终层法线图 (CV_32FC3)，可为空
@@ -63,6 +67,7 @@ struct DepthFrameResult
     QSharedPointer<cv::Mat> supportRegionMask; ///< 项目/内容允许参与重建的区域，不含深度孔洞
     DepthPostProcessStats depthPostprocess; ///< 融合前深度图后处理统计
     DepthCompletenessDiagnostics depthCompleteness; ///< 蒙版内覆盖和逐阶段损失诊断
+    QJsonObject crossViewRepairDiagnostics; ///< 跨视补回和锚定插值的逐原因统计
     std::vector<DepthLevelSummary> pyramidLevels; ///< 三级深度估计逐层摘要
     std::vector<DepthLevelResult> intermediatePyramidLevels; ///< 可选的 L3/L2 调试结果
     DepthMapQualityMetrics qualityMetrics; ///< 帧级覆盖、连通性与搜索边界统计
@@ -275,6 +280,7 @@ private:
         std::vector<MvsSourcePlanEntry> sourceViewScores;
         int requestedSourceViewCount = 0;
         int sourceViewShortfall = 0;
+        std::string sourceViewShortfallReason;
     };
 
     /// 在 QtConcurrent 线程中运行的主函数

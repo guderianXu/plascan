@@ -1,4 +1,5 @@
 #include "MvsWorkspaceManifest.h"
+#include "MvsWorkspaceReplay.h"
 #include "DepthFrameUtils.h"
 #include "DepthMapGenerator.h"
 #include "MvsQualityReport.h"
@@ -9,7 +10,10 @@
 #include <QDir>
 #include <QFile>
 #include <QJsonObject>
+#include <QJsonDocument>
 #include <QTemporaryDir>
+
+#include <opencv2/imgcodecs.hpp>
 
 #include <chrono>
 
@@ -39,6 +43,22 @@ MvsDepthFrameRecord makeRecord(int index, const QString &name, const QString &st
     record.algorithmRevision = xjw::mvs::kMvsDepthAlgorithmRevision;
     record.sourceImages = {QStringLiteral("source_a.jpg"), QStringLiteral("source_b.jpg")};
     record.sourceIndices = {7, 9};
+    record.sourceViewCount = 2;
+    record.requestedSourceViewCount = 4;
+    record.sourceViewShortfall = 2;
+    record.sourceViewShortfallReason =
+        QStringLiteral("missing_pair_verification_statistics");
+    record.crossViewRepairDiagnostics = QJsonObject{
+        {QStringLiteral("considered_hole_pixel_count"), 20},
+        {QStringLiteral("repaired_pixel_count"), 12},
+        {QStringLiteral("anchored_interpolation"),
+         QJsonObject{{QStringLiteral("interpolated_pixel_count"), 8}}}
+    };
+    record.geometryEvidenceDiagnostics = QJsonObject{
+        {QStringLiteral("valid_inputs"), true},
+        {QStringLiteral("native_valid_ratio"), 0.75},
+        {QStringLiteral("repaired_valid_ratio"), 0.10}
+    };
     record.rawGeometrySourceMaskPath = QStringLiteral("geometry_source_mask_%1.bin")
                                            .arg(index, 3, 10, QLatin1Char('0'));
     record.rawInverseDepthMeanPath = QStringLiteral("inverse_depth_mean_%1.bin")
@@ -73,6 +93,13 @@ void touchFile(const QString &path)
     ASSERT_TRUE(file.open(QIODevice::WriteOnly));
     file.write("x");
 }
+
+void writeJson(const QString &path, const QJsonObject &object)
+{
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    ASSERT_GT(file.write(QJsonDocument(object).toJson()), 0);
+}
 }
 
 TEST(MvsWorkspaceManifest, SavesAndLoadsFrameRecordsAtomically)
@@ -97,6 +124,25 @@ TEST(MvsWorkspaceManifest, SavesAndLoadsFrameRecordsAtomically)
     EXPECT_EQ(loaded.frames().front().rawGeometrySupportPath,
               QStringLiteral("geometry_support_002.bin"));
     EXPECT_EQ(loaded.frames().front().sourceIndices, QVector<int>({7, 9}));
+    EXPECT_EQ(loaded.frames().front().requestedSourceViewCount, 4);
+    EXPECT_EQ(loaded.frames().front().sourceViewShortfall, 2);
+    EXPECT_EQ(
+        loaded.frames().front().sourceViewShortfallReason,
+        QStringLiteral("missing_pair_verification_statistics"));
+    EXPECT_EQ(
+        loaded.frames()
+            .front()
+            .crossViewRepairDiagnostics
+            .value(QStringLiteral("repaired_pixel_count"))
+            .toInt(),
+        12);
+    EXPECT_DOUBLE_EQ(
+        loaded.frames()
+            .front()
+            .geometryEvidenceDiagnostics
+            .value(QStringLiteral("native_valid_ratio"))
+            .toDouble(),
+        0.75);
     EXPECT_EQ(loaded.frames().front().rawGeometrySourceMaskPath,
               QStringLiteral("geometry_source_mask_002.bin"));
     EXPECT_EQ(loaded.frames().front().rawInverseDepthMeanPath,
@@ -170,10 +216,14 @@ TEST(MvsWorkspaceManifest, CompletedFrameUpdatePreservesExistingSourcePlan)
     MvsDepthFrameRecord filtered = initial;
     filtered.depthPng = QStringLiteral("filtered_depth_005.png");
     filtered.sourcePlan = QJsonArray();
+    filtered.algorithmRevision =
+        xjw::mvs::kMvsDepthAlgorithmRevision - 1;
     manifest.markCompleted(filtered);
 
     ASSERT_EQ(manifest.frames().size(), 1);
     EXPECT_EQ(manifest.frames().front().depthPng, QStringLiteral("filtered_depth_005.png"));
+    EXPECT_EQ(manifest.frames().front().algorithmRevision,
+              xjw::mvs::kMvsDepthAlgorithmRevision);
     ASSERT_EQ(manifest.frames().front().sourcePlan.size(), 1)
         << "Filtered depth artifact updates must not erase the source plan needed for reproducible MVS fusion";
     EXPECT_EQ(manifest.frames().front().sourcePlan.at(0).toObject().value(QStringLiteral("view_index")).toInt(), 7);
@@ -282,6 +332,93 @@ TEST(MvsWorkspaceManifest, PreservesDepthQualityDiagnostics)
                          .value(QStringLiteral("valid_coverage"))
                          .toDouble(),
                      1.0);
+}
+
+TEST(MvsWorkspaceReplay, RestoresOrderedViewsAndProjectMasks)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString maskDir = QDir(tempDir.path()).filePath(QStringLiteral("masks"));
+    ASSERT_TRUE(QDir().mkpath(maskDir));
+
+    MvsWorkspaceManifest manifest;
+    manifest.setConfigHash(QStringLiteral("legacy"));
+    for (int index = 0; index < 2; ++index)
+    {
+        const QString imagePath =
+            QDir(tempDir.path()).filePath(QStringLiteral("image_%1.png").arg(index));
+        ASSERT_TRUE(cv::imwrite(
+            imagePath.toStdString(),
+            cv::Mat(12, 18, CV_8U, cv::Scalar(80 + index))));
+        const QString maskPath =
+            QDir(maskDir).filePath(QStringLiteral("image_%1_mask.png").arg(index));
+        ASSERT_TRUE(cv::imwrite(
+            maskPath.toStdString(),
+            cv::Mat(12, 18, CV_8U, cv::Scalar(0))));
+
+        MvsDepthFrameRecord record =
+            makeRecord(index, imagePath, QStringLiteral("completed"));
+        manifest.markCompleted(record);
+    }
+
+    const QString manifestPath =
+        QDir(tempDir.path()).filePath(QStringLiteral("mvs_manifest.json"));
+    QString error;
+    ASSERT_TRUE(manifest.saveAtomic(manifestPath, &error)) << error.toStdString();
+
+    std::vector<xjw::mvs::CameraView> views;
+    ASSERT_TRUE(xjw::mvs::loadMvsReplayViews(
+        manifestPath, maskDir, &views, &error)) << error.toStdString();
+    ASSERT_EQ(views.size(), 2);
+    EXPECT_EQ(views[0].imageWidth, 18);
+    EXPECT_EQ(views[0].imageHeight, 12);
+    EXPECT_TRUE(views[0].camera.isValid());
+    EXPECT_FALSE(views[0].validRegionMaskPath.empty());
+}
+
+TEST(MvsWorkspaceReplay, LoadsVerifiedFailedAndMissingPairAuditStates)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString reportPath =
+        QDir(tempDir.path()).filePath(QStringLiteral("pair_audit.json"));
+    writeJson(
+        reportPath,
+        QJsonObject{
+            {QStringLiteral("pairs"),
+             QJsonArray{
+                 QJsonObject{
+                     {QStringLiteral("image_a"), QStringLiteral("a.png")},
+                     {QStringLiteral("image_b"), QStringLiteral("b.png")},
+                     {QStringLiteral("status"), QStringLiteral("verified")},
+                     {QStringLiteral("total_matches"), 100},
+                     {QStringLiteral("geometric_inliers"), 90},
+                     {QStringLiteral("coverage_score"), 0.5}},
+                 QJsonObject{
+                     {QStringLiteral("image_a"), QStringLiteral("b.png")},
+                     {QStringLiteral("image_b"), QStringLiteral("c.png")},
+                     {QStringLiteral("status"), QStringLiteral("failed")}},
+                 QJsonObject{
+                     {QStringLiteral("image_a"), QStringLiteral("c.png")},
+                     {QStringLiteral("image_b"), QStringLiteral("d.png")},
+                     {QStringLiteral("status"), QStringLiteral("missing_statistics")}}
+             }}
+        });
+
+    std::vector<xjw::mvs::MvsSourcePairQuality> qualities;
+    xjw::mvs::MvsPairAuditSummary summary;
+    QString error;
+    ASSERT_TRUE(xjw::mvs::loadMvsPairAuditReport(
+        reportPath, &qualities, &summary, &error)) << error.toStdString();
+    ASSERT_EQ(qualities.size(), 3);
+    EXPECT_EQ(summary.auditedPairCount, 3);
+    EXPECT_EQ(summary.verifiedPairCount, 1);
+    EXPECT_EQ(summary.failedPairCount, 1);
+    EXPECT_EQ(summary.missingStatisticsPairCount, 1);
+    EXPECT_TRUE(qualities[0].verified);
+    EXPECT_TRUE(qualities[1].hasVerificationStatistics);
+    EXPECT_FALSE(qualities[1].verified);
+    EXPECT_FALSE(qualities[2].hasVerificationStatistics);
 }
 
 TEST(MvsWorkspaceManifest, PreservesQualityGateAndPyramidDiagnostics)

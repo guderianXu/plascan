@@ -29,3 +29,10 @@ target_link_libraries(test_common_project_match_catalog PRIVATE
   GTest::gtest_main
 )
 gtest_discover_tests(test_common_project_match_catalog DISCOVERY_MODE PRE_TEST)
+
+add_executable(test_common_asp_match_point_reader test_asp_match_point_reader.cpp)
+target_link_libraries(test_common_asp_match_point_reader PRIVATE
+  plascan_common_project
+  GTest::gtest_main
+)
+gtest_discover_tests(test_common_asp_match_point_reader DISCOVERY_MODE PRE_TEST)

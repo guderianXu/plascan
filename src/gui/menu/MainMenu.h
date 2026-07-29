@@ -20,6 +20,7 @@
  */
 
 #include <QObject>
+#include <QList>
 
 class QMainWindow;
 class QAction;
@@ -67,6 +68,13 @@ public:
 
     /** @brief 返回主工具栏显示/隐藏切换动作。 */
     QAction *toggleMainToolbarAction() const;
+
+    /** @brief 返回“恢复默认窗口布局”动作。 */
+    QAction *restoreDefaultWindowLayoutAction() const;
+
+    /** @brief 使用面板注册表中的动作重建“视图 > 窗口”菜单。 */
+    void setManagedWindowActions(const QList<QAction *> &dockActions,
+                                 const QList<QAction *> &toolBarActions);
 
     // ==== 工具栏 ====
 
@@ -286,6 +294,9 @@ private:
     /** @brief "模型 / 显示/隐藏项目"子菜单。 */
     QMenu *_modelDisplayHideMenu{};
 
+    /** @brief "视图 / 窗口"子菜单。 */
+    QMenu *_windowMenu{};
+
     /** @brief "视图 / 影像显示"子菜单。 */
     QMenu *_imageDisplayMenu{};
 
@@ -344,6 +355,7 @@ private:
     QAction *_togglePhotosAct{}; ///< 照片面板显示/隐藏
     QAction *_toggleLogAct{}; ///< 日志面板显示/隐藏
     QAction *_toggleMainToolbarAct{}; ///< 主工具栏显示/隐藏
+    QAction *_restoreDefaultWindowLayoutAct{}; ///< 恢复默认 Dock 与工具栏布局
     QAction *_toggleFullScreenAct{}; ///< 全屏显示切换
     bool _imageToolsVisible{};
     bool _imageDisplayReady{};

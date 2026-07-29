@@ -9,7 +9,7 @@
 //   UI层(ProjectManager) --> 数据层(ProjectData) --> 存储层(PlascanArchive)
 //
 // 设计原则:
-//   - ProjectData 不持有 QWidget，不弹对话框，不执行后台任务
+//   - ProjectData 不持有 QWidget、不弹对话框；持久化快照在专用串行线程执行
 //   - 项目元数据写操作触发 metadataChanged / dirtyStateChanged 信号
 //   - 临时保存（saveTemporaryMetadata）用于崩溃恢复
 // =============================================================================
@@ -22,8 +22,12 @@
 #include <QStringList>
 #include <QTimer>
 
+#include <memory>
+
 #include "ProjectFilesManager.h"
 #include "ProjectConfigManager.h"
+
+class QThreadPool;
 
 struct ProjectOpenSnapshot
 {
@@ -57,7 +61,7 @@ class ProjectData : public QObject
 
 public:
     explicit ProjectData(QObject *parent = nullptr);
-    ~ProjectData() override = default;
+    ~ProjectData() override;
 
     // === 项目基本信息 ===
     QString currentProjectPath() const { return _projectPath; }
@@ -75,12 +79,14 @@ public:
     bool applyResultsSnapshot(const ProjectResultsSnapshot &snapshot, QString *errorMsg = nullptr);
     // 保存项目(将运行时元数据写回.plascan归档)
     bool saveProject(QString *errorMsg = nullptr);
+    // GUI 使用的异步保存入口；完成后发出 projectSaveCompleted。
+    void saveProjectAsync();
     // 关闭当前项目
     void closeProject();
 
     // === 元数据访问 ===
-    // 获取当前运行时元数据(project_files.json + project_results.json 合并)
-    QJsonObject metadata() const { ensureResultsLoaded(); return _filesManager.data(); }
+    // 获取当前已加载的运行时元数据；getter 不执行文件 IO。
+    QJsonObject metadata() const { return _filesManager.data(); }
     // 获取核心数据（仅 project_files.json，不触发惰性加载，快速）
     QJsonObject coreFilesMeta() const { return _filesManager.coreData(); }
     // 更新运行时元数据
@@ -91,6 +97,8 @@ public:
     bool loadTemporaryMetadata();
     // 保存运行时元数据到临时目录
     bool saveTemporaryMetadata();
+    // 合并并异步写入临时恢复数据。
+    void scheduleTemporaryMetadataSave();
     // 删除临时元数据
     void clearTemporaryMetadata();
     // 检查是否存在临时元数据
@@ -175,6 +183,7 @@ signals:
     // 项目状态变化
     void projectOpened(const QString &plascanPath);
     void projectSaved(const QString &plascanPath);
+    void projectSaveCompleted(bool success, const QString &errorMessage);
     void projectClosed();
     
     // 元数据变化
@@ -186,6 +195,15 @@ private Q_SLOTS:
     void syncToArchive();
 
 private:
+    enum class PersistenceMode
+    {
+        FullSave,
+        ArchiveSync,
+        TemporaryOnly
+    };
+    struct PersistenceSnapshot;
+    struct PersistenceResult;
+
     QString _projectPath;                          // 当前.plascan路径
     mutable ProjectFilesManager _filesManager;     // project_files.json / project_results.json 管理（mutable 用于惰性加载）
     ProjectConfigManager _configManager;           // project_config.json 管理
@@ -197,12 +215,27 @@ private:
     QTimer *_archiveSyncTimer{};                   // 单射，2s防抖
     bool _resultsDirtyForArchive{false};           // project_results.json 需同步到归档
     bool _coreFileDirtyForArchive{false};          // project_files.json 需同步到归档
+    bool _configDirtyForArchive{false};             // project_config.json 需同步到归档
+    QThreadPool *_persistencePool{};
+    bool _persistenceRunning{false};
+    bool _fullSavePending{false};
+    bool _archiveSyncPending{false};
+    bool _temporarySavePending{false};
+    bool _shuttingDown{false};
+    std::unique_ptr<PersistenceSnapshot> _detachedPersistenceSnapshot;
 
     // 惰性加载 results：仅在首次访问时读取 project_results.json
     void ensureResultsLoaded() const;
     void markDirtyIfRequested(bool markDirty);
     void emitCurrentMetadataChanged();
-    void scheduleArchiveSync(bool coreDirty, bool resultsDirty, bool writeTemporary);
+    void scheduleArchiveSync(bool coreDirty,
+                             bool resultsDirty,
+                             bool writeTemporary,
+                             bool configDirty = false);
+    PersistenceSnapshot createPersistenceSnapshot(PersistenceMode mode) const;
+    static PersistenceResult persistSnapshot(PersistenceSnapshot snapshot);
+    void startNextPersistence();
+    void handlePersistenceFinished(PersistenceResult result);
 
     // 辅助方法
     QString projectDir() const;        // 返回项目目录(.plascan文件所在目录)

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QJsonObject>
+
 #include <opencv2/core.hpp>
 
 #include <cstdint>
@@ -20,6 +22,8 @@ struct DepthAnchoredHoleInterpolationOptions
     int maximumIterations = 160;
     float convergenceTolerance = 1.0e-5f;
     float interpolatedConfidence = 0.45f;
+    bool allowSilhouetteConnectedInterior = false;
+    int silhouetteProtectionRadiusPixels = 4;
 };
 
 struct DepthAnchoredHoleInterpolationStats
@@ -31,6 +35,8 @@ struct DepthAnchoredHoleInterpolationStats
     std::uint64_t rejectedAreaComponentCount = 0;
     std::uint64_t rejectedAnchorComponentCount = 0;
     std::uint64_t rejectedBoundarySpreadComponentCount = 0;
+    std::uint64_t protectedSilhouetteComponentCount = 0;
+    std::uint64_t protectedSilhouettePixelCount = 0;
 };
 
 DepthAnchoredHoleInterpolationStats interpolateAnchoredInternalDepthHoles(
@@ -41,5 +47,8 @@ DepthAnchoredHoleInterpolationStats interpolateAnchoredInternalDepthHoles(
     const DepthAnchoredHoleInterpolationOptions &options,
     cv::Mat *confidence = nullptr,
     cv::Mat *repairedMask = nullptr);
+
+QJsonObject depthAnchoredHoleInterpolationStatsToJson(
+    const DepthAnchoredHoleInterpolationStats &stats);
 
 } // namespace xjw::mvs

@@ -30,6 +30,15 @@ enum class MvsSourceTier
     SequenceFallback
 };
 
+enum class MvsSourceVerificationStatus
+{
+    Verified,
+    Failed,
+    MissingStatistics,
+    NotRequested,
+    SequenceFallback
+};
+
 struct MvsSourceCandidate
 {
     int viewIndex = -1;
@@ -41,6 +50,11 @@ struct MvsSourceCandidate
     int sequenceDistance = 0;
     bool knownOverlap = false;
     bool verifiedPairGeometry = false;
+    MvsSourceVerificationStatus verificationStatus =
+        MvsSourceVerificationStatus::NotRequested;
+    int pairTotalMatches = 0;
+    float pairCoverageScore = 0.0f;
+    std::string verificationReason;
 };
 
 struct MvsSourcePlanEntry
@@ -56,6 +70,12 @@ struct MvsSourcePlanEntry
     bool verifiedPairGeometry = false;
     bool sequenceFallback = false;
     MvsSourceTier tier = MvsSourceTier::VerifiedPair;
+    MvsSourceVerificationStatus verificationStatus =
+        MvsSourceVerificationStatus::NotRequested;
+    int pairTotalMatches = 0;
+    float pairInlierRatio = 0.0f;
+    float pairCoverageScore = 0.0f;
+    std::string verificationReason;
     float score = 0.0f;
     float sourceQualityScore = 0.0f;
 };

@@ -96,7 +96,7 @@ private:
     QJsonObject currentProjectMeta() const;
     QJsonObject currentUiSettingsSnapshot() const;
     void restoreDefaultProjectDockLayout();
-    void restoreProjectDockState(const QJsonObject &settings);
+    bool restoreProjectDockState(const QJsonObject &settings);
     void persistCurrentUiSettings();
     void scheduleProjectMetadataRefresh(const QJsonObject &meta);
     // saveUiSetting: 将 partial JSON 片段合并写入项目 UI 持久化设置（通过 DialogSettingStore）
@@ -104,10 +104,6 @@ private:
     void saveUiSetting(const QJsonObject &partial);
     // currentBottomPanelKey: 返回旧版 UI 设置使用的底部面板键名，dock 化后仅用于兼容保存。
     QString currentBottomPanelKey() const;
-
-    // ---- 日志面板切换 ----
-    // switchToLogPanel: 显示日志 Dock，并从磁盘加载历史日志
-    void switchToLogPanel();
 
     // ---- 导出辅助 ----
     // exportMatchedPairsToLis: 将项目中已存在的匹配影像对导出到 export/matched_pairs.lis
@@ -121,7 +117,6 @@ private:
     QDockWidget *_propertiesDock{};
     QDockWidget *_photosDock{};
     SelectionPropertiesWidget *_selectionProperties{};
-    QWidget *_photosPanel{};
     PhotoStripWidget *_photoStrip{};
     ProjectDashboardWidget* _dashboard{};              // 项目概览与工作流状态（只读）
     DataTreeWidget*   _dataTree{};                     // 工作区资源树（照片/匹配/点云/DEM 等分组）
@@ -180,9 +175,6 @@ private slots:
     void applyUiSettings(const QJsonObject &ui);
 
     // ---- 日志面板 ----
-    // onToggleLogAction: 响应菜单「视图→日志」CheckAction 的勾选状态变化
-    // 参数: on - true 表示勾选（显示日志）
-    void onToggleLogAction(bool on);
     // onLogDisplayLevelChanged: 日志级别变化时将新级别写入项目 UI 设置
     // 参数: lvl - Logger::Level 枚举的整数值
     void onLogDisplayLevelChanged(int lvl);

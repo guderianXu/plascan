@@ -6,6 +6,10 @@
 > 主要数据集：Dino、Temple
 > 主构建目录：`E:\code\plascan\build\windows-vcpkg-cuda-release`
 
+> **2026-07-28 Hyb2 环拍缺口专项：** 后续匹配对审计、角度缺口感知、
+> 受约束单视图恢复和分扇区质量门见
+> `2026-07-28-orbital-gap-aware-depth-fusion.md`。
+
 ## 1. 目标
 
 在不引入“先生成密集点云”作为强制中间步骤的前提下，提高 PlaScan

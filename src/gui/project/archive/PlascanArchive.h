@@ -22,6 +22,7 @@
 #pragma once
 
 #include <QString>
+#include <QPair>
 #include <QVector>
 
 // PlascanArchive: 轻量封装 .plascan（ZIP）容器的常用操作
@@ -66,6 +67,8 @@ public:
     bool writeEntry(const QString &entryPath,
                     const QByteArray &data,
                     QString *err = nullptr);
+    bool writeEntries(const QVector<QPair<QString, QByteArray>> &entries,
+                      QString *err = nullptr);
 
 private:
     QString _path;       // .plascan 文件的磁盘路径

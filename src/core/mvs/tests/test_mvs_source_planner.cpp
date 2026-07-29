@@ -8,6 +8,7 @@ using xjw::mvs::MvsSourcePairQuality;
 using xjw::mvs::MvsSourcePlannerOptions;
 using xjw::mvs::MvsSourceRejectReason;
 using xjw::mvs::MvsSourceTier;
+using xjw::mvs::MvsSourceVerificationStatus;
 using xjw::mvs::planMvsSourceViews;
 using xjw::mvs::planMvsSourceViewsVerifiedFirst;
 using xjw::mvs::filterMvsSourcePairQualitiesForImages;
@@ -70,6 +71,31 @@ TEST(MvsSourcePlanner, EntirelyStalePairCatalogProducesNoActiveQuality)
     };
 
     EXPECT_TRUE(filterMvsSourcePairQualitiesForImages(staleQualities, currentImages).empty());
+}
+
+TEST(MvsSourcePlanner, AuditedFailureReplacesDuplicateWithMissingStatistics)
+{
+    const std::vector<std::string> currentImages = {
+        "E:/data/current/image_01.tif",
+        "E:/data/current/image_02.tif",
+    };
+    MvsSourcePairQuality missing;
+    missing.imageA = currentImages[0];
+    missing.imageB = currentImages[1];
+    missing.totalMatches = 120;
+    missing.verificationReason = "missing_geometric_inlier_statistics";
+
+    MvsSourcePairQuality failed = missing;
+    failed.hasVerificationStatistics = true;
+    failed.verificationReason = "stored_match_geometry_gate_failed";
+
+    const auto filtered = filterMvsSourcePairQualitiesForImages(
+        {missing, failed}, currentImages);
+
+    ASSERT_EQ(filtered.size(), 1u);
+    EXPECT_TRUE(filtered.front().hasVerificationStatistics);
+    EXPECT_EQ(filtered.front().verificationReason,
+              "stored_match_geometry_gate_failed");
 }
 
 TEST(MvsSourcePlanner, VerifiedPairsStayFirstAndQualifiedGeometryBackfillsShortfall)
@@ -176,6 +202,71 @@ TEST(MvsSourcePlanner, VerifiedFirstNeverBackfillsZeroInlierViews)
     {
         return entry.geometricInliers <= 0;
     }));
+}
+
+TEST(MvsSourcePlanner, MissingVerificationStatisticsCanBackfillButFailedPairCannot)
+{
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 9;
+    options.maxSources = 3;
+    options.rejectAngleOutliers = true;
+    options.maxTriangulationAngleDeg = 50.0f;
+    options.allowSequenceFallback = false;
+
+    MvsSourceCandidate verified =
+        candidate(3, 120, 95, 12.0f, 0.8f, 0.5f, true);
+    verified.verifiedPairGeometry = true;
+    verified.verificationStatus = MvsSourceVerificationStatus::Verified;
+    verified.pairTotalMatches = 130;
+
+    MvsSourceCandidate missing =
+        candidate(5, 100, 100, 14.0f, 0.7f, 0.5f, true);
+    missing.verificationStatus =
+        MvsSourceVerificationStatus::MissingStatistics;
+    missing.pairTotalMatches = 140;
+    missing.verificationReason = "missing_geometric_inlier_statistics";
+
+    MvsSourceCandidate failed =
+        candidate(6, 300, 0, 10.0f, 0.9f, 0.5f, true);
+    failed.verificationStatus = MvsSourceVerificationStatus::Failed;
+    failed.pairTotalMatches = 320;
+    failed.verificationReason = "zero_geometric_inliers";
+
+    const auto plan =
+        planMvsSourceViewsVerifiedFirst({verified, missing, failed}, options);
+
+    ASSERT_EQ(plan.selected.size(), 2u);
+    EXPECT_EQ(plan.selected[0].tier, MvsSourceTier::VerifiedPair);
+    EXPECT_EQ(plan.selected[1].tier, MvsSourceTier::TrackGeometryBackfill);
+    EXPECT_EQ(
+        plan.selected[1].verificationStatus,
+        MvsSourceVerificationStatus::MissingStatistics);
+    EXPECT_TRUE(std::none_of(
+        plan.selected.cbegin(),
+        plan.selected.cend(),
+        [](const auto &entry)
+        {
+            return entry.viewIndex == 6;
+        }));
+    EXPECT_TRUE(std::any_of(
+        plan.rejected.cbegin(),
+        plan.rejected.cend(),
+        [](const auto &entry)
+        {
+            return entry.candidate.viewIndex == 6
+                && entry.candidate.verificationStatus ==
+                    MvsSourceVerificationStatus::Failed;
+        }));
+
+    const QJsonObject json = mvsSourcePlanEntryToJson(plan.selected[1]);
+    EXPECT_EQ(
+        json.value(QStringLiteral("verification_status")).toString(),
+        QStringLiteral("missing_statistics"));
+    EXPECT_EQ(json.value(QStringLiteral("pair_total_matches")).toInt(), 140);
+    EXPECT_EQ(
+        json.value(QStringLiteral("verification_reason")).toString(),
+        QStringLiteral("missing_geometric_inlier_statistics"));
 }
 
 TEST(MvsSourcePlanner, VerifiedFirstBackfillRespectsSceneSpecificMaximumAngle)

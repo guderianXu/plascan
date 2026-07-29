@@ -68,6 +68,12 @@ QJsonObject MvsDepthFrameRecord::toJson() const
     object.insert(QStringLiteral("source_indices"), source_indices);
     object.insert(QStringLiteral("source_plan"), sourcePlan);
     object.insert(QStringLiteral("source_view_count"), sourceViewCount);
+    object.insert(
+        QStringLiteral("requested_source_view_count"), requestedSourceViewCount);
+    object.insert(QStringLiteral("source_view_shortfall"), sourceViewShortfall);
+    object.insert(
+        QStringLiteral("source_view_shortfall_reason"),
+        sourceViewShortfallReason);
     object.insert(QStringLiteral("source_quality_mean"), meanSourceQualityScore);
     object.insert(QStringLiteral("source_quality_min"), minSourceQualityScore);
     object.insert(QStringLiteral("depth_confidence_mean"), meanDepthConfidence);
@@ -78,6 +84,12 @@ QJsonObject MvsDepthFrameRecord::toJson() const
     }
     object.insert(QStringLiteral("depth_quality"), depthQuality);
     object.insert(QStringLiteral("depth_completeness"), depthCompleteness);
+    object.insert(
+        QStringLiteral("cross_view_repair_diagnostics"),
+        crossViewRepairDiagnostics);
+    object.insert(
+        QStringLiteral("geometry_evidence_diagnostics"),
+        geometryEvidenceDiagnostics);
     object.insert(QStringLiteral("quality_decision"), qualityDecision);
     object.insert(QStringLiteral("pyramid_levels"), pyramidLevels);
     object.insert(QStringLiteral("mask_source"), maskSource);
@@ -130,6 +142,13 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
     }
     record.sourcePlan = object.value(QStringLiteral("source_plan")).toArray();
     record.sourceViewCount = object.value(QStringLiteral("source_view_count")).toInt(0);
+    record.requestedSourceViewCount = object.value(
+        QStringLiteral("requested_source_view_count")).toInt(record.sourceViewCount);
+    record.sourceViewShortfall = object.value(
+        QStringLiteral("source_view_shortfall")).toInt(
+            std::max(0, record.requestedSourceViewCount - record.sourceViewCount));
+    record.sourceViewShortfallReason = object.value(
+        QStringLiteral("source_view_shortfall_reason")).toString();
     record.meanSourceQualityScore = object.value(QStringLiteral("source_quality_mean")).toDouble(0.0);
     record.minSourceQualityScore = object.value(QStringLiteral("source_quality_min")).toDouble(0.0);
     record.meanDepthConfidence = object.value(QStringLiteral("depth_confidence_mean")).toDouble(0.0);
@@ -138,6 +157,10 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
     record.depthQuality = object.value(QStringLiteral("depth_quality")).toObject();
     record.depthCompleteness = object.value(
         QStringLiteral("depth_completeness")).toObject();
+    record.crossViewRepairDiagnostics = object.value(
+        QStringLiteral("cross_view_repair_diagnostics")).toObject();
+    record.geometryEvidenceDiagnostics = object.value(
+        QStringLiteral("geometry_evidence_diagnostics")).toObject();
     record.qualityDecision = object.value(QStringLiteral("quality_decision")).toObject();
     record.pyramidLevels = object.value(QStringLiteral("pyramid_levels")).toArray();
     record.maskSource = object.value(QStringLiteral("mask_source")).toString();
@@ -347,6 +370,10 @@ void MvsWorkspaceManifest::markRunning(int refIndex, const QString &refImage, co
 void MvsWorkspaceManifest::markCompleted(const MvsDepthFrameRecord &record)
 {
     MvsDepthFrameRecord completed = record;
+    // A completed artifact belongs to the running implementation even when a
+    // replay caller seeded the record from an older manifest. Keeping the
+    // caller's stale value makes the root and per-frame revisions disagree.
+    completed.algorithmRevision = kMvsDepthAlgorithmRevision;
     const int index = findFrameIndex(completed.refIndex);
     if (completed.sourcePlan.isEmpty() && index >= 0)
     {
@@ -355,6 +382,11 @@ void MvsWorkspaceManifest::markCompleted(const MvsDepthFrameRecord &record)
     if (completed.sourceViewCount <= 0 && index >= 0)
     {
         completed.sourceViewCount = _frames[index].sourceViewCount;
+        completed.requestedSourceViewCount =
+            _frames[index].requestedSourceViewCount;
+        completed.sourceViewShortfall = _frames[index].sourceViewShortfall;
+        completed.sourceViewShortfallReason =
+            _frames[index].sourceViewShortfallReason;
         completed.meanSourceQualityScore = _frames[index].meanSourceQualityScore;
         completed.minSourceQualityScore = _frames[index].minSourceQualityScore;
     }
@@ -366,6 +398,16 @@ void MvsWorkspaceManifest::markCompleted(const MvsDepthFrameRecord &record)
     if (completed.depthQuality.isEmpty() && index >= 0)
     {
         completed.depthQuality = _frames[index].depthQuality;
+    }
+    if (completed.geometryEvidenceDiagnostics.isEmpty() && index >= 0)
+    {
+        completed.geometryEvidenceDiagnostics =
+            _frames[index].geometryEvidenceDiagnostics;
+    }
+    if (completed.crossViewRepairDiagnostics.isEmpty() && index >= 0)
+    {
+        completed.crossViewRepairDiagnostics =
+            _frames[index].crossViewRepairDiagnostics;
     }
     if (completed.qualityDecision.isEmpty() && index >= 0)
     {

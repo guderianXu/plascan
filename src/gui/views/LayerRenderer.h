@@ -99,6 +99,13 @@ public:
                               QGraphicsPixmapItem **outA = nullptr,
                               QGraphicsPixmapItem **outB = nullptr,
                               int gap = 20);
+    bool addStitchedImagePair(const QImage &imageA,
+                              const QImage &imageB,
+                              const QString &sourcePathA,
+                              const QString &sourcePathB,
+                              QGraphicsPixmapItem **outA = nullptr,
+                              QGraphicsPixmapItem **outB = nullptr,
+                              int gap = 20);
 
     // 根据两组点绘制匹配连线，ptsA/ptsB 应按同一索引对应；bOffsetX 为第二幅图在 scene 中的 X 偏移量。
     void addMatchLines(const QVector<QPointF> &ptsA, const QVector<QPointF> &ptsB, qreal bOffsetX = 0.0);

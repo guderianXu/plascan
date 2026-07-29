@@ -247,7 +247,17 @@ bool PlascanArchive::writeEntry(const QString &entryPath,
                                 const QByteArray &data,
                                 QString *err)
 {
+    return writeEntries({qMakePair(entryPath, data)}, err);
+}
+
+bool PlascanArchive::writeEntries(const QVector<QPair<QString, QByteArray>> &entries,
+                                  QString *err)
+{
 #if defined(HAVE_LIBZIP)
+    if (entries.isEmpty())
+    {
+        return true;
+    }
     if (_path.isEmpty())
     {
         if (err)
@@ -274,38 +284,46 @@ bool PlascanArchive::writeEntry(const QString &entryPath,
             *err = QStringLiteral("无法打开归档以写入: %1").arg(openError);
         return false;
     }
-
-    // 如果条目已经存在，则先移除（确保替换效果）
-    const QByteArray entryName = zipEntryName(entryPath);
-    const zip_int64_t idx = zip_name_locate(za, entryName.constData(), ZIP_FL_ENC_UTF_8);
-    if (idx >= 0)
+    for (const auto &entry : entries)
     {
-        if (zip_delete(za, static_cast<zip_uint64_t>(idx)) < 0)
+        const QByteArray entryName = zipEntryName(entry.first);
+        const zip_int64_t idx =
+            zip_name_locate(za, entryName.constData(), ZIP_FL_ENC_UTF_8);
+        if (idx >= 0 && zip_delete(za, static_cast<zip_uint64_t>(idx)) < 0)
         {
             if (err)
+            {
                 *err = QString::fromUtf8(zip_strerror(za));
-            zip_close(za);
+            }
+            zip_discard(za);
             return false;
         }
-    }
 
-    // 创建源并添加
-    zip_source_t *src = zip_source_buffer(za, data.constData(), (zip_uint64_t)data.size(), 0);
-    if (!src)
-    {
-        if (err)
-            *err = QString::fromUtf8(zip_strerror(za));
-        zip_close(za);
-        return false;
-    }
+        zip_source_t *src = zip_source_buffer(
+            za,
+            entry.second.constData(),
+            static_cast<zip_uint64_t>(entry.second.size()),
+            0);
+        if (!src)
+        {
+            if (err)
+            {
+                *err = QString::fromUtf8(zip_strerror(za));
+            }
+            zip_discard(za);
+            return false;
+        }
 
-    if (zip_file_add(za, entryName.constData(), src, ZIP_FL_ENC_UTF_8) < 0)
-    {
-        if (err)
-            *err = QString::fromUtf8(zip_strerror(za));
-        zip_source_free(src);
-        zip_close(za);
-        return false;
+        if (zip_file_add(za, entryName.constData(), src, ZIP_FL_ENC_UTF_8) < 0)
+        {
+            if (err)
+            {
+                *err = QString::fromUtf8(zip_strerror(za));
+            }
+            zip_source_free(src);
+            zip_discard(za);
+            return false;
+        }
     }
 
     if (zip_close(za) < 0)
@@ -325,8 +343,7 @@ bool PlascanArchive::writeEntry(const QString &entryPath,
 
     return true;
 #else
-    Q_UNUSED(entryPath);
-    Q_UNUSED(data);
+    Q_UNUSED(entries);
     if (err)
         *err = QStringLiteral("libzip 未启用，无法写入归档");
     return false;

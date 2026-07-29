@@ -231,6 +231,59 @@ TEST(DepthAnchoredHoleInterpolatorTest, PreservesOpeningInSupportMask)
     EXPECT_EQ(cv::countNonZero(depth(opening) > 0.0f), 0);
 }
 
+TEST(DepthAnchoredHoleInterpolatorTest,
+     RecoversProtectedInteriorOfSilhouetteConnectedHole)
+{
+    cv::Mat depth(72, 72, CV_32FC1, cv::Scalar(0.0f));
+    cv::Mat support(72, 72, CV_8UC1, cv::Scalar(0));
+    support(cv::Rect(6, 6, 60, 60)).setTo(255);
+    depth.setTo(2.0f, support);
+
+    const cv::Rect interior_hole(18, 20, 30, 28);
+    depth(interior_hole).setTo(0.0f);
+    depth(cv::Rect(6, 32, 12, 2)).setTo(0.0f);
+    cv::Mat anchors = depth > 0.0f;
+    cv::Mat repaired(72, 72, CV_8UC1, cv::Scalar(0));
+
+    xjw::mvs::DepthAnchoredHoleInterpolationOptions options;
+    options.enabled = true;
+    options.maximumComponentArea = 2000;
+    options.maximumComponentAreaRatio = 0.5f;
+    options.allowSilhouetteConnectedInterior = true;
+    options.silhouetteProtectionRadiusPixels = 3;
+
+    const auto stats = xjw::mvs::interpolateAnchoredInternalDepthHoles(
+        depth, support, anchors, nullptr, options, nullptr, &repaired);
+
+    EXPECT_EQ(stats.protectedSilhouetteComponentCount, 1U);
+    EXPECT_GT(stats.protectedSilhouettePixelCount, 0U);
+    EXPECT_EQ(stats.acceptedComponentCount, 1U);
+    EXPECT_GT(stats.interpolatedPixelCount, 800U);
+    EXPECT_NEAR(depth.at<float>(34, 32), 2.0f, 1.0e-3f);
+    EXPECT_EQ(depth.at<float>(32, 6), 0.0f);
+    EXPECT_EQ(repaired.at<std::uint8_t>(34, 32), 255);
+}
+
+TEST(DepthAnchoredHoleInterpolatorTest,
+     RejectsSilhouetteConnectedHoleWhenProtectionIsDisabled)
+{
+    cv::Mat depth(48, 48, CV_32FC1, cv::Scalar(2.0f));
+    const cv::Mat support(48, 48, CV_8UC1, cv::Scalar(255));
+    depth(cv::Rect(0, 16, 24, 16)).setTo(0.0f);
+    cv::Mat anchors = depth > 0.0f;
+    xjw::mvs::DepthAnchoredHoleInterpolationOptions options;
+    options.enabled = true;
+    options.maximumComponentArea = 1000;
+    options.maximumComponentAreaRatio = 0.5f;
+
+    const auto stats = xjw::mvs::interpolateAnchoredInternalDepthHoles(
+        depth, support, anchors, nullptr, options);
+
+    EXPECT_EQ(stats.acceptedComponentCount, 0U);
+    EXPECT_EQ(stats.rejectedSilhouetteComponentCount, 1U);
+    EXPECT_EQ(cv::countNonZero(depth(cv::Rect(0, 16, 24, 16)) > 0.0f), 0);
+}
+
 TEST(DepthAnchoredHoleInterpolatorTest, RejectsDepthDiscontinuity)
 {
     cv::Mat depth(48, 48, CV_32FC1, cv::Scalar(2.0f));

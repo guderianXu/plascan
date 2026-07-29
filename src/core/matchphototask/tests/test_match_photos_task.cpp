@@ -36,7 +36,10 @@
 #include "MatchPhotosAlgorithmSelector.h"
 #include "MatchPhotosRuntime.h"
 #include "MatchingStage.h"
+#include "MatchFileIO.h"
+#include "StoredPairGeometryAudit.h"
 #include "TrackBuildStage.h"
+#include "FeatureOutput.h"
 
 #include <gtest/gtest.h>
 
@@ -445,6 +448,124 @@ TEST(MatchPhotosTaskTest, MatchSidecarCarriesAerialTiePointFrontendSignature)
     EXPECT_EQ(sidecar.value(QStringLiteral("tie_point_feature_max_keypoints")).toInt(), 40000);
     EXPECT_EQ(sidecar.value(QStringLiteral("tie_point_keypoint_limit_per_megapixel")).toInt(), 0);
     EXPECT_NEAR(sidecar.value(QStringLiteral("dense_sift_threshold")).toDouble(), 0.0005, 1e-9);
+}
+
+TEST(MatchPhotosTaskTest, StoredPairGeometryAuditRecomputesMissingStatistics)
+{
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    constexpr int point_count = 32;
+    FeatureOutput feature0;
+    FeatureOutput feature1;
+    feature0.imageWidth = 640;
+    feature0.imageHeight = 480;
+    feature1.imageWidth = 640;
+    feature1.imageHeight = 480;
+    feature0.descriptors = torch::zeros({point_count, 16});
+    feature1.descriptors = torch::zeros({point_count, 16});
+    std::vector<cv::DMatch> matches;
+    for (int index = 0; index < point_count; ++index)
+    {
+        const int column = index % 8;
+        const int row = index / 8;
+        const double world_x = (column - 3.5) * 0.25;
+        const double world_y = (row - 1.5) * 0.25;
+        const double world_z = 4.0 + 0.1 * (index % 3);
+        const cv::Point2f point0(
+            static_cast<float>(500.0 * world_x / world_z + 320.0),
+            static_cast<float>(500.0 * world_y / world_z + 240.0));
+        const cv::Point2f point1(
+            static_cast<float>(500.0 * (world_x - 0.2) / world_z + 320.0),
+            static_cast<float>(500.0 * world_y / world_z + 240.0));
+        feature0.keypoints.emplace_back(point0, 1.0f);
+        feature1.keypoints.emplace_back(point1, 1.0f);
+        feature0.scores.push_back(1.0f);
+        feature1.scores.push_back(1.0f);
+        matches.emplace_back(index, index, 0.0f);
+    }
+
+    const QString feature0_path =
+        QDir(temp_dir.path()).filePath(QStringLiteral("left.sift"));
+    const QString feature1_path =
+        QDir(temp_dir.path()).filePath(QStringLiteral("right.sift"));
+    const QString match_path =
+        QDir(temp_dir.path()).filePath(QStringLiteral("left__right.match"));
+    const QString sidecar_path = match_path + QStringLiteral(".json");
+    ASSERT_TRUE(FeatureFileIO::write(
+        feature0_path, QStringLiteral("left.png"), feature0, "sift"));
+    ASSERT_TRUE(FeatureFileIO::write(
+        feature1_path, QStringLiteral("right.png"), feature1, "sift"));
+    const xjw::feature_match::MatchResult match_result =
+        xjw::feature_match::MatchResult::fromCvMatches(
+            matches, point_count, point_count, "lightglue");
+    ASSERT_TRUE(xjw::feature_match::writeIndexedMatchFile(
+        match_path,
+        QStringLiteral("left.png"),
+        QStringLiteral("right.png"),
+        match_result));
+
+    QFile sidecar_file(sidecar_path);
+    ASSERT_TRUE(sidecar_file.open(QIODevice::WriteOnly));
+    sidecar_file.write(QJsonDocument(QJsonObject{
+        {QStringLiteral("feature0_path"), feature0_path},
+        {QStringLiteral("feature1_path"), feature1_path}
+    }).toJson());
+    sidecar_file.close();
+
+    const xjw::matchphotos::StoredPairGeometryAuditResult audit =
+        xjw::matchphotos::auditStoredPairGeometry(
+            match_path, sidecar_path, 20, 1.5);
+
+    EXPECT_TRUE(audit.statisticsAvailable);
+    EXPECT_TRUE(audit.verified);
+    EXPECT_EQ(audit.totalMatches, point_count);
+    EXPECT_GE(audit.geometricInliers, 20);
+    EXPECT_GT(audit.inlierRatio, 0.60);
+    EXPECT_GT(audit.coverageScore, 0.20);
+    EXPECT_EQ(audit.reason, QStringLiteral("verified_from_stored_matches"));
+
+    const QString empty_match_path =
+        QDir(temp_dir.path()).filePath(QStringLiteral("left__right_empty.match"));
+    const xjw::feature_match::MatchResult empty_match_result =
+        xjw::feature_match::MatchResult::fromCvMatches(
+            {}, point_count, point_count, "lightglue");
+    ASSERT_TRUE(xjw::feature_match::writeIndexedMatchFile(
+        empty_match_path,
+        QStringLiteral("left.png"),
+        QStringLiteral("right.png"),
+        empty_match_result));
+    const xjw::matchphotos::StoredPairGeometryAuditResult empty_audit =
+        xjw::matchphotos::auditStoredPairGeometry(
+            empty_match_path, sidecar_path, 20, 1.5);
+    EXPECT_FALSE(empty_audit.statisticsAvailable);
+    EXPECT_FALSE(empty_audit.verified);
+    EXPECT_EQ(empty_audit.totalMatches, 0);
+    EXPECT_EQ(empty_audit.geometricInliers, 0);
+    EXPECT_EQ(
+        empty_audit.reason, QStringLiteral("stored_match_evidence_absent"));
+
+    const QString weak_match_path =
+        QDir(temp_dir.path()).filePath(QStringLiteral("left__right_weak.match"));
+    const std::vector<cv::DMatch> weak_matches(
+        matches.cbegin(), matches.cbegin() + 10);
+    const xjw::feature_match::MatchResult weak_match_result =
+        xjw::feature_match::MatchResult::fromCvMatches(
+            weak_matches, point_count, point_count, "lightglue");
+    ASSERT_TRUE(xjw::feature_match::writeIndexedMatchFile(
+        weak_match_path,
+        QStringLiteral("left.png"),
+        QStringLiteral("right.png"),
+        weak_match_result));
+    const xjw::matchphotos::StoredPairGeometryAuditResult weak_audit =
+        xjw::matchphotos::auditStoredPairGeometry(
+            weak_match_path, sidecar_path, 20, 1.5);
+    EXPECT_FALSE(weak_audit.statisticsAvailable);
+    EXPECT_FALSE(weak_audit.verified);
+    EXPECT_EQ(weak_audit.totalMatches, 10);
+    EXPECT_EQ(
+        weak_audit.reason,
+        QStringLiteral("stored_match_evidence_insufficient"));
 }
 
 TEST(MatchPhotosTaskTest, GeometryAndTrackStagesUseExistingCoreImplementations)

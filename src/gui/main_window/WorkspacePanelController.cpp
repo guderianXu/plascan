@@ -9,40 +9,38 @@ WorkspacePanelController::WorkspacePanelController(QObject *parent)
 {
 }
 
-void WorkspacePanelController::registerDock(const QString &settingKey,
+bool WorkspacePanelController::registerDock(WorkspacePanelId id,
                                             QAction *action,
-                                            QDockWidget *dock,
-                                            bool defaultVisible)
+                                            QDockWidget *dock)
 {
-    registerWidget(settingKey, action, dock, defaultVisible);
-    if (!dock)
+    if (!registerWidget(id, action, dock))
     {
-        return;
+        return false;
     }
 
-    connect(dock, &QDockWidget::visibilityChanged, this, [this, dock](bool visible)
+    connect(dock, &QDockWidget::visibilityChanged, this, [this, id](bool visible)
     {
         Q_UNUSED(visible)
-        handleVisibilityChanged(dock);
+        handleVisibilityChanged(id);
     });
+    return true;
 }
 
-void WorkspacePanelController::registerToolBar(const QString &settingKey,
+bool WorkspacePanelController::registerToolBar(WorkspacePanelId id,
                                                QAction *action,
-                                               QToolBar *toolBar,
-                                               bool defaultVisible)
+                                               QToolBar *toolBar)
 {
-    registerWidget(settingKey, action, toolBar, defaultVisible);
-    if (!toolBar)
+    if (!registerWidget(id, action, toolBar))
     {
-        return;
+        return false;
     }
 
-    connect(toolBar, &QToolBar::visibilityChanged, this, [this, toolBar](bool visible)
+    connect(toolBar, &QToolBar::visibilityChanged, this, [this, id](bool visible)
     {
         Q_UNUSED(visible)
-        handleVisibilityChanged(toolBar);
+        handleVisibilityChanged(id);
     });
+    return true;
 }
 
 QJsonObject WorkspacePanelController::visibilitySnapshot() const
@@ -50,13 +48,27 @@ QJsonObject WorkspacePanelController::visibilitySnapshot() const
     QJsonObject settings;
     for (const Entry &entry : _entries)
     {
-        if (!entry.widget || entry.settingKey.isEmpty())
+        if (!entry.widget || entry.descriptor.settingKey.isEmpty())
         {
             continue;
         }
-        settings[entry.settingKey] = !entry.widget->isHidden();
+        settings[entry.descriptor.settingKey] = !entry.widget->isHidden();
     }
     return settings;
+}
+
+QList<QAction *> WorkspacePanelController::actions(
+    WorkspacePanelKind kind) const
+{
+    QList<QAction *> result;
+    for (const Entry &entry : _entries)
+    {
+        if (entry.descriptor.kind == kind && entry.action)
+        {
+            result.push_back(entry.action);
+        }
+    }
+    return result;
 }
 
 void WorkspacePanelController::applyVisibility(const QJsonObject &settings)
@@ -69,16 +81,11 @@ void WorkspacePanelController::applyVisibility(const QJsonObject &settings)
             continue;
         }
 
-        const bool visible = settings.contains(entry.settingKey)
-            ? settings.value(entry.settingKey).toBool(entry.defaultVisible)
-            : entry.defaultVisible;
-        if (entry.action)
-        {
-            const QSignalBlocker blocker(entry.action);
-            entry.action->setChecked(visible);
-        }
-        entry.explicitlyVisible = visible;
-        entry.widget->setVisible(visible);
+        const QString &settingKey = entry.descriptor.settingKey;
+        const bool visible = settings.contains(settingKey)
+            ? settings.value(settingKey).toBool(entry.descriptor.defaultVisible)
+            : entry.descriptor.defaultVisible;
+        setPanelVisible(entry.descriptor.id, visible, false);
     }
     _applying = false;
 }
@@ -97,14 +104,64 @@ void WorkspacePanelController::syncActions()
     }
 }
 
-void WorkspacePanelController::registerWidget(const QString &settingKey,
-                                              QAction *action,
-                                              QWidget *widget,
-                                              bool defaultVisible)
+void WorkspacePanelController::restoreDefaultVisibility()
 {
-    if (settingKey.isEmpty() || !action || !widget)
+    applyVisibility(QJsonObject());
+}
+
+void WorkspacePanelController::ensureRequiredProjectPanelsVisible()
+{
+    for (const Entry &entry : _entries)
+    {
+        if (entry.descriptor.requiredForProject)
+        {
+            setPanelVisible(entry.descriptor.id, true);
+        }
+    }
+}
+
+void WorkspacePanelController::setPanelVisible(WorkspacePanelId id,
+                                               bool visible,
+                                               bool raise)
+{
+    Entry *entry = findEntry(id);
+    if (!entry || !entry->widget)
     {
         return;
+    }
+
+    const bool changed = entry->explicitlyVisible != visible;
+    entry->explicitlyVisible = visible;
+    if (entry->action)
+    {
+        const QSignalBlocker blocker(entry->action);
+        entry->action->setChecked(visible);
+    }
+    entry->widget->setVisible(visible);
+    if (visible && raise)
+    {
+        entry->widget->raise();
+    }
+    if (changed && !_applying)
+    {
+        emit visibilitySettingChanged(id, visible);
+    }
+}
+
+bool WorkspacePanelController::isPanelVisible(WorkspacePanelId id) const
+{
+    const Entry *entry = findEntry(id);
+    return entry && entry->widget && !entry->widget->isHidden();
+}
+
+bool WorkspacePanelController::registerWidget(WorkspacePanelId id,
+                                              QAction *action,
+                                              QWidget *widget)
+{
+    const WorkspacePanelDescriptor descriptor = workspacePanelDescriptor(id);
+    if (descriptor.settingKey.isEmpty() || !action || !widget || findEntry(id))
+    {
+        return false;
     }
 
     action->setCheckable(true);
@@ -112,45 +169,65 @@ void WorkspacePanelController::registerWidget(const QString &settingKey,
         const QSignalBlocker blocker(action);
         action->setChecked(!widget->isHidden());
     }
-    connect(action, &QAction::toggled, widget, [widget](bool visible)
+    connect(action, &QAction::toggled, this, [this, id](bool visible)
     {
-        widget->setVisible(visible);
-        if (visible)
-        {
-            widget->raise();
-        }
+        setPanelVisible(id, visible);
     });
 
-    _entries.push_back(Entry{settingKey,
+    _entries.push_back(Entry{descriptor,
                              action,
                              widget,
-                             defaultVisible,
                              !widget->isHidden()});
+    return true;
 }
 
-void WorkspacePanelController::handleVisibilityChanged(QWidget *widget)
+WorkspacePanelController::Entry *WorkspacePanelController::findEntry(
+    WorkspacePanelId id)
 {
     for (Entry &entry : _entries)
     {
-        if (entry.widget != widget)
+        if (entry.descriptor.id == id)
         {
-            continue;
+            return &entry;
         }
-        const bool explicitlyVisible = !widget->isHidden();
-        if (entry.action)
+    }
+    return nullptr;
+}
+
+const WorkspacePanelController::Entry *WorkspacePanelController::findEntry(
+    WorkspacePanelId id) const
+{
+    for (const Entry &entry : _entries)
+    {
+        if (entry.descriptor.id == id)
         {
-            const QSignalBlocker blocker(entry.action);
-            entry.action->setChecked(explicitlyVisible);
+            return &entry;
         }
-        if (entry.explicitlyVisible == explicitlyVisible)
-        {
-            return;
-        }
-        entry.explicitlyVisible = explicitlyVisible;
-        if (!_applying)
-        {
-            emit visibilitySettingChanged(entry.settingKey, explicitlyVisible);
-        }
+    }
+    return nullptr;
+}
+
+void WorkspacePanelController::handleVisibilityChanged(WorkspacePanelId id)
+{
+    Entry *entry = findEntry(id);
+    if (!entry || !entry->widget)
+    {
         return;
+    }
+
+    const bool explicitlyVisible = !entry->widget->isHidden();
+    if (entry->action)
+    {
+        const QSignalBlocker blocker(entry->action);
+        entry->action->setChecked(explicitlyVisible);
+    }
+    if (entry->explicitlyVisible == explicitlyVisible)
+    {
+        return;
+    }
+    entry->explicitlyVisible = explicitlyVisible;
+    if (!_applying)
+    {
+        emit visibilitySettingChanged(id, explicitlyVisible);
     }
 }

@@ -33,6 +33,7 @@ set(MVS_CXX_SOURCES
     MvsSceneClassifier.cpp
     MvsImagePreprocessor.cpp
     MvsWorkspaceManifest.cpp
+    MvsWorkspaceReplay.cpp
     DenseCloudBuilder.cpp
     DepthMapGenerator.cpp
     EpipolarRectifier.cpp
@@ -65,6 +66,7 @@ set(MVS_HEADERS
     MvsImagePreprocessor.h
     MvsViewSelection.h
     MvsWorkspaceManifest.h
+    MvsWorkspaceReplay.h
     PatchMatchCUDA.h
     DepthMapFusion.h
     DepthFrameQualityGate.h

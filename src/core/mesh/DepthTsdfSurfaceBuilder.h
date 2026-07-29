@@ -4,6 +4,7 @@
 #include "DepthMapMeshBuilder.h"
 #include "MeshTypes.h"
 
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QString>
 #include <QVector>
@@ -43,6 +44,12 @@ struct DepthTsdfOptions
     int resolution = 320;
     float truncationVoxels = 7.5f;
     float surfaceSupportBandVoxels = 0.0f;
+    bool enableUncertaintyAdaptiveTruncation = false;
+    float uncertaintyAdaptiveScale = 0.40f;
+    float uncertaintyAdaptiveActivationRatio = 1.20f;
+    float uncertaintyAdaptiveMaximumTruncationVoxels = 12.0f;
+    int uncertaintyAdaptiveMaximumSamplesPerFrame = 20000;
+    int uncertaintyAdaptiveMinimumSampleCount = 512;
     float minimumConfidence = 0.25f;
     float minimumVoxelWeight = 1.0f;
     float minimumSingleObservationWeight = 0.70f;
@@ -74,6 +81,10 @@ struct DepthTsdfOptions
     float maximumOrbitalAngularGapRatio = 2.0f;
     float validationOnlyFrameWeightMultiplier = 0.35f;
     float coverageProtectedFrameMinimumMultiplier = 0.20f;
+    bool enableOrbitalGapBoundaryRecovery = false;
+    float orbitalGapBoundaryMinimumQualityMultiplier = 0.65f;
+    float orbitalGapOppositeMinimumQualityMultiplier = 0.50f;
+    float orbitalGapBoundaryMinimumObservationWeight = 0.30f;
     bool enableSurfacePatchSupport = false;
     bool enableContourBandZeroCrossingSupport = false;
     bool collectZeroCrossingDiagnostics = false;
@@ -83,6 +94,11 @@ struct DepthTsdfOptions
     bool enableGeometryZeroCrossingRecovery = false;
     int geometryZeroCrossingMinimumSupportedCorners = 2;
     int geometryZeroCrossingMinimumCellVotes = 2;
+    bool enableCrossViewAnchoredSurfaceRecovery = false;
+    float crossViewAnchoredMinimumObservationWeight = 0.30f;
+    int crossViewAnchoredMinimumSupportedCorners = 2;
+    int crossViewAnchoredMinimumCellVotes = 1;
+    int crossViewAnchoredGrowthPasses = 2;
     bool enableGeometryZeroCrossingCellSheets = false;
     int minimumGeometryZeroCrossingSheetCells = 3;
     int minimumGeometryZeroCrossingSheetAnchorCells = 2;
@@ -298,6 +314,16 @@ struct DepthTsdfStatistics
     bool effectiveGeometryZeroCrossingRecovery = false;
     std::uint64_t geometryZeroCrossingCandidateSampleCount = 0;
     std::uint64_t geometryZeroCrossingRecoveredSampleCount = 0;
+    bool effectiveCrossViewAnchoredSurfaceRecovery = false;
+    std::uint64_t crossViewAnchoredObservedSampleCount = 0;
+    std::uint64_t crossViewAnchoredEligibleSampleCount = 0;
+    std::uint64_t crossViewAnchoredCandidateSampleCount = 0;
+    std::uint64_t crossViewAnchoredRecoveredSampleCount = 0;
+    int crossViewAnchoredExecutedGrowthPassCount = 0;
+    float effectiveCrossViewAnchoredMinimumObservationWeight = 0.0f;
+    int effectiveCrossViewAnchoredMinimumSupportedCorners = 0;
+    int effectiveCrossViewAnchoredMinimumCellVotes = 0;
+    int effectiveCrossViewAnchoredGrowthPasses = 0;
     bool effectiveGeometryZeroCrossingCellSheets = false;
     std::uint64_t geometryZeroCrossingSheetCandidateCellCount = 0;
     std::uint64_t geometryZeroCrossingSheetAcceptedCellCount = 0;
@@ -381,6 +407,24 @@ struct DepthTsdfStatistics
     double orbitalMedianAngularSpacingDegrees = 0.0;
     double orbitalMaximumAngularGapDegrees = 0.0;
     double orbitalMaximumAngularGapRatio = 0.0;
+    bool orbitalSignificantAngularGap = false;
+    int orbitalGapStartRefIndex = -1;
+    int orbitalGapEndRefIndex = -1;
+    int orbitalGapOppositeRefIndex = -1;
+    QJsonArray orbitalFrameRoles;
+    bool effectiveOrbitalGapBoundaryRecovery = false;
+    int orbitalGapQualityFloorFrameCount = 0;
+    QVector<int> orbitalGapQualityFloorRefIndices;
+    std::uint64_t orbitalGapBoundaryRecoveryCandidateCount = 0;
+    std::uint64_t orbitalGapBoundaryRecoveryAcceptedCount = 0;
+    std::uint64_t orbitalGapBoundaryRecoveryRejectedCount = 0;
+    std::uint64_t orbitalGapBoundarySingleObservationCount = 0;
+    std::uint64_t orbitalGapBoundaryRejectedWeightCount = 0;
+    std::uint64_t orbitalGapBoundaryRejectedGeometrySupportCount = 0;
+    std::uint64_t orbitalGapBoundaryRejectedSourceCount = 0;
+    std::uint64_t orbitalGapBoundaryRejectedSpreadCount = 0;
+    std::uint64_t orbitalGapBoundaryRejectedFieldCount = 0;
+    float effectiveOrbitalGapBoundaryMinimumObservationWeight = 0.0f;
     std::uint64_t auxiliaryOutsideSurfaceBandRejectedCount = 0;
     bool effectiveSurfacePatchSupport = false;
     float effectiveMinimumSurfacePatchObservationWeight = 0.0f;
@@ -393,6 +437,13 @@ struct DepthTsdfStatistics
     float effectiveMaximumSurfacePatchAbsoluteTsdf = 0.0f;
     float effectiveMinimumSurfacePatchWeightRatio = 0.0f;
     int effectiveMinimumDistinctCameraSupport = 0;
+    bool effectiveUncertaintyAdaptiveTruncation = false;
+    std::uint64_t uncertaintyAdaptiveSampleCount = 0;
+    float uncertaintyAdaptiveP90Voxels = 0.0f;
+    float uncertaintyAdaptiveAddedVoxels = 0.0f;
+    float effectiveUncertaintyAdaptiveScale = 0.0f;
+    float effectiveUncertaintyAdaptiveActivationRatio = 0.0f;
+    float effectiveUncertaintyAdaptiveMaximumTruncationVoxels = 0.0f;
     float effectiveTruncationVoxels = 0.0f;
     float effectiveSurfaceSupportBandVoxels = 0.0f;
     float effectiveMaximumFreeSpaceVoxels = 0.0f;
@@ -651,6 +702,11 @@ struct DepthTsdfStatistics
     double depthCompletenessMedianFrameRecall = 0.0;
     QVector<int> depthCompletenessRefIndices;
     QVector<double> depthCompletenessFrameRecalls;
+    bool depthCompletenessGapBoundaryAvailable = false;
+    bool depthCompletenessGapBoundaryGatePassed = true;
+    double depthCompletenessGapBoundaryMinimumRecall = 0.0;
+    QVector<int> depthCompletenessGapBoundaryRefIndices;
+    QVector<double> depthCompletenessGapBoundaryFrameRecalls;
     std::uint64_t boundaryAttributionEdgeCount = 0;
     std::uint64_t boundaryAttributionNoObservationEdgeCount = 0;
     std::uint64_t boundaryAttributionInsufficientSourceEdgeCount = 0;
@@ -718,6 +774,7 @@ struct DepthTsdfObservationSample
     bool recoveredFromInvalidNearestPixel = false;
     bool rejectedInvalidNearestPixelRecovery = false;
     bool usedCrossViewConsensusDepth = false;
+    bool usedCrossViewRepairedDepth = false;
     DepthTsdfObservationFailure failure = DepthTsdfObservationFailure::Projection;
 };
 

@@ -3,6 +3,8 @@
 #include "DepthFrameQualityGate.h"
 #include "MvsTypes.h"
 
+#include <QJsonObject>
+
 #include <opencv2/core.hpp>
 
 namespace xjw
@@ -52,6 +54,13 @@ GeometryEvidenceMaps makeGeometryEvidenceMaps(
     const cv::Mat &sourceMask,
     const cv::Mat &sourceInverseDepthSum,
     const cv::Mat &sourceInverseDepthSquaredSum);
+
+QJsonObject geometryEvidenceDiagnosticsToJson(
+    const cv::Mat &depth,
+    const cv::Mat &geometrySupportCount,
+    const cv::Mat &inverseDepthRelativeSpread,
+    const cv::Mat &crossViewRepairedMask,
+    const cv::Mat &supportRegionMask);
 
 } // namespace mvs
 } // namespace xjw

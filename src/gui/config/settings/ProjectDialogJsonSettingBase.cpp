@@ -14,6 +14,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
+#include <QSaveFile>
 
 namespace {
 
@@ -136,14 +137,14 @@ bool ProjectDialogJsonSettingBase::writeJsonFile(const QString &path, const QJso
     {
         return false;
     }
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly))
     {
         return false;
     }
     const QJsonDocument doc(root);
-    file.write(doc.toJson(QJsonDocument::Indented));
-    return true;
+    const QByteArray bytes = doc.toJson(QJsonDocument::Indented);
+    return file.write(bytes) == bytes.size() && file.commit();
 }
 
 /**

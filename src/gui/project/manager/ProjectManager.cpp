@@ -517,6 +517,20 @@ ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
                 });
         connect(_projectData, &ProjectData::dirtyStateChanged,
                 this, &ProjectManager::metadataDirtyChanged);
+        connect(_projectData,
+                &ProjectData::projectSaveCompleted,
+                this,
+                [this](bool success, const QString &errorMessage)
+                {
+                    if (!success && !errorMessage.isEmpty())
+                    {
+                        QMessageBox::critical(
+                            _parent,
+                            QStringLiteral("错误"),
+                            QStringLiteral("保存项目失败: %1").arg(errorMessage));
+                    }
+                    emit saveFinished(success);
+                });
     }
 
         connect(_reconstructionManager, &ProjectReconstructionManager::mvsProgressChanged,
@@ -676,9 +690,7 @@ void ProjectManager::saveProject()
     }
 
     emit saveStarted();
-    const bool success = _uiCommands && _uiCommands->saveProject();
-
-    emit saveFinished(success);
+    _projectData->saveProjectAsync();
 }
 
 void ProjectManager::closeProject()
@@ -1769,7 +1781,7 @@ void ProjectManager::writeMetadataToTempAsync(const QJsonObject &meta, bool mark
 {
     if (_projectData) {
         _projectData->updateMetadata(meta, markDirty);
-        _projectData->saveTemporaryMetadata();
+        _projectData->scheduleTemporaryMetadataSave();
     }
 }
 

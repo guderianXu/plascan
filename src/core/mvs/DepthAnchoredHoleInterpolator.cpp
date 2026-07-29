@@ -99,11 +99,85 @@ DepthAnchoredHoleInterpolationStats interpolateAnchoredInternalDepthHoles(
         return result;
     }
 
+    cv::Mat interpolation_candidates = invalid_supported;
+    if (options.allowSilhouetteConnectedInterior)
+    {
+        cv::Mat support_distance;
+        cv::distanceTransform(
+            support_mask, support_distance, cv::DIST_L2, cv::DIST_MASK_PRECISE);
+        const int protection_radius = std::clamp(
+            options.silhouetteProtectionRadiusPixels, 1, 32);
+        interpolation_candidates = invalid_supported.clone();
+        const cv::Mat protected_band = support_distance <=
+            static_cast<float>(protection_radius);
+        interpolation_candidates.setTo(0, protected_band);
+
+        cv::Mat original_labels;
+        cv::Mat original_stats;
+        cv::Mat original_centroids;
+        const int original_component_count = cv::connectedComponentsWithStats(
+            invalid_supported,
+            original_labels,
+            original_stats,
+            original_centroids,
+            8,
+            CV_32S);
+        for (int label = 1; label < original_component_count; ++label)
+        {
+            bool touches_silhouette = false;
+            bool retains_interior = false;
+            const int top = original_stats.at<int>(label, cv::CC_STAT_TOP);
+            const int left = original_stats.at<int>(label, cv::CC_STAT_LEFT);
+            const int height = original_stats.at<int>(label, cv::CC_STAT_HEIGHT);
+            const int width = original_stats.at<int>(label, cv::CC_STAT_WIDTH);
+            for (int row = top;
+                 row < top + height && (!touches_silhouette || !retains_interior);
+                 ++row)
+            {
+                for (int column = left;
+                     column < left + width &&
+                         (!touches_silhouette || !retains_interior);
+                     ++column)
+                {
+                    if (original_labels.at<int>(row, column) != label)
+                    {
+                        continue;
+                    }
+                    const float distance = support_distance.at<float>(row, column);
+                    touches_silhouette = touches_silhouette || distance <= 1.0f;
+                    retains_interior = retains_interior ||
+                        interpolation_candidates.at<std::uint8_t>(row, column) != 0;
+                }
+            }
+            if (!touches_silhouette || !retains_interior)
+            {
+                continue;
+            }
+            ++result.protectedSilhouetteComponentCount;
+            const cv::Mat component_mask = original_labels == label;
+            const cv::Mat retained_mask =
+                component_mask & (interpolation_candidates != 0);
+            result.protectedSilhouettePixelCount +=
+                static_cast<std::uint64_t>(
+                    cv::countNonZero(component_mask) -
+                    cv::countNonZero(retained_mask));
+        }
+    }
+    if (cv::countNonZero(interpolation_candidates) == 0)
+    {
+        return result;
+    }
+
     cv::Mat labels;
     cv::Mat component_stats;
     cv::Mat centroids;
     const int component_count = cv::connectedComponentsWithStats(
-        invalid_supported, labels, component_stats, centroids, 8, CV_32S);
+        interpolation_candidates,
+        labels,
+        component_stats,
+        centroids,
+        8,
+        CV_32S);
     const int support_area = cv::countNonZero(support_mask);
     const int maximum_area = std::max(
         1,
@@ -287,6 +361,40 @@ DepthAnchoredHoleInterpolationStats interpolateAnchoredInternalDepthHoles(
         ++result.acceptedComponentCount;
     }
     return result;
+}
+
+QJsonObject depthAnchoredHoleInterpolationStatsToJson(
+    const DepthAnchoredHoleInterpolationStats &stats)
+{
+    QJsonObject object;
+    object.insert(
+        QStringLiteral("candidate_component_count"),
+        static_cast<double>(stats.candidateComponentCount));
+    object.insert(
+        QStringLiteral("accepted_component_count"),
+        static_cast<double>(stats.acceptedComponentCount));
+    object.insert(
+        QStringLiteral("interpolated_pixel_count"),
+        static_cast<double>(stats.interpolatedPixelCount));
+    object.insert(
+        QStringLiteral("rejected_silhouette_component_count"),
+        static_cast<double>(stats.rejectedSilhouetteComponentCount));
+    object.insert(
+        QStringLiteral("rejected_area_component_count"),
+        static_cast<double>(stats.rejectedAreaComponentCount));
+    object.insert(
+        QStringLiteral("rejected_anchor_component_count"),
+        static_cast<double>(stats.rejectedAnchorComponentCount));
+    object.insert(
+        QStringLiteral("rejected_boundary_spread_component_count"),
+        static_cast<double>(stats.rejectedBoundarySpreadComponentCount));
+    object.insert(
+        QStringLiteral("protected_silhouette_component_count"),
+        static_cast<double>(stats.protectedSilhouetteComponentCount));
+    object.insert(
+        QStringLiteral("protected_silhouette_pixel_count"),
+        static_cast<double>(stats.protectedSilhouettePixelCount));
+    return object;
 }
 
 } // namespace xjw::mvs

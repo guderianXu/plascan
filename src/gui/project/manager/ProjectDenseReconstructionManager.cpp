@@ -19,6 +19,8 @@
 #include "DepthMapGenerator.h"
 #include "MvsSourcePlanner.h"
 #include "preparation/MatchResultCatalog.h"
+#include "GeometryVerifyStage.h"
+#include "StoredPairGeometryAudit.h"
 #include "project/ProjectIO.h"
 #include "SparseCloudPreprocessor.h"
 #include "io/PathIO.h"
@@ -131,18 +133,24 @@ std::vector<xjw::mvs::MvsSourcePairQuality> loadMvsSourcePairQualities(
                 continue;
             }
 
-            const int inliers = sample.value(QStringLiteral("geometric_inlier_count")).toInt();
-            if (inliers <= 0)
-            {
-                continue;
-            }
-
             xjw::mvs::MvsSourcePairQuality quality;
             quality.imageA = xjw::common::io::toUtf8Path(sample.value(QStringLiteral("image_a")).toString());
             quality.imageB = xjw::common::io::toUtf8Path(sample.value(QStringLiteral("image_b")).toString());
             quality.totalMatches = std::max(0, sample.value(QStringLiteral("match_count")).toInt());
-            quality.geometricInliers = inliers;
-            quality.verified = true;
+            quality.hasVerificationStatistics =
+                sample.contains(QStringLiteral("geometric_inlier_count"));
+            quality.geometricInliers = std::max(
+                0, sample.value(QStringLiteral("geometric_inlier_count")).toInt());
+            quality.verified =
+                quality.hasVerificationStatistics && quality.geometricInliers > 0;
+            quality.geometricCoverage = static_cast<float>(
+                sample.value(QStringLiteral("geometric_coverage_ratio")).toDouble(
+                    sample.value(QStringLiteral("coverage_ratio")).toDouble(0.0)));
+            quality.verificationReason = quality.verified
+                ? "verified"
+                : (quality.hasVerificationStatistics
+                       ? "zero_geometric_inliers"
+                       : "missing_geometric_inlier_statistics");
             qualities.push_back(std::move(quality));
         }
     }
@@ -164,7 +172,7 @@ std::vector<xjw::mvs::MvsSourcePairQuality> loadMvsSourcePairQualities(
         }
 
         const xjw::aerial_triangulation::MatchVariant &variant = group.variants.at(group.bestVariantIndex);
-        if (!variant.compatible || !variant.hasInlierStats || variant.geometricVerifiedInliers <= 0)
+        if (!variant.compatible)
         {
             continue;
         }
@@ -174,7 +182,34 @@ std::vector<xjw::mvs::MvsSourcePairQuality> loadMvsSourcePairQualities(
         quality.imageB = xjw::common::io::toUtf8Path(variant.imageB);
         quality.totalMatches = std::max(0, variant.totalMatches);
         quality.geometricInliers = std::max(0, variant.geometricVerifiedInliers);
-        quality.verified = true;
+        quality.hasVerificationStatistics =
+            variant.hasInlierStats && quality.totalMatches >= 20;
+        quality.verified =
+            quality.hasVerificationStatistics &&
+            xjw::matchphotos::passesGeometryQualityGate(
+                quality.totalMatches, quality.geometricInliers, 20);
+        quality.verificationReason = quality.verified
+            ? "verified"
+            : (quality.hasVerificationStatistics
+                   ? "sidecar_geometry_gate_failed"
+                   : "missing_geometric_inlier_statistics");
+        if (!quality.hasVerificationStatistics)
+        {
+            const xjw::matchphotos::StoredPairGeometryAuditResult audit =
+                xjw::matchphotos::auditStoredPairGeometry(
+                    variant.matchFilePath, variant.sidecarPath);
+            if (audit.statisticsAvailable)
+            {
+                quality.totalMatches = audit.totalMatches;
+                quality.geometricInliers = audit.geometricInliers;
+                quality.hasVerificationStatistics = true;
+                quality.verified = audit.verified;
+                quality.geometricCoverage = static_cast<float>(
+                    audit.coverageScore);
+            }
+            quality.verificationReason =
+                xjw::common::io::toUtf8Path(audit.reason);
+        }
         qualities.push_back(std::move(quality));
     }
     return qualities;
@@ -201,12 +236,32 @@ void attachMvsSourcePairQualities(xjw::mvs::DepthGenConfig *config,
             currentImagePaths);
     config->sourcePairQualities = xjw::mvs::filterMvsSourcePairQualitiesForImages(
         loadedQualities, currentImagePaths);
-    config->requireVerifiedSourcePairs = !config->sourcePairQualities.empty();
-    if (config->requireVerifiedSourcePairs)
+    const int verified_pair_count = static_cast<int>(std::count_if(
+        config->sourcePairQualities.cbegin(),
+        config->sourcePairQualities.cend(),
+        [](const xjw::mvs::MvsSourcePairQuality &quality)
+        {
+            return quality.verified && quality.geometricInliers > 0;
+        }));
+    const int missing_statistics_count = static_cast<int>(std::count_if(
+        config->sourcePairQualities.cbegin(),
+        config->sourcePairQualities.cend(),
+        [](const xjw::mvs::MvsSourcePairQuality &quality)
+        {
+            return !quality.hasVerificationStatistics;
+        }));
+    const int failed_verification_count =
+        static_cast<int>(config->sourcePairQualities.size()) -
+        verified_pair_count - missing_statistics_count;
+    config->requireVerifiedSourcePairs = verified_pair_count > 0;
+    if (!config->sourcePairQualities.empty())
     {
         LOG_INFO(QStringLiteral(
-                     "[MVS] 当前影像集合采用 %1 个几何验证匹配对；忽略 %2 个旧引用或重复记录")
-                     .arg(config->sourcePairQualities.size())
+                     "[MVS] 当前影像匹配对审计：已验证=%1，缺少统计=%2，"
+                     "验证失败=%3；忽略旧引用或重复记录=%4")
+                     .arg(verified_pair_count)
+                     .arg(missing_statistics_count)
+                     .arg(failed_verification_count)
                      .arg(loadedQualities.size() - config->sourcePairQualities.size()));
     }
     else if (!loadedQualities.empty())

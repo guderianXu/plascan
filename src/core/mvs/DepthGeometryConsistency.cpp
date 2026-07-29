@@ -1,8 +1,11 @@
 #include "DepthGeometryConsistency.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <limits>
+#include <vector>
 
 namespace xjw
 {
@@ -284,6 +287,152 @@ GeometryEvidenceMaps makeGeometryEvidenceMaps(
         }
     }
     return result;
+}
+
+QJsonObject geometryEvidenceDiagnosticsToJson(
+    const cv::Mat &depth,
+    const cv::Mat &geometry_support_count,
+    const cv::Mat &inverse_depth_relative_spread,
+    const cv::Mat &cross_view_repaired_mask,
+    const cv::Mat &support_region_mask)
+{
+    QJsonObject object;
+    if (depth.empty() || depth.type() != CV_32FC1 ||
+        geometry_support_count.empty() ||
+        geometry_support_count.type() != CV_16UC1 ||
+        geometry_support_count.size() != depth.size())
+    {
+        object.insert(QStringLiteral("valid_inputs"), false);
+        return object;
+    }
+    const bool has_spread =
+        !inverse_depth_relative_spread.empty() &&
+        inverse_depth_relative_spread.type() == CV_32FC1 &&
+        inverse_depth_relative_spread.size() == depth.size();
+    const bool has_repaired =
+        !cross_view_repaired_mask.empty() &&
+        cross_view_repaired_mask.type() == CV_8UC1 &&
+        cross_view_repaired_mask.size() == depth.size();
+    const bool has_support_region =
+        !support_region_mask.empty() &&
+        support_region_mask.type() == CV_8UC1 &&
+        support_region_mask.size() == depth.size();
+
+    std::array<std::uint64_t, 6> support_histogram{};
+    std::uint64_t mask_pixel_count = 0;
+    std::uint64_t valid_pixel_count = 0;
+    std::uint64_t native_valid_pixel_count = 0;
+    std::uint64_t repaired_valid_pixel_count = 0;
+    std::vector<float> spreads;
+    spreads.reserve(static_cast<std::size_t>(depth.total() / 2));
+    for (int row = 0; row < depth.rows; ++row)
+    {
+        const float *depth_row = depth.ptr<float>(row);
+        const std::uint16_t *support_row =
+            geometry_support_count.ptr<std::uint16_t>(row);
+        const float *spread_row = has_spread
+            ? inverse_depth_relative_spread.ptr<float>(row) : nullptr;
+        const std::uint8_t *repaired_row = has_repaired
+            ? cross_view_repaired_mask.ptr<std::uint8_t>(row) : nullptr;
+        const std::uint8_t *region_row = has_support_region
+            ? support_region_mask.ptr<std::uint8_t>(row) : nullptr;
+        for (int column = 0; column < depth.cols; ++column)
+        {
+            if (region_row && region_row[column] == 0)
+            {
+                continue;
+            }
+            ++mask_pixel_count;
+            const float depth_value = depth_row[column];
+            if (!std::isfinite(depth_value) || depth_value <= 0.0f)
+            {
+                ++support_histogram[0];
+                continue;
+            }
+            ++valid_pixel_count;
+            const bool repaired = repaired_row && repaired_row[column] != 0;
+            if (repaired)
+            {
+                ++repaired_valid_pixel_count;
+            }
+            else
+            {
+                ++native_valid_pixel_count;
+            }
+            const std::size_t support_bucket = std::min<std::size_t>(
+                5, static_cast<std::size_t>(support_row[column]));
+            ++support_histogram[support_bucket];
+            if (spread_row && std::isfinite(spread_row[column]) &&
+                spread_row[column] >= 0.0f)
+            {
+                spreads.push_back(spread_row[column]);
+            }
+        }
+    }
+
+    std::sort(spreads.begin(), spreads.end());
+    const auto percentile = [&spreads](double quantile)
+    {
+        if (spreads.empty())
+        {
+            return 0.0;
+        }
+        const double position = std::clamp(quantile, 0.0, 1.0) *
+            static_cast<double>(spreads.size() - 1);
+        const std::size_t lower = static_cast<std::size_t>(std::floor(position));
+        const std::size_t upper = std::min(lower + 1, spreads.size() - 1);
+        const double fraction = position - static_cast<double>(lower);
+        return static_cast<double>(spreads[lower]) * (1.0 - fraction) +
+            static_cast<double>(spreads[upper]) * fraction;
+    };
+    QJsonObject histogram;
+    histogram.insert(
+        QStringLiteral("support_0"), static_cast<double>(support_histogram[0]));
+    histogram.insert(
+        QStringLiteral("support_1"), static_cast<double>(support_histogram[1]));
+    histogram.insert(
+        QStringLiteral("support_2"), static_cast<double>(support_histogram[2]));
+    histogram.insert(
+        QStringLiteral("support_3"), static_cast<double>(support_histogram[3]));
+    histogram.insert(
+        QStringLiteral("support_4"), static_cast<double>(support_histogram[4]));
+    histogram.insert(
+        QStringLiteral("support_5_plus"),
+        static_cast<double>(support_histogram[5]));
+
+    object.insert(QStringLiteral("valid_inputs"), true);
+    object.insert(
+        QStringLiteral("mask_pixel_count"),
+        static_cast<double>(mask_pixel_count));
+    object.insert(
+        QStringLiteral("valid_pixel_count"),
+        static_cast<double>(valid_pixel_count));
+    object.insert(
+        QStringLiteral("native_valid_pixel_count"),
+        static_cast<double>(native_valid_pixel_count));
+    object.insert(
+        QStringLiteral("repaired_valid_pixel_count"),
+        static_cast<double>(repaired_valid_pixel_count));
+    object.insert(
+        QStringLiteral("native_valid_ratio"),
+        mask_pixel_count > 0
+            ? static_cast<double>(native_valid_pixel_count) /
+                  static_cast<double>(mask_pixel_count)
+            : 0.0);
+    object.insert(
+        QStringLiteral("repaired_valid_ratio"),
+        mask_pixel_count > 0
+            ? static_cast<double>(repaired_valid_pixel_count) /
+                  static_cast<double>(mask_pixel_count)
+            : 0.0);
+    object.insert(QStringLiteral("geometry_support_histogram"), histogram);
+    object.insert(
+        QStringLiteral("inverse_depth_spread_p50"), percentile(0.50));
+    object.insert(
+        QStringLiteral("inverse_depth_spread_p90"), percentile(0.90));
+    object.insert(
+        QStringLiteral("inverse_depth_spread_p95"), percentile(0.95));
+    return object;
 }
 
 } // namespace mvs

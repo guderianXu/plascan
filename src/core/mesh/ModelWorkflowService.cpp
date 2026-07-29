@@ -511,6 +511,40 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
                                .toDouble(options.surfaceSupportBandVoxels)),
         0.0f,
         12.0f);
+    options.enableUncertaintyAdaptiveTruncation = settings.value(
+        QStringLiteral("tsdfUncertaintyAdaptiveTruncation")).toBool(false);
+    options.uncertaintyAdaptiveScale = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfUncertaintyAdaptiveScale"))
+                               .toDouble(options.uncertaintyAdaptiveScale)),
+        0.0f,
+        2.0f);
+    options.uncertaintyAdaptiveActivationRatio = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfUncertaintyAdaptiveActivationRatio"))
+                               .toDouble(
+                                   options.uncertaintyAdaptiveActivationRatio)),
+        1.0f,
+        4.0f);
+    options.uncertaintyAdaptiveMaximumTruncationVoxels = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfUncertaintyAdaptiveMaximumTruncationVoxels"))
+                               .toDouble(
+                                   options.uncertaintyAdaptiveMaximumTruncationVoxels)),
+        1.0f,
+        16.0f);
+    options.uncertaintyAdaptiveMaximumSamplesPerFrame = qBound(
+        256,
+        settings.value(QStringLiteral(
+            "tsdfUncertaintyAdaptiveMaximumSamplesPerFrame"))
+            .toInt(options.uncertaintyAdaptiveMaximumSamplesPerFrame),
+        100000);
+    options.uncertaintyAdaptiveMinimumSampleCount = qBound(
+        64,
+        settings.value(QStringLiteral(
+            "tsdfUncertaintyAdaptiveMinimumSampleCount"))
+            .toInt(options.uncertaintyAdaptiveMinimumSampleCount),
+        100000);
     options.minimumVoxelWeight = std::clamp(
         static_cast<float>(settings.value(QStringLiteral("tsdfMinimumVoxelWeight"))
                                .toDouble(options.minimumVoxelWeight)),
@@ -657,6 +691,29 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
                                .toDouble(options.coverageProtectedFrameMinimumMultiplier)),
         0.05f,
         1.0f);
+    options.enableOrbitalGapBoundaryRecovery = settings.value(
+        QStringLiteral("tsdfOrbitalGapBoundaryRecovery")).toBool(false);
+    options.orbitalGapBoundaryMinimumQualityMultiplier = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfOrbitalGapBoundaryMinimumQualityMultiplier"))
+                               .toDouble(
+                                   options.orbitalGapBoundaryMinimumQualityMultiplier)),
+        0.05f,
+        1.0f);
+    options.orbitalGapOppositeMinimumQualityMultiplier = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfOrbitalGapOppositeMinimumQualityMultiplier"))
+                               .toDouble(
+                                   options.orbitalGapOppositeMinimumQualityMultiplier)),
+        0.05f,
+        1.0f);
+    options.orbitalGapBoundaryMinimumObservationWeight = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfOrbitalGapBoundaryMinimumObservationWeight"))
+                               .toDouble(
+                                   options.orbitalGapBoundaryMinimumObservationWeight)),
+        0.05f,
+        1.0f);
     const bool automatic_surface_patch_support = options.resolution >= 384 &&
         options.simplifyTargetFaces > 0 &&
         (options.simplifyTargetFaces <= 120000 ||
@@ -691,6 +748,33 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
             "tsdfGeometryZeroCrossingMinimumCellVotes"))
             .toInt(options.geometryZeroCrossingMinimumCellVotes),
         8);
+    options.enableCrossViewAnchoredSurfaceRecovery = settings.value(
+        QStringLiteral("tsdfCrossViewAnchoredSurfaceRecovery")).toBool(false);
+    options.crossViewAnchoredMinimumObservationWeight = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfCrossViewAnchoredMinimumObservationWeight"))
+                               .toDouble(options
+                                   .crossViewAnchoredMinimumObservationWeight)),
+        0.05f,
+        1.0f);
+    options.crossViewAnchoredMinimumSupportedCorners = qBound(
+        1,
+        settings.value(QStringLiteral(
+            "tsdfCrossViewAnchoredMinimumSupportedCorners"))
+            .toInt(options.crossViewAnchoredMinimumSupportedCorners),
+        7);
+    options.crossViewAnchoredMinimumCellVotes = qBound(
+        1,
+        settings.value(QStringLiteral(
+            "tsdfCrossViewAnchoredMinimumCellVotes"))
+            .toInt(options.crossViewAnchoredMinimumCellVotes),
+        8);
+    options.crossViewAnchoredGrowthPasses = qBound(
+        1,
+        settings.value(QStringLiteral(
+            "tsdfCrossViewAnchoredGrowthPasses"))
+            .toInt(options.crossViewAnchoredGrowthPasses),
+        4);
     options.enableGeometryZeroCrossingCellSheets = settings.value(
         QStringLiteral("tsdfGeometryZeroCrossingCellSheets")).toBool(false);
     options.minimumGeometryZeroCrossingSheetCells = qBound(
@@ -1257,6 +1341,10 @@ void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
     {
         options->enableOrbitalFrameCoverageProtection = true;
     }
+    if (!settings.contains(QStringLiteral("tsdfOrbitalGapBoundaryRecovery")))
+    {
+        options->enableOrbitalGapBoundaryRecovery = true;
+    }
     if (!settings.contains(QStringLiteral("tsdfSurfaceEvidenceFreeSpaceVeto")))
     {
         options->enableSurfaceEvidenceFreeSpaceVeto = true;
@@ -1311,6 +1399,24 @@ void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
     {
         options->surfaceSupportBandVoxels = 7.5f;
     }
+    if (!settings.contains(QStringLiteral("tsdfUncertaintyAdaptiveTruncation")))
+    {
+        options->enableUncertaintyAdaptiveTruncation = true;
+    }
+    if (!settings.contains(QStringLiteral("tsdfUncertaintyAdaptiveScale")))
+    {
+        options->uncertaintyAdaptiveScale = 0.40f;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfUncertaintyAdaptiveActivationRatio")))
+    {
+        options->uncertaintyAdaptiveActivationRatio = 1.20f;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfUncertaintyAdaptiveMaximumTruncationVoxels")))
+    {
+        options->uncertaintyAdaptiveMaximumTruncationVoxels = 12.0f;
+    }
     if (!settings.contains(QStringLiteral("tsdfAllowInvalidNearestPixelRecovery")))
     {
         options->allowInvalidNearestPixelRecovery = false;
@@ -1323,6 +1429,31 @@ void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
     if (!settings.contains(QStringLiteral("tsdfGeometryZeroCrossingRecovery")))
     {
         options->enableGeometryZeroCrossingRecovery = false;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfCrossViewAnchoredSurfaceRecovery")))
+    {
+        options->enableCrossViewAnchoredSurfaceRecovery = false;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfCrossViewAnchoredMinimumObservationWeight")))
+    {
+        options->crossViewAnchoredMinimumObservationWeight = 0.25f;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfCrossViewAnchoredMinimumSupportedCorners")))
+    {
+        options->crossViewAnchoredMinimumSupportedCorners = 2;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfCrossViewAnchoredMinimumCellVotes")))
+    {
+        options->crossViewAnchoredMinimumCellVotes = 1;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfCrossViewAnchoredGrowthPasses")))
+    {
+        options->crossViewAnchoredGrowthPasses = 2;
     }
     if (!settings.contains(QStringLiteral("tsdfGeometryZeroCrossingCellSheets")))
     {
@@ -1871,6 +2002,15 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
         result.payload[QStringLiteral(
             "configured_orbital_frame_coverage_protection")] =
             options.enableOrbitalFrameCoverageProtection;
+        result.payload[QStringLiteral(
+            "configured_orbital_gap_boundary_recovery")] =
+            options.enableOrbitalGapBoundaryRecovery;
+        result.payload[QStringLiteral(
+            "configured_cross_view_anchored_surface_recovery")] =
+            options.enableCrossViewAnchoredSurfaceRecovery;
+        result.payload[QStringLiteral(
+            "configured_uncertainty_adaptive_truncation")] =
+            options.enableUncertaintyAdaptiveTruncation;
         result.payload[QStringLiteral(
             "configured_support_mask_free_space_carving")] =
             options.enableSupportMaskFreeSpaceCarving;

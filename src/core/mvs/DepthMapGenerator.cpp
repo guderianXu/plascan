@@ -282,6 +282,10 @@ QString makeMvsDepthInputHash(const DepthGenConfig &config,
         addHashValue(&hash, quality.totalMatches);
         addHashValue(&hash, quality.geometricInliers);
         addHashValue(&hash, quality.verified);
+        addHashValue(&hash, quality.hasVerificationStatistics);
+        addHashValue(&hash, quality.geometricCoverage);
+        hash.addData(QByteArray::fromStdString(quality.verificationReason));
+        hash.addData(QByteArray(1, '\0'));
     }
 
     const std::size_t sparse_point_count = sparse.points.size();
@@ -992,6 +996,10 @@ CrossViewHoleRepairOptions orbitalCrossViewHoleRepairOptions(
     options.maximumGrowthComponentArea =
         config.twoSourceGrowthMaximumComponentArea;
     options.anchoredInterpolation.enabled = true;
+    options.anchoredInterpolation.maximumComponentArea = 32000;
+    options.anchoredInterpolation.maximumComponentAreaRatio = 0.25f;
+    options.anchoredInterpolation.allowSilhouetteConnectedInterior = true;
+    options.anchoredInterpolation.silhouetteProtectionRadiusPixels = 4;
     return options;
 }
 
@@ -1389,6 +1397,10 @@ DepthAnchoredHoleInterpolationStats repairPostprocessedInternalDepthHoles(
     }
     DepthAnchoredHoleInterpolationOptions options;
     options.enabled = true;
+    options.maximumComponentArea = 32000;
+    options.maximumComponentAreaRatio = 0.25f;
+    options.allowSilhouetteConnectedInterior = true;
+    options.silhouetteProtectionRadiusPixels = 4;
     return interpolateAnchoredInternalDepthHoles(
         depth,
         support_mask,
@@ -2305,21 +2317,45 @@ void DepthMapGenerator::prepareFrameCaches()
             const MvsSourcePairQuality *pairQuality = pairQualityLookup.find(
                 _views[static_cast<size_t>(refIdx)].imagePath,
                 _views[static_cast<size_t>(candidate.viewIndex)].imagePath);
-            sourceCandidate.geometricInliers = referenceHasPairQuality
-                ? (pairQuality ? std::max(0, pairQuality->geometricInliers) : 0)
+            const bool pairVerificationFailed = pairQuality
+                && pairQuality->hasVerificationStatistics
+                && !pairQuality->verified;
+            const bool pairVerificationMissing = pairQuality
+                && !pairQuality->hasVerificationStatistics;
+            sourceCandidate.geometricInliers =
+                pairQuality && pairQuality->hasVerificationStatistics
+                ? std::max(0, pairQuality->geometricInliers)
                 : candidate.commonVisiblePoints;
             sourceCandidate.verifiedPairGeometry = pairQuality
                 && pairQuality->verified
                 && pairQuality->geometricInliers > 0;
+            sourceCandidate.verificationStatus =
+                sourceCandidate.verifiedPairGeometry
+                ? MvsSourceVerificationStatus::Verified
+                : (pairVerificationFailed
+                       ? MvsSourceVerificationStatus::Failed
+                       : (pairVerificationMissing || referenceHasPairQuality
+                              ? MvsSourceVerificationStatus::MissingStatistics
+                              : MvsSourceVerificationStatus::NotRequested));
+            sourceCandidate.pairTotalMatches =
+                pairQuality ? std::max(0, pairQuality->totalMatches) : 0;
+            sourceCandidate.pairCoverageScore =
+                pairQuality ? pairQuality->geometricCoverage : 0.0f;
+            sourceCandidate.verificationReason = pairQuality
+                ? pairQuality->verificationReason
+                : (referenceHasPairQuality
+                       ? "pair_not_present_in_current_catalog"
+                       : "pair_verification_not_requested");
             sourceCandidate.medianTriangulationAngleDeg = medianAngle;
             sourceCandidate.coverageScore = refVisibleCount > 0
                 ? std::clamp(static_cast<float>(candidate.commonVisiblePoints) / static_cast<float>(refVisibleCount), 0.0f, 1.0f)
                 : 0.0f;
             sourceCandidate.baselineScore = std::clamp(medianAngle / 20.0f, 0.0f, 1.0f);
             sourceCandidate.sequenceDistance = candidate.sequenceDistance;
-            sourceCandidate.knownOverlap = referenceHasPairQuality
-                ? sourceCandidate.verifiedPairGeometry
-                : true;
+            sourceCandidate.knownOverlap =
+                !pairVerificationFailed
+                && (candidate.commonVisiblePoints > 0
+                    || sourceCandidate.verifiedPairGeometry);
             candidates.push_back(sourceCandidate);
             const bool hasRequiredPairQuality = !plannerOptions.requireVerifiedPairGeometry
                 || (sourceCandidate.verifiedPairGeometry
@@ -2335,6 +2371,21 @@ void DepthMapGenerator::prepareFrameCaches()
                 }
             }
         }
+        if (_effectiveSceneProfile == MvsSceneProfile::OrbitalObject)
+        {
+            std::vector<float> candidate_angles;
+            candidate_angles.reserve(candidates.size());
+            for (const MvsSourceCandidate &candidate : candidates)
+            {
+                candidate_angles.push_back(
+                    candidate.medianTriangulationAngleDeg);
+            }
+            plannerOptions.maxTriangulationAngleDeg =
+                adaptiveMvsSourceMaximumAngleDeg(
+                    _effectiveSceneProfile,
+                    desiredSourceCount,
+                    candidate_angles);
+        }
 
         const MvsSourcePlan sourcePlan = requireVerifiedSourcePairsForReference
             ? planMvsSourceViewsVerifiedFirst(candidates, plannerOptions)
@@ -2344,6 +2395,45 @@ void DepthMapGenerator::prepareFrameCaches()
         _frameCaches[static_cast<size_t>(refIdx)].sourceViewScores = sourcePlan.selected;
         _frameCaches[static_cast<size_t>(refIdx)].requestedSourceViewCount = desiredSourceCount;
         _frameCaches[static_cast<size_t>(refIdx)].sourceViewShortfall = sourcePlan.sourceViewShortfall;
+        if (sourcePlan.sourceViewShortfall > 0)
+        {
+            bool verification_failed = false;
+            bool verification_missing = false;
+            bool angle_rejected = false;
+            bool evidence_missing = false;
+            for (const MvsSourceRejectedCandidate &rejected : sourcePlan.rejected)
+            {
+                verification_failed = verification_failed ||
+                    rejected.candidate.verificationStatus ==
+                        MvsSourceVerificationStatus::Failed;
+                verification_missing = verification_missing ||
+                    rejected.candidate.verificationStatus ==
+                        MvsSourceVerificationStatus::MissingStatistics;
+                angle_rejected = angle_rejected ||
+                    rejected.reason == MvsSourceRejectReason::TriangulationAngle;
+                evidence_missing = evidence_missing ||
+                    rejected.reason == MvsSourceRejectReason::NoEvidence;
+            }
+            std::string reason = "insufficient_qualified_sources";
+            if (verification_failed)
+            {
+                reason = "pair_geometry_verification_failed";
+            }
+            else if (verification_missing)
+            {
+                reason = "missing_pair_verification_statistics";
+            }
+            else if (angle_rejected)
+            {
+                reason = "safe_baseline_source_shortfall";
+            }
+            else if (evidence_missing)
+            {
+                reason = "insufficient_overlap_evidence";
+            }
+            _frameCaches[static_cast<size_t>(refIdx)]
+                .sourceViewShortfallReason = std::move(reason);
+        }
         sources.reserve(static_cast<size_t>(std::min(NV - 1, desiredSourceCount)));
         for (const auto &score : sourcePlan.selected)
         {
@@ -3795,6 +3885,39 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
         return result;
     }
     result.sourceViewIndices = sourceIndices;
+    if (_frameCachesReady &&
+        refIdx >= 0 &&
+        refIdx < static_cast<int>(_frameCaches.size()))
+    {
+        const auto &cache = _frameCaches[static_cast<size_t>(refIdx)];
+        result.requestedSourceViewCount = cache.requestedSourceViewCount;
+        result.sourceViewShortfall = std::max(
+            0,
+            result.requestedSourceViewCount -
+                static_cast<int>(result.sourceViewIndices.size()));
+        result.sourceViewShortfallReason = cache.sourceViewShortfallReason;
+        result.sourceViewPlan.reserve(result.sourceViewIndices.size());
+        for (const int sourceIndex : result.sourceViewIndices)
+        {
+            const auto score = std::find_if(
+                cache.sourceViewScores.cbegin(),
+                cache.sourceViewScores.cend(),
+                [sourceIndex](const MvsSourcePlanEntry &entry)
+                {
+                    return entry.viewIndex == sourceIndex;
+                });
+            if (score != cache.sourceViewScores.cend())
+            {
+                result.sourceViewPlan.push_back(*score);
+            }
+        }
+    }
+    if (result.requestedSourceViewCount <= 0)
+    {
+        result.requestedSourceViewCount =
+            static_cast<int>(result.sourceViewIndices.size());
+        result.sourceViewShortfall = 0;
+    }
 
     {
         std::ostringstream oss;
@@ -4673,6 +4796,8 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                 &camI,
                 i >= 0 && i < static_cast<int>(_grayCache.size())
                     ? &_grayCache[static_cast<std::size_t>(i)] : nullptr);
+        _depthFrames[i].crossViewRepairDiagnostics =
+            crossViewHoleRepairStatsToJson(repair_stats);
         _depthFrames[i].depthCompleteness.crossViewRepairedCount +=
             static_cast<int>(repair_stats.repairedPixelCount);
         cv::Mat restoration_mask = _depthFrames[i].supportRegionMask &&
@@ -5026,6 +5151,8 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 &reference_camera,
                 frame_index >= 0 && frame_index < static_cast<int>(_grayCache.size())
                     ? &_grayCache[static_cast<std::size_t>(frame_index)] : nullptr);
+        _depthFrames[frame_index].crossViewRepairDiagnostics =
+            crossViewHoleRepairStatsToJson(repair_stats);
         _depthFrames[frame_index].depthCompleteness.crossViewRepairedCount +=
             static_cast<int>(repair_stats.repairedPixelCount);
         cv::Mat restoration_mask = _depthFrames[frame_index].supportRegionMask &&
@@ -5103,6 +5230,9 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 filtered_depth,
                 filtered_confidence,
                 _effectiveSceneProfile);
+        _depthFrames[frame_index].crossViewRepairDiagnostics.insert(
+            QStringLiteral("postprocess_anchored_interpolation"),
+            depthAnchoredHoleInterpolationStatsToJson(final_repair));
         _depthFrames[frame_index].depthCompleteness.crossViewRepairedCount +=
             static_cast<int>(final_repair.interpolatedPixelCount);
         if (final_repair.interpolatedPixelCount > 0)
@@ -5748,6 +5878,7 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         QJsonArray sourceIndices;
         QJsonArray sourcePlan;
         QStringList sourceImageList;
+        const bool hasResultSourcePlan = !result.sourceViewPlan.empty();
         const bool hasSourceScoreCache =
             frameIndex >= 0
             && frameIndex < static_cast<int>(_frameCaches.size())
@@ -5762,16 +5893,24 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             const QString sourceImage = QString::fromStdString(_views[sourceIndex].imagePath);
             sourceImages.append(sourceImage);
             sourceImageList.append(sourceImage);
-            if (hasSourceScoreCache)
+            const std::vector<MvsSourcePlanEntry> *scores = nullptr;
+            if (hasResultSourcePlan)
             {
-                const auto &scores = _frameCaches[static_cast<size_t>(frameIndex)].sourceViewScores;
-                const auto it = std::find_if(scores.begin(),
-                                             scores.end(),
+                scores = &result.sourceViewPlan;
+            }
+            else if (hasSourceScoreCache)
+            {
+                scores = &_frameCaches[static_cast<size_t>(frameIndex)].sourceViewScores;
+            }
+            if (scores)
+            {
+                const auto it = std::find_if(scores->cbegin(),
+                                             scores->cend(),
                                              [sourceIndex](const MvsSourcePlanEntry &entry)
                                              {
                                                  return entry.viewIndex == sourceIndex;
                                              });
-                if (it != scores.end())
+                if (it != scores->cend())
                 {
                     QJsonObject sourcePlanEntry = mvsSourcePlanEntryToJson(*it);
                     sourcePlanEntry.insert(QStringLiteral("source_image"), sourceImage);
@@ -5820,6 +5959,26 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         }
         const QJsonObject depthCompletenessJson =
             depthCompletenessDiagnosticsToJson(depthCompleteness);
+        const cv::Mat empty_geometry_evidence;
+        const QJsonObject geometryEvidenceDiagnostics =
+            geometryEvidenceDiagnosticsToJson(
+                *result.depthMap,
+                result.geometrySupportCount &&
+                        !result.geometrySupportCount->empty()
+                    ? *result.geometrySupportCount
+                    : empty_geometry_evidence,
+                result.inverseDepthRelativeSpread &&
+                        !result.inverseDepthRelativeSpread->empty()
+                    ? *result.inverseDepthRelativeSpread
+                    : empty_geometry_evidence,
+                result.crossViewRepairedMask &&
+                        !result.crossViewRepairedMask->empty()
+                    ? *result.crossViewRepairedMask
+                    : empty_geometry_evidence,
+                result.supportRegionMask &&
+                        !result.supportRegionMask->empty()
+                    ? *result.supportRegionMask
+                    : empty_geometry_evidence);
         const cv::Mat emptyConfidence;
         const DepthMapQualityMetrics depthQualityMetrics = result.qualityMetrics.width > 0
             ? result.qualityMetrics
@@ -5833,14 +5992,28 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         {
             depthQualityJson.insert(it.key(), it.value());
         }
-        const int requestedSourceViewCount = hasSourceScoreCache
-            ? _frameCaches[static_cast<size_t>(frameIndex)].requestedSourceViewCount
-            : sourceQualitySummary.sourceViewCount;
+        const int requestedSourceViewCount =
+            result.requestedSourceViewCount > 0
+            ? result.requestedSourceViewCount
+            : (hasSourceScoreCache
+                   ? _frameCaches[static_cast<size_t>(frameIndex)]
+                         .requestedSourceViewCount
+                   : sourceQualitySummary.sourceViewCount);
         const int sourceViewShortfall = std::max(
             0,
             requestedSourceViewCount - sourceQualitySummary.sourceViewCount);
+        const QString sourceViewShortfallReason =
+            !result.sourceViewShortfallReason.empty()
+            ? QString::fromStdString(result.sourceViewShortfallReason)
+            : (hasSourceScoreCache
+                   ? QString::fromStdString(
+                         _frameCaches[static_cast<size_t>(frameIndex)]
+                             .sourceViewShortfallReason)
+                   : QString());
         depthQualityJson[QStringLiteral("requested_source_view_count")] = requestedSourceViewCount;
         depthQualityJson[QStringLiteral("source_view_shortfall")] = sourceViewShortfall;
+        depthQualityJson[QStringLiteral("source_view_shortfall_reason")] =
+            sourceViewShortfallReason;
         depthQualityJson[QStringLiteral("verified_source_view_count")] =
             sourceQualitySummary.verifiedSourceViewCount;
         depthQualityJson[QStringLiteral("backfill_source_view_count")] =
@@ -5935,6 +6108,8 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         artifact[QStringLiteral("source_view_count")] = sourceQualitySummary.sourceViewCount;
         artifact[QStringLiteral("requested_source_view_count")] = requestedSourceViewCount;
         artifact[QStringLiteral("source_view_shortfall")] = sourceViewShortfall;
+        artifact[QStringLiteral("source_view_shortfall_reason")] =
+            sourceViewShortfallReason;
         artifact[QStringLiteral("verified_source_view_count")] =
             sourceQualitySummary.verifiedSourceViewCount;
         artifact[QStringLiteral("backfill_source_view_count")] =
@@ -5947,6 +6122,10 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             static_cast<double>(result.qualityMetrics.validCoverage);
         artifact[QStringLiteral("depth_quality")] = depthQualityJson;
         artifact[QStringLiteral("depth_completeness")] = depthCompletenessJson;
+        artifact[QStringLiteral("cross_view_repair_diagnostics")] =
+            result.crossViewRepairDiagnostics;
+        artifact[QStringLiteral("geometry_evidence_diagnostics")] =
+            geometryEvidenceDiagnostics;
         if (depthCompleteness.finalMetrics.validInputs)
         {
             artifact[QStringLiteral("mask_pixel_count")] =
@@ -6000,6 +6179,9 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         }
         record.sourcePlan = sourcePlan;
         record.sourceViewCount = sourceQualitySummary.sourceViewCount;
+        record.requestedSourceViewCount = requestedSourceViewCount;
+        record.sourceViewShortfall = sourceViewShortfall;
+        record.sourceViewShortfallReason = sourceViewShortfallReason;
         record.meanSourceQualityScore = sourceQualitySummary.meanQuality;
         record.minSourceQualityScore = sourceQualitySummary.minQuality;
         record.meanDepthConfidence = depthConfidenceSummary.meanConfidence;
@@ -6007,6 +6189,8 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         record.validCoverage = static_cast<double>(result.qualityMetrics.validCoverage);
         record.depthQuality = depthQualityJson;
         record.depthCompleteness = depthCompletenessJson;
+        record.crossViewRepairDiagnostics = result.crossViewRepairDiagnostics;
+        record.geometryEvidenceDiagnostics = geometryEvidenceDiagnostics;
         record.qualityDecision = qualityDecisionJson;
         record.pyramidLevels = pyramidLevelsJson;
         record.maskSource = QString::fromStdString(result.maskSource);
@@ -6653,6 +6837,9 @@ void DepthMapGenerator::runInBackground()
                         *res.depthMap,
                         confidence,
                         _effectiveSceneProfile);
+                res.crossViewRepairDiagnostics.insert(
+                    QStringLiteral("postprocess_anchored_interpolation"),
+                    depthAnchoredHoleInterpolationStatsToJson(final_repair));
                 res.depthCompleteness.crossViewRepairedCount +=
                     static_cast<int>(final_repair.interpolatedPixelCount);
                 updateDepthCompletenessAfterPostprocess(

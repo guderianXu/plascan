@@ -473,6 +473,7 @@ set_target_properties(test_project_data PROPERTIES
 target_link_libraries(test_project_data PRIVATE
     plascan_common_project
     Qt6::Core
+    Qt6::Concurrent
     ${PLASCAN_LIBZIP_TARGET}
     GTest::gtest_main
 )

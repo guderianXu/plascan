@@ -7,6 +7,7 @@
 #include "project/ProjectIO.h"
 #include "GuiTaskRunner.h"
 #include "io/PathIO.h"
+#include "project/AspMatchPointReader.h"
 
 #include <QtConcurrent>
 #include <QFuture>
@@ -35,6 +36,17 @@
 
 namespace
 {
+
+struct MatchPairLoadResult
+{
+    int generation = 0;
+    QString imagePathA;
+    QString imagePathB;
+    QString matchFilePath;
+    QImage imageA;
+    QImage imageB;
+    xjw::common::project::AspMatchPointResult matches;
+};
 
 bool isDepthMapPreviewPath(const QString &path)
 {
@@ -153,6 +165,7 @@ void CanvasWidget::showImage(const QString &path)
         return;
     }
 
+    ++_matchPairLoadGeneration;
     _singleImageReady = false;
     _viewRotationDegrees = 0;
     _zoomFactor = 1.0;
@@ -421,8 +434,12 @@ void CanvasWidget::setDepthInspectionActive(bool active)
 
 void CanvasWidget::showMatchedPair(const QString &imgA, const QString &imgB, const QString &matchFile)
 {
-    if (!scene() || !_layerRenderer) return;
+    if (!scene() || !_layerRenderer)
+    {
+        return;
+    }
 
+    const int generation = ++_matchPairLoadGeneration;
     _singleImageReady = false;
     _viewRotationDegrees = 0;
     _currentImagePath.clear();
@@ -437,277 +454,85 @@ void CanvasWidget::showMatchedPair(const QString &imgA, const QString &imgB, con
     _layerRenderer->clearMaskLayers();
     _layerRenderer->clear();
 
-    // parse match file (robust raw parser based on ASP parse_match_file.py)
-    QVector<QPointF> ptsA, ptsB;
-    QFile f(matchFile);
-    if (!QFileInfo(matchFile).exists()) {
-        LOG_WARN(QStringLiteral("showMatchedPair: match file not found: %1").arg(matchFile));
-    }
-
-    if (f.open(QIODevice::ReadOnly)) {
-        LOG_DEBUG(QStringLiteral("showMatchedPair: parsing raw match file %1").arg(matchFile));
-        using namespace Qt;
-        auto readBytes = [&](qint64 n) -> QByteArray {
-            QByteArray b = f.read(n);
-            if (b.size() != n) {
-                LOG_WARN(QStringLiteral("showMatchedPair: unexpected EOF when reading %1 bytes").arg(n));
-            }
-            return b;
-        };
-
-        auto readUint64LE = [&](quint64 &out) -> bool {
-            QByteArray b = readBytes(8);
-            if (b.size() != 8) return false;
-            quint64 v = 0;
-            memcpy(&v, b.constData(), 8);
-            out = qFromLittleEndian<quint64>(v);
-            return true;
-        };
-        auto readUint32LE = [&](quint32 &out) -> bool {
-            QByteArray b = readBytes(4);
-            if (b.size() != 4) return false;
-            quint32 v = 0; memcpy(&v, b.constData(), 4); out = qFromLittleEndian<quint32>(v); return true;
-        };
-        auto readInt32LE = [&](qint32 &out) -> bool {
-            QByteArray b = readBytes(4);
-            if (b.size() != 4) return false;
-            qint32 v = 0; memcpy(&v, b.constData(), 4); out = qFromLittleEndian<qint32>(v); return true;
-        };
-        auto readFloatLE = [&](float &out) -> bool {
-            QByteArray b = readBytes(4);
-            if (b.size() != 4) return false;
-            quint32 v = 0; memcpy(&v, b.constData(), 4); v = qFromLittleEndian<quint32>(v);
-            float fval; memcpy(&fval, &v, sizeof(float)); out = fval; return true;
-        };
-        auto readInt8 = [&](qint8 &out) -> bool {
-            QByteArray b = readBytes(1);
-            if (b.size() != 1) return false;
-            out = static_cast<qint8>(b.at(0)); return true;
-        };
-
-        quint64 size1 = 0, size2 = 0;
-        if (!readUint64LE(size1) || !readUint64LE(size2)) {
-            LOG_WARN(QStringLiteral("showMatchedPair: failed to read header sizes"));
-            f.close();
-        } else {
-            LOG_DEBUG(QStringLiteral("showMatchedPair: parsed header size1=%1 size2=%2").arg(size1).arg(size2));
-
-            auto read_ip_raw = [&]() -> QPointF {
-                float x=0.0f, y=0.0f;
-                qint32 xi=0, yi=0;
-                float orientation=0.0f, scale=0.0f, interest=0.0f;
-                qint8 pol=0; quint32 octave=0, scale_lvl=0; quint64 ndesc=0;
-                if (!readFloatLE(x)) return QPointF();
-                if (!readFloatLE(y)) return QPointF();
-                if (!readInt32LE(xi)) return QPointF();
-                if (!readInt32LE(yi)) return QPointF();
-                if (!readFloatLE(orientation)) return QPointF();
-                if (!readFloatLE(scale)) return QPointF();
-                if (!readFloatLE(interest)) return QPointF();
-                if (!readInt8(pol)) return QPointF();
-                if (!readUint32LE(octave)) return QPointF();
-                if (!readUint32LE(scale_lvl)) return QPointF();
-                if (!readUint64LE(ndesc)) return QPointF();
-
-                qint64 toSkip = static_cast<qint64>(ndesc) * static_cast<qint64>(sizeof(float));
-                if (toSkip > 0)
-                {
-                    // guard the seek length to avoid absurd values
-                    const qint64 maxSkip = 1LL << 30; // ~1GB
-                    if (toSkip > maxSkip)
-                    {
-                        LOG_WARN(QStringLiteral("showMatchedPair: ndesc too large (%1), skipping descriptors aborted")
-                                     .arg(ndesc));
-                    }
-                    else
-                    {
-                        const qint64 cur = f.pos();
-                        if (!f.seek(cur + toSkip))
-                        {
-                            LOG_WARN(QStringLiteral("showMatchedPair: failed to skip descriptor bytes %1").arg(toSkip));
-                        }
-                    }
-                }
-                return QPointF(static_cast<qreal>(x), static_cast<qreal>(y));
-            };
-
-            for (quint64 i = 0; i < size1; ++i) ptsA.append(read_ip_raw());
-            for (quint64 i = 0; i < size2; ++i) ptsB.append(read_ip_raw());
-            LOG_DEBUG(QStringLiteral("showMatchedPair: read ptsA=%1 ptsB=%2").arg(ptsA.size()).arg(ptsB.size()));
-            f.close();
-        }
-    }
-
     // Ensure renderer knows project path (so caching/convert works same as showImage)
-    if (_layerRenderer)
+    const QString projectPath = property("currentProjectPath").toString();
+    if (!projectPath.isEmpty())
     {
-        const QVariant v = property("currentProjectPath");
-        if (v.isValid())
+        _layerRenderer->setCurrentProjectPath(projectPath);
+        if (_depthOverlayController)
         {
-            _layerRenderer->setCurrentProjectPath(v.toString());
-            if (_depthOverlayController)
+            _depthOverlayController->setProjectPath(projectPath);
+        }
+    }
+
+    xjw::gui::tasks::runGuarded(
+        this,
+        [generation, imgA, imgB, matchFile, projectPath]()
+        {
+            MatchPairLoadResult result;
+            result.generation = generation;
+            result.imagePathA = imgA;
+            result.imagePathB = imgB;
+            result.matchFilePath = matchFile;
+            result.imageA = LayerRenderer::loadImageForDisplay(imgA, projectPath);
+            result.imageB = LayerRenderer::loadImageForDisplay(imgB, projectPath);
+            result.matches = xjw::common::project::readAspMatchPoints(matchFile);
+            return result;
+        },
+        [](CanvasWidget *self, MatchPairLoadResult result)
+        {
+            if (result.generation != self->_matchPairLoadGeneration
+                || !self->_layerRenderer
+                || !self->scene())
             {
-                _depthOverlayController->setProjectPath(v.toString());
+                return;
             }
-        }
-    }
 
-    // Add stitched images
-    QGraphicsPixmapItem *itemA = nullptr;
-    QGraphicsPixmapItem *itemB = nullptr;
-    if (!_layerRenderer->addStitchedImagePair(imgA, imgB, &itemA, &itemB, 20))
-    {
-        qWarning() << "addStitchedImagePair failed for" << imgA << imgB;
-        LOG_WARN(QStringLiteral("showMatchedPair: addStitchedImagePair failed for %1 <-> %2").arg(imgA, imgB));
-        // fallback: show single image
-        showImage(imgA);
-        return;
-    }
-
-    // Validate that pixmaps are non-empty
-    if (!itemA || itemA->pixmap().isNull()) {
-        qWarning() << "Failed to load image A for stitched view:" << imgA;
-        // cleanup any added B
-        if (itemA) { _layerRenderer->clear(); }
-        showImage(imgA);
-        return;
-    }
-    if (!itemB || itemB->pixmap().isNull()) {
-        qWarning() << "Failed to load image B for stitched view:" << imgB;
-        // treat as single image
-        _layerRenderer->clear();
-        showImage(imgA);
-        return;
-    }
-
-    qreal bOffsetX = itemB ? itemB->pos().x() : 0.0;
-
-    // Debug: report positions and sizes of stitched items
-    if (itemA)
-    {
-        LOG_DEBUG(QStringLiteral("showMatchedPair: itemA pos=(%1,%2) size=%3x%4")
-                      .arg(itemA->pos().x())
-                      .arg(itemA->pos().y())
-                      .arg(itemA->pixmap().width())
-                      .arg(itemA->pixmap().height()));
-    }
-    if (itemB)
-    {
-        LOG_DEBUG(QStringLiteral("showMatchedPair: itemB pos=(%1,%2) size=%3x%4")
-                      .arg(itemB->pos().x())
-                      .arg(itemB->pos().y())
-                      .arg(itemB->pixmap().width())
-                      .arg(itemB->pixmap().height()));
-    }
-
-    // draw match lines if points parsed
-    if (!ptsA.isEmpty() && !ptsB.isEmpty())
-    {
-        LOG_DEBUG(QStringLiteral("showMatchedPair: drawing match lines with offset %1").arg(bOffsetX));
-
-        // Log a few sample points for diagnostics
-        for (int si = 0; si < qMin(5, ptsA.size()); ++si)
-        {
-            const QPointF &pa = ptsA.at(si);
-            const QPointF &pb = (si < ptsB.size()) ? ptsB.at(si) : QPointF();
-            LOG_DEBUG(QStringLiteral("showMatchedPair: sample[%1] A=(%2,%3) B=(%4,%5)")
-                          .arg(si)
-                          .arg(pa.x())
-                          .arg(pa.y())
-                          .arg(pb.x())
-                          .arg(pb.y()));
-        }
-
-        // Filter out obviously invalid points (non-finite or extreme) to avoid corrupting scene bounds
-        QVector<QPointF> fA;
-        fA.reserve(ptsA.size());
-        QVector<QPointF> fB;
-        fB.reserve(ptsB.size());
-        const double MAX_COORD = 1e7; // arbitrary large threshold
-        const int n = qMin(ptsA.size(), ptsB.size());
-        for (int i = 0; i < n; ++i)
-        {
-            const QPointF &a = ptsA.at(i);
-            const QPointF &b = ptsB.at(i);
-            const bool aok = std::isfinite(a.x()) &&
-                             std::isfinite(a.y()) &&
-                             std::fabs(a.x()) <= MAX_COORD &&
-                             std::fabs(a.y()) <= MAX_COORD;
-            const bool bok = std::isfinite(b.x()) &&
-                             std::isfinite(b.y()) &&
-                             std::fabs(b.x()) <= MAX_COORD &&
-                             std::fabs(b.y()) <= MAX_COORD;
-            if (aok && bok)
+            if (!result.matches.success)
             {
-                fA.append(a);
-                fB.append(b);
+                LOG_WARN(QStringLiteral("showMatchedPair: %1")
+                             .arg(result.matches.errorMessage));
             }
-            else
+
+            QGraphicsPixmapItem *itemA = nullptr;
+            QGraphicsPixmapItem *itemB = nullptr;
+            if (!self->_layerRenderer->addStitchedImagePair(
+                    result.imageA,
+                    result.imageB,
+                    result.imagePathA,
+                    result.imagePathB,
+                    &itemA,
+                    &itemB,
+                    20))
             {
-                LOG_DEBUG(QStringLiteral("showMatchedPair: skipping invalid pair index %1 A=(%2,%3) B=(%4,%5)")
-                              .arg(i)
-                              .arg(a.x())
-                              .arg(a.y())
-                              .arg(b.x())
-                              .arg(b.y()));
+                LOG_WARN(QStringLiteral("showMatchedPair: 影像加载失败 %1 <-> %2")
+                             .arg(result.imagePathA, result.imagePathB));
+                self->showImage(result.imagePathA);
+                return;
             }
-        }
 
-        LOG_DEBUG(QStringLiteral("showMatchedPair: filtered ptsA=%1 ptsB=%2").arg(fA.size()).arg(fB.size()));
+            const qreal secondImageOffset = itemB ? itemB->pos().x() : 0.0;
+            if (!result.matches.leftPoints.isEmpty()
+                && !result.matches.rightPoints.isEmpty())
+            {
+                self->_layerRenderer->addMatchLines(
+                    result.matches.leftPoints,
+                    result.matches.rightPoints,
+                    secondImageOffset);
+            }
 
-        if (!fA.isEmpty() && !fB.isEmpty())
-        {
-            _layerRenderer->addMatchLines(fA, fB, bOffsetX);
-        }
-        else
-        {
-            LOG_DEBUG(QStringLiteral("showMatchedPair: no valid match points after filtering"));
-        }
-    }
-    else
-    {
-        LOG_DEBUG(QStringLiteral("showMatchedPair: no match points to draw"));
-    }
-    // 强制刷新并输出场景信息，帮助诊断“白屏”
-    if (scene())
-    {
-        // log item count and bounding rect
-        const auto itemsCount = scene()->items().size();
-        const QRectF boundsBefore = scene()->itemsBoundingRect();
-        LOG_DEBUG(QStringLiteral("showMatchedPair: scene items=%1 boundsBefore=(%2,%3,%4,%5)")
-                      .arg(itemsCount)
-                      .arg(boundsBefore.x())
-                      .arg(boundsBefore.y())
-                      .arg(boundsBefore.width())
-                      .arg(boundsBefore.height()));
-        // Ask scene and viewport to update immediately
-        scene()->update();
-        viewport()->update();
-    }
+            const QRectF bounds = self->scene()->itemsBoundingRect();
+            if (bounds.isEmpty())
+            {
+                self->_layerRenderer->clear();
+                self->showImage(result.imagePathA);
+                return;
+            }
 
-    // fit view to items bounding rect (robust if sceneRect was large/empty)
-    QRectF rect = scene()->itemsBoundingRect();
-    LOG_DEBUG(QStringLiteral("showMatchedPair: itemsBoundingRect after draw=(%1,%2,%3,%4)")
-                  .arg(rect.x())
-                  .arg(rect.y())
-                  .arg(rect.width())
-                  .arg(rect.height()));
-    if (!rect.isEmpty())
-    {
-        scene()->setSceneRect(rect);
-        fitInView(rect, Qt::KeepAspectRatio);
-    }
-    else
-    {
-        // fallback to show single image
-        qWarning() << "itemsBoundingRect empty after stitching; falling back";
-        LOG_WARN(QStringLiteral("showMatchedPair: itemsBoundingRect empty after stitching, "
-                                "falling back to single image"));
-        _layerRenderer->clear();
-        showImage(imgA);
-        return;
-    }
-    _zoomFactor = 1.0;
+            self->scene()->setSceneRect(bounds);
+            self->fitInView(bounds, Qt::KeepAspectRatio);
+            self->_zoomFactor = 1.0;
+        });
 }
 
 void CanvasWidget::setActiveFeatureSuffix(const QString &suffix)

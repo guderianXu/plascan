@@ -366,7 +366,7 @@ TiePointMutationResult ProjectTiePointResultService::replaceCurrent(ProjectData 
         updatedMeta[key] = QJsonArray{};
     }
     projectData->updateMetadata(updatedMeta, true);
-    projectData->saveTemporaryMetadata();
+    projectData->scheduleTemporaryMetadataSave();
 
     result.removedRecordCount = oldRecords.size();
     result.reconstructionGenerationId =
@@ -421,7 +421,7 @@ TiePointMutationResult ProjectTiePointResultService::deleteAll(ProjectData *proj
     QJsonObject newMeta = oldMeta;
     newMeta[QStringLiteral("aerial_triangulation_results")] = QJsonArray{};
     projectData->updateMetadata(newMeta, true);
-    projectData->saveTemporaryMetadata();
+    projectData->scheduleTemporaryMetadataSave();
     removeEmptyDirectories(oldDirectories, protectedPaths);
 
     result.success = true;

@@ -154,6 +154,7 @@ private:
     std::map<QString, std::pair<QDateTime, std::vector<cv::KeyPoint>>> _spCache;
     int _featureLoadGeneration{0};
     int _residualLoadGeneration{0};
+    int _matchPairLoadGeneration{0};
     int _viewRotationDegrees{0};
     bool _singleImageReady{false};
     bool _depthOverlayEnabled{false};

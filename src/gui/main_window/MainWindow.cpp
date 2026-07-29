@@ -393,7 +393,6 @@ void MainWindow::setupSelectionPanels()
     _photosDock->setObjectName(QStringLiteral("photosDock"));
     configureMovableDock(_photosDock);
     _photosDock->setWidget(_photoStrip);
-    _photosPanel = _photosDock;
 
     restoreDefaultProjectDockLayout();
 }
@@ -459,38 +458,55 @@ void MainWindow::setupMenuConnections()
     }
 
     _workspacePanels = new WorkspacePanelController(this);
-    _workspacePanels->registerDock(QStringLiteral("workspace_visible"),
+    _workspacePanels->registerDock(WorkspacePanelId::Workspace,
                                    _mainMenu->toggleWorkspaceAction(),
-                                   _workspaceDock,
-                                   true);
-    _workspacePanels->registerDock(QStringLiteral("properties_visible"),
+                                   _workspaceDock);
+    _workspacePanels->registerDock(WorkspacePanelId::Properties,
                                    _mainMenu->togglePropertiesAction(),
-                                   _propertiesDock,
-                                   true);
-    _workspacePanels->registerDock(QStringLiteral("photos_visible"),
+                                   _propertiesDock);
+    _workspacePanels->registerDock(WorkspacePanelId::Photos,
                                    _mainMenu->togglePhotosAction(),
-                                   _photosDock,
-                                   true);
-    _workspacePanels->registerDock(QStringLiteral("log_visible"),
+                                   _photosDock);
+    _workspacePanels->registerDock(WorkspacePanelId::Log,
                                    _mainMenu->toggleLogAction(),
-                                   _logDock,
-                                   false);
-    _workspacePanels->registerToolBar(QStringLiteral("main_toolbar_visible"),
+                                   _logDock);
+    _workspacePanels->registerToolBar(WorkspacePanelId::MainToolbar,
                                       _mainMenu->toggleMainToolbarAction(),
-                                      _mainMenu->toolBar(),
-                                      true);
+                                      _mainMenu->toolBar());
+    _mainMenu->setManagedWindowActions(
+        _workspacePanels->actions(WorkspacePanelKind::Dock),
+        _workspacePanels->actions(WorkspacePanelKind::ToolBar));
     connect(_workspacePanels,
             &WorkspacePanelController::visibilitySettingChanged,
             this,
-            [this](const QString &settingKey, bool visible)
+            [this](WorkspacePanelId id, bool visible)
             {
+                const QString settingKey =
+                    workspacePanelDescriptor(id).settingKey;
                 QJsonObject settings{{settingKey, visible}};
-                if (settingKey == QLatin1String("log_visible"))
+                if (id == WorkspacePanelId::Log)
                 {
                     settings[QStringLiteral("bottom_panel")] = currentBottomPanelKey();
+                    if (visible && _log)
+                    {
+                        _log->loadFromLogFile();
+                    }
                 }
                 saveUiSetting(settings);
             });
+    if (QAction *restoreLayoutAction =
+            _mainMenu->restoreDefaultWindowLayoutAction())
+    {
+        connect(restoreLayoutAction, &QAction::triggered, this, [this]()
+        {
+            restoreDefaultProjectDockLayout();
+            if (_workspacePanels)
+            {
+                _workspacePanels->restoreDefaultVisibility();
+            }
+            persistCurrentUiSettings();
+        });
+    }
 
     if (_workspaceCenter)
     {
@@ -683,17 +699,6 @@ void MainWindow::setupMenuConnections()
         {
             LOG_WARN(QStringLiteral("[DepthOverlay] %1").arg(message));
         });
-    }
-
-    if (_mainMenu->toggleLogAction())
-    {
-        auto *action = _mainMenu->toggleLogAction();
-        action->setCheckable(true);
-        {
-            const QSignalBlocker blocker(action);
-            action->setChecked(_logDock && _logDock->isVisible());
-        }
-        connect(action, &QAction::toggled, this, &MainWindow::onToggleLogAction);
     }
 
     if (_mainMenu->minimizeAction())
@@ -2594,45 +2599,54 @@ void MainWindow::restoreDefaultProjectDockLayout()
     splitDockWidget(_workspaceDock, _propertiesDock, Qt::Vertical);
     addDockWidget(Qt::BottomDockWidgetArea, _photosDock);
 
-    _workspaceDock->setVisible(true);
-    _propertiesDock->setVisible(true);
-    _photosDock->setVisible(true);
-    _workspaceDock->raise();
-    _propertiesDock->raise();
-    _photosDock->raise();
+    if (_workspacePanels)
+    {
+        _workspacePanels->ensureRequiredProjectPanelsVisible();
+    }
+    else
+    {
+        _workspaceDock->setVisible(true);
+        _propertiesDock->setVisible(true);
+        _photosDock->setVisible(true);
+        _workspaceDock->raise();
+        _propertiesDock->raise();
+        _photosDock->raise();
+    }
 
     resizeDocks({_workspaceDock}, {320}, Qt::Horizontal);
     resizeDocks({_workspaceDock, _propertiesDock}, {560, 190}, Qt::Vertical);
     resizeDocks({_photosDock}, {120}, Qt::Vertical);
 }
 
-void MainWindow::restoreProjectDockState(const QJsonObject &settings)
+bool MainWindow::restoreProjectDockState(const QJsonObject &settings)
 {
     const int layoutVersion = settings.value(QStringLiteral("dock_layout_version")).toInt(0);
     if (layoutVersion != ProjectDockLayoutVersion)
     {
         restoreDefaultProjectDockLayout();
-        return;
+        return false;
     }
 
     const QString encoded = settings.value(QStringLiteral("dock_state")).toString();
     if (encoded.isEmpty())
     {
         restoreDefaultProjectDockLayout();
-        return;
+        return false;
     }
 
     const QByteArray state = QByteArray::fromBase64(encoded.toLatin1());
     if (state.isEmpty())
     {
         restoreDefaultProjectDockLayout();
-        return;
+        return false;
     }
 
     if (!restoreState(state))
     {
         restoreDefaultProjectDockLayout();
+        return false;
     }
+    return true;
 }
 
 void MainWindow::persistCurrentUiSettings()
@@ -2669,39 +2683,11 @@ QString MainWindow::currentBottomPanelKey() const
     return QStringLiteral("none");
 }
 
-void MainWindow::switchToLogPanel()
-{
-    if (_logDock)
-    {
-        _logDock->setWidget(_log);
-        _logDock->setVisible(true);
-    }
-    if (_log)
-    {
-        _log->loadFromLogFile();
-    }
-}
-
 // Interest-point panel removed: onIpBtnClicked is a no-op now.
 
 // ============================================================
 //  菜单动作响应
 // ============================================================
-
-void MainWindow::onToggleLogAction(bool on)
-{
-    if (on)
-    {
-        switchToLogPanel();
-    }
-    else
-    {
-        if (_logDock)
-        {
-            _logDock->setVisible(false);
-        }
-    }
-}
 
 // Interest-point info UI removed: related slots are no-ops / deleted.
 
@@ -3035,10 +3021,17 @@ void MainWindow::applyUiSettings(const QJsonObject &ui)
     }
 
     const QJsonObject settings = ui;
-    restoreProjectDockState(settings);
+    const bool restoredDockState = restoreProjectDockState(settings);
     if (_workspacePanels)
     {
-        _workspacePanels->applyVisibility(settings);
+        if (restoredDockState)
+        {
+            _workspacePanels->syncActions();
+        }
+        else
+        {
+            _workspacePanels->applyVisibility(settings);
+        }
     }
 
     if (settings.contains(QStringLiteral("log_display_level")) && _log)

@@ -116,7 +116,7 @@ void persistProjectMeta(ProjectData *projectData,
     }
 
     projectData->updateMetadata(meta, markDirty);
-    projectData->saveTemporaryMetadata();
+    projectData->scheduleTemporaryMetadataSave();
 }
 
 QString resolveProjectOutputDir(const QString &projectPath,

@@ -12,6 +12,25 @@ namespace
 {
 
 constexpr double kRadiansToDegrees = 180.0 / 3.14159265358979323846;
+constexpr double kTwoPi = 2.0 * 3.14159265358979323846;
+
+double normalizeAngle(double angle)
+{
+    while (angle < -3.14159265358979323846)
+    {
+        angle += kTwoPi;
+    }
+    while (angle >= 3.14159265358979323846)
+    {
+        angle -= kTwoPi;
+    }
+    return angle;
+}
+
+double circularDistance(double left, double right)
+{
+    return std::fabs(normalizeAngle(left - right));
+}
 
 double dot(const std::array<double, 3> &left,
            const std::array<double, 3> &right)
@@ -31,9 +50,24 @@ std::array<double, 3> subtract(const std::array<double, 3> &left,
 
 } // namespace
 
+const char *orbitalFrameRoleId(OrbitalFrameRole role)
+{
+    switch (role)
+    {
+    case OrbitalFrameRole::GapBoundary:
+        return "gap_boundary";
+    case OrbitalFrameRole::GapOpposite:
+        return "gap_opposite";
+    case OrbitalFrameRole::NormalSector:
+    default:
+        return "normal_sector";
+    }
+}
+
 OrbitalCoverageStatistics DepthFusionFramePolicy::evaluateOrbitalCoverage(
     const std::vector<DepthFusionView> &views,
-    const std::vector<float> &weights)
+    const std::vector<float> &weights,
+    double significantGapRatio)
 {
     OrbitalCoverageStatistics result;
     if (views.size() != weights.size() || views.size() < 3)
@@ -54,17 +88,17 @@ OrbitalCoverageStatistics DepthFusionFramePolicy::evaluateOrbitalCoverage(
         coordinate /= static_cast<double>(views.size());
     }
 
-    std::vector<std::array<double, 3>> active_centers;
-    active_centers.reserve(views.size());
+    std::vector<DepthFusionView> active_views;
+    active_views.reserve(views.size());
     for (std::size_t index = 0; index < views.size(); ++index)
     {
         if (weights[index] > 0.0f)
         {
-            active_centers.push_back(views[index].cameraCenter);
+            active_views.push_back(views[index]);
         }
     }
-    result.activeViewCount = static_cast<int>(active_centers.size());
-    if (active_centers.size() < 3)
+    result.activeViewCount = static_cast<int>(active_views.size());
+    if (active_views.size() < 3)
     {
         return result;
     }
@@ -109,29 +143,86 @@ OrbitalCoverageStatistics DepthFusionFramePolicy::evaluateOrbitalCoverage(
         return result;
     }
 
-    std::vector<double> angles;
-    angles.reserve(active_centers.size());
-    for (const auto &center : active_centers)
+    struct AngularView
     {
-        const std::array<double, 3> offset = subtract(center, centroid);
-        angles.push_back(std::atan2(dot(offset, axis_v), dot(offset, axis_u)));
+        DepthFusionView view;
+        double angle = 0.0;
+    };
+    cv::Mat circle_system(
+        static_cast<int>(views.size()), 3, CV_64FC1);
+    cv::Mat circle_rhs(
+        static_cast<int>(views.size()), 1, CV_64FC1);
+    for (int index = 0; index < static_cast<int>(views.size()); ++index)
+    {
+        const std::array<double, 3> offset =
+            subtract(views[static_cast<std::size_t>(index)].cameraCenter, centroid);
+        const double projected_x = dot(offset, axis_u);
+        const double projected_y = dot(offset, axis_v);
+        circle_system.at<double>(index, 0) = projected_x;
+        circle_system.at<double>(index, 1) = projected_y;
+        circle_system.at<double>(index, 2) = 1.0;
+        circle_rhs.at<double>(index, 0) =
+            -(projected_x * projected_x + projected_y * projected_y);
     }
-    std::sort(angles.begin(), angles.end());
+    cv::Mat circle_solution;
+    double circle_center_x = 0.0;
+    double circle_center_y = 0.0;
+    if (cv::solve(
+            circle_system,
+            circle_rhs,
+            circle_solution,
+            cv::DECOMP_SVD)
+        && circle_solution.rows == 3)
+    {
+        circle_center_x = -0.5 * circle_solution.at<double>(0, 0);
+        circle_center_y = -0.5 * circle_solution.at<double>(1, 0);
+    }
+
+    std::vector<AngularView> angular_views;
+    angular_views.reserve(active_views.size());
+    for (const DepthFusionView &view : active_views)
+    {
+        const std::array<double, 3> offset =
+            subtract(view.cameraCenter, centroid);
+        angular_views.push_back(
+            {view,
+             std::atan2(
+                 dot(offset, axis_v) - circle_center_y,
+                 dot(offset, axis_u) - circle_center_x)});
+    }
+    std::sort(
+        angular_views.begin(),
+        angular_views.end(),
+        [](const AngularView &left, const AngularView &right)
+        {
+            return left.angle < right.angle;
+        });
 
     std::vector<double> gaps;
-    gaps.reserve(angles.size());
-    for (std::size_t index = 1; index < angles.size(); ++index)
+    gaps.reserve(angular_views.size());
+    std::size_t maximum_gap_start_index = 0;
+    double maximum_gap = -1.0;
+    for (std::size_t index = 0; index < angular_views.size(); ++index)
     {
-        gaps.push_back(angles[index] - angles[index - 1]);
+        const std::size_t next_index = (index + 1) % angular_views.size();
+        const double next_angle = next_index == 0
+            ? angular_views.front().angle + kTwoPi
+            : angular_views[next_index].angle;
+        const double gap = next_angle - angular_views[index].angle;
+        gaps.push_back(gap);
+        if (gap > maximum_gap)
+        {
+            maximum_gap = gap;
+            maximum_gap_start_index = index;
+        }
     }
-    gaps.push_back(angles.front() + 2.0 * 3.14159265358979323846 - angles.back());
-    std::sort(gaps.begin(), gaps.end());
+    std::vector<double> sorted_gaps = gaps;
+    std::sort(sorted_gaps.begin(), sorted_gaps.end());
 
-    const std::size_t middle = gaps.size() / 2;
-    const double median_gap = gaps.size() % 2 == 0
-        ? 0.5 * (gaps[middle - 1] + gaps[middle])
-        : gaps[middle];
-    const double maximum_gap = gaps.back();
+    const std::size_t middle = sorted_gaps.size() / 2;
+    const double median_gap = sorted_gaps.size() % 2 == 0
+        ? 0.5 * (sorted_gaps[middle - 1] + sorted_gaps[middle])
+        : sorted_gaps[middle];
     if (!std::isfinite(median_gap) || median_gap <= 1.0e-9 ||
         !std::isfinite(maximum_gap))
     {
@@ -142,6 +233,61 @@ OrbitalCoverageStatistics DepthFusionFramePolicy::evaluateOrbitalCoverage(
     result.medianAngularSpacingDegrees = median_gap * kRadiansToDegrees;
     result.maximumAngularGapDegrees = maximum_gap * kRadiansToDegrees;
     result.maximumAngularGapRatio = maximum_gap / median_gap;
+    const std::size_t maximum_gap_end_index =
+        (maximum_gap_start_index + 1) % angular_views.size();
+    const AngularView &gap_start = angular_views[maximum_gap_start_index];
+    const AngularView &gap_end = angular_views[maximum_gap_end_index];
+    result.gapStartFrameIndex = gap_start.view.frameIndex;
+    result.gapStartRefIndex = gap_start.view.refIndex;
+    result.gapEndFrameIndex = gap_end.view.frameIndex;
+    result.gapEndRefIndex = gap_end.view.refIndex;
+    result.significantGap =
+        result.maximumAngularGapRatio >= std::max(1.0, significantGapRatio);
+
+    result.frameRoles.reserve(angular_views.size());
+    for (const AngularView &angular_view : angular_views)
+    {
+        result.frameRoles.push_back(
+            {angular_view.view.frameIndex,
+             angular_view.view.refIndex,
+             angular_view.angle * kRadiansToDegrees,
+             OrbitalFrameRole::NormalSector});
+    }
+    if (result.significantGap)
+    {
+        const double gap_midpoint = normalizeAngle(
+            gap_start.angle + maximum_gap * 0.5);
+        const double opposite_angle = normalizeAngle(
+            gap_midpoint + 3.14159265358979323846);
+        std::size_t opposite_index = 0;
+        double opposite_distance = std::numeric_limits<double>::infinity();
+        for (std::size_t index = 0; index < angular_views.size(); ++index)
+        {
+            const double distance = circularDistance(
+                angular_views[index].angle, opposite_angle);
+            if (distance < opposite_distance)
+            {
+                opposite_distance = distance;
+                opposite_index = index;
+            }
+        }
+        result.gapOppositeFrameIndex =
+            angular_views[opposite_index].view.frameIndex;
+        result.gapOppositeRefIndex =
+            angular_views[opposite_index].view.refIndex;
+        for (OrbitalFrameRoleAssignment &assignment : result.frameRoles)
+        {
+            if (assignment.frameIndex == result.gapStartFrameIndex
+                || assignment.frameIndex == result.gapEndFrameIndex)
+            {
+                assignment.role = OrbitalFrameRole::GapBoundary;
+            }
+            else if (assignment.frameIndex == result.gapOppositeFrameIndex)
+            {
+                assignment.role = OrbitalFrameRole::GapOpposite;
+            }
+        }
+    }
     return result;
 }
 

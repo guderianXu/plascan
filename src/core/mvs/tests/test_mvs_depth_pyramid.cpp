@@ -26,6 +26,20 @@ TEST(MvsDepthPyramidPolicyTest, SmallImagesKeepAFullResolutionFinalLevel)
     EXPECT_GE(std::min(final_size.width, final_size.height), 320);
 }
 
+TEST(MvsDepthPyramidPolicyTest, OneKilopixelHighQualityImagesKeepNativeFinalLevel)
+{
+    xjw::mvs::PatchMatchConfig base_config;
+    base_config.downsampleFactor = 2;
+
+    const xjw::mvs::DepthPyramidConfig config =
+        xjw::mvs::makeDepthPyramidConfig(base_config, 1024, 1024);
+
+    ASSERT_EQ(config.activeLevelCount, 3);
+    EXPECT_EQ(config.levels[0].patchMatch.downsampleFactor, 4);
+    EXPECT_EQ(config.levels[1].patchMatch.downsampleFactor, 2);
+    EXPECT_EQ(config.levels[2].patchMatch.downsampleFactor, 1);
+}
+
 TEST(MvsDepthPyramidPolicyTest, LargeAerialImagesKeepRequestedFinalDownsample)
 {
     xjw::mvs::PatchMatchConfig base_config;

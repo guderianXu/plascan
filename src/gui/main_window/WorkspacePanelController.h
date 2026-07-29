@@ -2,10 +2,13 @@
 
 #include <QAction>
 #include <QJsonObject>
+#include <QList>
 #include <QObject>
 #include <QPointer>
 #include <QVector>
 #include <QWidget>
+
+#include "WorkspacePanelDescriptor.h"
 
 class QDockWidget;
 class QToolBar;
@@ -16,37 +19,40 @@ class WorkspacePanelController : public QObject
 public:
     explicit WorkspacePanelController(QObject *parent = nullptr);
 
-    void registerDock(const QString &settingKey,
+    bool registerDock(WorkspacePanelId id,
                       QAction *action,
-                      QDockWidget *dock,
-                      bool defaultVisible);
-    void registerToolBar(const QString &settingKey,
+                      QDockWidget *dock);
+    bool registerToolBar(WorkspacePanelId id,
                          QAction *action,
-                         QToolBar *toolBar,
-                         bool defaultVisible);
+                         QToolBar *toolBar);
 
     QJsonObject visibilitySnapshot() const;
+    QList<QAction *> actions(WorkspacePanelKind kind) const;
     void applyVisibility(const QJsonObject &settings);
     void syncActions();
+    void restoreDefaultVisibility();
+    void ensureRequiredProjectPanelsVisible();
+    void setPanelVisible(WorkspacePanelId id, bool visible, bool raise = true);
+    bool isPanelVisible(WorkspacePanelId id) const;
 
 signals:
-    void visibilitySettingChanged(const QString &settingKey, bool visible);
+    void visibilitySettingChanged(WorkspacePanelId id, bool visible);
 
 private:
     struct Entry
     {
-        QString settingKey;
+        WorkspacePanelDescriptor descriptor;
         QPointer<QAction> action;
         QPointer<QWidget> widget;
-        bool defaultVisible{};
         bool explicitlyVisible{};
     };
 
-    void registerWidget(const QString &settingKey,
+    bool registerWidget(WorkspacePanelId id,
                         QAction *action,
-                        QWidget *widget,
-                        bool defaultVisible);
-    void handleVisibilityChanged(QWidget *widget);
+                        QWidget *widget);
+    Entry *findEntry(WorkspacePanelId id);
+    const Entry *findEntry(WorkspacePanelId id) const;
+    void handleVisibilityChanged(WorkspacePanelId id);
 
     QVector<Entry> _entries;
     bool _applying{};

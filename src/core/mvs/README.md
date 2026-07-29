@@ -33,17 +33,21 @@ live under `src/core/mvs/tests/`.
   computed through `core/camera/CameraBaseline`, so zero-baseline pairs and points behind either camera do not
   become MVS source evidence.
 - `MvsSceneClassifier` resolves the candidate source pool before image preload and frame-cache preparation.
-  High-resolution aerial terrain uses up to eight candidates, while high-resolution orbital-object capture
-  uses six ring views and low-resolution object capture uses four. The final value is capped by the number
-  of available views. Aerial planning keeps the 35-degree maximum triangulation angle; four-source orbital
-  jobs use 47 degrees so the second ring neighbor can contribute, while high-quality six-source jobs admit
-  the roughly 67-degree third neighbors with a 70-degree gate so coherent background surfaces require wider
-  cross-view agreement. Logs and CLI reports record both configured and effective pool sizes.
+  High-resolution aerial terrain uses up to eight candidates. Dense orbital rings with at least 16 cameras
+  may use six views, while sparser rings and lower-quality object capture use four; this prevents a 12-view
+  ring from treating the roughly 90-degree third neighbor as mandatory confirmation. The final value is
+  capped by the number of available views. Aerial planning keeps the 35-degree maximum triangulation angle.
+  Orbital planning derives the required angle from the actual sorted candidate angles, with 70/90-degree
+  safety caps for four/six-source jobs. Logs and CLI reports record both configured and effective pool sizes.
 - The selected source plan is saved with the depth frame record so depth generation and fusion use the same
   overlap assumptions.
 - When verified pair geometry is available, verified pairs are selected first and shared-track geometry may
   backfill only the remaining slots. The manifest records the requested count, shortfall, and verified,
   backfill, or sequence tier for every selected source.
+- Stored match evidence is audited with USAC/MAGSAC before replay. An empty match file or fewer matches than
+  the minimum inlier count is recorded as missing/insufficient evidence, not as a proven geometric failure.
+  Only a nontrivial pair that fails the geometry gate is excluded. `mvs_pair_audit_cli` and
+  `mvs_depth_reprocess_cli` provide a reproducible audit/replay path without modifying the original workspace.
 - If no match or track evidence exists, planning falls back to nearby sequence views instead of defaulting to
   an unbounded all-pairs search.
 
@@ -68,7 +72,9 @@ live under `src/core/mvs/tests/`.
 
 - The final quality profile selects the Level 1 downsample `D`: `highest/high/medium/low/lowest` map to
   `1/2/4/8/16`. `DepthPyramidPolicy` derives Level 3/2/1 as `4D/2D/D` and degrades cleanly when an image is
-  too small to keep three distinct levels.
+  too small to keep three distinct levels. For the `high` profile, images with a short side no larger than
+  1280 pixels keep a native-resolution final level (`4/2/1` for a 1024-pixel input); the memory saving from
+  a half-resolution final pass is small at this size, while its lost silhouette detail is measurable.
 - `MvsSceneClassifier` distinguishes down-looking aerial terrain from orbital object capture by camera-center
   layout, viewing direction consistency, and sparse-cloud thickness. Users can keep automatic detection or
   explicitly select `aerial_terrain` or `orbital_object`.
@@ -86,11 +92,11 @@ live under `src/core/mvs/tests/`.
 - `valid_mask_path` is the final depth-valid mask; `support_mask_path` is the project/content support region.
   They are intentionally distinct so a missing depth sample is not silently reinterpreted as free space.
 - Cross-view consistency selects its few-view policy from the actual source count and depth-filter preset.
-  One source remains contradiction-only. With multiple sources, `mild`, `moderate`, and `aggressive` require
-  respectively one, two, and three independent source confirmations when enough sources are available. This
-  prevents a single agreeing outlier pair from preserving fragmented orbital-object depth. For three or more
-  sources their relative-depth tolerances are 3%, 1.5%, and 0.75%; two-source frames retain wider 10%, 6%,
-  and 3% tolerances because their baseline evidence is weaker.
+  One source remains contradiction-only. With multiple sources, `mild`, `moderate`, and `aggressive` normally
+  require respectively one, two, and three independent source confirmations; orbital `mild` frames with four
+  or more sources require two. Two-source frames retain 10%, 6%, and 3% relative-depth tolerances. With three
+  or more sources, aerial tolerances are 3%, 1.5%, and 0.75%, while convergent orbital capture uses the stricter
+  1.25%, 0.8%, and 0.5% thresholds plus a source-to-reference round-trip check.
 - The 0.80 mask-normalized coverage gate applies only to constrained project/content masks. Aerial frames using
   `full_image` retain the established edge/interior consistency thresholds instead of being downgraded merely
   because valid terrain does not cover the whole 6000×4000 raster.
@@ -302,7 +308,8 @@ E:/code/plascan/build/windows-vcpkg-cuda-release/tests/test_mvs_pipeline.exe `
   region to about 27% and removed that wall. This artifact is a mask-input problem, not a TSDF hole-fill failure.
 - With identical project masks, four and six source views produced mixed Temple results: four views slightly
   improved SSIM and one edge metric, while six improved IoU and reference-edge agreement. High-quality orbital
-  reconstruction therefore keeps six source views and the 70-degree gate; lower-quality jobs keep four views.
+  reconstruction therefore uses six sources only for dense rings with at least 16 cameras. Sparser rings keep
+  four nearby sources and adapt the angle gate to their measured camera spacing.
 
 ## 2026-07-27 Orbital Fusion Admission and Completeness Gate
 
@@ -318,6 +325,28 @@ E:/code/plascan/build/windows-vcpkg-cuda-release/tests/test_mvs_pipeline.exe `
   gate instead of registering a half-model as successful.
 - Frozen Dino validation fused all 16 frames (two auxiliary), with P10/median recall `0.7238`/`0.8693`.
   Temple fused all 16 frames with `0.7604`/`0.8439`. Both enforced gates and the existing geometry baselines pass.
+
+## 2026-07-28 Hyb2 Pair Audit and Sparse-Ring Regression
+
+- The 12-view Hyb2 audit found 13 verified pairs, no proven failed pairs, and 53 pairs with absent or insufficient
+  stored match evidence. Verified-first planning fills the remaining slots from shared-track geometry instead of
+  misclassifying those 53 pairs as failures.
+- The high-quality replay keeps four nearby sources and a native-resolution final level for the 1024×1024 inputs.
+  The four-source sparse-ring value is a scene-derived cap, not a lower-bound recommendation: generic GUI quality
+  presets requesting six or more candidates cannot reintroduce the roughly 84-degree third-neighbor pair. This
+  GUI/CLI convergence is recorded by depth algorithm revision 10 so revision-9 artifacts are regenerated.
+  All 12 frames entered TSDF fusion. The final mesh recorded P10/median/minimum depth recall
+  `0.6289`/`0.8625`/`0.5442`, compared with `0.5599`/`0.7935`/`0.4271` for the frozen old-depth mesh.
+- Photo-projection validation produced median IoU `0.9246`, edge P90 `15.50 px`, and SSIM `0.4413`. The old-depth
+  mesh recorded `0.9306`, `15.13 px`, and `0.3986`: silhouette agreement is close to the old baseline while
+  appearance and sector completeness improve. The strict 3-pixel edge and 0.75 SSIM gates remain unmet.
+- Current-depth Temple and Dino checks preserve their real openings and remain single-component. Temple recorded
+  864 boundary edges and IoU `0.9077`; Dino recorded 436 boundary edges, IoU `0.9366`, and SSIM `0.8709`.
+- A GUI-equivalent Hyb2 replay explicitly requested seven sources after the preset layer. Revision 10 resolved it
+  to `source_pool=4 (configured=7)`. Frame 9/10 depth consistency retention reached `90.8%`/`83.0%`; their raw
+  depth files and the final mesh are bit-for-bit identical to the approved four-source replay above. Consequently,
+  the screenshot's six-source mesh recall `33.3%`/`35.9%` returns to `54.4%`/`61.2%`; all 12 frames enter TSDF
+  and produce one component instead of failing the completeness precondition.
 
 ## 2026-07-28 Supported MC33 Surface and Sampling-Aware Orbital Defaults
 
@@ -336,3 +365,16 @@ E:/code/plascan/build/windows-vcpkg-cuda-release/tests/test_mvs_pipeline.exe `
   Temple produced 61,402 faces from all 16 frames and reduced boundary edges from 6,639 to 1,032 while preserving
   the architectural openings. Its boundary ratio is `0.01114`, slightly above the generic `0.01` strict threshold,
   so it remains reported rather than being hidden by an unsafe threshold change.
+
+## 2026-07-29 Protected Orbital Depth-Hole Recovery
+
+- Orbital depth repair no longer rejects an entire missing-depth component only because a narrow invalid corridor
+  connects it to the foreground silhouette. It preserves a four-pixel silhouette band, then considers only the
+  remaining interior. Project-mask exclusions and real openings remain outside the interpolation domain.
+- The interior still requires cross-view anchors, enough boundary samples, a bounded robust inverse-depth spread,
+  and a component area no larger than 25% of the authoritative support region. Recovered pixels keep low confidence
+  and the `crossViewRepairedMask` provenance, so they cannot silently become native observations.
+- Revision 11 manifests persist source-count, depth-spread, local-depth, component-area, silhouette-protection, and
+  postprocess interpolation diagnostics. A Hyb2 replay raised frame 9/10 valid-within-mask ratios from
+  `85.4%/80.0%` to `98.9%/99.2%`. The resulting mesh remained one component; photo projection improved median
+  coverage from `0.9633` to `0.9745` and IoU from `0.9257` to `0.9348`. The strict edge/SSIM targets remain unmet.

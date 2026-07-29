@@ -13,21 +13,47 @@ struct DepthFusionView
     std::array<double, 3> cameraCenter{};
 };
 
+enum class OrbitalFrameRole
+{
+    NormalSector,
+    GapBoundary,
+    GapOpposite
+};
+
+struct OrbitalFrameRoleAssignment
+{
+    int frameIndex = -1;
+    int refIndex = -1;
+    double azimuthDegrees = 0.0;
+    OrbitalFrameRole role = OrbitalFrameRole::NormalSector;
+};
+
 struct OrbitalCoverageStatistics
 {
     bool valid = false;
+    bool significantGap = false;
     int activeViewCount = 0;
     double medianAngularSpacingDegrees = 0.0;
     double maximumAngularGapDegrees = 0.0;
     double maximumAngularGapRatio = 0.0;
+    int gapStartFrameIndex = -1;
+    int gapStartRefIndex = -1;
+    int gapEndFrameIndex = -1;
+    int gapEndRefIndex = -1;
+    int gapOppositeFrameIndex = -1;
+    int gapOppositeRefIndex = -1;
+    std::vector<OrbitalFrameRoleAssignment> frameRoles;
 };
+
+const char *orbitalFrameRoleId(OrbitalFrameRole role);
 
 class DepthFusionFramePolicy
 {
 public:
     static OrbitalCoverageStatistics evaluateOrbitalCoverage(
         const std::vector<DepthFusionView> &views,
-        const std::vector<float> &weights);
+        const std::vector<float> &weights,
+        double significantGapRatio = 1.5);
 
     static bool canRejectWithoutCoverageGap(
         const std::vector<DepthFusionView> &views,

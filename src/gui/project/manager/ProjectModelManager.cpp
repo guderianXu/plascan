@@ -329,6 +329,25 @@ QString meshReconstructionSuccessMessage(const QJsonObject &taskResult)
                            QStringLiteral("depth_completeness_gate_passed")).toBool()
                                 ? QStringLiteral("通过")
                                 : QStringLiteral("未通过"));
+        if (taskResult.value(
+                QStringLiteral(
+                    "depth_completeness_gap_boundary_available")).toBool())
+        {
+            message += QStringLiteral("\n最大缺口边界最低召回: %1%（%2）")
+                           .arg(100.0 * taskResult.value(
+                               QStringLiteral(
+                                   "depth_completeness_gap_boundary_minimum_recall"))
+                                            .toDouble(),
+                                0,
+                                'f',
+                                1)
+                           .arg(taskResult.value(
+                               QStringLiteral(
+                                   "depth_completeness_gap_boundary_gate_passed"))
+                                        .toBool()
+                                    ? QStringLiteral("通过")
+                                    : QStringLiteral("未通过"));
+        }
     }
     return message;
 }

@@ -20,6 +20,8 @@ add_library(matchphototask STATIC
     stages/FeatureStage.h
     stages/GeometryVerifyStage.cpp
     stages/GeometryVerifyStage.h
+    stages/StoredPairGeometryAudit.cpp
+    stages/StoredPairGeometryAudit.h
     stages/GuidedMatchStage.cpp
     stages/GuidedMatchStage.h
     stages/MatchingStage.cpp

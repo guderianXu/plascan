@@ -234,6 +234,7 @@ set(GUI_HEADERS
   widgets/ProjectDashboardWidget.h
   widgets/ReferencePanelWidget.h
   widgets/SelectionPropertiesWidget.h
+  main_window/WorkspacePanelDescriptor.h
   main_window/WorkspacePanelController.h
   widgets/ImageViewWidget.h
   widgets/MatchLineOverlay.h

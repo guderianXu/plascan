@@ -21,6 +21,7 @@ add_library(plascan_common_model STATIC
 )
 
 add_library(plascan_common_project STATIC
+  project/AspMatchPointReader.cpp
   project/ProjectCameraIO.cpp
   project/ProjectIO.cpp
   project/ProjectMatchCatalog.cpp

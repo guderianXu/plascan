@@ -281,6 +281,8 @@ private:
     int removePointsInScreenRect(const QRect &screenRect);
     void pushManualUndoSnapshot(RenderCloud snapshot);
     void collectPointIndicesInScreenRect(const QRect &screenRect, std::vector<std::size_t> *indices) const;
+    void queueCurrentPointCloudSave();
+    void startCurrentPointCloudSave();
 
     // 取消未完成的异步加载并等待结束（在新加载开始前调用）
     void cancelPendingLoad();
@@ -474,9 +476,12 @@ private:
     QPoint _manualSelectStart;
     QRect _manualSelectRect;
     std::vector<std::size_t> _manualPreviewIndices;
+    bool _manualPreviewValid = false;
     QString _currentCloudPath;
     std::vector<RenderCloud> _manualUndoStack;
     int _manualUndoLimit = 10;
+    bool _manualSaveRunning = false;
+    bool _manualSavePending = false;
 };
 
 // =============================================================================

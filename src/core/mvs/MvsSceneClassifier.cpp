@@ -210,9 +210,14 @@ int recommendedMvsSourceViewCount(MvsSceneProfile scene_profile,
     }
     else if (scene_profile == MvsSceneProfile::OrbitalObject)
     {
-        // High-resolution orbital scenes need the wider +/-3 pair to reject
-        // coherent background surfaces that can survive a four-view vote.
-        scene_target = high_quality ? 6 : 4;
+        // A six-source ring is useful for dense 16-view object captures, but it
+        // is destructive for sparser rings: on a 12-view sequence the +/-3
+        // cameras are already close to a 90-degree baseline. Requiring those
+        // views to confirm every high-resolution pixel removes valid grazing
+        // surfaces around the largest angular gap. Keep the four-view plan
+        // unless the ring has enough cameras to supply six nearby views.
+        scene_target = high_quality && view_count >= 16 ? 6 : 4;
+        return std::min(scene_target, view_count - 1);
     }
 
     const int requested_count = std::max(std::max(1, configured_count), scene_target);
@@ -233,6 +238,47 @@ float recommendedMvsSourceMaximumAngleDeg(MvsSceneProfile sceneProfile,
     // Keep the conservative gate for four-view jobs, and admit the +/-3 pair
     // for high-quality six-source jobs.
     return requested_source_count >= 6 ? 70.0f : 47.0f;
+}
+
+float adaptiveMvsSourceMaximumAngleDeg(
+    MvsSceneProfile sceneProfile,
+    int requested_source_count,
+    const std::vector<float> &candidate_angles_degrees)
+{
+    const float configured_maximum =
+        recommendedMvsSourceMaximumAngleDeg(
+            sceneProfile, requested_source_count);
+    if (sceneProfile != MvsSceneProfile::OrbitalObject ||
+        requested_source_count <= 0)
+    {
+        return configured_maximum;
+    }
+
+    std::vector<float> valid_angles;
+    valid_angles.reserve(candidate_angles_degrees.size());
+    for (const float angle : candidate_angles_degrees)
+    {
+        if (std::isfinite(angle) && angle > 0.0f)
+        {
+            valid_angles.push_back(angle);
+        }
+    }
+    if (valid_angles.size() <
+        static_cast<std::size_t>(requested_source_count))
+    {
+        return configured_maximum;
+    }
+
+    std::sort(valid_angles.begin(), valid_angles.end());
+    const float requested_angle =
+        valid_angles[static_cast<std::size_t>(requested_source_count - 1)];
+    const float sampling_margin_angle = requested_angle * 1.05f;
+    const float safety_cap =
+        requested_source_count >= 6 ? 90.0f : 70.0f;
+    return std::clamp(
+        std::max(configured_maximum, sampling_margin_angle),
+        configured_maximum,
+        safety_cap);
 }
 
 } // namespace mvs

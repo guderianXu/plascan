@@ -68,7 +68,17 @@ DepthPyramidConfig makeDepthPyramidConfig(const PatchMatchConfig &base_config,
     const int short_side = std::max(1, std::min(image_width, image_height));
     const int requested_final_factor = std::max(1, base_config.downsampleFactor);
     const int maximum_final_factor = std::max(1, short_side / kMinimumFinalShortSide);
-    const int final_factor = std::min(requested_final_factor, maximum_final_factor);
+    // The high-quality profile normally requests half resolution. For small
+    // 1K-class images that saves little memory but discards the fine surface
+    // structure needed by orbital-object silhouettes. Preserve the requested
+    // downsample for larger inputs while restoring a native-resolution final
+    // level for manageable high-quality images.
+    constexpr int kMaximumNativeHighQualityShortSide = 1280;
+    const int final_factor =
+        requested_final_factor == 2 &&
+        short_side <= kMaximumNativeHighQualityShortSide
+        ? 1
+        : std::min(requested_final_factor, maximum_final_factor);
     const int maximum_factor = std::max(1, short_side / kMinimumLevelShortSide);
     const std::array<int, 3> desired_factors = {
         final_factor * 4,

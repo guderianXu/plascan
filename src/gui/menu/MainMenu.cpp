@@ -627,6 +627,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         {
             return;
         }
+        _windowMenu = windowMenu;
 
         QMenu *imageMenu = ensureSubMenu(_mainWindow,
                                          viewMenu,
@@ -685,25 +686,12 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         viewMenu->addMenu(imageMenu);
         viewMenu->addSeparator();
 
-        for (QAction *action : {_toggleWorkspaceAct,
-                                _togglePropertiesAct,
-                                _togglePhotosAct,
-                                _toggleLogAct})
-        {
-            if (action)
-            {
-                windowMenu->addAction(action);
-            }
-        }
-        windowMenu->addSeparator();
-        if (_toggleMainToolbarAct)
-        {
-            windowMenu->addAction(_toggleMainToolbarAct);
-        }
-        if (_toggleHenanUniversityBrandAct)
-        {
-            windowMenu->addAction(_toggleHenanUniversityBrandAct);
-        }
+        setManagedWindowActions(
+            {_toggleWorkspaceAct,
+             _togglePropertiesAct,
+             _togglePhotosAct,
+             _toggleLogAct},
+            {_toggleMainToolbarAct});
         viewMenu->addMenu(windowMenu);
 
         QStyle *style = _mainWindow->style();
@@ -1050,6 +1038,14 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                       tr("主工具栏"),
                                                       true);
         _toggleMainToolbarAct->setToolTip(tr("显示或隐藏主工具栏"));
+        _restoreDefaultWindowLayoutAct = ensurePlainAction(
+            _mainWindow,
+            windowActionParent,
+            nullptr,
+            QStringLiteral("actionRestoreDefaultWindowLayout"),
+            tr("恢复默认窗口布局"));
+        _restoreDefaultWindowLayoutAct->setToolTip(
+            tr("恢复工作区、属性、照片、日志和主工具栏的默认布局"));
         QObject *viewActionParent = viewMenu
             ? static_cast<QObject *>(viewMenu)
             : static_cast<QObject *>(_mainWindow);
@@ -1556,6 +1552,11 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     _toggleMainToolbarAct->setCheckable(true);
     _toggleMainToolbarAct->setChecked(true);
     _toggleMainToolbarAct->setToolTip(tr("显示或隐藏主工具栏"));
+    _restoreDefaultWindowLayoutAct = new QAction(tr("恢复默认窗口布局"), windowMenu);
+    _restoreDefaultWindowLayoutAct->setObjectName(
+        QStringLiteral("actionRestoreDefaultWindowLayout"));
+    _restoreDefaultWindowLayoutAct->setToolTip(
+        tr("恢复工作区、属性、照片、日志和主工具栏的默认布局"));
 
     // ---- 工作流程菜单 ----
     // 提供高层一键式处理流程入口，适合不需要分步调试的普通用户
@@ -1676,6 +1677,52 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
 
 /** @brief 析构函数（默认实现，所有成员由 Qt 对象树释放）。 */
 MainMenu::~MainMenu() = default;
+
+void MainMenu::setManagedWindowActions(
+    const QList<QAction *> &dockActions,
+    const QList<QAction *> &toolBarActions)
+{
+    if (!_windowMenu)
+    {
+        return;
+    }
+
+    const QList<QAction *> existingActions = _windowMenu->actions();
+    for (QAction *action : existingActions)
+    {
+        _windowMenu->removeAction(action);
+    }
+    auto addActions = [this](const QList<QAction *> &actions)
+    {
+        for (QAction *action : actions)
+        {
+            if (action)
+            {
+                _windowMenu->addAction(action);
+            }
+        }
+    };
+
+    addActions(dockActions);
+    if (!dockActions.isEmpty()
+        && (!toolBarActions.isEmpty() || _toggleHenanUniversityBrandAct))
+    {
+        _windowMenu->addSeparator();
+    }
+    addActions(toolBarActions);
+    if (_toggleHenanUniversityBrandAct)
+    {
+        _windowMenu->addAction(_toggleHenanUniversityBrandAct);
+    }
+    if (_restoreDefaultWindowLayoutAct)
+    {
+        if (!_windowMenu->isEmpty())
+        {
+            _windowMenu->addSeparator();
+        }
+        _windowMenu->addAction(_restoreDefaultWindowLayoutAct);
+    }
+}
 
 void MainMenu::setContextualToolbarVisibility(bool showModelTools, bool showImageTools)
 {
@@ -1909,6 +1956,10 @@ void MainMenu::setRecentProjects(const QStringList &paths)
 
 QAction *MainMenu::toggleLogAction() const   { return _toggleLogAct; }
 QAction *MainMenu::toggleMainToolbarAction() const { return _toggleMainToolbarAct; }
+QAction *MainMenu::restoreDefaultWindowLayoutAction() const
+{
+    return _restoreDefaultWindowLayoutAct;
+}
 QToolBar *MainMenu::toolBar() const          { return _toolBar; }
 
 QAction *MainMenu::newAction() const  { return _newAct; }

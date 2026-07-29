@@ -9770,7 +9770,14 @@ TEST(MainMenuTest, WindowMenuUsesCompactNativeActions)
         if (!action->isSeparator())
         {
             actionTexts.push_back(action->text());
-            EXPECT_TRUE(action->isCheckable());
+            if (action->text() == QStringLiteral("恢复默认窗口布局"))
+            {
+                EXPECT_FALSE(action->isCheckable());
+            }
+            else
+            {
+                EXPECT_TRUE(action->isCheckable());
+            }
         }
     }
 
@@ -9780,11 +9787,15 @@ TEST(MainMenuTest, WindowMenuUsesCompactNativeActions)
                            QStringLiteral("照片"),
                            QStringLiteral("日志"),
                            QStringLiteral("主工具栏"),
-                           QStringLiteral("河南大学校徽")}));
+                           QStringLiteral("河南大学校徽"),
+                           QStringLiteral("恢复默认窗口布局")}));
 
     QAction *toolbarAction = window.findChild<QAction *>(QStringLiteral("actionToggleMainToolbar"));
     ASSERT_NE(toolbarAction, nullptr);
     EXPECT_TRUE(toolbarAction->isChecked());
+    QAction *restoreAction = menu.restoreDefaultWindowLayoutAction();
+    ASSERT_NE(restoreAction, nullptr);
+    EXPECT_FALSE(restoreAction->isCheckable());
 }
 
 TEST(MainMenuTest, ViewMenuSeparatesImageAndModelDisplayCommands)
@@ -9858,12 +9869,45 @@ TEST(WorkspacePanelControllerTest, ProvidesOneRegistryForVisibilityAndPersistenc
 
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
-    EXPECT_TRUE(header.contains(QStringLiteral("void registerDock")));
-    EXPECT_TRUE(header.contains(QStringLiteral("void registerToolBar")));
+    EXPECT_TRUE(header.contains(QStringLiteral("bool registerDock")));
+    EXPECT_TRUE(header.contains(QStringLiteral("bool registerToolBar")));
     EXPECT_TRUE(header.contains(QStringLiteral("QJsonObject visibilitySnapshot() const")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QList<QAction *> actions")));
     EXPECT_TRUE(header.contains(QStringLiteral("void applyVisibility")));
+    EXPECT_TRUE(header.contains(QStringLiteral("void ensureRequiredProjectPanelsVisible")));
+    EXPECT_TRUE(header.contains(QStringLiteral("void setPanelVisible")));
     EXPECT_TRUE(source.contains(QStringLiteral("QDockWidget::visibilityChanged")));
     EXPECT_TRUE(source.contains(QStringLiteral("QToolBar::visibilityChanged")));
+}
+
+TEST(WorkspacePanelControllerTest, StableDescriptorsDefinePersistenceAndRequiredPanels)
+{
+    const auto workspace =
+        workspacePanelDescriptor(WorkspacePanelId::Workspace);
+    const auto properties =
+        workspacePanelDescriptor(WorkspacePanelId::Properties);
+    const auto photos =
+        workspacePanelDescriptor(WorkspacePanelId::Photos);
+    const auto log =
+        workspacePanelDescriptor(WorkspacePanelId::Log);
+    const auto toolbar =
+        workspacePanelDescriptor(WorkspacePanelId::MainToolbar);
+
+    EXPECT_EQ(workspace.settingKey, QStringLiteral("workspace_visible"));
+    EXPECT_EQ(properties.settingKey, QStringLiteral("properties_visible"));
+    EXPECT_EQ(photos.settingKey, QStringLiteral("photos_visible"));
+    EXPECT_EQ(log.settingKey, QStringLiteral("log_visible"));
+    EXPECT_EQ(toolbar.settingKey, QStringLiteral("main_toolbar_visible"));
+    EXPECT_TRUE(workspace.requiredForProject);
+    EXPECT_TRUE(properties.requiredForProject);
+    EXPECT_TRUE(photos.requiredForProject);
+    EXPECT_FALSE(log.requiredForProject);
+    EXPECT_FALSE(toolbar.requiredForProject);
+    EXPECT_TRUE(workspace.defaultVisible);
+    EXPECT_FALSE(log.defaultVisible);
+    EXPECT_EQ(workspace.kind, WorkspacePanelKind::Dock);
+    EXPECT_EQ(log.kind, WorkspacePanelKind::Dock);
+    EXPECT_EQ(toolbar.kind, WorkspacePanelKind::ToolBar);
 }
 
 TEST(WorkspacePanelControllerTest, KeepsActionsWidgetsAndSnapshotInSync)
@@ -9874,7 +9918,8 @@ TEST(WorkspacePanelControllerTest, KeepsActionsWidgetsAndSnapshotInSync)
     QAction action(QStringLiteral("工作区"), &window);
     action.setCheckable(true);
     WorkspacePanelController controller;
-    controller.registerDock(QStringLiteral("workspace_visible"), &action, &dock, true);
+    ASSERT_TRUE(controller.registerDock(
+        WorkspacePanelId::Workspace, &action, &dock));
 
     window.show();
     QApplication::processEvents();
@@ -9901,11 +9946,10 @@ TEST(WorkspacePanelControllerTest, AppliesSavedVisibilityBeforeDefaults)
     QAction dockAction(QStringLiteral("工作区"), &window);
     QAction toolBarAction(QStringLiteral("主工具栏"), &window);
     WorkspacePanelController controller;
-    controller.registerDock(QStringLiteral("workspace_visible"), &dockAction, &dock, true);
-    controller.registerToolBar(QStringLiteral("main_toolbar_visible"),
-                               &toolBarAction,
-                               &toolBar,
-                               true);
+    ASSERT_TRUE(controller.registerDock(
+        WorkspacePanelId::Workspace, &dockAction, &dock));
+    ASSERT_TRUE(controller.registerToolBar(
+        WorkspacePanelId::MainToolbar, &toolBarAction, &toolBar));
 
     controller.applyVisibility(QJsonObject{
         {QStringLiteral("workspace_visible"), false},
@@ -9935,14 +9979,14 @@ TEST(WorkspacePanelControllerTest, TabSelectionDoesNotPersistInactiveDockAsHidde
     QAction workspaceAction(QStringLiteral("工作区"), &window);
     QAction propertiesAction(QStringLiteral("属性"), &window);
     WorkspacePanelController controller;
-    controller.registerDock(QStringLiteral("workspace_visible"),
-                            &workspaceAction,
-                            &workspaceDock,
-                            true);
-    controller.registerDock(QStringLiteral("properties_visible"),
-                            &propertiesAction,
-                            &propertiesDock,
-                            true);
+    ASSERT_TRUE(controller.registerDock(
+        WorkspacePanelId::Workspace,
+        &workspaceAction,
+        &workspaceDock));
+    ASSERT_TRUE(controller.registerDock(
+        WorkspacePanelId::Properties,
+        &propertiesAction,
+        &propertiesDock));
     QSignalSpy visibilitySpy(&controller,
                              &WorkspacePanelController::visibilitySettingChanged);
 
@@ -9964,6 +10008,76 @@ TEST(WorkspacePanelControllerTest, TabSelectionDoesNotPersistInactiveDockAsHidde
     EXPECT_TRUE(controller.visibilitySnapshot()
                     .value(QStringLiteral("properties_visible"))
                     .toBool(false));
+}
+
+TEST(WorkspacePanelControllerTest, RejectsDuplicatePanelRegistration)
+{
+    QMainWindow window;
+    QDockWidget firstDock(QStringLiteral("工作区"), &window);
+    QDockWidget secondDock(QStringLiteral("另一个工作区"), &window);
+    QAction firstAction(QStringLiteral("工作区"), &window);
+    QAction secondAction(QStringLiteral("另一个工作区"), &window);
+    WorkspacePanelController controller;
+
+    EXPECT_TRUE(controller.registerDock(
+        WorkspacePanelId::Workspace, &firstAction, &firstDock));
+    EXPECT_FALSE(controller.registerDock(
+        WorkspacePanelId::Workspace, &secondAction, &secondDock));
+
+    controller.setPanelVisible(WorkspacePanelId::Workspace, false);
+    EXPECT_TRUE(firstDock.isHidden());
+    EXPECT_FALSE(firstAction.isChecked());
+    EXPECT_FALSE(secondDock.isHidden());
+}
+
+TEST(WorkspacePanelControllerTest, RestoresRequiredPanelsWithoutOpeningOptionalPanels)
+{
+    QMainWindow window;
+    QDockWidget workspaceDock(QStringLiteral("工作区"), &window);
+    QDockWidget logDock(QStringLiteral("日志"), &window);
+    window.addDockWidget(Qt::LeftDockWidgetArea, &workspaceDock);
+    window.addDockWidget(Qt::BottomDockWidgetArea, &logDock);
+    QAction workspaceAction(QStringLiteral("工作区"), &window);
+    QAction logAction(QStringLiteral("日志"), &window);
+    WorkspacePanelController controller;
+
+    ASSERT_TRUE(controller.registerDock(
+        WorkspacePanelId::Workspace, &workspaceAction, &workspaceDock));
+    ASSERT_TRUE(controller.registerDock(
+        WorkspacePanelId::Log, &logAction, &logDock));
+    controller.setPanelVisible(WorkspacePanelId::Workspace, false);
+    controller.setPanelVisible(WorkspacePanelId::Log, false);
+
+    controller.ensureRequiredProjectPanelsVisible();
+
+    EXPECT_FALSE(workspaceDock.isHidden());
+    EXPECT_TRUE(workspaceAction.isChecked());
+    EXPECT_TRUE(logDock.isHidden());
+    EXPECT_FALSE(logAction.isChecked());
+}
+
+TEST(WorkspacePanelControllerTest, ExposesRegisteredActionsByWindowItemKind)
+{
+    QMainWindow window;
+    QDockWidget workspaceDock(QStringLiteral("工作区"), &window);
+    QDockWidget logDock(QStringLiteral("日志"), &window);
+    QToolBar toolBar(QStringLiteral("主工具栏"), &window);
+    QAction workspaceAction(QStringLiteral("工作区"), &window);
+    QAction logAction(QStringLiteral("日志"), &window);
+    QAction toolBarAction(QStringLiteral("主工具栏"), &window);
+    WorkspacePanelController controller;
+
+    ASSERT_TRUE(controller.registerDock(
+        WorkspacePanelId::Workspace, &workspaceAction, &workspaceDock));
+    ASSERT_TRUE(controller.registerDock(
+        WorkspacePanelId::Log, &logAction, &logDock));
+    ASSERT_TRUE(controller.registerToolBar(
+        WorkspacePanelId::MainToolbar, &toolBarAction, &toolBar));
+
+    EXPECT_EQ(controller.actions(WorkspacePanelKind::Dock),
+              QList<QAction *>({&workspaceAction, &logAction}));
+    EXPECT_EQ(controller.actions(WorkspacePanelKind::ToolBar),
+              QList<QAction *>({&toolBarAction}));
 }
 
 TEST(ProjectUiHydratorTest, NewRequestCancelsRemainingStagesFromOlderMetadata)
@@ -10485,11 +10599,17 @@ TEST(MainWindowTest, SelectionAndPhotoPanelsUseMovableDockWidgets)
     EXPECT_TRUE(source.contains(QStringLiteral("splitDockWidget(_workspaceDock, _propertiesDock, Qt::Vertical)")));
     EXPECT_TRUE(source.contains(QStringLiteral("addDockWidget(Qt::BottomDockWidgetArea, _photosDock)")));
 
-    EXPECT_TRUE(source.contains(QStringLiteral("_workspacePanels->registerDock(QStringLiteral(\"workspace_visible\")")));
-    EXPECT_TRUE(source.contains(QStringLiteral("_workspacePanels->registerDock(QStringLiteral(\"properties_visible\")")));
-    EXPECT_TRUE(source.contains(QStringLiteral("_workspacePanels->registerDock(QStringLiteral(\"photos_visible\")")));
-    EXPECT_TRUE(source.contains(QStringLiteral("_workspacePanels->registerDock(QStringLiteral(\"log_visible\")")));
-    EXPECT_TRUE(source.contains(QStringLiteral("_workspacePanels->registerToolBar(QStringLiteral(\"main_toolbar_visible\")")));
+    EXPECT_TRUE(source.contains(
+        QStringLiteral("_workspacePanels->registerDock(WorkspacePanelId::Workspace")));
+    EXPECT_TRUE(source.contains(
+        QStringLiteral("_workspacePanels->registerDock(WorkspacePanelId::Properties")));
+    EXPECT_TRUE(source.contains(
+        QStringLiteral("_workspacePanels->registerDock(WorkspacePanelId::Photos")));
+    EXPECT_TRUE(source.contains(
+        QStringLiteral("_workspacePanels->registerDock(WorkspacePanelId::Log")));
+    EXPECT_TRUE(source.contains(
+        QStringLiteral("_workspacePanels->registerToolBar(WorkspacePanelId::MainToolbar")));
+    EXPECT_FALSE(source.contains(QStringLiteral("&MainWindow::onToggleLogAction")));
     EXPECT_FALSE(header.contains(QStringLiteral("featureInfoAction()")));
     EXPECT_FALSE(header.contains(QStringLiteral("_featureInfoAct")));
     EXPECT_FALSE(source.contains(QStringLiteral("actionFeatureInfo")));
@@ -10511,10 +10631,13 @@ TEST(MainWindowTest, ProjectOpenRestoresAndPersistsDockPanelState)
     ASSERT_FALSE(header.isEmpty());
 
     EXPECT_TRUE(header.contains(QStringLiteral("QJsonObject currentUiSettingsSnapshot() const")));
-    EXPECT_TRUE(header.contains(QStringLiteral("void restoreProjectDockState(const QJsonObject &settings)")));
+    EXPECT_TRUE(header.contains(QStringLiteral("bool restoreProjectDockState(const QJsonObject &settings)")));
     EXPECT_TRUE(header.contains(QStringLiteral("void restoreDefaultProjectDockLayout();")));
     EXPECT_TRUE(header.contains(QStringLiteral("void persistCurrentUiSettings()")));
     EXPECT_TRUE(header.contains(QStringLiteral("bool _applyingUiSettings{}")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_mainMenu->setManagedWindowActions(")));
+    EXPECT_TRUE(source.contains(
+        QStringLiteral("_workspacePanels->actions(WorkspacePanelKind::Dock)")));
     EXPECT_FALSE(source.contains(
         QStringLiteral("connect(_mainMenu->openAction(), &QAction::triggered, _projectManager, &ProjectManager::openProject)")));
     EXPECT_TRUE(source.contains(QStringLiteral("persistCurrentUiSettings();\n                _projectManager->openProject();")));
@@ -10541,7 +10664,9 @@ TEST(MainWindowTest, ProjectOpenRestoresAndPersistsDockPanelState)
     ASSERT_GT(closeStart, applyStart);
     const QString applyBlock = source.mid(applyStart, closeStart - applyStart);
     EXPECT_TRUE(applyBlock.contains(QStringLiteral("const QJsonObject settings = ui;")));
-    EXPECT_TRUE(applyBlock.contains(QStringLiteral("restoreProjectDockState(settings);")));
+    EXPECT_TRUE(applyBlock.contains(
+        QStringLiteral("const bool restoredDockState = restoreProjectDockState(settings);")));
+    EXPECT_TRUE(applyBlock.contains(QStringLiteral("_workspacePanels->syncActions();")));
     EXPECT_TRUE(applyBlock.contains(QStringLiteral("_workspacePanels->applyVisibility(settings);")));
     EXPECT_TRUE(applyBlock.contains(QStringLiteral("QScopedValueRollback<bool> applyingRollback")));
     EXPECT_FALSE(applyBlock.contains(QStringLiteral("if (ui.isEmpty())\n    {\n        return;\n    }")));
@@ -10573,7 +10698,7 @@ TEST(MainWindowTest, DefaultDockLayoutKeepsPropertiesAndPhotosSideBySide)
 
     const int layoutStart = source.indexOf(QStringLiteral("void MainWindow::restoreDefaultProjectDockLayout"));
     ASSERT_GE(layoutStart, 0);
-    const int restoreStart = source.indexOf(QStringLiteral("void MainWindow::restoreProjectDockState"), layoutStart);
+    const int restoreStart = source.indexOf(QStringLiteral("bool MainWindow::restoreProjectDockState"), layoutStart);
     ASSERT_GT(restoreStart, layoutStart);
     const QString layoutBlock = source.mid(layoutStart, restoreStart - layoutStart);
 
@@ -10592,6 +10717,8 @@ TEST(MainWindowTest, DefaultDockLayoutKeepsPropertiesAndPhotosSideBySide)
         << "Adding photos after the left dock stack keeps photos beside properties instead of underneath them.";
 
     EXPECT_TRUE(layoutBlock.contains(QStringLiteral("resizeDocks({_workspaceDock}, {320}, Qt::Horizontal)")));
+    EXPECT_TRUE(layoutBlock.contains(
+        QStringLiteral("_workspacePanels->ensureRequiredProjectPanelsVisible();")));
     EXPECT_TRUE(layoutBlock.contains(
         QStringLiteral("resizeDocks({_workspaceDock, _propertiesDock}, {560, 190}, Qt::Vertical)")));
     EXPECT_TRUE(layoutBlock.contains(QStringLiteral("resizeDocks({_photosDock}, {120}, Qt::Vertical)")));
@@ -10657,7 +10784,7 @@ TEST(MainWindowTest, OldDockLayoutStateMigratesToDefaultSideBySideLayout)
 
     EXPECT_TRUE(source.contains(QStringLiteral("constexpr int ProjectDockLayoutVersion = 2")));
 
-    const int restoreStart = source.indexOf(QStringLiteral("void MainWindow::restoreProjectDockState"));
+    const int restoreStart = source.indexOf(QStringLiteral("bool MainWindow::restoreProjectDockState"));
     const int ensureStart = source.indexOf(QStringLiteral("void MainWindow::persistCurrentUiSettings"), restoreStart);
     ASSERT_GE(restoreStart, 0);
     ASSERT_GT(ensureStart, restoreStart);
@@ -10695,12 +10822,18 @@ TEST(MainWindowTest, ProjectOpenUsesDefaultsOnlyWhenVisibilityWasNotSaved)
     ASSERT_GE(applyStart, 0);
     ASSERT_GT(closeStart, applyStart);
     const QString applyBlock = source.mid(applyStart, closeStart - applyStart);
-    const int restoreIndex = applyBlock.indexOf(QStringLiteral("restoreProjectDockState(settings);"));
+    const int restoreIndex = applyBlock.indexOf(
+        QStringLiteral("const bool restoredDockState = restoreProjectDockState(settings);"));
+    const int syncActionsIndex = applyBlock.indexOf(QStringLiteral("_workspacePanels->syncActions();"));
     const int applyVisibilityIndex = applyBlock.indexOf(
         QStringLiteral("_workspacePanels->applyVisibility(settings);"));
     ASSERT_GE(restoreIndex, 0);
+    ASSERT_GE(syncActionsIndex, 0);
     ASSERT_GE(applyVisibilityIndex, 0);
-    EXPECT_LT(restoreIndex, applyVisibilityIndex);
+    EXPECT_LT(restoreIndex, syncActionsIndex);
+    EXPECT_LT(syncActionsIndex, applyVisibilityIndex);
+    EXPECT_TRUE(applyBlock.contains(QStringLiteral("if (restoredDockState)")));
+    EXPECT_TRUE(applyBlock.contains(QStringLiteral("else")));
 }
 
 TEST(ProjectOpenResponsivenessTest, ProjectManagerLoadsProjectSnapshotOffGuiThread)
@@ -13447,7 +13580,7 @@ TEST(AerialTriangulationWorkflowTest, DefaultsToSiftLightGlueWhenDialogOmitsMatc
     EXPECT_FALSE(launchBody.contains(QStringLiteral(".toString(QStringLiteral(\"disk\"))")));
 }
 
-TEST(AerialTriangulationWorkflowTest, CompletedButUnusableMatchingOnlyBlocksWhenNotResettingAlignment)
+TEST(AerialTriangulationWorkflowTest, CompletedButUnusableMatchingOnlyBlocksWhenReusingExistingMatches)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.h"));
@@ -13468,11 +13601,11 @@ TEST(AerialTriangulationWorkflowTest, CompletedButUnusableMatchingOnlyBlocksWhen
     ASSERT_GT(launchStart, callbackStart);
     const QString callbackBody = source.mid(callbackStart, launchStart - callbackStart);
 
-    EXPECT_TRUE(callbackBody.contains(QStringLiteral("resetCurrentAlignment")));
-    EXPECT_TRUE(callbackBody.contains(QStringLiteral("if (prereq.blockOnMatchQuality && !resetCurrentAlignment)")));
+    EXPECT_TRUE(callbackBody.contains(QStringLiteral("reuseExistingMatches")));
+    EXPECT_TRUE(callbackBody.contains(QStringLiteral("if (prereq.blockOnMatchQuality && reuseExistingMatches)")));
     EXPECT_TRUE(callbackBody.contains(QStringLiteral("atProgressFinished(false)")));
     EXPECT_TRUE(callbackBody.contains(QStringLiteral("return;")));
-    EXPECT_LT(callbackBody.indexOf(QStringLiteral("if (prereq.blockOnMatchQuality && !resetCurrentAlignment)")),
+    EXPECT_LT(callbackBody.indexOf(QStringLiteral("if (prereq.blockOnMatchQuality && reuseExistingMatches)")),
               callbackBody.indexOf(QStringLiteral("if (!prereq.missingMessages.isEmpty())")));
 }
 

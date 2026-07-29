@@ -801,4 +801,50 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
     return stats;
 }
 
+QJsonObject crossViewHoleRepairStatsToJson(
+    const CrossViewHoleRepairStats &stats)
+{
+    QJsonObject object;
+    object.insert(
+        QStringLiteral("projected_candidate_count"),
+        static_cast<double>(stats.projectedCandidateCount));
+    object.insert(
+        QStringLiteral("considered_hole_pixel_count"),
+        static_cast<double>(stats.consideredHolePixelCount));
+    object.insert(
+        QStringLiteral("rejected_insufficient_source_count"),
+        static_cast<double>(stats.rejectedInsufficientSourceCount));
+    object.insert(
+        QStringLiteral("rejected_depth_spread_count"),
+        static_cast<double>(stats.rejectedDepthSpreadCount));
+    object.insert(
+        QStringLiteral("rejected_local_depth_count"),
+        static_cast<double>(stats.rejectedLocalDepthCount));
+    object.insert(
+        QStringLiteral("repaired_pixel_count"),
+        static_cast<double>(stats.repairedPixelCount));
+    object.insert(
+        QStringLiteral("two_source_candidate_pixel_count"),
+        static_cast<double>(stats.twoSourceCandidatePixelCount));
+    object.insert(
+        QStringLiteral("two_source_grown_pixel_count"),
+        static_cast<double>(stats.twoSourceGrownPixelCount));
+    object.insert(
+        QStringLiteral("growth_rejected_component_area_count"),
+        static_cast<double>(stats.growthRejectedComponentAreaCount));
+    object.insert(
+        QStringLiteral("growth_rejected_source_overlap_count"),
+        static_cast<double>(stats.growthRejectedSourceOverlapCount));
+    object.insert(
+        QStringLiteral("growth_rejected_normal_count"),
+        static_cast<double>(stats.growthRejectedNormalCount));
+    object.insert(
+        QStringLiteral("growth_rejected_image_edge_count"),
+        static_cast<double>(stats.growthRejectedImageEdgeCount));
+    object.insert(
+        QStringLiteral("anchored_interpolation"),
+        depthAnchoredHoleInterpolationStatsToJson(stats.anchoredInterpolation));
+    return object;
+}
+
 } // namespace xjw::mvs

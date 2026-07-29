@@ -19,6 +19,7 @@
 #include "project/ProjectMatchCatalog.h"
 #include "project/ProjectMetadata.h"
 #include "LayerImageLoader.h"
+#include "GuiTaskRunner.h"
 #include "Logger.h"
 #include "io/PathIO.h"
 
@@ -83,6 +84,14 @@ constexpr quint64 kPreviewMemoryReserveBytes = 2ull * 1024ull * 1024ull * 1024ul
 constexpr quint64 kEstimatedPreviewBytesPerVertex = 128;
 
 using PlyPreviewProgressCallback = std::function<void(int, const QString &)>;
+
+struct PointCloudSaveResult
+{
+    bool success = false;
+    QString path;
+    QString errorMessage;
+    int pointCount = 0;
+};
 
 RenderCloud cloneRenderCloud(const RenderCloud &src)
 {
@@ -240,6 +249,42 @@ ObjLoadResult loadObjWithMaterialTexture(const QString &obj_path,
     result.renderPreparation = prepareObjRenderData(
         *result.cloud, !result.textureImage.isNull());
     result.prepareElapsedMs = timer.elapsed();
+    return result;
+}
+
+PointCloudSaveResult savePointCloudSnapshot(const QString &path,
+                                            const RenderCloud &cloud)
+{
+    PointCloudSaveResult result;
+    result.path = path;
+    result.pointCount = static_cast<int>(cloud.size());
+    if (path.trimmed().isEmpty())
+    {
+        result.errorMessage = QStringLiteral("当前点云来源未知，无法覆盖保存。");
+        return result;
+    }
+
+    const std::string nativePath = xjw::common::io::toNativeNarrowPath(path);
+    const bool isPly =
+        nativePath.size() >= 4
+        && (nativePath.substr(nativePath.size() - 4) == ".ply"
+            || nativePath.substr(nativePath.size() - 4) == ".PLY");
+    try
+    {
+        if (isPly)
+        {
+            plapoint::io::writePly<float>(nativePath, cloud);
+        }
+        else
+        {
+            plapoint::io::writeXyz<float>(nativePath, cloud);
+        }
+        result.success = true;
+    }
+    catch (const std::exception &error)
+    {
+        result.errorMessage = QString::fromStdString(error.what());
+    }
     return result;
 }
 
@@ -3485,6 +3530,7 @@ bool CameraSceneWidget::setManualPruneModeEnabled(bool enabled, QString *errorMe
     _manualSelecting = false;
     _manualSelectRect = QRect();
     _manualPreviewIndices.clear();
+    _manualPreviewValid = false;
     if (!enabled)
     {
         _manualUndoStack.clear();
@@ -3533,19 +3579,8 @@ bool CameraSceneWidget::undoLastManualPrune(QString *errorMessage)
     _gpuDirty = true;
     update();
 
-    QString saveError;
-    if (!saveCurrentPointCloudToSource(&saveError))
-    {
-        if (errorMessage)
-        {
-            *errorMessage = saveError;
-        }
-        emit manualPruneSaveFailed(saveError);
-        return false;
-    }
-
     emit manualPruneUndone(static_cast<int>(_cloud.size()));
-    emit manualPruneSaved(_currentCloudPath, static_cast<int>(_cloud.size()));
+    queueCurrentPointCloudSave();
     return true;
 }
 
@@ -3558,7 +3593,14 @@ int CameraSceneWidget::removePointsInScreenRect(const QRect &screenRect)
     }
 
     std::vector<std::size_t> selectedIndices;
-    collectPointIndicesInScreenRect(rect, &selectedIndices);
+    if (_manualPreviewValid && rect == _manualSelectRect.normalized())
+    {
+        selectedIndices = _manualPreviewIndices;
+    }
+    else
+    {
+        collectPointIndicesInScreenRect(rect, &selectedIndices);
+    }
     const std::size_t pointCount = _cloud.size();
     std::vector<bool> removeMask(pointCount, false);
     for (const std::size_t index : selectedIndices)
@@ -3638,6 +3680,8 @@ int CameraSceneWidget::removePointsInScreenRect(const QRect &screenRect)
     }
 
     _cloud = std::move(filtered);
+    _manualPreviewIndices.clear();
+    _manualPreviewValid = false;
     _cacheDirty = true;
     _gpuDirty = true;
     update();
@@ -3677,40 +3721,57 @@ void CameraSceneWidget::collectPointIndicesInScreenRect(const QRect &screenRect,
 
 bool CameraSceneWidget::saveCurrentPointCloudToSource(QString *errorMessage)
 {
+    const PointCloudSaveResult result =
+        savePointCloudSnapshot(_currentCloudPath, _cloud);
+    if (!result.success && errorMessage)
+    {
+        *errorMessage = result.errorMessage;
+    }
+    return result.success;
+}
+
+void CameraSceneWidget::queueCurrentPointCloudSave()
+{
+    _manualSavePending = true;
+    startCurrentPointCloudSave();
+}
+
+void CameraSceneWidget::startCurrentPointCloudSave()
+{
+    if (_manualSaveRunning || !_manualSavePending)
+    {
+        return;
+    }
     if (_currentCloudPath.trimmed().isEmpty())
     {
-        if (errorMessage)
-        {
-            *errorMessage = tr("当前点云来源未知，无法覆盖保存。");
-        }
-        return false;
+        _manualSavePending = false;
+        emit manualPruneSaveFailed(tr("当前点云来源未知，无法覆盖保存。"));
+        return;
     }
 
-    // Determine file format from extension
-    const std::string stdPath = xjw::common::io::toNativeNarrowPath(_currentCloudPath);
-    const bool isPly = (stdPath.size() >= 4 &&
-        (stdPath.substr(stdPath.size() - 4) == ".ply" || stdPath.substr(stdPath.size() - 4) == ".PLY"));
-
-    try
-    {
-        if (isPly)
+    _manualSavePending = false;
+    _manualSaveRunning = true;
+    const QString path = _currentCloudPath;
+    RenderCloud snapshot = cloneRenderCloud(_cloud);
+    xjw::gui::tasks::runGuarded(
+        this,
+        [path, snapshot = std::move(snapshot)]() mutable
         {
-            plapoint::io::writePly<float>(stdPath, _cloud);
-        }
-        else
+            return savePointCloudSnapshot(path, snapshot);
+        },
+        [](CameraSceneWidget *self, PointCloudSaveResult result)
         {
-            plapoint::io::writeXyz<float>(stdPath, _cloud);
-        }
-        return true;
-    }
-    catch (const std::exception &e)
-    {
-        if (errorMessage)
-        {
-            *errorMessage = QString::fromStdString(e.what());
-        }
-        return false;
-    }
+            self->_manualSaveRunning = false;
+            if (result.success)
+            {
+                emit self->manualPruneSaved(result.path, result.pointCount);
+            }
+            else
+            {
+                emit self->manualPruneSaveFailed(result.errorMessage);
+            }
+            self->startCurrentPointCloudSave();
+        });
 }
 
 void CameraSceneWidget::mousePressEvent(QMouseEvent *event)
@@ -3722,6 +3783,8 @@ void CameraSceneWidget::mousePressEvent(QMouseEvent *event)
         _manualSelecting = true;
         _manualSelectStart = event->pos();
         _manualSelectRect = QRect(_manualSelectStart, _manualSelectStart);
+        _manualPreviewIndices.clear();
+        _manualPreviewValid = false;
         updateCursor();
         event->accept();
         update();
@@ -3737,16 +3800,7 @@ void CameraSceneWidget::mousePressEvent(QMouseEvent *event)
         {
             pushManualUndoSnapshot(std::move(snapshot));
             emit manualPruneApplied(removedCount, static_cast<int>(_cloud.size()));
-            QString saveError;
-            if (saveCurrentPointCloudToSource(&saveError))
-            {
-                emit manualPruneSaved(_currentCloudPath, static_cast<int>(_cloud.size()));
-            }
-            else
-            {
-                emit manualPruneSaveFailed(saveError);
-            }
-            collectPointIndicesInScreenRect(_manualSelectRect, &_manualPreviewIndices);
+            queueCurrentPointCloudSave();
         }
         event->accept();
         update();
@@ -3787,7 +3841,8 @@ void CameraSceneWidget::mouseMoveEvent(QMouseEvent *event)
     if (_manualPruneMode && _manualSelecting && (event->buttons() & Qt::RightButton))
     {
         _manualSelectRect = QRect(_manualSelectStart, event->pos()).normalized();
-        collectPointIndicesInScreenRect(_manualSelectRect, &_manualPreviewIndices);
+        _manualPreviewIndices.clear();
+        _manualPreviewValid = false;
         event->accept();
         update();
         return;
@@ -3863,6 +3918,7 @@ void CameraSceneWidget::mouseReleaseEvent(QMouseEvent *event)
         _manualSelecting = false;
         _manualSelectRect = _manualSelectRect.normalized();
         collectPointIndicesInScreenRect(_manualSelectRect, &_manualPreviewIndices);
+        _manualPreviewValid = true;
         updateCursor();
         update();
         event->accept();

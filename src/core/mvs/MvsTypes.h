@@ -179,6 +179,9 @@ struct MvsSourcePairQuality
     int totalMatches = 0;
     int geometricInliers = 0;
     bool verified = false;
+    bool hasVerificationStatistics = false;
+    float geometricCoverage = 0.0f;
+    std::string verificationReason;
 };
 
 // =============================================================================
