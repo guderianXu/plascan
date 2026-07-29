@@ -1507,7 +1507,8 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
         return !mesh.empty();
     };
     auto minUsefulPoissonFaces = [&]() {
-        return std::max(16, std::min(std::max(2, config.minComponentFaces), 256));
+        constexpr int usable_face_cap = 96;
+        return std::max(16, std::min(std::max(2, config.minComponentFaces), usable_face_cap));
     };
 
     if (!streamingMeshBuilt)

@@ -121,12 +121,20 @@ class RepoHygieneTest(unittest.TestCase):
 
     def test_plapoint_cuda_warning_sentinels_use_device_safe_values(self):
         knn_source = (ROOT / "3rdparty" / "plapoint" / "src" / "knn_gpu.cu").read_text(encoding="utf-8")
+        distance_key_source = (
+            ROOT / "3rdparty" / "plapoint" / "include" / "plapoint" / "gpu" /
+            "detail" / "distance_key.cuh"
+        ).read_text(encoding="utf-8")
         icp_source = (ROOT / "3rdparty" / "plapoint" / "src" / "icp_gpu.cu").read_text(encoding="utf-8")
 
         self.assertNotIn("HUGE_VAL", knn_source)
         self.assertNotRegex(icp_source, r"\bINFINITY\b")
-        self.assertIn("return CUDART_INF;", knn_source)
-        self.assertIn("return DBL_MAX;", knn_source)
+        self.assertIn("detail::finiteDistanceKey", knn_source)
+        self.assertIn("detail::squaredOutputDistance", knn_source)
+        self.assertIn("Scalar(FLT_MAX)", knn_source)
+        self.assertIn("Scalar(DBL_MAX)", knn_source)
+        self.assertIn("return {INT_MAX, DBL_MAX};", distance_key_source)
+        self.assertIn("return static_cast<Scalar>(maximum);", distance_key_source)
         self.assertIn("std::numeric_limits<double>::infinity()", icp_source)
         self.assertIn("markSharedTransformMaybeUnused", icp_source)
         self.assertIn("(void)min_z;", icp_source)
