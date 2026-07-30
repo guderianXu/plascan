@@ -8,6 +8,7 @@ namespace xjw::gui::widgets
 enum class WorkspaceSection
 {
     Photos,
+    Masks,
     ObservationNetwork,
     TiePoints,
     DepthMaps,
@@ -22,5 +23,8 @@ enum class WorkspaceSection
 
 // QPixmap-backed icons must be created and consumed on the GUI thread.
 QIcon workspaceSectionIcon(WorkspaceSection section);
+QIcon workspaceRootIcon();
+QIcon workspaceChunkIcon();
+QIcon workspaceImageIcon();
 
 } // namespace xjw::gui::widgets

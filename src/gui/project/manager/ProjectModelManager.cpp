@@ -354,9 +354,23 @@ QString meshReconstructionSuccessMessage(const QJsonObject &taskResult)
 
 QString textureMappingSuccessMessage(const QJsonObject &taskResult)
 {
-    return QStringLiteral("纹理映射完成。\nOBJ: %1\n纹理: %2")
+    return QStringLiteral(
+        "纹理映射完成。\nOBJ: %1\n纹理: %2\n"
+        "映射面: %3  未映射面: %4\n纹理块: %5  使用视角: %6  图集占用率: %7%")
         .arg(taskResult.value(QStringLiteral("model_obj")).toString())
-        .arg(taskResult.value(QStringLiteral("texture_png")).toString());
+        .arg(taskResult.value(QStringLiteral("texture_png")).toString())
+        .arg(taskResult.value(
+            QStringLiteral("texture_mapped_face_count")).toInt())
+        .arg(taskResult.value(
+            QStringLiteral("texture_unmapped_face_count")).toInt())
+        .arg(taskResult.value(QStringLiteral("texture_chart_count")).toInt())
+        .arg(taskResult.value(
+            QStringLiteral("texture_used_view_count")).toInt())
+        .arg(taskResult.value(
+            QStringLiteral("texture_atlas_occupancy")).toDouble() * 100.0,
+            0,
+            'f',
+            1);
 }
 
 QString modelGenerationSuccessMessage(const QJsonObject &terrainResult)
@@ -782,9 +796,29 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
 
     const QString meshPath = lookup.meshPath;
     const QJsonObject baseRecord = lookup.modelRecord;
-    const QString depthMapSourcePath =
-        baseRecord.value(QStringLiteral("depth_map_source_path"))
-            .toString(baseRecord.value(QStringLiteral("source_path")).toString());
+    const QString recorded_depth_source =
+        baseRecord.value(QStringLiteral("depth_map_source_path")).toString();
+    const QString depthMapSourcePath = !recorded_depth_source.trimmed().isEmpty()
+        ? recorded_depth_source
+        : (baseRecord.value(QStringLiteral("source_data")).toString() ==
+                   QStringLiteral("depth_maps")
+               ? baseRecord.value(QStringLiteral("source_path")).toString()
+               : QString());
+    bool allow_vertex_color_fallback = false;
+    if (depthMapSourcePath.trimmed().isEmpty())
+    {
+        const auto answer = QMessageBox::question(
+            _parentWidget,
+            QStringLiteral("纹理映射"),
+            QStringLiteral(
+                "当前模型没有深度图与相机证据，无法执行多视图纹理映射。\n"
+                "是否改用网格顶点色生成平面投影纹理？"));
+        if (answer != QMessageBox::Yes)
+        {
+            return;
+        }
+        allow_vertex_color_fallback = true;
+    }
 
     {
         QJsonObject meta = _projectData->metadata();
@@ -795,13 +829,23 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
     const QString productsDir = QFileInfo(meshPath).absolutePath();
 
     _isRunning = true;
+    _activeCancelFlag = std::make_shared<std::atomic_bool>(false);
+    const std::shared_ptr<std::atomic_bool> cancel_flag = _activeCancelFlag;
     emit meshProgressChanged(tr("正在初始化纹理映射..."), 0);
     QPointer<ProjectModelManager> self(this);
     QPointer<ProjectManager> ownerGuard(_owner);
     const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
     runModelAsyncTask(
         this,
-        [self, ownerGuard, meshPath, productsDir, depthMapSourcePath, settings, projectPath]() -> ModelTaskResult {
+        [self,
+         ownerGuard,
+         meshPath,
+         productsDir,
+         depthMapSourcePath,
+         settings,
+         projectPath,
+         cancel_flag,
+         allow_vertex_color_fallback]() -> ModelTaskResult {
             ModelTaskResult task;
             if (!self)
             {
@@ -814,19 +858,42 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
             request.outputDir = productsDir;
             request.depthMapSourcePath = depthMapSourcePath;
             request.texture = xjw::mesh::workflow::textureConfigFromSettings(settings);
-            request.progress = makeProgressReporter(self, ownerGuard, projectPath);
+            request.allowVertexColorFallback = allow_vertex_color_fallback;
+            request.isCancelled = [cancel_flag]()
+            {
+                return cancel_flag->load(std::memory_order_relaxed);
+            };
+            const auto progress_reporter =
+                makeProgressReporter(self, ownerGuard, projectPath);
+            request.progress = [cancel_flag, progress_reporter](
+                                   const QString &stage, int percent)
+            {
+                if (!cancel_flag->load(std::memory_order_relaxed))
+                {
+                    progress_reporter(stage, percent);
+                }
+            };
 
             const xjw::mesh::workflow::WorkflowResult workflowResult =
                 xjw::mesh::workflow::buildTextureOnly(request);
             applyWorkflowResult(&task, workflowResult);
             return task;
         },
-        [self, ownerGuard, meshPath, baseRecord, projectPath](const ModelTaskResult &task) {
+        [self,
+         ownerGuard,
+         meshPath,
+         baseRecord,
+         projectPath,
+         cancel_flag](const ModelTaskResult &task) {
             if (!self)
             {
                 return;
             }
             self->_isRunning = false;
+            if (self->_activeCancelFlag == cancel_flag)
+            {
+                self->_activeCancelFlag.reset();
+            }
             if (!ownerGuard || ownerGuard->currentProjectPath() != projectPath)
             {
                 emit self->meshProgressFinished(false);

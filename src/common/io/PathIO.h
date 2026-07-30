@@ -1,6 +1,6 @@
 #pragma once
 
-#include <opencv2/core/mat.hpp>
+#include "io/ImageIO.h"
 
 #include <QByteArray>
 #include <QString>
@@ -9,7 +9,6 @@
 #include <fstream>
 #include <ios>
 #include <string>
-#include <vector>
 
 namespace xjw::common::io
 {
@@ -41,13 +40,5 @@ QByteArray readFileBytes(const std::filesystem::path &path, QString *errorMessag
 bool writeFileBytesAtomic(const QString &path, const QByteArray &bytes, QString *errorMessage = nullptr);
 bool writeFileBytesAtomic(const std::string &path, const QByteArray &bytes, QString *errorMessage = nullptr);
 bool writeFileBytesAtomic(const std::filesystem::path &path, const QByteArray &bytes, QString *errorMessage = nullptr);
-
-cv::Mat readImage(const QString &path, int flags);
-cv::Mat readImage(const std::string &path, int flags);
-cv::Mat readImage(const std::filesystem::path &path, int flags);
-
-bool writeImage(const QString &path, const cv::Mat &image, const std::vector<int> &params = {});
-bool writeImage(const std::string &path, const cv::Mat &image, const std::vector<int> &params = {});
-bool writeImage(const std::filesystem::path &path, const cv::Mat &image, const std::vector<int> &params = {});
 
 } // namespace xjw::common::io

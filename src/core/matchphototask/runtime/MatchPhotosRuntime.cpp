@@ -2,6 +2,7 @@
 #include "match.h"
 #include "MatchPhotosRuntime.h"
 #include "project/ProjectMetadata.h"
+#include "project/ProjectIO.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -118,7 +119,8 @@ QString matchPhotosFeatureDirectory(const MatchPhotosContext &context)
         return cleanPath(context.featureDirectory);
     }
     const QString root = context.workingDirectory.trimmed().isEmpty()
-        ? QFileInfo(context.projectPath).absolutePath()
+        ? xjw::common::project::ProjectIO::projectRootFromPlascan(
+              context.projectPath)
         : context.workingDirectory;
     return cleanPath(QDir(root).filePath(QStringLiteral("ip")));
 }
@@ -130,7 +132,8 @@ QString matchPhotosMatchDirectory(const MatchPhotosContext &context)
         return cleanPath(context.matchDirectory);
     }
     const QString root = context.workingDirectory.trimmed().isEmpty()
-        ? QFileInfo(context.projectPath).absolutePath()
+        ? xjw::common::project::ProjectIO::projectRootFromPlascan(
+              context.projectPath)
         : context.workingDirectory;
     return cleanPath(QDir(root).filePath(QStringLiteral("matches")));
 }
@@ -426,8 +429,9 @@ bool writeMatchPhotosSidecar(const QString &sidecarPath,
     {
         return false;
     }
-    file.write(QJsonDocument(sidecar).toJson(QJsonDocument::Compact));
-    return true;
+    const QByteArray payload =
+        QJsonDocument(sidecar).toJson(QJsonDocument::Compact);
+    return file.write(payload) == payload.size() && file.flush();
 }
 
 } // namespace matchphotos

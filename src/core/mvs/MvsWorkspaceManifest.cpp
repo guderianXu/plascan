@@ -77,6 +77,9 @@ QJsonObject MvsDepthFrameRecord::toJson() const
     object.insert(QStringLiteral("source_quality_mean"), meanSourceQualityScore);
     object.insert(QStringLiteral("source_quality_min"), minSourceQualityScore);
     object.insert(QStringLiteral("depth_confidence_mean"), meanDepthConfidence);
+    object.insert(
+        QStringLiteral("effective_patch_match_confidence_threshold"),
+        effectivePatchMatchConfidenceThreshold);
     object.insert(QStringLiteral("valid_pixel_count"), validPixelCount);
     if (validCoverage >= 0.0 && validCoverage <= 1.0 && std::isfinite(validCoverage))
     {
@@ -152,6 +155,8 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
     record.meanSourceQualityScore = object.value(QStringLiteral("source_quality_mean")).toDouble(0.0);
     record.minSourceQualityScore = object.value(QStringLiteral("source_quality_min")).toDouble(0.0);
     record.meanDepthConfidence = object.value(QStringLiteral("depth_confidence_mean")).toDouble(0.0);
+    record.effectivePatchMatchConfidenceThreshold = object.value(
+        QStringLiteral("effective_patch_match_confidence_threshold")).toDouble(0.0);
     record.validPixelCount = object.value(QStringLiteral("valid_pixel_count")).toInt(0);
     record.validCoverage = object.value(QStringLiteral("valid_coverage")).toDouble(-1.0);
     record.depthQuality = object.value(QStringLiteral("depth_quality")).toObject();

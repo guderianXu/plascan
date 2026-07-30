@@ -27,6 +27,7 @@ public:
 
     // 加载图像
     bool loadImage(const QString &imagePath);
+    void clearImage();
     
     // 设置匹配点（场景坐标）
     void setMatchPoints(const QVector<QPointF> &points);

@@ -8,7 +8,48 @@
  */
 #include "RecentProjectsManager.h"
 
-#include <QSettings>
+#include "GuiSettingsStore.h"
+
+#include <QDir>
+#include <QFileInfo>
+#include <QSet>
+
+namespace
+{
+
+QString normalizedProjectPath(const QString &path)
+{
+    const QString trimmed_path = path.trimmed();
+    if (trimmed_path.isEmpty())
+    {
+        return {};
+    }
+
+    const QFileInfo file_info(trimmed_path);
+    if (!file_info.exists() || !file_info.isFile())
+    {
+        return {};
+    }
+
+    const QString canonical_path = file_info.canonicalFilePath();
+    if (!canonical_path.isEmpty())
+    {
+        return QDir::cleanPath(canonical_path);
+    }
+
+    return QDir::cleanPath(file_info.absoluteFilePath());
+}
+
+QString projectPathKey(const QString &path)
+{
+#ifdef Q_OS_WIN
+    return path.toCaseFolded();
+#else
+    return path;
+#endif
+}
+
+} // namespace
 
 /**
  * @brief 构造函数，无额外初始化逻辑。
@@ -27,8 +68,39 @@ RecentProjectsManager::RecentProjectsManager(QObject *parent)
  */
 QStringList RecentProjectsManager::recentProjects() const
 {
-    QSettings settings("PlaScan", "plascan_gui");
-    return settings.value("Project/recent", QStringList()).toStringList();
+    QSettings settings = xjw::gui::settings::createGuiSettings();
+    const QStringList stored_paths = settings.value(QStringLiteral("Project/recent"), QStringList()).toStringList();
+
+    QSet<QString> seen_paths;
+    QStringList valid_paths;
+    for (const QString &stored_path : stored_paths)
+    {
+        const QString normalized_path = normalizedProjectPath(stored_path);
+        if (normalized_path.isEmpty())
+        {
+            continue;
+        }
+
+        const QString path_key = projectPathKey(normalized_path);
+        if (seen_paths.contains(path_key))
+        {
+            continue;
+        }
+
+        seen_paths.insert(path_key);
+        valid_paths.append(normalized_path);
+        if (valid_paths.size() == 10)
+        {
+            break;
+        }
+    }
+
+    if (valid_paths != stored_paths)
+    {
+        settings.setValue(QStringLiteral("Project/recent"), valid_paths);
+    }
+
+    return valid_paths;
 }
 
 /**
@@ -38,22 +110,33 @@ QStringList RecentProjectsManager::recentProjects() const
  */
 void RecentProjectsManager::addRecentProject(const QString &plascanPath)
 {
-    // 忽略空路径，防止写入无意义记录
-    if (plascanPath.trimmed().isEmpty()) return;
+    const QString normalized_path = normalizedProjectPath(plascanPath);
+    if (normalized_path.isEmpty())
+    {
+        return;
+    }
 
-    QSettings settings("PlaScan", "plascan_gui");
-    QStringList list = settings.value("Project/recent", QStringList()).toStringList();
+    QSettings settings = xjw::gui::settings::createGuiSettings();
+    QStringList list = recentProjects();
 
-    // 先移除列表中已有的同路径条目，避免重复
-    list.removeAll(plascanPath);
+    const QString path_key = projectPathKey(normalized_path);
+    for (int index = list.size() - 1; index >= 0; --index)
+    {
+        if (projectPathKey(list.at(index)) == path_key)
+        {
+            list.removeAt(index);
+        }
+    }
 
-    // 将新路径插入首位，使"最近打开"菜单按最新顺序排列
-    list.prepend(plascanPath);
+    list.prepend(normalized_path);
 
     // 保持列表条目数不超过 10，超出时从尾部删除最旧记录
-    while (list.size() > 10) list.removeLast();
+    while (list.size() > 10)
+    {
+        list.removeLast();
+    }
 
-    settings.setValue("Project/recent", list);
+    settings.setValue(QStringLiteral("Project/recent"), list);
 }
 
 /**
@@ -63,6 +146,6 @@ void RecentProjectsManager::addRecentProject(const QString &plascanPath)
  */
 void RecentProjectsManager::clearRecentProjects()
 {
-    QSettings settings("PlaScan", "plascan_gui");
-    settings.setValue("Project/recent", QStringList());
+    QSettings settings = xjw::gui::settings::createGuiSettings();
+    settings.setValue(QStringLiteral("Project/recent"), QStringList());
 }

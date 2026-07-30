@@ -7,8 +7,9 @@
  */
 #include "WindowStateManager.h"
 
+#include "GuiSettingsStore.h"
+
 #include <QMainWindow>
-#include <QSettings>
 
 /**
  * @brief 构造函数，无额外初始化逻辑。
@@ -36,7 +37,7 @@ void WindowStateManager::load(QMainWindow *mainWindow)
 {
     if (!mainWindow) return;
 
-    QSettings settings("PlaScan", "plascan_gui");
+    QSettings settings = xjw::gui::settings::createGuiSettings();
 
     // 检查是否为首次运行
     bool hasRun = settings.value("hasRunBefore", false).toBool();
@@ -76,7 +77,7 @@ void WindowStateManager::save(QMainWindow *mainWindow)
 {
     if (!mainWindow) return;
 
-    QSettings settings("PlaScan", "plascan_gui");
+    QSettings settings = xjw::gui::settings::createGuiSettings();
     settings.setValue("MainWindow/geometry",     mainWindow->saveGeometry());
     settings.setValue("MainWindow/isFullScreen", mainWindow->isFullScreen());
     settings.setValue("MainWindow/isMaximized",  mainWindow->isMaximized());

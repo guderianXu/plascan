@@ -5,6 +5,7 @@
 #include "ProjectManager.h"
 #include "ProjectModelManager.h"
 #include "ProjectModelWorkflowPolicy.h"
+#include "project/ProjectIO.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -183,7 +184,9 @@ void ProjectModelGenerationWorkflow::startDepthStage(const QJsonObject &depth_se
     _pendingModelSettings = model_settings;
     QJsonObject depth_settings_with_runtime = depth_settings;
     QString output_directory = depth_settings_with_runtime.value(QStringLiteral("output_dir")).toString().trimmed();
-    const QString project_directory = QFileInfo(_projectPath).absolutePath();
+    const QString project_directory =
+        xjw::common::project::ProjectIO::projectRootFromPlascan(
+            _projectPath);
     if (output_directory.isEmpty())
     {
         output_directory = QDir(project_directory).filePath(QStringLiteral("mvs_output"));

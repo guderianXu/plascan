@@ -318,6 +318,45 @@ TEST(MvsSceneClassifierTest, RecommendsSceneAwareSourceViewPool)
     EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::AerialTerrain, 2, 10, 16), 10);
 }
 
+TEST(MvsDepthConfidenceThresholdTest,
+     PreservesWeakEvidenceForSparseOrbitalRingSectors)
+{
+    using xjw::mvs::DepthConfidenceThresholds;
+    using xjw::mvs::DepthFilterMode;
+    using xjw::mvs::MvsSceneProfile;
+    using xjw::mvs::depthConfidenceThresholds;
+
+    const DepthConfidenceThresholds sparse_orbital =
+        depthConfidenceThresholds(
+            MvsSceneProfile::OrbitalObject,
+            DepthFilterMode::Mild,
+            3,
+            0.72f,
+            0.75f);
+    EXPECT_FLOAT_EQ(sparse_orbital.patchMatch, 0.50f);
+    EXPECT_FLOAT_EQ(sparse_orbital.fusion, 0.60f);
+
+    const DepthConfidenceThresholds dense_orbital =
+        depthConfidenceThresholds(
+            MvsSceneProfile::OrbitalObject,
+            DepthFilterMode::Mild,
+            4,
+            0.72f,
+            0.75f);
+    EXPECT_FLOAT_EQ(dense_orbital.patchMatch, 0.72f);
+    EXPECT_FLOAT_EQ(dense_orbital.fusion, 0.75f);
+
+    const DepthConfidenceThresholds terrain =
+        depthConfidenceThresholds(
+            MvsSceneProfile::AerialTerrain,
+            DepthFilterMode::Mild,
+            3,
+            0.72f,
+            0.75f);
+    EXPECT_FLOAT_EQ(terrain.patchMatch, 0.72f);
+    EXPECT_FLOAT_EQ(terrain.fusion, 0.75f);
+}
+
 TEST(MvsSceneClassifierTest, AllowsWiderObjectRingBaselines)
 {
     using xjw::mvs::MvsSceneProfile;
@@ -1402,6 +1441,25 @@ TEST(DepthFrameQualityGateTest, MakesOrbitalConsistencyLossAuxiliaryBeforeCollap
                         collapsed.reasons.end(),
                         std::string("depth_consistency_collapse")),
               collapsed.reasons.end());
+}
+
+TEST(DepthFrameLifecycleTest,
+     ValidationOnlyFrameStillParticipatesInConsistencyBeforeFinalFusion)
+{
+    xjw::mvs::DepthFrameResult frame;
+    frame.success = true;
+    frame.qualityDecision.acceptance =
+        xjw::mvs::DepthFrameAcceptance::ValidationOnly;
+
+    EXPECT_TRUE(frame.eligibleForConsistencyCheck());
+    EXPECT_TRUE(frame.eligibleAsConsistencySource());
+    EXPECT_FALSE(frame.eligibleForFusion());
+
+    frame.qualityDecision.acceptance =
+        xjw::mvs::DepthFrameAcceptance::Rejected;
+    EXPECT_FALSE(frame.eligibleForConsistencyCheck());
+    EXPECT_FALSE(frame.eligibleAsConsistencySource());
+    EXPECT_FALSE(frame.eligibleForFusion());
 }
 
 TEST(DepthFrameQualityGateTest, MakesMarginalMaskCoverageValidationOnly)

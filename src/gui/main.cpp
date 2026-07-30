@@ -17,10 +17,13 @@
 #include <QIODevice>
 #include <QMessageBox>
 #include <QMetaObject>
+#include <QProcessEnvironment>
 #include <QStandardPaths>
+#include <QTimer>
 #include "MainWindow.h"
 #include "Logger.h"
-#include "PythonRuntimeBinding.h"
+#include "platform/ProjectFileIntegration.h"
+#include "runtime/PythonRuntimeLocator.h"
 // 抑制 libtiff 读取 GDAL 写入的 GeoTIFF 时产生的 tag 42113 (GDAL_NODATA) 警告
 #include <tiffio.h>
 
@@ -95,6 +98,22 @@ void applyApplicationStyle(QApplication &app)
 
     app.setStyleSheet(QString::fromUtf8(styleFile.readAll()));
 }
+
+void bindPythonRuntime()
+{
+    const QString python_path = xjw::common::runtime::resolvePythonExecutable(
+        QProcessEnvironment::systemEnvironment(), QStringLiteral(PLASCAN_SOURCE_DIR));
+    if (python_path.isEmpty())
+    {
+        LOG_WARN("PlaScan Python runtime was not found. Configure PLASCAN_PYTHON_EXECUTABLE or initialize .venv.");
+        return;
+    }
+
+    const QByteArray encoded_path = python_path.toUtf8();
+    qputenv("PLASCAN_PYTHON_EXECUTABLE", encoded_path);
+    qputenv("PLASCAN_PYTHON", encoded_path);
+    LOG_INFO("PlaScan Python runtime bound: %s", encoded_path.constData());
+}
 } // namespace
 
 // main - 程序入口
@@ -120,8 +139,7 @@ int main(int argc, char *argv[])
 
     // 创建 Qt 应用程序对象，必须在任何 Qt 对象之前创建
     SafeApplication app(argc, argv);
-    PythonRuntimeBinding::bindPythonRuntime(QStringLiteral(PLASCAN_SOURCE_DIR),
-                                            QCoreApplication::applicationDirPath());
+    bindPythonRuntime();
     applyApplicationStyle(app);
 
     // GNOME/桌面集成 — 必须与 .desktop 文件名一致
@@ -152,12 +170,40 @@ int main(int argc, char *argv[])
     QDir(baseDir).mkpath(QStringLiteral("logs"));
     Logger::instance()->setLogDirectory(QDir(baseDir).filePath(QStringLiteral("logs")));
     LOG_INFO("PlaScan GUI started");
+
+    const auto association_result =
+        xjw::gui::platform::ensureProjectFileAssociation(QCoreApplication::applicationFilePath());
+    if (!association_result.success)
+    {
+        LOG_WARN("PlaScan project file association could not be registered: %s",
+                 association_result.errorMessage.toUtf8().constData());
+    }
+    else if (association_result.changed)
+    {
+        LOG_INFO("PlaScan project file association registered for the current user");
+    }
+
+    if (QCoreApplication::arguments().contains(
+            QStringLiteral("--register-project-file-association")))
+    {
+        return association_result.success ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
+    const QString startup_project =
+        xjw::gui::platform::startupProjectPath(QCoreApplication::arguments());
     
     try
     {
         // 创建并展示主窗口
         MainWindow mainWindow;
         mainWindow.show();
+        if (!startup_project.isEmpty())
+        {
+            QTimer::singleShot(0, &mainWindow, [&mainWindow, startup_project]()
+            {
+                mainWindow.openProjectFromPath(startup_project);
+            });
+        }
 
         // 进入 Qt 事件循环，阻塞直到应用退出
         return app.exec();

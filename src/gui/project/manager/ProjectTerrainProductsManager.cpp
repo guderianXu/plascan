@@ -6,7 +6,7 @@
 #include "project/ProjectIO.h"
 #include "ProjectMetadataOperations.h"
 #include "ProjectResultRecords.h"
-#include "project/ProjectCameraIO.h"
+#include "ProjectCameraIO.h"
 #include "project/ProjectMatchCatalog.h"
 #include "project/ProjectMetadata.h"
 #include "ProjectWorkflowUtils.h"
@@ -1059,7 +1059,7 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
             LOG_ERROR(QStringLiteral("[DEM流水线] ✗ 未找到正式 SfM/BA 稀疏点云，拒绝使用两视预览云继续 DEM 流水线"));
             QMessageBox::warning(self->_parentWidget,
                                  QStringLiteral("创建相对 DEM"),
-                                 QStringLiteral("未找到可用的正式 SfM/BA 稀疏点云结果。\n请先运行[工作流程 → 三维重建/空三]，不要使用两视预览三角化作为 DEM 输入。"));
+                                 QStringLiteral("未找到可用的正式 SfM/BA 稀疏点云结果。\n请先运行[工作流程 → 空中三角测量]，不要使用两视预览三角化作为 DEM 输入。"));
             emit self->demPipelineFinished(false, QStringLiteral("缺少正式 SfM/BA 稀疏点云"));
             return;
         }

@@ -1,12 +1,11 @@
 import importlib.util
 import sys
-import types
 import unittest
 from pathlib import Path
 from unittest import mock
 
 
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "run_full_pipeline.py"
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "workflows" / "run_full_pipeline.py"
 SPEC = importlib.util.spec_from_file_location("run_full_pipeline", SCRIPT_PATH)
 pipeline = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
@@ -63,6 +62,5 @@ class FullPipelineEntrypointTest(unittest.TestCase):
             "input.lis",
             "--legacy-stereo-test",
         ]
-        fake_module = types.SimpleNamespace(main=lambda: 42)
-        with mock.patch.dict(sys.modules, {"run_full_pipeline_test": fake_module}):
+        with mock.patch.object(pipeline, "load_legacy_pipeline_main", return_value=lambda: 42):
             self.assertEqual(pipeline.main(args), 42)

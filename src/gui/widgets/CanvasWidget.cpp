@@ -620,7 +620,7 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
     const int generation = ++_featureLoadGeneration;
     // 检查缓存 (key 含 suffix)
     QFileInfo fiCheck(imagePathCopy);
-    const QString cacheKey = imagePathCopy + activeSuffix;
+    const QString cacheKey = featureCacheKey(imagePathCopy, activeSuffix);
     auto it = _spCache.find(cacheKey);
     if (it != _spCache.end()) {
         if (it->second.first == fiCheck.lastModified()) {
@@ -733,7 +733,7 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
             if (!imagePathCopy.trimmed().isEmpty())
             {
                 QFileInfo fi(imagePathCopy);
-                const QString key = imagePathCopy + activeSuffix;
+                const QString key = self->featureCacheKey(imagePathCopy, activeSuffix);
                 self->_spCache[key] = std::make_pair(fi.lastModified(), kps);
             }
             if (isCurrentImage && self->_layerRenderer)
@@ -842,11 +842,8 @@ void CanvasWidget::reloadInterestPoints(const QString &imagePath)
 {
     if (imagePath.trimmed().isEmpty()) return;
 
-    // 删除缓存条目以确保后续读取不会直接走缓存分支
-    auto it = _spCache.find(imagePath);
-    if (it != _spCache.end()) {
-        _spCache.erase(it);
-    }
+    // 删除该影像的全部提取器缓存，保证后续异步读取不会命中过期条目。
+    clearFeatureCacheForImage(imagePath);
 
     // 仅在用户开启叠加兴趣点或当前图像为目标时刷新渲染
     if (shouldRenderFeatureDiagnostics()
@@ -868,130 +865,14 @@ void CanvasWidget::reloadInterestPoints(const QString &imagePath)
 
 void CanvasWidget::immediateReloadInterestPoints(const QString &imagePath)
 {
-    if (imagePath.trimmed().isEmpty()) return;
-
-    const bool isCurrentImage = (QDir::cleanPath(imagePath) == QDir::cleanPath(_currentImagePath));
-
-    // 删除缓存条目以确保后续读取不会直接走缓存分支
-    auto it = _spCache.find(imagePath);
-    if (it != _spCache.end()) {
-        _spCache.erase(it);
-    }
-
-    // 直接在主线程同步读取特征文件并更新显示，使用当前活动的后缀
-    const QString projectPath = property("currentProjectPath").toString();
-    const QString spFile = xjw::common::project::ProjectIO::featureFileForSuffix(
-        projectPath,
-        imagePath,
-        _activeFeatureSuffix);
-    if (spFile.isEmpty())
-    {
-        LOG_DEBUG(QStringLiteral("immediateReloadInterestPoints: no %1 found for %2")
-                      .arg(_activeFeatureSuffix, imagePath));
-        // 仅在当前显示影像时清除场景中的兴趣点，避免覆盖用户正在看的其它影像
-        if (isCurrentImage && _layerRenderer)
-        {
-            _layerRenderer->clearFeatureLayers();
-        }
-        emit featuresLoaded(imagePath, 0);
-        return;
-    }
-
-    std::vector<cv::KeyPoint> keypoints = xjw::gui::views::loadFeatureKeypointsFromFile(spFile);
-    if (keypoints.empty())
-    {
-        LOG_WARN(QStringLiteral("immediateReloadInterestPoints: failed to read .sp file %1").arg(spFile));
-        if (isCurrentImage && _layerRenderer)
-        {
-            _layerRenderer->clearFeatureLayers();
-        }
-        emit featuresLoaded(imagePath, 0);
-        return;
-    }
-
-    if (_currentFeatureOpts.showOrientation)
-    {
-        // 估计每个 keypoint 的方向（用于显示方向箭头）。
-        // 注意：startSpLoadForImage 的异步路径有做这个；这里同步刷新也需要同样处理，否则 showOrientation 不会生效。
-        try
-        {
-            cv::Mat img = xjw::common::io::readImage(imagePath, cv::IMREAD_GRAYSCALE);
-            if (!img.empty())
-            {
-                cv::Mat gx, gy;
-                cv::Sobel(img, gx, CV_32F, 1, 0, 3);
-                cv::Sobel(img, gy, CV_32F, 0, 1, 3);
-                for (auto &kp : keypoints)
-                {
-                    int x = static_cast<int>(std::round(kp.pt.x));
-                    int y = static_cast<int>(std::round(kp.pt.y));
-                    if (x >= 0 && x < gx.cols && y >= 0 && y < gx.rows)
-                    {
-                        float vx = gx.at<float>(y, x);
-                        float vy = gy.at<float>(y, x);
-                        if (std::isfinite(vx) &&
-                            std::isfinite(vy) &&
-                            (std::abs(vx) > 1e-6f || std::abs(vy) > 1e-6f))
-                        {
-                            double ang =
-                                std::atan2(static_cast<double>(vy), static_cast<double>(vx)) * 180.0 / M_PI;
-                            if (ang < 0)
-                            {
-                                ang += 360.0;
-                            }
-                            kp.angle = static_cast<float>(ang);
-                        }
-                        else
-                        {
-                            kp.angle = 0.0f;
-                        }
-                    }
-                    else
-                    {
-                        kp.angle = 0.0f;
-                    }
-                }
-            }
-        }
-        catch (...)
-        {
-            // 忽略方向估计失败
-        }
-    }
-
-    // 更新 cache (key 含 suffix, 支持多提取器)
-    QFileInfo fi(imagePath);
-    _spCache[imagePath + _activeFeatureSuffix] = std::make_pair(fi.lastModified(), keypoints);
-
-    // 仅当刷新的是“当前显示的影像”时才更新场景，避免处理批量图像时最后一张覆盖当前视图。
-    if (isCurrentImage && _layerRenderer && shouldRenderFeatureDiagnostics())
-    {
-        _layerRenderer->setFeatureDisplayOptions(_currentFeatureOpts);
-        if (!_showInterestPoints || !_currentFeatureOpts.showPoints)
-        {
-            _layerRenderer->clearFeatureLayers();
-        }
-        else
-        {
-            _layerRenderer->clearFeatureLayers();
-            if (!keypoints.empty())
-            {
-                _layerRenderer->addFeatureItems(keypoints);
-            }
-        }
-    }
-
-    LOG_DEBUG(QStringLiteral("immediateReloadInterestPoints: loaded %1 keypoints from %2")
-                  .arg(static_cast<int>(keypoints.size()))
-                  .arg(spFile));
-    emit featuresLoaded(imagePath, static_cast<int>(keypoints.size()));
+    reloadInterestPoints(imagePath);
 }
 
 QList<QVariantMap> CanvasWidget::getCachedInterestPointsAsVariant(const QString &imagePath) const
 {
     QList<QVariantMap> out;
     if (imagePath.trimmed().isEmpty()) return out;
-    auto it = _spCache.find(imagePath);
+    const auto it = _spCache.find(featureCacheKey(imagePath, _activeFeatureSuffix));
     if (it == _spCache.end()) return out;
     for (const auto &kp : it->second.second) {
         QVariantMap m;
@@ -1003,6 +884,44 @@ QList<QVariantMap> CanvasWidget::getCachedInterestPointsAsVariant(const QString 
         out.append(m);
     }
     return out;
+}
+
+QString CanvasWidget::featureCacheKey(const QString &imagePath, const QString &suffix) const
+{
+    const QString cleanPath = QDir::cleanPath(imagePath.trimmed());
+    if (cleanPath.isEmpty())
+    {
+        return QString();
+    }
+
+    const QFileInfo fileInfo(cleanPath);
+    const QString canonicalPath = fileInfo.canonicalFilePath();
+    const QString absolutePath = canonicalPath.isEmpty()
+        ? QDir::cleanPath(fileInfo.absoluteFilePath())
+        : QDir::cleanPath(canonicalPath);
+    return absolutePath + QChar(0x1F) + suffix.trimmed().toLower();
+}
+
+void CanvasWidget::clearFeatureCacheForImage(const QString &imagePath)
+{
+    const QString keyPrefix = featureCacheKey(imagePath, QString()).section(QChar(0x1F), 0, 0);
+    if (keyPrefix.isEmpty())
+    {
+        return;
+    }
+
+    const QString prefix = keyPrefix + QChar(0x1F);
+    for (auto it = _spCache.begin(); it != _spCache.end();)
+    {
+        if (it->first.startsWith(prefix))
+        {
+            it = _spCache.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
 }
 
 QString CanvasWidget::currentImagePath() const

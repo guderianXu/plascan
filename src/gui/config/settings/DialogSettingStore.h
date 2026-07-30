@@ -4,6 +4,8 @@
 #include <QJsonObject>
 #include <QString>
 
+#include <functional>
+
 #include "ProjectDialogJsonSettingBase.h"
 
 class DialogSettingStore : public QObject, public ProjectDialogJsonSettingBase
@@ -15,10 +17,12 @@ public:
     QString key() const { return _dialogKey; }
 
     void setProjectPath(const QString &plascanPath);
-    QJsonObject load() const;
-    bool save(const QJsonObject &settings) const;
-    bool merge(const QJsonObject &partial) const;
+    QJsonObject load(QString *errorMessage = nullptr) const;
+    bool save(const QJsonObject &settings, QString *errorMessage = nullptr) const;
+    bool merge(const QJsonObject &partial, QString *errorMessage = nullptr) const;
+    void setChangeCallback(std::function<void()> callback);
 
 private:
     QString _dialogKey;
+    std::function<void()> _changeCallback;
 };

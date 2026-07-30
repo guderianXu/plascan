@@ -3,7 +3,6 @@ if(TARGET sfm AND TARGET bundle_adjust AND TARGET lidar)
         SOURCE cli_bundle_adjust.cpp
         SOURCES
             ${CMAKE_SOURCE_DIR}/src/gui/project/services/BundleAdjustService.cpp
-            ${CMAKE_SOURCE_DIR}/src/gui/project/archive/PlascanArchive.cpp
         LIBRARIES
             sfm
             bundle_adjust
@@ -14,7 +13,6 @@ if(TARGET sfm AND TARGET bundle_adjust AND TARGET lidar)
             plascan_common_project
             Qt6::Core
             Qt6::Gui
-            ${PLASCAN_LIBZIP_TARGET}
         INCLUDE_DIRECTORIES
             ${CMAKE_SOURCE_DIR}/src/common
             ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust

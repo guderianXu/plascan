@@ -1,19 +1,17 @@
-#include "FeatureData.h"
-#include "FeatureFileIO.h"
 #include "lightglue/LightGlueFeatureBudget.h"
+#include "LightGluePairBatch.h"
 #include "LightGlueMatcher.h"
-#include "MatchFileIO.h"
 #include "MatchPhotosMaskSupport.h"
+#include "MatchPhotosParallelism.h"
 #include "MatchPhotosRuntime.h"
 #include "MatchingStage.h"
 #include "io/PathIO.h"
 
 #include <QDir>
-#include <QFileInfo>
-#include <QJsonObject>
-#include <QMap>
 
+#include <algorithm>
 #include <exception>
+#include <iterator>
 
 namespace xjw
 {
@@ -33,26 +31,6 @@ MatchPhotosStageReport makeMatchingReport(MatchPhotosStageStatus status,
     report.message = message;
     report.itemCount = itemCount;
     return report;
-}
-
-void normalizeMatchResult(xjw::feature_match::MatchResult *matchResult,
-                          int keypointCount0,
-                          int keypointCount1)
-{
-    if (!matchResult)
-    {
-        return;
-    }
-
-    if (matchResult->matches0.empty() && !matchResult->cvMatches.empty())
-    {
-        matchResult->buildIndicesFromCvMatches(keypointCount0, keypointCount1);
-    }
-    if (matchResult->cvMatches.empty() && !matchResult->matches0.empty())
-    {
-        matchResult->buildCvMatchesFromIndices();
-    }
-    matchResult->numMatches = static_cast<int>(matchResult->cvMatches.size());
 }
 
 } // namespace
@@ -116,279 +94,110 @@ MatchPhotosStageReport MatchingStage::run(const MatchPhotosContext &context,
     lightGlueConfig.useCuda = useCuda;
     lightGlueConfig.cudaDevice = options.cudaDevice;
 
+    const MatchPhotosGpuMemoryInfo gpuMemory =
+        useCuda ? queryMatchPhotosGpuMemory(options.cudaDevice)
+                : MatchPhotosGpuMemoryInfo{};
+    xjw::feature_match::LightGlueGpuMemoryInfo budgetMemory;
+    budgetMemory.available = gpuMemory.available;
+    budgetMemory.freeBytes = gpuMemory.freeBytes;
+    budgetMemory.totalBytes = gpuMemory.totalBytes;
+    budgetMemory.deviceIndex = gpuMemory.deviceIndex;
     const int primaryKeypointBudget = xjw::feature_match::resolveLightGlueKeypointBudget(
         algorithmPlan.featureAlgorithm,
         algorithmPlan.matcherAlgorithm,
         useCuda,
-        algorithmPlan.maxKeypoints);
+        algorithmPlan.maxKeypoints,
+        budgetMemory);
     const float effectiveMatchThreshold = xjw::feature_match::resolveLightGlueMatchThreshold(
         algorithmPlan.featureAlgorithm,
         algorithmPlan.matcherAlgorithm,
         useCuda,
         options.matchThreshold,
         primaryKeypointBudget,
-        xjw::feature_match::LightGlueGpuMemoryInfo{});
+        budgetMemory);
     lightGlueConfig.scoreThreshold = effectiveMatchThreshold;
 
-    int matchedPairs = 0;
-    int failedPairs = 0;
-    int totalMatches = 0;
-    const bool applyTiepointMask = shouldApplyMasksToTiepoints(options);
-    QMap<QString, cv::Mat> maskCache;
     const int totalPairs = static_cast<int>(pairSelection.candidates.size());
+    const LightGlueParallelismDecision parallelism =
+        resolveLightGlueParallelism(options.cudaParallelPairs,
+                                    totalPairs,
+                                    useCuda,
+                                    primaryKeypointBudget,
+                                    gpuMemory);
 
     reportMatchPhotosProgress(context,
                               QStringLiteral("matching"),
-                              QStringLiteral("SIFT + LightGlue 两两匹配：准备处理 %1 对%2")
+                              QStringLiteral(
+                                  "SIFT + LightGlue 两两匹配：准备处理 %1 对，"
+                                  "并发 %2%3")
                                   .arg(totalPairs)
-                                  .arg(applyTiepointMask ? QStringLiteral("，按蒙版过滤连接点")
-                                                         : QString()),
+                                  .arg(parallelism.effectiveWorkers)
+                                  .arg(parallelism.reason.isEmpty()
+                                           ? QString()
+                                           : QStringLiteral("（%1）")
+                                                 .arg(parallelism.reason)),
                               0,
                               totalPairs);
 
+    LightGluePairBatchConfig batchConfig;
+    batchConfig.matcherConfig = lightGlueConfig;
+    batchConfig.gpuMemory = gpuMemory;
+    batchConfig.primaryKeypointBudget = primaryKeypointBudget;
+    batchConfig.requestedWorkers = options.cudaParallelPairs;
+    batchConfig.effectiveWorkers = parallelism.effectiveWorkers;
+    batchConfig.effectiveMatchThreshold = effectiveMatchThreshold;
+    batchConfig.applyTiepointMask = shouldApplyMasksToTiepoints(options);
+
+    LightGluePairBatchResult batch;
     try
     {
-        xjw::feature_match::LightGlueMatcher matcher(lightGlueConfig);
-
-        for (const PairCandidate &candidate : pairSelection.candidates)
-        {
-            if (shouldCancelMatchPhotos(context))
-            {
-                return makeMatchingReport(MatchPhotosStageStatus::Failed,
-                                          QStringLiteral("用户取消连接点匹配"),
-                                          matchedPairs);
-            }
-
-            QString errorMessage;
-            ResolvedImagePair pair;
-            if (!resolveMatchPhotosPair(context, candidate, &pair, &errorMessage))
-            {
-                ++failedPairs;
-                advanceMatchPhotosProgress(context);
-                reportMatchPhotosProgress(context,
-                                          QStringLiteral("matching"),
-                                          QStringLiteral("SIFT + LightGlue 两两匹配：%1/%2，成功 %3 对，失败 %4 对")
-                                              .arg(matchedPairs + failedPairs)
-                                              .arg(totalPairs)
-                                              .arg(matchedPairs)
-                                              .arg(failedPairs),
-                                          matchedPairs + failedPairs,
-                                          totalPairs);
-                continue;
-            }
-
-            const QString feature0Path = matchPhotosFeaturePath(context, pair.image0Path, algorithmPlan);
-            const QString feature1Path = matchPhotosFeaturePath(context, pair.image1Path, algorithmPlan);
-            QString image0Name;
-            QString image1Name;
-            xjw::feature_extractors::FeatureData feature0;
-            xjw::feature_extractors::FeatureData feature1;
-            if (!FeatureFileIO::readData(feature0Path, image0Name, feature0) ||
-                !FeatureFileIO::readData(feature1Path, image1Name, feature1))
-            {
-                ++failedPairs;
-                advanceMatchPhotosProgress(context);
-                reportMatchPhotosProgress(context,
-                                          QStringLiteral("matching"),
-                                          QStringLiteral("SIFT + LightGlue 两两匹配：%1/%2，成功 %3 对，失败 %4 对")
-                                              .arg(matchedPairs + failedPairs)
-                                              .arg(totalPairs)
-                                              .arg(matchedPairs)
-                                              .arg(failedPairs),
-                                          matchedPairs + failedPairs,
-                                          totalPairs);
-                continue;
-            }
-
-            xjw::feature_match::MatchResult matchResult;
-            QJsonObject matchDiagnostics;
-            bool matched = false;
-            QString matchError;
-            for (int keypointBudget : xjw::feature_match::lightGlueRetryKeypointBudgets(primaryKeypointBudget))
-            {
-                try
-                {
-                    const xjw::feature_match::BudgetedFeatureData budgetedFeature0 =
-                        xjw::feature_match::budgetFeatureDataForLightGlue(feature0, keypointBudget);
-                    const xjw::feature_match::BudgetedFeatureData budgetedFeature1 =
-                        xjw::feature_match::budgetFeatureDataForLightGlue(feature1, keypointBudget);
-                    xjw::feature_match::MatchResult limitedMatch =
-                        matcher.match(budgetedFeature0.features, budgetedFeature1.features);
-                    normalizeMatchResult(&limitedMatch,
-                                         budgetedFeature0.features.size(),
-                                         budgetedFeature1.features.size());
-                    matchResult = xjw::feature_match::remapLightGlueMatchResultToOriginal(
-                        limitedMatch,
-                        budgetedFeature0,
-                        feature0.size(),
-                        budgetedFeature1,
-                        feature1.size());
-                    normalizeMatchResult(&matchResult, feature0.size(), feature1.size());
-
-                    matchDiagnostics[QStringLiteral("lightglue_keypoint_budget")] = keypointBudget;
-                    matchDiagnostics[QStringLiteral("lightglue_used_keypoints0")] = budgetedFeature0.features.size();
-                    matchDiagnostics[QStringLiteral("lightglue_used_keypoints1")] = budgetedFeature1.features.size();
-                    matchDiagnostics[QStringLiteral("lightglue_limited_keypoints0")] = budgetedFeature0.limited;
-                    matchDiagnostics[QStringLiteral("lightglue_limited_keypoints1")] = budgetedFeature1.limited;
-                    matchDiagnostics[QStringLiteral("lightglue_effective_match_threshold")] =
-                        static_cast<double>(effectiveMatchThreshold);
-                    matched = true;
-                    break;
-                }
-                catch (const std::exception &e)
-                {
-                    matchError = QString::fromUtf8(e.what());
-                    if (keypointBudget <= 1024)
-                    {
-                        break;
-                    }
-                }
-            }
-
-            if (!matched)
-            {
-                ++failedPairs;
-                advanceMatchPhotosProgress(context);
-                Q_UNUSED(matchError)
-                reportMatchPhotosProgress(context,
-                                          QStringLiteral("matching"),
-                                          QStringLiteral("SIFT + LightGlue 两两匹配：%1/%2，成功 %3 对，失败 %4 对")
-                                              .arg(matchedPairs + failedPairs)
-                                              .arg(totalPairs)
-                                              .arg(matchedPairs)
-                                              .arg(failedPairs),
-                                          matchedPairs + failedPairs,
-                                          totalPairs);
-                continue;
-            }
-            normalizeMatchResult(&matchResult, feature0.size(), feature1.size());
-
-            if (applyTiepointMask)
-            {
-                const QString mask0Path = maskPathForImage(context, pair.image0Path);
-                const QString mask1Path = maskPathForImage(context, pair.image1Path);
-                auto loadCachedMask = [&](const QString &imagePath,
-                                          const QString &maskPath,
-                                          const xjw::feature_extractors::FeatureData &feature) -> cv::Mat
-                {
-                    if (maskPath.isEmpty())
-                    {
-                        return cv::Mat();
-                    }
-                    if (!maskCache.contains(maskPath))
-                    {
-                        const cv::Size imageSize(feature.imageWidth, feature.imageHeight);
-                        maskCache.insert(maskPath, loadMaskForImage(context, imagePath, imageSize));
-                    }
-                    return maskCache.value(maskPath);
-                };
-
-                const int unmaskedMatchCount = matchResult.numMatches;
-                const cv::Mat mask0 = loadCachedMask(pair.image0Path, mask0Path, feature0);
-                const cv::Mat mask1 = loadCachedMask(pair.image1Path, mask1Path, feature1);
-                if (!mask0.empty() || !mask1.empty())
-                {
-                    matchResult = filterMatchResultByMasks(matchResult, feature0, feature1, mask0, mask1);
-                    normalizeMatchResult(&matchResult, feature0.size(), feature1.size());
-                }
-                matchDiagnostics[QStringLiteral("mask0_path")] = mask0Path;
-                matchDiagnostics[QStringLiteral("mask1_path")] = mask1Path;
-                matchDiagnostics[QStringLiteral("mask_unfiltered_matches")] = unmaskedMatchCount;
-                matchDiagnostics[QStringLiteral("mask_filtered_matches")] =
-                    std::max(0, unmaskedMatchCount - matchResult.numMatches);
-            }
-
-            const QString matchPath = matchPhotosMatchPath(context,
-                                                           pair.image0Path,
-                                                           pair.image1Path,
-                                                           algorithmPlan);
-            const QString sidecarPath = matchPath + QStringLiteral(".json");
-            if (!xjw::feature_match::writeIndexedMatchFile(matchPath,
-                                                           QFileInfo(pair.image0Path).completeBaseName(),
-                                                           QFileInfo(pair.image1Path).completeBaseName(),
-                                                           matchResult) ||
-                !writeMatchPhotosSidecar(sidecarPath,
-                                         pair,
-                                         feature0Path,
-                                         feature1Path,
-                                         matchPath,
-                                         feature0,
-                                         feature1,
-                                         matchResult,
-                                         algorithmPlan,
-                                         options,
-                                         matchDiagnostics))
-            {
-                ++failedPairs;
-                advanceMatchPhotosProgress(context);
-                reportMatchPhotosProgress(context,
-                                          QStringLiteral("matching"),
-                                          QStringLiteral("SIFT + LightGlue 两两匹配：%1/%2，成功 %3 对，失败 %4 对")
-                                              .arg(matchedPairs + failedPairs)
-                                              .arg(totalPairs)
-                                              .arg(matchedPairs)
-                                              .arg(failedPairs),
-                                          matchedPairs + failedPairs,
-                                          totalPairs);
-                continue;
-            }
-
-            if (matchRecords)
-            {
-                MatchPhotosMatchRecord record;
-                record.image0Path = pair.image0Path;
-                record.image1Path = pair.image1Path;
-                record.matchPath = matchPath;
-                record.sidecarPath = sidecarPath;
-                record.matchCount = matchResult.numMatches;
-                record.settings = makeMatchRecordSettings(algorithmPlan,
-                                                          options,
-                                                          pair,
-                                                          feature0Path,
-                                                          feature1Path,
-                                                          matchPath,
-                                                          sidecarPath,
-                                                          matchResult.numMatches,
-                                                          matchDiagnostics);
-                matchRecords->push_back(std::move(record));
-            }
-            ++matchedPairs;
-            totalMatches += matchResult.numMatches;
-            advanceMatchPhotosProgress(context);
-            reportMatchPhotosProgress(context,
-                                      QStringLiteral("matching"),
-                                      QStringLiteral("SIFT + LightGlue 两两匹配：%1/%2，成功 %3 对，失败 %4 对，累计匹配 %5")
-                                          .arg(matchedPairs + failedPairs)
-                                          .arg(totalPairs)
-                                          .arg(matchedPairs)
-                                          .arg(failedPairs)
-                                          .arg(totalMatches),
-                                      matchedPairs + failedPairs,
-                                      totalPairs);
-        }
+        batch = runLightGluePairBatch(
+            context, options, algorithmPlan, pairSelection, batchConfig);
     }
     catch (const std::exception &e)
     {
         return makeMatchingReport(MatchPhotosStageStatus::Failed,
                                   QStringLiteral("LightGlue 匹配失败: %1").arg(QString::fromUtf8(e.what())),
-                                  matchedPairs);
+                                  batch.matchedPairs);
     }
 
-    if (matchedPairs == 0)
+    if (batch.cancelled)
     {
         return makeMatchingReport(MatchPhotosStageStatus::Failed,
-                                  QStringLiteral("没有成功写入任何匹配结果，失败影像对 %1")
-                                      .arg(failedPairs),
+                                  QStringLiteral("用户取消连接点匹配"),
+                                  batch.matchedPairs);
+    }
+    if (matchRecords)
+    {
+        matchRecords->insert(matchRecords->end(),
+                             std::make_move_iterator(batch.records.begin()),
+                             std::make_move_iterator(batch.records.end()));
+    }
+    if (batch.matchedPairs == 0)
+    {
+        return makeMatchingReport(MatchPhotosStageStatus::Failed,
+                                  batch.fatalError.isEmpty()
+                                      ? QStringLiteral("没有成功写入任何匹配结果，失败影像对 %1")
+                                            .arg(batch.failedPairs)
+                                      : QStringLiteral("LightGlue 匹配失败: %1")
+                                            .arg(batch.fatalError),
                                   0);
     }
 
     return makeMatchingReport(MatchPhotosStageStatus::Completed,
-                              QStringLiteral("SIFT + LightGlue 匹配完成：%1 对，匹配点 %2，失败 %3，对应模型 %4")
-                                  .arg(matchedPairs)
-                                  .arg(totalMatches)
-                                  .arg(failedPairs)
-                                  .arg(modelName),
-                              matchedPairs);
+                              QStringLiteral(
+                                  "SIFT + LightGlue 匹配完成：%1 对，匹配点 %2，"
+                                  "失败 %3，并发 %4，对应模型 %5%6")
+                                  .arg(batch.matchedPairs)
+                                  .arg(batch.totalMatches)
+                                  .arg(batch.failedPairs)
+                                  .arg(parallelism.effectiveWorkers)
+                                  .arg(modelName)
+                                  .arg(batch.usedSerialRecovery
+                                           ? QStringLiteral("，已执行串行恢复（%1）")
+                                                 .arg(batch.serialRecoveryReason)
+                                           : QString()),
+                              batch.matchedPairs);
 }
 
 } // namespace matchphotos

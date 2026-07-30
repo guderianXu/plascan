@@ -50,6 +50,20 @@ TEST(NativeCudaMathTest, ProjectionMatchesSimplePinhole)
     EXPECT_NEAR(projected.pixel[1], 440.0, 1e-9);
 }
 
+TEST(NativeCudaMathTest, ProjectionHonorsFlippedPhysicalDepthAxis)
+{
+    nc::HostCamera camera = makeCamera();
+    camera.depthAxisFlipped = 1;
+
+    const auto front = nc::projectHost(camera, {{0.0, 0.0, -10.0}});
+    ASSERT_TRUE(front.ok);
+    EXPECT_NEAR(front.pixel[0], 320.0, 1e-9);
+    EXPECT_NEAR(front.pixel[1], 240.0, 1e-9);
+
+    const auto behind = nc::projectHost(camera, {{0.0, 0.0, 10.0}});
+    EXPECT_FALSE(behind.ok);
+}
+
 TEST(NativeCudaMathTest, PointJacobianMatchesFiniteDifference)
 {
     const nc::HostCamera camera = makeCamera();

@@ -66,6 +66,19 @@ inline double huberWeight(double residualNorm, double delta)
     return delta / std::max(residualNorm, 1e-12);
 }
 
+inline double huberLoss(double residualNorm, double delta)
+{
+    if (!std::isfinite(residualNorm))
+    {
+        return std::numeric_limits<double>::infinity();
+    }
+    if (!(delta > 0.0) || residualNorm <= delta)
+    {
+        return 0.5 * residualNorm * residualNorm;
+    }
+    return delta * (residualNorm - 0.5 * delta);
+}
+
 inline double observationWeight(const BAObservation &observation)
 {
     if (!std::isfinite(observation.weight))
@@ -481,25 +494,103 @@ double computeTrackAcceptanceCost(const std::vector<Camera> &cams,
                                   int trackIndex,
                                   const std::vector<BARefinedPoint> *pointSnapshot)
 {
-    double cost = computeTrackRms(cams, track, X);
-    if (!std::isfinite(cost))
+    double cost = 0.0;
+    int residualCount = 0;
+    for (const BAObservation &observation : track.observations)
     {
-        cost = 0.0;
+        if (observation.cameraIndex < 0 ||
+            observation.cameraIndex >= static_cast<int>(cams.size()))
+        {
+            continue;
+        }
+        double pixel[2] = {0.0, 0.0};
+        if (!projectPoint(cams[static_cast<size_t>(observation.cameraIndex)], X, pixel))
+        {
+            continue;
+        }
+        const double du = pixel[0] - observation.u;
+        const double dv = pixel[1] - observation.v;
+        const double residualNorm = std::sqrt(du * du + dv * dv);
+        const double contribution =
+            observationWeight(observation) * huberLoss(residualNorm, opt.huberDelta);
+        if (!std::isfinite(contribution))
+        {
+            continue;
+        }
+        cost += contribution;
+        ++residualCount;
     }
     if (opt.enableLaserPlaneConstraints && !track.laserPlaneConstraints.empty())
     {
-        cost += std::max(0.0, opt.laserPlaneWeight) * computeTrackLaserRms(track, X);
+        for (const BALaserPlaneConstraint &constraint : track.laserPlaneConstraints)
+        {
+            const double residual = laserSignedDistance(constraint, X);
+            const double contribution =
+                std::max(0.0, opt.laserPlaneWeight) *
+                std::max(0.0, constraint.weight) *
+                huberLoss(std::abs(residual), opt.laserHuberDeltaMeters);
+            if (std::isfinite(contribution))
+            {
+                cost += contribution;
+                ++residualCount;
+            }
+        }
     }
     if (opt.enableControlPointConstraints && !track.controlPointConstraints.empty())
     {
-        cost += std::max(0.0, opt.controlPointWeight) * computeTrackControlPointRms(track, X);
+        for (const BAControlPointConstraint &constraint : track.controlPointConstraints)
+        {
+            const double residual = controlPointDistance(constraint, X);
+            const double sigma =
+                std::isfinite(constraint.sigmaMeters) && std::abs(constraint.sigmaMeters) > 1e-12
+                    ? std::abs(constraint.sigmaMeters)
+                    : 1.0;
+            const double contribution =
+                std::max(0.0, opt.controlPointWeight) *
+                std::max(0.0, constraint.weight) /
+                (sigma * sigma) *
+                huberLoss(residual, opt.controlPointHuberDeltaMeters);
+            if (std::isfinite(contribution))
+            {
+                cost += contribution;
+                ++residualCount;
+            }
+        }
     }
     if (opt.enableScaleBarConstraints && pointSnapshot && !opt.scaleBarConstraints.empty())
     {
-        cost += std::max(0.0, opt.scaleBarWeight)
-            * computeTrackScaleBarRms(opt, trackIndex, X, pointSnapshot);
+        for (const BAScaleBarConstraint &constraint : opt.scaleBarConstraints)
+        {
+            if ((constraint.trackIndexA != trackIndex &&
+                 constraint.trackIndexB != trackIndex) ||
+                !scaleBarConstraintIsUsable(constraint, pointSnapshot->size()))
+            {
+                continue;
+            }
+            std::array<double, 3> other{};
+            if (!scaleBarOtherEndpoint(constraint, trackIndex, *pointSnapshot, &other))
+            {
+                continue;
+            }
+            const double residual =
+                std::abs(pointDistance(X, other) - constraint.measuredDistanceMeters);
+            const double sigma =
+                std::isfinite(constraint.sigmaMeters) && std::abs(constraint.sigmaMeters) > 1e-12
+                    ? std::abs(constraint.sigmaMeters)
+                    : 1.0;
+            const double contribution =
+                std::max(0.0, opt.scaleBarWeight) *
+                std::max(0.0, constraint.weight) /
+                (sigma * sigma) *
+                huberLoss(residual, opt.scaleBarHuberDeltaMeters);
+            if (std::isfinite(contribution))
+            {
+                cost += contribution;
+                ++residualCount;
+            }
+        }
     }
-    return cost;
+    return residualCount > 0 ? cost : std::numeric_limits<double>::infinity();
 }
 
 struct LaserDistanceStats
@@ -924,8 +1015,8 @@ static double computeCameraCost(const Camera &cam, int cameraIndex,
                                const std::vector<BARefinedPoint> &points,
                                const BAOptions &opt)
 {
-    double sum2 = 0.0;
-    int cnt = 0;
+    double cost = 0.0;
+    int residualCount = 0;
     for (size_t ti = 0; ti < tracks.size() && ti < points.size(); ++ti) {
         if (!points[ti].valid) continue;
         for (const BAObservation &obs : tracks[ti].observations) {
@@ -933,25 +1024,20 @@ static double computeCameraCost(const Camera &cam, int cameraIndex,
             double uv[2];
             if (!projectPoint(cam, points[ti].point, uv)) continue;
             double du = uv[0] - obs.u, dv = uv[1] - obs.v;
-            const double w = observationWeight(obs);
-            sum2 += w * (du * du + dv * dv);
-            cnt += 2;
+            const double residualNorm = std::sqrt(du * du + dv * dv);
+            cost += observationWeight(obs) * huberLoss(residualNorm, opt.huberDelta);
+            ++residualCount;
         }
     }
 
     if (const BACameraPosePrior *prior = cameraPosePriorForIndex(opt, cameraIndex))
     {
-        const auto residual = cameraPosePriorResidual(cam, *prior);
         const double norm = cameraPosePriorResidualNorm(cam, *prior);
-        const double w = std::max(0.0, opt.cameraPosePriorWeight)
-            * huberWeight(norm, opt.cameraPosePriorHuberDelta);
-        for (const double value : residual)
-        {
-            sum2 += w * value * value;
-            ++cnt;
-        }
+        cost += std::max(0.0, opt.cameraPosePriorWeight) *
+                huberLoss(norm, opt.cameraPosePriorHuberDelta);
+        ++residualCount;
     }
-    return (cnt > 0) ? std::sqrt(sum2 / cnt) : 0.0;
+    return residualCount > 0 ? cost : std::numeric_limits<double>::infinity();
 }
 
 bool optimizeOneCamera(Camera *cam,
@@ -1150,11 +1236,12 @@ void applySharedFocalScale(std::vector<Camera> *cameras, double scale)
     }
 }
 
-double computeSharedFocalRms(const std::vector<Camera> &cameras,
-                             const std::vector<BATrack> &tracks,
-                             const std::vector<BARefinedPoint> &points)
+double computeSharedFocalAcceptanceCost(const std::vector<Camera> &cameras,
+                                        const std::vector<BATrack> &tracks,
+                                        const std::vector<BARefinedPoint> &points,
+                                        double huberDelta)
 {
-    double sum2 = 0.0;
+    double cost = 0.0;
     int count = 0;
     for (size_t ti = 0; ti < tracks.size() && ti < points.size(); ++ti)
     {
@@ -1182,13 +1269,13 @@ double computeSharedFocalRms(const std::vector<Camera> &cameras,
 
             const double du = uv[0] - observation.u;
             const double dv = uv[1] - observation.v;
-            const double w = observationWeight(observation);
-            sum2 += w * (du * du + dv * dv);
-            count += 2;
+            const double residualNorm = std::sqrt(du * du + dv * dv);
+            cost += observationWeight(observation) *
+                    huberLoss(residualNorm, huberDelta);
+            ++count;
         }
     }
-    return count > 0 ? std::sqrt(sum2 / static_cast<double>(count))
-                     : std::numeric_limits<double>::infinity();
+    return count > 0 ? cost : std::numeric_limits<double>::infinity();
 }
 
 void recomputePointRmsForCurrentCameras(const std::vector<Camera> &cameras,
@@ -1241,7 +1328,8 @@ SharedFocalOptimizationResult optimizeSharedFocalScale(std::vector<Camera> *came
     double currentScale = std::clamp(averageSharedFocalScale(*cameras, referenceCameras),
                                      minScale,
                                      maxScale);
-    double currentCost = computeSharedFocalRms(*cameras, tracks, *points);
+    double currentCost =
+        computeSharedFocalAcceptanceCost(*cameras, tracks, *points, opt.huberDelta);
     if (!std::isfinite(currentCost))
     {
         return result;
@@ -1321,7 +1409,8 @@ SharedFocalOptimizationResult optimizeSharedFocalScale(std::vector<Camera> *came
         std::vector<Camera> trialCameras = *cameras;
         const double trialStepScale = std::exp(delta);
         applySharedFocalScale(&trialCameras, trialStepScale);
-        const double trialCost = computeSharedFocalRms(trialCameras, tracks, *points);
+        const double trialCost =
+            computeSharedFocalAcceptanceCost(trialCameras, tracks, *points, opt.huberDelta);
         if (std::isfinite(trialCost) && trialCost < currentCost)
         {
             *cameras = std::move(trialCameras);
@@ -1405,6 +1494,15 @@ bool resultFailsQualityGate(const BAResult &result,
     if (!options.enableBackendQualityGate)
     {
         return false;
+    }
+
+    if (!result.solutionUsable)
+    {
+        if (message)
+        {
+            *message = "质量门控拒绝: BA 求解状态不可写回";
+        }
+        return true;
     }
 
     if (!std::isfinite(result.meanRmsAfter))
@@ -1504,8 +1602,35 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
     // 将相机列表拷贝到结果中，在优化过程中来回修改
     result.refinedCameras = cameras;
     result.points.resize(tracks.size());
+    bool callbackAborted = false;
 
     auto finishResult = [&]() -> BAResult {
+        if (result.solveStatus == BASolveStatus::NotRun)
+        {
+            if (isCancelled(options) || callbackAborted)
+            {
+                result.solveStatus = BASolveStatus::Cancelled;
+                result.solutionUsable = false;
+                if (result.backendMessage.empty())
+                {
+                    result.backendMessage = "legacy_cpu BA 已取消，结果不会写回";
+                }
+            }
+            else if (result.optimizedTracks > 0)
+            {
+                result.solveStatus = BASolveStatus::Success;
+                result.solutionUsable = true;
+            }
+            else
+            {
+                result.solveStatus = BASolveStatus::NumericalFailure;
+                result.solutionUsable = false;
+                if (result.backendMessage.empty())
+                {
+                    result.backendMessage = "legacy_cpu BA 未生成可用 track";
+                }
+            }
+        }
         const auto totalEnd = std::chrono::steady_clock::now();
         result.totalSeconds = std::chrono::duration<double>(totalEnd - totalStart).count();
         result.solveSeconds = result.totalSeconds;
@@ -1513,8 +1638,18 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
         return result;
     };
 
-    if (cameras.empty() || tracks.empty()) return finishResult();
-    if (isCancelled(options)) return finishResult();
+    if (cameras.empty() || tracks.empty())
+    {
+        result.solveStatus = BASolveStatus::InvalidInput;
+        result.backendMessage = "legacy_cpu BA 输入相机或 track 为空";
+        return finishResult();
+    }
+    if (isCancelled(options))
+    {
+        result.solveStatus = BASolveStatus::Cancelled;
+        result.backendMessage = "legacy_cpu BA 在启动前被取消";
+        return finishResult();
+    }
 
     if (options.enableLaserPlaneConstraints)
     {
@@ -1565,7 +1700,7 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
     }
 
     // 外层交替优化：先点后相机，重复迭代直到达到最大次数或收敛
-    double prevTotalCost = std::numeric_limits<double>::max();
+    double prevTotalCost = std::numeric_limits<double>::quiet_NaN();
     const int maxOuterIterations = std::max(1, options.maxIterations);
 
     for (int outer = 0; outer < maxOuterIterations; ++outer)
@@ -1678,8 +1813,13 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
                 }
             }
             double avgCost = (costCnt > 0) ? totalCost / costCnt : 0.0;
-            double relChange = (prevTotalCost > 1e-12)
-                ? std::fabs(prevTotalCost - avgCost) / prevTotalCost : 1.0;
+            double relChange = std::numeric_limits<double>::infinity();
+            if (std::isfinite(prevTotalCost))
+            {
+                const double costScale = std::max(
+                    {std::fabs(prevTotalCost), std::fabs(avgCost), 1e-12});
+                relChange = std::fabs(prevTotalCost - avgCost) / costScale;
+            }
 
             if (options.logIterationProgress)
             {
@@ -1691,6 +1831,7 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
                 !options.progressCallback(outer + 1, maxOuterIterations, avgCost, costCnt))
             {
                 Logger::instance()->info("[BA] 进度回调请求终止光束法平差");
+                callbackAborted = true;
                 break;
             }
 
@@ -1783,6 +1924,48 @@ const char *BundleAdjust::backendName(BABackend backend)
     return "unknown";
 }
 
+const char *BundleAdjust::solveStatusName(BASolveStatus status)
+{
+    switch (status)
+    {
+    case BASolveStatus::NotRun:
+        return "not_run";
+    case BASolveStatus::Success:
+        return "success";
+    case BASolveStatus::NoConvergence:
+        return "no_convergence";
+    case BASolveStatus::Cancelled:
+        return "cancelled";
+    case BASolveStatus::InvalidInput:
+        return "invalid_input";
+    case BASolveStatus::UnsupportedConfiguration:
+        return "unsupported_configuration";
+    case BASolveStatus::BackendUnavailable:
+        return "backend_unavailable";
+    case BASolveStatus::NumericalFailure:
+        return "numerical_failure";
+    }
+    return "unknown";
+}
+
+BABackendCapabilities BundleAdjust::backendCapabilities(BABackend backend)
+{
+    switch (backend)
+    {
+    case BABackend::Auto:
+        return {true, true, true, true};
+    case BABackend::LegacyCpu:
+        return {true, true, true, true};
+    case BABackend::CeresCpu:
+    case BABackend::CeresCuda:
+        return {true, true, true, true};
+    case BABackend::NativeCuda:
+        // 当前 native CUDA kernel 只联合调度各 track 的三维点更新，尚未求解相机块。
+        return {true, false, false, false};
+    }
+    return {};
+}
+
 bool BundleAdjust::isBackendAvailable(BABackend backend)
 {
     switch (backend)
@@ -1821,15 +2004,12 @@ BABackendDecision BundleAdjust::decideBackendForProblem(const BAProblemStats &st
     {
         return {options.backend, "explicit_backend"};
     }
-    if (options.refineSharedFocalLength)
-    {
-        return {BABackend::LegacyCpu, "shared_focal_requires_legacy_cpu"};
-    }
     if (!options.refineCameraPose)
     {
         return {BABackend::LegacyCpu, "point_only_prefers_legacy_cpu"};
     }
     if (options.refineCameraPose &&
+        backendCapabilities(BABackend::NativeCuda).refinesCameraPose &&
         isBackendAvailable(BABackend::NativeCuda) &&
         stats.cameraCount >= options.minNativeCudaCameras &&
         stats.observationCount >= options.minNativeCudaObservations)
@@ -1841,6 +2021,13 @@ BABackendDecision BundleAdjust::decideBackendForProblem(const BAProblemStats &st
         stats.observationCount >= std::max(1, options.minCeresCudaObservations))
     {
         return {BABackend::CeresCuda, "ceres_cuda_problem_size"};
+    }
+    if (options.refineSharedFocalLength &&
+        isBackendAvailable(BABackend::CeresCpu))
+    {
+        // 共享焦距必须和相机、三维点放在同一个非线性问题中求解。
+        // 即使问题较小，也优先使用联合 Ceres，而不是退回 Legacy 分块交替更新。
+        return {BABackend::CeresCpu, "joint_shared_focal_requires_ceres"};
     }
     if (isBackendAvailable(BABackend::CeresCpu) &&
         stats.observationCount >= std::max(1, options.minCeresCpuObservations))
@@ -1880,23 +2067,6 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
         const BAProblemStats stats = summarizeProblem(cameras, tracks);
         return stats.observationCount > std::max(1, options.maxCeresPointOnlyObservations);
     };
-
-    if (options.refineSharedFocalLength &&
-        options.backend != BABackend::LegacyCpu &&
-        options.backend != BABackend::Auto)
-    {
-        const std::string message =
-            "共享焦距自标定目前仅由 legacy_cpu BA 支持，已回退到 legacy_cpu";
-        if (!options.allowBackendFallback)
-        {
-            BAResult result;
-            result.requestedBackend = options.backend;
-            result.backendMessage = message + "，但当前禁止回退";
-            updateDerivedResultStats(result);
-            return result;
-        }
-        return runLegacy(message);
-    }
 
     if (options.backend == BABackend::Auto)
     {
@@ -1997,6 +2167,34 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
 
     if (options.backend == BABackend::NativeCuda)
     {
+        const BABackendCapabilities capabilities = backendCapabilities(BABackend::NativeCuda);
+        const bool unsupportedConfiguration =
+            (options.refineCameraPose && !capabilities.refinesCameraPose) ||
+            (options.refineSharedFocalLength && !capabilities.refinesSharedFocalLength) ||
+            ((options.enableLaserPlaneConstraints ||
+              options.enableControlPointConstraints ||
+              options.enableScaleBarConstraints ||
+              !options.cameraPosePriors.empty()) &&
+             !capabilities.supportsSoftConstraints);
+        if (unsupportedConfiguration)
+        {
+            const std::string message =
+                "native_cuda 当前仅支持固定相机的三维点优化，不能执行请求的联合 BA";
+            if (!options.allowBackendFallback)
+            {
+                BAResult result;
+                result.requestedBackend = BABackend::NativeCuda;
+                result.usedBackend = BABackend::NativeCuda;
+                result.solveStatus = BASolveStatus::UnsupportedConfiguration;
+                result.backendMessage = message + "，且当前禁止回退";
+                result.totalTracks = static_cast<int>(tracks.size());
+                result.refinedCameras = cameras;
+                updateDerivedResultStats(result);
+                return result;
+            }
+            return runLegacy(message + "，已回退到 legacy_cpu");
+        }
+
         std::string message;
         if (!detail::isNativeCudaRuntimeAvailable(options.nativeCudaDevice, &message))
         {
@@ -2004,6 +2202,8 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
             {
                 BAResult result;
                 result.requestedBackend = BABackend::NativeCuda;
+                result.usedBackend = BABackend::NativeCuda;
+                result.solveStatus = BASolveStatus::BackendUnavailable;
                 result.backendMessage = message + "，且禁止回退";
                 updateDerivedResultStats(result);
                 return result;
@@ -2015,10 +2215,13 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
         result.requestedBackend = BABackend::NativeCuda;
         updateDerivedResultStats(result);
         const bool nativeCudaFailed =
+            !result.solutionUsable ||
             !result.usedGpu ||
             result.optimizedTracks == 0 ||
             !std::isfinite(result.meanRmsAfter);
-        if (nativeCudaFailed && options.allowBackendFallback)
+        if (nativeCudaFailed &&
+            result.solveStatus != BASolveStatus::Cancelled &&
+            options.allowBackendFallback)
         {
             const std::string message = result.backendMessage.empty()
                                             ? "native_cuda 求解失败，已回退到 legacy_cpu"
@@ -2046,6 +2249,8 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
             {
                 BAResult result;
                 result.requestedBackend = BABackend::CeresCpu;
+                result.usedBackend = BABackend::CeresCpu;
+                result.solveStatus = BASolveStatus::UnsupportedConfiguration;
                 result.backendMessage = message + "，但当前禁止回退";
                 updateDerivedResultStats(result);
                 return result;
@@ -2059,12 +2264,27 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
             result.usedBackend = BABackend::CeresCpu;
             result.usedGpu = false;
             updateDerivedResultStats(result);
+            if (!result.solutionUsable &&
+                result.solveStatus != BASolveStatus::Cancelled &&
+                options.allowBackendFallback)
+            {
+                const std::string message = result.backendMessage.empty()
+                                                ? "Ceres CPU 求解失败，已回退到 legacy_cpu"
+                                                : result.backendMessage + "，已回退到 legacy_cpu";
+                BAResult fallback = runLegacy(message);
+                fallback.setupSeconds += result.setupSeconds;
+                fallback.solveSeconds += result.solveSeconds;
+                fallback.totalSeconds += result.totalSeconds;
+                return fallback;
+            }
             return result;
         }
         if (!options.allowBackendFallback)
         {
             BAResult result;
             result.requestedBackend = BABackend::CeresCpu;
+            result.usedBackend = BABackend::CeresCpu;
+            result.solveStatus = BASolveStatus::BackendUnavailable;
             result.backendMessage = "Ceres CPU 后端不可用，且禁止回退";
             updateDerivedResultStats(result);
             return result;
@@ -2082,6 +2302,8 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
             {
                 BAResult result;
                 result.requestedBackend = BABackend::CeresCuda;
+                result.usedBackend = BABackend::CeresCuda;
+                result.solveStatus = BASolveStatus::UnsupportedConfiguration;
                 result.backendMessage = message + "，但当前禁止回退";
                 updateDerivedResultStats(result);
                 return result;
@@ -2094,6 +2316,19 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
             BAResult result = detail::optimizePointsWithCeres(cameras, tracks, options, true);
             result.requestedBackend = BABackend::CeresCuda;
             updateDerivedResultStats(result);
+            if (!result.solutionUsable &&
+                result.solveStatus != BASolveStatus::Cancelled &&
+                options.allowBackendFallback)
+            {
+                const std::string message = result.backendMessage.empty()
+                                                ? "Ceres CUDA 求解失败，已回退到 legacy_cpu"
+                                                : result.backendMessage + "，已回退到 legacy_cpu";
+                BAResult fallback = runLegacy(message);
+                fallback.setupSeconds += result.setupSeconds;
+                fallback.solveSeconds += result.solveSeconds;
+                fallback.totalSeconds += result.totalSeconds;
+                return fallback;
+            }
             return result;
         }
 
@@ -2101,6 +2336,8 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
         {
             BAResult result;
             result.requestedBackend = BABackend::CeresCuda;
+            result.usedBackend = BABackend::CeresCuda;
+            result.solveStatus = BASolveStatus::BackendUnavailable;
             result.backendMessage = "Ceres CUDA 后端不可用或未达到 GPU 求解阈值，且禁止回退";
             updateDerivedResultStats(result);
             return result;
@@ -2124,6 +2361,19 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
                 result.backendMessage = "相机数量低于 Ceres CUDA 阈值，已回退到 ceres_cpu；" + result.backendMessage;
             }
             updateDerivedResultStats(result);
+            if (!result.solutionUsable &&
+                result.solveStatus != BASolveStatus::Cancelled &&
+                options.allowBackendFallback)
+            {
+                const std::string message = result.backendMessage.empty()
+                                                ? "Ceres CPU 回退求解失败，已继续回退到 legacy_cpu"
+                                                : result.backendMessage + "，已继续回退到 legacy_cpu";
+                BAResult fallback = runLegacy(message);
+                fallback.setupSeconds += result.setupSeconds;
+                fallback.solveSeconds += result.solveSeconds;
+                fallback.totalSeconds += result.totalSeconds;
+                return fallback;
+            }
             return result;
         }
         return runLegacy("Ceres CUDA/CPU 后端均不可用，已回退到 legacy_cpu");

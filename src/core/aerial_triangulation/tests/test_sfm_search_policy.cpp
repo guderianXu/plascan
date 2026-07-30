@@ -90,6 +90,88 @@ TEST(SfmSearchPolicyTest, StrongerPhotogrammetricNetworkDominatesMarginalRmsGain
     EXPECT_FALSE(xjw::aerial_triangulation::isBetterCandidate(weakNetwork, strongNetwork));
 }
 
+TEST(SfmSearchPolicyTest, ClosedSequenceContinuityRejectsMarginallyStrongerDegenerateNetwork)
+{
+    SfmCandidateSummary continuous{
+        0, 4.0, 0, 1, 12, 2219, 0.468, true};
+    continuous.hasNetworkQuality = true;
+    continuous.medianTriangulationAngleDeg = 58.77;
+    continuous.twoViewTrackRatio = 0.454;
+    continuous.observationGridCoverage = 0.112;
+    continuous.hasClosedSequenceGeometry = true;
+    continuous.sequenceAdjacentDistanceMaximumRatio = 1.48;
+    continuous.sequenceAdjacentDistanceMadRatio = 0.010;
+
+    SfmCandidateSummary degenerate{
+        1, 3.2, 0, 1, 12, 2332, 0.521, true};
+    degenerate.hasNetworkQuality = true;
+    degenerate.medianTriangulationAngleDeg = 59.32;
+    degenerate.twoViewTrackRatio = 0.371;
+    degenerate.observationGridCoverage = 0.115;
+    degenerate.hasClosedSequenceGeometry = true;
+    degenerate.sequenceAdjacentDistanceMaximumRatio = 1.64;
+    degenerate.sequenceAdjacentDistanceMadRatio = 0.011;
+
+    EXPECT_TRUE(xjw::aerial_triangulation::isBetterCandidate(continuous, degenerate));
+    EXPECT_FALSE(xjw::aerial_triangulation::isBetterCandidate(degenerate, continuous));
+}
+
+TEST(SfmSearchPolicyTest, SmallClosedSequenceDifferencesFallBackToNetworkQuality)
+{
+    SfmCandidateSummary strongerNetwork{
+        0, 3.2, 0, 1, 12, 2300, 0.52, true};
+    strongerNetwork.hasNetworkQuality = true;
+    strongerNetwork.medianTriangulationAngleDeg = 59.0;
+    strongerNetwork.twoViewTrackRatio = 0.37;
+    strongerNetwork.observationGridCoverage = 0.116;
+    strongerNetwork.hasClosedSequenceGeometry = true;
+    strongerNetwork.sequenceAdjacentDistanceMaximumRatio = 1.55;
+    strongerNetwork.sequenceAdjacentDistanceMadRatio = 0.011;
+
+    SfmCandidateSummary similarSequence{
+        1, 4.0, 0, 1, 12, 2200, 0.47, true};
+    similarSequence.hasNetworkQuality = true;
+    similarSequence.medianTriangulationAngleDeg = 58.8;
+    similarSequence.twoViewTrackRatio = 0.45;
+    similarSequence.observationGridCoverage = 0.112;
+    similarSequence.hasClosedSequenceGeometry = true;
+    similarSequence.sequenceAdjacentDistanceMaximumRatio = 1.48;
+    similarSequence.sequenceAdjacentDistanceMadRatio = 0.010;
+
+    EXPECT_TRUE(xjw::aerial_triangulation::isBetterCandidate(
+        strongerNetwork, similarSequence));
+}
+
+TEST(SfmSearchPolicyTest, BalancedQualityRejectsLongFocalSequenceOutlier)
+{
+    // temple 实测：10 倍焦距只有最坏相邻基线比略小，其余摄影测量指标均明显较差。
+    // 单个极值不能压过重投影、多视轨迹和稳健闭环连续性。
+    SfmCandidateSummary balanced{
+        0, 2.4, 14, 15, 16, 4735, 0.3044073359, true};
+    balanced.hasNetworkQuality = true;
+    balanced.medianTriangulationAngleDeg = 45.320758;
+    balanced.twoViewTrackRatio = 0.3759239704;
+    balanced.observationGridCoverage = 0.096924;
+    balanced.hasClosedSequenceGeometry = true;
+    balanced.sequenceAdjacentDistanceMaximumRatio = 4.9488195611;
+    balanced.sequenceAdjacentDistanceMadRatio = 0.0119897050;
+
+    SfmCandidateSummary longFocalOutlier{
+        1, 10.0, 14, 15, 16, 4509, 0.5642177339, true};
+    longFocalOutlier.hasNetworkQuality = true;
+    longFocalOutlier.medianTriangulationAngleDeg = 31.134545;
+    longFocalOutlier.twoViewTrackRatio = 0.5504546463;
+    longFocalOutlier.observationGridCoverage = 0.089862;
+    longFocalOutlier.hasClosedSequenceGeometry = true;
+    longFocalOutlier.sequenceAdjacentDistanceMaximumRatio = 3.8983537706;
+    longFocalOutlier.sequenceAdjacentDistanceMadRatio = 0.2142429022;
+
+    EXPECT_TRUE(xjw::aerial_triangulation::isBetterCandidate(
+        balanced, longFocalOutlier));
+    EXPECT_FALSE(xjw::aerial_triangulation::isBetterCandidate(
+        longFocalOutlier, balanced));
+}
+
 TEST(SfmSearchPolicyTest, RankingIsDeterministicAndReplayIsLimitedToThree)
 {
     const std::vector<SfmCandidateSummary> candidates{

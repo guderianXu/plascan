@@ -2,9 +2,11 @@
 // 文件: workflows/ReconstructionPipelineRunner.cpp
 // 功能: PlaScan 一键重建 CLI
 //       默认: .lis(image camera) -> SFM -> MVS -> 三维模型 -> DEM/DOM
-//       PLASCAN_THREE_D_ONLY: GUI 三维重建等价流程，仅 SFM -> MVS -> 三维模型
+//       PLASCAN_THREE_D_ONLY: 独立三维重建流程，仅 SFM -> MVS -> 三维模型
 // =============================================================================
 #include "ReconstructionPipelineRunner.h"
+
+#include "ProjectCameraIO.h"
 #include "ReconstructionCliOptions.h"
 #include "ReconstructionCliProgress.h"
 #include "ReconstructionCliReport.h"
@@ -33,6 +35,7 @@
 #endif
 #include "io/PathIO.h"
 #include "project/ProjectCommonUtils.h"
+#include "project/ProjectSession.h"
 
 #include <plapoint/core/point_cloud.h>
 #include <plapoint/features/normal_estimation.h>
@@ -1192,13 +1195,69 @@ xjw::cli::ReconstructionCliOptions options;
 
     const QStringList images = xjw::cli::imagePaths(items);
     const QStringList cameraPaths = xjw::cli::cameraPathsForService(items);
-    QJsonObject projectMeta = xjw::cli::projectMetaFromInputItems(items);
+    const QString projectPath =
+        QDir(outputDir).filePath(QStringLiteral("headless.plascan"));
+    xjw::common::project::ProjectSession projectSession;
+    if (!projectSession.openOrCreate(
+            projectPath,
+            QFileInfo(projectPath).completeBaseName(),
+            &error))
+    {
+        std::fprintf(stderr,
+                     "工程打开/创建失败: %s\n",
+                     qUtf8Printable(error));
+        return cli::EXIT_IO_ERR;
+    }
+    if (!options.chunkIdArg.empty() && !options.chunkNameArg.empty())
+    {
+        std::fprintf(stderr,
+                     "错误: --chunk-id 与 --chunk-name 不能同时使用\n");
+        return cli::EXIT_ARG_ERR;
+    }
+    if (!projectSession.selectChunk(
+            xjw::cli::fromStdString(options.chunkIdArg),
+            xjw::cli::fromStdString(options.chunkNameArg),
+            &error))
+    {
+        std::fprintf(stderr,
+                     "Chunk 选择失败: %s\n",
+                     qUtf8Printable(error));
+        return cli::EXIT_IO_ERR;
+    }
+    if (!projectSession.mergeImages(
+            xjw::cli::inputItemsToJson(items), &error)
+        || !projectSession.save(&error))
+    {
+        std::fprintf(stderr,
+                     "工程影像初始化失败: %s\n",
+                     qUtf8Printable(error));
+        return cli::EXIT_IO_ERR;
+    }
+    const QString pipelineRoot =
+        QDir(projectSession.activeChunkRoot())
+            .filePath(QStringLiteral("reconstruction"));
+    const QString reportsRoot =
+        QDir(projectSession.activeChunkRoot())
+            .filePath(QStringLiteral("reports/reconstruction_pipeline"));
+    if (!QDir().mkpath(pipelineRoot))
+    {
+        std::fprintf(stderr,
+                     "Chunk 重建目录创建失败: %s\n",
+                     qUtf8Printable(pipelineRoot));
+        return cli::EXIT_IO_ERR;
+    }
+    QJsonObject projectMeta = projectSession.mergedMetadata();
 
     QJsonObject report;
     report[QStringLiteral("status")] = QStringLiteral("running");
     report[QStringLiteral("created_at")] = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
     report[QStringLiteral("list_file")] = listPath;
     report[QStringLiteral("output_dir")] = outputDir;
+    report[QStringLiteral("project_path")] = projectPath;
+    report[QStringLiteral("chunk_directory")] =
+        projectSession.activeChunk().directory;
+    report[QStringLiteral("chunk_root")] =
+        projectSession.activeChunkRoot();
     report[QStringLiteral("inputs")] = xjw::cli::inputPairsToJson(items);
     if (!mvs_mask_dir.isEmpty())
     {
@@ -1207,9 +1266,26 @@ xjw::cli::ReconstructionCliOptions options;
 
     auto writeFinalReport = [&](QJsonObject *finalReport) {
         QString reportError;
-        if (!xjw::cli::writeReconstructionReport(outputDir, report, finalReport, &reportError))
+        if (!xjw::cli::writeReconstructionReport(
+                reportsRoot, report, finalReport, &reportError))
         {
             std::fprintf(stderr, "报告写入失败: %s\n", qUtf8Printable(reportError));
+            return false;
+        }
+        QJsonObject reportRecord = report;
+        reportRecord[QStringLiteral("kind")] =
+            QStringLiteral("reconstruction_pipeline_cli");
+        reportRecord[QStringLiteral("path")] =
+            finalReport->value(QStringLiteral("report_json")).toString();
+        projectSession.upsertResultByPath(
+            QStringLiteral("report_results"),
+            QStringLiteral("path"),
+            reportRecord);
+        if (!projectSession.save(&reportError))
+        {
+            std::fprintf(stderr,
+                         "报告已生成，但 Chunk 写回失败: %s\n",
+                         qUtf8Printable(reportError));
             return false;
         }
         return true;
@@ -1249,8 +1325,15 @@ xjw::cli::ReconstructionCliOptions options;
     sfmOptions.images = images;
     sfmOptions.cameraPaths = cameraPaths;
     sfmOptions.projectMeta = projectMeta;
-    sfmOptions.projectPath = QDir(outputDir).filePath(QStringLiteral("headless.plascan"));
-    sfmOptions.outputDir = outputDir;
+    sfmOptions.projectPath = projectPath;
+    sfmOptions.assetsDir = QDir(projectSession.activeChunkRoot())
+        .filePath(QStringLiteral("assets"));
+    sfmOptions.featureDir = QDir(sfmOptions.assetsDir)
+        .filePath(QStringLiteral("ip"));
+    sfmOptions.matchDir = QDir(sfmOptions.assetsDir)
+        .filePath(QStringLiteral("matches"));
+    sfmOptions.outputDir = QDir(pipelineRoot)
+        .filePath(QStringLiteral("sparse"));
     sfmOptions.device = QString::fromStdString(device);
     sfmOptions.featureAlgorithm = QString::fromStdString(sfmFeatureAlgorithm);
     sfmOptions.matchAlgorithm = QString::fromStdString(sfmMatchAlgorithm);
@@ -1264,7 +1347,7 @@ xjw::cli::ReconstructionCliOptions options;
     };
     sfmOptions.quality = qualityNames.at(qBound(0, quality, qualityNames.size() - 1));
     sfmOptions.threads = std::max(1, threads);
-    sfmOptions.cudaParallelPairs = std::max(1, cudaParallelPairs);
+    sfmOptions.cudaParallelPairs = std::max(0, cudaParallelPairs);
     sfmOptions.featureMaxImageDim = featureMaxImageDim;
     sfmOptions.resetAlignment = true;
     sfmOptions.autoGenerateMissingMatches = true;
@@ -1285,6 +1368,85 @@ xjw::cli::ReconstructionCliOptions options;
     sfmJson[QStringLiteral("points")] = sfmResult.numPoints3D;
     sfmJson[QStringLiteral("mean_reprojection_error")] = sfmResult.meanReprojError;
     report[QStringLiteral("sfm")] = sfmJson;
+
+    const QString resultCreatedAt =
+        QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+    for (const xjw::matchphotos::MatchPhotosFeatureRecord &feature :
+         sfmWorkflowResult.tiePointResult.features)
+    {
+        projectSession.upsertResultByPath(
+            QStringLiteral("ipfind_results"),
+            QStringLiteral("output"),
+            QJsonObject{
+                {QStringLiteral("input"), feature.imagePath},
+                {QStringLiteral("output"), feature.featurePath},
+                {QStringLiteral("keypoint_count"), feature.keypointCount},
+                {QStringLiteral("settings"), feature.settings},
+                {QStringLiteral("created_at"), resultCreatedAt}
+            });
+    }
+    for (const xjw::matchphotos::MatchPhotosMatchRecord &match :
+         sfmWorkflowResult.tiePointResult.matches)
+    {
+        projectSession.upsertResultByPath(
+            QStringLiteral("ipmatch_results"),
+            QStringLiteral("output"),
+            QJsonObject{
+                {QStringLiteral("image0"), match.image0Path},
+                {QStringLiteral("image1"), match.image1Path},
+                {QStringLiteral("output"), match.matchPath},
+                {QStringLiteral("sidecar_path"), match.sidecarPath},
+                {QStringLiteral("match_count"), match.matchCount},
+                {QStringLiteral("geometric_inlier_count"),
+                 match.geometricInlierCount},
+                {QStringLiteral("passed_geometry"),
+                 match.passedGeometry},
+                {QStringLiteral("settings"), match.settings},
+                {QStringLiteral("created_at"), resultCreatedAt}
+            });
+    }
+    if (!sfmResult.sparseCloudPath.isEmpty())
+    {
+        QJsonObject sparseFiles{
+            {QStringLiteral("sparse_cloud_xyz"),
+             sfmResult.sparseCloudPath}
+        };
+        const QJsonObject extraFiles =
+            sfmResult.resultRecordExtra
+                .value(QStringLiteral("files")).toObject();
+        for (auto it = extraFiles.constBegin();
+             it != extraFiles.constEnd();
+             ++it)
+        {
+            sparseFiles.insert(it.key(), it.value());
+        }
+        QJsonObject sparseRecord = sfmResult.resultRecordExtra;
+        sparseRecord.remove(QStringLiteral("files"));
+        sparseRecord[QStringLiteral("created_at")] = resultCreatedAt;
+        sparseRecord[QStringLiteral("output_dir")] =
+            sfmOptions.outputDir;
+        sparseRecord[QStringLiteral("sparse_point_count")] =
+            sfmResult.numPoints3D;
+        sparseRecord[QStringLiteral("selected_images")] =
+            QJsonArray::fromStringList(images);
+        sparseRecord[QStringLiteral("files")] = sparseFiles;
+        sparseRecord[QStringLiteral("quality_metadata")] =
+            sfmResult.qualityMetadata;
+        projectSession.appendResult(
+            QStringLiteral("aerial_triangulation_results"),
+            sparseRecord);
+    }
+    if (sfmResult.success
+        && !projectSession.updateImageCameras(
+            sfmResult.pendingCamUpdates, nullptr, &error))
+    {
+        report[QStringLiteral("status")] = QStringLiteral("failed");
+        report[QStringLiteral("reason")] =
+            QStringLiteral("SFM 相机写回失败: %1").arg(error);
+        QJsonObject finalReport;
+        writeFinalReport(&finalReport);
+        return cli::EXIT_IO_ERR;
+    }
     if (!sfmResult.success || sfmResult.sparseCloudPath.isEmpty())
     {
         report[QStringLiteral("status")] = QStringLiteral("failed");
@@ -1529,7 +1691,8 @@ xjw::cli::ReconstructionCliOptions options;
 
     xjw::cli::printPipelineStage(2, kTotalStages, QStringLiteral("MVS 稠密点云..."));
     const auto mvsStart = std::chrono::steady_clock::now();
-    const QString mvsDir = QDir(outputDir).filePath(QStringLiteral("mvs"));
+    const QString mvsDir =
+        QDir(pipelineRoot).filePath(QStringLiteral("mvs"));
     QDir().mkpath(mvsDir);
     xjw::gui::project::DenseGenerationSettings denseSettings;
     denseSettings.threads = std::max(1, threads);
@@ -1601,7 +1764,7 @@ xjw::cli::ReconstructionCliOptions options;
     depthConfig.saveIntermediateDepthMaps = true;
     depthConfig.intermediateDir = xjw::common::io::toUtf8Path(mvsDir);
     depthConfig.sourcePairQualities =
-        loadMvsSourcePairQualities(QDir(outputDir).filePath(QStringLiteral("assets/matches")));
+        loadMvsSourcePairQualities(sfmOptions.matchDir);
     const std::size_t verified_pair_count = static_cast<std::size_t>(std::count_if(
         depthConfig.sourcePairQualities.cbegin(),
         depthConfig.sourcePairQualities.cend(),
@@ -1934,7 +2097,8 @@ xjw::cli::ReconstructionCliOptions options;
         const auto meshStart = std::chrono::steady_clock::now();
         xjw::mesh::workflow::MeshBuildRequest meshRequest;
         meshRequest.pointCloudPath = refinedCloudPathForModel;
-        meshRequest.outputRoot = QDir(outputDir).filePath(QStringLiteral("model"));
+        meshRequest.outputRoot =
+            QDir(pipelineRoot).filePath(QStringLiteral("model"));
         meshRequest.exportObj = exportObj;
         const bool aerialTerrain =
             effectiveSceneProfile == xjw::mvs::MvsSceneProfile::AerialTerrain;
@@ -1983,7 +2147,8 @@ xjw::cli::ReconstructionCliOptions options;
     {
         xjw::cli::printPipelineStage(4, 4, QStringLiteral("DEM/DOM 产品..."));
         const auto terrainStart = std::chrono::steady_clock::now();
-        const QString terrainDir = QDir(outputDir).filePath(QStringLiteral("terrain"));
+        const QString terrainDir =
+            QDir(pipelineRoot).filePath(QStringLiteral("terrain"));
         QJsonObject demResult;
         if (!xjw::TerrainPipeline::generateDemProducts(refinedCloudPathForModel,
                                                        terrainDir,
@@ -2026,7 +2191,9 @@ xjw::cli::ReconstructionCliOptions options;
 
 #ifndef PLASCAN_THREE_D_ONLY
     const QJsonObject terrain = report.value(QStringLiteral("terrain")).toObject();
-    const QString demPath = terrain.value(QStringLiteral("dem")).toObject().value(QStringLiteral("dem_tif")).toString();
+    const QString demPath =
+        terrain.value(QStringLiteral("dem")).toObject()
+            .value(QStringLiteral("dem_tif")).toString();
     const QString domPath = domOutputPath(terrain.value(QStringLiteral("dom")).toObject());
 #endif
     const QJsonObject model = report.value(QStringLiteral("model")).toObject();
@@ -2043,6 +2210,70 @@ xjw::cli::ReconstructionCliOptions options;
     report[QStringLiteral("status")] = (modelOk && terrainOk) ? QStringLiteral("ok") : QStringLiteral("partial");
     const double totalElapsedMs = recordTiming(QStringLiteral("total_elapsed_ms"), pipelineStart);
     report[QStringLiteral("timings")] = timings;
+
+    if (!denseCloudPathForReport.isEmpty())
+    {
+        projectSession.upsertResultByPath(
+            QStringLiteral("dense_cloud_results"),
+            QStringLiteral("dense_cloud_xyz"),
+            QJsonObject{
+                {QStringLiteral("created_at"), resultCreatedAt},
+                {QStringLiteral("kind"), QStringLiteral("dense_cloud")},
+                {QStringLiteral("result_type"),
+                 QStringLiteral("dense_cloud")},
+                {QStringLiteral("source_sparse_cloud"),
+                 sfmResult.sparseCloudPath},
+                {QStringLiteral("dense_cloud_xyz"),
+                 denseCloudPathForReport},
+                {QStringLiteral("refined_dense_cloud"),
+                 refinedCloudPathForModel},
+                {QStringLiteral("point_count"), densePointCount},
+                {QStringLiteral("refined_point_count"),
+                 refinedPointCount}
+            });
+    }
+    if (!modelPath.isEmpty())
+    {
+        QJsonObject modelRecord = model;
+        modelRecord[QStringLiteral("created_at")] = resultCreatedAt;
+        modelRecord[QStringLiteral("kind")] = QStringLiteral("mesh");
+        modelRecord[QStringLiteral("result_type")] =
+            QStringLiteral("mesh");
+        modelRecord[QStringLiteral("model_ply")] = modelPath;
+        modelRecord[QStringLiteral("source_dense_cloud")] =
+            refinedCloudPathForModel;
+        projectSession.upsertResultByPath(
+            QStringLiteral("model_results"),
+            QStringLiteral("model_ply"),
+            modelRecord);
+    }
+#ifndef PLASCAN_THREE_D_ONLY
+    if (!demPath.isEmpty())
+    {
+        QJsonObject demRecord =
+            terrain.value(QStringLiteral("dem")).toObject();
+        demRecord[QStringLiteral("created_at")] = resultCreatedAt;
+        demRecord[QStringLiteral("dem_tif")] = demPath;
+        demRecord[QStringLiteral("source_sparse_cloud")] =
+            sfmResult.sparseCloudPath;
+        projectSession.upsertResultByPath(
+            QStringLiteral("dem_results"),
+            QStringLiteral("dem_tif"),
+            demRecord);
+    }
+    if (!domPath.isEmpty())
+    {
+        QJsonObject orthoRecord =
+            terrain.value(QStringLiteral("dom")).toObject();
+        orthoRecord[QStringLiteral("created_at")] = resultCreatedAt;
+        orthoRecord[QStringLiteral("output_path")] = domPath;
+        orthoRecord[QStringLiteral("dem_path")] = demPath;
+        projectSession.upsertResultByPath(
+            QStringLiteral("ortho_results"),
+            QStringLiteral("output_path"),
+            orthoRecord);
+    }
+#endif
     QJsonObject finalReport;
     if (!writeFinalReport(&finalReport))
     {

@@ -1,12 +1,8 @@
 #include "ProjectMetadata.h"
 
-#include "ProjectIO.h"
-
 #include <QDir>
 #include <QFileInfo>
 #include <QSet>
-
-#include <algorithm>
 
 namespace xjw::common::project
 {
@@ -14,65 +10,34 @@ namespace xjw::common::project
 namespace
 {
 
-QString normalizedFeatureSuffix(QString suffix)
+QStringList uniqueCandidates(const QStringList &candidates)
 {
-    suffix = suffix.trimmed().toLower();
-    if (suffix.isEmpty())
+    QStringList unique;
+    QSet<QString> keys;
+    for (const QString &candidate : candidates)
     {
-        return QString();
+        const QString key = normalizedImageToken(candidate);
+        if (!key.isEmpty() && !keys.contains(key))
+        {
+            keys.insert(key);
+            unique.append(candidate);
+        }
     }
-    if (!suffix.startsWith(QLatin1Char('.')))
-    {
-        suffix.prepend(QLatin1Char('.'));
-    }
-    return suffix;
+    return unique;
 }
 
-QSet<QString> collectProjectFeatureSuffixes(const QString &project_path,
-                                            const QJsonObject &metadata)
+ImageResolveResult resultForCandidates(const QStringList &candidates)
 {
-    QSet<QString> suffixes;
-    for (const QString &image_path : projectImagePaths(metadata))
+    const QStringList unique = uniqueCandidates(candidates);
+    if (unique.size() == 1)
     {
-        for (const QString &suffix : ProjectIO::availableFeatureSuffixes(project_path,
-                                                                          image_path))
-        {
-            const QString normalized = normalizedFeatureSuffix(suffix);
-            if (!normalized.isEmpty())
-            {
-                suffixes.insert(normalized);
-            }
-        }
+        return {ImageResolveStatus::Found, unique.first(), unique};
     }
-
-    const QDir feature_dir(ProjectIO::ipfindOutputDir(project_path));
-    if (!feature_dir.exists())
+    if (unique.size() > 1)
     {
-        return suffixes;
+        return {ImageResolveStatus::Ambiguous, {}, unique};
     }
-
-    static const QStringList known_suffixes = {
-        QStringLiteral(".sp"),
-        QStringLiteral(".dsk"),
-        QStringLiteral(".alk"),
-        QStringLiteral(".sift"),
-        QStringLiteral(".orb"),
-        QStringLiteral(".akz"),
-        QStringLiteral(".dedode")
-    };
-    const QFileInfoList files = feature_dir.entryInfoList(QDir::Files | QDir::NoDotAndDotDot);
-    for (const QFileInfo &file_info : files)
-    {
-        const QString file_name = file_info.fileName().toLower();
-        for (const QString &suffix : known_suffixes)
-        {
-            if (file_name.endsWith(suffix))
-            {
-                suffixes.insert(suffix);
-            }
-        }
-    }
-    return suffixes;
+    return {ImageResolveStatus::NotFound, {}, {}};
 }
 
 } // namespace
@@ -116,18 +81,7 @@ bool imageTokensReferToSameImage(const QString &lhs, const QString &rhs)
     {
         return false;
     }
-    if (normalized_lhs == normalized_rhs)
-    {
-        return true;
-    }
-
-    const QFileInfo lhs_info(QDir::fromNativeSeparators(lhs.trimmed()));
-    const QFileInfo rhs_info(QDir::fromNativeSeparators(rhs.trimmed()));
-    if (lhs_info.fileName().toCaseFolded() == rhs_info.fileName().toCaseFolded())
-    {
-        return true;
-    }
-    return imageBaseToken(lhs) == imageBaseToken(rhs);
+    return normalized_lhs == normalized_rhs;
 }
 
 bool imageReferenceMatchesToken(const QString &path_token,
@@ -138,8 +92,11 @@ bool imageReferenceMatchesToken(const QString &path_token,
     {
         return false;
     }
-    return imageTokensReferToSameImage(path_token, candidate) ||
-           imageTokensReferToSameImage(name_token, candidate);
+    if (!path_token.trimmed().isEmpty())
+    {
+        return imageTokensReferToSameImage(path_token, candidate);
+    }
+    return imageTokensReferToSameImage(name_token, candidate);
 }
 
 bool pathTokenMatchesImage(const QString &token, const QString &image_path)
@@ -201,116 +158,100 @@ QMap<QString, QJsonObject> projectImageMetaByPath(const QJsonObject &metadata,
 QString resolveProjectImagePathFromToken(const QString &token,
                                          const QJsonObject &metadata)
 {
-    return resolveProjectImagePathFromToken(token, projectImagePaths(metadata));
+    return resolveProjectImageToken(token, metadata).path;
 }
 
-QString resolveProjectImagePathFromToken(const QString &token,
-                                         const QStringList &project_image_paths)
+ImageResolveResult resolveProjectImageToken(const QString &token,
+                                            const QJsonObject &metadata)
 {
-    if (token.isEmpty())
+    const QString trimmed_token = token.trimmed();
+    if (trimmed_token.isEmpty())
     {
-        return QString();
+        return {ImageResolveStatus::InvalidToken, {}, {}};
     }
+
+    QStringList uuid_matches;
+    for (const QJsonValue &value : projectImageEntries(metadata))
+    {
+        const QJsonObject image = value.toObject();
+        if (image.value(QStringLiteral("image_uuid")).toString().trimmed()
+            == trimmed_token)
+        {
+            const QString path = image.value(QStringLiteral("path")).toString();
+            if (!path.isEmpty())
+            {
+                uuid_matches.append(path);
+            }
+        }
+    }
+    if (!uuid_matches.isEmpty())
+    {
+        return resultForCandidates(uuid_matches);
+    }
+    return resolveProjectImageToken(token, projectImagePaths(metadata));
+}
+
+ImageResolveResult resolveProjectImageToken(
+    const QString &token,
+    const QStringList &project_image_paths)
+{
+    if (token.trimmed().isEmpty())
+    {
+        return {ImageResolveStatus::InvalidToken, {}, {}};
+    }
+
+    QStringList exact_matches;
+    const QString normalized_token = normalizedImageToken(token);
     for (const QString &image_path : project_image_paths)
     {
-        if (pathTokenMatchesImage(token, image_path))
+        if (normalizedImageToken(image_path) == normalized_token)
         {
-            return image_path;
+            exact_matches.append(image_path);
         }
     }
-    return QString();
-}
-
-QString resolveProjectFeaturePathFromToken(const QString &project_path,
-                                           const QJsonObject &metadata,
-                                           const QString &token)
-{
-    const QString image_path = resolveProjectImagePathFromToken(token, metadata);
-    if (!image_path.isEmpty())
+    if (!exact_matches.isEmpty())
     {
-        const QString feature_path = ProjectIO::findFeatureForImage(project_path, image_path);
-        if (!feature_path.isEmpty())
+        return resultForCandidates(exact_matches);
+    }
+    if (token.contains(QLatin1Char('/')) || token.contains(QLatin1Char('\\')))
+    {
+        return {ImageResolveStatus::NotFound, {}, {}};
+    }
+
+    QStringList file_name_matches;
+    const QString token_file_name =
+        QFileInfo(QDir::fromNativeSeparators(token.trimmed()))
+            .fileName().toCaseFolded();
+    for (const QString &image_path : project_image_paths)
+    {
+        if (QFileInfo(QDir::fromNativeSeparators(image_path))
+                .fileName().toCaseFolded() == token_file_name)
         {
-            return feature_path;
+            file_name_matches.append(image_path);
         }
     }
-    return ProjectIO::findFeatureForImage(project_path, token);
-}
-
-QString resolveFeaturePathBySuffix(const QString &project_path,
-                                   const QJsonObject &metadata,
-                                   const QString &token,
-                                   const QString &suffix)
-{
-    const QString image_path = resolveProjectImagePathFromToken(token, metadata);
-    if (image_path.isEmpty())
+    if (!file_name_matches.isEmpty())
     {
-        return QString();
+        return resultForCandidates(file_name_matches);
     }
-    return ProjectIO::featureFileForSuffix(project_path, image_path, suffix);
-}
 
-QStringList projectFeatureSuffixes(const QString &project_path,
-                                   const QJsonObject &metadata)
-{
-    QSet<QString> available = collectProjectFeatureSuffixes(project_path, metadata);
-    static const QStringList preferred_order = {
-        QStringLiteral(".sift"),
-        QStringLiteral(".dsk"),
-        QStringLiteral(".alk"),
-        QStringLiteral(".sp"),
-        QStringLiteral(".orb"),
-        QStringLiteral(".akz"),
-        QStringLiteral(".dedode")
-    };
-
-    QStringList ordered;
-    for (const QString &suffix : preferred_order)
+    QStringList stem_matches;
+    const QString token_base = imageBaseToken(token);
+    for (const QString &image_path : project_image_paths)
     {
-        if (available.remove(suffix))
+        if (!token_base.isEmpty() && imageBaseToken(image_path) == token_base)
         {
-            ordered.append(suffix);
+            stem_matches.append(image_path);
         }
     }
-    QStringList extras = available.values();
-    std::sort(extras.begin(), extras.end());
-    ordered.append(extras);
-    return ordered;
+    return resultForCandidates(stem_matches);
 }
 
-QString inferPreferredFeatureSuffix(const QString &project_path,
-                                    const QJsonObject &metadata)
+QString resolveProjectImagePathFromToken(
+    const QString &token,
+    const QStringList &project_image_paths)
 {
-    const QStringList suffixes = projectFeatureSuffixes(project_path, metadata);
-    return suffixes.isEmpty() ? QString() : suffixes.first();
-}
-
-QString resolvePreferredFeatureSuffix(const QString &project_path,
-                                      const QJsonObject &metadata,
-                                      const QString &requested_suffix,
-                                      const QString &fallback_suffix)
-{
-    const QString requested = normalizedFeatureSuffix(requested_suffix);
-    const QStringList available = projectFeatureSuffixes(project_path, metadata);
-    if (!requested.isEmpty() && available.contains(requested))
-    {
-        return requested;
-    }
-    if (!available.isEmpty())
-    {
-        return available.first();
-    }
-    const QString fallback = normalizedFeatureSuffix(fallback_suffix);
-    return fallback.isEmpty() ? QStringLiteral(".sift") : fallback;
-}
-
-bool projectHasFeatureSuffix(const QString &project_path,
-                             const QJsonObject &metadata,
-                             const QString &suffix)
-{
-    const QString normalized = normalizedFeatureSuffix(suffix);
-    return !normalized.isEmpty()
-        && collectProjectFeatureSuffixes(project_path, metadata).contains(normalized);
+    return resolveProjectImageToken(token, project_image_paths).path;
 }
 
 } // namespace xjw::common::project

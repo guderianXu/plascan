@@ -1,4 +1,5 @@
 #include "VisualHullReconstructor.h"
+#include "Mc33IsoSurfaceExtractor.h"
 #include "SurfaceReconstructorPostprocess.h"
 
 #include <plapoint/mesh/marching_cubes.h>
@@ -8,6 +9,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <numeric>
 #include <thread>
@@ -43,6 +45,77 @@ bool validBounds(const VisualHullConfig &config)
         }
     }
     return true;
+}
+
+std::uint64_t edgeKey(int first, int second)
+{
+    const std::uint32_t low = static_cast<std::uint32_t>(std::min(first, second));
+    const std::uint32_t high = static_cast<std::uint32_t>(std::max(first, second));
+    return (static_cast<std::uint64_t>(low) << 32U) | high;
+}
+
+std::vector<int> edgeConnectedFaceRoots(const TriMesh &mesh)
+{
+    std::vector<int> parent(mesh.faces.size());
+    std::iota(parent.begin(), parent.end(), 0);
+    const auto find_root = [&parent](int face)
+    {
+        int root = face;
+        while (parent[static_cast<std::size_t>(root)] != root)
+        {
+            root = parent[static_cast<std::size_t>(root)];
+        }
+        while (parent[static_cast<std::size_t>(face)] != face)
+        {
+            const int next = parent[static_cast<std::size_t>(face)];
+            parent[static_cast<std::size_t>(face)] = root;
+            face = next;
+        }
+        return root;
+    };
+    const auto unite = [&parent, &find_root](int left, int right)
+    {
+        const int left_root = find_root(left);
+        const int right_root = find_root(right);
+        if (left_root != right_root)
+        {
+            parent[static_cast<std::size_t>(right_root)] = left_root;
+        }
+    };
+
+    std::unordered_map<std::uint64_t, int> first_face_by_edge;
+    first_face_by_edge.reserve(mesh.faces.size() * 2);
+    for (int face_index = 0; face_index < static_cast<int>(mesh.faces.size()); ++face_index)
+    {
+        const Triangle &face = mesh.faces[static_cast<std::size_t>(face_index)];
+        const bool valid =
+            face.v[0] >= 0 && face.v[1] >= 0 && face.v[2] >= 0 &&
+            face.v[0] < static_cast<int>(mesh.vertices.size()) &&
+            face.v[1] < static_cast<int>(mesh.vertices.size()) &&
+            face.v[2] < static_cast<int>(mesh.vertices.size());
+        if (!valid)
+        {
+            continue;
+        }
+        const std::array<std::array<int, 2>, 3> edges{{
+            {{face.v[0], face.v[1]}},
+            {{face.v[1], face.v[2]}},
+            {{face.v[2], face.v[0]}}}};
+        for (const auto &edge : edges)
+        {
+            const std::uint64_t key = edgeKey(edge[0], edge[1]);
+            const auto [it, inserted] = first_face_by_edge.emplace(key, face_index);
+            if (!inserted)
+            {
+                unite(face_index, it->second);
+            }
+        }
+    }
+    for (int face_index = 0; face_index < static_cast<int>(parent.size()); ++face_index)
+    {
+        parent[static_cast<std::size_t>(face_index)] = find_root(face_index);
+    }
+    return parent;
 }
 
 bool isOccupied(float worldX,
@@ -319,6 +392,89 @@ void recomputeNormalsAndColors(TriMesh *mesh, const std::vector<VisualHullView> 
     }
 }
 
+void closeOccupiedField(
+    std::vector<float> *field,
+    int gridSize,
+    int iterations,
+    int workers)
+{
+    if (field == nullptr || gridSize < 3 || iterations <= 0)
+    {
+        return;
+    }
+    const std::size_t layer_size =
+        static_cast<std::size_t>(gridSize) * gridSize;
+    const auto offset = [gridSize, layer_size](
+                            int x, int y, int z)
+    {
+        return static_cast<std::size_t>(z) * layer_size +
+               static_cast<std::size_t>(y) * gridSize +
+               static_cast<std::size_t>(x);
+    };
+    std::vector<std::uint8_t> occupied(field->size(), 0);
+    for (std::size_t index = 0; index < field->size(); ++index)
+    {
+        occupied[index] = (*field)[index] < 0.0f ? 1 : 0;
+    }
+    std::vector<std::uint8_t> updated(field->size(), 0);
+    for (int iteration = 0; iteration < iterations; ++iteration)
+    {
+        std::fill(updated.begin(), updated.end(), 0);
+#if defined(MESHING_OPENMP)
+#pragma omp parallel for schedule(static) num_threads(workers)
+#endif
+        for (int z = 1; z < gridSize - 1; ++z)
+        {
+            for (int y = 1; y < gridSize - 1; ++y)
+            {
+                for (int x = 1; x < gridSize - 1; ++x)
+                {
+                    const std::size_t center = offset(x, y, z);
+                    updated[center] =
+                        occupied[center] ||
+                        occupied[offset(x - 1, y, z)] ||
+                        occupied[offset(x + 1, y, z)] ||
+                        occupied[offset(x, y - 1, z)] ||
+                        occupied[offset(x, y + 1, z)] ||
+                        occupied[offset(x, y, z - 1)] ||
+                        occupied[offset(x, y, z + 1)];
+                }
+            }
+        }
+        occupied.swap(updated);
+    }
+    for (int iteration = 0; iteration < iterations; ++iteration)
+    {
+        std::fill(updated.begin(), updated.end(), 0);
+#if defined(MESHING_OPENMP)
+#pragma omp parallel for schedule(static) num_threads(workers)
+#endif
+        for (int z = 1; z < gridSize - 1; ++z)
+        {
+            for (int y = 1; y < gridSize - 1; ++y)
+            {
+                for (int x = 1; x < gridSize - 1; ++x)
+                {
+                    const std::size_t center = offset(x, y, z);
+                    updated[center] =
+                        occupied[center] &&
+                        occupied[offset(x - 1, y, z)] &&
+                        occupied[offset(x + 1, y, z)] &&
+                        occupied[offset(x, y - 1, z)] &&
+                        occupied[offset(x, y + 1, z)] &&
+                        occupied[offset(x, y, z - 1)] &&
+                        occupied[offset(x, y, z + 1)];
+                }
+            }
+        }
+        occupied.swap(updated);
+    }
+    for (std::size_t index = 0; index < field->size(); ++index)
+    {
+        (*field)[index] = occupied[index] ? -1.0f : 1.0f;
+    }
+}
+
 } // namespace
 
 MeshConnectivityStats VisualHullReconstructor::analyzeConnectivity(const TriMesh &mesh)
@@ -329,48 +485,7 @@ MeshConnectivityStats VisualHullReconstructor::analyzeConnectivity(const TriMesh
         return stats;
     }
 
-    std::vector<int> parent(mesh.vertices.size());
-    std::iota(parent.begin(), parent.end(), 0);
-    const auto find_root = [&parent](int vertex)
-    {
-        int root = vertex;
-        while (parent[static_cast<std::size_t>(root)] != root)
-        {
-            root = parent[static_cast<std::size_t>(root)];
-        }
-        while (parent[static_cast<std::size_t>(vertex)] != vertex)
-        {
-            const int next = parent[static_cast<std::size_t>(vertex)];
-            parent[static_cast<std::size_t>(vertex)] = root;
-            vertex = next;
-        }
-        return root;
-    };
-    const auto unite = [&parent, &find_root](int left, int right)
-    {
-        const int left_root = find_root(left);
-        const int right_root = find_root(right);
-        if (left_root != right_root)
-        {
-            parent[static_cast<std::size_t>(right_root)] = left_root;
-        }
-    };
-
-    for (const Triangle &face : mesh.faces)
-    {
-        const int a = face.v[0];
-        const int b = face.v[1];
-        const int c = face.v[2];
-        if (a < 0 || b < 0 || c < 0 ||
-            a >= static_cast<int>(mesh.vertices.size()) ||
-            b >= static_cast<int>(mesh.vertices.size()) ||
-            c >= static_cast<int>(mesh.vertices.size()))
-        {
-            continue;
-        }
-        unite(a, b);
-        unite(a, c);
-    }
+    const std::vector<int> component_roots = edgeConnectedFaceRoots(mesh);
 
     struct ComponentAccumulator
     {
@@ -386,13 +501,15 @@ MeshConnectivityStats VisualHullReconstructor::analyzeConnectivity(const TriMesh
     };
 
     std::unordered_map<int, ComponentAccumulator> component_accumulators;
-    for (const Triangle &face : mesh.faces)
+    for (int face_index = 0; face_index < static_cast<int>(mesh.faces.size()); ++face_index)
     {
+        const Triangle &face = mesh.faces[static_cast<std::size_t>(face_index)];
         if (face.v[0] < 0 || face.v[0] >= static_cast<int>(mesh.vertices.size()))
         {
             continue;
         }
-        ComponentAccumulator &component = component_accumulators[find_root(face.v[0])];
+        ComponentAccumulator &component =
+            component_accumulators[component_roots[static_cast<std::size_t>(face_index)]];
         ++component.faceCount;
         for (const int vertex_index : face.v)
         {
@@ -458,37 +575,11 @@ bool VisualHullReconstructor::retainLargestConnectedComponent(TriMesh *mesh)
         return false;
     }
 
-    std::vector<int> parent(mesh->vertices.size());
-    std::iota(parent.begin(), parent.end(), 0);
-    const auto find_root = [&parent](int vertex)
-    {
-        while (parent[static_cast<std::size_t>(vertex)] != vertex)
-        {
-            parent[static_cast<std::size_t>(vertex)] =
-                parent[static_cast<std::size_t>(parent[static_cast<std::size_t>(vertex)])];
-            vertex = parent[static_cast<std::size_t>(vertex)];
-        }
-        return vertex;
-    };
-    const auto unite = [&parent, &find_root](int left, int right)
-    {
-        const int left_root = find_root(left);
-        const int right_root = find_root(right);
-        if (left_root != right_root)
-        {
-            parent[static_cast<std::size_t>(right_root)] = left_root;
-        }
-    };
-
-    for (const Triangle &face : mesh->faces)
-    {
-        unite(face.v[0], face.v[1]);
-        unite(face.v[0], face.v[2]);
-    }
+    const std::vector<int> component_roots = edgeConnectedFaceRoots(*mesh);
     std::unordered_map<int, std::size_t> face_counts;
-    for (const Triangle &face : mesh->faces)
+    for (int face_index = 0; face_index < static_cast<int>(mesh->faces.size()); ++face_index)
     {
-        ++face_counts[find_root(face.v[0])];
+        ++face_counts[component_roots[static_cast<std::size_t>(face_index)]];
     }
     const auto largest = std::max_element(
         face_counts.begin(), face_counts.end(), [](const auto &left, const auto &right)
@@ -503,9 +594,10 @@ bool VisualHullReconstructor::retainLargestConnectedComponent(TriMesh *mesh)
     std::vector<Triangle> retained_faces;
     retained_faces.reserve(largest->second);
     std::vector<bool> used_vertices(mesh->vertices.size(), false);
-    for (const Triangle &face : mesh->faces)
+    for (int face_index = 0; face_index < static_cast<int>(mesh->faces.size()); ++face_index)
     {
-        if (find_root(face.v[0]) == largest->first)
+        const Triangle &face = mesh->faces[static_cast<std::size_t>(face_index)];
+        if (component_roots[static_cast<std::size_t>(face_index)] == largest->first)
         {
             retained_faces.push_back(face);
             used_vertices[static_cast<std::size_t>(face.v[0])] = true;
@@ -599,6 +691,15 @@ bool VisualHullReconstructor::reconstruct(const std::vector<VisualHullView> &vie
                 const float worldX = config.boundsMin[0] + stepX * xIndex;
                 const std::size_t offset = static_cast<std::size_t>(zIndex) * layerSize +
                                            static_cast<std::size_t>(yIndex) * gridSize + xIndex;
+                const bool volume_boundary =
+                    xIndex == 0 || yIndex == 0 || zIndex == 0 ||
+                    xIndex == resolution || yIndex == resolution ||
+                    zIndex == resolution;
+                if (config.closeVolumeBoundary && volume_boundary)
+                {
+                    field[offset] = 1.0f;
+                    continue;
+                }
                 field[offset] = isOccupied(worldX, worldY, worldZ, views, config) ? -1.0f : 1.0f;
             }
         }
@@ -611,53 +712,103 @@ bool VisualHullReconstructor::reconstruct(const std::vector<VisualHullView> &vie
         }
         return false;
     }
+    closeOccupiedField(
+        &field,
+        gridSize,
+        std::clamp(config.topologyClosingIterations, 0, 3),
+        workers);
     if (config.progressFn)
     {
         config.progressFn("正在提取视觉外壳表面...", 0.75f);
     }
 
+    bool extracted = false;
+    std::string topology_extraction_error;
+    if (Mc33IsoSurfaceExtractor::isAvailable())
+    {
+        Mc33IsoSurfaceOptions extraction_options;
+        extraction_options.isoLevel = 0.0f;
+        extraction_options.isCancelled = config.isCancelled;
+        Mc33IsoSurfaceResult extraction =
+            Mc33IsoSurfaceExtractor::extract(
+                config.boundsMin,
+                config.boundsMax,
+                {resolution, resolution, resolution},
+                field,
+                {},
+                extraction_options);
+        if (extraction.ok && !extraction.mesh.empty())
+        {
+            *mesh = std::move(extraction.mesh);
+            extracted = true;
+        }
+        else
+        {
+            topology_extraction_error = extraction.errorMessage;
+        }
+    }
+
     try
     {
-        plapoint::mesh::MarchingCubes<float> marchingCubes;
-        marchingCubes.setBounds({config.boundsMin[0], config.boundsMin[1], config.boundsMin[2]},
-                                {config.boundsMax[0], config.boundsMax[1], config.boundsMax[2]});
-        marchingCubes.setResolution(resolution, resolution, resolution);
-        marchingCubes.setIsoLevel(0.0f);
-        auto [vertices, faces] = marchingCubes.extract(
-            [&](float x, float y, float z)
-            {
-                const int xIndex = std::clamp(static_cast<int>(std::lround((x - config.boundsMin[0]) / stepX)),
-                                              0, resolution);
-                const int yIndex = std::clamp(static_cast<int>(std::lround((y - config.boundsMin[1]) / stepY)),
-                                              0, resolution);
-                const int zIndex = std::clamp(static_cast<int>(std::lround((z - config.boundsMin[2]) / stepZ)),
-                                              0, resolution);
-                return field[static_cast<std::size_t>(zIndex) * layerSize +
-                             static_cast<std::size_t>(yIndex) * gridSize + xIndex];
-            });
+        if (!extracted)
+        {
+            plapoint::mesh::MarchingCubes<float> marchingCubes;
+            marchingCubes.setBounds(
+                {config.boundsMin[0], config.boundsMin[1], config.boundsMin[2]},
+                {config.boundsMax[0], config.boundsMax[1], config.boundsMax[2]});
+            marchingCubes.setResolution(resolution, resolution, resolution);
+            marchingCubes.setIsoLevel(0.0f);
+            auto [vertices, faces] = marchingCubes.extract(
+                [&](float x, float y, float z)
+                {
+                    const int xIndex = std::clamp(
+                        static_cast<int>(std::lround(
+                            (x - config.boundsMin[0]) / stepX)),
+                        0,
+                        resolution);
+                    const int yIndex = std::clamp(
+                        static_cast<int>(std::lround(
+                            (y - config.boundsMin[1]) / stepY)),
+                        0,
+                        resolution);
+                    const int zIndex = std::clamp(
+                        static_cast<int>(std::lround(
+                            (z - config.boundsMin[2]) / stepZ)),
+                        0,
+                        resolution);
+                    return field[static_cast<std::size_t>(zIndex) * layerSize +
+                                 static_cast<std::size_t>(yIndex) * gridSize +
+                                 xIndex];
+                });
 
-        mesh->vertices.resize(static_cast<std::size_t>(vertices.rows()));
-        for (plamatrix::Index row = 0; row < vertices.rows(); ++row)
-        {
-            MeshVertex &vertex = mesh->vertices[static_cast<std::size_t>(row)];
-            vertex.x = vertices(row, 0);
-            vertex.y = vertices(row, 1);
-            vertex.z = vertices(row, 2);
-        }
-        mesh->faces.resize(static_cast<std::size_t>(faces.rows()));
-        for (plamatrix::Index row = 0; row < faces.rows(); ++row)
-        {
-            Triangle &face = mesh->faces[static_cast<std::size_t>(row)];
-            face.v[0] = static_cast<int>(std::lround(faces(row, 0)));
-            face.v[1] = static_cast<int>(std::lround(faces(row, 1)));
-            face.v[2] = static_cast<int>(std::lround(faces(row, 2)));
+            mesh->vertices.resize(static_cast<std::size_t>(vertices.rows()));
+            for (plamatrix::Index row = 0; row < vertices.rows(); ++row)
+            {
+                MeshVertex &vertex =
+                    mesh->vertices[static_cast<std::size_t>(row)];
+                vertex.x = vertices(row, 0);
+                vertex.y = vertices(row, 1);
+                vertex.z = vertices(row, 2);
+            }
+            mesh->faces.resize(static_cast<std::size_t>(faces.rows()));
+            for (plamatrix::Index row = 0; row < faces.rows(); ++row)
+            {
+                Triangle &face =
+                    mesh->faces[static_cast<std::size_t>(row)];
+                face.v[0] = static_cast<int>(std::lround(faces(row, 0)));
+                face.v[1] = static_cast<int>(std::lround(faces(row, 1)));
+                face.v[2] = static_cast<int>(std::lround(faces(row, 2)));
+            }
         }
     }
     catch (const std::exception &exception)
     {
         if (errorMessage)
         {
-            *errorMessage = exception.what();
+            *errorMessage = topology_extraction_error.empty()
+                ? exception.what()
+                : topology_extraction_error +
+                      "; fallback extraction failed: " + exception.what();
         }
         return false;
     }
@@ -672,8 +823,14 @@ bool VisualHullReconstructor::reconstruct(const std::vector<VisualHullView> &vie
     }
     detail::weldCoincidentVertices(mesh, 1.0e-7f);
     detail::removeDegenerateFaces(mesh);
+    detail::removeDuplicateFaces(mesh);
+    detail::removeNonManifoldFaces(mesh);
+    detail::compactReferencedVertices(mesh);
     detail::removeSmallConnectedComponents(mesh, 64);
-    detail::taubinSmooth(mesh, 2, 0.18f);
+    detail::taubinSmooth(
+        mesh,
+        std::clamp(config.smoothingIterations, 0, 20),
+        std::clamp(config.smoothingLambda, 0.0f, 0.49f));
     recomputeNormalsAndColors(mesh, views);
     if (config.progressFn)
     {

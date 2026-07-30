@@ -101,13 +101,25 @@ ReferencePanelWidget::~ReferencePanelWidget() = default;
 
 void ReferencePanelWidget::loadFromJson(const QJsonObject &meta)
 {
-    if (meta.isEmpty()) return;
+    if (meta.isEmpty())
+    {
+        clearProject();
+        return;
+    }
 
     QJsonObject normalized = normalizeMeta(meta);
     if (normalized.isEmpty()) return;
 
     QJsonArray images = normalized.value(QStringLiteral("images")).toArray();
     rebuildTable(images);
+}
+
+void ReferencePanelWidget::clearProject()
+{
+    _table->clearContents();
+    _table->setRowCount(0);
+    _exactImportBtn->setEnabled(false);
+    _clearCameraBtn->setEnabled(false);
 }
 
 void ReferencePanelWidget::onExactImportClicked()

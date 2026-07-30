@@ -2,7 +2,7 @@
 
 #include "ProjectManager.h"
 #include "project/ProjectIO.h"
-#include "project/ProjectCameraIO.h"
+#include "ProjectCameraIO.h"
 #include "project/ProjectMatchCatalog.h"
 #include "project/ProjectMetadata.h"
 #include "workflow/AerialTriangulationWorkflow.h"
@@ -11,22 +11,18 @@
 #include "Logger.h"
 #include "project/SparseResultQuality.h"
 
-#include "FeatureExtractionDialog.h"
-#include "VocabularyOverlapDialog.h"
-#include "FeatureExtractionRunner.h"
 #include "GuiTaskRunner.h"
-#include "FeaturePointVisualizationDialog.h"
+#include "tie_points/FeaturePointVisualizationDialog.h"
 #include "CanvasWidget.h"
 #include "MainWindow.h"
 #include "MainMenu.h"
-#include "MatchPairSelectorDialog.h"
-#include "AerialTriangulationDialog.h"
-#include "ThreeDReconstructionDialog.h"
-#include "OverlapAnalysisDialog.h"
-#include "CreateDemDialog.h"
-#include "MapProjectDialog.h"
-#include "WorkflowReportDialog.h"
-#include "CameraConvertDialog.h"
+#include "tie_points/MatchPairSelectorDialog.h"
+#include "reconstruction/AerialTriangulationDialog.h"
+#include "tie_points/OverlapAnalysisDialog.h"
+#include "reconstruction/CreateDemDialog.h"
+#include "reconstruction/MapProjectDialog.h"
+#include "application/WorkflowReportDialog.h"
+#include "camera/CameraConvertDialog.h"
 
 #include "settings/DialogSettingStore.h"
 #include "settings/DialogSettingKeys.h"
@@ -40,7 +36,6 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
-#include <QFutureWatcher>
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -51,7 +46,6 @@
 #include <QSettings>
 #include <QTimer>
 #include <QAction>
-#include <QtConcurrent/QtConcurrent>
 
 #include <algorithm>
 #include <atomic>
@@ -87,16 +81,6 @@ bool shouldUseStoredGeneratedPairConstraints(const QJsonObject &settings)
         return false;
     }
     return true;
-}
-
-QJsonArray stringListToJsonArray(const QStringList &values)
-{
-    QJsonArray array;
-    for (const QString &value : values)
-    {
-        array.append(value);
-    }
-    return array;
 }
 
 float normalizedFeatureGrayscaleMin(const QJsonObject &settings)
@@ -282,6 +266,20 @@ void MenuWorkflowController::setProjectManager(ProjectManager *projectManager)
     _projectManager = projectManager;
 }
 
+DialogSettingStore *MenuWorkflowController::createDialogSettingStore(
+    const QString &settingKey)
+{
+    auto *store = new DialogSettingStore(settingKey, this);
+    store->setChangeCallback([this]()
+    {
+        if (_projectManager)
+        {
+            _projectManager->markWorkspaceDirty();
+        }
+    });
+    return store;
+}
+
 void MenuWorkflowController::bindActions(MainMenu *mainMenu)
 {
     if (!mainMenu)
@@ -297,13 +295,9 @@ void MenuWorkflowController::bindActions(MainMenu *mainMenu)
         }
     };
 
-    connectAction(mainMenu->detectFeaturesAction(), &MenuWorkflowController::openFeatureExtractionDialog);
-    connectAction(mainMenu->vocabularyOverlapAction(), &MenuWorkflowController::openVocabularyOverlapDialog);
     connectAction(mainMenu->workflowAerialTriangulationAction(),
                   &MenuWorkflowController::openWorkflowAerialTriangulationDialog);
-    connectAction(mainMenu->aerialTriangulationAction(), &MenuWorkflowController::openAerialTriangulationDialog);
     connectAction(mainMenu->featureVisualizationAction(), &MenuWorkflowController::openFeaturePointVisualizationDialog);
-    connectAction(mainMenu->threeDReconstructionAction(), &MenuWorkflowController::openThreeDReconstructionDialog);
     connectAction(mainMenu->overlapAnalysisAction(), &MenuWorkflowController::openOverlapAnalysisDialog);
     connectAction(mainMenu->createDEMAction(), &MenuWorkflowController::openCreateDemDialog);
     connectAction(mainMenu->generateOrthoAction(), &MenuWorkflowController::openMapProjectDialog);
@@ -888,158 +882,6 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
     return summary;
 }
 
-void MenuWorkflowController::openFeatureExtractionDialog()
-{
-    if (!_mainWindow)
-    {
-        return;
-    }
-
-    auto *dlg = new FeatureExtractionDialog(_mainWindow);
-    dlg->setAttribute(Qt::WA_DeleteOnClose);
-
-    if (_projectManager)
-    {
-        if (!_featureExtractionSetting)
-        {
-            _featureExtractionSetting = new DialogSettingStore(DialogSettingKeys::FeatureExtraction, this);
-        }
-        _featureExtractionSetting->setProjectPath(_projectManager->currentProjectPath());
-
-        // 从 project_dialog.json 加载之前保存的设置
-        const QJsonObject saved = _featureExtractionSetting->load();
-        if (!saved.isEmpty())
-        {
-            dlg->applySettings(saved);
-        }
-
-        // 自动获取项目中的照片数据作为输入选择
-        QStringList images = getProjectImages();
-        if (!images.isEmpty())
-        {
-            dlg->setProjectImages(images);
-        }
-
-        // 设置默认输出目录
-        const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(_projectManager->currentProjectPath());
-        if (!assetsDir.isEmpty() && saved.value(QStringLiteral("output_dir")).toString().isEmpty())
-        {
-            QJsonObject defaultOutput = saved;
-            defaultOutput.insert("output_dir", QDir(assetsDir).filePath(QStringLiteral("ip")));
-            dlg->applySettings(defaultOutput);
-        }
-    }
-    else
-    {
-        LOG_ERROR(QStringLiteral("无法运行特征提取：项目管理器未初始化"));
-    }
-
-    // 连接设置变更信号，实时保存到 project_dialog.json
-    connect(dlg, &FeatureExtractionDialog::settingsChanged, this, [this](const QJsonObject &s)
-    {
-        if (_featureExtractionSetting)
-        {
-            _featureExtractionSetting->save(s);
-        }
-    });
-
-    // 连接运行请求信号
-    connect(dlg, &FeatureExtractionDialog::runRequested, this,
-        [this](const QJsonObject &config, const QStringList &inputs)
-    {
-        if (!_projectManager)
-        {
-            LOG_ERROR(QStringLiteral("无法运行特征提取：项目管理器未初始化"));
-            return;
-        }
-
-        runFeatureExtraction(config, inputs);
-    });
-
-    dlg->exec();
-}
-
-void MenuWorkflowController::openVocabularyOverlapDialog()
-{
-    if (!_mainWindow)
-    {
-        return;
-    }
-    if (!_projectManager || _projectManager->currentProjectPath().isEmpty())
-    {
-        LOG_ERROR(QStringLiteral("无法获取重叠对：请先打开或创建项目"));
-        QMessageBox::warning(_mainWindow, QStringLiteral("获取重叠对"), QStringLiteral("请先打开或创建项目。"));
-        return;
-    }
-
-    if (!_vocabOverlapSetting)
-    {
-        _vocabOverlapSetting = new DialogSettingStore(DialogSettingKeys::VocabularyOverlap, this);
-    }
-    _vocabOverlapSetting->setProjectPath(_projectManager->currentProjectPath());
-
-    auto *dlg = new VocabularyOverlapDialog(_projectManager, _mainWindow);
-    dlg->setAttribute(Qt::WA_DeleteOnClose);
-    dlg->setProjectImages(getProjectImages());
-
-    auto *mainWin = qobject_cast<MainWindow *>(_mainWindow.data());
-    QMetaObject::Connection overlapCancelConn;
-    if (mainWin)
-    {
-        connect(dlg, &VocabularyOverlapDialog::overlapProgressChanged,
-                mainWin, &MainWindow::onOverlapProgress);
-        connect(dlg, &VocabularyOverlapDialog::overlapFinished,
-                mainWin, &MainWindow::onOverlapFinished);
-        overlapCancelConn = connect(mainWin, &MainWindow::overlapCancelRequested,
-                                    dlg, &VocabularyOverlapDialog::cancelRun);
-        connect(dlg, &QObject::destroyed, mainWin, [overlapCancelConn]()
-        {
-            QObject::disconnect(overlapCancelConn);
-        });
-    }
-
-    const QJsonObject saved = _vocabOverlapSetting->load();
-    if (!saved.isEmpty())
-    {
-        dlg->applySettings(saved);
-    }
-
-    connect(dlg, &VocabularyOverlapDialog::settingsChanged, this, [this](const QJsonObject &settings)
-    {
-        if (_vocabOverlapSetting)
-        {
-            _vocabOverlapSetting->save(settings);
-        }
-    });
-
-    connect(dlg,
-            &VocabularyOverlapDialog::generatedPairsReady,
-            this,
-            [this](const QStringList &pairs, const QJsonObject &settings)
-    {
-        if (!_projectManager || _projectManager->currentProjectPath().isEmpty())
-        {
-            return;
-        }
-
-        DialogSettingStore matchStore(DialogSettingKeys::FeatureMatching, this);
-        matchStore.setProjectPath(_projectManager->currentProjectPath());
-
-        QJsonObject matchingSettings = matchStore.load();
-        matchingSettings.insert(QStringLiteral("generated_pairs"), stringListToJsonArray(pairs));
-        matchingSettings.insert(QStringLiteral("pair_source"), QStringLiteral("vocabulary_overlap"));
-        matchingSettings.insert(QStringLiteral("feature_suffix"), settings.value(QStringLiteral("feature_suffix")));
-        matchingSettings.insert(QStringLiteral("lis_file"), settings.value(QStringLiteral("output_lis")));
-        matchingSettings.insert(QStringLiteral("overlap_lis"), settings.value(QStringLiteral("output_lis")));
-        matchingSettings.insert(QStringLiteral("overlap_json"), settings.value(QStringLiteral("output_json")));
-        matchStore.save(matchingSettings);
-
-        LOG_INFO(QStringLiteral("词汇重叠对已应用到特征匹配设置：%1 对").arg(pairs.size()));
-    });
-
-    dlg->exec();
-}
-
 void MenuWorkflowController::openFeaturePointVisualizationDialog()
 {
     if (!_mainWindow)
@@ -1067,7 +909,7 @@ void MenuWorkflowController::openFeaturePointVisualizationDialog()
         if (!_featurePointVisualizationSetting)
         {
             _featurePointVisualizationSetting =
-                new DialogSettingStore(DialogSettingKeys::FeaturePointVisualization, this);
+                createDialogSettingStore(DialogSettingKeys::FeaturePointVisualization);
         }
         _featurePointVisualizationSetting->setProjectPath(_projectManager->currentProjectPath());
         sv = _featurePointVisualizationSetting->load();
@@ -1211,7 +1053,7 @@ void MenuWorkflowController::applySavedFeatureDisplayOptions(const QJsonObject &
     if (!_featurePointVisualizationSetting)
     {
         _featurePointVisualizationSetting =
-            new DialogSettingStore(DialogSettingKeys::FeaturePointVisualization, this);
+            createDialogSettingStore(DialogSettingKeys::FeaturePointVisualization);
     }
     _featurePointVisualizationSetting->setProjectPath(_projectManager->currentProjectPath());
     QJsonObject sv = _featurePointVisualizationSetting->load();
@@ -1287,104 +1129,6 @@ void MenuWorkflowController::applySavedFeatureDisplayOptions(const QJsonObject &
     emit requestApplyFeatureDisplayOptions(opts);
 }
 
-void MenuWorkflowController::openThreeDReconstructionDialog()
-{
-    if (!_mainWindow)
-    {
-        return;
-    }
-
-    auto *dlg = new ThreeDReconstructionDialog(_mainWindow);
-    dlg->setAttribute(Qt::WA_DeleteOnClose);
-
-    const QStringList images = getProjectImages();
-    dlg->setImageCount(images.size());
-
-    if (!_threeDSetting)
-    {
-        _threeDSetting = new DialogSettingStore(DialogSettingKeys::ThreeDReconstruction, this);
-    }
-
-    if (_projectManager)
-    {
-        const QString projectPath = _projectManager->currentProjectPath();
-        const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(projectPath);
-        if (!assetsDir.isEmpty())
-        {
-            dlg->setDefaultOutputDir(QDir(assetsDir).filePath(QStringLiteral("three_d_reconstruction")));
-        }
-        _threeDSetting->setProjectPath(projectPath);
-        dlg->applySettings(_threeDSetting->load());
-    }
-
-    connect(dlg, &ThreeDReconstructionDialog::settingsChanged, this, [this](const QJsonObject &settings) {
-        if (_threeDSetting)
-        {
-            _threeDSetting->save(settings);
-        }
-    });
-    connect(dlg, &ThreeDReconstructionDialog::runRequested, this, [this](const QJsonObject &settings) {
-        if (_threeDSetting)
-        {
-            _threeDSetting->save(settings);
-        }
-        startThreeDReconstructionWorkflow(settings);
-    }, Qt::QueuedConnection);
-
-    dlg->exec();
-}
-
-void MenuWorkflowController::openAerialTriangulationDialog()
-{
-    if (!_mainWindow)
-    {
-        return;
-    }
-
-    AerialTriangulationDialog dlg(_mainWindow);
-
-    const QStringList images = getProjectImages();
-    dlg.setImageCount(images.size());
-    bool hasAllReferenceCameras = false;
-    const int cameraCount = _projectManager
-        ? _projectManager->getCamerasForImages(images, &hasAllReferenceCameras).size()
-        : 0;
-    dlg.setReferencePreselectionAvailable(
-        hasAllReferenceCameras && cameraCount == images.size() && images.size() >= 2,
-        cameraCount,
-        images.size());
-
-    if (!_aerialTriangulationSetting)
-    {
-        _aerialTriangulationSetting = new DialogSettingStore(DialogSettingKeys::AerialTriangulation, this);
-    }
-
-    if (_projectManager)
-    {
-        const QString projectPath = _projectManager->currentProjectPath();
-        _aerialTriangulationSetting->setProjectPath(projectPath);
-        dlg.applySettings(_aerialTriangulationSetting->load());
-    }
-
-    connect(&dlg, &AerialTriangulationDialog::settingsChanged, this, [this](const QJsonObject &settings)
-    {
-        if (_aerialTriangulationSetting)
-        {
-            _aerialTriangulationSetting->save(settings);
-        }
-    });
-
-    if (dlg.exec() == QDialog::Accepted)
-    {
-        const QJsonObject settings = dlg.collectSettings();
-        if (_aerialTriangulationSetting)
-        {
-            _aerialTriangulationSetting->save(settings);
-        }
-        startAerialTriangulationWorkflow(settings);
-    }
-}
-
 void MenuWorkflowController::openWorkflowAerialTriangulationDialog()
 {
     if (!_mainWindow)
@@ -1407,7 +1151,8 @@ void MenuWorkflowController::openWorkflowAerialTriangulationDialog()
 
     if (!_aerialTriangulationSetting)
     {
-        _aerialTriangulationSetting = new DialogSettingStore(DialogSettingKeys::AerialTriangulation, this);
+        _aerialTriangulationSetting =
+            createDialogSettingStore(DialogSettingKeys::AerialTriangulation);
     }
 
     if (_projectManager)
@@ -1941,440 +1686,6 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
         });
 }
 
-void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject &settings)
-{
-    if (!_projectManager)
-    {
-        QMessageBox::warning(_mainWindow, QStringLiteral("三维重建"), QStringLiteral("请先打开项目"));
-        return;
-    }
-
-    const QStringList images = getProjectImages();
-    if (images.size() < 2)
-    {
-        QMessageBox::warning(_mainWindow,
-                             QStringLiteral("三维重建"),
-                             QStringLiteral("至少需要 2 张影像才能进行三维重建。"));
-        return;
-    }
-
-    QString outputRoot = settings.value(QStringLiteral("output_dir")).toString().trimmed();
-    if (outputRoot.isEmpty())
-    {
-        const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(_projectManager->currentProjectPath());
-        outputRoot = QDir(assetsDir).filePath(QStringLiteral("three_d_reconstruction"));
-    }
-    outputRoot = QDir::cleanPath(outputRoot);
-    QDir().mkpath(outputRoot);
-
-    QJsonObject runSettings = settings;
-    runSettings[QStringLiteral("output_dir")] = outputRoot;
-
-    auto *pm = _projectManager;
-    xjw::aerial_triangulation::AerialTriangulationOptions workflowOptions;
-    workflowOptions.images = images;
-    workflowOptions.projectPath = pm->currentProjectPath();
-    workflowOptions.projectMeta = pm->coreProjectMeta();
-    workflowOptions.outputDir = outputRoot;
-    const int workflowThreads = std::max(1, settings.value(QStringLiteral("threads")).toInt(8));
-    workflowOptions.threads = workflowThreads;
-    workflowOptions.device = settings.value(QStringLiteral("device")).toString(QStringLiteral("auto"));
-    workflowOptions.featureAlgorithm = settings.value(QStringLiteral("feature_algorithm"))
-                                 .toString(QStringLiteral("disk"))
-                                 .trimmed()
-                                 .toLower();
-    workflowOptions.matchAlgorithm = settings.value(QStringLiteral("match_algorithm"))
-                              .toString(QStringLiteral("lightglue"))
-                              .trimmed()
-                              .toLower();
-    workflowOptions.featureGrayscaleMin = normalizedFeatureGrayscaleMin(settings);
-    workflowOptions.featureGrayscaleMax = 1.0f;
-    workflowOptions.resetAlignment = settings.value(QStringLiteral("reset_current_alignment")).toBool(true);
-    workflowOptions.reuseExistingMatches =
-        settings.value(QStringLiteral("reuse_existing_matches")).toBool(true);
-    workflowOptions.lockInputCameraPoses =
-        settings.value(QStringLiteral("lock_input_camera_poses")).toBool(false);
-    workflowOptions.autoGenerateMissingMatches = true;
-
-    const QString quality = settings.value(QStringLiteral("quality")).toString(QStringLiteral("standard"));
-    workflowOptions.quality = quality;
-
-    QPointer<ProjectManager> pmGuard(pm);
-    workflowOptions.progressFn = [pmGuard](const QString &stage, int percent) {
-        if (!pmGuard)
-        {
-            return;
-        }
-        xjw::gui::tasks::postGuarded(pmGuard.data(), [stage, percent](ProjectManager *manager) {
-            emit manager->atProgressChanged(QStringLiteral("三维重建/空三: %1").arg(stage), percent);
-        });
-    };
-    workflowOptions.pairMatchedFn = [pmGuard](const QString &img0,
-                                   const QString &img1,
-                                   const QString &matchPath,
-                                   int numMatches) {
-        if (!pmGuard)
-        {
-            return;
-        }
-        xjw::gui::tasks::postGuarded(pmGuard.data(),
-                                     [img0, img1, matchPath, numMatches](ProjectManager *manager) {
-            emit manager->matchPairReady(img0, img1, matchPath, numMatches);
-        });
-    };
-
-    auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
-    pm->setAtCancelFlag(cancelFlag);
-    workflowOptions.cancelFlag = cancelFlag;
-
-    emit pm->atProgressChanged(QStringLiteral("三维重建: 启动空中三角测量..."), 0);
-
-    const QStringList sfmImages = images;
-    const QString sfmOutputDir =
-        xjw::aerial_triangulation::AerialTriangulationWorkflow::resolveConfig(workflowOptions)
-            .pipelineInput.outputDir;
-    const QString projectPath = pm->currentProjectPath();
-    const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(projectPath);
-    xjw::gui::tasks::runGuarded(
-        this,
-        [runWorkflowOptions = std::move(workflowOptions), sfmImages, sfmOutputDir, assetsDir]() mutable {
-            xjw::aerial_triangulation::AerialTriangulationResult workflowResult =
-                xjw::aerial_triangulation::AerialTriangulationWorkflow::run(runWorkflowOptions);
-            const xjw::aerial_triangulation::AerialTriangulationReconstructionResult &result =
-                workflowResult.reconstructionResult;
-
-            if (result.success && !assetsDir.isEmpty())
-            {
-                QJsonObject report;
-                report[QStringLiteral("type")] = QStringLiteral("three_d_reconstruction_sfm");
-                report[QStringLiteral("mode")] = QStringLiteral("sfm");
-                report[QStringLiteral("source")] = QStringLiteral("three_d_reconstruction_sfm");
-                report[QStringLiteral("timestamp")] =
-                    QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
-                report[QStringLiteral("num_images")] = sfmImages.size();
-                report[QStringLiteral("num_registered")] = result.numRegisteredImages;
-                report[QStringLiteral("num_points_3d")] = result.numPoints3D;
-                report[QStringLiteral("mean_reproj_error_px")] = result.meanReprojError;
-                report[QStringLiteral("ba_rms_before")] = result.baRmsBefore;
-                report[QStringLiteral("ba_rms_after")] = result.baRmsAfter;
-                report[QStringLiteral("ba_tracks_total")] = result.baTracksTotal;
-                report[QStringLiteral("ba_tracks_optimized")] = result.baTracksOptimized;
-                report[QStringLiteral("ba_tracks_filtered")] = result.baTracksFiltered;
-                report[QStringLiteral("duration_s")] = result.durationSeconds;
-                report[QStringLiteral("output_dir")] = sfmOutputDir;
-                report[QStringLiteral("sparse_cloud_path")] = result.sparseCloudPath;
-                report[QStringLiteral("per_camera")] = result.perCameraResiduals;
-                report[QStringLiteral("sfm_diagnostics")] = result.sfmDiagnostics;
-                writeLatestAndAppendHistoryReport(QDir(assetsDir).filePath(QStringLiteral("reports")),
-                                                  QStringLiteral("at_report.json"),
-                                                  QStringLiteral("at_report_history.json"),
-                                                  report);
-                writeLatestAndAppendHistoryReport(QDir(assetsDir).filePath(QStringLiteral("reports")),
-                                                  QStringLiteral("three_d_reconstruction_sfm_report.json"),
-                                                  QStringLiteral("three_d_reconstruction_sfm_report_history.json"),
-                                                  report);
-            }
-            return workflowResult;
-        },
-        [pmGuard,
-         cancelFlag,
-         projectPath,
-         runSettings,
-         sfmImages,
-         sfmOutputDir](MenuWorkflowController *controller,
-                       xjw::aerial_triangulation::AerialTriangulationResult workflowResult) mutable {
-            if (!pmGuard)
-            {
-                return;
-            }
-            pmGuard->clearAtCancelFlag(cancelFlag);
-            if (pmGuard->currentProjectPath() != projectPath)
-            {
-                emit pmGuard->atProgressFinished(false);
-                QMessageBox::warning(controller->_mainWindow,
-                                     QStringLiteral("三维重建"),
-                                     QStringLiteral("项目已切换，本次三维重建空三结果未写回。"));
-                return;
-            }
-
-            const bool wasCanceled = cancelFlag->load(std::memory_order_relaxed);
-            if (wasCanceled)
-            {
-                emit pmGuard->atProgressFinished(false);
-                return;
-            }
-
-            xjw::aerial_triangulation::AerialTriangulationReconstructionResult &result =
-                workflowResult.reconstructionResult;
-            for (const xjw::matchphotos::MatchPhotosFeatureRecord &feature :
-                 workflowResult.tiePointResult.features)
-            {
-                pmGuard->appendIpfindResult(feature.imagePath, feature.featurePath, feature.settings);
-            }
-            for (const xjw::matchphotos::MatchPhotosMatchRecord &match :
-                 workflowResult.tiePointResult.matches)
-            {
-                pmGuard->appendIpmatchResult(QStringList{match.matchPath}, match.settings);
-            }
-
-            const bool resetCurrentAlignment =
-                runSettings.value(QStringLiteral("reset_current_alignment")).toBool(true);
-            if (result.success && resetCurrentAlignment)
-            {
-                int updated = 0;
-                int cleared = 0;
-                QString err;
-                if (!pmGuard->replaceImageCameras(sfmImages,
-                                                  result.pendingCamUpdates,
-                                                  &updated,
-                                                  &cleared,
-                                                  &err))
-                {
-                    LOG_WARN(QStringLiteral("三维重建: SFM 相机写回失败: %1").arg(err));
-                }
-            }
-            else if (!result.pendingCamUpdates.isEmpty())
-            {
-                int updated = 0;
-                QString err;
-                if (!pmGuard->setImageCameras(result.pendingCamUpdates, &updated, &err))
-                {
-                    LOG_WARN(QStringLiteral("三维重建: SFM 相机写回失败: %1").arg(err));
-                }
-            }
-
-            int registeredImageCount = result.numRegisteredImages;
-            int sfmAtIndex = -1;
-            bool currentSfmIsProduction = false;
-            QString currentSfmBlockingReason = QStringLiteral("SFM 未生成可用的正式稀疏点云，已停止后续 MVS 流程。");
-            if (result.success && !result.sparseCloudPath.isEmpty())
-            {
-                const QStringList registeredCameraKeys = result.pendingCamUpdates.keys();
-                QStringList registeredImages;
-                registeredImages.reserve(sfmImages.size());
-                for (const QString &imagePath : sfmImages)
-                {
-                    const QString normalized = xjw::common::project::normalizePath(imagePath);
-                    if (registeredCameraKeys.contains(normalized))
-                    {
-                        registeredImages.append(normalized);
-                    }
-                }
-                if (registeredImages.size() < registeredCameraKeys.size())
-                {
-                    for (const QString &imagePath : registeredCameraKeys)
-                    {
-                        if (!registeredImages.contains(imagePath))
-                        {
-                            registeredImages.append(imagePath);
-                        }
-                    }
-                }
-                registeredImageCount = registeredImages.size();
-
-                QJsonObject resultRecordExtra = result.resultRecordExtra;
-                resultRecordExtra[QStringLiteral("source")] = QStringLiteral("three_d_reconstruction");
-                sfmAtIndex = 0;
-                if (!pmGuard->replaceTiePointResult(result.sparseCloudPath,
-                                                    result.numPoints3D,
-                                                    registeredImages,
-                                                    sfmOutputDir,
-                                                    resultRecordExtra))
-                {
-                    emit pmGuard->atProgressFinished(false);
-                    return;
-                }
-                currentSfmIsProduction = xjw::gui::project::isProductionSparseResult(resultRecordExtra);
-                currentSfmBlockingReason = xjw::gui::project::sparseResultBlockingReason(resultRecordExtra);
-            }
-
-            emit pmGuard->atProgressFinished(result.success);
-            if (!result.success)
-            {
-                QMessageBox::warning(controller->_mainWindow,
-                                     QStringLiteral("三维重建"),
-                                     result.errorMessage.isEmpty()
-                                         ? QStringLiteral("空中三角测量失败。")
-                                         : result.errorMessage);
-                return;
-            }
-
-            if (!currentSfmIsProduction)
-            {
-                QMessageBox::warning(controller->_mainWindow,
-                                     QStringLiteral("三维重建"),
-                                     currentSfmBlockingReason.isEmpty()
-                                         ? QStringLiteral("当前 SFM 稀疏点云质量不足，已停止后续 MVS 流程。")
-                                         : currentSfmBlockingReason);
-                return;
-            }
-
-            QJsonObject denseRunSettings = runSettings;
-            denseRunSettings[QStringLiteral("registered_image_count")] = registeredImageCount;
-            denseRunSettings[QStringLiteral("sfm_at_index")] = sfmAtIndex;
-            controller->startThreeDReconstructionDenseStage(denseRunSettings);
-        });
-}
-
-void MenuWorkflowController::startThreeDReconstructionDenseStage(const QJsonObject &settings)
-{
-    if (!_projectManager)
-    {
-        return;
-    }
-
-    QObject *ctx = new QObject(_projectManager);
-    QPointer<MenuWorkflowController> self(this);
-    connect(_projectManager, &ProjectManager::mvsProgressFinished, ctx,
-            [self, ctx, settings](bool success) {
-        ctx->deleteLater();
-        if (!success || !self)
-        {
-            return;
-        }
-
-        self->startThreeDReconstructionDenseRefineStage(settings);
-    });
-
-    const QString outputRoot = settings.value(QStringLiteral("output_dir")).toString();
-    const QString quality = settings.value(QStringLiteral("quality")).toString(QStringLiteral("standard"));
-
-    QJsonObject denseSettings;
-    denseSettings[QStringLiteral("pipeline_mode")] = true;
-    denseSettings[QStringLiteral("at_index")] = settings.value(QStringLiteral("sfm_at_index")).toInt(-1);
-    denseSettings[QStringLiteral("output_dir")] = QDir(outputRoot).filePath(QStringLiteral("mvs"));
-    const int denseThreads = std::max(1, settings.value(QStringLiteral("threads")).toInt(8));
-    const bool useCuda = settings.value(QStringLiteral("device")).toString(QStringLiteral("auto")) != QStringLiteral("cpu");
-    denseSettings[QStringLiteral("threads")] = denseThreads;
-    denseSettings[QStringLiteral("cuda")] = useCuda;
-    denseSettings[QStringLiteral("gpu_frame_workers")] = useCuda
-        ? std::clamp(std::max(1, denseThreads / 4), 1, 2)
-        : 0;
-    denseSettings[QStringLiteral("cpu_frame_workers")] = useCuda
-        ? 0
-        : std::clamp(std::max(1, denseThreads / 4), 1, 4);
-    denseSettings[QStringLiteral("keepColor")] = true;
-    denseSettings[QStringLiteral("keepNormals")] = true;
-    const int registeredImageCount = settings.value(QStringLiteral("registered_image_count")).toInt(0);
-    const int denseMinViewCount = registeredImageCount > 0
-        ? std::clamp(registeredImageCount, 2, 3)
-        : 2;
-    denseSettings[QStringLiteral("minConsistentViews")] = denseMinViewCount;
-    denseSettings[QStringLiteral("minViews")] = denseMinViewCount;
-    denseSettings[QStringLiteral("patchSize")] = 11;
-    denseSettings[QStringLiteral("confidence")] = 0.20;
-    denseSettings[QStringLiteral("minConfidence")] = 0.50;
-    denseSettings[QStringLiteral("depthConsistency")] = 1.0;
-    denseSettings[QStringLiteral("maxReprojError")] = 2.0;
-    if (quality == QStringLiteral("fast"))
-    {
-        denseSettings[QStringLiteral("resScale")] = 0.25;
-        denseSettings[QStringLiteral("iterations")] = 4;
-    }
-    else if (quality == QStringLiteral("quality"))
-    {
-        denseSettings[QStringLiteral("resScale")] = 0.5;
-        denseSettings[QStringLiteral("iterations")] = 10;
-    }
-    else
-    {
-        denseSettings[QStringLiteral("resScale")] = 0.5;
-        denseSettings[QStringLiteral("iterations")] = 6;
-    }
-
-    _projectManager->startGenerateDenseCloudAsync(denseSettings);
-}
-
-void MenuWorkflowController::startThreeDReconstructionDenseRefineStage(const QJsonObject &settings)
-{
-    if (!_projectManager)
-    {
-        return;
-    }
-
-    QObject *ctx = new QObject(_projectManager);
-    QPointer<MenuWorkflowController> self(this);
-    connect(_projectManager, &ProjectManager::mvsProgressFinished, ctx,
-            [self, ctx, settings](bool success) {
-        ctx->deleteLater();
-        if (!success || !self)
-        {
-            return;
-        }
-
-        self->startThreeDReconstructionMeshStage(settings);
-    });
-
-    const bool useCuda = settings.value(QStringLiteral("device")).toString(QStringLiteral("auto")) != QStringLiteral("cpu");
-    QJsonObject refineSettings;
-    refineSettings[QStringLiteral("pipeline_mode")] = true;
-    refineSettings[QStringLiteral("sorEnabled")] = true;
-    refineSettings[QStringLiteral("sorK")] = 30;
-    refineSettings[QStringLiteral("sorStdDev")] = 2.0;
-    refineSettings[QStringLiteral("voxelEnabled")] = false;
-    refineSettings[QStringLiteral("voxelSize")] = 0.005;
-    refineSettings[QStringLiteral("normalsEnabled")] = true;
-    refineSettings[QStringLiteral("normalK")] = 30;
-    refineSettings[QStringLiteral("smoothIter")] = 2;
-    refineSettings[QStringLiteral("colorEnabled")] = false;
-    refineSettings[QStringLiteral("threads")] = std::max(1, settings.value(QStringLiteral("threads")).toInt(8));
-    refineSettings[QStringLiteral("processingDevice")] = useCuda ? QStringLiteral("gpu") : QStringLiteral("cpu");
-
-    _projectManager->startDenseCloudRefineAsync(refineSettings);
-}
-
-void MenuWorkflowController::startThreeDReconstructionMeshStage(const QJsonObject &settings)
-{
-    if (!_projectManager)
-    {
-        return;
-    }
-
-    QObject *ctx = new QObject(_projectManager);
-    connect(_projectManager, &ProjectManager::meshProgressFinished, ctx,
-            [this, ctx](bool success) {
-        ctx->deleteLater();
-        QMessageBox::information(_mainWindow,
-                                 QStringLiteral("三维重建"),
-                                 success ? QStringLiteral("三维模型生成完成。")
-                                         : QStringLiteral("三维模型生成失败。"));
-    });
-
-    const QString quality = settings.value(QStringLiteral("quality")).toString(QStringLiteral("standard"));
-    QJsonObject meshSettings;
-    meshSettings[QStringLiteral("pipeline_mode")] = true;
-    meshSettings[QStringLiteral("method")] = QStringLiteral("Poisson Surface");
-    meshSettings[QStringLiteral("export_format")] =
-        settings.value(QStringLiteral("export_obj")).toBool(false) ? QStringLiteral("OBJ") : QStringLiteral("PLY");
-    meshSettings[QStringLiteral("smoothIter")] = 2;
-    meshSettings[QStringLiteral("holeFill")] = true;
-    meshSettings[QStringLiteral("cleanSmall")] = true;
-    meshSettings[QStringLiteral("threads")] = std::max(1, settings.value(QStringLiteral("threads")).toInt(8));
-    if (quality == QStringLiteral("fast"))
-    {
-        meshSettings[QStringLiteral("qualityProfile")] = QStringLiteral("lite");
-        meshSettings[QStringLiteral("voxelDensity")] = QStringLiteral("coarse");
-        meshSettings[QStringLiteral("resolution")] = 160;
-        meshSettings[QStringLiteral("octreeDepth")] = 8;
-    }
-    else if (quality == QStringLiteral("quality"))
-    {
-        meshSettings[QStringLiteral("qualityProfile")] = QStringLiteral("detail");
-        meshSettings[QStringLiteral("voxelDensity")] = QStringLiteral("fine");
-        meshSettings[QStringLiteral("resolution")] = 320;
-        meshSettings[QStringLiteral("octreeDepth")] = 10;
-    }
-    else
-    {
-        meshSettings[QStringLiteral("qualityProfile")] = QStringLiteral("balanced");
-        meshSettings[QStringLiteral("voxelDensity")] = QStringLiteral("medium");
-        meshSettings[QStringLiteral("resolution")] = 224;
-        meshSettings[QStringLiteral("octreeDepth")] = 9;
-    }
-
-    _projectManager->startMeshReconstructionAsync(meshSettings);
-}
-
 void MenuWorkflowController::openOverlapAnalysisDialog()
 {
     if (!_mainWindow)
@@ -2512,7 +1823,7 @@ void MenuWorkflowController::openMapProjectDialog()
         // 懒初始化 MapProject 记忆化管理器
         if (!_mapSetting)
         {
-            _mapSetting = new DialogSettingStore(DialogSettingKeys::MapProject, this);
+            _mapSetting = createDialogSettingStore(DialogSettingKeys::MapProject);
         }
         _mapSetting->setProjectPath(_projectManager->currentProjectPath());
         const QJsonObject saved = _mapSetting->load();
@@ -2552,69 +1863,6 @@ void MenuWorkflowController::openMapProjectDialog()
     });
 
     dlg->exec();
-}
-
-void MenuWorkflowController::runFeatureExtraction(const QJsonObject &config, const QStringList &inputs)
-{
-    const QString featureAlgorithm = config.value(QStringLiteral("feature_algorithm")).toString(QStringLiteral("disk")).toUpper();
-    LOG_INFO(QStringLiteral("开始在后台线程执行 %1 特征提取...").arg(featureAlgorithm));
-
-    QPointer<MainWindow> mainWin(qobject_cast<MainWindow *>(_mainWindow.data()));
-
-    auto cancelFlag    = std::make_shared<std::atomic<bool>>(false);
-    auto progressCount = std::make_shared<std::atomic<int>>(0);
-    const int total    = inputs.size();
-
-    if (mainWin)
-    {
-        mainWin->showSpProgress(total);
-    }
-
-    // 取消按钮临时连接
-    QMetaObject::Connection cancelConn;
-    if (mainWin)
-    {
-        cancelConn = connect(mainWin, &MainWindow::spCancelRequested,
-                             [cancelFlag]()
-                             {
-                                 cancelFlag->store(true);
-                             });
-    }
-
-    // 定时轮询进度（100ms）
-    auto *timer = new QTimer(_mainWindow);
-    timer->setInterval(100);
-    connect(timer, &QTimer::timeout, timer, [mainWin, progressCount]()
-    {
-        if (mainWin)
-        {
-            mainWin->updateSpProgress(progressCount->load());
-        }
-    });
-    timer->start();
-
-    auto *watcher = new QFutureWatcher<bool>(_mainWindow);
-    connect(watcher, &QFutureWatcher<bool>::finished, watcher,
-            [mainWin, cancelFlag, timer, watcher, cancelConn]()
-    {
-        timer->stop();
-        timer->deleteLater();
-        if (mainWin)
-        {
-            QObject::disconnect(cancelConn);
-            const bool cancelled = cancelFlag->load();
-            const bool taskOk = !cancelled && watcher->result();
-            mainWin->hideSpProgress(taskOk);
-        }
-        watcher->deleteLater();
-    });
-
-    QPointer<ProjectManager> pmGuard(_projectManager);
-    watcher->setFuture(QtConcurrent::run(
-        [config, inputs, pmGuard, cancelFlag, progressCount]() -> bool
-        {
-            return FeatureExtractionRunner::run(config, inputs, pmGuard, *cancelFlag, *progressCount);
-        }));
 }
 
 void MenuWorkflowController::openWorkflowReportDialog()

@@ -208,7 +208,9 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     applyPipelineToken(options.matchPipeline, &feature, &matcher);
     matcher = normalizeMatcher(matcher);
 
-    const QString projectRoot = QFileInfo(options.projectPath).absolutePath();
+    const QString projectRoot =
+        xjw::common::project::ProjectIO::projectRootFromPlascan(
+            options.projectPath);
     const QString assetsDirectory = options.assetsDir.isEmpty()
         ? QDir(projectRoot).filePath(QStringLiteral("assets"))
         : QDir::cleanPath(options.assetsDir);
@@ -258,6 +260,7 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     tieOptions.featureAlgorithm = feature;
     tieOptions.matcherAlgorithm = matcher;
     tieOptions.maskApplyMode = normalizedToken(options.maskApplyMode, QStringLiteral("none"));
+    tieOptions.cudaParallelPairs = std::max(0, options.cudaParallelPairs);
     tieOptions.maxImageDim = options.featureMaxImageDim == 0
         ? quality.maxImageDimension : options.featureMaxImageDim;
     tieOptions.enableGuidedMatching = options.guidedImageMatching;
@@ -416,6 +419,19 @@ AerialTriangulationResult AerialTriangulationWorkflow::run(
         if (!result.tiePointResult.tiePointPath.trimmed().isEmpty())
         {
             result.config.pipelineInput.tiePointPath = result.tiePointResult.tiePointPath;
+        }
+        for (const matchphotos::MatchPhotosMatchRecord &match :
+             result.tiePointResult.matches)
+        {
+            const int effectiveWorkers = match.settings.value(
+                QStringLiteral("cuda_parallel_pairs_effective")).toInt();
+            if (effectiveWorkers > 0)
+            {
+                result.config.resolvedSettings.insert(
+                    QStringLiteral("cuda_parallel_pairs_effective"),
+                    effectiveWorkers);
+                break;
+            }
         }
         if (options.pairMatchedFn)
         {

@@ -1,8 +1,9 @@
 #include "PhotoStripWidget.h"
 
-#include "project/ProjectCameraIO.h"
+#include "ProjectCameraIO.h"
 #include "project/ProjectMatchCatalog.h"
 #include "project/ProjectMetadata.h"
+#include "project/ProjectIO.h"
 
 #include "../views/LayerImageLoader.h"
 
@@ -149,7 +150,9 @@ void PhotoStripWidget::setProjectPath(const QString &plascanPath)
     const QString cleanProjectPath = plascanPath.trimmed();
     if (!cleanProjectPath.isEmpty())
     {
-        projectRootPath = QDir::cleanPath(QFileInfo(cleanProjectPath).absolutePath());
+        projectRootPath =
+            xjw::common::project::ProjectIO::projectRootFromPlascan(
+                cleanProjectPath);
     }
 
     if (_projectRootPath == projectRootPath && _projectFilePath == cleanProjectPath)
@@ -159,8 +162,7 @@ void PhotoStripWidget::setProjectPath(const QString &plascanPath)
 
     _projectFilePath = cleanProjectPath;
     _projectRootPath = projectRootPath;
-    _thumbnailCache.clear();
-    _thumbnailLoadsInFlight.clear();
+    advanceThumbnailGeneration(true);
     clearPhotos();
 }
 
@@ -171,6 +173,7 @@ void PhotoStripWidget::loadFromJson(const QJsonObject &meta)
         return;
     }
 
+    advanceThumbnailGeneration(false);
     clearPhotos();
 
     const QJsonArray images = xjw::common::project::projectImageEntries(meta);
@@ -332,25 +335,40 @@ void PhotoStripWidget::startThumbnailLoad(const QString &imagePath)
 {
     const QString resolvedPath = resolveImagePath(imagePath);
     const QString key = normalizedPath(resolvedPath);
-    if (key.isEmpty() || _thumbnailCache.contains(key) || _thumbnailLoadsInFlight.contains(key))
+    const quint64 generation = _thumbnailGeneration;
+    if (key.isEmpty() || _thumbnailCache.contains(key)
+        || _thumbnailLoadsInFlight.value(key, 0) == generation)
     {
         return;
     }
 
-    _thumbnailLoadsInFlight.insert(key);
+    _thumbnailLoadsInFlight.insert(key, generation);
     auto *watcher = new QFutureWatcher<ThumbnailResult>(this);
     const QString projectPath = _projectFilePath;
-    connect(watcher, &QFutureWatcher<ThumbnailResult>::finished, this, [this, watcher, key]()
+    connect(watcher, &QFutureWatcher<ThumbnailResult>::finished, this,
+            [this, watcher, key, generation, projectPath]()
     {
-        applyThumbnail(watcher->result());
-        _thumbnailLoadsInFlight.remove(key);
+        if (generation == _thumbnailGeneration && projectPath == _projectFilePath)
+        {
+            applyThumbnail(watcher->result(), generation, projectPath);
+        }
+        if (_thumbnailLoadsInFlight.value(key, 0) == generation)
+        {
+            _thumbnailLoadsInFlight.remove(key);
+        }
         watcher->deleteLater();
     });
     watcher->setFuture(QtConcurrent::run(&PhotoStripWidget::loadThumbnail, resolvedPath, projectPath));
 }
 
-void PhotoStripWidget::applyThumbnail(const ThumbnailResult &result)
+void PhotoStripWidget::applyThumbnail(const ThumbnailResult &result,
+                                      quint64 generation,
+                                      const QString &projectPath)
 {
+    if (generation != _thumbnailGeneration || projectPath != _projectFilePath)
+    {
+        return;
+    }
     const QString key = normalizedPath(result.path);
     if (key.isEmpty() || !result.loaded || result.image.isNull())
     {
@@ -371,6 +389,15 @@ void PhotoStripWidget::applyThumbnail(const ThumbnailResult &result)
         {
             item->setIcon(icon);
         }
+    }
+}
+
+void PhotoStripWidget::advanceThumbnailGeneration(bool clearCache)
+{
+    ++_thumbnailGeneration;
+    if (clearCache)
+    {
+        _thumbnailCache.clear();
     }
 }
 

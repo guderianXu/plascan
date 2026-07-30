@@ -79,8 +79,8 @@ TEST(ProjectMetadataTest, MatchesImageTokensByPathFileNameOrStem)
 
     EXPECT_TRUE(imageTokensReferToSameImage(QStringLiteral("e:\\dataset\\templesr0001.png"),
                                             image_path));
-    EXPECT_TRUE(imageTokensReferToSameImage(QStringLiteral("TempleSR0001.PNG"), image_path));
-    EXPECT_TRUE(imageTokensReferToSameImage(QStringLiteral("templesr0001"), image_path));
+    EXPECT_FALSE(imageTokensReferToSameImage(QStringLiteral("TempleSR0001.PNG"), image_path));
+    EXPECT_FALSE(imageTokensReferToSameImage(QStringLiteral("templesr0001"), image_path));
     EXPECT_FALSE(imageTokensReferToSameImage(QStringLiteral("templesr0002"), image_path));
     EXPECT_FALSE(imageTokensReferToSameImage(QString(), image_path));
 }
@@ -89,13 +89,48 @@ TEST(ProjectMetadataTest, MatchesImageReferencePathOrNameAgainstDisplayToken)
 {
     EXPECT_TRUE(imageReferenceMatchesToken(QStringLiteral("E:/data/a.png"),
                                            QStringLiteral("a.png"),
-                                           QStringLiteral("A")));
+                                           QStringLiteral("e:/data/a.png")));
     EXPECT_TRUE(imageReferenceMatchesToken(QString(),
                                            QStringLiteral("a.png"),
                                            QStringLiteral("A.PNG")));
     EXPECT_FALSE(imageReferenceMatchesToken(QStringLiteral("E:/data/a.png"),
                                             QStringLiteral("a.png"),
                                             QStringLiteral("b.png")));
+}
+
+TEST(ProjectMetadataTest, RejectsAmbiguousFileNameAndStemTokens)
+{
+    const QString left = QStringLiteral("E:/dataset/left/frame001.tif");
+    const QString right = QStringLiteral("E:/dataset/right/frame001.tif");
+    const QStringList images{left, right};
+
+    const ImageResolveResult file_name =
+        resolveProjectImageToken(QStringLiteral("frame001.tif"), images);
+    EXPECT_EQ(file_name.status, ImageResolveStatus::Ambiguous);
+    EXPECT_TRUE(file_name.path.isEmpty());
+    EXPECT_EQ(file_name.candidates.size(), 2);
+
+    const ImageResolveResult stem =
+        resolveProjectImageToken(QStringLiteral("frame001"), images);
+    EXPECT_EQ(stem.status, ImageResolveStatus::Ambiguous);
+    EXPECT_TRUE(resolveProjectImagePathFromToken(
+                    QStringLiteral("frame001"), images).isEmpty());
+    EXPECT_EQ(resolveProjectImagePathFromToken(left, images), left);
+}
+
+TEST(ProjectMetadataTest, ResolvesStableImageUuidBeforeDisplayTokens)
+{
+    const QString image_path = QStringLiteral("E:/dataset/left/frame001.tif");
+    const QJsonObject metadata{
+        {QStringLiteral("images"),
+         QJsonArray{QJsonObject{
+             {QStringLiteral("image_uuid"), QStringLiteral("stable-image-id")},
+             {QStringLiteral("path"), image_path}}}}};
+
+    const ImageResolveResult resolved =
+        resolveProjectImageToken(QStringLiteral("stable-image-id"), metadata);
+    EXPECT_EQ(resolved.status, ImageResolveStatus::Found);
+    EXPECT_EQ(resolved.path, image_path);
 }
 
 } // namespace

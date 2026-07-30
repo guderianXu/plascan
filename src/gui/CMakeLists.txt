@@ -56,6 +56,7 @@ target_include_directories(plascan_gui PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/config/settings
   ${CMAKE_CURRENT_SOURCE_DIR}/main_window
   ${CMAKE_CURRENT_SOURCE_DIR}/menu
+  ${CMAKE_CURRENT_SOURCE_DIR}/platform
   ${CMAKE_CURRENT_SOURCE_DIR}/markers
   ${CMAKE_CURRENT_SOURCE_DIR}/panels
   ${CMAKE_CURRENT_SOURCE_DIR}/project
@@ -145,6 +146,10 @@ target_link_libraries(plascan_gui PRIVATE
   ${PLASCAN_GDAL_TARGET}
   ${PLASCAN_TIFF_TARGET}
 )
+
+if(WIN32)
+  target_link_libraries(plascan_gui PRIVATE advapi32 shell32)
+endif()
 
 #==============================================================================
 # 设置RPATH

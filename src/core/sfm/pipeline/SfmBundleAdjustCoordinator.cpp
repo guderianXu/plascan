@@ -1,7 +1,7 @@
 #include "SfmBundleAdjustCoordinator.h"
 #include "IncrementalSfmDetail.h"
-#include "SfmBundleAdjustCoordinator.h"
 #include "geometry/OpenCvCameraAdapter.h"
+#include "geometry/SimilarityGaugeNormalizer.h"
 #include "Intersection.h"
 #include "tracks/CorrespondenceTrackThinner.h"
 #include "tracks/MultiViewTrackBuilder.h"
@@ -16,6 +16,7 @@
 #include <cmath>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -49,6 +50,33 @@ int SfmBundleAdjustCoordinator::filterNegativeDepthPoints()
 
 void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> &anchorIds)
 {
+    const char *scopeName = localOnly ? "local" : "global";
+    const auto reportSkipped = [this, localOnly, scopeName](const std::string &reason)
+    {
+        Logger::instance()->infof("[BA] skipped scope=%s reason=%s",
+                                  scopeName,
+                                  reason.c_str());
+        if (!localOnly)
+        {
+            _lastGlobalBARmsBefore = 0.0;
+            _lastGlobalBARmsAfter = 0.0;
+            _lastGlobalBATracksTotal = 0;
+            _lastGlobalBATracksOptimized = 0;
+            _lastGlobalBATracksFiltered = 0;
+            _lastGlobalBARefinedIntrinsicCount = 0;
+            _lastGlobalBASharedFocalScale = 1.0;
+            _lastGlobalBARequestedBackend = _sfmOptions.baOptions.backend;
+            _lastGlobalBAUsedBackend = BABackend::LegacyCpu;
+            _lastGlobalBASolveStatus = BASolveStatus::NotRun;
+            _lastGlobalBASolutionUsable = false;
+            _lastGlobalBAResultApplied = false;
+            _lastGlobalBABackendFallback = false;
+            _lastGlobalBAObservationCount = 0;
+            _lastGlobalBATotalSeconds = 0.0;
+            _lastGlobalBABackendMessage = reason;
+        }
+    };
+
     // 收集参与 BA 的图像 ID
     std::vector<ImageId> baImageIds;
     if (localOnly && !anchorIds.empty())
@@ -74,8 +102,74 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
         baImageIds = _reconstruction->registeredImageIds();
     }
 
+    std::sort(baImageIds.begin(), baImageIds.end());
+    baImageIds.erase(std::unique(baImageIds.begin(), baImageIds.end()), baImageIds.end());
+
     if (baImageIds.size() < 2)
+    {
+        reportSkipped("fewer_than_two_registered_cameras");
         return;
+    }
+
+    // 局部 BA 把与活动图像共享三维点最多的两台外部相机作为固定边界。
+    // 这样既保留局部问题规模，也避免局部块在 7 自由度 gauge 下整体漂移或缩放。
+    std::vector<ImageId> fixedBoundaryImageIds;
+    if (localOnly)
+    {
+        const std::unordered_set<ImageId> activeImageIds(baImageIds.begin(), baImageIds.end());
+        std::unordered_map<ImageId, int> boundaryObservationCounts;
+        for (Point3DId pointId : _reconstruction->allPoint3DIds())
+        {
+            if (!_reconstruction->hasPoint3D(pointId))
+            {
+                continue;
+            }
+            const ScenePoint3D &point = _reconstruction->point3D(pointId);
+            bool touchesActiveImage = false;
+            for (const TrackElement &element : point.track.elements)
+            {
+                if (activeImageIds.count(element.imageId) > 0)
+                {
+                    touchesActiveImage = true;
+                    break;
+                }
+            }
+            if (!touchesActiveImage)
+            {
+                continue;
+            }
+            for (const TrackElement &element : point.track.elements)
+            {
+                if (activeImageIds.count(element.imageId) == 0 &&
+                    _reconstruction->isRegistered(element.imageId))
+                {
+                    ++boundaryObservationCounts[element.imageId];
+                }
+            }
+        }
+
+        std::vector<std::pair<ImageId, int>> rankedBoundaryImages(
+            boundaryObservationCounts.begin(), boundaryObservationCounts.end());
+        std::sort(rankedBoundaryImages.begin(),
+                  rankedBoundaryImages.end(),
+                  [](const auto &left, const auto &right)
+                  {
+                      if (left.second != right.second)
+                      {
+                          return left.second > right.second;
+                      }
+                      return left.first < right.first;
+                  });
+        for (const auto &[imageId, observationCount] : rankedBoundaryImages)
+        {
+            if (observationCount <= 0 || fixedBoundaryImageIds.size() >= 2)
+            {
+                break;
+            }
+            fixedBoundaryImageIds.push_back(imageId);
+            baImageIds.push_back(imageId);
+        }
+    }
 
     // 构造 imageId → BA 内部相机索引的映射
     std::unordered_map<ImageId, int> idToIdx;
@@ -180,11 +274,12 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
     }
 
     if (baTracks.empty())
+    {
+        reportSkipped("no_tracks_with_two_or_more_observations");
         return;
+    }
 
-    // 构造本次 BA 选项：
-    //   - 全局 BA 固定 index=0 的相机（gauge 固定，消除坐标系漂移）
-    //   - 局部 BA 不固定（局部块坐标由全局约束）
+    // 构造本次 BA 选项，并显式消除无绝对约束问题的 7 自由度 gauge。
     BAOptions baOpt = _sfmOptions.baOptions;
     int control_scale_bar_count = 0;
     for (std::size_t scale_index = 0; scale_index < _pendingPriorScaleBars.size(); ++scale_index)
@@ -247,13 +342,78 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
             baOpt.backend = BABackend::CeresCpu;
         }
     }
-    if (!localOnly && !baImageIds.empty())
+    const bool hasAbsolutePoseConstraint =
+        control_constraint_count > 0 ||
+        std::any_of(baOpt.cameraPosePriors.begin(),
+                    baOpt.cameraPosePriors.end(),
+                    [](const BACameraPosePrior &prior)
+                    {
+                        return prior.enabled;
+                    });
+    const bool hasAbsoluteScaleConstraint =
+        hasAbsolutePoseConstraint || control_scale_bar_count > 0;
+    std::optional<std::pair<int, int>> similarityGaugeCameras;
+
+    if (localOnly)
     {
-        baOpt.fixedCameraIndices = {0}; // gauge: 第一个相机位姿保持不变
+        for (ImageId fixedImageId : fixedBoundaryImageIds)
+        {
+            const auto index = idToIdx.find(fixedImageId);
+            if (index != idToIdx.end())
+            {
+                baOpt.fixedCameraIndices.push_back(index->second);
+            }
+        }
+        // 没有外部边界和绝对控制时固定一台相机，消除局部块的旋转和平移规范。
+        if (baOpt.fixedCameraIndices.empty() &&
+            !hasAbsolutePoseConstraint &&
+            !baImageIds.empty())
+        {
+            baOpt.fixedCameraIndices.push_back(0);
+        }
+    }
+    else if (!baImageIds.empty())
+    {
+        if (!hasAbsolutePoseConstraint)
+        {
+            baOpt.fixedCameraIndices = {0};
+        }
+    }
+
+    // 单目 BA 固定一台相机后仍有尺度规范。不要固定第二台相机的完整位姿；
+    // 记录一条非退化基线，并在求解后对全部相机中心和点做同一 Sim(3) 尺度恢复。
+    if (baOpt.refineCameraPose &&
+        !hasAbsoluteScaleConstraint &&
+        baOpt.fixedCameraIndices.size() == 1)
+    {
+        const int anchorIndex = baOpt.fixedCameraIndices.front();
+        if (anchorIndex >= 0 && anchorIndex < static_cast<int>(baCameras.size()))
+        {
+            const auto anchorCenter = baCameras[static_cast<std::size_t>(anchorIndex)].cameraCenter();
+            for (int candidateIndex = 0;
+                 candidateIndex < static_cast<int>(baCameras.size());
+                 ++candidateIndex)
+            {
+                if (candidateIndex == anchorIndex)
+                {
+                    continue;
+                }
+                const auto candidateCenter =
+                    baCameras[static_cast<std::size_t>(candidateIndex)].cameraCenter();
+                const double dx = candidateCenter[0] - anchorCenter[0];
+                const double dy = candidateCenter[1] - anchorCenter[1];
+                const double dz = candidateCenter[2] - anchorCenter[2];
+                if (dx * dx + dy * dy + dz * dz > 1.0e-20)
+                {
+                    similarityGaugeCameras = std::make_pair(anchorIndex, candidateIndex);
+                    break;
+                }
+            }
+        }
     }
 
     // 执行 BA
-    const BAResult baResult = BundleAdjust::optimizePoints(baCameras, baTracks, baOpt);
+    BAResult baResult = BundleAdjust::optimizePoints(baCameras, baTracks, baOpt);
     if (baOpt.logIterationProgress)
     {
         const BAProblemStats stats = BundleAdjust::summarizeProblem(baCameras, baTracks);
@@ -267,7 +427,44 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
             baResult.backendSelectionReason.c_str());
     }
 
-    bool applyBaResult = true;
+    bool gaugeNormalizationFailed = false;
+    if (baResult.solutionUsable && similarityGaugeCameras.has_value())
+    {
+        const SimilarityGaugeNormalizationResult gaugeResult =
+            normalizeSimilarityGauge(
+                baCameras,
+                similarityGaugeCameras->first,
+                similarityGaugeCameras->second,
+                &baResult.refinedCameras,
+                &baResult.points);
+        if (gaugeResult.applied)
+        {
+            Logger::instance()->infof(
+                "[BA] similarity gauge normalized scope=%s anchor=%d scaleCamera=%d scale=%.9f",
+                scopeName,
+                similarityGaugeCameras->first,
+                similarityGaugeCameras->second,
+                gaugeResult.scale);
+        }
+        else
+        {
+            gaugeNormalizationFailed = true;
+            Logger::instance()->warnf(
+                "[BA] similarity gauge normalization failed scope=%s reason=%s",
+                scopeName,
+                gaugeResult.reason.c_str());
+        }
+    }
+
+    bool applyBaResult = baResult.solutionUsable && !gaugeNormalizationFailed;
+    if (!applyBaResult)
+    {
+        Logger::instance()->warnf(
+            "[BA] 求解结果不可写回: status=%d backend=%s message=%s",
+            static_cast<int>(baResult.solveStatus),
+            BundleAdjust::backendName(baResult.usedBackend),
+            baResult.backendMessage.c_str());
+    }
     const bool knownPoseGlobalBa = _sfmOptions.useKnownCameraPoses && !localOnly &&
                                    baOpt.refineCameraPose && !baOpt.cameraPosePriors.empty();
     if (knownPoseGlobalBa)
@@ -316,6 +513,23 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
                 "[SFM] Known-pose BA result rejected by prior/RMS gate; keeping pre-BA cameras and points");
         }
     }
+    Logger::instance()->infof(
+        "[BA] result scope=%s cameras=%zu tracks=%zu observations=%d requested=%s used=%s "
+        "status=%s usable=%s applied=%s fallback=%s rms=%.6f->%.6f totalSeconds=%.3f message=%s",
+        scopeName,
+        baCameras.size(),
+        baTracks.size(),
+        baResult.observationCount,
+        BundleAdjust::backendName(baResult.requestedBackend),
+        BundleAdjust::backendName(baResult.usedBackend),
+        BundleAdjust::solveStatusName(baResult.solveStatus),
+        baResult.solutionUsable ? "true" : "false",
+        applyBaResult ? "true" : "false",
+        baResult.backendFallback ? "true" : "false",
+        baResult.meanRmsBefore,
+        baResult.meanRmsAfter,
+        baResult.totalSeconds,
+        baResult.backendMessage.c_str());
 
     // 回写优化后的相机位姿（跳过被 gauge 固定的相机）
     if (applyBaResult)
@@ -494,11 +708,24 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
         _lastGlobalBARmsAfter = baResult.meanRmsAfter;
         _lastGlobalBATracksTotal = baResult.totalTracks;
         _lastGlobalBATracksOptimized = baResult.optimizedTracks;
-        _lastGlobalBATracksFiltered = (int)baTracks.size() - baResult.optimizedTracks;
+        _lastGlobalBATracksFiltered = applyBaResult
+            ? static_cast<int>(baTracks.size()) - baResult.optimizedTracks
+            : 0;
         if (_lastGlobalBATracksFiltered < 0)
             _lastGlobalBATracksFiltered = deletedPts;
-        _lastGlobalBARefinedIntrinsicCount = baResult.refinedIntrinsicCount;
-        _lastGlobalBASharedFocalScale = baResult.refinedSharedFocalScale;
+        _lastGlobalBARefinedIntrinsicCount =
+            applyBaResult ? baResult.refinedIntrinsicCount : 0;
+        _lastGlobalBASharedFocalScale =
+            applyBaResult ? baResult.refinedSharedFocalScale : 1.0;
+        _lastGlobalBARequestedBackend = baResult.requestedBackend;
+        _lastGlobalBAUsedBackend = baResult.usedBackend;
+        _lastGlobalBASolveStatus = baResult.solveStatus;
+        _lastGlobalBASolutionUsable = baResult.solutionUsable;
+        _lastGlobalBAResultApplied = applyBaResult;
+        _lastGlobalBABackendFallback = baResult.backendFallback;
+        _lastGlobalBAObservationCount = baResult.observationCount;
+        _lastGlobalBATotalSeconds = baResult.totalSeconds;
+        _lastGlobalBABackendMessage = baResult.backendMessage;
     }
 }
 
@@ -592,10 +819,7 @@ int IncrementalSfm::filterNegativeDepthPoints()
 
             const Camera &cam = _reconstruction->camera(elem.imageId);
             const double world[3] = {xyz[0], xyz[1], xyz[2]};
-            double cameraPoint[3] = {0.0, 0.0, 0.0};
-            cam.worldToCamera(world, cameraPoint);
-
-            if (cameraPoint[2] < 0.0)
+            if (!cam.isPointInFront(world))
             {
                 badObsIndices.push_back(oi);
                 hasNegativeDepth = true;

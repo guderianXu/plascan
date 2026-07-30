@@ -65,6 +65,23 @@ QJsonObject inputSnapshot(const QString &cameraRevision)
     return snapshot;
 }
 
+QJsonObject stageSnapshots(const QString &depthRevision)
+{
+    QJsonObject camera_stage;
+    camera_stage.insert(QStringLiteral("revision"),
+                        QStringLiteral("camera-v1"));
+    camera_stage.insert(QStringLiteral("registered_frames"), 16);
+
+    QJsonObject depth_stage;
+    depth_stage.insert(QStringLiteral("revision"), depthRevision);
+    depth_stage.insert(QStringLiteral("usable_frames"), 16);
+
+    QJsonObject stages;
+    stages.insert(QStringLiteral("camera"), camera_stage);
+    stages.insert(QStringLiteral("depth"), depth_stage);
+    return stages;
+}
+
 TEST(ProcessingBaselineManagerTest, MeasuresSurfaceNormalRoughness)
 {
     const xjw::qc::ProcessingBaselineMeshMetrics smooth =
@@ -188,6 +205,60 @@ TEST(ProcessingBaselineManagerTest, SavesLoadsAndValidatesFingerprint)
     EXPECT_FALSE(xjw::qc::ProcessingBaselineManager::fromJson(
         tampered, &loaded, &error));
     EXPECT_TRUE(error.contains(QStringLiteral("指纹")));
+}
+
+TEST(ProcessingBaselineManagerTest, ReportsTheStageWhoseInputsDrifted)
+{
+    const QJsonObject inputs = inputSnapshot(QStringLiteral("middlebury-v1"));
+    const xjw::qc::ProcessingBaselineDefinition baseline =
+        xjw::qc::ProcessingBaselineManager::create(
+            QStringLiteral("dino-metashape"),
+            QStringLiteral("dino"),
+            inputs,
+            makeGrid(false),
+            {},
+            stageSnapshots(QStringLiteral("depth-v1")));
+
+    const xjw::qc::ProcessingBaselineComparison comparison =
+        xjw::qc::ProcessingBaselineManager::compare(
+            baseline,
+            inputs,
+            makeGrid(false),
+            stageSnapshots(QStringLiteral("depth-v2")));
+
+    EXPECT_TRUE(comparison.inputMatches);
+    EXPECT_FALSE(comparison.stageMatches);
+    EXPECT_FALSE(comparison.passed);
+    ASSERT_EQ(comparison.stageMismatches.size(), 1);
+    EXPECT_EQ(comparison.stageMismatches.front(), QStringLiteral("depth"));
+    EXPECT_TRUE(comparison.report.value(
+        QStringLiteral("candidate_stage_fingerprints_sha256")).isObject());
+}
+
+TEST(ProcessingBaselineManagerTest, LoadsLegacyBaselineWithoutStageSnapshots)
+{
+    const xjw::qc::ProcessingBaselineDefinition baseline =
+        xjw::qc::ProcessingBaselineManager::create(
+            QStringLiteral("dino-metashape"),
+            QStringLiteral("dino"),
+            inputSnapshot(QStringLiteral("middlebury-v1")),
+            makeGrid(false));
+    const QJsonObject legacy =
+        xjw::qc::ProcessingBaselineManager::toJson(baseline);
+
+    xjw::qc::ProcessingBaselineDefinition decoded;
+    QString error;
+    ASSERT_TRUE(xjw::qc::ProcessingBaselineManager::fromJson(
+        legacy, &decoded, &error)) << error.toStdString();
+    EXPECT_TRUE(decoded.stageSnapshots.isEmpty());
+    EXPECT_TRUE(decoded.stageFingerprintsSha256.isEmpty());
+
+    const xjw::qc::ProcessingBaselineComparison comparison =
+        xjw::qc::ProcessingBaselineManager::compare(
+            decoded,
+            decoded.inputSnapshot,
+            makeGrid(false));
+    EXPECT_TRUE(comparison.stageMatches);
 }
 
 } // namespace

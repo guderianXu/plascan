@@ -70,9 +70,42 @@ TEST(AerialTriangulationWorkflowTest, ExplicitRuntimeLimitsOverrideQualityDefaul
         xjw::aerial_triangulation::AerialTriangulationWorkflow::resolveConfig(options);
 
     EXPECT_EQ(resolved.tiePointOptions.maxImageDim, -1);
+    EXPECT_EQ(resolved.tiePointOptions.cudaParallelPairs, 3);
     EXPECT_EQ(resolved.resolvedSettings.value(QStringLiteral("cuda_parallel_pairs_requested")).toInt(), 3);
     EXPECT_EQ(resolved.resolvedSettings.value(QStringLiteral("cuda_parallel_pairs_effective")).toInt(), 0);
     EXPECT_EQ(resolved.pipelineInput.quality, 0);
+}
+
+TEST(AerialTriangulationWorkflowTest, RecordsEffectiveCudaPairConcurrencyAfterMatching)
+{
+    QTemporaryDir tempDir;
+    auto options = makeBaseOptions(tempDir.path());
+    options.cudaParallelPairs = 3;
+
+    const auto result = xjw::aerial_triangulation::AerialTriangulationWorkflow::run(
+        options,
+        [](const xjw::aerial_triangulation::PreparedAerialTriangulationInput &)
+        {
+            xjw::aerial_triangulation::AerialTriangulationReconstructionResult reconstruction;
+            reconstruction.success = true;
+            return reconstruction;
+        },
+        [](const xjw::matchphotos::MatchPhotosOptions &actualOptions,
+           const xjw::matchphotos::MatchPhotosContext &)
+        {
+            EXPECT_EQ(actualOptions.cudaParallelPairs, 3);
+            xjw::matchphotos::MatchPhotosResult tiePoints;
+            tiePoints.success = true;
+            xjw::matchphotos::MatchPhotosMatchRecord match;
+            match.settings.insert(
+                QStringLiteral("cuda_parallel_pairs_effective"), 2);
+            tiePoints.matches.push_back(match);
+            return tiePoints;
+        });
+
+    EXPECT_EQ(result.config.resolvedSettings.value(
+                  QStringLiteral("cuda_parallel_pairs_effective")).toInt(),
+              2);
 }
 
 TEST(AerialTriangulationWorkflowTest, SequenceModeOnlyChangesPairSelectionPolicy)

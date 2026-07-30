@@ -120,7 +120,101 @@ TEST(BundleAdjustSharedFocalTest, SharedFocalRefinementImprovesWrongNoCameraInit
     EXPECT_GT(shared.refinedSharedFocalScale, 1.0);
 }
 
-TEST(BundleAdjustSharedFocalTest, AutoBackendKeepsSharedFocalOnLegacySolver)
+TEST(BundleAdjustSharedFocalTest, CeresJointlyRefinesSharedFocalAndPoints)
+{
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    {
+        GTEST_SKIP() << "Ceres CPU backend is not available";
+    }
+
+    const std::vector<xjw::Camera> truthCameras{
+        makeCamera(-2.0, 0.0, 0.0, 1500.0),
+        makeCamera(0.0, -2.0, 0.0, 1500.0),
+        makeCamera(2.0, 0.0, 0.0, 1500.0),
+        makeCamera(0.0, 2.0, 0.0, 1500.0),
+    };
+    const std::vector<xjw::Camera> initialCameras{
+        makeCamera(-2.0, 0.0, 0.0, 900.0),
+        makeCamera(0.0, -2.0, 0.0, 900.0),
+        makeCamera(2.0, 0.0, 0.0, 900.0),
+        makeCamera(0.0, 2.0, 0.0, 900.0),
+    };
+    const std::vector<xjw::BATrack> tracks = makeSharedFocalTracks(truthCameras);
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::CeresCpu;
+    options.refineCameraPose = false;
+    options.refineSharedFocalLength = true;
+    options.minSharedFocalScale = 0.5;
+    options.maxSharedFocalScale = 2.0;
+    options.enableControlPointConstraints = true;
+    options.controlPointWeight = 100.0;
+    options.controlPointHuberDeltaMeters = 0.5;
+    options.enablePointFilter = false;
+    options.maxIterations = 30;
+
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(initialCameras, tracks, options);
+
+    ASSERT_EQ(result.usedBackend, xjw::BABackend::CeresCpu);
+    ASSERT_TRUE(result.solutionUsable);
+    ASSERT_FALSE(result.refinedCameras.empty());
+    EXPECT_GT(result.refinedCameras.front().focalX(), 1200.0);
+    EXPECT_LT(result.refinedCameras.front().focalX(), 1700.0);
+    EXPECT_GT(result.refinedSharedFocalScale, 1.0);
+    EXPECT_EQ(result.refinedIntrinsicCount, static_cast<int>(initialCameras.size()));
+}
+
+TEST(BundleAdjustSharedFocalTest, CeresUsesOneAbsoluteFocalForHeterogeneousInputs)
+{
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    {
+        GTEST_SKIP() << "Ceres CPU backend is not available";
+    }
+
+    const std::vector<xjw::Camera> truthCameras{
+        makeCamera(-2.0, 0.0, 0.0, 1500.0),
+        makeCamera(0.0, -2.0, 0.0, 1500.0),
+        makeCamera(2.0, 0.0, 0.0, 1500.0),
+        makeCamera(0.0, 2.0, 0.0, 1500.0),
+    };
+    const std::vector<xjw::Camera> initialCameras{
+        makeCamera(-2.0, 0.0, 0.0, 800.0),
+        makeCamera(0.0, -2.0, 0.0, 900.0),
+        makeCamera(2.0, 0.0, 0.0, 1000.0),
+        makeCamera(0.0, 2.0, 0.0, 1100.0),
+    };
+    const std::vector<xjw::BATrack> tracks = makeSharedFocalTracks(truthCameras);
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::CeresCpu;
+    options.refineCameraPose = false;
+    options.refineSharedFocalLength = true;
+    options.minSharedFocalScale = 0.5;
+    options.maxSharedFocalScale = 2.0;
+    options.enableControlPointConstraints = true;
+    options.controlPointWeight = 100.0;
+    options.controlPointHuberDeltaMeters = 0.5;
+    options.enablePointFilter = false;
+    options.maxIterations = 30;
+
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(initialCameras, tracks, options);
+
+    ASSERT_EQ(result.usedBackend, xjw::BABackend::CeresCpu);
+    ASSERT_TRUE(result.solutionUsable);
+    ASSERT_EQ(result.refinedCameras.size(), initialCameras.size());
+
+    const double refinedFocal = result.refinedCameras.front().focalX();
+    EXPECT_GT(refinedFocal, 1200.0);
+    EXPECT_LT(refinedFocal, 1700.0);
+    for (const xjw::Camera &camera : result.refinedCameras)
+    {
+        EXPECT_NEAR(camera.focalX(), refinedFocal, 1e-6);
+    }
+}
+
+TEST(BundleAdjustSharedFocalTest, AutoBackendCanSelectCeresForSharedFocal)
 {
     xjw::BAProblemStats stats;
     stats.cameraCount = 120;
@@ -137,6 +231,18 @@ TEST(BundleAdjustSharedFocalTest, AutoBackendKeepsSharedFocalOnLegacySolver)
     options.minCeresCudaObservations = 1;
     options.minCeresCpuObservations = 1;
 
-    EXPECT_EQ(xjw::BundleAdjust::selectBackendForProblem(stats, options),
-              xjw::BABackend::LegacyCpu);
+    const xjw::BABackend selected =
+        xjw::BundleAdjust::selectBackendForProblem(stats, options);
+    if (xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCuda))
+    {
+        EXPECT_EQ(selected, xjw::BABackend::CeresCuda);
+    }
+    else if (xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    {
+        EXPECT_EQ(selected, xjw::BABackend::CeresCpu);
+    }
+    else
+    {
+        EXPECT_EQ(selected, xjw::BABackend::LegacyCpu);
+    }
 }

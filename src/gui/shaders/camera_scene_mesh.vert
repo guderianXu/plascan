@@ -14,6 +14,7 @@ layout(std140, binding = 0) uniform SceneUniforms
 
 layout(location = 0) out vec3 vNormal;
 layout(location = 1) out vec3 vColor;
+layout(location = 2) out vec3 vViewPosition;
 
 void main()
 {
@@ -21,4 +22,5 @@ void main()
     gl_PointSize = ubuf.uLightDirPointSize.w;
     vNormal = mat3(ubuf.uNormalMat) * aNormal;
     vColor = aColor;
+    vViewPosition = (ubuf.uModelView * vec4(aPos, 1.0)).xyz;
 }

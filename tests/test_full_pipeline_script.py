@@ -11,8 +11,8 @@ from pathlib import Path
 import numpy as np
 
 
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "run_full_pipeline_test.py"
-EXTRACT_FEATURES_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "extract_features.py"
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "legacy" / "run_full_pipeline_test.py"
+EXTRACT_FEATURES_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "workflows" / "extract_features.py"
 SPEC = importlib.util.spec_from_file_location("run_full_pipeline_test", SCRIPT_PATH)
 pipeline = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None

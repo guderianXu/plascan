@@ -45,14 +45,9 @@ class BaCudaContractsTest(unittest.TestCase):
         self.assertIn('saveObj[QStringLiteral("ba_quality_gate_rejected")]', source)
         self.assertIn('saveObj[QStringLiteral("ba_valid_track_ratio")]', source)
 
-    def test_standalone_bundle_adjust_defaults_to_auto_backend(self):
-        dialog = read_text("src/gui/dialogs/BundleAdjustDialog.cpp")
+    def test_bundle_adjust_execution_defaults_to_auto_backend(self):
         project_manager = read_text("src/gui/project/manager/ProjectManager.cpp")
 
-        self.assertIn('options[QStringLiteral("ba_backend")] = QStringLiteral("auto");', dialog)
-        self.assertIn('options[QStringLiteral("ba_min_cpu_observations")] = 50000;', dialog)
-        self.assertIn('options[QStringLiteral("ba_max_ceres_point_only_observations")] = 100000;', dialog)
-        self.assertIn('options[QStringLiteral("ba_enable_backend_quality_gate")] = true;', dialog)
         self.assertIn('toString(QStringLiteral("auto"))', project_manager)
         self.assertIn('opts.baOpt.backend = xjw::BABackend::Auto;', project_manager)
         self.assertIn('opts.baOpt.minCeresCudaObservations', project_manager)

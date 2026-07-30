@@ -60,6 +60,12 @@ public:
                          QString& imageName,
                          xjw::feature_extractors::FeatureData& output);
 
+    // 几何验证只需要关键点坐标。该接口仍校验描述子区长度，但不把描述子读入内存，
+    // 避免同一特征文件在逐像对 F/E/H 验证中反复构造大矩阵。
+    static bool readGeometryData(const QString& path,
+                                 QString& imageName,
+                                 xjw::feature_extractors::FeatureData& output);
+
     // 快速读取算法类型 (不加载描述子)
     static std::string peekAlgorithm(const QString& path);
 

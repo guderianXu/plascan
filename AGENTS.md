@@ -70,7 +70,7 @@ PlaScan 是面向行星表面影像的摄影测量处理系统，主线是从多
 - 使用 `pathlib.Path`、`argparse` 和结构化读写接口，避免硬编码本机绝对路径。
 - 脚本入口保持 `parse_args()`、`main()` 结构，错误信息写清缺失路径、参数和建议修复方式。
 - 深度学习脚本要明确区分 CPU/CUDA、模型路径、输入输出目录和阈值参数。
-- `scripts/extract_features.py` 等运行时脚本依赖 torch、cv2 和相关模型库；验证失败时要说明缺少的 Python 包或环境。
+- `scripts/workflows/extract_features.py` 等运行时脚本依赖 torch、cv2 和相关模型库；验证失败时要说明缺少的 Python 包或环境。
 - 新增长期保留的脚本时，同步补充脚本用途、输入输出和依赖说明；一次性探索脚本不要长期留在根目录。
 
 ## 构建与验证
@@ -99,14 +99,14 @@ ctest --output-on-failure
 改 Python 脚本后至少做语法检查：
 
 ```bash
-python -m py_compile scripts/extract_features.py
+python -m py_compile scripts/workflows/extract_features.py
 ```
 
 需要运行依赖 torch、cv2、kornia 或 LightGlue 的脚本时，先初始化 `.venv`，再优先使用 `.venv` 中的解释器，例如 Windows：
 
 ```powershell
 python scripts\env\setup_python_runtime.py --device cuda --cuda-wheel cu130
-.\.venv\Scripts\python.exe scripts\export_lightglue_torchscript.py --help
+.\.venv\Scripts\python.exe scripts\models\export_lightglue_torchscript.py --help
 ```
 
 若需要运行脚本本体，必须使用同时包含 torch、cv2 和相关模型依赖的 Python 环境。不要在依赖缺失时声称脚本验证通过。

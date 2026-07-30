@@ -99,6 +99,7 @@ struct MvsSourcePlannerOptions
     float softMaxTriangulationAngleDeg = 25.0f;
     int minSharedTracks = 0;
     int minGeometricInliers = 0;
+    int minMissingStatisticsPairMatches = 16;
     float minSourceQualityScore = 0.0f;
     bool allowWeakKnownOverlap = true;
     bool requireVerifiedPairGeometry = false;

@@ -1,5 +1,6 @@
 #include "ProjectMatchInputReader.h"
 
+#include "ProjectCameraIO.h"
 #include "project/ProjectCommonUtils.h"
 
 #include <QFile>

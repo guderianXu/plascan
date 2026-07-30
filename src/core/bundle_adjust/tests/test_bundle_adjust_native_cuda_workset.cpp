@@ -45,6 +45,24 @@ TEST(NativeCudaWorksetTest, BuildsContiguousWorksetFromValidTracks)
     EXPECT_EQ(build.workset.points[0].observationCount, 2);
 }
 
+TEST(NativeCudaWorksetTest, PreservesCameraDepthAxisConvention)
+{
+    std::vector<xjw::Camera> cameras{makeCamera(), makeCamera(1.0)};
+    cameras[1].setDepthAxisFlipped(true);
+
+    xjw::BATrack track;
+    track.initialPoint = {{0.0, 0.0, -5.0}};
+    track.observations.push_back({0, 320.0, 240.0, 1.0});
+    track.observations.push_back({1, 320.0, 240.0, 1.0});
+
+    const auto build =
+        xjw::detail::native_cuda::buildWorkset(cameras, {track}, xjw::BAOptions{});
+    ASSERT_TRUE(build.ok) << build.message;
+    ASSERT_EQ(build.workset.cameras.size(), 2U);
+    EXPECT_EQ(build.workset.cameras[0].depthAxisFlipped, 0);
+    EXPECT_EQ(build.workset.cameras[1].depthAxisFlipped, 1);
+}
+
 TEST(NativeCudaWorksetTest, FiltersInvalidTracksAndKeepsOriginalMapping)
 {
     std::vector<xjw::Camera> cameras{makeCamera(), makeCamera(1.0)};

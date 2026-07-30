@@ -1,6 +1,5 @@
 #pragma once
 
-#include "ProjectCameraIO.h"
 #include "ProjectMetadata.h"
 
 #include <QDir>

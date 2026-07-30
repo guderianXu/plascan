@@ -12,7 +12,7 @@
 
 DeDoDe 使用 **kornia + PyTorch** (Python)，通过 C++ CLI 子进程调用。
 
-- 脚本: `scripts/run_dedode.py`
+- 脚本: `scripts/workflows/run_dedode.py`
 - 特征提取 CLI: `feature_extract_cli -a dedode -i a.tif -o a.dedode --cuda`
 - 特征文件匹配 CLI: `feature_match_cli -a dedode --sp1 a.dedode --sp2 b.dedode -o a__b.match --cuda`
 - 端到端匹配 CLI: `feature_match_cli -a dedode -L a.tif -R b.tif -o a__b.match --cuda`
@@ -27,6 +27,6 @@ DINOv2 在自然图像上预训练。卫星遥感影像（灰度、俯视视角�
 
 ## 相关文件
 
-- Python 脚本: `scripts/run_dedode.py`
+- Python 脚本: `scripts/workflows/run_dedode.py`
 - 模块说明: `src/core/feature_extractors/dedode/`
 - CLI 入口: `feature_extract_cli -a dedode`, `feature_match_cli -a dedode`

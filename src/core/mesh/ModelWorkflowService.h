@@ -45,6 +45,8 @@ struct TextureBuildRequest
     QString outputDir;
     QString depthMapSourcePath;
     xjw::mesh::TextureMappingConfig texture;
+    bool allowVertexColorFallback = false;
+    std::function<bool()> isCancelled;
     std::function<void(const QString &, int)> progress;
 };
 
@@ -81,6 +83,11 @@ xjw::mesh::DepthTsdfOptions depthTsdfOptionsFromSettings(const QJsonObject &sett
 void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
                                    xjw::mesh::DepthTsdfOptions *options,
                                    int maximumReliableResolution = 0);
+bool shouldUseOrbitalVisualHullCompletion(bool orbitalWorkspace,
+                                          bool enabled,
+                                          double aggregateProjectionRecall,
+                                          int boundaryEdgeCount,
+                                          int faceCount);
 xjw::mesh::ReconstructionConfig reconstructionConfigFromModelSettings(const QJsonObject &settings);
 xjw::mesh::ReconstructionConfig reconstructionConfigForDenseScene(int requestedResolution,
                                                                    bool aerialTerrain,

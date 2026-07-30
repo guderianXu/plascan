@@ -161,3 +161,41 @@ TEST(BundleAdjustQualityGateTest, AutoRejectsCeresCandidateWhenQualityGateFails)
     EXPECT_TRUE(std::isfinite(result.validTrackRatio));
     EXPECT_NE(result.qualityGateMessage.find("质量门控"), std::string::npos);
 }
+
+TEST(BundleAdjustConvergenceTest, ExactLegacyProblemStopsAfterMinimumConvergenceRounds)
+{
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-1.0, 0.0, 0.0),
+        makeCamera(1.0, 0.0, 0.0),
+    };
+    std::vector<xjw::BATrack> tracks;
+    for (int i = 0; i < 24; ++i)
+    {
+        const std::array<double, 3> point{{
+            (static_cast<double>(i % 6) - 2.5) * 0.2,
+            (static_cast<double>(i / 6) - 1.5) * 0.2,
+            8.0 + static_cast<double>(i % 3) * 0.1,
+        }};
+        tracks.push_back(makeTrack(cameras, point, point));
+    }
+
+    int reportedIterations = 0;
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::LegacyCpu;
+    options.refineCameraPose = false;
+    options.enablePointFilter = false;
+    options.maxIterations = 20;
+    options.progressCallback =
+        [&reportedIterations](int iteration, int, double, int)
+        {
+            reportedIterations = iteration;
+            return true;
+        };
+
+    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(cameras, tracks, options);
+
+    ASSERT_TRUE(result.solutionUsable);
+    EXPECT_EQ(result.solveStatus, xjw::BASolveStatus::Success);
+    EXPECT_LE(reportedIterations, 3);
+    EXPECT_NEAR(result.meanRmsAfter, 0.0, 1e-8);
+}

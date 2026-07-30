@@ -20,6 +20,7 @@ add_library(meshing STATIC
     AdaptiveTsdfOctree.cpp
     SparseTgvSolver.cpp
     VisualHullReconstructor.cpp
+    VisualHullDepthRefiner.cpp
     MeshIO.cpp
     MeshColorizer.cpp
     MeshFaceColorOptimizer.cpp
@@ -31,6 +32,12 @@ add_library(meshing STATIC
     MeshIsotropicRemesher.cpp
     TextureMapper.cpp
     CameraTextureMapper.cpp
+    CameraTextureMapperV4.cpp
+    TextureAtlasPacker.cpp
+    TextureSourcePreprocessor.cpp
+    TextureVisibilityEvaluator.cpp
+    TextureChartBuilder.cpp
+    TextureAtlasBaker.cpp
     ModelWorkflowService.cpp
 )
 

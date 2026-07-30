@@ -60,17 +60,6 @@ double safeObservationWeight(const BAObservation &observation)
     return std::isfinite(observation.weight) ? std::max(0.0, observation.weight) : 1.0;
 }
 
-bool projectWithDelta(const Camera &baseCamera,
-                      const double *cameraDelta,
-                      const double *point,
-                      double *pixel)
-{
-    Camera camera = baseCamera;
-    camera.applyDeltaPose(cameraDelta);
-    const double world[3] = {point[0], point[1], point[2]};
-    return camera.projectWorldPoint(world, pixel);
-}
-
 double computeTrackRms(const std::vector<Camera> &cameras,
                        const BATrack &track,
                        const std::array<double, 3> &point)
@@ -294,23 +283,77 @@ struct FixedCameraReprojectionResidual
 
 struct PoseDeltaReprojectionResidual
 {
-    Camera camera;
+    xjw::ba::ProjectionCamera camera;
     BAObservation observation;
 
-    bool operator()(const double *const cameraDelta,
-                    const double *const point,
-                    double *residuals) const
+    template <typename T>
+    bool operator()(const T *const cameraDelta,
+                    const T *const point,
+                    T *residuals) const
     {
-        double pixel[2] = {0.0, 0.0};
-        const double sqrtWeight = std::sqrt(safeObservationWeight(observation));
-        if (!projectWithDelta(camera, cameraDelta, point, pixel))
+        T pixel[2] = {T(0.0), T(0.0)};
+        const T sqrtWeight = T(std::sqrt(safeObservationWeight(observation)));
+        if (!xjw::ba::projectWithPoseDelta(camera, cameraDelta, point, pixel))
         {
-            residuals[0] = sqrtWeight * 1.0e6;
-            residuals[1] = sqrtWeight * 1.0e6;
+            residuals[0] = sqrtWeight * T(1.0e6);
+            residuals[1] = sqrtWeight * T(1.0e6);
             return true;
         }
-        residuals[0] = sqrtWeight * (pixel[0] - observation.u);
-        residuals[1] = sqrtWeight * (pixel[1] - observation.v);
+        residuals[0] = sqrtWeight * (pixel[0] - T(observation.u));
+        residuals[1] = sqrtWeight * (pixel[1] - T(observation.v));
+        return true;
+    }
+};
+
+struct FixedPoseSharedFocalReprojectionResidual
+{
+    xjw::ba::ProjectionCamera camera;
+    BAObservation observation;
+
+    template <typename T>
+    bool operator()(const T *const point,
+                    const T *const sharedFocalLogPixels,
+                    T *residuals) const
+    {
+        const T zeroDelta[6] = {
+            T(0.0), T(0.0), T(0.0), T(0.0), T(0.0), T(0.0)};
+        T pixel[2] = {T(0.0), T(0.0)};
+        const T sqrtWeight = T(std::sqrt(safeObservationWeight(observation)));
+        if (!xjw::ba::projectWithPoseDeltaAndSharedFocal(
+                camera, zeroDelta, point, sharedFocalLogPixels, pixel))
+        {
+            residuals[0] = sqrtWeight * T(1.0e6);
+            residuals[1] = sqrtWeight * T(1.0e6);
+            return true;
+        }
+        residuals[0] = sqrtWeight * (pixel[0] - T(observation.u));
+        residuals[1] = sqrtWeight * (pixel[1] - T(observation.v));
+        return true;
+    }
+};
+
+struct PoseDeltaSharedFocalReprojectionResidual
+{
+    xjw::ba::ProjectionCamera camera;
+    BAObservation observation;
+
+    template <typename T>
+    bool operator()(const T *const cameraDelta,
+                    const T *const point,
+                    const T *const sharedFocalLogPixels,
+                    T *residuals) const
+    {
+        T pixel[2] = {T(0.0), T(0.0)};
+        const T sqrtWeight = T(std::sqrt(safeObservationWeight(observation)));
+        if (!xjw::ba::projectWithPoseDeltaAndSharedFocal(
+                camera, cameraDelta, point, sharedFocalLogPixels, pixel))
+        {
+            residuals[0] = sqrtWeight * T(1.0e6);
+            residuals[1] = sqrtWeight * T(1.0e6);
+            return true;
+        }
+        residuals[0] = sqrtWeight * (pixel[0] - T(observation.u));
+        residuals[1] = sqrtWeight * (pixel[1] - T(observation.v));
         return true;
     }
 };
@@ -320,14 +363,18 @@ struct LaserPlaneResidual
     BALaserPlaneConstraint constraint;
     double weight = 1.0;
 
-    bool operator()(const double *const point, double *residuals) const
+    template <typename T>
+    bool operator()(const T *const point, T *residuals) const
     {
-        const double dx = point[0] - constraint.point[0];
-        const double dy = point[1] - constraint.point[1];
-        const double dz = point[2] - constraint.point[2];
-        const double signedDistance =
-            dx * constraint.normal[0] + dy * constraint.normal[1] + dz * constraint.normal[2];
-        residuals[0] = std::sqrt(std::max(0.0, weight * constraint.weight)) * signedDistance;
+        const T dx = point[0] - T(constraint.point[0]);
+        const T dy = point[1] - T(constraint.point[1]);
+        const T dz = point[2] - T(constraint.point[2]);
+        const T signedDistance =
+            dx * T(constraint.normal[0]) +
+            dy * T(constraint.normal[1]) +
+            dz * T(constraint.normal[2]);
+        residuals[0] =
+            T(std::sqrt(std::max(0.0, weight * constraint.weight))) * signedDistance;
         return true;
     }
 };
@@ -337,13 +384,14 @@ struct ControlPointResidual
     BAControlPointConstraint constraint;
     double weight = 1.0;
 
-    bool operator()(const double *const point, double *residuals) const
+    template <typename T>
+    bool operator()(const T *const point, T *residuals) const
     {
         const double sigma = std::max(1e-9, constraint.sigmaMeters);
         const double scale = std::sqrt(std::max(0.0, weight * constraint.weight)) / sigma;
-        residuals[0] = scale * (point[0] - constraint.point[0]);
-        residuals[1] = scale * (point[1] - constraint.point[1]);
-        residuals[2] = scale * (point[2] - constraint.point[2]);
+        residuals[0] = T(scale) * (point[0] - T(constraint.point[0]));
+        residuals[1] = T(scale) * (point[1] - T(constraint.point[1]));
+        residuals[2] = T(scale) * (point[2] - T(constraint.point[2]));
         return true;
     }
 };
@@ -353,17 +401,20 @@ struct ScaleBarResidual
     BAScaleBarConstraint constraint;
     double weight = 1.0;
 
-    bool operator()(const double *const pointA,
-                    const double *const pointB,
-                    double *residuals) const
+    template <typename T>
+    bool operator()(const T *const pointA,
+                    const T *const pointB,
+                    T *residuals) const
     {
-        const double dx = pointA[0] - pointB[0];
-        const double dy = pointA[1] - pointB[1];
-        const double dz = pointA[2] - pointB[2];
-        const double distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+        const T dx = pointA[0] - pointB[0];
+        const T dy = pointA[1] - pointB[1];
+        const T dz = pointA[2] - pointB[2];
+        using std::sqrt;
+        const T distance = sqrt(dx * dx + dy * dy + dz * dz);
         const double sigma = std::max(1e-9, constraint.sigmaMeters);
         const double scale = std::sqrt(std::max(0.0, weight * constraint.weight)) / sigma;
-        residuals[0] = scale * (distance - constraint.measuredDistanceMeters);
+        residuals[0] =
+            T(scale) * (distance - T(constraint.measuredDistanceMeters));
         return true;
     }
 };
@@ -403,8 +454,9 @@ ceres::LossFunction *makeHuberLoss(double delta)
 class CeresBaIterationCallback final : public ceres::IterationCallback
 {
 public:
-    explicit CeresBaIterationCallback(const BAOptions &options)
-        : _options(options)
+    CeresBaIterationCallback(const BAOptions &options, int observationCount)
+        : _options(options),
+          _observationCount(std::max(1, observationCount))
     {
     }
 
@@ -412,24 +464,49 @@ public:
     {
         if (_options.cancelFlag && _options.cancelFlag->load())
         {
+            _cancelled = true;
             return ceres::SOLVER_ABORT;
         }
         if (_options.progressCallback)
         {
-            const double rmsProxy = std::sqrt(std::max(0.0, summary.cost));
-            if (!_options.progressCallback(summary.iteration + 1,
-                                           std::max(1, _options.maxIterations),
-                                           rmsProxy,
-                                           0))
+            const int maximumIterations = std::max(1, _options.maxIterations);
+            // Ceres 会为初始状态额外产生 iteration=0 的摘要。GUI 只展示最多
+            // maxIterations 个实际进度步，避免出现“21/20”。
+            if (summary.iteration < maximumIterations)
             {
-                return ceres::SOLVER_ABORT;
+                // Ceres cost 为 0.5 * sum(r^2)。每个影像观测有两个像素残差，
+                // 因而 sqrt(cost / observationCount) 是可解释的像素 RMS 代理。
+                const double rmsProxy =
+                    std::sqrt(std::max(0.0, summary.cost) /
+                              static_cast<double>(_observationCount));
+                if (!_options.progressCallback(summary.iteration + 1,
+                                                 maximumIterations,
+                                                 rmsProxy,
+                                                 0))
+                {
+                    _progressAborted = true;
+                    return ceres::SOLVER_ABORT;
+                }
             }
         }
         return ceres::SOLVER_CONTINUE;
     }
 
+    bool cancelled() const
+    {
+        return _cancelled;
+    }
+
+    bool progressAborted() const
+    {
+        return _progressAborted;
+    }
+
 private:
     const BAOptions &_options;
+    int _observationCount = 1;
+    bool _cancelled = false;
+    bool _progressAborted = false;
 };
 
 bool selectCeresCudaDevice(const BAOptions &options, std::string *message)
@@ -512,17 +589,28 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
     result.usedBackend = requestGpu ? BABackend::CeresCuda : BABackend::CeresCpu;
     result.usedGpu = requestGpu;
     result.observationCount = countObservations(tracks);
+    for (size_t ti = 0; ti < tracks.size(); ++ti)
+    {
+        BARefinedPoint &point = result.points[ti];
+        point.point = tracks[ti].initialPoint;
+        point.rmsBefore = computeTrackRms(cameras, tracks[ti], tracks[ti].initialPoint);
+        point.rmsAfter = point.rmsBefore;
+    }
 
 #ifndef PLASCAN_BA_HAS_CERES
+    result.solveStatus = BASolveStatus::BackendUnavailable;
     result.backendMessage = "Ceres 未编译进当前目标";
     return result;
 #else
     if (cameras.empty() || tracks.empty())
     {
+        result.solveStatus = BASolveStatus::InvalidInput;
+        result.backendMessage = "Ceres BA 输入相机或 track 为空";
         return result;
     }
     if (options.cancelFlag && options.cancelFlag->load())
     {
+        result.solveStatus = BASolveStatus::Cancelled;
         result.backendMessage = "Ceres BA 在启动前被取消";
         return result;
     }
@@ -600,6 +688,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         const auto setupEnd = std::chrono::steady_clock::now();
         result.setupSeconds = std::chrono::duration<double>(setupEnd - setupStart).count();
         result.totalSeconds = result.setupSeconds;
+        result.solveStatus = BASolveStatus::InvalidInput;
         result.backendMessage = "Ceres BA 没有足够有效 track";
         return result;
     }
@@ -624,6 +713,38 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         }
     }
 
+    // 用所有相机焦距中位数初始化一个绝对共享焦距。此前按每台相机当前焦距
+    // 乘同一 scale，会让参与局部 BA 次数不同的相机累积出不同焦距。
+    std::vector<double> inputFocalPixels;
+    inputFocalPixels.reserve(cameras.size());
+    for (const Camera &camera : cameras)
+    {
+        if (std::isfinite(camera.focalX()) && camera.focalX() > 0.0)
+        {
+            inputFocalPixels.push_back(camera.focalX());
+        }
+    }
+    std::sort(inputFocalPixels.begin(), inputFocalPixels.end());
+    const double sharedFocalReferencePixels =
+        inputFocalPixels.empty()
+            ? 1.0
+            : inputFocalPixels[inputFocalPixels.size() / 2];
+    double sharedFocalLogPixels = std::log(sharedFocalReferencePixels);
+    if (options.refineSharedFocalLength)
+    {
+        const double minimumScale = std::max(1e-6, options.minSharedFocalScale);
+        const double maximumScale =
+            std::max(minimumScale, options.maxSharedFocalScale);
+        problem.AddParameterBlock(&sharedFocalLogPixels, 1);
+        problem.SetParameterLowerBound(&sharedFocalLogPixels,
+                                       0,
+                                       std::log(sharedFocalReferencePixels * minimumScale));
+        problem.SetParameterUpperBound(
+            &sharedFocalLogPixels,
+            0,
+            std::log(sharedFocalReferencePixels * maximumScale));
+    }
+
     for (size_t ti = 0; ti < tracks.size(); ++ti)
     {
         if (!activeTrack[ti])
@@ -635,20 +756,55 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         problem.AddParameterBlock(pointParams[ti].data(), 3);
         for (const BAObservation &observation : validObservationsByTrack[ti])
         {
-            if (options.refineCameraPose)
+            if (options.refineCameraPose && options.refineSharedFocalLength)
             {
-                auto *cost = new ceres::NumericDiffCostFunction<PoseDeltaReprojectionResidual,
-                                                                ceres::CENTRAL,
-                                                                2,
-                                                                6,
-                                                                3>(
+                auto *cost =
+                    new ceres::AutoDiffCostFunction<PoseDeltaSharedFocalReprojectionResidual,
+                                                    2,
+                                                    6,
+                                                    3,
+                                                    1>(
+                        new PoseDeltaSharedFocalReprojectionResidual{
+                            xjw::ba::makeProjectionCamera(
+                                cameras[static_cast<size_t>(observation.cameraIndex)]),
+                            observation});
+                problem.AddResidualBlock(
+                    cost,
+                    makeHuberLoss(options.huberDelta),
+                    cameraDeltas[static_cast<size_t>(observation.cameraIndex)].data(),
+                    pointParams[ti].data(),
+                    &sharedFocalLogPixels);
+            }
+            else if (options.refineCameraPose)
+            {
+                auto *cost = new ceres::AutoDiffCostFunction<PoseDeltaReprojectionResidual,
+                                                             2,
+                                                             6,
+                                                             3>(
                     new PoseDeltaReprojectionResidual{
-                        cameras[static_cast<size_t>(observation.cameraIndex)],
+                        xjw::ba::makeProjectionCamera(
+                            cameras[static_cast<size_t>(observation.cameraIndex)]),
                         observation});
                 problem.AddResidualBlock(cost,
                                          makeHuberLoss(options.huberDelta),
                                          cameraDeltas[static_cast<size_t>(observation.cameraIndex)].data(),
                                          pointParams[ti].data());
+            }
+            else if (options.refineSharedFocalLength)
+            {
+                auto *cost =
+                    new ceres::AutoDiffCostFunction<FixedPoseSharedFocalReprojectionResidual,
+                                                    2,
+                                                    3,
+                                                    1>(
+                        new FixedPoseSharedFocalReprojectionResidual{
+                            xjw::ba::makeProjectionCamera(
+                                cameras[static_cast<size_t>(observation.cameraIndex)]),
+                            observation});
+                problem.AddResidualBlock(cost,
+                                         makeHuberLoss(options.huberDelta),
+                                         pointParams[ti].data(),
+                                         &sharedFocalLogPixels);
             }
             else
             {
@@ -665,7 +821,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         {
             for (const BALaserPlaneConstraint &constraint : tracks[ti].laserPlaneConstraints)
             {
-                auto *cost = new ceres::NumericDiffCostFunction<LaserPlaneResidual, ceres::CENTRAL, 1, 3>(
+                auto *cost = new ceres::AutoDiffCostFunction<LaserPlaneResidual, 1, 3>(
                     new LaserPlaneResidual{constraint, options.laserPlaneWeight});
                 problem.AddResidualBlock(cost, makeHuberLoss(options.laserHuberDeltaMeters), pointParams[ti].data());
             }
@@ -674,7 +830,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         {
             for (const BAControlPointConstraint &constraint : tracks[ti].controlPointConstraints)
             {
-                auto *cost = new ceres::NumericDiffCostFunction<ControlPointResidual, ceres::CENTRAL, 3, 3>(
+                auto *cost = new ceres::AutoDiffCostFunction<ControlPointResidual, 3, 3>(
                     new ControlPointResidual{constraint, options.controlPointWeight});
                 problem.AddResidualBlock(cost,
                                          makeHuberLoss(options.controlPointHuberDeltaMeters),
@@ -695,7 +851,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
             {
                 continue;
             }
-            auto *cost = new ceres::NumericDiffCostFunction<ScaleBarResidual, ceres::CENTRAL, 1, 3, 3>(
+            auto *cost = new ceres::AutoDiffCostFunction<ScaleBarResidual, 1, 3, 3>(
                 new ScaleBarResidual{constraint, options.scaleBarWeight});
             problem.AddResidualBlock(cost,
                                      makeHuberLoss(options.scaleBarHuberDeltaMeters),
@@ -724,7 +880,8 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
     {
         solverOptions.linear_solver_type = ceres::SPARSE_SCHUR;
     }
-    else if (!options.refineCameraPose || variableCameraCount == 0)
+    else if ((!options.refineCameraPose || variableCameraCount == 0) &&
+             !options.refineSharedFocalLength)
     {
         // 仅优化三维点时没有需要 Schur 消元的相机变量，Dense QR 更符合问题结构。
         solverOptions.linear_solver_type = ceres::DENSE_QR;
@@ -766,7 +923,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                    : "dense_schur_cpu");
 #  endif
 
-    CeresBaIterationCallback iterationCallback(options);
+    CeresBaIterationCallback iterationCallback(options, result.observationCount);
     if (options.progressCallback || options.cancelFlag)
     {
         solverOptions.callbacks.push_back(&iterationCallback);
@@ -783,10 +940,50 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                                 ? summary.BriefReport()
                                 : cudaDeviceMessage + "；" + summary.BriefReport();
 
+    const bool cancelledByFlag =
+        iterationCallback.cancelled() ||
+        (options.cancelFlag && options.cancelFlag->load());
+    if (cancelledByFlag || iterationCallback.progressAborted())
+    {
+        result.solveStatus = BASolveStatus::Cancelled;
+        result.solutionUsable = false;
+        result.backendMessage =
+            (cancelledByFlag ? "Ceres BA 已取消；" : "Ceres BA 被进度回调终止；") +
+            result.backendMessage;
+        return result;
+    }
+    if (!summary.IsSolutionUsable())
+    {
+        result.solveStatus = BASolveStatus::NumericalFailure;
+        result.solutionUsable = false;
+        result.backendMessage = "Ceres BA 解不可用，保留输入相机和三维点；" +
+                                result.backendMessage;
+        return result;
+    }
+
+    result.solveStatus = summary.termination_type == ceres::NO_CONVERGENCE
+                             ? BASolveStatus::NoConvergence
+                             : BASolveStatus::Success;
+    result.solutionUsable = true;
+
+    const double sharedFocalPixels = std::exp(sharedFocalLogPixels);
+    const double sharedFocalScale =
+        sharedFocalPixels / sharedFocalReferencePixels;
     for (size_t ci = 0; ci < cameras.size(); ++ci)
     {
         result.refinedCameras[ci] = cameras[ci];
         result.refinedCameras[ci].applyDeltaPose(cameraDeltas[ci].data());
+        if (options.refineSharedFocalLength)
+        {
+            const Camera::Intrinsics intrinsics = result.refinedCameras[ci].intrinsics();
+            const double focalAspect =
+                intrinsics.focalX > 0.0 ? intrinsics.focalY / intrinsics.focalX : 1.0;
+            result.refinedCameras[ci].setIntrinsics(
+                sharedFocalPixels,
+                sharedFocalPixels * focalAspect,
+                intrinsics.principalX,
+                intrinsics.principalY);
+        }
     }
 
     double sumBefore = 0.0;
@@ -844,6 +1041,12 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
     result.meanRmsBefore = countBefore > 0 ? sumBefore / static_cast<double>(countBefore) : 0.0;
     result.meanRmsAfter = countAfter > 0 ? sumAfter / static_cast<double>(countAfter) : 0.0;
     result.refinedCameraCount = options.refineCameraPose ? variableCameraCount : 0;
+    result.refinedSharedFocalScale = sharedFocalScale;
+    if (options.refineSharedFocalLength &&
+        std::abs(sharedFocalScale - 1.0) > 1e-8)
+    {
+        result.refinedIntrinsicCount = static_cast<int>(cameras.size());
+    }
 
     if (options.enableLaserPlaneConstraints)
     {

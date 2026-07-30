@@ -32,6 +32,10 @@ struct VisualHullConfig
     bool enableDepthFreeSpaceCarving = false;
     int minimumDepthFreeSpaceViolations = 2;
     float relativeDepthTolerance = 0.01f;
+    bool closeVolumeBoundary = true;
+    int topologyClosingIterations = 0;
+    int smoothingIterations = 2;
+    float smoothingLambda = 0.18f;
     int workerCount = 0;
     std::function<bool()> isCancelled;
     std::function<void(const std::string &, float)> progressFn;

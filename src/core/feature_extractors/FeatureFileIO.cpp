@@ -10,8 +10,10 @@
 #include <QFile>
 #include <QDataStream>
 #include <QDebug>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace
 {
@@ -218,6 +220,118 @@ bool FeatureFileIO::readData(const QString& path,
         algorithmName = "superpoint";
     }
     output = xjw::feature_extractors::FeatureData::fromFeatureOutput(featureOutput, algorithmName);
+    return true;
+}
+
+bool FeatureFileIO::readGeometryData(
+    const QString& path,
+    QString& imageName,
+    xjw::feature_extractors::FeatureData& output)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        qWarning() << "Cannot open for geometry reading:" << path;
+        return false;
+    }
+
+    QDataStream in(&file);
+    in.setByteOrder(QDataStream::LittleEndian);
+    in.setFloatingPointPrecision(QDataStream::SinglePrecision);
+
+    char magic[4];
+    if (in.readRawData(magic, 4) != 4)
+    {
+        return false;
+    }
+    const char *algorithm = ALGO_FOR_MAGIC(magic);
+    if (!algorithm)
+    {
+        return false;
+    }
+
+    quint32 version = 0;
+    quint32 nameLength = 0;
+    in >> version >> nameLength;
+    if (version < 1 || version > kCurrentFeatureFileVersion ||
+        nameLength > static_cast<quint32>(std::numeric_limits<int>::max()))
+    {
+        return false;
+    }
+
+    QByteArray nameBytes(static_cast<int>(nameLength), 0);
+    if (in.readRawData(nameBytes.data(), static_cast<int>(nameLength)) !=
+        static_cast<int>(nameLength))
+    {
+        return false;
+    }
+
+    output = xjw::feature_extractors::FeatureData{};
+    imageName = QString::fromUtf8(nameBytes);
+    output.sourceAlgorithm = algorithm;
+    if (version >= 3)
+    {
+        qint32 imageWidth = 0;
+        qint32 imageHeight = 0;
+        in >> imageWidth >> imageHeight;
+        output.imageWidth = std::max(0, static_cast<int>(imageWidth));
+        output.imageHeight = std::max(0, static_cast<int>(imageHeight));
+    }
+
+    quint32 keypointCount = 0;
+    in >> keypointCount;
+    if (keypointCount > static_cast<quint32>(std::numeric_limits<int>::max()))
+    {
+        return false;
+    }
+    output.keypoints.reserve(static_cast<std::size_t>(keypointCount));
+    output.scores.reserve(static_cast<std::size_t>(keypointCount));
+    for (quint32 index = 0; index < keypointCount; ++index)
+    {
+        float x = 0.0f;
+        float y = 0.0f;
+        float score = 0.0f;
+        float size = 8.0f;
+        float angle = -1.0f;
+        in >> x >> y >> score;
+        if (version >= 2)
+        {
+            in >> size >> angle;
+        }
+        if (in.status() != QDataStream::Ok)
+        {
+            return false;
+        }
+
+        cv::KeyPoint keypoint;
+        keypoint.pt = cv::Point2f(x, y);
+        keypoint.response = score;
+        keypoint.size = (std::isfinite(size) && size > 0.0f) ? size : 8.0f;
+        keypoint.angle = std::isfinite(angle) ? angle : -1.0f;
+        output.keypoints.push_back(keypoint);
+        output.scores.push_back(score);
+    }
+
+    quint32 descriptorDimension = 0;
+    in >> descriptorDimension;
+    if (in.status() != QDataStream::Ok)
+    {
+        return false;
+    }
+
+    // QDataStream 以单精度写入每个描述子元素。这里只做 O(1) 长度校验，
+    // 既拒绝半写缓存，也不为几何验证分配 N x D 描述子矩阵。
+    const quint64 descriptorBytes =
+        static_cast<quint64>(keypointCount) *
+        static_cast<quint64>(descriptorDimension) *
+        static_cast<quint64>(sizeof(float));
+    const qint64 remainingBytes = file.size() - file.pos();
+    if (descriptorBytes > static_cast<quint64>(std::numeric_limits<qint64>::max()) ||
+        remainingBytes < static_cast<qint64>(descriptorBytes))
+    {
+        return false;
+    }
+
     return true;
 }
 

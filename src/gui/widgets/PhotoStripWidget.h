@@ -43,7 +43,8 @@ private:
 
     QListWidgetItem *createItem(const QJsonObject &entry);
     void startThumbnailLoad(const QString &imagePath);
-    void applyThumbnail(const ThumbnailResult &result);
+    void applyThumbnail(const ThumbnailResult &result, quint64 generation, const QString &projectPath);
+    void advanceThumbnailGeneration(bool clearCache);
     QStringList selectedPhotoPaths() const;
     QString resolveImagePath(const QString &imagePath) const;
     QString normalizedPath(const QString &imagePath) const;
@@ -54,5 +55,6 @@ private:
     QString _projectRootPath;
     QHash<QString, QList<QListWidgetItem *>> _itemsByPath;
     QHash<QString, QIcon> _thumbnailCache;
-    QSet<QString> _thumbnailLoadsInFlight;
+    QHash<QString, quint64> _thumbnailLoadsInFlight;
+    quint64 _thumbnailGeneration{};
 };

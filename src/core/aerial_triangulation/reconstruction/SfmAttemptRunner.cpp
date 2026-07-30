@@ -3,7 +3,7 @@
 #include "reconstruction/MarkerPriorLoader.h"
 
 #include "io/PathIO.h"
-#include "project/ProjectCameraIO.h"
+#include "ProjectCameraIO.h"
 #include "project/ProjectCommonUtils.h"
 #include "project/ProjectMetadata.h"
 #include "pipeline/IncrementalSfm.h"
@@ -19,9 +19,11 @@
 #include <opencv2/imgcodecs.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <limits>
 #include <map>
+#include <memory>
 #include <set>
 #include <utility>
 
@@ -104,6 +106,7 @@ Camera cameraWithIdentityPose(Camera camera)
 }
 
 void configureSfmOptions(const PreparedAerialTriangulationInput &input,
+                         const std::shared_ptr<std::atomic<int>> &registeredProgress,
                          IncrementalSfmOptions *options)
 {
     const SfmQualityPreset preset = presetForQuality(input.quality);
@@ -113,6 +116,34 @@ void configureSfmOptions(const PreparedAerialTriangulationInput &input,
     options->globalBAInterval = preset.globalBaInterval;
     options->baOptions.cancelFlag = input.cancelFlag;
     options->baOptions.numThreads = std::max(1, input.threads);
+    options->baOptions.progressCallback =
+        [progress = input.progressFn,
+         cancelFlag = input.cancelFlag,
+         registeredProgress](int currentIteration,
+                             int maxIterations,
+                             double avgRms,
+                             int validPoints)
+        {
+            if (cancelFlag && cancelFlag->load())
+            {
+                return false;
+            }
+            if (progress)
+            {
+                QString stage = QStringLiteral("光束法平差：迭代 %1/%2，RMS %3")
+                                    .arg(currentIteration)
+                                    .arg(maxIterations)
+                                    .arg(avgRms, 0, 'f', 4);
+                if (validPoints > 0)
+                {
+                    stage += QStringLiteral("，有效点 %1").arg(validPoints);
+                }
+                // BA 会在多次局部/全局阶段重复进入，百分比沿用当前已注册影像进度，
+                // 只更新真实迭代信息，避免整体工作流进度条来回跳动。
+                progress(stage, registeredProgress ? registeredProgress->load() : 0);
+            }
+            return true;
+        };
 
     if (input.useInitialPairHint)
     {
@@ -121,7 +152,9 @@ void configureSfmOptions(const PreparedAerialTriangulationInput &input,
         options->initImageId2 = input.initialImageId2;
     }
 
-    if (input.device.trimmed().compare(QStringLiteral("cpu"), Qt::CaseInsensitive) != 0)
+    const bool cpuOnly =
+        input.device.trimmed().compare(QStringLiteral("cpu"), Qt::CaseInsensitive) == 0;
+    if (!cpuOnly)
     {
         options->baOptions.backend = BABackend::Auto;
         options->baOptions.minNativeCudaCameras = 50;
@@ -133,7 +166,7 @@ void configureSfmOptions(const PreparedAerialTriangulationInput &input,
         options->baOptions.enableBackendQualityGate = true;
         options->baOptions.maxAcceptedRmsGrowth = 1.25;
         options->baOptions.minAcceptedValidTrackRatio = 0.60;
-        options->baOptions.compareAutoBackendWithLegacy = true;
+        options->baOptions.compareAutoBackendWithLegacy = false;
         options->baOptions.allowBackendFallback = true;
     }
 
@@ -143,6 +176,7 @@ void configureSfmOptions(const PreparedAerialTriangulationInput &input,
         options->filterMinTriAngle = 2.0;
         options->iterativeBARounds = 4;
     }
+    options->baOptions.filterMaxReprojError = options->filterMaxReprojError;
 
     options->enforceSequencePoseConsistency = input.enforceSequencePoseConsistency;
     options->sequenceLoopClosure = input.sequenceLoopClosure;
@@ -153,6 +187,17 @@ void configureSfmOptions(const PreparedAerialTriangulationInput &input,
         options->baOptions.maxSharedFocalScale = 1.55;
         options->baOptions.maxSharedFocalStepScale = 1.12;
         options->baOptions.maxSharedFocalIterations = 6;
+        if (cpuOnly && BundleAdjust::isBackendAvailable(BABackend::CeresCpu))
+        {
+            // CPU 模式仍使用 Ceres 联合求解焦距、位姿和三维点，避免 Legacy 分块
+            // 自标定在转台弱基线数据上出现焦距/尺度交替漂移。
+            options->baOptions.backend = BABackend::CeresCpu;
+        }
+        else if (!cpuOnly)
+        {
+            // GPU 规模不足时回落到 Ceres CPU，而不是回落到非联合的 Legacy 自标定。
+            options->baOptions.minCeresCpuObservations = 1;
+        }
     }
 }
 
@@ -197,7 +242,8 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
     }
 
     IncrementalSfmOptions sfmOptions;
-    configureSfmOptions(input, &sfmOptions);
+    const auto registeredProgress = std::make_shared<std::atomic<int>>(0);
+    configureSfmOptions(input, registeredProgress, &sfmOptions);
 
     const bool hasCompleteCameraFiles = input.cameraPaths.size() == input.images.size() &&
         std::all_of(input.cameraPaths.cbegin(), input.cameraPaths.cend(), [](const QString &path)
@@ -362,17 +408,18 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
     }
 
     const IncrementalSfmResult sfmResult = sfm.run(
-        [&input](int registered, int total, const std::string &message)
+        [&input, registeredProgress](int registered, int total, const std::string &message)
         {
             if (input.cancelFlag && input.cancelFlag->load())
             {
                 return false;
             }
+            const int percent = total > 0
+                ? std::clamp(static_cast<int>(100.0 * registered / total), 0, 100)
+                : 0;
+            registeredProgress->store(percent);
             if (input.progressFn)
             {
-                const int percent = total > 0
-                    ? std::clamp(static_cast<int>(100.0 * registered / total), 0, 100)
-                    : 0;
                 input.progressFn(QString::fromStdString(message), percent);
             }
             return true;
@@ -403,6 +450,19 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
     diagnostics.insert(QStringLiteral("control_network_applied"), sfmResult.controlNetworkApplied);
     diagnostics.insert(QStringLiteral("control_point_constraints"),
                        sfmResult.controlPointConstraintCount);
+    diagnostics.insert(QStringLiteral("ba_requested_backend"),
+                       QString::fromLatin1(BundleAdjust::backendName(sfmResult.baRequestedBackend)));
+    diagnostics.insert(QStringLiteral("ba_used_backend"),
+                       QString::fromLatin1(BundleAdjust::backendName(sfmResult.baUsedBackend)));
+    diagnostics.insert(QStringLiteral("ba_solve_status"),
+                       QString::fromLatin1(BundleAdjust::solveStatusName(sfmResult.baSolveStatus)));
+    diagnostics.insert(QStringLiteral("ba_solution_usable"), sfmResult.baSolutionUsable);
+    diagnostics.insert(QStringLiteral("ba_result_applied"), sfmResult.baResultApplied);
+    diagnostics.insert(QStringLiteral("ba_backend_fallback"), sfmResult.baBackendFallback);
+    diagnostics.insert(QStringLiteral("ba_observations"), sfmResult.baObservationCount);
+    diagnostics.insert(QStringLiteral("ba_total_seconds"), sfmResult.baTotalSeconds);
+    diagnostics.insert(QStringLiteral("ba_backend_message"),
+                       QString::fromStdString(sfmResult.baBackendMessage));
     diagnostics.insert(QStringLiteral("project_intrinsic_prior_inspected"),
                        intrinsicSanitization.inspectedCameraCount);
     diagnostics.insert(QStringLiteral("project_intrinsic_prior_dominant_group"),

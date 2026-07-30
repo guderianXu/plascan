@@ -1,6 +1,7 @@
 #include "LayerStitchedDebug.h"
 
 #include "Logger.h"
+#include "project/ProjectIO.h"
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -28,8 +29,8 @@ QString debugOutputDirectory(const QString &plascanPath, const QString &fallback
 {
     if (!plascanPath.trimmed().isEmpty())
     {
-        QDir projectRoot(QFileInfo(plascanPath).absolutePath());
-        return projectRoot.filePath(QStringLiteral(".plascan_tmp/debug"));
+        return QDir(xjw::common::project::ProjectIO::tmpDir(plascanPath))
+            .filePath(QStringLiteral("debug"));
     }
     return QFileInfo(fallbackImagePath).absolutePath() + QDir::separator() + QStringLiteral("plascan_debug");
 }

@@ -1,6 +1,6 @@
 #include "reconstruction/CameraIntrinsicPriorSanitizer.h"
 
-#include "project/ProjectCameraIO.h"
+#include "ProjectCameraIO.h"
 #include "project/ProjectCommonUtils.h"
 
 #include <Camera.h>

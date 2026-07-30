@@ -2,6 +2,7 @@
 
 #include "ProjectData.h"
 #include "ProjectMetadataOperations.h"
+#include "project/ProjectIO.h"
 
 #include <QDir>
 #include <QFile>
@@ -262,7 +263,9 @@ ResourceCleanupResult ProjectResourceCleanupService::cleanupGeneratedData(Projec
         return result;
     }
 
-    const QString projectRoot = QFileInfo(projectData->currentProjectPath()).absolutePath();
+    const QString projectRoot =
+        xjw::common::project::ProjectIO::projectRootFromPlascan(
+            projectData->currentProjectPath());
     QJsonObject meta = projectData->metadata();
     const QJsonArray sourceArray = meta.value(result.sectionArrayKey).toArray();
     QJsonArray keptArray;

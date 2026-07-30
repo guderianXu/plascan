@@ -37,7 +37,7 @@ TEST(NativeCudaBackendTest, ExplicitBackendReportsActiveWorkset)
 
     xjw::BAOptions options;
     options.backend = xjw::BABackend::NativeCuda;
-    options.refineCameraPose = true;
+    options.refineCameraPose = false;
     options.fixedCameraIndices.push_back(0);
     options.maxIterations = 1;
     options.enablePointFilter = false;
@@ -86,7 +86,7 @@ TEST(NativeCudaBackendTest, ReducesReprojectionRmsOnSyntheticGlobalProblem)
 
     xjw::BAOptions options;
     options.backend = xjw::BABackend::NativeCuda;
-    options.refineCameraPose = true;
+    options.refineCameraPose = false;
     options.fixedCameraIndices.push_back(0);
     options.maxIterations = 5;
     options.nativeCudaMaxPcgIterations = 80;

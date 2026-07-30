@@ -19,9 +19,11 @@ set(MVS_CXX_SOURCES
     DenseCloudQualityFilter.cpp
     DepthCompletenessMetrics.cpp
     DepthConsistencyCache.cpp
+    DepthConsistencyEvidencePolicy.cpp
     DepthAnchoredHoleInterpolator.cpp
     DepthCrossViewHoleRepair.cpp
     DepthGeometryConsistency.cpp
+    DepthPoseAlignmentRefiner.cpp
     DepthMapFusion.cpp
     DepthFrameQualityGate.cpp
     DepthPyramidPolicy.cpp
@@ -56,9 +58,11 @@ set(MVS_HEADERS
     DenseCloudQualityFilter.h
     DepthCompletenessMetrics.h
     DepthConsistencyCache.h
+    DepthConsistencyEvidencePolicy.h
     DepthAnchoredHoleInterpolator.h
     DepthCrossViewHoleRepair.h
     DepthGeometryConsistency.h
+    DepthPoseAlignmentRefiner.h
     MvsTypes.h
     MvsSourcePlanner.h
     MvsQualityReport.h
@@ -219,6 +223,38 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/src/core/mvs
         )
         gtest_discover_tests(test_mvs_depth_completeness)
+
+        add_executable(test_mvs_depth_consistency_evidence
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_depth_consistency_evidence.cpp
+        )
+        set_target_properties(test_mvs_depth_consistency_evidence PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
+        )
+        target_link_libraries(test_mvs_depth_consistency_evidence PRIVATE
+            mvs
+            GTest::gtest_main
+            ${OpenCV_LIBS}
+        )
+        target_include_directories(test_mvs_depth_consistency_evidence PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/core/mvs
+        )
+        gtest_discover_tests(test_mvs_depth_consistency_evidence)
+
+        add_executable(test_mvs_depth_pose_alignment
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_depth_pose_alignment.cpp
+        )
+        set_target_properties(test_mvs_depth_pose_alignment PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
+        )
+        target_link_libraries(test_mvs_depth_pose_alignment PRIVATE
+            mvs
+            GTest::gtest_main
+            ${OpenCV_LIBS}
+        )
+        target_include_directories(test_mvs_depth_pose_alignment PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/core/mvs
+        )
+        gtest_discover_tests(test_mvs_depth_pose_alignment DISCOVERY_MODE PRE_TEST)
 
         add_executable(test_mvs_cross_view_hole_repair
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_cross_view_hole_repair.cpp

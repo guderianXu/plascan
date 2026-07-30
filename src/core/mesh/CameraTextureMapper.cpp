@@ -1,5 +1,6 @@
 #include "TextureMapper.h"
 
+#include "CameraTextureMapperV4.h"
 #include "MeshColorizer.h"
 #include "io/PathIO.h"
 
@@ -361,6 +362,11 @@ bool TextureMapper::generateCameraTexturedModelFromMeshFile(
     TextureMappingResult *result,
     std::string *errorMsg)
 {
+    if (config.enableV4)
+    {
+        return generateCameraTexturedModelV4(
+            meshPath, productsDir, config, views, result, errorMsg);
+    }
     if (result)
     {
         *result = TextureMappingResult();

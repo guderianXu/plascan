@@ -28,6 +28,7 @@ struct DepthAnchoredHoleInterpolationOptions
 
 struct DepthAnchoredHoleInterpolationStats
 {
+    std::uint64_t anchorPixelCount = 0;
     std::uint64_t candidateComponentCount = 0;
     std::uint64_t acceptedComponentCount = 0;
     std::uint64_t interpolatedPixelCount = 0;

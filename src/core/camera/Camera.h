@@ -174,6 +174,20 @@ public:
                                     double &positiveDepth) const;
 
     /**
+     * @brief 返回世界点沿相机物理前向光轴的有符号深度。
+     *
+     * 普通相机返回 `Z_cam`，`depthAxisFlipped` 相机返回 `-Z_cam`。
+     * 相机无效、输入为空或结果非有限时返回 NaN。
+     */
+    double positiveDepth(const double world[3]) const;
+
+    /**
+     * @brief 判断世界点是否位于相机物理前方。
+     * @param minimumDepth 最小允许正深度，默认排除光心附近的病态点。
+     */
+    bool isPointInFront(const double world[3], double minimumDepth = 1.0e-9) const;
+
+    /**
      * @brief 有符号投影：允许 Z_cam < 0，使用 cam[2] 本身（带符号）做透视除法。
      * @details 对于相对定向产生的「场景在相机-Z方向」数据，Z_cam = -|depth| < 0，
      *   但投影公式 u = u_dir * fu * (X_cam / Z_cam) + cu 在 Z_cam < 0 时仍然

@@ -1,6 +1,7 @@
 #include "ProjectTiePointResultService.h"
 
 #include "ProjectData.h"
+#include "project/ProjectIO.h"
 
 #include <QDir>
 #include <QFile>
@@ -31,8 +32,8 @@ QString resolveProjectPath(const QString &projectPath, const QString &path)
         return QDir::cleanPath(pathInfo.absoluteFilePath());
     }
 
-    const QString projectDir = QFileInfo(projectPath).absolutePath();
-    return QDir::cleanPath(QDir(projectDir).filePath(trimmedPath));
+    return xjw::common::project::ProjectIO::resolveProjectResourcePath(
+        projectPath, trimmedPath);
 }
 
 QString pathKey(const QString &path)

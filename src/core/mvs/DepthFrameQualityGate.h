@@ -33,6 +33,12 @@ struct DepthFilterSettings
     int minConsistentViews = 3;
 };
 
+struct DepthConfidenceThresholds
+{
+    float patchMatch = 0.60f;
+    float fusion = 0.65f;
+};
+
 struct DepthFrameQualityInput
 {
     MvsSceneProfile sceneProfile = MvsSceneProfile::OrbitalObject;
@@ -69,6 +75,13 @@ enum class DepthConsistencyEvidence
 float calibrateDepthConfidence(const DepthConfidenceComponents &components);
 
 DepthFilterSettings depthFilterSettings(DepthFilterMode mode, int availableSourceViews);
+
+DepthConfidenceThresholds depthConfidenceThresholds(
+    MvsSceneProfile sceneProfile,
+    DepthFilterMode filterMode,
+    int availableSourceViews,
+    float configuredPatchMatch,
+    float configuredFusion);
 
 int minimumDepthConsistencySourceConfirmations(DepthFilterMode mode,
                                                int availableSourceViews);

@@ -14,19 +14,19 @@
 
 ## DISK / ALIKED（特征提取）
 
-DISK 和 ALIKED 输出动态数量的关键点，无法导出为 TorchScript。使用 Python 脚本提取特征，输出与 SuperPoint 相同格式的 `.sp` 文件：
+发行版默认使用 `disk_extractor_*_8192.torchscript` 和
+`aliked_extractor_*_480.torchscript`，由 C++ 提取器直接加载。下面的 Python 脚本仅用于手动提取或
+排查模型行为，输出与 SuperPoint 相同格式的 `.sp` 文件：
 
-```bash
-conda activate plascan
-
+```powershell
 # DISK
-python scripts/extract_features.py --algo disk \
+.\.venv\Scripts\python.exe scripts\workflows\extract_features.py --algo disk \
     --images /path/to/images/*.jpg \
     --output /path/to/sp_output \
     --max-keypoints 2048
 
 # ALIKED
-python scripts/extract_features.py --algo aliked \
+.\.venv\Scripts\python.exe scripts\workflows\extract_features.py --algo aliked \
     --images /path/to/images/*.jpg \
     --output /path/to/sp_output \
     --max-keypoints 2048
@@ -39,9 +39,7 @@ python scripts/extract_features.py --algo aliked \
 RoMa 同样无法导出为 TorchScript。使用 Python 脚本直接匹配：
 
 ```bash
-conda activate plascan
-
-python scripts/match_roma.py \
+.\.venv\Scripts\python.exe scripts\workflows\match_roma.py \
     --scene outdoor \
     --pairs img001__img002 img001__img003 \
     --image-dir /path/to/images \
@@ -55,8 +53,8 @@ python scripts/match_roma.py \
 LoFTR 已导出为 TorchScript，可直接在 GUI 中使用（FeatureMatchingDialog → 选择 LoFTR）。
 
 模型文件：
-- `loftr_outdoor_cuda.pt` / `loftr_outdoor_cpu.pt` — 室外/航空影像
-- `loftr_indoor_cuda.pt` / `loftr_indoor_cpu.pt` — 室内/近景
+- `loftr_outdoor_cuda.torchscript` / `loftr_outdoor_cpu.torchscript` — 室外/航空影像
+- `loftr_indoor_cuda.torchscript` / `loftr_indoor_cpu.torchscript` — 室内/近景
 
 ## SAM2.1（AI 蒙版）
 
@@ -76,13 +74,13 @@ GUI 默认优先使用 CUDA，勾选“CUDA 不可用时回退 CPU”后会在 C
 
 GUI 会在“生成蒙版”对话框中显示每个 SAM2.1 变体的安装状态。未安装或缺少 CPU/CUDA
 TorchScript 文件时，可以点击“安装模型...”下载官方 checkpoint，并调用项目内
-`scripts/export_sam21_torchscript.py` 导出 TorchScript。该流程假定软件分发时已经内置包含
+`scripts/models/export_sam21_torchscript.py` 导出 TorchScript。该流程假定软件分发时已经内置包含
 `torch` 和 `sam2` 的 Python 运行时；程序不会在 GUI 中自动安装 Python 包。
 
 也可以用命令行安装指定变体：
 
 ```bash
-python scripts/install_sam21_model.py \
+python scripts/models/install_sam21_model.py \
     --variant small \
     --devices auto \
     --model-dir resources/models
@@ -96,17 +94,16 @@ PATH 中的 Python。直接运行脚本时仍使用启动该脚本的当前 Pyth
 导出依赖 Meta SAM2 Python 包和 PyTorch：
 
 ```bash
-conda activate plascan
-pip install git+https://github.com/facebookresearch/sam2.git
+.\.venv\Scripts\python.exe -m pip install git+https://github.com/facebookresearch/sam2.git
 
 # 默认导出 tiny，CPU；如果当前环境有 CUDA，会同时导出 CUDA
-python scripts/export_sam21_torchscript.py \
+.\.venv\Scripts\python.exe scripts\models\export_sam21_torchscript.py \
     --variant tiny \
     --checkpoint resources/models/sam2.1_hiera_tiny.pt \
     --output-dir resources/models
 
 # 强制导出 CPU + CUDA
-python scripts/export_sam21_torchscript.py \
+.\.venv\Scripts\python.exe scripts\models\export_sam21_torchscript.py \
     --variant tiny \
     --checkpoint resources/models/sam2.1_hiera_tiny.pt \
     --devices cpu,cuda \
@@ -142,8 +139,7 @@ OpenCV，GUI 仍可使用 U2Net CPU 推理，CUDA 按钮会在运行时回退或
 如需重新导出 LoFTR：
 
 ```bash
-conda activate plascan
-python scripts/export_models.py --loftr
+.\.venv\Scripts\python.exe scripts\models\export_models.py --loftr
 ```
 
 依赖：`pip install kornia`（plascan 环境已包含）

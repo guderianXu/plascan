@@ -48,6 +48,8 @@ struct ProcessingBaselineDefinition
     QString createdAtUtc;
     QJsonObject inputSnapshot;
     QString inputFingerprintSha256;
+    QJsonObject stageSnapshots;
+    QJsonObject stageFingerprintsSha256;
     ProcessingBaselineMeshMetrics referenceMesh;
     ProcessingBaselineThresholds thresholds;
 };
@@ -55,8 +57,10 @@ struct ProcessingBaselineDefinition
 struct ProcessingBaselineComparison
 {
     bool inputMatches = false;
+    bool stageMatches = true;
     bool passed = false;
     QStringList failures;
+    QStringList stageMismatches;
     ProcessingBaselineMeshMetrics candidateMesh;
     QJsonObject report;
 };
@@ -65,6 +69,7 @@ class ProcessingBaselineManager
 {
 public:
     static QString inputFingerprint(const QJsonObject &inputSnapshot);
+    static QJsonObject stageFingerprints(const QJsonObject &stageSnapshots);
 
     static ProcessingBaselineMeshMetrics analyzeMesh(
         const xjw::mesh::TriMesh &mesh);
@@ -74,12 +79,14 @@ public:
         const QString &sceneType,
         const QJsonObject &inputSnapshot,
         const xjw::mesh::TriMesh &referenceMesh,
-        const ProcessingBaselineThresholds &thresholds = {});
+        const ProcessingBaselineThresholds &thresholds = {},
+        const QJsonObject &stageSnapshots = {});
 
     static ProcessingBaselineComparison compare(
         const ProcessingBaselineDefinition &baseline,
         const QJsonObject &candidateInputSnapshot,
-        const xjw::mesh::TriMesh &candidateMesh);
+        const xjw::mesh::TriMesh &candidateMesh,
+        const QJsonObject &candidateStageSnapshots = {});
 
     static QJsonObject toJson(const ProcessingBaselineDefinition &baseline);
 

@@ -457,6 +457,30 @@ void DualImageViewer::resetBothViews()
     _rightView->resetZoom();
 }
 
+void DualImageViewer::clearViewer()
+{
+    _matchPtsA.clear();
+    _matchPtsB.clear();
+    if (_leftView)
+    {
+        _leftView->clearImage();
+    }
+    if (_rightView)
+    {
+        _rightView->clearImage();
+    }
+    if (_overlay)
+    {
+        _overlay->setMatches({}, {});
+        _overlay->clearHighlightedIndices();
+    }
+    if (_disparityOverlay)
+    {
+        _disparityOverlay->hide();
+    }
+    updateOverlayGeometry();
+}
+
 int DualImageViewer::totalMatchCount() const
 {
     return _matchPtsA.size();

@@ -54,6 +54,7 @@ HostCamera makeHostCamera(const Camera &camera, int originalIndex, const BAOptio
     host.tangentialP2 = projection.tangentialP2;
     host.uAxisSign = projection.uAxisSign;
     host.vAxisSign = projection.vAxisSign;
+    host.depthAxisFlipped = projection.depthAxisFlipped ? 1 : 0;
     host.fixed = cameraFixed(originalIndex, options) ? 1 : 0;
     host.originalIndex = originalIndex;
     return host;

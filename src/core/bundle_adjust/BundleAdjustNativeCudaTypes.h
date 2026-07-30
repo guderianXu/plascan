@@ -23,6 +23,7 @@ struct HostCamera
     double tangentialP2 = 0.0;
     int uAxisSign = 1;
     int vAxisSign = 1;
+    int depthAxisFlipped = 0;
     int fixed = 0;
     int originalIndex = -1;
 };

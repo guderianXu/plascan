@@ -5,8 +5,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPT_PATH = REPO_ROOT / "scripts" / "install_sam21_model.py"
-EXPORT_SCRIPT_PATH = REPO_ROOT / "scripts" / "export_sam21_torchscript.py"
+SCRIPT_PATH = REPO_ROOT / "scripts" / "models" / "install_sam21_model.py"
+EXPORT_SCRIPT_PATH = REPO_ROOT / "scripts" / "models" / "export_sam21_torchscript.py"
 
 
 def load_script_module():
@@ -42,7 +42,7 @@ class InstallSam21ModelScriptTest(unittest.TestCase):
         )
 
         self.assertEqual(command[0], "C:/PlaScan/runtime/python.exe")
-        self.assertEqual(command[1], "E:/code/plascan/scripts/export_sam21_torchscript.py")
+        self.assertEqual(command[1], "E:/code/plascan/scripts/models/export_sam21_torchscript.py")
         self.assertIn("--variant", command)
         self.assertIn("small", command)
         self.assertIn("--checkpoint", command)

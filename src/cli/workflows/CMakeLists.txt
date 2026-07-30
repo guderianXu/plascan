@@ -2,7 +2,10 @@
 if(TARGET aerial_triangulation AND TARGET plascan_cli_photogrammetry_common)
     add_plascan_cli(aerial_triangulation_cli
         SOURCE cli_aerial_triangulation.cpp
-        LIBRARIES aerial_triangulation plascan_cli_photogrammetry_common
+        LIBRARIES
+            aerial_triangulation
+            plascan_cli_photogrammetry_common
+            plascan_common_project
         COMPILE_DEFINITIONS PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
         WITH_NVRTC_RPATH
     )

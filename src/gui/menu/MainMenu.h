@@ -42,7 +42,7 @@ public:
     /**
      * @brief 构造函数：绑定或创建指定主窗口上的菜单系统与工具栏。
      *
-     * 优先绑定 MainWindow.ui 中的项目、视图、工作流程、重建、工具、帮助菜单和主工具栏；
+     * 优先绑定 MainWindow.ui 中的项目、视图、工作流程、工具、帮助菜单和主工具栏；
      * 若主窗口未通过 .ui 初始化，则回退到代码创建，保持单元测试可独立运行。
      *
      * @param mainWindow 要在其上添加菜单/工具栏的主窗口，不可为 nullptr。
@@ -167,6 +167,16 @@ public:
     QAction *showCameraImagesInForegroundAction() const;
     QAction *showCameraImagesInBackgroundAction() const;
     QAction *lockCameraImageAction() const;
+    QAction *tiePointColorModeAction() const;
+    QAction *tiePointElevationModeAction() const;
+    QAction *tiePointImageCountModeAction() const;
+    QAction *modelTextureModeAction() const;
+    QAction *modelShadedModeAction() const;
+    QAction *modelSolidModeAction() const;
+    QAction *modelWireframeModeAction() const;
+    QAction *modelElevationModeAction() const;
+    QAction *modelConfidenceModeAction() const;
+    QAction *modelAssignedImageModeAction() const;
 
     /** @brief 返回"河南大学校徽"显示/隐藏切换动作（可检查状态）。 */
     QAction *toggleHenanUniversityBrandAction() const;
@@ -179,24 +189,8 @@ public:
     /** @brief 返回"添加文件夹"动作（批量导入目录内的所有图片）。 */
     QAction *addFolderAction() const;
 
-    /** @brief 返回"特征点查找"（通用特征检测）动作。 */
-    QAction *detectFeaturesAction() const;
-
-    /** @brief 返回"获取重叠对"动作。 */
-    QAction *vocabularyOverlapAction() const;
-
     /** @brief 返回"特征点可视化设置"对话框动作。 */
     QAction *featureVisualizationAction() const;
-
-    /** @brief 返回"创建连接点"（通用特征匹配）动作。 */
-    QAction *matchFeaturesAction() const;
-
-    /** @brief 返回"查看匹配"（匹配结果可视化）动作。 */
-    QAction *viewMatchesAction() const;
-    QAction *denseMatchAction() const;
-
-    /** @brief 返回"三维重建"（一键完整建模）动作。 */
-    QAction *threeDReconstructionAction() const;
 
     /** @brief 返回工作流程中的"空中三角测量"参数对话框动作。 */
     QAction *workflowAerialTriangulationAction() const;
@@ -219,6 +213,9 @@ public:
     /** @brief 返回"生成模型"动作。 */
     QAction *generateModelAction() const;
 
+    /** @brief 返回"生成纹理"动作。 */
+    QAction *generateTextureAction() const;
+
     /** @brief 返回"查看工作流程报告"动作。 */
     QAction *viewWorkflowReportAction() const;
     QAction *createTiePointsAction() const;
@@ -235,18 +232,6 @@ public:
     QAction *importReferenceDatasetAction() const;
     QAction *referenceQualityCheckAction() const;
     QAction *referenceTerrainBundleAdjustAction() const;
-
-    // ==== 重建菜单动作（稀疏/密集） ====
-
-    QAction *buildObsNetworkAction() const;
-    QAction *initCameraPoseAction() const;
-    QAction *aerialTriangulationAction() const;
-    QAction *triangulateAction() const;
-    QAction *reconBundleAdjustAction() const;
-    QAction *sparseCloudPostProcessAction() const;
-    QAction *depthMapEstimateAction() const;
-    QAction *fuseDepthMapsAction() const;
-    QAction *refineDenseCloudAction() const;
 
     /** @brief 返回“导出匹配对(.lis)”动作。 */
     QAction *exportMatchedPairsAction() const;
@@ -348,6 +333,16 @@ private:
     QAction *_showCameraImagesInForegroundAct{}; ///< 在前景中显示当前相机图像
     QAction *_showCameraImagesInBackgroundAct{}; ///< 在后景中显示当前相机图像
     QAction *_lockCameraImageAct{}; ///< 锁定当前显示的相机图像
+    QAction *_tiePointColorModeAct{}; ///< 连接点原始 RGB 颜色
+    QAction *_tiePointElevationModeAct{}; ///< 连接点按高程着色
+    QAction *_tiePointImageCountModeAct{}; ///< 连接点按影像观测数着色
+    QAction *_modelTextureModeAct{}; ///< 模型纹理
+    QAction *_modelShadedModeAct{}; ///< 模型平滑阴影
+    QAction *_modelSolidModeAct{}; ///< 模型实体
+    QAction *_modelWireframeModeAct{}; ///< 模型线框
+    QAction *_modelElevationModeAct{}; ///< 模型按高程着色
+    QAction *_modelConfidenceModeAct{}; ///< 模型按视角支持可信度着色
+    QAction *_modelAssignedImageModeAct{}; ///< 模型按指定影像着色
     QAction *_toggleHenanUniversityBrandAct{}; ///< 显示/隐藏河南大学校徽
     // ---- 面板开关动作 ----
     QAction *_toggleWorkspaceAct{}; ///< 左侧工作区显示/隐藏
@@ -368,15 +363,10 @@ private:
     // ---- 工作流程菜单动作 ----
     QAction *_addPhotoAct{};            ///< 添加单张照片
     QAction *_addFolderAct{};           ///< 批量添加文件夹中的图片
-    QAction *_detectFeaturesAct{};      ///< 特征点检测
-    QAction *_vocabularyOverlapAct{};   ///< 基于特征词汇预获取重叠影像对
     QAction *_featureVisualizationAct{};///< 特征点可视化设置对话框
-    QAction *_matchFeaturesAct{};       ///< 特征点匹配生成连接点
-    QAction *_viewMatchesAct{};         ///< 查看匹配结果
-    QAction *_denseMatchAct{};          ///< 密集匹配
     QAction *_workflowAerialTriangulationAct{}; ///< 工作流程中的对齐照片参数对话框
-    QAction *_threeDReconstructionAct{}; ///< 三维重建（一键完整建模）
     QAction *_generateModelAct{};       ///< 生成模型（源数据选择）
+    QAction *_generateTextureAct{};     ///< 生成纹理（已有模型投影纹理）
     QAction *_overlapAnalysisAct{};     ///< 重叠度分析
     QAction *_intersectionCheckAct{};   ///< 前方交汇精度检验
     QAction *_intersectionViewResultsAct{}; ///< 查看前方交汇结果
@@ -399,15 +389,5 @@ private:
     QAction *_referenceQualityCheckAct{};     ///< 使用参考数据生成精度检查报告
     QAction *_referenceTerrainBundleAdjustAct{}; ///< 参考地形软约束 BA 前置检查
 
-    // ---- 重建菜单动作 ----
-    QAction *_buildObsNetworkAct{};         ///< 构建观测网络模型
-    QAction *_initCameraPoseAct{};          ///< 初始化相机位姿
-    QAction *_aerialTriangulationAct{};     ///< 正式空中三角测量（SfM + BA）
-    QAction *_triangulateAct{};             ///< 两视预览云三角化
-    QAction *_reconBundleAdjustAct{};       ///< 光束法平差（重建菜单）
-    QAction *_sparseCloudPostProcessAct{};  ///< 稀疏点云后处理
-    QAction *_depthMapEstimateAct{};        ///< 深度图估计
-    QAction *_fuseDepthMapsAct{};           ///< 深度图融合
-    QAction *_refineDenseCloudAct{};        ///< 密集点云后处理
     QAction *_exportMatchedPairsAct{};      ///< 导出匹配影像对 .lis
 };

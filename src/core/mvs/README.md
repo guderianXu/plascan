@@ -142,7 +142,7 @@ Useful filters:
 
 ```powershell
 ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "MvsWorkspaceManifest|MvsSourcePlanner|MvsDepthPostprocess|MvsPipelineTest" --output-on-failure
-ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "DenseCloudDialog|DepthMapPersistence|DepthFrameUtils|DenseDepth" --output-on-failure
+ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "DenseCloudRefinement|DenseCloudQualityFilter|DepthMapPersistence|DepthFrameUtils|DenseDepth" --output-on-failure
 ```
 
 For the new pyramid components, the direct filter is:

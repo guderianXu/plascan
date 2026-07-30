@@ -57,6 +57,7 @@ public:
     // 快捷操作
     void fitBothViews();
     void resetBothViews();
+    void clearViewer();
     // 高亮/筛选匹配线：只显示指定索引集合或清除高亮
     void highlightMatchIndex(int index);
     void highlightMatchIndices(const QVector<int> &indices);

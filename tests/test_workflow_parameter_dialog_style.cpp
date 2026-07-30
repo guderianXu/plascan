@@ -17,7 +17,7 @@
 #include <QSignalSpy>
 #include <QToolButton>
 
-#include "GenerateModelDialog.h"
+#include "reconstruction/GenerateModelDialog.h"
 
 namespace
 {

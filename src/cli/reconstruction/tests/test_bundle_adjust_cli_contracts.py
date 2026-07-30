@@ -31,6 +31,16 @@ class BundleAdjustCliContractsTest(unittest.TestCase):
         self.assertNotIn("QString toQString(", source)
         self.assertIn("baOptions.backend", source)
 
+    def test_default_output_uses_current_chunk_bundle_adjust_directory(self):
+        source = (ROOT / "src/cli/reconstruction/cli_bundle_adjust.cpp").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("ProjectIO::projectBundleAdjustDir(projectPath)", source)
+        self.assertIn(
+            "未指定时写入当前 Chunk 的 bundle_adjust/<timestamp>", source
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

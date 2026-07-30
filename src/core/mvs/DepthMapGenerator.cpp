@@ -6,6 +6,7 @@
 #include "DepthMapGenerator.h"
 #include "DenseCloudBuilder.h"
 #include "DepthConsistencyCache.h"
+#include "DepthConsistencyEvidencePolicy.h"
 #include "DepthCrossViewHoleRepair.h"
 #include "DepthGeometryConsistency.h"
 #include "DepthFrameUtils.h"
@@ -995,6 +996,7 @@ CrossViewHoleRepairOptions orbitalCrossViewHoleRepairOptions(
         config.twoSourceGrowthNormalAngleDegrees;
     options.maximumGrowthComponentArea =
         config.twoSourceGrowthMaximumComponentArea;
+    options.includeValidNativeInterpolationAnchors = true;
     options.anchoredInterpolation.enabled = true;
     options.anchoredInterpolation.maximumComponentArea = 32000;
     options.anchoredInterpolation.maximumComponentAreaRatio = 0.25f;
@@ -1385,15 +1387,15 @@ DepthAnchoredHoleInterpolationStats repairPostprocessedInternalDepthHoles(
         cv::resize(
             support_mask, support_mask, depth.size(), 0.0, 0.0, cv::INTER_NEAREST);
     }
-    cv::Mat anchor_mask = *result.crossViewRepairedMask;
-    if (anchor_mask.size() != depth.size())
-    {
-        cv::resize(
-            anchor_mask, anchor_mask, depth.size(), 0.0, 0.0, cv::INTER_NEAREST);
-    }
+    cv::Mat anchor_mask = depth > 0.0f;
     if (result.crossViewRepairedMask->size() != depth.size())
     {
-        *result.crossViewRepairedMask = anchor_mask.clone();
+        cv::resize(*result.crossViewRepairedMask,
+                   *result.crossViewRepairedMask,
+                   depth.size(),
+                   0.0,
+                   0.0,
+                   cv::INTER_NEAREST);
     }
     DepthAnchoredHoleInterpolationOptions options;
     options.enabled = true;
@@ -4002,6 +4004,15 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
         // 2 源视图：适当降低阈值但不可过低，0.10 会保留大量低质量匹配→噪声
         pmCfg.confidenceThresh = std::min(pmCfg.confidenceThresh, 0.20f);
     }
+    const DepthConfidenceThresholds confidence_thresholds =
+        depthConfidenceThresholds(
+            _effectiveSceneProfile,
+            _effectiveDepthFilterMode,
+            static_cast<int>(srcGrays.size()),
+            pmCfg.confidenceThresh,
+            config.fusion.confidenceThresh);
+    pmCfg.confidenceThresh = confidence_thresholds.patchMatch;
+    result.effectivePatchMatchConfidenceThreshold = pmCfg.confidenceThresh;
 
     // 诊断输出
     const std::array<double, 9> refRotation = refCam.worldToCameraRotation();
@@ -4582,6 +4593,12 @@ FusionFrameInput DepthMapGenerator::buildFusionFrame(const DepthFrameResult &res
             filter_settings.localDepthOutlierRelThreshold;
         fusion_config.minSpeckleComponentArea = filter_settings.minComponentArea;
         fusion_config.minConsistentViews = filter_settings.minConsistentViews;
+        fusion_config.confidenceThresh = depthConfidenceThresholds(
+            _effectiveSceneProfile,
+            _effectiveDepthFilterMode,
+            static_cast<int>(res.sourceViewIndices.size()),
+            _config.patchMatch.confidenceThresh,
+            fusion_config.confidenceThresh).fusion;
         frame.depthPostprocess = postprocessFusionDepthMap(filteredDepth,
                                                            filteredConfidence,
                                                            fusion_config,
@@ -4650,7 +4667,8 @@ void DepthMapGenerator::crossCheckDepthConsistency()
         {
             return;
         }
-        if (!_depthFrames[i].eligibleForFusion() || !_depthFrames[i].depthMap)
+        if (!_depthFrames[i].eligibleForConsistencyCheck() ||
+            !_depthFrames[i].depthMap)
         {
             continue;
         }
@@ -4780,6 +4798,25 @@ void DepthMapGenerator::crossCheckDepthConsistency()
 
         // 剔除不一致像素
         depthI.setTo(0, consistentMask == 0);
+        WeakNativeDepthRetentionStats weak_native_retention;
+        if (_effectiveSceneProfile == MvsSceneProfile::OrbitalObject)
+        {
+            const cv::Mat empty_confidence;
+            const cv::Mat &original_confidence = _depthFrames[i].confidence
+                ? *_depthFrames[i].confidence
+                : empty_confidence;
+            weak_native_retention = retainWeaklyVerifiedNativeDepth(
+                depthBackup,
+                original_confidence,
+                repair_mask,
+                consistent_votes,
+                contradicted_votes,
+                {},
+                &depthI,
+                _depthFrames[i].confidence
+                    ? _depthFrames[i].confidence.data()
+                    : nullptr);
+        }
         _depthFrames[i].crossViewRepairedMask = QSharedPointer<cv::Mat>::create();
         const CrossViewHoleRepairStats repair_stats =
             repairDepthHolesFromProjectedSources(
@@ -4796,8 +4833,60 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                 &camI,
                 i >= 0 && i < static_cast<int>(_grayCache.size())
                     ? &_grayCache[static_cast<std::size_t>(i)] : nullptr);
+        WeakNativeDepthRetentionOptions unconfirmed_backfill_options;
+        unconfirmed_backfill_options.minimumConfirmationCount =
+            std::numeric_limits<int>::max();
+        unconfirmed_backfill_options.retainUnconfirmedWithoutContradiction = true;
+        const cv::Mat empty_backfill_confidence;
+        const cv::Mat &original_backfill_confidence = _depthFrames[i].confidence
+            ? *_depthFrames[i].confidence
+            : empty_backfill_confidence;
+        const WeakNativeDepthRetentionStats unconfirmed_native_backfill =
+            retainWeaklyVerifiedNativeDepth(
+                depthBackup,
+                original_backfill_confidence,
+                repair_mask,
+                consistent_votes,
+                contradicted_votes,
+                unconfirmed_backfill_options,
+                &depthI,
+                _depthFrames[i].confidence
+                    ? _depthFrames[i].confidence.data()
+                    : nullptr);
         _depthFrames[i].crossViewRepairDiagnostics =
             crossViewHoleRepairStatsToJson(repair_stats);
+        _depthFrames[i].crossViewRepairDiagnostics.insert(
+            QStringLiteral("weak_native_retention"),
+            QJsonObject{
+                {QStringLiteral("considered_pixel_count"),
+                 static_cast<double>(
+                     weak_native_retention.consideredPixelCount)},
+                {QStringLiteral("retained_pixel_count"),
+                 static_cast<double>(
+                     weak_native_retention.retainedPixelCount)},
+                {QStringLiteral("retained_unconfirmed_pixel_count"),
+                 static_cast<double>(
+                     weak_native_retention.retainedUnconfirmedPixelCount)},
+                {QStringLiteral("rejected_contradiction_pixel_count"),
+                 static_cast<double>(
+                     weak_native_retention.rejectedContradictionPixelCount)},
+                {QStringLiteral("rejected_no_confirmation_pixel_count"),
+                 static_cast<double>(
+                     weak_native_retention.rejectedNoConfirmationPixelCount)},
+                {QStringLiteral("confidence_multiplier"), 0.55},
+                {QStringLiteral("minimum_retained_confidence"), 0.80}});
+        _depthFrames[i].crossViewRepairDiagnostics.insert(
+            QStringLiteral("unconfirmed_native_backfill"),
+            QJsonObject{
+                {QStringLiteral("considered_pixel_count"),
+                 static_cast<double>(
+                     unconfirmed_native_backfill.consideredPixelCount)},
+                {QStringLiteral("retained_pixel_count"),
+                 static_cast<double>(
+                     unconfirmed_native_backfill.retainedPixelCount)},
+                {QStringLiteral("rejected_contradiction_pixel_count"),
+                 static_cast<double>(
+                     unconfirmed_native_backfill.rejectedContradictionPixelCount)}});
         _depthFrames[i].depthCompleteness.crossViewRepairedCount +=
             static_cast<int>(repair_stats.repairedPixelCount);
         cv::Mat restoration_mask = _depthFrames[i].supportRegionMask &&
@@ -4981,7 +5070,7 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             remove_pending_files();
             return false;
         }
-        if (!_depthFrames[frame_index].eligibleForFusion())
+        if (!_depthFrames[frame_index].eligibleForConsistencyCheck())
         {
             continue;
         }
@@ -5134,6 +5223,19 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
 
         const int valid_before = cv::countNonZero(reference->depth > 0.0f);
         filtered_depth.setTo(0.0f, consistent_mask == 0);
+        WeakNativeDepthRetentionStats weak_native_retention;
+        if (_effectiveSceneProfile == MvsSceneProfile::OrbitalObject)
+        {
+            weak_native_retention = retainWeaklyVerifiedNativeDepth(
+                reference->depth,
+                reference->confidence,
+                repair_mask,
+                consistent_votes,
+                contradicted_votes,
+                {},
+                &filtered_depth,
+                filtered_confidence.empty() ? nullptr : &filtered_confidence);
+        }
         _depthFrames[frame_index].crossViewRepairedMask =
             QSharedPointer<cv::Mat>::create();
         const CrossViewHoleRepairStats repair_stats =
@@ -5151,8 +5253,54 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 &reference_camera,
                 frame_index >= 0 && frame_index < static_cast<int>(_grayCache.size())
                     ? &_grayCache[static_cast<std::size_t>(frame_index)] : nullptr);
+        WeakNativeDepthRetentionOptions unconfirmed_backfill_options;
+        unconfirmed_backfill_options.minimumConfirmationCount =
+            std::numeric_limits<int>::max();
+        unconfirmed_backfill_options.retainUnconfirmedWithoutContradiction = true;
+        const WeakNativeDepthRetentionStats unconfirmed_native_backfill =
+            retainWeaklyVerifiedNativeDepth(
+                reference->depth,
+                reference->confidence,
+                repair_mask,
+                consistent_votes,
+                contradicted_votes,
+                unconfirmed_backfill_options,
+                &filtered_depth,
+                filtered_confidence.empty() ? nullptr : &filtered_confidence);
         _depthFrames[frame_index].crossViewRepairDiagnostics =
             crossViewHoleRepairStatsToJson(repair_stats);
+        _depthFrames[frame_index].crossViewRepairDiagnostics.insert(
+            QStringLiteral("weak_native_retention"),
+            QJsonObject{
+                {QStringLiteral("considered_pixel_count"),
+                 static_cast<double>(
+                     weak_native_retention.consideredPixelCount)},
+                {QStringLiteral("retained_pixel_count"),
+                 static_cast<double>(
+                     weak_native_retention.retainedPixelCount)},
+                {QStringLiteral("retained_unconfirmed_pixel_count"),
+                 static_cast<double>(
+                     weak_native_retention.retainedUnconfirmedPixelCount)},
+                {QStringLiteral("rejected_contradiction_pixel_count"),
+                 static_cast<double>(
+                     weak_native_retention.rejectedContradictionPixelCount)},
+                {QStringLiteral("rejected_no_confirmation_pixel_count"),
+                 static_cast<double>(
+                     weak_native_retention.rejectedNoConfirmationPixelCount)},
+                {QStringLiteral("confidence_multiplier"), 0.55},
+                {QStringLiteral("minimum_retained_confidence"), 0.80}});
+        _depthFrames[frame_index].crossViewRepairDiagnostics.insert(
+            QStringLiteral("unconfirmed_native_backfill"),
+            QJsonObject{
+                {QStringLiteral("considered_pixel_count"),
+                 static_cast<double>(
+                     unconfirmed_native_backfill.consideredPixelCount)},
+                {QStringLiteral("retained_pixel_count"),
+                 static_cast<double>(
+                     unconfirmed_native_backfill.retainedPixelCount)},
+                {QStringLiteral("rejected_contradiction_pixel_count"),
+                 static_cast<double>(
+                     unconfirmed_native_backfill.rejectedContradictionPixelCount)}});
         _depthFrames[frame_index].depthCompleteness.crossViewRepairedCount +=
             static_cast<int>(repair_stats.repairedPixelCount);
         cv::Mat restoration_mask = _depthFrames[frame_index].supportRegionMask &&
@@ -5217,6 +5365,12 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             filter_settings.localDepthOutlierRelThreshold;
         fusion_config.minSpeckleComponentArea = filter_settings.minComponentArea;
         fusion_config.minConsistentViews = filter_settings.minConsistentViews;
+        fusion_config.confidenceThresh = depthConfidenceThresholds(
+            _effectiveSceneProfile,
+            _effectiveDepthFilterMode,
+            static_cast<int>(source_indices.size()),
+            _config.patchMatch.confidenceThresh,
+            fusion_config.confidenceThresh).fusion;
         _depthFrames[frame_index].depthPostprocess = postprocessFusionDepthMap(
             filtered_depth,
             filtered_confidence,
@@ -6117,6 +6271,8 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         artifact[QStringLiteral("source_quality_mean")] = sourceQualitySummary.meanQuality;
         artifact[QStringLiteral("source_quality_min")] = sourceQualitySummary.minQuality;
         artifact[QStringLiteral("depth_confidence_mean")] = depthConfidenceSummary.meanConfidence;
+        artifact[QStringLiteral("effective_patch_match_confidence_threshold")] =
+            result.effectivePatchMatchConfidenceThreshold;
         artifact[QStringLiteral("valid_pixel_count")] = depthConfidenceSummary.validPixelCount;
         artifact[QStringLiteral("valid_coverage")] =
             static_cast<double>(result.qualityMetrics.validCoverage);
@@ -6185,6 +6341,8 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         record.meanSourceQualityScore = sourceQualitySummary.meanQuality;
         record.minSourceQualityScore = sourceQualitySummary.minQuality;
         record.meanDepthConfidence = depthConfidenceSummary.meanConfidence;
+        record.effectivePatchMatchConfidenceThreshold =
+            result.effectivePatchMatchConfidenceThreshold;
         record.validPixelCount = depthConfidenceSummary.validPixelCount;
         record.validCoverage = static_cast<double>(result.qualityMetrics.validCoverage);
         record.depthQuality = depthQualityJson;
@@ -6825,6 +6983,12 @@ void DepthMapGenerator::runInBackground()
                     filter_settings.localDepthOutlierRelThreshold;
                 fusion_config.minSpeckleComponentArea = filter_settings.minComponentArea;
                 fusion_config.minConsistentViews = filter_settings.minConsistentViews;
+                fusion_config.confidenceThresh = depthConfidenceThresholds(
+                    _effectiveSceneProfile,
+                    _effectiveDepthFilterMode,
+                    static_cast<int>(res.sourceViewIndices.size()),
+                    _config.patchMatch.confidenceThresh,
+                    fusion_config.confidenceThresh).fusion;
                 res.depthPostprocess = postprocessFusionDepthMap(*res.depthMap,
                                                                   confidence,
                                                                   fusion_config,

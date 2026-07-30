@@ -2,8 +2,8 @@
 // 文件名: ProjectData.h
 // 描述:   项目数据层核心类声明。
 //         ProjectData 是项目信息的唯一数据来源（Single Source of Truth），
-//         封装了 .plascan 归档（ZIP格式）的读写、运行时元数据的内存管理，
-//         以及临时缓存（.plascan_tmp/）的持久化策略。
+//         封装 .plascan + .files 工程读写、运行时元数据的内存管理，
+//         以及应用缓存中运行工作区和崩溃恢复数据的持久化策略。
 //
 // 层次关系:
 //   UI层(ProjectManager) --> 数据层(ProjectData) --> 存储层(PlascanArchive)
@@ -28,6 +28,10 @@
 #include "ProjectConfigManager.h"
 
 class QThreadPool;
+namespace xjw::common::project
+{
+class ProjectLock;
+}
 
 struct ProjectOpenSnapshot
 {
@@ -36,6 +40,10 @@ struct ProjectOpenSnapshot
     QString errorMessage;
     QJsonObject filesMeta;
     QJsonObject configMeta;
+    QJsonObject uiState;
+    QString chunkId;
+    QString chunkName;
+    int chunkDirectory = 0;
     bool recoveredFromTemporary = false;
     bool resultsLoaded = false;
 };
@@ -46,13 +54,14 @@ struct ProjectResultsSnapshot
     QString projectPath;
     QString errorMessage;
     QJsonObject resultsMeta;
+    QString chunkId;
     bool hasResults = false;
 };
 
 // ProjectData: 轻量级项目数据管理类
 // 职责:
 // 1. 项目文件(.plascan)的读写
-// 2. 元数据(JSON)的管理：core 写 project_files.json，workflow results 写 project_results.json
+// 2. 元数据管理：core/results 写入 Chunk doc.json 的独立字段
 // 3. 资源路径的查询
 // 不负责: UI交互、对话框、业务逻辑执行
 class ProjectData : public QObject
@@ -65,6 +74,10 @@ public:
 
     // === 项目基本信息 ===
     QString currentProjectPath() const { return _projectPath; }
+    QString activeChunkId() const { return _activeChunkId; }
+    QString activeChunkName() const { return _activeChunkName; }
+    int activeChunkDirectory() const { return _activeChunkDirectory; }
+    QJsonArray chunks() const;
     bool hasProject() const { return !_projectPath.isEmpty(); }
     bool isDirty() const { return _isDirty; }
 
@@ -84,15 +97,30 @@ public:
     // 关闭当前项目
     void closeProject();
 
+    // === Chunk 管理 ===
+    bool createChunk(const QString &name,
+                     QString *createdChunkId = nullptr,
+                     QString *errorMsg = nullptr);
+    bool renameChunk(const QString &chunkId,
+                     const QString &name,
+                     QString *errorMsg = nullptr);
+    bool removeChunk(const QString &chunkId,
+                     QString *errorMsg = nullptr);
+    bool switchChunk(const QString &chunkId,
+                     QString *errorMsg = nullptr);
+
     // === 元数据访问 ===
     // 获取当前已加载的运行时元数据；getter 不执行文件 IO。
     QJsonObject metadata() const { return _filesManager.data(); }
-    // 获取核心数据（仅 project_files.json，不触发惰性加载，快速）
+    // 获取核心数据（仅 project_files 字段，不触发惰性加载，快速）
     QJsonObject coreFilesMeta() const { return _filesManager.coreData(); }
     // 更新运行时元数据
     void updateMetadata(const QJsonObject &meta, bool markDirty = true);
     // 更新配置数据
     void updateConfig(const QJsonObject &config, bool markDirty = true);
+    QJsonObject projectUiState() const { return _projectUiState; }
+    void updateProjectUiState(const QJsonObject &state,
+                              bool markDirty = true);
     // 从临时目录加载元数据(.plascan_tmp)
     bool loadTemporaryMetadata();
     // 保存运行时元数据到临时目录
@@ -105,11 +133,11 @@ public:
     bool hasTemporaryMetadata() const;
 
     // === 资源管理 ===
-    // 添加影像到项目（默认保存外部文件绝对路径引用，不复制原始文件）
+    // 添加影像到项目；立即复制到工程级共享影像库并跨 Chunk 去重。
     bool addImages(const QStringList &imagePaths, QString *errorMsg = nullptr);
     // 添加文件夹中的影像
     bool addImagesFromFolder(const QString &folderPath, QString *errorMsg = nullptr);
-    // 移除资源引用(仅从元数据中删除)
+    // 移除资源引用；共享影像仅在全部 Chunk 都解除引用后删除。
     bool removeResource(const QString &resourcePath);
     bool removeResources(const QStringList &resourcePaths);
     // 为指定影像写入相机元数据（写入 images[*].camera）
@@ -170,6 +198,8 @@ public:
     // 保存/加载UI设置
     void saveUiSettings(const QJsonObject &settings);
     QJsonObject loadUiSettings() const;
+    // 运行工作区中的独立文件发生变化（例如 project_dialog.json）。
+    void markWorkspaceDirty();
 
     // === 结果追加 ===
     // 追加ipfind结果到元数据
@@ -185,6 +215,11 @@ signals:
     void projectSaved(const QString &plascanPath);
     void projectSaveCompleted(bool success, const QString &errorMessage);
     void projectClosed();
+    void chunkListChanged(const QJsonArray &chunks,
+                          const QString &activeChunkId);
+    void activeChunkChanged(const QString &chunkId,
+                            const QString &chunkName,
+                            int chunkDirectory);
     
     // 元数据变化
     void metadataChanged(const QJsonObject &meta);
@@ -205,17 +240,23 @@ private:
     struct PersistenceResult;
 
     QString _projectPath;                          // 当前.plascan路径
-    mutable ProjectFilesManager _filesManager;     // project_files.json / project_results.json 管理（mutable 用于惰性加载）
-    ProjectConfigManager _configManager;           // project_config.json 管理
+    QString _activeChunkId;
+    QString _activeChunkName;
+    int _activeChunkDirectory = 0;
+    mutable ProjectFilesManager _filesManager;     // Chunk core/results 字段管理（mutable 用于惰性加载）
+    ProjectConfigManager _configManager;           // Chunk project_config 字段管理
     bool _isDirty = false;                         // 是否有未保存更改
-    mutable bool _resultsLoaded = false;           // project_results.json 是否已载入内存
+    mutable bool _resultsLoaded = false;           // project_results 字段是否已载入内存
 
     // 防抖归档写入：每次 appendIpfind/appendIpmatch/setImageCameras 不再单次打开 ZIP，
     // 而是启动 2s 单射定时器，到期一次性批量写入
     QTimer *_archiveSyncTimer{};                   // 单射，2s防抖
-    bool _resultsDirtyForArchive{false};           // project_results.json 需同步到归档
-    bool _coreFileDirtyForArchive{false};          // project_files.json 需同步到归档
-    bool _configDirtyForArchive{false};             // project_config.json 需同步到归档
+    bool _resultsDirtyForArchive{false};           // project_results 字段需同步
+    bool _coreFileDirtyForArchive{false};          // project_files 字段需同步
+    bool _configDirtyForArchive{false};            // project_config 字段需同步
+    QJsonObject _projectUiState;                   // 根 doc.json 的 ui_state 字段
+    bool _uiStateDirtyForArchive{false};
+    bool _workspaceDirtyForArchive{false};          // workspace/ 资源索引需更新
     QThreadPool *_persistencePool{};
     bool _persistenceRunning{false};
     bool _fullSavePending{false};
@@ -223,6 +264,7 @@ private:
     bool _temporarySavePending{false};
     bool _shuttingDown{false};
     std::unique_ptr<PersistenceSnapshot> _detachedPersistenceSnapshot;
+    std::unique_ptr<xjw::common::project::ProjectLock> _projectLock;
 
     // 惰性加载 results：仅在首次访问时读取 project_results.json
     void ensureResultsLoaded() const;
@@ -231,7 +273,9 @@ private:
     void scheduleArchiveSync(bool coreDirty,
                              bool resultsDirty,
                              bool writeTemporary,
-                             bool configDirty = false);
+                             bool configDirty = false,
+                             bool uiStateDirty = false,
+                             bool workspaceDirty = false);
     PersistenceSnapshot createPersistenceSnapshot(PersistenceMode mode) const;
     static PersistenceResult persistSnapshot(PersistenceSnapshot snapshot);
     void startNextPersistence();
@@ -242,6 +286,7 @@ private:
     QString tempFilesPath() const;     // 返回临时 project_files.json 路径
     QString tempResultsPath() const;   // 返回临时 project_results.json 路径
     QString tempConfigPath() const;    // 返回临时 project_config.json 路径
+    QString tempUiStatePath() const;
     QString assetsDir() const;         // 返回assets目录
     QString imagesDir() const;         // 返回assets/images目录
 };

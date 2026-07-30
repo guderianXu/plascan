@@ -13,7 +13,7 @@ struct DepthGenConfig;
 
 // Increment whenever a production depth algorithm change makes persisted
 // depth maps unsuitable for transparent reuse by a newer build.
-inline constexpr int kMvsDepthAlgorithmRevision = 11;
+inline constexpr int kMvsDepthAlgorithmRevision = 12;
 
 struct MvsDepthFrameRecord
 {
@@ -29,6 +29,7 @@ struct MvsDepthFrameRecord
     double meanSourceQualityScore = 0.0;
     double minSourceQualityScore = 0.0;
     double meanDepthConfidence = 0.0;
+    double effectivePatchMatchConfidenceThreshold = 0.0;
     int validPixelCount = 0;
     double validCoverage = -1.0;
     QJsonObject depthQuality;

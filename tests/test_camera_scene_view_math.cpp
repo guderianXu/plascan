@@ -192,3 +192,20 @@ TEST(CameraSceneViewMathTest, ConvertsPixelAxesToVisualImagePlaneAxes)
     EXPECT_EQ(reversedAxes.right, QVector3D(-1.0f, 0.0f, 0.0f));
     EXPECT_EQ(reversedAxes.up, QVector3D(0.0f, 1.0f, 0.0f));
 }
+
+TEST(CameraSceneViewMathTest, BuildsCameraLocalAxesInWorldCoordinates)
+{
+    QMatrix3x3 rotation;
+    rotation.fill(0.0f);
+    rotation(0, 0) = 1.0f;
+    rotation(1, 1) = 1.0f;
+    rotation(2, 2) = 1.0f;
+
+    const CameraLocalAxes axes = cameraLocalAxes(rotation, false);
+    EXPECT_EQ(axes.x, QVector3D(1.0f, 0.0f, 0.0f));
+    EXPECT_EQ(axes.y, QVector3D(0.0f, 1.0f, 0.0f));
+    EXPECT_EQ(axes.z, QVector3D(0.0f, 0.0f, 1.0f));
+
+    const CameraLocalAxes flippedAxes = cameraLocalAxes(rotation, true);
+    EXPECT_EQ(flippedAxes.z, QVector3D(0.0f, 0.0f, -1.0f));
+}

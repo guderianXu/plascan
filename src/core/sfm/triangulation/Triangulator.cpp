@@ -706,9 +706,7 @@ bool Triangulator::hasPositiveDepth(const std::array<double, 3> &xyz, ImageId im
         return false;
     const Camera &cam = _reconstruction.camera(imageId);
     const double world[3] = {xyz[0], xyz[1], xyz[2]};
-    double cameraPoint[3] = {0.0, 0.0, 0.0};
-    cam.worldToCamera(world, cameraPoint);
-    return cameraPoint[2] > 0.0;
+    return cam.isPointInFront(world);
 }
 
 double Triangulator::computeMaxTriangulationAngle(const std::array<double, 3> &xyz,

@@ -4,20 +4,21 @@
  * @file ProjectUiConfigManager.h
  * @brief 项目 UI 显示配置子管理器的声明文件。
  *
- * ProjectUiConfigManager 负责管理 project_config.json 中 "ui" 顶层段落，
+ * ProjectUiConfigManager 负责管理根 doc.json 的 ui_state 中
+ * "display_settings" 段，
  * 该段落存储用户在视图中调整的显示参数，主要包括：
  *   - feature_display : 特征点的显示样式（大小、形状、不透明度、最大数量等）
  *   - match_display   : 匹配连线的显示样式（线宽、是否仅显示内点等）
  *   - show_interest_points : 是否显示兴趣点覆盖层
  *
- * 本类不直接持久化数据，数据的加载/保存由上层 ProjectConfigManager 协调。
+ * 本类不直接持久化数据，数据的加载/保存由 ProjectData 协调。
  */
 
 #include <QJsonObject>
 
 /**
  * @class ProjectUiConfigManager
- * @brief 管理 project_config.json 中 "ui" 段的显示配置。
+ * @brief 管理 ui_state.display_settings 段。
  *
  * 主要职责：
  * 1. 提供各字段的默认值（通过静态方法 defaultUiSettings）。

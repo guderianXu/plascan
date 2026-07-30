@@ -3,6 +3,7 @@
 #include "ui_DataTreeWidget.h"
 #include "ProjectWorkflowUtils.h"
 #include "WorkspaceSectionIcons.h"
+#include "project/ProjectIO.h"
 
 #include <QTreeView>
 #include <QStandardItemModel>
@@ -19,6 +20,7 @@
 #include <QImageReader>
 #include <QSet>
 #include <QVector>
+#include <QFont>
 
 #include <initializer_list>
 
@@ -33,6 +35,59 @@ namespace
 constexpr int SectionRole = Qt::UserRole + 1;
 constexpr int ResourcePathRole = Qt::UserRole + 2;
 constexpr int AggregateResourcePathsRole = Qt::UserRole + 3;
+constexpr int WorkspaceSectionRole = Qt::UserRole + 4;
+constexpr int ChunkIdRole = Qt::UserRole + 5;
+constexpr int ChunkDirectoryRole = Qt::UserRole + 6;
+constexpr int WorkspaceRootRole = Qt::UserRole + 7;
+
+QString workspaceSummaryLabel(int chunkCount, int imageCount)
+{
+    return QStringLiteral("工作区 (%1个块, %2个图像)")
+        .arg(QLocale().toString(chunkCount),
+             QLocale().toString(imageCount));
+}
+
+QString chunkSummaryLabel(const QString &name,
+                          int imageCount,
+                          int tiePointCount)
+{
+    QStringList summary;
+    if (imageCount >= 0)
+    {
+        summary.append(QStringLiteral("%1个图像")
+                           .arg(QLocale().toString(imageCount)));
+    }
+    if (tiePointCount >= 0)
+    {
+        summary.append(QStringLiteral("%1个连接点")
+                           .arg(QLocale().toString(tiePointCount)));
+    }
+    return summary.isEmpty()
+        ? name
+        : QStringLiteral("%1 (%2)")
+              .arg(name, summary.join(QStringLiteral(", ")));
+}
+
+QString workspaceSectionName(xjw::gui::widgets::WorkspaceSection section)
+{
+    using xjw::gui::widgets::WorkspaceSection;
+    switch (section)
+    {
+    case WorkspaceSection::Photos: return QStringLiteral("照片");
+    case WorkspaceSection::Masks: return QStringLiteral("掩膜");
+    case WorkspaceSection::ObservationNetwork: return QStringLiteral("观测网络");
+    case WorkspaceSection::TiePoints: return QStringLiteral("连接点");
+    case WorkspaceSection::DepthMaps: return QStringLiteral("深度图");
+    case WorkspaceSection::DenseCloud: return QStringLiteral("稠密点云");
+    case WorkspaceSection::Model3D: return QStringLiteral("3D模型");
+    case WorkspaceSection::Dem: return QStringLiteral("DEM");
+    case WorkspaceSection::Orthomosaic: return QStringLiteral("正射影像");
+    case WorkspaceSection::ReferenceData: return QStringLiteral("参考数据");
+    case WorkspaceSection::Reports: return QStringLiteral("报告");
+    case WorkspaceSection::Unknown: return QString();
+    }
+    return QString();
+}
 
 QString depthRecordPrimaryPath(const QJsonObject &record)
 {
@@ -425,7 +480,27 @@ DataTreeWidget::DataTreeWidget(QWidget *parent)
     _model->setHorizontalHeaderLabels({QObject::tr("名称"), QObject::tr("路径"), QObject::tr("存储")});
 
     _view->setModel(_model);
-    _view->setIconSize(QSize(18, 18));
+    _view->setIconSize(QSize(16, 16));
+    _view->header()->hide();
+    _view->setIndentation(18);
+    _view->setUniformRowHeights(true);
+    _view->setRootIsDecorated(true);
+    _view->setItemsExpandable(true);
+    _view->setAllColumnsShowFocus(true);
+    _view->setStyleSheet(QStringLiteral(
+        "QTreeView {"
+        "  border: none;"
+        "  background: palette(base);"
+        "  outline: 0;"
+        "}"
+        "QTreeView::item {"
+        "  min-height: 23px;"
+        "  padding: 1px 2px;"
+        "}"
+        "QTreeView::item:selected {"
+        "  background: palette(highlight);"
+        "  color: palette(highlighted-text);"
+        "}"));
     // 隐藏“路径/存储”两列
     _view->setColumnHidden(1, true);
     _view->setColumnHidden(2, true);
@@ -452,6 +527,17 @@ DataTreeWidget::DataTreeWidget(QWidget *parent)
     // 双击或回车激活资源时，通知上层切换中央显示。
     // 单击只负责选择，避免浏览资源树时同步加载大图造成界面卡顿。
     connect(_view, &QTreeView::activated, this, [this](const QModelIndex &idx) {
+        const QModelIndex nameIndex = idx.sibling(idx.row(), 0);
+        const QString chunkId =
+            _model->data(nameIndex, ChunkIdRole).toString();
+        if (!chunkId.isEmpty())
+        {
+            if (chunkId != _activeChunkId)
+            {
+                emit switchChunkRequested(chunkId);
+            }
+            return;
+        }
         QString section;
         QString path;
         if (resourceFromIndex(idx, &section, &path))
@@ -476,6 +562,20 @@ void DataTreeWidget::setProjectPath(const QString &plascanPath)
 {
     _currentPlascanPath = plascanPath;
     _lastMeta = QJsonObject();
+    _workspaceRoot = nullptr;
+    _activeChunkRoot = nullptr;
+    _model->removeRows(0, _model->rowCount());
+}
+
+void DataTreeWidget::clearProject()
+{
+    _currentPlascanPath.clear();
+    _lastMeta = QJsonObject();
+    _transientModels.clear();
+    _chunks = QJsonArray();
+    _activeChunkId.clear();
+    _workspaceRoot = nullptr;
+    _activeChunkRoot = nullptr;
     _model->removeRows(0, _model->rowCount());
 }
 
@@ -531,6 +631,18 @@ void DataTreeWidget::loadFromJson(const QJsonObject &meta)
     // 无论 images 是否为空，只要 meta 明确提供了 images，我们就清空并重建模型（允许清空列表）。
     _lastMeta = normalized;
     populateFromMeta(normalized);
+}
+
+void DataTreeWidget::setChunkContext(
+    const QJsonArray &chunks,
+    const QString &activeChunkId)
+{
+    _chunks = chunks;
+    _activeChunkId = activeChunkId;
+    if (!_lastMeta.isEmpty())
+    {
+        populateFromMeta(_lastMeta);
+    }
 }
 
 void DataTreeWidget::addTransientModel(const QString &modelPath)
@@ -602,13 +714,23 @@ QStandardItem *DataTreeWidget::createSection(
     auto *nameItem = new QStandardItem(label);
     nameItem->setFlags(nameItem->flags() & ~Qt::ItemIsEditable);
     nameItem->setIcon(xjw::gui::widgets::workspaceSectionIcon(section));
+    nameItem->setData(workspaceSectionName(section), SectionRole);
+    nameItem->setData(static_cast<int>(section), WorkspaceSectionRole);
 
     auto *pathItem = new QStandardItem(QString());
     auto *storageItem = new QStandardItem(QString());
     pathItem->setFlags(pathItem->flags() & ~Qt::ItemIsEditable);
     storageItem->setFlags(storageItem->flags() & ~Qt::ItemIsEditable);
 
-    _model->appendRow({nameItem, pathItem, storageItem});
+    if (_activeChunkRoot)
+    {
+        _activeChunkRoot->appendRow(
+            {nameItem, pathItem, storageItem});
+    }
+    else
+    {
+        _model->appendRow({nameItem, pathItem, storageItem});
+    }
     return nameItem;
 }
 
@@ -632,6 +754,9 @@ QStandardItem *DataTreeWidget::appendItemRow(QStandardItem *parent,
     nameItem->setFlags(nameItem->flags() & ~Qt::ItemIsEditable);
     pathItem->setFlags(pathItem->flags() & ~Qt::ItemIsEditable);
     storageItem->setFlags(storageItem->flags() & ~Qt::ItemIsEditable);
+    nameItem->setData(parent->data(SectionRole), SectionRole);
+    nameItem->setData(parent->data(WorkspaceSectionRole), WorkspaceSectionRole);
+    nameItem->setData(path, ResourcePathRole);
     parent->appendRow({nameItem, pathItem, storageItem});
     return nameItem;
 }
@@ -651,8 +776,17 @@ QStandardItem *DataTreeWidget::appendTopLevelResource(
     storageItem->setFlags(storageItem->flags() & ~Qt::ItemIsEditable);
     nameItem->setIcon(xjw::gui::widgets::workspaceSectionIcon(section));
     nameItem->setData(sectionName, SectionRole);
+    nameItem->setData(static_cast<int>(section), WorkspaceSectionRole);
     nameItem->setData(path, ResourcePathRole);
-    _model->appendRow({nameItem, pathItem, storageItem});
+    if (_activeChunkRoot)
+    {
+        _activeChunkRoot->appendRow(
+            {nameItem, pathItem, storageItem});
+    }
+    else
+    {
+        _model->appendRow({nameItem, pathItem, storageItem});
+    }
     return nameItem;
 }
 
@@ -675,8 +809,17 @@ QStandardItem *DataTreeWidget::appendTopLevelAggregate(
     storageItem->setFlags(storageItem->flags() & ~Qt::ItemIsEditable);
     nameItem->setIcon(xjw::gui::widgets::workspaceSectionIcon(section));
     nameItem->setData(sectionName, SectionRole);
+    nameItem->setData(static_cast<int>(section), WorkspaceSectionRole);
     nameItem->setData(paths, AggregateResourcePathsRole);
-    _model->appendRow({nameItem, pathItem, storageItem});
+    if (_activeChunkRoot)
+    {
+        _activeChunkRoot->appendRow(
+            {nameItem, pathItem, storageItem});
+    }
+    else
+    {
+        _model->appendRow({nameItem, pathItem, storageItem});
+    }
     return nameItem;
 }
 
@@ -780,9 +923,14 @@ bool DataTreeWidget::resourceFromIndex(const QModelIndex &index, QString *sectio
         return false;
     }
 
+    const QString parentSection = _model->data(parentIndex, SectionRole).toString();
+    if (parentSection.trimmed().isEmpty())
+    {
+        return false;
+    }
     if (section)
     {
-        *section = _model->data(parentIndex).toString().section(QLatin1Char(' '), 0, 0);
+        *section = parentSection;
     }
     if (resourcePath)
     {
@@ -804,8 +952,8 @@ QString DataTreeWidget::resolveResourcePath(const QString &resourcePath) const
         return QDir::cleanPath(trimmedPath);
     }
 
-    const QString projectRoot = QFileInfo(_currentPlascanPath).absolutePath();
-    return QDir::cleanPath(QDir(projectRoot).filePath(trimmedPath));
+    return xjw::common::project::ProjectIO::resolveProjectResourcePath(
+        _currentPlascanPath, trimmedPath);
 }
 
 void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
@@ -872,11 +1020,17 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
     }
 
     int alignedImageCount = 0;
+    int maskCount = 0;
     for (const QJsonValue &v : images)
     {
         if (imageIsAligned(v, alignedImageKeys))
         {
             ++alignedImageCount;
+        }
+        if (v.isObject()
+            && !v.toObject().value(QStringLiteral("mask_path")).toString().trimmed().isEmpty())
+        {
+            ++maskCount;
         }
     }
 
@@ -927,24 +1081,180 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
                                                                         "lidar_path", "cloud_path"});
 
     // ── 保存展开状态 ──────────────────────────────────────────────────────
-    QSet<QString> expandedSections;
-    for (int i = 0; i < _model->rowCount(); ++i) {
-        QStandardItem *item = _model->item(i, 0);
-        if (item) {
-            QModelIndex idx = _model->indexFromItem(item);
-            if (_view->isExpanded(idx)) {
-                expandedSections.insert(item->text().section(' ', 0, 0));
+    QSet<int> expandedSections;
+    QSet<QString> expandedChunks;
+    const auto captureSectionExpansion =
+        [this, &expandedSections](QStandardItem *item)
+    {
+        if (!item)
+        {
+            return;
+        }
+        const QModelIndex index = _model->indexFromItem(item);
+        const QVariant sectionValue =
+            item->data(WorkspaceSectionRole);
+        if (_view->isExpanded(index) && sectionValue.isValid())
+        {
+            expandedSections.insert(sectionValue.toInt());
+        }
+    };
+    const auto captureChunkExpansion =
+        [this, &expandedChunks, &captureSectionExpansion](
+            QStandardItem *chunk)
+    {
+        if (!chunk
+            || chunk->data(ChunkIdRole).toString().isEmpty())
+        {
+            return;
+        }
+        if (_view->isExpanded(_model->indexFromItem(chunk)))
+        {
+            expandedChunks.insert(
+                chunk->data(ChunkIdRole).toString());
+        }
+        for (int row = 0; row < chunk->rowCount(); ++row)
+        {
+            captureSectionExpansion(chunk->child(row, 0));
+        }
+    };
+    for (int i = 0; i < _model->rowCount(); ++i)
+    {
+        QStandardItem *topLevel = _model->item(i, 0);
+        if (topLevel
+            && topLevel->data(WorkspaceRootRole).toBool())
+        {
+            for (int row = 0; row < topLevel->rowCount(); ++row)
+            {
+                captureChunkExpansion(topLevel->child(row, 0));
             }
+            continue;
+        }
+        if (!topLevel->data(ChunkIdRole).toString().isEmpty())
+        {
+            captureChunkExpansion(topLevel);
+        }
+        else
+        {
+            captureSectionExpansion(topLevel);
         }
     }
-    
+
     _model->removeRows(0, _model->rowCount());
+    _workspaceRoot = nullptr;
+    _activeChunkRoot = nullptr;
+
+    int totalImageCount = 0;
+    for (const QJsonValue &value : _chunks)
+    {
+        const QJsonObject chunk = value.toObject();
+        const QString chunkId =
+            chunk.value(QStringLiteral("id")).toString();
+        const int imageCount = chunkId == _activeChunkId
+            ? images.size()
+            : chunk.value(QStringLiteral("image_count")).toInt(0);
+        totalImageCount += qMax(0, imageCount);
+    }
+
+    if (!_chunks.isEmpty())
+    {
+        auto *nameItem = new QStandardItem(
+            workspaceSummaryLabel(
+                _chunks.size(), totalImageCount));
+        auto *pathItem = new QStandardItem(QString());
+        auto *storageItem =
+            new QStandardItem(QStringLiteral("workspace"));
+        nameItem->setFlags(
+            nameItem->flags() & ~Qt::ItemIsEditable);
+        pathItem->setFlags(
+            pathItem->flags() & ~Qt::ItemIsEditable);
+        storageItem->setFlags(
+            storageItem->flags() & ~Qt::ItemIsEditable);
+        nameItem->setIcon(
+            xjw::gui::widgets::workspaceRootIcon());
+        nameItem->setData(true, WorkspaceRootRole);
+        nameItem->setToolTip(QStringLiteral(
+            "工程中的 Chunk 与影像汇总"));
+        _model->appendRow(
+            {nameItem, pathItem, storageItem});
+        _workspaceRoot = nameItem;
+    }
+
+    for (const QJsonValue &value : _chunks)
+    {
+        const QJsonObject chunk = value.toObject();
+        const QString chunkId =
+            chunk.value(QStringLiteral("id")).toString();
+        if (chunkId.isEmpty())
+        {
+            continue;
+        }
+        QString name = chunk.value(
+            QStringLiteral("name")).toString().trimmed();
+        const QJsonValue directoryValue =
+            chunk.value(QStringLiteral("directory"));
+        const int directory = directoryValue.isDouble()
+            ? directoryValue.toInt()
+            : directoryValue.toString().toInt();
+        if (name.isEmpty())
+        {
+            name = QStringLiteral("Chunk %1").arg(directory);
+        }
+        const bool active = chunkId == _activeChunkId;
+        const int imageCount = active
+            ? images.size()
+            : chunk.value(QStringLiteral("image_count")).toInt(-1);
+        const int tiePointCount = active
+            ? totalSparsePoints
+            : chunk.value(
+                  QStringLiteral("tie_point_count")).toInt(-1);
+        auto *nameItem = new QStandardItem(
+            chunkSummaryLabel(name, imageCount, tiePointCount));
+        auto *pathItem =
+            new QStandardItem(QString::number(directory));
+        auto *storageItem =
+            new QStandardItem(QStringLiteral("chunk"));
+        nameItem->setFlags(
+            nameItem->flags() & ~Qt::ItemIsEditable);
+        pathItem->setFlags(
+            pathItem->flags() & ~Qt::ItemIsEditable);
+        storageItem->setFlags(
+            storageItem->flags() & ~Qt::ItemIsEditable);
+        nameItem->setIcon(
+            xjw::gui::widgets::workspaceChunkIcon());
+        nameItem->setData(chunkId, ChunkIdRole);
+        nameItem->setData(directory, ChunkDirectoryRole);
+        QFont font = nameItem->font();
+        font.setBold(active);
+        nameItem->setFont(font);
+        nameItem->setToolTip(
+            active
+                ? QStringLiteral("当前 Chunk")
+                : QStringLiteral("双击切换到此 Chunk"));
+        if (_workspaceRoot)
+        {
+            _workspaceRoot->appendRow(
+                {nameItem, pathItem, storageItem});
+        }
+        else
+        {
+            _model->appendRow(
+                {nameItem, pathItem, storageItem});
+        }
+        if (active)
+        {
+            _activeChunkRoot = nameItem;
+        }
+    }
 
     using xjw::gui::widgets::WorkspaceSection;
     auto *photos = images.isEmpty()
         ? nullptr
-        : createSection(QStringLiteral("照片 (%1/%2 对齐)").arg(alignedImageCount).arg(images.size()),
+        : createSection(QStringLiteral("图像 (%1/%2 对齐)").arg(alignedImageCount).arg(images.size()),
                         WorkspaceSection::Photos);
+    if (maskCount > 0)
+    {
+        createSection(QStringLiteral("掩膜"), maskCount, WorkspaceSection::Masks);
+    }
     auto *obsNet = obsNetResults.isEmpty()
         ? nullptr
         : createSection(QStringLiteral("观测网络"), obsNetResults.size(), WorkspaceSection::ObservationNetwork);
@@ -953,7 +1263,7 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
         QString tiePointLabel = QStringLiteral("连接点");
         if (totalSparsePoints >= 0)
         {
-            tiePointLabel = QStringLiteral("连接点（%1个点）")
+            tiePointLabel = QStringLiteral("连接点 (%1个点)")
                                 .arg(QLocale().toString(totalSparsePoints));
         }
         appendTopLevelResource(tiePointLabel,
@@ -1017,12 +1327,18 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
         QFileInfo fi(path);
         QString name = fi.fileName();
         if (name.isEmpty()) name = path;
-        // 相机状态标记：✓ = 已对齐/已定向
-        if (imageIsAligned(v, alignedImageKeys))
+        const bool aligned = imageIsAligned(v, alignedImageKeys);
+        QStandardItem *imageItem =
+            appendItemRow(photos, name, path, storage);
+        if (imageItem)
         {
-            name += QStringLiteral("  [✓]");
+            imageItem->setIcon(
+                xjw::gui::widgets::workspaceImageIcon());
+            imageItem->setToolTip(
+                aligned
+                    ? QStringLiteral("已对齐")
+                    : QStringLiteral("未对齐"));
         }
-        appendItemRow(photos, name, path, storage);
     }
 
     // ── 观测网络结果 ──────────────────────────────────────────────────────
@@ -1182,23 +1498,46 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
         appendItemRow(references, name, path, storage);
     }
 
-    for (int i = 0; i < _model->rowCount(); ++i)
+    const int sectionCount = _activeChunkRoot
+        ? _activeChunkRoot->rowCount()
+        : _model->rowCount();
+    for (int i = 0; i < sectionCount; ++i)
     {
-        sortSectionChildrenByFileName(_model->item(i, 0));
+        sortSectionChildrenByFileName(
+            _activeChunkRoot
+                ? _activeChunkRoot->child(i, 0)
+                : _model->item(i, 0));
     }
     
     // ── 恢复展开状态 ──────────────────────────────────────────────────────
     // 仅恢复用户先前显式展开过的分组，不在数据更新时自动展开任何默认分组。
     // 之前这里对第一个分组（通常是“照片”）做了强制展开，导致新增深度图/点云等
     // 元数据写回后，工作区会突然自动展开“照片”树，打断用户当前浏览位置。
-    for (int i = 0; i < _model->rowCount(); ++i) {
-        QStandardItem *item = _model->item(i, 0);
+    for (int i = 0; i < sectionCount; ++i) {
+        QStandardItem *item = _activeChunkRoot
+            ? _activeChunkRoot->child(i, 0)
+            : _model->item(i, 0);
         if (item) {
-            QString sectionName = item->text().section(' ', 0, 0);
-            if (expandedSections.contains(sectionName)) {
+            const QVariant sectionValue = item->data(WorkspaceSectionRole);
+            if (sectionValue.isValid() && expandedSections.contains(sectionValue.toInt())) {
                 QModelIndex idx = _model->indexFromItem(item);
                 _view->expand(idx);
             }
+        }
+    }
+    if (_workspaceRoot)
+    {
+        _view->expand(
+            _model->indexFromItem(_workspaceRoot));
+    }
+    if (_activeChunkRoot)
+    {
+        const QModelIndex activeIndex =
+            _model->indexFromItem(_activeChunkRoot);
+        if (expandedChunks.isEmpty()
+            || expandedChunks.contains(_activeChunkId))
+        {
+            _view->expand(activeIndex);
         }
     }
 }
@@ -1207,6 +1546,53 @@ void DataTreeWidget::onContextMenuRequested(const QPoint &pos)
 {
     QModelIndex idx = _view->indexAt(pos);
     if (!idx.isValid()) return;
+
+    const QModelIndex nameIndex = idx.sibling(idx.row(), 0);
+    if (_model->data(nameIndex, WorkspaceRootRole).toBool())
+    {
+        QMenu menu(this);
+        QAction *createAction =
+            menu.addAction(tr("新建 Chunk..."));
+        if (menu.exec(_view->viewport()->mapToGlobal(pos))
+            == createAction)
+        {
+            emit createChunkRequested();
+        }
+        return;
+    }
+    const QString chunkId =
+        _model->data(nameIndex, ChunkIdRole).toString();
+    if (!chunkId.isEmpty())
+    {
+        QMenu menu(this);
+        QAction *activateAction = nullptr;
+        if (chunkId != _activeChunkId)
+        {
+            activateAction = menu.addAction(tr("设为当前 Chunk"));
+        }
+        QAction *createAction = menu.addAction(tr("新建 Chunk..."));
+        QAction *renameAction = menu.addAction(tr("重命名 Chunk..."));
+        QAction *removeAction = menu.addAction(tr("删除 Chunk..."));
+        QAction *selected =
+            menu.exec(_view->viewport()->mapToGlobal(pos));
+        if (selected == activateAction)
+        {
+            emit switchChunkRequested(chunkId);
+        }
+        else if (selected == createAction)
+        {
+            emit createChunkRequested();
+        }
+        else if (selected == renameAction)
+        {
+            emit renameChunkRequested(chunkId);
+        }
+        else if (selected == removeAction)
+        {
+            emit removeChunkRequested(chunkId);
+        }
+        return;
+    }
 
     // 收集当前选中的所有条目（支持树状选择），如果没有多选，则只包含右键所在项
     QModelIndexList sel = _view->selectionModel()->selectedIndexes();
@@ -1277,6 +1663,7 @@ void DataTreeWidget::onContextMenuRequested(const QPoint &pos)
     QAction *removeAct = nullptr;
     QAction *deleteAct = nullptr;
     QAction *sideOpenAct = nullptr;
+    QAction *viewMatchesAct = nullptr;
     if (depthAggregateOnly)
     {
         deleteAct = menu.addAction(tr("删除深度图"));
@@ -1300,6 +1687,14 @@ void DataTreeWidget::onContextMenuRequested(const QPoint &pos)
                 || sectionName == QStringLiteral("正射影像")))
         {
             sideOpenAct = menu.addAction(tr("在侧边打开"));
+        }
+        if (sameSection
+            && hasRegularRow
+            && !hasAggregateRow
+            && paths.size() == 1
+            && sectionName == QStringLiteral("照片"))
+        {
+            viewMatchesAct = menu.addAction(tr("查看匹配..."));
         }
     }
 
@@ -1408,5 +1803,9 @@ void DataTreeWidget::onContextMenuRequested(const QPoint &pos)
     else if (sideOpenAct && act == sideOpenAct)
     {
         emit sideOpenRequested(sectionName, paths.first());
+    }
+    else if (viewMatchesAct && act == viewMatchesAct)
+    {
+        emit viewMatchesRequested(paths.first());
     }
 }

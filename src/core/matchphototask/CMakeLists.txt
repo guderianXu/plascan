@@ -16,6 +16,10 @@ add_library(matchphototask STATIC
     runtime/MatchPhotosRuntime.h
     runtime/MatchPhotosMaskSupport.cpp
     runtime/MatchPhotosMaskSupport.h
+    runtime/MatchPhotosParallelism.cpp
+    runtime/MatchPhotosParallelism.h
+    stages/FeaturePreparationQueue.cpp
+    stages/FeaturePreparationQueue.h
     stages/FeatureStage.cpp
     stages/FeatureStage.h
     stages/GeometryVerifyStage.cpp
@@ -24,6 +28,8 @@ add_library(matchphototask STATIC
     stages/StoredPairGeometryAudit.h
     stages/GuidedMatchStage.cpp
     stages/GuidedMatchStage.h
+    stages/LightGluePairBatch.cpp
+    stages/LightGluePairBatch.h
     stages/MatchingStage.cpp
     stages/MatchingStage.h
     stages/SiftLightGlueRecovery.cpp
@@ -71,3 +77,24 @@ target_link_libraries(matchphototask PUBLIC
 
 target_compile_definitions(matchphototask PRIVATE PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_compile_features(matchphototask PUBLIC cxx_std_17)
+
+add_executable(aerial_geometry_benchmark
+    tools/aerial_geometry_benchmark.cpp
+)
+target_link_libraries(aerial_geometry_benchmark PRIVATE
+    matchphototask
+    camera
+    intersection
+    sfm_core
+)
+target_include_directories(aerial_geometry_benchmark PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../camera
+    ${CMAKE_CURRENT_SOURCE_DIR}/../feature_extractors
+    ${CMAKE_CURRENT_SOURCE_DIR}/../feature_match
+    ${CMAKE_CURRENT_SOURCE_DIR}/../intersection
+    ${CMAKE_CURRENT_SOURCE_DIR}/../sfm
+)
+set_target_properties(aerial_geometry_benchmark PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)

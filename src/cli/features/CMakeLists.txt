@@ -48,6 +48,7 @@ if(TARGET matchphototask AND TARGET plascan_cli_photogrammetry_common)
         LIBRARIES
             matchphototask
             plascan_cli_photogrammetry_common
+            plascan_common_project
             ${TORCH_LIBRARIES}
         INCLUDE_DIRECTORIES
             ${CMAKE_SOURCE_DIR}/src/core/matchphototask

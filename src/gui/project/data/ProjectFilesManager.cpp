@@ -2,12 +2,12 @@
 // 文件名: ProjectFilesManager.cpp
 // 描述:   ProjectFilesManager 内存数据模型实现。
 //
-//         数据拆分为两個对象，分别对应归档中的两个文件：
+//         数据拆分为两个对象，分别对应 Chunk doc.json 中的两个字段：
 //
-//   【_coreFiles → project_files.json】始终加载
+//   【_coreFiles → project_files】始终加载
 //     { "images": [...] }
 //
-//   【_resultFiles → project_results.json】惰性加载（需要时再读）
+//   【_resultFiles → project_results】惰性加载（需要时再读）
 //     {
 //       "ipfind_results":  [...],
 //       "ipmatch_results": [

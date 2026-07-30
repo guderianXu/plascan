@@ -1,11 +1,13 @@
 #include "TraditionalFeatureExtractor.h"
 #include "FeatureFileIO.h"
+#include "FeaturePreparationQueue.h"
 #include "FeatureStage.h"
 #include "MatchPhotosMaskSupport.h"
 #include "MatchPhotosRuntime.h"
 #include "io/PathIO.h"
 
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFileInfo>
 
 #include <opencv2/imgcodecs.hpp>
@@ -83,7 +85,8 @@ cv::Mat resizeForFeatureExtraction(const cv::Mat &grayImage,
 }
 
 void restoreOriginalCoordinates(FeatureOutput *output,
-                                const cv::Mat &originalImage,
+                                int originalWidth,
+                                int originalHeight,
                                 double resizeScale)
 {
     if (!output)
@@ -102,8 +105,8 @@ void restoreOriginalCoordinates(FeatureOutput *output,
         }
     }
 
-    output->imageWidth = originalImage.cols;
-    output->imageHeight = originalImage.rows;
+    output->imageWidth = originalWidth;
+    output->imageHeight = originalHeight;
 }
 
 } // namespace
@@ -146,6 +149,7 @@ MatchPhotosStageReport FeatureStage::run(const MatchPhotosContext &context,
 
     const bool useCuda = shouldUseCudaSift(options, algorithmPlan);
     const bool applyKeypointMask = shouldApplyMasksToKeypoints(options);
+    const int prefetchDepth = std::clamp(options.featurePrefetchDepth, 1, 4);
     int extractedCount = 0;
     int reusedCount = 0;
     const int totalImages = images.size();
@@ -159,7 +163,82 @@ MatchPhotosStageReport FeatureStage::run(const MatchPhotosContext &context,
                               0,
                               totalImages);
 
-    for (const QString &imagePath : images)
+    std::vector<FeaturePreparationRequest> requests;
+    requests.reserve(static_cast<std::size_t>(totalImages));
+    for (int index = 0; index < totalImages; ++index)
+    {
+        FeaturePreparationRequest request;
+        request.index = index;
+        request.imagePath = images.at(index);
+        request.featurePath =
+            matchPhotosFeaturePath(context, request.imagePath, algorithmPlan);
+        requests.push_back(std::move(request));
+    }
+
+    FeaturePreparationQueue preparationQueue(
+        std::move(requests),
+        prefetchDepth,
+        context.cancelFlag,
+        [&](const FeaturePreparationRequest &request)
+        {
+            QElapsedTimer totalTimer;
+            totalTimer.start();
+
+            PreparedFeatureImage prepared;
+            prepared.index = request.index;
+            prepared.imagePath = request.imagePath;
+            prepared.featurePath = request.featurePath;
+
+            const int existingCount = FeatureFileIO::peekCount(request.featurePath);
+            if (!applyKeypointMask &&
+                options.reuseExistingFeatures &&
+                existingCount > 0 &&
+                FeatureFileIO::peekAlgorithm(request.featurePath) == "sift")
+            {
+                prepared.reused = true;
+                prepared.existingKeypointCount = existingCount;
+                prepared.preparationMs = totalTimer.elapsed();
+                return prepared;
+            }
+
+            QElapsedTimer phaseTimer;
+            phaseTimer.start();
+            cv::Mat grayImage =
+                xjw::common::io::readImage(request.imagePath, cv::IMREAD_GRAYSCALE);
+            prepared.imageReadMs = phaseTimer.elapsed();
+            if (grayImage.empty())
+            {
+                prepared.errorMessage =
+                    QStringLiteral("无法读取影像: %1").arg(request.imagePath);
+                prepared.preparationMs = totalTimer.elapsed();
+                return prepared;
+            }
+
+            prepared.originalWidth = grayImage.cols;
+            prepared.originalHeight = grayImage.rows;
+            prepared.effectiveKeypointLimit =
+                resolveFeatureKeypointLimit(options, algorithmPlan, grayImage.cols, grayImage.rows);
+
+            phaseTimer.restart();
+            prepared.inputImage = resizeForFeatureExtraction(grayImage,
+                                                              algorithmPlan.maxImageDim,
+                                                              &prepared.resizeScale);
+            prepared.imageResizeMs = phaseTimer.elapsed();
+
+            if (applyKeypointMask)
+            {
+                phaseTimer.restart();
+                prepared.maskPath = maskPathForImage(context, request.imagePath);
+                prepared.mask = loadMaskForImage(context,
+                                                 request.imagePath,
+                                                 grayImage.size());
+                prepared.maskReadMs = phaseTimer.elapsed();
+            }
+            prepared.preparationMs = totalTimer.elapsed();
+            return prepared;
+        });
+
+    for (int index = 0; index < totalImages; ++index)
     {
         if (shouldCancelMatchPhotos(context))
         {
@@ -168,20 +247,38 @@ MatchPhotosStageReport FeatureStage::run(const MatchPhotosContext &context,
                                      extractedCount + reusedCount);
         }
 
-        const QString featurePath = matchPhotosFeaturePath(context, imagePath, algorithmPlan);
-        const int existingCount = FeatureFileIO::peekCount(featurePath);
-        if (!applyKeypointMask &&
-            options.reuseExistingFeatures &&
-            existingCount > 0 &&
-            FeatureFileIO::peekAlgorithm(featurePath) == "sift")
+        PreparedFeatureImage prepared;
+        if (!preparationQueue.take(&prepared))
+        {
+            if (shouldCancelMatchPhotos(context))
+            {
+                return makeFeatureReport(MatchPhotosStageStatus::Failed,
+                                         QStringLiteral("用户取消连接点特征提取"),
+                                         extractedCount + reusedCount);
+            }
+            return makeFeatureReport(MatchPhotosStageStatus::Failed,
+                                     QStringLiteral("影像预取队列提前结束"),
+                                     extractedCount + reusedCount);
+        }
+        if (!prepared.errorMessage.isEmpty())
+        {
+            return makeFeatureReport(MatchPhotosStageStatus::Failed,
+                                     prepared.errorMessage,
+                                     extractedCount + reusedCount);
+        }
+
+        if (prepared.reused)
         {
             if (featureRecords)
             {
+                QJsonObject settings = makeFeatureRecordSettings(algorithmPlan, options);
+                settings[QStringLiteral("feature_prefetch_depth")] = prefetchDepth;
+                settings[QStringLiteral("feature_reused")] = true;
                 featureRecords->push_back(
-                    MatchPhotosFeatureRecord{imagePath,
-                                             featurePath,
-                                             existingCount,
-                                             makeFeatureRecordSettings(algorithmPlan, options)});
+                    MatchPhotosFeatureRecord{prepared.imagePath,
+                                             prepared.featurePath,
+                                             prepared.existingKeypointCount,
+                                             settings});
             }
             ++reusedCount;
             advanceMatchPhotosProgress(context);
@@ -197,68 +294,77 @@ MatchPhotosStageReport FeatureStage::run(const MatchPhotosContext &context,
             continue;
         }
 
-        cv::Mat grayImage = xjw::common::io::readImage(imagePath, cv::IMREAD_GRAYSCALE);
-        if (grayImage.empty())
-        {
-            return makeFeatureReport(MatchPhotosStageStatus::Failed,
-                                     QStringLiteral("无法读取影像: %1").arg(imagePath),
-                                     extractedCount + reusedCount);
-        }
-
         try
         {
-            const int effectiveKeypointLimit =
-                resolveFeatureKeypointLimit(options, algorithmPlan, grayImage.cols, grayImage.rows);
             xjw::feature_extractors::TraditionalFeatureConfig imageConfig = config;
-            imageConfig.maxKeypoints = effectiveKeypointLimit;
+            imageConfig.maxKeypoints = prepared.effectiveKeypointLimit;
             imageConfig.detectionThreshold = siftDetectionThresholdForTiePoints(options);
 
-            double resizeScale = 1.0;
-            const cv::Mat inputImage = resizeForFeatureExtraction(grayImage,
-                                                                  algorithmPlan.maxImageDim,
-                                                                  &resizeScale);
+            QElapsedTimer phaseTimer;
+            phaseTimer.start();
             FeatureOutput output = xjw::feature_extractors::TraditionalFeatureExtractor::detect(
-                inputImage, imageConfig, "sift", useCuda, options.cudaDevice);
-            restoreOriginalCoordinates(&output, grayImage, resizeScale);
+                prepared.inputImage, imageConfig, "sift", useCuda, options.cudaDevice);
+            const qint64 extractionMs = phaseTimer.elapsed();
+            restoreOriginalCoordinates(&output,
+                                       prepared.originalWidth,
+                                       prepared.originalHeight,
+                                       prepared.resizeScale);
             const int unmaskedKeypointCount = output.count();
-            QString maskPath;
             int maskRemovedKeypointCount = 0;
-            if (applyKeypointMask)
+            phaseTimer.restart();
+            if (applyKeypointMask && !prepared.mask.empty())
             {
-                maskPath = maskPathForImage(context, imagePath);
-                const cv::Mat mask = loadMaskForImage(context, imagePath, grayImage.size());
-                if (!mask.empty())
-                {
-                    output = filterFeatureOutputByMask(output, mask);
-                    maskRemovedKeypointCount = std::max(0, unmaskedKeypointCount - output.count());
-                }
+                output = filterFeatureOutputByMask(output, prepared.mask);
+                maskRemovedKeypointCount =
+                    std::max(0, unmaskedKeypointCount - output.count());
             }
+            const qint64 maskFilterMs = phaseTimer.elapsed();
 
-            if (!FeatureFileIO::write(featurePath,
-                                      QFileInfo(imagePath).fileName(),
+            phaseTimer.restart();
+            if (!FeatureFileIO::write(prepared.featurePath,
+                                      QFileInfo(prepared.imagePath).fileName(),
                                       output,
                                       "sift"))
             {
                 return makeFeatureReport(MatchPhotosStageStatus::Failed,
-                                         QStringLiteral("无法写入 SIFT 特征文件: %1").arg(featurePath),
+                                         QStringLiteral("无法写入 SIFT 特征文件: %1")
+                                             .arg(prepared.featurePath),
                                          extractedCount + reusedCount);
             }
+            const qint64 writeMs = phaseTimer.elapsed();
 
             if (featureRecords)
             {
                 QJsonObject settings = makeFeatureRecordSettings(algorithmPlan, options);
-                settings[QStringLiteral("effective_keypoint_limit")] = effectiveKeypointLimit;
-                settings[QStringLiteral("image_width")] = grayImage.cols;
-                settings[QStringLiteral("image_height")] = grayImage.rows;
+                settings[QStringLiteral("effective_keypoint_limit")] =
+                    prepared.effectiveKeypointLimit;
+                settings[QStringLiteral("image_width")] = prepared.originalWidth;
+                settings[QStringLiteral("image_height")] = prepared.originalHeight;
+                settings[QStringLiteral("feature_prefetch_depth")] = prefetchDepth;
+                settings[QStringLiteral("feature_prepare_ms")] =
+                    static_cast<double>(prepared.preparationMs);
+                settings[QStringLiteral("feature_image_read_ms")] =
+                    static_cast<double>(prepared.imageReadMs);
+                settings[QStringLiteral("feature_image_resize_ms")] =
+                    static_cast<double>(prepared.imageResizeMs);
+                settings[QStringLiteral("feature_mask_read_ms")] =
+                    static_cast<double>(prepared.maskReadMs);
+                settings[QStringLiteral("feature_extract_ms")] =
+                    static_cast<double>(extractionMs);
+                settings[QStringLiteral("feature_mask_filter_ms")] =
+                    static_cast<double>(maskFilterMs);
+                settings[QStringLiteral("feature_write_ms")] =
+                    static_cast<double>(writeMs);
+                settings[QStringLiteral("feature_cuda_enabled")] = useCuda;
                 if (applyKeypointMask)
                 {
-                    settings[QStringLiteral("mask_path")] = maskPath;
+                    settings[QStringLiteral("mask_path")] = prepared.maskPath;
                     settings[QStringLiteral("mask_unfiltered_keypoints")] = unmaskedKeypointCount;
                     settings[QStringLiteral("mask_filtered_keypoints")] = maskRemovedKeypointCount;
                 }
                 featureRecords->push_back(
-                    MatchPhotosFeatureRecord{imagePath,
-                                             featurePath,
+                    MatchPhotosFeatureRecord{prepared.imagePath,
+                                             prepared.featurePath,
                                              output.count(),
                                              settings});
             }
@@ -287,9 +393,10 @@ MatchPhotosStageReport FeatureStage::run(const MatchPhotosContext &context,
     }
 
     return makeFeatureReport(MatchPhotosStageStatus::Completed,
-                             QStringLiteral("SIFT 特征完成：新提取 %1 张，复用 %2 张，目录 %3")
+                             QStringLiteral("SIFT 特征完成：新提取 %1 张，复用 %2 张，CPU 预取深度 %3，目录 %4")
                                  .arg(extractedCount)
                                  .arg(reusedCount)
+                                 .arg(prefetchDepth)
                                  .arg(featureDir.path()),
                              extractedCount + reusedCount);
 }

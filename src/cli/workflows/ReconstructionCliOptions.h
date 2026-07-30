@@ -17,6 +17,8 @@ struct ReconstructionCliOptions
 #else
     std::string outputDirArg = "full_pipeline_output";
 #endif
+    std::string chunkIdArg;
+    std::string chunkNameArg;
     std::string device = "auto";
     std::string sfmFeatureAlgorithm = "disk";
     std::string sfmMatchAlgorithm = "lightglue";

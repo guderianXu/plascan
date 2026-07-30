@@ -7,6 +7,7 @@ import argparse
 import json
 from pathlib import Path
 from typing import Any
+import xml.etree.ElementTree as ET
 
 import numpy as np
 import trimesh
@@ -31,6 +32,27 @@ def parse_args() -> argparse.Namespace:
         "--aligned-candidate-output",
         type=Path,
         help="Optional path for exporting the camera-aligned candidate mesh used by the comparison.",
+    )
+    parser.add_argument(
+        "--aligned-reference-output",
+        type=Path,
+        help="Optional path for exporting the camera-aligned reference mesh used by the comparison.",
+    )
+    parser.add_argument(
+        "--reference-metashape-chunk",
+        type=Path,
+        help="Optional extracted Metashape chunk doc.xml used to align its internal model coordinates.",
+    )
+    parser.add_argument(
+        "--align-reference-geometry",
+        action="store_true",
+        help="Align the reference mesh to the candidate with scale-aware PCA + ICP.",
+    )
+    parser.add_argument(
+        "--geometry-alignment-samples",
+        type=int,
+        default=2_000,
+        help="Surface samples used by --align-reference-geometry.",
     )
     parser.add_argument(
         "--reference-middlebury-par",
@@ -68,7 +90,7 @@ def read_middlebury_camera_centers(path: Path) -> dict[str, np.ndarray]:
         values = np.asarray([float(value) for value in fields[1:]], dtype=np.float64)
         rotation = values[9:18].reshape(3, 3)
         translation = values[18:21]
-        centers[Path(fields[0]).name] = -rotation.T @ translation
+        centers[Path(fields[0]).stem.lower()] = -rotation.T @ translation
     return centers
 
 
@@ -85,7 +107,7 @@ def read_middlebury_camera_rotations(path: Path) -> dict[str, np.ndarray]:
         fields = line.split()
         if len(fields) == 22:
             values = np.asarray([float(value) for value in fields[1:]], dtype=np.float64)
-            rotations[Path(fields[0]).name] = values[9:18].reshape(3, 3)
+            rotations[Path(fields[0]).stem.lower()] = values[9:18].reshape(3, 3)
     return rotations
 
 
@@ -93,7 +115,7 @@ def read_manifest_camera_centers(path: Path) -> dict[str, np.ndarray]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     centers: dict[str, np.ndarray] = {}
     for frame in payload.get("frames", []):
-        image_name = Path(frame.get("ref_image", "")).name
+        image_name = Path(frame.get("ref_image", "")).stem.lower()
         camera_center = frame.get("camera_model", {}).get("camera_center")
         if image_name and isinstance(camera_center, list) and len(camera_center) == 3:
             centers[image_name] = np.asarray(camera_center, dtype=np.float64)
@@ -102,11 +124,31 @@ def read_manifest_camera_centers(path: Path) -> dict[str, np.ndarray]:
     return centers
 
 
+def read_metashape_camera_centers(path: Path) -> dict[str, np.ndarray]:
+    root = ET.parse(path).getroot()
+    centers: dict[str, np.ndarray] = {}
+    for camera in root.findall(".//cameras/camera"):
+        label = camera.get("label", "").strip()
+        transform = camera.findtext("transform", "").strip()
+        if not label or not transform:
+            continue
+        values = np.asarray(
+            [float(value) for value in transform.split()], dtype=np.float64
+        )
+        if values.size != 16:
+            continue
+        matrix = values.reshape(4, 4)
+        centers[Path(label).stem.lower()] = matrix[:3, 3]
+    if not centers:
+        raise ValueError(f"No camera centers found in Metashape chunk: {path}")
+    return centers
+
+
 def read_manifest_camera_rotations(path: Path) -> dict[str, np.ndarray]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     rotations: dict[str, np.ndarray] = {}
     for frame in payload.get("frames", []):
-        image_name = Path(frame.get("ref_image", "")).name
+        image_name = Path(frame.get("ref_image", "")).stem.lower()
         values = frame.get("camera_model", {}).get("rotation_world_to_camera")
         if image_name and isinstance(values, list) and len(values) == 9:
             rotations[image_name] = np.asarray(values, dtype=np.float64).reshape(3, 3)
@@ -181,6 +223,29 @@ def align_candidate_from_cameras(
         )
     diagnostics["camera_names"] = common_names
     diagnostics["candidate_to_reference_transform"] = transform.tolist()
+    return diagnostics
+
+
+def align_reference_from_metashape_cameras(
+    reference: trimesh.Trimesh,
+    metashape_chunk_path: Path,
+    manifest_path: Path,
+) -> dict[str, Any]:
+    reference_centers = read_metashape_camera_centers(metashape_chunk_path)
+    candidate_centers = read_manifest_camera_centers(manifest_path)
+    common_names = sorted(set(reference_centers) & set(candidate_centers))
+    if len(common_names) < 3:
+        raise ValueError(
+            f"Only {len(common_names)} matching camera names between "
+            f"{metashape_chunk_path} and {manifest_path}"
+        )
+    source = np.stack([reference_centers[name] for name in common_names])
+    target = np.stack([candidate_centers[name] for name in common_names])
+    transform, diagnostics = estimate_similarity(source, target)
+    reference.apply_transform(transform)
+    diagnostics["camera_names"] = common_names
+    diagnostics["reference_to_candidate_transform"] = transform.tolist()
+    diagnostics["source"] = "metashape_chunk_to_plascan_manifest"
     return diagnostics
 
 
@@ -311,17 +376,61 @@ def main() -> int:
     candidate_path = args.candidate.resolve()
     reference = load_mesh(reference_path)
     candidate = load_mesh(candidate_path)
-    if (args.reference_middlebury_par is None) != (args.candidate_mvs_manifest is None):
+    camera_alignment_requested = (
+        args.reference_middlebury_par is not None
+        or args.reference_metashape_chunk is not None
+    )
+    if camera_alignment_requested != (args.candidate_mvs_manifest is not None):
         raise ValueError(
-            "--reference-middlebury-par and --candidate-mvs-manifest must be specified together"
+            "A reference camera source and --candidate-mvs-manifest must be specified together"
+        )
+    if args.align_reference_geometry and camera_alignment_requested:
+        raise ValueError(
+            "Geometry and camera alignment modes are mutually exclusive"
         )
     alignment = None
-    if args.reference_middlebury_par is not None:
+    if args.align_reference_geometry:
+        if args.geometry_alignment_samples < 100:
+            raise ValueError("--geometry-alignment-samples must be at least 100")
+        transform, cost = trimesh.registration.mesh_other(
+            reference,
+            candidate,
+            samples=args.geometry_alignment_samples,
+            scale=True,
+            icp_first=20,
+            icp_final=80,
+        )
+        reference.apply_transform(transform)
+        alignment = {
+            "source": "scale_aware_geometry_icp",
+            "reference_to_candidate_transform": transform.tolist(),
+            "mean_squared_cost": float(cost),
+            "sample_count": args.geometry_alignment_samples,
+        }
+    elif args.reference_metashape_chunk is not None:
+        if args.candidate_mvs_manifest is None:
+            raise ValueError(
+                "--reference-metashape-chunk requires --candidate-mvs-manifest"
+            )
+        if args.reference_middlebury_par is not None:
+            raise ValueError(
+                "Metashape chunk and Middlebury camera alignment are mutually exclusive"
+            )
+        alignment = align_reference_from_metashape_cameras(
+            reference,
+            args.reference_metashape_chunk.resolve(),
+            args.candidate_mvs_manifest.resolve(),
+        )
+    elif args.reference_middlebury_par is not None:
         alignment = align_candidate_from_cameras(
             candidate,
             args.reference_middlebury_par.resolve(),
             args.candidate_mvs_manifest.resolve(),
         )
+    if args.aligned_reference_output is not None:
+        aligned_reference_path = args.aligned_reference_output.resolve()
+        aligned_reference_path.parent.mkdir(parents=True, exist_ok=True)
+        reference.export(aligned_reference_path)
     if args.aligned_candidate_output is not None:
         aligned_candidate_path = args.aligned_candidate_output.resolve()
         aligned_candidate_path.parent.mkdir(parents=True, exist_ok=True)

@@ -2,6 +2,8 @@
 
 #include <QJsonObject>
 #include <QObject>
+#include <QSharedPointer>
+#include <QTimer>
 #include <QVector>
 
 #include <functional>
@@ -19,8 +21,13 @@ public:
     void cancel();
 
 private:
-    void scheduleStage(quint64 generation, int stageIndex, const QJsonObject &metadata);
+    void startPendingRefresh();
+    void scheduleStage(quint64 generation,
+                       int stageIndex,
+                       const QSharedPointer<const QJsonObject> &metadata);
 
     QVector<Stage> _stages;
     quint64 _generation{};
+    QTimer _coalesceTimer;
+    QSharedPointer<const QJsonObject> _pendingMetadata;
 };

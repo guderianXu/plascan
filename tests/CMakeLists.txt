@@ -55,6 +55,22 @@ target_compile_definitions(test_source_contracts PRIVATE
 )
 gtest_discover_tests(test_source_contracts)
 
+add_executable(test_project_file_integration
+    test_project_file_integration.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/platform/ProjectFileIntegration.cpp
+)
+target_link_libraries(test_project_file_integration PRIVATE
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_project_file_integration PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui/platform
+)
+if(WIN32)
+    target_link_libraries(test_project_file_integration PRIVATE advapi32 shell32)
+endif()
+gtest_discover_tests(test_project_file_integration)
+
 # ==============================================================================
 # test_patchmatch_cpu — CPU PatchMatch 深度恢复回归测试
 # ==============================================================================
@@ -97,21 +113,6 @@ target_include_directories(test_lightglue_feature_budget PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/feature_extractors
 )
 gtest_discover_tests(test_lightglue_feature_budget)
-
-add_executable(test_feature_pair_planner
-    test_feature_pair_planner.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeaturePairPlanner.cpp
-)
-target_link_libraries(test_feature_pair_planner PRIVATE
-    plascan_common_project
-    Qt6::Core
-    GTest::gtest_main
-)
-target_include_directories(test_feature_pair_planner PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs
-    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
-)
-gtest_discover_tests(test_feature_pair_planner)
 
 # ==============================================================================
 # test_match_photos_task — Metashape-like 匹配照片任务框架
@@ -158,6 +159,34 @@ target_include_directories(test_match_photos_task PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/matchphototask/task
 )
 gtest_discover_tests(test_match_photos_task)
+
+add_executable(test_match_photos_parallelism
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask/tests/test_match_photos_parallelism.cpp
+)
+target_link_libraries(test_match_photos_parallelism PRIVATE
+    matchphototask
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_match_photos_parallelism PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask/runtime
+)
+gtest_discover_tests(test_match_photos_parallelism)
+
+add_executable(test_feature_preparation_queue
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask/tests/test_feature_preparation_queue.cpp
+)
+target_link_libraries(test_feature_preparation_queue PRIVATE
+    matchphototask
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_feature_preparation_queue PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask/stages
+)
+gtest_discover_tests(test_feature_preparation_queue)
 
 add_executable(test_tie_point_track_manager
     ${CMAKE_SOURCE_DIR}/src/core/matchphototask/tests/test_tie_point_track_manager.cpp
@@ -421,47 +450,12 @@ set(PLASCAN_QT_PLATFORM_PLUGIN_PATH
     "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/platforms")
 
 # ==============================================================================
-# test_bundle_adjust_dialog_lidar — GUI LiDAR 约束参数入口
-# ==============================================================================
-add_executable(test_bundle_adjust_dialog_lidar
-    test_bundle_adjust_dialog_lidar.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/BundleAdjustDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/BundleAdjustDialog.ui
-)
-set_target_properties(test_bundle_adjust_dialog_lidar PROPERTIES
-    AUTOMOC ON
-    AUTOUIC ON
-)
-target_link_libraries(test_bundle_adjust_dialog_lidar PRIVATE
-    Qt6::Core
-    Qt6::Gui
-    Qt6::Test
-    Qt6::Widgets
-    Qt6::Concurrent
-    GTest::gtest
-)
-target_compile_definitions(test_bundle_adjust_dialog_lidar PRIVATE
-    PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
-)
-target_include_directories(test_bundle_adjust_dialog_lidar PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs
-)
-gtest_discover_tests(test_bundle_adjust_dialog_lidar
-    DISCOVERY_TIMEOUT 60
-    DISCOVERY_MODE PRE_TEST
-    PROPERTIES
-        ENVIRONMENT
-            "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${PLASCAN_QT_PLATFORM_PLUGIN_PATH}")
-
-# ==============================================================================
 # test_project_data — ProjectData 持久化契约与 core/results 分域
 # ==============================================================================
 add_executable(test_project_data
     test_project_data.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/archive/PlascanArchive.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectData.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectFilesManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/config/JsonMergeUtil.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectConfigManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectUiConfigManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectWorkflowConfigManager.cpp
@@ -472,6 +466,7 @@ set_target_properties(test_project_data PROPERTIES
 )
 target_link_libraries(test_project_data PRIVATE
     plascan_common_project
+    plascan_common_json
     Qt6::Core
     Qt6::Concurrent
     ${PLASCAN_LIBZIP_TARGET}
@@ -518,38 +513,24 @@ add_executable(test_gui_project_utils
     test_gui_project_utils.cpp
     test_marker_canvas_interaction.cpp
     ${MARKER_PANEL_TEST_SOURCES}
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeatureExtractionDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeatureExtractionDialog.ui
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeaturePairPlanner.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeatureMatchingDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeatureMatchingDialog.ui
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/InitCameraPoseDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/InitCameraPoseDialog.ui
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/AerialTriangulationDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/AerialTriangulationDialog.ui
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/ThreeDReconstructionDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/ThreeDReconstructionDialog.ui
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/SparseCloudPostProcessDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/SparseCloudPostProcessDialog.ui
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/MapProjectDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/MapProjectDialog.ui
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/BundleAdjustDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/BundleAdjustDialog.ui
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/AboutDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/GenerateMaskDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/GenerateModelDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/WorkflowParameterDialogStyle.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/SurveyControlDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/CreateTiePointsDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/ThinTiePointsDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/CleanTiePointsDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/ObjRenderPreparation.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/AerialTriangulationDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/AerialTriangulationDialog.ui
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/MapProjectDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/MapProjectDialog.ui
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/application/AboutDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/image/GenerateMaskDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/GenerateModelDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/shared/WorkflowParameterDialogStyle.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/camera/SurveyControlDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/tie_points/CreateTiePointsDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/tie_points/ThinTiePointsDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/tie_points/CleanTiePointsDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/views/ObjRenderPreparation.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/menu/ToolbarButton.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/menu/MainMenu.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/main_window/ModelDropSupport.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/main_window/WorkspacePanelController.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/main_window/ProjectUiHydrator.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/archive/PlascanArchive.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectData.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectFilesManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectDashboardSummary.cpp
@@ -565,12 +546,12 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectResourceCleanupService.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectTiePointResultService.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectResultRecords.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/config/JsonMergeUtil.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ImageViewRotationSettings.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/config/PythonRuntimeBinding.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectConfigManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectUiConfigManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectWorkflowConfigManager.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/config/settings/ProjectDialogJsonSettingBase.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/config/settings/DialogSettingStore.cpp
     ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/FeatureData.cpp
     ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/FeatureFileIO.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/DepthOverlayData.cpp
@@ -629,6 +610,8 @@ target_link_libraries(test_gui_project_utils PRIVATE
     ${PLASCAN_LIBZIP_TARGET}
     ${PLASCAN_GDAL_TARGET}
     plascan_common_io
+    plascan_common_json
+    plascan_common_runtime
     plascan_common_string_utils
     plascan_common_model
     GTest::gtest
@@ -649,6 +632,7 @@ target_include_directories(test_gui_project_utils PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui/project/manager
     ${CMAKE_SOURCE_DIR}/src/gui/project/services
     ${CMAKE_SOURCE_DIR}/src/gui/project/support
+    ${CMAKE_SOURCE_DIR}/src/gui/config/settings
     ${CMAKE_SOURCE_DIR}/src/gui/views
     ${CMAKE_SOURCE_DIR}/src/gui/widgets
     ${CMAKE_SOURCE_DIR}/src/core/sfm
@@ -686,6 +670,7 @@ set_target_properties(test_workspace_section_icons PROPERTIES
     AUTOUIC ON
 )
 target_link_libraries(test_workspace_section_icons PRIVATE
+    plascan_common_project
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
@@ -706,8 +691,8 @@ gtest_discover_tests(test_workspace_section_icons
 
 add_executable(test_workflow_parameter_dialog_style
     test_workflow_parameter_dialog_style.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/GenerateModelDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/WorkflowParameterDialogStyle.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/GenerateModelDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/shared/WorkflowParameterDialogStyle.cpp
 )
 set_target_properties(test_workflow_parameter_dialog_style PROPERTIES
     AUTOMOC ON
@@ -983,7 +968,7 @@ gtest_discover_tests(test_feature_file_io)
 # ==============================================================================
 add_executable(test_camera_scene_view_math
     test_camera_scene_view_math.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/CameraSceneViewMath.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/views/CameraSceneViewMath.cpp
 )
 target_link_libraries(test_camera_scene_view_math PRIVATE
     Qt6::Core
@@ -991,7 +976,7 @@ target_link_libraries(test_camera_scene_view_math PRIVATE
     GTest::gtest_main
 )
 target_include_directories(test_camera_scene_view_math PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs
+    ${CMAKE_SOURCE_DIR}/src/gui/views
 )
 gtest_discover_tests(test_camera_scene_view_math)
 
@@ -1006,6 +991,35 @@ target_compile_definitions(test_camera_scene_render_contracts PRIVATE
     PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
 gtest_discover_tests(test_camera_scene_render_contracts)
+
+add_executable(test_tie_point_visualization
+    test_tie_point_visualization.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/views/TiePointVisualization.cpp
+)
+target_link_libraries(test_tie_point_visualization PRIVATE
+    GTest::gtest_main
+    Qt6::Core
+    Qt6::Gui
+)
+target_include_directories(test_tie_point_visualization PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui/views
+)
+gtest_discover_tests(test_tie_point_visualization)
+
+add_executable(test_model_visualization
+    test_model_visualization.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/views/ModelVisualization.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/views/TiePointVisualization.cpp
+)
+target_link_libraries(test_model_visualization PRIVATE
+    GTest::gtest_main
+    Qt6::Core
+    Qt6::Gui
+)
+target_include_directories(test_model_visualization PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui/views
+)
+gtest_discover_tests(test_model_visualization)
 
 # ==============================================================================
 # test_marker_task_runner — 标靶后台检测、真实进度与取消
@@ -1034,10 +1048,8 @@ gtest_discover_tests(test_marker_task_runner DISCOVERY_MODE PRE_TEST)
 add_executable(test_marker_detection_job_builder
     test_marker_detection_job_builder.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerDetectionJobBuilder.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/archive/PlascanArchive.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectData.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectFilesManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/config/JsonMergeUtil.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectConfigManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectUiConfigManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectWorkflowConfigManager.cpp
@@ -1046,6 +1058,7 @@ add_executable(test_marker_detection_job_builder
 set_target_properties(test_marker_detection_job_builder PROPERTIES AUTOMOC ON)
 target_link_libraries(test_marker_detection_job_builder PRIVATE
     plascan_common_project
+    plascan_common_json
     control_points
     Qt6::Core
     Qt6::Gui

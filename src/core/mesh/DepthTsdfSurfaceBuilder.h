@@ -51,6 +51,14 @@ struct DepthTsdfOptions
     int uncertaintyAdaptiveMaximumSamplesPerFrame = 20000;
     int uncertaintyAdaptiveMinimumSampleCount = 512;
     float minimumConfidence = 0.25f;
+    bool enablePixelEvidenceWeighting = false;
+    float unconfirmedNativeObservationMultiplier = 0.30f;
+    float weakNativeObservationMultiplier = 0.55f;
+    float repairedObservationMultiplier = 0.70f;
+    bool enableEvidenceSupportWeightDecoupling = false;
+    float evidenceSupportWeightExponent = 0.50f;
+    bool enableWeakEvidenceSurfaceOnlyIntegration = false;
+    float weakEvidenceSurfaceBandVoxels = 0.0f;
     float minimumVoxelWeight = 1.0f;
     float minimumSingleObservationWeight = 0.70f;
     float minimumGeometryVerifiedObservationWeight = 0.85f;
@@ -85,6 +93,9 @@ struct DepthTsdfOptions
     float orbitalGapBoundaryMinimumQualityMultiplier = 0.65f;
     float orbitalGapOppositeMinimumQualityMultiplier = 0.50f;
     float orbitalGapBoundaryMinimumObservationWeight = 0.30f;
+    bool enableOrbitalGapAdaptiveTruncation = false;
+    float orbitalGapAdaptiveTruncationScale = 1.50f;
+    float orbitalGapAdaptiveMaximumTruncationVoxels = 16.0f;
     bool enableSurfacePatchSupport = false;
     bool enableContourBandZeroCrossingSupport = false;
     bool collectZeroCrossingDiagnostics = false;
@@ -131,6 +142,16 @@ struct DepthTsdfOptions
     int adaptiveTgvRecoveryPasses = 2;
     int adaptiveTgvMinimumRecoveryNeighbors = 2;
     float adaptiveTgvMaximumRecoveryConflictRatio = 0.20f;
+    bool enableVisualHullSignedDistanceCompletion = false;
+    int visualHullCompletionMinimumVisibleViews = 4;
+    int visualHullCompletionAllowedSilhouetteViolations = 1;
+    float visualHullCompletionBandVoxels = 8.0f;
+    bool visualHullCompletionPreserveObservedTsdf = false;
+    float visualHullCompletionMaximumObservedAbsoluteTsdf = 0.45f;
+    int visualHullCompletionMinimumGeometrySupport = 2;
+    int visualHullCompletionRelaxationIterations = 0;
+    float visualHullCompletionRelaxationLambda = 0.35f;
+    float visualHullCompletionMaximumUpdate = 0.20f;
     float minimumSurfacePatchObservationWeight = 0.60f;
     int minimumSurfacePatchSourceCount = 2;
     int minimumSurfacePatchCoreNeighborCount = 3;
@@ -271,6 +292,11 @@ struct DepthTsdfStatistics
     std::uint64_t rejectedGeometryConsistencyCount = 0;
     std::uint64_t rejectedInvalidNearestPixelRecoveryCount = 0;
     std::uint64_t crossViewConsensusDepthObservationCount = 0;
+    std::uint64_t unconfirmedNativeObservationCount = 0;
+    std::uint64_t weakNativeObservationCount = 0;
+    std::uint64_t repairedObservationCount = 0;
+    std::uint64_t strongNativeObservationCount = 0;
+    std::uint64_t weakEvidenceOutsideSurfaceBandRejectedCount = 0;
     std::uint64_t crossViewConsensusContourBandPixelCount = 0;
     std::uint64_t supportedSampleCount = 0;
     std::uint64_t singleViewSupportedSampleCount = 0;
@@ -288,6 +314,8 @@ struct DepthTsdfStatistics
     std::uint64_t surfacePatchRejectedSourceOverlapCount = 0;
     std::uint64_t surfacePatchRejectedDepthSpreadCount = 0;
     std::uint64_t surfacePatchRejectedFreeSpaceCount = 0;
+    std::uint64_t surfacePatchRejectedSurfaceWeightRatioCount = 0;
+    std::uint64_t surfacePatchRejectedAbsoluteTsdfCount = 0;
     int surfacePatchCreatedComponentCount = 0;
     bool effectiveContourBandZeroCrossingSupport = false;
     std::uint64_t contourBandZeroCrossingConsideredSampleCount = 0;
@@ -357,7 +385,16 @@ struct DepthTsdfStatistics
     std::uint64_t adaptiveTgvMergedNodeCount = 0;
     std::uint64_t adaptiveTgvBalanceSplitCount = 0;
     std::uint64_t adaptiveTgvGlobalVisibilitySampleCount = 0;
+    std::uint64_t adaptiveTgvRecoveryEligibleSampleCount = 0;
+    std::uint64_t adaptiveTgvRecoveryConflictRejectedSampleCount = 0;
     std::uint64_t adaptiveTgvRecoveredSampleCount = 0;
+    bool effectiveVisualHullSignedDistanceCompletion = false;
+    std::uint64_t visualHullCompletionOccupiedSampleCount = 0;
+    std::uint64_t visualHullCompletionBoundarySampleCount = 0;
+    std::uint64_t visualHullCompletionPreservedObservedSampleCount = 0;
+    std::uint64_t visualHullCompletionRecoveredSampleCount = 0;
+    std::uint64_t visualHullCompletionRelaxedSampleCount = 0;
+    float effectiveVisualHullCompletionBandVoxels = 0.0f;
     float effectiveAdaptiveTgvMaximumActiveAbsoluteField = 0.0f;
     bool adaptiveTgvTwoToOneBalanced = false;
     int adaptiveTgvIterationCount = 0;
@@ -391,6 +428,15 @@ struct DepthTsdfStatistics
     bool effectiveCrossViewConsensusDepth = false;
     float effectiveMaximumCrossViewConsensusInverseDepthSpread = 0.0f;
     bool effectiveCrossViewConsensusContourBandOnly = false;
+    bool effectivePixelEvidenceWeighting = false;
+    float effectiveUnconfirmedNativeObservationMultiplier = 0.0f;
+    float effectiveWeakNativeObservationMultiplier = 0.0f;
+    float effectiveRepairedObservationMultiplier = 0.0f;
+    bool effectiveEvidenceSupportWeightDecoupling = false;
+    float effectiveEvidenceSupportWeightExponent = 0.0f;
+    bool effectiveWeakEvidenceSurfaceOnlyIntegration = false;
+    float effectiveWeakEvidenceSurfaceBandVoxels = 0.0f;
+    std::uint64_t evidenceSupportRecoveredSampleCount = 0;
     bool effectiveRobustFrameQualityWeighting = false;
     int robustFrameQualityDownweightedFrameCount = 0;
     float robustFrameQualityMedian = 0.0f;
@@ -413,6 +459,9 @@ struct DepthTsdfStatistics
     int orbitalGapOppositeRefIndex = -1;
     QJsonArray orbitalFrameRoles;
     bool effectiveOrbitalGapBoundaryRecovery = false;
+    bool effectiveOrbitalGapAdaptiveTruncation = false;
+    float effectiveOrbitalGapAdaptiveTruncationScale = 0.0f;
+    float effectiveOrbitalGapAdaptiveMaximumTruncationVoxels = 0.0f;
     int orbitalGapQualityFloorFrameCount = 0;
     QVector<int> orbitalGapQualityFloorRefIndices;
     std::uint64_t orbitalGapBoundaryRecoveryCandidateCount = 0;
@@ -802,6 +851,13 @@ struct DepthTsdfZeroCrossingRecoveryStatistics
     int rejectedAnchorComponentCount = 0;
 };
 
+struct DepthTsdfVisualHullCompletionStatistics
+{
+    std::uint64_t occupiedSampleCount = 0;
+    std::uint64_t boundarySampleCount = 0;
+    std::uint64_t recoveredSampleCount = 0;
+};
+
 class DepthTsdfSurfaceBuilder
 {
 public:
@@ -835,6 +891,15 @@ public:
                                   bool *multiView = nullptr,
                                   int maximumGeometrySupportCount = 0,
                                   bool *geometryVerifiedSingleView = nullptr);
+    static float observationEvidenceWeightMultiplier(
+        const DepthTsdfObservationSample &observation,
+        const DepthTsdfOptions &options);
+    static float observationEvidenceSupportWeightMultiplier(
+        const DepthTsdfObservationSample &observation,
+        const DepthTsdfOptions &options);
+    static bool observationUsesSurfaceOnlyIntegration(
+        const DepthTsdfObservationSample &observation,
+        const DepthTsdfOptions &options);
     static QVector<float> robustFrameQualityWeights(
         const QVector<float> &rawWeights,
         float minimumMultiplier = 0.35f,
@@ -856,6 +921,14 @@ public:
         const std::vector<float> &tsdf,
         const std::vector<float> &weight,
         const std::vector<std::uint8_t> &supported);
+    static DepthTsdfVisualHullCompletionStatistics
+    completeUnsupportedSamplesWithVisualHullSignedDistance(
+        const DepthTsdfLayout &layout,
+        const std::vector<std::uint8_t> &occupied,
+        float bandVoxels,
+        std::vector<float> *tsdf,
+        std::vector<std::uint8_t> *supported);
+
     static DepthTsdfZeroCrossingRecoveryStatistics
         recoverGeometryVerifiedZeroCrossingSamples(
             const DepthTsdfLayout &layout,

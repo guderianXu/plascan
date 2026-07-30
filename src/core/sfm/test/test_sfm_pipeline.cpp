@@ -984,6 +984,18 @@ TEST(IncrementalSfmOptionsTest, FullExecutionProfilePreservesConfiguredRefinemen
     EXPECT_EQ(effective.iterativeBARounds, 3);
 }
 
+TEST(IncrementalSfmOptionsTest, ReprojectionThresholdIsSharedWithBundleAdjustment)
+{
+    IncrementalSfmOptions options;
+    options.filterMaxReprojError = 1.25;
+    options.baOptions.filterMaxReprojError = 9.0;
+
+    const IncrementalSfmOptions effective = effectiveSfmOptions(options);
+
+    EXPECT_DOUBLE_EQ(effective.filterMaxReprojError, 1.25);
+    EXPECT_DOUBLE_EQ(effective.baOptions.filterMaxReprojError, 1.25);
+}
+
 class SfmPipelineTest : public ::testing::Test {
 protected:
     IncrementalSfmOptions opts;

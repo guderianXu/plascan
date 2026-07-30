@@ -545,11 +545,11 @@ public:
         QString scriptName;
         if (_algorithm == "roma")
         {
-            scriptName = QStringLiteral("match_roma.py");
+            scriptName = QStringLiteral("workflows/match_roma.py");
         }
         else if (_algorithm == "dedode")
         {
-            scriptName = QStringLiteral("run_dedode.py");
+            scriptName = QStringLiteral("workflows/run_dedode.py");
         }
         else
         {

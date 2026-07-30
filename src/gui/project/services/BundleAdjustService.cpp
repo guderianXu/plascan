@@ -12,7 +12,7 @@
 #include "LaserConstraintAssociation.h"
 #include "LaserConstraintMap.h"
 #include "Logger.h"
-#include "project/ProjectCameraIO.h"
+#include "ProjectCameraIO.h"
 #include "project/ProjectMatchCatalog.h"
 #include "project/ProjectMetadata.h"
 #include "io/PathIO.h"

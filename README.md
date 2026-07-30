@@ -124,17 +124,47 @@ python scripts\env\configure_with_env.py --build-type release --build
 
 `.venv/` 已加入 git 忽略列表。后续需要运行 Python 模型导出、测试或辅助脚本时，优先复用这个环境；只有 CI、打包或特殊隔离场景才通过 `--runtime-dir` 指定其它虚拟环境位置。
 
+### 工程文件
+
+PlaScan 使用与 Metashape 相同的双实体工程结构：
+
+```text
+name.plascan
+name.files/
+├─ project.zip
+├─ 1/
+│  └─ chunk.zip
+└─ 2/
+   └─ chunk.zip
+```
+
+  `.plascan` 是轻量项目描述；`name.files/project.zip` 保存 Chunk 索引和项目 UI 状态，
+  `1/`、`2/` 等只增不复用的数字目录分别保存各 Chunk 的元数据、影像和工作流产物。
+  目录号单调递增且不复用，例如已经创建 `1/2/3`，删除 `2` 后再次新建会分配 `4`。
+  复制、移动、重命名或备份时必须成对处理 `.plascan` 与 `.files`。资源使用项目 URI
+  和 SHA-256 索引，不依赖原电脑盘符。旧版根级 `workspace/` 分体工程和旧版单体
+  `.plascan` ZIP 均不再支持，打开时只报告格式错误，不修改旧工程内容。
+
+  Windows 下 PlaScan 启动时会为当前用户注册 `.plascan` 文件关联。首次运行一次 PlaScan
+  后，可在资源管理器中双击项目描述文件，软件将自动启动并通过异步加载流程打开该项目。
+
+应用窗口和最近项目使用系统 `QSettings`；处理参数保存在 Chunk `doc.json` 的
+`project_config` 字段；项目显示状态保存在根 `doc.json` 的 `ui_state` 字段。旧工程
+不会自动迁移。格式细节见
+[`docs/project/PLASCAN_PROJECT_FORMAT.md`](docs/project/PLASCAN_PROJECT_FORMAT.md)。
+
 ### GUI 一键工作流
 
-GUI 的 `工作流程` 菜单提供三个互相独立的工程入口：
+GUI 的 `工作流程` 菜单按处理阶段提供互相独立的工程入口：
 
 | 入口 | 输出 | 说明 |
 |------|------|------|
-| `三维重建` | 稀疏点云、深度图、PLY/OBJ 三维模型 | 任意三维深度源默认直接 TSDF 建模；密集点云是独立可选产品，不生成 DEM/DOM |
+| `空中三角测量` | 相机外参、连接点和正式稀疏点云 | 只负责影像对齐和 BA，不自动进入密集重建 |
+| `生成模型` | PLY/OBJ 三维模型 | 从当前项目已有的连接点、深度图或点云生成模型 |
 | `创建 DEM` | `dem.tif`、`depth_map.png`、可选 DEM 网格模型 | 自动模式从立体影像开始，手动模式可直接使用已有密集点云 |
 | `生成 正射影像` | DOM GeoTIFF/PNG | 默认全选项目影像，分辨率为 `0` 时自动沿用 DEM 网格 |
 
-这三个入口的 UI 契约由 `test_gui_project_utils` 覆盖，避免后续改动把 DEM/DOM 错误耦合进三维重建流程。
+旧版 `工作流程 -> 三维重建` 一键对话框已移除；空三、密集处理、模型和地形产品由各自入口显式启动。
 
 ### 重建链路状态
 
@@ -169,7 +199,7 @@ build/bin/camera_convert_cli --format auto \
   --overwrite
 ```
 
-三维建模专用 CLI 与 GUI 的 `工作流程 -> 三维重建` 使用同一套服务链路，只生成稀疏点云、密集点云和三维模型，不生成 DEM/DOM：
+三维建模专用 CLI 仍提供无 GUI 的批处理链路，只生成稀疏点云、密集点云和三维模型，不生成 DEM/DOM：
 
 ```bash
 cmake --build build --target three_d_reconstruction_cli -j$(nproc)
@@ -228,7 +258,7 @@ python scripts/bench/run_ba_backend_benchmark.py \
 批量测试 `testData/photogrammetry_benchmarks` 中已转换为 PlaScan 输入的数据：
 
 ```bash
-python scripts/run_photogrammetry_benchmarks.py \
+python scripts/bench/run_photogrammetry_benchmarks.py \
   --root testData/photogrammetry_benchmarks \
   --output-dir build/benchmark_runs/photogrammetry_benchmarks \
   --stage sfm \
@@ -240,7 +270,7 @@ python scripts/run_photogrammetry_benchmarks.py \
 
 ```bash
 cmake --build build --target reconstruct_pipeline_cli -j$(nproc)
-python scripts/run_full_pipeline.py path/to/input.lis \
+python scripts/workflows/run_full_pipeline.py path/to/input.lis \
   --build-dir build \
   --output-dir build/测试用临时文件/full_pipeline \
   --device auto \
@@ -366,9 +396,9 @@ triangulate_cli     -d disp.tif --rect rect.xml --camL A.txt --camR B.txt -o clo
 或通过导出脚本生成：
 
 ```bash
-python scripts/export_superpoint.py                 # SuperPoint
-python scripts/export_disk_aliked.py                # DISK + ALIKED
-python scripts/export_models.py --loftr --roma      # LoFTR + RoMa
+python scripts/models/export_superpoint.py                 # SuperPoint
+python scripts/models/export_disk_aliked.py                # DISK + ALIKED
+python scripts/models/export_models.py --loftr --roma      # LoFTR + RoMa
 ```
 
 ## 平台支持
@@ -408,7 +438,7 @@ QT_QPA_PLATFORM=offscreen ./build/tests/test_gui_project_utils
 
 这些测试分别覆盖：
 
-- GUI 一键入口边界：三维重建只负责点云/模型，DEM 和 DOM 使用独立按钮。
+- GUI 工作流边界：空三、模型、DEM 和 DOM 使用独立入口。
 - 模型生成降级路径：点云缺少法向量时 Poisson 重建能回退到可用网格。
 - DEM/DOM 工程质量：DEM 栅格、点云颜色/强度保留、DOM 锐度融合、OBJ/MTL 纹理、目录瓦片拼接输出。
 

@@ -151,6 +151,27 @@ TEST(CameraPositiveDepth, NormalizationPreservesDistortedProjection)
     EXPECT_NEAR(normalized_pixel[1], original_pixel[1], 1e-9);
 }
 
+TEST(CameraPositiveDepth, UsesPhysicalForwardAxis)
+{
+    Camera camera;
+    camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
+    camera.setPose({1.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0,
+                    0.0, 0.0, 1.0},
+                   {0.0, 0.0, 0.0});
+
+    const double positive_z[3] = {0.0, 0.0, 5.0};
+    const double negative_z[3] = {0.0, 0.0, -5.0};
+    EXPECT_DOUBLE_EQ(camera.positiveDepth(positive_z), 5.0);
+    EXPECT_TRUE(camera.isPointInFront(positive_z));
+    EXPECT_FALSE(camera.isPointInFront(negative_z));
+
+    camera.setDepthAxisFlipped(true);
+    EXPECT_DOUBLE_EQ(camera.positiveDepth(negative_z), 5.0);
+    EXPECT_TRUE(camera.isPointInFront(negative_z));
+    EXPECT_FALSE(camera.isPointInFront(positive_z));
+}
+
 TEST(CameraPositiveDepth, DistortedProjectionUnprojectionRoundTrip)
 {
     Camera camera;

@@ -125,10 +125,10 @@ int runPythonDedodeExtract(const std::string &imgPath,
                            int maxDim,
                            int maxKp)
 {
-    const QString script = findScriptFile(QStringLiteral("run_dedode.py"));
+    const QString script = findScriptFile(QStringLiteral("workflows/run_dedode.py"));
     if (script.isEmpty())
     {
-        fprintf(stderr, "未找到 DeDoDe 脚本 scripts/run_dedode.py\n");
+        fprintf(stderr, "未找到 DeDoDe 脚本 scripts/workflows/run_dedode.py\n");
         return cli::EXIT_IO_ERR;
     }
 

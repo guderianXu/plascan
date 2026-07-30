@@ -3,10 +3,10 @@
 #include "ui_WorkspaceCenterWidget.h"
 
 #include "CanvasWidget.h"
-#include "CameraModel3DDialog.h"
+#include "camera/CameraModel3DDialog.h"
 #include "DualImageViewer.h"
 #include "ObservationNetworkView.h"
-#include "project/ProjectCameraIO.h"
+#include "ProjectCameraIO.h"
 #include "project/ProjectMatchCatalog.h"
 #include "project/ProjectMetadata.h"
 
@@ -289,6 +289,22 @@ void WorkspaceCenterWidget::showPointCloudFile(const QString &pointCloudPath)
     }
 }
 
+void WorkspaceCenterWidget::showTiePointCloudFile(const QString &pointCloudPath,
+                                                  const QString &sidecarPath)
+{
+    if (!_modelView)
+    {
+        return;
+    }
+
+    _modelView->loadTiePointCloudFromFile(pointCloudPath, sidecarPath);
+    if (_modelBtn)
+    {
+        setViewButtonText(_modelBtn, displayNameForPath(pointCloudPath), pointCloudPath);
+    }
+    showModelView();
+}
+
 void WorkspaceCenterWidget::highlightCameraForImage(const QString &imagePath)
 {
     if (_modelView)
@@ -303,6 +319,77 @@ void WorkspaceCenterWidget::clearHighlightedCamera()
     {
         _modelView->clearHighlightedCamera();
     }
+}
+
+void WorkspaceCenterWidget::resetActiveView()
+{
+    switch (currentViewMode())
+    {
+    case ViewMode::Image:
+        if (_canvas)
+        {
+            _canvas->resetView();
+        }
+        break;
+    case ViewMode::Model:
+        if (_modelView)
+        {
+            _modelView->resetView();
+        }
+        break;
+    case ViewMode::Compare:
+        if (_dualImageViewer)
+        {
+            _dualImageViewer->resetBothViews();
+        }
+        break;
+    case ViewMode::ObservationNetwork:
+        if (_obsNetView)
+        {
+            _obsNetView->resetLayout();
+        }
+        break;
+    case ViewMode::None:
+        break;
+    }
+}
+
+void WorkspaceCenterWidget::clearProjectView()
+{
+    if (_canvas)
+    {
+        _canvas->showImage(QString());
+    }
+    if (_dualImageViewer)
+    {
+        _dualImageViewer->clearViewer();
+    }
+    if (_obsNetView)
+    {
+        _obsNetView->clearNetwork();
+    }
+    if (_modelView)
+    {
+        _modelView->clearProjectScene();
+    }
+
+    if (_modelBtn)
+    {
+        setViewButtonText(_modelBtn, tr("模型"), tr("模型"));
+    }
+    if (_imageBtn)
+    {
+        setViewButtonText(_imageBtn, tr("影像"), tr("影像"));
+    }
+    if (_compareBtn)
+    {
+        setViewButtonText(_compareBtn, tr("对比"), tr("对比"));
+    }
+    if (_obsNetBtn)
+    {
+        setViewButtonText(_obsNetBtn, tr("观测网络"), tr("观测网络"));
+    }
+    showModelView();
 }
 
 void WorkspaceCenterWidget::showObservationNetwork(const xjw::ObservationNetwork &net, const QString &title)

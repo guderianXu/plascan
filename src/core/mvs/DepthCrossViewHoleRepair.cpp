@@ -316,12 +316,29 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
     }
     auto interpolate_anchored_components = [&]()
     {
+        cv::Mat interpolation_anchor_mask = strong_repaired_mask.clone();
+        if (options.includeValidNativeInterpolationAnchors)
+        {
+            for (int row = 0; row < reference_depth.rows; ++row)
+            {
+                const float *depth_row = reference_depth.ptr<float>(row);
+                std::uint8_t *anchor_row =
+                    interpolation_anchor_mask.ptr<std::uint8_t>(row);
+                for (int column = 0; column < reference_depth.cols; ++column)
+                {
+                    if (validDepth(depth_row[column]))
+                    {
+                        anchor_row[column] = 255;
+                    }
+                }
+            }
+        }
         stats.anchoredInterpolation = interpolateAnchoredInternalDepthHoles(
             reference_depth,
             has_support
                 ? support_mask
                 : cv::Mat(reference_depth.size(), CV_8UC1, cv::Scalar(255)),
-            strong_repaired_mask,
+            interpolation_anchor_mask,
             guide_gray,
             options.anchoredInterpolation,
             has_confidence ? reference_confidence : nullptr,

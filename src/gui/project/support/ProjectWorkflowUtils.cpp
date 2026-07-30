@@ -647,7 +647,7 @@ bool resolveSparsePointContext(const QJsonObject &meta,
 
     if (errorMessage)
     {
-        *errorMessage = QStringLiteral("未找到可用的正式 SfM/BA 稀疏点云结果。请先运行三维重建/空三，而不是两视预览三角化。");
+        *errorMessage = QStringLiteral("未找到可用的正式 SfM/BA 稀疏点云结果。请先运行空中三角测量，而不是两视预览三角化。");
     }
     return false;
 }

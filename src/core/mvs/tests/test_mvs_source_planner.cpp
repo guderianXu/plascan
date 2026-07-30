@@ -269,6 +269,47 @@ TEST(MvsSourcePlanner, MissingVerificationStatisticsCanBackfillButFailedPairCann
         QStringLiteral("missing_geometric_inlier_statistics"));
 }
 
+TEST(MvsSourcePlanner,
+     MissingStatisticsWithNegligibleDirectMatchesCannotBackfill)
+{
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 9;
+    options.maxSources = 3;
+    options.rejectAngleOutliers = true;
+    options.maxTriangulationAngleDeg = 60.0f;
+    options.allowSequenceFallback = false;
+    options.minMissingStatisticsPairMatches = 16;
+
+    MvsSourceCandidate verified =
+        candidate(3, 120, 95, 12.0f, 0.8f, 0.5f, true);
+    verified.verifiedPairGeometry = true;
+    verified.verificationStatus = MvsSourceVerificationStatus::Verified;
+    verified.pairTotalMatches = 130;
+
+    MvsSourceCandidate missing =
+        candidate(5, 1600, 1600, 56.0f, 0.9f, 1.0f, true);
+    missing.verificationStatus =
+        MvsSourceVerificationStatus::MissingStatistics;
+    missing.pairTotalMatches = 2;
+    missing.verificationReason = "stored_match_evidence_insufficient";
+
+    const auto plan =
+        planMvsSourceViewsVerifiedFirst({verified, missing}, options);
+
+    ASSERT_EQ(plan.selected.size(), 1u);
+    EXPECT_EQ(plan.selected.front().viewIndex, 3);
+    EXPECT_EQ(plan.sourceViewShortfall, 2);
+    EXPECT_TRUE(std::any_of(
+        plan.rejected.cbegin(),
+        plan.rejected.cend(),
+        [](const auto &entry)
+        {
+            return entry.candidate.viewIndex == 5 &&
+                entry.reason == MvsSourceRejectReason::LowQuality;
+        }));
+}
+
 TEST(MvsSourcePlanner, VerifiedFirstBackfillRespectsSceneSpecificMaximumAngle)
 {
     MvsSourcePlannerOptions options;

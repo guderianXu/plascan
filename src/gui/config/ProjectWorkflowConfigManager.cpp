@@ -5,7 +5,8 @@
  * 包含工作流配置的默认值定义、步骤参数读取与合并更新逻辑。
  */
 #include "ProjectWorkflowConfigManager.h"
-#include "JsonMergeUtil.h"
+
+#include "json/JsonObjectMerge.h"
 
 /**
  * @brief 生成 "workflow" 段各步骤的默认参数结构。
@@ -53,5 +54,5 @@ void ProjectWorkflowConfigManager::setSettings(const QString &step, const QJsonO
 {
     // 以当前步骤配置为基准进行深度合并，保留未被补丁覆盖的原有字段
     QJsonObject current = _workflow.value(step).toObject();
-    _workflow[step] = JsonMergeUtil::deepMerge(current, settings);
+    _workflow[step] = xjw::common::json::deepMergeObjects(current, settings);
 }

@@ -182,6 +182,40 @@ TEST(DepthCrossViewHoleRepairTest, RejectsOversizedTwoSourceComponent)
     EXPECT_EQ(cv::countNonZero(reference(cv::Rect(28, 28, 7, 7)) > 0.0f), 0);
 }
 
+TEST(DepthCrossViewHoleRepairTest,
+     UsesValidNativeBoundaryAsInterpolationAnchor)
+{
+    cv::Mat reference(48, 48, CV_32FC1, cv::Scalar(2.0f));
+    const cv::Rect hole(16, 16, 16, 16);
+    reference(hole).setTo(0.0f);
+    const cv::Mat support(48, 48, CV_8UC1, cv::Scalar(255));
+    const std::vector<cv::Mat> projected = {
+        cv::Mat(48, 48, CV_32FC1, cv::Scalar(0.0f)),
+        cv::Mat(48, 48, CV_32FC1, cv::Scalar(0.0f))};
+    cv::Mat confidence(48, 48, CV_32FC1, cv::Scalar(0.8f));
+    cv::Mat votes(48, 48, CV_16UC1, cv::Scalar(1));
+    votes(hole).setTo(0);
+    cv::Mat repaired_mask;
+    xjw::mvs::CrossViewHoleRepairOptions options;
+    options.includeValidNativeInterpolationAnchors = true;
+    options.anchoredInterpolation.enabled = true;
+
+    const auto stats = xjw::mvs::repairDepthHolesFromProjectedSources(
+        reference,
+        support,
+        projected,
+        options,
+        &confidence,
+        &votes,
+        &repaired_mask);
+
+    EXPECT_GT(stats.anchoredInterpolation.anchorPixelCount, 0U);
+    EXPECT_EQ(stats.anchoredInterpolation.acceptedComponentCount, 1U);
+    EXPECT_EQ(cv::countNonZero(reference(hole) <= 0.0f), 0);
+    EXPECT_NEAR(reference.at<float>(24, 24), 2.0f, 1.0e-3f);
+    EXPECT_EQ(repaired_mask.at<std::uint8_t>(24, 24), 255);
+}
+
 TEST(DepthAnchoredHoleInterpolatorTest, FillsInternalComponentBetweenStrongAnchors)
 {
     cv::Mat depth(48, 48, CV_32FC1, cv::Scalar(2.0f));

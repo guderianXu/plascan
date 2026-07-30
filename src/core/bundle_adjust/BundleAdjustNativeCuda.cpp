@@ -110,12 +110,24 @@ BAResult optimizePointsWithNativeCuda(const std::vector<Camera> &cameras,
     result.totalTracks = static_cast<int>(tracks.size());
     result.refinedCameras = cameras;
     result.points.resize(tracks.size());
+    for (size_t trackIndex = 0; trackIndex < tracks.size(); ++trackIndex)
+    {
+        result.points[trackIndex].point = tracks[trackIndex].initialPoint;
+    }
+
+    if (options.cancelFlag && options.cancelFlag->load())
+    {
+        result.solveStatus = BASolveStatus::Cancelled;
+        result.backendMessage = "native_cuda BA 在启动前被取消";
+        return result;
+    }
 
     auto build = native_cuda::buildWorkset(cameras, tracks, options);
     const auto setupEnd = std::chrono::steady_clock::now();
     result.setupSeconds = std::chrono::duration<double>(setupEnd - totalStart).count();
     if (!build.ok)
     {
+        result.solveStatus = BASolveStatus::InvalidInput;
         result.backendMessage = build.message;
         result.totalSeconds = result.setupSeconds;
         return result;
@@ -142,10 +154,13 @@ BAResult optimizePointsWithNativeCuda(const std::vector<Camera> &cameras,
     result.totalSeconds = std::chrono::duration<double>(solveEnd - totalStart).count();
     if (!summary.ok)
     {
+        result.solveStatus = BASolveStatus::NumericalFailure;
         result.backendMessage = summary.message;
         return result;
     }
 
+    result.solveStatus = BASolveStatus::Success;
+    result.solutionUsable = true;
     result.usedGpu = true;
     result.nativeCudaPcgIterations = summary.pcgIterations;
     result.nativeCudaLinearResidual = summary.linearResidual;
@@ -223,6 +238,7 @@ BAResult optimizePointsWithNativeCuda(const std::vector<Camera> &cameras,
 #endif
 
     result.backendMessage = "native_cuda 后端尚未完成求解路径";
+    result.solveStatus = BASolveStatus::BackendUnavailable;
     result.totalSeconds = result.setupSeconds;
     return result;
 }

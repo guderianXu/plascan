@@ -10,10 +10,10 @@
 #include "project/BaInputBuilder.h"
 #include "BundleAdjust.h"
 #include "BundleAdjustService.h"
-#include "PlascanArchive.h"
 #include "ProjectFilesManager.h"
 #include "project/ProjectIO.h"
-#include "project/ProjectCameraIO.h"
+#include "project/ProjectSession.h"
+#include "ProjectCameraIO.h"
 #include "project/ProjectMatchCatalog.h"
 #include "project/ProjectMetadata.h"
 
@@ -22,7 +22,6 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
-#include <QJsonDocument>
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
@@ -77,60 +76,6 @@ xjw::BABackend parseBaBackendName(const QString &raw)
     return xjw::BABackend::LegacyCpu;
 }
 
-QJsonObject readJsonObject(const QByteArray &bytes, const QString &label)
-{
-    QJsonParseError error;
-    const QJsonDocument doc = QJsonDocument::fromJson(bytes, &error);
-    if (error.error != QJsonParseError::NoError || !doc.isObject())
-    {
-        fatalQt(QStringLiteral("%1 不是有效 JSON 对象: %2").arg(label, error.errorString()), cli::EXIT_IO_ERR);
-    }
-    return doc.object();
-}
-
-QJsonObject loadProjectMeta(const QString &projectPath)
-{
-    if (!QFileInfo::exists(projectPath))
-    {
-        fatalQt(QStringLiteral("项目文件不存在: %1").arg(projectPath), cli::EXIT_IO_ERR);
-    }
-
-    PlascanArchive archive(projectPath);
-    if (!archive.isValid())
-    {
-        fatalQt(QStringLiteral("无法打开 .plascan 项目归档: %1").arg(projectPath), cli::EXIT_IO_ERR);
-    }
-
-    QString archiveError;
-    QByteArray coreData = archive.readEntry(ProjectFilesManager::kArchiveCoreFile, &archiveError);
-    if (coreData.isEmpty())
-    {
-        coreData = archive.readEntry(QStringLiteral("project.json"), &archiveError);
-    }
-    if (coreData.isEmpty())
-    {
-        fatalQt(QStringLiteral("项目归档缺少 project_files.json/project.json: %1").arg(archiveError),
-                cli::EXIT_IO_ERR);
-    }
-
-    QJsonObject meta = readJsonObject(coreData, QStringLiteral("project_files.json"));
-
-    QByteArray resultsData = archive.readEntry(ProjectFilesManager::kArchiveResultsFile, &archiveError);
-    if (!resultsData.isEmpty())
-    {
-        const QJsonObject results = readJsonObject(resultsData, QStringLiteral("project_results.json"));
-        for (auto it = results.constBegin(); it != results.constEnd(); ++it)
-        {
-            if (it.key() != QLatin1String("images"))
-            {
-                meta.insert(it.key(), it.value());
-            }
-        }
-    }
-
-    return meta;
-}
-
 QStringList resolveSelectedImages(const QJsonObject &meta, const std::vector<std::string> &tokens)
 {
     QStringList selected;
@@ -164,8 +109,24 @@ QStringList resolveSelectedImages(const QJsonObject &meta, const std::vector<std
 
 QString defaultOutputDir(const QString &projectPath)
 {
-    const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
-    return QDir(QFileInfo(projectPath).absolutePath()).filePath(QStringLiteral("bundle_adjust_cli_%1").arg(stamp));
+    const QString stamp = QDateTime::currentDateTime().toString(
+        QStringLiteral("yyyyMMdd_HHmmss_zzz"));
+    return QDir(
+        xjw::common::project::ProjectIO::projectBundleAdjustDir(projectPath))
+        .filePath(stamp);
+}
+
+QJsonObject bundleAdjustRecord(const QString &mode,
+                               const QString &outputDir,
+                               const xjw::gui::BaServiceResult &result)
+{
+    QJsonObject record = result.resultJson;
+    record[QStringLiteral("created_at")] =
+        QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+    record[QStringLiteral("source")] = QStringLiteral("bundle_adjust_cli");
+    record[QStringLiteral("mode")] = mode;
+    record[QStringLiteral("output_dir")] = outputDir;
+    return record;
 }
 
 bool directoryHasEntries(const QString &path)
@@ -421,6 +382,8 @@ int main(int argc, char *argv[])
     CLI::App app{"PlaScan 光束法平差 CLI — 支持 LiDAR 点到面约束与 A/B 对比"};
 
     std::string projectPathRaw;
+    std::string chunkIdRaw;
+    std::string chunkNameRaw;
     std::string outputDirRaw;
     std::vector<std::string> imageTokens;
     std::string laserCloudRaw;
@@ -467,7 +430,12 @@ int main(int argc, char *argv[])
     double laserHuberDelta = 0.2;
 
     app.add_option("project", projectPathRaw, ".plascan 项目文件")->required();
-    app.add_option("-o,--output-dir", outputDirRaw, "输出目录；未指定时在项目旁创建 bundle_adjust_cli_<timestamp>");
+    app.add_option("--chunk-id", chunkIdRaw, "使用指定 UUID 的 Chunk");
+    app.add_option("--chunk-name", chunkNameRaw, "使用指定名称的 Chunk");
+    app.add_option(
+        "-o,--output-dir",
+        outputDirRaw,
+        "输出目录；未指定时写入当前 Chunk 的 bundle_adjust/<timestamp>");
     app.add_option("--image,--images", imageTokens, "限定参与 BA 的影像路径/文件名/去扩展名，可重复或逗号分隔")
         ->delimiter(',');
     app.add_option("--min-matches", minMatches, "构建 BA tracks 时单对匹配最少点数");
@@ -545,6 +513,34 @@ int main(int argc, char *argv[])
     CLI11_PARSE(app, argc, argv);
 
     const QString projectPath = xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(projectPathRaw));
+    if (!QFileInfo::exists(projectPath))
+    {
+        fatalQt(QStringLiteral("项目文件不存在: %1").arg(projectPath),
+                cli::EXIT_IO_ERR);
+    }
+
+    xjw::common::project::ProjectSession projectSession;
+    QString projectError;
+    if (!projectSession.open(projectPath, &projectError))
+    {
+        fatalQt(QStringLiteral("无法打开 .plascan Chunk 工程: %1")
+                    .arg(projectError),
+                cli::EXIT_IO_ERR);
+    }
+    if (!chunkIdRaw.empty() && !chunkNameRaw.empty())
+    {
+        fatalQt(QStringLiteral("--chunk-id 与 --chunk-name 不能同时使用"),
+                cli::EXIT_ARG_ERR);
+    }
+    if (!projectSession.selectChunk(
+            xjw::cli::fromStdString(chunkIdRaw),
+            xjw::cli::fromStdString(chunkNameRaw),
+            &projectError))
+    {
+        fatalQt(QStringLiteral("Chunk 选择失败: %1").arg(projectError),
+                cli::EXIT_IO_ERR);
+    }
+
     const QString outputDir = outputDirRaw.empty()
         ? defaultOutputDir(projectPath)
         : xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(outputDirRaw));
@@ -560,7 +556,7 @@ int main(int argc, char *argv[])
         fatalQt(QStringLiteral("LiDAR 点云不存在: %1").arg(laserCloud), cli::EXIT_IO_ERR);
     }
 
-    const QJsonObject meta = loadProjectMeta(projectPath);
+    const QJsonObject meta = projectSession.mergedMetadata();
     const QStringList selectedImages = resolveSelectedImages(meta, imageTokens);
 
     ensureOutputDirAllowed(outputDir, force);
@@ -669,9 +665,48 @@ int main(int argc, char *argv[])
                                              .toObject()
                                              .value(QStringLiteral("passed"))
                                              .toBool(false);
+        projectSession.appendResult(
+            QStringLiteral("bundle_adjust_results"),
+            bundleAdjustRecord(
+                QStringLiteral("baseline"), baselineDir, baseline));
+        projectSession.appendResult(
+            QStringLiteral("bundle_adjust_results"),
+            bundleAdjustRecord(QStringLiteral("laser"), laserDir, laser));
+        int updatedCameraCount = 0;
+        if (!dryRun
+            && !projectSession.updateImageCameras(
+                laser.pendingCamUpdates,
+                &updatedCameraCount,
+                &projectError))
+        {
+            fatalQt(QStringLiteral("A/B BA 已完成，但相机写回失败: %1")
+                        .arg(projectError),
+                    cli::EXIT_IO_ERR);
+        }
+        QJsonObject compareRecord = compareJson;
+        compareRecord[QStringLiteral("path")] = comparePath;
+        compareRecord[QStringLiteral("kind")] =
+            QStringLiteral("bundle_adjust_comparison");
+        projectSession.upsertResultByPath(
+            QStringLiteral("report_results"),
+            QStringLiteral("path"),
+            compareRecord);
+        if (!projectSession.save(&projectError))
+        {
+            fatalQt(QStringLiteral("A/B BA 已完成，但 Chunk 写回失败: %1")
+                        .arg(projectError),
+                    cli::EXIT_IO_ERR);
+        }
+        xjw::cli::printUtf8(
+            stdout,
+            QStringLiteral("已写回 Chunk %1，相机=%2")
+                .arg(projectSession.activeChunk().directory)
+                .arg(updatedCameraCount));
         if (failOnQualityGate && !quality_gate_passed)
         {
-            xjw::cli::printError(QStringLiteral("LiDAR BA 质量门禁失败，详情见: %1").arg(comparePath));
+            xjw::cli::printError(
+                QStringLiteral("LiDAR BA 质量门禁失败，详情见: %1")
+                    .arg(comparePath));
             return cli::EXIT_ALGO_ERR;
         }
         return cli::EXIT_OK;
@@ -691,7 +726,37 @@ int main(int argc, char *argv[])
         fatalQt(QStringLiteral("BA 失败: %1").arg(result.errorMessage), cli::EXIT_ALGO_ERR);
     }
 
+    projectSession.appendResult(
+        QStringLiteral("bundle_adjust_results"),
+        bundleAdjustRecord(
+            enableLaser ? QStringLiteral("laser")
+                        : QStringLiteral("baseline"),
+            outputDir,
+            result));
+    int updatedCameraCount = 0;
+    if (!dryRun
+        && !projectSession.updateImageCameras(
+            result.pendingCamUpdates,
+            &updatedCameraCount,
+            &projectError))
+    {
+        fatalQt(QStringLiteral("BA 已完成，但相机写回失败: %1")
+                    .arg(projectError),
+                cli::EXIT_IO_ERR);
+    }
+    if (!projectSession.save(&projectError))
+    {
+        fatalQt(QStringLiteral("BA 已完成，但 Chunk 写回失败: %1")
+                    .arg(projectError),
+                cli::EXIT_IO_ERR);
+    }
+
     printRunSummary(enableLaser ? QStringLiteral("laser") : QStringLiteral("baseline"), result);
+    xjw::cli::printUtf8(
+        stdout,
+        QStringLiteral("已写回 Chunk %1，相机=%2")
+            .arg(projectSession.activeChunk().directory)
+            .arg(updatedCameraCount));
     xjw::cli::printUtf8(stdout, QStringLiteral("输出目录: %1").arg(outputDir));
     return cli::EXIT_OK;
 }

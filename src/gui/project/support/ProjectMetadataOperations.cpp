@@ -3,6 +3,7 @@
 #include "ProjectData.h"
 #include "ProjectResultRecords.h"
 #include "ProjectWorkflowUtils.h"
+#include "project/ProjectIO.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -126,7 +127,9 @@ QString resolveProjectOutputDir(const QString &projectPath,
     QString outputDir = requestedDir.trimmed();
     if (outputDir.isEmpty())
     {
-        const QString projectRoot = QFileInfo(projectPath).absolutePath();
+        const QString projectRoot =
+            xjw::common::project::ProjectIO::projectRootFromPlascan(
+                projectPath);
         outputDir = QDir(projectRoot).filePath(fallbackRelativeDir);
     }
     outputDir = QDir::cleanPath(outputDir);

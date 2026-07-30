@@ -8,6 +8,7 @@ import csv
 import json
 import math
 import re
+import uuid
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -389,18 +390,80 @@ def build_ipmatch_results(matches_dir: Path, images: list[dict[str, Any]]) -> li
 
 
 def write_plascan(project_path: Path, project_files: dict[str, Any], project_results: dict[str, Any]) -> None:
-    manifest = {
-        "type": "PlaScanProject",
-        "format_version": 2,
-        "created_by": "prepare_mun_frl_lidar_ba_project.py",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+    project_id = str(uuid.uuid4())
+    chunk_id = str(uuid.uuid4())
+    chunk_record = {
+        "id": chunk_id,
+        "name": "区块 1",
+        "directory": "1",
+        "storage": "1/chunk.zip",
+        "order": 0,
+        "revision": 0,
     }
+    project_document = {
+        "type": "plascan_project",
+        "format_version": "4.0",
+        "minimum_reader_version": "4.0",
+        "project_id": project_id,
+        "created_with": "prepare_mun_frl_lidar_ba_project.py",
+        "chunk_index": {
+            "schema_version": 1,
+            "default_chunk_id": chunk_id,
+            "next_chunk_directory": 2,
+            "chunks": [chunk_record],
+        },
+        "ui_state": {
+            "schema_version": 1,
+            "display_settings": {},
+        },
+    }
+    chunk_document = {
+        "type": "plascan_chunk",
+        "format_version": "1.0",
+        "chunk": chunk_record,
+        "project_files": project_files,
+        "project_results": project_results,
+        "project_config": {
+            "project_name": project_path.stem,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "version": "4.0",
+            "schema_version": 2,
+            "project_id": project_id,
+        },
+        "resource_index": {
+            "schema_version": 1,
+            "resources": [],
+        },
+    }
+
     project_path.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(project_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
-        archive.writestr("project_files.json", json.dumps(project_files, ensure_ascii=False, indent=2))
-        archive.writestr("project_results.json", json.dumps(project_results, ensure_ascii=False, indent=2))
-        archive.writestr("project_config.json", json.dumps({}, ensure_ascii=False, indent=2))
+    data_directory = project_path.with_suffix(".files")
+    chunk_directory = data_directory / "1"
+    chunk_directory.mkdir(parents=True, exist_ok=True)
+    project_path.write_text(
+        '<?xml version="1.0"?>\n'
+        '<document version="4.0.0" type="plascan_project" '
+        'path="{projectname}.files/project.zip"/>\n',
+        encoding="utf-8",
+    )
+    with zipfile.ZipFile(
+        data_directory / "project.zip",
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
+    ) as archive:
+        archive.writestr(
+            "doc.json",
+            json.dumps(project_document, ensure_ascii=False, indent=2),
+        )
+    with zipfile.ZipFile(
+        chunk_directory / "chunk.zip",
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
+    ) as archive:
+        archive.writestr(
+            "doc.json",
+            json.dumps(chunk_document, ensure_ascii=False, indent=2),
+        )
 
 
 def prepare_project(

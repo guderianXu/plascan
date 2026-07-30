@@ -4,10 +4,10 @@
  * @file ProjectConfigManager.h
  * @brief 项目配置管理器的声明文件。
  *
- * ProjectConfigManager 负责管理存储在 project_config.json 中的项目级配置，
- * 该 JSON 文件分为两大顶层段落：
- *   - "ui"       : 视图显示相关设置（委托给 ProjectUiConfigManager）
- *   - "workflow" : 各处理步骤的参数配置（委托给 ProjectWorkflowConfigManager）
+ * ProjectConfigManager 负责管理 Chunk doc.json 的 project_config 字段，
+ * 该 JSON 文件只保存影响处理结果、需要随项目复现的工作流参数。
+ * 项目视图状态单独存储在根 doc.json 的 ui_state，应用窗口状态存储在
+ * QSettings，避免把机器相关状态混入处理配置。
  *
  * 设计原则：
  *   - 本类拥有底层 QJsonObject 数据，子管理器作为"视图"操作特定段落。
@@ -18,18 +18,17 @@
 
 #include <QJsonObject>
 
-#include "ProjectUiConfigManager.h"
 #include "ProjectWorkflowConfigManager.h"
 
 /**
  * @class ProjectConfigManager
- * @brief 管理 project_config.json 的完整配置数据。
+ * @brief 管理 project_config 字段的工作流配置数据。
  *
  * 典型用法：
  * @code
  *   ProjectConfigManager cfg;
  *   cfg.setData(ProjectConfigManager::mergeWithDefaults(loadedJson));
- *   auto uiCfg = cfg.uiSettings();
+ *   auto matching = cfg.workflowSettings("ipmatch");
  * @endcode
  */
 class ProjectConfigManager
@@ -39,23 +38,26 @@ public:
     ProjectConfigManager() = default;
 
     /**
-     * @brief 获取完整的底层 QJsonObject 数据（包含 "ui" 和 "workflow" 段）。
+     * @brief 获取完整的底层 QJsonObject 数据。
      * @return 当前配置的 JSON 对象副本。
      */
     QJsonObject data() const { return _config; }
 
     /**
      * @brief 替换全部底层配置数据。
-     * @param data 新的 JSON 配置对象，应包含 "ui" 和 "workflow" 两个顶层键。
+     * @param data 新的 JSON 配置对象。
      */
-    void setData(const QJsonObject &data) { _config = data; }
+    void setData(const QJsonObject &data)
+    {
+        _config = data;
+        _config.remove(QStringLiteral("ui"));
+    }
 
     /**
      * @brief 生成包含所有字段默认值的标准配置对象。
      *
-     * 汇集 ProjectUiConfigManager::defaultUiSettings() 和
-     * ProjectWorkflowConfigManager::defaultWorkflowSettings() 的结果，
-     * 形成完整的 project_config.json 默认结构。
+     * 汇集 ProjectWorkflowConfigManager::defaultWorkflowSettings()，
+     * 形成标准 project_config 字段结构。
      *
      * @return 含有 "ui" 和 "workflow" 段的默认配置 QJsonObject。
      */
@@ -73,18 +75,6 @@ public:
     static QJsonObject mergeWithDefaults(const QJsonObject &input);
 
     /**
-     * @brief 获取 "ui" 段的显示设置。
-     * @return "ui" 顶层键对应的 QJsonObject。
-     */
-    QJsonObject uiSettings() const;
-
-    /**
-     * @brief 部分更新 "ui" 段（深度合并补丁）。
-     * @param settings 仅包含需要改动字段的 JSON 补丁对象。
-     */
-    void setUiSettings(const QJsonObject &settings);
-
-    /**
      * @brief 获取指定处理步骤的工作流参数。
      * @param step  步骤名称，例如 "bundle_adjust"、"dem"、"ortho"。
      * @return      该步骤对应的参数 QJsonObject；若不存在则返回空对象。
@@ -99,6 +89,6 @@ public:
     void setWorkflowSettings(const QString &step, const QJsonObject &settings);
 
 private:
-    /** @brief 存储完整项目配置的底层 JSON 对象（包含 "ui" 和 "workflow" 段）。 */
+    /** @brief 存储完整项目工作流配置的底层 JSON 对象。 */
     QJsonObject _config;
 };

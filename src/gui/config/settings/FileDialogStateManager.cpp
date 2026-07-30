@@ -7,7 +7,8 @@
  */
 #include "FileDialogStateManager.h"
 
-#include <QSettings>
+#include "GuiSettingsStore.h"
+
 #include <QDir>
 
 /**
@@ -32,7 +33,7 @@ FileDialogStateManager::FileDialogStateManager(QObject *parent)
  */
 QString FileDialogStateManager::lastDir(const QString &key) const
 {
-    QSettings settings("PlaScan", "plascan_gui");
+    QSettings settings = xjw::gui::settings::createGuiSettings();
     // 空 key 统一存为 "default"，避免生成无意义的空键名
     const QString k = key.trimmed().isEmpty() ? QStringLiteral("default") : key.trimmed();
     return settings.value(QStringLiteral("Dialogs/lastDir/%1").arg(k), QDir::homePath()).toString();
@@ -49,7 +50,7 @@ QString FileDialogStateManager::lastDir(const QString &key) const
  */
 void FileDialogStateManager::setLastDir(const QString &key, const QString &dir)
 {
-    QSettings settings("PlaScan", "plascan_gui");
+    QSettings settings = xjw::gui::settings::createGuiSettings();
     // 同 lastDir，空 key 统一为 "default"
     const QString k = key.trimmed().isEmpty() ? QStringLiteral("default") : key.trimmed();
     settings.setValue(QStringLiteral("Dialogs/lastDir/%1").arg(k), dir);

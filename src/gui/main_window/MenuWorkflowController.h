@@ -3,7 +3,7 @@
 // 模块: main_window
 // 说明:
 //   菜单业务流程控制器。处理所有菜单/工具栏动作被触发后的业务逻辑：
-//   - 弹出对应的参数配置对话框（特征提取/特征匹配/BA/AT 等）
+//   - 弹出仍在使用的工作流程与工具参数对话框
 //   - 从项目 UI 设置中记忆化加载/保存对话框参数（JSON持久化）
 //   - 准备输入数据（影像列表、输出目录等）并发起后台任务
 //   - 通过信号将特征点可视化选项同步到 CanvasWidget
@@ -49,12 +49,6 @@ public:
     void bindActions(MainMenu *mainMenu);
 
 public slots:
-    /// 打开特征提取配置对话框，并恢复记忆化参数。
-    void openFeatureExtractionDialog();
-
-    /// 打开基于特征词汇的重叠对预检索对话框。
-    void openVocabularyOverlapDialog();
-
     /// 打开特征点渲染选项对话框，并支持实时预览。
     void openFeaturePointVisualizationDialog();
 
@@ -62,14 +56,8 @@ public slots:
     /// @param ui 项目级 UI 设置 JSON，包含 feature_point_visualization 配置。
     void applySavedFeatureDisplayOptions(const QJsonObject &ui);
 
-    /// 打开一键三维重建对话框。
-    void openThreeDReconstructionDialog();
-
     /// 打开工作流程中的对齐照片参数对话框；确认后启动空中三角测量 workflow。
     void openWorkflowAerialTriangulationDialog();
-
-    /// 打开稀疏重建中的正式空中三角测量对话框。
-    void openAerialTriangulationDialog();
 
     /// 打开影像重叠度分析对话框。
     void openOverlapAnalysisDialog();
@@ -119,11 +107,7 @@ private:
                                                                   const QString &matchAlgorithm = QString());
     QJsonObject sanitizeAerialTriangulationReferencePreselection(const QJsonObject &settings,
                                                                 const QStringList &images) const;
-
-    /// 在后台线程中启动特征提取任务。
-    /// @param config 配置参数 JSON，如设备、阈值和输出目录。
-    /// @param inputs 待处理的影像路径列表。
-    void runFeatureExtraction(const QJsonObject &config, const QStringList &inputs);
+    DialogSettingStore *createDialogSettingStore(const QString &settingKey);
 
     void startAerialTriangulationWorkflow(const QJsonObject &settings);
     void runUnifiedAerialTriangulation(const QJsonObject &settings,
@@ -132,19 +116,11 @@ private:
                                        const QJsonObject &projectMeta,
                                        const QString &outputRoot,
                                        bool fillMissingTiePoints);
-    void startThreeDReconstructionWorkflow(const QJsonObject &settings);
-    void startThreeDReconstructionDenseStage(const QJsonObject &settings);
-    void startThreeDReconstructionDenseRefineStage(const QJsonObject &settings);
-    void startThreeDReconstructionMeshStage(const QJsonObject &settings);
-
     /// 各对话框记忆化设置管理器（生命周期与控制器一致）。
-    DialogSettingStore *_featureExtractionSetting = nullptr;
-    DialogSettingStore *_vocabOverlapSetting = nullptr;
     DialogSettingStore *_featurePointVisualizationSetting = nullptr;
     DialogSettingStore *_baSetting = nullptr;
     DialogSettingStore *_mapSetting = nullptr;
     DialogSettingStore *_dcSetting = nullptr;
-    DialogSettingStore *_threeDSetting = nullptr;
     DialogSettingStore *_aerialTriangulationSetting = nullptr;
     QPointer<QMainWindow> _mainWindow;            // 父主窗口弱引用（不拥有）
     ProjectManager *_projectManager = nullptr;    // 注入的项目管理器（非拥有引用）

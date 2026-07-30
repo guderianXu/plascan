@@ -1,6 +1,7 @@
 #include "MarkerDetectionJobBuilder.h"
 
 #include "ProjectData.h"
+#include "project/ProjectIO.h"
 
 #include <gtest/gtest.h>
 
@@ -12,6 +13,7 @@
 #include <QTemporaryDir>
 
 using xjw::control_points::MarkerTargetFamily;
+using xjw::common::project::ProjectIO;
 using xjw::gui::markers::MarkerDetectionJobBuildOptions;
 using xjw::gui::markers::MarkerDetectionJobBuilder;
 
@@ -32,13 +34,17 @@ TEST(MarkerDetectionJobBuilderTest, ResolvesImagesSignaturesAndMasksFromProjectM
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
     const QString project_path = directory.filePath(QStringLiteral("markers.plascan"));
-    const QString image_path = writeImage(directory.filePath(QStringLiteral("photo.png")));
-    const QString mask_path = writeImage(directory.filePath(QStringLiteral("photo-mask.png")));
-    ASSERT_FALSE(image_path.isEmpty());
-    ASSERT_FALSE(mask_path.isEmpty());
 
     ProjectData project;
     ASSERT_TRUE(project.createProject(project_path, QStringLiteral("markers")));
+    const QDir project_root(ProjectIO::projectRootFromPlascan(project_path));
+    const QString image_path =
+        writeImage(project_root.filePath(QStringLiteral("photo.png")));
+    const QString mask_path =
+        writeImage(project_root.filePath(QStringLiteral("photo-mask.png")));
+    ASSERT_FALSE(image_path.isEmpty());
+    ASSERT_FALSE(mask_path.isEmpty());
+
     ASSERT_TRUE(project.addImages({image_path}));
     QJsonObject metadata = project.coreFilesMeta();
     QJsonArray images = metadata.value(QStringLiteral("images")).toArray();

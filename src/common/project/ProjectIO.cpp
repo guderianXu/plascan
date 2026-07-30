@@ -1,14 +1,102 @@
 #include "ProjectIO.h"
 
+#include "ProjectChunkStore.h"
+#include "ProjectPackageLayout.h"
+
 #include <QDir>
 #include <QFileInfo>
+#include <QHash>
+#include <QReadWriteLock>
 
 namespace xjw::common::project
 {
 
+namespace
+{
+
+QReadWriteLock runtimeRootsLock;
+QHash<QString, QString> runtimeRoots;
+
+QString normalizedProjectKey(const QString &plascanPath)
+{
+    if (plascanPath.trimmed().isEmpty())
+    {
+        return {};
+    }
+    const QString key =
+        QDir::cleanPath(QFileInfo(plascanPath).absoluteFilePath());
+#ifdef Q_OS_WIN
+    return key.toCaseFolded();
+#else
+    return key;
+#endif
+}
+
+} // namespace
+
+void ProjectIO::registerRuntimeRoot(const QString &plascanPath,
+                                    const QString &runtimeRoot)
+{
+    const QString key = normalizedProjectKey(plascanPath);
+    const QString root = QDir::cleanPath(runtimeRoot.trimmed());
+    if (key.isEmpty() || root.isEmpty() || root == QLatin1String("."))
+    {
+        return;
+    }
+
+    QWriteLocker locker(&runtimeRootsLock);
+    runtimeRoots.insert(key, root);
+}
+
+void ProjectIO::unregisterRuntimeRoot(const QString &plascanPath)
+{
+    const QString key = normalizedProjectKey(plascanPath);
+    if (key.isEmpty())
+    {
+        return;
+    }
+
+    QWriteLocker locker(&runtimeRootsLock);
+    runtimeRoots.remove(key);
+}
+
+QString ProjectIO::registeredRuntimeRoot(const QString &plascanPath)
+{
+    const QString key = normalizedProjectKey(plascanPath);
+    if (key.isEmpty())
+    {
+        return {};
+    }
+
+    QReadLocker locker(&runtimeRootsLock);
+    return runtimeRoots.value(key);
+}
+
 QString ProjectIO::projectRootFromPlascan(const QString &plascanPath)
 {
-    if (plascanPath.trimmed().isEmpty()) return QString();
+    const QString registered = registeredRuntimeRoot(plascanPath);
+    if (!registered.isEmpty())
+    {
+        return registered;
+    }
+    if (ProjectPackageLayout::isDescriptor(plascanPath))
+    {
+        QString error;
+        const QString chunkRoot =
+            ProjectChunkStore(plascanPath).defaultChunkDirectory(&error);
+        return chunkRoot.isEmpty()
+            ? QString()
+            : chunkRoot;
+    }
+    return physicalProjectRoot(plascanPath);
+}
+
+QString ProjectIO::physicalProjectRoot(const QString &plascanPath)
+{
+    if (plascanPath.trimmed().isEmpty())
+    {
+        return {};
+    }
     return QFileInfo(plascanPath).absolutePath();
 }
 
@@ -38,11 +126,16 @@ QString ProjectIO::projectAssetsDir(const QString &plascanPath)
     return QDir(root).filePath(QStringLiteral("assets"));
 }
 
+QString ProjectIO::projectBundleAdjustDir(const QString &plascanPath)
+{
+    const QString root = projectRootFromPlascan(plascanPath);
+    if (root.isEmpty()) return QString();
+    return QDir(root).filePath(QStringLiteral("bundle_adjust"));
+}
+
 QString ProjectIO::projectImagesDir(const QString &plascanPath)
 {
-    const QString assets = projectAssetsDir(plascanPath);
-    if (assets.isEmpty()) return QString();
-    return QDir(assets).filePath(QStringLiteral("images"));
+    return ProjectPackageLayout::sharedImagesDirectory(plascanPath);
 }
 
 QString ProjectIO::projectControlPointsDir(const QString &plascanPath)
@@ -87,6 +180,13 @@ QString ProjectIO::tempConfigPath(const QString &plascanPath)
     return QDir(tmp).filePath(QStringLiteral("project_config.json"));
 }
 
+QString ProjectIO::tempUiStatePath(const QString &plascanPath)
+{
+    const QString tmp = tmpDir(plascanPath);
+    if (tmp.isEmpty()) return QString();
+    return QDir(tmp).filePath(QStringLiteral("project_ui_state.json"));
+}
+
 QString ProjectIO::tempResultsPath(const QString &plascanPath)
 {
     const QString tmp = tmpDir(plascanPath);
@@ -120,183 +220,6 @@ QString ProjectIO::tmpIpfindDir(const QString &plascanPath)
     const QString root = projectRootFromPlascan(plascanPath);
     if (root.isEmpty()) return QString();
     return QDir(root).filePath(QStringLiteral(".plascan_tmp/ip"));
-}
-
-QString ProjectIO::vwipOutputPathForImage(const QString &plascanPath, const QString &imagePath)
-{
-    QFileInfo fi(imagePath);
-    if (fi.fileName().isEmpty()) return QString();
-
-    const QString outDir = ipfindOutputDir(plascanPath);
-    if (outDir.isEmpty()) return QString();
-
-    return QDir(outDir).filePath(fi.completeBaseName() + QStringLiteral(".sp"));
-}
-
-QString ProjectIO::featureOutputPathForImage(const QString &plascanPath,
-                                              const QString &imagePath,
-                                              const QString &suffix)
-{
-    QFileInfo fi(imagePath);
-    if (fi.fileName().isEmpty()) return QString();
-
-    const QString outDir = ipfindOutputDir(plascanPath);
-    if (outDir.isEmpty()) return QString();
-
-    return QDir(outDir).filePath(fi.completeBaseName() + suffix);
-}
-
-QString ProjectIO::maskOutputPathForImage(const QString &plascanPath, const QString &imagePath)
-{
-    QFileInfo fi(imagePath);
-    if (fi.fileName().isEmpty()) return QString();
-
-    const QString outDir = maskOutputDir(plascanPath);
-    if (outDir.isEmpty()) return QString();
-
-    return QDir(outDir).filePath(fi.completeBaseName() + QStringLiteral("_mask.png"));
-}
-
-QStringList ProjectIO::spCandidates(const QString &plascanPath, const QString &imagePath)
-{
-    QStringList candidates;
-
-    QFileInfo fi(imagePath);
-    if (fi.fileName().isEmpty()) return candidates;
-    const QString baseName = fi.completeBaseName() + QStringLiteral(".sp");
-
-    const QString tmpDir = tmpIpfindDir(plascanPath);
-    if (!tmpDir.isEmpty()) {
-        candidates << QDir(tmpDir).filePath(baseName);
-    }
-
-    // 标准目录：assets/ip
-    const QString ipDir = QDir(projectRootFromPlascan(plascanPath)).filePath(QStringLiteral("assets/ip"));
-    if (!ipDir.isEmpty()) {
-        candidates << QDir(ipDir).filePath(baseName);
-    }
-
-    candidates << fi.absoluteDir().filePath(baseName);
-    return candidates;
-}
-
-QString ProjectIO::findSpForImage(const QString &plascanPath, const QString &imagePath)
-{
-    const QStringList candidates = spCandidates(plascanPath, imagePath);
-    for (const QString &path : candidates) {
-        if (QFileInfo::exists(path)) {
-            return path;
-        }
-    }
-    return QString();
-}
-
-QString ProjectIO::findFeatureForImage(const QString &plascanPath, const QString &imagePath)
-{
-    // 生成 .sp 候选路径，然后用所有后缀替换
-    const QStringList spPaths = spCandidates(plascanPath, imagePath);
-    static const char *suffixes[] = {".sp", ".dsk", ".alk", ".sift", ".orb", ".akz", ".dedode"};
-    for (const QString &spPath : spPaths)
-    {
-        QString base = spPath;
-        if (base.endsWith(".sp"))
-            base.chop(3);
-        for (const char *suf : suffixes)
-        {
-            QString candidate = base + suf;
-            if (QFileInfo::exists(candidate))
-                return candidate;
-        }
-    }
-    return QString();
-}
-
-QString ProjectIO::featureFileForSuffix(const QString &plascanPath, const QString &imagePath,
-                                         const QString &suffix)
-{
-    const QStringList candidates = spCandidates(plascanPath, imagePath);
-    for (const QString &spPath : candidates)
-    {
-        QString base = spPath;
-        if (base.endsWith(QStringLiteral(".sp")))
-            base.chop(3);
-        const QString path = base + suffix;
-        if (QFileInfo::exists(path))
-            return path;
-    }
-    return QString();
-}
-
-QStringList ProjectIO::availableFeatureSuffixes(const QString &plascanPath,
-                                                  const QString &imagePath)
-{
-    QStringList result;
-    const QStringList spPaths = spCandidates(plascanPath, imagePath);
-    static const char *suffixes[] = {".sp", ".dsk", ".alk", ".sift", ".orb", ".akz", ".dedode"};
-
-    for (const QString &spPath : spPaths)
-    {
-        QString base = spPath;
-        if (base.endsWith(".sp"))
-            base.chop(3);
-        for (const char *suf : suffixes)
-        {
-            if (QFileInfo::exists(base + suf) && !result.contains(suf))
-                result.append(suf);
-        }
-    }
-    return result;
-}
-
-QString ProjectIO::findMaskForImage(const QString &plascanPath, const QString &imagePath)
-{
-    QFileInfo fi(imagePath);
-    if (fi.fileName().isEmpty()) return QString();
-
-    QStringList candidates;
-    const QString standard = maskOutputPathForImage(plascanPath, imagePath);
-    if (!standard.isEmpty())
-    {
-        candidates << standard;
-    }
-    candidates << fi.absoluteDir().filePath(fi.completeBaseName() + QStringLiteral("_mask.png"));
-
-    for (const QString &candidate : candidates)
-    {
-        if (QFileInfo::exists(candidate))
-        {
-            return candidate;
-        }
-    }
-    return QString();
-}
-
-QMap<QString, QString> ProjectIO::maskPathsForImages(const QString &plascanPath,
-                                                     const QStringList &imagePaths)
-{
-    QMap<QString, QString> masks;
-    for (const QString &imagePath : imagePaths)
-    {
-        const QString maskPath = findMaskForImage(plascanPath, imagePath);
-        if (maskPath.isEmpty())
-        {
-            continue;
-        }
-
-        const QFileInfo imageInfo(imagePath);
-        const QString cleanImagePath = QDir::cleanPath(QDir::fromNativeSeparators(imagePath));
-        masks.insert(imagePath, maskPath);
-        masks.insert(cleanImagePath, maskPath);
-        if (!imageInfo.fileName().isEmpty())
-        {
-            masks.insert(imageInfo.fileName(), maskPath);
-        }
-        if (!imageInfo.completeBaseName().isEmpty())
-        {
-            masks.insert(imageInfo.completeBaseName(), maskPath);
-        }
-    }
-    return masks;
 }
 
 } // namespace xjw::common::project

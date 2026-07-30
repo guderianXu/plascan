@@ -6,7 +6,7 @@
 #include "ProjectUiCommands.h"
 #include "ProjectData.h"
 #include "project/ProjectIO.h"
-#include "project/ProjectCameraIO.h"
+#include "ProjectCameraIO.h"
 #include "project/ProjectMatchCatalog.h"
 #include "project/ProjectMetadata.h"
 #include "ProjectCameraImportService.h"
@@ -17,7 +17,6 @@
 #include "ProjectResourceCleanupService.h"
 #include "ProjectTiePointResultService.h"
 
-#include "DenseMatchRunner.h"
 #include "ProjectMetadataOperations.h"
 #include "ProjectSfmWorkflow.h"
 #include "ProjectSparseWorkflow.h"
@@ -26,8 +25,8 @@
 #include "ProjectSurveyControl.h"
 #include "ProjectWorkflowUtils.h"
 #include "ProjectWorkflowReports.h"
-#include "GenerateMaskDialog.h"
-#include "SurveyControlDialog.h"
+#include "image/GenerateMaskDialog.h"
+#include "camera/SurveyControlDialog.h"
 #include "GuiTaskRunner.h"
 #include "Logger.h"
 #include "MaskGenerator.h"
@@ -36,6 +35,7 @@
 #include "io/PathIO.h"
 #include "model/TorchScriptModelResolver.h"
 #include "model/U2NetModelCatalog.h"
+#include "runtime/PythonRuntimeLocator.h"
 #include "filtering/SparsePointCloudProcessor.h"
 #include "FileDialogStateManager.h"
 #include "Camera.h"
@@ -50,6 +50,8 @@
 
 
 #include <QMessageBox>
+#include <QInputDialog>
+#include <QLineEdit>
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileDialog>
@@ -337,7 +339,7 @@ QString plascanSourceRoot()
 
 QString resolveSam21InstallerScript()
 {
-    const QString sourceScript = QDir(plascanSourceRoot()).filePath(QStringLiteral("scripts/install_sam21_model.py"));
+    const QString sourceScript = QDir(plascanSourceRoot()).filePath(QStringLiteral("scripts/models/install_sam21_model.py"));
     if (QFileInfo::exists(sourceScript))
     {
         return QDir::cleanPath(sourceScript);
@@ -345,9 +347,9 @@ QString resolveSam21InstallerScript()
 
     const QString appDir = QCoreApplication::applicationDirPath();
     const QStringList candidates{
-        QDir(appDir).filePath(QStringLiteral("scripts/install_sam21_model.py")),
-        QDir(appDir).filePath(QStringLiteral("../scripts/install_sam21_model.py")),
-        QDir(appDir).filePath(QStringLiteral("../../scripts/install_sam21_model.py")),
+        QDir(appDir).filePath(QStringLiteral("scripts/models/install_sam21_model.py")),
+        QDir(appDir).filePath(QStringLiteral("../scripts/models/install_sam21_model.py")),
+        QDir(appDir).filePath(QStringLiteral("../../scripts/models/install_sam21_model.py")),
     };
     for (const QString &candidate : candidates)
     {
@@ -361,32 +363,13 @@ QString resolveSam21InstallerScript()
 
 QString resolvePythonExecutable()
 {
-    QString pythonExecutable = qEnvironmentVariable("PLASCAN_PYTHON_EXECUTABLE").trimmed();
-    if (pythonExecutable.isEmpty())
+    const QString resolved = xjw::common::runtime::resolvePythonExecutable(
+        QProcessEnvironment::systemEnvironment(), plascanSourceRoot());
+    if (!resolved.isEmpty())
     {
-        pythonExecutable = qEnvironmentVariable("PLASCAN_PYTHON").trimmed();
-    }
-    if (!pythonExecutable.isEmpty())
-    {
-        return QDir::cleanPath(pythonExecutable);
+        return resolved;
     }
 
-    const QString sourceRoot = plascanSourceRoot();
-#ifdef Q_OS_WIN
-    const QString projectVenv = QDir(sourceRoot).filePath(QStringLiteral(".venv/Scripts/python.exe"));
-    const QString bundled = QDir(sourceRoot).filePath(QStringLiteral("build/env/python-runtime/Scripts/python.exe"));
-#else
-    const QString projectVenv = QDir(sourceRoot).filePath(QStringLiteral(".venv/bin/python"));
-    const QString bundled = QDir(sourceRoot).filePath(QStringLiteral("build/env/python-runtime/bin/python"));
-#endif
-    if (QFileInfo::exists(projectVenv))
-    {
-        return QDir::cleanPath(projectVenv);
-    }
-    if (QFileInfo::exists(bundled))
-    {
-        return QDir::cleanPath(bundled);
-    }
     return QStringLiteral("python");
 }
 
@@ -506,6 +489,8 @@ ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
                 this, &ProjectManager::projectSaved);
         connect(_projectData, &ProjectData::projectClosed,
                 this, &ProjectManager::projectClosed);
+        connect(_projectData, &ProjectData::chunkListChanged,
+                this, &ProjectManager::chunkListChanged);
         connect(_projectData, &ProjectData::metadataChanged,
                 this,
                 [this](const QJsonObject &meta)
@@ -783,19 +768,6 @@ bool ProjectManager::importCameraForImage(const QString &imagePath)
 void ProjectManager::startTriangulationAsync(const QJsonObject &settings)
 {
     _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::Triangulation, settings);
-}
-
-void ProjectManager::startDenseMatchAsync(const QJsonObject &settings)
-{
-    startDenseMatchAsyncWithProgress(settings, nullptr);
-}
-
-void ProjectManager::startDenseMatchAsyncWithProgress(
-    const QJsonObject &settings,
-    std::shared_ptr<std::atomic<int>> progress,
-    std::shared_ptr<std::atomic<bool>> cancelFlag)
-{
-    DenseMatchRunner::run(settings, progress, cancelFlag);
 }
 
 void ProjectManager::startSparseCloudOutlierRemovalAsync(const QJsonObject &settings)
@@ -1524,13 +1496,16 @@ void ProjectManager::prepareReferenceTerrainBundleAdjust()
         return;
     }
 
-    const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(currentProjectPath());
-    const QString outputDir = QDir(assetsDir).filePath(
-        QStringLiteral("bundle_adjust/%1_%2")
+    const QString bundleAdjustDir =
+        xjw::common::project::ProjectIO::projectBundleAdjustDir(
+            currentProjectPath());
+    const QString outputDir = QDir(bundleAdjustDir).filePath(
+        QStringLiteral("%1_%2")
             .arg(demPriorPath.isEmpty()
                      ? QStringLiteral("reference_laser")
                      : QStringLiteral("reference_terrain"))
-            .arg(QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyyMMdd_hhmmss"))));
+            .arg(QDateTime::currentDateTimeUtc().toString(
+                QStringLiteral("yyyyMMdd_HHmmss_zzz"))));
 
     const QString prompt = demPriorPath.isEmpty()
         ? QStringLiteral("将使用 LiDAR/点云 PLY 作为 BA 点到面 soft prior 重新平差。\n\n"
@@ -1719,13 +1694,153 @@ QJsonObject ProjectManager::loadUiSettings() const
     return _projectData ? _projectData->loadUiSettings() : QJsonObject();
 }
 
+void ProjectManager::createChunk()
+{
+    if (!_projectData || !_projectData->hasProject())
+    {
+        return;
+    }
+    bool accepted = false;
+    const QString name = QInputDialog::getText(
+        _parent,
+        QStringLiteral("新建 Chunk"),
+        QStringLiteral("名称："),
+        QLineEdit::Normal,
+        QString(),
+        &accepted).trimmed();
+    if (!accepted)
+    {
+        return;
+    }
+    QString error;
+    if (!_projectData->createChunk(name, nullptr, &error))
+    {
+        QMessageBox::critical(
+            _parent,
+            QStringLiteral("新建 Chunk 失败"),
+            error);
+    }
+}
+
+void ProjectManager::renameChunk(const QString &chunkId)
+{
+    if (!_projectData || chunkId.trimmed().isEmpty())
+    {
+        return;
+    }
+    QString currentName;
+    for (const QJsonValue &value : _projectData->chunks())
+    {
+        const QJsonObject chunk = value.toObject();
+        if (chunk.value(QStringLiteral("id")).toString() == chunkId)
+        {
+            currentName =
+                chunk.value(QStringLiteral("name")).toString();
+            break;
+        }
+    }
+    bool accepted = false;
+    const QString name = QInputDialog::getText(
+        _parent,
+        QStringLiteral("重命名 Chunk"),
+        QStringLiteral("名称："),
+        QLineEdit::Normal,
+        currentName,
+        &accepted).trimmed();
+    if (!accepted)
+    {
+        return;
+    }
+    QString error;
+    if (!_projectData->renameChunk(chunkId, name, &error))
+    {
+        QMessageBox::critical(
+            _parent,
+            QStringLiteral("重命名 Chunk 失败"),
+            error);
+    }
+}
+
+void ProjectManager::removeChunk(const QString &chunkId)
+{
+    if (!_projectData || chunkId.trimmed().isEmpty())
+    {
+        return;
+    }
+    QString chunkName;
+    for (const QJsonValue &value : _projectData->chunks())
+    {
+        const QJsonObject chunk = value.toObject();
+        if (chunk.value(QStringLiteral("id")).toString() == chunkId)
+        {
+            chunkName = chunk.value(QStringLiteral("name")).toString();
+            break;
+        }
+    }
+    const QMessageBox::StandardButton answer =
+        QMessageBox::warning(
+            _parent,
+            QStringLiteral("删除 Chunk"),
+            QStringLiteral(
+                "确定删除“%1”吗？该 Chunk 的影像、处理结果和数字目录都会被删除，此操作不可撤销。")
+                .arg(chunkName),
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No);
+    if (answer != QMessageBox::Yes)
+    {
+        return;
+    }
+    QString error;
+    if (!_projectData->removeChunk(chunkId, &error))
+    {
+        QMessageBox::critical(
+            _parent,
+            QStringLiteral("删除 Chunk 失败"),
+            error);
+    }
+}
+
+void ProjectManager::switchChunk(const QString &chunkId)
+{
+    if (!_projectData || chunkId.trimmed().isEmpty())
+    {
+        return;
+    }
+    QString error;
+    if (!_projectData->switchChunk(chunkId, &error))
+    {
+        QMessageBox::critical(
+            _parent,
+            QStringLiteral("切换 Chunk 失败"),
+            error);
+    }
+}
+
+void ProjectManager::saveUiSettings(const QJsonObject &settings)
+{
+    if (_projectData)
+    {
+        _projectData->saveUiSettings(settings);
+    }
+}
+
+void ProjectManager::markWorkspaceDirty()
+{
+    if (_projectData)
+    {
+        _projectData->markWorkspaceDirty();
+    }
+}
+
 //==============================================================================
 // 查询接口 (委托给ProjectData)
 //==============================================================================
 
 bool ProjectManager::isDirty() const
 {
-    return _projectData ? _projectData->isDirty() : false;
+    return _projectData
+        && _projectData->hasProject()
+        && _projectData->isDirty();
 }
 
 QString ProjectManager::currentProjectPath() const

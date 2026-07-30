@@ -6,7 +6,7 @@
  * 本文件不包含任何业务逻辑，所有 QAction 的 triggered 信号由主窗口负责连接。
  */
 #include "MainMenu.h"
-#include "AboutDialog.h"
+#include "application/AboutDialog.h"
 #include "ToolbarButton.h"
 
 #include <QDir>
@@ -619,6 +619,148 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                     tr("锁定图像"),
                                                     false);
         _lockCameraImageAct->setToolTip(tr("固定当前相机图像；模型视角仍可自由旋转"));
+
+        QMenu *viewModeMenu = ensureSubMenu(_mainWindow,
+                                            modelMenu,
+                                            QStringLiteral("menuModelViewMode"),
+                                            tr("视图模式"));
+        QMenu *tiePointViewModeMenu = ensureSubMenu(
+            _mainWindow,
+            viewModeMenu,
+            QStringLiteral("menuModelTiePointViewMode"),
+            tr("连接点"));
+        if (!tiePointViewModeMenu)
+        {
+            return;
+        }
+
+        _tiePointColorModeAct = ensureCheckableAction(
+            _mainWindow,
+            tiePointViewModeMenu,
+            tiePointViewModeMenu,
+            QStringLiteral("actionTiePointColorMode"),
+            tr("连接点 — 颜色"),
+            true);
+        _tiePointColorModeAct->setToolTip(tr("使用连接点从原始照片采样的 RGB 颜色"));
+
+        _tiePointElevationModeAct = ensureCheckableAction(
+            _mainWindow,
+            tiePointViewModeMenu,
+            tiePointViewModeMenu,
+            QStringLiteral("actionTiePointElevationMode"),
+            tr("连接点 — 高程"),
+            false);
+        _tiePointElevationModeAct->setToolTip(tr("按连接点 Z 高程从蓝色到红色着色"));
+
+        _tiePointImageCountModeAct = ensureCheckableAction(
+            _mainWindow,
+            tiePointViewModeMenu,
+            tiePointViewModeMenu,
+            QStringLiteral("actionTiePointImageCountMode"),
+            tr("连接点 — 影像数"),
+            false);
+        _tiePointImageCountModeAct->setToolTip(tr("按每个连接点的影像观测数量着色"));
+
+        auto *tiePointModeGroup =
+            tiePointViewModeMenu->findChild<QActionGroup *>(
+                QStringLiteral("actionGroupTiePointViewMode"));
+        if (!tiePointModeGroup)
+        {
+            tiePointModeGroup = new QActionGroup(tiePointViewModeMenu);
+            tiePointModeGroup->setObjectName(QStringLiteral("actionGroupTiePointViewMode"));
+        }
+        tiePointModeGroup->setExclusive(true);
+        tiePointModeGroup->addAction(_tiePointColorModeAct);
+        tiePointModeGroup->addAction(_tiePointElevationModeAct);
+        tiePointModeGroup->addAction(_tiePointImageCountModeAct);
+
+        QMenu *modelViewModeMenu = ensureSubMenu(
+            _mainWindow,
+            viewModeMenu,
+            QStringLiteral("menuModelSurfaceViewMode"),
+            tr("模型"));
+        if (!modelViewModeMenu)
+        {
+            return;
+        }
+
+        auto addModelMode = [this, modelViewModeMenu](QAction **action,
+                                                      const QString &objectName,
+                                                      const QString &text,
+                                                      const QString &toolTip,
+                                                      bool checked)
+        {
+            *action = ensureCheckableAction(_mainWindow,
+                                            modelViewModeMenu,
+                                            modelViewModeMenu,
+                                            objectName,
+                                            text,
+                                            checked);
+            (*action)->setToolTip(toolTip);
+        };
+        addModelMode(&_modelTextureModeAct,
+                     QStringLiteral("actionModelTextureMode"),
+                     tr("模型 — 纹理"),
+                     tr("当前版本尚未提供模型纹理生成流程"),
+                     false);
+        addModelMode(&_modelShadedModeAct,
+                     QStringLiteral("actionModelShadedMode"),
+                     tr("模型 — 阴影"),
+                     tr("使用中性白色和平滑法线显示模型表面"),
+                     true);
+        addModelMode(&_modelSolidModeAct,
+                     QStringLiteral("actionModelSolidMode"),
+                     tr("模型 — 实体"),
+                     tr("使用实体材质和面法线突出三角面结构"),
+                     false);
+        addModelMode(&_modelWireframeModeAct,
+                     QStringLiteral("actionModelWireframeMode"),
+                     tr("模型 — 线框"),
+                     tr("仅显示模型三角网格边线"),
+                     false);
+        addModelMode(&_modelElevationModeAct,
+                     QStringLiteral("actionModelElevationMode"),
+                     tr("模型 — 高程"),
+                     tr("按模型顶点 Z 高程从蓝色到红色着色"),
+                     false);
+        addModelMode(&_modelConfidenceModeAct,
+                     QStringLiteral("actionModelConfidenceMode"),
+                     tr("模型 — 可信度"),
+                     tr("当前模型产物未包含逐面或逐顶点重建置信度"),
+                     false);
+        addModelMode(&_modelAssignedImageModeAct,
+                     QStringLiteral("actionModelAssignedImageMode"),
+                     tr("模型 — 指定影像"),
+                     tr("当前模型产物未包含面片到源影像的真实映射"),
+                     false);
+
+        // 这些模式只有在重建流程产出对应模型属性后才具有明确语义。
+        // 保留菜单位置便于后续接入，但不能用观察方向启发式伪装成真实产物。
+        _modelTextureModeAct->setEnabled(false);
+        _modelConfidenceModeAct->setEnabled(false);
+        _modelAssignedImageModeAct->setEnabled(false);
+
+        auto *modelModeGroup = modelViewModeMenu->findChild<QActionGroup *>(
+            QStringLiteral("actionGroupModelSurfaceViewMode"));
+        if (!modelModeGroup)
+        {
+            modelModeGroup = new QActionGroup(modelViewModeMenu);
+            modelModeGroup->setObjectName(
+                QStringLiteral("actionGroupModelSurfaceViewMode"));
+        }
+        modelModeGroup->setExclusive(true);
+        for (QAction *action : {
+                 _modelTextureModeAct,
+                 _modelShadedModeAct,
+                 _modelSolidModeAct,
+                 _modelWireframeModeAct,
+                 _modelElevationModeAct,
+                 _modelConfidenceModeAct,
+                 _modelAssignedImageModeAct})
+        {
+            modelModeGroup->addAction(action);
+        }
+        _modelShadedModeAct->setChecked(true);
     };
 
     auto installViewMenuLayout = [this](QMenu *viewMenu, QMenu *windowMenu)
@@ -722,14 +864,13 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         _toggleCamerasAct->setText(tr("显示相机"));
         _toggleCamerasAct->setToolTip(tr("显示相机"));
 
-        const bool showLocalAxes = !_toggleGizmoAct || _toggleGizmoAct->isChecked();
         _toggleLocalAxesAct = ensureCheckableAction(_mainWindow,
                                                     _mainWindow,
                                                     nullptr,
                                                     QStringLiteral("actionToggleLocalAxes"),
                                                     tr("显示本地轴"),
-                                                    showLocalAxes);
-        _toggleLocalAxesAct->setToolTip(tr("显示或隐藏模型视图中的本地轴"));
+                                                    false);
+        _toggleLocalAxesAct->setToolTip(tr("显示或隐藏每个相机的本地 X/Y/Z 坐标轴"));
 
         auto *cameraMenu = new QMenu(_toolBar);
         cameraMenu->setObjectName(QStringLiteral("menuToolbarCameraVisibility"));
@@ -915,7 +1056,6 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         auto *viewMenu = findNamedChild<QMenu>(_mainWindow, "menuView");
         auto *windowMenu = findNamedChild<QMenu>(_mainWindow, "menuWindow");
         auto *workflowMenu = findNamedChild<QMenu>(_mainWindow, "menuWorkflow");
-        auto *reconstructionMenu = findNamedChild<QMenu>(_mainWindow, "menuReconstruction");
         auto *toolsMenu = findNamedChild<QMenu>(_mainWindow, "menuTools");
         auto *modelMenu = findNamedChild<QMenu>(_mainWindow, "menuModel");
 
@@ -1071,30 +1211,16 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         _addFolderAct = findNamedChild<QAction>(_mainWindow, "actionAddFolder");
         _workflowAerialTriangulationAct =
             findNamedChild<QAction>(_mainWindow, "actionWorkflowAerialTriangulation");
-        _threeDReconstructionAct = findNamedChild<QAction>(_mainWindow, "actionThreeDReconstruction");
         _generateModelAct = findNamedChild<QAction>(_mainWindow, "actionGenerateModel");
+        _generateTextureAct = findNamedChild<QAction>(_mainWindow, "actionGenerateTexture");
         _createDEMAct = findNamedChild<QAction>(_mainWindow, "actionCreateDEM");
         _generateOrthoAct = findNamedChild<QAction>(_mainWindow, "actionGenerateOrtho");
 
-        _detectFeaturesAct = findNamedChild<QAction>(_mainWindow, "actionDetectFeatures");
-        _vocabularyOverlapAct = findNamedChild<QAction>(_mainWindow, "actionVocabularyOverlap");
-        _matchFeaturesAct = findNamedChild<QAction>(_mainWindow, "actionMatchFeatures");
-        _aerialTriangulationAct = findNamedChild<QAction>(_mainWindow, "actionAerialTriangulation");
-        _buildObsNetworkAct = findNamedChild<QAction>(_mainWindow, "actionBuildObsNetwork");
-        _initCameraPoseAct = findNamedChild<QAction>(_mainWindow, "actionInitCameraPose");
-        _triangulateAct = findNamedChild<QAction>(_mainWindow, "actionTriangulate");
-        _reconBundleAdjustAct = findNamedChild<QAction>(_mainWindow, "actionReconBundleAdjust");
-        _sparseCloudPostProcessAct = findNamedChild<QAction>(_mainWindow, "actionSparseCloudPostProcess");
-        _denseMatchAct = findNamedChild<QAction>(_mainWindow, "actionDenseMatch");
-        _depthMapEstimateAct = findNamedChild<QAction>(_mainWindow, "actionDepthMapEstimate");
-        _fuseDepthMapsAct = findNamedChild<QAction>(_mainWindow, "actionFuseDepthMaps");
-        _refineDenseCloudAct = findNamedChild<QAction>(_mainWindow, "actionRefineDenseCloud");
         _overlapAnalysisAct = findNamedChild<QAction>(_mainWindow, "actionOverlapAnalysis");
         _intersectionCheckAct = findNamedChild<QAction>(_mainWindow, "actionIntersectionCheck");
         _intersectionViewResultsAct = findNamedChild<QAction>(_mainWindow, "actionIntersectionViewResults");
         _manualPointCloudPruneAct = findNamedChild<QAction>(_mainWindow, "actionManualPointCloudPrune");
         _generateMaskAct = findNamedChild<QAction>(_mainWindow, "actionGenerateMask");
-        _viewMatchesAct = findNamedChild<QAction>(_mainWindow, "actionViewMatches");
         _viewWorkflowReportAct = findNamedChild<QAction>(_mainWindow, "actionViewWorkflowReport");
         _cameraConvertAct = findNamedChild<QAction>(_mainWindow, "actionCameraConvert");
         _surveyControlAct = findNamedChild<QAction>(_mainWindow, "actionSurveyControl");
@@ -1122,14 +1248,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
             _workflowAerialTriangulationAct->setToolTip(tr("打开对齐照片参数对话框"));
             if (workflowMenu)
             {
-                if (_threeDReconstructionAct)
-                {
-                    workflowMenu->insertAction(_threeDReconstructionAct, _workflowAerialTriangulationAct);
-                }
-                else
-                {
-                    workflowMenu->addAction(_workflowAerialTriangulationAct);
-                }
+                workflowMenu->addAction(_workflowAerialTriangulationAct);
             }
         }
         if (!_generateModelAct)
@@ -1149,6 +1268,26 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                 else
                 {
                     workflowMenu->addAction(_generateModelAct);
+                }
+            }
+        }
+        if (!_generateTextureAct)
+        {
+            QObject *actionParent = workflowMenu
+                ? static_cast<QObject *>(workflowMenu)
+                : static_cast<QObject *>(_mainWindow);
+            _generateTextureAct = new QAction(tr("生成纹理..."), actionParent);
+            _generateTextureAct->setObjectName(QStringLiteral("actionGenerateTexture"));
+            _generateTextureAct->setToolTip(tr("将项目影像投影到当前三维模型，生成 OBJ、MTL 和纹理图"));
+            if (workflowMenu)
+            {
+                if (_createDEMAct)
+                {
+                    workflowMenu->insertAction(_createDEMAct, _generateTextureAct);
+                }
+                else
+                {
+                    workflowMenu->addAction(_generateTextureAct);
                 }
             }
         }
@@ -1187,9 +1326,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
             modelMenu->setObjectName(QStringLiteral("menuModel"));
             if (_mainWindow->menuBar())
             {
-                QAction *before = reconstructionMenu
-                    ? reconstructionMenu->menuAction()
-                    : (toolsMenu ? toolsMenu->menuAction() : nullptr);
+                QAction *before = toolsMenu ? toolsMenu->menuAction() : nullptr;
                 if (before)
                 {
                     _mainWindow->menuBar()->insertMenu(before, modelMenu);
@@ -1410,8 +1547,8 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         }
         const QList<QAction *> workflowActions{
             _workflowAerialTriangulationAct,
-            _threeDReconstructionAct,
             _generateModelAct,
+            _generateTextureAct,
             _createDEMAct,
             _generateOrthoAct
         };
@@ -1565,41 +1702,14 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     _addFolderAct      = workflowMenu->addAction(tr("添加 文件夹"));
     workflowMenu->addSeparator();
     _workflowAerialTriangulationAct = workflowMenu->addAction(tr("空中三角测量...")); // 对齐照片参数对话框
-    _threeDReconstructionAct = workflowMenu->addAction(tr("三维重建"));     // 一键完整建模流程
     _generateModelAct = workflowMenu->addAction(tr("生成模型..."));        // Metashape 风格源数据选择
+    _generateTextureAct = workflowMenu->addAction(tr("生成纹理..."));      // 将影像投影到已有模型
     _createDEMAct      = workflowMenu->addAction(tr("创建 DEM"));          // DEM 完整流程
     _generateOrthoAct  = workflowMenu->addAction(tr("生成 正射影像"));     // 正射影像完整流程
 
     _modelMenu = _mainWindow->menuBar()->addMenu(tr("模型"));
     _modelMenu->setObjectName(QStringLiteral("menuModel"));
     installModelDisplayMenu(_modelMenu);
-
-    // ---- 重建菜单 ----
-    // 重建菜单只保留稀疏、密集阶段；模型统一从“工作流程 → 生成模型”进入。
-    auto *reconMenu = _mainWindow->menuBar()->addMenu(tr("重建"));
-
-    // ── 稀疏重建 ──
-    auto *sparseReconMenu = reconMenu->addMenu(tr("稀疏重建"));
-    _detectFeaturesAct = sparseReconMenu->addAction(tr("特征点提取"));
-    _vocabularyOverlapAct = sparseReconMenu->addAction(tr("重叠对规划..."));
-    _matchFeaturesAct  = sparseReconMenu->addAction(tr("连接点匹配"));
-    _aerialTriangulationAct = sparseReconMenu->addAction(tr("空中三角测量..."));
-    _sparseCloudPostProcessAct = sparseReconMenu->addAction(tr("稀疏点云后处理..."));
-
-    sparseReconMenu->addSeparator();
-    auto *advancedSparseMenu = sparseReconMenu->addMenu(tr("高级工具"));
-    _viewMatchesAct = advancedSparseMenu->addAction(tr("查看匹配"));
-    _buildObsNetworkAct = advancedSparseMenu->addAction(tr("构建观测网络..."));
-    _initCameraPoseAct = advancedSparseMenu->addAction(tr("初始化相机位姿..."));
-    _triangulateAct = advancedSparseMenu->addAction(tr("生成两视预览云..."));
-    _reconBundleAdjustAct = advancedSparseMenu->addAction(tr("单独光束法平差..."));
-
-    // ── 密集重建 ──
-    auto *denseReconMenu = reconMenu->addMenu(tr("密集重建"));
-    _denseMatchAct       = denseReconMenu->addAction(tr("密集匹配..."));
-    _depthMapEstimateAct = denseReconMenu->addAction(tr("深度图估计..."));
-    _fuseDepthMapsAct    = denseReconMenu->addAction(tr("深度图融合生成密集点云..."));
-    _refineDenseCloudAct = denseReconMenu->addAction(tr("密集点云后处理..."));
 
     // ---- 工具菜单 ----
     // 提供细粒度的单步工具入口，供高级用户和调试场景使用
@@ -1995,23 +2105,32 @@ QAction *MainMenu::toggleCameraImagesAction() const { return _toggleCameraImages
 QAction *MainMenu::showCameraImagesInForegroundAction() const { return _showCameraImagesInForegroundAct; }
 QAction *MainMenu::showCameraImagesInBackgroundAction() const { return _showCameraImagesInBackgroundAct; }
 QAction *MainMenu::lockCameraImageAction() const { return _lockCameraImageAct; }
+QAction *MainMenu::tiePointColorModeAction() const { return _tiePointColorModeAct; }
+QAction *MainMenu::tiePointElevationModeAction() const { return _tiePointElevationModeAct; }
+QAction *MainMenu::tiePointImageCountModeAction() const { return _tiePointImageCountModeAct; }
+QAction *MainMenu::modelTextureModeAction() const { return _modelTextureModeAct; }
+QAction *MainMenu::modelShadedModeAction() const { return _modelShadedModeAct; }
+QAction *MainMenu::modelSolidModeAction() const { return _modelSolidModeAct; }
+QAction *MainMenu::modelWireframeModeAction() const { return _modelWireframeModeAct; }
+QAction *MainMenu::modelElevationModeAction() const { return _modelElevationModeAct; }
+QAction *MainMenu::modelConfidenceModeAction() const { return _modelConfidenceModeAct; }
+QAction *MainMenu::modelAssignedImageModeAction() const
+{
+    return _modelAssignedImageModeAct;
+}
 QAction *MainMenu::toggleHenanUniversityBrandAction() const { return _toggleHenanUniversityBrandAct; }
 
 QAction *MainMenu::addPhotoAction() const       { return _addPhotoAct; }
 QAction *MainMenu::addFolderAction() const      { return _addFolderAct; }
-QAction *MainMenu::detectFeaturesAction() const { return _detectFeaturesAct; }
-QAction *MainMenu::vocabularyOverlapAction() const { return _vocabularyOverlapAct; }
 QAction *MainMenu::featureVisualizationAction() const { return _featureVisualizationAct; }
-QAction *MainMenu::matchFeaturesAction() const  { return _matchFeaturesAct; }
-QAction *MainMenu::viewMatchesAction() const    { return _viewMatchesAct; }
 QAction *MainMenu::workflowAerialTriangulationAction() const { return _workflowAerialTriangulationAct; }
-QAction *MainMenu::threeDReconstructionAction() const { return _threeDReconstructionAct; }
 QAction *MainMenu::overlapAnalysisAction() const { return _overlapAnalysisAct; }
 QAction *MainMenu::intersectionCheckAction() const { return _intersectionCheckAct; }
 QAction *MainMenu::intersectionViewResultsAction() const { return _intersectionViewResultsAct; }
 QAction *MainMenu::createDEMAction() const      { return _createDEMAct; }
 QAction *MainMenu::generateOrthoAction() const  { return _generateOrthoAct; }
 QAction *MainMenu::generateModelAction() const  { return _generateModelAct; }
+QAction *MainMenu::generateTextureAction() const { return _generateTextureAct; }
 
 QAction *MainMenu::viewWorkflowReportAction() const         { return _viewWorkflowReportAct; }
 QAction *MainMenu::createTiePointsAction() const           { return _createTiePointsAct; }
@@ -2029,18 +2148,8 @@ QAction *MainMenu::importReferenceDatasetAction() const     { return _importRefe
 QAction *MainMenu::referenceQualityCheckAction() const      { return _referenceQualityCheckAct; }
 QAction *MainMenu::referenceTerrainBundleAdjustAction() const { return _referenceTerrainBundleAdjustAct; }
 
-QAction *MainMenu::buildObsNetworkAction() const     { return _buildObsNetworkAct; }
-QAction *MainMenu::initCameraPoseAction() const      { return _initCameraPoseAct; }
-QAction *MainMenu::aerialTriangulationAction() const { return _aerialTriangulationAct; }
-QAction *MainMenu::triangulateAction() const         { return _triangulateAct; }
-QAction *MainMenu::reconBundleAdjustAction() const   { return _reconBundleAdjustAct; }
-QAction *MainMenu::sparseCloudPostProcessAction() const { return _sparseCloudPostProcessAct; }
-QAction *MainMenu::depthMapEstimateAction() const    { return _depthMapEstimateAct; }
-QAction *MainMenu::fuseDepthMapsAction() const       { return _fuseDepthMapsAct; }
-QAction *MainMenu::refineDenseCloudAction() const    { return _refineDenseCloudAct; }
 QAction *MainMenu::exportMatchedPairsAction() const  { return _exportMatchedPairsAct; }
 
-QAction *MainMenu::denseMatchAction() const { return _denseMatchAct; }
 QAction *MainMenu::toggleWorkspaceAction() const { return _toggleWorkspaceAct; }
 QAction *MainMenu::togglePropertiesAction() const { return _togglePropertiesAct; }
 QAction *MainMenu::togglePhotosAction() const { return _togglePhotosAct; }

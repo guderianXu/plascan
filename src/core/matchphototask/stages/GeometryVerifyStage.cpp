@@ -33,10 +33,19 @@
 #include "MatchFileIO.h"
 #include "MatchGeometryFilter.h"
 #include "MatchPhotosAlgorithmSelector.h"
+#include "MatchPhotosParallelism.h"
 #include "MatchPhotosRuntime.h"
 #include "SiftLightGlueRecovery.h"
 
+#include <QElapsedTimer>
 #include <QSet>
+
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <thread>
 
 namespace xjw
 {
@@ -145,6 +154,67 @@ xjw::feature_match::MatchResult filterGeometry(
     return filtered;
 }
 
+struct PrimaryGeometryOutcome
+{
+    bool processed = false;
+    bool success = false;
+    xjw::feature_match::MatchResult rawMatch;
+    xjw::feature_match::MatchResult filteredMatch;
+    qint64 featureReadMs = 0;
+    qint64 matchReadMs = 0;
+    qint64 filterMs = 0;
+    qint64 totalMs = 0;
+};
+
+PrimaryGeometryOutcome verifyPrimaryGeometry(
+    const MatchPhotosMatchRecord &record,
+    const xjw::feature_match::OutlierFilterConfig &filterConfig)
+{
+    PrimaryGeometryOutcome outcome;
+    outcome.processed = true;
+    QElapsedTimer totalTimer;
+    QElapsedTimer phaseTimer;
+    totalTimer.start();
+
+    const QString feature0Path =
+        record.settings.value(QStringLiteral("feature0_path")).toString();
+    const QString feature1Path =
+        record.settings.value(QStringLiteral("feature1_path")).toString();
+    QString image0Name;
+    QString image1Name;
+    xjw::feature_extractors::FeatureData feature0;
+    xjw::feature_extractors::FeatureData feature1;
+
+    phaseTimer.start();
+    const bool featureRead =
+        FeatureFileIO::readGeometryData(feature0Path, image0Name, feature0) &&
+        FeatureFileIO::readGeometryData(feature1Path, image1Name, feature1);
+    outcome.featureReadMs = phaseTimer.elapsed();
+
+    phaseTimer.restart();
+    const bool matchRead = featureRead &&
+        xjw::feature_match::readIndexedMatchFile(
+            record.matchPath,
+            image0Name,
+            image1Name,
+            outcome.rawMatch);
+    outcome.matchReadMs = phaseTimer.elapsed();
+    if (!featureRead || !matchRead)
+    {
+        outcome.totalMs = totalTimer.elapsed();
+        return outcome;
+    }
+
+    normalizeMatchResult(&outcome.rawMatch, feature0.size(), feature1.size());
+    phaseTimer.restart();
+    outcome.filteredMatch =
+        filterGeometry(outcome.rawMatch, feature0, feature1, filterConfig);
+    outcome.filterMs = phaseTimer.elapsed();
+    outcome.totalMs = totalTimer.elapsed();
+    outcome.success = true;
+    return outcome;
+}
+
 } // namespace
 
 MatchPhotosStageReport GeometryVerifyStage::run(const MatchPhotosContext &context,
@@ -178,59 +248,185 @@ MatchPhotosStageReport GeometryVerifyStage::run(const MatchPhotosContext &contex
     int totalInliers = 0;
     int denseRecoveredPairs = 0;
     int connectivityRecoveredPairs = 0;
-    for (MatchPhotosMatchRecord &record : *matchRecords)
+    qint64 totalFeatureReadMs = 0;
+    qint64 totalMatchReadMs = 0;
+    qint64 totalFilterMs = 0;
+    qint64 totalRecoveryMs = 0;
+    QElapsedTimer stageTimer;
+    stageTimer.start();
+    const int totalPairs = static_cast<int>(matchRecords->size());
+    const int geometryWorkers = resolveGeometryVerificationWorkers(
+        totalPairs,
+        std::thread::hardware_concurrency());
+    std::vector<PrimaryGeometryOutcome> primaryOutcomes(
+        static_cast<std::size_t>(totalPairs));
+    std::atomic_int nextIndex{0};
+    std::atomic_int activeWorkers{geometryWorkers};
+    std::atomic_bool stop{false};
+    std::mutex completionMutex;
+    std::condition_variable completionCondition;
+    std::deque<int> completionQueue;
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<std::size_t>(geometryWorkers));
+
+    for (int workerIndex = 0; workerIndex < geometryWorkers; ++workerIndex)
     {
+        workers.emplace_back([&]()
+        {
+            while (!stop.load())
+            {
+                const int index = nextIndex.fetch_add(1);
+                if (index >= totalPairs)
+                {
+                    break;
+                }
+                if (shouldCancelMatchPhotos(context))
+                {
+                    stop.store(true);
+                    break;
+                }
+
+                try
+                {
+                    primaryOutcomes[static_cast<std::size_t>(index)] =
+                        verifyPrimaryGeometry(
+                            (*matchRecords)[static_cast<std::size_t>(index)],
+                            filterConfig);
+                }
+                catch (const std::exception &)
+                {
+                    primaryOutcomes[static_cast<std::size_t>(index)].processed = true;
+                }
+                {
+                    std::lock_guard<std::mutex> lock(completionMutex);
+                    completionQueue.push_back(index);
+                }
+                completionCondition.notify_one();
+            }
+            activeWorkers.fetch_sub(1);
+            completionCondition.notify_one();
+        });
+    }
+
+    int computedPairs = 0;
+    int lastReportedPairs = -1;
+    while (true)
+    {
+        std::unique_lock<std::mutex> lock(completionMutex);
+        completionCondition.wait_for(
+            lock,
+            std::chrono::milliseconds(100),
+            [&]()
+            {
+                return !completionQueue.empty() ||
+                    activeWorkers.load() == 0 ||
+                    shouldCancelMatchPhotos(context);
+            });
         if (shouldCancelMatchPhotos(context))
         {
-            return makeGeometryReport(MatchPhotosStageStatus::Failed,
-                                      QStringLiteral("用户取消几何验证"),
-                                      passedPairs);
+            stop.store(true);
         }
+        while (!completionQueue.empty())
+        {
+            completionQueue.pop_front();
+            ++computedPairs;
+        }
+        const bool allWorkersFinished =
+            activeWorkers.load() == 0 && completionQueue.empty();
+        lock.unlock();
+        if (computedPairs > 0 && computedPairs != lastReportedPairs)
+        {
+            reportMatchPhotosProgress(
+                context,
+                QStringLiteral("geometry"),
+                QStringLiteral("几何验证计算：%1/%2，CPU 并发 %3")
+                    .arg(computedPairs)
+                    .arg(totalPairs)
+                    .arg(geometryWorkers),
+                computedPairs,
+                totalPairs);
+            lastReportedPairs = computedPairs;
+        }
+        if (allWorkersFinished)
+        {
+            break;
+        }
+    }
 
-        const QString feature0Path = record.settings.value(QStringLiteral("feature0_path")).toString();
-        const QString feature1Path = record.settings.value(QStringLiteral("feature1_path")).toString();
-        QString image0Name;
-        QString image1Name;
-        xjw::feature_extractors::FeatureData feature0;
-        xjw::feature_extractors::FeatureData feature1;
-        xjw::feature_match::MatchResult rawMatch;
-        if (!FeatureFileIO::readData(feature0Path, image0Name, feature0) ||
-            !FeatureFileIO::readData(feature1Path, image1Name, feature1) ||
-            !xjw::feature_match::readIndexedMatchFile(record.matchPath, image0Name, image1Name, rawMatch))
+    for (std::thread &worker : workers)
+    {
+        if (worker.joinable())
+        {
+            worker.join();
+        }
+    }
+    if (shouldCancelMatchPhotos(context))
+    {
+        return makeGeometryReport(MatchPhotosStageStatus::Failed,
+                                  QStringLiteral("用户取消几何验证"),
+                                  passedPairs);
+    }
+
+    for (int index = 0; index < totalPairs; ++index)
+    {
+        MatchPhotosMatchRecord &record =
+            (*matchRecords)[static_cast<std::size_t>(index)];
+        PrimaryGeometryOutcome &outcome =
+            primaryOutcomes[static_cast<std::size_t>(index)];
+        totalFeatureReadMs += outcome.featureReadMs;
+        totalMatchReadMs += outcome.matchReadMs;
+        totalFilterMs += outcome.filterMs;
+        if (!outcome.success)
         {
             ++failedPairs;
             continue;
         }
 
-        normalizeMatchResult(&rawMatch, feature0.size(), feature1.size());
-        xjw::feature_match::MatchResult filteredMatch =
-            filterGeometry(rawMatch, feature0, feature1, filterConfig);
-        const int primaryInliers = filteredMatch.numMatches;
+        const QString feature0Path =
+            record.settings.value(QStringLiteral("feature0_path")).toString();
+        const QString feature1Path =
+            record.settings.value(QStringLiteral("feature1_path")).toString();
+        const int primaryInliers = outcome.filteredMatch.numMatches;
         applyVerifiedMatch(&record,
-                           filteredMatch,
-                           rawMatch.numMatches,
+                           outcome.filteredMatch,
+                           outcome.rawMatch.numMatches,
                            options.geometryMinInliers);
 
-        if (shouldAugmentDenseSiftPair(options, record, rawMatch.numMatches))
+        qint64 recoveryMs = 0;
+        if (shouldAugmentDenseSiftPair(
+                options, record, outcome.rawMatch.numMatches))
         {
+            xjw::feature_extractors::FeatureData recoveryFeature0;
+            xjw::feature_extractors::FeatureData recoveryFeature1;
             xjw::feature_match::MatchResult recoveredRaw;
             xjw::feature_match::MatchResult recoveredFiltered;
             bool usedCuda = false;
-            if (runFullSiftRecovery(options,
-                                    feature0,
-                                    feature1,
+            QString image0Name;
+            QString image1Name;
+            QElapsedTimer phaseTimer;
+            phaseTimer.restart();
+            const bool recoveryFeaturesRead =
+                FeatureFileIO::readData(feature0Path, image0Name, recoveryFeature0) &&
+                FeatureFileIO::readData(feature1Path, image1Name, recoveryFeature1);
+            const bool recovered = recoveryFeaturesRead &&
+                runFullSiftRecovery(options,
+                                    recoveryFeature0,
+                                    recoveryFeature1,
                                     filterConfig,
                                     &recoveredRaw,
                                     &recoveredFiltered,
-                                    &usedCuda) &&
-                recoveredFiltered.numMatches > filteredMatch.numMatches &&
+                                    &usedCuda);
+            recoveryMs = phaseTimer.elapsed();
+            totalRecoveryMs += recoveryMs;
+            if (recovered &&
+                recoveredFiltered.numMatches > outcome.filteredMatch.numMatches &&
                 persistRecoveredMatch(options,
                                       plan,
-                                      feature0,
-                                      feature1,
+                                      recoveryFeature0,
+                                      recoveryFeature1,
                                       recoveredRaw,
                                       QStringLiteral("dense_overlap_budget_truncation"),
-                                      rawMatch.numMatches,
+                                      outcome.rawMatch.numMatches,
                                       primaryInliers,
                                       recoveredFiltered.numMatches,
                                       usedCuda,
@@ -254,6 +450,19 @@ MatchPhotosStageReport GeometryVerifyStage::run(const MatchPhotosContext &contex
             ++failedPairs;
         }
         record.settings[QStringLiteral("geometry_reproj_threshold")] = options.geometryReprojThreshold;
+        record.settings[QStringLiteral("geometry_feature_read_mode")] =
+            QStringLiteral("keypoints_only");
+        record.settings[QStringLiteral("geometry_feature_read_ms")] =
+            static_cast<double>(outcome.featureReadMs);
+        record.settings[QStringLiteral("geometry_match_read_ms")] =
+            static_cast<double>(outcome.matchReadMs);
+        record.settings[QStringLiteral("geometry_filter_ms")] =
+            static_cast<double>(outcome.filterMs);
+        record.settings[QStringLiteral("geometry_pair_total_ms")] =
+            static_cast<double>(outcome.totalMs + recoveryMs);
+        record.settings[QStringLiteral("geometry_parallel_pairs_effective")] =
+            geometryWorkers;
+        record.settings[QStringLiteral("geometry_gpu_used")] = false;
     }
 
     // 先使用 LightGlue 形成实际匹配图；只对跨连通分量的失败边做全量 SIFT 恢复。
@@ -333,12 +542,21 @@ MatchPhotosStageReport GeometryVerifyStage::run(const MatchPhotosContext &contex
 
     return makeGeometryReport(MatchPhotosStageStatus::Completed,
                               QStringLiteral("几何验证完成：通过 %1 对，失败 %2 对，内点 %3，"
-                                             "强重叠增强 %4 对，断图恢复 %5 对")
+                                             "强重叠增强 %4 对，断图恢复 %5 对；"
+                                             "关键点读取 %6 ms，匹配读取 %7 ms，"
+                                             "USAC %8 ms，恢复 %9 ms，CPU 并发 %10，"
+                                             "总计 %11 ms")
                                   .arg(passedPairs)
                                   .arg(failedPairs)
                                   .arg(totalInliers)
                                   .arg(denseRecoveredPairs)
-                                  .arg(connectivityRecoveredPairs),
+                                  .arg(connectivityRecoveredPairs)
+                                  .arg(totalFeatureReadMs)
+                                  .arg(totalMatchReadMs)
+                                  .arg(totalFilterMs)
+                                  .arg(totalRecoveryMs)
+                                  .arg(geometryWorkers)
+                                  .arg(stageTimer.elapsed()),
                               passedPairs);
 }
 

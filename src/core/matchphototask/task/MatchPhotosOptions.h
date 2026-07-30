@@ -49,6 +49,10 @@ struct MatchPhotosOptions
     int maxKeypoints = 0;
     int keypointLimitPerMegapixel = 0;
     int cudaDevice = 0;
+    // 0 表示根据可用显存自动选择；CPU 路径始终按 1 处理。
+    int cudaParallelPairs = 0;
+    // CUDA SIFT 流水线最多预读的影像数，避免大 TIFF 占满主机内存。
+    int featurePrefetchDepth = 2;
     float matchThreshold = 0.15f;
     double geometryReprojThreshold = 1.5;
     int geometryMinInliers = 20;

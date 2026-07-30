@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <QWidget>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QStandardItem>
 #include <QStringList>
@@ -32,10 +33,14 @@ public:
 public slots:
     // 直接从内存提供的 JSON 元数据刷新视图（由 ProjectManager 在修改后立即调用）
     void loadFromJson(const QJsonObject &meta);
+    void setChunkContext(const QJsonArray &chunks,
+                         const QString &activeChunkId);
     // 添加会话级临时模型：只显示在左侧工作区，不写入项目元数据。
     void addTransientModel(const QString &modelPath);
     // 清除所有会话级临时资源。打开/新建/切换项目时调用。
     void clearTransientResources();
+    // 项目关闭时清空树、会话资源及路径状态，防止旧项目资源残留。
+    void clearProject();
 
 signals:
     // 用户在右键菜单选择打开时发出（传递被选中资源的路径，可能为相对或绝对）
@@ -51,6 +56,12 @@ signals:
     void deleteDataRequested(const QString &section, const QStringList &resourcePaths);
     // 在工作区中心的侧边打开二维图像，用于双图对比
     void sideOpenRequested(const QString &section, const QString &resourcePath);
+    // 从照片节点直接打开匹配查看器，并将该照片设为当前影像。
+    void viewMatchesRequested(const QString &imagePath);
+    void createChunkRequested();
+    void renameChunkRequested(const QString &chunkId);
+    void removeChunkRequested(const QString &chunkId);
+    void switchChunkRequested(const QString &chunkId);
 
     // 用户在列表中“激活/点击”某个影像（单选）时发出。
     // 上层可以据此把该影像显示到中央画布。
@@ -93,4 +104,8 @@ private:
     QString _currentPlascanPath{};
     QJsonObject _lastMeta{};
     QStringList _transientModels{};
+    QJsonArray _chunks{};
+    QString _activeChunkId{};
+    QStandardItem *_workspaceRoot{};
+    QStandardItem *_activeChunkRoot{};
 };

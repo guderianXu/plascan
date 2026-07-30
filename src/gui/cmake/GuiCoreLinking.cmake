@@ -3,6 +3,14 @@ if(TARGET plascan_common_project)
   target_link_libraries(plascan_gui PRIVATE plascan_common_project)
 endif()
 
+if(TARGET plascan_common_json)
+  target_link_libraries(plascan_gui PRIVATE plascan_common_json)
+endif()
+
+if(TARGET plascan_common_runtime)
+  target_link_libraries(plascan_gui PRIVATE plascan_common_runtime)
+endif()
+
 if(EXISTS ${CMAKE_SOURCE_DIR}/src/core/CMakeLists.txt)
   if(TARGET superpoint)
     message(STATUS "plascan_gui: linking against superpoint target")

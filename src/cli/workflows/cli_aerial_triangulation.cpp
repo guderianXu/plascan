@@ -4,6 +4,7 @@
 #include "CliTokenUtils.h"
 
 #include "workflow/AerialTriangulationWorkflow.h"
+#include "project/ProjectSession.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -249,6 +250,8 @@ int main(int argc, char *argv[])
     std::string inputPath;
     std::string outputDirArg;
     std::string projectPathArg;
+    std::string chunkIdArg;
+    std::string chunkNameArg;
     std::string assetsDirArg;
     std::string featureDirArg;
     std::string matchDirArg;
@@ -285,6 +288,8 @@ int main(int argc, char *argv[])
     app.add_option("-i,--input", inputPath, "影像列表；每行支持 '<image>' 或 '<image> <camera.tsai>'")->required();
     app.add_option("-o,--output-dir", outputDirArg, "输出目录")->required();
     app.add_option("--project", projectPathArg, "无头项目路径，默认写到输出目录 headless.plascan");
+    app.add_option("--chunk-id", chunkIdArg, "使用指定 UUID 的 Chunk");
+    app.add_option("--chunk-name", chunkNameArg, "使用指定名称的 Chunk");
     app.add_option("--assets-dir", assetsDirArg, "复用特征与匹配的 assets 目录，默认使用输出目录下的 assets");
     app.add_option("--feature-dir", featureDirArg, "特征缓存目录，默认使用 assets/ip");
     app.add_option("--match-dir", matchDirArg, "匹配缓存目录，默认使用 assets/matches");
@@ -327,9 +332,10 @@ int main(int argc, char *argv[])
     const QString projectPath = projectPathArg.empty()
         ? QDir(outputDir).filePath(QStringLiteral("headless.plascan"))
         : xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(projectPathArg));
-    const QString assetsDir = assetsDirArg.empty()
-        ? QDir(outputDir).filePath(QStringLiteral("assets"))
-        : xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(assetsDirArg));
+    const QString requestedAssetsDir = assetsDirArg.empty()
+        ? QString()
+        : xjw::cli::cleanAbsolutePath(
+              xjw::cli::fromStdString(assetsDirArg));
 
     QString errorMessage;
     if (!xjw::cli::validateOutputDirectory(outputDir, force, &errorMessage) ||
@@ -396,6 +402,49 @@ int main(int argc, char *argv[])
         return cli::EXIT_ARG_ERR;
     }
 
+    xjw::common::project::ProjectSession projectSession;
+    if (!projectSession.openOrCreate(
+            projectPath,
+            QFileInfo(projectPath).completeBaseName(),
+            &errorMessage))
+    {
+        std::fprintf(stderr,
+                     "工程打开/创建失败: %s\n",
+                     qUtf8Printable(errorMessage));
+        return cli::EXIT_IO_ERR;
+    }
+    if (!chunkIdArg.empty() && !chunkNameArg.empty())
+    {
+        std::fprintf(stderr, "错误: --chunk-id 与 --chunk-name 不能同时使用\n");
+        return cli::EXIT_ARG_ERR;
+    }
+    if (!projectSession.selectChunk(
+            xjw::cli::fromStdString(chunkIdArg),
+            xjw::cli::fromStdString(chunkNameArg),
+            &errorMessage))
+    {
+        std::fprintf(stderr,
+                     "Chunk 选择失败: %s\n",
+                     qUtf8Printable(errorMessage));
+        return cli::EXIT_IO_ERR;
+    }
+    if (!projectSession.mergeImages(
+            xjw::cli::inputItemsToJson(items), &errorMessage)
+        || !projectSession.save(&errorMessage))
+    {
+        std::fprintf(stderr,
+                     "工程影像初始化失败: %s\n",
+                     qUtf8Printable(errorMessage));
+        return cli::EXIT_IO_ERR;
+    }
+    const QString assetsDir = requestedAssetsDir.isEmpty()
+        ? QDir(projectSession.activeChunkRoot())
+              .filePath(QStringLiteral("assets"))
+        : requestedAssetsDir;
+    const QString reconstructionDir =
+        QDir(projectSession.activeChunkRoot())
+            .filePath(QStringLiteral("reconstruction/sparse"));
+
     auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
     xjw::aerial_triangulation::AerialTriangulationOptions options;
     options.images = xjw::cli::imagePaths(items);
@@ -408,9 +457,8 @@ int main(int argc, char *argv[])
     options.matchDir = matchDirArg.empty()
         ? QDir(options.assetsDir).filePath(QStringLiteral("matches"))
         : xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(matchDirArg));
-    // CLI 的产物目录由 --output-dir 独立控制；assets-dir 仅用于特征、匹配与连接点缓存。
-    options.outputDir = outputDir;
-    options.projectMeta = xjw::cli::projectMetaFromInputItems(items);
+    options.outputDir = reconstructionDir;
+    options.projectMeta = projectSession.mergedMetadata();
     options.quality = xjw::cli::normalizedToken(qualityArg, QStringLiteral("high"));
     options.genericPreselection = genericPreselection;
     options.referencePreselection = referencePreselection;
@@ -456,7 +504,10 @@ int main(int argc, char *argv[])
         std::fflush(stdout);
     };
 
-    const QString reportPath = QDir(outputDir).filePath(QStringLiteral("aerial_triangulation_cli_report.json"));
+    const QString reportPath =
+        QDir(projectSession.activeChunkRoot()).filePath(
+            QStringLiteral(
+                "reports/aerial_triangulation_cli_report.json"));
     if (dryRunConfig)
     {
         const xjw::aerial_triangulation::AerialTriangulationResolvedConfig config =
@@ -468,6 +519,21 @@ int main(int argc, char *argv[])
         if (!xjw::cli::writeJsonFile(reportPath, report, &errorMessage))
         {
             std::fprintf(stderr, "报告写入失败: %s\n", qUtf8Printable(errorMessage));
+            return cli::EXIT_IO_ERR;
+        }
+        QJsonObject reportRecord = report;
+        reportRecord[QStringLiteral("kind")] =
+            QStringLiteral("aerial_triangulation_cli_dry_run");
+        reportRecord[QStringLiteral("path")] = reportPath;
+        projectSession.upsertResultByPath(
+            QStringLiteral("report_results"),
+            QStringLiteral("path"),
+            reportRecord);
+        if (!projectSession.save(&errorMessage))
+        {
+            std::fprintf(stderr,
+                         "配置报告已生成，但 Chunk 写回失败: %s\n",
+                         qUtf8Printable(errorMessage));
             return cli::EXIT_IO_ERR;
         }
         std::fprintf(stdout, "status=ok\n");
@@ -493,6 +559,103 @@ int main(int argc, char *argv[])
         return cli::EXIT_IO_ERR;
     }
 
+    for (const xjw::matchphotos::MatchPhotosFeatureRecord &feature :
+         result.tiePointResult.features)
+    {
+        QJsonObject record{
+            {QStringLiteral("input"), feature.imagePath},
+            {QStringLiteral("output"), feature.featurePath},
+            {QStringLiteral("keypoint_count"), feature.keypointCount},
+            {QStringLiteral("settings"), feature.settings},
+            {QStringLiteral("created_at"),
+             QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}
+        };
+        projectSession.upsertResultByPath(
+            QStringLiteral("ipfind_results"),
+            QStringLiteral("output"),
+            record);
+    }
+    for (const xjw::matchphotos::MatchPhotosMatchRecord &match :
+         result.tiePointResult.matches)
+    {
+        QJsonObject record{
+            {QStringLiteral("image0"), match.image0Path},
+            {QStringLiteral("image1"), match.image1Path},
+            {QStringLiteral("output"), match.matchPath},
+            {QStringLiteral("sidecar_path"), match.sidecarPath},
+            {QStringLiteral("match_count"), match.matchCount},
+            {QStringLiteral("geometric_inlier_count"),
+             match.geometricInlierCount},
+            {QStringLiteral("passed_geometry"), match.passedGeometry},
+            {QStringLiteral("settings"), match.settings},
+            {QStringLiteral("created_at"),
+             QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}
+        };
+        projectSession.upsertResultByPath(
+            QStringLiteral("ipmatch_results"),
+            QStringLiteral("output"),
+            record);
+    }
+
+    const auto &reconstruction = result.reconstructionResult;
+    if (!reconstruction.sparseCloudPath.isEmpty())
+    {
+        QJsonObject files{
+            {QStringLiteral("sparse_cloud_xyz"),
+             reconstruction.sparseCloudPath}
+        };
+        const QJsonObject extraFiles =
+            reconstruction.resultRecordExtra
+                .value(QStringLiteral("files")).toObject();
+        for (auto it = extraFiles.constBegin();
+             it != extraFiles.constEnd();
+             ++it)
+        {
+            files.insert(it.key(), it.value());
+        }
+        QJsonObject record = reconstruction.resultRecordExtra;
+        record.remove(QStringLiteral("files"));
+        record[QStringLiteral("created_at")] =
+            QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+        record[QStringLiteral("output_dir")] = reconstructionDir;
+        record[QStringLiteral("sparse_point_count")] =
+            reconstruction.numPoints3D;
+        record[QStringLiteral("selected_images")] =
+            QJsonArray::fromStringList(options.images);
+        record[QStringLiteral("files")] = files;
+        record[QStringLiteral("quality_metadata")] =
+            reconstruction.qualityMetadata;
+        projectSession.appendResult(
+            QStringLiteral("aerial_triangulation_results"), record);
+    }
+    int updatedCameraCount = 0;
+    if (reconstruction.success
+        && !projectSession.updateImageCameras(
+            reconstruction.pendingCamUpdates,
+            &updatedCameraCount,
+            &errorMessage))
+    {
+        std::fprintf(stderr,
+                     "空三已完成，但相机写回失败: %s\n",
+                     qUtf8Printable(errorMessage));
+        return cli::EXIT_IO_ERR;
+    }
+    QJsonObject reportRecord = report;
+    reportRecord[QStringLiteral("kind")] =
+        QStringLiteral("aerial_triangulation_cli");
+    reportRecord[QStringLiteral("path")] = reportPath;
+    projectSession.upsertResultByPath(
+        QStringLiteral("report_results"),
+        QStringLiteral("path"),
+        reportRecord);
+    if (!projectSession.save(&errorMessage))
+    {
+        std::fprintf(stderr,
+                     "空三结果已生成，但 Chunk 写回失败: %s\n",
+                     qUtf8Printable(errorMessage));
+        return cli::EXIT_IO_ERR;
+    }
+
     std::fprintf(stdout, "status=%s\n", result.reconstructionResult.success ? "ok" : "failed");
     std::fprintf(stdout, "registered_images=%d\n", result.reconstructionResult.numRegisteredImages);
     std::fprintf(stdout, "points3d=%d\n", result.reconstructionResult.numPoints3D);
@@ -502,6 +665,11 @@ int main(int argc, char *argv[])
         std::fprintf(stdout, "sparse_cloud=%s\n", qUtf8Printable(result.reconstructionResult.sparseCloudPath));
     }
     std::fprintf(stdout, "aerial_triangulation_cli_report.json=%s\n", qUtf8Printable(reportPath));
+    std::fprintf(stdout,
+                 "project=%s\nchunk=%d\nupdated_cameras=%d\n",
+                 qUtf8Printable(projectSession.projectPath()),
+                 projectSession.activeChunk().directory,
+                 updatedCameraCount);
 
     if (!result.reconstructionResult.success)
     {

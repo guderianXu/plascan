@@ -36,3 +36,31 @@ target_link_libraries(test_common_asp_match_point_reader PRIVATE
   GTest::gtest_main
 )
 gtest_discover_tests(test_common_asp_match_point_reader DISCOVERY_MODE PRE_TEST)
+
+add_executable(test_portable_project_format test_portable_project_format.cpp)
+target_link_libraries(test_portable_project_format PRIVATE
+  plascan_common_project
+  GTest::gtest_main
+)
+gtest_discover_tests(test_portable_project_format DISCOVERY_MODE PRE_TEST)
+
+add_executable(test_project_package_layout test_project_package_layout.cpp)
+target_link_libraries(test_project_package_layout PRIVATE
+  plascan_common_project
+  GTest::gtest_main
+)
+gtest_discover_tests(test_project_package_layout DISCOVERY_MODE PRE_TEST)
+
+add_executable(test_project_chunk_index test_project_chunk_index.cpp)
+target_link_libraries(test_project_chunk_index PRIVATE
+  plascan_common_project
+  GTest::gtest_main
+)
+gtest_discover_tests(test_project_chunk_index DISCOVERY_MODE PRE_TEST)
+
+add_executable(test_project_session test_project_session.cpp)
+target_link_libraries(test_project_session PRIVATE
+  plascan_common_project
+  GTest::gtest_main
+)
+gtest_discover_tests(test_project_session DISCOVERY_MODE PRE_TEST)

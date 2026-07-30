@@ -73,9 +73,11 @@ signals:
     void projectOpenStarted(const QString &plascanPath);
     void projectOpenProgressChanged(const QString &message, int percent);
     void projectOpenFinished(bool success, const QString &message);
+    void chunkListChanged(const QJsonArray &chunks,
+                          const QString &activeChunkId);
     
     // === 元数据变化信号（转发自 ProjectData） ===
-    // 运行时项目元数据（project_files.json + project_results.json 合并视图）变化时发出
+    // 运行时项目元数据（project_files + project_results 合并视图）变化时发出
     void projectMetadataChanged(const QJsonObject &meta);
     // 元数据被更新并已持久化到临时缓存时发出（包含 plascanPath 便于接收方定位文件）
     void projectMetadataUpdated(const QString &plascanPath);
@@ -125,11 +127,6 @@ signals:
     void demPipelineProgressChanged(const QString &stage, int percent);
     void demPipelineFinished(bool success, const QString &message);
 
-    // 观测网络构建进度（主窗口状态栏显示）
-    void obsNetProgressChanged(const QString &stage, int percent);
-    // 观测网络构建结束（success=true 正常完成）
-    void obsNetProgressFinished(bool success);
-
 public slots:
     // === 项目操作（内部会显示文件对话框） ===
     // 显示"另存为"对话框，然后创建新 .plascan 项目
@@ -142,6 +139,10 @@ public slots:
     void saveProject();
     // 关闭当前项目（清空数据层状态，触发 projectClosed 信号）
     void closeProject();
+    void createChunk();
+    void renameChunk(const QString &chunkId);
+    void removeChunk(const QString &chunkId);
+    void switchChunk(const QString &chunkId);
     
     // === 资源管理（内部会显示文件对话框） ===
     // 弹出多选图片对话框，将选中图片引用添加到项目元数据
@@ -179,19 +180,21 @@ public slots:
     void runReferenceQualityCheck();
     // 生成参考地形软约束 BA 前置检查报告；真正 BA 只在检查通过后进入后续流程。
     void prepareReferenceTerrainBundleAdjust();
-    // 将参考数据记录写入 project_results.json/reference_datasets；按 path 去重。
+    // 将参考数据记录写入 project_results/reference_datasets；按 path 去重。
     bool registerReferenceDataset(const QString &path,
                                   const QString &type = QString(),
                                   const QString &role = QStringLiteral("validation"),
                                   QString *errorMsg = nullptr);
     // 删除非照片生成数据（删除元数据记录及关联生成文件）
     void deleteGeneratedData(const QString &section, const QStringList &resourcePaths);
-    // 将外部资源打包进 .plascan 归档（功能待完善）
+    // 将外部资源复制进同名 .files 数据目录
     void packResource(const QString &resourcePath);
     
     // === 设置管理（委托给 ProjectData） ===
-    // 加载旧版 UI 配置（project_config.json），仅供向后兼容迁移使用
+    // 加载和保存根 doc.json 中独立的 ui_state。
     QJsonObject loadUiSettings() const;
+    void saveUiSettings(const QJsonObject &settings);
+    void markWorkspaceDirty();
     
     // 取消正在运行的 MVS 任务
     void cancelMvs();
@@ -297,40 +300,33 @@ public slots:
     // 异步执行纹理映射（从最近一次网格生成 OBJ+MTL+PNG）
     void startTextureMappingAsync(const QJsonObject &settings);
 
-    // 兼容入口：密集匹配长任务由 DenseMatchRunner 执行。
-    // settings 支持的字段见 DenseMatchDialog::collectSettings()。
-    void startDenseMatchAsync(const QJsonObject &settings);
-    void startDenseMatchAsyncWithProgress(const QJsonObject &settings,
-                                          std::shared_ptr<std::atomic<int>> progress,
-                                          std::shared_ptr<std::atomic<bool>> cancelFlag = nullptr);
-
     // 异步执行初始稀疏点云三角化，并将结果注册到 aerial_triangulation_results。
     void startTriangulationAsync(const QJsonObject &settings);
 
     // 异步执行稀疏点云离群点分层剔除，并将新结果注册到 aerial_triangulation_results。
-    // settings 支持的字段见 SparseCloudPostProcessDialog::collectSettings()。
+    // settings 由调用方提供稀疏点云离群点剔除参数。
     void startSparseCloudOutlierRemovalAsync(const QJsonObject &settings);
 
     // 异步执行稀疏点云空间清理，并将新结果注册到 aerial_triangulation_results。
-    // settings 支持的字段见 SparseCloudPostProcessDialog::collectSettings()。
+    // settings 由调用方提供稀疏点云局部优化参数。
     void startSparseCloudLocalOptimAsync(const QJsonObject &settings);
 
     // 异步执行稀疏点云精修，并将新结果注册到 aerial_triangulation_results。
-    // settings 支持的字段见 SparseCloudPostProcessDialog::collectSettings()。
+    // settings 由调用方提供稀疏点云后处理参数。
     void startSparseCloudRefineAsync(const QJsonObject &settings);
 
-    // 获取所有空三结果的摘要列表（供 DenseCloudDialog 选择AT结果）
+    // 获取所有空三结果的摘要列表，供稠密重建工作流程选择输入。
     // 每项包含: index, created_at, image0, image1, output_dir, sparse_cloud_xyz
     QJsonArray getAvailableAtResults() const;
     // 仅执行深度图估计，并保存可复用的原始深度/置信图。
     void startEstimateDepthMapsAsync(const QJsonObject &settings);
     // 基于最近一次深度图估计结果执行融合，只生成密集点云。
     void startFuseDepthMapsAsync(const QJsonObject &settings);
-    // 异步启动MVS稠密点云生成（接受来自DenseCloudDialog的完整配置JSON）
+    // 异步启动 MVS 稠密点云生成。
     void startGenerateDenseCloudAsync(const QJsonObject &settings);
 
     // 异步对已生成的密集点云执行后处理（SOR/体素下采样/法向量估计）
-    // settings 支持的字段见 DenseCloudRefineDialog::collectSettings()
+    // settings 由调用方提供稠密点云精化参数。
     void startDenseCloudRefineAsync(const QJsonObject &settings);
 
     // 接受 BA 预览结果，将待写入相机参数写回项目（此后预览缓存清空）

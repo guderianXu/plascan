@@ -312,6 +312,15 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
     result.baTracksFiltered = _lastGlobalBATracksFiltered;
     result.baRefinedIntrinsicCount = _lastGlobalBARefinedIntrinsicCount;
     result.baSharedFocalScale = _lastGlobalBASharedFocalScale;
+    result.baRequestedBackend = _lastGlobalBARequestedBackend;
+    result.baUsedBackend = _lastGlobalBAUsedBackend;
+    result.baSolveStatus = _lastGlobalBASolveStatus;
+    result.baSolutionUsable = _lastGlobalBASolutionUsable;
+    result.baResultApplied = _lastGlobalBAResultApplied;
+    result.baBackendFallback = _lastGlobalBABackendFallback;
+    result.baObservationCount = _lastGlobalBAObservationCount;
+    result.baTotalSeconds = _lastGlobalBATotalSeconds;
+    result.baBackendMessage = _lastGlobalBABackendMessage;
 
     int finalLongTrackCount = 0;
     int finalTwoViewTrackCount = 0;
@@ -518,10 +527,86 @@ void IncrementalSfm::alignReconstructionToKnownPosePriors(const std::vector<Imag
         return;
     }
 
+    double directSquaredError = 0.0;
+    for (size_t i = 0; i < currentCenters.size(); ++i)
+    {
+        const double dx = currentCenters[i][0] - inputCenters[i][0];
+        const double dy = currentCenters[i][1] - inputCenters[i][1];
+        const double dz = currentCenters[i][2] - inputCenters[i][2];
+        directSquaredError += dx * dx + dy * dy + dz * dz;
+    }
+    const double directRmse = std::sqrt(
+        directSquaredError / static_cast<double>(currentCenters.size()));
+    const double inputExtent = centerExtent(inputCenters);
+    const double noOpTolerance = std::max(1e-8, inputExtent * 1e-6);
+    if (directRmse <= noOpTolerance)
+    {
+        Logger::instance()->infof(
+            "[SFM] Known-pose Sim3 alignment skipped: camera centers already aligned "
+            "(rmse=%.9f tolerance=%.9f)",
+            directRmse,
+            noOpTolerance);
+        return;
+    }
+
+    // 仅凭共线相机中心无法确定绕基线方向的旋转。强行套用该 Sim(3) 会保持
+    // 重投影误差不变，却把相机姿态整体转离输入先验，随后软先验 BA 会发生振荡。
+    double maxTriangleArea2 = 0.0;
+    for (size_t i = 0; i < inputCenters.size(); ++i)
+    {
+        for (size_t j = i + 1; j < inputCenters.size(); ++j)
+        {
+            const std::array<double, 3> first{{
+                inputCenters[j][0] - inputCenters[i][0],
+                inputCenters[j][1] - inputCenters[i][1],
+                inputCenters[j][2] - inputCenters[i][2],
+            }};
+            for (size_t k = j + 1; k < inputCenters.size(); ++k)
+            {
+                const std::array<double, 3> second{{
+                    inputCenters[k][0] - inputCenters[i][0],
+                    inputCenters[k][1] - inputCenters[i][1],
+                    inputCenters[k][2] - inputCenters[i][2],
+                }};
+                const std::array<double, 3> cross{{
+                    first[1] * second[2] - first[2] * second[1],
+                    first[2] * second[0] - first[0] * second[2],
+                    first[0] * second[1] - first[1] * second[0],
+                }};
+                maxTriangleArea2 = std::max(
+                    maxTriangleArea2,
+                    std::sqrt(cross[0] * cross[0] +
+                              cross[1] * cross[1] +
+                              cross[2] * cross[2]));
+            }
+        }
+    }
+    const double layoutAreaTolerance =
+        std::max(1e-12, inputExtent * inputExtent * 1e-6);
+    if (maxTriangleArea2 <= layoutAreaTolerance)
+    {
+        Logger::instance()->warnf(
+            "[SFM] Known-pose Sim3 alignment skipped: camera-center layout is collinear "
+            "(area2=%.9e tolerance=%.9e)",
+            maxTriangleArea2,
+            layoutAreaTolerance);
+        return;
+    }
+
     const SimilarityTransform3d transform = estimateRobustCameraCenterSimilarity(currentCenters, inputCenters);
     if (!transform.valid || transform.inlierCount < 3)
     {
         Logger::instance()->warnf("[SFM] Known-pose Sim3 alignment skipped: insufficient robust camera-center inliers");
+        return;
+    }
+    if (!(transform.rmse + noOpTolerance < directRmse))
+    {
+        Logger::instance()->infof(
+            "[SFM] Known-pose Sim3 alignment skipped: no meaningful center improvement "
+            "(before=%.9f after=%.9f tolerance=%.9f)",
+            directRmse,
+            transform.rmse,
+            noOpTolerance);
         return;
     }
 

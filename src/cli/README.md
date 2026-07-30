@@ -27,9 +27,30 @@ JSON、控制台输出、覆盖保护和摄影测量列表解析复制到多个�
 `ReconstructionCliReport` 负责输出协议。密集点云细化、流式深度融合和点云 PLY 产物写出属于
 `src/core/mvs`，CLI 只做参数/工作区适配。
 
-`workflows/` 以 GUI 菜单语义划分，而不是按底层算法划分：空中三角测量、三维重建和生成模型
-分别由前三个入口覆盖；`reconstruct_pipeline_cli` 覆盖包含 DEM/正射产物的完整流水线。菜单中的
+`workflows/` 按用户可执行的摄影测量任务划分：空中三角测量、无 GUI 三维重建和生成模型
+分别由前三个入口覆盖；`reconstruct_pipeline_cli` 覆盖包含 DEM/正射产物的完整流水线。GUI 中的
 “添加照片/文件夹”属于项目输入管理，命令行通过输入清单和项目路径表达，不另建重复入口。
+
+## Chunk 工程行为
+
+会产生项目状态的 CLI 统一使用 `src/common/project/ProjectSession`，与 GUI 读写同一种
+4.0 Chunk 工程，不再把 `headless.plascan` 当作未创建的占位路径：
+
+- `match_photos_cli` 与 `aerial_triangulation_cli`：`--project` 不存在时创建
+  `.plascan + .files/project.zip + .files/1/chunk.zip`；存在时打开根索引指定的默认 Chunk。
+- `three_d_reconstruction_cli` 与 `reconstruct_pipeline_cli`：在 `--output-dir` 创建或打开
+  `headless.plascan`，特征、匹配、稀疏、稠密、模型和地形产物写入当前 Chunk 数字目录。
+- `bundle_adjust_cli`：只接受已经存在的 4.0 工程，解析 `plascan:///` URI，完成后写回相机和
+  `bundle_adjust_results`；默认输出统一位于当前 Chunk 的
+  `bundle_adjust/<yyyyMMdd_HHmmss_zzz>/`。
+- 所有工程型 CLI 支持 `--chunk-id` 或 `--chunk-name`；两者不能同时使用。显式选择后
+  该 Chunk 成为工程默认 Chunk。
+- 输入影像立即复制到 `.files/shared/images/<sha256>/`。相同内容只保存一次，所有 Chunk
+  使用 `plascan:///shared/...` 引用，不依赖某个可删除 Chunk。
+- CLI 保存会把 Chunk 内文件写成项目 URI，并增量更新 `resource_index`。其他外部文件按需
+  导入；外部目录不递归复制，持久化报告只保留 `plascan-diagnostic:///` 诊断标识。
+- 同一工程具有独占写锁，被 GUI 或另一个 CLI 打开时会明确报错。
+- 旧版单体 ZIP、3.x 描述符及根级 `workspace/` 工程直接报错，不迁移、不改写。
 
 ## 新增或修改命令
 

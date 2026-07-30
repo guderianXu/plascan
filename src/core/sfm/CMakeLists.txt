@@ -5,6 +5,7 @@ set(SFM_CORE_SOURCES
     geometry/ProjectionGeometry.cpp
     geometry/TriangulationQuality.cpp
     geometry/OpenCvCameraAdapter.cpp
+    geometry/SimilarityGaugeNormalizer.cpp
     graph/CorrespondenceGraph.cpp
     graph/ObservationNetworkBuilder.cpp
     tracks/CorrespondenceTrackThinner.cpp
@@ -28,6 +29,7 @@ set(SFM_CORE_HEADERS
     geometry/ProjectionGeometry.h
     geometry/TriangulationQuality.h
     geometry/OpenCvCameraAdapter.h
+    geometry/SimilarityGaugeNormalizer.h
     graph/CorrespondenceGraph.h
     graph/ObservationNetworkBuilder.h
     tracks/CorrespondenceTrackThinner.h

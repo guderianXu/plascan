@@ -50,10 +50,14 @@ public slots:
     void showSideBySideImages(const QString &primaryImagePath, const QString &sideImagePath);
     void showModelFile(const QString &modelPath);
     void showPointCloudFile(const QString &pointCloudPath);
+    void showTiePointCloudFile(const QString &pointCloudPath,
+                               const QString &sidecarPath = QString());
     void showObservationNetwork(const xjw::ObservationNetwork &net, const QString &title = QString());
     void setProjectMeta(const QJsonObject &meta);
     void highlightCameraForImage(const QString &imagePath);
     void clearHighlightedCamera();
+    void resetActiveView();
+    void clearProjectView();
 
 private:
     void refreshModelFromMeta(const QJsonObject &meta);

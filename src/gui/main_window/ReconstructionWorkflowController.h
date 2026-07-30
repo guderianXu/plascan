@@ -2,8 +2,8 @@
 // 文件: ReconstructionWorkflowController.h
 // 模块: main_window
 // 说明:
-//   重建菜单业务控制器。管理「重建」顶层菜单中所有对话框的创建、
-//   设置加载/保存（记忆化）以及运行请求的转发。
+//   管理工作流程菜单中的模型生成与纹理生成对话框，
+//   负责设置加载/保存（记忆化）以及运行请求的转发。
 //
 //   设计原则:
 //   - 从 MenuWorkflowController 独立出来，避免单类过大
@@ -34,44 +34,19 @@ public:
     /// @param parent QObject 父对象。
     explicit ReconstructionWorkflowController(QMainWindow *mainWindow, QObject *parent = nullptr);
 
-    /// 注入项目管理器，供各重建步骤查询项目状态和提交任务。
+    /// 注入项目管理器，供模型工作流程查询项目状态和提交任务。
     /// @param pm 当前项目管理器，非拥有引用。
     void setProjectManager(ProjectManager *pm);
 
 public slots:
-    // ── 稀疏重建 ──
-    /// 打开观测网络构建对话框。
-    void openObservationNetworkDialog();
-
-    /// 打开初始相机位姿恢复对话框。
-    void openInitCameraPoseDialog();
-
-    /// 打开初始稀疏点云三角化对话框。
-    void openTriangulationDialog();
-
-    /// 打开稀疏重建阶段的光束法平差对话框。
-    void openReconBundleAdjustDialog();
-
-    /// 打开统一稀疏点云后处理对话框。
-    void openSparseCloudPostProcessDialog();
-
-    // ── 密集重建 ──
-    void openDenseMatchDialog();
-    void openDepthMapEstimateDialog();
-    void openDepthFusionDialog();
-    void openDenseCloudRefineDialog();
-
-    // ── 模型生成 ──
     void openGenerateModelDialog();
-    void openMeshReconstructionDialog();
     void openTextureMappingDialog();
-    void openModelExportDialog();
 
 private:
     /**
      * @brief 通用对话框创建/设置恢复辅助模板。
      *
-     * 完成与每个重建对话框相同的公共步骤:
+     * 完成模型工作流程对话框相同的公共步骤:
      *   1. new DialogT(parent), WA_DeleteOnClose
      *   2. 从 DialogSettingStore 加载并恢复上次保存的参数
      *   3. 连接 settingsChanged → store.save()
@@ -97,6 +72,10 @@ private:
             if (!store)
             {
                 store = new DialogSettingStore(settingKey, this);
+                store->setChangeCallback([this]()
+                {
+                    markProjectWorkspaceDirty();
+                });
             }
             store->setProjectPath(projectPath());
 
@@ -122,22 +101,11 @@ private:
 
     /// 获取当前项目路径，避免重复查询逻辑。
     QString projectPath() const;
+    void markProjectWorkspaceDirty();
 
     QPointer<QMainWindow> _mainWindow;
     ProjectManager       *_projectManager = nullptr;
 
-    // ── 各对话框的设置存储（延迟初始化） ──
-    DialogSettingStore *_obsNetStore       = nullptr;
-    DialogSettingStore *_initPoseStore     = nullptr;
-    DialogSettingStore *_triStore          = nullptr;
-    DialogSettingStore *_reconBaStore      = nullptr;
-    DialogSettingStore *_sparsePostStore   = nullptr;
-    DialogSettingStore *_denseMatchStore   = nullptr;
-    DialogSettingStore *_depthEstStore     = nullptr;
-    DialogSettingStore *_depthFuseStore    = nullptr;
-    DialogSettingStore *_denseRefStore     = nullptr;
     DialogSettingStore *_generateModelStore = nullptr;
-    DialogSettingStore *_meshStore         = nullptr;
     DialogSettingStore *_texStore          = nullptr;
-    DialogSettingStore *_exportStore       = nullptr;
 };

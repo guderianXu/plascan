@@ -1,5 +1,10 @@
 # 生产静态库：Camera/Tsai I/O、坐标归一化和外部格式转换器。
-add_library(camera STATIC Camera.cpp CameraBaseline.cpp CameraFormatConverter.cpp)
+add_library(camera STATIC
+	Camera.cpp
+	CameraBaseline.cpp
+	CameraFormatConverter.cpp
+	ProjectCameraIO.cpp
+)
 target_include_directories(camera PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(camera
 	PUBLIC plascan_common_io

@@ -44,7 +44,6 @@ class ReferencePanelWidget;
 class WorkspaceCenterWidget;
 class PhotoStripWidget;
 class SelectionPropertiesWidget;
-class DialogSettingStore;
 class TaskStatusWidget;
 class QDragEnterEvent;
 class QDropEvent;
@@ -52,6 +51,7 @@ class QWidgetAction;
 class HenuBrandWidget;
 class WorkspacePanelController;
 class ProjectUiHydrator;
+class TiePointWorkflowController;
 
 namespace xjw::gui::markers
 {
@@ -86,6 +86,7 @@ private:
     void setHenanUniversityBrandVisible(bool visible);
     void setupMenuConnections();  // 将菜单/工具栏 QAction 信号连接到对应的槽
     void setupProjectManager();   // 创建所有业务对象（ProjectManager 等）并完成全局信号/槽连接
+    void showMatchViewer(const QString &initialImagePath = {}, bool modal = true);
     void openMarkerFocusMeasurement(const QString &markerId, const QString &preferredImagePath = {});
     void refreshDashboardTaskSnapshots(); // 将状态栏任务快照同步到只读概览页
 
@@ -99,11 +100,13 @@ private:
     bool restoreProjectDockState(const QJsonObject &settings);
     void persistCurrentUiSettings();
     void scheduleProjectMetadataRefresh(const QJsonObject &meta);
-    // saveUiSetting: 将 partial JSON 片段合并写入项目 UI 持久化设置（通过 DialogSettingStore）
+    // saveUiSetting: 将 partial 合并写入根 doc.json 的 ui_state 字段。
     // 参数: partial - 仅包含需更新键值对的 JSON 对象
     void saveUiSetting(const QJsonObject &partial);
     // currentBottomPanelKey: 返回旧版 UI 设置使用的底部面板键名，dock 化后仅用于兼容保存。
     QString currentBottomPanelKey() const;
+    QString projectImageStateKey(const QString &imagePath) const;
+    QString projectImagePathForStateKey(const QString &stateKey) const;
 
     // ---- 导出辅助 ----
     // exportMatchedPairsToLis: 将项目中已存在的匹配影像对导出到 export/matched_pairs.lis
@@ -125,6 +128,7 @@ private:
     CanvasWidget*     _canvas{};                       // 影像画布（从 workspaceCenter 获取的直接引用）
     WorkspacePanelController *_workspacePanels{};      // Dock/工具栏可见性与菜单动作统一管理
     ProjectUiHydrator *_projectUiHydrator{};           // 分阶段刷新项目 UI，并丢弃过期请求
+    TiePointWorkflowController *_tiePointWorkflowController{};
     Qt::WindowStates _windowStateBeforeFullScreen{Qt::WindowNoState};
 public:
     CanvasWidget* canvas() const { return _canvas; }
@@ -136,7 +140,7 @@ private:
     AppConfigManager* _config{};                       // 应用级配置管理器（窗口状态/最近项目）
     ProjectData*      _projectData{};                  // 项目数据模型（元数据 + 文件索引）
     MenuWorkflowController* _menuWorkflowController{}; // 菜单业务流程控制器（对话框调用协调）
-    ReconstructionWorkflowController* _reconController{}; // 重建菜单业务控制器
+    ReconstructionWorkflowController* _reconController{}; // 模型与纹理工作流程控制器
     ProjectManager*   _projectManager{};               // 项目生命周期管理（新建/打开/保存/关闭）
     xjw::gui::markers::MarkerWorkspaceController *_markerWorkspaceController{};
     xjw::gui::markers::MarkerReferencePanel *_markerReferencePanel{};
@@ -146,16 +150,10 @@ private:
     TaskStatusWidget* _meshTaskStatus{};                // 网格重建状态栏任务状态
     TaskStatusWidget* _atTaskStatus{};                  // 空三状态栏任务状态
     TaskStatusWidget* _sgTaskStatus{};                  // 特征匹配状态栏任务状态
-    TaskStatusWidget* _spTaskStatus{};                  // 特征提取状态栏任务状态
-    TaskStatusWidget* _dmTaskStatus{};                  // 密集匹配状态栏任务状态
-    TaskStatusWidget* _overlapTaskStatus{};             // 重叠对获取状态栏任务状态
-    TaskStatusWidget* _obsNetTaskStatus{};              // 观测网络状态栏任务状态
     TaskStatusWidget* _maskTaskStatus{};                // 照片蒙版生成状态栏任务状态
     QDockWidget*      _logDock{};                      // 日志 Dock 窗口容器
-    DialogSettingStore*   _featureMatchingSetting{};   // 特征匹配对话框记忆化设置
-    DialogSettingStore*   _uiSetting{};                // 主窗口 UI 状态记忆化设置
     bool _applyingUiSettings{};                        // 正在恢复项目 UI，阻止中间态写回
-    QJsonObject _imageViewRotations;                   // 按影像路径保存的查看旋转角度
+    QJsonObject _imageViewRotations;                   // 按稳定 image_uuid 保存的查看旋转角度
     
     QString           _lastSelectedImage;               // 最近一次被激活的影像路径（供关联操作使用）
 
@@ -194,24 +192,14 @@ private slots:
 
 signals:
     void sgCancelRequested();
-    void spCancelRequested();
-    void dmCancelRequested();
-    void overlapCancelRequested();
 
 public slots:
-    // 特征提取状态栏进度（由 MenuWorkflowController 调用）
-    void showSpProgress(int total);
-    void updateSpProgress(int done);
-    void hideSpProgress(bool ok);
+    // 使用与“打开项目”和“最近项目”相同的异步流程打开指定工程。
+    void openProjectFromPath(const QString &projectPath);
     // 特征匹配状态栏进度（内部使用，也可外部调用）
     void showSgProgress(int total);
     void updateSgProgress(int done);
     void hideSgProgress(bool ok);
-    void showDmProgress(int total);
-    void updateDmProgress(int done);
-    void hideDmProgress(bool ok);
-    void onOverlapProgress(const QString &stage, int percent);
-    void onOverlapFinished(bool success);
 
 private slots:
     // 网格重建进度状态栏更新
@@ -222,8 +210,6 @@ private slots:
     void onAtFinished(bool success);
     void onCancelAt();
     // 观测网络进度状态栏更新
-    void onObsNetProgress(const QString &stage, int percent);
-    void onObsNetFinished(bool success);
     // 照片蒙版生成进度状态栏更新
     void onMaskGenerationProgress(const QString &stage, int done, int total);
     void onMaskGenerationFinished(bool success);

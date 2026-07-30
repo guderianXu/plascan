@@ -220,19 +220,32 @@ cv::Mat buildSilhouetteMask(const cv::Mat &color_image,
         cv::bitwise_not(mask, mask);
     }
 
-    std::vector<std::vector<cv::Point>> contours;
-    cv::findContours(mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-    if (contours.empty())
+    cv::Mat labels;
+    cv::Mat statistics;
+    cv::Mat centroids;
+    const int component_count = cv::connectedComponentsWithStats(
+        mask,
+        labels,
+        statistics,
+        centroids,
+        8,
+        CV_32S);
+    if (component_count <= 1)
     {
         return {};
     }
-    const auto largest = std::max_element(
-        contours.begin(), contours.end(), [](const auto &left, const auto &right)
+    int largest_label = 1;
+    int largest_area = statistics.at<int>(1, cv::CC_STAT_AREA);
+    for (int label = 2; label < component_count; ++label)
+    {
+        const int area = statistics.at<int>(label, cv::CC_STAT_AREA);
+        if (area > largest_area)
         {
-            return cv::contourArea(left) < cv::contourArea(right);
-        });
-    mask.setTo(0);
-    cv::drawContours(mask, contours, static_cast<int>(largest - contours.begin()), 255, cv::FILLED);
+            largest_label = label;
+            largest_area = area;
+        }
+    }
+    cv::compare(labels, largest_label, mask, cv::CMP_EQ);
     const double image_scale = std::min(mask.cols / 640.0, mask.rows / 480.0);
     const int dilate_radius = std::max(2, static_cast<int>(std::lround(10.0 * image_scale)));
     const int erode_radius = std::max(1, static_cast<int>(std::lround(7.0 * image_scale)));
@@ -242,6 +255,41 @@ cv::Mat buildSilhouetteMask(const cv::Mat &color_image,
         cv::MORPH_ELLIPSE, cv::Size(erode_radius * 2 + 1, erode_radius * 2 + 1));
     cv::dilate(mask, mask, dilate_kernel);
     cv::erode(mask, mask, erode_kernel);
+
+    cv::Mat background;
+    cv::bitwise_not(mask, background);
+    cv::Mat background_labels;
+    cv::Mat background_statistics;
+    cv::Mat background_centroids;
+    const int background_component_count = cv::connectedComponentsWithStats(
+        background,
+        background_labels,
+        background_statistics,
+        background_centroids,
+        8,
+        CV_32S);
+    const int maximum_speckle_hole_area =
+        std::max(32, mask.rows * mask.cols / 240);
+    for (int label = 1; label < background_component_count; ++label)
+    {
+        const int left =
+            background_statistics.at<int>(label, cv::CC_STAT_LEFT);
+        const int top =
+            background_statistics.at<int>(label, cv::CC_STAT_TOP);
+        const int width =
+            background_statistics.at<int>(label, cv::CC_STAT_WIDTH);
+        const int height =
+            background_statistics.at<int>(label, cv::CC_STAT_HEIGHT);
+        const int area =
+            background_statistics.at<int>(label, cv::CC_STAT_AREA);
+        const bool touches_border =
+            left == 0 || top == 0 || left + width >= mask.cols ||
+            top + height >= mask.rows;
+        if (!touches_border && area <= maximum_speckle_hole_area)
+        {
+            mask.setTo(255, background_labels == label);
+        }
+    }
 
     if (coverage)
     {
@@ -254,6 +302,47 @@ cv::Mat buildSilhouetteMask(const cv::Mat &color_image,
                            std::max(1, border_pixels);
     }
     return mask;
+}
+
+int countEnclosedMaskHoles(const cv::Mat &mask)
+{
+    if (mask.empty() || mask.type() != CV_8UC1)
+    {
+        return 0;
+    }
+    cv::Mat background;
+    cv::bitwise_not(mask, background);
+    cv::Mat labels;
+    cv::Mat statistics;
+    cv::Mat centroids;
+    const int component_count = cv::connectedComponentsWithStats(
+        background,
+        labels,
+        statistics,
+        centroids,
+        8,
+        CV_32S);
+    int hole_count = 0;
+    for (int label = 1; label < component_count; ++label)
+    {
+        const int left =
+            statistics.at<int>(label, cv::CC_STAT_LEFT);
+        const int top =
+            statistics.at<int>(label, cv::CC_STAT_TOP);
+        const int width =
+            statistics.at<int>(label, cv::CC_STAT_WIDTH);
+        const int height =
+            statistics.at<int>(label, cv::CC_STAT_HEIGHT);
+        const bool touches_border =
+            left == 0 || top == 0 ||
+            left + width >= mask.cols ||
+            top + height >= mask.rows;
+        if (!touches_border)
+        {
+            ++hole_count;
+        }
+    }
+    return hole_count;
 }
 
 bool estimateBounds(const QVector<DepthFrameArtifact> &frames,
@@ -322,6 +411,8 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
     QJsonObject manifest;
     if (readJsonObject(directory.filePath(QStringLiteral("mvs_manifest.json")), &manifest))
     {
+        const int manifest_algorithm_revision =
+            manifest.value(QStringLiteral("algorithm_revision")).toInt(0);
         for (const QJsonValue &value : manifest.value(QStringLiteral("frames")).toArray())
         {
             const QJsonObject object = value.toObject();
@@ -358,6 +449,9 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
                 directory, object.value(QStringLiteral("support_mask_path")).toString());
             frame.status = status;
             frame.sceneProfile = object.value(QStringLiteral("scene_profile")).toString();
+            frame.algorithmRevision = object.value(
+                QStringLiteral("algorithm_revision")).toInt(
+                    manifest_algorithm_revision);
             const QJsonObject depthQuality = object.value(QStringLiteral("depth_quality")).toObject();
             const QJsonObject qualityDecision = object.value(QStringLiteral("quality_decision")).toObject();
             frame.acceptance = object.value(QStringLiteral("acceptance")).toString(
@@ -481,6 +575,10 @@ DepthMapVisualHullResult DepthMapMeshBuilder::buildVisualHull(
         {
             continue;
         }
+        if (countEnclosedMaskHoles(silhouette) > 0)
+        {
+            ++result.preservedSilhouetteHoleViewCount;
+        }
         VisualHullView view;
         view.camera = frame.cameraModel;
         view.silhouetteMask = silhouette;
@@ -516,9 +614,19 @@ DepthMapVisualHullResult DepthMapMeshBuilder::buildVisualHull(
         result.message = QStringLiteral("无法从深度图估计视觉外壳范围");
         return result;
     }
-    config.resolution = std::clamp(resolution, 96, 192);
+    config.resolution = std::clamp(resolution, 96, 256);
     config.minimumVisibleViews = std::max(4, result.usableViewCount / 3);
     config.allowedSilhouetteViolations = std::max(1, result.usableViewCount / 10);
+    config.topologyClosingIterations =
+        options.topologyClosingIterations >= 0
+        ? std::clamp(options.topologyClosingIterations, 0, 3)
+        : (result.preservedSilhouetteHoleViewCount == 0 ? 2 : 0);
+    result.topologyClosingIterations =
+        config.topologyClosingIterations;
+    config.smoothingIterations =
+        std::clamp(options.smoothingIterations, 0, 20);
+    config.smoothingLambda =
+        std::clamp(options.smoothingLambda, 0.0f, 0.49f);
     const int minimum_depth_views = std::max(4, result.usableViewCount / 3);
     config.enableDepthFreeSpaceCarving =
         options.strictVolumetricMasks && result.depthViewCount >= minimum_depth_views;

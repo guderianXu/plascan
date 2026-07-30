@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT_PATH = ROOT / "scripts" / "run_photogrammetry_benchmarks.py"
+SCRIPT_PATH = ROOT / "scripts" / "bench" / "run_photogrammetry_benchmarks.py"
 SPEC = importlib.util.spec_from_file_location("run_photogrammetry_benchmarks", SCRIPT_PATH)
 runner = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None

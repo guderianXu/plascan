@@ -32,6 +32,9 @@ using namespace incremental_sfm_detail;
 IncrementalSfmOptions effectiveSfmOptions(const IncrementalSfmOptions &options)
 {
     IncrementalSfmOptions effective = options;
+    // 三角化、BA 点过滤和观测级过滤必须使用同一像素阈值，避免同一个点在相邻阶段
+    // 被分别判为有效和无效。BAOptions 中的副本仅作为求解器输入，不再独立配置。
+    effective.baOptions.filterMaxReprojError = effective.filterMaxReprojError;
     if (effective.executionProfile != SfmExecutionProfile::CoarseEvaluation)
     {
         return effective;

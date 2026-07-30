@@ -17,6 +17,7 @@
 #include "io/PathIO.h"
 #include "string_utils/StringParsing.h"
 #include "string_utils/StringTransform.h"
+#include <algorithm>
 #include <fstream>
 #include <sstream>
 #include <iostream>
@@ -673,6 +674,28 @@ bool Camera::projectWorldPointWithDepth(const double world[3],
         return false;
     }
     return projectWorldPoint(world, pixel);
+}
+
+double Camera::positiveDepth(const double world[3]) const
+{
+    if (!_isLoaded || world == nullptr)
+    {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+
+    double camera_point[3] = {0.0, 0.0, 0.0};
+    worldToCameraFromCameraToWorldPose(world, camera_point);
+    const double depth = _pose.depthAxisFlipped ? -camera_point[2] : camera_point[2];
+    return std::isfinite(depth) ? depth : std::numeric_limits<double>::quiet_NaN();
+}
+
+bool Camera::isPointInFront(const double world[3], double minimumDepth) const
+{
+    if (!std::isfinite(minimumDepth))
+    {
+        return false;
+    }
+    return positiveDepth(world) > std::max(0.0, minimumDepth);
 }
 
 /**

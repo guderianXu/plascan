@@ -31,6 +31,7 @@ struct DepthFrameArtifact
     QString status;
     QString acceptance;
     QString sceneProfile;
+    int algorithmRevision = 0;
     bool fusionEligible = true;
     double validCoverage = -1.0;
     double validWithinMaskRatio = -1.0;
@@ -51,6 +52,8 @@ struct DepthMapVisualHullResult
     bool ok = false;
     int usableViewCount = 0;
     int depthViewCount = 0;
+    int preservedSilhouetteHoleViewCount = 0;
+    int topologyClosingIterations = 0;
     bool usedDepthFreeSpaceCarving = false;
     bool retriedWithoutDepthCarving = false;
     bool qualityRejected = false;
@@ -67,6 +70,9 @@ struct DepthMapVisualHullOptions
     bool strictVolumetricMasks = false;
     double minimumLargestComponentFaceRatio = 0.85;
     int maximumConnectedComponents = 12;
+    int topologyClosingIterations = -1;
+    int smoothingIterations = 6;
+    float smoothingLambda = 0.18f;
 };
 
 class DepthMapMeshBuilder

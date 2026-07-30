@@ -16,6 +16,7 @@ public:
 
 public slots:
     void loadFromJson(const QJsonObject &meta);
+    void clearProject();
 
 signals:
     void exactImportRequested(const QString &imagePath);

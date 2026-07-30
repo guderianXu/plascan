@@ -104,3 +104,47 @@ Chamfer-L1 against the registered Metashape mesh. Temple produced 239,949
 faces, 45 boundary edges, one component, and an 8.55-degree normal median.
 These runs verify that GUI defaults select MC33, adaptive TGV, the six-voxel
 geometry profile, and OpenMesh rather than only the explicit validation JSON.
+
+## Depth/pose/fusion attribution
+
+`run_depth_pose_fusion_ablation.ps1` freezes declared camera, depth, fusion,
+and mesh artifacts before running A/B variants. The output
+`ablation_manifest.json` records a SHA-256 fingerprint for every stage,
+the exact executable and arguments, elapsed time, exit code, and fingerprints
+of expected products. Existing output directories are never overwritten.
+
+The JSON configuration contains `scenes[].stages` and `scenes[].variants`.
+Stage values are arrays of files or directories. Variant arguments support
+`${REPO_ROOT}`, `${BUILD_DIR}`, and `${VARIANT_OUTPUT}`. Start with `-DryRun`
+to validate all paths and inspect the resolved commands:
+
+```powershell
+.\scripts\validation\run_depth_pose_fusion_ablation.ps1 `
+  -Config E:\path\to\hyb2_depth_pose_ablation.json `
+  -DryRun
+```
+
+Recommended variants are `current_pose_current_depth`,
+`reference_pose_current_depth`, `current_pose_reference_depth`, and
+`reference_pose_reference_depth`. The runner deliberately does not infer or
+substitute third-party results; every artifact must be declared explicitly.
+
+`analyze_depth_pose_alignment.py` is the read-only precursor to the pose A/B.
+It reprojects PlaScan depth into the source views declared by
+`mvs_manifest.json`, estimates bounded per-camera SE(3) corrections, and writes
+only a diagnostic JSON. It does not edit the project, manifest, cameras, or
+depth files:
+
+```powershell
+.\.venv\Scripts\python.exe `
+  scripts\validation\analyze_depth_pose_alignment.py `
+  --mvs-manifest E:\path\to\mvs_output\mvs_manifest.json `
+  --output E:\path\to\validation\pose_metrics.json
+```
+
+## Historical mesh experiments
+
+The active mesh-quality profiles remain directly in this directory. Superseded
+July 2026 trial profiles are preserved under `experiments/2026-07/`; they are
+not selected by the baseline runner and must be passed explicitly when replaying
+an older experiment.

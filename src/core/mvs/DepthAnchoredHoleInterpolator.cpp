@@ -81,6 +81,8 @@ DepthAnchoredHoleInterpolationStats interpolateAnchoredInternalDepthHoles(
         confidence->size() == depth.size();
     const bool has_repaired_mask = repaired_mask &&
         repaired_mask->type() == CV_8UC1 && repaired_mask->size() == depth.size();
+    result.anchorPixelCount = static_cast<std::uint64_t>(
+        cv::countNonZero(strong_anchor_mask));
     cv::Mat invalid_supported(depth.size(), CV_8UC1, cv::Scalar(0));
     for (int row = 0; row < depth.rows; ++row)
     {
@@ -367,6 +369,9 @@ QJsonObject depthAnchoredHoleInterpolationStatsToJson(
     const DepthAnchoredHoleInterpolationStats &stats)
 {
     QJsonObject object;
+    object.insert(
+        QStringLiteral("anchor_pixel_count"),
+        static_cast<double>(stats.anchorPixelCount));
     object.insert(
         QStringLiteral("candidate_component_count"),
         static_cast<double>(stats.candidateComponentCount));

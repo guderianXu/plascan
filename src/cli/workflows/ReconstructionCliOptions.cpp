@@ -15,6 +15,8 @@ void ReconstructionCliOptions::addTo(CLI::App &app)
 {
     app.add_option("list_file", listPathArg, "image/camera .lis file")->required();
     app.add_option("-o,--output-dir", outputDirArg, "output directory");
+    app.add_option("--chunk-id", chunkIdArg, "use the Chunk with this UUID");
+    app.add_option("--chunk-name", chunkNameArg, "use the Chunk with this name");
     app.add_option("--device", device, "auto, cpu, cuda")->check(CLI::IsMember({"auto", "cpu", "cuda"}));
     app.add_option("--sfm-feature-algorithm", sfmFeatureAlgorithm,
                    "SFM feature algorithm: disk, aliked, sift")

@@ -198,6 +198,15 @@ struct IncrementalSfmResult
     int baTracksFiltered = 0;  ///< 最终全局 BA 过滤的离群点数
     int baRefinedIntrinsicCount = 0;    ///< 最终全局 BA 中发生共享内参更新的相机数量
     double baSharedFocalScale = 1.0;    ///< 最终全局 BA 后焦距相对输入焦距的平均尺度
+    BABackend baRequestedBackend = BABackend::LegacyCpu; ///< 最终全局 BA 请求后端
+    BABackend baUsedBackend = BABackend::LegacyCpu;      ///< 最终全局 BA 实际后端
+    BASolveStatus baSolveStatus = BASolveStatus::NotRun; ///< 最终全局 BA 求解状态
+    bool baSolutionUsable = false;                       ///< 求解结果是否满足写回前置条件
+    bool baResultApplied = false;                        ///< 求解结果是否通过 SfM 质量门并写回
+    bool baBackendFallback = false;                      ///< 是否发生后端回退
+    int baObservationCount = 0;                         ///< 最终全局 BA 观测数量
+    double baTotalSeconds = 0.0;                        ///< 最终全局 BA 总耗时
+    std::string baBackendMessage;                       ///< 后端选择、回退或失败原因
     int priorTracksAccepted = 0;
     int priorTracksRejected = 0;
     int priorObservationsAccepted = 0;
@@ -346,6 +355,15 @@ class IncrementalSfm
     int _lastGlobalBATracksFiltered = 0;
     int _lastGlobalBARefinedIntrinsicCount = 0;
     double _lastGlobalBASharedFocalScale = 1.0;
+    BABackend _lastGlobalBARequestedBackend = BABackend::LegacyCpu;
+    BABackend _lastGlobalBAUsedBackend = BABackend::LegacyCpu;
+    BASolveStatus _lastGlobalBASolveStatus = BASolveStatus::NotRun;
+    bool _lastGlobalBASolutionUsable = false;
+    bool _lastGlobalBAResultApplied = false;
+    bool _lastGlobalBABackendFallback = false;
+    int _lastGlobalBAObservationCount = 0;
+    double _lastGlobalBATotalSeconds = 0.0;
+    std::string _lastGlobalBABackendMessage;
 
     /// 增量维护的可见三维点计数缓存（imageId → 可见已三角化点数）
     std::unordered_map<ImageId, size_t> _visibilityCache;

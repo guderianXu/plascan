@@ -41,6 +41,18 @@ void drawPhotos(QPainter &painter)
     painter.drawLine(QPointF(2.0, 7.0), QPointF(17.8, 7.0));
 }
 
+void drawMasks(QPainter &painter)
+{
+    const QColor frameColor(QStringLiteral("#7F8994"));
+    painter.setPen(iconPen(frameColor.darker(112), 1.0));
+    painter.setBrush(frameColor);
+    painter.drawRoundedRect(QRectF(2.0, 2.0, 16.0, 16.0), 2.0, 2.0);
+
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(QStringLiteral("#F7F8FA")));
+    painter.drawEllipse(QPointF(10.0, 10.0), 4.2, 4.2);
+}
+
 void drawObservationNetwork(QPainter &painter)
 {
     const QColor color(QStringLiteral("#4B86C5"));
@@ -230,6 +242,53 @@ void drawUnknown(QPainter &painter)
     painter.drawEllipse(QPointF(10.0, 10.0), 2.2, 2.2);
 }
 
+void drawWorkspaceRoot(QPainter &painter)
+{
+    const QColor color(QStringLiteral("#7A828B"));
+    painter.setPen(iconPen(color, 1.3));
+    painter.setBrush(QColor(QStringLiteral("#E9ECEF")));
+    painter.drawRect(QRectF(2.0, 2.0, 6.0, 5.0));
+    painter.drawRect(QRectF(11.5, 11.0, 6.0, 5.0));
+    painter.drawLine(QPointF(5.0, 7.0), QPointF(5.0, 13.5));
+    painter.drawLine(QPointF(5.0, 13.5), QPointF(11.5, 13.5));
+}
+
+void drawWorkspaceChunk(QPainter &painter)
+{
+    const QColor dark(QStringLiteral("#8A9097"));
+    const QColor light(QStringLiteral("#E8EAEC"));
+    painter.setPen(iconPen(dark.darker(115), 0.9));
+    for (int row = 0; row < 4; ++row)
+    {
+        for (int column = 0; column < 4; ++column)
+        {
+            painter.setBrush((row + column) % 2 == 0 ? light : dark);
+            painter.drawRect(QRectF(2.0 + column * 4.0,
+                                    2.0 + row * 4.0,
+                                    4.0,
+                                    4.0));
+        }
+    }
+}
+
+void drawWorkspaceImage(QPainter &painter)
+{
+    const QColor frame(QStringLiteral("#7E848A"));
+    painter.setPen(iconPen(frame.darker(112), 1.0));
+    painter.setBrush(frame);
+    painter.drawRect(QRectF(2.0, 3.0, 16.0, 14.0));
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(QStringLiteral("#CDD1D5")));
+    painter.drawEllipse(QPointF(6.2, 7.0), 1.6, 1.6);
+    painter.setBrush(QColor(QStringLiteral("#AEB4BA")));
+    painter.drawPolygon(QPolygonF{
+        QPointF(3.5, 15.5),
+        QPointF(8.0, 10.0),
+        QPointF(11.0, 13.0),
+        QPointF(14.0, 9.0),
+        QPointF(17.0, 15.5)});
+}
+
 QPixmap drawSectionPixmap(WorkspaceSection section, int size)
 {
     QPixmap pixmap(size, size);
@@ -243,6 +302,9 @@ QPixmap drawSectionPixmap(WorkspaceSection section, int size)
     {
     case WorkspaceSection::Photos:
         drawPhotos(painter);
+        break;
+    case WorkspaceSection::Masks:
+        drawMasks(painter);
         break;
     case WorkspaceSection::ObservationNetwork:
         drawObservationNetwork(painter);
@@ -279,6 +341,22 @@ QPixmap drawSectionPixmap(WorkspaceSection section, int size)
     return pixmap;
 }
 
+QIcon drawWorkspaceIcon(void (*draw)(QPainter &))
+{
+    QIcon icon;
+    for (const int size : {16, 18, 20, 24, 32, 36, 48, 64})
+    {
+        QPixmap pixmap(size, size);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.scale(size / DesignSize, size / DesignSize);
+        draw(painter);
+        icon.addPixmap(pixmap);
+    }
+    return icon;
+}
+
 } // namespace
 
 QIcon workspaceSectionIcon(WorkspaceSection section)
@@ -297,6 +375,24 @@ QIcon workspaceSectionIcon(WorkspaceSection section)
         icon.addPixmap(drawSectionPixmap(section, size));
     }
     cache.insert(key, icon);
+    return icon;
+}
+
+QIcon workspaceRootIcon()
+{
+    static const QIcon icon = drawWorkspaceIcon(drawWorkspaceRoot);
+    return icon;
+}
+
+QIcon workspaceChunkIcon()
+{
+    static const QIcon icon = drawWorkspaceIcon(drawWorkspaceChunk);
+    return icon;
+}
+
+QIcon workspaceImageIcon()
+{
+    static const QIcon icon = drawWorkspaceIcon(drawWorkspaceImage);
     return icon;
 }
 

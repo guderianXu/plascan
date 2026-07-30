@@ -3,6 +3,7 @@
 #include "BundleAdjust.h"
 #include "Camera.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <limits>
@@ -93,8 +94,86 @@ TEST(BundleAdjustCeresBackendTest, CeresCpuBackendOptimizesPointAndReportsBacken
     EXPECT_EQ(result.usedBackend, xjw::BABackend::CeresCpu);
     EXPECT_FALSE(result.usedGpu);
     EXPECT_FALSE(result.backendFallback);
+    EXPECT_EQ(result.solveStatus, xjw::BASolveStatus::Success);
+    EXPECT_TRUE(result.solutionUsable);
     EXPECT_LT(result.meanRmsAfter, result.meanRmsBefore);
     EXPECT_LT(distance3d(result.points.front().point, truth), distance3d(initial, truth));
+}
+
+TEST(BundleAdjustCeresBackendTest, ProgressCancellationDoesNotPublishPartialSolution)
+{
+    ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
+
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-8.0, 0.0, 0.0),
+        makeCamera(8.0, 0.0, 0.0),
+        makeCamera(0.0, 8.0, 0.0),
+    };
+    const std::array<double, 3> truth{{0.5, -0.4, 42.0}};
+    const std::array<double, 3> initial{{truth[0] + 2.0, truth[1] - 1.5, truth[2] + 4.0}};
+    const xjw::BATrack track = makeTrack(cameras, truth, initial);
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::CeresCpu;
+    options.refineCameraPose = false;
+    options.enablePointFilter = false;
+    options.maxIterations = 25;
+    options.progressCallback = [](int, int, double, int)
+    {
+        return false;
+    };
+
+    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(cameras, {track}, options);
+
+    ASSERT_EQ(result.points.size(), 1u);
+    EXPECT_EQ(result.solveStatus, xjw::BASolveStatus::Cancelled);
+    EXPECT_FALSE(result.solutionUsable);
+    EXPECT_EQ(result.points.front().point, initial);
+    EXPECT_EQ(result.refinedCameras.size(), cameras.size());
+    for (size_t i = 0; i < cameras.size(); ++i)
+    {
+        EXPECT_EQ(result.refinedCameras[i].cameraCenter(), cameras[i].cameraCenter());
+        EXPECT_EQ(result.refinedCameras[i].cameraToWorldRotation(),
+                  cameras[i].cameraToWorldRotation());
+    }
+}
+
+TEST(BundleAdjustCeresBackendTest, ProgressNeverExceedsConfiguredIterationCount)
+{
+    ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
+
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-8.0, 0.0, 0.0),
+        makeCamera(8.0, 0.0, 0.0),
+        makeCamera(0.0, 8.0, 0.0),
+    };
+    const std::array<double, 3> truth{{0.5, -0.4, 42.0}};
+    const std::array<double, 3> initial{{truth[0] + 2.0, truth[1] - 1.5, truth[2] + 4.0}};
+    const xjw::BATrack track = makeTrack(cameras, truth, initial);
+
+    int callbackCount = 0;
+    int largestCurrentIteration = 0;
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::CeresCpu;
+    options.refineCameraPose = false;
+    options.enablePointFilter = false;
+    options.maxIterations = 1;
+    options.progressCallback =
+        [&callbackCount, &largestCurrentIteration](int current, int maximum, double, int)
+    {
+        ++callbackCount;
+        largestCurrentIteration = std::max(largestCurrentIteration, current);
+        EXPECT_LE(current, maximum);
+        EXPECT_EQ(maximum, 1);
+        return true;
+    };
+
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(cameras, {track}, options);
+
+    EXPECT_TRUE(result.solutionUsable);
+    EXPECT_EQ(callbackCount, 1);
+    EXPECT_EQ(largestCurrentIteration, 1);
 }
 
 TEST(BundleAdjustCeresBackendTest, CeresPointOnlyUsesDenseQrSolver)

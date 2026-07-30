@@ -6,6 +6,10 @@
 #include "ProjectSparseReconstructionManager.h"
 
 #include <QDebug>
+#include <QDir>
+#include <QMessageBox>
+#include <QPointer>
+#include <QPushButton>
 
 ProjectReconstructionManager::ProjectReconstructionManager(ProjectManager *owner,
                                                            ProjectData *projectData,
@@ -13,7 +17,7 @@ ProjectReconstructionManager::ProjectReconstructionManager(ProjectManager *owner
                                                            QObject *parent)
     : QObject(parent)
     , _sparseManager(new ProjectSparseReconstructionManager(owner, projectData, parentWidget, this))
-    , _denseManager(new ProjectDenseReconstructionManager(owner, projectData, parentWidget, this))
+    , _denseManager(new ProjectDenseReconstructionManager(owner, projectData, this))
     , _modelManager(new ProjectModelManager(owner, projectData, parentWidget, this))
     , _modelWorkflow(new ProjectModelGenerationWorkflow(owner,
                                                         projectData,
@@ -22,6 +26,52 @@ ProjectReconstructionManager::ProjectReconstructionManager(ProjectManager *owner
                                                         _modelManager,
                                                         this))
 {
+    const QPointer<QWidget> parentGuard(parentWidget);
+    _denseManager->setExistingDepthActionRequester(
+        [parentGuard](int existingCount, int totalCount, const QString &outputDir)
+    {
+        if (!parentGuard)
+        {
+            return 0;
+        }
+
+        QMessageBox box(parentGuard.data());
+        box.setIcon(QMessageBox::Question);
+        box.setWindowTitle(QStringLiteral("深度图估计"));
+        box.setText(QStringLiteral("检测到已有深度图结果（%1/%2）。")
+                        .arg(existingCount)
+                        .arg(totalCount));
+        box.setInformativeText(QStringLiteral("输出目录：%1\n请选择覆盖重算，或继续生成未完成的帧。")
+                                   .arg(QDir::toNativeSeparators(outputDir)));
+        QPushButton *overwriteButton = box.addButton(QStringLiteral("覆盖重算"), QMessageBox::DestructiveRole);
+        QPushButton *continueButton = box.addButton(QStringLiteral("继续生成未完成帧"), QMessageBox::AcceptRole);
+        box.addButton(QStringLiteral("取消"), QMessageBox::RejectRole);
+        box.setDefaultButton(continueButton);
+        box.exec();
+        if (box.clickedButton() == overwriteButton)
+        {
+            return 1;
+        }
+        return box.clickedButton() == continueButton ? 2 : 0;
+    });
+    connect(_denseManager,
+            &ProjectDenseReconstructionManager::userMessageRequested,
+            this,
+            [parentGuard](bool informational, const QString &title, const QString &message)
+    {
+        if (!parentGuard)
+        {
+            return;
+        }
+        if (informational)
+        {
+            QMessageBox::information(parentGuard.data(), title, message);
+        }
+        else
+        {
+            QMessageBox::warning(parentGuard.data(), title, message);
+        }
+    });
     connect(_sparseManager, &ProjectSparseReconstructionManager::atProgressChanged,
             this, &ProjectReconstructionManager::atProgressChanged);
     connect(_sparseManager, &ProjectSparseReconstructionManager::atProgressFinished,

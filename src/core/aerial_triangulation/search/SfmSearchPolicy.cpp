@@ -25,6 +25,43 @@ double networkQualityScore(const SfmCandidateSummary &candidate)
            0.15 * reprojectionQuality;
 }
 
+double closedSequenceQualityScore(const SfmCandidateSummary &candidate)
+{
+    if (!candidate.hasClosedSequenceGeometry ||
+        !std::isfinite(candidate.sequenceAdjacentDistanceMaximumRatio) ||
+        !std::isfinite(candidate.sequenceAdjacentDistanceMadRatio))
+    {
+        return 0.0;
+    }
+
+    const double maximumRatio = std::max(1.0, candidate.sequenceAdjacentDistanceMaximumRatio);
+    const double madRatio = std::max(0.0, candidate.sequenceAdjacentDistanceMadRatio);
+
+    // MAD 对单个错误相机更稳健；最大值仍保留较低权重，用于惩罚闭环中的局部断裂。
+    // 两项都映射到 [0, 1]，避免任一原始极值直接支配候选排序。
+    const double robustContinuity = std::exp(-4.0 * madRatio);
+    const double worstEdgeContinuity = std::exp(-0.75 * (maximumRatio - 1.0));
+    return 0.65 * robustContinuity + 0.35 * worstEdgeContinuity;
+}
+
+double photogrammetricQualityScore(const SfmCandidateSummary &candidate)
+{
+    if (candidate.hasNetworkQuality && candidate.hasClosedSequenceGeometry)
+    {
+        return 0.50 * networkQualityScore(candidate) +
+               0.50 * closedSequenceQualityScore(candidate);
+    }
+    if (candidate.hasNetworkQuality)
+    {
+        return networkQualityScore(candidate);
+    }
+    if (candidate.hasClosedSequenceGeometry)
+    {
+        return closedSequenceQualityScore(candidate);
+    }
+    return 0.0;
+}
+
 } // namespace
 
 SfmWorkerBudget allocateWorkers(int candidateCount, int totalThreads)
@@ -50,17 +87,21 @@ bool isBetterCandidate(const SfmCandidateSummary &candidate,
     {
         return candidate.registeredImages > reference.registeredImages;
     }
+    if (candidate.hasClosedSequenceGeometry != reference.hasClosedSequenceGeometry)
+    {
+        return candidate.hasClosedSequenceGeometry;
+    }
     if (candidate.hasNetworkQuality != reference.hasNetworkQuality)
     {
         return candidate.hasNetworkQuality;
     }
-    if (candidate.hasNetworkQuality)
+    if (candidate.hasNetworkQuality || candidate.hasClosedSequenceGeometry)
     {
-        const double candidateNetworkScore = networkQualityScore(candidate);
-        const double referenceNetworkScore = networkQualityScore(reference);
-        if (std::abs(candidateNetworkScore - referenceNetworkScore) > 1e-9)
+        const double candidateQuality = photogrammetricQualityScore(candidate);
+        const double referenceQuality = photogrammetricQualityScore(reference);
+        if (candidateQuality != referenceQuality)
         {
-            return candidateNetworkScore > referenceNetworkScore;
+            return candidateQuality > referenceQuality;
         }
     }
     const bool candidateRmsFinite = std::isfinite(candidate.meanReprojError);

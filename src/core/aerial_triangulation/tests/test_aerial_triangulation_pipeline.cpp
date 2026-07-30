@@ -15,6 +15,9 @@
 #include <QTemporaryDir>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <thread>
 
 namespace
 {
@@ -169,6 +172,54 @@ TEST(AerialTriangulationPipelineTest, SearchesNarrowFieldFocalCandidatesEvenWhen
               attemptedScales.cend());
     EXPECT_DOUBLE_EQ(result.sfmDiagnostics.value(QStringLiteral("adaptive_focal_scale")).toDouble(),
                      5.2);
+}
+
+TEST(AerialTriangulationPipelineTest, ParallelizesCoarseFocalSearchWithinThreadBudget)
+{
+    std::atomic<int> activeAttempts{0};
+    std::atomic<int> maximumConcurrentAttempts{0};
+    const auto attemptRunner = [&activeAttempts, &maximumConcurrentAttempts](
+                                   const xjw::aerial_triangulation::PreparedAerialTriangulationInput &)
+    {
+        const int active = activeAttempts.fetch_add(1) + 1;
+        int observedMaximum = maximumConcurrentAttempts.load();
+        while (active > observedMaximum &&
+               !maximumConcurrentAttempts.compare_exchange_weak(observedMaximum, active))
+        {
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        activeAttempts.fetch_sub(1);
+
+        xjw::aerial_triangulation::SfmAttemptExecutionResult execution;
+        execution.result.success = true;
+        execution.result.numRegisteredImages = 16;
+        execution.result.numPoints3D = 1000;
+        execution.result.meanReprojError = 0.5;
+        return execution;
+    };
+    const auto resultWriter = [](
+                                  const xjw::aerial_triangulation::PreparedAerialTriangulationInput &,
+                                  xjw::aerial_triangulation::SfmAttemptExecutionResult *,
+                                  QString *)
+    {
+        return true;
+    };
+
+    xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
+    for (int index = 0; index < 16; ++index)
+    {
+        input.images.append(QStringLiteral("image_%1.png").arg(index));
+    }
+    input.threads = 32;
+    input.adaptiveCameraModelFitting = false;
+
+    const auto result =
+        xjw::aerial_triangulation::AerialTriangulationPipeline(
+            attemptRunner, resultWriter).run(input);
+
+    ASSERT_TRUE(result.success);
+    EXPECT_GE(maximumConcurrentAttempts.load(), 2);
+    EXPECT_LE(maximumConcurrentAttempts.load(), 4);
 }
 
 TEST(AerialTriangulationPipelineTest, InitializesUnknownFocalEvenWhenAdaptiveModelFittingIsDisabled)

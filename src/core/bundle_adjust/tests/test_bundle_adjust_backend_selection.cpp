@@ -65,9 +65,15 @@ TEST(BundleAdjustBackendSelectionTest, LargeProblemCanSelectCudaWhenAvailable)
     }
 }
 
-TEST(BundleAdjustBackendSelectionTest, NativeCudaBackendNameAndAutoThresholdsAreStable)
+TEST(BundleAdjustBackendSelectionTest, NativeCudaCapabilityPreventsPoseRefinementSelection)
 {
     EXPECT_STREQ(xjw::BundleAdjust::backendName(xjw::BABackend::NativeCuda), "native_cuda");
+    const xjw::BABackendCapabilities capabilities =
+        xjw::BundleAdjust::backendCapabilities(xjw::BABackend::NativeCuda);
+    EXPECT_TRUE(capabilities.optimizesPoints);
+    EXPECT_FALSE(capabilities.refinesCameraPose);
+    EXPECT_FALSE(capabilities.refinesSharedFocalLength);
+    EXPECT_FALSE(capabilities.supportsSoftConstraints);
 
     xjw::BAOptions options;
     options.backend = xjw::BABackend::Auto;
@@ -84,12 +90,31 @@ TEST(BundleAdjustBackendSelectionTest, NativeCudaBackendNameAndAutoThresholdsAre
     stats.observationCount = 30;
 
     const xjw::BABackend selected = xjw::BundleAdjust::selectBackendForProblem(stats, options);
-    if (xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::NativeCuda))
+    EXPECT_NE(selected, xjw::BABackend::NativeCuda);
+}
+
+TEST(BundleAdjustBackendSelectionTest, SharedFocalUsesJointCeresEvenForSmallProblem)
+{
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::Auto;
+    options.refineCameraPose = true;
+    options.refineSharedFocalLength = true;
+    options.minCeresCudaCameras = 1000;
+    options.minCeresCudaObservations = 1000000;
+    options.minCeresCpuObservations = 1000000;
+
+    xjw::BAProblemStats stats;
+    stats.cameraCount = 8;
+    stats.trackCount = 300;
+    stats.observationCount = 1600;
+
+    const xjw::BABackend selected = xjw::BundleAdjust::selectBackendForProblem(stats, options);
+    if (xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
     {
-        EXPECT_EQ(selected, xjw::BABackend::NativeCuda);
+        EXPECT_EQ(selected, xjw::BABackend::CeresCpu);
     }
     else
     {
-        EXPECT_NE(selected, xjw::BABackend::NativeCuda);
+        EXPECT_EQ(selected, xjw::BABackend::LegacyCpu);
     }
 }

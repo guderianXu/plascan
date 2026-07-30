@@ -4,7 +4,7 @@
  * @file ProjectWorkflowConfigManager.h
  * @brief 项目工作流参数配置子管理器的声明文件。
  *
- * ProjectWorkflowConfigManager 负责管理 project_config.json 中 "workflow" 顶层段落，
+ * ProjectWorkflowConfigManager 负责管理 Chunk doc.json 的 project_config.workflow 段，
  * 该段落以处理步骤名称为键，存储各步骤的输入参数，例如：
  *   - "bundle_adjust" : 光束法平差的各项参数
  *   - "dem"           : DEM 生成参数
@@ -21,7 +21,7 @@
 
 /**
  * @class ProjectWorkflowConfigManager
- * @brief 管理 project_config.json 中 "workflow" 段的各步骤参数配置。
+ * @brief 管理 project_config.workflow 段的各步骤参数配置。
  */
 class ProjectWorkflowConfigManager
 {

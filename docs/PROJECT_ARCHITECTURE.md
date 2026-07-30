@@ -13,7 +13,7 @@ plascan/
 ├── cmake/          # 全局 CMake 模块 (依赖查找, 包管理)
 ├── 3rdparty/       # 第三方库源码 (LightGlue)
 ├── resources/      # 静态资源 (深度学习模型权重, 图标)
-├── scripts/        # Python 辅助脚本和 benchmark runner
+├── scripts/        # 按 models/workflows/bench/env/validation 分类的辅助脚本
 ├── tools/          # 独立工具 (匹配转 CSV)
 ├── tests/          # 顶层测试
 ├── data/           # 示例/测试数据
@@ -44,7 +44,13 @@ common/
 ├── log/
 │   ├── Logger.h/cpp        # 全局日志单例 (LOG_INFO/LOG_ERROR/LOG_DEBUG 宏)
 ├── io/
-│   └── PathIO.h/cpp        # UTF-8/本机路径转换、原子文件写入和 OpenCV 图像读写封装
+│   ├── PathIO.h/cpp        # UTF-8/本机路径转换、字节读取和原子文件写入
+│   ├── ImageIO.h/cpp       # OpenCV 解码及 TIFF/GeoTIFF 的 GDAL 直接读取
+│   └── JsonObjectFile.h/cpp # JSON 对象的安全读取与原子写入
+├── json/
+│   └── JsonObjectMerge.h/cpp # 无业务语义的 JSON 对象深度合并
+├── runtime/
+│   └── PythonRuntimeLocator.h/cpp # Python 运行时路径解析（环境变量/.venv/兼容文件）
 ├── model/
 │   ├── FeatureExtractorModelCatalog.h/cpp # 特征提取器模型候选文件名与托管路径识别
 │   ├── TorchScriptModelResolver.h/cpp # 模型搜索路径解析（PLASCAN_MODEL_DIR、源码树和安装目录）
@@ -54,8 +60,20 @@ common/
 │       └── FeatureExtractorModelCatalog_tests.cpp # 特征模型候选顺序和路径识别测试
 ├── project/
 │   ├── ProjectIO.h/cpp # 项目目录、临时缓存、资源和产物路径规则
+│   ├── ProjectArtifactIO.cpp # 基于规范化影像路径哈希的特征/蒙版产物寻址
 │   ├── ProjectMetadata.h/cpp # 项目 JSON、影像 token 与资源路径解析
-│   ├── ProjectCameraIO.h/cpp # Camera JSON/TSAI 读取、转换与序列化
+│   ├── ProjectFeatureMetadata.cpp # 项目特征文件后缀发现与解析
+│   ├── ProjectChunkIndex.h/cpp # Chunk UUID、数字目录映射与只增不复用编号
+│   ├── ProjectPackageLayout.h/cpp # 4.0.0 分体工程描述符严格解析
+│   ├── PortableProjectFormat.h/cpp # 资源清单和项目 URI
+│   ├── PlascanArchive.h/cpp # ZIP 归档封装、安全条目名和流式读写
+│   ├── ProjectChunkStore.h/cpp # Chunk 索引、数字目录、格式门禁及持久化
+│   ├── ProjectResourceStore.h/cpp # Chunk 资源导入、索引、校验和解析
+│   ├── ProjectWorkspaceStore.h/cpp # 工程 URI 与当前 Chunk 路径互转
+│   ├── ProjectSession.h/cpp # GUI/CLI 共用的无界面 4.0 工程会话
+│   ├── ProjectLock.h/cpp # GUI/CLI 跨进程工程独占写锁
+│   ├── ProjectSharedImageStore.h/cpp # 跨 Chunk 内容寻址共享影像库
+│   ├── ProjectArchivePath.cpp # 归档条目与目标根目录安全校验
 │   ├── ProjectMatchCatalog.h/cpp # 项目匹配文件、sidecar 与负缓存编目
 │   ├── SparseResultQuality.h/cpp # 稀疏结果类型和质量门控元数据
 │   ├── ProjectCommonUtils.h # 项目通用内联工具
@@ -86,6 +104,7 @@ core/
 │   ├── Camera.h/cpp            # 唯一相机模型：内参、Brown-Conrady 畸变、位姿和正深度归一化
 │   ├── CameraBaseline.h/cpp    # 相机中心基线、指定点三角交会角和平均深度/基线比
 │   ├── CameraFormatConverter.h/cpp # Middlebury/EPFL 等外部相机 -> tsai + image_camera.lis
+│   ├── ProjectCameraIO.h/cpp   # Camera JSON/TSAI 与项目元数据适配
 │   └── test/                      # 相机测试与诊断程序
 │       ├── Camera_tests.cpp
 │       ├── CameraBaseline_tests.cpp
@@ -155,16 +174,21 @@ core/
 │   │   └── PairSelector.h/cpp       # 合并手动、全量、序列、相机重叠和词汇召回候选
 │   ├── runtime/
 │   │   ├── MatchPhotosRuntime.h/cpp # 输出路径、LightGlue 模型查找、匹配 sidecar 写入
-│   │   └── MatchPhotosMaskSupport.h/cpp # 连接点流程蒙版路径解析、关键点/连接点过滤
+│   │   ├── MatchPhotosMaskSupport.h/cpp # 连接点流程蒙版路径解析、关键点/连接点过滤
+│   │   └── MatchPhotosParallelism.h/cpp # CUDA 显存预算、LightGlue worker 和几何验证并发解析
 │   ├── stages/
 │   │   ├── FeatureStage.h/cpp       # SIFT 特征提取/复用，输出 assets/ip/*.sift
+│   │   ├── FeaturePreparationQueue.h/cpp # CUDA SIFT 前的有界 CPU 影像准备队列
 │   │   ├── MatchingStage.h/cpp      # SIFT + LightGlue 两两匹配，输出 assets/matches/*.match + JSON sidecar
+│   │   ├── LightGluePairBatch.h/cpp # 独立 matcher/stream 的显存感知 CUDA 匹配对调度与 OOM 回退
 │   │   ├── GeometryVerifyStage.h/cpp # 调用 MatchGeometryFilter 做基础矩阵几何验证
 │   │   ├── SiftLightGlueRecovery.h/cpp # 高精度预算截断增强与断图跨分量恢复
 │   │   ├── TrackBuildStage.h/cpp    # 连接点轨迹阶段边界，委托 tie_points 管理最终多视图 track
 │   │   └── GuidedMatchStage.h/cpp   # 引导重匹配阶段占位
 │   ├── tie_points/
 │   │   └── TiePointTrackManager.h/cpp # 最终多视图连接点 track 构建、筛选和统计摘要
+│   ├── tools/
+│   │   └── aerial_geometry_benchmark.cpp # 特征读取、USAC、PnP 和三角化微基准
 │   └── tests/                       # matchphototask 模块级测试
 │
 ├── control_points/             # Metashape-like 标记点与测绘控制网络
@@ -186,6 +210,7 @@ core/
 │   ├── BundleAdjustNativeCuda.h/cpp/.cu # PlaScan 自研 CUDA 后端入口和 GPU 点块求解
 │   ├── BundleAdjustNativeCudaWorkset.h/cpp # 将 Camera/BATrack 扁平化为 CUDA 连续工作集
 │   ├── BundleAdjustNativeCudaTypes.h / *Kernels.cuh # CUDA 侧数据类型、点块 kernel 和设备函数
+│   ├── README.md               # 调用链、后端能力、状态、规范与质量门控
 │   ├── tools/                  # BA 后端基准工具，例如 ba_backend_benchmark
 │   └── tests/                  # BA 模块级后端、投影模型、自动选择和约束回归测试
 │
@@ -239,6 +264,7 @@ core/
 │   ├── DepthFrameQualityGate.h/cpp # 深度帧 Accepted/ValidationOnly/Rejected 质量门控
 │   ├── DepthConsistencyCache.h/cpp # 有内存预算的 LRU source 邻域多视一致性缓存
 │   ├── DepthGeometryConsistency.h/cpp # 断边邻域搜索、相机基线自适应往返验证与一致性投票
+│   ├── DepthPoseAlignmentRefiner.h/cpp # 锚定尺度的鲁棒点到平面局部 SE(3) 派生位姿细化
 │   ├── PatchMatchCUDA.cu/h     # PatchMatch CUDA 实现
 │   ├── PatchMatchNoCUDA.cpp    # PatchMatch CPU 回退
   │   ├── DepthMapGenerator.h/cpp # 深度图估计、取消检查、raw depth/confidence/几何支持度/valid mask 写盘
@@ -260,6 +286,7 @@ core/
 │       ├── test_mvs_rectifier.cpp
 │       ├── test_mvs_depth_pyramid.cpp
 │       ├── test_mvs_depth_completeness.cpp
+│       ├── test_mvs_depth_pose_alignment.cpp
 │       ├── test_mvs_types.cpp
 │       └── test_mvs_pipeline.cpp
 │
@@ -285,8 +312,14 @@ core/
 │   ├── SurfaceReconstructorHeightGrid.h/cpp # 高度格网方法
 │   ├── SurfaceReconstructorPostprocess.h/cpp # 网格清理、边界环拆分、质量补洞及退化微孔保拓扑收缩
 │   ├── MeshIO.cpp              # 网格文件 I/O
-│   ├── TextureMapper.h/cpp     # 纹理映射
-│   ├── CameraTextureMapper.cpp # 按相机投影、深度一致性和视角评分生成逐面 UV 图集
+│   ├── TextureMapper.h/cpp     # 纹理配置/结果门面及无相机时的顶点色回退
+│   ├── CameraTextureMapper.cpp # camera_projected_atlas_v3 兼容路径与 v4 调度
+│   ├── CameraTextureMapperV4.h/cpp # 多视图纹理 v4 阶段编排
+│   ├── TextureSourcePreprocessor.cpp # 原图/证据相机、清晰度、曝光和网格邻接准备
+│   ├── TextureVisibilityEvaluator.cpp # 七点证据检查、top-K 评分、ICM 与小孤岛合并
+│   ├── TextureChartBuilder.cpp # 按相机标签连通域构建投影 chart
+│   ├── TextureAtlasPacker.h/cpp # 确定性 MaxRects chart 图集打包
+│   ├── TextureAtlasBaker.cpp   # 多视图融合、鬼影过滤、填充、锐化及 OBJ/MTL/PNG 输出
 │   ├── MeshColorizer.h/cpp     # 网格遮挡检查、鲁棒多视图顶点着色及孤立色斑清理
 │   ├── MeshFaceColorOptimizer.h/cpp # 实验性按面主视图投票与共享顶点一致着色
 │   ├── MeshQuadricSimplifier.h/cpp # 目标面数驱动、边界/锐边/翻转约束的 QEM 自适应简化
@@ -333,7 +366,7 @@ core/
 │   ├── ModelImageMetrics.h/cpp # 轮廓、覆盖、边缘、SSIM/PSNR 影像空间指标
 │   ├── ModelGeometryComparator.h/cpp # 连通分量与参考点云双向最近邻 A+C 几何验收
 │   ├── ModelImageQualityEvaluator.h/cpp # GUI/CLI 可复用的统一门控、诊断图和 JSON/CSV 报告
-│   ├── ProcessingBaselineManager.h/cpp # 输入快照指纹、参考网格指标和跨版本质量门
+│   ├── ProcessingBaselineManager.h/cpp # 总输入/分阶段快照指纹、参考网格指标和跨版本质量门
 │   └── DemDifference.h/cpp     # DEM 差分、绝对差分和统计报告
 │
 ├── aerial_triangulation/       # 对齐照片式空中三角测量，职责对应 Metashape Align Photos
@@ -349,23 +382,37 @@ core/
     └── LightGlueFeatureBudget.h  # LightGlue/SIFT 显存感知关键点预算工具
 ```
 
-`AerialTriangulationWorkflow` 是“空中三角测量/对齐照片”的唯一用户级入口。重置当前对齐时，workflow
-先用 `MatchPhotosTask` 重新提取 SIFT、执行 LightGlue 匹配并整理多视连接点，再把同一组
-`assetsDir/featureDir/matchDir` 和持久化连接点图交给 `AerialTriangulationPipeline`。GUI 与
-`aerial_triangulation_cli` 不再各自实现连接点补齐逻辑，也不允许 SfM 回退读取另一套项目缓存。
+`AerialTriangulationWorkflow` 是“空中三角测量/对齐照片”的唯一用户级入口。重置当前对齐只清除
+SfM 位姿和稀疏重建状态；默认仍复用与当前前端签名兼容的特征、匹配和连接点。只有用户取消
+“重用现有匹配”或缓存缺失/不兼容时，workflow 才调用 `MatchPhotosTask` 重新提取 SIFT、执行
+LightGlue 匹配并整理多视连接点。随后同一组 `assetsDir/featureDir/matchDir` 和持久化连接点图
+交给 `AerialTriangulationPipeline`。GUI 与 `aerial_triangulation_cli` 不再各自实现连接点补齐逻辑，
+也不允许 SfM 回退读取另一套项目缓存。
 合法的 V2 零匹配 sidecar 作为已确认负缓存消费，不重复扫描或生成。
 
+连接点阶段的 GPU 调度按真实资源而不是 CPU 线程数决定：CUDA SIFT 保持单执行上下文并由
+`FeaturePreparationQueue` 重叠 CPU 解码；LightGlue 每个 worker 独占模型和 stream，自动并发受可用显存约束，
+发生 OOM 时串行补跑未完成影像对。几何验证通过 `FeatureFileIO::readGeometryData()` 只加载关键点几何，
+再以最多 8 路 CPU 并发运行固定随机种子的 USAC-MAGSAC。PnP、增量三角化和轨迹图仍保留 CPU，
+因为当前基准未达到 20% 的端到端 GPU 收益门槛。
+
 无相机 `IncrementalSfm` 会在构建对应关系索引前再次按用户的连接点限制执行轨迹级筛选，确保
-SfM、BA 和创建连接点阶段使用相同的每影像限额语义。焦距粗筛首先保证注册覆盖，再按多视比例、
-三角交会角、空间覆盖和 RMS 选择正式重放候选；最终质量报告对两视轨迹比例执行 0.70 advisory / 0.85 blocking 门控。
+SfM、BA 和创建连接点阶段使用相同的每影像限额语义。焦距粗筛覆盖 `0.55` 到 `10.0` 的视场范围，
+最多并行 4 个候选并遵守总线程预算；排序首先保证注册覆盖，再联合评价多视比例、交会角、空间覆盖、
+重投影误差和有界闭环序列质量。最终质量报告对两视轨迹比例执行 0.70 advisory / 0.85 blocking 门控。
 
 `sfm/ReferenceTerrainPrior.h/cpp` 把参考 DEM 或 LiDAR 局部高度面接入 BA soft prior。参考地形默认作为软约束参与诊断，
 不把已知外参硬固定；BA 报告应记录 pose prior / terrain prior 优化前后的残差。
 
-`bundle_adjust` 的 `native_cuda` 后端已接入统一 BA 接口、Auto 选择和质量门控。当前首期实现把有效
-Camera/BATrack 观测扁平化为 CUDA 工作集，在固定相机投影下优化三维点块，并把 setup/solve/total、
-活动相机/track/观测数、接受步和线性残差写回报告。相机 Schur/PCG 更新尚未作为已完成能力发布，
-因此文档和 UI 只把它描述为首期 native CUDA BA 加速路径。
+`sfm/pipeline/SfmBundleAdjustCoordinator` 是空三调用 `bundle_adjust` 的正式入口。它构造局部或全局
+相机/轨迹问题、固定边界相机、转发进度，并只回写 `solutionUsable=true` 的结果。无绝对控制时，
+`SimilarityGaugeNormalizer` 在全局 BA 后恢复确定性锚点和初始基线尺度；有控制点或比例尺时由绝对约束接管规范。
+
+`bundle_adjust` 的 `native_cuda` 后端已接入统一 BA 接口和质量门控。当前实现把有效 Camera/BATrack
+观测扁平化为 CUDA 工作集，在固定相机投影下优化三维点块；能力表明确标记它不更新相机和共享焦距，
+因此需要联合相机 BA 时 Auto 不会选择该后端。Ceres CPU/CUDA 在同一非线性问题中联合优化相机、三维点
+和共享绝对焦距；Legacy CPU 保留小型固定焦距问题。所有后端统一返回状态、可用性、取消、回退原因和耗时，
+正常 Auto 路径只有未通过状态或质量门控时才回退，不再无条件重复完整 Legacy BA。
 
 无相机文件且没有用户内参时，`AerialTriangulationPipeline` 始终评估广域焦距尺度，并按注册覆盖、
 多视网络强度、点数和重投影质量排序。正式阶段重放最高质量的非默认候选，并重新自动选择初始像对。
@@ -395,7 +442,7 @@ gui/
 │   ├── MainWindow.h/cpp        # QMainWindow 派生, 顶层 UI 编排
 │   ├── ProjectUiHydrator.h/cpp # 分阶段刷新项目界面，并通过代次号丢弃过期请求
 │   ├── MenuWorkflowController.h/cpp       # "工作流程" 菜单业务控制器
-│   ├── ReconstructionWorkflowController.h/cpp  # "重建" 菜单业务控制器
+│   ├── ReconstructionWorkflowController.h/cpp  # 生成模型/纹理工作流程对话框协调
 │   └── WorkspacePanelController.h/cpp     # Dock/工具栏可见性、菜单动作与项目状态统一管理
 │
 ├── menu/
@@ -411,41 +458,14 @@ gui/
 │   ├── MarkerDetectionReviewDialog.h/cpp # 候选预览、归入已有标记或丢弃
 │   └── PrintMarkersDialog.h/cpp        # 标靶物理布局和 PDF 输出
 │
-├── dialogs/                    # 对话框 (31 个)
-│   ├── FeatureMatchingDialog.h/cpp          # 特征匹配参数
-│   ├── FeatureExtractionDialog.h/cpp/ui     # 多算法特征提取参数
-│   ├── DenseMatchDialog.h/cpp/Ui.cpp        # 密集匹配参数 (新增)
-│   ├── DepthMapEstimateDialog.h/cpp         # 深度图估计参数
-│   ├── DepthFusionDialog.h/cpp              # 深度图融合参数
-│   ├── DenseCloudDialog.h/cpp               # 密集点云参数
-│   ├── DenseCloudRefineDialog.h/cpp         # 密集点云后处理
-│   ├── AerialTriangulationDialog.h/cpp      # 空中三角测量
-│   ├── BundleAdjustDialog.h/cpp             # 光束法平差参数
-│   ├── TriangulationDialog.h/cpp            # 三角化参数
-│   ├── MatchViewerDialog.h/cpp              # 统一连接点查看器 (稀疏+密集 Tab)
-│   ├── MatchPairSelectorDialog.h/cpp        # 匹配对选择器
-│   ├── ObservationNetworkDialog.h/cpp       # 观测网络参数
-│   ├── InitCameraPoseDialog.h/cpp           # 相机位姿初始化
-│   ├── SparseCloudPostProcessDialog.h/cpp   # 稀疏点云后处理
-│   ├── ForwardIntersectionCheckDialog.h/cpp # 前方交汇检测
-│   ├── ForwardIntersectionResultsDialog.h/cpp  # 前方交汇结果
-│   ├── CameraModel3DDialog.h/cpp            # Qt RHI/Vulkan 3D 查看；异步加载 PLY 与 OBJ/MTL/面级 UV 纹理
-│   ├── CameraConvertDialog.h/cpp            # 外部相机格式转换
-│   ├── SurveyControlDialog.h/cpp            # 控制点/检查点/比例尺导入和查看
-│   ├── CreateDemDialog.h/cpp                # DEM 生成参数
-│   ├── MapProjectDialog.h/cpp               # 地图投影参数
-│   ├── GenerateModelDialog.h/cpp            # “工作流程 → 生成模型”唯一入口
-│   ├── MeshReconstructionDialog.h/cpp       # 旧网格参数组件（不再直接暴露菜单）
-│   ├── TextureMappingDialog.h/cpp           # 旧纹理参数组件（不再直接暴露菜单）
-│   ├── ModelExportDialog.h/cpp               # 旧导出参数组件（不再直接暴露菜单）
-│   ├── OverlapAnalysisDialog.h/cpp          # 重叠度分析
-│   ├── VocabularyOverlapDialog.h/cpp/ui     # 基于特征词汇获取重叠对
-│   ├── FeaturePointVisualizationDialog.h/cpp  # 特征点可视化
-│   ├── SimplePointCloudDialog.h/cpp         # 简单点云查看
-│   ├── StereoProcessingDialog.h/cpp         # 立体重建
-│   ├── MVSProgressDialog.h/cpp              # MVS 进度
-│   ├── WorkflowReportDialog.h/cpp           # 工作流程报告
-│   └── settings/                            # 对话框设置持久化支持
+├── dialogs/                    # 按业务域组织的参数与结果对话框
+│   ├── application/            # 关于、工作流程报告等应用级对话框
+│   ├── camera/                 # 相机查看/转换、前方交汇、测量控制
+│   ├── image/                  # 蒙版等单影像处理
+│   ├── reconstruction/         # 空三、模型、纹理、DEM/正射工作流程
+│   ├── tie_points/             # 连接点创建/清理/查看与重叠分析
+│   ├── shared/                 # 对话框共享样式与布局辅助
+│   └── README.md               # 分类规则与新增对话框约束
 │
 ├── widgets/                    # 自定义 Qt 控件 (10 个)
 │   ├── CanvasWidget.h/cpp              # 2D 影像/图层渲染画布；整体视图旋转不修改影像或摄影测量坐标
@@ -453,7 +473,8 @@ gui/
 │   ├── DualImageViewer.h/cpp           # 双图并列查看器 (左右影像 + 匹配线)
 │   ├── MatchLineOverlay.h/cpp          # 匹配线叠加层 (稀疏 → 连线)
 │   ├── DisparityHeatmapOverlay.h/cpp   # 视差热力图叠加层 (密集 → 热力图/新增)
-│   ├── DataTreeWidget.h/cpp            # 项目数据树 (左侧面板)
+│   ├── DataTreeWidget.h/cpp            # Metashape 式工作区汇总 → Chunk → 资源分组树
+│   ├── WorkspaceSectionIcons.h/cpp     # 工作区、Chunk、影像及成果类型语义图标
 │   ├── ReferencePanelWidget.h/cpp      # 参考信息面板
 │   ├── ObservationNetworkView.h/cpp    # 观测网络可视化
 │   └── WorkspaceCenterWidget.h/cpp     # 工作区布局管理及模型/影像/对比/观测网络模式通知
@@ -461,9 +482,9 @@ gui/
 ├── project/                    # 项目管理层
 │   ├── data/
 │   │   ├── ProjectData.h/cpp    # 项目数据入口：core/results 分域、归档与临时缓存持久化
-│   │   └── ProjectFilesManager.h/cpp  # project_files.json / project_results.json 内存模型
+│   │   └── ProjectFilesManager.h/cpp  # Chunk doc.json 的 core/results 内存模型
 │   ├── archive/
-│   │   └── PlascanArchive.h/cpp # ZIP 归档封装
+│   │   └── *.h # 指向 src/common/project 存储层的 GUI 兼容头
 │   ├── manager/
 │   │   ├── ProjectManager.h/cpp # 项目管理器 (核心协调器)
 │   │   ├── ProjectReconstructionManager.h/cpp       # 重建任务管理
@@ -498,26 +519,26 @@ gui/
 │       └── ProjectWorkflowReports.h/cpp             # 工作流报告
 │
 ├── tasks/                      # 异步任务执行器
-│   ├── FeatureExtractionRunner.h/cpp  # 特征提取异步执行
 │   └── GuiTaskRunner.h         # GUI 后台任务生命周期守护：runGuarded/postGuarded
 │
 ├── views/
 │   ├── LayerRenderer.h/cpp             # 图层渲染器
 │   ├── LayerOverlayItems.h/cpp          # 批量特征点、残差向量与匹配覆盖层
 │   ├── LayerFeatureLoader.h/cpp         # 特征文件解析与关键点加载
-│   └── FeatureResidualLoader.h/cpp      # 按当前影像异步筛选真实重投影残差
+│   ├── FeatureResidualLoader.h/cpp      # 按当前影像异步筛选真实重投影残差
+│   ├── CameraSceneViewMath.h/cpp        # 相机平面、视角选择与本地轴数学
+│   └── ObjRenderPreparation.h/cpp       # OBJ 显示数据准备
 │
 ├── config/                     # 配置管理
 │   ├── AppConfigManager.h/cpp          # 应用配置
-│   ├── ImageViewRotationSettings.h/cpp # 项目级、按影像路径索引的查看旋转角度
-│   ├── ProjectConfigManager.h/cpp      # 项目配置
-│   ├── ProjectUiConfigManager.h/cpp    # UI 配置
+│   ├── ImageViewRotationSettings.h/cpp # 项目级、按稳定 image_uuid 索引的查看旋转角度
+│   ├── ProjectConfigManager.h/cpp      # Chunk project_config，仅工作流参数
+│   ├── ProjectUiConfigManager.h/cpp    # 根 doc.json 的 ui_state 显示状态
 │   ├── ProjectWorkflowConfigManager.h/cpp  # 工作流配置
-│   ├── JsonMergeUtil.h/cpp             # JSON 合并工具
 │   └── settings/
-│       ├── GlobalSettings.h/cpp        # 全局设置
 │       ├── DialogSettingStore.h/cpp    # 对话框设置记忆化存储
 │       ├── DialogSettingKeys.h         # 各对话框设置键名
+│       ├── GuiSettingsStore.h           # GUI QSettings 工厂
 │       ├── WindowStateManager.h/cpp    # 窗口状态持久化
 │       ├── FileDialogStateManager.h/cpp # 文件对话框状态
 │       ├── RecentProjectsManager.h/cpp # 最近项目管理
@@ -525,6 +546,9 @@ gui/
 │
 ├── panels/
 │   └── LogPanel.h/cpp          # 日志面板 (QPlainTextEdit)
+│
+├── platform/
+│   └── ProjectFileIntegration.h/cpp # 启动工程参数解析与 Windows 当前用户文件关联
 │
 ├── log/                        # GUI 层日志 (使用 #include 快捷方式)
 ├── cmake/                      # GUI 构建配置
@@ -537,6 +561,26 @@ gui/
 └── packaging/                  # 打包配置
 ```
 
+PlaScan 工程采用 Metashape 式 `name.plascan + name.files` 结构。
+`ProjectPackageLayout` 只接受类型和版本严格匹配的 4.0.0 描述文件，并拒绝旧单体 ZIP；
+`name.files/project.zip` 只保存一个 `doc.json`，其中包含稳定 `project_id`、Chunk 索引
+和项目 UI 状态。每个 Chunk 由稳定 UUID 标识，并映射到 `1/`、`2/`、`3/` 等数字目录；
+目录号由持久化的 `next_chunk_directory` 单调分配，删除后不复用。Chunk 的核心元数据、
+结果、配置和资源索引位于其 `chunk.zip/doc.json` 的独立字段。原始影像位于工程级
+`.files/shared/images/<sha256>/`，其他大型成果直接位于对应数字目录。GUI 和 CLI 的
+BA 运行产物统一写入当前 Chunk 的 `bundle_adjust/<run>/`，不再混入 `assets/`；
+生效相机参数仍写回 Chunk 文档，综合报告继续位于 `reports/`。
+`ProjectWorkspaceStore` 继续兼容 `plascan:///workspace/...` 逻辑 URI，但只在当前 Chunk
+数字目录内解析，不再使用根级 `workspace/`。旧版根级 `workspace/` 分体工程和旧版
+单体工程均明确拒绝加载，并保持旧文件不变。归档条目在组合物理路径前执行跨平台名称、
+大小写冲突和目标根目录边界校验。
+项目配置按应用设置、工作流配置、项目视图状态和运行时缓存四层管理，避免机器路径混入工程。
+Chunk 保存将核心、结果、配置和资源索引合并为一次 `doc.json` 更新，并推进 `revision`；
+资源索引按引用集合和文件大小/修改时间增量维护。工程打开期间持有
+`.files/.plascan.lock`，避免 GUI/CLI 并发覆盖。共享影像只在所有 Chunk 都解除引用后清理。
+格式结构、路径安全规则和拒绝策略见
+[`docs/project/PLASCAN_PROJECT_FORMAT.md`](project/PLASCAN_PROJECT_FORMAT.md)。
+
 ### 菜单结构
 
 ```
@@ -547,7 +591,7 @@ gui/
 ├最近   ├操控球├生成模型         │├创建连接点              │└查看结果
 │打开   ├特征点├创建 DEM         │├构建观测网络...         ├手动点云剔除
 ├导出   │可视化├生成正射影像     │├初始化相机位姿...       ├连接点查看
-├最小化 └窗口                    │├生成初始稀疏点云...     ├相机格式转换...
+├最小化 └窗口  ├生成纹理         │├生成初始稀疏点云...     ├相机格式转换...
 └退出                            │├光束法平差优化...       └查看工作流程报告
                                  │└稀疏点云后处理...
                                  ├密集重建
@@ -558,8 +602,9 @@ gui/
                                  └（模型生成统一由“工作流程 → 生成模型”进入）
 ```
 
-模型生成只有一个用户入口。旧网格重建、纹理映射和模型导出对话框仍作为内部兼容组件保留，但不再
-出现在“重建”菜单，避免两套入口产生不同设置和结果。
+模型生成仍由一个统一入口负责几何重建；已经存在模型时，可通过“工作流程 → 生成纹理”独立重建
+OBJ/MTL/PNG 纹理产物。旧网格重建和模型导出对话框仍作为内部兼容组件保留，不再出现在“重建”
+菜单，避免两套几何入口产生不同设置和结果。
 
 ### 数据流 (稀疏重建 → 密集重建 → 模型)
 
@@ -629,7 +674,16 @@ MVS 源规划优先使用从当前存储匹配结果经 USAC/MAGSAC 验证的像
 相机环向覆盖保护，不能形成超过中位视角间隔两倍的连续角度缺口。
 环拍默认关闭支持蒙版自由空间雕刻；显式启用时需要至少五个参考相机一致，而且已有表面证据的体素
 会否决该自由空间票。航测和无法识别场景的旧工作区继续忽略掩膜外采样。TSDF 通用默认截断带为
-7.5 体素。环拍高细节路径会按输入深度图短边自动限制可靠体素分辨率，并按分辨率平方同步缩放目标
+7.5 体素。环拍高细节路径会从有效深度及逆深度相对离散度估计 `depth × relative_spread / voxel_size`
+的 P90；只有该不确定度超过基础截断带的 1.2 倍时，才按 `0.4 × P90` 增加截断带和表面支持带，
+通常限制在 12 体素以内。若环向覆盖分析同时检测到显著相邻视角缺口，则使用更保守的
+`1.5 × P90` 自适应系数，并把上限放宽到 16 体素，以容纳缺口两侧相机姿态和深度之间的投影偏差。
+没有显著缺口时不会使用该额外宽带，避免 Dino 的邻近表面或 Temple 的细柱被不必要地融合。
+报告保存样本数、P90、增加量、环拍缺口策略是否生效及实际带宽；显式
+`tsdfUncertaintyAdaptiveTruncation=false` 或 `tsdfOrbitalGapAdaptiveTruncation=false` 可分别关闭
+基础不确定度适配或缺口附加适配。跨视修补像素的局部 TSDF 锚定恢复仍保留为实验开关，但同输入
+A/B 对开放边帮助不足，因此不进入环拍默认值。环拍高细节路径还会按输入深度图
+短边自动限制可靠体素分辨率，并按分辨率平方同步缩放目标
 面数；640×480 深度图的 GUI 384/24 万面请求实际配置为 192/6 万面，避免用超过输入采样能力的体素
 和面片拟合像素噪声。可通过 `tsdfOrbitalAdaptiveResolution=false` 显式关闭该策略。普通插值仅填边界
 不超过 48 条边且物理直径不超过 10 体素的小闭环，并在 JSON 中记录
@@ -704,10 +758,12 @@ MC33 提取后默认执行“受支持符号变化”过滤：每个保留面所
 像素数分别写入 `effective_*boundary_recovery*` 与 `boundary_recovered_depth_valid_pixel_count`。
 顶点色经过网格 z-buffer、深度、
 视角及颜色离群检查；OBJ 纹理使用原始相机影像的逐面投影 UV 图集，不再把顶点色作全局平面烘焙。
-逐面相机选择检查三顶点、三边中点和质心的支持掩膜，严格路径同时检查深度一致性；无可靠视图的面
-使用安全回退颜色，不能采样照片黑背景。`camera_projected_atlas_v3` 还会统计共享顶点邻域的相机票数，
-在候选视图仍通过七点掩膜/深度检查且评分不低于原视图 65% 时，抑制孤立面的相机跳变；报告记录
-`texture_coherence_adjusted_face_count`，便于区分纹理接缝修复与几何变化。
+`camera_projected_atlas_v4` 对三顶点、三边中点和质心执行支持掩膜与深度一致性检查，每个面只保留
+前四个候选视角，再以 ICM 相邻面能量和小孤岛合并生成连续主视角标签。相同标签的连通面构成裁剪
+chart，经确定性 MaxRects 打包后逐纹素反投影；Natural、加权平均和最佳视角模式分别执行真实的
+多视图采样，Natural 可按中值颜色剔除鬼影。无可靠视图的面使用安全回退颜色，不能采样照片黑背景。
+输出报告包含严格/宽松映射面、chart/视角数、各类拒绝原因、图集占用率、中位纹素密度、接缝色差
+和峰值内存估算；`camera_projected_atlas_v3` 仅作为配置级兼容回退保留。
 GUI 的生成模型入口默认请求 OBJ，同时始终保留 `model_from_mesh.ply` 作为几何/兼容回退；项目记录保存
 `model_obj`、`model_mtl`、`texture_image`/`texture_png` 和最终显示路径。工作区选择模型时优先异步加载
 OBJ，在后台解析 MTL 与纹理图，并在 Vulkan 网格管线中按 `faceTextureIndices` 展开每个面角的 UV；
@@ -726,7 +782,8 @@ OBJ，在后台解析 MTL 与纹理图，并在 Vulkan 网格管线中按 `faceT
 `cross_view_repair_diagnostics` 记录逐原因拒绝、轮廓保护和最终后处理插值统计。
 
 处理基线由 `ProcessingBaselineManager` 统一管理。基线 JSON 保存相机版本、参与融合的深度帧和
-影响几何的处理参数快照，并以 SHA-256 指纹阻止输入漂移后的结果混入同一组 A/B。参考网格与候选
+影响几何的处理参数快照，并可分别冻结相机、深度、融合和网格阶段的 SHA-256 指纹，阻止输入漂移
+后的结果混入同一组 A/B，同时在比较报告中直接列出发生漂移的阶段。参考网格与候选
 网格统一统计面数、开放边、连通分量、瘦长面、归一化表面积，以及流形相邻三角面的法线夹角
 中位数、P90 和超过 30 度的比例。面数降低但法线折叠、表面积膨胀或开放边恶化时仍判定失败，
 不能再以“达到目标面数”替代平滑度和拓扑验收。
@@ -761,8 +818,12 @@ cli/
 各领域目录维护自己的 `CMakeLists.txt` 和直接依赖；顶层不再集中罗列所有工具依赖。
 `plascan_cli_support` 由所有入口共享路径、token、UTF-8 控制台、JSON 和输出目录策略；
 `plascan_cli_photogrammetry_common` 再提供摄影测量清单、相机 JSON 和蒙版索引能力。
-`workflows/` 对齐 GUI 的空中三角测量、三维重建、生成模型和 DEM/正射完整流水线；菜单中的项目
-输入操作通过 CLI 的输入清单与项目参数表达，不复制项目导入 UI。一键重建的深度融合、密集点云
+工程型入口通过 `plascan_common_project` 的 `ProjectSession` 创建或打开根索引指定的默认
+Chunk，统一处理项目 URI、共享影像、产物目录、相机与结果写回；也可通过 `--chunk-id`
+或 `--chunk-name` 显式选择 Chunk。旧工程不会由 CLI 隐式迁移。
+`workflows/` 提供空中三角测量、三维重建 CLI、生成模型和 DEM/正射完整流水线；GUI 不再提供旧版
+“三维重建”一键对话框，改由空三、密集处理和生成模型入口分阶段执行。菜单中的项目输入操作通过
+CLI 的输入清单与项目参数表达，不复制项目导入 UI。一键重建的深度融合、密集点云
 细化与点云产物写出由 `core/mvs` 服务实现，入口不保留算法副本。
 CLI 测试同样由各领域目录注册并放在对应 `tests/` 下，顶层 `tests/` 不再维护 CLI 聚合测试目标。
 
@@ -773,7 +834,7 @@ CLI 测试同样由各领域目录注册并放在对应 `tests/` 下，顶层 `t
 - 退出码: 0=成功, 1=参数错误, 2=I/O 错误, 3=算法错误
 - 进度/错误信息 → stderr，结果信息 → stdout
 - `three_d_reconstruction_cli` 支持 `--stop-after-sfm`、`--skip-mvs`、`--skip-mesh` 分阶段运行，用于大数据 benchmark 和问题定位。
-- `scripts/run_photogrammetry_benchmarks.py` 扫描 `prepared/plascan/image_camera.lis`，批量调用三维重建 CLI 并汇总 JSON。
+- `scripts/bench/run_photogrammetry_benchmarks.py` 扫描 `prepared/plascan/image_camera.lis`，批量调用三维重建 CLI 并汇总 JSON。
 
 **标准摄影测量流程与 CLI 覆盖**:
 
@@ -812,8 +873,8 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
 | `mvs/` 和 `dense_match/` 有重复逻辑 | `SubpixelRefiner` 两个版本 | 统一到 `dense_match/` |
 | 空三真实数据回归仍需扩大 | `core/aerial_triangulation` | 持续加入环拍、航带、弱纹理和控制点数据集 |
 | 构建依赖 4 个系统符号链接 | `/lib64/libm.so.6`, `libnvrtc-builtins.so.13.0` 等 | 见 `CONTEXT.md` 系统依赖 |
-| ALIKED 导出脚本依赖 lightglue pip 包 | `scripts/export_disk_aliked.py` | 已内联 pure-PyTorch DCN |
-| `export_models.py` DISK/ALIKED 部分废弃 | `scripts/export_models.py` | 移除或更新接口 |
+| ALIKED 导出脚本依赖 lightglue pip 包 | `scripts/models/export_disk_aliked.py` | 已内联 pure-PyTorch DCN |
+| LoFTR/RoMa 导出依赖额外 Python 包 | `scripts/models/export_models.py` | 仅用于维护 TorchScript 资源；DISK/ALIKED 已由独立导出脚本维护 |
 
 ## 六、构建系统
 

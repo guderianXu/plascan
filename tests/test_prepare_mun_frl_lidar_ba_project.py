@@ -92,9 +92,11 @@ class PrepareMunFrlLidarBaProjectTest(unittest.TestCase):
             self.assertEqual(result.image_count, 2)
             self.assertEqual(result.match_count, 1)
 
-            with zipfile.ZipFile(result.project_path) as archive:
-                project_files = json.loads(archive.read("project_files.json").decode("utf-8"))
-                project_results = json.loads(archive.read("project_results.json").decode("utf-8"))
+            chunk_path = result.project_path.with_suffix(".files") / "1" / "chunk.zip"
+            with zipfile.ZipFile(chunk_path) as archive:
+                document = json.loads(archive.read("doc.json").decode("utf-8"))
+                project_files = document["project_files"]
+                project_results = document["project_results"]
 
             self.assertEqual(len(project_files["images"]), 2)
             first_camera = project_files["images"][0]["camera"]
@@ -197,9 +199,11 @@ class PrepareMunFrlLidarBaProjectTest(unittest.TestCase):
                 body_frame="imu_link",
             )
 
-            with zipfile.ZipFile(result.project_path) as archive:
-                project_files = json.loads(archive.read("project_files.json").decode("utf-8"))
-                project_results = json.loads(archive.read("project_results.json").decode("utf-8"))
+            chunk_path = result.project_path.with_suffix(".files") / "1" / "chunk.zip"
+            with zipfile.ZipFile(chunk_path) as archive:
+                document = json.loads(archive.read("doc.json").decode("utf-8"))
+                project_files = document["project_files"]
+                project_results = document["project_results"]
 
             first_camera = project_files["images"][0]["camera"]
             second_camera = project_files["images"][1]["camera"]

@@ -27,6 +27,7 @@ struct CrossViewHoleRepairOptions
     float maximumGrowthNormalAngleDegrees = 15.0f;
     float maximumGrowthImageGradient = 80.0f;
     int maximumGrowthComponentArea = 64;
+    bool includeValidNativeInterpolationAnchors = false;
     DepthAnchoredHoleInterpolationOptions anchoredInterpolation;
 };
 

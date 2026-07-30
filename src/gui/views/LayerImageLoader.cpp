@@ -2,6 +2,7 @@
 
 #include "Logger.h"
 #include "io/PathIO.h"
+#include "project/ProjectIO.h"
 
 #include <opencv2/opencv.hpp>
 
@@ -475,8 +476,9 @@ QImage loadImageForDisplay(const QString &path, const QString &plascanPath)
     if (img.isNull() || needConvert)
     {
         const QString projectRoot = plascanPath.trimmed().isEmpty()
-                                        ? QString()
-                                        : QFileInfo(plascanPath).absolutePath();
+            ? QString()
+            : xjw::common::project::ProjectIO::projectRootFromPlascan(
+                  plascanPath);
         const QString out8 = make8BitCachePath(path, projectRoot);
         const bool fresh = isCacheFresh(path, out8);
 

@@ -6,9 +6,9 @@
 #include <QString>
 
 #include <atomic>
+#include <functional>
 #include <memory>
 
-class QWidget;
 class ProjectData;
 class ProjectManager;
 
@@ -19,8 +19,10 @@ class ProjectDenseReconstructionManager : public QObject
 public:
     explicit ProjectDenseReconstructionManager(ProjectManager *owner,
                                                ProjectData *projectData,
-                                               QWidget *parentWidget,
                                                QObject *parent = nullptr);
+
+    // 由上层控制器提供 UI 决策；执行器本身不依赖 QWidget 或 QMessageBox。
+    void setExistingDepthActionRequester(std::function<int(int, int, const QString &)> requester);
 
     bool startEstimateDepthMapsAsync(const QJsonObject &settings);
     bool startFuseDepthMapsAsync(const QJsonObject &settings);
@@ -34,16 +36,19 @@ signals:
     void mvsProgressFinished(bool success);
     void depthMapBatchReady(const QString &outputDirectory, int frameCount);
     void denseCloudResultReady(const QString &denseCloudPath, int pointCount);
+    void userMessageRequested(bool informational, const QString &title, const QString &message);
 
 private:
     bool ensureProjectOpen(const QString &message,
-                           const QString &title) const;
+                           const QString &title);
+    void showWarning(const QString &title, const QString &message);
+    void showInformation(const QString &title, const QString &message);
     std::shared_ptr<std::atomic_bool> createActiveMvsCancelFlag();
     void clearActiveMvsCancelFlag(const std::shared_ptr<std::atomic_bool> &cancelFlag);
 
     ProjectManager *_owner = nullptr;
     ProjectData *_projectData = nullptr;
-    QWidget *_parentWidget = nullptr;
+    std::function<int(int, int, const QString &)> _existingDepthActionRequester;
     QPointer<QObject> _activeMvsGenerator;
     std::shared_ptr<std::atomic_bool> _activeMvsCancelFlag;
     bool _mvsTransitionPending = false;

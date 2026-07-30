@@ -126,47 +126,8 @@
     <addaction name="actionAddFolder"/>
     <addaction name="separator"/>
     <addaction name="actionWorkflowAerialTriangulation"/>
-    <addaction name="actionThreeDReconstruction"/>
     <addaction name="actionCreateDEM"/>
     <addaction name="actionGenerateOrtho"/>
-   </widget>
-   <widget class="QMenu" name="menuReconstruction">
-    <property name="title">
-     <string>重建</string>
-    </property>
-    <widget class="QMenu" name="menuSparseReconstruction">
-     <property name="title">
-      <string>稀疏重建</string>
-     </property>
-     <widget class="QMenu" name="menuSparseAdvancedTools">
-      <property name="title">
-       <string>高级工具</string>
-      </property>
-      <addaction name="actionViewMatches"/>
-      <addaction name="actionBuildObsNetwork"/>
-      <addaction name="actionInitCameraPose"/>
-      <addaction name="actionTriangulate"/>
-      <addaction name="actionReconBundleAdjust"/>
-     </widget>
-     <addaction name="actionDetectFeatures"/>
-     <addaction name="actionVocabularyOverlap"/>
-     <addaction name="actionMatchFeatures"/>
-     <addaction name="actionAerialTriangulation"/>
-     <addaction name="actionSparseCloudPostProcess"/>
-     <addaction name="separator"/>
-     <addaction name="menuSparseAdvancedTools"/>
-    </widget>
-    <widget class="QMenu" name="menuDenseReconstruction">
-     <property name="title">
-      <string>密集重建</string>
-     </property>
-     <addaction name="actionDenseMatch"/>
-     <addaction name="actionDepthMapEstimate"/>
-     <addaction name="actionFuseDepthMaps"/>
-     <addaction name="actionRefineDenseCloud"/>
-    </widget>
-    <addaction name="menuSparseReconstruction"/>
-    <addaction name="menuDenseReconstruction"/>
    </widget>
    <widget class="QMenu" name="menuTools">
     <property name="title">
@@ -195,7 +156,6 @@
    <addaction name="menuProject"/>
    <addaction name="menuView"/>
    <addaction name="menuWorkflow"/>
-   <addaction name="menuReconstruction"/>
    <addaction name="menuTools"/>
    <addaction name="menuHelp"/>
   </widget>
@@ -369,14 +329,6 @@
     <string>从文件夹批量导入影像</string>
    </property>
   </action>
-  <action name="actionThreeDReconstruction">
-   <property name="text">
-    <string>三维重建</string>
-   </property>
-   <property name="toolTip">
-    <string>执行从特征、匹配、空三到模型生成的一键重建流程</string>
-   </property>
-  </action>
   <action name="actionWorkflowAerialTriangulation">
    <property name="text">
     <string>空中三角测量...</string>
@@ -401,71 +353,6 @@
     <string>基于 DEM 和影像生成正射影像产品</string>
    </property>
   </action>
-  <action name="actionDetectFeatures">
-   <property name="text">
-    <string>特征点提取</string>
-   </property>
-  </action>
-  <action name="actionVocabularyOverlap">
-   <property name="text">
-    <string>重叠对规划...</string>
-   </property>
-  </action>
-  <action name="actionMatchFeatures">
-   <property name="text">
-    <string>连接点匹配</string>
-   </property>
-  </action>
-  <action name="actionAerialTriangulation">
-   <property name="text">
-    <string>空中三角测量...</string>
-   </property>
-  </action>
-  <action name="actionBuildObsNetwork">
-   <property name="text">
-    <string>构建观测网络...</string>
-   </property>
-  </action>
-  <action name="actionInitCameraPose">
-   <property name="text">
-    <string>初始化相机位姿...</string>
-   </property>
-  </action>
-  <action name="actionTriangulate">
-   <property name="text">
-    <string>生成两视预览云...</string>
-   </property>
-  </action>
-  <action name="actionReconBundleAdjust">
-   <property name="text">
-    <string>单独光束法平差...</string>
-   </property>
-  </action>
-  <action name="actionSparseCloudPostProcess">
-   <property name="text">
-    <string>稀疏点云后处理...</string>
-   </property>
-  </action>
-  <action name="actionDenseMatch">
-   <property name="text">
-    <string>密集匹配...</string>
-   </property>
-  </action>
-  <action name="actionDepthMapEstimate">
-   <property name="text">
-    <string>深度图估计...</string>
-   </property>
-  </action>
-  <action name="actionFuseDepthMaps">
-   <property name="text">
-    <string>深度图融合生成密集点云...</string>
-   </property>
-  </action>
-  <action name="actionRefineDenseCloud">
-   <property name="text">
-    <string>密集点云后处理...</string>
-   </property>
-  </action>
   <action name="actionOverlapAnalysis">
    <property name="text">
     <string>重叠度获取</string>
@@ -487,11 +374,6 @@
    </property>
    <property name="toolTip">
     <string>打开点云交互剔除工具</string>
-   </property>
-  </action>
-  <action name="actionViewMatches">
-   <property name="text">
-    <string>查看匹配</string>
    </property>
   </action>
   <action name="actionViewWorkflowReport">

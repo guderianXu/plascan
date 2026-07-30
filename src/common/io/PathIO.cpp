@@ -1,18 +1,11 @@
 #include "io/PathIO.h"
 
-#include <gdal_priv.h>
-#include <opencv2/imgcodecs.hpp>
-
 #include <QByteArray>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QIODevice>
 #include <QSaveFile>
-
-#include <cstring>
-#include <memory>
-#include <mutex>
 
 namespace xjw::common::io
 {
@@ -50,167 +43,6 @@ bool ensureParentDirectory(const QString &path, QString *errorMessage)
 
     setError(errorMessage, QStringLiteral("无法创建父目录: %1").arg(parentPath));
     return false;
-}
-
-struct GdalDatasetDeleter
-{
-    void operator()(GDALDataset *dataset) const
-    {
-        if (dataset)
-        {
-            GDALClose(dataset);
-        }
-    }
-};
-
-using GdalDatasetPtr = std::unique_ptr<GDALDataset, GdalDatasetDeleter>;
-
-void registerGdalOnce()
-{
-    static std::once_flag gdalRegisterFlag;
-    std::call_once(gdalRegisterFlag, []()
-    {
-        GDALAllRegister();
-    });
-}
-
-int cvDepthForGdalType(GDALDataType type)
-{
-    switch (type)
-    {
-    case GDT_Byte:
-        return CV_8U;
-    case GDT_UInt16:
-        return CV_16U;
-    case GDT_Int16:
-        return CV_16S;
-    case GDT_Int32:
-        return CV_32S;
-    case GDT_UInt32:
-    case GDT_Float32:
-        return CV_32F;
-    case GDT_Float64:
-        return CV_64F;
-    default:
-        return -1;
-    }
-}
-
-GDALDataType gdalTypeForCvDepth(int depth)
-{
-    switch (depth)
-    {
-    case CV_8U:
-        return GDT_Byte;
-    case CV_16U:
-        return GDT_UInt16;
-    case CV_16S:
-        return GDT_Int16;
-    case CV_32S:
-        return GDT_Int32;
-    case CV_32F:
-        return GDT_Float32;
-    case CV_64F:
-        return GDT_Float64;
-    default:
-        return GDT_Unknown;
-    }
-}
-
-bool preservesSourceDepth(int flags)
-{
-    return flags == cv::IMREAD_UNCHANGED || (flags & cv::IMREAD_ANYDEPTH) != 0;
-}
-
-bool requestsGrayImage(int flags)
-{
-    return flags == cv::IMREAD_GRAYSCALE || flags == (cv::IMREAD_GRAYSCALE | cv::IMREAD_ANYDEPTH);
-}
-
-cv::Mat readGdalBand(GDALRasterBand *band, int rows, int cols, int cvDepth, GDALDataType gdalType)
-{
-    if (!band || rows <= 0 || cols <= 0 || gdalType == GDT_Unknown)
-    {
-        return {};
-    }
-
-    cv::Mat output(rows, cols, CV_MAKETYPE(cvDepth, 1));
-    const CPLErr err = band->RasterIO(GF_Read,
-                                      0,
-                                      0,
-                                      cols,
-                                      rows,
-                                      output.data,
-                                      cols,
-                                      rows,
-                                      gdalType,
-                                      0,
-                                      0);
-    if (err != CE_None)
-    {
-        return {};
-    }
-    return output;
-}
-
-cv::Mat readImageWithGdal(const QString &path, int flags)
-{
-    registerGdalOnce();
-
-    GdalDatasetPtr dataset(static_cast<GDALDataset *>(GDALOpen(toUtf8Path(path).c_str(), GA_ReadOnly)));
-    if (!dataset)
-    {
-        return {};
-    }
-
-    const int rows = dataset->GetRasterYSize();
-    const int cols = dataset->GetRasterXSize();
-    const int bandCount = dataset->GetRasterCount();
-    if (rows <= 0 || cols <= 0 || bandCount <= 0)
-    {
-        return {};
-    }
-
-    GDALRasterBand *firstBand = dataset->GetRasterBand(1);
-    if (!firstBand)
-    {
-        return {};
-    }
-
-    const bool preserveDepth = preservesSourceDepth(flags);
-    const int cvDepth = preserveDepth ? cvDepthForGdalType(firstBand->GetRasterDataType()) : CV_8U;
-    const GDALDataType gdalType = gdalTypeForCvDepth(cvDepth);
-    if (cvDepth < 0 || gdalType == GDT_Unknown)
-    {
-        return {};
-    }
-
-    if (requestsGrayImage(flags) || bandCount < 3)
-    {
-        return readGdalBand(firstBand, rows, cols, cvDepth, gdalType);
-    }
-
-    const bool includeAlpha = flags == cv::IMREAD_UNCHANGED && bandCount >= 4;
-    const int outputChannels = includeAlpha ? 4 : 3;
-    const int bgrBandOrder[4] = {3, 2, 1, 4};
-
-    std::vector<cv::Mat> channels;
-    channels.reserve(static_cast<size_t>(outputChannels));
-    for (int i = 0; i < outputChannels; ++i)
-    {
-        const int bandIndex = bgrBandOrder[i];
-        GDALRasterBand *band = dataset->GetRasterBand(bandIndex);
-        cv::Mat channel = readGdalBand(band, rows, cols, cvDepth, gdalType);
-        if (channel.empty())
-        {
-            return {};
-        }
-        channels.push_back(channel);
-    }
-
-    cv::Mat output;
-    cv::merge(channels, output);
-    return output;
 }
 
 } // namespace
@@ -370,69 +202,6 @@ bool writeFileBytesAtomic(const std::string &path, const QByteArray &bytes, QStr
 bool writeFileBytesAtomic(const std::filesystem::path &path, const QByteArray &bytes, QString *errorMessage)
 {
     return writeFileBytesAtomic(fromFilesystemPath(path), bytes, errorMessage);
-}
-
-cv::Mat readImage(const QString &path, int flags)
-{
-    const QByteArray bytes = readFileBytes(path);
-    if (bytes.isEmpty())
-    {
-        return {};
-    }
-
-    std::vector<uchar> encoded(static_cast<size_t>(bytes.size()));
-    std::memcpy(encoded.data(), bytes.constData(), static_cast<size_t>(bytes.size()));
-    const cv::Mat decoded = cv::imdecode(encoded, flags);
-    if (!decoded.empty())
-    {
-        return decoded;
-    }
-
-    return readImageWithGdal(path, flags);
-}
-
-cv::Mat readImage(const std::string &path, int flags)
-{
-    return readImage(fromUtf8Path(path), flags);
-}
-
-cv::Mat readImage(const std::filesystem::path &path, int flags)
-{
-    return readImage(fromFilesystemPath(path), flags);
-}
-
-bool writeImage(const QString &path, const cv::Mat &image, const std::vector<int> &params)
-{
-    if (image.empty())
-    {
-        return false;
-    }
-
-    const QString suffix = QFileInfo(path).suffix().trimmed();
-    if (suffix.isEmpty())
-    {
-        return false;
-    }
-
-    const QByteArray extension = QStringLiteral(".%1").arg(suffix).toLatin1();
-    std::vector<uchar> encoded;
-    if (!cv::imencode(extension.constData(), image, encoded, params))
-    {
-        return false;
-    }
-
-    const QByteArray bytes(reinterpret_cast<const char *>(encoded.data()), static_cast<qsizetype>(encoded.size()));
-    return writeFileBytesAtomic(path, bytes);
-}
-
-bool writeImage(const std::string &path, const cv::Mat &image, const std::vector<int> &params)
-{
-    return writeImage(fromUtf8Path(path), image, params);
-}
-
-bool writeImage(const std::filesystem::path &path, const cv::Mat &image, const std::vector<int> &params)
-{
-    return writeImage(fromFilesystemPath(path), image, params);
 }
 
 } // namespace xjw::common::io

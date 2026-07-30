@@ -405,12 +405,25 @@ MvsSourcePlan planMvsSourceViewsVerifiedFirst(
     remaining.reserve(candidates.size());
     for (const MvsSourceCandidate &candidate : candidates)
     {
-        if (selectedViews.find(candidate.viewIndex) == selectedViews.end()
-            && candidate.verificationStatus !=
+        if (selectedViews.find(candidate.viewIndex) != selectedViews.end() ||
+            candidate.verificationStatus ==
                 MvsSourceVerificationStatus::Failed)
         {
-            remaining.push_back(candidate);
+            continue;
         }
+        if (candidate.verificationStatus ==
+                MvsSourceVerificationStatus::MissingStatistics &&
+            candidate.pairTotalMatches <
+                std::max(
+                    1,
+                    options.minMissingStatisticsPairMatches))
+        {
+            result.rejected.push_back(
+                {makeEntry(candidate, options),
+                 MvsSourceRejectReason::LowQuality});
+            continue;
+        }
+        remaining.push_back(candidate);
     }
 
     MvsSourcePlannerOptions backfillOptions = options;

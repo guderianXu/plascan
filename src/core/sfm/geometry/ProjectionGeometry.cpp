@@ -18,9 +18,7 @@ ProjectionResult projectForReprojection(const Camera &camera,
     }
     else if (camera.projectWorldPointSigned(world, pixel))
     {
-        double cameraPoint[3] = {0.0, 0.0, 0.0};
-        camera.worldToCamera(world, cameraPoint);
-        result.positiveDepth = camera.depthAxisFlipped() ? -cameraPoint[2] : cameraPoint[2];
+        result.positiveDepth = camera.positiveDepth(world);
         result.success = true;
         result.usedSignedFallback = true;
     }

@@ -3,6 +3,7 @@
 #include "CliTokenUtils.h"
 
 #include "MatchPhotosTask.h"
+#include "project/ProjectSession.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -295,6 +296,8 @@ int main(int argc, char *argv[])
     std::string inputPath;
     std::string outputDirArg;
     std::string projectPathArg;
+    std::string chunkIdArg;
+    std::string chunkNameArg;
     std::string qualityArg = "high";
     std::string deviceArg = "auto";
     std::string featureAlgorithmArg = "sift";
@@ -322,6 +325,8 @@ int main(int argc, char *argv[])
     app.add_option("-i,--input", inputPath, "影像列表；每行支持 '<image>' 或 '<image> <camera.tsai>'")->required();
     app.add_option("-o,--output-dir", outputDirArg, "输出目录")->required();
     app.add_option("--project", projectPathArg, "无头项目路径，默认写到输出目录 headless.plascan");
+    app.add_option("--chunk-id", chunkIdArg, "使用指定 UUID 的 Chunk");
+    app.add_option("--chunk-name", chunkNameArg, "使用指定名称的 Chunk");
     app.add_option("--quality", qualityArg, "精度预设: auto, fast, high, highest, difficult, cpu, cuda");
     app.add_option("--device", deviceArg, "计算设备: auto, cpu, cuda");
     app.add_option("--feature-algorithm", featureAlgorithmArg, "特征算法，当前连接点流程应使用 sift");
@@ -388,6 +393,42 @@ int main(int argc, char *argv[])
         return cli::EXIT_ARG_ERR;
     }
 
+    xjw::common::project::ProjectSession projectSession;
+    if (!projectSession.openOrCreate(
+            projectPath,
+            QFileInfo(projectPath).completeBaseName(),
+            &errorMessage))
+    {
+        std::fprintf(stderr,
+                     "工程打开/创建失败: %s\n",
+                     qUtf8Printable(errorMessage));
+        return cli::EXIT_IO_ERR;
+    }
+    if (!chunkIdArg.empty() && !chunkNameArg.empty())
+    {
+        std::fprintf(stderr, "错误: --chunk-id 与 --chunk-name 不能同时使用\n");
+        return cli::EXIT_ARG_ERR;
+    }
+    if (!projectSession.selectChunk(
+            xjw::cli::fromStdString(chunkIdArg),
+            xjw::cli::fromStdString(chunkNameArg),
+            &errorMessage))
+    {
+        std::fprintf(stderr,
+                     "Chunk 选择失败: %s\n",
+                     qUtf8Printable(errorMessage));
+        return cli::EXIT_IO_ERR;
+    }
+    if (!projectSession.mergeImages(
+            xjw::cli::inputItemsToJson(items), &errorMessage)
+        || !projectSession.save(&errorMessage))
+    {
+        std::fprintf(stderr,
+                     "工程影像初始化失败: %s\n",
+                     qUtf8Printable(errorMessage));
+        return cli::EXIT_IO_ERR;
+    }
+
     MatchPhotosOptions options;
     options.profile = profileFromToken(xjw::cli::fromStdString(qualityArg));
     options.device = deviceFromToken(xjw::cli::fromStdString(deviceArg));
@@ -416,7 +457,8 @@ int main(int argc, char *argv[])
     options.reuseExistingFeatures = !noReuseFeatures;
     options.planOnly = planOnly;
 
-    const QString assetDir = QDir(outputDir).filePath(QStringLiteral("assets"));
+    const QString assetDir = QDir(projectSession.activeChunkRoot())
+        .filePath(QStringLiteral("assets"));
     xjw::matchphotos::MatchPhotosContext context;
     context.projectPath = projectPath;
     context.workingDirectory = assetDir;
@@ -447,7 +489,9 @@ int main(int argc, char *argv[])
     xjw::matchphotos::MatchPhotosTask task(options);
     const MatchPhotosResult result = task.run(context);
 
-    const QString reportPath = QDir(outputDir).filePath(QStringLiteral("match_photos_report.json"));
+    const QString reportPath =
+        QDir(projectSession.activeChunkRoot()).filePath(
+            QStringLiteral("reports/match_photos_report.json"));
     const QJsonObject report = makeReport(result,
                                           options,
                                           outputDir,
@@ -461,11 +505,68 @@ int main(int argc, char *argv[])
         return cli::EXIT_IO_ERR;
     }
 
+    for (const xjw::matchphotos::MatchPhotosFeatureRecord &feature :
+         result.features)
+    {
+        QJsonObject record{
+            {QStringLiteral("input"), feature.imagePath},
+            {QStringLiteral("output"), feature.featurePath},
+            {QStringLiteral("keypoint_count"), feature.keypointCount},
+            {QStringLiteral("settings"), feature.settings},
+            {QStringLiteral("created_at"),
+             QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}
+        };
+        projectSession.upsertResultByPath(
+            QStringLiteral("ipfind_results"),
+            QStringLiteral("output"),
+            record);
+    }
+    for (const xjw::matchphotos::MatchPhotosMatchRecord &match :
+         result.matches)
+    {
+        QJsonObject record{
+            {QStringLiteral("image0"), match.image0Path},
+            {QStringLiteral("image1"), match.image1Path},
+            {QStringLiteral("output"), match.matchPath},
+            {QStringLiteral("sidecar_path"), match.sidecarPath},
+            {QStringLiteral("match_count"), match.matchCount},
+            {QStringLiteral("geometric_inlier_count"),
+             match.geometricInlierCount},
+            {QStringLiteral("passed_geometry"), match.passedGeometry},
+            {QStringLiteral("settings"), match.settings},
+            {QStringLiteral("created_at"),
+             QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}
+        };
+        projectSession.upsertResultByPath(
+            QStringLiteral("ipmatch_results"),
+            QStringLiteral("output"),
+            record);
+    }
+    QJsonObject reportRecord = report;
+    reportRecord[QStringLiteral("kind")] =
+        QStringLiteral("match_photos_cli");
+    reportRecord[QStringLiteral("path")] = reportPath;
+    projectSession.upsertResultByPath(
+        QStringLiteral("report_results"),
+        QStringLiteral("path"),
+        reportRecord);
+    if (!projectSession.save(&errorMessage))
+    {
+        std::fprintf(stderr,
+                     "连接点结果已生成，但 Chunk 写回失败: %s\n",
+                     qUtf8Printable(errorMessage));
+        return cli::EXIT_IO_ERR;
+    }
+
     std::fprintf(stdout, "status=%s\n", result.success ? "ok" : "failed");
     std::fprintf(stdout, "images=%d\n", static_cast<int>(context.pairInput.images.size()));
     std::fprintf(stdout, "matches=%d\n", static_cast<int>(result.matches.size()));
     std::fprintf(stdout, "tracks=%d\n", result.trackCount);
     std::fprintf(stdout, "match_photos_report.json=%s\n", qUtf8Printable(reportPath));
+    std::fprintf(stdout,
+                 "project=%s\nchunk=%d\n",
+                 qUtf8Printable(projectSession.projectPath()),
+                 projectSession.activeChunk().directory);
     if (!result.tiePointPath.isEmpty())
     {
         std::fprintf(stdout, "tie_points=%s\n", qUtf8Printable(result.tiePointPath));

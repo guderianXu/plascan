@@ -6,7 +6,8 @@
  * 所有字段名称需与前端 JSON 读取代码保持一致。
  */
 #include "ProjectUiConfigManager.h"
-#include "JsonMergeUtil.h"
+
+#include "json/JsonObjectMerge.h"
 
 /**
  * @brief 生成 "ui" 段所有字段的默认值配置对象。
@@ -94,5 +95,5 @@ QJsonObject ProjectUiConfigManager::defaultUiSettings()
  */
 void ProjectUiConfigManager::applyPatch(const QJsonObject &partial)
 {
-    _ui = JsonMergeUtil::deepMerge(_ui, partial);
+    _ui = xjw::common::json::deepMergeObjects(_ui, partial);
 }

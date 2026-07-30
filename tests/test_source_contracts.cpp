@@ -345,20 +345,6 @@ void expectNotMatches(const QString &text, const char *pattern)
 
 } // namespace
 
-TEST(FeatureExtractionRunnerContractTest, ReadsImagesThroughCommonUnicodePathIo)
-{
-    const QString source = readSourceFile(QStringLiteral("src/gui/tasks/FeatureExtractionRunner.cpp"));
-
-    expectContainsAll(source, {
-        R"(#include "io/PathIO.h")",
-        "xjw::common::io::readImage(imagePath",
-    });
-    expectNotContainsAll(source, {
-        "readImageWithQtPath",
-        "cv::imread(imagePath.toStdString()",
-    });
-}
-
 TEST(CommonPathIoContractTest, FallsBackToGdalWhenOpenCvCannotDecodeImage)
 {
     const QString source = readSourceFile(QStringLiteral("src/common/io/PathIO.cpp"));
@@ -598,7 +584,7 @@ TEST(PythonRuntimeSourceContractTest, RuntimeLaunchersPreferRepoLocalVenv)
 
 TEST(SfmSourceContractTest, LightGlueSiftCarriesScaleAndOrientation)
 {
-    const QString exportScript = readSourceFile(QStringLiteral("scripts/export_lightglue_torchscript.py"));
+    const QString exportScript = readSourceFile(QStringLiteral("scripts/models/export_lightglue_torchscript.py"));
     const QString matcher = readSourceFile(QStringLiteral("src/core/feature_match/lightglue/LightGlueMatcher.cpp"));
 
     expectContainsAll(exportScript, {
@@ -669,7 +655,7 @@ TEST(GuiAlgorithmAlignmentContractTest, SequenceReferencePreselectionOwnsPairPla
 
     const QString unifiedRun = sectionBetween(guiSource,
                                               "void MenuWorkflowController::runUnifiedAerialTriangulation",
-                                              "void MenuWorkflowController::startThreeDReconstructionWorkflow");
+                                              "void MenuWorkflowController::openOverlapAnalysisDialog");
     expectContainsAll(unifiedRun, {
         "shouldUseStoredGeneratedPairConstraints(settings)",
         "loadGeneratedPairConstraints",
@@ -716,7 +702,7 @@ TEST(GuiAlgorithmAlignmentContractTest, AerialTriangulationGuiUsesSingleUnifiedW
 
     const QString run = sectionBetween(source,
                                        "void MenuWorkflowController::startAerialTriangulationWorkflow",
-                                       "void MenuWorkflowController::startThreeDReconstructionWorkflow");
+                                       "void MenuWorkflowController::openOverlapAnalysisDialog");
     expectContainsAll(run, {
         "workflowOptions.assetsDir",
         "workflowOptions.featureDir",
@@ -754,144 +740,6 @@ TEST(CudaSiftContractTest, TiePointThresholdCanReachDenseLowTextureRange)
     EXPECT_FALSE(source.contains(QStringLiteral("0.5f, 20.0f")));
 }
 
-TEST(GuiAlgorithmAlignmentContractTest, DenseWorkflowAndBundleAdjustSettingsReachCore)
-{
-    const QString terrainManager = readSourceFile(QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
-    const QString featureRunner = readSourceFile(QStringLiteral("src/gui/tasks/FeatureExtractionRunner.cpp"));
-    const QString projectManager = readSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
-    const QString denseRunner = readSourceFile(QStringLiteral("src/gui/tasks/DenseMatchRunner.cpp"));
-    const QString denseService = readSourceFile(QStringLiteral("src/core/dense_match/DenseMatchService.cpp"));
-    const QString cli = readSourceFile(QStringLiteral("src/cli/reconstruction/cli_bundle_adjust.cpp"));
-
-    expectContainsAll(terrainManager, {
-        "MatchPhotosTask",
-        R"(options.featureAlgorithm = QStringLiteral("sift"))",
-        R"(options.matcherAlgorithm = QStringLiteral("lightglue"))",
-        "options.device = xjw::matchphotos::ComputeDevice::Auto",
-        "options.planOnly = false",
-    });
-    expectNotContainsAll(terrainManager, {
-        "canonicalFeatureAlgorithmFromMatcher",
-        "canonicalMatchAlgorithmFromMatcher",
-        "FeatureMatchRunner",
-    });
-    expectContainsAll(featureRunner, {
-        "maxKeypointsFromConfig",
-        "deviceString.toLower()",
-    });
-
-    expectContainsAll(projectManager, {
-        R"(extraSettings.value(QStringLiteral("max_point_iterations")).toInt(12))",
-        R"(extraSettings.value(QStringLiteral("max_camera_iterations")).toInt(10))",
-        R"(extraSettings.value(QStringLiteral("finite_diff_eps")).toDouble(1e-6))",
-        R"(extraSettings.value(QStringLiteral("damping")).toDouble(1e-3))",
-        R"(extraSettings.value(QStringLiteral("step_tolerance")).toDouble(1e-8))",
-        R"(extraSettings.value(QStringLiteral("filter_max_reproj_error")).toDouble(2.5))",
-    });
-    expectContainsAll(cli, {
-        "int maxPointIterations = 12;",
-        "int maxCameraIterations = 10;",
-        "double stepTolerance = 1e-8;",
-    });
-
-    expectContainsAll(denseRunner, {
-        R"(settings.value(QStringLiteral("lr_threshold")))",
-        "cfg.lrCheckThreshold",
-        "cfg.enableLRCheck",
-        R"(settings.value(QStringLiteral("median_filter")))",
-        "cfg.medianFilterSize",
-    });
-    expectContainsAll(denseService, {
-        "enableLRCheck",
-        "checkLRConsistency",
-    });
-}
-
-TEST(DemPipelineContractTest, UsesMatchPhotosTaskAndWritesResultsBeforeDenseStage)
-{
-    const QString source = readSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    expectContainsAll(source, {
-        "MatchPhotosTask",
-        "MatchPhotosContext",
-        "appendIpfindResults",
-        "appendIpmatchResults",
-        "matchPhotosResult.success",
-    });
-    expectNotContainsAll(source, {
-        "FeatureMatchRunner",
-        "FeatureExtractionRunner",
-        "FeaturePairPlanner",
-        "canonicalFeatureAlgorithmFromMatcher",
-        "canonicalMatchAlgorithmFromMatcher",
-    });
-}
-
-TEST(GuiAlgorithmAlignmentContractTest, MvsDepthMetadataAndDialogContractsAreAligned)
-{
-    const QString denseManager = readSourceFile(QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    const QString depthGenerator = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
-    const QString cleanup = readSourceFile(QStringLiteral("src/gui/project/services/ProjectResourceCleanupService.cpp"));
-    const QString denseCloud = functionBody(readSourceFile(QStringLiteral("src/gui/dialogs/DenseCloudDialog.cpp")),
-                                            "QJsonObject DenseCloudDialog::collectSettings");
-    const QString depthFusion = functionBody(readSourceFile(QStringLiteral("src/gui/dialogs/DepthFusionDialog.cpp")),
-                                             "QJsonObject DepthFusionDialog::collectSettings");
-    const QString triangulation = functionBody(readSourceFile(QStringLiteral("src/gui/dialogs/TriangulationDialog.cpp")),
-                                               "QJsonObject TriangulationDialog::collectSettings");
-    const QString texture = functionBody(readSourceFile(QStringLiteral("src/gui/dialogs/TextureMappingDialog.cpp")),
-                                         "QJsonObject TextureMappingDialog::collectSettings");
-
-    expectContainsAll(denseManager, {
-        "validMaskStoragePath",
-        R"(depthResult[QStringLiteral("valid_mask_path")])",
-        R"(depthResult[QStringLiteral("batch_frame_count")])",
-        "将由 manifest 校验影像、相机与参数",
-        "projectDepthInputSignature(meta, realIdx)",
-    });
-    expectNotContainsAll(denseManager, {"existingDepthRecordForPath"});
-    expectContainsAll(depthGenerator, {
-        "makeMvsDepthInputHash",
-        "cameraToWorldRotation",
-        "configHash",
-        "lastModified().toMSecsSinceEpoch()",
-        "sourcePairQualities",
-        "minSourcePairGeometricInliers",
-        "sparse.points",
-    });
-    expectContainsAll(functionBody(denseManager, "void removeDepthArtifactsForIndices"), {"validMaskStoragePath"});
-    expectContainsAll(cleanup, {R"(record.value(QStringLiteral("valid_mask_path")))"});
-
-    expectNotContainsAll(denseCloud, {
-        "num_disparities",
-        "block_size",
-        "uniqueness_ratio",
-        "speckle_window_size",
-        "use_full_dp",
-        "use_wls_filter",
-    });
-    expectContainsAll(denseCloud, {
-        R"(s["resScale"])",
-        R"(s["iterations"])",
-        R"(s["patchSize"])",
-        R"(s["minViews"])",
-    });
-    expectNotContainsAll(depthFusion, {R"(o["cuda"])"});
-    expectNotContainsAll(triangulation, {
-        "depthStability",
-        "filterMode",
-        "maxReprojError",
-        "minAngleFilter",
-    });
-    expectNotContainsAll(texture, {
-        "colorCorrection",
-        "ghostFilter",
-        "seamsMargin",
-        "threads",
-    });
-}
-
 TEST(GuiAlgorithmAlignmentContractTest, MeshDecimationReachesReconstructionConfig)
 {
     const QString workflow = readSourceFile(QStringLiteral("src/core/mesh/ModelWorkflowService.cpp"));
@@ -908,7 +756,7 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelAcceptsDepthMapsAsMetashape
 {
     const QString controller =
         readSourceFile(QStringLiteral("src/gui/main_window/ReconstructionWorkflowController.cpp"));
-    const QString dialog = readSourceFile(QStringLiteral("src/gui/dialogs/GenerateModelDialog.cpp"));
+    const QString dialog = readSourceFile(QStringLiteral("src/gui/dialogs/reconstruction/GenerateModelDialog.cpp"));
     const QString manager = readSourceFile(QStringLiteral("src/gui/project/manager/ProjectModelManager.cpp"));
 
     const QString depthBlock =
@@ -952,7 +800,7 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelAcceptsDepthMapsAsMetashape
 
 TEST(GuiAlgorithmAlignmentContractTest, GenerateModelDepthMapsUseDirectMeshWorkflow)
 {
-    const QString dialog = readSourceFile(QStringLiteral("src/gui/dialogs/GenerateModelDialog.cpp"));
+    const QString dialog = readSourceFile(QStringLiteral("src/gui/dialogs/reconstruction/GenerateModelDialog.cpp"));
     const QString manager =
         readSourceFile(QStringLiteral("src/gui/project/manager/ProjectModelManager.cpp"));
     const QString workflow = readSourceFile(QStringLiteral("src/core/mesh/ModelWorkflowService.cpp"));
@@ -1175,7 +1023,7 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelContinuationChecksExpectedD
 
 TEST(GuiAlgorithmAlignmentContractTest, GenerateModelDialogExplainsAutomaticDepthMapGeneration)
 {
-    const QString dialog = readSourceFile(QStringLiteral("src/gui/dialogs/GenerateModelDialog.cpp"));
+    const QString dialog = readSourceFile(QStringLiteral("src/gui/dialogs/reconstruction/GenerateModelDialog.cpp"));
     ASSERT_FALSE(dialog.isEmpty());
 
     expectContainsAll(dialog, {
@@ -1188,7 +1036,7 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelDialogExplainsAutomaticDept
 
 TEST(GuiAlgorithmAlignmentContractTest, GenerateModelBlockControlsAreBoundToSettings)
 {
-    const QString dialog = readSourceFile(QStringLiteral("src/gui/dialogs/GenerateModelDialog.cpp"));
+    const QString dialog = readSourceFile(QStringLiteral("src/gui/dialogs/reconstruction/GenerateModelDialog.cpp"));
 
     expectContainsAll(dialog, {
         "_splitRegionCheck",
@@ -1875,79 +1723,6 @@ TEST(MvsSchedulerContractTest, DepthConsistencyMetadataAndReuseContracts)
     });
 }
 
-TEST(MvsSchedulerContractTest, ThreeDWorkflowDenseRefineAndDenseSettingsContracts)
-{
-    const QString workflow = readSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
-    const QString depthFusionUi = readSourceFile(QStringLiteral("src/gui/dialogs/DepthFusionDialog.ui"));
-    const QString threeDUi = readSourceFile(QStringLiteral("src/gui/dialogs/ThreeDReconstructionDialog.ui"));
-    const QString configH = readSourceFile(QStringLiteral("src/gui/project/support/ProjectDenseWorkflowConfig.h"));
-    const QString configCpp = readSourceFile(QStringLiteral("src/gui/project/support/ProjectDenseWorkflowConfig.cpp"));
-    const QString manager = readSourceFile(QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-
-    expectContainsAll(workflow, {
-        R"(denseSettings[QStringLiteral("keepNormals")] = true;)",
-        "registered_image_count",
-        "denseMinViewCount",
-        R"(denseSettings[QStringLiteral("minConsistentViews")] = denseMinViewCount;)",
-        R"(denseSettings[QStringLiteral("minViews")] = denseMinViewCount;)",
-        R"(denseSettings[QStringLiteral("minConfidence")] = 0.50;)",
-        R"(denseSettings[QStringLiteral("depthConsistency")] = 1.0;)",
-        "startThreeDReconstructionDenseRefineStage(settings)",
-        "startDenseCloudRefineAsync(refineSettings)",
-        "startThreeDReconstructionMeshStage(settings)",
-        R"(refineSettings[QStringLiteral("pipeline_mode")] = true;)",
-        R"(refineSettings[QStringLiteral("normalsEnabled")] = true;)",
-    });
-    expectContainsAll(depthFusionUi, {
-        "<string>保留法向量</string>",
-        "<number>3</number>",
-        "<double>0.500000000000000</double>",
-        "<double>1.000000000000000</double>",
-    });
-    expectContainsAll(threeDUi, {
-        R"(<widget class="QCheckBox" name="m_exportObjCheck">)",
-        "<bool>true</bool>",
-    });
-
-    const QString denseSettings = sectionBetween(configH, "struct DenseGenerationSettings", "DenseGenerationSettings denseGenerationSettingsFromJson");
-    const QString denseParse =
-        sectionBetween(configCpp, "DenseGenerationSettings denseGenerationSettingsFromJson", "xjw::mvs::DepthGenConfig buildDepthGenConfig");
-    expectContainsAll(denseSettings, {"plapoint::ProcessingDevice processingDevice"});
-    expectContainsAll(denseParse, {"parsed.processingDevice = processingDeviceFromString"});
-    EXPECT_EQ(countOccurrences(
-        manager,
-        "SparseCloudPreprocessor pp(plapoint::ProcessingDevice::CPU);"), 2);
-    expectNotContainsAll(manager, {"SparseCloudPreprocessor pp;"});
-
-    expectContainsAll(configH, {
-        "bool geomConsistency",
-        "int speckleMinArea",
-        "QString qualityProfile",
-        "float fusionRelDepthThreshold = 0.03f",
-    });
-    expectContainsAll(configCpp, {
-        R"(settings.value(QStringLiteral("geomConsistency")).toBool(true))",
-        R"(settings.value(QStringLiteral("speckleMinArea")).toInt(16))",
-        R"(settings.value(QStringLiteral("qualityProfile")))",
-        "applyDenseQualityProfile",
-        R"(QStringLiteral("highest"))",
-        R"(QStringLiteral("high"))",
-        R"(QStringLiteral("medium"))",
-        R"(QStringLiteral("low"))",
-        R"(QStringLiteral("lowest"))",
-        R"(QStringLiteral("fast_preview"))",
-        R"(QStringLiteral("high_quality"))",
-        "config.patchMatch.geomConsistency = settings.geomConsistency",
-        "config.fusion.minSpeckleComponentArea",
-        "config.fusion.enableSpeckleFilter",
-        "config.fusion.enableAdaptiveConfidenceFilter",
-        "parsed->fusionRelDepthThreshold",
-        "config.fusion.relDepthThresh = settings.fusionRelDepthThreshold",
-    });
-    expectContainsAll(manager, {"fusionCfg.maxDepthError = request.fusionRelDepthThreshold"});
-    expectNotContainsAll(manager, {"fusionCfg.maxDepthError = 0.05f;"});
-}
-
 TEST(MvsSchedulerContractTest, DenseCloudRefineFilteringAndCancelContracts)
 {
     const QString preprocessor = readSourceFile(QStringLiteral("src/core/mvs/SparseCloudPreprocessor.cpp"));
@@ -2063,4 +1838,52 @@ TEST(MvsSchedulerContractTest, DenseCloudRefineFilteringAndCancelContracts)
         "options.localPlaneMadMultiplier",
         "local_plane_removed_points",
     });
+}
+
+TEST(GuiDialogLayoutContractTest, DialogSourcesAreGroupedByDomain)
+{
+    const QString gui_sources =
+        readSourceFile(QStringLiteral("src/gui/cmake/GuiSources.cmake"));
+    const QString dialog_sources =
+        readSourceFile(QStringLiteral("src/gui/cmake/GuiDialogSources.cmake"));
+    const QString layout_readme =
+        readSourceFile(QStringLiteral("src/gui/dialogs/README.md"));
+    const QString workspace_ui =
+        readSourceFile(QStringLiteral("src/gui/widgets/WorkspaceCenterWidget.ui"));
+
+    expectContainsAll(gui_sources, {
+        "include(${CMAKE_CURRENT_LIST_DIR}/GuiDialogSources.cmake)",
+        "views/CameraSceneViewMath.cpp",
+        "views/ObjRenderPreparation.cpp",
+    });
+    expectNotContainsAll(gui_sources, {
+        "dialogs/application/AboutDialog.cpp",
+        "dialogs/camera/CameraModel3DDialog.cpp",
+        "dialogs/reconstruction/GenerateModelDialog.cpp",
+        "dialogs/tie_points/MatchViewerDialog.cpp",
+    });
+    expectContainsAll(dialog_sources, {
+        "GUI_APPLICATION_DIALOG_SOURCES",
+        "GUI_CAMERA_DIALOG_SOURCES",
+        "GUI_IMAGE_DIALOG_SOURCES",
+        "GUI_RECONSTRUCTION_DIALOG_SOURCES",
+        "GUI_TIE_POINT_DIALOG_SOURCES",
+        "GUI_SHARED_DIALOG_SOURCES",
+        "dialogs/application/AboutDialog.cpp",
+        "dialogs/camera/CameraModel3DDialog.cpp",
+        "dialogs/image/GenerateMaskDialog.cpp",
+        "dialogs/reconstruction/GenerateModelDialog.cpp",
+        "dialogs/tie_points/MatchViewerDialog.cpp",
+        "dialogs/shared/WorkflowParameterDialogStyle.cpp",
+    });
+    expectContainsAll(layout_readme, {
+        "`application/`",
+        "`camera/`",
+        "`image/`",
+        "`reconstruction/`",
+        "`tie_points/`",
+        "`shared/`",
+    });
+    EXPECT_TRUE(workspace_ui.contains(
+        QStringLiteral("<header>camera/CameraModel3DDialog.h</header>")));
 }

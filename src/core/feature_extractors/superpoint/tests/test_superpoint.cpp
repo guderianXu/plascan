@@ -103,7 +103,7 @@ protected:
     void SetUp() override
     {
         modelPath = findModelPath();
-        ASSERT_FALSE(modelPath.empty()) << "未找到 superpoint_extractor_cpu.pt，运行 scripts/export_superpoint.py 生成";
+        ASSERT_FALSE(modelPath.empty()) << "未找到 superpoint_extractor_cpu.pt，运行 scripts/models/export_superpoint.py 生成";
     }
 
     std::string modelPath;
@@ -196,7 +196,7 @@ TEST_F(SuperPointTest, KeypointBounds)
 // 和 SuperPoint.cpp 的 detect() 提取描述子，对比同一关键点的描述子余弦相似度。
 // 如果采样公式一致，相似度应接近 1.0。
 //
-// 注意：此测试依赖 superpoint_extractor_cpu.pt（由 scripts/export_superpoint.py 导出），
+// 注意：此测试依赖 superpoint_extractor_cpu.pt（由 scripts/models/export_superpoint.py 导出），
 // 即已经完成了模型替换。
 // ==============================================================================
 TEST_F(SuperPointTest, SampleDescriptorsConsistency)

@@ -23,7 +23,8 @@ __device__ inline bool projectDevice(const DeviceCamera &camera, const double po
                         camera.cameraToWorldRotation[5] * dy +
                         camera.cameraToWorldRotation[8] * dz;
 
-    if (!(zCam > 1e-9))
+    const double forwardDepth = camera.depthAxisFlipped ? -zCam : zCam;
+    if (!(forwardDepth > 1e-9))
     {
         return false;
     }
@@ -67,7 +68,8 @@ __device__ inline bool pointProjectionJacobianDevice(const DeviceCamera &camera,
     const double zCam = camera.cameraToWorldRotation[2] * dx +
                         camera.cameraToWorldRotation[5] * dy +
                         camera.cameraToWorldRotation[8] * dz;
-    if (!(zCam > 1e-9))
+    const double forwardDepth = camera.depthAxisFlipped ? -zCam : zCam;
+    if (!(forwardDepth > 1e-9))
     {
         return false;
     }

@@ -39,6 +39,35 @@ enum class BABackend
 };
 
 /**
+ * @brief BA 求解终止状态。
+ *
+ * solutionUsable 只在 Success 或可接受的 NoConvergence 下为 true。调用方必须先
+ * 检查该状态，再把相机和三维点写回重建，避免取消或数值失败后的中间状态污染工程。
+ */
+enum class BASolveStatus
+{
+    NotRun,
+    Success,
+    NoConvergence,
+    Cancelled,
+    InvalidInput,
+    UnsupportedConfiguration,
+    BackendUnavailable,
+    NumericalFailure,
+};
+
+/**
+ * @brief 后端真实能力声明，用于调度器拒绝能力不完整的执行路径。
+ */
+struct BABackendCapabilities
+{
+    bool optimizesPoints = false;
+    bool refinesCameraPose = false;
+    bool refinesSharedFocalLength = false;
+    bool supportsSoftConstraints = false;
+};
+
+/**
  * @brief Ceres 内部线性求解策略。
  */
 enum class BACeresLinearSolver
@@ -195,7 +224,8 @@ struct BAOptions
 
     // ── Gauge 固定 ──────────────────────────────────────────────────────────
     /// 固定这些索引对应的相机位姿（不参与 camera 优化阶段）。
-    /// 全局 BA 时通常固定索引 0，消除坐标系漂移（7 自由度 gauge 问题）。
+    /// 仅固定一个相机只能消除整体旋转和平移；无绝对尺度约束时还必须固定第二个相机
+    /// 或提供比例尺/控制点约束，才能消除完整的 7 自由度 gauge。
     std::vector<int> fixedCameraIndices;
 
     // ── 离群点过滤 ─────────────────────────────────────────────────────────
@@ -245,8 +275,9 @@ struct BAOptions
     double maxAcceptedRmsGrowth = 1.25;
     /// Auto 候选后端最少有效 track 比例；低于该比例则回退 legacy。
     double minAcceptedValidTrackRatio = 0.60;
-    /// Auto 候选为 Ceres/CUDA 时是否运行 legacy 对照，保证默认路径优先质量。
-    bool compareAutoBackendWithLegacy = true;
+    /// Auto 候选为 Ceres/CUDA 时是否额外运行一次 legacy 对照。
+    /// 默认关闭，避免每轮 BA 执行两套完整求解；基准测试或诊断时可显式开启。
+    bool compareAutoBackendWithLegacy = false;
 
     // ── 任务控制 ──────────────────────────────────────────────────────────
     /// 外部取消标志；GUI/CLI 长任务可在外层迭代边界中止 BA。
@@ -279,6 +310,8 @@ struct BAResult
 {
     BABackend requestedBackend = BABackend::LegacyCpu; ///< 调用方请求的 BA 后端
     BABackend usedBackend = BABackend::LegacyCpu;      ///< 实际执行的 BA 后端
+    BASolveStatus solveStatus = BASolveStatus::NotRun; ///< 求解终止状态
+    bool solutionUsable = false;                       ///< 相机和点结果是否允许写回重建
     bool usedGpu = false;                              ///< 本次 BA 是否实际启用了 GPU 求解
     bool backendFallback = false;                      ///< 请求后端不可用时是否发生回退
     std::string backendMessage;                        ///< 后端选择/回退说明，便于 GUI 和日志展示
@@ -346,6 +379,12 @@ public:
 
     /// 返回后端稳定名称，供日志、JSON 和测试输出使用。
     static const char *backendName(BABackend backend);
+
+    /// 返回求解状态稳定名称，供日志、JSON 和测试输出使用。
+    static const char *solveStatusName(BASolveStatus status);
+
+    /// 返回后端当前实现的真实能力，不能根据名称推断 CUDA 后端一定支持联合 BA。
+    static BABackendCapabilities backendCapabilities(BABackend backend);
 
     /// 统计 BA 输入规模。
     static BAProblemStats summarizeProblem(const std::vector<Camera> &cameras,

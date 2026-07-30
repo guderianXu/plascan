@@ -87,7 +87,7 @@ public slots:
     // 强制重新加载指定影像的兴趣点（忽略缓存），用于在外部重新生成 .sp 后刷新显示
     void reloadInterestPoints(const QString &imagePath);
 
-    // 立即（同步）重新读取并刷新指定影像的兴趣点，用于在外部任务写入 .sp 后强制更新 UI
+    // 兼容旧调用；现在始终异步刷新，绝不在 GUI 线程读取特征文件。
     void immediateReloadInterestPoints(const QString &imagePath);
 
     // 返回指定影像当前缓存的兴趣点（以 QVariantMap 列表形式，避免在头文件暴露内部类型）
@@ -125,6 +125,8 @@ private:
     // 启动异步加载特征文件的通用方法（在主线程调度后台任务）
     void startSpLoadForImage(const QString &imagePath);
     void startResidualLoadForImage(const QString &imagePath);
+    QString featureCacheKey(const QString &imagePath, const QString &suffix) const;
+    void clearFeatureCacheForImage(const QString &imagePath);
     void refreshDepthOverlay();
     void setDepthInspectionActive(bool active);
     bool shouldRenderFeatureDiagnostics() const { return !_depthInspectionActive; }

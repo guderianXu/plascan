@@ -1,18 +1,17 @@
 # GUI 源文件清单
 
+include(${CMAKE_CURRENT_LIST_DIR}/GuiDialogSources.cmake)
+
 set(GUI_SOURCES
   main.cpp
   config/AppConfigManager.cpp
   config/ImageViewRotationSettings.cpp
-  config/JsonMergeUtil.cpp
   config/ProjectUiConfigManager.cpp
   config/ProjectWorkflowConfigManager.cpp
   config/ProjectConfigManager.cpp
-  config/PythonRuntimeBinding.cpp
   config/settings/WindowStateManager.cpp
   config/settings/RecentProjectsManager.cpp
   config/settings/FileDialogStateManager.cpp
-  config/settings/GlobalSettings.cpp
   config/settings/ProjectDialogJsonSettingBase.cpp
   config/settings/DialogSettingStore.cpp
   main_window/MainWindow.cpp
@@ -21,9 +20,11 @@ set(GUI_SOURCES
   main_window/MenuWorkflowController.cpp
   main_window/ProjectUiHydrator.cpp
   main_window/ReconstructionWorkflowController.cpp
+  main_window/TiePointWorkflowController.cpp
   main_window/WorkspacePanelController.cpp
   menu/ToolbarButton.cpp
   menu/MainMenu.cpp
+  platform/ProjectFileIntegration.cpp
   markers/ProjectMarkerRepository.cpp
   markers/MarkerUndoCommand.cpp
   markers/MarkerOverlayItems.cpp
@@ -39,13 +40,13 @@ set(GUI_SOURCES
   markers/MarkerDetectionReviewDialog.cpp
   markers/PrintMarkersDialog.cpp
   panels/LogPanel.cpp
-  project/archive/PlascanArchive.cpp
   project/data/ProjectData.cpp
   project/data/ProjectFilesManager.cpp
   project/services/BundleAdjustService.cpp
   project/services/ProjectCameraImportService.cpp
   project/services/ProjectResourceCleanupService.cpp
   project/services/ProjectTiePointResultService.cpp
+  project/services/DenseSparseCloudPreparation.cpp
   project/support/ProjectBundleAdjustExecution.cpp
   project/support/ProjectBundleAdjustWorkflow.cpp
   project/support/ProjectCameraInitialization.cpp
@@ -71,8 +72,6 @@ set(GUI_SOURCES
   project/manager/ProjectSparseReconstructionManager.cpp
   project/manager/ProjectTerrainProductsManager.cpp
   project/manager/ProjectCameraSetupManager.cpp
-  tasks/DenseMatchRunner.cpp
-  tasks/FeatureExtractionRunner.cpp
   views/DepthOverlayData.cpp
   widgets/DepthOverlayController.cpp
   views/LayerFeatureLoader.cpp
@@ -81,6 +80,10 @@ set(GUI_SOURCES
   views/LayerOverlayItems.cpp
   views/LayerRenderer.cpp
   views/LayerStitchedDebug.cpp
+  views/CameraSceneViewMath.cpp
+  views/ObjRenderPreparation.cpp
+  views/TiePointVisualization.cpp
+  views/ModelVisualization.cpp
   widgets/CanvasWidget.cpp
   widgets/DataTreeWidget.cpp
   widgets/DataTreeWidget.ui
@@ -101,66 +104,18 @@ set(GUI_SOURCES
   widgets/ObservationNetworkView.cpp
   widgets/WorkspaceCenterWidget.cpp
   widgets/WorkspaceCenterWidget.ui
-  dialogs/AboutDialog.cpp
-  dialogs/CreateTiePointsDialog.cpp
-  dialogs/ThinTiePointsDialog.cpp
-  dialogs/CleanTiePointsDialog.cpp
-  dialogs/MatchViewerDialog.cpp
-  dialogs/MatchPairSelectorDialog.cpp
-  dialogs/BundleAdjustDialog.cpp
-  dialogs/CameraModel3DDialog.cpp
-  dialogs/CameraSceneViewMath.cpp
-  dialogs/ObjRenderPreparation.cpp
-  dialogs/StereoProcessingDialog.cpp
-  dialogs/OverlapAnalysisDialog.cpp
-  dialogs/CreateDemDialog.cpp
-  dialogs/MapProjectDialog.cpp
-  dialogs/FeatureExtractionDialog.cpp
-  dialogs/FeaturePairPlanner.cpp
-  dialogs/VocabularyOverlapDialog.cpp
-  dialogs/VocabularyOverlapDialog.ui
-  dialogs/FeaturePointVisualizationDialog.cpp
-  dialogs/FeatureMatchingDialog.cpp
-  dialogs/ForwardIntersectionCheckDialog.cpp
-  dialogs/ForwardIntersectionResultsDialog.cpp
-  dialogs/DenseCloudDialog.cpp
-  dialogs/AerialTriangulationDialog.cpp
-  dialogs/AerialTriangulationDialog.ui
-  dialogs/ThreeDReconstructionDialog.cpp
-  dialogs/ThreeDReconstructionDialog.ui
-  dialogs/SparseCloudPostProcessDialog.cpp
-  dialogs/MVSProgressDialog.cpp
-  dialogs/WorkflowReportDialog.cpp
-  dialogs/CameraConvertDialog.cpp
-  dialogs/GenerateMaskDialog.cpp
-  dialogs/SurveyControlDialog.cpp
-  dialogs/ObservationNetworkDialog.cpp
-  dialogs/InitCameraPoseDialog.cpp
-  dialogs/TriangulationDialog.cpp
-  dialogs/DepthMapEstimateDialog.cpp
-  dialogs/DepthFusionDialog.cpp
-  dialogs/DenseCloudRefineDialog.cpp
-  dialogs/WorkflowParameterDialogStyle.cpp
-  dialogs/GenerateModelDialog.cpp
-  dialogs/MeshReconstructionDialog.cpp
-  dialogs/TextureMappingDialog.cpp
-  dialogs/ModelExportDialog.cpp
-  dialogs/DenseMatchDialog.cpp
-  dialogs/DenseMatchDialogUi.cpp
 )
 
 set(GUI_HEADERS
   config/AppConfigManager.h
   config/ImageViewRotationSettings.h
-  config/JsonMergeUtil.h
   config/ProjectUiConfigManager.h
   config/ProjectWorkflowConfigManager.h
   config/ProjectConfigManager.h
-  config/PythonRuntimeBinding.h
   config/settings/WindowStateManager.h
   config/settings/RecentProjectsManager.h
   config/settings/FileDialogStateManager.h
-  config/settings/GlobalSettings.h
+  config/settings/GuiSettingsStore.h
   config/settings/ProjectDialogJsonSettingBase.h
   config/settings/DialogSettingStore.h
   config/settings/DialogSettingKeys.h
@@ -169,8 +124,10 @@ set(GUI_HEADERS
   main_window/MenuWorkflowController.h
   main_window/ProjectUiHydrator.h
   main_window/ReconstructionWorkflowController.h
+  main_window/TiePointWorkflowController.h
   menu/ToolbarButton.h
   menu/MainMenu.h
+  platform/ProjectFileIntegration.h
   markers/ProjectMarkerRepository.h
   markers/MarkerUndoCommand.h
   markers/MarkerOverlayItems.h
@@ -185,12 +142,16 @@ set(GUI_HEADERS
   markers/PrintMarkersDialog.h
   panels/LogPanel.h
   project/archive/PlascanArchive.h
+  project/archive/ProjectChunkStore.h
+  project/archive/ProjectResourceStore.h
+  project/archive/ProjectWorkspaceStore.h
   project/data/ProjectData.h
   project/data/ProjectFilesManager.h
   project/services/BundleAdjustService.h
   project/services/ProjectCameraImportService.h
   project/services/ProjectResourceCleanupService.h
   project/services/ProjectTiePointResultService.h
+  project/services/DenseSparseCloudPreparation.h
   project/support/ProjectBundleAdjustExecution.h
   project/support/ProjectBundleAdjustWorkflow.h
   project/support/ProjectCameraInitialization.h
@@ -216,8 +177,6 @@ set(GUI_HEADERS
   project/manager/ProjectSparseReconstructionManager.h
   project/manager/ProjectTerrainProductsManager.h
   project/manager/ProjectCameraSetupManager.h
-  tasks/DenseMatchRunner.h
-  tasks/FeatureExtractionRunner.h
   tasks/GuiTaskRunner.h
   views/DepthOverlayData.h
   widgets/DepthOverlayController.h
@@ -227,6 +186,10 @@ set(GUI_HEADERS
   views/LayerOverlayItems.h
   views/LayerRenderer.h
   views/LayerStitchedDebug.h
+  views/CameraSceneViewMath.h
+  views/ObjRenderPreparation.h
+  views/TiePointVisualization.h
+  views/ModelVisualization.h
   widgets/CanvasWidget.h
   widgets/DataTreeWidget.h
   widgets/WorkspaceSectionIcons.h
@@ -245,51 +208,9 @@ set(GUI_HEADERS
   widgets/MatchValidityAnalyzer.h
   widgets/ObservationNetworkView.h
   widgets/WorkspaceCenterWidget.h
-  dialogs/AboutDialog.h
-  dialogs/CreateTiePointsDialog.h
-  dialogs/ThinTiePointsDialog.h
-  dialogs/CleanTiePointsDialog.h
-  dialogs/MatchViewerDialog.h
-  dialogs/MatchPairSelectorDialog.h
-  dialogs/BundleAdjustDialog.h
-  dialogs/CameraModel3DDialog.h
-  dialogs/CameraSceneViewMath.h
-  dialogs/ObjRenderPreparation.h
-  dialogs/StereoProcessingDialog.h
-  dialogs/OverlapAnalysisDialog.h
-  dialogs/CreateDemDialog.h
-  dialogs/MapProjectDialog.h
-  dialogs/FeatureExtractionDialog.h
-  dialogs/FeaturePairPlanner.h
-  dialogs/VocabularyOverlapDialog.h
-  dialogs/FeaturePointVisualizationDialog.h
-  dialogs/FeatureMatchingDialog.h
-  dialogs/ForwardIntersectionCheckDialog.h
-  dialogs/ForwardIntersectionResultsDialog.h
-  dialogs/DenseCloudDialog.h
-  dialogs/AerialTriangulationDialog.h
-  dialogs/ThreeDReconstructionDialog.h
-  dialogs/SparseCloudPostProcessDialog.h
-  dialogs/WorkflowReportDialog.h
-  dialogs/CameraConvertDialog.h
-  dialogs/GenerateMaskDialog.h
-  dialogs/SurveyControlDialog.h
-  dialogs/ObservationNetworkDialog.h
-  dialogs/InitCameraPoseDialog.h
-  dialogs/TriangulationDialog.h
-  dialogs/DepthMapEstimateDialog.h
-  dialogs/DepthFusionDialog.h
-  dialogs/DenseCloudRefineDialog.h
-  dialogs/WorkflowParameterDialogStyle.h
-  dialogs/GenerateModelDialog.h
-  dialogs/MeshReconstructionDialog.h
-  dialogs/TextureMappingDialog.h
-  dialogs/ModelExportDialog.h
-  dialogs/DenseMatchDialog.h
 )
 
 set(GUI_PROJECT_SOURCES
-  project/archive/PlascanArchive.cpp
   project/data/ProjectData.cpp
   project/data/ProjectFilesManager.cpp
   project/services/BundleAdjustService.cpp
@@ -323,55 +244,4 @@ set(GUI_PROJECT_SOURCES
   project/manager/ProjectCameraSetupManager.cpp
 )
 
-set(GUI_TASK_SOURCES
-  tasks/DenseMatchRunner.cpp
-  tasks/FeatureExtractionRunner.cpp
-)
-
-set(GUI_DIALOG_SOURCES
-  dialogs/AboutDialog.cpp
-  dialogs/CreateTiePointsDialog.cpp
-  dialogs/ThinTiePointsDialog.cpp
-  dialogs/CleanTiePointsDialog.cpp
-  dialogs/MatchViewerDialog.cpp
-  dialogs/MatchPairSelectorDialog.cpp
-  dialogs/BundleAdjustDialog.cpp
-  dialogs/CameraModel3DDialog.cpp
-  dialogs/CameraSceneViewMath.cpp
-  dialogs/ObjRenderPreparation.cpp
-  dialogs/StereoProcessingDialog.cpp
-  dialogs/OverlapAnalysisDialog.cpp
-  dialogs/CreateDemDialog.cpp
-  dialogs/MapProjectDialog.cpp
-  dialogs/FeatureExtractionDialog.cpp
-  dialogs/FeaturePairPlanner.cpp
-  dialogs/VocabularyOverlapDialog.cpp
-  dialogs/VocabularyOverlapDialog.ui
-  dialogs/FeaturePointVisualizationDialog.cpp
-  dialogs/FeatureMatchingDialog.cpp
-  dialogs/ForwardIntersectionCheckDialog.cpp
-  dialogs/ForwardIntersectionResultsDialog.cpp
-  dialogs/DenseCloudDialog.cpp
-  dialogs/AerialTriangulationDialog.cpp
-  dialogs/AerialTriangulationDialog.ui
-  dialogs/ThreeDReconstructionDialog.cpp
-  dialogs/ThreeDReconstructionDialog.ui
-  dialogs/SparseCloudPostProcessDialog.cpp
-  dialogs/MVSProgressDialog.cpp
-  dialogs/WorkflowReportDialog.cpp
-  dialogs/CameraConvertDialog.cpp
-  dialogs/GenerateMaskDialog.cpp
-  dialogs/SurveyControlDialog.cpp
-  dialogs/ObservationNetworkDialog.cpp
-  dialogs/InitCameraPoseDialog.cpp
-  dialogs/TriangulationDialog.cpp
-  dialogs/DepthMapEstimateDialog.cpp
-  dialogs/DepthFusionDialog.cpp
-  dialogs/DenseCloudRefineDialog.cpp
-  dialogs/GenerateModelDialog.cpp
-  dialogs/MeshReconstructionDialog.cpp
-  dialogs/TextureMappingDialog.cpp
-  dialogs/ModelExportDialog.cpp
-  dialogs/DenseMatchDialog.cpp
-  dialogs/DenseMatchDialogUi.cpp
-)
+set(GUI_TASK_SOURCES)

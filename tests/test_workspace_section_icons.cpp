@@ -60,7 +60,8 @@ bool iconHasVisiblePixel(const QIcon &icon, const QSize &size)
 xjw::gui::widgets::WorkspaceSection sectionForTitle(const QString &title)
 {
     using xjw::gui::widgets::WorkspaceSection;
-    if (title.startsWith(QStringLiteral("照片"))) return WorkspaceSection::Photos;
+    if (title.startsWith(QStringLiteral("图像"))) return WorkspaceSection::Photos;
+    if (title.startsWith(QStringLiteral("掩膜"))) return WorkspaceSection::Masks;
     if (title.startsWith(QStringLiteral("观测网络"))) return WorkspaceSection::ObservationNetwork;
     if (title.startsWith(QStringLiteral("连接点"))) return WorkspaceSection::TiePoints;
     if (title.startsWith(QStringLiteral("深度图"))) return WorkspaceSection::DepthMaps;
@@ -80,6 +81,7 @@ TEST(WorkspaceSectionIconsTest, FactoryRendersEverySectionAtSupportedSizes)
     using xjw::gui::widgets::WorkspaceSection;
     const std::array sections = {
         WorkspaceSection::Photos,
+        WorkspaceSection::Masks,
         WorkspaceSection::ObservationNetwork,
         WorkspaceSection::TiePoints,
         WorkspaceSection::DepthMaps,
@@ -108,7 +110,12 @@ TEST(WorkspaceSectionIconsTest, VisibleSectionsUseDistinctSemanticIcons)
 {
     DataTreeWidget tree;
     QJsonObject meta;
-    meta[QStringLiteral("images")] = QJsonArray{QStringLiteral("/tmp/image.tif")};
+    meta[QStringLiteral("images")] = QJsonArray{
+        QJsonObject{
+            {QStringLiteral("path"), QStringLiteral("/tmp/image.tif")},
+            {QStringLiteral("mask_path"), QStringLiteral("/tmp/image_mask.png")}
+        }
+    };
     meta[QStringLiteral("observation_network_results")] = QJsonArray{
         QJsonObject{{QStringLiteral("algorithm"), QStringLiteral("overlap")}}
     };
@@ -152,10 +159,10 @@ TEST(WorkspaceSectionIconsTest, VisibleSectionsUseDistinctSemanticIcons)
 
     auto *view = tree.findChild<QTreeView *>();
     ASSERT_NE(view, nullptr);
-    EXPECT_EQ(view->iconSize(), QSize(18, 18));
+    EXPECT_EQ(view->iconSize(), QSize(16, 16));
     auto *model = qobject_cast<QStandardItemModel *>(view->model());
     ASSERT_NE(model, nullptr);
-    ASSERT_EQ(model->rowCount(), 10);
+    ASSERT_EQ(model->rowCount(), 11);
 
     QSet<QByteArray> signatures;
     for (int row = 0; row < model->rowCount(); ++row)
@@ -178,6 +185,27 @@ TEST(WorkspaceSectionIconsTest, VisibleSectionsUseDistinctSemanticIcons)
         signatures.insert(signature);
     }
     EXPECT_EQ(signatures.size(), model->rowCount());
+}
+
+TEST(WorkspaceSectionIconsTest, WorkspaceHierarchyIconsAreVisibleAndDistinct)
+{
+    const QSize size(16, 16);
+    const QIcon rootIcon =
+        xjw::gui::widgets::workspaceRootIcon();
+    const QIcon chunkIcon =
+        xjw::gui::widgets::workspaceChunkIcon();
+    const QIcon imageIcon =
+        xjw::gui::widgets::workspaceImageIcon();
+
+    EXPECT_TRUE(iconHasVisiblePixel(rootIcon, size));
+    EXPECT_TRUE(iconHasVisiblePixel(chunkIcon, size));
+    EXPECT_TRUE(iconHasVisiblePixel(imageIcon, size));
+    EXPECT_NE(iconPixelSignature(rootIcon, size),
+              iconPixelSignature(chunkIcon, size));
+    EXPECT_NE(iconPixelSignature(rootIcon, size),
+              iconPixelSignature(imageIcon, size));
+    EXPECT_NE(iconPixelSignature(chunkIcon, size),
+              iconPixelSignature(imageIcon, size));
 }
 
 int main(int argc, char **argv)

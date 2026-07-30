@@ -4,7 +4,7 @@
 #include "MarkerWorkspaceController.h"
 #include "ProjectData.h"
 #include "project/ProjectIO.h"
-#include "project/ProjectCameraIO.h"
+#include "ProjectCameraIO.h"
 #include "project/ProjectMatchCatalog.h"
 #include "project/ProjectMetadata.h"
 #include "geometry/MarkerProjectionPredictor.h"

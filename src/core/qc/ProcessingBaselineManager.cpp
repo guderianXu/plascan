@@ -197,6 +197,23 @@ QString ProcessingBaselineManager::inputFingerprint(
         QCryptographicHash::hash(canonical, QCryptographicHash::Sha256).toHex());
 }
 
+QJsonObject ProcessingBaselineManager::stageFingerprints(
+    const QJsonObject &stageSnapshots)
+{
+    QJsonObject fingerprints;
+    for (auto iterator = stageSnapshots.constBegin();
+         iterator != stageSnapshots.constEnd();
+         ++iterator)
+    {
+        const QJsonObject snapshot = iterator.value().toObject();
+        if (!snapshot.isEmpty())
+        {
+            fingerprints.insert(iterator.key(), inputFingerprint(snapshot));
+        }
+    }
+    return fingerprints;
+}
+
 ProcessingBaselineMeshMetrics ProcessingBaselineManager::analyzeMesh(
     const xjw::mesh::TriMesh &mesh)
 {
@@ -291,7 +308,8 @@ ProcessingBaselineDefinition ProcessingBaselineManager::create(
     const QString &sceneType,
     const QJsonObject &inputSnapshot,
     const xjw::mesh::TriMesh &referenceMesh,
-    const ProcessingBaselineThresholds &thresholds)
+    const ProcessingBaselineThresholds &thresholds,
+    const QJsonObject &stageSnapshots)
 {
     ProcessingBaselineDefinition baseline;
     baseline.name = name;
@@ -300,6 +318,8 @@ ProcessingBaselineDefinition ProcessingBaselineManager::create(
         QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
     baseline.inputSnapshot = inputSnapshot;
     baseline.inputFingerprintSha256 = inputFingerprint(inputSnapshot);
+    baseline.stageSnapshots = stageSnapshots;
+    baseline.stageFingerprintsSha256 = stageFingerprints(stageSnapshots);
     baseline.referenceMesh = analyzeMesh(referenceMesh);
     baseline.thresholds = thresholds;
     return baseline;
@@ -308,7 +328,8 @@ ProcessingBaselineDefinition ProcessingBaselineManager::create(
 ProcessingBaselineComparison ProcessingBaselineManager::compare(
     const ProcessingBaselineDefinition &baseline,
     const QJsonObject &candidateInputSnapshot,
-    const xjw::mesh::TriMesh &candidateMesh)
+    const xjw::mesh::TriMesh &candidateMesh,
+    const QJsonObject &candidateStageSnapshots)
 {
     ProcessingBaselineComparison comparison;
     comparison.candidateMesh = analyzeMesh(candidateMesh);
@@ -319,6 +340,23 @@ ProcessingBaselineComparison ProcessingBaselineManager::compare(
     {
         comparison.failures.push_back(
             QStringLiteral("候选处理的输入快照与基线不一致"));
+    }
+    const QJsonObject candidate_stage_fingerprints =
+        stageFingerprints(candidateStageSnapshots);
+    for (auto iterator = baseline.stageFingerprintsSha256.constBegin();
+         iterator != baseline.stageFingerprintsSha256.constEnd();
+         ++iterator)
+    {
+        const QString candidate_fingerprint =
+            candidate_stage_fingerprints.value(iterator.key()).toString();
+        if (candidate_fingerprint != iterator.value().toString())
+        {
+            comparison.stageMatches = false;
+            comparison.stageMismatches.push_back(iterator.key());
+            comparison.failures.push_back(
+                QStringLiteral("候选处理的阶段快照与基线不一致: %1")
+                    .arg(iterator.key()));
+        }
     }
 
     const auto &reference = baseline.referenceMesh;
@@ -366,12 +404,24 @@ ProcessingBaselineComparison ProcessingBaselineManager::compare(
                 .arg(thresholds.minimumLargestComponentFaceRatio, 0, 'f', 4));
     }
     comparison.passed = comparison.inputMatches &&
+        comparison.stageMatches &&
         comparison.failures.isEmpty();
     comparison.report.insert(QStringLiteral("schema"),
                              QStringLiteral("plascan.processing_baseline_comparison.v1"));
     comparison.report.insert(QStringLiteral("baseline_name"), baseline.name);
     comparison.report.insert(QStringLiteral("input_matches"),
                              comparison.inputMatches);
+    comparison.report.insert(QStringLiteral("stage_matches"),
+                             comparison.stageMatches);
+    comparison.report.insert(QStringLiteral("candidate_stage_fingerprints_sha256"),
+                             candidate_stage_fingerprints);
+    QJsonArray stage_mismatches;
+    for (const QString &stage : comparison.stageMismatches)
+    {
+        stage_mismatches.push_back(stage);
+    }
+    comparison.report.insert(QStringLiteral("stage_mismatches"),
+                             stage_mismatches);
     comparison.report.insert(QStringLiteral("passed"), comparison.passed);
     comparison.report.insert(QStringLiteral("reference_mesh"),
                              metricsToJson(reference));
@@ -397,6 +447,13 @@ QJsonObject ProcessingBaselineManager::toJson(
     object.insert(QStringLiteral("input_snapshot"), baseline.inputSnapshot);
     object.insert(QStringLiteral("input_fingerprint_sha256"),
                   baseline.inputFingerprintSha256);
+    if (!baseline.stageSnapshots.isEmpty())
+    {
+        object.insert(QStringLiteral("stage_snapshots"),
+                      baseline.stageSnapshots);
+        object.insert(QStringLiteral("stage_fingerprints_sha256"),
+                      baseline.stageFingerprintsSha256);
+    }
     object.insert(QStringLiteral("reference_mesh"),
                   metricsToJson(baseline.referenceMesh));
     object.insert(QStringLiteral("thresholds"),
@@ -435,6 +492,10 @@ bool ProcessingBaselineManager::fromJson(
         object.value(QStringLiteral("input_snapshot")).toObject();
     decoded.inputFingerprintSha256 =
         object.value(QStringLiteral("input_fingerprint_sha256")).toString();
+    decoded.stageSnapshots =
+        object.value(QStringLiteral("stage_snapshots")).toObject();
+    decoded.stageFingerprintsSha256 =
+        object.value(QStringLiteral("stage_fingerprints_sha256")).toObject();
     decoded.referenceMesh =
         metricsFromJson(object.value(QStringLiteral("reference_mesh")).toObject());
     decoded.thresholds =
@@ -454,6 +515,21 @@ bool ProcessingBaselineManager::fromJson(
         if (errorMessage)
         {
             *errorMessage = QStringLiteral("处理基线输入指纹校验失败");
+        }
+        return false;
+    }
+    const QJsonObject expected_stage_fingerprints =
+        stageFingerprints(decoded.stageSnapshots);
+    if (decoded.stageFingerprintsSha256.isEmpty() &&
+        !decoded.stageSnapshots.isEmpty())
+    {
+        decoded.stageFingerprintsSha256 = expected_stage_fingerprints;
+    }
+    else if (decoded.stageFingerprintsSha256 != expected_stage_fingerprints)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("处理基线阶段指纹校验失败");
         }
         return false;
     }

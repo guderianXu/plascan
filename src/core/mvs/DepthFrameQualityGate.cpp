@@ -65,6 +65,33 @@ DepthFilterSettings depthFilterSettings(DepthFilterMode mode, int availableSourc
     return settings;
 }
 
+DepthConfidenceThresholds depthConfidenceThresholds(
+    MvsSceneProfile sceneProfile,
+    DepthFilterMode filterMode,
+    int availableSourceViews,
+    float configuredPatchMatch,
+    float configuredFusion)
+{
+    DepthConfidenceThresholds thresholds;
+    thresholds.patchMatch = std::clamp(configuredPatchMatch, 0.0f, 1.0f);
+    thresholds.fusion = std::clamp(configuredFusion, 0.0f, 1.0f);
+    if (sceneProfile == MvsSceneProfile::OrbitalObject &&
+        filterMode == DepthFilterMode::Mild &&
+        availableSourceViews > 0 &&
+        availableSourceViews <= 3)
+    {
+        // Sparse ring sectors and grazing views often have only three usable
+        // neighbours. Treating the "highest" generic thresholds as hard
+        // validity gates creates large, coherent holes on otherwise supported
+        // object surfaces. Preserve these weaker estimates for the subsequent
+        // cross-view evidence and TSDF weighting stages instead of deleting
+        // them at the photometric stage.
+        thresholds.patchMatch = std::min(thresholds.patchMatch, 0.50f);
+        thresholds.fusion = std::min(thresholds.fusion, 0.60f);
+    }
+    return thresholds;
+}
+
 int minimumDepthConsistencySourceConfirmations(DepthFilterMode mode,
                                                int availableSourceViews)
 {

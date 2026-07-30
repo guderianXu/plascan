@@ -192,6 +192,15 @@ IncrementalSfmResult IncrementalSfm::runRegistrationFromCurrentInitialization(
     result.baTracksFiltered = _lastGlobalBATracksFiltered;
     result.baRefinedIntrinsicCount = _lastGlobalBARefinedIntrinsicCount;
     result.baSharedFocalScale = _lastGlobalBASharedFocalScale;
+    result.baRequestedBackend = _lastGlobalBARequestedBackend;
+    result.baUsedBackend = _lastGlobalBAUsedBackend;
+    result.baSolveStatus = _lastGlobalBASolveStatus;
+    result.baSolutionUsable = _lastGlobalBASolutionUsable;
+    result.baResultApplied = _lastGlobalBAResultApplied;
+    result.baBackendFallback = _lastGlobalBABackendFallback;
+    result.baObservationCount = _lastGlobalBAObservationCount;
+    result.baTotalSeconds = _lastGlobalBATotalSeconds;
+    result.baBackendMessage = _lastGlobalBABackendMessage;
     applyControlNetworkDiagnostics(&result);
 
     return result;
@@ -287,6 +296,15 @@ void IncrementalSfm::resetForInitialPairTrial(const SfmReconstruction &baseRecon
     _lastGlobalBATracksFiltered = 0;
     _lastGlobalBARefinedIntrinsicCount = 0;
     _lastGlobalBASharedFocalScale = 1.0;
+    _lastGlobalBARequestedBackend = _sfmOptions.baOptions.backend;
+    _lastGlobalBAUsedBackend = BABackend::LegacyCpu;
+    _lastGlobalBASolveStatus = BASolveStatus::NotRun;
+    _lastGlobalBASolutionUsable = false;
+    _lastGlobalBAResultApplied = false;
+    _lastGlobalBABackendFallback = false;
+    _lastGlobalBAObservationCount = 0;
+    _lastGlobalBATotalSeconds = 0.0;
+    _lastGlobalBABackendMessage.clear();
     _controlNetworkApplied = false;
     _controlNetworkResult = {};
     _controlNetworkTransform = {};

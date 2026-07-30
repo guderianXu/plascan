@@ -107,6 +107,20 @@ bool ImageViewWidget::loadImage(const QString &imagePath)
     return true; // 异步，立即返回（真正完成在回调中）
 }
 
+void ImageViewWidget::clearImage()
+{
+    _imagePath.clear();
+    clearMatchPoints();
+    if (_imageItem)
+    {
+        _scene->removeItem(_imageItem);
+        delete _imageItem;
+        _imageItem = nullptr;
+    }
+    _scene->setSceneRect(QRectF());
+    _view->resetTransform();
+}
+
 void ImageViewWidget::setMatchPoints(const QVector<QPointF> &points)
 {
     clearMatchPoints();

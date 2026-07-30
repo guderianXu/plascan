@@ -38,14 +38,8 @@ dense_match/
 ## 架构概况
 
 ```
-DenseMatchDialog (GUI)
-    │ 用户配置参数 → JSON
-    ▼
-ReconstructionWorkflowController
-    │ 创建进度追踪, 启动异步任务
-    ▼
-DenseMatchRunner
-    │ 遍历匹配对, 逐个调用 DenseMatchService
+ProjectDenseReconstructionManager
+    │ 解析工作流程配置并调度匹配对
     ▼
 DenseMatchService
     │ 加载影像 → 分支调度匹配器 → 视差验证 → 保存
@@ -87,7 +81,7 @@ DenseMatchService
 
 ### 服务层
 - **DenseMatchService.h/cpp** — 编排完整流水线: 加载影像 → 匹配器 → 验证 → 保存 TIFF。内置 `printf` 性能诊断日志 (图像尺寸、算法、CUDA 状态、耗时)
-- **GUI DenseMatchRunner** — GUI 侧薄任务 runner，负责从 JSON 配置生成 `DenseMatchConfig`、遍历匹配对、更新进度和保存结果，避免 workflow controller 或 ProjectManager 直接承载长任务实现
+- GUI 通过 `ProjectDenseReconstructionManager` 调用服务层；核心模块不依赖具体对话框。
 
 ### OpenCV 封装
 - **opencv/OpenCVSgbmWrapper.h/cpp** — 封装 `cv::StereoSGBM::create()`，用于与自研 CUDA 算法对比精度和速度
@@ -156,16 +150,9 @@ cmake --build . --target test_dense_match_unit
 
 ## GUI 集成
 
-### 对话框
-- **DenseMatchDialog.h/cpp** — 业务逻辑 (影像加载、匹配对刷新、参数收集/恢复)
-- **DenseMatchDialogUi.cpp** — 纯 UI 构建 (setupUi, 左右分栏 QSplitter)
-
-### 主窗口
-- 进度条通过 `MainWindow::m_dmProgressBar` 显示在状态栏右下角
-- 每对影像 5 步进度 × 150ms 轮询刷新
-
-### 菜单
-- 位置: 重建 → 密集重建 → 密集匹配...
+旧的“重建 → 密集匹配”独立对话框已移除。密集匹配作为模型生成和地形产品工作流程的
+内部阶段，由项目管理层统一调度、取消、记录进度和写入结果，避免用户在多个重叠入口
+间维护不一致参数。
 
 ## 扩展点
 

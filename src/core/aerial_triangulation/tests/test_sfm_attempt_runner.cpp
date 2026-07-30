@@ -16,6 +16,7 @@
 
 #include <opencv2/imgcodecs.hpp>
 
+#include <algorithm>
 #include <array>
 #include <vector>
 
@@ -315,6 +316,12 @@ TEST(SfmAttemptRunnerTest, RunsKnownPoseSfmFromPreparedTiePointGraph)
     input.tiePointPath = tiePointPath;
     input.markerSetPath = markerPath;
     input.outputDir = tempDir.path();
+    QStringList progressStages;
+    input.progressFn =
+        [&progressStages](const QString &stage, int)
+        {
+            progressStages.push_back(stage);
+        };
 
     const xjw::aerial_triangulation::SfmAttemptExecutionResult result =
         xjw::aerial_triangulation::SfmAttemptRunner().run(input);
@@ -325,4 +332,17 @@ TEST(SfmAttemptRunnerTest, RunsKnownPoseSfmFromPreparedTiePointGraph)
     EXPECT_GE(result.result.numPoints3D, 20);
     EXPECT_EQ(result.result.sfmDiagnostics.value(QStringLiteral("marker_prior_tracks_loaded")).toInt(), 1);
     EXPECT_GE(result.result.sfmDiagnostics.value(QStringLiteral("prior_tracks_accepted")).toInt(), 1);
+    EXPECT_TRUE(std::any_of(progressStages.cbegin(),
+                            progressStages.cend(),
+                            [](const QString &stage)
+                            {
+                                return stage.contains(QStringLiteral("光束法平差"));
+                            }));
+    EXPECT_FALSE(result.result.sfmDiagnostics.value(QStringLiteral("ba_requested_backend")).toString().isEmpty());
+    EXPECT_FALSE(result.result.sfmDiagnostics.value(QStringLiteral("ba_used_backend")).toString().isEmpty());
+    EXPECT_EQ(result.result.sfmDiagnostics.value(QStringLiteral("ba_solve_status")).toString(),
+              QStringLiteral("success"));
+    EXPECT_TRUE(result.result.sfmDiagnostics.value(QStringLiteral("ba_solution_usable")).toBool());
+    EXPECT_TRUE(result.result.sfmDiagnostics.value(QStringLiteral("ba_result_applied")).toBool());
+    EXPECT_GT(result.result.sfmDiagnostics.value(QStringLiteral("ba_observations")).toInt(), 0);
 }

@@ -26,6 +26,10 @@ struct SfmCandidateSummary
     double medianTriangulationAngleDeg = 0.0;
     double twoViewTrackRatio = 1.0;
     double observationGridCoverage = 0.0;
+    bool hasClosedSequenceGeometry = false;
+    double sequenceAdjacentDistanceMedian = 0.0;
+    double sequenceAdjacentDistanceMaximumRatio = 0.0;
+    double sequenceAdjacentDistanceMadRatio = 0.0;
 };
 
 SfmWorkerBudget allocateWorkers(int candidateCount, int totalThreads);

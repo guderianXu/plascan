@@ -80,6 +80,7 @@ struct DepthFrameResult
     int pyramidActiveLevelCount = 0;
     int pyramidMinimumShortSide = 0;
     std::string pyramidDegradedReason;
+    float effectivePatchMatchConfidenceThreshold = 0.0f;
     bool depthPostprocessApplied = false;   ///< true 表示 depthMap/confidence 已应用上述后处理
     bool success = false;
     double elapsedMs = 0.0;               ///< 单帧深度估计耗时，不含异步写盘
@@ -91,9 +92,14 @@ struct DepthFrameResult
         return success && qualityDecision.acceptance == DepthFrameAcceptance::Accepted;
     }
 
-    bool eligibleAsConsistencySource() const
+    bool eligibleForConsistencyCheck() const
     {
         return success && qualityDecision.acceptance != DepthFrameAcceptance::Rejected;
+    }
+
+    bool eligibleAsConsistencySource() const
+    {
+        return eligibleForConsistencyCheck();
     }
 
     void releasePixelStorage()

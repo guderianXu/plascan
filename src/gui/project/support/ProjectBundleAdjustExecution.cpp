@@ -1,14 +1,13 @@
 #include "ProjectBundleAdjustExecution.h"
 
-#include "PlascanArchive.h"
-#include "ProjectFilesManager.h"
+#include "ProjectChunkStore.h"
+#include "project/PortableProjectFormat.h"
 #include "project/ProjectIO.h"
 #include "ProjectReferenceTerrainBa.h"
 #include "io/MarkerSetStore.h"
 
 #include <QFileInfo>
 #include <QJsonArray>
-#include <QJsonDocument>
 
 namespace xjw::gui::project {
 
@@ -18,24 +17,25 @@ QJsonObject loadBundleAdjustMeta(const QJsonObject &coreData, const QString &pla
 {
     QJsonObject meta = coreData;
 
-    PlascanArchive archive(plascanPath);
-    if (!archive.isValid())
-    {
-        return meta;
-    }
-
+    ProjectChunkStore chunkStore(plascanPath);
     QString errorMessage;
-    QByteArray resultsData = archive.readEntry(ProjectFilesManager::kArchiveResultsFile, &errorMessage);
-    if (resultsData.isEmpty())
-    {
-        resultsData = archive.readEntry(QStringLiteral("project_files.json"), &errorMessage);
-    }
-    if (resultsData.isEmpty())
+    if (!chunkStore.ensureLayout(&errorMessage))
     {
         return meta;
     }
 
-    const QJsonObject resultsObject = QJsonDocument::fromJson(resultsData).object();
+    QJsonObject resultsObject;
+    chunkStore.readDefaultChunkSection(
+        QString::fromLatin1(
+            xjw::common::project::PortableProjectFormat::
+                ProjectResultsSection),
+        &resultsObject,
+        &errorMessage);
+    if (!errorMessage.isEmpty())
+    {
+        return meta;
+    }
+
     for (auto it = resultsObject.constBegin(); it != resultsObject.constEnd(); ++it)
     {
         if (it.key() != QLatin1String("images"))
