@@ -97,8 +97,8 @@ aerial_triangulation_cli.exe `
 
 - `match_photos_cli`、`aerial_triangulation_cli`、`bundle_adjust_cli`、
   `aerial_geometry_benchmark` 和相关核心库均以 `--parallel 32` 构建成功。
-- 连接点任务 25 项、并发策略 8 项、特征准备队列 2 项、空三工作流 21 项、
-  SfM 40 项和 BA/CUDA 38 项测试通过。
+- 14 个相关测试二进制、共 120 项测试通过：特征准备队列 2 项、连接点与并发 33 项、
+  空三工作流 10 项、SfM 37 项、BA/CUDA 38 项。
 - GUI 对象和依赖库已编译；最后一次 `plascan.exe` 链接因正在运行的 GUI 占用目标文件而返回
   `LNK1104`，关闭当前 GUI 后重新执行增量链接即可。
 - 全仓历史契约测试仍有与本次 GPU 优化无关的失败：ProjectSession 迁移后的 CLI 报告路径

@@ -18,6 +18,15 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("--project", type=Path, required=True)
+    parser.add_argument(
+        "--aerial-report",
+        type=Path,
+        help=(
+            "Optional aerial_triangulation_cli_report.json. When provided, "
+            "pending_camera_updates replace the cameras stored in the project "
+            "without modifying the archive."
+        ),
+    )
     parser.add_argument("--output-directory", type=Path, required=True)
     return parser.parse_args()
 
@@ -61,6 +70,36 @@ def tsai_text(camera: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def normalized_path_key(path: Path | str) -> str:
+    return str(Path(path).resolve()).replace("\\", "/").casefold()
+
+
+def report_camera_updates(report_path: Path | None) -> dict[str, dict[str, Any]]:
+    if report_path is None:
+        return {}
+    resolved_report = report_path.resolve()
+    if not resolved_report.is_file():
+        raise FileNotFoundError(
+            f"aerial triangulation report not found: {resolved_report}"
+        )
+    report = json.loads(resolved_report.read_text(encoding="utf-8"))
+    reconstruction_result = report.get("reconstruction_result", {})
+    updates = reconstruction_result.get("pending_camera_updates", {})
+    if not isinstance(updates, dict) or not updates:
+        raise ValueError(
+            "aerial triangulation report has no pending_camera_updates: "
+            f"{resolved_report}"
+        )
+    normalized_updates: dict[str, dict[str, Any]] = {}
+    for image_path, camera in updates.items():
+        if not isinstance(camera, dict):
+            raise ValueError(
+                f"pending camera update for {image_path!r} is not an object"
+            )
+        normalized_updates[normalized_path_key(image_path)] = camera
+    return normalized_updates
+
+
 def main() -> int:
     args = parse_args()
     project = args.project.resolve()
@@ -80,6 +119,7 @@ def main() -> int:
     images = project_files.get("images", [])
     if not isinstance(images, list) or not images:
         raise ValueError(f"project archive has no active images: {project}")
+    report_updates = report_camera_updates(args.aerial_report)
 
     output_directory = args.output_directory.resolve()
     camera_directory = output_directory / "cameras"
@@ -94,13 +134,21 @@ def main() -> int:
             raise FileNotFoundError(f"image record {index} is missing: {image_path}")
         if not isinstance(camera, dict):
             raise ValueError(f"image record {index} has no camera object")
+        if report_updates:
+            camera = report_updates.get(normalized_path_key(image_path))
+            if camera is None:
+                raise ValueError(
+                    "aerial triangulation report has no camera update for "
+                    f"image record {index}: {image_path}"
+                )
         camera_path = camera_directory / f"{index:04d}_{image_path.stem}.tsai"
         camera_path.write_text(tsai_text(camera), encoding="utf-8")
         list_lines.append(f'"{image_path}" "{camera_path}"')
 
     list_path = output_directory / "image_camera.lis"
     list_path.write_text("\n".join(list_lines) + "\n", encoding="utf-8")
-    print(f"Exported {len(images)} project cameras: {list_path}")
+    source = "aerial report" if report_updates else "project archive"
+    print(f"Exported {len(images)} cameras from {source}: {list_path}")
     return 0
 
 

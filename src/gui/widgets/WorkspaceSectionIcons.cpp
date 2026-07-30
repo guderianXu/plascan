@@ -26,7 +26,7 @@ QPen iconPen(const QColor &color, qreal width = 1.4)
 
 void drawPhotos(QPainter &painter)
 {
-    const QColor color(QStringLiteral("#D5A52E"));
+    const QColor color(QStringLiteral("#A4A9AE"));
     QPainterPath folder;
     folder.moveTo(1.5, 5.0);
     folder.lineTo(7.7, 5.0);
