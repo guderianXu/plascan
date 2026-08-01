@@ -153,6 +153,7 @@ private:
     TaskStatusWidget* _maskTaskStatus{};                // 照片蒙版生成状态栏任务状态
     QDockWidget*      _logDock{};                      // 日志 Dock 窗口容器
     bool _applyingUiSettings{};                        // 正在恢复项目 UI，阻止中间态写回
+    bool _closeSavePending{};                          // 关闭请求正在等待异步项目保存完成
     QJsonObject _imageViewRotations;                   // 按稳定 image_uuid 保存的查看旋转角度
     
     QString           _lastSelectedImage;               // 最近一次被激活的影像路径（供关联操作使用）

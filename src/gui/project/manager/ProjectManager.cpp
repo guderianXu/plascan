@@ -483,6 +483,20 @@ ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
     // 连接ProjectData信号
     if (_projectData)
     {
+        const auto advanceSessionGeneration = [this]()
+        {
+            ++_projectSessionGeneration;
+        };
+        connect(_projectData, &ProjectData::projectOpened,
+                this, advanceSessionGeneration);
+        connect(_projectData, &ProjectData::projectClosed,
+                this, advanceSessionGeneration);
+        connect(_projectData, &ProjectData::activeChunkChanged,
+                this,
+                [advanceSessionGeneration](const QString &, const QString &, int)
+                {
+                    advanceSessionGeneration();
+                });
         connect(_projectData, &ProjectData::projectOpened,
                 this, &ProjectManager::projectOpened);
         connect(_projectData, &ProjectData::projectSaved,
@@ -1846,6 +1860,21 @@ bool ProjectManager::isDirty() const
 QString ProjectManager::currentProjectPath() const
 {
     return _projectData ? _projectData->currentProjectPath() : QString();
+}
+
+xjw::gui::project::ProjectSessionContext ProjectManager::currentSessionContext() const
+{
+    return {
+        currentProjectPath(),
+        _projectData ? _projectData->activeChunkId() : QString(),
+        _projectSessionGeneration
+    };
+}
+
+bool ProjectManager::isCurrentSession(
+    const xjw::gui::project::ProjectSessionContext &context) const
+{
+    return context.matches(currentSessionContext());
 }
 
 QJsonObject ProjectManager::currentMeta() const

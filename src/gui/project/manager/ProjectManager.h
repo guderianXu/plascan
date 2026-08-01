@@ -24,6 +24,7 @@
 
 #include "Camera.h"
 #include "ProjectFilesManager.h"
+#include "ProjectSessionContext.h"
 
 #include <QObject>
 #include <QString>
@@ -358,6 +359,8 @@ public slots:
     // === 查询接口（委托给 ProjectData） ===
     bool isDirty() const;                               // 是否有未保存更改
     QString currentProjectPath() const;                 // 当前 .plascan 路径
+    xjw::gui::project::ProjectSessionContext currentSessionContext() const;
+    bool isCurrentSession(const xjw::gui::project::ProjectSessionContext &context) const;
     QJsonObject currentMeta() const;                    // 当前运行时元数据快照（含 results）
     QJsonObject coreProjectMeta() const;                // 仅核心数据（images+camera），无需惰性加载，速度极快
     QStringList getImagesByCategory(const QString &category) const; // 按类别获取影像
@@ -395,6 +398,7 @@ private:
     ProjectTaskDispatcher *_taskDispatcher = nullptr;
     ProjectUiCommands *_uiCommands = nullptr;
     bool _projectOpenInProgress = false;
+    quint64 _projectSessionGeneration = 0;
     QString _activeImagePath;
 
     // AT/SFM 取消标志（跨线程共享）

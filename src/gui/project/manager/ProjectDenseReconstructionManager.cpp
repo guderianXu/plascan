@@ -1585,7 +1585,8 @@ bool ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
 
     std::vector<CameraView> views;
     views.reserve(selectedImages.size());
-    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
+    const auto session = _owner->currentSessionContext();
+    const QString projectPath = session.projectPath;
     for (const QString &imgPath : selectedImages)
     {
         CameraView view;
@@ -1617,8 +1618,8 @@ bool ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
 
     QPointer<ProjectDenseReconstructionManager> self(this);
     QObject::connect(gen, &DepthMapGenerator::progressChanged, this,
-                     [self, projectPath](const QString &stage, float ratio) {
-        if (!self || !self->_owner || self->_owner->currentProjectPath() != projectPath)
+                     [self, session](const QString &stage, float ratio) {
+        if (!self || !self->_owner || !self->_owner->isCurrentSession(session))
         {
             return;
         }
@@ -1631,12 +1632,12 @@ bool ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
             [self,
              sparseXyz,
              mvsOutDir,
-             projectPath,
+             session,
              project_input_signature,
              reconstruction_generation_id,
              quality_profile = request.qualityProfile,
              batch_frame_count = selectedImages.size()](const QJsonObject &artifact) {
-        if (!self || !self->_owner || self->_owner->currentProjectPath() != projectPath)
+        if (!self || !self->_owner || !self->_owner->isCurrentSession(session))
         {
             return;
         }
@@ -1661,15 +1662,14 @@ bool ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
             &DepthMapGenerator::finished,
             this,
             [self,
-             projectPath,
+             session,
              mvsOutDir,
              selectedImageCount = selectedImages.size()](bool success) {
         if (!self)
         {
             return;
         }
-        const bool project_matches = self->_owner &&
-            self->_owner->currentProjectPath() == projectPath;
+        const bool project_matches = self->_owner && self->_owner->isCurrentSession(session);
         if (success && project_matches)
         {
             self->_owner->refreshReconstructionQualityReport();
@@ -1692,19 +1692,19 @@ bool ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
     _activeMvsGenerator = gen;
     emit mvsProgressChanged(QStringLiteral("正在加载稀疏点云..."), 0);
     QPointer<DepthMapGenerator> genSelf(gen);
-    (void)QtConcurrent::run([self, genSelf, sparseXyz, views, request, projectPath]() {
+    (void)QtConcurrent::run([self, genSelf, sparseXyz, views, request, session]() {
         SparseCloud sparse = xjw::gui::project::prepareDenseSparseCloud(sparseXyz, views);
         if (!self || !genSelf)
         {
             return;
         }
         auto sparseCloud = std::make_shared<SparseCloud>(std::move(sparse));
-        QMetaObject::invokeMethod(genSelf.data(), [self, genSelf, sparseCloud, projectPath]() {
+        QMetaObject::invokeMethod(genSelf.data(), [self, genSelf, sparseCloud, session]() {
             if (!self || !genSelf)
             {
                 return;
             }
-            if (!self->_owner || self->_owner->currentProjectPath() != projectPath)
+            if (!self->_owner || !self->_owner->isCurrentSession(session))
             {
                 if (self->_activeMvsGenerator == genSelf.data())
                 {
@@ -1786,7 +1786,7 @@ bool ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
         ? storedFramesResult.batchDir
         : requested_output_dir;
     const QString outputPly = QDir(outputDir).filePath(QStringLiteral("dense_cloud.ply"));
-    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
+    const auto session = _owner->currentSessionContext();
     const auto cancelFlag = createActiveMvsCancelFlag();
 
     emit mvsProgressChanged(QStringLiteral("正在加载深度图批次..."), 0);
@@ -1803,26 +1803,26 @@ bool ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
                        source_depth_map_dir = storedFramesResult.batchDir,
                        transientForModel,
                        pipelineMode,
-                       projectPath,
+                       session,
                        cancelFlag]()
     {
         if (!self)
         {
             return;
         }
-        const auto reportException = [self, cancelFlag, projectPath](const QString &message) {
+        const auto reportException = [self, cancelFlag, session](const QString &message) {
             if (!self)
             {
                 return;
             }
-            QMetaObject::invokeMethod(self.data(), [self, cancelFlag, projectPath, message]() {
+            QMetaObject::invokeMethod(self.data(), [self, cancelFlag, session, message]() {
                 if (!self)
                 {
                     return;
                 }
                 self->clearActiveMvsCancelFlag(cancelFlag);
                 emit self->mvsProgressFinished(false);
-                if (self->_owner && self->_owner->currentProjectPath() == projectPath)
+                if (self->_owner && self->_owner->isCurrentSession(session))
                 {
                     self->showWarning(
                                          QStringLiteral("深度图融合"),
@@ -2210,13 +2210,13 @@ bool ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
                                     source_project_input_signature,
                                     transientForModel,
                                     pipelineMode,
-                                    projectPath,
+                                    session,
                                     cancelFlag]() {
             if (!self)
             {
                 return;
             }
-            if (!self->_owner || self->_owner->currentProjectPath() != projectPath)
+            if (!self->_owner || !self->_owner->isCurrentSession(session))
             {
                 self->clearActiveMvsCancelFlag(cancelFlag);
                 emit self->mvsProgressFinished(false);
@@ -2345,7 +2345,8 @@ bool ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
     }
 
     std::vector<CameraView> views;
-    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
+    const auto session = _owner->currentSessionContext();
+    const QString projectPath = session.projectPath;
     for (const QString &imgPath : selectedImages)
     {
         CameraView view;
@@ -2427,8 +2428,8 @@ bool ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
 
     QPointer<ProjectDenseReconstructionManager> self(this);
     QObject::connect(gen, &DepthMapGenerator::progressChanged, this,
-                     [self, projectPath](const QString &stage, float ratio) {
-        if (!self || !self->_owner || self->_owner->currentProjectPath() != projectPath)
+                     [self, session](const QString &stage, float ratio) {
+        if (!self || !self->_owner || !self->_owner->isCurrentSession(session))
         {
             return;
         }
@@ -2441,12 +2442,12 @@ bool ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
             [self,
              sparseXyz,
              mvsOutDir,
-             projectPath,
+             session,
              project_input_signature,
              reconstruction_generation_id,
              quality_profile = request.qualityProfile,
              batch_frame_count = selectedImages.size()](const QJsonObject &artifact) {
-        if (!self || !self->_owner || self->_owner->currentProjectPath() != projectPath)
+        if (!self || !self->_owner || !self->_owner->isCurrentSession(session))
         {
             return;
         }
@@ -2470,12 +2471,12 @@ bool ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
     connect(gen, &DepthMapGenerator::pointCloudReady, this,
             [self,
              mvsOutDir,
-             projectPath,
+             session,
              project_input_signature,
              reconstruction_generation_id,
              transientForModel,
              source_depth_map_count = static_cast<int>(selectedImages.size())](const std::vector<DensePoint> &cloud) {
-        if (!self || !self->_owner || self->_owner->currentProjectPath() != projectPath)
+        if (!self || !self->_owner || !self->_owner->isCurrentSession(session))
         {
             return;
         }
@@ -2546,7 +2547,7 @@ bool ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
     connect(gen,
             &DepthMapGenerator::finished,
             this,
-            [self, settings, continueMissingMode, projectPath](bool success)
+            [self, settings, continueMissingMode, session](bool success)
     {
         if (!self)
         {
@@ -2558,7 +2559,7 @@ bool ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
             self->_activeMvsGenerator = nullptr;
         }
 
-        if (!self->_owner || self->_owner->currentProjectPath() != projectPath)
+        if (!self->_owner || !self->_owner->isCurrentSession(session))
         {
             emit self->mvsProgressFinished(false);
             return;
@@ -2586,14 +2587,14 @@ bool ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
                                          QStringLiteral("缺失深度图补齐完成，正在开始融合。"));
             }
             QMetaObject::invokeMethod(self.data(),
-                                      [self, settings, projectPath]() {
+                                      [self, settings, session]() {
                                           if (!self || !self->_mvsTransitionPending)
                                           {
                                               return;
                                           }
                                           self->_mvsTransitionPending = false;
                                           if (!self->_owner ||
-                                              self->_owner->currentProjectPath() != projectPath)
+                                              !self->_owner->isCurrentSession(session))
                                           {
                                               emit self->mvsProgressFinished(false);
                                               return;
@@ -2617,19 +2618,19 @@ bool ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
     _activeMvsGenerator = gen;
     emit mvsProgressChanged(QStringLiteral("正在加载稀疏点云..."), 0);
     QPointer<DepthMapGenerator> genSelf(gen);
-    (void)QtConcurrent::run([self, genSelf, sparseXyz, views, request, projectPath]() {
+    (void)QtConcurrent::run([self, genSelf, sparseXyz, views, request, session]() {
         SparseCloud sparse = xjw::gui::project::prepareDenseSparseCloud(sparseXyz, views);
         if (!self || !genSelf)
         {
             return;
         }
         auto sparseCloud = std::make_shared<SparseCloud>(std::move(sparse));
-        QMetaObject::invokeMethod(genSelf.data(), [self, genSelf, sparseCloud, projectPath]() {
+        QMetaObject::invokeMethod(genSelf.data(), [self, genSelf, sparseCloud, session]() {
             if (!self || !genSelf)
             {
                 return;
             }
-            if (!self->_owner || self->_owner->currentProjectPath() != projectPath)
+            if (!self->_owner || !self->_owner->isCurrentSession(session))
             {
                 if (self->_activeMvsGenerator == genSelf.data())
                 {
@@ -2680,11 +2681,12 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
     const QString outDir = QFileInfo(inputPly).absolutePath();
     const QString ts = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
     const QString outputPly = outDir + QStringLiteral("/dense_cloud_refined_%1.ply").arg(ts);
+    const auto session = _owner->currentSessionContext();
     const auto cancelFlag = createActiveMvsCancelFlag();
 
     emit mvsProgressChanged(QStringLiteral("正在加载密集点云..."), 0);
     QPointer<ProjectDenseReconstructionManager> self(this);
-    auto refineWork = [self, inputPly, outputPly, request, pipelineMode, cancelFlag]()
+    auto refineWork = [self, inputPly, outputPly, request, pipelineMode, session, cancelFlag]()
     {
         if (!self)
         {
@@ -2709,13 +2711,13 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
             }, Qt::QueuedConnection);
         };
 
-        const auto postProgress = [self](const QString &message, int progressValue) {
+        const auto postProgress = [self, session](const QString &message, int progressValue) {
             if (!self)
             {
                 return;
             }
-            QMetaObject::invokeMethod(self.data(), [self, message, progressValue]() {
-                if (!self)
+            QMetaObject::invokeMethod(self.data(), [self, session, message, progressValue]() {
+                if (!self || !self->_owner || !self->_owner->isCurrentSession(session))
                 {
                     return;
                 }
@@ -2747,9 +2749,16 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
                                                         request,
                                                         streamingResult,
                                                         pipelineMode,
+                                                        session,
                                                         cancelFlag]() {
                     if (!self)
                     {
+                        return;
+                    }
+                    if (!self->_owner || !self->_owner->isCurrentSession(session))
+                    {
+                        self->clearActiveMvsCancelFlag(cancelFlag);
+                        emit self->mvsProgressFinished(false);
                         return;
                     }
                     self->clearActiveMvsCancelFlag(cancelFlag);
@@ -3078,9 +3087,16 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
                                                 request,
                                                 terrainSpikeReport,
                                                 pipelineMode,
+                                                session,
                                                 cancelFlag]() {
             if (!self)
             {
+                return;
+            }
+            if (!self->_owner || !self->_owner->isCurrentSession(session))
+            {
+                self->clearActiveMvsCancelFlag(cancelFlag);
+                emit self->mvsProgressFinished(false);
                 return;
             }
             self->clearActiveMvsCancelFlag(cancelFlag);

@@ -2503,6 +2503,15 @@ void MainWindow::onSaveFinished(bool ok)
         _saveProgressDialog = nullptr;
     }
     statusBar()->showMessage(ok ? tr("保存完成") : tr("保存失败"), ok ? 3000 : 5000);
+
+    if (_closeSavePending)
+    {
+        _closeSavePending = false;
+        if (ok)
+        {
+            QTimer::singleShot(0, this, &QWidget::close);
+        }
+    }
 }
 
 void MainWindow::onMetadataDirtyChanged(bool dirty)
@@ -2859,6 +2868,12 @@ void MainWindow::applyUiSettings(const QJsonObject &ui)
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
+    if (_closeSavePending)
+    {
+        event->ignore();
+        return;
+    }
+
     const bool hasProject = _projectManager
         && !_projectManager->currentProjectPath().trimmed().isEmpty();
     if (hasProject)
@@ -2881,8 +2896,10 @@ void MainWindow::closeEvent(QCloseEvent *event)
 
         if (btn == QMessageBox::Save)
         {
-            // 同步保存，不使用事件循环
+            _closeSavePending = true;
             _projectManager->saveProject();
+            event->ignore();
+            return;
         }
         else if (btn == QMessageBox::Discard)
         {

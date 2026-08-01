@@ -1075,3 +1075,18 @@ target_include_directories(test_marker_detection_job_builder PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/control_points
 )
 gtest_discover_tests(test_marker_detection_job_builder DISCOVERY_MODE PRE_TEST)
+
+# ============================================================================
+# test_project_session_context — 后台任务结果仅写回启动时的项目与 Chunk 会话
+# ============================================================================
+add_executable(test_project_session_context
+    test_project_session_context.cpp
+)
+target_link_libraries(test_project_session_context PRIVATE
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_project_session_context PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui/project/support
+)
+gtest_discover_tests(test_project_session_context)
