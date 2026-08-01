@@ -2,20 +2,20 @@
 
 /**
  * @file WorkflowSettingsDialog.h
- * @brief 工作流程级高级参数设置对话框。
+ * @brief 按工作流程组织的项目级设置对话框。
  *
- * 普通“空中三角测量”对话框保留摄影测量用户经常调整的参数；本对话框承载
- * 设备、并行度和数值门限等实现级参数。两类参数在启动工作流时合并，核心层
- * 始终收到一份完整配置，避免 GUI 中存在只显示但不生效的选项。
+ * 对话框只呈现工作流程真正需要用户选择的策略，不承载线程数、USAC 迭代数
+ * 等实现细节。设置按 workflow ID 分组，后续新增流程页面时不会污染空中三角
+ * 测量的配置命名空间。
  */
 
 #include <QDialog>
 #include <QJsonObject>
 
-class QDoubleSpinBox;
+class QComboBox;
 class QLabel;
 class QLineEdit;
-class QSpinBox;
+class QStackedWidget;
 class QToolButton;
 
 class WorkflowSettingsDialog final : public QDialog
@@ -23,35 +23,40 @@ class WorkflowSettingsDialog final : public QDialog
 public:
     explicit WorkflowSettingsDialog(QWidget *parent = nullptr);
 
-    /// 返回稳定的默认配置；项目中尚未保存设置时也使用同一份默认值。
+    /// 返回 v3 工作流程分组配置，包含所有已展示的工作流程入口。
     static QJsonObject defaultSettings();
 
-    /// 从项目级 JSON 恢复控件；缺失字段使用 defaultSettings() 补齐。
+    /**
+     * @brief 提取空中三角测量设置。
+     *
+     * 同时接受 v3 的 workflows.aerial_triangulation 对象和旧 v2 扁平字段，
+     * 供项目无损升级以及空三启动参数合并使用。
+     */
+    static QJsonObject aerialTriangulationSettings(const QJsonObject &settings);
+
+    /// 从项目级 JSON 恢复控件，旧版扁平配置会在内存中迁移到 v3。
     void applySettings(const QJsonObject &settings);
 
-    /// 收集可直接合并到 AerialTriangulationOptions 的稳定字段。
+    /// 收集按工作流程分组的 v3 配置。
     QJsonObject collectSettings() const;
 
 private:
-    /// 创建控件、范围、特殊值和工具提示。
+    /// 创建工作流程选择器、分页区域和对话框按钮。
     void setupUi();
-    /// 重新解析显式路径或自动搜索结果，让用户看到真正生效的 engine。
+    /// 从统一算法注册表填充匹配算法，避免 GUI 维护另一份算法清单。
+    void populateMatchingAlgorithms();
+    /// 切换右侧设置页；暂未开放的页面保持只读。
+    void setCurrentWorkflow(int index);
+    /// 根据当前算法刷新其专用资源控件。
+    void refreshAlgorithmControls();
+    /// 解析显式路径或自动搜索结果，让用户看到真正生效的 engine。
     void refreshLightGlueEngineStatus();
 
-    QSpinBox *_cpuThreadsSpin = nullptr;
-    QSpinBox *_cudaDeviceSpin = nullptr;
+    QComboBox *_workflowCombo = nullptr;
+    QStackedWidget *_workflowPages = nullptr;
+    QComboBox *_matchingAlgorithmCombo = nullptr;
     QLineEdit *_lightGlueEngineEdit = nullptr;
     QToolButton *_lightGlueEngineBrowseButton = nullptr;
     QLabel *_lightGlueEngineStatusLabel = nullptr;
-    QSpinBox *_cudaParallelPairsSpin = nullptr;
-    QSpinBox *_featurePrefetchDepthSpin = nullptr;
-    QSpinBox *_featureMaxImageDimSpin = nullptr;
-    QDoubleSpinBox *_matchThresholdSpin = nullptr;
-    QDoubleSpinBox *_geometryReprojectionSpin = nullptr;
-    QSpinBox *_geometryMinInliersSpin = nullptr;
-    QSpinBox *_geometryMaxIterationsSpin = nullptr;
-    QSpinBox *_tiePointGridColumnsSpin = nullptr;
-    QSpinBox *_tiePointGridRowsSpin = nullptr;
-    QSpinBox *_tiePointGridCellLimitSpin = nullptr;
-    QDoubleSpinBox *_stationaryMotionSpin = nullptr;
+    QJsonObject _appliedSettings;
 };

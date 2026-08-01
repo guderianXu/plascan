@@ -1089,7 +1089,15 @@ void MenuWorkflowController::openWorkflowSettingsDialog()
 QJsonObject MenuWorkflowController::mergeAerialTriangulationSettings(
     const QJsonObject &dialogSettings)
 {
-    QJsonObject merged = WorkflowSettingsDialog::defaultSettings();
+    QJsonObject merged;
+    const QJsonObject defaultAerialSettings =
+        WorkflowSettingsDialog::aerialTriangulationSettings(
+            WorkflowSettingsDialog::defaultSettings());
+    for (auto it = defaultAerialSettings.constBegin();
+         it != defaultAerialSettings.constEnd(); ++it)
+    {
+        merged.insert(it.key(), it.value());
+    }
     if (_projectManager)
     {
         if (!_workflowSettingsStore)
@@ -1098,8 +1106,11 @@ QJsonObject MenuWorkflowController::mergeAerialTriangulationSettings(
                 DialogSettingKeys::WorkflowSettings);
         }
         _workflowSettingsStore->setProjectPath(_projectManager->currentProjectPath());
-        const QJsonObject savedDetails = _workflowSettingsStore->load();
-        for (auto it = savedDetails.constBegin(); it != savedDetails.constEnd(); ++it)
+        const QJsonObject savedAerialSettings =
+            WorkflowSettingsDialog::aerialTriangulationSettings(
+                _workflowSettingsStore->load());
+        for (auto it = savedAerialSettings.constBegin();
+             it != savedAerialSettings.constEnd(); ++it)
         {
             merged.insert(it.key(), it.value());
         }

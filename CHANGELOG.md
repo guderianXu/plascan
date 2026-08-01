@@ -10,8 +10,8 @@
   所有消费者共用算法版本、配置指纹、模型指纹和几何验证结果契约。
 - 新增逐影像 `.pimatch` v1 二进制分片：一个影像文件保存该影像的匹配观测、所有相邻影像变体、
   置信度、几何残差和状态位，并使用固定 magic、小端序、长度边界及 SHA-256 校验。
-- “工作流程”菜单新增“设置”对话框，首批提供空中三角测量的 CUDA 设备、特征预取、LightGlue 阈值、
-  几何验证、连接点网格和固定连接点判定参数，并按项目持久化。
+- “工作流程”菜单新增按流程分组的“设置”对话框，可在空中三角测量、三维重建、DEM 和正射影像间切换；
+  首批仅开放空中三角测量的匹配算法与 TensorRT 引擎选择，其余流程保留只读入口，并按项目持久化。
 - 光束法平差新增相机标定分组和分阶段自标定：先固定焦距完成位姿/点的稳定热身，再按标定组释放共享焦距，并统一执行输入、gauge、正深度、离群点和控制约束质量检查。
 - “创建正射影像”对话框按 Metashape 式“投影/参数/区域/输出/进度”重新组织，显示 DEM 坐标系、真实 X/Y 像元、裁剪边界、输出尺寸与内存估算，并支持影像选择、马赛克/加权平均/首个有效影像、颜色校正、锐度权重、重影过滤、小孔洞填充、项目蒙版、后台进度和安全取消。
 - terrain 新增 `OrthoGenerationOptions` 与 `OrthoProjector`，将 DEM 有效高程逐像元投影到项目相机，支持独立 X/Y 像元或最大尺寸、区域裁剪、`mosaic` / `weighted_average` / `first_valid` 融合和 1 亿像素默认预算；零影像覆盖会明确失败。当前仅开放 DEM 网格投影、DEM 表面和影像颜色源，平面/圆柱投影及全局接缝线优化尚未实现并在 GUI 禁用。
@@ -54,6 +54,8 @@
   GUI、CLI、SfM 和空三均直接读取 `.pimatch`，不再维护独立特征文件和成对 sidecar。
 - LightGlue 推理链收敛为 TensorRT-only：删除 C++ TorchScript matcher、CPU/自动回退、旧后端基准和
   LightGlue TorchScript 导出入口；`lightglue` 统一加载目标 GPU 的 TensorRT engine，缺失或不兼容时明确失败。
+- TensorRT LightGlue 运行时支持从显式设置、环境变量、本机应用模型目录、源码模型目录和构建缓存自动发现
+  固定关键点容量 engine，并按实际 engine 容量限制匹配输入，避免配置上限超过固定 TensorRT profile。
 
 - Ceres BA 会按问题规模选择 Dense/Sparse/Iterative Schur，并在 CUDA 分配前执行显存预算门禁；Native CUDA 明确收敛为显式的固定相机点优化后端并报告真实代价/接受步统计，Legacy 小型法方程和有限中位数统计改由 PlaMatrix 提供。
 - 正射 GeoTIFF 现在把 OpenCV BGR 正确转换为 R/G/B 波段，并增加有效覆盖 Alpha 波段，避免把无覆盖区误认为真实黑色；同时写入最终网格地理变换和可用的 DEM WKT，`ortho_results` 记录已解析参数、输出范围/像元、相机贡献数、直接覆盖率和孔洞填充像元数。

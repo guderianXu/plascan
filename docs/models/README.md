@@ -57,6 +57,10 @@ build\windows-vcpkg-cuda-release\bin\feature_match_cli.exe `
 2. 环境变量 `PLASCAN_LIGHTGLUE_TENSORRT_ENGINE`；
 3. 标准模型/构建缓存目录中的 `lightglue_sift_fp32.engine` 或容量后缀变体。
 
+GUI 可在“工作流程 -> 设置 -> 空中三角测量”中选择匹配算法并显式指定 `.engine`；路径留空时，
+“当前生效”会显示自动发现的实际文件及固定关键点容量。项目设置使用 v3 分组结构，旧 v2 扁平配置会
+自动迁移，线程、几何门限和网格等实现参数不再由该对话框覆盖。
+
 找不到 engine、TensorRT/GPU 不兼容或显式选择 CPU 时会失败并给出路径/设备原因，不会切换到另一算法。
 Windows 部署还需要与构建版本一致的 `nvinfer_10.dll`。
 

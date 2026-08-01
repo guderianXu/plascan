@@ -1,80 +1,123 @@
 /**
  * @file WorkflowSettingsDialog.cpp
- * @brief 工作流程高级参数对话框实现。
+ * @brief 多工作流程项目设置对话框实现。
  */
 
 #include "application/WorkflowSettingsDialog.h"
 
+#include "ImageMatchingRegistry.h"
 #include "MatchPhotosOptions.h"
 #include "MatchPhotosRuntime.h"
 
 #include <QColor>
+#include <QComboBox>
 #include <QDialogButtonBox>
-#include <QDoubleSpinBox>
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
-#include <QFrame>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPalette>
 #include <QPushButton>
-#include <QScrollArea>
-#include <QSpinBox>
+#include <QStackedWidget>
 #include <QStyle>
-#include <QThread>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidget>
 
-#include <algorithm>
-
 namespace
 {
 
-/// JSON 中缺失字段时，把默认对象补到调用方对象中。
-QJsonObject withDefaults(QJsonObject settings)
+constexpr auto kAerialWorkflowId = "aerial_triangulation";
+constexpr auto kReconstructionWorkflowId = "reconstruction";
+constexpr auto kDemWorkflowId = "dem";
+constexpr auto kOrthomosaicWorkflowId = "orthomosaic";
+constexpr auto kSiftLightGlueAlgorithmId = "sift_lightglue";
+
+struct WorkflowEntry
 {
-    const QJsonObject defaults = WorkflowSettingsDialog::defaultSettings();
-    for (auto it = defaults.constBegin(); it != defaults.constEnd(); ++it)
-    {
-        if (!settings.contains(it.key()))
-        {
-            settings.insert(it.key(), it.value());
-        }
-    }
+    const char *id;
+    const char *displayName;
+};
+
+constexpr WorkflowEntry kWorkflowEntries[] = {
+    {kAerialWorkflowId, "空中三角测量"},
+    {kReconstructionWorkflowId, "三维重建"},
+    {kDemWorkflowId, "创建 DEM"},
+    {kOrthomosaicWorkflowId, "生成正射影像"}};
+
+QJsonObject defaultAerialSettings()
+{
+    QJsonObject settings;
+    settings[QStringLiteral("algorithm_id")] = QString::fromLatin1(kSiftLightGlueAlgorithmId);
+    settings[QStringLiteral("lightglue_tensorrt_engine")] = QString();
     return settings;
 }
 
-QSpinBox *makeIntegerSpin(int minimum,
-                          int maximum,
-                          const QString &toolTip,
-                          QWidget *parent)
+bool isKnownWorkflow(const QString &workflowId)
 {
-    auto *spin = new QSpinBox(parent);
-    spin->setRange(minimum, maximum);
-    spin->setToolTip(toolTip);
-    spin->setKeyboardTracking(false);
-    return spin;
+    for (const WorkflowEntry &entry : kWorkflowEntries)
+    {
+        if (workflowId == QString::fromLatin1(entry.id))
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
-QDoubleSpinBox *makeRealSpin(double minimum,
-                             double maximum,
-                             int decimals,
-                             double step,
-                             const QString &toolTip,
-                             QWidget *parent)
+QJsonObject normalizedSettings(const QJsonObject &settings)
 {
-    auto *spin = new QDoubleSpinBox(parent);
-    spin->setRange(minimum, maximum);
-    spin->setDecimals(decimals);
-    spin->setSingleStep(step);
-    spin->setToolTip(toolTip);
-    spin->setKeyboardTracking(false);
-    return spin;
+    QJsonObject normalized = WorkflowSettingsDialog::defaultSettings();
+    const QString selected = settings.value(QStringLiteral("selected_workflow"))
+        .toString()
+        .trimmed()
+        .toLower();
+    if (isKnownWorkflow(selected))
+    {
+        normalized[QStringLiteral("selected_workflow")] = selected;
+    }
+
+    // 保留未知工作流程对象，允许更新后的程序在旧版本中打开并保存项目时不丢数据。
+    QJsonObject workflows = settings.value(QStringLiteral("workflows")).toObject();
+    QJsonObject normalizedWorkflows = normalized.value(QStringLiteral("workflows")).toObject();
+    for (auto it = workflows.constBegin(); it != workflows.constEnd(); ++it)
+    {
+        if (it.value().isObject())
+        {
+            normalizedWorkflows.insert(it.key(), it.value());
+        }
+    }
+    normalizedWorkflows[QString::fromLatin1(kAerialWorkflowId)] =
+        WorkflowSettingsDialog::aerialTriangulationSettings(settings);
+    normalized[QStringLiteral("workflows")] = normalizedWorkflows;
+    return normalized;
+}
+
+QWidget *makeReadOnlyWorkflowPage(const QString &workflowId,
+                                  const QString &title,
+                                  QWidget *parent)
+{
+    auto *page = new QWidget(parent);
+    page->setObjectName(QStringLiteral("workflowPage_%1").arg(workflowId));
+    auto *layout = new QVBoxLayout(page);
+    layout->setContentsMargins(0, 0, 0, 0);
+
+    auto *group = new QGroupBox(title, page);
+    auto *form = new QFormLayout(group);
+    form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    auto *profile = new QComboBox(group);
+    profile->addItem(QStringLiteral("默认"));
+    form->addRow(QStringLiteral("参数方案:"), profile);
+    layout->addWidget(group);
+    layout->addStretch(1);
+
+    // 页面仍可通过顶部选择器查看，但整个设置区域不可编辑。
+    page->setEnabled(false);
+    return page;
 }
 
 } // namespace
@@ -88,85 +131,125 @@ WorkflowSettingsDialog::WorkflowSettingsDialog(QWidget *parent)
 
 QJsonObject WorkflowSettingsDialog::defaultSettings()
 {
+    QJsonObject workflows;
+    workflows[QString::fromLatin1(kAerialWorkflowId)] = defaultAerialSettings();
+    workflows[QString::fromLatin1(kReconstructionWorkflowId)] = QJsonObject();
+    workflows[QString::fromLatin1(kDemWorkflowId)] = QJsonObject();
+    workflows[QString::fromLatin1(kOrthomosaicWorkflowId)] = QJsonObject();
+
     QJsonObject settings;
-    settings[QStringLiteral("workflow_settings_version")] = 2;
-    settings[QStringLiteral("algorithm_id")] = QStringLiteral("sift_lightglue");
-    settings[QStringLiteral("device")] = QStringLiteral("cuda");
-    settings[QStringLiteral("lightglue_tensorrt_engine")] = QString();
-    settings[QStringLiteral("threads")] = std::max(1, QThread::idealThreadCount());
-    settings[QStringLiteral("cuda_device")] = 0;
-    settings[QStringLiteral("cuda_parallel_pairs")] = 0;
-    settings[QStringLiteral("feature_prefetch_depth")] = 2;
-    settings[QStringLiteral("feature_max_image_dim")] = 0;
-    settings[QStringLiteral("match_threshold")] = 0.15;
-    settings[QStringLiteral("geometry_reprojection_threshold_px")] = 1.5;
-    settings[QStringLiteral("geometry_min_inliers")] = 20;
-    settings[QStringLiteral("geometry_max_iterations")] = 10000;
-    settings[QStringLiteral("tie_point_grid_columns")] = 8;
-    settings[QStringLiteral("tie_point_grid_rows")] = 8;
-    settings[QStringLiteral("tie_point_grid_cell_limit")] = 0;
-    settings[QStringLiteral("stationary_tie_point_max_pixel_motion")] = 1.0;
+    settings[QStringLiteral("workflow_settings_version")] = 3;
+    settings[QStringLiteral("selected_workflow")] = QString::fromLatin1(kAerialWorkflowId);
+    settings[QStringLiteral("workflows")] = workflows;
     return settings;
+}
+
+QJsonObject WorkflowSettingsDialog::aerialTriangulationSettings(const QJsonObject &settings)
+{
+    QJsonObject source;
+    const QJsonObject workflows = settings.value(QStringLiteral("workflows")).toObject();
+    if (workflows.value(QString::fromLatin1(kAerialWorkflowId)).isObject())
+    {
+        source = workflows.value(QString::fromLatin1(kAerialWorkflowId)).toObject();
+    }
+    else
+    {
+        // v2 将空三字段直接放在根对象中；只迁移仍属于工作流程决策的字段。
+        source = settings;
+    }
+
+    QJsonObject aerial = defaultAerialSettings();
+    const QString algorithmId = source.value(QStringLiteral("algorithm_id"))
+        .toString()
+        .trimmed()
+        .toLower();
+    if (!algorithmId.isEmpty())
+    {
+        aerial[QStringLiteral("algorithm_id")] = algorithmId;
+    }
+    aerial[QStringLiteral("lightglue_tensorrt_engine")] =
+        source.value(QStringLiteral("lightglue_tensorrt_engine")).toString().trimmed();
+    return aerial;
 }
 
 void WorkflowSettingsDialog::setupUi()
 {
     setWindowTitle(QStringLiteral("工作流程设置"));
     setModal(true);
-    resize(620, 690);
+    resize(680, 360);
+    setMinimumSize(580, 320);
 
     auto *rootLayout = new QVBoxLayout(this);
     rootLayout->setContentsMargins(20, 18, 20, 18);
-    rootLayout->setSpacing(12);
+    rootLayout->setSpacing(14);
 
-    auto *scrollArea = new QScrollArea(this);
-    scrollArea->setWidgetResizable(true);
-    scrollArea->setFrameShape(QFrame::NoFrame);
-    auto *content = new QWidget(scrollArea);
-    auto *contentLayout = new QVBoxLayout(content);
-    contentLayout->setContentsMargins(0, 0, 0, 0);
-    contentLayout->setSpacing(12);
+    auto *workflowForm = new QFormLayout();
+    workflowForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    _workflowCombo = new QComboBox(this);
+    _workflowCombo->setObjectName(QStringLiteral("workflowSelector"));
+    for (const WorkflowEntry &entry : kWorkflowEntries)
+    {
+        _workflowCombo->addItem(QString::fromUtf8(entry.displayName),
+                                QString::fromLatin1(entry.id));
+    }
+    workflowForm->addRow(QStringLiteral("工作流程:"), _workflowCombo);
+    rootLayout->addLayout(workflowForm);
 
-    auto *algorithmGroup = new QGroupBox(QStringLiteral("空中三角测量 - 算法与运行资源"), content);
-    auto *algorithmForm = new QFormLayout(algorithmGroup);
-    algorithmForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
-    auto *algorithmLabel = new QLabel(QStringLiteral("CUDA SIFT + TensorRT LightGlue"), algorithmGroup);
-    algorithmLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    algorithmForm->addRow(QStringLiteral("匹配算法:"), algorithmLabel);
+    _workflowPages = new QStackedWidget(this);
+    _workflowPages->setObjectName(QStringLiteral("workflowPages"));
 
-    _cpuThreadsSpin = makeIntegerSpin(
-        1, 256, QStringLiteral("SfM、几何验证与 BA 共用的 CPU 线程预算。"), algorithmGroup);
-    algorithmForm->addRow(QStringLiteral("CPU 线程预算:"), _cpuThreadsSpin);
+    auto *aerialPage = new QWidget(_workflowPages);
+    aerialPage->setObjectName(QStringLiteral("workflowPage_aerial_triangulation"));
+    auto *aerialLayout = new QVBoxLayout(aerialPage);
+    aerialLayout->setContentsMargins(0, 0, 0, 0);
+    auto *aerialGroup = new QGroupBox(QStringLiteral("空中三角测量"), aerialPage);
+    auto *aerialForm = new QFormLayout(aerialGroup);
+    aerialForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
 
-    _cudaDeviceSpin = makeIntegerSpin(
-        0, 31, QStringLiteral("CUDA SIFT 与 TensorRT LightGlue 使用的设备序号。"), algorithmGroup);
-    algorithmForm->addRow(QStringLiteral("CUDA 设备:"), _cudaDeviceSpin);
+    _matchingAlgorithmCombo = new QComboBox(aerialGroup);
+    _matchingAlgorithmCombo->setObjectName(QStringLiteral("aerialMatchingAlgorithmCombo"));
+    populateMatchingAlgorithms();
+    aerialForm->addRow(QStringLiteral("匹配算法:"), _matchingAlgorithmCombo);
 
-    auto *enginePathRow = new QWidget(algorithmGroup);
+    auto *enginePathRow = new QWidget(aerialGroup);
     auto *enginePathLayout = new QHBoxLayout(enginePathRow);
     enginePathLayout->setContentsMargins(0, 0, 0, 0);
     enginePathLayout->setSpacing(6);
     _lightGlueEngineEdit = new QLineEdit(enginePathRow);
-    _lightGlueEngineEdit->setPlaceholderText(QStringLiteral("自动查找本机引擎"));
+    _lightGlueEngineEdit->setObjectName(QStringLiteral("aerialLightGlueEngineEdit"));
+    _lightGlueEngineEdit->setPlaceholderText(QStringLiteral("自动选择本机引擎"));
     _lightGlueEngineEdit->setClearButtonEnabled(true);
-    _lightGlueEngineEdit->setToolTip(
-        QStringLiteral("可选的 TensorRT LightGlue .engine 路径；留空时按模型目录和构建缓存自动查找。"));
     _lightGlueEngineBrowseButton = new QToolButton(enginePathRow);
     _lightGlueEngineBrowseButton->setIcon(style()->standardIcon(QStyle::SP_DialogOpenButton));
-    _lightGlueEngineBrowseButton->setToolTip(QStringLiteral("选择 TensorRT LightGlue 引擎"));
+    _lightGlueEngineBrowseButton->setToolTip(QStringLiteral("选择 TensorRT 引擎"));
     _lightGlueEngineBrowseButton->setFixedSize(32, 30);
     enginePathLayout->addWidget(_lightGlueEngineEdit, 1);
     enginePathLayout->addWidget(_lightGlueEngineBrowseButton);
-    algorithmForm->addRow(QStringLiteral("LightGlue 引擎:"), enginePathRow);
+    aerialForm->addRow(QStringLiteral("TensorRT 引擎:"), enginePathRow);
 
-    _lightGlueEngineStatusLabel = new QLabel(algorithmGroup);
+    _lightGlueEngineStatusLabel = new QLabel(aerialGroup);
     _lightGlueEngineStatusLabel->setWordWrap(true);
     _lightGlueEngineStatusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    algorithmForm->addRow(QStringLiteral("当前生效:"), _lightGlueEngineStatusLabel);
-    connect(_lightGlueEngineEdit, &QLineEdit::textChanged, this,
-            [this]() { refreshLightGlueEngineStatus(); });
-    connect(_lightGlueEngineBrowseButton, &QToolButton::clicked, this,
-            [this]()
+    aerialForm->addRow(QStringLiteral("当前生效:"), _lightGlueEngineStatusLabel);
+    aerialLayout->addWidget(aerialGroup);
+    aerialLayout->addStretch(1);
+    _workflowPages->addWidget(aerialPage);
+
+    _workflowPages->addWidget(makeReadOnlyWorkflowPage(
+        QString::fromLatin1(kReconstructionWorkflowId), QStringLiteral("三维重建"), _workflowPages));
+    _workflowPages->addWidget(makeReadOnlyWorkflowPage(
+        QString::fromLatin1(kDemWorkflowId), QStringLiteral("创建 DEM"), _workflowPages));
+    _workflowPages->addWidget(makeReadOnlyWorkflowPage(
+        QString::fromLatin1(kOrthomosaicWorkflowId), QStringLiteral("生成正射影像"), _workflowPages));
+    rootLayout->addWidget(_workflowPages, 1);
+
+    connect(_workflowCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, &WorkflowSettingsDialog::setCurrentWorkflow);
+    connect(_matchingAlgorithmCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [this]() { refreshAlgorithmControls(); });
+    connect(_lightGlueEngineEdit, &QLineEdit::textChanged,
+            this, [this]() { refreshLightGlueEngineStatus(); });
+    connect(_lightGlueEngineBrowseButton, &QToolButton::clicked, this, [this]()
     {
         const QString currentPath = _lightGlueEngineEdit->text().trimmed();
         const QString startPath = currentPath.isEmpty()
@@ -183,72 +266,6 @@ void WorkflowSettingsDialog::setupUi()
         }
     });
 
-    _cudaParallelPairsSpin = makeIntegerSpin(
-        0, 16, QStringLiteral("同时执行的 LightGlue 像对数量；0 表示按可用显存自动决定。"), algorithmGroup);
-    _cudaParallelPairsSpin->setSpecialValueText(QStringLiteral("自动"));
-    algorithmForm->addRow(QStringLiteral("GPU 并行像对:"), _cudaParallelPairsSpin);
-
-    _featurePrefetchDepthSpin = makeIntegerSpin(
-        1, 4, QStringLiteral("CUDA SIFT 提取时预读到主机内存的影像数。"), algorithmGroup);
-    algorithmForm->addRow(QStringLiteral("特征预读影像:"), _featurePrefetchDepthSpin);
-
-    _featureMaxImageDimSpin = makeIntegerSpin(
-        0, 32768, QStringLiteral("SIFT 输入影像最长边；0 表示由空三精度预设决定。"), algorithmGroup);
-    _featureMaxImageDimSpin->setSpecialValueText(QStringLiteral("由精度预设决定"));
-    _featureMaxImageDimSpin->setSuffix(QStringLiteral(" px"));
-    algorithmForm->addRow(QStringLiteral("特征输入最长边:"), _featureMaxImageDimSpin);
-    contentLayout->addWidget(algorithmGroup);
-
-    auto *matchingGroup = new QGroupBox(QStringLiteral("匹配与几何验证"), content);
-    auto *matchingForm = new QFormLayout(matchingGroup);
-    matchingForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
-
-    _matchThresholdSpin = makeRealSpin(
-        0.0, 1.0, 3, 0.01, QStringLiteral("LightGlue 输出匹配的最低置信度。"), matchingGroup);
-    matchingForm->addRow(QStringLiteral("匹配置信度门限:"), _matchThresholdSpin);
-
-    _geometryReprojectionSpin = makeRealSpin(
-        0.1, 20.0, 2, 0.1, QStringLiteral("基础矩阵 USAC 内点的最大像素残差。"), matchingGroup);
-    _geometryReprojectionSpin->setSuffix(QStringLiteral(" px"));
-    matchingForm->addRow(QStringLiteral("几何残差门限:"), _geometryReprojectionSpin);
-
-    _geometryMinInliersSpin = makeIntegerSpin(
-        8, 10000, QStringLiteral("一个像对进入连接点网络所需的最少几何内点。"), matchingGroup);
-    matchingForm->addRow(QStringLiteral("最少几何内点:"), _geometryMinInliersSpin);
-
-    _geometryMaxIterationsSpin = makeIntegerSpin(
-        100, 200000, QStringLiteral("USAC 几何模型估计的最大随机采样迭代次数。"), matchingGroup);
-    _geometryMaxIterationsSpin->setSingleStep(500);
-    matchingForm->addRow(QStringLiteral("USAC 最大迭代:"), _geometryMaxIterationsSpin);
-    contentLayout->addWidget(matchingGroup);
-
-    auto *tiePointGroup = new QGroupBox(QStringLiteral("连接点整理"), content);
-    auto *tiePointForm = new QFormLayout(tiePointGroup);
-    tiePointForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
-
-    _tiePointGridColumnsSpin = makeIntegerSpin(
-        1, 64, QStringLiteral("连接点空间均匀化网格的列数。"), tiePointGroup);
-    tiePointForm->addRow(QStringLiteral("网格列数:"), _tiePointGridColumnsSpin);
-
-    _tiePointGridRowsSpin = makeIntegerSpin(
-        1, 64, QStringLiteral("连接点空间均匀化网格的行数。"), tiePointGroup);
-    tiePointForm->addRow(QStringLiteral("网格行数:"), _tiePointGridRowsSpin);
-
-    _tiePointGridCellLimitSpin = makeIntegerSpin(
-        0, 10000, QStringLiteral("单个网格最多保留的连接点数；0 按影像连接点总限额自动分配。"), tiePointGroup);
-    _tiePointGridCellLimitSpin->setSpecialValueText(QStringLiteral("自动"));
-    tiePointForm->addRow(QStringLiteral("每网格连接点上限:"), _tiePointGridCellLimitSpin);
-
-    _stationaryMotionSpin = makeRealSpin(
-        0.0, 100.0, 2, 0.1, QStringLiteral("跨影像位移不超过该值的轨迹可判为固定连接点。"), tiePointGroup);
-    _stationaryMotionSpin->setSuffix(QStringLiteral(" px"));
-    tiePointForm->addRow(QStringLiteral("固定点最大位移:"), _stationaryMotionSpin);
-    contentLayout->addWidget(tiePointGroup);
-    contentLayout->addStretch(1);
-
-    scrollArea->setWidget(content);
-    rootLayout->addWidget(scrollArea, 1);
-
     auto *buttons = new QDialogButtonBox(
         QDialogButtonBox::RestoreDefaults | QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
         this);
@@ -258,76 +275,93 @@ void WorkflowSettingsDialog::setupUi()
     connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     connect(buttons->button(QDialogButtonBox::RestoreDefaults), &QPushButton::clicked,
-            this, [this]()
-    {
-        applySettings(defaultSettings());
-    });
+            this, [this]() { applySettings(defaultSettings()); });
     rootLayout->addWidget(buttons);
+}
+
+void WorkflowSettingsDialog::populateMatchingAlgorithms()
+{
+    _matchingAlgorithmCombo->clear();
+    const auto descriptors = xjw::image_matching::ImageMatchingRegistry::descriptors();
+    for (const auto &descriptor : descriptors)
+    {
+        _matchingAlgorithmCombo->addItem(descriptor.displayName, descriptor.id);
+    }
+    if (_matchingAlgorithmCombo->count() == 0)
+    {
+        _matchingAlgorithmCombo->addItem(QStringLiteral("无可用算法"), QString());
+        _matchingAlgorithmCombo->setEnabled(false);
+    }
 }
 
 void WorkflowSettingsDialog::applySettings(const QJsonObject &requestedSettings)
 {
-    const QJsonObject settings = withDefaults(requestedSettings);
-    _cpuThreadsSpin->setValue(settings.value(QStringLiteral("threads")).toInt());
-    _cudaDeviceSpin->setValue(settings.value(QStringLiteral("cuda_device")).toInt());
+    _appliedSettings = normalizedSettings(requestedSettings);
+    const QString selectedWorkflow = _appliedSettings
+        .value(QStringLiteral("selected_workflow"))
+        .toString();
+    const int workflowIndex = _workflowCombo->findData(selectedWorkflow);
+    _workflowCombo->setCurrentIndex(workflowIndex >= 0 ? workflowIndex : 0);
+
+    const QJsonObject aerial = aerialTriangulationSettings(_appliedSettings);
+    const QString algorithmId = aerial.value(QStringLiteral("algorithm_id")).toString();
+    const int algorithmIndex = _matchingAlgorithmCombo->findData(algorithmId);
+    _matchingAlgorithmCombo->setCurrentIndex(algorithmIndex >= 0 ? algorithmIndex : 0);
     _lightGlueEngineEdit->setText(
-        settings.value(QStringLiteral("lightglue_tensorrt_engine")).toString());
-    _cudaParallelPairsSpin->setValue(
-        settings.value(QStringLiteral("cuda_parallel_pairs")).toInt());
-    _featurePrefetchDepthSpin->setValue(
-        settings.value(QStringLiteral("feature_prefetch_depth")).toInt());
-    _featureMaxImageDimSpin->setValue(
-        settings.value(QStringLiteral("feature_max_image_dim")).toInt());
-    _matchThresholdSpin->setValue(
-        settings.value(QStringLiteral("match_threshold")).toDouble());
-    _geometryReprojectionSpin->setValue(
-        settings.value(QStringLiteral("geometry_reprojection_threshold_px")).toDouble());
-    _geometryMinInliersSpin->setValue(
-        settings.value(QStringLiteral("geometry_min_inliers")).toInt());
-    _geometryMaxIterationsSpin->setValue(
-        settings.value(QStringLiteral("geometry_max_iterations")).toInt());
-    _tiePointGridColumnsSpin->setValue(
-        settings.value(QStringLiteral("tie_point_grid_columns")).toInt());
-    _tiePointGridRowsSpin->setValue(
-        settings.value(QStringLiteral("tie_point_grid_rows")).toInt());
-    _tiePointGridCellLimitSpin->setValue(
-        settings.value(QStringLiteral("tie_point_grid_cell_limit")).toInt());
-    _stationaryMotionSpin->setValue(
-        settings.value(QStringLiteral("stationary_tie_point_max_pixel_motion")).toDouble());
-    refreshLightGlueEngineStatus();
+        aerial.value(QStringLiteral("lightglue_tensorrt_engine")).toString());
+    setCurrentWorkflow(_workflowCombo->currentIndex());
+    refreshAlgorithmControls();
 }
 
 QJsonObject WorkflowSettingsDialog::collectSettings() const
 {
-    QJsonObject settings;
-    settings[QStringLiteral("workflow_settings_version")] = 2;
-    // 当前注册表只提供这一条生产算法。固定 ID 和 CUDA 设备语义写入配置，
-    // 以后新增算法时仍由注册表扩展，而不需要修改空三下游文件格式。
-    settings[QStringLiteral("algorithm_id")] = QStringLiteral("sift_lightglue");
-    settings[QStringLiteral("device")] = QStringLiteral("cuda");
-    settings[QStringLiteral("lightglue_tensorrt_engine")] =
+    QJsonObject settings = normalizedSettings(_appliedSettings);
+    settings[QStringLiteral("workflow_settings_version")] = 3;
+    settings[QStringLiteral("selected_workflow")] =
+        _workflowCombo->currentData().toString();
+
+    QJsonObject workflows = settings.value(QStringLiteral("workflows")).toObject();
+    QJsonObject aerial = workflows.value(QString::fromLatin1(kAerialWorkflowId)).toObject();
+    const QString algorithmId = _matchingAlgorithmCombo->currentData().toString();
+    aerial[QStringLiteral("algorithm_id")] = algorithmId.isEmpty()
+        ? QString::fromLatin1(kSiftLightGlueAlgorithmId)
+        : algorithmId;
+    aerial[QStringLiteral("lightglue_tensorrt_engine")] =
         _lightGlueEngineEdit->text().trimmed();
-    settings[QStringLiteral("threads")] = _cpuThreadsSpin->value();
-    settings[QStringLiteral("cuda_device")] = _cudaDeviceSpin->value();
-    settings[QStringLiteral("cuda_parallel_pairs")] = _cudaParallelPairsSpin->value();
-    settings[QStringLiteral("feature_prefetch_depth")] = _featurePrefetchDepthSpin->value();
-    settings[QStringLiteral("feature_max_image_dim")] = _featureMaxImageDimSpin->value();
-    settings[QStringLiteral("match_threshold")] = _matchThresholdSpin->value();
-    settings[QStringLiteral("geometry_reprojection_threshold_px")] =
-        _geometryReprojectionSpin->value();
-    settings[QStringLiteral("geometry_min_inliers")] = _geometryMinInliersSpin->value();
-    settings[QStringLiteral("geometry_max_iterations")] = _geometryMaxIterationsSpin->value();
-    settings[QStringLiteral("tie_point_grid_columns")] = _tiePointGridColumnsSpin->value();
-    settings[QStringLiteral("tie_point_grid_rows")] = _tiePointGridRowsSpin->value();
-    settings[QStringLiteral("tie_point_grid_cell_limit")] = _tiePointGridCellLimitSpin->value();
-    settings[QStringLiteral("stationary_tie_point_max_pixel_motion")] =
-        _stationaryMotionSpin->value();
+    workflows[QString::fromLatin1(kAerialWorkflowId)] = aerial;
+    settings[QStringLiteral("workflows")] = workflows;
     return settings;
+}
+
+void WorkflowSettingsDialog::setCurrentWorkflow(int index)
+{
+    if (_workflowPages && index >= 0 && index < _workflowPages->count())
+    {
+        _workflowPages->setCurrentIndex(index);
+    }
+}
+
+void WorkflowSettingsDialog::refreshAlgorithmControls()
+{
+    const bool usesLightGlue = _matchingAlgorithmCombo->currentData().toString() ==
+        QString::fromLatin1(kSiftLightGlueAlgorithmId);
+    _lightGlueEngineEdit->setEnabled(usesLightGlue);
+    _lightGlueEngineBrowseButton->setEnabled(usesLightGlue);
+    if (usesLightGlue)
+    {
+        refreshLightGlueEngineStatus();
+    }
+    else
+    {
+        _lightGlueEngineStatusLabel->setText(QStringLiteral("不适用"));
+    }
 }
 
 void WorkflowSettingsDialog::refreshLightGlueEngineStatus()
 {
-    if (!_lightGlueEngineEdit || !_lightGlueEngineStatusLabel)
+    if (!_lightGlueEngineEdit || !_lightGlueEngineStatusLabel ||
+        _matchingAlgorithmCombo->currentData().toString() !=
+            QString::fromLatin1(kSiftLightGlueAlgorithmId))
     {
         return;
     }
@@ -341,7 +375,10 @@ void WorkflowSettingsDialog::refreshLightGlueEngineStatus()
     {
         palette.setColor(QPalette::WindowText, QColor(180, 45, 45));
         _lightGlueEngineStatusLabel->setPalette(palette);
-        _lightGlueEngineStatusLabel->setText(QStringLiteral("未找到可用引擎"));
+        _lightGlueEngineStatusLabel->setText(
+            options.lightGlueTensorRtEnginePath.isEmpty()
+                ? QStringLiteral("未找到自动引擎")
+                : QStringLiteral("指定引擎不可用"));
         return;
     }
 

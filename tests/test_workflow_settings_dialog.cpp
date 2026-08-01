@@ -1,78 +1,111 @@
 #include "application/WorkflowSettingsDialog.h"
 
 #include <QApplication>
+#include <QComboBox>
 #include <QJsonObject>
+#include <QStackedWidget>
 
 #include <gtest/gtest.h>
 
-TEST(WorkflowSettingsDialogTest, DefaultsDescribeOnlyRegisteredProductionAlgorithm)
+namespace
 {
-    const QJsonObject settings = WorkflowSettingsDialog::defaultSettings();
-    EXPECT_EQ(settings.value(QStringLiteral("workflow_settings_version")).toInt(), 2);
-    EXPECT_EQ(settings.value(QStringLiteral("algorithm_id")).toString(),
-              QStringLiteral("sift_lightglue"));
-    EXPECT_EQ(settings.value(QStringLiteral("device")).toString(),
-              QStringLiteral("cuda"));
-    EXPECT_TRUE(settings.value(QStringLiteral("lightglue_tensorrt_engine")).toString().isEmpty());
-    EXPECT_GT(settings.value(QStringLiteral("threads")).toInt(), 0);
-    EXPECT_GT(settings.value(QStringLiteral("geometry_max_iterations")).toInt(), 0);
+
+QJsonObject aerialSettings(const QJsonObject &settings)
+{
+    return settings.value(QStringLiteral("workflows"))
+        .toObject()
+        .value(QStringLiteral("aerial_triangulation"))
+        .toObject();
 }
 
-TEST(WorkflowSettingsDialogTest, AppliesAndCollectsAerialTriangulationDetails)
+} // namespace
+
+TEST(WorkflowSettingsDialogTest, DefaultsUseWorkflowScopedSchema)
+{
+    const QJsonObject settings = WorkflowSettingsDialog::defaultSettings();
+    EXPECT_EQ(settings.value(QStringLiteral("workflow_settings_version")).toInt(), 3);
+    EXPECT_EQ(settings.value(QStringLiteral("selected_workflow")).toString(),
+              QStringLiteral("aerial_triangulation"));
+
+    const QJsonObject workflows = settings.value(QStringLiteral("workflows")).toObject();
+    EXPECT_TRUE(workflows.contains(QStringLiteral("aerial_triangulation")));
+    EXPECT_TRUE(workflows.contains(QStringLiteral("reconstruction")));
+    EXPECT_TRUE(workflows.contains(QStringLiteral("dem")));
+    EXPECT_TRUE(workflows.contains(QStringLiteral("orthomosaic")));
+
+    const QJsonObject aerial = aerialSettings(settings);
+    EXPECT_EQ(aerial.value(QStringLiteral("algorithm_id")).toString(),
+              QStringLiteral("sift_lightglue"));
+    EXPECT_TRUE(aerial.value(QStringLiteral("lightglue_tensorrt_engine")).toString().isEmpty());
+    EXPECT_FALSE(settings.contains(QStringLiteral("threads")));
+    EXPECT_FALSE(settings.contains(QStringLiteral("geometry_max_iterations")));
+}
+
+TEST(WorkflowSettingsDialogTest, ExposesFourWorkflowPagesAndOnlyAerialIsEditable)
 {
     WorkflowSettingsDialog dialog;
-    QJsonObject requested;
-    requested[QStringLiteral("threads")] = 12;
-    requested[QStringLiteral("cuda_device")] = 2;
-    requested[QStringLiteral("lightglue_tensorrt_engine")] =
+    auto *workflowSelector = dialog.findChild<QComboBox *>(QStringLiteral("workflowSelector"));
+    auto *workflowPages = dialog.findChild<QStackedWidget *>(QStringLiteral("workflowPages"));
+    auto *algorithmSelector = dialog.findChild<QComboBox *>(
+        QStringLiteral("aerialMatchingAlgorithmCombo"));
+
+    ASSERT_NE(workflowSelector, nullptr);
+    ASSERT_NE(workflowPages, nullptr);
+    ASSERT_NE(algorithmSelector, nullptr);
+    EXPECT_EQ(workflowSelector->count(), 4);
+    EXPECT_EQ(workflowSelector->currentData().toString(),
+              QStringLiteral("aerial_triangulation"));
+    EXPECT_TRUE(workflowPages->currentWidget()->isEnabled());
+    EXPECT_GE(algorithmSelector->findData(QStringLiteral("sift_lightglue")), 0);
+
+    workflowSelector->setCurrentIndex(
+        workflowSelector->findData(QStringLiteral("reconstruction")));
+    EXPECT_FALSE(workflowPages->currentWidget()->isEnabled());
+}
+
+TEST(WorkflowSettingsDialogTest, AppliesAndCollectsWorkflowScopedAerialSettings)
+{
+    WorkflowSettingsDialog dialog;
+    QJsonObject requested = WorkflowSettingsDialog::defaultSettings();
+    requested[QStringLiteral("selected_workflow")] = QStringLiteral("dem");
+    QJsonObject workflows = requested.value(QStringLiteral("workflows")).toObject();
+    QJsonObject aerial = workflows.value(QStringLiteral("aerial_triangulation")).toObject();
+    aerial[QStringLiteral("algorithm_id")] = QStringLiteral("sift_lightglue");
+    aerial[QStringLiteral("lightglue_tensorrt_engine")] =
         QStringLiteral("D:/models/lightglue.engine");
-    requested[QStringLiteral("cuda_parallel_pairs")] = 3;
-    requested[QStringLiteral("feature_prefetch_depth")] = 4;
-    requested[QStringLiteral("feature_max_image_dim")] = 4096;
-    requested[QStringLiteral("match_threshold")] = 0.275;
-    requested[QStringLiteral("geometry_reprojection_threshold_px")] = 2.25;
-    requested[QStringLiteral("geometry_min_inliers")] = 48;
-    requested[QStringLiteral("geometry_max_iterations")] = 25000;
-    requested[QStringLiteral("tie_point_grid_columns")] = 10;
-    requested[QStringLiteral("tie_point_grid_rows")] = 6;
-    requested[QStringLiteral("tie_point_grid_cell_limit")] = 75;
-    requested[QStringLiteral("stationary_tie_point_max_pixel_motion")] = 1.75;
+    workflows[QStringLiteral("aerial_triangulation")] = aerial;
+    requested[QStringLiteral("workflows")] = workflows;
 
     dialog.applySettings(requested);
     const QJsonObject collected = dialog.collectSettings();
-    EXPECT_EQ(collected.value(QStringLiteral("threads")).toInt(), 12);
-    EXPECT_EQ(collected.value(QStringLiteral("cuda_device")).toInt(), 2);
-    EXPECT_EQ(collected.value(QStringLiteral("lightglue_tensorrt_engine")).toString(),
-              QStringLiteral("D:/models/lightglue.engine"));
-    EXPECT_EQ(collected.value(QStringLiteral("cuda_parallel_pairs")).toInt(), 3);
-    EXPECT_EQ(collected.value(QStringLiteral("feature_prefetch_depth")).toInt(), 4);
-    EXPECT_EQ(collected.value(QStringLiteral("feature_max_image_dim")).toInt(), 4096);
-    EXPECT_DOUBLE_EQ(collected.value(QStringLiteral("match_threshold")).toDouble(), 0.275);
-    EXPECT_DOUBLE_EQ(
-        collected.value(QStringLiteral("geometry_reprojection_threshold_px")).toDouble(),
-        2.25);
-    EXPECT_EQ(collected.value(QStringLiteral("geometry_min_inliers")).toInt(), 48);
-    EXPECT_EQ(collected.value(QStringLiteral("geometry_max_iterations")).toInt(), 25000);
-    EXPECT_EQ(collected.value(QStringLiteral("tie_point_grid_columns")).toInt(), 10);
-    EXPECT_EQ(collected.value(QStringLiteral("tie_point_grid_rows")).toInt(), 6);
-    EXPECT_EQ(collected.value(QStringLiteral("tie_point_grid_cell_limit")).toInt(), 75);
-    EXPECT_DOUBLE_EQ(
-        collected.value(QStringLiteral("stationary_tie_point_max_pixel_motion")).toDouble(),
-        1.75);
+    EXPECT_EQ(collected.value(QStringLiteral("selected_workflow")).toString(),
+              QStringLiteral("dem"));
+    EXPECT_EQ(aerialSettings(collected).value(QStringLiteral("algorithm_id")).toString(),
+              QStringLiteral("sift_lightglue"));
+    EXPECT_EQ(
+        aerialSettings(collected).value(QStringLiteral("lightglue_tensorrt_engine")).toString(),
+        QStringLiteral("D:/models/lightglue.engine"));
 }
 
-TEST(WorkflowSettingsDialogTest, FillsMissingFieldsFromStableDefaults)
+TEST(WorkflowSettingsDialogTest, MigratesLegacyFlatSettingsWithoutKeepingTuningFields)
 {
     WorkflowSettingsDialog dialog;
-    dialog.applySettings(QJsonObject{{QStringLiteral("threads"), 3}});
-    const QJsonObject collected = dialog.collectSettings();
-    const QJsonObject defaults = WorkflowSettingsDialog::defaultSettings();
+    QJsonObject legacy;
+    legacy[QStringLiteral("workflow_settings_version")] = 2;
+    legacy[QStringLiteral("algorithm_id")] = QStringLiteral("sift_lightglue");
+    legacy[QStringLiteral("lightglue_tensorrt_engine")] =
+        QStringLiteral("D:/legacy/lightglue.engine");
+    legacy[QStringLiteral("threads")] = 24;
+    legacy[QStringLiteral("geometry_max_iterations")] = 25000;
 
-    EXPECT_EQ(collected.value(QStringLiteral("threads")).toInt(), 3);
-    EXPECT_EQ(collected.value(QStringLiteral("geometry_min_inliers")),
-              defaults.value(QStringLiteral("geometry_min_inliers")));
-    EXPECT_EQ(collected.value(QStringLiteral("tie_point_grid_columns")),
-              defaults.value(QStringLiteral("tie_point_grid_columns")));
+    dialog.applySettings(legacy);
+    const QJsonObject collected = dialog.collectSettings();
+    EXPECT_EQ(collected.value(QStringLiteral("workflow_settings_version")).toInt(), 3);
+    EXPECT_EQ(
+        aerialSettings(collected).value(QStringLiteral("lightglue_tensorrt_engine")).toString(),
+        QStringLiteral("D:/legacy/lightglue.engine"));
+    EXPECT_FALSE(collected.contains(QStringLiteral("threads")));
+    EXPECT_FALSE(collected.contains(QStringLiteral("geometry_max_iterations")));
 }
 
 int main(int argc, char **argv)
