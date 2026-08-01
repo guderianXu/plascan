@@ -1,5 +1,13 @@
 #pragma once
 
+/**
+ * @file MatchPhotosRuntime.h
+ * @brief 创建连接点各阶段共享的轻量运行时工具。
+ *
+ * 本接口不暴露任何特征文件或成对 `.match` 路径。特征只存在于任务级缓存，
+ * 最终匹配统一由 ImageMatchRepository 写入每影像 `.pimatch` 分片。
+ */
+
 #include "MatchPhotosAlgorithmPlan.h"
 #include "MatchPhotosContext.h"
 #include "MatchPhotosOptions.h"
@@ -8,38 +16,18 @@
 #include <QJsonObject>
 #include <QString>
 
-namespace xjw::feature_extractors
-{
-struct FeatureData;
-}
-
-namespace xjw::feature_match
-{
-struct MatchResult;
-}
-
-namespace xjw
-{
-namespace matchphotos
+namespace xjw::matchphotos
 {
 
 struct ResolvedImagePair
 {
     QString image0Path;
     QString image1Path;
-    QString pairName;
+    QString pairName; ///< 只用于日志显示，不参与文件命名。
     QString pairKey;
 };
 
-QString matchPhotosFeatureDirectory(const MatchPhotosContext &context);
 QString matchPhotosMatchDirectory(const MatchPhotosContext &context);
-QString matchPhotosFeaturePath(const MatchPhotosContext &context,
-                               const QString &imagePath,
-                               const MatchPhotosAlgorithmPlan &plan);
-QString matchPhotosMatchPath(const MatchPhotosContext &context,
-                             const QString &image0Path,
-                             const QString &image1Path,
-                             const MatchPhotosAlgorithmPlan &plan);
 
 bool shouldCancelMatchPhotos(const MatchPhotosContext &context);
 void advanceMatchPhotosProgress(const MatchPhotosContext &context);
@@ -54,10 +42,8 @@ bool resolveMatchPhotosPair(const MatchPhotosContext &context,
                             ResolvedImagePair *resolved,
                             QString *errorMessage);
 
-QString resolveLightGlueModelPath(const MatchPhotosAlgorithmPlan &plan,
-                                  const MatchPhotosOptions &options,
-                                  bool *useCuda,
-                                  QString *modelName);
+QString resolveLightGlueTensorRtEnginePath(const MatchPhotosOptions &options,
+                                           QString *engineName);
 
 int resolveFeatureKeypointLimit(const MatchPhotosOptions &options,
                                 const MatchPhotosAlgorithmPlan &plan,
@@ -70,24 +56,7 @@ QJsonObject makeFeatureRecordSettings(const MatchPhotosAlgorithmPlan &plan,
 QJsonObject makeMatchRecordSettings(const MatchPhotosAlgorithmPlan &plan,
                                     const MatchPhotosOptions &options,
                                     const ResolvedImagePair &pair,
-                                    const QString &feature0Path,
-                                    const QString &feature1Path,
-                                    const QString &matchPath,
-                                    const QString &sidecarPath,
                                     int matchCount,
                                     const QJsonObject &extraSettings = QJsonObject());
 
-bool writeMatchPhotosSidecar(const QString &sidecarPath,
-                             const ResolvedImagePair &pair,
-                             const QString &feature0Path,
-                             const QString &feature1Path,
-                             const QString &matchPath,
-                             const xjw::feature_extractors::FeatureData &feature0,
-                             const xjw::feature_extractors::FeatureData &feature1,
-                             const xjw::feature_match::MatchResult &matchResult,
-                             const MatchPhotosAlgorithmPlan &plan,
-                             const MatchPhotosOptions &options,
-                             const QJsonObject &extraSettings = QJsonObject());
-
-} // namespace matchphotos
-} // namespace xjw
+} // namespace xjw::matchphotos

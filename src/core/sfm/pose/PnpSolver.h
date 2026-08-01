@@ -139,13 +139,27 @@ class PnpSolver
      *
      * @param worldPoints   三维点坐标列表
      * @param imagePoints   对应的图像像素坐标列表
-     * @param cam           提供内参的相机（仅使用 fu/fv/cu/cv）
+     * @param cam           提供内参、坐标轴方向和 Brown-Conrady 畸变的相机
      * @param options       PnP 求解选项
      * @return PnpResult    求解结果
      */
     static PnpResult solveWithCamera(const std::vector<std::array<double, 3>> &worldPoints,
                                      const std::vector<std::array<double, 2>> &imagePoints, const Camera &cam,
                                      const PnpOptions &options = PnpOptions());
+
+  private:
+    static PnpResult solveWithDistortion(
+        const std::vector<std::array<double, 3>> &worldPoints,
+        const std::vector<std::array<double, 2>> &imagePoints,
+        double fu,
+        double fv,
+        double cu,
+        double cv,
+        int uDir,
+        int vDir,
+        bool depthFlipped,
+        const Camera::Distortion &distortion,
+        const PnpOptions &options);
 };
 
 } // namespace xjw

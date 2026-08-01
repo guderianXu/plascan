@@ -1,10 +1,23 @@
 #pragma once
 
+/**
+ * @file BundleAdjustProjection.h
+ * @brief BA 残差块共享的可微投影与局部位姿参数化。
+ *
+ * 坐标约定：
+ * - Camera 存储 camera-to-world 旋转 Rcw 和世界坐标相机中心 C；
+ * - 世界点到相机坐标使用 `Rcw^T * (X - C)`；
+ * - `depthAxisFlipped` 决定相机前方是局部 +Z 还是 -Z；
+ * - 像素投影包含 u/v 轴符号和 Brown-Conrady 畸变。
+ *
+ * 模板函数必须同时支持 double 与 Ceres Jet，禁止在此处加入破坏自动微分的
+ * 非模板数学调用或与 Camera::projectWorldPoint 不一致的坐标变换。
+ */
+
 #include "Camera.h"
 
 #include <array>
 #include <cmath>
-#include <type_traits>
 
 namespace xjw::ba
 {
@@ -35,8 +48,15 @@ struct ProjectionCamera
     bool depthAxisFlipped = false;
 };
 
+/// 从运行态 Camera 复制一个不持有资源、可安全捕获进残差 functor 的快照。
 ProjectionCamera makeProjectionCamera(const Camera &camera);
 
+/**
+ * @brief 投影一个已经位于相机坐标系的点。
+ *
+ * 在归一化平面应用 Brown-Conrady 畸变，再乘焦距和轴方向符号。若正深度
+ * 小于阈值则返回 false，避免把相机后方点作为合法残差。
+ */
 template <typename T>
 bool projectCameraPoint(const ProjectionCamera &camera,
                         const T &xCam,
@@ -47,12 +67,9 @@ bool projectCameraPoint(const ProjectionCamera &camera,
                         T *pixel)
 {
     const T forwardDepth = camera.depthAxisFlipped ? -zCam : zCam;
-    if constexpr (std::is_floating_point_v<T>)
+    if (!(forwardDepth > T(1e-9)))
     {
-        if (!(forwardDepth > T(1e-9)))
-        {
-            return false;
-        }
+        return false;
     }
 
     const T x = xCam / zCam;
@@ -72,6 +89,7 @@ bool projectCameraPoint(const ProjectionCamera &camera,
     return true;
 }
 
+/// 使用固定外参、固定内参投影世界点，主要用于点块残差。
 template <typename T>
 bool project(const ProjectionCamera &camera, const T *world, T *pixel)
 {
@@ -97,6 +115,12 @@ bool project(const ProjectionCamera &camera, const T *world, T *pixel)
                               pixel);
 }
 
+/**
+ * @brief 将 3 维轴角增量转换为旋转矩阵。
+ *
+ * 小角度分支使用 Rodrigues 一阶展开，避免 theta 接近零时除零，同时保持
+ * Ceres Jet 的连续导数。
+ */
 template <typename T>
 void poseDeltaRotation(const T *cameraDelta, T *deltaRotation)
 {
@@ -140,6 +164,12 @@ void poseDeltaRotation(const T *cameraDelta, T *deltaRotation)
     deltaRotation[8] = T(1.0) - cosc * (wx * wx + wy * wy);
 }
 
+/**
+ * @brief 使用局部位姿增量和显式焦距投影世界点。
+ *
+ * cameraDelta 的布局为 `[wx, wy, wz, dCx, dCy, dCz]`。旋转增量左乘基准
+ * camera-to-world 旋转，相机中心增量在世界坐标系中相加。
+ */
 template <typename T>
 bool projectWithPoseDeltaAndFocal(const ProjectionCamera &camera,
                                   const T *cameraDelta,
@@ -181,6 +211,7 @@ bool projectWithPoseDeltaAndFocal(const ProjectionCamera &camera,
     return projectCameraPoint(camera, xCam, yCam, zCam, focalX, focalY, pixel);
 }
 
+/// 使用局部位姿增量和快照中的固定焦距投影。
 template <typename T>
 bool projectWithPoseDelta(const ProjectionCamera &camera,
                           const T *cameraDelta,
@@ -195,6 +226,12 @@ bool projectWithPoseDelta(const ProjectionCamera &camera,
                                         pixel);
 }
 
+/**
+ * @brief 使用对数参数化的共享水平焦距投影。
+ *
+ * 以 log(f) 优化可天然保证焦距为正；垂直焦距按每台相机原始 fy/fx 比例恢复，
+ * 因而共享的是标定组的水平尺度，而不是强制方形像素。
+ */
 template <typename T>
 bool projectWithPoseDeltaAndSharedFocal(const ProjectionCamera &camera,
                                         const T *cameraDelta,

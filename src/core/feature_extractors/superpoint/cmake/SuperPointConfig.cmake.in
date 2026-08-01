@@ -1,6 +1,0 @@
-@PACKAGE_INIT@
-
-# Allow downstream projects to find the exported targets
-include("${CMAKE_CURRENT_LIST_DIR}/SuperPointTargets.cmake")
-
-set(SuperPoint_DIR "${CMAKE_CURRENT_LIST_DIR}")

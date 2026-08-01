@@ -4,6 +4,7 @@ option(PLASCAN_BUNDLE_RUNTIME "Bundle runtime shared libraries (Qt/OpenCV/Torch 
 
 install(TARGETS plascan_gui
   RUNTIME DESTINATION bin
+  COMPONENT Runtime
 )
 
 if(WIN32)
@@ -11,6 +12,7 @@ if(WIN32)
     "${CMAKE_SOURCE_DIR}/resources/plascan.png"
     "${CMAKE_SOURCE_DIR}/resources/plascan.svg"
     DESTINATION share/plascan
+    COMPONENT Runtime
   )
 else()
   # 应用图标 — PNG (256x256, 所有桌面环境通用)
@@ -30,32 +32,23 @@ else()
   )
 endif()
 
-if(TARGET superpoint)
-  install(TARGETS superpoint
-    LIBRARY DESTINATION lib
-    RUNTIME DESTINATION bin
-  )
-endif()
-
-if(TARGET superglue_matcher)
-  install(TARGETS superglue_matcher
-    LIBRARY DESTINATION lib
-    RUNTIME DESTINATION bin
-  )
-endif()
-
-if(TARGET lightglue_matcher)
-  install(TARGETS lightglue_matcher
-    LIBRARY DESTINATION lib
-    ARCHIVE DESTINATION lib
-    RUNTIME DESTINATION bin
-  )
-endif()
-
 set(PLASCAN_QT_CONF_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/packaging/qt.conf.in")
 configure_file("${PLASCAN_QT_CONF_TEMPLATE}" "${CMAKE_CURRENT_BINARY_DIR}/qt.conf" @ONLY)
 
-install(FILES "${CMAKE_CURRENT_BINARY_DIR}/qt.conf" DESTINATION bin)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/qt.conf"
+  DESTINATION bin
+  COMPONENT Runtime)
+
+if(WIN32)
+  set(_plascan_u2net_model "${CMAKE_SOURCE_DIR}/resources/models/U2Net_v1.onnx")
+  if(EXISTS "${_plascan_u2net_model}")
+    install(FILES "${_plascan_u2net_model}"
+      DESTINATION resources/models
+      COMPONENT Runtime)
+  else()
+    message(WARNING "PlaScan package will not include U2Net_v1.onnx: ${_plascan_u2net_model}")
+  endif()
+endif()
 
 if(NOT WIN32)
   set(PLASCAN_LAUNCHER_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/packaging/plascan_gui_launcher.sh.in")
@@ -69,6 +62,23 @@ if(NOT WIN32)
   install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan_gui" DESTINATION bin)
   install(FILES "${CMAKE_CURRENT_BINARY_DIR}/plascan_path.sh" DESTINATION /etc/profile.d RENAME plascan.sh)
   install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan" DESTINATION /usr/bin)
+endif()
+
+if(PLASCAN_BUNDLE_RUNTIME AND WIN32)
+  set(PLASCAN_WINDOWS_RUNTIME_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+  if(NOT PLASCAN_WINDOWS_RUNTIME_DIR)
+    set(PLASCAN_WINDOWS_RUNTIME_DIR "${CMAKE_BINARY_DIR}/bin")
+  endif()
+
+  set(PLASCAN_WINDOWS_INSTALL_BUNDLE_SCRIPT
+    "${CMAKE_CURRENT_BINARY_DIR}/InstallBundledRuntimeWindows.cmake")
+  configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/packaging/InstallBundledRuntimeWindows.cmake.in"
+    "${PLASCAN_WINDOWS_INSTALL_BUNDLE_SCRIPT}"
+    @ONLY
+  )
+  install(SCRIPT "${PLASCAN_WINDOWS_INSTALL_BUNDLE_SCRIPT}"
+    COMPONENT Runtime)
 endif()
 
 if(PLASCAN_BUNDLE_RUNTIME AND NOT WIN32)

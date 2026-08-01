@@ -10,10 +10,10 @@
 //   /path/to/proj.files/project.zip   <- 项目与 Chunk 索引
 //   /path/to/proj.files/1/            <- 当前 Chunk 数字目录
 //   ├── chunk.zip                     <- Chunk 元数据归档
-//   ├── assets/                       <- 特征、匹配和导入资源
-//   ├── bundle_adjust/                <- BA 运行产物
-//   ├── reconstruction/               <- 重建成果
-//   ├── reports/                      <- 综合报告
+//   ├── assets/                       <- 按需创建：特征、匹配和导入资源
+//   ├── bundle_adjust/                <- 按需创建：BA 运行产物
+//   ├── reconstruction/               <- 按需创建：重建成果
+//   ├── reports/                      <- 按需创建：综合报告
 //   └── .plascan_tmp/                 <- 崩溃恢复数据
 //       ├── project_files.json     <- 崩溃恢复缓存，不是归档条目
 //       ├── project_results.json   <- qCompress 后的崩溃恢复缓存
@@ -78,45 +78,19 @@ public:
     // 返回崩溃恢复目录中 project_ui_state.json 的完整路径
     static QString tempUiStatePath(const QString &plascanPath);
 
-    // 返回 assets/ip/ 目录（ipfind 标准输出目录）
-    static QString ipfindOutputDir(const QString &plascanPath);
-
-    // 返回 assets/matches/ 目录（ipmatch 标准输出目录）
-    static QString ipmatchOutputDir(const QString &plascanPath);
+    // 返回 assets/image_matches/ 目录。目录内每幅影像只有一个 `.pimatch` 分片，
+    // 文件名与格式由 core/image_matching/ImageMatchFile 统一管理。
+    static QString imageMatchOutputDir(const QString &plascanPath);
 
     // 返回 assets/masks/ 目录（照片蒙版标准输出目录）
     static QString maskOutputDir(const QString &plascanPath);
 
-    // 返回 .plascan_tmp/ip/ 目录（ipfind 临时输出目录，用于异步处理）
-    static QString tmpIpfindDir(const QString &plascanPath);
-
     // 根据规范化影像路径生成稳定产物键，避免不同目录下的同名影像互相覆盖。
     static QString imageArtifactKey(const QString &imagePath);
-
-    // 根据影像路径推算对应的 vwip 特征点文件输出路径
-    // 输出格式：assets/ip/<basename>-<sha256>.sp
-    static QString vwipOutputPathForImage(const QString &plascanPath, const QString &imagePath);
-
-    // 根据算法后缀推算特征文件输出路径
-    // 输出格式：assets/ip/<basename>-<sha256><suffix>
-    static QString featureOutputPathForImage(const QString &plascanPath,
-                                              const QString &imagePath,
-                                              const QString &suffix);
 
     // 根据影像路径推算对应蒙版文件输出路径
     // 输出格式：assets/masks/<basename>-<sha256>_mask.png
     static QString maskOutputPathForImage(const QString &plascanPath, const QString &imagePath);
-
-    // 在项目临时目录和标准目录中查找指定影像对应的 .sp 特征点文件。
-    static QString findSpForImage(const QString &plascanPath, const QString &imagePath);
-    // 查找任意提取器的特征文件 (尝试 .sp/.dsk/.alk/.sift/.orb/.akz)
-    static QString findFeatureForImage(const QString &plascanPath, const QString &imagePath);
-    // 按固定后缀查找特征文件 (不扫描所有后缀)
-    static QString featureFileForSuffix(const QString &plascanPath, const QString &imagePath,
-                                        const QString &suffix);
-    // 列出影像所有存在的特征文件后缀 (用于 GUI 多提取器切换)
-    static QStringList availableFeatureSuffixes(const QString &plascanPath,
-                                                 const QString &imagePath);
 
     // 查找指定影像对应的项目蒙版文件。
     static QString findMaskForImage(const QString &plascanPath, const QString &imagePath);
@@ -124,12 +98,6 @@ public:
     static QMap<QString, QString> maskPathsForImages(const QString &plascanPath,
                                                      const QStringList &imagePaths);
 
-private:
-    // 生成 .sp 文件的候选路径列表（优先检查临时目录，其次标准目录，再次影像同目录）
-    static QStringList spCandidates(const QString &plascanPath, const QString &imagePath);
-
-    // 生成 vwip 文件的候选路径列表（保留供将来支持 .vwip 格式）
-    static QStringList vwipCandidates(const QString &plascanPath, const QString &imagePath);
 };
 
 } // namespace xjw::common::project

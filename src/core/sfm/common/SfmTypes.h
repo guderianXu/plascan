@@ -105,8 +105,8 @@ struct TrackElement {
 
 enum class TrackSource
 {
-    FeatureMatch,
-    PriorMarker
+    FeatureMatch, ///< 由自动 pairwise 特征匹配合并。
+    PriorMarker ///< 由人工标记投影直接注入。
 };
 
 /**
@@ -117,8 +117,8 @@ enum class TrackSource
 struct Track {
     std::vector<TrackElement> elements;  ///< 观测元素列表
     double confidence = 1.0;             ///< 由匹配边分数聚合得到的轨迹置信度
-    TrackSource source = TrackSource::FeatureMatch;
-    std::string sourceId;
+    TrackSource source = TrackSource::FeatureMatch; ///< 自动或人工来源。
+    std::string sourceId; ///< 人工先验的稳定标记 ID；自动轨迹通常为空。
 
     /// 轨迹长度（观测数）
     std::size_t length() const { return elements.size(); }

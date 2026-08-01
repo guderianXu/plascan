@@ -60,6 +60,9 @@ public slots:
     /// 打开工作流程中的对齐照片参数对话框；确认后启动空中三角测量 workflow。
     void openWorkflowAerialTriangulationDialog();
 
+    /// 打开工作流程级高级设置；当前编辑空三算法、设备和数值门限。
+    void openWorkflowSettingsDialog();
+
     /// 打开影像重叠度分析对话框。
     void openOverlapAnalysisDialog();
 
@@ -93,7 +96,6 @@ private:
     struct SparsePrerequisiteSummary
     {
         int imageCount = 0;
-        bool hasFeatures = false;
         bool hasMatches = false;
         bool blockOnMatchQuality = false;
         QJsonObject prerequisiteReport;
@@ -125,6 +127,7 @@ private:
     DialogSettingStore *_mapSetting = nullptr;
     DialogSettingStore *_dcSetting = nullptr;
     DialogSettingStore *_aerialTriangulationSetting = nullptr;
+    DialogSettingStore *_workflowSettingsStore = nullptr;
     QPointer<QMainWindow> _mainWindow;            // 父主窗口弱引用（不拥有）
     ProjectManager *_projectManager = nullptr;    // 注入的项目管理器（非拥有引用）
 };

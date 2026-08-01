@@ -23,7 +23,7 @@
 #pragma once
 
 #include "Camera.h"
-#include "ProjectFilesManager.h"
+#include "project/ProjectDocumentModel.h"
 #include "ProjectSessionContext.h"
 #include "ProjectTerrainRequests.h"
 
@@ -41,10 +41,10 @@
 class QWidget;
 class GenerateMaskDialog;
 class ProjectData;
-class ProjectReconstructionManager;
+class ProjectSparseReconstructionManager;
+class ProjectModelManager;
 class ProjectTerrainProductsManager;
 class ProjectCameraSetupManager;
-class ProjectTaskDispatcher;
 class ProjectUiCommands;
 
 // ProjectManager: 简化版 - 只负责UI对话框协调
@@ -85,8 +85,8 @@ signals:
     void projectMetadataUpdated(const QString &plascanPath);
     // 脏状态变化：dirty=true 表示有未保存更改
     void metadataDirtyChanged(bool dirty);
-    // 单个 ipfind 结果追加到元数据后发出，参数为对应的输入影像绝对路径
-    void ipfindResultAppended(const QString &imagePath, const QString &suffix = QString());
+    // 逐影像匹配分片写入项目后发出，用于刷新当前影像的匹配观测显示。
+    void imageMatchResultAppended(const QString &imagePath);
     // 照片蒙版生成进度（主窗口状态栏右下角显示）
     void maskGenerationProgressChanged(const QString &stage, int done, int total);
     // 照片蒙版生成结束（success=true 表示全部目标影像生成成功）
@@ -94,7 +94,7 @@ signals:
     // 照片蒙版生成完成后发出，供当前影像视图刷新轮廓覆盖层。
     void masksGenerated(const QStringList &imagePaths);
     /// 每对影像匹配完成时实时发出（在主线程中）
-    /// img0/img1: 影像绝对路径; matchFilePath: .match 文件路径; numMatches: 内点数
+    /// img0/img1: 影像绝对路径; matchFilePath: owner `.pimatch` 分片; numMatches: 内点数
     void matchPairReady(const QString &img0, const QString &img1,
                         const QString &matchFilePath, int numMatches);
     // 光束法平差（Bundle Adjust）单次运行完成后发出预览结果
@@ -120,6 +120,12 @@ signals:
     // DEM 流水线进度
     void demPipelineProgressChanged(const QString &stage, int percent);
     void demPipelineFinished(bool success, const QString &message);
+    // 正射影像流水线使用独立信号，避免与 DEM 任务状态串线。
+    void orthoPipelineStarted();
+    void orthoPipelineProgressChanged(const QString &stage, int percent);
+    void orthoPipelineFinished(bool success,
+                               const QString &message,
+                               const QJsonObject &result);
 
 public slots:
     // === 项目操作（内部会显示文件对话框） ===
@@ -213,12 +219,9 @@ public slots:
     }
     
     // === 结果追加接口（供后台任务通过 Qt::QueuedConnection 调用） ===
-    // 追加一条 ipfind 结果到项目元数据，并立即持久化到归档
-    void appendIpfindResult(const QString &input, const QString &output, const QJsonObject &settings);
-    void appendIpfindResults(const QVector<ProjectIpfindResultRecord> &records);
-    // 追加批量 ipmatch 结果到项目元数据，并立即持久化到归档
-    void appendIpmatchResult(const QStringList &outputs, const QJsonObject &settings);
-    void appendIpmatchResults(const QVector<ProjectIpmatchResultRecord> &records);
+    // 追加逐影像 `.pimatch` 分片索引，并立即持久化到归档。
+    void appendImageMatchResult(const ProjectImageMatchResultRecord &record);
+    void appendImageMatchResults(const QVector<ProjectImageMatchResultRecord> &records);
     // 将影像-相机参数映射批量写回项目 ProjectData（供 AT 服务结果写回时调用）
     // 参数: cameras       - 影像绝对路径 → 相机 JSON 的映射
     //       updatedCount  - 可选，输出实际更新的影像数量
@@ -251,7 +254,8 @@ public slots:
     void startDemFromPointCloudAsync(
         const xjw::gui::project::DemGenerationRequest &request);
     // 异步启动正射影像制作（settings 包含影像、DEM、输出路径与核心选项）。
-    void startMapProjectAsync(const QJsonObject &settings);
+    void startMapProjectAsync(
+        const xjw::gui::project::OrthoGenerationRequest &request);
     // 异步启动模型生成；输入必须来自项目内已有点云、深度图或显式指定路径。
     void startGenerateModelAsync();
     void startGenerateModelAsync(const QJsonObject &settings);
@@ -340,10 +344,10 @@ private:
     QWidget *_parent = nullptr;                        // 父窗口指针（用于对话框父窗口）
     ProjectData *_projectData = nullptr;               // 数据层：负责所有数据读写
     FileDialogStateManager *_fileDialogState = nullptr; // 文件对话框状态（记住上次路径）
-    ProjectReconstructionManager *_reconstructionManager = nullptr;
+    ProjectSparseReconstructionManager *_sparseReconstructionManager = nullptr;
+    ProjectModelManager *_modelManager = nullptr;
     ProjectTerrainProductsManager *_terrainProductsManager = nullptr;
     ProjectCameraSetupManager *_cameraSetupManager = nullptr;
-    ProjectTaskDispatcher *_taskDispatcher = nullptr;
     ProjectUiCommands *_uiCommands = nullptr;
     bool _projectOpenInProgress = false;
     quint64 _projectSessionGeneration = 0;

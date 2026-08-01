@@ -3,6 +3,7 @@
 #include "MeshTypes.h"
 
 #include <functional>
+#include <vector>
 
 namespace xjw::mesh
 {
@@ -16,6 +17,7 @@ struct MeshTopologyQualityThresholds
     double maximumHighAspectFaceRatio = 0.02;
     double maximumExtremeAspectFaceRatio = 0.005;
     int maximumNonManifoldEdgeCount = 0;
+    int maximumNonManifoldVertexCount = 0;
     int maximumComponentCount = 1;
     double minimumLargestComponentFaceRatio = 0.995;
     int maximumTopologicalComplexity = 128;
@@ -29,7 +31,9 @@ struct MeshTopologyQualityStatistics
     int uniqueEdgeCount = 0;
     int boundaryEdgeCount = 0;
     int nonManifoldEdgeCount = 0;
+    int nonManifoldVertexCount = 0;
     int componentCount = 0;
+    std::vector<int> componentEulerCharacteristics;
     int largestComponentFaceCount = 0;
     int skinnyFaceCount = 0;
     int highAspectFaceCount = 0;
@@ -47,7 +51,18 @@ struct MeshTopologyQualityStatistics
     int topologicalComplexity = 0;
     double closedGenusEstimate = 0.0;
     bool closedTopologyEvaluated = false;
+    bool closedTwoManifold = false;
     bool strictGatePassed = false;
+};
+
+struct MeshTopologySignature
+{
+    int nonManifoldEdgeCount = 0;
+    int nonManifoldVertexCount = 0;
+    bool closedTwoManifold = false;
+    std::vector<int> componentEulerCharacteristics;
+
+    bool operator==(const MeshTopologySignature &other) const = default;
 };
 
 struct MeshTriangleOptimizationOptions
@@ -89,6 +104,11 @@ struct MeshTriangleOptimizationStatistics
 MeshTopologyQualityStatistics evaluateMeshTopologyQuality(
     const TriMesh &mesh,
     const MeshTopologyQualityThresholds &thresholds = {});
+
+MeshTopologySignature meshTopologySignature(
+    const MeshTopologyQualityStatistics &statistics);
+
+MeshTopologySignature evaluateMeshTopologySignature(const TriMesh &mesh);
 
 bool passesMeshTopologyQualityGate(
     const MeshTopologyQualityStatistics &statistics,

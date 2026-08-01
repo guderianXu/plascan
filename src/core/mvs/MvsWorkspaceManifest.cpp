@@ -118,6 +118,12 @@ QJsonObject MvsDepthFrameRecord::toJson() const
     object.insert(QStringLiteral("raw_depth_path"), rawDepthPath);
     object.insert(QStringLiteral("raw_confidence_path"), rawConfidencePath);
     object.insert(QStringLiteral("raw_geometry_support_path"), rawGeometrySupportPath);
+    object.insert(QStringLiteral("raw_adaptive_geometry_support_weight_path"),
+                  rawAdaptiveGeometrySupportWeightPath);
+    object.insert(QStringLiteral("raw_adaptive_geometry_effective_view_count_path"),
+                  rawAdaptiveGeometryEffectiveViewCountPath);
+    object.insert(QStringLiteral("raw_adaptive_geometry_conflict_weight_path"),
+                  rawAdaptiveGeometryConflictWeightPath);
     object.insert(QStringLiteral("raw_geometry_source_mask_path"), rawGeometrySourceMaskPath);
     object.insert(QStringLiteral("raw_inverse_depth_mean_path"), rawInverseDepthMeanPath);
     object.insert(QStringLiteral("raw_inverse_depth_spread_path"), rawInverseDepthSpreadPath);
@@ -194,6 +200,12 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
     record.rawConfidencePath = object.value(QStringLiteral("raw_confidence_path")).toString();
     record.rawGeometrySupportPath = object.value(
         QStringLiteral("raw_geometry_support_path")).toString();
+    record.rawAdaptiveGeometrySupportWeightPath = object.value(
+        QStringLiteral("raw_adaptive_geometry_support_weight_path")).toString();
+    record.rawAdaptiveGeometryEffectiveViewCountPath = object.value(
+        QStringLiteral("raw_adaptive_geometry_effective_view_count_path")).toString();
+    record.rawAdaptiveGeometryConflictWeightPath = object.value(
+        QStringLiteral("raw_adaptive_geometry_conflict_weight_path")).toString();
     record.rawGeometrySourceMaskPath = object.value(
         QStringLiteral("raw_geometry_source_mask_path")).toString();
     record.rawInverseDepthMeanPath = object.value(
@@ -579,6 +591,8 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
     root.insert(QStringLiteral("scene_profile"), static_cast<int>(config.sceneProfile));
     root.insert(QStringLiteral("depth_filter_mode"), static_cast<int>(config.depthFilterMode));
     root.insert(QStringLiteral("adaptive_depth_filter_mode"), config.adaptiveDepthFilterMode);
+    root.insert(QStringLiteral("enable_adaptive_geometry_evidence"),
+                config.enableAdaptiveGeometryEvidence);
     root.insert(QStringLiteral("cross_view_hole_repair_source_count"),
                 config.crossViewHoleRepairSourceCount);
     root.insert(QStringLiteral("two_source_cross_view_growth"),

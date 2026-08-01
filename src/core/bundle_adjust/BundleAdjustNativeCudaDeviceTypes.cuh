@@ -1,10 +1,19 @@
 #pragma once
 
+/**
+ * @file BundleAdjustNativeCudaDeviceTypes.cuh
+ * @brief native CUDA 核函数使用的无 STL POD 数据结构。
+ *
+ * HostCamera/HostPoint 使用 std::array，不能直接假定其 ABI 可由设备代码消费。
+ * 本文件显式复制每个字段，保证主机工作集与设备缓冲区之间不存在隐藏布局依赖。
+ */
+
 #include "BundleAdjustNativeCudaTypes.h"
 
 namespace xjw::detail::native_cuda
 {
 
+/// HostCamera 的设备侧等价布局；字段语义见 BundleAdjustNativeCudaTypes.h。
 struct DeviceCamera
 {
     double cameraToWorldRotation[9];
@@ -25,6 +34,7 @@ struct DeviceCamera
     int originalIndex = -1;
 };
 
+/// HostPoint 的设备侧等价布局；观测仍按点连续分段。
 struct DevicePoint
 {
     double xyz[3];
@@ -33,6 +43,7 @@ struct DevicePoint
     int observationCount = 0;
 };
 
+/// HostObservation 的设备侧等价布局。
 struct DeviceObservation
 {
     int cameraIndex = -1;
@@ -42,6 +53,7 @@ struct DeviceObservation
     double weight = 1.0;
 };
 
+/// 显式打包相机，避免对 std::array 进行未定义的二进制复制。
 inline DeviceCamera makeDeviceCamera(const HostCamera &camera)
 {
     DeviceCamera out;
@@ -70,6 +82,7 @@ inline DeviceCamera makeDeviceCamera(const HostCamera &camera)
     return out;
 }
 
+/// 显式打包点坐标及其观测区间。
 inline DevicePoint makeDevicePoint(const HostPoint &point)
 {
     DevicePoint out;
@@ -83,6 +96,7 @@ inline DevicePoint makeDevicePoint(const HostPoint &point)
     return out;
 }
 
+/// 显式打包一条二维观测。
 inline DeviceObservation makeDeviceObservation(const HostObservation &observation)
 {
     DeviceObservation out;

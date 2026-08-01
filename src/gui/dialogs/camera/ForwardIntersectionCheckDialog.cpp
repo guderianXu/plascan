@@ -10,6 +10,7 @@
 #include "ImageViewWidget.h"
 #include "MatchLineOverlay.h"
 #include "DualImageViewer.h"
+#include "ImageMatchFile.h"
 #include "Logger.h"
 
 #include <QComboBox>
@@ -36,46 +37,83 @@
 
 namespace {
 
-using xjw::common::project::imageTokensReferToSameImage;
 using xjw::common::project::normalizePath;
 
-QStringList sidecarImageTokens(const QJsonObject &sidecar, int imageIndex)
+/**
+ * @brief 从逐影像二进制分片读取指定像对的几何内点。
+ *
+ * 前方交会只应消费已通过两视几何验证的观测。这里选择几何内点数最多的算法
+ * 变体，并根据分片 owner 的方向恢复 img1/img2 的坐标顺序；不再读取或扫描
+ * 任何成对 sidecar；格式版本和校验统一由 ImageMatchFile 处理。
+ */
+bool loadImageMatchPoints(const QString &matchFile,
+                          const QString &img1,
+                          const QString &img2,
+                          QVector<QPointF> *pts1,
+                          QVector<QPointF> *pts2)
 {
-    const QStringList keys = imageIndex == 0
-        ? QStringList{
-            QStringLiteral("image0_path"),
-            QStringLiteral("image0_name"),
-            QStringLiteral("feature0_path"),
-            QStringLiteral("sp0_path")
-        }
-        : QStringList{
-            QStringLiteral("image1_path"),
-            QStringLiteral("image1_name"),
-            QStringLiteral("feature1_path"),
-            QStringLiteral("sp1_path")
-        };
-    QStringList tokens;
-    for (const QString &key : keys)
+    if (!pts1 || !pts2)
     {
-        const QString token = sidecar.value(key).toString().trimmed();
-        if (!token.isEmpty())
-        {
-            tokens.append(token);
-        }
+        return false;
     }
-    return tokens;
-}
+    pts1->clear();
+    pts2->clear();
 
-bool sidecarTokensMatchImage(const QStringList &tokens, const QString &imagePath)
-{
-    for (const QString &token : tokens)
+    xjw::image_matching::ImageMatchShard shard;
+    QString readError;
+    if (!xjw::image_matching::ImageMatchFile::read(matchFile, &shard, &readError))
     {
-        if (imageTokensReferToSameImage(token, imagePath))
+        return false;
+    }
+
+    const QString img1Id = xjw::image_matching::ImageMatchFile::stableImageId(img1);
+    const QString img2Id = xjw::image_matching::ImageMatchFile::stableImageId(img2);
+    const bool ownerIsImg1 = shard.owner.stableId == img1Id;
+    const bool ownerIsImg2 = shard.owner.stableId == img2Id;
+    if (!ownerIsImg1 && !ownerIsImg2)
+    {
+        return false;
+    }
+    const QString peerId = ownerIsImg1 ? img2Id : img1Id;
+
+    const xjw::image_matching::NeighborMatchBlock *best = nullptr;
+    for (const xjw::image_matching::NeighborMatchBlock &block : shard.neighbors)
+    {
+        if (block.peer.stableId != peerId || !block.geometryPassed)
         {
-            return true;
+            continue;
+        }
+        if (!best || block.geometryInlierCount > best->geometryInlierCount)
+        {
+            best = &block;
         }
     }
-    return false;
+    if (!best)
+    {
+        return false;
+    }
+
+    pts1->reserve(static_cast<qsizetype>(best->geometryInlierCount));
+    pts2->reserve(static_cast<qsizetype>(best->geometryInlierCount));
+    for (const xjw::image_matching::MatchRecord &match : best->matches)
+    {
+        if (!xjw::image_matching::hasFlag(
+                match.flags, xjw::image_matching::MatchRecordFlag::GeometryInlier))
+        {
+            continue;
+        }
+        const xjw::image_matching::KeypointObservation *owner =
+            best->findOwnerObservation(match.ownerFeatureId);
+        if (!owner)
+        {
+            continue;
+        }
+        const QPointF ownerPoint(owner->x, owner->y);
+        const QPointF peerPoint(match.peerX, match.peerY);
+        pts1->append(ownerIsImg1 ? ownerPoint : peerPoint);
+        pts2->append(ownerIsImg1 ? peerPoint : ownerPoint);
+    }
+    return !pts1->isEmpty();
 }
 
 struct IntersectionBatchCandidate
@@ -316,48 +354,6 @@ void ForwardIntersectionCheckDialog::loadImagesWithCamera()
     onImageSelectionChanged();
 }
 
-// ── 辅助：从 sidecar JSON 文件中提取两张影像的匹配点 ─────────────────────────
-static bool loadSidecarMatchPoints(const QString &sidecarPath,
-                                    const QString &img1, const QString &img2,
-                                    QVector<QPointF> *pts1, QVector<QPointF> *pts2)
-{
-    if (!QFile::exists(sidecarPath)) return false;
-    QFile f(sidecarPath);
-    if (!f.open(QIODevice::ReadOnly)) return false;
-    const QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
-    f.close();
-    if (!doc.isObject()) return false;
-
-    const QJsonObject sidecar = doc.object();
-    const QJsonArray p0 = sidecar.value(QStringLiteral("matched_points0")).toArray();
-    const QJsonArray p1 = sidecar.value(QStringLiteral("matched_points1")).toArray();
-    if (p0.isEmpty() || p0.size() != p1.size()) return false;
-
-    const QStringList im0Tokens = sidecarImageTokens(sidecar, 0);
-    const QStringList im1Tokens = sidecarImageTokens(sidecar, 1);
-    const bool direct = sidecarTokensMatchImage(im0Tokens, img1)
-        && sidecarTokensMatchImage(im1Tokens, img2);
-    const bool reverse = sidecarTokensMatchImage(im0Tokens, img2)
-        && sidecarTokensMatchImage(im1Tokens, img1);
-    if (!direct && !reverse) return false;
-
-    pts1->clear();
-    pts2->clear();
-    for (int i = 0; i < p0.size(); ++i) {
-        const QJsonArray a0 = p0.at(i).toArray();
-        const QJsonArray a1 = p1.at(i).toArray();
-        if (a0.size() < 2 || a1.size() < 2) continue;
-        if (direct) {
-            pts1->append(QPointF(a0.at(0).toDouble(), a0.at(1).toDouble()));
-            pts2->append(QPointF(a1.at(0).toDouble(), a1.at(1).toDouble()));
-        } else {
-            pts1->append(QPointF(a1.at(0).toDouble(), a1.at(1).toDouble()));
-            pts2->append(QPointF(a0.at(0).toDouble(), a0.at(1).toDouble()));
-        }
-    }
-    return !pts1->isEmpty();
-}
-
 bool ForwardIntersectionCheckDialog::collectAutoPointPairs(QVector<QPointF> *pts1,
                                                            QVector<QPointF> *pts2,
                                                            QString *sourceInfo)
@@ -371,56 +367,21 @@ bool ForwardIntersectionCheckDialog::collectAutoPointPairs(QVector<QPointF> *pts
     const QString img2 = selectedImage2();
     if (img1.isEmpty() || img2.isEmpty()) return false;
 
-    // ── 方式一（优先）：直接扫描 assets/matches/*.match.json 文件系统 ────────
-    // 不依赖惰性加载的 ipmatch_results，与 MatchPairSelectorDialog 保持一致
-    const QString projectPath = _projectManager->currentProjectPath();
-    if (!projectPath.isEmpty()) {
-        const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(projectPath);
-        const QString matchDirPath = QDir(assetsDir).filePath(QStringLiteral("matches"));
-        QDir matchDir(matchDirPath);
-        if (matchDir.exists()) {
-            const QStringList jsonFiles = matchDir.entryList(
-                QStringList{QStringLiteral("*.match.json")}, QDir::Files, QDir::Time);
-            for (const QString &jf : jsonFiles) {
-                const QString fullPath = matchDir.filePath(jf);
-                if (loadSidecarMatchPoints(fullPath, img1, img2, pts1, pts2)) {
-                    if (sourceInfo) *sourceInfo = jf;
-                    return true;
-                }
-            }
-        }
+    QString matchFile = _projectManager->findMatchFileForPair(img1, img2);
+    if (matchFile.isEmpty())
+    {
+        const QString projectPath = _projectManager->currentProjectPath();
+        matchFile = xjw::image_matching::ImageMatchFile::filePathForImage(
+            xjw::common::project::ProjectIO::imageMatchOutputDir(projectPath), img1);
     }
-
-    // ── 方式二（回退）：读取 project_results 中的 ipmatch_results ─────────────
-    QJsonObject meta = _projectManager->currentMeta();
-    if (meta.value(QStringLiteral("project_files")).isObject()) {
-        meta = meta.value(QStringLiteral("project_files")).toObject();
-    }
-
-    const QJsonArray matchResults = meta.value(QStringLiteral("ipmatch_results")).toArray();
-    for (const QJsonValue &v : matchResults) {
-        if (!v.isObject()) continue;
-        const QJsonObject rec = v.toObject();
-        const QJsonObject settings = rec.value(QStringLiteral("settings")).toObject();
-        const QJsonArray imageFiles = settings.value(QStringLiteral("image_files")).toArray();
-
-        bool has1 = false;
-        bool has2 = false;
-        for (const QJsonValue &it : imageFiles) {
-            const QString token = it.toString();
-            has1 = has1 || imageTokensReferToSameImage(token, img1);
-            has2 = has2 || imageTokensReferToSameImage(token, img2);
+    if (QFileInfo::exists(matchFile) &&
+        loadImageMatchPoints(matchFile, img1, img2, pts1, pts2))
+    {
+        if (sourceInfo)
+        {
+            *sourceInfo = QFileInfo(matchFile).fileName();
         }
-        if (!(has1 && has2)) continue;
-
-        QString sidecarPath = settings.value(QStringLiteral("sidecar_json")).toString();
-        if (sidecarPath.isEmpty()) {
-            sidecarPath = rec.value(QStringLiteral("output")).toString() + QStringLiteral(".json");
-        }
-        if (loadSidecarMatchPoints(sidecarPath, img1, img2, pts1, pts2)) {
-            if (sourceInfo) *sourceInfo = QFileInfo(sidecarPath).fileName();
-            return true;
-        }
+        return true;
     }
 
     return false;

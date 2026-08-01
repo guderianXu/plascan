@@ -66,6 +66,8 @@ xjw::BATrack makeBaTrackFromIndexedTrack(
         return baTrack;
     }
 
+    // 依次寻找可交会的观测对，而不是固定使用轨迹前两个观测。弱基线或错误深度轴
+    // 的首对不应让整条长轨迹失去可用初值。
     bool initialized = false;
     for (std::size_t leftIndex = 0; leftIndex < observations.size() && !initialized; ++leftIndex)
     {
@@ -122,6 +124,8 @@ void appendBaTracks(const ProjectMatchInput &input, BaInputBuildResult *result)
         return;
     }
 
+    // 新格式匹配具有稳定特征索引，可跨多个 pair 合并为同一物点。旧格式只有
+    // 浮点坐标，没有可靠身份，只能保守地保留为双视 BA track。
     xjw::MultiViewTrackBuilder multiViewTrackBuilder;
     std::map<IndexedFeatureKey, IndexedObservation> observationsByIndexedFeature;
     for (const ProjectMatchPair &pair : input.pairs)
@@ -182,6 +186,8 @@ void appendBaTracks(const ProjectMatchInput &input, BaInputBuildResult *result)
         }
     }
 
+    // 冲突消解后每条轨迹每幅影像最多一个特征，避免同一相机对同一三维点提供
+    // 两条互相矛盾的观测。
     const xjw::MultiViewTrackBuildResult multiViewResult = multiViewTrackBuilder.build();
     result->multiViewTrackCount = static_cast<int>(multiViewResult.tracks.size());
     result->rejectedConflictTrackCount = multiViewResult.rejectedConflictComponents;

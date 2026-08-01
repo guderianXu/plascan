@@ -15,6 +15,7 @@ struct QuadricSimplifyOptions
     float minimumFaceReductionRatio = 0.001f;
     int maximumStagnantPasses = 2;
     float minimumFaceArea = 5.0e-9f;
+    float maximumResultFaceAspectRatio = 0.0f;
     float featureAngleDegrees = 35.0f;
     float maximumNormalDeviationDegrees = 45.0f;
     bool preserveOpenBoundaries = true;
@@ -35,6 +36,7 @@ struct QuadricSimplifyStatistics
     int rejectedFeatureEdgeCount = 0;
     int rejectedTopologyEdgeCount = 0;
     int rejectedFlipEdgeCount = 0;
+    int rejectedTriangleQualityEdgeCount = 0;
     int passCount = 0;
     bool reachedTarget = false;
     bool stoppedByStagnation = false;

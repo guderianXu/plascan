@@ -1,3 +1,11 @@
+/**
+ * @file AerialTriangulationResultWriter.cpp
+ * @brief 胜出 SfM 模型的稀疏点云、质量 sidecar 和工程记录构建实现。
+ *
+ * PLY 使用 QSaveFile 原子提交；质量 JSON 使用通用原子 IO。相机更新仍保留在
+ * pendingCamUpdates，由工程服务在本函数完全成功后统一应用。
+ */
+
 #include "reporting/AerialTriangulationResultWriter.h"
 
 #include "io/PathIO.h"
@@ -24,10 +32,10 @@ namespace
 
 struct ExportPoint
 {
-    std::array<float, 3> xyz{};
-    std::array<quint8, 3> color{{128, 128, 128}};
-    ImageId colorImageId = kInvalidImageId;
-    FeatureIdx colorFeatureIndex = kInvalidFeatureIdx;
+    std::array<float, 3> xyz{}; ///< 最终 BA 坐标系中的三维坐标。
+    std::array<quint8, 3> color{{128, 128, 128}}; ///< 无可读影像时使用中性灰。
+    ImageId colorImageId = kInvalidImageId; ///< 采样颜色所用的首个有效轨迹观测。
+    FeatureIdx colorFeatureIndex = kInvalidFeatureIdx; ///< 对应影像内关键点索引。
 };
 
 bool fail(const QString &message, QString *errorMessage)
@@ -39,6 +47,12 @@ bool fail(const QString &message, QString *errorMessage)
     return false;
 }
 
+/**
+ * @brief 从最终重建收集可发布点。
+ *
+ * 发布门槛与质量报告保持一致：轨迹至少两视、误差不高于 4 px、坐标有限。
+ * 这里不修改 reconstruction，也不重新三角化。
+ */
 std::vector<ExportPoint> collectExportPoints(const SfmReconstruction &reconstruction)
 {
     std::vector<ExportPoint> points;
@@ -76,6 +90,11 @@ std::vector<ExportPoint> collectExportPoints(const SfmReconstruction &reconstruc
     return points;
 }
 
+/**
+ * @brief 按影像分组读取颜色，避免每个点重复解码同一文件。
+ *
+ * 颜色只用于可视化，不参与点的有效性；影像读取失败时保留默认灰色。
+ */
 void samplePointColors(const SfmReconstruction &reconstruction,
                        std::vector<ExportPoint> *points)
 {
@@ -122,6 +141,7 @@ void samplePointColors(const SfmReconstruction &reconstruction,
     }
 }
 
+/// 原子写入 little-endian binary PLY，失败时旧文件保持不变。
 bool writeBinaryPly(const QString &path,
                     const std::vector<ExportPoint> &points,
                     QString *errorMessage)
@@ -187,6 +207,7 @@ bool AerialTriangulationResultWriter::write(
         return fail(QStringLiteral("无法创建空三输出目录: %1").arg(input.outputDir), errorMessage);
     }
 
+    // 先在内存中完成点过滤和颜色采样，再开始任何正式文件提交。
     std::vector<ExportPoint> points = collectExportPoints(*execution->reconstruction);
     samplePointColors(*execution->reconstruction, &points);
     const QString plyPath = QDir(input.outputDir).filePath(QStringLiteral("sfm_sparse.ply"));
@@ -195,6 +216,7 @@ bool AerialTriangulationResultWriter::write(
         return false;
     }
 
+    // 质量 sidecar 与 PLY 基于同一最终 reconstruction，避免候选试算指标混入。
     const SparseQualityReport report = QualityReportWriter::build(
         input, *execution->reconstruction, execution->result);
     const QString sidecarPath = QDir(input.outputDir)
@@ -216,6 +238,7 @@ bool AerialTriangulationResultWriter::write(
                     errorMessage);
     }
 
+    // 到达此处表示两个正式文件均成功，随后才更新返回结果记录。
     execution->result.sparseCloudPath = plyPath;
     execution->result.qualityMetadata = report.qualityMetadata;
     execution->result.sfmDiagnostics = report.diagnostics;

@@ -5,6 +5,8 @@
 #include "DemGenerator.h"
 #include "DomGenerator.h"
 #include "ObjMtlLoader.h"
+#include "OrthoGenerationOptions.h"
+#include "OrthoProjector.h"
 #include "projection/AsteroidProjection.h"
 #include "Camera.h"
 #include "io/PathIO.h"
@@ -19,7 +21,6 @@
 #include <QDateTime>
 #include <QFileInfo>
 #include <QJsonArray>
-#include <QSet>
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -57,7 +58,26 @@ void appendQualityArtifacts(QJsonObject *output, const xjw::DemQualityArtifacts 
 
 QString normalizePathForOrtho(const QString &path)
 {
-    return QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+    QString normalized = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+#ifdef Q_OS_WIN
+    normalized = normalized.toCaseFolded();
+#endif
+    return normalized;
+}
+
+bool applyRelativeDemOffset(const QJsonObject &record, double *zOffset)
+{
+    if (record.value(QStringLiteral("dem_reference")).toString()
+        != QStringLiteral("relative"))
+    {
+        return false;
+    }
+    if (zOffset)
+    {
+        *zOffset =
+            record.value(QStringLiteral("relative_z_offset")).toDouble(0.0);
+    }
+    return true;
 }
 
 bool resolveDemVerticalOffsetForOrtho(const QJsonObject &projectMeta,
@@ -76,10 +96,12 @@ bool resolveDemVerticalOffsetForOrtho(const QJsonObject &projectMeta,
 
     const QString normalizedDemPath = normalizePathForOrtho(demPath);
     const QJsonArray demResults = projectMeta.value(QStringLiteral("dem_results")).toArray();
+    QJsonObject uniqueFileNameMatch;
+    int fileNameMatchCount = 0;
 
-    for (const QJsonValue &value : demResults)
+    for (int index = demResults.size() - 1; index >= 0; --index)
     {
-        const QJsonObject record = value.toObject();
+        const QJsonObject record = demResults.at(index).toObject();
         const QString recordDemPath = record.value(QStringLiteral("dem_tif")).toString();
         if (recordDemPath.isEmpty())
         {
@@ -87,361 +109,26 @@ bool resolveDemVerticalOffsetForOrtho(const QJsonObject &projectMeta,
         }
 
         const QString normalizedRecordPath = normalizePathForOrtho(recordDemPath);
-        if (normalizedRecordPath != normalizedDemPath
-            && QFileInfo(recordDemPath).fileName() != QFileInfo(demPath).fileName())
+        if (normalizedRecordPath == normalizedDemPath)
         {
-            continue;
+            return applyRelativeDemOffset(record, zOffset);
         }
-
-        if (record.value(QStringLiteral("dem_reference")).toString() == QStringLiteral("relative"))
+        if (QFileInfo(recordDemPath).fileName().compare(
+                QFileInfo(demPath).fileName(),
+#ifdef Q_OS_WIN
+                Qt::CaseInsensitive
+#else
+                Qt::CaseSensitive
+#endif
+                ) == 0)
         {
-            if (zOffset)
-            {
-                *zOffset = record.value(QStringLiteral("relative_z_offset")).toDouble(0.0);
-            }
-            return true;
-        }
-
-        return false;
-    }
-
-    return false;
-}
-
-bool pathTokenMatchesImageForOrtho(const QString &token, const QString &imagePath)
-{
-    if (token.isEmpty() || imagePath.isEmpty())
-    {
-        return false;
-    }
-
-    const QString normalizedToken = normalizePathForOrtho(token);
-    const QString normalizedImage = normalizePathForOrtho(imagePath);
-    if (normalizedToken == normalizedImage)
-    {
-        return true;
-    }
-
-    if (QFileInfo(token).fileName() == QFileInfo(imagePath).fileName())
-    {
-        return true;
-    }
-
-    return QFileInfo(token).completeBaseName() == QFileInfo(imagePath).completeBaseName();
-}
-
-bool cameraFromJsonForOrtho(const QJsonObject &cameraObject, xjw::Camera *camera)
-{
-    if (!camera || cameraObject.isEmpty())
-    {
-        return false;
-    }
-
-    const QJsonArray centerArray = cameraObject.value(QStringLiteral("C")).toArray();
-    const QJsonArray rotationArray = cameraObject.value(QStringLiteral("R")).toArray();
-    if (centerArray.size() < 3 || rotationArray.size() < 9)
-    {
-        return false;
-    }
-
-    std::array<double, 3> center{{centerArray.at(0).toDouble(),
-                                  centerArray.at(1).toDouble(),
-                                  centerArray.at(2).toDouble()}};
-    if (cameraObject.value(QStringLiteral("camera_center_unit"))
-            .toString()
-            .compare(QStringLiteral("mm"), Qt::CaseInsensitive)
-        == 0)
-    {
-        center[0] /= 1000.0;
-        center[1] /= 1000.0;
-        center[2] /= 1000.0;
-    }
-
-    std::array<double, 9> rotation{};
-    for (int index = 0; index < 9; ++index)
-    {
-        rotation[index] = rotationArray.at(index).toDouble();
-    }
-
-    const double pitch = cameraObject.value(QStringLiteral("pitch")).toDouble(1.0);
-    const bool intrinsicsInMillimeters =
-        cameraObject.value(QStringLiteral("intrinsics_unit"))
-            .toString()
-            .compare(QStringLiteral("mm"), Qt::CaseInsensitive)
-        == 0;
-    const double fu = cameraObject.value(QStringLiteral("fu")).toDouble();
-    const double fv = cameraObject.value(QStringLiteral("fv")).toDouble();
-    const double cu = cameraObject.value(QStringLiteral("cu")).toDouble();
-    const double cv = cameraObject.value(QStringLiteral("cv")).toDouble();
-
-    if (intrinsicsInMillimeters)
-    {
-        camera->setIntrinsicsMillimeters(fu, fv, cu, cv, pitch);
-    }
-    else
-    {
-        camera->setPixelPitch(pitch);
-        camera->setIntrinsics(fu, fv, cu, cv);
-    }
-
-    camera->setAxisDirections(cameraObject.value(QStringLiteral("u_direction")).toInt(1),
-                              cameraObject.value(QStringLiteral("v_direction")).toInt(1));
-    camera->setDepthAxisFlipped(cameraObject.value(QStringLiteral("depth_axis_flipped")).toBool(false));
-    camera->setDistortion(cameraObject.value(QStringLiteral("k1")).toDouble(0.0),
-                          cameraObject.value(QStringLiteral("k2")).toDouble(0.0),
-                          cameraObject.value(QStringLiteral("k3")).toDouble(0.0),
-                          cameraObject.value(QStringLiteral("p1")).toDouble(0.0),
-                          cameraObject.value(QStringLiteral("p2")).toDouble(0.0));
-    camera->setPose(rotation, center);
-    return true;
-}
-
-struct OrthoCameraFrame
-{
-    QString imagePath;
-    xjw::Camera camera;
-    cv::Mat imageBgr;
-    double gain = 1.0;
-};
-
-cv::Size resolveOrthoOutputSize(const xjw::DemGridData &demGrid, double outputResolution)
-{
-    if (outputResolution > 0.0)
-    {
-        const double scaleX = demGrid.stepX / outputResolution;
-        const double scaleY = demGrid.stepY / outputResolution;
-        return cv::Size(std::max(1, static_cast<int>(std::round(demGrid.width * scaleX))),
-                        std::max(1, static_cast<int>(std::round(demGrid.height * scaleY))));
-    }
-
-    return cv::Size(demGrid.width, demGrid.height);
-}
-
-double computeLumaMean(const cv::Mat &imageBgr)
-{
-    cv::Mat gray;
-    cv::cvtColor(imageBgr, gray, cv::COLOR_BGR2GRAY);
-    return cv::mean(gray)[0];
-}
-
-cv::Vec3f sampleBilinearBgr(const cv::Mat &imageBgr, double u, double v)
-{
-    const double x = std::clamp(u, 0.0, std::max(0.0, static_cast<double>(imageBgr.cols - 1)));
-    const double y = std::clamp(v, 0.0, std::max(0.0, static_cast<double>(imageBgr.rows - 1)));
-
-    const int x0 = std::clamp(static_cast<int>(std::floor(x)), 0, imageBgr.cols - 1);
-    const int y0 = std::clamp(static_cast<int>(std::floor(y)), 0, imageBgr.rows - 1);
-    const int x1 = std::min(x0 + 1, imageBgr.cols - 1);
-    const int y1 = std::min(y0 + 1, imageBgr.rows - 1);
-
-    const float fx = static_cast<float>(x - x0);
-    const float fy = static_cast<float>(y - y0);
-
-    const cv::Vec3f c00 = imageBgr.at<cv::Vec3b>(y0, x0);
-    const cv::Vec3f c10 = imageBgr.at<cv::Vec3b>(y0, x1);
-    const cv::Vec3f c01 = imageBgr.at<cv::Vec3b>(y1, x0);
-    const cv::Vec3f c11 = imageBgr.at<cv::Vec3b>(y1, x1);
-
-    return (1.0f - fx) * (1.0f - fy) * c00
-           + fx * (1.0f - fy) * c10
-           + (1.0f - fx) * fy * c01
-           + fx * fy * c11;
-}
-
-bool buildOrthoFrames(const QJsonObject &projectMeta,
-                      const QStringList &selectedImages,
-                      std::vector<OrthoCameraFrame> *frames,
-                      QString *errorMsg)
-{
-    if (!frames)
-    {
-        if (errorMsg)
-        {
-            *errorMsg = QStringLiteral("内部错误：DOM 相机帧输出参数无效");
-        }
-        return false;
-    }
-
-    frames->clear();
-    QSet<QString> selectedNormalized;
-    for (const QString &path : selectedImages)
-    {
-        selectedNormalized.insert(normalizePathForOrtho(path));
-    }
-
-    const QJsonArray imageArray = projectMeta.value(QStringLiteral("images")).toArray();
-    for (const QJsonValue &value : imageArray)
-    {
-        const QJsonObject imageObject = value.toObject();
-        const QString imagePath = imageObject.value(QStringLiteral("path")).toString();
-        if (imagePath.isEmpty())
-        {
-            continue;
-        }
-
-        bool selected = selectedNormalized.isEmpty();
-        if (!selected)
-        {
-            const QString normalized = normalizePathForOrtho(imagePath);
-            if (selectedNormalized.contains(normalized))
-            {
-                selected = true;
-            }
-            else
-            {
-                for (const QString &candidate : selectedImages)
-                {
-                    if (pathTokenMatchesImageForOrtho(imagePath, candidate))
-                    {
-                        selected = true;
-                        break;
-                    }
-                }
-            }
-        }
-        if (!selected)
-        {
-            continue;
-        }
-
-        xjw::Camera camera;
-        if (!cameraFromJsonForOrtho(imageObject.value(QStringLiteral("camera")).toObject(), &camera)
-            || !camera.isValid())
-        {
-            continue;
-        }
-
-        const QString normalizedPath = normalizePathForOrtho(imagePath);
-        cv::Mat imageBgr = xjw::common::io::readImage(normalizedPath, cv::IMREAD_COLOR);
-        if (imageBgr.empty())
-        {
-            continue;
-        }
-
-        OrthoCameraFrame frame;
-        frame.imagePath = normalizedPath;
-        frame.camera = camera;
-        frame.imageBgr = std::move(imageBgr);
-        frames->push_back(std::move(frame));
-    }
-
-    if (frames->empty())
-    {
-        if (errorMsg)
-        {
-            *errorMsg = QStringLiteral("未找到可用于正射投影的有效影像+相机参数，请先完成相机初始化/空三。\n"
-                                       "并确认所选影像路径与项目元数据一致。");
-        }
-        return false;
-    }
-
-    const double targetLuma = computeLumaMean(frames->front().imageBgr);
-    for (OrthoCameraFrame &frame : *frames)
-    {
-        const double luma = computeLumaMean(frame.imageBgr);
-        frame.gain = std::clamp(targetLuma / std::max(1e-6, luma), 0.7, 1.3);
-    }
-
-    return true;
-}
-
-bool renderOrthoFromDemAndCameras(const xjw::DemGridData &demGrid,
-                                  const std::vector<OrthoCameraFrame> &frames,
-                                  double outputResolution,
-                                  double demZOffset,
-                                  cv::Mat *domImage,
-                                  int *contributingPixelCount)
-{
-    if (!domImage)
-    {
-        return false;
-    }
-
-    const cv::Size outputSize = resolveOrthoOutputSize(demGrid, outputResolution);
-    if (outputSize.width <= 0 || outputSize.height <= 0)
-    {
-        return false;
-    }
-
-    *domImage = cv::Mat(outputSize, CV_8UC3, cv::Scalar(0, 0, 0));
-    const double scaleX = static_cast<double>(outputSize.width) / static_cast<double>(demGrid.width);
-    const double scaleY = static_cast<double>(outputSize.height) / static_cast<double>(demGrid.height);
-
-    int filledPixels = 0;
-    for (int row = 0; row < outputSize.height; ++row)
-    {
-        const double demRow = ((static_cast<double>(row) + 0.5) / scaleY) - 0.5;
-        const int demRowIdx = std::clamp(static_cast<int>(std::lround(demRow)), 0, demGrid.height - 1);
-
-        for (int col = 0; col < outputSize.width; ++col)
-        {
-            const double demCol = ((static_cast<double>(col) + 0.5) / scaleX) - 0.5;
-            const int demColIdx = std::clamp(static_cast<int>(std::lround(demCol)), 0, demGrid.width - 1);
-            if (demGrid.validMask.at<uchar>(demRowIdx, demColIdx) == 0)
-            {
-                continue;
-            }
-
-            const double world[3] = {
-                demGrid.minX + demGrid.stepX * demCol,
-                demGrid.minY + demGrid.stepY * demRow,
-                static_cast<double>(demGrid.elevation.at<float>(demRowIdx, demColIdx)) + demZOffset
-            };
-
-            cv::Vec3f bestColor(0.0f, 0.0f, 0.0f);
-            double bestScore = 0.0;
-            for (const OrthoCameraFrame &frame : frames)
-            {
-                double pixel[2] = {0.0, 0.0};
-                if (!frame.camera.projectWorldPoint(world, pixel))
-                {
-                    continue;
-                }
-
-                const double u = pixel[0];
-                const double v = pixel[1];
-                if (u < 0.0 || v < 0.0
-                    || u >= static_cast<double>(frame.imageBgr.cols - 1)
-                    || v >= static_cast<double>(frame.imageBgr.rows - 1))
-                {
-                    continue;
-                }
-
-                const cv::Vec3f sampled = sampleBilinearBgr(frame.imageBgr, u, v) * static_cast<float>(frame.gain);
-                const double du = (u - frame.camera.principalX()) / std::max(1.0, frame.camera.focalX());
-                const double dv = (v - frame.camera.principalY()) / std::max(1.0, frame.camera.focalY());
-                const double viewWeight = 1.0 / (1.0 + du * du + dv * dv);
-                const double edgeDistance = std::min(
-                    std::min(u, static_cast<double>(frame.imageBgr.cols - 1) - u),
-                    std::min(v, static_cast<double>(frame.imageBgr.rows - 1) - v));
-                const double edgeWeight = std::clamp(edgeDistance / 20.0, 0.0, 1.0);
-                const double score = viewWeight * edgeWeight;
-
-                if (score > bestScore)
-                {
-                    bestScore = score;
-                    bestColor = sampled;
-                }
-            }
-
-            if (bestScore <= 0.0)
-            {
-                continue;
-            }
-
-            (*domImage).at<cv::Vec3b>(row, col) = cv::Vec3b(
-                static_cast<uint8_t>(std::clamp(bestColor[0], 0.0f, 255.0f)),
-                static_cast<uint8_t>(std::clamp(bestColor[1], 0.0f, 255.0f)),
-                static_cast<uint8_t>(std::clamp(bestColor[2], 0.0f, 255.0f)));
-            ++filledPixels;
+            uniqueFileNameMatch = record;
+            ++fileNameMatchCount;
         }
     }
 
-    if (contributingPixelCount)
-    {
-        *contributingPixelCount = filledPixels;
-    }
-    return true;
+    return fileNameMatchCount == 1
+        && applyRelativeDemOffset(uniqueFileNameMatch, zOffset);
 }
 
 } // namespace
@@ -604,6 +291,338 @@ bool TerrainPipeline::generateDemProducts(const QString &pointCloudPath,
     return true;
 }
 
+bool TerrainPipeline::estimateOrthoProduct(const QString &demPath,
+                                           const QJsonObject &settings,
+                                           QJsonObject *result,
+                                           QString *errorMsg)
+{
+    OrthoGenerationOptions options;
+    if (!OrthoGenerationOptions::fromJson(settings, &options, errorMsg))
+    {
+        return false;
+    }
+
+    DemGridData metadata;
+    if (!DemDomIO::readDemMetadata(demPath, &metadata, errorMsg))
+    {
+        return false;
+    }
+
+    OrthoOutputGrid planned;
+    if (!OrthoProjector::planOutputGrid(metadata, options, &planned, errorMsg))
+    {
+        return false;
+    }
+
+    if (result)
+    {
+        const double dem_min_x = metadata.minX - 0.5 * metadata.stepX;
+        const double dem_min_y = metadata.minY - 0.5 * metadata.stepY;
+        const double dem_max_x =
+            dem_min_x + static_cast<double>(metadata.width) * metadata.stepX;
+        const double dem_max_y =
+            dem_min_y + static_cast<double>(metadata.height) * metadata.stepY;
+        QJsonObject output;
+        output[QStringLiteral("resolved_settings")] =
+            planned.resolvedOptions.toResolvedJson();
+        output[QStringLiteral("coordinate_system")] =
+            metadata.projection.coordinateSystem.isEmpty()
+                ? QStringLiteral("Local Coordinates")
+                : metadata.projection.coordinateSystem;
+        output[QStringLiteral("projection_wkt_present")] =
+            !metadata.projection.projectionWkt.isEmpty();
+        output[QStringLiteral("dem_min_x")] = dem_min_x;
+        output[QStringLiteral("dem_min_y")] = dem_min_y;
+        output[QStringLiteral("dem_max_x")] = dem_max_x;
+        output[QStringLiteral("dem_max_y")] = dem_max_y;
+        output[QStringLiteral("dem_pixel_size_x")] = metadata.stepX;
+        output[QStringLiteral("dem_pixel_size_y")] = metadata.stepY;
+        output[QStringLiteral("min_x")] = planned.minEdgeX;
+        output[QStringLiteral("min_y")] = planned.minEdgeY;
+        output[QStringLiteral("max_x")] = planned.maxEdgeX;
+        output[QStringLiteral("max_y")] = planned.maxEdgeY;
+        output[QStringLiteral("pixel_size_x")] = planned.reference.stepX;
+        output[QStringLiteral("pixel_size_y")] = planned.reference.stepY;
+        output[QStringLiteral("width")] = planned.reference.width;
+        output[QStringLiteral("height")] = planned.reference.height;
+        output[QStringLiteral("estimated_memory_bytes")] =
+            static_cast<double>(planned.estimatedMemoryBytes);
+        *result = output;
+    }
+    return true;
+}
+
+bool TerrainPipeline::generateOrthoProduct(
+    const QStringList &images,
+    const QString &demPath,
+    const QString &outputPath,
+    const QJsonObject &settings,
+    const QJsonObject &projectMeta,
+    QJsonObject *result,
+    QString *errorMsg,
+    const std::atomic_bool *cancelFlag,
+    const OrthoProgressCallback &progressCallback)
+{
+    if (images.isEmpty())
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("没有可用于 DOM 生成的影像");
+        }
+        return false;
+    }
+    if (cancelFlag && cancelFlag->load(std::memory_order_relaxed))
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("正射影像生成已取消");
+        }
+        return false;
+    }
+
+    OrthoGenerationOptions options;
+    if (!OrthoGenerationOptions::fromJson(settings, &options, errorMsg))
+    {
+        return false;
+    }
+
+    if (progressCallback)
+    {
+        progressCallback(QStringLiteral("读取 DEM"), 0);
+    }
+    DemGridData demMetadata;
+    if (!DemDomIO::readDemMetadata(demPath, &demMetadata, errorMsg))
+    {
+        return false;
+    }
+    DemGridData demGrid;
+    if (!DemDomIO::readDemRaster(demPath, &demGrid, errorMsg))
+    {
+        return false;
+    }
+
+    cv::Mat dom_image;
+    cv::Mat output_valid_mask;
+    DemGridData output_reference;
+    OrthoGenerationOptions resolved_options = options;
+    int selected_camera_count = 0;
+    int loaded_camera_count = 0;
+    int contributing_camera_count = 0;
+    qint64 filled_pixel_count = 0;
+    qint64 hole_filled_pixel_count = 0;
+    double coverage_ratio = 0.0;
+    double min_x = demGrid.minX - 0.5 * demGrid.stepX;
+    double min_y = demGrid.minY - 0.5 * demGrid.stepY;
+    double max_x = min_x + static_cast<double>(demGrid.width) * demGrid.stepX;
+    double max_y = min_y + static_cast<double>(demGrid.height) * demGrid.stepY;
+    const bool camera_projected = !projectMeta.isEmpty();
+
+    if (camera_projected)
+    {
+        double dem_z_offset = 0.0;
+        resolveDemVerticalOffsetForOrtho(projectMeta, demPath, &dem_z_offset);
+        std::vector<OrthoImageInput> inputs;
+        if (!OrthoProjector::buildImageInputs(images, projectMeta, &inputs, errorMsg))
+        {
+            return false;
+        }
+
+        OrthoProjectionResult projection;
+        const auto projector_progress =
+            [&progressCallback](const QString &stage, int percent)
+            {
+                if (progressCallback)
+                {
+                    progressCallback(stage, std::clamp(percent * 9 / 10, 0, 90));
+                }
+            };
+        if (!OrthoProjector::project(demGrid,
+                                     inputs,
+                                     options,
+                                     dem_z_offset,
+                                     &projection,
+                                     errorMsg,
+                                     cancelFlag,
+                                     projector_progress))
+        {
+            return false;
+        }
+
+        dom_image = std::move(projection.imageBgr);
+        cv::bitwise_or(
+            projection.coverageMask,
+            projection.holeFilledMask,
+            output_valid_mask);
+        output_reference = projection.outputGrid.reference;
+        resolved_options = projection.outputGrid.resolvedOptions;
+        selected_camera_count = projection.selectedCameraCount;
+        loaded_camera_count = projection.loadedCameraCount;
+        contributing_camera_count = projection.contributingCameraCount;
+        filled_pixel_count = projection.filledPixelCount;
+        hole_filled_pixel_count = projection.holeFilledPixelCount;
+        coverage_ratio = projection.coverageRatio;
+        min_x = projection.outputGrid.minEdgeX;
+        min_y = projection.outputGrid.minEdgeY;
+        max_x = projection.outputGrid.maxEdgeX;
+        max_y = projection.outputGrid.maxEdgeY;
+    }
+    else
+    {
+        if (options.bounds.enabled
+            || options.sizingMode == OrthoSizingMode::MaximumDimension
+            || (options.pixelSizeX > 0.0 && options.pixelSizeY > 0.0
+                && std::abs(options.pixelSizeX - options.pixelSizeY) > 1e-12))
+        {
+            if (errorMsg)
+            {
+                *errorMsg = QStringLiteral(
+                    "无相机参数的兼容 DOM 模式不支持自定义区域、最大尺寸或非方形像元");
+            }
+            return false;
+        }
+        DomGenerationOptions fallback_options;
+        fallback_options.outputResolution =
+            options.pixelSizeX > 0.0 ? options.pixelSizeX : options.pixelSizeY;
+        fallback_options.imageFormat = DomImageFormat::Png;
+        fallback_options.enableSharpnessWeighting = options.sharpnessWeighting;
+        fallback_options.enableExposureCompensation = options.colorCorrection;
+        fallback_options.minBlendWeight = 0.05;
+        if (!DomGenerator::generateFromImages(
+                demGrid, images, fallback_options, &dom_image, errorMsg))
+        {
+            return false;
+        }
+        output_reference = demGrid;
+        output_reference.width = dom_image.cols;
+        output_reference.height = dom_image.rows;
+        output_reference.stepX =
+            demGrid.stepX * static_cast<double>(demGrid.width) / dom_image.cols;
+        output_reference.stepY =
+            demGrid.stepY * static_cast<double>(demGrid.height) / dom_image.rows;
+        output_reference.minX =
+            min_x + 0.5 * output_reference.stepX;
+        output_reference.minY =
+            min_y + 0.5 * output_reference.stepY;
+        if (!demGrid.validMask.empty())
+        {
+            cv::resize(
+                demGrid.validMask,
+                output_valid_mask,
+                dom_image.size(),
+                0.0,
+                0.0,
+                cv::INTER_NEAREST);
+        }
+        resolved_options.pixelSizeX = output_reference.stepX;
+        resolved_options.pixelSizeY = output_reference.stepY;
+        filled_pixel_count = cv::countNonZero(demGrid.validMask);
+        coverage_ratio = static_cast<double>(filled_pixel_count)
+            / static_cast<double>(demGrid.width * demGrid.height);
+    }
+    output_reference.validMask = output_valid_mask;
+
+    if (cancelFlag && cancelFlag->load(std::memory_order_relaxed))
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("正射影像生成已取消");
+        }
+        return false;
+    }
+    if (progressCallback)
+    {
+        progressCallback(QStringLiteral("写出正射影像"), 95);
+    }
+
+    const DomImageFormat output_format =
+        (outputPath.endsWith(QStringLiteral(".tif"), Qt::CaseInsensitive)
+         || outputPath.endsWith(QStringLiteral(".tiff"), Qt::CaseInsensitive))
+        ? DomImageFormat::Tiff
+        : DomImageFormat::Png;
+    const bool output_geotiff = output_format == DomImageFormat::Tiff;
+    if (output_geotiff)
+    {
+        if (!DemDomIO::writeDomGeoTiff(
+                dom_image,
+                output_valid_mask,
+                output_reference,
+                outputPath,
+                errorMsg))
+        {
+            return false;
+        }
+    }
+    else
+    {
+        cv::Mat north_up_image;
+        cv::flip(dom_image, north_up_image, 0);
+        if (!output_valid_mask.empty())
+        {
+            cv::Mat north_up_alpha;
+            cv::flip(output_valid_mask, north_up_alpha, 0);
+            std::vector<cv::Mat> channels;
+            cv::split(north_up_image, channels);
+            channels.push_back(north_up_alpha);
+            cv::merge(channels, north_up_image);
+        }
+        if (!DemDomIO::writeDomImage(
+                north_up_image, outputPath, output_format, errorMsg))
+        {
+            return false;
+        }
+    }
+
+    if (result)
+    {
+        QJsonObject output;
+        output[QStringLiteral("created_at")] =
+            QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+        output[QStringLiteral("output_path")] = outputPath;
+        output[QStringLiteral("source_image_count")] = images.size();
+        output[QStringLiteral("dem_path")] = demPath;
+        output[QStringLiteral("resolved_settings")] =
+            resolved_options.toResolvedJson();
+        output[QStringLiteral("output_resolution")] = output_reference.stepX;
+        output[QStringLiteral("pixel_size_x")] = output_reference.stepX;
+        output[QStringLiteral("pixel_size_y")] = output_reference.stepY;
+        output[QStringLiteral("min_x")] = min_x;
+        output[QStringLiteral("min_y")] = min_y;
+        output[QStringLiteral("max_x")] = max_x;
+        output[QStringLiteral("max_y")] = max_y;
+        output[QStringLiteral("dom_georeferenced")] = output_geotiff;
+        output[QStringLiteral("has_coverage_alpha")] =
+            !output_valid_mask.empty();
+        output[QStringLiteral("valid_pixel_count")] =
+            output_valid_mask.empty()
+                ? 0.0
+                : static_cast<double>(cv::countNonZero(output_valid_mask));
+        output[QStringLiteral("projection_wkt_present")] =
+            !output_reference.projection.projectionWkt.isEmpty();
+        output[QStringLiteral("camera_projected")] = camera_projected;
+        output[QStringLiteral("selected_camera_count")] = selected_camera_count;
+        output[QStringLiteral("loaded_camera_count")] = loaded_camera_count;
+        output[QStringLiteral("contributing_camera_count")] =
+            contributing_camera_count;
+        output[QStringLiteral("filled_pixel_count")] =
+            static_cast<double>(filled_pixel_count);
+        output[QStringLiteral("hole_filled_pixel_count")] =
+            static_cast<double>(hole_filled_pixel_count);
+        output[QStringLiteral("coverage_ratio")] = coverage_ratio;
+        output[QStringLiteral("width")] = dom_image.cols;
+        output[QStringLiteral("height")] = dom_image.rows;
+        output[QStringLiteral("algorithm_version")] = camera_projected
+            ? QStringLiteral("ortho_projector_v1")
+            : QStringLiteral("aligned_composite_legacy_v1");
+        *result = output;
+    }
+
+    if (progressCallback)
+    {
+        progressCallback(QStringLiteral("正射影像生成完成"), 100);
+    }
+    return true;
+}
+
 bool TerrainPipeline::generateOrthoProduct(const QStringList &images,
                                            const QString &demPath,
                                            const QString &outputPath,
@@ -612,95 +631,21 @@ bool TerrainPipeline::generateOrthoProduct(const QStringList &images,
                                            QJsonObject *result,
                                            QString *errorMsg)
 {
-    if (images.isEmpty()) 
+    QJsonObject settings;
+    if (resolution > 0.0)
     {
-        if (errorMsg) *errorMsg = QStringLiteral("没有可用于 DOM 生成的影像");
-        return false;
+        settings[QStringLiteral("pixel_size_x")] = resolution;
+        settings[QStringLiteral("pixel_size_y")] = resolution;
     }
-
-    DemGridData demGrid;
-    if (!DemDomIO::readDemRaster(demPath, &demGrid, errorMsg)) {
-        return false;
-    }
-
-    cv::Mat domImage;
-    int contributingPixels = 0;
-    if (!projectMeta.isEmpty())
-    {
-        double demZOffset = 0.0;
-        resolveDemVerticalOffsetForOrtho(projectMeta, demPath, &demZOffset);
-
-        std::vector<OrthoCameraFrame> frames;
-        if (!buildOrthoFrames(projectMeta, images, &frames, errorMsg))
-        {
-            return false;
-        }
-
-        if (!renderOrthoFromDemAndCameras(demGrid,
-                                          frames,
-                                          resolution,
-                                          demZOffset,
-                                          &domImage,
-                                          &contributingPixels))
-        {
-            if (errorMsg)
-            {
-                *errorMsg = QStringLiteral("DOM 正射投影失败：无法基于 DEM 与相机参数生成结果");
-            }
-            return false;
-        }
-    }
-    else
-    {
-        DomGenerationOptions fallbackOptions;
-        fallbackOptions.outputResolution = resolution;
-        fallbackOptions.imageFormat = DomImageFormat::Png;
-        fallbackOptions.enableSharpnessWeighting = true;
-        fallbackOptions.enableExposureCompensation = true;
-        fallbackOptions.minBlendWeight = 0.05;
-        if (!DomGenerator::generateFromImages(demGrid, images, fallbackOptions, &domImage, errorMsg))
-        {
-            return false;
-        }
-    }
-
-    const DomImageFormat outputFormat = (outputPath.endsWith(QStringLiteral(".tif"), Qt::CaseInsensitive)
-                                         || outputPath.endsWith(QStringLiteral(".tiff"), Qt::CaseInsensitive))
-        ? DomImageFormat::Tiff
-        : DomImageFormat::Png;
-
-    const bool outputGeoTiff = outputFormat == DomImageFormat::Tiff;
-    if (outputGeoTiff)
-    {
-        if (!DemDomIO::writeDomGeoTiff(domImage, demGrid, outputPath, errorMsg))
-        {
-            return false;
-        }
-    }
-    else if (!DemDomIO::writeDomImage(domImage, outputPath, outputFormat, errorMsg))
-    {
-        return false;
-    }
-
-    const double effectiveResolution = resolution > 0.0 ? resolution : demGrid.stepX;
-
-    if (result) {
-        QJsonObject output;
-        output[QStringLiteral("created_at")] = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
-        output[QStringLiteral("output_path")] = outputPath;
-        output[QStringLiteral("source_image_count")] = images.size();
-        output[QStringLiteral("dem_path")] = demPath;
-        output[QStringLiteral("output_resolution")] = effectiveResolution;
-        output[QStringLiteral("dom_georeferenced")] = outputGeoTiff;
-        output[QStringLiteral("projection_wkt_present")] = !demGrid.projection.projectionWkt.isEmpty();
-        output[QStringLiteral("camera_projected")] = !projectMeta.isEmpty();
-        output[QStringLiteral("filled_pixel_count")] = contributingPixels;
-        output[QStringLiteral("width")] = domImage.cols;
-        output[QStringLiteral("height")] = domImage.rows;
-        *result = output;
-    }
-
-    return true;
+    return generateOrthoProduct(images,
+                                demPath,
+                                outputPath,
+                                settings,
+                                projectMeta,
+                                result,
+                                errorMsg,
+                                nullptr,
+                                {});
 }
 
 bool TerrainPipeline::generateOrthoProduct(const QStringList &images,

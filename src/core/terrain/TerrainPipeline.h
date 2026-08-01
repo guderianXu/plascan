@@ -4,6 +4,8 @@
 #include <QJsonObject>
 #include <QStringList>
 
+#include <atomic>
+#include <functional>
 #include <vector>
 
 namespace cv { class Mat; }
@@ -22,6 +24,8 @@ class Camera;
 class TerrainPipeline
 {
 public:
+    using OrthoProgressCallback = std::function<void(const QString &, int)>;
+
     /**
      * @brief 从点云文件生成 DEM 相关产品。
      *
@@ -54,8 +58,24 @@ public:
     /**
      * @brief 结合 DEM 与输入影像生成 DOM。
      *
-     * 当前实现采用多张影像统一缩放后平均叠加，并使用 DEM 有效区裁剪输出。
+     * 基于 DEM 有效高程和项目相机逐像元反投影，可配置输出网格、融合、
+     * 项目蒙版、颜色处理、孔洞填充、进度与取消。
      */
+    static bool generateOrthoProduct(const QStringList &images,
+                                     const QString &demPath,
+                                     const QString &outputPath,
+                                     const QJsonObject &settings,
+                                     const QJsonObject &projectMeta,
+                                     QJsonObject *result,
+                                     QString *errorMsg = nullptr,
+                                     const std::atomic_bool *cancelFlag = nullptr,
+                                     const OrthoProgressCallback &progressCallback = {});
+
+    static bool estimateOrthoProduct(const QString &demPath,
+                                     const QJsonObject &settings,
+                                     QJsonObject *result,
+                                     QString *errorMsg = nullptr);
+
     static bool generateOrthoProduct(const QStringList &images,
                                      const QString &demPath,
                                      const QString &outputPath,

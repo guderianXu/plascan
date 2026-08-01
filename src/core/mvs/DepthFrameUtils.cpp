@@ -182,6 +182,8 @@ StoredDepthFramesResult collectStoredDepthFramesInDirectory(const QJsonArray &de
             QStringLiteral("algorithm_revision")).toInt(0);
         frame.projectInputSignature =
             record.value(QStringLiteral("project_input_signature")).toString();
+        frame.reconstructionGenerationId =
+            record.value(QStringLiteral("reconstruction_generation_id")).toString();
         frame.gridWidth = record.value(QStringLiteral("grid_width")).toInt();
         frame.gridHeight = record.value(QStringLiteral("grid_height")).toInt();
         if (!frame.refImage.isEmpty() && depthFrameArtifactsExist(frame))

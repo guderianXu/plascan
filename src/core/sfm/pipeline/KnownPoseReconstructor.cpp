@@ -45,6 +45,8 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
     auto imageIds = _reconstruction->allImageIds();
     std::sort(imageIds.begin(), imageIds.end());
 
+    // 阶段 1：已知位姿路径不执行初始对/PnP，直接把每台可信 Camera 注册到同一
+    // 重建中。任何缺失相机都使该路径失败，不能混入任意估计位姿。
     int registeredCount = 0;
     for (ImageId imageId : imageIds)
     {
@@ -65,6 +67,8 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
         }
     }
 
+    // 阶段 2：根据真实基线/交会角分布选择阈值。窄基线可有限放宽，但不能通过
+    // 影像序号假设相机必然成圆来伪造几何。
     const auto triangulationPolicy = resolveKnownPoseTriangulationPolicy(_reconstruction,
                                                                          _correspondenceGraph,
                                                                          imageIds,
@@ -89,6 +93,8 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
     int createdLongTrackCount = 0;
     int longTrackTwoViewOnlyCount = 0;
 
+    // 阶段 3：先按已知相机几何过滤 pairwise 边，再合并多视轨迹。若先合并后
+    // 过滤，一条坏边可能把两个独立物点组件错误地粘在一起。
     MultiViewTrackBuilder trackBuilder;
     float maxKeypointX = 0.0f;
     float maxKeypointY = 0.0f;
@@ -171,6 +177,9 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
     trackBuildOptions.imageHeight = std::max(1.0f, maxKeypointY + 1.0f);
 
     MultiViewTrackBuildResult multiViewTracks = trackBuilder.build(trackBuildOptions);
+
+    // 人工先验轨迹拥有独立身份。自动组件中若包含同一人工观测，先删除该自动轨迹，
+    // 再追加 materializedPriorTracks，避免一个 2D 特征同时归属两个三维点。
     multiViewTracks.tracks.erase(
         std::remove_if(multiViewTracks.tracks.begin(), multiViewTracks.tracks.end(), [this](const Track &track)
         {
@@ -253,6 +262,8 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
             trackStats.longTrackRejectedExtraGt25);
     }
 
+    // 多视轨迹完全无法成点时才回退逐图双视三角化。只要已有多视结果就不混入
+    // 大量弱双视点，以免后续 BA 的短轨迹占比失控。
     if (createdPoints == 0)
     {
         Logger::instance()->warnf(
@@ -277,6 +288,8 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
     int baCompletedObservations = 0;
     int baFilteredPoints = 0;
     int baShortTrackFiltered = 0;
+    // 阶段 4：先以当前点提供 PnP 微调，再调用统一 BA 协调器；BA 后必须重三角化、
+    // 补观测和再次过滤，因为相机位姿更新会改变全部交会几何。
     if (_reconstruction->numRegisteredImages() >= 2 && _reconstruction->numPoints3D() > 0)
     {
         Logger::instance()->infof("[SFM] Known-pose global BA: tracks=%zu cameras=%zu",
@@ -346,6 +359,8 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
     const double finalTwoViewTrackRatio = finalTrackCount > 0
         ? static_cast<double>(finalTwoViewTrackCount) / static_cast<double>(finalTrackCount)
         : 0.0;
+    // 阶段 5：已知位姿下“注册全部相机”本身不是成功标准。若输入存在充足长轨迹，
+    // 输出却几乎全为双视点，通常说明相机坐标约定或匹配身份错误，必须拒绝。
     const bool hasEnoughMultiViewInputForQualityGate =
         inputMultiViewTrackCount >= kKnownPoseMinLongInputTracksForQualityGate &&
         result.numPoints3D >= kKnownPoseMinPointsForTrackRatioGate;

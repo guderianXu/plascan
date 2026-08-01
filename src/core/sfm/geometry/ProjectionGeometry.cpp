@@ -12,6 +12,9 @@ ProjectionResult projectForReprojection(const Camera &camera,
     ProjectionResult result;
     const double world[3] = {worldPoint[0], worldPoint[1], worldPoint[2]};
     double pixel[2] = {0.0, 0.0};
+
+    // 生产几何优先要求正深度。signed fallback 只为旧相机元数据诊断保留，
+    // 并通过 usedSignedFallback 暴露给调用方，不能用于掩盖负深度质量问题。
     if (camera.projectWorldPointWithDepth(world, pixel, result.positiveDepth))
     {
         result.success = true;

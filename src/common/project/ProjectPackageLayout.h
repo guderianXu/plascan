@@ -26,9 +26,11 @@ public:
                                   int directoryNumber);
     static QString chunkArchivePath(const QString &projectPath,
                                     int directoryNumber);
-    static bool ensureChunkDirectories(const QString &projectPath,
-                                       int directoryNumber,
-                                       QString *errorMessage = nullptr);
+    // 清理旧版本提前创建的空目录；包含任何条目的目录保持不变。
+    static bool pruneEmptyOptionalDirectories(
+        const QString &projectPath,
+        int directoryNumber,
+        QString *errorMessage = nullptr);
     static bool isChunkDirectoryName(const QString &name);
 
     // 兼容旧调用：返回首个数字 Chunk 目录，不再返回根级 workspace/。

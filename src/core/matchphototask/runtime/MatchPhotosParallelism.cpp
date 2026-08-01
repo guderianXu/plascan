@@ -3,9 +3,8 @@
 #include <algorithm>
 #include <limits>
 
-#if defined(PLASCAN_TORCH_HAS_CUDA)
-#  include <c10/cuda/CUDACachingAllocator.h>
-#  include <torch/cuda.h>
+#if defined(PLASCAN_HAS_CUDA_SIFT)
+#  include <cuda_runtime_api.h>
 #endif
 
 namespace xjw
@@ -35,30 +34,23 @@ MatchPhotosGpuMemoryInfo queryMatchPhotosGpuMemory(int deviceIndex)
     MatchPhotosGpuMemoryInfo memory;
     memory.deviceIndex = std::max(0, deviceIndex);
 
-#if defined(PLASCAN_TORCH_HAS_CUDA)
-    try
+#if defined(PLASCAN_HAS_CUDA_SIFT)
+    int previousDevice = 0;
+    const bool restoreDevice = cudaGetDevice(&previousDevice) == cudaSuccess;
+    if (cudaSetDevice(memory.deviceIndex) == cudaSuccess)
     {
-        if (!torch::cuda::is_available())
+        std::size_t freeBytes = 0;
+        std::size_t totalBytes = 0;
+        if (cudaMemGetInfo(&freeBytes, &totalBytes) == cudaSuccess)
         {
-            return memory;
+            memory.freeBytes = static_cast<std::uint64_t>(freeBytes);
+            memory.totalBytes = static_cast<std::uint64_t>(totalBytes);
+            memory.available = freeBytes > 0 && totalBytes > 0;
         }
-
-        auto *allocator = c10::cuda::CUDACachingAllocator::get();
-        if (!allocator)
+        if (restoreDevice && previousDevice != memory.deviceIndex)
         {
-            return memory;
+            cudaSetDevice(previousDevice);
         }
-
-        const auto info = allocator->getMemoryInfo(memory.deviceIndex);
-        memory.freeBytes = static_cast<std::uint64_t>(info.first);
-        memory.totalBytes = static_cast<std::uint64_t>(info.second);
-        memory.available = memory.freeBytes > 0 && memory.totalBytes > 0;
-    }
-    catch (const std::exception &)
-    {
-        memory.available = false;
-        memory.freeBytes = 0;
-        memory.totalBytes = 0;
     }
 #endif
 

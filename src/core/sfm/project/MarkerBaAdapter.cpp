@@ -82,6 +82,9 @@ void appendMarkerBaInput(const MarkerBaInput *input,
 
     QMap<control_points::MarkerId, int> trackIndexByMarker;
     control_points::ControlNetworkInput networkInput;
+
+    // 阶段 1：把每个启用标记的有效投影变成独立多视轨迹。预测投影和禁用投影
+    // 不参与平差，同一相机的重复投影只取一个，防止人为重复加权。
     for (const control_points::Marker &marker : input->markerSet->markers())
     {
         if (!marker.enabled)
@@ -153,6 +156,8 @@ void appendMarkerBaInput(const MarkerBaInput *input,
         }
     }
 
+    // 阶段 2：仅控制点参与 Sim(3) 控制网估计；检查点保留独立残差评估语义。
+    // 估计失败时不附加错误物方约束，自动连接点仍可用于自由网 BA。
     result->markerControlNetwork = control_points::solveControlNetwork(networkInput);
     if (!result->markerControlNetwork.ok)
     {
@@ -170,6 +175,8 @@ void appendMarkerBaInput(const MarkerBaInput *input,
         track.initialPoint = transform.apply(track.initialPoint);
     }
 
+    // 阶段 3：只把控制网内点写成 BA 控制点约束。离群控制点仍保留轨迹和报告，
+    // 但不会把错误物方坐标拉入非线性优化。
     for (const control_points::MarkerResidual &residual :
          result->markerControlNetwork.controlResiduals)
     {
@@ -201,6 +208,7 @@ void appendMarkerBaInput(const MarkerBaInput *input,
         ++result->markerControlPointConstraintCount;
     }
 
+    // 阶段 4：控制标尺进入 BA 消除尺度自由度；检查标尺只建立回写绑定。
     for (int scaleIndex = 0; scaleIndex < input->markerSet->scaleBars().size(); ++scaleIndex)
     {
         const control_points::ScaleBar &scaleBar = input->markerSet->scaleBars()[scaleIndex];

@@ -34,6 +34,7 @@ struct VisualHullConfig
     float relativeDepthTolerance = 0.01f;
     bool closeVolumeBoundary = true;
     int topologyClosingIterations = 0;
+    bool useContinuousSilhouetteField = false;
     int smoothingIterations = 2;
     float smoothingLambda = 0.18f;
     int workerCount = 0;

@@ -1545,7 +1545,9 @@ std::string relativeToken(const std::filesystem::path &path,
     // 回退绝对路径，保证列表仍能定位文件。
     std::error_code ec;
     std::filesystem::path rel = std::filesystem::relative(path, baseDir, ec);
-    if (ec)
+    // MSVC 在跨盘符时可能返回空路径但不设置 error_code；空 token 会把
+    // image_camera.lis 变成 "'' camera.tsai"，下游因此误报缺少影像列。
+    if (ec || rel.empty())
     {
         rel = std::filesystem::absolute(path);
     }

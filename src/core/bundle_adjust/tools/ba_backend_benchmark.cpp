@@ -142,8 +142,6 @@ void runCase(const char *name,
     options.minCeresCudaCameras = 1;
     options.minCeresCudaObservations = 1;
     options.minCeresCpuObservations = 1;
-    options.minNativeCudaCameras = 1;
-    options.minNativeCudaObservations = 1;
     options.allowBackendFallback = true;
     options.enableBackendQualityGate = true;
     options.compareAutoBackendWithLegacy = true;
@@ -173,8 +171,8 @@ void runCase(const char *name,
               << ",quality_rejected=" << (result.qualityGateRejected ? "true" : "false")
               << ",backend_reason=" << sanitizeField(result.backendSelectionReason)
               << ",quality_message=" << sanitizeField(result.qualityGateMessage)
-              << ",native_pcg_iterations=" << result.nativeCudaPcgIterations
-              << ",native_linear_residual=" << result.nativeCudaLinearResidual
+              << ",native_initial_cost=" << result.nativeCudaInitialCost
+              << ",native_final_cost=" << result.nativeCudaFinalCost
               << ",native_active_observations=" << result.nativeCudaActiveObservations
               << ",native_upload_seconds=" << result.nativeCudaUploadSeconds
               << ",native_kernel_seconds=" << result.nativeCudaKernelSeconds

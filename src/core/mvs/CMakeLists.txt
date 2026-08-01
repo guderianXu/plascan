@@ -15,11 +15,13 @@ endif()
 
 # ── 源文件 ────────────────────────────────────────────────────────────────────
 set(MVS_CXX_SOURCES
+    AdaptiveGeometryEvidencePolicy.cpp
     DenseCloudRefinementService.cpp
     DenseCloudQualityFilter.cpp
     DepthCompletenessMetrics.cpp
     DepthConsistencyCache.cpp
     DepthConsistencyEvidencePolicy.cpp
+    DepthConsensusBiasPolicy.cpp
     DepthAnchoredHoleInterpolator.cpp
     DepthCrossViewHoleRepair.cpp
     DepthGeometryConsistency.cpp
@@ -54,11 +56,13 @@ set(MVS_CXX_SOURCES
 )
 
 set(MVS_HEADERS
+    AdaptiveGeometryEvidencePolicy.h
     DenseCloudRefinementService.h
     DenseCloudQualityFilter.h
     DepthCompletenessMetrics.h
     DepthConsistencyCache.h
     DepthConsistencyEvidencePolicy.h
+    DepthConsensusBiasPolicy.h
     DepthAnchoredHoleInterpolator.h
     DepthCrossViewHoleRepair.h
     DepthGeometryConsistency.h
@@ -240,6 +244,21 @@ if(BUILD_TESTS)
         )
         gtest_discover_tests(test_mvs_depth_consistency_evidence)
 
+        add_executable(test_mvs_adaptive_geometry_evidence_policy
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_adaptive_geometry_evidence_policy.cpp
+        )
+        set_target_properties(test_mvs_adaptive_geometry_evidence_policy PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
+        )
+        target_link_libraries(test_mvs_adaptive_geometry_evidence_policy PRIVATE
+            mvs
+            GTest::gtest_main
+        )
+        target_include_directories(test_mvs_adaptive_geometry_evidence_policy PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/core/mvs
+        )
+        gtest_discover_tests(test_mvs_adaptive_geometry_evidence_policy)
+
         add_executable(test_mvs_depth_pose_alignment
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_depth_pose_alignment.cpp
         )
@@ -393,5 +412,17 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/src/core/mvs
         )
         gtest_discover_tests(test_patchmatch_photometric_cost)
+
+        add_executable(test_patchmatch_mask_aware
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_patchmatch_mask_aware.cpp
+        )
+        target_link_libraries(test_patchmatch_mask_aware PRIVATE
+            mvs
+            GTest::gtest_main
+        )
+        target_include_directories(test_patchmatch_mask_aware PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/core/mvs
+        )
+        gtest_discover_tests(test_patchmatch_mask_aware DISCOVERY_MODE PRE_TEST)
     endif()
 endif()

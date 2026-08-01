@@ -7,10 +7,13 @@ namespace matchphotos
 
 QString algorithmPlanSummary(const MatchPhotosAlgorithmPlan &plan)
 {
-    QString summary = QStringLiteral("%1 + %2")
-                          .arg(plan.featureAlgorithm.isEmpty() ? QStringLiteral("end-to-end")
-                                                               : plan.featureAlgorithm,
-                               plan.matcherAlgorithm);
+    QString summary = plan.displayName.isEmpty()
+        ? plan.algorithmId
+        : plan.displayName;
+    if (plan.algorithmVersion > 0)
+    {
+        summary += QStringLiteral(" v%1").arg(plan.algorithmVersion);
+    }
     if (plan.rotationRobust)
     {
         summary += QStringLiteral("，旋转鲁棒");

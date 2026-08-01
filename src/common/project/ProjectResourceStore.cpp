@@ -136,6 +136,19 @@ bool copyFileAtomically(const QString &sourcePath,
     return true;
 }
 
+QString chunkRelativeEntryPath(const QString &entryPath)
+{
+    if (entryPath.startsWith(QStringLiteral("chunk/")))
+    {
+        return entryPath.mid(QStringLiteral("chunk/").size());
+    }
+    if (entryPath.startsWith(QStringLiteral("workspace/")))
+    {
+        return entryPath.mid(QStringLiteral("workspace/").size());
+    }
+    return entryPath;
+}
+
 } // namespace
 
 ProjectResourceStore::ProjectResourceStore(const QString &projectPath)
@@ -381,7 +394,7 @@ bool ProjectResourceResolver::materialize(
             : chunkRoot,
         shared
             ? resource.entryPath
-            : resource.entryPath.mid(QStringLiteral("workspace/").size()),
+            : chunkRelativeEntryPath(resource.entryPath),
         errorMessage);
     if (authoritativePath.isEmpty())
     {

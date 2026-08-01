@@ -281,6 +281,9 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
 
     // 构造本次 BA 选项，并显式消除无绝对约束问题的 7 自由度 gauge。
     BAOptions baOpt = _sfmOptions.baOptions;
+    // SfM 协调器会固定旋转/平移规范，并在求解后恢复基线尺度，
+    // 因此由调用方管理完整的 Sim(3) gauge，避免 BA 模块再自动固定第二台相机。
+    baOpt.gaugePolicy = BAGaugePolicy::CallerManaged;
     int control_scale_bar_count = 0;
     for (std::size_t scale_index = 0; scale_index < _pendingPriorScaleBars.size(); ++scale_index)
     {

@@ -209,6 +209,60 @@ TEST(BundleAdjustCeresBackendTest, CeresPointOnlyUsesDenseQrSolver)
     EXPECT_LT(result.meanRmsAfter, result.meanRmsBefore);
 }
 
+TEST(BundleAdjustCeresBackendTest, AutoDiffPosePriorStabilizesCameraCenter)
+{
+    ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
+
+    const std::vector<xjw::Camera> truthCameras{
+        makeCamera(-1.0, 0.0, 0.0),
+        makeCamera(1.0, 0.0, 0.0),
+        makeCamera(0.0, 1.0, 0.0),
+    };
+    std::vector<xjw::Camera> initialCameras = truthCameras;
+    initialCameras[1] = makeCamera(1.6, 0.2, 0.0);
+
+    std::vector<xjw::BATrack> tracks;
+    for (int index = 0; index < 36; ++index)
+    {
+        const std::array<double, 3> truth{{
+            (static_cast<double>(index % 6) - 2.5) * 0.15,
+            (static_cast<double>(index / 6) - 2.5) * 0.15,
+            8.0 + static_cast<double>(index % 3) * 0.1,
+        }};
+        tracks.push_back(makeTrack(truthCameras, truth, truth));
+    }
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::CeresCpu;
+    options.refineCameraPose = true;
+    options.fixedCameraIndices = {0};
+    options.enablePointFilter = false;
+    options.maxIterations = 20;
+    options.cameraPosePriors.resize(initialCameras.size());
+    options.cameraPosePriors[1].enabled = true;
+    options.cameraPosePriors[1].cameraCenter =
+        truthCameras[1].cameraCenter();
+    options.cameraPosePriors[1].cameraToWorldRotation =
+        truthCameras[1].cameraToWorldRotation();
+    options.cameraPosePriors[1].positionSigmaMeters = 0.05;
+    options.cameraPosePriors[1].rotationSigmaDegrees = 1.0;
+    options.cameraPosePriorWeight = 100.0;
+
+    const double before = distance3d(
+        initialCameras[1].cameraCenter(),
+        truthCameras[1].cameraCenter());
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(
+            initialCameras, tracks, options);
+
+    ASSERT_TRUE(result.solutionUsable);
+    ASSERT_EQ(result.refinedCameras.size(), initialCameras.size());
+    const double after = distance3d(
+        result.refinedCameras[1].cameraCenter(),
+        truthCameras[1].cameraCenter());
+    EXPECT_LT(after, before * 0.1);
+}
+
 TEST(BundleAdjustCeresBackendTest, CeresSkipsTracksThatCannotConstrainProblem)
 {
     ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
@@ -391,7 +445,8 @@ TEST(BundleAdjustCeresBackendTest, CeresDoesNotCountTracksWithNonFiniteRms)
     ASSERT_EQ(result.points.size(), 1u);
     EXPECT_FALSE(result.points.front().valid);
     EXPECT_EQ(result.optimizedTracks, 0);
-    EXPECT_TRUE(std::isfinite(result.meanRmsAfter));
+    EXPECT_TRUE(std::isinf(result.meanRmsAfter));
+    EXPECT_FALSE(result.solutionUsable);
 }
 
 TEST(BundleAdjustCeresBackendTest, CeresCudaAndCpuReachComparableRms)

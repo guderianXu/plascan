@@ -1,4 +1,12 @@
-// GUI“工作流程 > 空中三角测量”的无界面入口。
+/**
+ * @file cli_aerial_triangulation.cpp
+ * @brief GUI“工作流程 > 空中三角测量”的无界面入口。
+ *
+ * 本文件负责 CLI 层的流程编排：解析参数、打开或创建 PlaScan 项目、按需准备匹配/连接点，
+ * 调用 AerialTriangulationWorkflow 完成增量 SfM 与光束法平差（BA），最后把稀疏点云、相机和报告写回项目。
+ *
+ * 该流程在稀疏重建结束后停止，不执行 MVS 深度估计、稠密点云、网格、纹理或 DEM/DOM。
+ */
 #include "cli_common.h"
 #include "cli_photogrammetry_common.h"
 #include "CliTokenUtils.h"
@@ -25,6 +33,7 @@
 namespace
 {
 
+// 接受 CLI 中便于输入的别名，并转换为 workflow 使用的稳定枚举字符串。
 QString referenceModeFromToken(const QString &value)
 {
     const QString token = xjw::cli::normalizedToken(value, QStringLiteral("source_code"));
@@ -43,22 +52,10 @@ QString referenceModeFromToken(const QString &value)
     return QStringLiteral("source_code");
 }
 
-QJsonArray featureFilesToJson(const std::vector<xjw::matchphotos::MatchPhotosFeatureRecord> &records)
-{
-    QJsonArray array;
-    for (const xjw::matchphotos::MatchPhotosFeatureRecord &record : records)
-    {
-        QJsonObject object;
-        object[QStringLiteral("image_path")] = record.imagePath;
-        object[QStringLiteral("feature_path")] = record.featurePath;
-        object[QStringLiteral("keypoint_count")] = record.keypointCount;
-        object[QStringLiteral("settings")] = record.settings;
-        array.append(object);
-    }
-    return array;
-}
-
-QJsonArray matchFilesToJson(const std::vector<xjw::matchphotos::MatchPhotosMatchRecord> &records)
+// 以下序列化函数把 workflow 的配置和结果转换为稳定的 JSON 字段，
+// 供 CLI 报告、自动化脚本以及项目结果记录共同使用。
+QJsonArray pairDiagnosticsToJson(
+    const std::vector<xjw::matchphotos::MatchPhotosMatchRecord> &records)
 {
     QJsonArray array;
     for (const xjw::matchphotos::MatchPhotosMatchRecord &record : records)
@@ -66,11 +63,33 @@ QJsonArray matchFilesToJson(const std::vector<xjw::matchphotos::MatchPhotosMatch
         QJsonObject object;
         object[QStringLiteral("image0_path")] = record.image0Path;
         object[QStringLiteral("image1_path")] = record.image1Path;
-        object[QStringLiteral("match_path")] = record.matchPath;
-        object[QStringLiteral("sidecar_path")] = record.sidecarPath;
+        object[QStringLiteral("image0_match_file")] = record.image0MatchFilePath;
+        object[QStringLiteral("image1_match_file")] = record.image1MatchFilePath;
+        object[QStringLiteral("algorithm_id")] = record.algorithmId;
+        object[QStringLiteral("algorithm_version")] =
+            static_cast<qint64>(record.algorithmVersion);
         object[QStringLiteral("match_count")] = record.matchCount;
         object[QStringLiteral("geometric_inlier_count")] = record.geometricInlierCount;
         object[QStringLiteral("passed_geometry")] = record.passedGeometry;
+        object[QStringLiteral("settings")] = record.settings;
+        array.append(object);
+    }
+    return array;
+}
+
+QJsonArray imageMatchFilesToJson(
+    const std::vector<xjw::matchphotos::MatchPhotosImageMatchRecord> &records)
+{
+    QJsonArray array;
+    for (const xjw::matchphotos::MatchPhotosImageMatchRecord &record : records)
+    {
+        QJsonObject object;
+        object[QStringLiteral("image")] = record.imagePath;
+        object[QStringLiteral("output")] = record.matchFilePath;
+        object[QStringLiteral("neighbors")] =
+            QJsonArray::fromStringList(record.neighborImagePaths);
+        object[QStringLiteral("neighbor_variant_count")] =
+            record.neighborVariantCount;
         object[QStringLiteral("settings")] = record.settings;
         array.append(object);
     }
@@ -89,8 +108,10 @@ QJsonObject tiePointResultToJson(const xjw::matchphotos::MatchPhotosResult &tieP
         tiePoints.rejectedTrackConflictComponents;
     object[QStringLiteral("candidate_pair_count")] =
         static_cast<int>(tiePoints.pairSelection.candidates.size());
-    object[QStringLiteral("features")] = featureFilesToJson(tiePoints.features);
-    object[QStringLiteral("matches")] = matchFilesToJson(tiePoints.matches);
+    object[QStringLiteral("pair_diagnostics")] =
+        pairDiagnosticsToJson(tiePoints.matches);
+    object[QStringLiteral("image_match_files")] =
+        imageMatchFilesToJson(tiePoints.imageMatchFiles);
     object[QStringLiteral("track_summary")] = tiePoints.trackSummary;
     return object;
 }
@@ -154,8 +175,7 @@ QJsonObject pipelineInputToJson(
 QJsonObject tiePointOptionsToJson(const xjw::matchphotos::MatchPhotosOptions &options)
 {
     QJsonObject object;
-    object[QStringLiteral("feature_algorithm")] = options.featureAlgorithm;
-    object[QStringLiteral("matcher_algorithm")] = options.matcherAlgorithm;
+    object[QStringLiteral("algorithm_id")] = options.algorithmId;
     object[QStringLiteral("mask_apply_mode")] = options.maskApplyMode;
     object[QStringLiteral("max_image_dimension")] = options.maxImageDim;
     object[QStringLiteral("max_keypoints")] = options.maxKeypoints;
@@ -165,7 +185,7 @@ QJsonObject tiePointOptionsToJson(const xjw::matchphotos::MatchPhotosOptions &op
     object[QStringLiteral("generic_preselection")] = options.useGenericPreselection;
     object[QStringLiteral("reference_preselection")] = options.useReferencePreselection;
     object[QStringLiteral("exclude_stationary_tie_points")] = options.excludeStationaryTiePoints;
-    object[QStringLiteral("reuse_existing_features")] = options.reuseExistingFeatures;
+    object[QStringLiteral("reuse_existing_matches")] = options.reuseExistingMatches;
     return object;
 }
 
@@ -175,13 +195,13 @@ QJsonObject tiePointContextToJson(const xjw::aerial_triangulation::AerialTriangu
     object[QStringLiteral("preparation_required")] = config.prepareTiePoints;
     object[QStringLiteral("force_rebuild")] = config.forceRebuildTiePoints;
     object[QStringLiteral("working_dir")] = config.tiePointContext.workingDirectory;
-    object[QStringLiteral("feature_dir")] = config.tiePointContext.featureDirectory;
     object[QStringLiteral("match_dir")] = config.tiePointContext.matchDirectory;
     object[QStringLiteral("mask_count")] = config.tiePointContext.maskPaths.size();
     object[QStringLiteral("reference_camera_count")] = config.tiePointContext.referenceCameras.size();
     return object;
 }
 
+// dry-run 只报告最终解析出的配置，不运行连接点准备、SfM 或 BA。
 QJsonObject makeDryRunReport(const xjw::aerial_triangulation::AerialTriangulationResolvedConfig &config,
                              const QString &outputDir,
                              int imageCount,
@@ -202,6 +222,7 @@ QJsonObject makeDryRunReport(const xjw::aerial_triangulation::AerialTriangulatio
     return report;
 }
 
+// 正式运行报告同时保留连接点前端和稀疏重建后端的诊断信息。
 QJsonObject makeRunReport(const xjw::aerial_triangulation::AerialTriangulationResult &result,
                           const QString &outputDir,
                           int imageCount,
@@ -247,20 +268,18 @@ int main(int argc, char *argv[])
     QCoreApplication qtApplication(argc, argv);
     CLI::App app{"PlaScan 空中三角测量 CLI — 对齐照片式特征/匹配/SfM/BA 流程"};
 
+    // 阶段 1：声明 CLI 参数。默认值尽量与 GUI 的空中三角测量工作流保持一致。
     std::string inputPath;
     std::string outputDirArg;
     std::string projectPathArg;
     std::string chunkIdArg;
     std::string chunkNameArg;
     std::string assetsDirArg;
-    std::string featureDirArg;
     std::string matchDirArg;
     std::string qualityArg = "high";
     std::string deviceArg = "auto";
     std::string referenceModeArg = "source_code";
-    std::string featureAlgorithmArg = "sift";
-    std::string matchAlgorithmArg = "lightglue";
-    std::string matchPipelineArg;
+    std::string algorithmIdArg = "sift_lightglue";
     std::string maskApplyModeArg = "none";
     std::string maskDirArg;
     int keypointLimit = 40000;
@@ -291,14 +310,14 @@ int main(int argc, char *argv[])
     app.add_option("--chunk-id", chunkIdArg, "使用指定 UUID 的 Chunk");
     app.add_option("--chunk-name", chunkNameArg, "使用指定名称的 Chunk");
     app.add_option("--assets-dir", assetsDirArg, "复用特征与匹配的 assets 目录，默认使用输出目录下的 assets");
-    app.add_option("--feature-dir", featureDirArg, "特征缓存目录，默认使用 assets/ip");
-    app.add_option("--match-dir", matchDirArg, "匹配缓存目录，默认使用 assets/matches");
+    app.add_option("--match-dir", matchDirArg,
+                   "逐影像匹配目录，默认使用 assets/image_matches");
     app.add_option("--quality", qualityArg, "精度: lowest, low, medium, high, highest");
     app.add_option("--device", deviceArg, "计算设备: auto, cpu, cuda");
     app.add_option("--reference-mode", referenceModeArg, "参考预选模式: source-code/source, estimated, sequence");
-    app.add_option("--feature-algorithm", featureAlgorithmArg, "特征算法，默认 sift");
-    app.add_option("--match-algorithm", matchAlgorithmArg, "匹配算法，默认 lightglue");
-    app.add_option("--match-pipeline", matchPipelineArg, "匹配链路，如 sift-lightglue/sift-bf-l2");
+    app.add_option("--algorithm-id", algorithmIdArg,
+                   "统一影像匹配算法 ID；当前仅支持 sift_lightglue")
+        ->check(CLI::IsMember({"sift_lightglue"}));
     app.add_option("--keypoint-limit", keypointLimit, "关键点限制");
     app.add_option("--tiepoint-limit", tiepointLimit, "连接点限制");
     app.add_option("--initial-image-id-1", initialImageId1, "指定初始像对的第一个 0 基影像索引");
@@ -320,13 +339,15 @@ int main(int argc, char *argv[])
     app.add_flag("--include-fixed-tie-points", includeFixedTiePoints, "包含固定/近静止连接点");
     app.add_flag("--exclude-fixed-tie-points", excludeFixedTiePoints, "排除固定/近静止连接点");
     app.add_flag("--auto-generate-missing-matches", autoGenerateMissingMatches, "缺少连接点时自动创建连接点");
-    app.add_flag("--no-auto-generate-missing-matches", noAutoGenerateMissingMatches, "只复用已有特征/匹配缓存");
+    app.add_flag("--no-auto-generate-missing-matches", noAutoGenerateMissingMatches,
+                 "只复用已有逐影像匹配分片和连接点");
     app.add_option("--threads", threads, "CPU 工作线程数");
     app.add_flag("--dry-run-config", dryRunConfig, "只输出解析后的空三配置，不执行 SfM");
     app.add_flag("--force", force, "允许输出目录非空");
 
     CLI11_PARSE(app, argc, argv);
 
+    // 阶段 2：规范化路径并读取影像清单。清单可仅含影像，也可为每幅影像提供初始相机文件。
     const QString inputList = xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(inputPath));
     const QString outputDir = xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(outputDirArg));
     const QString projectPath = projectPathArg.empty()
@@ -402,6 +423,7 @@ int main(int argc, char *argv[])
         return cli::EXIT_ARG_ERR;
     }
 
+    // 阶段 3：打开或创建项目，选择目标 Chunk，并把本次影像合并进项目元数据。
     xjw::common::project::ProjectSession projectSession;
     if (!projectSession.openOrCreate(
             projectPath,
@@ -445,17 +467,15 @@ int main(int argc, char *argv[])
         QDir(projectSession.activeChunkRoot())
             .filePath(QStringLiteral("reconstruction/sparse"));
 
+    // 阶段 4：把 CLI 参数映射到 GUI/CLI 共用的 workflow 配置，避免在入口层重复实现算法逻辑。
     auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
     xjw::aerial_triangulation::AerialTriangulationOptions options;
     options.images = xjw::cli::imagePaths(items);
     options.cameraPaths = cameras;
     options.projectPath = projectPath;
     options.assetsDir = assetsDir;
-    options.featureDir = featureDirArg.empty()
-        ? QDir(options.assetsDir).filePath(QStringLiteral("ip"))
-        : xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(featureDirArg));
     options.matchDir = matchDirArg.empty()
-        ? QDir(options.assetsDir).filePath(QStringLiteral("matches"))
+        ? QDir(options.assetsDir).filePath(QStringLiteral("image_matches"))
         : xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(matchDirArg));
     options.outputDir = reconstructionDir;
     options.projectMeta = projectSession.mergedMetadata();
@@ -478,9 +498,8 @@ int main(int argc, char *argv[])
         options.initialImageId1 = static_cast<xjw::ImageId>(initialImageId1);
         options.initialImageId2 = static_cast<xjw::ImageId>(initialImageId2);
     }
-    options.featureAlgorithm = xjw::cli::normalizedToken(featureAlgorithmArg, QStringLiteral("sift"));
-    options.matchAlgorithm = xjw::cli::normalizedToken(matchAlgorithmArg, QStringLiteral("lightglue"));
-    options.matchPipeline = xjw::cli::normalizedToken(matchPipelineArg, QString());
+    options.matchingAlgorithmId = xjw::cli::normalizedToken(
+        algorithmIdArg, QStringLiteral("sift_lightglue"));
     options.device = xjw::cli::normalizedToken(deviceArg, QStringLiteral("auto"));
     options.threads = std::max(1, threads);
     options.autoGenerateMissingMatches = autoGenerateMissingMatches;
@@ -508,6 +527,8 @@ int main(int argc, char *argv[])
         QDir(projectSession.activeChunkRoot()).filePath(
             QStringLiteral(
                 "reports/aerial_triangulation_cli_report.json"));
+
+    // dry-run 仍会解析默认值和派生路径，但不会提取特征、匹配影像或启动 SfM。
     if (dryRunConfig)
     {
         const xjw::aerial_triangulation::AerialTriangulationResolvedConfig config =
@@ -543,6 +564,7 @@ int main(int argc, char *argv[])
         return cli::EXIT_OK;
     }
 
+    // 阶段 5：共享 workflow 先按需生成/复用连接点，再执行初始像对、增量注册、三角化和 BA。
     QElapsedTimer timer;
     timer.start();
     const xjw::aerial_triangulation::AerialTriangulationResult result =
@@ -559,44 +581,28 @@ int main(int argc, char *argv[])
         return cli::EXIT_IO_ERR;
     }
 
-    for (const xjw::matchphotos::MatchPhotosFeatureRecord &feature :
-         result.tiePointResult.features)
+    // 阶段 6：工程仅登记逐影像最终分片。特征描述子是任务内临时数据，
+    // 像对信息和残差已封装在 `.pimatch` 中，不再产生旧缓存数组。
+    for (const xjw::matchphotos::MatchPhotosImageMatchRecord &image :
+         result.tiePointResult.imageMatchFiles)
     {
         QJsonObject record{
-            {QStringLiteral("input"), feature.imagePath},
-            {QStringLiteral("output"), feature.featurePath},
-            {QStringLiteral("keypoint_count"), feature.keypointCount},
-            {QStringLiteral("settings"), feature.settings},
+            {QStringLiteral("image"), image.imagePath},
+            {QStringLiteral("output"), image.matchFilePath},
+            {QStringLiteral("neighbors"),
+             QJsonArray::fromStringList(image.neighborImagePaths)},
+            {QStringLiteral("neighbor_variant_count"), image.neighborVariantCount},
+            {QStringLiteral("settings"), image.settings},
             {QStringLiteral("created_at"),
              QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}
         };
         projectSession.upsertResultByPath(
-            QStringLiteral("ipfind_results"),
-            QStringLiteral("output"),
-            record);
-    }
-    for (const xjw::matchphotos::MatchPhotosMatchRecord &match :
-         result.tiePointResult.matches)
-    {
-        QJsonObject record{
-            {QStringLiteral("image0"), match.image0Path},
-            {QStringLiteral("image1"), match.image1Path},
-            {QStringLiteral("output"), match.matchPath},
-            {QStringLiteral("sidecar_path"), match.sidecarPath},
-            {QStringLiteral("match_count"), match.matchCount},
-            {QStringLiteral("geometric_inlier_count"),
-             match.geometricInlierCount},
-            {QStringLiteral("passed_geometry"), match.passedGeometry},
-            {QStringLiteral("settings"), match.settings},
-            {QStringLiteral("created_at"),
-             QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}
-        };
-        projectSession.upsertResultByPath(
-            QStringLiteral("ipmatch_results"),
+            QStringLiteral("image_match_results"),
             QStringLiteral("output"),
             record);
     }
 
+    // 阶段 7：登记稀疏点云并写回优化后的相机。这里是空三终点，不进入 MVS 或地形产品生产。
     const auto &reconstruction = result.reconstructionResult;
     if (!reconstruction.sparseCloudPath.isEmpty())
     {
@@ -656,6 +662,7 @@ int main(int argc, char *argv[])
         return cli::EXIT_IO_ERR;
     }
 
+    // 输出稳定的 key=value 摘要，便于批处理脚本读取；完整诊断信息保存在 JSON 报告中。
     std::fprintf(stdout, "status=%s\n", result.reconstructionResult.success ? "ok" : "failed");
     std::fprintf(stdout, "registered_images=%d\n", result.reconstructionResult.numRegisteredImages);
     std::fprintf(stdout, "points3d=%d\n", result.reconstructionResult.numPoints3D);

@@ -1,12 +1,26 @@
+/**
+ * @file BundleAdjustCeres.cpp
+ * @brief Ceres 联合相机、三维点和可选共享焦距 BA 后端。
+ *
+ * 公共 Camera 使用 camera-to-world 旋转 Rcw 和世界系中心 C；Ceres 参数块内部
+ * 转换为 angle-axis world-to-camera 加平移。每条像点观测形成二维残差块，点和
+ * 相机的稀疏耦合由 Schur 求解器处理。求解结果返回前仍经过与其他后端一致的
+ * 正深度、轨迹有效率和 RMS 质量门控。
+ */
+
 #include "BundleAdjustCeres.h"
 
+#include "BundleAdjustCeresPlanning.h"
 #include "BundleAdjustProjection.h"
+#include "BundleAdjustQuality.h"
 
+#include <plamatrix/ops/statistics.h>
 #include <plamatrix/ops/vector.h>
 
 #ifdef PLASCAN_BA_HAS_CERES
 #  include <ceres/ceres.h>
 #  include <ceres/internal/config.h>
+#  include <ceres/rotation.h>
 #  if !defined(CERES_NO_CUDA) && __has_include(<cuda_runtime_api.h>)
 #    include <cuda_runtime_api.h>
 #    define PLASCAN_BA_HAS_CUDA_RUNTIME_API 1
@@ -18,6 +32,7 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
@@ -28,6 +43,7 @@ namespace xjw::ba
 
 ProjectionCamera makeProjectionCamera(const Camera &camera)
 {
+    // 将功能丰富的 Camera 冻结为无虚函数投影 POD，供残差和质量复核共享。
     ProjectionCamera out;
     const Camera::Intrinsics intrinsics = camera.intrinsics();
     const Camera::Distortion distortion = camera.distortion();
@@ -66,6 +82,7 @@ double computeTrackRms(const std::vector<Camera> &cameras,
 {
     double sum = 0.0;
     int count = 0;
+    // RMS 采用实际像素残差，不包含 Ceres 鲁棒损失缩放，便于跨后端比较。
     for (const BAObservation &observation : track.observations)
     {
         if (observation.cameraIndex < 0 ||
@@ -141,11 +158,8 @@ ScalarDistanceStats computeLaserStats(const std::vector<BATrack> &tracks,
     stats.rms = stats.count > 0 ? std::sqrt(sum2 / static_cast<double>(stats.count)) : 0.0;
     if (!absDistances.empty())
     {
-        std::sort(absDistances.begin(), absDistances.end());
-        const size_t mid = absDistances.size() / 2;
-        stats.median = (absDistances.size() % 2 == 0)
-                           ? 0.5 * (absDistances[mid - 1] + absDistances[mid])
-                           : absDistances[mid];
+        stats.median =
+            plamatrix::finiteMedian(std::move(absDistances)).value_or(0.0);
     }
     return stats;
 }
@@ -205,48 +219,6 @@ ScalarDistanceStats computeScaleBarStats(const std::vector<BATrack> &tracks,
     return stats;
 }
 
-std::array<double, 9> relativeRotationCurrentToPrior(const std::array<double, 9> &current,
-                                                     const std::array<double, 9> &prior)
-{
-    std::array<double, 9> relative{};
-    for (int r = 0; r < 3; ++r)
-    {
-        for (int c = 0; c < 3; ++c)
-        {
-            double sum = 0.0;
-            for (int k = 0; k < 3; ++k)
-            {
-                sum += current[r * 3 + k] * prior[c * 3 + k];
-            }
-            relative[r * 3 + c] = sum;
-        }
-    }
-    return relative;
-}
-
-std::array<double, 3> rotationLogVector(const std::array<double, 9> &rotation)
-{
-    const double trace = rotation[0] + rotation[4] + rotation[8];
-    const double cosAngle = std::clamp(0.5 * (trace - 1.0), -1.0, 1.0);
-    const double angle = std::acos(cosAngle);
-    const std::array<double, 3> vee{{
-        rotation[7] - rotation[5],
-        rotation[2] - rotation[6],
-        rotation[3] - rotation[1],
-    }};
-    if (angle < 1e-10)
-    {
-        return {{0.5 * vee[0], 0.5 * vee[1], 0.5 * vee[2]}};
-    }
-    const double sinAngle = std::sin(angle);
-    if (std::abs(sinAngle) < 1e-10)
-    {
-        return {{0.0, 0.0, 0.0}};
-    }
-    const double scale = angle / (2.0 * sinAngle);
-    return {{scale * vee[0], scale * vee[1], scale * vee[2]}};
-}
-
 int countObservations(const std::vector<BATrack> &tracks)
 {
     int count = 0;
@@ -259,6 +231,13 @@ int countObservations(const std::vector<BATrack> &tracks)
 
 #ifdef PLASCAN_BA_HAS_CERES
 
+// -------------------------------------------------------------------------
+// 残差块定义
+//
+// 重投影残差按“固定/可变外参 × 固定/共享焦距”拆成四种签名，使 Ceres 只看到
+// 实际需要优化的参数块。无效正深度返回大残差而不是 false，避免 Ceres 将其当作
+// 残差求值失败并中止整个问题。
+// -------------------------------------------------------------------------
 struct FixedCameraReprojectionResidual
 {
     xjw::ba::ProjectionCamera camera;
@@ -425,23 +404,72 @@ struct PosePriorResidual
     BACameraPosePrior prior;
     double weight = 1.0;
 
-    bool operator()(const double *const cameraDelta, double *residuals) const
+    template <typename T>
+    bool operator()(const T *const cameraDelta, T *residuals) const
     {
-        Camera current = camera;
-        current.applyDeltaPose(cameraDelta);
         const double rotationSigma = std::max(1e-9, prior.rotationSigmaDegrees * 3.14159265358979323846 / 180.0);
         const double positionSigma = std::max(1e-9, prior.positionSigmaMeters);
         const double scale = std::sqrt(std::max(0.0, weight));
-        const auto relative =
-            relativeRotationCurrentToPrior(current.cameraToWorldRotation(), prior.cameraToWorldRotation);
-        const auto rotationResidual = rotationLogVector(relative);
-        const auto center = current.cameraCenter();
-        residuals[0] = scale * rotationResidual[0] / rotationSigma;
-        residuals[1] = scale * rotationResidual[1] / rotationSigma;
-        residuals[2] = scale * rotationResidual[2] / rotationSigma;
-        residuals[3] = scale * (center[0] - prior.cameraCenter[0]) / positionSigma;
-        residuals[4] = scale * (center[1] - prior.cameraCenter[1]) / positionSigma;
-        residuals[5] = scale * (center[2] - prior.cameraCenter[2]) / positionSigma;
+
+        T deltaRotation[9];
+        xjw::ba::poseDeltaRotation(cameraDelta, deltaRotation);
+        const auto baseRotation = camera.cameraToWorldRotation();
+        T updatedRotation[9];
+        for (int row = 0; row < 3; ++row)
+        {
+            for (int column = 0; column < 3; ++column)
+            {
+                T value = T(0.0);
+                for (int inner = 0; inner < 3; ++inner)
+                {
+                    value +=
+                        deltaRotation[row * 3 + inner] *
+                        T(baseRotation[inner * 3 + column]);
+                }
+                updatedRotation[row * 3 + column] = value;
+            }
+        }
+
+        // SO(3) 残差使用 log(R_current * R_prior^T)，避免对位姿先验做
+        // 12 次中央数值差分，同时保持旋转残差对 Ceres Jet 可导。
+        T relativeRotation[9];
+        for (int row = 0; row < 3; ++row)
+        {
+            for (int column = 0; column < 3; ++column)
+            {
+                T value = T(0.0);
+                for (int inner = 0; inner < 3; ++inner)
+                {
+                    value +=
+                        updatedRotation[row * 3 + inner] *
+                        T(prior.cameraToWorldRotation[
+                            column * 3 + inner]);
+                }
+                relativeRotation[row * 3 + column] = value;
+            }
+        }
+
+        T rotationResidual[3];
+        ceres::RotationMatrixToAngleAxis(
+            ceres::RowMajorAdapter3x3(
+                static_cast<const T *>(relativeRotation)),
+            rotationResidual);
+        residuals[0] = T(scale / rotationSigma) * rotationResidual[0];
+        residuals[1] = T(scale / rotationSigma) * rotationResidual[1];
+        residuals[2] = T(scale / rotationSigma) * rotationResidual[2];
+        const auto center = camera.cameraCenter();
+        residuals[3] =
+            T(scale / positionSigma) *
+            (T(center[0]) + cameraDelta[3] -
+             T(prior.cameraCenter[0]));
+        residuals[4] =
+            T(scale / positionSigma) *
+            (T(center[1]) + cameraDelta[4] -
+             T(prior.cameraCenter[1]));
+        residuals[5] =
+            T(scale / positionSigma) *
+            (T(center[2]) + cameraDelta[5] -
+             T(prior.cameraCenter[2]));
         return true;
     }
 };
@@ -454,9 +482,16 @@ ceres::LossFunction *makeHuberLoss(double delta)
 class CeresBaIterationCallback final : public ceres::IterationCallback
 {
 public:
-    CeresBaIterationCallback(const BAOptions &options, int observationCount)
+    CeresBaIterationCallback(const BAOptions &options,
+                             int observationCount,
+                             int iterationOffset,
+                             int stageIterations,
+                             int totalIterations)
         : _options(options),
-          _observationCount(std::max(1, observationCount))
+          _observationCount(std::max(1, observationCount)),
+          _iterationOffset(std::max(0, iterationOffset)),
+          _stageIterations(std::max(1, stageIterations)),
+          _totalIterations(std::max(1, totalIterations))
     {
     }
 
@@ -469,18 +504,20 @@ public:
         }
         if (_options.progressCallback)
         {
-            const int maximumIterations = std::max(1, _options.maxIterations);
             // Ceres 会为初始状态额外产生 iteration=0 的摘要。GUI 只展示最多
             // maxIterations 个实际进度步，避免出现“21/20”。
-            if (summary.iteration < maximumIterations)
+            if (summary.iteration < _stageIterations)
             {
                 // Ceres cost 为 0.5 * sum(r^2)。每个影像观测有两个像素残差，
                 // 因而 sqrt(cost / observationCount) 是可解释的像素 RMS 代理。
                 const double rmsProxy =
                     std::sqrt(std::max(0.0, summary.cost) /
                               static_cast<double>(_observationCount));
-                if (!_options.progressCallback(summary.iteration + 1,
-                                                 maximumIterations,
+                const int currentIteration = std::min(
+                    _totalIterations,
+                    _iterationOffset + summary.iteration + 1);
+                if (!_options.progressCallback(currentIteration,
+                                                 _totalIterations,
                                                  rmsProxy,
                                                  0))
                 {
@@ -505,12 +542,21 @@ public:
 private:
     const BAOptions &_options;
     int _observationCount = 1;
+    int _iterationOffset = 0;
+    int _stageIterations = 1;
+    int _totalIterations = 1;
     bool _cancelled = false;
     bool _progressAborted = false;
 };
 
-bool selectCeresCudaDevice(const BAOptions &options, std::string *message)
+bool selectCeresCudaDevice(const BAOptions &options,
+                           std::uint64_t *freeBytes,
+                           std::string *message)
 {
+    if (freeBytes)
+    {
+        *freeBytes = 0;
+    }
 #  if defined(PLASCAN_BA_HAS_CUDA_RUNTIME_API)
     int deviceCount = 0;
     const cudaError_t countStatus = cudaGetDeviceCount(&deviceCount);
@@ -547,8 +593,17 @@ bool selectCeresCudaDevice(const BAOptions &options, std::string *message)
         }
         return false;
     }
+    std::size_t freeMemory = 0;
+    std::size_t totalMemory = 0;
+    const cudaError_t memoryStatus =
+        cudaMemGetInfo(&freeMemory, &totalMemory);
+    if (memoryStatus == cudaSuccess && freeBytes)
+    {
+        *freeBytes = static_cast<std::uint64_t>(freeMemory);
+    }
 #  else
     (void)options;
+    (void)freeBytes;
     (void)message;
 #  endif
     return true;
@@ -615,27 +670,23 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         return result;
     }
 
-    bool useCeresCuda = requestGpu;
-    if (options.ceresLinearSolver == BACeresLinearSolver::DenseSchurCpu ||
-        options.ceresLinearSolver == BACeresLinearSolver::SparseSchurCpu)
-    {
-        useCeresCuda = false;
-        result.usedGpu = false;
-        if (requestGpu)
-        {
-            result.usedBackend = BABackend::CeresCpu;
-            result.backendFallback = true;
-        }
-    }
+    bool cudaDeviceReady = requestGpu;
+    std::uint64_t cudaFreeBytes = 0;
     std::string cudaDeviceMessage;
-    if (requestGpu && !selectCeresCudaDevice(options, &cudaDeviceMessage))
+    if (requestGpu &&
+        !selectCeresCudaDevice(
+            options, &cudaFreeBytes, &cudaDeviceMessage))
     {
-        useCeresCuda = false;
+        cudaDeviceReady = false;
         result.usedBackend = BABackend::CeresCpu;
         result.usedGpu = false;
         result.backendFallback = true;
     }
 
+    // 阶段 1：筛选可进入问题的轨迹并建立参数块活动掩码。
+    //
+    // 初始点必须被至少两台不同相机正深度观测；不满足条件的 track 保留在结果
+    // 对齐数组中，但不会进入 Ceres Problem。
     std::vector<std::array<double, 6>> cameraDeltas(cameras.size());
     std::vector<std::array<double, 3>> pointParams(tracks.size());
     std::vector<std::vector<BAObservation>> validObservationsByTrack(tracks.size());
@@ -674,6 +725,27 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
             continue;
         }
 
+        bool initialPointHasPositiveDepth = true;
+        for (const BAObservation &observation : validObservations)
+        {
+            const double world[3] = {
+                tracks[ti].initialPoint[0],
+                tracks[ti].initialPoint[1],
+                tracks[ti].initialPoint[2],
+            };
+            double pixel[2] = {0.0, 0.0};
+            if (!cameras[static_cast<size_t>(observation.cameraIndex)]
+                     .projectWorldPoint(world, pixel))
+            {
+                initialPointHasPositiveDepth = false;
+                break;
+            }
+        }
+        if (!initialPointHasPositiveDepth)
+        {
+            continue;
+        }
+
         activeTrack[ti] = 1;
         ++activeTrackCount;
         validObservationsByTrack[ti] = std::move(validObservations);
@@ -693,6 +765,8 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         return result;
     }
 
+    // 阶段 2：相机使用零起点的局部 6-DOF 增量，而不是直接优化 9 元旋转矩阵。
+    // fixedCameraIndices 在这里转换为 Ceres 常量块，真正消除 gauge 自由度。
     int variableCameraCount = 0;
     for (size_t ci = 0; ci < cameras.size(); ++ci)
     {
@@ -713,38 +787,114 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         }
     }
 
-    // 用所有相机焦距中位数初始化一个绝对共享焦距。此前按每台相机当前焦距
-    // 乘同一 scale，会让参与局部 BA 次数不同的相机累积出不同焦距。
-    std::vector<double> inputFocalPixels;
-    inputFocalPixels.reserve(cameras.size());
-    for (const Camera &camera : cameras)
+    // 按镜头/焦段标定组建立独立焦距参数。同组共享绝对焦距，不同组互不吸收误差。
+    std::vector<int> calibrationGroupByCamera(cameras.size(), 0);
+    if (!options.cameraCalibrationGroupIds.empty())
     {
-        if (std::isfinite(camera.focalX()) && camera.focalX() > 0.0)
+        calibrationGroupByCamera = options.cameraCalibrationGroupIds;
+    }
+    std::map<int, int> groupIdToParameterIndex;
+    for (const int groupId : calibrationGroupByCamera)
+    {
+        if (groupIdToParameterIndex.count(groupId) == 0)
         {
-            inputFocalPixels.push_back(camera.focalX());
+            const int parameterIndex =
+                static_cast<int>(groupIdToParameterIndex.size());
+            groupIdToParameterIndex.emplace(groupId, parameterIndex);
         }
     }
-    std::sort(inputFocalPixels.begin(), inputFocalPixels.end());
-    const double sharedFocalReferencePixels =
-        inputFocalPixels.empty()
-            ? 1.0
-            : inputFocalPixels[inputFocalPixels.size() / 2];
-    double sharedFocalLogPixels = std::log(sharedFocalReferencePixels);
+    std::vector<int> calibrationParameterByCamera(cameras.size(), 0);
+    std::vector<std::vector<double>> focalSamplesByGroup(
+        groupIdToParameterIndex.size());
+    for (size_t cameraIndex = 0; cameraIndex < cameras.size(); ++cameraIndex)
+    {
+        const int parameterIndex =
+            groupIdToParameterIndex.at(
+                calibrationGroupByCamera[cameraIndex]);
+        calibrationParameterByCamera[cameraIndex] = parameterIndex;
+        if (std::isfinite(cameras[cameraIndex].focalX()) &&
+            cameras[cameraIndex].focalX() > 0.0)
+        {
+            focalSamplesByGroup[static_cast<size_t>(parameterIndex)]
+                .push_back(cameras[cameraIndex].focalX());
+        }
+    }
+
+    // 求解器规划必须在活动轨迹、可变相机和标定组数量明确后执行；使用原始输入
+    // 数量估算会高估显存并导致不必要的 CPU 回退。
+    const BACeresSolverPlan solverPlan =
+        planCeresSolver(
+            options,
+            variableCameraCount,
+            options.refineSharedFocalLength
+                ? static_cast<int>(groupIdToParameterIndex.size())
+                : 0,
+            activeTrackCount,
+            result.observationCount,
+            requestGpu && cudaDeviceReady,
+            cudaFreeBytes);
+    const bool useCeresCuda = solverPlan.useCuda;
+    result.ceresEstimatedCudaBytes =
+        solverPlan.estimatedCudaBytes;
+    result.ceresCudaFreeBytes = cudaFreeBytes;
+    result.usedGpu = useCeresCuda;
+    if (requestGpu && !useCeresCuda)
+    {
+        result.usedBackend = BABackend::CeresCpu;
+        result.backendFallback = true;
+        if (!cudaDeviceMessage.empty())
+        {
+            cudaDeviceMessage += "；";
+        }
+        cudaDeviceMessage += solverPlan.reason;
+    }
+
+    std::vector<double> sharedFocalReferencePixels(
+        groupIdToParameterIndex.size(), 1.0);
+    std::vector<double> sharedFocalLogPixels(
+        groupIdToParameterIndex.size(), 0.0);
+    for (size_t groupIndex = 0;
+         groupIndex < sharedFocalReferencePixels.size();
+         ++groupIndex)
+    {
+        sharedFocalReferencePixels[groupIndex] =
+            plamatrix::finiteMedian(
+                std::move(focalSamplesByGroup[groupIndex]))
+                .value_or(1.0);
+        sharedFocalLogPixels[groupIndex] =
+            std::log(sharedFocalReferencePixels[groupIndex]);
+    }
+
     if (options.refineSharedFocalLength)
     {
         const double minimumScale = std::max(1e-6, options.minSharedFocalScale);
         const double maximumScale =
             std::max(minimumScale, options.maxSharedFocalScale);
-        problem.AddParameterBlock(&sharedFocalLogPixels, 1);
-        problem.SetParameterLowerBound(&sharedFocalLogPixels,
-                                       0,
-                                       std::log(sharedFocalReferencePixels * minimumScale));
-        problem.SetParameterUpperBound(
-            &sharedFocalLogPixels,
-            0,
-            std::log(sharedFocalReferencePixels * maximumScale));
+        for (size_t groupIndex = 0;
+             groupIndex < sharedFocalLogPixels.size();
+             ++groupIndex)
+        {
+            double *parameter = &sharedFocalLogPixels[groupIndex];
+            problem.AddParameterBlock(parameter, 1);
+            problem.SetParameterLowerBound(
+                parameter,
+                0,
+                std::log(
+                    sharedFocalReferencePixels[groupIndex] *
+                    minimumScale));
+            problem.SetParameterUpperBound(
+                parameter,
+                0,
+                std::log(
+                    sharedFocalReferencePixels[groupIndex] *
+                    maximumScale));
+        }
     }
 
+    // 阶段 3：装配重投影和物方约束。
+    //
+    // 每条二维观测只选择一种重投影残差签名；控制点/激光平面挂到单点块，
+    // 比例尺连接两个点块，位姿先验挂到相机增量块。
     for (size_t ti = 0; ti < tracks.size(); ++ti)
     {
         if (!activeTrack[ti])
@@ -773,7 +923,11 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                     makeHuberLoss(options.huberDelta),
                     cameraDeltas[static_cast<size_t>(observation.cameraIndex)].data(),
                     pointParams[ti].data(),
-                    &sharedFocalLogPixels);
+                    &sharedFocalLogPixels[
+                        static_cast<size_t>(
+                            calibrationParameterByCamera[
+                                static_cast<size_t>(
+                                    observation.cameraIndex)])]);
             }
             else if (options.refineCameraPose)
             {
@@ -804,7 +958,11 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                 problem.AddResidualBlock(cost,
                                          makeHuberLoss(options.huberDelta),
                                          pointParams[ti].data(),
-                                         &sharedFocalLogPixels);
+                                         &sharedFocalLogPixels[
+                                             static_cast<size_t>(
+                                                 calibrationParameterByCamera[
+                                                     static_cast<size_t>(
+                                                         observation.cameraIndex)])]);
             }
             else
             {
@@ -869,26 +1027,30 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         {
             continue;
         }
-        auto *cost = new ceres::NumericDiffCostFunction<PosePriorResidual, ceres::CENTRAL, 6, 6>(
+        auto *cost = new ceres::AutoDiffCostFunction<PosePriorResidual, 6, 6>(
             new PosePriorResidual{cameras[ci], prior, options.cameraPosePriorWeight});
         problem.AddResidualBlock(cost, makeHuberLoss(options.cameraPosePriorHuberDelta), cameraDeltas[ci].data());
     }
 
+    // 阶段 4：按规划配置线性求解器。CUDA 只加速 dense 线性代数，
+    // 残差装配、鲁棒核和大部分问题管理仍在 CPU。
     ceres::Solver::Options solverOptions;
     solverOptions.max_num_iterations = std::max(1, options.maxIterations);
-    if (options.ceresLinearSolver == BACeresLinearSolver::SparseSchurCpu)
+    switch (solverPlan.solver)
     {
-        solverOptions.linear_solver_type = ceres::SPARSE_SCHUR;
-    }
-    else if ((!options.refineCameraPose || variableCameraCount == 0) &&
-             !options.refineSharedFocalLength)
-    {
-        // 仅优化三维点时没有需要 Schur 消元的相机变量，Dense QR 更符合问题结构。
+    case BACeresSolverKind::DenseQr:
         solverOptions.linear_solver_type = ceres::DENSE_QR;
-    }
-    else
-    {
+        break;
+    case BACeresSolverKind::DenseSchur:
         solverOptions.linear_solver_type = ceres::DENSE_SCHUR;
+        break;
+    case BACeresSolverKind::SparseSchur:
+        solverOptions.linear_solver_type = ceres::SPARSE_SCHUR;
+        break;
+    case BACeresSolverKind::IterativeSchur:
+        solverOptions.linear_solver_type = ceres::ITERATIVE_SCHUR;
+        solverOptions.preconditioner_type = ceres::SCHUR_JACOBI;
+        break;
     }
     solverOptions.num_threads = options.numThreads > 0
                                     ? options.numThreads
@@ -901,49 +1063,147 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
     {
         solverOptions.dense_linear_algebra_library_type = ceres::CUDA;
         result.ceresLinearSolverName =
-            solverOptions.linear_solver_type == ceres::DENSE_QR
-                ? "dense_qr_cuda"
-                : "dense_schur_cuda";
+            std::string(ceresSolverKindName(solverPlan.solver)) +
+            "_cuda";
     }
     else
     {
         result.ceresLinearSolverName =
-            solverOptions.linear_solver_type == ceres::SPARSE_SCHUR
-                ? "sparse_schur_cpu"
-                : (solverOptions.linear_solver_type == ceres::DENSE_QR
-                       ? "dense_qr_cpu"
-                       : "dense_schur_cpu");
+            std::string(ceresSolverKindName(solverPlan.solver)) +
+            "_cpu";
     }
 #  else
     result.ceresLinearSolverName =
-        solverOptions.linear_solver_type == ceres::SPARSE_SCHUR
-            ? "sparse_schur_cpu"
-            : (solverOptions.linear_solver_type == ceres::DENSE_QR
-                   ? "dense_qr_cpu"
-                   : "dense_schur_cpu");
+        std::string(ceresSolverKindName(solverPlan.solver)) +
+        "_cpu";
 #  endif
 
-    CeresBaIterationCallback iterationCallback(options, result.observationCount);
-    if (options.progressCallback || options.cancelFlag)
+    const int totalIterationBudget = std::max(1, options.maxIterations);
+    // 自标定采用“固定焦距预热 -> 释放共享焦距”的两阶段策略。先稳定外参和点，
+    // 再释放内参可降低转台/弱基线数据中焦距吸收位姿误差的风险。
+    const bool runStagedSelfCalibration =
+        options.refineSharedFocalLength &&
+        options.stageSharedFocalRefinement &&
+        options.sharedFocalWarmupFraction > 0.0 &&
+        totalIterationBudget >= 2;
+    int warmupIterations = 0;
+    if (runStagedSelfCalibration)
     {
-        solverOptions.callbacks.push_back(&iterationCallback);
+        warmupIterations = std::clamp(
+            static_cast<int>(
+                std::lround(
+                    totalIterationBudget *
+                    options.sharedFocalWarmupFraction)),
+            1,
+            totalIterationBudget - 1);
+        for (double &focalParameter : sharedFocalLogPixels)
+        {
+            problem.SetParameterBlockConstant(&focalParameter);
+        }
     }
 
+    std::unique_ptr<CeresBaIterationCallback> warmupCallback;
+    std::unique_ptr<CeresBaIterationCallback> refinementCallback;
+    ceres::Solver::Summary warmupSummary;
     ceres::Solver::Summary summary;
     const auto setupEnd = std::chrono::steady_clock::now();
-    ceres::Solve(solverOptions, &problem, &summary);
+    if (runStagedSelfCalibration)
+    {
+        solverOptions.max_num_iterations = warmupIterations;
+        if (options.progressCallback || options.cancelFlag)
+        {
+            warmupCallback = std::make_unique<CeresBaIterationCallback>(
+                options,
+                result.observationCount,
+                0,
+                warmupIterations,
+                totalIterationBudget);
+            solverOptions.callbacks = {warmupCallback.get()};
+        }
+        ceres::Solve(solverOptions, &problem, &warmupSummary);
+        result.selfCalibrationStagesRun = 1;
+
+        const bool warmupInterrupted =
+            (warmupCallback &&
+             (warmupCallback->cancelled() ||
+              warmupCallback->progressAborted())) ||
+            (options.cancelFlag && options.cancelFlag->load());
+        if (warmupSummary.IsSolutionUsable() && !warmupInterrupted)
+        {
+            for (double &focalParameter : sharedFocalLogPixels)
+            {
+                problem.SetParameterBlockVariable(&focalParameter);
+            }
+            const int refinementIterations =
+                totalIterationBudget - warmupIterations;
+            solverOptions.max_num_iterations = refinementIterations;
+            solverOptions.callbacks.clear();
+            if (options.progressCallback || options.cancelFlag)
+            {
+                refinementCallback =
+                    std::make_unique<CeresBaIterationCallback>(
+                        options,
+                        result.observationCount,
+                        warmupIterations,
+                        refinementIterations,
+                        totalIterationBudget);
+                solverOptions.callbacks = {refinementCallback.get()};
+            }
+            ceres::Solve(solverOptions, &problem, &summary);
+            result.selfCalibrationStagesRun = 2;
+        }
+        else
+        {
+            summary = warmupSummary;
+        }
+    }
+    else
+    {
+        solverOptions.max_num_iterations = totalIterationBudget;
+        if (options.progressCallback || options.cancelFlag)
+        {
+            refinementCallback =
+                std::make_unique<CeresBaIterationCallback>(
+                    options,
+                    result.observationCount,
+                    0,
+                    totalIterationBudget,
+                    totalIterationBudget);
+            solverOptions.callbacks = {refinementCallback.get()};
+        }
+        ceres::Solve(solverOptions, &problem, &summary);
+        result.selfCalibrationStagesRun =
+            options.refineSharedFocalLength ? 1 : 0;
+    }
     const auto solveEnd = std::chrono::steady_clock::now();
     result.setupSeconds = std::chrono::duration<double>(setupEnd - setupStart).count();
     result.solveSeconds = std::chrono::duration<double>(solveEnd - setupEnd).count();
     result.totalSeconds = std::chrono::duration<double>(solveEnd - setupStart).count();
+    std::string solveReport;
+    if (runStagedSelfCalibration && result.selfCalibrationStagesRun == 2)
+    {
+        solveReport = "预热: " + warmupSummary.BriefReport() +
+                      "；自标定: " + summary.BriefReport();
+    }
+    else
+    {
+        solveReport = summary.BriefReport();
+    }
+    const std::string solverReport =
+        "求解规划: " + solverPlan.reason;
     result.backendMessage = cudaDeviceMessage.empty()
-                                ? summary.BriefReport()
-                                : cudaDeviceMessage + "；" + summary.BriefReport();
+                                ? solverReport + "；" + solveReport
+                                : cudaDeviceMessage + "；" +
+                                      solverReport + "；" + solveReport;
 
     const bool cancelledByFlag =
-        iterationCallback.cancelled() ||
+        (warmupCallback && warmupCallback->cancelled()) ||
+        (refinementCallback && refinementCallback->cancelled()) ||
         (options.cancelFlag && options.cancelFlag->load());
-    if (cancelledByFlag || iterationCallback.progressAborted())
+    const bool progressAborted =
+        (warmupCallback && warmupCallback->progressAborted()) ||
+        (refinementCallback && refinementCallback->progressAborted());
+    if (cancelledByFlag || progressAborted)
     {
         result.solveStatus = BASolveStatus::Cancelled;
         result.solutionUsable = false;
@@ -966,9 +1226,18 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                              : BASolveStatus::Success;
     result.solutionUsable = true;
 
-    const double sharedFocalPixels = std::exp(sharedFocalLogPixels);
-    const double sharedFocalScale =
-        sharedFocalPixels / sharedFocalReferencePixels;
+    // 阶段 5：把局部参数解码回 PlaScan Camera/BARefinedPoint。随后必须调用统一
+    // 终结器重算正深度和 RMS，Ceres 的 solution usable 不能替代摄影测量质量检查。
+    std::vector<double> refinedFocalPixels(sharedFocalLogPixels.size(), 1.0);
+    for (size_t groupIndex = 0;
+         groupIndex < sharedFocalLogPixels.size();
+         ++groupIndex)
+    {
+        refinedFocalPixels[groupIndex] =
+            std::exp(sharedFocalLogPixels[groupIndex]);
+    }
+    double focalScaleSum = 0.0;
+    int refinedIntrinsicCount = 0;
     for (size_t ci = 0; ci < cameras.size(); ++ci)
     {
         result.refinedCameras[ci] = cameras[ci];
@@ -978,11 +1247,21 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
             const Camera::Intrinsics intrinsics = result.refinedCameras[ci].intrinsics();
             const double focalAspect =
                 intrinsics.focalX > 0.0 ? intrinsics.focalY / intrinsics.focalX : 1.0;
+            const size_t groupIndex =
+                static_cast<size_t>(calibrationParameterByCamera[ci]);
+            const double focalPixels = refinedFocalPixels[groupIndex];
             result.refinedCameras[ci].setIntrinsics(
-                sharedFocalPixels,
-                sharedFocalPixels * focalAspect,
+                focalPixels,
+                focalPixels * focalAspect,
                 intrinsics.principalX,
                 intrinsics.principalY);
+            focalScaleSum +=
+                focalPixels / sharedFocalReferencePixels[groupIndex];
+            if (std::abs(focalPixels - intrinsics.focalX) >
+                1.0e-8 * std::max(1.0, std::abs(intrinsics.focalX)))
+            {
+                ++refinedIntrinsicCount;
+            }
         }
     }
 
@@ -1013,7 +1292,11 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         point.valid = plamatrix::isFinite(plamatrix::Vec3<double>(point.point));
         point.converged = summary.termination_type == ceres::CONVERGENCE ||
                           summary.termination_type == ceres::USER_SUCCESS;
-        point.iterations = static_cast<int>(summary.iterations.size());
+        point.iterations =
+            static_cast<int>(summary.iterations.size()) +
+            (result.selfCalibrationStagesRun == 2
+                 ? static_cast<int>(warmupSummary.iterations.size())
+                 : 0);
         point.rmsBefore = computeTrackRms(cameras, tracks[ti], tracks[ti].initialPoint);
         point.rmsAfter = computeTrackRms(result.refinedCameras, tracks[ti], point.point);
         // Ceres 可能把点推到所有观测相机的有效投影范围外，此时坐标仍为有限值，
@@ -1026,13 +1309,6 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         }
         if (point.valid)
         {
-            if (options.enablePointFilter && point.rmsAfter > options.filterMaxReprojError)
-            {
-                point.valid = false;
-            }
-        }
-        if (point.valid)
-        {
             sumAfter += point.rmsAfter;
             ++countAfter;
             ++result.optimizedTracks;
@@ -1041,12 +1317,18 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
     result.meanRmsBefore = countBefore > 0 ? sumBefore / static_cast<double>(countBefore) : 0.0;
     result.meanRmsAfter = countAfter > 0 ? sumAfter / static_cast<double>(countAfter) : 0.0;
     result.refinedCameraCount = options.refineCameraPose ? variableCameraCount : 0;
-    result.refinedSharedFocalScale = sharedFocalScale;
-    if (options.refineSharedFocalLength &&
-        std::abs(sharedFocalScale - 1.0) > 1e-8)
+    if (options.refineSharedFocalLength)
     {
-        result.refinedIntrinsicCount = static_cast<int>(cameras.size());
+        result.refinedSharedFocalScale =
+            cameras.empty()
+                ? 1.0
+                : focalScaleSum / static_cast<double>(cameras.size());
+        result.refinedIntrinsicCount = refinedIntrinsicCount;
+        result.refinedCalibrationGroupCount =
+            static_cast<int>(sharedFocalLogPixels.size());
     }
+
+    finalizeBundleAdjustResult(cameras, tracks, options, &result);
 
     if (options.enableLaserPlaneConstraints)
     {

@@ -50,6 +50,8 @@ public:
     // errorMsg     [out, 可选] 错误信息
     // hintDepth    [可选] 逐像素提示深度图 (CV_32F, 0=无)
     // hintRadius   [可选] 逐像素搜索半径 (CV_32F, <=0=自动半径)
+    // refValidMask [可选] 参考帧可信前景 (CV_8U, 非零=有效)
+    // srcValidMasks[可选] 源帧可信前景，与 srcGrays 等长；空 Mat=全图有效
     static bool estimate(
         const cv::Mat                          &refGray,
         const std::vector<cv::Mat>             &srcGrays,
@@ -62,7 +64,9 @@ public:
         cv::Mat                                *confOut    = nullptr,
         std::string                            *errorMsg   = nullptr,
         const cv::Mat                          *hintDepth  = nullptr,
-        const cv::Mat                          *hintRadius = nullptr);
+        const cv::Mat                          *hintRadius = nullptr,
+        const cv::Mat                          *refValidMask = nullptr,
+        const std::vector<cv::Mat>             *srcValidMasks = nullptr);
 
 private:
     static bool estimateGPU(
@@ -75,7 +79,9 @@ private:
         cv::Mat &depthOut, cv::Mat *confOut,
         std::string *errorMsg,
         const cv::Mat *hintDepth,
-        const cv::Mat *hintRadius);
+        const cv::Mat *hintRadius,
+        const cv::Mat *refValidMask,
+        const std::vector<cv::Mat> *srcValidMasks);
 
     static bool estimateCPU(
         const cv::Mat                          &refGray,
@@ -87,7 +93,9 @@ private:
         cv::Mat &depthOut, cv::Mat *confOut,
         std::string *errorMsg,
         const cv::Mat *hintDepth,
-        const cv::Mat *hintRadius);
+        const cv::Mat *hintRadius,
+        const cv::Mat *refValidMask,
+        const std::vector<cv::Mat> *srcValidMasks);
 };
 
 } // namespace mvs

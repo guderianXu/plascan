@@ -22,8 +22,4 @@ bool decodeImagePairKey(const QString &key,
 QVector<QPair<QString, QString>> collectMatchedImageNamePairs(
     const QString &project_path,
     const QJsonObject &metadata);
-QVector<QPair<QString, QString>> collectSettledNoMatchImageNamePairs(
-    const QString &project_path,
-    const QJsonObject &metadata);
-
 } // namespace xjw::common::project

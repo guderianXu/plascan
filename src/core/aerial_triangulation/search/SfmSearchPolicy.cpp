@@ -1,3 +1,11 @@
+/**
+ * @file SfmSearchPolicy.cpp
+ * @brief 多焦距/多初始化 SfM 候选的资源分配和确定性排序实现。
+ *
+ * 排序不是单纯最小化 RMS：优先保证重建成功和注册覆盖，再评价交会角、多视轨迹、
+ * 影像覆盖及照片序列连续性。低 RMS 但塌缩或弱基线的模型因此不会胜出。
+ */
+
 #include "search/SfmSearchPolicy.h"
 
 #include <algorithm>
@@ -9,6 +17,7 @@ namespace xjw::aerial_triangulation
 namespace
 {
 
+/// 将交会角、多视率、观测覆盖和 RMS 压缩成 [0, 1] 网络质量分数。
 double networkQualityScore(const SfmCandidateSummary &candidate)
 {
     const double angleQuality = std::clamp(candidate.medianTriangulationAngleDeg / 10.0, 0.0, 1.0);
@@ -25,6 +34,7 @@ double networkQualityScore(const SfmCandidateSummary &candidate)
            0.15 * reprojectionQuality;
 }
 
+/// 根据闭环相邻相机中心距离的鲁棒离散程度评估局部连续性。
 double closedSequenceQualityScore(const SfmCandidateSummary &candidate)
 {
     if (!candidate.hasClosedSequenceGeometry ||
@@ -72,6 +82,7 @@ SfmWorkerBudget allocateWorkers(int candidateCount, int totalThreads)
     }
 
     const int safeThreads = std::max(1, totalThreads);
+    // 每个 SfM 候选至少预留 8 个线程，同时最多并发 4 个，控制内存和 GPU 争用。
     const int workerCount = std::min({candidateCount, std::max(1, safeThreads / 8), 4});
     return {workerCount, std::max(1, safeThreads / workerCount)};
 }
@@ -79,6 +90,7 @@ SfmWorkerBudget allocateWorkers(int candidateCount, int totalThreads)
 bool isBetterCandidate(const SfmCandidateSummary &candidate,
                        const SfmCandidateSummary &reference)
 {
+    // 以下比较顺序也是稳定的产品语义，修改时必须同步候选策略测试。
     if (candidate.success != reference.success)
     {
         return candidate.success;
@@ -156,6 +168,7 @@ bool shouldStopAdaptiveFocalReplay(int totalImages,
                                    int registeredImages,
                                    bool hasProductionSparseCloud)
 {
+    // 只有全量注册且已生成可发布稀疏云时才提前结束，不能仅凭低 RMS 停止。
     return totalImages > 0 &&
            registeredImages >= totalImages &&
            hasProductionSparseCloud;

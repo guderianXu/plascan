@@ -244,18 +244,100 @@ bool hasDirectedEdge(const Triangle &face, int first, int second)
 void addEdge(std::unordered_map<std::uint64_t, EdgeFaces> *edges,
              int first,
              int second,
-             int faceIndex)
+             int faceIndex,
+             DisjointSet *faceComponents = nullptr)
 {
     EdgeFaces &record = (*edges)[edgeKey(first, second)];
     if (record.faceCount == 0)
     {
         record.firstFace = faceIndex;
     }
-    else if (record.faceCount == 1)
+    else
     {
-        record.secondFace = faceIndex;
+        if (record.faceCount == 1)
+        {
+            record.secondFace = faceIndex;
+        }
+        if (faceComponents)
+        {
+            faceComponents->unite(record.firstFace, faceIndex);
+        }
     }
     ++record.faceCount;
+}
+
+bool hasManifoldVertexLink(
+    const TriMesh &mesh,
+    int vertexIndex,
+    const std::vector<int> &incidentFaces)
+{
+    std::vector<std::array<int, 2>> link_edges;
+    std::vector<int> link_vertices;
+    link_edges.reserve(incidentFaces.size());
+    link_vertices.reserve(incidentFaces.size() * 2);
+    for (const int face_index : incidentFaces)
+    {
+        const Triangle &face = mesh.faces[static_cast<std::size_t>(face_index)];
+        std::array<int, 2> opposite{{-1, -1}};
+        int opposite_count = 0;
+        for (const int vertex : face.v)
+        {
+            if (vertex != vertexIndex && opposite_count < 2)
+            {
+                opposite[static_cast<std::size_t>(opposite_count++)] = vertex;
+            }
+        }
+        if (opposite_count != 2 || opposite[0] == opposite[1])
+        {
+            return false;
+        }
+        link_edges.push_back(opposite);
+        link_vertices.push_back(opposite[0]);
+        link_vertices.push_back(opposite[1]);
+    }
+    if (link_edges.empty())
+    {
+        return false;
+    }
+
+    std::sort(link_vertices.begin(), link_vertices.end());
+    link_vertices.erase(
+        std::unique(link_vertices.begin(), link_vertices.end()),
+        link_vertices.end());
+    DisjointSet link_components(link_vertices.size());
+    std::vector<int> link_degrees(link_vertices.size(), 0);
+    for (const std::array<int, 2> &edge : link_edges)
+    {
+        const int first = static_cast<int>(std::lower_bound(
+            link_vertices.cbegin(), link_vertices.cend(), edge[0]) -
+            link_vertices.cbegin());
+        const int second = static_cast<int>(std::lower_bound(
+            link_vertices.cbegin(), link_vertices.cend(), edge[1]) -
+            link_vertices.cbegin());
+        link_components.unite(first, second);
+        ++link_degrees[static_cast<std::size_t>(first)];
+        ++link_degrees[static_cast<std::size_t>(second)];
+    }
+
+    const int link_root = link_components.find(0);
+    int degree_one_count = 0;
+    for (std::size_t index = 0; index < link_vertices.size(); ++index)
+    {
+        if (link_components.find(static_cast<int>(index)) != link_root)
+        {
+            return false;
+        }
+        const int degree = link_degrees[index];
+        if (degree == 1)
+        {
+            ++degree_one_count;
+        }
+        else if (degree != 2)
+        {
+            return false;
+        }
+    }
+    return degree_one_count == 0 || degree_one_count == 2;
 }
 
 } // namespace
@@ -268,6 +350,8 @@ bool passesMeshTopologyQualityGate(
         statistics.boundaryEdgeRatio <= thresholds.maximumBoundaryEdgeRatio &&
         statistics.nonManifoldEdgeCount <=
             thresholds.maximumNonManifoldEdgeCount &&
+        statistics.nonManifoldVertexCount <=
+            thresholds.maximumNonManifoldVertexCount &&
         statistics.componentCount <= thresholds.maximumComponentCount &&
         statistics.largestComponentFaceRatio >=
             thresholds.minimumLargestComponentFaceRatio &&
@@ -297,6 +381,8 @@ MeshTopologyQualityStatistics evaluateMeshTopologyQuality(
     valid_face_indices.reserve(mesh.faces.size());
     std::vector<Vec3> face_normals(mesh.faces.size());
     std::vector<std::uint8_t> referenced_vertices(mesh.vertices.size(), 0);
+    std::vector<std::vector<int>> incident_faces(mesh.vertices.size());
+    DisjointSet face_components(mesh.faces.size());
     for (std::size_t face_index = 0;
          face_index < mesh.faces.size();
          ++face_index)
@@ -309,12 +395,30 @@ MeshTopologyQualityStatistics evaluateMeshTopologyQuality(
         valid_face_indices.push_back(static_cast<int>(face_index));
         face_normals[face_index] = faceNormal(mesh, face);
         ++statistics.validFaceCount;
-        addEdge(&edges, face.v[0], face.v[1], static_cast<int>(face_index));
-        addEdge(&edges, face.v[1], face.v[2], static_cast<int>(face_index));
-        addEdge(&edges, face.v[2], face.v[0], static_cast<int>(face_index));
-        referenced_vertices[static_cast<std::size_t>(face.v[0])] = 1;
-        referenced_vertices[static_cast<std::size_t>(face.v[1])] = 1;
-        referenced_vertices[static_cast<std::size_t>(face.v[2])] = 1;
+        addEdge(
+            &edges,
+            face.v[0],
+            face.v[1],
+            static_cast<int>(face_index),
+            &face_components);
+        addEdge(
+            &edges,
+            face.v[1],
+            face.v[2],
+            static_cast<int>(face_index),
+            &face_components);
+        addEdge(
+            &edges,
+            face.v[2],
+            face.v[0],
+            static_cast<int>(face_index),
+            &face_components);
+        for (const int vertex : face.v)
+        {
+            referenced_vertices[static_cast<std::size_t>(vertex)] = 1;
+            incident_faces[static_cast<std::size_t>(vertex)].push_back(
+                static_cast<int>(face_index));
+        }
 
         const double quality = triangleQuality(mesh, face);
         const double aspect = triangleAspectRatio(mesh, face);
@@ -334,7 +438,6 @@ MeshTopologyQualityStatistics evaluateMeshTopologyQuality(
     }
 
     statistics.uniqueEdgeCount = static_cast<int>(edges.size());
-    DisjointSet face_components(mesh.faces.size());
     std::vector<double> adjacent_normal_angles;
     adjacent_normal_angles.reserve(edges.size());
     int adjacent_over_30_count = 0;
@@ -353,7 +456,6 @@ MeshTopologyQualityStatistics evaluateMeshTopologyQuality(
         }
         if (edge.firstFace >= 0 && edge.secondFace >= 0)
         {
-            face_components.unite(edge.firstFace, edge.secondFace);
             if (edge.faceCount == 2)
             {
                 const Vec3 &first_normal =
@@ -391,10 +493,59 @@ MeshTopologyQualityStatistics evaluateMeshTopologyQuality(
     }
     statistics.componentCount =
         static_cast<int>(component_face_counts.size());
+
+    std::unordered_map<int, int> component_edge_counts;
+    component_edge_counts.reserve(component_face_counts.size());
+    for (const auto &[key, edge] : edges)
+    {
+        (void)key;
+        if (edge.firstFace >= 0)
+        {
+            ++component_edge_counts[face_components.find(edge.firstFace)];
+        }
+    }
+    std::unordered_map<int, std::unordered_set<int>> component_vertices;
+    component_vertices.reserve(component_face_counts.size());
+    for (const int face_index : valid_face_indices)
+    {
+        const int component = face_components.find(face_index);
+        const Triangle &face = mesh.faces[static_cast<std::size_t>(face_index)];
+        std::unordered_set<int> &vertices = component_vertices[component];
+        vertices.insert(face.v[0]);
+        vertices.insert(face.v[1]);
+        vertices.insert(face.v[2]);
+    }
+    statistics.componentEulerCharacteristics.reserve(
+        component_face_counts.size());
+    for (const auto &[component, face_count] : component_face_counts)
+    {
+        const int vertex_count = static_cast<int>(
+            component_vertices[component].size());
+        const int edge_count = component_edge_counts[component];
+        statistics.componentEulerCharacteristics.push_back(
+            vertex_count - edge_count + face_count);
+    }
+    std::sort(
+        statistics.componentEulerCharacteristics.begin(),
+        statistics.componentEulerCharacteristics.end());
+
     statistics.referencedVertexCount = static_cast<int>(std::count(
         referenced_vertices.cbegin(),
         referenced_vertices.cend(),
         static_cast<std::uint8_t>(1)));
+    for (std::size_t vertex_index = 0;
+         vertex_index < incident_faces.size();
+         ++vertex_index)
+    {
+        if (!incident_faces[vertex_index].empty() &&
+            !hasManifoldVertexLink(
+                mesh,
+                static_cast<int>(vertex_index),
+                incident_faces[vertex_index]))
+        {
+            ++statistics.nonManifoldVertexCount;
+        }
+    }
     statistics.eulerCharacteristic =
         statistics.referencedVertexCount -
         statistics.uniqueEdgeCount +
@@ -403,10 +554,12 @@ MeshTopologyQualityStatistics evaluateMeshTopologyQuality(
         0,
         2 * statistics.componentCount -
             statistics.eulerCharacteristic);
-    statistics.closedTopologyEvaluated =
+    statistics.closedTwoManifold =
         statistics.validFaceCount > 0 &&
         statistics.boundaryEdgeCount == 0 &&
-        statistics.nonManifoldEdgeCount == 0;
+        statistics.nonManifoldEdgeCount == 0 &&
+        statistics.nonManifoldVertexCount == 0;
+    statistics.closedTopologyEvaluated = statistics.closedTwoManifold;
     if (statistics.closedTopologyEvaluated)
     {
         statistics.closedGenusEstimate = std::max(
@@ -434,6 +587,23 @@ MeshTopologyQualityStatistics evaluateMeshTopologyQuality(
     statistics.strictGatePassed =
         passesMeshTopologyQualityGate(statistics, thresholds);
     return statistics;
+}
+
+MeshTopologySignature meshTopologySignature(
+    const MeshTopologyQualityStatistics &statistics)
+{
+    MeshTopologySignature signature;
+    signature.nonManifoldEdgeCount = statistics.nonManifoldEdgeCount;
+    signature.nonManifoldVertexCount = statistics.nonManifoldVertexCount;
+    signature.closedTwoManifold = statistics.closedTwoManifold;
+    signature.componentEulerCharacteristics =
+        statistics.componentEulerCharacteristics;
+    return signature;
+}
+
+MeshTopologySignature evaluateMeshTopologySignature(const TriMesh &mesh)
+{
+    return meshTopologySignature(evaluateMeshTopologyQuality(mesh));
 }
 
 MeshTriangleOptimizationStatistics optimizeTriangleQuality(

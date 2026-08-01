@@ -1,3 +1,11 @@
+/**
+ * @file AdaptiveFocalSearch.cpp
+ * @brief 旧版轻量焦距候选择优器的实现。
+ *
+ * 正式空三管线使用信息更完整的 SfmSearchPolicy；本类保留给窄接口调用和回归测试。
+ * 它只比较已有摘要，不运行 SfM，也不修改相机。
+ */
+
 #include "search/AdaptiveFocalSearch.h"
 
 #include <algorithm>
@@ -12,6 +20,7 @@ int AdaptiveFocalSearch::selectBestCandidate(const QVector<AdaptiveFocalCandidat
 {
     int bestIndex = -1;
     const int safeTotalImages = std::max(1, totalImages);
+    // tuple 按字典序比较：成功、注册率、点数、低 RMS、接近默认焦距依次优先。
     auto score = [safeTotalImages](const AdaptiveFocalCandidate &candidate)
     {
         const double registrationRatio = static_cast<double>(std::max(0, candidate.registeredImages)) /

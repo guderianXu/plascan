@@ -1,3 +1,12 @@
+/**
+ * @file IncrementalSfm.cpp
+ * @brief 增量 SfM 的输入装配、主状态机和人工控制网络接入。
+ *
+ * 未知位姿路径依次执行：对应图构建、初始像对试算、增量 PnP、三角化和 BA；
+ * 已知位姿路径委托 KnownPoseReconstructor。Camera 内部始终使用 camera-to-world
+ * 旋转和世界系相机中心，OpenCV 的 world-to-camera 约定只在适配层出现。
+ */
+
 #include "IncrementalSfm.h"
 #include "ImageRegistrationEngine.h"
 #include "InitialPairInitializer.h"
@@ -57,16 +66,15 @@ IncrementalSfmOptions effectiveSfmOptions(const IncrementalSfmOptions &options)
 // 构造
 // ============================================================
 
+/**
+ * @brief 保存规范化选项并创建空重建容器。
+ *
+ * 构造阶段不读取文件、不运行几何；所有影像、匹配和先验必须在 run() 前加入。
+ */
 IncrementalSfm::IncrementalSfm(const IncrementalSfmOptions &options)
     : _sfmOptions(effectiveSfmOptions(options)), _reconstruction(std::make_shared<SfmReconstruction>())
 {
 }
-
-/**
- * @brief 构造函数，使用给定选项初始化内部状态。
- *
- * 仅调整内部成员，实际重建在 run() 中执行。
- */
 
 // ============================================================
 // 数据输入
@@ -133,6 +141,8 @@ void IncrementalSfm::materializePriorTracks()
     _materializedPriorTracks.clear();
     _priorTrackDiagnostics.tracksSubmitted = static_cast<int>(_pendingPriorTracks.size());
 
+    // 人工投影追加为独立的合成关键点，绝不复用附近自动关键点索引。
+    // 这样可保留手工观测身份，并把位置冲突作为诊断而不是静默合并。
     std::unordered_set<std::string> marker_ids;
     for (const control_points::PriorTrack &priorTrack : _pendingPriorTracks)
     {
@@ -200,6 +210,7 @@ void IncrementalSfm::materializePriorTracks()
         }
 
         const float confidence = static_cast<float>(std::clamp(priorTrack.confidence, 0.0, 1.0));
+        // 整条 prior 必须原子加入。对应图拒绝时回滚所有合成关键点。
         if (!_correspondenceGraph.addPriorTrack(priorTrack.markerId,
                                                 graph_observations,
                                                 confidence))
@@ -342,6 +353,8 @@ bool IncrementalSfm::tryApplyControlNetwork(const std::vector<ImageId> &baImageI
         return _controlNetworkApplied;
     }
 
+    // 只有至少三个可用控制点才能解除自由 SfM 的 Sim(3) 规范自由度。
+    // 检查点不参与求解，只在变换应用后报告独立残差。
     control_points::ControlNetworkInput input;
     int usable_control_count = 0;
     for (Point3DId point_id : _reconstruction->allPoint3DIds())
@@ -371,6 +384,7 @@ bool IncrementalSfm::tryApplyControlNetwork(const std::vector<ImageId> &baImageI
         return false;
     }
 
+    // 同一个绝对定向必须一致作用于相机中心、camera-to-world 旋转和三维点。
     _controlNetworkTransform = _controlNetworkResult.transform;
     for (ImageId image_id : _reconstruction->registeredImageIds())
     {
@@ -483,6 +497,7 @@ IncrementalSfmResult IncrementalSfm::run(SfmProgressCallback progressCb)
     if (!reportProgress(0, totalImages, "Building correspondence graph...", progressCb))
         return result;
 
+    // 已知位姿和未知位姿是互斥的两条算法路径，避免部分先验相机被当成固定真值。
     if (_sfmOptions.useKnownCameraPoses)
     {
         KnownPoseReconstructor known_pose_reconstructor(*this);
@@ -511,6 +526,7 @@ IncrementalSfmResult IncrementalSfm::run(SfmProgressCallback progressCb)
         double bestScore = -std::numeric_limits<double>::infinity();
         bool anyInitialized = false;
 
+        // 每个初始 pair 都从同一 baseReconstruction 开始，防止前一候选状态泄漏。
         for (size_t ci = 0; ci < candidates.size(); ++ci)
         {
             initializer.resetTrial(baseReconstruction);

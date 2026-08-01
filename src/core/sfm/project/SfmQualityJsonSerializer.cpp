@@ -13,6 +13,7 @@ namespace
 
 double roundMetric(double value)
 {
+    // 报告保留 6 位小数，减少重复保存造成的 JSON 噪声；核心指标仍保留 double。
     return std::round(value * 1000000.0) / 1000000.0;
 }
 
@@ -44,6 +45,8 @@ QJsonArray serializeStrings(const std::vector<std::string> &values)
 
 QJsonObject serializeSfmQualityMetrics(const SfmQualityMetrics &metrics)
 {
+    // 字段分为原始计数、数值分布、空间覆盖和质量门控四组。机器状态与人类可读
+    // 建议分别保存，后续版本可新增建议而不破坏 acceptable_for_mvs。
     QJsonObject histogram;
     for (const auto &[length, count] : metrics.trackLengthHistogram)
     {

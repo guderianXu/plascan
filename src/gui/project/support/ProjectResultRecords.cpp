@@ -105,9 +105,11 @@ QJsonObject makeOrthoResultRecord(const QString &createdAt,
                                   int sourceImageCount,
                                   const QStringList &images,
                                   bool includeResolution,
-                                  double resolution)
+                                  double resolution,
+                                  const QJsonObject &payload)
 {
-    QJsonObject rec;
+    QJsonObject rec = payload;
+    rec[QStringLiteral("schema_version")] = 1;
     rec[QStringLiteral("created_at")] = createdAt;
     rec[QStringLiteral("dem_path")] = demPath;
     rec[QStringLiteral("output_path")] = outputPath;
@@ -149,6 +151,35 @@ QJsonObject makeAtResultRecord(const QString &createdAt,
         rec[it.key()] = it.value();
     }
     return rec;
+}
+
+QVector<ProjectImageMatchResultRecord> makeImageMatchResultRecords(
+    const xjw::matchphotos::MatchPhotosResult &result)
+{
+    QVector<ProjectImageMatchResultRecord> records;
+    records.reserve(static_cast<int>(result.imageMatchFiles.size()));
+    for (const xjw::matchphotos::MatchPhotosImageMatchRecord &source : result.imageMatchFiles)
+    {
+        if (source.imagePath.trimmed().isEmpty() || source.matchFilePath.trimmed().isEmpty())
+        {
+            continue;
+        }
+
+        QJsonObject settings = source.settings;
+        if (!result.tiePointPath.isEmpty())
+        {
+            settings[QStringLiteral("tie_point_path")] = result.tiePointPath;
+            settings[QStringLiteral("track_count")] = result.trackCount;
+            settings[QStringLiteral("track_summary")] = result.trackSummary;
+        }
+        records.push_back(ProjectImageMatchResultRecord{
+            source.imagePath,
+            source.matchFilePath,
+            source.neighborImagePaths,
+            settings
+        });
+    }
+    return records;
 }
 
 void upsertMetaArrayRecordByPath(QJsonObject *meta,

@@ -489,11 +489,11 @@ TEST(SfmSourceContractTest, SequencePnpRelaxationRequiresRegisteredCamerasOnBoth
 TEST(SfmSourceContractTest, MatchGeometryFilteringUsesSeededSerialUsac)
 {
     const QString source = readSourceFile(QStringLiteral(
-        "src/core/feature_match/MatchGeometryFilter.cpp"));
+        "src/core/image_matching/geometry/MatchGeometryVerifier.cpp"));
 
     expectContainsAll(source, {
-        "usacParams.randomGeneratorState = config.randomSeed",
-        "usacParams.isParallel = false",
+        "params.randomGeneratorState = options.randomSeed",
+        "params.isParallel = false",
     });
 }
 
@@ -547,26 +547,23 @@ TEST(SfmSourceContractTest, BracketedSequencePnpUsesInitialPoseCorrespondenceGat
     });
 }
 
-TEST(SfmSourceContractTest, CudaSiftMatchingIsDedicatedModule)
+TEST(SfmSourceContractTest, CudaSiftExtractionIsPartOfUnifiedImageMatchingModule)
 {
-    const QString header = readSourceFile(QStringLiteral("src/core/feature_match/tradition/CudaSiftMatcher.h"));
-    const QString cmake = readSourceFile(QStringLiteral("src/core/feature_match/tradition/CMakeLists.txt"));
-    const QString matcher = readSourceFile(QStringLiteral("src/core/feature_match/tradition/TraditionalFeatureMatcher.cpp"));
+    const QString extractor = readSourceFile(
+        QStringLiteral("src/core/image_matching/sift/SiftFeatureExtractor.cpp"));
+    const QString cmake = readSourceFile(
+        QStringLiteral("src/core/image_matching/CMakeLists.txt"));
 
-    EXPECT_TRUE(sourceFileExists(QStringLiteral("src/core/feature_match/tradition/CudaSiftMatcher.h")));
-    EXPECT_TRUE(sourceFileExists(QStringLiteral("src/core/feature_match/tradition/CudaSiftMatcher.cpp")));
-    expectContainsAll(header, {"class CudaSiftMatcher"});
-    expectContainsAll(cmake, {"CudaSiftMatcher.cpp"});
-    expectContainsAll(matcher, {R"(#include "CudaSiftMatcher.h")"});
-    expectNotContainsAll(matcher, {"knnMatchL2Cuda"});
+    expectContainsAll(extractor, {"ExtractSift", "PLASCAN_HAS_CUDA_SIFT", "validMask"});
+    expectContainsAll(cmake, {"SiftFeatureExtractor.cpp", "plascan_cudasift"});
+    EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/feature_extractors")));
+    EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/feature_match")));
 }
 
 TEST(PythonRuntimeSourceContractTest, RuntimeLaunchersPreferRepoLocalVenv)
 {
     const QStringList runtimeSources{
         QStringLiteral("src/gui/project/manager/ProjectManager.cpp"),
-        QStringLiteral("src/core/feature_match/MatcherFactory.cpp"),
-        QStringLiteral("src/cli/features/cli_feature_extract.cpp"),
     };
 
     for (const QString &relativePath : runtimeSources)
@@ -584,22 +581,57 @@ TEST(PythonRuntimeSourceContractTest, RuntimeLaunchersPreferRepoLocalVenv)
 
 TEST(SfmSourceContractTest, LightGlueSiftCarriesScaleAndOrientation)
 {
-    const QString exportScript = readSourceFile(QStringLiteral("scripts/models/export_lightglue_torchscript.py"));
-    const QString matcher = readSourceFile(QStringLiteral("src/core/feature_match/lightglue/LightGlueMatcher.cpp"));
+    const QString exportScript = readSourceFile(
+        QStringLiteral("scripts/models/export_lightglue_tensorrt.py"));
+    const QString matcher = readSourceFile(
+        QStringLiteral("src/core/image_matching/lightglue/TensorRtLightGlueMatcher.cpp"));
 
     expectContainsAll(exportScript, {
-        "self.model.conf.add_scale_ori",
-        "xy0 = normalize_keypoints(kpts0[..., :2], image_size0).clone()",
-        "torch.cat([xy0, scales0, oris0], dim=-1)",
-        "torch.cat([xy1, scales1, oris1], dim=-1)",
-        R"(feature == "sift")",
-        "kpt_dim = 4",
+        R"(LightGlue(features="sift", **common))",
+        "geometry0 = torch.cat([xy0, keypoints0[..., 2:4]], dim=-1)",
+        "geometry1 = torch.cat([xy1, keypoints1[..., 2:4]], dim=-1)",
+        R"("keypoints0")",
+        R"("keypoints1")",
     });
     expectContainsAll(matcher, {
-        R"(fd.sourceAlgorithm == "sift")",
+        R"(feature.sourceAlgorithm != "sift")",
         "keypoint.size",
         "keypoint.angle",
         "CV_PI",
+    });
+}
+
+TEST(SfmSourceContractTest, LightGlueRuntimeIsTensorRtOnly)
+{
+    const QString cmake = readSourceFile(
+        QStringLiteral("src/core/image_matching/CMakeLists.txt"));
+    const QString matchingStage = readSourceFile(
+        QStringLiteral("src/core/matchphototask/stages/MatchingStage.cpp"));
+    const QString runtimeHeader = readSourceFile(
+        QStringLiteral("src/core/matchphototask/runtime/MatchPhotosRuntime.h"));
+
+    expectContainsAll(cmake, {
+        "find_package(TensorRT REQUIRED)",
+        "TensorRtLightGlueMatcher.cpp",
+        "TensorRT::nvinfer",
+    });
+    expectNotContainsAll(cmake, {
+        "find_package(Torch",
+        "\n    LightGlueMatcher.cpp",
+        "PLASCAN_ENABLE_TENSORRT",
+    });
+    expectContainsAll(matchingStage, {
+        "LightGlue 仅支持 TensorRT/CUDA",
+        "resolveLightGlueTensorRtEnginePath",
+    });
+    expectNotContainsAll(matchingStage, {
+        "TorchScript",
+        "resolveLightGlueModelPath",
+        "LightGlueBackend",
+    });
+    expectNotContainsAll(runtimeHeader, {
+        "resolveLightGlueModelPath",
+        "torchscript",
     });
 }
 
@@ -670,10 +702,9 @@ TEST(GuiAlgorithmAlignmentContractTest, AerialTriangulationResetClearsStaleMatch
 
     expectContainsAll(workflow, {
         "clearTiePointCache",
-        "MatchResultCatalog",
-        "group.variants",
-        "variant.matchFilePath",
-        "variant.sidecarPath",
+        "ImageMatchRepository",
+        "repository.clear",
+        "不存在独立特征文件或 JSON sidecar",
         "QFile::remove",
         "forceRebuildTiePoints",
         "TiePointPreparation::run",
@@ -705,8 +736,8 @@ TEST(GuiAlgorithmAlignmentContractTest, AerialTriangulationGuiUsesSingleUnifiedW
                                        "void MenuWorkflowController::openOverlapAnalysisDialog");
     expectContainsAll(run, {
         "workflowOptions.assetsDir",
-        "workflowOptions.featureDir",
         "workflowOptions.matchDir",
+        "workflowOptions.matchingAlgorithmId",
         "workflowOptions.maskPaths = xjw::common::project::ProjectIO::maskPathsForImages",
         "AerialTriangulationWorkflow::run",
     });
@@ -734,10 +765,10 @@ TEST(SfmPnpObservationContractTest, RegistrationUsesOneThreeDimensionalCandidate
 TEST(CudaSiftContractTest, TiePointThresholdCanReachDenseLowTextureRange)
 {
     const QString source = readSourceFile(
-        QStringLiteral("src/core/feature_extractors/tradition/CudaSiftFeatureExtractor.cpp"));
+        QStringLiteral("src/core/image_matching/sift/SiftFeatureExtractor.cpp"));
 
     EXPECT_TRUE(source.contains(QStringLiteral("0.1f")));
-    EXPECT_FALSE(source.contains(QStringLiteral("0.5f, 20.0f")));
+    EXPECT_TRUE(source.contains(QStringLiteral("20.0f")));
 }
 
 TEST(GuiAlgorithmAlignmentContractTest, MeshDecimationReachesReconstructionConfig)
@@ -807,7 +838,8 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelDepthMapsUseDirectMeshWorkf
 
     expectContainsAll(dialog, {
         R"(settings[QStringLiteral("depthMapSourcePath")] = sourcePath)",
-        R"(settings[QStringLiteral("reuseDepthMaps")] = _reuseDepthMapsCheck->isChecked())",
+        R"(settings[QStringLiteral("reuseDepthMaps")] =)",
+        R"(_hasReusableDepthMaps && _reuseDepthMapsRequested)",
     });
 
     expectContainsAll(manager, {
@@ -855,8 +887,8 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelRoutesDirectlyToModelManage
         QStringLiteral("src/gui/main_window/ReconstructionWorkflowController.cpp"));
     const QString project_manager_header = readSourceFile(
         QStringLiteral("src/gui/project/manager/ProjectManager.h"));
-    const QString reconstruction_manager = readSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectReconstructionManager.cpp"));
+    const QString project_manager = readSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
 
     expectContainsAll(controller, {
         "_projectManager->startGenerateModelAsync(settings)",
@@ -866,21 +898,23 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelRoutesDirectlyToModelManage
     });
 
     const QString generate_block = sectionBetween(
-        reconstruction_manager,
-        "case Task::GenerateModel:",
-        "case Task::MeshReconstruction:");
+        project_manager,
+        "void ProjectManager::startGenerateModelAsync(const QJsonObject &settings)",
+        "void ProjectManager::startMeshReconstructionAsync");
     expectContainsAll(generate_block, {
         "_modelManager->startMeshReconstructionAsync(settings)",
     });
-    expectNotContainsAll(reconstruction_manager, {
+    expectNotContainsAll(project_manager, {
         "ProjectModelGenerationWorkflow",
         "ProjectDenseReconstructionManager",
+        "ProjectReconstructionManager",
+        "ProjectTaskDispatcher",
     });
 
     const QString mesh_block = sectionBetween(
-        reconstruction_manager,
-        "case Task::MeshReconstruction:",
-        "case Task::TextureMapping:");
+        project_manager,
+        "void ProjectManager::startMeshReconstructionAsync",
+        "void ProjectManager::startTextureMappingAsync");
     expectContainsAll(mesh_block, {
         "_modelManager->startMeshReconstructionAsync(settings)",
     });
@@ -1238,8 +1272,32 @@ TEST(GuiArchitectureContractTest, DenseReconstructionManagerIsNotPartOfGui)
         QStringLiteral("src/gui/project/manager/ProjectModelGenerationWorkflow.cpp")));
 
     const QString guiSources = readSourceFile(QStringLiteral("src/gui/cmake/GuiSources.cmake"));
-    const QString reconstructionManager = readSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectReconstructionManager.cpp"));
     EXPECT_FALSE(guiSources.contains(QStringLiteral("ProjectDenseReconstructionManager")));
-    EXPECT_FALSE(reconstructionManager.contains(QStringLiteral("DenseReconstruction")));
+    EXPECT_FALSE(sourceFileExists(
+        QStringLiteral("src/gui/project/manager/ProjectReconstructionManager.cpp")));
+    EXPECT_FALSE(sourceFileExists(
+        QStringLiteral("src/gui/project/manager/ProjectTaskDispatcher.cpp")));
+}
+
+TEST(GuiArchitectureContractTest, ProjectPersistenceAndWorkflowAlgorithmsLiveOutsideGui)
+{
+    EXPECT_TRUE(sourceFileExists(
+        QStringLiteral("src/common/project/ProjectSessionModel.cpp")));
+    EXPECT_TRUE(sourceFileExists(
+        QStringLiteral("src/common/project/ProjectDocumentModel.cpp")));
+    EXPECT_TRUE(sourceFileExists(
+        QStringLiteral("src/core/project_workflows/ProjectWorkflowOperations.cpp")));
+
+    EXPECT_FALSE(sourceFileExists(
+        QStringLiteral("src/gui/project/data/ProjectData.cpp")));
+    EXPECT_FALSE(sourceFileExists(
+        QStringLiteral("src/gui/project/data/ProjectFilesManager.cpp")));
+    EXPECT_FALSE(sourceFileExists(
+        QStringLiteral("src/gui/project/support/ProjectWorkflowUtils.cpp")));
+
+    const QString guiSources = readSourceFile(QStringLiteral("src/gui/cmake/GuiSources.cmake"));
+    EXPECT_FALSE(guiSources.contains(QStringLiteral("project/data/ProjectData.cpp")));
+    EXPECT_FALSE(guiSources.contains(QStringLiteral("project/support/ProjectWorkflowUtils.cpp")));
+    EXPECT_TRUE(guiSources.contains(QStringLiteral("main_window/MainWindowProjectLifecycle.cpp")));
+    EXPECT_TRUE(guiSources.contains(QStringLiteral("widgets/DataTreePopulation.cpp")));
 }

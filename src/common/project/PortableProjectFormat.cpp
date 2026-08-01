@@ -58,12 +58,13 @@ bool ProjectResourceRef::isValid(QString *errorMessage) const
     const QString normalized = PortableProjectFormat::normalizeEntryPath(entryPath);
     if (!normalized.startsWith(QStringLiteral("resources/"))
         && !normalized.startsWith(QStringLiteral("artifacts/"))
+        && !normalized.startsWith(QStringLiteral("chunk/"))
         && !normalized.startsWith(QStringLiteral("workspace/"))
         && !normalized.startsWith(QStringLiteral("shared/")))
     {
         setError(errorMessage,
                  QStringLiteral(
-                     "资源必须位于 resources/、artifacts/ 或 workspace/ 下: %1")
+                     "资源必须位于 resources/、artifacts/、chunk/ 或 shared/ 下: %1")
                      .arg(entryPath));
         return false;
     }

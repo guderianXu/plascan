@@ -134,6 +134,8 @@ MultiViewTrackBuildResult MultiViewTrackBuilder::build(const BuildOptions &optio
 {
     MultiViewTrackBuildResult result;
 
+    // 阶段 1：为每个全局观测键分配确定性并查集索引。一个节点代表“一幅影像中的
+    // 一个特征”，而不是一条匹配，因此同一节点可自然连接多个 pair。
     detail::DisjointSet disjointSet;
     std::map<ObservationKey, int> indexByKey;
     std::vector<ObservationKey> keys;
@@ -159,6 +161,8 @@ MultiViewTrackBuildResult MultiViewTrackBuilder::build(const BuildOptions &optio
         indexedEdges.emplace_back(left, right);
     }
 
+    // 每个并查集根维护 imageId -> featureIdx，用于在合并前 O(component images)
+    // 检查“一条物点轨迹中同一影像只能有一个观测”的硬约束。
     std::vector<std::map<ImageId, FeatureIdx>> featureByImageByRoot(keys.size());
     for (int i = 0; i < static_cast<int>(keys.size()); ++i)
     {
@@ -171,6 +175,8 @@ MultiViewTrackBuildResult MultiViewTrackBuilder::build(const BuildOptions &optio
     {
         order[static_cast<size_t>(i)] = i;
     }
+    // 阶段 2：高置信匹配优先合并；同分时保留输入顺序。这样冲突环路中优先留下
+    // 更可靠边，同时保证相同输入每次构建结果一致。
     std::sort(order.begin(), order.end(), [&](int left, int right)
     {
         const Edge &leftEdge = _edges[static_cast<size_t>(left)];
@@ -210,6 +216,8 @@ MultiViewTrackBuildResult MultiViewTrackBuilder::build(const BuildOptions &optio
 
         if (hasConflict)
         {
+            // 拒绝当前边而不是丢弃整个组件。组件中已有高分一致关系继续保留，
+            // 低分冲突边计入诊断供上游判断匹配质量。
             ++result.rejectedConflictEdges;
             continue;
         }
@@ -240,6 +248,7 @@ MultiViewTrackBuildResult MultiViewTrackBuilder::build(const BuildOptions &optio
         }
     }
 
+    // 阶段 3：物化最终组件，并把被接受边的平均分作为 track confidence。
     std::map<int, std::vector<ObservationKey>> components;
     for (int i = 0; i < static_cast<int>(keys.size()); ++i)
     {
@@ -292,10 +301,14 @@ MultiViewTrackBuildResult MultiViewTrackBuilder::build(const BuildOptions &optio
         result.tracks.push_back(std::move(track));
     }
 
+    // 对转台/固定传感器数据，可选删除在所有影像中像素位置近乎不动的伪特征。
+    // 缺少任一关键点坐标时保守保留，避免把“数据不完整”误判为静止。
     pruneStationaryTracks(options, _keypointsByImage, &result);
 
     if (options.enableQualityThinning && !result.tracks.empty())
     {
+        // 阶段 4：完整长轨迹优先，其次高置信度。只有轨迹在每个参与影像的总配额
+        // 和网格配额都可容纳时才整体接受，禁止留下残缺子轨迹。
         std::vector<int> order(result.tracks.size());
         for (int i = 0; i < static_cast<int>(order.size()); ++i)
         {

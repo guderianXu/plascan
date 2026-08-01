@@ -12,6 +12,7 @@
 
 #include <gdal_priv.h>
 #include <cpl_conv.h>
+#include <ogr_spatialref.h>
 
 #include <opencv2/imgcodecs.hpp>
 
@@ -37,6 +38,35 @@ void ensureGdalRegistered()
         GDALAllRegister();
         registered = true;
     }
+}
+
+void readProjectionMetadata(GDALDataset *dataset,
+                            DemProjectionParameters *projection)
+{
+    if (!dataset || !projection)
+    {
+        return;
+    }
+
+    const char *projectionRef = dataset->GetProjectionRef();
+    if (projectionRef && projectionRef[0] != '\0')
+    {
+        projection->projectionWkt = QString::fromUtf8(projectionRef);
+    }
+    const OGRSpatialReference *spatialReference = dataset->GetSpatialRef();
+    const char *name = spatialReference ? spatialReference->GetName() : nullptr;
+    if (name && name[0] != '\0')
+    {
+        projection->coordinateSystem = QString::fromUtf8(name);
+    }
+}
+
+bool isNorthUpGeoTransform(const double geoTransform[6])
+{
+    return std::abs(geoTransform[2]) <= 1e-12
+        && std::abs(geoTransform[4]) <= 1e-12
+        && geoTransform[1] > 0.0
+        && geoTransform[5] < 0.0;
 }
 
 double demMaxY(const DemGridData &demGrid)
@@ -631,6 +661,76 @@ bool DemDomIO::writeDemRaster(const DemGridData &demGrid,
     return true;
 }
 
+bool DemDomIO::readDemMetadata(const QString &inputPath,
+                               DemGridData *demGrid,
+                               QString *errorMsg)
+{
+    if (!demGrid)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("DEM 元数据读取目标为空");
+        }
+        return false;
+    }
+
+    ensureGdalRegistered();
+    const std::string inputPathUtf8 = xjw::common::io::toUtf8Path(inputPath);
+    GDALDataset *dataset = static_cast<GDALDataset *>(GDALOpen(inputPathUtf8.c_str(), GA_ReadOnly));
+    if (!dataset)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("DEM 读取失败: %1").arg(inputPath);
+        }
+        return false;
+    }
+
+    const int width = dataset->GetRasterXSize();
+    const int height = dataset->GetRasterYSize();
+    if (width <= 0 || height <= 0 || dataset->GetRasterCount() <= 0)
+    {
+        GDALClose(dataset);
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("DEM 尺寸无效: %1").arg(inputPath);
+        }
+        return false;
+    }
+
+    DemGridData metadata;
+    metadata.width = width;
+    metadata.height = height;
+    double geoTransform[6]{};
+    if (dataset->GetGeoTransform(geoTransform) == CE_None)
+    {
+        if (!isNorthUpGeoTransform(geoTransform))
+        {
+            GDALClose(dataset);
+            if (errorMsg)
+            {
+                *errorMsg = QStringLiteral("当前正射流程仅支持北向上、无旋转的 DEM: %1")
+                                .arg(inputPath);
+            }
+            return false;
+        }
+        metadata.stepX = geoTransform[1];
+        metadata.stepY = std::abs(geoTransform[5]);
+        metadata.minX = geoTransform[0] + metadata.stepX * 0.5;
+        metadata.minY = geoTransform[3] + geoTransform[5] * (height - 0.5);
+    }
+    else
+    {
+        metadata.stepX = 1.0;
+        metadata.stepY = 1.0;
+    }
+
+    readProjectionMetadata(dataset, &metadata.projection);
+    GDALClose(dataset);
+    *demGrid = std::move(metadata);
+    return true;
+}
+
 bool DemDomIO::readDemRaster(const QString &inputPath,
                              DemGridData *demGrid,
                              QString *errorMsg)
@@ -798,11 +898,7 @@ bool DemDomIO::readDemRaster(const QString &inputPath,
         demGrid->stepY = 1.0;
     }
 
-    const char *projectionRef = dataset->GetProjectionRef();
-    if (projectionRef && projectionRef[0] != '\0')
-    {
-        demGrid->projection.projectionWkt = QString::fromStdString(projectionRef);
-    }
+    readProjectionMetadata(dataset, &demGrid->projection);
 
     GDALClose(dataset);
     return true;
@@ -1065,8 +1161,16 @@ bool DemDomIO::writeDomImage(const cv::Mat &domImage,
         cv::split(domImage, channels);
         for (int index = 0; index < static_cast<int>(channels.size()); ++index)
         {
-            cv::Mat flipped = flipForRasterWrite(channels[static_cast<std::size_t>(index)]);
+            const int source_index = channels.size() == 3 ? 2 - index : index;
+            cv::Mat flipped =
+                flipForRasterWrite(channels[static_cast<std::size_t>(source_index)]);
             GDALRasterBand *band = dataset->GetRasterBand(index + 1);
+            if (band && channels.size() == 3)
+            {
+                band->SetColorInterpretation(
+                    index == 0 ? GCI_RedBand
+                               : (index == 1 ? GCI_GreenBand : GCI_BlueBand));
+            }
             if (!band || band->RasterIO(GF_Write,
                                         0,
                                         0,
@@ -1113,6 +1217,16 @@ bool DemDomIO::writeDomGeoTiff(const cv::Mat &domImage,
                                const QString &outputPath,
                                QString *errorMsg)
 {
+    return writeDomGeoTiff(
+        domImage, cv::Mat(), demGrid, outputPath, errorMsg);
+}
+
+bool DemDomIO::writeDomGeoTiff(const cv::Mat &domImage,
+                               const cv::Mat &validMask,
+                               const DemGridData &demGrid,
+                               const QString &outputPath,
+                               QString *errorMsg)
+{
     if (domImage.empty())
     {
         if (errorMsg)
@@ -1121,8 +1235,20 @@ bool DemDomIO::writeDomGeoTiff(const cv::Mat &domImage,
         }
         return false;
     }
+    if (!validMask.empty()
+        && (validMask.type() != CV_8UC1
+            || validMask.size() != domImage.size()))
+    {
+        if (errorMsg)
+        {
+            *errorMsg =
+                QStringLiteral("DOM 有效覆盖蒙版必须为同尺寸单通道 8 位图像");
+        }
+        return false;
+    }
 
-    if (!demGrid.isValid())
+    if (demGrid.width <= 0 || demGrid.height <= 0
+        || demGrid.stepX <= 0.0 || demGrid.stepY <= 0.0)
     {
         if (errorMsg)
         {
@@ -1149,10 +1275,11 @@ bool DemDomIO::writeDomGeoTiff(const cv::Mat &domImage,
     createOptions = CSLSetNameValue(createOptions, "TILED", "YES");
 
     const std::string outputPathUtf8 = xjw::common::io::toUtf8Path(outputPath);
+    const int bandCount = domImage.channels() + (validMask.empty() ? 0 : 1);
     GDALDataset *dataset = driver->Create(outputPathUtf8.c_str(),
                                           domImage.cols,
                                           domImage.rows,
-                                          domImage.channels(),
+                                          bandCount,
                                           GDT_Byte,
                                           createOptions);
     CSLDestroy(createOptions);
@@ -1191,8 +1318,16 @@ bool DemDomIO::writeDomGeoTiff(const cv::Mat &domImage,
     cv::split(domImage, channels);
     for (int index = 0; index < static_cast<int>(channels.size()); ++index)
     {
-        cv::Mat flipped = flipForRasterWrite(channels[static_cast<std::size_t>(index)]);
+        const int source_index = channels.size() == 3 ? 2 - index : index;
+        cv::Mat flipped =
+            flipForRasterWrite(channels[static_cast<std::size_t>(source_index)]);
         GDALRasterBand *band = dataset->GetRasterBand(index + 1);
+        if (band && channels.size() == 3)
+        {
+            band->SetColorInterpretation(
+                index == 0 ? GCI_RedBand
+                           : (index == 1 ? GCI_GreenBand : GCI_BlueBand));
+        }
         if (!band || band->RasterIO(GF_Write,
                                     0,
                                     0,
@@ -1209,6 +1344,40 @@ bool DemDomIO::writeDomGeoTiff(const cv::Mat &domImage,
             if (errorMsg)
             {
                 *errorMsg = QStringLiteral("GDAL 写出 DOM GeoTIFF 波段失败: %1").arg(outputPath);
+            }
+            return false;
+        }
+    }
+    if (!validMask.empty())
+    {
+        cv::Mat alpha;
+        cv::compare(validMask, 0, alpha, cv::CMP_NE);
+        alpha = flipForRasterWrite(alpha);
+        GDALRasterBand *alphaBand =
+            dataset->GetRasterBand(static_cast<int>(channels.size()) + 1);
+        if (alphaBand)
+        {
+            alphaBand->SetColorInterpretation(GCI_AlphaBand);
+        }
+        if (!alphaBand
+            || alphaBand->RasterIO(GF_Write,
+                                   0,
+                                   0,
+                                   domImage.cols,
+                                   domImage.rows,
+                                   alpha.data,
+                                   domImage.cols,
+                                   domImage.rows,
+                                   GDT_Byte,
+                                   0,
+                                   0) != CE_None)
+        {
+            GDALClose(dataset);
+            if (errorMsg)
+            {
+                *errorMsg =
+                    QStringLiteral("GDAL 写出 DOM Alpha 波段失败: %1")
+                        .arg(outputPath);
             }
             return false;
         }

@@ -1,6 +1,7 @@
 #include "VisualHullDepthRefiner.h"
 
 #include "DepthTsdfSurfaceBuilder.h"
+#include "RobustSurfaceDisplacementSolver.h"
 #include "SurfaceReconstructorPostprocess.h"
 
 #include <algorithm>
@@ -8,6 +9,7 @@
 #include <cstddef>
 #include <limits>
 #include <numeric>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -69,15 +71,121 @@ float weightedMedian(
         });
     const float target_weight = total_weight * 0.5f;
     float accumulated_weight = 0.0f;
-    for (const auto &[value, weight] : ordered)
+    for (std::size_t index = 0; index < ordered.size(); ++index)
     {
+        const auto &[value, weight] = ordered[index];
         accumulated_weight += weight;
         if (accumulated_weight >= target_weight)
         {
+            const float plateau_tolerance =
+                std::max(1.0f, total_weight) * 1.0e-6f;
+            if (std::abs(accumulated_weight - target_weight) <=
+                    plateau_tolerance)
+            {
+                for (std::size_t next = index + 1;
+                     next < ordered.size();
+                     ++next)
+                {
+                    if (ordered[next].second > 0.0f)
+                    {
+                        return 0.5f *
+                            (value + ordered[next].first);
+                    }
+                }
+            }
             return value;
         }
     }
     return ordered.back().first;
+}
+
+struct ConsensusEstimate
+{
+    float value = 0.0f;
+    bool blended = false;
+};
+
+ConsensusEstimate robustContinuousConsensus(
+    const std::vector<float> &values,
+    const std::vector<float> &weights,
+    bool all_native,
+    float maximum_median_absolute_deviation)
+{
+    ConsensusEstimate result;
+    result.value = weightedMedian(values, weights);
+    if (values.size() < 2 || values.size() != weights.size() ||
+        !(maximum_median_absolute_deviation > 0.0f))
+    {
+        return result;
+    }
+
+    float total_weight = 0.0f;
+    float weighted_sum = 0.0f;
+    for (std::size_t index = 0; index < weights.size(); ++index)
+    {
+        const float positive_weight = std::max(0.0f, weights[index]);
+        total_weight += positive_weight;
+        weighted_sum += positive_weight * values[index];
+    }
+    if (!(total_weight > 0.0f))
+    {
+        return result;
+    }
+
+    // The weighted median is retained only as a robust scale estimator.  Using
+    // it as the data target creates a discontinuous winner-takes-all depth
+    // layer whenever two orbital views exchange dominant confidence.
+    const float scale_center = result.value;
+    std::vector<float> deviations;
+    deviations.reserve(values.size());
+    for (const float value : values)
+    {
+        deviations.push_back(std::abs(value - scale_center));
+    }
+    const float median_absolute_deviation =
+        weightedMedian(deviations, weights);
+    const float robust_scale = std::clamp(
+        1.4826f * median_absolute_deviation,
+        0.01f * maximum_median_absolute_deviation,
+        maximum_median_absolute_deviation);
+    float estimate = weighted_sum / total_weight;
+    for (int iteration = 0; iteration < 8; ++iteration)
+    {
+        float robust_weight_sum = 0.0f;
+        float robust_value_sum = 0.0f;
+        for (std::size_t index = 0; index < values.size(); ++index)
+        {
+            const float weight = std::max(0.0f, weights[index]);
+            if (!(weight > 0.0f))
+            {
+                continue;
+            }
+            const float normalized =
+                (values[index] - estimate) /
+                std::max(1.0e-8f, robust_scale);
+            const float cauchy_weight =
+                1.0f / (1.0f + normalized * normalized);
+            const float robust_weight = weight * cauchy_weight;
+            robust_weight_sum += robust_weight;
+            robust_value_sum += robust_weight * values[index];
+        }
+        if (!(robust_weight_sum > 0.0f))
+        {
+            break;
+        }
+        const float updated = robust_value_sum / robust_weight_sum;
+        if (std::abs(updated - estimate) <=
+            1.0e-5f * std::max(1.0f, maximum_median_absolute_deviation))
+        {
+            estimate = updated;
+            break;
+        }
+        estimate = updated;
+    }
+    result.value = estimate;
+    result.blended = true;
+    static_cast<void>(all_native);
+    return result;
 }
 
 bool validNormal(const MeshVertex &vertex)
@@ -94,6 +202,24 @@ struct DepthObservation
     float depth = 0.0f;
     float confidence = 0.0f;
     float repairedFraction = 0.0f;
+    float inverseDepthRelativeSpread = 0.0f;
+    bool hasInverseDepthRelativeSpread = false;
+};
+
+struct VertexDepthObservation
+{
+    int frameIndex = -1;
+    float displacement = 0.0f;
+    float confidence = 0.0f;
+    bool repaired = false;
+};
+
+struct PairBiasSamples
+{
+    int firstFrame = -1;
+    int secondFrame = -1;
+    std::vector<float> differences;
+    std::vector<float> weights;
 };
 
 bool validObservationPixel(
@@ -177,15 +303,31 @@ bool sampleDepthObservation(
                 row, column) != 0
             ? 1.0f
             : 0.0f;
+        if (frame.inverseDepthRelativeSpread.type() == CV_32FC1 &&
+            frame.inverseDepthRelativeSpread.size() == frame.depth.size())
+        {
+            const float spread =
+                frame.inverseDepthRelativeSpread.at<float>(row, column);
+            if (std::isfinite(spread) && spread >= 0.0f)
+            {
+                observation->inverseDepthRelativeSpread = spread;
+                observation->hasInverseDepthRelativeSpread = true;
+            }
+        }
         return true;
     }
 
     float depth = 0.0f;
     float confidence = 0.0f;
     float repaired_fraction = 0.0f;
+    float inverse_depth_relative_spread = 0.0f;
+    bool has_inverse_depth_relative_spread = false;
     const bool has_repaired_mask =
         frame.crossViewRepairedMask.type() == CV_8UC1 &&
         frame.crossViewRepairedMask.size() == frame.depth.size();
+    const bool has_spread =
+        frame.inverseDepthRelativeSpread.type() == CV_32FC1 &&
+        frame.inverseDepthRelativeSpread.size() == frame.depth.size();
     for (int sample = 0; sample < 4; ++sample)
     {
         const float weight = weights[sample];
@@ -202,11 +344,340 @@ bool sampleDepthObservation(
         {
             repaired_fraction += weight;
         }
+        if (has_spread)
+        {
+            const float spread =
+                frame.inverseDepthRelativeSpread.at<float>(
+                    rows[sample], columns[sample]);
+            if (std::isfinite(spread) && spread >= 0.0f)
+            {
+                inverse_depth_relative_spread += weight * spread;
+                has_inverse_depth_relative_spread = true;
+            }
+        }
     }
     observation->depth = depth;
     observation->confidence = confidence;
     observation->repairedFraction = repaired_fraction;
+    observation->inverseDepthRelativeSpread =
+        inverse_depth_relative_spread;
+    observation->hasInverseDepthRelativeSpread =
+        has_inverse_depth_relative_spread;
     return true;
+}
+
+float inverseDepthSpreadWeight(
+    const DepthObservation &observation,
+    const VisualHullDepthRefineOptions &options)
+{
+    if (!options.enableInverseDepthSpreadWeighting ||
+        !observation.hasInverseDepthRelativeSpread)
+    {
+        return 1.0f;
+    }
+    const float knee = std::clamp(
+        options.inverseDepthSpreadWeightKnee, 0.0f, 0.099f);
+    const float zero = std::clamp(
+        options.inverseDepthSpreadWeightZero,
+        knee + 1.0e-6f,
+        0.10f);
+    const float minimum_weight = std::clamp(
+        options.minimumInverseDepthSpreadWeight, 0.0f, 1.0f);
+    const float spread = observation.inverseDepthRelativeSpread;
+    if (spread <= knee)
+    {
+        return 1.0f;
+    }
+    if (spread >= zero)
+    {
+        return minimum_weight;
+    }
+    const float normalized = (spread - knee) / (zero - knee);
+    const float smooth =
+        normalized * normalized * (3.0f - 2.0f * normalized);
+    return 1.0f - smooth * (1.0f - minimum_weight);
+}
+
+std::vector<VertexDepthObservation> collectVertexObservations(
+    const MeshVertex &vertex,
+    const QVector<DepthTsdfFrame> &frames,
+    const VisualHullDepthRefineOptions &options,
+    VisualHullDepthRefineStatistics *statistics)
+{
+    std::vector<VertexDepthObservation> observations;
+    observations.reserve(frames.size());
+    if (!validNormal(vertex))
+    {
+        return observations;
+    }
+    const double world[3] = {vertex.x, vertex.y, vertex.z};
+    for (int frame_index = 0;
+         frame_index < frames.size();
+         ++frame_index)
+    {
+        const DepthTsdfFrame &frame = frames[frame_index];
+        double pixel[2]{};
+        double projected_depth = 0.0;
+        if (!frame.camera.projectWorldPointWithDepth(
+                world, pixel, projected_depth))
+        {
+            continue;
+        }
+        if (statistics != nullptr)
+        {
+            ++statistics->projectedObservationCount;
+        }
+        DepthObservation observation;
+        if (!sampleDepthObservation(frame, pixel, &observation))
+        {
+            continue;
+        }
+        const bool repaired_observation =
+            observation.repairedFraction >= 0.5f;
+        if (!std::isfinite(observation.depth) ||
+            !(observation.depth > 0.0f) ||
+            !std::isfinite(observation.confidence) ||
+            observation.confidence < options.minimumDepthConfidence ||
+            std::abs(
+                observation.depth -
+                static_cast<float>(projected_depth)) >
+                options.maximumEvidenceDistance)
+        {
+            continue;
+        }
+        double target_world[3]{};
+        if (!frame.camera.unprojectPixel(
+                pixel, observation.depth, target_world))
+        {
+            continue;
+        }
+        const float displacement =
+            static_cast<float>(target_world[0] - world[0]) * vertex.nx +
+            static_cast<float>(target_world[1] - world[1]) * vertex.ny +
+            static_cast<float>(target_world[2] - world[2]) * vertex.nz;
+        const float frame_quality_weight = std::clamp(
+            frame.frameQualityWeight, 0.0f, 1.0f);
+        if (!std::isfinite(displacement) ||
+            frame_quality_weight <= 1.0e-6f)
+        {
+            continue;
+        }
+        const float spread_weight =
+            inverseDepthSpreadWeight(observation, options);
+        const float repaired_fraction =
+            std::clamp(observation.repairedFraction, 0.0f, 1.0f);
+        const float repaired_weight =
+            1.0f +
+            repaired_fraction *
+                (std::clamp(
+                     options.repairedObservationWeight, 0.0f, 1.0f) -
+                 1.0f);
+        const float confidence =
+            std::clamp(observation.confidence, 0.0f, 1.0f) *
+            frame_quality_weight *
+            repaired_weight *
+            spread_weight;
+        if (!(confidence > 0.0f))
+        {
+            continue;
+        }
+        observations.push_back(
+            {frame_index,
+             displacement,
+             confidence,
+             repaired_observation});
+        if (statistics != nullptr)
+        {
+            ++statistics->acceptedObservationCount;
+            if (spread_weight < 1.0f)
+            {
+                ++statistics->spreadDownweightedObservationCount;
+            }
+            if (options.enableInverseDepthSpreadWeighting &&
+                spread_weight <=
+                    options.minimumInverseDepthSpreadWeight + 1.0e-6f)
+            {
+                ++statistics->spreadVeryWeakObservationCount;
+            }
+        }
+    }
+    return observations;
+}
+
+std::vector<float> estimateCrossViewNormalBias(
+    const std::vector<std::vector<VertexDepthObservation>>
+        &vertex_observations,
+    int frame_count,
+    const VisualHullDepthRefineOptions &options,
+    VisualHullDepthRefineStatistics *statistics)
+{
+    std::vector<float> biases(
+        static_cast<std::size_t>(std::max(0, frame_count)), 0.0f);
+    if (!options.enableCrossViewBiasCompensation ||
+        frame_count < 2)
+    {
+        return biases;
+    }
+
+    std::unordered_map<std::uint64_t, PairBiasSamples> pair_samples;
+    const float maximum_pair_difference =
+        2.0f * options.maximumViewMedianAbsoluteDeviation;
+    for (const auto &observations : vertex_observations)
+    {
+        for (std::size_t first = 0;
+             first < observations.size();
+             ++first)
+        {
+            if (observations[first].repaired)
+            {
+                continue;
+            }
+            for (std::size_t second = first + 1;
+                 second < observations.size();
+                 ++second)
+            {
+                if (observations[second].repaired)
+                {
+                    continue;
+                }
+                const VertexDepthObservation *lower = &observations[first];
+                const VertexDepthObservation *upper = &observations[second];
+                if (lower->frameIndex > upper->frameIndex)
+                {
+                    std::swap(lower, upper);
+                }
+                const float difference =
+                    lower->displacement - upper->displacement;
+                if (!std::isfinite(difference) ||
+                    std::abs(difference) > maximum_pair_difference)
+                {
+                    continue;
+                }
+                const std::uint64_t key =
+                    (static_cast<std::uint64_t>(
+                         static_cast<std::uint32_t>(
+                             lower->frameIndex)) << 32U) |
+                    static_cast<std::uint32_t>(
+                        upper->frameIndex);
+                PairBiasSamples &samples = pair_samples[key];
+                samples.firstFrame = lower->frameIndex;
+                samples.secondFrame = upper->frameIndex;
+                samples.differences.push_back(difference);
+                samples.weights.push_back(std::min(
+                    lower->confidence, upper->confidence));
+            }
+        }
+    }
+
+    struct BiasEdge
+    {
+        int first = -1;
+        int second = -1;
+        float difference = 0.0f;
+        float weight = 0.0f;
+    };
+    std::vector<BiasEdge> edges;
+    const int minimum_samples =
+        std::max(1, options.minimumCrossViewBiasPairSamples);
+    for (const auto &[key, samples] : pair_samples)
+    {
+        (void)key;
+        if (static_cast<int>(samples.differences.size()) <
+            minimum_samples)
+        {
+            continue;
+        }
+        edges.push_back(
+            {samples.firstFrame,
+             samples.secondFrame,
+             weightedMedian(
+                 samples.differences, samples.weights),
+             std::sqrt(static_cast<float>(
+                 samples.differences.size()))});
+    }
+    if (edges.empty())
+    {
+        return biases;
+    }
+
+    std::vector<float> updated(biases.size(), 0.0f);
+    std::vector<float> incident_weight(biases.size(), 0.0f);
+    for (int iteration = 0; iteration < 40; ++iteration)
+    {
+        std::fill(updated.begin(), updated.end(), 0.0f);
+        std::fill(
+            incident_weight.begin(),
+            incident_weight.end(),
+            0.0f);
+        for (const BiasEdge &edge : edges)
+        {
+            const std::size_t first =
+                static_cast<std::size_t>(edge.first);
+            const std::size_t second =
+                static_cast<std::size_t>(edge.second);
+            updated[first] += edge.weight *
+                (biases[second] + edge.difference);
+            incident_weight[first] += edge.weight;
+            updated[second] += edge.weight *
+                (biases[first] - edge.difference);
+            incident_weight[second] += edge.weight;
+        }
+        std::vector<float> connected_biases;
+        for (std::size_t index = 0;
+             index < biases.size();
+             ++index)
+        {
+            if (incident_weight[index] > 0.0f)
+            {
+                updated[index] /= incident_weight[index];
+                connected_biases.push_back(updated[index]);
+            }
+            else
+            {
+                updated[index] = 0.0f;
+            }
+        }
+        const float gauge = median(connected_biases);
+        for (std::size_t index = 0;
+             index < biases.size();
+             ++index)
+        {
+            if (incident_weight[index] > 0.0f)
+            {
+                updated[index] -= gauge;
+            }
+        }
+        biases.swap(updated);
+    }
+
+    const float maximum_bias =
+        options.maximumCrossViewBias > 0.0f
+        ? options.maximumCrossViewBias
+        : std::min(
+              options.maximumDisplacement,
+              options.maximumViewMedianAbsoluteDeviation);
+    for (std::size_t index = 0; index < biases.size(); ++index)
+    {
+        if (incident_weight[index] <= 0.0f)
+        {
+            biases[index] = 0.0f;
+            continue;
+        }
+        biases[index] = std::clamp(
+            biases[index], -maximum_bias, maximum_bias);
+        if (statistics != nullptr)
+        {
+            ++statistics->biasCalibratedFrameCount;
+            statistics->maximumAbsoluteFrameBias = std::max(
+                statistics->maximumAbsoluteFrameBias,
+                std::abs(biases[index]));
+        }
+    }
+    if (statistics != nullptr)
+    {
+        statistics->biasCalibrationPairCount = edges.size();
+    }
+    return biases;
 }
 
 } // namespace
@@ -214,7 +685,8 @@ bool sampleDepthObservation(
 VisualHullDepthRefineStatistics VisualHullDepthRefiner::refine(
     TriMesh *mesh,
     const QVector<DepthTsdfFrame> &frames,
-    const VisualHullDepthRefineOptions &options)
+    const VisualHullDepthRefineOptions &options,
+    const std::function<bool()> &isCancelled)
 {
     VisualHullDepthRefineStatistics statistics;
     if (mesh == nullptr || mesh->empty() ||
@@ -231,6 +703,28 @@ VisualHullDepthRefineStatistics VisualHullDepthRefiner::refine(
     std::vector<float> initial_displacement(vertex_count, 0.0f);
     std::vector<float> anchor_weight(vertex_count, 0.0f);
     std::vector<float> supporting_view_counts(vertex_count, 0.0f);
+    std::vector<RobustSurfaceDisplacementObservation>
+        solver_observations;
+    solver_observations.reserve(vertex_count * 2);
+    std::vector<std::vector<VertexDepthObservation>>
+        vertex_observations(vertex_count);
+    for (std::size_t vertex_index = 0;
+         vertex_index < vertex_count;
+         ++vertex_index)
+    {
+        vertex_observations[vertex_index] =
+            collectVertexObservations(
+                mesh->vertices[vertex_index],
+                frames,
+                options,
+                &statistics);
+    }
+    const std::vector<float> frame_biases =
+        estimateCrossViewNormalBias(
+            vertex_observations,
+            frames.size(),
+            options,
+            &statistics);
 
     const int minimum_view_count = std::max(1, options.minimumViewCount);
     for (std::size_t vertex_index = 0;
@@ -244,76 +738,31 @@ VisualHullDepthRefineStatistics VisualHullDepthRefiner::refine(
         }
         std::vector<float> displacements;
         std::vector<float> confidences;
+        bool all_observations_native = true;
         displacements.reserve(frames.size());
         confidences.reserve(frames.size());
         int native_view_count = 0;
-        const double world[3] = {vertex.x, vertex.y, vertex.z};
-        for (const DepthTsdfFrame &frame : frames)
+        for (const VertexDepthObservation &observation :
+             vertex_observations[vertex_index])
         {
-            double pixel[2]{};
-            double projected_depth = 0.0;
-            if (!frame.camera.projectWorldPointWithDepth(
-                    world, pixel, projected_depth))
-            {
-                continue;
-            }
-            ++statistics.projectedObservationCount;
-            DepthObservation observation;
-            if (!sampleDepthObservation(
-                    frame, pixel, &observation))
-            {
-                continue;
-            }
-            const float observed_depth = observation.depth;
-            const float confidence = observation.confidence;
-            const bool repaired_observation =
-                observation.repairedFraction >= 0.5f;
-            if (!std::isfinite(observed_depth) ||
-                !(observed_depth > 0.0f) ||
-                !std::isfinite(confidence) ||
-                confidence < options.minimumDepthConfidence ||
-                std::abs(
-                    observed_depth -
-                    static_cast<float>(projected_depth)) >
-                    options.maximumEvidenceDistance)
-            {
-                continue;
-            }
-            double target_world[3]{};
-            if (!frame.camera.unprojectPixel(
-                    pixel, observed_depth, target_world))
-            {
-                continue;
-            }
-            const float displacement =
-                static_cast<float>(target_world[0] - world[0]) * vertex.nx +
-                static_cast<float>(target_world[1] - world[1]) * vertex.ny +
-                static_cast<float>(target_world[2] - world[2]) * vertex.nz;
-            if (!std::isfinite(displacement))
-            {
-                continue;
-            }
-            const float frame_quality_weight = std::clamp(
-                frame.frameQualityWeight, 0.0f, 1.0f);
-            if (frame_quality_weight <= 1.0e-6f)
-            {
-                continue;
-            }
-            displacements.push_back(displacement);
-            confidences.push_back(
-                std::clamp(confidence, 0.0f, 1.0f) *
-                frame_quality_weight *
-                (repaired_observation
-                     ? std::clamp(
-                           options.repairedObservationWeight,
-                           0.0f,
-                           1.0f)
-                     : 1.0f));
-            if (!repaired_observation)
+            const std::size_t frame_index =
+                static_cast<std::size_t>(
+                    observation.frameIndex);
+            const float bias =
+                frame_index < frame_biases.size()
+                ? frame_biases[frame_index]
+                : 0.0f;
+            displacements.push_back(
+                observation.displacement - bias);
+            confidences.push_back(observation.confidence);
+            if (!observation.repaired)
             {
                 ++native_view_count;
             }
-            ++statistics.acceptedObservationCount;
+            else
+            {
+                all_observations_native = false;
+            }
         }
 
         supporting_view_counts[vertex_index] =
@@ -327,8 +776,14 @@ VisualHullDepthRefineStatistics VisualHullDepthRefiner::refine(
         {
             continue;
         }
+        const ConsensusEstimate displacement_consensus =
+            robustContinuousConsensus(
+                displacements,
+                confidences,
+                all_observations_native,
+                options.maximumViewMedianAbsoluteDeviation);
         const float displacement_median =
-            weightedMedian(displacements, confidences);
+            displacement_consensus.value;
         std::vector<float> absolute_deviations;
         absolute_deviations.reserve(displacements.size());
         for (const float displacement : displacements)
@@ -364,10 +819,116 @@ VisualHullDepthRefineStatistics VisualHullDepthRefiner::refine(
             displacement_median,
             -options.maximumDisplacement,
             options.maximumDisplacement);
+        const float observation_reliability =
+            view_weight * agreement_weight;
+        for (std::size_t observation_index = 0;
+             observation_index < displacements.size();
+             ++observation_index)
+        {
+            const float observation_weight =
+                confidences[observation_index] *
+                observation_reliability;
+            if (!(observation_weight > 0.0f))
+            {
+                continue;
+            }
+            solver_observations.push_back(
+                {static_cast<int>(vertex_index),
+                 std::clamp(
+                     displacements[observation_index],
+                     -options.maximumDisplacement,
+                     options.maximumDisplacement),
+                 observation_weight});
+        }
+        statistics.blendedConsensusVertexCount +=
+            displacement_consensus.blended ? 1U : 0U;
         ++statistics.anchoredVertexCount;
     }
 
     std::vector<float> displacement = initial_displacement;
+    bool use_legacy_regularization = true;
+    if (options.enableGlobalRobustSolver &&
+        !solver_observations.empty())
+    {
+        ++statistics.globalSolverAttemptCount;
+        RobustSurfaceDisplacementOptions solver_options;
+        solver_options.irlsIterations =
+            options.globalSolverIrlsIterations;
+        solver_options.maximumPcgIterations =
+            options.globalSolverMaximumPcgIterations;
+        solver_options.convergenceTolerance =
+            options.globalSolverConvergenceTolerance;
+        solver_options.robustScale =
+            options.maximumViewMedianAbsoluteDeviation *
+            options.globalSolverRobustScaleMultiplier;
+        solver_options.laplacianWeight =
+            options.globalSolverLaplacianWeight;
+        solver_options.hullPriorWeight =
+            options.globalSolverHullPriorWeight;
+        solver_options.maximumDisplacement =
+            options.maximumDisplacement;
+        constexpr float degrees_to_radians =
+            3.14159265358979323846f / 180.0f;
+        solver_options.minimumNormalDot = std::cos(
+            std::clamp(
+                options.regularizationMaximumNormalAngleDegrees,
+                5.0f,
+                89.0f) *
+            degrees_to_radians);
+        statistics.globalSolverEffectiveRobustScale =
+            solver_options.robustScale;
+        std::vector<float> candidate_displacement =
+            initial_displacement;
+        const RobustSurfaceDisplacementStatistics solver =
+            RobustSurfaceDisplacementSolver::solve(
+                *mesh,
+                solver_observations,
+                solver_options,
+                &candidate_displacement,
+                isCancelled);
+        statistics.globalSolverCancelled = solver.cancelled;
+        statistics.globalSolverIrlsIterationCount =
+            solver.irlsIterationCount;
+        statistics.globalSolverPcgIterationCount =
+            solver.pcgIterationCount;
+        statistics.globalSolverObservationCount =
+            solver.observationCount;
+        statistics.globalSolverRegularizationEdgeCount =
+            solver.regularizationEdgeCount;
+        statistics.globalSolverAnchoredVertexCount =
+            solver.anchoredVertexCount;
+        statistics.globalSolverPriorOnlyVertexCount =
+            solver.priorOnlyVertexCount;
+        statistics.globalSolverInitialEnergy =
+            solver.initialEnergy;
+        statistics.globalSolverFinalEnergy =
+            solver.finalEnergy;
+        statistics.globalSolverFinalRelativeResidual =
+            solver.finalRelativeResidual;
+        statistics.globalSolverSolvedPassCount =
+            solver.solved ? 1 : 0;
+        statistics.globalSolverConvergedPassCount =
+            solver.converged ? 1 : 0;
+        if (solver.cancelled)
+        {
+            return statistics;
+        }
+        const double energy_tolerance = std::max(
+            1.0e-12,
+            std::abs(solver.initialEnergy) * 1.0e-5);
+        if (solver.solved &&
+            solver.finalEnergy <=
+                solver.initialEnergy + energy_tolerance)
+        {
+            displacement = std::move(candidate_displacement);
+            use_legacy_regularization = false;
+            statistics.globalSolverAppliedPassCount = 1;
+        }
+        else
+        {
+            statistics.globalSolverFallbackPassCount = 1;
+        }
+    }
     std::vector<float> confidence = anchor_weight;
     std::vector<std::vector<int>> neighbors(vertex_count);
     for (const Triangle &face : mesh->faces)
@@ -395,7 +956,9 @@ VisualHullDepthRefineStatistics VisualHullDepthRefiner::refine(
             adjacent.end());
     }
     const int regularization_iterations =
-        std::clamp(options.regularizationIterations, 0, 100);
+        use_legacy_regularization
+        ? std::clamp(options.regularizationIterations, 0, 100)
+        : 0;
     const float regularization_weight =
         std::clamp(options.regularizationWeight, 0.0f, 20.0f);
     const float propagation_decay =

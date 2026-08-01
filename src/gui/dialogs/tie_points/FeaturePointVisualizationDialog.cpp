@@ -1,6 +1,6 @@
 // =============================================================================
 // 文件: FeaturePointVisualizationDialog.cpp
-// 功能: 特征点可视化配置对话框实现
+// 功能: 匹配观测可视化配置对话框实现
 // 职责:
 //   - setupUi()         : 构建所有控件和分组布局
 //   - setupConnections(): 连接控件变化信号到更新/颜色选择槽
@@ -24,43 +24,14 @@
 #include <QComboBox>
 #include <QColorDialog>
 
-FeaturePointVisualizationDialog::FeaturePointVisualizationDialog(const QStringList &availableSuffixes,
-                                                                 QWidget *parent)
+FeaturePointVisualizationDialog::FeaturePointVisualizationDialog(QWidget *parent)
     : QDialog(parent)
 {
     setupUi();
-    if (!availableSuffixes.isEmpty())
-    {
-        _suffixCombo->addItems(availableSuffixes);
-    }
     setupConnections();
 }
 
 FeaturePointVisualizationDialog::~FeaturePointVisualizationDialog() = default;
-
-QString FeaturePointVisualizationDialog::currentSuffix() const
-{
-    return _suffixCombo->currentText();
-}
-
-void FeaturePointVisualizationDialog::setCurrentSuffix(const QString &suffix)
-{
-    const int idx = _suffixCombo->findText(suffix);
-    if (idx >= 0)
-        _suffixCombo->setCurrentIndex(idx);
-}
-
-void FeaturePointVisualizationDialog::setAvailableSuffixes(const QStringList &suffixes)
-{
-    const QString current = _suffixCombo->currentText();
-    _suffixCombo->blockSignals(true);
-    _suffixCombo->clear();
-    _suffixCombo->addItems(suffixes);
-    const int idx = _suffixCombo->findText(current);
-    if (idx >= 0)
-        _suffixCombo->setCurrentIndex(idx);
-    _suffixCombo->blockSignals(false);
-}
 
 // setupUi: 构建对话框全部控件和分组布局
 // 布局结构（从上到下）：
@@ -75,7 +46,6 @@ void FeaturePointVisualizationDialog::setupUi()
     Ui::FeaturePointVisualizationDialog ui;
     ui.setupUi(this);
 
-    _suffixCombo = ui.m_suffixCombo;
     _showPointsChk = ui.m_showPointsChk;
     _showScaleChk = ui.m_showScaleChk;
     _showOrientationChk = ui.m_showOrientationChk;
@@ -117,12 +87,6 @@ void FeaturePointVisualizationDialog::setupUi()
 // 底部按钮 → 对应槽函数
 void FeaturePointVisualizationDialog::setupConnections()
 {
-    // 特征文件后缀切换 → 通知外部
-    connect(_suffixCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, [this]() {
-        emit featureSuffixChanged(_suffixCombo->currentText());
-    });
-
     // 显示选项变化 → 实时刷新预览文字
     connect(_showPointsChk, &QCheckBox::toggled, this, &FeaturePointVisualizationDialog::updatePreview);
     connect(_showScaleChk, &QCheckBox::toggled, this, &FeaturePointVisualizationDialog::updatePreview);

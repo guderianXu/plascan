@@ -1,0 +1,106 @@
+set(_plascan_runtime_source "@PLASCAN_WINDOWS_RUNTIME_DIR@")
+set(_plascan_executable "${_plascan_runtime_source}/plascan.exe")
+
+if(NOT IS_DIRECTORY "${_plascan_runtime_source}")
+  message(FATAL_ERROR
+    "PlaScan Windows runtime directory does not exist: ${_plascan_runtime_source}")
+endif()
+
+if(NOT EXISTS "${_plascan_executable}")
+  message(FATAL_ERROR
+    "PlaScan executable does not exist: ${_plascan_executable}")
+endif()
+
+set(_plascan_plugin_groups
+  platforms
+  imageformats
+  iconengines
+  styles
+  tls
+  sqldrivers)
+
+set(_plascan_plugin_dlls)
+foreach(_plascan_plugin_group IN LISTS _plascan_plugin_groups)
+  set(_plascan_plugin_source
+    "${_plascan_runtime_source}/${_plascan_plugin_group}")
+  if(NOT IS_DIRECTORY "${_plascan_plugin_source}")
+    continue()
+  endif()
+
+  file(GLOB _plascan_plugin_group_dlls
+    LIST_DIRECTORIES false
+    "${_plascan_plugin_source}/*.dll")
+  if(_plascan_plugin_group_dlls)
+    file(INSTALL
+      DESTINATION
+        "${CMAKE_INSTALL_PREFIX}/plugins/${_plascan_plugin_group}"
+      TYPE FILE
+      FILES ${_plascan_plugin_group_dlls})
+    list(APPEND _plascan_plugin_dlls ${_plascan_plugin_group_dlls})
+  endif()
+endforeach()
+
+file(GET_RUNTIME_DEPENDENCIES
+  EXECUTABLES "${_plascan_executable}"
+  LIBRARIES ${_plascan_plugin_dlls}
+  RESOLVED_DEPENDENCIES_VAR _plascan_runtime_dlls
+  UNRESOLVED_DEPENDENCIES_VAR _plascan_unresolved_dlls
+  DIRECTORIES "${_plascan_runtime_source}"
+  PRE_EXCLUDE_REGEXES
+    "api-ms-win-.*"
+    "ext-ms-win-.*"
+  POST_EXCLUDE_REGEXES
+    ".*[/\\\\]Windows[/\\\\]System32[/\\\\].*"
+    ".*[/\\\\]WINDOWS[/\\\\]system32[/\\\\].*")
+
+if(_plascan_unresolved_dlls)
+  list(JOIN _plascan_unresolved_dlls ", " _plascan_unresolved_text)
+  message(FATAL_ERROR
+    "Unresolved PlaScan Windows runtime dependencies: "
+    "${_plascan_unresolved_text}")
+endif()
+
+# Vulkan, cuDNN and NVRTC load parts of their runtime dynamically, so PE
+# import-table traversal cannot discover these files.
+set(_plascan_dynamic_runtime_patterns
+  "cudnn*.dll"
+  "nvfatbin*.dll"
+  "nvrtc-builtins*.dll"
+  "nvToolsExt*.dll"
+  "vulkan-1.dll")
+foreach(_plascan_dynamic_pattern IN LISTS _plascan_dynamic_runtime_patterns)
+  file(GLOB _plascan_dynamic_runtime_dlls
+    LIST_DIRECTORIES false
+    "${_plascan_runtime_source}/${_plascan_dynamic_pattern}")
+  list(APPEND _plascan_runtime_dlls ${_plascan_dynamic_runtime_dlls})
+endforeach()
+
+list(REMOVE_DUPLICATES _plascan_runtime_dlls)
+list(SORT _plascan_runtime_dlls)
+
+if(NOT _plascan_runtime_dlls)
+  message(FATAL_ERROR
+    "No Windows runtime DLLs resolved for: ${_plascan_executable}")
+endif()
+
+if(NOT EXISTS "${_plascan_runtime_source}/vulkan-1.dll")
+  message(FATAL_ERROR
+    "Vulkan loader was not found in: ${_plascan_runtime_source}")
+endif()
+
+file(INSTALL
+  DESTINATION "${CMAKE_INSTALL_PREFIX}/bin"
+  TYPE FILE
+  FILES ${_plascan_runtime_dlls})
+
+if(NOT EXISTS
+    "${CMAKE_INSTALL_PREFIX}/plugins/platforms/qwindows.dll")
+  message(FATAL_ERROR
+    "Qt Windows platform plugin was not bundled: "
+    "${CMAKE_INSTALL_PREFIX}/plugins/platforms/qwindows.dll")
+endif()
+
+list(LENGTH _plascan_runtime_dlls _plascan_runtime_dll_count)
+message(STATUS
+  "Bundled ${_plascan_runtime_dll_count} resolved Windows runtime DLLs from "
+  "${_plascan_runtime_source}")

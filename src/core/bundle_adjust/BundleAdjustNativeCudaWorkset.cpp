@@ -145,12 +145,15 @@ WorksetBuildResult buildWorkset(const std::vector<Camera> &cameras,
         return result;
     }
 
+    // 相机保持原始顺序，观测中的 cameraIndex 因而无需重映射。
     result.workset.cameras.reserve(cameras.size());
     for (size_t i = 0; i < cameras.size(); ++i)
     {
         result.workset.cameras.push_back(makeHostCamera(cameras[i], static_cast<int>(i), options));
     }
 
+    // 三维点会压缩掉无效 track；originalTrackToPoint 保证下载后仍能构造与输入
+    // tracks 等长、索引稳定的 BAResult::points。
     result.workset.originalTrackToPoint.assign(tracks.size(), -1);
     for (size_t trackIndex = 0; trackIndex < tracks.size(); ++trackIndex)
     {
@@ -180,6 +183,8 @@ WorksetBuildResult buildWorkset(const std::vector<Camera> &cameras,
 
         const int pointIndex = static_cast<int>(result.workset.points.size());
 
+        // 同一点的观测连续追加。CUDA 点块求解可通过 begin/count 顺序扫描，
+        // 不需要在设备端建立间接链表或原子聚合。
         HostPoint point;
         point.xyz = track.initialPoint;
         point.originalTrackIndex = static_cast<int>(trackIndex);

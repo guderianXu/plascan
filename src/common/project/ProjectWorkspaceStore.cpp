@@ -2,7 +2,6 @@
 
 #include "project/PlascanArchive.h"
 #include "project/ProjectChunkStore.h"
-#include "project/ProjectResourceStore.h"
 #include "project/ProjectPackageLayout.h"
 #include "project/PortableProjectFormat.h"
 #include "project/ProjectIO.h"
@@ -25,6 +24,9 @@ using xjw::common::project::ProjectIO;
 using xjw::common::project::ProjectPackageLayout;
 using xjw::common::project::ProjectResourceIndex;
 using xjw::common::project::ProjectResourceRef;
+
+constexpr auto ChunkEntryPrefix = "chunk/";
+constexpr auto LegacyWorkspaceEntryPrefix = "workspace/";
 
 void setError(QString *errorMessage, const QString &message)
 {
@@ -195,7 +197,30 @@ bool copyTree(const QString &source,
     return true;
 }
 
-QString workspaceUri(const QString &runtimeRoot, const QString &path)
+bool isChunkEntry(const QString &entryPath)
+{
+    return entryPath.startsWith(QString::fromLatin1(ChunkEntryPrefix))
+        || entryPath.startsWith(
+            QString::fromLatin1(LegacyWorkspaceEntryPrefix));
+}
+
+QString chunkRelativePath(const QString &entryPath)
+{
+    if (entryPath.startsWith(QString::fromLatin1(ChunkEntryPrefix)))
+    {
+        return entryPath.mid(
+            static_cast<int>(qstrlen(ChunkEntryPrefix)));
+    }
+    if (entryPath.startsWith(
+            QString::fromLatin1(LegacyWorkspaceEntryPrefix)))
+    {
+        return entryPath.mid(
+            static_cast<int>(qstrlen(LegacyWorkspaceEntryPrefix)));
+    }
+    return {};
+}
+
+QString chunkUri(const QString &runtimeRoot, const QString &path)
 {
     const QString relative =
         QDir::fromNativeSeparators(QDir(runtimeRoot).relativeFilePath(path));
@@ -205,7 +230,7 @@ QString workspaceUri(const QString &runtimeRoot, const QString &path)
         return {};
     }
     return PortableProjectFormat::resourceUriForEntry(
-        QStringLiteral("workspace/%1").arg(relative));
+        QStringLiteral("chunk/%1").arg(relative));
 }
 
 QString projectUri(const QString &runtimeRoot,
@@ -214,7 +239,7 @@ QString projectUri(const QString &runtimeRoot,
 {
     if (isPathWithin(path, runtimeRoot))
     {
-        return workspaceUri(runtimeRoot, path);
+        return chunkUri(runtimeRoot, path);
     }
     if (isPathWithin(path, dataRoot))
     {
@@ -324,8 +349,16 @@ QJsonValue portableValue(const QJsonValue &value,
         PortableProjectFormat::entryPathFromResourceUri(text);
     if (!existingEntry.isEmpty())
     {
-        if (existingEntry.startsWith(QStringLiteral("workspace/"))
-            || existingEntry.startsWith(QStringLiteral("shared/")))
+        if (isChunkEntry(existingEntry))
+        {
+            const QString normalizedEntry =
+                QStringLiteral("chunk/%1")
+                    .arg(chunkRelativePath(existingEntry));
+            referencedEntries->insert(normalizedEntry);
+            return PortableProjectFormat::resourceUriForEntry(
+                normalizedEntry);
+        }
+        if (existingEntry.startsWith(QStringLiteral("shared/")))
         {
             referencedEntries->insert(existingEntry);
         }
@@ -429,9 +462,9 @@ QJsonValue materializedValue(const QJsonValue &value,
     const QString entry =
         PortableProjectFormat::entryPathFromResourceUri(value.toString());
     QString path;
-    if (entry.startsWith(QStringLiteral("workspace/")))
+    if (isChunkEntry(entry))
     {
-        path = QDir(runtimeRoot).filePath(entry.mid(10));
+        path = QDir(runtimeRoot).filePath(chunkRelativePath(entry));
     }
     else if (entry.startsWith(QStringLiteral("shared/")))
     {
@@ -449,8 +482,10 @@ QJsonValue materializedValue(const QJsonValue &value,
 
 } // namespace
 
-ProjectWorkspaceStore::ProjectWorkspaceStore(const QString &projectPath)
-    : _projectPath(QDir::cleanPath(QFileInfo(projectPath).absoluteFilePath()))
+ProjectWorkspaceStore::ProjectWorkspaceStore(const QString &projectPath,
+                                             int chunkDirectory)
+    : _projectPath(QDir::cleanPath(QFileInfo(projectPath).absoluteFilePath())),
+      _chunkDirectory(chunkDirectory)
 {
 }
 
@@ -471,8 +506,69 @@ QString ProjectWorkspaceStore::runtimeRoot(QString *errorMessage) const
     {
         return {};
     }
-    return ProjectChunkStore(_projectPath)
-        .defaultChunkDirectory(errorMessage);
+    ProjectChunkStore chunkStore(_projectPath);
+    if (_chunkDirectory <= 0)
+    {
+        return chunkStore.defaultChunkDirectory(errorMessage);
+    }
+
+    bool found = false;
+    for (const auto &chunk : chunkStore.chunks(errorMessage))
+    {
+        if (chunk.directory == _chunkDirectory)
+        {
+            found = true;
+            break;
+        }
+    }
+    if (!found)
+    {
+        setError(errorMessage,
+                 QStringLiteral("项目中不存在 Chunk 数字目录: %1")
+                     .arg(_chunkDirectory));
+        return {};
+    }
+    return ProjectPackageLayout::chunkDirectory(
+        _projectPath, _chunkDirectory);
+}
+
+bool ProjectWorkspaceStore::loadResourceIndex(
+    ProjectResourceIndex *index,
+    QString *errorMessage) const
+{
+    if (!index)
+    {
+        setError(errorMessage, QStringLiteral("资源索引输出参数为空"));
+        return false;
+    }
+
+    ProjectChunkStore chunkStore(_projectPath);
+    QJsonObject chunkDocument;
+    const bool loaded = _chunkDirectory > 0
+        ? chunkStore.readChunkDocument(
+              _chunkDirectory, &chunkDocument, errorMessage)
+        : chunkStore.readDefaultChunkDocument(
+              &chunkDocument, errorMessage);
+    if (!loaded)
+    {
+        return false;
+    }
+
+    QString indexError;
+    const ProjectResourceIndex parsed =
+        ProjectResourceIndex::fromJson(
+            chunkDocument.value(
+                QString::fromLatin1(
+                    PortableProjectFormat::ResourceIndexSection))
+                .toObject(),
+            &indexError);
+    if (!indexError.isEmpty())
+    {
+        setError(errorMessage, indexError);
+        return false;
+    }
+    *index = parsed;
+    return true;
 }
 
 bool ProjectWorkspaceStore::initializeRuntime(QString *runtimeRootOut,
@@ -494,8 +590,7 @@ bool ProjectWorkspaceStore::initializeRuntime(QString *runtimeRootOut,
     }
 
     ProjectResourceIndex index;
-    ProjectResourceStore resourceStore(_projectPath);
-    if (!resourceStore.loadIndex(&index, errorMessage))
+    if (!loadResourceIndex(&index, errorMessage))
     {
         return false;
     }
@@ -504,15 +599,15 @@ bool ProjectWorkspaceStore::initializeRuntime(QString *runtimeRootOut,
         ProjectPackageLayout::dataDirectory(_projectPath);
     for (const ProjectResourceRef &resource : index.resources())
     {
-        if (resource.kind != QStringLiteral("workspace")
+        if (resource.kind != QStringLiteral("chunk")
+            && resource.kind != QStringLiteral("workspace")
             && resource.kind != QStringLiteral("shared_image"))
         {
             continue;
         }
         const bool shared =
             resource.entryPath.startsWith(QStringLiteral("shared/"));
-        if (!shared
-            && !resource.entryPath.startsWith(QStringLiteral("workspace/")))
+        if (!shared && !isChunkEntry(resource.entryPath))
         {
             setError(errorMessage,
                      QStringLiteral("工程资源路径无效: %1")
@@ -521,7 +616,8 @@ bool ProjectWorkspaceStore::initializeRuntime(QString *runtimeRootOut,
         }
         const QString destination = PortableProjectFormat::resolveEntryPath(
             shared ? dataRoot : root,
-            shared ? resource.entryPath : resource.entryPath.mid(10),
+            shared ? resource.entryPath
+                   : chunkRelativePath(resource.entryPath),
             errorMessage);
         if (destination.isEmpty())
         {
@@ -579,10 +675,15 @@ bool ProjectWorkspaceStore::prepareSplitMetadata(
         return false;
     }
 
-    QString root = ProjectIO::registeredRuntimeRoot(_projectPath);
-    if (root.isEmpty()
-        && !initializeRuntime(&root, errorMessage))
+    const QString root = runtimeRoot(errorMessage);
+    if (root.isEmpty())
     {
+        return false;
+    }
+    if (!QDir().mkpath(root))
+    {
+        setError(errorMessage,
+                 QStringLiteral("无法创建当前 Chunk 目录: %1").arg(root));
         return false;
     }
 
@@ -616,9 +717,8 @@ bool ProjectWorkspaceStore::prepareSplitMetadata(
         return false;
     }
 
-    ProjectResourceStore resourceStore(_projectPath);
     ProjectResourceIndex oldIndex;
-    if (!resourceStore.loadIndex(&oldIndex, errorMessage))
+    if (!loadResourceIndex(&oldIndex, errorMessage))
     {
         return false;
     }
@@ -626,7 +726,8 @@ bool ProjectWorkspaceStore::prepareSplitMetadata(
     QMap<QString, ProjectResourceRef> oldProjectFiles;
     for (const ProjectResourceRef &resource : oldIndex.resources())
     {
-        if (resource.kind == QStringLiteral("workspace")
+        if (resource.kind == QStringLiteral("chunk")
+            || resource.kind == QStringLiteral("workspace")
             || resource.kind == QStringLiteral("shared_image"))
         {
             oldProjectFiles.insert(resource.entryPath, resource);
@@ -645,7 +746,7 @@ bool ProjectWorkspaceStore::prepareSplitMetadata(
             entryPath.startsWith(QStringLiteral("shared/"));
         const QString relative = shared
             ? entryPath
-            : entryPath.mid(QStringLiteral("workspace/").size());
+            : chunkRelativePath(entryPath);
         const QString path = PortableProjectFormat::resolveEntryPath(
             shared ? dataRoot : root,
             relative,
@@ -679,11 +780,11 @@ bool ProjectWorkspaceStore::prepareSplitMetadata(
         ProjectResourceRef resource;
         resource.id = QStringLiteral("%1-%2")
             .arg(shared ? QStringLiteral("shared-image")
-                        : QStringLiteral("workspace"),
+                        : QStringLiteral("chunk"),
                  stableToken(entryPath));
         resource.kind = shared
             ? QStringLiteral("shared_image")
-            : QStringLiteral("workspace");
+            : QStringLiteral("chunk");
         resource.name = info.fileName();
         resource.entryPath = entryPath;
         resource.sha256 = checksum;

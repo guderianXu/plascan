@@ -18,6 +18,7 @@ double percentile(std::vector<double> values, double ratio)
     }
 
     ratio = std::clamp(ratio, 0.0, 1.0);
+    // 使用 nearest-rank 风格的离散百分位，并以 nth_element 避免完整排序。
     const auto index = static_cast<std::size_t>(
         std::round(ratio * static_cast<double>(values.size() - 1)));
     std::nth_element(values.begin(), values.begin() + static_cast<std::ptrdiff_t>(index), values.end());
@@ -57,6 +58,8 @@ double pointGridCoverage(const SfmQualityPoint &point, const SfmQualityMetricsOp
         return 0.0;
     }
 
+    // 该指标衡量单个物点的观测在各影像坐标中的分布，不把 imageId 拼入 cell。
+    // 它用于发现观测长期集中于影像局部的弱网络，不能替代每相机覆盖率报告。
     std::set<int> occupiedCells;
     for (const SfmQualityObservation &observation : point.observations)
     {
@@ -104,6 +107,7 @@ SfmQualityMetrics computeSfmQualityMetrics(const std::vector<SfmQualityPoint> &p
     triangulationAngles.reserve(points.size());
     coverages.reserve(points.size());
 
+    // 阶段 1：单次遍历产生计数、直方图和数值样本，保证候选模型排序开销线性。
     for (const SfmQualityPoint &point : points)
     {
         const int trackLength = std::max(0, point.trackLength);
@@ -142,6 +146,8 @@ SfmQualityMetrics computeSfmQualityMetrics(const std::vector<SfmQualityPoint> &p
     metrics.triangulationAngle = summarize(triangulationAngles);
     metrics.observationGridCoverageMean = summarize(coverages).mean;
 
+    // 阶段 2：把原始计数归一化为 MVS 门控比例。空点云不通过上游生产条件，
+    // 此函数中比例按 0 处理，避免除零和制造 NaN JSON。
     const double registeredRatio = metrics.totalImageCount > 0
         ? static_cast<double>(metrics.registeredImageCount) / static_cast<double>(metrics.totalImageCount)
         : 0.0;
@@ -155,6 +161,7 @@ SfmQualityMetrics computeSfmQualityMetrics(const std::vector<SfmQualityPoint> &p
         ? static_cast<double>(metrics.weakTriangulationAngleCount) / static_cast<double>(metrics.pointCount)
         : 0.0;
 
+    // 阶段 3：warnings 是阻塞条件，advisories 只改变状态为 warn。
     if (metrics.totalImageCount > 0 && registeredRatio < options.minRegisteredImageRatioForMvs)
     {
         metrics.qualityWarnings.push_back("low_registered_image_coverage");

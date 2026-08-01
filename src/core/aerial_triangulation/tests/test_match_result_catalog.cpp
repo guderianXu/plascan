@@ -1,785 +1,173 @@
-#include <gtest/gtest.h>
-
+#include "ImageMatchRepository.h"
 #include "preparation/MatchResultCatalog.h"
 
-#include <QDataStream>
-#include <QDateTime>
 #include <QDir>
 #include <QFile>
-#include <QFileInfo>
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QPair>
-#include <QSet>
 #include <QTemporaryDir>
+
+#include <gtest/gtest.h>
 
 namespace
 {
 
-QString writeSgmtMatch(const QString &directory,
-                       const QString &fileName,
-                       const QString &imageA,
-                       const QString &imageB,
-                       int matchCount,
-                       const QDateTime &modifiedTime = QDateTime(),
-                       quint32 version = 2)
+QString createImage(const QString &directory, const QString &name)
 {
-    const QString path = QDir(directory).filePath(fileName);
+    const QString path = QDir(directory).filePath(name);
     QFile file(path);
-    EXPECT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
-
-    QDataStream out(&file);
-    out.setVersion(QDataStream::Qt_5_15);
-    out.writeRawData("SGMT", 4);
-    out << version;
-
-    const QByteArray imageABytes = imageA.toUtf8();
-    const QByteArray imageBBytes = imageB.toUtf8();
-    out << quint32(imageABytes.size());
-    out.writeRawData(imageABytes.constData(), imageABytes.size());
-    out << quint32(imageBBytes.size());
-    out.writeRawData(imageBBytes.constData(), imageBBytes.size());
-
-    out << qint32(matchCount);
-    out << qint32(matchCount);
-    out << qint32(matchCount);
-
-    for (int i = 0; i < matchCount; ++i)
-    {
-        out << qint32(i);
-        out << float(1.0f);
-    }
-    for (int i = 0; i < matchCount; ++i)
-    {
-        out << qint32(i);
-        out << float(1.0f);
-    }
-
+    EXPECT_TRUE(file.open(QIODevice::WriteOnly));
+    EXPECT_EQ(file.write(name.toUtf8()), name.toUtf8().size());
     file.close();
-    if (modifiedTime.isValid())
-    {
-        QFile timeFile(path);
-        EXPECT_TRUE(timeFile.open(QIODevice::ReadWrite));
-        EXPECT_TRUE(timeFile.setFileTime(modifiedTime, QFileDevice::FileModificationTime));
-    }
-
     return path;
 }
 
-QString writeInvalidMatch(const QString &directory, const QString &fileName)
+xjw::image_matching::PairMatchData makePair(const QString &image0,
+                                             const QString &image1,
+                                             const QByteArray &fingerprint,
+                                             std::uint32_t raw_count,
+                                             std::uint32_t inlier_count,
+                                             std::int64_t created_time)
 {
-    const QString path = QDir(directory).filePath(fileName);
-    QFile file(path);
-    EXPECT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
-    file.write("BAD!");
-    return path;
-}
+    using namespace xjw::image_matching;
 
-void writeSidecar(const QString &matchPath,
-                  const QString &imageA,
-                  const QString &imageB,
-                  const QString &featureAlgorithm,
-                  const QString &matchAlgorithm,
-                  int matchCount,
-                  int geometricInliers,
-                  bool includeInlierStats = true)
-{
-    QJsonArray indices0;
-    QJsonArray indices1;
-    QJsonArray scores;
-    for (int i = 0; i < matchCount; ++i)
-    {
-        indices0.append(i);
-        indices1.append(i);
-        scores.append(1.0);
-    }
+    PairMatchData pair;
+    pair.image0 = ImageMatchFile::identityForImage(image0, 640, 480);
+    pair.image1 = ImageMatchFile::identityForImage(image1, 640, 480);
+    pair.algorithmId = QStringLiteral("sift_lightglue");
+    pair.algorithmVersion = 1;
+    pair.configFingerprint = fingerprint;
+    pair.modelFingerprint = QByteArrayLiteral("engine-sha256");
+    pair.createdTimeMs = created_time;
+    pair.rawMatchCount = raw_count;
+    pair.geometryInlierCount = inlier_count;
+    pair.tiePointMatchCount = inlier_count;
+    pair.geometryPassed = inlier_count > 0;
+    pair.geometryModel = GeometryModel::Fundamental;
 
-    QJsonObject sidecar;
-    sidecar.insert(QStringLiteral("match_file"), matchPath);
-    sidecar.insert(QStringLiteral("image0_name"), QFileInfo(imageA).fileName());
-    sidecar.insert(QStringLiteral("image1_name"), QFileInfo(imageB).fileName());
-    sidecar.insert(QStringLiteral("image0_path"), imageA);
-    sidecar.insert(QStringLiteral("image1_path"), imageB);
-    sidecar.insert(QStringLiteral("feature0_path"), imageA + QStringLiteral(".sp"));
-    sidecar.insert(QStringLiteral("feature1_path"), imageB + QStringLiteral(".sp"));
-    sidecar.insert(QStringLiteral("sp0_path"), imageA + QStringLiteral(".sp"));
-    sidecar.insert(QStringLiteral("sp1_path"), imageB + QStringLiteral(".sp"));
-    sidecar.insert(QStringLiteral("feature_algorithm"), featureAlgorithm);
-    sidecar.insert(QStringLiteral("match_algorithm"), matchAlgorithm);
-    sidecar.insert(QStringLiteral("feature_format_version"), 2);
-    sidecar.insert(QStringLiteral("num_matches"), matchCount);
-    if (includeInlierStats)
-    {
-        sidecar.insert(QStringLiteral("geometric_inlier_count"), geometricInliers);
-    }
-    sidecar.insert(QStringLiteral("matched_indices0"), indices0);
-    sidecar.insert(QStringLiteral("matched_indices1"), indices1);
-    sidecar.insert(QStringLiteral("matched_scores"), scores);
-
-    QFile file(matchPath + QStringLiteral(".json"));
-    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
-    file.write(QJsonDocument(sidecar).toJson(QJsonDocument::Compact));
-}
-
-const xjw::aerial_triangulation::MatchPairGroup *findGroup(const xjw::aerial_triangulation::MatchResultCatalogSummary &summary,
-                                               const QString &imageA,
-                                               const QString &imageB)
-{
-    const QString key = xjw::aerial_triangulation::MatchResultCatalog::canonicalPairKey(imageA, imageB);
-    const auto it = std::find_if(summary.pairGroups.begin(), summary.pairGroups.end(),
-                                 [&](const xjw::aerial_triangulation::MatchPairGroup &group)
-    {
-        return group.pairKey == key;
-    });
-    return it == summary.pairGroups.end() ? nullptr : &(*it);
+    PairCorrespondence correspondence;
+    correspondence.observation0 = {7, 10.0f, 20.0f, 1.5f, 0.2f, 0.8f};
+    correspondence.observation1 = {9, 12.0f, 21.0f, 1.7f, 0.3f, 0.9f};
+    correspondence.confidence = 0.95f;
+    correspondence.residualPixels = 0.4f;
+    correspondence.flags = MatchRecordFlag::GeometryInlier |
+        MatchRecordFlag::InTiePointTrack;
+    pair.correspondences.push_back(correspondence);
+    return pair;
 }
 
 } // namespace
 
-TEST(MatchResultCatalogTest, GroupsAlgorithmVariantsForSameImagePair)
+TEST(MatchResultCatalogTest, ScansPerImageShardsWithoutDuplicatingSymmetricPair)
 {
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+    const QString image_a = createImage(temporary.path(), QStringLiteral("A.png"));
+    const QString image_b = createImage(temporary.path(), QStringLiteral("B.png"));
+    const QString match_directory = QDir(temporary.path()).filePath(QStringLiteral("matches"));
 
-    const QString imageA = QDir(tempDir.path()).filePath(QStringLiteral("image_A.tif"));
-    const QString imageB = QDir(tempDir.path()).filePath(QStringLiteral("image_B.tif"));
-    const QString imageC = QDir(tempDir.path()).filePath(QStringLiteral("image_C.tif"));
+    xjw::image_matching::ImageMatchRepository repository(match_directory);
+    const auto write_result = repository.writePairs(
+        {makePair(image_a, image_b, QByteArrayLiteral("config-a"), 120, 90, 1000)},
+        false);
+    ASSERT_TRUE(write_result.success) << write_result.errorMessage.toStdString();
+    ASSERT_EQ(write_result.imageCount, 2);
 
-    const QString supergluePath = writeSgmtMatch(tempDir.path(),
-                                                 QStringLiteral("image_A__image_B_superglue.match"),
-                                                 imageA,
-                                                 imageB,
-                                                 100);
-    writeSidecar(supergluePath, imageA, imageB, QStringLiteral("superpoint"), QStringLiteral("superglue"), 100, 45);
-
-    const QString lightgluePath = writeSgmtMatch(tempDir.path(),
-                                                 QStringLiteral("image_B__image_A_lightglue.match"),
-                                                 imageB,
-                                                 imageA,
-                                                 120);
-    writeSidecar(lightgluePath, imageB, imageA, QStringLiteral("disk"), QStringLiteral("lightglue"), 120, 40);
-
-    const QString otherPath = writeSgmtMatch(tempDir.path(),
-                                             QStringLiteral("image_A__image_C_superglue.match"),
-                                             imageA,
-                                             imageC,
-                                             90);
-    writeSidecar(otherPath, imageA, imageC, QStringLiteral("superpoint"), QStringLiteral("superglue"), 90, 30);
-
+    int last_processed = 0;
+    int last_total = 0;
     xjw::aerial_triangulation::MatchResultCatalogConfig config;
-    config.matchDirectory = tempDir.path();
-    const xjw::aerial_triangulation::MatchResultCatalogSummary summary =
-        xjw::aerial_triangulation::MatchResultCatalog(config).scan();
-
-    EXPECT_EQ(summary.matchFileCount, 3);
-    EXPECT_EQ(summary.variantCount, 3);
-    EXPECT_EQ(summary.compatibleVariantCount, 3);
-    ASSERT_EQ(summary.pairGroups.size(), 2);
-
-    const xjw::aerial_triangulation::MatchPairGroup *group = findGroup(summary, imageA, imageB);
-    ASSERT_NE(group, nullptr);
-    ASSERT_EQ(group->variants.size(), 2);
-    ASSERT_GE(group->bestVariantIndex, 0);
-    ASSERT_LT(group->bestVariantIndex, group->variants.size());
-
-    const xjw::aerial_triangulation::MatchVariant &best = group->variants.at(group->bestVariantIndex);
-    EXPECT_EQ(best.matchFilePath, QFileInfo(supergluePath).absoluteFilePath());
-    EXPECT_EQ(best.featureAlgorithm, QStringLiteral("superpoint"));
-    EXPECT_EQ(best.matchAlgorithm, QStringLiteral("superglue"));
-    EXPECT_EQ(best.totalMatches, 100);
-    EXPECT_EQ(best.geometricVerifiedInliers, 45);
-    EXPECT_TRUE(best.compatible);
-    EXPECT_EQ(best.status, QStringLiteral("compatible"));
-}
-
-TEST(MatchResultCatalogTest, TargetImagePathFiltersUnrelatedVariantsBeforeParsingSidecars)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    const QString targetA = QDir(tempDir.path()).filePath(QStringLiteral("target_A.tif"));
-    const QString targetB = QDir(tempDir.path()).filePath(QStringLiteral("target_B.tif"));
-    const QString unrelatedC = QDir(tempDir.path()).filePath(QStringLiteral("unrelated_C.tif"));
-    const QString unrelatedD = QDir(tempDir.path()).filePath(QStringLiteral("unrelated_D.tif"));
-
-    const QString targetPath = writeSgmtMatch(tempDir.path(),
-                                             QStringLiteral("target_A__target_B_lightglue.match"),
-                                             targetA,
-                                             targetB,
-                                             64);
-    writeSidecar(targetPath, targetA, targetB, QStringLiteral("disk"), QStringLiteral("lightglue"), 64, 32);
-
-    const QString unrelatedPath = writeSgmtMatch(tempDir.path(),
-                                                QStringLiteral("unrelated_C__unrelated_D_lightglue.match"),
-                                                unrelatedC,
-                                                unrelatedD,
-                                                96);
-    QFile unrelatedSidecar(unrelatedPath + QStringLiteral(".json"));
-    ASSERT_TRUE(unrelatedSidecar.open(QIODevice::WriteOnly | QIODevice::Truncate));
-    unrelatedSidecar.write("{ not valid json");
-
-    xjw::aerial_triangulation::MatchResultCatalogConfig config;
-    config.matchDirectory = tempDir.path();
-    config.targetImagePath = targetA;
-    const xjw::aerial_triangulation::MatchResultCatalogSummary summary =
-        xjw::aerial_triangulation::MatchResultCatalog(config).scan();
-
-    EXPECT_EQ(summary.matchFileCount, 1);
-    EXPECT_EQ(summary.variantCount, 1);
-    EXPECT_EQ(summary.compatibleVariantCount, 1);
-    EXPECT_EQ(summary.incompatibleVariantCount, 0);
-    ASSERT_EQ(summary.pairGroups.size(), 1);
-    EXPECT_NE(findGroup(summary, targetA, targetB), nullptr);
-    EXPECT_EQ(findGroup(summary, unrelatedC, unrelatedD), nullptr);
-}
-
-TEST(MatchResultCatalogTest, TargetImagePathsFilterCurrentProjectPairsBeforeParsingSidecars)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    const QString imageA = QDir(tempDir.path()).filePath(QStringLiteral("project_A.tif"));
-    const QString imageB = QDir(tempDir.path()).filePath(QStringLiteral("project_B.tif"));
-    const QString unrelatedC = QDir(tempDir.path()).filePath(QStringLiteral("unrelated_C.tif"));
-    const QString unrelatedD = QDir(tempDir.path()).filePath(QStringLiteral("unrelated_D.tif"));
-
-    const QString projectPath = writeSgmtMatch(tempDir.path(),
-                                               QStringLiteral("project_A__project_B_lightglue.match"),
-                                               imageA,
-                                               imageB,
-                                               48);
-    writeSidecar(projectPath, imageA, imageB, QStringLiteral("sift"), QStringLiteral("lightglue"), 48, 24);
-
-    const QString unrelatedPath = writeSgmtMatch(tempDir.path(),
-                                                 QStringLiteral("unrelated_C__unrelated_D_lightglue.match"),
-                                                 unrelatedC,
-                                                 unrelatedD,
-                                                 96);
-    QFile unrelatedSidecar(unrelatedPath + QStringLiteral(".json"));
-    ASSERT_TRUE(unrelatedSidecar.open(QIODevice::WriteOnly | QIODevice::Truncate));
-    unrelatedSidecar.write("{ not valid json");
-
-    xjw::aerial_triangulation::MatchResultCatalogConfig config;
-    config.matchDirectory = tempDir.path();
-    config.targetImagePaths = QStringList{imageA, imageB};
-    const xjw::aerial_triangulation::MatchResultCatalogSummary summary =
-        xjw::aerial_triangulation::MatchResultCatalog(config).scan();
-
-    EXPECT_EQ(summary.matchFileCount, 1);
-    EXPECT_EQ(summary.variantCount, 1);
-    EXPECT_EQ(summary.compatibleVariantCount, 1);
-    EXPECT_EQ(summary.incompatibleVariantCount, 0);
-    ASSERT_EQ(summary.pairGroups.size(), 1);
-    EXPECT_NE(findGroup(summary, imageA, imageB), nullptr);
-    EXPECT_EQ(findGroup(summary, unrelatedC, unrelatedD), nullptr);
-}
-
-TEST(MatchResultCatalogTest, ReportsScanProgressForEveryEnumeratedMatchFile)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    const QString imageA = QDir(tempDir.path()).filePath(QStringLiteral("progress_A.tif"));
-    const QString imageB = QDir(tempDir.path()).filePath(QStringLiteral("progress_B.tif"));
-    const QString imageC = QDir(tempDir.path()).filePath(QStringLiteral("progress_C.tif"));
-
-    const QString pathAB = writeSgmtMatch(tempDir.path(),
-                                          QStringLiteral("progress_A__progress_B_lightglue.match"),
-                                          imageA,
-                                          imageB,
-                                          10);
-    writeSidecar(pathAB, imageA, imageB, QStringLiteral("sift"), QStringLiteral("lightglue"), 10, 8);
-    const QString pathAC = writeSgmtMatch(tempDir.path(),
-                                          QStringLiteral("progress_A__progress_C_lightglue.match"),
-                                          imageA,
-                                          imageC,
-                                          12);
-    writeSidecar(pathAC, imageA, imageC, QStringLiteral("sift"), QStringLiteral("lightglue"), 12, 9);
-    const QString pathBC = writeSgmtMatch(tempDir.path(),
-                                          QStringLiteral("progress_B__progress_C_lightglue.match"),
-                                          imageB,
-                                          imageC,
-                                          14);
-    writeSidecar(pathBC, imageB, imageC, QStringLiteral("sift"), QStringLiteral("lightglue"), 14, 11);
-
-    QVector<QPair<int, int>> progress;
-    xjw::aerial_triangulation::MatchResultCatalogConfig config;
-    config.matchDirectory = tempDir.path();
+    config.matchDirectory = match_directory;
     config.progressCallback = [&](int processed, int total)
     {
-        progress.append(qMakePair(processed, total));
+        last_processed = processed;
+        last_total = total;
     };
 
-    const xjw::aerial_triangulation::MatchResultCatalogSummary summary =
-        xjw::aerial_triangulation::MatchResultCatalog(config).scan();
-
-    EXPECT_EQ(summary.matchFileCount, 3);
-    ASSERT_GE(progress.size(), 4);
-    EXPECT_EQ(progress.first(), qMakePair(0, 3));
-    EXPECT_EQ(progress.last(), qMakePair(3, 3));
-    for (int i = 1; i < progress.size(); ++i)
-    {
-        EXPECT_EQ(progress.at(i).second, 3);
-        EXPECT_GE(progress.at(i).first, progress.at(i - 1).first);
-    }
-}
-
-TEST(MatchResultCatalogTest, SelectsBestVariantByInliersThenMatchesThenModifiedTime)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    const QString imageA = QDir(tempDir.path()).filePath(QStringLiteral("left.tif"));
-    const QString imageB = QDir(tempDir.path()).filePath(QStringLiteral("right.tif"));
-    const QDateTime older = QDateTime::fromSecsSinceEpoch(1700000000, Qt::UTC);
-    const QDateTime newer = QDateTime::fromSecsSinceEpoch(1700003600, Qt::UTC);
-
-    const QString lowerInliers = writeSgmtMatch(tempDir.path(),
-                                                QStringLiteral("left__right_low_inliers.match"),
-                                                imageA,
-                                                imageB,
-                                                500,
-                                                newer);
-    writeSidecar(lowerInliers, imageA, imageB, QStringLiteral("superpoint"), QStringLiteral("superglue"), 500, 70);
-
-    const QString fewerMatches = writeSgmtMatch(tempDir.path(),
-                                                QStringLiteral("left__right_fewer_matches.match"),
-                                                imageA,
-                                                imageB,
-                                                120,
-                                                newer);
-    writeSidecar(fewerMatches, imageA, imageB, QStringLiteral("disk"), QStringLiteral("lightglue"), 120, 90);
-
-    const QString olderTie = writeSgmtMatch(tempDir.path(),
-                                            QStringLiteral("left__right_old_tie.match"),
-                                            imageA,
-                                            imageB,
-                                            140,
-                                            older);
-    writeSidecar(olderTie, imageA, imageB, QStringLiteral("aliked"), QStringLiteral("lightglue"), 140, 90);
-
-    const QString expectedBest = writeSgmtMatch(tempDir.path(),
-                                                QStringLiteral("left__right_new_tie.match"),
-                                                imageA,
-                                                imageB,
-                                                140,
-                                                newer);
-    writeSidecar(expectedBest, imageA, imageB, QStringLiteral("sift"), QStringLiteral("bf"), 140, 90);
-
-    xjw::aerial_triangulation::MatchResultCatalogConfig config;
-    config.matchDirectory = tempDir.path();
-    const xjw::aerial_triangulation::MatchResultCatalogSummary summary =
-        xjw::aerial_triangulation::MatchResultCatalog(config).scan();
-
-    ASSERT_EQ(summary.pairGroups.size(), 1);
-    const xjw::aerial_triangulation::MatchPairGroup &group = summary.pairGroups.front();
-    ASSERT_EQ(group.variants.size(), 4);
-    ASSERT_GE(group.bestVariantIndex, 0);
-
-    const xjw::aerial_triangulation::MatchVariant &best = group.variants.at(group.bestVariantIndex);
-    EXPECT_EQ(best.matchFilePath, QFileInfo(expectedBest).absoluteFilePath());
-    EXPECT_EQ(best.geometricVerifiedInliers, 90);
-    EXPECT_EQ(best.totalMatches, 140);
-}
-
-TEST(MatchResultCatalogTest, UsesTotalMatchesAfterEffectiveInlierCount)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    const QString imageA = QDir(tempDir.path()).filePath(QStringLiteral("zero_A.tif"));
-    const QString imageB = QDir(tempDir.path()).filePath(QStringLiteral("zero_B.tif"));
-    const QDateTime older = QDateTime::fromSecsSinceEpoch(1700000000, Qt::UTC);
-    const QDateTime newer = QDateTime::fromSecsSinceEpoch(1700003600, Qt::UTC);
-
-    const QString explicitZeroPath = writeSgmtMatch(tempDir.path(),
-                                                    QStringLiteral("zero_explicit.match"),
-                                                    imageA,
-                                                    imageB,
-                                                    10,
-                                                    older);
-    writeSidecar(explicitZeroPath,
-                 imageA,
-                 imageB,
-                 QStringLiteral("superpoint"),
-                 QStringLiteral("superglue"),
-                 10,
-                 0);
-
-    const QString missingStatsPath = writeSgmtMatch(tempDir.path(),
-                                                    QStringLiteral("zero_missing_stats.match"),
-                                                    imageA,
-                                                    imageB,
-                                                    500,
-                                                    newer);
-    writeSidecar(missingStatsPath,
-                 imageA,
-                 imageB,
-                 QStringLiteral("disk"),
-                 QStringLiteral("lightglue"),
-                 500,
-                 0,
-                 false);
-
-    xjw::aerial_triangulation::MatchResultCatalogConfig config;
-    config.matchDirectory = tempDir.path();
-    const xjw::aerial_triangulation::MatchResultCatalogSummary summary =
-        xjw::aerial_triangulation::MatchResultCatalog(config).scan();
-
-    ASSERT_EQ(summary.pairGroups.size(), 1);
-    const xjw::aerial_triangulation::MatchPairGroup &group = summary.pairGroups.front();
-    ASSERT_EQ(group.variants.size(), 2);
-    ASSERT_GE(group.bestVariantIndex, 0);
-
-    bool sawMissingStats = false;
-    bool sawExplicitStats = false;
-    for (const xjw::aerial_triangulation::MatchVariant &variant : group.variants)
-    {
-        if (variant.matchFilePath == QFileInfo(missingStatsPath).absoluteFilePath())
-        {
-            sawMissingStats = true;
-            EXPECT_FALSE(variant.hasInlierStats);
-            EXPECT_EQ(variant.geometricVerifiedInliers, 0);
-        }
-        if (variant.matchFilePath == QFileInfo(explicitZeroPath).absoluteFilePath())
-        {
-            sawExplicitStats = true;
-            EXPECT_TRUE(variant.hasInlierStats);
-            EXPECT_EQ(variant.geometricVerifiedInliers, 0);
-        }
-    }
-    EXPECT_TRUE(sawMissingStats);
-    EXPECT_TRUE(sawExplicitStats);
-
-    const xjw::aerial_triangulation::MatchVariant &best = group.variants.at(group.bestVariantIndex);
-    EXPECT_EQ(best.matchFilePath, QFileInfo(missingStatsPath).absoluteFilePath());
-    EXPECT_FALSE(best.hasInlierStats);
-    EXPECT_EQ(best.geometricVerifiedInliers, 0);
-    EXPECT_EQ(best.totalMatches, 500);
-}
-
-TEST(MatchResultCatalogTest, CanonicalPairKeyIsStableForReversedOrdering)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    const QString imageA = QDir(tempDir.path()).filePath(QStringLiteral("A.tif"));
-    const QString imageB = QDir(tempDir.path()).filePath(QStringLiteral("B.tif"));
-
-    const QString keyAB = xjw::aerial_triangulation::MatchResultCatalog::canonicalPairKey(imageA, imageB);
-    const QString keyBA = xjw::aerial_triangulation::MatchResultCatalog::canonicalPairKey(imageB, imageA);
-
-    EXPECT_FALSE(keyAB.isEmpty());
-    EXPECT_EQ(keyAB, keyBA);
-    QString expectedA = QFileInfo(imageA).absoluteFilePath();
-    QString expectedB = QFileInfo(imageB).absoluteFilePath();
-#if defined(Q_OS_WIN)
-    expectedA = expectedA.toLower();
-    expectedB = expectedB.toLower();
-#endif
-    EXPECT_TRUE(keyAB.contains(expectedA));
-    EXPECT_TRUE(keyAB.contains(expectedB));
-}
-
-TEST(MatchResultCatalogTest, MissingOrMismatchedSidecarsAreRecordedButNotSelected)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    const QString imageA = QDir(tempDir.path()).filePath(QStringLiteral("A.tif"));
-    const QString imageB = QDir(tempDir.path()).filePath(QStringLiteral("B.tif"));
-    const QString imageC = QDir(tempDir.path()).filePath(QStringLiteral("C.tif"));
-
-    const QString compatiblePath = writeSgmtMatch(tempDir.path(),
-                                                  QStringLiteral("A__B_compatible.match"),
-                                                  imageA,
-                                                  imageB,
-                                                  20);
-    writeSidecar(compatiblePath, imageA, imageB, QStringLiteral("superpoint"), QStringLiteral("superglue"), 20, 12);
-
-    const QString missingSidecarPath = writeSgmtMatch(tempDir.path(),
-                                                      QStringLiteral("A__B_missing_sidecar.match"),
-                                                      imageA,
-                                                      imageB,
-                                                      200);
-
-    const QString mismatchedSidecarPath = writeSgmtMatch(tempDir.path(),
-                                                         QStringLiteral("A__B_mismatched_sidecar.match"),
-                                                         imageA,
-                                                         imageB,
-                                                         300);
-    writeSidecar(mismatchedSidecarPath,
-                 imageA,
-                 imageC,
-                 QStringLiteral("disk"),
-                 QStringLiteral("lightglue"),
-                 300,
-                 250);
-
-    xjw::aerial_triangulation::MatchResultCatalogConfig config;
-    config.matchDirectory = tempDir.path();
-    const xjw::aerial_triangulation::MatchResultCatalogSummary summary =
-        xjw::aerial_triangulation::MatchResultCatalog(config).scan();
-
-    EXPECT_EQ(summary.matchFileCount, 3);
+    const auto summary = xjw::aerial_triangulation::MatchResultCatalog(config).scan();
+    EXPECT_EQ(summary.matchFileCount, 2);
+    EXPECT_EQ(summary.pairGroupCount, 1);
+    EXPECT_EQ(summary.variantCount, 1);
     EXPECT_EQ(summary.compatibleVariantCount, 1);
-    EXPECT_EQ(summary.incompatibleVariantCount, 2);
-    ASSERT_EQ(summary.pairGroups.size(), 1);
-
-    const xjw::aerial_triangulation::MatchPairGroup &group = summary.pairGroups.front();
-    ASSERT_EQ(group.variants.size(), 3);
-    ASSERT_GE(group.bestVariantIndex, 0);
-    EXPECT_EQ(group.variants.at(group.bestVariantIndex).matchFilePath, QFileInfo(compatiblePath).absoluteFilePath());
-
-    QSet<QString> statuses;
-    for (const xjw::aerial_triangulation::MatchVariant &variant : group.variants)
-    {
-        statuses.insert(variant.status);
-        if (variant.matchFilePath == QFileInfo(missingSidecarPath).absoluteFilePath())
-        {
-            EXPECT_FALSE(variant.compatible);
-            EXPECT_EQ(variant.status, QStringLiteral("missing_sidecar"));
-            EXPECT_EQ(variant.reason, QStringLiteral("sidecar_json_missing"));
-            EXPECT_EQ(variant.totalMatches, 200);
-        }
-        if (variant.matchFilePath == QFileInfo(mismatchedSidecarPath).absoluteFilePath())
-        {
-            EXPECT_FALSE(variant.compatible);
-            EXPECT_EQ(variant.status, QStringLiteral("mismatched_image_names"));
-            EXPECT_EQ(variant.reason, QStringLiteral("sidecar_images_do_not_match_sgmt_header"));
-            EXPECT_EQ(variant.geometricVerifiedInliers, 250);
-        }
-    }
-
-    EXPECT_TRUE(statuses.contains(QStringLiteral("compatible")));
-    EXPECT_TRUE(statuses.contains(QStringLiteral("missing_sidecar")));
-    EXPECT_TRUE(statuses.contains(QStringLiteral("mismatched_image_names")));
-}
-
-TEST(MatchResultCatalogTest, RejectsSidecarPathWithSameFileNameInDifferentDirectory)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    const QString headerDir = QDir(tempDir.path()).filePath(QStringLiteral("header"));
-    const QString sidecarDir = QDir(tempDir.path()).filePath(QStringLiteral("sidecar"));
-    ASSERT_TRUE(QDir().mkpath(headerDir));
-    ASSERT_TRUE(QDir().mkpath(sidecarDir));
-
-    const QString headerImageA = QDir(headerDir).filePath(QStringLiteral("A.tif"));
-    const QString headerImageB = QDir(headerDir).filePath(QStringLiteral("B.tif"));
-    const QString sidecarImageA = QDir(sidecarDir).filePath(QStringLiteral("A.tif"));
-
-    const QString staleSidecarPath = writeSgmtMatch(tempDir.path(),
-                                                    QStringLiteral("stale_sidecar.match"),
-                                                    headerImageA,
-                                                    headerImageB,
-                                                    40);
-    writeSidecar(staleSidecarPath,
-                 sidecarImageA,
-                 headerImageB,
-                 QStringLiteral("disk"),
-                 QStringLiteral("lightglue"),
-                 40,
-                 30);
-
-    xjw::aerial_triangulation::MatchResultCatalogConfig config;
-    config.matchDirectory = tempDir.path();
-    const xjw::aerial_triangulation::MatchResultCatalogSummary summary =
-        xjw::aerial_triangulation::MatchResultCatalog(config).scan();
+    EXPECT_EQ(summary.incompatibleVariantCount, 0);
+    EXPECT_EQ(last_processed, 2);
+    EXPECT_EQ(last_total, 2);
 
     ASSERT_EQ(summary.pairGroups.size(), 1);
-    const xjw::aerial_triangulation::MatchPairGroup &group = summary.pairGroups.front();
+    const auto &group = summary.pairGroups.first();
     ASSERT_EQ(group.variants.size(), 1);
-    const int compatibleCount = std::count_if(group.variants.begin(),
-                                              group.variants.end(),
-                                              [](const xjw::aerial_triangulation::MatchVariant &variant)
-    {
-        return variant.compatible;
-    });
-    EXPECT_EQ(compatibleCount, 0);
-    EXPECT_EQ(group.bestVariantIndex, -1);
-
-    const xjw::aerial_triangulation::MatchVariant &variant = group.variants.front();
-    EXPECT_FALSE(variant.compatible);
-    EXPECT_EQ(variant.status, QStringLiteral("mismatched_image_names"));
+    ASSERT_EQ(group.bestVariantIndex, 0);
+    EXPECT_EQ(group.variants.first().algorithmId, QStringLiteral("sift_lightglue"));
+    EXPECT_EQ(group.variants.first().totalMatches, 120);
+    EXPECT_EQ(group.variants.first().geometricVerifiedInliers, 90);
+    EXPECT_DOUBLE_EQ(group.variants.first().geometricCoverage, 1.0 / 16.0);
+    EXPECT_TRUE(group.variants.first().geometryPassed);
+    EXPECT_TRUE(group.variants.first().matchFilePath.endsWith(QStringLiteral(".pimatch")));
 }
 
-TEST(MatchResultCatalogTest, CanonicalPairKeyTreatsWindowsPathCaseAsSamePair)
+TEST(MatchResultCatalogTest, KeepsVariantsInsideShardAndSelectsStrongestGeometry)
 {
-#if defined(Q_OS_WIN)
-    const QString imageA = QStringLiteral("E:/Data/Images/A.tif");
-    const QString imageB = QStringLiteral("E:/Data/Images/B.tif");
-    const QString lowerA = QStringLiteral("e:/data/images/a.tif");
-    const QString lowerB = QStringLiteral("e:/data/images/b.tif");
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+    const QString image_a = createImage(temporary.path(), QStringLiteral("A.png"));
+    const QString image_b = createImage(temporary.path(), QStringLiteral("B.png"));
+    const QString match_directory = QDir(temporary.path()).filePath(QStringLiteral("matches"));
+    xjw::image_matching::ImageMatchRepository repository(match_directory);
 
-    const QString keyUpper = xjw::aerial_triangulation::MatchResultCatalog::canonicalPairKey(imageA, imageB);
-    const QString keyLower = xjw::aerial_triangulation::MatchResultCatalog::canonicalPairKey(lowerA, lowerB);
-
-    EXPECT_FALSE(keyUpper.isEmpty());
-    EXPECT_EQ(keyUpper, keyLower);
-#else
-    GTEST_SKIP() << "Windows-specific path case normalization";
-#endif
-}
-
-TEST(MatchResultCatalogTest, SidecarImagePathsKeepValidAndInvalidHeaderVariantsInOneGroup)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    const QString imageA = QDir(tempDir.path()).filePath(QStringLiteral("invalid_A.tif"));
-    const QString imageB = QDir(tempDir.path()).filePath(QStringLiteral("invalid_B.tif"));
-    const QString validPath = writeSgmtMatch(tempDir.path(),
-                                             QStringLiteral("valid_for_pair.match"),
-                                             QFileInfo(imageA).fileName(),
-                                             QFileInfo(imageB).fileName(),
-                                             30);
-    writeSidecar(validPath, imageA, imageB, QStringLiteral("superpoint"), QStringLiteral("superglue"), 30, 12);
-
-    const QString invalidPath = writeInvalidMatch(tempDir.path(), QStringLiteral("invalid_header.match"));
-    writeSidecar(invalidPath, imageA, imageB, QStringLiteral("disk"), QStringLiteral("lightglue"), 200, 80);
+    ASSERT_TRUE(repository.writePairs(
+        {makePair(image_a, image_b, QByteArrayLiteral("config-low"), 300, 40, 1000)},
+        false).success);
+    ASSERT_TRUE(repository.writePairs(
+        {makePair(image_a, image_b, QByteArrayLiteral("config-high"), 180, 95, 2000)},
+        true).success);
 
     xjw::aerial_triangulation::MatchResultCatalogConfig config;
-    config.matchDirectory = tempDir.path();
-    const xjw::aerial_triangulation::MatchResultCatalogSummary summary =
-        xjw::aerial_triangulation::MatchResultCatalog(config).scan();
-
+    config.matchDirectory = match_directory;
+    const auto summary = xjw::aerial_triangulation::MatchResultCatalog(config).scan();
     ASSERT_EQ(summary.pairGroups.size(), 1);
-    const xjw::aerial_triangulation::MatchPairGroup &group = summary.pairGroups.front();
-    EXPECT_EQ(group.pairKey, xjw::aerial_triangulation::MatchResultCatalog::canonicalPairKey(imageA, imageB));
+    const auto &group = summary.pairGroups.first();
     ASSERT_EQ(group.variants.size(), 2);
-
-    const auto validIt = std::find_if(group.variants.begin(), group.variants.end(),
-                                      [&](const xjw::aerial_triangulation::MatchVariant &variant)
-    {
-        return variant.matchFilePath == QFileInfo(validPath).absoluteFilePath();
-    });
-    ASSERT_NE(validIt, group.variants.end());
-    EXPECT_TRUE(validIt->compatible);
-    EXPECT_EQ(validIt->imageA, imageA);
-    EXPECT_EQ(validIt->imageB, imageB);
-
-    const auto invalidIt = std::find_if(group.variants.begin(), group.variants.end(),
-                                        [&](const xjw::aerial_triangulation::MatchVariant &variant)
-    {
-        return variant.matchFilePath == QFileInfo(invalidPath).absoluteFilePath();
-    });
-    ASSERT_NE(invalidIt, group.variants.end());
-    EXPECT_FALSE(invalidIt->compatible);
-    EXPECT_EQ(invalidIt->status, QStringLiteral("invalid_match_file"));
-    EXPECT_EQ(invalidIt->reason, QStringLiteral("sgmt_magic_missing"));
-    EXPECT_EQ(invalidIt->imageA, imageA);
-    EXPECT_EQ(invalidIt->imageB, imageB);
+    ASSERT_GE(group.bestVariantIndex, 0);
+    EXPECT_EQ(group.variants.at(group.bestVariantIndex).geometricVerifiedInliers, 95);
 }
 
-TEST(MatchResultCatalogTest, ReadsSgmtV2MatchCount)
+TEST(MatchResultCatalogTest, AppliesTargetImageFilterAndRejectsCorruptedShard)
 {
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+    const QString image_a = createImage(temporary.path(), QStringLiteral("A.png"));
+    const QString image_b = createImage(temporary.path(), QStringLiteral("B.png"));
+    const QString image_c = createImage(temporary.path(), QStringLiteral("C.png"));
+    const QString match_directory = QDir(temporary.path()).filePath(QStringLiteral("matches"));
+    xjw::image_matching::ImageMatchRepository repository(match_directory);
+    ASSERT_TRUE(repository.writePairs(
+        {makePair(image_a, image_b, QByteArrayLiteral("config-a"), 100, 70, 1000)},
+        false).success);
 
-    const QString path = writeSgmtMatch(tempDir.path(),
-                                        QStringLiteral("count_test.match"),
-                                        QStringLiteral("A.tif"),
-                                        QStringLiteral("B.tif"),
-                                        37);
+    QFile corrupted(QDir(match_directory).filePath(QStringLiteral("corrupted.pimatch")));
+    ASSERT_TRUE(corrupted.open(QIODevice::WriteOnly));
+    ASSERT_GT(corrupted.write("not-a-pimatch"), 0);
+    corrupted.close();
 
-    EXPECT_EQ(xjw::aerial_triangulation::MatchResultCatalog::readSgmtMatchCount(path), 37);
+    xjw::aerial_triangulation::MatchResultCatalogConfig included;
+    included.matchDirectory = match_directory;
+    included.targetImagePath = image_a;
+    const auto included_summary =
+        xjw::aerial_triangulation::MatchResultCatalog(included).scan();
+    EXPECT_EQ(included_summary.matchFileCount, 3);
+    EXPECT_EQ(included_summary.incompatibleVariantCount, 1);
+    EXPECT_EQ(included_summary.pairGroupCount, 1);
+
+    xjw::aerial_triangulation::MatchResultCatalogConfig excluded = included;
+    excluded.targetImagePath = image_c;
+    const auto excluded_summary =
+        xjw::aerial_triangulation::MatchResultCatalog(excluded).scan();
+    EXPECT_EQ(excluded_summary.pairGroupCount, 0);
+    EXPECT_EQ(excluded_summary.incompatibleVariantCount, 1);
 }
 
-TEST(MatchResultCatalogTest, ReadsSgmtV1MatchCount)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    const QString path = writeSgmtMatch(tempDir.path(),
-                                        QStringLiteral("count_test_v1.match"),
-                                        QStringLiteral("A.tif"),
-                                        QStringLiteral("B.tif"),
-                                        41,
-                                        QDateTime(),
-                                        1);
-
-    EXPECT_EQ(xjw::aerial_triangulation::MatchResultCatalog::readSgmtMatchCount(path), 41);
-}
-
-TEST(MatchResultCatalogTest, FormatsVariantAlgorithmAsFeatureMatcher)
+TEST(MatchResultCatalogTest, FormatsRegisteredAlgorithmLabel)
 {
     xjw::aerial_triangulation::MatchVariant variant;
-    variant.featureAlgorithm = QStringLiteral("disk");
-    variant.matchAlgorithm = QStringLiteral("lightglue");
-
+    variant.algorithmId = QStringLiteral("sift_lightglue");
+    variant.algorithmVersion = 3;
     EXPECT_EQ(xjw::aerial_triangulation::MatchResultCatalog::algorithmDisplayLabel(variant),
-              QStringLiteral("disk-lightglue"));
-
-    variant.featureAlgorithm = QStringLiteral("superpoint");
-    variant.matchAlgorithm = QStringLiteral("lightglue");
-    EXPECT_EQ(xjw::aerial_triangulation::MatchResultCatalog::algorithmDisplayLabel(variant),
-              QStringLiteral("superpoint-lightglue"));
-
-    variant.featureAlgorithm = QStringLiteral("sift");
-    variant.matchAlgorithm = QStringLiteral("sift_bf_l2");
-    EXPECT_EQ(xjw::aerial_triangulation::MatchResultCatalog::algorithmDisplayLabel(variant),
-              QStringLiteral("sift-bf-l2"));
-
-    variant.featureAlgorithm.clear();
-    variant.matchAlgorithm = QStringLiteral("lightglue");
-    variant.matchFilePath.clear();
-    EXPECT_EQ(xjw::aerial_triangulation::MatchResultCatalog::algorithmDisplayLabel(variant),
-              QStringLiteral("unknown-lightglue"));
-}
-
-TEST(MatchResultCatalogTest, InfersLegacyLightGlueFeatureFromMatchFileName)
-{
-    xjw::aerial_triangulation::MatchVariant variant;
-    variant.matchAlgorithm = QStringLiteral("lightglue");
-    variant.matchFilePath = QStringLiteral("E:/tmp/image_A__image_B_disk_lightglue.match");
-
-    EXPECT_EQ(xjw::aerial_triangulation::MatchResultCatalog::algorithmDisplayLabel(variant),
-              QStringLiteral("disk-lightglue"));
-
-    variant.matchFilePath = QStringLiteral("E:/tmp/image_A__image_B_sift_lightglue.match");
-    EXPECT_EQ(xjw::aerial_triangulation::MatchResultCatalog::algorithmDisplayLabel(variant),
-              QStringLiteral("sift-lightglue"));
-}
-
-TEST(MatchResultCatalogTest, InfersFeatureAlgorithmFromLegacySidecarFeaturePath)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    const QString imageA = QDir(tempDir.path()).filePath(QStringLiteral("image_A.JPG"));
-    const QString imageB = QDir(tempDir.path()).filePath(QStringLiteral("image_B.JPG"));
-    const QString matchPath = writeSgmtMatch(tempDir.path(),
-                                             QStringLiteral("image_A__image_B_lightglue.match"),
-                                             QFileInfo(imageA).fileName(),
-                                             QFileInfo(imageB).fileName(),
-                                             88);
-
-    QJsonObject sidecar;
-    sidecar.insert(QStringLiteral("image0_path"), imageA);
-    sidecar.insert(QStringLiteral("image1_path"), imageB);
-    sidecar.insert(QStringLiteral("feature0_path"), imageA + QStringLiteral(".dsk"));
-    sidecar.insert(QStringLiteral("feature1_path"), imageB + QStringLiteral(".dsk"));
-    sidecar.insert(QStringLiteral("match_algorithm"), QStringLiteral("lightglue"));
-    sidecar.insert(QStringLiteral("num_matches"), 88);
-
-    QFile sidecarFile(matchPath + QStringLiteral(".json"));
-    ASSERT_TRUE(sidecarFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
-    sidecarFile.write(QJsonDocument(sidecar).toJson(QJsonDocument::Compact));
-    sidecarFile.close();
-
-    xjw::aerial_triangulation::MatchResultCatalogConfig config;
-    config.matchDirectory = tempDir.path();
-    const xjw::aerial_triangulation::MatchResultCatalogSummary summary =
-        xjw::aerial_triangulation::MatchResultCatalog(config).scan();
-
-    ASSERT_EQ(summary.pairGroups.size(), 1);
-    ASSERT_EQ(summary.pairGroups.front().variants.size(), 1);
-    const xjw::aerial_triangulation::MatchVariant &variant = summary.pairGroups.front().variants.front();
-    EXPECT_TRUE(variant.compatible);
-    EXPECT_EQ(variant.featureAlgorithm, QStringLiteral("disk"));
-    EXPECT_EQ(xjw::aerial_triangulation::MatchResultCatalog::algorithmDisplayLabel(variant),
-              QStringLiteral("disk-lightglue"));
+              QStringLiteral("sift-lightglue v3"));
 }

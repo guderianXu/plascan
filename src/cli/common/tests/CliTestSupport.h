@@ -233,37 +233,6 @@ void writeFloatLE(QFile *file, float value)
     file->write(reinterpret_cast<const char *>(&value), sizeof(value));
 }
 
-void writeSiftFeature(const QString &path,
-                      const QByteArray &imageName,
-                      const QVector<QVector<float>> &keypoints,
-                      const QVector<QVector<float>> &descriptors)
-{
-    QFile file(path);
-    ASSERT_TRUE(file.open(QIODevice::WriteOnly)) << qPrintable(path);
-    file.write("SFTB", 4);
-    writeUInt32LE(&file, 1);
-    writeUInt32LE(&file, static_cast<quint32>(imageName.size()));
-    file.write(imageName);
-    writeUInt32LE(&file, static_cast<quint32>(keypoints.size()));
-    for (const QVector<float> &keypoint : keypoints)
-    {
-        ASSERT_EQ(keypoint.size(), 3);
-        writeFloatLE(&file, keypoint[0]);
-        writeFloatLE(&file, keypoint[1]);
-        writeFloatLE(&file, keypoint[2]);
-    }
-    const quint32 descriptorDim = descriptors.isEmpty() ? 0u : static_cast<quint32>(descriptors.front().size());
-    writeUInt32LE(&file, descriptorDim);
-    for (const QVector<float> &row : descriptors)
-    {
-        ASSERT_EQ(static_cast<quint32>(row.size()), descriptorDim);
-        for (float value : row)
-        {
-            writeFloatLE(&file, value);
-        }
-    }
-}
-
 void writeBinaryPly(const QString &path, const QVector<Point3f> &points)
 {
     QFile file(path);

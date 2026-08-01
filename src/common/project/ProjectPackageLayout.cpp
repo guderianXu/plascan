@@ -57,6 +57,26 @@ QString xmlError(const QString &projectPath, const QXmlStreamReader &xml)
         .arg(xml.errorString());
 }
 
+bool removeDirectoryIfEmpty(const QString &path, QString *errorMessage)
+{
+    QDir directory(path);
+    if (!directory.exists()
+        || !directory.entryList(
+                QDir::AllEntries | QDir::NoDotAndDotDot).isEmpty())
+    {
+        return true;
+    }
+    if (QDir().rmdir(directory.absolutePath()))
+    {
+        return true;
+    }
+
+    setError(errorMessage,
+             QStringLiteral("无法清理空的项目目录: %1")
+                 .arg(directory.absolutePath()));
+    return false;
+}
+
 } // namespace
 
 QString ProjectPackageLayout::dataDirectory(const QString &projectPath)
@@ -104,37 +124,56 @@ QString ProjectPackageLayout::chunkArchivePath(const QString &projectPath,
         : QDir(directory).filePath(QStringLiteral("chunk.zip"));
 }
 
-bool ProjectPackageLayout::ensureChunkDirectories(
+bool ProjectPackageLayout::pruneEmptyOptionalDirectories(
     const QString &projectPath,
     int directoryNumber,
     QString *errorMessage)
 {
+    if (errorMessage)
+    {
+        errorMessage->clear();
+    }
     const QString root = chunkDirectory(projectPath, directoryNumber);
-    const QStringList directories{
-        QStringLiteral("assets/ip"),
-        QStringLiteral("assets/matches"),
+    if (root.isEmpty())
+    {
+        setError(errorMessage, QStringLiteral("Chunk 目录编号无效"));
+        return false;
+    }
+
+    const QStringList optionalDirectories{
+        QStringLiteral("reconstruction/terrain/products"),
+        QStringLiteral("reconstruction/terrain"),
+        QStringLiteral("reconstruction/model"),
+        QStringLiteral("reconstruction/mvs"),
+        QStringLiteral("reconstruction/sparse"),
+        QStringLiteral("reconstruction"),
+        // 统一匹配模块只产生逐影像 `.pimatch`，不再创建特征目录或旧成对匹配目录。
+        QStringLiteral("assets/image_matches"),
         QStringLiteral("assets/tie_points"),
         QStringLiteral("assets/control_points"),
         QStringLiteral("assets/imported"),
-        QStringLiteral("reconstruction/sparse"),
-        QStringLiteral("reconstruction/mvs"),
-        QStringLiteral("reconstruction/model"),
-        QStringLiteral("reconstruction/terrain/products"),
+        QStringLiteral("assets"),
         QStringLiteral("bundle_adjust"),
         QStringLiteral("reports")
     };
-    for (const QString &relative : directories)
+    for (const QString &relative : optionalDirectories)
     {
-        const QString path = QDir(root).filePath(relative);
-        if (!QDir().mkpath(path))
+        if (!removeDirectoryIfEmpty(
+                QDir(root).filePath(relative), errorMessage))
         {
-            if (errorMessage)
-            {
-                *errorMessage =
-                    QStringLiteral("无法创建 Chunk 标准目录: %1").arg(path);
-            }
             return false;
         }
+    }
+
+    const QString dataRoot = dataDirectory(projectPath);
+    if (!removeDirectoryIfEmpty(
+            QDir(dataRoot).filePath(QStringLiteral("shared/images")),
+            errorMessage)
+        || !removeDirectoryIfEmpty(
+            QDir(dataRoot).filePath(QStringLiteral("shared")),
+            errorMessage))
+    {
+        return false;
     }
     return true;
 }

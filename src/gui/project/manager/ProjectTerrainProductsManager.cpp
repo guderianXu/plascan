@@ -197,7 +197,8 @@ void ProjectTerrainProductsManager::startDemFromPointCloudAsync(
         });
 }
 
-void ProjectTerrainProductsManager::startMapProjectAsync(const QJsonObject &settings)
+void ProjectTerrainProductsManager::startMapProjectAsync(
+    const xjw::gui::project::OrthoGenerationRequest &request)
 {
     if (!ensureProjectOpen())
     {
@@ -227,9 +228,16 @@ void ProjectTerrainProductsManager::startMapProjectAsync(const QJsonObject &sett
                   projectPath, trimmed);
     };
 
+    QString requestError;
+    if (!request.validate(&requestError))
+    {
+        emit orthoPipelineFinished(false, requestError, QJsonObject());
+        return;
+    }
+
     QJsonObject meta = _projectData->metadata();
     QString resolvedDem =
-        resolveProjectPath(settings.value(QStringLiteral("dem_path")).toString());
+        resolveProjectPath(request.demPath);
     QJsonObject matchedDemRecord;
     if (resolvedDem.isEmpty())
     {
@@ -277,11 +285,10 @@ void ProjectTerrainProductsManager::startMapProjectAsync(const QJsonObject &sett
     }
 
     QStringList sourceImages;
-    const QJsonArray requestedImages = settings.value(QStringLiteral("images")).toArray();
-    sourceImages.reserve(requestedImages.size());
-    for (const QJsonValue &value : requestedImages)
+    sourceImages.reserve(request.sourceImages.size());
+    for (const QString &requested_image : request.sourceImages)
     {
-        const QString imagePath = resolveProjectPath(value.toString());
+        const QString imagePath = resolveProjectPath(requested_image);
         if (!imagePath.isEmpty())
         {
             sourceImages.append(imagePath);
@@ -303,7 +310,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(const QJsonObject &sett
         return;
     }
 
-    QString out = settings.value(QStringLiteral("output_path")).toString().trimmed();
+    QString out = request.outputPath.trimmed();
     if (out.isEmpty())
     {
         out = QDir(projectRoot).filePath(
@@ -343,7 +350,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(const QJsonObject &sett
         }
     }
 
-    QJsonObject resolvedSettings = settings;
+    QJsonObject resolvedSettings = request.toResolvedSettings();
     resolvedSettings[QStringLiteral("images")] = QJsonArray::fromStringList(sourceImages);
     resolvedSettings[QStringLiteral("dem_path")] = resolvedDem;
     resolvedSettings[QStringLiteral("output_path")] = out;

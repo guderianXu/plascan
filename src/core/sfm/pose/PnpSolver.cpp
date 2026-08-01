@@ -14,6 +14,23 @@ PnpResult PnpSolver::solve(const std::vector<std::array<double, 3>> &worldPoints
                            const std::vector<std::array<double, 2>> &imagePoints, double fu, double fv, double cu,
                            double cv, int uDir, int vDir, bool depthFlipped, const PnpOptions &options)
 {
+    return solveWithDistortion(worldPoints, imagePoints, fu, fv, cu, cv, uDir, vDir, depthFlipped,
+                               Camera::Distortion{}, options);
+}
+
+PnpResult PnpSolver::solveWithDistortion(
+    const std::vector<std::array<double, 3>> &worldPoints,
+    const std::vector<std::array<double, 2>> &imagePoints,
+    double fu,
+    double fv,
+    double cu,
+    double cv,
+    int uDir,
+    int vDir,
+    bool depthFlipped,
+    const Camera::Distortion &distortion,
+    const PnpOptions &options)
+{
     PnpResult result;
     const size_t n = worldPoints.size();
     result.inputCandidateCount = static_cast<int>(n);
@@ -35,8 +52,26 @@ PnpResult PnpSolver::solve(const std::vector<std::array<double, 3>> &worldPoints
     const cv::Mat cameraMatrix = openCvCameraMatrix(
         fu, fv, cu, cv, uDir, vDir, depthFlipped, true);
 
-    // 暂不考虑畸变（假设已去畸变或畸变较小）
-    cv::Mat distCoeffs = cv::Mat::zeros(4, 1, CV_64F);
+    const std::array<double, 5> distortionCoefficients{{
+        distortion.radialK1,
+        distortion.radialK2,
+        distortion.tangentialP1,
+        distortion.tangentialP2,
+        distortion.radialK3,
+    }};
+    if (!std::all_of(distortionCoefficients.begin(), distortionCoefficients.end(),
+                     [](double coefficient) { return std::isfinite(coefficient); }))
+    {
+        return result;
+    }
+
+    // OpenCV 的 Brown-Conrady 参数顺序固定为 k1, k2, p1, p2, k3。
+    const cv::Mat distCoeffs = (cv::Mat_<double>(1, 5)
+        << distortionCoefficients[0],
+           distortionCoefficients[1],
+           distortionCoefficients[2],
+           distortionCoefficients[3],
+           distortionCoefficients[4]);
 
     cv::Mat rvec, tvec;
     cv::Mat inliers;
@@ -192,8 +227,11 @@ PnpResult PnpSolver::solveWithCamera(const std::vector<std::array<double, 3>> &w
                                      const std::vector<std::array<double, 2>> &imagePoints, const Camera &cam,
                                      const PnpOptions &options)
 {
-    return solve(worldPoints, imagePoints, cam.focalX(), cam.focalY(), cam.principalX(), cam.principalY(),
-                 cam.uAxisSign(), cam.vAxisSign(), cam.depthAxisFlipped(), options);
+    return solveWithDistortion(worldPoints, imagePoints,
+                               cam.focalX(), cam.focalY(),
+                               cam.principalX(), cam.principalY(),
+                               cam.uAxisSign(), cam.vAxisSign(),
+                               cam.depthAxisFlipped(), cam.distortion(), options);
 }
 
 } // namespace xjw

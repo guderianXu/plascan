@@ -225,8 +225,6 @@ TEST(BundleAdjustSharedFocalTest, AutoBackendCanSelectCeresForSharedFocal)
     options.backend = xjw::BABackend::Auto;
     options.refineCameraPose = true;
     options.refineSharedFocalLength = true;
-    options.minNativeCudaCameras = 1;
-    options.minNativeCudaObservations = 1;
     options.minCeresCudaCameras = 1;
     options.minCeresCudaObservations = 1;
     options.minCeresCpuObservations = 1;
@@ -245,4 +243,119 @@ TEST(BundleAdjustSharedFocalTest, AutoBackendCanSelectCeresForSharedFocal)
     {
         EXPECT_EQ(selected, xjw::BABackend::LegacyCpu);
     }
+}
+
+TEST(BundleAdjustSharedFocalTest, CeresRefinesIndependentCalibrationGroups)
+{
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    {
+        GTEST_SKIP() << "Ceres CPU backend is not available";
+    }
+
+    const std::vector<xjw::Camera> truthCameras{
+        makeCamera(-2.0, 0.0, 0.0, 1200.0),
+        makeCamera(0.0, -2.0, 0.0, 1200.0),
+        makeCamera(2.0, 0.0, 0.0, 1800.0),
+        makeCamera(0.0, 2.0, 0.0, 1800.0),
+    };
+    const std::vector<xjw::Camera> initialCameras{
+        makeCamera(-2.0, 0.0, 0.0, 900.0),
+        makeCamera(0.0, -2.0, 0.0, 900.0),
+        makeCamera(2.0, 0.0, 0.0, 900.0),
+        makeCamera(0.0, 2.0, 0.0, 900.0),
+    };
+    const std::vector<xjw::BATrack> tracks = makeSharedFocalTracks(truthCameras);
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::CeresCpu;
+    options.refineCameraPose = false;
+    options.refineSharedFocalLength = true;
+    options.cameraCalibrationGroupIds = {0, 0, 1, 1};
+    options.minSharedFocalScale = 0.5;
+    options.maxSharedFocalScale = 2.5;
+    options.enableControlPointConstraints = true;
+    options.controlPointWeight = 100.0;
+    options.controlPointHuberDeltaMeters = 0.5;
+    options.enablePointFilter = false;
+    options.maxIterations = 40;
+
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(initialCameras, tracks, options);
+
+    ASSERT_TRUE(result.solutionUsable);
+    ASSERT_EQ(result.refinedCameras.size(), initialCameras.size());
+    EXPECT_EQ(result.refinedCalibrationGroupCount, 2);
+    EXPECT_NEAR(result.refinedCameras[0].focalX(),
+                result.refinedCameras[1].focalX(),
+                1e-6);
+    EXPECT_NEAR(result.refinedCameras[2].focalX(),
+                result.refinedCameras[3].focalX(),
+                1e-6);
+    EXPECT_NEAR(result.refinedCameras[0].focalX(), 1200.0, 30.0);
+    EXPECT_NEAR(result.refinedCameras[2].focalX(), 1800.0, 30.0);
+    EXPECT_GT(result.refinedCameras[2].focalX() -
+                  result.refinedCameras[0].focalX(),
+              400.0);
+}
+
+TEST(BundleAdjustSharedFocalTest, StagedSelfCalibrationReportsTwoSolveStages)
+{
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    {
+        GTEST_SKIP() << "Ceres CPU backend is not available";
+    }
+
+    const std::vector<xjw::Camera> truthCameras{
+        makeCamera(-2.0, 0.0, 0.0, 1500.0),
+        makeCamera(0.0, -2.0, 0.0, 1500.0),
+        makeCamera(2.0, 0.0, 0.0, 1500.0),
+        makeCamera(0.0, 2.0, 0.0, 1500.0),
+    };
+    const std::vector<xjw::Camera> initialCameras{
+        makeCamera(-2.0, 0.0, 0.0, 900.0),
+        makeCamera(0.0, -2.0, 0.0, 900.0),
+        makeCamera(2.0, 0.0, 0.0, 900.0),
+        makeCamera(0.0, 2.0, 0.0, 900.0),
+    };
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::CeresCpu;
+    options.refineCameraPose = false;
+    options.refineSharedFocalLength = true;
+    options.stageSharedFocalRefinement = true;
+    options.enableControlPointConstraints = true;
+    options.controlPointWeight = 100.0;
+    options.enablePointFilter = false;
+    options.maxIterations = 12;
+
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(
+            initialCameras,
+            makeSharedFocalTracks(truthCameras),
+            options);
+
+    ASSERT_TRUE(result.solutionUsable);
+    EXPECT_EQ(result.selfCalibrationStagesRun, 2);
+}
+
+TEST(BundleAdjustSharedFocalTest, RejectsCalibrationGroupCountMismatch)
+{
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-1.0, 0.0, 0.0, 900.0),
+        makeCamera(1.0, 0.0, 0.0, 900.0),
+    };
+    xjw::BAOptions options;
+    options.refineCameraPose = false;
+    options.refineSharedFocalLength = true;
+    options.cameraCalibrationGroupIds = {0};
+
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(
+            cameras,
+            makeSharedFocalTracks(cameras),
+            options);
+
+    EXPECT_FALSE(result.solutionUsable);
+    EXPECT_EQ(result.solveStatus, xjw::BASolveStatus::InvalidInput);
+    EXPECT_NE(result.backendMessage.find("标定分组"), std::string::npos);
 }

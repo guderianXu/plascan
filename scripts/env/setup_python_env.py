@@ -26,9 +26,7 @@ BASE_PACKAGES = [
     "git+https://github.com/cvg/LightGlue.git",
 ]
 
-OPTIONAL_PACKAGES = [
-    "romatch",
-]
+OPTIONAL_PACKAGES: list[str] = []
 
 
 def conda_executable() -> str:

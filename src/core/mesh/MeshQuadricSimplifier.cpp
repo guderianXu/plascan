@@ -102,6 +102,12 @@ double length(const Vec3 &value)
     return std::sqrt(dot(value, value));
 }
 
+double squaredDistance(const Vec3 &first, const Vec3 &second)
+{
+    const Vec3 difference = subtract(first, second);
+    return dot(difference, difference);
+}
+
 Vec3 normalized(const Vec3 &value)
 {
     const double magnitude = length(value);
@@ -211,8 +217,14 @@ bool collapsePreservesFaces(const TriMesh &mesh,
                             int remove,
                             const Vec3 &position,
                             double minimumNormalCosine,
-                            double minimumFaceArea)
+                            double minimumFaceArea,
+                            double maximumResultFaceAspectRatio,
+                            bool *rejectedTriangleQuality)
 {
+    if (rejectedTriangleQuality)
+    {
+        *rejectedTriangleQuality = false;
+    }
     std::vector<int> faces = vertexFaces[static_cast<std::size_t>(keep)];
     faces.insert(faces.end(),
                  vertexFaces[static_cast<std::size_t>(remove)].cbegin(),
@@ -252,11 +264,29 @@ bool collapsePreservesFaces(const TriMesh &mesh,
         }
         const Vec3 newCross = cross(subtract(vertices[1], vertices[0]),
                                     subtract(vertices[2], vertices[0]));
+        const double double_area = length(newCross);
         const double minimumDoubleArea =
             std::max(1.0e-18, 2.0 * minimumFaceArea);
-        if (length(newCross) <= minimumDoubleArea)
+        if (!std::isfinite(double_area) || double_area <= minimumDoubleArea)
         {
             return false;
+        }
+        if (maximumResultFaceAspectRatio > 0.0)
+        {
+            const double longest_squared = std::max({
+                squaredDistance(vertices[0], vertices[1]),
+                squaredDistance(vertices[1], vertices[2]),
+                squaredDistance(vertices[2], vertices[0])});
+            const double aspect_ratio = longest_squared / double_area;
+            if (!std::isfinite(aspect_ratio) ||
+                aspect_ratio > maximumResultFaceAspectRatio)
+            {
+                if (rejectedTriangleQuality)
+                {
+                    *rejectedTriangleQuality = true;
+                }
+                return false;
+            }
         }
         if (dot(faceNormal(mesh, face), normalized(newCross)) < minimumNormalCosine)
         {
@@ -469,6 +499,7 @@ QuadricSimplifyStatistics simplifyMeshQuadric(
             int rejectedFeatureEdgeCount = 0;
             int rejectedTopologyEdgeCount = 0;
             int rejectedFlipEdgeCount = 0;
+            int rejectedTriangleQualityEdgeCount = 0;
         };
         int worker_count = 1;
 #ifdef MESHING_OPENMP
@@ -575,14 +606,31 @@ QuadricSimplifyStatistics simplifyMeshQuadric(
                 quadric,
                 positionOf(mesh->vertices[static_cast<std::size_t>(edge.first)]),
                 positionOf(mesh->vertices[static_cast<std::size_t>(edge.second)]));
-            if (!collapsePreservesFaces(*mesh, vertexFaces, edge.first, edge.second,
-                                        position, normalCosine,
-                                        std::max(
-                                            0.0,
-                                            static_cast<double>(
-                                                options.minimumFaceArea))))
+            bool rejected_triangle_quality = false;
+            if (!collapsePreservesFaces(
+                    *mesh,
+                    vertexFaces,
+                    edge.first,
+                    edge.second,
+                    position,
+                    normalCosine,
+                    std::max(
+                        0.0,
+                        static_cast<double>(options.minimumFaceArea)),
+                    std::max(
+                        0.0,
+                        static_cast<double>(
+                            options.maximumResultFaceAspectRatio)),
+                    &rejected_triangle_quality))
             {
-                ++worker_result.rejectedFlipEdgeCount;
+                if (rejected_triangle_quality)
+                {
+                    ++worker_result.rejectedTriangleQualityEdgeCount;
+                }
+                else
+                {
+                    ++worker_result.rejectedFlipEdgeCount;
+                }
                 return;
             }
             worker_result.candidates.push_back(
@@ -623,6 +671,8 @@ QuadricSimplifyStatistics simplifyMeshQuadric(
                 worker_result.rejectedTopologyEdgeCount;
             statistics.rejectedFlipEdgeCount +=
                 worker_result.rejectedFlipEdgeCount;
+            statistics.rejectedTriangleQualityEdgeCount +=
+                worker_result.rejectedTriangleQualityEdgeCount;
         }
         std::vector<CollapseCandidate> candidates;
         candidates.reserve(candidate_count);

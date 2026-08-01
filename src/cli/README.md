@@ -1,7 +1,7 @@
 # PlaScan CLI
 
-CLI 源码按业务领域组织，但继续生成独立可执行文件。这样可以保持现有脚本和自动化调用兼容，
-同时避免单个总入口把 Torch、Qt、MVS、网格和质量检查等依赖全部绑定在一起。
+CLI 源码按业务领域组织，并继续生成独立可执行文件。影像匹配接口不保留旧特征文件参数兼容层；
+这样可以避免单个总入口把 Qt、TensorRT、MVS、网格和质量检查等依赖全部绑定在一起。
 
 ## 模块
 
@@ -9,7 +9,7 @@ CLI 源码按业务领域组织，但继续生成独立可执行文件。这样�
 | --- | --- | --- |
 | `camera/` | 相机格式导入与转换 | `camera_convert_cli` |
 | `control_points/` | 标靶检测与打印 | `marker_detect_cli`, `marker_print_cli` |
-| `features/` | 特征提取、匹配与连接点生成 | `feature_extract_cli`, `feature_match_cli`, `match_photos_cli` |
+| `features/` | CUDA SIFT + TensorRT LightGlue 双影像匹配与连接点生成 | `feature_match_cli`, `match_photos_cli` |
 | `dense/` | 极线校正、密集匹配、三角化与点云细化 | `rectify_cli`, `dense_match_cli`, `triangulate_cli`, `dense_cloud_refine_cli` |
 | `reconstruction/` | 可独立执行的重建阶段与诊断工具 | `bundle_adjust_cli` |
 | `workflows/` | GUI“工作流程”菜单对应的无界面编排入口 | `aerial_triangulation_cli`, `mesh_reconstruct_cli`, `three_d_reconstruction_cli`, `reconstruct_pipeline_cli` |
@@ -39,7 +39,7 @@ JSON、控制台输出、覆盖保护和摄影测量列表解析复制到多个�
 - `match_photos_cli` 与 `aerial_triangulation_cli`：`--project` 不存在时创建
   `.plascan + .files/project.zip + .files/1/chunk.zip`；存在时打开根索引指定的默认 Chunk。
 - `three_d_reconstruction_cli` 与 `reconstruct_pipeline_cli`：在 `--output-dir` 创建或打开
-  `headless.plascan`，特征、匹配、稀疏、稠密、模型和地形产物写入当前 Chunk 数字目录。
+  `headless.plascan`，逐影像匹配、连接点、稀疏、稠密、模型和地形产物写入当前 Chunk 数字目录。
 - `bundle_adjust_cli`：只接受已经存在的 4.0 工程，解析 `plascan:///` URI，完成后写回相机和
   `bundle_adjust_results`；默认输出统一位于当前 Chunk 的
   `bundle_adjust/<yyyyMMdd_HHmmss_zzz>/`。
@@ -56,7 +56,7 @@ JSON、控制台输出、覆盖保护和摄影测量列表解析复制到多个�
 
 1. 将入口放进最接近的领域目录，不在顶层继续堆放 `.cpp`。
 2. 只在该目录的 `CMakeLists.txt` 声明直接依赖；共享业务能力应进入 `src/core` 或 `src/common`。
-3. 保留现有可执行文件名和参数兼容性；需要统一编排时由脚本或工作流 CLI 调用独立阶段。
+3. 稳定参数应保持兼容；已经移除的数据格式不得通过隐式转换或旧参数别名重新引入。
 4. 公共参数解析和输出约定放进 `common/`，不要在多个入口复制实现。
 5. 新增参数时在当前领域的 `tests/` 中补充契约或端到端测试，并由模块自己的 `CMakeLists.txt`
    注册；不要把 CLI 测试放回顶层 `tests/`。

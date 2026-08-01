@@ -19,6 +19,8 @@ double minimumTriangulationAngleDeg(const std::vector<Camera> &cameras,
         return 0.0;
     }
 
+    // 对轨迹中所有有效相机对取最小角，作为保守稳定性指标。最大角只能证明
+    // 某一对基线良好，无法发现其余观测几乎共线。
     double minimumAngleDeg = 180.0;
     for (std::size_t leftIndex = 0; leftIndex < track.observations.size(); ++leftIndex)
     {
@@ -80,6 +82,8 @@ PairIntersectionCandidate triangulatePairWithDirectionFallback(
     const std::array<double, 2> &pixelB)
 {
     PairIntersectionCandidate bestCandidate;
+    // 历史 .tsai/工程相机可能错误标记局部前向轴。四种组合只用于寻找可优化初值，
+    // 输入相机保持不变，后续严格正深度检查仍会暴露元数据问题。
     for (int flipMask = 0; flipMask < 4; ++flipMask)
     {
         Camera testCameraA = cameraA;

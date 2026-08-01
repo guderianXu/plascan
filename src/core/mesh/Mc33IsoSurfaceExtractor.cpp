@@ -265,8 +265,11 @@ Mc33IsoSurfaceResult Mc33IsoSurfaceExtractor::extract(
             target.v[1] = static_cast<int>(source[1]);
             target.v[2] = static_cast<int>(source[2]);
         }
+        const bool has_unsupported_samples =
+            result.statistics.supportMaskedSampleCount > 0;
         if (options.requireSupportedSignChange &&
-            !extractionSupport.empty())
+            !extractionSupport.empty() &&
+            has_unsupported_samples)
         {
             const std::array<float, 3> voxel_size{
                 (boundsMax[0] - boundsMin[0]) /

@@ -1284,8 +1284,12 @@ TEST(DepthGeometryConsistencyTest, FindsSubpixelNeighborAndVerifiesRoundTrip)
         source_depth,
         0.05f,
         0,
-        1.5f);
+        1.5f,
+        true);
     EXPECT_EQ(central_only.evidence, xjw::mvs::DepthConsistencyEvidence::Contradicted);
+    EXPECT_TRUE(central_only.continuousGeometryValid);
+    EXPECT_GT(central_only.worldSurfaceResidual, 0.0f);
+    EXPECT_GT(central_only.jointWorldPixelFootprint, 0.0f);
 
     const auto edge_aware = xjw::mvs::evaluateProjectedDepthConsistency(
         reference_camera,
@@ -1299,6 +1303,13 @@ TEST(DepthGeometryConsistencyTest, FindsSubpixelNeighborAndVerifiesRoundTrip)
     EXPECT_EQ(edge_aware.evidence, xjw::mvs::DepthConsistencyEvidence::Consistent);
     EXPECT_EQ(edge_aware.sourcePixel.x, consistent_column);
     EXPECT_LE(edge_aware.roundTripErrorPixels, 1.5f);
+    EXPECT_TRUE(edge_aware.continuousGeometryValid);
+    EXPECT_GT(edge_aware.jointWorldPixelFootprint, 0.0f);
+    EXPECT_NEAR(edge_aware.worldSurfaceResidual, 0.05f, 1.0e-5f);
+    EXPECT_NEAR(edge_aware.worldSurfaceResidual /
+                    edge_aware.jointWorldPixelFootprint,
+                0.5f,
+                1.0e-5f);
 }
 
 TEST(DepthGeometryConsistencyTest, UsesAllVerifiableSourceVotes)
@@ -1441,6 +1452,52 @@ TEST(DepthFrameQualityGateTest, MakesOrbitalConsistencyLossAuxiliaryBeforeCollap
                         collapsed.reasons.end(),
                         std::string("depth_consistency_collapse")),
               collapsed.reasons.end());
+}
+
+TEST(DepthGeometryConsistencyTest,
+     FinalizesAdaptiveEvidenceMapsWithoutDiscardingPrefilterHypotheses)
+{
+    cv::Mat prefilter_depth(1, 3, CV_32FC1, cv::Scalar(2.0f));
+    prefilter_depth.at<float>(0, 1) = 0.0f;
+    auto accumulator_maps =
+        xjw::mvs::makeAdaptiveGeometryEvidenceAccumulatorMaps(
+            prefilter_depth.size());
+
+    xjw::mvs::AdaptiveGeometryEvidenceAccumulator supported;
+    xjw::mvs::AdaptiveGeometryEvidenceObservation comparable;
+    comparable.evidenceClass =
+        xjw::mvs::AdaptiveGeometryEvidenceClass::Comparable;
+    comparable.worldPixelFootprint = 0.1f;
+    supported.add(comparable);
+    accumulator_maps.positiveSupport.at<float>(0, 0) =
+        supported.positiveSupport;
+    accumulator_maps.squaredPositiveSupport.at<float>(0, 0) =
+        supported.squaredPositiveSupport;
+    accumulator_maps.conflict.at<float>(0, 0) = supported.conflict;
+    accumulator_maps.observable.at<float>(0, 0) = supported.observable;
+
+    xjw::mvs::AdaptiveGeometryEvidenceAccumulator contradicted;
+    xjw::mvs::AdaptiveGeometryEvidenceObservation contradiction;
+    contradiction.evidenceClass =
+        xjw::mvs::AdaptiveGeometryEvidenceClass::Contradictory;
+    contradicted.add(contradiction);
+    accumulator_maps.positiveSupport.at<float>(0, 2) =
+        contradicted.positiveSupport;
+    accumulator_maps.squaredPositiveSupport.at<float>(0, 2) =
+        contradicted.squaredPositiveSupport;
+    accumulator_maps.conflict.at<float>(0, 2) = contradicted.conflict;
+    accumulator_maps.observable.at<float>(0, 2) = contradicted.observable;
+
+    const auto maps = xjw::mvs::makeAdaptiveGeometryEvidenceMaps(
+        prefilter_depth, accumulator_maps);
+    ASSERT_FALSE(maps.supportWeight.empty());
+    EXPECT_GT(maps.supportWeight.at<float>(0, 0),
+              maps.supportWeight.at<float>(0, 2));
+    EXPECT_FLOAT_EQ(maps.effectiveViewCount.at<float>(0, 0), 2.0f);
+    EXPECT_FLOAT_EQ(maps.effectiveViewCount.at<float>(0, 2), 1.0f);
+    EXPECT_FLOAT_EQ(maps.conflictWeight.at<float>(0, 2), 1.0f);
+    EXPECT_FLOAT_EQ(maps.supportWeight.at<float>(0, 1), 0.0f);
+    EXPECT_FLOAT_EQ(maps.effectiveViewCount.at<float>(0, 1), 0.0f);
 }
 
 TEST(DepthFrameLifecycleTest,

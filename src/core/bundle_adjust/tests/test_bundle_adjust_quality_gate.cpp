@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "BundleAdjust.h"
+#include "BundleAdjustQuality.h"
 #include "Camera.h"
 
 #include <array>
@@ -81,9 +82,6 @@ TEST(BundleAdjustQualityGateTest, AutoDoesNotSelectNativeCudaForPointOnlyProblem
     xjw::BAOptions options;
     options.backend = xjw::BABackend::Auto;
     options.refineCameraPose = false;
-    options.minNativeCudaCameras = 1;
-    options.minNativeCudaObservations = 1;
-
     const auto selected = xjw::BundleAdjust::selectBackendForProblem(stats, options);
     EXPECT_NE(selected, xjw::BABackend::NativeCuda);
 }
@@ -198,4 +196,142 @@ TEST(BundleAdjustConvergenceTest, ExactLegacyProblemStopsAfterMinimumConvergence
     EXPECT_EQ(result.solveStatus, xjw::BASolveStatus::Success);
     EXPECT_LE(reportedIterations, 3);
     EXPECT_NEAR(result.meanRmsAfter, 0.0, 1e-8);
+}
+
+TEST(BundleAdjustQualityGateTest, AdaptiveFilterUsesAbsoluteFloorAndMedianScale)
+{
+    const std::vector<double> pointRms{1.0, 2.0, 9.0};
+    EXPECT_DOUBLE_EQ(
+        xjw::detail::adaptivePointFilterThreshold(pointRms, 2.5, 3.0),
+        6.0);
+    EXPECT_DOUBLE_EQ(
+        xjw::detail::adaptivePointFilterThreshold(pointRms, 8.0, 3.0),
+        8.0);
+}
+
+TEST(BundleAdjustQualityGateTest, FinalizerRejectsTrackBehindAnyObservationCamera)
+{
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-1.0, 0.0, 0.0),
+        makeCamera(1.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> truth{{0.0, 0.0, 5.0}};
+    xjw::BATrack track = makeTrack(cameras, truth, truth);
+    ASSERT_EQ(track.observations.size(), 2u);
+
+    xjw::BAResult result;
+    result.solveStatus = xjw::BASolveStatus::Success;
+    result.solutionUsable = true;
+    result.refinedCameras = cameras;
+    result.points.resize(1);
+    result.points.front().valid = true;
+    result.points.front().point = {{0.0, 0.0, -5.0}};
+
+    xjw::BAOptions options;
+    options.refineCameraPose = false;
+    options.enablePointFilter = false;
+    xjw::detail::finalizeBundleAdjustResult(cameras, {track}, options, &result);
+
+    EXPECT_FALSE(result.points.front().valid);
+    EXPECT_FALSE(result.solutionUsable);
+    EXPECT_EQ(result.optimizedTracks, 0);
+    EXPECT_TRUE(std::isinf(result.meanRmsAfter));
+}
+
+TEST(BundleAdjustQualityGateTest, JointBaWithoutGaugeConstraintIsRejected)
+{
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-1.0, 0.0, 0.0),
+        makeCamera(1.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> point{{0.0, 0.0, 5.0}};
+    const xjw::BATrack track = makeTrack(cameras, point, point);
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::LegacyCpu;
+    options.refineCameraPose = true;
+    options.gaugePolicy = xjw::BAGaugePolicy::RequireExplicitGauge;
+    options.enablePointFilter = false;
+
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(cameras, {track}, options);
+
+    EXPECT_FALSE(result.solutionUsable);
+    EXPECT_EQ(result.solveStatus, xjw::BASolveStatus::UnsupportedConfiguration);
+    EXPECT_NE(result.backendMessage.find("gauge"), std::string::npos);
+}
+
+TEST(BundleAdjustQualityGateTest, ConstraintRegressionIsRejected)
+{
+    std::string message;
+    EXPECT_FALSE(
+        xjw::detail::constraintRmsPassesQualityGate(
+            12, 0.10, 0.20, 1.25, "控制点约束", &message));
+    EXPECT_NE(message.find("控制点约束"), std::string::npos);
+
+    message.clear();
+    EXPECT_TRUE(
+        xjw::detail::constraintRmsPassesQualityGate(
+            12, 0.10, 0.12, 1.25, "控制点约束", &message));
+    EXPECT_TRUE(message.empty());
+}
+
+TEST(BundleAdjustValidationTest, RejectsNonPositiveFiniteDifferenceStep)
+{
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-1.0, 0.0, 0.0),
+        makeCamera(1.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> point{{0.0, 0.0, 5.0}};
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::LegacyCpu;
+    options.refineCameraPose = false;
+    options.finiteDiffEps = 0.0;
+
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(
+            cameras,
+            {makeTrack(cameras, point, point)},
+            options);
+
+    EXPECT_FALSE(result.solutionUsable);
+    EXPECT_EQ(result.solveStatus, xjw::BASolveStatus::InvalidInput);
+    EXPECT_NE(result.backendMessage.find("有限差分"), std::string::npos);
+}
+
+TEST(BundleAdjustQualityGateTest, LegacyConstraintStatsKeepRejectedTrackBaseline)
+{
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-1.0, 0.0, 0.0),
+        makeCamera(1.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> visiblePoint{{0.0, 0.0, 5.0}};
+    xjw::BATrack validTrack =
+        makeTrack(cameras, visiblePoint, visiblePoint);
+
+    xjw::BATrack rejectedTrack =
+        makeTrack(
+            cameras,
+            visiblePoint,
+            {{0.0, 0.0, -5.0}});
+    rejectedTrack.controlPointConstraints.push_back(
+        {{{0.0, 0.0, -6.0}}, 1.0, 1.0, 0});
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::LegacyCpu;
+    options.refineCameraPose = false;
+    options.enableControlPointConstraints = true;
+    options.enablePointFilter = false;
+
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(
+            cameras,
+            {validTrack, rejectedTrack},
+            options);
+
+    ASSERT_TRUE(result.solutionUsable);
+    ASSERT_EQ(result.controlPointConstraintCount, 1);
+    EXPECT_NEAR(result.controlPointRmsBeforeMeters, 1.0, 1.0e-9);
+    EXPECT_NEAR(result.controlPointRmsAfterMeters, 1.0, 1.0e-9);
 }

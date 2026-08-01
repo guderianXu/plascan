@@ -17,9 +17,7 @@ set(CMAKE_AUTOUIC ON)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/GuiSources.cmake)
 
 list(REMOVE_ITEM GUI_SOURCES ${GUI_PROJECT_SOURCES})
-list(REMOVE_ITEM GUI_SOURCES ${GUI_TASK_SOURCES})
-add_library(gui_project OBJECT ${GUI_PROJECT_SOURCES})
-add_library(gui_tasks OBJECT ${GUI_TASK_SOURCES})
+add_library(gui_project STATIC ${GUI_PROJECT_SOURCES})
 
 #==============================================================================
 # plascan_gui 可执行文件
@@ -28,8 +26,6 @@ add_library(gui_tasks OBJECT ${GUI_TASK_SOURCES})
 add_executable(plascan_gui
   ${GUI_SOURCES}
   ${GUI_DIALOG_SOURCES}
-  $<TARGET_OBJECTS:gui_project>
-  $<TARGET_OBJECTS:gui_tasks>
   ${CMAKE_SOURCE_DIR}/resources/resources.qrc
 )
 
@@ -85,6 +81,7 @@ target_include_directories(plascan_gui PRIVATE
   ${CMAKE_SOURCE_DIR}/src/core/matchphototask/pair_selection
   ${CMAKE_SOURCE_DIR}/src/core/matchphototask/runtime
   ${CMAKE_SOURCE_DIR}/src/core/matchphototask/task
+  ${CMAKE_SOURCE_DIR}/src/core/image_matching
   ${CMAKE_SOURCE_DIR}/src/core/dense_match
   ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
   ${CMAKE_SOURCE_DIR}/src/common
@@ -96,17 +93,21 @@ target_include_directories(gui_project PRIVATE
   $<TARGET_PROPERTY:plascan_gui,INCLUDE_DIRECTORIES>
   ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
 )
-target_include_directories(gui_tasks PRIVATE
-  $<TARGET_PROPERTY:plascan_gui,INCLUDE_DIRECTORIES>
-  ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
-)
 target_compile_definitions(plascan_gui PRIVATE PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-target_compile_definitions(gui_tasks PRIVATE PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
-set_target_properties(gui_project gui_tasks PROPERTIES
+set_target_properties(gui_project PROPERTIES
   AUTOMOC ON
   AUTOUIC OFF
   AUTORCC OFF
+)
+
+target_link_libraries(gui_project PRIVATE
+  Qt6::Core
+  Qt6::Gui
+  Qt6::Widgets
+  Qt6::Concurrent
+  plascan_common_project
+  project_workflows
 )
 
 if(GDAL_INCLUDE_DIRS)
@@ -117,20 +118,11 @@ if(TIFF_INCLUDE_DIRS)
   target_include_directories(plascan_gui PRIVATE ${TIFF_INCLUDE_DIRS})
 endif()
 
-# 添加SuperPoint头文件目录（superpoint库始终可用）
-target_include_directories(plascan_gui PRIVATE ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/superpoint)
-target_include_directories(plascan_gui PRIVATE ${CMAKE_SOURCE_DIR}/src/core/feature_extractors)
-
-# 添加特征匹配头文件目录
-target_include_directories(plascan_gui PRIVATE ${CMAKE_SOURCE_DIR}/src/core/feature_match)
-target_include_directories(plascan_gui PRIVATE ${CMAKE_SOURCE_DIR}/src/core/feature_match/superglue)
-target_include_directories(plascan_gui PRIVATE ${CMAKE_SOURCE_DIR}/src/core/feature_match/lightglue)
-target_include_directories(plascan_gui PRIVATE ${CMAKE_SOURCE_DIR}/src/core/feature_match/tradition)
-
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/GuiCoreLinking.cmake)
 
 # 链接Qt和其他库
 target_link_libraries(plascan_gui PRIVATE
+  gui_project
   Qt6::Core
   Qt6::Gui
   Qt6::GuiPrivate
@@ -140,6 +132,7 @@ target_link_libraries(plascan_gui PRIVATE
   plascan_common_log
   plascan_common_io
   plascan_common_model
+  project_workflows
   ${TORCH_LIBRARIES}
   ${OpenCV_LIBS}
   ${PLASCAN_LIBZIP_TARGET}

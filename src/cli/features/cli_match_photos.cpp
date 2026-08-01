@@ -130,14 +130,18 @@ QJsonObject algorithmPlanToJson(const xjw::matchphotos::MatchPhotosAlgorithmPlan
     QJsonObject object;
     object[QStringLiteral("strategy_id")] = plan.strategyId;
     object[QStringLiteral("display_name")] = plan.displayName;
-    object[QStringLiteral("feature_algorithm")] = plan.featureAlgorithm;
-    object[QStringLiteral("feature_suffix")] = plan.featureSuffix;
-    object[QStringLiteral("matcher_algorithm")] = plan.matcherAlgorithm;
+    object[QStringLiteral("algorithm_id")] = plan.algorithmId;
+    object[QStringLiteral("algorithm_version")] = static_cast<qint64>(plan.algorithmVersion);
+    object[QStringLiteral("valid")] = plan.valid;
+    object[QStringLiteral("extracts_features_in_memory")] = plan.extractsFeaturesInMemory;
+    object[QStringLiteral("requires_cuda")] = plan.requiresCuda;
     object[QStringLiteral("prefer_cuda")] = plan.preferCuda;
+    object[QStringLiteral("rotation_robust")] = plan.rotationRobust;
     object[QStringLiteral("max_image_dim")] = plan.maxImageDim;
     object[QStringLiteral("max_keypoints")] = plan.maxKeypoints;
     object[QStringLiteral("guided_matching")] = plan.enableGuidedMatching;
     object[QStringLiteral("reason")] = plan.reason;
+    object[QStringLiteral("validation_error")] = plan.validationError;
     return object;
 }
 
@@ -198,21 +202,6 @@ QJsonObject pairSelectionToJson(const MatchPhotosResult &result)
     return object;
 }
 
-QJsonArray featuresToJson(const MatchPhotosResult &result)
-{
-    QJsonArray array;
-    for (const xjw::matchphotos::MatchPhotosFeatureRecord &feature : result.features)
-    {
-        QJsonObject object;
-        object[QStringLiteral("image_path")] = feature.imagePath;
-        object[QStringLiteral("feature_path")] = feature.featurePath;
-        object[QStringLiteral("keypoint_count")] = feature.keypointCount;
-        object[QStringLiteral("settings")] = feature.settings;
-        array.append(object);
-    }
-    return array;
-}
-
 QJsonArray matchesToJson(const MatchPhotosResult &result)
 {
     QJsonArray array;
@@ -221,8 +210,10 @@ QJsonArray matchesToJson(const MatchPhotosResult &result)
         QJsonObject object;
         object[QStringLiteral("image0_path")] = match.image0Path;
         object[QStringLiteral("image1_path")] = match.image1Path;
-        object[QStringLiteral("match_path")] = match.matchPath;
-        object[QStringLiteral("sidecar_path")] = match.sidecarPath;
+        object[QStringLiteral("image0_match_file")] = match.image0MatchFilePath;
+        object[QStringLiteral("image1_match_file")] = match.image1MatchFilePath;
+        object[QStringLiteral("algorithm_id")] = match.algorithmId;
+        object[QStringLiteral("algorithm_version")] = static_cast<qint64>(match.algorithmVersion);
         object[QStringLiteral("match_count")] = match.matchCount;
         object[QStringLiteral("geometric_inlier_count")] = match.geometricInlierCount;
         object[QStringLiteral("passed_geometry")] = match.passedGeometry;
@@ -232,11 +223,26 @@ QJsonArray matchesToJson(const MatchPhotosResult &result)
     return array;
 }
 
+QJsonArray imageMatchFilesToJson(const MatchPhotosResult &result)
+{
+    QJsonArray array;
+    for (const xjw::matchphotos::MatchPhotosImageMatchRecord &image : result.imageMatchFiles)
+    {
+        QJsonObject object;
+        object[QStringLiteral("image")] = image.imagePath;
+        object[QStringLiteral("output")] = image.matchFilePath;
+        object[QStringLiteral("neighbors")] = QJsonArray::fromStringList(image.neighborImagePaths);
+        object[QStringLiteral("neighbor_variant_count")] = image.neighborVariantCount;
+        object[QStringLiteral("settings")] = image.settings;
+        array.append(object);
+    }
+    return array;
+}
+
 QJsonObject optionsToJson(const MatchPhotosOptions &options)
 {
     QJsonObject object;
-    object[QStringLiteral("feature_algorithm")] = options.featureAlgorithm;
-    object[QStringLiteral("match_algorithm")] = options.matcherAlgorithm;
+    object[QStringLiteral("algorithm_id")] = options.algorithmId;
     object[QStringLiteral("mask_apply_mode")] = options.maskApplyMode;
     object[QStringLiteral("max_image_dim")] = options.maxImageDim;
     object[QStringLiteral("keypoint_limit")] = options.maxKeypoints;
@@ -249,6 +255,7 @@ QJsonObject optionsToJson(const MatchPhotosOptions &options)
     object[QStringLiteral("reference_preselection")] = options.useReferencePreselection;
     object[QStringLiteral("guided_image_matching")] = options.enableGuidedMatching;
     object[QStringLiteral("exclude_fixed_tie_points")] = options.excludeStationaryTiePoints;
+    object[QStringLiteral("reuse_existing_matches")] = options.reuseExistingMatches;
     object[QStringLiteral("plan_only")] = options.planOnly;
     return object;
 }
@@ -256,7 +263,6 @@ QJsonObject optionsToJson(const MatchPhotosOptions &options)
 QJsonObject makeReport(const MatchPhotosResult &result,
                        const MatchPhotosOptions &options,
                        const QString &outputDir,
-                       const QString &featureDir,
                        const QString &matchDir,
                        int imageCount,
                        double elapsedMs)
@@ -265,14 +271,14 @@ QJsonObject makeReport(const MatchPhotosResult &result,
     report[QStringLiteral("success")] = result.success;
     report[QStringLiteral("error_message")] = result.errorMessage;
     report[QStringLiteral("image_count")] = imageCount;
-    report[QStringLiteral("feature_count")] = static_cast<int>(result.features.size());
-    report[QStringLiteral("match_count")] = static_cast<int>(result.matches.size());
+    report[QStringLiteral("pair_match_count")] = static_cast<int>(result.matches.size());
+    report[QStringLiteral("image_match_file_count")] =
+        static_cast<int>(result.imageMatchFiles.size());
     report[QStringLiteral("track_count")] = result.trackCount;
     report[QStringLiteral("accepted_track_components")] = result.acceptedTrackComponents;
     report[QStringLiteral("rejected_track_conflict_components")] = result.rejectedTrackConflictComponents;
     report[QStringLiteral("tie_point_path")] = result.tiePointPath;
     report[QStringLiteral("output_dir")] = outputDir;
-    report[QStringLiteral("feature_dir")] = featureDir;
     report[QStringLiteral("match_dir")] = matchDir;
     report[QStringLiteral("elapsed_ms")] = elapsedMs;
     report[QStringLiteral("generated_at")] = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
@@ -280,8 +286,8 @@ QJsonObject makeReport(const MatchPhotosResult &result,
     report[QStringLiteral("algorithm_plan")] = algorithmPlanToJson(result.algorithmPlan);
     report[QStringLiteral("pair_selection")] = pairSelectionToJson(result);
     report[QStringLiteral("stages")] = stagesToJson(result);
-    report[QStringLiteral("features")] = featuresToJson(result);
-    report[QStringLiteral("matches")] = matchesToJson(result);
+    report[QStringLiteral("pair_diagnostics")] = matchesToJson(result);
+    report[QStringLiteral("image_match_files")] = imageMatchFilesToJson(result);
     report[QStringLiteral("track_summary")] = result.trackSummary;
     return report;
 }
@@ -300,8 +306,7 @@ int main(int argc, char *argv[])
     std::string chunkNameArg;
     std::string qualityArg = "high";
     std::string deviceArg = "auto";
-    std::string featureAlgorithmArg = "sift";
-    std::string matchAlgorithmArg = "lightglue";
+    std::string algorithmIdArg = "sift_lightglue";
     std::string maskApplyModeArg = "none";
     std::string maskDirArg;
     std::string pairModeArg = "auto";
@@ -318,7 +323,7 @@ int main(int argc, char *argv[])
     bool guidedImageMatching = false;
     bool excludeFixedTiePoints = true;
     bool includeFixedTiePoints = false;
-    bool noReuseFeatures = false;
+    bool noReuseMatches = false;
     bool planOnly = false;
     bool force = false;
 
@@ -329,8 +334,9 @@ int main(int argc, char *argv[])
     app.add_option("--chunk-name", chunkNameArg, "使用指定名称的 Chunk");
     app.add_option("--quality", qualityArg, "精度预设: auto, fast, high, highest, difficult, cpu, cuda");
     app.add_option("--device", deviceArg, "计算设备: auto, cpu, cuda");
-    app.add_option("--feature-algorithm", featureAlgorithmArg, "特征算法，当前连接点流程应使用 sift");
-    app.add_option("--match-algorithm", matchAlgorithmArg, "匹配算法，当前连接点流程应使用 lightglue");
+    app.add_option("--algorithm-id", algorithmIdArg,
+                   "统一影像匹配算法 ID；当前仅支持 sift_lightglue")
+        ->check(CLI::IsMember({"sift_lightglue"}));
     app.add_option("--keypoint-limit", keypointLimit, "每张影像关键点限制");
     app.add_option("--keypoint-limit-per-mpx", keypointLimitPerMpx, "每百万像素关键点限制，0 表示不额外限制");
     app.add_option("--tiepoint-limit", tiepointLimit, "每张影像连接点限制");
@@ -347,7 +353,8 @@ int main(int argc, char *argv[])
     app.add_option("--sequence-window", sequenceWindow, "序列预选邻域窗口");
     app.add_option("--max-pairs", maxPairs, "候选影像对上限，0 表示不限制");
     app.add_option("--cuda-device", cudaDevice, "CUDA 设备 ID");
-    app.add_flag("--no-reuse-features", noReuseFeatures, "不复用已有特征文件，强制重新提取");
+    app.add_flag("--no-reuse-matches", noReuseMatches,
+                 "不复用兼容的逐影像匹配分片，强制重新提取并匹配");
     app.add_flag("--plan-only", planOnly, "只解析参数和规划候选对，不提取/匹配/构建连接点");
     app.add_flag("--force", force, "允许输出目录非空");
 
@@ -436,8 +443,8 @@ int main(int argc, char *argv[])
     options.pairPolicy.mode = pairModeFromToken(xjw::cli::fromStdString(pairModeArg));
     options.pairPolicy.sequenceWindow = std::max(1, sequenceWindow);
     options.pairPolicy.maxPairs = std::max(0, maxPairs);
-    options.featureAlgorithm = xjw::cli::normalizedToken(featureAlgorithmArg, QStringLiteral("sift"));
-    options.matcherAlgorithm = xjw::cli::normalizedToken(matchAlgorithmArg, QStringLiteral("lightglue"));
+    options.algorithmId = xjw::cli::normalizedToken(
+        algorithmIdArg, QStringLiteral("sift_lightglue"));
     options.maskApplyMode = xjw::cli::normalizedToken(maskApplyModeArg, QStringLiteral("none"));
     options.maxImageDim = maxImageDim;
     options.maxKeypoints = std::max(0, keypointLimit);
@@ -454,7 +461,7 @@ int main(int argc, char *argv[])
     options.useGenericPreselection = genericPreselection;
     options.useReferencePreselection = referencePreselection;
     options.excludeStationaryTiePoints = excludeFixedTiePoints;
-    options.reuseExistingFeatures = !noReuseFeatures;
+    options.reuseExistingMatches = !noReuseMatches;
     options.planOnly = planOnly;
 
     const QString assetDir = QDir(projectSession.activeChunkRoot())
@@ -462,8 +469,7 @@ int main(int argc, char *argv[])
     xjw::matchphotos::MatchPhotosContext context;
     context.projectPath = projectPath;
     context.workingDirectory = assetDir;
-    context.featureDirectory = QDir(assetDir).filePath(QStringLiteral("ip"));
-    context.matchDirectory = QDir(assetDir).filePath(QStringLiteral("matches"));
+    context.matchDirectory = QDir(assetDir).filePath(QStringLiteral("image_matches"));
     context.pairInput.images = xjw::cli::imagePaths(items);
     context.referenceCameras = xjw::cli::referenceCameraMap(items);
     context.maskPaths = xjw::cli::maskPathsFromDirectory(
@@ -495,7 +501,6 @@ int main(int argc, char *argv[])
     const QJsonObject report = makeReport(result,
                                           options,
                                           outputDir,
-                                          context.featureDirectory,
                                           context.matchDirectory,
                                           context.pairInput.images.size(),
                                           static_cast<double>(timer.elapsed()));
@@ -505,40 +510,23 @@ int main(int argc, char *argv[])
         return cli::EXIT_IO_ERR;
     }
 
-    for (const xjw::matchphotos::MatchPhotosFeatureRecord &feature :
-         result.features)
+    // 工程索引只登记“一幅影像一个分片”的最终结果。SIFT 描述子仅存在于任务
+    // 内存，像对诊断也已封装在对应 `.pimatch` 中，不能再写旧 ipfind/ipmatch 数组。
+    for (const xjw::matchphotos::MatchPhotosImageMatchRecord &image :
+         result.imageMatchFiles)
     {
         QJsonObject record{
-            {QStringLiteral("input"), feature.imagePath},
-            {QStringLiteral("output"), feature.featurePath},
-            {QStringLiteral("keypoint_count"), feature.keypointCount},
-            {QStringLiteral("settings"), feature.settings},
+            {QStringLiteral("image"), image.imagePath},
+            {QStringLiteral("output"), image.matchFilePath},
+            {QStringLiteral("neighbors"),
+             QJsonArray::fromStringList(image.neighborImagePaths)},
+            {QStringLiteral("neighbor_variant_count"), image.neighborVariantCount},
+            {QStringLiteral("settings"), image.settings},
             {QStringLiteral("created_at"),
              QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}
         };
         projectSession.upsertResultByPath(
-            QStringLiteral("ipfind_results"),
-            QStringLiteral("output"),
-            record);
-    }
-    for (const xjw::matchphotos::MatchPhotosMatchRecord &match :
-         result.matches)
-    {
-        QJsonObject record{
-            {QStringLiteral("image0"), match.image0Path},
-            {QStringLiteral("image1"), match.image1Path},
-            {QStringLiteral("output"), match.matchPath},
-            {QStringLiteral("sidecar_path"), match.sidecarPath},
-            {QStringLiteral("match_count"), match.matchCount},
-            {QStringLiteral("geometric_inlier_count"),
-             match.geometricInlierCount},
-            {QStringLiteral("passed_geometry"), match.passedGeometry},
-            {QStringLiteral("settings"), match.settings},
-            {QStringLiteral("created_at"),
-             QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}
-        };
-        projectSession.upsertResultByPath(
-            QStringLiteral("ipmatch_results"),
+            QStringLiteral("image_match_results"),
             QStringLiteral("output"),
             record);
     }
@@ -560,7 +548,9 @@ int main(int argc, char *argv[])
 
     std::fprintf(stdout, "status=%s\n", result.success ? "ok" : "failed");
     std::fprintf(stdout, "images=%d\n", static_cast<int>(context.pairInput.images.size()));
-    std::fprintf(stdout, "matches=%d\n", static_cast<int>(result.matches.size()));
+    std::fprintf(stdout, "pair_matches=%d\n", static_cast<int>(result.matches.size()));
+    std::fprintf(stdout, "image_match_files=%d\n",
+                 static_cast<int>(result.imageMatchFiles.size()));
     std::fprintf(stdout, "tracks=%d\n", result.trackCount);
     std::fprintf(stdout, "match_photos_report.json=%s\n", qUtf8Printable(reportPath));
     std::fprintf(stdout,

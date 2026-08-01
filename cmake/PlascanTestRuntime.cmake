@@ -2,6 +2,15 @@ function(plascan_get_windows_test_runtime_path out_var)
     set(runtime_dirs "")
 
     if(WIN32)
+        if(TensorRT_NVINFER_RUNTIME_LIBRARY AND
+           EXISTS "${TensorRT_NVINFER_RUNTIME_LIBRARY}")
+            get_filename_component(
+                _plascan_tensorrt_dir
+                "${TensorRT_NVINFER_RUNTIME_LIBRARY}"
+                DIRECTORY)
+            list(APPEND runtime_dirs "${_plascan_tensorrt_dir}")
+        endif()
+
         if(DEFINED Torch_DIR)
             get_filename_component(_plascan_torch_root "${Torch_DIR}/../../.." ABSOLUTE)
             foreach(_plascan_torch_dir

@@ -35,6 +35,15 @@ MvsDepthFrameRecord makeRecord(int index, const QString &name, const QString &st
     record.rawConfidencePath = QStringLiteral("confidence_%1.bin").arg(index, 3, 10, QLatin1Char('0'));
     record.rawGeometrySupportPath = QStringLiteral("geometry_support_%1.bin")
                                         .arg(index, 3, 10, QLatin1Char('0'));
+    record.rawAdaptiveGeometrySupportWeightPath =
+        QStringLiteral("adaptive_geometry_support_weight_%1.bin")
+            .arg(index, 3, 10, QLatin1Char('0'));
+    record.rawAdaptiveGeometryEffectiveViewCountPath =
+        QStringLiteral("adaptive_geometry_effective_view_count_%1.bin")
+            .arg(index, 3, 10, QLatin1Char('0'));
+    record.rawAdaptiveGeometryConflictWeightPath =
+        QStringLiteral("adaptive_geometry_conflict_weight_%1.bin")
+            .arg(index, 3, 10, QLatin1Char('0'));
     record.validMaskPath = QStringLiteral("mask_%1.png").arg(index, 3, 10, QLatin1Char('0'));
     record.gridWidth = 6000;
     record.gridHeight = 4000;
@@ -123,6 +132,12 @@ TEST(MvsWorkspaceManifest, SavesAndLoadsFrameRecordsAtomically)
     EXPECT_EQ(loaded.frames().front().rawConfidencePath, QStringLiteral("confidence_002.bin"));
     EXPECT_EQ(loaded.frames().front().rawGeometrySupportPath,
               QStringLiteral("geometry_support_002.bin"));
+    EXPECT_EQ(loaded.frames().front().rawAdaptiveGeometrySupportWeightPath,
+              QStringLiteral("adaptive_geometry_support_weight_002.bin"));
+    EXPECT_EQ(loaded.frames().front().rawAdaptiveGeometryEffectiveViewCountPath,
+              QStringLiteral("adaptive_geometry_effective_view_count_002.bin"));
+    EXPECT_EQ(loaded.frames().front().rawAdaptiveGeometryConflictWeightPath,
+              QStringLiteral("adaptive_geometry_conflict_weight_002.bin"));
     EXPECT_EQ(loaded.frames().front().sourceIndices, QVector<int>({7, 9}));
     EXPECT_EQ(loaded.frames().front().requestedSourceViewCount, 4);
     EXPECT_EQ(loaded.frames().front().sourceViewShortfall, 2);
@@ -240,6 +255,9 @@ TEST(MvsWorkspaceManifest, LoadsLegacyRecordWithoutGeometryEvidencePaths)
     const MvsDepthFrameRecord record = MvsDepthFrameRecord::fromJson(legacy);
 
     EXPECT_TRUE(record.sourceIndices.isEmpty());
+    EXPECT_TRUE(record.rawAdaptiveGeometrySupportWeightPath.isEmpty());
+    EXPECT_TRUE(record.rawAdaptiveGeometryEffectiveViewCountPath.isEmpty());
+    EXPECT_TRUE(record.rawAdaptiveGeometryConflictWeightPath.isEmpty());
     EXPECT_TRUE(record.rawGeometrySourceMaskPath.isEmpty());
     EXPECT_TRUE(record.rawInverseDepthMeanPath.isEmpty());
     EXPECT_TRUE(record.rawInverseDepthSpreadPath.isEmpty());
@@ -658,6 +676,10 @@ TEST(MvsWorkspaceManifest, DepthConfigHashChangesWhenRelevantSettingsChange)
     });
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
         changed.depthFilterMode = xjw::mvs::DepthFilterMode::Aggressive;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.enableAdaptiveGeometryEvidence =
+            !changed.enableAdaptiveGeometryEvidence;
     });
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
         changed.fusion.maxLocalDepthOutlierRemovalRatio -= 0.01f;

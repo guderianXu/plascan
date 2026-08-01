@@ -85,7 +85,7 @@ TEST(TorchScriptModelResolverTest, FindsFirstExistingModelAndReportsPickedName)
 
     const QString sourceRoot = QDir(tempDir.path()).filePath(QStringLiteral("source"));
     const QString appDir = QDir(tempDir.path()).filePath(QStringLiteral("bin"));
-    const QString pickedModel = QStringLiteral("lightglue_sift_cuda.torchscript");
+    const QString pickedModel = QStringLiteral("sam21_hiera_tiny_encoder_cuda.pt");
     const QString pickedPath = QDir(sourceRoot).filePath(QStringLiteral("resources/models/%1").arg(pickedModel));
     writeFile(pickedPath);
     qunsetenv("PLASCAN_MODEL_DIR");

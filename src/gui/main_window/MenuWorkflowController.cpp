@@ -10,6 +10,7 @@
 #include "preparation/ReconstructionPrerequisiteReport.h"
 #include "Logger.h"
 #include "project/SparseResultQuality.h"
+#include "ProjectResultRecords.h"
 
 #include "GuiTaskRunner.h"
 #include "tie_points/FeaturePointVisualizationDialog.h"
@@ -18,6 +19,7 @@
 #include "MainMenu.h"
 #include "tie_points/MatchPairSelectorDialog.h"
 #include "reconstruction/AerialTriangulationDialog.h"
+#include "application/WorkflowSettingsDialog.h"
 #include "tie_points/OverlapAnalysisDialog.h"
 #include "reconstruction/CreateDemDialog.h"
 #include "reconstruction/MapProjectDialog.h"
@@ -297,6 +299,8 @@ void MenuWorkflowController::bindActions(MainMenu *mainMenu)
 
     connectAction(mainMenu->workflowAerialTriangulationAction(),
                   &MenuWorkflowController::openWorkflowAerialTriangulationDialog);
+    connectAction(mainMenu->workflowSettingsAction(),
+                  &MenuWorkflowController::openWorkflowSettingsDialog);
     connectAction(mainMenu->featureVisualizationAction(), &MenuWorkflowController::openFeaturePointVisualizationDialog);
     connectAction(mainMenu->overlapAnalysisAction(), &MenuWorkflowController::openOverlapAnalysisDialog);
     connectAction(mainMenu->createDEMAction(), &MenuWorkflowController::openCreateDemDialog);
@@ -352,23 +356,15 @@ MenuWorkflowController::SparsePrerequisiteSummary
 MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
                                                      const QJsonObject &meta,
                                                      const QString &projectPath,
-                                                     const QString &featureAlgorithm,
-                                                     const QString &matchAlgorithm)
+                                                     const QString &algorithmId)
 {
     SparsePrerequisiteSummary summary;
     summary.imageCount = images.size();
-    const QString selectedFeatureAlgorithm = featureAlgorithm.trimmed().toLower();
-    const QString selectedMatchAlgorithm = matchAlgorithm.trimmed().toLower();
-
-    int availableFeatureCount = 0;
-    for (const QString &imagePath : images)
-    {
-        if (!xjw::common::project::ProjectIO::findFeatureForImage(projectPath, imagePath).isEmpty())
-        {
-            ++availableFeatureCount;
-        }
-    }
-    summary.hasFeatures = images.isEmpty() || availableFeatureCount == images.size();
+    // 新匹配链路只有组合算法标识，不再把“特征算法”和“匹配算法”拆成两个
+    // 自由字符串。SIFT 描述子只驻留任务内存，预检也不再查找特征中间文件。
+    const QString selectedAlgorithmId = algorithmId.trimmed().isEmpty()
+        ? QStringLiteral("sift_lightglue")
+        : algorithmId.trimmed().toLower();
 
     auto nameAliases = [](const QString &pathOrName) -> QStringList
     {
@@ -403,52 +399,13 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
             : (right + QStringLiteral("\n") + left);
     };
 
-    auto recordAlgorithmMatches = [&](const QJsonObject &object) -> bool
-    {
-        QString recordFeatureAlgorithm =
-            object.value(QStringLiteral("feature_algorithm")).toString().trimmed().toLower();
-        if (recordFeatureAlgorithm.isEmpty())
-        {
-            recordFeatureAlgorithm = object.value(QStringLiteral("settings")).toObject()
-                                         .value(QStringLiteral("feature_algorithm")).toString().trimmed().toLower();
-        }
-
-        QString recordMatchAlgorithm =
-            object.value(QStringLiteral("match_algorithm")).toString().trimmed().toLower();
-        if (recordMatchAlgorithm.isEmpty())
-        {
-            recordMatchAlgorithm = object.value(QStringLiteral("settings")).toObject()
-                                      .value(QStringLiteral("match_algorithm")).toString().trimmed().toLower();
-        }
-
-        if (!selectedFeatureAlgorithm.isEmpty() && recordFeatureAlgorithm != selectedFeatureAlgorithm)
-        {
-            return false;
-        }
-        if (!selectedMatchAlgorithm.isEmpty() && recordMatchAlgorithm != selectedMatchAlgorithm)
-        {
-            return false;
-        }
-        return true;
-    };
-
     auto variantAlgorithmMatches = [&](const xjw::aerial_triangulation::MatchVariant &variant) -> bool
     {
         if (!variant.compatible)
         {
             return false;
         }
-        if (!selectedFeatureAlgorithm.isEmpty() &&
-            variant.featureAlgorithm.trimmed().toLower() != selectedFeatureAlgorithm)
-        {
-            return false;
-        }
-        if (!selectedMatchAlgorithm.isEmpty() &&
-            variant.matchAlgorithm.trimmed().toLower() != selectedMatchAlgorithm)
-        {
-            return false;
-        }
-        return true;
+        return variant.algorithmId.trimmed().toLower() == selectedAlgorithmId;
     };
 
     QSet<QString> matchedPairKeys;
@@ -476,7 +433,7 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
     if (!projectPath.isEmpty())
     {
         xjw::aerial_triangulation::MatchResultCatalogConfig catalogConfig;
-        catalogConfig.matchDirectory = xjw::common::project::ProjectIO::ipmatchOutputDir(projectPath);
+        catalogConfig.matchDirectory = xjw::common::project::ProjectIO::imageMatchOutputDir(projectPath);
         catalogConfig.targetImagePaths = images;
         const xjw::aerial_triangulation::MatchResultCatalogSummary catalogSummary =
             xjw::aerial_triangulation::MatchResultCatalog(catalogConfig).scan();
@@ -489,35 +446,14 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
                     continue;
                 }
 
-                appendPreflightPair(variant.imageA.isEmpty() ? group.imageA : variant.imageA,
-                                    variant.imageB.isEmpty() ? group.imageB : variant.imageB);
+                if (variant.geometryPassed && variant.geometricVerifiedInliers > 0)
+                {
+                    appendPreflightPair(variant.imageA.isEmpty() ? group.imageA : variant.imageA,
+                                        variant.imageB.isEmpty() ? group.imageB : variant.imageB);
+                }
                 break;
             }
         }
-    }
-
-    const QJsonArray ipmatchResults = meta.value(QStringLiteral("ipmatch_results")).toArray();
-    for (const QJsonValue &resultValue : ipmatchResults)
-    {
-        const QJsonObject resultObject = resultValue.toObject();
-        if (!recordAlgorithmMatches(resultObject))
-        {
-            continue;
-        }
-
-        QString image0Name = resultObject.value(QStringLiteral("image0_name")).toString();
-        QString image1Name = resultObject.value(QStringLiteral("image1_name")).toString();
-
-        if (image0Name.isEmpty())
-        {
-            image0Name = QFileInfo(resultObject.value(QStringLiteral("image0")).toString()).completeBaseName();
-        }
-        if (image1Name.isEmpty())
-        {
-            image1Name = QFileInfo(resultObject.value(QStringLiteral("image1")).toString()).completeBaseName();
-        }
-
-        appendPreflightPair(image0Name, image1Name);
     }
 
     for (const auto &pair : matchedPairs)
@@ -561,20 +497,27 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
 
     if (!projectPath.isEmpty())
     {
-        QFile noMatchFile(QDir(xjw::common::project::ProjectIO::ipmatchOutputDir(projectPath))
-                              .filePath(QStringLiteral("no_match_pairs.json")));
-        if (noMatchFile.open(QIODevice::ReadOnly))
+        // 无匹配或几何失败也是 `.pimatch` 中的一种确定结果。它与有效匹配
+        // 共用同一格式和版本，不再维护容易失同步的 no_match_pairs.json。
+        xjw::aerial_triangulation::MatchResultCatalogConfig catalogConfig;
+        catalogConfig.matchDirectory =
+            xjw::common::project::ProjectIO::imageMatchOutputDir(projectPath);
+        catalogConfig.targetImagePaths = images;
+        const auto catalogSummary =
+            xjw::aerial_triangulation::MatchResultCatalog(catalogConfig).scan();
+        for (const auto &group : catalogSummary.pairGroups)
         {
-            const QJsonArray records = QJsonDocument::fromJson(noMatchFile.readAll()).array();
-            for (const QJsonValue &value : records)
-            {
-                const QJsonObject object = value.toObject();
-                if (!recordAlgorithmMatches(object))
+            const auto settled = std::find_if(
+                group.variants.cbegin(), group.variants.cend(),
+                [&](const xjw::aerial_triangulation::MatchVariant &variant)
                 {
-                    continue;
-                }
-                appendSettledNoMatchPair(object.value(QStringLiteral("image0")).toString(),
-                                         object.value(QStringLiteral("image1")).toString());
+                    return variant.compatible &&
+                        variant.algorithmId.trimmed().toLower() == selectedAlgorithmId &&
+                        (!variant.geometryPassed || variant.geometricVerifiedInliers <= 0);
+                });
+            if (settled != group.variants.cend())
+            {
+                appendSettledNoMatchPair(group.imageA, group.imageB);
             }
         }
     }
@@ -793,8 +736,6 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
     prerequisiteReport.plannedPairCount = generatedPairRequiredCount;
     prerequisiteReport.validMatchPairCount = matchStats.matchedEdgeCount;
     prerequisiteReport.settledNoMatchPairCount = settledNoMatchPairs.size();
-    prerequisiteReport.missingFeaturePairCount =
-        std::max(0, static_cast<int>(images.size()) - availableFeatureCount);
     prerequisiteReport.missingMatchPairCount =
         (usedStoredPairs && !storedPairsStale && generatedPairRequiredCount > 0)
             ? std::max(0, generatedPairRequiredCount - generatedPairProcessedCount)
@@ -819,7 +760,7 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
                      .arg(prerequisiteReport.missingMatchPairCount)
                      .arg(prerequisiteReport.validMatchPairCount));
         break;
-    case xjw::aerial_triangulation::ReconstructionPrerequisiteRecommendedAction::PrepareFeaturesAndMatches:
+    case xjw::aerial_triangulation::ReconstructionPrerequisiteRecommendedAction::PrepareImageMatches:
         LOG_INFO(QStringLiteral("空三缺少连接点输入：创建连接点流程将自动提取特征并匹配"));
         break;
     case xjw::aerial_triangulation::ReconstructionPrerequisiteRecommendedAction::InspectMatchQuality:
@@ -842,11 +783,6 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
         LOG_WARN(QStringLiteral("空中三角测量预检: 未找到已完成的影像匹配结果"));
     }
 
-    if (!summary.hasFeatures)
-    {
-        summary.missingMessages.append(
-            QStringLiteral("缺少连接点输入：当前影像特征不完整，将通过创建连接点流程自动补齐。"));
-    }
     if (!summary.hasMatches && matchingProducedNoUsableEdges)
     {
         summary.warningMessages.append(
@@ -889,19 +825,8 @@ void MenuWorkflowController::openFeaturePointVisualizationDialog()
         return;
     }
 
-    // 收集当前可用的特征文件后缀
-    QStringList availableSuffixes;
-    QString currentSuffix;
     auto *mainWin = qobject_cast<MainWindow*>(_mainWindow.data());
     auto *canvas = mainWin ? mainWin->canvas() : nullptr;
-    if (canvas)
-    {
-        availableSuffixes = canvas->availableFeatureSuffixes();
-        currentSuffix = canvas->activeFeatureSuffix();
-    }
-    if (availableSuffixes.isEmpty())
-        availableSuffixes << QStringLiteral(".sp") << QStringLiteral(".dsk") << QStringLiteral(".alk")
-                           << QStringLiteral(".sift") << QStringLiteral(".orb") << QStringLiteral(".akz");
 
     QJsonObject sv;
     if (_projectManager)
@@ -914,40 +839,10 @@ void MenuWorkflowController::openFeaturePointVisualizationDialog()
         _featurePointVisualizationSetting->setProjectPath(_projectManager->currentProjectPath());
         sv = _featurePointVisualizationSetting->load();
 
-        const QString savedSuffix = sv.value(QStringLiteral("feature_suffix")).toString().trimmed();
-        if (!savedSuffix.isEmpty())
-        {
-            currentSuffix = savedSuffix;
-        }
     }
 
-    auto *dlg = new FeaturePointVisualizationDialog(availableSuffixes, _mainWindow);
+    auto *dlg = new FeaturePointVisualizationDialog(_mainWindow);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
-    if (!currentSuffix.isEmpty())
-    {
-        dlg->setCurrentSuffix(currentSuffix);
-    }
-    const QString effectiveSuffix = dlg->currentSuffix();
-    if (canvas && !effectiveSuffix.isEmpty())
-    {
-        canvas->setActiveFeatureSuffix(effectiveSuffix);
-    }
-
-    // 切换特征文件后缀 → CanvasWidget 重新加载
-    if (canvas)
-    {
-        connect(dlg, &FeaturePointVisualizationDialog::featureSuffixChanged,
-                this, [this, canvas](const QString &suffix)
-        {
-            canvas->setActiveFeatureSuffix(suffix);
-            if (_featurePointVisualizationSetting)
-            {
-                QJsonObject sv = _featurePointVisualizationSetting->load();
-                sv[QStringLiteral("feature_suffix")] = suffix;
-                _featurePointVisualizationSetting->save(sv);
-            }
-        });
-    }
 
     // 懒初始化可视化记忆化管理器并加载保存的设置
     if (_projectManager)
@@ -1006,7 +901,7 @@ void MenuWorkflowController::openFeaturePointVisualizationDialog()
 
     // 连接实时更新信号
     connect(dlg, &FeaturePointVisualizationDialog::displayOptionsChanged, this,
-        [this, dlg](const LayerRenderer::FeatureDisplayOptions &opts)
+        [this](const LayerRenderer::FeatureDisplayOptions &opts)
         {
             // 发送信号给MainWindow应用到CanvasWidget
             emit requestApplyFeatureDisplayOptions(opts);
@@ -1029,7 +924,6 @@ void MenuWorkflowController::openFeaturePointVisualizationDialog()
                 sv["markerShape"] = opts.markerShape;
                 sv["maxDisplayCount"] = opts.maxDisplayCount;
                 sv["showTopScores"] = opts.showTopScores;
-                sv[QStringLiteral("feature_suffix")] = dlg->currentSuffix();
                 sv["pointColor"] = colorToJson(opts.pointColor);
                 sv["scaleColor"] = colorToJson(opts.scaleColor);
                 sv["orientColor"] = colorToJson(opts.orientColor);
@@ -1042,7 +936,7 @@ void MenuWorkflowController::openFeaturePointVisualizationDialog()
     dlg->show();
 }
 
-void MenuWorkflowController::applySavedFeatureDisplayOptions(const QJsonObject &ui)
+void MenuWorkflowController::applySavedFeatureDisplayOptions(const QJsonObject &)
 {
     if (!_projectManager)
     {
@@ -1057,32 +951,6 @@ void MenuWorkflowController::applySavedFeatureDisplayOptions(const QJsonObject &
     }
     _featurePointVisualizationSetting->setProjectPath(_projectManager->currentProjectPath());
     QJsonObject sv = _featurePointVisualizationSetting->load();
-
-    // 兼容旧版本：若新文件中无数据则尝试从传入的旧 ui 设置中读取
-    if (sv.isEmpty() && ui.contains(QStringLiteral("superpoint_visualization")))
-    {
-        sv = ui.value(QStringLiteral("superpoint_visualization")).toObject();
-    }
-    auto *mainWin = qobject_cast<MainWindow*>(_mainWindow.data());
-    auto *canvas = mainWin ? mainWin->canvas() : nullptr;
-    const QString savedSuffix = sv.value(QStringLiteral("feature_suffix")).toString().trimmed();
-    if (canvas)
-    {
-        const QString inferredSuffix = xjw::common::project::inferPreferredFeatureSuffix(
-            _projectManager->currentProjectPath(), _projectManager->currentMeta());
-        const bool savedSuffixUsable = !savedSuffix.isEmpty()
-            && (inferredSuffix.isEmpty()
-                || xjw::common::project::projectHasFeatureSuffix(
-                    _projectManager->currentProjectPath(), _projectManager->currentMeta(), savedSuffix));
-        if (savedSuffixUsable)
-        {
-            canvas->setActiveFeatureSuffix(savedSuffix);
-        }
-        else if (!inferredSuffix.isEmpty())
-        {
-            canvas->setActiveFeatureSuffix(inferredSuffix);
-        }
-    }
 
     if (sv.isEmpty())
     {
@@ -1171,13 +1039,79 @@ void MenuWorkflowController::openWorkflowAerialTriangulationDialog()
 
     if (dlg.exec() == QDialog::Accepted)
     {
-        const QJsonObject settings = dlg.collectSettings();
+        const QJsonObject dialogSettings = dlg.collectSettings();
         if (_aerialTriangulationSetting)
         {
-            _aerialTriangulationSetting->save(settings);
+            _aerialTriangulationSetting->save(dialogSettings);
         }
-        startAerialTriangulationWorkflow(settings);
+        startAerialTriangulationWorkflow(
+            mergeAerialTriangulationSettings(dialogSettings));
     }
+}
+
+void MenuWorkflowController::openWorkflowSettingsDialog()
+{
+    if (!_mainWindow)
+    {
+        return;
+    }
+    if (!_projectManager || _projectManager->currentProjectPath().trimmed().isEmpty())
+    {
+        QMessageBox::warning(_mainWindow,
+                             QStringLiteral("工作流程设置"),
+                             QStringLiteral("请先打开项目。工作流程设置按项目保存。"));
+        return;
+    }
+
+    if (!_workflowSettingsStore)
+    {
+        _workflowSettingsStore = createDialogSettingStore(
+            DialogSettingKeys::WorkflowSettings);
+    }
+    _workflowSettingsStore->setProjectPath(_projectManager->currentProjectPath());
+
+    WorkflowSettingsDialog dialog(_mainWindow);
+    dialog.applySettings(_workflowSettingsStore->load());
+    if (dialog.exec() == QDialog::Accepted)
+    {
+        QString saveError;
+        if (!_workflowSettingsStore->save(dialog.collectSettings(), &saveError))
+        {
+            QMessageBox::warning(_mainWindow,
+                                 QStringLiteral("工作流程设置"),
+                                 saveError.isEmpty()
+                                     ? QStringLiteral("无法保存工作流程设置。")
+                                     : saveError);
+        }
+    }
+}
+
+QJsonObject MenuWorkflowController::mergeAerialTriangulationSettings(
+    const QJsonObject &dialogSettings)
+{
+    QJsonObject merged = WorkflowSettingsDialog::defaultSettings();
+    if (_projectManager)
+    {
+        if (!_workflowSettingsStore)
+        {
+            _workflowSettingsStore = createDialogSettingStore(
+                DialogSettingKeys::WorkflowSettings);
+        }
+        _workflowSettingsStore->setProjectPath(_projectManager->currentProjectPath());
+        const QJsonObject savedDetails = _workflowSettingsStore->load();
+        for (auto it = savedDetails.constBegin(); it != savedDetails.constEnd(); ++it)
+        {
+            merged.insert(it.key(), it.value());
+        }
+    }
+
+    // 空三主对话框拥有质量、预选、蒙版和连接点总配额等高频字段；若未来
+    // 两个对话框出现同名字段，应以用户本次确认的主对话框值为准。
+    for (auto it = dialogSettings.constBegin(); it != dialogSettings.constEnd(); ++it)
+    {
+        merged.insert(it.key(), it.value());
+    }
+    return merged;
 }
 
 QJsonObject MenuWorkflowController::sanitizeAerialTriangulationReferencePreselection(
@@ -1806,11 +1740,25 @@ void MenuWorkflowController::openMapProjectDialog()
             dlg->setAvailableImages(images);
         }
 
-        QString projectRoot = xjw::common::project::ProjectIO::projectRootFromPlascan(_projectManager->currentProjectPath());
+        const QString projectPath = _projectManager->currentProjectPath();
+        const QString projectRoot =
+            xjw::common::project::ProjectIO::projectRootFromPlascan(projectPath);
         if (!projectRoot.isEmpty())
         {
             dlg->setProjectRoot(projectRoot);
         }
+
+        const QMap<QString, xjw::Camera> cameraMap =
+            _projectManager->getCamerasForImages(images);
+        int maskReadyCount = 0;
+        for (const QString &imagePath : images)
+        {
+            if (!xjw::common::project::ProjectIO::findMaskForImage(projectPath, imagePath).isEmpty())
+            {
+                ++maskReadyCount;
+            }
+        }
+        dlg->setImageReadiness(cameraMap.keys(), maskReadyCount);
 
         const QJsonArray demResults = _projectManager->currentMeta().value(QStringLiteral("dem_results")).toArray();
         QString latestRelativeDem;
@@ -1818,8 +1766,12 @@ void MenuWorkflowController::openMapProjectDialog()
         for (int index = demResults.size() - 1; index >= 0; --index)
         {
             const QJsonObject record = demResults.at(index).toObject();
-            const QString candidate = record.value(QStringLiteral("dem_tif")).toString();
-            if (candidate.isEmpty())
+            const QString candidate =
+                xjw::common::project::ProjectIO::resolveProjectResourcePath(
+                    projectPath,
+                    record.value(QStringLiteral("dem_tif")).toString());
+            const QFileInfo candidateInfo(candidate);
+            if (candidate.isEmpty() || !candidateInfo.exists() || !candidateInfo.isFile())
             {
                 continue;
             }
@@ -1856,26 +1808,50 @@ void MenuWorkflowController::openMapProjectDialog()
         }
     });
 
-    connect(dlg, &MapProjectDialog::requestRunMapProject, this,
-        [this](const QStringList &images, const QString &demPath, const QString &outputPath, double res)
+    connect(dlg, &MapProjectDialog::requestRunMapProject, dlg,
+        [this, dialog = QPointer<MapProjectDialog>(dlg)](const QJsonObject &settings)
         {
         if (!_projectManager)
         {
             LOG_WARN(QStringLiteral("MapProject: 未找到 ProjectManager"));
+            if (dialog)
+            {
+                dialog->onPipelineFinished(
+                    false, QStringLiteral("项目管理器不可用，无法启动正射影像任务"));
+            }
             return;
         }
-        QPointer<ProjectManager> pmGuard(_projectManager);
-        const QString projectPath = pmGuard->currentProjectPath();
-        QTimer::singleShot(0, pmGuard.data(),
-            [pmGuard, projectPath, images, demPath, outputPath, res]()
+        xjw::gui::project::OrthoGenerationRequest request;
+        QString requestError;
+        if (!xjw::gui::project::OrthoGenerationRequest::fromJson(
+                settings, &request, &requestError))
+        {
+            if (dialog)
             {
-                if (!pmGuard || pmGuard->currentProjectPath() != projectPath)
-                {
-                    return;
-                }
-                pmGuard->startMapProjectAsync(images, demPath, outputPath, res);
-            });
+                dialog->onPipelineFinished(false, requestError);
+            }
+            return;
+        }
+        _projectManager->startMapProjectAsync(request);
     });
+
+    connect(dlg, &MapProjectDialog::requestCancelMapProject, this, [this]()
+    {
+        if (_projectManager)
+        {
+            _projectManager->cancelMapProject();
+        }
+    });
+
+    if (_projectManager)
+    {
+        connect(_projectManager, &ProjectManager::orthoPipelineStarted,
+                dlg, &MapProjectDialog::onPipelineStarted);
+        connect(_projectManager, &ProjectManager::orthoPipelineProgressChanged,
+                dlg, &MapProjectDialog::onPipelineProgress);
+        connect(_projectManager, &ProjectManager::orthoPipelineFinished,
+                dlg, &MapProjectDialog::onPipelineFinished);
+    }
 
     dlg->exec();
 }

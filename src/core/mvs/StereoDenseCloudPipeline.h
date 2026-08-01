@@ -40,7 +40,7 @@ enum class StereoPipelineGeometryMode
 struct StereoPipelineConfig
 {
     // Feature matching
-    std::string featureAlgorithm = "disk+lightglue";
+    std::string featureAlgorithm = "sift_lightglue";
     float matchScoreThreshold = 0.2f;
 
     StereoPipelineGeometryMode geometryMode = StereoPipelineGeometryMode::OriginalDepth;

@@ -57,10 +57,6 @@ class FullPipelineEntrypointTest(unittest.TestCase):
 
         self.assertIn("--force", cmd)
 
-    def test_legacy_flag_dispatches_old_validation_script(self):
-        args = [
-            "input.lis",
-            "--legacy-stereo-test",
-        ]
-        with mock.patch.object(pipeline, "load_legacy_pipeline_main", return_value=lambda: 42):
-            self.assertEqual(pipeline.main(args), 42)
+    def test_removed_legacy_flag_is_rejected(self):
+        with self.assertRaises(SystemExit):
+            pipeline.parse_args(["input.lis", "--legacy-stereo-test"])

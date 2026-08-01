@@ -30,6 +30,7 @@ struct StoredDepthFrameRecord
     QStringList sourceImages;
     QString configHash;
     QString projectInputSignature;
+    QString reconstructionGenerationId;
     int algorithmRevision = 0;
     int gridWidth = 0;
     int gridHeight = 0;

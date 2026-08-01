@@ -1,3 +1,11 @@
+/**
+ * @file BundleAdjustNativeCuda.cu
+ * @brief Native CUDA 点块求解器的设备内存管理、核调度和主机复核。
+ *
+ * 相机和观测只读，点在设备端原位更新。一次 kernel launch 内完成全部 LM 迭代，
+ * 以减少主机同步；最终代价仍由 CPU 参考投影计算，便于检测设备公式漂移。
+ */
+
 #include "BundleAdjustNativeCudaKernels.cuh"
 
 #include "BundleAdjustNativeCudaDeviceTypes.cuh"
@@ -34,6 +42,7 @@ static_assert(offsetof(HostObservation, v) == offsetof(DeviceObservation, v),
               "v layout mismatch");
 static_assert(offsetof(HostObservation, weight) == offsetof(DeviceObservation, weight),
               "weight layout mismatch");
+// 观测数组直接按字节上传，因此布局差异必须在编译期失败，不能依赖运行时转换。
 
 double elapsedSeconds(Clock::time_point start, Clock::time_point end)
 {
@@ -75,6 +84,7 @@ bool copyToDevice(const std::vector<T> &host, T **device, KernelRunSummary *summ
     return true;
 }
 
+/// 观测使用不同主机/设备类型，但由上面的布局断言保证可直接拷贝。
 bool copyObservationsToDevice(const std::vector<HostObservation> &host,
                               DeviceObservation **device,
                               KernelRunSummary *summary)
@@ -109,6 +119,7 @@ bool copyObservationsToDevice(const std::vector<HostObservation> &host,
     return true;
 }
 
+/// 把 CUDA API 错误转换为稳定后端消息；返回 true 表示发生错误。
 bool setCudaError(KernelRunSummary *summary, cudaError_t status, const char *operation)
 {
     if (status == cudaSuccess)
@@ -124,6 +135,7 @@ bool setCudaError(KernelRunSummary *summary, cudaError_t status, const char *ope
     return true;
 }
 
+/// 与设备投影公式一致的主机复核实现，只接受相机前方点。
 bool projectHostDeviceCamera(const DeviceCamera &camera, const DevicePoint &point, double pixel[2])
 {
     const double dx = point.xyz[0] - camera.cameraCenter[0];
@@ -165,6 +177,7 @@ bool projectHostDeviceCamera(const DeviceCamera &camera, const DevicePoint &poin
     return std::isfinite(pixel[0]) && std::isfinite(pixel[1]);
 }
 
+/// 计算未施加 Huber 截断的加权平方误差，作为前后变化和调试指标。
 double hostCost(const std::vector<DeviceCamera> &cameras,
                 const std::vector<DevicePoint> &points,
                 const std::vector<HostObservation> &observations)
@@ -192,6 +205,7 @@ void freeDeviceBuffers(DeviceCamera *cameras,
                        DevicePoint *points,
                        DeviceObservation *observations,
                        int *acceptedIterations,
+                       int *rejectedTrials,
                        KernelRunSummary *summary)
 {
     const auto releaseStart = Clock::now();
@@ -199,6 +213,7 @@ void freeDeviceBuffers(DeviceCamera *cameras,
     cudaFree(points);
     cudaFree(observations);
     cudaFree(acceptedIterations);
+    cudaFree(rejectedTrials);
     if (summary)
     {
         summary->releaseSeconds += elapsedSeconds(releaseStart, Clock::now());
@@ -210,10 +225,9 @@ void freeDeviceBuffers(DeviceCamera *cameras,
 KernelRunSummary runNativeCudaBundleAdjust(Workset *workset,
                                            int deviceId,
                                            int maxIterations,
-                                           int maxPcgIterations,
-                                           double pcgTolerance,
                                            double huberDelta,
-                                           double initialDamping)
+                                           double initialDamping,
+                                           double maxPointStepNorm)
 {
     KernelRunSummary summary;
     if (!workset)
@@ -239,6 +253,8 @@ KernelRunSummary runNativeCudaBundleAdjust(Workset *workset,
         return summary;
     }
 
+    // 阶段 1：把含 std::array 的主机工作集显式打包为设备 POD，并在上传前计算
+    // 初始代价。主机复核让 CUDA 核统计可与 CPU 测试直接比较。
     const auto stagingStart = Clock::now();
     std::vector<DeviceCamera> hostCameras;
     hostCameras.reserve(workset->cameras.size());
@@ -259,17 +275,25 @@ KernelRunSummary runNativeCudaBundleAdjust(Workset *workset,
     summary.initialCost = hostCost(hostCameras, hostPoints, workset->observations);
     summary.hostCostSeconds += elapsedSeconds(hostCostStart, Clock::now());
 
+    // 阶段 2：一次性上传相机、点和观测。迭代全部在单次 kernel launch 内完成，
+    // 避免每轮在主机和设备之间同步造成高延迟。
     DeviceCamera *deviceCameras = nullptr;
     DevicePoint *devicePoints = nullptr;
     DeviceObservation *deviceObservations = nullptr;
     int *deviceAcceptedIterations = nullptr;
+    int *deviceRejectedTrials = nullptr;
     const auto uploadStart = Clock::now();
     if (!copyToDevice(hostCameras, &deviceCameras, &summary, "cameras") ||
         !copyToDevice(hostPoints, &devicePoints, &summary, "points") ||
         !copyObservationsToDevice(workset->observations, &deviceObservations, &summary))
     {
         summary.uploadSeconds += elapsedSeconds(uploadStart, Clock::now());
-        freeDeviceBuffers(deviceCameras, devicePoints, deviceObservations, deviceAcceptedIterations, &summary);
+        freeDeviceBuffers(deviceCameras,
+                          devicePoints,
+                          deviceObservations,
+                          deviceAcceptedIterations,
+                          deviceRejectedTrials,
+                          &summary);
         return summary;
     }
 
@@ -278,7 +302,27 @@ KernelRunSummary runNativeCudaBundleAdjust(Workset *workset,
     if (setCudaError(&summary, status, "cudaMalloc acceptedIterations"))
     {
         summary.uploadSeconds += elapsedSeconds(uploadStart, Clock::now());
-        freeDeviceBuffers(deviceCameras, devicePoints, deviceObservations, deviceAcceptedIterations, &summary);
+        freeDeviceBuffers(deviceCameras,
+                          devicePoints,
+                          deviceObservations,
+                          deviceAcceptedIterations,
+                          deviceRejectedTrials,
+                          &summary);
+        return summary;
+    }
+
+    status = cudaMalloc(
+        reinterpret_cast<void **>(&deviceRejectedTrials),
+        hostPoints.size() * sizeof(int));
+    if (setCudaError(&summary, status, "cudaMalloc rejectedTrials"))
+    {
+        summary.uploadSeconds += elapsedSeconds(uploadStart, Clock::now());
+        freeDeviceBuffers(deviceCameras,
+                          devicePoints,
+                          deviceObservations,
+                          deviceAcceptedIterations,
+                          deviceRejectedTrials,
+                          &summary);
         return summary;
     }
 
@@ -286,11 +330,30 @@ KernelRunSummary runNativeCudaBundleAdjust(Workset *workset,
     if (setCudaError(&summary, status, "cudaMemset acceptedIterations"))
     {
         summary.uploadSeconds += elapsedSeconds(uploadStart, Clock::now());
-        freeDeviceBuffers(deviceCameras, devicePoints, deviceObservations, deviceAcceptedIterations, &summary);
+        freeDeviceBuffers(deviceCameras,
+                          devicePoints,
+                          deviceObservations,
+                          deviceAcceptedIterations,
+                          deviceRejectedTrials,
+                          &summary);
+        return summary;
+    }
+    status = cudaMemset(
+        deviceRejectedTrials, 0, hostPoints.size() * sizeof(int));
+    if (setCudaError(&summary, status, "cudaMemset rejectedTrials"))
+    {
+        summary.uploadSeconds += elapsedSeconds(uploadStart, Clock::now());
+        freeDeviceBuffers(deviceCameras,
+                          devicePoints,
+                          deviceObservations,
+                          deviceAcceptedIterations,
+                          deviceRejectedTrials,
+                          &summary);
         return summary;
     }
     summary.uploadSeconds += elapsedSeconds(uploadStart, Clock::now());
 
+    // 阶段 3：一线程一三维点。128 线程块兼顾小轨迹寄存器占用和大点云吞吐。
     const int pointCount = static_cast<int>(hostPoints.size());
     const int blockSize = 128;
     const int gridSize = (pointCount + blockSize - 1) / blockSize;
@@ -302,12 +365,19 @@ KernelRunSummary runNativeCudaBundleAdjust(Workset *workset,
                                                   std::max(1, maxIterations),
                                                   huberDelta,
                                                   initialDamping,
-                                                  deviceAcceptedIterations);
+                                                  maxPointStepNorm,
+                                                  deviceAcceptedIterations,
+                                                  deviceRejectedTrials);
     status = cudaGetLastError();
     if (setCudaError(&summary, status, "native_cuda optimizePointsKernel"))
     {
         summary.kernelSeconds += elapsedSeconds(kernelStart, Clock::now());
-        freeDeviceBuffers(deviceCameras, devicePoints, deviceObservations, deviceAcceptedIterations, &summary);
+        freeDeviceBuffers(deviceCameras,
+                          devicePoints,
+                          deviceObservations,
+                          deviceAcceptedIterations,
+                          deviceRejectedTrials,
+                          &summary);
         return summary;
     }
 
@@ -315,11 +385,17 @@ KernelRunSummary runNativeCudaBundleAdjust(Workset *workset,
     if (setCudaError(&summary, status, "cudaDeviceSynchronize"))
     {
         summary.kernelSeconds += elapsedSeconds(kernelStart, Clock::now());
-        freeDeviceBuffers(deviceCameras, devicePoints, deviceObservations, deviceAcceptedIterations, &summary);
+        freeDeviceBuffers(deviceCameras,
+                          devicePoints,
+                          deviceObservations,
+                          deviceAcceptedIterations,
+                          deviceRejectedTrials,
+                          &summary);
         return summary;
     }
     summary.kernelSeconds += elapsedSeconds(kernelStart, Clock::now());
 
+    // 阶段 4：仅下载最终点和每点迭代统计；相机/观测从未被设备修改。
     const auto downloadStart = Clock::now();
     status = cudaMemcpy(hostPoints.data(),
                         devicePoints,
@@ -328,7 +404,12 @@ KernelRunSummary runNativeCudaBundleAdjust(Workset *workset,
     if (setCudaError(&summary, status, "cudaMemcpy points back"))
     {
         summary.downloadSeconds += elapsedSeconds(downloadStart, Clock::now());
-        freeDeviceBuffers(deviceCameras, devicePoints, deviceObservations, deviceAcceptedIterations, &summary);
+        freeDeviceBuffers(deviceCameras,
+                          devicePoints,
+                          deviceObservations,
+                          deviceAcceptedIterations,
+                          deviceRejectedTrials,
+                          &summary);
         return summary;
     }
 
@@ -340,30 +421,53 @@ KernelRunSummary runNativeCudaBundleAdjust(Workset *workset,
     if (setCudaError(&summary, status, "cudaMemcpy acceptedIterations back"))
     {
         summary.downloadSeconds += elapsedSeconds(downloadStart, Clock::now());
-        freeDeviceBuffers(deviceCameras, devicePoints, deviceObservations, deviceAcceptedIterations, &summary);
+        freeDeviceBuffers(deviceCameras,
+                          devicePoints,
+                          deviceObservations,
+                          deviceAcceptedIterations,
+                          deviceRejectedTrials,
+                          &summary);
+        return summary;
+    }
+    std::vector<int> rejectedTrials(hostPoints.size(), 0);
+    status = cudaMemcpy(rejectedTrials.data(),
+                        deviceRejectedTrials,
+                        rejectedTrials.size() * sizeof(int),
+                        cudaMemcpyDeviceToHost);
+    if (setCudaError(&summary, status, "cudaMemcpy rejectedTrials back"))
+    {
+        summary.downloadSeconds += elapsedSeconds(downloadStart, Clock::now());
+        freeDeviceBuffers(deviceCameras,
+                          devicePoints,
+                          deviceObservations,
+                          deviceAcceptedIterations,
+                          deviceRejectedTrials,
+                          &summary);
         return summary;
     }
     summary.downloadSeconds += elapsedSeconds(downloadStart, Clock::now());
-    freeDeviceBuffers(deviceCameras, devicePoints, deviceObservations, deviceAcceptedIterations, &summary);
+    freeDeviceBuffers(deviceCameras,
+                      devicePoints,
+                      deviceObservations,
+                      deviceAcceptedIterations,
+                      deviceRejectedTrials,
+                      &summary);
 
     for (size_t i = 0; i < hostPoints.size(); ++i)
     {
         workset->points[i].xyz = {{hostPoints[i].xyz[0], hostPoints[i].xyz[1], hostPoints[i].xyz[2]}};
         summary.acceptedSteps += acceptedIterations[i];
+        summary.rejectedSteps += rejectedTrials[i];
     }
 
+    // 最终代价仍在主机按参考公式复核；真正的正深度和离群点质量门控由
+    // finalizeBundleAdjustResult 在更外层统一执行。
     hostCostStart = Clock::now();
     summary.finalCost = hostCost(hostCameras, hostPoints, workset->observations);
     summary.hostCostSeconds += elapsedSeconds(hostCostStart, Clock::now());
     summary.ok = true;
     summary.activeObservations = static_cast<int>(workset->observations.size());
-    summary.pcgIterations = 0;
-    summary.linearResidual = summary.initialCost > 0.0
-                                 ? std::sqrt(std::max(0.0, summary.finalCost / summary.initialCost))
-                                 : pcgTolerance;
-    summary.rejectedSteps = 0;
     std::snprintf(summary.message, sizeof(summary.message), "native_cuda CUDA 点块求解完成");
-    (void)maxPcgIterations;
     return summary;
 }
 

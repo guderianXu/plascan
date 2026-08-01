@@ -5,9 +5,9 @@
 #include "LayerRenderer.h"
 #include "DepthOverlayController.h"
 #include "project/ProjectIO.h"
+#include "ImageMatchFile.h"
 #include "GuiTaskRunner.h"
 #include "io/PathIO.h"
-#include "project/AspMatchPointReader.h"
 
 #include <QtConcurrent>
 #include <QFuture>
@@ -30,23 +30,11 @@
 #include <QDataStream>
 #include <QPointF>
 #include <QVector>
-#include <QGraphicsPixmapItem>
 #include "Logger.h"
 #include "ImageViewRotationSettings.h"
 
 namespace
 {
-
-struct MatchPairLoadResult
-{
-    int generation = 0;
-    QString imagePathA;
-    QString imagePathB;
-    QString matchFilePath;
-    QImage imageA;
-    QImage imageB;
-    xjw::common::project::AspMatchPointResult matches;
-};
 
 bool isDepthMapPreviewPath(const QString &path)
 {
@@ -129,7 +117,7 @@ void CanvasWidget::applyFeatureDisplayOptions(const LayerRenderer::FeatureDispla
         && opts.showPoints && !_currentImagePath.trimmed().isEmpty()
         && !isDepthMapPreviewPath(_currentImagePath)) {
         _layerRenderer->clearFeatureLayers();
-        startSpLoadForImage(_currentImagePath);
+        startMatchObservationLoadForImage(_currentImagePath);
     } else {
         _layerRenderer->clearFeatureLayers();
     }
@@ -165,7 +153,10 @@ void CanvasWidget::showImage(const QString &path)
         return;
     }
 
-    ++_matchPairLoadGeneration;
+    // 切换影像时立即作废上一幅影像仍在后台运行的匹配观测和残差请求。
+    // 两类回调各自比较代次，不能共用一个未声明的“像对加载”计数器。
+    ++_featureLoadGeneration;
+    ++_residualLoadGeneration;
     _singleImageReady = false;
     _viewRotationDegrees = 0;
     _zoomFactor = 1.0;
@@ -268,12 +259,12 @@ void CanvasWidget::showImage(const QString &path)
         // 重新适配后，重置缩放因子
         self->_zoomFactor = 1.0;
 
-        // 自动加载特征点（默认启用）
-        // 跳过非项目影像（如深度图 depth_*.png）的特征点加载，避免无意义的 .sp 查找
+        // 自动加载已参与匹配的关键点（默认启用）。深度图不属于匹配任务输入，
+        // 因此不为它查询 `.pimatch` 分片。
         if (!isDepthMap && self->shouldRenderFeatureDiagnostics()) {
             if (self->_showInterestPoints)
             {
-                self->startSpLoadForImage(loadedPath);
+                self->startMatchObservationLoadForImage(loadedPath);
             }
             if (self->_currentFeatureOpts.showResiduals)
             {
@@ -424,131 +415,12 @@ void CanvasWidget::setDepthInspectionActive(bool active)
     }
     if (_showInterestPoints && _currentFeatureOpts.showPoints)
     {
-        startSpLoadForImage(_currentImagePath);
+        startMatchObservationLoadForImage(_currentImagePath);
     }
     if (_currentFeatureOpts.showResiduals)
     {
         startResidualLoadForImage(_currentImagePath);
     }
-}
-
-void CanvasWidget::showMatchedPair(const QString &imgA, const QString &imgB, const QString &matchFile)
-{
-    if (!scene() || !_layerRenderer)
-    {
-        return;
-    }
-
-    const int generation = ++_matchPairLoadGeneration;
-    _singleImageReady = false;
-    _viewRotationDegrees = 0;
-    _currentImagePath.clear();
-    emit displayImageReadyChanged(false);
-    resetTransform();
-
-    LOG_DEBUG(QStringLiteral("showMatchedPair: imgA=%1 imgB=%2 match=%3").arg(imgA, imgB, matchFile));
-
-    // clear existing layers
-    _layerRenderer->clearFeatureLayers();
-    _layerRenderer->clearMatchLayers();
-    _layerRenderer->clearMaskLayers();
-    _layerRenderer->clear();
-
-    // Ensure renderer knows project path (so caching/convert works same as showImage)
-    const QString projectPath = property("currentProjectPath").toString();
-    if (!projectPath.isEmpty())
-    {
-        _layerRenderer->setCurrentProjectPath(projectPath);
-        if (_depthOverlayController)
-        {
-            _depthOverlayController->setProjectPath(projectPath);
-        }
-    }
-
-    xjw::gui::tasks::runGuarded(
-        this,
-        [generation, imgA, imgB, matchFile, projectPath]()
-        {
-            MatchPairLoadResult result;
-            result.generation = generation;
-            result.imagePathA = imgA;
-            result.imagePathB = imgB;
-            result.matchFilePath = matchFile;
-            result.imageA = LayerRenderer::loadImageForDisplay(imgA, projectPath);
-            result.imageB = LayerRenderer::loadImageForDisplay(imgB, projectPath);
-            result.matches = xjw::common::project::readAspMatchPoints(matchFile);
-            return result;
-        },
-        [](CanvasWidget *self, MatchPairLoadResult result)
-        {
-            if (result.generation != self->_matchPairLoadGeneration
-                || !self->_layerRenderer
-                || !self->scene())
-            {
-                return;
-            }
-
-            if (!result.matches.success)
-            {
-                LOG_WARN(QStringLiteral("showMatchedPair: %1")
-                             .arg(result.matches.errorMessage));
-            }
-
-            QGraphicsPixmapItem *itemA = nullptr;
-            QGraphicsPixmapItem *itemB = nullptr;
-            if (!self->_layerRenderer->addStitchedImagePair(
-                    result.imageA,
-                    result.imageB,
-                    result.imagePathA,
-                    result.imagePathB,
-                    &itemA,
-                    &itemB,
-                    20))
-            {
-                LOG_WARN(QStringLiteral("showMatchedPair: 影像加载失败 %1 <-> %2")
-                             .arg(result.imagePathA, result.imagePathB));
-                self->showImage(result.imagePathA);
-                return;
-            }
-
-            const qreal secondImageOffset = itemB ? itemB->pos().x() : 0.0;
-            if (!result.matches.leftPoints.isEmpty()
-                && !result.matches.rightPoints.isEmpty())
-            {
-                self->_layerRenderer->addMatchLines(
-                    result.matches.leftPoints,
-                    result.matches.rightPoints,
-                    secondImageOffset);
-            }
-
-            const QRectF bounds = self->scene()->itemsBoundingRect();
-            if (bounds.isEmpty())
-            {
-                self->_layerRenderer->clear();
-                self->showImage(result.imagePathA);
-                return;
-            }
-
-            self->scene()->setSceneRect(bounds);
-            self->fitInView(bounds, Qt::KeepAspectRatio);
-            self->_zoomFactor = 1.0;
-        });
-}
-
-void CanvasWidget::setActiveFeatureSuffix(const QString &suffix)
-{
-    if (suffix.isEmpty() || suffix == _activeFeatureSuffix) return;
-    _activeFeatureSuffix = suffix;
-    // 清除当前影像的缓存, 强制重新加载
-    if (!_currentImagePath.isEmpty())
-        setShowInterestPoints(_showInterestPoints);
-}
-
-QStringList CanvasWidget::availableFeatureSuffixes() const
-{
-    if (_currentImagePath.isEmpty()) return {};
-    const QString projectPath = property("currentProjectPath").toString();
-    return xjw::common::project::ProjectIO::availableFeatureSuffixes(projectPath, _currentImagePath);
 }
 
 void CanvasWidget::setShowInterestPoints(bool show)
@@ -568,9 +440,9 @@ void CanvasWidget::setShowInterestPoints(bool show)
     if (shouldRenderFeatureDiagnostics()
         && _showInterestPoints && !_currentImagePath.trimmed().isEmpty())
     {
-        // 异步加载当前影像的特征文件
+        // 异步加载当前影像实际参与匹配的观测。
         _layerRenderer->clearFeatureLayers();
-        startSpLoadForImage(_currentImagePath);
+        startMatchObservationLoadForImage(_currentImagePath);
     }
     else
     {
@@ -601,7 +473,7 @@ void CanvasWidget::setShowFeatureResiduals(bool show)
     emit featureResidualVisibilityChanged(show);
 }
 
-void CanvasWidget::startSpLoadForImage(const QString &imagePath)
+void CanvasWidget::startMatchObservationLoadForImage(const QString &imagePath)
 {
     if (imagePath.trimmed().isEmpty()) return;
     if (!shouldRenderFeatureDiagnostics())
@@ -614,21 +486,27 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
     }
 
     const QString imagePathCopy = imagePath;
-    const QString activeSuffix = _activeFeatureSuffix;
     const QString projectPath = property("currentProjectPath").toString();
-    const bool shouldEstimateOrientation = _currentFeatureOpts.showOrientation;
     const int generation = ++_featureLoadGeneration;
-    // 检查缓存 (key 含 suffix)
-    QFileInfo fiCheck(imagePathCopy);
-    const QString cacheKey = featureCacheKey(imagePathCopy, activeSuffix);
-    auto it = _spCache.find(cacheKey);
-    if (it != _spCache.end()) {
-        if (it->second.first == fiCheck.lastModified()) {
-            const bool isCurrentImage = QDir::cleanPath(imagePathCopy) == QDir::cleanPath(_currentImagePath);
-            if (isCurrentImage && _layerRenderer) {
+    const QString match_file_path = xjw::image_matching::ImageMatchFile::filePathForImage(
+        xjw::common::project::ProjectIO::imageMatchOutputDir(projectPath), imagePathCopy);
+    const QDateTime match_modified = QFileInfo(match_file_path).lastModified();
+    const QString cache_key = matchObservationCacheKey(imagePathCopy);
+    auto it = _matchObservationCache.find(cache_key);
+    if (it != _matchObservationCache.end())
+    {
+        if (it->second.first == match_modified)
+        {
+            const bool is_current_image =
+                QDir::cleanPath(imagePathCopy) == QDir::cleanPath(_currentImagePath);
+            if (is_current_image && _layerRenderer)
+            {
                 _layerRenderer->setFeatureDisplayOptions(_currentFeatureOpts);
                 _layerRenderer->clearFeatureLayers();
-                if (!it->second.second.empty()) _layerRenderer->addFeatureItems(it->second.second);
+                if (!it->second.second.empty())
+                {
+                    _layerRenderer->addFeatureItems(it->second.second);
+                }
             }
             emit featuresLoaded(imagePathCopy, static_cast<int>(it->second.second.size()));
             return;
@@ -638,87 +516,18 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
     QPointer<CanvasWidget> self(this);
     xjw::gui::tasks::runGuarded(
         this,
-        [imagePathCopy, activeSuffix, projectPath, shouldEstimateOrientation]() -> std::vector<cv::KeyPoint>
+        [imagePathCopy, projectPath]() -> std::vector<cv::KeyPoint>
         {
-            std::vector<cv::KeyPoint> empty;
-            // 使用当前选中的后缀查找特征文件。
-            const QString spFile = xjw::common::project::ProjectIO::featureOutputPathForImage(
-                projectPath, imagePathCopy, activeSuffix);
-            LOG_DEBUG(QStringLiteral("startSpLoadForImage: suffix=%1 file=%2")
-                .arg(activeSuffix, spFile));
-
-            if (spFile.isEmpty() || !QFile::exists(spFile))
-            {
-                LOG_DEBUG(QStringLiteral("startSpLoadForImage: no %1 found for %2")
-                    .arg(activeSuffix, imagePathCopy));
-                return empty;
-            }
-
-            // 读取特征文件 (支持所有提取器类型)。
-            std::vector<cv::KeyPoint> keypoints = xjw::gui::views::loadFeatureKeypointsFromFile(spFile);
-            if (keypoints.empty())
-            {
-                LOG_WARN(QStringLiteral("startSpLoadForImage: failed to read feature file %1").arg(spFile));
-                return empty;
-            }
-
-            if (shouldEstimateOrientation)
-            {
-                // 尝试从影像中估计每个 keypoint 的方向（梯度方向），以便显示方向箭头。
-                // 默认不开方向显示时跳过整图 imread/Sobel，避免切换影像时抢占磁盘与 CPU。
-                try
-                {
-                    cv::Mat img = xjw::common::io::readImage(imagePathCopy, cv::IMREAD_GRAYSCALE);
-                    if (!img.empty())
-                    {
-                        cv::Mat gx, gy;
-                        cv::Sobel(img, gx, CV_32F, 1, 0, 3);
-                        cv::Sobel(img, gy, CV_32F, 0, 1, 3);
-                        for (auto &kp : keypoints)
-                        {
-                            int x = static_cast<int>(std::round(kp.pt.x));
-                            int y = static_cast<int>(std::round(kp.pt.y));
-                            if (x >= 0 && x < gx.cols && y >= 0 && y < gx.rows)
-                            {
-                                float vx = gx.at<float>(y, x);
-                                float vy = gy.at<float>(y, x);
-                                if (std::isfinite(vx) &&
-                                    std::isfinite(vy) &&
-                                    (std::abs(vx) > 1e-6f || std::abs(vy) > 1e-6f))
-                                {
-                                    double ang =
-                                        std::atan2(static_cast<double>(vy), static_cast<double>(vx)) * 180.0 / M_PI;
-                                    if (ang < 0)
-                                    {
-                                        ang += 360.0;
-                                    }
-                                    kp.angle = static_cast<float>(ang);
-                                }
-                                else
-                                {
-                                    kp.angle = 0.0f;
-                                }
-                            }
-                            else
-                            {
-                                kp.angle = 0.0f;
-                            }
-                        }
-                    }
-                }
-                catch (...)
-                {
-                    // 估计失败则忽略，保持原有角度值。
-                }
-            }
-
-            LOG_DEBUG(QStringLiteral("startSpLoadForImage: loaded %1 keypoints from %2")
+            // SIFT 的尺度、方向和响应值已经随匹配结果持久化，无需重新读取影像估计。
+            std::vector<cv::KeyPoint> keypoints =
+                xjw::gui::views::loadMatchedKeypointsForImage(projectPath, imagePathCopy);
+            LOG_DEBUG(QStringLiteral("从匹配分片加载 %1 个观测: %2")
                           .arg(static_cast<int>(keypoints.size()))
-                          .arg(spFile));
+                          .arg(imagePathCopy));
             return keypoints;
         },
-        [self, imagePathCopy, activeSuffix, generation](CanvasWidget *widget,
-                                                        std::vector<cv::KeyPoint> kps) mutable
+        [self, imagePathCopy, match_modified, generation](CanvasWidget *widget,
+                                                           std::vector<cv::KeyPoint> kps) mutable
         {
             if (!self || widget != self.data() || !self->shouldRenderFeatureDiagnostics())
             {
@@ -732,9 +541,8 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
             const bool isCurrentImage = QDir::cleanPath(imagePathCopy) == QDir::cleanPath(self->_currentImagePath);
             if (!imagePathCopy.trimmed().isEmpty())
             {
-                QFileInfo fi(imagePathCopy);
-                const QString key = self->featureCacheKey(imagePathCopy, activeSuffix);
-                self->_spCache[key] = std::make_pair(fi.lastModified(), kps);
+                const QString key = self->matchObservationCacheKey(imagePathCopy);
+                self->_matchObservationCache[key] = std::make_pair(match_modified, kps);
             }
             if (isCurrentImage && self->_layerRenderer)
             {
@@ -852,14 +660,14 @@ void CanvasWidget::reloadInterestPoints(const QString &imagePath)
         if (QDir::cleanPath(imagePath) == QDir::cleanPath(_currentImagePath)) {
             // 对当前显示影像，直接触发加载并叠加
             _layerRenderer->clearFeatureLayers();
-            startSpLoadForImage(_currentImagePath);
+            startMatchObservationLoadForImage(_currentImagePath);
         } else {
             // 对非当前显示影像，只更新缓存：启动后台加载但不要修改当前 scene
-            startSpLoadForImage(imagePath);
+            startMatchObservationLoadForImage(imagePath);
         }
     } else {
         // 即使未开启叠加，也更新缓存以便后续打开影像时能立即得到最新数据
-        startSpLoadForImage(imagePath);
+        startMatchObservationLoadForImage(imagePath);
     }
 }
 
@@ -872,8 +680,8 @@ QList<QVariantMap> CanvasWidget::getCachedInterestPointsAsVariant(const QString 
 {
     QList<QVariantMap> out;
     if (imagePath.trimmed().isEmpty()) return out;
-    const auto it = _spCache.find(featureCacheKey(imagePath, _activeFeatureSuffix));
-    if (it == _spCache.end()) return out;
+    const auto it = _matchObservationCache.find(matchObservationCacheKey(imagePath));
+    if (it == _matchObservationCache.end()) return out;
     for (const auto &kp : it->second.second) {
         QVariantMap m;
         m.insert(QStringLiteral("x"), kp.pt.x);
@@ -886,7 +694,7 @@ QList<QVariantMap> CanvasWidget::getCachedInterestPointsAsVariant(const QString 
     return out;
 }
 
-QString CanvasWidget::featureCacheKey(const QString &imagePath, const QString &suffix) const
+QString CanvasWidget::matchObservationCacheKey(const QString &imagePath) const
 {
     const QString cleanPath = QDir::cleanPath(imagePath.trimmed());
     if (cleanPath.isEmpty())
@@ -899,29 +707,17 @@ QString CanvasWidget::featureCacheKey(const QString &imagePath, const QString &s
     const QString absolutePath = canonicalPath.isEmpty()
         ? QDir::cleanPath(fileInfo.absoluteFilePath())
         : QDir::cleanPath(canonicalPath);
-    return absolutePath + QChar(0x1F) + suffix.trimmed().toLower();
+    return absolutePath;
 }
 
 void CanvasWidget::clearFeatureCacheForImage(const QString &imagePath)
 {
-    const QString keyPrefix = featureCacheKey(imagePath, QString()).section(QChar(0x1F), 0, 0);
-    if (keyPrefix.isEmpty())
+    const QString key = matchObservationCacheKey(imagePath);
+    if (key.isEmpty())
     {
         return;
     }
-
-    const QString prefix = keyPrefix + QChar(0x1F);
-    for (auto it = _spCache.begin(); it != _spCache.end();)
-    {
-        if (it->first.startsWith(prefix))
-        {
-            it = _spCache.erase(it);
-        }
-        else
-        {
-            ++it;
-        }
-    }
+    _matchObservationCache.erase(key);
 }
 
 QString CanvasWidget::currentImagePath() const

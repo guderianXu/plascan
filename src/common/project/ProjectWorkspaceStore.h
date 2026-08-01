@@ -3,10 +3,16 @@
 #include <QJsonObject>
 #include <QString>
 
+namespace xjw::common::project
+{
+class ProjectResourceIndex;
+}
+
 class ProjectWorkspaceStore
 {
 public:
-    explicit ProjectWorkspaceStore(const QString &projectPath);
+    explicit ProjectWorkspaceStore(const QString &projectPath,
+                                   int chunkDirectory = 0);
 
     bool initializeRuntime(QString *runtimeRoot = nullptr,
                            QString *errorMessage = nullptr) const;
@@ -24,6 +30,10 @@ public:
 
 private:
     bool ensureProjectManifest(QString *errorMessage) const;
+    bool loadResourceIndex(
+        xjw::common::project::ProjectResourceIndex *index,
+        QString *errorMessage) const;
 
     QString _projectPath;
+    int _chunkDirectory = 0;
 };

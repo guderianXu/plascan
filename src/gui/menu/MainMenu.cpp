@@ -1211,6 +1211,8 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         _addFolderAct = findNamedChild<QAction>(_mainWindow, "actionAddFolder");
         _workflowAerialTriangulationAct =
             findNamedChild<QAction>(_mainWindow, "actionWorkflowAerialTriangulation");
+        _workflowSettingsAct =
+            findNamedChild<QAction>(_mainWindow, "actionWorkflowSettings");
         _generateModelAct = findNamedChild<QAction>(_mainWindow, "actionGenerateModel");
         _generateTextureAct = findNamedChild<QAction>(_mainWindow, "actionGenerateTexture");
         _createDEMAct = findNamedChild<QAction>(_mainWindow, "actionCreateDEM");
@@ -1249,6 +1251,21 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
             if (workflowMenu)
             {
                 workflowMenu->addAction(_workflowAerialTriangulationAct);
+            }
+        }
+        if (!_workflowSettingsAct)
+        {
+            QObject *actionParent = workflowMenu
+                ? static_cast<QObject *>(workflowMenu)
+                : static_cast<QObject *>(_mainWindow);
+            _workflowSettingsAct = new QAction(tr("设置..."), actionParent);
+            _workflowSettingsAct->setObjectName(QStringLiteral("actionWorkflowSettings"));
+            _workflowSettingsAct->setToolTip(
+                tr("设置空中三角测量的设备、并行度和数值门限"));
+            if (workflowMenu)
+            {
+                workflowMenu->addSeparator();
+                workflowMenu->addAction(_workflowSettingsAct);
             }
         }
         if (!_generateModelAct)
@@ -1550,7 +1567,8 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
             _generateModelAct,
             _generateTextureAct,
             _createDEMAct,
-            _generateOrthoAct
+            _generateOrthoAct,
+            _workflowSettingsAct
         };
         for (QAction *action : workflowActions)
         {
@@ -1706,6 +1724,11 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     _generateTextureAct = workflowMenu->addAction(tr("生成纹理..."));      // 将影像投影到已有模型
     _createDEMAct      = workflowMenu->addAction(tr("创建 DEM"));          // DEM 完整流程
     _generateOrthoAct  = workflowMenu->addAction(tr("生成 正射影像"));     // 正射影像完整流程
+    workflowMenu->addSeparator();
+    _workflowSettingsAct = workflowMenu->addAction(tr("设置..."));
+    _workflowSettingsAct->setObjectName(QStringLiteral("actionWorkflowSettings"));
+    _workflowSettingsAct->setToolTip(
+        tr("设置空中三角测量的设备、并行度和数值门限"));
 
     _modelMenu = _mainWindow->menuBar()->addMenu(tr("模型"));
     _modelMenu->setObjectName(QStringLiteral("menuModel"));
@@ -2124,6 +2147,7 @@ QAction *MainMenu::addPhotoAction() const       { return _addPhotoAct; }
 QAction *MainMenu::addFolderAction() const      { return _addFolderAct; }
 QAction *MainMenu::featureVisualizationAction() const { return _featureVisualizationAct; }
 QAction *MainMenu::workflowAerialTriangulationAction() const { return _workflowAerialTriangulationAct; }
+QAction *MainMenu::workflowSettingsAction() const { return _workflowSettingsAct; }
 QAction *MainMenu::overlapAnalysisAction() const { return _overlapAnalysisAct; }
 QAction *MainMenu::intersectionCheckAction() const { return _intersectionCheckAct; }
 QAction *MainMenu::intersectionViewResultsAction() const { return _intersectionViewResultsAct; }

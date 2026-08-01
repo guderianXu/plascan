@@ -340,53 +340,61 @@ def build_images(
     return output
 
 
-def sidecar_tokens(sidecar: dict[str, Any], sidecar_path: Path) -> tuple[str, str]:
-    left = sidecar.get("image0_path") or sidecar.get("image0_name")
-    right = sidecar.get("image1_path") or sidecar.get("image1_name")
-    if left and right:
-        return str(left), str(right)
+def build_image_match_results(
+    match_report: Path,
+    images: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    """Load the canonical per-image match index emitted by ``match_photos_cli``.
 
-    stem = sidecar_path.name
-    if stem.endswith(".match.json"):
-        stem = stem[: -len(".match.json")]
-    if "__" not in stem:
-        return "", ""
-    left_stem, right_stem = stem.split("__", 1)
-    return left_stem, right_stem
+    The binary ``.pimatch`` payload is intentionally parsed only by the C++
+    ``ImageMatchFile`` implementation. This preparation script merely transfers
+    the CLI report index into the project archive, which keeps format-version and
+    checksum validation in one implementation.
+    """
+    report = read_json(match_report)
+    if not report.get("success", False):
+        raise ValueError(f"match report does not describe a successful run: {match_report}")
 
-
-def build_ipmatch_results(matches_dir: Path, images: list[dict[str, Any]]) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
-    for sidecar_path in sorted(matches_dir.glob("*.match.json")):
-        sidecar = read_json(sidecar_path)
-        if int(sidecar.get("feature_format_version", 0)) < 2:
+    seen_images: set[str] = set()
+    for source in report.get("image_match_files", []):
+        owner = resolve_image_token(str(source.get("image", "")), images)
+        output = Path(str(source.get("output", "")))
+        if owner is None or not output.name.lower().endswith(".pimatch"):
             continue
-        left_token, right_token = sidecar_tokens(sidecar, sidecar_path)
-        left = resolve_image_token(left_token, images)
-        right = resolve_image_token(right_token, images)
-        if left is None or right is None or left["path"] == right["path"]:
-            continue
+        if not output.is_absolute():
+            output = (match_report.parent / output).resolve()
+        if not output.is_file():
+            raise ValueError(f"match report references a missing .pimatch shard: {output}")
 
-        match_file = sidecar.get("match_file")
-        if not match_file:
-            match_file = str(sidecar_path)[: -len(".json")]
-        record = {
-            "image0": left["path"],
-            "image1": right["path"],
-            "output": normalize_path(match_file),
-            "num_matches": int(sidecar.get("num_matches", len(sidecar.get("matched_indices0", [])))),
-            "settings": {
-                "image_files": [left["path"], right["path"]],
-                "sidecar_json": normalize_path(sidecar_path),
-                "feature_format_version": 2,
-                "match_algorithm": sidecar.get("match_algorithm", "bf"),
-                "feature_algorithm": sidecar.get("feature_algorithm", "sift"),
-            },
-        }
-        results.append(record)
+        owner_path = normalize_path(owner["path"])
+        if owner_path in seen_images:
+            raise ValueError(f"match report contains duplicate owner image: {owner_path}")
+        seen_images.add(owner_path)
+
+        neighbors: list[str] = []
+        for token in source.get("neighbors", []):
+            neighbor = resolve_image_token(str(token), images)
+            if neighbor is not None and neighbor["path"] != owner["path"]:
+                neighbors.append(normalize_path(neighbor["path"]))
+
+        settings = dict(source.get("settings", {}))
+        settings["storage_format"] = "pimatch"
+        settings["format_version"] = 1
+        settings["source_report"] = normalize_path(match_report)
+        results.append(
+            {
+                "schema_version": 1,
+                "image": owner_path,
+                "output": normalize_path(output),
+                "neighbors": sorted(set(neighbors)),
+                "settings": settings,
+            }
+        )
+
     if not results:
-        raise ValueError(f"no BA-ready match sidecars found in {matches_dir}")
-    return results
+        raise ValueError(f"no per-image .pimatch records found in {match_report}")
+    return results, int(report.get("pair_match_count", 0))
 
 
 def write_plascan(project_path: Path, project_files: dict[str, Any], project_results: dict[str, Any]) -> None:
@@ -473,6 +481,7 @@ def prepare_project(
     matches_dir: Path,
     output_dir: Path,
     project_name: str = "mun_frl_lidar_ba",
+    match_report: Path | None = None,
     tf_static: Path | None = None,
     camera_frame: str = "camera",
     body_frame: str = "imu_link",
@@ -483,6 +492,7 @@ def prepare_project(
     matches_dir = Path(matches_dir)
     output_dir = Path(output_dir)
     tf_static = Path(tf_static) if tf_static else None
+    match_report = Path(match_report) if match_report else matches_dir / "match_photos_report.json"
 
     plan = read_json(benchmark_plan)
     parsed_camera_info = parse_camera_info(camera_info)
@@ -502,7 +512,7 @@ def prepare_project(
         camera_frame=camera_frame if body_to_camera is not None else "",
         body_frame=body_frame if body_to_camera is not None else "",
     )
-    ipmatch_results = build_ipmatch_results(matches_dir, images)
+    image_match_results, pair_match_count = build_image_match_results(match_report, images)
 
     project_files = {
         "project_name": project_name,
@@ -511,10 +521,11 @@ def prepare_project(
         "images": images,
     }
     project_results = {
-        "ipmatch_results": ipmatch_results,
+        "image_match_results": image_match_results,
         "lidar_ba_input": {
             "laser_constraint_cloud_path": plan.get("laser_constraint_cloud_path", ""),
             "matches_dir": normalize_path(matches_dir),
+            "match_report": normalize_path(match_report),
             "camera_info": normalize_path(camera_info),
             "trajectory": normalize_path(trajectory),
             "tf_static": normalize_path(tf_static) if tf_static is not None else "",
@@ -529,7 +540,8 @@ def prepare_project(
     summary = {
         "project_path": normalize_path(project_path),
         "image_count": len(images),
-        "match_count": len(ipmatch_results),
+        "match_count": pair_match_count,
+        "match_shard_count": len(image_match_results),
         "laser_constraint_cloud_path": plan.get("laser_constraint_cloud_path", ""),
         "tf_static": normalize_path(tf_static) if tf_static is not None else "",
         "tf_static_camera_frame": camera_frame if body_to_camera is not None else "",
@@ -544,7 +556,7 @@ def prepare_project(
         project_path=project_path,
         summary_path=summary_path,
         image_count=len(images),
-        match_count=len(ipmatch_results),
+        match_count=pair_match_count,
     )
 
 
@@ -554,6 +566,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--camera-info", required=True, type=Path)
     parser.add_argument("--trajectory", required=True, type=Path)
     parser.add_argument("--matches-dir", required=True, type=Path)
+    parser.add_argument(
+        "--match-report",
+        type=Path,
+        help="match_photos_cli report containing the canonical image_match_files index",
+    )
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--project-name", default="mun_frl_lidar_ba")
     parser.add_argument("--tf-static", type=Path, help="MUN-FRL tf_static_unique.csv used to convert body pose to camera pose")
@@ -569,6 +586,7 @@ def main() -> int:
         camera_info=args.camera_info,
         trajectory=args.trajectory,
         matches_dir=args.matches_dir,
+        match_report=args.match_report,
         output_dir=args.output_dir,
         project_name=args.project_name,
         tf_static=args.tf_static,

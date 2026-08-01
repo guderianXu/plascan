@@ -1,3 +1,11 @@
+/**
+ * @file ReferenceTerrainPrior.cpp
+ * @brief 参考高程栅格采样、轨迹关联和 BA 软约束装配实现。
+ *
+ * 本实现假设点坐标与栅格仿射参数处于同一坐标系，只生成法向为世界 Z 的水平面
+ * 约束。它不执行 CRS 转换，也不把 DEM 当作硬约束。
+ */
+
 #include "ReferenceTerrainPrior.h"
 
 #include <algorithm>
@@ -68,6 +76,7 @@ double ReferenceTerrainPrior::sampleHeight(const ReferenceTerrainGrid &grid,
         return std::numeric_limits<double>::quiet_NaN();
     }
 
+    // 该表达式同时支持正、负像元步长；边界判断在连续栅格坐标中完成。
     const double col = (x - grid.originX) / grid.pixelSizeX;
     const double row = (y - grid.originY) / grid.pixelSizeY;
     if (col < 0.0 || row < 0.0 ||
@@ -84,6 +93,7 @@ double ReferenceTerrainPrior::sampleHeight(const ReferenceTerrainGrid &grid,
     const double tx = col - static_cast<double>(col0);
     const double ty = row - static_cast<double>(row0);
 
+    // 四个角任一为 nodata 时拒绝样本，避免跨越 DEM 空洞插值出虚假表面。
     const double z00 = heightAt(grid, row0, col0);
     const double z10 = heightAt(grid, row0, col1);
     const double z01 = heightAt(grid, row1, col0);
@@ -123,6 +133,7 @@ ReferenceTerrainPriorStats ReferenceTerrainPrior::attachHeightPlaneConstraints(
 
     std::vector<double> absoluteDistances;
     double sum2 = 0.0;
+    // 关联只使用 BA 初始点。距离门控防止错误稀疏点被地形先验强行吸附。
     for (BATrack &track : *tracks)
     {
         const auto &point = track.initialPoint;
@@ -149,6 +160,7 @@ ReferenceTerrainPriorStats ReferenceTerrainPrior::attachHeightPlaneConstraints(
             continue;
         }
 
+        // 当前地形近似为采样点处水平切平面；未来支持坡度时可替换 normal。
         BALaserPlaneConstraint constraint;
         constraint.point = {{point[0], point[1], height}};
         constraint.normal = {{0.0, 0.0, 1.0}};

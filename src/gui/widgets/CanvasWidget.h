@@ -73,21 +73,10 @@ public slots:
     void setShowInterestPoints(bool show);
     void setShowFeatureResiduals(bool show);
 
-    // 切换当前显示的特征提取器后缀 (.sp/.dsk/.alk 等), 重新加载特征点
-    void setActiveFeatureSuffix(const QString &suffix);
-    // 获取当前活动的特征文件后缀
-    QString activeFeatureSuffix() const { return _activeFeatureSuffix; }
-
-    // 获取当前影像可用的特征文件后缀列表 (供 UI 构建选择器)
-    QStringList availableFeatureSuffixes() const;
-
-    // 在主画布上显示一对匹配影像并绘制匹配连线（基于 .match 二进制文件）
-    void showMatchedPair(const QString &imgA, const QString &imgB, const QString &matchFile);
-
-    // 强制重新加载指定影像的兴趣点（忽略缓存），用于在外部重新生成 .sp 后刷新显示
+    // 强制重新加载指定影像的匹配观测，用于重新生成 `.pimatch` 后刷新显示。
     void reloadInterestPoints(const QString &imagePath);
 
-    // 兼容旧调用；现在始终异步刷新，绝不在 GUI 线程读取特征文件。
+    // 兼容现有 UI 调用；始终异步刷新，不在 GUI 线程读取匹配分片。
     void immediateReloadInterestPoints(const QString &imagePath);
 
     // 返回指定影像当前缓存的兴趣点（以 QVariantMap 列表形式，避免在头文件暴露内部类型）
@@ -97,7 +86,7 @@ public slots:
     QString currentImagePath() const;
 
 signals:
-    // emitted when features for an image are loaded (count may be zero)
+    // 当前影像参与匹配的观测加载完成；count 允许为零。
     void featuresLoaded(const QString &imagePath, int count);
     // emitted when the active display image changes (for UI state persistence)
     void activeImageChanged(const QString &imagePath);
@@ -122,10 +111,10 @@ signals:
     void imageContextRequested(const QString &imagePath, const QPointF &originalPixel);
 
 private:
-    // 启动异步加载特征文件的通用方法（在主线程调度后台任务）
-    void startSpLoadForImage(const QString &imagePath);
+    // 在后台加载当前影像的 `.pimatch` 观测，主线程只负责更新场景。
+    void startMatchObservationLoadForImage(const QString &imagePath);
     void startResidualLoadForImage(const QString &imagePath);
-    QString featureCacheKey(const QString &imagePath, const QString &suffix) const;
+    QString matchObservationCacheKey(const QString &imagePath) const;
     void clearFeatureCacheForImage(const QString &imagePath);
     void refreshDepthOverlay();
     void setDepthInspectionActive(bool active);
@@ -147,16 +136,14 @@ private:
     xjw::gui::widgets::DepthOverlayController *_depthOverlayController{};
     bool _showInterestPoints{true};  // 默认启用特征点显示
     bool _showMaskOverlay{true}; // 默认显示照片蒙版轮廓
-    QString _activeFeatureSuffix{QStringLiteral(".sp")};  // 当前选择的特征提取器后缀
     // 当前的兴趣点显示选项（由 UI 通过 applyFeatureDisplayOptions 设置）
     LayerRenderer::FeatureDisplayOptions _currentFeatureOpts;
     QString _currentImagePath;
     QFutureWatcher<QImage> *_imageWatcher{nullptr};
-    // cache: imagePath -> (lastModified, keypoints)
-    std::map<QString, std::pair<QDateTime, std::vector<cv::KeyPoint>>> _spCache;
+    // 缓存键为影像规范路径，时间戳来自对应 `.pimatch`，而不是源影像。
+    std::map<QString, std::pair<QDateTime, std::vector<cv::KeyPoint>>> _matchObservationCache;
     int _featureLoadGeneration{0};
     int _residualLoadGeneration{0};
-    int _matchPairLoadGeneration{0};
     int _viewRotationDegrees{0};
     bool _singleImageReady{false};
     bool _depthOverlayEnabled{false};

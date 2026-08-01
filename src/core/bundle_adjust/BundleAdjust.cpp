@@ -6,7 +6,7 @@
 //   1. 交替优化策略：先固定相机优化三维点，再固定点优化相机，循环多轮
 //   2. 鲁棒正则化：采用高斯牛顿 + LM 风格阻尼
 //   3. Huber 权重：残差范数 > huberDelta 时降低对应观测的权重，抹除粗差
-//   4. 解析雅可比：针对针孔+Tsai 畸变模型推导闭式 Jacobian（点 2×3，相机 2×6）
+//   4. 数值雅可比：对点 2×3、相机 2×6 残差块采用中央有限差分
 //   5. SO(3) 旋转更新：使用 Rodrigues 公式 exp(ω) 进行旋转增量扰动
 //   6. 系统求解：自实现带部分主元高斯-约尔当消元，避免外部线性代数依赖
 // ============================================================
@@ -15,8 +15,12 @@
 
 #include "BundleAdjustCeres.h"
 #include "BundleAdjustNativeCuda.h"
+#include "BundleAdjustQuality.h"
+#include "BundleAdjustValidation.h"
 #include "log/Logger.h"
 
+#include <plamatrix/ops/small_matrix.h>
+#include <plamatrix/ops/statistics.h>
 #include <plamatrix/ops/vector.h>
 
 #ifdef _OPENMP
@@ -41,7 +45,7 @@ namespace
 // 2) 固定三维点，优化相机位姿（6自由度增量）；
 // 3) 重复若干轮。
 //
-// 数值部分采用高斯牛顿 + 阻尼（LM 风格），雅可比通过有限差分近似。
+// 数值部分采用高斯牛顿 + 阻尼（LM 风格），雅可比通过中央有限差分近似。
 // 为增强鲁棒性，残差使用 Huber 权重抑制粗差影响。
 // ================================================================
 
@@ -205,79 +209,45 @@ double cameraPosePriorResidualNorm(const Camera &cam,
  * @param x  输出解向量
  * @return   求解成功返回 true；遇到奇异矩阵或解非有限时返回 false
  */
-bool solveLinearSystem(std::vector<double> A, std::vector<double> b, int n, std::vector<double> *x)
+template <std::size_t N>
+bool solveFixedLinearSystem(const std::vector<double> &matrix,
+                            const std::vector<double> &rhs,
+                            std::vector<double> *solution)
 {
-    if (!x || n <= 0 || static_cast<int>(A.size()) != n * n || static_cast<int>(b.size()) != n)
+    if (!solution || matrix.size() != N * N || rhs.size() != N)
     {
         return false;
     }
 
-    x->assign(n, 0.0);
-    // 使用带部分主元的高斯-约尔当消元，提升病态情况下的稳定性。
-    for (int col = 0; col < n; ++col)
+    std::array<double, N * N> fixedMatrix{};
+    std::array<double, N> fixedRhs{};
+    std::copy(matrix.begin(), matrix.end(), fixedMatrix.begin());
+    std::copy(rhs.begin(), rhs.end(), fixedRhs.begin());
+    std::array<double, N> fixedSolution{};
+    if (!plamatrix::solveSmallLinearSystem(
+            fixedMatrix, fixedRhs, &fixedSolution))
     {
-        // 在当前列中寻找绝对值最大的行（主元行）
-        int pivot = col;
-        double best = std::abs(A[col * n + col]);
-        for (int r = col + 1; r < n; ++r)
-        {
-            const double v = std::abs(A[r * n + col]);
-            if (v > best)
-            {
-                best = v;
-                pivot = r;
-            }
-        }
-        // 若主元过小，矩阵近似奇异，返回失败
-        if (best < 1e-14)
-        {
-            return false;
-        }
-
-        // 交换主元行与当前行
-        if (pivot != col)
-        {
-            for (int c = col; c < n; ++c)
-            {
-                std::swap(A[col * n + c], A[pivot * n + c]);
-            }
-            std::swap(b[col], b[pivot]);
-        }
-
-        // 归一：将主元行除以对角元
-        const double diag = A[col * n + col];
-        for (int c = col; c < n; ++c)
-        {
-            A[col * n + c] /= diag;
-        }
-        b[col] /= diag;
-
-        // 消元：将其余行该列的元素归零
-        for (int r = 0; r < n; ++r)
-        {
-            if (r == col)
-            {
-                continue;
-            }
-            const double factor = A[r * n + col];
-            for (int c = col; c < n; ++c)
-            {
-                A[r * n + c] -= factor * A[col * n + c];
-            }
-            b[r] -= factor * b[col];
-        }
+        return false;
     }
 
-    // 主元化后 b 即为解，检查有限性
-    for (int i = 0; i < n; ++i)
-    {
-        (*x)[i] = b[i];
-        if (!std::isfinite((*x)[i]))
-        {
-            return false;
-        }
-    }
+    solution->assign(fixedSolution.begin(), fixedSolution.end());
     return true;
+}
+
+bool solveLinearSystem(const std::vector<double> &matrix,
+                       const std::vector<double> &rhs,
+                       int order,
+                       std::vector<double> *solution)
+{
+    if (order == 3)
+    {
+        return solveFixedLinearSystem<3>(matrix, rhs, solution);
+    }
+    if (order == 6)
+    {
+        return solveFixedLinearSystem<6>(matrix, rhs, solution);
+    }
+    return false;
 }
 
 /**
@@ -612,6 +582,25 @@ struct ScaleBarDistanceStats
     double rms = 0.0;
 };
 
+std::array<double, 3> pointForConstraintStats(
+    const std::vector<BATrack> &tracks,
+    const std::vector<BARefinedPoint> *points,
+    std::size_t trackIndex)
+{
+    if (points &&
+        trackIndex < points->size() &&
+        (*points)[trackIndex].valid &&
+        plamatrix::isFinite(
+            plamatrix::Vec3<double>((*points)[trackIndex].point)))
+    {
+        return (*points)[trackIndex].point;
+    }
+
+    // 被正深度或重投影门控拒绝的点不能从约束统计中消失，否则会把
+    // “优化后没有可评估样本”误报成 0 RMS。此时保守沿用该 track 初值。
+    return tracks[trackIndex].initialPoint;
+}
+
 LaserDistanceStats computeLaserStatsForPoints(const std::vector<BATrack> &tracks,
                                               const std::vector<BARefinedPoint> *points)
 {
@@ -621,15 +610,8 @@ LaserDistanceStats computeLaserStatsForPoints(const std::vector<BATrack> &tracks
     for (std::size_t trackIndex = 0; trackIndex < tracks.size(); ++trackIndex)
     {
         const BATrack &track = tracks[trackIndex];
-        std::array<double, 3> X = track.initialPoint;
-        if (points)
-        {
-            if (trackIndex >= points->size() || !(*points)[trackIndex].valid)
-            {
-                continue;
-            }
-            X = (*points)[trackIndex].point;
-        }
+        const std::array<double, 3> X =
+            pointForConstraintStats(tracks, points, trackIndex);
 
         for (const BALaserPlaneConstraint &constraint : track.laserPlaneConstraints)
         {
@@ -655,11 +637,8 @@ LaserDistanceStats computeLaserStatsForPoints(const std::vector<BATrack> &tracks
     }
     stats.rms = std::sqrt(sum2 / static_cast<double>(distances.size()));
 
-    std::sort(distances.begin(), distances.end());
-    const std::size_t middle = distances.size() / 2;
-    stats.median = (distances.size() % 2 == 0)
-        ? 0.5 * (distances[middle - 1] + distances[middle])
-        : distances[middle];
+    stats.median =
+        plamatrix::finiteMedian(std::move(distances)).value_or(0.0);
     return stats;
 }
 
@@ -672,15 +651,8 @@ ControlPointDistanceStats computeControlPointStatsForPoints(const std::vector<BA
     for (std::size_t trackIndex = 0; trackIndex < tracks.size(); ++trackIndex)
     {
         const BATrack &track = tracks[trackIndex];
-        std::array<double, 3> X = track.initialPoint;
-        if (points)
-        {
-            if (trackIndex >= points->size() || !(*points)[trackIndex].valid)
-            {
-                continue;
-            }
-            X = (*points)[trackIndex].point;
-        }
+        const std::array<double, 3> X =
+            pointForConstraintStats(tracks, points, trackIndex);
 
         for (const BAControlPointConstraint &constraint : track.controlPointConstraints)
         {
@@ -715,10 +687,18 @@ ScaleBarDistanceStats computeScaleBarStatsForPoints(const std::vector<BATrack> &
             continue;
         }
 
-        std::array<double, 3> a{};
-        std::array<double, 3> b{};
-        if (!pointFromRefinedOrInitial(tracks, points, constraint.trackIndexA, &a)
-            || !pointFromRefinedOrInitial(tracks, points, constraint.trackIndexB, &b))
+        const std::array<double, 3> a =
+            pointForConstraintStats(
+                tracks,
+                points,
+                static_cast<std::size_t>(constraint.trackIndexA));
+        const std::array<double, 3> b =
+            pointForConstraintStats(
+                tracks,
+                points,
+                static_cast<std::size_t>(constraint.trackIndexB));
+        if (!plamatrix::isFinite(plamatrix::Vec3<double>(a)) ||
+            !plamatrix::isFinite(plamatrix::Vec3<double>(b)))
         {
             continue;
         }
@@ -745,7 +725,7 @@ ScaleBarDistanceStats computeScaleBarStatsForPoints(const std::vector<BATrack> &
  *
  * 优化目标：min_X sum_i w_i * || proj(cam_i, X) - obs_i ||^2
  * 其中 w_i 为 Huber 加权，雅可比通过对 X 每个分量做有限差分得到。
- * 正规化方程 H*dx = -g，加 damping 阻尼后求解电车增量 dx。
+ * 正规方程 H*dx = -g，加 damping 阻尼后求解点坐标增量 dx。
  *
  * @param cams   相机列表（优化期间固定不变）
  * @param track  待优化的轨迹
@@ -1449,21 +1429,6 @@ static bool isCameraFixed(int ci, const BAOptions &options)
     return false;
 }
 
-// ---- 辅助：计算所有有效点 rmsAfter 的中位数（用于自适应过滤） ----
-static double computeMedianRms(const std::vector<BARefinedPoint> &pts)
-{
-    std::vector<double> vals;
-    vals.reserve(pts.size());
-    for (const auto &p : pts) {
-        if (p.valid && std::isfinite(p.rmsAfter) && p.rmsAfter > 0.0)
-            vals.push_back(p.rmsAfter);
-    }
-    if (vals.empty()) return 0.0;
-    std::sort(vals.begin(), vals.end());
-    const size_t m = vals.size() / 2;
-    return (vals.size() % 2 == 0) ? 0.5 * (vals[m - 1] + vals[m]) : vals[m];
-}
-
 static bool isCancelled(const BAOptions &options)
 {
     return options.cancelFlag && options.cancelFlag->load(std::memory_order_relaxed);
@@ -1477,6 +1442,18 @@ int countObservations(const std::vector<BATrack> &tracks)
         count += static_cast<int>(track.observations.size());
     }
     return count;
+}
+
+int calibrationGroupCount(const BAOptions &options, std::size_t cameraCount)
+{
+    if (cameraCount == 0 || options.cameraCalibrationGroupIds.empty())
+    {
+        return cameraCount == 0 ? 0 : 1;
+    }
+    std::vector<int> groups = options.cameraCalibrationGroupIds;
+    std::sort(groups.begin(), groups.end());
+    groups.erase(std::unique(groups.begin(), groups.end()), groups.end());
+    return static_cast<int>(groups.size());
 }
 
 void updateDerivedResultStats(BAResult &result)
@@ -1549,6 +1526,33 @@ bool resultFailsQualityGate(const BAResult &result,
         }
     }
 
+    const double maxConstraintGrowth =
+        std::max(1.0, options.maxAcceptedConstraintRmsGrowth);
+    if (!detail::constraintRmsPassesQualityGate(
+            result.laserConstraintCount,
+            result.laserRmsBeforeMeters,
+            result.laserRmsAfterMeters,
+            maxConstraintGrowth,
+            "LiDAR 点到面约束",
+            message) ||
+        !detail::constraintRmsPassesQualityGate(
+            result.controlPointConstraintCount,
+            result.controlPointRmsBeforeMeters,
+            result.controlPointRmsAfterMeters,
+            maxConstraintGrowth,
+            "控制点约束",
+            message) ||
+        !detail::constraintRmsPassesQualityGate(
+            result.scaleBarConstraintCount,
+            result.scaleBarRmsBeforeMeters,
+            result.scaleBarRmsAfterMeters,
+            maxConstraintGrowth,
+            "比例尺约束",
+            message))
+    {
+        return true;
+    }
+
     return false;
 }
 
@@ -1605,6 +1609,7 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
     bool callbackAborted = false;
 
     auto finishResult = [&]() -> BAResult {
+        detail::finalizeBundleAdjustResult(cameras, tracks, options, &result);
         if (result.solveStatus == BASolveStatus::NotRun)
         {
             if (isCancelled(options) || callbackAborted)
@@ -1777,14 +1782,20 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
         // 阶段三（可选）：离群点过滤——每轮结束后根据 rmsAfter 过滤高误差点
         if (options.enablePointFilter)
         {
-            // 自适应阈值 = max( filterMaxReprojError, filterSigmaFactor × median_rms )
-            double adaptThresh = options.filterMaxReprojError;
-            if (options.filterSigmaFactor > 0.0)
+            std::vector<double> currentRms;
+            currentRms.reserve(result.points.size());
+            for (const BARefinedPoint &point : result.points)
             {
-                const double medRms = computeMedianRms(result.points);
-                adaptThresh = std::max(adaptThresh,
-                                       options.filterSigmaFactor * medRms);
+                if (point.valid)
+                {
+                    currentRms.push_back(point.rmsAfter);
+                }
             }
+            const double adaptThresh =
+                detail::adaptivePointFilterThreshold(
+                    currentRms,
+                    options.filterMaxReprojError,
+                    options.filterSigmaFactor);
 
 #pragma omp parallel for schedule(static)
             for (int i = 0; i < numTracks; ++i)
@@ -1856,16 +1867,9 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
             ++cntBefore;
         }
 
-        // 用最终相机位姿重新计算 rmsAfter，确保全局一致性
+        // 用最终相机位姿重新计算 rmsAfter，最终正深度和离群点判定由统一终结器完成。
         p.rmsAfter = computeTrackRms(result.refinedCameras, tracks[i], p.point);
         p.valid = plamatrix::isFinite(plamatrix::Vec3<double>(p.point)) && std::isfinite(p.rmsAfter);
-        if (p.valid) {
-            // 若本点 rmsAfter 超过自适应阈值，仍标记为无效
-            if (options.enablePointFilter &&
-                p.rmsAfter > options.filterMaxReprojError) {
-                p.valid = false;
-            }
-        }
         if (p.valid) {
             ++result.optimizedTracks;
             sumAfter += p.rmsAfter;
@@ -1881,6 +1885,11 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
         result.refinedIntrinsicCount == 0)
     {
         result.refinedIntrinsicCount = static_cast<int>(result.refinedCameras.size());
+    }
+    if (options.refineSharedFocalLength)
+    {
+        result.refinedCalibrationGroupCount = 1;
+        result.selfCalibrationStagesRun = 1;
     }
 
     if (options.enableLaserPlaneConstraints)
@@ -2008,14 +2017,6 @@ BABackendDecision BundleAdjust::decideBackendForProblem(const BAProblemStats &st
     {
         return {BABackend::LegacyCpu, "point_only_prefers_legacy_cpu"};
     }
-    if (options.refineCameraPose &&
-        backendCapabilities(BABackend::NativeCuda).refinesCameraPose &&
-        isBackendAvailable(BABackend::NativeCuda) &&
-        stats.cameraCount >= options.minNativeCudaCameras &&
-        stats.observationCount >= options.minNativeCudaObservations)
-    {
-        return {BABackend::NativeCuda, "native_cuda_problem_size"};
-    }
     if (isBackendAvailable(BABackend::CeresCuda) &&
         stats.cameraCount >= std::max(1, options.minCeresCudaCameras) &&
         stats.observationCount >= std::max(1, options.minCeresCudaObservations))
@@ -2045,8 +2046,29 @@ BABackend BundleAdjust::selectBackendForProblem(const BAProblemStats &stats,
 
 BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
                                       const std::vector<BATrack> &tracks,
-                                      const BAOptions &options)
+                                      const BAOptions &requestedOptions)
 {
+    BAOptions normalizedOptions;
+    const detail::BundleAdjustValidationResult validation =
+        detail::validateAndNormalizeBundleAdjustOptions(
+            cameras, tracks, requestedOptions, &normalizedOptions);
+    if (!validation.ok)
+    {
+        BAResult result;
+        result.requestedBackend = requestedOptions.backend;
+        result.usedBackend = requestedOptions.backend;
+        result.solveStatus = validation.status;
+        result.solutionUsable = false;
+        result.backendMessage = validation.message;
+        result.totalTracks = static_cast<int>(tracks.size());
+        result.observationCount = countObservations(tracks);
+        result.refinedCameras = cameras;
+        result.points.resize(tracks.size());
+        updateDerivedResultStats(result);
+        return result;
+    }
+    const BAOptions &options = normalizedOptions;
+
     auto runLegacy = [&](const std::string &fallbackMessage) {
         BAResult result = optimizePointsLegacyImpl(cameras, tracks, options);
         result.requestedBackend = options.backend;
@@ -2157,6 +2179,40 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
 
     if (options.backend == BABackend::LegacyCpu)
     {
+        if (options.refineSharedFocalLength &&
+            calibrationGroupCount(options, cameras.size()) > 1)
+        {
+            const std::string message =
+                "legacy_cpu 不支持多标定组联合焦距，";
+            if (detail::isCeresBackendCompiled() &&
+                options.allowBackendFallback)
+            {
+                BAOptions ceresOptions = options;
+                ceresOptions.backend = BABackend::CeresCpu;
+                BAResult result =
+                    optimizePoints(cameras, tracks, ceresOptions);
+                result.requestedBackend = BABackend::LegacyCpu;
+                result.backendFallback = true;
+                result.backendMessage =
+                    message + "已切换到 ceres_cpu；" +
+                    result.backendMessage;
+                return result;
+            }
+
+            BAResult result;
+            result.requestedBackend = BABackend::LegacyCpu;
+            result.usedBackend = BABackend::LegacyCpu;
+            result.solveStatus =
+                BASolveStatus::UnsupportedConfiguration;
+            result.solutionUsable = false;
+            result.backendMessage =
+                message + "当前无法回退到 ceres_cpu";
+            result.totalTracks = static_cast<int>(tracks.size());
+            result.observationCount = countObservations(tracks);
+            result.refinedCameras = cameras;
+            result.points.resize(tracks.size());
+            return result;
+        }
         BAResult result = optimizePointsLegacyImpl(cameras, tracks, options);
         result.requestedBackend = BABackend::LegacyCpu;
         result.usedBackend = BABackend::LegacyCpu;

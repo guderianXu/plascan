@@ -1,5 +1,9 @@
 add_library(terrain STATIC
     TerrainPipeline.cpp
+    OrthoGenerationOptions.cpp
+    OrthoProjector.cpp
+    OrthoProjectorGrid.cpp
+    OrthoProjectorSupport.cpp
     DemGridAggregator.cpp
     DemMosaic.cpp
     TerrainProductManifest.cpp
@@ -69,6 +73,24 @@ if(BUILD_TESTS)
     )
 
     gtest_discover_tests(test_terrain_dem_dom)
+
+    add_executable(test_ortho_generation
+        tests/test_ortho_generation.cpp
+    )
+
+    target_link_libraries(test_ortho_generation PRIVATE
+        terrain
+        Qt6::Core
+        Qt6::Gui
+        ${OpenCV_LIBS}
+        GTest::gtest_main
+    )
+
+    target_include_directories(test_ortho_generation PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+
+    gtest_discover_tests(test_ortho_generation)
 
     add_executable(test_dem_grid_aggregator
         tests/test_dem_grid_aggregator.cpp

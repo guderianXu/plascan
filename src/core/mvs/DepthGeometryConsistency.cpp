@@ -12,6 +12,90 @@ namespace xjw
 namespace mvs
 {
 
+namespace
+{
+
+float worldPixelFootprint(const Camera &camera, double positive_depth)
+{
+    const double focal_product =
+        std::fabs(camera.focalX() * camera.focalY());
+    if (!std::isfinite(positive_depth) || positive_depth <= 0.0 ||
+        !std::isfinite(focal_product) ||
+        focal_product <= std::numeric_limits<double>::epsilon())
+    {
+        return 0.0f;
+    }
+    return static_cast<float>(
+        positive_depth / std::sqrt(focal_product));
+}
+
+float worldDistance(const double first[3], const double second[3])
+{
+    const double delta_x = first[0] - second[0];
+    const double delta_y = first[1] - second[1];
+    const double delta_z = first[2] - second[2];
+    return static_cast<float>(std::sqrt(
+        delta_x * delta_x + delta_y * delta_y + delta_z * delta_z));
+}
+
+void assignContinuousMetrics(
+    const Camera &reference_camera,
+    const cv::Point2f &reference_pixel,
+    float reference_depth,
+    const double reference_world[3],
+    const Camera &source_camera,
+    const cv::Point &source_pixel,
+    float source_depth,
+    ProjectedDepthConsistencyResult *result)
+{
+    if (!result || !std::isfinite(source_depth) || source_depth <= 0.0f)
+    {
+        return;
+    }
+    const double source_pixel_array[2] = {
+        static_cast<double>(source_pixel.x),
+        static_cast<double>(source_pixel.y)};
+    double measured_world[3] = {0.0, 0.0, 0.0};
+    if (!source_camera.unprojectPixel(
+            source_pixel_array, source_depth, measured_world))
+    {
+        return;
+    }
+    double round_trip_pixel[2] = {0.0, 0.0};
+    double round_trip_depth = 0.0;
+    if (!reference_camera.projectWorldPointWithDepth(
+            measured_world, round_trip_pixel, round_trip_depth) ||
+        !std::isfinite(round_trip_depth) || round_trip_depth <= 0.0)
+    {
+        return;
+    }
+    const float reference_footprint =
+        worldPixelFootprint(reference_camera, reference_depth);
+    const float source_footprint =
+        worldPixelFootprint(source_camera, source_depth);
+    const float joint_footprint =
+        0.5f * (reference_footprint + source_footprint);
+    if (!std::isfinite(joint_footprint) ||
+        joint_footprint <= std::numeric_limits<float>::epsilon())
+    {
+        return;
+    }
+    const float delta_x =
+        static_cast<float>(round_trip_pixel[0]) - reference_pixel.x;
+    const float delta_y =
+        static_cast<float>(round_trip_pixel[1]) - reference_pixel.y;
+    result->roundTripErrorPixels =
+        std::sqrt(delta_x * delta_x + delta_y * delta_y);
+    result->worldSurfaceResidual =
+        worldDistance(reference_world, measured_world);
+    result->jointWorldPixelFootprint = joint_footprint;
+    result->continuousGeometryValid =
+        std::isfinite(result->roundTripErrorPixels) &&
+        std::isfinite(result->worldSurfaceResidual);
+}
+
+} // namespace
+
 ProjectedDepthConsistencyResult evaluateProjectedDepthConsistency(
     const Camera &referenceCamera,
     const cv::Point2f &referencePixel,
@@ -20,7 +104,8 @@ ProjectedDepthConsistencyResult evaluateProjectedDepthConsistency(
     const cv::Mat &sourceDepth,
     float relativeThreshold,
     int searchRadius,
-    float maximumRoundTripErrorPixels)
+    float maximumRoundTripErrorPixels,
+    bool computeContinuousMetrics)
 {
     ProjectedDepthConsistencyResult result;
     if (!referenceCamera.isValid() || !sourceCamera.isValid() ||
@@ -64,6 +149,18 @@ ProjectedDepthConsistencyResult evaluateProjectedDepthConsistency(
         result.relativeDepthError = std::fabs(
             center_depth - static_cast<float>(expected_source_depth)) /
             static_cast<float>(expected_source_depth);
+        if (computeContinuousMetrics)
+        {
+            assignContinuousMetrics(
+                referenceCamera,
+                referencePixel,
+                referenceDepth,
+                reference_world,
+                sourceCamera,
+                result.sourcePixel,
+                center_depth,
+                &result);
+        }
     }
 
     const int radius = std::clamp(searchRadius, 0, 2);
@@ -168,6 +265,19 @@ ProjectedDepthConsistencyResult evaluateProjectedDepthConsistency(
             result.relativeDepthError = relative_error;
             result.roundTripErrorPixels = round_trip_error;
             result.consistentReferenceDepth = static_cast<float>(round_trip_depth);
+            result.worldSurfaceResidual =
+                worldDistance(reference_world, measured_world);
+            const float reference_footprint =
+                worldPixelFootprint(referenceCamera, referenceDepth);
+            const float source_footprint =
+                worldPixelFootprint(sourceCamera, measured_depth);
+            result.jointWorldPixelFootprint =
+                0.5f * (reference_footprint + source_footprint);
+            result.continuousGeometryValid =
+                std::isfinite(result.worldSurfaceResidual) &&
+                std::isfinite(result.jointWorldPixelFootprint) &&
+                result.jointWorldPixelFootprint >
+                    std::numeric_limits<float>::epsilon();
         }
     }
 
@@ -284,6 +394,80 @@ GeometryEvidenceMaps makeGeometryEvidenceMaps(
             mean_row[column] = mean;
             spread_row[column] = mean > 1.0e-12f
                 ? std::sqrt(variance) / mean : 0.0f;
+        }
+    }
+    return result;
+}
+
+AdaptiveGeometryEvidenceAccumulatorMaps makeAdaptiveGeometryEvidenceAccumulatorMaps(
+    cv::Size size)
+{
+    AdaptiveGeometryEvidenceAccumulatorMaps result;
+    if (size.width <= 0 || size.height <= 0)
+    {
+        return result;
+    }
+    result.positiveSupport = cv::Mat(size, CV_32FC1, cv::Scalar(0.0f));
+    result.squaredPositiveSupport = cv::Mat(size, CV_32FC1, cv::Scalar(0.0f));
+    result.conflict = cv::Mat(size, CV_32FC1, cv::Scalar(0.0f));
+    result.observable = cv::Mat(size, CV_32FC1, cv::Scalar(0.0f));
+    return result;
+}
+
+AdaptiveGeometryEvidenceMaps makeAdaptiveGeometryEvidenceMaps(
+    const cv::Mat &retained_depth,
+    const AdaptiveGeometryEvidenceAccumulatorMaps &accumulator_maps,
+    const AdaptiveGeometryEvidenceOptions &options)
+{
+    AdaptiveGeometryEvidenceMaps result;
+    const cv::Size size = retained_depth.size();
+    if (retained_depth.empty() || retained_depth.type() != CV_32FC1 ||
+        accumulator_maps.positiveSupport.empty() ||
+        accumulator_maps.positiveSupport.type() != CV_32FC1 ||
+        accumulator_maps.squaredPositiveSupport.empty() ||
+        accumulator_maps.squaredPositiveSupport.type() != CV_32FC1 ||
+        accumulator_maps.conflict.empty() ||
+        accumulator_maps.conflict.type() != CV_32FC1 ||
+        accumulator_maps.observable.empty() ||
+        accumulator_maps.observable.type() != CV_32FC1 ||
+        accumulator_maps.positiveSupport.size() != size ||
+        accumulator_maps.squaredPositiveSupport.size() != size ||
+        accumulator_maps.conflict.size() != size ||
+        accumulator_maps.observable.size() != size)
+    {
+        return result;
+    }
+
+    result.supportWeight = cv::Mat(size, CV_32FC1, cv::Scalar(0.0f));
+    result.effectiveViewCount = cv::Mat(size, CV_32FC1, cv::Scalar(0.0f));
+    result.conflictWeight = cv::Mat(size, CV_32FC1, cv::Scalar(0.0f));
+    for (int row = 0; row < retained_depth.rows; ++row)
+    {
+        const float *depth_row = retained_depth.ptr<float>(row);
+        const float *positive_row = accumulator_maps.positiveSupport.ptr<float>(row);
+        const float *squared_row =
+            accumulator_maps.squaredPositiveSupport.ptr<float>(row);
+        const float *conflict_row = accumulator_maps.conflict.ptr<float>(row);
+        const float *observable_row = accumulator_maps.observable.ptr<float>(row);
+        float *support_row = result.supportWeight.ptr<float>(row);
+        float *effective_view_row = result.effectiveViewCount.ptr<float>(row);
+        float *output_conflict_row = result.conflictWeight.ptr<float>(row);
+        for (int column = 0; column < retained_depth.cols; ++column)
+        {
+            if (!std::isfinite(depth_row[column]) || depth_row[column] <= 0.0f)
+            {
+                continue;
+            }
+            AdaptiveGeometryEvidenceAccumulator accumulator;
+            accumulator.positiveSupport = positive_row[column];
+            accumulator.squaredPositiveSupport = squared_row[column];
+            accumulator.conflict = conflict_row[column];
+            accumulator.observable = observable_row[column];
+            const AdaptiveGeometryEvidenceResult evidence =
+                finalizeAdaptiveGeometryEvidence(accumulator, options);
+            support_row[column] = evidence.supportWeight;
+            effective_view_row[column] = evidence.effectiveViewCount;
+            output_conflict_row[column] = evidence.conflictWeight;
         }
     }
     return result;

@@ -1,8 +1,6 @@
 #include "cli_common.h"
 
 #include "preparation/MatchResultCatalog.h"
-#include "GeometryVerifyStage.h"
-#include "StoredPairGeometryAudit.h"
 
 #include <QCoreApplication>
 #include <QFile>
@@ -78,16 +76,12 @@ int main(int argc, char **argv)
     std::string manifest_path;
     std::string output_path;
     int minimum_inliers = 20;
-    double reprojection_threshold = 1.5;
-    app.add_option("--match-dir", match_dir, "assets/matches 目录")->required();
+    app.add_option("--match-dir", match_dir, "assets/image_matches 逐影像匹配目录")->required();
     app.add_option("--mvs-manifest", manifest_path, "用于限定当前影像集合的 mvs_manifest.json")
         ->required();
     app.add_option("-o,--output", output_path, "可选 JSON 输出路径");
     app.add_option("--minimum-inliers", minimum_inliers, "几何验证最少内点")
         ->check(CLI::Range(8, 1000));
-    app.add_option("--reprojection-threshold", reprojection_threshold,
-                   "USAC/MAGSAC 重投影阈值（像素）")
-        ->check(CLI::Range(0.1, 10.0));
     CLI11_PARSE(app, argc, argv);
 
     QString error;
@@ -127,36 +121,15 @@ int main(int argc, char **argv)
         int total_matches = std::max(0, variant.totalMatches);
         int geometric_inliers =
             std::max(0, variant.geometricVerifiedInliers);
-        bool statistics_available =
-            variant.hasInlierStats && total_matches >= minimum_inliers;
-        bool verified = statistics_available &&
-            xjw::matchphotos::passesGeometryQualityGate(
-                total_matches,
-                geometric_inliers,
-                minimum_inliers);
-        double coverage_score = 0.0;
+        const bool statistics_available = variant.hasInlierStats;
+        const bool verified = statistics_available &&
+            variant.geometryPassed && geometric_inliers >= minimum_inliers;
+        const double coverage_score = variant.geometricCoverage;
         QString reason = verified
-            ? QStringLiteral("verified_from_sidecar")
+            ? QStringLiteral("verified_from_pimatch")
             : (statistics_available
-                   ? QStringLiteral("sidecar_geometry_gate_failed")
+                   ? QStringLiteral("pimatch_geometry_gate_failed")
                    : QStringLiteral("missing_geometric_inlier_statistics"));
-        if (!statistics_available)
-        {
-            const xjw::matchphotos::StoredPairGeometryAuditResult audit =
-                xjw::matchphotos::auditStoredPairGeometry(
-                    variant.matchFilePath,
-                    variant.sidecarPath,
-                    minimum_inliers,
-                    reprojection_threshold);
-            statistics_available = audit.statisticsAvailable;
-            verified = audit.verified;
-            total_matches = audit.statisticsAvailable
-                ? audit.totalMatches
-                : total_matches;
-            geometric_inliers = audit.geometricInliers;
-            coverage_score = audit.coverageScore;
-            reason = audit.reason;
-        }
 
         if (verified)
         {
@@ -189,7 +162,7 @@ int main(int argc, char **argv)
     }
 
     const QJsonObject root{
-        {QStringLiteral("schema"), QStringLiteral("plascan_mvs_pair_audit_v1")},
+        {QStringLiteral("schema"), QStringLiteral("plascan_mvs_pair_audit_v2")},
         {QStringLiteral("current_image_count"), images.size()},
         {QStringLiteral("catalog_pair_count"), catalog.pairGroupCount},
         {QStringLiteral("audited_pair_count"), pairs.size()},

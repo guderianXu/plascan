@@ -20,8 +20,8 @@ struct ReconstructionCliOptions
     std::string chunkIdArg;
     std::string chunkNameArg;
     std::string device = "auto";
-    std::string sfmFeatureAlgorithm = "disk";
-    std::string sfmMatchAlgorithm = "lightglue";
+    // 连接点算法使用统一注册 ID，不再让调用者任意拼接提取器和匹配器。
+    std::string sfmMatchingAlgorithmId = "sift_lightglue";
     bool sfmGuidedRematching = false;
     bool lockInputCameraPoses = false;
     int quality = 3;

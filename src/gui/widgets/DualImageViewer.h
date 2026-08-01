@@ -5,7 +5,9 @@
 #include <QVector>
 #include <QPointF>
 #include <QPointer>
+#include <QByteArray>
 
+#include <cstdint>
 #include <optional>
 
 class ImageViewWidget;
@@ -27,9 +29,17 @@ public:
     explicit DualImageViewer(QWidget *parent = nullptr);
     ~DualImageViewer() override;
 
-    // 加载匹配对
+    /**
+     * @brief 从逐影像 `.pimatch` 分片加载一个像对。
+     *
+     * algorithmId 为空时选择几何内点最多的变体；非空时，版本和配置指纹共同
+     * 指定唯一变体。该接口使查看器不需要知道特征文件或成对文件命名规则。
+     */
     bool loadMatchPair(const QString &imgA, const QString &imgB,
-                       const QString &matchFile);
+                       const QString &matchFile,
+                       const QString &algorithmId = QString(),
+                       std::uint32_t algorithmVersion = 0,
+                       const QByteArray &configFingerprint = QByteArray());
     
     // 加载匹配对（直接传入数据）
     void loadMatchPair(const QString &imgA, const QString &imgB,
@@ -98,12 +108,16 @@ private:
     void connectSignals();
     void updateOverlayGeometry();
     
-    // 解析 .match 文件
+    // 解析一个 `.pimatch` 分片中的目标邻接变体。
     bool parseMatchFile(const QString &matchFile,
                         const QString &imgA,
                         const QString &imgB,
+                        const QString &algorithmId,
+                        std::uint32_t algorithmVersion,
+                        const QByteArray &configFingerprint,
                         QVector<QPointF> &ptsA,
-                        QVector<QPointF> &ptsB);
+                        QVector<QPointF> &ptsB,
+                        QVector<bool> &inlierMask);
 
 private:
     QPointer<ImageViewWidget> _leftView;

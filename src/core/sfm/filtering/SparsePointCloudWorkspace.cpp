@@ -1,3 +1,11 @@
+/**
+ * @file SparsePointCloudWorkspace.cpp
+ * @brief SfM 稀疏点到 PlaPoint/PlaMatrix 连续工作集的转换和邻域查询实现。
+ *
+ * 工作集构造后不可变，因此 KD-tree 可以惰性构建并在多个过滤阶段复用。
+ * `_points`、`_pointIds` 和 PlaPoint cloud 始终保持相同索引顺序。
+ */
+
 #include "SparsePointCloudWorkspace.h"
 
 #include "reconstruction/SfmReconstruction.h"
@@ -29,6 +37,7 @@ SparsePointCloudPoint scenePointToSparsePoint(const ScenePoint3D &scenePoint)
 std::shared_ptr<SparsePointCloudWorkspace::Cloud> buildCloud(
     const std::vector<SparsePointCloudPoint> &points)
 {
+    // PlaPoint 的点矩阵固定为 N x 3 行主序逻辑，每一行对应一个稳定工作集索引。
     auto cloud = std::make_shared<SparsePointCloudWorkspace::Cloud>(points.size());
     for (std::size_t i = 0; i < points.size(); ++i)
     {
@@ -50,6 +59,7 @@ SparsePointCloudWorkspace SparsePointCloudWorkspace::fromPoints(
 SparsePointCloudWorkspace SparsePointCloudWorkspace::fromReconstruction(
     const SfmReconstruction &reconstruction)
 {
+    // 显式排序消除 unordered 容器迭代顺序，使过滤结果和测试可重复。
     std::vector<Point3DId> pointIds = reconstruction.allPoint3DIds();
     std::sort(pointIds.begin(), pointIds.end());
 
@@ -175,6 +185,7 @@ std::vector<SparsePointCloudNeighborList> SparsePointCloudWorkspace::knnCache(in
         return cache;
     }
 
+    // 查询时多取一个邻居，因为点自身通常以距离 0 返回，随后显式剔除。
     const int actualK = std::min<int>(k, static_cast<int>(_points.size()) - 1);
     if (actualK < 1)
     {
@@ -270,6 +281,7 @@ std::vector<int> SparsePointCloudWorkspace::radiusOutlierIndices(
 
 const SparsePointCloudWorkspace::KdTree &SparsePointCloudWorkspace::tree() const
 {
+    // 工作集不可变，首次构建后的树可安全用于后续只读查询。
     if (!_tree)
     {
         _tree = std::make_shared<KdTree>();

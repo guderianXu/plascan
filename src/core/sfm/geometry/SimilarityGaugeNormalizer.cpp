@@ -1,3 +1,11 @@
+/**
+ * @file SimilarityGaugeNormalizer.cpp
+ * @brief 两相机基线规范的验证和原子应用实现。
+ *
+ * 变换形式为 `X' = C_ref + s * (X - C_refined)`。因为只进行统一平移和尺度，
+ * 相机旋转、内参及所有重投影像素保持不变。
+ */
+
 #include "SimilarityGaugeNormalizer.h"
 
 #include <array>
@@ -83,6 +91,7 @@ SimilarityGaugeNormalizationResult normalizeSimilarityGauge(
         return result;
     }
 
+    // 参考基线来自 BA 前状态，细化基线来自 BA 输出；二者都必须非退化。
     const double referenceBaseline = distance(referenceAnchor, referenceScaleCamera);
     const double refinedBaseline = distance(refinedAnchor, refinedScaleCamera);
     constexpr double kMinimumBaseline = 1.0e-10;
@@ -93,6 +102,7 @@ SimilarityGaugeNormalizationResult normalizeSimilarityGauge(
         return result;
     }
 
+    // 统一正尺度排除镜像；本步骤不估计旋转。
     const double scale = referenceBaseline / refinedBaseline;
     if (!std::isfinite(scale) || !(scale > 0.0))
     {

@@ -57,6 +57,9 @@ struct MvsDepthFrameRecord
     QString rawDepthPath;
     QString rawConfidencePath;
     QString rawGeometrySupportPath;
+    QString rawAdaptiveGeometrySupportWeightPath;
+    QString rawAdaptiveGeometryEffectiveViewCountPath;
+    QString rawAdaptiveGeometryConflictWeightPath;
     QString rawGeometrySourceMaskPath;
     QString rawInverseDepthMeanPath;
     QString rawInverseDepthSpreadPath;

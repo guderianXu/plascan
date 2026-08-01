@@ -11,31 +11,15 @@
    </rect>
   </property>
   <property name="windowTitle">
-   <string>特征点显示设置</string>
+   <string>匹配观测显示设置</string>
   </property>
   <layout class="QVBoxLayout" name="mainLayout">
    <item>
-    <widget class="QGroupBox" name="fileGroup">
+    <widget class="QGroupBox" name="residualGroup">
      <property name="title">
-      <string>特征文件</string>
+      <string>重投影残差</string>
      </property>
-     <layout class="QHBoxLayout" name="fileLayout">
-      <item>
-       <widget class="QLabel" name="suffixLabel">
-        <property name="text">
-         <string>当前算法:</string>
-        </property>
-        <property name="buddy">
-         <cstring>m_suffixCombo</cstring>
-        </property>
-   </widget>
-  </item>
-  <item>
-   <widget class="QGroupBox" name="residualGroup">
-    <property name="title">
-     <string>重投影残差</string>
-    </property>
-    <layout class="QFormLayout" name="residualForm">
+     <layout class="QFormLayout" name="residualForm">
      <item row="0" column="1">
       <widget class="QCheckBox" name="m_showResidualsChk">
        <property name="text"><string>显示点残差</string></property>
@@ -68,16 +52,6 @@
      </item>
      <item row="4" column="0"><widget class="QLabel" name="residualColorLabel"><property name="text"><string>残差颜色:</string></property></widget></item>
      <item row="4" column="1"><widget class="QPushButton" name="m_residualColorBtn"><property name="text"><string>    </string></property></widget></item>
-    </layout>
-   </widget>
-  </item>
-      <item>
-       <widget class="QComboBox" name="m_suffixCombo">
-        <property name="toolTip">
-         <string>切换显示不同算法提取的特征点文件</string>
-        </property>
-       </widget>
-      </item>
      </layout>
     </widget>
    </item>
@@ -93,7 +67,7 @@
          <string>显示关键点中心标记</string>
         </property>
         <property name="text">
-         <string>显示特征点</string>
+         <string>显示匹配关键点</string>
         </property>
         <property name="checked">
          <bool>true</bool>
@@ -113,8 +87,7 @@
       <item>
        <widget class="QCheckBox" name="m_showOrientationChk">
         <property name="toolTip">
-         <string>显示关键点的方向（基于KeyPoint.angle）
-SuperPoint默认无方向</string>
+          <string>显示匹配结果中保存的 SIFT 关键点方向</string>
         </property>
         <property name="text">
          <string>显示方向箭头</string>

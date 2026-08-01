@@ -17,7 +17,7 @@ class TrackBuildStage
 public:
     MatchPhotosStageReport run(const MatchPhotosContext &context,
                                const MatchPhotosOptions &options,
-                               const std::vector<MatchPhotosMatchRecord> &matchRecords,
+                               std::vector<MatchPhotosMatchRecord> *matchRecords,
                                MatchPhotosResult *result) const;
 };
 

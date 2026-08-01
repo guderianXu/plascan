@@ -12,6 +12,7 @@
 #include <opencv2/core/mat.hpp>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <vector>
@@ -55,6 +56,12 @@ struct DepthTsdfOptions
     float unconfirmedNativeObservationMultiplier = 0.30f;
     float weakNativeObservationMultiplier = 0.55f;
     float repairedObservationMultiplier = 0.70f;
+    bool enableInverseDepthSpreadWeighting = false;
+    float inverseDepthSpreadWeightKnee = 0.005f;
+    float inverseDepthSpreadWeightZero = 0.015f;
+    float minimumInverseDepthSpreadWeightMultiplier = 0.05f;
+    bool enableInverseDepthSpreadSupportWeightDecoupling = false;
+    float inverseDepthSpreadSupportWeightExponent = 0.25f;
     bool enableEvidenceSupportWeightDecoupling = false;
     float evidenceSupportWeightExponent = 0.50f;
     bool enableWeakEvidenceSurfaceOnlyIntegration = false;
@@ -152,6 +159,42 @@ struct DepthTsdfOptions
     int visualHullCompletionRelaxationIterations = 0;
     float visualHullCompletionRelaxationLambda = 0.35f;
     float visualHullCompletionMaximumUpdate = 0.20f;
+    bool enableVisibilityOccupancyCompletion = false;
+    int visibilityOccupancyResolution = 72;
+    bool visibilityOccupancyAlignCarrierGrid = false;
+    bool visibilityOccupancyNativeCarrierExtraction = false;
+    bool visibilityOccupancyCellBoundaryExtraction = false;
+    int visibilityOccupancyMinimumVisibleViews = 2;
+    int visibilityOccupancyMinimumSilhouetteViews = 2;
+    int visibilityOccupancyMinimumDepthFullViewsForSilhouettePrior = 0;
+    float visibilityOccupancyAdaptiveDepthSupportMinimumFullFraction = 0.02f;
+    int visibilityOccupancyAllowedSilhouetteViolations = 1;
+    float visibilityOccupancyFrontTolerancePixelFootprints = 2.5f;
+    float visibilityOccupancyBehindSurfaceBandPixelFootprints = 5.0f;
+    int visibilityOccupancyDepthEmptyCapacity = 18;
+    int visibilityOccupancyDepthFullCapacity = 22;
+    int visibilityOccupancySilhouetteEmptyCapacity = 8;
+    int visibilityOccupancySilhouetteFullPriorCapacity = 2;
+    int visibilityOccupancyPairwiseCapacity = 6;
+    int visibilityOccupancyClosingIterations = 0;
+    int visibilityOccupancyMaximumHandleRepairPasses = 4;
+    int visibilityOccupancyMaximumHandleRepairAcceptedCandidateCount = 32;
+    std::size_t visibilityOccupancyMaximumHandleRepairCandidateSampleCount =
+        512;
+    std::size_t visibilityOccupancyMaximumHandleRepairSubsetSampleCount = 96;
+    int visibilityOccupancyMaximumHandleRepairSubsetSeedCount = 0;
+    int visibilityOccupancyClosingMinimumDepthEmptyViewsToProtect = 16;
+    int visibilityOccupancyClosingMinimumSilhouetteOutsideViewsToProtect = 2;
+    bool visibilityOccupancyTopologyLockedResidualBlend = true;
+    float visibilityOccupancyObservedBand = 0.60f;
+    float visibilityOccupancyCarrierBand = 0.85f;
+    float visibilityOccupancyMaximumResidual = 0.30f;
+    float visibilityOccupancyDetailBlend = 0.70f;
+    bool visibilityOccupancyPreserveAllObservedSamples = false;
+    bool visibilityOccupancyPreserveObservedNearSurface = true;
+    bool visibilityOccupancyRequireSignAgreement = true;
+    float visibilityOccupancyMaximumPreservedAbsoluteTsdf = 0.45f;
+    float visibilityOccupancySignedDistanceNormalizationSamples = 3.0f;
     float minimumSurfacePatchObservationWeight = 0.60f;
     int minimumSurfacePatchSourceCount = 2;
     int minimumSurfacePatchCoreNeighborCount = 3;
@@ -169,6 +212,11 @@ struct DepthTsdfOptions
     bool enableSurfaceEvidenceFreeSpaceVeto = true;
     float supportMaskFreeSpaceWeight = 0.25f;
     int minimumSupportMaskFreeSpaceViews = 1;
+    bool enableNarrowBandActivation = false;
+    int narrowBandActivationBlockSizeSamples = 8;
+    int narrowBandActivationDepthStride = 4;
+    float narrowBandActivationRayStepVoxels = 1.0f;
+    int narrowBandActivationHaloBlocks = 1;
     float maximumFreeSpaceVoxels = 36.0f;
     int depthValidBoundaryErosionPixels = 0;
     bool enableGeometryVerifiedBoundaryRecovery = false;
@@ -296,6 +344,9 @@ struct DepthTsdfStatistics
     std::uint64_t weakNativeObservationCount = 0;
     std::uint64_t repairedObservationCount = 0;
     std::uint64_t strongNativeObservationCount = 0;
+    std::uint64_t inverseDepthSpreadDownweightedObservationCount = 0;
+    std::uint64_t inverseDepthSpreadVeryWeakObservationCount = 0;
+    std::uint64_t inverseDepthSpreadSupportLiftedObservationCount = 0;
     std::uint64_t weakEvidenceOutsideSurfaceBandRejectedCount = 0;
     std::uint64_t crossViewConsensusContourBandPixelCount = 0;
     std::uint64_t supportedSampleCount = 0;
@@ -337,6 +388,9 @@ struct DepthTsdfStatistics
     bool effectiveMc33RequireSupportedSignChange = false;
     std::uint64_t mc33SupportMaskedSampleCount = 0;
     std::uint64_t mc33RejectedUnsupportedCellFaceCount = 0;
+    int isoSurfaceExtractionNonManifoldEdgeCount = 0;
+    int isoSurfaceExtractionComponentCount = 0;
+    int isoSurfaceExtractionEulerCharacteristic = 0;
     int initialDegenerateRemovedFaceCount = 0;
     int componentFilterRemovedFaceCount = 0;
     bool effectiveGeometryZeroCrossingRecovery = false;
@@ -391,10 +445,86 @@ struct DepthTsdfStatistics
     bool effectiveVisualHullSignedDistanceCompletion = false;
     std::uint64_t visualHullCompletionOccupiedSampleCount = 0;
     std::uint64_t visualHullCompletionBoundarySampleCount = 0;
+    std::uint64_t visualHullCompletionAnchorCellCount = 0;
+    std::uint64_t visualHullCompletionFrontierCellCount = 0;
     std::uint64_t visualHullCompletionPreservedObservedSampleCount = 0;
     std::uint64_t visualHullCompletionRecoveredSampleCount = 0;
     std::uint64_t visualHullCompletionRelaxedSampleCount = 0;
     float effectiveVisualHullCompletionBandVoxels = 0.0f;
+    bool effectiveVisibilityOccupancyCompletion = false;
+    bool effectiveVisibilityOccupancyCellBoundaryExtraction = false;
+    int effectiveVisibilityOccupancyResolution = 0;
+    int effectiveVisibilityOccupancyPairwiseCapacity = 0;
+    int effectiveVisibilityOccupancyClosingIterations = 0;
+    int effectiveVisibilityOccupancyMinimumDepthFullViewsForSilhouettePrior = 0;
+    int visibilityOccupancyDepthSupportFallbackCount = 0;
+    std::uint64_t visibilityOccupancySampleCount = 0;
+    std::uint64_t visibilityOccupancyBoundaryOccupiedCellCount = 0;
+    std::uint64_t visibilityOccupancyBoundaryExposedQuadCount = 0;
+    std::uint64_t visibilityOccupancyBoundaryNonManifoldEdgeCount = 0;
+    std::uint64_t visibilityOccupancyBoundaryNonManifoldVertexCount = 0;
+    int visibilityOccupancyBoundaryBodyEulerCharacteristic = 0;
+    int visibilityOccupancyBoundarySurfaceEulerCharacteristic = 0;
+    bool visibilityOccupancyBoundaryTopologyConsistent = false;
+    std::uint64_t visibilityOccupancyDepthEmptyVoteCount = 0;
+    std::uint64_t visibilityOccupancyDepthFullVoteCount = 0;
+    std::uint64_t
+        visibilityOccupancySilhouetteFullPriorCandidateSampleCount = 0;
+    std::uint64_t visibilityOccupancySilhouetteFullPriorSampleCount = 0;
+    std::uint64_t
+        visibilityOccupancySilhouetteFullPriorRejectedWithoutDepthSupportSampleCount = 0;
+    std::uint64_t visibilityOccupancySilhouetteFullPriorCapacityTotal = 0;
+    std::uint64_t visibilityOccupancyFullSampleCount = 0;
+    std::uint64_t visibilityOccupancyFilledBubbleSampleCount = 0;
+    std::uint64_t visibilityOccupancyRemovedDustSampleCount = 0;
+    std::uint64_t visibilityOccupancyClosingChangedSampleCount = 0;
+    std::uint64_t visibilityOccupancyClosingProposalAddedSampleCount = 0;
+    std::uint64_t
+        visibilityOccupancyClosingProposalDepthEmptyAtLeastTwoSampleCount = 0;
+    std::uint64_t
+        visibilityOccupancyClosingProposalDepthEmptyAtLeastThreeSampleCount = 0;
+    std::uint64_t
+        visibilityOccupancyClosingProposalDepthEmptyAtLeastFourSampleCount = 0;
+    std::uint64_t visibilityOccupancyClosingProposalDepthFullSampleCount = 0;
+    std::uint64_t
+        visibilityOccupancyClosingProposalSilhouetteOutsideAtLeastTwoSampleCount = 0;
+    std::uint64_t visibilityOccupancyClosingProtectedEmptySampleCount = 0;
+    std::uint64_t visibilityOccupancyClosingDepthEmptyProtectedSampleCount = 0;
+    std::uint64_t
+        visibilityOccupancyClosingSilhouetteEmptyProtectedSampleCount = 0;
+    int visibilityOccupancyHandleRepairCandidateComponentCount = 0;
+    int visibilityOccupancyHandleRepairAcceptedCandidateCount = 0;
+    int visibilityOccupancyHandleRepairAcceptedSubsetCandidateCount = 0;
+    int visibilityOccupancyHandleRepairAcceptedPlateauSubsetCandidateCount = 0;
+    int visibilityOccupancyHandleRepairAttemptedSubsetSeedCount = 0;
+    int visibilityOccupancyHandleRepairRejectedProtectedCandidateCount = 0;
+    int visibilityOccupancyHandleRepairRejectedOversizedCandidateCount = 0;
+    int visibilityOccupancyHandleRepairRejectedTopologyCandidateCount = 0;
+    int visibilityOccupancyHandleRepairRejectedProtectedReachabilityCandidateCount = 0;
+    int visibilityOccupancyHandleRepairBodyEulerBefore = 0;
+    int visibilityOccupancyHandleRepairBodyEulerAfter = 0;
+    std::uint64_t visibilityOccupancyWellComposedRepairFilledSampleCount = 0;
+    int visibilityOccupancyWellComposedRepairAcceptedPassCount = 0;
+    int visibilityOccupancyWellComposedRepairBodyEulerBefore = 0;
+    int visibilityOccupancyWellComposedRepairBodyEulerAfter = 0;
+    std::uint64_t
+        visibilityOccupancyWellComposedRepairRemainingEdgeCheckerboardCount = 0;
+    std::uint64_t
+        visibilityOccupancyWellComposedRepairRemainingVertexOccupiedDefectCount = 0;
+    std::uint64_t
+        visibilityOccupancyWellComposedRepairRemainingVertexEmptyDefectCount = 0;
+    std::uint64_t visibilityOccupancyRecoveredUnsupportedSampleCount = 0;
+    std::uint64_t visibilityOccupancyPreservedObservedSampleCount = 0;
+    std::uint64_t visibilityOccupancyOverriddenObservedSampleCount = 0;
+    std::uint64_t visibilityOccupancyForcedBoundarySampleCount = 0;
+    std::uint64_t visibilityOccupancyAdjustedExactIsoValueSampleCount = 0;
+    std::uint64_t visibilityOccupancyTrustedObservationSampleCount = 0;
+    std::uint64_t visibilityOccupancyIgnoredSignConflictObservationCount = 0;
+    std::uint64_t visibilityOccupancyBlendedSampleCount = 0;
+    std::uint64_t visibilityOccupancyClippedResidualSampleCount = 0;
+    std::uint64_t visibilityOccupancyCarrierSignMismatchSampleCount = 0;
+    float visibilityOccupancyMaximumAppliedResidual = 0.0f;
+    std::int64_t visibilityOccupancyCutEnergy = 0;
     float effectiveAdaptiveTgvMaximumActiveAbsoluteField = 0.0f;
     bool adaptiveTgvTwoToOneBalanced = false;
     int adaptiveTgvIterationCount = 0;
@@ -432,6 +562,12 @@ struct DepthTsdfStatistics
     float effectiveUnconfirmedNativeObservationMultiplier = 0.0f;
     float effectiveWeakNativeObservationMultiplier = 0.0f;
     float effectiveRepairedObservationMultiplier = 0.0f;
+    bool effectiveInverseDepthSpreadWeighting = false;
+    float effectiveInverseDepthSpreadWeightKnee = 0.0f;
+    float effectiveInverseDepthSpreadWeightZero = 0.0f;
+    float effectiveMinimumInverseDepthSpreadWeightMultiplier = 0.0f;
+    bool effectiveInverseDepthSpreadSupportWeightDecoupling = false;
+    float effectiveInverseDepthSpreadSupportWeightExponent = 0.0f;
     bool effectiveEvidenceSupportWeightDecoupling = false;
     float effectiveEvidenceSupportWeightExponent = 0.0f;
     bool effectiveWeakEvidenceSurfaceOnlyIntegration = false;
@@ -499,6 +635,16 @@ struct DepthTsdfStatistics
     int effectiveMinimumSupportMaskFreeSpaceViews = 0;
     bool effectiveSurfaceEvidenceFreeSpaceVeto = false;
     std::uint64_t supportMaskFreeSpaceSurfaceVetoCount = 0;
+    bool effectiveNarrowBandActivation = false;
+    int effectiveNarrowBandActivationBlockSizeSamples = 0;
+    int effectiveNarrowBandActivationDepthStride = 0;
+    float effectiveNarrowBandActivationRayStepVoxels = 0.0f;
+    int effectiveNarrowBandActivationHaloBlocks = 0;
+    std::uint64_t narrowBandActivationTotalBlockCount = 0;
+    std::uint64_t narrowBandActivationActiveBlockCount = 0;
+    std::uint64_t narrowBandActivationValidSourceSampleCount = 0;
+    std::uint64_t narrowBandActivationMarkedRaySampleCount = 0;
+    std::uint64_t narrowBandActivationSkippedSampleCount = 0;
     int effectiveDepthValidBoundaryErosionPixels = 0;
     bool effectiveGeometryVerifiedBoundaryRecovery = false;
     int effectiveMinimumBoundaryRecoveryGeometrySupport = 0;
@@ -773,6 +919,28 @@ struct DepthTsdfStatistics
     std::vector<MeshConnectivityStats::Component> components;
 };
 
+struct VisibilityOccupancyCarrierFieldGrid
+{
+    std::array<int, 3> sampleDimensions{};
+    std::array<float, 3> boundsMin{};
+    std::array<float, 3> boundsMax{};
+    std::vector<float> signedWorldDistance;
+
+    [[nodiscard]] bool valid() const
+    {
+        std::size_t expected_sample_count = 1;
+        for (const int dimension : sampleDimensions)
+        {
+            if (dimension < 2)
+            {
+                return false;
+            }
+            expected_sample_count *= static_cast<std::size_t>(dimension);
+        }
+        return signedWorldDistance.size() == expected_sample_count;
+    }
+};
+
 struct DepthTsdfResult
 {
     bool ok = false;
@@ -781,6 +949,7 @@ struct DepthTsdfResult
     DepthTsdfStatistics statistics;
     TriMesh mesh;
     TriMesh boundaryAttributionDebugMesh;
+    VisibilityOccupancyCarrierFieldGrid visibilityOccupancyCarrierField;
 };
 
 struct DepthTsdfFrameLoadResult
@@ -855,6 +1024,8 @@ struct DepthTsdfVisualHullCompletionStatistics
 {
     std::uint64_t occupiedSampleCount = 0;
     std::uint64_t boundarySampleCount = 0;
+    std::uint64_t anchorCellCount = 0;
+    std::uint64_t frontierCellCount = 0;
     std::uint64_t recoveredSampleCount = 0;
 };
 
@@ -864,7 +1035,8 @@ public:
     static DepthTsdfLayout makeLayout(const std::array<float, 3> &boundsMin,
                                       const std::array<float, 3> &boundsMax,
                                       int resolution,
-                                      bool includeColor);
+                                      bool includeColor,
+                                      int nestedResolution = 0);
     static DepthTsdfResult validateAllocation(const std::array<float, 3> &boundsMin,
                                               const std::array<float, 3> &boundsMax,
                                               const DepthTsdfOptions &options);
@@ -882,7 +1054,8 @@ public:
         float maximumInvalidNearestPixelRecoveryInverseDepthSpread = 0.0f,
         bool enableCrossViewConsensusDepth = false,
         float maximumCrossViewConsensusInverseDepthSpread = 0.02f,
-        const cv::Mat &crossViewConsensusMask = cv::Mat());
+        const cv::Mat &crossViewConsensusMask = cv::Mat(),
+        const cv::Mat &referenceAnchoredConsensusDepth = cv::Mat());
     static bool isSampleSupported(float accumulatedWeight,
                                   int distinctSupportCount,
                                   float maximumObservationWeight,
@@ -892,6 +1065,12 @@ public:
                                   int maximumGeometrySupportCount = 0,
                                   bool *geometryVerifiedSingleView = nullptr);
     static float observationEvidenceWeightMultiplier(
+        const DepthTsdfObservationSample &observation,
+        const DepthTsdfOptions &options);
+    static float observationInverseDepthSpreadWeightMultiplier(
+        const DepthTsdfObservationSample &observation,
+        const DepthTsdfOptions &options);
+    static float observationInverseDepthSpreadSupportWeightMultiplier(
         const DepthTsdfObservationSample &observation,
         const DepthTsdfOptions &options);
     static float observationEvidenceSupportWeightMultiplier(

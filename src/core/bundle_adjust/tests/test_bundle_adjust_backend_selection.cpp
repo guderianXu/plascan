@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "BundleAdjust.h"
+#include "BundleAdjustCeresPlanning.h"
 
 TEST(BundleAdjustBackendSelectionTest, SmallProblemUsesLegacyCpu)
 {
@@ -23,8 +24,6 @@ TEST(BundleAdjustBackendSelectionTest, SmallProblemExplainsWhyCudaIsNotUsed)
 {
     xjw::BAOptions options;
     options.backend = xjw::BABackend::Auto;
-    options.minNativeCudaCameras = 50;
-    options.minNativeCudaObservations = 500000;
     options.minCeresCudaCameras = 50;
     options.minCeresCudaObservations = 500000;
     options.minCeresCpuObservations = 50000;
@@ -78,8 +77,6 @@ TEST(BundleAdjustBackendSelectionTest, NativeCudaCapabilityPreventsPoseRefinemen
     xjw::BAOptions options;
     options.backend = xjw::BABackend::Auto;
     options.refineCameraPose = true;
-    options.minNativeCudaCameras = 3;
-    options.minNativeCudaObservations = 20;
     options.minCeresCudaCameras = 1000;
     options.minCeresCudaObservations = 1000000;
     options.minCeresCpuObservations = 1000000;
@@ -117,4 +114,55 @@ TEST(BundleAdjustBackendSelectionTest, SharedFocalUsesJointCeresEvenForSmallProb
     {
         EXPECT_EQ(selected, xjw::BABackend::LegacyCpu);
     }
+}
+
+TEST(BundleAdjustCeresPlanningTest, AutoUsesSolverMatchingCameraScale)
+{
+    xjw::BAOptions options;
+    options.ceresLinearSolver = xjw::BACeresLinearSolver::Auto;
+    options.maxDenseSchurCameras = 50;
+    options.maxSparseSchurCameras = 500;
+
+    const auto small = xjw::detail::planCeresSolver(
+        options, 40, 1, 1000, 5000, false, 0);
+    const auto medium = xjw::detail::planCeresSolver(
+        options, 200, 1, 10000, 50000, false, 0);
+    const auto large = xjw::detail::planCeresSolver(
+        options, 1000, 1, 100000, 500000, false, 0);
+
+    EXPECT_EQ(small.solver, xjw::detail::BACeresSolverKind::DenseSchur);
+    EXPECT_EQ(medium.solver, xjw::detail::BACeresSolverKind::SparseSchur);
+    EXPECT_EQ(large.solver, xjw::detail::BACeresSolverKind::IterativeSchur);
+}
+
+TEST(BundleAdjustCeresPlanningTest, PointOnlyProblemUsesDenseQr)
+{
+    xjw::BAOptions options;
+    const auto plan = xjw::detail::planCeresSolver(
+        options, 0, 0, 10000, 50000, false, 0);
+
+    EXPECT_EQ(plan.solver, xjw::detail::BACeresSolverKind::DenseQr);
+    EXPECT_FALSE(plan.useCuda);
+}
+
+TEST(BundleAdjustCeresPlanningTest, CudaFallsBackBeforeExceedingMemoryBudget)
+{
+    xjw::BAOptions options;
+    options.maxCeresCudaMemoryFraction = 0.5;
+    options.maxDenseSchurCameras = 20;
+    options.maxSparseSchurCameras = 200;
+
+    const auto plan = xjw::detail::planCeresSolver(
+        options,
+        1000,
+        1,
+        100000,
+        1000000,
+        true,
+        256ULL * 1024ULL * 1024ULL);
+
+    EXPECT_FALSE(plan.useCuda);
+    EXPECT_EQ(plan.solver, xjw::detail::BACeresSolverKind::IterativeSchur);
+    EXPECT_GT(plan.estimatedCudaBytes, 128ULL * 1024ULL * 1024ULL);
+    EXPECT_NE(plan.reason.find("显存"), std::string::npos);
 }

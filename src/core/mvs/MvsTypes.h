@@ -42,6 +42,7 @@ struct PatchMatchConfig
     int   numSourceViews     = 6;
     int   cpuThreadCount     = 1;       ///< CPU 路径的像素级并行线程数
     float confidenceThresh   = 0.60f;   ///< 多图生产阈值；少视图/快速预览由调用方显式降低
+    float minimumMaskedPatchSupportRatio = 0.35f; ///< mask-aware NCC 最小双边有效样本比例
     bool  useCuda            = true;
     int   downsampleFactor   = 2;       ///< 降采样因子（2=半分辨率，速度提升约4倍）
     bool  doMedianBlur       = true;
@@ -212,6 +213,7 @@ struct DepthGenConfig
     MvsSceneProfile sceneProfile = MvsSceneProfile::Auto; ///< Auto 时根据相机与稀疏云几何分类
     DepthFilterMode depthFilterMode = DepthFilterMode::Moderate; ///< 显式过滤预设
     bool adaptiveDepthFilterMode = true; ///< Auto 场景下航测用中等、环拍物体用温和过滤
+    bool enableAdaptiveGeometryEvidence = true; ///< 环拍场景生成连续几何证据；当前仅影子统计
     int crossViewHoleRepairSourceCount = 8; ///< 环拍内部孔洞修复使用的邻帧数，不改变 PatchMatch 源视图
     bool enableTwoSourceCrossViewGrowth = false; ///< 实验：从三源强核心受控恢复稳定两源缺口
     int twoSourceGrowthDistancePixels = 3;

@@ -8,10 +8,7 @@ namespace {
 
 bool isDashboardResultKey(const QString &key)
 {
-    return key == QStringLiteral("ipfind_results")
-        || key == QStringLiteral("feature_results")
-        || key == QStringLiteral("ipmatch_results")
-        || key == QStringLiteral("match_results")
+    return key == QStringLiteral("image_match_results")
         || key == QStringLiteral("aerial_triangulation_results")
         || key == QStringLiteral("sparse_results")
         || key == QStringLiteral("bundle_adjust_results")
@@ -249,10 +246,11 @@ ProjectDashboardSummary buildProjectDashboardSummary(const QJsonObject &metadata
     const QJsonObject normalized = normalizeMetadata(metadata);
 
     const QJsonArray images = normalized.value(QStringLiteral("images")).toArray();
-    const QJsonArray featureResults = mergedArray(normalized, {QStringLiteral("ipfind_results"),
-                                                               QStringLiteral("feature_results")});
-    const QJsonArray matchResults = mergedArray(normalized, {QStringLiteral("ipmatch_results"),
-                                                             QStringLiteral("match_results")});
+    // `.pimatch` 同时保存一幅影像的匹配观测和像对匹配，因此不再维护独立的
+    // 特征结果数组。这里保留两个统计字段只是为了维持概览模型的展示契约。
+    const QJsonArray matchResults =
+        normalized.value(QStringLiteral("image_match_results")).toArray();
+    const QJsonArray featureResults = matchResults;
     const QJsonArray sparseResults = mergedArray(normalized, {QStringLiteral("aerial_triangulation_results"),
                                                               QStringLiteral("sparse_results")});
     const QJsonArray bundleAdjustResults = normalized.value(QStringLiteral("bundle_adjust_results")).toArray();
@@ -365,16 +363,16 @@ ProjectDashboardSummary buildProjectDashboardSummary(const QJsonObject &metadata
                          : QStringLiteral("等待影像导入后检查相机参数"));
     appendStep(&summary,
                QStringLiteral("features"),
-               QStringLiteral("特征提取"),
+               QStringLiteral("匹配观测"),
                hasFeatures ? ProjectDashboardStepState::Complete : readyAfter(hasImages),
-               hasFeatures ? QStringLiteral("已有 %1 条特征结果").arg(summary.featureResultCount)
-                           : QStringLiteral("可在影像导入后运行特征提取"));
+               hasFeatures ? QStringLiteral("已有 %1 个影像匹配分片").arg(summary.featureResultCount)
+                           : QStringLiteral("可在影像导入后创建连接点"));
     appendStep(&summary,
                QStringLiteral("matches"),
                QStringLiteral("特征匹配"),
-               hasMatches ? ProjectDashboardStepState::Complete : readyAfter(hasFeatures),
-               hasMatches ? QStringLiteral("已有 %1 条匹配结果").arg(summary.matchResultCount)
-                          : QStringLiteral("等待特征结果后进行匹配"));
+               hasMatches ? ProjectDashboardStepState::Complete : readyAfter(hasImages),
+               hasMatches ? QStringLiteral("已有 %1 个影像匹配分片").arg(summary.matchResultCount)
+                          : QStringLiteral("等待创建连接点"));
     appendStep(&summary,
                QStringLiteral("sparse_ba"),
                QStringLiteral("稀疏重建/BA"),

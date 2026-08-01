@@ -6,15 +6,18 @@ set(GUI_SOURCES
   main.cpp
   config/AppConfigManager.cpp
   config/ImageViewRotationSettings.cpp
-  config/ProjectUiConfigManager.cpp
-  config/ProjectWorkflowConfigManager.cpp
-  config/ProjectConfigManager.cpp
   config/settings/WindowStateManager.cpp
   config/settings/RecentProjectsManager.cpp
   config/settings/FileDialogStateManager.cpp
   config/settings/ProjectDialogJsonSettingBase.cpp
   config/settings/DialogSettingStore.cpp
   main_window/MainWindow.cpp
+  main_window/MainWindowLayout.cpp
+  main_window/MainWindowMenuBindings.cpp
+  main_window/MainWindowProjectBindings.cpp
+  main_window/MainWindowProjectLifecycle.cpp
+  main_window/MainWindowTaskStatus.cpp
+  main_window/MainWindowUiState.cpp
   main_window/MainWindow.ui
   main_window/ModelDropSupport.cpp
   main_window/MenuWorkflowController.cpp
@@ -40,8 +43,6 @@ set(GUI_SOURCES
   markers/MarkerDetectionReviewDialog.cpp
   markers/PrintMarkersDialog.cpp
   panels/LogPanel.cpp
-  project/data/ProjectData.cpp
-  project/data/ProjectFilesManager.cpp
   project/services/BundleAdjustService.cpp
   project/services/ProjectCameraImportService.cpp
   project/services/ProjectResourceCleanupService.cpp
@@ -58,12 +59,9 @@ set(GUI_SOURCES
   project/support/ProjectSfmWorkflow.cpp
   project/support/ProjectSparseWorkflow.cpp
   project/support/ProjectSurveyControl.cpp
-  project/support/ProjectWorkflowUtils.cpp
   project/support/ProjectWorkflowReports.cpp
   project/manager/ProjectManager.cpp
   project/manager/ProjectModelManager.cpp
-  project/manager/ProjectReconstructionManager.cpp
-  project/manager/ProjectTaskDispatcher.cpp
   project/manager/ProjectUiCommands.cpp
   project/manager/ProjectSparseReconstructionManager.cpp
   project/manager/ProjectTerrainProductsManager.cpp
@@ -82,6 +80,11 @@ set(GUI_SOURCES
   views/ModelVisualization.cpp
   widgets/CanvasWidget.cpp
   widgets/DataTreeWidget.cpp
+  widgets/DataTreeContextMenu.cpp
+  widgets/DataTreeModel.cpp
+  widgets/DataTreePopulation.cpp
+  widgets/DataTreeResourceAlignment.cpp
+  widgets/DataTreeResourceMetadata.cpp
   widgets/DataTreeWidget.ui
   widgets/WorkspaceSectionIcons.cpp
   widgets/PhotoStripWidget.cpp
@@ -141,7 +144,6 @@ set(GUI_HEADERS
   project/archive/ProjectResourceStore.h
   project/archive/ProjectWorkspaceStore.h
   project/data/ProjectData.h
-  project/data/ProjectFilesManager.h
   project/services/BundleAdjustService.h
   project/services/ProjectCameraImportService.h
   project/services/ProjectResourceCleanupService.h
@@ -162,8 +164,6 @@ set(GUI_HEADERS
   project/support/ProjectWorkflowReports.h
   project/manager/ProjectManager.h
   project/manager/ProjectModelManager.h
-  project/manager/ProjectReconstructionManager.h
-  project/manager/ProjectTaskDispatcher.h
   project/manager/ProjectUiCommands.h
   project/manager/ProjectSparseReconstructionManager.h
   project/manager/ProjectTerrainProductsManager.h
@@ -183,6 +183,7 @@ set(GUI_HEADERS
   views/ModelVisualization.h
   widgets/CanvasWidget.h
   widgets/DataTreeWidget.h
+  widgets/DataTreeResourceUtils.h
   widgets/WorkspaceSectionIcons.h
   widgets/PhotoStripWidget.h
   widgets/ProjectDashboardWidget.h
@@ -201,8 +202,6 @@ set(GUI_HEADERS
 )
 
 set(GUI_PROJECT_SOURCES
-  project/data/ProjectData.cpp
-  project/data/ProjectFilesManager.cpp
   project/services/BundleAdjustService.cpp
   project/services/ProjectCameraImportService.cpp
   project/services/ProjectResourceCleanupService.cpp
@@ -219,16 +218,11 @@ set(GUI_PROJECT_SOURCES
   project/support/ProjectSfmWorkflow.cpp
   project/support/ProjectSparseWorkflow.cpp
   project/support/ProjectSurveyControl.cpp
-  project/support/ProjectWorkflowUtils.cpp
   project/support/ProjectWorkflowReports.cpp
   project/manager/ProjectManager.cpp
   project/manager/ProjectModelManager.cpp
-  project/manager/ProjectReconstructionManager.cpp
-  project/manager/ProjectTaskDispatcher.cpp
   project/manager/ProjectUiCommands.cpp
   project/manager/ProjectSparseReconstructionManager.cpp
   project/manager/ProjectTerrainProductsManager.cpp
   project/manager/ProjectCameraSetupManager.cpp
 )
-
-set(GUI_TASK_SOURCES)

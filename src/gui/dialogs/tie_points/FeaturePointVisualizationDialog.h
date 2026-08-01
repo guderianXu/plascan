@@ -1,9 +1,8 @@
 // =============================================================================
 // 文件: FeaturePointVisualizationDialog.h
-// 功能: 特征点可视化配置对话框声明
+// 功能: 匹配观测可视化配置对话框声明
 // 职责:
-//   - 提供特征点文件后缀切换（.sp / .dsk / .alk / ...）
-//   - 提供特征点显示内容的多维控制
+//   - 配置 `.pimatch` 中已参与匹配的关键点观测显示方式
 //   - 提供样式设置：标记形状、点大小、尺度倍数、整体透明度
 //   - 提供颜色设置：点颜色、尺度圈颜色、方向箭头颜色
 //   - 提供显示过滤：最大显示数量限制、优先显示高分点
@@ -26,37 +25,26 @@ class QGroupBox;
 class QComboBox;
 
 // =============================================================================
-// FeaturePointVisualizationDialog — 特征点可视化参数配置对话框
+// FeaturePointVisualizationDialog — 匹配观测可视化参数配置对话框
 //
 // 典型用法：
-//   auto *dlg = new FeaturePointVisualizationDialog(suffixes, this);
-//   dlg->setCurrentSuffix(currentSuffix);
+//   auto *dlg = new FeaturePointVisualizationDialog(this);
 //   connect(dlg, &FeaturePointVisualizationDialog::displayOptionsChanged,
 //           layerRenderer, &LayerRenderer::setDisplayOptions);
-//   connect(dlg, &FeaturePointVisualizationDialog::featureSuffixChanged,
-//           canvasWidget, &CanvasWidget::setActiveFeatureSuffix);
 //   dlg->show(); // 非模态，参数修改实时预览
 // =============================================================================
 class FeaturePointVisualizationDialog : public QDialog
 {
     Q_OBJECT
 public:
-    explicit FeaturePointVisualizationDialog(const QStringList &availableSuffixes,
-                                             QWidget *parent = nullptr);
+    explicit FeaturePointVisualizationDialog(QWidget *parent = nullptr);
     ~FeaturePointVisualizationDialog() override;
 
     LayerRenderer::FeatureDisplayOptions getDisplayOptions() const;
     void setDisplayOptions(const LayerRenderer::FeatureDisplayOptions &opts);
 
-    // 特征文件后缀
-    QString currentSuffix() const;
-    void setCurrentSuffix(const QString &suffix);
-    void setAvailableSuffixes(const QStringList &suffixes);
-
 signals:
     void displayOptionsChanged(const LayerRenderer::FeatureDisplayOptions &opts);
-    // 用户切换了特征文件后缀
-    void featureSuffixChanged(const QString &suffix);
 
 private slots:
     void onApply();
@@ -68,9 +56,6 @@ private:
     void setupUi();
     void setupConnections();
     void emitCurrentOptions();
-
-    // ── 特征文件选择 ─────────────────────────────────────────────
-    QComboBox *_suffixCombo{nullptr};
 
     // ── 显示内容控制 ─────────────────────────────────────────────
     QCheckBox *_showPointsChk{nullptr};

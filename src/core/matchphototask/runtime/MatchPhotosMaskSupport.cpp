@@ -8,10 +8,7 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
-#include <algorithm>
 #include <cmath>
-#include <cstdint>
-#include <vector>
 
 namespace xjw
 {
@@ -53,15 +50,6 @@ bool imageTokensReferToSameImage(const QString &lhs, const QString &rhs)
 
     return !leftInfo.completeBaseName().isEmpty() &&
            leftInfo.completeBaseName().compare(rightInfo.completeBaseName(), Qt::CaseInsensitive) == 0;
-}
-
-int descriptorRowCount(const torch::Tensor &descriptors)
-{
-    if (!descriptors.defined() || descriptors.dim() != 2)
-    {
-        return 0;
-    }
-    return static_cast<int>(descriptors.size(0));
 }
 
 } // namespace
@@ -145,107 +133,6 @@ bool isPointAllowedByMask(const cv::Mat &mask, const cv::Point2f &point)
     }
 
     return mask.at<uchar>(y, x) == 0;
-}
-
-FeatureOutput filterFeatureOutputByMask(const FeatureOutput &output, const cv::Mat &mask)
-{
-    if (mask.empty() || output.keypoints.empty())
-    {
-        return output;
-    }
-
-    FeatureOutput filtered;
-    filtered.imageWidth = output.imageWidth;
-    filtered.imageHeight = output.imageHeight;
-    filtered.keypoints.reserve(output.keypoints.size());
-    filtered.scores.reserve(output.scores.size());
-
-    std::vector<int64_t> keptIndices;
-    keptIndices.reserve(output.keypoints.size());
-    for (std::size_t index = 0; index < output.keypoints.size(); ++index)
-    {
-        const cv::KeyPoint &keypoint = output.keypoints[index];
-        if (!isPointAllowedByMask(mask, keypoint.pt))
-        {
-            continue;
-        }
-
-        filtered.keypoints.push_back(keypoint);
-        if (index < output.scores.size())
-        {
-            filtered.scores.push_back(output.scores[index]);
-        }
-        keptIndices.push_back(static_cast<int64_t>(index));
-    }
-
-    if (output.scores.size() < output.keypoints.size())
-    {
-        filtered.scores.resize(filtered.keypoints.size(), 0.0f);
-    }
-
-    const int descriptorRows = descriptorRowCount(output.descriptors);
-    if (descriptorRows >= static_cast<int>(output.keypoints.size()) && !keptIndices.empty())
-    {
-        const torch::Tensor indices =
-            torch::from_blob(keptIndices.data(),
-                             {static_cast<int64_t>(keptIndices.size())},
-                             torch::kInt64)
-                .clone();
-        filtered.descriptors = output.descriptors.to(torch::kCPU).index_select(0, indices).contiguous();
-    }
-    else if (descriptorRows > 0 && keptIndices.empty())
-    {
-        filtered.descriptors =
-            torch::empty({0, output.descriptors.size(1)}, output.descriptors.options().device(torch::kCPU));
-    }
-
-    return filtered;
-}
-
-xjw::feature_match::MatchResult filterMatchResultByMasks(
-    const xjw::feature_match::MatchResult &matchResult,
-    const xjw::feature_extractors::FeatureData &feature0,
-    const xjw::feature_extractors::FeatureData &feature1,
-    const cv::Mat &mask0,
-    const cv::Mat &mask1)
-{
-    if (mask0.empty() && mask1.empty())
-    {
-        return matchResult;
-    }
-
-    xjw::feature_match::MatchResult normalized = matchResult;
-    if (normalized.cvMatches.empty() && !normalized.matches0.empty())
-    {
-        normalized.buildCvMatchesFromIndices();
-    }
-
-    std::vector<cv::DMatch> keptMatches;
-    keptMatches.reserve(normalized.cvMatches.size());
-    for (const cv::DMatch &match : normalized.cvMatches)
-    {
-        if (match.queryIdx < 0 || match.trainIdx < 0 ||
-            match.queryIdx >= feature0.size() ||
-            match.trainIdx >= feature1.size())
-        {
-            continue;
-        }
-
-        const cv::KeyPoint &keypoint0 = feature0.keypoints[static_cast<std::size_t>(match.queryIdx)];
-        const cv::KeyPoint &keypoint1 = feature1.keypoints[static_cast<std::size_t>(match.trainIdx)];
-        if (!isPointAllowedByMask(mask0, keypoint0.pt) ||
-            !isPointAllowedByMask(mask1, keypoint1.pt))
-        {
-            continue;
-        }
-        keptMatches.push_back(match);
-    }
-
-    xjw::feature_match::MatchResult filtered;
-    filtered.cvMatches = std::move(keptMatches);
-    filtered.sourceAlgorithm = matchResult.sourceAlgorithm;
-    filtered.buildIndicesFromCvMatches(feature0.size(), feature1.size());
-    return filtered;
 }
 
 QString maskPathForImage(const MatchPhotosContext &context, const QString &imagePath)

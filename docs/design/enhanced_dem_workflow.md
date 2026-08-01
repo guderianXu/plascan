@@ -20,18 +20,16 @@
 #### 自动模式 (Automatic Mode)
 - **输入**：2 张影像 + 2 个相机文件
 - **流程**：自动执行完整流水线
-  1. 特征提取 (SuperPoint)
-  2. 特征匹配 (SuperGlue/LightGlue)
-  3. 前方交会/三角化 (生成稀疏点云)
-  4. MVS 深度估计 + 融合 (生成密集点云)
-  5. DEM 生成
+  1. CUDA SIFT + TensorRT LightGlue，写入逐影像 `.pimatch`
+  2. 前方交会/三角化 (生成稀疏点云)
+  3. MVS 深度估计 + 融合 (生成密集点云)
+  4. DEM 生成
 - **智能检测**：检测项目中是否已有中间结果，提示用户是否复用
 
 #### 手动模式 (Manual Mode)
 - **输入**：用户指定任意中间数据
 - **选项**：
-  - 使用已有特征点文件 (.pt)
-  - 使用已有匹配文件 (.match)
+  - 使用已有逐影像匹配分片 (`.pimatch`)
   - 使用已有稀疏点云 (.xyz)
   - 使用已有密集点云 (.ply)
 - **流程**：从指定步骤开始执行
@@ -154,26 +152,22 @@ PipelineStepStatus detectPipelineStatus(const QStringList &images)
     // 从项目元数据中查询
     QJsonObject meta = projectData->metadata();
     
-    // 1. 检测特征点
-    QJsonArray ipfindResults = meta["ipfind_results"].toArray();
-    for (const auto &result : ipfindResults) {
-        QString input = result["input"].toString();
+    // 1. 检测逐影像匹配分片。关键点观测和像对都在同一 `.pimatch` 中，
+    // 不再维护独立特征结果数组。
+    QJsonArray matchResults = meta["image_match_results"].toArray();
+    for (const auto &result : matchResults) {
         QString output = result["output"].toString();
-        if (images.contains(input) && QFile::exists(output)) {
-            status.hasFeatures = true;
-            status.featuresPath = output;
+        if (QFile::exists(output)) {
+            status.hasMatches = true;
+            status.matchShardPaths.append(output);
         }
     }
     
-    // 2. 检测匹配结果
-    QJsonArray ipmatchResults = meta["ipmatch_results"].toArray();
-    // ... 类似逻辑
-    
-    // 3. 检测稀疏点云
+    // 2. 检测稀疏点云
     QJsonArray atResults = meta["aerial_triangulation_results"].toArray();
     // ... 类似逻辑
     
-    // 4. 检测密集点云
+    // 3. 检测密集点云
     QString denseCloud;
     if (resolveLatestDenseCloudPath(projectData, &denseCloud, nullptr)) {
         status.hasDenseCloud = true;

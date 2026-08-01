@@ -104,6 +104,9 @@ void appendSurveyControlBaInput(const QJsonObject &meta,
     const QJsonObject surveyControl = meta.value(QStringLiteral("survey_control")).toObject();
     const QJsonArray controlPoints = surveyControl.value(QStringLiteral("control_points")).toArray();
     QMap<QString, int> trackIndexByControlId;
+
+    // 控制点先建立 trackIndex 映射，后续比例尺通过稳定 ID 引用轨迹；不能直接使用
+    // JSON 数组下标，因为禁用或非法控制点会被跳过。
     for (int pointIndex = 0; pointIndex < controlPoints.size(); ++pointIndex)
     {
         const QJsonObject record = controlPoints.at(pointIndex).toObject();
@@ -179,6 +182,7 @@ void appendSurveyControlBaInput(const QJsonObject &meta,
         result->tracks.push_back(std::move(track));
     }
 
+    // 只有两端都成功进入 tracks 的标尺才可加入 BA，否则约束索引会指向错误物点。
     const QJsonArray scaleBars = surveyControl.value(QStringLiteral("scale_bars")).toArray();
     for (int scaleBarIndex = 0; scaleBarIndex < scaleBars.size(); ++scaleBarIndex)
     {

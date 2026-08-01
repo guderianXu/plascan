@@ -71,7 +71,7 @@ target_link_libraries(sfm_core
         ${OpenCV_LIBS}
 )
 
-target_compile_features(sfm_core PUBLIC cxx_std_17)
+target_compile_features(sfm_core PUBLIC cxx_std_20)
 
 set(SFM_POSTPROCESS_SOURCES
     quality/SfmQualityMetrics.cpp
@@ -98,7 +98,7 @@ target_link_libraries(sfm_postprocess
         plapoint::plapoint
 )
 
-target_compile_features(sfm_postprocess PUBLIC cxx_std_17)
+target_compile_features(sfm_postprocess PUBLIC cxx_std_20)
 
 set(SFM_PROJECT_SOURCES
     project/BaInputBuilder.cpp
@@ -135,13 +135,14 @@ target_link_libraries(sfm_project
         Qt6::Core
         Qt6::Gui
     PRIVATE
+        image_matching
         plascan_common_log
         plascan_common_io
         plascan_common_project
         ${OpenCV_LIBS}
 )
 
-target_compile_features(sfm_project PUBLIC cxx_std_17)
+target_compile_features(sfm_project PUBLIC cxx_std_20)
 
 add_library(sfm INTERFACE)
 target_link_libraries(sfm INTERFACE sfm_core sfm_postprocess sfm_project)

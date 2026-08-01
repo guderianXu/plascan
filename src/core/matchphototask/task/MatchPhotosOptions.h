@@ -33,14 +33,16 @@ struct MatchPhotosOptions
     MatchPhotosProfile profile = MatchPhotosProfile::Auto;
     ComputeDevice device = ComputeDevice::Auto;
 
+    // LightGlue 仅使用 TensorRT。engine 与目标 GPU 和 TensorRT 版本绑定。
+    QString lightGlueTensorRtEnginePath;
+
     // 影像对规划保持显式配置，方便调用方复用 overlap 结果，
     // 或在测试、批处理中强制使用确定性模式。
     PairSelectionPolicy pairPolicy = makePairSelectionPolicy(PairSelectionPreset::Auto);
 
-    // 算法名有意与 feature_extractors 和 feature_match 工厂保持一致。
-    // 阶段层后续会把这些字符串转换为具体实现。
-    QString featureAlgorithm = QStringLiteral("sift");
-    QString matcherAlgorithm = QStringLiteral("lightglue");
+    // 组合算法通过统一注册表选择。当前只注册 sift_lightglue；以后增加算法时，
+    // 新实现只需实现 IImageMatchingAlgorithm 并注册，不再增加特征/匹配双重 token。
+    QString algorithmId = QStringLiteral("sift_lightglue");
     // 蒙版应用阶段：none=不使用，keypoints=提取后过滤关键点，tiepoints=匹配后过滤连接点。
     // 项目蒙版约定为 0 表示有效区域，非 0 表示排除区域。
     QString maskApplyMode = QStringLiteral("none");
@@ -56,6 +58,7 @@ struct MatchPhotosOptions
     float matchThreshold = 0.15f;
     double geometryReprojThreshold = 1.5;
     int geometryMinInliers = 20;
+    int geometryMaxIterations = 10000;
     int maxTiePointsPerImage = 4000;
     int maxTiePointsPerGridCell = 500;
     int tiePointGridColumns = 4;
@@ -67,7 +70,9 @@ struct MatchPhotosOptions
     bool useGenericPreselection = true;
     bool useReferencePreselection = false;
     bool excludeStationaryTiePoints = true;
-    bool reuseExistingFeatures = true;
+    // 复用与当前影像指纹、算法版本和配置指纹完全一致的 `.pimatch` 数据。
+    // 特征本身不再持久化，因此“重置对齐 + 复用匹配”不会重新提取 SIFT。
+    bool reuseExistingMatches = true;
     float stationaryTiePointMaxPixelMotion = 1.0f;
 
     // 在特征、匹配、几何验证和轨迹阶段接入现有核心模块前，

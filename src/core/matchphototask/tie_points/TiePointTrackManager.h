@@ -40,7 +40,7 @@ class TiePointTrackManager
 public:
     TiePointTrackBuildResult build(const MatchPhotosContext &context,
                                    const MatchPhotosOptions &options,
-                                   const std::vector<MatchPhotosMatchRecord> &matchRecords) const;
+                                   std::vector<MatchPhotosMatchRecord> *matchRecords) const;
 };
 
 } // namespace matchphotos

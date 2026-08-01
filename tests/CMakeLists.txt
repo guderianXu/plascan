@@ -99,18 +99,16 @@ endif()
 
 add_executable(test_lightglue_feature_budget
     test_lightglue_feature_budget.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/feature_match/match.cpp
 )
 target_link_libraries(test_lightglue_feature_budget PRIVATE
+    image_matching
     Qt6::Core
     GTest::gtest_main
-    ${TORCH_LIBRARIES}
     ${OpenCV_LIBS}
 )
 target_include_directories(test_lightglue_feature_budget PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_SOURCE_DIR}/src/core/feature_match
-    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors
+    ${CMAKE_SOURCE_DIR}/src/core/image_matching
 )
 gtest_discover_tests(test_lightglue_feature_budget)
 
@@ -131,6 +129,21 @@ target_include_directories(test_matchphotos_algorithm_selector PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/matchphototask/task
 )
 gtest_discover_tests(test_matchphotos_algorithm_selector)
+
+add_executable(test_matchphotos_runtime
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask/tests/test_matchphotos_runtime.cpp
+)
+target_link_libraries(test_matchphotos_runtime PRIVATE
+    matchphototask
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_matchphotos_runtime PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask/runtime
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask/task
+)
+gtest_discover_tests(test_matchphotos_runtime)
 
 add_executable(test_matchphotos_pair_selector
     ${CMAKE_SOURCE_DIR}/src/core/matchphototask/tests/test_pair_selector.cpp
@@ -303,6 +316,11 @@ target_include_directories(test_bundle_adjust_projection PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
     ${CMAKE_SOURCE_DIR}/src/core/camera
 )
+find_package(Ceres CONFIG QUIET)
+if(Ceres_FOUND AND TARGET Ceres::ceres)
+    target_link_libraries(test_bundle_adjust_projection PRIVATE Ceres::ceres)
+    target_compile_definitions(test_bundle_adjust_projection PRIVATE PLASCAN_TEST_HAS_CERES=1)
+endif()
 gtest_discover_tests(test_bundle_adjust_projection)
 
 # ==============================================================================
@@ -454,12 +472,6 @@ set(PLASCAN_QT_PLATFORM_PLUGIN_PATH
 # ==============================================================================
 add_executable(test_project_data
     test_project_data.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectData.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectFilesManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectConfigManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectUiConfigManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectWorkflowConfigManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/common/log/Logger.cpp
 )
 set_target_properties(test_project_data PROPERTIES
     AUTOMOC ON
@@ -515,8 +527,6 @@ add_executable(test_gui_project_utils
     ${MARKER_PANEL_TEST_SOURCES}
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/AerialTriangulationDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/AerialTriangulationDialog.ui
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/MapProjectDialog.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/MapProjectDialog.ui
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/application/AboutDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/image/GenerateMaskDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/GenerateModelDialog.cpp
@@ -531,13 +541,10 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/main_window/ModelDropSupport.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/main_window/WorkspacePanelController.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/main_window/ProjectUiHydrator.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectData.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectFilesManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectDashboardSummary.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectDenseWorkflowConfig.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectModelWorkflowPolicy.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectMetadataOperations.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectWorkflowUtils.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectReferenceDatasets.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectReferenceTerrainBa.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectSurveyControl.cpp
@@ -547,13 +554,8 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectTiePointResultService.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectResultRecords.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ImageViewRotationSettings.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectConfigManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectUiConfigManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectWorkflowConfigManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/settings/ProjectDialogJsonSettingBase.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/settings/DialogSettingStore.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/FeatureData.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/FeatureFileIO.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/DepthOverlayData.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/DepthOverlayController.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/LayerImageLoader.cpp
@@ -576,10 +578,14 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/MatchLineOverlay.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/DisparityHeatmapOverlay.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeWidget.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeContextMenu.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeModel.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreePopulation.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeResourceAlignment.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeResourceMetadata.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/WorkspaceSectionIcons.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/PhotoStripWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/ProjectDashboardWidget.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/MatchValidityAnalyzer.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/TaskStatusWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/HenuBrandWidget.cpp
 )
@@ -600,7 +606,10 @@ target_link_libraries(test_gui_project_utils PRIVATE
     qc
     control_points
     terrain
+    project_workflows
     mask
+    image_matching
+    matchphototask
     Qt6::Core
     Qt6::Concurrent
     Qt6::Gui
@@ -637,8 +646,7 @@ target_include_directories(test_gui_project_utils PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui/widgets
     ${CMAKE_SOURCE_DIR}/src/core/sfm
     ${CMAKE_SOURCE_DIR}/src/core/camera
-    ${CMAKE_SOURCE_DIR}/src/core/feature_match
-    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors
+    ${CMAKE_SOURCE_DIR}/src/core/image_matching
     ${CMAKE_SOURCE_DIR}/src/core/intersection
     ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
     ${CMAKE_SOURCE_DIR}/src/core/qc
@@ -659,9 +667,68 @@ gtest_discover_tests(test_gui_project_utils
         ENVIRONMENT
             "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${PLASCAN_QT_PLATFORM_PLUGIN_PATH}")
 
+add_executable(test_map_project_dialog
+    test_map_project_dialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/MapProjectDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/MapProjectDialogSettings.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/MapProjectDialogEstimate.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/MapProjectDialogLayout.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/shared/WorkflowParameterDialogStyle.cpp
+)
+set_target_properties(test_map_project_dialog PROPERTIES
+    AUTOMOC ON
+)
+target_link_libraries(test_map_project_dialog PRIVATE
+    terrain
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Test
+    Qt6::Widgets
+    ${OpenCV_LIBS}
+    GTest::gtest
+)
+target_include_directories(test_map_project_dialog PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs
+    ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/src/core/terrain
+    ${CMAKE_SOURCE_DIR}/src/common
+    ${OpenCV_INCLUDE_DIRS}
+)
+gtest_discover_tests(test_map_project_dialog
+    DISCOVERY_TIMEOUT 60
+    DISCOVERY_MODE PRE_TEST
+    PROPERTIES
+        ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${PLASCAN_QT_PLATFORM_PLUGIN_PATH}")
+
+add_executable(test_workflow_settings_dialog
+    test_workflow_settings_dialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/application/WorkflowSettingsDialog.cpp
+)
+target_link_libraries(test_workflow_settings_dialog PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+    GTest::gtest
+)
+target_include_directories(test_workflow_settings_dialog PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs
+)
+gtest_discover_tests(test_workflow_settings_dialog
+    DISCOVERY_TIMEOUT 60
+    DISCOVERY_MODE PRE_TEST
+    PROPERTIES
+        ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${PLASCAN_QT_PLATFORM_PLUGIN_PATH}")
+
 add_executable(test_workspace_section_icons
     test_workspace_section_icons.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeWidget.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeContextMenu.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeModel.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreePopulation.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeResourceAlignment.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeResourceMetadata.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeWidget.ui
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/WorkspaceSectionIcons.cpp
 )
@@ -671,6 +738,7 @@ set_target_properties(test_workspace_section_icons PROPERTIES
 )
 target_link_libraries(test_workspace_section_icons PRIVATE
     plascan_common_project
+    project_workflows
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
@@ -734,8 +802,6 @@ add_executable(test_layer_renderer_batched_overlay
     ${CMAKE_SOURCE_DIR}/src/gui/views/LayerOverlayItems.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/LayerRenderer.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/LayerStitchedDebug.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/FeatureData.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/FeatureFileIO.cpp
     ${CMAKE_SOURCE_DIR}/src/common/log/Logger.cpp
 )
 set_target_properties(test_layer_renderer_batched_overlay PROPERTIES
@@ -747,11 +813,11 @@ target_link_libraries(test_layer_renderer_batched_overlay PRIVATE
     Qt6::Gui
     Qt6::Widgets
     ${OpenCV_LIBS}
-    ${TORCH_LIBRARIES}
     ${PLASCAN_GDAL_TARGET}
     plascan_common_io
     plascan_common_string_utils
     mask
+    image_matching
     GTest::gtest
 )
 target_include_directories(test_layer_renderer_batched_overlay PRIVATE
@@ -759,10 +825,8 @@ target_include_directories(test_layer_renderer_batched_overlay PRIVATE
     ${CMAKE_SOURCE_DIR}/src/common
     ${CMAKE_SOURCE_DIR}/src/common/log
     ${CMAKE_SOURCE_DIR}/src/core/mask
-    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors
-    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/superpoint
+    ${CMAKE_SOURCE_DIR}/src/core/image_matching
     ${OpenCV_INCLUDE_DIRS}
-    ${TORCH_INCLUDE_DIRS}
 )
 if(GDAL_INCLUDE_DIRS)
     target_include_directories(test_layer_renderer_batched_overlay PRIVATE ${GDAL_INCLUDE_DIRS})
@@ -771,14 +835,6 @@ add_test(NAME test_layer_renderer_batched_overlay
          COMMAND test_layer_renderer_batched_overlay)
 
 if(Python3_Interpreter_FOUND)
-    add_test(
-        NAME FullPipelineScriptTest
-        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_full_pipeline_script
-    )
-    set_tests_properties(FullPipelineScriptTest PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-
     add_test(
         NAME FullPipelineEntrypointTest
         COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_full_pipeline_entrypoint
@@ -860,30 +916,6 @@ if(Python3_Interpreter_FOUND)
     )
 
     add_test(
-        NAME RunLightGlueScriptTest
-        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_run_lightglue_script
-    )
-    set_tests_properties(RunLightGlueScriptTest PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-
-    add_test(
-        NAME DiskTorchscriptModelTest
-        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_disk_torchscript_model
-    )
-    set_tests_properties(DiskTorchscriptModelTest PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-
-    add_test(
-        NAME LightGlueTorchscriptModelTest
-        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_lightglue_torchscript_models
-    )
-    set_tests_properties(LightGlueTorchscriptModelTest PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-
-    add_test(
         NAME PrepareMunFrlLidarBaProjectTest
         COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_prepare_mun_frl_lidar_ba_project
     )
@@ -905,6 +937,17 @@ endif()
 # ==============================================================================
 add_executable(test_mesh_reconstructor
     test_mesh_reconstructor.cpp
+    test_robust_surface_displacement_solver.cpp
+    test_depth_ray_metric.cpp
+    test_depth_tsdf_narrow_band_activation.cpp
+    test_binary_grid_min_cut_solver.cpp
+    test_visibility_occupancy_distance_field.cpp
+    test_visibility_occupancy_boundary_extractor.cpp
+    test_visibility_occupancy_carrier_subdivider.cpp
+    test_visibility_occupancy_carrier_fairer.cpp
+    test_visibility_occupancy_carrier_field_projector.cpp
+    test_visibility_occupancy_well_composed_repair.cpp
+    test_visibility_occupancy_surface_builder.cpp
     test_mesh_boundary_attribution.cpp
     test_consistent_isosurface_extractor.cpp
     test_mc33_isosurface_extractor.cpp
@@ -924,44 +967,6 @@ gtest_discover_tests(test_mesh_reconstructor)
 
 # pointcloud 模块测试迁移到 src/core/pointcloud/tests，
 # 不再在全局 tests 目录内维护该测试源码。
-
-# ==============================================================================
-# test_feature_extractor_suffix — 多提取器后缀映射 + FeatureFileIO + 工厂
-# ==============================================================================
-add_executable(test_feature_extractor_suffix test_feature_extractor_suffix.cpp)
-target_link_libraries(test_feature_extractor_suffix PRIVATE
-    feature_extractors_traditional
-    GTest::gtest_main
-    ${TORCH_LIBRARIES}
-    ${OpenCV_LIBS}
-)
-target_include_directories(test_feature_extractor_suffix PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/gui/compat
-    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors
-    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/superpoint
-    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/disk
-    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/aliked
-    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/tradition
-)
-gtest_discover_tests(test_feature_extractor_suffix)
-
-add_executable(test_feature_file_io
-    test_feature_file_io.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/FeatureData.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/FeatureFileIO.cpp
-)
-target_link_libraries(test_feature_file_io PRIVATE
-    Qt6::Core
-    GTest::gtest_main
-    plascan_common_string_utils
-    ${TORCH_LIBRARIES}
-    ${OpenCV_LIBS}
-)
-target_include_directories(test_feature_file_io PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/gui
-    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors
-)
-gtest_discover_tests(test_feature_file_io)
 
 # ==============================================================================
 # test_camera_scene_view_math — 三维相机视角选择、深度排序与校准投影
@@ -1048,12 +1053,6 @@ gtest_discover_tests(test_marker_task_runner DISCOVERY_MODE PRE_TEST)
 add_executable(test_marker_detection_job_builder
     test_marker_detection_job_builder.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerDetectionJobBuilder.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectData.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectFilesManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectConfigManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectUiConfigManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectWorkflowConfigManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/common/log/Logger.cpp
 )
 set_target_properties(test_marker_detection_job_builder PROPERTIES AUTOMOC ON)
 target_link_libraries(test_marker_detection_job_builder PRIVATE
@@ -1088,5 +1087,6 @@ target_link_libraries(test_project_session_context PRIVATE
 )
 target_include_directories(test_project_session_context PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui/project/support
+    ${CMAKE_SOURCE_DIR}/src/core/terrain
 )
 gtest_discover_tests(test_project_session_context)

@@ -24,7 +24,6 @@ add_library(plascan_common_string_utils STATIC
 )
 
 add_library(plascan_common_model STATIC
-  model/FeatureExtractorModelCatalog.cpp
   model/Sam21ModelCatalog.cpp
   model/TorchScriptModelResolver.cpp
   model/U2NetModelCatalog.cpp
@@ -37,7 +36,8 @@ add_library(plascan_common_project STATIC
   project/ProjectArchivePath.cpp
   project/ProjectChunkStore.cpp
   project/ProjectChunkIndex.cpp
-  project/ProjectFeatureMetadata.cpp
+  project/ProjectDocumentModel.cpp
+  project/ProjectConfigManager.cpp
   project/ProjectIO.cpp
   project/ProjectLock.cpp
   project/ProjectMatchCatalog.cpp
@@ -45,8 +45,11 @@ add_library(plascan_common_project STATIC
   project/ProjectPackageLayout.cpp
   project/ProjectResourceStore.cpp
   project/ProjectSession.cpp
+  project/ProjectSessionModel.cpp
   project/ProjectSharedImageStore.cpp
   project/ProjectWorkspaceStore.cpp
+  project/ProjectUiConfigManager.cpp
+  project/ProjectWorkflowConfigManager.cpp
   project/PortableProjectFormat.cpp
   project/SparseResultQuality.cpp
 )
@@ -83,13 +86,13 @@ target_include_directories(plascan_common_project PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-target_compile_features(plascan_common_log PUBLIC cxx_std_17)
-target_compile_features(plascan_common_io PUBLIC cxx_std_17)
-target_compile_features(plascan_common_json PUBLIC cxx_std_17)
-target_compile_features(plascan_common_runtime PUBLIC cxx_std_17)
-target_compile_features(plascan_common_string_utils PUBLIC cxx_std_17)
-target_compile_features(plascan_common_model PUBLIC cxx_std_17)
-target_compile_features(plascan_common_project PUBLIC cxx_std_17)
+target_compile_features(plascan_common_log PUBLIC cxx_std_20)
+target_compile_features(plascan_common_io PUBLIC cxx_std_20)
+target_compile_features(plascan_common_json PUBLIC cxx_std_20)
+target_compile_features(plascan_common_runtime PUBLIC cxx_std_20)
+target_compile_features(plascan_common_string_utils PUBLIC cxx_std_20)
+target_compile_features(plascan_common_model PUBLIC cxx_std_20)
+target_compile_features(plascan_common_project PUBLIC cxx_std_20)
 
 target_link_libraries(plascan_common_io PUBLIC
   Qt6::Core
@@ -104,12 +107,16 @@ target_compile_definitions(plascan_common_model PRIVATE PLASCAN_SOURCE_DIR="${CM
 
 target_link_libraries(plascan_common_project PUBLIC
   Qt6::Core
+  Qt6::Concurrent
+  plascan_common_json
+  plascan_common_log
   ${PLASCAN_LIBZIP_TARGET}
 )
+
+set_target_properties(plascan_common_project PROPERTIES AUTOMOC ON)
 
 if(BUILD_TESTS)
   add_subdirectory(io/test)
   add_subdirectory(string_utils/test)
-  add_subdirectory(model/test)
   add_subdirectory(project/test)
 endif()

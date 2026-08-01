@@ -1,8 +1,8 @@
 #include "ProjectManager.h"
-#include "ProjectReconstructionManager.h"
+#include "ProjectModelManager.h"
+#include "ProjectSparseReconstructionManager.h"
 #include "ProjectTerrainProductsManager.h"
 #include "ProjectCameraSetupManager.h"
-#include "ProjectTaskDispatcher.h"
 #include "ProjectUiCommands.h"
 #include "ProjectData.h"
 #include "project/ProjectIO.h"
@@ -463,13 +463,11 @@ ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
     : QObject(parent)
     , _parent(parent)
     , _projectData(projectData)
-    , _reconstructionManager(new ProjectReconstructionManager(this, projectData, parent, this))
+    , _sparseReconstructionManager(
+          new ProjectSparseReconstructionManager(this, projectData, parent, this))
+    , _modelManager(new ProjectModelManager(this, projectData, parent, this))
     , _terrainProductsManager(new ProjectTerrainProductsManager(this, projectData, parent, this))
     , _cameraSetupManager(new ProjectCameraSetupManager(this, projectData, parent, this))
-    , _taskDispatcher(new ProjectTaskDispatcher(_cameraSetupManager,
-                                                 _terrainProductsManager,
-                                                 _reconstructionManager,
-                                                 this))
     , _uiCommands(new ProjectUiCommands(projectData, parent))
 {
     _uiCommands->setDirectoryAccessors(
@@ -528,18 +526,26 @@ ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
                 });
     }
 
-        connect(_reconstructionManager, &ProjectReconstructionManager::meshProgressChanged,
+        connect(_modelManager, &ProjectModelManager::meshProgressChanged,
             this, &ProjectManager::meshProgressChanged);
-        connect(_reconstructionManager, &ProjectReconstructionManager::meshProgressFinished,
+        connect(_modelManager, &ProjectModelManager::meshProgressFinished,
             this, &ProjectManager::meshProgressFinished);
-        connect(_reconstructionManager, &ProjectReconstructionManager::atProgressChanged,
+        connect(_sparseReconstructionManager,
+            &ProjectSparseReconstructionManager::atProgressChanged,
             this, &ProjectManager::atProgressChanged);
-        connect(_reconstructionManager, &ProjectReconstructionManager::atProgressFinished,
+        connect(_sparseReconstructionManager,
+            &ProjectSparseReconstructionManager::atProgressFinished,
             this, &ProjectManager::atProgressFinished);
         connect(_terrainProductsManager, &ProjectTerrainProductsManager::demPipelineProgressChanged,
             this, &ProjectManager::demPipelineProgressChanged);
         connect(_terrainProductsManager, &ProjectTerrainProductsManager::demPipelineFinished,
             this, &ProjectManager::demPipelineFinished);
+        connect(_terrainProductsManager, &ProjectTerrainProductsManager::orthoPipelineStarted,
+            this, &ProjectManager::orthoPipelineStarted);
+        connect(_terrainProductsManager, &ProjectTerrainProductsManager::orthoPipelineProgressChanged,
+            this, &ProjectManager::orthoPipelineProgressChanged);
+        connect(_terrainProductsManager, &ProjectTerrainProductsManager::orthoPipelineFinished,
+            this, &ProjectManager::orthoPipelineFinished);
 
     LOG_INFO(QStringLiteral("ProjectManager 已初始化(精简版)"));
 }
@@ -795,47 +801,60 @@ void ProjectManager::addFolder()
 
 bool ProjectManager::importCameraForImage(const QString &imagePath)
 {
-    return _taskDispatcher->importCameraForImage(imagePath);
+    return _cameraSetupManager && _cameraSetupManager->importCameraForImage(imagePath);
 }
 
 void ProjectManager::startTriangulationAsync(const QJsonObject &settings)
 {
-    _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::Triangulation, settings);
+    if (_sparseReconstructionManager)
+    {
+        _sparseReconstructionManager->startTriangulationAsync(settings);
+    }
 }
 
 void ProjectManager::startSparseCloudOutlierRemovalAsync(const QJsonObject &settings)
 {
-    _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::SparseOutlierRemoval, settings);
+    if (_sparseReconstructionManager)
+    {
+        _sparseReconstructionManager->startSparseCloudOutlierRemovalAsync(settings);
+    }
 }
 
 void ProjectManager::startSparseCloudLocalOptimAsync(const QJsonObject &settings)
 {
-    _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::SparseLocalOptimization, settings);
+    if (_sparseReconstructionManager)
+    {
+        _sparseReconstructionManager->startSparseCloudLocalOptimAsync(settings);
+    }
 }
 
 void ProjectManager::startSparseCloudRefineAsync(const QJsonObject &settings)
 {
-    _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::SparseRefine, settings);
+    if (_sparseReconstructionManager)
+    {
+        _sparseReconstructionManager->startSparseCloudRefineAsync(settings);
+    }
 }
 
 bool ProjectManager::importCamerasByFilenameBatch()
 {
-    return _taskDispatcher->importCamerasByFilenameBatch();
+    return _cameraSetupManager && _cameraSetupManager->importCamerasByFilenameBatch();
 }
 
 bool ProjectManager::initializeCamerasFromExifOrDefault(const QJsonObject &settings)
 {
-    return _taskDispatcher->initializeCamerasFromExifOrDefault(settings);
+    return _cameraSetupManager &&
+        _cameraSetupManager->initializeCamerasFromExifOrDefault(settings);
 }
 
 bool ProjectManager::initializeCamerasFromIntrinsics(const QJsonObject &settings)
 {
-    return _taskDispatcher->initializeCamerasFromIntrinsics(settings);
+    return _cameraSetupManager && _cameraSetupManager->initializeCamerasFromIntrinsics(settings);
 }
 
 bool ProjectManager::initializeCameraPosesWithSFM(const QJsonObject &settings)
 {
-    return _taskDispatcher->initializeCameraPosesWithSFM(settings);
+    return _cameraSetupManager && _cameraSetupManager->initializeCameraPosesWithSFM(settings);
 }
 
 void ProjectManager::removeResource(const QString &resourcePath)
@@ -1649,12 +1668,21 @@ void ProjectManager::deleteGeneratedData(const QString &section, const QStringLi
     }
 
     const int selectedCount = resourcePaths.size();
+    const bool deletingTiePoints =
+        section == QStringLiteral("连接点");
+    const QString dialogTitle = deletingTiePoints
+        ? QStringLiteral("移除连接点")
+        : QStringLiteral("删除数据");
     const QMessageBox::StandardButton confirm = QMessageBox::question(
         _parent,
-        QStringLiteral("删除数据"),
-        selectedCount == 1
-            ? QStringLiteral("确定删除所选%1数据及其关联生成文件吗？此操作不可撤销。").arg(section)
-            : QStringLiteral("确定删除所选 %1 项%2数据及其关联生成文件吗？此操作不可撤销。").arg(selectedCount).arg(section),
+        dialogTitle,
+        deletingTiePoints
+            ? QStringLiteral("确定移除当前连接点及其关联生成文件吗？此操作不可撤销。")
+            : (selectedCount == 1
+                   ? QStringLiteral("确定删除所选%1数据及其关联生成文件吗？此操作不可撤销。").arg(section)
+                   : QStringLiteral("确定删除所选 %1 项%2数据及其关联生成文件吗？此操作不可撤销。")
+                         .arg(selectedCount)
+                         .arg(section)),
         QMessageBox::Yes | QMessageBox::No,
         QMessageBox::No);
     if (confirm != QMessageBox::Yes)
@@ -1668,15 +1696,15 @@ void ProjectManager::deleteGeneratedData(const QString &section, const QStringLi
         if (!result.success)
         {
             QMessageBox::warning(_parent,
-                                 QStringLiteral("删除数据"),
+                                 dialogTitle,
                                  QStringLiteral("删除失败：%1").arg(result.errorMessage));
             return;
         }
 
         refreshReconstructionQualityReport();
         QMessageBox::information(_parent,
-                                 QStringLiteral("删除数据"),
-                                 QStringLiteral("已删除连接点数据及其关联生成文件。"));
+                                 dialogTitle,
+                                 QStringLiteral("已移除连接点及其关联生成文件。"));
         return;
     }
 
@@ -1980,56 +2008,26 @@ void ProjectManager::refreshReconstructionQualityReport()
     }
 }
 
-void ProjectManager::appendIpfindResult(const QString &input, const QString &output, const QJsonObject &settings)
+void ProjectManager::appendImageMatchResult(const ProjectImageMatchResultRecord &record)
 {
-    if (_projectData) {
-        _projectData->appendIpfindResult(input, output, settings);
-        // 通知界面刷新该影像的 interest points 缓存
-        // 从输出路径推导后缀 (.sp/.dsk/.alk/.sift/...)
-        QString suffix;
-        for (const char *suf : {".sp", ".dsk", ".alk", ".sift", ".orb", ".akz", ".dedode"})
-        {
-            if (output.endsWith(QLatin1String(suf))) { suffix = QLatin1String(suf); break; }
-        }
-        emit ipfindResultAppended(input, suffix.isEmpty() ? QStringLiteral(".sp") : suffix);
-    }
-}
-
-void ProjectManager::appendIpfindResults(const QVector<ProjectIpfindResultRecord> &records)
-{
-    if (!_projectData || records.isEmpty())
+    if (!_projectData || record.image.trimmed().isEmpty())
     {
         return;
     }
-
-    _projectData->appendIpfindResults(records);
-    for (const ProjectIpfindResultRecord &record : records)
-    {
-        QString suffix;
-        for (const char *suf : {".sp", ".dsk", ".alk", ".sift", ".orb", ".akz", ".dedode"})
-        {
-            if (record.output.endsWith(QLatin1String(suf)))
-            {
-                suffix = QLatin1String(suf);
-                break;
-            }
-        }
-        emit ipfindResultAppended(record.input, suffix.isEmpty() ? QStringLiteral(".sp") : suffix);
-    }
+    _projectData->appendImageMatchResult(record);
+    emit imageMatchResultAppended(record.image);
 }
 
-void ProjectManager::appendIpmatchResult(const QStringList &outputs, const QJsonObject &settings)
-{
-    if (_projectData) {
-        _projectData->appendIpmatchResult(outputs, settings);
-    }
-}
-
-void ProjectManager::appendIpmatchResults(const QVector<ProjectIpmatchResultRecord> &records)
+void ProjectManager::appendImageMatchResults(
+    const QVector<ProjectImageMatchResultRecord> &records)
 {
     if (_projectData && !records.isEmpty())
     {
-        _projectData->appendIpmatchResults(records);
+        _projectData->appendImageMatchResults(records);
+        for (const ProjectImageMatchResultRecord &record : records)
+        {
+            emit imageMatchResultAppended(record.image);
+        }
     }
 }
 
@@ -2053,7 +2051,7 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
     const QString outDir = QDir::cleanPath(outputDir);
 
     // ── 只获取核心数据（影像列表/相机，无结果数组，速度极快）──────────────
-    // 结果数据（ipmatch_results）在后台线程直接读取，避免 UI 阻塞
+    // 单影像 `.pimatch` 分片在后台线程直接读取，避免 UI 阻塞。
     const QJsonObject coreData   = _projectData->coreFilesMeta();
     const QString     plascanPath = _projectData->currentProjectPath();
 
@@ -2113,22 +2111,10 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
     opts.baOpt.nativeCudaDevice = qMax(
         0,
         extraSettings.value(QStringLiteral("ba_native_cuda_device")).toInt(opts.baOpt.nativeCudaDevice));
-    opts.baOpt.minNativeCudaCameras = qMax(
-        1,
-        extraSettings.value(QStringLiteral("ba_min_native_cuda_cameras")).toInt(
-            opts.baOpt.minNativeCudaCameras));
-    opts.baOpt.minNativeCudaObservations = qMax(
-        1,
-        extraSettings.value(QStringLiteral("ba_min_native_cuda_observations")).toInt(
-            opts.baOpt.minNativeCudaObservations));
-    opts.baOpt.nativeCudaMaxPcgIterations = qMax(
-        1,
-        extraSettings.value(QStringLiteral("ba_native_cuda_max_pcg_iterations")).toInt(
-            opts.baOpt.nativeCudaMaxPcgIterations));
-    opts.baOpt.nativeCudaPcgTolerance = qMax(
+    opts.baOpt.nativeCudaMaxPointStepNorm = qMax(
         1e-12,
-        extraSettings.value(QStringLiteral("ba_native_cuda_pcg_tolerance")).toDouble(
-            opts.baOpt.nativeCudaPcgTolerance));
+        extraSettings.value(QStringLiteral("ba_native_cuda_max_point_step")).toDouble(
+            opts.baOpt.nativeCudaMaxPointStepNorm));
     opts.baOpt.minCeresCpuObservations = qMax(
         1,
         extraSettings.value(QStringLiteral("ba_min_cpu_observations")).toInt(
@@ -2137,8 +2123,25 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
         1,
         extraSettings.value(QStringLiteral("ba_max_ceres_point_only_observations")).toInt(
             opts.baOpt.maxCeresPointOnlyObservations));
+    opts.baOpt.maxDenseSchurCameras = qMax(
+        1,
+        extraSettings.value(QStringLiteral("ba_max_dense_schur_cameras")).toInt(
+            opts.baOpt.maxDenseSchurCameras));
+    opts.baOpt.maxSparseSchurCameras = qMax(
+        opts.baOpt.maxDenseSchurCameras,
+        extraSettings.value(QStringLiteral("ba_max_sparse_schur_cameras")).toInt(
+            opts.baOpt.maxSparseSchurCameras));
+    opts.baOpt.maxCeresCudaMemoryFraction = qBound(
+        0.01,
+        extraSettings.value(QStringLiteral("ba_max_ceres_cuda_memory_fraction")).toDouble(
+            opts.baOpt.maxCeresCudaMemoryFraction),
+        1.0);
     opts.baOpt.allowBackendFallback =
         extraSettings.value(QStringLiteral("ba_allow_backend_fallback")).toBool(true);
+    opts.baOpt.maxAcceptedConstraintRmsGrowth = qMax(
+        1.0,
+        extraSettings.value(QStringLiteral("ba_max_accepted_constraint_rms_growth")).toDouble(
+            opts.baOpt.maxAcceptedConstraintRmsGrowth));
     opts.baOpt.enableBackendQualityGate =
         extraSettings.value(QStringLiteral("ba_enable_backend_quality_gate")).toBool(true);
     opts.baOpt.maxAcceptedRmsGrowth = qMax(
@@ -2513,38 +2516,60 @@ QMap<QString, xjw::Camera> ProjectManager::getCamerasForImages(
 
 void ProjectManager::startGenerateModelAsync()
 {
-    _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::GenerateModel);
+    if (_modelManager)
+    {
+        _modelManager->startGenerateModelAsync();
+    }
 }
 
 void ProjectManager::startGenerateModelAsync(const QJsonObject &settings)
 {
-    _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::GenerateModel, settings);
+    if (_modelManager)
+    {
+        _modelManager->startMeshReconstructionAsync(settings);
+    }
 }
 
 void ProjectManager::startMeshReconstructionAsync(const QJsonObject &settings)
 {
-    _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::MeshReconstruction, settings);
+    if (_modelManager)
+    {
+        _modelManager->startMeshReconstructionAsync(settings);
+    }
 }
 
 void ProjectManager::startTextureMappingAsync(const QJsonObject &settings)
 {
-    _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::TextureMapping, settings);
+    if (_modelManager)
+    {
+        _modelManager->startTextureMappingAsync(settings);
+    }
 }
 
 void ProjectManager::startDemFromPointCloudAsync(
     const xjw::gui::project::DemGenerationRequest &request)
 {
-    _taskDispatcher->startDemFromPointCloudAsync(request);
+    if (_terrainProductsManager)
+    {
+        _terrainProductsManager->startDemFromPointCloudAsync(request);
+    }
 }
 
-void ProjectManager::startMapProjectAsync(const QJsonObject &settings)
+void ProjectManager::startMapProjectAsync(
+    const xjw::gui::project::OrthoGenerationRequest &request)
 {
-    _taskDispatcher->startMapProjectAsync(settings);
+    if (_terrainProductsManager)
+    {
+        _terrainProductsManager->startMapProjectAsync(request);
+    }
 }
 
 void ProjectManager::cancelMapProject()
 {
-    _taskDispatcher->cancelMapProject();
+    if (_terrainProductsManager)
+    {
+        _terrainProductsManager->cancelMapProject();
+    }
 }
 
 bool ProjectManager::acceptBundleAdjustPreview(QString *errorMsg)
@@ -2784,12 +2809,17 @@ void ProjectManager::appendObsNetResult(int nodeCount,
 // ── 追加空三（SFM）结果到 aerial_triangulation_results ─────────────────
 QJsonArray ProjectManager::getAvailableAtResults() const
 {
-    return _taskDispatcher->getAvailableAtResults();
+    return _sparseReconstructionManager
+        ? _sparseReconstructionManager->getAvailableAtResults()
+        : QJsonArray();
 }
 
 void ProjectManager::cancelModelGeneration()
 {
-    _taskDispatcher->cancelModelGeneration();
+    if (_modelManager)
+    {
+        _modelManager->cancelActiveTask();
+    }
 }
 
 // ── 取消正在运行的 AT/SFM 任务 ──────────────────────────────────────────────

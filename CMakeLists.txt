@@ -16,7 +16,7 @@ if(POLICY CMP0104)
   cmake_policy(SET CMP0104 NEW)
 endif()
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_FIND_PACKAGE_PREFER_CONFIG ON)
@@ -76,7 +76,7 @@ include(CheckLanguage)
 check_language(CUDA)
 if(CMAKE_CUDA_COMPILER)
   enable_language(CUDA)
-  set(CMAKE_CUDA_STANDARD 17)
+  set(CMAKE_CUDA_STANDARD 20)
   set(CMAKE_CUDA_STANDARD_REQUIRED ON)
   message(STATUS "plascan: CUDA enabled (${CMAKE_CUDA_COMPILER})")
 else()
@@ -232,12 +232,8 @@ message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
 add_subdirectory(src/common)
 
-# 核心模块（仅当存在时加入）
-if(EXISTS ${CMAKE_SOURCE_DIR}/src/core/CMakeLists.txt)
-  add_subdirectory(src/core)
-else()
-  message(WARNING "src/core missing - skipping core module (you removed core components)")
-endif()
+# 核心模块
+add_subdirectory(src/core)
 
 # GUI模块
 add_subdirectory(src/gui)
@@ -289,6 +285,37 @@ set(CPACK_PACKAGE_DIRECTORY "${CMAKE_BINARY_DIR}/packages" CACHE PATH "CPack pac
 if(WIN32)
   set(CPACK_SET_DESTDIR OFF)
   set(CPACK_PACKAGING_INSTALL_PREFIX "PlaScan")
+  set(CPACK_COMPONENTS_ALL Runtime)
+  set(CPACK_COMPONENT_RUNTIME_DISPLAY_NAME "PlaScan Runtime")
+  set(CPACK_COMPONENT_RUNTIME_DESCRIPTION
+    "PlaScan application, runtime libraries, plugins and bundled models")
+  set(CPACK_COMPONENT_RUNTIME_HIDDEN ON)
+  set(CPACK_COMPONENT_RUNTIME_REQUIRED ON)
+  set(CPACK_PACKAGE_EXECUTABLES "plascan" "PlaScan")
+  set(CPACK_CREATE_DESKTOP_LINKS "plascan")
+  set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
+  set(CPACK_RESOURCE_FILE_README "${CMAKE_SOURCE_DIR}/README.md")
+
+  set(CPACK_INNOSETUP_ARCHITECTURE "x64")
+  set(CPACK_INNOSETUP_USE_MODERN_WIZARD ON)
+  set(CPACK_INNOSETUP_CREATE_UNINSTALL_LINK ON)
+  set(CPACK_INNOSETUP_RUN_EXECUTABLES "plascan")
+  set(CPACK_INNOSETUP_SETUP_ChangesAssociations ON)
+  set(CPACK_INNOSETUP_SETUP_UninstallDisplayIcon
+    "{app}\\\\bin\\\\plascan.exe")
+  set(CPACK_INNOSETUP_EXTRA_SCRIPTS
+    "${CMAKE_SOURCE_DIR}/src/gui/packaging/PlaScanInnoSetup.iss")
+
+  find_program(PLASCAN_INNOSETUP_EXECUTABLE
+    NAMES ISCC.exe ISCC
+    HINTS
+      "$ENV{LOCALAPPDATA}/Programs/Inno Setup 6"
+      "$ENV{ProgramFiles}/Inno Setup 6"
+      "$ENV{ProgramFiles\(x86\)}/Inno Setup 6")
+  if(PLASCAN_INNOSETUP_EXECUTABLE)
+    set(CPACK_INNOSETUP_EXECUTABLE
+      "${PLASCAN_INNOSETUP_EXECUTABLE}")
+  endif()
 else()
   set(CPACK_SET_DESTDIR ON)
   set(CPACK_PACKAGING_INSTALL_PREFIX "/opt/plascan")
@@ -304,6 +331,7 @@ endif()
 
 if(WIN32)
   install(DIRECTORY resources/ DESTINATION share/plascan
+      COMPONENT Runtime
       FILES_MATCHING
       PATTERN "*.png"
       PATTERN "*.svg")

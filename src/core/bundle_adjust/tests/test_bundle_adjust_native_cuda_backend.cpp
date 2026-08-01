@@ -89,8 +89,7 @@ TEST(NativeCudaBackendTest, ReducesReprojectionRmsOnSyntheticGlobalProblem)
     options.refineCameraPose = false;
     options.fixedCameraIndices.push_back(0);
     options.maxIterations = 5;
-    options.nativeCudaMaxPcgIterations = 80;
-    options.nativeCudaPcgTolerance = 1e-5;
+    options.nativeCudaMaxPointStepNorm = 0.5;
     options.enablePointFilter = false;
 
     const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(cameras, tracks, options);
@@ -99,4 +98,5 @@ TEST(NativeCudaBackendTest, ReducesReprojectionRmsOnSyntheticGlobalProblem)
     EXPECT_LT(result.meanRmsAfter, result.meanRmsBefore);
     EXPECT_LT(result.meanRmsAfter, 0.25);
     EXPECT_GT(result.nativeCudaAcceptedSteps, 0);
+    EXPECT_LT(result.nativeCudaFinalCost, result.nativeCudaInitialCost);
 }

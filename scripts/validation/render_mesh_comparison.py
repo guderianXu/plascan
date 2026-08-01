@@ -26,6 +26,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate-label", default="Candidate")
     parser.add_argument("--max-faces", type=int, default=60_000)
     parser.add_argument("--seed", type=int, default=20260726)
+    parser.add_argument("--edge-opacity", type=float, default=0.10)
+    parser.add_argument("--line-width", type=float, default=0.08)
     return parser.parse_args()
 
 
@@ -64,6 +66,8 @@ def render_mesh(
     azimuth: float,
     center: np.ndarray,
     radius: float,
+    edge_opacity: float,
+    line_width: float,
 ) -> None:
     triangles = mesh.vertices[mesh.faces[face_indices]]
     normals = mesh.face_normals[face_indices]
@@ -74,8 +78,8 @@ def render_mesh(
     collection = Poly3DCollection(
         triangles,
         facecolors=colors,
-        edgecolors=(0.08, 0.08, 0.08, 0.10),
-        linewidths=0.08,
+        edgecolors=(0.08, 0.08, 0.08, edge_opacity),
+        linewidths=line_width,
         antialiased=False,
     )
     axis.add_collection3d(collection)
@@ -92,6 +96,10 @@ def main() -> int:
     args = parse_args()
     if args.max_faces < 100:
         raise ValueError("--max-faces must be at least 100")
+    if not 0.0 <= args.edge_opacity <= 1.0:
+        raise ValueError("--edge-opacity must be in [0, 1]")
+    if args.line_width < 0.0:
+        raise ValueError("--line-width must be non-negative")
     reference = load_mesh(args.reference.resolve())
     candidate = load_mesh(args.candidate.resolve())
     combined_minimum = np.minimum(reference.bounds[0], candidate.bounds[0])
@@ -127,6 +135,8 @@ def main() -> int:
                 azimuth,
                 center,
                 radius,
+                args.edge_opacity,
+                args.line_width,
             )
             axis.set_title(f"{label} — {view_name}", fontsize=13, pad=8)
     figure.tight_layout(rect=(0.0, 0.0, 1.0, 0.965))

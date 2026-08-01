@@ -9,7 +9,7 @@
 
 ### 依赖
 
-- C++17 编译器：MSVC 2022、GCC 11+ 或 Clang 15+。
+- C++20 编译器：MSVC 2022、GCC 11+ 或 Clang 15+。
 - CMake 3.25+ 和 Ninja。
 - Qt6、OpenCV 4、LibTorch、GDAL、libtiff、libzip、OpenMP、GTest。
 - CUDA Toolkit 可选；启用后用于深度学习特征、匹配、MVS 和 dense match 加速。
@@ -61,7 +61,19 @@ ctest --preset windows-vcpkg-release
 cpack --preset windows-vcpkg-release
 ```
 
-Windows 构建使用原生 MSVC/Ninja/PowerShell，不需要 WSL。打包后的 GUI 需要 Qt platform plugins 和 vcpkg/LibTorch 运行时 DLL；`PLASCAN_BUNDLE_RUNTIME=ON` 时 CMake install/CPack 会尽量随包收集这些依赖。
+`cpack --preset windows-vcpkg-release` 生成 ZIP 离线包。安装 Inno Setup 6 后，可从已配置的
+Windows Release 构建生成带开始菜单、桌面快捷方式、卸载入口和 `.plascan` 文件关联的安装程序：
+
+```powershell
+cpack `
+  --config build/windows-vcpkg-cuda-release/CPackConfig.cmake `
+  -G INNOSETUP `
+  -C Release `
+  -D "CPACK_PACKAGING_INSTALL_PREFIX=/" `
+  -D "CPACK_PACKAGE_DIRECTORY=$PWD/dist/packages/windows-vcpkg-release"
+```
+
+Windows 构建使用原生 MSVC/Ninja/PowerShell，不需要 WSL。打包后的 GUI 需要 Qt platform plugins 和 vcpkg/LibTorch 运行时 DLL；`PLASCAN_BUNDLE_RUNTIME=ON` 时 CMake install/CPack 会按主程序和 Qt 插件的传递依赖闭包收集 DLL，并补充 Vulkan、cuDNN 和 NVRTC 等动态加载运行时，不再复制 Release 目录中的无关开发库。Windows 包同时内置 `U2Net_v1.onnx`。
 
 当前 manifest 使用 vcpkg 中可用的 OpenCV 4.x port。后续 vcpkg 正式提供 OpenCV 5 后，优先通过更新 `builtin-baseline`、OpenCV feature 列表和现有 `OpenCvCompat` 兼容测试切换。
 
@@ -162,9 +174,20 @@ GUI 的 `工作流程` 菜单按处理阶段提供互相独立的工程入口：
 | `空中三角测量` | 相机外参、连接点和正式稀疏点云 | 只负责影像对齐和 BA，不自动进入密集重建 |
 | `生成模型` | PLY/OBJ 三维模型 | 从当前项目已有的连接点、深度图或点云生成模型 |
 | `创建 DEM` | `dem.tif`、`depth_map.png`、可选 DEM 网格模型 | 自动模式从立体影像开始，手动模式可直接使用已有密集点云 |
-| `生成 正射影像` | DOM GeoTIFF/PNG | 默认全选项目影像，分辨率为 `0` 时自动沿用 DEM 网格 |
+| `生成正射影像` | 带覆盖 Alpha 的 DOM GeoTIFF/PNG | 选择项目影像和 DEM，按相机反投影并登记有效参数与覆盖统计 |
 
 旧版 `工作流程 -> 三维重建` 一键对话框已移除；空三、密集处理、模型和地形产品由各自入口显式启动。
+
+“创建正射影像”对话框提供马赛克、加权平均和首个有效影像三种融合模式，可按独立 X/Y
+像元或最大尺寸生成，并支持 DEM 范围裁剪、颜色校正、锐度权重、重影过滤、小孔洞填充和
+项目蒙版。对话框会读取 DEM 坐标系及真实像元，实时显示输出宽高和预计内存；生成任务在
+后台运行，阶段进度和取消状态保留在同一窗口。GeoTIFF 按 R/G/B/Alpha 波段写出，以 Alpha
+区分无覆盖区和真实黑色，并继承最终网格地理变换及可用的 DEM 投影 WKT。有效 DEM 表面零影像
+覆盖时会明确失败，不会保存全黑成果。
+
+当前只支持跟随 DEM 网格的地理/本地坐标投影、DEM 表面和影像颜色源。平面投影、圆柱投影及
+全局接缝线优化尚未实现，对应 GUI 选项明确禁用。当前版本也尚未建立逐相机地形遮挡深度
+缓冲，陡峭地形应结合输出 Alpha 和质量检查复核。
 
 ### 重建链路状态
 
@@ -211,14 +234,16 @@ build/bin/three_d_reconstruction_cli path/to/input.lis \
   --feature-max-image-dim 0
 ```
 
-`--device auto` 是默认值：CUDA 可用时特征提取、LightGlue 匹配和 MVS PatchMatch 会优先使用 GPU；
-需要强制 CPU 时再传 `--device cpu`。`--feature-max-image-dim 0` 表示使用质量档位的默认设置；
-最高质量档不会自动把 DISK/ALIKED 输入缩回 1200 px。显存紧张时可手动调小，
+`--device auto` 是默认值：CUDA 可用时 SIFT 提取、LightGlue 匹配和 MVS PatchMatch 会使用 GPU。
+当前稀疏前端要求 CUDA/TensorRT，显式 `--device cpu` 会返回不支持错误，不会切换算法。
+`--feature-max-image-dim 0` 表示使用质量档位的默认设置；最高质量档不会自动缩小 SIFT 输入。
+显存紧张时可手动调小，
 例如 `--feature-max-image-dim 1600`；传负数也会关闭缩放保护。
 
 `bundle_adjust_cli` 默认请求 `--ba-backend auto`。BA 会先统计相机数、track 数和观测数：
 point-only BA 和小规模局部 BA 优先使用 legacy/OpenMP 或 Ceres CPU；需要相机位姿优化且问题规模足够大时，
-Auto 会先尝试 PlaScan 自研 `native_cuda`，不可用或不满足阈值时再尝试 Ceres CUDA dense Schur。
+Auto 会尝试 Ceres CUDA dense Schur；固定相机的显式 point-only CUDA 请求才使用 PlaScan 自研
+`native_cuda` 点块后端。
 `ba_run_summary.json` 会写入 `ba_requested_backend`、`ba_used_backend`、`ba_used_gpu`、
 `ba_ceres_linear_solver`、`ba_valid_track_ratio`、setup/solve/total 耗时、native CUDA 活动工作集统计、
 质量门控和回退原因。Auto 后端会优先保证 RMS 和有效 track 比例；CUDA 候选若比 legacy 明显变差，
@@ -227,14 +252,14 @@ Auto 会先尝试 PlaScan 自研 `native_cuda`，不可用或不满足阈值时�
 需要复现旧路径时可传
 `--ba-backend legacy_cpu`；需要强制 Ceres CPU 或 CUDA 时分别传 `--ba-backend ceres_cpu` /
 `--ba-backend ceres_cuda`；需要强制自研 CUDA 路径时传 `--ba-backend native_cuda`。
-可用 `--ba-min-native-cuda-cameras`、`--ba-min-native-cuda-observations`、
-`--ba-native-cuda-device`、`--ba-native-cuda-max-pcg-iterations` 和
-`--ba-native-cuda-pcg-tolerance` 调整 native CUDA 候选条件和设备参数；默认需要至少 50 台相机和
-500000 条观测才自动选择 native CUDA。`--ba-min-cuda-cameras` 和 `--ba-min-cuda-observations`
-仍用于 Ceres CUDA 阈值。
-Ceres CUDA 当前加速的是 Ceres dense Schur 线性求解环节，不加速 residual/Jacobian 构建和 BA 输入构建。
+可用 `--ba-native-cuda-device` 和 `--ba-native-cuda-max-point-step` 调整显式
+native CUDA point-only 求解的设备与点块步长；`--ba-min-cuda-cameras` 和
+`--ba-min-cuda-observations` 用于 Ceres CUDA 自动选择阈值。
+Ceres CPU 按相机规模自动选择 Dense/Sparse/Iterative Schur；CUDA 在求解前按
+`--ba-max-cuda-memory-fraction` 检查 dense 工作集显存预算。Ceres CUDA 当前加速的是
+Ceres dense Schur 线性求解环节，不加速 residual/Jacobian 构建和 BA 输入构建。
 native CUDA 当前首期接入的是固定相机投影下的 GPU 三维点块求解，并接入 Auto 质量门控；
-相机 Schur/PCG 更新尚未作为已完成能力发布。
+相机 Schur/PCG 更新尚未实现，因此不再暴露伪 PCG 参数或统计。
 
 BA 后端基准可单独运行：
 
@@ -294,21 +319,14 @@ sudo docker build -t plascan-build -f docker/Dockerfile.ubuntu2404 .
 src/
 ├── core/
 │   ├── camera/                # 相机模型与外部相机格式转换
-│   ├── feature_extractors/    # 8 种提取器, IExtractor 接口 + 工厂
-│   │   ├── superpoint/        # SuperPoint (256d, TorchScript)
-│   │   ├── disk/              # DISK (128d, TorchScript)
-│   │   ├── aliked/            # ALIKED (128d, TorchScript)
-│   │   └── tradition/         # SIFT / SURF / ORB / AKAZE (OpenCV)
-│   ├── feature_match/         # 7 种匹配器, IMatcher 接口 + 工厂
-│   │   ├── superglue/         # SuperGlue (GNN, 256d)
-│   │   ├── lightglue/         # LightGlue (GNN)
-│   │   ├── loftr/             # LoFTR (端到端密集)
-│   │   └── tradition/         # BF / FLANN (OpenCV)
+│   ├── image_matching/        # CUDA SIFT + TensorRT LightGlue、几何验证与 .pimatch I/O
+│   ├── matchphototask/        # 候选对、任务内特征缓存、匹配及连接点编排
+│   ├── aerial_triangulation/  # 对齐照片/空中三角测量工作流
 │   ├── sfm/                   # 增量式 SfM + 光束法平差, ReferenceTerrainPrior
 │   ├── mvs/                   # PatchMatch 深度图, MvsWorkspaceManifest, MvsSourcePlanner, 融合
 │   ├── dense_match/           # MGM/SGM 密集立体匹配 (自研 CUDA)
 │   ├── mesh/                  # Poisson 表面重建 + 纹理映射
-│   ├── terrain/               # DEM/DOM, TerrainProductManifest, DemGridAggregator, DemMosaic
+│   ├── terrain/               # DEM/DOM, OrthoProjector, TerrainProductManifest, DEM 聚合与 mosaic
 │   ├── qc/                    # ReconstructionQualityReport, PointCloudAlignment, DemDifference
 │   ├── overlap/               # 影像重叠度分析
 │   ├── intersection/          # 前方交汇精度检验
@@ -334,7 +352,8 @@ src/
 
 ## CLI 工具
 
-CLI 在源码和 CMake 中按领域拆分，但保留原有独立可执行文件名，因此已有脚本无需改命令。
+CLI 在源码和 CMake 中按领域拆分。影像匹配接口已收敛为原始影像输入和逐影像 `.pimatch` 输出；
+旧特征文件与成对 `.match` 参数不再兼容，调用脚本必须使用当前接口。
 每个 CLI 模块也在自己的 `tests/` 中维护测试。模块职责和扩展规则见
 [`src/cli/README.md`](src/cli/README.md)。
 
@@ -355,35 +374,24 @@ camera_convert_cli --format metashape-xml -i ./depth_images -o ./plascan_cameras
 输出目录包含 `image_camera.lis`、`cameras/*.tsai` 和 `summary.json`，可直接传给重建类 CLI。
 Metashape adjusted calibration 中的 `k1/k2/k3/p1/p2` 会写入 `.tsai`。
 
-### 特征提取 (`feature_extract_cli`)
+### 双影像匹配 (`feature_match_cli`)
 
-```bash
-# 8 种算法: superpoint, disk, aliked, sift, surf, orb, akaze, dedode
-feature_extract_cli -a superpoint -m superpoint_extractor_cpu.torchscript -i img.tif -o out.sp --cuda
-feature_extract_cli -a disk       -m disk_extractor_cuda_8192.torchscript -i img.tif -o out.dsk --cuda
-feature_extract_cli -a sift       -i img.tif -o out.sift -n 4096
-
-# 批量处理目录
-feature_extract_cli -a superpoint -m superpoint_extractor_cpu.torchscript -i ./images/ -o ./features/ --cuda
+```powershell
+# CUDA SIFT + TensorRT LightGlue；为 A、B 分别写一个 .pimatch 分片
+feature_match_cli -L A.tif -R B.tif `
+  -o E:\project\assets\image_matches `
+  -m lightglue_sift_fp32.engine `
+  -a sift_lightglue --max-keypoints 40000
 ```
 
-### 特征匹配 (`feature_match_cli`)
-
-```bash
-# 自动检测文件后缀
-feature_match_cli --sp1 a.sp  --sp2 b.sp  -o out.match --cuda    # .sp → SuperGlue
-feature_match_cli --sp1 a.dsk --sp2 b.dsk -o out.match --cuda    # .dsk → NN
-
-# 端到端 (无需预先提取特征)
-feature_match_cli -a loftr -L a.tif -R b.tif -o out.match --cuda
-```
+SIFT 描述子只存在于本次任务的内存缓存。LightGlue 只使用 TensorRT；最终分片保存关键点观测、
+相邻影像、置信度、几何内点和残差，不生成独立特征文件或 JSON sidecar。engine 导出、固定容量和
+精度策略见 [docs/models/README.md](docs/models/README.md#sift--lightglue-tensorrt)。
 
 ### 密集重建流水线
 
 ```bash
-feature_extract_cli -a superpoint -m superpoint_extractor_cpu.torchscript -i A.tif -o A.sp --cuda
-feature_extract_cli -a superpoint -m superpoint_extractor_cpu.torchscript -i B.tif -o B.sp --cuda
-feature_match_cli   -a superglue -m superglue_outdoor_cuda.torchscript --sp1 A.sp --sp2 B.sp -o AB.match --cuda
+feature_match_cli   -L A.tif -R B.tif -o ./assets/image_matches -m lightglue_sift_fp32.engine
 rectify_cli         -L A.tif -R B.tif --camL A.txt --camR B.txt -o rect
 dense_match_cli     -L rect_L.tif -R rect_R.tif -o disp.tif --cuda --algorithm mgm
 triangulate_cli     -d disp.tif --rect rect.xml --camL A.txt --camR B.txt -o cloud.ply
@@ -396,9 +404,8 @@ triangulate_cli     -d disp.tif --rect rect.xml --camL A.txt --camR B.txt -o clo
 或通过导出脚本生成：
 
 ```bash
-python scripts/models/export_superpoint.py                 # SuperPoint
-python scripts/models/export_disk_aliked.py                # DISK + ALIKED
-python scripts/models/export_models.py --loftr --roma      # LoFTR + RoMa
+python scripts/models/export_lightglue_tensorrt.py         # TensorRT LightGlue（默认 FP32）
+python scripts/models/install_sam21_model.py --variant tiny --devices auto
 ```
 
 ## 平台支持
@@ -407,11 +414,10 @@ python scripts/models/export_models.py --loftr --roma      # LoFTR + RoMa
 |------|:---:|:---:|:---:|
 | CUDA 加速 | ✅ | ✅ | ❌ (MPS via PyTorch) |
 | dense_match MGM/SGM | CUDA + CPU | CUDA + CPU | CPU only |
-| SuperPoint/DISK/ALIKED | CUDA + CPU | CUDA + CPU | CPU |
-| SIFT/ORB/AKAZE | CPU | CPU | CPU |
+| CUDA SIFT + TensorRT LightGlue | CUDA | CUDA | 不支持 |
 | 全部 CLI 工具 | ✅ | ✅ | ✅ |
 | Qt6 GUI | ✅ | ✅ | ✅ |
-| CPack 打包 | ZIP | TGZ/DEB | TGZ |
+| CPack 打包 | ZIP/INNOSETUP | TGZ/DEB | TGZ |
 | Docker 构建 | — | ✅ | — |
 
 ## 开发
@@ -430,7 +436,9 @@ git push origin main
 面向工作流和地形产品的改动至少运行：
 
 ```bash
-cmake --build build --target test_gui_project_utils test_mesh_reconstructor test_terrain_dem_dom plascan_gui -j$(nproc)
+cmake --build build --target test_ortho_generation test_map_project_dialog test_gui_project_utils test_mesh_reconstructor test_terrain_dem_dom plascan_gui -j$(nproc)
+ctest --test-dir build -R "OrthoGeneration|OrthoGridPlanner|OrthoProjector|MapProjectDialog" --output-on-failure
+QT_QPA_PLATFORM=offscreen ./build/tests/test_map_project_dialog
 QT_QPA_PLATFORM=offscreen ./build/tests/test_gui_project_utils
 ./build/tests/test_mesh_reconstructor
 ./build/src/core/terrain/test_terrain_dem_dom
@@ -438,6 +446,8 @@ QT_QPA_PLATFORM=offscreen ./build/tests/test_gui_project_utils
 
 这些测试分别覆盖：
 
+- 正射核心：参数解析、X/Y 像元与最大尺寸网格规划、融合、项目蒙版、孔洞、零覆盖和取消。
+- 正射 GUI：仅开放真实支持项、DEM 元数据估算、设置往返、后台进度和取消。
 - GUI 工作流边界：空三、模型、DEM 和 DOM 使用独立入口。
 - 模型生成降级路径：点云缺少法向量时 Poisson 重建能回退到可用网格。
 - DEM/DOM 工程质量：DEM 栅格、点云颜色/强度保留、DOM 锐度融合、OBJ/MTL 纹理、目录瓦片拼接输出。

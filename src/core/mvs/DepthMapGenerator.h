@@ -62,6 +62,9 @@ struct DepthFrameResult
     QSharedPointer<cv::Mat> geometrySourceMask; ///< bit N 对应 sourceViewIndices 的第 N 个来源 (CV_16U)
     QSharedPointer<cv::Mat> inverseDepthMean; ///< 几何确认观测的逆深度均值 (CV_32F)
     QSharedPointer<cv::Mat> inverseDepthRelativeSpread; ///< 逆深度相对标准差 (CV_32F)
+    QSharedPointer<cv::Mat> adaptiveGeometrySupportWeight; ///< 连续跨视几何支持权重 (CV_32F)
+    QSharedPointer<cv::Mat> adaptiveGeometryEffectiveViewCount; ///< 连续证据有效视图数 (CV_32F)
+    QSharedPointer<cv::Mat> adaptiveGeometryConflictWeight; ///< 可见自由空间/深度冲突权重 (CV_32F)
     QSharedPointer<cv::Mat> crossViewRepairedMask; ///< 跨视图补回像素；不参与帧准入评分 (CV_8U)
     QSharedPointer<cv::Mat> validMask;   ///< 最终输出空间的权威有效蒙版 (CV_8U)
     QSharedPointer<cv::Mat> supportRegionMask; ///< 项目/内容允许参与重建的区域，不含深度孔洞
@@ -112,6 +115,9 @@ struct DepthFrameResult
         geometrySourceMask.clear();
         inverseDepthMean.clear();
         inverseDepthRelativeSpread.clear();
+        adaptiveGeometrySupportWeight.clear();
+        adaptiveGeometryEffectiveViewCount.clear();
+        adaptiveGeometryConflictWeight.clear();
         crossViewRepairedMask.clear();
         validMask.clear();
         supportRegionMask.clear();

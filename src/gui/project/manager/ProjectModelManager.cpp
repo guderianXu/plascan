@@ -561,6 +561,27 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
         ? QStringLiteral("生成模型")
         : QStringLiteral("网格重建");
 
+    if (settings.value(QStringLiteral("source_data")).toString() ==
+        QStringLiteral("depth_maps"))
+    {
+        const QString depth_source_path =
+            settings.value(QStringLiteral("depthMapSourcePath"))
+                .toString(settings.value(QStringLiteral("source_path")).toString());
+        const auto batch_compatibility =
+            xjw::gui::project::assessStoredDepthBatchCompatibility(
+                _projectData->metadata(),
+                depth_source_path,
+                settings.value(QStringLiteral("at_index")).toInt(-1));
+        if (!batch_compatibility.compatible)
+        {
+            QMessageBox::warning(_parentWidget,
+                                 dialogTitle,
+                                 QStringLiteral("不能使用当前深度图生成模型：\n%1")
+                                     .arg(batch_compatibility.reason));
+            return false;
+        }
+    }
+
     ResolvedModelSource resolvedSource;
     QString sourceError;
     if (!resolveModelSourceForMeshing(_projectData, settings, &resolvedSource, &sourceError))

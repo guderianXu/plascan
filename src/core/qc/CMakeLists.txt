@@ -22,7 +22,7 @@ target_link_libraries(qc PUBLIC
     ${OpenCV_LIBS}
 )
 
-target_compile_features(qc PUBLIC cxx_std_17)
+target_compile_features(qc PUBLIC cxx_std_20)
 
 if(BUILD_TESTS)
     include(GoogleTest)

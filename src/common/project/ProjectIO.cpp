@@ -194,18 +194,11 @@ QString ProjectIO::tempResultsPath(const QString &plascanPath)
     return QDir(tmp).filePath(QStringLiteral("project_results.json"));
 }
 
-QString ProjectIO::ipfindOutputDir(const QString &plascanPath)
+QString ProjectIO::imageMatchOutputDir(const QString &plascanPath)
 {
     const QString root = projectRootFromPlascan(plascanPath);
     if (root.isEmpty()) return QString();
-    return QDir(root).filePath(QStringLiteral("assets/ip"));
-}
-
-QString ProjectIO::ipmatchOutputDir(const QString &plascanPath)
-{
-    const QString root = projectRootFromPlascan(plascanPath);
-    if (root.isEmpty()) return QString();
-    return QDir(root).filePath(QStringLiteral("assets/matches"));
+    return QDir(root).filePath(QStringLiteral("assets/image_matches"));
 }
 
 QString ProjectIO::maskOutputDir(const QString &plascanPath)
@@ -213,13 +206,6 @@ QString ProjectIO::maskOutputDir(const QString &plascanPath)
     const QString root = projectRootFromPlascan(plascanPath);
     if (root.isEmpty()) return QString();
     return QDir(root).filePath(QStringLiteral("assets/masks"));
-}
-
-QString ProjectIO::tmpIpfindDir(const QString &plascanPath)
-{
-    const QString root = projectRootFromPlascan(plascanPath);
-    if (root.isEmpty()) return QString();
-    return QDir(root).filePath(QStringLiteral(".plascan_tmp/ip"));
 }
 
 } // namespace xjw::common::project

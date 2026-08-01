@@ -12,6 +12,7 @@
 #include "pose/PnpSolver.h"
 #include "BundleAdjust.h"
 #include "filtering/SparsePointCloudProcessor.h"
+#include "Intersection.h"
 
 using namespace xjw;
 
@@ -491,6 +492,121 @@ TEST(PnpParamsTest, DeterministicSeedIsIndependentOfExternalOpenCvRngState)
     {
         EXPECT_DOUBLE_EQ(first.R[i], second.R[i]);
     }
+}
+
+TEST(PnpParamsTest, SolveWithCameraHonorsBrownConradyDistortion)
+{
+    const std::array<double, 9> identity{{
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
+    }};
+    const std::array<double, 3> trueCenter{{0.25, -0.12, 0.35}};
+
+    Camera camera;
+    camera.setIntrinsics(820.0, 790.0, 640.0, 480.0);
+    camera.setDistortion(-0.32, 0.11, -0.014, 0.004, -0.003);
+    camera.setPose(identity, trueCenter);
+
+    std::vector<std::array<double, 3>> worldPoints;
+    std::vector<std::array<double, 2>> imagePoints;
+    worldPoints.reserve(63);
+    imagePoints.reserve(63);
+    for (int row = 0; row < 7; ++row)
+    {
+        for (int column = 0; column < 9; ++column)
+        {
+            const double normalizedX = -0.62 + 0.155 * static_cast<double>(column);
+            const double normalizedY = -0.45 + 0.15 * static_cast<double>(row);
+            const double depth = 3.2 + 0.17 * static_cast<double>((row * 3 + column) % 5);
+            const std::array<double, 3> world{{
+                trueCenter[0] + normalizedX * depth,
+                trueCenter[1] + normalizedY * depth,
+                trueCenter[2] + depth,
+            }};
+            double pixel[2] = {0.0, 0.0};
+            ASSERT_TRUE(camera.projectWorldPoint(world.data(), pixel));
+            worldPoints.push_back(world);
+            imagePoints.push_back({{pixel[0], pixel[1]}});
+        }
+    }
+
+    PnpOptions options;
+    options.maxReprojError = 0.05;
+    options.maxIterations = 2000;
+    options.minNumInliers = 50;
+    options.minInlierRatio = 0.95;
+    options.smallSampleThreshold = 0;
+    options.useInitialPose = true;
+    options.initialCameraToWorldRotation = identity;
+    options.initialCameraCenter = trueCenter;
+    options.ransacSeed = 20260730;
+
+    const PnpResult pinholeResult =
+        PnpSolver::solve(worldPoints, imagePoints,
+                         camera.focalX(), camera.focalY(),
+                         camera.principalX(), camera.principalY(),
+                         camera.uAxisSign(), camera.vAxisSign(),
+                         camera.depthAxisFlipped(), options);
+    const PnpResult result =
+        PnpSolver::solveWithCamera(worldPoints, imagePoints, camera, options);
+
+    EXPECT_FALSE(pinholeResult.success)
+        << "Synthetic case must distinguish the calibrated distortion path from the pinhole overload";
+    ASSERT_TRUE(result.success);
+    EXPECT_EQ(result.numInliers, static_cast<int>(worldPoints.size()));
+    for (std::size_t index = 0; index < trueCenter.size(); ++index)
+    {
+        EXPECT_NEAR(result.C[index], trueCenter[index], 1.0e-6);
+    }
+    for (std::size_t index = 0; index < identity.size(); ++index)
+    {
+        EXPECT_NEAR(result.R[index], identity[index], 1.0e-6);
+    }
+
+    Camera recovered = camera;
+    recovered.setPose(result.R, result.C);
+    for (std::size_t index = 0; index < worldPoints.size(); ++index)
+    {
+        double pixel[2] = {0.0, 0.0};
+        ASSERT_TRUE(recovered.projectWorldPoint(worldPoints[index].data(), pixel));
+        EXPECT_NEAR(pixel[0], imagePoints[index][0], 1.0e-4);
+        EXPECT_NEAR(pixel[1], imagePoints[index][1], 1.0e-4);
+    }
+}
+
+TEST(IntersectionDistortionTest, RecoversWorldPointFromDistortedPixels)
+{
+    const std::array<double, 9> identity{{
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
+    }};
+    Camera camera1;
+    camera1.setIntrinsics(900.0, 875.0, 640.0, 480.0);
+    camera1.setDistortion(-0.28, 0.09, -0.012, 0.003, -0.004);
+    camera1.setPose(identity, {{-1.0, 0.10, 0.0}});
+
+    Camera camera2 = camera1;
+    camera2.setPose(identity, {{1.0, -0.05, 0.10}});
+
+    const std::array<double, 3> expectedPoint{{0.75, -0.55, 3.70}};
+    double pixel1[2] = {0.0, 0.0};
+    double pixel2[2] = {0.0, 0.0};
+    ASSERT_TRUE(camera1.projectWorldPoint(expectedPoint.data(), pixel1));
+    ASSERT_TRUE(camera2.projectWorldPoint(expectedPoint.data(), pixel2));
+
+    const Intersection::Result result =
+        Intersection::intersectPair(camera1, pixel1[0], pixel1[1],
+                                    camera2, pixel2[0], pixel2[1]);
+
+    ASSERT_TRUE(result.valid);
+    for (std::size_t index = 0; index < expectedPoint.size(); ++index)
+    {
+        EXPECT_NEAR(result.point[index], expectedPoint[index], 1.0e-7);
+    }
+    EXPECT_LT(result.ray_miss_distance, 1.0e-8);
+    EXPECT_LT(result.reproj_error_rms, 1.0e-5);
 }
 
 // ─── BundleAdjust 参数验证 ──────────────────────────────────────

@@ -6,7 +6,7 @@
 
 PlaScan 是面向行星表面影像的摄影测量处理系统，主线是从多视角影像生成稀疏点云、密集点云、网格、DEM 和 DOM。项目包含：
 
-- C++17 / CMake 的核心库、CLI 工具和 Qt6 GUI。
+- C++20 / CMake 的核心库、CLI 工具和 Qt6 GUI。
 - OpenCV、LibTorch、GDAL、libtiff、libzip、OpenMP、GTest 等依赖。
 - CUDA 可选加速，主要用于深度学习特征、匹配、MVS 和 dense match。
 - Python 脚本用于模型导出、深度学习特征提取和辅助处理。
@@ -23,7 +23,7 @@ PlaScan 是面向行星表面影像的摄影测量处理系统，主线是从多
   ```
 - 可能存在 GUI、构建、测试或长时间运行的处理任务。需要确认时使用：
   ```bash
-  pgrep -af 'plascan|feature_extract_cli|feature_match_cli|dense_match_cli|triangulate_cli|cmake --build|ctest' || true
+  pgrep -af 'plascan|feature_match_cli|match_photos_cli|dense_match_cli|triangulate_cli|cmake --build|ctest' || true
   ```
 - 不要随意删除、覆盖或重生成 `testData/`、`.plascan` 工程文件、`resources/models/`、用户输出目录或大体量中间结果。需要清理磁盘或重建数据时先确认路径和用途。
 - 子模块目录内的改动要特别谨慎。除非任务明确要求，不要重置、更新或提交 `3rdparty/plapoint`、`3rdparty/plamatrix` 的指针或内部 dirty state。
@@ -33,7 +33,7 @@ PlaScan 是面向行星表面影像的摄影测量处理系统，主线是从多
 
 ### C++
 
-- 使用 C++17，4 空格缩进，不使用 tab，行宽尽量不超过 120 字符。
+- 使用 C++20，4 空格缩进，不使用 tab，行宽尽量不超过 120 字符。
 - 花括号使用 Allman 风格，左大括号独占一行。
   ```cpp
   if (ok)
@@ -106,7 +106,7 @@ python -m py_compile scripts/workflows/extract_features.py
 
 ```powershell
 python scripts\env\setup_python_runtime.py --device cuda --cuda-wheel cu130
-.\.venv\Scripts\python.exe scripts\models\export_lightglue_torchscript.py --help
+.\.venv\Scripts\python.exe scripts\models\export_lightglue_tensorrt.py --help
 ```
 
 若需要运行脚本本体，必须使用同时包含 torch、cv2 和相关模型依赖的 Python 环境。不要在依赖缺失时声称脚本验证通过。
@@ -123,9 +123,7 @@ python scripts\env\setup_python_runtime.py --device cuda --cuda-wheel cu130
 
 ## 模块约定
 
-- `src/core/feature_extractors`：维护 `IExtractor` 接口和各算法实现，新增算法要补工厂、CLI/GUI 参数、模型说明和测试。
-- `src/core/feature_match`：维护匹配器接口和算法实现，注意描述子维度、距离度量和 CUDA/CPU 差异。
-- `src/core/sfm`、`src/core/mvs`、`src/core/dense_match`、`src/core/terrain`：改动会影响重建主链，必须补针对性测试或最小可复现验证命令。
+- `src/core/image_matching`：维护统一算法注册接口、任务内特征、几何验证和逐影像 `.pimatch` 格式；新增算法要补版本/指纹、CLI/GUI 参数、模型说明和测试。
 - `src/gui`：保持对话框、任务 runner、项目服务和主窗口职责分离。UI 文案使用中文，错误信息要能定位到路径、算法或参数。
 - `src/cli`：CLI 参数应与核心配置一致，错误输出适合脚本调用和日志排查。
 - `src/common`：只放跨模块通用能力，不把业务流程塞进 common。
@@ -135,7 +133,7 @@ python scripts\env\setup_python_runtime.py --device cuda --cuda-wheel cu130
 - 新增、删除或移动核心文件后，对照并更新 `docs/PROJECT_ARCHITECTURE.md`。
 - 修改密集匹配、特征提取或 SfM 边界时，同步检查：
   - `src/core/dense_match/README.md`
-  - `src/core/feature_extractors/README.md`
+  - `src/core/image_matching/README.md`
   - `src/core/sfm/README.md`
 - 修改构建、依赖、模型、CLI 或 Docker 流程时，同步检查 `README.md`、`docs/models/README.md` 和 `docker/` 相关脚本说明。
 - 版本更新文档集中维护：
@@ -147,14 +145,10 @@ python scripts\env\setup_python_runtime.py --device cuda --cuda-wheel cu130
 
 ## Git 与提交
 
-- 只有用户明确要求时才 commit。
+- 每一次修改代码后都要 commit。
 - 分支管理建议：
   - `main`：稳定可运行版本，只合并已经构建和测试验证过的代码。
-  - `develop`：日常集成分支，用于汇总多个功能或修复后再进入 `main`。
-  - `feature/<name>`：单个功能开发分支，例如 `feature/windows-packaging`。
-  - `fix/<name>`：单个 bug 修复分支，例如 `fix/mvs-depth-mask`。
   - `release/vX.Y.Z`：发版准备分支，用于版本号、文档、打包和最终验证。
-- 轻量流程也可以只使用 `main` 加 `feature/<name>` / `fix/<name>`，但阶段性成果必须用 tag 和 GitHub Release 记录。
 - 版本 tag 使用语义化版本，并在快速迭代期使用预发布后缀：
   ```bash
   git tag -a v0.2.1-alpha.1 -m "PlaScan v0.2.1-alpha.1"

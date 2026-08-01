@@ -49,7 +49,7 @@ public:
     // 构造函数
     // imgA      — 左侧影像的完整路径
     // imgB      — 右侧影像的完整路径
-    // matchFile — 二进制 .match 格式的匹配结果文件路径
+    // matchFile — 包含当前像对的逐影像 `.pimatch` 二进制分片路径
     // parent    — 父窗口指针
     explicit MatchViewerDialog(const QString &imgA, const QString &imgB,
                                const QString &matchFile, QWidget *parent = nullptr);
@@ -128,7 +128,7 @@ private:
     void loadSettings();
     // 将当前显示参数保存到 project_dialog.json（项目级）
     void saveSettings();
-    // 应用一个稀疏匹配算法变体，必要时重新加载 .match 文件
+    // 应用一个稀疏匹配算法变体，必要时重新加载 `.pimatch` 分片
     void applyMatchVariant(const xjw::aerial_triangulation::MatchVariant &variant, bool forceReload);
 
     // ── 核心控件 ──────────────────────────────────────────────────
@@ -173,7 +173,7 @@ private:
     // ── 数据成员 ──────────────────────────────────────────────────
     QString _imageA;       // 左侧影像路径
     QString _imageB;       // 右侧影像路径
-    QString _matchFile;    // 当前加载的 .match 文件路径
+    QString _matchFile;    // 当前加载的 owner `.pimatch` 分片路径
     int _totalMatches = 0;     // 已加载的总匹配点数（加载成功后更新）
     int _validMatches = -1;    // 空三后仍有效的匹配数，-1 表示暂无分类
     int _invalidMatches = -1;  // 空三后被过滤的匹配数，-1 表示暂无分类

@@ -68,11 +68,11 @@
 
 ## 匹配配对规划与诊断
 
-空三由 `AerialTriangulationWorkflow` 调用时，连接点阶段和 SfM 阶段必须共享显式的
-`assetsDir`、`featureDir`、`matchDir`。Workflow 解析出唯一的
+空三由 `AerialTriangulationWorkflow` 调用时，连接点阶段和 SfM 阶段共享显式的
+`assetsDir` 与 `matchDir`。`matchDir` 指向 `assets/image_matches`，其中每幅影像只有一个
+`.pimatch` 二进制分片；不存在独立特征目录。Workflow 解析出唯一的
 `assets/tie_points/latest_tie_points.json`，`AerialTriangulationPipeline` 只消费该持久化连接点图，
-不再回退扫描特征或匹配目录。特征 sidecar 中记录的路径必须与连接点阶段实际加载的特征文件一致，
-否则索引不能进入观测网络。
+不再回退扫描旧特征文件、成对匹配文件或 JSON sidecar。
 
 ## 输入连接点限额与观测唯一性
 
@@ -85,9 +85,9 @@
 
 质量报告对两视轨迹使用两级门控：比例超过 0.70 时输出 advisory，超过 0.85 时将 `acceptable_for_mvs` 置为 `false`。注册率和低 RMS 不能替代多视轨迹与交会角检查。
 
-匹配缓存中 `feature_format_version >= 2`、两侧索引数组为空且 `num_matches == 0` 的 sidecar
-表示该影像对已确认无匹配。它会作为负缓存计入已处理配对，不进入待生成队列；缺少明确
-`num_matches` 的旧空 sidecar 仍按无效缓存拒绝。
+`.pimatch` 邻接块以统一的算法 ID、算法版本、配置指纹和模型指纹构成缓存键。邻接块中
+`rawMatchCount == 0` 表示该算法配置已经确认该像对无匹配，可作为负缓存跳过重复推理；
+版本或指纹不一致的分片会明确判为不可复用，不做隐式格式转换。
 
 `src/core/aerial_triangulation/reconstruction/SfmPairPlanner.h` 描述大规模项目的 SfM 匹配候选规划。
 实际连接点候选生成由 `matchphototask/PairSelector` 执行，大项目默认不做无约束 N^2 全匹配，
@@ -102,9 +102,6 @@
 `AerialTriangulationWorkflow` 把显式 `allowedPairKeys` 交给 `MatchPhotosTask`，因此高优先级 pair
 会优先进入缓存检查、自动补匹配和后续诊断；SfM 本身不会重新生成匹配。
 
-SfM 匹配阶段会在项目 `assets/reports/` 下输出：
-
-- `matching_quality_report.json`：候选图、实际匹配图、来源统计、候选样本和 BA 前诊断摘要。
-- `matching_quality_report.csv`：完整 pair 明细，包括状态、匹配数、几何内点数、来源、优先级、失败原因。
-
-GUI 的工作流报告会读取 `sfm_diagnostics.pair_plan`，展示规划候选数和来源分布，方便判断当前数据是足迹重叠、空间邻域还是顺序窗口在主导匹配。
+`MatchResultCatalog` 直接扫描 `.pimatch` 中的匹配数、几何内点、残差和覆盖率，并把像对规划结果
+写入 `sfm_diagnostics.pair_plan`。GUI 工作流报告据此展示候选数和来源分布，判断当前数据是足迹重叠、
+空间邻域还是顺序窗口在主导匹配，不再维护另一份匹配质量 sidecar 报告。

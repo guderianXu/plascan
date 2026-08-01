@@ -20,6 +20,7 @@
 #include "ProjectSurveyControl.h"
 #include "io/MarkerSetStore.h"
 #include "TriangulationService.h"
+#include "ImageMatchRepository.h"
 #include "ProjectWorkflowReports.h"
 #include "ProjectWorkflowUtils.h"
 #include "ProjectResultRecords.h"
@@ -37,7 +38,6 @@
 #include "tie_points/ThinTiePointsDialog.h"
 #include "reconstruction/AerialTriangulationDialog.h"
 #include "application/AboutDialog.h"
-#include "reconstruction/MapProjectDialog.h"
 #include "camera/SurveyControlDialog.h"
 #include "image/GenerateMaskDialog.h"
 #include "reconstruction/GenerateModelDialog.h"
@@ -52,7 +52,6 @@
 #include "FeatureResidualLoader.h"
 #include "PhotoStripWidget.h"
 #include "ProjectDashboardWidget.h"
-#include "MatchValidityAnalyzer.h"
 #include "MainMenu.h"
 #include "ProjectUiHydrator.h"
 #include "GuiTaskRunner.h"
@@ -1093,10 +1092,10 @@ TEST(ProjectDataAsyncOpenTest, OpensProjectFromSnapshotAndAppliesResultsLater)
     ASSERT_TRUE(source.createProject(projectPath, QStringLiteral("async_open")));
     ASSERT_TRUE(source.addImages(QStringList{imagePath}));
     ASSERT_TRUE(source.appendResultRecord(
-        QStringLiteral("ipmatch_results"),
-        QJsonObject{{QStringLiteral("image0"), imagePath},
-                    {QStringLiteral("image1"), imagePath},
-                    {QStringLiteral("output"), QStringLiteral("matches/IMG_003.match")}},
+        QStringLiteral("image_match_results"),
+        QJsonObject{{QStringLiteral("image"), imagePath},
+                    {QStringLiteral("output"), QStringLiteral("matches/IMG_003.pimatch")},
+                    {QStringLiteral("neighbors"), QJsonArray{}}},
         true));
     QString saveError;
     ASSERT_TRUE(source.saveProject(&saveError)) << saveError.toStdString();
@@ -1115,7 +1114,7 @@ TEST(ProjectDataAsyncOpenTest, OpensProjectFromSnapshotAndAppliesResultsLater)
     const ProjectResultsSnapshot resultsSnapshot = ProjectData::loadProjectResultsSnapshot(projectPath);
     ASSERT_TRUE(resultsSnapshot.success) << resultsSnapshot.errorMessage.toStdString();
     ASSERT_TRUE(reopened.applyResultsSnapshot(resultsSnapshot, &error)) << error.toStdString();
-    EXPECT_EQ(reopened.metadata().value(QStringLiteral("ipmatch_results")).toArray().size(), 1);
+    EXPECT_EQ(reopened.metadata().value(QStringLiteral("image_match_results")).toArray().size(), 1);
 }
 
 QJsonObject buildImageEntry(const QString &path, const xjw::Camera &camera)
@@ -1124,6 +1123,63 @@ QJsonObject buildImageEntry(const QString &path, const xjw::Camera &camera)
     imageObject[QStringLiteral("path")] = path;
     imageObject[QStringLiteral("camera")] = xjw::common::project::cameraToJson(camera);
     return imageObject;
+}
+
+xjw::image_matching::PairMatchData makeVerifiedPair(
+    const QString &image0,
+    const QString &image1,
+    const QVector<QPointF> &points0,
+    const QVector<QPointF> &points1,
+    const QVector<int> &featureIds0,
+    const QVector<int> &featureIds1)
+{
+    EXPECT_EQ(points0.size(), points1.size());
+    EXPECT_EQ(points0.size(), featureIds0.size());
+    EXPECT_EQ(points0.size(), featureIds1.size());
+
+    xjw::image_matching::PairMatchData pair;
+    pair.image0 = xjw::image_matching::ImageMatchFile::identityForImage(image0, 1000, 800);
+    pair.image1 = xjw::image_matching::ImageMatchFile::identityForImage(image1, 1000, 800);
+    pair.algorithmId = QStringLiteral("sift-lightglue");
+    pair.algorithmVersion = 1;
+    pair.rawMatchCount = static_cast<std::uint32_t>(points0.size());
+    pair.geometryInlierCount = pair.rawMatchCount;
+    pair.tiePointMatchCount = pair.rawMatchCount;
+    pair.geometryPassed = true;
+    pair.geometryModel = xjw::image_matching::GeometryModel::Fundamental;
+    for (int index = 0; index < points0.size(); ++index)
+    {
+        xjw::image_matching::PairCorrespondence correspondence;
+        correspondence.observation0.featureId =
+            static_cast<std::uint32_t>(featureIds0.at(index));
+        correspondence.observation0.x = static_cast<float>(points0.at(index).x());
+        correspondence.observation0.y = static_cast<float>(points0.at(index).y());
+        correspondence.observation1.featureId =
+            static_cast<std::uint32_t>(featureIds1.at(index));
+        correspondence.observation1.x = static_cast<float>(points1.at(index).x());
+        correspondence.observation1.y = static_cast<float>(points1.at(index).y());
+        correspondence.confidence = 1.0f;
+        correspondence.residualPixels = 0.0f;
+        correspondence.flags =
+            xjw::image_matching::MatchRecordFlag::GeometryInlier |
+            xjw::image_matching::MatchRecordFlag::InTiePointTrack;
+        pair.correspondences.push_back(correspondence);
+    }
+    return pair;
+}
+
+QJsonArray imageMatchResultRecords(
+    const xjw::image_matching::ImageMatchRepository &repository,
+    const QStringList &images)
+{
+    QJsonArray records;
+    for (const QString &image : images)
+    {
+        records.append(QJsonObject{
+            {QStringLiteral("image"), image},
+            {QStringLiteral("output"), repository.shardPath(image)}});
+    }
+    return records;
 }
 
 QLineEdit *findLineEditByPlaceholder(QWidget *root, const QString &text)
@@ -1229,78 +1285,24 @@ TEST(ProjectSupportUtilsTest, CollectMatchedPairsUsesFilenameWithSuffix)
     ASSERT_TRUE(tempDir.isValid());
 
     const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("demo.plascan"));
-    const QString matchesDir = xjw::common::project::ProjectIO::ipmatchOutputDir(projectPath);
-    ASSERT_TRUE(QDir().mkpath(matchesDir));
-
-    QFile matchFile(QDir(matchesDir).filePath(QStringLiteral("1__2.match")));
-    ASSERT_TRUE(matchFile.open(QIODevice::WriteOnly));
-    matchFile.write("dummy");
-    matchFile.close();
-
-    QFile sidecarFile(QDir(matchesDir).filePath(QStringLiteral("1__2.match.json")));
-    ASSERT_TRUE(sidecarFile.open(QIODevice::WriteOnly));
-    sidecarFile.write(QJsonDocument(QJsonObject{{QStringLiteral("image0_name"), QStringLiteral("1")},
-                                                {QStringLiteral("image1_name"), QStringLiteral("2")}}).toJson());
-    sidecarFile.close();
-
     QJsonArray images;
     images.append(QJsonObject{{QStringLiteral("path"), QStringLiteral("/tmp/1.jpg")}});
     images.append(QJsonObject{{QStringLiteral("path"), QStringLiteral("/tmp/2.png")}});
     images.append(QJsonObject{{QStringLiteral("path"), QStringLiteral("/tmp/3.tif")}});
 
-    QJsonArray ipmatchResults;
-    ipmatchResults.append(QJsonObject{{QStringLiteral("image0"), QStringLiteral("/tmp/1.jpg")},
-                                      {QStringLiteral("image1"), QStringLiteral("/tmp/3.tif")}});
-
     QJsonObject meta;
     meta[QStringLiteral("images")] = images;
-    meta[QStringLiteral("ipmatch_results")] = ipmatchResults;
+    meta[QStringLiteral("image_match_results")] = QJsonArray{
+        QJsonObject{{QStringLiteral("image"), QStringLiteral("/tmp/1.jpg")},
+                    {QStringLiteral("neighbors"),
+                     QJsonArray{QStringLiteral("/tmp/2.png"),
+                                QStringLiteral("/tmp/3.tif")}}}};
 
     const QVector<QPair<QString, QString>> pairs =
         xjw::common::project::collectMatchedImageNamePairs(projectPath, meta);
 
     EXPECT_TRUE(pairs.contains(qMakePair(QStringLiteral("1.jpg"), QStringLiteral("2.png"))));
     EXPECT_TRUE(pairs.contains(qMakePair(QStringLiteral("1.jpg"), QStringLiteral("3.tif"))));
-}
-
-TEST(ProjectSupportUtilsTest, CollectSettledNoMatchPairsUsesFilenameWithSuffix)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("demo.plascan"));
-    const QString matchesDir = xjw::common::project::ProjectIO::ipmatchOutputDir(projectPath);
-    ASSERT_TRUE(QDir().mkpath(matchesDir));
-
-    QJsonArray noMatchPairs;
-    noMatchPairs.append(QJsonObject{{QStringLiteral("image0"), QStringLiteral("/tmp/1.jpg")},
-                                    {QStringLiteral("image1"), QStringLiteral("/tmp/2.png")},
-                                    {QStringLiteral("feature_algorithm"), QStringLiteral("disk")},
-                                    {QStringLiteral("match_algorithm"), QStringLiteral("lightglue")}});
-    noMatchPairs.append(QJsonObject{{QStringLiteral("image0"), QStringLiteral("3")},
-                                    {QStringLiteral("image1"), QStringLiteral("4")},
-                                    {QStringLiteral("feature_algorithm"), QStringLiteral("disk")},
-                                    {QStringLiteral("match_algorithm"), QStringLiteral("lightglue")}});
-
-    QFile noMatchFile(QDir(matchesDir).filePath(QStringLiteral("no_match_pairs.json")));
-    ASSERT_TRUE(noMatchFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
-    noMatchFile.write(QJsonDocument(noMatchPairs).toJson(QJsonDocument::Compact));
-    noMatchFile.close();
-
-    QJsonArray images;
-    images.append(QJsonObject{{QStringLiteral("path"), QStringLiteral("/tmp/1.jpg")}});
-    images.append(QJsonObject{{QStringLiteral("path"), QStringLiteral("/tmp/2.png")}});
-    images.append(QJsonObject{{QStringLiteral("path"), QStringLiteral("/tmp/3.tif")}});
-    images.append(QJsonObject{{QStringLiteral("path"), QStringLiteral("/tmp/4.tif")}});
-
-    QJsonObject meta;
-    meta[QStringLiteral("images")] = images;
-
-    const QVector<QPair<QString, QString>> pairs =
-        xjw::common::project::collectSettledNoMatchImageNamePairs(projectPath, meta);
-
-    EXPECT_TRUE(pairs.contains(qMakePair(QStringLiteral("1.jpg"), QStringLiteral("2.png"))));
-    EXPECT_TRUE(pairs.contains(qMakePair(QStringLiteral("3.tif"), QStringLiteral("4.tif"))));
 }
 
 TEST(ProjectDashboardSummaryTest, EmptyMetadataShowsMissingReadOnlyWorkflow)
@@ -1334,8 +1336,9 @@ TEST(ProjectDashboardSummaryTest, SummarizesWorkflowReportsAndReferenceDatasets)
 
     QJsonObject meta;
     meta[QStringLiteral("project_files")] = QJsonObject{{QStringLiteral("images"), images}};
-    meta[QStringLiteral("ipfind_results")] = QJsonArray{QJsonObject{{QStringLiteral("path"), QStringLiteral("ip.json")}}};
-    meta[QStringLiteral("ipmatch_results")] = QJsonArray{QJsonObject{{QStringLiteral("path"), QStringLiteral("matches.json")}}};
+    meta[QStringLiteral("image_match_results")] =
+        QJsonArray{QJsonObject{{QStringLiteral("image"), QStringLiteral("E:/data/img_001.tif")},
+                               {QStringLiteral("output"), QStringLiteral("img_001.pimatch")}}};
     meta[QStringLiteral("aerial_triangulation_results")] =
         QJsonArray{QJsonObject{{QStringLiteral("sparse_point_count"), 1200}}};
     meta[QStringLiteral("bundle_adjust_results")] =
@@ -1499,195 +1502,6 @@ TEST(ProjectSupportUtilsTest, CameraJsonRoundTripPreservesUnitsAndDepthDirection
     EXPECT_DOUBLE_EQ(restoredCenter[0], sourceCenter[0]);
     EXPECT_DOUBLE_EQ(restoredCenter[1], sourceCenter[1]);
     EXPECT_DOUBLE_EQ(restoredCenter[2], sourceCenter[2]);
-}
-
-TEST(ProjectSupportUtilsTest, ResolveFeaturePathFromTokenSupportsSuffix)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("demo.plascan"));
-    const QString ipDir = xjw::common::project::ProjectIO::ipfindOutputDir(projectPath);
-    ASSERT_TRUE(QDir().mkpath(ipDir));
-
-    const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("1.jpg"));
-    QFile imageFile(imagePath);
-    ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
-    imageFile.write("img");
-    imageFile.close();
-
-    const QString spPath = QDir(ipDir).filePath(QStringLiteral("1.sp"));
-    QFile spFile(spPath);
-    ASSERT_TRUE(spFile.open(QIODevice::WriteOnly));
-    spFile.write("sp");
-    spFile.close();
-
-    QJsonArray images;
-    images.append(QJsonObject{{QStringLiteral("path"), imagePath}});
-
-    QJsonObject meta;
-    meta[QStringLiteral("images")] = images;
-
-    EXPECT_EQ(xjw::common::project::resolveProjectImagePathFromToken(QStringLiteral("1.jpg"), meta), imagePath);
-    EXPECT_EQ(xjw::common::project::resolveProjectFeaturePathFromToken(projectPath, meta, QStringLiteral("1.jpg")), spPath);
-    EXPECT_EQ(xjw::common::project::resolveProjectFeaturePathFromToken(projectPath, meta, imagePath), spPath);
-}
-
-TEST(ProjectSupportUtilsTest, InfersDiskFeatureSuffixWhenProjectHasOnlyDskOutputs)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("demo.plascan"));
-    const QString ipDir = xjw::common::project::ProjectIO::ipfindOutputDir(projectPath);
-    ASSERT_TRUE(QDir().mkpath(ipDir));
-
-    const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("66.png"));
-    QFile imageFile(imagePath);
-    ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
-    imageFile.write("img");
-    imageFile.close();
-
-    const QString dskPath = QDir(ipDir).filePath(QStringLiteral("66.dsk"));
-    QFile dskFile(dskPath);
-    ASSERT_TRUE(dskFile.open(QIODevice::WriteOnly));
-    dskFile.write("dsk");
-    dskFile.close();
-
-    QJsonArray images;
-    images.append(QJsonObject{{QStringLiteral("path"), imagePath}});
-
-    QJsonObject meta;
-    meta[QStringLiteral("images")] = images;
-
-    EXPECT_EQ(xjw::common::project::inferPreferredFeatureSuffix(projectPath, meta),
-              QStringLiteral(".dsk"));
-}
-
-TEST(ProjectSupportUtilsTest, InfersSiftFeatureSuffixBeforeLegacyDskOutputs)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("demo.plascan"));
-    const QString ipDir = xjw::common::project::ProjectIO::ipfindOutputDir(projectPath);
-    ASSERT_TRUE(QDir().mkpath(ipDir));
-
-    const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("66.png"));
-    QFile imageFile(imagePath);
-    ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
-    imageFile.write("img");
-    imageFile.close();
-
-    for (const QString &suffix : {QStringLiteral(".dsk"), QStringLiteral(".sift")})
-    {
-        QFile featureFile(QDir(ipDir).filePath(QStringLiteral("66") + suffix));
-        ASSERT_TRUE(featureFile.open(QIODevice::WriteOnly));
-        featureFile.write("feature");
-        featureFile.close();
-    }
-
-    QJsonObject meta;
-    meta[QStringLiteral("images")] = QJsonArray{
-        QJsonObject{{QStringLiteral("path"), imagePath}}
-    };
-
-    EXPECT_EQ(xjw::common::project::inferPreferredFeatureSuffix(projectPath, meta),
-              QStringLiteral(".sift"));
-
-    const QStringList suffixes = xjw::common::project::projectFeatureSuffixes(projectPath, meta);
-    ASSERT_FALSE(suffixes.isEmpty());
-    EXPECT_EQ(suffixes.first(), QStringLiteral(".sift"));
-}
-
-TEST(ProjectSupportUtilsTest, ResolvesUnavailableLegacyDskSuffixToAvailableSiftFeature)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("demo.plascan"));
-    const QString ipDir = xjw::common::project::ProjectIO::ipfindOutputDir(projectPath);
-    ASSERT_TRUE(QDir().mkpath(ipDir));
-
-    const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("66.png"));
-    QFile imageFile(imagePath);
-    ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
-    imageFile.write("img");
-    imageFile.close();
-
-    QFile siftFile(QDir(ipDir).filePath(QStringLiteral("66.sift")));
-    ASSERT_TRUE(siftFile.open(QIODevice::WriteOnly));
-    siftFile.write("sift");
-    siftFile.close();
-
-    QJsonObject meta;
-    meta[QStringLiteral("images")] = QJsonArray{
-        QJsonObject{{QStringLiteral("path"), imagePath}}
-    };
-
-    EXPECT_EQ(xjw::common::project::resolvePreferredFeatureSuffix(projectPath,
-                                                               meta,
-                                                               QStringLiteral(".dsk")),
-              QStringLiteral(".sift"));
-}
-
-TEST(ProjectSupportUtilsTest, DetectsWhetherProjectHasRequestedFeatureSuffix)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("demo.plascan"));
-    const QString ipDir = xjw::common::project::ProjectIO::ipfindOutputDir(projectPath);
-    ASSERT_TRUE(QDir().mkpath(ipDir));
-
-    const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("66.png"));
-    QFile imageFile(imagePath);
-    ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
-    imageFile.write("img");
-    imageFile.close();
-
-    QFile dskFile(QDir(ipDir).filePath(QStringLiteral("66.dsk")));
-    ASSERT_TRUE(dskFile.open(QIODevice::WriteOnly));
-    dskFile.write("dsk");
-    dskFile.close();
-
-    QJsonArray images;
-    images.append(QJsonObject{{QStringLiteral("path"), imagePath}});
-
-    QJsonObject meta;
-    meta[QStringLiteral("images")] = images;
-
-    EXPECT_TRUE(xjw::common::project::projectHasFeatureSuffix(projectPath, meta, QStringLiteral(".dsk")));
-    EXPECT_FALSE(xjw::common::project::projectHasFeatureSuffix(projectPath, meta, QStringLiteral(".sp")));
-}
-
-TEST(ProjectSupportUtilsTest, ListsOnlyFeatureSuffixesPresentInProject)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("demo.plascan"));
-    const QString ipDir = xjw::common::project::ProjectIO::ipfindOutputDir(projectPath);
-    ASSERT_TRUE(QDir().mkpath(ipDir));
-
-    const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("75.png"));
-    QFile imageFile(imagePath);
-    ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
-    imageFile.write("img");
-    imageFile.close();
-
-    QFile dskFile(QDir(ipDir).filePath(QStringLiteral("75.dsk")));
-    ASSERT_TRUE(dskFile.open(QIODevice::WriteOnly));
-    dskFile.write("dsk");
-    dskFile.close();
-
-    QJsonObject meta;
-    meta[QStringLiteral("images")] = QJsonArray{
-        QJsonObject{{QStringLiteral("path"), imagePath}}
-    };
-
-    const QStringList suffixes = xjw::common::project::projectFeatureSuffixes(projectPath, meta);
-    EXPECT_EQ(suffixes, QStringList{QStringLiteral(".dsk")});
 }
 
 TEST(DepthFrameUtilsTest, ExistingFrameArtifactsRequirePreviewAndRawDepth)
@@ -2699,13 +2513,13 @@ TEST(FeatureNamingCleanupTest, CanvasWidgetDoesNotIncludeTorchExtractorHeaders)
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_FALSE(source.contains(QStringLiteral("#include \"SuperPoint.h\"")))
-        << "CanvasWidget only reads serialized features and should not pull LibTorch extractor headers into the view.";
+        << "CanvasWidget only reads persisted match observations.";
     EXPECT_FALSE(source.contains(QStringLiteral("QtTorchMacroGuard")));
     EXPECT_FALSE(source.contains(QStringLiteral("NEED_RESTORE_SLOTS")));
     EXPECT_FALSE(source.contains(QStringLiteral("#include \"FeatureFileIO.h\"")));
     EXPECT_FALSE(source.contains(QStringLiteral("#include \"FeatureOutput.h\"")));
     EXPECT_TRUE(source.contains(QStringLiteral("#include \"LayerFeatureLoader.h\"")));
-    EXPECT_TRUE(source.contains(QStringLiteral("loadFeatureKeypointsFromFile")));
+    EXPECT_TRUE(source.contains(QStringLiteral("loadMatchedKeypointsForImage")));
     EXPECT_TRUE(source.contains(QStringLiteral("#include <opencv2/imgcodecs.hpp>")));
     EXPECT_TRUE(source.contains(QStringLiteral("#include <opencv2/imgproc.hpp>")));
 }
@@ -2754,14 +2568,14 @@ TEST(CodeStyleTest, SettingsFilesUseLowerCamelPrivateMemberNames)
 
 TEST(CodeStyleTest, ProjectConfigManagersUseLowerCamelPrivateMemberNames)
 {
-    const QString configHeader = readProjectSourceFile(QStringLiteral("src/gui/config/ProjectConfigManager.h"));
-    const QString configSource = readProjectSourceFile(QStringLiteral("src/gui/config/ProjectConfigManager.cpp"));
-    const QString uiHeader = readProjectSourceFile(QStringLiteral("src/gui/config/ProjectUiConfigManager.h"));
-    const QString uiSource = readProjectSourceFile(QStringLiteral("src/gui/config/ProjectUiConfigManager.cpp"));
+    const QString configHeader = readProjectSourceFile(QStringLiteral("src/common/project/ProjectConfigManager.h"));
+    const QString configSource = readProjectSourceFile(QStringLiteral("src/common/project/ProjectConfigManager.cpp"));
+    const QString uiHeader = readProjectSourceFile(QStringLiteral("src/common/project/ProjectUiConfigManager.h"));
+    const QString uiSource = readProjectSourceFile(QStringLiteral("src/common/project/ProjectUiConfigManager.cpp"));
     const QString workflowHeader =
-        readProjectSourceFile(QStringLiteral("src/gui/config/ProjectWorkflowConfigManager.h"));
+        readProjectSourceFile(QStringLiteral("src/common/project/ProjectWorkflowConfigManager.h"));
     const QString workflowSource =
-        readProjectSourceFile(QStringLiteral("src/gui/config/ProjectWorkflowConfigManager.cpp"));
+        readProjectSourceFile(QStringLiteral("src/common/project/ProjectWorkflowConfigManager.cpp"));
     ASSERT_FALSE(configHeader.isEmpty());
     ASSERT_FALSE(configSource.isEmpty());
     ASSERT_FALSE(uiHeader.isEmpty());
@@ -2869,8 +2683,8 @@ TEST(CodeStyleTest, ProjectResourceCleanupServiceSourceKeepsLinesWithinStyleLimi
 
 TEST(CodeStyleTest, ProjectFilesManagerUsesLowerCamelPrivateMemberNames)
 {
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/project/data/ProjectFilesManager.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/data/ProjectFilesManager.cpp"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/common/project/ProjectDocumentModel.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/common/project/ProjectDocumentModel.cpp"));
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
 
@@ -2898,8 +2712,8 @@ TEST(CodeStyleTest, ProjectFilesManagerUsesLowerCamelPrivateMemberNames)
 
 TEST(CodeStyleTest, ProjectDataUsesLowerCamelPrivateMemberNames)
 {
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/project/data/ProjectData.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/data/ProjectData.cpp"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/common/project/ProjectSessionModel.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/common/project/ProjectSessionModel.cpp"));
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
 
@@ -3248,11 +3062,10 @@ TEST(CodeStyleTest, CanvasWidgetUsesLowerCamelPrivateMemberNames)
     const QStringList expectedMembers = {
         QStringLiteral("LayerRenderer *_layerRenderer{};"),
         QStringLiteral("bool _showInterestPoints{true};"),
-        QStringLiteral("QString _activeFeatureSuffix{QStringLiteral(\".sp\")};"),
         QStringLiteral("LayerRenderer::FeatureDisplayOptions _currentFeatureOpts;"),
         QStringLiteral("QString _currentImagePath;"),
         QStringLiteral("QFutureWatcher<QImage> *_imageWatcher{nullptr};"),
-        QStringLiteral("std::map<QString, std::pair<QDateTime, std::vector<cv::KeyPoint>>> _spCache;"),
+        QStringLiteral("std::map<QString, std::pair<QDateTime, std::vector<cv::KeyPoint>>> _matchObservationCache;"),
         QStringLiteral("int _featureLoadGeneration{0};"),
         QStringLiteral("double _zoomFactor{1.0};"),
         QStringLiteral("const double _zoomStep{1.15};"),
@@ -3267,18 +3080,14 @@ TEST(CodeStyleTest, CanvasWidgetUsesLowerCamelPrivateMemberNames)
         EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
     }
 
-    EXPECT_TRUE(header.contains(QStringLiteral("return _activeFeatureSuffix;")))
-        << "CanvasWidget accessor should use the renamed member";
-
     const QStringList oldMemberNames = {
         QStringLiteral("m_layerRenderer"),
         QStringLiteral("m_showInterestPoints"),
-        QStringLiteral("m_activeFeatureSuffix"),
         QStringLiteral("m_currentFeatureOpts"),
         QStringLiteral("m_currentImagePath"),
         QStringLiteral("m_spWatcher"),
         QStringLiteral("m_imageWatcher"),
-        QStringLiteral("m_spCache"),
+        QStringLiteral("m_matchObservationCache"),
         QStringLiteral("m_zoomFactor"),
         QStringLiteral("m_zoomStep"),
         QStringLiteral("m_zoomMin"),
@@ -3863,84 +3672,24 @@ TEST(CodeStyleTest, DenseMatchCoreUsesLowerCamelPrivateMemberNames)
     }
 }
 
-TEST(CodeStyleTest, TorchFeatureWrappersUseLowerCamelPrivateMemberNames)
+TEST(CodeStyleTest, UnifiedImageMatchingWrappersUseLowerCamelPrivateMemberNames)
 {
-    const QHash<QString, QStringList> expectedByHeader = {
-        {QStringLiteral("src/core/feature_extractors/disk/DiskExtractor.h"),
-         {QStringLiteral("DiskConfig _config;"),
-          QStringLiteral("torch::jit::script::Module _model;"),
-          QStringLiteral("torch::Device _device{torch::kCPU};")}},
-        {QStringLiteral("src/core/feature_extractors/aliked/AlikedExtractor.h"),
-         {QStringLiteral("AlikedConfig _config;"),
-          QStringLiteral("torch::jit::script::Module _model;"),
-          QStringLiteral("torch::Device _device{torch::kCPU};")}},
-        {QStringLiteral("src/core/feature_match/loftr/LoFTRMatcher.h"),
-         {QStringLiteral("LoFTRConfig _config;"),
-          QStringLiteral("torch::jit::script::Module _model;"),
-          QStringLiteral("torch::Device _device{torch::kCPU};")}},
-    };
-    for (auto it = expectedByHeader.cbegin(); it != expectedByHeader.cend(); ++it)
-    {
-        const QString header = readProjectSourceFile(it.key());
-        ASSERT_FALSE(header.isEmpty()) << qPrintable(it.key());
-        for (const QString &expectedMember : it.value())
-        {
-            EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(it.key() + QStringLiteral(": ") + expectedMember);
-        }
-    }
+    const QString header = readProjectSourceFile(
+        QStringLiteral("src/core/image_matching/lightglue/TensorRtLightGlueMatcher.h"));
+    const QString registry = readProjectSourceFile(
+        QStringLiteral("src/core/image_matching/ImageMatchingRegistry.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(registry.isEmpty());
 
-    const QStringList files = {
-        QStringLiteral("src/core/feature_extractors/disk/DiskExtractor.h"),
-        QStringLiteral("src/core/feature_extractors/disk/DiskExtractor.cpp"),
-        QStringLiteral("src/core/feature_extractors/aliked/AlikedExtractor.h"),
-        QStringLiteral("src/core/feature_extractors/aliked/AlikedExtractor.cpp"),
-        QStringLiteral("src/core/feature_match/loftr/LoFTRMatcher.h"),
-        QStringLiteral("src/core/feature_match/loftr/LoFTRMatcher.cpp"),
-    };
-    const QStringList oldMemberNames = {
-        QStringLiteral("m_cfg"),
-        QStringLiteral("m_model"),
-        QStringLiteral("m_device"),
-    };
-    for (const QString &path : files)
-    {
-        const QString source = readProjectSourceFile(path);
-        ASSERT_FALSE(source.isEmpty()) << qPrintable(path);
-        for (const QString &oldName : oldMemberNames)
-        {
-            EXPECT_FALSE(source.contains(oldName)) << qPrintable(path + QStringLiteral(": ") + oldName);
-        }
-    }
-}
-
-TEST(CodeStyleTest, ExtractorFactoryUsesLowerCamelPrivateMemberNames)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("src/core/feature_extractors/ExtractorFactory.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(source.contains(QStringLiteral("std::string _algorithm;")));
-    EXPECT_TRUE(source.contains(QStringLiteral("SuperPointConfig _config;")));
-
-    EXPECT_FALSE(source.contains(QStringLiteral("m_algo")));
-    EXPECT_FALSE(source.contains(QStringLiteral("m_cfg")));
-}
-
-TEST(CodeStyleTest, MatcherFactoryUsesLowerCamelPrivateMemberNames)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("src/core/feature_match/MatcherFactory.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(source.contains(QStringLiteral("std::string _algorithm;")));
-    EXPECT_TRUE(source.contains(QStringLiteral("MatcherConfig _config;")));
-
-    EXPECT_FALSE(source.contains(QStringLiteral("m_algo")));
-    EXPECT_FALSE(source.contains(QStringLiteral("m_cfg")));
+    EXPECT_TRUE(header.contains(QStringLiteral("std::unique_ptr<Impl> _impl;")));
+    EXPECT_FALSE(header.contains(QStringLiteral("m_impl")));
+    EXPECT_FALSE(registry.contains(QStringLiteral("MatcherFactory")));
 }
 
 TEST(CodeStyleTest, TensorRtLightGlueMatcherHeaderKeepsLinesWithinStyleLimit)
 {
     const QString header = readProjectSourceFile(
-        QStringLiteral("src/core/feature_match/lightglue/TensorRtLightGlueMatcher.h"));
+        QStringLiteral("src/core/image_matching/lightglue/TensorRtLightGlueMatcher.h"));
     ASSERT_FALSE(header.isEmpty());
 
     const QStringList lines = header.split(QLatin1Char('\n'));
@@ -4045,36 +3794,6 @@ TEST(CodeStyleTest, BaInputBuilderSourceKeepsLinesWithinStyleLimit)
     }
 }
 
-TEST(CodeStyleTest, SuperPointBatchSourceKeepsLinesWithinStyleLimit)
-{
-    const QString source =
-        readProjectSourceFile(QStringLiteral("src/core/feature_extractors/superpoint/SuperPointBatch.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const QStringList lines = source.split(QLatin1Char('\n'));
-    for (int i = 0; i < lines.size(); ++i)
-    {
-        EXPECT_LE(lines.at(i).size(), 120)
-            << "SuperPointBatch.cpp:" << (i + 1)
-            << " has " << lines.at(i).size() << " characters";
-    }
-}
-
-TEST(CodeStyleTest, SuperPointSourceKeepsLinesWithinStyleLimit)
-{
-    const QString source =
-        readProjectSourceFile(QStringLiteral("src/core/feature_extractors/superpoint/SuperPoint.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const QStringList lines = source.split(QLatin1Char('\n'));
-    for (int i = 0; i < lines.size(); ++i)
-    {
-        EXPECT_LE(lines.at(i).size(), 120)
-            << "SuperPoint.cpp:" << (i + 1)
-            << " has " << lines.at(i).size() << " characters";
-    }
-}
-
 TEST(CodeStyleTest, ProjectModelManagerUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectModelManager.h"));
@@ -4112,25 +3831,16 @@ TEST(CodeStyleTest, ProjectModelManagerSourceKeepsLinesWithinStyleLimit)
     }
 }
 
-TEST(CodeStyleTest, ProjectReconstructionManagerUsesLowerCamelPrivateMemberNames)
+TEST(GuiArchitectureTest, RedundantProjectForwardersAreRemoved)
 {
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectReconstructionManager.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectReconstructionManager.cpp"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(header.contains(QStringLiteral("ProjectSparseReconstructionManager *_sparseManager = nullptr;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("ProjectModelManager *_modelManager = nullptr;")));
-
-    const QStringList oldMemberNames = {
-        QStringLiteral("m_sparseManager"),
-        QStringLiteral("m_modelManager"),
-    };
-    for (const QString &oldName : oldMemberNames)
-    {
-        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
-        EXPECT_FALSE(source.contains(oldName)) << qPrintable(oldName);
-    }
+    EXPECT_TRUE(readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectReconstructionManager.h")).isEmpty());
+    EXPECT_TRUE(readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectReconstructionManager.cpp")).isEmpty());
+    EXPECT_TRUE(readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectTaskDispatcher.h")).isEmpty());
+    EXPECT_TRUE(readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectTaskDispatcher.cpp")).isEmpty());
 }
 
 TEST(CodeStyleTest, ProjectManagerUsesLowerCamelPrivateMemberNames)
@@ -4144,10 +3854,10 @@ TEST(CodeStyleTest, ProjectManagerUsesLowerCamelPrivateMemberNames)
         QStringLiteral("QWidget *_parent = nullptr;"),
         QStringLiteral("ProjectData *_projectData = nullptr;"),
         QStringLiteral("FileDialogStateManager *_fileDialogState = nullptr;"),
-        QStringLiteral("ProjectReconstructionManager *_reconstructionManager = nullptr;"),
+        QStringLiteral("ProjectSparseReconstructionManager *_sparseReconstructionManager = nullptr;"),
+        QStringLiteral("ProjectModelManager *_modelManager = nullptr;"),
         QStringLiteral("ProjectTerrainProductsManager *_terrainProductsManager = nullptr;"),
         QStringLiteral("ProjectCameraSetupManager *_cameraSetupManager = nullptr;"),
-        QStringLiteral("ProjectTaskDispatcher *_taskDispatcher = nullptr;"),
         QStringLiteral("ProjectUiCommands *_uiCommands = nullptr;"),
         QStringLiteral("std::shared_ptr<std::atomic<bool>> _atCancelFlag;"),
         QStringLiteral("QMap<QString, QJsonObject> _pendingBaCameraMeta;"),
@@ -4164,10 +3874,10 @@ TEST(CodeStyleTest, ProjectManagerUsesLowerCamelPrivateMemberNames)
         QStringLiteral("m_parent"),
         QStringLiteral("m_projectData"),
         QStringLiteral("m_fileDialogState"),
-        QStringLiteral("m_reconstructionManager"),
+        QStringLiteral("m_sparseReconstructionManager"),
+        QStringLiteral("m_modelManager"),
         QStringLiteral("m_terrainProductsManager"),
         QStringLiteral("m_cameraSetupManager"),
-        QStringLiteral("m_taskDispatcher"),
         QStringLiteral("m_uiCommands"),
         QStringLiteral("m_atCancelFlag"),
         QStringLiteral("m_pendingBaCameraMeta"),
@@ -6513,14 +6223,14 @@ TEST(TiePointResultServiceTest, ReplaceRejectsMissingNewSparseCloudWithoutChangi
     EXPECT_EQ(records.first().toObject(), oldRecord);
 }
 
-TEST(TiePointResultServiceTest, ReplaceRejectsMissingListedSidecar)
+TEST(TiePointResultServiceTest, ReplaceRejectsMissingListedArtifact)
 {
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
     ProjectData projectData;
-    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("missing_sidecar.plascan"));
-    ASSERT_TRUE(projectData.createProject(projectPath, QStringLiteral("missing_sidecar")));
+    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("missing_artifact.plascan"));
+    ASSERT_TRUE(projectData.createProject(projectPath, QStringLiteral("missing_artifact")));
     const QString sparsePath = QDir(tempDir.path()).filePath(QStringLiteral("sparse.ply"));
     QFile sparseFile(sparsePath);
     ASSERT_TRUE(sparseFile.open(QIODevice::WriteOnly));
@@ -9288,41 +8998,6 @@ TEST(DepthPyramidDiagnosticsTest, IntermediateLevelPreviewsFlowToPhotoOverlayOnl
     EXPECT_FALSE(tree.contains(QStringLiteral("appendItemRow(depth_frame_item")));
 }
 
-TEST(DenseCloudPostProcessMetadataTest, TerrainSpikeFilterPublishesProductionTerrainStage)
-{
-    const QString source =
-        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int refineStart = source.indexOf(
-        QStringLiteral("void ProjectDenseReconstructionManager::startDenseCloudRefineAsync"));
-    ASSERT_GE(refineStart, 0);
-    const int recordStart = source.indexOf(QStringLiteral("QJsonObject record = makeDenseResultRecord"), refineStart);
-    ASSERT_GE(recordStart, 0);
-    const int upsertStart = source.indexOf(QStringLiteral("upsertProjectRecordByPath"), recordStart);
-    ASSERT_GT(upsertStart, recordStart);
-    const QString recordBlock = source.mid(recordStart, upsertStart - recordStart);
-
-    EXPECT_TRUE(recordBlock.contains(QStringLiteral("QStringLiteral(\"production\")")));
-    EXPECT_TRUE(recordBlock.contains(QStringLiteral("QStringLiteral(\"terrain\")")));
-    EXPECT_TRUE(recordBlock.contains(QStringLiteral("QStringLiteral(\"dense_cloud_surface_cleanup\")")));
-    EXPECT_TRUE(recordBlock.contains(QStringLiteral("QStringLiteral(\"streaming_cli\")")));
-    EXPECT_TRUE(recordBlock.contains(QStringLiteral("request.terrainFilterPasses")));
-    EXPECT_TRUE(recordBlock.contains(QStringLiteral("dense_refine_report")));
-
-    const int fallbackRecordStart = source.indexOf(QStringLiteral("const bool terrainProductionCloud"), upsertStart);
-    ASSERT_GT(fallbackRecordStart, upsertStart);
-    const int fallbackUpsertStart = source.indexOf(QStringLiteral("upsertProjectRecordByPath"), fallbackRecordStart);
-    ASSERT_GT(fallbackUpsertStart, fallbackRecordStart);
-    const QString fallbackRecordBlock = source.mid(fallbackRecordStart, fallbackUpsertStart - fallbackRecordStart);
-
-    EXPECT_TRUE(fallbackRecordBlock.contains(QStringLiteral("request.terrainSpikeFilterEnabled")));
-    EXPECT_TRUE(fallbackRecordBlock.contains(QStringLiteral("QStringLiteral(\"production\")")));
-    EXPECT_TRUE(fallbackRecordBlock.contains(QStringLiteral("QStringLiteral(\"terrain\")")));
-    EXPECT_TRUE(fallbackRecordBlock.contains(QStringLiteral("QStringLiteral(\"dense_cloud_surface_cleanup\")")));
-    EXPECT_TRUE(fallbackRecordBlock.contains(QStringLiteral("QStringLiteral(\"refined\")")));
-}
-
 TEST(TaskStatusWidgetTest, ShowsProgressAndPreservesCancellingState)
 {
     TaskStatusWidget widget;
@@ -9378,7 +9053,9 @@ TEST(ProjectDashboardWidgetTest, LoadsMetadataIntoReadOnlyWorkflowAndReferenceSu
 
     QJsonObject meta;
     meta[QStringLiteral("images")] = images;
-    meta[QStringLiteral("ipfind_results")] = QJsonArray{QJsonObject{{QStringLiteral("path"), QStringLiteral("ip.json")}}};
+    meta[QStringLiteral("image_match_results")] =
+        QJsonArray{QJsonObject{{QStringLiteral("image"), QStringLiteral("E:/data/img_001.tif")},
+                               {QStringLiteral("output"), QStringLiteral("img_001.pimatch")}}};
     meta[QStringLiteral("reference_datasets")] =
         QJsonArray{QJsonObject{{QStringLiteral("path"), QStringLiteral("scan.las")},
                                {QStringLiteral("type"), QStringLiteral("lidar")},
@@ -9720,50 +9397,6 @@ TEST(AerialTriangulationModuleLayoutTest, AlignPhotosCodeLivesInDedicatedCoreMod
     EXPECT_FALSE(cliCmake.contains(QStringLiteral("src/core/pipeline/SFMService.cpp")));
 }
 
-TEST(AerialTriangulationWorkflowTest, SparseOnlyWorkflowStopsBeforeDenseStages)
-{
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_FALSE(header.contains(QStringLiteral("openAerialTriangulationDialog")));
-    EXPECT_TRUE(header.contains(QStringLiteral("openWorkflowAerialTriangulationDialog")));
-    EXPECT_TRUE(header.contains(QStringLiteral("startAerialTriangulationWorkflow")));
-    EXPECT_TRUE(source.contains(QStringLiteral("DialogSettingKeys::AerialTriangulation")));
-    const int workflowDialogStart = source.indexOf(
-        QStringLiteral("void MenuWorkflowController::openWorkflowAerialTriangulationDialog"));
-    ASSERT_GE(workflowDialogStart, 0);
-    const int workflowDialogEnd = source.indexOf(
-        QStringLiteral("void MenuWorkflowController::startAerialTriangulationWorkflow"),
-        workflowDialogStart);
-    ASSERT_GT(workflowDialogEnd, workflowDialogStart);
-    const QString workflowDialogBody = source.mid(workflowDialogStart, workflowDialogEnd - workflowDialogStart);
-    EXPECT_TRUE(workflowDialogBody.contains(QStringLiteral("AerialTriangulationDialog")));
-    EXPECT_TRUE(workflowDialogBody.contains(QStringLiteral("dlg.exec()")));
-    EXPECT_TRUE(workflowDialogBody.contains(QStringLiteral("dlg.collectSettings()")));
-    EXPECT_TRUE(workflowDialogBody.contains(QStringLiteral("startAerialTriangulationWorkflow(settings)")));
-
-    EXPECT_TRUE(source.contains(QStringLiteral("source\"] = QStringLiteral(\"aerial_triangulation\")"))
-                || source.contains(QStringLiteral("source\", QStringLiteral(\"aerial_triangulation\")"))
-                || source.contains(QStringLiteral("resultRecordExtra[QStringLiteral(\"source\")] = QStringLiteral(\"aerial_triangulation\")")));
-
-    const int sparseStart = source.indexOf(QStringLiteral("void MenuWorkflowController::startAerialTriangulationWorkflow"));
-    ASSERT_GE(sparseStart, 0);
-    const int nextFunction = source.indexOf(QStringLiteral("void MenuWorkflowController::openOverlapAnalysisDialog"),
-                                            sparseStart);
-    ASSERT_GT(nextFunction, sparseStart);
-    const QString sparseBlock = source.mid(sparseStart, nextFunction - sparseStart);
-    EXPECT_TRUE(sparseBlock.contains(QStringLiteral("AerialTriangulationWorkflow::run")));
-    EXPECT_TRUE(sparseBlock.contains(QStringLiteral("replaceTiePointResult")));
-    EXPECT_FALSE(sparseBlock.contains(QStringLiteral("startGenerateDenseCloudAsync")));
-    EXPECT_FALSE(sparseBlock.contains(QStringLiteral("startDenseCloudRefineAsync")));
-    EXPECT_FALSE(sparseBlock.contains(QStringLiteral("startMeshReconstructionAsync")));
-    EXPECT_FALSE(sparseBlock.contains(QStringLiteral("startDenseMatch")));
-    EXPECT_FALSE(sparseBlock.contains(QStringLiteral("startMVS")));
-    EXPECT_FALSE(sparseBlock.contains(QStringLiteral("startMesh")));
-}
-
 TEST(AerialTriangulationWorkflowTest, ReferencePreselectionRequiresCompleteCameraReferences)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
@@ -9819,7 +9452,7 @@ TEST(AerialTriangulationWorkflowTest, TiePointPreparationUsesUnifiedDeviceMappin
         QStringLiteral("matchphotos::ComputeDevice computeDevice"));
     ASSERT_GE(helperStart, 0);
     const int helperEnd = workflow.indexOf(
-        QStringLiteral("QString normalizeMatcher"),
+        QStringLiteral("int tiePointProgress"),
         helperStart);
     ASSERT_GT(helperEnd, helperStart);
     const QString helperBody = workflow.mid(helperStart, helperEnd - helperStart);
@@ -9863,8 +9496,11 @@ TEST(AerialTriangulationWorkflowTest, TiePointPreparationPassesMaskOptionsToMatc
     EXPECT_TRUE(optionsBody.contains(QStringLiteral("tieOptions.maskApplyMode")))
         << "空三对话框的掩膜参数必须传给创建连接点任务。";
     EXPECT_TRUE(optionsBody.contains(QStringLiteral("options.maskApplyMode")));
-    EXPECT_TRUE(optionsBody.contains(QStringLiteral("tieOptions.reuseExistingFeatures")))
-        << "将掩膜应用于关键点时，旧特征文件可能没有经过掩膜过滤，必须强制重提。";
+    EXPECT_TRUE(optionsBody.contains(
+        QStringLiteral("tieOptions.reuseExistingMatches = options.reuseExistingMatches &&")))
+        << "将掩膜应用于关键点时，旧匹配分片可能来自不同蒙版，必须强制重算匹配。";
+    EXPECT_TRUE(optionsBody.contains(
+        QStringLiteral("tieOptions.maskApplyMode != QStringLiteral(\"keypoints\")")));
 
     const int unifiedStart = source.indexOf(
         QStringLiteral("void MenuWorkflowController::runUnifiedAerialTriangulation"));
@@ -9884,7 +9520,7 @@ TEST(AerialTriangulationWorkflowTest, TiePointPreparationPassesMaskOptionsToMatc
         << "连接点准备阶段的特征提取、配对、匹配进度要映射到空三总进度条。";
 }
 
-TEST(AerialTriangulationWorkflowTest, DefaultsToSiftLightGlueWhenDialogOmitsMatchPipeline)
+TEST(AerialTriangulationWorkflowTest, DefaultsToUnifiedSiftLightGlueAlgorithm)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
     ASSERT_FALSE(source.isEmpty());
@@ -9898,11 +9534,9 @@ TEST(AerialTriangulationWorkflowTest, DefaultsToSiftLightGlueWhenDialogOmitsMatc
     ASSERT_GT(launchBegin, startBegin);
     const QString startBody = source.mid(startBegin, launchBegin - startBegin);
 
-    EXPECT_TRUE(startBody.contains(
-        QStringLiteral("runSettings.value(QStringLiteral(\"feature_algorithm\")).toString(QStringLiteral(\"sift\"))")))
-        << "空三参数对话框没有算法字段时，前置检查必须按创建连接点的 SIFT + LightGlue 默认链路检查缓存。";
-    EXPECT_FALSE(startBody.contains(
-        QStringLiteral("runSettings.value(QStringLiteral(\"feature_algorithm\")).toString(QStringLiteral(\"disk\"))")));
+    EXPECT_TRUE(startBody.contains(QStringLiteral("runSettings.value(QStringLiteral(\"algorithm_id\"))")));
+    EXPECT_TRUE(startBody.contains(QStringLiteral(".toString(QStringLiteral(\"sift_lightglue\"))")))
+        << "空三前置检查必须使用统一注册算法 ID，不能再组合特征/匹配算法字符串。";
 
     const int launchEnd = source.indexOf(
         QStringLiteral("void MenuWorkflowController::openOverlapAnalysisDialog"),
@@ -9910,10 +9544,9 @@ TEST(AerialTriangulationWorkflowTest, DefaultsToSiftLightGlueWhenDialogOmitsMatc
     ASSERT_GT(launchEnd, launchBegin);
     const QString launchBody = source.mid(launchBegin, launchEnd - launchBegin);
 
-    EXPECT_TRUE(launchBody.contains(QStringLiteral("settings.value(QStringLiteral(\"feature_algorithm\"))")));
-    EXPECT_TRUE(launchBody.contains(QStringLiteral(".toString(QStringLiteral(\"sift\"))")))
-        << "正式 SfM 检查匹配缓存时也必须沿用 SIFT + LightGlue，避免把刚生成的 SIFT 匹配误判为 DISK 不兼容。";
-    EXPECT_FALSE(launchBody.contains(QStringLiteral(".toString(QStringLiteral(\"disk\"))")));
+    EXPECT_TRUE(launchBody.contains(QStringLiteral("settings.value(QStringLiteral(\"algorithm_id\"))")));
+    EXPECT_TRUE(launchBody.contains(QStringLiteral(".toString(QStringLiteral(\"sift_lightglue\"))")))
+        << "正式 SfM 必须沿用同一个算法 ID 和 `.pimatch` 缓存契约。";
 }
 
 TEST(AerialTriangulationWorkflowTest, CompletedButUnusableMatchingOnlyBlocksWhenReusingExistingMatches)
@@ -9999,7 +9632,10 @@ TEST(AerialTriangulationWorkflowTest, WorkflowDialogStartsAerialTriangulationWor
     EXPECT_TRUE(dialogBody.contains(QStringLiteral("AerialTriangulationDialog")));
     EXPECT_TRUE(dialogBody.contains(QStringLiteral("dlg.exec()")));
     EXPECT_TRUE(dialogBody.contains(QStringLiteral("dlg.collectSettings()")));
-    EXPECT_TRUE(dialogBody.contains(QStringLiteral("startAerialTriangulationWorkflow(settings)")));
+    EXPECT_TRUE(dialogBody.contains(QStringLiteral("startAerialTriangulationWorkflow(")));
+    EXPECT_TRUE(dialogBody.contains(
+        QStringLiteral("mergeAerialTriangulationSettings(dialogSettings)")))
+        << "空三主对话框应与工作流程高级设置合并后再启动。";
 }
 
 TEST(AerialTriangulationWorkflowTest, StartDoesPrerequisiteAndSfmWorkOffGuiThread)
@@ -10067,7 +9703,7 @@ TEST(AerialTriangulationWorkflowTest, SfmLaunchReusesGeneratedPairConstraints)
     EXPECT_TRUE(launchBody.contains(QStringLiteral("storedPairsStale")));
 }
 
-TEST(AerialTriangulationWorkflowTest, SfmLaunchUsesSelectedMatchPipeline)
+TEST(AerialTriangulationWorkflowTest, SfmLaunchUsesSelectedUnifiedMatchingAlgorithm)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
     ASSERT_FALSE(source.isEmpty());
@@ -10081,10 +9717,12 @@ TEST(AerialTriangulationWorkflowTest, SfmLaunchUsesSelectedMatchPipeline)
     ASSERT_GT(nextFunction, launchStart);
     const QString launchBody = source.mid(launchStart, nextFunction - launchStart);
 
-    EXPECT_TRUE(launchBody.contains(QStringLiteral("workflowOptions.featureAlgorithm")));
-    EXPECT_TRUE(launchBody.contains(QStringLiteral("workflowOptions.matchAlgorithm")));
-    EXPECT_TRUE(launchBody.contains(QStringLiteral("settings.value(QStringLiteral(\"feature_algorithm\")")));
-    EXPECT_TRUE(launchBody.contains(QStringLiteral("settings.value(QStringLiteral(\"match_algorithm\")")));
+    EXPECT_TRUE(launchBody.contains(QStringLiteral("workflowOptions.matchingAlgorithmId")));
+    EXPECT_TRUE(launchBody.contains(
+        QStringLiteral("settings.value(QStringLiteral(\"algorithm_id\"))")));
+    EXPECT_TRUE(launchBody.contains(QStringLiteral("QStringLiteral(\"sift_lightglue\")")));
+    EXPECT_FALSE(launchBody.contains(QStringLiteral("workflowOptions.featureAlgorithm")));
+    EXPECT_FALSE(launchBody.contains(QStringLiteral("workflowOptions.matchAlgorithm")));
     EXPECT_TRUE(launchBody.contains(QStringLiteral("AerialTriangulationWorkflow::resolveConfig")));
 }
 
@@ -10176,33 +9814,22 @@ TEST(AerialTriangulationCancelTest, CancelledWorkflowSkipsGuiThreadMetadataWrite
                     .contains(QStringLiteral("emit pmGuard->atProgressFinished(false);")));
 }
 
-TEST(ForwardIntersectionCheckDialogTest, AutoModeAcceptsPythonLightGlueSidecarTokens)
+TEST(ForwardIntersectionCheckDialogTest, AutoModeReadsUnifiedImageMatchShard)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/ForwardIntersectionCheckDialog.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
-    EXPECT_TRUE(source.contains(QStringLiteral("feature0_path")));
-    EXPECT_TRUE(source.contains(QStringLiteral("feature1_path")));
-    EXPECT_TRUE(source.contains(QStringLiteral("sp0_path")));
-    EXPECT_TRUE(source.contains(QStringLiteral("sp1_path")));
-    EXPECT_TRUE(source.contains(QStringLiteral("image0_name")));
-    EXPECT_TRUE(source.contains(QStringLiteral("image1_name")));
-}
-
-TEST(FeatureVisualizationSettingsTest, PersistsAndRestoresActiveFeatureSuffix)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(source.contains(QStringLiteral("feature_suffix")));
-    EXPECT_TRUE(source.contains(QStringLiteral("setActiveFeatureSuffix")));
+    EXPECT_TRUE(source.contains(QStringLiteral("ImageMatchFile::read")));
+    EXPECT_TRUE(source.contains(QStringLiteral("ImageMatchFile::filePathForImage")));
+    EXPECT_TRUE(source.contains(QStringLiteral("MatchRecordFlag::GeometryInlier")));
+    EXPECT_FALSE(source.contains(QStringLiteral("feature0_path")));
 }
 
 TEST(FeatureVisualizationSettingsTest, DefaultsToOnePixelCrossMarker)
 {
     const QString rendererHeader = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.h"));
     const QString overlaySource = readProjectSourceFile(QStringLiteral("src/gui/views/LayerOverlayItems.cpp"));
-    const QString uiDefaults = readProjectSourceFile(QStringLiteral("src/gui/config/ProjectUiConfigManager.cpp"));
+    const QString uiDefaults = readProjectSourceFile(QStringLiteral("src/common/project/ProjectUiConfigManager.cpp"));
     const QString dialogSource = readProjectSourceFile(QStringLiteral("src/gui/dialogs/tie_points/FeaturePointVisualizationDialog.cpp"));
     const QString dialogUi = readProjectSourceFile(QStringLiteral("src/gui/dialogs/tie_points/FeaturePointVisualizationDialog.ui"));
     ASSERT_FALSE(rendererHeader.isEmpty());
@@ -10227,7 +9854,7 @@ TEST(FeatureVisualizationSettingsTest, DefaultsToOnePixelCrossMarker)
 TEST(FeatureVisualizationSettingsTest, DefaultsPointColorToBlue)
 {
     const QString rendererHeader = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.h"));
-    const QString uiDefaults = readProjectSourceFile(QStringLiteral("src/gui/config/ProjectUiConfigManager.cpp"));
+    const QString uiDefaults = readProjectSourceFile(QStringLiteral("src/common/project/ProjectUiConfigManager.cpp"));
     const QString dialogHeader = readProjectSourceFile(QStringLiteral("src/gui/dialogs/tie_points/FeaturePointVisualizationDialog.h"));
     const QString dialogSource = readProjectSourceFile(QStringLiteral("src/gui/dialogs/tie_points/FeaturePointVisualizationDialog.cpp"));
     ASSERT_FALSE(rendererHeader.isEmpty());
@@ -10243,154 +9870,6 @@ TEST(FeatureVisualizationSettingsTest, DefaultsPointColorToBlue)
     EXPECT_TRUE(dialogHeader.contains(QStringLiteral("QColor _pointColor{0, 120, 255}")));
     EXPECT_TRUE(dialogSource.contains(QStringLiteral("_pointColor = QColor(0, 120, 255)")));
     EXPECT_FALSE(dialogSource.contains(QStringLiteral("点颜色黄")));
-}
-
-TEST(FeatureVisualizationSettingsTest, ProjectOpenRestoresFeatureSuffixEvenWhenUiSettingsAreEmpty)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int applyStart = source.indexOf(QStringLiteral("void MainWindow::applyUiSettings"));
-    ASSERT_GE(applyStart, 0);
-    const int applyIndex = source.indexOf(QStringLiteral("applySavedFeatureDisplayOptions(ui)"), applyStart);
-    const int normalizeIndex = source.indexOf(QStringLiteral("QJsonObject settings = ui;"), applyStart);
-    ASSERT_GE(applyIndex, 0);
-    ASSERT_GE(normalizeIndex, 0);
-    EXPECT_LT(applyIndex, normalizeIndex);
-}
-
-TEST(FeatureVisualizationSettingsTest, VisualizationRestoreInfersSuffixFromExistingFeatureFiles)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(source.contains(QStringLiteral("inferPreferredFeatureSuffix")));
-    EXPECT_TRUE(source.contains(QStringLiteral("inferredSuffix")));
-    EXPECT_TRUE(source.contains(QStringLiteral("setActiveFeatureSuffix(inferredSuffix)")));
-}
-
-TEST(FeatureVisualizationSettingsTest, SavedSuffixIsUsedOnlyWhenProjectContainsThatSuffix)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(source.contains(QStringLiteral("projectHasFeatureSuffix")));
-    EXPECT_TRUE(source.contains(QStringLiteral("savedSuffixUsable")));
-}
-
-TEST(MapProjectDialogTest, DefaultsToOneClickDomEngineeringSettings)
-{
-    MapProjectDialog dialog;
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    const QString projectRoot = tempDir.path();
-    const QString demPath = QDir(projectRoot).filePath(QStringLiteral("assets/dem/relative_dem/dem.tif"));
-    const QString expectedOutput = QDir(projectRoot).filePath(QStringLiteral("assets/ortho/relative_dom.tif"));
-    ASSERT_TRUE(QDir().mkpath(QFileInfo(demPath).absolutePath()));
-    QFile demFile(demPath);
-    ASSERT_TRUE(demFile.open(QIODevice::WriteOnly));
-    demFile.write("dem");
-    demFile.close();
-
-    const QStringList images{
-        QDir(projectRoot).filePath(QStringLiteral("assets/img/1.png")),
-        QDir(projectRoot).filePath(QStringLiteral("assets/img/2.png"))
-    };
-
-    dialog.setAvailableImages(images);
-    dialog.setProjectRoot(projectRoot);
-    dialog.setDefaultDemPath(demPath);
-
-    auto *imageList = dialog.findChild<QListWidget *>(QStringLiteral("m_imageList"));
-    auto *demEdit = dialog.findChild<QLineEdit *>(QStringLiteral("m_demEdit"));
-    auto *outputEdit = dialog.findChild<QLineEdit *>(QStringLiteral("m_outputEdit"));
-    auto *resolutionSpin = dialog.findChild<QDoubleSpinBox *>(QStringLiteral("m_resolutionSpin"));
-    auto *runButton = dialog.findChild<QPushButton *>(QStringLiteral("runBtn"));
-
-    ASSERT_NE(imageList, nullptr);
-    ASSERT_NE(demEdit, nullptr);
-    ASSERT_NE(outputEdit, nullptr);
-    ASSERT_NE(resolutionSpin, nullptr);
-    ASSERT_NE(runButton, nullptr);
-
-    ASSERT_EQ(imageList->count(), images.size());
-    for (int i = 0; i < imageList->count(); ++i)
-    {
-        EXPECT_EQ(imageList->item(i)->checkState(), Qt::Checked);
-    }
-    EXPECT_EQ(demEdit->text(), demPath);
-    EXPECT_EQ(outputEdit->text(), expectedOutput);
-    EXPECT_DOUBLE_EQ(resolutionSpin->value(), 0.0);
-    EXPECT_TRUE(resolutionSpin->specialValueText().contains(QStringLiteral("自动")));
-    EXPECT_TRUE(runButton->text().contains(QStringLiteral("一键")));
-    EXPECT_TRUE(runButton->text().contains(QStringLiteral("DOM")));
-
-    bool emitted = false;
-    QStringList emittedImages;
-    QString emittedDem;
-    QString emittedOutput;
-    double emittedResolution = -1.0;
-    QObject::connect(&dialog, &MapProjectDialog::requestRunMapProject, &dialog,
-                     [&](const QStringList &runImages,
-                         const QString &runDem,
-                         const QString &runOutput,
-                         double runResolution)
-                     {
-                         emitted = true;
-                         emittedImages = runImages;
-                         emittedDem = runDem;
-                         emittedOutput = runOutput;
-                         emittedResolution = runResolution;
-                     });
-    ASSERT_TRUE(QMetaObject::invokeMethod(&dialog, "onRun", Qt::DirectConnection));
-
-    EXPECT_TRUE(emitted);
-    EXPECT_EQ(emittedImages, images);
-    EXPECT_EQ(emittedDem, demPath);
-    EXPECT_EQ(emittedOutput, expectedOutput);
-    EXPECT_DOUBLE_EQ(emittedResolution, 0.0);
-}
-
-TEST(MapProjectDialogTest, KeepsLatestDemDefaultWhenSavedDemIsMissing)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    const QString projectRoot = tempDir.path();
-    const QString latestDemPath = QDir(projectRoot).filePath(QStringLiteral("assets/dem/latest/dem.tif"));
-    ASSERT_TRUE(QDir().mkpath(QFileInfo(latestDemPath).absolutePath()));
-    QFile latestDemFile(latestDemPath);
-    ASSERT_TRUE(latestDemFile.open(QIODevice::WriteOnly));
-    latestDemFile.write("dem");
-    latestDemFile.close();
-
-    MapProjectDialog dialog;
-    dialog.setProjectRoot(projectRoot);
-    dialog.setDefaultDemPath(latestDemPath);
-
-    auto *demEdit = dialog.findChild<QLineEdit *>(QStringLiteral("m_demEdit"));
-    ASSERT_NE(demEdit, nullptr);
-    ASSERT_EQ(demEdit->text(), latestDemPath);
-
-    QJsonObject savedSettings;
-    savedSettings[QStringLiteral("dem_path")] =
-        QDir(projectRoot).filePath(QStringLiteral("assets/dem/old/missing_dem.tif"));
-    savedSettings[QStringLiteral("output_path")] =
-        QDir(projectRoot).filePath(QStringLiteral("assets/ortho/relative_dom.tif"));
-    dialog.applySettings(savedSettings);
-
-    EXPECT_EQ(demEdit->text(), latestDemPath);
-}
-
-TEST(MapProjectDialogTest, ValidatesDemFileExistsBeforeRunning)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/reconstruction/MapProjectDialog.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(source.contains(QStringLiteral("QFileInfo demInfo")));
-    EXPECT_TRUE(source.contains(QStringLiteral("demInfo.exists()")));
-    EXPECT_TRUE(source.contains(QStringLiteral("不是有效的 DEM 文件")));
 }
 
 TEST(CreateDemDialogTest, UiAdvertisesOneClickDemWorkflow)
@@ -10432,28 +9911,27 @@ TEST(GuiMainTest, WindowsConsoleUsesUtf8)
     EXPECT_TRUE(source.contains(QStringLiteral("configureConsoleEncoding()")));
 }
 
-TEST(FeatureNamingCleanupTest, LightGlueDocumentationDoesNotAdvertiseSuperPointAsLegacy)
+TEST(FeatureNamingCleanupTest, LightGlueHeaderDocumentsTensorRtOnlyRuntime)
 {
     const QString header =
-        readProjectSourceFile(QStringLiteral("src/core/feature_match/lightglue/LightGlueMatcher.h"));
+        readProjectSourceFile(
+            QStringLiteral("src/core/image_matching/lightglue/TensorRtLightGlueMatcher.h"));
     ASSERT_FALSE(header.isEmpty());
 
-    EXPECT_TRUE(header.contains(QStringLiteral("SuperPoint")))
-        << "The algorithm remains supported, but it should be described as an explicit compatibility path.";
-    EXPECT_FALSE(header.contains(QStringLiteral("SuperPoint legacy")))
-        << "Do not present the supported SuperPoint fallback as a legacy GUI/interface path.";
+    EXPECT_TRUE(header.contains(QStringLiteral("TensorRT")));
+    EXPECT_TRUE(header.contains(QStringLiteral("TensorRtLightGlueMatcher final")));
+    EXPECT_FALSE(header.contains(QStringLiteral("TorchScript")));
 }
 
-TEST(FeatureNamingCleanupTest, FeatureExtractorReadmeUsesFeatureDataForSharedOutput)
+TEST(FeatureNamingCleanupTest, ImageMatchingReadmeDocumentsUnifiedBinaryOutput)
 {
     const QString readme =
-        readProjectSourceFile(QStringLiteral("src/core/feature_extractors/README.md"));
+        readProjectSourceFile(QStringLiteral("src/core/image_matching/README.md"));
     ASSERT_FALSE(readme.isEmpty());
 
-    EXPECT_TRUE(readme.contains(QStringLiteral("FeatureData")))
-        << "Feature extractor docs should describe the current shared feature container.";
-    EXPECT_FALSE(readme.contains(QStringLiteral("SuperPointOutput")))
-        << "Do not describe the shared output abstraction with the old SuperPoint-specific type name.";
+    EXPECT_TRUE(readme.contains(QStringLiteral(".pimatch")));
+    EXPECT_TRUE(readme.contains(QStringLiteral("一幅影像一个分片")));
+    EXPECT_FALSE(readme.contains(QStringLiteral("FeatureFileIO")));
 }
 
 TEST(FeatureNamingCleanupTest, ProjectManagerDoesNotIncludeLegacyTorchAlgorithmHeaders)
@@ -10470,58 +9948,14 @@ TEST(FeatureNamingCleanupTest, ProjectManagerDoesNotIncludeLegacyTorchAlgorithmH
     EXPECT_FALSE(managerSource.contains(QStringLiteral("#include \"FeatureFileIO.h\"")));
 }
 
-TEST(FeatureNamingCleanupTest, TorchFeatureWrappersSuppressLibTorchC4267Warnings)
+TEST(FeatureNamingCleanupTest, UnifiedMatchingRuntimeDoesNotDependOnLibTorch)
 {
-    const QStringList files = {
-        QStringLiteral("src/core/feature_extractors/ExtractorFactory.cpp"),
-        QStringLiteral("src/core/feature_extractors/disk/DiskExtractor.cpp"),
-        QStringLiteral("src/core/feature_extractors/aliked/AlikedExtractor.cpp"),
-        QStringLiteral("src/core/feature_match/loftr/LoFTRMatcher.cpp"),
-    };
-    for (const QString &path : files)
-    {
-        const QString source = readProjectSourceFile(path);
-        ASSERT_FALSE(source.isEmpty()) << qPrintable(path);
-        EXPECT_TRUE(source.contains(QStringLiteral("#pragma warning(push)"))) << qPrintable(path);
-        EXPECT_TRUE(source.contains(QStringLiteral("#pragma warning(disable: 4267)")))
-            << qPrintable(path + QStringLiteral(": LibTorch emits MSVC C4267 from external templates."));
-        EXPECT_TRUE(source.contains(QStringLiteral("#pragma warning(pop)"))) << qPrintable(path);
-    }
-}
-
-TEST(FeatureNamingCleanupTest, MatchPhotosTaskGuardsTorchIncludesAfterQtHeaders)
-{
-    const QString source =
-        readProjectSourceFile(QStringLiteral("src/core/matchphototask/task/MatchPhotosTask.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int qtHeaderIndex = source.indexOf(QStringLiteral("#include \"MatchPhotosTask.h\""));
-    const int torchHeaderIndex = source.indexOf(QStringLiteral("#include \"FeatureFileIO.h\""));
-    ASSERT_GE(qtHeaderIndex, 0);
-    ASSERT_GT(torchHeaderIndex, qtHeaderIndex);
-
-    const QString preTorchBlock = source.mid(qtHeaderIndex, torchHeaderIndex - qtHeaderIndex);
-    EXPECT_TRUE(preTorchBlock.contains(QStringLiteral("#undef slots")));
-    EXPECT_TRUE(preTorchBlock.contains(QStringLiteral("#undef signals")));
-    EXPECT_TRUE(preTorchBlock.contains(QStringLiteral("#undef emit")));
-    EXPECT_TRUE(preTorchBlock.contains(QStringLiteral("PLASCAN_MATCHPHOTOS_RESTORE_QT_SLOTS")));
-
-    const int restoreIndex = source.indexOf(QStringLiteral("#define slots Q_SLOTS"), torchHeaderIndex);
-    const int nextQtIncludeIndex = source.indexOf(QStringLiteral("#include <QFileInfo>"), torchHeaderIndex);
-    ASSERT_GE(restoreIndex, 0);
-    ASSERT_GT(nextQtIncludeIndex, torchHeaderIndex);
-    EXPECT_LT(restoreIndex, nextQtIncludeIndex);
-}
-
-TEST(FeatureNamingCleanupTest, MatcherFactorySuppressesLibTorchC4267Warnings)
-{
-    const QString path = QStringLiteral("src/core/feature_match/MatcherFactory.cpp");
-    const QString source = readProjectSourceFile(path);
-    ASSERT_FALSE(source.isEmpty());
-    EXPECT_TRUE(source.contains(QStringLiteral("#pragma warning(push)"))) << qPrintable(path);
-    EXPECT_TRUE(source.contains(QStringLiteral("#pragma warning(disable: 4267)")))
-        << qPrintable(path + QStringLiteral(": LibTorch emits MSVC C4267 from external templates."));
-    EXPECT_TRUE(source.contains(QStringLiteral("#pragma warning(pop)"))) << qPrintable(path);
+    const QString cmake = readProjectSourceFile(
+        QStringLiteral("src/core/image_matching/CMakeLists.txt"));
+    ASSERT_FALSE(cmake.isEmpty());
+    EXPECT_TRUE(cmake.contains(QStringLiteral("TensorRT::nvinfer")));
+    EXPECT_FALSE(cmake.contains(QStringLiteral("TORCH_LIBRARIES")));
+    EXPECT_FALSE(cmake.contains(QStringLiteral("find_package(Torch")));
 }
 
 TEST(FeatureNamingCleanupTest, GuiTestsDoNotCompileObsoleteCompatibilityTranslationUnits)
@@ -10583,12 +10017,12 @@ TEST(FeatureNamingCleanupTest, GuiSfmCallersUseCoreServicesDirectly)
     EXPECT_TRUE(sparseManagerSource.contains(QStringLiteral("xjw::core::project::TriangulationService::run")));
 }
 
-TEST(MainWindowFeatureRefreshTest, BatchFeatureAppendDoesNotSynchronouslyReloadNonCurrentImages)
+TEST(MainWindowFeatureRefreshTest, MatchShardAppendReloadsOnlyCurrentImage)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
-    const int connectIndex = source.indexOf(QStringLiteral("ipfindResultAppended"));
+    const int connectIndex = source.indexOf(QStringLiteral("imageMatchResultAppended"));
     ASSERT_GE(connectIndex, 0);
     const int blockEnd = source.indexOf(QStringLiteral("if (_config)"), connectIndex);
     ASSERT_GE(blockEnd, connectIndex);
@@ -10671,7 +10105,7 @@ TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesOverlayDrawingToDedic
     EXPECT_TRUE(overlaySource.contains(QStringLiteral("new QGraphicsLineItem(a.x(), a.y()")));
 }
 
-TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesFeatureFileLoadingToDedicatedLoader)
+TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesMatchObservationLoadingToDedicatedLoader)
 {
     const QString rendererSource = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.cpp"));
     const QString featureLoaderHeader = readProjectSourceFile(QStringLiteral("src/gui/views/LayerFeatureLoader.h"));
@@ -10681,7 +10115,7 @@ TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesFeatureFileLoadingToD
     ASSERT_FALSE(featureLoaderSource.isEmpty());
 
     EXPECT_TRUE(rendererSource.contains(QStringLiteral("#include \"LayerFeatureLoader.h\"")));
-    EXPECT_TRUE(rendererSource.contains(QStringLiteral("loadFeatureKeypointsForImage(_currentProjectPath, imagePath)")));
+    EXPECT_TRUE(rendererSource.contains(QStringLiteral("loadMatchedKeypointsForImage(_currentProjectPath, imagePath)")));
     EXPECT_FALSE(rendererSource.contains(QStringLiteral("#include \"FeatureOutput.h\"")));
     EXPECT_FALSE(rendererSource.contains(QStringLiteral("#include \"FeatureFileIO.h\"")));
     EXPECT_FALSE(rendererSource.contains(QStringLiteral("xjw::common::project::ProjectIO::findFeatureForImage")))
@@ -10689,14 +10123,12 @@ TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesFeatureFileLoadingToD
     EXPECT_FALSE(rendererSource.contains(QStringLiteral("FeatureFileIO::read")))
         << "Feature file decoding should stay out of the scene renderer.";
 
-    EXPECT_TRUE(featureLoaderHeader.contains(QStringLiteral("loadFeatureKeypointsFromFile")));
-    EXPECT_TRUE(featureLoaderHeader.contains(QStringLiteral("loadFeatureKeypointsForImage")));
-    EXPECT_TRUE(featureLoaderSource.contains(QStringLiteral("xjw::common::project::ProjectIO::findFeatureForImage")));
-    EXPECT_TRUE(featureLoaderSource.contains(QStringLiteral("loadFeatureKeypointsFromFile(featurePath)")));
-    EXPECT_TRUE(featureLoaderSource.contains(QStringLiteral("FeatureFileIO::read")));
-    EXPECT_TRUE(featureLoaderSource.contains(QStringLiteral("output.keypoints[i].response = output.scores[i]")));
-    EXPECT_TRUE(featureLoaderSource.contains(QStringLiteral("#pragma warning(disable: 4267)")))
-        << "LibTorch emits MSVC C4267 from external templates; keep it local to the feature loader.";
+    EXPECT_TRUE(featureLoaderHeader.contains(QStringLiteral("loadMatchedKeypointsFromFile")));
+    EXPECT_TRUE(featureLoaderHeader.contains(QStringLiteral("loadMatchedKeypointsForImage")));
+    EXPECT_TRUE(featureLoaderSource.contains(QStringLiteral("ProjectIO::imageMatchOutputDir")));
+    EXPECT_TRUE(featureLoaderSource.contains(QStringLiteral("ImageMatchFile::filePathForImage")));
+    EXPECT_TRUE(featureLoaderSource.contains(QStringLiteral("ImageMatchFile::read")));
+    EXPECT_FALSE(featureLoaderSource.contains(QStringLiteral("FeatureFileIO")));
 }
 
 TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesStitchedPairDebugOutput)
@@ -10739,25 +10171,23 @@ TEST(CanvasWidgetResponsivenessTest, StaleFeatureLoadsDoNotPaintOverCurrentImage
     EXPECT_TRUE(finishedBlock.contains(QStringLiteral("if (isCurrentImage && self->_layerRenderer)")));
 }
 
-TEST(CanvasWidgetResponsivenessTest, FeatureLoadEstimatesOrientationOnlyWhenDisplayed)
+TEST(CanvasWidgetResponsivenessTest, MatchObservationLoadUsesPersistedSiftGeometry)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
-    const int startIndex = source.indexOf(QStringLiteral("void CanvasWidget::startSpLoadForImage"));
+    const int startIndex = source.indexOf(
+        QStringLiteral("void CanvasWidget::startMatchObservationLoadForImage"));
     ASSERT_GE(startIndex, 0);
-    const int readImageIndex = source.indexOf(
-        QStringLiteral("xjw::common::io::readImage(imagePathCopy"), startIndex);
-    ASSERT_GE(readImageIndex, startIndex);
-    const QString loadBlock = source.mid(startIndex, readImageIndex - startIndex + 600);
+    const int endIndex = source.indexOf(QStringLiteral("void CanvasWidget::reloadMaskOverlay"), startIndex);
+    ASSERT_GT(endIndex, startIndex);
+    const QString loadBlock = source.mid(startIndex, endIndex - startIndex);
 
     EXPECT_TRUE(loadBlock.contains(QStringLiteral("const QString projectPath = property(\"currentProjectPath\").toString()")));
-    EXPECT_TRUE(loadBlock.contains(QStringLiteral("const bool shouldEstimateOrientation = _currentFeatureOpts.showOrientation")));
-    EXPECT_TRUE(loadBlock.contains(QStringLiteral("imagePathCopy")));
-    EXPECT_TRUE(loadBlock.contains(QStringLiteral("activeSuffix")));
-    EXPECT_TRUE(loadBlock.contains(QStringLiteral("projectPath")));
-    EXPECT_TRUE(loadBlock.contains(QStringLiteral("shouldEstimateOrientation")));
-    EXPECT_TRUE(loadBlock.contains(QStringLiteral("if (shouldEstimateOrientation)")));
+    EXPECT_TRUE(loadBlock.contains(QStringLiteral("loadMatchedKeypointsForImage")));
+    EXPECT_TRUE(loadBlock.contains(QStringLiteral("SIFT 的尺度、方向和响应值已经随匹配结果持久化")));
+    EXPECT_FALSE(loadBlock.contains(QStringLiteral("readImage")));
+    EXPECT_FALSE(loadBlock.contains(QStringLiteral("activeSuffix")));
 }
 
 TEST(TriangulationServiceTest, ExportsInitialSparseCloud)
@@ -10766,7 +10196,7 @@ TEST(TriangulationServiceTest, ExportsInitialSparseCloud)
     ASSERT_TRUE(tempDir.isValid());
 
     const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("demo.plascan"));
-    const QString matchesDir = xjw::common::project::ProjectIO::ipmatchOutputDir(projectPath);
+    const QString matchesDir = xjw::common::project::ProjectIO::imageMatchOutputDir(projectPath);
     ASSERT_TRUE(QDir().mkpath(matchesDir));
 
     const QString image0Path = QDir(tempDir.path()).filePath(QStringLiteral("1.jpg"));
@@ -10781,8 +10211,8 @@ TEST(TriangulationServiceTest, ExportsInitialSparseCloud)
         {5.0,  1.2, 45.0}
     };
 
-    QJsonArray matchedPoints0;
-    QJsonArray matchedPoints1;
+    QVector<QPointF> matchedPoints0;
+    QVector<QPointF> matchedPoints1;
     for (const std::array<double, 3> &point : points)
     {
         double u0 = 0.0;
@@ -10792,39 +10222,36 @@ TEST(TriangulationServiceTest, ExportsInitialSparseCloud)
         ASSERT_TRUE(projectPoint(camera0, point, &u0, &v0));
         ASSERT_TRUE(projectPoint(camera1, point, &u1, &v1));
 
-        matchedPoints0.append(QJsonArray{u0, v0});
-        matchedPoints1.append(QJsonArray{u1, v1});
+        matchedPoints0.append(QPointF(u0, v0));
+        matchedPoints1.append(QPointF(u1, v1));
     }
 
-    const QString matchPath = QDir(matchesDir).filePath(QStringLiteral("1__2.match"));
-    QFile matchFile(matchPath);
-    ASSERT_TRUE(matchFile.open(QIODevice::WriteOnly));
-    matchFile.write("dummy");
-    matchFile.close();
-
-    QFile sidecarFile(matchPath + QStringLiteral(".json"));
-    ASSERT_TRUE(sidecarFile.open(QIODevice::WriteOnly));
-    const QJsonObject sidecarObject{
-        {QStringLiteral("image0_path"), image0Path},
-        {QStringLiteral("image1_path"), image1Path},
-        {QStringLiteral("matched_points0"), matchedPoints0},
-        {QStringLiteral("matched_points1"), matchedPoints1}
-    };
-    sidecarFile.write(QJsonDocument(sidecarObject).toJson());
-    sidecarFile.close();
+    QVector<int> featureIds0;
+    QVector<int> featureIds1;
+    for (int index = 0; index < matchedPoints0.size(); ++index)
+    {
+        featureIds0.append(index);
+        featureIds1.append(index);
+    }
+    xjw::image_matching::ImageMatchRepository repository(matchesDir);
+    const auto writeResult = repository.writePairs(
+        {makeVerifiedPair(image0Path,
+                          image1Path,
+                          matchedPoints0,
+                          matchedPoints1,
+                          featureIds0,
+                          featureIds1)},
+        false);
+    ASSERT_TRUE(writeResult.success) << writeResult.errorMessage.toStdString();
 
     QJsonArray images;
     images.append(buildImageEntry(image0Path, camera0));
     images.append(buildImageEntry(image1Path, camera1));
 
-    QJsonArray ipmatchResults;
-    ipmatchResults.append(QJsonObject{{QStringLiteral("image0"), image0Path},
-                                      {QStringLiteral("image1"), image1Path},
-                                      {QStringLiteral("output"), matchPath}});
-
     QJsonObject meta;
     meta[QStringLiteral("images")] = images;
-    meta[QStringLiteral("ipmatch_results")] = ipmatchResults;
+    meta[QStringLiteral("image_match_results")] =
+        imageMatchResultRecords(repository, {image0Path, image1Path});
 
     xjw::core::project::TriangulationServiceOptions options;
     options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("out"));
@@ -10851,13 +10278,13 @@ TEST(TriangulationServiceTest, ExportsInitialSparseCloud)
     EXPECT_FALSE(xjw::gui::project::isProductionSparseResult(result.resultJson));
 }
 
-TEST(TriangulationServiceTest, UsesSidecarV2IndicesForMultiViewTracks)
+TEST(TriangulationServiceTest, UsesBinaryShardFeatureIdsForMultiViewTracks)
 {
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
     const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("demo.plascan"));
-    const QString matchesDir = xjw::common::project::ProjectIO::ipmatchOutputDir(projectPath);
+    const QString matchesDir = xjw::common::project::ProjectIO::imageMatchOutputDir(projectPath);
     ASSERT_TRUE(QDir().mkpath(matchesDir));
 
     const QString image0Path = QDir(tempDir.path()).filePath(QStringLiteral("1.jpg"));
@@ -10879,45 +10306,22 @@ TEST(TriangulationServiceTest, UsesSidecarV2IndicesForMultiViewTracks)
     ASSERT_TRUE(projectPoint(camera1, point, &u1, &v1));
     ASSERT_TRUE(projectPoint(camera2, point, &u2, &v2));
 
-    auto writeSidecar = [](const QString &path,
-                           const QString &imageA,
-                           const QString &imageB,
-                           const QPointF &uvA,
-                           const QPointF &uvB,
-                           int featureA,
-                           int featureB) {
-        QFile matchFile(path);
-        ASSERT_TRUE(matchFile.open(QIODevice::WriteOnly));
-        matchFile.write("dummy");
-        matchFile.close();
-
-        QFile sidecarFile(path + QStringLiteral(".json"));
-        ASSERT_TRUE(sidecarFile.open(QIODevice::WriteOnly));
-        QJsonArray matchedPoints0;
-        QJsonArray matchedPoints1;
-        QJsonArray matchedIndices0;
-        QJsonArray matchedIndices1;
-        matchedPoints0.append(QJsonArray{uvA.x(), uvA.y()});
-        matchedPoints1.append(QJsonArray{uvB.x(), uvB.y()});
-        matchedIndices0.append(featureA);
-        matchedIndices1.append(featureB);
-        const QJsonObject sidecarObject{
-            {QStringLiteral("feature_format_version"), 2},
-            {QStringLiteral("image0_path"), imageA},
-            {QStringLiteral("image1_path"), imageB},
-            {QStringLiteral("matched_points0"), matchedPoints0},
-            {QStringLiteral("matched_points1"), matchedPoints1},
-            {QStringLiteral("matched_indices0"), matchedIndices0},
-            {QStringLiteral("matched_indices1"), matchedIndices1}
-        };
-        sidecarFile.write(QJsonDocument(sidecarObject).toJson());
-        sidecarFile.close();
-    };
-
-    const QString match01Path = QDir(matchesDir).filePath(QStringLiteral("1__2.match"));
-    const QString match02Path = QDir(matchesDir).filePath(QStringLiteral("1__3.match"));
-    writeSidecar(match01Path, image0Path, image1Path, QPointF(u0, v0), QPointF(u1, v1), 7, 13);
-    writeSidecar(match02Path, image0Path, image2Path, QPointF(u0, v0), QPointF(u2, v2), 7, 29);
+    std::vector<xjw::image_matching::PairMatchData> pairs;
+    pairs.push_back(makeVerifiedPair(image0Path,
+                                     image1Path,
+                                     {QPointF(u0, v0)},
+                                     {QPointF(u1, v1)},
+                                     {7},
+                                     {13}));
+    pairs.push_back(makeVerifiedPair(image0Path,
+                                     image2Path,
+                                     {QPointF(u0, v0)},
+                                     {QPointF(u2, v2)},
+                                     {7},
+                                     {29}));
+    xjw::image_matching::ImageMatchRepository repository(matchesDir);
+    const auto writeResult = repository.writePairs(pairs, false);
+    ASSERT_TRUE(writeResult.success) << writeResult.errorMessage.toStdString();
 
     QJsonObject meta;
     meta[QStringLiteral("images")] = QJsonArray{
@@ -10925,14 +10329,8 @@ TEST(TriangulationServiceTest, UsesSidecarV2IndicesForMultiViewTracks)
         buildImageEntry(image1Path, camera1),
         buildImageEntry(image2Path, camera2)
     };
-    meta[QStringLiteral("ipmatch_results")] = QJsonArray{
-        QJsonObject{{QStringLiteral("image0"), image0Path},
-                    {QStringLiteral("image1"), image1Path},
-                    {QStringLiteral("output"), match01Path}},
-        QJsonObject{{QStringLiteral("image0"), image0Path},
-                    {QStringLiteral("image1"), image2Path},
-                    {QStringLiteral("output"), match02Path}}
-    };
+    meta[QStringLiteral("image_match_results")] =
+        imageMatchResultRecords(repository, {image0Path, image1Path, image2Path});
 
     xjw::core::project::TriangulationServiceOptions options;
     options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("out"));
@@ -11181,21 +10579,6 @@ TEST(DownstreamSparseInputGateTest, ResolveSparseContextSkipsPreviewAndRequiresP
     EXPECT_EQ(context.sourceResultIndex, 0);
 }
 
-TEST(DownstreamSparseInputGateTest, DenseAndDemUseProductionSparseInputs)
-{
-    const QString denseSource =
-        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    const QString terrainSource =
-        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
-    ASSERT_FALSE(denseSource.isEmpty());
-    ASSERT_FALSE(terrainSource.isEmpty());
-
-    EXPECT_TRUE(denseSource.contains(QStringLiteral("findLatestProductionAtResultIndex")));
-    EXPECT_TRUE(denseSource.contains(QStringLiteral("sparseResultBlockingReason")));
-    EXPECT_TRUE(terrainSource.contains(QStringLiteral("findLatestProductionAtResultIndex")));
-    EXPECT_FALSE(terrainSource.contains(QStringLiteral("startTriangulationAsync(triangulationSettings)")));
-}
-
 TEST(DownstreamSparseInputGateTest, OneClickDenseStageUsesCurrentSfmResultIndex)
 {
     const QString controllerSource =
@@ -11217,21 +10600,25 @@ TEST(DownstreamSparseInputGateTest, OneClickWorkflowStopsDenseWhenCurrentSfmQual
     EXPECT_TRUE(controllerSource.contains(QStringLiteral("sparseResultBlockingReason(resultRecordExtra)")));
 }
 
-TEST(FeatureMatcherScriptLookupTest, MatcherFactoryPythonAdapterUsesSourceAwareScriptLookup)
+TEST(ImageMatchingArchitectureTest, RegistryExposesOnlyCudaSiftLightGlue)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/core/feature_match/MatcherFactory.cpp"));
-    const QString cmake = readProjectSourceFile(QStringLiteral("src/core/feature_match/CMakeLists.txt"));
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/core/image_matching/ImageMatchingRegistry.cpp"));
+    const QString implementation = readProjectSourceFile(
+        QStringLiteral("src/core/image_matching/sift_lightglue/SiftLightGlueAlgorithm.cpp"));
+    const QString cmake = readProjectSourceFile(
+        QStringLiteral("src/core/image_matching/CMakeLists.txt"));
     ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(implementation.isEmpty());
     ASSERT_FALSE(cmake.isEmpty());
 
-    EXPECT_TRUE(source.contains(QStringLiteral("QString findScriptFile")));
-    EXPECT_TRUE(source.contains(QStringLiteral("PLASCAN_SCRIPT_DIR")));
-    EXPECT_TRUE(source.contains(QStringLiteral("PLASCAN_SOURCE_DIR")));
-    EXPECT_TRUE(source.contains(QStringLiteral("findScriptFile(scriptName)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("match_roma.py")));
-    EXPECT_TRUE(source.contains(QStringLiteral("run_dedode.py")));
-    EXPECT_FALSE(source.contains(QStringLiteral("run_disk_aliked.py")));
-    EXPECT_TRUE(cmake.contains(QStringLiteral("PLASCAN_SOURCE_DIR=\"${CMAKE_SOURCE_DIR}\"")));
+    EXPECT_TRUE(source.contains(QStringLiteral("registerSiftLightGlueAlgorithm")));
+    EXPECT_TRUE(implementation.contains(QStringLiteral("SiftLightGlueAlgorithm")));
+    EXPECT_TRUE(implementation.contains(QStringLiteral("kSiftLightGlueAlgorithmId")));
+    EXPECT_FALSE(source.contains(QStringLiteral("superpoint"), Qt::CaseInsensitive));
+    EXPECT_FALSE(source.contains(QStringLiteral("disk"), Qt::CaseInsensitive));
+    EXPECT_TRUE(cmake.contains(QStringLiteral("TensorRtLightGlueMatcher.cpp")));
+    EXPECT_TRUE(cmake.contains(QStringLiteral("SiftFeatureExtractor.cpp")));
 }
 
 TEST(AerialTriangulationWorkflowTest, ConfirmsExistingDepthMapsWillBeInvalidatedBeforeStarting)
@@ -11259,189 +10646,17 @@ TEST(AerialTriangulationWorkflowTest, ConfirmsExistingDepthMapsWillBeInvalidated
     EXPECT_TRUE(block.contains(QStringLiteral("QMessageBox::No")));
 }
 
-TEST(ModelGenerationWorkflowTest, SmallDepthMapBatchesFallbackOnlyAfterStrictFusionCollapses)
-{
-    const QString denseSource = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    ASSERT_FALSE(denseSource.isEmpty());
-
-    const int start = denseSource.indexOf(
-        QStringLiteral("ProjectDenseReconstructionManager::startFuseDepthMapsAsync"));
-    ASSERT_GE(start, 0);
-    const int finish = denseSource.indexOf(
-        QStringLiteral("ProjectDenseReconstructionManager::startGenerateDenseCloudAsync"), start);
-    ASSERT_GT(finish, start);
-    const QString block = denseSource.mid(start, finish - start);
-
-    EXPECT_TRUE(block.contains(QStringLiteral(
-        "fusionCfg.minNumPixels = std::max(1, request.minConsistentViews)")));
-    EXPECT_TRUE(block.contains(QStringLiteral(
-        "fusionCfg.enableLowYieldFallback = totalFrames <= 32")));
-    EXPECT_FALSE(block.contains(QStringLiteral("std::min(fusionCfg.minNumPixels, 2)")))
-        << "Small projects must try the configured production consensus before an observed low-yield fallback.";
-}
-
-TEST(MatchViewerSidecarOrderTest, ReordersCachedPointsWhenDisplayOrderIsReversed)
+TEST(MatchViewerImageShardTest, ReadsCoordinatesAndValidityFromUnifiedBinaryShard)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/DualImageViewer.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
-    EXPECT_TRUE(source.contains(QStringLiteral("parseMatchFile(matchFile, imgA, imgB")));
-    EXPECT_TRUE(source.contains(QStringLiteral("displayOrderForMatchFile")));
-    EXPECT_TRUE(source.contains(QStringLiteral("appendSidecarMatchedPoints")));
-    EXPECT_TRUE(source.contains(QStringLiteral("reversed ? p1 : p0")));
-}
-
-TEST(MatchViewerValidityTest, UsesTiePointTrackValidityBeforeSparsePointFallback)
-{
-    const QString analyzerHeader =
-        readProjectSourceFile(QStringLiteral("src/gui/widgets/MatchValidityAnalyzer.h"));
-    const QString analyzerSource =
-        readProjectSourceFile(QStringLiteral("src/gui/widgets/MatchValidityAnalyzer.cpp"));
-    const QString dualSource = readProjectSourceFile(QStringLiteral("src/gui/widgets/DualImageViewer.cpp"));
-    const QString overlaySource = readProjectSourceFile(QStringLiteral("src/gui/widgets/MatchLineOverlay.cpp"));
-    const QString dialogSource = readProjectSourceFile(QStringLiteral("src/gui/dialogs/tie_points/MatchViewerDialog.cpp"));
-    const QString guiSources = readProjectSourceFile(QStringLiteral("src/gui/cmake/GuiSources.cmake"));
-    ASSERT_FALSE(analyzerHeader.isEmpty());
-    ASSERT_FALSE(analyzerSource.isEmpty());
-    ASSERT_FALSE(dualSource.isEmpty());
-    ASSERT_FALSE(overlaySource.isEmpty());
-    ASSERT_FALSE(dialogSource.isEmpty());
-    ASSERT_FALSE(guiSources.isEmpty());
-
-    EXPECT_TRUE(analyzerHeader.contains(QStringLiteral("MatchValidityResult")));
-    EXPECT_TRUE(analyzerSource.contains(QStringLiteral("matched_indices0")));
-    EXPECT_TRUE(analyzerSource.contains(QStringLiteral("latest_tie_points.json")));
-    EXPECT_TRUE(analyzerSource.contains(QStringLiteral("tiePointSidecarPaths")));
-    EXPECT_TRUE(analyzerSource.contains(QStringLiteral("sfm_sparse_points.json")));
-    EXPECT_TRUE(analyzerSource.contains(QStringLiteral("QStringLiteral(\"tracks\")")));
-    EXPECT_TRUE(analyzerSource.contains(QStringLiteral("observations")));
-    EXPECT_TRUE(dualSource.contains(QStringLiteral("analyzeMatchTrackValidity(matchFile, imgA, imgB)")));
-    EXPECT_TRUE(dualSource.contains(QStringLiteral("emit matchValidityLoaded")));
-    EXPECT_TRUE(overlaySource.contains(QStringLiteral("const QColor inlierColor(0, 80, 255);")));
-    EXPECT_TRUE(overlaySource.contains(QStringLiteral("const QColor outlierColor(255, 0, 0);")));
-    EXPECT_TRUE(dialogSource.contains(QStringLiteral("有效连接点：%1 | 无效匹配：%2")));
-    EXPECT_TRUE(guiSources.contains(QStringLiteral("widgets/MatchValidityAnalyzer.cpp")));
-}
-
-TEST(MatchViewerValidityTest, IgnoresSparsePointsWithDuplicateImageObservations)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    const QString imageA = QDir(tempDir.path()).filePath(QStringLiteral("imageA.png"));
-    const QString imageB = QDir(tempDir.path()).filePath(QStringLiteral("imageB.png"));
-    const QString matchFile = QDir(tempDir.path()).filePath(QStringLiteral("imageA__imageB_lightglue.match"));
-    const QString sparseSidecar = QDir(tempDir.path()).filePath(QStringLiteral("sfm_sparse_points.json"));
-
-    QJsonObject matchSidecar;
-    matchSidecar.insert(QStringLiteral("feature_format_version"), 2);
-    matchSidecar.insert(QStringLiteral("image0_path"), imageA);
-    matchSidecar.insert(QStringLiteral("image0_name"), QStringLiteral("imageA"));
-    matchSidecar.insert(QStringLiteral("image1_path"), imageB);
-    matchSidecar.insert(QStringLiteral("image1_name"), QStringLiteral("imageB"));
-    matchSidecar.insert(QStringLiteral("matched_indices0"), QJsonArray{10, 11});
-    matchSidecar.insert(QStringLiteral("matched_indices1"), QJsonArray{20, 20});
-
-    QFile matchSidecarFile(matchFile + QStringLiteral(".json"));
-    ASSERT_TRUE(matchSidecarFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
-    matchSidecarFile.write(QJsonDocument(matchSidecar).toJson(QJsonDocument::Compact));
-    matchSidecarFile.close();
-
-    QJsonArray duplicateObservations;
-    duplicateObservations.append(QJsonObject{
-        {QStringLiteral("image_path"), imageA},
-        {QStringLiteral("image_name"), QStringLiteral("imageA")},
-        {QStringLiteral("feature_idx"), 10}
-    });
-    duplicateObservations.append(QJsonObject{
-        {QStringLiteral("image_path"), imageA},
-        {QStringLiteral("image_name"), QStringLiteral("imageA")},
-        {QStringLiteral("feature_idx"), 11}
-    });
-    duplicateObservations.append(QJsonObject{
-        {QStringLiteral("image_path"), imageB},
-        {QStringLiteral("image_name"), QStringLiteral("imageB")},
-        {QStringLiteral("feature_idx"), 20}
-    });
-    QJsonObject sparseRoot;
-    sparseRoot.insert(QStringLiteral("points"), QJsonArray{
-        QJsonObject{{QStringLiteral("observations"), duplicateObservations}}
-    });
-
-    QFile sparseFile(sparseSidecar);
-    ASSERT_TRUE(sparseFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
-    sparseFile.write(QJsonDocument(sparseRoot).toJson(QJsonDocument::Compact));
-    sparseFile.close();
-
-    MatchValidityContext context;
-    context.sparseSidecarPaths = QStringList{sparseSidecar};
-    const MatchValidityResult result = analyzeMatchTrackValidity(matchFile, imageA, imageB, context);
-
-    ASSERT_TRUE(result.hasTrackValidity);
-    ASSERT_EQ(result.inlierMask.size(), 2);
-    EXPECT_FALSE(result.inlierMask.at(0));
-    EXPECT_FALSE(result.inlierMask.at(1));
-    EXPECT_EQ(result.validCount, 0);
-    EXPECT_EQ(result.invalidCount, 2);
-}
-
-TEST(MatchViewerValidityTest, PrefersTiePointTracksWhoseFeatureIndicesMatchRawPairs)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    const QString imageA = QDir(tempDir.path()).filePath(QStringLiteral("imageA.png"));
-    const QString imageB = QDir(tempDir.path()).filePath(QStringLiteral("imageB.png"));
-    const QString matchFile = QDir(tempDir.path()).filePath(QStringLiteral("imageA__imageB_lightglue.match"));
-    const QString tiePointSidecar = QDir(tempDir.path()).filePath(QStringLiteral("latest_tie_points.json"));
-    const QString sparseSidecar = QDir(tempDir.path()).filePath(QStringLiteral("sfm_sparse_points.json"));
-
-    QJsonObject matchSidecar;
-    matchSidecar.insert(QStringLiteral("image0_path"), imageA);
-    matchSidecar.insert(QStringLiteral("image0_name"), QStringLiteral("imageA"));
-    matchSidecar.insert(QStringLiteral("image1_path"), imageB);
-    matchSidecar.insert(QStringLiteral("image1_name"), QStringLiteral("imageB"));
-    matchSidecar.insert(QStringLiteral("matched_indices0"), QJsonArray{10, 11});
-    matchSidecar.insert(QStringLiteral("matched_indices1"), QJsonArray{20, 21});
-    QFile matchSidecarFile(matchFile + QStringLiteral(".json"));
-    ASSERT_TRUE(matchSidecarFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
-    matchSidecarFile.write(QJsonDocument(matchSidecar).toJson(QJsonDocument::Compact));
-    matchSidecarFile.close();
-
-    const QJsonArray validObservations{
-        QJsonObject{{QStringLiteral("image_path"), imageA}, {QStringLiteral("feature_idx"), 10}},
-        QJsonObject{{QStringLiteral("image_path"), imageB}, {QStringLiteral("feature_idx"), 20}}
-    };
-    QFile tiePointFile(tiePointSidecar);
-    ASSERT_TRUE(tiePointFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
-    tiePointFile.write(QJsonDocument(QJsonObject{{QStringLiteral("tracks"), QJsonArray{
-        QJsonObject{{QStringLiteral("observations"), validObservations}}
-    }}}).toJson(QJsonDocument::Compact));
-    tiePointFile.close();
-
-    QFile sparseFile(sparseSidecar);
-    ASSERT_TRUE(sparseFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
-    sparseFile.write(QJsonDocument(QJsonObject{{QStringLiteral("points"), QJsonArray{
-        QJsonObject{{QStringLiteral("observations"), QJsonArray{
-            QJsonObject{{QStringLiteral("image_path"), imageA}, {QStringLiteral("feature_idx"), 99}},
-            QJsonObject{{QStringLiteral("image_path"), imageB}, {QStringLiteral("feature_idx"), 98}}
-        }}}
-    }}}).toJson(QJsonDocument::Compact));
-    sparseFile.close();
-
-    MatchValidityContext context;
-    context.tiePointSidecarPaths = QStringList{tiePointSidecar};
-    context.sparseSidecarPaths = QStringList{sparseSidecar};
-    const MatchValidityResult result = analyzeMatchTrackValidity(matchFile, imageA, imageB, context);
-
-    ASSERT_TRUE(result.hasTrackValidity);
-    EXPECT_EQ(result.sparseSidecarPath, tiePointSidecar);
-    EXPECT_EQ(result.validCount, 1);
-    EXPECT_EQ(result.invalidCount, 1);
-    ASSERT_EQ(result.inlierMask.size(), 2);
-    EXPECT_TRUE(result.inlierMask.at(0));
-    EXPECT_FALSE(result.inlierMask.at(1));
+    EXPECT_TRUE(source.contains(QStringLiteral("parseMatchFile(matchFile,")));
+    EXPECT_TRUE(source.contains(QStringLiteral("ImageMatchFile::read")));
+    EXPECT_TRUE(source.contains(QStringLiteral("selected_block->findOwnerObservation")));
+    EXPECT_TRUE(source.contains(QStringLiteral("MatchRecordFlag::GeometryInlier")));
+    EXPECT_TRUE(source.contains(QStringLiteral("owner_is_a ? owner_point : peer_point")));
+    EXPECT_FALSE(source.contains(QStringLiteral("appendSidecarMatchedPoints")));
 }
 
 TEST(MatchPairSelectorOverlapCandidatesTest, ListsOverlapPairsEvenWhenNoMatchFileExists)
@@ -11467,18 +10682,16 @@ TEST(MatchPairSelectorTrackValidityTest, ShowsMetashapeStyleCounts)
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(header.contains(QStringLiteral("bool hasTrackValidity = false;")));
-    EXPECT_TRUE(source.contains(QStringLiteral("#include \"MatchValidityAnalyzer.h\"")));
+    EXPECT_TRUE(source.contains(QStringLiteral("#include \"ImageMatchFile.h\"")));
     EXPECT_TRUE(source.contains(QStringLiteral("headers << tr(\"图像\") << tr(\"原始匹配\")")));
     EXPECT_TRUE(source.contains(QStringLiteral("<< tr(\"有效连接点\") << tr(\"无效匹配\")")));
     EXPECT_TRUE(source.contains(QStringLiteral("<< tr(\"最佳算法\") << tr(\"状态\")")));
-    EXPECT_TRUE(source.contains(QStringLiteral("const MatchValidityContext validityContext")))
-        << "Sparse-track sidecar discovery must be done once per selector scan, not once per table row.";
-    EXPECT_TRUE(source.contains(QStringLiteral("analyzeMatchTrackValidity")));
-    EXPECT_TRUE(source.contains(QStringLiteral("info.hasTrackValidity = true;")));
+    EXPECT_TRUE(source.contains(QStringLiteral("block.tiePointMatchCount")));
+    EXPECT_TRUE(source.contains(QStringLiteral("variant.tiePointMatches")));
     EXPECT_TRUE(source.contains(QStringLiteral("原始 %3，有效连接点 %4，无效匹配 %5")));
     EXPECT_TRUE(source.contains(QStringLiteral("已对齐")));
     EXPECT_TRUE(source.contains(QStringLiteral("const bool hasValidityStats = info.hasTrackValidity;")))
-        << "Metashape 风格的有效点必须来自空三后保留的 tie point，不能回退到两视图几何内点。";
+        << "有效点应直接来自 `.pimatch` 中空三回写的连接点计数。";
     EXPECT_FALSE(source.contains(QStringLiteral("info.hasTrackValidity || info.hasInlierStats")))
         << "几何验证内点不是 Metashape View Matches 里的有效连接点。";
 }
@@ -11526,8 +10739,10 @@ TEST(MatchPairSelectorResponsivenessTest, PrioritizesCurrentImageBeforeFullCatal
         << "The selector should keep a separate watcher for fast current-image results.";
     EXPECT_TRUE(source.contains(QStringLiteral("parsePriorityMatchDataForImageFromSnapshot")))
         << "The first worker should scan only match files that name the current image.";
-    EXPECT_TRUE(source.contains(QStringLiteral("candidateMatchFilesForImage")))
-        << "Fast loading must avoid a full MatchResultCatalog scan before showing rows.";
+    EXPECT_TRUE(source.contains(QStringLiteral("ImageMatchFile::filePathForImage")))
+        << "Fast loading should resolve the current image's deterministic .pimatch shard directly.";
+    EXPECT_TRUE(source.contains(QStringLiteral("ImageMatchFile::read(shardPath")))
+        << "Fast loading should read only the current image shard before showing rows.";
     EXPECT_TRUE(header.contains(QStringLiteral("startFullMatchPairLoad")))
         << "The full catalog scan should have its own delayed launcher.";
     EXPECT_TRUE(source.contains(QStringLiteral("startFullMatchPairLoad(makeSnapshot(), imagePath, generation)")))
@@ -11654,7 +10869,10 @@ TEST(MatchViewerVariantSwitchTest, ExposesCompactVariantComboAndReloadsSparseMat
     EXPECT_TRUE(header.contains(QStringLiteral("QVector<xjw::aerial_triangulation::MatchVariant> _matchVariants;")));
     EXPECT_TRUE(source.contains(QStringLiteral("onVariantChanged")));
     EXPECT_TRUE(source.contains(QStringLiteral("_variantCombo->setVisible(_variantCombo->count() > 1)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("loadMatchPair(_imageA, _imageB, _matchFile)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_viewer->loadMatchPair(_imageA,")));
+    EXPECT_TRUE(source.contains(QStringLiteral("variant.algorithmId")));
+    EXPECT_TRUE(source.contains(QStringLiteral("variant.algorithmVersion")));
+    EXPECT_TRUE(source.contains(QStringLiteral("variant.configFingerprint")));
     EXPECT_TRUE(source.contains(QStringLiteral("几何内点 %1 / 原始 %2")));
 }
 
@@ -13556,74 +12774,6 @@ TEST(ProjectWorkflowReportsTest, ReconstructionQualityReportIsRegisteredInProjec
     EXPECT_NEAR(reportRecord.value(QStringLiteral("dem_coverage")).toDouble(), 0.75, 1e-9);
 }
 
-TEST(ProjectManagerQualityReportTest, PipelineStageBoundariesRefreshReconstructionQualityReport)
-{
-    const QString managerHeader = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.h"));
-    const QString managerSource = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
-    const QString denseSource =
-        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    const QString terrainSource =
-        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
-    ASSERT_FALSE(managerHeader.isEmpty());
-    ASSERT_FALSE(managerSource.isEmpty());
-    ASSERT_FALSE(denseSource.isEmpty());
-    ASSERT_FALSE(terrainSource.isEmpty());
-
-    EXPECT_TRUE(managerHeader.contains(QStringLiteral("refreshReconstructionQualityReport")));
-    EXPECT_TRUE(managerSource.contains(QStringLiteral("writeReconstructionQualityProjectReport")));
-    EXPECT_TRUE(managerSource.contains(QStringLiteral("ProjectManager::refreshReconstructionQualityReport")));
-    EXPECT_TRUE(managerSource.contains(QStringLiteral("refreshReconstructionQualityReport();")));
-    EXPECT_TRUE(denseSource.contains(QStringLiteral("_owner->refreshReconstructionQualityReport()")));
-    EXPECT_TRUE(terrainSource.contains(QStringLiteral("_owner->refreshReconstructionQualityReport()")));
-}
-
-TEST(ProjectDenseReconstructionManagerContractTest, RefreshesQualityBeforeDepthToFusionTransition)
-{
-    const QString source = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int functionStart = source.indexOf(
-        QStringLiteral("ProjectDenseReconstructionManager::startGenerateDenseCloudAsync"));
-    const int functionEnd = source.indexOf(
-        QStringLiteral("void ProjectDenseReconstructionManager::startDenseCloudRefineAsync"), functionStart);
-    ASSERT_GE(functionStart, 0);
-    ASSERT_GT(functionEnd, functionStart);
-    const QString block = source.mid(functionStart, functionEnd - functionStart);
-    const int finishedConnection = block.indexOf(QStringLiteral("&DepthMapGenerator::finished"));
-    const int refresh = block.indexOf(QStringLiteral("refreshReconstructionQualityReport()"),
-                                      finishedConnection);
-    const int transition = block.indexOf(QStringLiteral("startFuseDepthMapsAsync(settings)"),
-                                         finishedConnection);
-    ASSERT_GE(finishedConnection, 0);
-    ASSERT_GE(refresh, 0);
-    ASSERT_GE(transition, 0);
-    EXPECT_LT(refresh, transition);
-}
-
-TEST(ProjectDenseReconstructionManagerContractTest, RefreshesQualityAfterFusionRegistration)
-{
-    const QString source = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int functionStart = source.indexOf(
-        QStringLiteral("ProjectDenseReconstructionManager::startFuseDepthMapsAsync"));
-    const int functionEnd = source.indexOf(
-        QStringLiteral("ProjectDenseReconstructionManager::startGenerateDenseCloudAsync"), functionStart);
-    ASSERT_GE(functionStart, 0);
-    ASSERT_GT(functionEnd, functionStart);
-    const QString block = source.mid(functionStart, functionEnd - functionStart);
-    const int registration = block.indexOf(QStringLiteral("QStringLiteral(\"dense_cloud_results\")"));
-    const int refresh = block.indexOf(QStringLiteral("refreshReconstructionQualityReport()"), registration);
-    const int ready = block.indexOf(QStringLiteral("emit self->denseCloudResultReady(outputPly, pointCount)"),
-                                    registration);
-    ASSERT_GE(registration, 0);
-    ASSERT_GE(refresh, 0);
-    ASSERT_GE(ready, 0);
-    EXPECT_LT(refresh, ready);
-}
-
 TEST(DataTreeWidgetTest, SelectionClickDoesNotActivateImageUntilItemActivation)
 {
     DataTreeWidget tree;
@@ -13693,6 +12843,53 @@ TEST(DataTreeWidgetTest, ContextMenuUsesSameResourcePathResolutionAsActivation)
     EXPECT_TRUE(source.contains(QStringLiteral("path = resolveResourcePath(path)")));
     EXPECT_TRUE(source.contains(QStringLiteral("resourceFromIndex(i, &rowSection, &rowPath)")));
     EXPECT_TRUE(source.contains(QStringLiteral("paths << rowPath")));
+}
+
+TEST(DataTreeWidgetTest, TiePointContextMenuUsesDedicatedDestructiveActions)
+{
+    const QString treeSource =
+        readProjectSourceFile(QStringLiteral("src/gui/widgets/DataTreeWidget.cpp"));
+    const QString managerSource =
+        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    ASSERT_FALSE(treeSource.isEmpty());
+    ASSERT_FALSE(managerSource.isEmpty());
+
+    const qsizetype menuStart = treeSource.indexOf(QStringLiteral(
+        "if (resourceFromIndex(nameIndex, &contextSection, &contextPath)"));
+    const qsizetype genericMenuStart = treeSource.indexOf(
+        QStringLiteral("// 收集当前选中的所有条目"),
+        menuStart);
+    ASSERT_GE(menuStart, 0);
+    ASSERT_GT(genericMenuStart, menuStart);
+    const QString tiePointMenu =
+        treeSource.mid(menuStart, genericMenuStart - menuStart);
+
+    const QStringList expectedActions{
+        QStringLiteral("放大至"),
+        QStringLiteral("移除连接点"),
+        QStringLiteral("显示信息"),
+        QStringLiteral("在文件管理器中显示")
+    };
+    qsizetype previousPosition = -1;
+    for (const QString &actionText : expectedActions)
+    {
+        const qsizetype position = tiePointMenu.indexOf(
+            QStringLiteral("menu.addAction(tr(\"%1\"))").arg(actionText));
+        EXPECT_GT(position, previousPosition) << actionText.toStdString();
+        previousPosition = position;
+    }
+
+    EXPECT_TRUE(tiePointMenu.contains(
+        QStringLiteral("emit resourceActivated(contextSection, contextPath)")));
+    EXPECT_TRUE(tiePointMenu.contains(
+        QStringLiteral("emit deleteDataRequested(")));
+    EXPECT_TRUE(tiePointMenu.contains(
+        QStringLiteral("emit revealRequested(contextPath)")));
+    EXPECT_FALSE(tiePointMenu.contains(QStringLiteral("打包到归档")));
+    EXPECT_FALSE(tiePointMenu.contains(QStringLiteral("移除引用")));
+    EXPECT_FALSE(tiePointMenu.contains(QStringLiteral("删除数据")));
+    EXPECT_TRUE(managerSource.contains(
+        QStringLiteral("ProjectTiePointResultService::deleteAll(_projectData)")));
 }
 
 TEST(DataTreeWidgetTest, PhotoContextMenuRoutesSelectedImageToMatchViewer)
@@ -14378,27 +13575,6 @@ TEST(CameraModel3DDialogTest, PlyLoadProgressDoesNotRegressAfterFinished)
         << "Late queued PLY progress from the worker must not re-enable the loading overlay after the model loaded.";
     EXPECT_TRUE(source.contains(QStringLiteral("正在完整加载 PLY 点云")))
         << "Direct PLY loading should advance the overlay beyond the header parsing stage.";
-}
-
-TEST(DenseCloudRefineTest, ReportsPlaPointProcessingDeviceForGui)
-{
-    const QString guiSource = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    ASSERT_FALSE(guiSource.isEmpty());
-
-    EXPECT_TRUE(guiSource.contains(QStringLiteral("plapoint::ProcessingReport")));
-    EXPECT_TRUE(guiSource.contains(QStringLiteral("processingDeviceLabel")));
-    EXPECT_TRUE(guiSource.contains(QStringLiteral("usedDevice")));
-}
-
-TEST(DenseCloudRefineTest, NormalEstimationUsesRequestedPlaPointDevice)
-{
-    const QString guiSource = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    ASSERT_FALSE(guiSource.isEmpty());
-
-    EXPECT_TRUE(guiSource.contains(QStringLiteral("estimateNormals(cloud, request.normalK, request.processingDevice")));
-    EXPECT_FALSE(guiSource.contains(QStringLiteral("NormalEstimation<float, plamatrix::Device::CPU> ne")));
 }
 
 TEST(SurfaceReconstructorTest, HeightGridFallbackUsesPlaPointGpuCapablePath)

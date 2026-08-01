@@ -8,8 +8,46 @@ from pathlib import Path
 from testData.prepare_mun_frl_lidar_ba_project import prepare_project
 
 
+def write_match_report(matches_dir: Path, image0: Path, image1: Path) -> Path:
+    """Create the CLI index used by the project-preparation unit fixture.
+
+    The payload bytes are deliberately opaque here. Production validation is
+    covered by the C++ ImageMatchFile tests; this test only verifies project
+    metadata transport and must not duplicate the binary parser in Python.
+    """
+    shard0 = matches_dir / "frame_000001_test.pimatch"
+    shard1 = matches_dir / "frame_000002_test.pimatch"
+    shard0.write_bytes(b"opaque-pimatch-fixture-0")
+    shard1.write_bytes(b"opaque-pimatch-fixture-1")
+    report_path = matches_dir / "match_photos_report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "success": True,
+                "pair_match_count": 1,
+                "image_match_files": [
+                    {
+                        "image": str(image0),
+                        "output": str(shard0),
+                        "neighbors": [str(image1)],
+                        "settings": {"algorithm_id": "sift_lightglue"},
+                    },
+                    {
+                        "image": str(image1),
+                        "output": str(shard1),
+                        "neighbors": [str(image0)],
+                        "settings": {"algorithm_id": "sift_lightglue"},
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return report_path
+
+
 class PrepareMunFrlLidarBaProjectTest(unittest.TestCase):
-    def test_prepare_project_writes_plascan_with_cameras_and_match_sidecars(self):
+    def test_prepare_project_writes_plascan_with_cameras_and_match_shards(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             images_dir = root / "images"
@@ -46,23 +84,7 @@ class PrepareMunFrlLidarBaProjectTest(unittest.TestCase):
 
             matches_dir = root / "matches"
             matches_dir.mkdir()
-            match_file = matches_dir / "frame_000001__frame_000002.match"
-            match_file.write_bytes(b"match")
-            sidecar = {
-                "match_file": str(match_file),
-                "image0_name": "frame_000001.jpg",
-                "image1_name": "frame_000002.jpg",
-                "image0_path": "frame_000001.jpg",
-                "image1_path": "frame_000002.jpg",
-                "feature_format_version": 2,
-                "num_matches": 2,
-                "matched_points0": [[1.0, 2.0], [3.0, 4.0]],
-                "matched_points1": [[1.5, 2.5], [3.5, 4.5]],
-                "matched_indices0": [0, 1],
-                "matched_indices1": [0, 1],
-                "matched_scores": [1.0, 0.9],
-            }
-            Path(str(match_file) + ".json").write_text(json.dumps(sidecar), encoding="utf-8")
+            match_report = write_match_report(matches_dir, image0, image1)
 
             plan = root / "benchmark_plan.json"
             plan.write_text(
@@ -104,8 +126,15 @@ class PrepareMunFrlLidarBaProjectTest(unittest.TestCase):
             self.assertEqual(first_camera["fv"], 801.0)
             self.assertEqual(first_camera["C"], [1.0, 2.0, 3.0])
             self.assertEqual(first_camera["k1"], -0.1)
-            self.assertEqual(project_results["ipmatch_results"][0]["settings"]["sidecar_json"],
-                             str(Path(str(match_file) + ".json").resolve()))
+            self.assertEqual(len(project_results["image_match_results"]), 2)
+            self.assertEqual(
+                project_results["image_match_results"][0]["settings"]["source_report"],
+                str(match_report.resolve()),
+            )
+            self.assertEqual(
+                project_results["image_match_results"][0]["settings"]["storage_format"],
+                "pimatch",
+            )
 
     def test_prepare_project_applies_tf_static_body_to_camera_transform(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -155,23 +184,7 @@ class PrepareMunFrlLidarBaProjectTest(unittest.TestCase):
 
             matches_dir = root / "matches"
             matches_dir.mkdir()
-            match_file = matches_dir / "frame_000001__frame_000002.match"
-            match_file.write_bytes(b"match")
-            sidecar = {
-                "match_file": str(match_file),
-                "image0_name": "frame_000001.jpg",
-                "image1_name": "frame_000002.jpg",
-                "image0_path": "frame_000001.jpg",
-                "image1_path": "frame_000002.jpg",
-                "feature_format_version": 2,
-                "num_matches": 2,
-                "matched_points0": [[1.0, 2.0], [3.0, 4.0]],
-                "matched_points1": [[1.5, 2.5], [3.5, 4.5]],
-                "matched_indices0": [0, 1],
-                "matched_indices1": [0, 1],
-                "matched_scores": [1.0, 0.9],
-            }
-            Path(str(match_file) + ".json").write_text(json.dumps(sidecar), encoding="utf-8")
+            write_match_report(matches_dir, image0, image1)
 
             plan = root / "benchmark_plan.json"
             plan.write_text(

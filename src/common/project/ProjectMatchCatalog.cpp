@@ -115,23 +115,6 @@ void appendPair(QVector<QPair<QString, QString>> *pairs,
     pairs->push_back(canonicalPair(trimmed_left, trimmed_right));
 }
 
-void appendPairFromStem(QVector<QPair<QString, QString>> *pairs,
-                        QSet<QString> *seen,
-                        const QString &stem)
-{
-    const QStringList double_underscore = stem.split(QStringLiteral("__"));
-    if (double_underscore.size() == 2)
-    {
-        appendPair(pairs, seen, double_underscore.at(0), double_underscore.at(1));
-        return;
-    }
-    const QStringList dash = stem.split(QLatin1Char('-'));
-    if (dash.size() == 2)
-    {
-        appendPair(pairs, seen, dash.at(0), dash.at(1));
-    }
-}
-
 QString resolveDisplayName(const QString &token, const QJsonArray &image_entries)
 {
     const QString trimmed = token.trimmed();
@@ -180,86 +163,19 @@ QVector<QPair<QString, QString>> collectMatchedImageNamePairs(
                    resolveDisplayName(right, image_entries));
     };
 
-    if (!project_path.isEmpty())
-    {
-        const QDir match_dir(ProjectIO::ipmatchOutputDir(project_path));
-        const QStringList files = match_dir.entryList(
-            QStringList{QStringLiteral("*.match")}, QDir::Files, QDir::Name);
-        for (const QString &file_name : files)
-        {
-            QFile sidecar(match_dir.filePath(file_name + QStringLiteral(".json")));
-            if (sidecar.open(QIODevice::ReadOnly))
-            {
-                const QJsonObject object = QJsonDocument::fromJson(sidecar.readAll()).object();
-                const QString image0 = object.value(QStringLiteral("image0_name")).toString();
-                const QString image1 = object.value(QStringLiteral("image1_name")).toString();
-                append_resolved(image0, image1);
-                if (!image0.isEmpty() && !image1.isEmpty())
-                {
-                    continue;
-                }
-            }
-            const QString stem = QFileInfo(file_name).completeBaseName();
-            QVector<QPair<QString, QString>> raw_pairs;
-            QSet<QString> raw_seen;
-            appendPairFromStem(&raw_pairs, &raw_seen, stem);
-            for (const auto &pair : raw_pairs)
-            {
-                append_resolved(pair.first, pair.second);
-            }
-        }
-    }
-
-    const QJsonArray match_results = metadata.value(QStringLiteral("ipmatch_results")).toArray();
+    Q_UNUSED(project_path)
+    const QJsonArray match_results =
+        metadata.value(QStringLiteral("image_match_results")).toArray();
     for (const QJsonValue &value : match_results)
     {
         const QJsonObject object = value.toObject();
-        QString image0 = object.value(QStringLiteral("image0_name")).toString();
-        QString image1 = object.value(QStringLiteral("image1_name")).toString();
-        if (image0.isEmpty())
+        const QString owner = object.value(QStringLiteral("image")).toString();
+        for (const QJsonValue &neighbor : object.value(QStringLiteral("neighbors")).toArray())
         {
-            image0 = QFileInfo(object.value(QStringLiteral("image0")).toString()).completeBaseName();
+            append_resolved(owner, neighbor.toString());
         }
-        if (image1.isEmpty())
-        {
-            image1 = QFileInfo(object.value(QStringLiteral("image1")).toString()).completeBaseName();
-        }
-        append_resolved(image0, image1);
     }
 
-    sortPairs(&pairs);
-    return pairs;
-}
-
-QVector<QPair<QString, QString>> collectSettledNoMatchImageNamePairs(
-    const QString &project_path,
-    const QJsonObject &metadata)
-{
-    QVector<QPair<QString, QString>> pairs;
-    if (project_path.isEmpty())
-    {
-        return pairs;
-    }
-
-    QFile file(QDir(ProjectIO::ipmatchOutputDir(project_path))
-                   .filePath(QStringLiteral("no_match_pairs.json")));
-    if (!file.open(QIODevice::ReadOnly))
-    {
-        return pairs;
-    }
-
-    QSet<QString> seen;
-    const QJsonArray image_entries = projectImageEntries(metadata);
-    for (const QJsonValue &value : QJsonDocument::fromJson(file.readAll()).array())
-    {
-        const QJsonObject object = value.toObject();
-        appendPair(&pairs,
-                   &seen,
-                   resolveDisplayName(object.value(QStringLiteral("image0")).toString(),
-                                      image_entries),
-                   resolveDisplayName(object.value(QStringLiteral("image1")).toString(),
-                                      image_entries));
-    }
     sortPairs(&pairs);
     return pairs;
 }

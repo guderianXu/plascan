@@ -19,8 +19,7 @@ xjw::aerial_triangulation::AerialTriangulationOptions makeBaseOptions(
     options.projectPath = QDir(root).filePath(QStringLiteral("project.plascan"));
     options.outputDir = QDir(root).filePath(QStringLiteral("assets/aerial_triangulation"));
     options.assetsDir = QDir(root).filePath(QStringLiteral("assets"));
-    options.featureAlgorithm = QStringLiteral("sift");
-    options.matchAlgorithm = QStringLiteral("lightglue");
+    options.matchingAlgorithmId = QStringLiteral("sift_lightglue");
     return options;
 }
 
@@ -63,16 +62,38 @@ TEST(AerialTriangulationWorkflowTest, ExplicitRuntimeLimitsOverrideQualityDefaul
     QTemporaryDir tempDir;
     auto options = makeBaseOptions(tempDir.path());
     options.quality = QStringLiteral("lowest");
-    options.featureMaxImageDim = -1;
+    options.featureMaxImageDim = 6144;
     options.cudaParallelPairs = 3;
+    options.cudaDevice = 1;
+    options.featurePrefetchDepth = 4;
+    options.matchThreshold = 0.22f;
+    options.geometryReprojThreshold = 2.25;
+    options.geometryMinInliers = 31;
+    options.geometryMaxIterations = 24000;
+    options.tiePointGridColumns = 10;
+    options.tiePointGridRows = 6;
+    options.maxTiePointsPerGridCell = 77;
+    options.stationaryTiePointMaxPixelMotion = 1.75f;
 
     const auto resolved =
         xjw::aerial_triangulation::AerialTriangulationWorkflow::resolveConfig(options);
 
-    EXPECT_EQ(resolved.tiePointOptions.maxImageDim, -1);
+    EXPECT_EQ(resolved.tiePointOptions.maxImageDim, 6144);
     EXPECT_EQ(resolved.tiePointOptions.cudaParallelPairs, 3);
+    EXPECT_EQ(resolved.tiePointOptions.cudaDevice, 1);
+    EXPECT_EQ(resolved.tiePointOptions.featurePrefetchDepth, 4);
+    EXPECT_FLOAT_EQ(resolved.tiePointOptions.matchThreshold, 0.22f);
+    EXPECT_DOUBLE_EQ(resolved.tiePointOptions.geometryReprojThreshold, 2.25);
+    EXPECT_EQ(resolved.tiePointOptions.geometryMinInliers, 31);
+    EXPECT_EQ(resolved.tiePointOptions.geometryMaxIterations, 24000);
+    EXPECT_EQ(resolved.tiePointOptions.tiePointGridColumns, 10);
+    EXPECT_EQ(resolved.tiePointOptions.tiePointGridRows, 6);
+    EXPECT_EQ(resolved.tiePointOptions.maxTiePointsPerGridCell, 77);
+    EXPECT_FLOAT_EQ(resolved.tiePointOptions.stationaryTiePointMaxPixelMotion, 1.75f);
     EXPECT_EQ(resolved.resolvedSettings.value(QStringLiteral("cuda_parallel_pairs_requested")).toInt(), 3);
     EXPECT_EQ(resolved.resolvedSettings.value(QStringLiteral("cuda_parallel_pairs_effective")).toInt(), 0);
+    EXPECT_EQ(resolved.resolvedSettings.value(QStringLiteral("geometry_max_iterations")).toInt(),
+              24000);
     EXPECT_EQ(resolved.pipelineInput.quality, 0);
 }
 
@@ -274,7 +295,7 @@ TEST(AerialTriangulationWorkflowTest, ResetAlignmentReusesExistingMatchesByDefau
         xjw::aerial_triangulation::AerialTriangulationWorkflow::resolveConfig(options);
 
     EXPECT_FALSE(resolved.forceRebuildTiePoints);
-    EXPECT_TRUE(resolved.tiePointOptions.reuseExistingFeatures);
+    EXPECT_TRUE(resolved.tiePointOptions.reuseExistingMatches);
     EXPECT_TRUE(resolved.pipelineInput.useProjectCameraIntrinsics);
     EXPECT_FALSE(resolved.pipelineInput.useProjectCameraPoses);
 
@@ -297,7 +318,7 @@ TEST(AerialTriangulationWorkflowTest, DisablingMatchReuseForcesTiePointRebuild)
 
     EXPECT_TRUE(resolved.prepareTiePoints);
     EXPECT_TRUE(resolved.forceRebuildTiePoints);
-    EXPECT_FALSE(resolved.tiePointOptions.reuseExistingFeatures);
+    EXPECT_FALSE(resolved.tiePointOptions.reuseExistingMatches);
     EXPECT_EQ(resolved.resolvedSettings.value(
                   QStringLiteral("tie_point_preparation")).toString(),
               QStringLiteral("force_rebuild"));

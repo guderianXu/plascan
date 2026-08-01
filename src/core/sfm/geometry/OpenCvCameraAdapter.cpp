@@ -44,6 +44,8 @@ cv::Mat openCvCameraMatrix(double focalX,
                            bool depthAxisFlipped,
                            bool positiveDepthConvention)
 {
+    // OpenCV 固定采用 +Z 前向。PlaScan 若以 -Z 为前方，需要同时翻转透视分母
+    // 对应的焦距符号；u/v 轴自身方向符号仍独立保留。
     const double depthSign = positiveDepthConvention && depthAxisFlipped ? -1.0 : 1.0;
     const double fx = depthSign * (uAxisSign < 0 ? -1.0 : 1.0) * focalX;
     const double fy = depthSign * (vAxisSign < 0 ? -1.0 : 1.0) * focalY;
@@ -56,6 +58,8 @@ cv::Mat openCvRvecFromCameraToWorldPose(
     const std::array<double, 9> &cameraToWorldRotation,
     bool depthAxisFlipped)
 {
+    // PlaScan Rcw 转为 OpenCV Rwc。深度轴翻转用等价的局部坐标变换吸收，
+    // 避免调用 solvePnP 时再对结果做一次不一致的 180 度旋转。
     cv::Mat worldToCamera = cameraToWorldMatrix(cameraToWorldRotation).t();
     if (depthAxisFlipped)
     {
@@ -75,6 +79,8 @@ cv::Mat openCvTvecFromCameraPose(
     const std::array<double, 3> &cameraCenter,
     bool depthAxisFlipped)
 {
+    // OpenCV 外参不是相机中心；必须使用 t=-Rwc*C。把 C 直接写入 t 会导致
+    // 相机缩略图方向看似合理但绝对位置完全错误。
     const cv::Mat worldToCamera = cameraToWorldMatrix(cameraToWorldRotation).t();
     const cv::Mat center = (cv::Mat_<double>(3, 1)
         << cameraCenter[0], cameraCenter[1], cameraCenter[2]);

@@ -68,13 +68,26 @@ TEST(ProjectSessionTest, CreatesCurrentChunkProjectAndRoundTripsUris)
         ProjectPackageLayout::metadataArchivePath(projectPath)).isFile());
     EXPECT_TRUE(QFileInfo(
         ProjectPackageLayout::chunkArchivePath(projectPath, 1)).isFile());
+    const QString chunkRoot =
+        ProjectPackageLayout::chunkDirectory(projectPath, 1);
+    for (const QString &optionalDirectory :
+         {QStringLiteral("assets"),
+          QStringLiteral("bundle_adjust"),
+          QStringLiteral("reconstruction"),
+          QStringLiteral("reports")})
+    {
+        EXPECT_FALSE(QFileInfo::exists(
+            QDir(chunkRoot).filePath(optionalDirectory)));
+    }
+    EXPECT_FALSE(QFileInfo::exists(
+        ProjectPackageLayout::sharedDirectory(projectPath)));
 
     const QString artifact = QDir(session.activeChunkRoot())
-        .filePath(QStringLiteral("assets/ip/a.sift"));
+        .filePath(QStringLiteral("assets/image_matches/a.pimatch"));
     ASSERT_TRUE(QDir().mkpath(QFileInfo(artifact).absolutePath()));
     QFile artifactFile(artifact);
     ASSERT_TRUE(artifactFile.open(QIODevice::WriteOnly));
-    ASSERT_EQ(artifactFile.write("feature"), 7);
+    ASSERT_EQ(artifactFile.write("match"), 5);
     artifactFile.close();
 
     ASSERT_TRUE(session.mergeImages(
@@ -87,9 +100,9 @@ TEST(ProjectSessionTest, CreatesCurrentChunkProjectAndRoundTripsUris)
         },
         &error)) << qPrintable(error);
     session.appendResult(
-        QStringLiteral("ipfind_results"),
+        QStringLiteral("image_match_results"),
         QJsonObject{
-            {QStringLiteral("input"),
+            {QStringLiteral("image"),
              QDir(temporary.path()).filePath(QStringLiteral("a.png"))},
             {QStringLiteral("output"), artifact}
         });
@@ -110,11 +123,11 @@ TEST(ProjectSessionTest, CreatesCurrentChunkProjectAndRoundTripsUris)
         QString::fromLatin1(
             PortableProjectFormat::ProjectResultsSection)).toObject();
     const QString storedArtifact = storedResults.value(
-        QStringLiteral("ipfind_results")).toArray().first().toObject()
+        QStringLiteral("image_match_results")).toArray().first().toObject()
         .value(QStringLiteral("output")).toString();
     EXPECT_EQ(storedArtifact,
               QStringLiteral(
-                  "plascan:///workspace/assets/ip/a.sift"));
+                   "plascan:///chunk/assets/image_matches/a.pimatch"));
     const QJsonObject storedImage = stored.value(
         QString::fromLatin1(
             PortableProjectFormat::ProjectFilesSection)).toObject()
@@ -122,7 +135,7 @@ TEST(ProjectSessionTest, CreatesCurrentChunkProjectAndRoundTripsUris)
     EXPECT_TRUE(storedImage.value(QStringLiteral("path")).toString()
                     .startsWith(QStringLiteral(
                         "plascan:///shared/images/")));
-    EXPECT_EQ(storedResults.value(QStringLiteral("ipfind_results"))
+    EXPECT_EQ(storedResults.value(QStringLiteral("image_match_results"))
                   .toArray().first().toObject()
                   .value(QStringLiteral("schema_version")).toInt(),
               1);
@@ -133,7 +146,7 @@ TEST(ProjectSessionTest, CreatesCurrentChunkProjectAndRoundTripsUris)
         QStringLiteral("report_results")).toArray().first().toObject();
     EXPECT_EQ(storedReport.value(QStringLiteral("planned_dir")).toString(),
               QStringLiteral(
-                  "plascan:///workspace/reconstruction/future/run"));
+                  "plascan:///chunk/reconstruction/future/run"));
     EXPECT_TRUE(storedReport.value(
         QStringLiteral("external_output_dir")).toString()
                     .startsWith(QStringLiteral(
@@ -141,9 +154,49 @@ TEST(ProjectSessionTest, CreatesCurrentChunkProjectAndRoundTripsUris)
 
     ASSERT_TRUE(session.open(projectPath, &error)) << qPrintable(error);
     const QString materialized = session.projectResults().value(
-        QStringLiteral("ipfind_results")).toArray().first().toObject()
+        QStringLiteral("image_match_results")).toArray().first().toObject()
         .value(QStringLiteral("output")).toString();
     EXPECT_EQ(QDir::cleanPath(materialized), QDir::cleanPath(artifact));
+}
+
+TEST(ProjectSessionTest, SavePrunesOnlyEmptyLegacyWorkflowDirectories)
+{
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+    const QString projectPath =
+        QDir(temporary.path()).filePath(QStringLiteral("lazy.plascan"));
+
+    ProjectSession session;
+    QString error;
+    ASSERT_TRUE(session.create(
+        projectPath, QStringLiteral("按需目录"), &error))
+        << qPrintable(error);
+
+    const QString chunkRoot = session.activeChunkRoot();
+    const QString bundleAdjustDir =
+        QDir(chunkRoot).filePath(QStringLiteral("bundle_adjust"));
+    const QString reconstructionModelDir =
+        QDir(chunkRoot).filePath(QStringLiteral("reconstruction/model"));
+    const QString reportsDir =
+        QDir(chunkRoot).filePath(QStringLiteral("reports"));
+    ASSERT_TRUE(QDir().mkpath(bundleAdjustDir));
+    ASSERT_TRUE(QDir().mkpath(reconstructionModelDir));
+    ASSERT_TRUE(QDir().mkpath(reportsDir));
+
+    const QString reportPath =
+        QDir(reportsDir).filePath(QStringLiteral("keep.json"));
+    QFile report(reportPath);
+    ASSERT_TRUE(report.open(QIODevice::WriteOnly));
+    ASSERT_EQ(report.write("{}"), 2);
+    report.close();
+
+    ASSERT_TRUE(session.save(&error)) << qPrintable(error);
+    EXPECT_FALSE(QFileInfo::exists(bundleAdjustDir));
+    EXPECT_FALSE(QFileInfo::exists(reconstructionModelDir));
+    EXPECT_FALSE(QFileInfo::exists(
+        QDir(chunkRoot).filePath(QStringLiteral("reconstruction"))));
+    EXPECT_TRUE(QFileInfo(reportsDir).isDir());
+    EXPECT_TRUE(QFileInfo(reportPath).isFile());
 }
 
 TEST(ProjectSessionTest, SharesIdenticalImagesAcrossChunks)
@@ -323,6 +376,20 @@ TEST(ProjectSessionTest, SelectsChunkByNameAndUpdatesDefault)
         xjw::common::project::ProjectResourceIndex().toJson(),
         &second,
         &error)) << qPrintable(error);
+    const QString secondRoot =
+        ProjectPackageLayout::chunkDirectory(projectPath, second.directory);
+    EXPECT_TRUE(QFileInfo(
+        ProjectPackageLayout::chunkArchivePath(
+            projectPath, second.directory)).isFile());
+    for (const QString &optionalDirectory :
+         {QStringLiteral("assets"),
+          QStringLiteral("bundle_adjust"),
+          QStringLiteral("reconstruction"),
+          QStringLiteral("reports")})
+    {
+        EXPECT_FALSE(QFileInfo::exists(
+            QDir(secondRoot).filePath(optionalDirectory)));
+    }
 
     ProjectSession session;
     ASSERT_TRUE(session.open(projectPath, &error)) << qPrintable(error);

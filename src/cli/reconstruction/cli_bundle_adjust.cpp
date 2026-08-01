@@ -399,18 +399,19 @@ int main(int argc, char *argv[])
     int baMinCudaCameras = 50;
     int baMinCudaObservations = 500000;
     int baNativeCudaDevice = 0;
-    int baMinNativeCudaCameras = 50;
-    int baMinNativeCudaObservations = 500000;
-    int baNativeCudaMaxPcgIterations = 100;
     int baMinCpuObservations = 50000;
     int baMaxCeresPointOnlyObservations = 100000;
+    int baMaxDenseSchurCameras = 200;
+    int baMaxSparseSchurCameras = 2000;
     double huberDelta = 3.0;
     double damping = 1e-3;
     double finiteDiffEps = 1e-6;
     double stepTolerance = 1e-8;
-    double baNativeCudaPcgTolerance = 1e-4;
+    double baNativeCudaMaxPointStep = 1.0;
     double baMaxAcceptedRmsGrowth = 1.25;
     double baMinAcceptedValidTrackRatio = 0.60;
+    double baMaxConstraintRmsGrowth = 1.25;
+    double baMaxCudaMemoryFraction = 0.70;
     bool refinePose = true;
     bool dryRun = false;
     bool force = false;
@@ -460,21 +461,21 @@ int main(int argc, char *argv[])
                    baMinCpuObservations,
                    "低于该观测数时自动 BA 不选择 Ceres CPU");
     app.add_option("--ba-native-cuda-device", baNativeCudaDevice, "native_cuda BA 使用的 GPU 设备 ID");
-    app.add_option("--ba-min-native-cuda-cameras",
-                   baMinNativeCudaCameras,
-                   "低于该相机数时 Auto 不选择 native_cuda");
-    app.add_option("--ba-min-native-cuda-observations",
-                   baMinNativeCudaObservations,
-                   "低于该观测数时 Auto 不选择 native_cuda");
-    app.add_option("--ba-native-cuda-max-pcg-iterations",
-                   baNativeCudaMaxPcgIterations,
-                   "native_cuda 相机 Schur PCG 最大迭代次数");
-    app.add_option("--ba-native-cuda-pcg-tolerance",
-                   baNativeCudaPcgTolerance,
-                   "native_cuda 相机 Schur PCG 相对残差阈值");
+    app.add_option("--ba-native-cuda-max-point-step",
+                   baNativeCudaMaxPointStep,
+                   "native_cuda 单次点块更新的最大三维位移范数");
     app.add_option("--ba-max-ceres-point-only-observations",
                    baMaxCeresPointOnlyObservations,
                    "point-only Ceres BA 超过该观测数时回退 legacy_cpu");
+    app.add_option("--ba-max-dense-schur-cameras",
+                   baMaxDenseSchurCameras,
+                   "Ceres Auto 使用 dense Schur 的最大可变相机数");
+    app.add_option("--ba-max-sparse-schur-cameras",
+                   baMaxSparseSchurCameras,
+                   "Ceres Auto 使用 sparse Schur 的最大可变相机数");
+    app.add_option("--ba-max-cuda-memory-fraction",
+                   baMaxCudaMemoryFraction,
+                   "Ceres CUDA 最多使用当前空闲显存的比例");
     app.add_flag("--ba-backend-fallback{true},--no-ba-backend-fallback{false}",
                  baBackendFallback,
                  "请求的 BA 后端不可用时是否允许回退到可用后端");
@@ -484,6 +485,9 @@ int main(int argc, char *argv[])
     app.add_option("--ba-max-rms-growth",
                    baMaxAcceptedRmsGrowth,
                    "Auto BA 候选后端允许的最大 RMS 增长倍率");
+    app.add_option("--ba-max-constraint-rms-growth",
+                   baMaxConstraintRmsGrowth,
+                   "Auto BA 物方约束允许的最大 RMS 增长倍率");
     app.add_option("--ba-min-valid-track-ratio",
                    baMinAcceptedValidTrackRatio,
                    "Auto BA 候选后端允许的最小有效 track 比例");
@@ -585,16 +589,24 @@ int main(int argc, char *argv[])
     baOptions.minCeresCudaCameras = std::max(1, baMinCudaCameras);
     baOptions.minCeresCudaObservations = std::max(1, baMinCudaObservations);
     baOptions.nativeCudaDevice = std::max(0, baNativeCudaDevice);
-    baOptions.minNativeCudaCameras = std::max(1, baMinNativeCudaCameras);
-    baOptions.minNativeCudaObservations = std::max(1, baMinNativeCudaObservations);
-    baOptions.nativeCudaMaxPcgIterations = std::max(1, baNativeCudaMaxPcgIterations);
-    baOptions.nativeCudaPcgTolerance = std::max(1e-12, baNativeCudaPcgTolerance);
+    baOptions.nativeCudaMaxPointStepNorm =
+        std::max(1e-12, baNativeCudaMaxPointStep);
     baOptions.minCeresCpuObservations = std::max(1, baMinCpuObservations);
     baOptions.maxCeresPointOnlyObservations = std::max(1, baMaxCeresPointOnlyObservations);
+    baOptions.maxDenseSchurCameras =
+        std::max(1, baMaxDenseSchurCameras);
+    baOptions.maxSparseSchurCameras =
+        std::max(
+            baOptions.maxDenseSchurCameras,
+            baMaxSparseSchurCameras);
+    baOptions.maxCeresCudaMemoryFraction =
+        std::clamp(baMaxCudaMemoryFraction, 0.01, 1.0);
     baOptions.allowBackendFallback = baBackendFallback;
     baOptions.enableBackendQualityGate = baEnableQualityGate;
     baOptions.maxAcceptedRmsGrowth = std::max(0.0, baMaxAcceptedRmsGrowth);
     baOptions.minAcceptedValidTrackRatio = std::max(0.0, baMinAcceptedValidTrackRatio);
+    baOptions.maxAcceptedConstraintRmsGrowth =
+        std::max(1.0, baMaxConstraintRmsGrowth);
     baOptions.compareAutoBackendWithLegacy = baCompareAutoWithLegacy;
     if (baInput.surveyControlTrackCount > 0)
     {
@@ -607,13 +619,13 @@ int main(int argc, char *argv[])
     }
 
     const QString ba_input_summary =
-        QStringLiteral("BA 输入: cameras=%1 tracks=%2 selected_images=%3 sidecar_v2_pairs=%4 ")
+        QStringLiteral("BA 输入: cameras=%1 tracks=%2 selected_images=%3 indexed_observations=%4 ")
         + QStringLiteral("multiview_tracks=%5 survey_control_tracks=%6 scale_bars=%7");
     xjw::cli::printUtf8(stdout,
               ba_input_summary.arg(static_cast<int>(baInput.cameras.size()))
                   .arg(static_cast<int>(baInput.tracks.size()))
                   .arg(selectedImages.size())
-                  .arg(baInput.sidecarV2PairCount)
+                  .arg(baInput.indexedObservationCount)
                   .arg(baInput.multiViewTrackCount)
                   .arg(baInput.surveyControlTrackCount)
                   .arg(baInput.surveyScaleBarConstraintCount));

@@ -1,3 +1,12 @@
+/**
+ * @file AerialTriangulationPipeline.cpp
+ * @brief 连接点图到正式 SfM/BA 稀疏结果的候选搜索与提交实现。
+ *
+ * 当输入没有完整可信内参时，管线对多个焦距尺度运行相互隔离的 SfM 候选。
+ * 候选按注册覆盖、摄影测量网络质量、闭环连续性和重投影误差排序；只有胜出模型
+ * 可进入 AerialTriangulationResultWriter，避免失败候选污染工程相机和结果文件。
+ */
+
 #include "workflow/AerialTriangulationPipeline.h"
 
 #include "ProjectCameraIO.h"
@@ -29,6 +38,12 @@ namespace xjw::aerial_triangulation
 namespace
 {
 
+/**
+ * @brief 判断每张影像是否都有可直接使用的可信内参。
+ *
+ * 独立相机文件优先；工程内参必须带可信来源且能反序列化为有效 Camera。
+ * 由上一次 SfM 写回的 intrinsic_source=sfm_estimated 不作为新一轮初始化真值。
+ */
 bool hasCompleteCameraIntrinsicPrior(const PreparedAerialTriangulationInput &input)
 {
     if (input.cameraPaths.size() == input.images.size() && !input.images.isEmpty() &&
@@ -67,6 +82,7 @@ bool hasCompleteCameraIntrinsicPrior(const PreparedAerialTriangulationInput &inp
     return !input.images.isEmpty();
 }
 
+/// 从一次完整执行提取仅供焦距搜索排序的轻量指标。
 AdaptiveFocalCandidate candidateFromExecution(
     double focalScale,
     const SfmAttemptExecutionResult &execution)
@@ -80,6 +96,7 @@ AdaptiveFocalCandidate candidateFromExecution(
     };
 }
 
+/// 对候选内存模型即时计算网络质量，不写任何正式文件。
 QJsonObject sparseQualityFromExecution(
     const PreparedAerialTriangulationInput &input,
     const SfmAttemptExecutionResult &execution)
@@ -93,6 +110,12 @@ QJsonObject sparseQualityFromExecution(
     return report.diagnostics.value(QStringLiteral("sparse_quality")).toObject();
 }
 
+/**
+ * @brief 将候选执行结果转换为确定性排序摘要。
+ *
+ * 闭环几何仅在明确的照片序列模式、全部影像已注册且影像数足够时计算。
+ * 相邻中心距离的 MAD/最大比值用于发现局部跳跃，不用于强制圆形或等距轨迹。
+ */
 SfmCandidateSummary summaryFromExecution(
     int candidateIndex,
     double focalScale,
@@ -202,6 +225,7 @@ SfmCandidateSummary summaryFromExecution(
     return summary;
 }
 
+/// 将候选核心指标写入诊断 JSON，便于复现最终选择。
 QJsonObject candidateToJson(const AdaptiveFocalCandidate &candidate,
                             const SfmCandidateSummary *summary)
 {
@@ -287,6 +311,7 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
         originalProgress(QStringLiteral("读取连接点并构建观测图..."), 0);
     }
 
+    // 先执行用户给定/默认焦距候选。若已有完整内参，这也是唯一一次试算。
     SfmAttemptExecutionResult execution = _attemptRunner(attemptInput);
     QVector<AdaptiveFocalCandidate> focalCandidates;
     std::vector<SfmCandidateSummary> candidateSummaries;
@@ -296,6 +321,7 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
 
     if (needsFocalInitializationSearch)
     {
+        // 每个候选保留独立重建对象和同一口径质量摘要，不能交叉复用相机状态。
         const auto appendCandidate = [&](double focalScale,
                                          SfmAttemptExecutionResult candidateExecution)
         {
@@ -327,6 +353,8 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
             }
         }
 
+        // 粗搜索按总线程预算分组并行。每个 worker 内部仍给 SfM/BA 保留多个线程，
+        // 避免候选数较多时创建过量线程并争抢 GPU/内存。
         const int coarseCount = static_cast<int>(coarseScales.size());
         const SfmWorkerBudget workerBudget = allocateWorkers(coarseCount, input.threads);
         std::vector<SfmAttemptExecutionResult> coarseExecutions(
@@ -402,6 +430,7 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
             }));
         }
 
+        // 汇总所有候选的真实内部进度；不把“当前候选”误显示成整体百分比。
         while (completedCoarseCount.load() < coarseCount)
         {
             if (originalProgress)
@@ -450,11 +479,13 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
                 std::move(coarseExecutions[static_cast<std::size_t>(scaleIndex)]));
         }
 
+        // 排序首要目标是注册完整性，其次才是网络刚性、闭环连续性、RMS 和点数。
         const std::vector<SfmCandidateSummary> ranked = rankCandidates(candidateSummaries);
         const int selectedIndex = ranked.empty() ? 0 : ranked.front().candidateIndex;
         selectedFocalScale = focalCandidates.at(selectedIndex).focalScale;
         execution = std::move(candidateExecutions[selectedIndex]);
 
+        // 自适应内参只在粗搜索胜出焦距附近执行一次联合细化，并再次经过同一排序门控。
         if (input.adaptiveCameraModelFitting)
         {
             PreparedAerialTriangulationInput refinementInput = input;
@@ -495,6 +526,7 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
         focalCandidates.append(candidateFromExecution(input.estimatedFocalScale, execution));
     }
 
+    // 在正式提交前固化所有焦距候选及选择结果；失败返回也保留诊断。
     QJsonArray focalCandidateJson;
     for (int index = 0; index < focalCandidates.size(); ++index)
     {
@@ -536,6 +568,7 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
     {
         originalProgress(QStringLiteral("写出稀疏点云和质量报告..."), 92);
     }
+    // 写出器是唯一正式提交点：PLY、质量 sidecar 和待回写相机在此同步生成。
     QString writeError;
     if (!_resultWriter(input, &execution, &writeError))
     {

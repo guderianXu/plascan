@@ -5,13 +5,15 @@
 // 功能：定义光束法平差（Bundle Adjustment）相关数据结构和核心类。
 //
 // 算法概述：
-//   - 采用交替优化策略：先固定相机优化三维点，再固定三维点优化相机位姿
-//   - 数值集加速：采用高斯牛顿 + LM 风格週界，雅可比通过有限差分构造雅可比
-//   - 鲁棒性：使用 Huber 损失挺压粗差省点影响
+//   - Legacy CPU：采用点、相机交替优化，高斯牛顿/LM 与有限差分雅可比
+//   - Ceres CPU/CUDA：联合优化三维点、相机位姿及可选标定组共享焦距
+//   - Native CUDA：显式固定相机的三维点块优化，不冒充完整联合 BA
+//   - 所有后端统一执行正深度、离群点、约束质量和结果可写回检查
 // ============================================================
 
 #include <array>
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -26,8 +28,9 @@ namespace xjw
  * @brief BA 求解后端。
  *
  * LegacyCpu 为项目原有的手写 CPU/OpenMP 求解器；CeresCpu/CeresCuda 使用
- * Ceres 构建同一个非线性最小二乘问题，其中 CeresCuda 仅在 Ceres 本身
- * 编译了 CUDA 支持时才会实际启用 GPU 线性代数求解。
+ * Ceres 构建联合非线性最小二乘问题，其中 CeresCuda 仅在 Ceres 本身
+ * 编译了 CUDA 支持时才会实际启用 GPU 线性代数求解；NativeCuda 当前
+ * 只负责固定相机的三维点块优化。
  */
 enum class BABackend
 {
@@ -76,6 +79,21 @@ enum class BACeresLinearSolver
     DenseSchurCpu,
     DenseSchurCuda,
     SparseSchurCpu,
+    IterativeSchurCpu,
+};
+
+/**
+ * @brief 联合 BA 的相似变换规范（gauge）处理策略。
+ *
+ * AutoAnchor 会在缺少绝对约束时自动固定两台具有非退化基线的相机；
+ * RequireExplicitGauge 用于严格检查调用方是否完整提供规范约束；
+ * CallerManaged 用于 SfM 协调器等在求解后自行执行 Sim(3) 归一化的调用方。
+ */
+enum class BAGaugePolicy
+{
+    AutoAnchor,
+    RequireExplicitGauge,
+    CallerManaged,
 };
 
 /**
@@ -195,6 +213,13 @@ struct BAOptions
     double maxSharedFocalStepScale = 1.20;
     /// 每轮外层 BA 中共享焦距优化的最大内部迭代次数。
     int maxSharedFocalIterations = 6;
+    /// 每台相机所属的内参标定组。为空表示所有相机共享组 0；非空时长度必须
+    /// 与 cameras 相同，同组相机共享一个焦距参数，不同组独立自标定。
+    std::vector<int> cameraCalibrationGroupIds;
+    /// 是否先固定焦距稳定相机/三维点，再释放各标定组焦距。
+    bool stageSharedFocalRefinement = true;
+    /// 分阶段自标定中用于固定焦距预热的迭代比例。
+    double sharedFocalWarmupFraction = 0.35;
 
     double huberDelta = 3.0;        ///< Huber 损失阈值（像素），残差>delta 则降低权重以抑制粗差
     double finiteDiffEps = 1e-6;   ///< 有限差分步长（中央差分: ±eps），用于近似雅可比
@@ -223,6 +248,8 @@ struct BAOptions
     double cameraPosePriorHuberDelta = 3.0;          ///< 位姿先验 Huber 阈值（归一化残差）
 
     // ── Gauge 固定 ──────────────────────────────────────────────────────────
+    /// 联合 BA 的规范处理策略。默认自动锚定，避免直接调用产生奇异法方程。
+    BAGaugePolicy gaugePolicy = BAGaugePolicy::AutoAnchor;
     /// 固定这些索引对应的相机位姿（不参与 camera 优化阶段）。
     /// 仅固定一个相机只能消除整体旋转和平移；无绝对尺度约束时还必须固定第二个相机
     /// 或提供比例尺/控制点约束，才能消除完整的 7 自由度 gauge。
@@ -247,16 +274,8 @@ struct BAOptions
     int ceresCudaDevice = 0;
     /// 自研 CUDA BA 使用的 GPU 设备 ID。
     int nativeCudaDevice = 0;
-    /// 低于该相机数时 Auto 不选择 native_cuda，避免小问题 GPU 调度开销大于收益。
-    int minNativeCudaCameras = 50;
-    /// 低于该观测数时 Auto 不选择 native_cuda。
-    int minNativeCudaObservations = 500000;
-    /// native_cuda PCG 最大迭代次数。
-    int nativeCudaMaxPcgIterations = 100;
-    /// native_cuda PCG 相对残差阈值。
-    double nativeCudaPcgTolerance = 1e-4;
-    /// native_cuda 每个 LM step 允许的最大位姿增量范数。
-    double nativeCudaMaxPoseStepNorm = 1.0;
+    /// native_cuda 每个点块 LM step 允许的最大三维位移范数。
+    double nativeCudaMaxPointStepNorm = 1.0;
     /// 参考 COLMAP：问题太小时 GPU 数据搬运开销通常不划算，低于该相机数则回退 Ceres CPU。
     int minCeresCudaCameras = 50;
     /// 低于该观测数时，即使 CUDA 可用也优先使用 CPU，避免 GPU 调度/搬运开销大于收益。
@@ -265,8 +284,15 @@ struct BAOptions
     int minCeresCpuObservations = 50000;
     /// point-only Ceres 使用 dense QR；超出该观测规模时默认回退 legacy，避免大矩阵内存/稳定性问题。
     int maxCeresPointOnlyObservations = 100000;
-    /// Ceres 线性求解策略。Auto 会根据是否实际使用 CUDA 选择 dense schur CPU/GPU。
+    /// Ceres 线性求解策略。Auto 在 CPU 上按问题规模选择 Dense/Sparse/Iterative
+    /// Schur；CUDA 当前使用 Dense Schur/Dense QR，并受显存预算门禁保护。
     BACeresLinearSolver ceresLinearSolver = BACeresLinearSolver::Auto;
+    /// Auto 模式下使用 DENSE_SCHUR 的最大可变相机数量。
+    int maxDenseSchurCameras = 200;
+    /// Auto 模式下使用 SPARSE_SCHUR 的最大可变相机数量；更大问题使用 ITERATIVE_SCHUR。
+    int maxSparseSchurCameras = 2000;
+    /// Ceres CUDA 预计工作集最多占当前空闲显存的比例，超限时回退 CPU 求解器。
+    double maxCeresCudaMemoryFraction = 0.70;
     /// 请求 Ceres/GPU 后端不可用时是否回退到可用后端。
     bool allowBackendFallback = true;
     /// Auto 后端是否启用质量门控；显式指定 Ceres/CUDA 时不自动替用户回退质量。
@@ -275,6 +301,8 @@ struct BAOptions
     double maxAcceptedRmsGrowth = 1.25;
     /// Auto 候选后端最少有效 track 比例；低于该比例则回退 legacy。
     double minAcceptedValidTrackRatio = 0.60;
+    /// LiDAR/GCP/比例尺等物方约束允许的最大 RMS 增长倍率。
+    double maxAcceptedConstraintRmsGrowth = 1.25;
     /// Auto 候选为 Ceres/CUDA 时是否额外运行一次 legacy 对照。
     /// 默认关闭，避免每轮 BA 执行两套完整求解；基准测试或诊断时可显式开启。
     bool compareAutoBackendWithLegacy = false;
@@ -320,12 +348,14 @@ struct BAResult
     std::string qualityGateMessage;                    ///< 质量门控拒绝细节
     double validTrackRatio = 0.0;                      ///< optimizedTracks / totalTracks
     std::string ceresLinearSolverName = "none";        ///< Ceres 实际线性求解器名称，legacy 为 none
+    std::uint64_t ceresEstimatedCudaBytes = 0;         ///< Ceres dense CUDA 工作集保守估算字节数
+    std::uint64_t ceresCudaFreeBytes = 0;              ///< 求解前查询到的 CUDA 空闲显存
     double setupSeconds = 0.0;                         ///< Ceres 问题构建耗时或 legacy 前处理耗时
     double solveSeconds = 0.0;                         ///< 非线性求解主体耗时
     double totalSeconds = 0.0;                         ///< BA 后端总耗时
     int observationCount = 0;                          ///< 输入观测总数
-    int nativeCudaPcgIterations = 0;                   ///< native_cuda 累计 PCG 迭代次数
-    double nativeCudaLinearResidual = 0.0;             ///< native_cuda 最后一轮线性系统相对残差
+    double nativeCudaInitialCost = 0.0;                ///< native_cuda 优化前加权重投影代价
+    double nativeCudaFinalCost = 0.0;                  ///< native_cuda 优化后加权重投影代价
     int nativeCudaAcceptedSteps = 0;                   ///< native_cuda 接受的 LM trial step 数
     int nativeCudaRejectedSteps = 0;                   ///< native_cuda 拒绝的 LM trial step 数
     int nativeCudaActiveCameras = 0;                   ///< native_cuda 工作集中的活动相机数
@@ -345,6 +375,8 @@ struct BAResult
     double meanRmsAfter = 0.0;  ///< 优化后所有轨迹重投影 RMS 的均値
     int refinedCameraCount = 0; ///< 最后一轮中实际被更新的相机数量
     int refinedIntrinsicCount = 0;        ///< 发生共享焦距更新的相机数量
+    int refinedCalibrationGroupCount = 0; ///< 实际参与焦距优化的标定组数量
+    int selfCalibrationStagesRun = 0;     ///< 本次自标定实际执行的求解阶段数
     double refinedSharedFocalScale = 1.0; ///< 优化后焦距相对输入焦距的平均尺度
 
     int laserConstraintCount = 0;          ///< 参与统计/优化的 LiDAR 点到面约束数量

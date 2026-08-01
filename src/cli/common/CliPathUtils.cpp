@@ -10,6 +10,11 @@ QString fromStdString(const std::string &value)
     return QString::fromUtf8(value.data(), static_cast<int>(value.size()));
 }
 
+QString fromStdString(std::u8string_view value)
+{
+    return QString::fromUtf8(value.data(), static_cast<qsizetype>(value.size()));
+}
+
 QString cleanAbsolutePath(const QString &path)
 {
     const QString trimmed = path.trimmed();

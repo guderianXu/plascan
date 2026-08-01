@@ -106,11 +106,12 @@ The converter writes only `x/y/z` vertices. It does not reproject or change CRS;
 already be in the same world/map frame as the PlaScan sparse points and cameras. This mirrors the conservative first
 step of using external heights as soft BA constraints before adding full raster sampling or map-projection support.
 
-For an end-to-end CLI BA smoke test, first run `feature_match_cli` on the selected window. The CLI writes the legacy
-binary `.match` file and a `.match.json` sidecar containing matched feature indices and image points; the sidecar is
-what the BA project builder uses to assemble multi-view tracks.
+For an end-to-end CLI BA smoke test, first run `match_photos_cli` on the selected window. CUDA SIFT features stay in
+task memory and the CLI writes one binary `.pimatch` shard per image plus `match_photos_report.json`. The C++
+`ImageMatchFile` reader remains the only binary parser; the project builder copies the report's
+`image_match_files` index into project metadata.
 
-Then package a temporary PlaScan project from the benchmark manifest, ROS camera info, odometry, and match sidecars:
+Then package a temporary PlaScan project from the benchmark manifest, ROS camera info, odometry, and match shards:
 
 ```bash
 python testData/prepare_mun_frl_lidar_ba_project.py \
@@ -120,7 +121,8 @@ python testData/prepare_mun_frl_lidar_ba_project.py \
   --tf-static testData/photogrammetry_benchmarks/mun_frl_vil/lighthouse_benchmarking_bag/extracted/tf/tf_static_unique.csv \
   --camera-frame camera \
   --body-frame imu_link \
-  --matches-dir build/mun_frl_lidar_ba_ab_benchmark/cli_match_run/matches.sift \
+  --matches-dir build/mun_frl_lidar_ba_ab_benchmark/cli_match_run/assets/image_matches \
+  --match-report build/mun_frl_lidar_ba_ab_benchmark/cli_match_run/reports/match_photos_report.json \
   --output-dir build/mun_frl_lidar_ba_ab_project \
   --project-name mun_frl_lidar_ba
 ```

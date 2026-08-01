@@ -26,10 +26,8 @@ TEST(ProjectIOTest, ResolvesCanonicalProjectDirectories)
     EXPECT_EQ(ProjectIO::projectBundleAdjustDir(project_path),
               QDir(temp_dir.path()).filePath(
                   QStringLiteral("bundle_adjust")));
-    EXPECT_EQ(ProjectIO::ipfindOutputDir(project_path),
-              QDir(temp_dir.path()).filePath(QStringLiteral("assets/ip")));
-    EXPECT_EQ(ProjectIO::ipmatchOutputDir(project_path),
-              QDir(temp_dir.path()).filePath(QStringLiteral("assets/matches")));
+    EXPECT_EQ(ProjectIO::imageMatchOutputDir(project_path),
+              QDir(temp_dir.path()).filePath(QStringLiteral("assets/image_matches")));
     EXPECT_EQ(ProjectIO::maskOutputDir(project_path),
               QDir(temp_dir.path()).filePath(QStringLiteral("assets/masks")));
 }
@@ -61,7 +59,7 @@ TEST(ProjectIOTest, PreservesAbsoluteResourcePaths)
               QDir::cleanPath(absolute_path));
 }
 
-TEST(ProjectIOTest, UsesDistinctArtifactPathsForDuplicateBaseNames)
+TEST(ProjectIOTest, UsesDistinctMaskPathsForDuplicateBaseNames)
 {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
@@ -73,22 +71,15 @@ TEST(ProjectIOTest, UsesDistinctArtifactPathsForDuplicateBaseNames)
     const QString right_image =
         QDir(temp_dir.path()).filePath(QStringLiteral("right/frame001.tif"));
 
-    const QString left_feature =
-        ProjectIO::featureOutputPathForImage(project_path, left_image, QStringLiteral(".sp"));
-    const QString right_feature =
-        ProjectIO::featureOutputPathForImage(project_path, right_image, QStringLiteral(".sp"));
     const QString left_mask =
         ProjectIO::maskOutputPathForImage(project_path, left_image);
     const QString right_mask =
         ProjectIO::maskOutputPathForImage(project_path, right_image);
 
-    EXPECT_NE(left_feature, right_feature);
     EXPECT_NE(left_mask, right_mask);
-    EXPECT_TRUE(QFileInfo(left_feature).fileName().startsWith(QStringLiteral("frame001-")));
-    EXPECT_TRUE(QFileInfo(right_feature).fileName().startsWith(QStringLiteral("frame001-")));
-    EXPECT_EQ(left_feature,
-              ProjectIO::featureOutputPathForImage(
-                  project_path, left_image, QStringLiteral(".sp")));
+    EXPECT_TRUE(QFileInfo(left_mask).fileName().startsWith(QStringLiteral("frame001-")));
+    EXPECT_TRUE(QFileInfo(right_mask).fileName().startsWith(QStringLiteral("frame001-")));
+    EXPECT_EQ(left_mask, ProjectIO::maskOutputPathForImage(project_path, left_image));
 }
 
 TEST(ProjectIOTest, MaskLookupDoesNotExposeAmbiguousBaseNameAliases)

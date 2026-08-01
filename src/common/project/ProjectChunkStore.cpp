@@ -262,13 +262,6 @@ bool ProjectChunkStore::createChunk(
                      .arg(directory));
         return false;
     }
-    if (!ProjectPackageLayout::ensureChunkDirectories(
-            _projectPath, chunk.directory, errorMessage))
-    {
-        QDir(directory).removeRecursively();
-        return false;
-    }
-
     const QJsonObject document =
         PortableProjectFormat::createChunkDocument(
             chunk,

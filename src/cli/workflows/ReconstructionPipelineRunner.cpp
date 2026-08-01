@@ -21,8 +21,6 @@
 #include "DepthMapFusion.h"
 #include "DepthMapGenerator.h"
 #include "preparation/MatchResultCatalog.h"
-#include "GeometryVerifyStage.h"
-#include "StoredPairGeometryAudit.h"
 #include "ModelWorkflowService.h"
 #include "MvsSceneClassifier.h"
 #include "ProjectDenseWorkflowConfig.h"
@@ -79,46 +77,8 @@ std::vector<xjw::mvs::MvsSourcePairQuality> loadMvsSourcePairQualities(const QSt
         return qualities;
     }
 
-    const QString matchingReportPath =
-        QDir(QDir(matchDir).filePath(QStringLiteral("..")))
-            .filePath(QStringLiteral("reports/matching_quality_report.json"));
-    QFile reportFile(matchingReportPath);
-    if (reportFile.open(QIODevice::ReadOnly))
-    {
-        const QJsonDocument document = QJsonDocument::fromJson(reportFile.readAll());
-        const QJsonObject root = document.object();
-        const QJsonArray samples = root.value(QStringLiteral("pair_samples")).toArray();
-        qualities.reserve(static_cast<size_t>(samples.size()));
-        for (const QJsonValue &value : samples)
-        {
-            const QJsonObject sample = value.toObject();
-            if (sample.value(QStringLiteral("status")).toString() != QStringLiteral("matched"))
-            {
-                continue;
-            }
-
-            xjw::mvs::MvsSourcePairQuality quality;
-            quality.imageA = xjw::common::io::toUtf8Path(sample.value(QStringLiteral("image_a")).toString());
-            quality.imageB = xjw::common::io::toUtf8Path(sample.value(QStringLiteral("image_b")).toString());
-            quality.totalMatches = std::max(0, sample.value(QStringLiteral("match_count")).toInt());
-            quality.hasVerificationStatistics =
-                sample.contains(QStringLiteral("geometric_inlier_count"));
-            quality.geometricInliers = std::max(
-                0, sample.value(QStringLiteral("geometric_inlier_count")).toInt());
-            quality.verified =
-                quality.hasVerificationStatistics && quality.geometricInliers > 0;
-            quality.geometricCoverage = static_cast<float>(
-                sample.value(QStringLiteral("geometric_coverage_ratio")).toDouble(
-                    sample.value(QStringLiteral("coverage_ratio")).toDouble(0.0)));
-            quality.verificationReason = quality.verified
-                ? "verified"
-                : (quality.hasVerificationStatistics
-                       ? "zero_geometric_inliers"
-                       : "missing_geometric_inlier_statistics");
-            qualities.push_back(std::move(quality));
-        }
-    }
-
+    // `.pimatch` 是匹配结果的唯一权威来源。旧流程先读 JSON 报告、再扫描匹配
+    // 文件，会把同一像对重复加入 MVS 规划器，并且报告可能落后于当前缓存。
     xjw::aerial_triangulation::MatchResultCatalogConfig config;
     config.matchDirectory = matchDir;
     const xjw::aerial_triangulation::MatchResultCatalogSummary summary =
@@ -142,34 +102,12 @@ std::vector<xjw::mvs::MvsSourcePairQuality> loadMvsSourcePairQualities(const QSt
         quality.imageB = xjw::common::io::toUtf8Path(variant.imageB);
         quality.totalMatches = std::max(0, variant.totalMatches);
         quality.geometricInliers = std::max(0, variant.geometricVerifiedInliers);
-        quality.hasVerificationStatistics =
-            variant.hasInlierStats && quality.totalMatches >= 20;
-        quality.verified =
-            quality.hasVerificationStatistics &&
-            xjw::matchphotos::passesGeometryQualityGate(
-                quality.totalMatches, quality.geometricInliers, 20);
+        quality.hasVerificationStatistics = variant.hasInlierStats;
+        quality.verified = variant.geometryPassed;
+        quality.geometricCoverage = static_cast<float>(variant.geometricCoverage);
         quality.verificationReason = quality.verified
-            ? "verified"
-            : (quality.hasVerificationStatistics
-                   ? "sidecar_geometry_gate_failed"
-                   : "missing_geometric_inlier_statistics");
-        if (!quality.hasVerificationStatistics)
-        {
-            const xjw::matchphotos::StoredPairGeometryAuditResult audit =
-                xjw::matchphotos::auditStoredPairGeometry(
-                    variant.matchFilePath, variant.sidecarPath);
-            if (audit.statisticsAvailable)
-            {
-                quality.totalMatches = audit.totalMatches;
-                quality.geometricInliers = audit.geometricInliers;
-                quality.hasVerificationStatistics = true;
-                quality.verified = audit.verified;
-                quality.geometricCoverage = static_cast<float>(
-                    audit.coverageScore);
-            }
-            quality.verificationReason =
-                xjw::common::io::toUtf8Path(audit.reason);
-        }
+            ? "verified_from_pimatch"
+            : "pimatch_geometry_gate_failed";
         qualities.push_back(std::move(quality));
     }
     return qualities;
@@ -1114,8 +1052,7 @@ xjw::cli::ReconstructionCliOptions options;
     auto &listPathArg = options.listPathArg;
     auto &outputDirArg = options.outputDirArg;
     auto &device = options.device;
-    auto &sfmFeatureAlgorithm = options.sfmFeatureAlgorithm;
-    auto &sfmMatchAlgorithm = options.sfmMatchAlgorithm;
+    auto &sfmMatchingAlgorithmId = options.sfmMatchingAlgorithmId;
     auto &sfmGuidedRematching = options.sfmGuidedRematching;
     auto &lockInputCameraPoses = options.lockInputCameraPoses;
     auto &quality = options.quality;
@@ -1328,15 +1265,13 @@ xjw::cli::ReconstructionCliOptions options;
     sfmOptions.projectPath = projectPath;
     sfmOptions.assetsDir = QDir(projectSession.activeChunkRoot())
         .filePath(QStringLiteral("assets"));
-    sfmOptions.featureDir = QDir(sfmOptions.assetsDir)
-        .filePath(QStringLiteral("ip"));
     sfmOptions.matchDir = QDir(sfmOptions.assetsDir)
-        .filePath(QStringLiteral("matches"));
+        .filePath(QStringLiteral("image_matches"));
     sfmOptions.outputDir = QDir(pipelineRoot)
         .filePath(QStringLiteral("sparse"));
     sfmOptions.device = QString::fromStdString(device);
-    sfmOptions.featureAlgorithm = QString::fromStdString(sfmFeatureAlgorithm);
-    sfmOptions.matchAlgorithm = QString::fromStdString(sfmMatchAlgorithm);
+    sfmOptions.matchingAlgorithmId =
+        QString::fromStdString(sfmMatchingAlgorithmId);
     sfmOptions.guidedImageMatching = sfmGuidedRematching;
     sfmOptions.lockInputCameraPoses = lockInputCameraPoses;
     const QStringList qualityNames = {
@@ -1371,37 +1306,22 @@ xjw::cli::ReconstructionCliOptions options;
 
     const QString resultCreatedAt =
         QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
-    for (const xjw::matchphotos::MatchPhotosFeatureRecord &feature :
-         sfmWorkflowResult.tiePointResult.features)
+    // 与 GUI 和独立空三 CLI 共用逐影像持久化契约。这里不保存 SIFT 描述子，
+    // 也不再创建成对 `.match` 或 JSON sidecar 工程记录。
+    for (const xjw::matchphotos::MatchPhotosImageMatchRecord &image :
+         sfmWorkflowResult.tiePointResult.imageMatchFiles)
     {
         projectSession.upsertResultByPath(
-            QStringLiteral("ipfind_results"),
+            QStringLiteral("image_match_results"),
             QStringLiteral("output"),
             QJsonObject{
-                {QStringLiteral("input"), feature.imagePath},
-                {QStringLiteral("output"), feature.featurePath},
-                {QStringLiteral("keypoint_count"), feature.keypointCount},
-                {QStringLiteral("settings"), feature.settings},
-                {QStringLiteral("created_at"), resultCreatedAt}
-            });
-    }
-    for (const xjw::matchphotos::MatchPhotosMatchRecord &match :
-         sfmWorkflowResult.tiePointResult.matches)
-    {
-        projectSession.upsertResultByPath(
-            QStringLiteral("ipmatch_results"),
-            QStringLiteral("output"),
-            QJsonObject{
-                {QStringLiteral("image0"), match.image0Path},
-                {QStringLiteral("image1"), match.image1Path},
-                {QStringLiteral("output"), match.matchPath},
-                {QStringLiteral("sidecar_path"), match.sidecarPath},
-                {QStringLiteral("match_count"), match.matchCount},
-                {QStringLiteral("geometric_inlier_count"),
-                 match.geometricInlierCount},
-                {QStringLiteral("passed_geometry"),
-                 match.passedGeometry},
-                {QStringLiteral("settings"), match.settings},
+                {QStringLiteral("image"), image.imagePath},
+                {QStringLiteral("output"), image.matchFilePath},
+                {QStringLiteral("neighbors"),
+                 QJsonArray::fromStringList(image.neighborImagePaths)},
+                {QStringLiteral("neighbor_variant_count"),
+                 image.neighborVariantCount},
+                {QStringLiteral("settings"), image.settings},
                 {QStringLiteral("created_at"), resultCreatedAt}
             });
     }

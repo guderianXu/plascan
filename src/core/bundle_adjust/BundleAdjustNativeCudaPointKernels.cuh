@@ -1,5 +1,17 @@
 #pragma once
 
+/**
+ * @file BundleAdjustNativeCudaPointKernels.cuh
+ * @brief 固定相机条件下，每个三维点独立求解的 CUDA 设备实现。
+ *
+ * 一条线程负责一个三维点，在其连续观测区间上构造 3x3 Gauss-Newton 正规方程，
+ * 加 LM 对角阻尼后求解位移。点之间没有共享变量，因此不需要原子操作或 Schur
+ * 消元；这也是该后端不能用于联合相机 BA 的根本原因。
+ *
+ * 本文件的投影、雅可比和 Huber 公式必须与 BundleAdjustNativeCudaMath.cpp
+ * 的 CPU 参考实现逐项一致。
+ */
+
 #include "BundleAdjustNativeCudaDeviceTypes.cuh"
 
 #include <math_constants.h>
@@ -7,6 +19,7 @@
 namespace xjw::detail::native_cuda
 {
 
+/// 将世界点投影到像素；相机外参采用 Rcw/C，与公共 Camera 约定一致。
 __device__ inline bool projectDevice(const DeviceCamera &camera, const double point[3], double pixel[2])
 {
     const double dx = point[0] - camera.cameraCenter[0];
@@ -51,6 +64,7 @@ __device__ inline bool projectDevice(const DeviceCamera &camera, const double po
     return isfinite(pixel[0]) && isfinite(pixel[1]);
 }
 
+/// 计算像素对世界点的 2x3 解析雅可比，按 [du/dX..., dv/dX...] 行优先写出。
 __device__ inline bool pointProjectionJacobianDevice(const DeviceCamera &camera,
                                                      const double point[3],
                                                      double jacobian[6])
@@ -125,6 +139,7 @@ __device__ inline bool pointProjectionJacobianDevice(const DeviceCamera &camera,
     return true;
 }
 
+/// 返回加权 Huber 平方根权重；二维像素残差共享同一鲁棒权重。
 __device__ inline double robustScale(double residualU, double residualV, double weight, double huberDelta)
 {
     if (!(weight > 0.0) || !isfinite(weight))
@@ -141,6 +156,7 @@ __device__ inline double robustScale(double residualU, double residualV, double 
     return sqrt(weight * robustWeight);
 }
 
+/// 复核一个候选点在其全部观测上的鲁棒代价，投影失败使用大惩罚而非忽略。
 __device__ inline double pointCostDevice(const DeviceCamera *cameras,
                                          const DeviceObservation *observations,
                                          const DevicePoint &point,
@@ -167,6 +183,7 @@ __device__ inline double pointCostDevice(const DeviceCamera *cameras,
     return cost;
 }
 
+/// 用带部分主元的 Gauss-Jordan 消元求解 `H * step = -g`。
 __device__ inline bool solve3x3(double h[9], const double g[3], double step[3])
 {
     double a[3][4] = {
@@ -230,6 +247,13 @@ __device__ inline bool solve3x3(double h[9], const double g[3], double step[3])
     return isfinite(step[0]) && isfinite(step[1]) && isfinite(step[2]);
 }
 
+/**
+ * @brief 每线程一个点的阻尼 Gauss-Newton 核。
+ *
+ * 每轮先构造 J^T J 和 J^T r，再限制最大步长并最多进行 8 次二分回溯。
+ * 只有鲁棒目标严格下降才提交候选点；接受/拒绝计数按点写入独立数组，
+ * 由主机汇总为后端统计。
+ */
 __global__ void optimizePointsKernel(const DeviceCamera *cameras,
                                      DevicePoint *points,
                                      const DeviceObservation *observations,
@@ -237,7 +261,9 @@ __global__ void optimizePointsKernel(const DeviceCamera *cameras,
                                      int maxIterations,
                                      double huberDelta,
                                      double damping,
-                                     int *acceptedIterations)
+                                     double maxPointStepNorm,
+                                     int *acceptedIterations,
+                                     int *rejectedTrials)
 {
     const int pointIndex = blockIdx.x * blockDim.x + threadIdx.x;
     if (pointIndex >= pointCount)
@@ -247,6 +273,7 @@ __global__ void optimizePointsKernel(const DeviceCamera *cameras,
 
     DevicePoint &point = points[pointIndex];
     int accepted = 0;
+    int rejected = 0;
     double xyz[3] = {point.xyz[0], point.xyz[1], point.xyz[2]};
 
     for (int iter = 0; iter < maxIterations; ++iter)
@@ -320,7 +347,9 @@ __global__ void optimizePointsKernel(const DeviceCamera *cameras,
             break;
         }
 
-        double stepScale = stepNorm > 1.0 ? 1.0 / stepNorm : 1.0;
+        const double maximumStep = fmax(maxPointStepNorm, 1.0e-12);
+        double stepScale =
+            stepNorm > maximumStep ? maximumStep / stepNorm : 1.0;
         bool stepAccepted = false;
         for (int trial = 0; trial < 8; ++trial)
         {
@@ -340,6 +369,7 @@ __global__ void optimizePointsKernel(const DeviceCamera *cameras,
                 stepAccepted = true;
                 break;
             }
+            ++rejected;
             stepScale *= 0.5;
         }
 
@@ -353,6 +383,7 @@ __global__ void optimizePointsKernel(const DeviceCamera *cameras,
     point.xyz[1] = xyz[1];
     point.xyz[2] = xyz[2];
     acceptedIterations[pointIndex] = accepted;
+    rejectedTrials[pointIndex] = rejected;
 }
 
 } // namespace xjw::detail::native_cuda

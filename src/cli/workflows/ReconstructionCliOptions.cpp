@@ -18,12 +18,9 @@ void ReconstructionCliOptions::addTo(CLI::App &app)
     app.add_option("--chunk-id", chunkIdArg, "use the Chunk with this UUID");
     app.add_option("--chunk-name", chunkNameArg, "use the Chunk with this name");
     app.add_option("--device", device, "auto, cpu, cuda")->check(CLI::IsMember({"auto", "cpu", "cuda"}));
-    app.add_option("--sfm-feature-algorithm", sfmFeatureAlgorithm,
-                   "SFM feature algorithm: disk, aliked, sift")
-        ->check(CLI::IsMember({"disk", "aliked", "sift"}));
-    app.add_option("--sfm-match-algorithm", sfmMatchAlgorithm,
-                   "SFM match algorithm: lightglue, sift_flann, sift_bf_l2")
-        ->check(CLI::IsMember({"lightglue", "sift_flann", "sift_bf_l2"}));
+    app.add_option("--sfm-matching-algorithm", sfmMatchingAlgorithmId,
+                   "SFM image matching algorithm id: sift_lightglue")
+        ->check(CLI::IsMember({"sift_lightglue"}));
     app.add_flag("--sfm-guided-rematching", sfmGuidedRematching,
                  "enable guided rematching after initial SfM");
     app.add_flag("--lock-input-camera-poses", lockInputCameraPoses,

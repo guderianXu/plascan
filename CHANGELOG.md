@@ -6,6 +6,15 @@
 
 ### 新增
 
+- 新增统一 `image_matching` 模块和可扩展算法注册接口；当前只注册 CUDA SIFT + TensorRT LightGlue，
+  所有消费者共用算法版本、配置指纹、模型指纹和几何验证结果契约。
+- 新增逐影像 `.pimatch` v1 二进制分片：一个影像文件保存该影像的匹配观测、所有相邻影像变体、
+  置信度、几何残差和状态位，并使用固定 magic、小端序、长度边界及 SHA-256 校验。
+- “工作流程”菜单新增“设置”对话框，首批提供空中三角测量的 CUDA 设备、特征预取、LightGlue 阈值、
+  几何验证、连接点网格和固定连接点判定参数，并按项目持久化。
+- 光束法平差新增相机标定分组和分阶段自标定：先固定焦距完成位姿/点的稳定热身，再按标定组释放共享焦距，并统一执行输入、gauge、正深度、离群点和控制约束质量检查。
+- “创建正射影像”对话框按 Metashape 式“投影/参数/区域/输出/进度”重新组织，显示 DEM 坐标系、真实 X/Y 像元、裁剪边界、输出尺寸与内存估算，并支持影像选择、马赛克/加权平均/首个有效影像、颜色校正、锐度权重、重影过滤、小孔洞填充、项目蒙版、后台进度和安全取消。
+- terrain 新增 `OrthoGenerationOptions` 与 `OrthoProjector`，将 DEM 有效高程逐像元投影到项目相机，支持独立 X/Y 像元或最大尺寸、区域裁剪、`mosaic` / `weighted_average` / `first_valid` 融合和 1 亿像素默认预算；零影像覆盖会明确失败。当前仅开放 DEM 网格投影、DEM 表面和影像颜色源，平面/圆柱投影及全局接缝线优化尚未实现并在 GUI 禁用。
 - 重建质量报告新增 `survey_control` 汇总，支持从项目 metadata 统计控制点、检查点和比例尺数量、启用数量、残差 RMSE、最大残差和质量状态，为后续 GCP/检查点/scale bar 生产闭环打基础。
 - 新增 Survey Control CSV 导入核心解析器，支持按 `role/type/kind` 区分控制点、检查点和比例尺，并解析 `id/x/y/z/sigma/enabled/from_id/to_id/measured_m` 等基础字段。
 - GUI 项目支持层新增 `ProjectSurveyControl`，可把 Survey Control CSV 导入并持久化到项目 `survey_control` metadata，同时记录 `source_path/imported_at/format`。
@@ -41,6 +50,13 @@
 
 ### 优化
 
+- CUDA SIFT 描述子改为只保留在单次 `MatchPhotosTask` 的有界内存缓存，最终结果提交后释放；
+  GUI、CLI、SfM 和空三均直接读取 `.pimatch`，不再维护独立特征文件和成对 sidecar。
+- LightGlue 推理链收敛为 TensorRT-only：删除 C++ TorchScript matcher、CPU/自动回退、旧后端基准和
+  LightGlue TorchScript 导出入口；`lightglue` 统一加载目标 GPU 的 TensorRT engine，缺失或不兼容时明确失败。
+
+- Ceres BA 会按问题规模选择 Dense/Sparse/Iterative Schur，并在 CUDA 分配前执行显存预算门禁；Native CUDA 明确收敛为显式的固定相机点优化后端并报告真实代价/接受步统计，Legacy 小型法方程和有限中位数统计改由 PlaMatrix 提供。
+- 正射 GeoTIFF 现在把 OpenCV BGR 正确转换为 R/G/B 波段，并增加有效覆盖 Alpha 波段，避免把无覆盖区误认为真实黑色；同时写入最终网格地理变换和可用的 DEM WKT，`ortho_results` 记录已解析参数、输出范围/像元、相机贡献数、直接覆盖率和孔洞填充像元数。
 - 密集匹配执行逻辑从 `ProjectManager`/`ReconstructionWorkflowController` 拆到 `DenseMatchRunner`，workflow controller 的 `QtConcurrent` worker 不再捕获 `this`，也不再依赖 GUI manager 生命周期。
 - `FeatureExtractionRunner` 和 `FeatureMatchRunner` 对 LibTorch/ATen 触发的 MSVC C4267 外部模板 warning 使用编译单元级局部隔离，避免 Windows CUDA GUI 构建日志继续被第三方头文件窄化警告刷屏。
 - `SuperPointBatch.cpp` 拆分描述子诊断和密集描述子采样路径中的超长语句，并新增行宽回归测试，继续收敛旧 SuperPoint 编译单元的格式债。
@@ -156,6 +172,13 @@
 - `OverlapAnalyzer.cpp` 拆分重叠对阈值计算的超长表达式，并新增源文件 120 列风格回归测试，保持中心距离阈值和重叠得分逻辑不变。
 - `VocabularyOverlapRetriever.cpp` 拆分 TF-IDF 词频权重计算中的超长 `document_frequency` 下标表达式，并新增源文件 120 列风格回归测试，保持 dense/inverted pair scoring 行为不变。
 - `BaInputBuilder.cpp` 拆分 BA 输入构造中影像路径规范化的超长调用，并新增源文件 120 列风格回归测试，保持控制点 track 和比例尺约束构造行为不变。
+
+### 不兼容变更
+
+- 删除 `src/core/feature_extractors`、`src/core/feature_match` 及 SuperPoint、SuperGlue、DISK、ALIKED、
+  LoFTR、RoMa、DeDoDe、传统 BF/FLANN 等旧匹配实现和模型资源。
+- 删除独立 `feature_extract_cli` 及 `.sp/.dsk/.alk/.sift` 中间特征文件接口；`feature_match_cli` 现在
+  直接接收两幅影像并输出逐影像 `.pimatch`，旧 `.match + .match.json` 不提供兼容读取层。
 
 ### 验证
 

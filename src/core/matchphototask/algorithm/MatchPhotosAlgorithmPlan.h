@@ -2,25 +2,25 @@
 
 #include <QString>
 
+#include <cstdint>
+
 namespace xjw
 {
 namespace matchphotos
 {
 
-// MatchPhotosTask 的算法计划。这里不实现具体算法，只描述本轮匹配照片流程
-// 应该调用哪个特征提取器、哪个匹配器，以及为什么这么选。
+// MatchPhotosTask 的已解析算法计划。算法身份由注册表中的 id + version 唯一确定，
+// 不再暴露“特征算法 + 匹配算法 + 文件后缀”的历史组合。
 struct MatchPhotosAlgorithmPlan
 {
     QString strategyId;
     QString displayName;
+    QString algorithmId;
+    std::uint32_t algorithmVersion = 0;
 
-    QString featureAlgorithm;
-    QString featureSuffix;
-    QString matcherAlgorithm;
-    QString fallbackMatcherAlgorithm;
-
-    bool needsFeatureStage = true;
-    bool endToEndMatcher = false;
+    bool valid = false;
+    bool extractsFeaturesInMemory = true;
+    bool requiresCuda = true;
     bool preferCuda = false;
     bool rotationRobust = false;
     bool enableGuidedMatching = false;
@@ -29,7 +29,7 @@ struct MatchPhotosAlgorithmPlan
     int maxKeypoints = 8192;
 
     QString reason;
-    QString fallbackReason;
+    QString validationError;
 };
 
 QString algorithmPlanSummary(const MatchPhotosAlgorithmPlan &plan);

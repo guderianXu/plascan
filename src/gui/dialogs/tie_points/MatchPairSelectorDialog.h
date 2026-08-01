@@ -86,11 +86,11 @@ private:
     struct MatchInfo {
         QString imagePath;       // 匹配影像的完整路径
         QString imageName;       // 匹配影像的文件名（用于显示）
-        QString algorithm;       // 匹配算法名 (superglue/lightglue/loftr/...)
+        QString algorithm;       // 注册算法标识，例如 sift_lightglue
         int totalPoints = 0;     // 原始匹配点数
         int validPoints = 0;     // 有效连接点或几何验证内点数
         int invalidPoints = 0;   // 未被几何验证或空三最终轨迹接受的匹配数
-        QString matchFilePath;   // 对应 .match 文件的完整路径
+        QString matchFilePath;   // 当前像对所在 owner `.pimatch` 分片的完整路径
         QVector<xjw::aerial_triangulation::MatchVariant> variants; // 同一影像对的全部算法结果
         bool hasInlierStats = false; // true 表示 validPoints 来自几何验证内点统计
         bool hasTrackValidity = false; // true 表示 validPoints/invalidPoints 来自空三最终轨迹
@@ -152,18 +152,18 @@ private:
         const QSet<QString> &seenPairKeys,
         const QMap<QString, QString> &baseToPath);
     
-    // 在元数据和文件系统中查找两张影像对应的 .match 文件路径
+    // 在项目元数据和逐影像分片中查找包含指定像对的 `.pimatch` 路径
     // imgA, imgB — 两张影像的完整路径
-    // 返回值     — 找到的 .match 文件路径，未找到返回空字符串
+    // 返回值     — 找到的 owner 分片路径，未找到返回空字符串
     QString findMatchFile(const QString &imgA, const QString &imgB);
     static QString findMatchFileInSnapshot(const MatchDataSnapshot &snapshot,
                                            const QString &imgA,
                                            const QString &imgB);
     
-    // 读取 .match 文件，统计匹配点数量并返回 MatchInfo
+    // 读取 `.pimatch` 中对应的邻接块，统计匹配点数量并返回 MatchInfo
     // imgA      — 参考影像路径（仅用于上下文，不直接使用）
     // imgB      — 匹配影像路径
-    // matchFile — .match 文件路径
+    // matchFile — owner `.pimatch` 分片路径
     // 返回值    — 包含统计结果的 MatchInfo 结构体
     MatchInfo getMatchStatistics(const QString &imgA, const QString &imgB, 
                                  const QString &matchFile);

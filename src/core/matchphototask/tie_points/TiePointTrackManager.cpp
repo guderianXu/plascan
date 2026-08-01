@@ -1,36 +1,5 @@
 #include "TiePointTrackManager.h"
 
-// Avoid Qt keyword macros rewriting LibTorch's slots() member name.
-#ifdef slots
-#undef slots
-#define PLASCAN_MATCHPHOTOS_RESTORE_QT_SLOTS
-#endif
-#ifdef signals
-#undef signals
-#define PLASCAN_MATCHPHOTOS_RESTORE_QT_SIGNALS
-#endif
-#ifdef emit
-#undef emit
-#define PLASCAN_MATCHPHOTOS_RESTORE_QT_EMIT
-#endif
-
-#include "FeatureData.h"
-
-#ifdef PLASCAN_MATCHPHOTOS_RESTORE_QT_SLOTS
-#define slots Q_SLOTS
-#undef PLASCAN_MATCHPHOTOS_RESTORE_QT_SLOTS
-#endif
-#ifdef PLASCAN_MATCHPHOTOS_RESTORE_QT_SIGNALS
-#define signals Q_SIGNALS
-#undef PLASCAN_MATCHPHOTOS_RESTORE_QT_SIGNALS
-#endif
-#ifdef PLASCAN_MATCHPHOTOS_RESTORE_QT_EMIT
-#define emit Q_EMIT
-#undef PLASCAN_MATCHPHOTOS_RESTORE_QT_EMIT
-#endif
-
-#include "FeatureFileIO.h"
-#include "MatchFileIO.h"
 #include "MatchPhotosRuntime.h"
 #include "tracks/MultiViewTrackBuilder.h"
 
@@ -44,7 +13,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <map>
+#include <set>
 
 namespace xjw
 {
@@ -61,30 +32,6 @@ QString canonicalPath(const QString &path)
         return QString();
     }
     return QDir::cleanPath(QFileInfo(trimmed).absoluteFilePath());
-}
-
-std::vector<FeatureKeypoint> toSfmKeypoints(const std::vector<cv::KeyPoint> &keypoints)
-{
-    std::vector<FeatureKeypoint> converted;
-    converted.reserve(keypoints.size());
-    for (const cv::KeyPoint &keypoint : keypoints)
-    {
-        converted.push_back(FeatureKeypoint{keypoint.pt.x, keypoint.pt.y});
-    }
-    return converted;
-}
-
-float matchScoreAt(const xjw::feature_match::MatchResult &matchResult, int index0, float distance)
-{
-    if (index0 >= 0 && index0 < static_cast<int>(matchResult.matchingScores0.size()))
-    {
-        return matchResult.matchingScores0[static_cast<std::size_t>(index0)];
-    }
-    if (std::isfinite(distance))
-    {
-        return 1.0f / (1.0f + std::max(0.0f, distance));
-    }
-    return 1.0f;
 }
 
 QJsonObject makeTrackSummary(const MultiViewTrackBuildResult &buildResult)
@@ -407,59 +354,95 @@ void copyBuildResult(const MultiViewTrackBuildResult &buildResult, TiePointTrack
     result->trackSummary = makeTrackSummary(buildResult);
 }
 
-bool appendInlierIndexPairs(const MatchPhotosMatchRecord &record,
-                            int keypointCount0,
-                            int keypointCount1,
-                            std::vector<MultiViewTrackBuilder::MatchIndexPair> *indexedMatches)
-{
-    if (!indexedMatches || record.inlierIndexPairs.empty())
-    {
-        return false;
-    }
+using ObservationKey = std::pair<ImageId, FeatureIdx>;
 
-    indexedMatches->reserve(record.inlierIndexPairs.size());
-    for (const std::array<int, 2> &pair : record.inlierIndexPairs)
-    {
-        if (pair[0] < 0 || pair[1] < 0 || pair[0] >= keypointCount0 || pair[1] >= keypointCount1)
-        {
-            continue;
-        }
-        indexedMatches->emplace_back(static_cast<FeatureIdx>(pair[0]),
-                                     static_cast<FeatureIdx>(pair[1]),
-                                     1.0f);
-    }
-    return true;
+image_matching::MatchRecordFlag withTrackFlag(
+    image_matching::MatchRecordFlag value,
+    bool enabled)
+{
+    const auto raw = static_cast<std::uint32_t>(value);
+    const auto bit = static_cast<std::uint32_t>(
+        image_matching::MatchRecordFlag::InTiePointTrack);
+    return static_cast<image_matching::MatchRecordFlag>(enabled ? raw | bit : raw & ~bit);
 }
 
-void appendRawIndexedMatches(const QString &matchPath,
-                             int keypointCount0,
-                             int keypointCount1,
-                             std::vector<MultiViewTrackBuilder::MatchIndexPair> *indexedMatches)
+void rememberKeypoint(
+    ImageId imageId,
+    const image_matching::KeypointObservation &observation,
+    std::map<ImageId, std::map<FeatureIdx, FeatureKeypoint>> *sparseKeypoints)
 {
-    if (!indexedMatches)
+    if (!sparseKeypoints)
     {
         return;
     }
+    (*sparseKeypoints)[imageId][static_cast<FeatureIdx>(observation.featureId)] =
+        FeatureKeypoint{observation.x, observation.y};
+}
 
-    QString image0Name;
-    QString image1Name;
-    xjw::feature_match::MatchResult matchResult;
-    if (!xjw::feature_match::readIndexedMatchFile(matchPath, image0Name, image1Name, matchResult))
+std::vector<FeatureKeypoint> denseKeypointVector(
+    const std::map<FeatureIdx, FeatureKeypoint> &sparse)
+{
+    if (sparse.empty())
     {
-        return;
+        return {};
+    }
+    const FeatureIdx maximumIndex = sparse.rbegin()->first;
+    std::vector<FeatureKeypoint> dense(static_cast<std::size_t>(maximumIndex) + 1U);
+    for (const auto &[featureIndex, keypoint] : sparse)
+    {
+        dense[static_cast<std::size_t>(featureIndex)] = keypoint;
+    }
+    return dense;
+}
+
+void markTrackMembership(const std::vector<Track> &tracks,
+                         const std::map<QString, ImageId> &imageIdByPath,
+                         std::vector<MatchPhotosMatchRecord> *records)
+{
+    std::map<ObservationKey, int> trackByObservation;
+    for (int trackId = 0; trackId < static_cast<int>(tracks.size()); ++trackId)
+    {
+        for (const TrackElement &element : tracks[static_cast<std::size_t>(trackId)].elements)
+        {
+            trackByObservation[{element.imageId, element.featureIdx}] = trackId;
+        }
     }
 
-    indexedMatches->reserve(matchResult.cvMatches.size());
-    for (const cv::DMatch &match : matchResult.cvMatches)
+    for (MatchPhotosMatchRecord &record : *records)
     {
-        if (match.queryIdx < 0 || match.trainIdx < 0 ||
-            match.queryIdx >= keypointCount0 || match.trainIdx >= keypointCount1)
+        if (!record.pairData)
         {
             continue;
         }
-        indexedMatches->emplace_back(static_cast<FeatureIdx>(match.queryIdx),
-                                     static_cast<FeatureIdx>(match.trainIdx),
-                                     matchScoreAt(matchResult, match.queryIdx, match.distance));
+        const auto image0It = imageIdByPath.find(canonicalPath(record.image0Path));
+        const auto image1It = imageIdByPath.find(canonicalPath(record.image1Path));
+        if (image0It == imageIdByPath.end() || image1It == imageIdByPath.end())
+        {
+            continue;
+        }
+
+        int trackMatches = 0;
+        for (image_matching::PairCorrespondence &correspondence :
+             record.pairData->correspondences)
+        {
+            const ObservationKey key0{
+                image0It->second,
+                static_cast<FeatureIdx>(correspondence.observation0.featureId)};
+            const ObservationKey key1{
+                image1It->second,
+                static_cast<FeatureIdx>(correspondence.observation1.featureId)};
+            const auto track0 = trackByObservation.find(key0);
+            const auto track1 = trackByObservation.find(key1);
+            const bool inSameTrack = track0 != trackByObservation.end() &&
+                track1 != trackByObservation.end() && track0->second == track1->second;
+            correspondence.flags = withTrackFlag(correspondence.flags, inSameTrack);
+            if (inSameTrack)
+            {
+                ++trackMatches;
+            }
+        }
+        record.pairData->tiePointMatchCount = static_cast<std::uint32_t>(trackMatches);
+        record.settings[QStringLiteral("tie_point_matches")] = trackMatches;
     }
 }
 
@@ -467,10 +450,16 @@ void appendRawIndexedMatches(const QString &matchPath,
 
 TiePointTrackBuildResult TiePointTrackManager::build(const MatchPhotosContext &context,
                                                      const MatchPhotosOptions &options,
-                                                     const std::vector<MatchPhotosMatchRecord> &matchRecords) const
+                                                     std::vector<MatchPhotosMatchRecord> *matchRecords) const
 {
     TiePointTrackBuildResult result;
     result.success = true;
+    if (!matchRecords)
+    {
+        result.success = false;
+        result.errorMessage = QStringLiteral("内部错误：连接点匹配记录为空");
+        return result;
+    }
 
     std::map<QString, ImageId> imageIdByPath;
     for (int index = 0; index < context.pairInput.images.size(); ++index)
@@ -479,12 +468,14 @@ TiePointTrackBuildResult TiePointTrackManager::build(const MatchPhotosContext &c
     }
 
     MultiViewTrackBuilder builder;
-    std::map<ImageId, bool> keypointsLoaded;
+    std::map<ImageId, std::map<FeatureIdx, FeatureKeypoint>> sparseKeypoints;
     std::map<ImageId, std::vector<FeatureKeypoint>> keypointsByImage;
     float imageWidth = 0.0f;
     float imageHeight = 0.0f;
 
-    for (const MatchPhotosMatchRecord &record : matchRecords)
+    // 第一遍只整理匹配真正引用的观测。featureId 保留原始 SIFT 索引，因此数组
+    // 可能稀疏；先用 map 收集，再一次性展开，避免对每条边反复扩容。
+    for (const MatchPhotosMatchRecord &record : *matchRecords)
     {
         if (shouldCancelMatchPhotos(context))
         {
@@ -499,10 +490,13 @@ TiePointTrackBuildResult TiePointTrackManager::build(const MatchPhotosContext &c
             continue;
         }
 
-        const QString image0Path = canonicalPath(record.image0Path);
-        const QString image1Path = canonicalPath(record.image1Path);
-        const auto image0It = imageIdByPath.find(image0Path);
-        const auto image1It = imageIdByPath.find(image1Path);
+        if (!record.pairData)
+        {
+            ++result.skippedPairCount;
+            continue;
+        }
+        const auto image0It = imageIdByPath.find(canonicalPath(record.image0Path));
+        const auto image1It = imageIdByPath.find(canonicalPath(record.image1Path));
         if (image0It == imageIdByPath.end() || image1It == imageIdByPath.end())
         {
             ++result.skippedPairCount;
@@ -511,62 +505,79 @@ TiePointTrackBuildResult TiePointTrackManager::build(const MatchPhotosContext &c
 
         const ImageId image0Id = image0It->second;
         const ImageId image1Id = image1It->second;
-        const QString feature0Path = record.settings.value(QStringLiteral("feature0_path")).toString();
-        const QString feature1Path = record.settings.value(QStringLiteral("feature1_path")).toString();
-        QString featureImageName0;
-        QString featureImageName1;
-        xjw::feature_extractors::FeatureData feature0;
-        xjw::feature_extractors::FeatureData feature1;
-        if (feature0Path.isEmpty() ||
-            feature1Path.isEmpty() ||
-            !FeatureFileIO::readData(feature0Path, featureImageName0, feature0) ||
-            !FeatureFileIO::readData(feature1Path, featureImageName1, feature1))
+        for (const image_matching::PairCorrespondence &correspondence :
+             record.pairData->correspondences)
         {
-            ++result.skippedPairCount;
+            if (options.enableGeometryVerification &&
+                !image_matching::hasFlag(correspondence.flags,
+                                         image_matching::MatchRecordFlag::GeometryInlier))
+            {
+                continue;
+            }
+            rememberKeypoint(image0Id, correspondence.observation0, &sparseKeypoints);
+            rememberKeypoint(image1Id, correspondence.observation1, &sparseKeypoints);
+        }
+        imageWidth = std::max(
+            imageWidth,
+            static_cast<float>(std::max(record.pairData->image0.width,
+                                        record.pairData->image1.width)));
+        imageHeight = std::max(
+            imageHeight,
+            static_cast<float>(std::max(record.pairData->image0.height,
+                                        record.pairData->image1.height)));
+    }
+
+    for (const auto &[imageId, sparse] : sparseKeypoints)
+    {
+        keypointsByImage[imageId] = denseKeypointVector(sparse);
+        builder.setImageKeypoints(imageId, keypointsByImage[imageId]);
+    }
+
+    // 第二遍添加经过几何验证的边。置信度来自 LightGlue，供冲突消解和质量抽稀
+    // 使用；不再从单独的 `.match` 文件恢复索引。
+    for (const MatchPhotosMatchRecord &record : *matchRecords)
+    {
+        if (!record.pairData ||
+            (options.enableGeometryVerification && !record.passedGeometry))
+        {
             continue;
         }
-
-        if (!keypointsLoaded[image0Id])
+        const auto image0It = imageIdByPath.find(canonicalPath(record.image0Path));
+        const auto image1It = imageIdByPath.find(canonicalPath(record.image1Path));
+        if (image0It == imageIdByPath.end() || image1It == imageIdByPath.end())
         {
-            keypointsByImage[image0Id] = toSfmKeypoints(feature0.keypoints);
-            builder.setImageKeypoints(image0Id, keypointsByImage[image0Id]);
-            keypointsLoaded[image0Id] = true;
+            continue;
         }
-        if (!keypointsLoaded[image1Id])
-        {
-            keypointsByImage[image1Id] = toSfmKeypoints(feature1.keypoints);
-            builder.setImageKeypoints(image1Id, keypointsByImage[image1Id]);
-            keypointsLoaded[image1Id] = true;
-        }
-        imageWidth = std::max(imageWidth, static_cast<float>(std::max(feature0.imageWidth, feature1.imageWidth)));
-        imageHeight = std::max(imageHeight, static_cast<float>(std::max(feature0.imageHeight, feature1.imageHeight)));
 
         std::vector<MultiViewTrackBuilder::MatchIndexPair> indexedMatches;
-        if (!appendInlierIndexPairs(record,
-                                    static_cast<int>(feature0.keypoints.size()),
-                                    static_cast<int>(feature1.keypoints.size()),
-                                    &indexedMatches) &&
-            !options.enableGeometryVerification)
+        indexedMatches.reserve(record.pairData->correspondences.size());
+        for (const image_matching::PairCorrespondence &correspondence :
+             record.pairData->correspondences)
         {
-            appendRawIndexedMatches(record.matchPath,
-                                    static_cast<int>(feature0.keypoints.size()),
-                                    static_cast<int>(feature1.keypoints.size()),
-                                    &indexedMatches);
+            if (options.enableGeometryVerification &&
+                !image_matching::hasFlag(correspondence.flags,
+                                         image_matching::MatchRecordFlag::GeometryInlier))
+            {
+                continue;
+            }
+            indexedMatches.emplace_back(
+                static_cast<FeatureIdx>(correspondence.observation0.featureId),
+                static_cast<FeatureIdx>(correspondence.observation1.featureId),
+                correspondence.confidence);
         }
-
         if (indexedMatches.empty())
         {
-            ++result.skippedPairCount;
             continue;
         }
 
-        builder.addMatchPair(image0Id, image1Id, indexedMatches);
+        builder.addMatchPair(image0It->second, image1It->second, indexedMatches);
         ++result.consumedPairCount;
     }
 
     const MultiViewTrackBuildResult buildResult =
         builder.build(makeBuildOptions(options, imageWidth, imageHeight));
     copyBuildResult(buildResult, &result);
+    markTrackMembership(result.tracks, imageIdByPath, matchRecords);
     if (result.consumedPairCount <= 0)
     {
         result.success = false;

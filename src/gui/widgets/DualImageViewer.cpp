@@ -5,181 +5,41 @@
 #include "ImageViewWidget.h"
 #include "MatchLineOverlay.h"
 #include "DisparityHeatmapOverlay.h"
-#include "MatchValidityAnalyzer.h"
+#include "ImageMatchFile.h"
 #include "project/ProjectMetadata.h"
-#include <QFile>
 #include <QFileInfo>
-#include <QDir>
-#include <QJsonDocument>
-#include <QJsonArray>
-#include <QJsonObject>
-#include <QTextStream>
 
 #include <QTimer>
-#include <QFile>
-#include <QDataStream>
 #include <QMessageBox>
 #include <QDebug>
-#include <QRegularExpression>
+
+#include <algorithm>
 
 namespace {
 
-bool readSgmtMatchFile(const QString &matchFile,
-                       QString &image0Name,
-                       QString &image1Name,
-                       QVector<int> &matches0)
+bool identityMatchesImage(const xjw::image_matching::ImageIdentity &identity,
+                          const QString &imagePath)
 {
-    QFile file(matchFile);
-    if (!file.open(QIODevice::ReadOnly)) return false;
-
-    QDataStream in(&file);
-    in.setVersion(QDataStream::Qt_5_15);
-
-    char magic[4];
-    if (in.readRawData(magic, 4) != 4 || strncmp(magic, "SGMT", 4) != 0) {
-        return false;
-    }
-
-    quint32 version = 0;
-    in >> version;
-    if (version != 1) return false;
-
-    quint32 img0Len = 0;
-    quint32 img1Len = 0;
-    in >> img0Len;
-    QByteArray img0Bytes(img0Len, 0);
-    if (in.readRawData(img0Bytes.data(), img0Len) != static_cast<int>(img0Len)) return false;
-    image0Name = QString::fromUtf8(img0Bytes);
-
-    in >> img1Len;
-    QByteArray img1Bytes(img1Len, 0);
-    if (in.readRawData(img1Bytes.data(), img1Len) != static_cast<int>(img1Len)) return false;
-    image1Name = QString::fromUtf8(img1Bytes);
-
-    qint32 numMatches = 0;
-    qint32 numKp0 = 0;
-    qint32 numKp1 = 0;
-    in >> numMatches >> numKp0 >> numKp1;
-    Q_UNUSED(numMatches);
-    Q_UNUSED(numKp1);
-
-    if (numKp0 < 0) return false;
-    matches0.resize(numKp0);
-
-    for (int i = 0; i < numKp0; ++i) {
-        qint32 matchIdx = -1;
-        float score = 0.0f;
-        in >> matchIdx >> score;
-        Q_UNUSED(score);
-        matches0[i] = static_cast<int>(matchIdx);
-    }
-
-    return true;
+    return xjw::common::project::imageReferenceMatchesToken(
+        identity.path, identity.displayName, imagePath);
 }
 
-bool readSpPoints(const QString &spPath, QVector<QPointF> &points)
+bool betterBlock(const xjw::image_matching::NeighborMatchBlock &left,
+                 const xjw::image_matching::NeighborMatchBlock &right)
 {
-    points.clear();
-    QFile file(spPath);
-    if (!file.open(QIODevice::ReadOnly)) return false;
-
-    QDataStream in(&file);
-    in.setVersion(QDataStream::Qt_5_15);
-    in.setByteOrder(QDataStream::LittleEndian);
-
-    char magic[4];
-    if (in.readRawData(magic, 4) != 4 || strncmp(magic, "SPBT", 4) != 0) {
-        return false;
-    }
-
-    quint32 version = 0;
-    in >> version;
-    if (version != 1) return false;
-
-    quint32 imageNameLen = 0;
-    in >> imageNameLen;
-    QByteArray imageNameBytes(imageNameLen, 0);
-    if (in.readRawData(imageNameBytes.data(), imageNameLen) != static_cast<int>(imageNameLen)) return false;
-
-    quint32 numKeypoints = 0;
-    in >> numKeypoints;
-    points.reserve(static_cast<int>(numKeypoints));
-
-    for (quint32 i = 0; i < numKeypoints; ++i) {
-        float x = 0.f;
-        float y = 0.f;
-        float score = 0.f;
-        in >> x >> y >> score;
-        Q_UNUSED(score);
-        points.append(QPointF(x, y));
-    }
-
-    return true;
-}
-
-QString findExistingPath(const QStringList &candidates)
-{
-    for (const QString &cand : candidates) {
-        QString clean = QDir::cleanPath(cand);
-        if (QFile::exists(clean)) return clean;
-    }
-    return QString();
-}
-
-using xjw::common::project::imageReferenceMatchesToken;
-
-enum class MatchFileDisplayOrder
-{
-    Direct,
-    Reversed,
-    Unknown
-};
-
-MatchFileDisplayOrder displayOrderForMatchFile(const QString &fileImage0Path,
-                                               const QString &fileImage0Name,
-                                               const QString &fileImage1Path,
-                                               const QString &fileImage1Name,
-                                               const QString &displayImageA,
-                                               const QString &displayImageB)
-{
-    const bool direct =
-        imageReferenceMatchesToken(fileImage0Path, fileImage0Name, displayImageA) &&
-        imageReferenceMatchesToken(fileImage1Path, fileImage1Name, displayImageB);
-    const bool reversed =
-        imageReferenceMatchesToken(fileImage0Path, fileImage0Name, displayImageB) &&
-        imageReferenceMatchesToken(fileImage1Path, fileImage1Name, displayImageA);
-
-    if (direct)
+    if (left.geometryPassed != right.geometryPassed)
     {
-        return MatchFileDisplayOrder::Direct;
+        return left.geometryPassed;
     }
-    if (reversed)
+    if (left.geometryInlierCount != right.geometryInlierCount)
     {
-        return MatchFileDisplayOrder::Reversed;
+        return left.geometryInlierCount > right.geometryInlierCount;
     }
-    return MatchFileDisplayOrder::Unknown;
-}
-
-void appendSidecarMatchedPoints(const QJsonArray &points0,
-                                const QJsonArray &points1,
-                                bool reversed,
-                                QVector<QPointF> &ptsA,
-                                QVector<QPointF> &ptsB)
-{
-    for (int i = 0; i < points0.size(); ++i)
+    if (left.rawMatchCount != right.rawMatchCount)
     {
-        const QJsonArray p0 = points0.at(i).toArray();
-        const QJsonArray p1 = points1.at(i).toArray();
-        if (p0.size() < 2 || p1.size() < 2)
-        {
-            continue;
-        }
-
-        const QJsonArray &leftPoint = reversed ? p1 : p0;
-        const QJsonArray &rightPoint = reversed ? p0 : p1;
-        ptsA.append(QPointF(leftPoint.at(0).toDouble(), leftPoint.at(1).toDouble()));
-        ptsB.append(QPointF(rightPoint.at(0).toDouble(), rightPoint.at(1).toDouble()));
+        return left.rawMatchCount > right.rawMatchCount;
     }
+    return left.createdTimeMs > right.createdTimeMs;
 }
 
 }
@@ -364,7 +224,10 @@ void DualImageViewer::setMarkerMeasurement(const QString &anchorImage,
 }
 
 bool DualImageViewer::loadMatchPair(const QString &imgA, const QString &imgB,
-                                    const QString &matchFile)
+                                    const QString &matchFile,
+                                    const QString &algorithmId,
+                                    std::uint32_t algorithmVersion,
+                                    const QByteArray &configFingerprint)
 {
     if (matchFile.trimmed().isEmpty()) {
         loadMatchPair(imgA, imgB, QVector<QPointF>{}, QVector<QPointF>{});
@@ -373,18 +236,28 @@ bool DualImageViewer::loadMatchPair(const QString &imgA, const QString &imgB,
 
     // 解析匹配文件
     QVector<QPointF> ptsA, ptsB;
-    if (!parseMatchFile(matchFile, imgA, imgB, ptsA, ptsB)) {
+    QVector<bool> inlier_mask;
+    if (!parseMatchFile(matchFile,
+                        imgA,
+                        imgB,
+                        algorithmId,
+                        algorithmVersion,
+                        configFingerprint,
+                        ptsA,
+                        ptsB,
+                        inlier_mask)) {
         emit loadFailed(tr("无法解析匹配文件：%1").arg(matchFile));
         return false;
     }
     
     // 加载图像和匹配点
     loadMatchPair(imgA, imgB, ptsA, ptsB);
-    const MatchValidityResult validity = analyzeMatchTrackValidity(matchFile, imgA, imgB);
-    if (validity.hasTrackValidity && validity.inlierMask.size() == ptsA.size())
+    if (inlier_mask.size() == ptsA.size())
     {
-        _overlay->setInlierMask(validity.inlierMask);
-        emit matchValidityLoaded(validity.validCount, validity.invalidCount);
+        _overlay->setInlierMask(inlier_mask);
+        const int valid_count = static_cast<int>(std::count(
+            inlier_mask.cbegin(), inlier_mask.cend(), true));
+        emit matchValidityLoaded(valid_count, inlier_mask.size() - valid_count);
     }
     else
     {
@@ -582,172 +455,74 @@ void DualImageViewer::updateOverlayGeometry()
 bool DualImageViewer::parseMatchFile(const QString &matchFile,
                                      const QString &imgA,
                                      const QString &imgB,
+                                     const QString &algorithmId,
+                                     std::uint32_t algorithmVersion,
+                                     const QByteArray &configFingerprint,
                                      QVector<QPointF> &ptsA,
-                                     QVector<QPointF> &ptsB)
+                                     QVector<QPointF> &ptsB,
+                                     QVector<bool> &inlierMask)
 {
     ptsA.clear();
     ptsB.clear();
+    inlierMask.clear();
 
-    QString image0Name, image1Name;
-    QVector<int> matches0;
-    if (readSgmtMatchFile(matchFile, image0Name, image1Name, matches0)) {
-        QFileInfo matchFi(matchFile);
-        QString matchDir = matchFi.absolutePath();
-        QString assetsDir = QDir(matchDir).filePath("..");
-        QString projectRoot = QDir(assetsDir).filePath("..");
-
-        // 优先读取与 .match 同名的 sidecar json（由统一特征匹配流程写入）
-        QString sp0Path;
-        QString sp1Path;
-        const QString sidecarPath = matchFile + ".json";
-        QFile sidecarFile(sidecarPath);
-        if (sidecarFile.open(QIODevice::ReadOnly)) {
-            QJsonParseError perr;
-            QJsonDocument sdoc = QJsonDocument::fromJson(sidecarFile.readAll(), &perr);
-            sidecarFile.close();
-            if (perr.error == QJsonParseError::NoError && sdoc.isObject()) {
-                QJsonObject sobj = sdoc.object();
-
-                // 优先直接使用 sidecar 中缓存的匹配点坐标（无需读取 .sp）
-                QJsonArray m0 = sobj.value("matched_points0").toArray();
-                QJsonArray m1 = sobj.value("matched_points1").toArray();
-                if (!m0.isEmpty() && m0.size() == m1.size()) {
-                    const MatchFileDisplayOrder order = displayOrderForMatchFile(
-                        sobj.value("image0_path").toString(),
-                        sobj.value("image0_name").toString(image0Name),
-                        sobj.value("image1_path").toString(),
-                        sobj.value("image1_name").toString(image1Name),
-                        imgA,
-                        imgB);
-                    appendSidecarMatchedPoints(
-                        m0,
-                        m1,
-                        order == MatchFileDisplayOrder::Reversed,
-                        ptsA,
-                        ptsB);
-                    if (!ptsA.isEmpty() && ptsA.size() == ptsB.size()) {
-                        return true;
-                    }
-                    ptsA.clear();
-                    ptsB.clear();
-                }
-
-                sp0Path = sobj.value("sp0_path").toString();
-                sp1Path = sobj.value("sp1_path").toString();
-            }
-        }
-
-        if (sp0Path.isEmpty() || sp1Path.isEmpty()) {
-            // 回退：尝试所有特征文件后缀 (.sp/.dsk/.alk/.sift 等)
-            static const char *suffixes[] = {".sp",".dsk",".alk",".sift",".orb",".akz",".dedode"};
-            for (const char *suf : suffixes) {
-                if (sp0Path.isEmpty()) {
-                    QStringList c0 = {
-                        QDir(assetsDir).filePath("ip/" + image0Name + suf),
-                        QDir(projectRoot).filePath("assets/ip/" + image0Name + suf),
-                        QDir(projectRoot).filePath("ip/" + image0Name + suf),
-                    };
-                    sp0Path = findExistingPath(c0);
-                }
-                if (sp1Path.isEmpty()) {
-                    QStringList c1 = {
-                        QDir(assetsDir).filePath("ip/" + image1Name + suf),
-                        QDir(projectRoot).filePath("assets/ip/" + image1Name + suf),
-                        QDir(projectRoot).filePath("ip/" + image1Name + suf),
-                    };
-                    sp1Path = findExistingPath(c1);
-                }
-                if (!sp0Path.isEmpty() && !sp1Path.isEmpty()) break;
-            }
-        }
-
-        if (sp0Path.isEmpty() || sp1Path.isEmpty()) {
-            qWarning() << "无法找到特征文件:" << image0Name << image1Name;
-            return false;
-        }
-
-        QVector<QPointF> kpts0;
-        QVector<QPointF> kpts1;
-        if (!readSpPoints(sp0Path, kpts0) || !readSpPoints(sp1Path, kpts1)) {
-            qWarning() << "无法读取 .sp 文件:" << sp0Path << sp1Path;
-            return false;
-        }
-
-        QVector<QPointF> filePts0;
-        QVector<QPointF> filePts1;
-        for (int idx0 = 0; idx0 < matches0.size(); ++idx0) {
-            int idx1 = matches0[idx0];
-            if (idx1 >= 0 && idx0 < kpts0.size() && idx1 < kpts1.size()) {
-                filePts0.append(kpts0[idx0]);
-                filePts1.append(kpts1[idx1]);
-            }
-        }
-
-        const MatchFileDisplayOrder order = displayOrderForMatchFile(
-            QString(),
-            image0Name,
-            QString(),
-            image1Name,
-            imgA,
-            imgB);
-        const bool reversed = order == MatchFileDisplayOrder::Reversed;
-        ptsA = reversed ? filePts1 : filePts0;
-        ptsB = reversed ? filePts0 : filePts1;
-
-        return !ptsA.isEmpty();
-    }
-    
-    // 回退：尝试 JSON 或文本格式（旧格式）
-    QFile f(matchFile);
-    if (!f.open(QIODevice::ReadOnly)) return false;
-    const QByteArray raw = f.readAll();
-    f.close();
-
-    // Try JSON first
-    QJsonParseError perr;
-    QJsonDocument doc = QJsonDocument::fromJson(raw, &perr);
-    if (doc.isArray()) {
-        QJsonArray arr = doc.array();
-        for (const QJsonValue &val : arr) {
-            if (val.isArray()) {
-                QJsonArray a = val.toArray();
-                if (a.size() >= 4) {
-                    double x1 = a.at(0).toDouble();
-                    double y1 = a.at(1).toDouble();
-                    double x2 = a.at(2).toDouble();
-                    double y2 = a.at(3).toDouble();
-                    ptsA.append(QPointF(x1, y1));
-                    ptsB.append(QPointF(x2, y2));
-                }
-            } else if (val.isObject()) {
-                QJsonObject o = val.toObject();
-                double x1 = o.value(QStringLiteral("x1")).toDouble(o.value(QStringLiteral("xa")).toDouble());
-                double y1 = o.value(QStringLiteral("y1")).toDouble(o.value(QStringLiteral("ya")).toDouble());
-                double x2 = o.value(QStringLiteral("x2")).toDouble(o.value(QStringLiteral("xb")).toDouble());
-                double y2 = o.value(QStringLiteral("y2")).toDouble(o.value(QStringLiteral("yb")).toDouble());
-                ptsA.append(QPointF(x1, y1));
-                ptsB.append(QPointF(x2, y2));
-            }
-        }
-        return !ptsA.isEmpty();
+    xjw::image_matching::ImageMatchShard shard;
+    QString read_error;
+    if (!xjw::image_matching::ImageMatchFile::read(matchFile, &shard, &read_error))
+    {
+        qWarning() << "无法读取匹配分片:" << matchFile << read_error;
+        return false;
     }
 
-    // Fallback to text lines
-    QTextStream ts(raw);
-    while (!ts.atEnd()) {
-        QString line = ts.readLine().trimmed();
-        if (line.isEmpty()) continue;
-        QStringList parts = line.split(QRegularExpression(QStringLiteral("[\\s,]+")), Qt::SkipEmptyParts);
-        if (parts.size() < 4) continue;
-        bool ok1,ok2,ok3,ok4;
-        double x1 = parts.at(0).toDouble(&ok1);
-        double y1 = parts.at(1).toDouble(&ok2);
-        double x2 = parts.at(2).toDouble(&ok3);
-        double y2 = parts.at(3).toDouble(&ok4);
-        if (ok1 && ok2 && ok3 && ok4) {
-            ptsA.append(QPointF(x1,y1));
-            ptsB.append(QPointF(x2,y2));
+    const bool owner_is_a = identityMatchesImage(shard.owner, imgA);
+    const bool owner_is_b = identityMatchesImage(shard.owner, imgB);
+    if (!owner_is_a && !owner_is_b)
+    {
+        qWarning() << "匹配分片 owner 与查看影像不一致:" << shard.owner.path;
+        return false;
+    }
+    const QString peer_image = owner_is_a ? imgB : imgA;
+
+    const xjw::image_matching::NeighborMatchBlock *selected_block = nullptr;
+    for (const xjw::image_matching::NeighborMatchBlock &block : shard.neighbors)
+    {
+        if (!identityMatchesImage(block.peer, peer_image))
+        {
+            continue;
+        }
+        if (!algorithmId.trimmed().isEmpty() &&
+            !block.isCompatible(algorithmId, algorithmVersion, configFingerprint))
+        {
+            continue;
+        }
+        if (!selected_block || betterBlock(block, *selected_block))
+        {
+            selected_block = &block;
         }
     }
-    return !ptsA.isEmpty();
+    if (!selected_block)
+    {
+        return false;
+    }
+
+    ptsA.reserve(static_cast<int>(selected_block->matches.size()));
+    ptsB.reserve(static_cast<int>(selected_block->matches.size()));
+    inlierMask.reserve(static_cast<int>(selected_block->matches.size()));
+    for (const xjw::image_matching::MatchRecord &match : selected_block->matches)
+    {
+        const xjw::image_matching::KeypointObservation *owner_observation =
+            selected_block->findOwnerObservation(match.ownerFeatureId);
+        if (!owner_observation)
+        {
+            continue;
+        }
+
+        const QPointF owner_point(owner_observation->x, owner_observation->y);
+        const QPointF peer_point(match.peerX, match.peerY);
+        ptsA.append(owner_is_a ? owner_point : peer_point);
+        ptsB.append(owner_is_a ? peer_point : owner_point);
+        inlierMask.append(xjw::image_matching::hasFlag(
+            match.flags, xjw::image_matching::MatchRecordFlag::GeometryInlier));
+    }
+    return !ptsA.isEmpty() && ptsA.size() == ptsB.size();
 }

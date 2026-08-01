@@ -1,3 +1,9 @@
+/**
+ * @file AerialTriangulationDialog.cpp
+ * @brief 空中三角测量参数对话框的界面初始化和 JSON 配置映射。
+ *
+ * 本文件不执行重建算法；真正的连接点准备、增量 SfM 和 BA 由上层工作流服务负责。
+ */
 #include "reconstruction/AerialTriangulationDialog.h"
 #include "ui_AerialTriangulationDialog.h"
 
@@ -14,6 +20,7 @@
 namespace
 {
 
+// 组合框显示中文名称，itemData 保存供配置和 workflow 使用的稳定标识。
 void setComboByData(QComboBox *combo, const QString &data)
 {
     if (!combo)
@@ -39,19 +46,7 @@ QString comboDataOr(QComboBox *combo, const QString &fallback)
     return value.isEmpty() ? fallback : value;
 }
 
-QString normalizeReferenceSource(QString value)
-{
-    if (value == QStringLiteral("camera_pose"))
-    {
-        return QStringLiteral("estimated");
-    }
-    if (value == QStringLiteral("image_coordinates"))
-    {
-        return QStringLiteral("sequence");
-    }
-    return value;
-}
-
+// 固定输入控件的纵向尺寸，避免高级区域展开时布局抖动。
 void stabilizeInputControl(QWidget *widget)
 {
     if (!widget)
@@ -89,6 +84,7 @@ void AerialTriangulationDialog::setupUi()
     setWindowTitle(QStringLiteral("空中三角测量"));
     _ui->m_statusLabel->hide();
 
+    // 中文文本只用于显示；英文 token 会原样进入工作流配置。
     _ui->m_qualityCombo->clear();
     _ui->m_qualityCombo->addItem(QStringLiteral("最高"), QStringLiteral("highest"));
     _ui->m_qualityCombo->addItem(QStringLiteral("高"), QStringLiteral("high"));
@@ -121,6 +117,7 @@ void AerialTriangulationDialog::setupUi()
     _ui->m_maskApplyCombo->addItem(QStringLiteral("连接点"), QStringLiteral("tiepoints"));
     setComboByData(_ui->m_maskApplyCombo, QStringLiteral("keypoints"));
 
+    // 这里集中设置 GUI 的推荐初值；打开已有项目时，applySettings() 会用已保存配置覆盖它们。
     _ui->m_genericPreselectionCheck->setChecked(true);
     _ui->m_referencePreselectionCheck->setChecked(false);
     _ui->m_referenceSourceCombo->setEnabled(true);
@@ -161,6 +158,7 @@ void AerialTriangulationDialog::setupUi()
     setReferencePreselectionAvailable(false, 0, 0);
     setAdvancedExpanded(false);
 
+    // 参数发生变化时发送完整配置，而不是只发送单个控件值，便于上层统一持久化和校验。
     connect(_ui->m_buttonBox, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(_ui->m_buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
     connect(_ui->m_advancedToggle, &QToolButton::toggled, this, [this](bool expanded)
@@ -208,6 +206,8 @@ void AerialTriangulationDialog::setupUi()
     connectCheckBox(_ui->m_guidedImageMatchingCheck);
     connectCheckBox(_ui->m_adaptiveCameraModelCheck);
     connectCheckBox(_ui->m_reuseExistingMatchesCheck);
+
+    // “重新对齐”与“锁定输入相机位姿”语义互斥，界面始终只允许其中一个生效。
     connect(_ui->m_lockInputCameraPosesCheck, &QCheckBox::toggled, this,
             [this](bool checked)
     {
@@ -252,6 +252,7 @@ void AerialTriangulationDialog::setReferencePreselectionAvailable(bool available
         return;
     }
 
+    // available 只表示相机文件是否完整；序列参考无需相机，因此保留选择入口并通过提示说明限制。
     _ui->m_referencePreselectionCheck->setEnabled(true);
     _ui->m_referencePreselectionCheck->setToolTip(
         available
@@ -269,6 +270,8 @@ void AerialTriangulationDialog::setReferencePreselectionAvailable(bool available
 void AerialTriangulationDialog::applySettings(const QJsonObject &settings)
 {
     _applyingSettings = true;
+
+    // 批量恢复时屏蔽各控件信号，避免上层收到尚未恢复完成的中间配置。
     const QSignalBlocker blockQuality(_ui->m_qualityCombo);
     const QSignalBlocker blockGeneric(_ui->m_genericPreselectionCheck);
     const QSignalBlocker blockReference(_ui->m_referencePreselectionCheck);
@@ -289,9 +292,9 @@ void AerialTriangulationDialog::applySettings(const QJsonObject &settings)
         settings.value(QStringLiteral("generic_preselection")).toBool(true));
     _ui->m_referencePreselectionCheck->setChecked(
         settings.value(QStringLiteral("reference_preselection")).toBool(false));
-    const QString referenceSource = normalizeReferenceSource(
+    setComboByData(
+        _ui->m_referenceSourceCombo,
         settings.value(QStringLiteral("reference_preselection_source")).toString(QStringLiteral("source_code")));
-    setComboByData(_ui->m_referenceSourceCombo, referenceSource);
     _ui->m_resetAlignmentCheck->setChecked(
         settings.value(QStringLiteral("reset_current_alignment")).toBool(true));
     _ui->m_saveAfterEachStepCheck->setChecked(
@@ -310,6 +313,8 @@ void AerialTriangulationDialog::applySettings(const QJsonObject &settings)
         settings.value(QStringLiteral("reuse_existing_matches")).toBool(true));
     _ui->m_lockInputCameraPosesCheck->setChecked(
         settings.value(QStringLiteral("lock_input_camera_poses")).toBool(false));
+
+    // 输入配置同时启用两个互斥选项时，以“锁定输入位姿”为更强约束进行归一化。
     if (_ui->m_lockInputCameraPosesCheck->isChecked())
     {
         _ui->m_resetAlignmentCheck->setChecked(false);
@@ -321,6 +326,7 @@ void AerialTriangulationDialog::applySettings(const QJsonObject &settings)
 
 QJsonObject AerialTriangulationDialog::collectSettings() const
 {
+    // 字段名属于项目持久化与工作流之间的接口，不能随界面对象名一起变化。
     QJsonObject settings;
     settings[QStringLiteral("workflow_kind")] = QStringLiteral("aerial_triangulation_dialog_only");
     settings[QStringLiteral("quality")] = comboDataOr(_ui->m_qualityCombo, QStringLiteral("high"));
@@ -348,6 +354,7 @@ QJsonObject AerialTriangulationDialog::collectSettings() const
 
 void AerialTriangulationDialog::emitSettingsChanged()
 {
+    // applySettings() 会一次修改多个控件，完成前不应暴露不一致的配置快照。
     if (_applyingSettings)
     {
         return;

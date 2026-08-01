@@ -52,59 +52,51 @@ TEST(MatchPhotosCliGTest, AcceptsImageOnlyListInPlanMode)
     });
 
     EXPECT_EQ(result.exitCode, 0) << qPrintable(combinedOutput(result));
-    expectContainsAll(combinedOutput(result), {"match_photos_report.json"});
-    expectNotContainsAll(combinedOutput(result), {"需要 '<image> <camera.tsai>'"});
-    const QJsonObject report = readJsonObject(QDir(outputDir).filePath(QStringLiteral("match_photos_report.json")));
+    const QString output = combinedOutput(result);
+    expectContainsAll(output, {"match_photos_report.json"});
+    expectNotContainsAll(output, {"需要 '<image> <camera.tsai>'"});
+
+    // 报告属于活动 Chunk，而不是用户传入的临时输出目录。直接读取 CLI 回报的
+    // 最终路径，保证测试与 GUI/CLI 共用的项目布局一致。
+    const QRegularExpression reportPattern(
+        QStringLiteral("match_photos_report\\.json=([^\\r\\n]+)"));
+    const QRegularExpressionMatch reportMatch = reportPattern.match(output);
+    ASSERT_TRUE(reportMatch.hasMatch()) << qPrintable(output);
+    const QJsonObject report = readJsonObject(reportMatch.captured(1).trimmed());
     EXPECT_TRUE(report.value(QStringLiteral("success")).toBool());
     EXPECT_EQ(report.value(QStringLiteral("image_count")).toInt(), 2);
 }
 
-TEST(FeatureMatchCliGTest, BfSiftWritesBaV2SidecarIndicesAndPoints)
+TEST(FeatureMatchCliGTest, ExposesOnlyRawImagePimatchContract)
 {
+    const QString source = readSourceFile(
+        QStringLiteral("src/cli/features/cli_feature_match.cpp"));
+    expectContainsAll(source, {
+        "--left",
+        "--right",
+        "--output-dir",
+        "sift_lightglue",
+        "MatchPhotosTask",
+        ".pimatch",
+    });
+    expectNotContainsAll(source, {
+        "--sp1",
+        "--sp2",
+        "QStringLiteral(\"bf\")",
+        ".match.json",
+        "FeatureFileIO",
+    });
+
     const QString exe = executablePath(PLASCAN_FEATURE_MATCH_CLI_PATH);
     SKIP_IF_MISSING_EXECUTABLE(exe);
 
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-    const QString left = QDir(tempDir.path()).filePath(QStringLiteral("left.sift"));
-    const QString right = QDir(tempDir.path()).filePath(QStringLiteral("right.sift"));
-    const QString out = QDir(tempDir.path()).filePath(QStringLiteral("left__right.match"));
-
-    writeSiftFeature(left,
-                     QByteArray("left.jpg"),
-                     {{10.0f, 20.0f, 0.9f}, {30.0f, 40.0f, 0.8f}},
-                     {{1.0f, 0.0f}, {0.0f, 1.0f}});
-    writeSiftFeature(right,
-                     QByteArray("right.jpg"),
-                     {{11.0f, 21.0f, 0.95f}, {31.0f, 41.0f, 0.85f}},
-                     {{1.0f, 0.0f}, {0.0f, 1.0f}});
-
-    const CliResult result = runCli(exe, {
-        QStringLiteral("--algorithm"), QStringLiteral("bf"),
-        QStringLiteral("--sp1"), left,
-        QStringLiteral("--sp2"), right,
-        QStringLiteral("--output"), out,
-        QStringLiteral("--match-threshold"), QStringLiteral("0.0"),
-    });
-
+    const CliResult result = runCli(exe, {QStringLiteral("--help")});
     EXPECT_EQ(result.exitCode, 0) << qPrintable(combinedOutput(result));
-    const QString sidecarPath = out + QStringLiteral(".json");
-    ASSERT_TRUE(QFileInfo::exists(sidecarPath)) << qPrintable(combinedOutput(result));
-    const QJsonObject sidecar = readJsonObject(sidecarPath);
-
-    EXPECT_EQ(sidecar.value(QStringLiteral("feature_format_version")).toInt(), 2);
-    EXPECT_EQ(sidecar.value(QStringLiteral("image0_name")).toString(), QStringLiteral("left.jpg"));
-    EXPECT_EQ(sidecar.value(QStringLiteral("image1_name")).toString(), QStringLiteral("right.jpg"));
-    EXPECT_EQ(sidecar.value(QStringLiteral("feature0_path")).toString(), left);
-    EXPECT_EQ(sidecar.value(QStringLiteral("feature1_path")).toString(), right);
-    EXPECT_EQ(sidecar.value(QStringLiteral("matched_indices0")).toArray().size(), 2);
-    EXPECT_EQ(sidecar.value(QStringLiteral("matched_indices1")).toArray().size(), 2);
-    EXPECT_EQ(sidecar.value(QStringLiteral("matched_indices0")).toArray().at(0).toInt(), 0);
-    EXPECT_EQ(sidecar.value(QStringLiteral("matched_indices0")).toArray().at(1).toInt(), 1);
-    EXPECT_EQ(sidecar.value(QStringLiteral("matched_indices1")).toArray().at(0).toInt(), 0);
-    EXPECT_EQ(sidecar.value(QStringLiteral("matched_indices1")).toArray().at(1).toInt(), 1);
-    EXPECT_EQ(sidecar.value(QStringLiteral("matched_points0")).toArray().at(0).toArray().at(0).toDouble(), 10.0);
-    EXPECT_EQ(sidecar.value(QStringLiteral("matched_points1")).toArray().at(1).toArray().at(1).toDouble(), 41.0);
-    EXPECT_EQ(sidecar.value(QStringLiteral("num_matches")).toInt(), 2);
-    EXPECT_EQ(sidecar.value(QStringLiteral("matched_scores")).toArray().size(), 2);
+    expectContainsAll(combinedOutput(result), {
+        "--left",
+        "--right",
+        "--output-dir",
+        "sift_lightglue",
+    });
+    expectNotContainsAll(combinedOutput(result), {"--sp1", "--sp2", " bf"});
 }

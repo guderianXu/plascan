@@ -13,6 +13,9 @@ endif()
 add_library(bundle_adjust STATIC
     BundleAdjust.cpp
     BundleAdjustCeres.cpp
+    BundleAdjustCeresPlanning.cpp
+    BundleAdjustQuality.cpp
+    BundleAdjustValidation.cpp
     BundleAdjustNativeCuda.cpp
     BundleAdjustNativeCudaMath.cpp
     BundleAdjustNativeCudaWorkset.cpp

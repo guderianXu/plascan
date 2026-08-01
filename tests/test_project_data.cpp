@@ -3,6 +3,7 @@
 #include "PlascanArchive.h"
 #include "ProjectChunkStore.h"
 #include "ProjectResourceStore.h"
+#include "ProjectWorkspaceStore.h"
 #include "ProjectData.h"
 #include "ProjectFilesManager.h"
 #include "project/ProjectChunkIndex.h"
@@ -30,8 +31,7 @@ namespace {
 QStringList allResultKeys()
 {
     return {
-        QStringLiteral("ipfind_results"),
-        QStringLiteral("ipmatch_results"),
+        QStringLiteral("image_match_results"),
         QStringLiteral("intersection_results"),
         QStringLiteral("bundle_adjust_results"),
         QStringLiteral("aerial_triangulation_results"),
@@ -87,6 +87,16 @@ QJsonObject chunkDocument(const QString &projectPath)
     return archiveDocument(projectPath, false);
 }
 
+QJsonObject chunkDocument(const QString &projectPath, int chunkDirectory)
+{
+    QJsonObject document;
+    QString error;
+    EXPECT_TRUE(ProjectChunkStore(projectPath).readChunkDocument(
+        chunkDirectory, &document, &error))
+        << qPrintable(error);
+    return document;
+}
+
 QJsonObject chunkSection(const QString &projectPath, const char *sectionName)
 {
     return chunkDocument(projectPath)
@@ -107,7 +117,16 @@ QString chunkPhysicalPath(const QString &projectPath,
                           const QString &entryPath)
 {
     QString relativePath = entryPath;
-    if (relativePath.startsWith(QStringLiteral("workspace/")))
+    if (relativePath.startsWith(QStringLiteral("shared/")))
+    {
+        return QDir(ProjectPackageLayout::dataDirectory(projectPath))
+            .filePath(relativePath);
+    }
+    if (relativePath.startsWith(QStringLiteral("chunk/")))
+    {
+        relativePath = relativePath.mid(6);
+    }
+    else if (relativePath.startsWith(QStringLiteral("workspace/")))
     {
         relativePath = relativePath.mid(10);
     }
@@ -328,6 +347,19 @@ TEST(ProjectDataTest, NewProjectCreatesMetashapeStyleSplitLayout)
         ProjectPackageLayout::metadataArchivePath(projectPath)).isFile());
     EXPECT_TRUE(QFileInfo(
         ProjectPackageLayout::workspaceDirectory(projectPath)).isDir());
+    const QString chunkRoot =
+        ProjectPackageLayout::workspaceDirectory(projectPath);
+    for (const QString &optionalDirectory :
+         {QStringLiteral("assets"),
+          QStringLiteral("bundle_adjust"),
+          QStringLiteral("reconstruction"),
+          QStringLiteral("reports")})
+    {
+        EXPECT_FALSE(QFileInfo::exists(
+            QDir(chunkRoot).filePath(optionalDirectory)));
+    }
+    EXPECT_FALSE(QFileInfo::exists(
+        ProjectPackageLayout::sharedDirectory(projectPath)));
 
     const QJsonObject manifest = projectDocument(projectPath);
     EXPECT_TRUE(
@@ -369,6 +401,42 @@ TEST(ProjectDataTest, NewProjectCreatesMetashapeStyleSplitLayout)
     EXPECT_EQ(
         chunkArchive.listEntries(),
         QVector<QString>{QStringLiteral("doc.json")});
+}
+
+TEST(ProjectDataTest, FullSavePrunesOnlyEmptyLegacyWorkflowDirectories)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString projectPath = tempProjectPath(dir);
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(
+        projectPath, QStringLiteral("按需目录")));
+
+    const QString chunkRoot =
+        ProjectPackageLayout::workspaceDirectory(projectPath);
+    const QString bundleAdjustDir =
+        QDir(chunkRoot).filePath(QStringLiteral("bundle_adjust"));
+    const QString reconstructionModelDir =
+        QDir(chunkRoot).filePath(QStringLiteral("reconstruction/model"));
+    const QString reportsDir =
+        QDir(chunkRoot).filePath(QStringLiteral("reports"));
+    ASSERT_TRUE(QDir().mkpath(bundleAdjustDir));
+    ASSERT_TRUE(QDir().mkpath(reconstructionModelDir));
+    ASSERT_TRUE(QDir().mkpath(reportsDir));
+
+    const QString reportPath =
+        QDir(reportsDir).filePath(QStringLiteral("keep.json"));
+    writeTestFile(reportPath, QByteArray("{}"));
+
+    QString error;
+    ASSERT_TRUE(project.saveProject(&error)) << qPrintable(error);
+    EXPECT_FALSE(QFileInfo::exists(bundleAdjustDir));
+    EXPECT_FALSE(QFileInfo::exists(reconstructionModelDir));
+    EXPECT_FALSE(QFileInfo::exists(
+        QDir(chunkRoot).filePath(QStringLiteral("reconstruction"))));
+    EXPECT_TRUE(QFileInfo(reportsDir).isDir());
+    EXPECT_TRUE(QFileInfo(reportPath).isFile());
 }
 
 TEST(ProjectDataTest, ChunkDirectoriesAreMonotonicAndNeverReused)
@@ -565,8 +633,8 @@ TEST(ProjectDataTest, ProjectUiStateAndWorkflowConfigPersistSeparatelyAfterMove)
             {QStringLiteral("feature_display"),
              QJsonObject{{QStringLiteral("pointSize"), 7}}}
         });
-        project.saveIpfindSettings(QJsonObject{
-            {QStringLiteral("algorithm"), QStringLiteral("superpoint")},
+        project.saveImageMatchingSettings(QJsonObject{
+            {QStringLiteral("algorithm"), QStringLiteral("sift_lightglue")},
             {QStringLiteral("max_features"), 2048}
         });
 
@@ -580,11 +648,11 @@ TEST(ProjectDataTest, ProjectUiStateAndWorkflowConfigPersistSeparatelyAfterMove)
     EXPECT_EQ(
         archivedConfig.value(QStringLiteral("workflow"))
             .toObject()
-            .value(QStringLiteral("ipfind"))
+            .value(QStringLiteral("image_matching"))
             .toObject()
             .value(QStringLiteral("algorithm"))
             .toString(),
-        QStringLiteral("superpoint"));
+        QStringLiteral("sift_lightglue"));
 
     const QJsonObject archivedUiState = projectDocument(projectPath).value(
         QString::fromLatin1(
@@ -618,10 +686,10 @@ TEST(ProjectDataTest, ProjectUiStateAndWorkflowConfigPersistSeparatelyAfterMove)
             .toInt(),
         7);
     EXPECT_EQ(
-        reopened.loadIpfindSettings()
+        reopened.loadImageMatchingSettings()
             .value(QStringLiteral("algorithm"))
             .toString(),
-        QStringLiteral("superpoint"));
+        QStringLiteral("sift_lightglue"));
 }
 
 TEST(ProjectDataTest, WorkspaceOnlySettingsAreIndexedInSplitProject)
@@ -762,14 +830,12 @@ TEST(ProjectDataTest, SplitProjectReopensAllWorkflowAssetsAfterPairMoves)
         ASSERT_FALSE(runtimeRoot.isEmpty());
         EXPECT_NE(QDir::cleanPath(runtimeRoot), QDir::cleanPath(sourceDir));
 
-        const QString feature =
-            QDir(runtimeRoot).filePath(QStringLiteral("assets/ip/影像一.sp"));
         const QString mask =
             QDir(runtimeRoot).filePath(QStringLiteral("assets/masks/影像一_mask.png"));
         const QString match =
-            QDir(runtimeRoot).filePath(QStringLiteral("assets/matches/连接点.match"));
+            QDir(runtimeRoot).filePath(QStringLiteral("assets/image_matches/影像一.pimatch"));
         const QString tracks =
-            QDir(runtimeRoot).filePath(QStringLiteral("assets/matches/tracks.bin"));
+            QDir(runtimeRoot).filePath(QStringLiteral("assets/tie_points/tracks.bin"));
         const QString depth =
             QDir(runtimeRoot).filePath(QStringLiteral("assets/mvs/depth/影像一.exr"));
         const QString cloud =
@@ -788,7 +854,6 @@ TEST(ProjectDataTest, SplitProjectReopensAllWorkflowAssetsAfterPairMoves)
             QDir(runtimeRoot).filePath(QStringLiteral("assets/reference/lidar.ply"));
 
         const QList<QPair<QString, QByteArray>> files{
-            {feature, QByteArray("feature")},
             {mask, QByteArray("mask")},
             {match, QByteArray("match")},
             {tracks, QByteArray("tracks")},
@@ -820,11 +885,9 @@ TEST(ProjectDataTest, SplitProjectReopensAllWorkflowAssetsAfterPairMoves)
         };
         images[0] = imageRecord;
         metadata[QStringLiteral("images")] = images;
-        metadata[QStringLiteral("ipfind_results")] = QJsonArray{
-            QJsonObject{{QStringLiteral("output"), feature}}
-        };
-        metadata[QStringLiteral("ipmatch_results")] = QJsonArray{
+        metadata[QStringLiteral("image_match_results")] = QJsonArray{
             QJsonObject{
+                {QStringLiteral("image"), externalImage},
                 {QStringLiteral("output"), match},
                 {QStringLiteral("track_file"), tracks}
             }
@@ -873,7 +936,7 @@ TEST(ProjectDataTest, SplitProjectReopensAllWorkflowAssetsAfterPairMoves)
             .toObject()
             .value(QStringLiteral("path"))
             .toString();
-        EXPECT_TRUE(archivedImage.startsWith(QStringLiteral("plascan:///workspace/")));
+        EXPECT_TRUE(archivedImage.startsWith(QStringLiteral("plascan:///shared/")));
 
         const QJsonObject archivedResults = chunkSection(
             projectPath, PortableProjectFormat::ProjectResultsSection);
@@ -881,12 +944,12 @@ TEST(ProjectDataTest, SplitProjectReopensAllWorkflowAssetsAfterPairMoves)
                         archivedResults,
                         QStringLiteral("model_results"),
                         QStringLiteral("model_path"))
-                        .startsWith(QStringLiteral("plascan:///workspace/")));
+                        .startsWith(QStringLiteral("plascan:///chunk/")));
         EXPECT_TRUE(resultPath(
                         archivedResults,
                         QStringLiteral("report_results"),
                         QStringLiteral("path"))
-                        .startsWith(QStringLiteral("plascan:///workspace/")));
+                        .startsWith(QStringLiteral("plascan:///chunk/")));
 
         const QJsonObject indexObject = chunkSection(
             projectPath, PortableProjectFormat::ResourceIndexSection);
@@ -894,7 +957,7 @@ TEST(ProjectDataTest, SplitProjectReopensAllWorkflowAssetsAfterPairMoves)
         const ProjectResourceIndex index =
             ProjectResourceIndex::fromJson(indexObject, &indexError);
         ASSERT_TRUE(indexError.isEmpty()) << qPrintable(indexError);
-        EXPECT_EQ(index.size(), 13);
+        EXPECT_EQ(index.size(), 12);
 
         project.closeProject();
     }
@@ -928,11 +991,9 @@ TEST(ProjectDataTest, SplitProjectReopensAllWorkflowAssetsAfterPairMoves)
     const QList<QPair<QString, QByteArray>> restoredFiles{
         {restoredImage.value(QStringLiteral("mask_path")).toString(),
          QByteArray("mask")},
-        {resultPath(restored, QStringLiteral("ipfind_results"), QStringLiteral("output")),
-         QByteArray("feature")},
-        {resultPath(restored, QStringLiteral("ipmatch_results"), QStringLiteral("output")),
+        {resultPath(restored, QStringLiteral("image_match_results"), QStringLiteral("output")),
          QByteArray("match")},
-        {restored.value(QStringLiteral("ipmatch_results")).toArray().at(0)
+        {restored.value(QStringLiteral("image_match_results")).toArray().at(0)
              .toObject().value(QStringLiteral("track_file")).toString(),
          QByteArray("tracks")},
         {resultPath(restored, QStringLiteral("depth_map_results"), QStringLiteral("depth_path")),
@@ -1076,7 +1137,7 @@ TEST(ProjectDataTest, PackResourcePersistsFilesAndDirectoriesInsideProject)
         {
             EXPECT_TRUE(
                 value.toObject().value(QStringLiteral("path")).toString()
-                    .startsWith(QStringLiteral("plascan:///workspace/")));
+                    .startsWith(QStringLiteral("plascan:///chunk/")));
         }
         project.closeProject();
     }
@@ -1116,7 +1177,7 @@ TEST(ProjectDataTest, PackResourcePersistsFilesAndDirectoriesInsideProject)
         QByteArray("{\"kind\":\"control\"}"));
 }
 
-TEST(ProjectDataTest, MissingIndexedWorkspaceEntryFailsWithResourceError)
+TEST(ProjectDataTest, MissingIndexedChunkEntryFailsWithResourceError)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
@@ -1162,6 +1223,77 @@ TEST(ProjectDataTest, MissingIndexedWorkspaceEntryFailsWithResourceError)
         || error.contains(QStringLiteral("归档"))
         || error.contains(QStringLiteral("提取")))
         << qPrintable(error);
+}
+
+TEST(ProjectDataTest, SavesChangedArtifactIntoActiveChunkWithoutLegacyWorkspacePath)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString projectPath = tempProjectPath(dir);
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(
+        projectPath, QStringLiteral("当前 Chunk 保存")));
+
+    const int initialChunkDirectory = project.activeChunkDirectory();
+    QString error;
+    QString activeChunkId;
+    ASSERT_TRUE(project.createChunk(
+        QStringLiteral("第二处理区"), &activeChunkId, &error))
+        << qPrintable(error);
+    const int chunkDirectory = project.activeChunkDirectory();
+    ASSERT_NE(chunkDirectory, initialChunkDirectory);
+    const QString artifactPath = QDir(
+        ProjectPackageLayout::chunkDirectory(
+            projectPath, chunkDirectory))
+        .filePath(QStringLiteral(
+            "assets/image_matches/a.pimatch"));
+    writeTestFile(artifactPath, QByteArray("first-version"));
+
+    QJsonObject metadata = project.metadata();
+    metadata[QStringLiteral("image_match_results")] = QJsonArray{
+        QJsonObject{
+            {QStringLiteral("image"), QStringLiteral("a.tif")},
+            {QStringLiteral("output"), artifactPath},
+            {QStringLiteral("valid_match_count"), 1}
+        }
+    };
+    project.updateMetadata(metadata, true);
+
+    ASSERT_TRUE(project.saveProject(&error)) << qPrintable(error);
+    const QJsonObject firstDocument =
+        chunkDocument(projectPath, chunkDirectory);
+    const QString firstUri = firstDocument
+        .value(QString::fromLatin1(
+            PortableProjectFormat::ProjectResultsSection))
+        .toObject()
+        .value(QStringLiteral("image_match_results"))
+        .toArray()
+        .first()
+        .toObject()
+        .value(QStringLiteral("output"))
+        .toString();
+    EXPECT_EQ(
+        firstUri,
+        QStringLiteral(
+            "plascan:///chunk/assets/image_matches/a.pimatch"));
+
+    writeTestFile(artifactPath, QByteArray("newer-version"));
+    ProjectWorkspaceStore(
+        projectPath, chunkDirectory).releaseRuntime();
+    ASSERT_TRUE(project.saveProject(&error)) << qPrintable(error);
+
+    const QByteArray storedJson =
+        QJsonDocument(chunkDocument(projectPath, chunkDirectory))
+            .toJson(QJsonDocument::Compact);
+    EXPECT_FALSE(storedJson.contains("plascan:///workspace/"));
+    EXPECT_TRUE(storedJson.contains("plascan:///chunk/"));
+
+    const QByteArray initialChunkJson =
+        QJsonDocument(chunkDocument(
+            projectPath, initialChunkDirectory))
+            .toJson(QJsonDocument::Compact);
+    EXPECT_FALSE(initialChunkJson.contains("a.pimatch"));
 }
 
 TEST(PlascanArchiveTest, StreamsUnicodeFileAndRejectsUnsafeEntry)
@@ -1476,6 +1608,38 @@ TEST(ProjectDataTest, UpsertResultRecordPersistsThroughProjectDataContract)
     ASSERT_EQ(depthResults.size(), 1);
     EXPECT_EQ(depthResults.first().toObject().value(QStringLiteral("grid_width")).toInt(), 800);
     EXPECT_EQ(depthResults.first().toObject().value(QStringLiteral("grid_height")).toInt(), 600);
+}
+
+TEST(ProjectDataTest, UpsertResultRecordKeepsSameFileNameInDifferentDirectories)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString projectPath = tempProjectPath(dir);
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(projectPath, QStringLiteral("demo")));
+
+    ASSERT_TRUE(project.upsertResultRecordByPath(
+        QStringLiteral("ortho_results"),
+        QStringLiteral("output_path"),
+        QJsonObject{
+            {QStringLiteral("output_path"), QStringLiteral("assets/a/dom.tif")},
+            {QStringLiteral("width"), 10}}));
+    ASSERT_TRUE(project.upsertResultRecordByPath(
+        QStringLiteral("ortho_results"),
+        QStringLiteral("output_path"),
+        QJsonObject{
+            {QStringLiteral("output_path"), QStringLiteral("assets/b/dom.tif")},
+            {QStringLiteral("width"), 20}}));
+
+    const QJsonArray results =
+        project.metadata().value(QStringLiteral("ortho_results")).toArray();
+    ASSERT_EQ(results.size(), 2);
+    EXPECT_EQ(results.at(0).toObject().value(QStringLiteral("width")).toInt(), 10);
+    EXPECT_EQ(results.at(1).toObject().value(QStringLiteral("width")).toInt(), 20);
+    EXPECT_EQ(
+        results.at(0).toObject().value(QStringLiteral("schema_version")).toInt(),
+        1);
 }
 
 TEST(ProjectDataTest, RemoveResourcesMatchesRelativeProjectPathsWithAbsoluteRequests)

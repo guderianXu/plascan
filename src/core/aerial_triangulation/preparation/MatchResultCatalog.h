@@ -1,26 +1,42 @@
 #pragma once
 
+/**
+ * @file MatchResultCatalog.h
+ * @brief 对逐影像 `.pimatch` 分片建立像对/算法变体只读索引。
+ *
+ * 文件系统层面一幅影像只有一个分片；逻辑层面同一像对仍可在分片内部保存多个
+ * algorithmId + version + configFingerprint 变体。目录器只依赖统一二进制契约，
+ * 不读取 JSON sidecar，也不从文件名推断影像身份或算法。
+ */
+
+#include <QByteArray>
 #include <QDateTime>
 #include <QString>
 #include <QStringList>
 #include <QVector>
 
+#include <cstdint>
 #include <functional>
 
 namespace xjw::aerial_triangulation
 {
 
+/// 同一无向影像对在一个算法版本和配置下的持久化结果。
 struct MatchVariant
 {
     QString imageA;
     QString imageB;
-    QString featureAlgorithm;
-    QString matchAlgorithm;
-    QString matchFilePath;
-    QString sidecarPath;
+    QString algorithmId;
+    std::uint32_t algorithmVersion = 0;
+    QByteArray configFingerprint;
+    QString matchFilePath; ///< 可直接读取该像对的 owner `.pimatch` 分片。
+    QString peerMatchFilePath; ///< 对称的 peer 分片，诊断缺失分片时使用。
     int totalMatches = 0;
     int geometricVerifiedInliers = 0;
-    bool hasInlierStats = false;
+    int tiePointMatches = 0;
+    double geometricCoverage = 0.0; ///< 几何内点在两幅影像 4x4 网格中的平均覆盖率。
+    bool hasInlierStats = true;
+    bool geometryPassed = false;
     bool compatible = false;
     QString status;
     QString reason;
@@ -39,20 +55,17 @@ struct MatchPairGroup
 struct MatchResultCatalogConfig
 {
     QString matchDirectory;
-    // 仅构建包含该影像的匹配目录索引；为空时扫描全部匹配结果。
     QString targetImagePath;
-    // 仅构建两端都属于当前影像集合的匹配目录索引；空三前置检查用于跳过历史工程残留匹配。
     QStringList targetImagePaths;
-    // 扫描 .match 文件时上报 processed/total，用于 GUI 展示真实百分比。
     std::function<void(int processed, int total)> progressCallback;
 };
 
 struct MatchResultCatalogSummary
 {
-    int matchFileCount = 0;
+    int matchFileCount = 0; ///< 实际访问的逐影像分片数。
     int variantCount = 0;
     int compatibleVariantCount = 0;
-    int incompatibleVariantCount = 0;
+    int incompatibleVariantCount = 0; ///< 文件损坏或版本不支持的分片数。
     int pairGroupCount = 0;
     QVector<MatchPairGroup> pairGroups;
 };
@@ -63,10 +76,8 @@ public:
     explicit MatchResultCatalog(const MatchResultCatalogConfig &config = MatchResultCatalogConfig());
 
     MatchResultCatalogSummary scan() const;
-
     static QString canonicalPairKey(const QString &imageA, const QString &imageB);
     static QString algorithmDisplayLabel(const MatchVariant &variant);
-    static int readSgmtMatchCount(const QString &path);
 
 private:
     MatchResultCatalogConfig _config;

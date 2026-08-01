@@ -44,10 +44,10 @@ live under `src/core/mvs/tests/`.
 - When verified pair geometry is available, verified pairs are selected first and shared-track geometry may
   backfill only the remaining slots. The manifest records the requested count, shortfall, and verified,
   backfill, or sequence tier for every selected source.
-- Stored match evidence is audited with USAC/MAGSAC before replay. An empty match file or fewer matches than
-  the minimum inlier count is recorded as missing/insufficient evidence, not as a proven geometric failure.
-  Only a nontrivial pair that fails the geometry gate is excluded. `mvs_pair_audit_cli` and
-  `mvs_depth_reprocess_cli` provide a reproducible audit/replay path without modifying the original workspace.
+- `.pimatch` stores the geometry model, inlier flags, residuals, and per-pair counts produced by the matching
+  workflow. MVS reads those persisted statistics directly instead of reopening feature files or rerunning
+  USAC/MAGSAC. `mvs_pair_audit_cli` exports the stored evidence and `mvs_depth_reprocess_cli` replays it without
+  modifying the original workspace.
 - If no match or track evidence exists, planning falls back to nearby sequence views instead of defaulting to
   an unbounded all-pairs search.
 
@@ -86,6 +86,10 @@ live under `src/core/mvs/tests/`.
   and coverage-regression reason instead of publishing a severely incomplete fine result.
 - CPU and CUDA PatchMatch consume the same per-pixel search radius. The final frame is accepted,
   validation-only, or rejected by `DepthFrameQualityGate` before fusion.
+- CPU and CUDA PatchMatch also consume the same reference/source valid masks. Plane-homography NCC uses only
+  samples that are foreground in the reference mask and whose four source bilinear neighbors are foreground;
+  a masked patch needs at least 35% valid samples (and at least four) before it can contribute photometric
+  support. Calls without masks retain the legacy all-image behavior.
 - `DepthCompletenessMetrics` measures coverage inside the effective project/content mask rather than against
   the whole raster. It separately records small interior holes, large interior openings, boundary-connected
   invalid regions, output-filter retention, and cross-view consistency retention.

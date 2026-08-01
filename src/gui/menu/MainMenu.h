@@ -195,6 +195,9 @@ public:
     /** @brief 返回工作流程中的"空中三角测量"参数对话框动作。 */
     QAction *workflowAerialTriangulationAction() const;
 
+    /** @brief 返回工作流程级高级设置动作。 */
+    QAction *workflowSettingsAction() const;
+
     /** @brief 返回"重叠度获取"分析动作。 */
     QAction *overlapAnalysisAction() const;
 
@@ -365,6 +368,7 @@ private:
     QAction *_addFolderAct{};           ///< 批量添加文件夹中的图片
     QAction *_featureVisualizationAct{};///< 特征点可视化设置对话框
     QAction *_workflowAerialTriangulationAct{}; ///< 工作流程中的对齐照片参数对话框
+    QAction *_workflowSettingsAct{};    ///< 工作流程级设备、并行度和数值门限设置
     QAction *_generateModelAct{};       ///< 生成模型（源数据选择）
     QAction *_generateTextureAct{};     ///< 生成纹理（已有模型投影纹理）
     QAction *_overlapAnalysisAct{};     ///< 重叠度分析

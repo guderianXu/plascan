@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import subprocess
 import sys
 import time
@@ -33,11 +32,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--skip-terrain", action="store_true")
     parser.add_argument("--export-obj", action="store_true")
     parser.add_argument("--force", action="store_true")
-    parser.add_argument(
-        "--legacy-stereo-test",
-        action="store_true",
-        help="run the old dense_match_cli/triangulate_cli validation pipeline",
-    )
     return parser.parse_args(argv)
 
 
@@ -46,21 +40,6 @@ def command_path(build_dir: Path, name: str) -> Path:
     if direct.exists():
         return direct
     return build_dir / "bin" / name
-
-
-def load_legacy_pipeline_main():
-    script_path = Path(__file__).resolve().parents[1] / "legacy" / "run_full_pipeline_test.py"
-    spec = importlib.util.spec_from_file_location("plascan_legacy_full_pipeline", script_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"cannot load legacy pipeline script: {script_path}")
-
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    entrypoint = getattr(module, "main", None)
-    if not callable(entrypoint):
-        raise RuntimeError(f"legacy pipeline script has no callable main(): {script_path}")
-    return entrypoint
 
 
 def build_command(args: argparse.Namespace) -> list[str]:
@@ -108,9 +87,6 @@ def build_command(args: argparse.Namespace) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    if args.legacy_stereo_test:
-        return load_legacy_pipeline_main()()
-
     cmd = build_command(args)
     tool = Path(cmd[0])
     if not tool.exists():

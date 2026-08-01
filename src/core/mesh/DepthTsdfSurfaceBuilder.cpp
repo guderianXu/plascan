@@ -1,7 +1,9 @@
 #include "DepthTsdfSurfaceBuilder.h"
 
+#include "DepthTsdfNarrowBandActivation.h"
 #include "AdaptiveTsdfOctree.h"
 #include "ConsistentIsoSurfaceExtractor.h"
+#include "DepthConsensusBiasPolicy.h"
 #include "DepthFrameUtils.h"
 #include "DepthFusionFramePolicy.h"
 #include "DepthMeshCompleteness.h"
@@ -16,6 +18,11 @@
 #include "Mc33IsoSurfaceExtractor.h"
 #include "SparseTgvSolver.h"
 #include "SurfaceReconstructorPostprocess.h"
+#include "VisibilityOccupancySurfaceBuilder.h"
+#include "VisibilityOccupancyBoundaryExtractor.h"
+#include "VisibilityOccupancyDistanceField.h"
+#include "VisibilityOccupancyHandleRepair.h"
+#include "VisibilityOccupancyTsdfCompletion.h"
 #include "io/PathIO.h"
 
 #include <QJsonArray>
@@ -1153,7 +1160,8 @@ bool DepthTsdfSurfaceBuilder::shouldAcceptQuadricSimplification(
 DepthTsdfLayout DepthTsdfSurfaceBuilder::makeLayout(const std::array<float, 3> &boundsMin,
                                                     const std::array<float, 3> &boundsMax,
                                                     int resolution,
-                                                    bool includeColor)
+                                                    bool includeColor,
+                                                    int nestedResolution)
 {
     DepthTsdfLayout layout;
     layout.boundsMin = boundsMin;
@@ -1176,13 +1184,33 @@ DepthTsdfLayout DepthTsdfSurfaceBuilder::makeLayout(const std::array<float, 3> &
         longestExtent = std::max(longestExtent, extents[axis]);
     }
 
+    const bool use_nested_resolution = nestedResolution >= 4 &&
+        resolution >= nestedResolution &&
+        resolution % nestedResolution == 0;
+    const int nested_scale = use_nested_resolution
+        ? resolution / nestedResolution
+        : 1;
     for (int axis = 0; axis < 3; ++axis)
     {
-        layout.cells[axis] = std::max(
+        const int unaligned_cells = std::max(
             1,
             static_cast<int>(std::lround(static_cast<double>(resolution) *
                                          static_cast<double>(extents[axis]) /
                                          static_cast<double>(longestExtent))));
+        if (use_nested_resolution)
+        {
+            const int nested_cells = std::max(
+                1,
+                static_cast<int>(std::lround(
+                    static_cast<double>(nestedResolution) *
+                    static_cast<double>(extents[axis]) /
+                    static_cast<double>(longestExtent))));
+            layout.cells[axis] = nested_cells * nested_scale;
+        }
+        else
+        {
+            layout.cells[axis] = unaligned_cells;
+        }
         layout.voxelSize[axis] = extents[axis] / static_cast<float>(layout.cells[axis]);
     }
 
@@ -1217,10 +1245,21 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::validateAllocation(
     const DepthTsdfOptions &options)
 {
     DepthTsdfResult result;
+    int nested_occupancy_resolution = 0;
+    const int occupancy_resolution = std::clamp(
+        options.visibilityOccupancyResolution, 24, 128);
+    if (options.enableVisibilityOccupancyCompletion &&
+        options.visibilityOccupancyAlignCarrierGrid &&
+        options.resolution >= occupancy_resolution &&
+        options.resolution % occupancy_resolution == 0)
+    {
+        nested_occupancy_resolution = occupancy_resolution;
+    }
     result.layout = makeLayout(boundsMin,
                                boundsMax,
                                options.resolution,
-                               options.calculateVertexColors);
+                               options.calculateVertexColors,
+                               nested_occupancy_resolution);
     if (!result.layout.ok)
     {
         result.errorMessage = QStringLiteral("Invalid TSDF bounds or resolution=%1")
@@ -1613,7 +1652,8 @@ DepthTsdfObservationSample DepthTsdfSurfaceBuilder::sampleObservation(
     float maximumInvalidNearestPixelRecoveryInverseDepthSpread,
     bool enableCrossViewConsensusDepth,
     float maximumCrossViewConsensusInverseDepthSpread,
-    const cv::Mat &crossViewConsensusMask)
+    const cv::Mat &crossViewConsensusMask,
+    const cv::Mat &referenceAnchoredConsensusDepth)
 {
     DepthTsdfObservationSample result;
     const int nearest_column = static_cast<int>(std::lround(pixel.x));
@@ -1635,7 +1675,27 @@ DepthTsdfObservationSample DepthTsdfSurfaceBuilder::sampleObservation(
         {
             *used = false;
         }
-        if (!enableCrossViewConsensusDepth || geometry_support < 2 ||
+        if (!enableCrossViewConsensusDepth)
+        {
+            return raw_depth;
+        }
+        // The precomputed map already encodes geometry, confidence, contour,
+        // repair and bias gates. Legacy per-sample gates apply only without it.
+        if (referenceAnchoredConsensusDepth.type() == CV_32FC1 &&
+            referenceAnchoredConsensusDepth.size() == frame.depth.size())
+        {
+            const float depth = referenceAnchoredConsensusDepth.at<float>(row, column);
+            if (!std::isfinite(depth) || depth <= 0.0f)
+            {
+                return raw_depth;
+            }
+            if (used)
+            {
+                *used = std::fabs(depth - raw_depth) > 1.0e-8f;
+            }
+            return depth;
+        }
+        if (geometry_support < 2 ||
             (!crossViewConsensusMask.empty() &&
              crossViewConsensusMask.at<std::uint8_t>(row, column) == 0) ||
             !std::isfinite(inverse_depth_spread) || inverse_depth_spread < 0.0f ||
@@ -2208,6 +2268,60 @@ float DepthTsdfSurfaceBuilder::observationEvidenceWeightMultiplier(
     return 1.0f;
 }
 
+float DepthTsdfSurfaceBuilder::observationInverseDepthSpreadWeightMultiplier(
+    const DepthTsdfObservationSample &observation,
+    const DepthTsdfOptions &options)
+{
+    if (!options.enableInverseDepthSpreadWeighting ||
+        !std::isfinite(observation.inverseDepthRelativeSpread) ||
+        observation.inverseDepthRelativeSpread <= 0.0f)
+    {
+        return 1.0f;
+    }
+
+    const float knee = std::clamp(
+        options.inverseDepthSpreadWeightKnee, 0.0f, 0.099f);
+    const float zero = std::clamp(
+        options.inverseDepthSpreadWeightZero, knee + 1.0e-6f, 0.10f);
+    const float minimum_multiplier = std::clamp(
+        options.minimumInverseDepthSpreadWeightMultiplier, 0.0f, 1.0f);
+    if (observation.inverseDepthRelativeSpread <= knee)
+    {
+        return 1.0f;
+    }
+    if (observation.inverseDepthRelativeSpread >= zero)
+    {
+        return minimum_multiplier;
+    }
+
+    const float normalized =
+        (observation.inverseDepthRelativeSpread - knee) / (zero - knee);
+    const float smooth = normalized * normalized * (3.0f - 2.0f * normalized);
+    return 1.0f - smooth * (1.0f - minimum_multiplier);
+}
+
+float DepthTsdfSurfaceBuilder::
+    observationInverseDepthSpreadSupportWeightMultiplier(
+        const DepthTsdfObservationSample &observation,
+        const DepthTsdfOptions &options)
+{
+    const float field_multiplier =
+        observationInverseDepthSpreadWeightMultiplier(observation, options);
+    if (!options.enableInverseDepthSpreadSupportWeightDecoupling ||
+        !options.enableInverseDepthSpreadWeighting)
+    {
+        return field_multiplier;
+    }
+    if (field_multiplier <= 0.0f)
+    {
+        return 0.0f;
+    }
+    return std::pow(
+        field_multiplier,
+        std::clamp(
+            options.inverseDepthSpreadSupportWeightExponent, 0.05f, 1.0f));
+}
+
 float DepthTsdfSurfaceBuilder::observationEvidenceSupportWeightMultiplier(
     const DepthTsdfObservationSample &observation,
     const DepthTsdfOptions &options)
@@ -2463,6 +2577,144 @@ DepthTsdfSurfaceBuilder::completeUnsupportedSamplesWithVisualHullSignedDistance(
         return statistics;
     }
 
+    const std::vector<std::uint8_t> core_supported = *supported;
+    std::vector<std::uint8_t> requested(expected_size, 0);
+    const std::size_t cell_count =
+        static_cast<std::size_t>(layout.cells[0]) *
+        static_cast<std::size_t>(layout.cells[1]) *
+        static_cast<std::size_t>(layout.cells[2]);
+    std::vector<std::uint8_t> frontier_cells(cell_count, 0);
+    const auto cell_index = [&](int x, int y, int z)
+    {
+        return (static_cast<std::size_t>(z) *
+                    static_cast<std::size_t>(layout.cells[1]) +
+                static_cast<std::size_t>(y)) *
+                   static_cast<std::size_t>(layout.cells[0]) +
+               static_cast<std::size_t>(x);
+    };
+    const auto inspect_core_signs = [&](int cell_x,
+                                        int cell_y,
+                                        int cell_z,
+                                        bool *has_positive,
+                                        bool *has_negative)
+    {
+        *has_positive = false;
+        *has_negative = false;
+        for (int dz = 0; dz <= 1; ++dz)
+        {
+            for (int dy = 0; dy <= 1; ++dy)
+            {
+                for (int dx = 0; dx <= 1; ++dx)
+                {
+                    const std::size_t corner = sampleIndex(
+                        layout, cell_x + dx, cell_y + dy, cell_z + dz);
+                    if (core_supported[corner] == 0)
+                    {
+                        continue;
+                    }
+                    if ((*tsdf)[corner] < 0.0f)
+                    {
+                        *has_negative = true;
+                    }
+                    else
+                    {
+                        *has_positive = true;
+                    }
+                }
+            }
+        }
+    };
+    for (int z = 0; z < layout.cells[2]; ++z)
+    {
+        for (int y = 0; y < layout.cells[1]; ++y)
+        {
+            for (int x = 0; x < layout.cells[0]; ++x)
+            {
+                bool anchor_positive = false;
+                bool anchor_negative = false;
+                inspect_core_signs(
+                    x, y, z, &anchor_positive, &anchor_negative);
+                if (!anchor_positive || !anchor_negative)
+                {
+                    continue;
+                }
+                ++statistics.anchorCellCount;
+
+                for (int neighbor_z = std::max(0, z - 1);
+                     neighbor_z <= std::min(layout.cells[2] - 1, z + 1);
+                     ++neighbor_z)
+                {
+                    for (int neighbor_y = std::max(0, y - 1);
+                         neighbor_y <= std::min(layout.cells[1] - 1, y + 1);
+                         ++neighbor_y)
+                    {
+                        for (int neighbor_x = std::max(0, x - 1);
+                             neighbor_x <= std::min(layout.cells[0] - 1, x + 1);
+                             ++neighbor_x)
+                        {
+                            bool core_positive = false;
+                            bool core_negative = false;
+                            inspect_core_signs(
+                                neighbor_x,
+                                neighbor_y,
+                                neighbor_z,
+                                &core_positive,
+                                &core_negative);
+                            if (core_positive == core_negative)
+                            {
+                                continue;
+                            }
+
+                            bool requested_in_cell = false;
+                            for (int dz = 0; dz <= 1; ++dz)
+                            {
+                                for (int dy = 0; dy <= 1; ++dy)
+                                {
+                                    for (int dx = 0; dx <= 1; ++dx)
+                                    {
+                                        const std::size_t corner = sampleIndex(
+                                            layout,
+                                            neighbor_x + dx,
+                                            neighbor_y + dy,
+                                            neighbor_z + dz);
+                                        if (core_supported[corner] != 0)
+                                        {
+                                            continue;
+                                        }
+                                        const bool hull_negative =
+                                            occupied[corner] != 0;
+                                        const bool supplies_missing_sign =
+                                            (core_positive && hull_negative) ||
+                                            (core_negative && !hull_negative);
+                                        if (!supplies_missing_sign)
+                                        {
+                                            continue;
+                                        }
+                                        requested[corner] = 1;
+                                        requested_in_cell = true;
+                                    }
+                                }
+                            }
+                            if (requested_in_cell)
+                            {
+                                frontier_cells[cell_index(
+                                    neighbor_x, neighbor_y, neighbor_z)] = 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    statistics.frontierCellCount = static_cast<std::uint64_t>(
+        std::count(
+            frontier_cells.cbegin(), frontier_cells.cend(), std::uint8_t{1}));
+    if (statistics.anchorCellCount == 0 ||
+        statistics.frontierCellCount == 0)
+    {
+        return statistics;
+    }
+
     constexpr std::uint16_t kInfinity =
         std::numeric_limits<std::uint16_t>::max();
     const int maximum_distance = std::clamp(
@@ -2601,7 +2853,8 @@ DepthTsdfSurfaceBuilder::completeUnsupportedSamplesWithVisualHullSignedDistance(
         1.0f / std::max(1.0f, bandVoxels * 3.0f);
     for (std::size_t index = 0; index < expected_size; ++index)
     {
-        if ((*supported)[index] != 0 ||
+        if (requested[index] == 0 ||
+            (*supported)[index] != 0 ||
             distance[index] == kInfinity ||
             distance[index] > maximum_distance)
         {
@@ -3258,6 +3511,37 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         }
     }
 
+    QVector<cv::Mat> reference_anchored_consensus_depths;
+    if (options.enableCrossViewConsensusDepth)
+    {
+        reference_anchored_consensus_depths.reserve(frames.size());
+        xjw::mvs::ReferenceAnchoredDepthConsensusOptions consensus_options;
+        consensus_options.maximumInverseDepthSpread =
+            options.maximumCrossViewConsensusInverseDepthSpread;
+        consensus_options.minimumConfidence = std::max(
+            consensus_options.minimumConfidence, options.minimumConfidence);
+        for (int frame_index = 0; frame_index < frames.size(); ++frame_index)
+        {
+            const DepthTsdfFrame &frame = frames[frame_index];
+            const cv::Mat &valid_mask = erosion_pixels > 0
+                ? effective_depth_valid_masks[frame_index]
+                : frame.depthValidMask;
+            xjw::mvs::ReferenceAnchoredDepthConsensusResult consensus =
+                xjw::mvs::makeReferenceAnchoredDepthConsensus(
+                    frame.depth,
+                    frame.inverseDepthMean,
+                    frame.geometrySupportCount,
+                    frame.inverseDepthRelativeSpread,
+                    frame.confidence,
+                    frame.crossViewRepairedMask,
+                    frame.supportMask,
+                    valid_mask,
+                    consensus_options);
+            reference_anchored_consensus_depths.push_back(
+                consensus.depth.empty() ? frame.depth.clone() : std::move(consensus.depth));
+        }
+    }
+
     QVector<cv::Mat> contour_band_masks;
     std::uint64_t cross_view_consensus_contour_band_pixel_count = 0;
     if ((options.enableCrossViewConsensusDepth &&
@@ -3565,7 +3849,72 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                   effective_truncation_voxels,
                   options.maximumFreeSpaceVoxels)
         : std::numeric_limits<float>::infinity();
+    DepthTsdfNarrowBandActivation narrow_band_activation;
+    if (options.enableNarrowBandActivation)
+    {
+        if (options.progress)
+        {
+            options.progress(
+                QStringLiteral("正在激活有效深度附近的 TSDF 窄带..."), 4);
+        }
+        std::vector<DepthTsdfNarrowBandFrameView> activation_frames;
+        activation_frames.reserve(static_cast<std::size_t>(frames.size()));
+        for (int frame_index = 0; frame_index < frames.size(); ++frame_index)
+        {
+            if (effective_frame_quality_weights[frame_index] <= 0.0f)
+            {
+                continue;
+            }
+            const DepthTsdfFrame &frame = frames[frame_index];
+            DepthTsdfNarrowBandFrameView view;
+            view.camera = &frame.camera;
+            view.depth = &frame.depth;
+            view.depthValidMask = erosion_pixels > 0
+                ? &effective_depth_valid_masks[frame_index]
+                : &frame.depthValidMask;
+            view.supportMask = &frame.supportMask;
+            activation_frames.push_back(view);
+        }
+
+        DepthTsdfNarrowBandActivationOptions activation_options;
+        activation_options.blockSizeSamples = std::clamp(
+            options.narrowBandActivationBlockSizeSamples, 2, 32);
+        activation_options.depthStride = std::clamp(
+            options.narrowBandActivationDepthStride, 1, 16);
+        activation_options.truncationDistance = truncation;
+        activation_options.rayStepVoxels = std::clamp(
+            options.narrowBandActivationRayStepVoxels, 0.25f, 4.0f);
+        activation_options.haloBlocks = std::clamp(
+            options.narrowBandActivationHaloBlocks, 0, 3);
+        activation_options.isCancelled = options.isCancelled;
+        if (!narrow_band_activation.build(
+                result.layout, activation_frames, activation_options))
+        {
+            result.errorMessage = narrow_band_activation.wasCancelled()
+                ? QStringLiteral("TSDF 窄带激活已取消")
+                : QStringLiteral("TSDF 窄带激活失败：输入布局或参数无效");
+            return result;
+        }
+        const DepthTsdfNarrowBandActivationStatistics &activation_statistics =
+            narrow_band_activation.statistics();
+        if (activation_statistics.activeBlocks == 0)
+        {
+            result.errorMessage = QStringLiteral(
+                "TSDF 窄带激活没有找到可用深度样本；"
+                "无效深度和蒙版外区域保持为 unknown");
+            return result;
+        }
+        result.statistics.narrowBandActivationTotalBlockCount =
+            activation_statistics.totalBlocks;
+        result.statistics.narrowBandActivationActiveBlockCount =
+            activation_statistics.activeBlocks;
+        result.statistics.narrowBandActivationValidSourceSampleCount =
+            activation_statistics.validSourceSamples;
+        result.statistics.narrowBandActivationMarkedRaySampleCount =
+            activation_statistics.markedRaySamples;
+    }
     unsigned long long integratedVoxelUpdates = 0;
+    unsigned long long narrowBandActivationSkippedSampleCount = 0;
     unsigned long long rejectedProjectionCount = 0;
     unsigned long long rejectedSupportMaskCount = 0;
     unsigned long long supportMaskFreeSpaceUpdateCount = 0;
@@ -3584,6 +3933,9 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
     unsigned long long weakNativeObservationCount = 0;
     unsigned long long repairedObservationCount = 0;
     unsigned long long strongNativeObservationCount = 0;
+    unsigned long long inverseDepthSpreadDownweightedObservationCount = 0;
+    unsigned long long inverseDepthSpreadVeryWeakObservationCount = 0;
+    unsigned long long inverseDepthSpreadSupportLiftedObservationCount = 0;
     unsigned long long weakEvidenceOutsideSurfaceBandRejectedCount = 0;
     std::atomic_bool cancelled{false};
     std::atomic<int> completed_z_slices{0};
@@ -3592,7 +3944,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
 #ifdef MESHING_OPENMP
     const int workerCount = options.workerCount > 0 ? options.workerCount : omp_get_max_threads();
 #pragma omp parallel for schedule(static) num_threads(workerCount) \
-    reduction(+:integratedVoxelUpdates,rejectedProjectionCount,rejectedSupportMaskCount,supportMaskFreeSpaceUpdateCount,supportMaskFreeSpaceSurfaceVetoCount,auxiliaryOutsideSurfaceBandRejectedCount,rejectedDepthValidCount,rejectedDepthCount,rejectedConfidenceCount,subpixelObservationCount,recoveredNeighborObservationCount,discontinuityRejectedCandidateCount,rejectedGeometryConsistencyCount,rejectedInvalidNearestPixelRecoveryCount,crossViewConsensusDepthObservationCount,unconfirmedNativeObservationCount,weakNativeObservationCount,repairedObservationCount,strongNativeObservationCount,weakEvidenceOutsideSurfaceBandRejectedCount)
+    reduction(+:integratedVoxelUpdates,narrowBandActivationSkippedSampleCount,rejectedProjectionCount,rejectedSupportMaskCount,supportMaskFreeSpaceUpdateCount,supportMaskFreeSpaceSurfaceVetoCount,auxiliaryOutsideSurfaceBandRejectedCount,rejectedDepthValidCount,rejectedDepthCount,rejectedConfidenceCount,subpixelObservationCount,recoveredNeighborObservationCount,discontinuityRejectedCandidateCount,rejectedGeometryConsistencyCount,rejectedInvalidNearestPixelRecoveryCount,crossViewConsensusDepthObservationCount,unconfirmedNativeObservationCount,weakNativeObservationCount,repairedObservationCount,strongNativeObservationCount,inverseDepthSpreadDownweightedObservationCount,inverseDepthSpreadVeryWeakObservationCount,inverseDepthSpreadSupportLiftedObservationCount,weakEvidenceOutsideSurfaceBandRejectedCount)
 #endif
     for (int z = 0; z < zSamples; ++z)
     {
@@ -3617,6 +3969,12 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                     worldZ
                 };
                 const std::size_t index = sampleIndex(result.layout, x, y, z);
+                if (options.enableNarrowBandActivation &&
+                    !narrow_band_activation.isSampleActive(x, y, z))
+                {
+                    ++narrowBandActivationSkippedSampleCount;
+                    continue;
+                }
                 int support_mask_free_space_votes = 0;
                 for (int frame_index = 0; frame_index < frames.size(); ++frame_index)
                 {
@@ -3649,6 +4007,9 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                         options.maximumCrossViewConsensusInverseDepthSpread,
                         options.crossViewConsensusContourBandOnly
                             ? contour_band_masks[frame_index]
+                            : cv::Mat(),
+                        options.enableCrossViewConsensusDepth
+                            ? reference_anchored_consensus_depths[frame_index]
                             : cv::Mat());
                     if (!observation.valid)
                     {
@@ -3727,14 +4088,38 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                     const float evidence_support_weight_multiplier =
                         observationEvidenceSupportWeightMultiplier(
                             observation, options);
+                    const float spread_weight_multiplier =
+                        observationInverseDepthSpreadWeightMultiplier(
+                            observation, options);
+                    const float spread_support_weight_multiplier =
+                        observationInverseDepthSpreadSupportWeightMultiplier(
+                            observation, options);
                     const float observationWeight =
                         confidence *
                         effective_frame_quality_weights[frame_index] *
-                        evidence_weight_multiplier;
+                        evidence_weight_multiplier *
+                        spread_weight_multiplier;
                     const float evidenceSupportObservationWeight =
                         confidence *
                         effective_frame_quality_weights[frame_index] *
-                        evidence_support_weight_multiplier;
+                        evidence_support_weight_multiplier *
+                        spread_support_weight_multiplier;
+                    if (spread_weight_multiplier < 1.0f)
+                    {
+                        ++inverseDepthSpreadDownweightedObservationCount;
+                    }
+                    if (options.enableInverseDepthSpreadWeighting &&
+                        spread_weight_multiplier <=
+                        options.minimumInverseDepthSpreadWeightMultiplier +
+                            1.0e-6f)
+                    {
+                        ++inverseDepthSpreadVeryWeakObservationCount;
+                    }
+                    if (spread_support_weight_multiplier >
+                        spread_weight_multiplier + 1.0e-6f)
+                    {
+                        ++inverseDepthSpreadSupportLiftedObservationCount;
+                    }
                     if (observation.usedCrossViewRepairedDepth)
                     {
                         ++repairedObservationCount;
@@ -3915,6 +4300,8 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         return result;
     }
     result.statistics.integratedVoxelUpdates = integratedVoxelUpdates;
+    result.statistics.narrowBandActivationSkippedSampleCount =
+        narrowBandActivationSkippedSampleCount;
     result.statistics.rejectedProjectionCount = rejectedProjectionCount;
     result.statistics.rejectedSupportMaskCount = rejectedSupportMaskCount;
     result.statistics.supportMaskFreeSpaceUpdateCount = supportMaskFreeSpaceUpdateCount;
@@ -3944,6 +4331,12 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         repairedObservationCount;
     result.statistics.strongNativeObservationCount =
         strongNativeObservationCount;
+    result.statistics.inverseDepthSpreadDownweightedObservationCount =
+        inverseDepthSpreadDownweightedObservationCount;
+    result.statistics.inverseDepthSpreadVeryWeakObservationCount =
+        inverseDepthSpreadVeryWeakObservationCount;
+    result.statistics.inverseDepthSpreadSupportLiftedObservationCount =
+        inverseDepthSpreadSupportLiftedObservationCount;
     result.statistics.weakEvidenceOutsideSurfaceBandRejectedCount =
         weakEvidenceOutsideSurfaceBandRejectedCount;
     result.statistics.effectivePixelEvidenceWeighting =
@@ -3954,6 +4347,19 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         options.weakNativeObservationMultiplier;
     result.statistics.effectiveRepairedObservationMultiplier =
         options.repairedObservationMultiplier;
+    result.statistics.effectiveInverseDepthSpreadWeighting =
+        options.enableInverseDepthSpreadWeighting;
+    result.statistics.effectiveInverseDepthSpreadWeightKnee =
+        options.inverseDepthSpreadWeightKnee;
+    result.statistics.effectiveInverseDepthSpreadWeightZero =
+        options.inverseDepthSpreadWeightZero;
+    result.statistics.effectiveMinimumInverseDepthSpreadWeightMultiplier =
+        options.minimumInverseDepthSpreadWeightMultiplier;
+    result.statistics.effectiveInverseDepthSpreadSupportWeightDecoupling =
+        options.enableInverseDepthSpreadSupportWeightDecoupling;
+    result.statistics.effectiveInverseDepthSpreadSupportWeightExponent =
+        std::clamp(
+            options.inverseDepthSpreadSupportWeightExponent, 0.05f, 1.0f);
     result.statistics.effectiveEvidenceSupportWeightDecoupling =
         options.enableEvidenceSupportWeightDecoupling;
     result.statistics.effectiveEvidenceSupportWeightExponent =
@@ -4095,6 +4501,25 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         options.minimumSupportMaskFreeSpaceViews, 1, 16);
     result.statistics.effectiveSurfaceEvidenceFreeSpaceVeto =
         options.enableSurfaceEvidenceFreeSpaceVeto;
+    result.statistics.effectiveNarrowBandActivation =
+        options.enableNarrowBandActivation;
+    result.statistics.effectiveNarrowBandActivationBlockSizeSamples =
+        options.enableNarrowBandActivation
+        ? std::clamp(options.narrowBandActivationBlockSizeSamples, 2, 32)
+        : 0;
+    result.statistics.effectiveNarrowBandActivationDepthStride =
+        options.enableNarrowBandActivation
+        ? std::clamp(options.narrowBandActivationDepthStride, 1, 16)
+        : 0;
+    result.statistics.effectiveNarrowBandActivationRayStepVoxels =
+        options.enableNarrowBandActivation
+        ? std::clamp(
+              options.narrowBandActivationRayStepVoxels, 0.25f, 4.0f)
+        : 0.0f;
+    result.statistics.effectiveNarrowBandActivationHaloBlocks =
+        options.enableNarrowBandActivation
+        ? std::clamp(options.narrowBandActivationHaloBlocks, 0, 3)
+        : 0;
     result.statistics.effectiveDepthValidBoundaryErosionPixels = erosion_pixels;
     result.statistics.effectiveGeometryVerifiedBoundaryRecovery =
         options.enableGeometryVerifiedBoundaryRecovery;
@@ -5095,13 +5520,18 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         }
         result.statistics.surfacePatchCreatedComponentCount = 0;
     }
+    const bool use_visual_hull_completion =
+        options.enableVisualHullSignedDistanceCompletion &&
+        !options.enableVisibilityOccupancyCompletion;
     result.statistics.effectiveVisualHullSignedDistanceCompletion =
-        options.enableVisualHullSignedDistanceCompletion;
+        use_visual_hull_completion;
     result.statistics.effectiveVisualHullCompletionBandVoxels =
-        options.enableVisualHullSignedDistanceCompletion
+        use_visual_hull_completion
         ? std::clamp(options.visualHullCompletionBandVoxels, 1.0f, 24.0f)
         : 0.0f;
-    if (options.enableVisualHullSignedDistanceCompletion)
+    std::vector<float> visual_hull_completion_tsdf;
+    std::vector<std::uint8_t> visual_hull_completion_support;
+    if (use_visual_hull_completion)
     {
         if (options.progress)
         {
@@ -5122,8 +5552,10 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 QStringLiteral("TSDF 轮廓距离先验构建已取消");
             return result;
         }
+        visual_hull_completion_tsdf = tsdf;
+        visual_hull_completion_support = supported;
         if (options.visualHullCompletionPreserveObservedTsdf &&
-            occupied.size() == supported.size())
+            occupied.size() == visual_hull_completion_support.size())
         {
             const float maximum_absolute_tsdf = std::clamp(
                 options.visualHullCompletionMaximumObservedAbsoluteTsdf,
@@ -5131,59 +5563,63 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 1.0f);
             const int minimum_geometry_support = std::max(
                 1, options.visualHullCompletionMinimumGeometrySupport);
-            for (std::size_t index = 0; index < supported.size(); ++index)
+            for (std::size_t index = 0;
+                 index < visual_hull_completion_support.size();
+                 ++index)
             {
-                if (supported[index] != 0 || weight[index] <= 1.0e-6f ||
+                if (visual_hull_completion_support[index] != 0 ||
+                    weight[index] <= 1.0e-6f ||
                     maximumGeometrySupportCount[index] <
                         minimum_geometry_support ||
                     bitCount(geometrySourceMask[index]) < 2 ||
-                    std::fabs(tsdf[index]) > maximum_absolute_tsdf)
+                    std::fabs(visual_hull_completion_tsdf[index]) >
+                        maximum_absolute_tsdf)
                 {
                     continue;
                 }
                 const bool hull_inside = occupied[index] != 0;
-                const bool tsdf_inside = tsdf[index] < 0.0f;
+                const bool tsdf_inside =
+                    visual_hull_completion_tsdf[index] < 0.0f;
                 if (hull_inside != tsdf_inside)
                 {
                     continue;
                 }
-                supported[index] = 1;
+                visual_hull_completion_support[index] = 1;
                 ++result.statistics
                       .visualHullCompletionPreservedObservedSampleCount;
             }
-            result.statistics.supportedSampleCount +=
-                result.statistics
-                    .visualHullCompletionPreservedObservedSampleCount;
         }
         const std::vector<std::uint8_t> supported_before_hull_completion =
-            supported;
+            visual_hull_completion_support;
         const DepthTsdfVisualHullCompletionStatistics completion =
             completeUnsupportedSamplesWithVisualHullSignedDistance(
                 result.layout,
                 occupied,
                 result.statistics.effectiveVisualHullCompletionBandVoxels,
-                &tsdf,
-                &supported);
+                &visual_hull_completion_tsdf,
+                &visual_hull_completion_support);
         result.statistics.visualHullCompletionOccupiedSampleCount =
             completion.occupiedSampleCount;
         result.statistics.visualHullCompletionBoundarySampleCount =
             completion.boundarySampleCount;
+        result.statistics.visualHullCompletionAnchorCellCount =
+            completion.anchorCellCount;
+        result.statistics.visualHullCompletionFrontierCellCount =
+            completion.frontierCellCount;
         result.statistics.visualHullCompletionRecoveredSampleCount =
-            completion.recoveredSampleCount;
-        result.statistics.supportedSampleCount +=
             completion.recoveredSampleCount;
         if (completion.recoveredSampleCount > 0 &&
             options.visualHullCompletionRelaxationIterations > 0)
         {
             std::vector<std::uint8_t> completion_mask(
-                supported.size(), 0);
+                visual_hull_completion_support.size(), 0);
             for (std::size_t index = 0;
                  index < completion_mask.size();
                  ++index)
             {
                 completion_mask[index] =
                     supported_before_hull_completion[index] == 0 &&
-                    supported[index] != 0
+                    visual_hull_completion_support[index] != 0
                     ? 1
                     : 0;
             }
@@ -5192,16 +5628,405 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                     result.layout,
                     occupied,
                     completion_mask,
-                    supported,
+                    visual_hull_completion_support,
                     options.visualHullCompletionRelaxationIterations,
                     options.visualHullCompletionRelaxationLambda,
                     options.visualHullCompletionMaximumUpdate,
-                    &tsdf);
+                    &visual_hull_completion_tsdf);
         }
-        if (!adaptiveTgvExtractionSupport.empty())
+    }
+    result.statistics.effectiveVisibilityOccupancyCompletion =
+        options.enableVisibilityOccupancyCompletion;
+    result.statistics.effectiveVisibilityOccupancyResolution =
+        options.enableVisibilityOccupancyCompletion
+        ? std::clamp(options.visibilityOccupancyResolution, 24, 128)
+        : 0;
+    std::array<float, 3> native_carrier_bounds_min{};
+    std::array<float, 3> native_carrier_bounds_max{};
+    std::array<int, 3> native_carrier_dimensions{};
+    std::array<int, 3> native_carrier_cells{};
+    std::vector<std::uint8_t> native_carrier_occupied;
+    std::vector<float> native_carrier_field;
+    if (options.enableVisibilityOccupancyCompletion)
+    {
+        if (options.progress)
         {
-            adaptiveTgvExtractionSupport = supported;
+            options.progress(
+                QStringLiteral("正在求解可见性约束的全局空实占据场..."),
+                74);
         }
+        std::vector<VisibilityOccupancyFrameView> occupancy_frames;
+        occupancy_frames.reserve(static_cast<std::size_t>(frames.size()));
+        for (int frame_index = 0; frame_index < frames.size(); ++frame_index)
+        {
+            if (effective_frame_quality_weights[frame_index] <= 0.0f)
+            {
+                continue;
+            }
+            const DepthTsdfFrame &frame = frames[frame_index];
+            VisibilityOccupancyFrameView view;
+            view.camera = &frame.camera;
+            view.depth = &frame.depth;
+            view.confidence = &frame.confidence;
+            view.depthValidMask =
+                &effective_depth_valid_masks[frame_index];
+            view.supportMask = &frame.supportMask;
+            view.frameWeight =
+                effective_frame_quality_weights[frame_index];
+            occupancy_frames.push_back(view);
+        }
+
+        VisibilityOccupancyOptions occupancy_options;
+        occupancy_options.resolution =
+            result.statistics.effectiveVisibilityOccupancyResolution;
+        if (options.visibilityOccupancyAlignCarrierGrid &&
+            options.resolution >= occupancy_options.resolution &&
+            options.resolution % occupancy_options.resolution == 0)
+        {
+            const int grid_scale =
+                options.resolution / occupancy_options.resolution;
+            for (int axis = 0; axis < 3; ++axis)
+            {
+                if (grid_scale > 1 &&
+                    result.layout.cells[axis] % grid_scale == 0)
+                {
+                    occupancy_options.sampleDimensions[axis] =
+                        result.layout.cells[axis] / grid_scale + 1;
+                }
+            }
+        }
+        occupancy_options.minimumVisibleViews = std::clamp(
+            options.visibilityOccupancyMinimumVisibleViews, 1, 16);
+        occupancy_options.minimumSilhouetteViews = std::clamp(
+            options.visibilityOccupancyMinimumSilhouetteViews, 1, 16);
+        occupancy_options.minimumDepthFullViewsForSilhouettePrior = std::clamp(
+            options.visibilityOccupancyMinimumDepthFullViewsForSilhouettePrior,
+            0,
+            16);
+        occupancy_options.allowedSilhouetteViolations = std::clamp(
+            options.visibilityOccupancyAllowedSilhouetteViolations, 0, 8);
+        occupancy_options.frontTolerancePixelFootprints = std::clamp(
+            options.visibilityOccupancyFrontTolerancePixelFootprints,
+            0.5f,
+            12.0f);
+        occupancy_options.behindSurfaceBandPixelFootprints = std::clamp(
+            options.visibilityOccupancyBehindSurfaceBandPixelFootprints,
+            1.0f,
+            16.0f);
+        occupancy_options.depthEmptyCapacity = std::max(
+            0, options.visibilityOccupancyDepthEmptyCapacity);
+        occupancy_options.depthFullCapacity = std::max(
+            0, options.visibilityOccupancyDepthFullCapacity);
+        occupancy_options.silhouetteEmptyCapacity = std::max(
+            0, options.visibilityOccupancySilhouetteEmptyCapacity);
+        occupancy_options.silhouetteFullPriorCapacity = std::max(
+            0, options.visibilityOccupancySilhouetteFullPriorCapacity);
+        occupancy_options.pairwiseCapacity = std::max(
+            0, options.visibilityOccupancyPairwiseCapacity);
+        result.statistics.effectiveVisibilityOccupancyPairwiseCapacity =
+            occupancy_options.pairwiseCapacity;
+        occupancy_options.closingIterations = std::clamp(
+            options.visibilityOccupancyClosingIterations, 0, 8);
+        result.statistics.effectiveVisibilityOccupancyClosingIterations =
+            occupancy_options.closingIterations;
+        occupancy_options.maximumHandleRepairPasses = std::clamp(
+            options.visibilityOccupancyMaximumHandleRepairPasses, 1, 16);
+        occupancy_options.maximumHandleRepairAcceptedCandidateCount =
+            std::clamp(
+                options
+                    .visibilityOccupancyMaximumHandleRepairAcceptedCandidateCount,
+                0,
+                512);
+        occupancy_options.maximumHandleRepairCandidateSampleCount =
+            std::max<std::size_t>(
+                1,
+                options
+                    .visibilityOccupancyMaximumHandleRepairCandidateSampleCount);
+        occupancy_options.maximumHandleRepairSubsetSampleCount =
+            std::clamp<std::size_t>(
+                options
+                    .visibilityOccupancyMaximumHandleRepairSubsetSampleCount,
+                1,
+                1024);
+        occupancy_options.maximumHandleRepairSubsetSeedCount = std::clamp(
+            options.visibilityOccupancyMaximumHandleRepairSubsetSeedCount,
+            0,
+            4096);
+        occupancy_options.repairNonManifoldConfigurations =
+            options.visibilityOccupancyCellBoundaryExtraction;
+        occupancy_options.closingMinimumDepthEmptyViewsToProtect = std::clamp(
+            options
+                .visibilityOccupancyClosingMinimumDepthEmptyViewsToProtect,
+            1,
+            16);
+        occupancy_options.closingMinimumSilhouetteOutsideViewsToProtect =
+            std::clamp(
+                options
+                    .visibilityOccupancyClosingMinimumSilhouetteOutsideViewsToProtect,
+                1,
+                16);
+        occupancy_options.buildSignedDistanceSamples = false;
+        occupancy_options.isCancelled = options.isCancelled;
+        const float minimum_full_fraction = std::clamp(
+            options.visibilityOccupancyAdaptiveDepthSupportMinimumFullFraction,
+            0.0f,
+            0.25f);
+        VisibilityOccupancyResult occupancy;
+        int depth_support_fallback_count = 0;
+        while (true)
+        {
+            occupancy = VisibilityOccupancySurfaceBuilder::build(
+                result.layout.boundsMin,
+                result.layout.boundsMax,
+                occupancy_frames,
+                occupancy_options);
+            const double full_fraction = occupancy.statistics.sampleCount > 0
+                ? static_cast<double>(
+                      occupancy.statistics.fullSampleCountAfterCleanup) /
+                      static_cast<double>(occupancy.statistics.sampleCount)
+                : 0.0;
+            const bool empty_cut =
+                occupancy.error ==
+                "visibility occupancy cut contains no full samples";
+            const bool collapsed_cut = occupancy.ok &&
+                full_fraction < static_cast<double>(minimum_full_fraction);
+            if (occupancy.cancelled ||
+                occupancy_options
+                        .minimumDepthFullViewsForSilhouettePrior <= 0 ||
+                (!empty_cut && !collapsed_cut))
+            {
+                break;
+            }
+            const int current_threshold = occupancy_options
+                .minimumDepthFullViewsForSilhouettePrior;
+            occupancy_options.minimumDepthFullViewsForSilhouettePrior =
+                current_threshold > 1 ? 1 : 0;
+            ++depth_support_fallback_count;
+        }
+        if (!occupancy.ok)
+        {
+            result.errorMessage = occupancy.cancelled
+                ? QStringLiteral("可见性占据场求解已取消")
+                : QStringLiteral("可见性占据场求解失败: %1")
+                      .arg(QString::fromStdString(occupancy.error));
+            return result;
+        }
+        VisibilityOccupancyDistanceFieldResult distance_field =
+            VisibilityOccupancyDistanceField::build(
+                occupancy.sampleDimensions,
+                occupancy.boundsMin,
+                occupancy.boundsMax,
+                occupancy.occupied);
+        if (!distance_field.ok)
+        {
+            result.errorMessage = QStringLiteral(
+                "可见性占据场距离场构建失败: %1")
+                                      .arg(QString::fromStdString(
+                                          distance_field.error));
+            return result;
+        }
+        occupancy.signedDistanceSamples =
+            std::move(distance_field.signedWorldDistance);
+        occupancy.signedDistanceSamplesAreWorldUnits = true;
+        if (options.visibilityOccupancyNativeCarrierExtraction ||
+            options.visibilityOccupancyCellBoundaryExtraction)
+        {
+            native_carrier_bounds_min = occupancy.boundsMin;
+            native_carrier_bounds_max = occupancy.boundsMax;
+            native_carrier_dimensions = occupancy.sampleDimensions;
+            for (int axis = 0; axis < 3; ++axis)
+            {
+                native_carrier_cells[axis] =
+                    occupancy.sampleDimensions[axis] - 1;
+            }
+            native_carrier_occupied = occupancy.occupied;
+            native_carrier_field =
+                std::move(occupancy.signedDistanceSamples);
+        }
+        result.statistics.visibilityOccupancySampleCount =
+            occupancy.statistics.sampleCount;
+        result.statistics
+            .effectiveVisibilityOccupancyMinimumDepthFullViewsForSilhouettePrior =
+            occupancy_options.minimumDepthFullViewsForSilhouettePrior;
+        result.statistics.visibilityOccupancyDepthSupportFallbackCount =
+            depth_support_fallback_count;
+        result.statistics.visibilityOccupancyDepthEmptyVoteCount =
+            occupancy.statistics.depthEmptyVoteCount;
+        result.statistics.visibilityOccupancyDepthFullVoteCount =
+            occupancy.statistics.depthFullVoteCount;
+        result.statistics
+            .visibilityOccupancySilhouetteFullPriorCandidateSampleCount =
+            occupancy.statistics.silhouetteFullPriorCandidateSampleCount;
+        result.statistics.visibilityOccupancySilhouetteFullPriorSampleCount =
+            occupancy.statistics.silhouetteFullPriorSampleCount;
+        result.statistics
+            .visibilityOccupancySilhouetteFullPriorRejectedWithoutDepthSupportSampleCount =
+            occupancy.statistics
+                .silhouetteFullPriorRejectedWithoutDepthSupportSampleCount;
+        result.statistics.visibilityOccupancySilhouetteFullPriorCapacityTotal =
+            occupancy.statistics.silhouetteFullPriorCapacityTotal;
+        result.statistics.visibilityOccupancyFullSampleCount =
+            occupancy.statistics.fullSampleCountAfterCleanup;
+        result.statistics.visibilityOccupancyFilledBubbleSampleCount =
+            occupancy.statistics.filledInteriorEmptySampleCount;
+        result.statistics.visibilityOccupancyRemovedDustSampleCount =
+            occupancy.statistics.removedFullDustSampleCount;
+        result.statistics.visibilityOccupancyClosingChangedSampleCount =
+            occupancy.statistics.closingChangedSampleCount;
+        result.statistics.visibilityOccupancyClosingProposalAddedSampleCount =
+            occupancy.statistics.closingProposalAddedSampleCount;
+        result.statistics
+            .visibilityOccupancyClosingProposalDepthEmptyAtLeastTwoSampleCount =
+            occupancy.statistics
+                .closingProposalDepthEmptyAtLeastTwoSampleCount;
+        result.statistics
+            .visibilityOccupancyClosingProposalDepthEmptyAtLeastThreeSampleCount =
+            occupancy.statistics
+                .closingProposalDepthEmptyAtLeastThreeSampleCount;
+        result.statistics
+            .visibilityOccupancyClosingProposalDepthEmptyAtLeastFourSampleCount =
+            occupancy.statistics
+                .closingProposalDepthEmptyAtLeastFourSampleCount;
+        result.statistics
+            .visibilityOccupancyClosingProposalDepthFullSampleCount =
+            occupancy.statistics.closingProposalDepthFullSampleCount;
+        result.statistics
+            .visibilityOccupancyClosingProposalSilhouetteOutsideAtLeastTwoSampleCount =
+            occupancy.statistics
+                .closingProposalSilhouetteOutsideAtLeastTwoSampleCount;
+        result.statistics.visibilityOccupancyClosingProtectedEmptySampleCount =
+            occupancy.statistics.closingProtectedEmptySampleCount;
+        result.statistics
+            .visibilityOccupancyClosingDepthEmptyProtectedSampleCount =
+            occupancy.statistics.closingDepthEmptyProtectedSampleCount;
+        result.statistics
+            .visibilityOccupancyClosingSilhouetteEmptyProtectedSampleCount =
+            occupancy.statistics.closingSilhouetteEmptyProtectedSampleCount;
+        result.statistics
+            .visibilityOccupancyHandleRepairCandidateComponentCount =
+            occupancy.statistics.handleRepairCandidateComponentCount;
+        result.statistics
+            .visibilityOccupancyHandleRepairAcceptedCandidateCount =
+            occupancy.statistics.handleRepairAcceptedCandidateCount;
+        result.statistics
+            .visibilityOccupancyHandleRepairAcceptedSubsetCandidateCount =
+            occupancy.statistics.handleRepairAcceptedSubsetCandidateCount;
+        result.statistics
+            .visibilityOccupancyHandleRepairAcceptedPlateauSubsetCandidateCount =
+            occupancy.statistics
+                .handleRepairAcceptedPlateauSubsetCandidateCount;
+        result.statistics
+            .visibilityOccupancyHandleRepairAttemptedSubsetSeedCount =
+            occupancy.statistics.handleRepairAttemptedSubsetSeedCount;
+        result.statistics
+            .visibilityOccupancyHandleRepairRejectedProtectedCandidateCount =
+            occupancy.statistics.handleRepairRejectedProtectedCandidateCount;
+        result.statistics
+            .visibilityOccupancyHandleRepairRejectedOversizedCandidateCount =
+            occupancy.statistics.handleRepairRejectedOversizedCandidateCount;
+        result.statistics
+            .visibilityOccupancyHandleRepairRejectedTopologyCandidateCount =
+            occupancy.statistics.handleRepairRejectedTopologyCandidateCount;
+        result.statistics
+            .visibilityOccupancyHandleRepairRejectedProtectedReachabilityCandidateCount =
+            occupancy.statistics
+                .handleRepairRejectedProtectedReachabilityCandidateCount;
+        result.statistics.visibilityOccupancyHandleRepairBodyEulerBefore =
+            occupancy.statistics.handleRepairBodyEulerBefore;
+        result.statistics.visibilityOccupancyHandleRepairBodyEulerAfter =
+            occupancy.statistics.handleRepairBodyEulerAfter;
+        result.statistics
+            .visibilityOccupancyWellComposedRepairFilledSampleCount =
+            occupancy.statistics.wellComposedRepairFilledSampleCount;
+        result.statistics
+            .visibilityOccupancyWellComposedRepairAcceptedPassCount =
+            occupancy.statistics.wellComposedRepairAcceptedPassCount;
+        result.statistics
+            .visibilityOccupancyWellComposedRepairBodyEulerBefore =
+            occupancy.statistics.wellComposedRepairBodyEulerBefore;
+        result.statistics
+            .visibilityOccupancyWellComposedRepairBodyEulerAfter =
+            occupancy.statistics.wellComposedRepairBodyEulerAfter;
+        result.statistics
+            .visibilityOccupancyWellComposedRepairRemainingEdgeCheckerboardCount =
+            occupancy.statistics
+                .wellComposedRepairRemainingEdgeCheckerboardCount;
+        result.statistics
+            .visibilityOccupancyWellComposedRepairRemainingVertexOccupiedDefectCount =
+            occupancy.statistics
+                .wellComposedRepairRemainingVertexOccupiedComponentDefectCount;
+        result.statistics
+            .visibilityOccupancyWellComposedRepairRemainingVertexEmptyDefectCount =
+            occupancy.statistics
+                .wellComposedRepairRemainingVertexEmptyComponentDefectCount;
+        result.statistics.visibilityOccupancyCutEnergy =
+            occupancy.statistics.minCut.cutEnergy;
+
+        std::vector<float> *completion_tsdf =
+            visual_hull_completion_tsdf.empty()
+            ? &tsdf
+            : &visual_hull_completion_tsdf;
+        std::vector<std::uint8_t> *completion_support =
+            visual_hull_completion_support.empty()
+            ? &supported
+            : &visual_hull_completion_support;
+        VisibilityOccupancyTsdfCompletionOptions completion_options;
+        completion_options.enableTopologyLockedResidualBlend =
+            options.visibilityOccupancyTopologyLockedResidualBlend;
+        completion_options.truncationDistanceWorld = truncation;
+        completion_options.observedBand = std::clamp(
+            options.visibilityOccupancyObservedBand, 0.01f, 1.0f);
+        completion_options.carrierBand = std::clamp(
+            options.visibilityOccupancyCarrierBand, 0.01f, 1.0f);
+        completion_options.maximumResidual = std::clamp(
+            options.visibilityOccupancyMaximumResidual, 0.0f, 1.0f);
+        completion_options.detailBlend = std::clamp(
+            options.visibilityOccupancyDetailBlend, 0.0f, 1.0f);
+        completion_options.preserveAllObservedSamples =
+            options.visibilityOccupancyPreserveAllObservedSamples;
+        completion_options.preserveObservedNearSurface =
+            options.visibilityOccupancyPreserveObservedNearSurface;
+        completion_options.requireOccupancySignAgreement =
+            options.visibilityOccupancyRequireSignAgreement;
+        completion_options.maximumPreservedAbsoluteTsdf = std::clamp(
+            options.visibilityOccupancyMaximumPreservedAbsoluteTsdf,
+            0.0f,
+            1.0f);
+        completion_options.signedDistanceNormalizationSamples = std::clamp(
+            options.visibilityOccupancySignedDistanceNormalizationSamples,
+            0.5f,
+            16.0f);
+        const VisibilityOccupancyTsdfCompletionStatistics completion =
+            VisibilityOccupancyTsdfCompletion::apply(
+                result.layout,
+                occupancy,
+                completion_options,
+                completion_tsdf,
+                completion_support);
+        result.statistics.visibilityOccupancyRecoveredUnsupportedSampleCount =
+            completion.recoveredUnsupportedSampleCount;
+        result.statistics.visibilityOccupancyPreservedObservedSampleCount =
+            completion.preservedObservedSampleCount;
+        result.statistics.visibilityOccupancyOverriddenObservedSampleCount =
+            completion.overriddenObservedSampleCount;
+        result.statistics.visibilityOccupancyForcedBoundarySampleCount =
+            completion.forcedExteriorBoundarySampleCount;
+        result.statistics
+            .visibilityOccupancyAdjustedExactIsoValueSampleCount =
+            completion.adjustedExactIsoValueSampleCount;
+        result.statistics.visibilityOccupancyTrustedObservationSampleCount =
+            completion.trustedObservationSampleCount;
+        result.statistics
+            .visibilityOccupancyIgnoredSignConflictObservationCount =
+            completion.ignoredSignConflictObservationCount;
+        result.statistics.visibilityOccupancyBlendedSampleCount =
+            completion.blendedSampleCount;
+        result.statistics.visibilityOccupancyClippedResidualSampleCount =
+            completion.clippedResidualSampleCount;
+        result.statistics.visibilityOccupancyCarrierSignMismatchSampleCount =
+            completion.carrierSignMismatchSampleCount;
+        result.statistics.visibilityOccupancyMaximumAppliedResidual =
+            completion.maximumAppliedResidual;
     }
     if (result.statistics.supportedSampleCount == 0)
     {
@@ -5211,15 +6036,20 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
 
     result.statistics.effectiveZeroCrossingDiagnostics =
         options.collectZeroCrossingDiagnostics;
+    result.statistics.effectiveVisibilityOccupancyCellBoundaryExtraction =
+        options.visibilityOccupancyCellBoundaryExtraction;
     result.statistics.effectiveConsistentIsoSurfaceExtraction =
-        options.enableConsistentIsoSurfaceExtraction;
+        options.enableConsistentIsoSurfaceExtraction &&
+        !options.visibilityOccupancyCellBoundaryExtraction;
     result.statistics.effectiveMc33IsoSurfaceExtraction =
-        options.enableMc33IsoSurfaceExtraction;
-    result.statistics.effectiveMc33RequireSupportedSignChange =
         options.enableMc33IsoSurfaceExtraction &&
+        !options.visibilityOccupancyCellBoundaryExtraction;
+    result.statistics.effectiveMc33RequireSupportedSignChange =
+        result.statistics.effectiveMc33IsoSurfaceExtraction &&
         options.mc33RequireSupportedSignChange;
     if (options.enableConsistentIsoSurfaceExtraction &&
-        options.enableMc33IsoSurfaceExtraction)
+        options.enableMc33IsoSurfaceExtraction &&
+        !options.visibilityOccupancyCellBoundaryExtraction)
     {
         result.errorMessage = QStringLiteral(
             "TSDF consistent and MC33 iso-surface extractors cannot both be enabled");
@@ -5275,14 +6105,103 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
     };
     const PostprocessClock::time_point postprocess_start = PostprocessClock::now();
     const PostprocessClock::time_point marching_cubes_start = PostprocessClock::now();
+    const bool use_native_carrier =
+        options.visibilityOccupancyNativeCarrierExtraction &&
+        !native_carrier_field.empty() &&
+        (options.enableMc33IsoSurfaceExtraction ||
+         options.enableConsistentIsoSurfaceExtraction);
+    const std::array<float, 3> &extraction_bounds_min =
+        use_native_carrier
+        ? native_carrier_bounds_min
+        : result.layout.boundsMin;
+    const std::array<float, 3> &extraction_bounds_max =
+        use_native_carrier
+        ? native_carrier_bounds_max
+        : result.layout.boundsMax;
+    const std::array<int, 3> &extraction_cells =
+        use_native_carrier
+        ? native_carrier_cells
+        : result.layout.cells;
+    const std::vector<float> &extraction_tsdf = use_native_carrier
+        ? native_carrier_field
+        : (!visual_hull_completion_tsdf.empty()
+        ? visual_hull_completion_tsdf
+        : tsdf);
+    const std::vector<std::uint8_t> no_native_support;
+    const std::vector<std::uint8_t> &extraction_support = use_native_carrier
+        ? no_native_support
+        : (!visual_hull_completion_support.empty()
+        ? visual_hull_completion_support
+        : (options.enableVisibilityOccupancyCompletion
+               ? supported
+               : (!adaptiveTgvExtractionSupport.empty()
+               ? adaptiveTgvExtractionSupport
+               : supported)));
     try
     {
-        if (options.enableMc33IsoSurfaceExtraction)
+        if (options.visibilityOccupancyCellBoundaryExtraction)
         {
-            const std::vector<std::uint8_t> &extraction_support =
-                !adaptiveTgvExtractionSupport.empty()
-                ? adaptiveTgvExtractionSupport
-                : supported;
+            VisibilityOccupancyBoundaryOptions extraction_options;
+            extraction_options.isCancelled = options.isCancelled;
+            VisibilityOccupancyBoundaryResult extraction =
+                VisibilityOccupancyBoundaryExtractor::extract(
+                    native_carrier_bounds_min,
+                    native_carrier_bounds_max,
+                    native_carrier_dimensions,
+                    native_carrier_occupied,
+                    extraction_options);
+            if (!extraction.ok)
+            {
+                result.errorMessage = QStringLiteral(
+                    "可见性占据体边界提取失败: %1")
+                    .arg(QString::fromStdString(extraction.errorMessage));
+                return result;
+            }
+            result.mesh = std::move(extraction.mesh);
+            result.statistics.visibilityOccupancyBoundaryOccupiedCellCount =
+                extraction.statistics.occupiedCellCount;
+            result.statistics.visibilityOccupancyBoundaryExposedQuadCount =
+                extraction.statistics.exposedQuadCount;
+            result.statistics
+                .visibilityOccupancyBoundaryNonManifoldEdgeCount =
+                extraction.statistics.nonManifoldEdgeCount;
+            result.statistics
+                .visibilityOccupancyBoundaryNonManifoldVertexCount =
+                extraction.statistics.nonManifoldVertexCount;
+            const int occupancy_body_euler =
+                VisibilityOccupancyHandleRepair::bodyEulerCharacteristic(
+                    native_carrier_dimensions,
+                    native_carrier_occupied);
+            result.statistics
+                .visibilityOccupancyBoundaryBodyEulerCharacteristic =
+                occupancy_body_euler;
+            result.statistics
+                .visibilityOccupancyBoundarySurfaceEulerCharacteristic =
+                extraction.statistics.eulerCharacteristic;
+            const bool topology_consistent =
+                extraction.statistics.closedTwoManifold &&
+                extraction.statistics.eulerCharacteristic ==
+                    2 * occupancy_body_euler;
+            result.statistics
+                .visibilityOccupancyBoundaryTopologyConsistent =
+                topology_consistent;
+            if (!topology_consistent)
+            {
+                result.errorMessage = QStringLiteral(
+                    "可见性占据体不是良构闭合流形: 边界边=%1, "
+                    "非流形边=%2, 非流形顶点=%3, 体欧拉特征=%4, "
+                    "曲面欧拉特征=%5（期望 %6）")
+                    .arg(extraction.statistics.boundaryEdgeCount)
+                    .arg(extraction.statistics.nonManifoldEdgeCount)
+                    .arg(extraction.statistics.nonManifoldVertexCount)
+                    .arg(occupancy_body_euler)
+                    .arg(extraction.statistics.eulerCharacteristic)
+                    .arg(2 * occupancy_body_euler);
+                return result;
+            }
+        }
+        else if (options.enableMc33IsoSurfaceExtraction)
+        {
             Mc33IsoSurfaceOptions extraction_options;
             extraction_options.isoLevel = 0.0f;
             extraction_options.requireSupportedSignChange =
@@ -5290,10 +6209,10 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             extraction_options.isCancelled = options.isCancelled;
             Mc33IsoSurfaceResult extraction =
                 Mc33IsoSurfaceExtractor::extract(
-                    result.layout.boundsMin,
-                    result.layout.boundsMax,
-                    result.layout.cells,
-                    tsdf,
+                    extraction_bounds_min,
+                    extraction_bounds_max,
+                    extraction_cells,
+                    extraction_tsdf,
                     extraction_support,
                     extraction_options);
             if (!extraction.ok)
@@ -5311,19 +6230,15 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         }
         else if (options.enableConsistentIsoSurfaceExtraction)
         {
-            const std::vector<std::uint8_t> &extraction_support =
-                !adaptiveTgvExtractionSupport.empty()
-                ? adaptiveTgvExtractionSupport
-                : supported;
             ConsistentIsoSurfaceOptions extraction_options;
             extraction_options.isoLevel = 0.0f;
             extraction_options.isCancelled = options.isCancelled;
             ConsistentIsoSurfaceResult extraction =
                 ConsistentIsoSurfaceExtractor::extract(
-                    result.layout.boundsMin,
-                    result.layout.boundsMax,
-                    result.layout.cells,
-                    tsdf,
+                    extraction_bounds_min,
+                    extraction_bounds_max,
+                    extraction_cells,
+                    extraction_tsdf,
                     extraction_support,
                     extraction_options);
             if (!extraction.ok)
@@ -5387,11 +6302,9 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                                               result.layout.cells[2]);
                     const std::size_t index =
                         sampleIndex(result.layout, ix, iy, iz);
-                    const bool extractable =
-                        !adaptiveTgvExtractionSupport.empty()
-                        ? adaptiveTgvExtractionSupport[index] != 0
-                        : supported[index] != 0;
-                    return extractable ? tsdf[index] : 1.0f;
+                    return extraction_support[index] != 0
+                        ? extraction_tsdf[index]
+                        : 1.0f;
                 });
             result.mesh.vertices.resize(
                 static_cast<std::size_t>(vertices.rows()));
@@ -5417,6 +6330,14 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         result.statistics.marchingCubesFaceCount = result.mesh.faceCount();
         result.statistics.marchingCubesBoundaryEdgeCount =
             boundaryEdgeCount(result.mesh);
+        const MeshTopologyQualityStatistics extraction_topology =
+            evaluateMeshTopologyQuality(result.mesh);
+        result.statistics.isoSurfaceExtractionNonManifoldEdgeCount =
+            extraction_topology.nonManifoldEdgeCount;
+        result.statistics.isoSurfaceExtractionComponentCount =
+            extraction_topology.componentCount;
+        result.statistics.isoSurfaceExtractionEulerCharacteristic =
+            extraction_topology.eulerCharacteristic;
         result.statistics.marchingCubesElapsedMs =
             elapsedMilliseconds(marching_cubes_start);
     }
@@ -5443,7 +6364,8 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
 
     const PostprocessClock::time_point cleanup_start = PostprocessClock::now();
     const float minimum_degenerate_face_area =
-        options.enableConsistentIsoSurfaceExtraction ||
+        options.visibilityOccupancyCellBoundaryExtraction ||
+            options.enableConsistentIsoSurfaceExtraction ||
             options.enableMc33IsoSurfaceExtraction
         ? 0.0f
         : 5.0e-9f;
@@ -5455,7 +6377,8 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
     result.statistics.initialDegenerateRemovedFaceCount = std::max(
         0,
         faces_before_degenerate_cleanup - result.mesh.faceCount());
-    if (!options.enableConsistentIsoSurfaceExtraction &&
+    if (!options.visibilityOccupancyCellBoundaryExtraction &&
+        !options.enableConsistentIsoSurfaceExtraction &&
         !options.enableMc33IsoSurfaceExtraction)
     {
         detail::weldCoincidentVertices(&result.mesh, 1.0e-6f);
@@ -7108,6 +8031,18 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             return result;
         }
     }
+    if (options.visibilityOccupancyCellBoundaryExtraction &&
+        !native_carrier_field.empty())
+    {
+        result.visibilityOccupancyCarrierField.sampleDimensions =
+            native_carrier_dimensions;
+        result.visibilityOccupancyCarrierField.boundsMin =
+            native_carrier_bounds_min;
+        result.visibilityOccupancyCarrierField.boundsMax =
+            native_carrier_bounds_max;
+        result.visibilityOccupancyCarrierField.signedWorldDistance =
+            std::move(native_carrier_field);
+    }
     result.statistics.postIntegrationElapsedMs =
         elapsedMilliseconds(postprocess_start);
 
@@ -7233,6 +8168,21 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          static_cast<double>(statistics.supportMaskFreeSpaceUpdateCount)},
         {QStringLiteral("support_mask_free_space_surface_veto_count"),
          static_cast<double>(statistics.supportMaskFreeSpaceSurfaceVetoCount)},
+        {QStringLiteral("narrow_band_activation_total_block_count"),
+         static_cast<double>(
+             statistics.narrowBandActivationTotalBlockCount)},
+        {QStringLiteral("narrow_band_activation_active_block_count"),
+         static_cast<double>(
+             statistics.narrowBandActivationActiveBlockCount)},
+        {QStringLiteral("narrow_band_activation_valid_source_sample_count"),
+         static_cast<double>(
+             statistics.narrowBandActivationValidSourceSampleCount)},
+        {QStringLiteral("narrow_band_activation_marked_ray_sample_count"),
+         static_cast<double>(
+             statistics.narrowBandActivationMarkedRaySampleCount)},
+        {QStringLiteral("narrow_band_activation_skipped_sample_count"),
+         static_cast<double>(
+             statistics.narrowBandActivationSkippedSampleCount)},
         {QStringLiteral("auxiliary_outside_surface_band_rejected_count"),
          static_cast<double>(statistics.auxiliaryOutsideSurfaceBandRejectedCount)},
         {QStringLiteral("rejected_depth_valid_count"),
@@ -7261,6 +8211,16 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          static_cast<double>(statistics.repairedObservationCount)},
         {QStringLiteral("strong_native_observation_count"),
          static_cast<double>(statistics.strongNativeObservationCount)},
+        {QStringLiteral("inverse_depth_spread_downweighted_observation_count"),
+         static_cast<double>(
+             statistics.inverseDepthSpreadDownweightedObservationCount)},
+        {QStringLiteral("inverse_depth_spread_very_weak_observation_count"),
+         static_cast<double>(
+             statistics.inverseDepthSpreadVeryWeakObservationCount)},
+        {QStringLiteral(
+             "inverse_depth_spread_support_lifted_observation_count"),
+         static_cast<double>(
+             statistics.inverseDepthSpreadSupportLiftedObservationCount)},
         {QStringLiteral("weak_evidence_outside_surface_band_rejected_count"),
          static_cast<double>(
              statistics.weakEvidenceOutsideSurfaceBandRejectedCount)},
@@ -7272,6 +8232,21 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          statistics.effectiveWeakNativeObservationMultiplier},
         {QStringLiteral("effective_repaired_observation_multiplier"),
          statistics.effectiveRepairedObservationMultiplier},
+        {QStringLiteral("effective_inverse_depth_spread_weighting"),
+         statistics.effectiveInverseDepthSpreadWeighting},
+        {QStringLiteral("effective_inverse_depth_spread_weight_knee"),
+         statistics.effectiveInverseDepthSpreadWeightKnee},
+        {QStringLiteral("effective_inverse_depth_spread_weight_zero"),
+         statistics.effectiveInverseDepthSpreadWeightZero},
+        {QStringLiteral(
+             "effective_minimum_inverse_depth_spread_weight_multiplier"),
+         statistics.effectiveMinimumInverseDepthSpreadWeightMultiplier},
+        {QStringLiteral(
+             "effective_inverse_depth_spread_support_weight_decoupling"),
+         statistics.effectiveInverseDepthSpreadSupportWeightDecoupling},
+        {QStringLiteral(
+             "effective_inverse_depth_spread_support_weight_exponent"),
+         statistics.effectiveInverseDepthSpreadSupportWeightExponent},
         {QStringLiteral("effective_evidence_support_weight_decoupling"),
          statistics.effectiveEvidenceSupportWeightDecoupling},
         {QStringLiteral("effective_evidence_support_weight_exponent"),
@@ -7362,6 +8337,12 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
         {QStringLiteral("mc33_rejected_unsupported_cell_face_count"),
          static_cast<double>(
              statistics.mc33RejectedUnsupportedCellFaceCount)},
+        {QStringLiteral("iso_surface_extraction_non_manifold_edge_count"),
+         statistics.isoSurfaceExtractionNonManifoldEdgeCount},
+        {QStringLiteral("iso_surface_extraction_component_count"),
+         statistics.isoSurfaceExtractionComponentCount},
+        {QStringLiteral("iso_surface_extraction_euler_characteristic"),
+         statistics.isoSurfaceExtractionEulerCharacteristic},
         {QStringLiteral("initial_degenerate_removed_face_count"),
          statistics.initialDegenerateRemovedFaceCount},
         {QStringLiteral("component_filter_removed_face_count"),
@@ -7511,6 +8492,14 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          static_cast<double>(
              statistics.visualHullCompletionBoundarySampleCount)},
         {QStringLiteral(
+             "visual_hull_completion_anchor_cell_count"),
+         static_cast<double>(
+             statistics.visualHullCompletionAnchorCellCount)},
+        {QStringLiteral(
+             "visual_hull_completion_frontier_cell_count"),
+         static_cast<double>(
+             statistics.visualHullCompletionFrontierCellCount)},
+        {QStringLiteral(
              "visual_hull_completion_preserved_observed_sample_count"),
          static_cast<double>(
              statistics
@@ -7523,6 +8512,241 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
              "visual_hull_completion_relaxed_sample_count"),
          static_cast<double>(
              statistics.visualHullCompletionRelaxedSampleCount)},
+        {QStringLiteral("effective_visibility_occupancy_completion"),
+         statistics.effectiveVisibilityOccupancyCompletion},
+        {QStringLiteral(
+             "effective_visibility_occupancy_cell_boundary_extraction"),
+         statistics.effectiveVisibilityOccupancyCellBoundaryExtraction},
+        {QStringLiteral("effective_visibility_occupancy_resolution"),
+         statistics.effectiveVisibilityOccupancyResolution},
+        {QStringLiteral(
+             "effective_visibility_occupancy_pairwise_capacity"),
+         statistics.effectiveVisibilityOccupancyPairwiseCapacity},
+        {QStringLiteral(
+             "effective_visibility_occupancy_closing_iterations"),
+         statistics.effectiveVisibilityOccupancyClosingIterations},
+        {QStringLiteral(
+             "effective_visibility_occupancy_minimum_depth_full_views_for_silhouette_prior"),
+         statistics
+             .effectiveVisibilityOccupancyMinimumDepthFullViewsForSilhouettePrior},
+        {QStringLiteral(
+             "visibility_occupancy_depth_support_fallback_count"),
+         statistics.visibilityOccupancyDepthSupportFallbackCount},
+        {QStringLiteral("visibility_occupancy_sample_count"),
+         static_cast<double>(statistics.visibilityOccupancySampleCount)},
+        {QStringLiteral(
+             "visibility_occupancy_boundary_occupied_cell_count"),
+         static_cast<double>(
+             statistics.visibilityOccupancyBoundaryOccupiedCellCount)},
+        {QStringLiteral(
+             "visibility_occupancy_boundary_exposed_quad_count"),
+         static_cast<double>(
+             statistics.visibilityOccupancyBoundaryExposedQuadCount)},
+        {QStringLiteral(
+             "visibility_occupancy_boundary_non_manifold_edge_count"),
+         static_cast<double>(statistics
+                                 .visibilityOccupancyBoundaryNonManifoldEdgeCount)},
+        {QStringLiteral(
+             "visibility_occupancy_boundary_non_manifold_vertex_count"),
+         static_cast<double>(statistics
+                                 .visibilityOccupancyBoundaryNonManifoldVertexCount)},
+        {QStringLiteral(
+             "visibility_occupancy_boundary_body_euler_characteristic"),
+         statistics.visibilityOccupancyBoundaryBodyEulerCharacteristic},
+        {QStringLiteral(
+             "visibility_occupancy_boundary_surface_euler_characteristic"),
+         statistics.visibilityOccupancyBoundarySurfaceEulerCharacteristic},
+        {QStringLiteral(
+             "visibility_occupancy_boundary_topology_consistent"),
+         statistics.visibilityOccupancyBoundaryTopologyConsistent},
+        {QStringLiteral("visibility_occupancy_depth_empty_vote_count"),
+         static_cast<double>(
+             statistics.visibilityOccupancyDepthEmptyVoteCount)},
+        {QStringLiteral("visibility_occupancy_depth_full_vote_count"),
+         static_cast<double>(
+             statistics.visibilityOccupancyDepthFullVoteCount)},
+        {QStringLiteral(
+             "visibility_occupancy_silhouette_full_prior_candidate_sample_count"),
+         static_cast<double>(
+             statistics
+                 .visibilityOccupancySilhouetteFullPriorCandidateSampleCount)},
+        {QStringLiteral(
+             "visibility_occupancy_silhouette_full_prior_sample_count"),
+         static_cast<double>(
+             statistics
+                 .visibilityOccupancySilhouetteFullPriorSampleCount)},
+        {QStringLiteral(
+             "visibility_occupancy_silhouette_full_prior_rejected_without_depth_support_sample_count"),
+         static_cast<double>(
+             statistics
+                 .visibilityOccupancySilhouetteFullPriorRejectedWithoutDepthSupportSampleCount)},
+        {QStringLiteral(
+             "visibility_occupancy_silhouette_full_prior_capacity_total"),
+         static_cast<double>(
+             statistics
+                 .visibilityOccupancySilhouetteFullPriorCapacityTotal)},
+        {QStringLiteral("visibility_occupancy_full_sample_count"),
+         static_cast<double>(
+             statistics.visibilityOccupancyFullSampleCount)},
+        {QStringLiteral("visibility_occupancy_filled_bubble_sample_count"),
+         static_cast<double>(
+             statistics.visibilityOccupancyFilledBubbleSampleCount)},
+        {QStringLiteral("visibility_occupancy_removed_dust_sample_count"),
+         static_cast<double>(
+             statistics.visibilityOccupancyRemovedDustSampleCount)},
+        {QStringLiteral(
+             "visibility_occupancy_closing_changed_sample_count"),
+         static_cast<double>(
+             statistics.visibilityOccupancyClosingChangedSampleCount)},
+        {QStringLiteral(
+             "visibility_occupancy_closing_proposal_added_sample_count"),
+         static_cast<double>(
+             statistics.visibilityOccupancyClosingProposalAddedSampleCount)},
+        {QStringLiteral(
+             "visibility_occupancy_closing_proposal_depth_empty_at_least_two_sample_count"),
+         static_cast<double>(statistics
+                                 .visibilityOccupancyClosingProposalDepthEmptyAtLeastTwoSampleCount)},
+        {QStringLiteral(
+             "visibility_occupancy_closing_proposal_depth_empty_at_least_three_sample_count"),
+         static_cast<double>(statistics
+                                 .visibilityOccupancyClosingProposalDepthEmptyAtLeastThreeSampleCount)},
+        {QStringLiteral(
+             "visibility_occupancy_closing_proposal_depth_empty_at_least_four_sample_count"),
+         static_cast<double>(statistics
+                                 .visibilityOccupancyClosingProposalDepthEmptyAtLeastFourSampleCount)},
+        {QStringLiteral(
+             "visibility_occupancy_closing_proposal_depth_full_sample_count"),
+         static_cast<double>(statistics
+                                 .visibilityOccupancyClosingProposalDepthFullSampleCount)},
+        {QStringLiteral(
+             "visibility_occupancy_closing_proposal_silhouette_outside_at_least_two_sample_count"),
+         static_cast<double>(statistics
+                                 .visibilityOccupancyClosingProposalSilhouetteOutsideAtLeastTwoSampleCount)},
+        {QStringLiteral(
+             "visibility_occupancy_closing_protected_empty_sample_count"),
+         static_cast<double>(
+             statistics.visibilityOccupancyClosingProtectedEmptySampleCount)},
+        {QStringLiteral(
+             "visibility_occupancy_closing_depth_empty_protected_sample_count"),
+         static_cast<double>(
+             statistics
+                 .visibilityOccupancyClosingDepthEmptyProtectedSampleCount)},
+        {QStringLiteral(
+             "visibility_occupancy_closing_silhouette_empty_protected_sample_count"),
+         static_cast<double>(
+             statistics
+                 .visibilityOccupancyClosingSilhouetteEmptyProtectedSampleCount)},
+        {QStringLiteral(
+             "visibility_occupancy_handle_repair_candidate_component_count"),
+         statistics.visibilityOccupancyHandleRepairCandidateComponentCount},
+        {QStringLiteral(
+             "visibility_occupancy_handle_repair_accepted_candidate_count"),
+         statistics.visibilityOccupancyHandleRepairAcceptedCandidateCount},
+        {QStringLiteral(
+             "visibility_occupancy_handle_repair_accepted_subset_candidate_count"),
+         statistics
+             .visibilityOccupancyHandleRepairAcceptedSubsetCandidateCount},
+        {QStringLiteral(
+             "visibility_occupancy_handle_repair_accepted_plateau_subset_candidate_count"),
+         statistics
+             .visibilityOccupancyHandleRepairAcceptedPlateauSubsetCandidateCount},
+        {QStringLiteral(
+             "visibility_occupancy_handle_repair_attempted_subset_seed_count"),
+         statistics
+             .visibilityOccupancyHandleRepairAttemptedSubsetSeedCount},
+        {QStringLiteral(
+             "visibility_occupancy_handle_repair_rejected_protected_candidate_count"),
+         statistics
+             .visibilityOccupancyHandleRepairRejectedProtectedCandidateCount},
+        {QStringLiteral(
+             "visibility_occupancy_handle_repair_rejected_oversized_candidate_count"),
+         statistics
+             .visibilityOccupancyHandleRepairRejectedOversizedCandidateCount},
+        {QStringLiteral(
+             "visibility_occupancy_handle_repair_rejected_topology_candidate_count"),
+         statistics
+             .visibilityOccupancyHandleRepairRejectedTopologyCandidateCount},
+        {QStringLiteral(
+             "visibility_occupancy_handle_repair_rejected_protected_reachability_candidate_count"),
+         statistics
+             .visibilityOccupancyHandleRepairRejectedProtectedReachabilityCandidateCount},
+        {QStringLiteral(
+             "visibility_occupancy_handle_repair_body_euler_before"),
+         statistics.visibilityOccupancyHandleRepairBodyEulerBefore},
+        {QStringLiteral(
+             "visibility_occupancy_handle_repair_body_euler_after"),
+         statistics.visibilityOccupancyHandleRepairBodyEulerAfter},
+        {QStringLiteral(
+             "visibility_occupancy_well_composed_repair_filled_sample_count"),
+         static_cast<double>(statistics
+                                 .visibilityOccupancyWellComposedRepairFilledSampleCount)},
+        {QStringLiteral(
+             "visibility_occupancy_well_composed_repair_accepted_pass_count"),
+         statistics.visibilityOccupancyWellComposedRepairAcceptedPassCount},
+        {QStringLiteral(
+             "visibility_occupancy_well_composed_repair_body_euler_before"),
+         statistics.visibilityOccupancyWellComposedRepairBodyEulerBefore},
+        {QStringLiteral(
+             "visibility_occupancy_well_composed_repair_body_euler_after"),
+         statistics.visibilityOccupancyWellComposedRepairBodyEulerAfter},
+        {QStringLiteral(
+             "visibility_occupancy_well_composed_repair_remaining_edge_checkerboard_count"),
+         static_cast<double>(statistics
+             .visibilityOccupancyWellComposedRepairRemainingEdgeCheckerboardCount)},
+        {QStringLiteral(
+             "visibility_occupancy_well_composed_repair_remaining_vertex_occupied_defect_count"),
+         static_cast<double>(statistics
+             .visibilityOccupancyWellComposedRepairRemainingVertexOccupiedDefectCount)},
+        {QStringLiteral(
+             "visibility_occupancy_well_composed_repair_remaining_vertex_empty_defect_count"),
+         static_cast<double>(statistics
+             .visibilityOccupancyWellComposedRepairRemainingVertexEmptyDefectCount)},
+        {QStringLiteral(
+             "visibility_occupancy_recovered_unsupported_sample_count"),
+         static_cast<double>(
+             statistics
+                 .visibilityOccupancyRecoveredUnsupportedSampleCount)},
+        {QStringLiteral(
+             "visibility_occupancy_preserved_observed_sample_count"),
+         static_cast<double>(
+             statistics.visibilityOccupancyPreservedObservedSampleCount)},
+        {QStringLiteral(
+             "visibility_occupancy_overridden_observed_sample_count"),
+         static_cast<double>(
+             statistics.visibilityOccupancyOverriddenObservedSampleCount)},
+        {QStringLiteral("visibility_occupancy_forced_boundary_sample_count"),
+         static_cast<double>(
+             statistics.visibilityOccupancyForcedBoundarySampleCount)},
+        {QStringLiteral(
+             "visibility_occupancy_adjusted_exact_iso_value_sample_count"),
+         static_cast<double>(
+             statistics
+                 .visibilityOccupancyAdjustedExactIsoValueSampleCount)},
+        {QStringLiteral(
+             "visibility_occupancy_trusted_observation_sample_count"),
+         static_cast<double>(
+             statistics.visibilityOccupancyTrustedObservationSampleCount)},
+        {QStringLiteral(
+             "visibility_occupancy_ignored_sign_conflict_observation_count"),
+         static_cast<double>(
+             statistics
+                 .visibilityOccupancyIgnoredSignConflictObservationCount)},
+        {QStringLiteral("visibility_occupancy_blended_sample_count"),
+         static_cast<double>(
+             statistics.visibilityOccupancyBlendedSampleCount)},
+        {QStringLiteral(
+             "visibility_occupancy_clipped_residual_sample_count"),
+         static_cast<double>(
+             statistics.visibilityOccupancyClippedResidualSampleCount)},
+        {QStringLiteral(
+             "visibility_occupancy_carrier_sign_mismatch_sample_count"),
+         static_cast<double>(
+             statistics
+                 .visibilityOccupancyCarrierSignMismatchSampleCount)},
+        {QStringLiteral("visibility_occupancy_maximum_applied_residual"),
+         statistics.visibilityOccupancyMaximumAppliedResidual},
+        {QStringLiteral("visibility_occupancy_cut_energy"),
+         static_cast<double>(statistics.visibilityOccupancyCutEnergy)},
         {QStringLiteral("adaptive_tgv_two_to_one_balanced"),
          statistics.adaptiveTgvTwoToOneBalanced},
         {QStringLiteral("adaptive_tgv_iteration_count"),
@@ -7720,6 +8944,18 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          statistics.effectiveMinimumSupportMaskFreeSpaceViews},
         {QStringLiteral("effective_surface_evidence_free_space_veto"),
          statistics.effectiveSurfaceEvidenceFreeSpaceVeto},
+        {QStringLiteral("effective_narrow_band_activation"),
+         statistics.effectiveNarrowBandActivation},
+        {QStringLiteral(
+             "effective_narrow_band_activation_block_size_samples"),
+         statistics.effectiveNarrowBandActivationBlockSizeSamples},
+        {QStringLiteral("effective_narrow_band_activation_depth_stride"),
+         statistics.effectiveNarrowBandActivationDepthStride},
+        {QStringLiteral(
+             "effective_narrow_band_activation_ray_step_voxels"),
+         statistics.effectiveNarrowBandActivationRayStepVoxels},
+        {QStringLiteral("effective_narrow_band_activation_halo_blocks"),
+         statistics.effectiveNarrowBandActivationHaloBlocks},
         {QStringLiteral("effective_depth_valid_boundary_erosion_pixels"),
          statistics.effectiveDepthValidBoundaryErosionPixels},
         {QStringLiteral("effective_geometry_verified_boundary_recovery"),

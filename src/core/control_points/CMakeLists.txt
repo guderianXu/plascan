@@ -14,7 +14,7 @@ target_link_libraries(control_network PUBLIC
     ${OpenCV_LIBS}
 )
 
-target_compile_features(control_network PUBLIC cxx_std_17)
+target_compile_features(control_network PUBLIC cxx_std_20)
 
 add_library(control_points STATIC
     model/MarkerSet.cpp
@@ -57,7 +57,7 @@ if(GDAL_INCLUDE_DIRS)
     target_include_directories(control_points PRIVATE ${GDAL_INCLUDE_DIRS})
 endif()
 
-target_compile_features(control_points PUBLIC cxx_std_17)
+target_compile_features(control_points PUBLIC cxx_std_20)
 
 if(BUILD_TESTS)
     include(GoogleTest)

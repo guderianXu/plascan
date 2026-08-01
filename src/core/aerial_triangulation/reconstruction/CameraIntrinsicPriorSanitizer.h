@@ -1,5 +1,10 @@
 #pragma once
 
+/**
+ * @file CameraIntrinsicPriorSanitizer.h
+ * @brief 在新空三前识别可信工程内参并隔离旧自标定污染。
+ */
+
 #include <QMap>
 #include <QJsonObject>
 #include <QStringList>
@@ -13,11 +18,11 @@ bool isTrustedProjectCameraIntrinsic(const QJsonObject &cameraObject);
 
 struct CameraIntrinsicPriorSanitizationResult
 {
-    int inspectedCameraCount = 0;
-    int dominantGroupCount = 0;
-    int normalizedCameraCount = 0;
-    double dominantMedianFocalPixels = 0.0;
-    QStringList normalizedImagePaths;
+    int inspectedCameraCount = 0; ///< 检查到可解析相机 JSON 的影像数。
+    int dominantGroupCount = 0; ///< 鲁棒主焦距组样本数。
+    int normalizedCameraCount = 0; ///< 被替换为主组焦距的离群相机数。
+    double dominantMedianFocalPixels = 0.0; ///< 主组焦距中位数，像素。
+    QStringList normalizedImagePaths; ///< 实际修改的影像规范路径。
 };
 
 // 无外部相机文件时，工程中可能保留上次 SfM 的错误焦距。

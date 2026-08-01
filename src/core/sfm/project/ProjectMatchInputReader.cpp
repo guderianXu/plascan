@@ -1,13 +1,15 @@
 #include "ProjectMatchInputReader.h"
 
+#include "ImageMatchFile.h"
 #include "ProjectCameraIO.h"
 #include "project/ProjectCommonUtils.h"
 
-#include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
-#include <QJsonDocument>
+#include <QMap>
 #include <QSet>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -16,28 +18,108 @@ namespace xjw::core::project
 namespace
 {
 
-bool readFeatureIndex(const QJsonArray &indices, int index, xjw::FeatureIdx *featureIndex)
+using xjw::image_matching::ImageMatchFile;
+using xjw::image_matching::ImageMatchShard;
+using xjw::image_matching::MatchRecordFlag;
+using xjw::image_matching::NeighborMatchBlock;
+
+/**
+ * @brief 一个无向像对当前最优的持久化算法变体。
+ *
+ * 对称分片会各保存一份有向邻接块，同一像对也允许多个配置指纹并存。读取层先
+ * 把每个候选转换为 SfM 的统一方向，再按几何内点数、连接点数和原始匹配数排序，
+ * 最终只向轨迹构建器提交一个变体，避免重复观测改变 BA 权重。
+ */
+struct PairCandidate
 {
-    if (!featureIndex || index < 0 || index >= indices.size())
-    {
-        return false;
-    }
+    ProjectMatchPair pair;
+    int geometricInlierCount = 0;
+    int tiePointMatchCount = 0;
+    int rawMatchCount = 0;
+    std::int64_t createdTimeMs = 0;
+};
 
-    const double raw = indices.at(index).toDouble(-1.0);
-    if (!std::isfinite(raw) || raw < 0.0
-        || raw > static_cast<double>(std::numeric_limits<xjw::FeatureIdx>::max()))
-    {
-        return false;
-    }
+QString normalizedPath(const QString &path)
+{
+    return xjw::common::project::normalizePath(path);
+}
 
-    const double rounded = std::floor(raw);
-    if (std::fabs(raw - rounded) > 1e-6)
+QString canonicalPairKey(const QString &left, const QString &right)
+{
+    const QString normalized_left = normalizedPath(left);
+    const QString normalized_right = normalizedPath(right);
+    if (normalized_left.isEmpty() || normalized_right.isEmpty() ||
+        normalized_left == normalized_right)
     {
-        return false;
+        return QString();
     }
+    return normalized_left < normalized_right
+        ? normalized_left + QLatin1Char('\n') + normalized_right
+        : normalized_right + QLatin1Char('\n') + normalized_left;
+}
 
-    *featureIndex = static_cast<xjw::FeatureIdx>(rounded);
-    return true;
+bool betterCandidate(const PairCandidate &left, const PairCandidate &right)
+{
+    if (left.geometricInlierCount != right.geometricInlierCount)
+    {
+        return left.geometricInlierCount > right.geometricInlierCount;
+    }
+    if (left.tiePointMatchCount != right.tiePointMatchCount)
+    {
+        return left.tiePointMatchCount > right.tiePointMatchCount;
+    }
+    if (left.rawMatchCount != right.rawMatchCount)
+    {
+        return left.rawMatchCount > right.rawMatchCount;
+    }
+    return left.createdTimeMs > right.createdTimeMs;
+}
+
+/**
+ * @brief 把 owner->peer 邻接块转换为 SfM 像对。
+ *
+ * 只保留通过几何模型验证的记录。owner 坐标由分片 observations 按稳定 featureId
+ * 查找，peer 坐标直接来自邻接记录；两端 featureId 可跨多个像对合并成多视轨迹。
+ */
+PairCandidate makePairCandidate(const ImageMatchShard &shard,
+                                const NeighborMatchBlock &block,
+                                int owner_camera_index,
+                                int peer_camera_index)
+{
+    PairCandidate candidate;
+    candidate.pair.cameraIndexA = owner_camera_index;
+    candidate.pair.cameraIndexB = peer_camera_index;
+    candidate.pair.indexed = true;
+    candidate.geometricInlierCount = static_cast<int>(block.geometryInlierCount);
+    candidate.tiePointMatchCount = static_cast<int>(block.tiePointMatchCount);
+    candidate.rawMatchCount = static_cast<int>(block.rawMatchCount);
+    candidate.createdTimeMs = block.createdTimeMs;
+    candidate.pair.observations.reserve(block.geometryInlierCount);
+
+    for (const xjw::image_matching::MatchRecord &match : block.matches)
+    {
+        if (!xjw::image_matching::hasFlag(match.flags, MatchRecordFlag::GeometryInlier))
+        {
+            continue;
+        }
+        const xjw::image_matching::KeypointObservation *owner_observation =
+            block.findOwnerObservation(match.ownerFeatureId);
+        if (!owner_observation)
+        {
+            continue;
+        }
+
+        ProjectMatchObservationPair observation;
+        observation.pixelA = {static_cast<double>(owner_observation->x),
+                              static_cast<double>(owner_observation->y)};
+        observation.pixelB = {static_cast<double>(match.peerX),
+                              static_cast<double>(match.peerY)};
+        observation.featureA = static_cast<xjw::FeatureIdx>(match.ownerFeatureId);
+        observation.featureB = static_cast<xjw::FeatureIdx>(match.peerFeatureId);
+        observation.score = std::clamp(static_cast<double>(match.confidence), 0.0, 1.0);
+        candidate.pair.observations.push_back(observation);
+    }
+    return candidate;
 }
 
 } // namespace
@@ -50,13 +132,15 @@ int cameraIndexForImageToken(const QString &imageToken,
         return -1;
     }
 
-    const QString normalizedToken = xjw::common::project::normalizePath(imageToken);
-    const auto direct = cameraIndexByPath.constFind(normalizedToken);
+    const QString normalized_token = normalizedPath(imageToken);
+    const auto direct = cameraIndexByPath.constFind(normalized_token);
     if (direct != cameraIndexByPath.constEnd())
     {
         return direct.value();
     }
 
+    // 工程中的影像路径可能经过移动或打包。受控 token 匹配仅在规范路径无法命中
+    // 时启用，并沿用 ProjectCommonUtils 对同名歧义的约束。
     for (auto it = cameraIndexByPath.constBegin(); it != cameraIndexByPath.constEnd(); ++it)
     {
         if (xjw::common::project::pathTokenMatchesImage(imageToken, it.key()))
@@ -76,21 +160,23 @@ bool readProjectMatchInput(const QJsonObject &meta,
     {
         return false;
     }
-
     *input = {};
-    QSet<QString> selectedNormalized;
+
+    // 第一阶段：按 selectedImages 的集合约束建立当前相机索引。数组实际顺序沿用
+    // 工程 images，以保证相机 JSON、影像路径和后续事务式回写始终一一对应。
+    QSet<QString> selected_normalized;
     for (const QString &path : selectedImages)
     {
-        selectedNormalized.insert(xjw::common::project::normalizePath(path));
+        selected_normalized.insert(normalizedPath(path));
     }
 
-    const QJsonArray imageArray = meta.value(QStringLiteral("images")).toArray();
-    for (const QJsonValue &value : imageArray)
+    const QJsonArray image_array = meta.value(QStringLiteral("images")).toArray();
+    for (const QJsonValue &value : image_array)
     {
         const QJsonObject object = value.toObject();
-        const QString normalizedPath =
-            xjw::common::project::normalizePath(object.value(QStringLiteral("path")).toString());
-        if (!selectedNormalized.contains(normalizedPath))
+        const QString normalized_path =
+            normalizedPath(object.value(QStringLiteral("path")).toString());
+        if (!selected_normalized.contains(normalized_path))
         {
             continue;
         }
@@ -102,156 +188,82 @@ bool readProjectMatchInput(const QJsonObject &meta,
             continue;
         }
 
-        input->cameraIndexByPath[normalizedPath] = static_cast<int>(input->cameras.size());
+        input->cameraIndexByPath[normalized_path] = static_cast<int>(input->cameras.size());
         input->cameras.push_back(camera);
-        input->imagePathByIndex.append(normalizedPath);
-        input->beforeCamMeta.insert(normalizedPath,
-                                    object.value(QStringLiteral("camera")).toObject());
+        input->imagePathByIndex.append(normalized_path);
+        input->beforeCamMeta.insert(
+            normalized_path, object.value(QStringLiteral("camera")).toObject());
     }
 
-    const QJsonArray matchResults = meta.value(QStringLiteral("ipmatch_results")).toArray();
-    for (const QJsonValue &value : matchResults)
+    // 第二阶段：每个 image_match_results 记录只指向一幅影像的唯一分片。使用
+    // output 路径去重后读取，不扫描目录，也不依赖文件名编码影像对。
+    QSet<QString> visited_files;
+    QMap<QString, PairCandidate> best_pairs;
+    const QJsonArray match_results =
+        meta.value(QStringLiteral("image_match_results")).toArray();
+    for (const QJsonValue &value : match_results)
     {
-        if (!value.isObject())
+        const QString output_path =
+            QFileInfo(value.toObject().value(QStringLiteral("output")).toString())
+                .absoluteFilePath();
+        const QString normalized_output = normalizedPath(output_path);
+        if (normalized_output.isEmpty() || visited_files.contains(normalized_output) ||
+            !QFileInfo::exists(output_path))
+        {
+            continue;
+        }
+        visited_files.insert(normalized_output);
+
+        ImageMatchShard shard;
+        QString read_error;
+        if (!ImageMatchFile::read(output_path, &shard, &read_error))
+        {
+            continue;
+        }
+        const int owner_index = cameraIndexForImageToken(
+            shard.owner.path, input->cameraIndexByPath);
+        if (owner_index < 0)
         {
             continue;
         }
 
-        const QJsonObject record = value.toObject();
-        QString rawPath0 = record.value(QStringLiteral("image0")).toString();
-        QString rawPath1 = record.value(QStringLiteral("image1")).toString();
-        if (rawPath0.isEmpty() || rawPath1.isEmpty())
+        for (const NeighborMatchBlock &block : shard.neighbors)
         {
-            const QJsonArray imageFiles = record.value(QStringLiteral("settings"))
-                                              .toObject()
-                                              .value(QStringLiteral("image_files"))
-                                              .toArray();
-            if (imageFiles.size() >= 2)
+            if (!block.geometryPassed)
             {
-                rawPath0 = imageFiles.at(0).toString();
-                rawPath1 = imageFiles.at(1).toString();
+                continue;
             }
-        }
-        if (rawPath0.isEmpty() || rawPath1.isEmpty())
-        {
-            continue;
-        }
-
-        QString imageA;
-        QString imageB;
-        for (const QString &selected : selectedImages)
-        {
-            if (xjw::common::project::pathTokenMatchesImage(rawPath0, selected))
-            {
-                imageA = xjw::common::project::normalizePath(selected);
-            }
-            if (xjw::common::project::pathTokenMatchesImage(rawPath1, selected))
-            {
-                imageB = xjw::common::project::normalizePath(selected);
-            }
-        }
-
-        if (imageA.isEmpty() || imageB.isEmpty() || imageA == imageB
-            || !input->cameraIndexByPath.contains(imageA)
-            || !input->cameraIndexByPath.contains(imageB))
-        {
-            continue;
-        }
-
-        QString sidecarPath = record.value(QStringLiteral("settings"))
-                                  .toObject()
-                                  .value(QStringLiteral("sidecar_json"))
-                                  .toString();
-        if (sidecarPath.isEmpty())
-        {
-            sidecarPath = record.value(QStringLiteral("output")).toString()
-                        + QStringLiteral(".json");
-        }
-
-        QFile sidecarFile(sidecarPath);
-        if (!sidecarFile.exists() || !sidecarFile.open(QIODevice::ReadOnly))
-        {
-            continue;
-        }
-        const QJsonDocument sidecarDocument = QJsonDocument::fromJson(sidecarFile.readAll());
-        if (!sidecarDocument.isObject())
-        {
-            continue;
-        }
-
-        const QJsonObject sidecar = sidecarDocument.object();
-        const QJsonArray matched0 = sidecar.value(QStringLiteral("matched_points0")).toArray();
-        const QJsonArray matched1 = sidecar.value(QStringLiteral("matched_points1")).toArray();
-        if (matched0.isEmpty() || matched0.size() != matched1.size()
-            || (minMatches > 0 && matched0.size() < minMatches))
-        {
-            continue;
-        }
-
-        const QString sideImage0 = sidecar.value(QStringLiteral("image0_path")).toString();
-        const QString sideImage1 = sidecar.value(QStringLiteral("image1_path")).toString();
-        const bool direct = xjw::common::project::pathTokenMatchesImage(sideImage0, imageA)
-                         && xjw::common::project::pathTokenMatchesImage(sideImage1, imageB);
-        const bool reverse = xjw::common::project::pathTokenMatchesImage(sideImage0, imageB)
-                          && xjw::common::project::pathTokenMatchesImage(sideImage1, imageA);
-        if (!direct && !reverse)
-        {
-            continue;
-        }
-
-        const QJsonArray indices0 = sidecar.value(QStringLiteral("matched_indices0")).toArray();
-        const QJsonArray indices1 = sidecar.value(QStringLiteral("matched_indices1")).toArray();
-        const QJsonArray matchedScores = sidecar.value(QStringLiteral("matched_scores")).toArray();
-        const bool hasIndexedMatches = !indices0.isEmpty()
-                                    && indices0.size() == matched0.size()
-                                    && indices1.size() == matched1.size();
-        const bool hasMatchScores = matchedScores.size() == matched0.size();
-
-        ProjectMatchPair pair;
-        pair.cameraIndexA = input->cameraIndexByPath.value(imageA);
-        pair.cameraIndexB = input->cameraIndexByPath.value(imageB);
-        pair.indexed = hasIndexedMatches;
-        pair.observations.reserve(static_cast<std::size_t>(matched0.size()));
-        for (int pointIndex = 0; pointIndex < matched0.size(); ++pointIndex)
-        {
-            const QJsonArray point0 = matched0.at(pointIndex).toArray();
-            const QJsonArray point1 = matched1.at(pointIndex).toArray();
-            if (point0.size() < 2 || point1.size() < 2)
+            const int peer_index = cameraIndexForImageToken(
+                block.peer.path, input->cameraIndexByPath);
+            const QString pair_key = canonicalPairKey(shard.owner.path, block.peer.path);
+            if (peer_index < 0 || peer_index == owner_index || pair_key.isEmpty())
             {
                 continue;
             }
 
-            ProjectMatchObservationPair observation;
-            observation.pixelA = direct
-                ? std::array<double, 2>{point0.at(0).toDouble(), point0.at(1).toDouble()}
-                : std::array<double, 2>{point1.at(0).toDouble(), point1.at(1).toDouble()};
-            observation.pixelB = direct
-                ? std::array<double, 2>{point1.at(0).toDouble(), point1.at(1).toDouble()}
-                : std::array<double, 2>{point0.at(0).toDouble(), point0.at(1).toDouble()};
-            observation.score = hasMatchScores
-                ? matchedScores.at(pointIndex).toDouble(1.0)
-                : 1.0;
-
-            if (hasIndexedMatches)
+            PairCandidate candidate = makePairCandidate(
+                shard, block, owner_index, peer_index);
+            if (minMatches > 0 &&
+                static_cast<int>(candidate.pair.observations.size()) < minMatches)
             {
-                xjw::FeatureIdx feature0 = xjw::kInvalidFeatureIdx;
-                xjw::FeatureIdx feature1 = xjw::kInvalidFeatureIdx;
-                if (!readFeatureIndex(indices0, pointIndex, &feature0)
-                    || !readFeatureIndex(indices1, pointIndex, &feature1))
-                {
-                    continue;
-                }
-                observation.featureA = direct ? feature0 : feature1;
-                observation.featureB = direct ? feature1 : feature0;
-                ++input->sidecarV2PairCount;
+                continue;
             }
-            pair.observations.push_back(observation);
-        }
 
-        if (!pair.observations.empty())
-        {
-            input->pairs.push_back(std::move(pair));
+            const auto existing = best_pairs.constFind(pair_key);
+            if (existing == best_pairs.constEnd() || betterCandidate(candidate, existing.value()))
+            {
+                best_pairs[pair_key] = std::move(candidate);
+            }
         }
+    }
+
+    // 第三阶段：QMap 的规范 pair key 保证输出顺序稳定，便于复现实验和单元测试。
+    input->pairs.reserve(static_cast<std::size_t>(best_pairs.size()));
+    for (auto it = best_pairs.begin(); it != best_pairs.end(); ++it)
+    {
+        input->indexedObservationCount +=
+            static_cast<int>(it.value().pair.observations.size());
+        input->pairs.push_back(std::move(it.value().pair));
     }
     return true;
 }

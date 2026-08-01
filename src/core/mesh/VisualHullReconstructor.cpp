@@ -1,6 +1,7 @@
 #include "VisualHullReconstructor.h"
 #include "Mc33IsoSurfaceExtractor.h"
 #include "SurfaceReconstructorPostprocess.h"
+#include "VisualHullFieldEvaluator.h"
 
 #include <plapoint/mesh/marching_cubes.h>
 
@@ -471,7 +472,12 @@ void closeOccupiedField(
     }
     for (std::size_t index = 0; index < field->size(); ++index)
     {
-        (*field)[index] = occupied[index] ? -1.0f : 1.0f;
+        const float magnitude = std::max(
+            1.0e-6f,
+            std::abs((*field)[index]));
+        (*field)[index] = occupied[index]
+            ? -magnitude
+            : magnitude;
     }
 }
 
@@ -658,7 +664,7 @@ bool VisualHullReconstructor::reconstruct(const std::vector<VisualHullView> &vie
         return false;
     }
 
-    const int resolution = std::clamp(config.resolution, 8, 256);
+    const int resolution = std::clamp(config.resolution, 8, 384);
     const int gridSize = resolution + 1;
     const std::size_t layerSize = static_cast<std::size_t>(gridSize) * gridSize;
     std::vector<float> field(layerSize * gridSize, 1.0f);
@@ -667,6 +673,11 @@ bool VisualHullReconstructor::reconstruct(const std::vector<VisualHullView> &vie
     const float stepZ = (config.boundsMax[2] - config.boundsMin[2]) / resolution;
     std::atomic_bool cancelled{false};
     const int workers = resolveWorkerCount(config.workerCount);
+    const std::vector<detail::PreparedVisualHullView>
+        prepared_field_views =
+            config.useContinuousSilhouetteField
+            ? detail::prepareVisualHullFieldViews(views)
+            : std::vector<detail::PreparedVisualHullView>{};
 
 #if defined(MESHING_OPENMP)
 #pragma omp parallel for schedule(dynamic, 1) num_threads(workers)
@@ -700,7 +711,22 @@ bool VisualHullReconstructor::reconstruct(const std::vector<VisualHullView> &vie
                     field[offset] = 1.0f;
                     continue;
                 }
-                field[offset] = isOccupied(worldX, worldY, worldZ, views, config) ? -1.0f : 1.0f;
+                field[offset] =
+                    config.useContinuousSilhouetteField
+                    ? detail::evaluateContinuousVisualHullField(
+                          worldX,
+                          worldY,
+                          worldZ,
+                          prepared_field_views,
+                          config)
+                    : (isOccupied(
+                           worldX,
+                           worldY,
+                           worldZ,
+                           views,
+                           config)
+                           ? -1.0f
+                           : 1.0f);
             }
         }
     }

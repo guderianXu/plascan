@@ -4,6 +4,7 @@
 #include "Logger.h"
 #include "MatchPhotosTask.h"
 #include "ProjectManager.h"
+#include "ProjectResultRecords.h"
 #include "project/ProjectIO.h"
 
 #include <QDir>
@@ -66,14 +67,10 @@ void TiePointWorkflowController::start(xjw::matchphotos::MatchPhotosOptions opti
     }
 
     options.planOnly = false;
-    options.featureAlgorithm = QStringLiteral("sift");
-    options.matcherAlgorithm = QStringLiteral("lightglue");
-
     xjw::matchphotos::MatchPhotosContext context;
     context.projectPath = projectPath;
     context.workingDirectory = xjw::common::project::ProjectIO::projectAssetsDir(projectPath);
-    context.featureDirectory = xjw::common::project::ProjectIO::ipfindOutputDir(projectPath);
-    context.matchDirectory = xjw::common::project::ProjectIO::ipmatchOutputDir(projectPath);
+    context.matchDirectory = xjw::common::project::ProjectIO::imageMatchOutputDir(projectPath);
     context.pairInput.images = images;
     context.pairInput.manualPairKeys = manualPairKeys;
     context.maskPaths = xjw::common::project::ProjectIO::maskPathsForImages(projectPath, images);

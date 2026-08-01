@@ -1,13 +1,13 @@
 // =============================================================================
 // 文件: MatchPairSelectorDialog.cpp
 // 说明: MatchPairSelectorDialog 的实现。
-//       直接扫描 assets/matches/*.match 文件系统，无需加载大 JSON 元数据，
+//       后台扫描 assets/image_matches/*.pimatch 逐影像分片，无需加载成对 sidecar，
 //       支持在匹配处理过程中实时刷新（通过 projectMetadataChanged 信号触发）。
 // =============================================================================
 #include "tie_points/MatchPairSelectorDialog.h"
 #include "tie_points/MatchViewerDialog.h"
-#include "MatchValidityAnalyzer.h"
 #include "preparation/MatchResultCatalog.h"
+#include "ImageMatchFile.h"
 #include "ProjectManager.h"
 #include "project/ProjectIO.h"
 #include "project/ProjectMatchCatalog.h"
@@ -28,7 +28,6 @@
 #include <QJsonValue>
 #include <QMessageBox>
 #include <QFile>
-#include <QDataStream>
 #include <QTimer>
 #include <QSet>
 #include <QRegularExpression>
@@ -39,7 +38,6 @@
 #include <QtConcurrent/QtConcurrent>
 
 #include <algorithm>
-#include <cstring>
 
 namespace {
 
@@ -110,25 +108,9 @@ QString matchVariantReasonLabel(const xjw::aerial_triangulation::MatchVariant &v
     {
         return QStringLiteral("可查看");
     }
-    if (variant.status == QStringLiteral("missing_sidecar"))
-    {
-        return QStringLiteral("缺少 sidecar");
-    }
-    if (variant.status == QStringLiteral("invalid_sidecar"))
-    {
-        return QStringLiteral("sidecar 无效");
-    }
     if (variant.status == QStringLiteral("invalid_match_file"))
     {
-        return QStringLiteral("匹配文件无效");
-    }
-    if (variant.status == QStringLiteral("mismatched_image_names"))
-    {
-        return QStringLiteral("影像名不一致");
-    }
-    if (variant.status == QStringLiteral("missing_image_names"))
-    {
-        return QStringLiteral("缺少影像名");
+        return QStringLiteral("匹配分片无效");
     }
     return variant.reason.isEmpty() ? variant.status : variant.reason;
 }
@@ -217,151 +199,6 @@ QString variantsTooltip(const QVector<xjw::aerial_triangulation::MatchVariant> &
                               counts));
     }
     return lines.join(QLatin1Char('\n'));
-}
-
-QJsonObject readJsonObjectFromFile(const QString &path)
-{
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly))
-    {
-        return QJsonObject();
-    }
-
-    QJsonParseError error;
-    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &error);
-    if (error.error != QJsonParseError::NoError || !doc.isObject())
-    {
-        return QJsonObject();
-    }
-    return doc.object();
-}
-
-QString sidecarString(const QJsonObject &sidecar, const QString &key)
-{
-    QString value = sidecar.value(key).toString().trimmed();
-    if (!value.isEmpty())
-    {
-        return value;
-    }
-    return sidecar.value(QStringLiteral("settings")).toObject().value(key).toString().trimmed();
-}
-
-int sidecarInt(const QJsonObject &sidecar, const QStringList &keys, int fallback)
-{
-    for (const QString &key : keys)
-    {
-        if (sidecar.contains(key))
-        {
-            return sidecar.value(key).toInt(fallback);
-        }
-        const QJsonObject settings = sidecar.value(QStringLiteral("settings")).toObject();
-        if (settings.contains(key))
-        {
-            return settings.value(key).toInt(fallback);
-        }
-    }
-    return fallback;
-}
-
-bool readSidecarImagePair(const QJsonObject &sidecar, QString *imageA, QString *imageB)
-{
-    QString first = sidecarString(sidecar, QStringLiteral("image0_path"));
-    QString second = sidecarString(sidecar, QStringLiteral("image1_path"));
-    if (first.isEmpty())
-    {
-        first = sidecarString(sidecar, QStringLiteral("image0"));
-    }
-    if (second.isEmpty())
-    {
-        second = sidecarString(sidecar, QStringLiteral("image1"));
-    }
-    if (first.isEmpty() || second.isEmpty())
-    {
-        const QJsonArray imageFiles =
-            sidecar.value(QStringLiteral("settings")).toObject().value(QStringLiteral("image_files")).toArray();
-        if (imageFiles.size() >= 2)
-        {
-            first = imageFiles.at(0).toString().trimmed();
-            second = imageFiles.at(1).toString().trimmed();
-        }
-    }
-
-    if (first.isEmpty() || second.isEmpty())
-    {
-        return false;
-    }
-    if (imageA)
-    {
-        *imageA = first;
-    }
-    if (imageB)
-    {
-        *imageB = second;
-    }
-    return true;
-}
-
-QFileInfoList candidateMatchFilesForImage(const QString &matchDirPath, const QString &imagePath)
-{
-    const QString base = QFileInfo(imagePath).completeBaseName().trimmed();
-    if (matchDirPath.trimmed().isEmpty() || base.isEmpty())
-    {
-        return QFileInfoList();
-    }
-
-    const QDir matchDir(matchDirPath);
-    if (!matchDir.exists())
-    {
-        return QFileInfoList();
-    }
-
-    return matchDir.entryInfoList(QStringList{QStringLiteral("*%1*.match").arg(base)},
-                                  QDir::Files,
-                                  QDir::Name);
-}
-
-QString inferOtherImageFromMatchFileName(const QFileInfo &matchInfo,
-                                         const QString &imagePath,
-                                         const QMap<QString, QString> &baseToPath)
-{
-    const QString currentBase = imageBaseToken(imagePath);
-    const QString stem = matchInfo.completeBaseName().toLower();
-    if (currentBase.isEmpty() || !stem.contains(currentBase))
-    {
-        return QString();
-    }
-
-    QString bestPath;
-    int bestLength = 0;
-    for (auto it = baseToPath.constBegin(); it != baseToPath.constEnd(); ++it)
-    {
-        const QString candidateBase = it.key();
-        if (candidateBase == currentBase || candidateBase.isEmpty() || !stem.contains(candidateBase))
-        {
-            continue;
-        }
-        if (candidateBase.size() > bestLength)
-        {
-            bestLength = candidateBase.size();
-            bestPath = it.value();
-        }
-    }
-    return bestPath;
-}
-
-QString sidecarAlgorithmLabel(const QJsonObject &sidecar)
-{
-    const QString featureAlgorithm = sidecarString(sidecar, QStringLiteral("feature_algorithm"));
-    const QString matchAlgorithm = sidecarString(sidecar, QStringLiteral("match_algorithm"));
-    if (featureAlgorithm.isEmpty())
-    {
-        return matchAlgorithm.isEmpty() ? QStringLiteral("(未知算法)") : matchAlgorithm;
-    }
-    if (matchAlgorithm.isEmpty() || matchAlgorithm == featureAlgorithm)
-    {
-        return featureAlgorithm;
-    }
-    return featureAlgorithm + QLatin1Char('-') + matchAlgorithm;
 }
 
 } // namespace
@@ -710,7 +547,7 @@ MatchPairSelectorDialog::MatchDataSnapshot MatchPairSelectorDialog::makeSnapshot
     snapshot.matchDir = _matchDir;
     if (snapshot.matchDir.isEmpty() && !snapshot.projectPath.isEmpty())
     {
-        snapshot.matchDir = xjw::common::project::ProjectIO::ipmatchOutputDir(snapshot.projectPath);
+        snapshot.matchDir = xjw::common::project::ProjectIO::imageMatchOutputDir(snapshot.projectPath);
     }
     snapshot.allImages = _allImages.isEmpty() ? _projectManager->getAllImages() : _allImages;
     snapshot.meta = _projectManager->currentMeta();
@@ -919,83 +756,72 @@ MatchPairSelectorDialog::MatchInfoList MatchPairSelectorDialog::parsePriorityMat
         return matches;
     }
 
-    QMap<QString, QString> baseToPath;
-    for (const QString &imgPath : snapshot.allImages)
+    const QString shardPath = xjw::image_matching::ImageMatchFile::filePathForImage(
+        snapshot.matchDir, imagePath);
+    xjw::image_matching::ImageMatchShard shard;
+    QString readError;
+    if (!xjw::image_matching::ImageMatchFile::read(shardPath, &shard, &readError))
     {
-        const QString base = imageBaseToken(imgPath);
-        if (!baseToPath.contains(base))
-        {
-            baseToPath.insert(base, imgPath);
-        }
+        return matches;
     }
 
-    QSet<QString> seenPairKeys;
-    for (const QFileInfo &matchInfo : candidateMatchFilesForImage(snapshot.matchDir, imagePath))
+    QMap<QString, MatchInfo> byPeer;
+    for (const xjw::image_matching::NeighborMatchBlock &block : shard.neighbors)
     {
-        const QString matchPath = matchInfo.absoluteFilePath();
-        const QJsonObject sidecar = readJsonObjectFromFile(matchPath + QStringLiteral(".json"));
-
-        QString otherToken;
-        QString sidecarImageA;
-        QString sidecarImageB;
-        if (readSidecarImagePair(sidecar, &sidecarImageA, &sidecarImageB))
-        {
-            if (!pairContainsImage(sidecarImageA, sidecarImageB, imagePath, &otherToken))
-            {
-                continue;
-            }
-        }
-
-        QString otherImagePath = otherToken.isEmpty()
-            ? inferOtherImageFromMatchFileName(matchInfo, imagePath, baseToPath)
-            : xjw::common::project::resolveProjectImagePathFromToken(otherToken,
-                                                                     snapshot.allImages);
+        const QString otherImagePath =
+            xjw::common::project::resolveProjectImagePathFromToken(block.peer.path,
+                                                                   snapshot.allImages);
         if (otherImagePath.trimmed().isEmpty() || imageTokensReferToSameImage(otherImagePath, imagePath))
         {
             continue;
         }
 
-        const QString pairKey = canonicalPairKeyForImages(imagePath, otherImagePath);
-        if (seenPairKeys.contains(pairKey))
-        {
-            continue;
-        }
-        seenPairKeys.insert(pairKey);
-
-        const int headerMatchCount = xjw::aerial_triangulation::MatchResultCatalog::readSgmtMatchCount(matchPath);
-        const int totalMatches = std::max(
-            0,
-            headerMatchCount >= 0
-                ? headerMatchCount
-                : sidecarInt(sidecar,
-                             QStringList{QStringLiteral("num_matches"), QStringLiteral("match_count")},
-                             0));
-
         xjw::aerial_triangulation::MatchVariant variant;
         variant.imageA = imagePath;
         variant.imageB = otherImagePath;
-        variant.matchFilePath = matchPath;
-        variant.sidecarPath = matchPath + QStringLiteral(".json");
-        variant.featureAlgorithm = sidecarString(sidecar, QStringLiteral("feature_algorithm"));
-        variant.matchAlgorithm = sidecarString(sidecar, QStringLiteral("match_algorithm"));
-        variant.totalMatches = totalMatches;
+        variant.algorithmId = block.algorithmId;
+        variant.algorithmVersion = block.algorithmVersion;
+        variant.configFingerprint = block.configFingerprint;
+        variant.matchFilePath = shardPath;
+        variant.peerMatchFilePath = xjw::image_matching::ImageMatchFile::filePathForImage(
+            snapshot.matchDir, otherImagePath);
+        variant.totalMatches = static_cast<int>(block.rawMatchCount);
+        variant.geometricVerifiedInliers = static_cast<int>(block.geometryInlierCount);
+        variant.tiePointMatches = static_cast<int>(block.tiePointMatchCount);
+        variant.geometryPassed = block.geometryPassed;
         variant.compatible = true;
         variant.status = QStringLiteral("priority_loaded");
-        variant.modifiedTime = matchInfo.lastModified();
 
-        MatchInfo info;
-        info.imagePath = otherImagePath;
-        info.imageName = QFileInfo(otherImagePath).fileName();
-        info.matchFilePath = matchPath;
-        info.totalPoints = totalMatches;
-        info.validPoints = 0;
-        info.invalidPoints = 0;
-        info.variants = QVector<xjw::aerial_triangulation::MatchVariant>{variant};
-        info.compatibleVariantCount = 1;
-        info.algorithm = sidecarAlgorithmLabel(sidecar);
-        info.availableAlgorithms = info.algorithm;
-        info.status = tr("可查看（快速）");
-        matches.append(info);
+        MatchInfo &info = byPeer[otherImagePath];
+        if (info.imagePath.isEmpty())
+        {
+            info.imagePath = otherImagePath;
+            info.imageName = QFileInfo(otherImagePath).fileName();
+            info.matchFilePath = shardPath;
+        }
+        info.variants.push_back(variant);
+        const bool useVariant = info.algorithm.isEmpty() ||
+            variant.geometricVerifiedInliers > info.validPoints;
+        if (useVariant)
+        {
+            info.algorithm = matchVariantAlgorithmLabel(variant);
+            info.totalPoints = variant.totalMatches;
+            info.hasInlierStats = true;
+            info.validPoints = variant.tiePointMatches > 0
+                ? variant.tiePointMatches
+                : variant.geometricVerifiedInliers;
+            info.invalidPoints = std::max(0, info.totalPoints - info.validPoints);
+            info.hasTrackValidity = variant.tiePointMatches > 0;
+        }
+    }
+
+    for (auto it = byPeer.begin(); it != byPeer.end(); ++it)
+    {
+        MatchInfo info = it.value();
+        info.compatibleVariantCount = compatibleVariantCount(info.variants);
+        info.availableAlgorithms = availableAlgorithmText(info.variants);
+        info.status = info.hasTrackValidity ? tr("已对齐（快速）") : tr("可查看（快速）");
+        matches.append(std::move(info));
     }
 
     std::sort(matches.begin(), matches.end(), [](const MatchInfo &a, const MatchInfo &b)
@@ -1023,13 +849,10 @@ MatchPairSelectorDialog::MatchInfoList MatchPairSelectorDialog::parseMatchDataFo
         if (!baseToPath.contains(base)) baseToPath.insert(base, imgPath);
     }
 
-    // ── 方式一：通过 Catalog 扫描 matchDir/*.match 文件并按影像对聚合 ────────
+    // 后台完整扫描用于补齐所有分片的算法变体与统计；首屏已由当前影像的单个
+    // `.pimatch` 快速加载，不会等待整个目录。
     QSet<QString> seenMatchFiles;
     QSet<QString> seenPairKeys;
-    const MatchValidityContext validityContext = snapshot.matchDir.isEmpty()
-        ? MatchValidityContext{}
-        : buildMatchValidityContextForMatchDirectory(snapshot.matchDir);
-
     if (!snapshot.matchDir.isEmpty())
     {
         xjw::aerial_triangulation::MatchResultCatalogConfig config;
@@ -1091,13 +914,11 @@ MatchPairSelectorDialog::MatchInfoList MatchPairSelectorDialog::parseMatchDataFo
                 if (variant.compatible)
                 {
                     info.matchFilePath = variant.matchFilePath;
-                    const MatchValidityResult validity =
-                        analyzeMatchTrackValidity(variant.matchFilePath, imagePath, otherImagePath, validityContext);
-                    if (validity.hasTrackValidity)
+                    if (variant.tiePointMatches > 0)
                     {
                         info.hasTrackValidity = true;
-                        info.validPoints = validity.validCount;
-                        info.invalidPoints = validity.invalidCount;
+                        info.validPoints = variant.tiePointMatches;
+                        info.invalidPoints = std::max(0, variant.totalMatches - variant.tiePointMatches);
                         info.status = info.compatibleVariantCount > 1
                             ? tr("已对齐（%1 个算法）").arg(info.compatibleVariantCount)
                             : tr("已对齐");
@@ -1114,58 +935,6 @@ MatchPairSelectorDialog::MatchInfoList MatchPairSelectorDialog::parseMatchDataFo
             }
             seenPairKeys.insert(pairKey);
             matches.append(info);
-        }
-    }
-
-    // ── 方式二：兜底 — 扫描项目元数据（针对仅有元数据无文件的历史记录）──────────
-    {
-        QJsonObject meta = snapshot.meta;
-        const QString baseFileName = QFileInfo(imagePath).fileName();
-        QJsonArray ipmatchResults = meta.value(QStringLiteral("ipmatch_results")).toArray();
-        for (const QJsonValue &val : ipmatchResults) {
-            if (!val.isObject()) continue;
-            const QJsonObject rec = val.toObject();
-
-            // 新格式：顶层 image0/image1
-            QString img0 = rec.value(QStringLiteral("image0")).toString();
-            QString img1 = rec.value(QStringLiteral("image1")).toString();
-
-            // 兼容旧格式：settings.image_files
-            if (img0.isEmpty() || img1.isEmpty()) {
-                const QJsonArray imgArr = rec.value(QStringLiteral("settings"))
-                    .toObject().value(QStringLiteral("image_files")).toArray();
-                if (imgArr.size() >= 2) { img0 = imgArr[0].toString(); img1 = imgArr[1].toString(); }
-            }
-            if (img0.isEmpty() || img1.isEmpty()) continue;
-
-            QString matchedPath;
-            bool containsCurrent = false;
-            for (const QString &p : {img0, img1}) {
-                if (QFileInfo(p).fileName() == baseFileName ||
-                    QFileInfo(p).completeBaseName() == baseName) {
-                    containsCurrent = true;
-                } else {
-                    matchedPath =
-                        xjw::common::project::resolveProjectImagePathFromToken(p,
-                                                                               snapshot.allImages);
-                }
-            }
-            if (!containsCurrent || matchedPath.isEmpty()) continue;
-
-            QString matchFile = rec.value(QStringLiteral("output")).toString();
-            if (matchFile.isEmpty() || !QFile::exists(matchFile))
-                matchFile = findMatchFileInSnapshot(snapshot, imagePath, matchedPath);
-            if (matchFile.isEmpty()) continue;
-
-            const QString pairKey = canonicalPairKeyForImages(imagePath, matchedPath);
-            if (seenPairKeys.contains(pairKey)) continue;
-
-            const QString cleanPath = QDir::cleanPath(matchFile);
-            if (seenMatchFiles.contains(cleanPath)) continue;
-            seenMatchFiles.insert(cleanPath);
-            seenPairKeys.insert(pairKey);
-
-            matches.append(getMatchStatisticsFromFile(imagePath, matchedPath, matchFile));
         }
     }
 
@@ -1323,79 +1092,14 @@ QString MatchPairSelectorDialog::findMatchFileInSnapshot(const MatchDataSnapshot
                                                          const QString &imgA,
                                                          const QString &imgB)
 {
-    if (snapshot.projectPath.isEmpty()) return QString();
-    
-    QString baseNameA = QFileInfo(imgA).completeBaseName();
-    QString baseNameB = QFileInfo(imgB).completeBaseName();
-    
-    // 第一优先：从 ipmatch_results 元数据中查找
-    QJsonObject meta = snapshot.meta;
-    QJsonArray ipmatchResults = meta.value("ipmatch_results").toArray();
-    
-    for (const QJsonValue &val : ipmatchResults) {
-        if (!val.isObject()) continue;
-        
-        QJsonObject result = val.toObject();
-        QJsonObject settings = result.value("settings").toObject();
-        QJsonArray imageFiles = settings.value("image_files").toArray();
-        
-        // 提取影像基础名（支持完整路径或仅基础名）
-        QSet<QString> imageBaseNames;
-        for (const QJsonValue &imgVal : imageFiles) {
-            QString imgPath = imgVal.toString();
-            imageBaseNames.insert(QFileInfo(imgPath).completeBaseName());
-        }
-        
-        // 检查是否匹配当前两张影像
-        if (imageBaseNames.contains(baseNameA) && imageBaseNames.contains(baseNameB)) {
-            QString outputPath = result.value("output").toString();
-            if (!outputPath.isEmpty() && QFile::exists(outputPath)) {
-                return outputPath;
-            }
-            
-            // 路径不存在时，尝试在项目的 assets/matches 中查找同名文件
-            if (!outputPath.isEmpty()) {
-                QString fileName = QFileInfo(outputPath).fileName();
-                QString matchesDir = snapshot.matchDir;
-                if (matchesDir.isEmpty())
-                {
-                    matchesDir = xjw::common::project::ProjectIO::ipmatchOutputDir(snapshot.projectPath);
-                }
-                QString candidatePath = QDir(matchesDir).filePath(fileName);
-                
-                if (QFile::exists(candidatePath)) {
-                    return candidatePath;
-                }
-            }
-        }
-    }
-    
-    // 第二优先：在 assets/matches 目录中按文件名模式直接搜索
-    QString plascanPath = snapshot.projectPath;
-    if (plascanPath.isEmpty()) return QString();
-    
-    QString matchesDir = snapshot.matchDir;
-    if (matchesDir.isEmpty())
+    Q_UNUSED(imgB)
+    if (snapshot.matchDir.trimmed().isEmpty())
     {
-        matchesDir = xjw::common::project::ProjectIO::ipmatchOutputDir(plascanPath);
+        return QString();
     }
-    
-    // 尝试常见命名模式（双向）
-    QStringList patterns = {
-        QString("%1__%2.match").arg(baseNameA, baseNameB),
-        QString("%1__%2.match").arg(baseNameB, baseNameA),
-        QString("%1-%2.match").arg(baseNameA, baseNameB),
-        QString("%1-%2.match").arg(baseNameB, baseNameA)
-    };
-    
-    for (const QString &pattern : patterns) {
-        QString fullPath = QDir(matchesDir).filePath(pattern);
-        if (QFile::exists(fullPath)) {
-            return fullPath;
-        }
-    }
-    
-    return QString();
+    const QString path = xjw::image_matching::ImageMatchFile::filePathForImage(
+        snapshot.matchDir, imgA);
+    return QFileInfo::exists(path) ? path : QString();
 }
 
 MatchPairSelectorDialog::MatchInfo MatchPairSelectorDialog::getMatchStatistics(
@@ -1416,52 +1120,37 @@ MatchPairSelectorDialog::MatchInfo MatchPairSelectorDialog::getMatchStatisticsFr
     info.totalPoints = 0;
     info.validPoints = 0;
     info.invalidPoints = 0;
-    info.availableAlgorithms = tr("(旧格式)");
+    info.availableAlgorithms = tr("SIFT-LightGlue");
     info.status = tr("可查看");
 
-    QFile file(matchFile);
-    if (!file.open(QIODevice::ReadOnly)) {
+    xjw::image_matching::ImageMatchShard shard;
+    QString readError;
+    if (!xjw::image_matching::ImageMatchFile::read(matchFile, &shard, &readError))
+    {
         info.status = tr("不可用：无法读取匹配文件");
         return info;
     }
 
-    QDataStream in(&file);
-    in.setVersion(QDataStream::Qt_5_15);
-
-    char magic[4];
-    if (in.readRawData(magic, 4) == 4 && strncmp(magic, "SGMT", 4) == 0) {
-        quint32 version = 0;
-        in >> version;
-        if (version == 1) {
-            quint32 img0Len = 0;
-            quint32 img1Len = 0;
-            in >> img0Len;
-            file.seek(file.pos() + static_cast<qint64>(img0Len));
-            in >> img1Len;
-            file.seek(file.pos() + static_cast<qint64>(img1Len));
-
-            qint32 numMatches = 0;
-            qint32 numKp0 = 0;
-            qint32 numKp1 = 0;
-            in >> numMatches >> numKp0 >> numKp1;
-            Q_UNUSED(numKp0);
-            Q_UNUSED(numKp1);
-
-            if (numMatches > 0) {
-                info.totalPoints = numMatches;
-                info.validPoints = numMatches;
-                info.invalidPoints = 0;
-            }
-        }
-    }
-
-    const MatchValidityResult validity = analyzeMatchTrackValidity(matchFile, imgA, imgB);
-    if (validity.hasTrackValidity)
+    const QString peerId = xjw::image_matching::ImageMatchFile::stableImageId(imgB);
+    for (const xjw::image_matching::NeighborMatchBlock &block : shard.neighbors)
     {
-        info.hasTrackValidity = true;
-        info.validPoints = validity.validCount;
-        info.invalidPoints = validity.invalidCount;
-        info.status = tr("已对齐");
+        if (block.peer.stableId != peerId)
+        {
+            continue;
+        }
+        if (static_cast<int>(block.geometryInlierCount) < info.validPoints)
+        {
+            continue;
+        }
+        info.algorithm = block.algorithmId;
+        info.totalPoints = static_cast<int>(block.rawMatchCount);
+        info.hasInlierStats = true;
+        info.validPoints = block.tiePointMatchCount > 0
+            ? static_cast<int>(block.tiePointMatchCount)
+            : static_cast<int>(block.geometryInlierCount);
+        info.invalidPoints = std::max(0, info.totalPoints - info.validPoints);
+        info.hasTrackValidity = block.tiePointMatchCount > 0;
+        info.status = info.hasTrackValidity ? tr("已对齐") : tr("可查看");
     }
     
     return info;

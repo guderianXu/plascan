@@ -47,23 +47,4 @@ QString resolveProjectImagePathFromToken(const QString &token,
                                          const QJsonObject &metadata);
 QString resolveProjectImagePathFromToken(const QString &token,
                                          const QStringList &project_image_paths);
-QString resolveProjectFeaturePathFromToken(const QString &project_path,
-                                           const QJsonObject &metadata,
-                                           const QString &token);
-QString resolveFeaturePathBySuffix(const QString &project_path,
-                                   const QJsonObject &metadata,
-                                   const QString &token,
-                                   const QString &suffix);
-QStringList projectFeatureSuffixes(const QString &project_path,
-                                   const QJsonObject &metadata);
-QString inferPreferredFeatureSuffix(const QString &project_path,
-                                    const QJsonObject &metadata);
-QString resolvePreferredFeatureSuffix(const QString &project_path,
-                                      const QJsonObject &metadata,
-                                      const QString &requested_suffix,
-                                      const QString &fallback_suffix = QString());
-bool projectHasFeatureSuffix(const QString &project_path,
-                             const QJsonObject &metadata,
-                             const QString &suffix);
-
 } // namespace xjw::common::project

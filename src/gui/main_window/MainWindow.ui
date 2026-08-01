@@ -128,6 +128,7 @@
     <addaction name="actionWorkflowAerialTriangulation"/>
     <addaction name="actionCreateDEM"/>
     <addaction name="actionGenerateOrtho"/>
+    <addaction name="actionWorkflowSettings"/>
    </widget>
    <widget class="QMenu" name="menuTools">
     <property name="title">
@@ -335,6 +336,14 @@
    </property>
    <property name="toolTip">
     <string>打开对齐照片参数对话框</string>
+   </property>
+  </action>
+  <action name="actionWorkflowSettings">
+   <property name="text">
+    <string>设置...</string>
+   </property>
+   <property name="toolTip">
+    <string>设置空中三角测量的设备、并行度和数值门限</string>
    </property>
   </action>
   <action name="actionCreateDEM">

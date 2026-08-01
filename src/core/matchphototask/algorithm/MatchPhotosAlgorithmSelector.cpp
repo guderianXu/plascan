@@ -1,5 +1,7 @@
 #include "MatchPhotosAlgorithmSelector.h"
 
+#include "ImageMatchingRegistry.h"
+
 #include <algorithm>
 
 namespace xjw
@@ -78,17 +80,43 @@ int resolveMaxKeypoints(const MatchPhotosOptions &options)
 MatchPhotosAlgorithmPlan MatchPhotosAlgorithmSelector::select(const MatchPhotosOptions &options)
 {
     MatchPhotosAlgorithmPlan plan;
-    plan.strategyId = QStringLiteral("metashape_like_%1_sift_lightglue").arg(profileId(options.profile));
-    plan.displayName = QStringLiteral("类 Metashape 自动匹配：SIFT + LightGlue");
+    plan.algorithmId = options.algorithmId.trimmed().toLower();
+    if (plan.algorithmId.isEmpty())
+    {
+        plan.algorithmId = QStringLiteral("sift_lightglue");
+    }
+    plan.strategyId = QStringLiteral("metashape_like_%1_%2")
+                          .arg(profileId(options.profile), plan.algorithmId);
 
-    // 当前主线固定为 SIFT + LightGlue：
-    // SIFT 提供尺度和旋转鲁棒性，LightGlue 负责更强的学习型特征匹配。
-    plan.featureAlgorithm = QStringLiteral("sift");
-    plan.featureSuffix = QStringLiteral(".sift");
-    plan.matcherAlgorithm = QStringLiteral("lightglue");
-    plan.fallbackMatcherAlgorithm = QStringLiteral("sift_bf_l2");
-    plan.needsFeatureStage = true;
-    plan.endToEndMatcher = false;
+    // 注册表是算法扩展的唯一入口。选择器不再维护独立的 if/else 工厂列表，
+    // 因而新算法不会迫使 GUI、空三或缓存格式同步增加自由字符串分支。
+    const std::vector<image_matching::ImageMatchingAlgorithmDescriptor> descriptors =
+        image_matching::ImageMatchingRegistry::descriptors();
+    const auto descriptor = std::find_if(
+        descriptors.cbegin(), descriptors.cend(),
+        [&](const image_matching::ImageMatchingAlgorithmDescriptor &candidate)
+        {
+            return candidate.id.compare(plan.algorithmId, Qt::CaseInsensitive) == 0;
+        });
+    if (descriptor == descriptors.cend())
+    {
+        plan.validationError = QStringLiteral("未注册的影像匹配算法: %1")
+                                   .arg(plan.algorithmId);
+        return plan;
+    }
+
+    plan.displayName = descriptor->displayName;
+    plan.algorithmVersion = descriptor->version;
+    plan.requiresCuda = descriptor->requiresCuda;
+    plan.extractsFeaturesInMemory =
+        descriptor->inputModel == image_matching::AlgorithmInputModel::ReusableFeatures;
+    if (plan.requiresCuda && options.device == ComputeDevice::Cpu)
+    {
+        plan.validationError = QStringLiteral("%1 需要 CUDA，不能使用 CPU 设备")
+                                   .arg(plan.displayName);
+        return plan;
+    }
+    plan.valid = true;
     plan.preferCuda = shouldPreferCuda(options);
     plan.rotationRobust = true;
     // 指导匹配是用户可见的显式开关。质量档只调整数值预算，不能覆盖未勾选状态，
@@ -96,10 +124,8 @@ MatchPhotosAlgorithmPlan MatchPhotosAlgorithmSelector::select(const MatchPhotosO
     plan.enableGuidedMatching = options.enableGuidedMatching;
     plan.maxImageDim = options.maxImageDim;
     plan.maxKeypoints = resolveMaxKeypoints(options);
-    plan.reason = QStringLiteral("采用 SIFT 作为特征提取器以保留尺度和旋转鲁棒性，"
-                                 "再使用 LightGlue 对 .sift 特征进行学习型匹配。");
-    plan.fallbackReason = QStringLiteral("LightGlue 模型或运行环境不可用时，可回退到 SIFT BF-L2，"
-                                         "保证 CPU 环境仍能完成匹配。");
+    plan.reason = QStringLiteral("CUDA SIFT 在任务内存中提取尺度/旋转鲁棒特征，"
+                                 "TensorRT LightGlue 完成匹配；只持久化最终 .pimatch 观测。");
     return plan;
 }
 

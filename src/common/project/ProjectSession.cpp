@@ -121,20 +121,6 @@ bool ProjectSession::create(const QString &projectPath,
         cleanup();
         return false;
     }
-    QString directoryError;
-    if (!ProjectPackageLayout::ensureChunkDirectories(
-            absolutePath, chunk.directory, &directoryError)
-        || !QDir().mkpath(
-            ProjectPackageLayout::sharedImagesDirectory(absolutePath)))
-    {
-        setError(errorMessage,
-                 directoryError.isEmpty()
-                     ? QStringLiteral("无法创建工程共享影像目录")
-                     : directoryError);
-        cleanup();
-        return false;
-    }
-
     QJsonObject config{
         {QStringLiteral("project_name"),
          projectName.trimmed().isEmpty()
@@ -575,7 +561,8 @@ bool ProjectSession::save(QString *errorMessage)
     QJsonObject portableFiles = _projectFiles;
     QJsonObject portableResults = _projectResults;
     QJsonObject resourceIndex;
-    ProjectWorkspaceStore workspace(_projectPath);
+    ProjectWorkspaceStore workspace(
+        _projectPath, _activeChunk.directory);
     if (!workspace.prepareSplitMetadata(
             &portableFiles,
             &portableResults,
@@ -610,8 +597,13 @@ bool ProjectSession::save(QString *errorMessage)
     {
         return false;
     }
-    return ProjectSharedImageStore(_projectPath)
-        .pruneUnreferenced(errorMessage);
+    if (!ProjectSharedImageStore(_projectPath)
+             .pruneUnreferenced(errorMessage))
+    {
+        return false;
+    }
+    return ProjectPackageLayout::pruneEmptyOptionalDirectories(
+        _projectPath, _activeChunk.directory, errorMessage);
 }
 
 bool ProjectSession::load(QString *errorMessage)
@@ -646,7 +638,8 @@ bool ProjectSession::load(QString *errorMessage)
         QString::fromLatin1(
             PortableProjectFormat::ProjectConfigSection)).toObject();
 
-    ProjectWorkspaceStore workspace(_projectPath);
+    ProjectWorkspaceStore workspace(
+        _projectPath, _activeChunk.directory);
     if (!workspace.initializeRuntime(&_activeChunkRoot, errorMessage))
     {
         return false;

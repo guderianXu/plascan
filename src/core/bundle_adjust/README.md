@@ -33,7 +33,11 @@ Auto 也不会在 `refineCameraPose=true` 时选择它。
 
 ## 性能策略
 
-- Ceres 重投影和约束残差使用 AutoDiff/解析导数，不再在热点路径执行中央数值微分。
+- Ceres 重投影、物方约束和相机位姿先验使用 AutoDiff/解析导数，不再在热点路径执行中央数值微分。
+- Ceres CPU 的 Auto 策略按可变相机规模选择 Dense Schur、Sparse Schur 或
+  Iterative Schur；point-only 问题使用 Dense QR。
+- Ceres CUDA 在创建求解器前保守估算 dense 工作集，并与当前空闲显存预算比较。
+  超限时自动改用 CPU Sparse/Iterative Schur，避免进入求解后才发生显存不足。
 - 小型固定焦距问题继续使用 Legacy CPU/OpenMP；小规模联合问题使用 Ceres CPU。只有同时满足
   相机数、观测数和 CUDA 求解器可用性门槛时，Auto 才会选择 Ceres CUDA。
 - CUDA 选择依据是完整 setup + solve 墙钟时间和质量门控，不只比较线性求解器内部耗时。
@@ -41,6 +45,9 @@ Auto 也不会在 `refineCameraPose=true` 时选择它。
   因而不会强制迁移到 GPU。
 - `ba_backend_benchmark` 用于比较 Legacy、Ceres CPU、Ceres CUDA 和 Native CUDA；
   `aerial_geometry_benchmark` 负责测量空三外围几何阶段，避免把低收益 kernel 接入默认流程。
+- Native CUDA 的公开参数只描述当前真实的固定相机点块能力：
+  `nativeCudaMaxPointStepNorm` 限制单次三维点更新；结果报告优化前后代价、接受步和
+  拒绝试探次数，不再输出并未执行的 PCG 指标。
 
 ## 结果状态与回写
 
@@ -59,14 +66,16 @@ Auto 也不会在 `refineCameraPose=true` 时选择它。
 
 Ceres 使用一个共享绝对焦距参数块，并以 `log(focalPx)` 参数化和设置上下界。相机可以有不同初始焦距，
 但同一相机组在求解后得到同一个焦距。焦距、相机位姿和三维点处于同一个 Ceres Problem，
-不使用外层交替更新模拟联合自标定。默认只释放焦距，不自动释放主点或畸变。
+不使用外层交替更新模拟联合自标定。`cameraCalibrationGroupIds` 可为不同镜头/焦段建立独立参数，
+默认先固定焦距预热几何，再释放各组焦距。默认只释放焦距，不自动释放主点或畸变。
 
 ## 规范、鲁棒目标与正深度
 
 - 单目 SfM 的全局 7 自由度规范由 `SfmBundleAdjustCoordinator` 和
   `SimilarityGaugeNormalizer` 管理，不在各后端内用不同方式重复实现。
 - Legacy 的法方程线性化与 LM trial step 使用同一个 Huber robust cost。
-- Ceres 和 Legacy 的点过滤阈值由空三质量预设统一下发。
+- Legacy、Ceres 和 Native CUDA 统一执行正深度检查、基于全局中位数的自适应点过滤与结果统计。
+- Auto 质量门控除重投影 RMS 和有效 track 比例外，还检查 LiDAR、控制点和比例尺 RMS 不得恶化。
 - 点的前后方由 `Camera::positiveDepth()` / `isPointInFront()` 定义，后端不得直接把原始相机 Z
   当作跨相机格式的统一正深度。
 
@@ -75,3 +84,11 @@ Ceres 使用一个共享绝对焦距参数块，并以 `log(focalPx)` 参数化�
 模块测试位于 `tests/`，重点覆盖后端能力和选择、取消/失败保护、共享焦距、质量门控、
 投影模型以及 Native CUDA 的固定相机能力。SfM 规范和局部/全局 BA 协调测试位于
 `src/core/sfm/test/`。
+
+## PlaMatrix 与 PlaPoint 边界
+
+- BA 的 3x3/6x6 小型法方程和有限样本中位数直接复用 PlaMatrix；相关能力放在
+  `plamatrix/ops/small_matrix.h` 与 `plamatrix/ops/statistics.h`，避免 PlaScan
+  维护第二套数值实现。
+- BA 输入是带观测索引的 track，而不是需要邻域查询的点云容器，因此不强行依赖 PlaPoint。
+  LiDAR 最近邻、法线和空间关联仍由 `core/lidar`/PlaPoint 在构建 BA 约束前完成。

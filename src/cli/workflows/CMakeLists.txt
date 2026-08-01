@@ -22,10 +22,8 @@ if(TARGET meshing)
 endif()
 
 set(workflow_cli_base_targets
-    feature_extractors_traditional
-    feature_match_traditional
-    lightglue_matcher
-    superglue_matcher
+    image_matching
+    matchphototask
     sfm
     mvs
     meshing
@@ -60,11 +58,8 @@ function(add_reconstruction_workflow_cli name)
             mvs
             meshing
             ${ARGN}
-            superglue_matcher
-            lightglue_matcher
-            feature_match_traditional
-            feature_extractors_traditional
-            feature_match_common
+            image_matching
+            matchphototask
             camera
             control_points
             overlap
@@ -77,14 +72,8 @@ function(add_reconstruction_workflow_cli name)
             ${CMAKE_SOURCE_DIR}/src/common
             ${CMAKE_SOURCE_DIR}/src/core/camera
             ${CMAKE_SOURCE_DIR}/src/core/control_points
-            ${CMAKE_SOURCE_DIR}/src/core/feature_extractors
-            ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/superpoint
-            ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/disk
-            ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/aliked
-            ${CMAKE_SOURCE_DIR}/src/core/feature_match
-            ${CMAKE_SOURCE_DIR}/src/core/feature_match/superglue
-            ${CMAKE_SOURCE_DIR}/src/core/feature_match/lightglue
-            ${CMAKE_SOURCE_DIR}/src/core/feature_match/tradition
+            ${CMAKE_SOURCE_DIR}/src/core/image_matching
+            ${CMAKE_SOURCE_DIR}/src/core/matchphototask
             ${CMAKE_SOURCE_DIR}/src/core/mesh
             ${CMAKE_SOURCE_DIR}/src/core/mvs
             ${CMAKE_SOURCE_DIR}/src/core/overlap

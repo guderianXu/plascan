@@ -1,274 +1,143 @@
-// =============================================================================
-// 文件: cli_feature_match.cpp
-// 功能: 统一特征匹配 CLI — 工厂模式, 自动检测算法
-// =============================================================================
+/**
+ * @file cli_feature_match.cpp
+ * @brief 两幅原始影像的 CUDA SIFT + TensorRT LightGlue 匹配入口。
+ *
+ * 本 CLI 不再接受或生成中间特征文件。两幅影像的 SIFT 特征只存在于本次
+ * MatchPhotosTask 的内存缓存中，最终匹配按“一幅影像一个 `.pimatch` 分片”
+ * 对称写入输出目录。这样 CLI、GUI 和空三共用完全相同的算法、几何验证、
+ * 残差计算及二进制版本契约。
+ */
+
 #include "cli_common.h"
-#include "MatcherFactory.h"
-#include "TraditionalFeatureMatcher.h"
-#include "FeatureData.h"
-#include "FeatureOutput.h"
-#include "AlgorithmCompat.h"
-#include "FeatureFileIO.h"
-#include "MatchFileIO.h"
-#include "io/PathIO.h"
 
-#include <QString>
-#include <QFile>
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
+#include "MatchPhotosTask.h"
+#include "PairTypes.h"
 
-namespace
-{
+#include <QCoreApplication>
+#include <QDir>
+#include <QFileInfo>
 
-QJsonArray makePointArray(double x, double y)
-{
-    QJsonArray point;
-    point.append(x);
-    point.append(y);
-    return point;
-}
-
-void writeIndexedSidecar(const std::string &outPath,
-                         const std::string &sp1,
-                         const std::string &sp2,
-                         const QString &imageName0,
-                         const QString &imageName1,
-                         const xjw::feature_extractors::FeatureData &fd0,
-                         const xjw::feature_extractors::FeatureData &fd1,
-                         const xjw::feature_match::MatchResult &matchResult,
-                         const QString &featureAlgorithm,
-                         const QString &matchAlgorithm,
-                         float matchThreshold)
-{
-    QJsonArray points0;
-    QJsonArray points1;
-    QJsonArray indices0;
-    QJsonArray indices1;
-    QJsonArray scores;
-
-    for (size_t i = 0; i < matchResult.matches0.size(); ++i)
-    {
-        const int idx1 = matchResult.matches0[i];
-        if (idx1 < 0 ||
-            i >= fd0.keypoints.size() ||
-            idx1 >= static_cast<int>(fd1.keypoints.size()))
-        {
-            continue;
-        }
-
-        indices0.append(static_cast<int>(i));
-        indices1.append(idx1);
-        points0.append(makePointArray(fd0.keypoints[i].pt.x, fd0.keypoints[i].pt.y));
-        points1.append(makePointArray(fd1.keypoints[static_cast<size_t>(idx1)].pt.x,
-                                      fd1.keypoints[static_cast<size_t>(idx1)].pt.y));
-
-        const float score = i < matchResult.matchingScores0.size()
-            ? matchResult.matchingScores0[i]
-            : 1.0f;
-        scores.append(static_cast<double>(score));
-    }
-
-    QJsonObject sidecar;
-    sidecar[QStringLiteral("match_file")] = QString::fromStdString(outPath);
-    sidecar[QStringLiteral("image0_name")] = imageName0;
-    sidecar[QStringLiteral("image1_name")] = imageName1;
-    sidecar[QStringLiteral("image0_path")] = imageName0;
-    sidecar[QStringLiteral("image1_path")] = imageName1;
-    sidecar[QStringLiteral("feature0_path")] = QString::fromStdString(sp1);
-    sidecar[QStringLiteral("feature1_path")] = QString::fromStdString(sp2);
-    sidecar[QStringLiteral("sp0_path")] = QString::fromStdString(sp1);
-    sidecar[QStringLiteral("sp1_path")] = QString::fromStdString(sp2);
-    sidecar[QStringLiteral("feature_algorithm")] = featureAlgorithm;
-    sidecar[QStringLiteral("match_algorithm")] = matchAlgorithm;
-    sidecar[QStringLiteral("feature_format_version")] = 2;
-    sidecar[QStringLiteral("num_matches")] = indices0.size();
-    sidecar[QStringLiteral("match_threshold")] = static_cast<double>(matchThreshold);
-    sidecar[QStringLiteral("matched_points0")] = points0;
-    sidecar[QStringLiteral("matched_points1")] = points1;
-    sidecar[QStringLiteral("matched_indices0")] = indices0;
-    sidecar[QStringLiteral("matched_indices1")] = indices1;
-    sidecar[QStringLiteral("matched_scores")] = scores;
-
-    QFile sidecarFile(xjw::common::io::fromUtf8Path(outPath) + QStringLiteral(".json"));
-    if (!sidecarFile.open(QIODevice::WriteOnly | QIODevice::Truncate))
-    {
-        cli::fatal("无法写入 sidecar: " + outPath + ".json", cli::EXIT_IO_ERR);
-    }
-    sidecarFile.write(QJsonDocument(sidecar).toJson(QJsonDocument::Compact));
-    sidecarFile.close();
-}
-
-} // namespace
-
-// 根据文件后缀自动选择匹配器
-static std::string autoMatcher(const std::string &spPath)
-{
-    return xjw::feature_match::defaultMatcherForFeatureSuffix(
-        xjw::common::io::fromUtf8Path(spPath)).toStdString();
-}
-
-static bool isTraditionalMatcher(const std::string &algo)
-{
-    return algo == "bf" ||
-        algo == "flann" ||
-        algo == "sift_bf_l2" ||
-        algo == "sift_flann" ||
-        algo == "orb_bf_hamming";
-}
-
-static std::string normalizedTraditionalMatcher(const std::string &algo)
-{
-    if (algo == "bf") return "sift_bf_l2";
-    if (algo == "flann") return "sift_flann";
-    return xjw::feature_match::tradition::TraditionalFeatureMatcher::normalizeAlgorithmName(algo);
-}
+#include <algorithm>
+#include <atomic>
+#include <cstdio>
+#include <string>
 
 int main(int argc, char *argv[])
 {
-    CLI::App app{"PlaScan 统一特征匹配 — 自动检测, 无需手动指定算法"};
+    QCoreApplication qtApplication(argc, argv);
+    CLI::App app{"PlaScan 双影像匹配 — CUDA SIFT + TensorRT LightGlue"};
 
-    std::string algo;
-    app.add_option("-a,--algorithm", algo, "留空自动检测");
+    std::string leftImageArg;
+    std::string rightImageArg;
+    std::string outputDirectoryArg;
+    std::string enginePathArg;
+    std::string algorithmIdArg = "sift_lightglue";
+    int maxKeypoints = 40000;
+    int maxImageDim = 0;
+    int cudaDevice = 0;
+    float matchThreshold = 0.15f;
+    double geometryThreshold = 1.5;
+    int geometryMinInliers = 20;
 
-    std::string modelPath, sp1, sp2, imgL, imgR, outPath;
-    app.add_option("-m,--model",  modelPath, "模型路径 (.torchscript/.pt)");
-    app.add_option("--sp1", sp1, "左特征文件");
-    app.add_option("--sp2", sp2, "右特征文件");
-    app.add_option("-L,--left",  imgL,    "左影像 (端到端模式)");
-    app.add_option("-R,--right", imgR,    "右影像 (端到端模式)");
-    app.add_option("-o,--output", outPath, "输出 .match 文件")->required();
-
-    float matchThresh = 0.2f;
-    int   maxKp = 2048, maxDim = 2048, gpu = 0;
-    bool  cuda = true;
-    app.add_option("-t,--match-threshold", matchThresh, "匹配置信度阈值");
-    app.add_option("-n,--max-keypoints",   maxKp,       "最大关键点数");
-    app.add_option("--max-dim", maxDim, "端到端匹配最大图像边长");
-    app.add_flag("--cuda{true}", cuda, "CUDA");
-    app.add_flag("--no-cuda{false}", cuda);
-    app.add_option("--gpu", gpu, "CUDA 设备 ID");
+    app.add_option("-L,--left", leftImageArg, "左影像路径")->required();
+    app.add_option("-R,--right", rightImageArg, "右影像路径")->required();
+    app.add_option("-o,--output-dir", outputDirectoryArg,
+                   "逐影像 .pimatch 输出目录")->required();
+    app.add_option("-m,--model", enginePathArg,
+                   "可选 TensorRT LightGlue .engine；留空时按运行时模型目录查找");
+    app.add_option("-a,--algorithm-id", algorithmIdArg,
+                   "统一影像匹配算法 ID；当前仅支持 sift_lightglue")
+        ->check(CLI::IsMember({"sift_lightglue"}));
+    app.add_option("-n,--max-keypoints", maxKeypoints, "每幅影像最大 SIFT 关键点数");
+    app.add_option("--max-image-dim", maxImageDim,
+                   "提取输入最长边，0 表示保持原始分辨率");
+    app.add_option("--cuda-device", cudaDevice, "CUDA 设备 ID");
+    app.add_option("-t,--match-threshold", matchThreshold, "LightGlue 匹配置信度阈值");
+    app.add_option("--geometry-threshold", geometryThreshold,
+                   "几何验证像素残差阈值");
+    app.add_option("--geometry-min-inliers", geometryMinInliers,
+                   "几何验证最少内点数");
 
     CLI11_PARSE(app, argc, argv);
 
-    // 自动检测
-    if (algo.empty() && !sp1.empty())
+    const QString leftImage = QDir::cleanPath(
+        QFileInfo(QString::fromStdString(leftImageArg)).absoluteFilePath());
+    const QString rightImage = QDir::cleanPath(
+        QFileInfo(QString::fromStdString(rightImageArg)).absoluteFilePath());
+    const QString outputDirectory = QDir::cleanPath(
+        QFileInfo(QString::fromStdString(outputDirectoryArg)).absoluteFilePath());
+    if (!QFileInfo(leftImage).isFile() || !QFileInfo(rightImage).isFile())
     {
-        algo = autoMatcher(sp1);
-        fprintf(stdout, "自动检测: %s → %s\n", sp1.c_str(), algo.c_str());
+        std::fprintf(stderr, "错误: 左右影像必须是可读取文件。\n");
+        return cli::EXIT_IO_ERR;
     }
-    if (algo.empty())
+    if (leftImage.compare(rightImage, Qt::CaseInsensitive) == 0)
     {
-        algo = "superglue";
+        std::fprintf(stderr, "错误: 左右影像不能是同一个文件。\n");
+        return cli::EXIT_ARG_ERR;
+    }
+    if (!QDir().mkpath(outputDirectory))
+    {
+        std::fprintf(stderr, "错误: 无法创建输出目录: %s\n",
+                     qUtf8Printable(outputDirectory));
+        return cli::EXIT_IO_ERR;
     }
 
-    // ── 工厂统一处理 ──
-    if (algo == "superglue" || algo == "lightglue" ||
-        algo == "loftr" || algo == "roma" || algo == "dedode")
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.algorithmId = QString::fromStdString(algorithmIdArg).trimmed().toLower();
+    options.profile = xjw::matchphotos::MatchPhotosProfile::HighAccuracy;
+    options.device = xjw::matchphotos::ComputeDevice::Cuda;
+    options.lightGlueTensorRtEnginePath = QString::fromStdString(enginePathArg);
+    options.pairPolicy.mode = xjw::matchphotos::PairSelectionMode::ManualOnly;
+    options.maxKeypoints = std::max(0, maxKeypoints);
+    options.useExplicitKeypointLimit = true;
+    options.maxImageDim = maxImageDim;
+    options.cudaDevice = std::max(0, cudaDevice);
+    options.matchThreshold = std::clamp(matchThreshold, 0.0f, 1.0f);
+    options.geometryReprojThreshold = std::max(0.1, geometryThreshold);
+    options.geometryMinInliers = std::max(4, geometryMinInliers);
+    options.enableGeometryVerification = true;
+    options.enableTrackBuild = true;
+    options.useGenericPreselection = false;
+    options.useReferencePreselection = false;
+    options.reuseExistingMatches = false;
+    options.planOnly = false;
+
+    xjw::matchphotos::MatchPhotosContext context;
+    context.workingDirectory = outputDirectory;
+    context.matchDirectory = outputDirectory;
+    context.pairInput.images = QStringList{leftImage, rightImage};
+    context.pairInput.manualPairKeys.append(
+        xjw::matchphotos::makePairKey(leftImage, rightImage));
+
+    std::atomic_bool cancelFlag(false);
+    context.cancelFlag = &cancelFlag;
+    context.progressCallback = [](const QString &stageId,
+                                  const QString &message,
+                                  int current,
+                                  int maximum)
     {
-        MatcherConfig mCfg;
-        mCfg.modelPath      = modelPath;
-        mCfg.matchThreshold = matchThresh;
-        mCfg.maxKeypoints   = maxKp;
-        mCfg.maxImageDim    = maxDim;
-        mCfg.useCuda        = cuda;
-        mCfg.cudaDevice     = gpu;
+        std::fprintf(stdout, "[%s %d/%d] %s\n",
+                     qUtf8Printable(stageId), current, maximum,
+                     qUtf8Printable(message));
+        std::fflush(stdout);
+    };
 
-        auto matcher = createMatcher(algo, mCfg);
-        if ((algo == "superglue" || algo == "lightglue") && (sp1.empty() || sp2.empty()))
-        {
-            cli::fatal(algo + " 需要 --sp1/--sp2 特征文件", cli::EXIT_ARG_ERR);
-        }
-        if ((algo == "loftr" || algo == "roma") && (imgL.empty() || imgR.empty()))
-        {
-            cli::fatal(algo + " 需要 -L/--left 和 -R/--right 影像", cli::EXIT_ARG_ERR);
-        }
-        if (algo == "dedode" && (sp1.empty() || sp2.empty()) && (imgL.empty() || imgR.empty()))
-        {
-            cli::fatal("dedode 需要 --sp1/--sp2 特征文件，或 -L/-R 影像执行端到端提取+匹配", cli::EXIT_ARG_ERR);
-        }
-
-        fprintf(stdout, "%s: %s <-> %s\n",
-                matcher->algorithmName().c_str(),
-                sp1.empty() ? imgL.c_str() : sp1.c_str(),
-                sp2.empty() ? imgR.c_str() : sp2.c_str());
-
-        int n = matcher->match(sp1, sp2, imgL, imgR, outPath);
-        if (n < 0)
-        {
-            cli::fatal("匹配失败", cli::EXIT_ALGO_ERR);
-        }
-        if (n == 0)
-        {
-            cli::fatal("未找到匹配点", cli::EXIT_ALGO_ERR);
-        }
-        fprintf(stdout, "匹配完成: %d 点 -> %s\n", n, outPath.c_str());
+    const xjw::matchphotos::MatchPhotosResult result =
+        xjw::matchphotos::MatchPhotosTask(options).run(context);
+    if (!result.success)
+    {
+        std::fprintf(stderr, "匹配失败: %s\n", qUtf8Printable(result.errorMessage));
+        return cli::EXIT_ALGO_ERR;
     }
-    else if (isTraditionalMatcher(algo))
+
+    std::fprintf(stdout, "status=ok\n");
+    std::fprintf(stdout, "pair_matches=%d\n", static_cast<int>(result.matches.size()));
+    std::fprintf(stdout, "tracks=%d\n", result.trackCount);
+    for (const xjw::matchphotos::MatchPhotosImageMatchRecord &record : result.imageMatchFiles)
     {
-        if (sp1.empty() || sp2.empty())
-        {
-            cli::fatal("传统匹配需要 --sp1/--sp2");
-        }
-
-        QString n1, n2;
-        xjw::feature_extractors::FeatureData fd0;
-        xjw::feature_extractors::FeatureData fd1;
-        if (!FeatureFileIO::readData(QString::fromStdString(sp1), n1, fd0))
-        {
-            cli::fatal("加载失败: " + sp1, cli::EXIT_IO_ERR);
-        }
-        if (!FeatureFileIO::readData(QString::fromStdString(sp2), n2, fd1))
-        {
-            cli::fatal("加载失败: " + sp2, cli::EXIT_IO_ERR);
-        }
-
-        xjw::feature_match::tradition::TraditionalMatchConfig tc;
-        tc.algorithmName = normalizedTraditionalMatcher(algo);
-        tc.requireMutualConsistency = true;
-        tc.ratioTestThreshold = 0.85f;
-        tc.useCuda = cuda;
-        tc.cudaDevice = gpu;
-
-        fprintf(stdout, "%s: %s <-> %s (%zu/%zu kp)\n",
-                tc.algorithmName.c_str(), sp1.c_str(), sp2.c_str(),
-                fd0.keypoints.size(), fd1.keypoints.size());
-
-        auto mr = xjw::feature_match::tradition::TraditionalFeatureMatcher::match(
-            fd0.toCvDescriptors(tc.algorithmName),
-            fd1.toCvDescriptors(tc.algorithmName),
-            fd0.keypoints.size(), fd1.keypoints.size(), tc);
-
-        if (mr.numMatches == 0)
-        {
-            cli::fatal("未找到匹配点", cli::EXIT_ALGO_ERR);
-        }
-
-        QByteArray writeError;
-        const int count = xjw::feature_match::writeMatchFile(
-            QString::fromStdString(outPath), mr, fd0.keypoints, fd1.keypoints, &writeError);
-        if (count < 0)
-        {
-            cli::fatal("无法写入: " + outPath + " " + writeError.toStdString(), cli::EXIT_IO_ERR);
-        }
-        writeIndexedSidecar(outPath,
-                            sp1,
-                            sp2,
-                            n1,
-                            n2,
-                            fd0,
-                            fd1,
-                            mr,
-                            QString::fromStdString(fd0.sourceAlgorithm),
-                            QString::fromStdString(tc.algorithmName),
-                            matchThresh);
-        fprintf(stdout, "匹配完成: %d 点 -> %s\n", count, outPath.c_str());
-    }
-    else
-    {
-        cli::fatal("未知算法: " + algo
-            + ". 支持: superglue, lightglue, loftr, roma, dedode, bf, flann, "
-              "sift_bf_l2, sift_flann, orb_bf_hamming");
+        std::fprintf(stdout, "image_match_file=%s\n",
+                     qUtf8Printable(record.matchFilePath));
     }
     return cli::EXIT_OK;
 }

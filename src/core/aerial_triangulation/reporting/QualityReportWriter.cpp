@@ -1,3 +1,11 @@
+/**
+ * @file QualityReportWriter.cpp
+ * @brief 从最终稀疏重建计算点级、相机级、网络级质量指标。
+ *
+ * 点级记录服务于匹配/三角化审查；相机级记录服务于异常影像定位；网络级指标
+ * 服务于 MVS 入口门控和焦距候选排序。所有误差单位为像素，角度单位为度。
+ */
+
 #include "reporting/QualityReportWriter.h"
 
 #include "project/SfmQualityJsonSerializer.h"
@@ -23,6 +31,12 @@ namespace
 
 constexpr double kExportMaxReprojectionErrorPx = 4.0;
 
+/**
+ * @brief 计算一个三维点所有观测射线两两组合中的最大交会角。
+ *
+ * 最大角代表该轨迹最有利的基线组合；它用于网络诊断，不替代逐观测正深度和
+ * 重投影验证。
+ */
 double maximumTriangulationAngleDegrees(const SfmReconstruction &reconstruction,
                                         const ScenePoint3D &point)
 {
@@ -63,6 +77,11 @@ double maximumTriangulationAngleDegrees(const SfmReconstruction &reconstruction,
     return maximumAngle;
 }
 
+/**
+ * @brief 获取网格覆盖统计所需影像尺寸。
+ *
+ * 优先读取真实影像头；无头/测试输入回退到关键点包围范围，保证质量序列化仍可用。
+ */
 QSize inferImageSize(const PreparedAerialTriangulationInput &input,
                      const SfmReconstruction &reconstruction)
 {
@@ -100,6 +119,7 @@ SparseQualityReport QualityReportWriter::build(
     std::vector<SfmQualityPoint> qualityPoints;
     std::unordered_map<ImageId, std::pair<double, int>> cameraErrors;
 
+    // 第一阶段：用正式发布门槛筛选点，并记录每个观测的投影残差。
     for (const Point3DId pointId : reconstruction.allPoint3DIds())
     {
         if (!reconstruction.hasPoint3D(pointId))
@@ -176,6 +196,7 @@ SparseQualityReport QualityReportWriter::build(
         qualityPoints.push_back(std::move(qualityPoint));
     }
 
+    // 第二阶段：为全部输入影像输出记录，包括未注册影像，便于 GUI 直接定位缺口。
     for (int index = 0; index < input.images.size(); ++index)
     {
         const ImageId imageId = static_cast<ImageId>(index);
@@ -191,6 +212,7 @@ SparseQualityReport QualityReportWriter::build(
         });
     }
 
+    // 第三阶段：汇总注册覆盖、轨迹长度、交会角、误差和影像网格覆盖。
     const QSize imageSize = inferImageSize(input, reconstruction);
     SfmQualityMetricsOptions qualityOptions;
     qualityOptions.totalImageCount = input.images.size();
@@ -205,6 +227,7 @@ SparseQualityReport QualityReportWriter::build(
         computeSfmQualityMetrics(qualityPoints, qualityOptions));
     sparseQuality.insert(QStringLiteral("mean_reprojection_error_px"), result.meanReprojError);
 
+    // 第四阶段：保留 attempt 诊断，并追加最终模型重新计算的稳定质量字段。
     report.diagnostics = result.sfmDiagnostics;
     report.diagnostics.insert(QStringLiteral("sparse_quality"), sparseQuality);
     report.diagnostics.insert(QStringLiteral("ba_summary"), QJsonObject{

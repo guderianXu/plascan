@@ -67,7 +67,7 @@ QString variantComboLabel(const xjw::aerial_triangulation::MatchVariant &variant
 // 构造函数
 // imgA      — 左侧影像路径
 // imgB      — 右侧影像路径
-// matchFile — .match 格式匹配文件路径
+// matchFile — 当前像对任意一侧的 `.pimatch` 分片路径
 // parent    — 父窗口
 MatchViewerDialog::MatchViewerDialog(const QString &imgA, const QString &imgB,
                                      const QString &matchFile, QWidget *parent)
@@ -262,7 +262,8 @@ void MatchViewerDialog::setMatchVariants(const QVector<xjw::aerial_triangulation
 
     if (selectedVariantIndex >= 0 && selectedVariantIndex < _matchVariants.size())
     {
-        applyMatchVariant(_matchVariants.at(selectedVariantIndex), false);
+        // 一个分片可以保存多个配置变体；即使文件路径相同，也必须按变体键重载。
+        applyMatchVariant(_matchVariants.at(selectedVariantIndex), true);
     }
     else
     {
@@ -414,7 +415,12 @@ void MatchViewerDialog::applyMatchVariant(const xjw::aerial_triangulation::Match
 
     if (willReload)
     {
-        _viewer->loadMatchPair(_imageA, _imageB, _matchFile);
+        _viewer->loadMatchPair(_imageA,
+                               _imageB,
+                               _matchFile,
+                               variant.algorithmId,
+                               variant.algorithmVersion,
+                               variant.configFingerprint);
     }
 }
 

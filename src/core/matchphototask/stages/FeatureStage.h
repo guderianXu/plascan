@@ -11,7 +11,7 @@ namespace matchphotos
 {
 
 // 特征检测和描述子提取阶段边界。
-// MatchPhotosTask 从影像对规划扩展出去后，这里会调用 feature_extractors。
+// MatchPhotosTask 从影像对规划扩展出去后，这里调用统一 image_matching 算法。
 class FeatureStage
 {
 public:

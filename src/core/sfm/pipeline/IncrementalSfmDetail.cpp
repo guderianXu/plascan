@@ -1,3 +1,12 @@
+/**
+ * @file IncrementalSfmDetail.cpp
+ * @brief 增量 SfM 的无状态几何、候选评分和坐标系对齐辅助实现。
+ *
+ * 本文件不持有重建流程状态。所有旋转均采用 Camera 的 camera-to-world 行主序约定；
+ * 相似变换采用 `target = scale * R * source + translation`。这些函数被初始对试算、
+ * 已知位姿三角化和参考相机绝对定向共同使用。
+ */
+
 #include "IncrementalSfmDetail.h"
 
 #include "Intersection.h"
@@ -12,6 +21,12 @@
 namespace xjw::incremental_sfm_detail
 {
 
+/**
+ * @brief 判断是否对多个初始像对运行完整的小规模 SfM 试算。
+ *
+ * 大数据集逐候选试算成本过高，因此受 multiInitialPairMaxImages 控制；显式初始对
+ * 和关闭 autoSelectInitPair 时绝不触发。
+ */
 bool shouldEvaluateMultipleInitialPairModels(const IncrementalSfmOptions &options,
                                              int totalImages,
                                              std::size_t candidateCount)
@@ -23,6 +38,12 @@ bool shouldEvaluateMultipleInitialPairModels(const IncrementalSfmOptions &option
            totalImages <= std::max(2, options.multiInitialPairMaxImages);
 }
 
+/**
+ * @brief 为初始像对试算构造高分优先的标量。
+ *
+ * 十亿级注册影像权重保证“多注册一张”始终优于点数或 RMS 的局部改善；
+ * 该分数只比较同一输入数据集的候选，不具有跨项目物理意义。
+ */
 double scoreInitialPairTrial(const IncrementalSfmResult &result, int totalImages)
 {
     const int registered = std::max(0, result.numRegisteredImages);
@@ -36,6 +57,7 @@ double scoreInitialPairTrial(const IncrementalSfmResult &result, int totalImages
            reprojPenalty;
 }
 
+/// 网络尚小时允许双视点参与 PnP，稳定后要求配置的更长轨迹。
 int effectivePnpMinTrackLength(const IncrementalSfmOptions &options, std::size_t registeredImageCount)
 {
     if (registeredImageCount < 3)
@@ -45,6 +67,7 @@ int effectivePnpMinTrackLength(const IncrementalSfmOptions &options, std::size_t
     return std::max(2, options.pnpMinTrackLength);
 }
 
+/// 对 PnP 候选只做存在性和轨迹长度预筛，数值有效性在投影对应构建时检查。
 bool pointUsableForPnp(const SfmReconstruction &reconstruction,
                        Point3DId pointId,
                        int minTrackLength)
@@ -78,6 +101,7 @@ double percentile(std::vector<double> values, double ratio)
     return values[index];
 }
 
+/// 将行主序 camera-to-world 旋转转换为单位四元数 (w, x, y, z)。
 std::array<double, 4> rotationToQuaternion(const std::array<double, 9> &rotation)
 {
     std::array<double, 4> quaternion{}; // w, x, y, z
@@ -129,6 +153,7 @@ std::array<double, 4> rotationToQuaternion(const std::array<double, 9> &rotation
     return quaternion;
 }
 
+/// 将单位四元数恢复为行主序 3x3 旋转矩阵。
 std::array<double, 9> quaternionToRotation(const std::array<double, 4> &quaternion)
 {
     const double w = quaternion[0];
@@ -150,6 +175,7 @@ std::array<double, 9> interpolateCameraRotation(const std::array<double, 9> &rot
                                     quaternionA.end(),
                                     quaternionB.begin(),
                                     0.0);
+    // q 与 -q 表示同一旋转；翻转第二个四元数以选择四维球面的最短弧。
     if (dot < 0.0)
     {
         dot = -dot;
@@ -210,6 +236,8 @@ KnownPoseTriangulationPolicy resolveKnownPoseTriangulationPolicy(
     constexpr double relaxedMinTriAngle = 0.1;
     constexpr double absoluteMinTriAngle = 0.05;
 
+    // 先在不应用最小交会角的条件下统计通过正深度和重投影门控的候选角度。
+    // 直接统计现有三维点会产生选择偏差，因为它们已经被旧阈值过滤。
     std::vector<double> validAngles;
     validAngles.reserve(1024);
 
@@ -271,6 +299,7 @@ KnownPoseTriangulationPolicy resolveKnownPoseTriangulationPolicy(
                                                                     return angle >= options.triangulatorOptions.minTriAngle;
                                                                 }));
 
+    // 默认阈值已提供足量点，或样本本身太少无法可靠估计分布时，保持配置不变。
     if (policy.acceptedWithDefault >= minUsefulTriangulations ||
         policy.validCandidates < minUsefulTriangulations)
     {
@@ -285,6 +314,8 @@ KnownPoseTriangulationPolicy resolveKnownPoseTriangulationPolicy(
                                                                 return angle >= relaxedMinTriAngle;
                                                             }));
 
+    // 优先放宽到 0.1 度；仍不足时使用角度分布第 20 百分位的 80%，
+    // 并以 0.05 度作为绝对下限，防止近零基线被无限接纳。
     double adaptedMinTriAngle = relaxedMinTriAngle;
     if (acceptedWithRelaxed < minUsefulTriangulations)
     {
@@ -331,6 +362,7 @@ bool knownPoseMatchPassesGeometry(const SfmReconstruction &reconstruction,
     const Camera &otherCamera = reconstruction.camera(otherImageId);
     const FeatureKeypoint &keypoint = image.keypoints[match.idx1];
     const FeatureKeypoint &otherKeypoint = otherImage.keypoints[match.idx2];
+    // Intersection 同时检查两相机正深度，并返回双视交会角和 RMS。
     const auto triResult = Intersection::intersectPair(camera,
                                                        keypoint.x,
                                                        keypoint.y,
@@ -411,6 +443,7 @@ double centerExtent(const std::vector<std::array<double, 3>> &points)
 SimilarityTransform3d estimateSimilarityUmeyama(const std::vector<std::array<double, 3>> &source,
                                                 const std::vector<std::array<double, 3>> &target)
 {
+    // Umeyama 闭式解要求至少三个一一对应且非退化的相机中心。
     SimilarityTransform3d transform;
     if (source.size() != target.size() || source.size() < 3)
     {
@@ -465,6 +498,7 @@ SimilarityTransform3d estimateSimilarityUmeyama(const std::vector<std::array<dou
     }
     covariance /= static_cast<double>(source.size());
 
+    // SVD 求旋转；若行列式为负，翻转最小奇异值方向以排除镜像。
     cv::SVD svd(covariance, cv::SVD::FULL_UV);
     cv::Mat sign = cv::Mat::eye(3, 3, CV_64F);
     cv::Mat rotation = svd.u * svd.vt;
@@ -485,6 +519,7 @@ SimilarityTransform3d estimateSimilarityUmeyama(const std::vector<std::array<dou
         return transform;
     }
 
+    // 平移由两组质心关系得到，随后用全部输入对应计算 RMSE。
     transform.valid = true;
     transform.scale = scale;
     for (int r = 0; r < 3; ++r)
@@ -523,11 +558,14 @@ SimilarityTransform3d estimateRobustCameraCenterSimilarity(
         return best;
     }
 
+    // 阈值随两组中心的整体尺度变化。3% 对参考位姿中的少量离群相机有容忍度，
+    // 但不会把错误半圈或镜像解吸收到同一 Sim(3) 中。
     const double extent = std::max(centerExtent(source), centerExtent(target));
     const double inlierThreshold = std::max(1e-4, extent * 0.03);
     constexpr int maxSamples = 256;
     int sampleCount = 0;
 
+    // 确定性枚举最多 256 个三点样本，避免随机 RANSAC 造成 GUI/CLI 结果不一致。
     for (size_t i = 0; i + 2 < source.size() && sampleCount < maxSamples; ++i)
     {
         for (size_t j = i + 1; j + 1 < source.size() && sampleCount < maxSamples; ++j)
@@ -565,6 +603,7 @@ SimilarityTransform3d estimateRobustCameraCenterSimilarity(
                 }
 
                 const double rmse = std::sqrt(sum2 / static_cast<double>(inlierSource.size()));
+                // 首先最大化内点数，再最小化样本模型的内点 RMSE。
                 if (!best.valid ||
                     inlierSource.size() > static_cast<size_t>(best.inlierCount) ||
                     (inlierSource.size() == static_cast<size_t>(best.inlierCount) && rmse < best.rmse))
@@ -577,6 +616,7 @@ SimilarityTransform3d estimateRobustCameraCenterSimilarity(
         }
     }
 
+    // 所有最小样本退化时仍尝试全体闭式解，由调用方检查 valid/RMSE。
     if (!best.valid)
     {
         best = estimateSimilarityUmeyama(source, target);

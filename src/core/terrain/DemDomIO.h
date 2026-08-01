@@ -31,6 +31,11 @@ public:
                               DemGridData *demGrid,
                               QString *errorMsg = nullptr);
 
+    /** @brief 仅读取 DEM 尺寸、地理变换和投影，不加载栅格波段。 */
+    static bool readDemMetadata(const QString &inputPath,
+                                DemGridData *demGrid,
+                                QString *errorMsg = nullptr);
+
     /** @brief 写出 DEM 的误差、点数、置信度和覆盖率质量栅格。 */
     static bool writeDemQualityRasters(const DemGridData &demGrid,
                                        const QString &outputDir,
@@ -72,6 +77,16 @@ public:
      * @param outputPath 输出文件路径（.tif）
      */
     static bool writeDomGeoTiff(const cv::Mat &domImage,
+                                const DemGridData &demGrid,
+                                const QString &outputPath,
+                                QString *errorMsg = nullptr);
+
+    /**
+     * @brief 写出带有效覆盖 Alpha 波段的 DOM GeoTIFF。
+     * @param validMask 非零像素表示有效颜色，必须与 domImage 同尺寸
+     */
+    static bool writeDomGeoTiff(const cv::Mat &domImage,
+                                const cv::Mat &validMask,
                                 const DemGridData &demGrid,
                                 const QString &outputPath,
                                 QString *errorMsg = nullptr);

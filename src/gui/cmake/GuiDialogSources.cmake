@@ -7,6 +7,8 @@ set(GUI_APPLICATION_DIALOG_SOURCES
   dialogs/application/WorkflowReportDialog.cpp
   dialogs/application/WorkflowReportDialog.h
   dialogs/application/WorkflowReportDialog.ui
+  dialogs/application/WorkflowSettingsDialog.cpp
+  dialogs/application/WorkflowSettingsDialog.h
 )
 
 set(GUI_CAMERA_DIALOG_SOURCES
@@ -40,8 +42,10 @@ set(GUI_RECONSTRUCTION_DIALOG_SOURCES
   dialogs/reconstruction/GenerateModelDialog.cpp
   dialogs/reconstruction/GenerateModelDialog.h
   dialogs/reconstruction/MapProjectDialog.cpp
+  dialogs/reconstruction/MapProjectDialogEstimate.cpp
   dialogs/reconstruction/MapProjectDialog.h
-  dialogs/reconstruction/MapProjectDialog.ui
+  dialogs/reconstruction/MapProjectDialogLayout.cpp
+  dialogs/reconstruction/MapProjectDialogSettings.cpp
   dialogs/reconstruction/TextureMappingDialog.cpp
   dialogs/reconstruction/TextureMappingDialog.h
   dialogs/reconstruction/TextureMappingDialog.ui

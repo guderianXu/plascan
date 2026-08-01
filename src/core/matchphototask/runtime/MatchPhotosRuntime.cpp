@@ -1,29 +1,23 @@
-#include "FeatureData.h"
-#include "match.h"
 #include "MatchPhotosRuntime.h"
-#include "project/ProjectMetadata.h"
+
 #include "project/ProjectIO.h"
+#include "project/ProjectMetadata.h"
 
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
-#include <QJsonDocument>
 
 #include <algorithm>
 #include <cmath>
 
-namespace xjw
-{
-namespace matchphotos
+namespace xjw::matchphotos
 {
 namespace
 {
 
-constexpr int kTiePointFrontendVersion = 3;
-
-using xjw::common::project::imageTokensReferToSameImage;
+constexpr int kTiePointFrontendVersion = 4;
 
 QString cleanPath(const QString &path)
 {
@@ -40,7 +34,7 @@ QString resolveImageToken(const QString &token, const QStringList &images)
 {
     for (const QString &imagePath : images)
     {
-        if (imageTokensReferToSameImage(token, imagePath))
+        if (common::project::imageTokensReferToSameImage(token, imagePath))
         {
             return imagePath;
         }
@@ -51,26 +45,25 @@ QString resolveImageToken(const QString &token, const QStringList &images)
 QString modelPathCandidate(const QString &modelName)
 {
     QStringList candidates;
-    const QString envModelDir = qEnvironmentVariable("PLASCAN_MODEL_DIR").trimmed();
-    if (!envModelDir.isEmpty())
+    const QString environmentDirectory = qEnvironmentVariable("PLASCAN_MODEL_DIR").trimmed();
+    if (!environmentDirectory.isEmpty())
     {
-        candidates.append(QDir(envModelDir).filePath(modelName));
+        candidates.append(QDir(environmentDirectory).filePath(modelName));
     }
 
 #ifdef PLASCAN_SOURCE_DIR
-    candidates.append(
-        QDir(QStringLiteral(PLASCAN_SOURCE_DIR)).filePath(QStringLiteral("resources/models/%1").arg(modelName)));
+    candidates.append(QDir(QStringLiteral(PLASCAN_SOURCE_DIR))
+                          .filePath(QStringLiteral("resources/models/%1").arg(modelName)));
 #endif
 
-    const QString exeDir = QCoreApplication::applicationDirPath();
-    candidates.append(QDir(exeDir).filePath(QStringLiteral("../models/%1").arg(modelName)));
-    candidates.append(QDir(exeDir).filePath(QStringLiteral("../resources/models/%1").arg(modelName)));
-    candidates.append(QDir(exeDir).filePath(QStringLiteral("../../resources/models/%1").arg(modelName)));
+    const QString executableDirectory = QCoreApplication::applicationDirPath();
+    candidates.append(QDir(executableDirectory).filePath(QStringLiteral("../models/%1").arg(modelName)));
+    candidates.append(QDir(executableDirectory).filePath(QStringLiteral("../resources/models/%1").arg(modelName)));
+    candidates.append(QDir(executableDirectory).filePath(QStringLiteral("../../resources/models/%1").arg(modelName)));
     candidates.append(QStringLiteral("models/%1").arg(modelName));
-
     for (const QString &candidate : candidates)
     {
-        if (QFile::exists(candidate))
+        if (QFileInfo(candidate).isFile())
         {
             return cleanPath(QFileInfo(candidate).absoluteFilePath());
         }
@@ -78,52 +71,7 @@ QString modelPathCandidate(const QString &modelName)
     return QString();
 }
 
-QJsonArray makePointArray(float x, float y)
-{
-    QJsonArray point;
-    point.append(static_cast<double>(x));
-    point.append(static_cast<double>(y));
-    return point;
-}
-
-float scoreForMatch(const xjw::feature_match::MatchResult &matchResult, int index0, float distance)
-{
-    if (index0 >= 0 && index0 < static_cast<int>(matchResult.matchingScores0.size()))
-    {
-        return matchResult.matchingScores0[static_cast<std::size_t>(index0)];
-    }
-    if (std::isfinite(distance))
-    {
-        return 1.0f / (1.0f + std::max(0.0f, distance));
-    }
-    return 1.0f;
-}
-
-float denseSiftThresholdForTiePointFrontend(const MatchPhotosAlgorithmPlan &plan)
-{
-    if (plan.featureAlgorithm.trimmed().toLower() == QStringLiteral("sift") &&
-        plan.matcherAlgorithm.trimmed().toLower() == QStringLiteral("lightglue"))
-    {
-        // 与空三 SfM 前端保持一致：兼顾低纹理覆盖与 LightGlue 有效特征预算。
-        return 0.0005f;
-    }
-    return 0.0f;
-}
-
 } // namespace
-
-QString matchPhotosFeatureDirectory(const MatchPhotosContext &context)
-{
-    if (!context.featureDirectory.trimmed().isEmpty())
-    {
-        return cleanPath(context.featureDirectory);
-    }
-    const QString root = context.workingDirectory.trimmed().isEmpty()
-        ? xjw::common::project::ProjectIO::projectRootFromPlascan(
-              context.projectPath)
-        : context.workingDirectory;
-    return cleanPath(QDir(root).filePath(QStringLiteral("ip")));
-}
 
 QString matchPhotosMatchDirectory(const MatchPhotosContext &context)
 {
@@ -132,40 +80,21 @@ QString matchPhotosMatchDirectory(const MatchPhotosContext &context)
         return cleanPath(context.matchDirectory);
     }
     const QString root = context.workingDirectory.trimmed().isEmpty()
-        ? xjw::common::project::ProjectIO::projectRootFromPlascan(
-              context.projectPath)
+        ? common::project::ProjectIO::projectRootFromPlascan(context.projectPath)
         : context.workingDirectory;
-    return cleanPath(QDir(root).filePath(QStringLiteral("matches")));
-}
-
-QString matchPhotosFeaturePath(const MatchPhotosContext &context,
-                               const QString &imagePath,
-                               const MatchPhotosAlgorithmPlan &plan)
-{
-    const QString suffix = plan.featureSuffix.isEmpty() ? QStringLiteral(".sift") : plan.featureSuffix;
-    return QDir(matchPhotosFeatureDirectory(context)).filePath(imageBaseName(imagePath) + suffix);
-}
-
-QString matchPhotosMatchPath(const MatchPhotosContext &context,
-                             const QString &image0Path,
-                             const QString &image1Path,
-                             const MatchPhotosAlgorithmPlan &plan)
-{
-    const QString pairName = imageBaseName(image0Path) + QStringLiteral("__") + imageBaseName(image1Path);
-    const QString matcher = plan.matcherAlgorithm.isEmpty() ? QStringLiteral("lightglue") : plan.matcherAlgorithm;
-    return QDir(matchPhotosMatchDirectory(context)).filePath(pairName + QStringLiteral("_") + matcher + QStringLiteral(".match"));
+    return cleanPath(QDir(root).filePath(QStringLiteral("image_matches")));
 }
 
 bool shouldCancelMatchPhotos(const MatchPhotosContext &context)
 {
-    return context.cancelFlag && context.cancelFlag->load();
+    return context.cancelFlag && context.cancelFlag->load(std::memory_order_relaxed);
 }
 
 void advanceMatchPhotosProgress(const MatchPhotosContext &context)
 {
     if (context.progressCount)
     {
-        context.progressCount->fetch_add(1);
+        context.progressCount->fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -175,15 +104,13 @@ void reportMatchPhotosProgress(const MatchPhotosContext &context,
                                int current,
                                int maximum)
 {
-    if (!context.progressCallback)
+    if (context.progressCallback)
     {
-        return;
+        context.progressCallback(stageId,
+                                 message,
+                                 std::max(0, current),
+                                 std::max(1, maximum));
     }
-
-    context.progressCallback(stageId,
-                             message,
-                             std::max(0, current),
-                             std::max(1, maximum));
 }
 
 bool resolveMatchPhotosPair(const MatchPhotosContext &context,
@@ -193,6 +120,10 @@ bool resolveMatchPhotosPair(const MatchPhotosContext &context,
 {
     if (!resolved)
     {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("内部错误：影像对输出为空");
+        }
         return false;
     }
 
@@ -216,58 +147,71 @@ bool resolveMatchPhotosPair(const MatchPhotosContext &context,
     }
 
     if (image0.trimmed().isEmpty() || image1.trimmed().isEmpty() ||
-        imageTokensReferToSameImage(image0, image1))
+        common::project::imageTokensReferToSameImage(image0, image1))
     {
         if (errorMessage)
         {
-            *errorMessage = QStringLiteral("无法解析影像对: %1").arg(candidate.pairKey);
+            *errorMessage = QStringLiteral("无法解析影像对：%1").arg(candidate.pairKey);
         }
         return false;
     }
 
-    resolved->image0Path = cleanPath(image0);
-    resolved->image1Path = cleanPath(image1);
-    resolved->pairName = imageBaseName(image0) + QStringLiteral("__") + imageBaseName(image1);
+    resolved->image0Path = cleanPath(QFileInfo(image0).absoluteFilePath());
+    resolved->image1Path = cleanPath(QFileInfo(image1).absoluteFilePath());
+    resolved->pairName = imageBaseName(image0) + QStringLiteral(" / ") + imageBaseName(image1);
     resolved->pairKey = makePairKey(resolved->image0Path, resolved->image1Path);
     return true;
 }
 
-QString resolveLightGlueModelPath(const MatchPhotosAlgorithmPlan &plan,
-                                  const MatchPhotosOptions &options,
-                                  bool *useCuda,
-                                  QString *modelName)
+QString resolveLightGlueTensorRtEnginePath(const MatchPhotosOptions &options,
+                                           QString *engineName)
 {
-    const bool requestCuda = options.device == ComputeDevice::Cuda ||
-        (options.device == ComputeDevice::Auto && plan.preferCuda);
-    const QStringList suffixes = requestCuda
-        ? QStringList{QStringLiteral("cuda"), QStringLiteral("cpu")}
-        : QStringList{QStringLiteral("cpu")};
-
-    for (const QString &suffix : suffixes)
+    QString configured = options.lightGlueTensorRtEnginePath.trimmed();
+    if (configured.isEmpty())
     {
-        const QString name = QStringLiteral("lightglue_sift_%1.torchscript").arg(suffix);
-        const QString path = modelPathCandidate(name);
+        configured = qEnvironmentVariable("PLASCAN_LIGHTGLUE_TENSORRT_ENGINE").trimmed();
+    }
+    if (!configured.isEmpty())
+    {
+        const QFileInfo info(configured);
+        if (info.isFile())
+        {
+            if (engineName)
+            {
+                *engineName = info.fileName();
+            }
+            return cleanPath(info.absoluteFilePath());
+        }
+        if (engineName)
+        {
+            engineName->clear();
+        }
+        return QString();
+    }
+
+    const QStringList candidates = {
+        QStringLiteral("lightglue_sift_fp32.engine"),
+        QStringLiteral("lightglue_sift_bucket16384_fp32.engine"),
+        QStringLiteral("lightglue_sift_bucket12288_fp32.engine"),
+        QStringLiteral("lightglue_sift_bucket8192_fp32.engine"),
+        QStringLiteral("lightglue_sift_bucket4096_fp32.engine"),
+        QStringLiteral("lightglue_sift_bucket2048_fp32.engine"),
+        QStringLiteral("lightglue_sift_bucket1024_fp32.engine")};
+    for (const QString &candidate : candidates)
+    {
+        const QString path = modelPathCandidate(candidate);
         if (!path.isEmpty())
         {
-            if (useCuda)
+            if (engineName)
             {
-                *useCuda = suffix == QStringLiteral("cuda");
-            }
-            if (modelName)
-            {
-                *modelName = name;
+                *engineName = candidate;
             }
             return path;
         }
     }
-
-    if (useCuda)
+    if (engineName)
     {
-        *useCuda = false;
-    }
-    if (modelName)
-    {
-        modelName->clear();
+        engineName->clear();
     }
     return QString();
 }
@@ -277,18 +221,15 @@ int resolveFeatureKeypointLimit(const MatchPhotosOptions &options,
                                 int imageWidth,
                                 int imageHeight)
 {
-    if (plan.enableGuidedMatching &&
-        options.keypointLimitPerMegapixel > 0 &&
-        imageWidth > 0 &&
-        imageHeight > 0)
+    if (plan.enableGuidedMatching && options.keypointLimitPerMegapixel > 0 &&
+        imageWidth > 0 && imageHeight > 0)
     {
-        const double megapixels =
-            static_cast<double>(imageWidth) * static_cast<double>(imageHeight) / 1000000.0;
+        const double megapixels = static_cast<double>(imageWidth) *
+            static_cast<double>(imageHeight) / 1000000.0;
         return std::max(1,
                         static_cast<int>(std::round(
                             static_cast<double>(options.keypointLimitPerMegapixel) * megapixels)));
     }
-
     return std::max(0, plan.maxKeypoints);
 }
 
@@ -296,57 +237,44 @@ QJsonObject makeFeatureRecordSettings(const MatchPhotosAlgorithmPlan &plan,
                                       const MatchPhotosOptions &options)
 {
     QJsonObject settings;
-    settings[QStringLiteral("feature_algorithm")] = plan.featureAlgorithm;
-    settings[QStringLiteral("feature_suffix")] = plan.featureSuffix;
+    settings[QStringLiteral("algorithm_id")] = plan.algorithmId;
+    settings[QStringLiteral("algorithm_version")] = static_cast<int>(plan.algorithmVersion);
     settings[QStringLiteral("max_keypoints")] = plan.maxKeypoints;
-    settings[QStringLiteral("keypoint_limit")] = options.maxKeypoints;
     settings[QStringLiteral("keypoint_limit_per_mpx")] = options.keypointLimitPerMegapixel;
-    settings[QStringLiteral("guided_image_matching")] = plan.enableGuidedMatching;
     settings[QStringLiteral("mask_apply_mode")] = options.maskApplyMode.trimmed().toLower();
     settings[QStringLiteral("max_image_dim")] = options.maxImageDim;
-    settings[QStringLiteral("matchphotos_task")] = true;
+    settings[QStringLiteral("storage")] = QStringLiteral("memory_only");
     return settings;
 }
 
 QJsonObject makeMatchRecordSettings(const MatchPhotosAlgorithmPlan &plan,
                                     const MatchPhotosOptions &options,
                                     const ResolvedImagePair &pair,
-                                    const QString &feature0Path,
-                                    const QString &feature1Path,
-                                    const QString &matchPath,
-                                    const QString &sidecarPath,
                                     int matchCount,
                                     const QJsonObject &extraSettings)
 {
+    QJsonArray images;
+    images.append(pair.image0Path);
+    images.append(pair.image1Path);
+
     QJsonObject settings;
-    QJsonArray imageFiles;
-    imageFiles.append(pair.image0Path);
-    imageFiles.append(pair.image1Path);
-    settings[QStringLiteral("image_files")] = imageFiles;
+    settings[QStringLiteral("image_files")] = images;
     settings[QStringLiteral("image0")] = pair.image0Path;
     settings[QStringLiteral("image1")] = pair.image1Path;
-    settings[QStringLiteral("feature0_path")] = feature0Path;
-    settings[QStringLiteral("feature1_path")] = feature1Path;
-    settings[QStringLiteral("sp0_path")] = feature0Path;
-    settings[QStringLiteral("sp1_path")] = feature1Path;
     settings[QStringLiteral("pair_name")] = pair.pairName;
-    settings[QStringLiteral("sidecar_json")] = sidecarPath;
-    settings[QStringLiteral("feature_algorithm")] = plan.featureAlgorithm;
-    settings[QStringLiteral("match_algorithm")] = plan.matcherAlgorithm;
+    settings[QStringLiteral("pair_key")] = pair.pairKey;
+    settings[QStringLiteral("algorithm_id")] = plan.algorithmId;
+    settings[QStringLiteral("algorithm_version")] = static_cast<int>(plan.algorithmVersion);
     settings[QStringLiteral("match_threshold")] = static_cast<double>(options.matchThreshold);
     settings[QStringLiteral("keypoint_limit")] = options.maxKeypoints;
     settings[QStringLiteral("keypoint_limit_per_mpx")] = options.keypointLimitPerMegapixel;
     settings[QStringLiteral("tie_point_frontend_version")] = kTiePointFrontendVersion;
-    settings[QStringLiteral("tie_point_feature_max_keypoints")] = plan.maxKeypoints;
-    settings[QStringLiteral("tie_point_keypoint_limit_per_megapixel")] = options.keypointLimitPerMegapixel;
-    settings[QStringLiteral("dense_sift_threshold")] =
-        static_cast<double>(denseSiftThresholdForTiePointFrontend(plan));
-    settings[QStringLiteral("guided_image_matching")] = plan.enableGuidedMatching;
     settings[QStringLiteral("mask_apply_mode")] = options.maskApplyMode.trimmed().toLower();
     settings[QStringLiteral("tiepoint_limit")] = options.maxTiePointsPerImage;
-    settings[QStringLiteral("exclude_stationary_tie_points")] = options.excludeStationaryTiePoints;
+    settings[QStringLiteral("exclude_stationary_tie_points")] =
+        options.excludeStationaryTiePoints;
     settings[QStringLiteral("num_matches")] = matchCount;
-    settings[QStringLiteral("matchphotos_task")] = true;
+    settings[QStringLiteral("storage_format")] = QStringLiteral("pimatch");
     for (auto it = extraSettings.constBegin(); it != extraSettings.constEnd(); ++it)
     {
         settings[it.key()] = it.value();
@@ -354,85 +282,4 @@ QJsonObject makeMatchRecordSettings(const MatchPhotosAlgorithmPlan &plan,
     return settings;
 }
 
-bool writeMatchPhotosSidecar(const QString &sidecarPath,
-                             const ResolvedImagePair &pair,
-                             const QString &feature0Path,
-                             const QString &feature1Path,
-                             const QString &matchPath,
-                             const xjw::feature_extractors::FeatureData &feature0,
-                             const xjw::feature_extractors::FeatureData &feature1,
-                             const xjw::feature_match::MatchResult &matchResult,
-                             const MatchPhotosAlgorithmPlan &plan,
-                             const MatchPhotosOptions &options,
-                             const QJsonObject &extraSettings)
-{
-    QJsonArray points0;
-    QJsonArray points1;
-    QJsonArray indices0;
-    QJsonArray indices1;
-    QJsonArray scores;
-
-    for (const cv::DMatch &match : matchResult.cvMatches)
-    {
-        const int index0 = match.queryIdx;
-        const int index1 = match.trainIdx;
-        if (index0 < 0 || index1 < 0 ||
-            index0 >= static_cast<int>(feature0.keypoints.size()) ||
-            index1 >= static_cast<int>(feature1.keypoints.size()))
-        {
-            continue;
-        }
-
-        const cv::KeyPoint &keypoint0 = feature0.keypoints[static_cast<std::size_t>(index0)];
-        const cv::KeyPoint &keypoint1 = feature1.keypoints[static_cast<std::size_t>(index1)];
-        indices0.append(index0);
-        indices1.append(index1);
-        points0.append(makePointArray(keypoint0.pt.x, keypoint0.pt.y));
-        points1.append(makePointArray(keypoint1.pt.x, keypoint1.pt.y));
-        scores.append(static_cast<double>(
-            std::max(0.0f, std::min(1.0f, scoreForMatch(matchResult, index0, match.distance)))));
-    }
-
-    QJsonObject sidecar = makeMatchRecordSettings(
-        plan,
-        options,
-        pair,
-        feature0Path,
-        feature1Path,
-        matchPath,
-        sidecarPath,
-        indices0.size(),
-        extraSettings);
-    sidecar[QStringLiteral("match_file")] = matchPath;
-    sidecar[QStringLiteral("image0_name")] = QFileInfo(pair.image0Path).completeBaseName();
-    sidecar[QStringLiteral("image1_name")] = QFileInfo(pair.image1Path).completeBaseName();
-    sidecar[QStringLiteral("image0_path")] = pair.image0Path;
-    sidecar[QStringLiteral("image1_path")] = pair.image1Path;
-    sidecar[QStringLiteral("feature_format_version")] = 2;
-    sidecar[QStringLiteral("lightglue_configured_match_threshold")] =
-        static_cast<double>(options.matchThreshold);
-    sidecar[QStringLiteral("lightglue_effective_match_threshold")] =
-        static_cast<double>(options.matchThreshold);
-    if (extraSettings.contains(QStringLiteral("lightglue_effective_match_threshold")))
-    {
-        sidecar[QStringLiteral("lightglue_effective_match_threshold")] =
-            extraSettings.value(QStringLiteral("lightglue_effective_match_threshold"));
-    }
-    sidecar[QStringLiteral("matched_points0")] = points0;
-    sidecar[QStringLiteral("matched_points1")] = points1;
-    sidecar[QStringLiteral("matched_indices0")] = indices0;
-    sidecar[QStringLiteral("matched_indices1")] = indices1;
-    sidecar[QStringLiteral("matched_scores")] = scores;
-
-    QFile file(sidecarPath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
-    {
-        return false;
-    }
-    const QByteArray payload =
-        QJsonDocument(sidecar).toJson(QJsonDocument::Compact);
-    return file.write(payload) == payload.size() && file.flush();
-}
-
-} // namespace matchphotos
-} // namespace xjw
+} // namespace xjw::matchphotos

@@ -12,7 +12,8 @@
 - `workflow/AerialTriangulationPipeline.*`：只消费已经持久化的连接点图，执行 SfM、无先验焦距搜索和结果发布。
 - `preparation/TiePointPreparation.*`：对 `MatchPhotosTask` 的薄封装。特征提取、影像对生成、匹配、几何验证、
   guided image matching 和多视轨迹整理仍由 `src/core/matchphototask` 独占。
-- `preparation/MatchResultCatalog.*`：编目 `.match` 及 sidecar，选择与当前影像和前端签名兼容的结果。
+- `preparation/MatchResultCatalog.*`：读取逐影像 `.pimatch` 分片，在文件内部编目像对及算法变体；
+  不扫描 sidecar，也不从文件名推断影像对。
 - `preparation/ReconstructionPrerequisiteReport.*`：生成特征、匹配和图连通性的结构化前置检查结果。
 - `reconstruction/SfmAttemptRunner.*`：把连接点 JSON 转换为 `IncrementalSfm` 输入，配置 BA 并执行一次 SfM 尝试。
 - `reconstruction/CameraIntrinsicPriorSanitizer.*`：无外部相机文件且重置对齐时，修正项目中明显偏离主焦距群的旧 SfM 内参，
@@ -28,7 +29,7 @@
    `MatchPhotosOptions` 与 `PreparedAerialTriangulationInput`。
 2. 缺少 `assets/tie_points/latest_tie_points.json` 时自动调用创建连接点。“重置当前对齐”只让 SfM
    忽略旧相机外方位并重新解算；默认勾选“重用现有匹配”，直接复用兼容的特征、匹配与连接点缓存。
-   只有取消“重用现有匹配”时，才删除旧匹配文件和连接点文件并重新提取、匹配与整理轨迹。
+   只有取消“重用现有匹配”时，才删除旧 `.pimatch` 分片和连接点文件并重新提取、匹配与整理轨迹。
 3. `AerialTriangulationPipeline` 只读取本次解析出的连接点路径，不扫描另一套特征或匹配缓存。
 4. `SfmAttemptRunner` 装载连接点、多视观测和标记点先验，调用 `IncrementalSfm` 与统一 BA 后端。
 5. `AerialTriangulationResultWriter` 发布稀疏点云、待写回相机、质量指标和诊断。GUI 在任务完成且未取消后，
@@ -38,11 +39,11 @@
 
 - CUDA SIFT 使用单个 GPU 提取通道；CPU 以有界队列提前完成下一张影像的读取、灰度化和缩放，
   使影像解码与 GPU 提取重叠。队列深度默认自动解析，取消后不会继续准备新影像。
-- LightGlue CUDA 按可用显存、关键点预算和候选对数量自动解析并发数。每个 worker 独占
-  `LightGlueMatcher` 和 CUDA stream，当前最多 4 路；检测到 CUDA OOM 时释放并发 worker，
+- LightGlue TensorRT 按可用显存、固定 engine 桶容量和候选对数量自动解析并发数。每个 worker 独占
+  `TensorRtLightGlueMatcher` 执行上下文，当前最多 4 路；检测到 CUDA OOM 时释放并发 worker，
   对未完成影像对进行串行重试，不把整个 GUI 进程带崩。
-- 基础矩阵几何验证只读取关键点、尺度和方向，不再读取无用的描述子矩阵；多个影像对使用最多
-  8 路 CPU 并发执行确定性 USAC-MAGSAC。只有需要全量 SIFT 恢复的少数影像对才重新读取描述子。
+- 基础矩阵几何验证直接消费任务内存中的像点；多个影像对使用最多 8 路 CPU 并发执行确定性
+  USAC-MAGSAC。描述子不会持久化，也不会由空三模块重新读取。
 - PnP、增量三角化和连接点轨迹图继续使用 CPU。当前典型 16 影像规模下，这些阶段的总耗时低于
   CUDA 启动和数据搬运成本；只有基准证明端到端收益达到 20% 后才允许增加默认 GPU 路径。
 - 已有兼容缓存命中时直接复用。不会为了提高任务管理器中的 GPU 利用率而重新提取或重新匹配。
@@ -53,7 +54,7 @@
 - 指导图像匹配只启用几何引导的补充匹配，不改变 `keypointLimit` 的每幅影像上限语义；
   每百万像素关键点限制是 `MatchPhotosOptions` 的独立参数，空三界面当前不混用这两个预算。
 - `tiepointLimit` 是每幅影像参与正式多视轨迹的连接点上限；筛选优先保留长轨迹和高置信度轨迹。
-- `maskApplyMode=keypoints` 会禁用旧特征复用并重新提取；`tiepoints` 在匹配后过滤任一端位于排除区的观测。
+- `maskApplyMode=keypoints` 在 SIFT 提取后立即过滤蒙版外关键点；`tiepoints` 在匹配后过滤任一端位于排除区的观测。
 - 通用预选、参考预选和照片序列只改变 `MatchPhotosTask` 的候选对策略，不在空三模块内另建匹配链路。
 - 当前 guided image matching 是连接点阶段的显式选项，不包含 SfM 恢复位姿后的第二轮私有重匹配。
 
@@ -79,6 +80,6 @@
 - 本模块不直接包含任何特征提取器或匹配器实现。
 - 本模块不依赖 GUI 工程、项目窗口管理器或界面控件。
 - 项目路径与标记点 sidecar 由 `src/common/project` 提供；项目元数据写回由 GUI 负责。
-- 独立 CLI 的 `--output-dir` 只控制稀疏云和报告产物，`--assets-dir` 只控制特征、匹配与连接点缓存；
+- 独立 CLI 的 `--output-dir` 只控制稀疏云和报告产物，`--assets-dir` 只控制 `.pimatch` 与连接点缓存；
   指定外部缓存目录时不会把重建产物写回该缓存所属项目。
 - MVS、深度图、网格、DEM 和 DOM 不属于本模块。

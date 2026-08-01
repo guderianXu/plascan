@@ -60,6 +60,8 @@ TriangulationServiceResult TriangulationService::run(const QJsonObject &meta,
         return result;
     }
 
+    // 阶段 1：复用工程 BA 输入适配器读取相机和多视轨迹，确保独立三角化与
+    // 正式 BA 使用相同路径解析、索引和人工标记语义。
     BaInputBuildResult buildResult;
     const BaInputBuildStatus buildStatus = buildBaInputFromMeta(meta, images, 1, &buildResult);
     if (buildStatus == BaInputBuildStatus::NotEnoughCameras)
@@ -80,6 +82,8 @@ TriangulationServiceResult TriangulationService::run(const QJsonObject &meta,
     coreOptions.ignoreTwoViewTracks = options.ignoreTwoViewTracks;
     coreOptions.minTrackLength = options.minTrackLength;
 
+    // 阶段 2：核心过滤器只做几何计算，不执行 IO。这里把 UI/工程选项翻译为
+    // 无 Qt 参数，并保留每一种拒绝原因用于诊断。
     const xjw::InitialSparseTriangulationResult coreResult =
         xjw::InitialSparsePointFilter::filter(buildResult.cameras,
                                               buildResult.tracks,
@@ -102,6 +106,8 @@ TriangulationServiceResult TriangulationService::run(const QJsonObject &meta,
         return result;
     }
 
+    // 阶段 3：通过原始 track 的各观测采样颜色。采用多视平均可减轻单幅影像
+    // 阴影/曝光差异；影像读取失败时使用中性灰，不影响几何点导出。
     QJsonArray pointsArray;
     QVector<std::array<double, 3>> exportedPoints;
     exportedPoints.reserve(static_cast<int>(coreResult.points.size()));
@@ -201,6 +207,7 @@ TriangulationServiceResult TriangulationService::run(const QJsonObject &meta,
         pointsArray.append(pointObject);
     }
 
+    // 阶段 4：用 PlaPoint 写标准 PLY，并生成与正式稀疏结果相同的质量元数据。
     QDir().mkpath(options.outputDir);
     const QString sparseCloudPath = QDir(options.outputDir).filePath(QStringLiteral("sparse_cloud.ply"));
     try

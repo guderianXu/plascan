@@ -77,18 +77,28 @@ inline bool isFinite3(const std::array<double, 3> &a)
 
 // 将像素坐标 (u,v) 转换为世界坐标系下的射线方向向量（已归一化）
 // 说明：
-//  1) 先将像素坐标反内参得到相机坐标系下的归一化像平面点 (x,y,1)
-//     x = (u - cu) / (udir * fu), y = (v - cv) / (vdir * fv)
+//  1) 使用 Camera 的 Brown-Conrady 反投影恢复未畸变归一化像平面点 (x,y,1)
 //  2) 使用相机的 R（这里 R 约定为 cam->world）乘以相机坐标向量得到
 //     世界方向（未归一化），再做归一化返回。归一化是为了数值稳定和
 //     在后续最小距离解中简化符号（令 a = d1·d1 ≈ 1）
-inline std::array<double, 3> pixelToWorldRay(const Camera &cam, double u, double v) 
+inline std::array<double, 3> pixelToWorldRay(const Camera &cam, double u, double v)
 {
-    const double x = (u - cam.principalX()) / (cam.uAxisSign() * cam.focalX());
-    const double y = (v - cam.principalY()) / (cam.vAxisSign() * cam.focalY());
+    const double pixel[2] = {u, v};
+    double normalized[2] = {0.0, 0.0};
+    if (!cam.undistortPixel(pixel, normalized)
+        || !std::isfinite(normalized[0])
+        || !std::isfinite(normalized[1]))
+    {
+        return {NAN, NAN, NAN};
+    }
+
     const double zSign = cam.depthAxisFlipped() ? -1.0 : 1.0;
 
-    const std::array<double, 3> ray_cam{x * zSign, y * zSign, zSign};
+    const std::array<double, 3> ray_cam{
+        normalized[0] * zSign,
+        normalized[1] * zSign,
+        zSign,
+    };
     const auto R = cam.cameraToWorldRotation();
     // R 存储为行主序的 3x3 cam->world 矩阵，因此 world_dir = R * ray_cam
     std::array<double, 3> ray_world{

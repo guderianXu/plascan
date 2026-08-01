@@ -1,6 +1,7 @@
 #include "ModelWorkflowService.h"
 
 #include "DepthMapMeshBuilder.h"
+#include "DepthConstrainedSurfaceRefiner.h"
 #include "DepthTsdfSurfaceBuilder.h"
 #include "Mc33IsoSurfaceExtractor.h"
 #include "MeshColorizer.h"
@@ -11,11 +12,15 @@
 #include "SurfaceReconstructor.h"
 #include "SurfaceReconstructorPostprocess.h"
 #include "VisualHullDepthRefiner.h"
+#include "VisibilityOccupancyCarrierFairer.h"
+#include "VisibilityOccupancyCarrierFieldProjector.h"
+#include "VisibilityOccupancyCarrierSubdivider.h"
 #include "io/PathIO.h"
 
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QTextStream>
 
 #include <opencv2/imgcodecs.hpp>
@@ -40,6 +45,36 @@ struct RefinementQualityGuardResult
     double normalVariationBefore = 0.0;
     double normalVariationAfter = 0.0;
 };
+
+bool hasSameFaceIndexBuffer(const TriMesh &first, const TriMesh &second)
+{
+    if (first.faces.size() != second.faces.size())
+    {
+        return false;
+    }
+    for (std::size_t index = 0; index < first.faces.size(); ++index)
+    {
+        for (int corner = 0; corner < 3; ++corner)
+        {
+            if (first.faces[index].v[corner] !=
+                second.faces[index].v[corner])
+            {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+QJsonArray eulerCharacteristicsToJson(const std::vector<int> &values)
+{
+    QJsonArray json;
+    for (const int value : values)
+    {
+        json.append(value);
+    }
+    return json;
+}
 
 double meshSurfaceArea(const TriMesh &mesh)
 {
@@ -791,6 +826,37 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
                                .toDouble(options.repairedObservationMultiplier)),
         0.05f,
         1.0f);
+    options.enableInverseDepthSpreadWeighting = settings.value(
+        QStringLiteral("tsdfInverseDepthSpreadWeighting")).toBool(false);
+    options.inverseDepthSpreadWeightKnee = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfInverseDepthSpreadWeightKnee"))
+                               .toDouble(options.inverseDepthSpreadWeightKnee)),
+        0.0f,
+        0.099f);
+    options.inverseDepthSpreadWeightZero = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfInverseDepthSpreadWeightZero"))
+                               .toDouble(options.inverseDepthSpreadWeightZero)),
+        options.inverseDepthSpreadWeightKnee + 1.0e-6f,
+        0.10f);
+    options.minimumInverseDepthSpreadWeightMultiplier = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfMinimumInverseDepthSpreadWeightMultiplier"))
+                               .toDouble(
+                                   options.minimumInverseDepthSpreadWeightMultiplier)),
+        0.0f,
+        1.0f);
+    options.enableInverseDepthSpreadSupportWeightDecoupling = settings.value(
+        QStringLiteral("tsdfInverseDepthSpreadSupportWeightDecoupling"))
+        .toBool(false);
+    options.inverseDepthSpreadSupportWeightExponent = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfInverseDepthSpreadSupportWeightExponent"))
+                               .toDouble(
+                                   options.inverseDepthSpreadSupportWeightExponent)),
+        0.05f,
+        1.0f);
     options.enableEvidenceSupportWeightDecoupling = settings.value(
         QStringLiteral("tsdfEvidenceSupportWeightDecoupling")).toBool(false);
     options.evidenceSupportWeightExponent = std::clamp(
@@ -1285,6 +1351,221 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
                                              .visualHullCompletionMaximumUpdate)),
         0.01f,
         1.0f);
+    options.enableVisibilityOccupancyCompletion = settings.value(
+        QStringLiteral("tsdfVisibilityOccupancyCompletion")).toBool(false);
+    options.visibilityOccupancyResolution = qBound(
+        24,
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyResolution"))
+            .toInt(options.visibilityOccupancyResolution),
+        128);
+    options.visibilityOccupancyAlignCarrierGrid = settings.value(
+        QStringLiteral("tsdfVisibilityOccupancyAlignCarrierGrid"))
+        .toBool(options.visibilityOccupancyAlignCarrierGrid);
+    options.visibilityOccupancyNativeCarrierExtraction = settings.value(
+        QStringLiteral("tsdfVisibilityOccupancyNativeCarrierExtraction"))
+        .toBool(options.visibilityOccupancyNativeCarrierExtraction);
+    options.visibilityOccupancyCellBoundaryExtraction = settings.value(
+        QStringLiteral("tsdfVisibilityOccupancyCellBoundaryExtraction"))
+        .toBool(options.visibilityOccupancyCellBoundaryExtraction);
+    options.visibilityOccupancyMinimumVisibleViews = qBound(
+        1,
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyMinimumVisibleViews"))
+            .toInt(options.visibilityOccupancyMinimumVisibleViews),
+        16);
+    options.visibilityOccupancyMinimumSilhouetteViews = qBound(
+        1,
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyMinimumSilhouetteViews"))
+            .toInt(options.visibilityOccupancyMinimumSilhouetteViews),
+        16);
+    options.visibilityOccupancyMinimumDepthFullViewsForSilhouettePrior = qBound(
+        0,
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyMinimumDepthFullViewsForSilhouettePrior"))
+            .toInt(options
+                       .visibilityOccupancyMinimumDepthFullViewsForSilhouettePrior),
+        16);
+    options.visibilityOccupancyAdaptiveDepthSupportMinimumFullFraction =
+        std::clamp(
+            static_cast<float>(settings.value(QStringLiteral(
+                "tsdfVisibilityOccupancyAdaptiveDepthSupportMinimumFullFraction"))
+                                   .toDouble(options
+                                       .visibilityOccupancyAdaptiveDepthSupportMinimumFullFraction)),
+            0.0f,
+            0.25f);
+    options.visibilityOccupancyAllowedSilhouetteViolations = qBound(
+        0,
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyAllowedSilhouetteViolations"))
+            .toInt(options.visibilityOccupancyAllowedSilhouetteViolations),
+        8);
+    options.visibilityOccupancyFrontTolerancePixelFootprints = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyFrontTolerancePixelFootprints"))
+                               .toDouble(options
+                                             .visibilityOccupancyFrontTolerancePixelFootprints)),
+        0.5f,
+        12.0f);
+    options.visibilityOccupancyBehindSurfaceBandPixelFootprints = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyBehindSurfaceBandPixelFootprints"))
+                               .toDouble(options
+                                             .visibilityOccupancyBehindSurfaceBandPixelFootprints)),
+        1.0f,
+        16.0f);
+    options.visibilityOccupancyDepthEmptyCapacity = qBound(
+        0,
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyDepthEmptyCapacity"))
+            .toInt(options.visibilityOccupancyDepthEmptyCapacity),
+        1000);
+    options.visibilityOccupancyDepthFullCapacity = qBound(
+        0,
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyDepthFullCapacity"))
+            .toInt(options.visibilityOccupancyDepthFullCapacity),
+        1000);
+    options.visibilityOccupancySilhouetteEmptyCapacity = qBound(
+        0,
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancySilhouetteEmptyCapacity"))
+            .toInt(options.visibilityOccupancySilhouetteEmptyCapacity),
+        1000);
+    options.visibilityOccupancySilhouetteFullPriorCapacity = qBound(
+        0,
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancySilhouetteFullPriorCapacity"))
+            .toInt(options.visibilityOccupancySilhouetteFullPriorCapacity),
+        1000);
+    options.visibilityOccupancyPairwiseCapacity = qBound(
+        0,
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyPairwiseCapacity"))
+            .toInt(options.visibilityOccupancyPairwiseCapacity),
+        1000);
+    options.visibilityOccupancyClosingIterations = qBound(
+        0,
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyClosingIterations"))
+            .toInt(options.visibilityOccupancyClosingIterations),
+        8);
+    options.visibilityOccupancyMaximumHandleRepairPasses = qBound(
+        1,
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyMaximumHandleRepairPasses"))
+            .toInt(options.visibilityOccupancyMaximumHandleRepairPasses),
+        16);
+    options.visibilityOccupancyMaximumHandleRepairAcceptedCandidateCount =
+        qBound(
+            0,
+            settings.value(QStringLiteral(
+                "tsdfVisibilityOccupancyMaximumHandleRepairAcceptedCandidateCount"))
+                .toInt(options
+                    .visibilityOccupancyMaximumHandleRepairAcceptedCandidateCount),
+            512);
+    options.visibilityOccupancyMaximumHandleRepairCandidateSampleCount =
+        static_cast<std::size_t>(qBound(
+            1,
+            settings.value(QStringLiteral(
+                "tsdfVisibilityOccupancyMaximumHandleRepairCandidateSampleCount"))
+                .toInt(static_cast<int>(std::min<std::size_t>(
+                    options
+                        .visibilityOccupancyMaximumHandleRepairCandidateSampleCount,
+                    static_cast<std::size_t>(65536)))),
+            65536));
+    options.visibilityOccupancyMaximumHandleRepairSubsetSampleCount =
+        static_cast<std::size_t>(qBound(
+            1,
+            settings.value(QStringLiteral(
+                "tsdfVisibilityOccupancyMaximumHandleRepairSubsetSampleCount"))
+                .toInt(static_cast<int>(std::min<std::size_t>(
+                    options
+                        .visibilityOccupancyMaximumHandleRepairSubsetSampleCount,
+                    static_cast<std::size_t>(1024)))),
+            1024));
+    options.visibilityOccupancyMaximumHandleRepairSubsetSeedCount = qBound(
+        0,
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyMaximumHandleRepairSubsetSeedCount"))
+            .toInt(options
+                .visibilityOccupancyMaximumHandleRepairSubsetSeedCount),
+        4096);
+    options.visibilityOccupancyClosingMinimumDepthEmptyViewsToProtect = qBound(
+        1,
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyClosingMinimumDepthEmptyViewsToProtect"))
+            .toInt(options
+                .visibilityOccupancyClosingMinimumDepthEmptyViewsToProtect),
+        16);
+    options.visibilityOccupancyClosingMinimumSilhouetteOutsideViewsToProtect =
+        qBound(
+            1,
+            settings.value(QStringLiteral(
+                "tsdfVisibilityOccupancyClosingMinimumSilhouetteOutsideViewsToProtect"))
+                .toInt(options
+                    .visibilityOccupancyClosingMinimumSilhouetteOutsideViewsToProtect),
+            16);
+    options.visibilityOccupancyTopologyLockedResidualBlend = settings.value(
+        QStringLiteral(
+            "tsdfVisibilityOccupancyTopologyLockedResidualBlend"))
+        .toBool(options.visibilityOccupancyTopologyLockedResidualBlend);
+    options.visibilityOccupancyObservedBand = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyObservedBand"))
+                               .toDouble(
+                                   options.visibilityOccupancyObservedBand)),
+        0.01f,
+        1.0f);
+    options.visibilityOccupancyCarrierBand = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyCarrierBand"))
+                               .toDouble(
+                                   options.visibilityOccupancyCarrierBand)),
+        0.01f,
+        1.0f);
+    options.visibilityOccupancyMaximumResidual = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyMaximumResidual"))
+                               .toDouble(
+                                   options.visibilityOccupancyMaximumResidual)),
+        0.0f,
+        1.0f);
+    options.visibilityOccupancyDetailBlend = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyDetailBlend"))
+                               .toDouble(
+                                   options.visibilityOccupancyDetailBlend)),
+        0.0f,
+        1.0f);
+    options.visibilityOccupancyPreserveAllObservedSamples = settings.value(
+        QStringLiteral(
+            "tsdfVisibilityOccupancyPreserveAllObservedSamples"))
+        .toBool(options.visibilityOccupancyPreserveAllObservedSamples);
+    options.visibilityOccupancyPreserveObservedNearSurface = settings.value(
+        QStringLiteral(
+            "tsdfVisibilityOccupancyPreserveObservedNearSurface"))
+        .toBool(options.visibilityOccupancyPreserveObservedNearSurface);
+    options.visibilityOccupancyRequireSignAgreement = settings.value(
+        QStringLiteral(
+            "tsdfVisibilityOccupancyRequireSignAgreement"))
+        .toBool(options.visibilityOccupancyRequireSignAgreement);
+    options.visibilityOccupancyMaximumPreservedAbsoluteTsdf = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyMaximumPreservedAbsoluteTsdf"))
+                               .toDouble(options
+                                             .visibilityOccupancyMaximumPreservedAbsoluteTsdf)),
+        0.0f,
+        1.0f);
+    options.visibilityOccupancySignedDistanceNormalizationSamples =
+        std::clamp(
+            static_cast<float>(settings.value(QStringLiteral(
+                "tsdfVisibilityOccupancySignedDistanceNormalizationSamples"))
+                                   .toDouble(options
+                                                 .visibilityOccupancySignedDistanceNormalizationSamples)),
+            0.5f,
+            16.0f);
     const float automatic_minimum_surface_patch_observation_weight = 0.60f;
     options.minimumSurfacePatchObservationWeight = std::clamp(
         static_cast<float>(settings.value(
@@ -1382,6 +1663,33 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
         settings.value(QStringLiteral("tsdfMinimumSupportMaskFreeSpaceViews"))
             .toInt(options.minimumSupportMaskFreeSpaceViews),
         16);
+    options.enableNarrowBandActivation = settings.value(
+        QStringLiteral("tsdfNarrowBandActivation")).toBool(false);
+    options.narrowBandActivationBlockSizeSamples = qBound(
+        2,
+        settings.value(QStringLiteral(
+            "tsdfNarrowBandActivationBlockSizeSamples"))
+            .toInt(options.narrowBandActivationBlockSizeSamples),
+        32);
+    options.narrowBandActivationDepthStride = qBound(
+        1,
+        settings.value(QStringLiteral(
+            "tsdfNarrowBandActivationDepthStride"))
+            .toInt(options.narrowBandActivationDepthStride),
+        16);
+    options.narrowBandActivationRayStepVoxels = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfNarrowBandActivationRayStepVoxels"))
+                               .toDouble(
+                                   options.narrowBandActivationRayStepVoxels)),
+        0.25f,
+        4.0f);
+    options.narrowBandActivationHaloBlocks = qBound(
+        0,
+        settings.value(QStringLiteral(
+            "tsdfNarrowBandActivationHaloBlocks"))
+            .toInt(options.narrowBandActivationHaloBlocks),
+        3);
 
     const QString interpolation = settings.value(
         QStringLiteral("interpolation")).toString(QStringLiteral("enabled"));
@@ -1591,6 +1899,219 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
     return options;
 }
 
+float visibilityOccupancyMedianVoxelStep(
+    const xjw::mesh::DepthTsdfLayout &layout,
+    int occupancy_resolution)
+{
+    std::array<float, 3> occupancy_steps{};
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        occupancy_steps[axis] =
+            (layout.boundsMax[axis] - layout.boundsMin[axis]) /
+            static_cast<float>(std::max(2, occupancy_resolution - 1));
+    }
+    std::sort(occupancy_steps.begin(), occupancy_steps.end());
+    return std::max(occupancy_steps[1], 1.0e-6f);
+}
+
+xjw::mesh::DepthConstrainedSurfaceRefineOptions
+makeVisibilityOccupancyDepthRefineOptions(
+    const QJsonObject &settings,
+    const xjw::mesh::DepthTsdfLayout &layout,
+    int occupancy_resolution)
+{
+    xjw::mesh::DepthConstrainedSurfaceRefineOptions options;
+    const float occupancy_step = visibilityOccupancyMedianVoxelStep(
+        layout, occupancy_resolution);
+    options.passes = qBound(
+        1,
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyDepthRefinementPasses"))
+            .toInt(1),
+        4);
+    options.depthRefine.maximumEvidenceDistance =
+        occupancy_step * std::clamp(
+            static_cast<float>(settings.value(QStringLiteral(
+                "tsdfVisibilityOccupancyDepthMaximumEvidenceVoxels"))
+                                   .toDouble(3.0)),
+            0.5f,
+            12.0f);
+    options.depthRefine.maximumDisplacement =
+        occupancy_step * std::clamp(
+            static_cast<float>(settings.value(QStringLiteral(
+                "tsdfVisibilityOccupancyDepthMaximumDisplacementVoxels"))
+                                   .toDouble(0.20)),
+            0.02f,
+            1.0f);
+    options.depthRefine.minimumViewCount = qBound(
+        2,
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyDepthMinimumViews"))
+            .toInt(2),
+        8);
+    options.depthRefine.minimumNativeViewCount = qBound(
+        0,
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyDepthMinimumNativeViews"))
+            .toInt(1),
+        options.depthRefine.minimumViewCount);
+    options.depthRefine.minimumDepthConfidence = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyDepthMinimumConfidence"))
+                               .toDouble(0.20)),
+        0.0f,
+        1.0f);
+    options.depthRefine.repairedObservationWeight = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyDepthRepairedWeight"))
+                               .toDouble(0.25)),
+        0.0f,
+        1.0f);
+    options.depthRefine.enableInverseDepthSpreadWeighting =
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyDepthSpreadWeighting"))
+            .toBool(true);
+    options.depthRefine.inverseDepthSpreadWeightKnee = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyDepthSpreadWeightKnee"))
+                               .toDouble(0.005)),
+        0.0f,
+        0.099f);
+    options.depthRefine.inverseDepthSpreadWeightZero = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyDepthSpreadWeightZero"))
+                               .toDouble(0.015)),
+        options.depthRefine.inverseDepthSpreadWeightKnee + 1.0e-6f,
+        0.10f);
+    options.depthRefine.minimumInverseDepthSpreadWeight = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyDepthMinimumSpreadWeight"))
+                               .toDouble(0.05)),
+        0.0f,
+        1.0f);
+    options.depthRefine.maximumViewMedianAbsoluteDeviation =
+        occupancy_step * std::clamp(
+            static_cast<float>(settings.value(QStringLiteral(
+                "tsdfVisibilityOccupancyDepthMaximumMadVoxels"))
+                                   .toDouble(1.5)),
+            0.25f,
+            6.0f);
+    options.depthRefine.enableCrossViewBiasCompensation =
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyDepthBiasCompensation"))
+            .toBool(true);
+    options.depthRefine.minimumCrossViewBiasPairSamples = qBound(
+        8,
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyDepthBiasMinimumPairSamples"))
+            .toInt(64),
+        4096);
+    options.depthRefine.maximumCrossViewBias =
+        occupancy_step * std::clamp(
+            static_cast<float>(settings.value(QStringLiteral(
+                "tsdfVisibilityOccupancyDepthMaximumBiasVoxels"))
+                                   .toDouble(0.75)),
+            0.05f,
+            3.0f);
+    options.depthRefine.minimumAnchorWeight = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyDepthMinimumAnchorWeight"))
+                               .toDouble(0.05)),
+        0.0f,
+        1.0f);
+    options.depthRefine.regularizationMaximumNormalAngleDegrees =
+        std::clamp(
+            static_cast<float>(settings.value(QStringLiteral(
+                "tsdfVisibilityOccupancyDepthMaximumNormalAngleDegrees"))
+                                   .toDouble(55.0)),
+            5.0f,
+            89.0f);
+    options.depthRefine.enableGlobalRobustSolver =
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyDepthGlobalRobustSolver"))
+            .toBool(true);
+    options.depthRefine.globalSolverIrlsIterations = qBound(
+        1,
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyDepthGlobalSolverIrlsIterations"))
+            .toInt(4),
+        10);
+    options.depthRefine.globalSolverMaximumPcgIterations = qBound(
+        1,
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyDepthGlobalSolverMaximumPcgIterations"))
+            .toInt(120),
+        500);
+    options.depthRefine.globalSolverConvergenceTolerance =
+        std::clamp(
+            static_cast<float>(settings.value(QStringLiteral(
+                "tsdfVisibilityOccupancyDepthGlobalSolverTolerance"))
+                                   .toDouble(1.0e-5)),
+            1.0e-9f,
+            1.0e-2f);
+    options.depthRefine.globalSolverRobustScaleMultiplier =
+        std::clamp(
+            static_cast<float>(settings.value(QStringLiteral(
+                "tsdfVisibilityOccupancyDepthGlobalSolverRobustScale"))
+                                   .toDouble(0.5)),
+            0.01f,
+            4.0f);
+    options.depthRefine.globalSolverLaplacianWeight =
+        std::clamp(
+            static_cast<float>(settings.value(QStringLiteral(
+                "tsdfVisibilityOccupancyDepthGlobalSolverLaplacian"))
+                                   .toDouble(0.60)),
+            0.0f,
+            20.0f);
+    options.depthRefine.globalSolverHullPriorWeight =
+        std::clamp(
+            static_cast<float>(settings.value(QStringLiteral(
+                "tsdfVisibilityOccupancyDepthGlobalSolverCarrierPrior"))
+                                   .toDouble(0.05)),
+            1.0e-6f,
+            1.0f);
+    options.minimumAreaRatio = std::clamp(
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyDepthMinimumAreaRatio"))
+            .toDouble(0.97),
+        0.80,
+        1.0);
+    options.maximumAreaRatio = std::clamp(
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyDepthMaximumAreaRatio"))
+            .toDouble(1.03),
+        1.0,
+        1.20);
+    options.minimumVolumeRatio = std::clamp(
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyDepthMinimumVolumeRatio"))
+            .toDouble(0.98),
+        0.80,
+        1.0);
+    options.maximumVolumeRatio = std::clamp(
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyDepthMaximumVolumeRatio"))
+            .toDouble(1.02),
+        1.0,
+        1.20);
+    options.minimumFaceNormalDot = std::clamp(
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyDepthMinimumFaceNormalDot"))
+            .toDouble(0.25),
+        -1.0,
+        1.0);
+    options.minimumFaceAreaRatio = std::clamp(
+        settings.value(QStringLiteral(
+            "tsdfVisibilityOccupancyDepthMinimumFaceAreaRatio"))
+            .toDouble(0.10),
+        0.01,
+        1.0);
+    options.removeMedianNormalBias = settings.value(QStringLiteral(
+        "tsdfVisibilityOccupancyDepthRemoveMedianNormalBias"))
+        .toBool(true);
+    return options;
+}
+
 void mergePayload(const QJsonObject &source, QJsonObject *target)
 {
     if (!target)
@@ -1655,6 +2176,10 @@ void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
     if (!settings.contains(QStringLiteral("tsdfSupportMaskFreeSpaceCarving")))
     {
         options->enableSupportMaskFreeSpaceCarving = false;
+    }
+    if (!settings.contains(QStringLiteral("tsdfNarrowBandActivation")))
+    {
+        options->enableNarrowBandActivation = true;
     }
     if (!settings.contains(QStringLiteral("tsdfPixelEvidenceWeighting")))
     {
@@ -1726,6 +2251,36 @@ void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
     if (!high_detail_model)
     {
         return;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfInverseDepthSpreadWeighting")))
+    {
+        options->enableInverseDepthSpreadWeighting = true;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfInverseDepthSpreadWeightKnee")))
+    {
+        options->inverseDepthSpreadWeightKnee = 0.005f;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfInverseDepthSpreadWeightZero")))
+    {
+        options->inverseDepthSpreadWeightZero = 0.015f;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfMinimumInverseDepthSpreadWeightMultiplier")))
+    {
+        options->minimumInverseDepthSpreadWeightMultiplier = 0.05f;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfInverseDepthSpreadSupportWeightDecoupling")))
+    {
+        options->enableInverseDepthSpreadSupportWeightDecoupling = true;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfInverseDepthSpreadSupportWeightExponent")))
+    {
+        options->inverseDepthSpreadSupportWeightExponent = 0.25f;
     }
     if (settings.value(QStringLiteral(
             "tsdfOrbitalAdaptiveResolution")).toBool(true) &&
@@ -1868,7 +2423,7 @@ void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
     if (!settings.contains(QStringLiteral(
             "tsdfMaximumObservationInverseDepthSpread")))
     {
-        options->maximumObservationInverseDepthSpread = 0.008f;
+        options->maximumObservationInverseDepthSpread = 0.015f;
     }
     if (!settings.contains(QStringLiteral(
             "tsdfDepthValidBoundaryErosionPixels")))
@@ -2459,6 +3014,12 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
             "configured_surface_evidence_free_space_veto")] =
             options.enableSurfaceEvidenceFreeSpaceVeto;
         result.payload[QStringLiteral(
+            "configured_narrow_band_activation")] =
+            options.enableNarrowBandActivation;
+        result.payload[QStringLiteral(
+            "configured_visibility_occupancy_completion")] =
+            options.enableVisibilityOccupancyCompletion;
+        result.payload[QStringLiteral(
             "configured_depth_completeness_diagnostics")] =
             options.enableDepthCompletenessDiagnostics;
         result.payload[QStringLiteral(
@@ -2482,7 +3043,7 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
             "orbital_adaptive_resolution_applied")] =
             orbital_workspace &&
             options.resolution < requested_tsdf_resolution;
-        const DepthTsdfResult tsdf = DepthTsdfSurfaceBuilder::build(loaded.frames, options);
+        DepthTsdfResult tsdf = DepthTsdfSurfaceBuilder::build(loaded.frames, options);
         mergePayload(DepthTsdfSurfaceBuilder::statisticsToJson(tsdf), &result.payload);
         result.payload[QStringLiteral("tsdf_resolution_x")] = tsdf.layout.cells[0];
         result.payload[QStringLiteral("tsdf_resolution_y")] = tsdf.layout.cells[1];
@@ -2819,6 +3380,33 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                                                .toDouble(0.35)),
                         0.0f,
                         1.0f);
+                    refine_options.enableInverseDepthSpreadWeighting =
+                        request.settings.value(QStringLiteral(
+                            "tsdfOrbitalVisualHullDepthSpreadWeighting"))
+                            .toBool(true);
+                    refine_options.inverseDepthSpreadWeightKnee = std::clamp(
+                        static_cast<float>(request.settings.value(
+                            QStringLiteral(
+                                "tsdfOrbitalVisualHullDepthSpreadWeightKnee"))
+                                               .toDouble(0.005)),
+                        0.0f,
+                        0.099f);
+                    refine_options.inverseDepthSpreadWeightZero = std::clamp(
+                        static_cast<float>(request.settings.value(
+                            QStringLiteral(
+                                "tsdfOrbitalVisualHullDepthSpreadWeightZero"))
+                                               .toDouble(0.015)),
+                        refine_options.inverseDepthSpreadWeightKnee +
+                            1.0e-6f,
+                        0.10f);
+                    refine_options.minimumInverseDepthSpreadWeight =
+                        std::clamp(
+                            static_cast<float>(request.settings.value(
+                                QStringLiteral(
+                                    "tsdfOrbitalVisualHullDepthMinimumSpreadWeight"))
+                                                   .toDouble(0.05)),
+                            0.0f,
+                            1.0f);
                     refine_options
                         .maximumViewMedianAbsoluteDeviation =
                         maximum_voxel_size * std::clamp(
@@ -2828,6 +3416,25 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                                                    .toDouble(2.5)),
                             0.25f,
                             8.0f);
+                    refine_options.enableCrossViewBiasCompensation =
+                        request.settings.value(QStringLiteral(
+                            "tsdfOrbitalVisualHullDepthBiasCompensation"))
+                            .toBool(true);
+                    refine_options.minimumCrossViewBiasPairSamples =
+                        qBound(
+                            8,
+                            request.settings.value(QStringLiteral(
+                                "tsdfOrbitalVisualHullDepthBiasMinimumPairSamples"))
+                                .toInt(64),
+                            4096);
+                    refine_options.maximumCrossViewBias =
+                        maximum_voxel_size * std::clamp(
+                            static_cast<float>(request.settings.value(
+                                QStringLiteral(
+                                    "tsdfOrbitalVisualHullDepthMaximumBiasVoxels"))
+                                                   .toDouble(2.0)),
+                            0.25f,
+                            6.0f);
                     refine_options.minimumAnchorWeight = std::clamp(
                         static_cast<float>(request.settings.value(
                             QStringLiteral(
@@ -2864,6 +3471,56 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                                                    .toDouble(50.0)),
                             5.0f,
                             89.0f);
+                    refine_options.enableGlobalRobustSolver =
+                        request.settings.value(QStringLiteral(
+                            "tsdfOrbitalVisualHullDepthGlobalRobustSolver"))
+                            .toBool(false);
+                    refine_options.globalSolverIrlsIterations = qBound(
+                        1,
+                        request.settings.value(QStringLiteral(
+                            "tsdfOrbitalVisualHullDepthGlobalSolverIrlsIterations"))
+                            .toInt(4),
+                        10);
+                    refine_options.globalSolverMaximumPcgIterations =
+                        qBound(
+                            1,
+                            request.settings.value(QStringLiteral(
+                                "tsdfOrbitalVisualHullDepthGlobalSolverMaximumPcgIterations"))
+                                .toInt(120),
+                            500);
+                    refine_options
+                        .globalSolverConvergenceTolerance =
+                        std::clamp(
+                            static_cast<float>(request.settings.value(
+                                QStringLiteral(
+                                    "tsdfOrbitalVisualHullDepthGlobalSolverConvergenceTolerance"))
+                                                   .toDouble(1.0e-5)),
+                            1.0e-9f,
+                            1.0e-2f);
+                    refine_options.globalSolverRobustScaleMultiplier =
+                        std::clamp(
+                            static_cast<float>(request.settings.value(
+                                QStringLiteral(
+                                    "tsdfOrbitalVisualHullDepthGlobalSolverRobustScaleMultiplier"))
+                                                   .toDouble(0.5)),
+                            0.01f,
+                            4.0f);
+                    refine_options.globalSolverLaplacianWeight =
+                        std::clamp(
+                            static_cast<float>(request.settings.value(
+                                QStringLiteral(
+                                    "tsdfOrbitalVisualHullDepthGlobalSolverLaplacianWeight"))
+                                                   .toDouble(0.45)),
+                            0.0f,
+                            20.0f);
+                    refine_options.globalSolverHullPriorWeight =
+                        std::clamp(
+                            static_cast<float>(request.settings.value(
+                                QStringLiteral(
+                                    "tsdfOrbitalVisualHullDepthGlobalSolverHullPriorWeight"))
+                                                   .toDouble(0.02)),
+                            1.0e-6f,
+                            1.0f);
                     if (request.progress)
                     {
                         request.progress(
@@ -2892,13 +3549,29 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                             VisualHullDepthRefiner::refine(
                                 &orbital_completion.mesh,
                                 loaded.frames,
-                                refine_options);
+                                refine_options,
+                                request.isCancelled);
                         refine.projectedObservationCount +=
                             pass_refine.projectedObservationCount;
                         refine.acceptedObservationCount +=
                             pass_refine.acceptedObservationCount;
+                        refine.spreadDownweightedObservationCount +=
+                            pass_refine.spreadDownweightedObservationCount;
+                        refine.spreadVeryWeakObservationCount +=
+                            pass_refine.spreadVeryWeakObservationCount;
                         refine.anchoredVertexCount +=
                             pass_refine.anchoredVertexCount;
+                        refine.blendedConsensusVertexCount +=
+                            pass_refine.blendedConsensusVertexCount;
+                        refine.biasCalibratedFrameCount = std::max(
+                            refine.biasCalibratedFrameCount,
+                            pass_refine.biasCalibratedFrameCount);
+                        refine.biasCalibrationPairCount = std::max(
+                            refine.biasCalibrationPairCount,
+                            pass_refine.biasCalibrationPairCount);
+                        refine.maximumAbsoluteFrameBias = std::max(
+                            refine.maximumAbsoluteFrameBias,
+                            pass_refine.maximumAbsoluteFrameBias);
                         refine.displacedVertexCount +=
                             pass_refine.displacedVertexCount;
                         refine.medianSupportingViewCount =
@@ -2912,6 +3585,55 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                             pass_refine.medianAppliedDisplacement;
                         refine.p90AppliedDisplacement =
                             pass_refine.p90AppliedDisplacement;
+                        const bool first_global_solver_pass =
+                            refine.globalSolverAttemptCount == 0 &&
+                            pass_refine.globalSolverAttemptCount > 0;
+                        refine.globalSolverAttemptCount +=
+                            pass_refine.globalSolverAttemptCount;
+                        refine.globalSolverSolvedPassCount +=
+                            pass_refine.globalSolverSolvedPassCount;
+                        refine.globalSolverAppliedPassCount +=
+                            pass_refine.globalSolverAppliedPassCount;
+                        refine.globalSolverConvergedPassCount +=
+                            pass_refine.globalSolverConvergedPassCount;
+                        refine.globalSolverFallbackPassCount +=
+                            pass_refine.globalSolverFallbackPassCount;
+                        refine.globalSolverCancelled =
+                            refine.globalSolverCancelled ||
+                            pass_refine.globalSolverCancelled;
+                        refine.globalSolverIrlsIterationCount +=
+                            pass_refine.globalSolverIrlsIterationCount;
+                        refine.globalSolverPcgIterationCount +=
+                            pass_refine.globalSolverPcgIterationCount;
+                        refine.globalSolverObservationCount +=
+                            pass_refine.globalSolverObservationCount;
+                        refine.globalSolverRegularizationEdgeCount =
+                            pass_refine
+                                .globalSolverRegularizationEdgeCount;
+                        refine.globalSolverAnchoredVertexCount =
+                            pass_refine.globalSolverAnchoredVertexCount;
+                        refine.globalSolverPriorOnlyVertexCount =
+                            pass_refine.globalSolverPriorOnlyVertexCount;
+                        refine.globalSolverEffectiveRobustScale =
+                            pass_refine
+                                .globalSolverEffectiveRobustScale;
+                        if (first_global_solver_pass)
+                        {
+                            refine.globalSolverInitialEnergy =
+                                pass_refine.globalSolverInitialEnergy;
+                        }
+                        if (pass_refine.globalSolverAttemptCount > 0)
+                        {
+                            refine.globalSolverFinalEnergy =
+                                pass_refine.globalSolverFinalEnergy;
+                            refine.globalSolverFinalRelativeResidual =
+                                pass_refine
+                                    .globalSolverFinalRelativeResidual;
+                        }
+                        if (pass_refine.globalSolverCancelled)
+                        {
+                            break;
+                        }
                         if (!pass_refine.applied)
                         {
                             break;
@@ -2982,8 +3704,33 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                         static_cast<double>(
                             refine.acceptedObservationCount);
                     result.payload[QStringLiteral(
+                        "orbital_visual_hull_depth_refinement_spread_downweighted_observations")] =
+                        static_cast<double>(
+                            refine.spreadDownweightedObservationCount);
+                    result.payload[QStringLiteral(
+                        "orbital_visual_hull_depth_refinement_spread_very_weak_observations")] =
+                        static_cast<double>(
+                            refine.spreadVeryWeakObservationCount);
+                    result.payload[QStringLiteral(
                         "orbital_visual_hull_depth_refinement_anchored_vertices")] =
                         static_cast<double>(refine.anchoredVertexCount);
+                    result.payload[QStringLiteral(
+                        "orbital_visual_hull_depth_refinement_blended_consensus_vertices")] =
+                        static_cast<double>(
+                            refine.blendedConsensusVertexCount);
+                    result.payload[QStringLiteral(
+                        "configured_orbital_visual_hull_depth_bias_compensation")] =
+                        refine_options.enableCrossViewBiasCompensation;
+                    result.payload[QStringLiteral(
+                        "orbital_visual_hull_depth_bias_calibrated_frames")] =
+                        refine.biasCalibratedFrameCount;
+                    result.payload[QStringLiteral(
+                        "orbital_visual_hull_depth_bias_calibration_pairs")] =
+                        static_cast<double>(
+                            refine.biasCalibrationPairCount);
+                    result.payload[QStringLiteral(
+                        "orbital_visual_hull_depth_bias_maximum_absolute_offset")] =
+                        refine.maximumAbsoluteFrameBias;
                     result.payload[QStringLiteral(
                         "orbital_visual_hull_depth_refinement_displaced_vertices")] =
                         static_cast<double>(refine.displacedVertexCount);
@@ -3002,6 +3749,79 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                     result.payload[QStringLiteral(
                         "orbital_visual_hull_depth_refinement_p90_displacement")] =
                         refine.p90AppliedDisplacement;
+                    result.payload[QStringLiteral(
+                        "configured_orbital_visual_hull_depth_global_robust_solver")] =
+                        refine_options.enableGlobalRobustSolver;
+                    result.payload[QStringLiteral(
+                        "configured_orbital_visual_hull_depth_global_solver_irls_iterations")] =
+                        refine_options.globalSolverIrlsIterations;
+                    result.payload[QStringLiteral(
+                        "configured_orbital_visual_hull_depth_global_solver_maximum_pcg_iterations")] =
+                        refine_options.globalSolverMaximumPcgIterations;
+                    result.payload[QStringLiteral(
+                        "configured_orbital_visual_hull_depth_global_solver_convergence_tolerance")] =
+                        refine_options.globalSolverConvergenceTolerance;
+                    result.payload[QStringLiteral(
+                        "configured_orbital_visual_hull_depth_global_solver_robust_scale_multiplier")] =
+                        refine_options.globalSolverRobustScaleMultiplier;
+                    result.payload[QStringLiteral(
+                        "configured_orbital_visual_hull_depth_global_solver_laplacian_weight")] =
+                        refine_options.globalSolverLaplacianWeight;
+                    result.payload[QStringLiteral(
+                        "configured_orbital_visual_hull_depth_global_solver_hull_prior_weight")] =
+                        refine_options.globalSolverHullPriorWeight;
+                    result.payload[QStringLiteral(
+                        "orbital_visual_hull_depth_global_solver_effective_robust_scale")] =
+                        refine.globalSolverEffectiveRobustScale;
+                    result.payload[QStringLiteral(
+                        "orbital_visual_hull_depth_global_solver_attempts")] =
+                        refine.globalSolverAttemptCount;
+                    result.payload[QStringLiteral(
+                        "orbital_visual_hull_depth_global_solver_solved_passes")] =
+                        refine.globalSolverSolvedPassCount;
+                    result.payload[QStringLiteral(
+                        "orbital_visual_hull_depth_global_solver_applied_passes")] =
+                        refine.globalSolverAppliedPassCount;
+                    result.payload[QStringLiteral(
+                        "orbital_visual_hull_depth_global_solver_converged_passes")] =
+                        refine.globalSolverConvergedPassCount;
+                    result.payload[QStringLiteral(
+                        "orbital_visual_hull_depth_global_solver_fallback_passes")] =
+                        refine.globalSolverFallbackPassCount;
+                    result.payload[QStringLiteral(
+                        "orbital_visual_hull_depth_global_solver_cancelled")] =
+                        refine.globalSolverCancelled;
+                    result.payload[QStringLiteral(
+                        "orbital_visual_hull_depth_global_solver_irls_iterations")] =
+                        refine.globalSolverIrlsIterationCount;
+                    result.payload[QStringLiteral(
+                        "orbital_visual_hull_depth_global_solver_pcg_iterations")] =
+                        refine.globalSolverPcgIterationCount;
+                    result.payload[QStringLiteral(
+                        "orbital_visual_hull_depth_global_solver_observations")] =
+                        static_cast<double>(
+                            refine.globalSolverObservationCount);
+                    result.payload[QStringLiteral(
+                        "orbital_visual_hull_depth_global_solver_regularization_edges")] =
+                        static_cast<double>(
+                            refine.globalSolverRegularizationEdgeCount);
+                    result.payload[QStringLiteral(
+                        "orbital_visual_hull_depth_global_solver_anchored_vertices")] =
+                        static_cast<double>(
+                            refine.globalSolverAnchoredVertexCount);
+                    result.payload[QStringLiteral(
+                        "orbital_visual_hull_depth_global_solver_prior_only_vertices")] =
+                        static_cast<double>(
+                            refine.globalSolverPriorOnlyVertexCount);
+                    result.payload[QStringLiteral(
+                        "orbital_visual_hull_depth_global_solver_initial_energy")] =
+                        refine.globalSolverInitialEnergy;
+                    result.payload[QStringLiteral(
+                        "orbital_visual_hull_depth_global_solver_final_energy")] =
+                        refine.globalSolverFinalEnergy;
+                    result.payload[QStringLiteral(
+                        "orbital_visual_hull_depth_global_solver_final_relative_residual")] =
+                        refine.globalSolverFinalRelativeResidual;
                 }
                 else
                 {
@@ -3319,6 +4139,829 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
         {
             result.payload[QStringLiteral(
                 "orbital_visual_hull_completion_applied")] = false;
+        }
+
+        const bool direct_visibility_occupancy_output =
+            output_mesh == &tsdf.mesh &&
+            tsdf.statistics
+                .effectiveVisibilityOccupancyCellBoundaryExtraction;
+        const int carrier_subdivision_passes =
+            direct_visibility_occupancy_output
+            ? qBound(
+                  0,
+                  request.settings.value(QStringLiteral(
+                      "tsdfVisibilityOccupancyCarrierSubdivisionPasses"))
+                      .toInt(0),
+                  1)
+            : 0;
+        result.payload[QStringLiteral(
+            "configured_visibility_occupancy_carrier_subdivision_passes")] =
+            carrier_subdivision_passes;
+        if (carrier_subdivision_passes > 0)
+        {
+            if (request.progress)
+            {
+                request.progress(
+                    QStringLiteral("正在细分闭合拓扑载体..."),
+                    96);
+            }
+            const MeshTopologySignature topology_before_subdivision =
+                evaluateMeshTopologySignature(tsdf.mesh);
+            VisibilityOccupancyCarrierSubdivisionResult subdivision =
+                VisibilityOccupancyCarrierSubdivider::subdivide(
+                    tsdf.mesh,
+                    {request.isCancelled});
+            if (!subdivision.ok)
+            {
+                result.errorMessage = subdivision.cancelled
+                    ? QStringLiteral("模型载体细分已取消。")
+                    : QStringLiteral("模型载体细分失败：%1")
+                          .arg(QString::fromStdString(
+                              subdivision.errorMessage));
+                return result;
+            }
+            const MeshTopologySignature topology_after_subdivision =
+                evaluateMeshTopologySignature(subdivision.mesh);
+            if (!topology_before_subdivision.closedTwoManifold ||
+                topology_after_subdivision != topology_before_subdivision)
+            {
+                result.errorMessage = QStringLiteral(
+                    "模型载体细分未保持闭合二流形拓扑，已停止写入模型。");
+                return result;
+            }
+            tsdf.mesh = std::move(subdivision.mesh);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_carrier_subdivision_applied")] = true;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_carrier_subdivision_input_vertices")] =
+                static_cast<double>(
+                    subdivision.statistics.inputVertexCount);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_carrier_subdivision_input_faces")] =
+                static_cast<double>(subdivision.statistics.inputFaceCount);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_carrier_subdivision_midpoint_vertices")] =
+                static_cast<double>(
+                    subdivision.statistics.createdMidpointVertexCount);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_carrier_subdivision_output_vertices")] =
+                static_cast<double>(
+                    subdivision.statistics.outputVertexCount);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_carrier_subdivision_output_faces")] =
+                static_cast<double>(subdivision.statistics.outputFaceCount);
+        }
+        else
+        {
+            result.payload[QStringLiteral(
+                "visibility_occupancy_carrier_subdivision_applied")] = false;
+        }
+
+        const int carrier_fairing_passes =
+            direct_visibility_occupancy_output
+            ? qBound(
+                  0,
+                  request.settings.value(QStringLiteral(
+                      "tsdfVisibilityOccupancyCarrierFairingPasses"))
+                      .toInt(0),
+                  12)
+            : 0;
+        result.payload[QStringLiteral(
+            "configured_visibility_occupancy_carrier_fairing_passes")] =
+            carrier_fairing_passes;
+        if (carrier_fairing_passes > 0)
+        {
+            if (request.progress)
+            {
+                request.progress(
+                    QStringLiteral("正在保拓扑平滑闭合载体..."),
+                    96);
+            }
+            const float occupancy_step =
+                visibilityOccupancyMedianVoxelStep(
+                    tsdf.layout,
+                    options.visibilityOccupancyResolution);
+            VisibilityOccupancyCarrierFairingOptions fairing_options;
+            fairing_options.iterations = carrier_fairing_passes;
+            fairing_options.lambda = std::clamp(
+                request.settings.value(QStringLiteral(
+                    "tsdfVisibilityOccupancyCarrierFairingLambda"))
+                    .toDouble(0.20),
+                0.01,
+                0.60);
+            fairing_options.mu = std::clamp(
+                request.settings.value(QStringLiteral(
+                    "tsdfVisibilityOccupancyCarrierFairingMu"))
+                    .toDouble(-0.21),
+                -0.80,
+                -0.01);
+            fairing_options.absoluteMaximumDisplacement =
+                static_cast<double>(occupancy_step) * std::clamp(
+                    request.settings.value(QStringLiteral(
+                        "tsdfVisibilityOccupancyCarrierFairingMaximumDisplacementVoxels"))
+                        .toDouble(0.35),
+                    0.02,
+                    1.0);
+            fairing_options.minimumNormalDot = std::clamp(
+                request.settings.value(QStringLiteral(
+                    "tsdfVisibilityOccupancyCarrierFairingMinimumNormalDot"))
+                    .toDouble(0.50),
+                -1.0,
+                1.0);
+            fairing_options.minimumFaceAreaRatio = std::clamp(
+                request.settings.value(QStringLiteral(
+                    "tsdfVisibilityOccupancyCarrierFairingMinimumFaceAreaRatio"))
+                    .toDouble(0.25),
+                0.01,
+                1.0);
+            fairing_options.minimumSurfaceAreaRatio = std::clamp(
+                request.settings.value(QStringLiteral(
+                    "tsdfVisibilityOccupancyCarrierFairingMinimumAreaRatio"))
+                    .toDouble(0.90),
+                0.50,
+                1.0);
+            fairing_options.maximumSurfaceAreaRatio = std::clamp(
+                request.settings.value(QStringLiteral(
+                    "tsdfVisibilityOccupancyCarrierFairingMaximumAreaRatio"))
+                    .toDouble(1.05),
+                1.0,
+                1.50);
+            fairing_options.minimumAbsoluteVolumeRatio = std::clamp(
+                request.settings.value(QStringLiteral(
+                    "tsdfVisibilityOccupancyCarrierFairingMinimumVolumeRatio"))
+                    .toDouble(0.90),
+                0.50,
+                1.0);
+            fairing_options.maximumAbsoluteVolumeRatio = std::clamp(
+                request.settings.value(QStringLiteral(
+                    "tsdfVisibilityOccupancyCarrierFairingMaximumVolumeRatio"))
+                    .toDouble(1.05),
+                1.0,
+                1.50);
+            fairing_options.isCancelled = request.isCancelled;
+
+            const TriMesh fairing_baseline = tsdf.mesh;
+            const MeshTopologySignature topology_before_fairing =
+                evaluateMeshTopologySignature(fairing_baseline);
+            VisibilityOccupancyCarrierFairingResult fairing =
+                VisibilityOccupancyCarrierFairer::fair(
+                    fairing_baseline,
+                    fairing_options);
+            if (fairing.cancelled)
+            {
+                result.errorMessage = QStringLiteral(
+                    "模型载体平滑已取消。");
+                return result;
+            }
+            bool fairing_topology_preserved = false;
+            if (fairing.ok)
+            {
+                const MeshTopologySignature topology_after_fairing =
+                    evaluateMeshTopologySignature(fairing.mesh);
+                fairing_topology_preserved =
+                    topology_before_fairing.closedTwoManifold &&
+                    topology_after_fairing == topology_before_fairing &&
+                    hasSameFaceIndexBuffer(
+                        fairing_baseline,
+                        fairing.mesh);
+                if (fairing_topology_preserved)
+                {
+                    tsdf.mesh = std::move(fairing.mesh);
+                    detail::recomputeNormals(&tsdf.mesh);
+                }
+            }
+            const bool fairing_applied =
+                fairing.ok && fairing_topology_preserved;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_carrier_fairing_applied")] =
+                fairing_applied;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_carrier_fairing_reverted")] =
+                !fairing_applied;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_carrier_fairing_topology_preserved")] =
+                fairing_topology_preserved;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_carrier_fairing_error")] =
+                QString::fromStdString(fairing.errorMessage);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_carrier_fairing_completed_passes")] =
+                fairing.statistics.completedIterationCount;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_carrier_fairing_accepted_half_steps")] =
+                fairing.statistics.acceptedHalfStepCount;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_carrier_fairing_frozen_vertices")] =
+                static_cast<double>(
+                    fairing.statistics.locallyFrozenVertexCount);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_carrier_fairing_rejected_faces")] =
+                static_cast<double>(
+                    fairing.statistics.locallyRejectedFaceCount);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_carrier_fairing_clamped_vertices")] =
+                static_cast<double>(
+                    fairing.statistics.displacementClampedVertexCount);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_carrier_fairing_mean_edge_length")] =
+                fairing.statistics.meanEdgeLength;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_carrier_fairing_displacement_limit")] =
+                fairing.statistics.resolvedMaximumDisplacement;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_carrier_fairing_maximum_displacement")] =
+                fairing.statistics.maximumAppliedDisplacement;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_carrier_fairing_area_ratio")] =
+                fairing.statistics.finalSurfaceAreaRatio;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_carrier_fairing_volume_ratio")] =
+                fairing.statistics.finalAbsoluteVolumeRatio;
+        }
+        else
+        {
+            result.payload[QStringLiteral(
+                "visibility_occupancy_carrier_fairing_applied")] = false;
+        }
+
+        const bool carrier_field_projection_requested =
+            request.settings.value(QStringLiteral(
+                "tsdfVisibilityOccupancyCarrierFieldProjection"))
+                .toBool(false);
+        const bool carrier_field_projection_enabled =
+            direct_visibility_occupancy_output &&
+            carrier_field_projection_requested;
+        result.payload[QStringLiteral(
+            "configured_visibility_occupancy_carrier_field_projection")] =
+            carrier_field_projection_enabled;
+        if (carrier_field_projection_enabled)
+        {
+            const bool well_composed_carrier =
+                tsdf.statistics
+                    .visibilityOccupancyWellComposedRepairRemainingEdgeCheckerboardCount == 0 &&
+                tsdf.statistics
+                    .visibilityOccupancyWellComposedRepairRemainingVertexOccupiedDefectCount == 0 &&
+                tsdf.statistics
+                    .visibilityOccupancyWellComposedRepairRemainingVertexEmptyDefectCount == 0;
+            const bool projection_prerequisites_met =
+                well_composed_carrier &&
+                tsdf.statistics
+                    .visibilityOccupancyBoundaryTopologyConsistent &&
+                tsdf.visibilityOccupancyCarrierField.valid();
+            result.payload[QStringLiteral(
+                "visibility_occupancy_carrier_field_projection_prerequisites_met")] =
+                projection_prerequisites_met;
+            if (projection_prerequisites_met)
+            {
+                if (request.progress)
+                {
+                    request.progress(
+                        QStringLiteral(
+                            "正在将闭合载体弱投影到可见性距离场..."),
+                        97);
+                }
+                VisibilityOccupancyCarrierFieldProjectionOptions
+                    projection_options;
+                projection_options.iterations = qBound(
+                    1,
+                    request.settings.value(QStringLiteral(
+                        "tsdfVisibilityOccupancyCarrierFieldProjectionIterations"))
+                        .toInt(3),
+                    8);
+                projection_options.maximumBacktrackingSteps = qBound(
+                    0,
+                    request.settings.value(QStringLiteral(
+                        "tsdfVisibilityOccupancyCarrierFieldProjectionMaximumBacktrackingSteps"))
+                        .toInt(6),
+                    10);
+                projection_options.relaxation = std::clamp(
+                    request.settings.value(QStringLiteral(
+                        "tsdfVisibilityOccupancyCarrierFieldProjectionRelaxation"))
+                        .toDouble(0.40),
+                    0.05,
+                    1.0);
+                projection_options.maximumStepSpacingRatio = std::clamp(
+                    request.settings.value(QStringLiteral(
+                        "tsdfVisibilityOccupancyCarrierFieldProjectionMaximumStepVoxels"))
+                        .toDouble(0.15),
+                    0.01,
+                    0.50);
+                projection_options.maximumCumulativeDisplacementSpacingRatio =
+                    std::clamp(
+                        request.settings.value(QStringLiteral(
+                            "tsdfVisibilityOccupancyCarrierFieldProjectionMaximumDisplacementVoxels"))
+                            .toDouble(0.30),
+                        0.01,
+                        1.0);
+                projection_options.smoothNarrowBand =
+                    request.settings.value(QStringLiteral(
+                        "tsdfVisibilityOccupancyCarrierFieldProjectionSmoothNarrowBand"))
+                        .toBool(true);
+                projection_options.narrowBandWidthSpacingRatio = std::clamp(
+                    request.settings.value(QStringLiteral(
+                        "tsdfVisibilityOccupancyCarrierFieldProjectionNarrowBandVoxels"))
+                        .toDouble(2.0),
+                    0.25,
+                    8.0);
+                projection_options.scalarSmoothingRelaxation = std::clamp(
+                    request.settings.value(QStringLiteral(
+                        "tsdfVisibilityOccupancyCarrierFieldProjectionSmoothingLambda"))
+                        .toDouble(0.12),
+                    0.0,
+                    0.50);
+                projection_options.minimumNormalDot = std::clamp(
+                    request.settings.value(QStringLiteral(
+                        "tsdfVisibilityOccupancyCarrierFieldProjectionMinimumNormalDot"))
+                        .toDouble(0.50),
+                    -1.0,
+                    1.0);
+                projection_options.minimumFaceAreaRatio = std::clamp(
+                    request.settings.value(QStringLiteral(
+                        "tsdfVisibilityOccupancyCarrierFieldProjectionMinimumFaceAreaRatio"))
+                        .toDouble(0.25),
+                    0.01,
+                    1.0);
+                projection_options.minimumSurfaceAreaRatio = std::clamp(
+                    request.settings.value(QStringLiteral(
+                        "tsdfVisibilityOccupancyCarrierFieldProjectionMinimumAreaRatio"))
+                        .toDouble(0.90),
+                    0.50,
+                    1.0);
+                projection_options.maximumSurfaceAreaRatio = std::clamp(
+                    request.settings.value(QStringLiteral(
+                        "tsdfVisibilityOccupancyCarrierFieldProjectionMaximumAreaRatio"))
+                        .toDouble(1.05),
+                    1.0,
+                    1.50);
+                projection_options.minimumAbsoluteVolumeRatio = std::clamp(
+                    request.settings.value(QStringLiteral(
+                        "tsdfVisibilityOccupancyCarrierFieldProjectionMinimumVolumeRatio"))
+                        .toDouble(0.92),
+                    0.50,
+                    1.0);
+                projection_options.maximumAbsoluteVolumeRatio = std::clamp(
+                    request.settings.value(QStringLiteral(
+                        "tsdfVisibilityOccupancyCarrierFieldProjectionMaximumVolumeRatio"))
+                        .toDouble(1.05),
+                    1.0,
+                    1.50);
+                projection_options.isCancelled = request.isCancelled;
+
+                const TriMesh projection_baseline = tsdf.mesh;
+                const MeshTopologySignature topology_before_projection =
+                    evaluateMeshTopologySignature(projection_baseline);
+                VisibilityOccupancyCarrierFieldProjectionResult projection =
+                    VisibilityOccupancyCarrierFieldProjector::project(
+                        projection_baseline,
+                        tsdf.visibilityOccupancyCarrierField.sampleDimensions,
+                        tsdf.visibilityOccupancyCarrierField.boundsMin,
+                        tsdf.visibilityOccupancyCarrierField.boundsMax,
+                        tsdf.visibilityOccupancyCarrierField
+                            .signedWorldDistance,
+                        projection_options);
+                if (projection.cancelled)
+                {
+                    result.errorMessage = QStringLiteral(
+                        "模型载体距离场投影已取消。");
+                    return result;
+                }
+                bool projection_topology_preserved = false;
+                if (projection.ok)
+                {
+                    const MeshTopologySignature topology_after_projection =
+                        evaluateMeshTopologySignature(projection.mesh);
+                    projection_topology_preserved =
+                        topology_before_projection.closedTwoManifold &&
+                        topology_after_projection ==
+                            topology_before_projection &&
+                        hasSameFaceIndexBuffer(
+                            projection_baseline,
+                            projection.mesh);
+                    if (projection_topology_preserved)
+                    {
+                        tsdf.mesh = std::move(projection.mesh);
+                        detail::recomputeNormals(&tsdf.mesh);
+                    }
+                }
+                const bool projection_applied =
+                    projection.ok && projection_topology_preserved;
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_applied")] =
+                    projection_applied;
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_reverted")] =
+                    projection.rolledBack ||
+                    (projection.ok && !projection_topology_preserved);
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_topology_preserved")] =
+                    projection_topology_preserved;
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_error")] =
+                    QString::fromStdString(projection.errorMessage);
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_completed_iterations")] =
+                    projection.statistics.completedIterationCount;
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_attempted_blends")] =
+                    projection.statistics.attemptedBlendCount;
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_accepted_full_steps")] =
+                    projection.statistics.acceptedFullStepCount;
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_accepted_half_steps")] =
+                    projection.statistics.acceptedHalfStepCount;
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_rejected_blends")] =
+                    projection.statistics.rejectedBlendCount;
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_minimum_accepted_blend")] =
+                    projection.statistics.minimumAcceptedBlend;
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_projected_vertices")] =
+                    static_cast<double>(
+                        projection.statistics.projectedVertexCount);
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_frozen_vertices")] =
+                    static_cast<double>(
+                        projection.statistics.locallyFrozenVertexCount);
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_step_clamped_vertices")] =
+                    static_cast<double>(
+                        projection.statistics.stepClampedVertexCount);
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_cumulative_clamped_vertices")] =
+                    static_cast<double>(
+                        projection.statistics.cumulativeClampedVertexCount);
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_mean_residual_before")] =
+                    projection.statistics.meanAbsoluteFieldResidualBefore;
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_mean_residual_after")] =
+                    projection.statistics.meanAbsoluteFieldResidualAfter;
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_p90_residual_before")] =
+                    projection.statistics.p90AbsoluteFieldResidualBefore;
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_p90_residual_after")] =
+                    projection.statistics.p90AbsoluteFieldResidualAfter;
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_maximum_displacement")] =
+                    projection.statistics
+                        .resolvedMaximumCumulativeDisplacement;
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_area_ratio")] =
+                    projection.statistics.finalSurfaceAreaRatio;
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_volume_ratio")] =
+                    projection.statistics.finalAbsoluteVolumeRatio;
+            }
+            else
+            {
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_applied")] =
+                    false;
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_reverted")] =
+                    false;
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_error")] =
+                    QStringLiteral(
+                        "占据场或良构闭合拓扑前置条件不满足，已保留原载体。");
+            }
+        }
+        else
+        {
+            result.payload[QStringLiteral(
+                "visibility_occupancy_carrier_field_projection_applied")] =
+                false;
+        }
+
+        const bool visibility_occupancy_depth_refinement_enabled =
+            output_mesh == &tsdf.mesh &&
+            options.enableVisibilityOccupancyCompletion &&
+            request.settings.value(QStringLiteral(
+                "tsdfVisibilityOccupancyDepthRefinement"))
+                .toBool(false);
+        result.payload[QStringLiteral(
+            "configured_visibility_occupancy_depth_refinement")] =
+            visibility_occupancy_depth_refinement_enabled;
+        if (visibility_occupancy_depth_refinement_enabled)
+        {
+            TriMesh direct_refinement_baseline;
+            MeshTopologySignature direct_refinement_topology;
+            if (direct_visibility_occupancy_output)
+            {
+                direct_refinement_baseline = tsdf.mesh;
+                direct_refinement_topology =
+                    evaluateMeshTopologySignature(tsdf.mesh);
+            }
+            if (request.progress)
+            {
+                request.progress(
+                    QStringLiteral(
+                        "正在用鲁棒多视深度约束细化闭合表面..."),
+                    97);
+            }
+            const DepthConstrainedSurfaceRefineOptions refine_options =
+                makeVisibilityOccupancyDepthRefineOptions(
+                    request.settings,
+                    tsdf.layout,
+                    options.visibilityOccupancyResolution);
+            const DepthConstrainedSurfaceRefineStatistics refinement =
+                DepthConstrainedSurfaceRefiner::refine(
+                    &tsdf.mesh,
+                    loaded.frames,
+                    refine_options,
+                    request.isCancelled);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_applied")] =
+                refinement.applied;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_reverted")] =
+                refinement.reverted;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_attempted_passes")] =
+                refinement.attemptedPassCount;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_applied_passes")] =
+                refinement.appliedPassCount;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_reverted_passes")] =
+                refinement.revertedPassCount;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_accepted_blend")] =
+                refinement.acceptedBlend;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_area_before")] =
+                refinement.areaBefore;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_area_after")] =
+                refinement.areaAfter;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_volume_before")] =
+                refinement.absoluteVolumeBefore;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_volume_after")] =
+                refinement.absoluteVolumeAfter;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_flipped_faces")] =
+                static_cast<double>(refinement.flippedFaceCount);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_degenerate_faces")] =
+                static_cast<double>(refinement.degenerateFaceCount);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_locally_projected_candidates")] =
+                refinement.locallyProjectedCandidateCount;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_local_projection_iterations")] =
+                refinement.localSafetyProjectionIterationCount;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_locally_rejected_faces")] =
+                static_cast<double>(refinement.locallyRejectedFaceCount);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_locally_frozen_vertices")] =
+                static_cast<double>(refinement.locallyFrozenVertexCount);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_accepted_rejected_faces")] =
+                static_cast<double>(
+                    refinement.acceptedLocallyRejectedFaceCount);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_accepted_frozen_vertices")] =
+                static_cast<double>(
+                    refinement.acceptedLocallyFrozenVertexCount);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_removed_median_normal_bias")] =
+                refinement.removedMedianNormalBias;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_projected_observations")] =
+                static_cast<double>(
+                    refinement.refiner.projectedObservationCount);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_accepted_observations")] =
+                static_cast<double>(
+                    refinement.refiner.acceptedObservationCount);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_anchored_vertices")] =
+                static_cast<double>(
+                    refinement.refiner.anchoredVertexCount);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_displaced_vertices")] =
+                static_cast<double>(
+                    refinement.refiner.displacedVertexCount);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_bias_frames")] =
+                refinement.refiner.biasCalibratedFrameCount;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_bias_pairs")] =
+                static_cast<double>(
+                    refinement.refiner.biasCalibrationPairCount);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_maximum_bias")] =
+                refinement.refiner.maximumAbsoluteFrameBias;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_median_views")] =
+                refinement.refiner.medianSupportingViewCount;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_p90_views")] =
+                refinement.refiner.p90SupportingViewCount;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_maximum_displacement")] =
+                refinement.refiner.maximumAppliedDisplacement;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_global_solver_applied")] =
+                refinement.refiner.globalSolverAppliedPassCount > 0;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_global_solver_energy_before")] =
+                refinement.refiner.globalSolverInitialEnergy;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_global_solver_energy_after")] =
+                refinement.refiner.globalSolverFinalEnergy;
+            bool topology_guard_reverted = false;
+            if (direct_visibility_occupancy_output && refinement.applied)
+            {
+                const MeshTopologySignature refined_topology =
+                    evaluateMeshTopologySignature(tsdf.mesh);
+                const bool topology_preserved =
+                    direct_refinement_topology.closedTwoManifold &&
+                    refined_topology == direct_refinement_topology &&
+                    hasSameFaceIndexBuffer(
+                        direct_refinement_baseline,
+                        tsdf.mesh);
+                if (!topology_preserved)
+                {
+                    tsdf.mesh = std::move(direct_refinement_baseline);
+                    topology_guard_reverted = true;
+                    result.payload[QStringLiteral(
+                        "visibility_occupancy_depth_refinement_applied")] =
+                        false;
+                    result.payload[QStringLiteral(
+                        "visibility_occupancy_depth_refinement_reverted")] =
+                        true;
+                }
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_depth_refinement_topology_preserved")] =
+                    topology_preserved;
+            }
+            result.payload[QStringLiteral(
+                "visibility_occupancy_depth_refinement_topology_guard_reverted")] =
+                topology_guard_reverted;
+        }
+
+        const int post_refinement_target_faces =
+            direct_visibility_occupancy_output
+            ? qBound(
+                  0,
+                  request.settings.value(QStringLiteral(
+                      "tsdfVisibilityOccupancyPostRefinementTargetFaces"))
+                      .toInt(0),
+                  5000000)
+            : 0;
+        result.payload[QStringLiteral(
+            "configured_visibility_occupancy_post_refinement_target_faces")] =
+            post_refinement_target_faces;
+        if (post_refinement_target_faces > 0 &&
+            post_refinement_target_faces < output_mesh->faceCount())
+        {
+            if (request.progress)
+            {
+                request.progress(
+                    QStringLiteral("正在保拓扑简化细化表面..."),
+                    98);
+            }
+            const MeshTopologySignature topology_before_simplification =
+                evaluateMeshTopologySignature(*output_mesh);
+            TriMesh simplified_candidate = *output_mesh;
+            QuadricSimplifyOptions simplify_options;
+            simplify_options.targetFaceCount = post_refinement_target_faces;
+            simplify_options.maximumPasses = 24;
+            simplify_options.workerCount = options.workerCount;
+            simplify_options.maximumResultFaceAspectRatio =
+                std::clamp(
+                    static_cast<float>(request.settings.value(QStringLiteral(
+                        "tsdfVisibilityOccupancyPostRefinementMaximumFaceAspectRatio"))
+                        .toDouble(10.0)),
+                    1.2f,
+                    1000.0f);
+            simplify_options.featureAngleDegrees = 45.0f;
+            simplify_options.maximumNormalDeviationDegrees = 45.0f;
+            simplify_options.preserveOpenBoundaries = true;
+            simplify_options.simplifySimpleOpenBoundaries = false;
+            simplify_options.isCancelled = request.isCancelled;
+            const QuadricSimplifyStatistics simplification =
+                simplifyMeshQuadric(
+                    &simplified_candidate,
+                    simplify_options);
+            const MeshTopologySignature topology_after_simplification =
+                evaluateMeshTopologySignature(simplified_candidate);
+            const bool simplification_accepted =
+                !simplification.cancelled &&
+                simplified_candidate.faceCount() <
+                    output_mesh->faceCount() &&
+                topology_before_simplification.closedTwoManifold &&
+                topology_after_simplification ==
+                    topology_before_simplification;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_post_refinement_simplification_attempted")] =
+                true;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_post_refinement_simplification_accepted")] =
+                simplification_accepted;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_post_refinement_simplification_input_faces")] =
+                simplification.inputFaceCount;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_post_refinement_simplification_output_faces")] =
+                simplification.outputFaceCount;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_post_refinement_simplification_collapsed_edges")] =
+                simplification.collapsedEdgeCount;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_post_refinement_simplification_rejected_triangle_quality_edges")] =
+                simplification.rejectedTriangleQualityEdgeCount;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_post_refinement_maximum_face_aspect_ratio")] =
+                simplify_options.maximumResultFaceAspectRatio;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_post_refinement_simplification_reached_target")] =
+                simplification.reachedTarget;
+            if (simplification_accepted)
+            {
+                tsdf.mesh = std::move(simplified_candidate);
+            }
+        }
+        else
+        {
+            result.payload[QStringLiteral(
+                "visibility_occupancy_post_refinement_simplification_attempted")] =
+                false;
+        }
+
+        if (direct_visibility_occupancy_output)
+        {
+            const MeshTopologyQualityStatistics final_topology =
+                evaluateMeshTopologyQuality(*output_mesh);
+            const int expected_surface_euler =
+                2 * tsdf.statistics
+                        .visibilityOccupancyBoundaryBodyEulerCharacteristic;
+            const bool final_topology_preserved =
+                final_topology.closedTwoManifold &&
+                final_topology.eulerCharacteristic ==
+                    tsdf.statistics
+                        .visibilityOccupancyBoundarySurfaceEulerCharacteristic &&
+                final_topology.eulerCharacteristic == expected_surface_euler;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_closed_two_manifold")] =
+                final_topology.closedTwoManifold;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_boundary_edge_count")] =
+                final_topology.boundaryEdgeCount;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_non_manifold_edge_count")] =
+                final_topology.nonManifoldEdgeCount;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_non_manifold_vertex_count")] =
+                final_topology.nonManifoldVertexCount;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_euler_characteristic")] =
+                final_topology.eulerCharacteristic;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_high_aspect_face_ratio")] =
+                final_topology.highAspectFaceRatio;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_extreme_aspect_face_ratio")] =
+                final_topology.extremeAspectFaceRatio;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_adjacent_normal_median_degrees")] =
+                final_topology.adjacentNormalAngleMedianDegrees;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_adjacent_normal_p90_degrees")] =
+                final_topology.adjacentNormalAngleP90Degrees;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_adjacent_normal_over_30_ratio")] =
+                final_topology.adjacentNormalAngleOver30Ratio;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_surface_area")] =
+                meshSurfaceArea(*output_mesh);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_component_eulers")] =
+                eulerCharacteristicsToJson(
+                    final_topology.componentEulerCharacteristics);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_topology_preserved")] =
+                final_topology_preserved;
+            if (!final_topology_preserved)
+            {
+                result.errorMessage = QStringLiteral(
+                    "可见性占据场最终拓扑质量门未通过：边界边=%1，"
+                    "非流形边=%2，非流形顶点=%3，曲面欧拉特征=%4"
+                    "（期望 %5）。已停止写入模型。")
+                    .arg(final_topology.boundaryEdgeCount)
+                    .arg(final_topology.nonManifoldEdgeCount)
+                    .arg(final_topology.nonManifoldVertexCount)
+                    .arg(final_topology.eulerCharacteristic)
+                    .arg(expected_surface_euler);
+                return result;
+            }
         }
 
         const QJsonObject diagnostics = result.payload;

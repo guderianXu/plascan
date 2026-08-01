@@ -151,7 +151,7 @@ bool LayerRenderer::addFeatureLayerFromVwip(const QString &imagePath)
 {
     if (!_scene) return false;
 
-    const auto keypoints = xjw::gui::views::loadFeatureKeypointsForImage(_currentProjectPath, imagePath);
+    const auto keypoints = xjw::gui::views::loadMatchedKeypointsForImage(_currentProjectPath, imagePath);
     if (keypoints.empty()) return false;
     addFeatureItems(keypoints);
     return true;

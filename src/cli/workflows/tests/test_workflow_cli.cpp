@@ -2,6 +2,22 @@
 
 // 这些测试只覆盖 GUI“工作流程”菜单对应的 CLI。
 
+namespace
+{
+
+// CLI 报告属于活动 Chunk，入口程序会以 `键=绝对路径` 的形式回报真实位置。
+// 测试从标准输出取路径，避免重新假设项目内部目录布局。
+QString reportedPath(const CliResult &result, const QString &key)
+{
+    const QRegularExpression expression(
+        QStringLiteral("(?:^|[\\r\\n])%1=([^\\r\\n]+)")
+            .arg(QRegularExpression::escape(key)));
+    const QRegularExpressionMatch match = expression.match(combinedOutput(result));
+    return match.hasMatch() ? match.captured(1).trimmed() : QString();
+}
+
+} // namespace
+
 TEST(WorkflowCliModuleTest, MirrorsGuiWorkflowMenuEntryPoints)
 {
     const QString cmake = readSourceFile(QStringLiteral("src/cli/workflows/CMakeLists.txt"));
@@ -19,10 +35,10 @@ TEST(WorkflowCliModuleTest, MirrorsGuiWorkflowMenuEntryPoints)
     });
     expectContainsAll(menu, {
         "空中三角测量...",
-        "三维重建",
         "生成模型...",
         "创建 DEM",
         "生成 正射影像",
+        "设置...",
     });
     expectContainsAll(aerial, {
         "AerialTriangulationWorkflow::run",
@@ -32,12 +48,10 @@ TEST(WorkflowCliModuleTest, MirrorsGuiWorkflowMenuEntryPoints)
         "--no-reset-alignment",
         "--mask-dir",
         "--assets-dir",
-        "--feature-dir",
         "--match-dir",
         "options.assetsDir",
-        "options.featureDir",
         "options.matchDir",
-        "options.outputDir = outputDir",
+        "options.outputDir = reconstructionDir",
         "options.maskPaths = xjw::cli::maskPathsFromDirectory",
         "tie_point_preparation_executed",
         "--no-adaptive-camera-model-fitting",
@@ -335,8 +349,11 @@ TEST(PhotogrammetryWorkflowCliGTest, AerialTriangulationCliAcceptsImageOnlyListF
     EXPECT_EQ(result.exitCode, 0) << qPrintable(combinedOutput(result));
     expectContainsAll(combinedOutput(result), {"aerial_triangulation_cli_report.json", "dry_run"});
     expectNotContainsAll(combinedOutput(result), {"需要 '<image> <camera.tsai>'"});
-    const QJsonObject report =
-        readJsonObject(QDir(outputDir).filePath(QStringLiteral("aerial_triangulation_cli_report.json")));
+    const QString reportPath = reportedPath(result, QStringLiteral("aerial_triangulation_cli_report.json"));
+    ASSERT_FALSE(reportPath.isEmpty()) << qPrintable(combinedOutput(result));
+    const QJsonObject report = readJsonObject(reportPath);
+    QDir chunkRoot = QFileInfo(reportPath).absoluteDir();
+    ASSERT_TRUE(chunkRoot.cdUp());
     EXPECT_TRUE(report.value(QStringLiteral("success")).toBool());
     EXPECT_TRUE(report.value(QStringLiteral("dry_run")).toBool());
     EXPECT_EQ(report.value(QStringLiteral("image_count")).toInt(), 2);
@@ -349,10 +366,9 @@ TEST(PhotogrammetryWorkflowCliGTest, AerialTriangulationCliAcceptsImageOnlyListF
               QStringLiteral("fill_missing"));
     const QJsonObject tiePointContext = report.value(QStringLiteral("tie_point_context")).toObject();
     EXPECT_EQ(tiePointContext.value(QStringLiteral("mask_count")).toInt(), 6);
-    EXPECT_TRUE(tiePointContext.value(QStringLiteral("feature_dir")).toString()
-                    .endsWith(QStringLiteral("assets/ip")));
-    EXPECT_TRUE(tiePointContext.value(QStringLiteral("match_dir")).toString()
-                    .endsWith(QStringLiteral("assets/matches")));
+    EXPECT_FALSE(tiePointContext.contains(QStringLiteral("feature_dir")));
+    EXPECT_EQ(QDir::cleanPath(tiePointContext.value(QStringLiteral("match_dir")).toString()),
+              QDir::cleanPath(chunkRoot.filePath(QStringLiteral("assets/image_matches"))));
     const QJsonObject tiePointOptions = report.value(QStringLiteral("tie_point_options")).toObject();
     EXPECT_EQ(tiePointOptions.value(QStringLiteral("max_keypoints")).toInt(), 40000);
     EXPECT_EQ(tiePointOptions.value(QStringLiteral("keypoint_limit_per_megapixel")).toInt(), 0);
@@ -360,7 +376,7 @@ TEST(PhotogrammetryWorkflowCliGTest, AerialTriangulationCliAcceptsImageOnlyListF
     const QJsonObject pipelineInput = report.value(QStringLiteral("pipeline_input")).toObject();
     EXPECT_TRUE(pipelineInput.value(QStringLiteral("adaptive_camera_model_fitting")).toBool());
     EXPECT_EQ(QDir::cleanPath(pipelineInput.value(QStringLiteral("output_dir")).toString()),
-              QDir::cleanPath(QDir(outputDir).filePath(QStringLiteral("sfm_sparse"))));
+              QDir::cleanPath(chunkRoot.filePath(QStringLiteral("reconstruction/sparse/sfm_sparse"))));
 }
 
 TEST(PhotogrammetryWorkflowCliGTest, AerialTriangulationCliAllowsSequenceReferenceWithoutCameraFiles)
@@ -394,8 +410,9 @@ TEST(PhotogrammetryWorkflowCliGTest, AerialTriangulationCliAllowsSequenceReferen
 
     EXPECT_EQ(result.exitCode, 0) << qPrintable(combinedOutput(result));
     expectNotContainsAll(combinedOutput(result), {"参考预选需要完整相机文件"});
-    const QJsonObject report =
-        readJsonObject(QDir(outputDir).filePath(QStringLiteral("aerial_triangulation_cli_report.json")));
+    const QString reportPath = reportedPath(result, QStringLiteral("aerial_triangulation_cli_report.json"));
+    ASSERT_FALSE(reportPath.isEmpty()) << qPrintable(combinedOutput(result));
+    const QJsonObject report = readJsonObject(reportPath);
     EXPECT_TRUE(report.value(QStringLiteral("success")).toBool());
     const QJsonObject pipelineInput = report.value(QStringLiteral("pipeline_input")).toObject();
     EXPECT_TRUE(pipelineInput.value(QStringLiteral("sequence_loop_closure")).toBool());

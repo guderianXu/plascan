@@ -431,6 +431,18 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
                 directory, object.value(QStringLiteral("raw_geometry_support_path")).toString());
             frame.geometrySourceMaskPath = resolveArtifactPath(
                 directory, object.value(QStringLiteral("raw_geometry_source_mask_path")).toString());
+            frame.adaptiveGeometrySupportWeightPath = resolveArtifactPath(
+                directory,
+                object.value(QStringLiteral(
+                    "raw_adaptive_geometry_support_weight_path")).toString());
+            frame.adaptiveGeometryEffectiveViewCountPath = resolveArtifactPath(
+                directory,
+                object.value(QStringLiteral(
+                    "raw_adaptive_geometry_effective_view_count_path")).toString());
+            frame.adaptiveGeometryConflictWeightPath = resolveArtifactPath(
+                directory,
+                object.value(QStringLiteral(
+                    "raw_adaptive_geometry_conflict_weight_path")).toString());
             frame.inverseDepthMeanPath = resolveArtifactPath(
                 directory, object.value(QStringLiteral("raw_inverse_depth_mean_path")).toString());
             frame.inverseDepthSpreadPath = resolveArtifactPath(
@@ -506,6 +518,9 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
             if (file_name.endsWith(QStringLiteral("_conf.bin")) ||
                 file_name.endsWith(QStringLiteral("_geometry_support.bin")) ||
                 file_name.endsWith(QStringLiteral("_geometry_source_mask.bin")) ||
+                file_name.endsWith(QStringLiteral("_adaptive_geometry_support_weight.bin")) ||
+                file_name.endsWith(QStringLiteral("_adaptive_geometry_effective_view_count.bin")) ||
+                file_name.endsWith(QStringLiteral("_adaptive_geometry_conflict_weight.bin")) ||
                 file_name.endsWith(QStringLiteral("_inverse_depth_mean.bin")) ||
                 file_name.endsWith(QStringLiteral("_inverse_depth_spread.bin")) ||
                 file_name.endsWith(QStringLiteral("_support.bin")) ||
@@ -614,13 +629,15 @@ DepthMapVisualHullResult DepthMapMeshBuilder::buildVisualHull(
         result.message = QStringLiteral("无法从深度图估计视觉外壳范围");
         return result;
     }
-    config.resolution = std::clamp(resolution, 96, 256);
+    config.resolution = std::clamp(resolution, 96, 384);
     config.minimumVisibleViews = std::max(4, result.usableViewCount / 3);
     config.allowedSilhouetteViolations = std::max(1, result.usableViewCount / 10);
+    config.useContinuousSilhouetteField =
+        options.useContinuousSilhouetteField;
     config.topologyClosingIterations =
         options.topologyClosingIterations >= 0
         ? std::clamp(options.topologyClosingIterations, 0, 3)
-        : (result.preservedSilhouetteHoleViewCount == 0 ? 2 : 0);
+        : (config.useContinuousSilhouetteField ? 0 : 2);
     result.topologyClosingIterations =
         config.topologyClosingIterations;
     config.smoothingIterations =

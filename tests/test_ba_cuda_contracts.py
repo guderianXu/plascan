@@ -27,8 +27,7 @@ class BaCudaContractsTest(unittest.TestCase):
         )
 
         self.assertIn("options->baOptions.backend = BABackend::Auto;", source)
-        self.assertIn("options->baOptions.minNativeCudaCameras = 50;", source)
-        self.assertIn("options->baOptions.minNativeCudaObservations = 500000;", source)
+        self.assertIn("options->baOptions.nativeCudaMaxPointStepNorm = 1.0;", source)
         self.assertIn("options->baOptions.minCeresCudaObservations = 500000;", source)
         self.assertIn("options->baOptions.minCeresCpuObservations = 50000;", source)
         self.assertIn("options->baOptions.enableBackendQualityGate = true;", source)
@@ -58,14 +57,12 @@ class BaCudaContractsTest(unittest.TestCase):
     def test_native_cuda_backend_is_exposed(self):
         header = self.read_text("src/core/bundle_adjust/BundleAdjust.h")
         self.assertIn("NativeCuda", header)
-        self.assertIn("minNativeCudaCameras", header)
-        self.assertIn("minNativeCudaObservations", header)
-        self.assertIn("nativeCudaPcgIterations", header)
+        self.assertIn("nativeCudaMaxPointStepNorm", header)
 
     def test_service_reports_native_cuda_metrics(self):
         source = self.read_text("src/gui/project/services/BundleAdjustService.cpp")
-        self.assertIn("ba_native_cuda_pcg_iterations", source)
-        self.assertIn("ba_native_cuda_linear_residual", source)
+        self.assertIn("ba_native_cuda_initial_cost", source)
+        self.assertIn("ba_native_cuda_final_cost", source)
         self.assertIn("ba_native_cuda_active_observations", source)
         self.assertIn("ba_native_cuda_kernel_seconds", source)
         self.assertIn("ba_native_cuda_upload_seconds", source)

@@ -3,9 +3,7 @@
 #include "project/ProjectIO.h"
 
 #include <QDir>
-#include <QFile>
 #include <QJsonArray>
-#include <QJsonDocument>
 #include <QJsonObject>
 #include <QTemporaryDir>
 
@@ -15,14 +13,6 @@ namespace
 {
 
 using namespace xjw::common::project;
-
-void writeJson(const QString &path, const QJsonDocument &document)
-{
-    QFile file(path);
-    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
-    ASSERT_EQ(file.write(document.toJson(QJsonDocument::Compact)),
-              document.toJson(QJsonDocument::Compact).size());
-}
 
 QJsonObject projectMetadata()
 {
@@ -39,45 +29,20 @@ TEST(ProjectMatchCatalogTest, ReadsAndDeduplicatesMatchedPairs)
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
     const QString project_path = QDir(temp_dir.path()).filePath(QStringLiteral("test.plascan"));
-    const QString match_dir = ProjectIO::ipmatchOutputDir(project_path);
-    ASSERT_TRUE(QDir().mkpath(match_dir));
-
-    QFile match_file(QDir(match_dir).filePath(QStringLiteral("a__b_lightglue.match")));
-    ASSERT_TRUE(match_file.open(QIODevice::WriteOnly));
-    match_file.close();
-    writeJson(match_file.fileName() + QStringLiteral(".json"),
-              QJsonDocument(QJsonObject{{QStringLiteral("image0_name"), QStringLiteral("b.png")},
-                                        {QStringLiteral("image1_name"), QStringLiteral("a.png")}}));
 
     QJsonObject metadata = projectMetadata();
-    metadata[QStringLiteral("ipmatch_results")] =
-        QJsonArray{QJsonObject{{QStringLiteral("image0_name"), QStringLiteral("a.png")},
-                               {QStringLiteral("image1_name"), QStringLiteral("b.png")}}};
+    metadata[QStringLiteral("image_match_results")] = QJsonArray{
+        QJsonObject{{QStringLiteral("image"), QStringLiteral("E:/data/a.png")},
+                    {QStringLiteral("neighbors"),
+                     QJsonArray{QStringLiteral("E:/data/b.png"),
+                                QStringLiteral("E:/data/b.png")}}},
+        QJsonObject{{QStringLiteral("image"), QStringLiteral("E:/data/b.png")},
+                    {QStringLiteral("neighbors"),
+                     QJsonArray{QStringLiteral("E:/data/a.png")}}}};
 
     const auto pairs = collectMatchedImageNamePairs(project_path, metadata);
     ASSERT_EQ(pairs.size(), 1);
     EXPECT_EQ(pairs.front(), qMakePair(QStringLiteral("a.png"), QStringLiteral("b.png")));
-}
-
-TEST(ProjectMatchCatalogTest, ReadsSettledNoMatchPairsInStableOrder)
-{
-    QTemporaryDir temp_dir;
-    ASSERT_TRUE(temp_dir.isValid());
-    const QString project_path = QDir(temp_dir.path()).filePath(QStringLiteral("test.plascan"));
-    const QString match_dir = ProjectIO::ipmatchOutputDir(project_path);
-    ASSERT_TRUE(QDir().mkpath(match_dir));
-
-    writeJson(QDir(match_dir).filePath(QStringLiteral("no_match_pairs.json")),
-              QJsonDocument(QJsonArray{
-                  QJsonObject{{QStringLiteral("image0"), QStringLiteral("c")},
-                              {QStringLiteral("image1"), QStringLiteral("b")}},
-                  QJsonObject{{QStringLiteral("image0"), QStringLiteral("a")},
-                              {QStringLiteral("image1"), QStringLiteral("c")}}}));
-
-    const auto pairs = collectSettledNoMatchImageNamePairs(project_path, projectMetadata());
-    ASSERT_EQ(pairs.size(), 2);
-    EXPECT_EQ(pairs.at(0), qMakePair(QStringLiteral("a.png"), QStringLiteral("c.png")));
-    EXPECT_EQ(pairs.at(1), qMakePair(QStringLiteral("b.png"), QStringLiteral("c.png")));
 }
 
 TEST(ProjectMatchCatalogTest, EncodesCanonicalAndOrderedPairKeys)

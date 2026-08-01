@@ -9,7 +9,21 @@ add_library(meshing STATIC
     DepthMapMeshBuilder.cpp
     DepthFusionFramePolicy.cpp
     DepthMeshCompleteness.cpp
+    DepthRayMetric.cpp
     DepthTsdfSurfaceBuilder.cpp
+    DepthTsdfNarrowBandActivation.cpp
+    BinaryGridMinCutSolver.cpp
+    BinaryGridMinCutSolverFlow.cpp
+    VisibilityOccupancyCleanup.cpp
+    VisibilityOccupancyBoundaryExtractor.cpp
+    VisibilityOccupancyCarrierSubdivider.cpp
+    VisibilityOccupancyCarrierFairer.cpp
+    VisibilityOccupancyCarrierFieldProjector.cpp
+    VisibilityOccupancyHandleRepair.cpp
+    VisibilityOccupancyWellComposedRepair.cpp
+    VisibilityOccupancyDistanceField.cpp
+    VisibilityOccupancySurfaceBuilder.cpp
+    VisibilityOccupancyTsdfCompletion.cpp
     DepthTsdfCellSheetRecovery.cpp
     IsoSurfaceTopology.cpp
     ConsistentIsoSurfaceInternal.cpp
@@ -20,7 +34,10 @@ add_library(meshing STATIC
     AdaptiveTsdfOctree.cpp
     SparseTgvSolver.cpp
     VisualHullReconstructor.cpp
+    VisualHullFieldEvaluator.cpp
+    RobustSurfaceDisplacementSolver.cpp
     VisualHullDepthRefiner.cpp
+    DepthConstrainedSurfaceRefiner.cpp
     MeshIO.cpp
     MeshColorizer.cpp
     MeshFaceColorOptimizer.cpp

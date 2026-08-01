@@ -1,3 +1,18 @@
+/**
+ * @file SfmAttemptRunner.cpp
+ * @brief 将连接点 sidecar 和工程先验装配为一次隔离的 IncrementalSfm 试算。
+ *
+ * 一次 attempt 的职责包括：
+ * 1. 严格读取当前影像集合对应的多视连接点图；
+ * 2. 选择相机文件、可信工程内参或影像尺寸估计内参；
+ * 3. 装载人工标记、控制点和比例尺先验；
+ * 4. 配置增量 SfM/BA 并运行；
+ * 5. 返回内存重建、诊断和待提交相机更新。
+ *
+ * 本类不写稀疏点云、不直接修改工程。焦距搜索因此可以并发运行多个互不污染的
+ * attempt，并由上层只提交胜出结果。
+ */
+
 #include "reconstruction/SfmAttemptRunner.h"
 #include "reconstruction/CameraIntrinsicPriorSanitizer.h"
 #include "reconstruction/MarkerPriorLoader.h"
@@ -32,6 +47,7 @@ namespace xjw::aerial_triangulation
 namespace
 {
 
+/// 将无向影像 ID 对压缩为 64 位键，用于连接点展开时去重。
 quint64 pairKey(ImageId imageA, ImageId imageB)
 {
     const quint64 first = std::min(imageA, imageB);
@@ -48,6 +64,7 @@ bool fail(const QString &message, QString *errorMessage)
     return false;
 }
 
+/// 用项目的路径 token 规则将持久化影像路径映射到本次输入索引。
 int selectedImageIndex(const QString &path, const QStringList &selectedImages)
 {
     for (int index = 0; index < selectedImages.size(); ++index)
@@ -62,10 +79,11 @@ int selectedImageIndex(const QString &path, const QStringList &selectedImages)
 
 struct ParsedObservation
 {
-    ImageId imageId = kInvalidImageId;
-    FeatureIdx featureIndex = kInvalidFeatureIdx;
+    ImageId imageId = kInvalidImageId; ///< 本次 SfM 连续影像 ID。
+    FeatureIdx featureIndex = kInvalidFeatureIdx; ///< 本影像内压缩后的关键点索引。
 };
 
+/// 质量等级对初始化强度和 BA 调度频率的映射。
 struct SfmQualityPreset
 {
     int initMinMatches = 25;
@@ -105,6 +123,12 @@ Camera cameraWithIdentityPose(Camera camera)
     return camera;
 }
 
+/**
+ * @brief 根据工作流输入统一配置 IncrementalSfm 和 BA。
+ *
+ * GPU/CPU 仅影响 BA 后端选择；特征与匹配已经在上游完成。自适应相机模型拟合
+ * 会开启共享焦距联合优化，但已知完整相机位姿时保持输入内参稳定。
+ */
 void configureSfmOptions(const PreparedAerialTriangulationInput &input,
                          const std::shared_ptr<std::atomic<int>> &registeredProgress,
                          IncrementalSfmOptions *options)
@@ -157,10 +181,7 @@ void configureSfmOptions(const PreparedAerialTriangulationInput &input,
     if (!cpuOnly)
     {
         options->baOptions.backend = BABackend::Auto;
-        options->baOptions.minNativeCudaCameras = 50;
-        options->baOptions.minNativeCudaObservations = 500000;
-        options->baOptions.nativeCudaMaxPcgIterations = 100;
-        options->baOptions.nativeCudaPcgTolerance = 1e-4;
+        options->baOptions.nativeCudaMaxPointStepNorm = 1.0;
         options->baOptions.minCeresCudaObservations = 500000;
         options->baOptions.minCeresCpuObservations = 50000;
         options->baOptions.enableBackendQualityGate = true;
@@ -225,6 +246,7 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
     const PreparedAerialTriangulationInput &input) const
 {
     SfmAttemptExecutionResult execution;
+    // 阶段 1：把持久化多视轨迹转换为 SfM 需要的每影像关键点和 pairwise matches。
     if (!readTiePointGraph(input.tiePointPath,
                            input.images,
                            &execution.graph,
@@ -245,6 +267,7 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
     const auto registeredProgress = std::make_shared<std::atomic<int>>(0);
     configureSfmOptions(input, registeredProgress, &sfmOptions);
 
+    // 阶段 2：相机来源优先级为完整相机文件、可信工程相机、影像尺寸估算。
     const bool hasCompleteCameraFiles = input.cameraPaths.size() == input.images.size() &&
         std::all_of(input.cameraPaths.cbegin(), input.cameraPaths.cend(), [](const QString &path)
         {
@@ -285,6 +308,7 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
         }
     }
 
+    // 只有所有影像都具备真实外参时才进入 known-pose 路径，禁止混合已知/未知位姿。
     bool hasCompleteProjectPoseCameras = !input.images.isEmpty();
     for (const QString &imagePath : input.images)
     {
@@ -324,6 +348,7 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
             std::max(sfmOptions.pnpOptions.relaxedMinNumInliers, 24);
     }
 
+    // 阶段 3：创建影像节点。重置对齐时工程 Camera 只保留内参并将外参置为单位位姿。
     IncrementalSfm sfm(sfmOptions);
     QMap<QString, ImageId> imageIdByPath;
     for (int index = 0; index < input.images.size(); ++index)
@@ -385,6 +410,8 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
                                keypoints);
     }
 
+    // 阶段 4：人工标记和比例尺作为 prior track/control constraint 注入，
+    // 不伪装成普通自动连接点。
     const MarkerPriorLoadResult markerPriors = MarkerPriorLoader::load(
         input.markerSetPath, input.projectMeta, imageIdByPath);
     if (!markerPriors.ok)
@@ -402,11 +429,13 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
         sfm.addPriorScaleBar(scaleBar);
     }
 
+    // 阶段 5：连接点轨迹已展开为去重 pairwise 对应，交给 IncrementalSfm 建观测图。
     for (const PreparedTiePointMatchPair &pair : execution.graph.matchPairs)
     {
         sfm.addMatches(pair.imageA, pair.imageB, pair.matches);
     }
 
+    // 阶段 6：运行初始对、增量 PnP/三角化、局部/全局 BA 和质量过滤。
     const IncrementalSfmResult sfmResult = sfm.run(
         [&input, registeredProgress](int registered, int total, const std::string &message)
         {
@@ -437,6 +466,7 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
     execution.result.baTracksFiltered = sfmResult.baTracksFiltered;
     execution.result.summary = QString::fromStdString(sfmResult.summary);
 
+    // 数值后端、先验接纳和初始化选择全部进入稳定诊断字段，便于 GUI/CLI 对比。
     QJsonObject diagnostics;
     diagnostics.insert(QStringLiteral("selected_initial_pair"),
                        QJsonArray{static_cast<int>(sfmResult.selectedInitialImageId1),
@@ -485,6 +515,7 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
         return execution;
     }
 
+    // 仅生成待回写对象；工程服务必须在上层正式写出成功后统一提交。
     if (execution.reconstruction)
     {
         for (int index = 0; index < input.images.size(); ++index)
@@ -544,6 +575,7 @@ bool SfmAttemptRunner::readTiePointGraph(const QString &tiePointPath,
         return fail(QStringLiteral("SfM 至少需要两张影像"), errorMessage);
     }
 
+    // 持久化 image_id 可能与本次选择顺序不同，必须先按路径建立显式重映射。
     QMap<int, ImageId> selectedIdByPersistedId;
     QSet<int> coveredSelectedIds;
     for (const QJsonValue &value : root.value(QStringLiteral("images")).toArray())
@@ -569,6 +601,8 @@ bool SfmAttemptRunner::readTiePointGraph(const QString &tiePointPath,
         graph->imagePaths.append(xjw::common::project::normalizePath(path));
     }
 
+    // 连接点文件保留原始特征索引；SfM 只需要轨迹实际引用的稀疏子集。
+    // 每张影像独立压缩索引可显著降低关键点内存，同时保持同一原始索引一致。
     QMap<ImageId, QMap<qulonglong, FeatureIdx>> compactIndexByOriginal;
     std::map<quint64, std::size_t> pairPosition;
     std::map<quint64, std::set<std::pair<FeatureIdx, FeatureIdx>>> pairObservations;
@@ -615,6 +649,7 @@ bool SfmAttemptRunner::readTiePointGraph(const QString &tiePointPath,
             observations.push_back({imageId, compactIndex});
         }
 
+        // 一条多视轨迹在同一影像最多保留一个观测，避免生成自相矛盾 pair。
         std::sort(observations.begin(), observations.end(), [](const ParsedObservation &left,
                                                                const ParsedObservation &right)
         {
@@ -631,6 +666,8 @@ bool SfmAttemptRunner::readTiePointGraph(const QString &tiePointPath,
             continue;
         }
 
+        // 将 N 视轨迹展开为 N(N-1)/2 条 pairwise 对应；pairObservations 防止不同
+        // 输入轨迹重复引用同一特征对，最终多视身份仍由 SfM 观测图重新合并。
         ++graph->trackCount;
         for (std::size_t first = 0; first + 1 < observations.size(); ++first)
         {

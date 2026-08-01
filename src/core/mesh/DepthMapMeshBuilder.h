@@ -21,6 +21,9 @@ struct DepthFrameArtifact
     QString confidencePath;
     QString geometrySupportPath;
     QString geometrySourceMaskPath;
+    QString adaptiveGeometrySupportWeightPath;
+    QString adaptiveGeometryEffectiveViewCountPath;
+    QString adaptiveGeometryConflictWeightPath;
     QString inverseDepthMeanPath;
     QString inverseDepthSpreadPath;
     QString crossViewRepairedMaskPath;
@@ -71,6 +74,7 @@ struct DepthMapVisualHullOptions
     double minimumLargestComponentFaceRatio = 0.85;
     int maximumConnectedComponents = 12;
     int topologyClosingIterations = -1;
+    bool useContinuousSilhouetteField = false;
     int smoothingIterations = 6;
     float smoothingLambda = 0.18f;
 };

@@ -43,7 +43,13 @@ public:
                                                 &confidence,
                                                 error_message,
                                                 hint,
-                                                radius))
+                                                radius,
+                                                request.referenceValidMask.empty()
+                                                    ? nullptr
+                                                    : &request.referenceValidMask,
+                                                request.sourceValidMasks.empty()
+                                                    ? nullptr
+                                                    : &request.sourceValidMasks))
         {
             return false;
         }
@@ -263,6 +269,12 @@ DepthPyramidResult DepthPyramidEstimator::estimate(const DepthPyramidRequest &re
         result.errorMessage = "depth pyramid request is missing images or backend";
         return result;
     }
+    if (!request.sourceValidMasks.empty() &&
+        request.sourceValidMasks.size() != request.sourceImages.size())
+    {
+        result.errorMessage = "depth pyramid source valid mask count mismatch";
+        return result;
+    }
 
     const int level_count = std::clamp(request.pyramidConfig.activeLevelCount, 1, 3);
     DepthLevelResult parent;
@@ -281,6 +293,15 @@ DepthPyramidResult DepthPyramidEstimator::estimate(const DepthPyramidRequest &re
             request.referenceImage.rows,
             level_config.patchMatch.downsampleFactor);
         const cv::Mat level_valid_mask = resizedValidMask(request.referenceValidMask, target_size);
+        std::vector<cv::Mat> level_source_valid_masks;
+        if (!request.sourceValidMasks.empty())
+        {
+            level_source_valid_masks.reserve(request.sourceValidMasks.size());
+            for (const cv::Mat &source_mask : request.sourceValidMasks)
+            {
+                level_source_valid_masks.push_back(resizedValidMask(source_mask, target_size));
+            }
+        }
         DepthSearchPrior prior;
         if (has_parent)
         {
@@ -296,6 +317,7 @@ DepthPyramidResult DepthPyramidEstimator::estimate(const DepthPyramidRequest &re
         backend_request.referenceImage = request.referenceImage;
         backend_request.referenceValidMask = level_valid_mask;
         backend_request.sourceImages = request.sourceImages;
+        backend_request.sourceValidMasks = std::move(level_source_valid_masks);
         backend_request.referenceCamera = request.referenceCamera;
         backend_request.sourceCameras = request.sourceCameras;
         backend_request.zNear = request.zNear;

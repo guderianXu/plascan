@@ -24,6 +24,9 @@ CorrespondenceTrackThinningResult thinCorrespondenceTracks(
     MultiViewTrackBuilder builder;
     float maxKeypointX = 0.0f;
     float maxKeypointY = 0.0f;
+
+    // 先把对应图恢复成完整多视轨迹。直接按 pair 截断会打断跨多幅影像的同一
+    // 物点，并让 SfM 中的 track length 统计失真。
     for (ImageId imageId : reconstruction.allImageIds())
     {
         const ImageData &image = reconstruction.image(imageId);
@@ -69,6 +72,8 @@ CorrespondenceTrackThinningResult thinCorrespondenceTracks(
     buildOptions.imageWidth = std::max(1.0f, maxKeypointX + 1.0f);
     buildOptions.imageHeight = std::max(1.0f, maxKeypointY + 1.0f);
 
+    // MultiViewTrackBuilder 在轨迹层应用每图/网格配额。保留集合确定后，再从原图
+    // 删除不属于这些轨迹的边，确保剩余边仍全部来自真实 pairwise match。
     const MultiViewTrackBuildResult tracks = builder.build(buildOptions);
     result.retainedTrackCount = static_cast<int>(tracks.tracks.size());
     result.prunedTrackCount = tracks.prunedByQualityThinning;

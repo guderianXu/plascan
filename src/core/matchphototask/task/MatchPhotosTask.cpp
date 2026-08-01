@@ -1,39 +1,10 @@
 #include "MatchPhotosTask.h"
 
-// Avoid Qt keyword macros rewriting LibTorch's slots() member name.
-#ifdef slots
-#undef slots
-#define PLASCAN_MATCHPHOTOS_RESTORE_QT_SLOTS
-#endif
-#ifdef signals
-#undef signals
-#define PLASCAN_MATCHPHOTOS_RESTORE_QT_SIGNALS
-#endif
-#ifdef emit
-#undef emit
-#define PLASCAN_MATCHPHOTOS_RESTORE_QT_EMIT
-#endif
-
-#include "FeatureFileIO.h"
-#include "FeatureOutput.h"
-
-#ifdef PLASCAN_MATCHPHOTOS_RESTORE_QT_SLOTS
-#define slots Q_SLOTS
-#undef PLASCAN_MATCHPHOTOS_RESTORE_QT_SLOTS
-#endif
-#ifdef PLASCAN_MATCHPHOTOS_RESTORE_QT_SIGNALS
-#define signals Q_SIGNALS
-#undef PLASCAN_MATCHPHOTOS_RESTORE_QT_SIGNALS
-#endif
-#ifdef PLASCAN_MATCHPHOTOS_RESTORE_QT_EMIT
-#define emit Q_EMIT
-#undef PLASCAN_MATCHPHOTOS_RESTORE_QT_EMIT
-#endif
-
 #include "FeatureStage.h"
 #include "GeometryVerifyStage.h"
 #include "GuidedMatchStage.h"
 #include "MatchPhotosAlgorithmSelector.h"
+#include "MatchPhotosFeatureCache.h"
 #include "MatchPhotosRuntime.h"
 #include "MatchingStage.h"
 #include "OverlapAnalyzer.h"
@@ -46,7 +17,7 @@
 #include <opencv2/imgcodecs.hpp>
 
 #include <algorithm>
-#include <cstring>
+#include <memory>
 
 namespace xjw
 {
@@ -60,9 +31,11 @@ MatchPhotosStageReport makeAlgorithmSelectionReport(const MatchPhotosAlgorithmPl
     MatchPhotosStageReport report;
     report.stageId = QStringLiteral("algorithm_selection");
     report.displayName = QStringLiteral("算法选择");
-    report.status = MatchPhotosStageStatus::Completed;
-    report.message = QStringLiteral("%1：%2")
-                         .arg(algorithmPlanSummary(plan), plan.reason);
+    report.status = plan.valid ? MatchPhotosStageStatus::Completed
+                               : MatchPhotosStageStatus::Failed;
+    report.message = plan.valid
+        ? QStringLiteral("%1：%2").arg(algorithmPlanSummary(plan), plan.reason)
+        : plan.validationError;
     return report;
 }
 
@@ -75,24 +48,6 @@ MatchPhotosStageReport makePairSelectionReport(const PairSelectionResult &select
     report.itemCount = static_cast<int>(selection.candidates.size());
     report.message = selection.detail;
     return report;
-}
-
-cv::Mat tensorToDescriptorMat(const torch::Tensor &tensor)
-{
-    if (!tensor.defined() || tensor.numel() <= 0 || tensor.dim() != 2)
-    {
-        return cv::Mat();
-    }
-
-    torch::Tensor cpu = tensor.to(torch::kCPU).to(torch::kFloat32).contiguous();
-    const int rows = static_cast<int>(cpu.size(0));
-    const int cols = static_cast<int>(cpu.size(1));
-    cv::Mat descriptors(rows, cols, CV_32F);
-    const auto byteCount = static_cast<std::size_t>(rows) *
-        static_cast<std::size_t>(cols) *
-        sizeof(float);
-    std::memcpy(descriptors.ptr<float>(0), cpu.data_ptr<float>(), byteCount);
-    return descriptors;
 }
 
 QString normalizedCameraLookupKey(const QString &path)
@@ -116,36 +71,42 @@ bool loadVocabularyFeatures(const MatchPhotosContext &context,
     }
 
     features->clear();
+    if (!context.featureCache)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("通用预选缺少任务级特征缓存");
+        }
+        return false;
+    }
     features->reserve(static_cast<std::size_t>(context.pairInput.images.size()));
     for (const QString &imagePath : context.pairInput.images)
     {
-        const QString featurePath = matchPhotosFeaturePath(context, imagePath, plan);
-        QString storedImageName;
-        FeatureOutput output;
-        if (!FeatureFileIO::read(featurePath, storedImageName, output))
+        const std::shared_ptr<const image_matching::FeatureSet> cached =
+            context.featureCache->find(imagePath);
+        if (!cached)
         {
             if (errorMessage)
             {
-                *errorMessage = QStringLiteral("通用预选缺少可用特征文件：%1").arg(featurePath);
+                *errorMessage = QStringLiteral("通用预选缺少内存特征：%1").arg(imagePath);
             }
             return false;
         }
 
-        cv::Mat descriptors = tensorToDescriptorMat(output.descriptors);
-        if (descriptors.empty() ||
-            output.keypoints.size() != static_cast<std::size_t>(descriptors.rows))
+        if (!cached->isConsistent())
         {
             if (errorMessage)
             {
-                *errorMessage = QStringLiteral("通用预选特征文件无效：%1").arg(featurePath);
+                *errorMessage = QStringLiteral("通用预选内存特征无效：%1").arg(imagePath);
             }
             return false;
         }
 
         VocabularyImageFeatures item;
         item.imagePath = common::io::toUtf8Path(imagePath);
-        item.keypoints = output.keypoints;
-        item.descriptors = descriptors;
+        item.keypoints = cached->keypoints;
+        // cv::Mat 采用引用计数；缓存贯穿整个任务，因此这里无需复制数百 MiB 描述子。
+        item.descriptors = cached->descriptors;
         features->push_back(std::move(item));
     }
     return true;
@@ -434,9 +395,9 @@ void clearTransientMatchPayloads(std::vector<MatchPhotosMatchRecord> *matchRecor
 
     for (MatchPhotosMatchRecord &record : *matchRecords)
     {
-        // inlierIndexPairs 只用于构建连接点轨迹，返回 GUI 前必须释放，避免结果对象携带大块临时索引。
-        std::vector<std::array<int, 2>> empty;
-        record.inlierIndexPairs.swap(empty);
+        // PairMatchData 已经提交到每影像 `.pimatch` 分片，返回 GUI 后只需保留
+        // 路径和统计。及时释放坐标数组可显著降低大型项目的峰值内存。
+        record.pairData.reset();
     }
 }
 
@@ -455,14 +416,25 @@ const MatchPhotosOptions &MatchPhotosTask::options() const
 MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
 {
     MatchPhotosResult result;
-    reportMatchPhotosProgress(context,
+    MatchPhotosContext runtimeContext = context;
+    if (!runtimeContext.featureCache)
+    {
+        runtimeContext.featureCache = std::make_shared<MatchPhotosFeatureCache>();
+    }
+
+    reportMatchPhotosProgress(runtimeContext,
                               QStringLiteral("algorithm_selection"),
                               QStringLiteral("选择 SIFT + LightGlue 连接点流程"),
                               0,
                               1);
     result.algorithmPlan = MatchPhotosAlgorithmSelector::select(_options);
     result.stages.push_back(makeAlgorithmSelectionReport(result.algorithmPlan));
-    reportMatchPhotosProgress(context,
+    if (!result.algorithmPlan.valid)
+    {
+        result.errorMessage = result.algorithmPlan.validationError;
+        return result;
+    }
+    reportMatchPhotosProgress(runtimeContext,
                               QStringLiteral("algorithm_selection"),
                               QStringLiteral("连接点算法已确定: SIFT + LightGlue"),
                               1,
@@ -476,24 +448,24 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
     const TrackBuildStage trackBuildStage;
     const GuidedMatchStage guidedMatchStage;
 
-    reportMatchPhotosProgress(context,
+    reportMatchPhotosProgress(runtimeContext,
                               QStringLiteral("feature"),
                               QStringLiteral("SIFT 特征提取：准备处理影像"),
                               0,
-                              std::max(1, static_cast<int>(context.pairInput.images.size())));
+                              std::max(1, static_cast<int>(runtimeContext.pairInput.images.size())));
     const MatchPhotosStageReport featureReport =
-        featureStage.run(context, _options, result.algorithmPlan, &result.features);
-    reportMatchPhotosProgress(context,
+        featureStage.run(runtimeContext, _options, result.algorithmPlan, &result.features);
+    reportMatchPhotosProgress(runtimeContext,
                               QStringLiteral("feature"),
                               featureReport.message,
                               featureReport.itemCount,
-                              std::max(1, static_cast<int>(context.pairInput.images.size())));
+                              std::max(1, static_cast<int>(runtimeContext.pairInput.images.size())));
     if (appendStageAndStopOnFailure(&result, featureReport))
     {
         return result;
     }
 
-    PairSelectionInput pairInput = context.pairInput;
+    PairSelectionInput pairInput = runtimeContext.pairInput;
     PairSelectionPolicy pairPolicy = _options.pairPolicy;
     const bool manualOnly = pairPolicy.mode == PairSelectionMode::ManualOnly;
     MatchPhotosOptions effectiveOptions = _options;
@@ -512,12 +484,12 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
 
     VocabularyOverlapResult vocabularyOverlap;
     MatchPhotosStageReport vocabularyReport;
-    reportMatchPhotosProgress(context,
+    reportMatchPhotosProgress(runtimeContext,
                               QStringLiteral("generic_preselection"),
                               QStringLiteral("通用预选：构建候选影像对"),
                               0,
                               1);
-    if (!buildVocabularyPreselection(context,
+    if (!buildVocabularyPreselection(runtimeContext,
                                      effectiveOptions,
                                      result.algorithmPlan,
                                      &vocabularyOverlap,
@@ -529,7 +501,7 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
         return result;
     }
     result.stages.push_back(vocabularyReport);
-    reportMatchPhotosProgress(context,
+    reportMatchPhotosProgress(runtimeContext,
                               QStringLiteral("generic_preselection"),
                               vocabularyReport.message,
                               1,
@@ -541,12 +513,12 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
 
     OverlapAnalysisResult cameraOverlap;
     MatchPhotosStageReport referenceReport;
-    reportMatchPhotosProgress(context,
+    reportMatchPhotosProgress(runtimeContext,
                               QStringLiteral("reference_preselection"),
                               QStringLiteral("参考预选：检查相机参考"),
                               0,
                               1);
-    if (!buildReferencePreselection(context, effectiveOptions, &cameraOverlap, &referenceReport))
+    if (!buildReferencePreselection(runtimeContext, effectiveOptions, &cameraOverlap, &referenceReport))
     {
         result.stages.push_back(referenceReport);
         result.success = false;
@@ -554,7 +526,7 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
         return result;
     }
     result.stages.push_back(referenceReport);
-    reportMatchPhotosProgress(context,
+    reportMatchPhotosProgress(runtimeContext,
                               QStringLiteral("reference_preselection"),
                               referenceReport.message,
                               1,
@@ -564,7 +536,7 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
         pairInput.cameraOverlapResult = &cameraOverlap;
     }
 
-    reportMatchPhotosProgress(context,
+    reportMatchPhotosProgress(runtimeContext,
                               QStringLiteral("pair_selection"),
                               QStringLiteral("影像对规划：生成候选匹配对"),
                               0,
@@ -579,21 +551,21 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
     }
 
     result.stages.push_back(makePairSelectionReport(result.pairSelection));
-    reportMatchPhotosProgress(context,
+    reportMatchPhotosProgress(runtimeContext,
                               QStringLiteral("pair_selection"),
                               QStringLiteral("影像对规划完成：候选 %1 对")
                                   .arg(static_cast<int>(result.pairSelection.candidates.size())),
                               1,
                               1);
 
-    reportMatchPhotosProgress(context,
+    reportMatchPhotosProgress(runtimeContext,
                               QStringLiteral("matching"),
                               QStringLiteral("两两匹配：准备处理候选影像对"),
                               0,
                               std::max(1, static_cast<int>(result.pairSelection.candidates.size())));
     const MatchPhotosStageReport matchingReport =
-        matchingStage.run(context, _options, result.algorithmPlan, result.pairSelection, &result.matches);
-    reportMatchPhotosProgress(context,
+        matchingStage.run(runtimeContext, _options, result.algorithmPlan, result.pairSelection, &result.matches);
+    reportMatchPhotosProgress(runtimeContext,
                               QStringLiteral("matching"),
                               matchingReport.message,
                               matchingReport.itemCount,
@@ -603,8 +575,8 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
         return result;
     }
     const MatchPhotosStageReport geometryReport =
-        geometryVerifyStage.run(context, _options, &result.matches);
-    reportMatchPhotosProgress(context,
+        geometryVerifyStage.run(runtimeContext, _options, &result.matches);
+    reportMatchPhotosProgress(runtimeContext,
                               QStringLiteral("geometry"),
                               geometryReport.message,
                               geometryReport.itemCount,
@@ -615,8 +587,8 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
         return result;
     }
     const MatchPhotosStageReport trackReport =
-        trackBuildStage.run(context, _options, result.matches, &result);
-    reportMatchPhotosProgress(context,
+        trackBuildStage.run(runtimeContext, _options, &result.matches, &result);
+    reportMatchPhotosProgress(runtimeContext,
                               QStringLiteral("track_build"),
                               trackReport.message,
                               trackReport.itemCount,
@@ -627,7 +599,7 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
     {
         return result;
     }
-    result.stages.push_back(guidedMatchStage.run(context, _options));
+    result.stages.push_back(guidedMatchStage.run(runtimeContext, _options));
 
     result.success = true;
     return result;

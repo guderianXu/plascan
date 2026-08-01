@@ -26,7 +26,8 @@ public:
     void startDemFromPointCloudAsync(
         const xjw::gui::project::DemGenerationRequest &request);
 
-    void startMapProjectAsync(const QJsonObject &settings);
+    void startMapProjectAsync(
+        const xjw::gui::project::OrthoGenerationRequest &request);
     void cancelMapProject();
 
 signals:

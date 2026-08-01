@@ -5,11 +5,11 @@
 #include "project/ProjectIO.h"
 #include "ProjectCameraImportService.h"
 #include "ProjectCameraInitialization.h"
+#include "ProjectResultRecords.h"
 #include "ProjectSfmWorkflow.h"
 #include "GuiTaskRunner.h"
 #include "Logger.h"
 #include "workflow/AerialTriangulationWorkflow.h"
-#include "AlgorithmCompat.h"
 
 #include <QDir>
 #include <QFileDialog>
@@ -549,27 +549,16 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
                              : (qualityLevel == 2 ? QStringLiteral("high")
                                                   : QStringLiteral("highest")));
     workflowOptions.threads = settings.value(QStringLiteral("threads")).toInt(8);
-    const QString requestedFeatureSuffix =
-        settings.value(QStringLiteral("feature_suffix")).toString().trimmed().toLower();
-    QString requestedFeatureAlgorithm =
-        settings.value(QStringLiteral("feature_algorithm")).toString().trimmed().toLower();
-    if (requestedFeatureAlgorithm.isEmpty())
-    {
-        requestedFeatureAlgorithm = xjw::feature_match::featureAlgorithmForSuffix(requestedFeatureSuffix);
-    }
-    workflowOptions.featureAlgorithm = requestedFeatureAlgorithm.isEmpty()
-        ? QStringLiteral("disk")
-        : requestedFeatureAlgorithm;
-    workflowOptions.matchAlgorithm = settings.value(QStringLiteral("match_algorithm")).toString().trimmed().toLower();
-    if (workflowOptions.matchAlgorithm.isEmpty())
-    {
-        workflowOptions.matchAlgorithm = QStringLiteral("lightglue");
-    }
+    workflowOptions.matchingAlgorithmId =
+        settings.value(QStringLiteral("algorithm_id"))
+            .toString(QStringLiteral("sift_lightglue"))
+            .trimmed()
+            .toLower();
     workflowOptions.resetAlignment = false;
     workflowOptions.autoGenerateMissingMatches = false;
 
-    LOG_INFO(QStringLiteral("初始化相机位姿: 使用匹配链路 %1 + %2")
-        .arg(workflowOptions.featureAlgorithm.toUpper(), workflowOptions.matchAlgorithm));
+    LOG_INFO(QStringLiteral("初始化相机位姿: 使用影像匹配算法 %1")
+        .arg(workflowOptions.matchingAlgorithmId));
 
     auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
     _owner->setAtCancelFlag(cancelFlag);
@@ -673,18 +662,8 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
                 return;
             }
 
-            for (const xjw::matchphotos::MatchPhotosFeatureRecord &feature :
-                 workflowResult.tiePointResult.features)
-            {
-                manager->_owner->appendIpfindResult(feature.imagePath,
-                                                     feature.featurePath,
-                                                     feature.settings);
-            }
-            for (const xjw::matchphotos::MatchPhotosMatchRecord &match :
-                 workflowResult.tiePointResult.matches)
-            {
-                manager->_owner->appendIpmatchResult(QStringList{match.matchPath}, match.settings);
-            }
+            manager->_owner->appendImageMatchResults(
+                xjw::gui::project::makeImageMatchResultRecords(workflowResult.tiePointResult));
 
             const InitPoseFinalizeResult finalizeResult = finalizeInitializedCameraPoses(manager->_projectData,
                                                                                         result,

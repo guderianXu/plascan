@@ -56,7 +56,7 @@ target_link_libraries(aerial_triangulation
 target_compile_definitions(aerial_triangulation PRIVATE
     PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
-target_compile_features(aerial_triangulation PUBLIC cxx_std_17)
+target_compile_features(aerial_triangulation PUBLIC cxx_std_20)
 
 if(BUILD_TESTS)
     add_subdirectory(tests)

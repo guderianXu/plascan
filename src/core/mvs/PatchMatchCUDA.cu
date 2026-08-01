@@ -284,6 +284,26 @@ inline float cpuBilinear(const cv::Mat &image, float u, float v)
          + fy * ((1.f - fx) * v01 + fx * v11);
 }
 
+inline bool cpuBilinearMaskValid(const cv::Mat &mask, float u, float v)
+{
+    if (mask.empty())
+    {
+        return true;
+    }
+    if (u < 0.f || v < 0.f || u >= static_cast<float>(mask.cols - 1) ||
+        v >= static_cast<float>(mask.rows - 1))
+    {
+        return false;
+    }
+
+    const int column = static_cast<int>(u);
+    const int row = static_cast<int>(v);
+    return mask.at<std::uint8_t>(row, column) != 0 &&
+           mask.at<std::uint8_t>(row, column + 1) != 0 &&
+           mask.at<std::uint8_t>(row + 1, column) != 0 &&
+           mask.at<std::uint8_t>(row + 1, column + 1) != 0;
+}
+
 void cpuComposeHomography(int row,
                           int col,
                           float depth,
@@ -334,19 +354,18 @@ float cpuComputeHomographyNcc(int refCol,
                               const CpuNormal &normal,
                               const cv::Mat &refImage,
                               const cv::Mat &srcImage,
+                              const cv::Mat &refMask,
+                              const cv::Mat &srcMask,
                               const float *srcData,
                               const float invK[4],
-                              int patchHalf)
+                              int patchHalf,
+                              float minimumMaskedSupportRatio)
 {
     float H[9];
     cpuComposeHomography(refRow, refCol, depth, normal, srcData, invK, H);
 
-    float sumRef = 0.f;
-    float sumSrc = 0.f;
-    float sumRef2 = 0.f;
-    float sumSrc2 = 0.f;
-    float sumRefSrc = 0.f;
-    int count = 0;
+    PatchNccAccumulator accumulator;
+    const bool mask_aware = !refMask.empty() || !srcMask.empty();
 
     for (int dv = -patchHalf; dv <= patchHalf; ++dv)
     {
@@ -359,49 +378,38 @@ float cpuComputeHomographyNcc(int refCol,
                 continue;
             }
 
+            if (!refMask.empty() && refMask.at<std::uint8_t>(pv, pu) == 0)
+            {
+                // Reference-mask exclusions are outside the photometric
+                // support domain. Do not count them against the paired
+                // support ratio, otherwise every foreground silhouette is
+                // penalized merely because its patch overlaps background.
+                continue;
+            }
             const float refValue = refImage.at<float>(pv, pu);
             const float wsC = H[0] * static_cast<float>(pu) + H[1] * static_cast<float>(pv) + H[2];
             const float wsR = H[3] * static_cast<float>(pu) + H[4] * static_cast<float>(pv) + H[5];
             const float wsZ = H[6] * static_cast<float>(pu) + H[7] * static_cast<float>(pv) + H[8];
             if (std::fabs(wsZ) < 1e-6f)
             {
+                accumulator.addCandidate(false);
                 continue;
             }
 
             const float srcU = wsC / wsZ;
             const float srcV = wsR / wsZ;
             const float srcValue = cpuBilinear(srcImage, srcU, srcV);
-            if (srcValue < 0.f)
+            if (srcValue < 0.f || !cpuBilinearMaskValid(srcMask, srcU, srcV))
             {
+                accumulator.addCandidate(false);
                 continue;
             }
 
-            sumRef += refValue;
-            sumSrc += srcValue;
-            sumRef2 += refValue * refValue;
-            sumSrc2 += srcValue * srcValue;
-            sumRefSrc += refValue * srcValue;
-            ++count;
+            accumulator.addCandidate(true, refValue, srcValue);
         }
     }
 
-    if (count < 4)
-    {
-        return 0.f;
-    }
-
-    const float invCount = 1.f / static_cast<float>(count);
-    const float meanRef = sumRef * invCount;
-    const float meanSrc = sumSrc * invCount;
-    const float varRef = sumRef2 * invCount - meanRef * meanRef;
-    const float varSrc = sumSrc2 * invCount - meanSrc * meanSrc;
-    const float cov = sumRefSrc * invCount - meanRef * meanSrc;
-    const float denom = std::sqrt(std::max(0.f, varRef * varSrc));
-    if (denom < 1e-5f)
-    {
-        return 0.f;
-    }
-    return ((cov / denom) + 1.f) * 0.5f;
+    return accumulator.score(mask_aware, minimumMaskedSupportRatio);
 }
 
 float cpuEvalHypCost(int col,
@@ -410,9 +418,12 @@ float cpuEvalHypCost(int col,
                      const CpuNormal &normal,
                      const cv::Mat &refImage,
                      const std::vector<cv::Mat> &srcImages,
+                     const cv::Mat &refMask,
+                     const std::vector<cv::Mat> &srcMasks,
                      const std::vector<float> &srcDatas,
                      int patchHalf,
-                     const float invK[4])
+                     const float invK[4],
+                     float minimumMaskedSupportRatio)
 {
     if (depth <= 0.f)
     {
@@ -426,8 +437,10 @@ float cpuEvalHypCost(int col,
     {
         const float *srcData = srcDatas.data() + srcIndex * 16;
         const float ncc = cpuComputeHomographyNcc(col, row, depth, normal,
-                                                  refImage, srcImages[srcIndex], srcData,
-                                                  invK, patchHalf);
+                                                  refImage, srcImages[srcIndex],
+                                                  refMask, srcMasks[srcIndex], srcData,
+                                                  invK, patchHalf,
+                                                  minimumMaskedSupportRatio);
         scores[static_cast<size_t>(srcIndex)] = ncc;
     }
 
@@ -680,6 +693,25 @@ bool getOrUploadGrayImageGpu(
     return true;
 }
 
+cv::Mat resizedBinaryMask(const cv::Mat *mask, const cv::Size &targetSize)
+{
+    if (mask == nullptr || mask->empty())
+    {
+        return cv::Mat();
+    }
+
+    cv::Mat binary;
+    cv::compare(*mask, 0, binary, cv::CMP_GT);
+    if (binary.size() == targetSize)
+    {
+        return binary.isContinuous() ? binary : binary.clone();
+    }
+
+    cv::Mat resized;
+    cv::resize(binary, resized, targetSize, 0.0, 0.0, cv::INTER_NEAREST);
+    return resized.isContinuous() ? resized : resized.clone();
+}
+
 } // namespace
 
 // =============================================================================
@@ -712,6 +744,28 @@ __device__ float bilinear(const float *img, int W, int H, float u, float v)
     float v00 = img[iy*W+ix],     v10 = img[iy*W+ix+1];
     float v01 = img[(iy+1)*W+ix], v11 = img[(iy+1)*W+ix+1];
     return (1-fy)*((1-fx)*v00 + fx*v10) + fy*((1-fx)*v01 + fx*v11);
+}
+
+__device__ bool bilinearMaskValid(const std::uint8_t *mask,
+                                  int width,
+                                  int height,
+                                  float u,
+                                  float v)
+{
+    if (mask == nullptr)
+    {
+        return true;
+    }
+    if (u < 0.0f || v < 0.0f || u >= width - 1 || v >= height - 1)
+    {
+        return false;
+    }
+    const int column = static_cast<int>(u);
+    const int row = static_cast<int>(v);
+    return mask[row * width + column] != 0 &&
+           mask[row * width + column + 1] != 0 &&
+           mask[(row + 1) * width + column] != 0 &&
+           mask[(row + 1) * width + column + 1] != 0;
 }
 
 // =============================================================================
@@ -924,14 +978,17 @@ __device__ float computeHomographyNCC(
     float depth, const float normal[3],
     const float *refImg, int refW, int refH,
     const float *srcImg, int srcW, int srcH,
+    const std::uint8_t *refMask,
+    const std::uint8_t *srcMask,
     const float *srcData,
-    int patchHalf)
+    int patchHalf,
+    float minimumMaskedSupportRatio)
 {
     float H[9];
     composeHomography(v_r, u_r, depth, normal, srcData, H);
 
-    float sumRef=0, sumSrc=0, sumRef2=0, sumSrc2=0, sumRefSrc=0;
-    int cnt = 0;
+    PatchNccAccumulator accumulator;
+    const bool maskAware = refMask != nullptr || srcMask != nullptr;
     const int r = patchHalf;
 
     for (int dv = -r; dv <= r; ++dv) 
@@ -941,33 +998,39 @@ __device__ float computeHomographyNCC(
             int pu = u_r + du, pv = v_r + dv;
             if (pu<0||pu>=refW||pv<0||pv>=refH) continue;
 
+            if (refMask != nullptr && refMask[pv * refW + pu] == 0)
+            {
+                // Reference-mask exclusions are not candidate observations.
+                // Keeping them out of the denominator preserves foreground
+                // boundary support while source-mask failures still reject
+                // genuinely invalid paired samples.
+                continue;
+            }
             float valRef = refImg[pv*refW + pu];
 
             float ws_c = H[0]*pu + H[1]*pv + H[2];
             float ws_r = H[3]*pu + H[4]*pv + H[5];
             float ws_z = H[6]*pu + H[7]*pv + H[8];
-            if (fabsf(ws_z) < 1e-6f) continue;
+            if (fabsf(ws_z) < 1e-6f)
+            {
+                accumulator.addCandidate(false);
+                continue;
+            }
             float u_s = ws_c / ws_z;
             float v_s = ws_r / ws_z;
 
             float valSrc = bilinear(srcImg, srcW, srcH, u_s, v_s);
-            if (valSrc < 0) continue;
+            if (valSrc < 0 || !bilinearMaskValid(srcMask, srcW, srcH, u_s, v_s))
+            {
+                accumulator.addCandidate(false);
+                continue;
+            }
 
-            sumRef   += valRef;   sumSrc   += valSrc;
-            sumRef2  += valRef*valRef; sumSrc2  += valSrc*valSrc;
-            sumRefSrc += valRef*valSrc;
-            ++cnt;
+            accumulator.addCandidate(true, valRef, valSrc);
         }
     }
 
-    if (cnt < 4) return 0.f;
-    float n = (float)cnt;
-    float mR=sumRef/n, mS=sumSrc/n;
-    float vR=sumRef2/n-mR*mR, vS=sumSrc2/n-mS*mS;
-    float cov=sumRefSrc/n-mR*mS;
-    float denom=sqrtf(vR*vS);
-    if (denom < 1e-5f) return 0.f;
-    return ((cov/denom) + 1.f) * 0.5f;
+    return accumulator.score(maskAware, minimumMaskedSupportRatio);
 }
 
 // =============================================================================
@@ -1053,7 +1116,8 @@ __device__ float evalHypCost(
     int col, int row, float depth, const float normal[3],
     const float *refImg, int refW, int refH,
     const float *const *srcImgs, const float *srcDatas, int srcW, int srcH, int numSrc,
-    int patchHalf)
+    const std::uint8_t *refMask, const std::uint8_t *srcMasks,
+    int patchHalf, float minimumMaskedSupportRatio)
 {
     if (depth <= 0.f) return 2.f;
     float scores[kMaxPatchMatchSourceViews] = {};
@@ -1067,8 +1131,11 @@ __device__ float evalHypCost(
             col, row, depth, normal,
             refImg, refW, refH,
             srcImg, srcW, srcH,
+            refMask,
+            srcMasks == nullptr ? nullptr : srcMasks + si * srcW * srcH,
             srcDatas + si * 16,
-            patchHalf);
+            patchHalf,
+            minimumMaskedSupportRatio);
         scores[si] = ncc;
     }
     const float robust_ncc = robustMultiSourceNcc(scores, source_count);
@@ -1083,8 +1150,10 @@ __global__ void kernelSweepTB(
     float *depthMap, float *normalMap, float *confMap,
     const float *refImg, int W, int H,
     const float *const *srcImgs, const float *srcDatas, int srcW, int srcH, int numSrc,
+    const std::uint8_t *refMask, const std::uint8_t *srcMasks,
     const float *hintDepth, const float *hintRadius,
     float zNear, float zFar, int patchHalf,
+    float minimumMaskedSupportRatio,
     float perturbation, unsigned long long seed)
 {
     int col = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1145,7 +1214,8 @@ __global__ void kernelSweepTB(
             float cost = evalHypCost(col, row, dep[hi], nor[hi],
                                      refImg, W, H,
                                      srcImgs, srcDatas, srcW, srcH, numSrc,
-                                     patchHalf);
+                                     refMask, srcMasks,
+                                     patchHalf, minimumMaskedSupportRatio);
             if (cost < bestCost)
             {
                 bestCost = cost;
@@ -1173,8 +1243,10 @@ __global__ void kernelSweepBT(
     float *depthMap, float *normalMap, float *confMap,
     const float *refImg, int W, int H,
     const float *const *srcImgs, const float *srcDatas, int srcW, int srcH, int numSrc,
+    const std::uint8_t *refMask, const std::uint8_t *srcMasks,
     const float *hintDepth, const float *hintRadius,
     float zNear, float zFar, int patchHalf,
+    float minimumMaskedSupportRatio,
     float perturbation, unsigned long long seed)
 {
     int col = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1233,7 +1305,8 @@ __global__ void kernelSweepBT(
             float cost = evalHypCost(col, row, dep[hi], nor[hi],
                                      refImg, W, H,
                                      srcImgs, srcDatas, srcW, srcH, numSrc,
-                                     patchHalf);
+                                     refMask, srcMasks,
+                                     patchHalf, minimumMaskedSupportRatio);
             if (cost < bestCost) { bestCost = cost; bestIdx = hi; }
         }
 
@@ -1257,8 +1330,10 @@ __global__ void kernelSweepLR(
     float *depthMap, float *normalMap, float *confMap,
     const float *refImg, int W, int H,
     const float *const *srcImgs, const float *srcDatas, int srcW, int srcH, int numSrc,
+    const std::uint8_t *refMask, const std::uint8_t *srcMasks,
     const float *hintDepth, const float *hintRadius,
     float zNear, float zFar, int patchHalf,
+    float minimumMaskedSupportRatio,
     float perturbation, unsigned long long seed)
 {
     int row = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1314,7 +1389,8 @@ __global__ void kernelSweepLR(
             float cost = evalHypCost(col, row, dep[hi], nor[hi],
                                      refImg, W, H,
                                      srcImgs, srcDatas, srcW, srcH, numSrc,
-                                     patchHalf);
+                                     refMask, srcMasks,
+                                     patchHalf, minimumMaskedSupportRatio);
             if (cost < bestCost) { bestCost = cost; bestIdx = hi; }
         }
 
@@ -1338,8 +1414,10 @@ __global__ void kernelSweepRL(
     float *depthMap, float *normalMap, float *confMap,
     const float *refImg, int W, int H,
     const float *const *srcImgs, const float *srcDatas, int srcW, int srcH, int numSrc,
+    const std::uint8_t *refMask, const std::uint8_t *srcMasks,
     const float *hintDepth, const float *hintRadius,
     float zNear, float zFar, int patchHalf,
+    float minimumMaskedSupportRatio,
     float perturbation, unsigned long long seed)
 {
     int row = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1398,7 +1476,8 @@ __global__ void kernelSweepRL(
             float cost = evalHypCost(col, row, dep[hi], nor[hi],
                                      refImg, W, H,
                                      srcImgs, srcDatas, srcW, srcH, numSrc,
-                                     patchHalf);
+                                     refMask, srcMasks,
+                                     patchHalf, minimumMaskedSupportRatio);
             if (cost < bestCost) { bestCost = cost; bestIdx = hi; }
         }
 
@@ -1420,7 +1499,9 @@ __device__ inline void considerHypothesis(
     float candidateDepth, const float candidateNormal[3],
     const float *refImg, int W, int H,
     const float *const *srcImgs, const float *srcDatas, int srcW, int srcH, int numSrc,
+    const std::uint8_t *refMask, const std::uint8_t *srcMasks,
     float zNear, float zFar, int patchHalf,
+    float minimumMaskedSupportRatio,
     float *bestCost, float *bestDepth, float bestNormal[3])
 {
     if (candidateDepth <= 0.f)
@@ -1432,7 +1513,8 @@ __device__ inline void considerHypothesis(
     const float cost = evalHypCost(col, row, candidateDepth, candidateNormal,
                                    refImg, W, H,
                                    srcImgs, srcDatas, srcW, srcH, numSrc,
-                                   patchHalf);
+                                   refMask, srcMasks,
+                                   patchHalf, minimumMaskedSupportRatio);
     if (cost < *bestCost)
     {
         *bestCost = cost;
@@ -1451,8 +1533,10 @@ __global__ void kernelCheckerboardSweep(
     float *depthMap, float *normalMap, float *confMap,
     const float *refImg, int W, int H,
     const float *const *srcImgs, const float *srcDatas, int srcW, int srcH, int numSrc,
+    const std::uint8_t *refMask, const std::uint8_t *srcMasks,
     const float *hintDepth, const float *hintRadius,
     float zNear, float zFar, int patchHalf,
+    float minimumMaskedSupportRatio,
     float perturbation, unsigned long long seed,
     int parity)
 {
@@ -1489,7 +1573,8 @@ __global__ void kernelCheckerboardSweep(
     float bestCost = evalHypCost(col, row, bestDepth, bestNormal,
                                  refImg, W, H,
                                  srcImgs, srcDatas, srcW, srcH, numSrc,
-                                 patchHalf);
+                                 refMask, srcMasks,
+                                 patchHalf, minimumMaskedSupportRatio);
 
     uint32_t rngState = mixRngSeed(seed, idx, parity);
     float randDepth = perturbDepthFast(perturbation, currDepth, rngState);
@@ -1500,17 +1585,23 @@ __global__ void kernelCheckerboardSweep(
     considerHypothesis(col, row, randDepth, randNormal,
                        refImg, W, H,
                        srcImgs, srcDatas, srcW, srcH, numSrc,
+                       refMask, srcMasks,
                        localNear, localFar, patchHalf,
+                       minimumMaskedSupportRatio,
                        &bestCost, &bestDepth, bestNormal);
     considerHypothesis(col, row, currDepth, randNormal,
                        refImg, W, H,
                        srcImgs, srcDatas, srcW, srcH, numSrc,
+                       refMask, srcMasks,
                        localNear, localFar, patchHalf,
+                       minimumMaskedSupportRatio,
                        &bestCost, &bestDepth, bestNormal);
     considerHypothesis(col, row, randDepth, currNormal,
                        refImg, W, H,
                        srcImgs, srcDatas, srcW, srcH, numSrc,
+                       refMask, srcMasks,
                        localNear, localFar, patchHalf,
+                       minimumMaskedSupportRatio,
                        &bestCost, &bestDepth, bestNormal);
 
     const int dRow[4] = { -1, 1, 0, 0 };
@@ -1545,7 +1636,9 @@ __global__ void kernelCheckerboardSweep(
         considerHypothesis(col, row, propDepth, neighborNormal,
                            refImg, W, H,
                            srcImgs, srcDatas, srcW, srcH, numSrc,
+                           refMask, srcMasks,
                            localNear, localFar, patchHalf,
+                           minimumMaskedSupportRatio,
                            &bestCost, &bestDepth, bestNormal);
     }
 
@@ -1581,7 +1674,9 @@ bool PatchMatchDepthEstimator::estimateGPU(
     cv::Mat                      *confOut,
     std::string                  *errorMsg,
     const cv::Mat                *hintDepth,
-    const cv::Mat                *hintRadius)
+    const cv::Mat                *hintRadius,
+    const cv::Mat                *refValidMask,
+    const std::vector<cv::Mat>   *srcValidMasks)
 {
     const int refW = refGray.cols, refH = refGray.rows;
     const int N    = (int)srcGrays.size();
@@ -1593,6 +1688,21 @@ bool PatchMatchDepthEstimator::estimateGPU(
     cv::Mat hintRadiusScaled;
     const int sW = std::max(1, refW / ds);
     const int sH = std::max(1, refH / ds);
+    const cv::Size scaled_size(sW, sH);
+    const cv::Mat ref_mask_scaled = resizedBinaryMask(refValidMask, scaled_size);
+    std::vector<cv::Mat> source_masks_scaled(static_cast<std::size_t>(N));
+    bool has_source_masks = false;
+    if (srcValidMasks)
+    {
+        for (int source_index = 0; source_index < N; ++source_index)
+        {
+            source_masks_scaled[static_cast<std::size_t>(source_index)] =
+                resizedBinaryMask(&(*srcValidMasks)[static_cast<std::size_t>(source_index)],
+                                  scaled_size);
+            has_source_masks = has_source_masks ||
+                !source_masks_scaled[static_cast<std::size_t>(source_index)].empty();
+        }
+    }
 
     const HostPinholeCamera refCamS = makeHostPinholeCamera(refCam, ds);
 
@@ -1686,6 +1796,8 @@ bool PatchMatchDepthEstimator::estimateGPU(
     CudaDevicePtr<float> d_hint;
     CudaDevicePtr<float> d_hintRadius;
     CudaDevicePtr<float*> d_srcPtrs;
+    CudaDevicePtr<std::uint8_t> d_refMask;
+    CudaDevicePtr<std::uint8_t> d_srcMasks;
 
     CUDA_CHECK(cudaMalloc(d_srcData.out(), N*16    * sizeof(float)));
     CUDA_CHECK(cudaMalloc(d_depth.out(),   refPx   * sizeof(float)));
@@ -1695,6 +1807,39 @@ bool PatchMatchDepthEstimator::estimateGPU(
 
     CUDA_CHECK(cudaMemcpy(d_srcData, srcDatas.data(),     N*16*sizeof(float),    cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemset(d_conf, 0, refPx * sizeof(float)));
+
+    if (!ref_mask_scaled.empty())
+    {
+        CUDA_CHECK(cudaMalloc(d_refMask.out(), static_cast<std::size_t>(refPx)));
+        CUDA_CHECK(cudaMemcpy(d_refMask,
+                              ref_mask_scaled.ptr<std::uint8_t>(),
+                              static_cast<std::size_t>(refPx),
+                              cudaMemcpyHostToDevice));
+    }
+    if (has_source_masks)
+    {
+        std::vector<std::uint8_t> packed_masks(
+            static_cast<std::size_t>(N) * static_cast<std::size_t>(refPx), 255);
+        for (int source_index = 0; source_index < N; ++source_index)
+        {
+            const cv::Mat &source_mask =
+                source_masks_scaled[static_cast<std::size_t>(source_index)];
+            if (source_mask.empty())
+            {
+                continue;
+            }
+            std::memcpy(packed_masks.data() +
+                            static_cast<std::size_t>(source_index) * static_cast<std::size_t>(refPx),
+                        source_mask.ptr<std::uint8_t>(),
+                        static_cast<std::size_t>(refPx));
+        }
+        const std::size_t source_mask_bytes = packed_masks.size() * sizeof(std::uint8_t);
+        CUDA_CHECK(cudaMalloc(d_srcMasks.out(), source_mask_bytes));
+        CUDA_CHECK(cudaMemcpy(d_srcMasks,
+                              packed_masks.data(),
+                              source_mask_bytes,
+                              cudaMemcpyHostToDevice));
+    }
 
     std::vector<float*> hSrcPtrs(static_cast<size_t>(N), nullptr);
     bool refCacheHit = false;
@@ -1777,8 +1922,10 @@ bool PatchMatchDepthEstimator::estimateGPU(
                 d_depth, d_normal, d_conf,
                 d_ref, sW, sH,
                 d_srcPtrs, d_srcData, srcW, srcH2, N,
+                d_refMask, d_srcMasks,
                 d_hint, d_hintRadius,
                 zNear, zFar, config.patchHalf,
+                config.minimumMaskedPatchSupportRatio,
                 perturbation, baseSeed,
                 0);
             CUDA_CHECK(cudaGetLastError());
@@ -1787,8 +1934,10 @@ bool PatchMatchDepthEstimator::estimateGPU(
                 d_depth, d_normal, d_conf,
                 d_ref, sW, sH,
                 d_srcPtrs, d_srcData, srcW, srcH2, N,
+                d_refMask, d_srcMasks,
                 d_hint, d_hintRadius,
                 zNear, zFar, config.patchHalf,
+                config.minimumMaskedPatchSupportRatio,
                 perturbation, baseSeed + 111111ULL,
                 1);
             CUDA_CHECK(cudaGetLastError());
@@ -1800,8 +1949,10 @@ bool PatchMatchDepthEstimator::estimateGPU(
                 d_depth, d_normal, d_conf,
                 d_ref, sW, sH,
                 d_srcPtrs, d_srcData, srcW, srcH2, N,
+                d_refMask, d_srcMasks,
                 d_hint, d_hintRadius,
                 zNear, zFar, config.patchHalf,
+                config.minimumMaskedPatchSupportRatio,
                 perturbation, baseSeed);
             CUDA_CHECK(cudaGetLastError());
 
@@ -1810,8 +1961,10 @@ bool PatchMatchDepthEstimator::estimateGPU(
                 d_depth, d_normal, d_conf,
                 d_ref, sW, sH,
                 d_srcPtrs, d_srcData, srcW, srcH2, N,
+                d_refMask, d_srcMasks,
                 d_hint, d_hintRadius,
                 zNear, zFar, config.patchHalf,
+                config.minimumMaskedPatchSupportRatio,
                 perturbation, baseSeed + 111111ULL);
             CUDA_CHECK(cudaGetLastError());
 
@@ -1820,8 +1973,10 @@ bool PatchMatchDepthEstimator::estimateGPU(
                 d_depth, d_normal, d_conf,
                 d_ref, sW, sH,
                 d_srcPtrs, d_srcData, srcW, srcH2, N,
+                d_refMask, d_srcMasks,
                 d_hint, d_hintRadius,
                 zNear, zFar, config.patchHalf,
+                config.minimumMaskedPatchSupportRatio,
                 perturbation, baseSeed + 222222ULL);
             CUDA_CHECK(cudaGetLastError());
 
@@ -1830,8 +1985,10 @@ bool PatchMatchDepthEstimator::estimateGPU(
                 d_depth, d_normal, d_conf,
                 d_ref, sW, sH,
                 d_srcPtrs, d_srcData, srcW, srcH2, N,
+                d_refMask, d_srcMasks,
                 d_hint, d_hintRadius,
                 zNear, zFar, config.patchHalf,
+                config.minimumMaskedPatchSupportRatio,
                 perturbation, baseSeed + 333333ULL);
             CUDA_CHECK(cudaGetLastError());
         }
@@ -1862,6 +2019,12 @@ bool PatchMatchDepthEstimator::estimateGPU(
     cv::Mat depthS(sH, sW, CV_32F), confS(sH, sW, CV_32F);
     CUDA_CHECK(cudaMemcpy(depthS.ptr<float>(), d_depth, refPx*sizeof(float), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(confS.ptr<float>(),  d_conf,  refPx*sizeof(float), cudaMemcpyDeviceToHost));
+    if (!ref_mask_scaled.empty())
+    {
+        const cv::Mat invalid_reference = ref_mask_scaled == 0;
+        depthS.setTo(cv::Scalar(0.0f), invalid_reference);
+        confS.setTo(cv::Scalar(0.0f), invalid_reference);
+    }
 
     // ── 后处理结果统计诊断 ────────────────────────────────────────
     {
@@ -1950,7 +2113,9 @@ bool PatchMatchDepthEstimator::estimateCPU(
     cv::Mat                      *confOut,
     std::string                  *errorMsg,
     const cv::Mat                *hintDepth,
-    const cv::Mat                *hintRadius)
+    const cv::Mat                *hintRadius,
+    const cv::Mat                *refValidMask,
+    const std::vector<cv::Mat>   *srcValidMasks)
 {
     const int refW = refGray.cols;
     const int refH = refGray.rows;
@@ -1964,6 +2129,18 @@ bool PatchMatchDepthEstimator::estimateCPU(
                0, 0, cv::INTER_AREA);
     const int W = refScaled.cols;
     const int H = refScaled.rows;
+    const cv::Size scaled_size(W, H);
+    const cv::Mat ref_mask_scaled = resizedBinaryMask(refValidMask, scaled_size);
+    std::vector<cv::Mat> source_masks_scaled(static_cast<std::size_t>(N));
+    if (srcValidMasks)
+    {
+        for (int source_index = 0; source_index < N; ++source_index)
+        {
+            source_masks_scaled[static_cast<std::size_t>(source_index)] =
+                resizedBinaryMask(&(*srcValidMasks)[static_cast<std::size_t>(source_index)],
+                                  scaled_size);
+        }
+    }
 
     const HostPinholeCamera refCamS = makeHostPinholeCamera(refCam, ds);
 
@@ -2144,8 +2321,10 @@ bool PatchMatchDepthEstimator::estimateCPU(
                 for (int hi = 0; hi < 5; ++hi)
                 {
                     const float cost = cpuEvalHypCost(col, row, dep[hi], nor[hi],
-                                                      refF, srcF, srcDatas,
-                                                      config.patchHalf, invK);
+                                                      refF, srcF,
+                                                      ref_mask_scaled, source_masks_scaled,
+                                                      srcDatas, config.patchHalf, invK,
+                                                      config.minimumMaskedPatchSupportRatio);
                     if (cost < bestCost)
                     {
                         bestCost = cost;
@@ -2215,8 +2394,10 @@ bool PatchMatchDepthEstimator::estimateCPU(
                 for (int hi = 0; hi < 5; ++hi)
                 {
                     const float cost = cpuEvalHypCost(col, row, dep[hi], nor[hi],
-                                                      refF, srcF, srcDatas,
-                                                      config.patchHalf, invK);
+                                                      refF, srcF,
+                                                      ref_mask_scaled, source_masks_scaled,
+                                                      srcDatas, config.patchHalf, invK,
+                                                      config.minimumMaskedPatchSupportRatio);
                     if (cost < bestCost)
                     {
                         bestCost = cost;
@@ -2264,6 +2445,13 @@ bool PatchMatchDepthEstimator::estimateCPU(
                 depthPtr[col] = 0.f;
             }
         }
+    }
+
+    if (!ref_mask_scaled.empty())
+    {
+        const cv::Mat invalid_reference = ref_mask_scaled == 0;
+        depthS.setTo(cv::Scalar(0.0f), invalid_reference);
+        confS.setTo(cv::Scalar(0.0f), invalid_reference);
     }
 
         fprintf(stderr, "[PatchMatchCPU] %dx%d ds=%d threads=%d validRows=%d\n",
@@ -2339,12 +2527,35 @@ bool PatchMatchDepthEstimator::estimate(
     cv::Mat                      *confOut,
     std::string                  *errorMsg,
     const cv::Mat                *hintDepth,
-    const cv::Mat                *hintRadius)
+    const cv::Mat                *hintRadius,
+    const cv::Mat                *refValidMask,
+    const std::vector<cv::Mat>   *srcValidMasks)
 {
     if (srcGrays.empty() || srcCams.empty() || srcGrays.size() != srcCams.size()) 
     {
         if (errorMsg) *errorMsg = "source frame count mismatch or empty";
         return false;
+    }
+    if (refValidMask && !refValidMask->empty() && refValidMask->channels() != 1)
+    {
+        if (errorMsg) *errorMsg = "reference valid mask must be single-channel";
+        return false;
+    }
+    if (srcValidMasks && srcValidMasks->size() != srcGrays.size())
+    {
+        if (errorMsg) *errorMsg = "source valid mask count does not match source frame count";
+        return false;
+    }
+    if (srcValidMasks)
+    {
+        for (const cv::Mat &source_mask : *srcValidMasks)
+        {
+            if (!source_mask.empty() && source_mask.channels() != 1)
+            {
+                if (errorMsg) *errorMsg = "source valid masks must be single-channel";
+                return false;
+            }
+        }
     }
     if (!refCam.isValid())
     {
@@ -2357,7 +2568,8 @@ bool PatchMatchDepthEstimator::estimate(
     if (config.useCuda && isCudaAvailable()) 
     {
         if (estimateGPU(refGray, srcGrays, refCam, srcCams,
-                        zNear, zFar, config, depthOut, confOut, errorMsg, hintDepth, hintRadius))
+                        zNear, zFar, config, depthOut, confOut, errorMsg,
+                        hintDepth, hintRadius, refValidMask, srcValidMasks))
         {
             return true;
         }
@@ -2373,7 +2585,8 @@ bool PatchMatchDepthEstimator::estimate(
         fprintf(stderr, "[PatchMatch] GPU failed, falling back to CPU\n");
     }
     return estimateCPU(refGray, srcGrays, refCam, srcCams,
-                       zNear, zFar, config, depthOut, confOut, errorMsg, hintDepth, hintRadius);
+                       zNear, zFar, config, depthOut, confOut, errorMsg,
+                       hintDepth, hintRadius, refValidMask, srcValidMasks);
 }
 
 } // namespace mvs

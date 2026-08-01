@@ -14,16 +14,13 @@ project.files/
 │           └── <首次导入文件名>
 ├── 1/
 │   ├── chunk.zip
-│   ├── assets/
-│   ├── reconstruction/
-│   ├── bundle_adjust/
-│   └── reports/
+│   ├── assets/                 # 对应流程首次写入时创建
+│   ├── reconstruction/         # 对应流程首次写入时创建
+│   ├── bundle_adjust/          # 对应流程首次写入时创建
+│   └── reports/                # 对应流程首次写入时创建
 └── 2/
     ├── chunk.zip
-    ├── assets/
-    ├── reconstruction/
-    ├── bundle_adjust/
-    └── reports/
+    └── ...                     # 可选目录按需创建
 ```
 
 `.plascan` 是轻量 XML 入口，业务数据位于同名 `.files`。复制、移动、重命名、备份或
@@ -108,23 +105,138 @@ doc.json
 `project_results` 中每条新结果记录都带独立的 `schema_version`，当前为 `1`。不同结果数组
 可独立升级，不再依赖整个 Chunk 格式一起变化。
 
-原始影像位于工程级共享影像库；特征、匹配、最终多视图 track、深度图、点云、模型、
+原始影像位于工程级共享影像库；逐影像匹配分片、最终多视图 track、深度图、点云、模型、
 纹理、DEM、DOM、参考数据和报告是对应 Chunk 数字目录中的普通文件。大文件不进入 ZIP。
 
-每个 Chunk 使用统一目录：
+每个 Chunk 使用统一目录。除 `chunk.zip` 外，这些目录都在对应流程首次写入产物时创建；
+新建但尚未处理的 Chunk 不包含空的工作流目录：
 
 ```text
-assets/{ip,matches,tie_points,control_points,imported}
+assets/{matches,tie_points,control_points,imported}
 reconstruction/{sparse,mvs,model,terrain/products}
 bundle_adjust/
 reports/
 ```
+
+### 逐影像匹配结果
+
+匹配结果登记在 `project_results.image_match_results[]`。每条记录对应一幅影像及其唯一 `.pimatch`
+分片，而不是一个影像对。`neighbors` 是用于目录树和快速筛选的冗余索引；SfM 以分片内经过校验的
+owner/peer 身份和算法变体为准。
+
+```json
+{
+  "schema_version": 1,
+  "image": "plascan:///shared/images/<sha256>/image.tif",
+  "output": "plascan:///chunk/assets/image_matches/image_<path-hash>.pimatch",
+  "neighbors": ["plascan:///shared/images/<sha256>/neighbor.tif"],
+  "settings": {
+    "storage_format": "pimatch",
+    "format_version": 1,
+    "algorithm_id": "sift_lightglue",
+    "algorithm_version": 1
+  }
+}
+```
+
+`.pimatch` 自身按算法变体隔离关键点观测，并包含相邻影像、置信度、残差、几何状态和缓存指纹。工程不登记独立
+特征文件，也不接受旧 `.match + JSON sidecar` 作为当前结果。
 
 `bundle_adjust/` 保存每次 BA 的可复现运行产物，按运行时间或运行模式建立子目录，例如
 `ba_run_summary.json`、点/相机误差 CSV、评估图和可选的精化相机文件。CLI 与 GUI 均写入
 当前 Chunk 的这个默认目录，不再自动将同类产物放入 `assets/bundle_adjust/`。最终生效
 的相机参数仍写入 Chunk 文档，综合工作流报告仍写入 `reports/`。CLI 显式传入
 `--output-dir` 时仍尊重用户指定的诊断输出位置。
+
+### 正射影像结果
+
+项目内“生成正射影像”成功后，在 `project_results.ortho_results[]` 登记一条结果。输出文件
+本身位于 Chunk 普通数据目录并由资源索引管理，不写入 `chunk.zip`。相同输出路径的再次生成
+会更新对应结果记录。
+
+典型记录如下；数值仅作字段示例：
+
+```json
+{
+  "schema_version": 1,
+  "created_at": "2026-07-30T12:00:00Z",
+  "output_path": "plascan:///chunk/assets/ortho/relative_dom.tif",
+  "dem_path": "plascan:///chunk/reconstruction/terrain/products/dem.tif",
+  "dem_reference": "relative",
+  "images": [
+    "plascan:///shared/images/<sha256>/IMG_0001.tif"
+  ],
+  "source_image_count": 1,
+  "resolution": 0.05,
+  "output_resolution": 0.05,
+  "pixel_size_x": 0.05,
+  "pixel_size_y": 0.05,
+  "min_x": 100.0,
+  "min_y": 200.0,
+  "max_x": 612.0,
+  "max_y": 584.0,
+  "width": 10240,
+  "height": 7680,
+  "dom_georeferenced": true,
+  "projection_wkt_present": true,
+  "camera_projected": true,
+  "algorithm_version": "ortho_projector_v1",
+  "selected_camera_count": 12,
+  "loaded_camera_count": 12,
+  "contributing_camera_count": 10,
+  "filled_pixel_count": 73400320,
+  "hole_filled_pixel_count": 128,
+  "coverage_ratio": 0.933,
+  "valid_pixel_count": 73400448,
+  "has_coverage_alpha": true,
+  "resolved_settings": {
+    "projection_type": "dem_grid",
+    "surface_type": "dem",
+    "color_source": "images",
+    "blend_mode": "mosaic",
+    "sizing_mode": "pixel_size",
+    "pixel_size_x": 0.05,
+    "pixel_size_y": 0.05,
+    "maximum_dimension": 4096,
+    "bounds_enabled": false,
+    "min_x": 100.0,
+    "min_y": 200.0,
+    "max_x": 612.0,
+    "max_y": 584.0,
+    "color_correction": true,
+    "sharpness_weighting": false,
+    "ghost_filter": false,
+    "fill_holes": true,
+    "hole_fill_max_area": 256,
+    "hole_fill_radius": 3.0,
+    "use_project_masks": false,
+    "maximum_pixel_count": 100000000
+  }
+}
+```
+
+字段约定：
+
+- `resolved_settings` 保存核心实际采用的参数，不只保存对话框原始输入。像元未指定或使用
+  `maximum_dimension` 时，`pixel_size_x/y` 是结合 DEM 网格后解析出的最终值；范围字段也是
+  与 DEM 相交并按输出网格对齐后的值。
+- 当前稳定 token 仅支持 `projection_type=dem_grid`、`surface_type=dem` 和
+  `color_source=images`。平面、圆柱和全局接缝线优化尚未实现，GUI 对应项禁用，也不会写入
+  结果。`blend_mode` 支持 `mosaic`、`weighted_average`、`first_valid`。
+- `sizing_mode` 支持 `pixel_size`（独立 X/Y 像元）和 `maximum_dimension`（限制最长边）；
+  `bounds_enabled` 控制 `min_x/min_y/max_x/max_y` 裁剪。顶层 `resolution` 是旧消费者使用的
+  X 向分辨率兼容字段，新代码应读取 `pixel_size_x/y` 和 `resolved_settings`。
+- `color_correction`、`sharpness_weighting`、`ghost_filter`、`fill_holes` 和
+  `use_project_masks` 分别记录颜色校正、锐度权重、鲁棒重影过滤、小孔洞填充和项目排除蒙版。
+- `selected_camera_count` 是已选择影像数，`loaded_camera_count` 是成功加载影像且相机有效的
+  数量，`contributing_camera_count` 是至少为一个输出像元提供颜色的相机数。
+- `filled_pixel_count` 与 `coverage_ratio` 统计孔洞填充前的直接相机影像覆盖；
+  `hole_filled_pixel_count` 单独统计合成填充像元。零直接覆盖时任务失败，因此不会产生只有
+  黑色像元的成功记录。
+- `.tif/.tiff` 输出为 R/G/B/Alpha 四波段 GeoTIFF，Alpha 的非零值表示直接覆盖或已完成
+  小孔洞填充的有效颜色；文件继承最终网格地理变换及可用的 DEM 投影 WKT。PNG 同样保存
+  Alpha 但不保存地理参考。`dom_georeferenced` 和 `projection_wkt_present` 应分别判断，
+  不应假设本地坐标 DEM 一定带 WKT。
 
 根 `doc.json` 的 `chunk_index` 持久化 Chunk UUID 与数字目录的映射，以及
 `next_chunk_directory`。数字目录只允许正整数并单调分配，已删除的编号永久保留为空洞；
@@ -140,14 +252,15 @@ reports/
 元数据使用与设备无关的项目 URI：
 
 ```text
-plascan:///workspace/assets/images/example.tif
+plascan:///chunk/assets/images/example.tif
 plascan:///shared/images/<sha256>/example.tif
 plascan:///resources/reference/<resource_id>/control.csv
 ```
 
 `ProjectWorkspaceStore` 在 URI、当前 Chunk 数字目录和工程级共享目录之间转换。
-`plascan:///workspace/...` 是首期保留的逻辑兼容 URI，不表示磁盘上仍存在根级
-`workspace/`。Chunk `doc.json` 的 `resource_index`
+`plascan:///chunk/...` 始终相对于拥有该 `doc.json` 的当前 Chunk 数字目录。
+早期 4.0 开发版本写入的 `plascan:///workspace/...` 只在读取时兼容，并在下一次成功
+保存时重写为 `plascan:///chunk/...`，不会继续写入资源索引。Chunk `doc.json` 的 `resource_index`
 为每个文件记录稳定 ID、类型、项目相对路径、字节数和 SHA-256。打开工程时会校验索引；
 资源缺失或损坏会报告具体路径，不会静默回退到其他位置。
 
