@@ -146,7 +146,6 @@ private:
     xjw::gui::markers::MarkerReferencePanel *_markerReferencePanel{};
     QProgressDialog*  _openProgressDialog{};           // 打开项目期间显示的模态进度对话框
     QProgressDialog*  _saveProgressDialog{};           // 保存操作期间显示的模态进度对话框
-    TaskStatusWidget* _mvsTaskStatus{};                 // MVS 状态栏任务状态
     TaskStatusWidget* _meshTaskStatus{};                // 网格重建状态栏任务状态
     TaskStatusWidget* _atTaskStatus{};                  // 空三状态栏任务状态
     TaskStatusWidget* _sgTaskStatus{};                  // 特征匹配状态栏任务状态
@@ -187,10 +186,6 @@ private slots:
     // onMetadataDirtyChanged: 项目脏状态变化时在标题栏末尾添加或去除 "*" 标记
     // 参数: dirty - true 表示有未保存的更改
     void onMetadataDirtyChanged(bool dirty);
-    // MVS 进度状态栏更新
-    void onMvsProgress(const QString &stage, int percent);
-    void onMvsFinished(bool success);
-
 signals:
     void sgCancelRequested();
 

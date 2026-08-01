@@ -33,9 +33,6 @@ signals:
 private:
     bool ensureProjectOpen(const QString &message,
                            const QString &title) const;
-    void finalizeModelGenerationSuccess(const QJsonObject &terrainResult,
-                                        const QString &sourceCloudPath,
-                                        bool sourceIsDense);
 
     ProjectManager *_owner = nullptr;
     ProjectData *_projectData = nullptr;

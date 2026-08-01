@@ -1,4 +1,5 @@
 #include "ProjectSessionContext.h"
+#include "ProjectTerrainRequests.h"
 
 #include <gtest/gtest.h>
 
@@ -8,6 +9,7 @@ namespace
 {
 
 using xjw::gui::project::ProjectSessionContext;
+using xjw::gui::project::DemGenerationRequest;
 
 TEST(ProjectSessionContextTest, MatchesEquivalentProjectPaths)
 {
@@ -45,6 +47,25 @@ TEST(ProjectSessionContextTest, RejectsDifferentProject)
     };
 
     EXPECT_FALSE(current.matches(other));
+}
+
+TEST(DemGenerationRequestTest, RequiresExistingSourceFieldsAtBoundary)
+{
+    DemGenerationRequest request;
+    QString error;
+
+    EXPECT_FALSE(request.validate(&error));
+    EXPECT_FALSE(error.isEmpty());
+
+    request.sourcePointCloudPath = QStringLiteral("cloud.ply");
+    request.outputDirectory = QStringLiteral("dem");
+    request.resolution = -1.0;
+    EXPECT_FALSE(request.validate(&error));
+
+    request.resolution = 0.5;
+    request.dataType = QStringLiteral("float32");
+    EXPECT_TRUE(request.validate(&error));
+    EXPECT_TRUE(error.isEmpty());
 }
 
 } // namespace

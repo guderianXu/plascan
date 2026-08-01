@@ -13,7 +13,6 @@
 #include "ProjectBundleAdjustExecution.h"
 #include "ProjectBundleAdjustWorkflow.h"
 #include "ProjectCameraInitialization.h"
-#include "ProjectDenseWorkflowConfig.h"
 #include "ProjectResourceCleanupService.h"
 #include "ProjectTiePointResultService.h"
 
@@ -91,12 +90,9 @@
 using xjw::common::project::cameraFromJson;
 using xjw::common::project::cameraToJson;
 using xjw::gui::project::BundleAdjustExecutionResult;
-using xjw::gui::project::buildDepthGenConfig;
 using xjw::gui::project::buildSparsePointWorkflowSuccessMessage;
 using xjw::gui::project::commitBundleAdjustPreview;
 using xjw::gui::project::existingCameraImages;
-using xjw::gui::project::denseGenerationSettingsFromJson;
-using xjw::gui::project::denseRefineSettingsFromJson;
 using xjw::gui::project::finalizeBundleAdjustArtifacts;
 using xjw::gui::project::finalizeInitializedCameraPoses;
 using xjw::gui::project::focalPixelsFromExif;
@@ -532,12 +528,6 @@ ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
                 });
     }
 
-        connect(_reconstructionManager, &ProjectReconstructionManager::mvsProgressChanged,
-            this, &ProjectManager::mvsProgressChanged);
-        connect(_reconstructionManager, &ProjectReconstructionManager::mvsProgressFinished,
-            this, &ProjectManager::mvsProgressFinished);
-        connect(_reconstructionManager, &ProjectReconstructionManager::denseCloudResultReady,
-            this, &ProjectManager::denseCloudResultReady);
         connect(_reconstructionManager, &ProjectReconstructionManager::meshProgressChanged,
             this, &ProjectManager::meshProgressChanged);
         connect(_reconstructionManager, &ProjectReconstructionManager::meshProgressFinished,
@@ -598,13 +588,14 @@ void ProjectManager::openProjectFromPath(const QString &plascanPath)
     emit projectOpenStarted(projectPath);
     emit projectOpenProgressChanged(QStringLiteral("正在读取项目文件..."), 10);
 
-    xjw::gui::tasks::runGuarded(
+    xjw::gui::tasks::runGuardedWithOutcome(
         this,
         [projectPath]() -> ProjectOpenSnapshot
         {
             return ProjectData::loadProjectOpenSnapshot(projectPath);
         },
-        [projectPath](ProjectManager *self, ProjectOpenSnapshot snapshot)
+        [projectPath](ProjectManager *self,
+                      xjw::gui::tasks::TaskOutcome<ProjectOpenSnapshot> outcome)
         {
             emit self->projectOpenProgressChanged(QStringLiteral("正在初始化项目界面..."), 75);
 
@@ -616,6 +607,14 @@ void ProjectManager::openProjectFromPath(const QString &plascanPath)
                                       QStringLiteral("错误"),
                                       QStringLiteral("打开项目失败: %1").arg(message));
             };
+
+            if (!outcome.succeeded())
+            {
+                finishWithError(outcome.errorMessage);
+                return;
+            }
+
+            ProjectOpenSnapshot snapshot = std::move(*outcome.value);
 
             if (!snapshot.success)
             {
@@ -651,21 +650,29 @@ void ProjectManager::loadProjectResultsAsync(const QString &plascanPath)
         return;
     }
 
-    xjw::gui::tasks::runGuarded(
+    const auto session = currentSessionContext();
+    xjw::gui::tasks::runGuardedWithOutcome(
         this,
         [plascanPath]() -> ProjectResultsSnapshot
         {
             return ProjectData::loadProjectResultsSnapshot(plascanPath);
         },
-        [plascanPath](ProjectManager *self, ProjectResultsSnapshot snapshot)
+        [plascanPath, session](ProjectManager *self,
+                               xjw::gui::tasks::TaskOutcome<ProjectResultsSnapshot> outcome)
         {
-            const QString currentProjectPath = self->_projectData
-                ? QDir::cleanPath(self->_projectData->currentProjectPath())
-                : QString();
-            if (!self->_projectData || currentProjectPath != QDir::cleanPath(plascanPath))
+            if (!self->_projectData || !self->isCurrentSession(session))
             {
                 return;
             }
+
+            if (!outcome.succeeded())
+            {
+                LOG_WARN(QStringLiteral("项目结果数据后台加载失败: %1")
+                             .arg(outcome.errorMessage));
+                return;
+            }
+
+            ProjectResultsSnapshot snapshot = std::move(*outcome.value);
 
             QString error;
             if (!self->_projectData->applyResultsSnapshot(snapshot, &error))
@@ -725,19 +732,31 @@ void ProjectManager::addFolder()
         return;
     }
 
-    const QString projectPath = currentProjectPath();
-    xjw::gui::tasks::runGuarded(
+    const auto session = currentSessionContext();
+    xjw::gui::tasks::runGuardedWithOutcome(
         this,
         [folder]() -> ImageFolderScan
         {
             return scanImageFolder(folder);
         },
-        [folder, projectPath](ProjectManager *self, ImageFolderScan scan)
+        [folder, session](ProjectManager *self,
+                          xjw::gui::tasks::TaskOutcome<ImageFolderScan> outcome)
         {
-            if (!self || !self->_projectData || self->currentProjectPath() != projectPath)
+            if (!self || !self->_projectData || !self->isCurrentSession(session))
             {
                 return;
             }
+
+            if (!outcome.succeeded())
+            {
+                QMessageBox::critical(self->_parent,
+                                      QStringLiteral("错误"),
+                                      QStringLiteral("添加文件夹失败: %1")
+                                          .arg(outcome.errorMessage));
+                return;
+            }
+
+            ImageFolderScan scan = std::move(*outcome.value);
 
             if (!scan.success)
             {
@@ -1121,7 +1140,8 @@ void ProjectManager::openGenerateMaskDialogForImages(const QStringList &requeste
         return;
     }
 
-    const QString projectPath = currentProjectPath();
+    const auto session = currentSessionContext();
+    const QString projectPath = session.projectPath;
     QHash<QString, QString> projectImages;
     QStringList resolvedAllImages;
     QSet<QString> projectImageKeys;
@@ -1199,7 +1219,7 @@ void ProjectManager::openGenerateMaskDialogForImages(const QStringList &requeste
     };
 
     QPointer<ProjectManager> managerGuard(this);
-    xjw::gui::tasks::runGuarded(
+    xjw::gui::tasks::runGuardedWithOutcome(
         this,
         [settings, targetImages, projectPath, cancelFlag, managerGuard, totalImages]() -> GenerateMaskResult
         {
@@ -1361,18 +1381,34 @@ void ProjectManager::openGenerateMaskDialogForImages(const QStringList &requeste
             }
             return result;
         },
-        [projectPath, masksDir, cancelFlag](ProjectManager *self, GenerateMaskResult result)
+        [session, masksDir, cancelFlag](
+            ProjectManager *self,
+            xjw::gui::tasks::TaskOutcome<GenerateMaskResult> outcome)
         {
             if (self->_maskGenerationCancelFlag == cancelFlag)
             {
                 self->_maskGenerationCancelFlag.reset();
             }
 
+            if (!outcome.succeeded())
+            {
+                emit self->maskGenerationFinished(false);
+                if (self->isCurrentSession(session))
+                {
+                    QMessageBox::warning(self->_parent,
+                                         QStringLiteral("生成蒙版"),
+                                         outcome.errorMessage);
+                }
+                return;
+            }
+
+            GenerateMaskResult result = std::move(*outcome.value);
+
             const bool finishedSuccessfully =
                 !result.cancelled && result.errors.isEmpty() && !result.generatedImages.isEmpty();
             emit self->maskGenerationFinished(finishedSuccessfully);
 
-            if (self->currentProjectPath() != projectPath)
+            if (!self->isCurrentSession(session))
             {
                 return;
             }
@@ -1395,7 +1431,7 @@ void ProjectManager::openGenerateMaskDialogForImages(const QStringList &requeste
             {
                 QJsonObject image = images.at(i).toObject();
                 const QString imagePath = xjw::common::project::ProjectIO::resolveProjectResourcePath(
-                    projectPath,
+                    session.projectPath,
                     image.value(QStringLiteral("path")).toString());
                 const QString normalized = normalizePath(imagePath);
                 if (!result.maskRecordsByImage.contains(normalized))
@@ -1412,7 +1448,7 @@ void ProjectManager::openGenerateMaskDialogForImages(const QStringList &requeste
             meta.insert(QStringLiteral("images"), images);
 
             persistProjectMeta(self->_projectData, meta, true);
-            emit self->projectMetadataUpdated(projectPath);
+            emit self->projectMetadataUpdated(session.projectPath);
             emit self->masksGenerated(result.generatedImages);
 
             QString message = result.cancelled
@@ -2210,7 +2246,7 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
 
     QPointer<ProjectManager> self(this);
 
-xjw::gui::tasks::runGuarded(
+xjw::gui::tasks::runGuardedWithOutcome(
     this,
     [self, coreData, plascanPath, images, minMatches,
      cancelFlag, opts = std::move(opts), isDryRun = dryRun]() mutable
@@ -2366,7 +2402,20 @@ xjw::gui::tasks::runGuarded(
             },
             Qt::QueuedConnection);
     },
-    [](ProjectManager *) {});
+    [cancelFlag](ProjectManager *manager,
+                 xjw::gui::tasks::TaskOutcome<void> outcome)
+    {
+        if (outcome.succeeded() || manager->_atCancelFlag != cancelFlag)
+        {
+            return;
+        }
+
+        manager->_atCancelFlag.reset();
+        emit manager->atProgressFinished(false);
+        QMessageBox::warning(manager->_parent,
+                             QStringLiteral("光束法平差"),
+                             outcome.errorMessage);
+    });
 }
 
 // ==============================================================================
@@ -2482,47 +2531,20 @@ void ProjectManager::startTextureMappingAsync(const QJsonObject &settings)
     _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::TextureMapping, settings);
 }
 
-void ProjectManager::startStereoAndPoint2DemAsync(const QStringList &images,
-                                                   const QString &outputDir,
-                                                   int threads,
-                                                   bool genPointCloud,
-                                                   double demResolution,
-                                                   const QString &demType,
-                                                   const QString &t_srs)
+void ProjectManager::startDemFromPointCloudAsync(
+    const xjw::gui::project::DemGenerationRequest &request)
 {
-    _taskDispatcher->startStereoAndPoint2DemAsync(images,
-                                                   outputDir,
-                                                   threads,
-                                                   genPointCloud,
-                                                   demResolution,
-                                                   demType,
-                                                   t_srs);
+    _taskDispatcher->startDemFromPointCloudAsync(request);
 }
 
-void ProjectManager::startFullDemPipelineAsync(const QStringList &images,
-                                               const QString &outputDir,
-                                               const QJsonObject &pipelineSettings)
+void ProjectManager::startMapProjectAsync(const QJsonObject &settings)
 {
-    _taskDispatcher->startFullDemPipelineAsync(images, outputDir, pipelineSettings);
+    _taskDispatcher->startMapProjectAsync(settings);
 }
 
-void ProjectManager::startDemFromDenseCloudAsync(const QString &denseCloudPath,
-                                                 const QString &outputDir,
-                                                 double demResolution,
-                                                 const QString &demType)
+void ProjectManager::cancelMapProject()
 {
-    _taskDispatcher->startDemFromDenseCloudAsync(denseCloudPath, outputDir, demResolution, demType);
-}
-
-void ProjectManager::startMapProjectAsync(const QStringList &images,
-                                          const QString &demPath,
-                                          const QString &outputPath,
-                                          double resolution)
-{
-    _taskDispatcher->startMapProjectAsync(images,
-                                           demPath,
-                                           outputPath,
-                                           resolution);
+    _taskDispatcher->cancelMapProject();
 }
 
 bool ProjectManager::acceptBundleAdjustPreview(QString *errorMsg)
@@ -2763,38 +2785,6 @@ void ProjectManager::appendObsNetResult(int nodeCount,
 QJsonArray ProjectManager::getAvailableAtResults() const
 {
     return _taskDispatcher->getAvailableAtResults();
-}
-
-void ProjectManager::startEstimateDepthMapsAsync(const QJsonObject &settings)
-{
-    _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::EstimateDepthMaps, settings);
-}
-
-void ProjectManager::startFuseDepthMapsAsync(const QJsonObject &settings)
-{
-    _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::FuseDepthMaps, settings);
-}
-
-// ── 带配置参数的MVS稠密点云生成（PatchMatch 多视图） ─────────────────────
-void ProjectManager::startGenerateDenseCloudAsync(const QJsonObject &settings)
-{
-    _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::GenerateDenseCloud, settings);
-}
-
-
-
-// ── 密集点云后处理（SOR + 体素下采样 + 法向量估计） ─────────────────────────────
-void ProjectManager::startDenseCloudRefineAsync(const QJsonObject &settings)
-{
-    _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::RefineDenseCloud, settings);
-}
-
-
-
-// ── 取消正在运行的 MVS 任务 ──────────────────────────────────────────────────
-void ProjectManager::cancelMvs()
-{
-    _taskDispatcher->cancelMvs();
 }
 
 void ProjectManager::cancelModelGeneration()

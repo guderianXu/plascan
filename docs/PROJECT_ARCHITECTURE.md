@@ -487,12 +487,10 @@ gui/
 │   │   └── *.h # 指向 src/common/project 存储层的 GUI 兼容头
 │   ├── manager/
 │   │   ├── ProjectManager.h/cpp # 项目管理器 (核心协调器)
-│   │   ├── ProjectReconstructionManager.h/cpp       # 重建任务管理
+│   │   ├── ProjectReconstructionManager.h/cpp       # 稀疏与模型任务协调；不持有稠密重建管理器
 │   │   ├── ProjectSparseReconstructionManager.h/cpp  # 稀疏重建管理
-│   │   ├── ProjectDenseReconstructionManager.h/cpp   # 密集重建管理
-│   │   ├── ProjectModelGenerationWorkflow.h/cpp      # 生成模型编排：自动深度估计、融合、网格
-│   │   ├── ProjectModelManager.h/cpp                 # 模型管理
-│   │   ├── ProjectTerrainProductsManager.h/cpp       # 地形产品管理
+│   │   ├── ProjectModelManager.h/cpp                 # 从已有点云/深度图生成模型，不隐式启动稠密流程
+│   │   ├── ProjectTerrainProductsManager.h/cpp       # 从已有点云生成 DEM，以及正射后台任务与结果登记
 │   │   ├── ProjectCameraSetupManager.h/cpp           # 相机设置管理
 │   │   ├── ProjectTaskDispatcher.h/cpp               # 任务调度器
 │   │   └── ProjectUiCommands.h/cpp                   # UI 命令
@@ -508,8 +506,10 @@ gui/
 │       ├── ProjectBundleAdjustExecution.h/cpp       # BA 执行
 │       ├── ProjectBundleAdjustWorkflow.h/cpp        # BA 工作流
 │       ├── ProjectCameraInitialization.h/cpp        # 相机初始化
-│       ├── ProjectDenseWorkflowConfig.h/cpp         # 密集工作流配置
-│       ├── ProjectModelWorkflowPolicy.h/cpp         # 模型源判定、输入签名校验、深度批次复用与质量参数映射
+│       ├── ProjectDenseWorkflowConfig.h/cpp         # CLI/MVS 兼容配置；不编入 GUI 目标
+│       ├── ProjectModelWorkflowPolicy.h/cpp         # 模型线程预算、输入签名和已有深度批次兼容性校验
+│       ├── ProjectSessionContext.h                  # 异步写回会话身份（项目、Chunk、generation）
+│       ├── ProjectTerrainRequests.h                 # DEM 类型化请求及边界校验
 │       ├── ProjectMetadataOperations.h/cpp          # 元数据操作
 │       ├── ProjectResultRecords.h/cpp               # 结果记录
 │       ├── ProjectSfmWorkflow.h/cpp                 # SfM 工作流

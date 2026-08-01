@@ -1,15 +1,7 @@
 #include "ProjectReconstructionManager.h"
 
-#include "ProjectDenseReconstructionManager.h"
-#include "ProjectModelGenerationWorkflow.h"
 #include "ProjectModelManager.h"
 #include "ProjectSparseReconstructionManager.h"
-
-#include <QDebug>
-#include <QDir>
-#include <QMessageBox>
-#include <QPointer>
-#include <QPushButton>
 
 ProjectReconstructionManager::ProjectReconstructionManager(ProjectManager *owner,
                                                            ProjectData *projectData,
@@ -17,92 +9,16 @@ ProjectReconstructionManager::ProjectReconstructionManager(ProjectManager *owner
                                                            QObject *parent)
     : QObject(parent)
     , _sparseManager(new ProjectSparseReconstructionManager(owner, projectData, parentWidget, this))
-    , _denseManager(new ProjectDenseReconstructionManager(owner, projectData, this))
     , _modelManager(new ProjectModelManager(owner, projectData, parentWidget, this))
-    , _modelWorkflow(new ProjectModelGenerationWorkflow(owner,
-                                                        projectData,
-                                                        parentWidget,
-                                                        _denseManager,
-                                                        _modelManager,
-                                                        this))
 {
-    const QPointer<QWidget> parentGuard(parentWidget);
-    _denseManager->setExistingDepthActionRequester(
-        [parentGuard](int existingCount, int totalCount, const QString &outputDir)
-    {
-        if (!parentGuard)
-        {
-            return 0;
-        }
-
-        QMessageBox box(parentGuard.data());
-        box.setIcon(QMessageBox::Question);
-        box.setWindowTitle(QStringLiteral("深度图估计"));
-        box.setText(QStringLiteral("检测到已有深度图结果（%1/%2）。")
-                        .arg(existingCount)
-                        .arg(totalCount));
-        box.setInformativeText(QStringLiteral("输出目录：%1\n请选择覆盖重算，或继续生成未完成的帧。")
-                                   .arg(QDir::toNativeSeparators(outputDir)));
-        QPushButton *overwriteButton = box.addButton(QStringLiteral("覆盖重算"), QMessageBox::DestructiveRole);
-        QPushButton *continueButton = box.addButton(QStringLiteral("继续生成未完成帧"), QMessageBox::AcceptRole);
-        box.addButton(QStringLiteral("取消"), QMessageBox::RejectRole);
-        box.setDefaultButton(continueButton);
-        box.exec();
-        if (box.clickedButton() == overwriteButton)
-        {
-            return 1;
-        }
-        return box.clickedButton() == continueButton ? 2 : 0;
-    });
-    connect(_denseManager,
-            &ProjectDenseReconstructionManager::userMessageRequested,
-            this,
-            [parentGuard](bool informational, const QString &title, const QString &message)
-    {
-        if (!parentGuard)
-        {
-            return;
-        }
-        if (informational)
-        {
-            QMessageBox::information(parentGuard.data(), title, message);
-        }
-        else
-        {
-            QMessageBox::warning(parentGuard.data(), title, message);
-        }
-    });
     connect(_sparseManager, &ProjectSparseReconstructionManager::atProgressChanged,
             this, &ProjectReconstructionManager::atProgressChanged);
     connect(_sparseManager, &ProjectSparseReconstructionManager::atProgressFinished,
             this, &ProjectReconstructionManager::atProgressFinished);
 
-    connect(_denseManager,
-            &ProjectDenseReconstructionManager::mvsProgressChanged,
-            this,
-            [this](const QString &stage, int percent)
-    {
-        if (!_modelWorkflow->isPreparingDenseCloud())
-        {
-            emit mvsProgressChanged(stage, percent);
-        }
-    });
-    connect(_denseManager,
-            &ProjectDenseReconstructionManager::mvsProgressFinished,
-            this,
-            [this](bool success)
-    {
-        if (!_modelWorkflow->consumeInternalMvsFinished())
-        {
-            emit mvsProgressFinished(success);
-        }
-    });
-    connect(_denseManager, &ProjectDenseReconstructionManager::denseCloudResultReady,
-            this, &ProjectReconstructionManager::denseCloudResultReady);
-
-    connect(_modelWorkflow, &ProjectModelGenerationWorkflow::meshProgressChanged,
+    connect(_modelManager, &ProjectModelManager::meshProgressChanged,
             this, &ProjectReconstructionManager::meshProgressChanged);
-    connect(_modelWorkflow, &ProjectModelGenerationWorkflow::meshProgressFinished,
+    connect(_modelManager, &ProjectModelManager::meshProgressFinished,
             this, &ProjectReconstructionManager::meshProgressFinished);
 }
 
@@ -113,24 +29,6 @@ QJsonArray ProjectReconstructionManager::getAvailableAtResults() const
 
 void ProjectReconstructionManager::startTask(Task task, const QJsonObject &settings)
 {
-    const bool is_mvs_task = task == Task::EstimateDepthMaps ||
-        task == Task::FuseDepthMaps ||
-        task == Task::GenerateDenseCloud ||
-        task == Task::RefineDenseCloud;
-    const bool is_model_task = task == Task::GenerateModel ||
-        task == Task::MeshReconstruction ||
-        task == Task::TextureMapping;
-    if (is_mvs_task && (_modelManager->isRunning() || _modelWorkflow->isRunning()))
-    {
-        qWarning() << "[Reconstruction] 模型任务运行期间不能启动 MVS 任务";
-        return;
-    }
-    if (is_model_task && _denseManager->isMvsRunning())
-    {
-        qWarning() << "[Reconstruction] MVS 任务运行期间不能启动模型任务";
-        return;
-    }
-
     switch (task)
     {
     case Task::GenerateModel:
@@ -140,7 +38,7 @@ void ProjectReconstructionManager::startTask(Task task, const QJsonObject &setti
         }
         else
         {
-            _modelWorkflow->start(settings);
+            _modelManager->startMeshReconstructionAsync(settings);
         }
         break;
     case Task::MeshReconstruction:
@@ -161,33 +59,11 @@ void ProjectReconstructionManager::startTask(Task task, const QJsonObject &setti
     case Task::SparseRefine:
         _sparseManager->startSparseCloudRefineAsync(settings);
         break;
-    case Task::EstimateDepthMaps:
-        _denseManager->startEstimateDepthMapsAsync(settings);
-        break;
-    case Task::FuseDepthMaps:
-        _denseManager->startFuseDepthMapsAsync(settings);
-        break;
-    case Task::GenerateDenseCloud:
-        _denseManager->startGenerateDenseCloudAsync(settings);
-        break;
-    case Task::RefineDenseCloud:
-        _denseManager->startDenseCloudRefineAsync(settings);
-        break;
     }
-}
-
-void ProjectReconstructionManager::cancelMvs()
-{
-    _denseManager->cancelMvs();
 }
 
 void ProjectReconstructionManager::cancelModelGeneration()
 {
-    if (_modelWorkflow && _modelWorkflow->isRunning())
-    {
-        _modelWorkflow->cancel();
-        return;
-    }
     if (_modelManager)
     {
         _modelManager->cancelActiveTask();

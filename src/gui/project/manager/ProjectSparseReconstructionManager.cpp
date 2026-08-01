@@ -92,7 +92,8 @@ void ProjectSparseReconstructionManager::startTriangulationAsync(const QJsonObje
         }
     }
 
-    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
+    const auto session = _owner->currentSessionContext();
+    const QString projectPath = session.projectPath;
     const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(projectPath);
     const bool overwriteExistingResult = settings.value(QStringLiteral("overwriteExistingResult")).toBool(false);
     int replaceIndex = -1;
@@ -128,20 +129,31 @@ void ProjectSparseReconstructionManager::startTriangulationAsync(const QJsonObje
     emit atProgressChanged(QStringLiteral("正在构建两视预览云..."), 10);
 
     QPointer<ProjectManager> ownerGuard(_owner);
-    xjw::gui::tasks::runGuarded(
+    xjw::gui::tasks::runGuardedWithOutcome(
         this,
         [mergedMeta, selectedImages, options]()
         {
             return xjw::core::project::TriangulationService::run(mergedMeta, selectedImages, options);
         },
-        [selectedImages, options, ownerGuard, projectPath](
+        [selectedImages, options, ownerGuard, session](
             ProjectSparseReconstructionManager *self,
-            const xjw::core::project::TriangulationServiceResult &result)
+            xjw::gui::tasks::TaskOutcome<xjw::core::project::TriangulationServiceResult> outcome)
         {
-            if (!ownerGuard || ownerGuard->currentProjectPath() != projectPath)
+            if (!ownerGuard || !ownerGuard->isCurrentSession(session))
             {
                 return;
             }
+
+            if (!outcome.succeeded())
+            {
+                emit self->atProgressFinished(false);
+                QMessageBox::warning(self->_parentWidget,
+                                     QStringLiteral("生成两视预览云"),
+                                     outcome.errorMessage);
+                return;
+            }
+
+            const auto &result = *outcome.value;
 
             if (!result.success)
             {
@@ -258,7 +270,8 @@ void ProjectSparseReconstructionManager::startSparsePointWorkflow(SparsePointWor
         context = contextResult.context;
     }
 
-    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
+    const auto session = _owner->currentSessionContext();
+    const QString projectPath = session.projectPath;
     const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(projectPath);
     const QString outputDir = QDir(assetsDir).filePath(
         QStringLiteral("aerial_triangulation/%1_%2")
@@ -268,19 +281,31 @@ void ProjectSparseReconstructionManager::startSparsePointWorkflow(SparsePointWor
     emit atProgressChanged(spec.progressMessage, 20);
 
     QPointer<ProjectManager> ownerGuard(_owner);
-    xjw::gui::tasks::runGuarded(
+    xjw::gui::tasks::runGuardedWithOutcome(
         this,
         [kind, context, settings, outputDir]()
         {
             return runSparsePointWorkflowResult(kind, context, settings, outputDir);
         },
-        [spec, context, ownerGuard, projectPath](ProjectSparseReconstructionManager *self,
-                                                 const SparsePointWorkflowResult &workflowResult)
+        [spec, context, ownerGuard, session](
+            ProjectSparseReconstructionManager *self,
+            xjw::gui::tasks::TaskOutcome<SparsePointWorkflowResult> outcome)
         {
-            if (!ownerGuard || ownerGuard->currentProjectPath() != projectPath)
+            if (!ownerGuard || !ownerGuard->isCurrentSession(session))
             {
                 return;
             }
+
+            if (!outcome.succeeded())
+            {
+                emit self->atProgressFinished(false);
+                QMessageBox::warning(self->_parentWidget,
+                                     spec.title,
+                                     outcome.errorMessage);
+                return;
+            }
+
+            const auto &workflowResult = *outcome.value;
 
             if (!workflowResult.status.ok)
             {

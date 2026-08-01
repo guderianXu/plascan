@@ -25,6 +25,7 @@
 #include "Camera.h"
 #include "ProjectFilesManager.h"
 #include "ProjectSessionContext.h"
+#include "ProjectTerrainRequests.h"
 
 #include <QObject>
 #include <QString>
@@ -105,14 +106,6 @@ signals:
     void saveStarted();
     // saveProject() 执行完毕时发出；success=false 时已弹出错误对话框
     void saveFinished(bool success);
-
-    // MVS 稠密重建进度（主窗口状态栏显示）
-    // stage: 当前阶段描述；percent: 0~100
-    void mvsProgressChanged(const QString &stage, int percent);
-    // MVS 流程结束（success=true 表示正常完成）
-    void mvsProgressFinished(bool success);
-    // 本次 MVS 写入的密集点云结果，携带明确输出路径，避免下游靠元数据变化猜测结果归属。
-    void denseCloudResultReady(const QString &denseCloudPath, int pointCount);
 
     // 网格重建进度（主窗口状态栏显示）
     void meshProgressChanged(const QString &stage, int percent);
@@ -197,10 +190,10 @@ public slots:
     void saveUiSettings(const QJsonObject &settings);
     void markWorkspaceDirty();
     
-    // 取消正在运行的 MVS 任务
-    void cancelMvs();
     // 取消正在运行的模型生成任务
     void cancelModelGeneration();
+    // 取消正在运行的正射影像生成任务。
+    void cancelMapProject();
 
     // 取消正在运行的 AT/SFM 任务
     void cancelAt();
@@ -255,48 +248,14 @@ public slots:
                                 int threads,
                                 bool dryRun,
                                 const QJsonObject &extraSettings);
-    // 异步启动立体视觉与点云/DEM生成全流程：
-    //   images: 影像列表（通常为2张立体像对）
-    //   outputDir: 输出目录
-    //   threads: 并行线程数
-    //   genPointCloud: 是否生成密集点云
-    //   demResolution: DEM 分辨率（米/像素）
-    //   demType: DEM 类型标识（"DTM" / "DSM"）
-    //   t_srs: 目标空间参考系（WKT 或 EPSG 编码）
-    void startStereoAndPoint2DemAsync(const QStringList &images,
-                                      const QString &outputDir,
-                                      int threads,
-                                      bool genPointCloud,
-                                      double demResolution,
-                                      const QString &demType,
-                                      const QString &t_srs);
-
-    // 异步启动完整 DEM 流水线（自动模式）：
-    //   images: 影像列表（2张立体像对）
-    //   outputDir: DEM 输出目录
-    //   pipelineSettings: 流水线配置（包含相机文件路径、DEM参数等）
-    void startFullDemPipelineAsync(const QStringList &images,
-                                   const QString &outputDir,
-                                   const QJsonObject &pipelineSettings);
-
-    // 异步从密集点云生成 DEM（手动模式）：
-    //   denseCloudPath: 密集点云路径（为空则自动查找最新）
-    //   outputDir: DEM 输出目录
-    //   demResolution: DEM 分辨率
-    //   demType: DEM 数据类型
-    void startDemFromDenseCloudAsync(const QString &denseCloudPath,
-                                     const QString &outputDir,
-                                     double demResolution,
-                                     const QString &demType);
-    // 异步启动正射影像制作（将影像投影到 DEM 上）
-    void startMapProjectAsync(const QStringList &images,
-                              const QString &demPath,
-                              const QString &outputPath,
-                              double resolution);
-    // 异步启动模型生成（密集重建 → 网格 → 纹理 全流程）
+    void startDemFromPointCloudAsync(
+        const xjw::gui::project::DemGenerationRequest &request);
+    // 异步启动正射影像制作（settings 包含影像、DEM、输出路径与核心选项）。
+    void startMapProjectAsync(const QJsonObject &settings);
+    // 异步启动模型生成；输入必须来自项目内已有点云、深度图或显式指定路径。
     void startGenerateModelAsync();
     void startGenerateModelAsync(const QJsonObject &settings);
-    // 异步执行网格重建（从最近一次密集点云生成三角网格）
+    // 异步执行网格重建。
     void startMeshReconstructionAsync(const QJsonObject &settings);
     // 异步执行纹理映射（从最近一次网格生成 OBJ+MTL+PNG）
     void startTextureMappingAsync(const QJsonObject &settings);
@@ -316,20 +275,9 @@ public slots:
     // settings 由调用方提供稀疏点云后处理参数。
     void startSparseCloudRefineAsync(const QJsonObject &settings);
 
-    // 获取所有空三结果的摘要列表，供稠密重建工作流程选择输入。
+    // 获取所有空三结果的摘要列表，供模型与质量检查工作流程选择输入。
     // 每项包含: index, created_at, image0, image1, output_dir, sparse_cloud_xyz
     QJsonArray getAvailableAtResults() const;
-    // 仅执行深度图估计，并保存可复用的原始深度/置信图。
-    void startEstimateDepthMapsAsync(const QJsonObject &settings);
-    // 基于最近一次深度图估计结果执行融合，只生成密集点云。
-    void startFuseDepthMapsAsync(const QJsonObject &settings);
-    // 异步启动 MVS 稠密点云生成。
-    void startGenerateDenseCloudAsync(const QJsonObject &settings);
-
-    // 异步对已生成的密集点云执行后处理（SOR/体素下采样/法向量估计）
-    // settings 由调用方提供稠密点云精化参数。
-    void startDenseCloudRefineAsync(const QJsonObject &settings);
-
     // 接受 BA 预览结果，将待写入相机参数写回项目（此后预览缓存清空）
     bool acceptBundleAdjustPreview(QString *errorMsg = nullptr);
     // 丢弃 BA 预览结果（不修改任何相机参数）

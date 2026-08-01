@@ -40,59 +40,31 @@ bool ProjectTaskDispatcher::initializeCameraPosesWithSFM(const QJsonObject &sett
     return _cameraManager ? _cameraManager->initializeCameraPosesWithSFM(settings) : false;
 }
 
-void ProjectTaskDispatcher::startStereoAndPoint2DemAsync(const QStringList &images,
-                                                         const QString &outputDir,
-                                                         int threads,
-                                                         bool genPointCloud,
-                                                         double demResolution,
-                                                         const QString &demType,
-                                                         const QString &tSrs) const
+void ProjectTaskDispatcher::startDemFromPointCloudAsync(
+    const xjw::gui::project::DemGenerationRequest &request) const
+{
+    if (_terrainManager)
+    {
+        _terrainManager->startDemFromPointCloudAsync(request);
+    }
+}
+
+void ProjectTaskDispatcher::startMapProjectAsync(const QJsonObject &settings) const
 {
     if (!_terrainManager)
     {
         return;
     }
 
-    _terrainManager->startStereoAndPoint2DemAsync(images,
-                                                  outputDir,
-                                                  threads,
-                                                  genPointCloud,
-                                                  demResolution,
-                                                  demType,
-                                                  tSrs);
+    _terrainManager->startMapProjectAsync(settings);
 }
 
-void ProjectTaskDispatcher::startFullDemPipelineAsync(const QStringList &images,
-                                                      const QString &outputDir,
-                                                      const QJsonObject &pipelineSettings) const
+void ProjectTaskDispatcher::cancelMapProject() const
 {
     if (_terrainManager)
-        _terrainManager->startFullDemPipelineAsync(images, outputDir, pipelineSettings);
-}
-
-void ProjectTaskDispatcher::startDemFromDenseCloudAsync(const QString &denseCloudPath,
-                                                        const QString &outputDir,
-                                                        double demResolution,
-                                                        const QString &demType) const
-{
-    if (_terrainManager)
-        _terrainManager->startDemFromDenseCloudAsync(denseCloudPath, outputDir, demResolution, demType);
-}
-
-void ProjectTaskDispatcher::startMapProjectAsync(const QStringList &images,
-                                                 const QString &demPath,
-                                                 const QString &outputPath,
-                                                 double resolution) const
-{
-    if (!_terrainManager)
     {
-        return;
+        _terrainManager->cancelMapProject();
     }
-
-    _terrainManager->startMapProjectAsync(images,
-                                          demPath,
-                                          outputPath,
-                                          resolution);
 }
 
 void ProjectTaskDispatcher::startReconstructionTask(ProjectReconstructionManager::Task task,
@@ -109,14 +81,6 @@ void ProjectTaskDispatcher::startReconstructionTask(ProjectReconstructionManager
 QJsonArray ProjectTaskDispatcher::getAvailableAtResults() const
 {
     return _reconstructionManager ? _reconstructionManager->getAvailableAtResults() : QJsonArray();
-}
-
-void ProjectTaskDispatcher::cancelMvs() const
-{
-    if (_reconstructionManager)
-    {
-        _reconstructionManager->cancelMvs();
-    }
 }
 
 void ProjectTaskDispatcher::cancelModelGeneration() const

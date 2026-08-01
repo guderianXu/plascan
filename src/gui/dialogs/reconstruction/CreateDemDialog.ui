@@ -142,7 +142,7 @@
        <item>
         <widget class="QLabel" name="manualHintLabel">
          <property name="text">
-          <string>已有密集点云？直接指定文件路径，跳过特征提取/MVS 步骤。</string>
+          <string>选择已有点云文件作为 DEM 输入。</string>
          </property>
          <property name="wordWrap">
           <bool>true</bool>
@@ -154,7 +154,7 @@
          <item>
           <widget class="QLineEdit" name="m_denseEdit">
            <property name="placeholderText">
-            <string>（留空则自动使用项目最新密集点云）</string>
+            <string>请选择点云文件</string>
            </property>
           </widget>
          </item>

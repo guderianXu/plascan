@@ -1869,21 +1869,6 @@ TEST(DepthFrameUtilsTest, StoredDepthCollectionCanSelectRequestedBatchDirectory)
     }
 }
 
-TEST(ModelWorkflowPolicyTest, PointCloudSourceRunsMeshDirectly)
-{
-    QJsonObject settings;
-    settings[QStringLiteral("source_data")] = QStringLiteral("point_cloud");
-    settings[QStringLiteral("source_path")] = QStringLiteral("E:/tmp/dense_cloud.ply");
-
-    const auto decision = xjw::gui::project::decideModelGenerationWorkflow(settings, QJsonObject());
-
-    EXPECT_EQ(decision.action, xjw::gui::project::ModelWorkflowAction::RunMeshDirectly);
-    EXPECT_EQ(decision.modelSettings.value(QStringLiteral("source_path")).toString(),
-              QStringLiteral("E:/tmp/dense_cloud.ply"));
-    EXPECT_GE(decision.modelSettings.value(QStringLiteral("threads")).toInt(), 1);
-    EXPECT_LE(decision.modelSettings.value(QStringLiteral("threads")).toInt(), 8);
-}
-
 TEST(ModelWorkflowPolicyTest, InteractiveModelWorkersLeaveGuiHeadroom)
 {
     EXPECT_EQ(xjw::gui::project::recommendedInteractiveModelWorkerCount(32), 8);
@@ -1891,19 +1876,6 @@ TEST(ModelWorkflowPolicyTest, InteractiveModelWorkersLeaveGuiHeadroom)
     EXPECT_EQ(xjw::gui::project::recommendedInteractiveModelWorkerCount(4), 2);
     EXPECT_EQ(xjw::gui::project::recommendedInteractiveModelWorkerCount(2), 1);
     EXPECT_EQ(xjw::gui::project::recommendedInteractiveModelWorkerCount(-1), 2);
-}
-
-TEST(ModelWorkflowPolicyTest, ExplicitModelWorkerCountIsPreserved)
-{
-    QJsonObject settings;
-    settings[QStringLiteral("source_data")] = QStringLiteral("point_cloud");
-    settings[QStringLiteral("threads")] = 12;
-
-    const auto decision = xjw::gui::project::decideModelGenerationWorkflow(
-        settings,
-        QJsonObject());
-
-    EXPECT_EQ(decision.modelSettings.value(QStringLiteral("threads")).toInt(), 12);
 }
 
 TEST(ModelWorkflowPolicyTest, ProjectDepthInputSignatureTracksImagesCamerasAndAerialTriangulation)
@@ -1952,224 +1924,22 @@ TEST(ModelWorkflowPolicyTest, ProjectDepthInputSignatureTracksImagesCamerasAndAe
               xjw::gui::project::projectDepthInputSignature(multiple_results, 1));
 }
 
-TEST(ModelWorkflowPolicyTest, CompleteDepthBatchRunsTsdfDirectlyWithoutDenseCloud)
-{
-    QTemporaryDir temp_dir;
-    ASSERT_TRUE(temp_dir.isValid());
-    QJsonArray depth_records;
-    for (int index = 0; index < 2; ++index)
-    {
-        const QString depth_png = QDir(temp_dir.path()).filePath(QStringLiteral("depth_%1.png").arg(index));
-        const QString raw_depth = QDir(temp_dir.path()).filePath(QStringLiteral("depth_%1.bin").arg(index));
-        for (const QString &path : {depth_png, raw_depth})
-        {
-            QFile artifact(path);
-            ASSERT_TRUE(artifact.open(QIODevice::WriteOnly));
-            artifact.write("x");
-        }
-        QJsonObject depth_record;
-        depth_record[QStringLiteral("ref_image")] = QStringLiteral("image_%1.jpg").arg(index);
-        depth_record[QStringLiteral("depth_png")] = depth_png;
-        depth_record[QStringLiteral("raw_depth_path")] = raw_depth;
-        depth_record[QStringLiteral("config_hash")] = QStringLiteral("config-a");
-        depth_record[QStringLiteral("algorithm_revision")] =
-            xjw::mvs::kMvsDepthAlgorithmRevision;
-        depth_records.append(depth_record);
-    }
-
-    const QString dense_cloud = QDir(temp_dir.path()).filePath(QStringLiteral("dense_cloud.ply"));
-    QFile file(dense_cloud);
-    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Text));
-    file.write("ply\nformat ascii 1.0\nelement vertex 1\n"
-               "property float x\nproperty float y\nproperty float z\n"
-               "end_header\n0 0 0\n");
-    file.close();
-
-    QJsonObject dense_record;
-    dense_record[QStringLiteral("dense_cloud_xyz")] = dense_cloud;
-    dense_record[QStringLiteral("source_depth_map_dir")] = temp_dir.path();
-    dense_record[QStringLiteral("source_depth_map_count")] = 2;
-    dense_record[QStringLiteral("source_depth_config_hash")] = QStringLiteral("config-a");
-    dense_record[QStringLiteral("fusion_pipeline_version")] =
-        xjw::gui::project::kDenseFusionPipelineVersion;
-    dense_record[QStringLiteral("point_count")] = 1;
-    QJsonObject metadata;
-    metadata[QStringLiteral("depth_map_results")] = depth_records;
-    metadata[QStringLiteral("dense_cloud_results")] = QJsonArray{dense_record};
-
-    QJsonObject settings;
-    settings[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
-    settings[QStringLiteral("source_path")] = temp_dir.path();
-    settings[QStringLiteral("depthMapSourcePath")] = temp_dir.path();
-    settings[QStringLiteral("reuseDepthMaps")] = true;
-
-    const auto decision = xjw::gui::project::decideModelGenerationWorkflow(settings, metadata);
-
-    EXPECT_EQ(decision.action, xjw::gui::project::ModelWorkflowAction::RunMeshDirectly);
-    EXPECT_EQ(decision.modelSettings.value(QStringLiteral("source_data")).toString(),
-              QStringLiteral("depth_maps"));
-    EXPECT_EQ(decision.modelSettings.value(QStringLiteral("reconstruction_mode")).toString(),
-              QStringLiteral("depth_tsdf"));
-    EXPECT_FALSE(decision.modelSettings.contains(QStringLiteral("source_point_cloud_path")));
-
-    dense_record.remove(QStringLiteral("fusion_pipeline_version"));
-    metadata[QStringLiteral("dense_cloud_results")] = QJsonArray{dense_record};
-    const auto legacy_decision =
-        xjw::gui::project::decideModelGenerationWorkflow(settings, metadata);
-    EXPECT_EQ(legacy_decision.action, xjw::gui::project::ModelWorkflowAction::RunMeshDirectly);
-    EXPECT_EQ(legacy_decision.modelSettings.value(QStringLiteral("reconstruction_mode")).toString(),
-              QStringLiteral("depth_tsdf"));
-    EXPECT_FALSE(legacy_decision.modelSettings.contains(QStringLiteral("source_point_cloud_path")));
-
-    QJsonArray stale_depth_records = depth_records;
-    for (qsizetype index = 0; index < stale_depth_records.size(); ++index)
-    {
-        QJsonObject stale_record = stale_depth_records.at(index).toObject();
-        stale_record.remove(QStringLiteral("algorithm_revision"));
-        stale_depth_records[index] = stale_record;
-    }
-    metadata[QStringLiteral("depth_map_results")] = stale_depth_records;
-    const auto stale_depth_decision =
-        xjw::gui::project::decideModelGenerationWorkflow(settings, metadata);
-    EXPECT_EQ(stale_depth_decision.action,
-              xjw::gui::project::ModelWorkflowAction::GenerateDepthMapsThenMesh);
-    EXPECT_TRUE(stale_depth_decision.reason.contains(QStringLiteral("旧版算法")));
-}
-
-TEST(ModelWorkflowPolicyTest, CompleteDepthBatchDoesNotRequireValidDenseCloud)
-{
-    QTemporaryDir temp_dir;
-    ASSERT_TRUE(temp_dir.isValid());
-
-    QJsonArray depth_records;
-    for (int index = 0; index < 2; ++index)
-    {
-        const QString depth_png =
-            QDir(temp_dir.path()).filePath(QStringLiteral("depth_%1.png").arg(index));
-        const QString raw_depth =
-            QDir(temp_dir.path()).filePath(QStringLiteral("depth_%1.bin").arg(index));
-        for (const QString &path : {depth_png, raw_depth})
-        {
-            QFile artifact(path);
-            ASSERT_TRUE(artifact.open(QIODevice::WriteOnly));
-            artifact.write("x");
-        }
-        depth_records.append(QJsonObject{
-            {QStringLiteral("ref_image"), QStringLiteral("image_%1.jpg").arg(index)},
-            {QStringLiteral("depth_png"), depth_png},
-            {QStringLiteral("raw_depth_path"), raw_depth},
-            {QStringLiteral("config_hash"), QStringLiteral("config-a")},
-            {QStringLiteral("algorithm_revision"),
-             xjw::mvs::kMvsDepthAlgorithmRevision}
-        });
-    }
-
-    const QString dense_cloud =
-        QDir(temp_dir.path()).filePath(QStringLiteral("dense_cloud.ply"));
-    QFile file(dense_cloud);
-    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Text));
-    file.write("ply\nformat ascii 1.0\nelement vertex 0\nend_header\n");
-    file.close();
-
-    QJsonObject dense_record;
-    dense_record[QStringLiteral("dense_cloud_xyz")] = dense_cloud;
-    dense_record[QStringLiteral("source_depth_map_dir")] = temp_dir.path();
-    dense_record[QStringLiteral("source_depth_map_count")] = 2;
-    dense_record[QStringLiteral("source_depth_config_hash")] = QStringLiteral("config-a");
-    dense_record[QStringLiteral("point_count")] = 0;
-
-    QJsonObject metadata;
-    metadata[QStringLiteral("depth_map_results")] = depth_records;
-    metadata[QStringLiteral("dense_cloud_results")] = QJsonArray{dense_record};
-
-    QJsonObject settings;
-    settings[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
-    settings[QStringLiteral("depthMapSourcePath")] = temp_dir.path();
-    settings[QStringLiteral("reuseDepthMaps")] = true;
-
-    const auto decision =
-        xjw::gui::project::decideModelGenerationWorkflow(settings, metadata);
-    EXPECT_EQ(decision.action, xjw::gui::project::ModelWorkflowAction::RunMeshDirectly);
-    EXPECT_EQ(decision.modelSettings.value(QStringLiteral("reconstruction_mode")).toString(),
-              QStringLiteral("depth_tsdf"));
-    EXPECT_FALSE(decision.modelSettings.contains(QStringLiteral("source_point_cloud_path")));
-}
-
-TEST(ModelWorkflowPolicyTest, CompleteDepthBatchIgnoresTruncatedDenseCloud)
-{
-    QTemporaryDir temp_dir;
-    ASSERT_TRUE(temp_dir.isValid());
-
-    QJsonArray depth_records;
-    for (int index = 0; index < 2; ++index)
-    {
-        const QString depth_png =
-            QDir(temp_dir.path()).filePath(QStringLiteral("depth_%1.png").arg(index));
-        const QString raw_depth =
-            QDir(temp_dir.path()).filePath(QStringLiteral("depth_%1.bin").arg(index));
-        for (const QString &path : {depth_png, raw_depth})
-        {
-            QFile artifact(path);
-            ASSERT_TRUE(artifact.open(QIODevice::WriteOnly));
-            artifact.write("x");
-        }
-        depth_records.append(QJsonObject{
-            {QStringLiteral("ref_image"), QStringLiteral("image_%1.jpg").arg(index)},
-            {QStringLiteral("depth_png"), depth_png},
-            {QStringLiteral("raw_depth_path"), raw_depth},
-            {QStringLiteral("config_hash"), QStringLiteral("config-a")},
-            {QStringLiteral("algorithm_revision"),
-             xjw::mvs::kMvsDepthAlgorithmRevision}
-        });
-    }
-
-    const QString dense_cloud =
-        QDir(temp_dir.path()).filePath(QStringLiteral("dense_cloud.ply"));
-    QFile file(dense_cloud);
-    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Text));
-    file.write("ply\nformat ascii 1.0\nelement vertex 1000000\n"
-               "property float x\nproperty float y\nproperty float z\n"
-               "end_header\n0 0 0\n");
-    file.close();
-
-    QJsonObject dense_record;
-    dense_record[QStringLiteral("dense_cloud_xyz")] = dense_cloud;
-    dense_record[QStringLiteral("source_depth_map_dir")] = temp_dir.path();
-    dense_record[QStringLiteral("source_depth_map_count")] = 2;
-    dense_record[QStringLiteral("source_depth_config_hash")] = QStringLiteral("config-a");
-    dense_record[QStringLiteral("point_count")] = 1000000;
-
-    QJsonObject metadata;
-    metadata[QStringLiteral("depth_map_results")] = depth_records;
-    metadata[QStringLiteral("dense_cloud_results")] = QJsonArray{dense_record};
-
-    QJsonObject settings;
-    settings[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
-    settings[QStringLiteral("depthMapSourcePath")] = temp_dir.path();
-    settings[QStringLiteral("reuseDepthMaps")] = true;
-
-    const auto decision =
-        xjw::gui::project::decideModelGenerationWorkflow(settings, metadata);
-    EXPECT_EQ(decision.action, xjw::gui::project::ModelWorkflowAction::RunMeshDirectly);
-    EXPECT_EQ(decision.modelSettings.value(QStringLiteral("reconstruction_mode")).toString(),
-              QStringLiteral("depth_tsdf"));
-    EXPECT_FALSE(decision.modelSettings.contains(QStringLiteral("source_point_cloud_path")));
-}
-
-TEST(ModelWorkflowPolicyTest, DepthFramesFromPreviousProjectInputAreRegenerated)
+TEST(ModelWorkflowPolicyTest, StoredDepthBatchCompatibilityRejectsOldReconstructionGeneration)
 {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
 
     QJsonObject metadata;
     metadata[QStringLiteral("images")] = QJsonArray{
-        QJsonObject{{QStringLiteral("path"), QStringLiteral("E:/tmp/current.jpg")},
-                    {QStringLiteral("camera"),
-                     QJsonObject{{QStringLiteral("fu"), 1200.0}}}}
+        QJsonObject{{QStringLiteral("path"), QStringLiteral("E:/tmp/image_0.jpg")}}
     };
     metadata[QStringLiteral("aerial_triangulation_results")] = QJsonArray{
-        QJsonObject{{QStringLiteral("run_id"), QStringLiteral("current-at")}}
+        QJsonObject{{QStringLiteral("run_id"), QStringLiteral("current-at")},
+                    {QStringLiteral("reconstruction_generation_id"),
+                     QStringLiteral("generation-current")}}
     };
+    const QString current_signature =
+        xjw::gui::project::projectDepthInputSignature(metadata);
 
     QJsonArray depth_records;
     for (int index = 0; index < 2; ++index)
@@ -2189,231 +1959,73 @@ TEST(ModelWorkflowPolicyTest, DepthFramesFromPreviousProjectInputAreRegenerated)
             {QStringLiteral("depth_png"), depth_png},
             {QStringLiteral("raw_depth_path"), raw_depth},
             {QStringLiteral("config_hash"), QStringLiteral("config-a")},
-            {QStringLiteral("project_input_signature"), QStringLiteral("stale-input")}
+            {QStringLiteral("project_input_signature"), current_signature},
+            {QStringLiteral("reconstruction_generation_id"),
+             QStringLiteral("generation-old")},
+            {QStringLiteral("algorithm_revision"),
+             xjw::mvs::kMvsDepthAlgorithmRevision}
         });
     }
     metadata[QStringLiteral("depth_map_results")] = depth_records;
 
-    QJsonObject settings;
-    settings[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
-    settings[QStringLiteral("depthMapSourcePath")] = temp_dir.path();
-    settings[QStringLiteral("reuseDepthMaps")] = true;
-
-    const auto decision =
-        xjw::gui::project::decideModelGenerationWorkflow(settings, metadata);
-    EXPECT_EQ(decision.action,
-              xjw::gui::project::ModelWorkflowAction::GenerateDepthMapsThenMesh);
-    EXPECT_EQ(decision.depthSettings.value(QStringLiteral("workflow_action")).toString(),
-              QStringLiteral("generate_depth_maps"));
+    const auto compatibility =
+        xjw::gui::project::assessStoredDepthBatchCompatibility(
+            metadata,
+            temp_dir.path());
+    EXPECT_FALSE(compatibility.compatible);
+    EXPECT_TRUE(compatibility.reason.contains(QStringLiteral("旧的重建代次")));
 }
 
-TEST(ModelWorkflowPolicyTest, DisabledDepthReuseRegeneratesEvenWhenDenseCloudExists)
+TEST(ModelWorkflowPolicyTest, StoredDepthBatchCompatibilityAcceptsCurrentLineage)
 {
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
-    QFile dense_cloud(QDir(temp_dir.path()).filePath(QStringLiteral("dense_cloud.ply")));
-    ASSERT_TRUE(dense_cloud.open(QIODevice::WriteOnly | QIODevice::Text));
-    dense_cloud.write("ply\nformat ascii 1.0\nelement vertex 0\nend_header\n");
-    dense_cloud.close();
 
-    QJsonObject settings;
-    settings[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
-    settings[QStringLiteral("depthMapSourcePath")] = temp_dir.path();
-    settings[QStringLiteral("reuseDepthMaps")] = false;
+    QJsonObject metadata;
+    metadata[QStringLiteral("images")] = QJsonArray{
+        QJsonObject{{QStringLiteral("path"), QStringLiteral("E:/tmp/image_0.jpg")}}
+    };
+    metadata[QStringLiteral("aerial_triangulation_results")] = QJsonArray{
+        QJsonObject{{QStringLiteral("run_id"), QStringLiteral("current-at")},
+                    {QStringLiteral("reconstruction_generation_id"),
+                     QStringLiteral("generation-current")}}
+    };
+    const QString current_signature =
+        xjw::gui::project::projectDepthInputSignature(metadata);
 
-    const auto decision = xjw::gui::project::decideModelGenerationWorkflow(settings, QJsonObject());
-
-    EXPECT_EQ(decision.action, xjw::gui::project::ModelWorkflowAction::GenerateDepthMapsThenMesh);
-    EXPECT_TRUE(decision.depthSettings.value(QStringLiteral("force_depth_recompute")).toBool());
-}
-
-TEST(ModelWorkflowPolicyTest, StoredFramesFromAnotherDirectoryAreNotReused)
-{
-    QTemporaryDir selected_batch;
-    QTemporaryDir other_batch;
-    ASSERT_TRUE(selected_batch.isValid());
-    ASSERT_TRUE(other_batch.isValid());
-
-    QJsonArray records;
+    QJsonArray depth_records;
     for (int index = 0; index < 2; ++index)
     {
-        const QString depth_png = QDir(other_batch.path()).filePath(QStringLiteral("depth_%1.png").arg(index));
-        const QString raw_depth = QDir(other_batch.path()).filePath(QStringLiteral("depth_%1.bin").arg(index));
+        const QString depth_png =
+            QDir(temp_dir.path()).filePath(QStringLiteral("depth_%1.png").arg(index));
+        const QString raw_depth =
+            QDir(temp_dir.path()).filePath(QStringLiteral("depth_%1.bin").arg(index));
         for (const QString &path : {depth_png, raw_depth})
         {
-            QFile file(path);
-            ASSERT_TRUE(file.open(QIODevice::WriteOnly));
-            file.write("x");
+            QFile artifact(path);
+            ASSERT_TRUE(artifact.open(QIODevice::WriteOnly));
+            artifact.write("x");
         }
-        QJsonObject record;
-        record[QStringLiteral("ref_image")] = QStringLiteral("image_%1.jpg").arg(index);
-        record[QStringLiteral("depth_png")] = depth_png;
-        record[QStringLiteral("raw_depth_path")] = raw_depth;
-        record[QStringLiteral("config_hash")] = QStringLiteral("config-a");
-        records.append(record);
+        depth_records.append(QJsonObject{
+            {QStringLiteral("ref_image"), QStringLiteral("image_%1.jpg").arg(index)},
+            {QStringLiteral("depth_png"), depth_png},
+            {QStringLiteral("raw_depth_path"), raw_depth},
+            {QStringLiteral("config_hash"), QStringLiteral("config-a")},
+            {QStringLiteral("project_input_signature"), current_signature},
+            {QStringLiteral("reconstruction_generation_id"),
+             QStringLiteral("generation-current")},
+            {QStringLiteral("algorithm_revision"),
+             xjw::mvs::kMvsDepthAlgorithmRevision}
+        });
     }
+    metadata[QStringLiteral("depth_map_results")] = depth_records;
 
-    QJsonObject metadata;
-    metadata[QStringLiteral("depth_map_results")] = records;
-    QJsonObject settings;
-    settings[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
-    settings[QStringLiteral("depthMapSourcePath")] = selected_batch.path();
-    settings[QStringLiteral("reuseDepthMaps")] = true;
-
-    const auto decision = xjw::gui::project::decideModelGenerationWorkflow(settings, metadata);
-
-    EXPECT_EQ(decision.action, xjw::gui::project::ModelWorkflowAction::GenerateDepthMapsThenMesh);
-}
-
-TEST(ModelWorkflowPolicyTest, PartialDepthBatchIsCompletedBeforeTsdf)
-{
-    QTemporaryDir temp_dir;
-    ASSERT_TRUE(temp_dir.isValid());
-
-    QJsonArray records;
-    for (int index = 0; index < 2; ++index)
-    {
-        const QString depth_png = QDir(temp_dir.path()).filePath(QStringLiteral("depth_%1.png").arg(index));
-        const QString raw_depth = QDir(temp_dir.path()).filePath(QStringLiteral("depth_%1.bin").arg(index));
-        for (const QString &path : {depth_png, raw_depth})
-        {
-            QFile file(path);
-            ASSERT_TRUE(file.open(QIODevice::WriteOnly));
-            file.write("x");
-        }
-        QJsonObject record;
-        record[QStringLiteral("ref_image")] = QStringLiteral("image_%1.jpg").arg(index);
-        record[QStringLiteral("depth_png")] = depth_png;
-        record[QStringLiteral("raw_depth_path")] = raw_depth;
-        record[QStringLiteral("batch_frame_count")] = 9;
-        record[QStringLiteral("config_hash")] = QStringLiteral("config-a");
-        records.append(record);
-    }
-
-    QJsonObject metadata;
-    metadata[QStringLiteral("depth_map_results")] = records;
-    QJsonObject settings;
-    settings[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
-    settings[QStringLiteral("depthMapSourcePath")] = temp_dir.path();
-    settings[QStringLiteral("reuseDepthMaps")] = true;
-
-    const auto decision = xjw::gui::project::decideModelGenerationWorkflow(settings, metadata);
-
-    EXPECT_EQ(decision.action, xjw::gui::project::ModelWorkflowAction::GenerateDepthMapsThenMesh);
-    EXPECT_EQ(decision.depthSettings.value(QStringLiteral("workflow_action")).toString(),
-              QStringLiteral("generate_depth_maps"));
-}
-
-TEST(ModelWorkflowPolicyTest, DepthFileSourceIsNormalizedToItsDirectory)
-{
-    QTemporaryDir temp_dir;
-    ASSERT_TRUE(temp_dir.isValid());
-    const QString depth_file = QDir(temp_dir.path()).filePath(QStringLiteral("depth_0.bin"));
-    QFile file(depth_file);
-    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
-    file.write("x");
-    file.close();
-
-    QJsonObject settings;
-    settings[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
-    settings[QStringLiteral("depthMapSourcePath")] = depth_file;
-
-    const auto decision = xjw::gui::project::decideModelGenerationWorkflow(settings, QJsonObject());
-
-    EXPECT_EQ(QDir::cleanPath(decision.depthMapSourcePath), QDir::cleanPath(temp_dir.path()));
-    EXPECT_EQ(QDir::cleanPath(decision.depthSettings.value(QStringLiteral("output_dir")).toString()),
-              QDir::cleanPath(temp_dir.path()));
-}
-
-TEST(ModelWorkflowPolicyTest, DenseSettingsPreserveSelectedAerialTriangulationIndex)
-{
-    QJsonObject settings;
-    settings[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
-    settings[QStringLiteral("at_index")] = 3;
-
-    const QJsonObject dense_settings =
-        xjw::gui::project::denseSettingsFromModelSettings(settings, QStringLiteral("E:/tmp/mvs"));
-
-    EXPECT_EQ(dense_settings.value(QStringLiteral("at_index")).toInt(-1), 3);
-    EXPECT_FALSE(dense_settings.contains(QStringLiteral("atIndex")));
-}
-
-TEST(ModelWorkflowPolicyTest, DepthMapsWithStoredFramesRunTsdfDirectly)
-{
-    QTemporaryDir temp_dir;
-    ASSERT_TRUE(temp_dir.isValid());
-
-    const QString depth_0 = QDir(temp_dir.path()).filePath(QStringLiteral("depth_0.png"));
-    const QString raw_0 = QDir(temp_dir.path()).filePath(QStringLiteral("depth_0.bin"));
-    const QString confidence_0 = QDir(temp_dir.path()).filePath(QStringLiteral("depth_0_conf.bin"));
-    const QString depth_1 = QDir(temp_dir.path()).filePath(QStringLiteral("depth_1.png"));
-    const QString raw_1 = QDir(temp_dir.path()).filePath(QStringLiteral("depth_1.bin"));
-    const QString confidence_1 = QDir(temp_dir.path()).filePath(QStringLiteral("depth_1_conf.bin"));
-    for (const QString &path : {depth_0, raw_0, confidence_0, depth_1, raw_1, confidence_1})
-    {
-        QFile file(path);
-        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
-        file.write("x");
-    }
-
-    QJsonObject frame_0;
-    frame_0[QStringLiteral("status")] = QStringLiteral("completed");
-    frame_0[QStringLiteral("ref_image")] = QStringLiteral("image_000.jpg");
-    frame_0[QStringLiteral("depth_png")] = depth_0;
-    frame_0[QStringLiteral("raw_depth_path")] = raw_0;
-    frame_0[QStringLiteral("raw_confidence_path")] = confidence_0;
-    frame_0[QStringLiteral("config_hash")] = QStringLiteral("config-a");
-    frame_0[QStringLiteral("algorithm_revision")] =
-        xjw::mvs::kMvsDepthAlgorithmRevision;
-    frame_0[QStringLiteral("grid_width")] = 1;
-    frame_0[QStringLiteral("grid_height")] = 1;
-
-    QJsonObject frame_1 = frame_0;
-    frame_1[QStringLiteral("ref_image")] = QStringLiteral("image_001.jpg");
-    frame_1[QStringLiteral("depth_png")] = depth_1;
-    frame_1[QStringLiteral("raw_depth_path")] = raw_1;
-    frame_1[QStringLiteral("raw_confidence_path")] = confidence_1;
-
-    QJsonObject metadata;
-    metadata[QStringLiteral("depth_map_results")] = QJsonArray{frame_0, frame_1};
-
-    QJsonObject settings;
-    settings[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
-    settings[QStringLiteral("source_path")] = temp_dir.path();
-    settings[QStringLiteral("depthMapSourcePath")] = temp_dir.path();
-    settings[QStringLiteral("reuseDepthMaps")] = true;
-
-    const auto decision = xjw::gui::project::decideModelGenerationWorkflow(settings, metadata);
-
-    EXPECT_EQ(decision.action, xjw::gui::project::ModelWorkflowAction::RunMeshDirectly);
-    EXPECT_EQ(decision.modelSettings.value(QStringLiteral("reconstruction_mode")).toString(),
-              QStringLiteral("depth_tsdf"));
-    EXPECT_FALSE(decision.modelSettings.contains(QStringLiteral("source_point_cloud_path")));
-}
-
-TEST(ModelWorkflowPolicyTest, DepthMapsMissingFramesEstimateThenRunTsdf)
-{
-    QTemporaryDir temp_dir;
-    ASSERT_TRUE(temp_dir.isValid());
-
-    QJsonObject settings;
-    settings[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
-    settings[QStringLiteral("source_path")] = temp_dir.path();
-    settings[QStringLiteral("depthMapSourcePath")] = temp_dir.path();
-    settings[QStringLiteral("reuseDepthMaps")] = true;
-    settings[QStringLiteral("quality")] = QStringLiteral("high");
-
-    const auto decision = xjw::gui::project::decideModelGenerationWorkflow(settings, QJsonObject());
-
-    EXPECT_EQ(decision.action, xjw::gui::project::ModelWorkflowAction::GenerateDepthMapsThenMesh);
-    EXPECT_TRUE(decision.depthSettings.value(QStringLiteral("pipeline_mode")).toBool());
-    EXPECT_EQ(decision.depthSettings.value(QStringLiteral("workflow_action")).toString(),
-              QStringLiteral("generate_depth_maps"));
-    EXPECT_EQ(decision.depthSettings.value(QStringLiteral("output_dir")).toString(), temp_dir.path());
-    EXPECT_EQ(decision.depthSettings.value(QStringLiteral("qualityProfile")).toString(),
-              QStringLiteral("high_quality"));
-    EXPECT_EQ(decision.modelSettings.value(QStringLiteral("source_data")).toString(),
-              QStringLiteral("depth_maps"));
+    const auto compatibility =
+        xjw::gui::project::assessStoredDepthBatchCompatibility(
+            metadata,
+            temp_dir.path());
+    EXPECT_TRUE(compatibility.compatible) << compatibility.reason.toStdString();
+    EXPECT_EQ(compatibility.frameCount, 2);
 }
 
 TEST(GenerateModelDialogTest, OffersAutomaticDepthMapsWithoutExistingDepthArtifacts)
@@ -2551,56 +2163,6 @@ TEST(GenerateModelDialogTest, AcceptsBeforeDispatchingModelWorkflow)
               QStringLiteral("OBJ"));
 }
 
-TEST(ModelWorkflowContractTest, GenerateDenseCloudEmitsReadyAfterWritingPointCloud)
-{
-    const QString source = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int start = source.indexOf(
-        QStringLiteral("ProjectDenseReconstructionManager::startGenerateDenseCloudAsync"));
-    ASSERT_GE(start, 0);
-    const int end = source.indexOf(
-        QStringLiteral("void ProjectDenseReconstructionManager::startDenseCloudRefineAsync"), start);
-    ASSERT_GT(end, start);
-    const QString block = source.mid(start, end - start);
-
-    EXPECT_TRUE(block.contains(QStringLiteral("emit self->denseCloudResultReady(")))
-        << "Successful dense-cloud generation must provide the current output path to model workflows.";
-    EXPECT_TRUE(block.contains(QStringLiteral("pipelineMode")))
-        << "Pipeline mode must suppress intermediate modal success dialogs.";
-}
-
-TEST(DenseDepthReuseTest, ExistingDepthDetectionRequiresRawDepthArtifact)
-{
-    const QString source = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int collectStart = source.indexOf(QStringLiteral("QSet<int> collectExistingDepthFrameIndices"));
-    ASSERT_GE(collectStart, 0);
-    const int collectEnd = source.indexOf(QStringLiteral("ExistingDepthAction askExistingDepthAction"), collectStart);
-    ASSERT_GT(collectEnd, collectStart);
-    const QString collectBlock = source.mid(collectStart, collectEnd - collectStart);
-    EXPECT_TRUE(collectBlock.contains(QStringLiteral("depthFrameArtifactsExist(pngPath)")))
-        << collectBlock.toStdString();
-
-}
-
-TEST(DenseDepthCameraLookupTest, MvsCameraLookupUsesNormalizedImageKeys)
-{
-    const QString source = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(source.contains(QStringLiteral("cameraForImagePath(camMap, imgPath")))
-        << "Dense estimation should query cameras with the same normalized key used by ProjectManager.";
-    EXPECT_TRUE(source.contains(QStringLiteral("cameraForImagePath(_cameraMap, _records[index].refImage")))
-        << "Stored-depth fusion cache should normalize ref_image before camera lookup.";
-    EXPECT_FALSE(source.contains(QStringLiteral("camMap.value(imgPath)")));
-    EXPECT_FALSE(source.contains(QStringLiteral("camMap.value(stored.refImage)")));
-}
-
 TEST(DepthMapMetadataTest, DemPreviewsStayOutOfMvsDepthResults)
 {
     const QString terrainSource = readProjectSourceFile(
@@ -2625,28 +2187,6 @@ TEST(DepthMapMetadataTest, DemPreviewsStayOutOfMvsDepthResults)
         << "DEM previews should be available from the DEM section instead.";
 }
 
-TEST(TerrainPipelineAsyncTest, AutoDemConsumesOnlyCurrentDenseCloudSignal)
-{
-    const QString source = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(source.contains(QStringLiteral("&ProjectManager::denseCloudResultReady")))
-        << "The automatic DEM pipeline should consume the exact dense cloud produced by the current MVS run.";
-    EXPECT_TRUE(source.contains(QStringLiteral("const QString plyPath = denseCloudPath.trimmed();")))
-        << "DEM generation should use the PLY path carried by the dense-cloud-ready signal.";
-    EXPECT_FALSE(source.contains(QStringLiteral("pendingDenseResultCount")))
-        << "Counting metadata records is still vulnerable to unrelated metadata updates.";
-    EXPECT_FALSE(source.contains(QStringLiteral("denseArr.size() <= pendingDenseResultCount")))
-        << "Unrelated metadata changes or pre-existing dense clouds must not drive DEM generation.";
-    EXPECT_FALSE(source.contains(QStringLiteral("denseIndex = pendingDenseResultCount")))
-        << "DEM generation should not scan dense metadata records to infer this run's output.";
-    EXPECT_FALSE(source.contains(QStringLiteral("denseArr.at(pendingDenseResultCount)")))
-        << "The first new dense record can be incomplete; scan new records for the first existing output instead.";
-    EXPECT_FALSE(source.contains(QStringLiteral("const QJsonObject lastRecord = denseArr.last().toObject()")))
-        << "Using last() can pick an old or unrelated dense cloud record.";
-}
-
 TEST(TerrainPipelineAsyncTest, AutoDemPipelineConnectionsUseSharedCleanupState)
 {
     const QString source = readProjectSourceFile(
@@ -2663,63 +2203,6 @@ TEST(TerrainPipelineAsyncTest, AutoDemPipelineConnectionsUseSharedCleanupState)
         << "Raw connection handles leak when the owner is destroyed or when the success path returns early.";
     EXPECT_FALSE(source.contains(QStringLiteral("delete connMeta")));
     EXPECT_FALSE(source.contains(QStringLiteral("delete connMvsFail")));
-}
-
-TEST(TerrainPipelineAsyncTest, AutoDemGenerationRunsOffGuiThreadAfterMvs)
-{
-    const QString source = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int start = source.indexOf(
-        QStringLiteral("void ProjectTerrainProductsManager::runFullDemPipelineInBackground"));
-    ASSERT_GE(start, 0);
-    const QString block = source.mid(start);
-
-    const int denseReadyStart = block.indexOf(QStringLiteral("denseCloudResultReady"));
-    ASSERT_GE(denseReadyStart, 0);
-    const int mvsFailureStart = block.indexOf(QStringLiteral("// 同时监听 MVS 失败"), denseReadyStart);
-    ASSERT_GT(mvsFailureStart, denseReadyStart);
-    const QString denseReadyBlock = block.mid(denseReadyStart, mvsFailureStart - denseReadyStart);
-
-    EXPECT_TRUE(source.contains(QStringLiteral("runAutomaticDemGenerationTask")))
-        << "The expensive DEM generation work should be isolated in a worker helper.";
-    EXPECT_TRUE(denseReadyBlock.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
-        << "MVS success should start DEM generation through the guarded GUI task runner.";
-    EXPECT_FALSE(block.contains(QStringLiteral("ProjectManager::projectMetadataChanged")))
-        << "The full DEM pipeline should consume the exact dense cloud result signal, not infer completion "
-           "from unrelated metadata updates.";
-    EXPECT_FALSE(denseReadyBlock.contains(QStringLiteral("xjw::TerrainPipeline::generateDemFromDepthMaps(")))
-        << "Depth-map DEM rasterization must not run inside the GUI dense-ready callback.";
-    EXPECT_FALSE(denseReadyBlock.contains(QStringLiteral("runDemProducts(plyPath")))
-        << "Dense-cloud fallback DEM rasterization must not run inside the GUI dense-ready callback.";
-}
-
-TEST(TerrainPipelineAsyncTest, AutoDemPipelineScopesDenseCloudSignalToCurrentMvsRun)
-{
-    const QString source = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int start = source.indexOf(
-        QStringLiteral("void ProjectTerrainProductsManager::runFullDemPipelineInBackground"));
-    ASSERT_GE(start, 0);
-    const QString block = source.mid(start);
-
-    const int denseReadyStart = block.indexOf(QStringLiteral("denseCloudResultReady"));
-    ASSERT_GE(denseReadyStart, 0);
-    const int mvsFailureStart = block.indexOf(QStringLiteral("// 同时监听 MVS 失败"), denseReadyStart);
-    ASSERT_GT(mvsFailureStart, denseReadyStart);
-    const QString denseReadyBlock = block.mid(denseReadyStart, mvsFailureStart - denseReadyStart);
-
-    EXPECT_TRUE(block.contains(QStringLiteral("const QString expectedMvsOutputDir")))
-        << "The full DEM pipeline should reserve a dedicated MVS output directory for this run.";
-    EXPECT_TRUE(block.contains(QStringLiteral("mvsSettings[QStringLiteral(\"output_dir\")] = expectedMvsOutputDir")))
-        << "The MVS request should write into the expected directory instead of the shared default mvs_output.";
-    EXPECT_TRUE(denseReadyBlock.contains(QStringLiteral("pathIsInsideDirectory(plyPath, expectedMvsOutputDir)")))
-        << "The dense-cloud-ready callback must ignore outputs from unrelated dense-cloud jobs.";
-    EXPECT_FALSE(denseReadyBlock.contains(QStringLiteral("return; // 成功时由 projectMetadataChanged 处理")))
-        << "The success path is now driven by denseCloudResultReady, not projectMetadataChanged.";
 }
 
 TEST(TerrainPipelineAsyncTest, FullDemPipelineUsesBoundedFeaturePairPlanning)
@@ -2744,79 +2227,6 @@ TEST(TerrainPipelineAsyncTest, FullDemPipelineUsesBoundedFeaturePairPlanning)
         << "Large DEM runs must not plan all image pairs by default.";
 }
 
-TEST(TerrainPipelineAsyncTest, FullDemPipelineFeedsReferenceCamerasToMatchPhotosTask)
-{
-    const QString header = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.h"));
-    const QString source = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-
-    const int start = source.indexOf(
-        QStringLiteral("void ProjectTerrainProductsManager::startFullDemPipelineAsync"));
-    ASSERT_GE(start, 0);
-    const int end = source.indexOf(
-        QStringLiteral("void ProjectTerrainProductsManager::startDemFromDenseCloudAsync"),
-        start);
-    ASSERT_GT(end, start);
-    const QString startBlock = source.mid(start, end - start);
-
-    const int matchStart = source.indexOf(
-        QStringLiteral("void ProjectTerrainProductsManager::runFullDemPipelineInBackground"));
-    ASSERT_GE(matchStart, 0);
-    const int matchEnd = source.indexOf(QStringLiteral("// 步骤 3-5:"), matchStart);
-    ASSERT_GT(matchEnd, matchStart);
-    const QString matchingBlock = source.mid(matchStart, matchEnd - matchStart);
-
-    EXPECT_TRUE(header.contains(QStringLiteral("referenceCameras")))
-        << "The DEM pipeline context should carry imported reference cameras into the background worker.";
-    EXPECT_TRUE(startBlock.contains(QStringLiteral("getCamerasForImages(images")))
-        << "The GUI-thread setup should read the project's imported camera centers before launching the worker.";
-    EXPECT_TRUE(startBlock.contains(QStringLiteral("ctx.referenceCameras")))
-        << "The start function should store reference cameras on the DEM pipeline context.";
-    EXPECT_TRUE(matchingBlock.contains(QStringLiteral("context.referenceCameras = ctx.referenceCameras")))
-        << "The background matching step should feed reference cameras into MatchPhotosTask.";
-    EXPECT_TRUE(matchingBlock.contains(QStringLiteral("options.useReferencePreselection")))
-        << "Reference preselection should be enabled when imported cameras are available.";
-}
-
-TEST(TerrainPipelineAsyncTest, DenseCloudResultSignalCarriesOutputPath)
-{
-    const QString denseHeader = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.h"));
-    const QString reconstructionHeader = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectReconstructionManager.h"));
-    const QString managerHeader = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectManager.h"));
-    const QString denseSource = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    const QString reconstructionSource = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectReconstructionManager.cpp"));
-    const QString managerSource = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
-    ASSERT_FALSE(denseHeader.isEmpty());
-    ASSERT_FALSE(reconstructionHeader.isEmpty());
-    ASSERT_FALSE(managerHeader.isEmpty());
-    ASSERT_FALSE(denseSource.isEmpty());
-    ASSERT_FALSE(reconstructionSource.isEmpty());
-    ASSERT_FALSE(managerSource.isEmpty());
-
-    const QString signalDecl =
-        QStringLiteral("void denseCloudResultReady(const QString &denseCloudPath, int pointCount);");
-    EXPECT_TRUE(denseHeader.contains(signalDecl));
-    EXPECT_TRUE(reconstructionHeader.contains(signalDecl));
-    EXPECT_TRUE(managerHeader.contains(signalDecl));
-    EXPECT_TRUE(denseSource.contains(QStringLiteral("emit self->denseCloudResultReady(outputPly, pointCount);")))
-        << "MVS completion should publish the exact PLY path produced by the current run.";
-    EXPECT_TRUE(reconstructionSource.contains(
-        QStringLiteral("&ProjectDenseReconstructionManager::denseCloudResultReady")));
-    EXPECT_TRUE(reconstructionSource.contains(
-        QStringLiteral("&ProjectReconstructionManager::denseCloudResultReady")));
-    EXPECT_TRUE(managerSource.contains(QStringLiteral("&ProjectReconstructionManager::denseCloudResultReady")));
-    EXPECT_TRUE(managerSource.contains(QStringLiteral("&ProjectManager::denseCloudResultReady")));
-}
-
 TEST(TerrainPipelineAsyncTest, DenseCloudDemRunsOffGuiThread)
 {
     const QString source = readProjectSourceFile(
@@ -2837,26 +2247,6 @@ TEST(TerrainPipelineAsyncTest, DenseCloudDemRunsOffGuiThread)
         << "Open-coded QtConcurrent can still start terrain work after the manager owner is destroyed.";
     EXPECT_FALSE(block.contains(QStringLiteral("runDemProductsOrWarn")))
         << "runDemProductsOrWarn shows QMessageBox and must stay on the GUI thread.";
-}
-
-TEST(TerrainPipelineAsyncTest, StereoPoint2DemRunsOffGuiThread)
-{
-    const QString source = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int start = source.indexOf(QStringLiteral("void ProjectTerrainProductsManager::startStereoAndPoint2DemAsync"));
-    ASSERT_GE(start, 0);
-    const int end = source.indexOf(QStringLiteral("void ProjectTerrainProductsManager::startFullDemPipelineAsync"), start);
-    ASSERT_GT(end, start);
-    const QString block = source.mid(start, end - start);
-
-    EXPECT_TRUE(block.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
-        << "The legacy stereo-to-DEM Async entry point should also keep DEM/DOM IO off the GUI thread.";
-    EXPECT_TRUE(block.contains(QStringLiteral("runDemProducts(resolvedDenseCloud")))
-        << "The worker should call the non-UI terrain function and report errors after returning to the GUI thread.";
-    EXPECT_FALSE(block.contains(QStringLiteral("runDemProductsOrWarn")))
-        << "The Async entry point must not call the QMessageBox wrapper directly.";
 }
 
 TEST(TerrainPipelineAsyncTest, MapProjectRunsOffGuiThread)
@@ -2894,26 +2284,6 @@ TEST(TerrainPipelineAsyncTest, TerrainProductsManagerDropsBlockingUiWrappers)
     EXPECT_FALSE(source.contains(QStringLiteral("ProjectTerrainProductsManager::runOrthoProductOrWarn")));
 }
 
-TEST(GuiAsyncLifetimeTest, TerrainAndDenseBackgroundCallbacksUseQPointerGuards)
-{
-    const QString terrainSource = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
-    const QString denseSource = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    const QString managerSource = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
-    ASSERT_FALSE(terrainSource.isEmpty());
-    ASSERT_FALSE(denseSource.isEmpty());
-    ASSERT_FALSE(managerSource.isEmpty());
-
-    EXPECT_TRUE(terrainSource.contains(QStringLiteral("#include <QPointer>")));
-    EXPECT_TRUE(terrainSource.contains(QStringLiteral("QPointer<ProjectTerrainProductsManager> self(this)")));
-    EXPECT_TRUE(denseSource.contains(QStringLiteral("#include <QPointer>")));
-    EXPECT_TRUE(denseSource.contains(QStringLiteral("QPointer<ProjectDenseReconstructionManager> self(this)")));
-    EXPECT_TRUE(managerSource.contains(QStringLiteral("#include <QPointer>")));
-    EXPECT_TRUE(managerSource.contains(QStringLiteral("QPointer<ProjectManager> self(this)")));
-}
-
 TEST(GuiTaskRunnerTest, DeliversBackgroundExceptionToGuiCallback)
 {
     QObject owner;
@@ -2948,33 +2318,6 @@ TEST(GuiTaskRunnerTest, DeliversBackgroundExceptionToGuiCallback)
     EXPECT_TRUE(callbackInvoked);
     EXPECT_EQ(errorMessage, QStringLiteral("intentional test failure"));
     EXPECT_EQ(callbackThread, owner.thread());
-}
-
-TEST(GuiAsyncLifetimeTest, FullDemPipelineUsesGuardedTaskRunner)
-{
-    const QString source = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int start = source.indexOf(QStringLiteral("void ProjectTerrainProductsManager::startFullDemPipelineAsync"));
-    ASSERT_GE(start, 0);
-    const int end = source.indexOf(QStringLiteral("void ProjectTerrainProductsManager::startDemFromDenseCloudAsync"), start);
-    ASSERT_GT(end, start);
-    const QString block = source.mid(start, end - start);
-
-    EXPECT_TRUE(source.contains(QStringLiteral("#include \"GuiTaskRunner.h\"")));
-    EXPECT_TRUE(block.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
-        << "The full DEM pipeline worker should use the shared guarded runner.";
-    EXPECT_TRUE(block.contains(QStringLiteral("QPointer<ProjectTerrainProductsManager> self(this)")))
-        << "The worker should not capture the DEM manager as a raw this pointer.";
-    EXPECT_TRUE(block.contains(QStringLiteral("[self, ctx]()")))
-        << "The worker should capture the guarded pointer and context only.";
-    EXPECT_TRUE(block.contains(QStringLiteral("runFullDemPipelineInBackground(ctx)")))
-        << "The existing background implementation should remain off the GUI thread.";
-    EXPECT_FALSE(block.contains(QStringLiteral("QtConcurrent::run([self, ctx")))
-        << "Do not open-code QtConcurrent for GUI-owned long-running workflows.";
-    EXPECT_FALSE(block.contains(QStringLiteral("[this, ctx]()")))
-        << "The guarded runner cannot protect a work closure that captures raw this.";
 }
 
 TEST(GuiAsyncLifetimeTest, BundleAdjustProgressCallbackUsesQPointerGuard)
@@ -3017,147 +2360,6 @@ TEST(GuiAsyncLifetimeTest, BundleAdjustUsesGuardedTaskRunner)
     EXPECT_TRUE(block.contains(QStringLiteral("QPointer<ProjectManager> self(this)")));
     EXPECT_FALSE(block.contains(QStringLiteral("(void)QtConcurrent::run(")))
         << "Open-coded QtConcurrent lacks the shared owner check before work starts.";
-}
-
-TEST(GuiAsyncLifetimeTest, EstimateDepthMapCallbacksUseQPointerGuard)
-{
-    const QString source = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int start = source.indexOf(
-        QStringLiteral("bool ProjectDenseReconstructionManager::startEstimateDepthMapsAsync"));
-    ASSERT_GE(start, 0);
-    const int end = source.indexOf(
-        QStringLiteral("ProjectDenseReconstructionManager::startFuseDepthMapsAsync"), start);
-    ASSERT_GT(end, start);
-    const QString block = source.mid(start, end - start);
-
-    EXPECT_TRUE(block.contains(QStringLiteral("QPointer<ProjectDenseReconstructionManager> self(this)")))
-        << "Depth-map estimation signal callbacks must share a guarded manager pointer.";
-    EXPECT_TRUE(block.contains(QStringLiteral("[self, projectPath](const QString &stage, float ratio)")))
-        << "Progress callbacks should not capture raw this.";
-    EXPECT_TRUE(block.contains(QStringLiteral("batch_frame_count = selectedImages.size()")))
-        << "Artifact callbacks should not capture raw this.";
-    EXPECT_TRUE(block.contains(QStringLiteral("selectedImageCount = selectedImages.size()")))
-        << "Finished callbacks should not capture raw this.";
-    EXPECT_TRUE(block.contains(QStringLiteral("emit self->depthMapBatchReady(mvsOutDir, selectedImageCount)")));
-    EXPECT_FALSE(block.contains(QStringLiteral("[this](const QString &stage, float ratio)")));
-    EXPECT_FALSE(block.contains(QStringLiteral("[this, sparseXyz, mvsOutDir]")));
-    EXPECT_FALSE(block.contains(QStringLiteral("[this](bool success)")));
-}
-
-TEST(GuiAsyncLifetimeTest, GenerateDenseCloudCallbacksUseQPointerGuard)
-{
-    const QString source = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int start = source.indexOf(
-        QStringLiteral("ProjectDenseReconstructionManager::startGenerateDenseCloudAsync"));
-    ASSERT_GE(start, 0);
-    const int end = source.indexOf(
-        QStringLiteral("void ProjectDenseReconstructionManager::startDenseCloudRefineAsync"), start);
-    ASSERT_GT(end, start);
-    const QString block = source.mid(start, end - start);
-
-    EXPECT_TRUE(block.contains(QStringLiteral("QPointer<ProjectDenseReconstructionManager> self(this)")))
-        << "Dense-cloud generation callbacks must share a guarded manager pointer.";
-    EXPECT_TRUE(block.contains(QStringLiteral("[self, projectPath](const QString &stage, float ratio)")))
-        << "Progress callbacks should not capture raw this.";
-    EXPECT_TRUE(block.contains(QStringLiteral("batch_frame_count = selectedImages.size()")))
-        << "Artifact callbacks should not capture raw this.";
-    EXPECT_TRUE(block.contains(QStringLiteral("source_depth_map_count = static_cast<int>(selectedImages.size())")))
-        << "Point cloud callbacks should not capture raw this.";
-    EXPECT_TRUE(block.contains(QStringLiteral("[self, settings, continueMissingMode, projectPath](bool success)")))
-        << "Finished callbacks should reuse the guarded pointer.";
-    EXPECT_FALSE(block.contains(QStringLiteral("[this](const QString &stage, float ratio)")));
-    EXPECT_FALSE(block.contains(QStringLiteral("[this, sparseXyz, mvsOutDir]")));
-    EXPECT_FALSE(block.contains(QStringLiteral("[this, mvsOutDir]")));
-    EXPECT_FALSE(block.contains(QStringLiteral("[self = QPointer<ProjectDenseReconstructionManager>(this)")));
-}
-
-TEST(GuiAsyncLifetimeTest, DenseCloudFusionUsesGuardedTaskRunner)
-{
-    const QString source = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int start = source.indexOf(
-        QStringLiteral("ProjectDenseReconstructionManager::startFuseDepthMapsAsync"));
-    ASSERT_GE(start, 0);
-    const int end = source.indexOf(
-        QStringLiteral("ProjectDenseReconstructionManager::startGenerateDenseCloudAsync"), start);
-    ASSERT_GT(end, start);
-    const QString block = source.mid(start, end - start);
-
-    EXPECT_TRUE(source.contains(QStringLiteral("#include \"GuiTaskRunner.h\"")));
-    EXPECT_TRUE(block.contains(QStringLiteral("QPointer<ProjectDenseReconstructionManager> self(this)")));
-    EXPECT_TRUE(block.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
-        << "Dense-cloud fusion should use the shared guarded runner before starting long-running work.";
-    EXPECT_FALSE(block.contains(QStringLiteral("(void)QtConcurrent::run([self,")))
-        << "Open-coded QtConcurrent can still start fusion after the manager owner has been destroyed.";
-}
-
-TEST(GuiAsyncLifetimeTest, DenseCloudRefineUsesGuardedTaskRunner)
-{
-    const QString source = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int start = source.indexOf(
-        QStringLiteral("void ProjectDenseReconstructionManager::startDenseCloudRefineAsync"));
-    ASSERT_GE(start, 0);
-    const int end = source.indexOf(
-        QStringLiteral("void ProjectDenseReconstructionManager::cancelMvs"), start);
-    ASSERT_GT(end, start);
-    const QString block = source.mid(start, end - start);
-
-    EXPECT_TRUE(source.contains(QStringLiteral("#include \"GuiTaskRunner.h\"")));
-    EXPECT_TRUE(block.contains(QStringLiteral("QPointer<ProjectDenseReconstructionManager> self(this)")));
-    EXPECT_TRUE(block.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
-        << "Dense-cloud post-processing should use the shared guarded runner before loading large clouds.";
-    EXPECT_FALSE(block.contains(QStringLiteral("(void)QtConcurrent::run([self,")))
-        << "Open-coded QtConcurrent can still start dense refine work after the manager owner is destroyed.";
-}
-
-TEST(GuiAsyncLifetimeTest, DepthMapSparsePreloadWorkersGuardGeneratorLifetime)
-{
-    const QString source = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const auto blockBetween = [&source](const QString &begin, const QString &finish) {
-        const int start = source.indexOf(begin);
-        EXPECT_GE(start, 0);
-        const int end = source.indexOf(finish, start);
-        EXPECT_GT(end, start);
-        return source.mid(start, end - start);
-    };
-
-    const QString estimateBlock = blockBetween(
-        QStringLiteral("bool ProjectDenseReconstructionManager::startEstimateDepthMapsAsync"),
-        QStringLiteral("ProjectDenseReconstructionManager::startFuseDepthMapsAsync"));
-    const QString denseBlock = blockBetween(
-        QStringLiteral("ProjectDenseReconstructionManager::startGenerateDenseCloudAsync"),
-        QStringLiteral("void ProjectDenseReconstructionManager::startDenseCloudRefineAsync"));
-
-    for (const QString &block : {estimateBlock, denseBlock})
-    {
-        EXPECT_TRUE(block.contains(QStringLiteral("QPointer<DepthMapGenerator> genSelf(gen)")))
-            << "Sparse preload workers should guard the generator before leaving the GUI thread.";
-        EXPECT_TRUE(block.contains(QStringLiteral("const QString projectPath = _owner ? _owner->currentProjectPath() : QString()")))
-            << "Sparse preload workers must bind their result to the project that launched them.";
-        EXPECT_TRUE(block.contains(QStringLiteral("QtConcurrent::run([self, genSelf, sparseXyz, views, request, projectPath]()")))
-            << "The worker should capture the guarded generator pointer, not raw gen.";
-        EXPECT_TRUE(block.contains(QStringLiteral("QMetaObject::invokeMethod(genSelf.data(), [self, genSelf, sparseCloud, projectPath]()")))
-            << "Sparse cloud handoff should be posted back through the guarded generator.";
-        EXPECT_TRUE(block.contains(QStringLiteral("self->_owner->currentProjectPath() != projectPath")))
-            << "Sparse preload completion must not start depth estimation after the user switches projects.";
-        EXPECT_FALSE(block.contains(QStringLiteral("QtConcurrent::run([gen, sparseXyz, views, request]()")));
-        EXPECT_FALSE(block.contains(QStringLiteral("gen->setSparseCloud(sparse)")));
-        EXPECT_FALSE(block.contains(QStringLiteral("QMetaObject::invokeMethod(gen, \"start\"")));
-    }
 }
 
 TEST(GuiAsyncLifetimeTest, DepthMapGeneratorOwnsAndJoinsBackgroundFuture)
@@ -4735,16 +3937,17 @@ TEST(CodeStyleTest, MatcherFactoryUsesLowerCamelPrivateMemberNames)
     EXPECT_FALSE(source.contains(QStringLiteral("m_cfg")));
 }
 
-TEST(CodeStyleTest, LightGlueMatcherHeaderKeepsLinesWithinStyleLimit)
+TEST(CodeStyleTest, TensorRtLightGlueMatcherHeaderKeepsLinesWithinStyleLimit)
 {
-    const QString header = readProjectSourceFile(QStringLiteral("src/core/feature_match/lightglue/LightGlueMatcher.h"));
+    const QString header = readProjectSourceFile(
+        QStringLiteral("src/core/feature_match/lightglue/TensorRtLightGlueMatcher.h"));
     ASSERT_FALSE(header.isEmpty());
 
     const QStringList lines = header.split(QLatin1Char('\n'));
     for (int i = 0; i < lines.size(); ++i)
     {
         EXPECT_LE(lines.at(i).size(), 120)
-            << "LightGlueMatcher.h:" << (i + 1)
+            << "TensorRtLightGlueMatcher.h:" << (i + 1)
             << " has " << lines.at(i).size() << " characters";
     }
 }
@@ -4917,12 +4120,10 @@ TEST(CodeStyleTest, ProjectReconstructionManagerUsesLowerCamelPrivateMemberNames
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(header.contains(QStringLiteral("ProjectSparseReconstructionManager *_sparseManager = nullptr;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("ProjectDenseReconstructionManager *_denseManager = nullptr;")));
     EXPECT_TRUE(header.contains(QStringLiteral("ProjectModelManager *_modelManager = nullptr;")));
 
     const QStringList oldMemberNames = {
         QStringLiteral("m_sparseManager"),
-        QStringLiteral("m_denseManager"),
         QStringLiteral("m_modelManager"),
     };
     for (const QString &oldName : oldMemberNames)
@@ -4996,63 +4197,6 @@ TEST(CodeStyleTest, ProjectSparseReconstructionManagerUsesLowerCamelPrivateMembe
         QStringLiteral("m_owner"),
         QStringLiteral("m_projectData"),
         QStringLiteral("m_parentWidget"),
-    };
-    for (const QString &oldName : oldMemberNames)
-    {
-        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
-        EXPECT_FALSE(source.contains(oldName)) << qPrintable(oldName);
-    }
-}
-
-TEST(CodeStyleTest, ProjectDenseReconstructionManagerUsesLowerCamelPrivateMemberNames)
-{
-    const QString header =
-        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.h"));
-    const QString source =
-        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-
-    const QStringList expectedHeaderMembers = {
-        QStringLiteral("ProjectManager *_owner = nullptr;"),
-        QStringLiteral("ProjectData *_projectData = nullptr;"),
-        QStringLiteral("QPointer<QObject> _activeMvsGenerator;"),
-        QStringLiteral("std::shared_ptr<std::atomic_bool> _activeMvsCancelFlag;"),
-    };
-    for (const QString &expectedMember : expectedHeaderMembers)
-    {
-        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
-    }
-
-    const QStringList expectedSourceMembers = {
-        QStringLiteral("const std::vector<StoredDepthFrameRecord> &_records;"),
-        QStringLiteral("const QMap<QString, xjw::Camera> &_cameraMap;"),
-        QStringLiteral("xjw::mvs::FusionConfig _fusionConfig;"),
-        QStringLiteral("int _viewCount = 0;"),
-        QStringLiteral("int _fusionMaxImageDim = 0;"),
-        QStringLiteral("int _capacity = 1;"),
-        QStringLiteral("std::list<int> _lru;"),
-        QStringLiteral("std::unordered_map<int, CacheEntry> _cache;"),
-    };
-    for (const QString &expectedMember : expectedSourceMembers)
-    {
-        EXPECT_TRUE(source.contains(expectedMember)) << qPrintable(expectedMember);
-    }
-
-    const QStringList oldMemberNames = {
-        QStringLiteral("m_owner"),
-        QStringLiteral("m_projectData"),
-        QStringLiteral("m_parentWidget"),
-        QStringLiteral("m_activeMvsGenerator"),
-        QStringLiteral("m_activeMvsCancelFlag"),
-        QStringLiteral("m_records"),
-        QStringLiteral("m_camMap"),
-        QStringLiteral("m_confidenceThreshold"),
-        QStringLiteral("m_viewCount"),
-        QStringLiteral("m_fusionMaxImageDim"),
-        QStringLiteral("m_capacity"),
-        QStringLiteral("m_lru"),
-        QStringLiteral("m_cache"),
     };
     for (const QString &oldName : oldMemberNames)
     {
@@ -5574,14 +4718,23 @@ TEST(CodeStyleTest, TextureMappingDialogUsesLowerCamelPrivateMemberNames)
 TEST(CodeStyleTest, MapProjectDialogUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/reconstruction/MapProjectDialog.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/reconstruction/MapProjectDialog.cpp"));
+    const QString source =
+        readProjectSourceFile(
+            QStringLiteral("src/gui/dialogs/reconstruction/MapProjectDialog.cpp"))
+        + readProjectSourceFile(
+            QStringLiteral("src/gui/dialogs/reconstruction/MapProjectDialogSettings.cpp"))
+        + readProjectSourceFile(
+            QStringLiteral("src/gui/dialogs/reconstruction/MapProjectDialogEstimate.cpp"))
+        + readProjectSourceFile(
+            QStringLiteral("src/gui/dialogs/reconstruction/MapProjectDialogLayout.cpp"));
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(header.contains(QStringLiteral("QListWidget *_imageList = nullptr;")));
     EXPECT_TRUE(header.contains(QStringLiteral("QLineEdit *_demEdit = nullptr;")));
     EXPECT_TRUE(header.contains(QStringLiteral("QLineEdit *_outputEdit = nullptr;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_resolutionSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_pixelSizeXSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_pixelSizeYSpin = nullptr;")));
     EXPECT_TRUE(header.contains(QStringLiteral("QString _projectRoot;")));
 
     const QStringList oldMemberNames = {
@@ -5589,6 +4742,8 @@ TEST(CodeStyleTest, MapProjectDialogUsesLowerCamelPrivateMemberNames)
         QStringLiteral("m_demEdit"),
         QStringLiteral("m_outputEdit"),
         QStringLiteral("m_resolutionSpin"),
+        QStringLiteral("m_pixelSizeXSpin"),
+        QStringLiteral("m_pixelSizeYSpin"),
         QStringLiteral("m_projectRoot"),
     };
     for (const QString &oldName : oldMemberNames)

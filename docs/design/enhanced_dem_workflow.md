@@ -330,3 +330,6 @@ void updateProgress(int step, const QString &name, int progress) {
 2. **批处理**：支持多对立体像对批量生成 DEM
 3. **可视化**：实时显示中间结果（特征点、匹配、点云）
 4. **配置保存**：记忆用户的流水线配置
+# 状态说明
+
+本文记录的是早期“自动立体匹配 → 稠密点云 → DEM”设计草案。当前 GUI 不提供稠密重建管理器，也不会在创建 DEM 时隐式启动稠密重建；用户必须选择已有点云作为 DEM 输入。文中的 `startFullDemPipelineAsync()` 等接口已移除，仅保留为历史设计背景。

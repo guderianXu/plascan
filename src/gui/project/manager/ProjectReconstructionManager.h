@@ -9,9 +9,7 @@ class QWidget;
 class ProjectData;
 class ProjectManager;
 class ProjectSparseReconstructionManager;
-class ProjectDenseReconstructionManager;
 class ProjectModelManager;
-class ProjectModelGenerationWorkflow;
 
 class ProjectReconstructionManager : public QObject
 {
@@ -26,11 +24,7 @@ public:
         Triangulation,
         SparseOutlierRemoval,
         SparseLocalOptimization,
-        SparseRefine,
-        EstimateDepthMaps,
-        FuseDepthMaps,
-        GenerateDenseCloud,
-        RefineDenseCloud
+        SparseRefine
     };
 
     explicit ProjectReconstructionManager(ProjectManager *owner,
@@ -40,13 +34,9 @@ public:
 
     QJsonArray getAvailableAtResults() const;
     void startTask(Task task, const QJsonObject &settings = QJsonObject());
-    void cancelMvs();
     void cancelModelGeneration();
 
 signals:
-    void mvsProgressChanged(const QString &stage, int percent);
-    void mvsProgressFinished(bool success);
-    void denseCloudResultReady(const QString &denseCloudPath, int pointCount);
     void meshProgressChanged(const QString &stage, int percent);
     void meshProgressFinished(bool success);
     void atProgressChanged(const QString &stage, int percent);
@@ -54,7 +44,5 @@ signals:
 
 private:
     ProjectSparseReconstructionManager *_sparseManager = nullptr;
-    ProjectDenseReconstructionManager *_denseManager = nullptr;
     ProjectModelManager *_modelManager = nullptr;
-    ProjectModelGenerationWorkflow *_modelWorkflow = nullptr;
 };

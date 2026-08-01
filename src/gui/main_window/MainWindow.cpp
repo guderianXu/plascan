@@ -1662,21 +1662,6 @@ void MainWindow::setupProjectManager()
         return widget;
     };
 
-    // ── MVS 状态栏进度条 ──────────────────────────────────────────
-    _mvsTaskStatus = createTaskStatus(220, true, tr("正在取消稠密重建..."));
-    connect(_mvsTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
-    {
-        if (_projectManager)
-        {
-            _projectManager->cancelMvs();
-        }
-    });
-
-    connect(_projectManager, &ProjectManager::mvsProgressChanged,
-            this, &MainWindow::onMvsProgress);
-    connect(_projectManager, &ProjectManager::mvsProgressFinished,
-            this, &MainWindow::onMvsFinished);
-
     // ── 网格重建状态栏进度条 ──────────────────────────────────────
     _meshTaskStatus = createTaskStatus(220, true, tr("正在取消模型生成..."));
     connect(_meshTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
@@ -1782,7 +1767,6 @@ void MainWindow::refreshDashboardTaskSnapshots()
         tasks.append(record);
     };
 
-    appendTask(tr("MVS/稠密重建"), _mvsTaskStatus);
     appendTask(tr("网格重建"), _meshTaskStatus);
     appendTask(tr("空三/光束法平差"), _atTaskStatus);
     appendTask(tr("特征匹配"), _sgTaskStatus);
@@ -1926,37 +1910,6 @@ void MainWindow::onManualPointCloudPrune()
     }
 }
 
-
-// ============================================================
-//  MVS 进度状态栏槽
-// ============================================================
-
-void MainWindow::onMvsProgress(const QString &stage, int percent)
-{
-    if (!_mvsTaskStatus)
-    {
-        return;
-    }
-    if (!_mvsTaskStatus->isActive())
-    {
-        _mvsTaskStatus->begin(stage, 0, 100);
-    }
-    _mvsTaskStatus->updateProgress(stage, percent);
-    refreshDashboardTaskSnapshots();
-    statusBar()->showMessage(QString());   // 清空普通消息，让 permanent widget 露出
-}
-
-void MainWindow::onMvsFinished(bool success)
-{
-    if (!_mvsTaskStatus)
-    {
-        return;
-    }
-    _mvsTaskStatus->finish();
-    refreshDashboardTaskSnapshots();
-    statusBar()->showMessage(
-        success ? tr("稠密重建完成") : tr("稠密重建已取消或失败"), 4000);
-}
 
 // ============================================================
 //  网格重建进度状态栏槽
@@ -2840,10 +2793,12 @@ void MainWindow::applyUiSettings(const QJsonObject &ui)
         }
         if (!imagePath.isEmpty() && QFileInfo::exists(imagePath))
         {
-            const QString projectPath = _projectManager ? _projectManager->currentProjectPath() : QString();
-            QTimer::singleShot(100, this, [this, imagePath, projectPath]()
+            const auto session = _projectManager
+                ? _projectManager->currentSessionContext()
+                : xjw::gui::project::ProjectSessionContext{};
+            QTimer::singleShot(100, this, [this, imagePath, session]()
             {
-                if (!_projectManager || _projectManager->currentProjectPath() != projectPath)
+                if (!_projectManager || !_projectManager->isCurrentSession(session))
                 {
                     return;
                 }

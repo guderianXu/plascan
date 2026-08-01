@@ -2,7 +2,6 @@
 
 #include "ProjectManager.h"
 #include "ProjectData.h"
-#include "ProjectDenseWorkflowConfig.h"
 #include "ProjectMetadataOperations.h"
 #include "ProjectModelWorkflowPolicy.h"
 #include "ProjectResultRecords.h"
@@ -26,11 +25,7 @@
 #include <exception>
 #include <utility>
 
-using xjw::gui::project::makeDenseResultRecord;
-using xjw::gui::project::makeModelResultRecord;
-using xjw::gui::project::replaceMetaArrayWithLatest;
 using xjw::gui::project::resolveLatestDenseCloudPath;
-using xjw::gui::project::runDemProducts;
 
 namespace
 {
@@ -40,19 +35,6 @@ struct ModelTaskResult
     QJsonObject result;
     QString errMsg;
     bool ok = false;
-};
-
-struct GenerateModelTaskInput
-{
-    QString cloudPath;
-    bool sourceIsDense = false;
-    QString outputRoot;
-    int gridResolution = 512;
-    int meshResolution = 128;
-    int meshSmoothIterations = 2;
-    double meshSmoothLambda = 0.5;
-    double meshPadding = 0.05;
-    bool exportObj = true;
 };
 
 struct ResolvedModelSource
@@ -81,17 +63,17 @@ void mergeJsonObject(QJsonObject *target, const QJsonObject &source);
 
 auto makeProgressReporter(QPointer<ProjectModelManager> manager,
                           QPointer<ProjectManager> owner,
-                          const QString &projectPath)
+                          const xjw::gui::project::ProjectSessionContext &session)
 {
-    return [manager, owner, projectPath](const QString &stage, int percent)
+    return [manager, owner, session](const QString &stage, int percent)
     {
         if (!manager || !owner)
         {
             return;
         }
-        QMetaObject::invokeMethod(manager.data(), [manager, owner, projectPath, stage, percent]()
+        QMetaObject::invokeMethod(manager.data(), [manager, owner, session, stage, percent]()
         {
-            if (!manager || !owner || owner->currentProjectPath() != projectPath)
+            if (!manager || !owner || !owner->isCurrentSession(session))
             {
                 return;
             }
@@ -111,63 +93,6 @@ void applyWorkflowResult(ModelTaskResult *task,
     task->ok = workflowResult.ok;
     task->errMsg = workflowResult.errorMessage;
     task->result = workflowResult.payload;
-}
-
-ModelTaskResult runGenerateModelTask(QPointer<ProjectModelManager> manager,
-                                     QPointer<ProjectManager> owner,
-                                     const QString &projectPath,
-                                     const GenerateModelTaskInput &input)
-{
-    ModelTaskResult task;
-
-    if (!input.sourceIsDense)
-    {
-        const auto runResult = runDemProducts(input.cloudPath,
-                                              input.outputRoot,
-                                              static_cast<double>(input.gridResolution),
-                                              QStringLiteral("float32"),
-                                              true);
-        if (!runResult.ok)
-        {
-            task.ok = false;
-            task.result = runResult.payload;
-            task.errMsg = runResult.error;
-            return task;
-        }
-        task.result = runResult.payload;
-    }
-
-    xjw::mesh::ReconstructionConfig reconstruction;
-    reconstruction.resolution = input.meshResolution;
-    reconstruction.smoothIterations = input.meshSmoothIterations;
-    reconstruction.smoothLambda = static_cast<float>(input.meshSmoothLambda);
-    reconstruction.padding = static_cast<float>(input.meshPadding);
-    reconstruction.fillHoles = true;
-    reconstruction.holeFillPasses = 12;
-    reconstruction.cleanSmallComponents = true;
-    reconstruction.minComponentFaces = std::max(64, input.meshResolution / 2);
-    reconstruction.verbose = false;
-
-    xjw::mesh::workflow::MeshBuildRequest request;
-    request.pointCloudPath = input.cloudPath;
-    request.outputRoot = input.outputRoot;
-    request.reconstruction = reconstruction;
-    request.exportObj = input.exportObj;
-    request.texture = xjw::mesh::workflow::defaultTextureConfig();
-    request.progress = makeProgressReporter(manager, owner, projectPath);
-
-    const xjw::mesh::workflow::WorkflowResult workflowResult =
-        xjw::mesh::workflow::buildMeshAndOptionalTexture(request);
-    if (!workflowResult.ok)
-    {
-        task.ok = false;
-        task.errMsg = workflowResult.errorMessage;
-        return task;
-    }
-
-    mergeJsonObject(&task.result, workflowResult.payload);
-    task.ok = true;
-    return task;
 }
 
 void mergeJsonObject(QJsonObject *target, const QJsonObject &source)
@@ -666,14 +591,14 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
     emit meshProgressChanged(tr("正在初始化模型生成..."), 0);
     QPointer<ProjectModelManager> self(this);
     QPointer<ProjectManager> ownerGuard(_owner);
-    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
+    const auto session = _owner->currentSessionContext();
     runModelAsyncTask(
         this,
         [self,
          ownerGuard,
          resolvedSource,
          effectiveSettings,
-         projectPath,
+         session,
          cancel_flag]() -> ModelTaskResult {
             ModelTaskResult task;
             if (!self)
@@ -698,7 +623,7 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
                 return cancel_flag->load(std::memory_order_relaxed);
             };
             const auto progress_reporter =
-                makeProgressReporter(self, ownerGuard, projectPath);
+                makeProgressReporter(self, ownerGuard, session);
             request.progress = [cancel_flag, progress_reporter](
                                    const QString &stage, int percent)
             {
@@ -713,14 +638,14 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
             applyWorkflowResult(&task, workflowResult);
             return task;
         },
-        [self, ownerGuard, resolvedSource, effectiveSettings, projectPath, dialogTitle](const ModelTaskResult &task) {
+        [self, ownerGuard, resolvedSource, effectiveSettings, session, dialogTitle](const ModelTaskResult &task) {
             if (!self)
             {
                 return;
             }
             self->_isRunning = false;
             self->_activeCancelFlag.reset();
-            if (!ownerGuard || ownerGuard->currentProjectPath() != projectPath)
+            if (!ownerGuard || !ownerGuard->isCurrentSession(session))
             {
                 emit self->meshProgressFinished(false);
                 return;
@@ -834,7 +759,7 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
     emit meshProgressChanged(tr("正在初始化纹理映射..."), 0);
     QPointer<ProjectModelManager> self(this);
     QPointer<ProjectManager> ownerGuard(_owner);
-    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
+    const auto session = _owner->currentSessionContext();
     runModelAsyncTask(
         this,
         [self,
@@ -843,7 +768,7 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
          productsDir,
          depthMapSourcePath,
          settings,
-         projectPath,
+         session,
          cancel_flag,
          allow_vertex_color_fallback]() -> ModelTaskResult {
             ModelTaskResult task;
@@ -864,7 +789,7 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
                 return cancel_flag->load(std::memory_order_relaxed);
             };
             const auto progress_reporter =
-                makeProgressReporter(self, ownerGuard, projectPath);
+                makeProgressReporter(self, ownerGuard, session);
             request.progress = [cancel_flag, progress_reporter](
                                    const QString &stage, int percent)
             {
@@ -883,7 +808,7 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
          ownerGuard,
          meshPath,
          baseRecord,
-         projectPath,
+         session,
          cancel_flag](const ModelTaskResult &task) {
             if (!self)
             {
@@ -894,7 +819,7 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
             {
                 self->_activeCancelFlag.reset();
             }
-            if (!ownerGuard || ownerGuard->currentProjectPath() != projectPath)
+            if (!ownerGuard || !ownerGuard->isCurrentSession(session))
             {
                 emit self->meshProgressFinished(false);
                 return;
@@ -923,34 +848,4 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
 bool ProjectModelManager::isRunning() const
 {
     return _isRunning;
-}
-
-void ProjectModelManager::finalizeModelGenerationSuccess(const QJsonObject &terrainResult,
-                                                         const QString &sourceCloudPath,
-                                                         bool sourceIsDense)
-{
-    const QString denseXyz = terrainResult.value(QStringLiteral("dense_cloud_xyz")).toString();
-    const int denseCount = terrainResult.value(QStringLiteral("dense_point_count")).toInt(-1);
-
-    const QJsonObject denseResult = makeDenseResultRecord(utcNowIso(),
-                                                          denseXyz,
-                                                          denseCount,
-                                                          sourceCloudPath);
-    const QJsonObject modelResult = makeModelResultRecord(
-        utcNowIso(),
-        sourceIsDense ? QStringLiteral("mvs_dense_cloud_mesh") : QStringLiteral("dense_cloud_grid_mesh"),
-        terrainResult.value(QStringLiteral("mesh_ply")).toString(),
-        terrainResult.value(QStringLiteral("vertex_count")).toInt(-1),
-        terrainResult.value(QStringLiteral("face_count")).toInt(-1),
-        QString(),
-        sourceCloudPath,
-        denseXyz);
-
-    const QJsonObject enrichedModelResult =
-        xjw::common::project::enrichModelResultFromTerrain(modelResult, terrainResult);
-
-    QJsonObject updatedMeta = _projectData->metadata();
-    replaceMetaArrayWithLatest(&updatedMeta, QStringLiteral("dense_cloud_results"), denseResult);
-    replaceMetaArrayWithLatest(&updatedMeta, QStringLiteral("model_results"), enrichedModelResult);
-    xjw::gui::project::persistProjectMeta(_projectData, updatedMeta, true);
 }

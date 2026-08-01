@@ -1,7 +1,8 @@
 #pragma once
 
+#include "ProjectTerrainRequests.h"
+
 #include <QDialog>
-#include <QJsonObject>
 #include <QStringList>
 
 class QLabel;
@@ -11,9 +12,7 @@ class QProgressBar;
 class QStackedWidget;
 class ProjectManager;
 
-// CreateDemDialog — 傻瓜式立体 DEM 生成对话框
-// 自动模式：选 2 张影像 → 点运行 → 全自动完成（特征提取→匹配→三角化→MVS CUDA→DEM）
-// 手动模式：已有密集点云 → 直接生成 DEM
+// CreateDemDialog — 从已有点云生成 DEM，不在 GUI 中隐式启动稠密重建。
 class CreateDemDialog : public QDialog
 {
     Q_OBJECT
@@ -29,19 +28,11 @@ public:
     void onPipelineFinished(bool success, const QString &message);
 
 signals:
-    void requestRunFullPipeline(const QStringList &images,
-                                const QString &outputDir,
-                                const QJsonObject &pipelineSettings);
-    void requestRunFromDenseCloud(const QString &denseCloudPath,
-                                  const QString &outputDir,
-                                  double demResolution,
-                                  const QString &demType);
+    void requestRun(const xjw::gui::project::DemGenerationRequest &request);
 
 private slots:
-    void onBrowseImages();
     void onBrowseDenseCloud();
     void onRunClicked();
-    void onModeToggled(bool autoMode);
 
 private:
     void setupUi();
@@ -57,11 +48,6 @@ private:
     QPushButton *_manualModeBtn = nullptr;
     QStackedWidget *_modeStack = nullptr;
 
-    // 自动模式
-    QListWidget *_imageList = nullptr;
-    QLabel *_camStatusLabel = nullptr;
-
-    // 手动模式
     class QLineEdit *_denseEdit = nullptr;
 
     // 进度区域

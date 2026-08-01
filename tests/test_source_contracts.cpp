@@ -849,125 +849,7 @@ TEST(GuiAlgorithmAlignmentContractTest, ModelManagerUsesSharedModelWorkflowEntry
     });
 }
 
-TEST(GuiAlgorithmAlignmentContractTest, GenerateModelUsesMetashapeStyleWorkflowOrchestrator)
-{
-    const QString workflow = readSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectModelGenerationWorkflow.cpp"));
-    const QString reconstruction_manager = readSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectReconstructionManager.cpp"));
-    const QString gui_sources = readSourceFile(QStringLiteral("src/gui/cmake/GuiSources.cmake"));
-
-    ASSERT_FALSE(workflow.isEmpty());
-    expectContainsAll(workflow, {
-        "decideModelGenerationWorkflow",
-        "startEstimateDepthMapsAsync",
-        "depthMapBatchReady",
-        "startMeshReconstructionAsync",
-        "_expectedDepthOutputDir",
-        R"(QStringLiteral("depth_maps"))",
-    });
-
-    expectContainsAll(reconstruction_manager, {
-        "ProjectModelGenerationWorkflow",
-        "_modelWorkflow->start(settings)",
-    });
-    expectContainsAll(gui_sources, {
-        "project/manager/ProjectModelGenerationWorkflow.cpp",
-        "project/manager/ProjectModelGenerationWorkflow.h",
-    });
-}
-
-TEST(GuiAlgorithmAlignmentContractTest, GenerateModelWorkflowHandlesSynchronousStartRejection)
-{
-    const QString workflow = readSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectModelGenerationWorkflow.cpp"));
-    const QString dense_header = readSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.h"));
-    const QString model_header = readSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectModelManager.h"));
-
-    expectContainsAll(dense_header, {
-        "bool startFuseDepthMapsAsync",
-        "bool startGenerateDenseCloudAsync",
-        "bool isMvsRunning() const",
-    });
-    expectContainsAll(model_header, {
-        "bool startMeshReconstructionAsync",
-    });
-    expectContainsAll(workflow, {
-        "if (_denseManager->startEstimateDepthMapsAsync(depth_settings_with_runtime))",
-        "else",
-        "if (!_modelManager->startMeshReconstructionAsync(settings))",
-        "finish(false)",
-    });
-}
-
-TEST(GuiAlgorithmAlignmentContractTest, DensePipelinePropagatesFusionStartFailure)
-{
-    const QString manager = readSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-
-    expectContainsAll(manager, {
-        "if (!self->startFuseDepthMapsAsync(settings))",
-        "emit self->mvsProgressFinished(false);",
-    });
-}
-
-TEST(GuiAlgorithmAlignmentContractTest, DenseAndModelTasksGuardProjectAndRejectOverlap)
-{
-    const QString dense = readSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    const QString model = readSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectModelManager.cpp"));
-    const QString model_header = readSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectModelManager.h"));
-    const QString reconstruction = readSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectReconstructionManager.cpp"));
-
-    expectContainsAll(dense, {
-        "if (isMvsRunning())",
-        "owner->currentProjectPath() != projectPath",
-        "source_depth_map_dir",
-        "batch_frame_count",
-    });
-    expectContainsAll(model, {
-        "if (_isRunning)",
-        "_isRunning = true",
-        "self->_isRunning = false",
-    });
-    expectContainsAll(model_header, {
-        "bool isRunning() const",
-    });
-    expectContainsAll(reconstruction, {
-        "_modelManager->isRunning()",
-        "_modelWorkflow->isRunning()",
-        "_denseManager->isMvsRunning()",
-    });
-}
-
-TEST(GuiAlgorithmAlignmentContractTest, DensePipelineGuardsQueuedFusionAndProjectSwitchCompletion)
-{
-    const QString header = readSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.h"));
-    const QString manager = readSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    const QString model = readSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectModelManager.cpp"));
-
-    expectContainsAll(header, {
-        "bool _mvsTransitionPending = false;",
-    });
-    expectContainsAll(manager, {
-        "_mvsTransitionPending = true",
-        "if (!self || !self->_mvsTransitionPending)",
-        "_mvsTransitionPending = false",
-        "return !_activeMvsGenerator.isNull() || static_cast<bool>(_activeMvsCancelFlag) ||",
-        "emit self->mvsProgressFinished(false);",
-    });
-    EXPECT_GE(countOccurrences(model, "emit self->meshProgressFinished(false);"), 2);
-}
-
-TEST(GuiAlgorithmAlignmentContractTest, GenerateModelKeepsIndependentMeshToolSeparate)
+TEST(GuiAlgorithmAlignmentContractTest, GenerateModelRoutesDirectlyToModelManager)
 {
     const QString controller = readSourceFile(
         QStringLiteral("src/gui/main_window/ReconstructionWorkflowController.cpp"));
@@ -988,7 +870,11 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelKeepsIndependentMeshToolSep
         "case Task::GenerateModel:",
         "case Task::MeshReconstruction:");
     expectContainsAll(generate_block, {
-        "_modelWorkflow->start(settings)",
+        "_modelManager->startMeshReconstructionAsync(settings)",
+    });
+    expectNotContainsAll(reconstruction_manager, {
+        "ProjectModelGenerationWorkflow",
+        "ProjectDenseReconstructionManager",
     });
 
     const QString mesh_block = sectionBetween(
@@ -1000,37 +886,20 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelKeepsIndependentMeshToolSep
     });
 }
 
-TEST(GuiAlgorithmAlignmentContractTest, GenerateModelContinuationChecksExpectedDenseOutput)
-{
-    const QString workflow = readSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectModelGenerationWorkflow.cpp"));
-    const QString workflow_header = readSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectModelGenerationWorkflow.h"));
-
-    expectContainsAll(workflow_header, {
-        "QString _expectedDepthOutputDir;",
-        "bool isPreparingDenseCloud() const;",
-    });
-    expectContainsAll(workflow, {
-        "_expectedDepthOutputDir",
-        "QDir::cleanPath(output_directory)",
-        "result_directory.compare(_expectedDepthOutputDir",
-        "depthMapBatchReady",
-        "Qt::CaseInsensitive",
-        "_denseManager->isMvsRunning()",
-    });
-}
-
-TEST(GuiAlgorithmAlignmentContractTest, GenerateModelDialogExplainsAutomaticDepthMapGeneration)
+TEST(GuiAlgorithmAlignmentContractTest, GenerateModelDialogRequiresExistingSourceArtifacts)
 {
     const QString dialog = readSourceFile(QStringLiteral("src/gui/dialogs/reconstruction/GenerateModelDialog.cpp"));
     ASSERT_FALSE(dialog.isEmpty());
 
     expectContainsAll(dialog, {
-        "缺少深度图时将自动估计深度图",
         "重用深度图",
         R"(settings[QStringLiteral("reuseDepthMaps")])",
         R"(settings[QStringLiteral("depthMapSourcePath")] = sourcePath)",
+    });
+    expectNotContainsAll(dialog, {
+        "自动生成深度图",
+        "缺少深度图时将自动估计深度图",
+        "automatic_depth_maps",
     });
 }
 
@@ -1098,139 +967,6 @@ TEST(MvsSchedulerContractTest, FrameWorkerControlsAndSchedulerBasics)
         R"(if (!saveDepthFrameArtifacts(i, res, QStringLiteral("初始"))))",
     });
     expectContainsAll(header, {"void releasePixelStorage()"});
-}
-
-TEST(MvsSchedulerContractTest, DepthCacheAndArtifactLifecycleContracts)
-{
-    const QString scheduler = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
-    const QString helper = readSourceFile(QStringLiteral("src/core/mvs/DepthFrameUtils.cpp"));
-    const QString manager = readSourceFile(QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-
-    expectContainsAll(scheduler, {
-        "shouldRetainAllDepthFramesInMemory",
-        "std::atomic<bool> keepDepthFramesInMemory",
-        "DepthFrameResult storedResult = res;",
-        "if (!keepDepthFramesInMemory.load())",
-        "storedResult.releasePixelStorage();",
-        "_depthFrames[i] = storedResult;",
-        "if (keepDepthFramesInMemory.load() && NV >= 2)",
-        "SystemMemorySnapshot",
-        "querySystemMemorySnapshot",
-        "estimateDepthFrameCacheBytes",
-        "retainedDepthMemoryBudgetBytes",
-        "_config.maxDepthCacheRamFraction",
-        "_config.minFreeRamBytes",
-        "深度图内存策略",
-        "refreshViewImageDimensionsFromCache",
-        "refreshViewImageDimensionsFromCache();",
-        "无有效影像尺寸，采用保守流式模式",
-        "memoryPressureRequiresStreaming",
-        "keepDepthFramesInMemory.compare_exchange_strong",
-        "releaseStoredDepthFramePixelStorage",
-        "内存压力升高，切换为流式保存",
-        "无法继续本次内存融合",
-    });
-    expectNotContainsAll(scheduler, {
-        "_depthFrames[i] = res;",
-        R"(QStringLiteral("无有效影像尺寸");
-        }
-        return true;)",
-    });
-
-    expectContainsAll(manager, {"applyImageSizeToMvsView"});
-    EXPECT_GE(countOccurrences(manager, "applyImageSizeToMvsView(imgPath, &view)"), 2);
-    expectNotContainsAll(manager, {
-        "cv::imread(imagePath.toStdString()",
-        "view.imageWidth = 0;",
-        "view.imageHeight = 0;",
-    });
-    expectContainsAll(helper, {
-        "if (!rawConfidencePath.isEmpty())",
-        "loadDepthMatStorage(rawConfidencePath, &result.frame.confidence)",
-        "result.frame.confidence.release();",
-    });
-    expectNotContainsAll(helper, {"cv::Mat filteredDepth = result.frame.depthMap.clone();"});
-}
-
-TEST(MvsSchedulerContractTest, QueueCancelPostprocessAndProgressContracts)
-{
-    const QString scheduler = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
-    const QString manager = readSourceFile(QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-
-    const QString fusionBody =
-        sectionBetween(scheduler, "FusionFrameInput DepthMapGenerator::buildFusionFrame", "void DepthMapGenerator::crossCheckDepthConsistency");
-    expectContainsAll(fusionBody, {"frame.confidence.release();"});
-
-    const QString fuseBody = sectionBetween(manager,
-                                            "ProjectDenseReconstructionManager::startFuseDepthMapsAsync",
-                                            "void ProjectDenseReconstructionManager::startDenseCloudRefineAsync");
-    expectContainsAll(fuseBody, {
-        "正在加载深度图 %1/%2",
-        "流式深度图融合 %1/%2",
-        "mvsProgressChanged",
-    });
-
-    const QString queueBlock = sectionBetween(scheduler, "class DepthFrameArtifactSaveQueue", "// =============================================================================");
-    expectContainsAll(queueBlock, {
-        "maxBufferedTasks",
-        "m_capacityCv.wait",
-        "m_tasks.size() < m_maxBufferedTasks",
-        "m_capacityCv.notify_one()",
-        "void cancel()",
-        "m_dropPendingTasks",
-        "m_tasks.clear()",
-    });
-
-    const QString postWorkerBlock = sectionBetween(scheduler, "for (std::thread &worker : workers)", "// 释放图像缓存");
-    expectContainsAll(postWorkerBlock, {
-        "if (_cancelled.load())",
-        "saveQueue.cancel()",
-    });
-    EXPECT_LT(indexOfOrFail(postWorkerBlock, "if (_cancelled.load())"),
-              indexOfOrFail(postWorkerBlock, "saveQueue.waitUntilIdle()"));
-
-    const QString crossBlock = sectionBetween(scheduler,
-                                              "void DepthMapGenerator::crossCheckDepthConsistency()",
-                                              "bool DepthMapGenerator::saveDepthFrameArtifacts");
-    expectContainsAll(crossBlock, {"if (_cancelled.load())"});
-
-    const int filteredSavePos = indexOfOrFail(scheduler, R"(saveQueue.enqueue(i, res, QStringLiteral("过滤后")))");
-    const QString filteredBlock = scheduler.mid(qMax(0, filteredSavePos - 400), 600);
-    expectContainsAll(filteredBlock, {"if (_cancelled.load())"});
-}
-
-TEST(MvsSchedulerContractTest, DenseSparsePreloadAndDepthArtifactSavingAreCancelableAndFast)
-{
-    const QString manager = readSourceFile(QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    const QString scheduler = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
-
-    EXPECT_GE(countOccurrences(manager, "QPointer<DepthMapGenerator> genSelf(gen)"), 2);
-    EXPECT_GE(countOccurrences(manager, "const QString projectPath = _owner ? _owner->currentProjectPath() : QString()"), 2);
-    EXPECT_GE(countOccurrences(manager, "QtConcurrent::run([self, genSelf, sparseXyz, views, request, projectPath]()"), 2);
-    EXPECT_GE(countOccurrences(manager, "self->_owner->currentProjectPath() != projectPath"), 2);
-    EXPECT_GE(countOccurrences(manager, "if (genSelf->isCancelled())"), 2);
-    EXPECT_GE(countOccurrences(manager, "return;"), 2);
-    EXPECT_GE(countOccurrences(manager, R"(QMetaObject::invokeMethod(genSelf.data(), "finished")"), 2);
-    EXPECT_GE(countOccurrences(manager, "QMetaObject::invokeMethod(genSelf.data(), [self, genSelf, sparseCloud, projectPath]()"), 2);
-    expectContainsAll(manager, {"Q_ARG(bool, false)"});
-    expectNotContainsAll(manager, {
-        "QtConcurrent::run([gen, sparseXyz, views, request]()",
-        "QtConcurrent::run([genSelf, sparseXyz, views, request]()",
-        "gen->setSparseCloud(sparse)",
-        R"(QMetaObject::invokeMethod(gen, "start")",
-    });
-
-    expectContainsAll(scheduler, {
-        "writeFastDepthMatStorage",
-        "saveDepthPreviewPng",
-        "maxPreviewDimension",
-        "保存%1深度产物耗时",
-        "xjw::common::io::writeImage(path, colorVis)",
-    });
-    expectNotContainsAll(scheduler, {
-        "FileStorage storage(path, cv::FileStorage::WRITE)",
-        ".yml.gz",
-    });
 }
 
 TEST(MvsSchedulerContractTest, VisibilityAndSourceViewCachesAvoidRedundantWork)
@@ -1424,49 +1160,6 @@ TEST(MvsSchedulerContractTest, FinalPyramidLevelKeepsConfiguredIterationBudget)
     });
 }
 
-TEST(MvsSchedulerContractTest, StoredDepthFramesUseSharedPostprocessBeforeFusion)
-{
-    const QString depth_utils = readSourceFile(QStringLiteral("src/core/mvs/DepthFrameUtils.cpp"));
-    const QString scheduler = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
-    const QString manager =
-        readSourceFile(QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    const QString stored_frame = sectionBetween(depth_utils,
-                                                "FusionFrameBuildResult buildStoredFusionFrame",
-                                                "} // namespace xjw::core::project");
-
-    expectContainsAll(stored_frame, {
-        "const xjw::mvs::FusionConfig &fusionConfig",
-        "DepthMapGenerator::postprocessFusionDepthMap",
-        "result.frame.depthPostprocess",
-    });
-    expectContainsAll(manager, {
-        "buildDepthGenConfig(request, totalFrames).fusion",
-        "const xjw::mvs::FusionConfig &fusionConfig",
-    });
-    expectContainsAll(scheduler, {
-        "#pragma omp parallel for schedule(static)",
-        "removeLocalDepthOutliers",
-        "postprocessFusionDepthMap",
-    });
-}
-
-TEST(MvsSchedulerContractTest, StoredDepthFusionUsesBoundedParallelPrefetch)
-{
-    const QString manager = readSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    const QString depth_utils = readSourceFile(QStringLiteral("src/core/mvs/DepthFrameUtils.cpp"));
-
-    ASSERT_FALSE(manager.isEmpty());
-    ASSERT_FALSE(depth_utils.isEmpty());
-    EXPECT_TRUE(manager.contains(QStringLiteral("recommendedDepthFrameLoadWorkers")));
-    EXPECT_TRUE(manager.contains(QStringLiteral("std::condition_variable")));
-    EXPECT_TRUE(manager.contains(QStringLiteral("depthFrameCache.prefetch(next_window)")));
-    EXPECT_TRUE(manager.contains(QStringLiteral("准备深度图：已加载 %1/%2")));
-    EXPECT_TRUE(manager.contains(QStringLiteral("readTotal=%9 ms postTotal=%10 ms resizeTotal=%11 ms")));
-    EXPECT_TRUE(depth_utils.contains(QStringLiteral("estimateFusionFrameWorkingSetBytes")));
-    EXPECT_TRUE(depth_utils.contains(QStringLiteral("downsampleFusionFrameForMaxDimension")));
-}
-
 TEST(MeshReconstructionContractTest, ClosedSurfaceNormalsUseNeighborhoodConsistency)
 {
     const QString source = readSourceFile(QStringLiteral("src/core/mesh/SurfaceReconstructor.cpp"));
@@ -1482,361 +1175,6 @@ TEST(MeshReconstructionContractTest, ClosedSurfaceNormalsUseNeighborhoodConsiste
     });
     expectNotContainsAll(orientation, {
         "if (outward_dot < 0.0)",
-    });
-}
-
-TEST(MvsSchedulerContractTest, DepthPostprocessAndFusionContracts)
-{
-    const QString types = readSourceFile(QStringLiteral("src/core/mvs/MvsTypes.h"));
-    const QString scheduler = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
-    const QString cli =
-        readSourceFile(QStringLiteral("src/cli/workflows/ReconstructionPipelineRunner.cpp"))
-        + readSourceFile(QStringLiteral("src/cli/workflows/ReconstructionCliOptions.cpp"))
-        + readSourceFile(QStringLiteral("src/cli/workflows/ReconstructionCliOptions.h"));
-    const QString streamingFusion =
-        readSourceFile(QStringLiteral("src/core/mvs/StreamingDepthFusionService.cpp"));
-    const QString fusionH = readSourceFile(QStringLiteral("src/core/mvs/DepthMapFusion.h"));
-    const QString fusion = readSourceFile(QStringLiteral("src/core/mvs/DepthMapFusion.cpp"));
-    const QString depthUtilsH = readSourceFile(QStringLiteral("src/core/mvs/DepthFrameUtils.h"));
-    const QString depthUtils = readSourceFile(QStringLiteral("src/core/mvs/DepthFrameUtils.cpp"));
-    const QString manager = readSourceFile(QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-
-    expectContainsAll(scheduler, {
-        "if (seedHintCnt <= 0)",
-        "没有可用 hint seed",
-        "FrameTiming",
-        "耗时统计",
-        "source=",
-        "patchmatch=",
-        "filter=",
-        "applySparseSupportPrior(depthMap, confMap, supportMask, refIdx)",
-        "稀疏支撑软约束",
-        "removeLocalDepthOutliers",
-        "postprocessFusionDepthMap(filteredDepth",
-    });
-    expectNotContainsAll(scheduler, {
-        "depthMap.setTo(0, supportMask == 0)",
-        "confMap.setTo(0, supportMask == 0)",
-    });
-    expectContainsAll(types, {
-        "DepthPostProcessStats",
-        "enableLocalDepthOutlierFilter",
-        "localDepthOutlierRelThresh",
-        "maxLocalDepthOutlierRemovalRatio",
-    });
-    expectContainsAll(cli, {
-        "postprocessFusionDepthMap",
-        "depth_postprocess",
-        "local_depth_outlier_removed",
-        "speckle_removed",
-        "edge_confidence_removed",
-        "geom_consistency_removed",
-        "rawDepthStoragePath(depthPngPath)",
-        "loadDepthMatStorage",
-        "--mvs-res-scale",
-        "--mvs-iterations",
-        "--mvs-confidence",
-        "--mvs-gpu-frame-workers",
-        "--mvs-cpu-frame-workers",
-        "--mvs-max-frames",
-        "denseSettings.resScale = mvsResScale;",
-        "denseSettings.iterations = mvsIterations;",
-        "denseSettings.patchMatchConfidence = mvsConfidence;",
-        "denseSettings.fusionMinConfidence = mvsFusionConfidence;",
-        "denseSettings.gpuFrameWorkers = mvsGpuFrameWorkers;",
-        "denseSettings.cpuFrameWorkers = mvsCpuFrameWorkers;",
-        "limitMvsInputsForRegression",
-    });
-    expectMatches(scheduler,
-                  R"(if\s*\(\s*keepDepthFramesInMemory\.load\(\)\s*&&\s*\(\s*savePreviewPng\s*\|\|\s*saveRawDepth\s*\)\s*\))");
-
-    expectContainsAll(cli, {
-        "QJsonArray depthArtifacts;",
-        "&xjw::mvs::DepthMapGenerator::depthMapArtifactSaved",
-        "depthArtifacts.append(artifact)",
-        R"(denseReport[QStringLiteral("depth_maps")] = depthArtifacts;)",
-        R"(denseReport[QStringLiteral("mvs_settings")])",
-        R"(denseReport[QStringLiteral("mvs_depth_config")])",
-        "bool mvsDepthOnly = false;",
-        "--mvs-depth-only",
-        R"(denseReport[QStringLiteral("status")] = QStringLiteral("depth_only");)",
-        R"(report[QStringLiteral("stop_stage")] = QStringLiteral("mvs_depth");)",
-        R"(markSkippedStage(QStringLiteral("mvs_fusion"), depthOnlyReason);)",
-        R"(markSkippedStage(QStringLiteral("mesh"), depthOnlyReason);)",
-        R"(markSkippedStage(QStringLiteral("terrain"), depthOnlyReason);)",
-        "const int depthMapCount = static_cast<int>(depthArtifacts.size());",
-        R"(std::fprintf(stdout, "depth_maps=%d\n", depthMapCount);)",
-        "fuseDepthMapsStreamingFromDisk",
-        "voxelDownsampleFusedPointsToTarget",
-        "--mvs-fusion-max-image-dim",
-        "mvsFusionMaxImageDim",
-        "loadFusionFrameFromDepthMap(",
-        "fusionMaxImageDim",
-        R"(settings[QStringLiteral("fusion_max_image_dim")])",
-    });
-    expectContainsAll(streamingFusion, {
-        "streamingFusionWindowIndices",
-        "config.cacheFrameLimit",
-        "const bool cacheFrames",
-        "std::vector<FusionFrameInput> cachedFrames",
-        "if (cacheFrames)",
-        "fusionConfig.fuseOnlyFirstFrame = true",
-        "frameLoader",
-        "MVS 流式融合没有生成有效稠密点",
-    });
-    expectContainsAll(depthUtilsH, {"int fusionMaxImageDim"});
-    expectContainsAll(depthUtils, {
-        "frame->cameraModel.scaledIntrinsics",
-        "downsampleFusionFrameForMaxDimension",
-        "cv::resize(frame->depthMap",
-        "cv::resize(frame->confidence",
-    });
-    expectContainsAll(fusionH, {
-        "bool  useColor",
-        "int   colorCacheCapacity",
-        "bool  fuseOnlyFirstFrame",
-        "fuseFirstFrameObservationsFast",
-    });
-    expectContainsAll(fusion, {
-        "class ColorImageCache",
-        "ColorImageCache colorCache",
-        "colorCache.get",
-        "const int fusionStartFrame",
-        "const int fusionEndFrame",
-        "m_frames[frameIdx].imgW",
-        "m_frames[frameIdx].imgH",
-        "cv::resize(image, image",
-        "fuseFirstFrameObservationsFast",
-        "使用已过滤深度图快速反投影",
-        "_config.fuseOnlyFirstFrame",
-        "resolveFusionWorkerCount",
-    });
-    expectNotContainsAll(fusion, {
-        "std::vector<cv::Mat> colorImages(NF)",
-        "colorImages[fi] = cv::imread",
-    });
-    expectContainsAll(manager, {
-        "class DepthFrameLruCache",
-        "nearestFusionWindowIndices",
-        "streamFusionWindowSize",
-        "depthFrameCache.get",
-        "fusionCfg.fuseOnlyFirstFrame = true",
-        "流式深度图融合",
-        "fusionMaxImageDim",
-        "_fusionMaxImageDim",
-        "request.fusionMaxImageDim",
-        "_fusionMaxImageDim)",
-    });
-    expectNotContainsAll(manager, {
-        "frames.reserve(storedFrames.size());\n        for (const auto &stored : storedFrames)",
-    });
-}
-
-TEST(MvsSchedulerContractTest, SuccessfulDepthGenerationDoesNotOpenCompletionDialog)
-{
-    const QString manager = readSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-
-    EXPECT_FALSE(manager.contains(QStringLiteral("深度图估计完成。")));
-    EXPECT_TRUE(manager.contains(QStringLiteral("深度图估计失败或被取消。")));
-}
-
-TEST(MvsSchedulerContractTest, DepthConsistencyMetadataAndReuseContracts)
-{
-    const QString header = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.h"));
-    const QString generator = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
-    const QString manager = readSourceFile(QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    const QString tree = readSourceFile(QStringLiteral("src/gui/widgets/DataTreeWidget.cpp"));
-    const QString depthUtils = readSourceFile(QStringLiteral("src/core/mvs/DepthFrameUtils.cpp"));
-    const QString terrain = readSourceFile(QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
-    const QString model = readSourceFile(QStringLiteral("src/gui/project/manager/ProjectModelManager.cpp"));
-    const QString heatmapH = readSourceFile(QStringLiteral("src/gui/widgets/DisparityHeatmapOverlay.h"));
-    const QString heatmap = readSourceFile(QStringLiteral("src/gui/widgets/DisparityHeatmapOverlay.cpp"));
-
-    expectContainsAll(header, {"sourceViewIndices", "void depthMapArtifactSaved(QJsonObject artifact)"});
-    expectContainsAll(generator, {
-        "std::vector<int> sourceIndices",
-        "sourceIndices.push_back(si)",
-        "result.sourceViewIndices = sourceIndices",
-        "consistencySourceIndicesForFrame",
-        "const std::vector<int> consistencySources",
-        "saveDepthPreviewPng",
-        "xjw::common::io::writeImage(path, colorVis)",
-        "saveDepthFrameArtifacts",
-        "emit depthMapSaved",
-        R"(artifact[QStringLiteral("source_images")])",
-        R"(artifact[QStringLiteral("source_indices")])",
-        R"(artifact[QStringLiteral("valid_mask_path")])",
-        R"(artifact[QStringLiteral("device")])",
-        R"(artifact[QStringLiteral("elapsed_ms")])",
-        "emit depthMapArtifactSaved(artifact)",
-        R"(cancelled("深度范围估计后"))",
-        R"(cancelled("极线校正后"))",
-        R"(cancelled("构建三级深度先验后"))",
-        R"(cancelled("三级 PatchMatch 后"))",
-        R"(cancelled("深度后处理后"))",
-    });
-    EXPECT_GT(indexOfOrFail(generator, R"(saveQueue.enqueue(i, res, QStringLiteral("过滤后")))"),
-              indexOfOrFail(generator, "crossCheckDepthConsistency();"));
-    EXPECT_GT(indexOfOrFail(generator, "emit depthMapSaved"), 0);
-
-    expectContainsAll(manager, {
-        "makeProjectDepthRecordFromArtifact",
-        "&DepthMapGenerator::depthMapArtifactSaved",
-        R"(depthResult[QStringLiteral("mvs_output_dir")])",
-        "depthFrameArtifactsExist(pngPath)",
-        "cameraForImagePath(camMap, imgPath",
-        "cameraForImagePath(_cameraMap, _records[index].refImage",
-        "if (request.pipelineMode)",
-        "genCfg.runFusion = false",
-        "shouldStartFusion = success && (continueMissingMode || pipelineMode)",
-        "startFuseDepthMapsAsync(settings)",
-    });
-    expectNotContainsAll(manager, {
-        "camMap.value(imgPath)",
-        "camMap.value(stored.refImage)",
-    });
-    expectContainsAll(tree, {
-        "depthRecordPrimaryPath",
-        R"(normalized.value("depth_map_results").toArray())",
-        "depthFrameKeys",
-        "depth_preview_png",
-    });
-    expectContainsAll(depthUtils, {
-        R"(record.value(QStringLiteral("depth_png")))",
-        "depthFrameArtifactsExist(frame)",
-        "QFileInfo::exists(frame.depthPng)",
-        "QFileInfo::exists(frame.rawDepthPath)",
-    });
-
-    expectNotContainsAll(terrain, {
-        R"(upsertMetaArrayRecordByPath(&metaUpdated, QStringLiteral("depth_map_results"))",
-    });
-    expectNotContainsAll(model, {"depth_map_results"});
-    expectContainsAll(terrain, {"collectLatestStoredDepthFrames"});
-
-    expectContainsAll(heatmapH, {"QImage heatmapImage() const"});
-    expectContainsAll(heatmap, {
-        "QImage::Format_RGBA8888",
-        "alphaRow[col] = validRow[col] ? 255 : 0",
-        "if (_showInvalid)",
-    });
-}
-
-TEST(MvsSchedulerContractTest, DenseCloudRefineFilteringAndCancelContracts)
-{
-    const QString preprocessor = readSourceFile(QStringLiteral("src/core/mvs/SparseCloudPreprocessor.cpp"));
-    const QString generator = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
-    const QString header = readSourceFile(QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.h"));
-    const QString manager = readSourceFile(QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    const QString configH = readSourceFile(QStringLiteral("src/gui/project/support/ProjectDenseWorkflowConfig.h"));
-    const QString configCpp = readSourceFile(QStringLiteral("src/gui/project/support/ProjectDenseWorkflowConfig.cpp"));
-
-    expectContainsAll(preprocessor, {
-        "kMaxMedianSpacingSamples",
-        "sampleCount",
-        "#pragma omp parallel for",
-    });
-    expectNotContainsAll(preprocessor, {"distances.reserve(cloud.size());"});
-    expectContainsAll(generator, {
-        "kMaxInlineDenseFilterPoints",
-        "initialCount <= kMaxInlineDenseFilterPoints",
-        "跳过内联稠密点云过滤",
-    });
-    expectNotContainsAll(generator, {"\"SOR-2\""});
-
-    expectContainsAll(manager, {
-        "统计离群点移除 (SOR)",
-        "半径离群点移除",
-    });
-    expectNotContainsAll(manager, {
-        "离群点二次清理",
-        "strictSorReport",
-    });
-
-    expectContainsAll(header, {
-        "std::shared_ptr<std::atomic_bool> _activeMvsCancelFlag",
-        "createActiveMvsCancelFlag",
-        "clearActiveMvsCancelFlag",
-    });
-    const QString cancelBody = sectionFrom(manager, "void ProjectDenseReconstructionManager::cancelMvs()");
-    expectContainsAll(cancelBody, {
-        "_activeMvsCancelFlag->store(true",
-        "gen->requestCancel()",
-        "if (!requestedCancel)",
-        "emit mvsProgressFinished(false);",
-    });
-    EXPECT_LT(indexOfOrFail(cancelBody, "if (!requestedCancel)"),
-              indexOfOrFail(cancelBody, R"(qDebug() << "[MVS] 已请求取消")"));
-
-    const QString fuseBody = sectionBetween(manager,
-                                            "ProjectDenseReconstructionManager::startFuseDepthMapsAsync",
-                                            "void ProjectDenseReconstructionManager::startDenseCloudRefineAsync");
-    const QString refineBody = sectionFrom(manager, "void ProjectDenseReconstructionManager::startDenseCloudRefineAsync");
-    expectContainsAll(fuseBody, {
-        "const auto cancelFlag = createActiveMvsCancelFlag();",
-        "cancelFlag",
-        "cancelFlag->load",
-        "深度图融合已取消",
-        "clearActiveMvsCancelFlag(cancelFlag)",
-    });
-    expectContainsAll(manager, {
-        "kMaxDenseRefineFilterInputPoints",
-        "preconditionDenseRefineCloudForFilters",
-        "点云过大，先进行预降采样",
-        "kStreamingDenseRefineMinPoints",
-        "shouldUseStreamingDenseRefine",
-        "runStreamingDenseCloudRefineCli",
-        "dense_cloud_refine_cli",
-        "parseBinaryPlyVertexStreamHeader",
-        "QProcess process",
-        "--terrain-filter-passes",
-    });
-    expectContainsAll(refineBody, {
-        "const auto cancelFlag = createActiveMvsCancelFlag();",
-        "cancelFlag",
-        "cancelFlag->load",
-        "密集点云后处理已取消",
-        "clearActiveMvsCancelFlag(cancelFlag)",
-        "!precondition.consumedRequestedVoxel",
-        "shouldUseStreamingDenseRefine",
-        "runStreamingDenseCloudRefineCli",
-    });
-    EXPECT_LT(indexOfOrFail(refineBody, "preconditionDenseRefineCloudForFilters"),
-              indexOfOrFail(refineBody, "sorFilter(cloud"));
-    EXPECT_LT(indexOfOrFail(refineBody, "preconditionDenseRefineCloudForFilters"),
-              indexOfOrFail(refineBody, "estimateNormals(cloud"));
-    EXPECT_LT(indexOfOrFail(refineBody, "runStreamingDenseCloudRefineCli"),
-              indexOfOrFail(refineBody, "readPointCloudPly(inputPly"));
-
-    expectContainsAll(configH, {
-        "int terrainSpikeGridResolution = 260;",
-        "int terrainSpikeMinCellPoints = 32;",
-        "double terrainSpikeMinHeightThreshold = 0.25;",
-        "double terrainSpikeMadMultiplier = 3.0;",
-        "bool terrainLocalPlaneFilterEnabled = true;",
-        "int terrainLocalPlaneMinPoints = 12;",
-        "double terrainLocalPlaneMinResidualThreshold = 0.12;",
-        "double terrainLocalPlaneMadMultiplier = 4.0;",
-        "int terrainFilterPasses = 2;",
-    });
-    expectContainsAll(configCpp, {
-        R"(settings.value(QStringLiteral("terrainSpikeGridResolution")).toInt(260))",
-        R"(settings.value(QStringLiteral("terrainSpikeMinCellPoints")).toInt(32))",
-        R"(settings.value(QStringLiteral("terrainSpikeMinHeightThreshold")).toDouble(0.25))",
-        R"(settings.value(QStringLiteral("terrainSpikeMadMultiplier")).toDouble(3.0))",
-        R"(settings.value(QStringLiteral("terrainLocalPlaneFilterEnabled")).toBool(true))",
-        R"(settings.value(QStringLiteral("terrainLocalPlaneMinPoints")).toInt(12))",
-        R"(settings.value(QStringLiteral("terrainLocalPlaneMinResidualThreshold")).toDouble(0.12))",
-        R"(settings.value(QStringLiteral("terrainLocalPlaneMadMultiplier")).toDouble(4.0))",
-        R"(settings.value(QStringLiteral("terrainFilterPasses")).toInt(2))",
-    });
-    expectContainsAll(manager, {
-        "options.localPlaneFilterEnabled = request.terrainLocalPlaneFilterEnabled",
-        "options.localPlaneMinPoints = request.terrainLocalPlaneMinPoints",
-        "options.localPlaneMinResidualThreshold",
-        "options.localPlaneMadMultiplier",
-        "local_plane_removed_points",
     });
 }
 
@@ -1886,4 +1224,22 @@ TEST(GuiDialogLayoutContractTest, DialogSourcesAreGroupedByDomain)
     });
     EXPECT_TRUE(workspace_ui.contains(
         QStringLiteral("<header>camera/CameraModel3DDialog.h</header>")));
+}
+
+TEST(GuiArchitectureContractTest, DenseReconstructionManagerIsNotPartOfGui)
+{
+    EXPECT_FALSE(sourceFileExists(
+        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.h")));
+    EXPECT_FALSE(sourceFileExists(
+        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp")));
+    EXPECT_FALSE(sourceFileExists(
+        QStringLiteral("src/gui/project/manager/ProjectModelGenerationWorkflow.h")));
+    EXPECT_FALSE(sourceFileExists(
+        QStringLiteral("src/gui/project/manager/ProjectModelGenerationWorkflow.cpp")));
+
+    const QString guiSources = readSourceFile(QStringLiteral("src/gui/cmake/GuiSources.cmake"));
+    const QString reconstructionManager = readSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectReconstructionManager.cpp"));
+    EXPECT_FALSE(guiSources.contains(QStringLiteral("ProjectDenseReconstructionManager")));
+    EXPECT_FALSE(reconstructionManager.contains(QStringLiteral("DenseReconstruction")));
 }

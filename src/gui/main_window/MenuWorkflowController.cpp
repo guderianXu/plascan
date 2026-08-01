@@ -1258,7 +1258,8 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
     }
 
     auto *pm = _projectManager;
-    const QString projectPath = pm->currentProjectPath();
+    const auto session = pm->currentSessionContext();
+    const QString projectPath = session.projectPath;
     QString outputRoot = settings.value(QStringLiteral("output_dir")).toString().trimmed();
     if (outputRoot.isEmpty())
     {
@@ -1271,32 +1272,44 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
     QJsonObject runSettings = settings;
     runSettings[QStringLiteral("output_dir")] = outputRoot;
     runSettings = sanitizeAerialTriangulationReferencePreselection(runSettings, images);
-    const QString selectedFeatureAlgorithm =
-        runSettings.value(QStringLiteral("feature_algorithm")).toString(QStringLiteral("sift"));
-    const QString selectedMatchAlgorithm =
-        runSettings.value(QStringLiteral("match_algorithm")).toString(QStringLiteral("lightglue"));
+    const QString selectedAlgorithmId =
+        runSettings.value(QStringLiteral("algorithm_id"))
+            .toString(QStringLiteral("sift_lightglue"))
+            .trimmed()
+            .toLower();
 
     emit pm->atProgressChanged(QStringLiteral("空中三角测量: 检查上游数据..."), 0);
 
     QPointer<ProjectManager> pmGuard(pm);
-    xjw::gui::tasks::runGuarded(
+    xjw::gui::tasks::runGuardedWithOutcome(
         this,
-        [images, projectMeta, projectPath, selectedFeatureAlgorithm, selectedMatchAlgorithm]()
+        [images, projectMeta, projectPath, selectedAlgorithmId]()
         {
             return MenuWorkflowController::summarizeSparsePrerequisites(images,
                                                                         projectMeta,
                                                                         projectPath,
-                                                                        selectedFeatureAlgorithm,
-                                                                        selectedMatchAlgorithm);
+                                                                        selectedAlgorithmId);
         },
-        [pmGuard, runSettings, images, projectPath, projectMeta, outputRoot](
-            MenuWorkflowController *controller, const SparsePrerequisiteSummary &prereq)
+        [pmGuard, runSettings, images, session, projectMeta, outputRoot](
+            MenuWorkflowController *controller,
+            xjw::gui::tasks::TaskOutcome<SparsePrerequisiteSummary> outcome)
         {
             if (!pmGuard)
             {
                 return;
             }
-            if (pmGuard->currentProjectPath() != projectPath)
+
+            if (!outcome.succeeded())
+            {
+                emit pmGuard->atProgressFinished(false);
+                QMessageBox::warning(controller->_mainWindow,
+                                     QStringLiteral("空中三角测量"),
+                                     outcome.errorMessage);
+                return;
+            }
+
+            const auto &prereq = *outcome.value;
+            if (!pmGuard->isCurrentSession(session))
             {
                 emit pmGuard->atProgressFinished(false);
                 QMessageBox::warning(controller->_mainWindow,
@@ -1337,7 +1350,7 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
 
             controller->runUnifiedAerialTriangulation(runSettings,
                                                       images,
-                                                      projectPath,
+                                                      session,
                                                       projectMeta,
                                                       outputRoot,
                                                       autoFillMissing);
@@ -1345,9 +1358,9 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
 }
 
 void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &settings,
-                                                           const QStringList &images,
-                                                           const QString &projectPath,
-                                                           const QJsonObject &projectMeta,
+                                                            const QStringList &images,
+                                                            const xjw::gui::project::ProjectSessionContext &session,
+                                                            const QJsonObject &projectMeta,
                                                            const QString &outputRoot,
                                                            bool fillMissingTiePoints)
 {
@@ -1357,7 +1370,7 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
     }
 
     auto *pm = _projectManager;
-    if (pm->currentProjectPath() != projectPath)
+    if (!pm->isCurrentSession(session))
     {
         emit pm->atProgressFinished(false);
         QMessageBox::warning(_mainWindow,
@@ -1365,6 +1378,8 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
                              QStringLiteral("项目已切换，本次空三启动已取消。"));
         return;
     }
+
+    const QString projectPath = session.projectPath;
 
     const bool resetCurrentAlignment =
         settings.value(QStringLiteral("reset_current_alignment")).toBool(true);
@@ -1394,21 +1409,41 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
     workflowOptions.guidedImageMatching = settings.value(QStringLiteral("guided_image_matching")).toBool(false);
     workflowOptions.adaptiveCameraModelFitting =
         settings.value(QStringLiteral("adaptive_camera_model_fitting")).toBool(true);
-    workflowOptions.featureAlgorithm = settings.value(QStringLiteral("feature_algorithm"))
-                                           .toString(QStringLiteral("sift"))
-                                           .trimmed()
-                                           .toLower();
-    workflowOptions.matchAlgorithm = settings.value(QStringLiteral("match_algorithm"))
-                                         .toString(QStringLiteral("lightglue"))
-                                         .trimmed()
-                                         .toLower();
-    workflowOptions.matchPipeline = settings.value(QStringLiteral("match_pipeline")).toString().trimmed().toLower();
+    workflowOptions.matchingAlgorithmId =
+        settings.value(QStringLiteral("algorithm_id"))
+            .toString(QStringLiteral("sift_lightglue"))
+            .trimmed()
+            .toLower();
     workflowOptions.device = settings.value(QStringLiteral("device")).toString(QStringLiteral("auto"));
     workflowOptions.threads = workflowThreads;
+    workflowOptions.cudaDevice = std::max(
+        0, settings.value(QStringLiteral("cuda_device")).toInt(0));
+    workflowOptions.featureMaxImageDim = std::max(
+        0, settings.value(QStringLiteral("feature_max_image_dim")).toInt(0));
+    workflowOptions.cudaParallelPairs = std::max(
+        0, settings.value(QStringLiteral("cuda_parallel_pairs")).toInt(0));
+    workflowOptions.featurePrefetchDepth = std::clamp(
+        settings.value(QStringLiteral("feature_prefetch_depth")).toInt(2), 1, 4);
+    workflowOptions.matchThreshold = static_cast<float>(std::clamp(
+        settings.value(QStringLiteral("match_threshold")).toDouble(0.15), 0.0, 1.0));
+    workflowOptions.geometryReprojThreshold = std::max(
+        0.1, settings.value(QStringLiteral("geometry_reprojection_threshold_px")).toDouble(1.5));
+    workflowOptions.geometryMinInliers = std::max(
+        8, settings.value(QStringLiteral("geometry_min_inliers")).toInt(20));
+    workflowOptions.geometryMaxIterations = std::max(
+        100, settings.value(QStringLiteral("geometry_max_iterations")).toInt(10000));
+    workflowOptions.tiePointGridColumns = std::clamp(
+        settings.value(QStringLiteral("tie_point_grid_columns")).toInt(8), 1, 64);
+    workflowOptions.tiePointGridRows = std::clamp(
+        settings.value(QStringLiteral("tie_point_grid_rows")).toInt(8), 1, 64);
+    workflowOptions.maxTiePointsPerGridCell = std::max(
+        0, settings.value(QStringLiteral("tie_point_grid_cell_limit")).toInt(0));
+    workflowOptions.stationaryTiePointMaxPixelMotion = static_cast<float>(std::max(
+        0.0,
+        settings.value(QStringLiteral("stationary_tie_point_max_pixel_motion")).toDouble(1.0)));
     workflowOptions.autoGenerateMissingMatches = fillMissingTiePoints;
     workflowOptions.assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(projectPath);
-    workflowOptions.featureDir = xjw::common::project::ProjectIO::ipfindOutputDir(projectPath);
-    workflowOptions.matchDir = xjw::common::project::ProjectIO::ipmatchOutputDir(projectPath);
+    workflowOptions.matchDir = xjw::common::project::ProjectIO::imageMatchOutputDir(projectPath);
     workflowOptions.maskPaths = xjw::common::project::ProjectIO::maskPathsForImages(projectPath, images);
     workflowOptions.featureGrayscaleMin = normalizedFeatureGrayscaleMin(settings);
     workflowOptions.featureGrayscaleMax = 1.0f;
@@ -1491,7 +1526,7 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
     const QStringList sfmImages = images;
     const QString sfmOutputDir = resolved.pipelineInput.outputDir;
     const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(projectPath);
-    xjw::gui::tasks::runGuarded(
+    xjw::gui::tasks::runGuardedWithOutcome(
         this,
         [runWorkflowOptions = std::move(workflowOptions), sfmImages, sfmOutputDir, assetsDir]() mutable
         {
@@ -1540,16 +1575,27 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
          cancelFlag,
          sfmImages,
          sfmOutputDir,
-         projectPath,
+         session,
          resetCurrentAlignment](MenuWorkflowController *controller,
-                                xjw::aerial_triangulation::AerialTriangulationResult workflowResult) mutable {
+                                xjw::gui::tasks::TaskOutcome<
+                                    xjw::aerial_triangulation::AerialTriangulationResult> outcome) mutable {
             if (!pmGuard)
             {
                 return;
             }
+            if (!outcome.succeeded())
+            {
+                pmGuard->clearAtCancelFlag(cancelFlag);
+                emit pmGuard->atProgressFinished(false);
+                QMessageBox::warning(controller->_mainWindow,
+                                     QStringLiteral("空中三角测量"),
+                                     outcome.errorMessage);
+                return;
+            }
+            auto workflowResult = std::move(*outcome.value);
             xjw::aerial_triangulation::AerialTriangulationReconstructionResult &result = workflowResult.reconstructionResult;
             pmGuard->clearAtCancelFlag(cancelFlag);
-            if (pmGuard->currentProjectPath() != projectPath)
+            if (!pmGuard->isCurrentSession(session))
             {
                 emit pmGuard->atProgressFinished(false);
                 QMessageBox::warning(controller->_mainWindow,
@@ -1567,18 +1613,9 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
 
             if (workflowResult.tiePointPreparationExecuted)
             {
-                for (const xjw::matchphotos::MatchPhotosFeatureRecord &feature :
-                     workflowResult.tiePointResult.features)
-                {
-                    pmGuard->appendIpfindResult(feature.imagePath,
-                                                feature.featurePath,
-                                                feature.settings);
-                }
-                for (const xjw::matchphotos::MatchPhotosMatchRecord &match :
-                     workflowResult.tiePointResult.matches)
-                {
-                    pmGuard->appendIpmatchResult(QStringList{match.matchPath}, match.settings);
-                }
+                pmGuard->appendImageMatchResults(
+                    xjw::gui::project::makeImageMatchResultRecords(
+                        workflowResult.tiePointResult));
             }
 
             if (!result.success)
@@ -1719,45 +1756,23 @@ void MenuWorkflowController::openCreateDemDialog()
         dlg->setAvailableImages(images);
     }
 
-    // 自动模式：完整流水线
-    connect(dlg, &CreateDemDialog::requestRunFullPipeline, this,
-        [this](const QStringList &images, const QString &outputDir, const QJsonObject &pipelineSettings)
+    connect(dlg, &CreateDemDialog::requestRun, this,
+        [this](const xjw::gui::project::DemGenerationRequest &request)
     {
         if (!_projectManager)
         {
             return;
         }
         QPointer<ProjectManager> pmGuard(_projectManager);
-        const QString projectPath = pmGuard->currentProjectPath();
+        const auto session = pmGuard->currentSessionContext();
         QTimer::singleShot(0, pmGuard.data(),
-            [pmGuard, projectPath, images, outputDir, pipelineSettings]()
+            [pmGuard, session, request]()
             {
-                if (!pmGuard || pmGuard->currentProjectPath() != projectPath)
+                if (!pmGuard || !pmGuard->isCurrentSession(session))
                 {
                     return;
                 }
-                pmGuard->startFullDemPipelineAsync(images, outputDir, pipelineSettings);
-            });
-    });
-
-    // 手动模式：从密集点云生成 DEM
-    connect(dlg, &CreateDemDialog::requestRunFromDenseCloud, this,
-        [this](const QString &denseCloudPath, const QString &outputDir, double demResolution, const QString &demType)
-    {
-        if (!_projectManager)
-        {
-            return;
-        }
-        QPointer<ProjectManager> pmGuard(_projectManager);
-        const QString projectPath = pmGuard->currentProjectPath();
-        QTimer::singleShot(0, pmGuard.data(),
-            [pmGuard, projectPath, denseCloudPath, outputDir, demResolution, demType]()
-            {
-                if (!pmGuard || pmGuard->currentProjectPath() != projectPath)
-                {
-                    return;
-                }
-                pmGuard->startDemFromDenseCloudAsync(denseCloudPath, outputDir, demResolution, demType);
+                pmGuard->startDemFromPointCloudAsync(request);
             });
     });
 

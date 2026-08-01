@@ -50,7 +50,8 @@ void TiePointWorkflowController::start(xjw::matchphotos::MatchPhotosOptions opti
         return;
     }
 
-    const QString projectPath = projectManager->currentProjectPath();
+    const auto session = projectManager->currentSessionContext();
+    const QString projectPath = session.projectPath;
     const QStringList images = projectManager->getAllImages();
     if (images.size() < 2)
     {
@@ -117,7 +118,7 @@ void TiePointWorkflowController::start(xjw::matchphotos::MatchPhotosOptions opti
             const xjw::matchphotos::MatchPhotosTask task(options);
             return task.run(context);
         },
-        [this, projectManager, projectPath, taskTitle, cancelFlag](TiePointWorkflowController *,
+        [this, projectManager, session, taskTitle, cancelFlag](TiePointWorkflowController *,
                                                                     xjw::gui::tasks::TaskOutcome<xjw::matchphotos::MatchPhotosResult> outcome)
         {
             if (!outcome.succeeded())
@@ -139,48 +140,28 @@ void TiePointWorkflowController::start(xjw::matchphotos::MatchPhotosOptions opti
             {
                 return;
             }
-            if (projectManager->currentProjectPath() != projectPath)
+            if (!projectManager->isCurrentSession(session))
             {
                 emit warningRequested(tr("连接点匹配"), tr("项目已切换，本次连接点匹配结果未写回。"));
                 return;
             }
 
-            QVector<ProjectIpfindResultRecord> featureRecords;
-            featureRecords.reserve(static_cast<int>(result.features.size()));
-            for (const xjw::matchphotos::MatchPhotosFeatureRecord &feature : result.features)
-            {
-                featureRecords.push_back({feature.imagePath, feature.featurePath, feature.settings});
-            }
-            projectManager->appendIpfindResults(featureRecords);
-
-            QVector<ProjectIpmatchResultRecord> matchRecords;
-            matchRecords.reserve(static_cast<int>(result.matches.size()));
-            for (const xjw::matchphotos::MatchPhotosMatchRecord &match : result.matches)
-            {
-                QJsonObject matchSettings = match.settings;
-                if (!result.tiePointPath.isEmpty())
-                {
-                    matchSettings[QStringLiteral("tie_point_path")] = result.tiePointPath;
-                    matchSettings[QStringLiteral("track_count")] = result.trackCount;
-                    matchSettings[QStringLiteral("track_summary")] = result.trackSummary;
-                }
-                matchRecords.push_back({QStringList{match.matchPath}, matchSettings});
-            }
-            projectManager->appendIpmatchResults(matchRecords);
+            projectManager->appendImageMatchResults(
+                xjw::gui::project::makeImageMatchResultRecords(result));
 
             for (const xjw::matchphotos::MatchPhotosMatchRecord &match : result.matches)
             {
                 emit projectManager->matchPairReady(match.image0Path,
                                                     match.image1Path,
-                                                    match.matchPath,
+                                                    match.image0MatchFilePath,
                                                     match.matchCount);
             }
 
             if (result.success && !cancelled)
             {
-                const QString message = tr("%1完成：%2 个特征文件，%3 对匹配")
+                const QString message = tr("%1完成：%2 个影像分片，%3 对匹配")
                     .arg(taskTitle)
-                    .arg(static_cast<int>(result.features.size()))
+                    .arg(static_cast<int>(result.imageMatchFiles.size()))
                     .arg(static_cast<int>(result.matches.size()));
                 LOG_INFO("%s", qUtf8Printable(message));
                 emit statusMessageRequested(message, 5000);

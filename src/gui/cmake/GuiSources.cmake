@@ -46,12 +46,10 @@ set(GUI_SOURCES
   project/services/ProjectCameraImportService.cpp
   project/services/ProjectResourceCleanupService.cpp
   project/services/ProjectTiePointResultService.cpp
-  project/services/DenseSparseCloudPreparation.cpp
   project/support/ProjectBundleAdjustExecution.cpp
   project/support/ProjectBundleAdjustWorkflow.cpp
   project/support/ProjectCameraInitialization.cpp
   project/support/ProjectDashboardSummary.cpp
-  project/support/ProjectDenseWorkflowConfig.cpp
   project/support/ProjectModelWorkflowPolicy.cpp
   project/support/ProjectMetadataOperations.cpp
   project/support/ProjectReferenceDatasets.cpp
@@ -63,9 +61,7 @@ set(GUI_SOURCES
   project/support/ProjectWorkflowUtils.cpp
   project/support/ProjectWorkflowReports.cpp
   project/manager/ProjectManager.cpp
-  project/manager/ProjectDenseReconstructionManager.cpp
   project/manager/ProjectModelManager.cpp
-  project/manager/ProjectModelGenerationWorkflow.cpp
   project/manager/ProjectReconstructionManager.cpp
   project/manager/ProjectTaskDispatcher.cpp
   project/manager/ProjectUiCommands.cpp
@@ -100,7 +96,6 @@ set(GUI_SOURCES
   widgets/DualImageViewer.cpp
   widgets/DualImageViewer.ui
   widgets/HenuBrandWidget.cpp
-  widgets/MatchValidityAnalyzer.cpp
   widgets/ObservationNetworkView.cpp
   widgets/WorkspaceCenterWidget.cpp
   widgets/WorkspaceCenterWidget.ui
@@ -151,12 +146,10 @@ set(GUI_HEADERS
   project/services/ProjectCameraImportService.h
   project/services/ProjectResourceCleanupService.h
   project/services/ProjectTiePointResultService.h
-  project/services/DenseSparseCloudPreparation.h
   project/support/ProjectBundleAdjustExecution.h
   project/support/ProjectBundleAdjustWorkflow.h
   project/support/ProjectCameraInitialization.h
   project/support/ProjectDashboardSummary.h
-  project/support/ProjectDenseWorkflowConfig.h
   project/support/ProjectModelWorkflowPolicy.h
   project/support/ProjectMetadataOperations.h
   project/support/ProjectReferenceDatasets.h
@@ -168,9 +161,7 @@ set(GUI_HEADERS
   project/support/ProjectWorkflowUtils.h
   project/support/ProjectWorkflowReports.h
   project/manager/ProjectManager.h
-  project/manager/ProjectDenseReconstructionManager.h
   project/manager/ProjectModelManager.h
-  project/manager/ProjectModelGenerationWorkflow.h
   project/manager/ProjectReconstructionManager.h
   project/manager/ProjectTaskDispatcher.h
   project/manager/ProjectUiCommands.h
@@ -205,7 +196,6 @@ set(GUI_HEADERS
   widgets/TaskStatusWidget.h
   widgets/DualImageViewer.h
   widgets/HenuBrandWidget.h
-  widgets/MatchValidityAnalyzer.h
   widgets/ObservationNetworkView.h
   widgets/WorkspaceCenterWidget.h
 )
@@ -221,7 +211,6 @@ set(GUI_PROJECT_SOURCES
   project/support/ProjectBundleAdjustWorkflow.cpp
   project/support/ProjectCameraInitialization.cpp
   project/support/ProjectDashboardSummary.cpp
-  project/support/ProjectDenseWorkflowConfig.cpp
   project/support/ProjectModelWorkflowPolicy.cpp
   project/support/ProjectMetadataOperations.cpp
   project/support/ProjectReferenceDatasets.cpp
@@ -233,9 +222,7 @@ set(GUI_PROJECT_SOURCES
   project/support/ProjectWorkflowUtils.cpp
   project/support/ProjectWorkflowReports.cpp
   project/manager/ProjectManager.cpp
-  project/manager/ProjectDenseReconstructionManager.cpp
   project/manager/ProjectModelManager.cpp
-  project/manager/ProjectModelGenerationWorkflow.cpp
   project/manager/ProjectReconstructionManager.cpp
   project/manager/ProjectTaskDispatcher.cpp
   project/manager/ProjectUiCommands.cpp

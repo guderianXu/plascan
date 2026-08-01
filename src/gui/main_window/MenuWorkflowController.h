@@ -21,6 +21,7 @@
 #include <QPointer>
 #include <QStringList>
 #include "LayerRenderer.h"
+#include "ProjectSessionContext.h"
 
 class QMainWindow;
 class QColor;
@@ -103,16 +104,18 @@ private:
     static SparsePrerequisiteSummary summarizeSparsePrerequisites(const QStringList &images,
                                                                   const QJsonObject &meta,
                                                                   const QString &projectPath,
-                                                                  const QString &featureAlgorithm = QString(),
-                                                                  const QString &matchAlgorithm = QString());
+                                                                  const QString &algorithmId = QString());
     QJsonObject sanitizeAerialTriangulationReferencePreselection(const QJsonObject &settings,
                                                                 const QStringList &images) const;
     DialogSettingStore *createDialogSettingStore(const QString &settingKey);
 
+    /// 将工作流程高级设置与空三主对话框设置合并；主对话框字段优先。
+    QJsonObject mergeAerialTriangulationSettings(const QJsonObject &dialogSettings);
+
     void startAerialTriangulationWorkflow(const QJsonObject &settings);
     void runUnifiedAerialTriangulation(const QJsonObject &settings,
                                        const QStringList &images,
-                                       const QString &projectPath,
+                                       const xjw::gui::project::ProjectSessionContext &session,
                                        const QJsonObject &projectMeta,
                                        const QString &outputRoot,
                                        bool fillMissingTiePoints);

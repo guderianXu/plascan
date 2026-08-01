@@ -356,40 +356,17 @@ void GenerateModelDialog::applySettings(const QJsonObject &settings)
 void GenerateModelDialog::setSourceCandidates(const QJsonArray &candidates)
 {
     _candidates = candidates;
-    bool has_depth_maps = false;
     _hasReusableDepthMaps = false;
     for (const QJsonValue &value : _candidates)
     {
         const QJsonObject candidate = value.toObject();
         if (candidate.value(QLatin1String(kSourceData)).toString() == QStringLiteral("depth_maps"))
         {
-            has_depth_maps = true;
             if (candidate.value(QLatin1String(kSupported)).toBool(false) &&
                 !candidate.value(QLatin1String(kSourcePath)).toString().trimmed().isEmpty())
             {
                 _hasReusableDepthMaps = true;
             }
-        }
-    }
-    if (!has_depth_maps)
-    {
-        QJsonObject automatic_depth_maps;
-        automatic_depth_maps[QLatin1String(kSourceData)] = QStringLiteral("depth_maps");
-        automatic_depth_maps[QLatin1String(kSourceLabel)] = tr("深度图");
-        automatic_depth_maps[QLatin1String(kSourcePath)] = QString();
-        automatic_depth_maps[QLatin1String(kDisplay)] = tr("自动生成深度图");
-        automatic_depth_maps[QLatin1String(kSupported)] = true;
-        automatic_depth_maps[QLatin1String(kNote)] =
-            tr("当前没有可复用深度图；生成模型时将自动估计深度图并直接进行 TSDF 表面重建。");
-        _candidates.insert(0, automatic_depth_maps);
-
-        // Older projects could persist tie points as the model source before the
-        // automatic depth-map workflow existed. Do not let that stale choice
-        // silently bypass dense reconstruction when this dialog is reopened.
-        if (_pendingSourceData == QStringLiteral("tie_points"))
-        {
-            _pendingSourceData = QStringLiteral("depth_maps");
-            _pendingSourcePath.clear();
         }
     }
     refreshSourceTypes();

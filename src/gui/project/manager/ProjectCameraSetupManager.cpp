@@ -530,7 +530,8 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
         return false;
     }
 
-    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
+    const auto session = _owner->currentSessionContext();
+    const QString projectPath = session.projectPath;
     const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(projectPath);
     const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
     const QString outputDir = QDir(assetsDir).filePath(QStringLiteral("aerial_triangulation/init_pose_%1").arg(timestamp));
@@ -576,15 +577,15 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
 
     QPointer<ProjectCameraSetupManager> self(this);
     QPointer<ProjectManager> ownerGuard(_owner);
-    workflowOptions.progressFn = [self, ownerGuard, projectPath](const QString &stage, int pct)
+    workflowOptions.progressFn = [self, ownerGuard, session](const QString &stage, int pct)
     {
-        if (!self || !ownerGuard || ownerGuard->currentProjectPath() != projectPath)
+        if (!self || !ownerGuard || !ownerGuard->isCurrentSession(session))
         {
             return;
         }
-        xjw::gui::tasks::postGuarded(self.data(), [ownerGuard, projectPath, stage, pct](ProjectCameraSetupManager *manager)
+        xjw::gui::tasks::postGuarded(self.data(), [ownerGuard, session, stage, pct](ProjectCameraSetupManager *manager)
         {
-            if (!ownerGuard || ownerGuard->currentProjectPath() != projectPath)
+            if (!ownerGuard || !ownerGuard->isCurrentSession(session))
             {
                 return;
             }
@@ -592,18 +593,18 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
         });
     };
 
-    workflowOptions.pairMatchedFn = [self, ownerGuard, projectPath](const QString &img0, const QString &img1,
+    workflowOptions.pairMatchedFn = [self, ownerGuard, session](const QString &img0, const QString &img1,
                                                          const QString &matchPath, int numMatches)
     {
-        if (!self || !ownerGuard || ownerGuard->currentProjectPath() != projectPath)
+        if (!self || !ownerGuard || !ownerGuard->isCurrentSession(session))
         {
             return;
         }
         xjw::gui::tasks::postGuarded(self.data(),
-                                     [ownerGuard, projectPath, img0, img1, matchPath, numMatches](
+                                     [ownerGuard, session, img0, img1, matchPath, numMatches](
                                          ProjectCameraSetupManager *manager)
         {
-            if (!ownerGuard || ownerGuard->currentProjectPath() != projectPath)
+            if (!ownerGuard || !ownerGuard->isCurrentSession(session))
             {
                 return;
             }
@@ -623,7 +624,7 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
 
     emit atProgressChanged(QStringLiteral("启动初始化相机位姿..."), 0);
 
-    xjw::gui::tasks::runGuarded(
+    xjw::gui::tasks::runGuardedWithOutcome(
         this,
         [workflowOptions]() mutable
         {
@@ -640,13 +641,25 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
          exifCount,
          fallbackCount,
          ownerGuard,
-         projectPath](ProjectCameraSetupManager *manager,
-                      xjw::aerial_triangulation::AerialTriangulationResult workflowResult) mutable
+         session](ProjectCameraSetupManager *manager,
+                      xjw::gui::tasks::TaskOutcome<
+                          xjw::aerial_triangulation::AerialTriangulationResult> outcome) mutable
         {
-            if (!ownerGuard || ownerGuard->currentProjectPath() != projectPath)
+            if (!ownerGuard || !ownerGuard->isCurrentSession(session))
             {
                 return;
             }
+
+            if (!outcome.succeeded())
+            {
+                emit manager->atProgressFinished(false);
+                QMessageBox::warning(manager->_parentWidget,
+                                     QStringLiteral("初始化相机位姿"),
+                                     outcome.errorMessage);
+                return;
+            }
+
+            auto workflowResult = std::move(*outcome.value);
 
             const xjw::aerial_triangulation::AerialTriangulationReconstructionResult &result =
                 workflowResult.reconstructionResult;
