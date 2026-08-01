@@ -33,7 +33,8 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "CPACK_GENERATOR": "TGZ;DEB",
-        "VCPKG_TARGET_TRIPLET": "x64-linux-dynamic"
+        "VCPKG_TARGET_TRIPLET": "x64-linux-dynamic",
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/cmake/vcpkg-overlays"
       }
     },
     {
@@ -48,7 +49,8 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CPACK_GENERATOR": "TGZ;DEB",
-        "VCPKG_TARGET_TRIPLET": "x64-linux-dynamic"
+        "VCPKG_TARGET_TRIPLET": "x64-linux-dynamic",
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/cmake/vcpkg-overlays"
       }
     },
     {
