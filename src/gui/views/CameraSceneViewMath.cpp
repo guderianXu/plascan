@@ -41,6 +41,39 @@ QVector<int> farToNearCameraIndices(const QVector<QVector3D> &centers,
     return indices;
 }
 
+float cameraPlaneHalfExtentForViewDepth(
+    const QVector3D &center,
+    const QMatrix4x4 &worldToView,
+    int viewportHeight,
+    float verticalFieldOfViewDegrees,
+    float targetHalfExtentPixels)
+{
+    if (viewportHeight <= 0
+        || !std::isfinite(verticalFieldOfViewDegrees)
+        || !std::isfinite(targetHalfExtentPixels)
+        || verticalFieldOfViewDegrees <= 0.0f
+        || verticalFieldOfViewDegrees >= 179.0f
+        || targetHalfExtentPixels <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    const float depth = -(worldToView * QVector4D(center, 1.0f)).z();
+    if (!std::isfinite(depth) || depth <= ScoreEpsilon)
+    {
+        return 0.0f;
+    }
+
+    constexpr float pi = 3.14159265358979323846f;
+    const float halfFovRadians =
+        verticalFieldOfViewDegrees * pi / 360.0f;
+    const float worldHeightAtDepth =
+        2.0f * depth * std::tan(halfFovRadians);
+    return worldHeightAtDepth
+        * targetHalfExtentPixels
+        / static_cast<float>(viewportHeight);
+}
+
 int selectCameraForView(const QVector<CameraViewCandidate> &candidates,
                         const QVector3D &worldViewDirection,
                         const QVector3D &sceneCenter,
@@ -220,6 +253,55 @@ QVector<QVector3D> cameraImagePlaneCorners(const QVector3D &center,
         center - horizontal - vertical,
         center + horizontal - vertical,
     };
+}
+
+QVector<QVector3D> axisAlignedBoundingBoxLineVertices(
+    const QVector3D &minimum,
+    const QVector3D &maximum)
+{
+    const auto is_finite = [](const QVector3D &point)
+    {
+        return std::isfinite(point.x())
+            && std::isfinite(point.y())
+            && std::isfinite(point.z());
+    };
+    if (!is_finite(minimum) || !is_finite(maximum))
+    {
+        return {};
+    }
+
+    const QVector3D lower(
+        std::min(minimum.x(), maximum.x()),
+        std::min(minimum.y(), maximum.y()),
+        std::min(minimum.z(), maximum.z()));
+    const QVector3D upper(
+        std::max(minimum.x(), maximum.x()),
+        std::max(minimum.y(), maximum.y()),
+        std::max(minimum.z(), maximum.z()));
+    const QVector<QVector3D> corners{
+        {lower.x(), lower.y(), lower.z()},
+        {upper.x(), lower.y(), lower.z()},
+        {upper.x(), upper.y(), lower.z()},
+        {lower.x(), upper.y(), lower.z()},
+        {lower.x(), lower.y(), upper.z()},
+        {upper.x(), lower.y(), upper.z()},
+        {upper.x(), upper.y(), upper.z()},
+        {lower.x(), upper.y(), upper.z()},
+    };
+    constexpr int edges[][2] = {
+        {0, 1}, {1, 2}, {2, 3}, {3, 0},
+        {4, 5}, {5, 6}, {6, 7}, {7, 4},
+        {0, 4}, {1, 5}, {2, 6}, {3, 7},
+    };
+
+    QVector<QVector3D> vertices;
+    vertices.reserve(24);
+    for (const auto &edge : edges)
+    {
+        vertices.push_back(corners.at(edge[0]));
+        vertices.push_back(corners.at(edge[1]));
+    }
+    return vertices;
 }
 
 QVector<QVector3D> calibratedImagePlaneCorners(const QVector3D &cameraCenter,

@@ -50,6 +50,13 @@ private:
 QVector<int> farToNearCameraIndices(const QVector<QVector3D> &centers,
                                     const QMatrix4x4 &worldToView);
 
+float cameraPlaneHalfExtentForViewDepth(
+    const QVector3D &center,
+    const QMatrix4x4 &worldToView,
+    int viewportHeight,
+    float verticalFieldOfViewDegrees = 45.0f,
+    float targetHalfExtentPixels = 28.0f);
+
 int selectCameraForView(const QVector<CameraViewCandidate> &candidates,
                         const QVector3D &worldViewDirection,
                         const QVector3D &sceneCenter,
@@ -87,6 +94,10 @@ QVector<QVector3D> cameraImagePlaneCorners(const QVector3D &center,
                                            const QVector3D &up,
                                            float halfWidth,
                                            float halfHeight);
+
+QVector<QVector3D> axisAlignedBoundingBoxLineVertices(
+    const QVector3D &minimum,
+    const QVector3D &maximum);
 
 QVector<QVector3D> calibratedImagePlaneCorners(const QVector3D &cameraCenter,
                                                const QVector3D &forward,

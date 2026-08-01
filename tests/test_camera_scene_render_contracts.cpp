@@ -108,6 +108,8 @@ TEST(CameraSceneRenderContractTest, SolidCameraCardsUseDepthTestedGpuResourcesWh
     const QString overlayBlock = source.mid(overlayStart, overlayEnd - overlayStart);
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("CameraImagePlaneMode::Solid")));
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("QImage(QSize(1, 1), QImage::Format_RGBA8888)")));
+    EXPECT_TRUE(ensureBlock.contains(QStringLiteral("image.fill(highlighted ? QColor")));
+    EXPECT_FALSE(ensureBlock.contains(QStringLiteral(".rgba()")));
     EXPECT_FALSE(overlayBlock.contains(QStringLiteral("QPolygonF cameraCard")));
     EXPECT_FALSE(overlayBlock.contains(QStringLiteral("painter.drawPolygon(cameraCard)")));
 }
@@ -126,6 +128,53 @@ TEST(CameraSceneRenderContractTest, SelectedCameraCardUsesRedHighlight)
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("isCameraHighlighted(pose)")));
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("QColor(57, 112, 173, 220)")));
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("QColor(205, 60, 70, 230)")));
+}
+
+TEST(CameraSceneRenderContractTest, CameraCardsScaleByViewDepthAndShowDirectionArrow)
+{
+    const QString header =
+        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
+    const QString source =
+        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+
+    EXPECT_TRUE(header.contains(QStringLiteral("void drawCameraDirectionArrow")));
+    EXPECT_TRUE(source.contains(QStringLiteral("cameraPlaneHalfExtentForViewDepth(")));
+
+    const qsizetype drawStart = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::drawCameraThumbnails"));
+    const qsizetype imageStart = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::drawActiveCameraImage"), drawStart);
+    ASSERT_GE(drawStart, 0);
+    ASSERT_GT(imageStart, drawStart);
+    const QString drawBlock = source.mid(drawStart, imageStart - drawStart);
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral(
+        "cameraImagePlaneHalfExtent(pose, matrices.modelView)")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral(
+        "fullDynamicBufferUpdateForCurrentFrame(")));
+
+    const qsizetype arrowStart = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::drawCameraDirectionArrow"));
+    const qsizetype manipStart = source.indexOf(
+        QStringLiteral("QVector3D CameraSceneWidget::manipCenterWorld"), arrowStart);
+    ASSERT_GE(arrowStart, 0);
+    ASSERT_GT(manipStart, arrowStart);
+    const QString arrowBlock = source.mid(arrowStart, manipStart - arrowStart);
+    EXPECT_TRUE(arrowBlock.contains(QStringLiteral("cameraForwardDirection(")));
+    EXPECT_TRUE(arrowBlock.contains(QStringLiteral("painter.drawLine(shaft)")));
+
+    const qsizetype overlayStart = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::paintOverlay(QPainter &painter)"));
+    const qsizetype overlayEnd = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::drawPlyLoadProgressOverlay"), overlayStart);
+    ASSERT_GE(overlayStart, 0);
+    ASSERT_GT(overlayEnd, overlayStart);
+    const QString overlayBlock = source.mid(overlayStart, overlayEnd - overlayStart);
+    const qsizetype arrowCall = overlayBlock.indexOf(
+        QStringLiteral("drawCameraDirectionArrow(painter, pose"));
+    const qsizetype localAxesGuard = overlayBlock.indexOf(
+        QStringLiteral("if (_showCameraLocalAxes)"));
+    EXPECT_GE(arrowCall, 0);
+    EXPECT_GT(localAxesGuard, arrowCall);
 }
 
 TEST(CameraSceneRenderContractTest, CachesImageLoadFailuresToPreventRetryStorm)
@@ -226,6 +275,106 @@ TEST(CameraSceneRenderContractTest, TiePointModesUseMetadataAndDrawLegend)
         QStringLiteral("sparse_cloud_points_json")));
     EXPECT_TRUE(mainWindowSource.contains(
         QStringLiteral("showTiePointCloudFile(path, sidecarPath)")));
+}
+
+TEST(CameraSceneRenderContractTest, TiePointsUseThePortableOverlayPointRenderer)
+{
+    const QString sceneHeader =
+        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
+    const QString sceneSource =
+        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+
+    EXPECT_TRUE(sceneHeader.contains(
+        QStringLiteral("void drawTiePointCloudOverlay(QPainter &painter) const;")));
+    EXPECT_TRUE(sceneSource.contains(
+        QStringLiteral("constexpr std::size_t maximumOverlayPointCount = 150'000;")));
+    EXPECT_TRUE(sceneSource.contains(
+        QStringLiteral("drawTiePointCloudOverlay(painter);")));
+    EXPECT_TRUE(sceneSource.contains(
+        QStringLiteral("TiePointColorMode::Elevation")));
+    EXPECT_TRUE(sceneSource.contains(
+        QStringLiteral("TiePointColorMode::ImageCount")));
+
+    const qsizetype drawStart = sceneSource.indexOf(
+        QStringLiteral("void CameraSceneWidget::drawSceneGeometry"));
+    const qsizetype renderStart = sceneSource.indexOf(
+        QStringLiteral("void CameraSceneWidget::render("), drawStart);
+    ASSERT_GE(drawStart, 0);
+    ASSERT_GT(renderStart, drawStart);
+    const QString drawBlock = sceneSource.mid(drawStart, renderStart - drawStart);
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("if (!_isTiePointCloud)")));
+}
+
+TEST(CameraSceneRenderContractTest, TiePointLoadFitsViewToLoadedGeometry)
+{
+    const QString sceneHeader =
+        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
+    const QString sceneSource =
+        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+
+    EXPECT_TRUE(sceneHeader.contains(QStringLiteral("void fitViewToLoadedGeometry();")));
+    EXPECT_TRUE(sceneHeader.contains(QStringLiteral("bool _fitViewAfterLoad = false;")));
+    EXPECT_TRUE(sceneHeader.contains(QStringLiteral("bool _hasFocusedGeometryBounds = false;")));
+
+    const qsizetype tiePointLoadStart =
+        sceneSource.indexOf(QStringLiteral("void CameraSceneWidget::loadTiePointCloudFromFile"));
+    const qsizetype fitViewStart =
+        sceneSource.indexOf(QStringLiteral("void CameraSceneWidget::fitViewToLoadedGeometry"));
+    ASSERT_GE(tiePointLoadStart, 0);
+    ASSERT_GT(fitViewStart, tiePointLoadStart);
+    const QString tiePointLoadBlock =
+        sceneSource.mid(tiePointLoadStart, fitViewStart - tiePointLoadStart);
+    EXPECT_TRUE(tiePointLoadBlock.contains(
+        QStringLiteral("loadModelFromPlyInternal(pointCloudPath, true, true);")));
+    EXPECT_TRUE(tiePointLoadBlock.contains(
+        QStringLiteral("loadModelFromObjInternal(pointCloudPath, true, true);")));
+    EXPECT_TRUE(tiePointLoadBlock.contains(
+        QStringLiteral("loadPointCloudFromXyzInternal(pointCloudPath, true, true);")));
+
+    const qsizetype plyLoadStart =
+        sceneSource.indexOf(QStringLiteral("void CameraSceneWidget::loadModelFromPlyInternal"));
+    const qsizetype plyFutureStart =
+        sceneSource.indexOf(QStringLiteral("watcher->setFuture"), plyLoadStart);
+    const qsizetype plyTiePointState =
+        sceneSource.indexOf(QStringLiteral("_isTiePointCloud = tiePointCloud;"), plyLoadStart);
+    const qsizetype plyFitState =
+        sceneSource.indexOf(QStringLiteral("_fitViewAfterLoad = fitAfterLoad;"), plyLoadStart);
+    ASSERT_GE(plyLoadStart, 0);
+    ASSERT_GT(plyFutureStart, plyLoadStart);
+    EXPECT_GT(plyTiePointState, plyLoadStart);
+    EXPECT_LT(plyTiePointState, plyFutureStart);
+    EXPECT_GT(plyFitState, plyLoadStart);
+    EXPECT_LT(plyFitState, plyFutureStart);
+
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
+        "if (self->_fitViewAfterLoad)\n"
+        "                {\n"
+        "                    self->fitViewToLoadedGeometry();")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
+        "if (_hasFocusedGeometryBounds)\n"
+        "    {\n"
+        "        return _focusedGeometryCenter;")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
+        "if (_hasFocusedGeometryBounds)\n"
+        "    {\n"
+        "        return _focusedGeometryRadius;")));
+}
+
+TEST(CameraSceneRenderContractTest, PointCloudUsesOwnBoundsAndPixelSizedFloorPivot)
+{
+    const QString sceneHeader =
+        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
+    const QString sceneSource =
+        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+
+    EXPECT_TRUE(sceneHeader.contains(QStringLiteral("bool       _hasCloudBounds = false;")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
+        "axisAlignedBoundingBoxLineVertices(\n"
+        "                _cachedCloudAABBMin, _cachedCloudAABBMax)")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
+        "constexpr qreal half_size_pixels = 7.0;")));
+    EXPECT_FALSE(sceneSource.contains(QStringLiteral(
+        "qMax(0.25f, _cachedRadius * 0.045f)")));
 }
 
 TEST(CameraSceneRenderContractTest, ModelMenuGatesUnsupportedModesAndDefaultsToShaded)

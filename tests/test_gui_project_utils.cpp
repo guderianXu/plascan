@@ -8892,9 +8892,10 @@ TEST(CameraSceneWidgetTest, CameraOverlayUsesMetashapeStyleImagePlanes)
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
 
-    EXPECT_TRUE(header.contains(QStringLiteral("float cameraImagePlaneHalfExtent() const")));
+    EXPECT_TRUE(header.contains(QStringLiteral("float cameraImagePlaneHalfExtent(const CameraPose &pose")));
     EXPECT_TRUE(header.contains(QStringLiteral("void drawFloorPivotCross(QPainter &painter)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("cameraImagePlaneHalfExtent()")));
+    EXPECT_TRUE(source.contains(QStringLiteral("cameraImagePlaneHalfExtent(pose, matrices.modelView)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("drawCameraDirectionArrow(painter, pose")));
     EXPECT_TRUE(source.contains(QStringLiteral("cameraImagePlaneCorners")));
     EXPECT_TRUE(source.contains(QStringLiteral("drawCameraThumbnails(cb")));
     EXPECT_TRUE(source.contains(QStringLiteral("_thumbnailPipeline.pipeline->setDepthTest(true)")));

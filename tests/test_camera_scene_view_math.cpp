@@ -1,4 +1,5 @@
 #include <cmath>
+#include <limits>
 
 #include <gtest/gtest.h>
 
@@ -14,6 +15,32 @@ TEST(CameraSceneViewMathTest, SortsFarCameraBeforeNearCameraRegardlessOfInputOrd
                                      QVector3D(0.0f, 0.0f, -9.0f)};
 
     EXPECT_EQ(farToNearCameraIndices(centers, world_to_view), QVector<int>({1, 0}));
+}
+
+TEST(CameraSceneViewMathTest, UsesLargerWorldPlaneForFartherCamera)
+{
+    QMatrix4x4 world_to_view;
+    world_to_view.setToIdentity();
+
+    const float near_half_extent = cameraPlaneHalfExtentForViewDepth(
+        QVector3D(0.0f, 0.0f, -4.0f), world_to_view, 1000, 45.0f, 24.0f);
+    const float far_half_extent = cameraPlaneHalfExtentForViewDepth(
+        QVector3D(0.0f, 0.0f, -12.0f), world_to_view, 1000, 45.0f, 24.0f);
+
+    EXPECT_GT(far_half_extent, near_half_extent);
+    EXPECT_NEAR(far_half_extent, near_half_extent * 3.0f, 1e-6f);
+}
+
+TEST(CameraSceneViewMathTest, RejectsInvalidCameraPlaneDepthInputs)
+{
+    QMatrix4x4 world_to_view;
+    world_to_view.setToIdentity();
+    EXPECT_EQ(cameraPlaneHalfExtentForViewDepth(
+                  QVector3D(0.0f, 0.0f, 1.0f), world_to_view, 1000),
+              0.0f);
+    EXPECT_EQ(cameraPlaneHalfExtentForViewDepth(
+                  QVector3D(0.0f, 0.0f, -4.0f), world_to_view, 0),
+              0.0f);
 }
 
 TEST(CameraSceneViewMathTest, ChoosesAvailableCameraWhoseForwardDirectionMatchesView)
@@ -208,4 +235,28 @@ TEST(CameraSceneViewMathTest, BuildsCameraLocalAxesInWorldCoordinates)
 
     const CameraLocalAxes flippedAxes = cameraLocalAxes(rotation, true);
     EXPECT_EQ(flippedAxes.z, QVector3D(0.0f, 0.0f, -1.0f));
+}
+
+TEST(CameraSceneViewMathTest, BuildsTwelveEdgesForPointCloudBoundingBox)
+{
+    const QVector3D minimum(-1.0f, -2.0f, -3.0f);
+    const QVector3D maximum(4.0f, 5.0f, 6.0f);
+
+    const QVector<QVector3D> vertices =
+        axisAlignedBoundingBoxLineVertices(minimum, maximum);
+
+    ASSERT_EQ(vertices.size(), 24);
+    EXPECT_EQ(vertices.at(0), QVector3D(-1.0f, -2.0f, -3.0f));
+    EXPECT_EQ(vertices.at(1), QVector3D(4.0f, -2.0f, -3.0f));
+    EXPECT_EQ(vertices.at(22), QVector3D(-1.0f, 5.0f, -3.0f));
+    EXPECT_EQ(vertices.at(23), QVector3D(-1.0f, 5.0f, 6.0f));
+}
+
+TEST(CameraSceneViewMathTest, RejectsNonFinitePointCloudBoundingBox)
+{
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    EXPECT_TRUE(axisAlignedBoundingBoxLineVertices(
+                    QVector3D(nan, 0.0f, 0.0f),
+                    QVector3D(1.0f, 1.0f, 1.0f))
+                    .isEmpty());
 }

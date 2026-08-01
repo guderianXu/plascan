@@ -269,8 +269,8 @@ private:
     void updateCursor();
 
     int maxVisibleCameraLabels() const;
-    float cameraCardBase() const;
-    float cameraImagePlaneHalfExtent() const;
+    float cameraImagePlaneHalfExtent(const CameraPose &pose,
+                                     const QMatrix4x4 &worldToView) const;
     bool isCameraHighlighted(const CameraPose &pose) const;
     QString normalizedCameraPath(const QString &imagePath) const;
     QString cameraPlaneImageKey(const QString &imagePath, CameraImagePlaneMode mode) const;
@@ -281,6 +281,10 @@ private:
     void updateActiveCameraForView();
     void refreshLockedCameraImage();
     void drawFloorPivotCross(QPainter &painter) const;
+    void drawCameraDirectionArrow(QPainter &painter,
+                                  const CameraPose &pose,
+                                  float planeHalfExtent,
+                                  bool highlighted) const;
 
     // 在普通透明 QWidget 覆盖层中绘制 2D 标注：
     //   - 操控球 Gizmo（旋转环）
@@ -290,9 +294,20 @@ private:
     void requestOverlayUpdate();
     void paintOverlay(QPainter &painter);
     void drawPlyLoadProgressOverlay(QPainter &painter);
+    void drawTiePointCloudOverlay(QPainter &painter) const;
     void drawTiePointLegend(QPainter &painter) const;
     void drawModelLegend(QPainter &painter) const;
     void startTiePointMetadataLoad(const QString &sidecarPath, int generation);
+    void loadPointCloudFromXyzInternal(const QString &xyzPath,
+                                       bool tiePointCloud,
+                                       bool fitAfterLoad);
+    void loadModelFromPlyInternal(const QString &plyPath,
+                                  bool tiePointCloud,
+                                  bool fitAfterLoad);
+    void loadModelFromObjInternal(const QString &objPath,
+                                  bool tiePointCloud,
+                                  bool fitAfterLoad);
+    void fitViewToLoadedGeometry();
 
     // 将点云和模型数据整理为 RHI 顶点缓冲，在 render 中按需上传。
     void uploadGpuData();
@@ -437,7 +452,7 @@ private:
     int _modelPtCount = 0;
     float _modelPointSize = 2.4f;
 
-    // 预留的辅助线 GPU 资源；常规模型视图不显示调试包围盒。
+    // 点云包围盒 GPU 资源。
     RhiBufferSet _lineBuffer;
     int _lineCount = 0;
 
@@ -469,16 +484,22 @@ private:
     // 场景中心/半径/包围盒缓存（避免每帧遍历大量点）
     mutable QVector3D  _cachedCenter;
     mutable float      _cachedRadius = 10.0f;
-    mutable float      _cachedCameraCardBase = 0.6f;
     mutable QVector3D  _cachedAABBMin;
     mutable QVector3D  _cachedAABBMax;
+    mutable QVector3D  _cachedCloudAABBMin;
+    mutable QVector3D  _cachedCloudAABBMax;
+    mutable bool       _hasCloudBounds = false;
     mutable bool       _cacheDirty = true;
+    QVector3D _focusedGeometryCenter;
+    float _focusedGeometryRadius = 1.0f;
+    bool _hasFocusedGeometryBounds = false;
 
     // 异步加载状态
     bool   _loading      = false;
     int    _loadGen      = 0;    ///< 每次发起新加载时递增，用于丢弃过期回调
     int    _plyLoadProgressPercent = -1;
     QString _plyLoadProgressText;
+    bool _fitViewAfterLoad = false;
     bool _preferModelPointRender = false;
     QQuaternion _viewRot;                     // 当前视图旋转四元数
     float _zoomScale = 1.0f;                  // 当前缩放系数（影响相机到场景中心的距离）
