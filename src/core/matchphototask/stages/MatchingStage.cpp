@@ -279,15 +279,6 @@ MatchPhotosStageReport MatchingStage::run(
                                   QStringLiteral("LightGlue 仅支持 TensorRT/CUDA"));
     }
 
-    QString engineName;
-    const QString enginePath = resolveLightGlueTensorRtEnginePath(options, &engineName);
-    if (enginePath.isEmpty())
-    {
-        return makeMatchingReport(
-            MatchPhotosStageStatus::Failed,
-            QStringLiteral("未找到 TensorRT LightGlue engine；请检查设置或模型目录"));
-    }
-
     const MatchPhotosGpuMemoryInfo gpuMemory =
         queryMatchPhotosGpuMemory(options.cudaDevice);
     image_matching::LightGlueGpuMemoryInfo budgetMemory;
@@ -295,9 +286,27 @@ MatchPhotosStageReport MatchingStage::run(
     budgetMemory.freeBytes = gpuMemory.freeBytes;
     budgetMemory.totalBytes = gpuMemory.totalBytes;
     budgetMemory.deviceIndex = gpuMemory.deviceIndex;
-    const int matcherBudget = image_matching::resolveSiftLightGlueKeypointBudget(
+    const int requestedMatcherBudget = image_matching::resolveSiftLightGlueKeypointBudget(
         algorithmPlan.maxKeypoints,
         budgetMemory);
+    const ResolvedLightGlueTensorRtEngine engine =
+        resolveLightGlueTensorRtEngine(options, requestedMatcherBudget);
+    if (!engine.isValid())
+    {
+        QString message = QStringLiteral(
+            "未找到 TensorRT LightGlue engine。请在“工作流程 - 设置”中指定 .engine，"
+            "或运行 scripts/models/export_lightglue_tensorrt.py 生成本机引擎。");
+        if (!engine.searchedDirectories.isEmpty())
+        {
+            message += QStringLiteral("\n已搜索：%1")
+                .arg(engine.searchedDirectories.join(QStringLiteral("; ")));
+        }
+        return makeMatchingReport(MatchPhotosStageStatus::Failed, message);
+    }
+    const QString enginePath = engine.path;
+    const QString engineName = engine.name;
+    const int matcherBudget = image_matching::clampLightGlueKeypointBudgetToEngine(
+        requestedMatcherBudget, engine.bucketKeypoints);
     const float effectiveThreshold = image_matching::resolveSiftLightGlueMatchThreshold(
         options.matchThreshold,
         matcherBudget,

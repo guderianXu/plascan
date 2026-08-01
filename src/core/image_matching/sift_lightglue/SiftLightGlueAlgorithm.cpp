@@ -67,10 +67,8 @@ MatchResult SiftLightGlueAlgorithm::matchFeatures(const FeatureSet &features0,
     }
 
     int keypointBudget = _config.maxMatcherKeypoints;
-    if (keypointBudget <= 0)
-    {
-        keypointBudget = _matcher->bucketKeypoints();
-    }
+    keypointBudget = clampLightGlueKeypointBudgetToEngine(
+        keypointBudget, _matcher->bucketKeypoints());
     if (keypointBudget <= 0)
     {
         keypointBudget = std::max(features0.size(), features1.size());

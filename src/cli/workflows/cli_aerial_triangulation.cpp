@@ -280,6 +280,7 @@ int main(int argc, char *argv[])
     std::string deviceArg = "auto";
     std::string referenceModeArg = "source_code";
     std::string algorithmIdArg = "sift_lightglue";
+    std::string lightGlueEngineArg;
     std::string maskApplyModeArg = "none";
     std::string maskDirArg;
     int keypointLimit = 40000;
@@ -318,6 +319,8 @@ int main(int argc, char *argv[])
     app.add_option("--algorithm-id", algorithmIdArg,
                    "统一影像匹配算法 ID；当前仅支持 sift_lightglue")
         ->check(CLI::IsMember({"sift_lightglue"}));
+    app.add_option("--lightglue-engine", lightGlueEngineArg,
+                   "TensorRT LightGlue .engine；留空时按模型目录自动查找");
     app.add_option("--keypoint-limit", keypointLimit, "关键点限制");
     app.add_option("--tiepoint-limit", tiepointLimit, "连接点限制");
     app.add_option("--initial-image-id-1", initialImageId1, "指定初始像对的第一个 0 基影像索引");
@@ -500,6 +503,9 @@ int main(int argc, char *argv[])
     }
     options.matchingAlgorithmId = xjw::cli::normalizedToken(
         algorithmIdArg, QStringLiteral("sift_lightglue"));
+    options.lightGlueTensorRtEnginePath = lightGlueEngineArg.empty()
+        ? QString()
+        : xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(lightGlueEngineArg));
     options.device = xjw::cli::normalizedToken(deviceArg, QStringLiteral("auto"));
     options.threads = std::max(1, threads);
     options.autoGenerateMissingMatches = autoGenerateMissingMatches;

@@ -21,6 +21,8 @@ void ReconstructionCliOptions::addTo(CLI::App &app)
     app.add_option("--sfm-matching-algorithm", sfmMatchingAlgorithmId,
                    "SFM image matching algorithm id: sift_lightglue")
         ->check(CLI::IsMember({"sift_lightglue"}));
+    app.add_option("--sfm-lightglue-engine", sfmLightGlueEnginePath,
+                   "TensorRT LightGlue .engine; empty enables model-directory lookup");
     app.add_flag("--sfm-guided-rematching", sfmGuidedRematching,
                  "enable guided rematching after initial SfM");
     app.add_flag("--lock-input-camera-poses", lockInputCameraPoses,

@@ -8,6 +8,10 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
+#include <QJsonDocument>
+#include <QRegularExpression>
+#include <QSet>
+#include <QStandardPaths>
 
 #include <algorithm>
 #include <cmath>
@@ -42,33 +46,125 @@ QString resolveImageToken(const QString &token, const QStringList &images)
     return QString();
 }
 
-QString modelPathCandidate(const QString &modelName)
+void appendUniqueDirectory(QStringList *directories, const QString &path)
 {
-    QStringList candidates;
+    if (!directories || path.trimmed().isEmpty())
+    {
+        return;
+    }
+    const QString clean = cleanPath(QFileInfo(path).absoluteFilePath());
+    if (!directories->contains(clean, Qt::CaseInsensitive))
+    {
+        directories->append(clean);
+    }
+}
+
+QStringList lightGlueTensorRtModelDirectories()
+{
+    QStringList directories;
     const QString environmentDirectory = qEnvironmentVariable("PLASCAN_MODEL_DIR").trimmed();
     if (!environmentDirectory.isEmpty())
     {
-        candidates.append(QDir(environmentDirectory).filePath(modelName));
+        appendUniqueDirectory(&directories, environmentDirectory);
     }
 
+    const QString applicationModels = QDir(
+        QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation))
+        .filePath(QStringLiteral("models"));
+    appendUniqueDirectory(&directories, applicationModels);
+
 #ifdef PLASCAN_SOURCE_DIR
-    candidates.append(QDir(QStringLiteral(PLASCAN_SOURCE_DIR))
-                          .filePath(QStringLiteral("resources/models/%1").arg(modelName)));
+    const QDir sourceDirectory(QStringLiteral(PLASCAN_SOURCE_DIR));
+    appendUniqueDirectory(
+        &directories,
+        sourceDirectory.filePath(QStringLiteral("build/model_cache/lightglue_tensorrt")));
+    appendUniqueDirectory(
+        &directories,
+        sourceDirectory.filePath(QStringLiteral("resources/models")));
 #endif
 
     const QString executableDirectory = QCoreApplication::applicationDirPath();
-    candidates.append(QDir(executableDirectory).filePath(QStringLiteral("../models/%1").arg(modelName)));
-    candidates.append(QDir(executableDirectory).filePath(QStringLiteral("../resources/models/%1").arg(modelName)));
-    candidates.append(QDir(executableDirectory).filePath(QStringLiteral("../../resources/models/%1").arg(modelName)));
-    candidates.append(QStringLiteral("models/%1").arg(modelName));
-    for (const QString &candidate : candidates)
+    const QDir executableDir(executableDirectory);
+    appendUniqueDirectory(&directories, executableDir.filePath(QStringLiteral("models")));
+    appendUniqueDirectory(&directories, executableDir.filePath(QStringLiteral("../models")));
+    appendUniqueDirectory(&directories, executableDir.filePath(QStringLiteral("../resources/models")));
+    appendUniqueDirectory(&directories, executableDir.filePath(QStringLiteral("../../resources/models")));
+    appendUniqueDirectory(&directories, executableDir.filePath(QStringLiteral("../model_cache/lightglue_tensorrt")));
+    appendUniqueDirectory(&directories, executableDir.filePath(QStringLiteral("../../model_cache/lightglue_tensorrt")));
+    appendUniqueDirectory(&directories, QStringLiteral("models"));
+    return directories;
+}
+
+int lightGlueEngineBucketFromMetadata(const QString &enginePath)
+{
+    QFile metadataFile(enginePath + QStringLiteral(".json"));
+    if (metadataFile.open(QIODevice::ReadOnly))
     {
-        if (QFileInfo(candidate).isFile())
+        QJsonParseError parseError;
+        const QJsonDocument document = QJsonDocument::fromJson(
+            metadataFile.readAll(), &parseError);
+        if (parseError.error == QJsonParseError::NoError && document.isObject())
         {
-            return cleanPath(QFileInfo(candidate).absoluteFilePath());
+            const int bucket = document.object()
+                .value(QStringLiteral("bucket_keypoints")).toInt();
+            if (bucket > 0)
+            {
+                return bucket;
+            }
         }
     }
-    return QString();
+
+    const QRegularExpression bucketPattern(
+        QStringLiteral("(?:^|_)bucket(\\d+)(?:_|\\.)"),
+        QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpressionMatch match = bucketPattern.match(QFileInfo(enginePath).fileName());
+    return match.hasMatch() ? match.captured(1).toInt() : 0;
+}
+
+struct LightGlueEngineCandidate
+{
+    QString path;
+    QString name;
+    int bucketKeypoints = 0;
+    int discoveryOrder = 0;
+};
+
+bool engineCandidateIsBetter(const LightGlueEngineCandidate &candidate,
+                             const LightGlueEngineCandidate &current,
+                             int preferredKeypoints)
+{
+    if (current.path.isEmpty())
+    {
+        return true;
+    }
+
+    const auto category = [preferredKeypoints](int bucket)
+    {
+        if (bucket > 0 && (preferredKeypoints <= 0 || bucket <= preferredKeypoints))
+        {
+            return 0;
+        }
+        if (bucket == 0)
+        {
+            return 1;
+        }
+        return 2;
+    };
+    const int candidateCategory = category(candidate.bucketKeypoints);
+    const int currentCategory = category(current.bucketKeypoints);
+    if (candidateCategory != currentCategory)
+    {
+        return candidateCategory < currentCategory;
+    }
+    if (candidateCategory == 0 && candidate.bucketKeypoints != current.bucketKeypoints)
+    {
+        return candidate.bucketKeypoints > current.bucketKeypoints;
+    }
+    if (candidateCategory == 2 && candidate.bucketKeypoints != current.bucketKeypoints)
+    {
+        return candidate.bucketKeypoints < current.bucketKeypoints;
+    }
+    return candidate.discoveryOrder < current.discoveryOrder;
 }
 
 } // namespace
@@ -163,9 +259,11 @@ bool resolveMatchPhotosPair(const MatchPhotosContext &context,
     return true;
 }
 
-QString resolveLightGlueTensorRtEnginePath(const MatchPhotosOptions &options,
-                                           QString *engineName)
+ResolvedLightGlueTensorRtEngine resolveLightGlueTensorRtEngine(
+    const MatchPhotosOptions &options,
+    int preferredKeypoints)
 {
+    ResolvedLightGlueTensorRtEngine resolved;
     QString configured = options.lightGlueTensorRtEnginePath.trimmed();
     if (configured.isEmpty())
     {
@@ -176,44 +274,86 @@ QString resolveLightGlueTensorRtEnginePath(const MatchPhotosOptions &options,
         const QFileInfo info(configured);
         if (info.isFile())
         {
-            if (engineName)
-            {
-                *engineName = info.fileName();
-            }
-            return cleanPath(info.absoluteFilePath());
+            resolved.path = cleanPath(info.absoluteFilePath());
+            resolved.name = info.fileName();
+            resolved.bucketKeypoints = lightGlueEngineBucketFromMetadata(resolved.path);
         }
-        if (engineName)
-        {
-            engineName->clear();
-        }
-        return QString();
+        return resolved;
     }
 
-    const QStringList candidates = {
+    const QStringList preferredNames = {
         QStringLiteral("lightglue_sift_fp32.engine"),
         QStringLiteral("lightglue_sift_bucket16384_fp32.engine"),
         QStringLiteral("lightglue_sift_bucket12288_fp32.engine"),
         QStringLiteral("lightglue_sift_bucket8192_fp32.engine"),
+        QStringLiteral("lightglue_sift_bucket6144_fp32.engine"),
         QStringLiteral("lightglue_sift_bucket4096_fp32.engine"),
+        QStringLiteral("lightglue_sift_bucket3072_fp32.engine"),
         QStringLiteral("lightglue_sift_bucket2048_fp32.engine"),
         QStringLiteral("lightglue_sift_bucket1024_fp32.engine")};
-    for (const QString &candidate : candidates)
+
+    resolved.searchedDirectories = lightGlueTensorRtModelDirectories();
+    QSet<QString> visitedPaths;
+    LightGlueEngineCandidate best;
+    int discoveryOrder = 0;
+    for (const QString &directoryPath : resolved.searchedDirectories)
     {
-        const QString path = modelPathCandidate(candidate);
-        if (!path.isEmpty())
+        const QDir directory(directoryPath);
+        QStringList names = preferredNames;
+        const QStringList discovered = directory.entryList(
+            QStringList{QStringLiteral("lightglue_sift*_fp32.engine")},
+            QDir::Files,
+            QDir::Name);
+        for (const QString &name : discovered)
         {
-            if (engineName)
+            if (!names.contains(name, Qt::CaseInsensitive))
             {
-                *engineName = candidate;
+                names.append(name);
             }
-            return path;
+        }
+        for (const QString &name : names)
+        {
+            const QFileInfo info(directory.filePath(name));
+            if (!info.isFile())
+            {
+                continue;
+            }
+            const QString path = cleanPath(info.absoluteFilePath());
+            const QString identity = path.toLower();
+            if (visitedPaths.contains(identity))
+            {
+                continue;
+            }
+            visitedPaths.insert(identity);
+
+            LightGlueEngineCandidate candidate;
+            candidate.path = path;
+            candidate.name = info.fileName();
+            candidate.bucketKeypoints = lightGlueEngineBucketFromMetadata(path);
+            candidate.discoveryOrder = discoveryOrder++;
+            if (engineCandidateIsBetter(candidate, best, preferredKeypoints))
+            {
+                best = candidate;
+            }
         }
     }
+
+    resolved.path = best.path;
+    resolved.name = best.name;
+    resolved.bucketKeypoints = best.bucketKeypoints;
+    return resolved;
+}
+
+QString resolveLightGlueTensorRtEnginePath(const MatchPhotosOptions &options,
+                                           QString *engineName)
+{
+    const ResolvedLightGlueTensorRtEngine resolved =
+        resolveLightGlueTensorRtEngine(options);
     if (engineName)
     {
-        engineName->clear();
+        *engineName = resolved.name;
     }
-    return QString();
+    return resolved.path;
 }
 
 int resolveFeatureKeypointLimit(const MatchPhotosOptions &options,

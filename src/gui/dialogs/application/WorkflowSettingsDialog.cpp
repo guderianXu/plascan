@@ -5,16 +5,28 @@
 
 #include "application/WorkflowSettingsDialog.h"
 
+#include "MatchPhotosOptions.h"
+#include "MatchPhotosRuntime.h"
+
+#include <QColor>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
+#include <QDir>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QFormLayout>
 #include <QFrame>
 #include <QGroupBox>
+#include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
+#include <QPalette>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSpinBox>
+#include <QStyle>
 #include <QThread>
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -77,9 +89,10 @@ WorkflowSettingsDialog::WorkflowSettingsDialog(QWidget *parent)
 QJsonObject WorkflowSettingsDialog::defaultSettings()
 {
     QJsonObject settings;
-    settings[QStringLiteral("workflow_settings_version")] = 1;
+    settings[QStringLiteral("workflow_settings_version")] = 2;
     settings[QStringLiteral("algorithm_id")] = QStringLiteral("sift_lightglue");
     settings[QStringLiteral("device")] = QStringLiteral("cuda");
+    settings[QStringLiteral("lightglue_tensorrt_engine")] = QString();
     settings[QStringLiteral("threads")] = std::max(1, QThread::idealThreadCount());
     settings[QStringLiteral("cuda_device")] = 0;
     settings[QStringLiteral("cuda_parallel_pairs")] = 0;
@@ -128,6 +141,47 @@ void WorkflowSettingsDialog::setupUi()
     _cudaDeviceSpin = makeIntegerSpin(
         0, 31, QStringLiteral("CUDA SIFT 与 TensorRT LightGlue 使用的设备序号。"), algorithmGroup);
     algorithmForm->addRow(QStringLiteral("CUDA 设备:"), _cudaDeviceSpin);
+
+    auto *enginePathRow = new QWidget(algorithmGroup);
+    auto *enginePathLayout = new QHBoxLayout(enginePathRow);
+    enginePathLayout->setContentsMargins(0, 0, 0, 0);
+    enginePathLayout->setSpacing(6);
+    _lightGlueEngineEdit = new QLineEdit(enginePathRow);
+    _lightGlueEngineEdit->setPlaceholderText(QStringLiteral("自动查找本机引擎"));
+    _lightGlueEngineEdit->setClearButtonEnabled(true);
+    _lightGlueEngineEdit->setToolTip(
+        QStringLiteral("可选的 TensorRT LightGlue .engine 路径；留空时按模型目录和构建缓存自动查找。"));
+    _lightGlueEngineBrowseButton = new QToolButton(enginePathRow);
+    _lightGlueEngineBrowseButton->setIcon(style()->standardIcon(QStyle::SP_DialogOpenButton));
+    _lightGlueEngineBrowseButton->setToolTip(QStringLiteral("选择 TensorRT LightGlue 引擎"));
+    _lightGlueEngineBrowseButton->setFixedSize(32, 30);
+    enginePathLayout->addWidget(_lightGlueEngineEdit, 1);
+    enginePathLayout->addWidget(_lightGlueEngineBrowseButton);
+    algorithmForm->addRow(QStringLiteral("LightGlue 引擎:"), enginePathRow);
+
+    _lightGlueEngineStatusLabel = new QLabel(algorithmGroup);
+    _lightGlueEngineStatusLabel->setWordWrap(true);
+    _lightGlueEngineStatusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    algorithmForm->addRow(QStringLiteral("当前生效:"), _lightGlueEngineStatusLabel);
+    connect(_lightGlueEngineEdit, &QLineEdit::textChanged, this,
+            [this]() { refreshLightGlueEngineStatus(); });
+    connect(_lightGlueEngineBrowseButton, &QToolButton::clicked, this,
+            [this]()
+    {
+        const QString currentPath = _lightGlueEngineEdit->text().trimmed();
+        const QString startPath = currentPath.isEmpty()
+            ? QString()
+            : QFileInfo(currentPath).absolutePath();
+        const QString selected = QFileDialog::getOpenFileName(
+            this,
+            QStringLiteral("选择 TensorRT LightGlue 引擎"),
+            startPath,
+            QStringLiteral("TensorRT engine (*.engine);;所有文件 (*)"));
+        if (!selected.isEmpty())
+        {
+            _lightGlueEngineEdit->setText(QFileInfo(selected).absoluteFilePath());
+        }
+    });
 
     _cudaParallelPairsSpin = makeIntegerSpin(
         0, 16, QStringLiteral("同时执行的 LightGlue 像对数量；0 表示按可用显存自动决定。"), algorithmGroup);
@@ -216,6 +270,8 @@ void WorkflowSettingsDialog::applySettings(const QJsonObject &requestedSettings)
     const QJsonObject settings = withDefaults(requestedSettings);
     _cpuThreadsSpin->setValue(settings.value(QStringLiteral("threads")).toInt());
     _cudaDeviceSpin->setValue(settings.value(QStringLiteral("cuda_device")).toInt());
+    _lightGlueEngineEdit->setText(
+        settings.value(QStringLiteral("lightglue_tensorrt_engine")).toString());
     _cudaParallelPairsSpin->setValue(
         settings.value(QStringLiteral("cuda_parallel_pairs")).toInt());
     _featurePrefetchDepthSpin->setValue(
@@ -238,16 +294,19 @@ void WorkflowSettingsDialog::applySettings(const QJsonObject &requestedSettings)
         settings.value(QStringLiteral("tie_point_grid_cell_limit")).toInt());
     _stationaryMotionSpin->setValue(
         settings.value(QStringLiteral("stationary_tie_point_max_pixel_motion")).toDouble());
+    refreshLightGlueEngineStatus();
 }
 
 QJsonObject WorkflowSettingsDialog::collectSettings() const
 {
     QJsonObject settings;
-    settings[QStringLiteral("workflow_settings_version")] = 1;
+    settings[QStringLiteral("workflow_settings_version")] = 2;
     // 当前注册表只提供这一条生产算法。固定 ID 和 CUDA 设备语义写入配置，
     // 以后新增算法时仍由注册表扩展，而不需要修改空三下游文件格式。
     settings[QStringLiteral("algorithm_id")] = QStringLiteral("sift_lightglue");
     settings[QStringLiteral("device")] = QStringLiteral("cuda");
+    settings[QStringLiteral("lightglue_tensorrt_engine")] =
+        _lightGlueEngineEdit->text().trimmed();
     settings[QStringLiteral("threads")] = _cpuThreadsSpin->value();
     settings[QStringLiteral("cuda_device")] = _cudaDeviceSpin->value();
     settings[QStringLiteral("cuda_parallel_pairs")] = _cudaParallelPairsSpin->value();
@@ -264,4 +323,33 @@ QJsonObject WorkflowSettingsDialog::collectSettings() const
     settings[QStringLiteral("stationary_tie_point_max_pixel_motion")] =
         _stationaryMotionSpin->value();
     return settings;
+}
+
+void WorkflowSettingsDialog::refreshLightGlueEngineStatus()
+{
+    if (!_lightGlueEngineEdit || !_lightGlueEngineStatusLabel)
+    {
+        return;
+    }
+
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.lightGlueTensorRtEnginePath = _lightGlueEngineEdit->text().trimmed();
+    const auto resolved = xjw::matchphotos::resolveLightGlueTensorRtEngine(options, 4096);
+
+    QPalette palette = _lightGlueEngineStatusLabel->palette();
+    if (!resolved.isValid())
+    {
+        palette.setColor(QPalette::WindowText, QColor(180, 45, 45));
+        _lightGlueEngineStatusLabel->setPalette(palette);
+        _lightGlueEngineStatusLabel->setText(QStringLiteral("未找到可用引擎"));
+        return;
+    }
+
+    palette.setColor(QPalette::WindowText, QColor(35, 110, 70));
+    _lightGlueEngineStatusLabel->setPalette(palette);
+    const QString bucketLabel = resolved.bucketKeypoints > 0
+        ? QStringLiteral("  [K=%1]").arg(resolved.bucketKeypoints)
+        : QString();
+    _lightGlueEngineStatusLabel->setText(
+        QDir::toNativeSeparators(resolved.path) + bucketLabel);
 }

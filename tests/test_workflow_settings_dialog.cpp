@@ -8,11 +8,12 @@
 TEST(WorkflowSettingsDialogTest, DefaultsDescribeOnlyRegisteredProductionAlgorithm)
 {
     const QJsonObject settings = WorkflowSettingsDialog::defaultSettings();
-    EXPECT_EQ(settings.value(QStringLiteral("workflow_settings_version")).toInt(), 1);
+    EXPECT_EQ(settings.value(QStringLiteral("workflow_settings_version")).toInt(), 2);
     EXPECT_EQ(settings.value(QStringLiteral("algorithm_id")).toString(),
               QStringLiteral("sift_lightglue"));
     EXPECT_EQ(settings.value(QStringLiteral("device")).toString(),
               QStringLiteral("cuda"));
+    EXPECT_TRUE(settings.value(QStringLiteral("lightglue_tensorrt_engine")).toString().isEmpty());
     EXPECT_GT(settings.value(QStringLiteral("threads")).toInt(), 0);
     EXPECT_GT(settings.value(QStringLiteral("geometry_max_iterations")).toInt(), 0);
 }
@@ -23,6 +24,8 @@ TEST(WorkflowSettingsDialogTest, AppliesAndCollectsAerialTriangulationDetails)
     QJsonObject requested;
     requested[QStringLiteral("threads")] = 12;
     requested[QStringLiteral("cuda_device")] = 2;
+    requested[QStringLiteral("lightglue_tensorrt_engine")] =
+        QStringLiteral("D:/models/lightglue.engine");
     requested[QStringLiteral("cuda_parallel_pairs")] = 3;
     requested[QStringLiteral("feature_prefetch_depth")] = 4;
     requested[QStringLiteral("feature_max_image_dim")] = 4096;
@@ -39,6 +42,8 @@ TEST(WorkflowSettingsDialogTest, AppliesAndCollectsAerialTriangulationDetails)
     const QJsonObject collected = dialog.collectSettings();
     EXPECT_EQ(collected.value(QStringLiteral("threads")).toInt(), 12);
     EXPECT_EQ(collected.value(QStringLiteral("cuda_device")).toInt(), 2);
+    EXPECT_EQ(collected.value(QStringLiteral("lightglue_tensorrt_engine")).toString(),
+              QStringLiteral("D:/models/lightglue.engine"));
     EXPECT_EQ(collected.value(QStringLiteral("cuda_parallel_pairs")).toInt(), 3);
     EXPECT_EQ(collected.value(QStringLiteral("feature_prefetch_depth")).toInt(), 4);
     EXPECT_EQ(collected.value(QStringLiteral("feature_max_image_dim")).toInt(), 4096);

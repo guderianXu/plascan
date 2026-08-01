@@ -1348,6 +1348,8 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
             .toString(QStringLiteral("sift_lightglue"))
             .trimmed()
             .toLower();
+    workflowOptions.lightGlueTensorRtEnginePath =
+        settings.value(QStringLiteral("lightglue_tensorrt_engine")).toString().trimmed();
     workflowOptions.device = settings.value(QStringLiteral("device")).toString(QStringLiteral("auto"));
     workflowOptions.threads = workflowThreads;
     workflowOptions.cudaDevice = std::max(

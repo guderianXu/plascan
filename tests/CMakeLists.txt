@@ -706,6 +706,7 @@ add_executable(test_workflow_settings_dialog
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/application/WorkflowSettingsDialog.cpp
 )
 target_link_libraries(test_workflow_settings_dialog PRIVATE
+    matchphototask
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
@@ -713,6 +714,9 @@ target_link_libraries(test_workflow_settings_dialog PRIVATE
 )
 target_include_directories(test_workflow_settings_dialog PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask/runtime
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask/task
 )
 gtest_discover_tests(test_workflow_settings_dialog
     DISCOVERY_TIMEOUT 60

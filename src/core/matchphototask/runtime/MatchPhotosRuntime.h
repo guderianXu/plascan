@@ -15,6 +15,7 @@
 
 #include <QJsonObject>
 #include <QString>
+#include <QStringList>
 
 namespace xjw::matchphotos
 {
@@ -25,6 +26,23 @@ struct ResolvedImagePair
     QString image1Path;
     QString pairName; ///< 只用于日志显示，不参与文件命名。
     QString pairKey;
+};
+
+/**
+ * @brief TensorRT LightGlue 引擎的运行时解析结果。
+ *
+ * TensorRT engine 与 GPU 架构、TensorRT 版本以及固定关键点桶绑定，因此不能
+ * 像普通权重文件一样只按一个硬编码名称查找。bucketKeypoints 优先从同名
+ * `.engine.json` 读取，旧文件没有元数据时再从文件名中的 `bucketNNNN` 推断。
+ */
+struct ResolvedLightGlueTensorRtEngine
+{
+    QString path;
+    QString name;
+    int bucketKeypoints = 0;
+    QStringList searchedDirectories;
+
+    bool isValid() const { return !path.isEmpty(); }
 };
 
 QString matchPhotosMatchDirectory(const MatchPhotosContext &context);
@@ -42,6 +60,11 @@ bool resolveMatchPhotosPair(const MatchPhotosContext &context,
                             ResolvedImagePair *resolved,
                             QString *errorMessage);
 
+ResolvedLightGlueTensorRtEngine resolveLightGlueTensorRtEngine(
+    const MatchPhotosOptions &options,
+    int preferredKeypoints = 0);
+
+// 保留轻量路径接口供既有调用者使用；新代码需要桶容量时应使用上面的完整结果。
 QString resolveLightGlueTensorRtEnginePath(const MatchPhotosOptions &options,
                                            QString *engineName);
 

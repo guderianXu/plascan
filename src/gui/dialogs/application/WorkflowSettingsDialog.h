@@ -13,7 +13,10 @@
 #include <QJsonObject>
 
 class QDoubleSpinBox;
+class QLabel;
+class QLineEdit;
 class QSpinBox;
+class QToolButton;
 
 class WorkflowSettingsDialog final : public QDialog
 {
@@ -32,9 +35,14 @@ public:
 private:
     /// 创建控件、范围、特殊值和工具提示。
     void setupUi();
+    /// 重新解析显式路径或自动搜索结果，让用户看到真正生效的 engine。
+    void refreshLightGlueEngineStatus();
 
     QSpinBox *_cpuThreadsSpin = nullptr;
     QSpinBox *_cudaDeviceSpin = nullptr;
+    QLineEdit *_lightGlueEngineEdit = nullptr;
+    QToolButton *_lightGlueEngineBrowseButton = nullptr;
+    QLabel *_lightGlueEngineStatusLabel = nullptr;
     QSpinBox *_cudaParallelPairsSpin = nullptr;
     QSpinBox *_featurePrefetchDepthSpin = nullptr;
     QSpinBox *_featureMaxImageDimSpin = nullptr;

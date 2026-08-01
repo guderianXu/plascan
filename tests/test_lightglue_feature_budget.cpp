@@ -61,6 +61,18 @@ TEST(LightGlueFeatureBudgetTest, AdaptsThresholdWithinSafeBounds)
                     0.05f);
 }
 
+TEST(LightGlueFeatureBudgetTest, ClampsRuntimeBudgetToFixedEngineBucket)
+{
+    EXPECT_EQ(xjw::image_matching::clampLightGlueKeypointBudgetToEngine(12288, 4096),
+              4096);
+    EXPECT_EQ(xjw::image_matching::clampLightGlueKeypointBudgetToEngine(2048, 4096),
+              2048);
+    EXPECT_EQ(xjw::image_matching::clampLightGlueKeypointBudgetToEngine(0, 4096),
+              4096);
+    EXPECT_EQ(xjw::image_matching::clampLightGlueKeypointBudgetToEngine(8192, 0),
+              8192);
+}
+
 TEST(LightGlueFeatureBudgetTest, SelectsFeaturesAndTracksOriginalIndices)
 {
     const auto input = makeFeatureSet(10);

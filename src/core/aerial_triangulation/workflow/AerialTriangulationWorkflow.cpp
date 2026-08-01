@@ -239,6 +239,12 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     tieOptions.device = computeDevice(options.device);
     tieOptions.pairPolicy = matchphotos::makePairSelectionPolicy(pairPreset(options.quality));
     tieOptions.algorithmId = algorithmId;
+    tieOptions.lightGlueTensorRtEnginePath =
+        QDir::cleanPath(options.lightGlueTensorRtEnginePath.trimmed());
+    if (options.lightGlueTensorRtEnginePath.trimmed().isEmpty())
+    {
+        tieOptions.lightGlueTensorRtEnginePath.clear();
+    }
     tieOptions.maskApplyMode = normalizedToken(options.maskApplyMode, QStringLiteral("none"));
     tieOptions.cudaDevice = std::max(0, options.cudaDevice);
     tieOptions.cudaParallelPairs = std::max(0, options.cudaParallelPairs);
@@ -335,6 +341,8 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     settings.insert(QStringLiteral("quality"), normalizedToken(options.quality, QStringLiteral("high")));
     // 特征提取和匹配现在属于同一个可版本化算法实现，配置中只记录稳定算法 ID。
     settings.insert(QStringLiteral("matching_algorithm_id"), algorithmId);
+    settings.insert(QStringLiteral("lightglue_tensorrt_engine"),
+                    tieOptions.lightGlueTensorRtEnginePath);
     settings.insert(QStringLiteral("pair_planning_mode"), pairPlanningMode);
     settings.insert(QStringLiteral("sequence_pair_window"), tieOptions.pairPolicy.sequenceWindow);
     settings.insert(QStringLiteral("sequence_loop_closure"), pipeline.sequenceLoopClosure);

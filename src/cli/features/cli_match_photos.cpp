@@ -307,6 +307,7 @@ int main(int argc, char *argv[])
     std::string qualityArg = "high";
     std::string deviceArg = "auto";
     std::string algorithmIdArg = "sift_lightglue";
+    std::string lightGlueEngineArg;
     std::string maskApplyModeArg = "none";
     std::string maskDirArg;
     std::string pairModeArg = "auto";
@@ -337,6 +338,8 @@ int main(int argc, char *argv[])
     app.add_option("--algorithm-id", algorithmIdArg,
                    "统一影像匹配算法 ID；当前仅支持 sift_lightglue")
         ->check(CLI::IsMember({"sift_lightglue"}));
+    app.add_option("--lightglue-engine", lightGlueEngineArg,
+                   "TensorRT LightGlue .engine；留空时按模型目录自动查找");
     app.add_option("--keypoint-limit", keypointLimit, "每张影像关键点限制");
     app.add_option("--keypoint-limit-per-mpx", keypointLimitPerMpx, "每百万像素关键点限制，0 表示不额外限制");
     app.add_option("--tiepoint-limit", tiepointLimit, "每张影像连接点限制");
@@ -445,6 +448,9 @@ int main(int argc, char *argv[])
     options.pairPolicy.maxPairs = std::max(0, maxPairs);
     options.algorithmId = xjw::cli::normalizedToken(
         algorithmIdArg, QStringLiteral("sift_lightglue"));
+    options.lightGlueTensorRtEnginePath = lightGlueEngineArg.empty()
+        ? QString()
+        : xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(lightGlueEngineArg));
     options.maskApplyMode = xjw::cli::normalizedToken(maskApplyModeArg, QStringLiteral("none"));
     options.maxImageDim = maxImageDim;
     options.maxKeypoints = std::max(0, keypointLimit);

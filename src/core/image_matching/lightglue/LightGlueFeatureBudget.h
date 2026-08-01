@@ -90,6 +90,28 @@ inline int resolveSiftLightGlueKeypointBudget(int configuredMaxKeypoints)
         LightGlueGpuMemoryInfo{});
 }
 
+/**
+ * @brief 把显存预算收敛到实际加载的固定 TensorRT 桶容量。
+ *
+ * LightGlue engine 的 `[1,K,*]` 维度在构建时已经固定。即使显存策略允许更多
+ * 关键点，也不能向较小的 engine 传入超过 K 的特征，否则 TensorRT 后端会在
+ * 第一个像对上失败。engineBucketKeypoints 未知时保留原预算，由加载后的 matcher
+ * 再执行同样的保护。
+ */
+inline int clampLightGlueKeypointBudgetToEngine(int requestedBudget,
+                                                int engineBucketKeypoints)
+{
+    if (engineBucketKeypoints <= 0)
+    {
+        return requestedBudget;
+    }
+    if (requestedBudget <= 0)
+    {
+        return engineBucketKeypoints;
+    }
+    return std::min(requestedBudget, engineBucketKeypoints);
+}
+
 /// 大桶适当降低置信度门限，避免高特征预算反而丢失弱纹理正确对应。
 inline float resolveSiftLightGlueMatchThreshold(
     float configuredThreshold,

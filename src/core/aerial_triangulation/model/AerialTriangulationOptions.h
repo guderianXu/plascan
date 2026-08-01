@@ -62,6 +62,7 @@ struct AerialTriangulationOptions
 
     // 算法、设备和缓存位置。
     QString matchingAlgorithmId = QStringLiteral("sift_lightglue"); ///< 统一算法注册标识。
+    QString lightGlueTensorRtEnginePath; ///< 可选本机 TensorRT engine；留空时自动查找。
     QString device = QStringLiteral("auto"); ///< auto/cpu/cuda。
     int threads = 8; ///< 整体 CPU 线程预算，不是每个并行候选的线程数。
     int cudaDevice = 0; ///< CUDA 设备序号；SIFT 与 LightGlue 必须使用同一设备。
