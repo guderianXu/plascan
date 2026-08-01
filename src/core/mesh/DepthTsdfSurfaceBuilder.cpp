@@ -1371,6 +1371,9 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
         const bool requires_current_orbital_evidence =
             artifact.algorithmRevision >= 11 &&
             artifact.sceneProfile == QStringLiteral("orbital_object");
+        const bool requires_adaptive_orbital_evidence =
+            requires_current_orbital_evidence &&
+            artifact.algorithmRevision >= 13;
         if (requires_current_orbital_evidence &&
             (artifact.geometrySupportPath.isEmpty() ||
              artifact.geometrySourceMaskPath.isEmpty() ||
@@ -1384,6 +1387,19 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
                     "current orbital depth evidence is incomplete; "
                     "regenerate depth maps so geometry support, source mask, "
                     "inverse-depth statistics, and repair provenance are all present"));
+            return result;
+        }
+        if (requires_adaptive_orbital_evidence &&
+            (artifact.adaptiveGeometrySupportWeightPath.isEmpty() ||
+             artifact.adaptiveGeometryEffectiveViewCountPath.isEmpty() ||
+             artifact.adaptiveGeometryConflictWeightPath.isEmpty()))
+        {
+            result.errorMessage = frameArtifactError(
+                artifact,
+                QStringLiteral(
+                    "current orbital adaptive geometry evidence is incomplete; "
+                    "regenerate depth maps so support weight, effective view count, "
+                    "and conflict weight are all present"));
             return result;
         }
 
@@ -1485,6 +1501,108 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
                 artifact.inverseDepthSpreadPath,
                 &frame.inverseDepthRelativeSpread,
                 QStringLiteral("inverse depth spread")))
+        {
+            return result;
+        }
+
+        auto load_optional_adaptive_evidence = [&](const QString &path,
+                                                    cv::Mat *destination,
+                                                    const QString &label)
+        {
+            destination->release();
+            if (path.isEmpty())
+            {
+                return true;
+            }
+            reason.clear();
+            if (!loadFloatMatrix(path, destination, &reason) ||
+                destination->size() != frame.depth.size())
+            {
+                if (reason.isEmpty())
+                {
+                    reason = QStringLiteral("dimensions do not match depth");
+                }
+                result.errorMessage = frameArtifactError(
+                    artifact, QStringLiteral("%1: %2").arg(label, reason));
+                return false;
+            }
+            return true;
+        };
+        if (!load_optional_adaptive_evidence(
+                artifact.adaptiveGeometrySupportWeightPath,
+                &frame.adaptiveGeometrySupportWeight,
+                QStringLiteral("adaptive geometry support weight")) ||
+            !load_optional_adaptive_evidence(
+                artifact.adaptiveGeometryEffectiveViewCountPath,
+                &frame.adaptiveGeometryEffectiveViewCount,
+                QStringLiteral("adaptive geometry effective view count")) ||
+            !load_optional_adaptive_evidence(
+                artifact.adaptiveGeometryConflictWeightPath,
+                &frame.adaptiveGeometryConflictWeight,
+                QStringLiteral("adaptive geometry conflict weight")))
+        {
+            return result;
+        }
+
+        auto validate_adaptive_evidence = [&](const cv::Mat &matrix,
+                                              const QString &label,
+                                              bool bounded_probability,
+                                              bool effective_view_count)
+        {
+            if (matrix.empty())
+            {
+                return true;
+            }
+            for (int row = 0; row < matrix.rows; ++row)
+            {
+                const float *values = matrix.ptr<float>(row);
+                for (int column = 0; column < matrix.cols; ++column)
+                {
+                    const float value = values[column];
+                    if (!std::isfinite(value) || value < 0.0f ||
+                        (bounded_probability && value > 1.0f))
+                    {
+                        result.errorMessage = frameArtifactError(
+                            artifact,
+                            QStringLiteral(
+                                "%1 contains an invalid value at row=%2 column=%3: value=%4")
+                                .arg(label)
+                                .arg(row)
+                                .arg(column)
+                                .arg(value));
+                        return false;
+                    }
+                    if (effective_view_count && value > 0.0f && value < 1.0f)
+                    {
+                        result.errorMessage = frameArtifactError(
+                            artifact,
+                            QStringLiteral(
+                                "adaptive geometry effective view count must be zero or "
+                                "at least one at row=%1 column=%2; value=%3")
+                                .arg(row)
+                                .arg(column)
+                                .arg(value));
+                        return false;
+                    }
+                }
+            }
+            return true;
+        };
+        if (!validate_adaptive_evidence(
+                frame.adaptiveGeometrySupportWeight,
+                QStringLiteral("adaptive geometry support weight"),
+                true,
+                false) ||
+            !validate_adaptive_evidence(
+                frame.adaptiveGeometryEffectiveViewCount,
+                QStringLiteral("adaptive geometry effective view count"),
+                false,
+                true) ||
+            !validate_adaptive_evidence(
+                frame.adaptiveGeometryConflictWeight,
+                QStringLiteral("adaptive geometry conflict weight"),
+                false,
+                false))
         {
             return result;
         }
@@ -1664,6 +1782,15 @@ DepthTsdfObservationSample DepthTsdfSurfaceBuilder::sampleObservation(
         return result;
     }
 
+    auto optional_float_evidence = [&](const cv::Mat &matrix,
+                                       int row,
+                                       int column)
+    {
+        return matrix.type() == CV_32FC1 && matrix.size() == frame.depth.size()
+            ? matrix.at<float>(row, column)
+            : 0.0f;
+    };
+
     auto consensus_depth = [&](int row,
                                int column,
                                float raw_depth,
@@ -1751,6 +1878,12 @@ DepthTsdfObservationSample DepthTsdfSurfaceBuilder::sampleObservation(
         sample->geometrySourceMask = frame.geometrySourceMask.type() == CV_16UC1 &&
                 frame.geometrySourceMask.size() == frame.depth.size()
             ? frame.geometrySourceMask.at<std::uint16_t>(row, column) : 0;
+        sample->adaptiveGeometrySupportWeight = optional_float_evidence(
+            frame.adaptiveGeometrySupportWeight, row, column);
+        sample->adaptiveGeometryEffectiveViewCount = optional_float_evidence(
+            frame.adaptiveGeometryEffectiveViewCount, row, column);
+        sample->adaptiveGeometryConflictWeight = optional_float_evidence(
+            frame.adaptiveGeometryConflictWeight, row, column);
         sample->inverseDepthRelativeSpread =
             frame.inverseDepthRelativeSpread.type() == CV_32FC1 &&
                 frame.inverseDepthRelativeSpread.size() == frame.depth.size()
@@ -1795,6 +1928,9 @@ DepthTsdfObservationSample DepthTsdfSurfaceBuilder::sampleObservation(
         float spatialWeight = 0.0f;
         std::uint16_t geometrySupportCount = 0;
         std::uint16_t geometrySourceMask = 0;
+        float adaptiveGeometrySupportWeight = 0.0f;
+        float adaptiveGeometryEffectiveViewCount = 0.0f;
+        float adaptiveGeometryConflictWeight = 0.0f;
         float inverseDepthRelativeSpread = 0.0f;
         bool nearest = false;
         bool usedCrossViewConsensusDepth = false;
@@ -1872,6 +2008,12 @@ DepthTsdfObservationSample DepthTsdfSurfaceBuilder::sampleObservation(
                 frame.geometrySourceMask.type() == CV_16UC1 &&
                     frame.geometrySourceMask.size() == frame.depth.size()
                 ? frame.geometrySourceMask.at<std::uint16_t>(row, column) : 0;
+            candidate.adaptiveGeometrySupportWeight = optional_float_evidence(
+                frame.adaptiveGeometrySupportWeight, row, column);
+            candidate.adaptiveGeometryEffectiveViewCount = optional_float_evidence(
+                frame.adaptiveGeometryEffectiveViewCount, row, column);
+            candidate.adaptiveGeometryConflictWeight = optional_float_evidence(
+                frame.adaptiveGeometryConflictWeight, row, column);
             candidate.inverseDepthRelativeSpread = inverse_depth_relative_spread;
             candidate.depth = consensus_depth(row,
                                               column,
@@ -1960,6 +2102,12 @@ DepthTsdfObservationSample DepthTsdfSurfaceBuilder::sampleObservation(
             ? candidate.geometrySourceMask
             : static_cast<std::uint16_t>(result.geometrySourceMask &
                                          candidate.geometrySourceMask);
+        result.adaptiveGeometrySupportWeight +=
+            candidate.adaptiveGeometrySupportWeight * candidate.spatialWeight;
+        result.adaptiveGeometryEffectiveViewCount +=
+            candidate.adaptiveGeometryEffectiveViewCount * candidate.spatialWeight;
+        result.adaptiveGeometryConflictWeight +=
+            candidate.adaptiveGeometryConflictWeight * candidate.spatialWeight;
         result.inverseDepthRelativeSpread = std::max(
             result.inverseDepthRelativeSpread,
             candidate.inverseDepthRelativeSpread);
@@ -1979,6 +2127,9 @@ DepthTsdfObservationSample DepthTsdfSurfaceBuilder::sampleObservation(
 
     result.depth /= depth_weight_sum;
     result.confidence /= spatial_weight_sum;
+    result.adaptiveGeometrySupportWeight /= spatial_weight_sum;
+    result.adaptiveGeometryEffectiveViewCount /= spatial_weight_sum;
+    result.adaptiveGeometryConflictWeight /= spatial_weight_sum;
     result.valid = true;
     result.failure = DepthTsdfObservationFailure::None;
     result.recoveredFromInvalidNearestPixel = !has_nearest_candidate;

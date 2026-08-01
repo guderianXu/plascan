@@ -2299,6 +2299,9 @@ TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxis
     EXPECT_EQ(cv::countNonZero(loaded.frames.at(2).inverseDepthMean), 0);
     EXPECT_EQ(cv::countNonZero(loaded.frames.at(2).inverseDepthRelativeSpread), 0);
     EXPECT_EQ(cv::countNonZero(loaded.frames.at(2).crossViewRepairedMask), 0);
+    EXPECT_TRUE(loaded.frames.front().adaptiveGeometrySupportWeight.empty());
+    EXPECT_TRUE(loaded.frames.front().adaptiveGeometryEffectiveViewCount.empty());
+    EXPECT_TRUE(loaded.frames.front().adaptiveGeometryConflictWeight.empty());
     EXPECT_EQ(loaded.frames.front().depthValidMask.type(), CV_8UC1);
     EXPECT_EQ(loaded.frames.front().supportMask.type(), CV_8UC1);
     EXPECT_TRUE(loaded.frames.front().camera.isValid());
@@ -2308,6 +2311,159 @@ TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxis
     ASSERT_TRUE(bounds.ok) << bounds.errorMessage.toStdString();
     EXPECT_LT(bounds.minimum[2], 2.0f);
     EXPECT_GT(bounds.maximum[2], 2.0f);
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
+     LoadsAndSamplesCurrentOrbitalAdaptiveGeometryEvidence)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+
+    const QString depth_path = directory.filePath(QStringLiteral("depth.bin"));
+    const QString geometry_support_path =
+        directory.filePath(QStringLiteral("geometry_support.bin"));
+    const QString geometry_source_mask_path =
+        directory.filePath(QStringLiteral("geometry_source_mask.bin"));
+    const QString inverse_depth_mean_path =
+        directory.filePath(QStringLiteral("inverse_depth_mean.bin"));
+    const QString inverse_depth_spread_path =
+        directory.filePath(QStringLiteral("inverse_depth_spread.bin"));
+    const QString repaired_mask_path =
+        directory.filePath(QStringLiteral("repaired_mask.png"));
+    const QString adaptive_support_path =
+        directory.filePath(QStringLiteral("adaptive_support.bin"));
+    const QString adaptive_effective_views_path =
+        directory.filePath(QStringLiteral("adaptive_effective_views.bin"));
+    const QString adaptive_conflict_path =
+        directory.filePath(QStringLiteral("adaptive_conflict.bin"));
+
+    const cv::Mat depth =
+        (cv::Mat_<float>(2, 2) << 2.0f, 2.0f, 2.0f, 0.0f);
+    const cv::Mat geometry_support(2, 2, CV_16UC1, cv::Scalar(4));
+    const cv::Mat geometry_source_mask(2, 2, CV_16UC1, cv::Scalar(0x0007));
+    const cv::Mat inverse_depth_mean(2, 2, CV_32FC1, cv::Scalar(0.5f));
+    const cv::Mat inverse_depth_spread(2, 2, CV_32FC1, cv::Scalar(0.01f));
+    const cv::Mat repaired_mask(2, 2, CV_8UC1, cv::Scalar(0));
+    const cv::Mat adaptive_support =
+        (cv::Mat_<float>(2, 2) << 0.2f, 0.4f, 0.6f, 0.8f);
+    const cv::Mat adaptive_effective_views =
+        (cv::Mat_<float>(2, 2) << 1.0f, 1.5f, 2.0f, 3.0f);
+    const cv::Mat adaptive_conflict =
+        (cv::Mat_<float>(2, 2) << 0.0f, 0.1f, 0.2f, 0.3f);
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(depth_path, depth).ok);
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        geometry_support_path, geometry_support).ok);
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        geometry_source_mask_path, geometry_source_mask).ok);
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        inverse_depth_mean_path, inverse_depth_mean).ok);
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        inverse_depth_spread_path, inverse_depth_spread).ok);
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        adaptive_support_path, adaptive_support).ok);
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        adaptive_effective_views_path, adaptive_effective_views).ok);
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        adaptive_conflict_path, adaptive_conflict).ok);
+    ASSERT_TRUE(cv::imwrite(repaired_mask_path.toStdString(), repaired_mask));
+
+    QVector<xjw::mesh::DepthFrameArtifact> artifacts;
+    for (int index = 0; index < 3; ++index)
+    {
+        xjw::mesh::DepthFrameArtifact artifact;
+        artifact.refIndex = index;
+        artifact.status = QStringLiteral("completed");
+        artifact.acceptance = QStringLiteral("accepted");
+        artifact.fusionEligible = true;
+        artifact.sceneProfile = QStringLiteral("orbital_object");
+        artifact.algorithmRevision = 13;
+        artifact.depthPath = depth_path;
+        artifact.geometrySupportPath = geometry_support_path;
+        artifact.geometrySourceMaskPath = geometry_source_mask_path;
+        artifact.inverseDepthMeanPath = inverse_depth_mean_path;
+        artifact.inverseDepthSpreadPath = inverse_depth_spread_path;
+        artifact.crossViewRepairedMaskPath = repaired_mask_path;
+        artifact.adaptiveGeometrySupportWeightPath = adaptive_support_path;
+        artifact.adaptiveGeometryEffectiveViewCountPath =
+            adaptive_effective_views_path;
+        artifact.adaptiveGeometryConflictWeightPath = adaptive_conflict_path;
+        artifact.cameraModel.setIntrinsics(20.0, 20.0, 1.0, 1.0);
+        artifact.cameraModel.setPose(
+            std::array<double, 9>{1.0, 0.0, 0.0,
+                                  0.0, 1.0, 0.0,
+                                  0.0, 0.0, 1.0},
+            std::array<double, 3>{0.1 * index, 0.0, 0.0});
+        artifact.hasCameraModel = true;
+        artifacts.push_back(std::move(artifact));
+    }
+
+    const auto loaded = xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(artifacts);
+    ASSERT_TRUE(loaded.ok) << loaded.errorMessage.toStdString();
+    ASSERT_EQ(loaded.frames.size(), 3);
+    EXPECT_EQ(loaded.frames.front().adaptiveGeometrySupportWeight.type(), CV_32FC1);
+    EXPECT_EQ(
+        loaded.frames.front().adaptiveGeometryEffectiveViewCount.type(), CV_32FC1);
+    EXPECT_EQ(loaded.frames.front().adaptiveGeometryConflictWeight.type(), CV_32FC1);
+    EXPECT_FLOAT_EQ(
+        loaded.frames.front().adaptiveGeometrySupportWeight.at<float>(0, 1), 0.4f);
+    EXPECT_FLOAT_EQ(
+        loaded.frames.front().adaptiveGeometryEffectiveViewCount.at<float>(0, 1),
+        1.5f);
+    EXPECT_FLOAT_EQ(
+        loaded.frames.front().adaptiveGeometryConflictWeight.at<float>(0, 1), 0.1f);
+    EXPECT_EQ(loaded.frames.front().depthValidMask.at<std::uint8_t>(1, 1), 0);
+    EXPECT_FLOAT_EQ(
+        loaded.frames.front().adaptiveGeometrySupportWeight.at<float>(1, 1), 0.8f);
+    EXPECT_FLOAT_EQ(
+        loaded.frames.front().adaptiveGeometryEffectiveViewCount.at<float>(1, 1),
+        3.0f);
+    EXPECT_FLOAT_EQ(
+        loaded.frames.front().adaptiveGeometryConflictWeight.at<float>(1, 1), 0.3f);
+
+    const auto sample = xjw::mesh::DepthTsdfSurfaceBuilder::sampleObservation(
+        loaded.frames.front(),
+        loaded.frames.front().depthValidMask,
+        cv::Point2d(1.0, 0.0),
+        0.25f,
+        false,
+        0.02f);
+    ASSERT_TRUE(sample.valid);
+    EXPECT_FLOAT_EQ(sample.adaptiveGeometrySupportWeight, 0.4f);
+    EXPECT_FLOAT_EQ(sample.adaptiveGeometryEffectiveViewCount, 1.5f);
+    EXPECT_FLOAT_EQ(sample.adaptiveGeometryConflictWeight, 0.1f);
+
+    auto legacy_artifacts = artifacts;
+    for (auto &artifact : legacy_artifacts)
+    {
+        artifact.algorithmRevision = 12;
+        artifact.adaptiveGeometrySupportWeightPath.clear();
+        artifact.adaptiveGeometryEffectiveViewCountPath.clear();
+        artifact.adaptiveGeometryConflictWeightPath.clear();
+    }
+    const auto legacy =
+        xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(legacy_artifacts);
+    ASSERT_TRUE(legacy.ok) << legacy.errorMessage.toStdString();
+    ASSERT_EQ(legacy.frames.size(), 3);
+    EXPECT_TRUE(legacy.frames.front().adaptiveGeometrySupportWeight.empty());
+    EXPECT_TRUE(legacy.frames.front().adaptiveGeometryEffectiveViewCount.empty());
+    EXPECT_TRUE(legacy.frames.front().adaptiveGeometryConflictWeight.empty());
+
+    auto incomplete_artifacts = artifacts;
+    incomplete_artifacts.front().adaptiveGeometrySupportWeightPath.clear();
+    const auto incomplete =
+        xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(incomplete_artifacts);
+    EXPECT_FALSE(incomplete.ok);
+    EXPECT_TRUE(incomplete.errorMessage.contains(
+        QStringLiteral("adaptive geometry evidence is incomplete")));
+
+    cv::Mat invalid_effective_views = adaptive_effective_views.clone();
+    invalid_effective_views.at<float>(0, 0) = 0.5f;
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        adaptive_effective_views_path, invalid_effective_views).ok);
+    const auto invalid = xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(artifacts);
+    EXPECT_FALSE(invalid.ok);
+    EXPECT_TRUE(invalid.errorMessage.contains(
+        QStringLiteral("effective view count must be zero or at least one")));
 }
 
 TEST(DepthTsdfSurfaceBuilderTest, PixelEvidenceWeightingSeparatesEvidenceClasses)

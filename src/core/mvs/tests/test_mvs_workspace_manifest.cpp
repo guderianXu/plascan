@@ -623,6 +623,39 @@ TEST(MvsWorkspaceManifest, CompletedFrameIsNotReusableWhenArtifactsAreMissing)
     EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
 }
 
+TEST(MvsWorkspaceManifest, OrbitalFrameRequiresAdaptiveGeometryEvidenceAfterRevisionThirteen)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    MvsWorkspaceManifest manifest;
+    manifest.setConfigHash(QStringLiteral("cfg-a"));
+    MvsDepthFrameRecord record = makeRecord(
+        4,
+        QStringLiteral("image_004.jpg"),
+        QStringLiteral("completed"));
+    record.algorithmRevision = xjw::mvs::kMvsAdaptiveGeometryEvidenceRevision;
+    record.sceneProfile = QStringLiteral("orbital_object");
+    record.depthPng = QDir(tempDir.path()).filePath(QStringLiteral("depth_004.png"));
+    record.rawDepthPath = QDir(tempDir.path()).filePath(QStringLiteral("depth_004.bin"));
+    record.rawAdaptiveGeometrySupportWeightPath = QDir(tempDir.path()).filePath(
+        QStringLiteral("depth_004_adaptive_geometry_support_weight.bin"));
+    record.rawAdaptiveGeometryEffectiveViewCountPath = QDir(tempDir.path()).filePath(
+        QStringLiteral("depth_004_adaptive_geometry_effective_view_count.bin"));
+    record.rawAdaptiveGeometryConflictWeightPath = QDir(tempDir.path()).filePath(
+        QStringLiteral("depth_004_adaptive_geometry_conflict_weight.bin"));
+    touchFile(record.depthPng);
+    touchFile(record.rawDepthPath);
+    manifest.markCompleted(record);
+
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+
+    touchFile(record.rawAdaptiveGeometrySupportWeightPath);
+    touchFile(record.rawAdaptiveGeometryEffectiveViewCountPath);
+    touchFile(record.rawAdaptiveGeometryConflictWeightPath);
+    EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+}
+
 TEST(MvsWorkspaceManifest, DepthConfigHashChangesWhenRelevantSettingsChange)
 {
     xjw::mvs::DepthGenConfig config;

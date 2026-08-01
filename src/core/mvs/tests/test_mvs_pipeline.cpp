@@ -805,6 +805,12 @@ TEST(MvsPipelineTest, DepthFrameResultReleasesFusionQualityArtifacts)
     result.depthMap = QSharedPointer<cv::Mat>::create(4, 5, CV_32F, cv::Scalar(8.0f));
     result.normalMap = QSharedPointer<cv::Mat>::create(4, 5, CV_32FC3, cv::Scalar(0.0f, 0.0f, 1.0f));
     result.supportCount = QSharedPointer<cv::Mat>::create(4, 5, CV_16U, cv::Scalar(3));
+    result.adaptiveGeometrySupportWeight =
+        QSharedPointer<cv::Mat>::create(4, 5, CV_32F, cv::Scalar(0.8f));
+    result.adaptiveGeometryEffectiveViewCount =
+        QSharedPointer<cv::Mat>::create(4, 5, CV_32F, cv::Scalar(2.0f));
+    result.adaptiveGeometryConflictWeight =
+        QSharedPointer<cv::Mat>::create(4, 5, CV_32F, cv::Scalar(0.1f));
     result.validMask = QSharedPointer<cv::Mat>::create(4, 5, CV_8U, cv::Scalar(255));
 
     result.releasePixelStorage();
@@ -812,6 +818,9 @@ TEST(MvsPipelineTest, DepthFrameResultReleasesFusionQualityArtifacts)
     EXPECT_TRUE(result.depthMap.isNull());
     EXPECT_TRUE(result.normalMap.isNull());
     EXPECT_TRUE(result.supportCount.isNull());
+    EXPECT_TRUE(result.adaptiveGeometrySupportWeight.isNull());
+    EXPECT_TRUE(result.adaptiveGeometryEffectiveViewCount.isNull());
+    EXPECT_TRUE(result.adaptiveGeometryConflictWeight.isNull());
     EXPECT_TRUE(result.validMask.isNull());
 }
 

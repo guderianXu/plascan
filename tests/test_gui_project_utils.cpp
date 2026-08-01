@@ -11564,31 +11564,70 @@ TEST(ProjectResourceCleanupServiceTest, DeletesAllDepthLevelsWithoutDeletingSour
     const QString level2Uncertainty = tempDir.filePath(QStringLiteral("depth_0_level_2_uncertainty.bin"));
     const QString level2Mask = tempDir.filePath(QStringLiteral("depth_0_level_2_mask.png"));
     const QString level2Preview = tempDir.filePath(QStringLiteral("depth_0_level_2.png"));
-    for (const QString &path : {sourcePhoto,
-                                finalDepth,
-                                finalMask,
-                                level2Depth,
-                                level2Support,
-                                level2Uncertainty,
-                                level2Mask,
-                                level2Preview})
+    const QStringList geometryEvidenceKeys{
+        QStringLiteral("raw_geometry_support_path"),
+        QStringLiteral("raw_geometry_source_mask_path"),
+        QStringLiteral("raw_inverse_depth_mean_path"),
+        QStringLiteral("raw_inverse_depth_spread_path"),
+        QStringLiteral("raw_adaptive_geometry_support_weight_path"),
+        QStringLiteral("raw_adaptive_geometry_effective_view_count_path"),
+        QStringLiteral("raw_adaptive_geometry_conflict_weight_path")};
+    QJsonObject finalGeometryEvidence;
+    QJsonObject level2GeometryEvidence;
+    QStringList generatedArtifacts{
+        finalDepth,
+        finalMask,
+        level2Depth,
+        level2Support,
+        level2Uncertainty,
+        level2Mask,
+        level2Preview};
+    for (const QString &key : geometryEvidenceKeys)
+    {
+        const QString finalPath = tempDir.filePath(
+            QStringLiteral("final_%1.bin").arg(key));
+        const QString level2Path = tempDir.filePath(
+            QStringLiteral("level_2_%1.bin").arg(key));
+        finalGeometryEvidence.insert(key, finalPath);
+        level2GeometryEvidence.insert(key, level2Path);
+        generatedArtifacts.append(finalPath);
+        generatedArtifacts.append(level2Path);
+    }
+
+    QStringList filesToCreate = generatedArtifacts;
+    filesToCreate.prepend(sourcePhoto);
+    for (const QString &path : filesToCreate)
     {
         QFile file(path);
         ASSERT_TRUE(file.open(QIODevice::WriteOnly));
         ASSERT_GT(file.write("artifact"), 0);
     }
 
-    const QJsonObject record{
+    QJsonObject level2Record{
+        {QStringLiteral("level"), 2},
+        {QStringLiteral("raw_depth_path"), level2Depth},
+        {QStringLiteral("raw_support_count_path"), level2Support},
+        {QStringLiteral("raw_uncertainty_path"), level2Uncertainty},
+        {QStringLiteral("valid_mask_path"), level2Mask},
+        {QStringLiteral("preview_path"), level2Preview}};
+    for (auto it = level2GeometryEvidence.constBegin();
+         it != level2GeometryEvidence.constEnd();
+         ++it)
+    {
+        level2Record.insert(it.key(), it.value());
+    }
+
+    QJsonObject record{
         {QStringLiteral("ref_image"), sourcePhoto},
         {QStringLiteral("raw_depth_path"), finalDepth},
         {QStringLiteral("valid_mask_path"), finalMask},
-        {QStringLiteral("pyramid_levels"),
-         QJsonArray{QJsonObject{{QStringLiteral("level"), 2},
-                                {QStringLiteral("raw_depth_path"), level2Depth},
-                                {QStringLiteral("raw_support_count_path"), level2Support},
-                                {QStringLiteral("raw_uncertainty_path"), level2Uncertainty},
-                                {QStringLiteral("valid_mask_path"), level2Mask},
-                                {QStringLiteral("preview_path"), level2Preview}}}}};
+        {QStringLiteral("pyramid_levels"), QJsonArray{level2Record}}};
+    for (auto it = finalGeometryEvidence.constBegin();
+         it != finalGeometryEvidence.constEnd();
+         ++it)
+    {
+        record.insert(it.key(), it.value());
+    }
     QJsonObject metadata = projectData.metadata();
     metadata[QStringLiteral("depth_map_results")] = QJsonArray{record};
     projectData.updateMetadata(metadata, false);
@@ -11602,13 +11641,10 @@ TEST(ProjectResourceCleanupServiceTest, DeletesAllDepthLevelsWithoutDeletingSour
     EXPECT_EQ(result.removedCount, 1);
     EXPECT_TRUE(projectData.metadata().value(QStringLiteral("depth_map_results")).toArray().isEmpty());
     EXPECT_TRUE(QFileInfo::exists(sourcePhoto));
-    EXPECT_FALSE(QFileInfo::exists(finalDepth));
-    EXPECT_FALSE(QFileInfo::exists(finalMask));
-    EXPECT_FALSE(QFileInfo::exists(level2Depth));
-    EXPECT_FALSE(QFileInfo::exists(level2Support));
-    EXPECT_FALSE(QFileInfo::exists(level2Uncertainty));
-    EXPECT_FALSE(QFileInfo::exists(level2Mask));
-    EXPECT_FALSE(QFileInfo::exists(level2Preview));
+    for (const QString &path : generatedArtifacts)
+    {
+        EXPECT_FALSE(QFileInfo::exists(path)) << path.toStdString();
+    }
 }
 
 TEST(TiePointResultIntegrationTest, ProjectManagerRoutesTiePointDeletionToDedicatedService)

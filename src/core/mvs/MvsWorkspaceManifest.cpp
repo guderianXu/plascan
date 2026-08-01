@@ -501,8 +501,27 @@ bool MvsWorkspaceManifest::hasReusableCompletedFrame(int refIndex, const QString
     {
         return false;
     }
-    return QFileInfo::exists(record.depthPng) &&
-           (record.rawDepthPath.isEmpty() || QFileInfo::exists(record.rawDepthPath));
+    if (!QFileInfo::exists(record.depthPng) ||
+        (!record.rawDepthPath.isEmpty() && !QFileInfo::exists(record.rawDepthPath)))
+    {
+        return false;
+    }
+
+    const bool requires_adaptive_geometry_evidence =
+        record.algorithmRevision >= kMvsAdaptiveGeometryEvidenceRevision &&
+        record.sceneProfile == QStringLiteral("orbital_object");
+    if (!requires_adaptive_geometry_evidence)
+    {
+        return true;
+    }
+
+    const auto artifact_exists = [](const QString &path)
+    {
+        return !path.isEmpty() && QFileInfo::exists(path);
+    };
+    return artifact_exists(record.rawAdaptiveGeometrySupportWeightPath) &&
+           artifact_exists(record.rawAdaptiveGeometryEffectiveViewCountPath) &&
+           artifact_exists(record.rawAdaptiveGeometryConflictWeightPath);
 }
 
 QJsonObject MvsWorkspaceManifest::toJson() const

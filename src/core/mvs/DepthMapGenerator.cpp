@@ -528,17 +528,51 @@ DepthConfidenceSummary summarizeDepthConfidence(const cv::Mat &depthMap,
     return summary;
 }
 
-uint64_t estimateDepthFrameCacheBytes(const std::vector<CameraView> &views)
+uint64_t adaptiveGeometryEvidenceBytesPerPixel(
+    const DepthGenConfig &config,
+    MvsSceneProfile scene_profile)
+{
+    return config.enableAdaptiveGeometryEvidence &&
+            scene_profile == MvsSceneProfile::OrbitalObject
+        ? sizeof(float) * 3ull
+        : 0ull;
+}
+
+uint64_t estimateDepthFrameCacheBytes(
+    const std::vector<CameraView> &views,
+    const DepthGenConfig &config,
+    MvsSceneProfile scene_profile)
 {
     uint64_t total = 0;
+    uint64_t largest_pixels = 0;
+    const uint64_t adaptive_output_bytes_per_pixel =
+        adaptiveGeometryEvidenceBytesPerPixel(config, scene_profile);
+    const uint64_t consistency_snapshot_bytes_per_pixel = sizeof(float) +
+        (adaptive_output_bytes_per_pixel > 0 ? sizeof(float) : 0ull);
     for (const CameraView &view : views)
     {
-        const uint64_t frameBytes = depthFramePixelStorageBytes(view.imageWidth, view.imageHeight);
+        const uint64_t pixels = static_cast<uint64_t>(
+            std::max(0, view.imageWidth)) * static_cast<uint64_t>(
+            std::max(0, view.imageHeight));
+        largest_pixels = std::max(largest_pixels, pixels);
+        const uint64_t frameBytes =
+            depthFramePixelStorageBytes(view.imageWidth, view.imageHeight) +
+            pixels * (adaptive_output_bytes_per_pixel +
+                      consistency_snapshot_bytes_per_pixel);
         if (std::numeric_limits<uint64_t>::max() - total < frameBytes)
         {
             return std::numeric_limits<uint64_t>::max();
         }
         total += frameBytes;
+    }
+    if (adaptive_output_bytes_per_pixel > 0)
+    {
+        const uint64_t accumulator_bytes = largest_pixels * sizeof(float) * 4ull;
+        if (std::numeric_limits<uint64_t>::max() - total < accumulator_bytes)
+        {
+            return std::numeric_limits<uint64_t>::max();
+        }
+        total += accumulator_bytes;
     }
     return total;
 }
@@ -571,6 +605,7 @@ uint64_t retainedDepthMemoryBudgetBytes(const SystemMemorySnapshot &snapshot, co
 
 bool shouldRetainAllDepthFramesInMemory(const std::vector<CameraView> &views,
                                         const DepthGenConfig &config,
+                                        MvsSceneProfile sceneProfile,
                                         const SystemMemorySnapshot &snapshot,
                                         QString *reason)
 {
@@ -583,7 +618,8 @@ bool shouldRetainAllDepthFramesInMemory(const std::vector<CameraView> &views,
         return true;
     }
 
-    const uint64_t requiredBytes = estimateDepthFrameCacheBytes(views);
+    const uint64_t requiredBytes = estimateDepthFrameCacheBytes(
+        views, config, sceneProfile);
     if (requiredBytes == 0)
     {
         if (reason)
@@ -1232,10 +1268,31 @@ bool estimatePatchMatchWithAdaptiveCuda(
     return cpuOk;
 }
 
+float sourceGeometryReliabilityWeight(const DepthFrameResult &reference_frame,
+                                      int source_view_index)
+{
+    const auto entry = std::find_if(
+        reference_frame.sourceViewPlan.cbegin(),
+        reference_frame.sourceViewPlan.cend(),
+        [source_view_index](const MvsSourcePlanEntry &candidate)
+        {
+            return candidate.viewIndex == source_view_index;
+        });
+    if (entry == reference_frame.sourceViewPlan.cend() ||
+        !std::isfinite(entry->sourceQualityScore) ||
+        entry->sourceQualityScore <= 0.0f)
+    {
+        return 1.0f;
+    }
+    return std::clamp(entry->sourceQualityScore, 0.05f, 1.0f);
+}
+
 void accumulateDepthConsistency(const cv::Mat &referenceDepth,
                                 const Camera &referenceCamera,
                                 const cv::Mat &sourceDepth,
                                 const Camera &sourceCamera,
+                                const cv::Mat *sourceConfidence,
+                                float sourceReliabilityWeight,
                                 int sourceOrdinal,
                                 float relativeThreshold,
                                 int rowWorkers,
@@ -1309,6 +1366,23 @@ void accumulateDepthConsistency(const cv::Mat &referenceDepth,
                 observation.worldResidual = result.worldSurfaceResidual;
                 observation.worldPixelFootprint = result.jointWorldPixelFootprint;
                 observation.roundTripResidualPixels = result.roundTripErrorPixels;
+                observation.reliabilityWeight = std::clamp(
+                    sourceReliabilityWeight, 0.0f, 1.0f);
+                if (sourceConfidence && !sourceConfidence->empty() &&
+                    sourceConfidence->type() == CV_32FC1 &&
+                    sourceConfidence->size() == sourceDepth.size() &&
+                    result.sourcePixel.x >= 0 &&
+                    result.sourcePixel.x < sourceConfidence->cols &&
+                    result.sourcePixel.y >= 0 &&
+                    result.sourcePixel.y < sourceConfidence->rows)
+                {
+                    const float source_confidence = sourceConfidence->at<float>(
+                        result.sourcePixel.y, result.sourcePixel.x);
+                    observation.reliabilityWeight *=
+                        std::isfinite(source_confidence)
+                        ? std::clamp(source_confidence, 0.0f, 1.0f)
+                        : 0.0f;
+                }
                 switch (result.evidence)
                 {
                 case DepthConsistencyEvidence::Consistent:
@@ -4763,7 +4837,12 @@ void DepthMapGenerator::crossCheckDepthConsistency()
     }
 
     // ── 先保存所有帧的原始深度图拷贝，避免顺序处理的级联清除问题 ──────
+    const bool capture_adaptive_reliability =
+        _config.enableAdaptiveGeometryEvidence &&
+        _effectiveSceneProfile == MvsSceneProfile::OrbitalObject;
     std::vector<cv::Mat> origDepths(NV);
+    std::vector<cv::Mat> origConfidences(
+        capture_adaptive_reliability ? static_cast<std::size_t>(NV) : 0U);
     for (int i = 0; i < NV; ++i)
     {
         if (_cancelled.load())
@@ -4773,6 +4852,12 @@ void DepthMapGenerator::crossCheckDepthConsistency()
         if (_depthFrames[i].eligibleAsConsistencySource() && _depthFrames[i].depthMap)
         {
             origDepths[i] = _depthFrames[i].depthMap->clone();
+            if (capture_adaptive_reliability && _depthFrames[i].confidence &&
+                !_depthFrames[i].confidence->empty())
+            {
+                origConfidences[static_cast<std::size_t>(i)] =
+                    _depthFrames[i].confidence->clone();
+            }
         }
     }
 
@@ -4873,6 +4958,14 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                                            camI,
                                            depthJ,
                                            camJ,
+                                           generate_adaptive_evidence &&
+                                                   !origConfidences[
+                                                        static_cast<std::size_t>(j)].empty()
+                                               ? &origConfidences[
+                                                     static_cast<std::size_t>(j)]
+                                               : nullptr,
+                                           sourceGeometryReliabilityWeight(
+                                               _depthFrames[i], j),
                                            source_ordinal,
                                            relThresh,
                                            rowWorkers,
@@ -5327,6 +5420,9 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                     _depthFrames[source_index].cameraModel.isValid()
                         ? _depthFrames[source_index].cameraModel
                         : mvsPinholeCamera(_views[source_index].camera),
+                    source->confidence.empty() ? nullptr : &source->confidence,
+                    sourceGeometryReliabilityWeight(
+                        _depthFrames[frame_index], source_index),
                     source_ordinal,
                     relative_threshold,
                     row_workers,
@@ -6403,7 +6499,7 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         const QJsonObject depthCompletenessJson =
             depthCompletenessDiagnosticsToJson(depthCompleteness);
         const cv::Mat empty_geometry_evidence;
-        const QJsonObject geometryEvidenceDiagnostics =
+        QJsonObject geometryEvidenceDiagnostics =
             geometryEvidenceDiagnosticsToJson(
                 *result.depthMap,
                 result.geometrySupportCount &&
@@ -6422,6 +6518,56 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
                         !result.supportRegionMask->empty()
                     ? *result.supportRegionMask
                     : empty_geometry_evidence);
+        const bool adaptive_evidence_available =
+            result.adaptiveGeometrySupportWeight &&
+            !result.adaptiveGeometrySupportWeight->empty() &&
+            result.adaptiveGeometryEffectiveViewCount &&
+            !result.adaptiveGeometryEffectiveViewCount->empty() &&
+            result.adaptiveGeometryConflictWeight &&
+            !result.adaptiveGeometryConflictWeight->empty() &&
+            result.adaptiveGeometrySupportWeight->size() == result.depthMap->size() &&
+            result.adaptiveGeometryEffectiveViewCount->size() == result.depthMap->size() &&
+            result.adaptiveGeometryConflictWeight->size() == result.depthMap->size();
+        geometryEvidenceDiagnostics.insert(
+            QStringLiteral("adaptive_evidence_available"),
+            adaptive_evidence_available);
+        geometryEvidenceDiagnostics.insert(
+            QStringLiteral("adaptive_reliability_model"),
+            QStringLiteral("source_confidence_x_source_quality"));
+        geometryEvidenceDiagnostics.insert(
+            QStringLiteral("adaptive_hypothesis_domain"),
+            QStringLiteral("pre_consistency_depth"));
+        if (adaptive_evidence_available)
+        {
+            const cv::Mat candidate_mask =
+                *result.adaptiveGeometryEffectiveViewCount > 0.0f;
+            const cv::Mat retained_candidate_mask =
+                candidate_mask & (*result.depthMap > 0.0f);
+            const int candidate_count = cv::countNonZero(candidate_mask);
+            const int retained_candidate_count =
+                cv::countNonZero(retained_candidate_mask);
+            geometryEvidenceDiagnostics.insert(
+                QStringLiteral("adaptive_candidate_pixel_count"),
+                candidate_count);
+            geometryEvidenceDiagnostics.insert(
+                QStringLiteral("adaptive_candidate_removed_by_hard_gate"),
+                std::max(0, candidate_count - retained_candidate_count));
+            geometryEvidenceDiagnostics.insert(
+                QStringLiteral("adaptive_support_weight_mean"),
+                cv::mean(
+                    *result.adaptiveGeometrySupportWeight,
+                    candidate_mask)[0]);
+            geometryEvidenceDiagnostics.insert(
+                QStringLiteral("adaptive_effective_view_count_mean"),
+                cv::mean(
+                    *result.adaptiveGeometryEffectiveViewCount,
+                    candidate_mask)[0]);
+            geometryEvidenceDiagnostics.insert(
+                QStringLiteral("adaptive_conflict_weight_mean"),
+                cv::mean(
+                    *result.adaptiveGeometryConflictWeight,
+                    candidate_mask)[0]);
+        }
         const cv::Mat emptyConfidence;
         const DepthMapQualityMetrics depthQualityMetrics = result.qualityMetrics.width > 0
             ? result.qualityMetrics
@@ -6815,10 +6961,16 @@ void DepthMapGenerator::runInBackground()
     _depthFrames.resize(NV);
     const bool savePreviewPng = !_outputDir.empty();
     const SystemMemorySnapshot initialMemory = querySystemMemorySnapshot();
-    const uint64_t estimatedDepthCacheBytes = estimateDepthFrameCacheBytes(_views);
+    const uint64_t estimatedDepthCacheBytes = estimateDepthFrameCacheBytes(
+        _views, _config, _effectiveSceneProfile);
     const uint64_t largestFrameBytes = largestDepthFrameBytes(_views);
     QString memoryPolicyReason;
-    bool retainDepthFrames = shouldRetainAllDepthFramesInMemory(_views, _config, initialMemory, &memoryPolicyReason);
+    bool retainDepthFrames = shouldRetainAllDepthFramesInMemory(
+        _views,
+        _config,
+        _effectiveSceneProfile,
+        initialMemory,
+        &memoryPolicyReason);
 
     _streamConsistencyStorageEnabled = NV >= 2 && _config.adaptiveDepthCacheMemory;
     if (_streamConsistencyStorageEnabled)

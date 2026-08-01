@@ -29,6 +29,9 @@ struct DepthTsdfFrame
     cv::Mat confidence;
     cv::Mat geometrySupportCount;
     cv::Mat geometrySourceMask;
+    cv::Mat adaptiveGeometrySupportWeight;
+    cv::Mat adaptiveGeometryEffectiveViewCount;
+    cv::Mat adaptiveGeometryConflictWeight;
     cv::Mat inverseDepthMean;
     cv::Mat inverseDepthRelativeSpread;
     cv::Mat crossViewRepairedMask;
@@ -986,6 +989,9 @@ struct DepthTsdfObservationSample
     float confidence = 0.0f;
     std::uint16_t geometrySupportCount = 0;
     std::uint16_t geometrySourceMask = 0;
+    float adaptiveGeometrySupportWeight = 0.0f;
+    float adaptiveGeometryEffectiveViewCount = 0.0f;
+    float adaptiveGeometryConflictWeight = 0.0f;
     float inverseDepthRelativeSpread = 0.0f;
     int contributingPixelCount = 0;
     int discontinuityRejectedPixelCount = 0;
