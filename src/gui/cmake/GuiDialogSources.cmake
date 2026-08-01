@@ -39,6 +39,8 @@ set(GUI_RECONSTRUCTION_DIALOG_SOURCES
   dialogs/reconstruction/CreateDemDialog.cpp
   dialogs/reconstruction/CreateDemDialog.h
   dialogs/reconstruction/CreateDemDialog.ui
+  dialogs/reconstruction/CreatePointCloudDialog.cpp
+  dialogs/reconstruction/CreatePointCloudDialog.h
   dialogs/reconstruction/GenerateModelDialog.cpp
   dialogs/reconstruction/GenerateModelDialog.h
   dialogs/reconstruction/MapProjectDialog.cpp

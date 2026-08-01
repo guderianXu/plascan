@@ -826,6 +826,36 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
                                .toDouble(options.repairedObservationMultiplier)),
         0.05f,
         1.0f);
+    options.adaptiveGeometryMinimumObservationMultiplier = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfAdaptiveGeometryMinimumObservationMultiplier"))
+                               .toDouble(
+                                   options.adaptiveGeometryMinimumObservationMultiplier)),
+        0.05f,
+        1.0f);
+    options.adaptiveGeometryFullIntegrationMinimumSupportWeight = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfAdaptiveGeometryFullIntegrationMinimumSupportWeight"))
+                               .toDouble(
+                                   options
+                                       .adaptiveGeometryFullIntegrationMinimumSupportWeight)),
+        0.0f,
+        1.0f);
+    options.adaptiveGeometryFullIntegrationMinimumEffectiveViewCount = std::max(
+        1.0f,
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfAdaptiveGeometryFullIntegrationMinimumEffectiveViewCount"))
+                               .toDouble(
+                                   options
+                                       .adaptiveGeometryFullIntegrationMinimumEffectiveViewCount)));
+    options.adaptiveGeometryFullIntegrationMaximumConflictRatio = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfAdaptiveGeometryFullIntegrationMaximumConflictRatio"))
+                               .toDouble(
+                                   options
+                                       .adaptiveGeometryFullIntegrationMaximumConflictRatio)),
+        0.0f,
+        1.0f);
     options.enableInverseDepthSpreadWeighting = settings.value(
         QStringLiteral("tsdfInverseDepthSpreadWeighting")).toBool(false);
     options.inverseDepthSpreadWeightKnee = std::clamp(
@@ -2194,6 +2224,11 @@ void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
             "tsdfWeakEvidenceSurfaceOnlyIntegration")))
     {
         options->enableWeakEvidenceSurfaceOnlyIntegration = true;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfGeometrySingleViewNeighborhoodGuard")))
+    {
+        options->enableGeometrySingleViewNeighborhoodGuard = true;
     }
     if (!settings.contains(QStringLiteral("tsdfMinimumSupportMaskFreeSpaceViews")))
     {

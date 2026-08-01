@@ -1790,6 +1790,67 @@ TEST(ModelWorkflowPolicyTest, StoredDepthBatchCompatibilityRejectsOldReconstruct
     EXPECT_TRUE(compatibility.reason.contains(QStringLiteral("旧的重建代次")));
 }
 
+TEST(ModelWorkflowPolicyTest, StoredDepthBatchCompatibilityRejectsIncompleteBatch)
+{
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    QJsonObject metadata;
+    metadata[QStringLiteral("images")] = QJsonArray{
+        QJsonObject{{QStringLiteral("path"), QStringLiteral("E:/tmp/image_0.jpg")}},
+        QJsonObject{{QStringLiteral("path"), QStringLiteral("E:/tmp/image_1.jpg")}},
+        QJsonObject{{QStringLiteral("path"), QStringLiteral("E:/tmp/image_2.jpg")}}
+    };
+    metadata[QStringLiteral("aerial_triangulation_results")] = QJsonArray{
+        QJsonObject{
+            {QStringLiteral("run_id"), QStringLiteral("current-at")},
+            {QStringLiteral("reconstruction_generation_id"),
+             QStringLiteral("generation-current")},
+            {QStringLiteral("selected_images"),
+             QJsonArray{QStringLiteral("E:/tmp/image_0.jpg"),
+                        QStringLiteral("E:/tmp/image_1.jpg"),
+                        QStringLiteral("E:/tmp/image_2.jpg")}}}
+    };
+    const QString current_signature =
+        xjw::gui::project::projectDepthInputSignature(metadata);
+
+    QJsonArray depth_records;
+    for (int index = 0; index < 2; ++index)
+    {
+        const QString depth_png =
+            QDir(temp_dir.path()).filePath(QStringLiteral("depth_%1.png").arg(index));
+        const QString raw_depth =
+            QDir(temp_dir.path()).filePath(QStringLiteral("depth_%1.bin").arg(index));
+        for (const QString &path : {depth_png, raw_depth})
+        {
+            QFile artifact(path);
+            ASSERT_TRUE(artifact.open(QIODevice::WriteOnly));
+            artifact.write("x");
+        }
+        depth_records.append(QJsonObject{
+            {QStringLiteral("ref_image"), QStringLiteral("image_%1.jpg").arg(index)},
+            {QStringLiteral("depth_png"), depth_png},
+            {QStringLiteral("raw_depth_path"), raw_depth},
+            {QStringLiteral("config_hash"), QStringLiteral("config-a")},
+            {QStringLiteral("batch_frame_count"), 3},
+            {QStringLiteral("project_input_signature"), current_signature},
+            {QStringLiteral("reconstruction_generation_id"),
+             QStringLiteral("generation-current")},
+            {QStringLiteral("algorithm_revision"),
+             xjw::mvs::kMvsDepthAlgorithmRevision}
+        });
+    }
+    metadata[QStringLiteral("depth_map_results")] = depth_records;
+
+    const auto compatibility =
+        xjw::gui::project::assessStoredDepthBatchCompatibility(
+            metadata,
+            temp_dir.path());
+    EXPECT_FALSE(compatibility.compatible);
+    EXPECT_EQ(compatibility.frameCount, 2);
+    EXPECT_TRUE(compatibility.reason.contains(QStringLiteral("不完整")));
+}
+
 TEST(ModelWorkflowPolicyTest, StoredDepthBatchCompatibilityAcceptsCurrentLineage)
 {
     QTemporaryDir temp_dir;
@@ -11571,6 +11632,7 @@ TEST(ProjectResourceCleanupServiceTest, DeletesAllDepthLevelsWithoutDeletingSour
         QStringLiteral("raw_inverse_depth_spread_path"),
         QStringLiteral("raw_adaptive_geometry_support_weight_path"),
         QStringLiteral("raw_adaptive_geometry_effective_view_count_path"),
+        QStringLiteral("raw_adaptive_geometry_conflict_ratio_path"),
         QStringLiteral("raw_adaptive_geometry_conflict_weight_path")};
     QJsonObject finalGeometryEvidence;
     QJsonObject level2GeometryEvidence;

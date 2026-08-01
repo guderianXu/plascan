@@ -7,6 +7,26 @@
 namespace xjw::mvs
 {
 
+namespace
+{
+
+bool cancellationRequested(const StreamingDepthFusionConfig &config)
+{
+    return config.cancelFlag &&
+           config.cancelFlag->load(std::memory_order_relaxed);
+}
+
+bool reportCancellation(std::string *errorMessage)
+{
+    if (errorMessage)
+    {
+        *errorMessage = "MVS depth fusion cancelled";
+    }
+    return false;
+}
+
+} // namespace
+
 std::vector<int> streamingFusionWindowIndices(int referenceIndex,
                                               int frameCount,
                                               int neighborCount)
@@ -68,6 +88,10 @@ bool fuseDepthMapsStreaming(int frameCount,
         }
         return false;
     }
+    if (cancellationRequested(config))
+    {
+        return reportCancellation(errorMessage);
+    }
 
     result->points.clear();
     result->depthPostprocessStats.clear();
@@ -79,6 +103,10 @@ bool fuseDepthMapsStreaming(int frameCount,
         cachedFrames.reserve(static_cast<std::size_t>(frameCount));
         for (int frameIndex = 0; frameIndex < frameCount; ++frameIndex)
         {
+            if (cancellationRequested(config))
+            {
+                return reportCancellation(errorMessage);
+            }
             FusionFrameInput frame;
             if (!frameLoader(frameIndex, &frame, errorMessage))
             {
@@ -91,6 +119,10 @@ bool fuseDepthMapsStreaming(int frameCount,
 
     for (int referenceIndex = 0; referenceIndex < frameCount; ++referenceIndex)
     {
+        if (cancellationRequested(config))
+        {
+            return reportCancellation(errorMessage);
+        }
         const auto startedAt = std::chrono::steady_clock::now();
         const std::vector<int> indices = streamingFusionWindowIndices(
             referenceIndex, frameCount, neighborCount);
@@ -98,6 +130,10 @@ bool fuseDepthMapsStreaming(int frameCount,
         frames.reserve(indices.size());
         for (const int frameIndex : indices)
         {
+            if (cancellationRequested(config))
+            {
+                return reportCancellation(errorMessage);
+            }
             if (cacheFrames)
             {
                 frames.push_back(cachedFrames[static_cast<std::size_t>(frameIndex)]);
@@ -127,9 +163,10 @@ bool fuseDepthMapsStreaming(int frameCount,
         fusionConfig.maxDepthError = 0.05f;
         fusionConfig.checkNumImages = std::min(neighborCount, static_cast<int>(frames.size()) - 1);
         fusionConfig.workerCount = std::max(1, config.workerCount);
-        fusionConfig.useColor = true;
-        fusionConfig.colorCacheCapacity = 2;
+        fusionConfig.useColor = config.useColor;
+        fusionConfig.colorCacheCapacity = config.useColor ? 2 : 0;
         fusionConfig.fuseOnlyFirstFrame = true;
+        fusionConfig.cancelFlag = config.cancelFlag;
         if (frameCount <= 32)
         {
             fusionConfig.minNumPixels = std::min(fusionConfig.minNumPixels, 2);
@@ -159,6 +196,10 @@ bool fuseDepthMapsStreaming(int frameCount,
             &fusionError);
         if (!ok)
         {
+            if (cancellationRequested(config))
+            {
+                return reportCancellation(errorMessage);
+            }
             if (errorMessage)
             {
                 *errorMessage = fusionError;

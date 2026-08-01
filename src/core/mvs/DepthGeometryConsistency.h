@@ -21,7 +21,7 @@ struct ProjectedDepthConsistencyResult
     float roundTripErrorPixels = 0.0f;
     float consistentReferenceDepth = 0.0f;
     float worldSurfaceResidual = 0.0f;
-    float jointWorldPixelFootprint = 0.0f;
+    float jointWorldPixelFootprint = 0.0f; ///< Reference lateral + target epipolar 1 px uncertainty.
     bool continuousGeometryValid = false;
 };
 
@@ -45,7 +45,7 @@ struct AdaptiveGeometryEvidenceMaps
 {
     cv::Mat supportWeight;      ///< Continuous fusion weight in [0, 1] (CV_32FC1).
     cv::Mat effectiveViewCount; ///< Kish effective view count including the reference (CV_32FC1).
-    cv::Mat conflictWeight;     ///< Accumulated visible conflict evidence (CV_32FC1).
+    cv::Mat conflictRatio;      ///< Visible conflict / observable evidence in [0, 1] (CV_32FC1).
 };
 
 ProjectedDepthConsistencyResult evaluateProjectedDepthConsistency(
@@ -58,6 +58,9 @@ ProjectedDepthConsistencyResult evaluateProjectedDepthConsistency(
     int searchRadius = 1,
     float maximumRoundTripErrorPixels = 3.0f,
     bool computeContinuousMetrics = false);
+
+AdaptiveGeometryEvidenceClass adaptiveGeometryEvidenceClass(
+    const ProjectedDepthConsistencyResult &result);
 
 bool shouldRetainDepthFromConsistencyVotes(int sourceViewCount,
                                            int consistentVotes,

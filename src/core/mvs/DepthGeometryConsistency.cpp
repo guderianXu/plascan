@@ -38,6 +38,263 @@ float worldDistance(const double first[3], const double second[3])
         delta_x * delta_x + delta_y * delta_y + delta_z * delta_z));
 }
 
+double vectorNorm(const double value[3])
+{
+    return std::sqrt(value[0] * value[0] +
+                     value[1] * value[1] +
+                     value[2] * value[2]);
+}
+
+bool normalizeVector(double value[3])
+{
+    const double norm = vectorNorm(value);
+    if (!std::isfinite(norm) ||
+        norm <= std::numeric_limits<double>::epsilon())
+    {
+        return false;
+    }
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        value[axis] /= norm;
+    }
+    return true;
+}
+
+float referenceHorizontalPixelFootprint(
+    const Camera &camera,
+    const cv::Point2f &pixel,
+    double positive_depth,
+    const double world[3])
+{
+    const double shifted_pixel[2] = {
+        static_cast<double>(pixel.x) + 1.0,
+        static_cast<double>(pixel.y)};
+    double shifted_world[3] = {0.0, 0.0, 0.0};
+    if (!camera.unprojectPixel(
+            shifted_pixel, positive_depth, shifted_world))
+    {
+        return 0.0f;
+    }
+
+    const std::array<double, 3> center = camera.cameraCenter();
+    const double point_vector[3] = {
+        world[0] - center[0],
+        world[1] - center[1],
+        world[2] - center[2]};
+    const double shifted_ray[3] = {
+        shifted_world[0] - center[0],
+        shifted_world[1] - center[1],
+        shifted_world[2] - center[2]};
+    const double ray_norm = vectorNorm(shifted_ray);
+    if (!std::isfinite(ray_norm) ||
+        ray_norm <= std::numeric_limits<double>::epsilon())
+    {
+        return 0.0f;
+    }
+    const double cross[3] = {
+        point_vector[1] * shifted_ray[2] -
+            point_vector[2] * shifted_ray[1],
+        point_vector[2] * shifted_ray[0] -
+            point_vector[0] * shifted_ray[2],
+        point_vector[0] * shifted_ray[1] -
+            point_vector[1] * shifted_ray[0]};
+    const double footprint = vectorNorm(cross) / ray_norm;
+    return std::isfinite(footprint) && footprint > 0.0
+        ? static_cast<float>(footprint)
+        : 0.0f;
+}
+
+bool triangulatedEpipolarPixelFootprint(
+    const Camera &reference_camera,
+    const double reference_world[3],
+    const Camera &source_camera,
+    float *footprint)
+{
+    if (!footprint)
+    {
+        return false;
+    }
+    *footprint = 0.0f;
+
+    const std::array<double, 3> reference_center =
+        reference_camera.cameraCenter();
+    const std::array<double, 3> source_center = source_camera.cameraCenter();
+    double reference_ray[3] = {
+        reference_world[0] - reference_center[0],
+        reference_world[1] - reference_center[1],
+        reference_world[2] - reference_center[2]};
+    const double reference_distance = vectorNorm(reference_ray);
+    const double baseline[3] = {
+        source_center[0] - reference_center[0],
+        source_center[1] - reference_center[1],
+        source_center[2] - reference_center[2]};
+    const double baseline_length = vectorNorm(baseline);
+    if (!std::isfinite(reference_distance) || reference_distance <= 0.0 ||
+        !std::isfinite(baseline_length) ||
+        baseline_length <= std::max(1.0e-9, reference_distance * 1.0e-8) ||
+        !normalizeVector(reference_ray))
+    {
+        return false;
+    }
+
+    double source_pixel[2] = {0.0, 0.0};
+    double expected_source_depth = 0.0;
+    if (!source_camera.projectWorldPointWithDepth(
+            reference_world, source_pixel, expected_source_depth) ||
+        !std::isfinite(expected_source_depth) || expected_source_depth <= 0.0)
+    {
+        return false;
+    }
+
+    double epipolar_world[3] = {
+        reference_center[0] +
+            1.01 * (reference_world[0] - reference_center[0]),
+        reference_center[1] +
+            1.01 * (reference_world[1] - reference_center[1]),
+        reference_center[2] +
+            1.01 * (reference_world[2] - reference_center[2])};
+    double epipolar_pixel[2] = {0.0, 0.0};
+    double epipolar_depth = 0.0;
+    if (!source_camera.projectWorldPointWithDepth(
+            epipolar_world, epipolar_pixel, epipolar_depth))
+    {
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            epipolar_world[axis] = reference_center[axis] +
+                0.99 * (reference_world[axis] - reference_center[axis]);
+        }
+        if (!source_camera.projectWorldPointWithDepth(
+                epipolar_world, epipolar_pixel, epipolar_depth))
+        {
+            return false;
+        }
+    }
+
+    double epipolar_direction[2] = {
+        epipolar_pixel[0] - source_pixel[0],
+        epipolar_pixel[1] - source_pixel[1]};
+    const double epipolar_length = std::hypot(
+        epipolar_direction[0], epipolar_direction[1]);
+    if (!std::isfinite(epipolar_length) || epipolar_length <= 1.0e-10)
+    {
+        return false;
+    }
+    epipolar_direction[0] /= epipolar_length;
+    epipolar_direction[1] /= epipolar_length;
+    const double shifted_source_pixel[2] = {
+        source_pixel[0] + epipolar_direction[0],
+        source_pixel[1] + epipolar_direction[1]};
+    double shifted_source_world[3] = {0.0, 0.0, 0.0};
+    if (!source_camera.unprojectPixel(
+            shifted_source_pixel,
+            expected_source_depth,
+            shifted_source_world))
+    {
+        return false;
+    }
+    double source_ray[3] = {
+        shifted_source_world[0] - source_center[0],
+        shifted_source_world[1] - source_center[1],
+        shifted_source_world[2] - source_center[2]};
+    if (!normalizeVector(source_ray))
+    {
+        return false;
+    }
+
+    const double ray_dot =
+        reference_ray[0] * source_ray[0] +
+        reference_ray[1] * source_ray[1] +
+        reference_ray[2] * source_ray[2];
+    const double denominator = 1.0 - ray_dot * ray_dot;
+    if (!std::isfinite(denominator) || denominator <= 1.0e-8)
+    {
+        return false;
+    }
+    const double center_delta[3] = {
+        reference_center[0] - source_center[0],
+        reference_center[1] - source_center[1],
+        reference_center[2] - source_center[2]};
+    const double reference_projection =
+        reference_ray[0] * center_delta[0] +
+        reference_ray[1] * center_delta[1] +
+        reference_ray[2] * center_delta[2];
+    const double source_projection =
+        source_ray[0] * center_delta[0] +
+        source_ray[1] * center_delta[1] +
+        source_ray[2] * center_delta[2];
+    const double reference_parameter =
+        (ray_dot * source_projection - reference_projection) / denominator;
+    const double source_parameter =
+        (source_projection - ray_dot * reference_projection) / denominator;
+    if (!std::isfinite(reference_parameter) ||
+        !std::isfinite(source_parameter) ||
+        reference_parameter <= 0.0 || source_parameter <= 0.0)
+    {
+        return false;
+    }
+
+    double triangulated_world[3] = {0.0, 0.0, 0.0};
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        const double reference_closest =
+            reference_center[axis] + reference_parameter * reference_ray[axis];
+        const double source_closest =
+            source_center[axis] + source_parameter * source_ray[axis];
+        triangulated_world[axis] =
+            0.5 * (reference_closest + source_closest);
+    }
+    if (!reference_camera.isPointInFront(triangulated_world) ||
+        !source_camera.isPointInFront(triangulated_world))
+    {
+        return false;
+    }
+    const float uncertainty = worldDistance(
+        reference_world, triangulated_world);
+    if (!std::isfinite(uncertainty) ||
+        uncertainty <= std::numeric_limits<float>::epsilon())
+    {
+        return false;
+    }
+    *footprint = uncertainty;
+    return true;
+}
+
+float jointWorldPixelFootprint(
+    const Camera &reference_camera,
+    const cv::Point2f &reference_pixel,
+    float reference_depth,
+    const double reference_world[3],
+    const Camera &source_camera,
+    float source_depth)
+{
+    const float reference_fallback =
+        worldPixelFootprint(reference_camera, reference_depth);
+    const float source_fallback =
+        worldPixelFootprint(source_camera, source_depth);
+    const float fallback = 0.5f * (reference_fallback + source_fallback);
+    const float reference_footprint = referenceHorizontalPixelFootprint(
+        reference_camera,
+        reference_pixel,
+        reference_depth,
+        reference_world);
+    float triangulated_footprint = 0.0f;
+    if (reference_footprint <= std::numeric_limits<float>::epsilon() ||
+        !triangulatedEpipolarPixelFootprint(
+            reference_camera,
+            reference_world,
+            source_camera,
+            &triangulated_footprint))
+    {
+        return fallback;
+    }
+    const float joint =
+        0.5f * (reference_footprint + triangulated_footprint);
+    return std::isfinite(joint) &&
+            joint > std::numeric_limits<float>::epsilon()
+        ? joint
+        : fallback;
+}
+
 void assignContinuousMetrics(
     const Camera &reference_camera,
     const cv::Point2f &reference_pixel,
@@ -69,12 +326,13 @@ void assignContinuousMetrics(
     {
         return;
     }
-    const float reference_footprint =
-        worldPixelFootprint(reference_camera, reference_depth);
-    const float source_footprint =
-        worldPixelFootprint(source_camera, source_depth);
-    const float joint_footprint =
-        0.5f * (reference_footprint + source_footprint);
+    const float joint_footprint = jointWorldPixelFootprint(
+        reference_camera,
+        reference_pixel,
+        reference_depth,
+        reference_world,
+        source_camera,
+        source_depth);
     if (!std::isfinite(joint_footprint) ||
         joint_footprint <= std::numeric_limits<float>::epsilon())
     {
@@ -267,12 +525,13 @@ ProjectedDepthConsistencyResult evaluateProjectedDepthConsistency(
             result.consistentReferenceDepth = static_cast<float>(round_trip_depth);
             result.worldSurfaceResidual =
                 worldDistance(reference_world, measured_world);
-            const float reference_footprint =
-                worldPixelFootprint(referenceCamera, referenceDepth);
-            const float source_footprint =
-                worldPixelFootprint(sourceCamera, measured_depth);
-            result.jointWorldPixelFootprint =
-                0.5f * (reference_footprint + source_footprint);
+            result.jointWorldPixelFootprint = jointWorldPixelFootprint(
+                referenceCamera,
+                referencePixel,
+                referenceDepth,
+                reference_world,
+                sourceCamera,
+                measured_depth);
             result.continuousGeometryValid =
                 std::isfinite(result.worldSurfaceResidual) &&
                 std::isfinite(result.jointWorldPixelFootprint) &&
@@ -286,6 +545,26 @@ ProjectedDepthConsistencyResult evaluateProjectedDepthConsistency(
         result.evidence = DepthConsistencyEvidence::Unverifiable;
     }
     return result;
+}
+
+AdaptiveGeometryEvidenceClass adaptiveGeometryEvidenceClass(
+    const ProjectedDepthConsistencyResult &result)
+{
+    switch (result.evidence)
+    {
+    case DepthConsistencyEvidence::Occluded:
+        return AdaptiveGeometryEvidenceClass::Occluded;
+    case DepthConsistencyEvidence::Contradicted:
+        return result.continuousGeometryValid
+            ? AdaptiveGeometryEvidenceClass::Comparable
+            : AdaptiveGeometryEvidenceClass::Contradictory;
+    case DepthConsistencyEvidence::Consistent:
+    case DepthConsistencyEvidence::Unverifiable:
+    default:
+        return result.continuousGeometryValid
+            ? AdaptiveGeometryEvidenceClass::Comparable
+            : AdaptiveGeometryEvidenceClass::Unobservable;
+    }
 }
 
 bool shouldRetainDepthFromConsistencyVotes(int sourceViewCount,
@@ -440,7 +719,7 @@ AdaptiveGeometryEvidenceMaps makeAdaptiveGeometryEvidenceMaps(
 
     result.supportWeight = cv::Mat(size, CV_32FC1, cv::Scalar(0.0f));
     result.effectiveViewCount = cv::Mat(size, CV_32FC1, cv::Scalar(0.0f));
-    result.conflictWeight = cv::Mat(size, CV_32FC1, cv::Scalar(0.0f));
+    result.conflictRatio = cv::Mat(size, CV_32FC1, cv::Scalar(0.0f));
     for (int row = 0; row < retained_depth.rows; ++row)
     {
         const float *depth_row = retained_depth.ptr<float>(row);
@@ -451,7 +730,7 @@ AdaptiveGeometryEvidenceMaps makeAdaptiveGeometryEvidenceMaps(
         const float *observable_row = accumulator_maps.observable.ptr<float>(row);
         float *support_row = result.supportWeight.ptr<float>(row);
         float *effective_view_row = result.effectiveViewCount.ptr<float>(row);
-        float *output_conflict_row = result.conflictWeight.ptr<float>(row);
+        float *output_conflict_row = result.conflictRatio.ptr<float>(row);
         for (int column = 0; column < retained_depth.cols; ++column)
         {
             if (!std::isfinite(depth_row[column]) || depth_row[column] <= 0.0f)
@@ -467,7 +746,7 @@ AdaptiveGeometryEvidenceMaps makeAdaptiveGeometryEvidenceMaps(
                 finalizeAdaptiveGeometryEvidence(accumulator, options);
             support_row[column] = evidence.supportWeight;
             effective_view_row[column] = evidence.effectiveViewCount;
-            output_conflict_row[column] = evidence.conflictWeight;
+            output_conflict_row[column] = evidence.conflictRatio;
         }
     }
     return result;

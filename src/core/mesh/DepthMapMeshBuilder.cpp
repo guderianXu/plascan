@@ -439,6 +439,10 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
                 directory,
                 object.value(QStringLiteral(
                     "raw_adaptive_geometry_effective_view_count_path")).toString());
+            frame.adaptiveGeometryConflictRatioPath = resolveArtifactPath(
+                directory,
+                object.value(QStringLiteral(
+                    "raw_adaptive_geometry_conflict_ratio_path")).toString());
             frame.adaptiveGeometryConflictWeightPath = resolveArtifactPath(
                 directory,
                 object.value(QStringLiteral(
@@ -520,6 +524,7 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
                 file_name.endsWith(QStringLiteral("_geometry_source_mask.bin")) ||
                 file_name.endsWith(QStringLiteral("_adaptive_geometry_support_weight.bin")) ||
                 file_name.endsWith(QStringLiteral("_adaptive_geometry_effective_view_count.bin")) ||
+                file_name.endsWith(QStringLiteral("_adaptive_geometry_conflict_ratio.bin")) ||
                 file_name.endsWith(QStringLiteral("_adaptive_geometry_conflict_weight.bin")) ||
                 file_name.endsWith(QStringLiteral("_inverse_depth_mean.bin")) ||
                 file_name.endsWith(QStringLiteral("_inverse_depth_spread.bin")) ||

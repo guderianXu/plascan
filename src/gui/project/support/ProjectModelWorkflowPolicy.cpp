@@ -207,6 +207,26 @@ StoredDepthBatchCompatibility assessStoredDepthBatchCompatibility(
         result.reason = QStringLiteral("可用深度图数量不足（至少需要 2 张）。");
         return result;
     }
+
+    const QJsonObject selected_at_result = selectedAerialTriangulationResult(
+        project_metadata,
+        aerial_triangulation_result_index);
+    const int expected_frame_count = qMax(
+        expectedDepthFrameCount(project_metadata,
+                                stored_frames.batchDir,
+                                result.frameCount),
+        selected_at_result.value(QStringLiteral("selected_images"))
+            .toArray()
+            .size());
+    if (result.frameCount < expected_frame_count)
+    {
+        result.reason = QStringLiteral(
+            "深度图批次不完整（已有 %1/%2 帧），不能直接作为可复用批次。"
+            "请继续估计缺失深度图或重新计算。")
+                            .arg(result.frameCount)
+                            .arg(expected_frame_count);
+        return result;
+    }
     const bool algorithm_revision_matches = std::all_of(
         stored_frames.frames.begin(),
         stored_frames.frames.end(),
@@ -242,9 +262,7 @@ StoredDepthBatchCompatibility assessStoredDepthBatchCompatibility(
     }
 
     const QString current_generation_id =
-        selectedAerialTriangulationResult(project_metadata,
-                                          aerial_triangulation_result_index)
-            .value(QStringLiteral("reconstruction_generation_id"))
+        selected_at_result.value(QStringLiteral("reconstruction_generation_id"))
             .toString();
     const QString stored_generation_id =
         consistentReconstructionGenerationId(stored_frames);

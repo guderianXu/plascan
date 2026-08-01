@@ -23,6 +23,9 @@ live under `src/core/mvs/tests/`.
   `confidence`, `valid mask`, and a config hash.
 - `DepthMapGenerator` writes frame artifacts before reporting completion. Completed frames with a matching
   config hash can be reused; failed frames can be retried.
+- Orbital depth artifacts at algorithm revision 14 persist adaptive support weight, effective view count,
+  and conflict ratio. Reuse rejects an incomplete revision-14 evidence set instead of silently interpreting
+  missing evidence as valid geometry.
 - GUI project metadata consumes manifest records. The workspace tree should refresh from metadata rather than
   treating directory scans as the primary state.
 
@@ -133,9 +136,12 @@ fixtures and then invokes `model_quality_cli` when quality validation is enabled
   streaming modes use the same reprojection consistency core; low memory no longer disables this quality
   stage.
 - Cancellation is cooperative: preload, source planning, hint-depth preparation, PatchMatch iteration
-  boundaries, artifact saving, and fusion setup must poll the cancel flag.
+  boundaries, artifact saving, frame loading, and every streaming-fusion window poll the same cancel flag.
 - `DepthMapFusion` supports `streaming fusion` from planned source images and clears stale output/cache at the
   start of every run so a cancelled run cannot expose old dense points.
+- The GUI `Create Point Cloud` workflow accepts only the latest production SfM/BA result. It reuses a stored
+  depth batch only when every expected frame exists and its algorithm revision, input signature, and
+  reconstruction generation match; otherwise it regenerates depth artifacts before bounded streaming fusion.
 - `reconstruct_pipeline_cli --mvs-depth-only` is the safest validation mode for large aerial projects when the
   goal is to exercise depth scheduling, artifact persistence, cancellation, and manifest recovery without
   entering fusion, mesh, or terrain generation.

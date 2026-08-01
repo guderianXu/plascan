@@ -39,6 +39,7 @@ TEST(AdaptiveGeometryEvidencePolicyTest,
     EXPECT_FLOAT_EQ(result.diversityWeight, 0.35f);
     EXPECT_FLOAT_EQ(result.observableWeight, 0.0f);
     EXPECT_FLOAT_EQ(result.conflictWeight, 0.0f);
+    EXPECT_FLOAT_EQ(result.conflictRatio, 0.0f);
     EXPECT_NEAR(result.agreementProbability, 5.0f / 6.0f, 1.0e-6f);
     EXPECT_NEAR(result.supportWeight, 7.0f / 24.0f, 1.0e-6f);
 }
@@ -104,6 +105,7 @@ TEST(AdaptiveGeometryEvidencePolicyTest,
     EXPECT_LT(conflicted.supportWeight, baseline.supportWeight);
     EXPECT_FLOAT_EQ(conflicted.observableWeight, 0.75f);
     EXPECT_FLOAT_EQ(conflicted.conflictWeight, 0.75f);
+    EXPECT_FLOAT_EQ(conflicted.conflictRatio, 1.0f);
     EXPECT_FLOAT_EQ(conflicted.positiveSupportWeight, 0.0f);
     EXPECT_FLOAT_EQ(conflicted.effectiveViewCount, 1.0f);
 }
@@ -224,6 +226,7 @@ TEST(AdaptiveGeometryEvidencePolicyTest,
                     span_result.effectiveViewCount,
                     1.0e-6f);
         EXPECT_NEAR(result.conflictWeight, span_result.conflictWeight, 1.0e-6f);
+        EXPECT_NEAR(result.conflictRatio, span_result.conflictRatio, 1.0e-6f);
         EXPECT_NEAR(result.observableWeight, span_result.observableWeight, 1.0e-6f);
         EXPECT_NEAR(result.positiveSupportWeight,
                     span_result.positiveSupportWeight,

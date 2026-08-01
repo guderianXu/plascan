@@ -41,8 +41,8 @@ MvsDepthFrameRecord makeRecord(int index, const QString &name, const QString &st
     record.rawAdaptiveGeometryEffectiveViewCountPath =
         QStringLiteral("adaptive_geometry_effective_view_count_%1.bin")
             .arg(index, 3, 10, QLatin1Char('0'));
-    record.rawAdaptiveGeometryConflictWeightPath =
-        QStringLiteral("adaptive_geometry_conflict_weight_%1.bin")
+    record.rawAdaptiveGeometryConflictRatioPath =
+        QStringLiteral("adaptive_geometry_conflict_ratio_%1.bin")
             .arg(index, 3, 10, QLatin1Char('0'));
     record.validMaskPath = QStringLiteral("mask_%1.png").arg(index, 3, 10, QLatin1Char('0'));
     record.gridWidth = 6000;
@@ -136,8 +136,8 @@ TEST(MvsWorkspaceManifest, SavesAndLoadsFrameRecordsAtomically)
               QStringLiteral("adaptive_geometry_support_weight_002.bin"));
     EXPECT_EQ(loaded.frames().front().rawAdaptiveGeometryEffectiveViewCountPath,
               QStringLiteral("adaptive_geometry_effective_view_count_002.bin"));
-    EXPECT_EQ(loaded.frames().front().rawAdaptiveGeometryConflictWeightPath,
-              QStringLiteral("adaptive_geometry_conflict_weight_002.bin"));
+    EXPECT_EQ(loaded.frames().front().rawAdaptiveGeometryConflictRatioPath,
+              QStringLiteral("adaptive_geometry_conflict_ratio_002.bin"));
     EXPECT_EQ(loaded.frames().front().sourceIndices, QVector<int>({7, 9}));
     EXPECT_EQ(loaded.frames().front().requestedSourceViewCount, 4);
     EXPECT_EQ(loaded.frames().front().sourceViewShortfall, 2);
@@ -257,6 +257,7 @@ TEST(MvsWorkspaceManifest, LoadsLegacyRecordWithoutGeometryEvidencePaths)
     EXPECT_TRUE(record.sourceIndices.isEmpty());
     EXPECT_TRUE(record.rawAdaptiveGeometrySupportWeightPath.isEmpty());
     EXPECT_TRUE(record.rawAdaptiveGeometryEffectiveViewCountPath.isEmpty());
+    EXPECT_TRUE(record.rawAdaptiveGeometryConflictRatioPath.isEmpty());
     EXPECT_TRUE(record.rawAdaptiveGeometryConflictWeightPath.isEmpty());
     EXPECT_TRUE(record.rawGeometrySourceMaskPath.isEmpty());
     EXPECT_TRUE(record.rawInverseDepthMeanPath.isEmpty());
@@ -646,13 +647,50 @@ TEST(MvsWorkspaceManifest, OrbitalFrameRequiresAdaptiveGeometryEvidenceAfterRevi
         QStringLiteral("depth_004_adaptive_geometry_conflict_weight.bin"));
     touchFile(record.depthPng);
     touchFile(record.rawDepthPath);
-    manifest.markCompleted(record);
+    manifest.upsertFrame(record);
 
     EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
 
     touchFile(record.rawAdaptiveGeometrySupportWeightPath);
     touchFile(record.rawAdaptiveGeometryEffectiveViewCountPath);
     touchFile(record.rawAdaptiveGeometryConflictWeightPath);
+    EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+}
+
+TEST(MvsWorkspaceManifest, RevisionFourteenOrbitalFrameRequiresConflictRatio)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    MvsWorkspaceManifest manifest;
+    manifest.setConfigHash(QStringLiteral("cfg-a"));
+    MvsDepthFrameRecord record = makeRecord(
+        4,
+        QStringLiteral("image_004.jpg"),
+        QStringLiteral("completed"));
+    record.algorithmRevision =
+        xjw::mvs::kMvsAdaptiveGeometryConflictRatioRevision;
+    record.sceneProfile = QStringLiteral("orbital_object");
+    record.depthPng = QDir(tempDir.path()).filePath(QStringLiteral("depth_004.png"));
+    record.rawDepthPath = QDir(tempDir.path()).filePath(QStringLiteral("depth_004.bin"));
+    record.rawAdaptiveGeometrySupportWeightPath = QDir(tempDir.path()).filePath(
+        QStringLiteral("depth_004_adaptive_geometry_support_weight.bin"));
+    record.rawAdaptiveGeometryEffectiveViewCountPath = QDir(tempDir.path()).filePath(
+        QStringLiteral("depth_004_adaptive_geometry_effective_view_count.bin"));
+    record.rawAdaptiveGeometryConflictRatioPath = QDir(tempDir.path()).filePath(
+        QStringLiteral("depth_004_adaptive_geometry_conflict_ratio.bin"));
+    record.rawAdaptiveGeometryConflictWeightPath = QDir(tempDir.path()).filePath(
+        QStringLiteral("depth_004_adaptive_geometry_conflict_weight.bin"));
+    touchFile(record.depthPng);
+    touchFile(record.rawDepthPath);
+    touchFile(record.rawAdaptiveGeometrySupportWeightPath);
+    touchFile(record.rawAdaptiveGeometryEffectiveViewCountPath);
+    touchFile(record.rawAdaptiveGeometryConflictWeightPath);
+    manifest.upsertFrame(record);
+
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+
+    touchFile(record.rawAdaptiveGeometryConflictRatioPath);
     EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
 }
 

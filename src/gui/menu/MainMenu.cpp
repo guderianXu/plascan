@@ -1213,6 +1213,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
             findNamedChild<QAction>(_mainWindow, "actionWorkflowAerialTriangulation");
         _workflowSettingsAct =
             findNamedChild<QAction>(_mainWindow, "actionWorkflowSettings");
+        _createPointCloudAct = findNamedChild<QAction>(_mainWindow, "actionCreatePointCloud");
         _generateModelAct = findNamedChild<QAction>(_mainWindow, "actionGenerateModel");
         _generateTextureAct = findNamedChild<QAction>(_mainWindow, "actionGenerateTexture");
         _createDEMAct = findNamedChild<QAction>(_mainWindow, "actionCreateDEM");
@@ -1285,6 +1286,30 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                 else
                 {
                     workflowMenu->addAction(_generateModelAct);
+                }
+            }
+        }
+        if (!_createPointCloudAct)
+        {
+            QObject *actionParent = workflowMenu
+                ? static_cast<QObject *>(workflowMenu)
+                : static_cast<QObject *>(_mainWindow);
+            _createPointCloudAct = new QAction(tr("创建点云..."), actionParent);
+            _createPointCloudAct->setObjectName(QStringLiteral("actionCreatePointCloud"));
+            _createPointCloudAct->setToolTip(tr("从深度图创建密集点云"));
+            if (workflowMenu)
+            {
+                if (_generateModelAct)
+                {
+                    workflowMenu->insertAction(_generateModelAct, _createPointCloudAct);
+                }
+                else if (_createDEMAct)
+                {
+                    workflowMenu->insertAction(_createDEMAct, _createPointCloudAct);
+                }
+                else
+                {
+                    workflowMenu->addAction(_createPointCloudAct);
                 }
             }
         }
@@ -1564,6 +1589,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         }
         const QList<QAction *> workflowActions{
             _workflowAerialTriangulationAct,
+            _createPointCloudAct,
             _generateModelAct,
             _generateTextureAct,
             _createDEMAct,
@@ -1720,6 +1746,9 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     _addFolderAct      = workflowMenu->addAction(tr("添加 文件夹"));
     workflowMenu->addSeparator();
     _workflowAerialTriangulationAct = workflowMenu->addAction(tr("空中三角测量...")); // 对齐照片参数对话框
+    _createPointCloudAct = workflowMenu->addAction(tr("创建点云..."));      // Metashape 风格深度图融合入口
+    _createPointCloudAct->setObjectName(QStringLiteral("actionCreatePointCloud"));
+    _createPointCloudAct->setToolTip(tr("从深度图创建密集点云"));
     _generateModelAct = workflowMenu->addAction(tr("生成模型..."));        // Metashape 风格源数据选择
     _generateTextureAct = workflowMenu->addAction(tr("生成纹理..."));      // 将影像投影到已有模型
     _createDEMAct      = workflowMenu->addAction(tr("创建 DEM"));          // DEM 完整流程
@@ -2153,6 +2182,7 @@ QAction *MainMenu::intersectionCheckAction() const { return _intersectionCheckAc
 QAction *MainMenu::intersectionViewResultsAction() const { return _intersectionViewResultsAct; }
 QAction *MainMenu::createDEMAction() const      { return _createDEMAct; }
 QAction *MainMenu::generateOrthoAction() const  { return _generateOrthoAct; }
+QAction *MainMenu::createPointCloudAction() const { return _createPointCloudAct; }
 QAction *MainMenu::generateModelAction() const  { return _generateModelAct; }
 QAction *MainMenu::generateTextureAction() const { return _generateTextureAct; }
 

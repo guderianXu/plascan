@@ -59,7 +59,7 @@ namespace
 {
 
 constexpr std::uint64_t kBaseBytesPerSample =
-    sizeof(float) * 3 + sizeof(std::uint16_t) * 2;
+    sizeof(float) * 5 + sizeof(std::uint16_t) * 2 + sizeof(std::uint8_t);
 constexpr std::uint64_t kColorBytesPerSample = sizeof(float) * 4;
 
 bool checkedMultiply(std::uint64_t lhs, std::uint64_t rhs, std::uint64_t *result)
@@ -1003,6 +1003,7 @@ struct WeakBoundaryTipResult
 WeakBoundaryTipResult trimWeakBoundaryTips(TriMesh *mesh,
                                            const DepthTsdfLayout &layout,
                                            const std::vector<std::uint16_t> &support,
+                                           const std::vector<std::uint8_t> &strongAdaptiveSupport,
                                            int minimum_support,
                                            int passes,
                                            bool enabled)
@@ -1064,7 +1065,12 @@ WeakBoundaryTipResult trimWeakBoundaryTips(TriMesh *mesh,
             const int z = std::clamp(static_cast<int>(std::lround(
                                          (vertex.z - layout.boundsMin[2]) / layout.voxelSize[2])),
                                      0, layout.cells[2]);
-            if (support[sampleIndex(layout, x, y, z)] <= minimum_support)
+            const std::size_t sample_index = sampleIndex(layout, x, y, z);
+            const bool has_strong_adaptive_support =
+                sample_index < strongAdaptiveSupport.size() &&
+                strongAdaptiveSupport[sample_index] != 0;
+            if (support[sample_index] < minimum_support &&
+                !has_strong_adaptive_support)
             {
                 weak_vertex[index] = 1;
                 if (!counted_weak_vertices[index])
@@ -1374,6 +1380,9 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
         const bool requires_adaptive_orbital_evidence =
             requires_current_orbital_evidence &&
             artifact.algorithmRevision >= 13;
+        const bool requires_conflict_ratio =
+            requires_adaptive_orbital_evidence &&
+            artifact.algorithmRevision >= 14;
         if (requires_current_orbital_evidence &&
             (artifact.geometrySupportPath.isEmpty() ||
              artifact.geometrySourceMaskPath.isEmpty() ||
@@ -1392,14 +1401,20 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
         if (requires_adaptive_orbital_evidence &&
             (artifact.adaptiveGeometrySupportWeightPath.isEmpty() ||
              artifact.adaptiveGeometryEffectiveViewCountPath.isEmpty() ||
-             artifact.adaptiveGeometryConflictWeightPath.isEmpty()))
+             (requires_conflict_ratio &&
+              artifact.adaptiveGeometryConflictRatioPath.isEmpty())))
         {
             result.errorMessage = frameArtifactError(
                 artifact,
-                QStringLiteral(
-                    "current orbital adaptive geometry evidence is incomplete; "
-                    "regenerate depth maps so support weight, effective view count, "
-                    "and conflict weight are all present"));
+                requires_conflict_ratio
+                    ? QStringLiteral(
+                          "current orbital adaptive geometry evidence is incomplete; "
+                          "regenerate depth maps so support weight, effective view count, "
+                          "and conflict ratio are all present")
+                    : QStringLiteral(
+                          "current orbital adaptive geometry evidence is incomplete; "
+                          "regenerate depth maps so support weight and effective view count "
+                          "are both present"));
             return result;
         }
 
@@ -1537,9 +1552,9 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
                 &frame.adaptiveGeometryEffectiveViewCount,
                 QStringLiteral("adaptive geometry effective view count")) ||
             !load_optional_adaptive_evidence(
-                artifact.adaptiveGeometryConflictWeightPath,
-                &frame.adaptiveGeometryConflictWeight,
-                QStringLiteral("adaptive geometry conflict weight")))
+                artifact.adaptiveGeometryConflictRatioPath,
+                &frame.adaptiveGeometryConflictRatio,
+                QStringLiteral("adaptive geometry conflict ratio")))
         {
             return result;
         }
@@ -1599,9 +1614,9 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
                 false,
                 true) ||
             !validate_adaptive_evidence(
-                frame.adaptiveGeometryConflictWeight,
-                QStringLiteral("adaptive geometry conflict weight"),
-                false,
+                frame.adaptiveGeometryConflictRatio,
+                QStringLiteral("adaptive geometry conflict ratio"),
+                true,
                 false))
         {
             return result;
@@ -1668,6 +1683,10 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
             ? static_cast<float>(std::clamp(artifact.meanConfidence, 0.05, 1.0))
             : 1.0f;
         frame.auxiliarySurfaceOnly = validation_only;
+        frame.useAdaptiveGeometryEvidence = requires_conflict_ratio &&
+            !frame.adaptiveGeometrySupportWeight.empty() &&
+            !frame.adaptiveGeometryEffectiveViewCount.empty() &&
+            !frame.adaptiveGeometryConflictRatio.empty();
         result.frames.push_back(std::move(frame));
     }
 
@@ -1774,6 +1793,7 @@ DepthTsdfObservationSample DepthTsdfSurfaceBuilder::sampleObservation(
     const cv::Mat &referenceAnchoredConsensusDepth)
 {
     DepthTsdfObservationSample result;
+    result.useAdaptiveGeometryEvidence = frame.useAdaptiveGeometryEvidence;
     const int nearest_column = static_cast<int>(std::lround(pixel.x));
     const int nearest_row = static_cast<int>(std::lround(pixel.y));
     if (nearest_row < 0 || nearest_row >= frame.depth.rows ||
@@ -1882,13 +1902,14 @@ DepthTsdfObservationSample DepthTsdfSurfaceBuilder::sampleObservation(
             frame.adaptiveGeometrySupportWeight, row, column);
         sample->adaptiveGeometryEffectiveViewCount = optional_float_evidence(
             frame.adaptiveGeometryEffectiveViewCount, row, column);
-        sample->adaptiveGeometryConflictWeight = optional_float_evidence(
-            frame.adaptiveGeometryConflictWeight, row, column);
+        sample->adaptiveGeometryConflictRatio = optional_float_evidence(
+            frame.adaptiveGeometryConflictRatio, row, column);
         sample->inverseDepthRelativeSpread =
             frame.inverseDepthRelativeSpread.type() == CV_32FC1 &&
                 frame.inverseDepthRelativeSpread.size() == frame.depth.size()
             ? frame.inverseDepthRelativeSpread.at<float>(row, column) : 0.0f;
-        if (maximumObservationInverseDepthSpread > 0.0f &&
+        if (!frame.useAdaptiveGeometryEvidence &&
+            maximumObservationInverseDepthSpread > 0.0f &&
             std::isfinite(sample->inverseDepthRelativeSpread) &&
             sample->inverseDepthRelativeSpread > maximumObservationInverseDepthSpread)
         {
@@ -1930,7 +1951,7 @@ DepthTsdfObservationSample DepthTsdfSurfaceBuilder::sampleObservation(
         std::uint16_t geometrySourceMask = 0;
         float adaptiveGeometrySupportWeight = 0.0f;
         float adaptiveGeometryEffectiveViewCount = 0.0f;
-        float adaptiveGeometryConflictWeight = 0.0f;
+        float adaptiveGeometryConflictRatio = 0.0f;
         float inverseDepthRelativeSpread = 0.0f;
         bool nearest = false;
         bool usedCrossViewConsensusDepth = false;
@@ -1987,7 +2008,8 @@ DepthTsdfObservationSample DepthTsdfSurfaceBuilder::sampleObservation(
                 frame.inverseDepthRelativeSpread.type() == CV_32FC1 &&
                     frame.inverseDepthRelativeSpread.size() == frame.depth.size()
                 ? frame.inverseDepthRelativeSpread.at<float>(row, column) : 0.0f;
-            if (maximumObservationInverseDepthSpread > 0.0f &&
+            if (!frame.useAdaptiveGeometryEvidence &&
+                maximumObservationInverseDepthSpread > 0.0f &&
                 std::isfinite(inverse_depth_relative_spread) &&
                 inverse_depth_relative_spread > maximumObservationInverseDepthSpread)
             {
@@ -2012,8 +2034,8 @@ DepthTsdfObservationSample DepthTsdfSurfaceBuilder::sampleObservation(
                 frame.adaptiveGeometrySupportWeight, row, column);
             candidate.adaptiveGeometryEffectiveViewCount = optional_float_evidence(
                 frame.adaptiveGeometryEffectiveViewCount, row, column);
-            candidate.adaptiveGeometryConflictWeight = optional_float_evidence(
-                frame.adaptiveGeometryConflictWeight, row, column);
+            candidate.adaptiveGeometryConflictRatio = optional_float_evidence(
+                frame.adaptiveGeometryConflictRatio, row, column);
             candidate.inverseDepthRelativeSpread = inverse_depth_relative_spread;
             candidate.depth = consensus_depth(row,
                                               column,
@@ -2106,8 +2128,8 @@ DepthTsdfObservationSample DepthTsdfSurfaceBuilder::sampleObservation(
             candidate.adaptiveGeometrySupportWeight * candidate.spatialWeight;
         result.adaptiveGeometryEffectiveViewCount +=
             candidate.adaptiveGeometryEffectiveViewCount * candidate.spatialWeight;
-        result.adaptiveGeometryConflictWeight +=
-            candidate.adaptiveGeometryConflictWeight * candidate.spatialWeight;
+        result.adaptiveGeometryConflictRatio +=
+            candidate.adaptiveGeometryConflictRatio * candidate.spatialWeight;
         result.inverseDepthRelativeSpread = std::max(
             result.inverseDepthRelativeSpread,
             candidate.inverseDepthRelativeSpread);
@@ -2129,11 +2151,12 @@ DepthTsdfObservationSample DepthTsdfSurfaceBuilder::sampleObservation(
     result.confidence /= spatial_weight_sum;
     result.adaptiveGeometrySupportWeight /= spatial_weight_sum;
     result.adaptiveGeometryEffectiveViewCount /= spatial_weight_sum;
-    result.adaptiveGeometryConflictWeight /= spatial_weight_sum;
+    result.adaptiveGeometryConflictRatio /= spatial_weight_sum;
     result.valid = true;
     result.failure = DepthTsdfObservationFailure::None;
     result.recoveredFromInvalidNearestPixel = !has_nearest_candidate;
-    if (result.recoveredFromInvalidNearestPixel &&
+    if (!frame.useAdaptiveGeometryEvidence &&
+        result.recoveredFromInvalidNearestPixel &&
         maximumInvalidNearestPixelRecoveryInverseDepthSpread > 0.0f &&
         result.inverseDepthRelativeSpread >
             maximumInvalidNearestPixelRecoveryInverseDepthSpread)
@@ -2153,7 +2176,8 @@ bool DepthTsdfSurfaceBuilder::isSampleSupported(
     bool *singleView,
     bool *multiView,
     int maximumGeometrySupportCount,
-    bool *geometryVerifiedSingleView)
+    bool *geometryVerifiedSingleView,
+    bool hasStrongAdaptiveSurfaceObservation)
 {
     const bool multi_view_supported = distinctSupportCount >= std::max(
                                           2, options.minimumDistinctCameraSupport)
@@ -2162,10 +2186,12 @@ bool DepthTsdfSurfaceBuilder::isSampleSupported(
         && distinctSupportCount == 1
         && maximumObservationWeight >= options.minimumSingleObservationWeight;
     const bool geometry_verified_single_view_supported =
-        options.allowGeometryVerifiedSingleObservation &&
         distinctSupportCount == 1 &&
         maximumObservationWeight >= options.minimumGeometryVerifiedObservationWeight &&
-        maximumGeometrySupportCount >= options.minimumGeometrySupportCount;
+        ((options.allowGeometryVerifiedSingleObservation &&
+          maximumGeometrySupportCount >= options.minimumGeometrySupportCount) ||
+         (options.enableGeometrySingleViewNeighborhoodGuard &&
+          hasStrongAdaptiveSurfaceObservation));
     const bool single_view_supported = legacy_single_view_supported ||
                                        geometry_verified_single_view_supported;
     if (singleView)
@@ -2398,6 +2424,25 @@ float DepthTsdfSurfaceBuilder::observationEvidenceWeightMultiplier(
     const DepthTsdfObservationSample &observation,
     const DepthTsdfOptions &options)
 {
+    if (observation.useAdaptiveGeometryEvidence)
+    {
+        if (observation.usedCrossViewRepairedDepth)
+        {
+            return std::clamp(
+                options.repairedObservationMultiplier, 0.05f, 1.0f);
+        }
+        const float support_weight = std::isfinite(
+                observation.adaptiveGeometrySupportWeight)
+            ? std::clamp(
+                  observation.adaptiveGeometrySupportWeight, 0.0f, 1.0f)
+            : 0.0f;
+        return std::max(
+            std::clamp(
+                options.adaptiveGeometryMinimumObservationMultiplier,
+                0.05f,
+                1.0f),
+            support_weight);
+    }
     if (!options.enablePixelEvidenceWeighting)
     {
         return 1.0f;
@@ -2488,10 +2533,40 @@ float DepthTsdfSurfaceBuilder::observationEvidenceSupportWeightMultiplier(
         std::clamp(options.evidenceSupportWeightExponent, 0.0f, 1.0f));
 }
 
+bool DepthTsdfSurfaceBuilder::observationHasStrongAdaptiveGeometryEvidence(
+    const DepthTsdfObservationSample &observation,
+    const DepthTsdfOptions &options)
+{
+    if (!observation.useAdaptiveGeometryEvidence ||
+        observation.usedCrossViewRepairedDepth ||
+        !std::isfinite(observation.adaptiveGeometrySupportWeight) ||
+        !std::isfinite(observation.adaptiveGeometryEffectiveViewCount) ||
+        !std::isfinite(observation.adaptiveGeometryConflictRatio))
+    {
+        return false;
+    }
+    return observation.adaptiveGeometrySupportWeight >= std::clamp(
+               options.adaptiveGeometryFullIntegrationMinimumSupportWeight,
+               0.0f,
+               1.0f) &&
+        observation.adaptiveGeometryEffectiveViewCount >= std::max(
+               1.0f,
+               options.adaptiveGeometryFullIntegrationMinimumEffectiveViewCount) &&
+        observation.adaptiveGeometryConflictRatio <= std::clamp(
+               options.adaptiveGeometryFullIntegrationMaximumConflictRatio,
+               0.0f,
+               1.0f);
+}
+
 bool DepthTsdfSurfaceBuilder::observationUsesSurfaceOnlyIntegration(
     const DepthTsdfObservationSample &observation,
     const DepthTsdfOptions &options)
 {
+    if (observation.useAdaptiveGeometryEvidence)
+    {
+        return !observationHasStrongAdaptiveGeometryEvidence(
+            observation, options);
+    }
     return options.enableWeakEvidenceSurfaceOnlyIntegration &&
         (observation.usedCrossViewRepairedDepth ||
          observation.geometrySupportCount <= 1);
@@ -3858,6 +3933,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
     std::vector<float> maximumObservationWeight;
     std::vector<float> maximumEvidenceSupportObservationWeight;
     std::vector<std::uint16_t> maximumGeometrySupportCount;
+    std::vector<std::uint8_t> strongAdaptiveSurfaceObservation;
     std::vector<std::uint16_t> support;
     std::vector<std::uint16_t> geometrySourceMask;
     std::vector<std::uint16_t> minimumInverseDepthSpread;
@@ -3878,6 +3954,8 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         maximumEvidenceSupportObservationWeight.assign(
             static_cast<std::size_t>(result.layout.sampleCount), 0.0f);
         maximumGeometrySupportCount.assign(
+            static_cast<std::size_t>(result.layout.sampleCount), 0);
+        strongAdaptiveSurfaceObservation.assign(
             static_cast<std::size_t>(result.layout.sampleCount), 0);
         support.assign(static_cast<std::size_t>(result.layout.sampleCount), 0);
         if (options.enableSurfacePatchSupport ||
@@ -4141,7 +4219,8 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                         ++rejectedProjectionCount;
                         continue;
                     }
-                    const cv::Mat &depth_valid_mask = erosion_pixels > 0
+                    const cv::Mat &depth_valid_mask =
+                        !frame.useAdaptiveGeometryEvidence && erosion_pixels > 0
                         ? effective_depth_valid_masks[frame_index]
                         : frame.depthValidMask;
                     const DepthTsdfObservationSample observation = sampleObservation(
@@ -4168,7 +4247,8 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                         {
                         case DepthTsdfObservationFailure::SupportMask:
                             if (options.enableSupportMaskFreeSpaceCarving &&
-                                !frame.auxiliarySurfaceOnly)
+                                !frame.auxiliarySurfaceOnly &&
+                                !frame.useAdaptiveGeometryEvidence)
                             {
                                 ++support_mask_free_space_votes;
                             }
@@ -4330,6 +4410,12 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                         maximumGeometrySupportCount[index] = std::max(
                             maximumGeometrySupportCount[index],
                             observation.geometrySupportCount);
+                        if (!frame.auxiliarySurfaceOnly &&
+                            observationHasStrongAdaptiveGeometryEvidence(
+                                observation, options))
+                        {
+                            strongAdaptiveSurfaceObservation[index] = 1;
+                        }
                         if (options.enableSurfacePatchSupport ||
                             options.enableContourBandZeroCrossingSupport ||
                             options.enableCrossViewAnchoredSurfaceRecovery ||
@@ -4708,7 +4794,8 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             &single_view_supported,
             &multi_view_supported,
             maximumGeometrySupportCount[index],
-            &geometry_verified_single_view_supported);
+            &geometry_verified_single_view_supported,
+            strongAdaptiveSurfaceObservation[index] != 0);
         const bool field_weight_supported = isSampleSupported(
             weight[index],
             support[index],
@@ -6557,6 +6644,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         &result.mesh,
         result.layout,
         support,
+        strongAdaptiveSurfaceObservation,
         std::max(2, options.minimumDistinctCameraSupport),
         options.weakBoundaryTipTrimPasses,
         options.trimWeakBoundaryTips);

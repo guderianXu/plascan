@@ -2,7 +2,7 @@
 // 文件: ReconstructionWorkflowController.h
 // 模块: main_window
 // 说明:
-//   管理工作流程菜单中的模型生成与纹理生成对话框，
+//   管理工作流程菜单中的点云、模型生成与纹理生成对话框，
 //   负责设置加载/保存（记忆化）以及运行请求的转发。
 //
 //   设计原则:
@@ -39,6 +39,7 @@ public:
     void setProjectManager(ProjectManager *pm);
 
 public slots:
+    void openCreatePointCloudDialog();
     void openGenerateModelDialog();
     void openTextureMappingDialog();
 
@@ -106,6 +107,7 @@ private:
     QPointer<QMainWindow> _mainWindow;
     ProjectManager       *_projectManager = nullptr;
 
+    DialogSettingStore *_createPointCloudStore = nullptr;
     DialogSettingStore *_generateModelStore = nullptr;
     DialogSettingStore *_texStore          = nullptr;
 };

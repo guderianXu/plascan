@@ -375,6 +375,13 @@ TEST(DepthTsdfSurfaceBuilderTest, UsesLargestComponentRelativeCleanupByDefault)
     EXPECT_FLOAT_EQ(
         options.uncertaintyAdaptiveMaximumTruncationVoxels, 12.0f);
     EXPECT_FALSE(options.enablePixelEvidenceWeighting);
+    EXPECT_FLOAT_EQ(options.adaptiveGeometryMinimumObservationMultiplier, 0.15f);
+    EXPECT_FLOAT_EQ(
+        options.adaptiveGeometryFullIntegrationMinimumSupportWeight, 0.75f);
+    EXPECT_FLOAT_EQ(
+        options.adaptiveGeometryFullIntegrationMinimumEffectiveViewCount, 1.75f);
+    EXPECT_FLOAT_EQ(
+        options.adaptiveGeometryFullIntegrationMaximumConflictRatio, 0.20f);
     EXPECT_FALSE(options.enableInverseDepthSpreadWeighting);
     EXPECT_FALSE(options.enableEvidenceSupportWeightDecoupling);
     EXPECT_FLOAT_EQ(options.evidenceSupportWeightExponent, 0.50f);
@@ -2301,7 +2308,7 @@ TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxis
     EXPECT_EQ(cv::countNonZero(loaded.frames.at(2).crossViewRepairedMask), 0);
     EXPECT_TRUE(loaded.frames.front().adaptiveGeometrySupportWeight.empty());
     EXPECT_TRUE(loaded.frames.front().adaptiveGeometryEffectiveViewCount.empty());
-    EXPECT_TRUE(loaded.frames.front().adaptiveGeometryConflictWeight.empty());
+    EXPECT_TRUE(loaded.frames.front().adaptiveGeometryConflictRatio.empty());
     EXPECT_EQ(loaded.frames.front().depthValidMask.type(), CV_8UC1);
     EXPECT_EQ(loaded.frames.front().supportMask.type(), CV_8UC1);
     EXPECT_TRUE(loaded.frames.front().camera.isValid());
@@ -2334,8 +2341,8 @@ TEST(DepthTsdfSurfaceBuilderTest,
         directory.filePath(QStringLiteral("adaptive_support.bin"));
     const QString adaptive_effective_views_path =
         directory.filePath(QStringLiteral("adaptive_effective_views.bin"));
-    const QString adaptive_conflict_path =
-        directory.filePath(QStringLiteral("adaptive_conflict.bin"));
+    const QString adaptive_conflict_ratio_path =
+        directory.filePath(QStringLiteral("adaptive_conflict_ratio.bin"));
 
     const cv::Mat depth =
         (cv::Mat_<float>(2, 2) << 2.0f, 2.0f, 2.0f, 0.0f);
@@ -2348,7 +2355,7 @@ TEST(DepthTsdfSurfaceBuilderTest,
         (cv::Mat_<float>(2, 2) << 0.2f, 0.4f, 0.6f, 0.8f);
     const cv::Mat adaptive_effective_views =
         (cv::Mat_<float>(2, 2) << 1.0f, 1.5f, 2.0f, 3.0f);
-    const cv::Mat adaptive_conflict =
+    const cv::Mat adaptive_conflict_ratio =
         (cv::Mat_<float>(2, 2) << 0.0f, 0.1f, 0.2f, 0.3f);
     ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(depth_path, depth).ok);
     ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
@@ -2364,7 +2371,7 @@ TEST(DepthTsdfSurfaceBuilderTest,
     ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
         adaptive_effective_views_path, adaptive_effective_views).ok);
     ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
-        adaptive_conflict_path, adaptive_conflict).ok);
+        adaptive_conflict_ratio_path, adaptive_conflict_ratio).ok);
     ASSERT_TRUE(cv::imwrite(repaired_mask_path.toStdString(), repaired_mask));
 
     QVector<xjw::mesh::DepthFrameArtifact> artifacts;
@@ -2376,7 +2383,7 @@ TEST(DepthTsdfSurfaceBuilderTest,
         artifact.acceptance = QStringLiteral("accepted");
         artifact.fusionEligible = true;
         artifact.sceneProfile = QStringLiteral("orbital_object");
-        artifact.algorithmRevision = 13;
+        artifact.algorithmRevision = 14;
         artifact.depthPath = depth_path;
         artifact.geometrySupportPath = geometry_support_path;
         artifact.geometrySourceMaskPath = geometry_source_mask_path;
@@ -2386,7 +2393,7 @@ TEST(DepthTsdfSurfaceBuilderTest,
         artifact.adaptiveGeometrySupportWeightPath = adaptive_support_path;
         artifact.adaptiveGeometryEffectiveViewCountPath =
             adaptive_effective_views_path;
-        artifact.adaptiveGeometryConflictWeightPath = adaptive_conflict_path;
+        artifact.adaptiveGeometryConflictRatioPath = adaptive_conflict_ratio_path;
         artifact.cameraModel.setIntrinsics(20.0, 20.0, 1.0, 1.0);
         artifact.cameraModel.setPose(
             std::array<double, 9>{1.0, 0.0, 0.0,
@@ -2400,17 +2407,18 @@ TEST(DepthTsdfSurfaceBuilderTest,
     const auto loaded = xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(artifacts);
     ASSERT_TRUE(loaded.ok) << loaded.errorMessage.toStdString();
     ASSERT_EQ(loaded.frames.size(), 3);
+    EXPECT_TRUE(loaded.frames.front().useAdaptiveGeometryEvidence);
     EXPECT_EQ(loaded.frames.front().adaptiveGeometrySupportWeight.type(), CV_32FC1);
     EXPECT_EQ(
         loaded.frames.front().adaptiveGeometryEffectiveViewCount.type(), CV_32FC1);
-    EXPECT_EQ(loaded.frames.front().adaptiveGeometryConflictWeight.type(), CV_32FC1);
+    EXPECT_EQ(loaded.frames.front().adaptiveGeometryConflictRatio.type(), CV_32FC1);
     EXPECT_FLOAT_EQ(
         loaded.frames.front().adaptiveGeometrySupportWeight.at<float>(0, 1), 0.4f);
     EXPECT_FLOAT_EQ(
         loaded.frames.front().adaptiveGeometryEffectiveViewCount.at<float>(0, 1),
         1.5f);
     EXPECT_FLOAT_EQ(
-        loaded.frames.front().adaptiveGeometryConflictWeight.at<float>(0, 1), 0.1f);
+        loaded.frames.front().adaptiveGeometryConflictRatio.at<float>(0, 1), 0.1f);
     EXPECT_EQ(loaded.frames.front().depthValidMask.at<std::uint8_t>(1, 1), 0);
     EXPECT_FLOAT_EQ(
         loaded.frames.front().adaptiveGeometrySupportWeight.at<float>(1, 1), 0.8f);
@@ -2418,7 +2426,7 @@ TEST(DepthTsdfSurfaceBuilderTest,
         loaded.frames.front().adaptiveGeometryEffectiveViewCount.at<float>(1, 1),
         3.0f);
     EXPECT_FLOAT_EQ(
-        loaded.frames.front().adaptiveGeometryConflictWeight.at<float>(1, 1), 0.3f);
+        loaded.frames.front().adaptiveGeometryConflictRatio.at<float>(1, 1), 0.3f);
 
     const auto sample = xjw::mesh::DepthTsdfSurfaceBuilder::sampleObservation(
         loaded.frames.front(),
@@ -2428,9 +2436,10 @@ TEST(DepthTsdfSurfaceBuilderTest,
         false,
         0.02f);
     ASSERT_TRUE(sample.valid);
+    EXPECT_TRUE(sample.useAdaptiveGeometryEvidence);
     EXPECT_FLOAT_EQ(sample.adaptiveGeometrySupportWeight, 0.4f);
     EXPECT_FLOAT_EQ(sample.adaptiveGeometryEffectiveViewCount, 1.5f);
-    EXPECT_FLOAT_EQ(sample.adaptiveGeometryConflictWeight, 0.1f);
+    EXPECT_FLOAT_EQ(sample.adaptiveGeometryConflictRatio, 0.1f);
 
     auto legacy_artifacts = artifacts;
     for (auto &artifact : legacy_artifacts)
@@ -2438,15 +2447,16 @@ TEST(DepthTsdfSurfaceBuilderTest,
         artifact.algorithmRevision = 12;
         artifact.adaptiveGeometrySupportWeightPath.clear();
         artifact.adaptiveGeometryEffectiveViewCountPath.clear();
-        artifact.adaptiveGeometryConflictWeightPath.clear();
+        artifact.adaptiveGeometryConflictRatioPath.clear();
     }
     const auto legacy =
         xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(legacy_artifacts);
     ASSERT_TRUE(legacy.ok) << legacy.errorMessage.toStdString();
     ASSERT_EQ(legacy.frames.size(), 3);
+    EXPECT_FALSE(legacy.frames.front().useAdaptiveGeometryEvidence);
     EXPECT_TRUE(legacy.frames.front().adaptiveGeometrySupportWeight.empty());
     EXPECT_TRUE(legacy.frames.front().adaptiveGeometryEffectiveViewCount.empty());
-    EXPECT_TRUE(legacy.frames.front().adaptiveGeometryConflictWeight.empty());
+    EXPECT_TRUE(legacy.frames.front().adaptiveGeometryConflictRatio.empty());
 
     auto incomplete_artifacts = artifacts;
     incomplete_artifacts.front().adaptiveGeometrySupportWeightPath.clear();
@@ -2464,6 +2474,18 @@ TEST(DepthTsdfSurfaceBuilderTest,
     EXPECT_FALSE(invalid.ok);
     EXPECT_TRUE(invalid.errorMessage.contains(
         QStringLiteral("effective view count must be zero or at least one")));
+
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        adaptive_effective_views_path, adaptive_effective_views).ok);
+    cv::Mat invalid_conflict_ratio = adaptive_conflict_ratio.clone();
+    invalid_conflict_ratio.at<float>(0, 0) = 1.01f;
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        adaptive_conflict_ratio_path, invalid_conflict_ratio).ok);
+    const auto invalid_ratio =
+        xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(artifacts);
+    EXPECT_FALSE(invalid_ratio.ok);
+    EXPECT_TRUE(invalid_ratio.errorMessage.contains(
+        QStringLiteral("adaptive geometry conflict ratio contains an invalid value")));
 }
 
 TEST(DepthTsdfSurfaceBuilderTest, PixelEvidenceWeightingSeparatesEvidenceClasses)
@@ -2495,6 +2517,112 @@ TEST(DepthTsdfSurfaceBuilderTest, PixelEvidenceWeightingSeparatesEvidenceClasses
         xjw::mesh::DepthTsdfSurfaceBuilder::observationEvidenceWeightMultiplier(
             observation, options),
         0.65f);
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
+     RevisionFourteenAdaptiveEvidenceReplacesDiscreteGeometryWeight)
+{
+    xjw::mesh::DepthTsdfOptions options;
+    options.enablePixelEvidenceWeighting = true;
+    options.unconfirmedNativeObservationMultiplier = 0.25f;
+    options.weakNativeObservationMultiplier = 0.50f;
+    options.repairedObservationMultiplier = 0.65f;
+    options.adaptiveGeometryMinimumObservationMultiplier = 0.15f;
+    xjw::mesh::DepthTsdfObservationSample observation;
+    observation.useAdaptiveGeometryEvidence = true;
+
+    observation.adaptiveGeometrySupportWeight = 0.05f;
+    observation.geometrySupportCount = 0;
+    EXPECT_FLOAT_EQ(
+        xjw::mesh::DepthTsdfSurfaceBuilder::observationEvidenceWeightMultiplier(
+            observation, options),
+        0.15f);
+    observation.geometrySupportCount = 9;
+    EXPECT_FLOAT_EQ(
+        xjw::mesh::DepthTsdfSurfaceBuilder::observationEvidenceWeightMultiplier(
+            observation, options),
+        0.15f);
+
+    observation.adaptiveGeometrySupportWeight = 0.60f;
+    EXPECT_FLOAT_EQ(
+        xjw::mesh::DepthTsdfSurfaceBuilder::observationEvidenceWeightMultiplier(
+            observation, options),
+        0.60f);
+    observation.usedCrossViewRepairedDepth = true;
+    EXPECT_FLOAT_EQ(
+        xjw::mesh::DepthTsdfSurfaceBuilder::observationEvidenceWeightMultiplier(
+            observation, options),
+        0.65f);
+
+    observation.useAdaptiveGeometryEvidence = false;
+    observation.usedCrossViewRepairedDepth = false;
+    observation.geometrySupportCount = 0;
+    EXPECT_FLOAT_EQ(
+        xjw::mesh::DepthTsdfSurfaceBuilder::observationEvidenceWeightMultiplier(
+            observation, options),
+        0.25f);
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
+     RevisionFourteenAdaptiveIntegrationGateIsInclusive)
+{
+    xjw::mesh::DepthTsdfOptions options;
+    xjw::mesh::DepthTsdfObservationSample observation;
+    observation.useAdaptiveGeometryEvidence = true;
+    observation.adaptiveGeometrySupportWeight = 0.75f;
+    observation.adaptiveGeometryEffectiveViewCount = 1.75f;
+    observation.adaptiveGeometryConflictRatio = 0.20f;
+
+    EXPECT_TRUE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::
+            observationHasStrongAdaptiveGeometryEvidence(observation, options));
+    EXPECT_FALSE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::
+            observationUsesSurfaceOnlyIntegration(observation, options));
+
+    observation.adaptiveGeometrySupportWeight = 0.749f;
+    EXPECT_TRUE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::
+            observationUsesSurfaceOnlyIntegration(observation, options));
+    observation.adaptiveGeometrySupportWeight = 0.75f;
+    observation.adaptiveGeometryEffectiveViewCount = 1.749f;
+    EXPECT_TRUE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::
+            observationUsesSurfaceOnlyIntegration(observation, options));
+    observation.adaptiveGeometryEffectiveViewCount = 1.75f;
+    observation.adaptiveGeometryConflictRatio = 0.201f;
+    EXPECT_TRUE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::
+            observationUsesSurfaceOnlyIntegration(observation, options));
+    observation.adaptiveGeometryConflictRatio = 0.20f;
+    observation.usedCrossViewRepairedDepth = true;
+    EXPECT_TRUE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::
+            observationUsesSurfaceOnlyIntegration(observation, options));
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
+     RevisionFourteenStrongSingleViewStillRequiresNeighborhoodGuard)
+{
+    xjw::mesh::DepthTsdfOptions options;
+    options.minimumDistinctCameraSupport = 2;
+    options.minimumGeometryVerifiedObservationWeight = 0.85f;
+    bool geometry_verified = false;
+
+    EXPECT_FALSE(xjw::mesh::DepthTsdfSurfaceBuilder::isSampleSupported(
+        0.9f, 1, 0.9f, options, nullptr, nullptr, 0,
+        &geometry_verified, true));
+    EXPECT_FALSE(geometry_verified);
+
+    options.enableGeometrySingleViewNeighborhoodGuard = true;
+    EXPECT_TRUE(xjw::mesh::DepthTsdfSurfaceBuilder::isSampleSupported(
+        0.9f, 1, 0.9f, options, nullptr, nullptr, 0,
+        &geometry_verified, true));
+    EXPECT_TRUE(geometry_verified);
+    EXPECT_FALSE(xjw::mesh::DepthTsdfSurfaceBuilder::isSampleSupported(
+        0.9f, 1, 0.9f, options, nullptr, nullptr, 0, nullptr, false));
+    EXPECT_TRUE(xjw::mesh::DepthTsdfSurfaceBuilder::isSampleSupported(
+        1.2f, 2, 0.7f, options));
 }
 
 TEST(DepthTsdfSurfaceBuilderTest,
@@ -4074,6 +4202,23 @@ TEST(DepthTsdfSurfaceBuilderTest, SeparatesSupportDepthValidAndConfidenceRejecti
     const auto carved = xjw::mesh::DepthTsdfSurfaceBuilder::build(frames, options);
     ASSERT_TRUE(carved.ok) << carved.errorMessage.toStdString();
     EXPECT_GT(carved.statistics.supportMaskFreeSpaceUpdateCount, 0u);
+
+    QVector<xjw::mesh::DepthTsdfFrame> adaptive_frames = frames;
+    for (xjw::mesh::DepthTsdfFrame &frame : adaptive_frames)
+    {
+        frame.useAdaptiveGeometryEvidence = true;
+        frame.adaptiveGeometrySupportWeight = cv::Mat(
+            frame.depth.size(), CV_32FC1, cv::Scalar(1.0f));
+        frame.adaptiveGeometryEffectiveViewCount = cv::Mat(
+            frame.depth.size(), CV_32FC1, cv::Scalar(2.0f));
+        frame.adaptiveGeometryConflictRatio = cv::Mat(
+            frame.depth.size(), CV_32FC1, cv::Scalar(0.0f));
+    }
+    const auto adaptive_carved =
+        xjw::mesh::DepthTsdfSurfaceBuilder::build(adaptive_frames, options);
+    ASSERT_TRUE(adaptive_carved.ok)
+        << adaptive_carved.errorMessage.toStdString();
+    EXPECT_EQ(adaptive_carved.statistics.supportMaskFreeSpaceUpdateCount, 0u);
 
     options.minimumSupportMaskFreeSpaceViews = static_cast<int>(frames.size()) + 1;
     const auto consensus_guarded = xjw::mesh::DepthTsdfSurfaceBuilder::build(frames, options);
@@ -6066,6 +6211,7 @@ TEST(MeshWorkflowSettingsTest,
     EXPECT_TRUE(options.enableEvidenceSupportWeightDecoupling);
     EXPECT_FLOAT_EQ(options.evidenceSupportWeightExponent, 0.50f);
     EXPECT_TRUE(options.enableWeakEvidenceSurfaceOnlyIntegration);
+    EXPECT_TRUE(options.enableGeometrySingleViewNeighborhoodGuard);
     EXPECT_TRUE(options.enableOrbitalGapAdaptiveTruncation);
     EXPECT_FLOAT_EQ(options.orbitalGapAdaptiveTruncationScale, 1.50f);
     EXPECT_FLOAT_EQ(
@@ -6404,7 +6550,7 @@ TEST(DepthMapMeshBuilderTest, LoadsDepthGridCameraFromWorkspaceManifest)
     EXPECT_EQ(frames.front().sourceIndices, QVector<int>({3, 7}));
 }
 
-TEST(DepthMapMeshBuilderTest, ResolvesRevision13AdaptiveGeometryEvidencePaths)
+TEST(DepthMapMeshBuilderTest, ResolvesCurrentAndLegacyAdaptiveGeometryEvidencePaths)
 {
     namespace fs = std::filesystem;
     const fs::path root =
@@ -6413,28 +6559,34 @@ TEST(DepthMapMeshBuilderTest, ResolvesRevision13AdaptiveGeometryEvidencePaths)
     fs::create_directories(root);
     std::ofstream(root / "depth_0.bin").put('\0');
     std::ofstream(root / "depth_1.bin").put('\0');
+    std::ofstream(root / "depth_2.bin").put('\0');
     const fs::path absolute_effective_view_path =
         fs::absolute(root / "absolute_effective_views.bin");
 
     std::ofstream manifest(root / "mvs_manifest.json");
     manifest
-        << "{\"algorithm_revision\":13,\"frames\":[{"
+        << "{\"algorithm_revision\":14,\"frames\":[{"
            "\"ref_index\":0,\"status\":\"completed\","
            "\"raw_depth_path\":\"depth_0.bin\","
            "\"raw_adaptive_geometry_support_weight_path\":"
            "\"evidence/support_weight.bin\","
            "\"raw_adaptive_geometry_effective_view_count_path\":\""
         << absolute_effective_view_path.generic_string()
-        << "\",\"raw_adaptive_geometry_conflict_weight_path\":"
-           "\"evidence/conflict_weight.bin\"},{"
+        << "\",\"raw_adaptive_geometry_conflict_ratio_path\":"
+           "\"evidence/conflict_ratio.bin\"},{"
            "\"ref_index\":1,\"status\":\"completed\","
-           "\"raw_depth_path\":\"depth_1.bin\"}]}";
+           "\"algorithm_revision\":13,"
+           "\"raw_depth_path\":\"depth_1.bin\","
+           "\"raw_adaptive_geometry_conflict_weight_path\":"
+           "\"evidence/legacy_conflict_weight.bin\"},{"
+           "\"ref_index\":2,\"status\":\"completed\","
+           "\"raw_depth_path\":\"depth_2.bin\"}]}";
     manifest.close();
 
     const auto frames = xjw::mesh::DepthMapMeshBuilder::discoverDepthFrames(
         QString::fromStdString(root.string()));
 
-    ASSERT_EQ(frames.size(), 2);
+    ASSERT_EQ(frames.size(), 3);
     const QString root_path = QString::fromStdString(root.string());
     EXPECT_EQ(
         frames.front().adaptiveGeometrySupportWeightPath,
@@ -6445,12 +6597,19 @@ TEST(DepthMapMeshBuilderTest, ResolvesRevision13AdaptiveGeometryEvidencePaths)
         QDir::cleanPath(QString::fromStdString(
             absolute_effective_view_path.generic_string())));
     EXPECT_EQ(
-        frames.front().adaptiveGeometryConflictWeightPath,
+        frames.front().adaptiveGeometryConflictRatioPath,
         QDir::cleanPath(
-            QDir(root_path).filePath(QStringLiteral("evidence/conflict_weight.bin"))));
-    EXPECT_TRUE(frames.at(1).adaptiveGeometrySupportWeightPath.isEmpty());
-    EXPECT_TRUE(frames.at(1).adaptiveGeometryEffectiveViewCountPath.isEmpty());
-    EXPECT_TRUE(frames.at(1).adaptiveGeometryConflictWeightPath.isEmpty());
+            QDir(root_path).filePath(QStringLiteral("evidence/conflict_ratio.bin"))));
+    EXPECT_TRUE(frames.front().adaptiveGeometryConflictWeightPath.isEmpty());
+    EXPECT_EQ(
+        frames.at(1).adaptiveGeometryConflictWeightPath,
+        QDir::cleanPath(QDir(root_path).filePath(
+            QStringLiteral("evidence/legacy_conflict_weight.bin"))));
+    EXPECT_TRUE(frames.at(1).adaptiveGeometryConflictRatioPath.isEmpty());
+    EXPECT_TRUE(frames.at(2).adaptiveGeometrySupportWeightPath.isEmpty());
+    EXPECT_TRUE(frames.at(2).adaptiveGeometryEffectiveViewCountPath.isEmpty());
+    EXPECT_TRUE(frames.at(2).adaptiveGeometryConflictRatioPath.isEmpty());
+    EXPECT_TRUE(frames.at(2).adaptiveGeometryConflictWeightPath.isEmpty());
 
     fs::remove_all(root);
 }

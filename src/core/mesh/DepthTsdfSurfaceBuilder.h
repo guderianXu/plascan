@@ -31,7 +31,7 @@ struct DepthTsdfFrame
     cv::Mat geometrySourceMask;
     cv::Mat adaptiveGeometrySupportWeight;
     cv::Mat adaptiveGeometryEffectiveViewCount;
-    cv::Mat adaptiveGeometryConflictWeight;
+    cv::Mat adaptiveGeometryConflictRatio;
     cv::Mat inverseDepthMean;
     cv::Mat inverseDepthRelativeSpread;
     cv::Mat crossViewRepairedMask;
@@ -41,6 +41,7 @@ struct DepthTsdfFrame
     cv::Mat colorBgr;
     float frameQualityWeight = 1.0f;
     bool auxiliarySurfaceOnly = false;
+    bool useAdaptiveGeometryEvidence = false;
 };
 
 struct DepthTsdfOptions
@@ -59,6 +60,10 @@ struct DepthTsdfOptions
     float unconfirmedNativeObservationMultiplier = 0.30f;
     float weakNativeObservationMultiplier = 0.55f;
     float repairedObservationMultiplier = 0.70f;
+    float adaptiveGeometryMinimumObservationMultiplier = 0.15f;
+    float adaptiveGeometryFullIntegrationMinimumSupportWeight = 0.75f;
+    float adaptiveGeometryFullIntegrationMinimumEffectiveViewCount = 1.75f;
+    float adaptiveGeometryFullIntegrationMaximumConflictRatio = 0.20f;
     bool enableInverseDepthSpreadWeighting = false;
     float inverseDepthSpreadWeightKnee = 0.005f;
     float inverseDepthSpreadWeightZero = 0.015f;
@@ -991,7 +996,7 @@ struct DepthTsdfObservationSample
     std::uint16_t geometrySourceMask = 0;
     float adaptiveGeometrySupportWeight = 0.0f;
     float adaptiveGeometryEffectiveViewCount = 0.0f;
-    float adaptiveGeometryConflictWeight = 0.0f;
+    float adaptiveGeometryConflictRatio = 0.0f;
     float inverseDepthRelativeSpread = 0.0f;
     int contributingPixelCount = 0;
     int discontinuityRejectedPixelCount = 0;
@@ -999,6 +1004,7 @@ struct DepthTsdfObservationSample
     bool rejectedInvalidNearestPixelRecovery = false;
     bool usedCrossViewConsensusDepth = false;
     bool usedCrossViewRepairedDepth = false;
+    bool useAdaptiveGeometryEvidence = false;
     DepthTsdfObservationFailure failure = DepthTsdfObservationFailure::Projection;
 };
 
@@ -1069,7 +1075,8 @@ public:
                                   bool *singleView = nullptr,
                                   bool *multiView = nullptr,
                                   int maximumGeometrySupportCount = 0,
-                                  bool *geometryVerifiedSingleView = nullptr);
+                                  bool *geometryVerifiedSingleView = nullptr,
+                                  bool hasStrongAdaptiveSurfaceObservation = false);
     static float observationEvidenceWeightMultiplier(
         const DepthTsdfObservationSample &observation,
         const DepthTsdfOptions &options);
@@ -1080,6 +1087,9 @@ public:
         const DepthTsdfObservationSample &observation,
         const DepthTsdfOptions &options);
     static float observationEvidenceSupportWeightMultiplier(
+        const DepthTsdfObservationSample &observation,
+        const DepthTsdfOptions &options);
+    static bool observationHasStrongAdaptiveGeometryEvidence(
         const DepthTsdfObservationSample &observation,
         const DepthTsdfOptions &options);
     static bool observationUsesSurfaceOnlyIntegration(

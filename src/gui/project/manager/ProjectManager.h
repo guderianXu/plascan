@@ -42,6 +42,7 @@ class QWidget;
 class GenerateMaskDialog;
 class ProjectData;
 class ProjectSparseReconstructionManager;
+class ProjectDenseReconstructionManager;
 class ProjectModelManager;
 class ProjectTerrainProductsManager;
 class ProjectCameraSetupManager;
@@ -111,6 +112,11 @@ signals:
     void meshProgressChanged(const QString &stage, int percent);
     // 网格重建结束
     void meshProgressFinished(bool success);
+
+    // 深度图估计与稠密点云融合进度；与网格重建分开，避免两个任务共用状态。
+    void pointCloudProgressChanged(const QString &stage, int percent);
+    void pointCloudProgressFinished(bool success);
+    void pointCloudResultReady(const QString &path, int pointCount);
 
     // 空中三角测量（AT/SFM）进度（主窗口状态栏显示）
     void atProgressChanged(const QString &stage, int percent);
@@ -198,6 +204,8 @@ public slots:
     
     // 取消正在运行的模型生成任务
     void cancelModelGeneration();
+    // 取消正在运行的深度图估计或点云融合任务。
+    void cancelPointCloudGeneration();
     // 取消正在运行的正射影像生成任务。
     void cancelMapProject();
 
@@ -259,6 +267,8 @@ public slots:
     // 异步启动模型生成；输入必须来自项目内已有点云、深度图或显式指定路径。
     void startGenerateModelAsync();
     void startGenerateModelAsync(const QJsonObject &settings);
+    // 使用正式空三相机和稀疏云，异步估计/复用深度图并融合稠密点云。
+    void startCreatePointCloudAsync(const QJsonObject &settings);
     // 异步执行网格重建。
     void startMeshReconstructionAsync(const QJsonObject &settings);
     // 异步执行纹理映射（从最近一次网格生成 OBJ+MTL+PNG）
@@ -345,6 +355,7 @@ private:
     ProjectData *_projectData = nullptr;               // 数据层：负责所有数据读写
     FileDialogStateManager *_fileDialogState = nullptr; // 文件对话框状态（记住上次路径）
     ProjectSparseReconstructionManager *_sparseReconstructionManager = nullptr;
+    ProjectDenseReconstructionManager *_denseReconstructionManager = nullptr;
     ProjectModelManager *_modelManager = nullptr;
     ProjectTerrainProductsManager *_terrainProductsManager = nullptr;
     ProjectCameraSetupManager *_cameraSetupManager = nullptr;

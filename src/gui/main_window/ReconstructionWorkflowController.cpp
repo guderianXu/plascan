@@ -1,7 +1,11 @@
 #include "ReconstructionWorkflowController.h"
 
+#include "project/SparseResultQuality.h"
+#include "reconstruction/CreatePointCloudDialog.h"
 #include "reconstruction/GenerateModelDialog.h"
 #include "ProjectManager.h"
+#include "ProjectModelWorkflowPolicy.h"
+#include "ProjectWorkflowUtils.h"
 #include "reconstruction/TextureMappingDialog.h"
 
 #include <QDir>
@@ -222,7 +226,99 @@ QJsonArray buildGenerateModelSourceCandidates(const QJsonObject &metadata)
     return candidates;
 }
 
+struct PointCloudProjectState
+{
+    bool hasProductionSparseResult = false;
+    bool hasReusableDepthMaps = false;
+    bool hasExistingPointCloud = false;
+    QString blockingReason;
+};
+
+PointCloudProjectState pointCloudProjectState(const QJsonObject &metadata)
+{
+    PointCloudProjectState state;
+    const QJsonArray sparse_results =
+        metadata.value(QStringLiteral("aerial_triangulation_results")).toArray();
+    const int production_index =
+        xjw::gui::project::findLatestProductionAtResultIndex(metadata);
+    if (production_index >= 0 && production_index < sparse_results.size())
+    {
+        state.hasProductionSparseResult = true;
+    }
+    else if (!sparse_results.isEmpty())
+    {
+        state.blockingReason = xjw::gui::project::sparseResultBlockingReason(
+            sparse_results.last().toObject());
+    }
+
+    if (state.hasProductionSparseResult)
+    {
+        state.hasReusableDepthMaps =
+            xjw::gui::project::assessStoredDepthBatchCompatibility(
+                metadata,
+                QString(),
+                production_index)
+                .compatible;
+    }
+
+    const QJsonArray dense_results =
+        metadata.value(QStringLiteral("dense_cloud_results")).toArray();
+    for (const QJsonValue &value : dense_results)
+    {
+        if (!existingCleanPath(
+                value.toObject().value(QStringLiteral("dense_cloud_xyz")).toString()).isEmpty())
+        {
+            state.hasExistingPointCloud = true;
+            break;
+        }
+    }
+    return state;
+}
+
 } // namespace
+
+void ReconstructionWorkflowController::openCreatePointCloudDialog()
+{
+    auto *dialog = prepareDialog<CreatePointCloudDialog>(
+        DialogSettingKeys::CreatePointCloud,
+        _createPointCloudStore);
+    if (!dialog)
+    {
+        return;
+    }
+
+    if (_projectManager)
+    {
+        const PointCloudProjectState state =
+            pointCloudProjectState(_projectManager->currentMeta());
+        dialog->setProjectState(state.hasProductionSparseResult,
+                                state.hasReusableDepthMaps,
+                                state.hasExistingPointCloud,
+                                state.blockingReason);
+    }
+    else
+    {
+        dialog->setProjectState(false, false, false, tr("请先打开项目。"));
+    }
+
+    connect(
+        dialog,
+        &CreatePointCloudDialog::runRequested,
+        this,
+        [this](const QJsonObject &settings)
+        {
+            LOG_INFO(QStringLiteral("创建点云参数: %1")
+                         .arg(QString::fromUtf8(
+                             QJsonDocument(settings).toJson(QJsonDocument::Compact))));
+            if (_projectManager)
+            {
+                _projectManager->startCreatePointCloudAsync(settings);
+            }
+        },
+        Qt::QueuedConnection);
+
+    dialog->exec();
+}
 
 void ReconstructionWorkflowController::openGenerateModelDialog()
 {

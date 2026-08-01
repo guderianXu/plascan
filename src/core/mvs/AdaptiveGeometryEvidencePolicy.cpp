@@ -11,7 +11,7 @@ namespace
 
 struct SanitizedOptions
 {
-    float footprintSigma = 1.5f;
+    float footprintSigma = 2.0f;
     float roundTripSigmaPixels = 1.5f;
     float priorAlpha = 0.25f;
     float priorBeta = 0.25f;
@@ -142,6 +142,13 @@ AdaptiveGeometryEvidenceResult finalizeAdaptiveGeometryEvidence(
     result.observableWeight = std::max(
         0.0f,
         finiteOr(accumulator.observable, 0.0f));
+    result.conflictRatio = result.observableWeight >
+            std::numeric_limits<float>::epsilon()
+        ? std::clamp(
+              result.conflictWeight / result.observableWeight,
+              0.0f,
+              1.0f)
+        : 0.0f;
     const float squared_positive_support = std::max(
         0.0f,
         finiteOr(accumulator.squaredPositiveSupport, 0.0f));

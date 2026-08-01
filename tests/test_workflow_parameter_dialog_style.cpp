@@ -17,6 +17,7 @@
 #include <QSignalSpy>
 #include <QToolButton>
 
+#include "reconstruction/CreatePointCloudDialog.h"
 #include "reconstruction/GenerateModelDialog.h"
 
 namespace
@@ -74,6 +75,98 @@ TEST(WorkflowParameterDialogStyleTest, GenerateModelUsesCompactScopedLayout)
     EXPECT_TRUE(buttonBox->centerButtons());
     EXPECT_EQ(buttonBox->button(QDialogButtonBox::Ok)->text(), QStringLiteral("确定"));
     EXPECT_EQ(buttonBox->button(QDialogButtonBox::Cancel)->text(), QStringLiteral("取消"));
+}
+
+TEST(WorkflowParameterDialogStyleTest, CreatePointCloudMatchesMetashapeParameterLayout)
+{
+    CreatePointCloudDialog dialog;
+    dialog.setProjectState(true, true, true);
+
+    EXPECT_TRUE(dialog.property("workflowParameterDialog").toBool());
+    EXPECT_EQ(dialog.windowTitle(), QStringLiteral("创建点云"));
+    ASSERT_NE(dialog.findChild<QGroupBox *>(QStringLiteral("pointCloudGeneralGroup")), nullptr);
+    ASSERT_NE(dialog.findChild<QGroupBox *>(QStringLiteral("pointCloudAdvancedGroup")), nullptr);
+
+    auto *source = dialog.findChild<QComboBox *>(QStringLiteral("pointCloudSourceCombo"));
+    auto *quality = dialog.findChild<QComboBox *>(QStringLiteral("pointCloudQualityCombo"));
+    auto *filter = dialog.findChild<QComboBox *>(QStringLiteral("pointCloudDepthFilterCombo"));
+    auto *reuse = dialog.findChild<QCheckBox *>(QStringLiteral("reuseDepthMapsCheck"));
+    auto *colors = dialog.findChild<QCheckBox *>(QStringLiteral("calculatePointColorsCheck"));
+    auto *confidence =
+        dialog.findChild<QCheckBox *>(QStringLiteral("calculatePointConfidenceCheck"));
+    auto *replace =
+        dialog.findChild<QCheckBox *>(QStringLiteral("replaceDefaultPointCloudCheck"));
+    ASSERT_NE(source, nullptr);
+    ASSERT_NE(quality, nullptr);
+    ASSERT_NE(filter, nullptr);
+    ASSERT_NE(reuse, nullptr);
+    ASSERT_NE(colors, nullptr);
+    ASSERT_NE(confidence, nullptr);
+    ASSERT_NE(replace, nullptr);
+
+    EXPECT_EQ(source->currentData().toString(), QStringLiteral("depth_maps"));
+    EXPECT_EQ(quality->currentData().toString(), QStringLiteral("highest"));
+    EXPECT_EQ(filter->currentData().toString(), QStringLiteral("mild"));
+    EXPECT_TRUE(reuse->isChecked());
+    EXPECT_TRUE(colors->isChecked());
+    EXPECT_FALSE(confidence->isChecked());
+    EXPECT_FALSE(confidence->isEnabled());
+    EXPECT_TRUE(replace->isEnabled());
+}
+
+TEST(WorkflowParameterDialogStyleTest, CreatePointCloudRestoresAndSubmitsEffectiveSettings)
+{
+    CreatePointCloudDialog dialog;
+    dialog.applySettings(QJsonObject{
+        {QStringLiteral("qualityProfile"), QStringLiteral("high")},
+        {QStringLiteral("depthFilterMode"), QStringLiteral("aggressive")},
+        {QStringLiteral("reuseDepthMaps"), false},
+        {QStringLiteral("saveAfterEachStep"), true},
+        {QStringLiteral("calculatePointColors"), false},
+        {QStringLiteral("calculatePointConfidence"), true},
+        {QStringLiteral("replaceDefaultPointCloud"), true}
+    });
+    dialog.setProjectState(true, true, true);
+
+    QSignalSpy run_spy(&dialog, &CreatePointCloudDialog::runRequested);
+    auto *button_box = dialog.findChild<QDialogButtonBox *>(QStringLiteral("workflowButtonBox"));
+    ASSERT_NE(button_box, nullptr);
+    button_box->button(QDialogButtonBox::Ok)->click();
+    ASSERT_EQ(run_spy.count(), 1);
+
+    const QJsonObject settings = run_spy.at(0).at(0).toJsonObject();
+    EXPECT_EQ(settings.value(QStringLiteral("source_data")).toString(),
+              QStringLiteral("depth_maps"));
+    EXPECT_EQ(settings.value(QStringLiteral("qualityProfile")).toString(),
+              QStringLiteral("high"));
+    EXPECT_EQ(settings.value(QStringLiteral("depthFilterMode")).toString(),
+              QStringLiteral("aggressive"));
+    EXPECT_FALSE(settings.value(QStringLiteral("reuseDepthMaps")).toBool());
+    EXPECT_TRUE(settings.value(QStringLiteral("force_depth_recompute")).toBool());
+    EXPECT_TRUE(settings.value(QStringLiteral("saveAfterEachStep")).toBool());
+    EXPECT_FALSE(settings.value(QStringLiteral("keepColor")).toBool());
+    EXPECT_FALSE(settings.value(QStringLiteral("calculatePointConfidence")).toBool());
+    EXPECT_TRUE(settings.value(QStringLiteral("replaceDefaultPointCloud")).toBool());
+}
+
+TEST(WorkflowParameterDialogStyleTest, CreatePointCloudBlocksWithoutProductionSparseResult)
+{
+    CreatePointCloudDialog dialog;
+    dialog.setProjectState(false, false, false, QStringLiteral("缺少正式空三结果"));
+
+    auto *button_box = dialog.findChild<QDialogButtonBox *>(QStringLiteral("workflowButtonBox"));
+    auto *status = dialog.findChild<QLabel *>(QStringLiteral("workflowStatusLabel"));
+    auto *reuse = dialog.findChild<QCheckBox *>(QStringLiteral("reuseDepthMapsCheck"));
+    auto *replace =
+        dialog.findChild<QCheckBox *>(QStringLiteral("replaceDefaultPointCloudCheck"));
+    ASSERT_NE(button_box, nullptr);
+    ASSERT_NE(status, nullptr);
+    ASSERT_NE(reuse, nullptr);
+    ASSERT_NE(replace, nullptr);
+    EXPECT_FALSE(button_box->button(QDialogButtonBox::Ok)->isEnabled());
+    EXPECT_EQ(status->text(), QStringLiteral("缺少正式空三结果"));
+    EXPECT_FALSE(reuse->isEnabled());
+    EXPECT_FALSE(replace->isEnabled());
 }
 
 TEST(WorkflowParameterDialogStyleTest, AdvancedSectionAndRegionControlsKeepBehavior)

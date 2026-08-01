@@ -147,6 +147,7 @@ private:
     QProgressDialog*  _openProgressDialog{};           // 打开项目期间显示的模态进度对话框
     QProgressDialog*  _saveProgressDialog{};           // 保存操作期间显示的模态进度对话框
     TaskStatusWidget* _meshTaskStatus{};                // 网格重建状态栏任务状态
+    TaskStatusWidget* _pointCloudTaskStatus{};          // 深度图估计/稠密点云融合状态
     TaskStatusWidget* _atTaskStatus{};                  // 空三状态栏任务状态
     TaskStatusWidget* _sgTaskStatus{};                  // 特征匹配状态栏任务状态
     TaskStatusWidget* _maskTaskStatus{};                // 照片蒙版生成状态栏任务状态
@@ -201,6 +202,9 @@ private slots:
     // 网格重建进度状态栏更新
     void onMeshProgress(const QString &stage, int percent);
     void onMeshFinished(bool success);
+    // 创建点云使用独立状态，避免与后续网格重建的取消按钮串线。
+    void onPointCloudProgress(const QString &stage, int percent);
+    void onPointCloudFinished(bool success);
     // 空三（AT）进度状态栏更新
     void onAtProgress(const QString &stage, int percent);
     void onAtFinished(bool success);

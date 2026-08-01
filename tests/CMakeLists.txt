@@ -763,6 +763,7 @@ gtest_discover_tests(test_workspace_section_icons
 
 add_executable(test_workflow_parameter_dialog_style
     test_workflow_parameter_dialog_style.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/CreatePointCloudDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/GenerateModelDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/shared/WorkflowParameterDialogStyle.cpp
 )

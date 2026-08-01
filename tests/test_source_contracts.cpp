@@ -881,7 +881,7 @@ TEST(GuiAlgorithmAlignmentContractTest, ModelManagerUsesSharedModelWorkflowEntry
     });
 }
 
-TEST(GuiAlgorithmAlignmentContractTest, GenerateModelRoutesDirectlyToModelManager)
+TEST(GuiAlgorithmAlignmentContractTest, ReconstructionStagesRouteToDedicatedManagers)
 {
     const QString controller = readSourceFile(
         QStringLiteral("src/gui/main_window/ReconstructionWorkflowController.cpp"));
@@ -891,9 +891,11 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelRoutesDirectlyToModelManage
         QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
 
     expectContainsAll(controller, {
+        "_projectManager->startCreatePointCloudAsync(settings)",
         "_projectManager->startGenerateModelAsync(settings)",
     });
     expectContainsAll(project_manager_header, {
+        "void startCreatePointCloudAsync(const QJsonObject &settings)",
         "void startGenerateModelAsync(const QJsonObject &settings)",
     });
 
@@ -902,11 +904,11 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelRoutesDirectlyToModelManage
         "void ProjectManager::startGenerateModelAsync(const QJsonObject &settings)",
         "void ProjectManager::startMeshReconstructionAsync");
     expectContainsAll(generate_block, {
+        "_denseReconstructionManager->startCreatePointCloudAsync(settings)",
         "_modelManager->startMeshReconstructionAsync(settings)",
     });
     expectNotContainsAll(project_manager, {
         "ProjectModelGenerationWorkflow",
-        "ProjectDenseReconstructionManager",
         "ProjectReconstructionManager",
         "ProjectTaskDispatcher",
     });
@@ -1244,6 +1246,7 @@ TEST(GuiDialogLayoutContractTest, DialogSourcesAreGroupedByDomain)
         "dialogs/application/AboutDialog.cpp",
         "dialogs/camera/CameraModel3DDialog.cpp",
         "dialogs/image/GenerateMaskDialog.cpp",
+        "dialogs/reconstruction/CreatePointCloudDialog.cpp",
         "dialogs/reconstruction/GenerateModelDialog.cpp",
         "dialogs/tie_points/MatchViewerDialog.cpp",
         "dialogs/shared/WorkflowParameterDialogStyle.cpp",
@@ -1260,11 +1263,11 @@ TEST(GuiDialogLayoutContractTest, DialogSourcesAreGroupedByDomain)
         QStringLiteral("<header>camera/CameraModel3DDialog.h</header>")));
 }
 
-TEST(GuiArchitectureContractTest, DenseReconstructionManagerIsNotPartOfGui)
+TEST(GuiArchitectureContractTest, DenseReconstructionManagerOnlyCoordinatesCoreMvs)
 {
-    EXPECT_FALSE(sourceFileExists(
+    EXPECT_TRUE(sourceFileExists(
         QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.h")));
-    EXPECT_FALSE(sourceFileExists(
+    EXPECT_TRUE(sourceFileExists(
         QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp")));
     EXPECT_FALSE(sourceFileExists(
         QStringLiteral("src/gui/project/manager/ProjectModelGenerationWorkflow.h")));
@@ -1272,7 +1275,18 @@ TEST(GuiArchitectureContractTest, DenseReconstructionManagerIsNotPartOfGui)
         QStringLiteral("src/gui/project/manager/ProjectModelGenerationWorkflow.cpp")));
 
     const QString guiSources = readSourceFile(QStringLiteral("src/gui/cmake/GuiSources.cmake"));
-    EXPECT_FALSE(guiSources.contains(QStringLiteral("ProjectDenseReconstructionManager")));
+    EXPECT_TRUE(guiSources.contains(QStringLiteral("ProjectDenseReconstructionManager")));
+    const QString denseManager = readSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
+    expectContainsAll(denseManager, {
+        "xjw::mvs::DepthMapGenerator",
+        "xjw::mvs::fuseDepthMapsStreaming",
+        "xjw::gui::tasks::runGuardedWithOutcome",
+    });
+    expectNotContainsAll(denseManager, {
+        "PatchMatchCPU",
+        "PatchMatchCuda",
+    });
     EXPECT_FALSE(sourceFileExists(
         QStringLiteral("src/gui/project/manager/ProjectReconstructionManager.cpp")));
     EXPECT_FALSE(sourceFileExists(

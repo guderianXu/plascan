@@ -450,6 +450,8 @@ void MainWindow::setupProjectManager()
                     connect(act, &QAction::triggered, _reconController, slot);
                 }
             };
+            connectRecon(_mainMenu->createPointCloudAction(),
+                         &ReconstructionWorkflowController::openCreatePointCloudDialog);
             connectRecon(_mainMenu->generateModelAction(),     &ReconstructionWorkflowController::openGenerateModelDialog);
             connectRecon(_mainMenu->generateTextureAction(),
                          &ReconstructionWorkflowController::openTextureMappingDialog);
@@ -983,6 +985,20 @@ void MainWindow::setupProjectManager()
             this, &MainWindow::onMeshProgress);
     connect(_projectManager, &ProjectManager::meshProgressFinished,
             this, &MainWindow::onMeshFinished);
+
+    // ── 深度图估计/创建点云状态栏进度条 ─────────────────────────
+    _pointCloudTaskStatus = createTaskStatus(220, true, tr("正在取消点云创建..."));
+    connect(_pointCloudTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
+    {
+        if (_projectManager)
+        {
+            _projectManager->cancelPointCloudGeneration();
+        }
+    });
+    connect(_projectManager, &ProjectManager::pointCloudProgressChanged,
+            this, &MainWindow::onPointCloudProgress);
+    connect(_projectManager, &ProjectManager::pointCloudProgressFinished,
+            this, &MainWindow::onPointCloudFinished);
 
     // ── 空三（AT）/光束法平差状态栏进度条 ───────────────────────
     _atTaskStatus = createTaskStatus(220, true, tr("正在取消空三/光束法平差..."));

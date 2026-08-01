@@ -3,7 +3,9 @@
 #include "DepthMapFusion.h"
 
 #include <cstddef>
+#include <atomic>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -18,6 +20,8 @@ struct StreamingDepthFusionConfig
     int neighborCount = 4;
     int cacheFrameLimit = 32;
     std::size_t preReduceThreshold = 2000000;
+    bool useColor = true;
+    std::shared_ptr<std::atomic_bool> cancelFlag;
 };
 
 struct StreamingDepthFusionResult

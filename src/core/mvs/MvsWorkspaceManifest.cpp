@@ -122,6 +122,8 @@ QJsonObject MvsDepthFrameRecord::toJson() const
                   rawAdaptiveGeometrySupportWeightPath);
     object.insert(QStringLiteral("raw_adaptive_geometry_effective_view_count_path"),
                   rawAdaptiveGeometryEffectiveViewCountPath);
+    object.insert(QStringLiteral("raw_adaptive_geometry_conflict_ratio_path"),
+                  rawAdaptiveGeometryConflictRatioPath);
     object.insert(QStringLiteral("raw_adaptive_geometry_conflict_weight_path"),
                   rawAdaptiveGeometryConflictWeightPath);
     object.insert(QStringLiteral("raw_geometry_source_mask_path"), rawGeometrySourceMaskPath);
@@ -204,6 +206,8 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
         QStringLiteral("raw_adaptive_geometry_support_weight_path")).toString();
     record.rawAdaptiveGeometryEffectiveViewCountPath = object.value(
         QStringLiteral("raw_adaptive_geometry_effective_view_count_path")).toString();
+    record.rawAdaptiveGeometryConflictRatioPath = object.value(
+        QStringLiteral("raw_adaptive_geometry_conflict_ratio_path")).toString();
     record.rawAdaptiveGeometryConflictWeightPath = object.value(
         QStringLiteral("raw_adaptive_geometry_conflict_weight_path")).toString();
     record.rawGeometrySourceMaskPath = object.value(
@@ -519,9 +523,13 @@ bool MvsWorkspaceManifest::hasReusableCompletedFrame(int refIndex, const QString
     {
         return !path.isEmpty() && QFileInfo::exists(path);
     };
+    const bool conflict_artifact_exists =
+        artifact_exists(record.rawAdaptiveGeometryConflictRatioPath) ||
+        (record.algorithmRevision < kMvsAdaptiveGeometryConflictRatioRevision &&
+         artifact_exists(record.rawAdaptiveGeometryConflictWeightPath));
     return artifact_exists(record.rawAdaptiveGeometrySupportWeightPath) &&
            artifact_exists(record.rawAdaptiveGeometryEffectiveViewCountPath) &&
-           artifact_exists(record.rawAdaptiveGeometryConflictWeightPath);
+           conflict_artifact_exists;
 }
 
 QJsonObject MvsWorkspaceManifest::toJson() const

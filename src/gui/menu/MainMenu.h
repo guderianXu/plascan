@@ -213,6 +213,9 @@ public:
     /** @brief 返回"生成正射影像"动作。 */
     QAction *generateOrthoAction() const;
 
+    /** @brief 返回"创建点云"动作。 */
+    QAction *createPointCloudAction() const;
+
     /** @brief 返回"生成模型"动作。 */
     QAction *generateModelAction() const;
 
@@ -369,6 +372,7 @@ private:
     QAction *_featureVisualizationAct{};///< 特征点可视化设置对话框
     QAction *_workflowAerialTriangulationAct{}; ///< 工作流程中的对齐照片参数对话框
     QAction *_workflowSettingsAct{};    ///< 工作流程级设备、并行度和数值门限设置
+    QAction *_createPointCloudAct{};     ///< 从深度图创建密集点云
     QAction *_generateModelAct{};       ///< 生成模型（源数据选择）
     QAction *_generateTextureAct{};     ///< 生成纹理（已有模型投影纹理）
     QAction *_overlapAnalysisAct{};     ///< 重叠度分析

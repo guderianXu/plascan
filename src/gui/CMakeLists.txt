@@ -110,6 +110,13 @@ target_link_libraries(gui_project PRIVATE
   project_workflows
 )
 
+# ProjectDenseReconstructionManager 位于 GUI 协调层，但其算法调用只通过
+# mvs 公共接口完成。显式声明依赖，确保 gui_project 被测试或其它目标单独链接时
+# 不依赖 plascan_gui 偶然补齐未解析符号。
+if(TARGET mvs)
+  target_link_libraries(gui_project PRIVATE mvs)
+endif()
+
 if(GDAL_INCLUDE_DIRS)
   target_include_directories(plascan_gui PRIVATE ${GDAL_INCLUDE_DIRS})
 endif()

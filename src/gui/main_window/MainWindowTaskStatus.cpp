@@ -128,6 +128,7 @@ void MainWindow::refreshDashboardTaskSnapshots()
     };
 
     appendTask(tr("网格重建"), _meshTaskStatus);
+    appendTask(tr("创建点云"), _pointCloudTaskStatus);
     appendTask(tr("空三/光束法平差"), _atTaskStatus);
     appendTask(tr("特征匹配"), _sgTaskStatus);
     appendTask(tr("生成蒙版"), _maskTaskStatus);
@@ -300,6 +301,41 @@ void MainWindow::onMeshFinished(bool success)
     refreshDashboardTaskSnapshots();
     statusBar()->showMessage(
         success ? tr("网格重建完成") : tr("网格重建失败"), 4000);
+}
+
+// ============================================================
+//  深度图估计与点云融合进度状态栏槽
+// ============================================================
+
+void MainWindow::onPointCloudProgress(const QString &stage, int percent)
+{
+    if (!_pointCloudTaskStatus)
+    {
+        return;
+    }
+    const int clamped_percent = std::clamp(percent, 0, 100);
+    const QString status_text = clamped_percent > 0 && clamped_percent < 100
+        ? QStringLiteral("%1 %2%").arg(stage).arg(clamped_percent)
+        : stage;
+    if (!_pointCloudTaskStatus->isActive())
+    {
+        _pointCloudTaskStatus->begin(status_text, 0, 100);
+    }
+    _pointCloudTaskStatus->updateProgress(status_text, clamped_percent);
+    refreshDashboardTaskSnapshots();
+    statusBar()->showMessage(QString());
+}
+
+void MainWindow::onPointCloudFinished(bool success)
+{
+    if (!_pointCloudTaskStatus)
+    {
+        return;
+    }
+    _pointCloudTaskStatus->finish();
+    refreshDashboardTaskSnapshots();
+    statusBar()->showMessage(
+        success ? tr("点云创建完成") : tr("点云创建已取消或失败"), 4000);
 }
 
 // ============================================================

@@ -809,7 +809,7 @@ TEST(MvsPipelineTest, DepthFrameResultReleasesFusionQualityArtifacts)
         QSharedPointer<cv::Mat>::create(4, 5, CV_32F, cv::Scalar(0.8f));
     result.adaptiveGeometryEffectiveViewCount =
         QSharedPointer<cv::Mat>::create(4, 5, CV_32F, cv::Scalar(2.0f));
-    result.adaptiveGeometryConflictWeight =
+    result.adaptiveGeometryConflictRatio =
         QSharedPointer<cv::Mat>::create(4, 5, CV_32F, cv::Scalar(0.1f));
     result.validMask = QSharedPointer<cv::Mat>::create(4, 5, CV_8U, cv::Scalar(255));
 
@@ -820,7 +820,7 @@ TEST(MvsPipelineTest, DepthFrameResultReleasesFusionQualityArtifacts)
     EXPECT_TRUE(result.supportCount.isNull());
     EXPECT_TRUE(result.adaptiveGeometrySupportWeight.isNull());
     EXPECT_TRUE(result.adaptiveGeometryEffectiveViewCount.isNull());
-    EXPECT_TRUE(result.adaptiveGeometryConflictWeight.isNull());
+    EXPECT_TRUE(result.adaptiveGeometryConflictRatio.isNull());
     EXPECT_TRUE(result.validMask.isNull());
 }
 
@@ -1297,6 +1297,9 @@ TEST(DepthGeometryConsistencyTest, FindsSubpixelNeighborAndVerifiesRoundTrip)
         true);
     EXPECT_EQ(central_only.evidence, xjw::mvs::DepthConsistencyEvidence::Contradicted);
     EXPECT_TRUE(central_only.continuousGeometryValid);
+    EXPECT_EQ(
+        xjw::mvs::adaptiveGeometryEvidenceClass(central_only),
+        xjw::mvs::AdaptiveGeometryEvidenceClass::Comparable);
     EXPECT_GT(central_only.worldSurfaceResidual, 0.0f);
     EXPECT_GT(central_only.jointWorldPixelFootprint, 0.0f);
 
@@ -1319,6 +1322,123 @@ TEST(DepthGeometryConsistencyTest, FindsSubpixelNeighborAndVerifiesRoundTrip)
                     edge_aware.jointWorldPixelFootprint,
                 0.5f,
                 1.0e-5f);
+}
+
+TEST(DepthGeometryConsistencyTest,
+     JointPixelFootprintIncludesEpipolarTriangulationUncertainty)
+{
+    constexpr double identity[9] = {1.0, 0.0, 0.0,
+                                    0.0, 1.0, 0.0,
+                                    0.0, 0.0, 1.0};
+    constexpr double reference_center[3] = {0.0, 0.0, 0.0};
+    constexpr double source_center[3] = {1.0, 0.0, 0.0};
+    const xjw::Camera reference_camera = makeMvsCamera(
+        100.0, 100.0, 20.0, 20.0, identity, reference_center);
+    const xjw::Camera source_camera = makeMvsCamera(
+        100.0, 100.0, 20.0, 20.0, identity, source_center);
+    cv::Mat source_depth(41, 41, CV_32F, cv::Scalar(0.0f));
+    source_depth.at<float>(20, 10) = 10.0f;
+
+    const auto result = xjw::mvs::evaluateProjectedDepthConsistency(
+        reference_camera,
+        cv::Point2f(20.0f, 20.0f),
+        10.0f,
+        source_camera,
+        source_depth,
+        0.01f,
+        0,
+        1.0f,
+        true);
+
+    ASSERT_EQ(result.evidence, xjw::mvs::DepthConsistencyEvidence::Consistent);
+    ASSERT_TRUE(result.continuousGeometryValid);
+    const float reference_pixel_size =
+        10.0f / std::sqrt(100.0f * 100.0f + 1.0f);
+    const float target_epipolar_uncertainty = 10.0f / 9.0f;
+    EXPECT_NEAR(
+        result.jointWorldPixelFootprint,
+        0.5f * (reference_pixel_size + target_epipolar_uncertainty),
+        1.0e-4f);
+    EXPECT_GT(result.jointWorldPixelFootprint, 5.0f * 0.1f);
+}
+
+TEST(DepthGeometryConsistencyTest,
+     JointPixelFootprintFallsBackForDegenerateEpipolarGeometry)
+{
+    constexpr double identity[9] = {1.0, 0.0, 0.0,
+                                    0.0, 1.0, 0.0,
+                                    0.0, 0.0, 1.0};
+    constexpr double reference_center[3] = {0.0, 0.0, 0.0};
+    const xjw::Camera reference_camera = makeMvsCamera(
+        100.0, 100.0, 20.0, 20.0, identity, reference_center);
+
+    const xjw::Camera coincident_camera = makeMvsCamera(
+        100.0, 100.0, 20.0, 20.0, identity, reference_center);
+    cv::Mat coincident_depth(41, 41, CV_32F, cv::Scalar(0.0f));
+    coincident_depth.at<float>(20, 20) = 10.0f;
+    const auto coincident = xjw::mvs::evaluateProjectedDepthConsistency(
+        reference_camera,
+        cv::Point2f(20.0f, 20.0f),
+        10.0f,
+        coincident_camera,
+        coincident_depth,
+        0.01f,
+        0,
+        1.0f,
+        true);
+    ASSERT_TRUE(coincident.continuousGeometryValid);
+    EXPECT_NEAR(coincident.jointWorldPixelFootprint, 0.1f, 1.0e-6f);
+
+    constexpr double collinear_center[3] = {0.0, 0.0, 1.0};
+    const xjw::Camera collinear_camera = makeMvsCamera(
+        100.0, 100.0, 20.0, 20.0, identity, collinear_center);
+    cv::Mat collinear_depth(41, 41, CV_32F, cv::Scalar(0.0f));
+    collinear_depth.at<float>(20, 20) = 9.0f;
+    const auto collinear = xjw::mvs::evaluateProjectedDepthConsistency(
+        reference_camera,
+        cv::Point2f(20.0f, 20.0f),
+        10.0f,
+        collinear_camera,
+        collinear_depth,
+        0.01f,
+        0,
+        1.0f,
+        true);
+    ASSERT_TRUE(collinear.continuousGeometryValid);
+    EXPECT_NEAR(collinear.jointWorldPixelFootprint, 0.095f, 1.0e-6f);
+}
+
+TEST(DepthGeometryConsistencyTest,
+     MissingSourceDepthRemainsUnverifiableWithContinuousMetrics)
+{
+    constexpr double identity[9] = {1.0, 0.0, 0.0,
+                                    0.0, 1.0, 0.0,
+                                    0.0, 0.0, 1.0};
+    constexpr double reference_center[3] = {0.0, 0.0, 0.0};
+    constexpr double source_center[3] = {1.0, 0.0, 0.0};
+    const xjw::Camera reference_camera = makeMvsCamera(
+        100.0, 100.0, 20.0, 20.0, identity, reference_center);
+    const xjw::Camera source_camera = makeMvsCamera(
+        100.0, 100.0, 20.0, 20.0, identity, source_center);
+    const cv::Mat source_depth(41, 41, CV_32F, cv::Scalar(0.0f));
+
+    const auto result = xjw::mvs::evaluateProjectedDepthConsistency(
+        reference_camera,
+        cv::Point2f(20.0f, 20.0f),
+        10.0f,
+        source_camera,
+        source_depth,
+        0.01f,
+        0,
+        1.0f,
+        true);
+
+    EXPECT_EQ(result.evidence, xjw::mvs::DepthConsistencyEvidence::Unverifiable);
+    EXPECT_FALSE(result.continuousGeometryValid);
+    EXPECT_EQ(
+        xjw::mvs::adaptiveGeometryEvidenceClass(result),
+        xjw::mvs::AdaptiveGeometryEvidenceClass::Unobservable);
+    EXPECT_FLOAT_EQ(result.jointWorldPixelFootprint, 0.0f);
 }
 
 TEST(DepthGeometryConsistencyTest, UsesAllVerifiableSourceVotes)
@@ -1504,7 +1624,7 @@ TEST(DepthGeometryConsistencyTest,
               maps.supportWeight.at<float>(0, 2));
     EXPECT_FLOAT_EQ(maps.effectiveViewCount.at<float>(0, 0), 2.0f);
     EXPECT_FLOAT_EQ(maps.effectiveViewCount.at<float>(0, 2), 1.0f);
-    EXPECT_FLOAT_EQ(maps.conflictWeight.at<float>(0, 2), 1.0f);
+    EXPECT_FLOAT_EQ(maps.conflictRatio.at<float>(0, 2), 1.0f);
     EXPECT_FLOAT_EQ(maps.supportWeight.at<float>(0, 1), 0.0f);
     EXPECT_FLOAT_EQ(maps.effectiveViewCount.at<float>(0, 1), 0.0f);
 }

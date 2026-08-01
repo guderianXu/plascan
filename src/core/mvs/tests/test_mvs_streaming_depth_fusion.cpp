@@ -2,6 +2,9 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <memory>
+
 namespace
 {
 
@@ -30,6 +33,26 @@ TEST(StreamingDepthFusionServiceTest, RejectsInvalidInputsBeforeLoadingFrames)
         1, {}, loader, &result, &error));
     EXPECT_EQ(loadCount, 0);
     EXPECT_FALSE(error.empty());
+}
+
+TEST(StreamingDepthFusionServiceTest, StopsBeforeLoadingWhenAlreadyCancelled)
+{
+    xjw::mvs::StreamingDepthFusionConfig config;
+    config.cancelFlag = std::make_shared<std::atomic_bool>(true);
+
+    xjw::mvs::StreamingDepthFusionResult result;
+    std::string error;
+    int loadCount = 0;
+    const xjw::mvs::FusionFrameLoader loader =
+        [&loadCount](int, xjw::mvs::FusionFrameInput *, std::string *) {
+            ++loadCount;
+            return true;
+        };
+
+    EXPECT_FALSE(xjw::mvs::fuseDepthMapsStreaming(
+        2, config, loader, &result, &error));
+    EXPECT_EQ(loadCount, 0);
+    EXPECT_NE(error.find("cancelled"), std::string::npos);
 }
 
 } // namespace

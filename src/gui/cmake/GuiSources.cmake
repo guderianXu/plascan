@@ -45,12 +45,14 @@ set(GUI_SOURCES
   panels/LogPanel.cpp
   project/services/BundleAdjustService.cpp
   project/services/ProjectCameraImportService.cpp
+  project/services/DenseSparseCloudPreparation.cpp
   project/services/ProjectResourceCleanupService.cpp
   project/services/ProjectTiePointResultService.cpp
   project/support/ProjectBundleAdjustExecution.cpp
   project/support/ProjectBundleAdjustWorkflow.cpp
   project/support/ProjectCameraInitialization.cpp
   project/support/ProjectDashboardSummary.cpp
+  project/support/ProjectDenseWorkflowConfig.cpp
   project/support/ProjectModelWorkflowPolicy.cpp
   project/support/ProjectMetadataOperations.cpp
   project/support/ProjectReferenceDatasets.cpp
@@ -61,6 +63,7 @@ set(GUI_SOURCES
   project/support/ProjectSurveyControl.cpp
   project/support/ProjectWorkflowReports.cpp
   project/manager/ProjectManager.cpp
+  project/manager/ProjectDenseReconstructionManager.cpp
   project/manager/ProjectModelManager.cpp
   project/manager/ProjectUiCommands.cpp
   project/manager/ProjectSparseReconstructionManager.cpp
@@ -146,12 +149,14 @@ set(GUI_HEADERS
   project/data/ProjectData.h
   project/services/BundleAdjustService.h
   project/services/ProjectCameraImportService.h
+  project/services/DenseSparseCloudPreparation.h
   project/services/ProjectResourceCleanupService.h
   project/services/ProjectTiePointResultService.h
   project/support/ProjectBundleAdjustExecution.h
   project/support/ProjectBundleAdjustWorkflow.h
   project/support/ProjectCameraInitialization.h
   project/support/ProjectDashboardSummary.h
+  project/support/ProjectDenseWorkflowConfig.h
   project/support/ProjectModelWorkflowPolicy.h
   project/support/ProjectMetadataOperations.h
   project/support/ProjectReferenceDatasets.h
@@ -163,6 +168,7 @@ set(GUI_HEADERS
   project/support/ProjectWorkflowUtils.h
   project/support/ProjectWorkflowReports.h
   project/manager/ProjectManager.h
+  project/manager/ProjectDenseReconstructionManager.h
   project/manager/ProjectModelManager.h
   project/manager/ProjectUiCommands.h
   project/manager/ProjectSparseReconstructionManager.h
@@ -204,12 +210,14 @@ set(GUI_HEADERS
 set(GUI_PROJECT_SOURCES
   project/services/BundleAdjustService.cpp
   project/services/ProjectCameraImportService.cpp
+  project/services/DenseSparseCloudPreparation.cpp
   project/services/ProjectResourceCleanupService.cpp
   project/services/ProjectTiePointResultService.cpp
   project/support/ProjectBundleAdjustExecution.cpp
   project/support/ProjectBundleAdjustWorkflow.cpp
   project/support/ProjectCameraInitialization.cpp
   project/support/ProjectDashboardSummary.cpp
+  project/support/ProjectDenseWorkflowConfig.cpp
   project/support/ProjectModelWorkflowPolicy.cpp
   project/support/ProjectMetadataOperations.cpp
   project/support/ProjectReferenceDatasets.cpp
@@ -220,6 +228,7 @@ set(GUI_PROJECT_SOURCES
   project/support/ProjectSurveyControl.cpp
   project/support/ProjectWorkflowReports.cpp
   project/manager/ProjectManager.cpp
+  project/manager/ProjectDenseReconstructionManager.cpp
   project/manager/ProjectModelManager.cpp
   project/manager/ProjectUiCommands.cpp
   project/manager/ProjectSparseReconstructionManager.cpp

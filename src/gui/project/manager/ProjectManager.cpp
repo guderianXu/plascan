@@ -1,5 +1,6 @@
 #include "ProjectManager.h"
 #include "ProjectModelManager.h"
+#include "ProjectDenseReconstructionManager.h"
 #include "ProjectSparseReconstructionManager.h"
 #include "ProjectTerrainProductsManager.h"
 #include "ProjectCameraSetupManager.h"
@@ -465,6 +466,8 @@ ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
     , _projectData(projectData)
     , _sparseReconstructionManager(
           new ProjectSparseReconstructionManager(this, projectData, parent, this))
+    , _denseReconstructionManager(
+          new ProjectDenseReconstructionManager(this, projectData, parent, this))
     , _modelManager(new ProjectModelManager(this, projectData, parent, this))
     , _terrainProductsManager(new ProjectTerrainProductsManager(this, projectData, parent, this))
     , _cameraSetupManager(new ProjectCameraSetupManager(this, projectData, parent, this))
@@ -530,6 +533,18 @@ ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
             this, &ProjectManager::meshProgressChanged);
         connect(_modelManager, &ProjectModelManager::meshProgressFinished,
             this, &ProjectManager::meshProgressFinished);
+        connect(_denseReconstructionManager,
+            &ProjectDenseReconstructionManager::pointCloudProgressChanged,
+            this,
+            &ProjectManager::pointCloudProgressChanged);
+        connect(_denseReconstructionManager,
+            &ProjectDenseReconstructionManager::pointCloudProgressFinished,
+            this,
+            &ProjectManager::pointCloudProgressFinished);
+        connect(_denseReconstructionManager,
+            &ProjectDenseReconstructionManager::pointCloudResultReady,
+            this,
+            &ProjectManager::pointCloudResultReady);
         connect(_sparseReconstructionManager,
             &ProjectSparseReconstructionManager::atProgressChanged,
             this, &ProjectManager::atProgressChanged);
@@ -2530,6 +2545,14 @@ void ProjectManager::startGenerateModelAsync(const QJsonObject &settings)
     }
 }
 
+void ProjectManager::startCreatePointCloudAsync(const QJsonObject &settings)
+{
+    if (_denseReconstructionManager)
+    {
+        _denseReconstructionManager->startCreatePointCloudAsync(settings);
+    }
+}
+
 void ProjectManager::startMeshReconstructionAsync(const QJsonObject &settings)
 {
     if (_modelManager)
@@ -2819,6 +2842,14 @@ void ProjectManager::cancelModelGeneration()
     if (_modelManager)
     {
         _modelManager->cancelActiveTask();
+    }
+}
+
+void ProjectManager::cancelPointCloudGeneration()
+{
+    if (_denseReconstructionManager)
+    {
+        _denseReconstructionManager->cancelActiveTask();
     }
 }
 

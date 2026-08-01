@@ -6,6 +6,9 @@
 
 ### 新增
 
+- 工作流程新增“创建点云”入口和独立 `ProjectDenseReconstructionManager`：从最新正式 SfM/BA 结果准备
+  MVS 视图与项目蒙版，可复用兼容深度图或重新估计，并通过有界流式融合生成、登记稠密点云；主窗口提供
+  独立的真实进度与取消状态。
 - 新增统一 `image_matching` 模块和可扩展算法注册接口；当前只注册 CUDA SIFT + TensorRT LightGlue，
   所有消费者共用算法版本、配置指纹、模型指纹和几何验证结果契约。
 - 新增逐影像 `.pimatch` v1 二进制分片：一个影像文件保存该影像的匹配观测、所有相邻影像变体、
@@ -50,6 +53,10 @@
 
 ### 优化
 
+- MVS 深度算法修订到第 14 版，轨道物体场景持久化连续几何支持权重、有效视图数和冲突比例；TSDF
+  以该证据区分强单视图表面与弱/冲突观测，并保留旧版 artifact 路径读取，但拒绝复用不完整的新版本批次。
+- 深度图复用门控增加批次完整性、项目输入签名和空三重建代次校验；流式融合支持统一取消标志和可选颜色，
+  避免把部分深度帧或旧相机解生成的缓存直接用于当前点云。
 - CUDA SIFT 描述子改为只保留在单次 `MatchPhotosTask` 的有界内存缓存，最终结果提交后释放；
   GUI、CLI、SfM 和空三均直接读取 `.pimatch`，不再维护独立特征文件和成对 sidecar。
 - LightGlue 推理链收敛为 TensorRT-only：删除 C++ TorchScript matcher、CPU/自动回退、旧后端基准和
@@ -184,6 +191,13 @@
 
 ### 验证
 
+- `cmake -S . -B build/windows-vcpkg-cuda-release -DBUILD_TESTS=ON` 与
+  `cmake --build build/windows-vcpkg-cuda-release --parallel 32` 通过，完整生成 `plascan.exe`、MVS、mesh、
+  `gui_project` 和全部测试目标。
+- 创建点云/MVS/mesh 聚焦 CTest 通过 148/148；相关完整测试程序通过 380/380（MVS pipeline 72、
+  workspace manifest 21、自适应几何证据 8、流式融合 3、mesh 269、工作流对话框 7）。新增 GUI 架构
+  契约通过 3/3，`FullPipelineEntrypointTest` 通过。`RepoHygieneTest` 仍因既有测试读取迁移前的
+  `src/gui/dialogs/CameraModel3DDialog.cpp` 路径失败，实际文件已位于 `dialogs/camera/`。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest\.BaInputBuilderSourceKeepsLinesWithinStyleLimit" --output-on-failure` 在生产代码调整前按预期失败，确认新增风格回归测试能抓到 `BaInputBuilder.cpp:525` 超长路径规范化调用；拆分调用后通过。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target sfm -Jobs 8`、`-Target test_ba_input_builder`、`-Target test_gui_project_utils` 和 `-Target plascan_gui` 均通过，确认 SfM 核心库、BA 输入构造测试、GUI 工具测试和主 GUI 可重新构建。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest\.BaInputBuilderSourceKeepsLinesWithinStyleLimit|BaInputBuilderSurveyControl" --output-on-failure` 通过，3/3，验证 BA 输入构造源文件行宽、Survey Control 控制点 track 和比例尺约束回归保持可用。

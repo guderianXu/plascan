@@ -33,8 +33,8 @@ struct AdaptiveGeometryEvidenceObservation
     /// Euclidean reference/source surface separation in world units.
     float worldResidual = 0.0f;
 
-    /// Joint reference/source world-space pixel footprint. The caller should normally provide the
-    /// mean of both camera footprints at the hypothesized surface point.
+    /// Joint world-space pixel footprint. For a valid baseline this combines the reference
+    /// lateral footprint with the target-view epipolar triangulation uncertainty.
     float worldPixelFootprint = 0.0f;
 
     /// Source-to-reference round-trip reprojection error in pixels.
@@ -46,7 +46,7 @@ struct AdaptiveGeometryEvidenceObservation
 
 struct AdaptiveGeometryEvidenceOptions
 {
-    float footprintSigma = 1.5f;
+    float footprintSigma = 2.0f;
     float roundTripSigmaPixels = 1.5f;
     float priorAlpha = 0.25f;
     float priorBeta = 0.25f;
@@ -73,6 +73,7 @@ struct AdaptiveGeometryEvidenceResult
     float supportWeight = 0.0f;
     float effectiveViewCount = 1.0f;
     float conflictWeight = 0.0f;
+    float conflictRatio = 0.0f;
     float observableWeight = 0.0f;
     float positiveSupportWeight = 0.0f;
     float agreementProbability = 0.0f;

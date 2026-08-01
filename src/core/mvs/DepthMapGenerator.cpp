@@ -1383,26 +1383,7 @@ void accumulateDepthConsistency(const cv::Mat &referenceDepth,
                         ? std::clamp(source_confidence, 0.0f, 1.0f)
                         : 0.0f;
                 }
-                switch (result.evidence)
-                {
-                case DepthConsistencyEvidence::Consistent:
-                    observation.evidenceClass = result.continuousGeometryValid
-                        ? AdaptiveGeometryEvidenceClass::Comparable
-                        : AdaptiveGeometryEvidenceClass::Unobservable;
-                    break;
-                case DepthConsistencyEvidence::Occluded:
-                    observation.evidenceClass = AdaptiveGeometryEvidenceClass::Occluded;
-                    break;
-                case DepthConsistencyEvidence::Contradicted:
-                    observation.evidenceClass = AdaptiveGeometryEvidenceClass::Contradictory;
-                    break;
-                case DepthConsistencyEvidence::Unverifiable:
-                default:
-                    observation.evidenceClass = result.continuousGeometryValid
-                        ? AdaptiveGeometryEvidenceClass::Comparable
-                        : AdaptiveGeometryEvidenceClass::Unobservable;
-                    break;
-                }
+                observation.evidenceClass = adaptiveGeometryEvidenceClass(result);
                 AdaptiveGeometryEvidenceAccumulator accumulator;
                 accumulator.positiveSupport = adaptive_positive_row[column];
                 accumulator.squaredPositiveSupport = adaptive_squared_row[column];
@@ -5015,7 +4996,18 @@ void DepthMapGenerator::crossCheckDepthConsistency()
             contradicted_votes);
 
         // 剔除不一致像素
-        depthI.setTo(0, consistentMask == 0);
+        if (generate_adaptive_evidence)
+        {
+            // Revision 14 keeps native orbital hypotheses and lets continuous
+            // evidence control their TSDF weight and integration band. The
+            // authoritative support mask remains a hard data-domain boundary.
+            depthBackup.copyTo(depthI);
+            depthI.setTo(0.0f, repair_mask == 0);
+        }
+        else
+        {
+            depthI.setTo(0, consistentMask == 0);
+        }
         WeakNativeDepthRetentionStats weak_native_retention;
         if (_effectiveSceneProfile == MvsSceneProfile::OrbitalObject)
         {
@@ -5174,8 +5166,8 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                 QSharedPointer<cv::Mat>::create(adaptive_evidence.supportWeight);
             _depthFrames[i].adaptiveGeometryEffectiveViewCount =
                 QSharedPointer<cv::Mat>::create(adaptive_evidence.effectiveViewCount);
-            _depthFrames[i].adaptiveGeometryConflictWeight =
-                QSharedPointer<cv::Mat>::create(adaptive_evidence.conflictWeight);
+            _depthFrames[i].adaptiveGeometryConflictRatio =
+                QSharedPointer<cv::Mat>::create(adaptive_evidence.conflictRatio);
         }
         const float consistency_keep_rate = beforeValid > 0
             ? static_cast<float>(afterValid) / static_cast<float>(beforeValid)
@@ -5274,7 +5266,7 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
         QString filteredInverseDepthSpreadPath;
         QString filteredAdaptiveSupportWeightPath;
         QString filteredAdaptiveEffectiveViewCountPath;
-        QString filteredAdaptiveConflictWeightPath;
+        QString filteredAdaptiveConflictRatioPath;
         int frameIndex = -1;
     };
     std::vector<PendingDepthReplacement> pending_replacements;
@@ -5294,7 +5286,7 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             {
                 QFile::remove(replacement.filteredAdaptiveSupportWeightPath);
                 QFile::remove(replacement.filteredAdaptiveEffectiveViewCountPath);
-                QFile::remove(replacement.filteredAdaptiveConflictWeightPath);
+                QFile::remove(replacement.filteredAdaptiveConflictRatioPath);
             }
         }
     };
@@ -5474,7 +5466,15 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             contradicted_votes);
 
         const int valid_before = cv::countNonZero(reference->depth > 0.0f);
-        filtered_depth.setTo(0.0f, consistent_mask == 0);
+        if (generate_adaptive_evidence)
+        {
+            reference->depth.copyTo(filtered_depth);
+            filtered_depth.setTo(0.0f, repair_mask == 0);
+        }
+        else
+        {
+            filtered_depth.setTo(0.0f, consistent_mask == 0);
+        }
         WeakNativeDepthRetentionStats weak_native_retention;
         if (_effectiveSceneProfile == MvsSceneProfile::OrbitalObject)
         {
@@ -5702,9 +5702,9 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                   "depth_%1_adaptive_geometry_effective_view_count_consistency.bin")
                   .arg(frame_index))
             : QString();
-        const QString filtered_adaptive_conflict_weight_path = generate_adaptive_evidence
+        const QString filtered_adaptive_conflict_ratio_path = generate_adaptive_evidence
             ? storage_dir.filePath(QStringLiteral(
-                  "depth_%1_adaptive_geometry_conflict_weight_consistency.bin")
+                  "depth_%1_adaptive_geometry_conflict_ratio_consistency.bin")
                   .arg(frame_index))
             : QString();
         const xjw::common::OperationResult write_result =
@@ -5778,12 +5778,12 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 xjw::core::project::writeDepthMatStorage(
                     filtered_adaptive_effective_view_count_path,
                     adaptive_evidence.effectiveViewCount);
-            const xjw::common::OperationResult conflict_weight_result =
+            const xjw::common::OperationResult conflict_ratio_result =
                 xjw::core::project::writeDepthMatStorage(
-                    filtered_adaptive_conflict_weight_path,
-                    adaptive_evidence.conflictWeight);
+                    filtered_adaptive_conflict_ratio_path,
+                    adaptive_evidence.conflictRatio);
             if (!support_weight_result.ok || !effective_view_result.ok ||
-                !conflict_weight_result.ok)
+                !conflict_ratio_result.ok)
             {
                 QFile::remove(filtered_path);
                 QFile::remove(filtered_confidence_path);
@@ -5793,13 +5793,13 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 QFile::remove(filtered_inverse_depth_spread_path);
                 QFile::remove(filtered_adaptive_support_weight_path);
                 QFile::remove(filtered_adaptive_effective_view_count_path);
-                QFile::remove(filtered_adaptive_conflict_weight_path);
+                QFile::remove(filtered_adaptive_conflict_ratio_path);
                 remove_pending_files();
                 const QString message = !support_weight_result.ok
                     ? support_weight_result.errorMessage
                     : (!effective_view_result.ok
                            ? effective_view_result.errorMessage
-                           : conflict_weight_result.errorMessage);
+                           : conflict_ratio_result.errorMessage);
                 emit errorOccurred(message);
                 return false;
             }
@@ -5816,7 +5816,7 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                                         filtered_inverse_depth_spread_path,
                                         filtered_adaptive_support_weight_path,
                                         filtered_adaptive_effective_view_count_path,
-                                        filtered_adaptive_conflict_weight_path,
+                                        filtered_adaptive_conflict_ratio_path,
                                         frame_index});
 
         ++completed_frames;
@@ -5953,7 +5953,7 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             {
                 cv::Mat adaptive_support_weight;
                 cv::Mat adaptive_effective_view_count;
-                cv::Mat adaptive_conflict_weight;
+                cv::Mat adaptive_conflict_ratio;
                 const xjw::common::OperationResult adaptive_support_result =
                     xjw::core::project::loadDepthMatStorage(
                         replacement.filteredAdaptiveSupportWeightPath,
@@ -5964,8 +5964,8 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                         &adaptive_effective_view_count);
                 const xjw::common::OperationResult adaptive_conflict_result =
                     xjw::core::project::loadDepthMatStorage(
-                        replacement.filteredAdaptiveConflictWeightPath,
-                        &adaptive_conflict_weight);
+                        replacement.filteredAdaptiveConflictRatioPath,
+                        &adaptive_conflict_ratio);
                 if (!adaptive_support_result.ok || !adaptive_view_result.ok ||
                     !adaptive_conflict_result.ok)
                 {
@@ -5982,8 +5982,8 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                     QSharedPointer<cv::Mat>::create(adaptive_support_weight);
                 artifact_result.adaptiveGeometryEffectiveViewCount =
                     QSharedPointer<cv::Mat>::create(adaptive_effective_view_count);
-                artifact_result.adaptiveGeometryConflictWeight =
-                    QSharedPointer<cv::Mat>::create(adaptive_conflict_weight);
+                artifact_result.adaptiveGeometryConflictRatio =
+                    QSharedPointer<cv::Mat>::create(adaptive_conflict_ratio);
             }
             if (!saveDepthFrameArtifacts(replacement.frameIndex,
                                          artifact_result,
@@ -5997,7 +5997,7 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             QFile::remove(replacement.filteredInverseDepthSpreadPath);
             QFile::remove(replacement.filteredAdaptiveSupportWeightPath);
             QFile::remove(replacement.filteredAdaptiveEffectiveViewCountPath);
-            QFile::remove(replacement.filteredAdaptiveConflictWeightPath);
+            QFile::remove(replacement.filteredAdaptiveConflictRatioPath);
         }
     }
     LOG_INFO(QStringLiteral(
@@ -6058,9 +6058,9 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
     const std::string rawAdaptiveGeometryEffectiveViewCountPath =
         raw_directory + "/depth_" + std::to_string(frameIndex) +
         "_adaptive_geometry_effective_view_count.bin";
-    const std::string rawAdaptiveGeometryConflictWeightPath =
+    const std::string rawAdaptiveGeometryConflictRatioPath =
         raw_directory + "/depth_" + std::to_string(frameIndex) +
-        "_adaptive_geometry_conflict_weight.bin";
+        "_adaptive_geometry_conflict_ratio.bin";
     const std::string crossViewRepairedMaskPath =
         raw_directory + "/depth_" + std::to_string(frameIndex) +
         "_cross_view_repaired_mask.png";
@@ -6256,11 +6256,11 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         rawAdaptiveGeometryEffectiveViewCountPath,
         QStringLiteral("连续几何有效视图数"),
         false);
-    const bool adaptiveGeometryConflictWeightSaved = save_geometry_evidence(
-        result.adaptiveGeometryConflictWeight,
+    const bool adaptiveGeometryConflictRatioSaved = save_geometry_evidence(
+        result.adaptiveGeometryConflictRatio,
         CV_32FC1,
-        rawAdaptiveGeometryConflictWeightPath,
-        QStringLiteral("连续几何冲突权重"),
+        rawAdaptiveGeometryConflictRatioPath,
+        QStringLiteral("连续几何冲突比例"),
         false);
     bool crossViewRepairedMaskSaved = false;
     if (saveRawDepth && result.crossViewRepairedMask &&
@@ -6523,11 +6523,11 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             !result.adaptiveGeometrySupportWeight->empty() &&
             result.adaptiveGeometryEffectiveViewCount &&
             !result.adaptiveGeometryEffectiveViewCount->empty() &&
-            result.adaptiveGeometryConflictWeight &&
-            !result.adaptiveGeometryConflictWeight->empty() &&
+            result.adaptiveGeometryConflictRatio &&
+            !result.adaptiveGeometryConflictRatio->empty() &&
             result.adaptiveGeometrySupportWeight->size() == result.depthMap->size() &&
             result.adaptiveGeometryEffectiveViewCount->size() == result.depthMap->size() &&
-            result.adaptiveGeometryConflictWeight->size() == result.depthMap->size();
+            result.adaptiveGeometryConflictRatio->size() == result.depthMap->size();
         geometryEvidenceDiagnostics.insert(
             QStringLiteral("adaptive_evidence_available"),
             adaptive_evidence_available);
@@ -6563,9 +6563,9 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
                     *result.adaptiveGeometryEffectiveViewCount,
                     candidate_mask)[0]);
             geometryEvidenceDiagnostics.insert(
-                QStringLiteral("adaptive_conflict_weight_mean"),
+                QStringLiteral("adaptive_conflict_ratio_mean"),
                 cv::mean(
-                    *result.adaptiveGeometryConflictWeight,
+                    *result.adaptiveGeometryConflictRatio,
                     candidate_mask)[0]);
         }
         const cv::Mat emptyConfidence;
@@ -6651,9 +6651,9 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
                               rawAdaptiveGeometryEffectiveViewCountPath)
                         : QString());
                 level_object.insert(
-                    QStringLiteral("raw_adaptive_geometry_conflict_weight_path"),
-                    adaptiveGeometryConflictWeightSaved
-                        ? QString::fromStdString(rawAdaptiveGeometryConflictWeightPath)
+                    QStringLiteral("raw_adaptive_geometry_conflict_ratio_path"),
+                    adaptiveGeometryConflictRatioSaved
+                        ? QString::fromStdString(rawAdaptiveGeometryConflictRatioPath)
                         : QString());
                 level_object.insert(QStringLiteral("cross_view_repaired_mask_path"),
                                     crossViewRepairedMaskSaved
@@ -6707,9 +6707,9 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             adaptiveGeometryEffectiveViewCountSaved
                 ? QString::fromStdString(rawAdaptiveGeometryEffectiveViewCountPath)
                 : QString();
-        artifact[QStringLiteral("raw_adaptive_geometry_conflict_weight_path")] =
-            adaptiveGeometryConflictWeightSaved
-                ? QString::fromStdString(rawAdaptiveGeometryConflictWeightPath)
+        artifact[QStringLiteral("raw_adaptive_geometry_conflict_ratio_path")] =
+            adaptiveGeometryConflictRatioSaved
+                ? QString::fromStdString(rawAdaptiveGeometryConflictRatioPath)
                 : QString();
         artifact[QStringLiteral("cross_view_repaired_mask_path")] =
             crossViewRepairedMaskSaved
@@ -6855,9 +6855,9 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             adaptiveGeometryEffectiveViewCountSaved
             ? QString::fromStdString(rawAdaptiveGeometryEffectiveViewCountPath)
             : QString();
-        record.rawAdaptiveGeometryConflictWeightPath =
-            adaptiveGeometryConflictWeightSaved
-            ? QString::fromStdString(rawAdaptiveGeometryConflictWeightPath)
+        record.rawAdaptiveGeometryConflictRatioPath =
+            adaptiveGeometryConflictRatioSaved
+            ? QString::fromStdString(rawAdaptiveGeometryConflictRatioPath)
             : QString();
         record.crossViewRepairedMaskPath = crossViewRepairedMaskSaved
             ? QString::fromStdString(crossViewRepairedMaskPath)
