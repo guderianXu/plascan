@@ -225,7 +225,7 @@ private:
         QMatrix4x4 projection;
     };
     struct CameraPlaneImageResult;
-    void applyZoomFactor(float factor);
+    void applyZoomFactor(double factor);
 
     // 将三维世界点投影到屏幕像素坐标（考虑当前视图旋转、投影、平移偏移）
     // ok 为 nullptr 或 false 时表示点在裁剪空间外
@@ -504,7 +504,7 @@ private:
     bool _fitViewAfterLoad = false;
     bool _preferModelPointRender = false;
     QQuaternion _viewRot;                     // 当前视图旋转四元数
-    float _zoomScale = 1.0f;                  // 当前缩放系数（影响相机到场景中心的距离）
+    double _zoomScale = 1.0;                  // 当前缩放系数（影响相机到场景中心的距离）
     QPointF _sceneOffsetPx = QPointF(0.0, 0.0); // 场景在屏幕空间的平移偏移（像素）
     QPoint _lastMousePos;                     // 上一帧鼠标位置（用于增量计算）
     HoverAxis _hoverAxis = HoverAxis::None;   // 当前鼠标悬停的轴（高亮显示）

@@ -1698,7 +1698,7 @@ void CameraSceneWidget::fitViewToLoadedGeometry()
         1.0e-4f,
         distances.at(percentileIndex) * 1.15f);
     _hasFocusedGeometryBounds = true;
-    _zoomScale = 1.0f;
+    _zoomScale = 1.0;
     _sceneOffsetPx = QPointF();
     _hoverAxis = HoverAxis::None;
     _dragAxis = HoverAxis::None;
@@ -1738,8 +1738,9 @@ CameraSceneWidget::SceneMatrices CameraSceneWidget::sceneMatrices() const
 {
     const QVector3D center = sceneCenter();
     const float radius = sceneRadius();
-    const float distance = qMax(radius * 0.001f, radius * (3.2f / qMax(0.1f, _zoomScale)));
-    const float nearPlane = qMax(1e-4f, distance * 0.001f);
+    const float distance = static_cast<float>(
+        static_cast<double>(radius) * 3.2 / _zoomScale);
+    const float nearPlane = distance * 0.001f;
     const float farPlane  = qMax(1000.0f, distance * 100.0f + radius * 50.0f);
 
     SceneMatrices matrices;
@@ -1824,9 +1825,7 @@ float CameraSceneWidget::cameraImagePlaneHalfExtent(
             height(),
             _zoomScale,
             45.0f,
-            34.0f,
-            18.0f,
-            72.0f);
+            34.0);
     if (screenScaledExtent > 0.0f)
     {
         return screenScaledExtent;
@@ -2161,9 +2160,7 @@ QLineF CameraSceneWidget::cameraDirectionLeaderLine(const CameraPose &pose,
     const qreal screenHalfExtent =
         xjw::gui::camera_scene::cameraPlaneScreenHalfExtentPixels(
             _zoomScale,
-            34.0f,
-            18.0f,
-            72.0f);
+            34.0);
     const qreal leaderLength = qMax<qreal>(34.0, screenHalfExtent + 16.0);
     return xjw::gui::camera_scene::cameraPlaneLeaderLine(
         center,
@@ -4897,8 +4894,10 @@ void CameraSceneWidget::wheelEvent(QWheelEvent *event)
     }
 
     const QPoint angle = event->angleDelta();
-    if (!angle.isNull()) {
-        const float factor = (angle.y() > 0) ? 1.10f : 0.90f;
+    if (!angle.isNull())
+    {
+        const double wheel_steps = static_cast<double>(angle.y()) / 120.0;
+        const double factor = std::pow(1.10, wheel_steps);
         applyZoomFactor(factor);
     }
     event->accept();
@@ -4906,27 +4905,38 @@ void CameraSceneWidget::wheelEvent(QWheelEvent *event)
 
 void CameraSceneWidget::zoomIn()
 {
-    applyZoomFactor(1.10f);
+    applyZoomFactor(1.10);
 }
 
 void CameraSceneWidget::zoomOut()
 {
-    applyZoomFactor(0.90f);
+    applyZoomFactor(1.0 / 1.10);
 }
 
 void CameraSceneWidget::resetView()
 {
     _viewRot = QQuaternion();
-    _zoomScale = 1.0f;
+    _zoomScale = 1.0;
     _sceneOffsetPx = QPointF();
     _hoverAxis = HoverAxis::None;
     _dragAxis = HoverAxis::None;
     updateCameraOverlay();
 }
 
-void CameraSceneWidget::applyZoomFactor(float factor)
+void CameraSceneWidget::applyZoomFactor(double factor)
 {
-    _zoomScale *= factor;
+    if (!std::isfinite(factor) || factor <= 0.0)
+    {
+        return;
+    }
+
+    const double next_zoom_scale = _zoomScale * factor;
+    if (!std::isfinite(next_zoom_scale) || next_zoom_scale <= 0.0)
+    {
+        return;
+    }
+
+    _zoomScale = next_zoom_scale;
     clampSceneOffset();
     update();
 }

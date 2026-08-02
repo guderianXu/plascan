@@ -53,12 +53,10 @@ QVector<int> farToNearCameraIndices(const QVector<QVector3D> &centers,
                                     const QMatrix4x4 &worldToView);
 
 // 相机卡片的目标屏幕半尺寸只由全局缩放倍率决定。
-// 缩远场景时返回更大的像素尺寸，且不受单个相机观察深度影响。
-float cameraPlaneScreenHalfExtentPixels(
-    float zoomScale,
-    float normalHalfExtentPixels = 34.0f,
-    float minimumHalfExtentPixels = 18.0f,
-    float maximumHalfExtentPixels = 72.0f);
+// 缩远场景时持续增大，缩近时持续减小，不设置视觉范围夹紧。
+double cameraPlaneScreenHalfExtentPixels(
+    double zoomScale,
+    double normalHalfExtentPixels = 34.0);
 
 // 先按单个相机的观察深度抵消透视缩放，再只用全局缩放倍率决定
 // 目标屏幕尺寸。这样旋转视图不会产生“近大远小”，而缩远整个
@@ -67,11 +65,9 @@ float cameraPlaneHalfExtentForScreenSize(
     const QVector3D &center,
     const QMatrix4x4 &worldToView,
     int viewportHeight,
-    float zoomScale,
+    double zoomScale,
     float verticalFieldOfViewDegrees = 45.0f,
-    float normalHalfExtentPixels = 34.0f,
-    float minimumHalfExtentPixels = 18.0f,
-    float maximumHalfExtentPixels = 72.0f);
+    double normalHalfExtentPixels = 34.0);
 
 // 生成固定屏幕像素长度的方向引线。探针只提供方向，探针距离
 // 和单个相机的透视深度都不会改变引线长度。

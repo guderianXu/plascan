@@ -87,13 +87,13 @@ TEST(CameraSceneViewMathTest, MakesCameraCardsLargerAsSceneZoomsOut)
                 68.0f,
                 1e-4f);
     EXPECT_NEAR(projectedHalfExtentPixels(zoomed_in_extent, camera_depth),
-                18.0f,
+                17.0f,
                 1e-4f);
     EXPECT_GT(zoomed_out_extent, normal_extent);
     EXPECT_LT(zoomed_in_extent, normal_extent);
 }
 
-TEST(CameraSceneViewMathTest, BoundsZoomDrivenCameraScreenSize)
+TEST(CameraSceneViewMathTest, DoesNotClampZoomDrivenCameraScreenSize)
 {
     constexpr int viewport_height = 1000;
     constexpr float half_fov_radians = 22.5f * 3.14159265358979323846f / 180.0f;
@@ -109,23 +109,25 @@ TEST(CameraSceneViewMathTest, BoundsZoomDrivenCameraScreenSize)
     QMatrix4x4 world_to_view;
     world_to_view.setToIdentity();
     const QVector3D camera_center(0.0f, 0.0f, -8.0f);
-    const float maximum_extent = cameraPlaneHalfExtentForScreenSize(
+    const float deeply_zoomed_out_extent = cameraPlaneHalfExtentForScreenSize(
         camera_center,
         world_to_view,
         viewport_height,
-        0.05f);
-    const float minimum_extent = cameraPlaneHalfExtentForScreenSize(
+        0.01);
+    const float deeply_zoomed_in_extent = cameraPlaneHalfExtentForScreenSize(
         camera_center,
         world_to_view,
         viewport_height,
-        20.0f);
+        100.0);
 
-    EXPECT_NEAR(projectedHalfExtentPixels(maximum_extent, 8.0f),
-                72.0f,
-                1e-4f);
-    EXPECT_NEAR(projectedHalfExtentPixels(minimum_extent, 8.0f),
-                18.0f,
-                1e-4f);
+    EXPECT_NEAR(projectedHalfExtentPixels(deeply_zoomed_out_extent, 8.0f),
+                3400.0f,
+                1e-3f);
+    EXPECT_NEAR(projectedHalfExtentPixels(deeply_zoomed_in_extent, 8.0f),
+                0.34f,
+                1e-5f);
+    EXPECT_NEAR(cameraPlaneScreenHalfExtentPixels(0.01), 3400.0, 1e-10);
+    EXPECT_NEAR(cameraPlaneScreenHalfExtentPixels(100.0), 0.34, 1e-12);
 }
 
 TEST(CameraSceneViewMathTest, RejectsInvalidCameraPlaneScreenSizeInputs)

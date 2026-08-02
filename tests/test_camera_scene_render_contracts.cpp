@@ -141,6 +141,8 @@ TEST(CameraSceneRenderContractTest, CameraCardsUseScreenSizeAndExternalBlackDire
     EXPECT_FALSE(header.contains(QStringLiteral("drawCameraDirectionArrow")));
     EXPECT_TRUE(source.contains(QStringLiteral("cameraPlaneHalfExtentForScreenSize(")));
     EXPECT_FALSE(source.contains(QStringLiteral("cameraPlaneHalfExtentForViewDepth(")));
+    EXPECT_FALSE(source.contains(QStringLiteral("qMax(0.1f, _zoomScale)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("std::pow(1.10, wheel_steps)")));
 
     const qsizetype extentStart = source.indexOf(
         QStringLiteral("float CameraSceneWidget::cameraImagePlaneHalfExtent"));
@@ -153,6 +155,8 @@ TEST(CameraSceneRenderContractTest, CameraCardsUseScreenSizeAndExternalBlackDire
     EXPECT_TRUE(extentBlock.contains(QStringLiteral("worldToView,")));
     EXPECT_TRUE(extentBlock.contains(QStringLiteral("_zoomScale,")));
     EXPECT_TRUE(extentBlock.contains(QStringLiteral("return screenScaledExtent;")));
+    EXPECT_FALSE(extentBlock.contains(QStringLiteral("18.0f")));
+    EXPECT_FALSE(extentBlock.contains(QStringLiteral("72.0f")));
 
     const qsizetype drawStart = source.indexOf(
         QStringLiteral("void CameraSceneWidget::drawCameraThumbnails"));

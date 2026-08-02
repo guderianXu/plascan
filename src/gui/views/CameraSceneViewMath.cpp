@@ -79,46 +79,37 @@ QVector<int> farToNearCameraIndices(const QVector<QVector3D> &centers,
     return indices;
 }
 
-float cameraPlaneScreenHalfExtentPixels(float zoomScale,
-                                        float normalHalfExtentPixels,
-                                        float minimumHalfExtentPixels,
-                                        float maximumHalfExtentPixels)
+double cameraPlaneScreenHalfExtentPixels(double zoomScale,
+                                         double normalHalfExtentPixels)
 {
     if (!std::isfinite(zoomScale)
         || !std::isfinite(normalHalfExtentPixels)
-        || !std::isfinite(minimumHalfExtentPixels)
-        || !std::isfinite(maximumHalfExtentPixels)
-        || zoomScale <= 0.0f
-        || normalHalfExtentPixels <= 0.0f
-        || minimumHalfExtentPixels <= 0.0f
-        || maximumHalfExtentPixels < minimumHalfExtentPixels)
+        || zoomScale <= 0.0
+        || normalHalfExtentPixels <= 0.0)
     {
-        return 0.0f;
+        return 0.0;
     }
 
-    return std::clamp(normalHalfExtentPixels / zoomScale,
-                      minimumHalfExtentPixels,
-                      maximumHalfExtentPixels);
+    const double half_extent_pixels = normalHalfExtentPixels / zoomScale;
+    return std::isfinite(half_extent_pixels) ? half_extent_pixels : 0.0;
 }
 
 float cameraPlaneHalfExtentForScreenSize(
     const QVector3D &center,
     const QMatrix4x4 &worldToView,
     int viewportHeight,
-    float zoomScale,
+    double zoomScale,
     float verticalFieldOfViewDegrees,
-    float normalHalfExtentPixels,
-    float minimumHalfExtentPixels,
-    float maximumHalfExtentPixels)
+    double normalHalfExtentPixels)
 {
+    const double target_half_extent_pixels = cameraPlaneScreenHalfExtentPixels(
+        zoomScale,
+        normalHalfExtentPixels);
     if (viewportHeight <= 0
         || !std::isfinite(verticalFieldOfViewDegrees)
         || verticalFieldOfViewDegrees <= 0.0f
         || verticalFieldOfViewDegrees >= 179.0f
-        || cameraPlaneScreenHalfExtentPixels(zoomScale,
-                                             normalHalfExtentPixels,
-                                             minimumHalfExtentPixels,
-                                             maximumHalfExtentPixels) <= 0.0f)
+        || target_half_extent_pixels <= 0.0)
     {
         return 0.0f;
     }
@@ -134,14 +125,15 @@ float cameraPlaneHalfExtentForScreenSize(
         verticalFieldOfViewDegrees * pi / 360.0f;
     const float worldHeightAtDepth =
         2.0f * depth * std::tan(halfFovRadians);
-    const float targetHalfExtentPixels = cameraPlaneScreenHalfExtentPixels(
-        zoomScale,
-        normalHalfExtentPixels,
-        minimumHalfExtentPixels,
-        maximumHalfExtentPixels);
-    return worldHeightAtDepth
-        * targetHalfExtentPixels
-        / static_cast<float>(viewportHeight);
+    const double world_half_extent = static_cast<double>(worldHeightAtDepth)
+        * target_half_extent_pixels
+        / static_cast<double>(viewportHeight);
+    if (!std::isfinite(world_half_extent)
+        || world_half_extent > std::numeric_limits<float>::max())
+    {
+        return 0.0f;
+    }
+    return static_cast<float>(world_half_extent);
 }
 
 QLineF cameraPlaneLeaderLine(const QPointF &center,
