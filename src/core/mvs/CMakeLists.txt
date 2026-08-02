@@ -132,6 +132,7 @@ if(MVS_HAS_CUDA)
     set_target_properties(mvs PROPERTIES
         CUDA_ARCHITECTURES "${PLASCAN_CUDA_ARCHITECTURES}"
         CUDA_SEPARABLE_COMPILATION ON
+        CUDA_RESOLVE_DEVICE_SYMBOLS ON
     )
     target_compile_definitions(mvs PUBLIC MVS_ENABLE_CUDA=1)
     target_compile_options(mvs PRIVATE

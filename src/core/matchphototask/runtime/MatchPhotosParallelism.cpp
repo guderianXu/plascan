@@ -22,6 +22,7 @@ constexpr int kLoMaRHighKeypoints = 2048;
 constexpr int kLoMaRHighestKeypoints = 3840;
 constexpr std::uint64_t kMebibyte = 1024ULL * 1024ULL;
 constexpr std::uint64_t kGibibyte = 1024ULL * kMebibyte;
+constexpr std::uint64_t kMemoryReserveDivisor = 10;
 
 std::uint64_t estimateLightGlueWorkerBytes(int keypointBudget)
 {
@@ -87,7 +88,7 @@ LightGlueParallelismDecision resolveLightGlueParallelism(
     }
 
     const std::uint64_t reserveBytes =
-        std::max(kGibibyte, memory.totalBytes / 10ULL);
+        std::max(kGibibyte, memory.totalBytes / kMemoryReserveDivisor);
     const std::uint64_t usableBytes =
         memory.freeBytes > reserveBytes ? memory.freeBytes - reserveBytes : 0;
     const std::uint64_t workersByMemory =

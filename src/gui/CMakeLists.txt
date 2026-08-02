@@ -18,6 +18,11 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/GuiSources.cmake)
 
 add_library(gui_project STATIC ${GUI_PROJECT_SOURCES})
 
+set(PLASCAN_GUI_RESOURCES ${CMAKE_SOURCE_DIR}/resources/resources.qrc)
+set_source_files_properties(${PLASCAN_GUI_RESOURCES} PROPERTIES
+  AUTORCC_OPTIONS "--no-compress"
+)
+
 #==============================================================================
 # plascan_gui 可执行文件
 #==============================================================================
@@ -25,7 +30,7 @@ add_library(gui_project STATIC ${GUI_PROJECT_SOURCES})
 add_executable(plascan_gui
   ${GUI_SOURCES}
   ${GUI_DIALOG_SOURCES}
-  ${CMAKE_SOURCE_DIR}/resources/resources.qrc
+  ${PLASCAN_GUI_RESOURCES}
 )
 
 qt_add_shaders(plascan_gui camera_scene_shaders
@@ -106,9 +111,16 @@ target_link_libraries(gui_project PRIVATE
   project_workflows
 )
 
-# ProjectPointCloudWorkflowController 位于 GUI 协调层，但其算法调用只通过
-# mvs 公共接口完成。显式声明依赖，确保 gui_project 被测试或其它目标单独链接时
-# 不依赖 plascan_gui 偶然补齐未解析符号。
+# GUI project services own these workflow calls, so the library declares the
+# corresponding core dependencies instead of relying on final executable link order.
+if(TARGET lidar)
+  target_link_libraries(gui_project PRIVATE lidar)
+endif()
+
+if(TARGET mask)
+  target_link_libraries(gui_project PRIVATE mask)
+endif()
+
 if(TARGET mvs)
   target_link_libraries(gui_project PRIVATE mvs)
 endif()
