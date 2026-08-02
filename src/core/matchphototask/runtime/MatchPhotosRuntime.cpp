@@ -1,5 +1,7 @@
 #include "MatchPhotosRuntime.h"
 
+#include "MatchPhotosParallelism.h"
+
 #include "project/ProjectIO.h"
 #include "project/ProjectMetadata.h"
 
@@ -260,6 +262,30 @@ bool engineCandidateIsBetter(const LightGlueEngineCandidate &candidate,
     return candidate.discoveryOrder < current.discoveryOrder;
 }
 
+bool loMaRPackageIsBetter(const ResolvedLoMaRTensorRtPackage &candidate,
+                          const ResolvedLoMaRTensorRtPackage &current,
+                          int preferredKeypoints)
+{
+    if (!current.isValid())
+    {
+        return true;
+    }
+
+    const bool candidateWithinBudget = candidate.keypointCount <= preferredKeypoints;
+    const bool currentWithinBudget = current.keypointCount <= preferredKeypoints;
+    if (candidateWithinBudget != currentWithinBudget)
+    {
+        return candidateWithinBudget;
+    }
+    if (candidate.keypointCount == current.keypointCount)
+    {
+        return candidate.manifestPath < current.manifestPath;
+    }
+    return candidateWithinBudget
+        ? candidate.keypointCount > current.keypointCount
+        : candidate.keypointCount < current.keypointCount;
+}
+
 } // namespace
 
 QString matchPhotosMatchDirectory(const MatchPhotosContext &context)
@@ -450,7 +476,8 @@ QString resolveLightGlueTensorRtEnginePath(const MatchPhotosOptions &options,
 }
 
 ResolvedLoMaRTensorRtPackage resolveLoMaRTensorRtPackage(
-    const MatchPhotosOptions &options)
+    const MatchPhotosOptions &options,
+    int preferredKeypoints)
 {
     QString configured = options.lomaRTensorRtPackagePath.trimmed();
     if (configured.isEmpty())
@@ -462,14 +489,33 @@ ResolvedLoMaRTensorRtPackage resolveLoMaRTensorRtPackage(
         return parseLoMaRPackage(configured);
     }
 
+    const int targetKeypoints = resolveLoMaRKeypointBudget(
+        preferredKeypoints,
+        options.lomaRKeypointBudget,
+        queryMatchPhotosGpuMemory(options.cudaDevice));
+
     ResolvedLoMaRTensorRtPackage unresolved;
     unresolved.searchedDirectories = loMaRTensorRtModelDirectories();
+    ResolvedLoMaRTensorRtPackage best;
+    QString firstPackageError;
+    QSet<QString> visitedManifests;
     for (const QString &directory : unresolved.searchedDirectories)
     {
-        const QStringList names = {
+        QStringList names = {
             QStringLiteral("loma_r_tensorrt.json"),
             QStringLiteral("loma_r_fp16.json"),
             QStringLiteral("loma_r_fp32.json")};
+        const QStringList discovered = QDir(directory).entryList(
+            QStringList{QStringLiteral("loma_r*.json")},
+            QDir::Files,
+            QDir::Name);
+        for (const QString &name : discovered)
+        {
+            if (!names.contains(name, Qt::CaseInsensitive))
+            {
+                names.append(name);
+            }
+        }
         for (const QString &name : names)
         {
             const QString candidate = QDir(directory).filePath(name);
@@ -477,12 +523,37 @@ ResolvedLoMaRTensorRtPackage resolveLoMaRTensorRtPackage(
             {
                 continue;
             }
+            const QString identity = cleanPath(QFileInfo(candidate).absoluteFilePath()).toLower();
+            if (visitedManifests.contains(identity))
+            {
+                continue;
+            }
+            visitedManifests.insert(identity);
             ResolvedLoMaRTensorRtPackage resolved = parseLoMaRPackage(candidate);
-            resolved.searchedDirectories = unresolved.searchedDirectories;
-            return resolved;
+            if (!resolved.isValid())
+            {
+                if (firstPackageError.isEmpty())
+                {
+                    firstPackageError = QStringLiteral("%1: %2")
+                        .arg(QFileInfo(candidate).fileName(), resolved.errorMessage);
+                }
+                continue;
+            }
+            if (loMaRPackageIsBetter(resolved, best, targetKeypoints))
+            {
+                best = std::move(resolved);
+            }
         }
     }
-    unresolved.errorMessage = QStringLiteral("未找到 LoMa-R TensorRT manifest");
+    if (best.isValid())
+    {
+        best.searchedDirectories = unresolved.searchedDirectories;
+        return best;
+    }
+    unresolved.errorMessage = firstPackageError.isEmpty()
+        ? QStringLiteral("未找到 LoMa-R TensorRT manifest")
+        : QStringLiteral("未找到完整可用的 LoMa-R TensorRT 模型包；%1")
+              .arg(firstPackageError);
     return unresolved;
 }
 

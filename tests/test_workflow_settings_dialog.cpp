@@ -24,7 +24,7 @@ QJsonObject aerialSettings(const QJsonObject &settings)
 TEST(WorkflowSettingsDialogTest, DefaultsUseWorkflowScopedSchema)
 {
     const QJsonObject settings = WorkflowSettingsDialog::defaultSettings();
-    EXPECT_EQ(settings.value(QStringLiteral("workflow_settings_version")).toInt(), 4);
+    EXPECT_EQ(settings.value(QStringLiteral("workflow_settings_version")).toInt(), 5);
     EXPECT_EQ(settings.value(QStringLiteral("selected_workflow")).toString(),
               QStringLiteral("aerial_triangulation"));
 
@@ -39,6 +39,7 @@ TEST(WorkflowSettingsDialogTest, DefaultsUseWorkflowScopedSchema)
               QStringLiteral("sift_lightglue"));
     EXPECT_TRUE(aerial.value(QStringLiteral("lightglue_tensorrt_engine")).toString().isEmpty());
     EXPECT_TRUE(aerial.value(QStringLiteral("loma_r_tensorrt_package")).toString().isEmpty());
+    EXPECT_EQ(aerial.value(QStringLiteral("loma_r_keypoint_budget")).toInt(), 0);
     EXPECT_FALSE(settings.contains(QStringLiteral("threads")));
     EXPECT_FALSE(settings.contains(QStringLiteral("geometry_max_iterations")));
 }
@@ -73,8 +74,11 @@ TEST(WorkflowSettingsDialogTest, SwitchesAndPersistsAlgorithmSpecificTensorRtRes
         QStringLiteral("aerialMatchingAlgorithmCombo"));
     auto *resourceEdit = dialog.findChild<QLineEdit *>(
         QStringLiteral("aerialMatchingResourceEdit"));
+    auto *lomaBudget = dialog.findChild<QComboBox *>(
+        QStringLiteral("aerialLoMaRKeypointBudgetCombo"));
     ASSERT_NE(algorithmSelector, nullptr);
     ASSERT_NE(resourceEdit, nullptr);
+    ASSERT_NE(lomaBudget, nullptr);
 
     algorithmSelector->setCurrentIndex(
         algorithmSelector->findData(QStringLiteral("sift_lightglue")));
@@ -82,6 +86,7 @@ TEST(WorkflowSettingsDialogTest, SwitchesAndPersistsAlgorithmSpecificTensorRtRes
     algorithmSelector->setCurrentIndex(
         algorithmSelector->findData(QStringLiteral("loma_r")));
     resourceEdit->setText(QStringLiteral("D:/models/loma_r_tensorrt.json"));
+    lomaBudget->setCurrentIndex(lomaBudget->findData(3840));
 
     const QJsonObject aerial = aerialSettings(dialog.collectSettings());
     EXPECT_EQ(aerial.value(QStringLiteral("algorithm_id")).toString(),
@@ -90,6 +95,7 @@ TEST(WorkflowSettingsDialogTest, SwitchesAndPersistsAlgorithmSpecificTensorRtRes
               QStringLiteral("D:/models/lightglue.engine"));
     EXPECT_EQ(aerial.value(QStringLiteral("loma_r_tensorrt_package")).toString(),
               QStringLiteral("D:/models/loma_r_tensorrt.json"));
+    EXPECT_EQ(aerial.value(QStringLiteral("loma_r_keypoint_budget")).toInt(), 3840);
 }
 
 TEST(WorkflowSettingsDialogTest, AppliesAndCollectsWorkflowScopedAerialSettings)
@@ -129,7 +135,7 @@ TEST(WorkflowSettingsDialogTest, MigratesLegacyFlatSettingsWithoutKeepingTuningF
 
     dialog.applySettings(legacy);
     const QJsonObject collected = dialog.collectSettings();
-    EXPECT_EQ(collected.value(QStringLiteral("workflow_settings_version")).toInt(), 4);
+    EXPECT_EQ(collected.value(QStringLiteral("workflow_settings_version")).toInt(), 5);
     EXPECT_EQ(
         aerialSettings(collected).value(QStringLiteral("lightglue_tensorrt_engine")).toString(),
         QStringLiteral("D:/legacy/lightglue.engine"));

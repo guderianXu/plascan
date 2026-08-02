@@ -95,7 +95,8 @@ QString resolveLightGlueTensorRtEnginePath(const MatchPhotosOptions &options,
                                            QString *engineName);
 
 ResolvedLoMaRTensorRtPackage resolveLoMaRTensorRtPackage(
-    const MatchPhotosOptions &options);
+    const MatchPhotosOptions &options,
+    int preferredKeypoints = 0);
 
 int resolveFeatureKeypointLimit(const MatchPhotosOptions &options,
                                 const MatchPhotosAlgorithmPlan &plan,

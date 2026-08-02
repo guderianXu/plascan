@@ -310,7 +310,9 @@ MatchPhotosStageReport MatchingStage::run(
     float effectiveThreshold = options.matchThreshold;
     if (algorithmPlan.algorithmId == QLatin1String(image_matching::kLoMaRAlgorithmId))
     {
-        const ResolvedLoMaRTensorRtPackage package = resolveLoMaRTensorRtPackage(options);
+        const ResolvedLoMaRTensorRtPackage package = resolveLoMaRTensorRtPackage(
+            options,
+            algorithmPlan.maxKeypoints);
         if (!package.isValid())
         {
             QString message = QStringLiteral("LoMa-R TensorRT 模型包不可用：%1")

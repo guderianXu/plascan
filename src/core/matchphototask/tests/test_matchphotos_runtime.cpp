@@ -58,10 +58,14 @@ QString createEngine(const QString &directory, int bucket)
     return path;
 }
 
-QString createLoMaRPackage(const QString &directory, bool includeMatcher = true)
+QString createLoMaRPackage(const QString &directory,
+                           int keypoints = 2048,
+                           bool includeMatcher = true)
 {
-    const QString featureName = QStringLiteral("loma_r_features_fp16.engine");
-    const QString matcherName = QStringLiteral("loma_r_matcher_k2048_fp16.engine");
+    const QString featureName = QStringLiteral("loma_r_features_k%1_fp16.engine")
+                                    .arg(keypoints);
+    const QString matcherName = QStringLiteral("loma_r_matcher_k%1_fp16.engine")
+                                    .arg(keypoints);
     for (const QString &name : QStringList{featureName, matcherName})
     {
         if (!includeMatcher && name == matcherName)
@@ -81,9 +85,10 @@ QString createLoMaRPackage(const QString &directory, bool includeMatcher = true)
         {QStringLiteral("matcher_engine"), matcherName},
         {QStringLiteral("input_width"), 784},
         {QStringLiteral("input_height"), 784},
-        {QStringLiteral("keypoint_count"), 2048},
+        {QStringLiteral("keypoint_count"), keypoints},
         {QStringLiteral("descriptor_dimension"), 256}};
-    const QString manifestPath = QDir(directory).filePath(QStringLiteral("loma_r_tensorrt.json"));
+    const QString manifestPath = QDir(directory).filePath(
+        QStringLiteral("loma_r_k%1_fp16.json").arg(keypoints));
     QFile file(manifestPath);
     EXPECT_TRUE(file.open(QIODevice::WriteOnly));
     file.write(QJsonDocument(manifest).toJson(QJsonDocument::Compact));
@@ -124,13 +129,55 @@ TEST(MatchPhotosRuntimeTest, RejectsIncompleteLoMaRTensorRtPackage)
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
     xjw::matchphotos::MatchPhotosOptions options;
-    options.lomaRTensorRtPackagePath = createLoMaRPackage(directory.path(), false);
+    options.lomaRTensorRtPackagePath = createLoMaRPackage(directory.path(), 2048, false);
 
     const auto resolved = xjw::matchphotos::resolveLoMaRTensorRtPackage(options);
 
     EXPECT_FALSE(resolved.isValid());
     EXPECT_TRUE(resolved.errorMessage.contains(QStringLiteral("matcher"),
                                                Qt::CaseInsensitive));
+}
+
+TEST(MatchPhotosRuntimeTest, SelectsLargestLoMaRPackageWithinPreferredBudget)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    createLoMaRPackage(directory.path(), 1024);
+    const QString bucket2048 = createLoMaRPackage(directory.path(), 2048);
+    createLoMaRPackage(directory.path(), 3840);
+
+    ScopedEnvironment explicitPackage("PLASCAN_LOMA_R_TENSORRT_PACKAGE", QByteArray());
+    ScopedEnvironment modelDirectory(
+        "PLASCAN_MODEL_DIR", QFile::encodeName(directory.path()));
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.lomaRKeypointBudget = 2048;
+
+    const auto resolved = xjw::matchphotos::resolveLoMaRTensorRtPackage(options, 40000);
+
+    ASSERT_TRUE(resolved.isValid()) << qPrintable(resolved.errorMessage);
+    EXPECT_EQ(resolved.manifestPath,
+              QDir::cleanPath(QFileInfo(bucket2048).absoluteFilePath()));
+    EXPECT_EQ(resolved.keypointCount, 2048);
+}
+
+TEST(MatchPhotosRuntimeTest, FallsBackToSmallestLoMaRPackageAboveTinyBudget)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString bucket1024 = createLoMaRPackage(directory.path(), 1024);
+    createLoMaRPackage(directory.path(), 2048);
+
+    ScopedEnvironment explicitPackage("PLASCAN_LOMA_R_TENSORRT_PACKAGE", QByteArray());
+    ScopedEnvironment modelDirectory(
+        "PLASCAN_MODEL_DIR", QFile::encodeName(directory.path()));
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.lomaRKeypointBudget = 500;
+
+    const auto resolved = xjw::matchphotos::resolveLoMaRTensorRtPackage(options, 500);
+
+    ASSERT_TRUE(resolved.isValid()) << qPrintable(resolved.errorMessage);
+    EXPECT_EQ(resolved.manifestPath,
+              QDir::cleanPath(QFileInfo(bucket1024).absoluteFilePath()));
 }
 
 TEST(MatchPhotosRuntimeTest, ResolvesExplicitTensorRtEngine)

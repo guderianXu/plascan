@@ -38,6 +38,7 @@ constexpr auto kDemWorkflowId = "dem";
 constexpr auto kOrthomosaicWorkflowId = "orthomosaic";
 constexpr auto kSiftLightGlueAlgorithmId = "sift_lightglue";
 constexpr auto kLoMaRAlgorithmId = "loma_r";
+constexpr int kWorkflowSettingsVersion = 5;
 
 struct WorkflowEntry
 {
@@ -57,6 +58,7 @@ QJsonObject defaultAerialSettings()
     settings[QStringLiteral("algorithm_id")] = QString::fromLatin1(kSiftLightGlueAlgorithmId);
     settings[QStringLiteral("lightglue_tensorrt_engine")] = QString();
     settings[QStringLiteral("loma_r_tensorrt_package")] = QString();
+    settings[QStringLiteral("loma_r_keypoint_budget")] = 0;
     return settings;
 }
 
@@ -141,7 +143,7 @@ QJsonObject WorkflowSettingsDialog::defaultSettings()
     workflows[QString::fromLatin1(kOrthomosaicWorkflowId)] = QJsonObject();
 
     QJsonObject settings;
-    settings[QStringLiteral("workflow_settings_version")] = 4;
+    settings[QStringLiteral("workflow_settings_version")] = kWorkflowSettingsVersion;
     settings[QStringLiteral("selected_workflow")] = QString::fromLatin1(kAerialWorkflowId);
     settings[QStringLiteral("workflows")] = workflows;
     return settings;
@@ -174,6 +176,13 @@ QJsonObject WorkflowSettingsDialog::aerialTriangulationSettings(const QJsonObjec
         source.value(QStringLiteral("lightglue_tensorrt_engine")).toString().trimmed();
     aerial[QStringLiteral("loma_r_tensorrt_package")] =
         source.value(QStringLiteral("loma_r_tensorrt_package")).toString().trimmed();
+    const int lomaRKeypointBudget =
+        source.value(QStringLiteral("loma_r_keypoint_budget")).toInt();
+    aerial[QStringLiteral("loma_r_keypoint_budget")] =
+        lomaRKeypointBudget == 1024 || lomaRKeypointBudget == 2048 ||
+                lomaRKeypointBudget == 3840
+            ? lomaRKeypointBudget
+            : 0;
     return aerial;
 }
 
@@ -216,6 +225,16 @@ void WorkflowSettingsDialog::setupUi()
     populateMatchingAlgorithms();
     aerialForm->addRow(QStringLiteral("匹配算法:"), _matchingAlgorithmCombo);
 
+    _lomaRKeypointBudgetCombo = new QComboBox(aerialGroup);
+    _lomaRKeypointBudgetCombo->setObjectName(
+        QStringLiteral("aerialLoMaRKeypointBudgetCombo"));
+    _lomaRKeypointBudgetCombo->addItem(QStringLiteral("自动（按显存）"), 0);
+    _lomaRKeypointBudgetCombo->addItem(QStringLiteral("标准（1024）"), 1024);
+    _lomaRKeypointBudgetCombo->addItem(QStringLiteral("高（2048）"), 2048);
+    _lomaRKeypointBudgetCombo->addItem(QStringLiteral("最高（3840）"), 3840);
+    aerialForm->addRow(QStringLiteral("LoMa-R 特征档位:"),
+                       _lomaRKeypointBudgetCombo);
+
     auto *enginePathRow = new QWidget(aerialGroup);
     auto *enginePathLayout = new QHBoxLayout(enginePathRow);
     enginePathLayout->setContentsMargins(0, 0, 0, 0);
@@ -253,6 +272,8 @@ void WorkflowSettingsDialog::setupUi()
     connect(_matchingAlgorithmCombo, qOverload<int>(&QComboBox::currentIndexChanged),
             this, [this]() { switchAlgorithmResource(); });
     connect(_matchingResourceEdit, &QLineEdit::textChanged,
+            this, [this]() { refreshMatchingResourceStatus(); });
+    connect(_lomaRKeypointBudgetCombo, qOverload<int>(&QComboBox::currentIndexChanged),
             this, [this]() { refreshMatchingResourceStatus(); });
     connect(_matchingResourceBrowseButton, &QToolButton::clicked, this, [this]()
     {
@@ -320,6 +341,9 @@ void WorkflowSettingsDialog::applySettings(const QJsonObject &requestedSettings)
         aerial.value(QStringLiteral("lightglue_tensorrt_engine")).toString();
     _lomaRPackagePath =
         aerial.value(QStringLiteral("loma_r_tensorrt_package")).toString();
+    const int budgetIndex = _lomaRKeypointBudgetCombo->findData(
+        aerial.value(QStringLiteral("loma_r_keypoint_budget")).toInt());
+    _lomaRKeypointBudgetCombo->setCurrentIndex(budgetIndex >= 0 ? budgetIndex : 0);
     _currentAlgorithmId.clear();
     switchAlgorithmResource();
     setCurrentWorkflow(_workflowCombo->currentIndex());
@@ -328,7 +352,7 @@ void WorkflowSettingsDialog::applySettings(const QJsonObject &requestedSettings)
 QJsonObject WorkflowSettingsDialog::collectSettings() const
 {
     QJsonObject settings = normalizedSettings(_appliedSettings);
-    settings[QStringLiteral("workflow_settings_version")] = 4;
+    settings[QStringLiteral("workflow_settings_version")] = kWorkflowSettingsVersion;
     settings[QStringLiteral("selected_workflow")] =
         _workflowCombo->currentData().toString();
 
@@ -350,6 +374,8 @@ QJsonObject WorkflowSettingsDialog::collectSettings() const
     }
     aerial[QStringLiteral("lightglue_tensorrt_engine")] = lightGluePath;
     aerial[QStringLiteral("loma_r_tensorrt_package")] = loMaRPath;
+    aerial[QStringLiteral("loma_r_keypoint_budget")] =
+        _lomaRKeypointBudgetCombo->currentData().toInt();
     workflows[QString::fromLatin1(kAerialWorkflowId)] = aerial;
     settings[QStringLiteral("workflows")] = workflows;
     return settings;
@@ -370,6 +396,8 @@ void WorkflowSettingsDialog::refreshAlgorithmControls()
         algorithmId == QLatin1String(kLoMaRAlgorithmId);
     _matchingResourceEdit->setEnabled(supported);
     _matchingResourceBrowseButton->setEnabled(supported);
+    _lomaRKeypointBudgetCombo->setEnabled(
+        algorithmId == QLatin1String(kLoMaRAlgorithmId));
     if (supported)
     {
         refreshMatchingResourceStatus();
@@ -417,7 +445,8 @@ void WorkflowSettingsDialog::refreshMatchingResourceStatus()
     if (algorithmId == QLatin1String(kLoMaRAlgorithmId))
     {
         options.lomaRTensorRtPackagePath = _matchingResourceEdit->text().trimmed();
-        const auto resolved = xjw::matchphotos::resolveLoMaRTensorRtPackage(options);
+        options.lomaRKeypointBudget = _lomaRKeypointBudgetCombo->currentData().toInt();
+        const auto resolved = xjw::matchphotos::resolveLoMaRTensorRtPackage(options, 40000);
         resolvedPath = resolved.manifestPath;
         detail = resolved.isValid()
             ? QStringLiteral("  [K=%1, D=%2, %3x%4]")

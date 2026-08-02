@@ -17,6 +17,9 @@ namespace
 constexpr int kMaximumLightGlueWorkers = 4;
 constexpr int kMaximumGeometryWorkers = 8;
 constexpr int kMinimumGeometryPairsPerWorker = 2;
+constexpr int kLoMaRNormalKeypoints = 1024;
+constexpr int kLoMaRHighKeypoints = 2048;
+constexpr int kLoMaRHighestKeypoints = 3840;
 constexpr std::uint64_t kMebibyte = 1024ULL * 1024ULL;
 constexpr std::uint64_t kGibibyte = 1024ULL * kMebibyte;
 
@@ -111,6 +114,37 @@ LightGlueParallelismDecision resolveLightGlueParallelism(
         ? QStringLiteral("LightGlue 并发受显存预算限制")
         : QStringLiteral("LightGlue 并发已按显存预算启用");
     return decision;
+}
+
+int resolveLoMaRKeypointBudget(int requestedKeypoints,
+                               int configuredBudget,
+                               const MatchPhotosGpuMemoryInfo &memory)
+{
+    int budget = configuredBudget;
+    if (budget <= 0)
+    {
+        // LoMa-R 的 TensorRT 图是静态 K。这里使用总显存而不是当前空闲显存，
+        // 防止特征 engine 加载后匹配阶段因为 freeBytes 变化而选择另一个档位。
+        if (!memory.available || memory.totalBytes == 0 ||
+            memory.totalBytes < 8ULL * kGibibyte)
+        {
+            budget = kLoMaRNormalKeypoints;
+        }
+        else if (memory.totalBytes < 12ULL * kGibibyte)
+        {
+            budget = kLoMaRHighKeypoints;
+        }
+        else
+        {
+            budget = kLoMaRHighestKeypoints;
+        }
+    }
+
+    if (requestedKeypoints > 0)
+    {
+        budget = std::min(budget, requestedKeypoints);
+    }
+    return std::max(1, budget);
 }
 
 int resolveGeometryVerificationWorkers(int pairCount,

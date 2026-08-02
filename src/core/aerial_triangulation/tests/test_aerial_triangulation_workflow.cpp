@@ -64,6 +64,7 @@ TEST(AerialTriangulationWorkflowTest, ExplicitRuntimeLimitsOverrideQualityDefaul
     options.quality = QStringLiteral("lowest");
     options.featureMaxImageDim = 6144;
     options.lightGlueTensorRtEnginePath = QStringLiteral("D:/models/lightglue.engine");
+    options.lomaRKeypointBudget = 2048;
     options.cudaParallelPairs = 3;
     options.cudaDevice = 1;
     options.featurePrefetchDepth = 4;
@@ -82,6 +83,7 @@ TEST(AerialTriangulationWorkflowTest, ExplicitRuntimeLimitsOverrideQualityDefaul
     EXPECT_EQ(resolved.tiePointOptions.maxImageDim, 6144);
     EXPECT_EQ(resolved.tiePointOptions.lightGlueTensorRtEnginePath,
               QStringLiteral("D:/models/lightglue.engine"));
+    EXPECT_EQ(resolved.tiePointOptions.lomaRKeypointBudget, 2048);
     EXPECT_EQ(resolved.tiePointOptions.cudaParallelPairs, 3);
     EXPECT_EQ(resolved.tiePointOptions.cudaDevice, 1);
     EXPECT_EQ(resolved.tiePointOptions.featurePrefetchDepth, 4);

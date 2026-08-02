@@ -92,6 +92,35 @@ TEST(MatchPhotosParallelismTest, DetectsCudaOutOfMemoryDiagnostics)
         QStringLiteral("LightGlue 模型输出维度错误")));
 }
 
+TEST(MatchPhotosParallelismTest, SelectsLoMaRBucketFromStableTotalGpuMemory)
+{
+    xjw::matchphotos::MatchPhotosGpuMemoryInfo memory;
+    memory.available = true;
+
+    memory.totalBytes = gib(6);
+    EXPECT_EQ(xjw::matchphotos::resolveLoMaRKeypointBudget(40000, 0, memory), 1024);
+    memory.totalBytes = gib(10);
+    EXPECT_EQ(xjw::matchphotos::resolveLoMaRKeypointBudget(40000, 0, memory), 2048);
+    memory.totalBytes = gib(16);
+    EXPECT_EQ(xjw::matchphotos::resolveLoMaRKeypointBudget(40000, 0, memory), 3840);
+}
+
+TEST(MatchPhotosParallelismTest, ManualLoMaRBucketOverridesAutomaticTier)
+{
+    xjw::matchphotos::MatchPhotosGpuMemoryInfo memory;
+    memory.available = true;
+    memory.totalBytes = gib(6);
+
+    EXPECT_EQ(xjw::matchphotos::resolveLoMaRKeypointBudget(40000, 3840, memory), 3840);
+    EXPECT_EQ(xjw::matchphotos::resolveLoMaRKeypointBudget(1500, 3840, memory), 1500);
+    EXPECT_EQ(xjw::matchphotos::resolveLoMaRKeypointBudget(0, 2048, memory), 2048);
+}
+
+TEST(MatchPhotosParallelismTest, MissingTelemetryUsesConservativeLoMaRBucket)
+{
+    EXPECT_EQ(xjw::matchphotos::resolveLoMaRKeypointBudget(40000, 0, {}), 1024);
+}
+
 TEST(MatchPhotosParallelismTest, GeometryVerificationUsesBoundedCpuPairParallelism)
 {
     EXPECT_EQ(

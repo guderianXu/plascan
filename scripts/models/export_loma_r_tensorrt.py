@@ -34,6 +34,7 @@ REQUIRED_WEIGHTS = (
     "dedode_descriptor_G.pth",
     "dinov2_vitl14_pretrain.pth",
 )
+TENSORRT_TOPK_MAX = 3840
 
 
 def parse_args() -> argparse.Namespace:
@@ -366,6 +367,11 @@ def main() -> None:
         raise ValueError("--input-size must be positive and divisible by DINOv2 patch size 14")
     if args.keypoints <= 0:
         raise ValueError("--keypoints must be positive")
+    if args.keypoints > TENSORRT_TOPK_MAX:
+        raise ValueError(
+            f"--keypoints cannot exceed {TENSORRT_TOPK_MAX}: TensorRT 10.x "
+            "ITopK does not support a larger static K"
+        )
 
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -374,7 +380,8 @@ def main() -> None:
     matcher_onnx = output / f"loma_r_matcher_{suffix}.onnx"
     feature_engine = output / f"loma_r_features_{suffix}.engine"
     matcher_engine = output / f"loma_r_matcher_{suffix}.engine"
-    manifest = output / "loma_r_tensorrt.json"
+    # 档位写入文件名，使多个静态 K 的模型包可以共存于标准模型目录。
+    manifest = output / f"loma_r_{suffix}.json"
     generated = ((matcher_onnx, matcher_engine) if args.matcher_only else
                  (feature_onnx, matcher_onnx, feature_engine, matcher_engine, manifest))
     if not args.force and any(path.exists() for path in generated):

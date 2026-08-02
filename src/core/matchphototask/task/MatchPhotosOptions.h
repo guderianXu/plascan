@@ -38,6 +38,9 @@ struct MatchPhotosOptions
     // LoMa-R 使用一个 JSON 清单同时绑定 DaD + DeDoDe-G 特征引擎和
     // LoMa-R 匹配引擎，避免两个不兼容 engine 被误组合。
     QString lomaRTensorRtPackagePath;
+    // 0 表示按 GPU 总显存与关键点上限自动选择 1024/2048/3840 bucket；
+    // 非 0 值表示用户明确指定档位。显式 manifest 路径始终优先于档位选择。
+    int lomaRKeypointBudget = 0;
 
     // 影像对规划保持显式配置，方便调用方复用 overlap 结果，
     // 或在测试、批处理中强制使用确定性模式。

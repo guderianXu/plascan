@@ -48,11 +48,19 @@ manifest 和两个固定形状 engine：
     --input-size 784 --keypoints 2048 --precision fp16
 ```
 
+分别以 `--keypoints 1024`、`2048` 和 `3840` 导出后，三个 manifest 和对应 engine 可以共存于
+同一目录。manifest 文件名为 `loma_r_k<K>_<precision>.json`。TensorRT 10.x 的 `ITopK`
+最多支持 3840，脚本会在请求更大 K 时直接给出错误，避免耗时导出后才构建失败。
+
 运行时按以下顺序寻找 manifest：
 
 1. `MatchPhotosOptions::lomaRTensorRtPackagePath`；
 2. 环境变量 `PLASCAN_LOMA_R_TENSORRT_PACKAGE`；
-3. 标准模型目录中的 `loma_r_tensorrt.json`、`loma_r_fp16.json` 或 `loma_r_fp32.json`。
+3. 标准模型目录中的全部 `loma_r*.json`；运行时按手动档位或 GPU 总显存选择最合适的 K。
+
+自动档位为：显存小于 8 GiB 使用 K1024，8 至 12 GiB 使用 K2048，12 GiB 及以上使用
+K3840。GUI 的“工作流程设置 -> 空中三角测量 -> LoMa-R 特征档位”可以手动覆盖；显式 manifest
+路径优先级最高。旧版通用文件名仍可被扫描，便于已有本机模型平滑迁移。
 
 LoMa-R 来源为 `davnords/loma`。其主体代码采用 MIT 许可，匹配器继承 LightGlue 的 Apache-2.0 许可；
 权重再分发遵循上游项目条款，PlaScan 仓库不包含这些权重。

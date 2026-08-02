@@ -251,6 +251,7 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     {
         tieOptions.lomaRTensorRtPackagePath.clear();
     }
+    tieOptions.lomaRKeypointBudget = options.lomaRKeypointBudget;
     tieOptions.maskApplyMode = normalizedToken(options.maskApplyMode, QStringLiteral("none"));
     tieOptions.cudaDevice = std::max(0, options.cudaDevice);
     tieOptions.cudaParallelPairs = std::max(0, options.cudaParallelPairs);
@@ -349,6 +350,10 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     settings.insert(QStringLiteral("matching_algorithm_id"), algorithmId);
     settings.insert(QStringLiteral("lightglue_tensorrt_engine"),
                     tieOptions.lightGlueTensorRtEnginePath);
+    settings.insert(QStringLiteral("loma_r_tensorrt_package"),
+                    tieOptions.lomaRTensorRtPackagePath);
+    settings.insert(QStringLiteral("loma_r_keypoint_budget"),
+                    tieOptions.lomaRKeypointBudget);
     settings.insert(QStringLiteral("pair_planning_mode"), pairPlanningMode);
     settings.insert(QStringLiteral("sequence_pair_window"), tieOptions.pairPolicy.sequenceWindow);
     settings.insert(QStringLiteral("sequence_loop_closure"), pipeline.sequenceLoopClosure);

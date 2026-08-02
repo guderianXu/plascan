@@ -64,5 +64,11 @@ DaD 关键点、置信度和 DeDoDe-G 描述子；匹配 engine 输入两组固�
 不兼容资源。运行时可通过 `MatchPhotosOptions::lomaRTensorRtPackagePath`、环境变量
 `PLASCAN_LOMA_R_TENSORRT_PACKAGE` 或标准模型目录解析该 manifest。
 
+同一模型目录可以并存 `loma_r_k1024_fp16.json`、`loma_r_k2048_fp16.json` 和
+`loma_r_k3840_fp16.json`。未显式指定 manifest 时，运行时根据 GPU 总显存自动选择档位：小于
+8 GiB 使用 1024，8 至 12 GiB 使用 2048，12 GiB 及以上使用 3840；工作流程设置或
+`MatchPhotosOptions::lomaRKeypointBudget` 可以覆盖自动结果。用户关键点限制仍是最终上限。
+TensorRT 10.x 的 `ITopK` 静态上限为 3840，因此当前不提供 4096 档位。
+
 导出脚本只在开发环境中使用 Python PyTorch 读取官方权重，生产 C++ 运行时不链接 LibTorch。具体命令、
 权重清单和部署方式见 `docs/models/README.md`。

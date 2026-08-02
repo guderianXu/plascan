@@ -125,7 +125,7 @@ MatchPhotosStageReport FeatureStage::run(
     ResolvedLoMaRTensorRtPackage loma_package;
     if (algorithmPlan.algorithmId == QLatin1String(image_matching::kLoMaRAlgorithmId))
     {
-        loma_package = resolveLoMaRTensorRtPackage(options);
+        loma_package = resolveLoMaRTensorRtPackage(options, algorithmPlan.maxKeypoints);
         if (!loma_package.isValid())
         {
             return makeFeatureReport(

@@ -23,21 +23,21 @@ class WorkflowSettingsDialog final : public QDialog
 public:
     explicit WorkflowSettingsDialog(QWidget *parent = nullptr);
 
-    /// 返回 v4 工作流程分组配置，包含算法专用 TensorRT 资源路径。
+    /// 返回 v5 工作流程分组配置，包含算法专用 TensorRT 资源路径和 LoMa-R 档位。
     static QJsonObject defaultSettings();
 
     /**
      * @brief 提取空中三角测量设置。
      *
-     * 同时接受 v4/v3 的 workflows.aerial_triangulation 对象和旧 v2 扁平字段，
+     * 同时接受 v5/v4/v3 的 workflows.aerial_triangulation 对象和旧 v2 扁平字段，
      * 供项目无损升级以及空三启动参数合并使用。
      */
     static QJsonObject aerialTriangulationSettings(const QJsonObject &settings);
 
-    /// 从项目级 JSON 恢复控件，旧版配置会在内存中迁移到 v4。
+    /// 从项目级 JSON 恢复控件，旧版配置会在内存中迁移到 v5。
     void applySettings(const QJsonObject &settings);
 
-    /// 收集按工作流程分组的 v4 配置。
+    /// 收集按工作流程分组的 v5 配置。
     QJsonObject collectSettings() const;
 
 private:
@@ -57,6 +57,7 @@ private:
     QComboBox *_workflowCombo = nullptr;
     QStackedWidget *_workflowPages = nullptr;
     QComboBox *_matchingAlgorithmCombo = nullptr;
+    QComboBox *_lomaRKeypointBudgetCombo = nullptr;
     QLineEdit *_matchingResourceEdit = nullptr;
     QToolButton *_matchingResourceBrowseButton = nullptr;
     QLabel *_matchingResourceStatusLabel = nullptr;

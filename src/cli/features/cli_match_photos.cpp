@@ -309,6 +309,7 @@ int main(int argc, char *argv[])
     std::string algorithmIdArg = "sift_lightglue";
     std::string lightGlueEngineArg;
     std::string lomaRPackageArg;
+    int lomaRKeypointBudget = 0;
     std::string maskApplyModeArg = "none";
     std::string maskDirArg;
     std::string pairModeArg = "auto";
@@ -343,6 +344,8 @@ int main(int argc, char *argv[])
                    "TensorRT LightGlue .engine；留空时按模型目录自动查找");
     app.add_option("--loma-r-package", lomaRPackageArg,
                    "LoMa-R TensorRT JSON 清单；留空时按模型目录自动查找");
+    app.add_option("--loma-r-keypoint-budget", lomaRKeypointBudget,
+                   "LoMa-R 静态特征档位: 0(自动), 1024, 2048, 3840");
     app.add_option("--keypoint-limit", keypointLimit, "每张影像关键点限制");
     app.add_option("--keypoint-limit-per-mpx", keypointLimitPerMpx, "每百万像素关键点限制，0 表示不额外限制");
     app.add_option("--tiepoint-limit", tiepointLimit, "每张影像连接点限制");
@@ -365,6 +368,14 @@ int main(int argc, char *argv[])
     app.add_flag("--force", force, "允许输出目录非空");
 
     CLI11_PARSE(app, argc, argv);
+
+    if (lomaRKeypointBudget != 0 && lomaRKeypointBudget != 1024 &&
+        lomaRKeypointBudget != 2048 && lomaRKeypointBudget != 3840)
+    {
+        std::fprintf(stderr,
+                     "错误: --loma-r-keypoint-budget 只接受 0、1024、2048 或 3840\n");
+        return cli::EXIT_ARG_ERR;
+    }
 
     const QString inputList = xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(inputPath));
     const QString outputDir = xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(outputDirArg));
@@ -457,6 +468,7 @@ int main(int argc, char *argv[])
     options.lomaRTensorRtPackagePath = lomaRPackageArg.empty()
         ? QString()
         : xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(lomaRPackageArg));
+    options.lomaRKeypointBudget = lomaRKeypointBudget;
     options.maskApplyMode = xjw::cli::normalizedToken(maskApplyModeArg, QStringLiteral("none"));
     options.maxImageDim = maxImageDim;
     options.maxKeypoints = std::max(0, keypointLimit);
