@@ -1,4 +1,4 @@
-#include "DenseSparseCloudPreparation.h"
+#include "PointCloudInputPreparation.h"
 
 #include "SparseCloudPreprocessor.h"
 #include "io/PathIO.h"
@@ -7,14 +7,14 @@
 
 #include <plapoint/filters/preprocessing.h>
 
-namespace xjw::gui::project
+namespace xjw::core::project
 {
 
-DenseSparsePreparationResult prepareDenseSparseCloud(
+PointCloudInputPreparationResult preparePointCloudInput(
     const QString &sparseCloudPath,
     const std::vector<xjw::mvs::CameraView> &views)
 {
-    DenseSparsePreparationResult prepared;
+    PointCloudInputPreparationResult prepared;
     if (sparseCloudPath.trimmed().isEmpty() || !QFileInfo::exists(sparseCloudPath))
     {
         prepared.errorMessage = QStringLiteral("正式空三稀疏点云不存在：%1")
@@ -47,4 +47,4 @@ DenseSparsePreparationResult prepareDenseSparseCloud(
     return prepared;
 }
 
-} // namespace xjw::gui::project
+} // namespace xjw::core::project

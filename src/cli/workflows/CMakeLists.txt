@@ -26,6 +26,7 @@ set(workflow_cli_base_targets
     matchphototask
     sfm
     mvs
+    project_workflows
     meshing
     aerial_triangulation
     plascan_cli_photogrammetry_common
@@ -49,13 +50,13 @@ function(add_reconstruction_workflow_cli name)
             ReconstructionCliReport.h
             ReconstructionPipelineRunner.cpp
             ReconstructionPipelineRunner.h
-            ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectDenseWorkflowConfig.cpp
         LIBRARIES
             aerial_triangulation
             plascan_cli_photogrammetry_common
             plascan_common_project
             sfm
             mvs
+            project_workflows
             meshing
             ${ARGN}
             image_matching
@@ -81,7 +82,6 @@ function(add_reconstruction_workflow_cli name)
             ${CMAKE_SOURCE_DIR}/src/core/terrain
             ${CMAKE_SOURCE_DIR}/src/gui
             ${CMAKE_SOURCE_DIR}/src/gui/compat
-            ${CMAKE_SOURCE_DIR}/src/gui/project/support
             ${OpenCV_INCLUDE_DIRS}
         COMPILE_DEFINITIONS PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
         WITH_NVRTC_RPATH
@@ -100,10 +100,9 @@ endif()
 if(TARGET mvs)
     add_plascan_cli(mvs_depth_reprocess_cli
         SOURCE cli_mvs_depth_reprocess.cpp
-        SOURCES
-            ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectDenseWorkflowConfig.cpp
         LIBRARIES
             mvs
+            project_workflows
             camera
             Qt6::Core
             Qt6::Concurrent
@@ -114,7 +113,6 @@ if(TARGET mvs)
             ${CMAKE_SOURCE_DIR}/src/common
             ${CMAKE_SOURCE_DIR}/src/core/camera
             ${CMAKE_SOURCE_DIR}/src/core/mvs
-            ${CMAKE_SOURCE_DIR}/src/gui/project/support
             ${OpenCV_INCLUDE_DIRS}
         WITH_NVRTC_RPATH
     )

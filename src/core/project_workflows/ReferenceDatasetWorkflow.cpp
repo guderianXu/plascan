@@ -1,9 +1,9 @@
-#include "ProjectReferenceDatasets.h"
+#include "ReferenceDatasetWorkflow.h"
 
 #include "DemDifference.h"
 #include "DemDomIO.h"
 #include "PointCloudAlignment.h"
-#include "ProjectData.h"
+#include "project/ProjectSessionModel.h"
 #include "project/ProjectIO.h"
 
 #include <QDateTime>
@@ -22,7 +22,7 @@
 #include <cstring>
 #include <limits>
 
-namespace xjw::gui::project {
+namespace xjw::core::project {
 namespace {
 
 QString utcNowIso()
@@ -1254,4 +1254,4 @@ ReferenceDatasetQualityReportResult writeReferenceTerrainPriorPreflightReport(Pr
     return result;
 }
 
-} // namespace xjw::gui::project
+} // namespace xjw::core::project

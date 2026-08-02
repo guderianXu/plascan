@@ -1,6 +1,8 @@
 #include "ProjectManager.h"
 #include "ProjectModelManager.h"
-#include "ProjectDenseReconstructionManager.h"
+#include "ProjectPointCloudWorkflowController.h"
+#include "ProjectLifecycleController.h"
+#include "ProjectMaskWorkflowController.h"
 #include "ProjectSparseReconstructionManager.h"
 #include "ProjectTerrainProductsManager.h"
 #include "ProjectCameraSetupManager.h"
@@ -25,15 +27,9 @@
 #include "ProjectSurveyControl.h"
 #include "ProjectWorkflowUtils.h"
 #include "ProjectWorkflowReports.h"
-#include "image/GenerateMaskDialog.h"
 #include "camera/SurveyControlDialog.h"
 #include "GuiTaskRunner.h"
 #include "Logger.h"
-#include "MaskGenerator.h"
-#include "u2net/U2NetMaskGenerator.h"
-#include "io/PathIO.h"
-#include "model/ModelFileResolver.h"
-#include "model/U2NetModelCatalog.h"
 #include "filtering/SparsePointCloudProcessor.h"
 #include "FileDialogStateManager.h"
 #include "Camera.h"
@@ -64,22 +60,12 @@
 #include <QTextStream>
 #include <QDateTime>
 #include <QImage>
-#include <QImageReader>
-#include <QPainter>
-#include <QPen>
-#include <QColor>
 
 #include <algorithm>
 #include <atomic>
 #include <array>
 #include <limits>
 #include <memory>
-#include <optional>
-
-#include "OpenCvCompat.h"
-#include <opencv2/core.hpp>
-#include <opencv2/imgcodecs.hpp>
-#include <opencv2/imgproc.hpp>
 
 using xjw::common::project::cameraFromJson;
 using xjw::common::project::cameraToJson;
@@ -251,104 +237,6 @@ void appendMetaArrayRecord(QJsonObject *meta,
     (*meta)[arrayKey] = arr;
 }
 
-xjw::mask::MaskGenerationOptions maskOptionsFromSettings(const QJsonObject &settings)
-{
-    xjw::mask::MaskGenerationOptions options;
-    const QString method = settings.value(QStringLiteral("method")).toString(QStringLiteral("black_background"));
-    options.method = method == QLatin1String("threshold")
-        ? xjw::mask::MaskGenerationMethod::Threshold
-        : xjw::mask::MaskGenerationMethod::BlackBackground;
-    options.threshold = settings.value(QStringLiteral("auto_threshold")).toBool(true)
-        ? -1.0
-        : settings.value(QStringLiteral("threshold")).toDouble(3.0);
-    options.morphologyRadius = settings.value(QStringLiteral("morphology_radius")).toInt(2);
-    options.minComponentArea = settings.value(QStringLiteral("min_component_area")).toInt(64);
-    options.keepLargestComponent = true;
-    return options;
-}
-
-xjw::mask::MaskOperation maskOperationFromSettings(const QJsonObject &settings)
-{
-    const QString operation = settings.value(QStringLiteral("operation")).toString(QStringLiteral("replace"));
-    if (operation == QLatin1String("union"))
-    {
-        return xjw::mask::MaskOperation::Union;
-    }
-    if (operation == QLatin1String("intersection"))
-    {
-        return xjw::mask::MaskOperation::Intersection;
-    }
-    if (operation == QLatin1String("difference"))
-    {
-        return xjw::mask::MaskOperation::Difference;
-    }
-    return xjw::mask::MaskOperation::Replace;
-}
-
-QStringList maskTargetsFromSettings(const QJsonObject &settings, const QStringList &allImages)
-{
-    const QString scope = settings.value(QStringLiteral("scope")).toString(QStringLiteral("selected_images"));
-    if (scope == QLatin1String("all_images"))
-    {
-        return allImages;
-    }
-
-    QStringList selectedImages;
-    const QJsonArray selected = settings.value(QStringLiteral("selected_images")).toArray();
-    for (const QJsonValue &value : selected)
-    {
-        const QString path = value.toString();
-        if (!path.trimmed().isEmpty())
-        {
-            selectedImages.push_back(path);
-        }
-    }
-
-    if (scope == QLatin1String("current_image"))
-    {
-        const QString currentImage = settings.value(QStringLiteral("current_image")).toString();
-        return currentImage.trimmed().isEmpty() ? QStringList{} : QStringList{currentImage};
-    }
-    return selectedImages.isEmpty() ? allImages : selectedImages;
-}
-
-std::string utf8StdString(const QString &value)
-{
-    const QByteArray bytes = QDir::toNativeSeparators(value).toUtf8();
-    return std::string(bytes.constData(), static_cast<std::size_t>(bytes.size()));
-}
-
-std::optional<xjw::mask::U2NetMaskGeneratorConfig> u2netMaskConfigFromSettings(const QJsonObject &settings,
-                                                                               QString *error)
-{
-    const xjw::common::model::ModelFileResolver resolver;
-    const auto status = xjw::common::model::u2netModelStatus(resolver);
-    if (!status.isInstalled)
-    {
-        if (error)
-        {
-            *error = QStringLiteral("未找到 U2Net ONNX 模型：U2Net_v1.onnx。请放到 PLASCAN_MODEL_DIR 或 resources/models。");
-        }
-        return std::nullopt;
-    }
-
-    xjw::mask::U2NetMaskGeneratorConfig config;
-    config.modelPath = utf8StdString(status.modelPath);
-    config.useCuda =
-        settings.value(QStringLiteral("u2net_device")).toString(QStringLiteral("cuda")) == QLatin1String("cuda");
-    config.allowDeviceFallback = settings.value(QStringLiteral("u2net_allow_fallback")).toBool(true);
-    config.cudaDevice = 0;
-    config.inputSize = std::clamp(settings.value(QStringLiteral("u2net_input_size")).toInt(320), 128, 1024);
-    config.foregroundThreshold =
-        static_cast<float>(std::clamp(settings.value(QStringLiteral("u2net_mask_threshold")).toDouble(0.5),
-                                      0.01,
-                                      0.99));
-    config.morphologyRadius = 1;
-    config.minComponentArea = 64;
-    config.keepLargestComponent = true;
-    return config;
-}
-
 } // namespace
 
 ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
@@ -357,12 +245,14 @@ ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
     , _projectData(projectData)
     , _sparseReconstructionManager(
           new ProjectSparseReconstructionManager(this, projectData, parent, this))
-    , _denseReconstructionManager(
-          new ProjectDenseReconstructionManager(this, projectData, parent, this))
+    , _pointCloudWorkflowController(
+          new ProjectPointCloudWorkflowController(this, projectData, parent, this))
     , _modelManager(new ProjectModelManager(this, projectData, parent, this))
     , _terrainProductsManager(new ProjectTerrainProductsManager(this, projectData, parent, this))
     , _cameraSetupManager(new ProjectCameraSetupManager(this, projectData, parent, this))
     , _uiCommands(new ProjectUiCommands(projectData, parent))
+    , _lifecycleController(new ProjectLifecycleController(projectData, _uiCommands, parent, this))
+    , _maskWorkflowController(new ProjectMaskWorkflowController(projectData, parent, this))
 {
     _uiCommands->setDirectoryAccessors(
         [this](const QString &key) { return getLastUsedDir(key); },
@@ -404,36 +294,43 @@ ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
                 });
         connect(_projectData, &ProjectData::dirtyStateChanged,
                 this, &ProjectManager::metadataDirtyChanged);
-        connect(_projectData,
-                &ProjectData::projectSaveCompleted,
-                this,
-                [this](bool success, const QString &errorMessage)
-                {
-                    if (!success && !errorMessage.isEmpty())
-                    {
-                        QMessageBox::critical(
-                            _parent,
-                            QStringLiteral("错误"),
-                            QStringLiteral("保存项目失败: %1").arg(errorMessage));
-                    }
-                    emit saveFinished(success);
-                });
     }
+
+    connect(_lifecycleController, &ProjectLifecycleController::projectCreated,
+            this, &ProjectManager::projectCreated);
+    connect(_lifecycleController, &ProjectLifecycleController::projectOpenStarted,
+            this, &ProjectManager::projectOpenStarted);
+    connect(_lifecycleController, &ProjectLifecycleController::projectOpenProgressChanged,
+            this, &ProjectManager::projectOpenProgressChanged);
+    connect(_lifecycleController, &ProjectLifecycleController::projectOpenFinished,
+            this, &ProjectManager::projectOpenFinished);
+    connect(_lifecycleController, &ProjectLifecycleController::saveStarted,
+            this, &ProjectManager::saveStarted);
+    connect(_lifecycleController, &ProjectLifecycleController::saveFinished,
+            this, &ProjectManager::saveFinished);
+    connect(_maskWorkflowController, &ProjectMaskWorkflowController::progressChanged,
+            this, &ProjectManager::maskGenerationProgressChanged);
+    connect(_maskWorkflowController, &ProjectMaskWorkflowController::finished,
+            this, &ProjectManager::maskGenerationFinished);
+    connect(_maskWorkflowController, &ProjectMaskWorkflowController::masksGenerated,
+            this, &ProjectManager::masksGenerated);
+    connect(_maskWorkflowController, &ProjectMaskWorkflowController::projectMetadataUpdated,
+            this, &ProjectManager::projectMetadataUpdated);
 
         connect(_modelManager, &ProjectModelManager::meshProgressChanged,
             this, &ProjectManager::meshProgressChanged);
         connect(_modelManager, &ProjectModelManager::meshProgressFinished,
             this, &ProjectManager::meshProgressFinished);
-        connect(_denseReconstructionManager,
-            &ProjectDenseReconstructionManager::pointCloudProgressChanged,
+        connect(_pointCloudWorkflowController,
+            &ProjectPointCloudWorkflowController::pointCloudProgressChanged,
             this,
             &ProjectManager::pointCloudProgressChanged);
-        connect(_denseReconstructionManager,
-            &ProjectDenseReconstructionManager::pointCloudProgressFinished,
+        connect(_pointCloudWorkflowController,
+            &ProjectPointCloudWorkflowController::pointCloudProgressFinished,
             this,
             &ProjectManager::pointCloudProgressFinished);
-        connect(_denseReconstructionManager,
-            &ProjectDenseReconstructionManager::pointCloudResultReady,
+        connect(_pointCloudWorkflowController,
+            &ProjectPointCloudWorkflowController::pointCloudResultReady,
             this,
             &ProjectManager::pointCloudResultReady);
         connect(_sparseReconstructionManager,
@@ -466,157 +363,27 @@ ProjectManager::~ProjectManager()
 
 void ProjectManager::createNewProject()
 {
-    QString plascanPath;
-    if (_uiCommands && _uiCommands->createNewProject(&plascanPath))
-    {
-        emit projectCreated(plascanPath);
-        LOG_INFO(QStringLiteral("项目已创建: %1").arg(plascanPath));
-    }
+    _lifecycleController->createNewProject();
 }
 
 void ProjectManager::openProject()
 {
-    QString plascanPath;
-    if (_uiCommands && _uiCommands->selectProjectByDialog(&plascanPath))
-    {
-        openProjectFromPath(plascanPath);
-    }
+    _lifecycleController->openProject();
 }
 
 void ProjectManager::openProjectFromPath(const QString &plascanPath)
 {
-    if (plascanPath.trimmed().isEmpty())
-    {
-        return;
-    }
-    const QString projectPath = QDir::cleanPath(QFileInfo(plascanPath).absoluteFilePath());
-    if (_projectOpenInProgress)
-    {
-        showWarning(QStringLiteral("正在打开项目，请稍候。"));
-        return;
-    }
-
-    _projectOpenInProgress = true;
-    emit projectOpenStarted(projectPath);
-    emit projectOpenProgressChanged(QStringLiteral("正在读取项目文件..."), 10);
-
-    xjw::gui::tasks::runGuardedWithOutcome(
-        this,
-        [projectPath]() -> ProjectOpenSnapshot
-        {
-            return ProjectData::loadProjectOpenSnapshot(projectPath);
-        },
-        [projectPath](ProjectManager *self,
-                      xjw::gui::tasks::TaskOutcome<ProjectOpenSnapshot> outcome)
-        {
-            emit self->projectOpenProgressChanged(QStringLiteral("正在初始化项目界面..."), 75);
-
-            auto finishWithError = [self](const QString &message)
-            {
-                self->_projectOpenInProgress = false;
-                emit self->projectOpenFinished(false, message);
-                QMessageBox::critical(self->_parent,
-                                      QStringLiteral("错误"),
-                                      QStringLiteral("打开项目失败: %1").arg(message));
-            };
-
-            if (!outcome.succeeded())
-            {
-                finishWithError(outcome.errorMessage);
-                return;
-            }
-
-            ProjectOpenSnapshot snapshot = std::move(*outcome.value);
-
-            if (!snapshot.success)
-            {
-                finishWithError(snapshot.errorMessage.isEmpty()
-                                    ? QStringLiteral("读取项目文件失败")
-                                    : snapshot.errorMessage);
-                return;
-            }
-
-            QString error;
-            if (!self->_projectData || !self->_projectData->openProjectFromSnapshot(snapshot, &error))
-            {
-                finishWithError(error.isEmpty() ? QStringLiteral("应用项目数据失败") : error);
-                return;
-            }
-
-            emit self->projectOpenProgressChanged(QStringLiteral("正在启动结果数据后台加载..."), 95);
-            if (!snapshot.resultsLoaded)
-            {
-                self->loadProjectResultsAsync(projectPath);
-            }
-
-            self->_projectOpenInProgress = false;
-            emit self->projectOpenFinished(true, QStringLiteral("项目已打开"));
-            LOG_INFO(QStringLiteral("项目已打开: %1").arg(projectPath));
-        });
-}
-
-void ProjectManager::loadProjectResultsAsync(const QString &plascanPath)
-{
-    if (plascanPath.trimmed().isEmpty())
-    {
-        return;
-    }
-
-    const auto session = currentSessionContext();
-    xjw::gui::tasks::runGuardedWithOutcome(
-        this,
-        [plascanPath]() -> ProjectResultsSnapshot
-        {
-            return ProjectData::loadProjectResultsSnapshot(plascanPath);
-        },
-        [plascanPath, session](ProjectManager *self,
-                               xjw::gui::tasks::TaskOutcome<ProjectResultsSnapshot> outcome)
-        {
-            if (!self->_projectData || !self->isCurrentSession(session))
-            {
-                return;
-            }
-
-            if (!outcome.succeeded())
-            {
-                LOG_WARN(QStringLiteral("项目结果数据后台加载失败: %1")
-                             .arg(outcome.errorMessage));
-                return;
-            }
-
-            ProjectResultsSnapshot snapshot = std::move(*outcome.value);
-
-            QString error;
-            if (!self->_projectData->applyResultsSnapshot(snapshot, &error))
-            {
-                LOG_WARN(QStringLiteral("项目结果数据后台加载失败: %1").arg(error));
-                return;
-            }
-
-            if (snapshot.hasResults)
-            {
-                LOG_INFO(QStringLiteral("项目结果数据已后台加载: %1").arg(plascanPath));
-            }
-        });
+    _lifecycleController->openProjectFromPath(plascanPath);
 }
 
 void ProjectManager::saveProject()
 {
-    if (!_projectData)
-    {
-        return;
-    }
-
-    emit saveStarted();
-    _projectData->saveProjectAsync();
+    _lifecycleController->saveProject();
 }
 
 void ProjectManager::closeProject()
 {
-    if (_uiCommands)
-    {
-        _uiCommands->closeProject();
-    }
+    _lifecycleController->closeProject();
 }
 
 //==============================================================================
@@ -873,312 +640,17 @@ void ProjectManager::openSurveyControlDialog()
 
 void ProjectManager::setActiveImagePath(const QString &imagePath)
 {
-    _activeImagePath = imagePath;
+    _maskWorkflowController->setActiveImagePath(imagePath);
 }
 
 void ProjectManager::openGenerateMaskDialog()
 {
-    const QStringList allImages = _projectData ? _projectData->getAllImages() : QStringList();
-    openGenerateMaskDialogForImages(allImages);
+    _maskWorkflowController->openDialog();
 }
 
 void ProjectManager::openGenerateMaskDialogForImages(const QStringList &requestedImages)
 {
-    if (!ensureProjectOpen(QStringLiteral("请先打开项目，再生成照片蒙版。")))
-    {
-        return;
-    }
-    if (_maskGenerationCancelFlag)
-    {
-        showWarning(QStringLiteral("已有照片蒙版生成任务正在运行，请等待完成或取消后再试。"),
-                    QStringLiteral("生成蒙版"));
-        return;
-    }
-
-    const QStringList allImages = _projectData ? _projectData->getAllImages() : QStringList();
-    if (allImages.isEmpty())
-    {
-        showWarning(QStringLiteral("当前项目没有可生成蒙版的照片。"), QStringLiteral("生成蒙版"));
-        return;
-    }
-
-    const auto session = currentSessionContext();
-    const QString projectPath = session.projectPath;
-    QHash<QString, QString> projectImages;
-    QStringList resolvedAllImages;
-    QSet<QString> projectImageKeys;
-    for (const QString &imagePath : allImages)
-    {
-        const QString resolvedPath = xjw::common::project::ProjectIO::resolveProjectResourcePath(projectPath, imagePath);
-        const QString key = normalizePath(resolvedPath);
-        if (key.isEmpty() || projectImageKeys.contains(key))
-        {
-            continue;
-        }
-        projectImageKeys.insert(key);
-        projectImages.insert(key, resolvedPath);
-        resolvedAllImages.push_back(resolvedPath);
-    }
-
-    QStringList selectedImages;
-    QSet<QString> seen;
-    for (const QString &requestedPath : requestedImages)
-    {
-        const QString resolvedPath = xjw::common::project::ProjectIO::resolveProjectResourcePath(projectPath, requestedPath);
-        const QString key = normalizePath(resolvedPath);
-        if (!key.isEmpty() && projectImages.contains(key) && !seen.contains(key))
-        {
-            seen.insert(key);
-            selectedImages.push_back(projectImages.value(key));
-        }
-    }
-    if (selectedImages.isEmpty())
-    {
-        showWarning(QStringLiteral("没有选中可生成蒙版的照片。"), QStringLiteral("生成蒙版"));
-        return;
-    }
-
-    const QString activeImage = xjw::common::project::ProjectIO::resolveProjectResourcePath(projectPath, _activeImagePath);
-    const QString currentImage = projectImages.value(normalizePath(activeImage));
-    GenerateMaskDialog dialog(selectedImages, currentImage, _parent);
-    if (dialog.exec() != QDialog::Accepted)
-    {
-        return;
-    }
-
-    const QJsonObject settings = dialog.collectSettings();
-    const QStringList targetImages = maskTargetsFromSettings(settings, resolvedAllImages);
-    if (targetImages.isEmpty())
-    {
-        showWarning(QStringLiteral("没有选中可生成蒙版的照片。"), QStringLiteral("生成蒙版"));
-        return;
-    }
-
-    const QString masksDir = xjw::common::project::ProjectIO::maskOutputDir(projectPath);
-    if (masksDir.isEmpty() || !QDir().mkpath(masksDir))
-    {
-        showWarning(QStringLiteral("无法创建蒙版输出目录：%1").arg(masksDir), QStringLiteral("生成蒙版"));
-        return;
-    }
-
-    const auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
-    const int totalImages = targetImages.size();
-    _maskGenerationCancelFlag = cancelFlag;
-    emit maskGenerationProgressChanged(QStringLiteral("生成蒙版"), 0, totalImages);
-
-    struct GenerateMaskResult
-    {
-        QMap<QString, QJsonObject> maskRecordsByImage;
-        QStringList generatedImages;
-        QStringList errors;
-        bool cancelled = false;
-    };
-
-    QPointer<ProjectManager> managerGuard(this);
-    xjw::gui::tasks::runGuardedWithOutcome(
-        this,
-        [settings, targetImages, projectPath, cancelFlag, managerGuard, totalImages]() -> GenerateMaskResult
-        {
-            GenerateMaskResult result;
-            const auto options = maskOptionsFromSettings(settings);
-            const auto operation = maskOperationFromSettings(settings);
-            const QString methodToken =
-                settings.value(QStringLiteral("method")).toString(QStringLiteral("black_background"));
-            const bool useU2Net = methodToken == QLatin1String("u2net");
-
-            std::unique_ptr<xjw::mask::U2NetMaskGenerator> u2netGenerator;
-            if (useU2Net)
-            {
-                QString configError;
-                const auto u2netConfig = u2netMaskConfigFromSettings(settings, &configError);
-                if (!u2netConfig.has_value())
-                {
-                    result.errors << configError;
-                    return result;
-                }
-
-                try
-                {
-                    u2netGenerator = std::make_unique<xjw::mask::U2NetMaskGenerator>(u2netConfig.value());
-                    LOG_INFO(QStringLiteral("U2Net ONNX 蒙版模型已加载: model=U2Net_v1.onnx device=%1")
-                                 .arg(QString::fromStdString(u2netGenerator->deviceLabel())));
-                }
-                catch (const std::exception &error)
-                {
-                    result.errors << QStringLiteral("U2Net ONNX 模型加载失败：%1").arg(QString::fromUtf8(error.what()));
-                    return result;
-                }
-            }
-
-            auto reportProgress = [managerGuard, totalImages](int done)
-            {
-                if (!managerGuard)
-                {
-                    return;
-                }
-                xjw::gui::tasks::postGuarded(managerGuard.data(),
-                                             [done, totalImages](ProjectManager *self)
-                {
-                    emit self->maskGenerationProgressChanged(QStringLiteral("生成蒙版"), done, totalImages);
-                });
-            };
-
-            int completed = 0;
-            for (const QString &imagePath : targetImages)
-            {
-                if (cancelFlag->load(std::memory_order_relaxed))
-                {
-                    result.cancelled = true;
-                    break;
-                }
-
-                const cv::Mat source = xjw::common::io::readImage(imagePath, cv::IMREAD_UNCHANGED);
-                if (source.empty())
-                {
-                    result.errors << QStringLiteral("%1: 读取失败").arg(QFileInfo(imagePath).fileName());
-                    reportProgress(++completed);
-                    continue;
-                }
-
-                cv::Mat generated;
-                try
-                {
-                    if (useU2Net)
-                    {
-                        const auto maskResult = u2netGenerator->generate(source);
-                        generated = maskResult.mask;
-                    }
-                    else
-                    {
-                        generated = xjw::mask::generateMask(source, options);
-                    }
-                }
-                catch (const std::exception &error)
-                {
-                    result.errors << QStringLiteral("%1: %2")
-                                         .arg(QFileInfo(imagePath).fileName(),
-                                              QString::fromUtf8(error.what()));
-                    reportProgress(++completed);
-                    continue;
-                }
-
-                if (generated.empty())
-                {
-                    result.errors << QStringLiteral("%1: 生成结果为空").arg(QFileInfo(imagePath).fileName());
-                    reportProgress(++completed);
-                    continue;
-                }
-
-                const QString maskPath = xjw::common::project::ProjectIO::maskOutputPathForImage(projectPath, imagePath);
-                if (QFileInfo::exists(maskPath) && operation != xjw::mask::MaskOperation::Replace)
-                {
-                    const cv::Mat existing = xjw::common::io::readImage(maskPath, cv::IMREAD_GRAYSCALE);
-                    if (!existing.empty())
-                    {
-                        generated = xjw::mask::composeMasks(existing, generated, operation);
-                    }
-                }
-
-                if (!xjw::common::io::writeImage(maskPath, generated))
-                {
-                    result.errors << QStringLiteral("%1: 写入失败").arg(QFileInfo(maskPath).fileName());
-                    reportProgress(++completed);
-                    continue;
-                }
-
-                QJsonObject record;
-                record.insert(QStringLiteral("mask_path"), QDir::cleanPath(maskPath));
-                record.insert(QStringLiteral("mask_method"), methodToken);
-                record.insert(QStringLiteral("mask_updated_at"),
-                              QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
-                result.maskRecordsByImage.insert(normalizePath(imagePath), record);
-                result.generatedImages << imagePath;
-                reportProgress(++completed);
-            }
-            return result;
-        },
-        [session, masksDir, cancelFlag](
-            ProjectManager *self,
-            xjw::gui::tasks::TaskOutcome<GenerateMaskResult> outcome)
-        {
-            if (self->_maskGenerationCancelFlag == cancelFlag)
-            {
-                self->_maskGenerationCancelFlag.reset();
-            }
-
-            if (!outcome.succeeded())
-            {
-                emit self->maskGenerationFinished(false);
-                if (self->isCurrentSession(session))
-                {
-                    QMessageBox::warning(self->_parent,
-                                         QStringLiteral("生成蒙版"),
-                                         outcome.errorMessage);
-                }
-                return;
-            }
-
-            GenerateMaskResult result = std::move(*outcome.value);
-
-            const bool finishedSuccessfully =
-                !result.cancelled && result.errors.isEmpty() && !result.generatedImages.isEmpty();
-            emit self->maskGenerationFinished(finishedSuccessfully);
-
-            if (!self->isCurrentSession(session))
-            {
-                return;
-            }
-
-            if (result.generatedImages.isEmpty())
-            {
-                const QString detail = result.errors.isEmpty()
-                    ? QStringLiteral("未生成任何蒙版。")
-                    : result.errors.join(QStringLiteral("; "));
-                const QString message = result.cancelled
-                    ? QStringLiteral("蒙版生成已取消。%1").arg(detail)
-                    : QStringLiteral("蒙版生成失败：%1").arg(detail);
-                self->showWarning(message, QStringLiteral("生成蒙版"));
-                return;
-            }
-
-            QJsonObject meta = self->_projectData->coreFilesMeta();
-            QJsonArray images = meta.value(QStringLiteral("images")).toArray();
-            for (int i = 0; i < images.size(); ++i)
-            {
-                QJsonObject image = images.at(i).toObject();
-                const QString imagePath = xjw::common::project::ProjectIO::resolveProjectResourcePath(
-                    session.projectPath,
-                    image.value(QStringLiteral("path")).toString());
-                const QString normalized = normalizePath(imagePath);
-                if (!result.maskRecordsByImage.contains(normalized))
-                {
-                    continue;
-                }
-
-                const QJsonObject record = result.maskRecordsByImage.value(normalized);
-                image.insert(QStringLiteral("mask_path"), record.value(QStringLiteral("mask_path")));
-                image.insert(QStringLiteral("mask_method"), record.value(QStringLiteral("mask_method")));
-                image.insert(QStringLiteral("mask_updated_at"), record.value(QStringLiteral("mask_updated_at")));
-                images.replace(i, image);
-            }
-            meta.insert(QStringLiteral("images"), images);
-
-            persistProjectMeta(self->_projectData, meta, true);
-            emit self->projectMetadataUpdated(session.projectPath);
-            emit self->masksGenerated(result.generatedImages);
-
-            QString message = result.cancelled
-                ? QStringLiteral("已取消，已保留 %1 张照片的蒙版。").arg(result.generatedImages.size())
-                : QStringLiteral("已生成 %1 张照片的蒙版。").arg(result.generatedImages.size());
-            if (!result.errors.isEmpty())
-            {
-                message += QStringLiteral("\n部分失败：%1").arg(result.errors.join(QStringLiteral("; ")));
-            }
-            QMessageBox::information(self->_parent, QStringLiteral("生成蒙版"), message);
-            LOG_INFO(QStringLiteral("蒙版生成完成: count=%1 dir=%2")
-                         .arg(result.generatedImages.size())
-                         .arg(masksDir));
-        });
+    _maskWorkflowController->openDialogForImages(requestedImages);
 }
 
 void ProjectManager::runReferenceQualityCheck()
@@ -2229,9 +1701,9 @@ void ProjectManager::startGenerateModelAsync(const QJsonObject &settings)
 
 void ProjectManager::startCreatePointCloudAsync(const QJsonObject &settings)
 {
-    if (_denseReconstructionManager)
+    if (_pointCloudWorkflowController)
     {
-        _denseReconstructionManager->startCreatePointCloudAsync(settings);
+        _pointCloudWorkflowController->startCreatePointCloudAsync(settings);
     }
 }
 
@@ -2529,9 +2001,9 @@ void ProjectManager::cancelModelGeneration()
 
 void ProjectManager::cancelPointCloudGeneration()
 {
-    if (_denseReconstructionManager)
+    if (_pointCloudWorkflowController)
     {
-        _denseReconstructionManager->cancelActiveTask();
+        _pointCloudWorkflowController->cancelActiveTask();
     }
 }
 
@@ -2548,9 +2020,5 @@ void ProjectManager::cancelAt()
 // ── 取消正在运行的照片蒙版生成任务 ───────────────────────────────────────────
 void ProjectManager::cancelMaskGeneration()
 {
-    if (_maskGenerationCancelFlag)
-    {
-        _maskGenerationCancelFlag->store(true, std::memory_order_relaxed);
-        qDebug() << "[Mask] 已请求取消照片蒙版生成";
-    }
+    _maskWorkflowController->cancelActiveTask();
 }

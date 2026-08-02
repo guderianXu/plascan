@@ -2197,7 +2197,8 @@ TEST(GuiTaskRunnerTest, DeliversBackgroundExceptionToGuiCallback)
 
 TEST(GuiAsyncLifetimeTest, BundleAdjustProgressCallbackUsesQPointerGuard)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectMaskWorkflowController.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
     const int callbackStart = source.indexOf(QStringLiteral("opts.baOpt.progressCallback ="));
@@ -2730,7 +2731,7 @@ TEST(CodeStyleTest, PlascanArchiveUsesLowerCamelPrivateMemberNames)
 TEST(CodeStyleTest, ProjectResourceCleanupServiceSourceKeepsLinesWithinStyleLimit)
 {
     const QString source =
-        readProjectSourceFile(QStringLiteral("src/gui/project/services/ProjectResourceCleanupService.cpp"));
+        readProjectSourceFile(QStringLiteral("src/core/project_workflows/ProjectResourceCleanup.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
     const QStringList lines = source.split(QLatin1Char('\n'));
@@ -3907,7 +3908,8 @@ TEST(GuiArchitectureTest, RedundantProjectForwardersAreRemoved)
 TEST(CodeStyleTest, ProjectManagerUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectMaskWorkflowController.cpp"));
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
 
@@ -6687,11 +6689,12 @@ TEST(GenerateMaskDialogTest, ExposesU2NetOnnxCpuAndCudaSettings)
 
 TEST(GenerateMaskWorkflowTest, ProjectManagerUsesCommonIoForTiffMaskGeneration)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectMaskWorkflowController.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
-    const int start = source.indexOf(QStringLiteral("void ProjectManager::openGenerateMaskDialog"));
-    const int end = source.indexOf(QStringLiteral("void ProjectManager::runReferenceQualityCheck"), start);
+    const int start = source.indexOf(QStringLiteral("void ProjectMaskWorkflowController::openDialogForImages"));
+    const int end = source.indexOf(QStringLiteral("void ProjectMaskWorkflowController::cancelActiveTask"), start);
     ASSERT_GE(start, 0);
     ASSERT_GT(end, start);
 
@@ -6706,13 +6709,14 @@ TEST(GenerateMaskWorkflowTest, ProjectManagerUsesCommonIoForTiffMaskGeneration)
 
 TEST(GenerateMaskWorkflowTest, U2NetMaskGenerationUsesBundledOnnxAndOpenCvDnn)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectMaskWorkflowController.cpp"));
     const QString cmake = readProjectSourceFile(QStringLiteral("src/core/mask/CMakeLists.txt"));
     ASSERT_FALSE(source.isEmpty());
     ASSERT_FALSE(cmake.isEmpty());
 
-    const int start = source.indexOf(QStringLiteral("void ProjectManager::openGenerateMaskDialog"));
-    const int end = source.indexOf(QStringLiteral("void ProjectManager::runReferenceQualityCheck"), start);
+    const int start = source.indexOf(QStringLiteral("void ProjectMaskWorkflowController::openDialogForImages"));
+    const int end = source.indexOf(QStringLiteral("void ProjectMaskWorkflowController::cancelActiveTask"), start);
     ASSERT_GE(start, 0);
     ASSERT_GT(end, start);
 
@@ -6735,24 +6739,25 @@ TEST(GenerateMaskWorkflowTest, U2NetMaskGenerationUsesBundledOnnxAndOpenCvDnn)
 
 TEST(GenerateMaskWorkflowTest, RunsMaskGenerationOffGuiThreadWithTaskStatusProgress)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectMaskWorkflowController.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
-    const int start = source.indexOf(QStringLiteral("void ProjectManager::openGenerateMaskDialog"));
-    const int end = source.indexOf(QStringLiteral("void ProjectManager::runReferenceQualityCheck"), start);
+    const int start = source.indexOf(QStringLiteral("void ProjectMaskWorkflowController::openDialogForImages"));
+    const int end = source.indexOf(QStringLiteral("void ProjectMaskWorkflowController::cancelActiveTask"), start);
     ASSERT_GE(start, 0);
     ASSERT_GT(end, start);
 
     const QString block = source.mid(start, end - start);
     EXPECT_TRUE(block.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
         << "AI mask generation must not run on the GUI thread.";
-    EXPECT_TRUE(block.contains(QStringLiteral("std::atomic<bool>")))
-        << "Mask generation should keep a worker-visible cancel flag.";
-    EXPECT_TRUE(block.contains(QStringLiteral("if (_maskGenerationCancelFlag)")))
+    EXPECT_TRUE(block.contains(QStringLiteral("cancellation.isCancellationRequested()")))
+        << "Mask generation should use the shared cancellation vocabulary.";
+    EXPECT_TRUE(block.contains(QStringLiteral("if (_running)")))
         << "Without a modal progress dialog, duplicate mask generation runs must be rejected.";
-    EXPECT_TRUE(block.contains(QStringLiteral("reportProgress(++completed)")))
+    EXPECT_TRUE(block.contains(QStringLiteral("report()")))
         << "The worker should report per-image progress while generating masks.";
-    EXPECT_TRUE(block.contains(QStringLiteral("emit self->maskGenerationProgressChanged")))
+    EXPECT_TRUE(block.contains(QStringLiteral("emit self->progressChanged")))
         << "The GUI should show long AI inference progress in the main task status area.";
     EXPECT_FALSE(block.contains(QStringLiteral("new QProgressDialog")))
         << "Mask generation progress belongs in the main-window task status area.";
@@ -6762,16 +6767,19 @@ TEST(GenerateMaskWorkflowTest, RunsMaskGenerationOffGuiThreadWithTaskStatusProgr
 TEST(GenerateMaskWorkflowTest, UsesMainWindowTaskStatusInsteadOfModalProgressDialog)
 {
     const QString managerHeader = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.h"));
-    const QString managerSource = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
-    const QString mainHeader = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.h"));
-    const QString mainSource = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    const QString managerSource = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectMaskWorkflowController.cpp"));
+    const QString mainHeader = readProjectSourceFile(
+        QStringLiteral("src/gui/main_window/ProjectTaskStatusController.h"));
+    const QString mainSource = readProjectSourceFile(
+        QStringLiteral("src/gui/main_window/ProjectTaskStatusController.cpp"));
     ASSERT_FALSE(managerHeader.isEmpty());
     ASSERT_FALSE(managerSource.isEmpty());
     ASSERT_FALSE(mainHeader.isEmpty());
     ASSERT_FALSE(mainSource.isEmpty());
 
-    const int start = managerSource.indexOf(QStringLiteral("void ProjectManager::openGenerateMaskDialog"));
-    const int end = managerSource.indexOf(QStringLiteral("void ProjectManager::runReferenceQualityCheck"), start);
+    const int start = managerSource.indexOf(QStringLiteral("void ProjectMaskWorkflowController::openDialogForImages"));
+    const int end = managerSource.indexOf(QStringLiteral("void ProjectMaskWorkflowController::cancelActiveTask"), start);
     ASSERT_GE(start, 0);
     ASSERT_GT(end, start);
     const QString block = managerSource.mid(start, end - start);
@@ -6784,12 +6792,12 @@ TEST(GenerateMaskWorkflowTest, UsesMainWindowTaskStatusInsteadOfModalProgressDia
     EXPECT_FALSE(block.contains(QStringLiteral("new QProgressDialog")))
         << "Mask generation progress belongs in the main-window task status area, not a modal dialog.";
 
-    EXPECT_TRUE(mainHeader.contains(QStringLiteral("TaskStatusWidget* _maskTaskStatus{};")));
-    EXPECT_TRUE(mainHeader.contains(QStringLiteral("void onMaskGenerationProgress(const QString &stage, int done, int total);")));
-    EXPECT_TRUE(mainHeader.contains(QStringLiteral("void onMaskGenerationFinished(bool success);")));
+    EXPECT_TRUE(mainHeader.contains(QStringLiteral("TaskStatusWidget *_maskStatus")));
+    EXPECT_TRUE(mainHeader.contains(QStringLiteral("void updateMask(const QString &stage, int done, int total);")));
+    EXPECT_TRUE(mainHeader.contains(QStringLiteral("void finishMask(bool success);")));
     EXPECT_TRUE(mainSource.contains(QStringLiteral("&ProjectManager::maskGenerationProgressChanged")));
     EXPECT_TRUE(mainSource.contains(QStringLiteral("&ProjectManager::maskGenerationFinished")));
-    EXPECT_TRUE(mainSource.contains(QStringLiteral("_maskTaskStatus = createTaskStatus")));
+    EXPECT_TRUE(mainSource.contains(QStringLiteral("_maskStatus = createStatus")));
     EXPECT_TRUE(mainSource.contains(QStringLiteral("生成蒙版 %1/%2")));
 }
 
@@ -8147,8 +8155,10 @@ TEST(MainWindowTest, ProjectOpenUsesDefaultsOnlyWhenVisibilityWasNotSaved)
 
 TEST(ProjectOpenResponsivenessTest, ProjectManagerLoadsProjectSnapshotOffGuiThread)
 {
-    const QString managerHeader = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.h"));
-    const QString managerSource = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    const QString managerHeader = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectLifecycleController.h"));
+    const QString managerSource = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectLifecycleController.cpp"));
     const QString commandsHeader = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectUiCommands.h"));
     const QString commandsSource = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectUiCommands.cpp"));
     ASSERT_FALSE(managerHeader.isEmpty());
@@ -8156,15 +8166,15 @@ TEST(ProjectOpenResponsivenessTest, ProjectManagerLoadsProjectSnapshotOffGuiThre
     ASSERT_FALSE(commandsHeader.isEmpty());
     ASSERT_FALSE(commandsSource.isEmpty());
 
-    EXPECT_TRUE(managerHeader.contains(QStringLiteral("void projectOpenStarted(const QString &plascanPath);")));
+    EXPECT_TRUE(managerHeader.contains(QStringLiteral("void projectOpenStarted(const QString &projectPath);")));
     EXPECT_TRUE(managerHeader.contains(QStringLiteral("void projectOpenProgressChanged(const QString &message, int percent);")));
     EXPECT_TRUE(managerHeader.contains(QStringLiteral("void projectOpenFinished(bool success, const QString &message);")));
-    EXPECT_TRUE(managerHeader.contains(QStringLiteral("void loadProjectResultsAsync(const QString &plascanPath);")));
-    EXPECT_TRUE(managerHeader.contains(QStringLiteral("bool _projectOpenInProgress")));
+    EXPECT_TRUE(managerHeader.contains(QStringLiteral("void loadProjectResultsAsync(const QString &projectPath);")));
+    EXPECT_TRUE(managerHeader.contains(QStringLiteral("bool _openInProgress")));
     EXPECT_TRUE(commandsHeader.contains(QStringLiteral("bool selectProjectByDialog(QString *selectedPath) const;")));
 
-    const int openStart = managerSource.indexOf(QStringLiteral("void ProjectManager::openProjectFromPath"));
-    const int saveStart = managerSource.indexOf(QStringLiteral("void ProjectManager::saveProject"), openStart);
+    const int openStart = managerSource.indexOf(QStringLiteral("void ProjectLifecycleController::openProjectFromPath"));
+    const int saveStart = managerSource.indexOf(QStringLiteral("void ProjectLifecycleController::saveProject"), openStart);
     ASSERT_GE(openStart, 0);
     ASSERT_GT(saveStart, openStart);
     const QString openBlock = managerSource.mid(openStart, saveStart - openStart);
@@ -8218,8 +8228,12 @@ TEST(ProjectOpenResponsivenessTest, ProjectManagerScansImageFoldersOffGuiThread)
 
 TEST(ProjectOpenResponsivenessTest, MainWindowShowsProgressAndAvoidsFullMetaDuringOpen)
 {
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    const QString header = readProjectSourceFile(
+        QStringLiteral("src/gui/main_window/ProjectLifecyclePresenter.h"));
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/main_window/ProjectLifecyclePresenter.cpp"));
+    const QString lifecycle = readProjectSourceFile(
+        QStringLiteral("src/gui/main_window/MainWindowProjectLifecycle.cpp"));
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
 
@@ -8253,7 +8267,10 @@ TEST(ProjectOpenResponsivenessTest, MainWindowShowsProgressAndAvoidsFullMetaDuri
 TEST(ProjectOpenResponsivenessTest, MainWindowDefersMetadataWidgetRefresh)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/main_window/MainWindowProjectBindings.cpp"));
+    const QString lifecycle = readProjectSourceFile(
+        QStringLiteral("src/gui/main_window/MainWindowProjectLifecycle.cpp"));
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
 
@@ -8261,7 +8278,7 @@ TEST(ProjectOpenResponsivenessTest, MainWindowDefersMetadataWidgetRefresh)
         << "Metadata refresh should be a named queued helper, not direct widget slots.";
 
     const int setupStart = source.indexOf(QStringLiteral("void MainWindow::setupProjectManager"));
-    const int setupEnd = source.indexOf(QStringLiteral("void MainWindow::refreshDashboardTaskSnapshots"), setupStart);
+    const int setupEnd = source.indexOf(QStringLiteral("new ProjectTaskStatusController"), setupStart);
     ASSERT_GE(setupStart, 0);
     ASSERT_GT(setupEnd, setupStart);
     const QString setupBlock = source.mid(setupStart, setupEnd - setupStart);
@@ -9323,8 +9340,10 @@ TEST(ProjectDashboardWidgetTest, ShowsReadOnlyRunningTaskSnapshots)
 
 TEST(ProjectDashboardWidgetTest, MainWindowMirrorsTaskStatusSnapshotsReadOnly)
 {
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    const QString header = readProjectSourceFile(
+        QStringLiteral("src/gui/main_window/ProjectTaskStatusController.h"));
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/main_window/ProjectTaskStatusController.cpp"));
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
 
@@ -9690,8 +9709,8 @@ TEST(AerialTriangulationWorkflowTest, SfmLaunchUsesSelectedUnifiedMatchingAlgori
 
 TEST(MainWindowProgressTest, FeatureMatchProgressUsesTaskEstimateAndClampsDisplay)
 {
-    const QString mainWindowSource =
-        readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    const QString mainWindowSource = readProjectSourceFile(
+        QStringLiteral("src/gui/main_window/ProjectTaskStatusController.cpp"));
     const QString controllerSource =
         readProjectSourceFile(QStringLiteral("src/gui/main_window/TiePointWorkflowController.cpp"));
     ASSERT_FALSE(mainWindowSource.isEmpty());
@@ -9705,20 +9724,24 @@ TEST(MainWindowProgressTest, FeatureMatchProgressUsesTaskEstimateAndClampsDispla
 TEST(MainWindowCancelTest, FeatureMatchCancelGivesImmediateFeedbackAndEmitsSignal)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/main_window/ProjectTaskStatusController.cpp"));
+    const QString bindings = readProjectSourceFile(
+        QStringLiteral("src/gui/main_window/MainWindowProjectBindings.cpp"));
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(header.contains(QStringLiteral("sgCancelRequested")));
     EXPECT_TRUE(source.contains(QStringLiteral("正在取消特征匹配")));
-    EXPECT_TRUE(source.contains(QStringLiteral("_sgTaskStatus")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_tiePointStatus")));
     EXPECT_TRUE(source.contains(QStringLiteral("TaskStatusWidget::cancelRequested")));
-    EXPECT_TRUE(source.contains(QStringLiteral("emit sgCancelRequested()")));
+    EXPECT_TRUE(bindings.contains(QStringLiteral("&MainWindow::sgCancelRequested")));
 }
 
 TEST(BundleAdjustStatusBarTest, UsesAtProgressWidgetWithCancelableCoreOptimization)
 {
-    const QString mainWindowSource = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    const QString mainWindowSource = readProjectSourceFile(
+        QStringLiteral("src/gui/main_window/ProjectTaskStatusController.cpp"));
     const QString projectManagerSource =
         readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
     const QString bundleAdjustHeader = readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjust.h"));

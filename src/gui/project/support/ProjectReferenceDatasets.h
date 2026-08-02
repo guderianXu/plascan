@@ -1,37 +1,14 @@
 #pragma once
 
-#include <QString>
-#include <QJsonObject>
+// Compatibility include for code that still uses the former GUI path.
+#include "ReferenceDatasetWorkflow.h"
 
-class ProjectData;
-
-namespace xjw::gui::project {
-
-struct ReferenceDatasetQualityReportResult
+namespace xjw::gui::project
 {
-    bool saved = false;
-    QString jsonPath;
-    QString csvPath;
-    QJsonObject record;
-    QString errorMessage;
-};
-
-QString referenceDatasetTypeForPath(const QString &path);
-
-QString normalizeReferenceDatasetType(const QString &type, const QString &path);
-
-bool registerReferenceDataset(ProjectData *projectData,
-                              const QString &path,
-                              const QString &type = QString(),
-                              const QString &role = QStringLiteral("validation"),
-                              QString *errorMsg = nullptr);
-
-ReferenceDatasetQualityReportResult writeReferenceDatasetQualityReport(
-    ProjectData *projectData,
-    const QString &baseName = QStringLiteral("reference_quality_report"));
-
-ReferenceDatasetQualityReportResult writeReferenceTerrainPriorPreflightReport(
-    ProjectData *projectData,
-    const QString &baseName = QStringLiteral("reference_terrain_prior_preflight"));
-
-} // namespace xjw::gui::project
+using xjw::core::project::ReferenceDatasetQualityReportResult;
+using xjw::core::project::normalizeReferenceDatasetType;
+using xjw::core::project::referenceDatasetTypeForPath;
+using xjw::core::project::registerReferenceDataset;
+using xjw::core::project::writeReferenceDatasetQualityReport;
+using xjw::core::project::writeReferenceTerrainPriorPreflightReport;
+}

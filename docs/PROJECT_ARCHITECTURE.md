@@ -414,6 +414,8 @@ gui/
 ├── main_window/                # 主窗口层
 │   ├── MainWindow.h/cpp        # QMainWindow 派生, 顶层 UI 编排
 │   ├── ProjectUiHydrator.h/cpp # 分阶段刷新项目界面，并通过代次号丢弃过期请求
+│   ├── ProjectLifecyclePresenter.h/cpp # 项目打开/保存进度、脏状态标题及关闭后保存
+│   ├── ProjectTaskStatusController.h/cpp # 状态栏任务控件、取消路由及概览快照
 │   ├── MenuWorkflowController.h/cpp       # "工作流程" 菜单业务控制器
 │   ├── ReconstructionWorkflowController.h/cpp  # 生成模型/纹理工作流程对话框协调
 │   └── WorkspacePanelController.h/cpp     # Dock/工具栏可见性、菜单动作与项目状态统一管理
@@ -464,9 +466,10 @@ gui/
 │   │   └── *.h # 指向 src/common/project 存储层的 GUI 兼容头
 │   ├── manager/
 │   │   ├── ProjectManager.h/cpp # 项目管理器 (核心协调器)
-│   │   ├── ProjectReconstructionManager.h/cpp       # 稀疏与模型任务协调；不持有稠密重建管理器
+│   │   ├── ProjectLifecycleController.h/cpp          # 创建、异步打开/结果加载、保存与关闭
+│   │   ├── ProjectMaskWorkflowController.h/cpp       # 蒙版对话框、异步生成、取消及结果登记
 │   │   ├── ProjectSparseReconstructionManager.h/cpp  # 稀疏重建管理
-│   │   ├── ProjectDenseReconstructionManager.h/cpp   # 创建点云协调：正式空三门控、深度估计/复用、流式融合与结果登记
+│   │   ├── ProjectPointCloudWorkflowController.h/cpp # 点云工作流协调：深度估计/复用、流式融合与结果登记
 │   │   ├── ProjectModelManager.h/cpp                 # 从已有点云/深度图生成模型，不隐式启动稠密流程
 │   │   ├── ProjectTerrainProductsManager.h/cpp       # 从已有点云生成 DEM，以及正射后台任务与结果登记
 │   │   ├── ProjectCameraSetupManager.h/cpp           # 相机设置管理
@@ -474,18 +477,18 @@ gui/
 │   │   └── ProjectUiCommands.h/cpp                   # UI 命令
 │   ├── services/
 │   │   ├── BundleAdjustService.h/cpp                 # BA 服务
-│   │   ├── DenseSparseCloudPreparation.h/cpp          # MVS 前稀疏云加载、过滤与明确错误返回
 │   │   ├── ProjectBaInputBuilder.h/cpp               # BA 输入构建
 │   │   ├── ProjectCameraImportService.h/cpp          # 相机导入
 │   │   ├── ProjectTriangulationService.h/cpp         # 三角化服务
-│   │   ├── ProjectResourceCleanupService.h/cpp       # 通用资源清理
+│   │   ├── ProjectResourceCleanupService.h           # 旧包含路径兼容层；实现位于 core/project_workflows
 │   │   └── ProjectTiePointResultService.h/cpp        # 单一当前连接点、覆盖清理与真实删除
 │   └── support/                 # 支持/辅助类
 │       ├── ProjectSupportUtils.h/cpp               # 通用工具
 │       ├── ProjectBundleAdjustExecution.h/cpp       # BA 执行
 │       ├── ProjectBundleAdjustWorkflow.h/cpp        # BA 工作流
 │       ├── ProjectCameraInitialization.h/cpp        # 相机初始化
-│       ├── ProjectDenseWorkflowConfig.h/cpp         # GUI/CLI 共用的 MVS 质量、资源与融合配置映射
+│       ├── ProjectDenseWorkflowConfig.h             # 旧包含路径兼容层；实现已迁移到 core/project_workflows
+│       ├── ProjectReferenceDatasets.h               # 旧包含路径兼容层；参考数据业务已迁移到 core/project_workflows
 │       ├── ProjectModelWorkflowPolicy.h/cpp         # 模型线程预算、输入签名及深度批次完整性/代次兼容校验
 │       ├── ProjectSessionContext.h                  # 异步写回会话身份（项目、Chunk、generation）
 │       ├── ProjectTerrainRequests.h                 # DEM 类型化请求及边界校验
@@ -893,11 +896,12 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
 
 - `src/common/project/ProjectSessionModel.*`、`ProjectDocumentModel.*` 和三类项目配置管理器负责
   QtCore 项目会话、文档分域与持久化；`src/gui/project/data`、`src/gui/config` 只保留兼容头。
-- `src/core/project_workflows/ProjectWorkflowOperations.*` 负责 DEM/正射生成及稀疏点云后处理，
-  通过独立 `project_workflows` 目标供 GUI 和测试复用。
-- `ProjectManager` 直接持有稀疏重建、模型、地形产品和相机设置管理器；已删除只做转发的
-  `ProjectTaskDispatcher` 与 `ProjectReconstructionManager`，GUI 中不存在稠密重建管理器。
-- `MainWindow` 按布局、菜单绑定、项目绑定、项目生命周期、任务状态和 UI 状态拆分实现；
+- `src/core/project_workflows` 负责 DEM/正射、稀疏点后处理、点云参数/输入准备、参考数据检查和
+  生成资源清理，通过独立 `project_workflows` 目标供 GUI、CLI 和测试复用。
+- `ProjectManager` 以门面形式持有项目生命周期、蒙版、点云、稀疏重建、模型、地形产品和相机设置
+  控制器。GUI 中不存在“稠密重建管理器”；`ProjectPointCloudWorkflowController` 只协调深度估计与点云融合。
+- `MainWindow` 按布局、菜单绑定、项目绑定和 UI 状态拆分实现；项目打开/保存展示由
+  `ProjectLifecyclePresenter` 管理，状态栏任务由 `ProjectTaskStatusController` 管理。
   `DataTreeWidget` 按模型、填充、上下文菜单、资源元数据和相机对齐判定拆分实现。
 - 正射流程为 `MenuWorkflowController -> ProjectManager -> ProjectTerrainProductsManager ->`
   `project_workflows::runOrthoProduct`，请求在 GUI 边界转换为 `OrthoGenerationRequest`。

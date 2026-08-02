@@ -23,7 +23,7 @@
 #include "preparation/MatchResultCatalog.h"
 #include "ModelWorkflowService.h"
 #include "MvsSceneClassifier.h"
-#include "ProjectDenseWorkflowConfig.h"
+#include "PointCloudWorkflowConfig.h"
 #include "PointCloudArtifactIO.h"
 #include "workflow/AerialTriangulationWorkflow.h"
 #include "SparseCloudPreprocessor.h"
@@ -518,7 +518,7 @@ FusedVoxelDownsampleResult voxelDownsampleFusedPointsToTarget(
 }
 
 xjw::mvs::TerrainHeightSpikeFilterOptions terrainSpikeOptionsFromRequest(
-    const xjw::gui::project::DenseRefineSettings &request)
+    const xjw::core::project::DenseRefineSettings &request)
 {
     xjw::mvs::TerrainHeightSpikeFilterOptions options;
     options.enabled = request.terrainSpikeFilterEnabled;
@@ -543,7 +543,7 @@ QJsonObject terrainSpikeReportToJson(const xjw::mvs::TerrainHeightSpikeFilterRep
 }
 
 PlaCloud refineDenseCloud(PlaCloud cloud,
-                          const xjw::gui::project::DenseRefineSettings &request,
+                          const xjw::core::project::DenseRefineSettings &request,
                           const std::function<void(const QString &, int)> &progress,
                           xjw::mvs::TerrainHeightSpikeFilterReport *terrainSpikeReport = nullptr)
 {
@@ -751,7 +751,7 @@ bool loadFusionFrameFromDepthMap(const QString &mvsDir,
 
 bool fuseDepthMapsStreamingFromDisk(const QString &mvsDir,
                                     const std::vector<xjw::mvs::CameraView> &views,
-                                    const xjw::gui::project::DenseGenerationSettings &denseSettings,
+                                    const xjw::core::project::DenseGenerationSettings &denseSettings,
                                     const xjw::mvs::DepthGenConfig &depthConfig,
                                     std::vector<xjw::mvs::FusedPoint> *fusedCloud,
                                     std::vector<xjw::mvs::DepthPostProcessStats> *depthPostprocessStats,
@@ -976,7 +976,7 @@ void limitMvsInputsForRegression(std::vector<xjw::mvs::CameraView> *views,
     *imageMetaArray = limited;
 }
 
-QJsonObject mvsSettingsToJson(const xjw::gui::project::DenseGenerationSettings &denseSettings,
+QJsonObject mvsSettingsToJson(const xjw::core::project::DenseGenerationSettings &denseSettings,
                               int requestedMaxFrames,
                               int mvsInputFrames,
                               int registeredImageCount)
@@ -1622,7 +1622,7 @@ xjw::cli::ReconstructionCliOptions options;
     const QString mvsDir =
         QDir(pipelineRoot).filePath(QStringLiteral("mvs"));
     QDir().mkpath(mvsDir);
-    xjw::gui::project::DenseGenerationSettings denseSettings;
+    xjw::core::project::DenseGenerationSettings denseSettings;
     denseSettings.threads = std::max(1, threads);
     denseSettings.useCuda = (device == "cuda" || device == "auto");
     denseSettings.pipelineMode = true;
@@ -1649,7 +1649,7 @@ xjw::cli::ReconstructionCliOptions options;
     denseSettings.minConsistentViews = denseMinViewCount;
     denseSettings.depthConsistency = 1.0f;
     xjw::mvs::DepthGenConfig depthConfig =
-        xjw::gui::project::buildDepthGenConfig(denseSettings, static_cast<int>(views.size()));
+        xjw::core::project::buildDepthGenConfig(denseSettings, static_cast<int>(views.size()));
     if (mvs_scene_profile == "aerial_terrain")
     {
         depthConfig.sceneProfile = xjw::mvs::MvsSceneProfile::AerialTerrain;
@@ -1846,7 +1846,7 @@ xjw::cli::ReconstructionCliOptions options;
             const std::vector<xjw::mvs::FusedPoint> *refineFusedCloud = &fusedCloud;
             bool preAggregatedBeforePlaPoint = false;
 
-            xjw::gui::project::DenseRefineSettings refineSettings;
+            xjw::core::project::DenseRefineSettings refineSettings;
             refineSettings.sorEnabled = true;
             refineSettings.sorK = 30;
             refineSettings.sorStdDev = 2.0;

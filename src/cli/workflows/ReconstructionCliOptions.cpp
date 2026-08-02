@@ -2,7 +2,7 @@
 
 // 工作流程 CLI 参数只负责命令行到核心配置的适配。
 
-#include "ProjectDenseWorkflowConfig.h"
+#include "PointCloudWorkflowConfig.h"
 
 #include <QString>
 
@@ -100,8 +100,8 @@ void ReconstructionCliOptions::normalize()
     }
     if (mvsResScaleOption && mvsResScaleOption->count() == 0)
     {
-        const auto profile = xjw::gui::project::depthQualityProfileFromId(QString::fromStdString(mvsQuality));
-        mvsResScale = 1.0 / static_cast<double>(xjw::gui::project::depthQualityDownsample(profile));
+        const auto profile = xjw::core::project::depthQualityProfileFromId(QString::fromStdString(mvsQuality));
+        mvsResScale = 1.0 / static_cast<double>(xjw::core::project::depthQualityDownsample(profile));
     }
     mvsResScale = std::clamp(mvsResScale, 0.05, 1.0);
     mvsIterations = std::max(1, mvsIterations);

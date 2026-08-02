@@ -22,6 +22,8 @@ set(GUI_SOURCES
   main_window/ModelDropSupport.cpp
   main_window/MenuWorkflowController.cpp
   main_window/ProjectUiHydrator.cpp
+  main_window/ProjectTaskStatusController.cpp
+  main_window/ProjectLifecyclePresenter.cpp
   main_window/ReconstructionWorkflowController.cpp
   main_window/TiePointWorkflowController.cpp
   main_window/WorkspacePanelController.cpp
@@ -43,32 +45,6 @@ set(GUI_SOURCES
   markers/MarkerDetectionReviewDialog.cpp
   markers/PrintMarkersDialog.cpp
   panels/LogPanel.cpp
-  project/services/BundleAdjustService.cpp
-  project/services/ProjectCameraImportService.cpp
-  project/services/DenseSparseCloudPreparation.cpp
-  project/services/ProjectResourceCleanupService.cpp
-  project/services/ProjectTiePointResultService.cpp
-  project/support/ProjectBundleAdjustExecution.cpp
-  project/support/ProjectBundleAdjustWorkflow.cpp
-  project/support/ProjectCameraInitialization.cpp
-  project/support/ProjectDashboardSummary.cpp
-  project/support/ProjectDenseWorkflowConfig.cpp
-  project/support/ProjectModelWorkflowPolicy.cpp
-  project/support/ProjectMetadataOperations.cpp
-  project/support/ProjectReferenceDatasets.cpp
-  project/support/ProjectReferenceTerrainBa.cpp
-  project/support/ProjectResultRecords.cpp
-  project/support/ProjectSfmWorkflow.cpp
-  project/support/ProjectSparseWorkflow.cpp
-  project/support/ProjectSurveyControl.cpp
-  project/support/ProjectWorkflowReports.cpp
-  project/manager/ProjectManager.cpp
-  project/manager/ProjectDenseReconstructionManager.cpp
-  project/manager/ProjectModelManager.cpp
-  project/manager/ProjectUiCommands.cpp
-  project/manager/ProjectSparseReconstructionManager.cpp
-  project/manager/ProjectTerrainProductsManager.cpp
-  project/manager/ProjectCameraSetupManager.cpp
   views/DepthOverlayData.cpp
   widgets/DepthOverlayController.cpp
   views/LayerFeatureLoader.cpp
@@ -124,6 +100,8 @@ set(GUI_HEADERS
   main_window/ModelDropSupport.h
   main_window/MenuWorkflowController.h
   main_window/ProjectUiHydrator.h
+  main_window/ProjectTaskStatusController.h
+  main_window/ProjectLifecyclePresenter.h
   main_window/ReconstructionWorkflowController.h
   main_window/TiePointWorkflowController.h
   menu/ToolbarButton.h
@@ -149,7 +127,6 @@ set(GUI_HEADERS
   project/data/ProjectData.h
   project/services/BundleAdjustService.h
   project/services/ProjectCameraImportService.h
-  project/services/DenseSparseCloudPreparation.h
   project/services/ProjectResourceCleanupService.h
   project/services/ProjectTiePointResultService.h
   project/support/ProjectBundleAdjustExecution.h
@@ -168,7 +145,9 @@ set(GUI_HEADERS
   project/support/ProjectWorkflowUtils.h
   project/support/ProjectWorkflowReports.h
   project/manager/ProjectManager.h
-  project/manager/ProjectDenseReconstructionManager.h
+  project/manager/ProjectLifecycleController.h
+  project/manager/ProjectMaskWorkflowController.h
+  project/manager/ProjectPointCloudWorkflowController.h
   project/manager/ProjectModelManager.h
   project/manager/ProjectUiCommands.h
   project/manager/ProjectSparseReconstructionManager.h
@@ -210,17 +189,13 @@ set(GUI_HEADERS
 set(GUI_PROJECT_SOURCES
   project/services/BundleAdjustService.cpp
   project/services/ProjectCameraImportService.cpp
-  project/services/DenseSparseCloudPreparation.cpp
-  project/services/ProjectResourceCleanupService.cpp
   project/services/ProjectTiePointResultService.cpp
   project/support/ProjectBundleAdjustExecution.cpp
   project/support/ProjectBundleAdjustWorkflow.cpp
   project/support/ProjectCameraInitialization.cpp
   project/support/ProjectDashboardSummary.cpp
-  project/support/ProjectDenseWorkflowConfig.cpp
   project/support/ProjectModelWorkflowPolicy.cpp
   project/support/ProjectMetadataOperations.cpp
-  project/support/ProjectReferenceDatasets.cpp
   project/support/ProjectReferenceTerrainBa.cpp
   project/support/ProjectResultRecords.cpp
   project/support/ProjectSfmWorkflow.cpp
@@ -228,7 +203,9 @@ set(GUI_PROJECT_SOURCES
   project/support/ProjectSurveyControl.cpp
   project/support/ProjectWorkflowReports.cpp
   project/manager/ProjectManager.cpp
-  project/manager/ProjectDenseReconstructionManager.cpp
+  project/manager/ProjectLifecycleController.cpp
+  project/manager/ProjectMaskWorkflowController.cpp
+  project/manager/ProjectPointCloudWorkflowController.cpp
   project/manager/ProjectModelManager.cpp
   project/manager/ProjectUiCommands.cpp
   project/manager/ProjectSparseReconstructionManager.cpp

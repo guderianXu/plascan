@@ -19,7 +19,6 @@
 
 #include <QMainWindow>
 #include <QJsonObject>
-#include <QPointer>
 
 // MainWindow: PlaScan 主窗口
 // 布局：中央工作区 + 可停靠的工作区、属性、照片、日志面板
@@ -34,7 +33,6 @@ class ProjectManager;
 class ProjectData;
 class MenuWorkflowController;
 class ReconstructionWorkflowController;
-class QProgressDialog;
 class QDockWidget;
 class QAction;
 class QListWidget;
@@ -44,7 +42,6 @@ class ReferencePanelWidget;
 class WorkspaceCenterWidget;
 class PhotoStripWidget;
 class SelectionPropertiesWidget;
-class TaskStatusWidget;
 class QDragEnterEvent;
 class QDropEvent;
 class QWidgetAction;
@@ -52,6 +49,8 @@ class HenuBrandWidget;
 class WorkspacePanelController;
 class ProjectUiHydrator;
 class TiePointWorkflowController;
+class ProjectTaskStatusController;
+class ProjectLifecyclePresenter;
 
 namespace xjw::gui::markers
 {
@@ -88,7 +87,6 @@ private:
     void setupProjectManager();   // 创建所有业务对象（ProjectManager 等）并完成全局信号/槽连接
     void showMatchViewer(const QString &initialImagePath = {}, bool modal = true);
     void openMarkerFocusMeasurement(const QString &markerId, const QString &preferredImagePath = {});
-    void refreshDashboardTaskSnapshots(); // 将状态栏任务快照同步到只读概览页
 
     // ---- UI 设置持久化辅助 ----
     void selectPhoto(const QString &imagePath, bool openImage);
@@ -129,6 +127,8 @@ private:
     WorkspacePanelController *_workspacePanels{};      // Dock/工具栏可见性与菜单动作统一管理
     ProjectUiHydrator *_projectUiHydrator{};           // 分阶段刷新项目 UI，并丢弃过期请求
     TiePointWorkflowController *_tiePointWorkflowController{};
+    ProjectTaskStatusController *_taskStatusController{};
+    ProjectLifecyclePresenter *_projectLifecyclePresenter{};
     Qt::WindowStates _windowStateBeforeFullScreen{Qt::WindowNoState};
 public:
     CanvasWidget* canvas() const { return _canvas; }
@@ -144,16 +144,8 @@ private:
     ProjectManager*   _projectManager{};               // 项目生命周期管理（新建/打开/保存/关闭）
     xjw::gui::markers::MarkerWorkspaceController *_markerWorkspaceController{};
     xjw::gui::markers::MarkerReferencePanel *_markerReferencePanel{};
-    QProgressDialog*  _openProgressDialog{};           // 打开项目期间显示的模态进度对话框
-    QProgressDialog*  _saveProgressDialog{};           // 保存操作期间显示的模态进度对话框
-    TaskStatusWidget* _meshTaskStatus{};                // 网格重建状态栏任务状态
-    TaskStatusWidget* _pointCloudTaskStatus{};          // 深度图估计/稠密点云融合状态
-    TaskStatusWidget* _atTaskStatus{};                  // 空三状态栏任务状态
-    TaskStatusWidget* _sgTaskStatus{};                  // 特征匹配状态栏任务状态
-    TaskStatusWidget* _maskTaskStatus{};                // 照片蒙版生成状态栏任务状态
     QDockWidget*      _logDock{};                      // 日志 Dock 窗口容器
     bool _applyingUiSettings{};                        // 正在恢复项目 UI，阻止中间态写回
-    bool _closeSavePending{};                          // 关闭请求正在等待异步项目保存完成
     QJsonObject _imageViewRotations;                   // 按稳定 image_uuid 保存的查看旋转角度
     
     QString           _lastSelectedImage;               // 最近一次被激活的影像路径（供关联操作使用）
@@ -164,9 +156,6 @@ private slots:
     // 参数: plascanPath - .plascan 归档文件的绝对路径
     void onProjectOpened(const QString &plascanPath);
     void onProjectClosed();
-    void onProjectOpenStarted(const QString &plascanPath);
-    void onProjectOpenProgressChanged(const QString &message, int percent);
-    void onProjectOpenFinished(bool success, const QString &message);
 
     // ---- UI 设置恢复 ----
     // applyUiSettings: 根据从项目文件加载的 JSON 恢复各 UI 状态（面板可见性、日志级别等）
@@ -178,15 +167,6 @@ private slots:
     // 参数: lvl - Logger::Level 枚举的整数值
     void onLogDisplayLevelChanged(int lvl);
 
-    // ---- 项目管理响应 ----
-    // onSaveStarted: 保存操作开始时显示模态进度对话框
-    void onSaveStarted();
-    // onSaveFinished: 保存操作完成后隐藏进度对话框；在状态栏显示"保存完成"或"保存失败"
-    // 参数: ok - true 表示保存成功
-    void onSaveFinished(bool ok);
-    // onMetadataDirtyChanged: 项目脏状态变化时在标题栏末尾添加或去除 "*" 标记
-    // 参数: dirty - true 表示有未保存的更改
-    void onMetadataDirtyChanged(bool dirty);
 signals:
     void sgCancelRequested();
 
@@ -199,20 +179,6 @@ public slots:
     void hideSgProgress(bool ok);
 
 private slots:
-    // 网格重建进度状态栏更新
-    void onMeshProgress(const QString &stage, int percent);
-    void onMeshFinished(bool success);
-    // 创建点云使用独立状态，避免与后续网格重建的取消按钮串线。
-    void onPointCloudProgress(const QString &stage, int percent);
-    void onPointCloudFinished(bool success);
-    // 空三（AT）进度状态栏更新
-    void onAtProgress(const QString &stage, int percent);
-    void onAtFinished(bool success);
-    void onCancelAt();
-    // 观测网络进度状态栏更新
-    // 照片蒙版生成进度状态栏更新
-    void onMaskGenerationProgress(const QString &stage, int done, int total);
-    void onMaskGenerationFinished(bool success);
     // onClearRecentRequested: 用户请求清空最近文件列表时触发的响应函数 用户请求清空最近打开列表，弹确认框后执行
     void onClearRecentRequested();
 

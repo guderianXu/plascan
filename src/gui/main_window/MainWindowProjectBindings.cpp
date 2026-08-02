@@ -65,6 +65,8 @@
 #include "WorkspacePanelController.h"
 #include "ProjectUiHydrator.h"
 #include "TiePointWorkflowController.h"
+#include "ProjectTaskStatusController.h"
+#include "ProjectLifecyclePresenter.h"
 #include "camera/CameraModel3DDialog.h"
 #include "tie_points/ThinTiePointsDialog.h"
 #include "LayerRenderer.h"
@@ -151,6 +153,13 @@ void MainWindow::setupProjectManager()
 {
     _projectData = new ProjectData(this);
     _projectManager = new ProjectManager(_projectData, this);
+    _projectLifecyclePresenter = new ProjectLifecyclePresenter(
+        _projectManager, this, statusBar(), this);
+    connect(_projectLifecyclePresenter,
+            &ProjectLifecyclePresenter::closeAfterSaveRequested,
+            this,
+            &QWidget::close,
+            Qt::QueuedConnection);
     _projectManager->setObjectName(QStringLiteral("ProjectManager"));
     _tiePointWorkflowController = new TiePointWorkflowController(_projectManager, this);
     connect(_tiePointWorkflowController,
@@ -629,15 +638,6 @@ void MainWindow::setupProjectManager()
         connect(_mainMenu, &MainMenu::clearRecentRequested, this, &MainWindow::onClearRecentRequested);
     }
 
-    connect(_projectManager, &ProjectManager::saveStarted,    this, &MainWindow::onSaveStarted);
-    connect(_projectManager, &ProjectManager::saveFinished,   this, &MainWindow::onSaveFinished);
-    connect(_projectManager, &ProjectManager::projectOpenStarted,
-            this, &MainWindow::onProjectOpenStarted);
-    connect(_projectManager, &ProjectManager::projectOpenProgressChanged,
-            this, &MainWindow::onProjectOpenProgressChanged);
-    connect(_projectManager, &ProjectManager::projectOpenFinished,
-            this, &MainWindow::onProjectOpenFinished);
-    connect(_projectManager, &ProjectManager::metadataDirtyChanged, this, &MainWindow::onMetadataDirtyChanged);
     connect(_projectManager, &ProjectManager::masksGenerated, this, [this](const QStringList &imagePaths)
     {
         if (!_canvas)
@@ -956,86 +956,10 @@ void MainWindow::setupProjectManager()
             selectPhoto(p, true);
         });
 
-    auto createTaskStatus = [this](int labelWidth, bool cancellable, const QString &cancellingText)
-    {
-        auto *widget = new TaskStatusWidget(this);
-        widget->setLabelMinimumWidth(labelWidth);
-        widget->setCancellable(cancellable);
-        if (!cancellingText.isEmpty())
-        {
-            widget->setCancellingText(cancellingText);
-        }
-        connect(widget, &TaskStatusWidget::cancelRequested,
-                this, &MainWindow::refreshDashboardTaskSnapshots);
-        statusBar()->addPermanentWidget(widget);
-        return widget;
-    };
-
-    // ── 网格重建状态栏进度条 ──────────────────────────────────────
-    _meshTaskStatus = createTaskStatus(220, true, tr("正在取消模型生成..."));
-    connect(_meshTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
-    {
-        if (_projectManager)
-        {
-            _projectManager->cancelModelGeneration();
-        }
-    });
-
-    connect(_projectManager, &ProjectManager::meshProgressChanged,
-            this, &MainWindow::onMeshProgress);
-    connect(_projectManager, &ProjectManager::meshProgressFinished,
-            this, &MainWindow::onMeshFinished);
-
-    // ── 深度图估计/创建点云状态栏进度条 ─────────────────────────
-    _pointCloudTaskStatus = createTaskStatus(220, true, tr("正在取消点云创建..."));
-    connect(_pointCloudTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
-    {
-        if (_projectManager)
-        {
-            _projectManager->cancelPointCloudGeneration();
-        }
-    });
-    connect(_projectManager, &ProjectManager::pointCloudProgressChanged,
-            this, &MainWindow::onPointCloudProgress);
-    connect(_projectManager, &ProjectManager::pointCloudProgressFinished,
-            this, &MainWindow::onPointCloudFinished);
-
-    // ── 空三（AT）/光束法平差状态栏进度条 ───────────────────────
-    _atTaskStatus = createTaskStatus(220, true, tr("正在取消空三/光束法平差..."));
-    connect(_atTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
-    {
-        if (_projectManager)
-        {
-            _projectManager->cancelAt();
-        }
-    });
-
-    connect(_projectManager, &ProjectManager::atProgressChanged,
-            this, &MainWindow::onAtProgress);
-    connect(_projectManager, &ProjectManager::atProgressFinished,
-            this, &MainWindow::onAtFinished);
-
-    // ── 特征匹配状态栏进度条 ────────────────────────────
-    _sgTaskStatus = createTaskStatus(180, true, tr("正在取消特征匹配..."));
-    connect(_sgTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
-    {
-        emit sgCancelRequested();
-    });
-
-    // ── 照片蒙版生成状态栏进度条 ─────────────────────────────────────
-    _maskTaskStatus = createTaskStatus(180, true, tr("正在取消生成蒙版..."));
-    connect(_maskTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
-    {
-        if (_projectManager)
-        {
-            _projectManager->cancelMaskGeneration();
-        }
-    });
-
-    connect(_projectManager, &ProjectManager::maskGenerationProgressChanged,
-            this, &MainWindow::onMaskGenerationProgress);
-    connect(_projectManager, &ProjectManager::maskGenerationFinished,
-            this, &MainWindow::onMaskGenerationFinished);
-
-    refreshDashboardTaskSnapshots();
+    _taskStatusController = new ProjectTaskStatusController(
+        _projectManager, _dashboard, statusBar(), this, this);
+    connect(_taskStatusController,
+            &ProjectTaskStatusController::tiePointCancelRequested,
+            this,
+            &MainWindow::sgCancelRequested);
 }

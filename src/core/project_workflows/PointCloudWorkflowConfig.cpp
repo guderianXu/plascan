@@ -1,11 +1,11 @@
-#include "ProjectDenseWorkflowConfig.h"
+#include "PointCloudWorkflowConfig.h"
 
 #include <QtGlobal>
 
 #include <algorithm>
 #include <cmath>
 
-namespace xjw::gui::project {
+namespace xjw::core::project {
 
 namespace
 {
@@ -378,4 +378,4 @@ DenseRefineSettings denseRefineSettingsFromJson(const QJsonObject &settings)
     return parsed;
 }
 
-} // namespace xjw::gui::project
+} // namespace xjw::core::project

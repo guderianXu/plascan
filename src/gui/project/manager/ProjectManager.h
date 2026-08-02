@@ -42,7 +42,9 @@ class QWidget;
 class GenerateMaskDialog;
 class ProjectData;
 class ProjectSparseReconstructionManager;
-class ProjectDenseReconstructionManager;
+class ProjectPointCloudWorkflowController;
+class ProjectLifecycleController;
+class ProjectMaskWorkflowController;
 class ProjectModelManager;
 class ProjectTerrainProductsManager;
 class ProjectCameraSetupManager;
@@ -348,26 +350,22 @@ public slots:
     QString getLastUsedDir(const QString &key) const;
     // 辅助：将当前选择的目录保存到 FileDialogStateManager
     void saveLastUsedDir(const QString &key, const QString &dir);
-    void loadProjectResultsAsync(const QString &plascanPath);
-
 private:
     QWidget *_parent = nullptr;                        // 父窗口指针（用于对话框父窗口）
     ProjectData *_projectData = nullptr;               // 数据层：负责所有数据读写
     FileDialogStateManager *_fileDialogState = nullptr; // 文件对话框状态（记住上次路径）
     ProjectSparseReconstructionManager *_sparseReconstructionManager = nullptr;
-    ProjectDenseReconstructionManager *_denseReconstructionManager = nullptr;
+    ProjectPointCloudWorkflowController *_pointCloudWorkflowController = nullptr;
     ProjectModelManager *_modelManager = nullptr;
     ProjectTerrainProductsManager *_terrainProductsManager = nullptr;
     ProjectCameraSetupManager *_cameraSetupManager = nullptr;
     ProjectUiCommands *_uiCommands = nullptr;
-    bool _projectOpenInProgress = false;
+    ProjectLifecycleController *_lifecycleController = nullptr;
+    ProjectMaskWorkflowController *_maskWorkflowController = nullptr;
     quint64 _projectSessionGeneration = 0;
-    QString _activeImagePath;
 
     // AT/SFM 取消标志（跨线程共享）
     std::shared_ptr<std::atomic<bool>> _atCancelFlag;
-    // 照片蒙版生成取消标志（跨线程共享）
-    std::shared_ptr<std::atomic<bool>> _maskGenerationCancelFlag;
 
     // BA 预览缓存：BA 运行后先缓存到此处，
     // 用户点击"保留"后再通过 acceptBundleAdjustPreview() 写回项目相机参数。

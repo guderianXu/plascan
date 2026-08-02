@@ -1,7 +1,6 @@
-#include "ProjectResourceCleanupService.h"
+#include "ProjectResourceCleanup.h"
 
-#include "ProjectData.h"
-#include "ProjectMetadataOperations.h"
+#include "project/ProjectSessionModel.h"
 #include "project/ProjectIO.h"
 
 #include <QDir>
@@ -13,7 +12,7 @@
 
 #include <algorithm>
 
-namespace xjw::gui::project
+namespace xjw::core::project
 {
 namespace
 {
@@ -330,7 +329,8 @@ ResourceCleanupResult ProjectResourceCleanupService::cleanupGeneratedData(Projec
     }
 
     meta[result.sectionArrayKey] = keptArray;
-    persistProjectMeta(projectData, meta, true);
+    projectData->updateMetadata(meta, true);
+    projectData->scheduleTemporaryMetadataSave();
 
     for (const QString &filePath : filePathsToDelete)
     {
@@ -370,4 +370,4 @@ ResourceCleanupResult ProjectResourceCleanupService::cleanupGeneratedData(Projec
     return result;
 }
 
-} // namespace xjw::gui::project
+} // namespace xjw::core::project

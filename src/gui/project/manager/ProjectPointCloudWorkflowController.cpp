@@ -1,9 +1,9 @@
-#include "ProjectDenseReconstructionManager.h"
+#include "ProjectPointCloudWorkflowController.h"
 
 #include "ProjectManager.h"
 #include "ProjectData.h"
-#include "DenseSparseCloudPreparation.h"
-#include "ProjectDenseWorkflowConfig.h"
+#include "PointCloudInputPreparation.h"
+#include "PointCloudWorkflowConfig.h"
 #include "ProjectMetadataOperations.h"
 #include "ProjectModelWorkflowPolicy.h"
 #include "ProjectResultRecords.h"
@@ -35,7 +35,7 @@
 #include <utility>
 
 using xjw::common::project::normalizePath;
-using xjw::gui::project::DenseGenerationSettings;
+using xjw::core::project::DenseGenerationSettings;
 
 struct PointCloudWorkflowContext
 {
@@ -269,7 +269,7 @@ int fusionNeighborCount(const DenseGenerationSettings &request, int frameCount)
 
 } // namespace
 
-ProjectDenseReconstructionManager::ProjectDenseReconstructionManager(
+ProjectPointCloudWorkflowController::ProjectPointCloudWorkflowController(
     ProjectManager *owner,
     ProjectData *projectData,
     QWidget *parentWidget,
@@ -281,13 +281,13 @@ ProjectDenseReconstructionManager::ProjectDenseReconstructionManager(
 {
 }
 
-ProjectDenseReconstructionManager::~ProjectDenseReconstructionManager()
+ProjectPointCloudWorkflowController::~ProjectPointCloudWorkflowController()
 {
     // runner 可能仍持有共享取消标志；析构前置位可阻止项目关闭后继续读取深度帧。
     cancelActiveTask();
 }
 
-bool ProjectDenseReconstructionManager::startCreatePointCloudAsync(
+bool ProjectPointCloudWorkflowController::startCreatePointCloudAsync(
     const QJsonObject &settings)
 {
     if (!_owner || !_projectData || !_projectData->hasProject())
@@ -323,7 +323,7 @@ bool ProjectDenseReconstructionManager::startCreatePointCloudAsync(
     auto context = std::make_shared<PointCloudWorkflowContext>();
     context->session = _owner->currentSessionContext();
     context->settings = settings;
-    context->request = xjw::gui::project::denseGenerationSettingsFromJson(settings);
+    context->request = xjw::core::project::denseGenerationSettingsFromJson(settings);
     context->atIndex = at_index;
     context->sparseCloudPath = sparseCloudPathFromRecord(at_record);
     context->selectedImages = selectedImagesFromRecord(at_record);
@@ -409,21 +409,21 @@ bool ProjectDenseReconstructionManager::startCreatePointCloudAsync(
     return true;
 }
 
-void ProjectDenseReconstructionManager::startDepthEstimation(
+void ProjectPointCloudWorkflowController::startDepthEstimation(
     const std::shared_ptr<PointCloudWorkflowContext> &context)
 {
     xjw::gui::tasks::runGuardedWithOutcome(
         this,
         [context]()
         {
-            return xjw::gui::project::prepareDenseSparseCloud(
+            return xjw::core::project::preparePointCloudInput(
                 context->sparseCloudPath,
                 context->views);
         },
         [context](
-            ProjectDenseReconstructionManager *self,
+            ProjectPointCloudWorkflowController *self,
             xjw::gui::tasks::TaskOutcome<
-                xjw::gui::project::DenseSparsePreparationResult> outcome)
+                xjw::core::project::PointCloudInputPreparationResult> outcome)
         {
             if (!self->_owner ||
                 !self->_owner->isCurrentSession(context->session))
@@ -454,7 +454,7 @@ void ProjectDenseReconstructionManager::startDepthEstimation(
 
             auto *generator = new xjw::mvs::DepthMapGenerator(self);
             xjw::mvs::DepthGenConfig config =
-                xjw::gui::project::buildDepthGenConfig(
+                xjw::core::project::buildDepthGenConfig(
                     context->request,
                     static_cast<int>(context->views.size()));
             config.inputSignature =
@@ -549,7 +549,7 @@ void ProjectDenseReconstructionManager::startDepthEstimation(
         });
 }
 
-void ProjectDenseReconstructionManager::startFusion(
+void ProjectPointCloudWorkflowController::startFusion(
     const std::shared_ptr<PointCloudWorkflowContext> &context)
 {
     if (!_owner || !_owner->isCurrentSession(context->session))
@@ -585,7 +585,7 @@ void ProjectDenseReconstructionManager::startFusion(
 
     emit pointCloudProgressChanged(QStringLiteral("正在加载并融合深度图"), 65);
     const auto cancel_flag = _cancelFlag;
-    QPointer<ProjectDenseReconstructionManager> self(this);
+    QPointer<ProjectPointCloudWorkflowController> self(this);
     xjw::gui::tasks::runGuardedWithOutcome(
         this,
         [self, context, stored, cameras, cancel_flag]() -> PointCloudTaskResult
@@ -599,7 +599,7 @@ void ProjectDenseReconstructionManager::startFusion(
 
             const int frame_count = static_cast<int>(stored.frames.size());
             const xjw::mvs::FusionConfig fusion_config =
-                xjw::gui::project::buildDepthGenConfig(
+                xjw::core::project::buildDepthGenConfig(
                     context->request, frame_count).fusion;
             const xjw::mvs::FusionFrameLoader loader =
                 [stored, cameras, fusion_config, context](
@@ -748,7 +748,7 @@ void ProjectDenseReconstructionManager::startFusion(
             return task;
         },
         [context](
-            ProjectDenseReconstructionManager *manager,
+            ProjectPointCloudWorkflowController *manager,
             xjw::gui::tasks::TaskOutcome<PointCloudTaskResult> outcome)
         {
             if (!manager->_owner ||
@@ -813,7 +813,7 @@ void ProjectDenseReconstructionManager::startFusion(
         });
 }
 
-void ProjectDenseReconstructionManager::cancelActiveTask()
+void ProjectPointCloudWorkflowController::cancelActiveTask()
 {
     if (_cancelFlag)
     {
@@ -826,12 +826,12 @@ void ProjectDenseReconstructionManager::cancelActiveTask()
     }
 }
 
-bool ProjectDenseReconstructionManager::isRunning() const
+bool ProjectPointCloudWorkflowController::isRunning() const
 {
     return _isRunning;
 }
 
-void ProjectDenseReconstructionManager::finishTask(bool success)
+void ProjectPointCloudWorkflowController::finishTask(bool success)
 {
     _activeGenerator.clear();
     _cancelFlag.reset();
@@ -839,7 +839,7 @@ void ProjectDenseReconstructionManager::finishTask(bool success)
     emit pointCloudProgressFinished(success);
 }
 
-void ProjectDenseReconstructionManager::failTask(const QString &message,
+void ProjectPointCloudWorkflowController::failTask(const QString &message,
                                                  const QString &title)
 {
     const QString effective_message = message.trimmed().isEmpty()

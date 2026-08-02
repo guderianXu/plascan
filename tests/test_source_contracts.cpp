@@ -928,7 +928,7 @@ TEST(GuiAlgorithmAlignmentContractTest, ReconstructionStagesRouteToDedicatedMana
         "void ProjectManager::startGenerateModelAsync(const QJsonObject &settings)",
         "void ProjectManager::startMeshReconstructionAsync");
     expectContainsAll(generate_block, {
-        "_denseReconstructionManager->startCreatePointCloudAsync(settings)",
+        "_pointCloudWorkflowController->startCreatePointCloudAsync(settings)",
         "_modelManager->startMeshReconstructionAsync(settings)",
     });
     expectNotContainsAll(project_manager, {
@@ -979,8 +979,8 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelBlockControlsAreBoundToSett
 TEST(MvsSchedulerContractTest, FrameWorkerControlsAndSchedulerBasics)
 {
     const QString types = readSourceFile(QStringLiteral("src/core/mvs/MvsTypes.h"));
-    const QString configH = readSourceFile(QStringLiteral("src/gui/project/support/ProjectDenseWorkflowConfig.h"));
-    const QString configCpp = readSourceFile(QStringLiteral("src/gui/project/support/ProjectDenseWorkflowConfig.cpp"));
+    const QString configH = readSourceFile(QStringLiteral("src/core/project_workflows/PointCloudWorkflowConfig.h"));
+    const QString configCpp = readSourceFile(QStringLiteral("src/core/project_workflows/PointCloudWorkflowConfig.cpp"));
     const QString scheduler = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
     const QString header = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.h"));
 
@@ -1287,11 +1287,13 @@ TEST(GuiDialogLayoutContractTest, DialogSourcesAreGroupedByDomain)
         QStringLiteral("<header>camera/CameraModel3DDialog.h</header>")));
 }
 
-TEST(GuiArchitectureContractTest, DenseReconstructionManagerOnlyCoordinatesCoreMvs)
+TEST(GuiArchitectureContractTest, PointCloudWorkflowControllerOnlyCoordinatesCoreMvs)
 {
     EXPECT_TRUE(sourceFileExists(
-        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.h")));
+        QStringLiteral("src/gui/project/manager/ProjectPointCloudWorkflowController.h")));
     EXPECT_TRUE(sourceFileExists(
+        QStringLiteral("src/gui/project/manager/ProjectPointCloudWorkflowController.cpp")));
+    EXPECT_FALSE(sourceFileExists(
         QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp")));
     EXPECT_FALSE(sourceFileExists(
         QStringLiteral("src/gui/project/manager/ProjectModelGenerationWorkflow.h")));
@@ -1299,15 +1301,15 @@ TEST(GuiArchitectureContractTest, DenseReconstructionManagerOnlyCoordinatesCoreM
         QStringLiteral("src/gui/project/manager/ProjectModelGenerationWorkflow.cpp")));
 
     const QString guiSources = readSourceFile(QStringLiteral("src/gui/cmake/GuiSources.cmake"));
-    EXPECT_TRUE(guiSources.contains(QStringLiteral("ProjectDenseReconstructionManager")));
-    const QString denseManager = readSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
-    expectContainsAll(denseManager, {
+    EXPECT_TRUE(guiSources.contains(QStringLiteral("ProjectPointCloudWorkflowController")));
+    const QString pointCloudController = readSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectPointCloudWorkflowController.cpp"));
+    expectContainsAll(pointCloudController, {
         "xjw::mvs::DepthMapGenerator",
         "xjw::mvs::fuseDepthMapsStreaming",
         "xjw::gui::tasks::runGuardedWithOutcome",
     });
-    expectNotContainsAll(denseManager, {
+    expectNotContainsAll(pointCloudController, {
         "PatchMatchCPU",
         "PatchMatchCuda",
     });
@@ -1315,6 +1317,25 @@ TEST(GuiArchitectureContractTest, DenseReconstructionManagerOnlyCoordinatesCoreM
         QStringLiteral("src/gui/project/manager/ProjectReconstructionManager.cpp")));
     EXPECT_FALSE(sourceFileExists(
         QStringLiteral("src/gui/project/manager/ProjectTaskDispatcher.cpp")));
+}
+
+TEST(GuiArchitectureContractTest, AsyncTasksExposeSharedCancellationVocabulary)
+{
+    const QString runner = readSourceFile(QStringLiteral("src/gui/tasks/GuiTaskRunner.h"));
+    const QString maskController = readSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectMaskWorkflowController.cpp"));
+
+    expectContainsAll(runner, {
+        "class TaskCancellationToken",
+        "class TaskCancellationSource",
+        "isCancellationRequested",
+        "requestCancellation",
+    });
+    expectContainsAll(maskController, {
+        "_cancellation.reset()",
+        "cancellation.isCancellationRequested()",
+        "_cancellation.requestCancellation()",
+    });
 }
 
 TEST(GuiArchitectureContractTest, ProjectPersistenceAndWorkflowAlgorithmsLiveOutsideGui)

@@ -1,30 +1,10 @@
 #pragma once
 
-#include <QString>
-#include <QStringList>
-
-class ProjectData;
+// Compatibility include for code that still uses the former GUI path.
+#include "ProjectResourceCleanup.h"
 
 namespace xjw::gui::project
 {
-
-struct ResourceCleanupResult
-{
-    bool success = false;
-    bool unsupportedSection = false;
-    bool noMatchedRecords = false;
-    int removedCount = 0;
-    QString sectionArrayKey;
-    QString errorMessage;
-    QStringList failedPaths;
-};
-
-class ProjectResourceCleanupService
-{
-public:
-    static ResourceCleanupResult cleanupGeneratedData(ProjectData *projectData,
-                                                      const QString &section,
-                                                      const QStringList &resourcePaths);
-};
-
-} // namespace xjw::gui::project
+using xjw::core::project::ProjectResourceCleanupService;
+using xjw::core::project::ResourceCleanupResult;
+}

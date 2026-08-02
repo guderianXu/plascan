@@ -38,7 +38,7 @@ dense_match/
 ## 架构概况
 
 ```
-ProjectDenseReconstructionManager
+ProjectPointCloudWorkflowController
     │ 解析工作流程配置并调度匹配对
     ▼
 DenseMatchService
@@ -81,7 +81,7 @@ DenseMatchService
 
 ### 服务层
 - **DenseMatchService.h/cpp** — 编排完整流水线: 加载影像 → 匹配器 → 验证 → 保存 TIFF。内置 `printf` 性能诊断日志 (图像尺寸、算法、CUDA 状态、耗时)
-- GUI 通过 `ProjectDenseReconstructionManager` 调用服务层；核心模块不依赖具体对话框。
+- GUI 通过 `ProjectPointCloudWorkflowController` 协调深度估计与点云融合；它不是独立的“稠密重建管理器”。核心模块不依赖具体对话框。
 
 ### OpenCV 封装
 - **opencv/OpenCVSgbmWrapper.h/cpp** — 封装 `cv::StereoSGBM::create()`，用于与自研 CUDA 算法对比精度和速度

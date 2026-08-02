@@ -12,10 +12,8 @@
 #include <QFileInfo>
 #include <QDesktopServices>
 #include <QUrl>
-#include <QJsonArray>
 #include <QJsonObject>
 #include <QMessageBox>
-#include <QProgressDialog>
 #include <QSaveFile>
 #include <QTabWidget>
 #include <QTextStream>
@@ -58,13 +56,13 @@
 #include "DataTreeWidget.h"
 #include "ReferencePanelWidget.h"
 #include "SelectionPropertiesWidget.h"
-#include "TaskStatusWidget.h"
 #include "ObservationNetworkView.h"
 #include "graph/ObservationNetworkBuilder.h"
 #include "WorkspaceCenterWidget.h"
 #include "WorkspacePanelController.h"
 #include "ProjectUiHydrator.h"
 #include "TiePointWorkflowController.h"
+#include "ProjectLifecyclePresenter.h"
 #include "camera/CameraModel3DDialog.h"
 #include "tie_points/ThinTiePointsDialog.h"
 #include "LayerRenderer.h"
@@ -77,96 +75,6 @@
 #include "MarkerDetectionReviewDialog.h"
 #include "PrintMarkersDialog.h"
 
-void MainWindow::onProjectOpenStarted(const QString &plascanPath)
-{
-    if (!_openProgressDialog)
-    {
-        _openProgressDialog = new QProgressDialog(tr("正在打开项目..."), QString(), 0, 100, this);
-        _openProgressDialog->setWindowModality(Qt::ApplicationModal);
-        _openProgressDialog->setCancelButton(nullptr);
-        _openProgressDialog->setMinimumDuration(0);
-        _openProgressDialog->setAutoClose(false);
-        _openProgressDialog->setAutoReset(false);
-    }
-    _openProgressDialog->setLabelText(tr("正在打开项目：%1").arg(QFileInfo(plascanPath).fileName()));
-    _openProgressDialog->setValue(0);
-    _openProgressDialog->show();
-}
-
-void MainWindow::onProjectOpenProgressChanged(const QString &message, int percent)
-{
-    if (!_openProgressDialog)
-    {
-        return;
-    }
-
-    _openProgressDialog->setLabelText(message.isEmpty() ? tr("正在打开项目...") : message);
-    _openProgressDialog->setValue(std::clamp(percent, 0, 100));
-}
-
-void MainWindow::onProjectOpenFinished(bool success, const QString &message)
-{
-    if (_openProgressDialog)
-    {
-        _openProgressDialog->hide();
-        _openProgressDialog->deleteLater();
-        _openProgressDialog = nullptr;
-    }
-
-    statusBar()->showMessage(success ? message : tr("打开项目失败"), success ? 3000 : 5000);
-}
-
-void MainWindow::onSaveStarted()
-{
-    if (!_saveProgressDialog)
-    {
-        _saveProgressDialog = new QProgressDialog(tr("正在保存项目..."), QString(), 0, 0, this);
-        _saveProgressDialog->setWindowModality(Qt::ApplicationModal);
-        _saveProgressDialog->setCancelButton(nullptr);
-        _saveProgressDialog->setMinimumDuration(0);
-    }
-    _saveProgressDialog->show();
-}
-
-void MainWindow::onSaveFinished(bool ok)
-{
-    if (_saveProgressDialog)
-    {
-        _saveProgressDialog->hide();
-        _saveProgressDialog->deleteLater();
-        _saveProgressDialog = nullptr;
-    }
-    statusBar()->showMessage(ok ? tr("保存完成") : tr("保存失败"), ok ? 3000 : 5000);
-
-    if (_closeSavePending)
-    {
-        _closeSavePending = false;
-        if (ok)
-        {
-            QTimer::singleShot(0, this, &QWidget::close);
-        }
-    }
-}
-
-void MainWindow::onMetadataDirtyChanged(bool dirty)
-{
-    const QString projPath = _projectManager
-        ? _projectManager->currentProjectPath()
-        : QString();
-    if (projPath.trimmed().isEmpty())
-    {
-        setWindowTitle(QStringLiteral("PlaScan"));
-        return;
-    }
-
-    QString name = QFileInfo(projPath).baseName();
-    if (name.isEmpty())
-    {
-        name = QFileInfo(projPath).fileName();
-    }
-    setWindowTitle(dirty ? QStringLiteral("PlaScan - %1*").arg(name)
-                         : QStringLiteral("PlaScan - %1").arg(name));
-}
 
 void MainWindow::onClearRecentRequested()
 {
@@ -504,7 +412,7 @@ void MainWindow::applyUiSettings(const QJsonObject &ui)
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
-    if (_closeSavePending)
+    if (_projectLifecyclePresenter && _projectLifecyclePresenter->isCloseSavePending())
     {
         event->ignore();
         return;
@@ -532,8 +440,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
 
         if (btn == QMessageBox::Save)
         {
-            _closeSavePending = true;
-            _projectManager->saveProject();
+            _projectLifecyclePresenter->requestCloseAfterSave();
             event->ignore();
             return;
         }

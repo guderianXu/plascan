@@ -19,16 +19,16 @@ struct PointCloudWorkflowContext;
  * 深度图，随后从磁盘流式融合并把点云记录写回项目。算法实现仍位于 core/mvs，
  * 因而这里不包含 PatchMatch 或融合数学逻辑。
  */
-class ProjectDenseReconstructionManager : public QObject
+class ProjectPointCloudWorkflowController : public QObject
 {
     Q_OBJECT
 
 public:
-    explicit ProjectDenseReconstructionManager(ProjectManager *owner,
-                                               ProjectData *projectData,
-                                               QWidget *parentWidget,
-                                               QObject *parent = nullptr);
-    ~ProjectDenseReconstructionManager() override;
+    explicit ProjectPointCloudWorkflowController(ProjectManager *owner,
+                                                 ProjectData *projectData,
+                                                 QWidget *parentWidget,
+                                                 QObject *parent = nullptr);
+    ~ProjectPointCloudWorkflowController() override;
 
     bool startCreatePointCloudAsync(const QJsonObject &settings);
     void cancelActiveTask();

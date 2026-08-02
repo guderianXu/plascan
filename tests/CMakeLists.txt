@@ -541,18 +541,6 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/main_window/ModelDropSupport.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/main_window/WorkspacePanelController.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/main_window/ProjectUiHydrator.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectDashboardSummary.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectDenseWorkflowConfig.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectModelWorkflowPolicy.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectMetadataOperations.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectReferenceDatasets.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectReferenceTerrainBa.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectSurveyControl.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectWorkflowReports.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectCameraImportService.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectResourceCleanupService.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectTiePointResultService.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectResultRecords.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ImageViewRotationSettings.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/settings/ProjectDialogJsonSettingBase.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/settings/DialogSettingStore.cpp
@@ -597,6 +585,7 @@ if(MSVC)
     target_compile_options(test_gui_project_utils PRIVATE /bigobj)
 endif()
 target_link_libraries(test_gui_project_utils PRIVATE
+    gui_project
     plascan_common_project
     mvs
     sfm

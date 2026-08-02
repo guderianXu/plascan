@@ -16,7 +16,6 @@ set(CMAKE_AUTOUIC ON)
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/GuiSources.cmake)
 
-list(REMOVE_ITEM GUI_SOURCES ${GUI_PROJECT_SOURCES})
 add_library(gui_project STATIC ${GUI_PROJECT_SOURCES})
 
 #==============================================================================
@@ -46,7 +45,7 @@ qt_add_shaders(plascan_gui camera_scene_shaders
 )
 
 # 包含目录
-target_include_directories(plascan_gui PRIVATE
+set(PLASCAN_GUI_INCLUDE_DIRECTORIES
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/config
   ${CMAKE_CURRENT_SOURCE_DIR}/config/settings
@@ -88,10 +87,8 @@ target_include_directories(plascan_gui PRIVATE
   ${OpenCV_INCLUDE_DIRS}
 )
 
-target_include_directories(gui_project PRIVATE
-  $<TARGET_PROPERTY:plascan_gui,INCLUDE_DIRECTORIES>
-  ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
-)
+target_include_directories(plascan_gui PRIVATE ${PLASCAN_GUI_INCLUDE_DIRECTORIES})
+target_include_directories(gui_project PRIVATE ${PLASCAN_GUI_INCLUDE_DIRECTORIES})
 target_compile_definitions(plascan_gui PRIVATE PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 set_target_properties(gui_project PROPERTIES
@@ -109,7 +106,7 @@ target_link_libraries(gui_project PRIVATE
   project_workflows
 )
 
-# ProjectDenseReconstructionManager 位于 GUI 协调层，但其算法调用只通过
+# ProjectPointCloudWorkflowController 位于 GUI 协调层，但其算法调用只通过
 # mvs 公共接口完成。显式声明依赖，确保 gui_project 被测试或其它目标单独链接时
 # 不依赖 plascan_gui 偶然补齐未解析符号。
 if(TARGET mvs)

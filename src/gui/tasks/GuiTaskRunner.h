@@ -9,6 +9,7 @@
 #include <QtConcurrent/QtConcurrent>
 
 #include <exception>
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <type_traits>
@@ -16,6 +17,50 @@
 
 namespace xjw::gui::tasks
 {
+
+class TaskCancellationToken final
+{
+public:
+    bool isCancellationRequested() const
+    {
+        return _flag && _flag->load(std::memory_order_relaxed);
+    }
+
+    std::shared_ptr<std::atomic<bool>> sharedFlag() const
+    {
+        return _flag;
+    }
+
+private:
+    friend class TaskCancellationSource;
+    explicit TaskCancellationToken(std::shared_ptr<std::atomic<bool>> flag)
+        : _flag(std::move(flag))
+    {
+    }
+
+    std::shared_ptr<std::atomic<bool>> _flag;
+};
+
+class TaskCancellationSource final
+{
+public:
+    TaskCancellationToken reset()
+    {
+        _flag = std::make_shared<std::atomic<bool>>(false);
+        return TaskCancellationToken(_flag);
+    }
+
+    void requestCancellation() const
+    {
+        if (_flag)
+        {
+            _flag->store(true, std::memory_order_relaxed);
+        }
+    }
+
+private:
+    std::shared_ptr<std::atomic<bool>> _flag;
+};
 
 class TaskFutureRetainer final : public QObject
 {
