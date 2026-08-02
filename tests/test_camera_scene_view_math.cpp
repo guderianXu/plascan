@@ -17,82 +17,10 @@ TEST(CameraSceneViewMathTest, SortsFarCameraBeforeNearCameraRegardlessOfInputOrd
     EXPECT_EQ(farToNearCameraIndices(centers, world_to_view), QVector<int>({1, 0}));
 }
 
-TEST(CameraSceneViewMathTest, MakesFarCameraAppearLargerThanNearCamera)
-{
-    QMatrix4x4 world_to_view;
-    world_to_view.setToIdentity();
-
-    const float near_half_extent = cameraPlaneHalfExtentForViewDepth(
-        QVector3D(0.0f, 0.0f, -6.0f),
-        QVector3D(0.0f, 0.0f, -8.0f),
-        world_to_view,
-        1000,
-        45.0f,
-        24.0f,
-        2.0f);
-    const float far_half_extent = cameraPlaneHalfExtentForViewDepth(
-        QVector3D(0.0f, 0.0f, -10.0f),
-        QVector3D(0.0f, 0.0f, -8.0f),
-        world_to_view,
-        1000,
-        45.0f,
-        24.0f,
-        2.0f);
-
-    EXPECT_GT(far_half_extent, near_half_extent);
-    EXPECT_GT(far_half_extent / 10.0f, near_half_extent / 6.0f);
-}
-
-TEST(CameraSceneViewMathTest, KeepsCameraCardReadableWhenViewZoomsOut)
+TEST(CameraSceneViewMathTest, CancelsPerspectiveDepthAtFixedSceneZoom)
 {
     constexpr int viewport_height = 1000;
-    constexpr float target_half_extent_pixels = 34.0f;
     constexpr float half_fov_radians = 22.5f * 3.14159265358979323846f / 180.0f;
-
-    auto projectedHalfExtentPixels = [viewport_height, half_fov_radians](
-                                         float world_half_extent,
-                                         float depth)
-    {
-        return world_half_extent * viewport_height
-            / (2.0f * depth * std::tan(half_fov_radians));
-    };
-
-    QMatrix4x4 normal_view;
-    normal_view.translate(0.0f, 0.0f, -10.0f);
-    const float normal_extent = cameraPlaneHalfExtentForViewDepth(
-        QVector3D(),
-        QVector3D(),
-        normal_view,
-        viewport_height,
-        45.0f,
-        target_half_extent_pixels,
-        2.0f);
-
-    QMatrix4x4 zoomed_out_view;
-    zoomed_out_view.translate(0.0f, 0.0f, -100.0f);
-    const float zoomed_out_extent = cameraPlaneHalfExtentForViewDepth(
-        QVector3D(),
-        QVector3D(),
-        zoomed_out_view,
-        viewport_height,
-        45.0f,
-        target_half_extent_pixels,
-        2.0f);
-
-    EXPECT_NEAR(projectedHalfExtentPixels(normal_extent, 10.0f),
-                target_half_extent_pixels,
-                1e-4f);
-    EXPECT_NEAR(projectedHalfExtentPixels(zoomed_out_extent, 100.0f),
-                target_half_extent_pixels,
-                1e-4f);
-}
-
-TEST(CameraSceneViewMathTest, BoundsDepthEmphasisInScreenSpace)
-{
-    constexpr int viewport_height = 1000;
-    constexpr float target_half_extent_pixels = 24.0f;
-    constexpr float half_fov_radians = 22.5f * 3.14159265358979323846f / 180.0f;
-
     auto projectedHalfExtentPixels = [viewport_height, half_fov_radians](
                                          float world_half_extent,
                                          float depth)
@@ -103,53 +31,176 @@ TEST(CameraSceneViewMathTest, BoundsDepthEmphasisInScreenSpace)
 
     QMatrix4x4 world_to_view;
     world_to_view.setToIdentity();
-    const float near_extent = cameraPlaneHalfExtentForViewDepth(
+    const float near_extent = cameraPlaneHalfExtentForScreenSize(
         QVector3D(0.0f, 0.0f, -4.0f),
-        QVector3D(0.0f, 0.0f, -8.0f),
         world_to_view,
         viewport_height,
-        45.0f,
-        target_half_extent_pixels,
-        2.0f);
-    const float far_extent = cameraPlaneHalfExtentForViewDepth(
+        1.0f);
+    const float far_extent = cameraPlaneHalfExtentForScreenSize(
         QVector3D(0.0f, 0.0f, -16.0f),
-        QVector3D(0.0f, 0.0f, -8.0f),
         world_to_view,
         viewport_height,
-        45.0f,
-        target_half_extent_pixels,
+        1.0f);
+
+    EXPECT_NEAR(projectedHalfExtentPixels(near_extent, 4.0f), 34.0f, 1e-4f);
+    EXPECT_NEAR(projectedHalfExtentPixels(far_extent, 16.0f), 34.0f, 1e-4f);
+    EXPECT_NEAR(far_extent / near_extent, 4.0f, 1e-4f);
+}
+
+TEST(CameraSceneViewMathTest, MakesCameraCardsLargerAsSceneZoomsOut)
+{
+    constexpr int viewport_height = 1000;
+    constexpr float camera_depth = 8.0f;
+    constexpr float half_fov_radians = 22.5f * 3.14159265358979323846f / 180.0f;
+
+    auto projectedHalfExtentPixels = [viewport_height, half_fov_radians](
+                                         float world_half_extent,
+                                         float depth)
+    {
+        return world_half_extent * viewport_height
+            / (2.0f * depth * std::tan(half_fov_radians));
+    };
+
+    QMatrix4x4 world_to_view;
+    world_to_view.setToIdentity();
+    const QVector3D camera_center(0.0f, 0.0f, -camera_depth);
+    const float normal_extent = cameraPlaneHalfExtentForScreenSize(
+        camera_center,
+        world_to_view,
+        viewport_height,
+        1.0f);
+    const float zoomed_out_extent = cameraPlaneHalfExtentForScreenSize(
+        camera_center,
+        world_to_view,
+        viewport_height,
+        0.5f);
+    const float zoomed_in_extent = cameraPlaneHalfExtentForScreenSize(
+        camera_center,
+        world_to_view,
+        viewport_height,
         2.0f);
 
-    EXPECT_NEAR(projectedHalfExtentPixels(near_extent, 4.0f),
-                target_half_extent_pixels * 0.55f,
+    EXPECT_NEAR(projectedHalfExtentPixels(normal_extent, camera_depth),
+                34.0f,
                 1e-4f);
-    EXPECT_NEAR(projectedHalfExtentPixels(far_extent, 16.0f),
-                target_half_extent_pixels * 1.65f,
+    EXPECT_NEAR(projectedHalfExtentPixels(zoomed_out_extent, camera_depth),
+                68.0f,
+                1e-4f);
+    EXPECT_NEAR(projectedHalfExtentPixels(zoomed_in_extent, camera_depth),
+                18.0f,
+                1e-4f);
+    EXPECT_GT(zoomed_out_extent, normal_extent);
+    EXPECT_LT(zoomed_in_extent, normal_extent);
+}
+
+TEST(CameraSceneViewMathTest, BoundsZoomDrivenCameraScreenSize)
+{
+    constexpr int viewport_height = 1000;
+    constexpr float half_fov_radians = 22.5f * 3.14159265358979323846f / 180.0f;
+
+    auto projectedHalfExtentPixels = [viewport_height, half_fov_radians](
+                                         float world_half_extent,
+                                         float depth)
+    {
+        return world_half_extent * viewport_height
+            / (2.0f * depth * std::tan(half_fov_radians));
+    };
+
+    QMatrix4x4 world_to_view;
+    world_to_view.setToIdentity();
+    const QVector3D camera_center(0.0f, 0.0f, -8.0f);
+    const float maximum_extent = cameraPlaneHalfExtentForScreenSize(
+        camera_center,
+        world_to_view,
+        viewport_height,
+        0.05f);
+    const float minimum_extent = cameraPlaneHalfExtentForScreenSize(
+        camera_center,
+        world_to_view,
+        viewport_height,
+        20.0f);
+
+    EXPECT_NEAR(projectedHalfExtentPixels(maximum_extent, 8.0f),
+                72.0f,
+                1e-4f);
+    EXPECT_NEAR(projectedHalfExtentPixels(minimum_extent, 8.0f),
+                18.0f,
                 1e-4f);
 }
 
-TEST(CameraSceneViewMathTest, RejectsInvalidCameraPlaneDepthInputs)
+TEST(CameraSceneViewMathTest, RejectsInvalidCameraPlaneScreenSizeInputs)
 {
     QMatrix4x4 world_to_view;
     world_to_view.setToIdentity();
-    EXPECT_EQ(cameraPlaneHalfExtentForViewDepth(
-                  QVector3D(0.0f, 0.0f, 1.0f),
-                  QVector3D(0.0f, 0.0f, -4.0f),
-                  world_to_view,
-                  1000),
-              0.0f);
-    EXPECT_EQ(cameraPlaneHalfExtentForViewDepth(
-                  QVector3D(0.0f, 0.0f, -4.0f),
-                  QVector3D(0.0f, 0.0f, -4.0f),
-                  world_to_view,
-                  0),
-              0.0f);
-    EXPECT_EQ(cameraPlaneHalfExtentForViewDepth(
-                  QVector3D(0.0f, 0.0f, -4.0f),
+    EXPECT_EQ(cameraPlaneHalfExtentForScreenSize(
                   QVector3D(0.0f, 0.0f, 1.0f),
                   world_to_view,
-                  1000),
+                  1000,
+                  1.0f),
               0.0f);
+    EXPECT_EQ(cameraPlaneHalfExtentForScreenSize(
+                  QVector3D(0.0f, 0.0f, -4.0f),
+                  world_to_view,
+                  0,
+                  1.0f),
+              0.0f);
+    EXPECT_EQ(cameraPlaneHalfExtentForScreenSize(
+                  QVector3D(0.0f, 0.0f, -4.0f),
+                  world_to_view,
+                  1000,
+                  0.0f),
+              0.0f);
+}
+
+TEST(CameraSceneViewMathTest, BuildsPerspectiveIndependentScreenLeader)
+{
+    const QLineF leader = cameraPlaneLeaderLine(
+        QPointF(10.0, 20.0), QPointF(1010.0, 20.0), 50.0);
+
+    EXPECT_FALSE(leader.isNull());
+    EXPECT_NEAR(leader.p1().x(), 10.0, 1e-6);
+    EXPECT_NEAR(leader.p1().y(), 20.0, 1e-6);
+    EXPECT_NEAR(leader.length(), 50.0, 1e-6);
+
+    const QLineF closeProbeLeader = cameraPlaneLeaderLine(
+        QPointF(10.0, 20.0), QPointF(11.0, 20.0), 50.0);
+    EXPECT_NEAR(closeProbeLeader.length(), leader.length(), 1e-6);
+}
+
+TEST(CameraSceneViewMathTest, RejectsLeaderWithoutScreenDirection)
+{
+    EXPECT_TRUE(cameraPlaneLeaderLine(
+                    QPointF(4.0, 5.0),
+                    QPointF(4.0, 5.0),
+                    40.0)
+                    .isNull());
+}
+
+TEST(CameraSceneViewMathTest, DetectsPointHiddenBehindProjectedCameraQuad)
+{
+    const QVector<QVector3D> quad{
+        QVector3D(-0.5f, -0.5f, 0.2f),
+        QVector3D(0.5f, -0.5f, 0.2f),
+        QVector3D(0.5f, 0.5f, 0.2f),
+        QVector3D(-0.5f, 0.5f, 0.2f),
+    };
+
+    EXPECT_TRUE(pointIsBehindProjectedQuad(QVector3D(0.0f, 0.0f, 0.6f), quad));
+    EXPECT_FALSE(pointIsBehindProjectedQuad(QVector3D(0.0f, 0.0f, -0.1f), quad));
+    EXPECT_FALSE(pointIsBehindProjectedQuad(QVector3D(0.8f, 0.0f, 0.6f), quad));
+}
+
+TEST(CameraSceneViewMathTest, InterpolatesDepthAcrossTiltedCameraQuad)
+{
+    const QVector<QVector3D> quad{
+        QVector3D(-1.0f, -1.0f, 0.1f),
+        QVector3D(1.0f, -1.0f, 0.5f),
+        QVector3D(1.0f, 1.0f, 0.5f),
+        QVector3D(-1.0f, 1.0f, 0.1f),
+    };
+
+    EXPECT_TRUE(pointIsBehindProjectedQuad(QVector3D(0.0f, 0.0f, 0.4f), quad));
+    EXPECT_FALSE(pointIsBehindProjectedQuad(QVector3D(0.0f, 0.0f, 0.2f), quad));
 }
 
 TEST(CameraSceneViewMathTest, ChoosesAvailableCameraWhoseForwardDirectionMatchesView)

@@ -77,7 +77,7 @@ TEST(CameraSceneRenderContractTest, ThumbnailPlanesUseTheSceneDepthBuffer)
     const QString renderBlock = source.mid(renderStart, overlayStart - renderStart);
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("setDepthTest(true)")));
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("setDepthWrite(true)")));
-    EXPECT_LT(renderBlock.indexOf(QStringLiteral("drawCameraThumbnails(cb")),
+    EXPECT_GT(renderBlock.indexOf(QStringLiteral("drawCameraThumbnails(cb")),
               renderBlock.indexOf(QStringLiteral("drawSceneGeometry(cb")));
 
     const qsizetype overlayEnd = source.indexOf(
@@ -130,7 +130,7 @@ TEST(CameraSceneRenderContractTest, SelectedCameraCardUsesRedHighlight)
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("QColor(205, 60, 70, 230)")));
 }
 
-TEST(CameraSceneRenderContractTest, CameraCardsUseDepthEmphasisAndBlackDirectionLeader)
+TEST(CameraSceneRenderContractTest, CameraCardsUseScreenSizeAndExternalBlackDirectionLeader)
 {
     const QString header =
         readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
@@ -139,8 +139,8 @@ TEST(CameraSceneRenderContractTest, CameraCardsUseDepthEmphasisAndBlackDirection
 
     EXPECT_TRUE(header.contains(QStringLiteral("QLineF cameraDirectionLeaderLine")));
     EXPECT_FALSE(header.contains(QStringLiteral("drawCameraDirectionArrow")));
-    EXPECT_TRUE(source.contains(QStringLiteral("cameraPlaneHalfExtentForViewDepth(")));
-    EXPECT_TRUE(source.contains(QStringLiteral("sceneCenter(),")));
+    EXPECT_TRUE(source.contains(QStringLiteral("cameraPlaneHalfExtentForScreenSize(")));
+    EXPECT_FALSE(source.contains(QStringLiteral("cameraPlaneHalfExtentForViewDepth(")));
 
     const qsizetype extentStart = source.indexOf(
         QStringLiteral("float CameraSceneWidget::cameraImagePlaneHalfExtent"));
@@ -149,10 +149,10 @@ TEST(CameraSceneRenderContractTest, CameraCardsUseDepthEmphasisAndBlackDirection
     ASSERT_GE(extentStart, 0);
     ASSERT_GT(highlightedStart, extentStart);
     const QString extentBlock = source.mid(extentStart, highlightedStart - extentStart);
-    EXPECT_TRUE(extentBlock.contains(QStringLiteral("return depthScaledExtent;")));
-    EXPECT_FALSE(extentBlock.contains(QStringLiteral("maximumExtent")));
-    EXPECT_FALSE(extentBlock.contains(QStringLiteral(
-        "qBound(minimumExtent, desiredExtent, maximumExtent)")));
+    EXPECT_TRUE(extentBlock.contains(QStringLiteral("pose.center,")));
+    EXPECT_TRUE(extentBlock.contains(QStringLiteral("worldToView,")));
+    EXPECT_TRUE(extentBlock.contains(QStringLiteral("_zoomScale,")));
+    EXPECT_TRUE(extentBlock.contains(QStringLiteral("return screenScaledExtent;")));
 
     const qsizetype drawStart = source.indexOf(
         QStringLiteral("void CameraSceneWidget::drawCameraThumbnails"));
@@ -161,8 +161,7 @@ TEST(CameraSceneRenderContractTest, CameraCardsUseDepthEmphasisAndBlackDirection
     ASSERT_GE(drawStart, 0);
     ASSERT_GT(imageStart, drawStart);
     const QString drawBlock = source.mid(drawStart, imageStart - drawStart);
-    EXPECT_TRUE(drawBlock.contains(QStringLiteral(
-        "cameraImagePlaneHalfExtent(pose, matrices.modelView)")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("pose, matrices.modelView")));
     EXPECT_TRUE(drawBlock.contains(QStringLiteral(
         "fullDynamicBufferUpdateForCurrentFrame(")));
 
@@ -175,8 +174,9 @@ TEST(CameraSceneRenderContractTest, CameraCardsUseDepthEmphasisAndBlackDirection
     const QString leaderBlock = source.mid(leaderStart, manipStart - leaderStart);
     EXPECT_TRUE(leaderBlock.contains(QStringLiteral("cameraForwardDirection(")));
     EXPECT_TRUE(leaderBlock.contains(QStringLiteral("pose.center - forward")));
-    EXPECT_TRUE(leaderBlock.contains(QStringLiteral("outsideExtensionPixels")));
-    EXPECT_TRUE(leaderBlock.contains(QStringLiteral("planeHalfExtentPixels * 1.2")));
+    EXPECT_TRUE(leaderBlock.contains(QStringLiteral("cameraPlaneScreenHalfExtentPixels(")));
+    EXPECT_TRUE(leaderBlock.contains(QStringLiteral("cameraPlaneLeaderLine(")));
+    EXPECT_FALSE(leaderBlock.contains(QStringLiteral("projectedCorners")));
     EXPECT_FALSE(leaderBlock.contains(QStringLiteral("headLength")));
 
     const qsizetype overlayStart = source.indexOf(
@@ -292,23 +292,22 @@ TEST(CameraSceneRenderContractTest, TiePointModesUseMetadataAndDrawLegend)
         QStringLiteral("showTiePointCloudFile(path, sidecarPath)")));
 }
 
-TEST(CameraSceneRenderContractTest, TiePointsUseThePortableOverlayPointRenderer)
+TEST(CameraSceneRenderContractTest, TiePointOverlayHonorsCameraPlaneDepth)
 {
     const QString sceneHeader =
         readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
     const QString sceneSource =
         readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
 
-    EXPECT_TRUE(sceneHeader.contains(
-        QStringLiteral("void drawTiePointCloudOverlay(QPainter &painter) const;")));
-    EXPECT_TRUE(sceneSource.contains(
-        QStringLiteral("constexpr std::size_t maximumOverlayPointCount = 150'000;")));
-    EXPECT_TRUE(sceneSource.contains(
-        QStringLiteral("drawTiePointCloudOverlay(painter);")));
+    EXPECT_TRUE(sceneHeader.contains(QStringLiteral("drawTiePointCloudOverlay")));
+    EXPECT_FALSE(sceneSource.contains(QStringLiteral("_tiePointPipeline")));
     EXPECT_TRUE(sceneSource.contains(
         QStringLiteral("TiePointColorMode::Elevation")));
     EXPECT_TRUE(sceneSource.contains(
         QStringLiteral("TiePointColorMode::ImageCount")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral("pointIsBehindProjectedQuad")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral("CameraImagePlaneAxes")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral("drawTiePointCloudOverlay(painter);")));
 
     const qsizetype drawStart = sceneSource.indexOf(
         QStringLiteral("void CameraSceneWidget::drawSceneGeometry"));
@@ -318,6 +317,30 @@ TEST(CameraSceneRenderContractTest, TiePointsUseThePortableOverlayPointRenderer)
     ASSERT_GT(renderStart, drawStart);
     const QString drawBlock = sceneSource.mid(drawStart, renderStart - drawStart);
     EXPECT_TRUE(drawBlock.contains(QStringLiteral("if (!_isTiePointCloud)")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral(
+        "drawRhiBuffer(cb, &_pointBuffer, &_colorPointPipeline, uniforms);")));
+
+    const qsizetype thumbnailPipelineStart = sceneSource.indexOf(
+        QStringLiteral("bool CameraSceneWidget::ensureCameraThumbnailPipeline"));
+    const qsizetype thumbnailDrawStart = sceneSource.indexOf(
+        QStringLiteral("void CameraSceneWidget::drawCameraThumbnails"),
+        thumbnailPipelineStart);
+    ASSERT_GE(thumbnailPipelineStart, 0);
+    ASSERT_GT(thumbnailDrawStart, thumbnailPipelineStart);
+    const QString thumbnailPipelineBlock = sceneSource.mid(
+        thumbnailPipelineStart,
+        thumbnailDrawStart - thumbnailPipelineStart);
+    EXPECT_TRUE(thumbnailPipelineBlock.contains(QStringLiteral("setDepthTest(true)")));
+    EXPECT_TRUE(thumbnailPipelineBlock.contains(QStringLiteral("setDepthWrite(true)")));
+    EXPECT_TRUE(thumbnailPipelineBlock.contains(QStringLiteral("Format_RGBX8888")));
+
+    const QString renderBlock = sceneSource.mid(renderStart);
+    const qsizetype geometryCall = renderBlock.indexOf(
+        QStringLiteral("drawSceneGeometry(cb, uniforms);"));
+    const qsizetype thumbnailsCall = renderBlock.indexOf(
+        QStringLiteral("drawCameraThumbnails(cb, mvp);"));
+    ASSERT_GE(geometryCall, 0);
+    ASSERT_GT(thumbnailsCall, geometryCall);
 }
 
 TEST(CameraSceneRenderContractTest, TiePointLoadFitsViewToLoadedGeometry)

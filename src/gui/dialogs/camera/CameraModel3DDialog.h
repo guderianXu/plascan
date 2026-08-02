@@ -417,7 +417,10 @@ private:
     CameraSceneOverlayWidget *_overlayWidget = nullptr;
 
     bool ensureRhiBuffer(RhiBufferSet *buffer, QRhiResourceUpdateBatch *updates);
-    bool ensurePipeline(RhiPipelineSet *pipeline, int topology, int strideBytes, bool hasNormals);
+    bool ensurePipeline(RhiPipelineSet *pipeline,
+                        int topology,
+                        int strideBytes,
+                        bool hasNormals);
     bool ensureTexturedMeshPipeline(QRhiResourceUpdateBatch *updates);
     bool ensureImagePipeline(QRhiResourceUpdateBatch *updates);
     bool ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *updates);

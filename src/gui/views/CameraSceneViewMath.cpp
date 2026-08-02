@@ -20,6 +20,44 @@ QVector3D normalizedOrZero(const QVector3D &value)
         : QVector3D();
 }
 
+bool interpolatedTriangleDepth(const QVector3D &point,
+                               const QVector3D &a,
+                               const QVector3D &b,
+                               const QVector3D &c,
+                               float *depth)
+{
+    const float denominator =
+        (b.y() - c.y()) * (a.x() - c.x())
+        + (c.x() - b.x()) * (a.y() - c.y());
+    if (std::abs(denominator) <= ScoreEpsilon)
+    {
+        return false;
+    }
+
+    const float weightA =
+        ((b.y() - c.y()) * (point.x() - c.x())
+         + (c.x() - b.x()) * (point.y() - c.y()))
+        / denominator;
+    const float weightB =
+        ((c.y() - a.y()) * (point.x() - c.x())
+         + (a.x() - c.x()) * (point.y() - c.y()))
+        / denominator;
+    const float weightC = 1.0f - weightA - weightB;
+    constexpr float edgeTolerance = 1.0e-5f;
+    if (weightA < -edgeTolerance
+        || weightB < -edgeTolerance
+        || weightC < -edgeTolerance)
+    {
+        return false;
+    }
+
+    if (depth)
+    {
+        *depth = weightA * a.z() + weightB * b.z() + weightC * c.z();
+    }
+    return true;
+}
+
 } // namespace
 
 QVector<int> farToNearCameraIndices(const QVector<QVector3D> &centers,
@@ -41,34 +79,52 @@ QVector<int> farToNearCameraIndices(const QVector<QVector3D> &centers,
     return indices;
 }
 
-float cameraPlaneHalfExtentForViewDepth(
+float cameraPlaneScreenHalfExtentPixels(float zoomScale,
+                                        float normalHalfExtentPixels,
+                                        float minimumHalfExtentPixels,
+                                        float maximumHalfExtentPixels)
+{
+    if (!std::isfinite(zoomScale)
+        || !std::isfinite(normalHalfExtentPixels)
+        || !std::isfinite(minimumHalfExtentPixels)
+        || !std::isfinite(maximumHalfExtentPixels)
+        || zoomScale <= 0.0f
+        || normalHalfExtentPixels <= 0.0f
+        || minimumHalfExtentPixels <= 0.0f
+        || maximumHalfExtentPixels < minimumHalfExtentPixels)
+    {
+        return 0.0f;
+    }
+
+    return std::clamp(normalHalfExtentPixels / zoomScale,
+                      minimumHalfExtentPixels,
+                      maximumHalfExtentPixels);
+}
+
+float cameraPlaneHalfExtentForScreenSize(
     const QVector3D &center,
-    const QVector3D &referenceCenter,
     const QMatrix4x4 &worldToView,
     int viewportHeight,
+    float zoomScale,
     float verticalFieldOfViewDegrees,
-    float targetHalfExtentPixels,
-    float depthEmphasisExponent)
+    float normalHalfExtentPixels,
+    float minimumHalfExtentPixels,
+    float maximumHalfExtentPixels)
 {
     if (viewportHeight <= 0
         || !std::isfinite(verticalFieldOfViewDegrees)
-        || !std::isfinite(targetHalfExtentPixels)
-        || !std::isfinite(depthEmphasisExponent)
         || verticalFieldOfViewDegrees <= 0.0f
         || verticalFieldOfViewDegrees >= 179.0f
-        || targetHalfExtentPixels <= 0.0f
-        || depthEmphasisExponent < 0.0f)
+        || cameraPlaneScreenHalfExtentPixels(zoomScale,
+                                             normalHalfExtentPixels,
+                                             minimumHalfExtentPixels,
+                                             maximumHalfExtentPixels) <= 0.0f)
     {
         return 0.0f;
     }
 
     const float depth = -(worldToView * QVector4D(center, 1.0f)).z();
-    const float referenceDepth =
-        -(worldToView * QVector4D(referenceCenter, 1.0f)).z();
-    if (!std::isfinite(depth)
-        || !std::isfinite(referenceDepth)
-        || depth <= ScoreEpsilon
-        || referenceDepth <= ScoreEpsilon)
+    if (!std::isfinite(depth) || depth <= ScoreEpsilon)
     {
         return 0.0f;
     }
@@ -78,18 +134,60 @@ float cameraPlaneHalfExtentForViewDepth(
         verticalFieldOfViewDegrees * pi / 360.0f;
     const float worldHeightAtDepth =
         2.0f * depth * std::tan(halfFovRadians);
-    const float depthRatio = std::clamp(depth / referenceDepth, 0.5f, 2.0f);
-    // 深度强调作用于屏幕尺寸，而不是世界尺寸。限制强调范围可以保留
-    // Metashape 风格的远大近小，同时防止连接点聚焦视图中的远端相机
-    // 放大到遮住点云，或近端相机缩成不可辨认的小点。
-    const float screenScale = std::clamp(
-        std::pow(depthRatio, depthEmphasisExponent),
-        0.55f,
-        1.65f);
+    const float targetHalfExtentPixels = cameraPlaneScreenHalfExtentPixels(
+        zoomScale,
+        normalHalfExtentPixels,
+        minimumHalfExtentPixels,
+        maximumHalfExtentPixels);
     return worldHeightAtDepth
         * targetHalfExtentPixels
-        * screenScale
         / static_cast<float>(viewportHeight);
+}
+
+QLineF cameraPlaneLeaderLine(const QPointF &center,
+                             const QPointF &directionProbe,
+                             qreal lengthPixels)
+{
+    if (!std::isfinite(center.x())
+        || !std::isfinite(center.y())
+        || !std::isfinite(directionProbe.x())
+        || !std::isfinite(directionProbe.y())
+        || !std::isfinite(lengthPixels)
+        || lengthPixels <= 0.0)
+    {
+        return {};
+    }
+
+    const QPointF direction = directionProbe - center;
+    const qreal directionLength = QLineF(QPointF(), direction).length();
+    if (directionLength < 1.0e-6)
+    {
+        return {};
+    }
+
+    return QLineF(center, center + direction * (lengthPixels / directionLength));
+}
+
+bool pointIsBehindProjectedQuad(const QVector3D &pointNdc,
+                                const QVector<QVector3D> &quadNdc,
+                                float depthEpsilon)
+{
+    if (quadNdc.size() != 4
+        || !std::isfinite(pointNdc.x())
+        || !std::isfinite(pointNdc.y())
+        || !std::isfinite(pointNdc.z())
+        || !std::isfinite(depthEpsilon)
+        || depthEpsilon < 0.0f)
+    {
+        return false;
+    }
+
+    float planeDepth = 0.0f;
+    const bool insideFirst = interpolatedTriangleDepth(
+        pointNdc, quadNdc.at(0), quadNdc.at(1), quadNdc.at(2), &planeDepth);
+    const bool insideSecond = insideFirst || interpolatedTriangleDepth(
+        pointNdc, quadNdc.at(0), quadNdc.at(2), quadNdc.at(3), &planeDepth);
+    return insideSecond && pointNdc.z() >= planeDepth - depthEpsilon;
 }
 
 int selectCameraForView(const QVector<CameraViewCandidate> &candidates,
