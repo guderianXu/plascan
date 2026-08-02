@@ -136,6 +136,8 @@ TEST(CameraSceneRenderContractTest, CameraCardsUseScreenSizeAndExternalBlackDire
         readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
     const QString source =
         readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString mathSource =
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneViewMath.cpp"));
 
     EXPECT_TRUE(header.contains(QStringLiteral("QLineF cameraDirectionLeaderLine")));
     EXPECT_FALSE(header.contains(QStringLiteral("drawCameraDirectionArrow")));
@@ -143,6 +145,8 @@ TEST(CameraSceneRenderContractTest, CameraCardsUseScreenSizeAndExternalBlackDire
     EXPECT_FALSE(source.contains(QStringLiteral("cameraPlaneHalfExtentForViewDepth(")));
     EXPECT_FALSE(source.contains(QStringLiteral("qMax(0.1f, _zoomScale)")));
     EXPECT_TRUE(source.contains(QStringLiteral("std::pow(1.10, wheel_steps)")));
+    EXPECT_TRUE(mathSource.contains(
+        QStringLiteral("CameraCardZoomResponseExponent = 0.25")));
 
     const qsizetype extentStart = source.indexOf(
         QStringLiteral("float CameraSceneWidget::cameraImagePlaneHalfExtent"));

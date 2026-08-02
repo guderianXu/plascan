@@ -53,7 +53,8 @@ QVector<int> farToNearCameraIndices(const QVector<QVector3D> &centers,
                                     const QMatrix4x4 &worldToView);
 
 // 相机卡片的目标屏幕半尺寸只由全局缩放倍率决定。
-// 缩远场景时持续增大，缩近时持续减小，不设置视觉范围夹紧。
+// 缩远场景时持续增大，缩近时持续减小，但使用缓增长曲线避免
+// 相机卡片比场景本身更快占满视口；不设置视觉范围夹紧。
 double cameraPlaneScreenHalfExtentPixels(
     double zoomScale,
     double normalHalfExtentPixels = 34.0);

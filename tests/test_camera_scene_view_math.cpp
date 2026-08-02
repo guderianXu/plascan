@@ -84,10 +84,10 @@ TEST(CameraSceneViewMathTest, MakesCameraCardsLargerAsSceneZoomsOut)
                 34.0f,
                 1e-4f);
     EXPECT_NEAR(projectedHalfExtentPixels(zoomed_out_extent, camera_depth),
-                68.0f,
+                34.0f * std::pow(2.0f, 0.25f),
                 1e-4f);
     EXPECT_NEAR(projectedHalfExtentPixels(zoomed_in_extent, camera_depth),
-                17.0f,
+                34.0f / std::pow(2.0f, 0.25f),
                 1e-4f);
     EXPECT_GT(zoomed_out_extent, normal_extent);
     EXPECT_LT(zoomed_in_extent, normal_extent);
@@ -121,13 +121,17 @@ TEST(CameraSceneViewMathTest, DoesNotClampZoomDrivenCameraScreenSize)
         100.0);
 
     EXPECT_NEAR(projectedHalfExtentPixels(deeply_zoomed_out_extent, 8.0f),
-                3400.0f,
+                34.0f * std::sqrt(10.0f),
                 1e-3f);
     EXPECT_NEAR(projectedHalfExtentPixels(deeply_zoomed_in_extent, 8.0f),
-                0.34f,
+                34.0f / std::sqrt(10.0f),
                 1e-5f);
-    EXPECT_NEAR(cameraPlaneScreenHalfExtentPixels(0.01), 3400.0, 1e-10);
-    EXPECT_NEAR(cameraPlaneScreenHalfExtentPixels(100.0), 0.34, 1e-12);
+    EXPECT_NEAR(cameraPlaneScreenHalfExtentPixels(0.01),
+                34.0 * std::sqrt(10.0),
+                1e-10);
+    EXPECT_NEAR(cameraPlaneScreenHalfExtentPixels(100.0),
+                34.0 / std::sqrt(10.0),
+                1e-12);
 }
 
 TEST(CameraSceneViewMathTest, RejectsInvalidCameraPlaneScreenSizeInputs)

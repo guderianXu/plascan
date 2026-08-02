@@ -12,6 +12,7 @@ namespace
 {
 
 constexpr float ScoreEpsilon = 1e-6f;
+constexpr double CameraCardZoomResponseExponent = 0.25;
 
 QVector3D normalizedOrZero(const QVector3D &value)
 {
@@ -90,7 +91,10 @@ double cameraPlaneScreenHalfExtentPixels(double zoomScale,
         return 0.0;
     }
 
-    const double half_extent_pixels = normalHalfExtentPixels / zoomScale;
+    const double zoom_response = std::pow(
+        zoomScale,
+        -CameraCardZoomResponseExponent);
+    const double half_extent_pixels = normalHalfExtentPixels * zoom_response;
     return std::isfinite(half_extent_pixels) ? half_extent_pixels : 0.0;
 }
 
