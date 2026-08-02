@@ -5,8 +5,8 @@
 #include "MatchPhotosRuntime.h"
 #include "FeaturePreparationQueue.h"
 #include "io/PathIO.h"
-#include "sift/SiftFeatureExtractor.h"
-#include "sift_lightglue/SiftLightGlueAlgorithm.h"
+#include "ImageMatchingRegistry.h"
+#include "loma_r/LoMaRAlgorithm.h"
 
 #include <QElapsedTimer>
 
@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <exception>
 #include <memory>
+#include <unordered_map>
 #include <utility>
 
 namespace xjw::matchphotos
@@ -114,19 +115,24 @@ MatchPhotosStageReport FeatureStage::run(
         return makeFeatureReport(MatchPhotosStageStatus::Failed,
                                  QStringLiteral("内部错误：没有创建任务级特征缓存"));
     }
-    if (algorithmPlan.algorithmId.compare(
-            QString::fromLatin1(image_matching::kSiftLightGlueAlgorithmId),
-            Qt::CaseInsensitive) != 0)
-    {
-        return makeFeatureReport(MatchPhotosStageStatus::Failed,
-                                 QStringLiteral("当前仅注册 CUDA SIFT + TensorRT LightGlue"));
-    }
-
     const QStringList images = context.pairInput.images;
     if (images.isEmpty())
     {
         return makeFeatureReport(MatchPhotosStageStatus::Failed,
                                  QStringLiteral("没有可用于提取特征的影像"));
+    }
+
+    ResolvedLoMaRTensorRtPackage loma_package;
+    if (algorithmPlan.algorithmId == QLatin1String(image_matching::kLoMaRAlgorithmId))
+    {
+        loma_package = resolveLoMaRTensorRtPackage(options);
+        if (!loma_package.isValid())
+        {
+            return makeFeatureReport(
+                MatchPhotosStageStatus::Failed,
+                QStringLiteral("LoMa-R TensorRT 模型包不可用：%1")
+                    .arg(loma_package.errorMessage));
+        }
     }
 
     const bool applyMask = shouldApplyMasksToKeypoints(options);
@@ -145,7 +151,8 @@ MatchPhotosStageReport FeatureStage::run(
     reportMatchPhotosProgress(
         context,
         QStringLiteral("feature"),
-        QStringLiteral("CUDA SIFT：准备处理 %1 张影像%2")
+        QStringLiteral("%1：准备处理 %2 张影像%3")
+            .arg(algorithmPlan.displayName)
             .arg(totalImages)
             .arg(applyMask ? QStringLiteral("，蒙版约束关键点") : QString()),
         0,
@@ -165,8 +172,10 @@ MatchPhotosStageReport FeatureStage::run(
             totalTimer.start();
 
             phaseTimer.start();
-            const cv::Mat original =
-                common::io::readImage(request.imagePath, cv::IMREAD_GRAYSCALE);
+            const int readMode = algorithmPlan.requiresColorInput
+                ? cv::IMREAD_COLOR
+                : cv::IMREAD_GRAYSCALE;
+            const cv::Mat original = common::io::readImage(request.imagePath, readMode);
             prepared.imageReadMs = phaseTimer.elapsed();
             if (original.empty())
             {
@@ -199,13 +208,15 @@ MatchPhotosStageReport FeatureStage::run(
         });
 
     int extractedCount = 0;
-    bool usedCudaForAll = true;
+    // 相同关键点预算的影像共享算法实例和 TensorRT execution context，避免逐图反序列化引擎。
+    std::unordered_map<int, std::unique_ptr<image_matching::IImageMatchingAlgorithm>> algorithms;
     for (int index = 0; index < totalImages; ++index)
     {
         if (shouldCancelMatchPhotos(context))
         {
             return makeFeatureReport(MatchPhotosStageStatus::Failed,
-                                     QStringLiteral("用户取消 SIFT 特征提取"),
+                                     QStringLiteral("用户取消 %1 特征提取")
+                                         .arg(algorithmPlan.displayName),
                                      extractedCount);
         }
 
@@ -228,13 +239,28 @@ MatchPhotosStageReport FeatureStage::run(
         runtime.maxKeypoints = prepared.effectiveKeypointLimit;
         runtime.removeBorders = 16;
         runtime.siftDetectionThreshold = siftDetectionThreshold(options);
-        // 产品链路明确要求 CUDA SIFT。CUDA 不可用时必须报错，不能静默切换到
-        // OpenCV CPU SIFT 后仍把结果标记为同一算法版本。
+        // 注册算法均要求 CUDA。不能静默切换到另一实现后仍沿用相同算法版本。
         runtime.allowCpuSiftFallback = false;
+        if (algorithmPlan.algorithmId == QLatin1String(image_matching::kLoMaRAlgorithmId))
+        {
+            runtime.tensorRtFeatureEnginePath = loma_package.featureEnginePath;
+            runtime.tensorRtMatcherEnginePath = loma_package.matcherEnginePath;
+            runtime.modelInputWidth = loma_package.inputWidth;
+            runtime.modelInputHeight = loma_package.inputHeight;
+            runtime.maxMatcherKeypoints = loma_package.keypointCount;
+            runtime.descriptorDimension = loma_package.descriptorDimension;
+        }
 
         image_matching::ImageFeatureInput input;
         input.imagePath = prepared.imagePath;
-        input.grayImage = prepared.inputImage;
+        if (algorithmPlan.requiresColorInput)
+        {
+            input.colorImage = prepared.inputImage;
+        }
+        else
+        {
+            input.grayImage = prepared.inputImage;
+        }
         input.validMask = prepared.mask;
         input.originalWidth = prepared.originalWidth;
         input.originalHeight = prepared.originalHeight;
@@ -244,38 +270,44 @@ MatchPhotosStageReport FeatureStage::run(
 
         QElapsedTimer extractTimer;
         extractTimer.start();
-        bool usedCuda = false;
         std::shared_ptr<image_matching::FeatureSet> features;
         try
         {
+            auto algorithm_it = algorithms.find(prepared.effectiveKeypointLimit);
+            if (algorithm_it == algorithms.end())
+            {
+                QString create_error;
+                auto algorithm = image_matching::ImageMatchingRegistry::create(
+                    algorithmPlan.algorithmId, runtime, &create_error);
+                if (!algorithm)
+                {
+                    throw std::runtime_error(create_error.toStdString());
+                }
+                algorithm_it = algorithms.emplace(prepared.effectiveKeypointLimit,
+                                                  std::move(algorithm)).first;
+            }
             features = std::make_shared<image_matching::FeatureSet>(
-                image_matching::SiftFeatureExtractor::extract(input, runtime, &usedCuda));
+                algorithm_it->second->extract(input));
         }
         catch (const std::exception &error)
         {
             return makeFeatureReport(
                 MatchPhotosStageStatus::Failed,
-                QStringLiteral("SIFT 特征提取失败：%1；影像：%2")
+                QStringLiteral("%1 特征提取失败：%2；影像：%3")
+                    .arg(algorithmPlan.displayName)
                     .arg(QString::fromUtf8(error.what()), prepared.imagePath),
                 extractedCount);
         }
         if (!features->isConsistent() || features->empty())
         {
             return makeFeatureReport(MatchPhotosStageStatus::Failed,
-                                     QStringLiteral("影像没有生成有效 SIFT 特征：%1")
-                                         .arg(prepared.imagePath),
-                                     extractedCount);
-        }
-        if (!usedCuda)
-        {
-            return makeFeatureReport(MatchPhotosStageStatus::Failed,
-                                     QStringLiteral("CUDA SIFT 未在 GPU 上执行：%1")
-                                         .arg(prepared.imagePath),
+                                     QStringLiteral("影像没有生成有效 %1 特征：%2")
+                                         .arg(algorithmPlan.displayName,
+                                              prepared.imagePath),
                                      extractedCount);
         }
 
         context.featureCache->insert(prepared.imagePath, features);
-        usedCudaForAll = usedCudaForAll && usedCuda;
         ++extractedCount;
 
         if (featureRecords)
@@ -286,7 +318,7 @@ MatchPhotosStageReport FeatureStage::run(
                 prepared.effectiveKeypointLimit;
             settings[QStringLiteral("image_width")] = prepared.originalWidth;
             settings[QStringLiteral("image_height")] = prepared.originalHeight;
-            settings[QStringLiteral("feature_cuda_enabled")] = usedCuda;
+            settings[QStringLiteral("feature_cuda_enabled")] = algorithmPlan.requiresCuda;
             settings[QStringLiteral("feature_prepare_ms")] =
                 static_cast<double>(prepared.preparationMs);
             settings[QStringLiteral("feature_extract_ms")] =
@@ -300,7 +332,8 @@ MatchPhotosStageReport FeatureStage::run(
         reportMatchPhotosProgress(
             context,
             QStringLiteral("feature"),
-            QStringLiteral("SIFT 特征提取：%1/%2，当前 %3 点，内存缓存约 %4 MiB")
+            QStringLiteral("%1 特征提取：%2/%3，当前 %4 点，内存缓存约 %5 MiB")
+                .arg(algorithmPlan.displayName)
                 .arg(extractedCount)
                 .arg(totalImages)
                 .arg(features->size())
@@ -315,10 +348,11 @@ MatchPhotosStageReport FeatureStage::run(
 
     return makeFeatureReport(
         MatchPhotosStageStatus::Completed,
-        QStringLiteral("SIFT 特征提取完成：%1 张，全部保存在任务内存中，%2")
+        QStringLiteral("%1 特征提取完成：%2 张，全部保存在任务内存中，%3")
+            .arg(algorithmPlan.displayName)
             .arg(extractedCount)
-            .arg(usedCudaForAll ? QStringLiteral("CUDA")
-                                : QStringLiteral("含 CPU 回退")),
+            .arg(algorithmPlan.requiresCuda ? QStringLiteral("CUDA")
+                                            : QStringLiteral("CPU")),
         extractedCount);
 }
 

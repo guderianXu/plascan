@@ -12,7 +12,6 @@ conda so the same workflow can be used on Windows and Linux.
 from __future__ import annotations
 
 import argparse
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -74,21 +73,6 @@ def dependency_plan(
     )
 
 
-def detect_torch_dir(python_exe: Path, *, dry_run: bool = False) -> str:
-    if dry_run or not python_exe.exists():
-        return ""
-
-    code = (
-        "from pathlib import Path; import torch; "
-        "p = Path(torch.__file__).resolve().parent / 'share' / 'cmake' / 'Torch'; "
-        "print(p if (p / 'TorchConfig.cmake').exists() else '')"
-    )
-    try:
-        return subprocess.check_output([str(python_exe), "-c", code], text=True, stderr=subprocess.DEVNULL).strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return ""
-
-
 def environment_values(
     *,
     repo_root: Path,
@@ -96,7 +80,6 @@ def environment_values(
     python_exe: Path,
     device: str,
     cuda_wheel: str,
-    torch_dir: str,
     cuda_root: str,
 ) -> dict[str, str]:
     values = {
@@ -109,8 +92,6 @@ def environment_values(
         "PLASCAN_PYTHON_CUDA_WHEEL": cuda_wheel,
         "PYTHONUTF8": "1",
         "PYTHONIOENCODING": "utf-8",
-        "PLASCAN_TORCH_DIR": torch_dir,
-        "Torch_DIR": torch_dir,
         "CUDAToolkit_ROOT": cuda_root,
         "CUDA_TOOLKIT_ROOT_DIR": cuda_root,
     }
@@ -125,7 +106,6 @@ def write_runtime_env_files(
     python_exe: Path,
     device: str,
     cuda_wheel: str,
-    torch_dir: str,
     cuda_root: str,
 ) -> Path:
     return write_env_files(
@@ -136,7 +116,6 @@ def write_runtime_env_files(
             python_exe=python_exe,
             device=device,
             cuda_wheel=cuda_wheel,
-            torch_dir=torch_dir,
             cuda_root=cuda_root,
         ),
     )
@@ -167,7 +146,6 @@ def create_runtime(args: argparse.Namespace) -> Path:
         if packages:
             run([str(python_exe), "-m", "pip", "install", *packages], dry_run=args.dry_run)
 
-    torch_dir = args.torch_dir or detect_torch_dir(python_exe, dry_run=args.dry_run)
     return write_runtime_env_files(
         output_dir=Path(args.output_dir).expanduser().resolve(),
         repo_root=source_dir,
@@ -175,7 +153,6 @@ def create_runtime(args: argparse.Namespace) -> Path:
         python_exe=python_exe,
         device=args.device,
         cuda_wheel=args.cuda_wheel,
-        torch_dir=torch_dir,
         cuda_root=args.cuda_root or "",
     )
 
@@ -188,7 +165,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
     parser.add_argument("--cuda-wheel", default="cu130", help="PyTorch CUDA wheel tag, for example cu128 or cu130.")
     parser.add_argument("--torch-index-url", help="Override the PyTorch pip index URL.")
-    parser.add_argument("--torch-dir", help="Existing TorchConfig.cmake directory to write into env files.")
     parser.add_argument("--cuda-root", help="Existing CUDA Toolkit root to write into env files.")
     parser.add_argument("--extra-package", action="append", default=[], help="Additional pip package to install.")
     parser.add_argument("--skip-create", action="store_true", help="Use an existing runtime instead of creating it.")

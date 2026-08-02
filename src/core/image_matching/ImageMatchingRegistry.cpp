@@ -11,6 +11,7 @@ namespace xjw::image_matching
 {
 
 void registerSiftLightGlueAlgorithm();
+void registerLoMaRAlgorithm();
 
 namespace
 {
@@ -44,6 +45,7 @@ void ensureBuiltInAlgorithms()
     std::call_once(once, []()
     {
         registerSiftLightGlueAlgorithm();
+        registerLoMaRAlgorithm();
     });
 }
 

@@ -10,7 +10,6 @@ param(
     [string] $CMakeExe = "C:\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
     [string] $CudaRoot = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1",
     [string] $CudnnRoot = "",
-    [string] $TorchRoot = "",
     [string] $Target = "",
     [string] $CTestRegex = "",
     [int] $Jobs = 0,
@@ -322,7 +321,6 @@ function Set-IsolatedBuildEnvironment
     param(
         [Parameter(Mandatory = $true)][string] $BuildPath,
         [Parameter(Mandatory = $true)][string] $VcpkgPath,
-        [Parameter(Mandatory = $true)][string] $TorchPath,
         [Parameter(Mandatory = $true)][string] $CudaPath,
         [Parameter(Mandatory = $true)][string] $CMakePath,
         [Parameter(Mandatory = $true)][string] $ProjectRoot,
@@ -331,11 +329,8 @@ function Set-IsolatedBuildEnvironment
 
     $vcpkgInstalled = Join-Path $BuildPath "vcpkg_installed"
     $tripletRoot = Join-Path $vcpkgInstalled "x64-windows"
-    $torchConfig = Join-Path $TorchPath "share\cmake\Torch"
     $vcpkgInstalledCMake = Convert-ToCMakePath $vcpkgInstalled
     $tripletRootCMake = Convert-ToCMakePath $tripletRoot
-    $torchPathCMake = Convert-ToCMakePath $TorchPath
-    $torchConfigCMake = Convert-ToCMakePath $torchConfig
     $cudaPathCMake = Convert-ToCMakePath $CudaPath
     $qtPluginsRoot = Join-Path $tripletRoot "Qt6\plugins"
     $qtPlatformsRoot = Join-Path $qtPluginsRoot "platforms"
@@ -348,20 +343,17 @@ function Set-IsolatedBuildEnvironment
     $env:VCPKG_ROOT = $VcpkgPath
     $env:VCPKG_DEFAULT_TRIPLET = "x64-windows"
     $env:VCPKG_INSTALLED_DIR = $vcpkgInstalledCMake
-    $env:PLASCAN_TORCH_DIR = $torchConfigCMake
-    $env:Torch_DIR = $torchConfigCMake
     $env:CUDAToolkit_ROOT = $cudaPathCMake
     $env:CUDA_PATH = $cudaPathCMake
     $env:CUDA_HOME = $cudaPathCMake
     $env:CUDA_BIN_PATH = "$cudaPathCMake/bin"
-    $env:CMAKE_PREFIX_PATH = ($tripletRootCMake, $torchPathCMake) -join ';'
+    $env:CMAKE_PREFIX_PATH = $tripletRootCMake
     $env:QT_PLUGIN_PATH = $qtPluginsRootCMake
     $env:QT_QPA_PLATFORM_PLUGIN_PATH = $qtPlatformsRootCMake
     $env:QT_QPA_PLATFORM = "offscreen"
 
     $rejectRoots = @(
         (Join-Path $ProjectRoot "build\windows-vcpkg-release"),
-        (Join-Path $ProjectRoot "build\env\libtorch\libtorch"),
         "E:\code\sat_sim_cuda\build\vcpkg"
     )
 
@@ -396,8 +388,6 @@ function Set-IsolatedBuildEnvironment
     $prepend = @(
         (Join-Path $tripletRoot "bin"),
         (Join-Path $tripletRoot "tools\Qt6\bin"),
-        (Join-Path $TorchPath "lib"),
-        (Join-Path $TorchPath "bin"),
         (Join-Path $CudaPath "bin"),
         (Join-Path $CudaPath "bin\x64"),
         (Join-Path $CudaPath "nvvm\bin"),
@@ -711,96 +701,6 @@ function Sync-OpenCvRuntime
     }
 
     Write-Host ("Synced {0} OpenCV runtime DLLs into {1} runtime director{2}." -f `
-        $sources.Count, $runtimeDirs.Count, $(if ($runtimeDirs.Count -eq 1) { "y" } else { "ies" }))
-}
-
-function Sync-TorchRuntime
-{
-    param(
-        [Parameter(Mandatory = $true)][string] $BuildPath,
-        [Parameter(Mandatory = $true)][string] $TorchPath
-    )
-
-    if (-not (Test-Path -LiteralPath $BuildPath))
-    {
-        return
-    }
-
-    $torchDllRoots = @(
-        (Join-Path $TorchPath "bin"),
-        (Join-Path $TorchPath "lib")
-    ) | Where-Object { Test-Path -LiteralPath $_ }
-
-    $sources = @{}
-    foreach ($root in $torchDllRoots)
-    {
-        Get-ChildItem -LiteralPath $root -Force -File -Filter "*.dll" -ErrorAction SilentlyContinue |
-            ForEach-Object {
-                if (-not $sources.ContainsKey($_.Name))
-                {
-                    $sources[$_.Name] = $_.FullName
-                }
-            }
-    }
-
-    if ($sources.Count -eq 0)
-    {
-        return
-    }
-
-    function Copy-RuntimeDllIfNeeded
-    {
-        param(
-            [Parameter(Mandatory = $true)][string] $Source,
-            [Parameter(Mandatory = $true)][string] $Destination
-        )
-
-        $copy = $true
-        if (Test-Path -LiteralPath $Destination)
-        {
-            $src = Get-Item -LiteralPath $Source
-            $dst = Get-Item -LiteralPath $Destination
-            $copy = ($src.Length -ne $dst.Length) -or ($src.LastWriteTimeUtc -gt $dst.LastWriteTimeUtc)
-        }
-
-        if ($copy)
-        {
-            Copy-Item -LiteralPath $Source -Destination $Destination -Force
-        }
-    }
-
-    $runtimeDirs = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
-    $primaryBinDir = Join-Path $BuildPath "bin"
-    New-Item -ItemType Directory -Path $primaryBinDir -Force | Out-Null
-    [void] $runtimeDirs.Add((Resolve-FullPath $primaryBinDir))
-
-    $testBinDir = Join-Path $BuildPath "tests"
-    if (Test-Path -LiteralPath $testBinDir)
-    {
-        [void] $runtimeDirs.Add((Resolve-FullPath $testBinDir))
-    }
-
-    foreach ($marker in @("c10.dll", "torch.dll", "torch_cpu.dll", "torch_cuda.dll"))
-    {
-        Get-ChildItem -LiteralPath $BuildPath -Recurse -Force -File -Filter $marker -ErrorAction SilentlyContinue |
-            ForEach-Object {
-                $dir = Resolve-FullPath $_.DirectoryName
-                [void] $runtimeDirs.Add($dir)
-            }
-    }
-
-    $sourceEntries = $sources.GetEnumerator() | Sort-Object Name
-    foreach ($dir in $runtimeDirs)
-    {
-        New-Item -ItemType Directory -Path $dir -Force | Out-Null
-        foreach ($entry in $sourceEntries)
-        {
-            $dst = Join-Path $dir $entry.Name
-            Copy-RuntimeDllIfNeeded -Source $entry.Value -Destination $dst
-        }
-    }
-
-    Write-Host ("Synced {0} LibTorch runtime DLLs into {1} runtime director{2}." -f `
         $sources.Count, $runtimeDirs.Count, $(if ($runtimeDirs.Count -eq 1) { "y" } else { "ies" }))
 }
 
@@ -1248,11 +1148,6 @@ if ([string]::IsNullOrWhiteSpace($VcpkgDownloadsRoot))
     $VcpkgDownloadsRoot = Join-Path $vcpkgWorkDrive "vdl"
 }
 
-if ([string]::IsNullOrWhiteSpace($TorchRoot))
-{
-    $TorchRoot = Join-Path $SourceDir "build\env\libtorch-cu130\libtorch"
-}
-$TorchRoot = Resolve-FullPath $TorchRoot
 $VcpkgRoot = Resolve-FullPath $VcpkgRoot
 $VcpkgBuildtreesRoot = Resolve-FullPath $VcpkgBuildtreesRoot
 $VcpkgPackagesRoot = Resolve-FullPath $VcpkgPackagesRoot
@@ -1264,8 +1159,6 @@ $VsDevCmd = Resolve-FullPath $VsDevCmd
 $buildRoot = Join-Path $SourceDir "build"
 $vcpkgInstalled = Join-Path $BuildDir "vcpkg_installed"
 $vcpkgTripletRoot = Join-Path $vcpkgInstalled "x64-windows"
-$torchConfigDir = Join-Path $TorchRoot "share\cmake\Torch"
-$torchConfig = Join-Path $torchConfigDir "TorchConfig.cmake"
 $cudaNvcc = Join-Path $CudaRoot "bin\nvcc.exe"
 $vcpkgToolchain = Join-Path $VcpkgRoot "scripts\buildsystems\vcpkg.cmake"
 $sourceDirCMake = Convert-ToCMakePath $SourceDir
@@ -1276,7 +1169,6 @@ $vcpkgPackagesRootCMake = Convert-ToCMakePath $VcpkgPackagesRoot
 $vcpkgDownloadsRootCMake = Convert-ToCMakePath $VcpkgDownloadsRoot
 $vcpkgOverlayTripletsCMake = ""
 $vcpkgOverlayPortsCMake = ""
-$torchConfigDirCMake = Convert-ToCMakePath $torchConfigDir
 $cudaRootCMake = Convert-ToCMakePath $CudaRoot
 $cudaNvccCMake = Convert-ToCMakePath $cudaNvcc
 $vcpkgToolchainCMake = Convert-ToCMakePath $vcpkgToolchain
@@ -1292,8 +1184,6 @@ Assert-ExistingPath $VcpkgRoot "VcpkgRoot"
 Assert-ExistingPath $vcpkgToolchain "vcpkg toolchain"
 Assert-ExistingPath $CudaRoot "CudaRoot"
 Assert-ExistingPath $cudaNvcc "CUDA nvcc"
-Assert-ExistingPath $TorchRoot "TorchRoot"
-Assert-ExistingPath $torchConfig "TorchConfig.cmake"
 Assert-ExistingPath $CMakeExe "CMake"
 
 foreach ($vcpkgWorkRoot in @($VcpkgBuildtreesRoot, $VcpkgPackagesRoot, $VcpkgDownloadsRoot))
@@ -1354,7 +1244,6 @@ if (-not $SkipVsDevCmd)
 Set-IsolatedBuildEnvironment `
     -BuildPath $BuildDir `
     -VcpkgPath $VcpkgRoot `
-    -TorchPath $TorchRoot `
     -CudaPath $CudaRoot `
     -CMakePath $CMakeExe `
     -ProjectRoot $SourceDir `
@@ -1408,7 +1297,6 @@ Sync-MsvcRuntime -BuildPath $BuildDir -VcpkgPath $VcpkgRoot
 Sync-CudaRuntime -BuildPath $BuildDir -CudaPath $CudaRoot
 Sync-QtRuntime -BuildPath $BuildDir -TripletRoot $vcpkgTripletRoot
 Sync-OpenCvRuntime -BuildPath $BuildDir -TripletRoot $vcpkgTripletRoot
-Sync-TorchRuntime -BuildPath $BuildDir -TorchPath $TorchRoot
 if ($EnableOpenCvDnnCuda)
 {
     Sync-CudnnRuntime -BuildPath $BuildDir -CudnnPath $env:CUDNN_ROOT_DIR
@@ -1447,7 +1335,6 @@ if (-not [string]::IsNullOrWhiteSpace($msvcCudaHostCompiler))
 {
     Write-Host "  CUDA host: $msvcCudaHostCompiler"
 }
-Write-Host "  Torch:     $TorchRoot"
 Write-Host "  Prefix:    $env:CMAKE_PREFIX_PATH"
 Write-Host "  Ceres BA CUDA: $(if ($EnableCeresCudaBa) { 'enabled' } else { 'disabled' })"
 Write-Host "  OpenCV DNN CUDA: $(if ($EnableOpenCvDnnCuda) { 'enabled' } else { 'disabled' })"
@@ -1479,8 +1366,6 @@ if (-not $BuildOnly)
         "-DPLASCAN_ENABLE_VCPKG=ON",
         "-DPLASCAN_BUNDLE_RUNTIME=ON",
         "-DBUILD_TESTS=ON",
-        "-DPLASCAN_TORCH_DIR=$torchConfigDirCMake",
-        "-DTorch_DIR=$torchConfigDirCMake",
         "-DCUDAToolkit_ROOT=$cudaRootCMake",
         "-DCUDA_TOOLKIT_ROOT_DIR=$cudaRootCMake",
         "-DCMAKE_CUDA_COMPILER=$cudaNvccCMake",
@@ -1548,7 +1433,6 @@ if (-not $ConfigureOnly)
     Sync-VcpkgRuntime -BuildPath $BuildDir -TripletRoot $vcpkgTripletRoot
     Sync-MsvcRuntime -BuildPath $BuildDir -VcpkgPath $VcpkgRoot
     Sync-CudaRuntime -BuildPath $BuildDir -CudaPath $CudaRoot
-    Sync-TorchRuntime -BuildPath $BuildDir -TorchPath $TorchRoot
     Sync-QtRuntime -BuildPath $BuildDir -TripletRoot $vcpkgTripletRoot
     Sync-OpenCvRuntime -BuildPath $BuildDir -TripletRoot $vcpkgTripletRoot
     if ($EnableOpenCvDnnCuda)
@@ -1572,7 +1456,6 @@ if (-not $ConfigureOnly)
     Sync-VcpkgRuntime -BuildPath $BuildDir -TripletRoot $vcpkgTripletRoot
     Sync-MsvcRuntime -BuildPath $BuildDir -VcpkgPath $VcpkgRoot
     Sync-CudaRuntime -BuildPath $BuildDir -CudaPath $CudaRoot
-    Sync-TorchRuntime -BuildPath $BuildDir -TorchPath $TorchRoot
     Sync-QtRuntime -BuildPath $BuildDir -TripletRoot $vcpkgTripletRoot
     Sync-OpenCvRuntime -BuildPath $BuildDir -TripletRoot $vcpkgTripletRoot
     if ($EnableOpenCvDnnCuda)

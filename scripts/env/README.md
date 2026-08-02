@@ -35,7 +35,7 @@ Use `--dry-run` to print the clone/bootstrap/install commands without running th
 ## Python Runtime
 
 The recommended development runtime is the repository-local standard-library `venv` at `.venv`. Use this runtime for
-model export helpers such as LightGlue TorchScript export and for Python tests, so PlaScan development does not depend
+model export helpers such as LightGlue and LoMa-R TensorRT export and for Python tests, so PlaScan development does not depend
 on a user-managed conda environment or a per-build virtual environment.
 
 Windows CUDA development runtime:
@@ -87,22 +87,6 @@ python scripts/env/setup_python_env.py --manager conda --name plascan --device c
 python scripts/env/setup_python_env.py --manager conda --name plascan --device cuda --cuda-wheel cu128
 ```
 
-## LibTorch
-
-Register an existing LibTorch directory:
-
-```bash
-python scripts/env/setup_libtorch.py --libtorch-root /opt/libtorch --cuda-root /usr/local/cuda-12.8
-```
-
-Download and extract LibTorch into `build/env/libtorch`:
-
-```bash
-python scripts/env/setup_libtorch.py --device cuda --version 2.7.1 --cuda-wheel cu128
-```
-
-Use `--url` when the default PyTorch archive URL does not match the release you want.
-
 ## Configure
 
 Configure with the generated environment file:
@@ -117,7 +101,7 @@ Configure, build, test, and package:
 python scripts/env/configure_with_env.py --build-type release --build --test --package
 ```
 
-The configure script passes `Torch_DIR`, `PLASCAN_TORCH_DIR`, `CUDAToolkit_ROOT`, and
-`CUDA_TOOLKIT_ROOT_DIR` to CMake when those values exist in `plascan-env.json`. It also
+The configure script passes `CUDAToolkit_ROOT` and `CUDA_TOOLKIT_ROOT_DIR` to CMake when
+those values exist in `plascan-env.json`. It also
 reads `plascan-vcpkg.json` when present and exports `VCPKG_ROOT` for presets that use the
 vcpkg toolchain.

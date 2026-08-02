@@ -7,7 +7,7 @@
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
 # 系统依赖
-brew install cmake qt@6 opencv libtorch gdal libtiff libzip openmp
+brew install cmake qt@6 opencv gdal libtiff libzip openmp
 
 # PyTorch (MPS 加速)
 pip3 install torch torchvision
@@ -17,7 +17,7 @@ pip3 install torch torchvision
 
 ```bash
 mkdir build && cd build
-cmake .. -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6);$(brew --prefix opencv);$(brew --prefix libtorch)" \
+cmake .. -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6);$(brew --prefix opencv)" \
          -DBUILD_TESTS=ON
 cmake --build . -j$(sysctl -n hw.logicalcpu)
 ```

@@ -1,5 +1,4 @@
 #include "MaskGenerator.h"
-#include "Sam21MaskGenerator.h"
 #include "u2net/U2NetMaskGenerator.h"
 
 #include <gtest/gtest.h>
@@ -27,18 +26,6 @@ cv::Mat makeAsteroidLikeImage()
 std::filesystem::path modelPath(const char *name)
 {
     return std::filesystem::path(TEST_DATA_DIR).parent_path() / "resources" / "models" / name;
-}
-
-bool allModelsExist(const std::initializer_list<const char *> names)
-{
-    for (const char *name : names)
-    {
-        if (!std::filesystem::exists(modelPath(name)))
-        {
-            return false;
-        }
-    }
-    return true;
 }
 
 std::filesystem::path u2netModelPath()
@@ -296,116 +283,6 @@ TEST(MaskComposerTest, OperationsMatchMetashapeStyleMaskComposition)
     EXPECT_EQ(intersected.at<uchar>(1, 1), 255);
     EXPECT_EQ(differed.at<uchar>(0, 0), 0);
     EXPECT_EQ(differed.at<uchar>(1, 1), 0);
-}
-
-TEST(Sam21MaskGeneratorTest, ModelNamesSeparateEncoderDecoderAndCpuCuda)
-{
-    const auto cpuNames = xjw::mask::sam21TorchScriptModelNames(
-        xjw::mask::Sam21ModelVariant::Tiny,
-        false);
-    const auto cudaNames = xjw::mask::sam21TorchScriptModelNames(
-        xjw::mask::Sam21ModelVariant::Tiny,
-        true);
-
-    EXPECT_EQ(cpuNames.encoder, "sam21_hiera_tiny_encoder_cpu.pt");
-    EXPECT_EQ(cpuNames.decoder, "sam21_hiera_tiny_decoder_cpu.pt");
-    EXPECT_EQ(cudaNames.encoder, "sam21_hiera_tiny_encoder_cuda.pt");
-    EXPECT_EQ(cudaNames.decoder, "sam21_hiera_tiny_decoder_cuda.pt");
-}
-
-TEST(Sam21MaskGeneratorTest, FullImageBoxPromptDoesNotDependOnBlackBackground)
-{
-    const cv::Size imageSize(640, 480);
-    const xjw::mask::Sam21Prompt prompt = xjw::mask::Sam21Prompt::fullImageBox(imageSize);
-
-    ASSERT_TRUE(prompt.hasBox);
-    EXPECT_FLOAT_EQ(prompt.box.x, 0.0f);
-    EXPECT_FLOAT_EQ(prompt.box.y, 0.0f);
-    EXPECT_FLOAT_EQ(prompt.box.width, 640.0f);
-    EXPECT_FLOAT_EQ(prompt.box.height, 480.0f);
-    EXPECT_TRUE(prompt.points.empty());
-}
-
-TEST(Sam21MaskGeneratorTest, AutoBoxUsesForegroundBoundsForDarkBorderImages)
-{
-    const cv::Mat image = makeAsteroidLikeImage();
-    const xjw::mask::Sam21Prompt prompt = xjw::mask::Sam21Prompt::autoBox(image, 0.0f);
-
-    ASSERT_TRUE(prompt.hasBox);
-    EXPECT_GT(prompt.box.x, 0.0f);
-    EXPECT_GT(prompt.box.y, 0.0f);
-    EXPECT_LT(prompt.box.width, static_cast<float>(image.cols));
-    EXPECT_LT(prompt.box.height, static_cast<float>(image.rows));
-    EXPECT_LE(prompt.box.x, 28.0f);
-    EXPECT_LE(prompt.box.y, 23.0f);
-    EXPECT_GE(prompt.box.x + prompt.box.width, 73.0f);
-    EXPECT_GE(prompt.box.y + prompt.box.height, 57.0f);
-}
-
-TEST(Sam21MaskGeneratorTest, AutoBoxFallsBackToFullImageWhenBorderIsNotDark)
-{
-    cv::Mat image(80, 100, CV_8UC3, cv::Scalar(120, 130, 140));
-    cv::rectangle(image, cv::Rect(30, 20, 40, 30), cv::Scalar(200, 210, 220), -1);
-
-    const xjw::mask::Sam21Prompt prompt = xjw::mask::Sam21Prompt::autoBox(image);
-
-    ASSERT_TRUE(prompt.hasBox);
-    EXPECT_FLOAT_EQ(prompt.box.x, 0.0f);
-    EXPECT_FLOAT_EQ(prompt.box.y, 0.0f);
-    EXPECT_FLOAT_EQ(prompt.box.width, 100.0f);
-    EXPECT_FLOAT_EQ(prompt.box.height, 80.0f);
-}
-
-TEST(Sam21MaskGeneratorIntegrationTest, TorchScriptModelsRunOnCpuAndCudaWhenPresent)
-{
-    constexpr const char *cpuEncoder = "sam21_hiera_tiny_encoder_cpu.pt";
-    constexpr const char *cpuDecoder = "sam21_hiera_tiny_decoder_cpu.pt";
-    constexpr const char *cudaEncoder = "sam21_hiera_tiny_encoder_cuda.pt";
-    constexpr const char *cudaDecoder = "sam21_hiera_tiny_decoder_cuda.pt";
-
-    if (!allModelsExist({cpuEncoder, cpuDecoder, cudaEncoder, cudaDecoder}))
-    {
-        GTEST_SKIP() << "SAM2.1 TorchScript models are not available in resources/models.";
-    }
-
-    const cv::Mat image = makeAsteroidLikeImage();
-    const xjw::mask::Sam21Prompt prompt = xjw::mask::Sam21Prompt::autoBox(image);
-
-    xjw::mask::Sam21MaskGeneratorConfig cpuConfig;
-    cpuConfig.encoderModelPath = modelPath(cpuEncoder).string();
-    cpuConfig.decoderModelPath = modelPath(cpuDecoder).string();
-    cpuConfig.useCuda = false;
-    cpuConfig.allowDeviceFallback = false;
-    xjw::mask::Sam21MaskGenerator cpuGenerator(cpuConfig);
-    const xjw::mask::Sam21MaskResult cpuResult = cpuGenerator.generate(image, prompt);
-
-    ASSERT_FALSE(cpuResult.mask.empty());
-    EXPECT_FALSE(cpuResult.usedCuda);
-    EXPECT_EQ(cpuResult.mask.size(), image.size());
-    EXPECT_GT(cv::countNonZero(cpuResult.mask == 0), 0);
-
-    xjw::mask::Sam21MaskGeneratorConfig cudaConfig;
-    cudaConfig.encoderModelPath = modelPath(cudaEncoder).string();
-    cudaConfig.decoderModelPath = modelPath(cudaDecoder).string();
-    cudaConfig.cpuEncoderModelPath = modelPath(cpuEncoder).string();
-    cudaConfig.cpuDecoderModelPath = modelPath(cpuDecoder).string();
-    cudaConfig.useCuda = true;
-    cudaConfig.allowDeviceFallback = false;
-
-    try
-    {
-        xjw::mask::Sam21MaskGenerator cudaGenerator(cudaConfig);
-        const xjw::mask::Sam21MaskResult cudaResult = cudaGenerator.generate(image, prompt);
-
-        ASSERT_FALSE(cudaResult.mask.empty());
-        EXPECT_TRUE(cudaResult.usedCuda);
-        EXPECT_EQ(cudaResult.mask.size(), image.size());
-        EXPECT_GT(cv::countNonZero(cudaResult.mask == 0), 0);
-    }
-    catch (const std::exception &error)
-    {
-        GTEST_SKIP() << "SAM2.1 CUDA runtime is not available: " << error.what();
-    }
 }
 
 TEST(U2NetMaskGeneratorTest, ReportsOpenCvDnnDeviceCapabilities)

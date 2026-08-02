@@ -110,6 +110,7 @@ MatchPhotosAlgorithmPlan MatchPhotosAlgorithmSelector::select(const MatchPhotosO
     plan.requiresCuda = descriptor->requiresCuda;
     plan.extractsFeaturesInMemory =
         descriptor->inputModel == image_matching::AlgorithmInputModel::ReusableFeatures;
+    plan.requiresColorInput = descriptor->requiresColorInput;
     if (plan.requiresCuda && options.device == ComputeDevice::Cpu)
     {
         plan.validationError = QStringLiteral("%1 需要 CUDA，不能使用 CPU 设备")
@@ -124,8 +125,9 @@ MatchPhotosAlgorithmPlan MatchPhotosAlgorithmSelector::select(const MatchPhotosO
     plan.enableGuidedMatching = options.enableGuidedMatching;
     plan.maxImageDim = options.maxImageDim;
     plan.maxKeypoints = resolveMaxKeypoints(options);
-    plan.reason = QStringLiteral("CUDA SIFT 在任务内存中提取尺度/旋转鲁棒特征，"
-                                 "TensorRT LightGlue 完成匹配；只持久化最终 .pimatch 观测。");
+    plan.reason = QStringLiteral("%1 在任务内存中提取并匹配特征；只持久化最终 "
+                                 ".pimatch 观测，不写中间特征文件。")
+                      .arg(plan.displayName);
     return plan;
 }
 

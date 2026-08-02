@@ -11,7 +11,7 @@
 
 - C++20 编译器：MSVC 2022、GCC 11+ 或 Clang 15+。
 - CMake 3.25+ 和 Ninja。
-- Qt6、OpenCV 4、LibTorch、GDAL、libtiff、libzip、OpenMP、GTest。
+- Qt6、OpenCV 4、GDAL、libtiff、libzip、OpenMP、GTest 和 TensorRT（GPU 匹配）。
 - CUDA Toolkit 可选；启用后用于深度学习特征、匹配、MVS 和 dense match 加速。
 - Python 3.10+ 可选；用于模型导出、数据准备和脚本化验证。
 
@@ -37,13 +37,12 @@ ctest --output-on-failure
 
 ### vcpkg / CPack 跨平台构建
 
-推荐新环境优先使用 `vcpkg.json` 和 `CMakePresets.json`。vcpkg 负责 Qt6、OpenCV 4、GDAL、libtiff、libzip、GTest 等通用依赖；LibTorch 和 CUDA 通过外部安装路径提供，这样 CPU-only CI、Windows CUDA 工作站和 Linux 服务器可以共用同一套源码。
+推荐新环境优先使用 `vcpkg.json` 和 `CMakePresets.json`。vcpkg 负责 Qt6、OpenCV 4、GDAL、libtiff、libzip、GTest 等通用依赖；CUDA 与 TensorRT 通过外部安装路径提供。
 
 Linux:
 
 ```bash
 export VCPKG_ROOT=/path/to/vcpkg
-export Torch_DIR=/path/to/libtorch/share/cmake/Torch
 cmake --preset linux-vcpkg-release
 cmake --build --preset linux-vcpkg-release
 ctest --preset linux-vcpkg-release
@@ -54,7 +53,6 @@ Windows PowerShell:
 
 ```powershell
 $env:VCPKG_ROOT = "C:\src\vcpkg"
-$env:Torch_DIR = "C:\path\to\libtorch\share\cmake\Torch"
 cmake --preset windows-vcpkg-release
 cmake --build --preset windows-vcpkg-release
 ctest --preset windows-vcpkg-release
@@ -73,13 +71,13 @@ cpack `
   -D "CPACK_PACKAGE_DIRECTORY=$PWD/dist/packages/windows-vcpkg-release"
 ```
 
-Windows 构建使用原生 MSVC/Ninja/PowerShell，不需要 WSL。打包后的 GUI 需要 Qt platform plugins 和 vcpkg/LibTorch 运行时 DLL；`PLASCAN_BUNDLE_RUNTIME=ON` 时 CMake install/CPack 会按主程序和 Qt 插件的传递依赖闭包收集 DLL，并补充 Vulkan、cuDNN 和 NVRTC 等动态加载运行时，不再复制 Release 目录中的无关开发库。Windows 包同时内置 `U2Net_v1.onnx`。
+Windows 构建使用原生 MSVC/Ninja/PowerShell，不需要 WSL。打包后的 GUI 需要 Qt platform plugins、vcpkg 和 TensorRT/CUDA 运行时 DLL；`PLASCAN_BUNDLE_RUNTIME=ON` 时 CMake install/CPack 会按主程序和 Qt 插件的传递依赖闭包收集 DLL，并补充 Vulkan、cuDNN 和 NVRTC 等动态加载运行时。Windows 包同时内置 `U2Net_v1.onnx`。
 
 当前 manifest 使用 vcpkg 中可用的 OpenCV 4.x port。后续 vcpkg 正式提供 OpenCV 5 后，优先通过更新 `builtin-baseline`、OpenCV feature 列表和现有 `OpenCvCompat` 兼容测试切换。
 
 Windows CUDA 开发机推荐固定使用 `scripts/build_win/build_windows_cuda.ps1`。脚本会把主构建目录收敛到
 `build/windows-vcpkg-cuda-release`，并使用该目录自己的 `vcpkg_installed`、CUDA 13.1 和
-`build/env/libtorch-cu130/libtorch`，避免旧 CPU LibTorch 或其它 build cache 混入运行时 PATH。
+构建目录自己的 TensorRT/CUDA 配置，避免其它 build cache 混入运行时 PATH。
 
 同一脚本默认启用 `ceres-cuda` manifest feature，用于 SfM/光束法平差中的 Ceres CUDA 后端。
 如果只想构建 CPU/legacy BA，可传 `-EnableCeresCudaBa:$false`。已有 `vcpkg_installed` 若仍是
@@ -93,12 +91,12 @@ pwsh scripts\build_win\build_windows_cuda.ps1 -InstallDeps -EnableOpenCvDnnCuda
 pwsh scripts\build_win\build_windows_cuda.ps1 -EnableOpenCvDnnCuda
 ```
 
-不带 `-EnableOpenCvDnnCuda` 时，SAM2.1、LibTorch、MVS 等 CUDA 路径不受影响，但 U2Net ONNX 会使用
+不带 `-EnableOpenCvDnnCuda` 时，匹配、MVS 等 CUDA 路径不受影响，但 U2Net ONNX 会使用
 OpenCV DNN CPU 或在 GUI 中从 CUDA 自动回退到 CPU。
 
-### Python / LibTorch 环境脚本
+### Python 环境脚本
 
-`scripts/env/` 集中管理 Python 和 LibTorch 相关的本机环境准备脚本。Python 开发环境默认创建在仓库根目录 `.venv/`，生成的机器本地配置文件仍输出到 `build/env/`，不会把本地路径写进源码目录。
+`scripts/env/` 集中管理 Python 本机环境准备脚本。Python 开发环境默认创建在仓库根目录 `.venv/`，用于模型导出和验证；生产 C++ 不链接 LibTorch。
 
 准备 vcpkg：
 
@@ -112,25 +110,17 @@ python scripts/env/setup_vcpkg.py --root /path/to/vcpkg --install
 python scripts/env/setup_python_runtime.py --device cuda --cuda-wheel cu130
 ```
 
-注册已有 LibTorch，或让脚本下载到 `build/env/libtorch`：
-
-```bash
-python scripts/env/setup_libtorch.py --libtorch-root /opt/libtorch --cuda-root /usr/local/cuda-12.8
-python scripts/env/setup_libtorch.py --device cuda --version 2.7.1 --cuda-wheel cu128
-```
-
 用生成的 `build/env/plascan-env.json` 配置、构建、测试和打包：
 
 ```bash
 python scripts/env/configure_with_env.py --build-type release --build --test --package
 ```
 
-Windows PowerShell 使用同一套脚本，只把路径换成 Windows 路径。CUDA 路径可指向完整 Toolkit，也可配合已经下载好的 CUDA LibTorch 使用：
+Windows PowerShell 使用同一套脚本：
 
 ```powershell
 python scripts\env\setup_vcpkg.py --root C:\src\vcpkg --clone --install --triplet x64-windows
 python scripts\env\setup_python_runtime.py --device cuda --cuda-wheel cu130
-python scripts\env\setup_libtorch.py --libtorch-root C:\deps\libtorch --cuda-root "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8"
 python scripts\env\configure_with_env.py --build-type release --build
 ```
 
@@ -384,7 +374,7 @@ feature_match_cli -L A.tif -R B.tif `
   -a sift_lightglue --max-keypoints 40000
 ```
 
-SIFT 描述子只存在于本次任务的内存缓存。LightGlue 只使用 TensorRT；最终分片保存关键点观测、
+SIFT 或 LoMa-R 描述子只存在于本次任务的内存缓存。LightGlue 和 LoMa-R 都只使用 TensorRT；最终分片保存关键点观测、
 相邻影像、置信度、几何内点和残差，不生成独立特征文件或 JSON sidecar。engine 导出、固定容量和
 精度策略见 [docs/models/README.md](docs/models/README.md#sift--lightglue-tensorrt)。
 
@@ -404,8 +394,8 @@ triangulate_cli     -d disp.tif --rect rect.xml --camL A.txt --camR B.txt -o clo
 或通过导出脚本生成：
 
 ```bash
-python scripts/models/export_lightglue_tensorrt.py         # TensorRT LightGlue（默认 FP32）
-python scripts/models/install_sam21_model.py --variant tiny --devices auto
+python scripts/models/export_lightglue_tensorrt.py
+python scripts/models/export_loma_r_tensorrt.py --help
 ```
 
 ## 平台支持
@@ -415,6 +405,7 @@ python scripts/models/install_sam21_model.py --variant tiny --devices auto
 | CUDA 加速 | ✅ | ✅ | ❌ (MPS via PyTorch) |
 | dense_match MGM/SGM | CUDA + CPU | CUDA + CPU | CPU only |
 | CUDA SIFT + TensorRT LightGlue | CUDA | CUDA | 不支持 |
+| TensorRT LoMa-R | CUDA | CUDA | 不支持 |
 | 全部 CLI 工具 | ✅ | ✅ | ✅ |
 | Qt6 GUI | ✅ | ✅ | ✅ |
 | CPack 打包 | ZIP/INNOSETUP | TGZ/DEB | TGZ |

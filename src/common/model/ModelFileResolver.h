@@ -6,7 +6,8 @@
 namespace xjw::common::model
 {
 
-struct TorchScriptModelSearchOptions
+// 描述模型资源的统一搜索位置。解析器只负责文件发现，不绑定具体推理框架。
+struct ModelFileSearchOptions
 {
     QString sourceRoot;
     QString applicationDir;
@@ -14,10 +15,10 @@ struct TorchScriptModelSearchOptions
     QStringList extraSearchDirs;
 };
 
-class TorchScriptModelResolver
+class ModelFileResolver
 {
 public:
-    explicit TorchScriptModelResolver(TorchScriptModelSearchOptions options = {});
+    explicit ModelFileResolver(ModelFileSearchOptions options = {});
 
     QString findModel(const QString &modelName) const;
     QString findFirstModel(const QStringList &modelNames, QString *pickedModelName = nullptr) const;
@@ -25,7 +26,7 @@ public:
     QString defaultModelDir() const;
 
 private:
-    TorchScriptModelSearchOptions _options;
+    ModelFileSearchOptions _options;
 };
 
 } // namespace xjw::common::model

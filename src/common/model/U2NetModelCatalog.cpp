@@ -15,7 +15,7 @@ U2NetModelSpec u2netModelSpec()
     };
 }
 
-U2NetModelStatus u2netModelStatus(const TorchScriptModelResolver &resolver)
+U2NetModelStatus u2netModelStatus(const ModelFileResolver &resolver)
 {
     U2NetModelStatus status;
     status.spec = u2netModelSpec();

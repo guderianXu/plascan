@@ -51,16 +51,6 @@ def torch_index_url(device: str, cuda_wheel: str) -> str:
     return f"https://download.pytorch.org/whl/{cuda_wheel}"
 
 
-def detect_torch_dir(python: Path, dry_run: bool) -> str:
-    code = (
-        "from pathlib import Path; import torch; "
-        "p = Path(torch.__file__).resolve().parent / 'share' / 'cmake' / 'Torch'; "
-        "print(p if (p / 'TorchConfig.cmake').exists() else '')"
-    )
-    out = capture([str(python), "-c", code], dry_run=dry_run)
-    return out.strip()
-
-
 def create_or_update_env(args: argparse.Namespace) -> Path:
     manager = args.manager
     if manager == "auto":
@@ -97,12 +87,9 @@ def create_or_update_env(args: argparse.Namespace) -> Path:
         if packages:
             run([str(python), "-m", "pip", "install", *packages], dry_run=args.dry_run)
 
-    torch_dir = args.torch_dir or detect_torch_dir(python, args.dry_run)
     values = {
         "PLASCAN_PYTHON_EXECUTABLE": str(python),
         "PLASCAN_PYTHON": str(python),
-        "PLASCAN_TORCH_DIR": torch_dir,
-        "Torch_DIR": torch_dir,
         "CUDAToolkit_ROOT": args.cuda_root or "",
         "CUDA_TOOLKIT_ROOT_DIR": args.cuda_root or "",
     }
@@ -118,7 +105,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
     parser.add_argument("--cuda-wheel", default="cu128", help="PyTorch CUDA wheel tag, e.g. cu121/cu124/cu128")
     parser.add_argument("--torch-index-url", help="Override PyTorch pip index URL")
-    parser.add_argument("--torch-dir", help="Existing TorchConfig.cmake directory")
     parser.add_argument("--cuda-root", help="Existing CUDA Toolkit root to write into env files")
     parser.add_argument("--with-optional", action="store_true", help="Install optional experimental Python packages")
     parser.add_argument("--extra-package", action="append", default=[], help="Additional pip package to install")

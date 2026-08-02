@@ -297,7 +297,7 @@ QJsonObject makeReport(const MatchPhotosResult &result,
 int main(int argc, char *argv[])
 {
     QCoreApplication qtApplication(argc, argv);
-    CLI::App app{"PlaScan 创建连接点 CLI — SIFT + LightGlue 特征匹配与连接点轨迹构建"};
+    CLI::App app{"PlaScan 创建连接点 CLI — 注册算法匹配与连接点轨迹构建"};
 
     std::string inputPath;
     std::string outputDirArg;
@@ -308,6 +308,7 @@ int main(int argc, char *argv[])
     std::string deviceArg = "auto";
     std::string algorithmIdArg = "sift_lightglue";
     std::string lightGlueEngineArg;
+    std::string lomaRPackageArg;
     std::string maskApplyModeArg = "none";
     std::string maskDirArg;
     std::string pairModeArg = "auto";
@@ -336,10 +337,12 @@ int main(int argc, char *argv[])
     app.add_option("--quality", qualityArg, "精度预设: auto, fast, high, highest, difficult, cpu, cuda");
     app.add_option("--device", deviceArg, "计算设备: auto, cpu, cuda");
     app.add_option("--algorithm-id", algorithmIdArg,
-                   "统一影像匹配算法 ID；当前仅支持 sift_lightglue")
-        ->check(CLI::IsMember({"sift_lightglue"}));
+                   "统一影像匹配算法 ID: sift_lightglue, loma_r")
+        ->check(CLI::IsMember({"sift_lightglue", "loma_r"}));
     app.add_option("--lightglue-engine", lightGlueEngineArg,
                    "TensorRT LightGlue .engine；留空时按模型目录自动查找");
+    app.add_option("--loma-r-package", lomaRPackageArg,
+                   "LoMa-R TensorRT JSON 清单；留空时按模型目录自动查找");
     app.add_option("--keypoint-limit", keypointLimit, "每张影像关键点限制");
     app.add_option("--keypoint-limit-per-mpx", keypointLimitPerMpx, "每百万像素关键点限制，0 表示不额外限制");
     app.add_option("--tiepoint-limit", tiepointLimit, "每张影像连接点限制");
@@ -451,6 +454,9 @@ int main(int argc, char *argv[])
     options.lightGlueTensorRtEnginePath = lightGlueEngineArg.empty()
         ? QString()
         : xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(lightGlueEngineArg));
+    options.lomaRTensorRtPackagePath = lomaRPackageArg.empty()
+        ? QString()
+        : xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(lomaRPackageArg));
     options.maskApplyMode = xjw::cli::normalizedToken(maskApplyModeArg, QStringLiteral("none"));
     options.maxImageDim = maxImageDim;
     options.maxKeypoints = std::max(0, keypointLimit);

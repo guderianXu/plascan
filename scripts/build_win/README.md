@@ -10,12 +10,12 @@
 - vcpkg 临时工作根：默认使用主构建目录所在盘的根目录，例如
   `E:\vbt`（buildtrees）、`E:\vpk`（packages）、`E:\vdl`（downloads）
 - CUDA：`C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1`
-- LibTorch：`E:\code\plascan\build\env\libtorch-cu130\libtorch`
+- TensorRT：通过 `TensorRT_ROOT` 或 CMake 参数指定与 CUDA 匹配的 SDK
 
-脚本会设置统一的 `PATH`、`Torch_DIR`、`PLASCAN_TORCH_DIR`、`CMAKE_PREFIX_PATH`、
+脚本会设置统一的 `PATH`、`CMAKE_PREFIX_PATH`、
 `CUDA_PATH` 和 Qt plugin 环境，并将 `CMAKE_PREFIX_PATH` 写入 CMake 缓存，保证 Ninja
-自动重新配置时仍使用同一套 vcpkg/LibTorch 前缀。脚本还会同步 Qt platform plugins 与
-LibTorch 运行时 DLL，避免 CMake/CTest 混用旧 CPU LibTorch、旧 vcpkg 或其它项目的依赖。
+自动重新配置时仍使用同一套 vcpkg 前缀。脚本还会同步 Qt platform plugins 和
+TensorRT/CUDA 运行时 DLL，避免 CMake/CTest 混用旧 vcpkg 或其它项目的依赖。
 
 ## 前置条件
 
@@ -26,7 +26,6 @@ LibTorch 运行时 DLL，避免 CMake/CTest 混用旧 CPU LibTorch、旧 vcpkg �
 - `C:\BuildTools\VC\vcpkg`
 - `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1`
 - Vulkan SDK，或等效的 Vulkan loader/header，使 vcpkg 构建的 `qtbase` 启用 Vulkan feature
-- `E:\code\plascan\build\env\libtorch-cu130\libtorch`
 - `E:\code\plascan\build\windows-vcpkg-cuda-release\vcpkg_installed\x64-windows`
 
 如果路径不同，用参数覆盖，见“参数速查”。
@@ -57,7 +56,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File E:\code\plascan\scripts\buil
 powershell -NoProfile -ExecutionPolicy Bypass -File E:\code\plascan\scripts\build_win\enter_plascan_dev_shell.ps1
 ```
 
-脚本会加载 VS Build Tools、CUDA 13.1、当前构建目录的 vcpkg 依赖、CUDA LibTorch、
+脚本会加载 VS Build Tools、CUDA 13.1、当前构建目录的 vcpkg 依赖、
 CMake 和 Ninja，然后打开一个新的交互式 PowerShell。进入后可以直接运行：
 
 ```powershell
@@ -137,7 +136,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File E:\code\plascan\scripts\buil
 | `-VsDevCmd <path>` | VS Build Tools 环境脚本。 |
 | `-CMakeExe <path>` | CMake 可执行文件路径。 |
 | `-CudaRoot <path>` | CUDA Toolkit 根目录，默认 CUDA 13.1。 |
-| `-TorchRoot <path>` | LibTorch 根目录，默认 `build\env\libtorch-cu130\libtorch`。 |
 | `-Target <name>` | 只构建指定 CMake target，例如 `plascan_gui`。 |
 | `-CTestRegex <regex>` | `ctest -R` 过滤表达式。 |
 | `-Jobs <n>` | 并行构建线程数，默认 CPU 核心数。 |
@@ -188,9 +186,8 @@ This application failed to start because no Qt platform plugin could be initiali
 
 ### 运行测试出现 `0xc0000139`
 
-通常是输出目录混入旧 CPU LibTorch DLL，或 CUDA 版 LibTorch 的 cuDNN、CUPTI、
-cuBLAS 等延迟加载 DLL 没有进入输出目录。脚本会把当前 CUDA LibTorch 的完整
-DLL 运行时同步到 `bin`、`tests` 和已有测试输出目录。
+通常是输出目录混入旧 DLL，或 TensorRT/CUDA 的延迟加载 DLL 没有进入
+输出目录。优先用本脚本重新构建，不要手工拼接多个历史构建的 PATH。
 优先用本脚本重新构建，不要直接手工拼 PATH。
 
 ### CMake 又引用旧目录
@@ -199,7 +196,7 @@ DLL 运行时同步到 `bin`、`tests` 和已有测试输出目录。
 
 ```powershell
 Select-String E:\code\plascan\build\windows-vcpkg-cuda-release\CMakeCache.txt `
-  -Pattern "windows-vcpkg-release|sat_sim_cuda|build/env/libtorch/libtorch"
+  -Pattern "windows-vcpkg-release|sat_sim_cuda"
 ```
 
 正常情况下不应有输出。若出现旧路径，执行：
@@ -244,6 +241,6 @@ pwsh scripts\build_win\build_windows_cuda.ps1 -InstallDeps `
 
 - 日常只使用本脚本构建 Windows CUDA 版本。
 - 不要直接在 `E:\code\plascan\build` 根目录运行 `cmake ..`。
-- 不要把 `windows-vcpkg-release`、`sat_sim_cuda` 或旧 CPU LibTorch 加进 PATH。
+- 不要把 `windows-vcpkg-release`、`sat_sim_cuda` 或旧构建输出加进 PATH。
 - 清理空间时优先清旧包、benchmark 输出和 vcpkg `blds/pkgs` 缓存；不要删当前
   `windows-vcpkg-cuda-release\vcpkg_installed\x64-windows`，除非准备重新补依赖。

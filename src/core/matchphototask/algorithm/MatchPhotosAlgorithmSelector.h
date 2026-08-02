@@ -9,7 +9,7 @@ namespace matchphotos
 {
 
 // 将用户预设和设备选择转换成具体算法计划。
-// 当前策略固定以 SIFT + LightGlue 为主线，避免在主流程里暴露算法商店。
+// 策略通过注册表解析算法 ID，不在主流程里硬编码特征/匹配组合。
 class MatchPhotosAlgorithmSelector
 {
 public:

@@ -1,6 +1,6 @@
 # 安装与打包
 
-option(PLASCAN_BUNDLE_RUNTIME "Bundle runtime shared libraries (Qt/OpenCV/Torch etc.) into install/package" ON)
+option(PLASCAN_BUNDLE_RUNTIME "Bundle runtime shared libraries (Qt/OpenCV etc.) into install/package" ON)
 
 install(TARGETS plascan_gui
   RUNTIME DESTINATION bin
@@ -112,17 +112,6 @@ if(PLASCAN_BUNDLE_RUNTIME AND NOT WIN32)
   else()
     set(PLASCAN_QT_PLUGINS_DIR "")
   endif()
-
-  set(PLASCAN_TORCH_LIB_DIR "")
-  foreach(_torch_lib IN LISTS TORCH_LIBRARIES)
-    if(EXISTS "${_torch_lib}")
-      get_filename_component(_torch_lib_dir_candidate "${_torch_lib}" DIRECTORY)
-      if(EXISTS "${_torch_lib_dir_candidate}")
-        set(PLASCAN_TORCH_LIB_DIR "${_torch_lib_dir_candidate}")
-        break()
-      endif()
-    endif()
-  endforeach()
 
   if(PLASCAN_QT_PLUGINS_DIR AND EXISTS "${PLASCAN_QT_PLUGINS_DIR}/platforms")
     install(

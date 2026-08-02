@@ -34,16 +34,16 @@ target_include_directories(test_common_unicode_path_io PRIVATE
 )
 gtest_discover_tests(test_common_unicode_path_io)
 
-add_executable(test_torchscript_model_resolver test_torchscript_model_resolver.cpp)
-target_link_libraries(test_torchscript_model_resolver PRIVATE
+add_executable(test_model_file_resolver test_model_file_resolver.cpp)
+target_link_libraries(test_model_file_resolver PRIVATE
     plascan_common_model
     Qt6::Core
     GTest::gtest_main
 )
-target_include_directories(test_torchscript_model_resolver PRIVATE
+target_include_directories(test_model_file_resolver PRIVATE
     ${CMAKE_SOURCE_DIR}/src/common
 )
-gtest_discover_tests(test_torchscript_model_resolver)
+gtest_discover_tests(test_model_file_resolver)
 
 add_executable(test_source_contracts test_source_contracts.cpp)
 target_link_libraries(test_source_contracts PRIVATE
@@ -861,14 +861,6 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_setup_python_runtime
     )
     set_tests_properties(PythonRuntimeSetupTest PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-
-    add_test(
-        NAME InstallSam21ModelScriptTest
-        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_install_sam21_model
-    )
-    set_tests_properties(InstallSam21ModelScriptTest PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
 

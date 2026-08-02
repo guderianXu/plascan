@@ -23,6 +23,7 @@ struct MatchPhotosAlgorithmPlan
     bool requiresCuda = true;
     bool preferCuda = false;
     bool rotationRobust = false;
+    bool requiresColorInput = false;
     bool enableGuidedMatching = false;
 
     int maxImageDim = 2048;

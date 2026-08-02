@@ -19,8 +19,6 @@ def default_preset(build_type: str) -> str:
 def cmake_defines(values: dict[str, str]) -> list[str]:
     defines = []
     mapping = {
-        "PLASCAN_TORCH_DIR": "PLASCAN_TORCH_DIR",
-        "Torch_DIR": "Torch_DIR",
         "CUDAToolkit_ROOT": "CUDAToolkit_ROOT",
         "CUDA_TOOLKIT_ROOT_DIR": "CUDA_TOOLKIT_ROOT_DIR",
         "CMAKE_CUDA_COMPILER": "CMAKE_CUDA_COMPILER",
@@ -42,8 +40,6 @@ def is_foreign_platform_path(value: str) -> bool:
 
 def validate_environment_values(values: dict[str, str]) -> None:
     path_keys = [
-        "Torch_DIR",
-        "PLASCAN_TORCH_DIR",
         "CUDAToolkit_ROOT",
         "CUDA_TOOLKIT_ROOT_DIR",
         "CMAKE_CUDA_COMPILER",

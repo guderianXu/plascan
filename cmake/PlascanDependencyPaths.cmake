@@ -6,13 +6,11 @@ include_guard(GLOBAL)
 # 目标：
 # 1. 保持 vcpkg toolchain 的优先级不变。
 # 2. 当用户启用了 conda 环境时，把 conda 前缀加入 CMake 查找路径。
-# 3. 为通过 conda/pip 安装的 PyTorch 自动补充 Torch_DIR 候选路径。
+# 3. 支持从 conda 补充 CUDA、Qt、OpenCV、GDAL 等依赖的查找路径。
 #
 # 说明：
 # - vcpkg 仍建议通过 CMAKE_TOOLCHAIN_FILE 使用。
-# - conda 作为额外前缀参与 find_package 查找，可补足 Torch/OpenCV/GDAL/Qt 等。
-# - 对于 pip/conda 中的 torch，常见的 TorchConfig.cmake 位于：
-#   <prefix>/lib/pythonX.Y/site-packages/torch/share/cmake/Torch
+# - conda 作为额外前缀参与 find_package 查找，可补足 OpenCV/GDAL/Qt 等。
 # ==============================================================================
 
 option(PLASCAN_ENABLE_VCPKG "Allow dependency discovery through vcpkg toolchain" ON)
@@ -20,9 +18,6 @@ option(PLASCAN_ENABLE_CONDA "Allow dependency discovery through conda prefix" ON
 
 set(PLASCAN_CONDA_PREFIX "" CACHE PATH
     "Optional conda prefix for dependency lookup; defaults to ENV{CONDA_PREFIX} when available")
-set(PLASCAN_TORCH_DIR "" CACHE PATH
-    "Optional explicit TorchConfig.cmake directory; overrides auto-detection when set")
-
 function(plascan_append_prefix_if_exists prefix)
     if(NOT prefix)
         return()
@@ -33,31 +28,6 @@ function(plascan_append_prefix_if_exists prefix)
         list(REMOVE_DUPLICATES CMAKE_PREFIX_PATH)
         set(CMAKE_PREFIX_PATH "${CMAKE_PREFIX_PATH}" PARENT_SCOPE)
     endif()
-endfunction()
-
-function(plascan_find_torch_dir_from_prefix prefix out_var)
-    if(NOT prefix OR NOT EXISTS "${prefix}")
-        set(${out_var} "" PARENT_SCOPE)
-        return()
-    endif()
-
-    set(candidates
-        "${prefix}/lib/cmake/Torch"
-        "${prefix}/share/cmake/Torch"
-    )
-
-    file(GLOB pythonTorchDirs LIST_DIRECTORIES true
-        "${prefix}/lib/python3.[0-9][0-9]*/site-packages/torch/share/cmake/Torch")
-    list(APPEND candidates ${pythonTorchDirs})
-
-    foreach(candidate IN LISTS candidates)
-        if(EXISTS "${candidate}/TorchConfig.cmake")
-            set(${out_var} "${candidate}" PARENT_SCOPE)
-            return()
-        endif()
-    endforeach()
-
-    set(${out_var} "" PARENT_SCOPE)
 endfunction()
 
 function(plascan_find_cuda_root_from_prefix prefix out_var)
@@ -262,23 +232,6 @@ function(plascan_configure_dependency_paths)
 
             list(APPEND _providerSummary "CUDA:${_autoCudaRoot}")
         endif()
-    endif()
-
-    if(PLASCAN_TORCH_DIR)
-        if(EXISTS "${PLASCAN_TORCH_DIR}/TorchConfig.cmake")
-            set(Torch_DIR "${PLASCAN_TORCH_DIR}" CACHE PATH "Torch config directory" FORCE)
-        endif()
-    elseif(DEFINED ENV{TORCH_DIR} AND EXISTS "$ENV{TORCH_DIR}/TorchConfig.cmake")
-        set(Torch_DIR "$ENV{TORCH_DIR}" CACHE PATH "Torch config directory" FORCE)
-    elseif(PLASCAN_ENABLE_CONDA AND _condaPrefix)
-        plascan_find_torch_dir_from_prefix("${_condaPrefix}" _autoTorchDir)
-        if(_autoTorchDir)
-            set(Torch_DIR "${_autoTorchDir}" CACHE PATH "Torch config directory" FORCE)
-        endif()
-    endif()
-
-    if(Torch_DIR)
-        list(APPEND _providerSummary "Torch:${Torch_DIR}")
     endif()
 
     list(REMOVE_DUPLICATES _providerSummary)

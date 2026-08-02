@@ -1,4 +1,5 @@
 #include "ImageMatchingRegistry.h"
+#include "loma_r/LoMaRAlgorithm.h"
 #include "sift_lightglue/SiftLightGlueAlgorithm.h"
 
 #include <gtest/gtest.h>
@@ -8,16 +9,27 @@ namespace xjw::image_matching
 namespace
 {
 
-TEST(ImageMatchingRegistryTest, ExposesOnlyTheSupportedBuiltInAlgorithm)
+TEST(ImageMatchingRegistryTest, ExposesTensorRtBuiltInAlgorithms)
 {
     const std::vector<ImageMatchingAlgorithmDescriptor> algorithms =
         ImageMatchingRegistry::descriptors();
-    ASSERT_EQ(algorithms.size(), 1U);
-    EXPECT_EQ(algorithms.front().id, QString::fromLatin1(kSiftLightGlueAlgorithmId));
-    EXPECT_EQ(algorithms.front().version, kSiftLightGlueAlgorithmVersion);
-    EXPECT_EQ(algorithms.front().inputModel, AlgorithmInputModel::ReusableFeatures);
-    EXPECT_TRUE(algorithms.front().requiresCuda);
-    EXPECT_TRUE(algorithms.front().suppliesStableFeatureIds);
+    ASSERT_EQ(algorithms.size(), 2U);
+
+    const auto findAlgorithm = [&](const QString &id)
+    {
+        return std::find_if(algorithms.cbegin(), algorithms.cend(),
+                            [&](const auto &algorithm) { return algorithm.id == id; });
+    };
+    const auto sift = findAlgorithm(QString::fromLatin1(kSiftLightGlueAlgorithmId));
+    const auto loma = findAlgorithm(QString::fromLatin1(kLoMaRAlgorithmId));
+    ASSERT_NE(sift, algorithms.cend());
+    ASSERT_NE(loma, algorithms.cend());
+    EXPECT_EQ(sift->version, kSiftLightGlueAlgorithmVersion);
+    EXPECT_EQ(loma->version, kLoMaRAlgorithmVersion);
+    EXPECT_EQ(loma->inputModel, AlgorithmInputModel::ReusableFeatures);
+    EXPECT_TRUE(loma->requiresCuda);
+    EXPECT_TRUE(loma->suppliesStableFeatureIds);
+    EXPECT_TRUE(loma->requiresColorInput);
 }
 
 TEST(ImageMatchingRegistryTest, RejectsUnknownAlgorithmWithoutFallback)

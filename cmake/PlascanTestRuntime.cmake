@@ -11,17 +11,6 @@ function(plascan_get_windows_test_runtime_path out_var)
             list(APPEND runtime_dirs "${_plascan_tensorrt_dir}")
         endif()
 
-        if(DEFINED Torch_DIR)
-            get_filename_component(_plascan_torch_root "${Torch_DIR}/../../.." ABSOLUTE)
-            foreach(_plascan_torch_dir
-                    "${_plascan_torch_root}/bin"
-                    "${_plascan_torch_root}/lib")
-                if(EXISTS "${_plascan_torch_dir}")
-                    list(APPEND runtime_dirs "${_plascan_torch_dir}")
-                endif()
-            endforeach()
-        endif()
-
         if(DEFINED CUDAToolkit_BIN_DIR AND EXISTS "${CUDAToolkit_BIN_DIR}")
             list(APPEND runtime_dirs "${CUDAToolkit_BIN_DIR}")
         elseif(DEFINED CUDAToolkit_ROOT AND EXISTS "${CUDAToolkit_ROOT}/bin")

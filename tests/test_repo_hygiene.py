@@ -89,23 +89,14 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("CUDAHOSTCXX", text)
         self.assertIn("--compiler-bindir", text)
 
-    def test_libtorch_cuda_arches_are_not_set_before_torch_package_loads(self):
+    def test_cuda_arches_are_propagated_to_native_backends(self):
         cmake_path = ROOT / "cmake" / "PlascanPackages.cmake"
         text = cmake_path.read_text(encoding="utf-8")
-        torch_find = text.index("find_package(Torch REQUIRED)")
-
-        before_torch = text[:torch_find]
-        after_torch = text[torch_find:]
-
-        self.assertIn("TORCH_CUDA_ARCH_LIST", before_torch)
-        self.assertNotRegex(before_torch, r"(?m)^\s*set\s*\(\s*CMAKE_CUDA_ARCHITECTURES\b")
-        self.assertRegex(after_torch, r"(?m)^\s*set\s*\(\s*CMAKE_CUDA_ARCHITECTURES\b")
-        self.assertIn("PLAMATRIX_CUDA_ARCHITECTURES", after_torch)
-        self.assertIn("PLAPOINT_CUDA_ARCHITECTURES", after_torch)
-        self.assertIn("FORCE", after_torch)
-        self.assertIn("kineto", text)
-        self.assertIn("kineto_LIBRARY", text)
-        self.assertIn("optional profiler backend skipped", text)
+        self.assertRegex(text, r"(?m)^\s*set\s*\(\s*CMAKE_CUDA_ARCHITECTURES\b")
+        self.assertIn("PLAMATRIX_CUDA_ARCHITECTURES", text)
+        self.assertIn("PLAPOINT_CUDA_ARCHITECTURES", text)
+        self.assertIn("FORCE", text)
+        self.assertNotIn("find_package(Torch", text)
 
     def test_cmake_preserves_command_line_cuda_flags_on_windows(self):
         root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
@@ -273,7 +264,7 @@ class RepoHygieneTest(unittest.TestCase):
                 "TerrainProductManifest",
                 "ReferenceTerrainPrior",
                 "Windows CUDA",
-                "libtorch-cu130",
+                "TensorRT",
             ],
             ROOT / "src" / "core" / "mvs" / "README.md": [
                 "MvsWorkspaceManifest",
@@ -325,8 +316,7 @@ class RepoHygieneTest(unittest.TestCase):
             env_file.write_text(
                 json.dumps(
                     {
-                        "Torch_DIR": r"E:\code\plascan\build\env\libtorch-cu130\libtorch\share\cmake\Torch",
-                        "PLASCAN_TORCH_DIR": r"E:\code\plascan\build\env\libtorch-cu130\libtorch\share\cmake\Torch",
+                        "CUDAToolkit_ROOT": r"E:\CUDA\v13.1",
                     }
                 ),
                 encoding="utf-8",
@@ -351,7 +341,7 @@ class RepoHygieneTest(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("foreign platform path", result.stderr)
-        self.assertIn("Torch_DIR", result.stderr)
+        self.assertIn("CUDAToolkit_ROOT", result.stderr)
 
     def test_camera_preview_memory_detection_supports_linux(self):
         source = (ROOT / "src" / "gui" / "dialogs" / "CameraModel3DDialog.cpp").read_text(encoding="utf-8")

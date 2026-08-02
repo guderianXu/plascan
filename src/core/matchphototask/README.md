@@ -7,17 +7,17 @@
 
 当前框架：
 
-- `algorithm/` 负责类 Metashape 策略到具体算法计划的映射，当前主线固定为 `SIFT + LightGlue`。
+- `algorithm/` 负责类 Metashape 策略到注册算法计划的映射，当前支持 `sift_lightglue` 和 `loma_r`。
 - `pair_selection/` 负责影像对类型、影像对选择策略和 `PairSelector`。
 - `runtime/` 负责任务级 SIFT 内存缓存、LightGlue TensorRT engine 查找、蒙版约束和 GUI 写回所需记录。
 - `task/` 负责 `MatchPhotosTask`、选项、上下文和结果报告。
-- `stages/` 负责流程阶段，当前已接入 SIFT 特征提取与 SIFT + LightGlue 两两匹配。
+- `stages/` 负责流程阶段，按算法能力加载灰度或彩色输入并执行特征与两两匹配。
 - `tie_points/` 负责最终多视图连接点 track 的构建、筛选和统计摘要。
 - `tests/` 放置本模块自己的单元测试。
 
 当前行为：
 
-- `MatchPhotosAlgorithmSelector` 将自动/快速/高精度/困难纹理/CPU/CUDA 预设映射为 SIFT + LightGlue。
+- `MatchPhotosAlgorithmSelector` 校验工作流选择的注册算法、设备要求与质量预设。
 - SIFT 负责提供尺度和旋转鲁棒性，LightGlue 直接消费任务内存中的 SIFT 关键点与描述子。
 - 连接点用途的 SIFT 检测阈值为 `0.0005`（快速模式为 `0.003`）；CUDA SIFT 使用等价的库内阈值映射。
   阈值写入前端签名，修改后旧缓存会自动失效。

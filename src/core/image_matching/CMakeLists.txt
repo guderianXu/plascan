@@ -27,6 +27,12 @@ add_library(image_matching STATIC
     sift/SiftFeatureExtractor.h
     sift_lightglue/SiftLightGlueAlgorithm.cpp
     sift_lightglue/SiftLightGlueAlgorithm.h
+    loma_r/LoMaRAlgorithm.cpp
+    loma_r/LoMaRAlgorithm.h
+    loma_r/LoMaRTensorRtBackend.cpp
+    loma_r/LoMaRTensorRtBackend.h
+    tensorrt/TensorRtSession.cpp
+    tensorrt/TensorRtSession.h
     lightglue/LightGlueFeatureBudget.h
     lightglue/LightGluePostprocessor.cpp
     lightglue/LightGluePostprocessor.h
@@ -62,6 +68,8 @@ target_include_directories(image_matching PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/geometry
     ${CMAKE_CURRENT_SOURCE_DIR}/sift
     ${CMAKE_CURRENT_SOURCE_DIR}/sift_lightglue
+    ${CMAKE_CURRENT_SOURCE_DIR}/loma_r
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensorrt
     ${CMAKE_SOURCE_DIR}/src/common
     ${CMAKE_SOURCE_DIR}/src/core
     ${CMAKE_SOURCE_DIR}/3rdparty/cudasift

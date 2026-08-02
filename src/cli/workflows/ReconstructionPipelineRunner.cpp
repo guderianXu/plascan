@@ -1055,6 +1055,7 @@ xjw::cli::ReconstructionCliOptions options;
     auto &sfmMatchingAlgorithmId = options.sfmMatchingAlgorithmId;
     auto &sfmGuidedRematching = options.sfmGuidedRematching;
     auto &sfmLightGlueEnginePath = options.sfmLightGlueEnginePath;
+    auto &sfmLoMaRTensorRtPackagePath = options.sfmLoMaRTensorRtPackagePath;
     auto &lockInputCameraPoses = options.lockInputCameraPoses;
     auto &quality = options.quality;
     auto &threads = options.threads;
@@ -1276,6 +1277,9 @@ xjw::cli::ReconstructionCliOptions options;
     sfmOptions.lightGlueTensorRtEnginePath = sfmLightGlueEnginePath.empty()
         ? QString()
         : xjw::cli::cleanAbsolutePath(QString::fromStdString(sfmLightGlueEnginePath));
+    sfmOptions.lomaRTensorRtPackagePath = sfmLoMaRTensorRtPackagePath.empty()
+        ? QString()
+        : xjw::cli::cleanAbsolutePath(QString::fromStdString(sfmLoMaRTensorRtPackagePath));
     sfmOptions.guidedImageMatching = sfmGuidedRematching;
     sfmOptions.lockInputCameraPoses = lockInputCameraPoses;
     const QStringList qualityNames = {

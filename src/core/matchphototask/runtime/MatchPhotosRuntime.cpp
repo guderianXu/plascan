@@ -95,6 +95,99 @@ QStringList lightGlueTensorRtModelDirectories()
     return directories;
 }
 
+QStringList loMaRTensorRtModelDirectories()
+{
+    QStringList directories = lightGlueTensorRtModelDirectories();
+#ifdef PLASCAN_SOURCE_DIR
+    appendUniqueDirectory(
+        &directories,
+        QDir(QStringLiteral(PLASCAN_SOURCE_DIR))
+            .filePath(QStringLiteral("build/model_cache/loma_r_tensorrt")));
+#endif
+    const QDir executableDir(QCoreApplication::applicationDirPath());
+    appendUniqueDirectory(
+        &directories,
+        executableDir.filePath(QStringLiteral("../model_cache/loma_r_tensorrt")));
+    appendUniqueDirectory(
+        &directories,
+        executableDir.filePath(QStringLiteral("../../model_cache/loma_r_tensorrt")));
+    return directories;
+}
+
+ResolvedLoMaRTensorRtPackage parseLoMaRPackage(const QString &manifestPath)
+{
+    ResolvedLoMaRTensorRtPackage resolved;
+    const QFileInfo manifestInfo(manifestPath);
+    if (!manifestInfo.isFile())
+    {
+        resolved.errorMessage = QStringLiteral("LoMa-R manifest 不存在: %1")
+            .arg(manifestPath);
+        return resolved;
+    }
+
+    QFile file(manifestInfo.absoluteFilePath());
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        resolved.errorMessage = QStringLiteral("无法读取 LoMa-R manifest: %1")
+            .arg(manifestInfo.absoluteFilePath());
+        return resolved;
+    }
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject())
+    {
+        resolved.errorMessage = QStringLiteral("LoMa-R manifest JSON 无效: %1")
+            .arg(parseError.errorString());
+        return resolved;
+    }
+
+    const QJsonObject object = document.object();
+    if (object.value(QStringLiteral("schema_version")).toInt() != 1 ||
+        object.value(QStringLiteral("algorithm_id")).toString() != QLatin1String("loma_r") ||
+        object.value(QStringLiteral("algorithm_version")).toInt() != 1)
+    {
+        resolved.errorMessage = QStringLiteral("LoMa-R manifest 版本或算法标识不兼容");
+        return resolved;
+    }
+
+    const QDir directory = manifestInfo.absoluteDir();
+    const auto resolveEngine = [&](const QString &field)
+    {
+        const QString configured = object.value(field).toString().trimmed();
+        const QFileInfo info(QFileInfo(configured).isAbsolute()
+                                 ? configured
+                                 : directory.filePath(configured));
+        return info.isFile() ? cleanPath(info.absoluteFilePath()) : QString();
+    };
+    resolved.featureEnginePath = resolveEngine(QStringLiteral("feature_engine"));
+    resolved.matcherEnginePath = resolveEngine(QStringLiteral("matcher_engine"));
+    if (resolved.featureEnginePath.isEmpty())
+    {
+        resolved.errorMessage = QStringLiteral("LoMa-R feature engine 不存在");
+        return resolved;
+    }
+    if (resolved.matcherEnginePath.isEmpty())
+    {
+        resolved.errorMessage = QStringLiteral("LoMa-R matcher engine 不存在");
+        return resolved;
+    }
+
+    resolved.inputWidth = object.value(QStringLiteral("input_width")).toInt();
+    resolved.inputHeight = object.value(QStringLiteral("input_height")).toInt();
+    resolved.keypointCount = object.value(QStringLiteral("keypoint_count")).toInt();
+    resolved.descriptorDimension = object.value(QStringLiteral("descriptor_dimension")).toInt();
+    if (resolved.inputWidth <= 0 || resolved.inputHeight <= 0 ||
+        resolved.keypointCount <= 0 || resolved.descriptorDimension != 256)
+    {
+        resolved.errorMessage = QStringLiteral("LoMa-R manifest 的输入尺寸或特征规格无效");
+        resolved.featureEnginePath.clear();
+        resolved.matcherEnginePath.clear();
+        return resolved;
+    }
+    resolved.manifestPath = cleanPath(manifestInfo.absoluteFilePath());
+    return resolved;
+}
+
 int lightGlueEngineBucketFromMetadata(const QString &enginePath)
 {
     QFile metadataFile(enginePath + QStringLiteral(".json"));
@@ -354,6 +447,43 @@ QString resolveLightGlueTensorRtEnginePath(const MatchPhotosOptions &options,
         *engineName = resolved.name;
     }
     return resolved.path;
+}
+
+ResolvedLoMaRTensorRtPackage resolveLoMaRTensorRtPackage(
+    const MatchPhotosOptions &options)
+{
+    QString configured = options.lomaRTensorRtPackagePath.trimmed();
+    if (configured.isEmpty())
+    {
+        configured = qEnvironmentVariable("PLASCAN_LOMA_R_TENSORRT_PACKAGE").trimmed();
+    }
+    if (!configured.isEmpty())
+    {
+        return parseLoMaRPackage(configured);
+    }
+
+    ResolvedLoMaRTensorRtPackage unresolved;
+    unresolved.searchedDirectories = loMaRTensorRtModelDirectories();
+    for (const QString &directory : unresolved.searchedDirectories)
+    {
+        const QStringList names = {
+            QStringLiteral("loma_r_tensorrt.json"),
+            QStringLiteral("loma_r_fp16.json"),
+            QStringLiteral("loma_r_fp32.json")};
+        for (const QString &name : names)
+        {
+            const QString candidate = QDir(directory).filePath(name);
+            if (!QFileInfo::exists(candidate))
+            {
+                continue;
+            }
+            ResolvedLoMaRTensorRtPackage resolved = parseLoMaRPackage(candidate);
+            resolved.searchedDirectories = unresolved.searchedDirectories;
+            return resolved;
+        }
+    }
+    unresolved.errorMessage = QStringLiteral("未找到 LoMa-R TensorRT manifest");
+    return unresolved;
 }
 
 int resolveFeatureKeypointLimit(const MatchPhotosOptions &options,

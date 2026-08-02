@@ -58,6 +58,38 @@ QString createEngine(const QString &directory, int bucket)
     return path;
 }
 
+QString createLoMaRPackage(const QString &directory, bool includeMatcher = true)
+{
+    const QString featureName = QStringLiteral("loma_r_features_fp16.engine");
+    const QString matcherName = QStringLiteral("loma_r_matcher_k2048_fp16.engine");
+    for (const QString &name : QStringList{featureName, matcherName})
+    {
+        if (!includeMatcher && name == matcherName)
+        {
+            continue;
+        }
+        QFile engine(QDir(directory).filePath(name));
+        EXPECT_TRUE(engine.open(QIODevice::WriteOnly));
+        EXPECT_GT(engine.write("test-engine"), 0);
+    }
+
+    const QJsonObject manifest{
+        {QStringLiteral("schema_version"), 1},
+        {QStringLiteral("algorithm_id"), QStringLiteral("loma_r")},
+        {QStringLiteral("algorithm_version"), 1},
+        {QStringLiteral("feature_engine"), featureName},
+        {QStringLiteral("matcher_engine"), matcherName},
+        {QStringLiteral("input_width"), 784},
+        {QStringLiteral("input_height"), 784},
+        {QStringLiteral("keypoint_count"), 2048},
+        {QStringLiteral("descriptor_dimension"), 256}};
+    const QString manifestPath = QDir(directory).filePath(QStringLiteral("loma_r_tensorrt.json"));
+    QFile file(manifestPath);
+    EXPECT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write(QJsonDocument(manifest).toJson(QJsonDocument::Compact));
+    return manifestPath;
+}
+
 } // namespace
 
 TEST(MatchPhotosRuntimeTest, DefaultsToAutomaticTensorRtEngineLookup)
@@ -65,6 +97,40 @@ TEST(MatchPhotosRuntimeTest, DefaultsToAutomaticTensorRtEngineLookup)
     const xjw::matchphotos::MatchPhotosOptions options;
 
     EXPECT_TRUE(options.lightGlueTensorRtEnginePath.isEmpty());
+    EXPECT_TRUE(options.lomaRTensorRtPackagePath.isEmpty());
+}
+
+TEST(MatchPhotosRuntimeTest, ResolvesExplicitLoMaRTensorRtPackage)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString manifestPath = createLoMaRPackage(directory.path());
+
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.lomaRTensorRtPackagePath = manifestPath;
+    const auto resolved = xjw::matchphotos::resolveLoMaRTensorRtPackage(options);
+
+    ASSERT_TRUE(resolved.isValid()) << qPrintable(resolved.errorMessage);
+    EXPECT_EQ(resolved.manifestPath,
+              QDir::cleanPath(QFileInfo(manifestPath).absoluteFilePath()));
+    EXPECT_TRUE(QFileInfo::exists(resolved.featureEnginePath));
+    EXPECT_TRUE(QFileInfo::exists(resolved.matcherEnginePath));
+    EXPECT_EQ(resolved.keypointCount, 2048);
+    EXPECT_EQ(resolved.descriptorDimension, 256);
+}
+
+TEST(MatchPhotosRuntimeTest, RejectsIncompleteLoMaRTensorRtPackage)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.lomaRTensorRtPackagePath = createLoMaRPackage(directory.path(), false);
+
+    const auto resolved = xjw::matchphotos::resolveLoMaRTensorRtPackage(options);
+
+    EXPECT_FALSE(resolved.isValid());
+    EXPECT_TRUE(resolved.errorMessage.contains(QStringLiteral("matcher"),
+                                               Qt::CaseInsensitive));
 }
 
 TEST(MatchPhotosRuntimeTest, ResolvesExplicitTensorRtEngine)

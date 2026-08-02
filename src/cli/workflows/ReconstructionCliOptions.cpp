@@ -19,10 +19,12 @@ void ReconstructionCliOptions::addTo(CLI::App &app)
     app.add_option("--chunk-name", chunkNameArg, "use the Chunk with this name");
     app.add_option("--device", device, "auto, cpu, cuda")->check(CLI::IsMember({"auto", "cpu", "cuda"}));
     app.add_option("--sfm-matching-algorithm", sfmMatchingAlgorithmId,
-                   "SFM image matching algorithm id: sift_lightglue")
-        ->check(CLI::IsMember({"sift_lightglue"}));
+                   "SFM image matching algorithm id: sift_lightglue or loma_r")
+        ->check(CLI::IsMember({"sift_lightglue", "loma_r"}));
     app.add_option("--sfm-lightglue-engine", sfmLightGlueEnginePath,
                    "TensorRT LightGlue .engine; empty enables model-directory lookup");
+    app.add_option("--sfm-loma-r-package", sfmLoMaRTensorRtPackagePath,
+                   "LoMa-R TensorRT package manifest; empty enables model-directory lookup");
     app.add_flag("--sfm-guided-rematching", sfmGuidedRematching,
                  "enable guided rematching after initial SfM");
     app.add_flag("--lock-input-camera-poses", lockInputCameraPoses,

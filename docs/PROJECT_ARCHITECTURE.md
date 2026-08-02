@@ -52,8 +52,7 @@ common/
 ├── runtime/
 │   └── PythonRuntimeLocator.h/cpp # Python 运行时路径解析（环境变量/.venv/兼容文件）
 ├── model/
-│   ├── TorchScriptModelResolver.h/cpp # 模型搜索路径解析（PLASCAN_MODEL_DIR、源码树和安装目录）
-│   ├── Sam21ModelCatalog.h/cpp # SAM2.1 checkpoint / TorchScript 文件名和安装状态
+│   ├── ModelFileResolver.h/cpp # 通用模型搜索路径解析（PLASCAN_MODEL_DIR、源码树和安装目录）
 │   └── U2NetModelCatalog.h/cpp # U2Net ONNX 文件名和安装状态
 ├── project/
 │   ├── ProjectIO.h/cpp # 项目目录、临时缓存、资源和产物路径规则
@@ -110,7 +109,7 @@ core/
 │
 ├── image_matching/             # 唯一局部特征/匹配/持久化模块
 │   ├── ImageMatchingAlgorithm.h/cpp # 可扩展算法接口、能力和版本契约
-│   ├── ImageMatchingRegistry.h/cpp  # 算法注册入口；当前仅 sift_lightglue
+│   ├── ImageMatchingRegistry.h/cpp  # 算法注册入口；sift_lightglue / loma_r
 │   ├── FeatureSet.h/cpp        # 任务内关键点与描述子，不持久化
 │   ├── ImageMatchTypes.h/cpp   # 观测、邻接变体、置信度、残差和标志位
 │   ├── ImageMatchFile.h/cpp    # 逐影像 `.pimatch` v1 唯一二进制读写器
@@ -191,7 +190,6 @@ core/
 │
 ├── mask/                       # 照片蒙版生成与合成
 │   ├── MaskGenerator.h/cpp     # 黑背景/亮度阈值蒙版、蒙版合成和轮廓提取
-│   ├── Sam21MaskGenerator.h/cpp # SAM2.1 TorchScript encoder/decoder 推理，支持 CPU/CUDA
 │   └── u2net/                  # U2Net ONNX 自动蒙版子模块
 │       └── U2NetMaskGenerator.h/cpp # OpenCV DNN 推理，CPU 可用、CUDA 取决于 OpenCV DNN 后端
 │
@@ -361,7 +359,7 @@ core/
 `AerialTriangulationWorkflow` 是“空中三角测量/对齐照片”的唯一用户级入口。重置当前对齐只清除
 SfM 位姿和稀疏重建状态；默认仍复用影像身份、算法版本、配置指纹和模型指纹均匹配的 `.pimatch`
 变体及连接点。只有用户取消“重用现有匹配”或缓存缺失/不兼容时，workflow 才调用
-`MatchPhotosTask` 重新提取 SIFT、执行 LightGlue 匹配并整理多视连接点。GUI 与
+`MatchPhotosTask` 按工作流设置执行 SIFT + LightGlue 或 LoMa-R，并整理多视连接点。GUI 与
 `aerial_triangulation_cli` 不再各自实现连接点补齐逻辑，也不允许 SfM 回退读取旧成对缓存。
 
 连接点阶段的 GPU 调度按真实资源而不是 CPU 线程数决定：CUDA SIFT 保持单执行上下文并由
@@ -537,8 +535,6 @@ gui/
 │   ├── GuiCoreLinking.cmake    # 核心库条件链接
 │   ├── GuiInstall.cmake        # 安装规则
 │   └── cmake/                  # Qt 宏
-├── compat/
-│   └── QtTorchMacroGuard.h     # Qt/Torch 宏兼容
 └── packaging/                  # 打包配置
 ```
 

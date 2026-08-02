@@ -1,6 +1,6 @@
 /**
  * @file cli_feature_match.cpp
- * @brief 两幅原始影像的 CUDA SIFT + TensorRT LightGlue 匹配入口。
+ * @brief 两幅原始影像的统一 TensorRT 匹配入口。
  *
  * 本 CLI 不再接受或生成中间特征文件。两幅影像的 SIFT 特征只存在于本次
  * MatchPhotosTask 的内存缓存中，最终匹配按“一幅影像一个 `.pimatch` 分片”
@@ -25,7 +25,7 @@
 int main(int argc, char *argv[])
 {
     QCoreApplication qtApplication(argc, argv);
-    CLI::App app{"PlaScan 双影像匹配 — CUDA SIFT + TensorRT LightGlue"};
+    CLI::App app{"PlaScan 双影像匹配 — TensorRT"};
 
     std::string leftImageArg;
     std::string rightImageArg;
@@ -44,15 +44,15 @@ int main(int argc, char *argv[])
     app.add_option("-o,--output-dir", outputDirectoryArg,
                    "逐影像 .pimatch 输出目录")->required();
     app.add_option("-m,--model", enginePathArg,
-                   "可选 TensorRT LightGlue .engine；留空时按运行时模型目录查找");
+                   "算法模型资源：LightGlue .engine 或 LoMa-R JSON 清单");
     app.add_option("-a,--algorithm-id", algorithmIdArg,
-                   "统一影像匹配算法 ID；当前仅支持 sift_lightglue")
-        ->check(CLI::IsMember({"sift_lightglue"}));
-    app.add_option("-n,--max-keypoints", maxKeypoints, "每幅影像最大 SIFT 关键点数");
+                   "统一影像匹配算法 ID: sift_lightglue, loma_r")
+        ->check(CLI::IsMember({"sift_lightglue", "loma_r"}));
+    app.add_option("-n,--max-keypoints", maxKeypoints, "每幅影像最大关键点数");
     app.add_option("--max-image-dim", maxImageDim,
                    "提取输入最长边，0 表示保持原始分辨率");
     app.add_option("--cuda-device", cudaDevice, "CUDA 设备 ID");
-    app.add_option("-t,--match-threshold", matchThreshold, "LightGlue 匹配置信度阈值");
+    app.add_option("-t,--match-threshold", matchThreshold, "匹配置信度阈值");
     app.add_option("--geometry-threshold", geometryThreshold,
                    "几何验证像素残差阈值");
     app.add_option("--geometry-min-inliers", geometryMinInliers,
@@ -87,7 +87,14 @@ int main(int argc, char *argv[])
     options.algorithmId = QString::fromStdString(algorithmIdArg).trimmed().toLower();
     options.profile = xjw::matchphotos::MatchPhotosProfile::HighAccuracy;
     options.device = xjw::matchphotos::ComputeDevice::Cuda;
-    options.lightGlueTensorRtEnginePath = QString::fromStdString(enginePathArg);
+    if (options.algorithmId == QLatin1String("loma_r"))
+    {
+        options.lomaRTensorRtPackagePath = QString::fromStdString(enginePathArg);
+    }
+    else
+    {
+        options.lightGlueTensorRtEnginePath = QString::fromStdString(enginePathArg);
+    }
     options.pairPolicy.mode = xjw::matchphotos::PairSelectionMode::ManualOnly;
     options.maxKeypoints = std::max(0, maxKeypoints);
     options.useExplicitKeypointLimit = true;

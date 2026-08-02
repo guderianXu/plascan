@@ -31,6 +31,21 @@ TEST(MatchPhotosAlgorithmSelectorTest, RejectsUnknownAlgorithm)
     EXPECT_TRUE(plan.validationError.contains(QStringLiteral("未注册")));
 }
 
+TEST(MatchPhotosAlgorithmSelectorTest, SelectsRegisteredLoMaR)
+{
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.algorithmId = QStringLiteral("loma_r");
+
+    const auto plan = xjw::matchphotos::MatchPhotosAlgorithmSelector::select(options);
+
+    EXPECT_TRUE(plan.valid) << qPrintable(plan.validationError);
+    EXPECT_EQ(plan.algorithmId, QStringLiteral("loma_r"));
+    EXPECT_EQ(plan.displayName, QStringLiteral("LoMa-R (TensorRT)"));
+    EXPECT_TRUE(plan.extractsFeaturesInMemory);
+    EXPECT_TRUE(plan.requiresCuda);
+    EXPECT_TRUE(plan.rotationRobust);
+}
+
 TEST(MatchPhotosAlgorithmSelectorTest, RejectsCpuForCudaOnlyAlgorithm)
 {
     xjw::matchphotos::MatchPhotosOptions options;

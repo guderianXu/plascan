@@ -283,6 +283,7 @@ int main(int argc, char *argv[])
     std::string lightGlueEngineArg;
     std::string maskApplyModeArg = "none";
     std::string maskDirArg;
+    std::string lomaRPackageArg;
     int keypointLimit = 40000;
     int tiepointLimit = 4000;
     int initialImageId1 = -1;
@@ -317,14 +318,16 @@ int main(int argc, char *argv[])
     app.add_option("--device", deviceArg, "计算设备: auto, cpu, cuda");
     app.add_option("--reference-mode", referenceModeArg, "参考预选模式: source-code/source, estimated, sequence");
     app.add_option("--algorithm-id", algorithmIdArg,
-                   "统一影像匹配算法 ID；当前仅支持 sift_lightglue")
-        ->check(CLI::IsMember({"sift_lightglue"}));
+                   "统一影像匹配算法 ID: sift_lightglue, loma_r")
+        ->check(CLI::IsMember({"sift_lightglue", "loma_r"}));
     app.add_option("--lightglue-engine", lightGlueEngineArg,
                    "TensorRT LightGlue .engine；留空时按模型目录自动查找");
     app.add_option("--keypoint-limit", keypointLimit, "关键点限制");
     app.add_option("--tiepoint-limit", tiepointLimit, "连接点限制");
     app.add_option("--initial-image-id-1", initialImageId1, "指定初始像对的第一个 0 基影像索引");
     app.add_option("--initial-image-id-2", initialImageId2, "指定初始像对的第二个 0 基影像索引");
+    app.add_option("--loma-r-package", lomaRPackageArg,
+                   "LoMa-R TensorRT JSON 清单；留空时按模型目录自动查找");
     app.add_option("--mask-apply-mode", maskApplyModeArg, "蒙版应用阶段: none, keypoints, tiepoints");
     app.add_option("--mask-dir", maskDirArg, "蒙版目录，按影像文件名或 *_mask 文件名匹配");
     app.add_flag("--generic-preselection", genericPreselection, "启用通用预选");
@@ -513,6 +516,9 @@ int main(int argc, char *argv[])
     options.maskPaths = xjw::cli::maskPathsFromDirectory(
         xjw::cli::fromStdString(maskDirArg), options.images);
     options.cancelFlag = cancelFlag;
+    options.lomaRTensorRtPackagePath = lomaRPackageArg.empty()
+        ? QString()
+        : xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(lomaRPackageArg));
     options.progressFn = [](const QString &stage, int percent)
     {
         std::fprintf(stdout, "[%3d%%] %s\n", percent, qUtf8Printable(stage));

@@ -45,6 +45,32 @@ struct ResolvedLightGlueTensorRtEngine
     bool isValid() const { return !path.isEmpty(); }
 };
 
+/**
+ * @brief 已校验的 LoMa-R TensorRT 模型包。
+ *
+ * 清单中的 engine 路径相对清单文件解析。固定输入尺寸、关键点桶和描述子维数
+ * 同时进入缓存指纹，保证模型升级后不会复用旧 `.pimatch`。
+ */
+struct ResolvedLoMaRTensorRtPackage
+{
+    QString manifestPath;
+    QString featureEnginePath;
+    QString matcherEnginePath;
+    int inputWidth = 0;
+    int inputHeight = 0;
+    int keypointCount = 0;
+    int descriptorDimension = 0;
+    QString errorMessage;
+    QStringList searchedDirectories;
+
+    bool isValid() const
+    {
+        return !manifestPath.isEmpty() && !featureEnginePath.isEmpty() &&
+            !matcherEnginePath.isEmpty() && inputWidth > 0 && inputHeight > 0 &&
+            keypointCount > 0 && descriptorDimension > 0;
+    }
+};
+
 QString matchPhotosMatchDirectory(const MatchPhotosContext &context);
 
 bool shouldCancelMatchPhotos(const MatchPhotosContext &context);
@@ -67,6 +93,9 @@ ResolvedLightGlueTensorRtEngine resolveLightGlueTensorRtEngine(
 // 保留轻量路径接口供既有调用者使用；新代码需要桶容量时应使用上面的完整结果。
 QString resolveLightGlueTensorRtEnginePath(const MatchPhotosOptions &options,
                                            QString *engineName);
+
+ResolvedLoMaRTensorRtPackage resolveLoMaRTensorRtPackage(
+    const MatchPhotosOptions &options);
 
 int resolveFeatureKeypointLimit(const MatchPhotosOptions &options,
                                 const MatchPhotosAlgorithmPlan &plan,

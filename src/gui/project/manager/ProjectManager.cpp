@@ -30,12 +30,10 @@
 #include "GuiTaskRunner.h"
 #include "Logger.h"
 #include "MaskGenerator.h"
-#include "Sam21MaskGenerator.h"
 #include "u2net/U2NetMaskGenerator.h"
 #include "io/PathIO.h"
-#include "model/TorchScriptModelResolver.h"
+#include "model/ModelFileResolver.h"
 #include "model/U2NetModelCatalog.h"
-#include "runtime/PythonRuntimeLocator.h"
 #include "filtering/SparsePointCloudProcessor.h"
 #include "FileDialogStateManager.h"
 #include "Camera.h"
@@ -52,16 +50,12 @@
 #include <QMessageBox>
 #include <QInputDialog>
 #include <QLineEdit>
-#include <QCoreApplication>
 #include <QDir>
 #include <QFileDialog>
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QPointer>
-#include <QProcess>
-#include <QProcessEnvironment>
-#include <QProgressDialog>
 #include <QThread>
 #include <cmath>
 #include <QFile>
@@ -73,7 +67,6 @@
 #include <QImageReader>
 #include <QPainter>
 #include <QPen>
-#include <QRegularExpression>
 #include <QColor>
 
 #include <algorithm>
@@ -325,112 +318,10 @@ std::string utf8StdString(const QString &value)
     return std::string(bytes.constData(), static_cast<std::size_t>(bytes.size()));
 }
 
-QString plascanSourceRoot()
-{
-#ifdef PLASCAN_SOURCE_DIR
-    return QDir::cleanPath(QStringLiteral(PLASCAN_SOURCE_DIR));
-#else
-    return QDir::cleanPath(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("../..")));
-#endif
-}
-
-QString resolveSam21InstallerScript()
-{
-    const QString sourceScript = QDir(plascanSourceRoot()).filePath(QStringLiteral("scripts/models/install_sam21_model.py"));
-    if (QFileInfo::exists(sourceScript))
-    {
-        return QDir::cleanPath(sourceScript);
-    }
-
-    const QString appDir = QCoreApplication::applicationDirPath();
-    const QStringList candidates{
-        QDir(appDir).filePath(QStringLiteral("scripts/models/install_sam21_model.py")),
-        QDir(appDir).filePath(QStringLiteral("../scripts/models/install_sam21_model.py")),
-        QDir(appDir).filePath(QStringLiteral("../../scripts/models/install_sam21_model.py")),
-    };
-    for (const QString &candidate : candidates)
-    {
-        if (QFileInfo::exists(candidate))
-        {
-            return QDir::cleanPath(candidate);
-        }
-    }
-    return QDir::cleanPath(sourceScript);
-}
-
-QString resolvePythonExecutable()
-{
-    const QString resolved = xjw::common::runtime::resolvePythonExecutable(
-        QProcessEnvironment::systemEnvironment(), plascanSourceRoot());
-    if (!resolved.isEmpty())
-    {
-        return resolved;
-    }
-
-    return QStringLiteral("python");
-}
-
-std::optional<xjw::mask::Sam21MaskGeneratorConfig> sam21MaskConfigFromSettings(const QJsonObject &settings,
-                                                                               QString *error)
-{
-    const QString variantToken = settings.value(QStringLiteral("sam21_variant")).toString(QStringLiteral("tiny"));
-    const xjw::mask::Sam21ModelVariant variant =
-        xjw::mask::sam21VariantFromToken(variantToken.toStdString());
-    const bool requestCuda =
-        settings.value(QStringLiteral("sam21_device")).toString(QStringLiteral("cuda")) == QLatin1String("cuda");
-    const bool allowFallback = settings.value(QStringLiteral("sam21_allow_fallback")).toBool(true);
-
-    const auto requestedNames = xjw::mask::sam21TorchScriptModelNames(variant, requestCuda);
-    const auto cpuNames = xjw::mask::sam21TorchScriptModelNames(variant, false);
-    const xjw::common::model::TorchScriptModelResolver resolver;
-    const QString requestedEncoder = resolver.findModel(QString::fromStdString(requestedNames.encoder));
-    const QString requestedDecoder = resolver.findModel(QString::fromStdString(requestedNames.decoder));
-    const QString cpuEncoder = resolver.findModel(QString::fromStdString(cpuNames.encoder));
-    const QString cpuDecoder = resolver.findModel(QString::fromStdString(cpuNames.decoder));
-
-    bool useCuda = requestCuda;
-    QString encoder = requestedEncoder;
-    QString decoder = requestedDecoder;
-    if (encoder.isEmpty() || decoder.isEmpty())
-    {
-        if (requestCuda && allowFallback && !cpuEncoder.isEmpty() && !cpuDecoder.isEmpty())
-        {
-            useCuda = false;
-            encoder = cpuEncoder;
-            decoder = cpuDecoder;
-        }
-        else
-        {
-            if (error)
-            {
-                const QString device = requestCuda ? QStringLiteral("CUDA") : QStringLiteral("CPU");
-                *error = QStringLiteral("未找到 SAM2.1 %1 TorchScript 模型：%2, %3。请放到 PLASCAN_MODEL_DIR 或 resources/models。")
-                    .arg(device,
-                         QString::fromStdString(requestedNames.encoder),
-                         QString::fromStdString(requestedNames.decoder));
-            }
-            return std::nullopt;
-        }
-    }
-
-    xjw::mask::Sam21MaskGeneratorConfig config;
-    config.encoderModelPath = utf8StdString(encoder);
-    config.decoderModelPath = utf8StdString(decoder);
-    config.cpuEncoderModelPath = utf8StdString(cpuEncoder);
-    config.cpuDecoderModelPath = utf8StdString(cpuDecoder);
-    config.useCuda = useCuda;
-    config.cudaDevice = std::max(0, settings.value(QStringLiteral("sam21_cuda_device")).toInt(0));
-    config.allowDeviceFallback = allowFallback;
-    config.inputSize = std::clamp(settings.value(QStringLiteral("sam21_input_size")).toInt(1024), 256, 2048);
-    config.maskThreshold = settings.value(QStringLiteral("sam21_mask_threshold")).toDouble(0.0);
-    config.multimaskOutput = true;
-    return config;
-}
-
 std::optional<xjw::mask::U2NetMaskGeneratorConfig> u2netMaskConfigFromSettings(const QJsonObject &settings,
                                                                                QString *error)
 {
-    const xjw::common::model::TorchScriptModelResolver resolver;
+    const xjw::common::model::ModelFileResolver resolver;
     const auto status = xjw::common::model::u2netModelStatus(resolver);
     if (!status.isInstalled)
     {
@@ -446,7 +337,7 @@ std::optional<xjw::mask::U2NetMaskGeneratorConfig> u2netMaskConfigFromSettings(c
     config.useCuda =
         settings.value(QStringLiteral("u2net_device")).toString(QStringLiteral("cuda")) == QLatin1String("cuda");
     config.allowDeviceFallback = settings.value(QStringLiteral("u2net_allow_fallback")).toBool(true);
-    config.cudaDevice = std::max(0, settings.value(QStringLiteral("sam21_cuda_device")).toInt(0));
+    config.cudaDevice = 0;
     config.inputSize = std::clamp(settings.value(QStringLiteral("u2net_input_size")).toInt(320), 128, 1024);
     config.foregroundThreshold =
         static_cast<float>(std::clamp(settings.value(QStringLiteral("u2net_mask_threshold")).toDouble(0.5),
@@ -985,169 +876,6 @@ void ProjectManager::setActiveImagePath(const QString &imagePath)
     _activeImagePath = imagePath;
 }
 
-void ProjectManager::installSam21Model(const QString &variantToken, GenerateMaskDialog *dialog)
-{
-    const QString cleanVariant = variantToken.trimmed().isEmpty() ? QStringLiteral("tiny") : variantToken.trimmed();
-    const QString pythonExecutable = resolvePythonExecutable();
-    const QString installerScript = resolveSam21InstallerScript();
-    const QString sourceRoot = plascanSourceRoot();
-
-    xjw::common::model::TorchScriptModelResolver resolver;
-    const QString modelDir = resolver.defaultModelDir();
-    if (modelDir.isEmpty() || !QDir().mkpath(modelDir))
-    {
-        showWarning(QStringLiteral("无法创建 SAM2.1 模型目录：%1").arg(modelDir), QStringLiteral("安装 SAM2.1 模型"));
-        return;
-    }
-
-    if (!QFileInfo::exists(installerScript))
-    {
-        showWarning(QStringLiteral("未找到 SAM2.1 安装脚本：%1").arg(installerScript),
-                    QStringLiteral("安装 SAM2.1 模型"));
-        return;
-    }
-
-    auto *progressDialog = new QProgressDialog(QStringLiteral("正在安装 SAM2.1 模型..."),
-                                               QStringLiteral("取消"),
-                                               0,
-                                               100,
-                                               _parent);
-    progressDialog->setWindowTitle(QStringLiteral("安装 SAM2.1 模型"));
-    progressDialog->setWindowModality(Qt::WindowModal);
-    progressDialog->setMinimumDuration(0);
-    progressDialog->setAutoClose(false);
-    progressDialog->setAutoReset(false);
-    progressDialog->setValue(0);
-    progressDialog->show();
-
-    auto *process = new QProcess(progressDialog);
-    process->setProcessChannelMode(QProcess::MergedChannels);
-
-    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
-    environment.insert(QStringLiteral("PLASCAN_MODEL_DIR"), modelDir);
-    environment.insert(QStringLiteral("PLASCAN_PYTHON_EXECUTABLE"), pythonExecutable);
-    environment.insert(QStringLiteral("PLASCAN_PYTHON"), pythonExecutable);
-    environment.insert(QStringLiteral("PYTHONUTF8"), QStringLiteral("1"));
-    environment.insert(QStringLiteral("PYTHONIOENCODING"), QStringLiteral("utf-8"));
-    process->setProcessEnvironment(environment);
-
-    QStringList arguments;
-    arguments << installerScript
-              << QStringLiteral("--variant") << cleanVariant
-              << QStringLiteral("--source-dir") << sourceRoot
-              << QStringLiteral("--model-dir") << modelDir
-              << QStringLiteral("--python-executable") << pythonExecutable
-              << QStringLiteral("--devices") << QStringLiteral("auto");
-
-    auto outputBuffer = std::make_shared<QString>();
-    QPointer<QProgressDialog> progressGuard(progressDialog);
-    QPointer<GenerateMaskDialog> dialogGuard(dialog);
-
-    connect(progressDialog, &QProgressDialog::canceled,
-            process,
-            [process, progressGuard]()
-            {
-                if (progressGuard)
-                {
-                    progressGuard->setLabelText(QStringLiteral("正在取消 SAM2.1 模型安装..."));
-                }
-                process->kill();
-            });
-
-    connect(process, &QProcess::readyReadStandardOutput,
-            process,
-            [process, outputBuffer, progressGuard]()
-            {
-                const QString text = QString::fromUtf8(process->readAllStandardOutput());
-                outputBuffer->append(text);
-                const QStringList lines = text.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
-                static const QRegularExpression downloadPercentPattern(QStringLiteral("PROGRESS download (\\d+)%"));
-                for (const QString &rawLine : lines)
-                {
-                    const QString line = rawLine.trimmed();
-                    if (!progressGuard || line.isEmpty())
-                    {
-                        continue;
-                    }
-
-                    const QRegularExpressionMatch match = downloadPercentPattern.match(line);
-                    if (match.hasMatch())
-                    {
-                        progressGuard->setRange(0, 100);
-                        progressGuard->setValue(std::clamp(match.captured(1).toInt(), 0, 100));
-                        progressGuard->setLabelText(QStringLiteral("正在下载 SAM2.1 checkpoint..."));
-                    }
-                    else if (line.contains(QStringLiteral("PROGRESS export started")))
-                    {
-                        progressGuard->setRange(0, 0);
-                        progressGuard->setLabelText(QStringLiteral("正在导出 TorchScript 模型..."));
-                    }
-                    else if (line.startsWith(QStringLiteral("PROGRESS")))
-                    {
-                        progressGuard->setLabelText(line.mid(QStringLiteral("PROGRESS").size()).trimmed());
-                    }
-                    else if (line.startsWith(QStringLiteral("EXPORT")))
-                    {
-                        progressGuard->setLabelText(line.mid(QStringLiteral("EXPORT").size()).trimmed());
-                    }
-                }
-            });
-
-    connect(process, &QProcess::errorOccurred,
-            process,
-            [this, progressGuard](QProcess::ProcessError error)
-            {
-                if (error == QProcess::FailedToStart)
-                {
-                    if (progressGuard)
-                    {
-                        progressGuard->close();
-                        progressGuard->deleteLater();
-                    }
-                    showWarning(QStringLiteral("无法启动 Python。请检查 PLASCAN_PYTHON_EXECUTABLE、PLASCAN_PYTHON 或项目 .venv。"),
-                                QStringLiteral("安装 SAM2.1 模型"));
-                }
-            });
-
-    connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            process,
-            [this, process, outputBuffer, progressGuard, dialogGuard](int exitCode, QProcess::ExitStatus exitStatus)
-            {
-                const bool success = exitStatus == QProcess::NormalExit && exitCode == 0;
-                if (progressGuard)
-                {
-                    progressGuard->setRange(0, 100);
-                    progressGuard->setValue(success ? 100 : 0);
-                    progressGuard->close();
-                    progressGuard->deleteLater();
-                }
-
-                if (success)
-                {
-                    if (dialogGuard)
-                    {
-                        dialogGuard->refreshSam21ModelStatus();
-                    }
-                    QMessageBox::information(_parent,
-                                             QStringLiteral("安装 SAM2.1 模型"),
-                                             QStringLiteral("SAM2.1 模型安装完成。"));
-                }
-                else
-                {
-                    QString output = outputBuffer ? outputBuffer->trimmed() : QString();
-                    if (output.size() > 2000)
-                    {
-                        output = output.right(2000);
-                    }
-                    showWarning(QStringLiteral("SAM2.1 模型安装失败。退出码：%1\n%2").arg(exitCode).arg(output),
-                                QStringLiteral("安装 SAM2.1 模型"));
-                }
-                process->deleteLater();
-            });
-
-    process->start(pythonExecutable, arguments);
-}
-
 void ProjectManager::openGenerateMaskDialog()
 {
     const QStringList allImages = _projectData ? _projectData->getAllImages() : QStringList();
@@ -1213,12 +941,6 @@ void ProjectManager::openGenerateMaskDialogForImages(const QStringList &requeste
     const QString activeImage = xjw::common::project::ProjectIO::resolveProjectResourcePath(projectPath, _activeImagePath);
     const QString currentImage = projectImages.value(normalizePath(activeImage));
     GenerateMaskDialog dialog(selectedImages, currentImage, _parent);
-    connect(&dialog, &GenerateMaskDialog::sam21InstallRequested,
-            this,
-            [this, &dialog](const QString &variantToken)
-            {
-                installSam21Model(variantToken, &dialog);
-            });
     if (dialog.exec() != QDialog::Accepted)
     {
         return;
@@ -1262,41 +984,7 @@ void ProjectManager::openGenerateMaskDialogForImages(const QStringList &requeste
             const auto operation = maskOperationFromSettings(settings);
             const QString methodToken =
                 settings.value(QStringLiteral("method")).toString(QStringLiteral("black_background"));
-            const bool useSam21 = methodToken == QLatin1String("sam21");
             const bool useU2Net = methodToken == QLatin1String("u2net");
-
-            std::unique_ptr<xjw::mask::Sam21MaskGenerator> sam21Generator;
-            if (useSam21)
-            {
-                const auto variant = xjw::mask::sam21VariantFromToken(
-                    settings.value(QStringLiteral("sam21_variant")).toString(QStringLiteral("tiny")).toStdString());
-                const bool requestCuda =
-                    settings.value(QStringLiteral("sam21_device")).toString(QStringLiteral("cuda"))
-                    == QLatin1String("cuda");
-                const auto modelNamesForLog = xjw::mask::sam21TorchScriptModelNames(variant, requestCuda);
-
-                QString configError;
-                const auto sam21Config = sam21MaskConfigFromSettings(settings, &configError);
-                if (!sam21Config.has_value())
-                {
-                    result.errors << configError;
-                    return result;
-                }
-
-                try
-                {
-                    sam21Generator = std::make_unique<xjw::mask::Sam21MaskGenerator>(sam21Config.value());
-                    LOG_INFO(QStringLiteral("SAM2.1 蒙版模型已加载: encoder=%1 decoder=%2 device=%3")
-                                 .arg(QString::fromStdString(modelNamesForLog.encoder),
-                                      QString::fromStdString(modelNamesForLog.decoder),
-                                      QString::fromStdString(sam21Generator->deviceLabel())));
-                }
-                catch (const std::exception &error)
-                {
-                    result.errors << QStringLiteral("SAM2.1 模型加载失败：%1").arg(QString::fromUtf8(error.what()));
-                    return result;
-                }
-            }
 
             std::unique_ptr<xjw::mask::U2NetMaskGenerator> u2netGenerator;
             if (useU2Net)
@@ -1355,13 +1043,7 @@ void ProjectManager::openGenerateMaskDialogForImages(const QStringList &requeste
                 cv::Mat generated;
                 try
                 {
-                    if (useSam21)
-                    {
-                        const auto prompt = xjw::mask::Sam21Prompt::autoBox(source);
-                        const auto maskResult = sam21Generator->generate(source, prompt);
-                        generated = maskResult.mask;
-                    }
-                    else if (useU2Net)
+                    if (useU2Net)
                     {
                         const auto maskResult = u2netGenerator->generate(source);
                         generated = maskResult.mask;

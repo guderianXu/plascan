@@ -1,7 +1,7 @@
 # image_matching 统一影像匹配模块
 
 `image_matching` 是 PlaScan 唯一的局部特征提取、学习型匹配、两视几何验证和匹配结果持久化模块。
-当前生产算法固定为 **CUDA SIFT + TensorRT LightGlue**。`matchphototask` 负责编排任务，SfM、GUI 和
+当前生产算法包括 **CUDA SIFT + TensorRT LightGlue** 与 **TensorRT LoMa-R**。`matchphototask` 负责编排任务，SfM、GUI 和
 CLI 只消费本模块的稳定结果契约，不直接依赖 SIFT 描述子或 TensorRT 数据布局。
 
 ## 模块边界
@@ -10,7 +10,9 @@ CLI 只消费本模块的稳定结果契约，不直接依赖 SIFT 描述子或 
 - `ImageMatchingRegistry` 是算法注册入口。增加新算法时注册新的实现，不修改 SfM、项目格式或查看器。
 - `sift/` 负责 CUDA SIFT。提取结果只保存在一次 `MatchPhotosTask` 的有界内存缓存中。
 - `lightglue/` 负责 TensorRT engine 加载、执行和输出后处理，不提供 TorchScript 或 CPU 隐式回退。
-- `sift_lightglue/` 组合上述前端并提供当前唯一注册算法 `sift_lightglue`。
+- `sift_lightglue/` 组合 CUDA SIFT 与 LightGlue，并注册算法 `sift_lightglue`。
+- `loma_r/` 负责 DaD + DeDoDe-G/DINOv2 特征与 LoMa-R 匹配的 TensorRT 执行，并注册算法 `loma_r`。
+- `tensorrt/` 提供两个算法共用的静态 engine 会话、CUDA 缓冲区和张量 ABI 校验。
 - `geometry/` 负责基础矩阵/单应模型验证和逐匹配像素残差。
 - `ImageMatchFile` 是 `.pimatch` 格式的唯一序列化入口。
 - `ImageMatchRepository` 负责对称写入、按缓存键查找和批量清理逐影像分片。
@@ -20,7 +22,7 @@ CLI 只消费本模块的稳定结果契约，不直接依赖 SIFT 描述子或 
 描述子只服务于当次 LightGlue 推理，SfM 和质量分析实际需要的是像点、跨影像对应、置信度、几何内点状态和
 残差。持久化描述子会把下游绑定到特征维度及模型版本，并产生重复 I/O。因此本模块采用以下生命周期：
 
-1. CUDA SIFT 提取关键点和描述子到任务级内存缓存。
+1. 所选算法提取关键点和描述子到任务级内存缓存。
 2. 所有引用该影像的候选像对完成后，描述子可以释放。
 3. 最终分片仅保存至少参与一个匹配的关键点观测和邻接匹配记录。
 4. 再次运行时只有算法 ID、算法版本、配置指纹和模型指纹全部命中的 `.pimatch` 像对可复用；
@@ -53,3 +55,14 @@ CLI 只消费本模块的稳定结果契约，不直接依赖 SIFT 描述子或 
 5. 增加注册、往返序列化、缓存失效、几何验证和损坏文件测试。
 
 只要满足该契约，项目格式、SfM 输入、匹配查看器和空三工作流无需了解新算法的描述子类型。
+
+## LoMa-R TensorRT 资源
+
+LoMa-R 使用一个 JSON manifest 绑定两个静态 TensorRT engine：特征 engine 输入 RGB 影像并输出
+DaD 关键点、置信度和 DeDoDe-G 描述子；匹配 engine 输入两组固定容量的归一化关键点与描述子并输出
+匹配概率矩阵。manifest 同时记录输入分辨率、关键点容量、描述子维度和 engine 内容指纹，禁止混用
+不兼容资源。运行时可通过 `MatchPhotosOptions::lomaRTensorRtPackagePath`、环境变量
+`PLASCAN_LOMA_R_TENSORRT_PACKAGE` 或标准模型目录解析该 manifest。
+
+导出脚本只在开发环境中使用 Python PyTorch 读取官方权重，生产 C++ 运行时不链接 LibTorch。具体命令、
+权重清单和部署方式见 `docs/models/README.md`。

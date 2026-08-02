@@ -9,6 +9,7 @@
 #include "MatchPhotosRuntime.h"
 #include "io/PathIO.h"
 #include "lightglue/LightGlueFeatureBudget.h"
+#include "loma_r/LoMaRAlgorithm.h"
 #include "sift_lightglue/SiftLightGlueAlgorithm.h"
 
 #include <QCryptographicHash>
@@ -60,6 +61,19 @@ QByteArray modelFingerprint(const QString &enginePath)
     return sha256(identity);
 }
 
+QByteArray modelFingerprint(const QStringList &paths)
+{
+    QByteArray identity;
+    for (const QString &path : paths)
+    {
+        const QFileInfo info(path);
+        identity += QDir::cleanPath(info.absoluteFilePath()).toUtf8() + '\n' +
+            QByteArray::number(info.size()) + '\n' +
+            QByteArray::number(info.lastModified().toMSecsSinceEpoch()) + '\n';
+    }
+    return sha256(identity);
+}
+
 QByteArray configFingerprint(const MatchPhotosOptions &options,
                              const MatchPhotosAlgorithmPlan &plan,
                              int matcherKeypointBudget,
@@ -67,13 +81,13 @@ QByteArray configFingerprint(const MatchPhotosOptions &options,
                              const QByteArray &engineFingerprint)
 {
     // JSON 键按固定顺序构造并压缩后计算 SHA-256。几何参数不属于“原始匹配”
-    // 缓存键：改变 USAC 阈值可以复用原始 LightGlue 对应并重新执行几何验证。
+    // 缓存键：改变 USAC 阈值可以复用原始对应并重新执行几何验证。
     QJsonObject object;
     object[QStringLiteral("algorithm")] = plan.algorithmId;
     object[QStringLiteral("algorithm_version")] = static_cast<int>(
         plan.algorithmVersion);
     object[QStringLiteral("max_image_dim")] = plan.maxImageDim;
-    object[QStringLiteral("sift_keypoint_limit")] = plan.maxKeypoints;
+    object[QStringLiteral("feature_keypoint_limit")] = plan.maxKeypoints;
     object[QStringLiteral("keypoint_limit_per_mpx")] = options.keypointLimitPerMegapixel;
     object[QStringLiteral("matcher_keypoint_budget")] = matcherKeypointBudget;
     object[QStringLiteral("match_threshold")] = static_cast<double>(effectiveMatchThreshold);
@@ -276,7 +290,8 @@ MatchPhotosStageReport MatchingStage::run(
     if (options.device == ComputeDevice::Cpu)
     {
         return makeMatchingReport(MatchPhotosStageStatus::Failed,
-                                  QStringLiteral("LightGlue 仅支持 TensorRT/CUDA"));
+                                  QStringLiteral("当前匹配算法 %1 仅支持 TensorRT/CUDA")
+                                      .arg(algorithmPlan.algorithmId));
     }
 
     const MatchPhotosGpuMemoryInfo gpuMemory =
@@ -286,41 +301,71 @@ MatchPhotosStageReport MatchingStage::run(
     budgetMemory.freeBytes = gpuMemory.freeBytes;
     budgetMemory.totalBytes = gpuMemory.totalBytes;
     budgetMemory.deviceIndex = gpuMemory.deviceIndex;
-    const int requestedMatcherBudget = image_matching::resolveSiftLightGlueKeypointBudget(
-        algorithmPlan.maxKeypoints,
-        budgetMemory);
-    const ResolvedLightGlueTensorRtEngine engine =
-        resolveLightGlueTensorRtEngine(options, requestedMatcherBudget);
-    if (!engine.isValid())
-    {
-        QString message = QStringLiteral(
-            "未找到 TensorRT LightGlue engine。请在“工作流程 - 设置”中指定 .engine，"
-            "或运行 scripts/models/export_lightglue_tensorrt.py 生成本机引擎。");
-        if (!engine.searchedDirectories.isEmpty())
-        {
-            message += QStringLiteral("\n已搜索：%1")
-                .arg(engine.searchedDirectories.join(QStringLiteral("; ")));
-        }
-        return makeMatchingReport(MatchPhotosStageStatus::Failed, message);
-    }
-    const QString enginePath = engine.path;
-    const QString engineName = engine.name;
-    const int matcherBudget = image_matching::clampLightGlueKeypointBudgetToEngine(
-        requestedMatcherBudget, engine.bucketKeypoints);
-    const float effectiveThreshold = image_matching::resolveSiftLightGlueMatchThreshold(
-        options.matchThreshold,
-        matcherBudget,
-        budgetMemory);
-    const QByteArray engineFingerprint = modelFingerprint(enginePath);
-    const QByteArray configurationFingerprint = configFingerprint(
-        options, algorithmPlan, matcherBudget, effectiveThreshold, engineFingerprint);
-
     image_matching::ImageMatchingRuntimeConfig runtime;
-    runtime.tensorRtEnginePath = enginePath;
     runtime.cudaDevice = options.cudaDevice;
     runtime.maxKeypoints = algorithmPlan.maxKeypoints;
-    runtime.maxMatcherKeypoints = matcherBudget;
-    runtime.matchThreshold = effectiveThreshold;
+    QString modelName;
+    QByteArray engineFingerprint;
+    int matcherBudget = 0;
+    float effectiveThreshold = options.matchThreshold;
+    if (algorithmPlan.algorithmId == QLatin1String(image_matching::kLoMaRAlgorithmId))
+    {
+        const ResolvedLoMaRTensorRtPackage package = resolveLoMaRTensorRtPackage(options);
+        if (!package.isValid())
+        {
+            QString message = QStringLiteral("LoMa-R TensorRT 模型包不可用：%1")
+                .arg(package.errorMessage);
+            if (!package.searchedDirectories.isEmpty())
+            {
+                message += QStringLiteral("\n已搜索：%1")
+                    .arg(package.searchedDirectories.join(QStringLiteral("; ")));
+            }
+            return makeMatchingReport(MatchPhotosStageStatus::Failed, message);
+        }
+        runtime.tensorRtFeatureEnginePath = package.featureEnginePath;
+        runtime.tensorRtMatcherEnginePath = package.matcherEnginePath;
+        runtime.modelInputWidth = package.inputWidth;
+        runtime.modelInputHeight = package.inputHeight;
+        runtime.descriptorDimension = package.descriptorDimension;
+        matcherBudget = package.keypointCount;
+        runtime.maxMatcherKeypoints = matcherBudget;
+        // LoMa-R 官方默认门限为 0.1；工作流默认 0.15 仍可作为更严格的用户门限。
+        runtime.matchThreshold = effectiveThreshold;
+        modelName = QFileInfo(package.manifestPath).fileName();
+        engineFingerprint = modelFingerprint(
+            {package.manifestPath, package.featureEnginePath, package.matcherEnginePath});
+    }
+    else
+    {
+        const int requestedMatcherBudget =
+            image_matching::resolveSiftLightGlueKeypointBudget(
+                algorithmPlan.maxKeypoints, budgetMemory);
+        const ResolvedLightGlueTensorRtEngine engine =
+            resolveLightGlueTensorRtEngine(options, requestedMatcherBudget);
+        if (!engine.isValid())
+        {
+            QString message = QStringLiteral(
+                "未找到 TensorRT LightGlue engine。请在“工作流程 - 设置”中指定 .engine，"
+                "或运行 scripts/models/export_lightglue_tensorrt.py 生成本机引擎。");
+            if (!engine.searchedDirectories.isEmpty())
+            {
+                message += QStringLiteral("\n已搜索：%1")
+                    .arg(engine.searchedDirectories.join(QStringLiteral("; ")));
+            }
+            return makeMatchingReport(MatchPhotosStageStatus::Failed, message);
+        }
+        matcherBudget = image_matching::clampLightGlueKeypointBudgetToEngine(
+            requestedMatcherBudget, engine.bucketKeypoints);
+        effectiveThreshold = image_matching::resolveSiftLightGlueMatchThreshold(
+            options.matchThreshold, matcherBudget, budgetMemory);
+        runtime.tensorRtEnginePath = engine.path;
+        runtime.maxMatcherKeypoints = matcherBudget;
+        runtime.matchThreshold = effectiveThreshold;
+        modelName = engine.name;
+        engineFingerprint = modelFingerprint(engine.path);
+    }
+    const QByteArray configurationFingerprint = configFingerprint(
+        options, algorithmPlan, matcherBudget, effectiveThreshold, engineFingerprint);
     runtime.configFingerprint = configurationFingerprint;
     runtime.modelFingerprint = engineFingerprint;
 
@@ -385,7 +430,8 @@ MatchPhotosStageReport MatchingStage::run(
     reportMatchPhotosProgress(
         context,
         QStringLiteral("matching"),
-        QStringLiteral("SIFT + LightGlue：%1 对待计算，%2 对复用，CUDA worker %3")
+        QStringLiteral("%1：%2 对待计算，%3 对复用，CUDA worker %4")
+            .arg(algorithmPlan.displayName)
             .arg(static_cast<int>(work.size()))
             .arg(reusedPairs)
             .arg(workerCount),
@@ -493,7 +539,8 @@ MatchPhotosStageReport MatchingStage::run(
                 reportMatchPhotosProgress(
                     context,
                     QStringLiteral("matching"),
-                    QStringLiteral("LightGlue 匹配：%1/%2，复用 %3，失败 %4")
+                    QStringLiteral("%1 匹配：%2/%3，复用 %4，失败 %5")
+                        .arg(algorithmPlan.displayName)
                         .arg(done)
                         .arg(totalPairs)
                         .arg(reusedPairs)
@@ -533,20 +580,22 @@ MatchPhotosStageReport MatchingStage::run(
         return makeMatchingReport(
             MatchPhotosStageStatus::Failed,
             fatalError.isEmpty() ? QStringLiteral("没有生成任何有效匹配结果")
-                                 : QStringLiteral("LightGlue 匹配失败：%1").arg(fatalError));
+                                 : QStringLiteral("%1 匹配失败：%2")
+                                       .arg(algorithmPlan.displayName, fatalError));
     }
 
     return makeMatchingReport(
         MatchPhotosStageStatus::Completed,
-        QStringLiteral("SIFT + LightGlue 匹配完成：%1/%2 对，原始匹配 %3，复用 %4，"
-                       "失败 %5，CUDA worker %6，模型 %7")
+        QStringLiteral("%1 匹配完成：%2/%3 对，原始匹配 %4，复用 %5，"
+                       "失败 %6，CUDA worker %7，模型 %8")
+            .arg(algorithmPlan.displayName)
             .arg(matchedPairs)
             .arg(totalPairs)
             .arg(totalMatches)
             .arg(reusedPairs)
             .arg(failedPairs.load())
             .arg(workerCount)
-            .arg(engineName),
+            .arg(modelName),
         matchedPairs);
 }
 

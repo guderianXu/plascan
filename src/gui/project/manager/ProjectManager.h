@@ -383,5 +383,4 @@ private:
     // 辅助：校验项目是否已打开；失败时统一弹窗提示并返回 false
     bool ensureProjectOpen(const QString &message = QStringLiteral("请先打开项目"),
                            const QString &title = QStringLiteral("提示")) const;
-    void installSam21Model(const QString &variantToken, GenerateMaskDialog *dialog = nullptr);
 };

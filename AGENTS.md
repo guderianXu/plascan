@@ -7,7 +7,7 @@
 PlaScan 是面向行星表面影像的摄影测量处理系统，主线是从多视角影像生成稀疏点云、密集点云、网格、DEM 和 DOM。项目包含：
 
 - C++20 / CMake 的核心库、CLI 工具和 Qt6 GUI。
-- OpenCV、LibTorch、GDAL、libtiff、libzip、OpenMP、GTest 等依赖。
+- OpenCV、TensorRT、GDAL、libtiff、libzip、OpenMP、GTest 等依赖。
 - CUDA 可选加速，主要用于深度学习特征、匹配、MVS 和 dense match。
 - Python 脚本用于模型导出、深度学习特征提取和辅助处理。
 - `3rdparty/plapoint` 和 `3rdparty/plamatrix` 两个 git submodule。

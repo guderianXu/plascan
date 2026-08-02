@@ -8,7 +8,7 @@ relative model, build, and test-data paths resolve consistently.
 | `models/` | Download, export, and maintain model resources. |
 | `workflows/` | User-invoked reconstruction, feature, and matching workflows. |
 | `bench/` | Deterministic performance and prepared-dataset benchmark runners. |
-| `env/` | Local Python, LibTorch, vcpkg, and CMake environment setup. |
+| `env/` | Local Python, vcpkg, and CMake environment setup. |
 | `build_win/` | Windows CUDA build and developer-shell entrypoints. |
 | `marker_targets/` | Marker corpus import and printable-target verification. |
 | `validation/` | Regression, third-party comparison, and reproducibility tools. |

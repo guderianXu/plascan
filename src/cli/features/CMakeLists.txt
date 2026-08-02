@@ -21,14 +21,12 @@ if(TARGET matchphototask AND TARGET plascan_cli_photogrammetry_common)
             matchphototask
             plascan_cli_photogrammetry_common
             plascan_common_project
-            ${TORCH_LIBRARIES}
         INCLUDE_DIRECTORIES
             ${CMAKE_SOURCE_DIR}/src/core/matchphototask
             ${CMAKE_SOURCE_DIR}/src/core/matchphototask/algorithm
             ${CMAKE_SOURCE_DIR}/src/core/matchphototask/pair_selection
             ${CMAKE_SOURCE_DIR}/src/core/matchphototask/runtime
             ${CMAKE_SOURCE_DIR}/src/core/matchphototask/task
-            ${TORCH_INCLUDE_DIRS}
             ${OpenCV_INCLUDE_DIRS}
         COMPILE_DEFINITIONS PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
         WITH_NVRTC_RPATH

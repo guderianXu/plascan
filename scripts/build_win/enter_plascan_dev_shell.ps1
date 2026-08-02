@@ -6,7 +6,6 @@ param(
     [string] $VsDevCmd = "",
     [string] $CMakeExe = "C:\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
     [string] $CudaRoot = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1",
-    [string] $TorchRoot = "",
     [switch] $HeadlessQt,
     [switch] $NoLaunch,
     [switch] $SkipVsDevCmd,
@@ -195,7 +194,6 @@ function Set-PlascanWindowsBuildEnvironment
     param(
         [Parameter(Mandatory = $true)][string] $BuildPath,
         [Parameter(Mandatory = $true)][string] $VcpkgPath,
-        [Parameter(Mandatory = $true)][string] $TorchPath,
         [Parameter(Mandatory = $true)][string] $CudaPath,
         [Parameter(Mandatory = $true)][string] $CMakePath,
         [Parameter(Mandatory = $true)][string] $ProjectRoot,
@@ -204,7 +202,6 @@ function Set-PlascanWindowsBuildEnvironment
 
     $vcpkgInstalled = Join-Path $BuildPath "vcpkg_installed"
     $tripletRoot = Join-Path $vcpkgInstalled "x64-windows"
-    $torchConfig = Join-Path $TorchPath "share\cmake\Torch"
     $qtPluginsRoot = Join-Path $tripletRoot "Qt6\plugins"
     $qtPlatformsRoot = Join-Path $qtPluginsRoot "platforms"
     $cmakeBin = Split-Path -Parent $CMakePath
@@ -228,13 +225,11 @@ function Set-PlascanWindowsBuildEnvironment
     $env:VCPKG_ROOT = $VcpkgPath
     $env:VCPKG_DEFAULT_TRIPLET = "x64-windows"
     $env:VCPKG_INSTALLED_DIR = Convert-ToCMakePath $vcpkgInstalled
-    $env:PLASCAN_TORCH_DIR = Convert-ToCMakePath $torchConfig
-    $env:Torch_DIR = Convert-ToCMakePath $torchConfig
     $env:CUDAToolkit_ROOT = Convert-ToCMakePath $CudaPath
     $env:CUDA_PATH = Convert-ToCMakePath $CudaPath
     $env:CUDA_HOME = Convert-ToCMakePath $CudaPath
     $env:CUDA_BIN_PATH = (Convert-ToCMakePath (Join-Path $CudaPath "bin"))
-    $env:CMAKE_PREFIX_PATH = ((Convert-ToCMakePath $tripletRoot), (Convert-ToCMakePath $TorchPath)) -join ';'
+    $env:CMAKE_PREFIX_PATH = Convert-ToCMakePath $tripletRoot
     $env:QT_PLUGIN_PATH = Convert-ToCMakePath $qtPluginsRoot
     $env:QT_QPA_PLATFORM_PLUGIN_PATH = Convert-ToCMakePath $qtPlatformsRoot
 
@@ -256,7 +251,6 @@ function Set-PlascanWindowsBuildEnvironment
 
     $rejectRoots = @(
         (Join-Path $ProjectRoot "build\windows-vcpkg-release"),
-        (Join-Path $ProjectRoot "build\env\libtorch\libtorch"),
         "E:\code\sat_sim_cuda\build\vcpkg"
     )
 
@@ -294,8 +288,6 @@ function Set-PlascanWindowsBuildEnvironment
         $runtimePythonPathEntries,
         (Join-Path $tripletRoot "bin"),
         (Join-Path $tripletRoot "tools\Qt6\bin"),
-        (Join-Path $TorchPath "lib"),
-        (Join-Path $TorchPath "bin"),
         (Join-Path $CudaPath "bin"),
         (Join-Path $CudaPath "nvvm\bin"),
         $cmakeBin,
@@ -322,11 +314,6 @@ if ([string]::IsNullOrWhiteSpace($BuildDir))
 }
 $BuildDir = Resolve-FullPath $BuildDir
 
-if ([string]::IsNullOrWhiteSpace($TorchRoot))
-{
-    $TorchRoot = Join-Path $SourceDir "build\env\libtorch-cu130\libtorch"
-}
-$TorchRoot = Resolve-FullPath $TorchRoot
 $VcpkgRoot = Resolve-FullPath $VcpkgRoot
 $CudaRoot = Resolve-FullPath $CudaRoot
 $CMakeExe = Resolve-FullPath $CMakeExe
@@ -338,7 +325,6 @@ $VsDevCmd = Resolve-FullPath $VsDevCmd
 
 $vcpkgToolchain = Join-Path $VcpkgRoot "scripts\buildsystems\vcpkg.cmake"
 $cudaNvcc = Join-Path $CudaRoot "bin\nvcc.exe"
-$torchConfig = Join-Path $TorchRoot "share\cmake\Torch\TorchConfig.cmake"
 
 Assert-ExistingPath $SourceDir "SourceDir"
 Assert-ExistingPath (Join-Path $SourceDir "CMakeLists.txt") "PlaScan CMakeLists.txt"
@@ -346,8 +332,6 @@ Assert-ExistingPath $VcpkgRoot "VcpkgRoot"
 Assert-ExistingPath $vcpkgToolchain "vcpkg toolchain"
 Assert-ExistingPath $CudaRoot "CudaRoot"
 Assert-ExistingPath $cudaNvcc "CUDA nvcc"
-Assert-ExistingPath $TorchRoot "TorchRoot"
-Assert-ExistingPath $torchConfig "TorchConfig.cmake"
 Assert-ExistingPath $CMakeExe "CMake"
 
 $vsDevPathEntries = @()
@@ -361,7 +345,6 @@ New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 Set-PlascanWindowsBuildEnvironment `
     -BuildPath $BuildDir `
     -VcpkgPath $VcpkgRoot `
-    -TorchPath $TorchRoot `
     -CudaPath $CudaRoot `
     -CMakePath $CMakeExe `
     -ProjectRoot $SourceDir `
@@ -390,7 +373,6 @@ if (-not $Quiet)
     {
         Write-Host "  MSVC:      $($clCommand.Source)"
     }
-    Write-Host "  Torch:     $TorchRoot"
     Write-Host "  CUDA:      $CudaRoot"
     if ($env:PLASCAN_PYTHON_EXECUTABLE)
     {

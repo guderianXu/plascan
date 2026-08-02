@@ -67,7 +67,6 @@ function(add_reconstruction_workflow_cli name)
             Qt6::Concurrent
             Qt6::Gui
             plascan_common_log
-            ${TORCH_LIBRARIES}
         INCLUDE_DIRECTORIES
             ${CMAKE_SOURCE_DIR}/src/common
             ${CMAKE_SOURCE_DIR}/src/core/camera
@@ -83,7 +82,6 @@ function(add_reconstruction_workflow_cli name)
             ${CMAKE_SOURCE_DIR}/src/gui
             ${CMAKE_SOURCE_DIR}/src/gui/compat
             ${CMAKE_SOURCE_DIR}/src/gui/project/support
-            ${TORCH_INCLUDE_DIRS}
             ${OpenCV_INCLUDE_DIRS}
         COMPILE_DEFINITIONS PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
         WITH_NVRTC_RPATH

@@ -245,6 +245,12 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     {
         tieOptions.lightGlueTensorRtEnginePath.clear();
     }
+    tieOptions.lomaRTensorRtPackagePath =
+        QDir::cleanPath(options.lomaRTensorRtPackagePath.trimmed());
+    if (options.lomaRTensorRtPackagePath.trimmed().isEmpty())
+    {
+        tieOptions.lomaRTensorRtPackagePath.clear();
+    }
     tieOptions.maskApplyMode = normalizedToken(options.maskApplyMode, QStringLiteral("none"));
     tieOptions.cudaDevice = std::max(0, options.cudaDevice);
     tieOptions.cudaParallelPairs = std::max(0, options.cudaParallelPairs);

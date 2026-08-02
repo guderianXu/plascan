@@ -25,7 +25,8 @@ struct FeaturePreparationRequest
     QString featurePath;
 };
 
-// CPU 预取阶段的产物。这里只保存后续 SIFT 必需的数据，避免同时驻留原图和缩放图。
+// CPU 预取阶段的产物。inputImage 的通道数由算法能力决定：SIFT 使用灰度，
+// LoMa-R 使用 BGR；队列仍只保留一份缩放后的输入，避免重复驻留原图。
 struct PreparedFeatureImage
 {
     int index = -1;

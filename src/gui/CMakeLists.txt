@@ -86,7 +86,6 @@ target_include_directories(plascan_gui PRIVATE
   ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
   ${CMAKE_SOURCE_DIR}/src/common
   ${OpenCV_INCLUDE_DIRS}
-  ${TORCH_INCLUDE_DIRS}
 )
 
 target_include_directories(gui_project PRIVATE
@@ -140,7 +139,6 @@ target_link_libraries(plascan_gui PRIVATE
   plascan_common_io
   plascan_common_model
   project_workflows
-  ${TORCH_LIBRARIES}
   ${OpenCV_LIBS}
   ${PLASCAN_LIBZIP_TARGET}
   ${PLASCAN_GDAL_TARGET}

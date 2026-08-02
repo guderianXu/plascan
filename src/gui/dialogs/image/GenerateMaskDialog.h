@@ -10,7 +10,6 @@ class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
-class QPushButton;
 class QSpinBox;
 class QWidget;
 
@@ -24,16 +23,9 @@ public:
 
     QJsonObject collectSettings() const;
 
-signals:
-    void sam21InstallRequested(const QString &variantToken);
-
-public slots:
-    void refreshSam21ModelStatus();
-
 private slots:
     void updateThresholdState();
     void updateMethodState();
-    void updateSam21StatusText();
     void updateU2NetStatusText();
 
 private:
@@ -43,21 +35,11 @@ private:
     QComboBox *_operationCombo{};
     QButtonGroup *_scopeGroup{};
     QWidget *_thresholdParameterPanel{};
-    QWidget *_sam21ParameterPanel{};
     QWidget *_u2netParameterPanel{};
     QCheckBox *_autoThresholdCheck{};
     QDoubleSpinBox *_thresholdSpin{};
     QSpinBox *_morphologyRadiusSpin{};
     QSpinBox *_minComponentAreaSpin{};
-    QComboBox *_sam21VariantCombo{};
-    QComboBox *_sam21DeviceCombo{};
-    QComboBox *_sam21PromptModeCombo{};
-    QCheckBox *_sam21AllowFallbackCheck{};
-    QPushButton *_sam21InstallButton{};
-    QLabel *_sam21ModelStatusLabel{};
-    QSpinBox *_sam21CudaDeviceSpin{};
-    QSpinBox *_sam21InputSizeSpin{};
-    QDoubleSpinBox *_sam21MaskThresholdSpin{};
     QComboBox *_u2netDeviceCombo{};
     QCheckBox *_u2netAllowFallbackCheck{};
     QLabel *_u2netModelStatusLabel{};

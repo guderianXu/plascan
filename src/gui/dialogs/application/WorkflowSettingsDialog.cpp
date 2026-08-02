@@ -22,6 +22,7 @@
 #include <QLineEdit>
 #include <QPalette>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QStackedWidget>
 #include <QStyle>
 #include <QToolButton>
@@ -36,6 +37,7 @@ constexpr auto kReconstructionWorkflowId = "reconstruction";
 constexpr auto kDemWorkflowId = "dem";
 constexpr auto kOrthomosaicWorkflowId = "orthomosaic";
 constexpr auto kSiftLightGlueAlgorithmId = "sift_lightglue";
+constexpr auto kLoMaRAlgorithmId = "loma_r";
 
 struct WorkflowEntry
 {
@@ -54,6 +56,7 @@ QJsonObject defaultAerialSettings()
     QJsonObject settings;
     settings[QStringLiteral("algorithm_id")] = QString::fromLatin1(kSiftLightGlueAlgorithmId);
     settings[QStringLiteral("lightglue_tensorrt_engine")] = QString();
+    settings[QStringLiteral("loma_r_tensorrt_package")] = QString();
     return settings;
 }
 
@@ -138,7 +141,7 @@ QJsonObject WorkflowSettingsDialog::defaultSettings()
     workflows[QString::fromLatin1(kOrthomosaicWorkflowId)] = QJsonObject();
 
     QJsonObject settings;
-    settings[QStringLiteral("workflow_settings_version")] = 3;
+    settings[QStringLiteral("workflow_settings_version")] = 4;
     settings[QStringLiteral("selected_workflow")] = QString::fromLatin1(kAerialWorkflowId);
     settings[QStringLiteral("workflows")] = workflows;
     return settings;
@@ -169,6 +172,8 @@ QJsonObject WorkflowSettingsDialog::aerialTriangulationSettings(const QJsonObjec
     }
     aerial[QStringLiteral("lightglue_tensorrt_engine")] =
         source.value(QStringLiteral("lightglue_tensorrt_engine")).toString().trimmed();
+    aerial[QStringLiteral("loma_r_tensorrt_package")] =
+        source.value(QStringLiteral("loma_r_tensorrt_package")).toString().trimmed();
     return aerial;
 }
 
@@ -215,22 +220,22 @@ void WorkflowSettingsDialog::setupUi()
     auto *enginePathLayout = new QHBoxLayout(enginePathRow);
     enginePathLayout->setContentsMargins(0, 0, 0, 0);
     enginePathLayout->setSpacing(6);
-    _lightGlueEngineEdit = new QLineEdit(enginePathRow);
-    _lightGlueEngineEdit->setObjectName(QStringLiteral("aerialLightGlueEngineEdit"));
-    _lightGlueEngineEdit->setPlaceholderText(QStringLiteral("自动选择本机引擎"));
-    _lightGlueEngineEdit->setClearButtonEnabled(true);
-    _lightGlueEngineBrowseButton = new QToolButton(enginePathRow);
-    _lightGlueEngineBrowseButton->setIcon(style()->standardIcon(QStyle::SP_DialogOpenButton));
-    _lightGlueEngineBrowseButton->setToolTip(QStringLiteral("选择 TensorRT 引擎"));
-    _lightGlueEngineBrowseButton->setFixedSize(32, 30);
-    enginePathLayout->addWidget(_lightGlueEngineEdit, 1);
-    enginePathLayout->addWidget(_lightGlueEngineBrowseButton);
-    aerialForm->addRow(QStringLiteral("TensorRT 引擎:"), enginePathRow);
+    _matchingResourceEdit = new QLineEdit(enginePathRow);
+    _matchingResourceEdit->setObjectName(QStringLiteral("aerialMatchingResourceEdit"));
+    _matchingResourceEdit->setPlaceholderText(QStringLiteral("自动选择本机模型资源"));
+    _matchingResourceEdit->setClearButtonEnabled(true);
+    _matchingResourceBrowseButton = new QToolButton(enginePathRow);
+    _matchingResourceBrowseButton->setIcon(style()->standardIcon(QStyle::SP_DialogOpenButton));
+    _matchingResourceBrowseButton->setToolTip(QStringLiteral("选择 TensorRT 模型资源"));
+    _matchingResourceBrowseButton->setFixedSize(32, 30);
+    enginePathLayout->addWidget(_matchingResourceEdit, 1);
+    enginePathLayout->addWidget(_matchingResourceBrowseButton);
+    aerialForm->addRow(QStringLiteral("模型资源:"), enginePathRow);
 
-    _lightGlueEngineStatusLabel = new QLabel(aerialGroup);
-    _lightGlueEngineStatusLabel->setWordWrap(true);
-    _lightGlueEngineStatusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    aerialForm->addRow(QStringLiteral("当前生效:"), _lightGlueEngineStatusLabel);
+    _matchingResourceStatusLabel = new QLabel(aerialGroup);
+    _matchingResourceStatusLabel->setWordWrap(true);
+    _matchingResourceStatusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    aerialForm->addRow(QStringLiteral("当前生效:"), _matchingResourceStatusLabel);
     aerialLayout->addWidget(aerialGroup);
     aerialLayout->addStretch(1);
     _workflowPages->addWidget(aerialPage);
@@ -246,23 +251,27 @@ void WorkflowSettingsDialog::setupUi()
     connect(_workflowCombo, qOverload<int>(&QComboBox::currentIndexChanged),
             this, &WorkflowSettingsDialog::setCurrentWorkflow);
     connect(_matchingAlgorithmCombo, qOverload<int>(&QComboBox::currentIndexChanged),
-            this, [this]() { refreshAlgorithmControls(); });
-    connect(_lightGlueEngineEdit, &QLineEdit::textChanged,
-            this, [this]() { refreshLightGlueEngineStatus(); });
-    connect(_lightGlueEngineBrowseButton, &QToolButton::clicked, this, [this]()
+            this, [this]() { switchAlgorithmResource(); });
+    connect(_matchingResourceEdit, &QLineEdit::textChanged,
+            this, [this]() { refreshMatchingResourceStatus(); });
+    connect(_matchingResourceBrowseButton, &QToolButton::clicked, this, [this]()
     {
-        const QString currentPath = _lightGlueEngineEdit->text().trimmed();
+        const QString algorithmId = _matchingAlgorithmCombo->currentData().toString();
+        const bool loMaR = algorithmId == QLatin1String(kLoMaRAlgorithmId);
+        const QString currentPath = _matchingResourceEdit->text().trimmed();
         const QString startPath = currentPath.isEmpty()
             ? QString()
             : QFileInfo(currentPath).absolutePath();
         const QString selected = QFileDialog::getOpenFileName(
             this,
-            QStringLiteral("选择 TensorRT LightGlue 引擎"),
+            loMaR ? QStringLiteral("选择 LoMa-R TensorRT 模型清单")
+                  : QStringLiteral("选择 TensorRT LightGlue 引擎"),
             startPath,
-            QStringLiteral("TensorRT engine (*.engine);;所有文件 (*)"));
+            loMaR ? QStringLiteral("LoMa-R manifest (*.json);;所有文件 (*)")
+                  : QStringLiteral("TensorRT engine (*.engine);;所有文件 (*)"));
         if (!selected.isEmpty())
         {
-            _lightGlueEngineEdit->setText(QFileInfo(selected).absoluteFilePath());
+            _matchingResourceEdit->setText(QFileInfo(selected).absoluteFilePath());
         }
     });
 
@@ -307,16 +316,19 @@ void WorkflowSettingsDialog::applySettings(const QJsonObject &requestedSettings)
     const QString algorithmId = aerial.value(QStringLiteral("algorithm_id")).toString();
     const int algorithmIndex = _matchingAlgorithmCombo->findData(algorithmId);
     _matchingAlgorithmCombo->setCurrentIndex(algorithmIndex >= 0 ? algorithmIndex : 0);
-    _lightGlueEngineEdit->setText(
-        aerial.value(QStringLiteral("lightglue_tensorrt_engine")).toString());
+    _lightGlueEnginePath =
+        aerial.value(QStringLiteral("lightglue_tensorrt_engine")).toString();
+    _lomaRPackagePath =
+        aerial.value(QStringLiteral("loma_r_tensorrt_package")).toString();
+    _currentAlgorithmId.clear();
+    switchAlgorithmResource();
     setCurrentWorkflow(_workflowCombo->currentIndex());
-    refreshAlgorithmControls();
 }
 
 QJsonObject WorkflowSettingsDialog::collectSettings() const
 {
     QJsonObject settings = normalizedSettings(_appliedSettings);
-    settings[QStringLiteral("workflow_settings_version")] = 3;
+    settings[QStringLiteral("workflow_settings_version")] = 4;
     settings[QStringLiteral("selected_workflow")] =
         _workflowCombo->currentData().toString();
 
@@ -326,8 +338,18 @@ QJsonObject WorkflowSettingsDialog::collectSettings() const
     aerial[QStringLiteral("algorithm_id")] = algorithmId.isEmpty()
         ? QString::fromLatin1(kSiftLightGlueAlgorithmId)
         : algorithmId;
-    aerial[QStringLiteral("lightglue_tensorrt_engine")] =
-        _lightGlueEngineEdit->text().trimmed();
+    QString lightGluePath = _lightGlueEnginePath;
+    QString loMaRPath = _lomaRPackagePath;
+    if (_currentAlgorithmId == QLatin1String(kSiftLightGlueAlgorithmId))
+    {
+        lightGluePath = _matchingResourceEdit->text().trimmed();
+    }
+    else if (_currentAlgorithmId == QLatin1String(kLoMaRAlgorithmId))
+    {
+        loMaRPath = _matchingResourceEdit->text().trimmed();
+    }
+    aerial[QStringLiteral("lightglue_tensorrt_engine")] = lightGluePath;
+    aerial[QStringLiteral("loma_r_tensorrt_package")] = loMaRPath;
     workflows[QString::fromLatin1(kAerialWorkflowId)] = aerial;
     settings[QStringLiteral("workflows")] = workflows;
     return settings;
@@ -343,50 +365,90 @@ void WorkflowSettingsDialog::setCurrentWorkflow(int index)
 
 void WorkflowSettingsDialog::refreshAlgorithmControls()
 {
-    const bool usesLightGlue = _matchingAlgorithmCombo->currentData().toString() ==
-        QString::fromLatin1(kSiftLightGlueAlgorithmId);
-    _lightGlueEngineEdit->setEnabled(usesLightGlue);
-    _lightGlueEngineBrowseButton->setEnabled(usesLightGlue);
-    if (usesLightGlue)
+    const QString algorithmId = _matchingAlgorithmCombo->currentData().toString();
+    const bool supported = algorithmId == QLatin1String(kSiftLightGlueAlgorithmId) ||
+        algorithmId == QLatin1String(kLoMaRAlgorithmId);
+    _matchingResourceEdit->setEnabled(supported);
+    _matchingResourceBrowseButton->setEnabled(supported);
+    if (supported)
     {
-        refreshLightGlueEngineStatus();
+        refreshMatchingResourceStatus();
     }
     else
     {
-        _lightGlueEngineStatusLabel->setText(QStringLiteral("不适用"));
+        _matchingResourceStatusLabel->setText(QStringLiteral("不适用"));
     }
 }
 
-void WorkflowSettingsDialog::refreshLightGlueEngineStatus()
+void WorkflowSettingsDialog::switchAlgorithmResource()
 {
-    if (!_lightGlueEngineEdit || !_lightGlueEngineStatusLabel ||
-        _matchingAlgorithmCombo->currentData().toString() !=
-            QString::fromLatin1(kSiftLightGlueAlgorithmId))
+    if (!_matchingResourceEdit || !_matchingAlgorithmCombo)
+    {
+        return;
+    }
+    if (_currentAlgorithmId == QLatin1String(kSiftLightGlueAlgorithmId))
+    {
+        _lightGlueEnginePath = _matchingResourceEdit->text().trimmed();
+    }
+    else if (_currentAlgorithmId == QLatin1String(kLoMaRAlgorithmId))
+    {
+        _lomaRPackagePath = _matchingResourceEdit->text().trimmed();
+    }
+    _currentAlgorithmId = _matchingAlgorithmCombo->currentData().toString();
+    const QSignalBlocker block(_matchingResourceEdit);
+    _matchingResourceEdit->setText(
+        _currentAlgorithmId == QLatin1String(kLoMaRAlgorithmId)
+            ? _lomaRPackagePath
+            : _lightGlueEnginePath);
+    refreshAlgorithmControls();
+}
+
+void WorkflowSettingsDialog::refreshMatchingResourceStatus()
+{
+    if (!_matchingResourceEdit || !_matchingResourceStatusLabel)
     {
         return;
     }
 
     xjw::matchphotos::MatchPhotosOptions options;
-    options.lightGlueTensorRtEnginePath = _lightGlueEngineEdit->text().trimmed();
-    const auto resolved = xjw::matchphotos::resolveLightGlueTensorRtEngine(options, 4096);
+    const QString algorithmId = _matchingAlgorithmCombo->currentData().toString();
+    QString resolvedPath;
+    QString detail;
+    if (algorithmId == QLatin1String(kLoMaRAlgorithmId))
+    {
+        options.lomaRTensorRtPackagePath = _matchingResourceEdit->text().trimmed();
+        const auto resolved = xjw::matchphotos::resolveLoMaRTensorRtPackage(options);
+        resolvedPath = resolved.manifestPath;
+        detail = resolved.isValid()
+            ? QStringLiteral("  [K=%1, D=%2, %3x%4]")
+                  .arg(resolved.keypointCount)
+                  .arg(resolved.descriptorDimension)
+                  .arg(resolved.inputWidth)
+                  .arg(resolved.inputHeight)
+            : resolved.errorMessage;
+    }
+    else
+    {
+        options.lightGlueTensorRtEnginePath = _matchingResourceEdit->text().trimmed();
+        const auto resolved = xjw::matchphotos::resolveLightGlueTensorRtEngine(options, 4096);
+        resolvedPath = resolved.path;
+        detail = resolved.bucketKeypoints > 0
+            ? QStringLiteral("  [K=%1]").arg(resolved.bucketKeypoints)
+            : QString();
+    }
 
-    QPalette palette = _lightGlueEngineStatusLabel->palette();
-    if (!resolved.isValid())
+    QPalette palette = _matchingResourceStatusLabel->palette();
+    if (resolvedPath.isEmpty())
     {
         palette.setColor(QPalette::WindowText, QColor(180, 45, 45));
-        _lightGlueEngineStatusLabel->setPalette(palette);
-        _lightGlueEngineStatusLabel->setText(
-            options.lightGlueTensorRtEnginePath.isEmpty()
-                ? QStringLiteral("未找到自动引擎")
-                : QStringLiteral("指定引擎不可用"));
+        _matchingResourceStatusLabel->setPalette(palette);
+        _matchingResourceStatusLabel->setText(
+            detail.isEmpty() ? QStringLiteral("未找到自动模型资源") : detail);
         return;
     }
 
     palette.setColor(QPalette::WindowText, QColor(35, 110, 70));
-    _lightGlueEngineStatusLabel->setPalette(palette);
-    const QString bucketLabel = resolved.bucketKeypoints > 0
-        ? QStringLiteral("  [K=%1]").arg(resolved.bucketKeypoints)
-        : QString();
-    _lightGlueEngineStatusLabel->setText(
-        QDir::toNativeSeparators(resolved.path) + bucketLabel);
+    _matchingResourceStatusLabel->setPalette(palette);
+    _matchingResourceStatusLabel->setText(
+        QDir::toNativeSeparators(resolvedPath) + detail);
 }

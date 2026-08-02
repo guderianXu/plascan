@@ -35,6 +35,9 @@ struct MatchPhotosOptions
 
     // LightGlue 仅使用 TensorRT。engine 与目标 GPU 和 TensorRT 版本绑定。
     QString lightGlueTensorRtEnginePath;
+    // LoMa-R 使用一个 JSON 清单同时绑定 DaD + DeDoDe-G 特征引擎和
+    // LoMa-R 匹配引擎，避免两个不兼容 engine 被误组合。
+    QString lomaRTensorRtPackagePath;
 
     // 影像对规划保持显式配置，方便调用方复用 overlap 结果，
     // 或在测试、批处理中强制使用确定性模式。

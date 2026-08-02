@@ -33,6 +33,7 @@ struct ImageMatchingAlgorithmDescriptor
     AlgorithmInputModel inputModel = AlgorithmInputModel::ReusableFeatures;
     bool requiresCuda = false;
     bool suppliesStableFeatureIds = true;
+    bool requiresColorInput = false; ///< 特征前端需要 RGB，而不是仅灰度输入。
 };
 
 /**
@@ -44,6 +45,8 @@ struct ImageMatchingAlgorithmDescriptor
 struct ImageMatchingRuntimeConfig
 {
     QString tensorRtEnginePath;
+    QString tensorRtFeatureEnginePath;
+    QString tensorRtMatcherEnginePath;
     int cudaDevice = 0;
     int maxKeypoints = 40000;
     int maxMatcherKeypoints = 0;
@@ -52,6 +55,9 @@ struct ImageMatchingRuntimeConfig
     float grayscaleMin = 0.0f;
     float grayscaleMax = 1.0f;
     float matchThreshold = 0.15f;
+    int modelInputWidth = 0;
+    int modelInputHeight = 0;
+    int descriptorDimension = 0;
     bool allowCpuSiftFallback = false;
     QByteArray configFingerprint;
     QByteArray modelFingerprint;
@@ -62,6 +68,7 @@ struct ImageFeatureInput
 {
     QString imagePath;
     cv::Mat grayImage;
+    cv::Mat colorImage; ///< BGR/BGRA/RGB 由具体算法在边界处规范化。
     cv::Mat validMask; ///< 空矩阵表示不应用蒙版；非零像素表示允许提取。
     int originalWidth = 0;
     int originalHeight = 0;

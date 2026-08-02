@@ -1,7 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 project(PlaScanCore VERSION 1.1.6 LANGUAGES CXX)
 
-message(STATUS "plascan_core: relying on vcpkg/conda/system CMAKE_PREFIX_PATH for LibTorch")
 
 function(plascan_core_add_optional_module moduleDir moduleLabel)
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${moduleDir}/CMakeLists.txt")

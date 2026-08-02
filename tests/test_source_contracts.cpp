@@ -601,7 +601,7 @@ TEST(SfmSourceContractTest, LightGlueSiftCarriesScaleAndOrientation)
     });
 }
 
-TEST(SfmSourceContractTest, LightGlueRuntimeIsTensorRtOnly)
+TEST(SfmSourceContractTest, ProductionMatchingRuntimeIsTensorRtOnly)
 {
     const QString cmake = readSourceFile(
         QStringLiteral("src/core/image_matching/CMakeLists.txt"));
@@ -613,6 +613,7 @@ TEST(SfmSourceContractTest, LightGlueRuntimeIsTensorRtOnly)
     expectContainsAll(cmake, {
         "find_package(TensorRT REQUIRED)",
         "TensorRtLightGlueMatcher.cpp",
+        "loma_r/LoMaRTensorRtBackend.cpp",
         "TensorRT::nvinfer",
     });
     expectNotContainsAll(cmake, {
@@ -621,8 +622,9 @@ TEST(SfmSourceContractTest, LightGlueRuntimeIsTensorRtOnly)
         "PLASCAN_ENABLE_TENSORRT",
     });
     expectContainsAll(matchingStage, {
-        "LightGlue 仅支持 TensorRT/CUDA",
-        "resolveLightGlueTensorRtEnginePath",
+        "当前匹配算法 %1 仅支持 TensorRT/CUDA",
+        "resolveLightGlueTensorRtEngine",
+        "resolveLoMaRTensorRtPackage",
     });
     expectNotContainsAll(matchingStage, {
         "TorchScript",
@@ -633,6 +635,28 @@ TEST(SfmSourceContractTest, LightGlueRuntimeIsTensorRtOnly)
         "resolveLightGlueModelPath",
         "torchscript",
     });
+}
+
+TEST(BuildDependencyContractTest, ProductionBuildDoesNotDependOnLibTorch)
+{
+    const QString packages = readSourceFile(QStringLiteral("cmake/PlascanPackages.cmake"));
+    const QString dependencyPaths = readSourceFile(
+        QStringLiteral("cmake/PlascanDependencyPaths.cmake"));
+    const QString maskCmake = readSourceFile(QStringLiteral("src/core/mask/CMakeLists.txt"));
+    const QString guiCmake = readSourceFile(QStringLiteral("src/gui/CMakeLists.txt"));
+
+    for (const QString &source : {packages, dependencyPaths, maskCmake, guiCmake})
+    {
+        expectNotContainsAll(source, {
+            "find_package(Torch",
+            "TORCH_LIBRARIES",
+            "TORCH_INCLUDE_DIRS",
+            "Torch_DIR",
+        });
+    }
+    EXPECT_FALSE(QFileInfo::exists(
+        QDir(QStringLiteral(PLASCAN_SOURCE_DIR))
+            .filePath(QStringLiteral("src/core/mask/Sam21MaskGenerator.cpp"))));
 }
 
 TEST(GuiAlgorithmAlignmentContractTest, WorkflowQualityMappingCoversFastStandardQuality)

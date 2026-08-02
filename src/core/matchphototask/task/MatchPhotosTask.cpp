@@ -422,12 +422,15 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
         runtimeContext.featureCache = std::make_shared<MatchPhotosFeatureCache>();
     }
 
+    result.algorithmPlan = MatchPhotosAlgorithmSelector::select(_options);
+    const QString algorithmName = result.algorithmPlan.displayName.isEmpty()
+        ? result.algorithmPlan.algorithmId
+        : result.algorithmPlan.displayName;
     reportMatchPhotosProgress(runtimeContext,
                               QStringLiteral("algorithm_selection"),
-                              QStringLiteral("选择 SIFT + LightGlue 连接点流程"),
+                              QStringLiteral("选择 %1 连接点流程").arg(algorithmName),
                               0,
                               1);
-    result.algorithmPlan = MatchPhotosAlgorithmSelector::select(_options);
     result.stages.push_back(makeAlgorithmSelectionReport(result.algorithmPlan));
     if (!result.algorithmPlan.valid)
     {
@@ -436,7 +439,7 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
     }
     reportMatchPhotosProgress(runtimeContext,
                               QStringLiteral("algorithm_selection"),
-                              QStringLiteral("连接点算法已确定: SIFT + LightGlue"),
+                              QStringLiteral("连接点算法已确定: %1").arg(algorithmName),
                               1,
                               1);
 
@@ -450,7 +453,7 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
 
     reportMatchPhotosProgress(runtimeContext,
                               QStringLiteral("feature"),
-                              QStringLiteral("SIFT 特征提取：准备处理影像"),
+                              QStringLiteral("%1 特征提取：准备处理影像").arg(algorithmName),
                               0,
                               std::max(1, static_cast<int>(runtimeContext.pairInput.images.size())));
     const MatchPhotosStageReport featureReport =

@@ -36,75 +36,14 @@ set(PLASCAN_APPLE_SILICON OFF)
 set(PLASCAN_CUDA_AVAILABLE OFF)
 if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
   set(PLASCAN_APPLE_SILICON ON)
-  message(STATUS "plascan: Apple Silicon (M-series) detected — CUDA disabled, MPS used via PyTorch")
+  message(STATUS "plascan: Apple Silicon (M-series) detected — CUDA disabled")
 endif()
 
-# ── LibTorch ──────────────────────────────────────────────────────────────────
+# ── CUDA architecture configuration ───────────────────────────────────────────
 if(NOT PLASCAN_APPLE_SILICON)
-  # CUDA 架构 (仅 Linux/Windows NVIDIA GPU)
   if(NOT DEFINED PLASCAN_CUDA_ARCHITECTURES)
     set(PLASCAN_CUDA_ARCHITECTURES "75;86;89;120" CACHE STRING "Target CUDA architectures")
   endif()
-  # 防止 Caffe2 自动检测, 避免 nvcc 13.1 不支持的 compute_50
-  # TORCH_CUDA_ARCH_LIST 格式为 "7.5;8.6;8.9" (带小数点)
-  set(TORCH_CUDA_ARCH_LIST "7.5;8.6;8.9" CACHE STRING "Torch CUDA architectures")
-  set(ENV{TORCH_CUDA_ARCH_LIST} "${TORCH_CUDA_ARCH_LIST}")
-  unset(CMAKE_CUDA_ARCHITECTURES)
-  message(STATUS "plascan: Torch CUDA arch list set to ${TORCH_CUDA_ARCH_LIST}")
-else()
-  message(STATUS "plascan: Apple Silicon — skipping CUDA, using MPS acceleration")
-endif()
-
-# conda linker fix (Linux only). Keep this opt-in because full conda toolchains
-# must not mix the system linker with the conda sysroot.
-option(PLASCAN_USE_SYSTEM_LINKER_FOR_TORCH
-  "Temporarily use /usr/bin/ld while finding LibTorch in mixed system/conda builds"
-  ON)
-if(PLASCAN_USE_SYSTEM_LINKER_FOR_TORCH AND DEFINED ENV{CONDA_PREFIX} AND NOT WIN32 AND NOT APPLE)
-  set(PLASCAN_ORIGINAL_CMAKE_LINKER ${CMAKE_LINKER})
-  set(CMAKE_LINKER "/usr/bin/ld" CACHE FILEPATH "System linker" FORCE)
-  message(STATUS "plascan: Using system linker")
-endif()
-
-set(_PLASCAN_SUPPRESS_TORCH_OPTIONAL_WARNINGS OFF)
-if(DEFINED Torch_DIR)
-  get_filename_component(_PLASCAN_TORCH_ROOT "${Torch_DIR}/../../.." ABSOLUTE)
-  if(NOT EXISTS "${_PLASCAN_TORCH_ROOT}/lib/kineto.lib"
-      AND NOT EXISTS "${_PLASCAN_TORCH_ROOT}/lib/kineto.dll"
-      AND NOT EXISTS "${_PLASCAN_TORCH_ROOT}/lib/libkineto.a"
-      AND NOT EXISTS "${_PLASCAN_TORCH_ROOT}/lib/libkineto.so"
-      AND NOT EXISTS "${_PLASCAN_TORCH_ROOT}/lib/libkineto.dylib")
-    set(_PLASCAN_SUPPRESS_TORCH_OPTIONAL_WARNINGS ON)
-  endif()
-endif()
-
-if(_PLASCAN_SUPPRESS_TORCH_OPTIONAL_WARNINGS)
-  set(_PLASCAN_TORCH_KINETO_PLACEHOLDER "")
-  foreach(_PLASCAN_TORCH_BASE_LIB torch torch_cpu c10)
-    foreach(_PLASCAN_TORCH_LIB_SUFFIX .lib .dll .so .dylib .a)
-      if(NOT _PLASCAN_TORCH_KINETO_PLACEHOLDER
-          AND EXISTS "${_PLASCAN_TORCH_ROOT}/lib/${_PLASCAN_TORCH_BASE_LIB}${_PLASCAN_TORCH_LIB_SUFFIX}")
-        set(_PLASCAN_TORCH_KINETO_PLACEHOLDER
-          "${_PLASCAN_TORCH_ROOT}/lib/${_PLASCAN_TORCH_BASE_LIB}${_PLASCAN_TORCH_LIB_SUFFIX}")
-      endif()
-      if(NOT _PLASCAN_TORCH_KINETO_PLACEHOLDER
-          AND EXISTS "${_PLASCAN_TORCH_ROOT}/lib/lib${_PLASCAN_TORCH_BASE_LIB}${_PLASCAN_TORCH_LIB_SUFFIX}")
-        set(_PLASCAN_TORCH_KINETO_PLACEHOLDER
-          "${_PLASCAN_TORCH_ROOT}/lib/lib${_PLASCAN_TORCH_BASE_LIB}${_PLASCAN_TORCH_LIB_SUFFIX}")
-      endif()
-    endforeach()
-  endforeach()
-  if(_PLASCAN_TORCH_KINETO_PLACEHOLDER)
-    set(kineto_LIBRARY "${_PLASCAN_TORCH_KINETO_PLACEHOLDER}" CACHE FILEPATH
-      "Optional LibTorch kineto placeholder when the runtime does not ship profiler libraries" FORCE)
-    message(STATUS "plascan: LibTorch kineto library not present; optional profiler backend skipped")
-  endif()
-endif()
-
-find_package(Torch REQUIRED)
-message(STATUS "plascan: found LibTorch")
-
-if(NOT PLASCAN_APPLE_SILICON)
   set(CMAKE_CUDA_ARCHITECTURES "${PLASCAN_CUDA_ARCHITECTURES}"
     CACHE STRING "CUDA architectures for PlaScan CUDA targets" FORCE)
   set(PLAMATRIX_CUDA_ARCHITECTURES "${PLASCAN_CUDA_ARCHITECTURES}"
@@ -112,23 +51,6 @@ if(NOT PLASCAN_APPLE_SILICON)
   set(PLAPOINT_CUDA_ARCHITECTURES "${PLASCAN_CUDA_ARCHITECTURES}"
     CACHE STRING "CUDA architectures for PlaPoint" FORCE)
   message(STATUS "plascan: CUDA architectures set to ${CMAKE_CUDA_ARCHITECTURES}")
-endif()
-
-if(DEFINED CAFFE2_USE_CUDA AND CAFFE2_USE_CUDA)
-  set(PLASCAN_TORCH_HAS_CUDA ON CACHE BOOL "LibTorch has CUDA headers and libraries" FORCE)
-  add_compile_definitions(PLASCAN_TORCH_HAS_CUDA=1)
-  message(STATUS "plascan: LibTorch CUDA support enabled")
-else()
-  set(PLASCAN_TORCH_HAS_CUDA OFF CACHE BOOL "LibTorch has CUDA headers and libraries" FORCE)
-  message(STATUS "plascan: LibTorch CUDA support disabled")
-endif()
-
-if(DEFINED PLASCAN_ORIGINAL_CMAKE_LINKER AND NOT WIN32 AND NOT APPLE)
-  if(PLASCAN_USE_SYSTEM_BINUTILS_FOR_MIXED_TOOLCHAIN AND EXISTS "/usr/bin/ld")
-    set(CMAKE_LINKER "/usr/bin/ld" CACHE FILEPATH "Linker" FORCE)
-  else()
-    set(CMAKE_LINKER ${PLASCAN_ORIGINAL_CMAKE_LINKER} CACHE FILEPATH "Linker" FORCE)
-  endif()
 endif()
 
 # ── GDAL ──────────────────────────────────────────────────────────────────────

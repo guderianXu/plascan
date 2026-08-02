@@ -1,6 +1,6 @@
 #pragma once
 
-#include "model/TorchScriptModelResolver.h"
+#include "model/ModelFileResolver.h"
 
 #include <QString>
 #include <QStringList>
@@ -26,6 +26,6 @@ struct U2NetModelStatus
 };
 
 U2NetModelSpec u2netModelSpec();
-U2NetModelStatus u2netModelStatus(const TorchScriptModelResolver &resolver);
+U2NetModelStatus u2netModelStatus(const ModelFileResolver &resolver);
 
 } // namespace xjw::common::model

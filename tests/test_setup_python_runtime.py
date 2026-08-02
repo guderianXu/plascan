@@ -65,7 +65,6 @@ class PythonRuntimeSetupTest(unittest.TestCase):
             python_exe=python_exe,
             device="cuda",
             cuda_wheel="cu130",
-            torch_dir="",
             cuda_root="",
         )
 
@@ -93,18 +92,6 @@ class PythonRuntimeSetupTest(unittest.TestCase):
         self.assertTrue(any("lightglue" in package.lower() for package in plan.base_packages))
         self.assertIn("pytest", plan.extra_packages)
 
-    def test_detect_torch_dir_suppresses_missing_torch_traceback(self):
-        runtime = load_runtime_module()
-
-        with mock.patch.object(
-            runtime.subprocess,
-            "check_output",
-            side_effect=subprocess.CalledProcessError(1, ["python"]),
-        ) as check_output:
-            self.assertEqual(runtime.detect_torch_dir(Path(sys.executable)), "")
-
-        self.assertEqual(check_output.call_args.kwargs.get("stderr"), subprocess.DEVNULL)
-
     def test_write_runtime_env_files(self):
         runtime = load_runtime_module()
         with tempfile.TemporaryDirectory() as tmp:
@@ -119,7 +106,6 @@ class PythonRuntimeSetupTest(unittest.TestCase):
                 python_exe=python_exe,
                 device="cpu",
                 cuda_wheel="cpu",
-                torch_dir="",
                 cuda_root="",
             )
 
