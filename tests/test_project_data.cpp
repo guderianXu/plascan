@@ -303,6 +303,111 @@ TEST(ProjectDataTest, UiSettingsDoNotDirtySessionWithoutProject)
     EXPECT_TRUE(project.currentProjectPath().isEmpty());
 }
 
+TEST(ProjectDataTest, CreatingProjectReplacesSessionWithoutImportingPreviousResources)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString firstProjectPath =
+        QDir(dir.path()).filePath(QStringLiteral("first.plascan"));
+    const QString secondProjectPath =
+        QDir(dir.path()).filePath(QStringLiteral("second.plascan"));
+    const QString externalResultPath =
+        QDir(dir.path()).filePath(QStringLiteral("old-result.ply"));
+    writeTestFile(externalResultPath, QByteArray("old-project-result"));
+
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(
+        firstProjectPath, QStringLiteral("first")));
+
+    QJsonObject oldMetadata = project.metadata();
+    oldMetadata[QStringLiteral("images")] = QJsonArray{
+        QJsonObject{{QStringLiteral("path"), externalResultPath}}
+    };
+    oldMetadata[QStringLiteral("model_results")] = QJsonArray{
+        QJsonObject{{QStringLiteral("path"), externalResultPath}}
+    };
+    project.updateMetadata(oldMetadata, true);
+
+    QStringList lifecycleEvents;
+    QObject::connect(&project, &ProjectData::projectClosed, [&]()
+    {
+        lifecycleEvents.append(QStringLiteral("closed"));
+    });
+    QObject::connect(&project, &ProjectData::projectOpened,
+                     [&](const QString &)
+    {
+        lifecycleEvents.append(QStringLiteral("opened"));
+    });
+
+    ASSERT_TRUE(project.createProject(
+        secondProjectPath, QStringLiteral("second")));
+    EXPECT_EQ(lifecycleEvents,
+              QStringList({QStringLiteral("closed"),
+                           QStringLiteral("opened")}));
+    EXPECT_EQ(project.currentProjectPath(), secondProjectPath);
+    EXPECT_TRUE(project.metadata()
+                    .value(QStringLiteral("images"))
+                    .toArray()
+                    .isEmpty());
+    EXPECT_TRUE(project.metadata()
+                    .value(QStringLiteral("model_results"))
+                    .toArray()
+                    .isEmpty());
+
+    QString error;
+    ASSERT_TRUE(project.saveProject(&error)) << qPrintable(error);
+    const QString importedDirectory = QDir(
+        ProjectPackageLayout::chunkDirectory(secondProjectPath, 1))
+        .filePath(QStringLiteral("assets/imported"));
+    EXPECT_FALSE(QFileInfo::exists(importedDirectory));
+    EXPECT_FALSE(QJsonDocument(chunkDocument(secondProjectPath))
+                     .toJson(QJsonDocument::Compact)
+                     .contains("old-result.ply"));
+}
+
+TEST(ProjectDataTest, OpeningDifferentProjectClosesPreviousSessionFirst)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString firstProjectPath =
+        QDir(dir.path()).filePath(QStringLiteral("first.plascan"));
+    const QString secondProjectPath =
+        QDir(dir.path()).filePath(QStringLiteral("second.plascan"));
+    {
+        ProjectData creator;
+        ASSERT_TRUE(creator.createProject(
+            firstProjectPath, QStringLiteral("first")));
+        creator.closeProject();
+        ASSERT_TRUE(creator.createProject(
+            secondProjectPath, QStringLiteral("second")));
+    }
+
+    ProjectData project;
+    QString error;
+    ASSERT_TRUE(project.openProject(firstProjectPath, &error))
+        << qPrintable(error);
+
+    QStringList lifecycleEvents;
+    QObject::connect(&project, &ProjectData::projectClosed, [&]()
+    {
+        lifecycleEvents.append(QStringLiteral("closed"));
+    });
+    QObject::connect(&project, &ProjectData::projectOpened,
+                     [&](const QString &)
+    {
+        lifecycleEvents.append(QStringLiteral("opened"));
+    });
+
+    ASSERT_TRUE(project.openProject(secondProjectPath, &error))
+        << qPrintable(error);
+    EXPECT_EQ(lifecycleEvents,
+              QStringList({QStringLiteral("closed"),
+                           QStringLiteral("opened")}));
+    EXPECT_EQ(project.currentProjectPath(), secondProjectPath);
+}
+
 TEST(ProjectDataTest, OpenRejectsDescriptorWithoutMatchingDataDirectory)
 {
     QTemporaryDir dir;

@@ -435,21 +435,20 @@ bool ProjectData::createProject(const QString &plascanPath, const QString &proje
                       .arg(dataDirectory));
         return false;
     }
-    _projectLock = std::make_unique<ProjectLock>();
+    auto newProjectLock = std::make_unique<ProjectLock>();
     QString lockError;
-    if (!_projectLock->acquire(plascanPath, &lockError))
+    if (!newProjectLock->acquire(plascanPath, &lockError))
     {
         LOG_ERROR(lockError);
-        _projectLock.reset();
         QDir(dataDirectory).removeRecursively();
         return false;
     }
     const auto cleanupCreatedProject = [&]()
     {
-        if (_projectLock)
+        if (newProjectLock)
         {
-            _projectLock->release();
-            _projectLock.reset();
+            newProjectLock->release();
+            newProjectLock.reset();
         }
         QFile::remove(plascanPath);
         QDir(dataDirectory).removeRecursively();
@@ -550,7 +549,15 @@ bool ProjectData::createProject(const QString &plascanPath, const QString &proje
         return false;
     }
 
+    // 目标项目已完整初始化后再结束旧会话。projectClosed 会使 GUI、异步刷新
+    // 和待归档状态统一失效，防止旧项目资源进入新项目。
+    if (hasProject())
+    {
+        closeProject();
+    }
+
     // 步骤6：更新内存状态
+    _projectLock = std::move(newProjectLock);
     _projectPath = plascanPath;
     _activeChunkId = initialChunk.id;
     _activeChunkName = initialChunk.name;
@@ -1028,11 +1035,6 @@ bool ProjectData::openProjectFromSnapshot(const ProjectOpenSnapshot &snapshot, Q
         return false;
     }
 
-    if (_archiveSyncTimer)
-    {
-        _archiveSyncTimer->stop();
-    }
-
     const QString currentPath =
         QDir::cleanPath(QFileInfo(_projectPath).absoluteFilePath());
     const QString targetPath =
@@ -1040,17 +1042,13 @@ bool ProjectData::openProjectFromSnapshot(const ProjectOpenSnapshot &snapshot, Q
     const bool reuseLock =
         _projectLock && _projectLock->isLocked()
         && currentPath == targetPath;
+    std::unique_ptr<ProjectLock> replacementLock;
     if (!reuseLock)
     {
-        if (_projectLock)
-        {
-            _projectLock->release();
-        }
-        _projectLock = std::make_unique<ProjectLock>();
+        replacementLock = std::make_unique<ProjectLock>();
         QString lockError;
-        if (!_projectLock->acquire(targetPath, &lockError))
+        if (!replacementLock->acquire(targetPath, &lockError))
         {
-            _projectLock.reset();
             if (errorMsg)
             {
                 *errorMsg = lockError;
@@ -1059,12 +1057,8 @@ bool ProjectData::openProjectFromSnapshot(const ProjectOpenSnapshot &snapshot, Q
         }
     }
 
-    _projectPath = snapshot.projectPath;
-    _activeChunkId = snapshot.chunkId;
-    _activeChunkName = snapshot.chunkName;
-    _activeChunkDirectory = snapshot.chunkDirectory;
     ProjectWorkspaceStore workspace(
-        _projectPath, snapshot.chunkDirectory);
+        snapshot.projectPath, snapshot.chunkDirectory);
     QString workspaceError;
     if (!workspace.initializeRuntime(nullptr, &workspaceError))
     {
@@ -1072,17 +1066,30 @@ bool ProjectData::openProjectFromSnapshot(const ProjectOpenSnapshot &snapshot, Q
         {
             *errorMsg = workspaceError;
         }
-        _projectPath.clear();
-        _activeChunkId.clear();
-        _activeChunkName.clear();
-        _activeChunkDirectory = 0;
-        if (!reuseLock)
+        if (replacementLock)
         {
-            _projectLock->release();
-            _projectLock.reset();
+            replacementLock->release();
         }
         return false;
     }
+
+    if (!reuseLock && hasProject())
+    {
+        closeProject();
+    }
+    if (replacementLock)
+    {
+        _projectLock = std::move(replacementLock);
+    }
+    if (_archiveSyncTimer)
+    {
+        _archiveSyncTimer->stop();
+    }
+
+    _projectPath = snapshot.projectPath;
+    _activeChunkId = snapshot.chunkId;
+    _activeChunkName = snapshot.chunkName;
+    _activeChunkDirectory = snapshot.chunkDirectory;
     _filesManager.setData(QJsonObject());
     _configManager.setData(QJsonObject());
     _resultsLoaded = false;
