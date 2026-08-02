@@ -947,8 +947,7 @@ VisibilityOccupancyHandleRepairResult VisibilityOccupancyHandleRepair::repair(
         bool preserves_exterior_reachability = true;
         for (std::size_t index = 0; index < count; ++index)
         {
-            if (initial_exterior[index] != 0 &&
-                result.occupied[index] == 0 &&
+            if (required_protected[index] != 0 &&
                 candidate_exterior[index] == 0)
             {
                 preserves_exterior_reachability = false;

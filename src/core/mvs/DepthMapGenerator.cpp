@@ -111,6 +111,67 @@ QJsonObject cameraModelToJson(const Camera &camera)
     };
 }
 
+QJsonObject depthPoseRefinementCandidateToJson(
+    const DepthPoseRefinementCandidate &candidate,
+    const DepthPoseRefinementStageResult &stage)
+{
+    QJsonArray pivot;
+    QJsonArray translation;
+    QJsonArray rotation;
+    for (int index = 0; index < 3; ++index)
+    {
+        pivot.append(candidate.correction.pivotWorld[index]);
+        translation.append(candidate.correction.translation[index]);
+    }
+    for (int row = 0; row < 3; ++row)
+    {
+        for (int column = 0; column < 3; ++column)
+        {
+            rotation.append(candidate.correction.rotation(row, column));
+        }
+    }
+    return QJsonObject{
+        {QStringLiteral("enabled"), stage.enabled},
+        {QStringLiteral("candidate_only"), stage.candidateOnly},
+        {QStringLiteral("application_status"),
+         QStringLiteral("not_applied_candidate_only")},
+        {QStringLiteral("scale_locked"), true},
+        {QStringLiteral("anchor_camera_index"), stage.anchorCameraIndex},
+        {QStringLiteral("camera_index"), candidate.cameraIndex},
+        {QStringLiteral("evidence_complete"), candidate.evidenceComplete},
+        {QStringLiteral("accepted"), candidate.accepted},
+        {QStringLiteral("reason"), QString::fromStdString(candidate.reason)},
+        {QStringLiteral("evidence_pixel_count"), candidate.evidencePixelCount},
+        {QStringLiteral("correspondence_count"),
+         candidate.generatedCorrespondenceCount},
+        {QStringLiteral("occluded_candidate_count"),
+         candidate.occludedCandidateCount},
+        {QStringLiteral("depth_conflict_candidate_count"),
+         candidate.depthConflictCandidateCount},
+        {QStringLiteral("evidence_sample_coverage"),
+         candidate.evidenceSampleCoverage},
+        {QStringLiteral("projection_retention_ratio"),
+         candidate.projectionRetentionRatio},
+        {QStringLiteral("translation_norm"),
+         candidate.correctionTranslation},
+        {QStringLiteral("rotation_degrees"),
+         candidate.correctionRotationDegrees},
+        {QStringLiteral("residual_median_before"),
+         candidate.correction.residualMedianBefore},
+        {QStringLiteral("residual_median_after"),
+         candidate.correction.residualMedianAfter},
+        {QStringLiteral("residual_p90_before"),
+         candidate.correction.residualP90Before},
+        {QStringLiteral("residual_p90_after"),
+         candidate.correction.residualP90After},
+        {QStringLiteral("correction_pivot_world"), pivot},
+        {QStringLiteral("correction_translation_world"), translation},
+        {QStringLiteral("correction_rotation_world"), rotation},
+        {QStringLiteral("rotation_mapping"),
+         QStringLiteral("R_wc'=R_wc*Q^T; stored R_cw'=Q*R_cw")}
+    };
+}
+
 QJsonArray depthPyramidLevelsToJson(const std::vector<DepthLevelSummary> &summaries)
 {
     QJsonArray array;
@@ -2515,6 +2576,20 @@ void DepthMapGenerator::prepareFrameCaches()
                     _effectiveSceneProfile,
                     desiredSourceCount,
                     candidate_angles);
+            // Failed SfM pairs are never promoted back into SfM. For a short
+            // orbital sequence, a narrowly qualified failed pair may still be
+            // useful as PatchMatch source-only evidence. PatchMatch now uses
+            // majority support (3 of 4 sources), so a fourth independently
+            // qualified direction can reject a mutually consistent wrong
+            // layer without letting that single weaker view dominate NCC.
+            plannerOptions.allowFailedPairBackfill = true;
+            plannerOptions.failedPairBackfillMaximumTotalSources = 4;
+            plannerOptions.failedPairBackfillMinimumInliers = 12;
+            plannerOptions.failedPairBackfillMinimumMatches = 14;
+            plannerOptions.failedPairBackfillMinimumSharedTracks = 20;
+            plannerOptions.failedPairBackfillMinimumCoverage = 0.1875f;
+            plannerOptions.failedPairBackfillMinimumWilsonLowerBound = 0.50f;
+            plannerOptions.failedPairBackfillMaximumAngleDeg = 65.0f;
         }
 
         const MvsSourcePlan sourcePlan = requireVerifiedSourcePairsForReference
@@ -6262,6 +6337,9 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         rawAdaptiveGeometryConflictRatioPath,
         QStringLiteral("连续几何冲突比例"),
         false);
+    // 连续几何证据由所有原始深度完成后的跨视一致性阶段生成。这里保存的是
+    // 单帧初始产物，此时证据图尚不存在，不能据此把有效深度帧标记为失败。
+    // 一致性阶段会原子写入三张 revision 14 证据图，并在任一写入失败时终止。
     bool crossViewRepairedMaskSaved = false;
     if (saveRawDepth && result.crossViewRepairedMask &&
         !result.crossViewRepairedMask->empty())
@@ -6745,6 +6823,16 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             result.crossViewRepairDiagnostics;
         artifact[QStringLiteral("geometry_evidence_diagnostics")] =
             geometryEvidenceDiagnostics;
+        if (!result.poseRefinementDiagnostics.isEmpty())
+        {
+            artifact[QStringLiteral("pose_refinement_diagnostics")] =
+                result.poseRefinementDiagnostics;
+        }
+        if (result.derivedCameraModel.isValid())
+        {
+            artifact[QStringLiteral("derived_camera_model")] =
+                cameraModelToJson(result.derivedCameraModel);
+        }
         if (depthCompleteness.finalMetrics.validInputs)
         {
             artifact[QStringLiteral("mask_pixel_count")] =
@@ -6812,6 +6900,12 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         record.depthCompleteness = depthCompletenessJson;
         record.crossViewRepairDiagnostics = result.crossViewRepairDiagnostics;
         record.geometryEvidenceDiagnostics = geometryEvidenceDiagnostics;
+        record.poseRefinementDiagnostics = result.poseRefinementDiagnostics;
+        if (result.derivedCameraModel.isValid())
+        {
+            record.derivedCameraModel =
+                cameraModelToJson(result.derivedCameraModel);
+        }
         record.qualityDecision = qualityDecisionJson;
         record.pyramidLevels = pyramidLevelsJson;
         record.maskSource = QString::fromStdString(result.maskSource);
@@ -6887,6 +6981,121 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
     return previewSaved && rawSaved;
 }
 
+void DepthMapGenerator::runDepthPoseRefinementCandidateStage(
+    bool residentDepthFrames)
+{
+    if (!_config.depthPoseRefinement.enabled)
+    {
+        return;
+    }
+
+    DepthPoseRefinementStageResult stage;
+    stage.enabled = true;
+    stage.candidateOnly = true;
+    stage.anchorCameraIndex =
+        _config.depthPoseRefinement.optimizer.anchorCameraIndex;
+    if (residentDepthFrames)
+    {
+        std::vector<DepthPoseRefinementFrame> frames;
+        frames.reserve(_depthFrames.size());
+        for (int frame_index = 0;
+             frame_index < static_cast<int>(_depthFrames.size());
+             ++frame_index)
+        {
+            const DepthFrameResult &depth_frame =
+                _depthFrames[static_cast<std::size_t>(frame_index)];
+            DepthPoseRefinementFrame frame;
+            frame.cameraIndex = frame_index;
+            frame.camera = depth_frame.cameraModel.isValid()
+                ? depth_frame.cameraModel
+                : mvsPinholeCamera(
+                    _views[static_cast<std::size_t>(frame_index)].camera);
+            frame.depthMap = depth_frame.depthMap
+                ? *depth_frame.depthMap : cv::Mat();
+            frame.normalMap = depth_frame.normalMap
+                ? *depth_frame.normalMap : cv::Mat();
+            frame.confidence = depth_frame.confidence
+                ? *depth_frame.confidence : cv::Mat();
+            frame.adaptiveSupportWeight =
+                depth_frame.adaptiveGeometrySupportWeight
+                ? *depth_frame.adaptiveGeometrySupportWeight : cv::Mat();
+            frame.adaptiveEffectiveViewCount =
+                depth_frame.adaptiveGeometryEffectiveViewCount
+                ? *depth_frame.adaptiveGeometryEffectiveViewCount : cv::Mat();
+            frame.adaptiveConflictRatio =
+                depth_frame.adaptiveGeometryConflictRatio
+                ? *depth_frame.adaptiveGeometryConflictRatio : cv::Mat();
+            frame.sourceCameraIndices = depth_frame.sourceViewIndices;
+            frames.push_back(std::move(frame));
+        }
+        stage = DepthPoseRefinementStage::buildCandidates(
+            frames,
+            _config.depthPoseRefinement);
+    }
+    else
+    {
+        stage.candidates.reserve(_depthFrames.size());
+        for (int frame_index = 0;
+             frame_index < static_cast<int>(_depthFrames.size());
+             ++frame_index)
+        {
+            DepthPoseRefinementCandidate candidate;
+            candidate.cameraIndex = frame_index;
+            candidate.reason = "streaming_depth_not_resident";
+            stage.candidates.push_back(std::move(candidate));
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(_workspaceManifestMutex);
+        for (const DepthPoseRefinementCandidate &candidate : stage.candidates)
+        {
+            if (candidate.cameraIndex < 0 ||
+                candidate.cameraIndex >=
+                    static_cast<int>(_depthFrames.size()))
+            {
+                continue;
+            }
+            DepthFrameResult &frame = _depthFrames[
+                static_cast<std::size_t>(candidate.cameraIndex)];
+            frame.poseRefinementDiagnostics =
+                depthPoseRefinementCandidateToJson(candidate, stage);
+            if (candidate.accepted && candidate.derivedCamera.isValid())
+            {
+                frame.derivedCameraModel = candidate.derivedCamera;
+            }
+            const QJsonObject derived_camera =
+                frame.derivedCameraModel.isValid()
+                ? cameraModelToJson(frame.derivedCameraModel)
+                : QJsonObject{};
+            _workspaceManifest.updatePoseRefinement(
+                candidate.cameraIndex,
+                frame.poseRefinementDiagnostics,
+                derived_camera);
+        }
+        QString manifest_error;
+        if (!_workspaceManifestPath.isEmpty() &&
+            !persistWorkspaceManifest(&manifest_error))
+        {
+            LOG_WARN(QStringLiteral(
+                "[MVS] 写入位姿细化候选诊断失败: %1")
+                         .arg(manifest_error));
+        }
+    }
+
+    LOG_INFO(QStringLiteral(
+        "[MVS] 深度约束位姿细化候选完成: accepted=%1/%2 mode=candidate_only; "
+        "项目相机与本轮深度均未修改")
+                 .arg(std::count_if(
+                     stage.candidates.begin(),
+                     stage.candidates.end(),
+                     [](const DepthPoseRefinementCandidate &candidate)
+                     {
+                         return candidate.accepted;
+                     }))
+                 .arg(stage.candidates.size()));
+}
+
 // =============================================================================
 void DepthMapGenerator::runInBackground()
 {
@@ -6904,6 +7113,19 @@ void DepthMapGenerator::runInBackground()
     _effectiveSceneProfile = _config.sceneProfile == MvsSceneProfile::Auto
         ? _sceneClassification.profile
         : _config.sceneProfile;
+    if (_effectiveSceneProfile == MvsSceneProfile::OrbitalObject &&
+        kMvsDepthAlgorithmRevision >= kMvsAdaptiveGeometryEvidenceRevision &&
+        !_config.enableAdaptiveGeometryEvidence)
+    {
+        const QString error = QStringLiteral(
+            "MVS revision %1 的环拍深度必须生成连续几何证据；"
+            "请启用 adaptive geometry evidence 后重试")
+                                  .arg(kMvsDepthAlgorithmRevision);
+        LOG_ERROR(QStringLiteral("[MVS] %1").arg(error));
+        emit errorOccurred(error);
+        emit finished(false);
+        return;
+    }
     _effectiveDepthFilterMode = _config.depthFilterMode;
     if (_config.adaptiveDepthFilterMode)
     {
@@ -7435,6 +7657,10 @@ void DepthMapGenerator::runInBackground()
             return;
         }
     }
+
+    // Experimental, default-off stage. It only emits derived camera candidates
+    // and diagnostics; neither project cameras nor this run's depth maps change.
+    runDepthPoseRefinementCandidateStage(keepDepthFramesInMemory.load());
 
     if (keepDepthFramesInMemory.load() && (savePreviewPng || saveRawDepth))
     {

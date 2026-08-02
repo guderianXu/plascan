@@ -24,6 +24,8 @@ target_include_directories(plascan_cli_support PUBLIC
 
 if(TARGET camera)
     add_library(plascan_cli_photogrammetry_common STATIC
+        FinalBaCameraExporter.cpp
+        FinalBaCameraExporter.h
         cli_photogrammetry_common.cpp
         cli_photogrammetry_common.h
     )

@@ -48,6 +48,7 @@ struct DepthFrameArtifact
     int gridHeight = 0;
     Camera cameraModel;
     bool hasCameraModel = false;
+    bool pyramidFallback = false;
 };
 
 struct DepthMapVisualHullResult

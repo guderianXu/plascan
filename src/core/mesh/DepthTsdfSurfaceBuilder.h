@@ -2,6 +2,7 @@
 
 #include "Camera.h"
 #include "DepthMapMeshBuilder.h"
+#include "MeshTopologyQuality.h"
 #include "MeshTypes.h"
 
 #include <QJsonArray>
@@ -167,6 +168,10 @@ struct DepthTsdfOptions
     int visualHullCompletionRelaxationIterations = 0;
     float visualHullCompletionRelaxationLambda = 0.35f;
     float visualHullCompletionMaximumUpdate = 0.20f;
+    bool enableVisualHullCompletionTopologyGuard = true;
+    int visualHullCompletionMaximumTopologicalComplexityIncrease = 0;
+    float visualHullCompletionMaximumSurfaceAreaRatio = 1.30f;
+    float visualHullCompletionMaximumBoundsDiagonalRatio = 1.10f;
     bool enableVisibilityOccupancyCompletion = false;
     int visibilityOccupancyResolution = 72;
     bool visibilityOccupancyAlignCarrierGrid = false;
@@ -235,9 +240,9 @@ struct DepthTsdfOptions
     int maximumHoleBoundaryEdges = 16;
     float maximumHoleDiameterVoxels = 4.0f;
     bool enableSilhouetteAwareFinalHoleFill = false;
-    int finalHoleFillMaximumBoundaryEdges = 128;
-    float finalHoleFillMaximumDiameterVoxels = 32.0f;
-    float finalHoleFillMaximumFaceGrowthRatio = 0.10f;
+    int finalHoleFillMaximumBoundaryEdges = 24;
+    float finalHoleFillMaximumDiameterVoxels = 4.0f;
+    float finalHoleFillMaximumFaceGrowthRatio = 0.03f;
     float finalHoleFillMaximumSliverRatio = 0.05f;
     bool enableVisibilityConstrainedFinalHoleFill = false;
     int visibilityHoleFillMinimumSupportingViews = 2;
@@ -335,6 +340,12 @@ struct DepthTsdfStatistics
 {
     int inputFrameCount = 0;
     int acceptedFrameCount = 0;
+    std::uint64_t boundsCandidateSampleCount = 0;
+    std::uint64_t boundsTrustedSampleCount = 0;
+    std::uint64_t boundsSelectedSampleCount = 0;
+    bool boundsUsedEvidenceAwareSamples = false;
+    bool boundsFellBackToCandidateSamples = false;
+    QString boundsSelectionReason;
     std::uint64_t integratedVoxelUpdates = 0;
     std::uint64_t rejectedProjectionCount = 0;
     std::uint64_t rejectedSupportMaskCount = 0;
@@ -456,10 +467,31 @@ struct DepthTsdfStatistics
     std::uint64_t visualHullCompletionAnchorCellCount = 0;
     std::uint64_t visualHullCompletionFrontierCellCount = 0;
     std::uint64_t visualHullCompletionPreservedObservedSampleCount = 0;
+    std::uint64_t visualHullCompletionObservedConflictVetoSampleCount = 0;
     std::uint64_t visualHullCompletionRecoveredSampleCount = 0;
     std::uint64_t visualHullCompletionRelaxedSampleCount = 0;
     float effectiveVisualHullCompletionBandVoxels = 0.0f;
+    bool effectiveVisualHullCompletionTopologyGuard = false;
+    bool visualHullCompletionTopologyGuardEvaluated = false;
+    bool visualHullCompletionTopologyGuardAccepted = false;
+    std::uint32_t visualHullCompletionTopologyGuardRejectionFlags = 0;
+    int visualHullCompletionTopologyGuardBaselineFaceCount = 0;
+    int visualHullCompletionTopologyGuardCandidateFaceCount = 0;
+    int visualHullCompletionTopologyGuardBaselineBoundaryEdgeCount = 0;
+    int visualHullCompletionTopologyGuardCandidateBoundaryEdgeCount = 0;
+    int visualHullCompletionTopologyGuardBaselineNonManifoldEdgeCount = 0;
+    int visualHullCompletionTopologyGuardCandidateNonManifoldEdgeCount = 0;
+    int visualHullCompletionTopologyGuardBaselineComponentCount = 0;
+    int visualHullCompletionTopologyGuardCandidateComponentCount = 0;
+    int visualHullCompletionTopologyGuardBaselineEulerCharacteristic = 0;
+    int visualHullCompletionTopologyGuardCandidateEulerCharacteristic = 0;
+    int visualHullCompletionTopologyGuardBaselineTopologicalComplexity = 0;
+    int visualHullCompletionTopologyGuardCandidateTopologicalComplexity = 0;
+    double visualHullCompletionTopologyGuardSurfaceAreaRatio = 0.0;
+    double visualHullCompletionTopologyGuardBoundsDiagonalRatio = 0.0;
     bool effectiveVisibilityOccupancyCompletion = false;
+    bool visibilityOccupancyRejectedEmptyCut = false;
+    bool visibilityOccupancyRejectedCollapsedCut = false;
     bool effectiveVisibilityOccupancyCellBoundaryExtraction = false;
     int effectiveVisibilityOccupancyResolution = 0;
     int effectiveVisibilityOccupancyPairwiseCapacity = 0;
@@ -715,6 +747,15 @@ struct DepthTsdfStatistics
     int visibilityHoleFillReleasedLoopCount = 0;
     int visibilityHoleFillRejectedSupportLoopCount = 0;
     int visibilityHoleFillRejectedConflictLoopCount = 0;
+    bool finalHoleFillPatchEvidenceValidationAttempted = false;
+    bool finalHoleFillPatchEvidenceValidationAccepted = false;
+    int finalHoleFillPatchEvidenceVertexSampleCount = 0;
+    int finalHoleFillPatchEvidenceFaceCenterSampleCount = 0;
+    int finalHoleFillPatchEvidenceAcceptedSampleCount = 0;
+    int finalHoleFillPatchEvidenceRejectedSupportSampleCount = 0;
+    int finalHoleFillPatchEvidenceRejectedConflictSampleCount = 0;
+    int finalHoleFillPatchEvidenceMinimumSupportingViewCount = 0;
+    int finalHoleFillPatchEvidenceMaximumConflictViewCount = 0;
     bool effectiveTinyBoundaryLoopCollapse = false;
     bool tinyBoundaryLoopCollapseAttempted = false;
     bool tinyBoundaryLoopCollapseAccepted = false;
@@ -949,6 +990,39 @@ struct VisibilityOccupancyCarrierFieldGrid
     }
 };
 
+enum DepthTsdfVisualHullTopologyGuardRejectionFlag : std::uint32_t
+{
+    VisualHullTopologyGuardAccepted = 0,
+    VisualHullTopologyGuardBoundaryEdgeGrowth = 1U << 0U,
+    VisualHullTopologyGuardNonManifoldEdgeGrowth = 1U << 1U,
+    VisualHullTopologyGuardNonManifoldVertexGrowth = 1U << 2U,
+    VisualHullTopologyGuardComponentGrowth = 1U << 3U,
+    VisualHullTopologyGuardTopologicalComplexityGrowth = 1U << 4U,
+    VisualHullTopologyGuardSurfaceAreaGrowth = 1U << 5U,
+    VisualHullTopologyGuardBoundsDiagonalGrowth = 1U << 6U,
+    VisualHullTopologyGuardEmptyMesh = 1U << 7U
+};
+
+struct DepthTsdfVisualHullTopologyGuardEvaluation
+{
+    bool accepted = false;
+    std::uint32_t rejectionFlags = VisualHullTopologyGuardAccepted;
+    int baselineFaceCount = 0;
+    int candidateFaceCount = 0;
+    int baselineBoundaryEdgeCount = 0;
+    int candidateBoundaryEdgeCount = 0;
+    int baselineNonManifoldEdgeCount = 0;
+    int candidateNonManifoldEdgeCount = 0;
+    int baselineComponentCount = 0;
+    int candidateComponentCount = 0;
+    int baselineEulerCharacteristic = 0;
+    int candidateEulerCharacteristic = 0;
+    int baselineTopologicalComplexity = 0;
+    int candidateTopologicalComplexity = 0;
+    double surfaceAreaRatio = 0.0;
+    double boundsDiagonalRatio = 0.0;
+};
+
 struct DepthTsdfResult
 {
     bool ok = false;
@@ -958,6 +1032,7 @@ struct DepthTsdfResult
     TriMesh mesh;
     TriMesh boundaryAttributionDebugMesh;
     VisibilityOccupancyCarrierFieldGrid visibilityOccupancyCarrierField;
+    VisibilityOccupancyCarrierFieldGrid depthImplicitField;
 };
 
 struct DepthTsdfFrameLoadResult
@@ -974,6 +1049,11 @@ struct DepthTsdfBoundsResult
     std::array<float, 3> minimum{};
     std::array<float, 3> maximum{};
     std::uint64_t sampleCount = 0;
+    std::uint64_t candidateSampleCount = 0;
+    std::uint64_t trustedSampleCount = 0;
+    bool usedEvidenceAwareSamples = false;
+    bool fellBackToCandidateSamples = false;
+    QString selectionReason;
 };
 
 enum class DepthTsdfObservationFailure
@@ -1122,7 +1202,15 @@ public:
         const std::vector<std::uint8_t> &occupied,
         float bandVoxels,
         std::vector<float> *tsdf,
-        std::vector<std::uint8_t> *supported);
+        std::vector<std::uint8_t> *supported,
+        const std::vector<std::uint8_t> *immutableVeto = nullptr);
+    static DepthTsdfVisualHullTopologyGuardEvaluation
+        evaluateVisualHullCompletionTopologyGuard(
+            const TriMesh &baseline,
+            const TriMesh &candidate,
+            int maximumTopologicalComplexityIncrease = 0,
+            double maximumSurfaceAreaRatio = 1.30,
+            double maximumBoundsDiagonalRatio = 1.10);
 
     static DepthTsdfZeroCrossingRecoveryStatistics
         recoverGeometryVerifiedZeroCrossingSamples(
@@ -1136,6 +1224,25 @@ public:
             std::vector<std::uint8_t> *supported);
     static bool shouldTrimWeakBoundaryFace(int boundaryEdgeCount,
                                            int weakVertexCount);
+    static bool shouldReleaseVisibilityConstrainedHole(
+        int loopVertexCount,
+        int silhouetteProtectedVertexCount,
+        int supportingViewCount,
+        int conflictViewCount,
+        int minimumSupportingViews,
+        int maximumConflictViews,
+        float strongSilhouetteRatio);
+    static bool shouldAcceptFinalHoleFillPatchSample(
+        int supportingViewCount,
+        int conflictViewCount,
+        int minimumSupportingViews,
+        int maximumConflictViews);
+    static bool shouldApplyVisibilityOccupancyCut(
+        bool cutOk,
+        bool emptyCut,
+        std::uint64_t sampleCount,
+        std::uint64_t fullSampleCount,
+        float minimumFullFraction);
     static bool shouldAcceptQuadricSimplification(
         int inputFaceCount,
         int outputFaceCount,

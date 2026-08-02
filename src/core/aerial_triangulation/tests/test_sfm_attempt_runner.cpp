@@ -345,4 +345,12 @@ TEST(SfmAttemptRunnerTest, RunsKnownPoseSfmFromPreparedTiePointGraph)
     EXPECT_TRUE(result.result.sfmDiagnostics.value(QStringLiteral("ba_solution_usable")).toBool());
     EXPECT_TRUE(result.result.sfmDiagnostics.value(QStringLiteral("ba_result_applied")).toBool());
     EXPECT_GT(result.result.sfmDiagnostics.value(QStringLiteral("ba_observations")).toInt(), 0);
+    EXPECT_GE(result.result.sfmDiagnostics.value(
+        QStringLiteral("ba_refined_intrinsic_count")).toInt(), 0);
+    EXPECT_GT(result.result.sfmDiagnostics.value(
+        QStringLiteral("ba_shared_focal_scale")).toDouble(), 0.0);
+    EXPECT_EQ(result.result.sfmDiagnostics.value(
+        QStringLiteral("final_camera_focal_count")).toInt(), 2);
+    EXPECT_GT(result.result.sfmDiagnostics.value(
+        QStringLiteral("final_camera_focal_median_px")).toDouble(), 0.0);
 }

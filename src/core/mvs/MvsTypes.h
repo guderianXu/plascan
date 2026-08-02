@@ -24,6 +24,7 @@
 #include <atomic>
 
 #include "camera/Camera.h"
+#include "DepthPoseRefinementStage.h"
 
 #include <opencv2/core.hpp>
 
@@ -43,6 +44,10 @@ struct PatchMatchConfig
     int   cpuThreadCount     = 1;       ///< CPU 路径的像素级并行线程数
     float confidenceThresh   = 0.60f;   ///< 多图生产阈值；少视图/快速预览由调用方显式降低
     float minimumMaskedPatchSupportRatio = 0.35f; ///< mask-aware NCC 最小双边有效样本比例
+    bool  enablePhotometricUniqueness = true; ///< 用相邻竞争深度抑制重复纹理/低纹理的歧义解
+    float photometricUniquenessRelativeDepthStep = 0.01f; ///< 竞争深度相对偏移（正负各一次）
+    float photometricUniquenessMinimumMargin = 0.03f; ///< 最优 NCC 与竞争深度 NCC 的最小可信间隔
+    float photometricUniquenessMinimumConfidenceScale = 0.50f; ///< 完全歧义时保留的置信度比例
     bool  useCuda            = true;
     int   downsampleFactor   = 2;       ///< 降采样因子（2=半分辨率，速度提升约4倍）
     bool  doMedianBlur       = true;
@@ -214,6 +219,7 @@ struct DepthGenConfig
     DepthFilterMode depthFilterMode = DepthFilterMode::Moderate; ///< 显式过滤预设
     bool adaptiveDepthFilterMode = true; ///< Auto 场景下航测用中等、环拍物体用温和过滤
     bool enableAdaptiveGeometryEvidence = true; ///< 环拍场景生成连续几何证据；当前仅影子统计
+    DepthPoseRefinementOptions depthPoseRefinement; ///< 默认关闭；仅输出派生相机候选和诊断，不覆盖项目相机
     int crossViewHoleRepairSourceCount = 8; ///< 环拍内部孔洞修复使用的邻帧数，不改变 PatchMatch 源视图
     bool enableTwoSourceCrossViewGrowth = false; ///< 实验：从三源强核心受控恢复稳定两源缺口
     int twoSourceGrowthDistancePixels = 3;

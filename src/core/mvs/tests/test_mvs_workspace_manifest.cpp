@@ -4,6 +4,8 @@
 #include "DepthMapGenerator.h"
 #include "MvsQualityReport.h"
 #include "MvsTypes.h"
+#include "io/ImageIO.h"
+#include "io/PathIO.h"
 
 #include <gtest/gtest.h>
 
@@ -67,6 +69,16 @@ MvsDepthFrameRecord makeRecord(int index, const QString &name, const QString &st
         {QStringLiteral("valid_inputs"), true},
         {QStringLiteral("native_valid_ratio"), 0.75},
         {QStringLiteral("repaired_valid_ratio"), 0.10}
+    };
+    record.poseRefinementDiagnostics = QJsonObject{
+        {QStringLiteral("enabled"), true},
+        {QStringLiteral("candidate_only"), true},
+        {QStringLiteral("accepted"), true},
+        {QStringLiteral("reason"), QStringLiteral("accepted_candidate")}
+    };
+    record.derivedCameraModel = QJsonObject{
+        {QStringLiteral("fx"), 1200.0},
+        {QStringLiteral("camera_center"), QJsonArray{0.01, 0.02, -1.99}}
     };
     record.rawGeometrySourceMaskPath = QStringLiteral("geometry_source_mask_%1.bin")
                                            .arg(index, 3, 10, QLatin1Char('0'));
@@ -158,6 +170,18 @@ TEST(MvsWorkspaceManifest, SavesAndLoadsFrameRecordsAtomically)
             .value(QStringLiteral("native_valid_ratio"))
             .toDouble(),
         0.75);
+    EXPECT_TRUE(loaded.frames()
+                    .front()
+                    .poseRefinementDiagnostics
+                    .value(QStringLiteral("candidate_only"))
+                    .toBool());
+    EXPECT_EQ(loaded.frames()
+                  .front()
+                  .derivedCameraModel
+                  .value(QStringLiteral("camera_center"))
+                  .toArray()
+                  .size(),
+              3);
     EXPECT_EQ(loaded.frames().front().rawGeometrySourceMaskPath,
               QStringLiteral("geometry_source_mask_002.bin"));
     EXPECT_EQ(loaded.frames().front().rawInverseDepthMeanPath,
@@ -395,6 +419,97 @@ TEST(MvsWorkspaceReplay, RestoresOrderedViewsAndProjectMasks)
     EXPECT_FALSE(views[0].validRegionMaskPath.empty());
 }
 
+TEST(MvsWorkspaceManifest, UpdatesPoseCandidateWithoutChangingFrameStatus)
+{
+    MvsWorkspaceManifest manifest;
+    manifest.upsertFrame(makeRecord(
+        4, QStringLiteral("image_004.jpg"), QStringLiteral("completed")));
+    const QJsonObject diagnostics{
+        {QStringLiteral("candidate_only"), true},
+        {QStringLiteral("accepted"), false},
+        {QStringLiteral("reason"), QStringLiteral("projection_coverage_regressed")}
+    };
+    const QJsonObject derived{
+        {QStringLiteral("camera_center"), QJsonArray{0.0, 0.0, 1.0}}
+    };
+
+    manifest.updatePoseRefinement(4, diagnostics, derived);
+
+    ASSERT_EQ(manifest.frames().size(), 1);
+    EXPECT_EQ(manifest.frames().front().status, QStringLiteral("completed"));
+    EXPECT_EQ(manifest.frames()
+                  .front()
+                  .poseRefinementDiagnostics
+                  .value(QStringLiteral("reason"))
+                  .toString(),
+              QStringLiteral("projection_coverage_regressed"));
+    EXPECT_EQ(manifest.frames().front().derivedCameraModel, derived);
+}
+
+TEST(MvsWorkspaceReplay, ResolvesRelativeImagePathsAgainstManifestDirectory)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString imageDir =
+        QDir(tempDir.path()).filePath(QStringLiteral("影像 目录"));
+    ASSERT_TRUE(QDir().mkpath(imageDir));
+
+    MvsWorkspaceManifest manifest;
+    manifest.setConfigHash(QStringLiteral("relative-paths"));
+    for (int index = 0; index < 2; ++index)
+    {
+        const QString imagePath = QDir(imageDir).filePath(
+            QStringLiteral("影像_%1.png").arg(index));
+        ASSERT_TRUE(xjw::common::io::writeImage(
+            imagePath, cv::Mat(12, 18, CV_8U, cv::Scalar(80 + index))));
+        MvsDepthFrameRecord record = makeRecord(
+            index,
+            QDir(tempDir.path()).relativeFilePath(imagePath),
+            QStringLiteral("completed"));
+        manifest.markCompleted(record);
+    }
+
+    const QString manifestPath =
+        QDir(tempDir.path()).filePath(QStringLiteral("mvs_manifest.json"));
+    QString error;
+    ASSERT_TRUE(manifest.saveAtomic(manifestPath, &error)) << error.toStdString();
+
+    std::vector<xjw::mvs::CameraView> views;
+    ASSERT_TRUE(xjw::mvs::loadMvsReplayViews(
+        manifestPath, QString(), &views, &error)) << error.toStdString();
+    ASSERT_EQ(views.size(), 2);
+    EXPECT_EQ(QFileInfo(xjw::common::io::fromUtf8Path(views[0].imagePath))
+                  .canonicalFilePath(),
+              QFileInfo(QDir(imageDir).filePath(QStringLiteral("影像_0.png")))
+                  .canonicalFilePath());
+}
+
+TEST(MvsWorkspaceReplay, RejectsDuplicateImagePathsAcrossFrameIndices)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString imagePath =
+        QDir(tempDir.path()).filePath(QStringLiteral("same_image.png"));
+    ASSERT_TRUE(cv::imwrite(
+        imagePath.toStdString(), cv::Mat(12, 18, CV_8U, cv::Scalar(80))));
+
+    MvsWorkspaceManifest manifest;
+    manifest.setConfigHash(QStringLiteral("duplicate-images"));
+    manifest.markCompleted(makeRecord(0, imagePath, QStringLiteral("completed")));
+    manifest.markCompleted(makeRecord(1, imagePath, QStringLiteral("completed")));
+    const QString manifestPath =
+        QDir(tempDir.path()).filePath(QStringLiteral("mvs_manifest.json"));
+    QString error;
+    ASSERT_TRUE(manifest.saveAtomic(manifestPath, &error)) << error.toStdString();
+
+    std::vector<xjw::mvs::CameraView> views;
+    EXPECT_FALSE(xjw::mvs::loadMvsReplayViews(
+        manifestPath, QString(), &views, &error));
+    EXPECT_TRUE(views.empty());
+    EXPECT_TRUE(error.contains(QStringLiteral("重复 ref_image")))
+        << error.toStdString();
+}
+
 TEST(MvsWorkspaceReplay, LoadsVerifiedFailedAndMissingPairAuditStates)
 {
     QTemporaryDir tempDir;
@@ -435,6 +550,10 @@ TEST(MvsWorkspaceReplay, LoadsVerifiedFailedAndMissingPairAuditStates)
     EXPECT_EQ(summary.failedPairCount, 1);
     EXPECT_EQ(summary.missingStatisticsPairCount, 1);
     EXPECT_TRUE(qualities[0].verified);
+    EXPECT_EQ(QDir::cleanPath(xjw::common::io::fromUtf8Path(qualities[0].imageA)),
+              QDir(tempDir.path()).filePath(QStringLiteral("a.png")));
+    EXPECT_EQ(QDir::cleanPath(xjw::common::io::fromUtf8Path(qualities[0].imageB)),
+              QDir(tempDir.path()).filePath(QStringLiteral("b.png")));
     EXPECT_TRUE(qualities[1].hasVerificationStatistics);
     EXPECT_FALSE(qualities[1].verified);
     EXPECT_FALSE(qualities[2].hasVerificationStatistics);
@@ -624,7 +743,7 @@ TEST(MvsWorkspaceManifest, CompletedFrameIsNotReusableWhenArtifactsAreMissing)
     EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
 }
 
-TEST(MvsWorkspaceManifest, OrbitalFrameRequiresAdaptiveGeometryEvidenceAfterRevisionThirteen)
+TEST(MvsWorkspaceManifest, PreviousRevisionFrameIsNotReusableEvenWhenArtifactsMatch)
 {
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
@@ -647,14 +766,12 @@ TEST(MvsWorkspaceManifest, OrbitalFrameRequiresAdaptiveGeometryEvidenceAfterRevi
         QStringLiteral("depth_004_adaptive_geometry_conflict_weight.bin"));
     touchFile(record.depthPng);
     touchFile(record.rawDepthPath);
-    manifest.upsertFrame(record);
-
-    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
-
     touchFile(record.rawAdaptiveGeometrySupportWeightPath);
     touchFile(record.rawAdaptiveGeometryEffectiveViewCountPath);
     touchFile(record.rawAdaptiveGeometryConflictWeightPath);
-    EXPECT_TRUE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+    manifest.upsertFrame(record);
+
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
 }
 
 TEST(MvsWorkspaceManifest, RevisionFourteenOrbitalFrameRequiresConflictRatio)
@@ -751,6 +868,9 @@ TEST(MvsWorkspaceManifest, DepthConfigHashChangesWhenRelevantSettingsChange)
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
         changed.enableAdaptiveGeometryEvidence =
             !changed.enableAdaptiveGeometryEvidence;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.depthPoseRefinement.enabled = true;
     });
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
         changed.fusion.maxLocalDepthOutlierRemovalRatio -= 0.01f;

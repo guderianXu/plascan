@@ -11,6 +11,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRegularExpression>
 #include <QStringList>
 
 #include <opencv2/imgcodecs.hpp>
@@ -112,6 +113,60 @@ bool parseCameraModel(const QJsonObject &object, Camera *camera)
     parsed.setPose(cameraToWorld, center);
     parsed.setDistortion(Camera::Distortion{});
     *camera = parsed;
+    return true;
+}
+
+bool selectExistingPyramidArtifact(const QDir &directory,
+                                   const QJsonObject &frame_object,
+                                   QString *depth_path,
+                                   QString *confidence_path,
+                                   QString *preview_path,
+                                   QString *valid_mask_path,
+                                   int *grid_width,
+                                   int *grid_height)
+{
+    if (!depth_path || !confidence_path || !preview_path || !valid_mask_path ||
+        !grid_width || !grid_height)
+    {
+        return false;
+    }
+
+    QJsonObject selected;
+    qint64 selected_area = -1;
+    for (const QJsonValue &level_value : frame_object.value(QStringLiteral("pyramid_levels")).toArray())
+    {
+        const QJsonObject level = level_value.toObject();
+        if (!level.value(QStringLiteral("success")).toBool(false))
+        {
+            continue;
+        }
+        const QString candidate = resolveArtifactPath(
+            directory, level.value(QStringLiteral("raw_depth_path")).toString());
+        const int width = level.value(QStringLiteral("artifact_width")).toInt(0);
+        const int height = level.value(QStringLiteral("artifact_height")).toInt(0);
+        const qint64 area = static_cast<qint64>(width) * height;
+        if (width <= 0 || height <= 0 || !QFileInfo::exists(candidate) || area <= selected_area)
+        {
+            continue;
+        }
+        selected = level;
+        selected_area = area;
+    }
+    if (selected.isEmpty())
+    {
+        return false;
+    }
+
+    *depth_path = resolveArtifactPath(
+        directory, selected.value(QStringLiteral("raw_depth_path")).toString());
+    *confidence_path = resolveArtifactPath(
+        directory, selected.value(QStringLiteral("raw_confidence_path")).toString());
+    *preview_path = resolveArtifactPath(
+        directory, selected.value(QStringLiteral("preview_path")).toString());
+    *valid_mask_path = resolveArtifactPath(
+        directory, selected.value(QStringLiteral("valid_mask_path")).toString());
+    *grid_width = selected.value(QStringLiteral("artifact_width")).toInt();
+    *grid_height = selected.value(QStringLiteral("artifact_height")).toInt();
     return true;
 }
 
@@ -506,6 +561,26 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
             frame.gridHeight = object.value(QStringLiteral("grid_height")).toInt();
             frame.hasCameraModel = parseCameraModel(
                 object.value(QStringLiteral("camera_model")).toObject(), &frame.cameraModel);
+            const int full_grid_width = frame.gridWidth;
+            const int full_grid_height = frame.gridHeight;
+            if (!QFileInfo::exists(frame.depthPath) && selectExistingPyramidArtifact(
+                    directory,
+                    object,
+                    &frame.depthPath,
+                    &frame.confidencePath,
+                    &frame.previewPath,
+                    &frame.validMaskPath,
+                    &frame.gridWidth,
+                    &frame.gridHeight))
+            {
+                if (frame.hasCameraModel && full_grid_width > 0 && full_grid_height > 0)
+                {
+                    frame.cameraModel = frame.cameraModel.scaledIntrinsics(
+                        static_cast<double>(frame.gridWidth) / full_grid_width,
+                        static_cast<double>(frame.gridHeight) / full_grid_height);
+                }
+                frame.pyramidFallback = true;
+            }
             if (QFileInfo::exists(frame.depthPath))
             {
                 frames.push_back(frame);
@@ -519,7 +594,11 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
             QStringList() << QStringLiteral("depth_*.bin"), QDir::Files, QDir::Name);
         for (const QString &file_name : depth_files)
         {
-            if (file_name.endsWith(QStringLiteral("_conf.bin")) ||
+            static const QRegularExpression pyramid_artifact_pattern(
+                QStringLiteral("^depth_\\d+_level_\\d+(?:_.*)?\\.bin$"),
+                QRegularExpression::CaseInsensitiveOption);
+            if (pyramid_artifact_pattern.match(file_name).hasMatch() ||
+                file_name.endsWith(QStringLiteral("_conf.bin")) ||
                 file_name.endsWith(QStringLiteral("_geometry_support.bin")) ||
                 file_name.endsWith(QStringLiteral("_geometry_source_mask.bin")) ||
                 file_name.endsWith(QStringLiteral("_adaptive_geometry_support_weight.bin")) ||

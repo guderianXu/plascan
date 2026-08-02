@@ -77,15 +77,15 @@ DepthConfidenceThresholds depthConfidenceThresholds(
     thresholds.fusion = std::clamp(configuredFusion, 0.0f, 1.0f);
     if (sceneProfile == MvsSceneProfile::OrbitalObject &&
         filterMode == DepthFilterMode::Mild &&
-        availableSourceViews > 0 &&
-        availableSourceViews <= 3)
+        availableSourceViews > 0)
     {
-        // Sparse ring sectors and grazing views often have only three usable
-        // neighbours. Treating the "highest" generic thresholds as hard
-        // validity gates creates large, coherent holes on otherwise supported
-        // object surfaces. Preserve these weaker estimates for the subsequent
-        // cross-view evidence and TSDF weighting stages instead of deleting
-        // them at the photometric stage.
+        // Ring sectors and grazing views remain locally difficult even when a
+        // fourth source is available.  Raising the hard validity threshold at
+        // exactly four sources deletes coherent, geometrically supported
+        // regions and creates view-count-dependent holes. Preserve the weaker
+        // estimates for cross-view evidence and TSDF weighting; additional
+        // sources improve the robust NCC itself and must not make the binary
+        // photometric gate stricter.
         thresholds.patchMatch = std::min(thresholds.patchMatch, 0.50f);
         thresholds.fusion = std::min(thresholds.fusion, 0.60f);
     }

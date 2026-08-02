@@ -116,7 +116,9 @@ core/
 │   ├── ImageMatchRepository.h/cpp # 对称写入、完整指纹键缓存和按影像查询
 │   ├── sift/                   # CUDA SIFT 提取
 │   ├── lightglue/              # TensorRT LightGlue 固定桶推理与后处理
-│   ├── sift_lightglue/         # 当前生产算法组合与注册实现
+│   ├── sift_lightglue/         # CUDA SIFT + LightGlue 组合与注册实现
+│   ├── loma_r/                 # TensorRT DaD/DeDoDe-G 特征与 LoMa-R 匹配
+│   ├── tensorrt/               # 通用 engine 会话、CUDA 缓冲和张量 ABI 校验
 │   ├── geometry/               # USAC/MAGSAC 验证及逐匹配像素残差
 │   └── tests/                  # 格式往返、损坏校验、注册和几何测试
 │
@@ -233,6 +235,7 @@ core/
 │   ├── DepthConsistencyCache.h/cpp # 有内存预算的 LRU source 邻域多视一致性缓存
 │   ├── DepthGeometryConsistency.h/cpp # 断边邻域搜索、相机基线自适应往返验证与一致性投票
 │   ├── DepthPoseAlignmentRefiner.h/cpp # 锚定尺度的鲁棒点到平面局部 SE(3) 派生位姿细化
+│   ├── DepthPoseRefinementStage.h/cpp # 默认关闭的跨视深度候选采样、安全门与派生相机输出
 │   ├── PatchMatchCUDA.cu/h     # PatchMatch CUDA 实现
 │   ├── PatchMatchNoCUDA.cpp    # PatchMatch CPU 回退
   │   ├── DepthMapGenerator.h/cpp # 深度图估计、取消检查、raw depth/confidence/几何支持度/valid mask 写盘
@@ -300,7 +303,7 @@ core/
 │   ├── IsoSurfaceTopology.h/cpp # 等值面共享边/共享面键、渐近判别和歧义统计
 │   ├── ConsistentIsoSurfaceExtractor.h/cpp # 项目自有共享顶点一致等值面实验提取器
 │   ├── Mc33IsoSurfaceExtractor.h/cpp # 可选 MC33 拓扑无歧义等值面适配器
-│   ├── DepthMapMeshBuilder.h/cpp # 深度帧 manifest/相机产物加载与 legacy 路径适配
+│   ├── DepthMapMeshBuilder.h/cpp # 深度帧 manifest/相机产物加载；缺最终层时按清单安全回退最高可用金字塔层
 │   ├── DepthFusionFramePolicy.h/cpp # 环拍视角覆盖度量及防连续视角缺口的帧准入策略
 │   ├── DepthMeshCompleteness.h/cpp # 深度观测到最终网格的逐帧召回率与完整性质量门
 │   ├── DepthRayMetric.h/cpp # camera-Z 深度、欧氏射线距离和世界像素足迹的统一换算
@@ -310,6 +313,10 @@ core/
 │   ├── DepthVisibilityHistogram.h/cpp # 每个 TSDF 样本 9 字节、含精确零中心的有符号距离直方图及鲁棒统计
 │   ├── AdaptiveTsdfOctree.h/cpp # 保留零面细节的 2:1 平衡自适应八叉树与面邻接图
 │   ├── SparseTgvSolver.h/cpp # 八叉树稀疏图上的 primal-dual 二阶 TGV 隐式场求解器
+│   ├── VisibilityOccupancyTsdfCompletion.h/cpp # 深度/轮廓可见性数据项、图割占据载体与拓扑锁定 TSDF 残差融合
+│   ├── VisibilityOccupancyCleanup/HandleRepair/WellComposedRepair.* # 占据体分量、柄和良构拓扑修复
+│   ├── VisibilityOccupancyDistanceField/BoundaryExtractor/SurfaceBuilder.* # 闭合载体距离场、边界和表面构造
+│   ├── VisibilityOccupancyCarrierSubdivision/Fairer/FieldProjector.* # 保拓扑载体细分、平滑和距离场投影
 │   ├── VisualHullReconstructor.h/cpp # 显式 legacy/诊断 Visual Hull 路径
 │   ├── ModelWorkflowService.h/cpp  # 模型工作流服务；保留 PLY 几何并可写 OBJ/MTL/相机纹理图集
 ├── terrain/                    # 地形产品 (DEM/DOM) 和质量栅格
@@ -473,7 +480,6 @@ gui/
 │   │   ├── ProjectModelManager.h/cpp                 # 从已有点云/深度图生成模型，不隐式启动稠密流程
 │   │   ├── ProjectTerrainProductsManager.h/cpp       # 从已有点云生成 DEM，以及正射后台任务与结果登记
 │   │   ├── ProjectCameraSetupManager.h/cpp           # 相机设置管理
-│   │   ├── ProjectTaskDispatcher.h/cpp               # 任务调度器
 │   │   └── ProjectUiCommands.h/cpp                   # UI 命令
 │   ├── services/
 │   │   ├── BundleAdjustService.h/cpp                 # BA 服务
@@ -701,6 +707,37 @@ A/B 对开放边帮助不足，因此不进入环拍默认值。环拍高细节�
 单/多视支持、拒绝原因、分量面数/包围盒及补洞前后边界数。超高质量档还会剥离两轮至少含两条开放边
 且带弱相机支持顶点的终端悬挂三角形，以及只有一条开放边但三个顶点均为弱支持的薄片，并执行两轮
 限位边界平滑；候选面和实际移除面数会单独记录。PLY
+
+环拍任意 3D 模型默认使用双分辨率隐式表面路径。72 级规则网格执行可见性占据图割：深度前方提供
+空域证据，深度邻域提供表面/实体证据，轮廓只作有界先验；占据体按“柄修复、良构修复、内部气泡
+清理”循环到固定点。该规则网格只是低分辨率的内外符号/拓扑先验，不再把单元外壳直接作为最终
+网格。完成器把其符号约束与原生高分辨率 TSDF 残差合成，然后由 MC33 在 192/384 级场上插值真实
+零交叉；被占据先验恢复的样本允许参与符号变化，避免再被“两个端点都必须有原生深度支持”的门限
+切掉。这与 Open3D 在目标 TSDF 分辨率上插值零交叉的几何原则一致，同时保留 PlaScan 的多视可见性
+补全。72 级单元边界提取仍保留为显式兼容/诊断开关，但不再是环拍默认值。
+
+这里的规则网格图割只借鉴 AliceVision 的“相机到表面为空、表面后方为实”的可见性投票原则，并不
+等价于 AliceVision `fuseCut`：后者先按像素足迹融合带相机集合的 3D 点，再在 Delaunay 四面体图上做
+射线图割和实体角后处理。项目若引入真正的 Delaunay 后端，应作为独立重建器和当前高分辨率 TSDF
+基线做同输入 A/B，不能再把规则体素外壳描述为 AliceVision 实现。
+
+该路径不依赖先生成密集点云，也不使用大孔三角扇掩盖失败零面；默认输出必须保持分量数、Euler 数
+和闭合二流形拓扑。最后在不改变面连接的前提下，以多视深度、置信度、来源数和逆深度离散度执行
+受限顶点细化，面积、体积、法向或拓扑门失败即按轮回退。可分别用
+`tsdfVisibilityOccupancyCompletion=false` 和 `tsdfVisibilityOccupancyDepthRefinement=false` 显式关闭；报告记录
+占据先验分辨率、完成场来源、MC33 支持策略、强制边界样本、拓扑签名、细化位移与是否回退。2026-08-02
+的 GUI 默认等价回归中，Dino、Temple 和 hyb2 均为单连通闭合二流形；Dino/hyb2 Euler 数为 2，Temple
+柱间真实开口以 Euler `-4` 保留且外部开放边为 0。Dino 原生深度相对 Metashape 的法线绝对点积中位数
+由旧 72 级单元外壳的约 `0.819` 提高到 `0.906`，30 度内法线一致率由 `43.4%` 提高到 `57.0%`；表面积
+由 `0.1075` 降到 `0.0880`，更接近参考 `0.0728`。Chamfer 从 `0.00414` 变为 `0.00440`，说明残余表面
+偏差主要仍在深度/位姿与融合场，而非最终三角面载体。不能只凭闭合质量门
+宣称已经达到 Metashape 的表面质量。
+
+旧工作区若 manifest 指向的最终深度文件已经缺失，但 `pyramid_levels` 中仍有成功且存在的产物，模型加载
+只回退到清单内最高分辨率的可用层，并按栅格比例缩放相机内参；几何计数/来源位掩码用最近邻、连续
+逆深度统计用面积采样同步降尺度。没有 manifest 时目录扫描明确忽略 `depth_*_level_*.bin`，避免把中间
+产物误识别成无相机的最终帧。
+
 384 级任意 3D 模型且目标不超过 24 万面时，目标面数优先使用 OpenMesh 的 link condition、
 法线偏差和翻转约束减面，并执行有绝对位移上限的平滑；进入 OpenMesh 前先统一共享边面朝向，
 无法全局定向的极少数冲突面按最小集合移除。OpenMesh 不可用、被显式关闭或候选未通过拓扑门时，

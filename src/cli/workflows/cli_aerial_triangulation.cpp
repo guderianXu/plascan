@@ -10,6 +10,7 @@
 #include "cli_common.h"
 #include "cli_photogrammetry_common.h"
 #include "CliTokenUtils.h"
+#include "FinalBaCameraExporter.h"
 
 #include "workflow/AerialTriangulationWorkflow.h"
 #include "project/ProjectSession.h"
@@ -271,6 +272,7 @@ int main(int argc, char *argv[])
     // 阶段 1：声明 CLI 参数。默认值尽量与 GUI 的空中三角测量工作流保持一致。
     std::string inputPath;
     std::string outputDirArg;
+    std::string exportCameraDirArg;
     std::string projectPathArg;
     std::string chunkIdArg;
     std::string chunkNameArg;
@@ -281,9 +283,9 @@ int main(int argc, char *argv[])
     std::string referenceModeArg = "source_code";
     std::string algorithmIdArg = "sift_lightglue";
     std::string lightGlueEngineArg;
+    std::string lomaRPackageArg;
     std::string maskApplyModeArg = "none";
     std::string maskDirArg;
-    std::string lomaRPackageArg;
     int keypointLimit = 40000;
     int tiepointLimit = 4000;
     int initialImageId1 = -1;
@@ -308,6 +310,8 @@ int main(int argc, char *argv[])
 
     app.add_option("-i,--input", inputPath, "影像列表；每行支持 '<image>' 或 '<image> <camera.tsai>'")->required();
     app.add_option("-o,--output-dir", outputDirArg, "输出目录")->required();
+    app.add_option("--export-camera-dir", exportCameraDirArg,
+                   "正式 SfM/BA 成功后导出 cameras/*.tsai 和 image_camera.lis；目录必须不存在");
     app.add_option("--project", projectPathArg, "无头项目路径，默认写到输出目录 headless.plascan");
     app.add_option("--chunk-id", chunkIdArg, "使用指定 UUID 的 Chunk");
     app.add_option("--chunk-name", chunkNameArg, "使用指定名称的 Chunk");
@@ -322,12 +326,12 @@ int main(int argc, char *argv[])
         ->check(CLI::IsMember({"sift_lightglue", "loma_r"}));
     app.add_option("--lightglue-engine", lightGlueEngineArg,
                    "TensorRT LightGlue .engine；留空时按模型目录自动查找");
+    app.add_option("--loma-r-package", lomaRPackageArg,
+                   "LoMa-R TensorRT JSON 清单；留空时按模型目录自动查找");
     app.add_option("--keypoint-limit", keypointLimit, "关键点限制");
     app.add_option("--tiepoint-limit", tiepointLimit, "连接点限制");
     app.add_option("--initial-image-id-1", initialImageId1, "指定初始像对的第一个 0 基影像索引");
     app.add_option("--initial-image-id-2", initialImageId2, "指定初始像对的第二个 0 基影像索引");
-    app.add_option("--loma-r-package", lomaRPackageArg,
-                   "LoMa-R TensorRT JSON 清单；留空时按模型目录自动查找");
     app.add_option("--mask-apply-mode", maskApplyModeArg, "蒙版应用阶段: none, keypoints, tiepoints");
     app.add_option("--mask-dir", maskDirArg, "蒙版目录，按影像文件名或 *_mask 文件名匹配");
     app.add_flag("--generic-preselection", genericPreselection, "启用通用预选");
@@ -356,6 +360,9 @@ int main(int argc, char *argv[])
     // 阶段 2：规范化路径并读取影像清单。清单可仅含影像，也可为每幅影像提供初始相机文件。
     const QString inputList = xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(inputPath));
     const QString outputDir = xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(outputDirArg));
+    const QString requestedCameraExportDir = exportCameraDirArg.empty()
+        ? QString()
+        : xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(exportCameraDirArg));
     const QString projectPath = projectPathArg.empty()
         ? QDir(outputDir).filePath(QStringLiteral("headless.plascan"))
         : xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(projectPathArg));
@@ -509,6 +516,9 @@ int main(int argc, char *argv[])
     options.lightGlueTensorRtEnginePath = lightGlueEngineArg.empty()
         ? QString()
         : xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(lightGlueEngineArg));
+    options.lomaRTensorRtPackagePath = lomaRPackageArg.empty()
+        ? QString()
+        : xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(lomaRPackageArg));
     options.device = xjw::cli::normalizedToken(deviceArg, QStringLiteral("auto"));
     options.threads = std::max(1, threads);
     options.autoGenerateMissingMatches = autoGenerateMissingMatches;
@@ -516,9 +526,6 @@ int main(int argc, char *argv[])
     options.maskPaths = xjw::cli::maskPathsFromDirectory(
         xjw::cli::fromStdString(maskDirArg), options.images);
     options.cancelFlag = cancelFlag;
-    options.lomaRTensorRtPackagePath = lomaRPackageArg.empty()
-        ? QString()
-        : xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(lomaRPackageArg));
     options.progressFn = [](const QString &stage, int percent)
     {
         std::fprintf(stdout, "[%3d%%] %s\n", percent, qUtf8Printable(stage));
@@ -545,10 +552,14 @@ int main(int argc, char *argv[])
     {
         const xjw::aerial_triangulation::AerialTriangulationResolvedConfig config =
             xjw::aerial_triangulation::AerialTriangulationWorkflow::resolveConfig(options);
-        const QJsonObject report = makeDryRunReport(config,
-                                                    outputDir,
-                                                    options.images.size(),
-                                                    options.cameraPaths.size());
+        QJsonObject report = makeDryRunReport(config,
+                                              outputDir,
+                                              options.images.size(),
+                                              options.cameraPaths.size());
+        report[QStringLiteral("camera_export_requested")] =
+            !requestedCameraExportDir.isEmpty();
+        report[QStringLiteral("camera_export_performed")] = false;
+        report[QStringLiteral("camera_export_dir")] = requestedCameraExportDir;
         if (!xjw::cli::writeJsonFile(reportPath, report, &errorMessage))
         {
             std::fprintf(stderr, "报告写入失败: %s\n", qUtf8Printable(errorMessage));
@@ -582,17 +593,36 @@ int main(int argc, char *argv[])
     const xjw::aerial_triangulation::AerialTriangulationResult result =
         xjw::aerial_triangulation::AerialTriangulationWorkflow::run(options);
 
-    const QJsonObject report = makeRunReport(result,
-                                             outputDir,
-                                             options.images.size(),
-                                             options.cameraPaths.size(),
-                                             static_cast<double>(timer.elapsed()));
+    xjw::cli::FinalBaCameraExportResult cameraExport;
+    QString cameraExportError;
+    bool cameraExportPerformed = false;
+    if (result.reconstructionResult.success && !requestedCameraExportDir.isEmpty())
+    {
+        cameraExportPerformed = xjw::cli::exportFinalBaCameras(
+            options.images,
+            result.reconstructionResult.pendingCamUpdates,
+            requestedCameraExportDir,
+            &cameraExport,
+            &cameraExportError);
+    }
+
+    QJsonObject report = makeRunReport(result,
+                                       outputDir,
+                                       options.images.size(),
+                                       options.cameraPaths.size(),
+                                       static_cast<double>(timer.elapsed()));
+    report[QStringLiteral("camera_export_requested")] =
+        !requestedCameraExportDir.isEmpty();
+    report[QStringLiteral("camera_export_performed")] = cameraExportPerformed;
+    report[QStringLiteral("camera_export_dir")] = requestedCameraExportDir;
+    report[QStringLiteral("image_camera_list_path")] = cameraExport.imageCameraList;
+    report[QStringLiteral("exported_camera_count")] = cameraExport.cameraPaths.size();
+    report[QStringLiteral("camera_export_error")] = cameraExportError;
     if (!xjw::cli::writeJsonFile(reportPath, report, &errorMessage))
     {
         std::fprintf(stderr, "报告写入失败: %s\n", qUtf8Printable(errorMessage));
         return cli::EXIT_IO_ERR;
     }
-
     // 阶段 6：工程仅登记逐影像最终分片。特征描述子是任务内临时数据，
     // 像对信息和残差已封装在 `.pimatch` 中，不再产生旧缓存数组。
     for (const xjw::matchphotos::MatchPhotosImageMatchRecord &image :
@@ -673,6 +703,15 @@ int main(int argc, char *argv[])
                      qUtf8Printable(errorMessage));
         return cli::EXIT_IO_ERR;
     }
+    if (result.reconstructionResult.success
+        && !requestedCameraExportDir.isEmpty()
+        && !cameraExportPerformed)
+    {
+        std::fprintf(stderr,
+                     "空三已完成并写回项目，但最终 BA 相机导出失败: %s\n",
+                     qUtf8Printable(cameraExportError));
+        return cli::EXIT_IO_ERR;
+    }
 
     // 输出稳定的 key=value 摘要，便于批处理脚本读取；完整诊断信息保存在 JSON 报告中。
     std::fprintf(stdout, "status=%s\n", result.reconstructionResult.success ? "ok" : "failed");
@@ -682,6 +721,14 @@ int main(int argc, char *argv[])
     if (!result.reconstructionResult.sparseCloudPath.isEmpty())
     {
         std::fprintf(stdout, "sparse_cloud=%s\n", qUtf8Printable(result.reconstructionResult.sparseCloudPath));
+    }
+    if (cameraExportPerformed)
+    {
+        std::fprintf(stdout, "camera_export_dir=%s\n", qUtf8Printable(cameraExport.outputDir));
+        std::fprintf(stdout,
+                     "image_camera.lis=%s\n",
+                     qUtf8Printable(cameraExport.imageCameraList));
+        std::fprintf(stdout, "exported_cameras=%d\n", cameraExport.cameraPaths.size());
     }
     std::fprintf(stdout, "aerial_triangulation_cli_report.json=%s\n", qUtf8Printable(reportPath));
     std::fprintf(stdout,

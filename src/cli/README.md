@@ -31,6 +31,11 @@ JSON、控制台输出、覆盖保护和摄影测量列表解析复制到多个�
 分别由前三个入口覆盖；`reconstruct_pipeline_cli` 覆盖包含 DEM/正射产物的完整流水线。GUI 中的
 “添加照片/文件夹”属于项目输入管理，命令行通过输入清单和项目路径表达，不另建重复入口。
 
+`aerial_triangulation_cli --export-camera-dir <新目录>` 只在正式 SfM/BA 模型通过质量门并成功
+写出后导出最终相机。目标目录必须不存在；成功后包含与输入影像一一对应的
+`cameras/*.tsai` 和可直接传给 `reconstruct_pipeline_cli` 的 `image_camera.lis`。缺失任一最终
+相机时整批拒绝，候选搜索阶段的相机不会落盘。
+
 ## Chunk 工程行为
 
 会产生项目状态的 CLI 统一使用 `src/common/project/ProjectSession`，与 GUI 读写同一种

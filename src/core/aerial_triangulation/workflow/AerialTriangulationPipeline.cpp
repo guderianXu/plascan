@@ -548,7 +548,31 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
     execution.result.sfmDiagnostics.insert(
         QStringLiteral("adaptive_focal_scale"), selectedFocalScale);
     execution.result.sfmDiagnostics.insert(
+        QStringLiteral("adaptive_focal_seed_scale"), selectedFocalScale);
+    execution.result.sfmDiagnostics.insert(
         QStringLiteral("adaptive_focal_candidates"), focalCandidateJson);
+
+    const bool focalInitializationSearch = focalCandidates.size() > 1;
+    QString selfCalibrationStatus = QStringLiteral("trusted_prior");
+    bool selfCalibrationRequiresReview = false;
+    if (focalInitializationSearch && adaptiveRefinementAccepted)
+    {
+        selfCalibrationStatus = QStringLiteral("refined");
+    }
+    else if (focalInitializationSearch && input.adaptiveCameraModelFitting)
+    {
+        selfCalibrationStatus = QStringLiteral("coarse_seed_only");
+        selfCalibrationRequiresReview = true;
+    }
+    else if (focalInitializationSearch)
+    {
+        selfCalibrationStatus = QStringLiteral("fixed_coarse_seed");
+    }
+    execution.result.sfmDiagnostics.insert(
+        QStringLiteral("camera_self_calibration_status"), selfCalibrationStatus);
+    execution.result.sfmDiagnostics.insert(
+        QStringLiteral("camera_self_calibration_requires_review"),
+        selfCalibrationRequiresReview);
 
     if (!execution.result.success)
     {

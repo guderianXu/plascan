@@ -6729,10 +6729,10 @@ TEST(GenerateMaskWorkflowTest, U2NetMaskGenerationUsesBundledOnnxAndOpenCvDnn)
                     .contains(QStringLiteral("class U2NetMaskGenerator")));
     EXPECT_TRUE(readProjectSourceFile(QStringLiteral("src/core/mask/u2net/U2NetMaskGenerator.cpp"))
                     .contains(QStringLiteral("#include \"U2NetMaskGenerator.h\"")));
-    EXPECT_TRUE(source.contains(QStringLiteral("u2netMaskConfigFromSettings")));
-    EXPECT_TRUE(block.contains(QStringLiteral("methodToken == QLatin1String(\"u2net\")")));
+    EXPECT_TRUE(source.contains(QStringLiteral("u2netConfig")));
+    EXPECT_TRUE(block.contains(QStringLiteral("method == QLatin1String(\"u2net\")")));
     EXPECT_TRUE(block.contains(QStringLiteral("xjw::mask::U2NetMaskGenerator")));
-    EXPECT_TRUE(block.contains(QStringLiteral("u2netGenerator->generate(source)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("u2net->generate(source)")));
     EXPECT_TRUE(block.contains(QStringLiteral("U2Net_v1.onnx")));
     EXPECT_TRUE(block.contains(QStringLiteral("deviceLabel()")));
 }
@@ -6787,8 +6787,8 @@ TEST(GenerateMaskWorkflowTest, UsesMainWindowTaskStatusInsteadOfModalProgressDia
     EXPECT_TRUE(managerHeader.contains(QStringLiteral("void maskGenerationProgressChanged(const QString &stage, int done, int total);")));
     EXPECT_TRUE(managerHeader.contains(QStringLiteral("void maskGenerationFinished(bool success);")));
     EXPECT_TRUE(managerHeader.contains(QStringLiteral("void cancelMaskGeneration();")));
-    EXPECT_TRUE(block.contains(QStringLiteral("emit self->maskGenerationProgressChanged")));
-    EXPECT_TRUE(block.contains(QStringLiteral("emit self->maskGenerationFinished")));
+    EXPECT_TRUE(block.contains(QStringLiteral("emit self->progressChanged")));
+    EXPECT_TRUE(block.contains(QStringLiteral("emit self->finished")));
     EXPECT_FALSE(block.contains(QStringLiteral("new QProgressDialog")))
         << "Mask generation progress belongs in the main-window task status area, not a modal dialog.";
 
@@ -7725,9 +7725,10 @@ TEST(CameraSceneWidgetTest, CameraOverlayUsesMetashapeStyleImagePlanes)
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
 
-    EXPECT_TRUE(header.contains(QStringLiteral("float cameraImagePlaneHalfExtent(const CameraPose &pose")));
+    EXPECT_TRUE(header.contains(QStringLiteral(
+        "float cameraImagePlaneHalfExtent(const CameraPose &pose,")));
     EXPECT_TRUE(header.contains(QStringLiteral("void drawFloorPivotCross(QPainter &painter)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("cameraImagePlaneHalfExtent(pose, matrices.modelView)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("pose, matrices.modelView")));
     EXPECT_TRUE(source.contains(QStringLiteral("cameraDirectionLeaderLine(")));
     EXPECT_TRUE(source.contains(QStringLiteral("pose, thumbnailHalfExtent")));
     EXPECT_FALSE(source.contains(QStringLiteral("drawCameraDirectionArrow")));
@@ -8180,7 +8181,7 @@ TEST(ProjectOpenResponsivenessTest, ProjectManagerLoadsProjectSnapshotOffGuiThre
     const QString openBlock = managerSource.mid(openStart, saveStart - openStart);
 
     EXPECT_TRUE(openBlock.contains(QStringLiteral("emit projectOpenStarted(projectPath);")));
-    EXPECT_TRUE(openBlock.contains(QStringLiteral("xjw::gui::tasks::runGuarded(")));
+    EXPECT_TRUE(openBlock.contains(QStringLiteral("xjw::gui::tasks::runGuardedWithOutcome(")));
     EXPECT_TRUE(openBlock.contains(QStringLiteral("ProjectData::loadProjectOpenSnapshot(projectPath)")))
         << "Archive IO and JSON parsing should happen in the worker, not inside ProjectData on the GUI thread.";
     EXPECT_TRUE(openBlock.contains(QStringLiteral("openProjectFromSnapshot(snapshot")))
@@ -8193,7 +8194,7 @@ TEST(ProjectOpenResponsivenessTest, ProjectManagerLoadsProjectSnapshotOffGuiThre
         << "The old synchronous UI command path blocks the GUI while the archive is read.";
 
     EXPECT_TRUE(commandsSource.contains(QStringLiteral("bool ProjectUiCommands::selectProjectByDialog")));
-    EXPECT_TRUE(commandsSource.contains(QStringLiteral("selectProjectByDialog(&plascanPath)")));
+    EXPECT_TRUE(managerSource.contains(QStringLiteral("selectProjectByDialog(&projectPath)")));
 }
 
 TEST(ProjectOpenResponsivenessTest, ProjectManagerScansImageFoldersOffGuiThread)
@@ -8237,28 +8238,28 @@ TEST(ProjectOpenResponsivenessTest, MainWindowShowsProgressAndAvoidsFullMetaDuri
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
 
-    EXPECT_TRUE(header.contains(QStringLiteral("QProgressDialog*  _openProgressDialog{}")));
-    EXPECT_TRUE(header.contains(QStringLiteral("void onProjectOpenStarted(const QString &plascanPath);")));
-    EXPECT_TRUE(header.contains(QStringLiteral("void onProjectOpenProgressChanged(const QString &message, int percent);")));
-    EXPECT_TRUE(header.contains(QStringLiteral("void onProjectOpenFinished(bool success, const QString &message);")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QProgressDialog *_openProgress")));
+    EXPECT_TRUE(header.contains(QStringLiteral("void showOpenProgress")));
+    EXPECT_TRUE(header.contains(QStringLiteral("void updateOpenProgress")));
+    EXPECT_TRUE(header.contains(QStringLiteral("void finishOpenProgress")));
 
     EXPECT_TRUE(source.contains(QStringLiteral("&ProjectManager::projectOpenStarted")));
     EXPECT_TRUE(source.contains(QStringLiteral("&ProjectManager::projectOpenProgressChanged")));
     EXPECT_TRUE(source.contains(QStringLiteral("&ProjectManager::projectOpenFinished")));
-    EXPECT_TRUE(source.contains(QStringLiteral("new QProgressDialog(tr(\"正在打开项目...\"), QString(), 0, 100, this)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("new QProgressDialog(tr(\"正在打开项目...\"), QString(), 0, 100, _window)")));
 
-    const int openSlotStart = source.indexOf(QStringLiteral("void MainWindow::onProjectOpened"));
-    const int closedSlotStart = source.indexOf(QStringLiteral("void MainWindow::onProjectClosed"), openSlotStart);
+    const int openSlotStart = lifecycle.indexOf(QStringLiteral("void MainWindow::onProjectOpened"));
+    const int closedSlotStart = lifecycle.indexOf(QStringLiteral("void MainWindow::onProjectClosed"), openSlotStart);
     ASSERT_GE(openSlotStart, 0);
     ASSERT_GT(closedSlotStart, openSlotStart);
-    const QString openSlot = source.mid(openSlotStart, closedSlotStart - openSlotStart);
+    const QString openSlot = lifecycle.mid(openSlotStart, closedSlotStart - openSlotStart);
     EXPECT_TRUE(openSlot.contains(
         QStringLiteral("scheduleProjectMetadataRefresh(_projectManager->coreProjectMeta())")));
     EXPECT_TRUE(openSlot.contains(QStringLiteral("coreProjectMeta()")));
     EXPECT_FALSE(openSlot.contains(QStringLiteral("_projectManager->currentMeta()")))
         << "Opening the first viewport must not synchronously trigger project_results.json loading.";
 
-    const int projectOpenedLambda = source.indexOf(
+    const int projectOpenedLambda = lifecycle.indexOf(
         QStringLiteral("connect(_projectManager, &ProjectManager::projectOpened, this, [this]"));
     EXPECT_LT(projectOpenedLambda, 0)
         << "The extra projectOpened lambda duplicated refresh work and called currentMeta() during open.";
@@ -8293,11 +8294,11 @@ TEST(ProjectOpenResponsivenessTest, MainWindowDefersMetadataWidgetRefresh)
         << "Model view refresh should be one of the hydrator stages.";
     EXPECT_TRUE(setupBlock.contains(QStringLiteral("_photoStrip->loadFromJson(meta)")));
 
-    const int refreshStart = source.indexOf(QStringLiteral("void MainWindow::scheduleProjectMetadataRefresh"));
+    const int refreshStart = lifecycle.indexOf(QStringLiteral("void MainWindow::scheduleProjectMetadataRefresh"));
     ASSERT_GE(refreshStart, 0);
-    const int refreshEnd = source.indexOf(QStringLiteral("void MainWindow::onProjectClosed"), refreshStart);
+    const int refreshEnd = lifecycle.indexOf(QStringLiteral("void MainWindow::onProjectClosed"), refreshStart);
     ASSERT_GT(refreshEnd, refreshStart);
-    const QString refreshBlock = source.mid(refreshStart, refreshEnd - refreshStart);
+    const QString refreshBlock = lifecycle.mid(refreshStart, refreshEnd - refreshStart);
 
     EXPECT_TRUE(refreshBlock.contains(QStringLiteral("_projectUiHydrator->schedule(meta)")));
     EXPECT_FALSE(refreshBlock.contains(QStringLiteral("QTimer::singleShot")));
@@ -9347,9 +9348,9 @@ TEST(ProjectDashboardWidgetTest, MainWindowMirrorsTaskStatusSnapshotsReadOnly)
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
 
-    EXPECT_TRUE(header.contains(QStringLiteral("refreshDashboardTaskSnapshots")));
+    EXPECT_TRUE(header.contains(QStringLiteral("refreshDashboard")));
     EXPECT_TRUE(source.contains(QStringLiteral("setTaskSnapshots")));
-    EXPECT_TRUE(source.contains(QStringLiteral("TaskStatusWidget *widget")));
+    EXPECT_TRUE(source.contains(QStringLiteral("const TaskStatusWidget *status")));
     EXPECT_TRUE(source.contains(QStringLiteral("cancelRequested")));
 }
 

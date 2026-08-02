@@ -280,10 +280,63 @@ std::vector<MvsSourcePlanEntry> sequenceFallbackEntries(const MvsSourcePlannerOp
     return entries;
 }
 
-} // namespace
+bool isSafeFailedPairGeometryBackfill(
+    const MvsSourcePlanEntry &entry,
+    const MvsSourcePlannerOptions &options)
+{
+    if (!options.allowFailedPairBackfill
+        || entry.verificationStatus != MvsSourceVerificationStatus::Failed
+        || entry.verifiedPairGeometry
+        || entry.pairTotalMatches <= 0
+        || entry.geometricInliers <= 0
+        || entry.geometricInliers > entry.pairTotalMatches)
+    {
+        return false;
+    }
 
-MvsSourcePlan planMvsSourceViews(const std::vector<MvsSourceCandidate> &candidates,
-                                 const MvsSourcePlannerOptions &options)
+    const int required_inliers = std::max(
+        options.failedPairBackfillMinimumInliers,
+        options.minGeometricInliers);
+    const int required_matches = std::max(
+        options.failedPairBackfillMinimumMatches,
+        required_inliers);
+    const int required_shared_tracks = std::max(
+        options.failedPairBackfillMinimumSharedTracks,
+        options.minSharedTracks);
+    if (entry.geometricInliers < required_inliers
+        || entry.pairTotalMatches < required_matches
+        || entry.sharedTracks < required_shared_tracks
+        || entry.pairCoverageScore <
+            options.failedPairBackfillMinimumCoverage)
+    {
+        return false;
+    }
+
+    // A raw ratio is over-confident for the small failed-pair samples that
+    // occur in short orbital sequences.  The 90% Wilson lower bound keeps a
+    // pair only when its direct geometric support remains credible after
+    // accounting for sample size.
+    constexpr double kWilson90Z = 1.6448536269514722;
+    const double sample_count =
+        static_cast<double>(entry.pairTotalMatches);
+    const double success_ratio =
+        static_cast<double>(entry.geometricInliers) / sample_count;
+    const double z_squared = kWilson90Z * kWilson90Z;
+    const double denominator = 1.0 + z_squared / sample_count;
+    const double center = success_ratio + z_squared / (2.0 * sample_count);
+    const double radius = kWilson90Z * std::sqrt(
+        success_ratio * (1.0 - success_ratio) / sample_count
+        + z_squared / (4.0 * sample_count * sample_count));
+    const double wilson_lower_bound = (center - radius) / denominator;
+    return wilson_lower_bound >=
+        static_cast<double>(
+            options.failedPairBackfillMinimumWilsonLowerBound);
+}
+
+MvsSourcePlan planMvsSourceViewsImpl(
+    const std::vector<MvsSourceCandidate> &candidates,
+    const MvsSourcePlannerOptions &options,
+    bool allowFailedPairGeometryBackfill)
 {
     MvsSourcePlan plan;
     plan.requestedSourceCount = std::max(0, options.maxSources);
@@ -310,8 +363,12 @@ MvsSourcePlan planMvsSourceViews(const std::vector<MvsSourceCandidate> &candidat
         }
         if (entry.verificationStatus == MvsSourceVerificationStatus::Failed)
         {
-            plan.rejected.push_back({entry, MvsSourceRejectReason::LowQuality});
-            continue;
+            if (!allowFailedPairGeometryBackfill
+                || !isSafeFailedPairGeometryBackfill(entry, options))
+            {
+                plan.rejected.push_back({entry, MvsSourceRejectReason::LowQuality});
+                continue;
+            }
         }
         if (isAngleOutlier(entry, options))
         {
@@ -374,6 +431,14 @@ MvsSourcePlan planMvsSourceViews(const std::vector<MvsSourceCandidate> &candidat
     return plan;
 }
 
+} // namespace
+
+MvsSourcePlan planMvsSourceViews(const std::vector<MvsSourceCandidate> &candidates,
+                                 const MvsSourcePlannerOptions &options)
+{
+    return planMvsSourceViewsImpl(candidates, options, false);
+}
+
 MvsSourcePlan planMvsSourceViewsVerifiedFirst(
     const std::vector<MvsSourceCandidate> &candidates,
     const MvsSourcePlannerOptions &options)
@@ -401,13 +466,13 @@ MvsSourcePlan planMvsSourceViewsVerifiedFirst(
         selectedViews.insert(entry.viewIndex);
     }
 
-    std::vector<MvsSourceCandidate> remaining;
-    remaining.reserve(candidates.size());
+    std::vector<MvsSourceCandidate> ordinary_backfill_candidates;
+    std::vector<MvsSourceCandidate> failed_backfill_candidates;
+    ordinary_backfill_candidates.reserve(candidates.size());
+    failed_backfill_candidates.reserve(candidates.size());
     for (const MvsSourceCandidate &candidate : candidates)
     {
-        if (selectedViews.find(candidate.viewIndex) != selectedViews.end() ||
-            candidate.verificationStatus ==
-                MvsSourceVerificationStatus::Failed)
+        if (selectedViews.find(candidate.viewIndex) != selectedViews.end())
         {
             continue;
         }
@@ -423,7 +488,15 @@ MvsSourcePlan planMvsSourceViewsVerifiedFirst(
                  MvsSourceRejectReason::LowQuality});
             continue;
         }
-        remaining.push_back(candidate);
+        if (candidate.verificationStatus ==
+            MvsSourceVerificationStatus::Failed)
+        {
+            failed_backfill_candidates.push_back(candidate);
+        }
+        else
+        {
+            ordinary_backfill_candidates.push_back(candidate);
+        }
     }
 
     MvsSourcePlannerOptions backfillOptions = options;
@@ -444,16 +517,56 @@ MvsSourcePlan planMvsSourceViewsVerifiedFirst(
     backfillOptions.minSourceQualityScore = 0.35f;
     backfillOptions.maxSources = result.requestedSourceCount -
         static_cast<int>(result.selected.size());
-    MvsSourcePlan backfill = planMvsSourceViews(remaining, backfillOptions);
-    for (MvsSourcePlanEntry &entry : backfill.selected)
+    MvsSourcePlan ordinary_backfill = planMvsSourceViewsImpl(
+        ordinary_backfill_candidates,
+        backfillOptions,
+        false);
+    for (MvsSourcePlanEntry &entry : ordinary_backfill.selected)
     {
         entry.tier = MvsSourceTier::TrackGeometryBackfill;
         result.selected.push_back(entry);
     }
     result.rejected.insert(
         result.rejected.end(),
-        std::make_move_iterator(backfill.rejected.begin()),
-        std::make_move_iterator(backfill.rejected.end()));
+        std::make_move_iterator(ordinary_backfill.rejected.begin()),
+        std::make_move_iterator(ordinary_backfill.rejected.end()));
+
+    const int failed_backfill_target = std::min(
+        result.requestedSourceCount,
+        std::max(0, options.failedPairBackfillMaximumTotalSources));
+    if (options.allowFailedPairBackfill
+        && static_cast<int>(result.selected.size()) < failed_backfill_target)
+    {
+        MvsSourcePlannerOptions failed_backfill_options = backfillOptions;
+        failed_backfill_options.allowFailedPairBackfill = true;
+        failed_backfill_options.maxTriangulationAngleDeg = std::min(
+            backfillOptions.maxTriangulationAngleDeg,
+            options.failedPairBackfillMaximumAngleDeg);
+        failed_backfill_options.maxSources = failed_backfill_target -
+            static_cast<int>(result.selected.size());
+        MvsSourcePlan failed_backfill = planMvsSourceViewsImpl(
+            failed_backfill_candidates,
+            failed_backfill_options,
+            true);
+        for (MvsSourcePlanEntry &entry : failed_backfill.selected)
+        {
+            entry.tier = MvsSourceTier::TrackGeometryBackfill;
+            result.selected.push_back(entry);
+        }
+        result.rejected.insert(
+            result.rejected.end(),
+            std::make_move_iterator(failed_backfill.rejected.begin()),
+            std::make_move_iterator(failed_backfill.rejected.end()));
+    }
+    else
+    {
+        for (const MvsSourceCandidate &candidate : failed_backfill_candidates)
+        {
+            result.rejected.push_back(
+                {makeEntry(candidate, options),
+                 MvsSourceRejectReason::LowQuality});
+        }
+    }
     result.usedSequenceFallback = false;
     result.sourceViewShortfall = std::max(
         0,
@@ -466,40 +579,96 @@ std::vector<MvsSourcePairQuality> filterMvsSourcePairQualitiesForImages(
     const std::vector<std::string> &imagePaths)
 {
     std::set<QString> activeImages;
+    std::map<QString, std::string> activePathByNormalizedPath;
+    std::map<QString, std::string> uniqueActivePathByFileName;
+    std::set<QString> ambiguousFileNames;
     for (const std::string &imagePath : imagePaths)
     {
         const QString normalizedPath = normalizedSourceImagePath(imagePath);
         if (!normalizedPath.isEmpty())
         {
             activeImages.insert(normalizedPath);
+            activePathByNormalizedPath[normalizedPath] = imagePath;
+
+            const QString fileName = QFileInfo(
+                QString::fromStdString(imagePath)).fileName().toCaseFolded();
+            if (!fileName.isEmpty())
+            {
+                if (uniqueActivePathByFileName.contains(fileName))
+                {
+                    uniqueActivePathByFileName.erase(fileName);
+                    ambiguousFileNames.insert(fileName);
+                }
+                else if (!ambiguousFileNames.contains(fileName))
+                {
+                    uniqueActivePathByFileName[fileName] = imagePath;
+                }
+            }
         }
     }
+
+    // A pair audit often travels together with an image set to a new workspace.
+    // Only enable file-name rebinding when the entire audit is detached from the
+    // current absolute paths.  If any endpoint still matches exactly, stale
+    // records from images removed by the user must remain stale.
+    const bool hasAnyExactEndpoint = std::any_of(
+        qualities.cbegin(),
+        qualities.cend(),
+        [&activeImages](const MvsSourcePairQuality &quality)
+        {
+            return activeImages.contains(normalizedSourceImagePath(quality.imageA))
+                || activeImages.contains(normalizedSourceImagePath(quality.imageB));
+        });
+
+    const auto resolveActivePath = [&](const std::string &storedPath) -> std::string
+    {
+        const QString normalizedPath = normalizedSourceImagePath(storedPath);
+        const auto exact = activePathByNormalizedPath.find(normalizedPath);
+        if (exact != activePathByNormalizedPath.end())
+        {
+            return exact->second;
+        }
+        if (hasAnyExactEndpoint)
+        {
+            return {};
+        }
+
+        const QString fileName = QFileInfo(
+            QString::fromStdString(storedPath)).fileName().toCaseFolded();
+        const auto relocated = uniqueActivePathByFileName.find(fileName);
+        return relocated != uniqueActivePathByFileName.end()
+            ? relocated->second
+            : std::string{};
+    };
 
     std::map<QString, MvsSourcePairQuality> bestByPair;
     for (const MvsSourcePairQuality &quality : qualities)
     {
-        const QString imageA = normalizedSourceImagePath(quality.imageA);
-        const QString imageB = normalizedSourceImagePath(quality.imageB);
-        if (activeImages.find(imageA) == activeImages.end()
-            || activeImages.find(imageB) == activeImages.end())
+        const std::string imageA = resolveActivePath(quality.imageA);
+        const std::string imageB = resolveActivePath(quality.imageB);
+        if (imageA.empty() || imageB.empty())
         {
             continue;
         }
 
-        const QString key = sourcePairKey(quality.imageA, quality.imageB);
+        const QString key = sourcePairKey(imageA, imageB);
         if (key.isEmpty())
         {
             continue;
         }
 
+        MvsSourcePairQuality reboundQuality = quality;
+        reboundQuality.imageA = imageA;
+        reboundQuality.imageB = imageB;
+
         auto it = bestByPair.find(key);
         if (it == bestByPair.end()
-            || quality.geometricInliers > it->second.geometricInliers
-            || (quality.geometricInliers == it->second.geometricInliers
-                && quality.hasVerificationStatistics
+            || reboundQuality.geometricInliers > it->second.geometricInliers
+            || (reboundQuality.geometricInliers == it->second.geometricInliers
+                && reboundQuality.hasVerificationStatistics
                 && !it->second.hasVerificationStatistics))
         {
-            bestByPair[key] = quality;
+            bestByPair[key] = std::move(reboundQuality);
         }
     }
 

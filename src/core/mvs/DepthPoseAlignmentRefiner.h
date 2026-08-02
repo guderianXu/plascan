@@ -11,6 +11,7 @@ namespace xjw::mvs
 struct DepthPoseAlignmentSample
 {
     int cameraIndex = -1;
+    int targetCameraIndex = -1;
     cv::Vec3d sourcePointWorld{0.0, 0.0, 0.0};
     cv::Vec3d targetPointWorld{0.0, 0.0, 0.0};
     cv::Vec3d targetNormalWorld{0.0, 0.0, 1.0};

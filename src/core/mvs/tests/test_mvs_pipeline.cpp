@@ -343,8 +343,8 @@ TEST(MvsDepthConfidenceThresholdTest,
             4,
             0.72f,
             0.75f);
-    EXPECT_FLOAT_EQ(dense_orbital.patchMatch, 0.72f);
-    EXPECT_FLOAT_EQ(dense_orbital.fusion, 0.75f);
+    EXPECT_FLOAT_EQ(dense_orbital.patchMatch, 0.50f);
+    EXPECT_FLOAT_EQ(dense_orbital.fusion, 0.60f);
 
     const DepthConfidenceThresholds terrain =
         depthConfidenceThresholds(

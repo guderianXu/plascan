@@ -53,6 +53,14 @@ live under `src/core/mvs/tests/`.
   modifying the original workspace.
 - If no match or track evidence exists, planning falls back to nearby sequence views instead of defaulting to
   an unbounded all-pairs search.
+- `mvs_depth_reprocess_cli --depth-pose-candidates` runs an experimental, default-off pose audit after
+  cross-view evidence is complete. It deterministically samples supported, low-conflict neighboring depth
+  observations, rejects occlusions, and reports robust point-to-plane SE(3) candidates. If a PatchMatch backend
+  does not expose its internal plane normals, the audit deterministically derives local surface normals from the
+  completed depth and camera model; the three adaptive geometry-evidence maps remain mandatory. The anchor and
+  scale remain fixed; P90 residual, motion-limit, evidence-coverage, and projection-retention gates must all pass.
+  Accepted cameras are persisted only as `derived_camera_model` candidates. They never replace project
+  cameras or change depth maps in the same run.
 
 ## Depth Quality
 

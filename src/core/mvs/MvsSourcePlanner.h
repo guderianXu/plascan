@@ -100,6 +100,14 @@ struct MvsSourcePlannerOptions
     int minSharedTracks = 0;
     int minGeometricInliers = 0;
     int minMissingStatisticsPairMatches = 16;
+    bool allowFailedPairBackfill = false;
+    int failedPairBackfillMaximumTotalSources = 3;
+    int failedPairBackfillMinimumInliers = 12;
+    int failedPairBackfillMinimumMatches = 14;
+    int failedPairBackfillMinimumSharedTracks = 20;
+    float failedPairBackfillMinimumCoverage = 0.1875f;
+    float failedPairBackfillMinimumWilsonLowerBound = 0.50f;
+    float failedPairBackfillMaximumAngleDeg = 65.0f;
     float minSourceQualityScore = 0.0f;
     bool allowWeakKnownOverlap = true;
     bool requireVerifiedPairGeometry = false;

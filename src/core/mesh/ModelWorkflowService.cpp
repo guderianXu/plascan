@@ -1760,9 +1760,12 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
             automatic_final_hole_fill);
     if (automatic_final_hole_fill)
     {
-        options.finalHoleFillMaximumBoundaryEdges = 192;
-        options.finalHoleFillMaximumDiameterVoxels = 48.0f;
-        options.finalHoleFillMaximumFaceGrowthRatio = 0.20f;
+        // This stage is a residual micro-hole repair.  Large boundary loops
+        // represent missing implicit geometry and must remain visible instead
+        // of being hidden behind a triangle fan.
+        options.finalHoleFillMaximumBoundaryEdges = 24;
+        options.finalHoleFillMaximumDiameterVoxels = 4.0f;
+        options.finalHoleFillMaximumFaceGrowthRatio = 0.03f;
     }
     options.finalHoleFillMaximumBoundaryEdges = qBound(
         3,
@@ -1948,7 +1951,8 @@ xjw::mesh::DepthConstrainedSurfaceRefineOptions
 makeVisibilityOccupancyDepthRefineOptions(
     const QJsonObject &settings,
     const xjw::mesh::DepthTsdfLayout &layout,
-    int occupancy_resolution)
+    int occupancy_resolution,
+    bool orbital_workspace)
 {
     xjw::mesh::DepthConstrainedSurfaceRefineOptions options;
     const float occupancy_step = visibilityOccupancyMedianVoxelStep(
@@ -1957,7 +1961,7 @@ makeVisibilityOccupancyDepthRefineOptions(
         1,
         settings.value(QStringLiteral(
             "tsdfVisibilityOccupancyDepthRefinementPasses"))
-            .toInt(1),
+            .toInt(orbital_workspace ? 4 : 1),
         4);
     options.depthRefine.maximumEvidenceDistance =
         occupancy_step * std::clamp(
@@ -1970,7 +1974,7 @@ makeVisibilityOccupancyDepthRefineOptions(
         occupancy_step * std::clamp(
             static_cast<float>(settings.value(QStringLiteral(
                 "tsdfVisibilityOccupancyDepthMaximumDisplacementVoxels"))
-                                   .toDouble(0.20)),
+                                   .toDouble(orbital_workspace ? 0.60 : 0.20)),
             0.02f,
             1.0f);
     options.depthRefine.minimumViewCount = qBound(
@@ -2090,20 +2094,20 @@ makeVisibilityOccupancyDepthRefineOptions(
         std::clamp(
             static_cast<float>(settings.value(QStringLiteral(
                 "tsdfVisibilityOccupancyDepthGlobalSolverLaplacian"))
-                                   .toDouble(0.60)),
+                                   .toDouble(orbital_workspace ? 2.50 : 0.60)),
             0.0f,
             20.0f);
     options.depthRefine.globalSolverHullPriorWeight =
         std::clamp(
             static_cast<float>(settings.value(QStringLiteral(
                 "tsdfVisibilityOccupancyDepthGlobalSolverCarrierPrior"))
-                                   .toDouble(0.05)),
+                                   .toDouble(orbital_workspace ? 0.04 : 0.05)),
             1.0e-6f,
             1.0f);
     options.minimumAreaRatio = std::clamp(
         settings.value(QStringLiteral(
             "tsdfVisibilityOccupancyDepthMinimumAreaRatio"))
-            .toDouble(0.97),
+            .toDouble(orbital_workspace ? 0.80 : 0.97),
         0.80,
         1.0);
     options.maximumAreaRatio = std::clamp(
@@ -2115,7 +2119,7 @@ makeVisibilityOccupancyDepthRefineOptions(
     options.minimumVolumeRatio = std::clamp(
         settings.value(QStringLiteral(
             "tsdfVisibilityOccupancyDepthMinimumVolumeRatio"))
-            .toDouble(0.98),
+            .toDouble(orbital_workspace ? 0.85 : 0.98),
         0.80,
         1.0);
     options.maximumVolumeRatio = std::clamp(
@@ -2276,6 +2280,84 @@ void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
     if (!settings.contains(QStringLiteral("tsdfEnforceDepthCompletenessGate")))
     {
         options->enforceDepthCompletenessGate = true;
+    }
+    if (!settings.contains(QStringLiteral("tsdfVisibilityOccupancyCompletion")))
+    {
+        options->enableVisibilityOccupancyCompletion = true;
+    }
+    if (!settings.contains(QStringLiteral("tsdfVisibilityOccupancyResolution")))
+    {
+        options->visibilityOccupancyResolution = 72;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfVisibilityOccupancyCellBoundaryExtraction")))
+    {
+        // Keep the low-resolution visibility graph cut as a topology/sign
+        // prior, but extract the surface from the completed high-resolution
+        // TSDF.  Emitting the occupancy-cell boundary here quantizes the
+        // geometry to the carrier grid and discards the sub-voxel zero
+        // crossing retained by MC33 (the same distinction made by Open3D's
+        // TSDF integration/extraction path).
+        options->visibilityOccupancyCellBoundaryExtraction = false;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfMc33RequireSupportedSignChange")))
+    {
+        // Visibility completion deliberately supplies a topology-consistent
+        // sign for samples without direct depth support. Requiring both edge
+        // endpoints to be observed would cut those recovered regions away.
+        options->mc33RequireSupportedSignChange = false;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfVisibilityOccupancyClosingIterations")))
+    {
+        options->visibilityOccupancyClosingIterations = 1;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfVisibilityOccupancyMaximumHandleRepairPasses")))
+    {
+        options->visibilityOccupancyMaximumHandleRepairPasses = 8;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfVisibilityOccupancyMaximumHandleRepairAcceptedCandidateCount")))
+    {
+        options->visibilityOccupancyMaximumHandleRepairAcceptedCandidateCount = 128;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfVisibilityOccupancyMaximumHandleRepairCandidateSampleCount")))
+    {
+        options->visibilityOccupancyMaximumHandleRepairCandidateSampleCount = 4096;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfVisibilityOccupancyMaximumHandleRepairSubsetSampleCount")))
+    {
+        options->visibilityOccupancyMaximumHandleRepairSubsetSampleCount = 256;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfVisibilityOccupancyMaximumHandleRepairSubsetSeedCount")))
+    {
+        options->visibilityOccupancyMaximumHandleRepairSubsetSeedCount = 4096;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfVisibilityOccupancyTopologyLockedResidualBlend")))
+    {
+        options->visibilityOccupancyTopologyLockedResidualBlend = true;
+    }
+    if (!settings.contains(QStringLiteral("tsdfVisibilityOccupancyObservedBand")))
+    {
+        options->visibilityOccupancyObservedBand = 1.0f;
+    }
+    if (!settings.contains(QStringLiteral("tsdfVisibilityOccupancyCarrierBand")))
+    {
+        options->visibilityOccupancyCarrierBand = 1.0f;
+    }
+    if (!settings.contains(QStringLiteral("tsdfVisibilityOccupancyMaximumResidual")))
+    {
+        options->visibilityOccupancyMaximumResidual = 1.0f;
+    }
+    if (!settings.contains(QStringLiteral("tsdfVisibilityOccupancyDetailBlend")))
+    {
+        options->visibilityOccupancyDetailBlend = 1.0f;
     }
 
     const bool high_detail_model = options->resolution >= 384 &&
@@ -2489,29 +2571,36 @@ void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
         if (!settings.contains(QStringLiteral(
                 "tsdfFinalHoleFillMaximumBoundaryEdges")))
         {
-            options->finalHoleFillMaximumBoundaryEdges = 384;
+            options->finalHoleFillMaximumBoundaryEdges = 24;
         }
         if (!settings.contains(QStringLiteral(
                 "tsdfFinalHoleFillMaximumDiameterVoxels")))
         {
-            options->finalHoleFillMaximumDiameterVoxels = 64.0f;
+            options->finalHoleFillMaximumDiameterVoxels = 4.0f;
         }
         if (!settings.contains(QStringLiteral(
                 "tsdfFinalHoleFillMaximumFaceGrowthRatio")))
         {
-            options->finalHoleFillMaximumFaceGrowthRatio = 0.20f;
+            options->finalHoleFillMaximumFaceGrowthRatio = 0.03f;
         }
         if (!settings.contains(QStringLiteral(
                 "tsdfVisibilityHoleFillMinimumSupportingViews")))
         {
-            options->visibilityHoleFillMinimumSupportingViews = 1;
+            options->visibilityHoleFillMinimumSupportingViews = 2;
         }
         if (!settings.contains(QStringLiteral(
                 "tsdfVisibilityHoleFillMaximumConflictViews")))
         {
-            options->visibilityHoleFillMaximumConflictViews = 16;
+            options->visibilityHoleFillMaximumConflictViews = 0;
         }
     }
+}
+
+bool visibilityOccupancyDepthRefinementEnabled(const QJsonObject &settings,
+                                               bool orbitalWorkspace)
+{
+    return settings.value(QStringLiteral(
+        "tsdfVisibilityOccupancyDepthRefinement")).toBool(orbitalWorkspace);
 }
 
 bool shouldUseOrbitalVisualHullCompletion(bool orbitalWorkspace,
@@ -4186,7 +4275,7 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                   0,
                   request.settings.value(QStringLiteral(
                       "tsdfVisibilityOccupancyCarrierSubdivisionPasses"))
-                      .toInt(0),
+                      .toInt(orbital_workspace ? 1 : 0),
                   1)
             : 0;
         result.payload[QStringLiteral(
@@ -4258,7 +4347,7 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                   0,
                   request.settings.value(QStringLiteral(
                       "tsdfVisibilityOccupancyCarrierFairingPasses"))
-                      .toInt(0),
+                      .toInt(orbital_workspace ? 8 : 0),
                   12)
             : 0;
         result.payload[QStringLiteral(
@@ -4422,7 +4511,7 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
         const bool carrier_field_projection_requested =
             request.settings.value(QStringLiteral(
                 "tsdfVisibilityOccupancyCarrierFieldProjection"))
-                .toBool(false);
+                .toBool(orbital_workspace);
         const bool carrier_field_projection_enabled =
             direct_visibility_occupancy_output &&
             carrier_field_projection_requested;
@@ -4431,6 +4520,15 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
             carrier_field_projection_enabled;
         if (carrier_field_projection_enabled)
         {
+            const VisibilityOccupancyCarrierFieldGrid &projection_field =
+                tsdf.depthImplicitField.valid()
+                ? tsdf.depthImplicitField
+                : tsdf.visibilityOccupancyCarrierField;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_carrier_field_projection_source")] =
+                tsdf.depthImplicitField.valid()
+                ? QStringLiteral("depth_implicit_field")
+                : QStringLiteral("occupancy_distance_field");
             const bool well_composed_carrier =
                 tsdf.statistics
                     .visibilityOccupancyWellComposedRepairRemainingEdgeCheckerboardCount == 0 &&
@@ -4442,7 +4540,7 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 well_composed_carrier &&
                 tsdf.statistics
                     .visibilityOccupancyBoundaryTopologyConsistent &&
-                tsdf.visibilityOccupancyCarrierField.valid();
+                projection_field.valid();
             result.payload[QStringLiteral(
                 "visibility_occupancy_carrier_field_projection_prerequisites_met")] =
                 projection_prerequisites_met;
@@ -4457,11 +4555,36 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 }
                 VisibilityOccupancyCarrierFieldProjectionOptions
                     projection_options;
+                const float occupancy_step =
+                    visibilityOccupancyMedianVoxelStep(
+                        tsdf.layout,
+                        options.visibilityOccupancyResolution);
+                std::array<double, 3> projection_spacing{};
+                for (int axis = 0; axis < 3; ++axis)
+                {
+                    projection_spacing[axis] =
+                        (static_cast<double>(projection_field.boundsMax[axis]) -
+                         static_cast<double>(projection_field.boundsMin[axis])) /
+                        static_cast<double>(std::max(
+                            1,
+                            projection_field.sampleDimensions[axis] - 1));
+                }
+                const double minimum_projection_spacing = std::max(
+                    1.0e-12,
+                    std::min({
+                        projection_spacing[0],
+                        projection_spacing[1],
+                        projection_spacing[2]}));
+                const double carrier_voxel_to_projection_spacing =
+                    std::max(
+                        1.0,
+                        static_cast<double>(occupancy_step) /
+                            minimum_projection_spacing);
                 projection_options.iterations = qBound(
                     1,
                     request.settings.value(QStringLiteral(
                         "tsdfVisibilityOccupancyCarrierFieldProjectionIterations"))
-                        .toInt(3),
+                        .toInt(orbital_workspace ? 4 : 3),
                     8);
                 projection_options.maximumBacktrackingSteps = qBound(
                     0,
@@ -4472,22 +4595,37 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 projection_options.relaxation = std::clamp(
                     request.settings.value(QStringLiteral(
                         "tsdfVisibilityOccupancyCarrierFieldProjectionRelaxation"))
-                        .toDouble(0.40),
+                        .toDouble(orbital_workspace ? 0.45 : 0.40),
                     0.05,
                     1.0);
-                projection_options.maximumStepSpacingRatio = std::clamp(
+                const double maximum_step_carrier_voxels = std::clamp(
                     request.settings.value(QStringLiteral(
                         "tsdfVisibilityOccupancyCarrierFieldProjectionMaximumStepVoxels"))
-                        .toDouble(0.15),
+                        .toDouble(orbital_workspace ? 0.25 : 0.15),
                     0.01,
                     0.50);
-                projection_options.maximumCumulativeDisplacementSpacingRatio =
+                projection_options.maximumStepSpacingRatio =
+                    maximum_step_carrier_voxels *
+                    carrier_voxel_to_projection_spacing;
+                const double maximum_displacement_carrier_voxels =
                     std::clamp(
                         request.settings.value(QStringLiteral(
                             "tsdfVisibilityOccupancyCarrierFieldProjectionMaximumDisplacementVoxels"))
-                            .toDouble(0.30),
+                            .toDouble(orbital_workspace ? 0.75 : 0.30),
                         0.01,
                         1.0);
+                projection_options.maximumCumulativeDisplacementSpacingRatio =
+                    maximum_displacement_carrier_voxels *
+                    carrier_voxel_to_projection_spacing;
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_carrier_voxel_to_field_spacing_ratio")] =
+                    carrier_voxel_to_projection_spacing;
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_maximum_step_carrier_voxels")] =
+                    maximum_step_carrier_voxels;
+                result.payload[QStringLiteral(
+                    "visibility_occupancy_carrier_field_projection_maximum_displacement_carrier_voxels")] =
+                    maximum_displacement_carrier_voxels;
                 projection_options.smoothNarrowBand =
                     request.settings.value(QStringLiteral(
                         "tsdfVisibilityOccupancyCarrierFieldProjectionSmoothNarrowBand"))
@@ -4548,11 +4686,10 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 VisibilityOccupancyCarrierFieldProjectionResult projection =
                     VisibilityOccupancyCarrierFieldProjector::project(
                         projection_baseline,
-                        tsdf.visibilityOccupancyCarrierField.sampleDimensions,
-                        tsdf.visibilityOccupancyCarrierField.boundsMin,
-                        tsdf.visibilityOccupancyCarrierField.boundsMax,
-                        tsdf.visibilityOccupancyCarrierField
-                            .signedWorldDistance,
+                        projection_field.sampleDimensions,
+                        projection_field.boundsMin,
+                        projection_field.boundsMax,
+                        projection_field.signedWorldDistance,
                         projection_options);
                 if (projection.cancelled)
                 {
@@ -4674,9 +4811,8 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
         const bool visibility_occupancy_depth_refinement_enabled =
             output_mesh == &tsdf.mesh &&
             options.enableVisibilityOccupancyCompletion &&
-            request.settings.value(QStringLiteral(
-                "tsdfVisibilityOccupancyDepthRefinement"))
-                .toBool(false);
+            visibilityOccupancyDepthRefinementEnabled(
+                request.settings, orbital_workspace);
         result.payload[QStringLiteral(
             "configured_visibility_occupancy_depth_refinement")] =
             visibility_occupancy_depth_refinement_enabled;
@@ -4701,7 +4837,8 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 makeVisibilityOccupancyDepthRefineOptions(
                     request.settings,
                     tsdf.layout,
-                    options.visibilityOccupancyResolution);
+                    options.visibilityOccupancyResolution,
+                    orbital_workspace);
             const DepthConstrainedSurfaceRefineStatistics refinement =
                 DepthConstrainedSurfaceRefiner::refine(
                     &tsdf.mesh,

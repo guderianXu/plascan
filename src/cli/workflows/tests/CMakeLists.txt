@@ -20,3 +20,10 @@ if(TARGET aerial_triangulation_cli)
     )
     add_dependencies(test_workflow_cli aerial_triangulation_cli)
 endif()
+
+if(TARGET mvs_depth_reprocess_cli)
+    target_compile_definitions(test_workflow_cli PRIVATE
+        PLASCAN_MVS_DEPTH_REPROCESS_CLI_PATH="$<TARGET_FILE:mvs_depth_reprocess_cli>"
+    )
+    add_dependencies(test_workflow_cli mvs_depth_reprocess_cli)
+endif()

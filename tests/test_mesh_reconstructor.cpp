@@ -324,6 +324,51 @@ TEST(DepthTsdfSurfaceBuilderTest, ResolutionAppliesToLongestPhysicalAxis)
     EXPECT_GT(layout.requiredBytes, 0u);
 }
 
+TEST(DepthTsdfSurfaceBuilderTest,
+     VisibilityConstrainedHoleFillFailsClosedWithoutSilhouetteClassification)
+{
+    EXPECT_FALSE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::shouldReleaseVisibilityConstrainedHole(
+            24, 0, 1, 0, 2, 0, 0.35f));
+    EXPECT_TRUE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::shouldReleaseVisibilityConstrainedHole(
+            24, 0, 2, 0, 2, 0, 0.35f));
+    EXPECT_TRUE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::shouldReleaseVisibilityConstrainedHole(
+            24, 0, 2, 0, 2, 0, 0.0f));
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
+     VisibilityConstrainedHoleFillRequiresExtraEvidenceAtStrongSilhouette)
+{
+    EXPECT_FALSE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::shouldReleaseVisibilityConstrainedHole(
+            20, 8, 2, 0, 2, 0, 0.35f));
+    EXPECT_TRUE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::shouldReleaseVisibilityConstrainedHole(
+            20, 8, 3, 0, 2, 0, 0.35f));
+    EXPECT_FALSE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::shouldReleaseVisibilityConstrainedHole(
+            20, 8, 3, 1, 2, 0, 0.35f));
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
+     FinalHoleFillPatchSampleRequiresTwoConsistentViews)
+{
+    EXPECT_FALSE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::
+            shouldAcceptFinalHoleFillPatchSample(1, 0, 1, 0));
+    EXPECT_TRUE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::
+            shouldAcceptFinalHoleFillPatchSample(2, 0, 1, 0));
+    EXPECT_FALSE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::
+            shouldAcceptFinalHoleFillPatchSample(2, 1, 2, 0));
+    EXPECT_TRUE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::
+            shouldAcceptFinalHoleFillPatchSample(3, 1, 3, 1));
+}
+
 TEST(DepthTsdfSurfaceBuilderTest, BuildsFineCellsAsCarrierGridMultiples)
 {
     const std::array<float, 3> minimum{0.0f, 0.0f, 0.0f};
@@ -2321,6 +2366,131 @@ TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxis
 }
 
 TEST(DepthTsdfSurfaceBuilderTest,
+     EvidenceAwareBoundsExcludeWeakSingleViewDepthOutliers)
+{
+    QVector<xjw::mesh::DepthTsdfFrame> frames;
+    for (int frame_index = 0; frame_index < 3; ++frame_index)
+    {
+        xjw::mesh::DepthTsdfFrame frame;
+        frame.refIndex = frame_index;
+        frame.camera.setIntrinsics(100.0, 100.0, 60.0, 60.0);
+        frame.camera.setPose(
+            std::array<double, 9>{
+                1.0, 0.0, 0.0,
+                0.0, 1.0, 0.0,
+                0.0, 0.0, 1.0},
+            std::array<double, 3>{0.0, 0.0, 0.0});
+        frame.depth = cv::Mat(120, 120, CV_32FC1, cv::Scalar(2.0f));
+        frame.depthValidMask = cv::Mat(120, 120, CV_8UC1, cv::Scalar(255));
+        frame.supportMask = cv::Mat(120, 120, CV_8UC1, cv::Scalar(255));
+        frame.geometrySupportCount = cv::Mat(120, 120, CV_16UC1, cv::Scalar(3));
+        frame.adaptiveGeometryEffectiveViewCount =
+            cv::Mat(120, 120, CV_32FC1, cv::Scalar(3.0f));
+        frame.useAdaptiveGeometryEvidence = true;
+
+        const cv::Rect weak_geometry_region(0, 0, 15, 120);
+        const cv::Rect weak_adaptive_region(15, 0, 15, 120);
+        frame.depth(weak_geometry_region).setTo(0.5f);
+        frame.geometrySupportCount(weak_geometry_region).setTo(1);
+        frame.depth(weak_adaptive_region).setTo(0.5f);
+        frame.adaptiveGeometryEffectiveViewCount(weak_adaptive_region).setTo(1.0f);
+        frames.push_back(std::move(frame));
+    }
+
+    const auto bounds = xjw::mesh::DepthTsdfSurfaceBuilder::estimateBounds(frames);
+
+    ASSERT_TRUE(bounds.ok) << bounds.errorMessage.toStdString();
+    EXPECT_TRUE(bounds.usedEvidenceAwareSamples);
+    EXPECT_FALSE(bounds.fellBackToCandidateSamples);
+    EXPECT_EQ(bounds.selectionReason,
+              QStringLiteral("trusted_multiview_evidence"));
+    EXPECT_EQ(bounds.sampleCount, bounds.trustedSampleCount);
+    EXPECT_LT(bounds.trustedSampleCount, bounds.candidateSampleCount);
+    EXPECT_GT(bounds.trustedSampleCount, 500u);
+    EXPECT_GT(bounds.minimum[2], 1.5f);
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
+     EvidenceAwareBoundsFallBackWhenTrustedEvidenceIsInsufficient)
+{
+    QVector<xjw::mesh::DepthTsdfFrame> frames;
+    for (int frame_index = 0; frame_index < 3; ++frame_index)
+    {
+        xjw::mesh::DepthTsdfFrame frame;
+        frame.refIndex = frame_index;
+        frame.camera.setIntrinsics(40.0, 40.0, 16.0, 16.0);
+        frame.camera.setPose(
+            std::array<double, 9>{
+                1.0, 0.0, 0.0,
+                0.0, 1.0, 0.0,
+                0.0, 0.0, 1.0},
+            std::array<double, 3>{0.0, 0.0, 0.0});
+        frame.depth = cv::Mat(32, 32, CV_32FC1, cv::Scalar(0.5f));
+        frame.depthValidMask = cv::Mat(32, 32, CV_8UC1, cv::Scalar(255));
+        frame.supportMask = cv::Mat(32, 32, CV_8UC1, cv::Scalar(255));
+        frame.geometrySupportCount = cv::Mat(32, 32, CV_16UC1, cv::Scalar(1));
+        frame.adaptiveGeometryEffectiveViewCount =
+            cv::Mat(32, 32, CV_32FC1, cv::Scalar(1.0f));
+        frame.useAdaptiveGeometryEvidence = true;
+
+        const cv::Rect trusted_region(10, 10, 11, 11);
+        frame.depth(trusted_region).setTo(2.0f);
+        frame.geometrySupportCount(trusted_region).setTo(3);
+        frame.adaptiveGeometryEffectiveViewCount(trusted_region).setTo(3.0f);
+        frames.push_back(std::move(frame));
+    }
+
+    const auto bounds = xjw::mesh::DepthTsdfSurfaceBuilder::estimateBounds(frames);
+
+    ASSERT_TRUE(bounds.ok) << bounds.errorMessage.toStdString();
+    EXPECT_FALSE(bounds.usedEvidenceAwareSamples);
+    EXPECT_TRUE(bounds.fellBackToCandidateSamples);
+    EXPECT_EQ(bounds.selectionReason,
+              QStringLiteral("insufficient_trusted_sample_count"));
+    EXPECT_EQ(bounds.sampleCount, bounds.candidateSampleCount);
+    EXPECT_EQ(bounds.trustedSampleCount, 363u);
+    EXPECT_LT(bounds.minimum[2], 1.0f);
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
+     EvidenceAwareBoundsFallBackWhenTrustedCoverageRatioIsInsufficient)
+{
+    QVector<xjw::mesh::DepthTsdfFrame> frames;
+    for (int frame_index = 0; frame_index < 3; ++frame_index)
+    {
+        xjw::mesh::DepthTsdfFrame frame;
+        frame.refIndex = frame_index;
+        frame.camera.setIntrinsics(50.0, 50.0, 24.0, 24.0);
+        frame.camera.setPose(
+            std::array<double, 9>{
+                1.0, 0.0, 0.0,
+                0.0, 1.0, 0.0,
+                0.0, 0.0, 1.0},
+            std::array<double, 3>{0.0, 0.0, 0.0});
+        frame.depth = cv::Mat(48, 48, CV_32FC1, cv::Scalar(0.5f));
+        frame.depthValidMask = cv::Mat(48, 48, CV_8UC1, cv::Scalar(255));
+        frame.supportMask = cv::Mat(48, 48, CV_8UC1, cv::Scalar(255));
+        frame.geometrySupportCount = cv::Mat(48, 48, CV_16UC1, cv::Scalar(1));
+
+        const cv::Rect trusted_region(14, 19, 20, 10);
+        frame.depth(trusted_region).setTo(2.0f);
+        frame.geometrySupportCount(trusted_region).setTo(3);
+        frames.push_back(std::move(frame));
+    }
+
+    const auto bounds = xjw::mesh::DepthTsdfSurfaceBuilder::estimateBounds(frames);
+
+    ASSERT_TRUE(bounds.ok) << bounds.errorMessage.toStdString();
+    EXPECT_FALSE(bounds.usedEvidenceAwareSamples);
+    EXPECT_TRUE(bounds.fellBackToCandidateSamples);
+    EXPECT_EQ(bounds.sampleCount, bounds.candidateSampleCount);
+    EXPECT_EQ(bounds.trustedSampleCount, 600u);
+    EXPECT_EQ(bounds.selectionReason,
+              QStringLiteral("insufficient_trusted_sample_ratio"));
+    EXPECT_LT(bounds.minimum[2], 1.0f);
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
      LoadsAndSamplesCurrentOrbitalAdaptiveGeometryEvidence)
 {
     QTemporaryDir directory;
@@ -2616,13 +2786,290 @@ TEST(DepthTsdfSurfaceBuilderTest,
 
     options.enableGeometrySingleViewNeighborhoodGuard = true;
     EXPECT_TRUE(xjw::mesh::DepthTsdfSurfaceBuilder::isSampleSupported(
-        0.9f, 1, 0.9f, options, nullptr, nullptr, 0,
+        0.4f, 1, 0.4f, options, nullptr, nullptr, 0,
         &geometry_verified, true));
     EXPECT_TRUE(geometry_verified);
     EXPECT_FALSE(xjw::mesh::DepthTsdfSurfaceBuilder::isSampleSupported(
         0.9f, 1, 0.9f, options, nullptr, nullptr, 0, nullptr, false));
     EXPECT_TRUE(xjw::mesh::DepthTsdfSurfaceBuilder::isSampleSupported(
         1.2f, 2, 0.7f, options));
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
+     VisualHullSignedDistanceDoesNotRecursivelyPromoteSyntheticSupport)
+{
+    xjw::mesh::DepthTsdfLayout layout;
+    layout.ok = true;
+    layout.cells = {6, 2, 2};
+    layout.sampleCount = 63;
+    const auto index = [](int x, int y, int z)
+    {
+        return static_cast<std::size_t>(z * 21 + y * 7 + x);
+    };
+
+    std::vector<std::uint8_t> occupied(63, 0);
+    for (int x = 1; x <= 6; ++x)
+    {
+        occupied[index(x, 1, 1)] = 1;
+    }
+    std::vector<float> tsdf(63, 0.75f);
+    std::vector<std::uint8_t> supported(63, 0);
+    tsdf[index(0, 1, 1)] = 0.20f;
+    tsdf[index(1, 1, 1)] = -0.20f;
+    supported[index(0, 1, 1)] = 1;
+    supported[index(1, 1, 1)] = 1;
+
+    const auto completed =
+        xjw::mesh::DepthTsdfSurfaceBuilder::
+            completeUnsupportedSamplesWithVisualHullSignedDistance(
+                layout,
+                occupied,
+                4.0f,
+                &tsdf,
+                &supported);
+
+    EXPECT_GT(completed.recoveredSampleCount, 0U);
+    EXPECT_EQ(supported[index(6, 1, 1)], 0);
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
+     VisualHullSignedDistanceImmutableVetoPreservesObservedConflict)
+{
+    xjw::mesh::DepthTsdfLayout layout;
+    layout.ok = true;
+    layout.cells = {4, 4, 4};
+    layout.sampleCount = 125;
+    const auto index = [](int x, int y, int z)
+    {
+        return static_cast<std::size_t>(z * 25 + y * 5 + x);
+    };
+
+    const std::size_t core_positive = index(1, 1, 1);
+    const std::size_t core_negative = index(2, 1, 1);
+    const std::size_t frontier_positive = index(1, 2, 1);
+    const std::size_t observed_conflict = index(2, 3, 1);
+    std::vector<std::uint8_t> occupied(125, 0);
+    occupied[core_negative] = 1;
+    occupied[observed_conflict] = 1;
+    std::vector<float> tsdf(125, 0.75f);
+    std::vector<std::uint8_t> supported(125, 0);
+    tsdf[core_positive] = 0.20f;
+    tsdf[core_negative] = -0.20f;
+    tsdf[frontier_positive] = 0.15f;
+    tsdf[observed_conflict] = 0.12f;
+    supported[core_positive] = 1;
+    supported[core_negative] = 1;
+    supported[frontier_positive] = 1;
+
+    std::vector<float> control_tsdf = tsdf;
+    std::vector<std::uint8_t> control_supported = supported;
+    xjw::mesh::DepthTsdfSurfaceBuilder::
+        completeUnsupportedSamplesWithVisualHullSignedDistance(
+            layout,
+            occupied,
+            2.0f,
+            &control_tsdf,
+            &control_supported);
+    ASSERT_EQ(control_supported[observed_conflict], 1);
+    ASSERT_LT(control_tsdf[observed_conflict], 0.0f);
+
+    std::vector<std::uint8_t> immutable_veto(125, 0);
+    immutable_veto[observed_conflict] = 1;
+    xjw::mesh::DepthTsdfSurfaceBuilder::
+        completeUnsupportedSamplesWithVisualHullSignedDistance(
+            layout,
+            occupied,
+            2.0f,
+            &tsdf,
+            &supported,
+            &immutable_veto);
+
+    EXPECT_FLOAT_EQ(tsdf[observed_conflict], 0.12f);
+    EXPECT_EQ(supported[observed_conflict], 0);
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
+     VisualHullSignedDistanceVetoKeepsThroughHoleClearanceOpen)
+{
+    xjw::mesh::DepthTsdfLayout layout;
+    layout.ok = true;
+    layout.cells = {4, 4, 4};
+    layout.sampleCount = 125;
+    const auto index = [](int x, int y, int z)
+    {
+        return static_cast<std::size_t>(z * 25 + y * 5 + x);
+    };
+
+    const std::size_t core_positive = index(1, 1, 1);
+    const std::size_t core_negative = index(2, 1, 1);
+    const std::size_t frontier_positive = index(1, 2, 1);
+    const std::size_t through_hole = index(2, 2, 1);
+    const std::size_t adjacent_hull_sample = index(2, 3, 1);
+    std::vector<std::uint8_t> occupied(125, 0);
+    occupied[core_negative] = 1;
+    occupied[through_hole] = 1;
+    occupied[adjacent_hull_sample] = 1;
+    std::vector<float> tsdf(125, 0.75f);
+    std::vector<std::uint8_t> supported(125, 0);
+    tsdf[core_positive] = 0.20f;
+    tsdf[core_negative] = -0.20f;
+    tsdf[frontier_positive] = 0.15f;
+    tsdf[through_hole] = 0.10f;
+    supported[core_positive] = 1;
+    supported[core_negative] = 1;
+    supported[frontier_positive] = 1;
+    std::vector<std::uint8_t> immutable_veto(125, 0);
+    immutable_veto[through_hole] = 1;
+
+    std::vector<float> control_tsdf = tsdf;
+    std::vector<std::uint8_t> control_supported = supported;
+    xjw::mesh::DepthTsdfSurfaceBuilder::
+        completeUnsupportedSamplesWithVisualHullSignedDistance(
+            layout,
+            occupied,
+            2.0f,
+            &control_tsdf,
+            &control_supported);
+    ASSERT_EQ(control_supported[adjacent_hull_sample], 1);
+    ASSERT_LT(control_tsdf[adjacent_hull_sample], 0.0f);
+
+    xjw::mesh::DepthTsdfSurfaceBuilder::
+        completeUnsupportedSamplesWithVisualHullSignedDistance(
+            layout,
+            occupied,
+            2.0f,
+            &tsdf,
+            &supported,
+            &immutable_veto);
+
+    EXPECT_FLOAT_EQ(tsdf[through_hole], 0.10f);
+    EXPECT_EQ(supported[through_hole], 0);
+    EXPECT_FLOAT_EQ(tsdf[adjacent_hull_sample], 0.75f);
+    EXPECT_EQ(supported[adjacent_hull_sample], 0);
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
+     VisualHullTopologyGuardRejectsBoundaryImprovementThatAddsAHandle)
+{
+    xjw::mesh::TriMesh baseline;
+    baseline.vertices.resize(4);
+    baseline.vertices[0].x = -0.5f;
+    baseline.vertices[0].y = -0.5f;
+    baseline.vertices[1].x = 0.5f;
+    baseline.vertices[1].y = -0.5f;
+    baseline.vertices[2].x = 0.5f;
+    baseline.vertices[2].y = 0.5f;
+    baseline.vertices[3].x = -0.5f;
+    baseline.vertices[3].y = 0.5f;
+    baseline.faces = {{{0, 1, 2}}, {{0, 2, 3}}};
+
+    xjw::mesh::TriMesh candidate;
+    constexpr int major_segments = 8;
+    constexpr int minor_segments = 6;
+    constexpr double pi = 3.14159265358979323846;
+    constexpr double major_radius = 0.30;
+    constexpr double minor_radius = 0.10;
+    candidate.vertices.resize(major_segments * minor_segments);
+    for (int major = 0; major < major_segments; ++major)
+    {
+        const double major_angle = 2.0 * pi * major / major_segments;
+        for (int minor = 0; minor < minor_segments; ++minor)
+        {
+            const double minor_angle = 2.0 * pi * minor / minor_segments;
+            xjw::mesh::MeshVertex &vertex = candidate.vertices[
+                static_cast<std::size_t>(major * minor_segments + minor)];
+            const double radial =
+                major_radius + minor_radius * std::cos(minor_angle);
+            vertex.x = static_cast<float>(radial * std::cos(major_angle));
+            vertex.y = static_cast<float>(radial * std::sin(major_angle));
+            vertex.z = static_cast<float>(minor_radius * std::sin(minor_angle));
+        }
+    }
+    for (int major = 0; major < major_segments; ++major)
+    {
+        for (int minor = 0; minor < minor_segments; ++minor)
+        {
+            const int next_major = (major + 1) % major_segments;
+            const int next_minor = (minor + 1) % minor_segments;
+            const int first = major * minor_segments + minor;
+            const int second = next_major * minor_segments + minor;
+            const int third = next_major * minor_segments + next_minor;
+            const int fourth = major * minor_segments + next_minor;
+            candidate.faces.push_back({{first, second, third}});
+            candidate.faces.push_back({{first, third, fourth}});
+        }
+    }
+
+    const auto evaluation =
+        xjw::mesh::DepthTsdfSurfaceBuilder::
+            evaluateVisualHullCompletionTopologyGuard(
+                baseline, candidate, 0, 1.30, 1.10);
+
+    EXPECT_LT(
+        evaluation.candidateBoundaryEdgeCount,
+        evaluation.baselineBoundaryEdgeCount);
+    EXPECT_GT(
+        evaluation.candidateTopologicalComplexity,
+        evaluation.baselineTopologicalComplexity);
+    EXPECT_EQ(
+        evaluation.rejectionFlags &
+            xjw::mesh::VisualHullTopologyGuardBoundaryEdgeGrowth,
+        0U);
+    EXPECT_NE(
+        evaluation.rejectionFlags &
+            xjw::mesh::VisualHullTopologyGuardTopologicalComplexityGrowth,
+        0U);
+    EXPECT_FALSE(evaluation.accepted);
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
+     VisualHullTopologyGuardAcceptsBoundedTopologyImprovement)
+{
+    xjw::mesh::TriMesh baseline;
+    baseline.vertices.resize(4);
+    baseline.vertices[0].x = -0.5f;
+    baseline.vertices[0].y = -0.5f;
+    baseline.vertices[1].x = 0.5f;
+    baseline.vertices[1].y = -0.5f;
+    baseline.vertices[2].x = 0.5f;
+    baseline.vertices[2].y = 0.5f;
+    baseline.vertices[3].x = -0.5f;
+    baseline.vertices[3].y = 0.5f;
+    baseline.faces = {{{0, 1, 2}}, {{0, 2, 3}}};
+
+    xjw::mesh::TriMesh candidate;
+    candidate.vertices.resize(4);
+    candidate.vertices[0].x = 0.25f;
+    candidate.vertices[0].y = 0.25f;
+    candidate.vertices[0].z = 0.25f;
+    candidate.vertices[1].x = -0.25f;
+    candidate.vertices[1].y = -0.25f;
+    candidate.vertices[1].z = 0.25f;
+    candidate.vertices[2].x = -0.25f;
+    candidate.vertices[2].y = 0.25f;
+    candidate.vertices[2].z = -0.25f;
+    candidate.vertices[3].x = 0.25f;
+    candidate.vertices[3].y = -0.25f;
+    candidate.vertices[3].z = -0.25f;
+    candidate.faces = {
+        {{0, 2, 1}},
+        {{0, 1, 3}},
+        {{0, 3, 2}},
+        {{1, 2, 3}}};
+
+    const auto evaluation =
+        xjw::mesh::DepthTsdfSurfaceBuilder::
+            evaluateVisualHullCompletionTopologyGuard(
+                baseline, candidate, 0, 1.30, 1.10);
+
+    EXPECT_LT(
+        evaluation.candidateBoundaryEdgeCount,
+        evaluation.baselineBoundaryEdgeCount);
+    EXPECT_LT(
+        evaluation.candidateTopologicalComplexity,
+        evaluation.baselineTopologicalComplexity);
+    EXPECT_EQ(evaluation.rejectionFlags, 0U);
+    EXPECT_TRUE(evaluation.accepted);
 }
 
 TEST(DepthTsdfSurfaceBuilderTest,
@@ -3134,6 +3581,25 @@ TEST(DepthTsdfSurfaceBuilderTest, RobustFrameWeightingSuppressesLowTailOutlier)
 }
 
 TEST(DepthTsdfSurfaceBuilderTest,
+     VisibilityOccupancyEmptyCutIsRejected)
+{
+    EXPECT_FALSE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::shouldApplyVisibilityOccupancyCut(
+            false, true, 1000, 0, 0.02f));
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
+     VisibilityOccupancyCollapsedCutIsRejectedAtFinalFallback)
+{
+    EXPECT_FALSE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::shouldApplyVisibilityOccupancyCut(
+            true, false, 127652, 203, 0.02f));
+    EXPECT_TRUE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::shouldApplyVisibilityOccupancyCut(
+            true, false, 127652, 2554, 0.02f));
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
      UncertaintyAdaptiveTruncationExpandsFusionBandFromDepthSpread)
 {
     QVector<xjw::mesh::DepthTsdfFrame> frames =
@@ -3495,6 +3961,16 @@ TEST(DepthTsdfSurfaceBuilderTest, BuildsFiniteSurfaceFromConfidenceWeightedPlane
         result.statistics.postSimplificationSurfaceDenoisingAttempted);
     const QJsonObject statistics =
         xjw::mesh::DepthTsdfSurfaceBuilder::statisticsToJson(result);
+    EXPECT_GT(statistics.value(QStringLiteral("bounds_candidate_sample_count")).toDouble(),
+              0.0);
+    EXPECT_GT(statistics.value(QStringLiteral("bounds_trusted_sample_count")).toDouble(),
+              0.0);
+    EXPECT_TRUE(statistics.value(
+        QStringLiteral("bounds_used_evidence_aware_samples")).toBool());
+    EXPECT_FALSE(statistics.value(
+        QStringLiteral("bounds_fell_back_to_candidate_samples")).toBool());
+    EXPECT_EQ(statistics.value(QStringLiteral("bounds_selection_reason")).toString(),
+              QStringLiteral("trusted_multiview_evidence"));
     EXPECT_TRUE(statistics.contains(QStringLiteral(
         "post_simplification_surface_denoising_accepted")));
     EXPECT_TRUE(statistics.contains(QStringLiteral(
@@ -4116,6 +4592,10 @@ TEST(DepthTsdfSurfaceBuilderTest, SeparatesSupportDepthValidAndConfidenceRejecti
         "topology_quality_adjacent_normal_angle_p90_degrees")));
     EXPECT_TRUE(statistics.contains(QStringLiteral(
         "topology_quality_adjacent_normal_angle_over_30_ratio")));
+    EXPECT_TRUE(statistics.contains(QStringLiteral(
+        "effective_visual_hull_completion_topology_guard")));
+    EXPECT_TRUE(statistics.contains(QStringLiteral(
+        "visual_hull_completion_topology_guard_rejection_flags")));
     EXPECT_TRUE(statistics.contains(
         QStringLiteral("effective_robust_frame_quality_weighting")));
     EXPECT_TRUE(statistics.contains(
@@ -4164,6 +4644,16 @@ TEST(DepthTsdfSurfaceBuilderTest, SeparatesSupportDepthValidAndConfidenceRejecti
         QStringLiteral("effective_visibility_constrained_final_hole_fill")));
     EXPECT_TRUE(statistics.contains(
         QStringLiteral("visibility_hole_fill_released_loop_count")));
+    EXPECT_TRUE(statistics.contains(QStringLiteral(
+        "final_hole_fill_patch_evidence_validation_accepted")));
+    EXPECT_TRUE(statistics.contains(QStringLiteral(
+        "final_hole_fill_patch_evidence_face_center_sample_count")));
+    EXPECT_TRUE(statistics.contains(QStringLiteral(
+        "final_hole_fill_patch_evidence_rejected_conflict_sample_count")));
+    EXPECT_TRUE(statistics.contains(QStringLiteral(
+        "visibility_occupancy_rejected_empty_cut")));
+    EXPECT_TRUE(statistics.contains(QStringLiteral(
+        "visibility_occupancy_rejected_collapsed_cut")));
     EXPECT_TRUE(statistics.contains(
         QStringLiteral("final_hole_fill_post_simplification_accepted")));
     EXPECT_TRUE(statistics.contains(
@@ -5205,6 +5695,200 @@ TEST(MeshReconstructorTest, QualityBoundaryHoleFillingUsesExistingVertices)
     EXPECT_EQ(quality.nonManifoldEdgeCount, 0);
 }
 
+TEST(MeshReconstructorTest,
+     CurvatureAwareBoundaryPatchAvoidsLargeCentroidFan)
+{
+    constexpr int segment_count = 48;
+    constexpr double pi = 3.14159265358979323846;
+    constexpr float curvature = 0.35f;
+    xjw::mesh::TriMesh source;
+    source.vertices.resize(segment_count * 2);
+    const auto assign_ring_vertex = [&](int index, float radius, int offset)
+    {
+        const double angle = 2.0 * pi * static_cast<double>(index) /
+            static_cast<double>(segment_count);
+        xjw::mesh::MeshVertex &vertex = source.vertices[
+            static_cast<std::size_t>(offset + index)];
+        vertex.x = radius * static_cast<float>(std::cos(angle));
+        vertex.y = radius * static_cast<float>(std::sin(angle));
+        vertex.z = curvature * radius * radius;
+        const double normal_x = -2.0 * curvature * vertex.x;
+        const double normal_y = -2.0 * curvature * vertex.y;
+        const double inverse_length = 1.0 / std::sqrt(
+            normal_x * normal_x + normal_y * normal_y + 1.0);
+        vertex.nx = static_cast<float>(normal_x * inverse_length);
+        vertex.ny = static_cast<float>(normal_y * inverse_length);
+        vertex.nz = static_cast<float>(inverse_length);
+    };
+    for (int index = 0; index < segment_count; ++index)
+    {
+        assign_ring_vertex(index, 1.0f, 0);
+        assign_ring_vertex(index, 1.30f, segment_count);
+        const int next = (index + 1) % segment_count;
+        source.faces.push_back(xjw::mesh::Triangle{{
+            index, segment_count + index, segment_count + next}});
+        source.faces.push_back(xjw::mesh::Triangle{{
+            index, segment_count + next, next}});
+    }
+    std::vector<int> boundary_loop(segment_count);
+    for (int index = 0; index < segment_count; ++index)
+    {
+        boundary_loop[static_cast<std::size_t>(index)] = index;
+    }
+
+    xjw::mesh::TriMesh centroid_fan = source;
+    ASSERT_EQ(
+        xjw::mesh::detail::fillSmallBoundaryHoles(
+            &centroid_fan, segment_count, 2.10f),
+        1);
+    const float fan_center_height = centroid_fan.vertices.back().z;
+
+    xjw::mesh::TriMesh smooth_patch = source;
+    const std::size_t original_face_count = smooth_patch.faces.size();
+    ASSERT_TRUE(xjw::mesh::detail::fillCurvatureAwareBoundaryPatch(
+        &smooth_patch, boundary_loop));
+    const xjw::mesh::MeshTopologyQualityStatistics quality =
+        xjw::mesh::evaluateMeshTopologyQuality(smooth_patch);
+
+    const auto triangle_aspect = [](const xjw::mesh::TriMesh &mesh,
+                                    const xjw::mesh::Triangle &face)
+    {
+        const auto &a = mesh.vertices[static_cast<std::size_t>(face.v[0])];
+        const auto &b = mesh.vertices[static_cast<std::size_t>(face.v[1])];
+        const auto &c = mesh.vertices[static_cast<std::size_t>(face.v[2])];
+        const double ab_x = b.x - a.x;
+        const double ab_y = b.y - a.y;
+        const double ab_z = b.z - a.z;
+        const double ac_x = c.x - a.x;
+        const double ac_y = c.y - a.y;
+        const double ac_z = c.z - a.z;
+        const double bc_x = c.x - b.x;
+        const double bc_y = c.y - b.y;
+        const double bc_z = c.z - b.z;
+        const double cross_x = ab_y * ac_z - ab_z * ac_y;
+        const double cross_y = ab_z * ac_x - ab_x * ac_z;
+        const double cross_z = ab_x * ac_y - ab_y * ac_x;
+        const double doubled_area = std::sqrt(
+            cross_x * cross_x + cross_y * cross_y + cross_z * cross_z);
+        const double longest_squared = std::max({
+            ab_x * ab_x + ab_y * ab_y + ab_z * ab_z,
+            ac_x * ac_x + ac_y * ac_y + ac_z * ac_z,
+            bc_x * bc_x + bc_y * bc_y + bc_z * bc_z});
+        return longest_squared / std::max(1.0e-15, doubled_area);
+    };
+    double maximum_fan_aspect = 0.0;
+    for (std::size_t face_index = source.faces.size();
+         face_index < centroid_fan.faces.size();
+         ++face_index)
+    {
+        maximum_fan_aspect = std::max(
+            maximum_fan_aspect,
+            triangle_aspect(centroid_fan, centroid_fan.faces[face_index]));
+    }
+    double maximum_patch_aspect = 0.0;
+    for (std::size_t face_index = original_face_count;
+         face_index < smooth_patch.faces.size();
+         ++face_index)
+    {
+        maximum_patch_aspect = std::max(
+            maximum_patch_aspect,
+            triangle_aspect(smooth_patch, smooth_patch.faces[face_index]));
+    }
+
+    const auto face_normal = [](const xjw::mesh::TriMesh &mesh,
+                                const xjw::mesh::Triangle &face)
+    {
+        const auto &a = mesh.vertices[static_cast<std::size_t>(face.v[0])];
+        const auto &b = mesh.vertices[static_cast<std::size_t>(face.v[1])];
+        const auto &c = mesh.vertices[static_cast<std::size_t>(face.v[2])];
+        std::array<double, 3> normal{{
+            (b.y - a.y) * (c.z - a.z) - (b.z - a.z) * (c.y - a.y),
+            (b.z - a.z) * (c.x - a.x) - (b.x - a.x) * (c.z - a.z),
+            (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)}};
+        const double length = std::sqrt(
+            normal[0] * normal[0] + normal[1] * normal[1] +
+            normal[2] * normal[2]);
+        for (double &coordinate : normal)
+        {
+            coordinate /= std::max(1.0e-15, length);
+        }
+        return normal;
+    };
+    const auto average_seam_angle = [&](const xjw::mesh::TriMesh &mesh)
+    {
+        double angle_sum = 0.0;
+        int angle_count = 0;
+        for (int index = 0; index < segment_count; ++index)
+        {
+            const int next = (index + 1) % segment_count;
+            const xjw::mesh::Triangle *outer_face = nullptr;
+            const xjw::mesh::Triangle *fill_face = nullptr;
+            for (std::size_t face_index = 0;
+                 face_index < mesh.faces.size();
+                 ++face_index)
+            {
+                const auto &face = mesh.faces[face_index];
+                bool has_index = false;
+                bool has_next = false;
+                for (const int vertex_index : face.v)
+                {
+                    has_index = has_index || vertex_index == index;
+                    has_next = has_next || vertex_index == next;
+                }
+                if (!has_index || !has_next)
+                {
+                    continue;
+                }
+                if (face_index < source.faces.size())
+                {
+                    outer_face = &face;
+                }
+                else
+                {
+                    fill_face = &face;
+                }
+            }
+            if (!outer_face || !fill_face)
+            {
+                continue;
+            }
+            const auto outer_normal = face_normal(mesh, *outer_face);
+            const auto fill_normal = face_normal(mesh, *fill_face);
+            const double alignment = std::clamp(std::abs(
+                outer_normal[0] * fill_normal[0] +
+                outer_normal[1] * fill_normal[1] +
+                outer_normal[2] * fill_normal[2]), 0.0, 1.0);
+            angle_sum += std::acos(alignment);
+            ++angle_count;
+        }
+        return angle_count > 0
+            ? angle_sum / static_cast<double>(angle_count)
+            : pi;
+    };
+    const double fan_seam_angle = average_seam_angle(centroid_fan);
+    const double patch_seam_angle = average_seam_angle(smooth_patch);
+
+    EXPECT_EQ(quality.boundaryEdgeCount, segment_count);
+    EXPECT_EQ(quality.nonManifoldEdgeCount, 0);
+    EXPECT_GT(smooth_patch.vertexCount(), source.vertexCount() + 1);
+    EXPECT_NEAR(fan_center_height, curvature, 1.0e-4f);
+    const auto innermost_vertex = std::min_element(
+        smooth_patch.vertices.cbegin() + source.vertexCount(),
+        smooth_patch.vertices.cend(),
+        [](const auto &left, const auto &right)
+        {
+            return left.x * left.x + left.y * left.y <
+                right.x * right.x + right.y * right.y;
+        });
+    ASSERT_NE(innermost_vertex, smooth_patch.vertices.cend());
+    EXPECT_LT(innermost_vertex->x * innermost_vertex->x +
+                  innermost_vertex->y * innermost_vertex->y,
+              0.15f);
+    EXPECT_NEAR(innermost_vertex->z, curvature * 0.32f * 0.32f, 0.08f);
+    EXPECT_LT(maximum_patch_aspect, maximum_fan_aspect * 0.90);
+    EXPECT_LT(patch_seam_angle, fan_seam_angle * 0.90);
+}
+
 TEST(MeshReconstructorTest, TinyBoundaryLoopCollapseClosesOnlyMicroHole)
 {
     xjw::mesh::TriMesh mesh;
@@ -5861,9 +6545,9 @@ TEST(MeshWorkflowSettingsTest, UltraLowFaceTargetEnablesConservativeSurfacePatch
     EXPECT_TRUE(options.enableSilhouetteAwareFinalHoleFill);
     EXPECT_TRUE(options.enableVisibilityConstrainedFinalHoleFill);
     EXPECT_TRUE(options.enableTinyBoundaryLoopCollapse);
-    EXPECT_EQ(options.finalHoleFillMaximumBoundaryEdges, 192);
-    EXPECT_FLOAT_EQ(options.finalHoleFillMaximumDiameterVoxels, 48.0f);
-    EXPECT_FLOAT_EQ(options.finalHoleFillMaximumFaceGrowthRatio, 0.20f);
+    EXPECT_EQ(options.finalHoleFillMaximumBoundaryEdges, 24);
+    EXPECT_FLOAT_EQ(options.finalHoleFillMaximumDiameterVoxels, 4.0f);
+    EXPECT_FLOAT_EQ(options.finalHoleFillMaximumFaceGrowthRatio, 0.03f);
     EXPECT_FLOAT_EQ(options.finalHoleFillMaximumSliverRatio, 0.05f);
     EXPECT_EQ(options.surfaceDenoisingIterations, 1);
     EXPECT_FLOAT_EQ(options.surfaceDenoisingLambda, 0.30f);
@@ -6237,8 +6921,11 @@ TEST(MeshWorkflowSettingsTest,
     EXPECT_FLOAT_EQ(options.maximumObservationInverseDepthSpread, 0.015f);
     EXPECT_TRUE(options.enableSilhouetteAwareFinalHoleFill);
     EXPECT_TRUE(options.enableVisibilityConstrainedFinalHoleFill);
-    EXPECT_EQ(options.visibilityHoleFillMinimumSupportingViews, 1);
-    EXPECT_EQ(options.visibilityHoleFillMaximumConflictViews, 16);
+    EXPECT_EQ(options.finalHoleFillMaximumBoundaryEdges, 24);
+    EXPECT_FLOAT_EQ(options.finalHoleFillMaximumDiameterVoxels, 4.0f);
+    EXPECT_FLOAT_EQ(options.finalHoleFillMaximumFaceGrowthRatio, 0.03f);
+    EXPECT_EQ(options.visibilityHoleFillMinimumSupportingViews, 2);
+    EXPECT_EQ(options.visibilityHoleFillMaximumConflictViews, 0);
     EXPECT_EQ(options.geometryZeroCrossingMinimumSupportedCorners, 2);
     EXPECT_FALSE(options.enableSupportMaskFreeSpaceCarving);
     EXPECT_EQ(options.minimumSupportMaskFreeSpaceViews, 5);
@@ -6249,6 +6936,60 @@ TEST(MeshWorkflowSettingsTest,
     EXPECT_TRUE(options.enableSurfaceEvidenceFreeSpaceVeto);
     EXPECT_TRUE(options.enableDepthCompletenessDiagnostics);
     EXPECT_TRUE(options.enforceDepthCompletenessGate);
+    EXPECT_TRUE(options.enableVisibilityOccupancyCompletion);
+    EXPECT_EQ(options.visibilityOccupancyResolution, 72);
+    EXPECT_FALSE(options.visibilityOccupancyCellBoundaryExtraction);
+    EXPECT_FALSE(options.mc33RequireSupportedSignChange);
+    EXPECT_EQ(options.visibilityOccupancyClosingIterations, 1);
+    EXPECT_EQ(options.visibilityOccupancyMaximumHandleRepairPasses, 8);
+    EXPECT_EQ(
+        options.visibilityOccupancyMaximumHandleRepairAcceptedCandidateCount,
+        128);
+    EXPECT_EQ(
+        options.visibilityOccupancyMaximumHandleRepairCandidateSampleCount,
+        4096U);
+    EXPECT_EQ(
+        options.visibilityOccupancyMaximumHandleRepairSubsetSampleCount,
+        256U);
+    EXPECT_EQ(
+        options.visibilityOccupancyMaximumHandleRepairSubsetSeedCount,
+        4096);
+    EXPECT_TRUE(options.visibilityOccupancyTopologyLockedResidualBlend);
+    EXPECT_FLOAT_EQ(options.visibilityOccupancyObservedBand, 1.0f);
+    EXPECT_FLOAT_EQ(options.visibilityOccupancyCarrierBand, 1.0f);
+    EXPECT_FLOAT_EQ(options.visibilityOccupancyMaximumResidual, 1.0f);
+    EXPECT_FLOAT_EQ(options.visibilityOccupancyDetailBlend, 1.0f);
+}
+
+TEST(MeshWorkflowSettingsTest, OrbitalCompletionDefaultsAlsoApplyBelowHighDetailProfile)
+{
+    const QJsonObject settings;
+    auto options = xjw::mesh::workflow::depthTsdfOptionsFromSettings(settings, 256);
+
+    xjw::mesh::workflow::applyOrbitalDepthTsdfDefaults(settings, &options);
+
+    EXPECT_TRUE(options.enableVisibilityOccupancyCompletion);
+    EXPECT_EQ(options.visibilityOccupancyResolution, 72);
+    EXPECT_FALSE(options.visibilityOccupancyCellBoundaryExtraction);
+    EXPECT_FALSE(options.mc33RequireSupportedSignChange);
+    EXPECT_EQ(options.visibilityOccupancyClosingIterations, 1);
+    EXPECT_EQ(options.visibilityOccupancyMaximumHandleRepairPasses, 8);
+    EXPECT_TRUE(options.visibilityOccupancyTopologyLockedResidualBlend);
+    EXPECT_FLOAT_EQ(options.visibilityOccupancyDetailBlend, 1.0f);
+}
+
+TEST(MeshWorkflowSettingsTest, OrbitalDepthRefinementDefaultsOnAndHonorsOverrides)
+{
+    EXPECT_TRUE(xjw::mesh::workflow::visibilityOccupancyDepthRefinementEnabled(
+        QJsonObject{}, true));
+    EXPECT_FALSE(xjw::mesh::workflow::visibilityOccupancyDepthRefinementEnabled(
+        QJsonObject{}, false));
+    EXPECT_FALSE(xjw::mesh::workflow::visibilityOccupancyDepthRefinementEnabled(
+        QJsonObject{{QStringLiteral("tsdfVisibilityOccupancyDepthRefinement"), false}},
+        true));
+    EXPECT_TRUE(xjw::mesh::workflow::visibilityOccupancyDepthRefinementEnabled(
+        QJsonObject{{QStringLiteral("tsdfVisibilityOccupancyDepthRefinement"), true}},
+        false));
 }
 
 TEST(MeshWorkflowSettingsTest, OrbitalOpenMeshPolicyKeepsGeometryProfileAt170K)
@@ -6323,7 +7064,33 @@ TEST(MeshWorkflowSettingsTest, OrbitalHighDetailPolicyPreservesExplicitOverrides
              "tsdfOrbitalGapAdaptiveMaximumTruncationVoxels"), 10.0},
         {QStringLiteral("tsdfSurfaceEvidenceFreeSpaceVeto"), false},
         {QStringLiteral("tsdfDepthCompletenessDiagnostics"), false},
-        {QStringLiteral("tsdfEnforceDepthCompletenessGate"), false}
+        {QStringLiteral("tsdfEnforceDepthCompletenessGate"), false},
+        {QStringLiteral("tsdfVisibilityOccupancyCompletion"), false},
+        {QStringLiteral("tsdfVisibilityOccupancyResolution"), 96},
+        {QStringLiteral(
+             "tsdfVisibilityOccupancyCellBoundaryExtraction"), false},
+        {QStringLiteral("tsdfMc33RequireSupportedSignChange"), true},
+        {QStringLiteral("tsdfVisibilityOccupancyClosingIterations"), 2},
+        {QStringLiteral(
+             "tsdfVisibilityOccupancyMaximumHandleRepairPasses"), 3},
+        {QStringLiteral(
+             "tsdfVisibilityOccupancyMaximumHandleRepairAcceptedCandidateCount"),
+         24},
+        {QStringLiteral(
+             "tsdfVisibilityOccupancyMaximumHandleRepairCandidateSampleCount"),
+         1024},
+        {QStringLiteral(
+             "tsdfVisibilityOccupancyMaximumHandleRepairSubsetSampleCount"),
+         64},
+        {QStringLiteral(
+             "tsdfVisibilityOccupancyMaximumHandleRepairSubsetSeedCount"),
+         32},
+        {QStringLiteral(
+             "tsdfVisibilityOccupancyTopologyLockedResidualBlend"), false},
+        {QStringLiteral("tsdfVisibilityOccupancyObservedBand"), 0.75},
+        {QStringLiteral("tsdfVisibilityOccupancyCarrierBand"), 0.80},
+        {QStringLiteral("tsdfVisibilityOccupancyMaximumResidual"), 0.50},
+        {QStringLiteral("tsdfVisibilityOccupancyDetailBlend"), 0.25}
     };
     auto options = xjw::mesh::workflow::depthTsdfOptionsFromSettings(settings, 384);
 
@@ -6356,6 +7123,29 @@ TEST(MeshWorkflowSettingsTest, OrbitalHighDetailPolicyPreservesExplicitOverrides
     EXPECT_FALSE(options.enableSurfaceEvidenceFreeSpaceVeto);
     EXPECT_FALSE(options.enableDepthCompletenessDiagnostics);
     EXPECT_FALSE(options.enforceDepthCompletenessGate);
+    EXPECT_FALSE(options.enableVisibilityOccupancyCompletion);
+    EXPECT_EQ(options.visibilityOccupancyResolution, 96);
+    EXPECT_FALSE(options.visibilityOccupancyCellBoundaryExtraction);
+    EXPECT_TRUE(options.mc33RequireSupportedSignChange);
+    EXPECT_EQ(options.visibilityOccupancyClosingIterations, 2);
+    EXPECT_EQ(options.visibilityOccupancyMaximumHandleRepairPasses, 3);
+    EXPECT_EQ(
+        options.visibilityOccupancyMaximumHandleRepairAcceptedCandidateCount,
+        24);
+    EXPECT_EQ(
+        options.visibilityOccupancyMaximumHandleRepairCandidateSampleCount,
+        1024U);
+    EXPECT_EQ(
+        options.visibilityOccupancyMaximumHandleRepairSubsetSampleCount,
+        64U);
+    EXPECT_EQ(
+        options.visibilityOccupancyMaximumHandleRepairSubsetSeedCount,
+        32);
+    EXPECT_FALSE(options.visibilityOccupancyTopologyLockedResidualBlend);
+    EXPECT_FLOAT_EQ(options.visibilityOccupancyObservedBand, 0.75f);
+    EXPECT_FLOAT_EQ(options.visibilityOccupancyCarrierBand, 0.80f);
+    EXPECT_FLOAT_EQ(options.visibilityOccupancyMaximumResidual, 0.50f);
+    EXPECT_FLOAT_EQ(options.visibilityOccupancyDetailBlend, 0.25f);
 }
 
 TEST(DepthMapMeshBuilderTest, TsdfFailureDoesNotFallBackToVisualHullOrDenseCloud)
@@ -6441,6 +7231,86 @@ TEST(DepthMapMeshBuilderTest, DiscoversDepthFramesFromOutputDirectory)
     EXPECT_TRUE(frames.at(0).previewPath.endsWith(QStringLiteral("depth_001.png")));
     EXPECT_TRUE(frames.at(0).validMaskPath.endsWith(QStringLiteral("depth_001_mask.png")));
     EXPECT_TRUE(frames.at(1).depthPath.endsWith(QStringLiteral("depth_002.bin")));
+}
+
+TEST(DepthMapMeshBuilderTest, IgnoresPyramidArtifactsWithoutManifest)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "plascan_depth_mesh_ignore_pyramid_test";
+    fs::remove_all(root);
+    fs::create_directories(root);
+    std::ofstream(root / "depth_0_level_2.bin").put('\0');
+    std::ofstream(root / "depth_0_level_2_conf.bin").put('\0');
+    std::ofstream(root / "depth_0_level_2_support.bin").put('\0');
+
+    const auto frames = xjw::mesh::DepthMapMeshBuilder::discoverDepthFrames(
+        QString::fromStdString(root.string()));
+
+    EXPECT_TRUE(frames.isEmpty());
+}
+
+TEST(DepthMapMeshBuilderTest, FallsBackToHighestResolutionManifestPyramidArtifact)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "plascan_depth_mesh_pyramid_fallback_test";
+    fs::remove_all(root);
+    fs::create_directories(root);
+    std::ofstream(root / "depth_4_level_3.bin").put('\0');
+    std::ofstream(root / "depth_4_level_2.bin").put('\0');
+    std::ofstream(root / "depth_4_level_2_conf.bin").put('\0');
+    std::ofstream(root / "depth_4_level_2.png").put('\0');
+    std::ofstream(root / "depth_4_level_2_mask.png").put('\0');
+    std::ofstream manifest(root / "mvs_manifest.json");
+    manifest << R"({
+        "frames": [{
+            "ref_index": 4,
+            "status": "completed",
+            "raw_depth_path": "depth_4.bin",
+            "raw_geometry_support_path": "depth_4_geometry_support.bin",
+            "grid_width": 640,
+            "grid_height": 480,
+            "camera_model": {
+                "fx": 1200.0,
+                "fy": 1180.0,
+                "cx": 320.0,
+                "cy": 240.0,
+                "rotation_world_to_camera": [1,0,0,0,1,0,0,0,1],
+                "translation_world_to_camera": [0,0,3],
+                "camera_center": [0,0,-3]
+            },
+            "pyramid_levels": [{
+                "success": true,
+                "artifact_width": 160,
+                "artifact_height": 120,
+                "raw_depth_path": "depth_4_level_3.bin"
+            }, {
+                "success": true,
+                "artifact_width": 320,
+                "artifact_height": 240,
+                "raw_depth_path": "depth_4_level_2.bin",
+                "raw_confidence_path": "depth_4_level_2_conf.bin",
+                "preview_path": "depth_4_level_2.png",
+                "valid_mask_path": "depth_4_level_2_mask.png"
+            }]
+        }]
+    })";
+    manifest.close();
+
+    const auto frames = xjw::mesh::DepthMapMeshBuilder::discoverDepthFrames(
+        QString::fromStdString(root.string()));
+
+    ASSERT_EQ(frames.size(), 1);
+    EXPECT_EQ(frames.front().refIndex, 4);
+    EXPECT_TRUE(frames.front().depthPath.endsWith(QStringLiteral("depth_4_level_2.bin")));
+    EXPECT_TRUE(frames.front().confidencePath.endsWith(QStringLiteral("depth_4_level_2_conf.bin")));
+    EXPECT_EQ(frames.front().gridWidth, 320);
+    EXPECT_EQ(frames.front().gridHeight, 240);
+    ASSERT_TRUE(frames.front().hasCameraModel);
+    EXPECT_DOUBLE_EQ(frames.front().cameraModel.focalX(), 600.0);
+    EXPECT_DOUBLE_EQ(frames.front().cameraModel.principalY(), 120.0);
+    EXPECT_TRUE(frames.front().pyramidFallback);
+    EXPECT_TRUE(frames.front().geometrySupportPath.endsWith(
+        QStringLiteral("depth_4_geometry_support.bin")));
 }
 
 TEST(MeshWorkflowSettingsTest, OrbitalVisualHullCompletionCatchesResidualOpenSurfaces)

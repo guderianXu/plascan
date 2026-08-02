@@ -2,6 +2,7 @@
 
 #include "DepthMapGenerator.h"
 #include "MvsSourcePlanner.h"
+#include "MvsWorkspaceManifest.h"
 #include "MvsWorkspaceReplay.h"
 #include "ProjectDenseWorkflowConfig.h"
 #include "SparseCloudPreprocessor.h"
@@ -19,6 +20,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -76,6 +78,170 @@ bool writeReplayReport(const QString &path,
     return true;
 }
 
+bool validateFreshOutputDirectory(const QString &path, QString *errorMessage)
+{
+    const QFileInfo outputInfo(path);
+    if (!outputInfo.exists())
+    {
+        return true;
+    }
+    if (!outputInfo.isDir())
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("MVS replay 输出路径不是目录：%1")
+                                .arg(QDir::toNativeSeparators(path));
+        }
+        return false;
+    }
+    if (!QDir(path).entryList(QDir::AllEntries | QDir::NoDotAndDotDot).isEmpty())
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral(
+                "输出目录非空，MVS replay 拒绝覆盖已有结果：%1")
+                                .arg(QDir::toNativeSeparators(path));
+        }
+        return false;
+    }
+    return true;
+}
+
+bool isVerifiedSourcePlanEntry(const QJsonObject &entry)
+{
+    const QString status = entry.value(QStringLiteral("verification_status"))
+                               .toString()
+                               .trimmed()
+                               .toLower();
+    if (!status.isEmpty())
+    {
+        return status == QStringLiteral("verified");
+    }
+    return entry.value(QStringLiteral("verified_pair_geometry")).toBool(false);
+}
+
+QString resolveManifestPath(const QString &manifestPath, const QString &storedPath)
+{
+    const QString trimmedPath = storedPath.trimmed();
+    if (trimmedPath.isEmpty())
+    {
+        return QString();
+    }
+
+    QFileInfo pathInfo(trimmedPath);
+    if (pathInfo.isRelative())
+    {
+        pathInfo.setFile(
+            QDir(QFileInfo(manifestPath).absolutePath()).filePath(trimmedPath));
+    }
+
+    const QString canonicalPath = pathInfo.canonicalFilePath();
+    return QDir::cleanPath(
+        canonicalPath.isEmpty() ? pathInfo.absoluteFilePath() : canonicalPath);
+}
+
+bool loadManifestSourcePlanPairQualities(
+    const QString &manifestPath,
+    std::vector<xjw::mvs::MvsSourcePairQuality> *qualities,
+    QString *errorMessage)
+{
+    if (!qualities)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("MVS source_plan 像对输出参数为空");
+        }
+        return false;
+    }
+    qualities->clear();
+
+    xjw::mvs::MvsWorkspaceManifest manifest;
+    QString manifestError;
+    if (!manifest.load(manifestPath, &manifestError))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("无法加载 MVS manifest source_plan：%1（%2）")
+                                .arg(QDir::toNativeSeparators(manifestPath), manifestError);
+        }
+        return false;
+    }
+
+    std::map<int, QString> imageByIndex;
+    for (const xjw::mvs::MvsDepthFrameRecord &record : manifest.frames())
+    {
+        if (record.refIndex >= 0 && !record.refImage.trimmed().isEmpty())
+        {
+            imageByIndex[record.refIndex] = resolveManifestPath(
+                manifestPath, record.refImage);
+        }
+    }
+
+    for (const xjw::mvs::MvsDepthFrameRecord &record : manifest.frames())
+    {
+        if (record.refImage.trimmed().isEmpty())
+        {
+            continue;
+        }
+        const QString referenceImage = resolveManifestPath(
+            manifestPath, record.refImage);
+
+        for (const QJsonValue &value : record.sourcePlan)
+        {
+            const QJsonObject entry = value.toObject();
+            if (entry.isEmpty() || !isVerifiedSourcePlanEntry(entry))
+            {
+                continue;
+            }
+
+            QString sourceImage =
+                entry.value(QStringLiteral("source_image")).toString().trimmed();
+            if (sourceImage.isEmpty())
+            {
+                const int sourceIndex =
+                    entry.value(QStringLiteral("view_index")).toInt(-1);
+                const auto imageIt = imageByIndex.find(sourceIndex);
+                if (imageIt != imageByIndex.end())
+                {
+                    sourceImage = imageIt->second;
+                }
+            }
+            if (sourceImage.isEmpty())
+            {
+                continue;
+            }
+            sourceImage = resolveManifestPath(manifestPath, sourceImage);
+
+            xjw::mvs::MvsSourcePairQuality quality;
+            quality.imageA = xjw::common::io::toUtf8Path(referenceImage);
+            quality.imageB = xjw::common::io::toUtf8Path(sourceImage);
+            quality.totalMatches = std::max(
+                0, entry.value(QStringLiteral("pair_total_matches")).toInt());
+            quality.geometricInliers = std::max(
+                0, entry.value(QStringLiteral("geometric_inliers")).toInt());
+            const QJsonValue pairCoverage =
+                entry.value(QStringLiteral("pair_coverage_score"));
+            const double coverage = pairCoverage.isDouble()
+                ? pairCoverage.toDouble()
+                : entry.value(QStringLiteral("coverage_score")).toDouble(0.0);
+            quality.geometricCoverage = static_cast<float>(
+                std::clamp(coverage, 0.0, 1.0));
+            quality.verified = true;
+            quality.hasVerificationStatistics = true;
+            QString reason = entry.value(QStringLiteral("verification_reason"))
+                                 .toString()
+                                 .trimmed();
+            if (reason.isEmpty())
+            {
+                reason = QStringLiteral("verified_from_manifest_source_plan");
+            }
+            quality.verificationReason = xjw::common::io::toUtf8Path(reason);
+            qualities->push_back(std::move(quality));
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -97,14 +263,14 @@ int main(int argc, char **argv)
     int gpuFrameWorkers = 1;
     int cpuFrameWorkers = 0;
     bool saveLevels = false;
+    bool depthPoseCandidates = false;
 
     app.add_option("--input-manifest", inputManifest,
                    "现有 mvs_manifest.json，用于读取影像顺序和相机")
         ->required()
         ->check(CLI::ExistingFile);
     app.add_option("--pair-audit", pairAuditReport,
-                   "mvs_pair_audit_cli 生成的 JSON 报告")
-        ->required()
+                   "可选：mvs_pair_audit_cli 生成的 JSON 报告；缺失时复用 manifest source_plan")
         ->check(CLI::ExistingFile);
     app.add_option("--sparse-cloud", sparseCloudPath,
                    "用于深度范围与可见性预处理的 SFM 稀疏点云 PLY")
@@ -134,12 +300,17 @@ int main(int argc, char **argv)
     app.add_option("--cpu-frame-workers", cpuFrameWorkers, "CPU 帧并发数")
         ->check(CLI::Range(0, 4));
     app.add_flag("--save-levels", saveLevels, "保存中间深度金字塔层");
+    app.add_flag(
+        "--depth-pose-candidates",
+        depthPoseCandidates,
+        "实验：输出深度约束派生相机候选与安全门诊断；不覆盖项目相机或重算深度");
     CLI11_PARSE(app, argc, argv);
 
     const QString manifestPath = QFileInfo(
         QString::fromUtf8(inputManifest.c_str())).absoluteFilePath();
-    const QString auditPath = QFileInfo(
-        QString::fromUtf8(pairAuditReport.c_str())).absoluteFilePath();
+    const QString auditPath = pairAuditReport.empty()
+        ? QString()
+        : QFileInfo(QString::fromUtf8(pairAuditReport.c_str())).absoluteFilePath();
     const QString sparsePath = QFileInfo(
         QString::fromUtf8(sparseCloudPath.c_str())).absoluteFilePath();
     const QString maskDir = maskDirectory.empty()
@@ -149,7 +320,7 @@ int main(int argc, char **argv)
         QString::fromUtf8(outputDirectory.c_str())).absoluteFilePath();
 
     QString error;
-    if (!ensureFreshOutputDirectory(outputDir, &error))
+    if (!validateFreshOutputDirectory(outputDir, &error))
     {
         std::fprintf(stderr, "%s\n", error.toUtf8().constData());
         return cli::EXIT_IO_ERR;
@@ -165,11 +336,26 @@ int main(int argc, char **argv)
 
     std::vector<xjw::mvs::MvsSourcePairQuality> pairQualities;
     xjw::mvs::MvsPairAuditSummary pairSummary;
-    if (!xjw::mvs::loadMvsPairAuditReport(
-            auditPath, &pairQualities, &pairSummary, &error))
+    QString pairEvidenceProvenance;
+    if (!auditPath.isEmpty())
     {
-        std::fprintf(stderr, "%s\n", error.toUtf8().constData());
-        return cli::EXIT_IO_ERR;
+        if (!xjw::mvs::loadMvsPairAuditReport(
+                auditPath, &pairQualities, &pairSummary, &error))
+        {
+            std::fprintf(stderr, "%s\n", error.toUtf8().constData());
+            return cli::EXIT_IO_ERR;
+        }
+        pairEvidenceProvenance = QStringLiteral("pair_audit");
+    }
+    else
+    {
+        if (!loadManifestSourcePlanPairQualities(
+                manifestPath, &pairQualities, &error))
+        {
+            std::fprintf(stderr, "%s\n", error.toUtf8().constData());
+            return cli::EXIT_IO_ERR;
+        }
+        pairEvidenceProvenance = QStringLiteral("manifest_source_plan");
     }
 
     std::vector<std::string> currentImages;
@@ -189,10 +375,33 @@ int main(int argc, char **argv)
         }));
     if (verifiedCurrentPairs <= 0)
     {
-        std::fprintf(stderr,
-                     "当前影像集合没有通过几何验证的 MVS 源像对，拒绝重放。\n");
+        if (auditPath.isEmpty())
+        {
+            std::fprintf(
+                stderr,
+                "未提供 --pair-audit，且 input manifest 的 source_plan "
+                "不含当前影像集合的已验证 MVS 源像对，拒绝重放。\n");
+        }
+        else
+        {
+            std::fprintf(stderr,
+                         "当前影像集合没有通过几何验证的 MVS 源像对，拒绝重放。\n");
+        }
         return cli::EXIT_ALGO_ERR;
     }
+    if (auditPath.isEmpty())
+    {
+        pairSummary.auditedPairCount = static_cast<int>(pairQualities.size());
+        pairSummary.verifiedPairCount = verifiedCurrentPairs;
+        pairSummary.failedPairCount = 0;
+        pairSummary.missingStatisticsPairCount = 0;
+    }
+
+    std::fprintf(stdout,
+                 "pair_evidence_provenance=%s verified_pairs=%d\n",
+                 pairEvidenceProvenance.toUtf8().constData(),
+                 verifiedCurrentPairs);
+    std::fflush(stdout);
 
     xjw::mvs::SparseCloudPreprocessor preprocessor(
         plapoint::ProcessingDevice::CPU);
@@ -207,6 +416,15 @@ int main(int argc, char **argv)
                      "稀疏点云预处理失败：%s\n",
                      preprocessError.c_str());
         return cli::EXIT_ALGO_ERR;
+    }
+
+    // Keep input/evidence validation side-effect free.  Creating the replay
+    // directory only after all preflight checks avoids leaving an empty
+    // output that looks like a started or reusable workspace.
+    if (!ensureFreshOutputDirectory(outputDir, &error))
+    {
+        std::fprintf(stderr, "%s\n", error.toUtf8().constData());
+        return cli::EXIT_IO_ERR;
     }
 
     const QJsonObject settingsJson{
@@ -230,21 +448,27 @@ int main(int argc, char **argv)
     config.saveIntermediateDepthMaps = true;
     config.intermediateDir = xjw::common::io::toUtf8Path(outputDir);
     config.inputSignature =
-        QStringLiteral("mvs-replay:%1:%2")
+        QStringLiteral("mvs-replay:%1:%2:%3")
             .arg(QFileInfo(manifestPath).lastModified().toMSecsSinceEpoch())
-            .arg(QFileInfo(auditPath).lastModified().toMSecsSinceEpoch())
+            .arg(pairEvidenceProvenance)
+            .arg(auditPath.isEmpty()
+                     ? 0
+                     : QFileInfo(auditPath).lastModified().toMSecsSinceEpoch())
             .toStdString();
     config.sourcePairQualities = std::move(pairQualities);
     config.requireVerifiedSourcePairs = true;
+    config.depthPoseRefinement.enabled = depthPoseCandidates;
 
     std::fprintf(stdout,
                  "views=%zu verified_pairs=%d failed_pairs=%d "
-                 "missing_stats_pairs=%d requested_sources=%d\n",
+                 "missing_stats_pairs=%d requested_sources=%d "
+                 "pair_evidence_provenance=%s\n",
                  views.size(),
                  verifiedCurrentPairs,
                  pairSummary.failedPairCount,
                  pairSummary.missingStatisticsPairCount,
-                 sourceViews);
+                 sourceViews,
+                 pairEvidenceProvenance.toUtf8().constData());
     std::fflush(stdout);
 
     xjw::mvs::DepthMapGenerator generator;
@@ -311,6 +535,7 @@ int main(int argc, char **argv)
          success ? QStringLiteral("ok") : QStringLiteral("failed")},
         {QStringLiteral("input_manifest"), manifestPath},
         {QStringLiteral("pair_audit"), auditPath},
+        {QStringLiteral("pair_evidence_provenance"), pairEvidenceProvenance},
         {QStringLiteral("sparse_cloud"), sparsePath},
         {QStringLiteral("mask_directory"), maskDir},
         {QStringLiteral("output_directory"), outputDir},
@@ -324,6 +549,7 @@ int main(int argc, char **argv)
         {QStringLiteral("quality"), QString::fromStdString(quality)},
         {QStringLiteral("scene_profile"), QString::fromStdString(sceneProfile)},
         {QStringLiteral("depth_filter"), QString::fromStdString(depthFilter)},
+        {QStringLiteral("depth_pose_candidates"), depthPoseCandidates},
         {QStringLiteral("depth_artifact_count"), artifacts.size()},
         {QStringLiteral("depth_artifacts"), artifacts},
         {QStringLiteral("error"), generatorError}

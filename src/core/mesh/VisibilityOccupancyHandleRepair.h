@@ -56,7 +56,9 @@ struct VisibilityOccupancyHandleRepairResult
  * path; if their net Euler delta is not positive, topology-improving singleton
  * subsets are considered. A transaction is accepted only when it raises the
  * cubical-complex Euler characteristic without changing the occupied component
- * count or making any previously exterior-reachable empty sample interior.
+ * count or making any evidence-protected, previously exterior-reachable empty
+ * sample interior. Unprotected exterior pockets may be sealed and are removed
+ * by the following interior-bubble cleanup pass.
  */
 class VisibilityOccupancyHandleRepair
 {

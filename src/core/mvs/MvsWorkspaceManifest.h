@@ -38,6 +38,8 @@ struct MvsDepthFrameRecord
     QJsonObject depthCompleteness;
     QJsonObject crossViewRepairDiagnostics;
     QJsonObject geometryEvidenceDiagnostics;
+    QJsonObject poseRefinementDiagnostics;
+    QJsonObject derivedCameraModel;
     QJsonObject qualityDecision;
     QJsonArray pyramidLevels;
     QString maskSource;
@@ -98,6 +100,9 @@ public:
     void markRunning(int refIndex, const QString &refImage, const QString &configHash);
     void markCompleted(const MvsDepthFrameRecord &record);
     void markFailed(int refIndex, const QString &error);
+    void updatePoseRefinement(int refIndex,
+                              const QJsonObject &diagnostics,
+                              const QJsonObject &derivedCameraModel = {});
 
     bool hasReusableCompletedFrame(int refIndex, const QString &configHash) const;
     QJsonObject toJson() const;

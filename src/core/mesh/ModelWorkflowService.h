@@ -83,6 +83,8 @@ xjw::mesh::DepthTsdfOptions depthTsdfOptionsFromSettings(const QJsonObject &sett
 void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
                                    xjw::mesh::DepthTsdfOptions *options,
                                    int maximumReliableResolution = 0);
+bool visibilityOccupancyDepthRefinementEnabled(const QJsonObject &settings,
+                                               bool orbitalWorkspace);
 bool shouldUseOrbitalVisualHullCompletion(bool orbitalWorkspace,
                                           bool enabled,
                                           double aggregateProjectionRecall,

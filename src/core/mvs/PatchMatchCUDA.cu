@@ -1649,6 +1649,85 @@ __global__ void kernelCheckerboardSweep(
     confMap[idx] = 1.f - bestCost * 0.5f;
 }
 
+// Probe distinct depths around the converged PatchMatch hypothesis. A high
+// NCC value by itself is insufficient on smooth or repetitive surfaces: when
+// either neighbouring depth explains the images almost as well, the result is
+// ambiguous and must enter fusion with reduced confidence.
+__global__ void kernelApplyPhotometricUniqueness(
+    const float *depthMap,
+    const float *normalMap,
+    float *confMap,
+    const float *refImg,
+    int W,
+    int H,
+    const float *const *srcImgs,
+    const float *srcDatas,
+    int srcW,
+    int srcH,
+    int numSrc,
+    const std::uint8_t *refMask,
+    const std::uint8_t *srcMasks,
+    float zNear,
+    float zFar,
+    int patchHalf,
+    float minimumMaskedSupportRatio,
+    float relativeDepthStep,
+    float minimumMargin,
+    float minimumConfidenceScale)
+{
+    const int col = blockIdx.x * blockDim.x + threadIdx.x;
+    const int row = blockIdx.y * blockDim.y + threadIdx.y;
+    if (col >= W || row >= H || numSrc < 3)
+    {
+        return;
+    }
+
+    const int idx = row * W + col;
+    const float depth = depthMap[idx];
+    const float bestNcc = confMap[idx];
+    if (!(depth > 0.0f) || !(bestNcc > 0.0f) || !(relativeDepthStep > 0.0f))
+    {
+        return;
+    }
+
+    const float normal[3] = {
+        normalMap[idx * 3],
+        normalMap[idx * 3 + 1],
+        normalMap[idx * 3 + 2]
+    };
+    float competingNcc = 0.0f;
+    const float lowerDepth = fmaxf(zNear, depth * (1.0f - relativeDepthStep));
+    const float upperDepth = fminf(zFar, depth * (1.0f + relativeDepthStep));
+    const float minimumDistinctDepth = fmaxf(1e-6f, depth * relativeDepthStep * 0.25f);
+
+    if (depth - lowerDepth >= minimumDistinctDepth)
+    {
+        const float cost = evalHypCost(
+            col, row, lowerDepth, normal,
+            refImg, W, H,
+            srcImgs, srcDatas, srcW, srcH, numSrc,
+            refMask, srcMasks,
+            patchHalf, minimumMaskedSupportRatio);
+        competingNcc = fmaxf(competingNcc, 1.0f - cost * 0.5f);
+    }
+    if (upperDepth - depth >= minimumDistinctDepth)
+    {
+        const float cost = evalHypCost(
+            col, row, upperDepth, normal,
+            refImg, W, H,
+            srcImgs, srcDatas, srcW, srcH, numSrc,
+            refMask, srcMasks,
+            patchHalf, minimumMaskedSupportRatio);
+        competingNcc = fmaxf(competingNcc, 1.0f - cost * 0.5f);
+    }
+
+    confMap[idx] = bestNcc * photometricUniquenessConfidenceScale(
+        bestNcc,
+        competingNcc,
+        minimumMargin,
+        minimumConfidenceScale);
+}
+
 /// 置信度阈值过滤
 __global__ void kernelFinalizeDepth(
     float *depthMap, const float *confMap, int W, int H, float confThresh)
@@ -2011,7 +2090,32 @@ bool PatchMatchDepthEstimator::estimateGPU(
         return false;
     }
 
-    // ── 置信度过滤 ────────────────────────────────────────────────
+    // ── 深度唯一性 + 置信度过滤 ──────────────────────────────────
+    if (config.enablePhotometricUniqueness)
+    {
+        kernelApplyPhotometricUniqueness<<<grid, block>>>(
+            d_depth,
+            d_normal,
+            d_conf,
+            d_ref,
+            sW,
+            sH,
+            d_srcPtrs,
+            d_srcData,
+            srcW,
+            srcH2,
+            N,
+            d_refMask,
+            d_srcMasks,
+            zNear,
+            zFar,
+            config.patchHalf,
+            config.minimumMaskedPatchSupportRatio,
+            config.photometricUniquenessRelativeDepthStep,
+            config.photometricUniquenessMinimumMargin,
+            config.photometricUniquenessMinimumConfidenceScale);
+        CUDA_CHECK(cudaGetLastError());
+    }
     kernelFinalizeDepth<<<grid, block>>>(d_depth, d_conf, sW, sH, config.confidenceThresh);
     CUDA_CHECK(cudaGetLastError());
 
@@ -2432,6 +2536,65 @@ bool PatchMatchDepthEstimator::estimateCPU(
         runRowSweep(true, baseSeed + 222222ULL, perturbation);
         runRowSweep(false, baseSeed + 333333ULL, perturbation);
         perturbation = std::max(perturbation * 0.5f, 0.02f);
+    }
+
+    if (config.enablePhotometricUniqueness && N >= 3)
+    {
+        cpuParallelForLines(H, cpuThreadCount, [&](int row)
+        {
+            float *confidence_row = confS.ptr<float>(row);
+            const float *depth_row = depthS.ptr<float>(row);
+            const cv::Vec3f *normal_row = normalS.ptr<cv::Vec3f>(row);
+            for (int col = 0; col < W; ++col)
+            {
+                const float depth = depth_row[col];
+                const float best_ncc = confidence_row[col];
+                if (!(depth > 0.0f) || !(best_ncc > 0.0f))
+                {
+                    continue;
+                }
+
+                const CpuNormal normal{
+                    normal_row[col][0], normal_row[col][1], normal_row[col][2]};
+                float competing_ncc = 0.0f;
+                const float relative_step =
+                    config.photometricUniquenessRelativeDepthStep;
+                const float lower_depth = std::max(
+                    zNear, depth * (1.0f - relative_step));
+                const float upper_depth = std::min(
+                    zFar, depth * (1.0f + relative_step));
+                const float minimum_distinct_depth = std::max(
+                    1e-6f, depth * relative_step * 0.25f);
+                if (depth - lower_depth >= minimum_distinct_depth)
+                {
+                    const float cost = cpuEvalHypCost(
+                        col, row, lower_depth, normal,
+                        refF, srcF,
+                        ref_mask_scaled, source_masks_scaled,
+                        srcDatas, config.patchHalf, invK,
+                        config.minimumMaskedPatchSupportRatio);
+                    competing_ncc = std::max(
+                        competing_ncc, 1.0f - cost * 0.5f);
+                }
+                if (upper_depth - depth >= minimum_distinct_depth)
+                {
+                    const float cost = cpuEvalHypCost(
+                        col, row, upper_depth, normal,
+                        refF, srcF,
+                        ref_mask_scaled, source_masks_scaled,
+                        srcDatas, config.patchHalf, invK,
+                        config.minimumMaskedPatchSupportRatio);
+                    competing_ncc = std::max(
+                        competing_ncc, 1.0f - cost * 0.5f);
+                }
+                confidence_row[col] = best_ncc *
+                    photometricUniquenessConfidenceScale(
+                        best_ncc,
+                        competing_ncc,
+                        config.photometricUniquenessMinimumMargin,
+                        config.photometricUniquenessMinimumConfidenceScale);
+            }
+        });
     }
 
     for (int row = 0; row < H; ++row)

@@ -815,6 +815,33 @@ TEST(VisibilityOccupancyHandleRepairTest, PreservesProtectedExteriorReachability
     EXPECT_EQ(result.statistics.protectedExteriorSampleCountAfter, 1U);
 }
 
+TEST(VisibilityOccupancyHandleRepairTest,
+     SealsUnprotectedExteriorPocketWhenTopologyImproves)
+{
+    const std::array<int, 3> dimensions{7, 7, 7};
+    auto occupied = solidOccupancyBlock(dimensions);
+    for (int x = 0; x <= 3; ++x)
+    {
+        occupied[occupancyIndex(dimensions, x, 3, 3)] = 0;
+    }
+    auto proposal = occupied;
+    const std::size_t seal = occupancyIndex(dimensions, 1, 3, 3);
+    proposal[seal] = 1;
+    const std::vector<std::uint8_t> protected_empty(occupied.size(), 0);
+
+    const auto result =
+        xjw::mesh::VisibilityOccupancyHandleRepair::repair(
+            dimensions, occupied, proposal, protected_empty);
+
+    ASSERT_TRUE(result.ok) << result.error;
+    EXPECT_EQ(result.occupied[seal], 1);
+    EXPECT_EQ(result.statistics.acceptedCandidateCount, 1);
+    EXPECT_EQ(result.statistics.rejectedProtectedReachabilityCandidateCount, 0);
+    EXPECT_GT(
+        result.statistics.bodyEulerAfter,
+        result.statistics.bodyEulerBefore);
+}
+
 TEST(VisibilityOccupancyHandleRepairTest, RejectsProposalThatRemovesFullSample)
 {
     const std::array<int, 3> dimensions{5, 5, 5};

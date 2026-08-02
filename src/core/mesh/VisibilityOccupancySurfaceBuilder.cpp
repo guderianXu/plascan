@@ -493,8 +493,13 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
     const int closing_iterations =
         std::clamp(options.closingIterations, 0, 8);
     result.statistics.effectiveClosingIterations = closing_iterations;
-    if (closing_iterations > 0)
+    bool recorded_initial_handle_euler = false;
+    const auto run_handle_repair = [&]() -> bool
     {
+        if (closing_iterations <= 0)
+        {
+            return true;
+        }
         VisibilityOccupancyHandleRepairOptions repair_options;
         repair_options.maximumAcceptedCandidateCount = std::max(
             0, options.maximumHandleRepairAcceptedCandidateCount);
@@ -507,7 +512,6 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
         repair_options.isCancelled = options.isCancelled;
         const int maximum_passes = std::clamp(
             options.maximumHandleRepairPasses, 1, 16);
-        bool recorded_initial_euler = false;
         for (int pass = 0; pass < maximum_passes; ++pass)
         {
             std::vector<std::uint8_t> closing_proposal = result.occupied;
@@ -552,13 +556,13 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
                 result.error = repair.cancelled
                     ? "visibility occupancy handle repair cancelled"
                     : repair.error;
-                return result;
+                return false;
             }
-            if (!recorded_initial_euler)
+            if (!recorded_initial_handle_euler)
             {
                 result.statistics.handleRepairBodyEulerBefore =
                     repair.statistics.bodyEulerBefore;
-                recorded_initial_euler = true;
+                recorded_initial_handle_euler = true;
             }
             result.occupied = repair.occupied;
             result.statistics.closingChangedSampleCount +=
@@ -591,9 +595,16 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
                 break;
             }
         }
-    }
-    if (options.repairNonManifoldConfigurations)
+        return true;
+    };
+
+    bool recorded_initial_well_composed_euler = false;
+    const auto run_well_composed_repair = [&]() -> bool
     {
+        if (!options.repairNonManifoldConfigurations)
+        {
+            return true;
+        }
         VisibilityOccupancyWellComposedRepairOptions repair_options;
         repair_options.maximumPasses = std::clamp(
             options.wellComposedRepairMaximumPasses, 1, 16);
@@ -612,15 +623,19 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
             result.error = repair.cancelled
                 ? "visibility occupancy well-composed repair cancelled"
                 : repair.error;
-            return result;
+            return false;
         }
         result.occupied = repair.occupied;
-        result.statistics.wellComposedRepairFilledSampleCount =
+        result.statistics.wellComposedRepairFilledSampleCount +=
             repair.statistics.filledSampleCount;
-        result.statistics.wellComposedRepairAcceptedPassCount =
+        result.statistics.wellComposedRepairAcceptedPassCount +=
             repair.statistics.acceptedPassCount;
-        result.statistics.wellComposedRepairBodyEulerBefore =
-            repair.statistics.bodyEulerBefore;
+        if (!recorded_initial_well_composed_euler)
+        {
+            result.statistics.wellComposedRepairBodyEulerBefore =
+                repair.statistics.bodyEulerBefore;
+            recorded_initial_well_composed_euler = true;
+        }
         result.statistics.wellComposedRepairBodyEulerAfter =
             repair.statistics.bodyEulerAfter;
         result.statistics.wellComposedRepairRemainingEdgeCheckerboardCount =
@@ -632,6 +647,34 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
         result.statistics
             .wellComposedRepairRemainingVertexEmptyComponentDefectCount =
             repair.statistics.remainingVertexEmptyComponentDefectCount;
+        return true;
+    };
+
+    // Handle repair and well-composed repair only add occupied samples. One
+    // pass may convert an exterior-connected pocket into an internal cavity;
+    // removing that cavity can in turn expose a simpler handle-repair
+    // candidate. Iterate this sequence to a fixed point while every observed
+    // exterior ray remains protected by the repair transactions.
+    constexpr int maximum_topology_cleanup_cycles = 8;
+    for (int cycle = 0; cycle < maximum_topology_cleanup_cycles; ++cycle)
+    {
+        const std::vector<std::uint8_t> before_cycle = result.occupied;
+        if (!run_handle_repair() || !run_well_composed_repair())
+        {
+            return result;
+        }
+        if (options.fillInteriorEmptyBubbles)
+        {
+            result.statistics.filledInteriorEmptySampleCount +=
+                detail::fillInteriorVisibilityEmptyBubbles(
+                    result.sampleDimensions,
+                    &result.occupied,
+                    &protected_empty);
+        }
+        if (result.occupied == before_cycle)
+        {
+            break;
+        }
     }
     for (const std::uint8_t value : result.occupied)
     {

@@ -93,6 +93,12 @@ QJsonObject MvsDepthFrameRecord::toJson() const
     object.insert(
         QStringLiteral("geometry_evidence_diagnostics"),
         geometryEvidenceDiagnostics);
+    object.insert(QStringLiteral("pose_refinement_diagnostics"),
+                  poseRefinementDiagnostics);
+    if (!derivedCameraModel.isEmpty())
+    {
+        object.insert(QStringLiteral("derived_camera_model"), derivedCameraModel);
+    }
     object.insert(QStringLiteral("quality_decision"), qualityDecision);
     object.insert(QStringLiteral("pyramid_levels"), pyramidLevels);
     object.insert(QStringLiteral("mask_source"), maskSource);
@@ -174,6 +180,10 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
         QStringLiteral("cross_view_repair_diagnostics")).toObject();
     record.geometryEvidenceDiagnostics = object.value(
         QStringLiteral("geometry_evidence_diagnostics")).toObject();
+    record.poseRefinementDiagnostics = object.value(
+        QStringLiteral("pose_refinement_diagnostics")).toObject();
+    record.derivedCameraModel = object.value(
+        QStringLiteral("derived_camera_model")).toObject();
     record.qualityDecision = object.value(QStringLiteral("quality_decision")).toObject();
     record.pyramidLevels = object.value(QStringLiteral("pyramid_levels")).toArray();
     record.maskSource = object.value(QStringLiteral("mask_source")).toString();
@@ -474,6 +484,15 @@ void MvsWorkspaceManifest::markCompleted(const MvsDepthFrameRecord &record)
     {
         completed.cameraModel = _frames[index].cameraModel;
     }
+    if (completed.poseRefinementDiagnostics.isEmpty() && index >= 0)
+    {
+        completed.poseRefinementDiagnostics =
+            _frames[index].poseRefinementDiagnostics;
+    }
+    if (completed.derivedCameraModel.isEmpty() && index >= 0)
+    {
+        completed.derivedCameraModel = _frames[index].derivedCameraModel;
+    }
     completed.status = QStringLiteral("completed");
     completed.error.clear();
     upsertFrame(completed);
@@ -493,6 +512,20 @@ void MvsWorkspaceManifest::markFailed(int refIndex, const QString &error)
     upsertFrame(record);
 }
 
+void MvsWorkspaceManifest::updatePoseRefinement(
+    int refIndex,
+    const QJsonObject &diagnostics,
+    const QJsonObject &derivedCameraModel)
+{
+    const int index = findFrameIndex(refIndex);
+    if (index < 0)
+    {
+        return;
+    }
+    _frames[index].poseRefinementDiagnostics = diagnostics;
+    _frames[index].derivedCameraModel = derivedCameraModel;
+}
+
 bool MvsWorkspaceManifest::hasReusableCompletedFrame(int refIndex, const QString &configHash) const
 {
     const int index = findFrameIndex(refIndex);
@@ -501,7 +534,9 @@ bool MvsWorkspaceManifest::hasReusableCompletedFrame(int refIndex, const QString
         return false;
     }
     const MvsDepthFrameRecord &record = _frames[index];
-    if (record.status != QStringLiteral("completed") || record.configHash != configHash)
+    if (record.status != QStringLiteral("completed") ||
+        record.configHash != configHash ||
+        record.algorithmRevision != kMvsDepthAlgorithmRevision)
     {
         return false;
     }
@@ -567,6 +602,14 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
     patch.insert(QStringLiteral("patch_half"), config.patchMatch.patchHalf);
     patch.insert(QStringLiteral("num_source_views"), config.patchMatch.numSourceViews);
     patch.insert(QStringLiteral("confidence_thresh"), config.patchMatch.confidenceThresh);
+    patch.insert(QStringLiteral("photometric_uniqueness"),
+                 config.patchMatch.enablePhotometricUniqueness);
+    patch.insert(QStringLiteral("photometric_uniqueness_relative_depth_step"),
+                 config.patchMatch.photometricUniquenessRelativeDepthStep);
+    patch.insert(QStringLiteral("photometric_uniqueness_minimum_margin"),
+                 config.patchMatch.photometricUniquenessMinimumMargin);
+    patch.insert(QStringLiteral("photometric_uniqueness_minimum_confidence_scale"),
+                 config.patchMatch.photometricUniquenessMinimumConfidenceScale);
     patch.insert(QStringLiteral("use_cuda"), config.patchMatch.useCuda);
     patch.insert(QStringLiteral("downsample_factor"), config.patchMatch.downsampleFactor);
     patch.insert(QStringLiteral("median_blur"), config.patchMatch.doMedianBlur);
@@ -620,6 +663,66 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
     root.insert(QStringLiteral("adaptive_depth_filter_mode"), config.adaptiveDepthFilterMode);
     root.insert(QStringLiteral("enable_adaptive_geometry_evidence"),
                 config.enableAdaptiveGeometryEvidence);
+    const DepthPoseRefinementOptions &pose_refinement =
+        config.depthPoseRefinement;
+    QJsonObject pose_refinement_json;
+    pose_refinement_json.insert(QStringLiteral("enabled"),
+                                pose_refinement.enabled);
+    pose_refinement_json.insert(
+        QStringLiteral("emit_derived_camera_candidates"),
+        pose_refinement.emitDerivedCameraCandidates);
+    pose_refinement_json.insert(QStringLiteral("sampling_stride_pixels"),
+                                pose_refinement.samplingStridePixels);
+    pose_refinement_json.insert(QStringLiteral("maximum_samples_per_camera"),
+                                pose_refinement.maximumSamplesPerCamera);
+    pose_refinement_json.insert(
+        QStringLiteral("maximum_source_frames_per_camera"),
+        pose_refinement.maximumSourceFramesPerCamera);
+    pose_refinement_json.insert(
+        QStringLiteral("minimum_adaptive_support_weight"),
+        pose_refinement.minimumAdaptiveSupportWeight);
+    pose_refinement_json.insert(
+        QStringLiteral("minimum_adaptive_effective_view_count"),
+        pose_refinement.minimumAdaptiveEffectiveViewCount);
+    pose_refinement_json.insert(
+        QStringLiteral("maximum_adaptive_conflict_ratio"),
+        pose_refinement.maximumAdaptiveConflictRatio);
+    pose_refinement_json.insert(
+        QStringLiteral("maximum_correspondence_relative_depth_error"),
+        pose_refinement.maximumCorrespondenceRelativeDepthError);
+    pose_refinement_json.insert(
+        QStringLiteral("occlusion_relative_depth_tolerance"),
+        pose_refinement.occlusionRelativeDepthTolerance);
+    pose_refinement_json.insert(
+        QStringLiteral("minimum_evidence_sample_coverage"),
+        pose_refinement.minimumEvidenceSampleCoverage);
+    pose_refinement_json.insert(
+        QStringLiteral("minimum_projection_retention_ratio"),
+        pose_refinement.minimumProjectionRetentionRatio);
+    pose_refinement_json.insert(
+        QStringLiteral("anchor_camera_index"),
+        pose_refinement.optimizer.anchorCameraIndex);
+    pose_refinement_json.insert(
+        QStringLiteral("maximum_iterations"),
+        pose_refinement.optimizer.maximumIterations);
+    pose_refinement_json.insert(
+        QStringLiteral("minimum_correspondences"),
+        pose_refinement.optimizer.minimumCorrespondences);
+    pose_refinement_json.insert(QStringLiteral("huber_delta"),
+                                pose_refinement.optimizer.huberDelta);
+    pose_refinement_json.insert(QStringLiteral("maximum_translation"),
+                                pose_refinement.optimizer.maximumTranslation);
+    pose_refinement_json.insert(
+        QStringLiteral("maximum_rotation_degrees"),
+        pose_refinement.optimizer.maximumRotationDegrees);
+    pose_refinement_json.insert(
+        QStringLiteral("required_p90_improvement_ratio"),
+        pose_refinement.optimizer.requiredP90ImprovementRatio);
+    if (pose_refinement.enabled)
+    {
+        root.insert(QStringLiteral("depth_pose_refinement"),
+                    pose_refinement_json);
+    }
     root.insert(QStringLiteral("cross_view_hole_repair_source_count"),
                 config.crossViewHoleRepairSourceCount);
     root.insert(QStringLiteral("two_source_cross_view_growth"),

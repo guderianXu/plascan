@@ -270,6 +270,12 @@ def load_mesh(path: Path) -> trimesh.Trimesh:
         raise ValueError(f"Mesh contains no triangles: {path}")
     if not np.isfinite(mesh.vertices).all():
         raise ValueError(f"Mesh contains non-finite vertices: {path}")
+    # PLY/OBJ loaders must duplicate a geometric vertex when adjacent faces use
+    # different UVs, normals, or camera/material assignments.  Those rendering
+    # seams are not geometric boundaries; leaving them split makes a textured
+    # Metashape mesh appear to have thousands of components and open edges.
+    mesh.merge_vertices(merge_tex=True, merge_norm=True)
+    mesh.remove_unreferenced_vertices()
     return mesh
 
 

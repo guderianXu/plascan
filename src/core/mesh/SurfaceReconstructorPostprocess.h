@@ -30,6 +30,8 @@ void removeSmallConnectedComponents(TriMesh *mesh,
 int removeDuplicateFaces(TriMesh *mesh);
 int removeNonManifoldFaces(TriMesh *mesh);
 int splitPinchedBoundaryVertices(TriMesh *mesh);
+bool fillCurvatureAwareBoundaryPatch(TriMesh *mesh,
+                                     const std::vector<int> &boundaryLoop);
 int fillSmallBoundaryHoles(TriMesh *mesh,
                            int maxBoundaryEdges,
                            float maxBoundaryDiameter = 0.0f,

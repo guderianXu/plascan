@@ -8,6 +8,7 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QSet>
 
 #include <opencv2/imgcodecs.hpp>
 
@@ -70,6 +71,35 @@ bool readJsonObject(const QString &path, QJsonObject *object, QString *errorMess
     }
     *object = document.object();
     return true;
+}
+
+QString resolveManifestPath(const QString &manifestPath, const QString &storedPath)
+{
+    const QString trimmedPath = storedPath.trimmed();
+    if (trimmedPath.isEmpty())
+    {
+        return QString();
+    }
+
+    QFileInfo pathInfo(trimmedPath);
+    if (pathInfo.isRelative())
+    {
+        const QDir manifestDirectory(QFileInfo(manifestPath).absolutePath());
+        pathInfo.setFile(manifestDirectory.filePath(trimmedPath));
+    }
+
+    const QString canonicalPath = pathInfo.canonicalFilePath();
+    return QDir::cleanPath(
+        canonicalPath.isEmpty() ? pathInfo.absoluteFilePath() : canonicalPath);
+}
+
+QString replayImageIdentity(const QString &path)
+{
+    QString identity = QDir::fromNativeSeparators(QDir::cleanPath(path));
+#ifdef Q_OS_WIN
+    identity = identity.toCaseFolded();
+#endif
+    return identity;
 }
 
 } // namespace
@@ -175,6 +205,7 @@ bool loadMvsReplayViews(const QString &manifestPath,
     }
 
     views->reserve(recordsByIndex.size());
+    QSet<QString> replayImageIdentities;
     int expectedIndex = 0;
     for (const auto &[index, record] : recordsByIndex)
     {
@@ -191,7 +222,7 @@ bool loadMvsReplayViews(const QString &manifestPath,
             return false;
         }
 
-        const QString imagePath = QFileInfo(record.refImage).absoluteFilePath();
+        const QString imagePath = resolveManifestPath(manifestPath, record.refImage);
         if (!QFileInfo::exists(imagePath))
         {
             if (errorMessage)
@@ -202,6 +233,20 @@ bool loadMvsReplayViews(const QString &manifestPath,
             views->clear();
             return false;
         }
+        const QString imageIdentity = replayImageIdentity(imagePath);
+        if (replayImageIdentities.contains(imageIdentity))
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral(
+                    "MVS manifest 含重复 ref_image：第 %1 帧与已有帧指向同一影像 %2")
+                                    .arg(index)
+                                    .arg(QDir::toNativeSeparators(imagePath));
+            }
+            views->clear();
+            return false;
+        }
+        replayImageIdentities.insert(imageIdentity);
 
         CameraView view;
         view.imagePath = xjw::common::io::toUtf8Path(imagePath);
@@ -284,12 +329,16 @@ bool loadMvsPairAuditReport(
     for (const QJsonValue &value : pairs)
     {
         const QJsonObject pair = value.toObject();
-        const QString imageA = pair.value(QStringLiteral("image_a")).toString().trimmed();
-        const QString imageB = pair.value(QStringLiteral("image_b")).toString().trimmed();
-        if (imageA.isEmpty() || imageB.isEmpty())
+        const QString storedImageA =
+            pair.value(QStringLiteral("image_a")).toString().trimmed();
+        const QString storedImageB =
+            pair.value(QStringLiteral("image_b")).toString().trimmed();
+        if (storedImageA.isEmpty() || storedImageB.isEmpty())
         {
             continue;
         }
+        const QString imageA = resolveManifestPath(reportPath, storedImageA);
+        const QString imageB = resolveManifestPath(reportPath, storedImageB);
 
         MvsSourcePairQuality quality;
         quality.imageA = xjw::common::io::toUtf8Path(imageA);

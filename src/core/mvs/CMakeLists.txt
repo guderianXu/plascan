@@ -26,6 +26,7 @@ set(MVS_CXX_SOURCES
     DepthCrossViewHoleRepair.cpp
     DepthGeometryConsistency.cpp
     DepthPoseAlignmentRefiner.cpp
+    DepthPoseRefinementStage.cpp
     DepthMapFusion.cpp
     DepthFrameQualityGate.cpp
     DepthPyramidPolicy.cpp
@@ -67,6 +68,7 @@ set(MVS_HEADERS
     DepthCrossViewHoleRepair.h
     DepthGeometryConsistency.h
     DepthPoseAlignmentRefiner.h
+    DepthPoseRefinementStage.h
     MvsTypes.h
     MvsSourcePlanner.h
     MvsQualityReport.h

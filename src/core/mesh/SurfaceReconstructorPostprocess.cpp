@@ -826,6 +826,496 @@ double boundaryTriangleAspect(const TriMesh &mesh,
         : std::numeric_limits<double>::infinity();
 }
 
+using PatchVector = std::array<double, 3>;
+
+PatchVector subtractPatchVector(const PatchVector &left,
+                                const PatchVector &right)
+{
+    return {{left[0] - right[0],
+             left[1] - right[1],
+             left[2] - right[2]}};
+}
+
+PatchVector addPatchVector(const PatchVector &left,
+                           const PatchVector &right)
+{
+    return {{left[0] + right[0],
+             left[1] + right[1],
+             left[2] + right[2]}};
+}
+
+PatchVector scalePatchVector(const PatchVector &value, double scale)
+{
+    return {{value[0] * scale, value[1] * scale, value[2] * scale}};
+}
+
+double dotPatchVector(const PatchVector &left, const PatchVector &right)
+{
+    return left[0] * right[0] + left[1] * right[1] +
+        left[2] * right[2];
+}
+
+PatchVector crossPatchVector(const PatchVector &left,
+                             const PatchVector &right)
+{
+    return {{left[1] * right[2] - left[2] * right[1],
+             left[2] * right[0] - left[0] * right[2],
+             left[0] * right[1] - left[1] * right[0]}};
+}
+
+bool normalizePatchVector(PatchVector *value)
+{
+    if (!value)
+    {
+        return false;
+    }
+    const double magnitude = std::sqrt(dotPatchVector(*value, *value));
+    if (!std::isfinite(magnitude) || magnitude <= 1.0e-12)
+    {
+        return false;
+    }
+    *value = scalePatchVector(*value, 1.0 / magnitude);
+    return true;
+}
+
+PatchVector patchPosition(const MeshVertex &vertex)
+{
+    return {{vertex.x, vertex.y, vertex.z}};
+}
+
+struct BoundaryPatchFrame
+{
+    PatchVector origin{};
+    PatchVector tangent{};
+    PatchVector bitangent{};
+    PatchVector normal{};
+    double scale = 0.0;
+};
+
+bool buildBoundaryPatchFrame(const TriMesh &mesh,
+                             const std::vector<int> &loop,
+                             BoundaryPatchFrame *frame)
+{
+    if (!frame || loop.size() < 3)
+    {
+        return false;
+    }
+
+    PatchVector origin{};
+    PatchVector newell_normal{};
+    PatchVector average_normal{};
+    for (std::size_t index = 0; index < loop.size(); ++index)
+    {
+        const MeshVertex &current =
+            mesh.vertices[static_cast<std::size_t>(loop[index])];
+        const MeshVertex &next = mesh.vertices[
+            static_cast<std::size_t>(loop[(index + 1) % loop.size()])];
+        origin = addPatchVector(origin, patchPosition(current));
+        newell_normal[0] += (current.y - next.y) * (current.z + next.z);
+        newell_normal[1] += (current.z - next.z) * (current.x + next.x);
+        newell_normal[2] += (current.x - next.x) * (current.y + next.y);
+        average_normal = addPatchVector(
+            average_normal, {{current.nx, current.ny, current.nz}});
+    }
+    origin = scalePatchVector(origin, 1.0 / static_cast<double>(loop.size()));
+    if (!normalizePatchVector(&newell_normal))
+    {
+        newell_normal = average_normal;
+        if (!normalizePatchVector(&newell_normal))
+        {
+            return false;
+        }
+    }
+    if (normalizePatchVector(&average_normal) &&
+        dotPatchVector(newell_normal, average_normal) < 0.0)
+    {
+        newell_normal = scalePatchVector(newell_normal, -1.0);
+    }
+
+    PatchVector tangent{};
+    double maximum_tangent_length = 0.0;
+    for (const int vertex_index : loop)
+    {
+        const PatchVector offset = subtractPatchVector(
+            patchPosition(mesh.vertices[static_cast<std::size_t>(vertex_index)]),
+            origin);
+        const PatchVector planar = subtractPatchVector(
+            offset,
+            scalePatchVector(newell_normal,
+                             dotPatchVector(offset, newell_normal)));
+        const double length = dotPatchVector(planar, planar);
+        if (length > maximum_tangent_length)
+        {
+            maximum_tangent_length = length;
+            tangent = planar;
+        }
+    }
+    if (!normalizePatchVector(&tangent))
+    {
+        return false;
+    }
+    PatchVector bitangent = crossPatchVector(newell_normal, tangent);
+    if (!normalizePatchVector(&bitangent))
+    {
+        return false;
+    }
+
+    double scale = 0.0;
+    for (const int vertex_index : loop)
+    {
+        const PatchVector offset = subtractPatchVector(
+            patchPosition(mesh.vertices[static_cast<std::size_t>(vertex_index)]),
+            origin);
+        const double u = dotPatchVector(offset, tangent);
+        const double v = dotPatchVector(offset, bitangent);
+        scale = std::max(scale, std::sqrt(u * u + v * v));
+    }
+    if (!std::isfinite(scale) || scale <= 1.0e-8)
+    {
+        return false;
+    }
+    frame->origin = origin;
+    frame->tangent = tangent;
+    frame->bitangent = bitangent;
+    frame->normal = newell_normal;
+    frame->scale = scale;
+    return true;
+}
+
+std::array<double, 3> boundaryPatchCoordinates(
+    const BoundaryPatchFrame &frame,
+    const MeshVertex &vertex)
+{
+    const PatchVector offset = subtractPatchVector(
+        patchPosition(vertex), frame.origin);
+    return {{dotPatchVector(offset, frame.tangent) / frame.scale,
+             dotPatchVector(offset, frame.bitangent) / frame.scale,
+             dotPatchVector(offset, frame.normal) / frame.scale}};
+}
+
+bool solveBoundaryPatchSystem(double matrix[6][7],
+                              std::array<double, 6> *solution)
+{
+    if (!solution)
+    {
+        return false;
+    }
+    for (int pivot = 0; pivot < 6; ++pivot)
+    {
+        int best_row = pivot;
+        for (int row = pivot + 1; row < 6; ++row)
+        {
+            if (std::abs(matrix[row][pivot]) >
+                std::abs(matrix[best_row][pivot]))
+            {
+                best_row = row;
+            }
+        }
+        if (!std::isfinite(matrix[best_row][pivot]) ||
+            std::abs(matrix[best_row][pivot]) <= 1.0e-12)
+        {
+            return false;
+        }
+        if (best_row != pivot)
+        {
+            for (int column = pivot; column < 7; ++column)
+            {
+                std::swap(matrix[pivot][column], matrix[best_row][column]);
+            }
+        }
+        const double inverse_pivot = 1.0 / matrix[pivot][pivot];
+        for (int column = pivot; column < 7; ++column)
+        {
+            matrix[pivot][column] *= inverse_pivot;
+        }
+        for (int row = 0; row < 6; ++row)
+        {
+            if (row == pivot)
+            {
+                continue;
+            }
+            const double factor = matrix[row][pivot];
+            for (int column = pivot; column < 7; ++column)
+            {
+                matrix[row][column] -= factor * matrix[pivot][column];
+            }
+        }
+    }
+    for (int row = 0; row < 6; ++row)
+    {
+        (*solution)[static_cast<std::size_t>(row)] = matrix[row][6];
+    }
+    return true;
+}
+
+struct BoundaryPatchQuadric
+{
+    std::array<double, 6> coefficients{};
+    double minimumHeight = -0.1;
+    double maximumHeight = 0.1;
+};
+
+double evaluateBoundaryPatchQuadric(const BoundaryPatchQuadric &quadric,
+                                    double u,
+                                    double v)
+{
+    return quadric.coefficients[0] * u * u +
+        quadric.coefficients[1] * u * v +
+        quadric.coefficients[2] * v * v +
+        quadric.coefficients[3] * u +
+        quadric.coefficients[4] * v +
+        quadric.coefficients[5];
+}
+
+BoundaryPatchQuadric fitBoundaryPatchQuadric(
+    const TriMesh &mesh,
+    const std::vector<int> &loop,
+    const BoundaryPatchFrame &frame)
+{
+    BoundaryPatchQuadric quadric;
+    std::vector<double> sample_weights(mesh.vertices.size(), 0.0);
+    for (const int vertex_index : loop)
+    {
+        sample_weights[static_cast<std::size_t>(vertex_index)] = 2.0;
+    }
+    for (const Triangle &face : mesh.faces)
+    {
+        bool touches_boundary = false;
+        for (const int vertex_index : face.v)
+        {
+            if (vertex_index >= 0 &&
+                static_cast<std::size_t>(vertex_index) < sample_weights.size() &&
+                sample_weights[static_cast<std::size_t>(vertex_index)] >= 2.0)
+            {
+                touches_boundary = true;
+                break;
+            }
+        }
+        if (!touches_boundary)
+        {
+            continue;
+        }
+        for (const int vertex_index : face.v)
+        {
+            if (vertex_index >= 0 &&
+                static_cast<std::size_t>(vertex_index) < sample_weights.size())
+            {
+                sample_weights[static_cast<std::size_t>(vertex_index)] =
+                    std::max(sample_weights[static_cast<std::size_t>(vertex_index)],
+                             1.0);
+            }
+        }
+    }
+
+    double normal_matrix[6][7]{};
+    double minimum_height = std::numeric_limits<double>::infinity();
+    double maximum_height = -std::numeric_limits<double>::infinity();
+    int sample_count = 0;
+    for (std::size_t vertex_index = 0;
+         vertex_index < sample_weights.size();
+         ++vertex_index)
+    {
+        const double weight = sample_weights[vertex_index];
+        if (weight <= 0.0)
+        {
+            continue;
+        }
+        const auto coordinates = boundaryPatchCoordinates(
+            frame, mesh.vertices[vertex_index]);
+        const double features[6]{
+            coordinates[0] * coordinates[0],
+            coordinates[0] * coordinates[1],
+            coordinates[1] * coordinates[1],
+            coordinates[0],
+            coordinates[1],
+            1.0};
+        for (int row = 0; row < 6; ++row)
+        {
+            for (int column = 0; column < 6; ++column)
+            {
+                normal_matrix[row][column] +=
+                    weight * features[row] * features[column];
+            }
+            normal_matrix[row][6] +=
+                weight * features[row] * coordinates[2];
+        }
+        minimum_height = std::min(minimum_height, coordinates[2]);
+        maximum_height = std::max(maximum_height, coordinates[2]);
+        ++sample_count;
+    }
+
+    if (sample_count >= 6)
+    {
+        double diagonal_scale = 0.0;
+        for (int diagonal = 0; diagonal < 6; ++diagonal)
+        {
+            diagonal_scale += normal_matrix[diagonal][diagonal];
+        }
+        const double regularization =
+            std::max(1.0e-10, diagonal_scale * 1.0e-8);
+        for (int diagonal = 0; diagonal < 6; ++diagonal)
+        {
+            normal_matrix[diagonal][diagonal] += regularization;
+        }
+        solveBoundaryPatchSystem(normal_matrix, &quadric.coefficients);
+    }
+
+    if (std::isfinite(minimum_height) && std::isfinite(maximum_height))
+    {
+        const double margin = std::max(
+            0.10, 2.0 * std::max(0.0, maximum_height - minimum_height));
+        quadric.minimumHeight = minimum_height - margin;
+        quadric.maximumHeight = maximum_height + margin;
+    }
+    return quadric;
+}
+
+MeshVertex makeBoundaryPatchVertex(const TriMesh &mesh,
+                                   const std::vector<int> &loop,
+                                   const BoundaryPatchFrame &frame,
+                                   const BoundaryPatchQuadric &quadric,
+                                   double loop_parameter,
+                                   double radius,
+                                   const std::vector<double> &edge_lengths,
+                                   double perimeter)
+{
+    const double target_length =
+        std::clamp(loop_parameter, 0.0, 1.0) * perimeter;
+    std::size_t edge_index = 0;
+    double accumulated = 0.0;
+    while (edge_index + 1 < edge_lengths.size() &&
+           accumulated + edge_lengths[edge_index] < target_length)
+    {
+        accumulated += edge_lengths[edge_index];
+        ++edge_index;
+    }
+    const double edge_length = edge_lengths[edge_index];
+    const double alpha = edge_length > 1.0e-12
+        ? std::clamp((target_length - accumulated) / edge_length, 0.0, 1.0)
+        : 0.0;
+    const MeshVertex &first = mesh.vertices[
+        static_cast<std::size_t>(loop[edge_index])];
+    const MeshVertex &second = mesh.vertices[
+        static_cast<std::size_t>(loop[(edge_index + 1) % loop.size()])];
+    const auto first_coordinates = boundaryPatchCoordinates(frame, first);
+    const auto second_coordinates = boundaryPatchCoordinates(frame, second);
+    const double boundary_u =
+        first_coordinates[0] * (1.0 - alpha) + second_coordinates[0] * alpha;
+    const double boundary_v =
+        first_coordinates[1] * (1.0 - alpha) + second_coordinates[1] * alpha;
+    const double boundary_height =
+        first_coordinates[2] * (1.0 - alpha) + second_coordinates[2] * alpha;
+    const double fit_boundary_height = evaluateBoundaryPatchQuadric(
+        quadric, boundary_u, boundary_v);
+    const double u = boundary_u * radius;
+    const double v = boundary_v * radius;
+    double height = evaluateBoundaryPatchQuadric(quadric, u, v) +
+        radius * (boundary_height - fit_boundary_height);
+    height = std::clamp(
+        height, quadric.minimumHeight, quadric.maximumHeight);
+
+    const PatchVector position = addPatchVector(
+        frame.origin,
+        scalePatchVector(
+            addPatchVector(
+                addPatchVector(
+                    scalePatchVector(frame.tangent, u),
+                    scalePatchVector(frame.bitangent, v)),
+                scalePatchVector(frame.normal, height)),
+            frame.scale));
+
+    const double derivative_u =
+        2.0 * quadric.coefficients[0] * u +
+        quadric.coefficients[1] * v + quadric.coefficients[3];
+    const double derivative_v =
+        quadric.coefficients[1] * u +
+        2.0 * quadric.coefficients[2] * v + quadric.coefficients[4];
+    PatchVector fitted_normal = addPatchVector(
+        frame.normal,
+        addPatchVector(
+            scalePatchVector(frame.tangent, -derivative_u),
+            scalePatchVector(frame.bitangent, -derivative_v)));
+    normalizePatchVector(&fitted_normal);
+    PatchVector boundary_normal{{
+        first.nx * (1.0 - alpha) + second.nx * alpha,
+        first.ny * (1.0 - alpha) + second.ny * alpha,
+        first.nz * (1.0 - alpha) + second.nz * alpha}};
+    if (!normalizePatchVector(&boundary_normal))
+    {
+        boundary_normal = fitted_normal;
+    }
+    if (dotPatchVector(boundary_normal, fitted_normal) < 0.0)
+    {
+        fitted_normal = scalePatchVector(fitted_normal, -1.0);
+    }
+    PatchVector blended_normal = addPatchVector(
+        scalePatchVector(boundary_normal, radius),
+        scalePatchVector(fitted_normal, 1.0 - radius));
+    normalizePatchVector(&blended_normal);
+
+    MeshVertex vertex;
+    vertex.x = static_cast<float>(position[0]);
+    vertex.y = static_cast<float>(position[1]);
+    vertex.z = static_cast<float>(position[2]);
+    vertex.nx = static_cast<float>(blended_normal[0]);
+    vertex.ny = static_cast<float>(blended_normal[1]);
+    vertex.nz = static_cast<float>(blended_normal[2]);
+    vertex.r = static_cast<std::uint8_t>(std::lround(
+        first.r * (1.0 - alpha) + second.r * alpha));
+    vertex.g = static_cast<std::uint8_t>(std::lround(
+        first.g * (1.0 - alpha) + second.g * alpha));
+    vertex.b = static_cast<std::uint8_t>(std::lround(
+        first.b * (1.0 - alpha) + second.b * alpha));
+    return vertex;
+}
+
+void appendBoundaryPatchAnnulus(const std::vector<int> &outer,
+                                const std::vector<double> &outer_parameters,
+                                const std::vector<int> &inner,
+                                const std::vector<double> &inner_parameters,
+                                std::vector<Triangle> *faces)
+{
+    if (!faces || outer.size() < 3 || inner.size() < 3)
+    {
+        return;
+    }
+    std::size_t outer_index = 0;
+    std::size_t inner_index = 0;
+    constexpr double epsilon = 1.0e-10;
+    while (outer_index < outer.size() || inner_index < inner.size())
+    {
+        const double next_outer = outer_index + 1 < outer.size()
+            ? outer_parameters[outer_index + 1]
+            : 1.0;
+        const double next_inner = inner_index + 1 < inner.size()
+            ? inner_parameters[inner_index + 1]
+            : 1.0;
+        const int outer_current = outer[outer_index % outer.size()];
+        const int inner_current = inner[inner_index % inner.size()];
+        if (std::abs(next_outer - next_inner) <= epsilon)
+        {
+            const int outer_next = outer[(outer_index + 1) % outer.size()];
+            const int inner_next = inner[(inner_index + 1) % inner.size()];
+            faces->push_back(Triangle{{outer_current, outer_next, inner_current}});
+            faces->push_back(Triangle{{outer_next, inner_next, inner_current}});
+            ++outer_index;
+            ++inner_index;
+        }
+        else if (next_outer < next_inner)
+        {
+            const int outer_next = outer[(outer_index + 1) % outer.size()];
+            faces->push_back(Triangle{{outer_current, outer_next, inner_current}});
+            ++outer_index;
+        }
+        else
+        {
+            const int inner_next = inner[(inner_index + 1) % inner.size()];
+            faces->push_back(Triangle{{outer_current, inner_next, inner_current}});
+            ++inner_index;
+        }
+    }
+}
+
 bool triangulateBoundaryLoop(const TriMesh &mesh,
                              const std::vector<int> &loop,
                              const std::unordered_map<std::uint64_t, int> &
@@ -991,6 +1481,190 @@ bool triangulateBoundaryLoop(const TriMesh &mesh,
 }
 
 } // namespace
+
+bool fillCurvatureAwareBoundaryPatch(TriMesh *mesh,
+                                     const std::vector<int> &boundaryLoop)
+{
+    if (!mesh || boundaryLoop.size() < 6 || mesh->vertices.empty())
+    {
+        return false;
+    }
+    for (const int vertex_index : boundaryLoop)
+    {
+        if (vertex_index < 0 ||
+            static_cast<std::size_t>(vertex_index) >= mesh->vertices.size())
+        {
+            return false;
+        }
+    }
+
+    BoundaryPatchFrame frame;
+    if (!buildBoundaryPatchFrame(*mesh, boundaryLoop, &frame))
+    {
+        return false;
+    }
+    const BoundaryPatchQuadric quadric = fitBoundaryPatchQuadric(
+        *mesh, boundaryLoop, frame);
+
+    std::vector<double> boundary_edge_lengths(boundaryLoop.size(), 0.0);
+    std::vector<double> boundary_parameters(boundaryLoop.size(), 0.0);
+    double perimeter = 0.0;
+    for (std::size_t index = 0; index < boundaryLoop.size(); ++index)
+    {
+        const PatchVector current = patchPosition(mesh->vertices[
+            static_cast<std::size_t>(boundaryLoop[index])]);
+        const PatchVector next = patchPosition(mesh->vertices[
+            static_cast<std::size_t>(boundaryLoop[(index + 1) %
+                                                   boundaryLoop.size()])]);
+        boundary_parameters[index] = perimeter;
+        const PatchVector edge = subtractPatchVector(next, current);
+        boundary_edge_lengths[index] = std::sqrt(dotPatchVector(edge, edge));
+        perimeter += boundary_edge_lengths[index];
+    }
+    if (!std::isfinite(perimeter) || perimeter <= 1.0e-8)
+    {
+        return false;
+    }
+    for (double &parameter : boundary_parameters)
+    {
+        parameter /= perimeter;
+    }
+
+    const int first_ring_count = std::max(
+        3, static_cast<int>(std::ceil(boundaryLoop.size() * 0.45)));
+    const bool use_second_ring = boundaryLoop.size() >= 18;
+    const int second_ring_count = use_second_ring
+        ? std::max(3, static_cast<int>(std::ceil(boundaryLoop.size() * 0.20)))
+        : 0;
+    const std::size_t original_vertex_count = mesh->vertices.size();
+    std::vector<MeshVertex> new_vertices;
+    new_vertices.reserve(static_cast<std::size_t>(
+        first_ring_count + second_ring_count + 1));
+    std::vector<int> first_ring;
+    std::vector<int> second_ring;
+    std::vector<double> first_parameters;
+    std::vector<double> second_parameters;
+
+    const auto build_ring = [&](int count,
+                                double radius,
+                                std::vector<int> *indices,
+                                std::vector<double> *parameters)
+    {
+        indices->reserve(static_cast<std::size_t>(count));
+        parameters->reserve(static_cast<std::size_t>(count));
+        for (int index = 0; index < count; ++index)
+        {
+            const double parameter =
+                static_cast<double>(index) / static_cast<double>(count);
+            parameters->push_back(parameter);
+            indices->push_back(static_cast<int>(
+                original_vertex_count + new_vertices.size()));
+            new_vertices.push_back(makeBoundaryPatchVertex(
+                *mesh,
+                boundaryLoop,
+                frame,
+                quadric,
+                parameter,
+                radius,
+                boundary_edge_lengths,
+                perimeter));
+        }
+    };
+    build_ring(first_ring_count, 0.65, &first_ring, &first_parameters);
+    if (use_second_ring)
+    {
+        build_ring(second_ring_count, 0.32, &second_ring, &second_parameters);
+    }
+
+    std::vector<Triangle> new_faces;
+    new_faces.reserve(boundaryLoop.size() +
+                      first_ring.size() * 2 +
+                      second_ring.size() * 2);
+    appendBoundaryPatchAnnulus(
+        boundaryLoop,
+        boundary_parameters,
+        first_ring,
+        first_parameters,
+        &new_faces);
+    const std::vector<int> &last_ring = use_second_ring
+        ? second_ring
+        : first_ring;
+    if (use_second_ring)
+    {
+        appendBoundaryPatchAnnulus(
+            first_ring,
+            first_parameters,
+            second_ring,
+            second_parameters,
+            &new_faces);
+    }
+
+    TriMesh inner_cap_mesh;
+    std::vector<int> inner_cap_loop(last_ring.size());
+    inner_cap_mesh.vertices.reserve(last_ring.size());
+    for (std::size_t index = 0; index < last_ring.size(); ++index)
+    {
+        inner_cap_loop[index] = static_cast<int>(index);
+        inner_cap_mesh.vertices.push_back(new_vertices[
+            static_cast<std::size_t>(last_ring[index]) -
+            original_vertex_count]);
+    }
+    std::vector<Triangle> inner_cap_faces;
+    const std::unordered_map<std::uint64_t, int> no_existing_edges;
+    if (!triangulateBoundaryLoop(
+            inner_cap_mesh,
+            inner_cap_loop,
+            no_existing_edges,
+            &inner_cap_faces))
+    {
+        return false;
+    }
+    for (Triangle face : inner_cap_faces)
+    {
+        for (int &vertex_index : face.v)
+        {
+            vertex_index = last_ring[static_cast<std::size_t>(vertex_index)];
+        }
+        new_faces.push_back(face);
+    }
+
+    const auto vertex_at = [&](int vertex_index) -> const MeshVertex &
+    {
+        if (static_cast<std::size_t>(vertex_index) < original_vertex_count)
+        {
+            return mesh->vertices[static_cast<std::size_t>(vertex_index)];
+        }
+        return new_vertices[static_cast<std::size_t>(vertex_index) -
+                            original_vertex_count];
+    };
+    const double minimum_doubled_area =
+        frame.scale * frame.scale * 1.0e-12;
+    for (const Triangle &face : new_faces)
+    {
+        if (face.v[0] == face.v[1] || face.v[1] == face.v[2] ||
+            face.v[2] == face.v[0])
+        {
+            return false;
+        }
+        const PatchVector first = patchPosition(vertex_at(face.v[0]));
+        const PatchVector second = patchPosition(vertex_at(face.v[1]));
+        const PatchVector third = patchPosition(vertex_at(face.v[2]));
+        const PatchVector doubled_area = crossPatchVector(
+            subtractPatchVector(second, first),
+            subtractPatchVector(third, first));
+        if (!std::isfinite(dotPatchVector(doubled_area, doubled_area)) ||
+            std::sqrt(dotPatchVector(doubled_area, doubled_area)) <=
+                minimum_doubled_area)
+        {
+            return false;
+        }
+    }
+
+    mesh->vertices.insert(
+        mesh->vertices.end(), new_vertices.cbegin(), new_vertices.cend());
+    mesh->faces.insert(mesh->faces.end(), new_faces.cbegin(), new_faces.cend());
+    return true;
+}
 
 int fillSmallBoundaryHoles(TriMesh *mesh,
                            int maxBoundaryEdges,
@@ -1179,6 +1853,18 @@ int fillSmallBoundaryHoles(TriMesh *mesh,
                 }
             }
 
+            if (useQualityTriangulation && loop.size() >= 24)
+            {
+                if (fillCurvatureAwareBoundaryPatch(mesh, loop))
+                {
+                    ++filled_holes;
+                }
+                // Large non-planar holes are never collapsed into a single
+                // centroid fan.  If the curvature-aware patch cannot be
+                // constructed, preserving the opening is safer than adding a
+                // star-shaped geometric artifact.
+                continue;
+            }
             if (useQualityTriangulation &&
                 triangulateBoundaryLoop(
                     *mesh, loop, edge_counts, &added_faces))

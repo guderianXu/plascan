@@ -136,6 +136,213 @@ int boundaryEdgeCount(const TriMesh &mesh)
     return boundaryTopology(mesh).boundaryEdgeCount;
 }
 
+double meshSurfaceArea(const TriMesh &mesh)
+{
+    double area = 0.0;
+    for (const Triangle &face : mesh.faces)
+    {
+        if (face.v[0] < 0 || face.v[1] < 0 || face.v[2] < 0 ||
+            face.v[0] >= mesh.vertexCount() ||
+            face.v[1] >= mesh.vertexCount() ||
+            face.v[2] >= mesh.vertexCount())
+        {
+            continue;
+        }
+        const MeshVertex &first =
+            mesh.vertices[static_cast<std::size_t>(face.v[0])];
+        const MeshVertex &second =
+            mesh.vertices[static_cast<std::size_t>(face.v[1])];
+        const MeshVertex &third =
+            mesh.vertices[static_cast<std::size_t>(face.v[2])];
+        const double ab_x = static_cast<double>(second.x) - first.x;
+        const double ab_y = static_cast<double>(second.y) - first.y;
+        const double ab_z = static_cast<double>(second.z) - first.z;
+        const double ac_x = static_cast<double>(third.x) - first.x;
+        const double ac_y = static_cast<double>(third.y) - first.y;
+        const double ac_z = static_cast<double>(third.z) - first.z;
+        const double cross_x = ab_y * ac_z - ab_z * ac_y;
+        const double cross_y = ab_z * ac_x - ab_x * ac_z;
+        const double cross_z = ab_x * ac_y - ab_y * ac_x;
+        const double twice_area = std::sqrt(
+            cross_x * cross_x + cross_y * cross_y + cross_z * cross_z);
+        if (std::isfinite(twice_area))
+        {
+            area += 0.5 * twice_area;
+        }
+    }
+    return area;
+}
+
+double meshBoundsDiagonal(const TriMesh &mesh)
+{
+    std::array<double, 3> minimum{
+        std::numeric_limits<double>::infinity(),
+        std::numeric_limits<double>::infinity(),
+        std::numeric_limits<double>::infinity()};
+    std::array<double, 3> maximum{
+        -std::numeric_limits<double>::infinity(),
+        -std::numeric_limits<double>::infinity(),
+        -std::numeric_limits<double>::infinity()};
+    bool has_finite_vertex = false;
+    for (const MeshVertex &vertex : mesh.vertices)
+    {
+        const std::array<double, 3> position{vertex.x, vertex.y, vertex.z};
+        if (!std::isfinite(position[0]) || !std::isfinite(position[1]) ||
+            !std::isfinite(position[2]))
+        {
+            continue;
+        }
+        has_finite_vertex = true;
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            minimum[axis] = std::min(minimum[axis], position[axis]);
+            maximum[axis] = std::max(maximum[axis], position[axis]);
+        }
+    }
+    if (!has_finite_vertex)
+    {
+        return 0.0;
+    }
+    const double dx = maximum[0] - minimum[0];
+    const double dy = maximum[1] - minimum[1];
+    const double dz = maximum[2] - minimum[2];
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+struct ComparableIsoSurfaceExtraction
+{
+    bool ok = false;
+    QString errorMessage;
+    TriMesh mesh;
+    std::uint64_t mc33SupportMaskedSampleCount = 0;
+    std::uint64_t mc33RejectedUnsupportedCellFaceCount = 0;
+    std::uint64_t isoSurfaceAmbiguousFaceCount = 0;
+    std::uint64_t isoSurfaceTopologyAdjustedCellCount = 0;
+    std::uint64_t isoSurfaceDeciderTieCount = 0;
+    std::uint64_t isoSurfaceMultipleLoopCellCount = 0;
+    std::uint64_t isoSurfaceEdgeVertexCacheHitCount = 0;
+    std::uint64_t isoSurfaceEdgeVertexCacheMissCount = 0;
+    std::uint64_t isoSurfaceInteriorLoopVertexCount = 0;
+    std::uint64_t isoSurfaceRejectedDegenerateFaceCount = 0;
+    std::uint64_t isoSurfaceUnresolvedCellCount = 0;
+};
+
+ComparableIsoSurfaceExtraction extractComparableIsoSurface(
+    const std::array<float, 3> &boundsMin,
+    const std::array<float, 3> &boundsMax,
+    const std::array<int, 3> &cells,
+    const std::vector<float> &field,
+    const std::vector<std::uint8_t> &support,
+    bool useMc33,
+    bool requireSupportedSignChange,
+    bool useConsistentExtractor,
+    const std::function<bool()> &isCancelled)
+{
+    ComparableIsoSurfaceExtraction result;
+    if (useMc33)
+    {
+        Mc33IsoSurfaceOptions options;
+        options.isoLevel = 0.0f;
+        options.requireSupportedSignChange = requireSupportedSignChange;
+        options.isCancelled = isCancelled;
+        Mc33IsoSurfaceResult extracted = Mc33IsoSurfaceExtractor::extract(
+            boundsMin, boundsMax, cells, field, support, options);
+        result.ok = extracted.ok;
+        result.errorMessage = QString::fromStdString(extracted.errorMessage);
+        result.mesh = std::move(extracted.mesh);
+        result.mc33SupportMaskedSampleCount =
+            extracted.statistics.supportMaskedSampleCount;
+        result.mc33RejectedUnsupportedCellFaceCount =
+            extracted.statistics.rejectedUnsupportedCellFaceCount;
+        return result;
+    }
+    if (useConsistentExtractor)
+    {
+        ConsistentIsoSurfaceOptions options;
+        options.isoLevel = 0.0f;
+        options.isCancelled = isCancelled;
+        ConsistentIsoSurfaceResult extracted =
+            ConsistentIsoSurfaceExtractor::extract(
+                boundsMin, boundsMax, cells, field, support, options);
+        result.ok = extracted.ok;
+        result.errorMessage = QString::fromStdString(extracted.errorMessage);
+        result.mesh = std::move(extracted.mesh);
+        result.isoSurfaceAmbiguousFaceCount =
+            extracted.statistics.uniqueAmbiguousFaceCount;
+        result.isoSurfaceTopologyAdjustedCellCount =
+            extracted.statistics.topologyAdjustedCellCount;
+        result.isoSurfaceDeciderTieCount = extracted.statistics.deciderTieCount;
+        result.isoSurfaceMultipleLoopCellCount =
+            extracted.statistics.multipleLoopCellCount;
+        result.isoSurfaceEdgeVertexCacheHitCount =
+            extracted.statistics.edgeVertexCacheHitCount;
+        result.isoSurfaceEdgeVertexCacheMissCount =
+            extracted.statistics.edgeVertexCacheMissCount;
+        result.isoSurfaceInteriorLoopVertexCount =
+            extracted.statistics.interiorLoopVertexCount;
+        result.isoSurfaceRejectedDegenerateFaceCount =
+            extracted.statistics.rejectedDegenerateFaceCount;
+        result.isoSurfaceUnresolvedCellCount =
+            extracted.statistics.unresolvedCellCount;
+        return result;
+    }
+
+    plapoint::mesh::MarchingCubes<float> marching_cubes;
+    marching_cubes.setBounds(
+        {boundsMin[0], boundsMin[1], boundsMin[2]},
+        {boundsMax[0], boundsMax[1], boundsMax[2]});
+    marching_cubes.setResolution(cells[0], cells[1], cells[2]);
+    marching_cubes.setIsoLevel(0.0f);
+    auto [vertices, faces] = marching_cubes.extract(
+        [&](float x, float y, float z)
+        {
+            const int ix = std::clamp(
+                static_cast<int>(std::lround(
+                    (x - boundsMin[0]) * cells[0] /
+                    (boundsMax[0] - boundsMin[0]))),
+                0,
+                cells[0]);
+            const int iy = std::clamp(
+                static_cast<int>(std::lround(
+                    (y - boundsMin[1]) * cells[1] /
+                    (boundsMax[1] - boundsMin[1]))),
+                0,
+                cells[1]);
+            const int iz = std::clamp(
+                static_cast<int>(std::lround(
+                    (z - boundsMin[2]) * cells[2] /
+                    (boundsMax[2] - boundsMin[2]))),
+                0,
+                cells[2]);
+            const std::size_t index =
+                (static_cast<std::size_t>(iz) *
+                     static_cast<std::size_t>(cells[1] + 1) +
+                 static_cast<std::size_t>(iy)) *
+                    static_cast<std::size_t>(cells[0] + 1) +
+                static_cast<std::size_t>(ix);
+            return support[index] != 0 ? field[index] : 1.0f;
+        });
+    result.mesh.vertices.resize(static_cast<std::size_t>(vertices.rows()));
+    for (plamatrix::Index row = 0; row < vertices.rows(); ++row)
+    {
+        MeshVertex &vertex =
+            result.mesh.vertices[static_cast<std::size_t>(row)];
+        vertex.x = vertices(row, 0);
+        vertex.y = vertices(row, 1);
+        vertex.z = vertices(row, 2);
+    }
+    result.mesh.faces.resize(static_cast<std::size_t>(faces.rows()));
+    for (plamatrix::Index row = 0; row < faces.rows(); ++row)
+    {
+        Triangle &face = result.mesh.faces[static_cast<std::size_t>(row)];
+        face.v[0] = static_cast<int>(std::lround(faces(row, 0)));
+        face.v[1] = static_cast<int>(std::lround(faces(row, 1)));
+        face.v[2] = static_cast<int>(std::lround(faces(row, 2)));
+    }
+    result.ok = true;
+    return result;
+}
+
 bool meshVerticesInsidePaddedLayout(const TriMesh &mesh,
                                     const DepthTsdfLayout &layout,
                                     float paddingVoxels = 2.0f)
@@ -351,6 +558,198 @@ struct VisibilityHoleProtectionResult
     int rejectedConflictLoopCount = 0;
 };
 
+struct HoleFillPatchEvidenceResult
+{
+    bool attempted = false;
+    bool accepted = false;
+    int vertexSampleCount = 0;
+    int faceCenterSampleCount = 0;
+    int acceptedSampleCount = 0;
+    int rejectedSupportSampleCount = 0;
+    int rejectedConflictSampleCount = 0;
+    int minimumSupportingViewCount = 0;
+    int maximumConflictViewCount = 0;
+};
+
+std::pair<int, int> holeFillPatchSampleViewEvidence(
+    const MeshVertex &sample,
+    const QVector<DepthTsdfFrame> &frames,
+    const QVector<cv::Mat> &effectiveDepthValidMasks,
+    float absoluteDepthTolerance,
+    float minimumConfidence)
+{
+    int supporting_views = 0;
+    int conflict_views = 0;
+    const double world[3] = {sample.x, sample.y, sample.z};
+    for (int frame_index = 0; frame_index < frames.size(); ++frame_index)
+    {
+        const DepthTsdfFrame &frame = frames[frame_index];
+        if (frame.depth.empty() || frame.depth.type() != CV_32FC1 ||
+            frame.confidence.empty() || frame.confidence.type() != CV_32FC1 ||
+            frame.supportMask.empty() || frame.supportMask.type() != CV_8UC1 ||
+            frame.depth.size() != frame.confidence.size() ||
+            frame.depth.size() != frame.supportMask.size())
+        {
+            continue;
+        }
+        const cv::Mat &valid_mask =
+            effectiveDepthValidMasks.size() == frames.size()
+            ? effectiveDepthValidMasks[frame_index]
+            : frame.depthValidMask;
+        if (valid_mask.empty() || valid_mask.type() != CV_8UC1 ||
+            valid_mask.size() != frame.depth.size())
+        {
+            continue;
+        }
+
+        double pixel[2]{};
+        double camera_depth = 0.0;
+        if (!frame.camera.projectWorldPointWithDepth(
+                world, pixel, camera_depth) ||
+            !std::isfinite(camera_depth) || camera_depth <= 0.0)
+        {
+            continue;
+        }
+        const int column = static_cast<int>(std::lround(pixel[0]));
+        const int row = static_cast<int>(std::lround(pixel[1]));
+        if (row < 0 || column < 0 || row >= frame.depth.rows ||
+            column >= frame.depth.cols)
+        {
+            continue;
+        }
+        if (frame.supportMask.at<std::uint8_t>(row, column) == 0)
+        {
+            ++conflict_views;
+            continue;
+        }
+        if (valid_mask.at<std::uint8_t>(row, column) == 0)
+        {
+            continue;
+        }
+
+        const float observed_depth = frame.depth.at<float>(row, column);
+        const float confidence = frame.confidence.at<float>(row, column);
+        if (!std::isfinite(observed_depth) || observed_depth <= 0.0f ||
+            !std::isfinite(confidence) || confidence < minimumConfidence)
+        {
+            continue;
+        }
+        const float projected_depth = static_cast<float>(camera_depth);
+        const float tolerance = std::max(
+            absoluteDepthTolerance, 0.008f * std::abs(projected_depth));
+        if (std::abs(observed_depth - projected_depth) <= tolerance)
+        {
+            ++supporting_views;
+        }
+        else if (projected_depth < observed_depth - tolerance)
+        {
+            // The proposed patch lies in front of an observed surface and
+            // therefore occupies free space in this view.  A sample behind
+            // the observed surface is merely occluded and is not a conflict.
+            ++conflict_views;
+        }
+    }
+    return {supporting_views, conflict_views};
+}
+
+HoleFillPatchEvidenceResult validateAddedHoleFillPatchEvidence(
+    const TriMesh &candidate,
+    std::size_t baselineVertexCount,
+    std::size_t baselineFaceCount,
+    const QVector<DepthTsdfFrame> &frames,
+    const QVector<cv::Mat> &effectiveDepthValidMasks,
+    int minimumSupportingViews,
+    int maximumConflictViews,
+    float depthToleranceVoxels,
+    float maximumVoxelSize,
+    float minimumConfidence)
+{
+    HoleFillPatchEvidenceResult result;
+    if (baselineVertexCount > candidate.vertices.size() ||
+        baselineFaceCount > candidate.faces.size())
+    {
+        return result;
+    }
+
+    result.vertexSampleCount = static_cast<int>(
+        candidate.vertices.size() - baselineVertexCount);
+    result.faceCenterSampleCount = static_cast<int>(
+        candidate.faces.size() - baselineFaceCount);
+    const int sample_count =
+        result.vertexSampleCount + result.faceCenterSampleCount;
+    result.attempted = sample_count > 0;
+    if (!result.attempted)
+    {
+        return result;
+    }
+
+    const float absolute_tolerance =
+        std::max(1.0f, depthToleranceVoxels) *
+        std::max(maximumVoxelSize, 1.0e-8f);
+    result.minimumSupportingViewCount = std::numeric_limits<int>::max();
+    const auto validate_sample = [&](const MeshVertex &sample)
+    {
+        const auto [supporting_views, conflict_views] =
+            holeFillPatchSampleViewEvidence(
+                sample,
+                frames,
+                effectiveDepthValidMasks,
+                absolute_tolerance,
+                minimumConfidence);
+        result.minimumSupportingViewCount = std::min(
+            result.minimumSupportingViewCount, supporting_views);
+        result.maximumConflictViewCount = std::max(
+            result.maximumConflictViewCount, conflict_views);
+        if (supporting_views < std::max(2, minimumSupportingViews))
+        {
+            ++result.rejectedSupportSampleCount;
+        }
+        if (conflict_views > std::max(0, maximumConflictViews))
+        {
+            ++result.rejectedConflictSampleCount;
+        }
+        if (DepthTsdfSurfaceBuilder::shouldAcceptFinalHoleFillPatchSample(
+                supporting_views,
+                conflict_views,
+                minimumSupportingViews,
+                maximumConflictViews))
+        {
+            ++result.acceptedSampleCount;
+        }
+    };
+
+    for (std::size_t vertex_index = baselineVertexCount;
+         vertex_index < candidate.vertices.size();
+         ++vertex_index)
+    {
+        validate_sample(candidate.vertices[vertex_index]);
+    }
+    for (std::size_t face_index = baselineFaceCount;
+         face_index < candidate.faces.size();
+         ++face_index)
+    {
+        const Triangle &face = candidate.faces[face_index];
+        const MeshVertex &first = candidate.vertices[
+            static_cast<std::size_t>(face.v[0])];
+        const MeshVertex &second = candidate.vertices[
+            static_cast<std::size_t>(face.v[1])];
+        const MeshVertex &third = candidate.vertices[
+            static_cast<std::size_t>(face.v[2])];
+        MeshVertex center;
+        center.x = (first.x + second.x + third.x) / 3.0f;
+        center.y = (first.y + second.y + third.y) / 3.0f;
+        center.z = (first.z + second.z + third.z) / 3.0f;
+        validate_sample(center);
+    }
+
+    result.accepted = result.acceptedSampleCount == sample_count;
+    if (result.minimumSupportingViewCount == std::numeric_limits<int>::max())
+    {
+        result.minimumSupportingViewCount = 0;
+    }
+    return result;
+}
+
 VisibilityHoleProtectionResult visibilityConstrainedHoleProtection(
     const TriMesh &mesh,
     const QVector<DepthTsdfFrame> &frames,
@@ -491,10 +890,9 @@ VisibilityHoleProtectionResult visibilityConstrainedHoleProtection(
                     return silhouetteProtectedVertices[
                         static_cast<std::size_t>(vertex)] != 0;
                 }));
-            if (silhouette_vertex_count == 0)
-            {
-                continue;
-            }
+            // Visibility-constrained filling is fail-closed for every eligible
+            // boundary loop.  Missing a silhouette tag is not positive evidence
+            // that an opening is safe to cap.
             ++result.consideredLoopCount;
 
             MeshVertex center;
@@ -607,17 +1005,16 @@ VisibilityHoleProtectionResult visibilityConstrainedHoleProtection(
                 }
             }
 
-            const float silhouette_ratio =
-                static_cast<float>(silhouette_vertex_count) /
-                static_cast<float>(loop.size());
-            const int extra_strong_support =
-                silhouette_ratio >= strong_ratio ? 1 : 0;
-            const bool enough_support =
-                supporting_views >=
-                    required_supporting_views + extra_strong_support;
-            const bool has_conflict =
-                conflict_views > allowed_conflict_views;
-            if (enough_support && !has_conflict)
+            const bool release_hole =
+                DepthTsdfSurfaceBuilder::shouldReleaseVisibilityConstrainedHole(
+                    static_cast<int>(loop.size()),
+                    silhouette_vertex_count,
+                    supporting_views,
+                    conflict_views,
+                    required_supporting_views,
+                    allowed_conflict_views,
+                    strong_ratio);
+            if (release_hole)
             {
                 for (const int vertex : loop)
                 {
@@ -626,13 +1023,21 @@ VisibilityHoleProtectionResult visibilityConstrainedHoleProtection(
                 }
                 ++result.releasedLoopCount;
             }
-            else if (has_conflict)
-            {
-                ++result.rejectedConflictLoopCount;
-            }
             else
             {
-                ++result.rejectedSupportLoopCount;
+                for (const int vertex : loop)
+                {
+                    result.protectedVertices[
+                        static_cast<std::size_t>(vertex)] = 1;
+                }
+                if (conflict_views > allowed_conflict_views)
+                {
+                    ++result.rejectedConflictLoopCount;
+                }
+                else
+                {
+                    ++result.rejectedSupportLoopCount;
+                }
             }
         }
     }
@@ -766,7 +1171,8 @@ bool loadUnsignedShortMatrix(const QString &path, cv::Mat *matrix, QString *reas
 bool loadMask(const QString &path,
               const cv::Size &size,
               cv::Mat *mask,
-              QString *reason)
+              QString *reason,
+              bool allow_resize = false)
 {
     if (!mask)
     {
@@ -780,6 +1186,10 @@ bool loadMask(const QString &path,
             *reason = QStringLiteral("mask cannot be read");
         }
         return false;
+    }
+    if (mask->type() == CV_8UC1 && mask->size() != size && allow_resize)
+    {
+        cv::resize(*mask, *mask, size, 0.0, 0.0, cv::INTER_NEAREST);
     }
     if (mask->type() != CV_8UC1 || mask->size() != size)
     {
@@ -1130,6 +1540,159 @@ WeakBoundaryTipResult trimWeakBoundaryTips(TriMesh *mesh,
 
 } // namespace
 
+bool DepthTsdfSurfaceBuilder::shouldReleaseVisibilityConstrainedHole(
+    int loopVertexCount,
+    int silhouetteProtectedVertexCount,
+    int supportingViewCount,
+    int conflictViewCount,
+    int minimumSupportingViews,
+    int maximumConflictViews,
+    float strongSilhouetteRatio)
+{
+    if (loopVertexCount < 3)
+    {
+        return false;
+    }
+
+    const int silhouette_vertex_count = std::clamp(
+        silhouetteProtectedVertexCount, 0, loopVertexCount);
+    const float silhouette_ratio =
+        static_cast<float>(silhouette_vertex_count) /
+        static_cast<float>(loopVertexCount);
+    const int extra_strong_support =
+        silhouette_vertex_count > 0 &&
+        silhouette_ratio >= std::clamp(strongSilhouetteRatio, 0.0f, 1.0f)
+        ? 1
+        : 0;
+    const int required_supporting_views =
+        std::max(1, minimumSupportingViews) + extra_strong_support;
+    return supportingViewCount >= required_supporting_views &&
+           conflictViewCount <= std::max(0, maximumConflictViews);
+}
+
+bool DepthTsdfSurfaceBuilder::shouldAcceptFinalHoleFillPatchSample(
+    int supportingViewCount,
+    int conflictViewCount,
+    int minimumSupportingViews,
+    int maximumConflictViews)
+{
+    return supportingViewCount >= std::max(2, minimumSupportingViews) &&
+           conflictViewCount <= std::max(0, maximumConflictViews);
+}
+
+bool DepthTsdfSurfaceBuilder::shouldApplyVisibilityOccupancyCut(
+    bool cutOk,
+    bool emptyCut,
+    std::uint64_t sampleCount,
+    std::uint64_t fullSampleCount,
+    float minimumFullFraction)
+{
+    if (!cutOk || emptyCut || sampleCount == 0)
+    {
+        return false;
+    }
+    const double full_fraction =
+        static_cast<double>(fullSampleCount) /
+        static_cast<double>(sampleCount);
+    return full_fraction >= static_cast<double>(std::clamp(
+        minimumFullFraction, 0.0f, 0.25f));
+}
+
+DepthTsdfVisualHullTopologyGuardEvaluation
+DepthTsdfSurfaceBuilder::evaluateVisualHullCompletionTopologyGuard(
+    const TriMesh &baseline,
+    const TriMesh &candidate,
+    int maximumTopologicalComplexityIncrease,
+    double maximumSurfaceAreaRatio,
+    double maximumBoundsDiagonalRatio)
+{
+    DepthTsdfVisualHullTopologyGuardEvaluation evaluation;
+    evaluation.baselineFaceCount = baseline.faceCount();
+    evaluation.candidateFaceCount = candidate.faceCount();
+    if (baseline.empty() || candidate.empty())
+    {
+        evaluation.rejectionFlags |= VisualHullTopologyGuardEmptyMesh;
+        return evaluation;
+    }
+
+    const MeshTopologyQualityStatistics baseline_quality =
+        evaluateMeshTopologyQuality(baseline);
+    const MeshTopologyQualityStatistics candidate_quality =
+        evaluateMeshTopologyQuality(candidate);
+    evaluation.baselineBoundaryEdgeCount = baseline_quality.boundaryEdgeCount;
+    evaluation.candidateBoundaryEdgeCount = candidate_quality.boundaryEdgeCount;
+    evaluation.baselineNonManifoldEdgeCount =
+        baseline_quality.nonManifoldEdgeCount;
+    evaluation.candidateNonManifoldEdgeCount =
+        candidate_quality.nonManifoldEdgeCount;
+    evaluation.baselineComponentCount = baseline_quality.componentCount;
+    evaluation.candidateComponentCount = candidate_quality.componentCount;
+    evaluation.baselineEulerCharacteristic =
+        baseline_quality.eulerCharacteristic;
+    evaluation.candidateEulerCharacteristic =
+        candidate_quality.eulerCharacteristic;
+    evaluation.baselineTopologicalComplexity =
+        baseline_quality.topologicalComplexity;
+    evaluation.candidateTopologicalComplexity =
+        candidate_quality.topologicalComplexity;
+
+    if (candidate_quality.boundaryEdgeCount > baseline_quality.boundaryEdgeCount)
+    {
+        evaluation.rejectionFlags |= VisualHullTopologyGuardBoundaryEdgeGrowth;
+    }
+    if (candidate_quality.nonManifoldEdgeCount >
+        baseline_quality.nonManifoldEdgeCount)
+    {
+        evaluation.rejectionFlags |=
+            VisualHullTopologyGuardNonManifoldEdgeGrowth;
+    }
+    if (candidate_quality.nonManifoldVertexCount >
+        baseline_quality.nonManifoldVertexCount)
+    {
+        evaluation.rejectionFlags |=
+            VisualHullTopologyGuardNonManifoldVertexGrowth;
+    }
+    if (candidate_quality.componentCount > baseline_quality.componentCount)
+    {
+        evaluation.rejectionFlags |= VisualHullTopologyGuardComponentGrowth;
+    }
+    if (candidate_quality.topologicalComplexity >
+        baseline_quality.topologicalComplexity +
+            std::max(0, maximumTopologicalComplexityIncrease))
+    {
+        evaluation.rejectionFlags |=
+            VisualHullTopologyGuardTopologicalComplexityGrowth;
+    }
+
+    const double baseline_area = meshSurfaceArea(baseline);
+    const double candidate_area = meshSurfaceArea(candidate);
+    evaluation.surfaceAreaRatio = baseline_area > 1.0e-18
+        ? candidate_area / baseline_area
+        : std::numeric_limits<double>::infinity();
+    if (!std::isfinite(evaluation.surfaceAreaRatio) ||
+        evaluation.surfaceAreaRatio > std::max(1.0, maximumSurfaceAreaRatio))
+    {
+        evaluation.rejectionFlags |= VisualHullTopologyGuardSurfaceAreaGrowth;
+    }
+
+    const double baseline_diagonal = meshBoundsDiagonal(baseline);
+    const double candidate_diagonal = meshBoundsDiagonal(candidate);
+    evaluation.boundsDiagonalRatio = baseline_diagonal > 1.0e-18
+        ? candidate_diagonal / baseline_diagonal
+        : std::numeric_limits<double>::infinity();
+    if (!std::isfinite(evaluation.boundsDiagonalRatio) ||
+        evaluation.boundsDiagonalRatio >
+            std::max(1.0, maximumBoundsDiagonalRatio))
+    {
+        evaluation.rejectionFlags |=
+            VisualHullTopologyGuardBoundsDiagonalGrowth;
+    }
+
+    evaluation.accepted =
+        evaluation.rejectionFlags == VisualHullTopologyGuardAccepted;
+    return evaluation;
+}
+
 bool DepthTsdfSurfaceBuilder::shouldTrimWeakBoundaryFace(int boundaryEdgeCount,
                                                           int weakVertexCount)
 {
@@ -1454,16 +2017,27 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
         else if (!loadUnsignedShortMatrix(
                      artifact.geometrySupportPath,
                      &frame.geometrySupportCount,
-                     &reason) ||
-                 frame.geometrySupportCount.size() != frame.depth.size())
+                     &reason))
         {
-            if (reason.isEmpty())
-            {
-                reason = QStringLiteral("geometry support dimensions do not match depth");
-            }
             result.errorMessage = frameArtifactError(
                 artifact, QStringLiteral("geometry support: %1").arg(reason));
             return result;
+        }
+        else if (frame.geometrySupportCount.size() != frame.depth.size())
+        {
+            if (!artifact.pyramidFallback)
+            {
+                result.errorMessage = frameArtifactError(
+                    artifact,
+                    QStringLiteral("geometry support dimensions do not match depth"));
+                return result;
+            }
+            cv::resize(frame.geometrySupportCount,
+                       frame.geometrySupportCount,
+                       frame.depth.size(),
+                       0.0,
+                       0.0,
+                       cv::INTER_NEAREST);
         }
 
         if (artifact.geometrySourceMaskPath.isEmpty())
@@ -1474,16 +2048,27 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
         else if (!loadUnsignedShortMatrix(
                      artifact.geometrySourceMaskPath,
                      &frame.geometrySourceMask,
-                     &reason) ||
-                 frame.geometrySourceMask.size() != frame.depth.size())
+                     &reason))
         {
-            if (reason.isEmpty())
-            {
-                reason = QStringLiteral("geometry source mask dimensions do not match depth");
-            }
             result.errorMessage = frameArtifactError(
                 artifact, QStringLiteral("geometry source mask: %1").arg(reason));
             return result;
+        }
+        else if (frame.geometrySourceMask.size() != frame.depth.size())
+        {
+            if (!artifact.pyramidFallback)
+            {
+                result.errorMessage = frameArtifactError(
+                    artifact,
+                    QStringLiteral("geometry source mask dimensions do not match depth"));
+                return result;
+            }
+            cv::resize(frame.geometrySourceMask,
+                       frame.geometrySourceMask,
+                       frame.depth.size(),
+                       0.0,
+                       0.0,
+                       cv::INTER_NEAREST);
         }
 
         auto load_optional_float_evidence = [&](const QString &path,
@@ -1495,16 +2080,26 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
                 *destination = cv::Mat(frame.depth.size(), CV_32FC1, cv::Scalar(0.0f));
                 return true;
             }
-            if (!loadFloatMatrix(path, destination, &reason) ||
-                destination->size() != frame.depth.size())
+            if (!loadFloatMatrix(path, destination, &reason))
             {
-                if (reason.isEmpty())
-                {
-                    reason = QStringLiteral("dimensions do not match depth");
-                }
                 result.errorMessage = frameArtifactError(
                     artifact, QStringLiteral("%1: %2").arg(label, reason));
                 return false;
+            }
+            if (destination->size() != frame.depth.size())
+            {
+                if (!artifact.pyramidFallback)
+                {
+                    result.errorMessage = frameArtifactError(
+                        artifact, QStringLiteral("%1: dimensions do not match depth").arg(label));
+                    return false;
+                }
+                cv::resize(*destination,
+                           *destination,
+                           frame.depth.size(),
+                           0.0,
+                           0.0,
+                           cv::INTER_AREA);
             }
             return true;
         };
@@ -1530,16 +2125,26 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
                 return true;
             }
             reason.clear();
-            if (!loadFloatMatrix(path, destination, &reason) ||
-                destination->size() != frame.depth.size())
+            if (!loadFloatMatrix(path, destination, &reason))
             {
-                if (reason.isEmpty())
-                {
-                    reason = QStringLiteral("dimensions do not match depth");
-                }
                 result.errorMessage = frameArtifactError(
                     artifact, QStringLiteral("%1: %2").arg(label, reason));
                 return false;
+            }
+            if (destination->size() != frame.depth.size())
+            {
+                if (!artifact.pyramidFallback)
+                {
+                    result.errorMessage = frameArtifactError(
+                        artifact, QStringLiteral("%1: dimensions do not match depth").arg(label));
+                    return false;
+                }
+                cv::resize(*destination,
+                           *destination,
+                           frame.depth.size(),
+                           0.0,
+                           0.0,
+                           cv::INTER_AREA);
             }
             return true;
         };
@@ -1630,7 +2235,8 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
         else if (!loadMask(artifact.crossViewRepairedMaskPath,
                            frame.depth.size(),
                            &frame.crossViewRepairedMask,
-                           &reason))
+                           &reason,
+                           artifact.pyramidFallback))
         {
             result.errorMessage = frameArtifactError(
                 artifact, QStringLiteral("cross-view repaired mask: %1").arg(reason));
@@ -1644,7 +2250,8 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
         else if (!loadMask(artifact.validMaskPath,
                            frame.depth.size(),
                            &frame.depthValidMask,
-                           &reason))
+                           &reason,
+                           artifact.pyramidFallback))
         {
             result.errorMessage = frameArtifactError(
                 artifact, QStringLiteral("depth-valid mask: %1").arg(reason));
@@ -1658,7 +2265,8 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
         else if (!loadMask(artifact.supportMaskPath,
                            frame.depth.size(),
                            &frame.supportMask,
-                           &reason))
+                           &reason,
+                           artifact.pyramidFallback))
         {
             result.errorMessage = frameArtifactError(
                 artifact, QStringLiteral("support mask: %1").arg(reason));
@@ -1704,6 +2312,9 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
 DepthTsdfBoundsResult DepthTsdfSurfaceBuilder::estimateBounds(
     const QVector<DepthTsdfFrame> &frames)
 {
+    constexpr std::uint64_t minimum_trusted_sample_count = 500;
+    constexpr double minimum_trusted_sample_ratio = 0.10;
+
     DepthTsdfBoundsResult result;
     if (frames.size() < 3)
     {
@@ -1711,7 +2322,8 @@ DepthTsdfBoundsResult DepthTsdfSurfaceBuilder::estimateBounds(
         return result;
     }
 
-    std::array<std::vector<float>, 3> coordinates;
+    std::array<std::vector<float>, 3> candidate_coordinates;
+    std::array<std::vector<float>, 3> trusted_coordinates;
     for (const DepthTsdfFrame &frame : frames)
     {
         if (!frame.camera.isValid() || frame.depth.type() != CV_32FC1 ||
@@ -1722,6 +2334,12 @@ DepthTsdfBoundsResult DepthTsdfSurfaceBuilder::estimateBounds(
         {
             continue;
         }
+        const bool has_geometry_evidence =
+            frame.geometrySupportCount.type() == CV_16UC1 &&
+            frame.geometrySupportCount.size() == frame.depth.size();
+        const bool has_adaptive_evidence = frame.useAdaptiveGeometryEvidence &&
+            frame.adaptiveGeometryEffectiveViewCount.type() == CV_32FC1 &&
+            frame.adaptiveGeometryEffectiveViewCount.size() == frame.depth.size();
         const int stride = std::max(
             1,
             static_cast<int>(std::ceil(std::sqrt(
@@ -1748,21 +2366,47 @@ DepthTsdfBoundsResult DepthTsdfSurfaceBuilder::estimateBounds(
                 {
                     continue;
                 }
+                const bool trusted = has_geometry_evidence &&
+                    frame.geometrySupportCount.at<std::uint16_t>(row, column) >= 2 &&
+                    (!has_adaptive_evidence ||
+                     frame.adaptiveGeometryEffectiveViewCount.at<float>(row, column) >= 2.0f);
                 for (int axis = 0; axis < 3; ++axis)
                 {
-                    coordinates[axis].push_back(static_cast<float>(world[axis]));
+                    const float coordinate = static_cast<float>(world[axis]);
+                    candidate_coordinates[axis].push_back(coordinate);
+                    if (trusted)
+                    {
+                        trusted_coordinates[axis].push_back(coordinate);
+                    }
                 }
             }
         }
     }
 
-    result.sampleCount = coordinates[0].size();
-    if (result.sampleCount < 500)
+    result.candidateSampleCount = candidate_coordinates[0].size();
+    result.trustedSampleCount = trusted_coordinates[0].size();
+    if (result.candidateSampleCount < 500)
     {
+        result.selectionReason = QStringLiteral("insufficient_candidate_samples");
         result.errorMessage = QStringLiteral("Insufficient finite TSDF bound samples: %1")
-                                  .arg(result.sampleCount);
+                                  .arg(result.candidateSampleCount);
         return result;
     }
+    const bool sufficient_trusted_samples =
+        result.trustedSampleCount >= minimum_trusted_sample_count &&
+        static_cast<double>(result.trustedSampleCount) >=
+            static_cast<double>(result.candidateSampleCount) * minimum_trusted_sample_ratio;
+    result.usedEvidenceAwareSamples = sufficient_trusted_samples;
+    result.fellBackToCandidateSamples = !sufficient_trusted_samples;
+    result.selectionReason = sufficient_trusted_samples
+        ? QStringLiteral("trusted_multiview_evidence")
+        : (result.trustedSampleCount < minimum_trusted_sample_count
+               ? QStringLiteral("insufficient_trusted_sample_count")
+               : QStringLiteral("insufficient_trusted_sample_ratio"));
+    std::array<std::vector<float>, 3> &coordinates = sufficient_trusted_samples
+        ? trusted_coordinates
+        : candidate_coordinates;
+    result.sampleCount = coordinates[0].size();
     for (int axis = 0; axis < 3; ++axis)
     {
         std::sort(coordinates[axis].begin(), coordinates[axis].end());
@@ -2185,13 +2829,23 @@ bool DepthTsdfSurfaceBuilder::isSampleSupported(
     const bool legacy_single_view_supported = options.minimumDistinctCameraSupport <= 1
         && distinctSupportCount == 1
         && maximumObservationWeight >= options.minimumSingleObservationWeight;
-    const bool geometry_verified_single_view_supported =
+    const bool legacy_geometry_verified_single_view_supported =
         distinctSupportCount == 1 &&
         maximumObservationWeight >= options.minimumGeometryVerifiedObservationWeight &&
-        ((options.allowGeometryVerifiedSingleObservation &&
-          maximumGeometrySupportCount >= options.minimumGeometrySupportCount) ||
-         (options.enableGeometrySingleViewNeighborhoodGuard &&
-          hasStrongAdaptiveSurfaceObservation));
+        options.allowGeometryVerifiedSingleObservation &&
+        maximumGeometrySupportCount >= options.minimumGeometrySupportCount;
+    // A strong adaptive observation already represents continuous agreement
+    // from multiple source views.  Its TSDF weight is intentionally reduced by
+    // confidence, frame quality and spread factors, so applying the legacy
+    // 0.85 gate again can make the guarded path unreachable.  It remains only
+    // a candidate here and must still pass neighborhood growth below.
+    const bool strong_adaptive_single_view_supported =
+        distinctSupportCount == 1 &&
+        options.enableGeometrySingleViewNeighborhoodGuard &&
+        hasStrongAdaptiveSurfaceObservation;
+    const bool geometry_verified_single_view_supported =
+        legacy_geometry_verified_single_view_supported ||
+        strong_adaptive_single_view_supported;
     const bool single_view_supported = legacy_single_view_supported ||
                                        geometry_verified_single_view_supported;
     if (singleView)
@@ -2781,7 +3435,8 @@ DepthTsdfSurfaceBuilder::completeUnsupportedSamplesWithVisualHullSignedDistance(
     const std::vector<std::uint8_t> &occupied,
     float bandVoxels,
     std::vector<float> *tsdf,
-    std::vector<std::uint8_t> *supported)
+    std::vector<std::uint8_t> *supported,
+    const std::vector<std::uint8_t> *immutableVeto)
 {
     DepthTsdfVisualHullCompletionStatistics statistics;
     const std::size_t expected_size =
@@ -2790,6 +3445,7 @@ DepthTsdfSurfaceBuilder::completeUnsupportedSamplesWithVisualHullSignedDistance(
         occupied.size() != expected_size ||
         tsdf->size() != expected_size ||
         supported->size() != expected_size ||
+        (immutableVeto && immutableVeto->size() != expected_size) ||
         !std::isfinite(bandVoxels) || bandVoxels <= 0.0f)
     {
         return statistics;
@@ -2803,7 +3459,58 @@ DepthTsdfSurfaceBuilder::completeUnsupportedSamplesWithVisualHullSignedDistance(
         return statistics;
     }
 
+    // Keep the original provenance fixed for the complete operation.  Values
+    // synthesized below can never become new zero-crossing anchors.
     const std::vector<std::uint8_t> core_supported = *supported;
+    std::vector<std::uint8_t> veto_neighborhood;
+    if (immutableVeto)
+    {
+        veto_neighborhood.assign(expected_size, 0);
+        for (int z = 0; z <= layout.cells[2]; ++z)
+        {
+            for (int y = 0; y <= layout.cells[1]; ++y)
+            {
+                for (int x = 0; x <= layout.cells[0]; ++x)
+                {
+                    const std::size_t index = sampleIndex(layout, x, y, z);
+                    if ((*immutableVeto)[index] == 0)
+                    {
+                        continue;
+                    }
+                    for (int dz = -1; dz <= 1; ++dz)
+                    {
+                        for (int dy = -1; dy <= 1; ++dy)
+                        {
+                            for (int dx = -1; dx <= 1; ++dx)
+                            {
+                                const int neighbor_x = x + dx;
+                                const int neighbor_y = y + dy;
+                                const int neighbor_z = z + dz;
+                                if (neighbor_x < 0 || neighbor_y < 0 ||
+                                    neighbor_z < 0 ||
+                                    neighbor_x > layout.cells[0] ||
+                                    neighbor_y > layout.cells[1] ||
+                                    neighbor_z > layout.cells[2])
+                                {
+                                    continue;
+                                }
+                                veto_neighborhood[sampleIndex(
+                                    layout,
+                                    neighbor_x,
+                                    neighbor_y,
+                                    neighbor_z)] = 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    const auto is_vetoed = [&veto_neighborhood](std::size_t index)
+    {
+        return !veto_neighborhood.empty() &&
+               veto_neighborhood[index] != 0;
+    };
     std::vector<std::uint8_t> requested(expected_size, 0);
     const std::size_t cell_count =
         static_cast<std::size_t>(layout.cells[0]) *
@@ -2904,6 +3611,14 @@ DepthTsdfSurfaceBuilder::completeUnsupportedSamplesWithVisualHullSignedDistance(
                                             neighbor_y + dy,
                                             neighbor_z + dz);
                                         if (core_supported[corner] != 0)
+                                        {
+                                            continue;
+                                        }
+                                        // Preserve a one-sample clearance
+                                        // around trusted free-space evidence;
+                                        // otherwise neighboring hull samples
+                                        // can still cap a real through-hole.
+                                        if (is_vetoed(corner))
                                         {
                                             continue;
                                         }
@@ -3081,6 +3796,7 @@ DepthTsdfSurfaceBuilder::completeUnsupportedSamplesWithVisualHullSignedDistance(
     {
         if (requested[index] == 0 ||
             (*supported)[index] != 0 ||
+            is_vetoed(index) ||
             distance[index] == kInfinity ||
             distance[index] > maximum_distance)
         {
@@ -3699,6 +4415,12 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             cv::Size(erosion_pixels * 2 + 1, erosion_pixels * 2 + 1));
         for (const DepthTsdfFrame &frame : frames)
         {
+            if (frame.useAdaptiveGeometryEvidence)
+            {
+                effective_depth_valid_masks.push_back(
+                    frame.depthValidMask.clone());
+                continue;
+            }
             cv::Mat eroded;
             cv::erode(frame.depthValidMask, eroded, kernel);
             if (options.enableGeometryVerifiedBoundaryRecovery && erosion_pixels > 1 &&
@@ -3849,6 +4571,12 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         return result;
     }
     result = validateAllocation(bounds.minimum, bounds.maximum, options);
+    result.statistics.boundsCandidateSampleCount = bounds.candidateSampleCount;
+    result.statistics.boundsTrustedSampleCount = bounds.trustedSampleCount;
+    result.statistics.boundsSelectedSampleCount = bounds.sampleCount;
+    result.statistics.boundsUsedEvidenceAwareSamples = bounds.usedEvidenceAwareSamples;
+    result.statistics.boundsFellBackToCandidateSamples = bounds.fellBackToCandidateSamples;
+    result.statistics.boundsSelectionReason = bounds.selectionReason;
     result.statistics.inputFrameCount = frames.size();
     result.statistics.acceptedFrameCount = retained_frames.size();
     result.statistics.effectiveRobustFrameQualityWeighting =
@@ -5763,6 +6491,9 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         !options.enableVisibilityOccupancyCompletion;
     result.statistics.effectiveVisualHullSignedDistanceCompletion =
         use_visual_hull_completion;
+    result.statistics.effectiveVisualHullCompletionTopologyGuard =
+        use_visual_hull_completion &&
+        options.enableVisualHullCompletionTopologyGuard;
     result.statistics.effectiveVisualHullCompletionBandVoxels =
         use_visual_hull_completion
         ? std::clamp(options.visualHullCompletionBandVoxels, 1.0f, 24.0f)
@@ -5792,9 +6523,12 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         }
         visual_hull_completion_tsdf = tsdf;
         visual_hull_completion_support = supported;
+        std::vector<std::uint8_t> observed_conflict_veto;
         if (options.visualHullCompletionPreserveObservedTsdf &&
             occupied.size() == visual_hull_completion_support.size())
         {
+            observed_conflict_veto.assign(
+                visual_hull_completion_support.size(), 0);
             const float maximum_absolute_tsdf = std::clamp(
                 options.visualHullCompletionMaximumObservedAbsoluteTsdf,
                 0.05f,
@@ -5805,8 +6539,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                  index < visual_hull_completion_support.size();
                  ++index)
             {
-                if (visual_hull_completion_support[index] != 0 ||
-                    weight[index] <= 1.0e-6f ||
+                if (weight[index] <= 1.0e-6f ||
                     maximumGeometrySupportCount[index] <
                         minimum_geometry_support ||
                     bitCount(geometrySourceMask[index]) < 2 ||
@@ -5820,11 +6553,16 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                     visual_hull_completion_tsdf[index] < 0.0f;
                 if (hull_inside != tsdf_inside)
                 {
-                    continue;
+                    observed_conflict_veto[index] = 1;
+                    ++result.statistics
+                          .visualHullCompletionObservedConflictVetoSampleCount;
                 }
-                visual_hull_completion_support[index] = 1;
-                ++result.statistics
-                      .visualHullCompletionPreservedObservedSampleCount;
+                if (visual_hull_completion_support[index] == 0)
+                {
+                    visual_hull_completion_support[index] = 1;
+                    ++result.statistics
+                          .visualHullCompletionPreservedObservedSampleCount;
+                }
             }
         }
         const std::vector<std::uint8_t> supported_before_hull_completion =
@@ -5835,7 +6573,10 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 occupied,
                 result.statistics.effectiveVisualHullCompletionBandVoxels,
                 &visual_hull_completion_tsdf,
-                &visual_hull_completion_support);
+                &visual_hull_completion_support,
+                observed_conflict_veto.empty()
+                    ? nullptr
+                    : &observed_conflict_veto);
         result.statistics.visualHullCompletionOccupiedSampleCount =
             completion.occupiedSampleCount;
         result.statistics.visualHullCompletionBoundarySampleCount =
@@ -6018,20 +6759,18 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 result.layout.boundsMax,
                 occupancy_frames,
                 occupancy_options);
-            const double full_fraction = occupancy.statistics.sampleCount > 0
-                ? static_cast<double>(
-                      occupancy.statistics.fullSampleCountAfterCleanup) /
-                      static_cast<double>(occupancy.statistics.sampleCount)
-                : 0.0;
             const bool empty_cut =
                 occupancy.error ==
                 "visibility occupancy cut contains no full samples";
-            const bool collapsed_cut = occupancy.ok &&
-                full_fraction < static_cast<double>(minimum_full_fraction);
-            if (occupancy.cancelled ||
+            const bool accepted_cut = shouldApplyVisibilityOccupancyCut(
+                occupancy.ok,
+                empty_cut,
+                occupancy.statistics.sampleCount,
+                occupancy.statistics.fullSampleCountAfterCleanup,
+                minimum_full_fraction);
+            if (occupancy.cancelled || accepted_cut ||
                 occupancy_options
-                        .minimumDepthFullViewsForSilhouettePrior <= 0 ||
-                (!empty_cut && !collapsed_cut))
+                        .minimumDepthFullViewsForSilhouettePrior <= 0)
             {
                 break;
             }
@@ -6041,7 +6780,30 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 current_threshold > 1 ? 1 : 0;
             ++depth_support_fallback_count;
         }
-        if (!occupancy.ok)
+        const bool rejected_empty_cut =
+            occupancy.error ==
+            "visibility occupancy cut contains no full samples";
+        const bool accepted_cut = shouldApplyVisibilityOccupancyCut(
+            occupancy.ok,
+            rejected_empty_cut,
+            occupancy.statistics.sampleCount,
+            occupancy.statistics.fullSampleCountAfterCleanup,
+            minimum_full_fraction);
+        const bool rejected_collapsed_cut = occupancy.ok &&
+            !rejected_empty_cut && !accepted_cut;
+        result.statistics.visibilityOccupancyRejectedEmptyCut =
+            rejected_empty_cut;
+        result.statistics.visibilityOccupancyRejectedCollapsedCut =
+            rejected_collapsed_cut;
+        result.statistics.effectiveVisibilityOccupancyCompletion =
+            !rejected_empty_cut && !rejected_collapsed_cut;
+        if (occupancy.cancelled)
+        {
+            result.errorMessage = QStringLiteral(
+                "Visibility occupancy solve was cancelled");
+            return result;
+        }
+        if (!occupancy.ok && !rejected_empty_cut)
         {
             result.errorMessage = occupancy.cancelled
                 ? QStringLiteral("可见性占据场求解已取消")
@@ -6049,13 +6811,17 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                       .arg(QString::fromStdString(occupancy.error));
             return result;
         }
-        VisibilityOccupancyDistanceFieldResult distance_field =
-            VisibilityOccupancyDistanceField::build(
+        VisibilityOccupancyDistanceFieldResult distance_field;
+        if (result.statistics.effectiveVisibilityOccupancyCompletion)
+        {
+            distance_field = VisibilityOccupancyDistanceField::build(
                 occupancy.sampleDimensions,
                 occupancy.boundsMin,
                 occupancy.boundsMax,
                 occupancy.occupied);
-        if (!distance_field.ok)
+        }
+        if (result.statistics.effectiveVisibilityOccupancyCompletion &&
+            !distance_field.ok)
         {
             result.errorMessage = QStringLiteral(
                 "可见性占据场距离场构建失败: %1")
@@ -6063,11 +6829,15 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                                           distance_field.error));
             return result;
         }
-        occupancy.signedDistanceSamples =
-            std::move(distance_field.signedWorldDistance);
-        occupancy.signedDistanceSamplesAreWorldUnits = true;
-        if (options.visibilityOccupancyNativeCarrierExtraction ||
-            options.visibilityOccupancyCellBoundaryExtraction)
+        if (result.statistics.effectiveVisibilityOccupancyCompletion)
+        {
+            occupancy.signedDistanceSamples =
+                std::move(distance_field.signedWorldDistance);
+            occupancy.signedDistanceSamplesAreWorldUnits = true;
+        }
+        if (result.statistics.effectiveVisibilityOccupancyCompletion &&
+            (options.visibilityOccupancyNativeCarrierExtraction ||
+             options.visibilityOccupancyCellBoundaryExtraction))
         {
             native_carrier_bounds_min = occupancy.boundsMin;
             native_carrier_bounds_max = occupancy.boundsMax;
@@ -6234,13 +7004,16 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             options.visibilityOccupancySignedDistanceNormalizationSamples,
             0.5f,
             16.0f);
-        const VisibilityOccupancyTsdfCompletionStatistics completion =
-            VisibilityOccupancyTsdfCompletion::apply(
+        VisibilityOccupancyTsdfCompletionStatistics completion;
+        if (result.statistics.effectiveVisibilityOccupancyCompletion)
+        {
+            completion = VisibilityOccupancyTsdfCompletion::apply(
                 result.layout,
                 occupancy,
                 completion_options,
                 completion_tsdf,
                 completion_support);
+        }
         result.statistics.visibilityOccupancyRecoveredUnsupportedSampleCount =
             completion.recoveredUnsupportedSampleCount;
         result.statistics.visibilityOccupancyPreservedObservedSampleCount =
@@ -6275,19 +7048,20 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
     result.statistics.effectiveZeroCrossingDiagnostics =
         options.collectZeroCrossingDiagnostics;
     result.statistics.effectiveVisibilityOccupancyCellBoundaryExtraction =
+        result.statistics.effectiveVisibilityOccupancyCompletion &&
         options.visibilityOccupancyCellBoundaryExtraction;
     result.statistics.effectiveConsistentIsoSurfaceExtraction =
         options.enableConsistentIsoSurfaceExtraction &&
-        !options.visibilityOccupancyCellBoundaryExtraction;
+        !result.statistics.effectiveVisibilityOccupancyCellBoundaryExtraction;
     result.statistics.effectiveMc33IsoSurfaceExtraction =
         options.enableMc33IsoSurfaceExtraction &&
-        !options.visibilityOccupancyCellBoundaryExtraction;
+        !result.statistics.effectiveVisibilityOccupancyCellBoundaryExtraction;
     result.statistics.effectiveMc33RequireSupportedSignChange =
         result.statistics.effectiveMc33IsoSurfaceExtraction &&
         options.mc33RequireSupportedSignChange;
     if (options.enableConsistentIsoSurfaceExtraction &&
         options.enableMc33IsoSurfaceExtraction &&
-        !options.visibilityOccupancyCellBoundaryExtraction)
+        !result.statistics.effectiveVisibilityOccupancyCellBoundaryExtraction)
     {
         result.errorMessage = QStringLiteral(
             "TSDF consistent and MC33 iso-surface extractors cannot both be enabled");
@@ -6370,14 +7144,14 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         ? no_native_support
         : (!visual_hull_completion_support.empty()
         ? visual_hull_completion_support
-        : (options.enableVisibilityOccupancyCompletion
+        : (result.statistics.effectiveVisibilityOccupancyCompletion
                ? supported
                : (!adaptiveTgvExtractionSupport.empty()
                ? adaptiveTgvExtractionSupport
                : supported)));
     try
     {
-        if (options.visibilityOccupancyCellBoundaryExtraction)
+        if (result.statistics.effectiveVisibilityOccupancyCellBoundaryExtraction)
         {
             VisibilityOccupancyBoundaryOptions extraction_options;
             extraction_options.isCancelled = options.isCancelled;
@@ -6562,6 +7336,110 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 face.v[0] = static_cast<int>(std::lround(faces(row, 0)));
                 face.v[1] = static_cast<int>(std::lround(faces(row, 1)));
                 face.v[2] = static_cast<int>(std::lround(faces(row, 2)));
+            }
+        }
+        if (result.statistics.effectiveVisualHullCompletionTopologyGuard &&
+            result.statistics.visualHullCompletionRecoveredSampleCount > 0)
+        {
+            const std::vector<std::uint8_t> &baseline_support =
+                !adaptiveTgvExtractionSupport.empty()
+                ? adaptiveTgvExtractionSupport
+                : supported;
+            ComparableIsoSurfaceExtraction baseline_extraction =
+                extractComparableIsoSurface(
+                    result.layout.boundsMin,
+                    result.layout.boundsMax,
+                    result.layout.cells,
+                    tsdf,
+                    baseline_support,
+                    options.enableMc33IsoSurfaceExtraction,
+                    options.mc33RequireSupportedSignChange,
+                    options.enableConsistentIsoSurfaceExtraction,
+                    options.isCancelled);
+            if (!baseline_extraction.ok || baseline_extraction.mesh.empty())
+            {
+                result.errorMessage = QStringLiteral(
+                    "TSDF visual-hull topology guard could not extract the "
+                    "uncompleted baseline: %1")
+                    .arg(baseline_extraction.errorMessage);
+                return result;
+            }
+
+            const DepthTsdfVisualHullTopologyGuardEvaluation evaluation =
+                evaluateVisualHullCompletionTopologyGuard(
+                    baseline_extraction.mesh,
+                    result.mesh,
+                    options
+                        .visualHullCompletionMaximumTopologicalComplexityIncrease,
+                    options.visualHullCompletionMaximumSurfaceAreaRatio,
+                    options.visualHullCompletionMaximumBoundsDiagonalRatio);
+            result.statistics.visualHullCompletionTopologyGuardEvaluated = true;
+            result.statistics.visualHullCompletionTopologyGuardAccepted =
+                evaluation.accepted;
+            result.statistics.visualHullCompletionTopologyGuardRejectionFlags =
+                evaluation.rejectionFlags;
+            result.statistics.visualHullCompletionTopologyGuardBaselineFaceCount =
+                evaluation.baselineFaceCount;
+            result.statistics.visualHullCompletionTopologyGuardCandidateFaceCount =
+                evaluation.candidateFaceCount;
+            result.statistics
+                .visualHullCompletionTopologyGuardBaselineBoundaryEdgeCount =
+                evaluation.baselineBoundaryEdgeCount;
+            result.statistics
+                .visualHullCompletionTopologyGuardCandidateBoundaryEdgeCount =
+                evaluation.candidateBoundaryEdgeCount;
+            result.statistics
+                .visualHullCompletionTopologyGuardBaselineNonManifoldEdgeCount =
+                evaluation.baselineNonManifoldEdgeCount;
+            result.statistics
+                .visualHullCompletionTopologyGuardCandidateNonManifoldEdgeCount =
+                evaluation.candidateNonManifoldEdgeCount;
+            result.statistics.visualHullCompletionTopologyGuardBaselineComponentCount =
+                evaluation.baselineComponentCount;
+            result.statistics.visualHullCompletionTopologyGuardCandidateComponentCount =
+                evaluation.candidateComponentCount;
+            result.statistics
+                .visualHullCompletionTopologyGuardBaselineEulerCharacteristic =
+                evaluation.baselineEulerCharacteristic;
+            result.statistics
+                .visualHullCompletionTopologyGuardCandidateEulerCharacteristic =
+                evaluation.candidateEulerCharacteristic;
+            result.statistics
+                .visualHullCompletionTopologyGuardBaselineTopologicalComplexity =
+                evaluation.baselineTopologicalComplexity;
+            result.statistics
+                .visualHullCompletionTopologyGuardCandidateTopologicalComplexity =
+                evaluation.candidateTopologicalComplexity;
+            result.statistics.visualHullCompletionTopologyGuardSurfaceAreaRatio =
+                evaluation.surfaceAreaRatio;
+            result.statistics.visualHullCompletionTopologyGuardBoundsDiagonalRatio =
+                evaluation.boundsDiagonalRatio;
+
+            if (!evaluation.accepted)
+            {
+                result.mesh = std::move(baseline_extraction.mesh);
+                result.statistics.mc33SupportMaskedSampleCount =
+                    baseline_extraction.mc33SupportMaskedSampleCount;
+                result.statistics.mc33RejectedUnsupportedCellFaceCount =
+                    baseline_extraction.mc33RejectedUnsupportedCellFaceCount;
+                result.statistics.isoSurfaceAmbiguousFaceCount =
+                    baseline_extraction.isoSurfaceAmbiguousFaceCount;
+                result.statistics.isoSurfaceTopologyAdjustedCellCount =
+                    baseline_extraction.isoSurfaceTopologyAdjustedCellCount;
+                result.statistics.isoSurfaceDeciderTieCount =
+                    baseline_extraction.isoSurfaceDeciderTieCount;
+                result.statistics.isoSurfaceMultipleLoopCellCount =
+                    baseline_extraction.isoSurfaceMultipleLoopCellCount;
+                result.statistics.isoSurfaceEdgeVertexCacheHitCount =
+                    baseline_extraction.isoSurfaceEdgeVertexCacheHitCount;
+                result.statistics.isoSurfaceEdgeVertexCacheMissCount =
+                    baseline_extraction.isoSurfaceEdgeVertexCacheMissCount;
+                result.statistics.isoSurfaceInteriorLoopVertexCount =
+                    baseline_extraction.isoSurfaceInteriorLoopVertexCount;
+                result.statistics.isoSurfaceRejectedDegenerateFaceCount =
+                    baseline_extraction.isoSurfaceRejectedDegenerateFaceCount;
+                result.statistics.isoSurfaceUnresolvedCellCount =
+                    baseline_extraction.isoSurfaceUnresolvedCellCount;
             }
         }
         result.statistics.marchingCubesVertexCount = result.mesh.vertexCount();
@@ -7327,6 +8205,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             options.enableVisibilityConstrainedFinalHoleFill)
         {
             TriMesh candidate = result.mesh;
+            const std::size_t vertex_count_before = candidate.vertices.size();
             const int face_count_before = candidate.faceCount();
             int protected_hole_count = 0;
             const int filled_hole_count = detail::fillSmallBoundaryHoles(
@@ -7337,6 +8216,44 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 &protected_silhouette_vertices,
                 &protected_hole_count,
                 true);
+            HoleFillPatchEvidenceResult patch_evidence;
+            if (options.enableVisibilityConstrainedFinalHoleFill &&
+                filled_hole_count > 0)
+            {
+                patch_evidence = validateAddedHoleFillPatchEvidence(
+                    candidate,
+                    vertex_count_before,
+                    static_cast<std::size_t>(face_count_before),
+                    frames,
+                    effective_depth_valid_masks,
+                    options.visibilityHoleFillMinimumSupportingViews,
+                    options.visibilityHoleFillMaximumConflictViews,
+                    options.visibilityHoleFillDepthToleranceVoxels,
+                    maximum_voxel_size,
+                    options.minimumConfidence);
+                result.statistics.finalHoleFillPatchEvidenceValidationAttempted =
+                    patch_evidence.attempted;
+                result.statistics.finalHoleFillPatchEvidenceValidationAccepted =
+                    patch_evidence.accepted;
+                result.statistics.finalHoleFillPatchEvidenceVertexSampleCount =
+                    patch_evidence.vertexSampleCount;
+                result.statistics.finalHoleFillPatchEvidenceFaceCenterSampleCount =
+                    patch_evidence.faceCenterSampleCount;
+                result.statistics.finalHoleFillPatchEvidenceAcceptedSampleCount =
+                    patch_evidence.acceptedSampleCount;
+                result.statistics
+                    .finalHoleFillPatchEvidenceRejectedSupportSampleCount =
+                    patch_evidence.rejectedSupportSampleCount;
+                result.statistics
+                    .finalHoleFillPatchEvidenceRejectedConflictSampleCount =
+                    patch_evidence.rejectedConflictSampleCount;
+                result.statistics
+                    .finalHoleFillPatchEvidenceMinimumSupportingViewCount =
+                    patch_evidence.minimumSupportingViewCount;
+                result.statistics
+                    .finalHoleFillPatchEvidenceMaximumConflictViewCount =
+                    patch_evidence.maximumConflictViewCount;
+            }
             detail::removeDegenerateFaces(
                 &candidate,
                 minimum_degenerate_face_area);
@@ -7357,8 +8274,12 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 quality_after.sliverRatio <=
                     std::max(0.0f, options.finalHoleFillMaximumSliverRatio) ||
                 quality_after.sliverRatio <= quality_before.sliverRatio;
+            const bool patch_evidence_is_safe =
+                !options.enableVisibilityConstrainedFinalHoleFill ||
+                (patch_evidence.attempted && patch_evidence.accepted);
             const bool accept_final_fill =
                 filled_hole_count > 0 &&
+                patch_evidence_is_safe &&
                 meshVerticesInsidePaddedLayout(candidate, result.layout) &&
                 topology_after.boundaryEdgeCount < topology_before.boundaryEdgeCount &&
                 topology_after.danglingBoundaryVertexCount <=
@@ -8282,6 +9203,34 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         result.visibilityOccupancyCarrierField.signedWorldDistance =
             std::move(native_carrier_field);
     }
+    if (options.visibilityOccupancyCellBoundaryExtraction)
+    {
+        const std::vector<float> &implicit_tsdf =
+            visual_hull_completion_tsdf.empty()
+            ? tsdf
+            : visual_hull_completion_tsdf;
+        if (implicit_tsdf.size() ==
+            static_cast<std::size_t>(result.layout.sampleCount))
+        {
+            for (int axis = 0; axis < 3; ++axis)
+            {
+                result.depthImplicitField.sampleDimensions[axis] =
+                    result.layout.cells[axis] + 1;
+            }
+            result.depthImplicitField.boundsMin = result.layout.boundsMin;
+            result.depthImplicitField.boundsMax = result.layout.boundsMax;
+            result.depthImplicitField.signedWorldDistance.resize(
+                implicit_tsdf.size());
+            std::transform(
+                implicit_tsdf.cbegin(),
+                implicit_tsdf.cend(),
+                result.depthImplicitField.signedWorldDistance.begin(),
+                [truncation](float value)
+                {
+                    return std::clamp(value, -1.0f, 1.0f) * truncation;
+                });
+        }
+    }
     result.statistics.postIntegrationElapsedMs =
         elapsedMilliseconds(postprocess_start);
 
@@ -8383,6 +9332,18 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
     QJsonObject object{
         {QStringLiteral("input_frame_count"), statistics.inputFrameCount},
         {QStringLiteral("accepted_frame_count"), statistics.acceptedFrameCount},
+        {QStringLiteral("bounds_candidate_sample_count"),
+         static_cast<double>(statistics.boundsCandidateSampleCount)},
+        {QStringLiteral("bounds_trusted_sample_count"),
+         static_cast<double>(statistics.boundsTrustedSampleCount)},
+        {QStringLiteral("bounds_selected_sample_count"),
+         static_cast<double>(statistics.boundsSelectedSampleCount)},
+        {QStringLiteral("bounds_used_evidence_aware_samples"),
+         statistics.boundsUsedEvidenceAwareSamples},
+        {QStringLiteral("bounds_fell_back_to_candidate_samples"),
+         statistics.boundsFellBackToCandidateSamples},
+        {QStringLiteral("bounds_selection_reason"),
+         statistics.boundsSelectionReason},
         {QStringLiteral("integrated_voxel_updates"),
          static_cast<double>(statistics.integratedVoxelUpdates)},
         {QStringLiteral("supported_sample_count"),
@@ -8742,7 +9703,12 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
              "visual_hull_completion_preserved_observed_sample_count"),
          static_cast<double>(
              statistics
-                 .visualHullCompletionPreservedObservedSampleCount)},
+                  .visualHullCompletionPreservedObservedSampleCount)},
+        {QStringLiteral(
+             "visual_hull_completion_observed_conflict_veto_sample_count"),
+         static_cast<double>(
+             statistics
+                 .visualHullCompletionObservedConflictVetoSampleCount)},
         {QStringLiteral(
              "visual_hull_completion_recovered_sample_count"),
          static_cast<double>(
@@ -8751,8 +9717,75 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
              "visual_hull_completion_relaxed_sample_count"),
          static_cast<double>(
              statistics.visualHullCompletionRelaxedSampleCount)},
+        {QStringLiteral(
+             "effective_visual_hull_completion_topology_guard"),
+         statistics.effectiveVisualHullCompletionTopologyGuard},
+        {QStringLiteral(
+             "visual_hull_completion_topology_guard_evaluated"),
+         statistics.visualHullCompletionTopologyGuardEvaluated},
+        {QStringLiteral(
+             "visual_hull_completion_topology_guard_accepted"),
+         statistics.visualHullCompletionTopologyGuardAccepted},
+        {QStringLiteral(
+             "visual_hull_completion_topology_guard_rejection_flags"),
+         static_cast<double>(
+             statistics.visualHullCompletionTopologyGuardRejectionFlags)},
+        {QStringLiteral(
+             "visual_hull_completion_topology_guard_baseline_face_count"),
+         statistics.visualHullCompletionTopologyGuardBaselineFaceCount},
+        {QStringLiteral(
+             "visual_hull_completion_topology_guard_candidate_face_count"),
+         statistics.visualHullCompletionTopologyGuardCandidateFaceCount},
+        {QStringLiteral(
+             "visual_hull_completion_topology_guard_baseline_boundary_edge_count"),
+         statistics
+             .visualHullCompletionTopologyGuardBaselineBoundaryEdgeCount},
+        {QStringLiteral(
+             "visual_hull_completion_topology_guard_candidate_boundary_edge_count"),
+         statistics
+             .visualHullCompletionTopologyGuardCandidateBoundaryEdgeCount},
+        {QStringLiteral(
+             "visual_hull_completion_topology_guard_baseline_non_manifold_edge_count"),
+         statistics
+             .visualHullCompletionTopologyGuardBaselineNonManifoldEdgeCount},
+        {QStringLiteral(
+             "visual_hull_completion_topology_guard_candidate_non_manifold_edge_count"),
+         statistics
+             .visualHullCompletionTopologyGuardCandidateNonManifoldEdgeCount},
+        {QStringLiteral(
+             "visual_hull_completion_topology_guard_baseline_component_count"),
+         statistics.visualHullCompletionTopologyGuardBaselineComponentCount},
+        {QStringLiteral(
+             "visual_hull_completion_topology_guard_candidate_component_count"),
+         statistics.visualHullCompletionTopologyGuardCandidateComponentCount},
+        {QStringLiteral(
+             "visual_hull_completion_topology_guard_baseline_euler_characteristic"),
+         statistics
+             .visualHullCompletionTopologyGuardBaselineEulerCharacteristic},
+        {QStringLiteral(
+             "visual_hull_completion_topology_guard_candidate_euler_characteristic"),
+         statistics
+             .visualHullCompletionTopologyGuardCandidateEulerCharacteristic},
+        {QStringLiteral(
+             "visual_hull_completion_topology_guard_baseline_topological_complexity"),
+         statistics
+             .visualHullCompletionTopologyGuardBaselineTopologicalComplexity},
+        {QStringLiteral(
+             "visual_hull_completion_topology_guard_candidate_topological_complexity"),
+         statistics
+             .visualHullCompletionTopologyGuardCandidateTopologicalComplexity},
+        {QStringLiteral(
+             "visual_hull_completion_topology_guard_surface_area_ratio"),
+         statistics.visualHullCompletionTopologyGuardSurfaceAreaRatio},
+        {QStringLiteral(
+             "visual_hull_completion_topology_guard_bounds_diagonal_ratio"),
+         statistics.visualHullCompletionTopologyGuardBoundsDiagonalRatio},
         {QStringLiteral("effective_visibility_occupancy_completion"),
          statistics.effectiveVisibilityOccupancyCompletion},
+        {QStringLiteral("visibility_occupancy_rejected_empty_cut"),
+         statistics.visibilityOccupancyRejectedEmptyCut},
+        {QStringLiteral("visibility_occupancy_rejected_collapsed_cut"),
+         statistics.visibilityOccupancyRejectedCollapsedCut},
         {QStringLiteral(
              "effective_visibility_occupancy_cell_boundary_extraction"),
          statistics.effectiveVisibilityOccupancyCellBoundaryExtraction},
@@ -9318,6 +10351,33 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
         {QStringLiteral(
              "visibility_hole_fill_rejected_conflict_loop_count"),
          statistics.visibilityHoleFillRejectedConflictLoopCount},
+        {QStringLiteral(
+             "final_hole_fill_patch_evidence_validation_attempted"),
+         statistics.finalHoleFillPatchEvidenceValidationAttempted},
+        {QStringLiteral(
+             "final_hole_fill_patch_evidence_validation_accepted"),
+         statistics.finalHoleFillPatchEvidenceValidationAccepted},
+        {QStringLiteral(
+             "final_hole_fill_patch_evidence_vertex_sample_count"),
+         statistics.finalHoleFillPatchEvidenceVertexSampleCount},
+        {QStringLiteral(
+             "final_hole_fill_patch_evidence_face_center_sample_count"),
+         statistics.finalHoleFillPatchEvidenceFaceCenterSampleCount},
+        {QStringLiteral(
+             "final_hole_fill_patch_evidence_accepted_sample_count"),
+         statistics.finalHoleFillPatchEvidenceAcceptedSampleCount},
+        {QStringLiteral(
+             "final_hole_fill_patch_evidence_rejected_support_sample_count"),
+         statistics.finalHoleFillPatchEvidenceRejectedSupportSampleCount},
+        {QStringLiteral(
+             "final_hole_fill_patch_evidence_rejected_conflict_sample_count"),
+         statistics.finalHoleFillPatchEvidenceRejectedConflictSampleCount},
+        {QStringLiteral(
+             "final_hole_fill_patch_evidence_minimum_supporting_view_count"),
+         statistics.finalHoleFillPatchEvidenceMinimumSupportingViewCount},
+        {QStringLiteral(
+             "final_hole_fill_patch_evidence_maximum_conflict_view_count"),
+         statistics.finalHoleFillPatchEvidenceMaximumConflictViewCount},
         {QStringLiteral("effective_tiny_boundary_loop_collapse"),
          statistics.effectiveTinyBoundaryLoopCollapse},
         {QStringLiteral("tiny_boundary_loop_collapse_attempted"),

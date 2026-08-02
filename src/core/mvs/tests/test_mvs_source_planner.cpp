@@ -67,10 +67,44 @@ TEST(MvsSourcePlanner, EntirelyStalePairCatalogProducesNoActiveQuality)
         "E:/data/current/image_02.tif",
     };
     const std::vector<MvsSourcePairQuality> staleQualities = {
-        {"E:/data/removed/image_01.tif", "E:/data/removed/image_02.tif", 150, 120, true},
+        {"E:/data/removed/old_image_01.tif", "E:/data/removed/old_image_02.tif", 150, 120, true},
     };
 
     EXPECT_TRUE(filterMvsSourcePairQualitiesForImages(staleQualities, currentImages).empty());
+}
+
+TEST(MvsSourcePlanner, RelocatedPairCatalogRebindsUniqueFileNames)
+{
+    const std::vector<std::string> currentImages = {
+        "E:/workspace/images/image_01.tif",
+        "E:/workspace/images/image_02.tif",
+    };
+    const std::vector<MvsSourcePairQuality> relocatedQualities = {
+        {"G:/capture/archive/image_01.tif", "G:/capture/archive/image_02.tif", 150, 120, true},
+    };
+
+    const auto filtered = filterMvsSourcePairQualitiesForImages(
+        relocatedQualities, currentImages);
+
+    ASSERT_EQ(filtered.size(), 1u);
+    EXPECT_EQ(filtered.front().imageA, currentImages[0]);
+    EXPECT_EQ(filtered.front().imageB, currentImages[1]);
+    EXPECT_EQ(filtered.front().geometricInliers, 120);
+}
+
+TEST(MvsSourcePlanner, RelocatedPairCatalogRejectsAmbiguousFileNames)
+{
+    const std::vector<std::string> currentImages = {
+        "E:/workspace/a/image_01.tif",
+        "E:/workspace/b/image_01.tif",
+        "E:/workspace/images/image_02.tif",
+    };
+    const std::vector<MvsSourcePairQuality> relocatedQualities = {
+        {"G:/capture/image_01.tif", "G:/capture/image_02.tif", 150, 120, true},
+    };
+
+    EXPECT_TRUE(filterMvsSourcePairQualitiesForImages(
+        relocatedQualities, currentImages).empty());
 }
 
 TEST(MvsSourcePlanner, AuditedFailureReplacesDuplicateWithMissingStatistics)
@@ -190,6 +224,9 @@ TEST(MvsSourcePlanner, VerifiedFirstNeverBackfillsZeroInlierViews)
     MvsSourceCandidate verified_b = candidate(6, 850, 846, 23.1f, 0.8f, 0.6f, true);
     verified_b.verifiedPairGeometry = true;
     MvsSourceCandidate zero_inlier = candidate(15, 800, 0, 42.9f, 0.8f, 1.0f, true);
+    zero_inlier.verificationStatus = MvsSourceVerificationStatus::Failed;
+    zero_inlier.pairTotalMatches = 320;
+    zero_inlier.verificationReason = "zero_geometric_inliers";
 
     const auto plan = planMvsSourceViewsVerifiedFirst(
         {verified_a, verified_b, zero_inlier}, options);
@@ -202,6 +239,290 @@ TEST(MvsSourcePlanner, VerifiedFirstNeverBackfillsZeroInlierViews)
     {
         return entry.geometricInliers <= 0;
     }));
+}
+
+TEST(MvsSourcePlanner, FailedPairWithDirectGeometryCanBackfillHyb2OrbitalShortfall)
+{
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 12;
+    options.maxSources = 4;
+    options.rejectAngleOutliers = true;
+    options.maxTriangulationAngleDeg = 62.0f;
+    options.minGeometricInliers = 20;
+    options.allowSequenceFallback = false;
+    options.allowFailedPairBackfill = true;
+
+    MvsSourceCandidate verified =
+        candidate(3, 900, 860, 29.8f, 0.9f, 1.0f, true);
+    verified.verifiedPairGeometry = true;
+    verified.verificationStatus = MvsSourceVerificationStatus::Verified;
+    verified.pairTotalMatches = 900;
+
+    MvsSourceCandidate failed_a =
+        candidate(2, 480, 34, 59.7f, 0.8f, 1.0f);
+    failed_a.verificationStatus = MvsSourceVerificationStatus::Failed;
+    failed_a.pairTotalMatches = 49;
+    failed_a.pairCoverageScore = 0.25f;
+    failed_a.verificationReason = "stored_match_geometry_gate_failed";
+
+    MvsSourceCandidate failed_b =
+        candidate(6, 420, 24, 59.5f, 0.75f, 1.0f);
+    failed_b.verificationStatus = MvsSourceVerificationStatus::Failed;
+    failed_b.pairTotalMatches = 37;
+    failed_b.pairCoverageScore = 0.1875f;
+    failed_b.verificationReason = "stored_match_geometry_gate_failed";
+
+    MvsSourceCandidate weak_ratio =
+        candidate(7, 900, 50, 30.0f, 0.9f, 1.0f);
+    weak_ratio.verificationStatus = MvsSourceVerificationStatus::Failed;
+    weak_ratio.pairTotalMatches = 200;
+    weak_ratio.pairCoverageScore = 0.50f;
+    weak_ratio.verificationReason = "stored_match_geometry_gate_failed";
+
+    const auto plan = planMvsSourceViewsVerifiedFirst(
+        {weak_ratio, failed_b, verified, failed_a}, options);
+
+    ASSERT_EQ(plan.selected.size(), 3u);
+    EXPECT_EQ(plan.selected[0].viewIndex, 3);
+    EXPECT_EQ(plan.selected[0].tier, MvsSourceTier::VerifiedPair);
+    for (std::size_t index = 1; index < plan.selected.size(); ++index)
+    {
+        EXPECT_EQ(plan.selected[index].tier, MvsSourceTier::TrackGeometryBackfill);
+        EXPECT_EQ(plan.selected[index].verificationStatus,
+                  MvsSourceVerificationStatus::Failed);
+        EXPECT_FALSE(plan.selected[index].verifiedPairGeometry);
+        EXPECT_FALSE(plan.selected[index].sequenceFallback);
+        EXPECT_GE(plan.selected[index].geometricInliers, 20);
+        EXPECT_GE(plan.selected[index].pairInlierRatio, 0.60f);
+    }
+    EXPECT_EQ(plan.sourceViewShortfall, 1);
+    EXPECT_TRUE(std::none_of(
+        plan.selected.cbegin(),
+        plan.selected.cend(),
+        [](const auto &entry)
+        {
+            return entry.viewIndex == 7;
+        }));
+
+    const auto defaultPlan = planMvsSourceViews({failed_a}, options);
+    EXPECT_TRUE(defaultPlan.selected.empty());
+}
+
+TEST(MvsSourcePlanner, VerifiedPriorityAndBackfillOrderRemainDeterministic)
+{
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 12;
+    options.maxSources = 3;
+    options.rejectAngleOutliers = true;
+    options.maxTriangulationAngleDeg = 62.0f;
+    options.minGeometricInliers = 20;
+    options.allowSequenceFallback = false;
+    options.allowFailedPairBackfill = true;
+
+    MvsSourceCandidate verified_a =
+        candidate(3, 120, 90, 15.0f, 0.6f, 0.6f, true);
+    verified_a.verifiedPairGeometry = true;
+    MvsSourceCandidate verified_b =
+        candidate(5, 110, 85, 16.0f, 0.6f, 0.6f, true);
+    verified_b.verifiedPairGeometry = true;
+
+    MvsSourceCandidate failed_a =
+        candidate(2, 700, 34, 59.7f, 0.9f, 1.0f);
+    failed_a.verificationStatus = MvsSourceVerificationStatus::Failed;
+    failed_a.pairTotalMatches = 49;
+    failed_a.pairCoverageScore = 0.25f;
+    MvsSourceCandidate failed_b =
+        candidate(6, 600, 24, 59.5f, 0.9f, 1.0f);
+    failed_b.verificationStatus = MvsSourceVerificationStatus::Failed;
+    failed_b.pairTotalMatches = 37;
+    failed_b.pairCoverageScore = 0.1875f;
+
+    const auto first = planMvsSourceViewsVerifiedFirst(
+        {failed_b, verified_b, failed_a, verified_a}, options);
+    const auto second = planMvsSourceViewsVerifiedFirst(
+        {verified_a, failed_a, verified_b, failed_b}, options);
+
+    ASSERT_EQ(first.selected.size(), 3u);
+    ASSERT_EQ(second.selected.size(), first.selected.size());
+    EXPECT_EQ(first.selected[0].tier, MvsSourceTier::VerifiedPair);
+    EXPECT_EQ(first.selected[1].tier, MvsSourceTier::VerifiedPair);
+    EXPECT_EQ(first.selected[2].tier, MvsSourceTier::TrackGeometryBackfill);
+    for (std::size_t index = 0; index < first.selected.size(); ++index)
+    {
+        EXPECT_EQ(first.selected[index].viewIndex,
+                  second.selected[index].viewIndex);
+        EXPECT_EQ(first.selected[index].tier,
+                  second.selected[index].tier);
+    }
+}
+
+TEST(MvsSourcePlanner, FailedBackfillRequiresSampleSizeCoverageAndWilsonConfidence)
+{
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 12;
+    options.maxSources = 3;
+    options.rejectAngleOutliers = true;
+    options.maxTriangulationAngleDeg = 62.0f;
+    options.allowSequenceFallback = false;
+    options.allowFailedPairBackfill = true;
+
+    MvsSourceCandidate verified =
+        candidate(3, 120, 95, 30.0f, 0.8f, 0.5f, true);
+    verified.verifiedPairGeometry = true;
+
+    MvsSourceCandidate accepted =
+        candidate(2, 80, 13, 60.0f, 0.7f, 0.8f);
+    accepted.verificationStatus = MvsSourceVerificationStatus::Failed;
+    accepted.pairTotalMatches = 17;
+    accepted.pairCoverageScore = 0.1875f;
+
+    MvsSourceCandidate too_small =
+        candidate(5, 80, 9, 60.0f, 0.7f, 0.8f);
+    too_small.verificationStatus = MvsSourceVerificationStatus::Failed;
+    too_small.pairTotalMatches = 9;
+    too_small.pairCoverageScore = 0.25f;
+
+    MvsSourceCandidate low_coverage =
+        candidate(6, 80, 17, 60.0f, 0.7f, 0.8f);
+    low_coverage.verificationStatus = MvsSourceVerificationStatus::Failed;
+    low_coverage.pairTotalMatches = 19;
+    low_coverage.pairCoverageScore = 0.125f;
+
+    MvsSourceCandidate weak_confidence =
+        candidate(7, 80, 50, 60.0f, 0.7f, 0.8f);
+    weak_confidence.verificationStatus = MvsSourceVerificationStatus::Failed;
+    weak_confidence.pairTotalMatches = 200;
+    weak_confidence.pairCoverageScore = 0.50f;
+
+    MvsSourceCandidate zero_inlier =
+        candidate(8, 80, 0, 60.0f, 0.7f, 0.8f);
+    zero_inlier.verificationStatus = MvsSourceVerificationStatus::Failed;
+    zero_inlier.pairTotalMatches = 20;
+    zero_inlier.pairCoverageScore = 0.50f;
+
+    const auto plan = planMvsSourceViewsVerifiedFirst(
+        {weak_confidence, low_coverage, accepted, zero_inlier,
+         too_small, verified},
+        options);
+
+    ASSERT_EQ(plan.selected.size(), 2u);
+    EXPECT_EQ(plan.selected[0].viewIndex, 3);
+    EXPECT_EQ(plan.selected[1].viewIndex, 2);
+    EXPECT_EQ(plan.sourceViewShortfall, 1);
+}
+
+TEST(MvsSourcePlanner, FailedPairNeverFillsRequestedFourthSource)
+{
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 12;
+    options.maxSources = 4;
+    options.rejectAngleOutliers = true;
+    options.maxTriangulationAngleDeg = 62.0f;
+    options.allowSequenceFallback = false;
+    options.allowFailedPairBackfill = true;
+
+    MvsSourceCandidate verified_a =
+        candidate(3, 120, 95, 15.0f, 0.8f, 0.5f, true);
+    verified_a.verifiedPairGeometry = true;
+    MvsSourceCandidate verified_b =
+        candidate(5, 115, 90, 16.0f, 0.8f, 0.5f, true);
+    verified_b.verifiedPairGeometry = true;
+    MvsSourceCandidate verified_c =
+        candidate(2, 110, 85, 30.0f, 0.8f, 0.5f, true);
+    verified_c.verifiedPairGeometry = true;
+
+    MvsSourceCandidate failed =
+        candidate(6, 80, 24, 60.0f, 0.7f, 0.8f);
+    failed.verificationStatus = MvsSourceVerificationStatus::Failed;
+    failed.pairTotalMatches = 37;
+    failed.pairCoverageScore = 0.1875f;
+
+    const auto plan = planMvsSourceViewsVerifiedFirst(
+        {failed, verified_c, verified_b, verified_a}, options);
+
+    ASSERT_EQ(plan.selected.size(), 3u);
+    EXPECT_TRUE(std::none_of(
+        plan.selected.cbegin(), plan.selected.cend(),
+        [](const auto &entry)
+        {
+            return entry.verificationStatus ==
+                MvsSourceVerificationStatus::Failed;
+        }));
+    EXPECT_EQ(plan.sourceViewShortfall, 1);
+}
+
+TEST(MvsSourcePlanner, ExplicitFourSourceCapAllowsQualifiedFailedPairForMajorityNcc)
+{
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 12;
+    options.maxSources = 4;
+    options.rejectAngleOutliers = true;
+    options.maxTriangulationAngleDeg = 62.0f;
+    options.allowSequenceFallback = false;
+    options.allowFailedPairBackfill = true;
+    options.failedPairBackfillMaximumTotalSources = 4;
+
+    std::vector<MvsSourceCandidate> candidates;
+    for (int view_index : {2, 3, 5})
+    {
+        MvsSourceCandidate verified =
+            candidate(view_index, 120, 95, 20.0f, 0.8f, 0.5f, true);
+        verified.verifiedPairGeometry = true;
+        candidates.push_back(verified);
+    }
+    MvsSourceCandidate failed =
+        candidate(6, 80, 24, 60.0f, 0.7f, 0.8f);
+    failed.verificationStatus = MvsSourceVerificationStatus::Failed;
+    failed.pairTotalMatches = 37;
+    failed.pairCoverageScore = 0.1875f;
+    candidates.push_back(failed);
+
+    const auto plan = planMvsSourceViewsVerifiedFirst(candidates, options);
+
+    ASSERT_EQ(plan.selected.size(), 4u);
+    EXPECT_EQ(plan.selected.back().viewIndex, 6);
+    EXPECT_EQ(plan.selected.back().verificationStatus,
+              MvsSourceVerificationStatus::Failed);
+    EXPECT_EQ(plan.sourceViewShortfall, 0);
+}
+
+TEST(MvsSourcePlanner, MissingStatisticsMayStillFillRequestedFourthSource)
+{
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 12;
+    options.maxSources = 4;
+    options.rejectAngleOutliers = true;
+    options.maxTriangulationAngleDeg = 62.0f;
+    options.allowSequenceFallback = false;
+    options.allowFailedPairBackfill = true;
+
+    std::vector<MvsSourceCandidate> candidates;
+    for (int view_index : {2, 3, 5})
+    {
+        MvsSourceCandidate verified =
+            candidate(view_index, 120, 95, 20.0f, 0.8f, 0.5f, true);
+        verified.verifiedPairGeometry = true;
+        candidates.push_back(verified);
+    }
+    MvsSourceCandidate missing =
+        candidate(6, 100, 100, 30.0f, 0.7f, 0.5f, true);
+    missing.verificationStatus =
+        MvsSourceVerificationStatus::MissingStatistics;
+    missing.pairTotalMatches = 100;
+    candidates.push_back(missing);
+
+    const auto plan = planMvsSourceViewsVerifiedFirst(candidates, options);
+
+    ASSERT_EQ(plan.selected.size(), 4u);
+    EXPECT_EQ(plan.selected.back().verificationStatus,
+              MvsSourceVerificationStatus::MissingStatistics);
+    EXPECT_EQ(plan.sourceViewShortfall, 0);
 }
 
 TEST(MvsSourcePlanner, MissingVerificationStatisticsCanBackfillButFailedPairCannot)

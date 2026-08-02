@@ -1,4 +1,5 @@
 #include "PatchMatchCUDA.h"
+#include "PatchMatchPhotometricCost.h"
 
 #include <gtest/gtest.h>
 
@@ -153,6 +154,35 @@ TEST(PatchMatchMaskAwareTest, CpuAndCudaApplyEquivalentMaskSemanticsWhenAvailabl
     cv::Mat gpu_outside_depth;
     gpu.depth.copyTo(gpu_outside_depth, outside_mask);
     EXPECT_EQ(cv::countNonZero(gpu_outside_depth > 0.0f), 0);
+}
+
+TEST(PatchMatchPhotometricUniquenessTest, KeepsDistinctDepthHypothesisAtFullConfidence)
+{
+    EXPECT_FLOAT_EQ(
+        xjw::mvs::photometricUniquenessConfidenceScale(
+            0.92f, 0.80f, 0.03f, 0.50f),
+        1.0f);
+}
+
+TEST(PatchMatchPhotometricUniquenessTest, SoftlyPenalizesAmbiguousDepthHypothesis)
+{
+    EXPECT_NEAR(
+        xjw::mvs::photometricUniquenessConfidenceScale(
+            0.92f, 0.91f, 0.03f, 0.50f),
+        2.0f / 3.0f,
+        1e-5f);
+    EXPECT_FLOAT_EQ(
+        xjw::mvs::photometricUniquenessConfidenceScale(
+            0.90f, 0.90f, 0.03f, 0.50f),
+        0.50f);
+}
+
+TEST(PatchMatchPhotometricUniquenessTest, InvalidMarginLeavesConfidenceUnchanged)
+{
+    EXPECT_FLOAT_EQ(
+        xjw::mvs::photometricUniquenessConfidenceScale(
+            0.50f, 0.50f, 0.0f, 0.25f),
+        1.0f);
 }
 
 } // namespace

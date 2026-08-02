@@ -491,6 +491,9 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
     diagnostics.insert(QStringLiteral("ba_backend_fallback"), sfmResult.baBackendFallback);
     diagnostics.insert(QStringLiteral("ba_observations"), sfmResult.baObservationCount);
     diagnostics.insert(QStringLiteral("ba_total_seconds"), sfmResult.baTotalSeconds);
+    diagnostics.insert(QStringLiteral("ba_refined_intrinsic_count"),
+                       sfmResult.baRefinedIntrinsicCount);
+    diagnostics.insert(QStringLiteral("ba_shared_focal_scale"), sfmResult.baSharedFocalScale);
     diagnostics.insert(QStringLiteral("ba_backend_message"),
                        QString::fromStdString(sfmResult.baBackendMessage));
     diagnostics.insert(QStringLiteral("project_intrinsic_prior_inspected"),
@@ -505,6 +508,41 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
                        QJsonArray::fromStringList(intrinsicSanitization.normalizedImagePaths));
     diagnostics.insert(QStringLiteral("project_intrinsic_prior_rejected"),
                        rejectedProjectIntrinsicCount);
+
+    std::vector<double> final_camera_focals;
+    if (execution.reconstruction)
+    {
+        for (const ImageId image_id : execution.reconstruction->registeredImageIds())
+        {
+            if (!execution.reconstruction->hasCamera(image_id))
+            {
+                continue;
+            }
+            const Camera &camera = execution.reconstruction->camera(image_id);
+            const double focal_x = camera.focalX();
+            const double focal_y = camera.focalY();
+            if (std::isfinite(focal_x) && focal_x > 0.0 &&
+                std::isfinite(focal_y) && focal_y > 0.0)
+            {
+                final_camera_focals.push_back(std::sqrt(focal_x * focal_y));
+            }
+        }
+    }
+    std::sort(final_camera_focals.begin(), final_camera_focals.end());
+    diagnostics.insert(QStringLiteral("final_camera_focal_count"),
+                       static_cast<int>(final_camera_focals.size()));
+    if (!final_camera_focals.empty())
+    {
+        const std::size_t middle = final_camera_focals.size() / 2;
+        const double median_focal = final_camera_focals.size() % 2 == 0
+            ? 0.5 * (final_camera_focals[middle - 1] + final_camera_focals[middle])
+            : final_camera_focals[middle];
+        diagnostics.insert(QStringLiteral("final_camera_focal_median_px"), median_focal);
+        diagnostics.insert(QStringLiteral("final_camera_focal_min_px"),
+                           final_camera_focals.front());
+        diagnostics.insert(QStringLiteral("final_camera_focal_max_px"),
+                           final_camera_focals.back());
+    }
     execution.result.sfmDiagnostics = diagnostics;
 
     if (!sfmResult.success)

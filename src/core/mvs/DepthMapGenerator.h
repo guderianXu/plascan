@@ -71,6 +71,8 @@ struct DepthFrameResult
     DepthPostProcessStats depthPostprocess; ///< 融合前深度图后处理统计
     DepthCompletenessDiagnostics depthCompleteness; ///< 蒙版内覆盖和逐阶段损失诊断
     QJsonObject crossViewRepairDiagnostics; ///< 跨视补回和锚定插值的逐原因统计
+    QJsonObject poseRefinementDiagnostics; ///< 深度约束位姿细化候选与安全门诊断
+    Camera derivedCameraModel; ///< 可选派生相机候选；绝不覆盖 cameraModel 或项目相机
     std::vector<DepthLevelSummary> pyramidLevels; ///< 三级深度估计逐层摘要
     std::vector<DepthLevelResult> intermediatePyramidLevels; ///< 可选的 L3/L2 调试结果
     DepthMapQualityMetrics qualityMetrics; ///< 帧级覆盖、连通性与搜索边界统计
@@ -351,6 +353,7 @@ private:
     /// 双视图深度图左右一致性检查（剔除互不一致的深度像素）
     void crossCheckDepthConsistency();
     bool crossCheckDepthConsistencyStreaming();
+    void runDepthPoseRefinementCandidateStage(bool residentDepthFrames);
 
     /// 保存单帧深度图预览、原始深度和置信图，并通知 GUI 更新项目结果树
     bool saveDepthFrameArtifacts(int frameIndex,

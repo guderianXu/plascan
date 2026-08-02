@@ -2,6 +2,10 @@
 
 // 这些测试只覆盖 GUI“工作流程”菜单对应的 CLI。
 
+#ifndef PLASCAN_MVS_DEPTH_REPROCESS_CLI_PATH
+#define PLASCAN_MVS_DEPTH_REPROCESS_CLI_PATH ""
+#endif
+
 namespace
 {
 
@@ -16,7 +20,245 @@ QString reportedPath(const CliResult &result, const QString &key)
     return match.hasMatch() ? match.captured(1).trimmed() : QString();
 }
 
+QJsonObject replayCameraModel(double centerX)
+{
+    return QJsonObject{
+        {QStringLiteral("fx"), 100.0},
+        {QStringLiteral("fy"), 100.0},
+        {QStringLiteral("cx"), 1.0},
+        {QStringLiteral("cy"), 1.0},
+        {QStringLiteral("rotation_world_to_camera"),
+         QJsonArray{1.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0,
+                    0.0, 0.0, 1.0}},
+        {QStringLiteral("camera_center"), QJsonArray{centerX, 0.0, 0.0}}
+    };
+}
+
+QString writeReplayManifest(const QString &root, bool includeVerifiedSourcePlan)
+{
+    const QString image0 = QDir(root).filePath(QStringLiteral("image_0.pgm"));
+    const QString image1 = QDir(root).filePath(QStringLiteral("image_1.pgm"));
+    const QByteArray pgm("P2\n2 2\n255\n10 20\n30 40\n");
+    writeBytesFile(image0, pgm);
+    writeBytesFile(image1, pgm);
+
+    QJsonArray sourcePlan;
+    if (includeVerifiedSourcePlan)
+    {
+        sourcePlan.append(QJsonObject{
+            {QStringLiteral("view_index"), 1},
+            {QStringLiteral("source_image"), image1},
+            {QStringLiteral("verification_status"), QStringLiteral("verified")},
+            {QStringLiteral("verified_pair_geometry"), true},
+            {QStringLiteral("pair_total_matches"), 80},
+            {QStringLiteral("geometric_inliers"), 70},
+            {QStringLiteral("pair_coverage_score"), 0.75},
+            {QStringLiteral("verification_reason"), QStringLiteral("test_verified_pair")}
+        });
+    }
+
+    const QJsonArray frames{
+        QJsonObject{
+            {QStringLiteral("ref_index"), 0},
+            {QStringLiteral("ref_image"), image0},
+            {QStringLiteral("source_plan"), sourcePlan},
+            {QStringLiteral("camera_model"), replayCameraModel(0.0)},
+            {QStringLiteral("status"), QStringLiteral("completed")}
+        },
+        QJsonObject{
+            {QStringLiteral("ref_index"), 1},
+            {QStringLiteral("ref_image"), image1},
+            {QStringLiteral("source_plan"), QJsonArray{}},
+            {QStringLiteral("camera_model"), replayCameraModel(0.1)},
+            {QStringLiteral("status"), QStringLiteral("completed")}
+        }
+    };
+    const QString manifestPath =
+        QDir(root).filePath(QStringLiteral("mvs_manifest.json"));
+    writeTextFile(
+        manifestPath,
+        QString::fromUtf8(QJsonDocument(QJsonObject{
+            {QStringLiteral("config_hash"), QStringLiteral("test")},
+            {QStringLiteral("frames"), frames}
+        }).toJson(QJsonDocument::Indented)));
+    return manifestPath;
+}
+
+QString writeRelativeReplayManifest(const QString &root)
+{
+    const QString imageDirectory =
+        QDir(root).filePath(QStringLiteral("影像 目录"));
+    QDir().mkpath(imageDirectory);
+    const QString image0 =
+        QDir(imageDirectory).filePath(QStringLiteral("影像_0.pgm"));
+    const QString image1 =
+        QDir(imageDirectory).filePath(QStringLiteral("影像_1.pgm"));
+    const QByteArray pgm("P2\n2 2\n255\n10 20\n30 40\n");
+    writeBytesFile(image0, pgm);
+    writeBytesFile(image1, pgm);
+
+    const QString storedImage0 = QDir(root).relativeFilePath(image0);
+    const QString storedImage1 = QDir(root).relativeFilePath(image1);
+    const QJsonArray frames{
+        QJsonObject{
+            {QStringLiteral("ref_index"), 0},
+            {QStringLiteral("ref_image"), storedImage0},
+            {QStringLiteral("source_plan"),
+             QJsonArray{QJsonObject{
+                 {QStringLiteral("view_index"), 1},
+                 {QStringLiteral("source_image"), storedImage1},
+                 {QStringLiteral("verification_status"), QStringLiteral("verified")},
+                 {QStringLiteral("pair_total_matches"), 80},
+                 {QStringLiteral("geometric_inliers"), 70},
+                 {QStringLiteral("pair_coverage_score"), 0.75}}}},
+            {QStringLiteral("camera_model"), replayCameraModel(0.0)},
+            {QStringLiteral("status"), QStringLiteral("completed")}},
+        QJsonObject{
+            {QStringLiteral("ref_index"), 1},
+            {QStringLiteral("ref_image"), storedImage1},
+            {QStringLiteral("source_plan"), QJsonArray{}},
+            {QStringLiteral("camera_model"), replayCameraModel(0.1)},
+            {QStringLiteral("status"), QStringLiteral("completed")}}
+    };
+    const QString manifestPath =
+        QDir(root).filePath(QStringLiteral("mvs_manifest.json"));
+    writeTextFile(
+        manifestPath,
+        QString::fromUtf8(QJsonDocument(QJsonObject{
+            {QStringLiteral("config_hash"), QStringLiteral("test-relative")},
+            {QStringLiteral("frames"), frames}
+        }).toJson(QJsonDocument::Indented)));
+    return manifestPath;
+}
+
 } // namespace
+
+TEST(MvsDepthReprocessCliContractTest, PairAuditIsOptionalWithManifestSourcePlanFallback)
+{
+    const QString source = readSourceFile(
+        QStringLiteral("src/cli/workflows/cli_mvs_depth_reprocess.cpp"));
+
+    expectContainsAll(source, {
+        "manifest_source_plan",
+        "pair_evidence_provenance",
+        "isVerifiedSourcePlanEntry",
+        "loadManifestSourcePlanPairQualities",
+    });
+    expectMatches(
+        source,
+        R"(add_option\("--pair-audit"(?P<body>.*?)check\(CLI::ExistingFile\))");
+    expectNotContainsAll(
+        sectionBetween(source,
+                       "add_option(\"--pair-audit\"",
+                       "app.add_option(\"--sparse-cloud\""),
+        {"->required()"});
+}
+
+TEST(MvsDepthReprocessCliContractTest, PoseRefinementIsExplicitCandidateOnlyOptIn)
+{
+    const QString source = readSourceFile(
+        QStringLiteral("src/cli/workflows/cli_mvs_depth_reprocess.cpp"));
+
+    expectContainsAll(source, {
+        "--depth-pose-candidates",
+        "config.depthPoseRefinement.enabled = depthPoseCandidates",
+        "不覆盖项目相机或重算深度",
+    });
+}
+
+TEST(MvsDepthReprocessCliContractTest, UsesVerifiedManifestSourcePlanWithoutPairAudit)
+{
+    const QString exe = executablePath(PLASCAN_MVS_DEPTH_REPROCESS_CLI_PATH);
+    SKIP_IF_MISSING_EXECUTABLE(exe);
+
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString manifestPath = writeReplayManifest(tempDir.path(), true);
+    const QString sparsePath =
+        QDir(tempDir.path()).filePath(QStringLiteral("empty_sparse.ply"));
+    writeBinaryPly(sparsePath, {});
+
+    const CliResult result = runCli(exe, {
+        QStringLiteral("--input-manifest"), manifestPath,
+        QStringLiteral("--sparse-cloud"), sparsePath,
+        QStringLiteral("--output-dir"),
+        QDir(tempDir.path()).filePath(QStringLiteral("output")),
+    });
+
+    EXPECT_NE(result.exitCode, 0);
+    expectContainsAll(result.stdoutText, {
+        "pair_evidence_provenance=manifest_source_plan",
+        "verified_pairs=1",
+    });
+    expectContainsAll(result.stderrText, {"稀疏点云预处理失败"});
+    expectNotContainsAll(combinedOutput(result), {
+        "不含当前影像集合的已验证 MVS 源像对",
+    });
+}
+
+TEST(MvsDepthReprocessCliContractTest, RejectsMissingAuditAndManifestEvidence)
+{
+    const QString exe = executablePath(PLASCAN_MVS_DEPTH_REPROCESS_CLI_PATH);
+    SKIP_IF_MISSING_EXECUTABLE(exe);
+
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString manifestPath = writeReplayManifest(tempDir.path(), false);
+    const QString sparsePath =
+        QDir(tempDir.path()).filePath(QStringLiteral("empty_sparse.ply"));
+    const QString outputPath =
+        QDir(tempDir.path()).filePath(QStringLiteral("output"));
+    writeBinaryPly(sparsePath, {});
+
+    const CliResult result = runCli(exe, {
+        QStringLiteral("--input-manifest"), manifestPath,
+        QStringLiteral("--sparse-cloud"), sparsePath,
+        QStringLiteral("--output-dir"), outputPath,
+    });
+
+    EXPECT_NE(result.exitCode, 0);
+    expectContainsAll(result.stderrText, {
+        "未提供 --pair-audit",
+        "source_plan",
+        "不含当前影像集合的已验证 MVS 源像对",
+    });
+    expectNotContainsAll(result.stderrText, {"稀疏点云预处理失败"});
+    EXPECT_FALSE(QFileInfo::exists(outputPath));
+}
+
+TEST(MvsDepthReprocessCliContractTest, ResolvesUnicodeRelativeManifestPaths)
+{
+    const QString exe = executablePath(PLASCAN_MVS_DEPTH_REPROCESS_CLI_PATH);
+    SKIP_IF_MISSING_EXECUTABLE(exe);
+
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString manifestPath = writeRelativeReplayManifest(tempDir.path());
+    const QString sparsePath =
+        QDir(tempDir.path()).filePath(QStringLiteral("empty_sparse.ply"));
+    const QString outputPath =
+        QDir(tempDir.path()).filePath(QStringLiteral("output"));
+    writeBinaryPly(sparsePath, {});
+
+    const CliResult result = runCli(exe, {
+        QStringLiteral("--input-manifest"), manifestPath,
+        QStringLiteral("--sparse-cloud"), sparsePath,
+        QStringLiteral("--output-dir"), outputPath,
+    });
+
+    EXPECT_NE(result.exitCode, 0);
+    expectContainsAll(result.stdoutText, {
+        "pair_evidence_provenance=manifest_source_plan",
+        "verified_pairs=1",
+    });
+    expectContainsAll(result.stderrText, {"稀疏点云预处理失败"});
+    expectNotContainsAll(result.stderrText, {
+        "MVS replay 影像不存在",
+        "不含当前影像集合的已验证 MVS 源像对",
+    });
+    EXPECT_FALSE(QFileInfo::exists(outputPath));
+}
 
 TEST(WorkflowCliModuleTest, MirrorsGuiWorkflowMenuEntryPoints)
 {
@@ -49,6 +291,8 @@ TEST(WorkflowCliModuleTest, MirrorsGuiWorkflowMenuEntryPoints)
         "--mask-dir",
         "--assets-dir",
         "--match-dir",
+        "--export-camera-dir",
+        "exportFinalBaCameras",
         "options.assetsDir",
         "options.matchDir",
         "options.outputDir = reconstructionDir",
@@ -60,6 +304,10 @@ TEST(WorkflowCliModuleTest, MirrorsGuiWorkflowMenuEntryPoints)
         "options.useInitialPairHint",
         "aerial_triangulation_cli_report.json",
     });
+    expectMatches(
+        aerial,
+        R"(if\s*\(\s*result\.reconstructionResult\.success\s*&&\s*)"
+        R"(!requestedCameraExportDir\.isEmpty\(\)\s*\).*?exportFinalBaCameras)");
     expectContainsAll(mesh, {
         "GUI 等价模型生成工具",
         "xjw::mesh::workflow::buildModel",
@@ -331,6 +579,8 @@ TEST(PhotogrammetryWorkflowCliGTest, AerialTriangulationCliAcceptsImageOnlyListF
     writeTextFile(list, QStringLiteral("templeSR0001.png\ntempleSR0002.png\n"));
 
     const QString outputDir = QDir(root).filePath(QStringLiteral("at_out"));
+    const QString cameraExportDir =
+        QDir(root).filePath(QStringLiteral("final ba cameras"));
     const CliResult result = runCli(exe, {
         QStringLiteral("--input"), list,
         QStringLiteral("--output-dir"), outputDir,
@@ -341,6 +591,7 @@ TEST(PhotogrammetryWorkflowCliGTest, AerialTriangulationCliAcceptsImageOnlyListF
         QStringLiteral("--tiepoint-limit"), QStringLiteral("4000"),
         QStringLiteral("--mask-dir"), maskDir,
         QStringLiteral("--mask-apply-mode"), QStringLiteral("keypoints"),
+        QStringLiteral("--export-camera-dir"), cameraExportDir,
         QStringLiteral("--no-reset-alignment"),
         QStringLiteral("--no-auto-generate-missing-matches"),
         QStringLiteral("--force"),
@@ -356,6 +607,11 @@ TEST(PhotogrammetryWorkflowCliGTest, AerialTriangulationCliAcceptsImageOnlyListF
     ASSERT_TRUE(chunkRoot.cdUp());
     EXPECT_TRUE(report.value(QStringLiteral("success")).toBool());
     EXPECT_TRUE(report.value(QStringLiteral("dry_run")).toBool());
+    EXPECT_TRUE(report.value(QStringLiteral("camera_export_requested")).toBool());
+    EXPECT_FALSE(report.value(QStringLiteral("camera_export_performed")).toBool());
+    EXPECT_EQ(QDir::cleanPath(report.value(QStringLiteral("camera_export_dir")).toString()),
+              QDir::cleanPath(cameraExportDir));
+    EXPECT_FALSE(QFileInfo::exists(cameraExportDir));
     EXPECT_EQ(report.value(QStringLiteral("image_count")).toInt(), 2);
     const QJsonObject resolved = report.value(QStringLiteral("resolved_settings")).toObject();
     EXPECT_EQ(resolved.value(QStringLiteral("quality")).toString(), QStringLiteral("highest"));

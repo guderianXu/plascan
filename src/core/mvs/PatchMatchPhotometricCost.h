@@ -168,6 +168,39 @@ PLASCAN_MVS_HOST_DEVICE inline float robustMultiSourceNcc(const float *scores,
     return score_sum / static_cast<float>(required_support);
 }
 
+/// Convert a local depth-cost uniqueness margin into a soft confidence scale.
+///
+/// AliceVision's SGM path compares the best and second-best depth-volume
+/// candidates. PatchMatch does not keep a full volume, so PlaScan probes the
+/// converged solution at neighbouring depths and applies the same principle:
+/// a visually plausible hypothesis is not reliable when a distinct depth has
+/// nearly the same score. Keeping this as a soft scale lets later cross-view
+/// repair recover coverage without allowing ambiguous native layers to carry
+/// full TSDF weight.
+PLASCAN_MVS_HOST_DEVICE inline float photometricUniquenessConfidenceScale(
+    float best_ncc,
+    float competing_ncc,
+    float minimum_margin,
+    float minimum_scale)
+{
+    const float bounded_minimum_scale = minimum_scale < 0.0f
+        ? 0.0f
+        : (minimum_scale > 1.0f ? 1.0f : minimum_scale);
+    if (!(minimum_margin > 0.0f))
+    {
+        return 1.0f;
+    }
+
+    const float margin = best_ncc > competing_ncc
+        ? best_ncc - competing_ncc
+        : 0.0f;
+    const float normalized_margin = margin >= minimum_margin
+        ? 1.0f
+        : margin / minimum_margin;
+    return bounded_minimum_scale
+        + (1.0f - bounded_minimum_scale) * normalized_margin;
+}
+
 } // namespace mvs
 } // namespace xjw
 
