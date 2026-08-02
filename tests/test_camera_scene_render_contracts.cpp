@@ -130,15 +130,17 @@ TEST(CameraSceneRenderContractTest, SelectedCameraCardUsesRedHighlight)
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("QColor(205, 60, 70, 230)")));
 }
 
-TEST(CameraSceneRenderContractTest, CameraCardsScaleByViewDepthAndShowDirectionArrow)
+TEST(CameraSceneRenderContractTest, CameraCardsUseDepthEmphasisAndBlackDirectionLeader)
 {
     const QString header =
         readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
     const QString source =
         readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
 
-    EXPECT_TRUE(header.contains(QStringLiteral("void drawCameraDirectionArrow")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QLineF cameraDirectionLeaderLine")));
+    EXPECT_FALSE(header.contains(QStringLiteral("drawCameraDirectionArrow")));
     EXPECT_TRUE(source.contains(QStringLiteral("cameraPlaneHalfExtentForViewDepth(")));
+    EXPECT_TRUE(source.contains(QStringLiteral("sceneCenter(),")));
 
     const qsizetype drawStart = source.indexOf(
         QStringLiteral("void CameraSceneWidget::drawCameraThumbnails"));
@@ -152,15 +154,18 @@ TEST(CameraSceneRenderContractTest, CameraCardsScaleByViewDepthAndShowDirectionA
     EXPECT_TRUE(drawBlock.contains(QStringLiteral(
         "fullDynamicBufferUpdateForCurrentFrame(")));
 
-    const qsizetype arrowStart = source.indexOf(
-        QStringLiteral("void CameraSceneWidget::drawCameraDirectionArrow"));
+    const qsizetype leaderStart = source.indexOf(
+        QStringLiteral("QLineF CameraSceneWidget::cameraDirectionLeaderLine"));
     const qsizetype manipStart = source.indexOf(
-        QStringLiteral("QVector3D CameraSceneWidget::manipCenterWorld"), arrowStart);
-    ASSERT_GE(arrowStart, 0);
-    ASSERT_GT(manipStart, arrowStart);
-    const QString arrowBlock = source.mid(arrowStart, manipStart - arrowStart);
-    EXPECT_TRUE(arrowBlock.contains(QStringLiteral("cameraForwardDirection(")));
-    EXPECT_TRUE(arrowBlock.contains(QStringLiteral("painter.drawLine(shaft)")));
+        QStringLiteral("QVector3D CameraSceneWidget::manipCenterWorld"), leaderStart);
+    ASSERT_GE(leaderStart, 0);
+    ASSERT_GT(manipStart, leaderStart);
+    const QString leaderBlock = source.mid(leaderStart, manipStart - leaderStart);
+    EXPECT_TRUE(leaderBlock.contains(QStringLiteral("cameraForwardDirection(")));
+    EXPECT_TRUE(leaderBlock.contains(QStringLiteral("pose.center - forward")));
+    EXPECT_TRUE(leaderBlock.contains(QStringLiteral("outsideExtensionPixels")));
+    EXPECT_TRUE(leaderBlock.contains(QStringLiteral("planeHalfExtentPixels * 1.2")));
+    EXPECT_FALSE(leaderBlock.contains(QStringLiteral("headLength")));
 
     const qsizetype overlayStart = source.indexOf(
         QStringLiteral("void CameraSceneWidget::paintOverlay(QPainter &painter)"));
@@ -169,12 +174,10 @@ TEST(CameraSceneRenderContractTest, CameraCardsScaleByViewDepthAndShowDirectionA
     ASSERT_GE(overlayStart, 0);
     ASSERT_GT(overlayEnd, overlayStart);
     const QString overlayBlock = source.mid(overlayStart, overlayEnd - overlayStart);
-    const qsizetype arrowCall = overlayBlock.indexOf(
-        QStringLiteral("drawCameraDirectionArrow(painter, pose"));
-    const qsizetype localAxesGuard = overlayBlock.indexOf(
-        QStringLiteral("if (_showCameraLocalAxes)"));
-    EXPECT_GE(arrowCall, 0);
-    EXPECT_GT(localAxesGuard, arrowCall);
+    EXPECT_TRUE(overlayBlock.contains(QStringLiteral("cameraDirectionLeaderLine(")));
+    EXPECT_TRUE(overlayBlock.contains(QStringLiteral("pose, thumbnailHalfExtent")));
+    EXPECT_TRUE(overlayBlock.contains(QStringLiteral("QColor(25, 25, 25")));
+    EXPECT_FALSE(overlayBlock.contains(QStringLiteral("drawCameraDirectionArrow")));
 }
 
 TEST(CameraSceneRenderContractTest, CachesImageLoadFailuresToPreventRetryStorm)

@@ -43,23 +43,32 @@ QVector<int> farToNearCameraIndices(const QVector<QVector3D> &centers,
 
 float cameraPlaneHalfExtentForViewDepth(
     const QVector3D &center,
+    const QVector3D &referenceCenter,
     const QMatrix4x4 &worldToView,
     int viewportHeight,
     float verticalFieldOfViewDegrees,
-    float targetHalfExtentPixels)
+    float targetHalfExtentPixels,
+    float depthEmphasisExponent)
 {
     if (viewportHeight <= 0
         || !std::isfinite(verticalFieldOfViewDegrees)
         || !std::isfinite(targetHalfExtentPixels)
+        || !std::isfinite(depthEmphasisExponent)
         || verticalFieldOfViewDegrees <= 0.0f
         || verticalFieldOfViewDegrees >= 179.0f
-        || targetHalfExtentPixels <= 0.0f)
+        || targetHalfExtentPixels <= 0.0f
+        || depthEmphasisExponent < 0.0f)
     {
         return 0.0f;
     }
 
     const float depth = -(worldToView * QVector4D(center, 1.0f)).z();
-    if (!std::isfinite(depth) || depth <= ScoreEpsilon)
+    const float referenceDepth =
+        -(worldToView * QVector4D(referenceCenter, 1.0f)).z();
+    if (!std::isfinite(depth)
+        || !std::isfinite(referenceDepth)
+        || depth <= ScoreEpsilon
+        || referenceDepth <= ScoreEpsilon)
     {
         return 0.0f;
     }
@@ -69,8 +78,11 @@ float cameraPlaneHalfExtentForViewDepth(
         verticalFieldOfViewDegrees * pi / 360.0f;
     const float worldHeightAtDepth =
         2.0f * depth * std::tan(halfFovRadians);
+    const float depthRatio = std::clamp(depth / referenceDepth, 0.5f, 2.0f);
+    const float screenScale = std::pow(depthRatio, depthEmphasisExponent);
     return worldHeightAtDepth
         * targetHalfExtentPixels
+        * screenScale
         / static_cast<float>(viewportHeight);
 }
 

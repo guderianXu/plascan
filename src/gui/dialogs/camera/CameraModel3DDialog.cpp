@@ -1817,17 +1817,20 @@ float CameraSceneWidget::cameraImagePlaneHalfExtent(
     const QMatrix4x4 &worldToView) const
 {
     if (_cacheDirty) invalidateCache();
+    const float radius = sceneRadius();
 
     const float depthScaledExtent =
         xjw::gui::camera_scene::cameraPlaneHalfExtentForViewDepth(
             pose.center,
+            sceneCenter(),
             worldToView,
             height(),
             45.0f,
-            28.0f);
-    const float minimumExtent = qMax(1.0e-5f, _cachedRadius * 0.004f);
-    const float maximumExtent = qMax(minimumExtent, _cachedRadius * 0.18f);
-    const float fallbackExtent = qMax(minimumExtent, _cachedRadius * 0.065f);
+            34.0f,
+            2.0f);
+    const float minimumExtent = qMax(1.0e-5f, radius * 0.002f);
+    const float maximumExtent = qMax(minimumExtent, radius * 0.32f);
+    const float fallbackExtent = qMax(minimumExtent, radius * 0.065f);
     const float desiredExtent = depthScaledExtent > 0.0f
         ? depthScaledExtent
         : fallbackExtent;
@@ -2116,48 +2119,81 @@ void CameraSceneWidget::drawFloorPivotCross(QPainter &painter) const
                      c + QPointF(0.0, half_size_pixels));
 }
 
-void CameraSceneWidget::drawCameraDirectionArrow(QPainter &painter,
-                                                 const CameraPose &pose,
-                                                 float planeHalfExtent,
-                                                 bool highlighted) const
+QLineF CameraSceneWidget::cameraDirectionLeaderLine(const CameraPose &pose,
+                                                    float planeHalfExtent) const
 {
     const QVector3D forward = xjw::gui::camera_scene::cameraForwardDirection(
         pose.rotation, pose.depthAxisFlipped);
     if (forward.isNull() || planeHalfExtent <= 0.0f)
     {
-        return;
+        return {};
     }
 
-    bool startOk = false;
-    bool endOk = false;
-    const QPointF start = projectToScreen(pose.center, &startOk);
-    const QPointF end = projectToScreen(
-        pose.center + forward * planeHalfExtent * 1.65f,
-        &endOk);
-    if (!startOk || !endOk)
+    bool centerOk = false;
+    bool probeOk = false;
+    const QPointF center = projectToScreen(pose.center, &centerOk);
+    // Metashape 风格的黑色引线从照片平面向相机后方延伸；相机本身
+    // 沿 forward 朝向被摄物，因此这里使用反向光轴而不是绘制箭头。
+    const QPointF probe = projectToScreen(
+        pose.center - forward * planeHalfExtent,
+        &probeOk);
+    if (!centerOk || !probeOk)
     {
-        return;
+        return {};
     }
 
-    const QLineF shaft(start, end);
-    if (shaft.length() < 4.0)
+    QPointF screenDirection = probe - center;
+    qreal directionLength = QLineF(QPointF(), screenDirection).length();
+    if (directionLength < 1.0)
     {
-        return;
+        bool sceneCenterOk = false;
+        const QPointF sceneCenterScreen = projectToScreen(sceneCenter(), &sceneCenterOk);
+        if (sceneCenterOk)
+        {
+            screenDirection = center - sceneCenterScreen;
+            directionLength = QLineF(QPointF(), screenDirection).length();
+        }
+    }
+    if (directionLength < 1.0)
+    {
+        return {};
     }
 
-    const QColor color = highlighted
-        ? QColor(205, 48, 62, 235)
-        : QColor(35, 91, 153, 230);
-    const qreal lineWidth = highlighted ? 2.2 : 1.7;
-    painter.setPen(QPen(color, lineWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    painter.drawLine(shaft);
-
-    const QPointF direction = (end - start) / shaft.length();
-    const QPointF normal(-direction.y(), direction.x());
-    const qreal headLength = qBound<qreal>(5.0, shaft.length() * 0.34, 9.0);
-    const QPointF headBase = end - direction * headLength;
-    painter.drawLine(end, headBase + normal * headLength * 0.48);
-    painter.drawLine(end, headBase - normal * headLength * 0.48);
+    const xjw::gui::camera_scene::CameraImagePlaneAxes axes =
+        xjw::gui::camera_scene::cameraImagePlaneAxes(
+            pose.rotation, pose.uAxisSign, pose.vAxisSign);
+    bool rightEdgeOk = false;
+    bool upEdgeOk = false;
+    const QPointF rightEdge = projectToScreen(
+        pose.center + axes.right * planeHalfExtent,
+        &rightEdgeOk);
+    const QPointF upEdge = projectToScreen(
+        pose.center + axes.up * planeHalfExtent * 0.68f,
+        &upEdgeOk);
+    qreal planeHalfExtentPixels = 18.0;
+    if (rightEdgeOk)
+    {
+        planeHalfExtentPixels = QLineF(center, rightEdge).length();
+    }
+    if (upEdgeOk)
+    {
+        planeHalfExtentPixels = qMax(
+            planeHalfExtentPixels,
+            QLineF(center, upEdge).length());
+    }
+    // 引线必须越过相机卡片边缘，否则在蓝色底板上只会表现成一条
+    // 难以辨认的短划线。外伸段随卡片略微增长，同时限制总长度，
+    // 保持近景和远景相机的标签间距一致可读。
+    const qreal outsideExtensionPixels = qBound<qreal>(14.0,
+                                                       planeHalfExtentPixels * 0.42,
+                                                       30.0);
+    const qreal leaderLength = qBound<qreal>(28.0,
+                                             planeHalfExtentPixels * 1.2
+                                                 + outsideExtensionPixels,
+                                             168.0);
+    const QPointF leaderEnd = center
+        + screenDirection * (leaderLength / directionLength);
+    return QLineF(center, leaderEnd);
 }
 
 // Gizmo 操控球的世界中心点（等于场景质心）
@@ -3998,8 +4034,6 @@ void CameraSceneWidget::paintOverlay(QPainter &painter)
         {
             const float planeHalfExtent = cameraImagePlaneHalfExtent(
                 pose, cameraMatrices.modelView);
-            const bool highlighted = isCameraHighlighted(pose);
-            drawCameraDirectionArrow(painter, pose, planeHalfExtent, highlighted);
 
             if (_showCameraLocalAxes)
             {
@@ -4034,7 +4068,16 @@ void CameraSceneWidget::paintOverlay(QPainter &painter)
             const bool highlighted = isCameraHighlighted(pose);
             const float thumbnailHalfExtent = cameraImagePlaneHalfExtent(
                 pose, cameraMatrices.modelView);
-            const float thumbnailHalfHeight = thumbnailHalfExtent * 0.68f;
+            const QLineF directionLeader = cameraDirectionLeaderLine(
+                pose, thumbnailHalfExtent);
+            if (!directionLeader.isNull())
+            {
+                painter.setPen(QPen(QColor(25, 25, 25, cameraCount > 120 ? 155 : 215),
+                                    highlighted ? 1.25 : 1.0,
+                                    Qt::SolidLine,
+                                    Qt::RoundCap));
+                painter.drawLine(directionLeader);
+            }
             const bool drawCameraLabel = highlighted
                 || drawAllCameraLabels
                 || (poseIndex == 0)
@@ -4042,40 +4085,29 @@ void CameraSceneWidget::paintOverlay(QPainter &painter)
                 || (poseIndex % cameraLabelStride == 0);
             if (drawCameraLabel)
             {
-                bool center_ok = false;
-                const QPointF pc = projectToScreen(pose.center, &center_ok);
-                if (!center_ok)
+                bool centerOk = false;
+                const QPointF center = projectToScreen(pose.center, &centerOk);
+                if (!centerOk)
                 {
                     continue;
                 }
-                const xjw::gui::camera_scene::CameraImagePlaneAxes imageAxes =
-                    xjw::gui::camera_scene::cameraImagePlaneAxes(
-                        pose.rotation, pose.uAxisSign, pose.vAxisSign);
-                bool ok1 = false;
-                bool ok2 = false;
-                const QPointF pp1 = projectToScreen(
-                    pose.center + imageAxes.right * thumbnailHalfExtent
-                        + imageAxes.up * thumbnailHalfHeight,
-                    &ok1);
-                const QPointF pp2 = projectToScreen(
-                    pose.center - imageAxes.right * thumbnailHalfExtent
-                        + imageAxes.up * thumbnailHalfHeight,
-                    &ok2);
                 const QString labelSource = pose.imagePath.isEmpty() ? pose.name : pose.imagePath;
                 const QString label = QFileInfo(labelSource).fileName().isEmpty()
                     ? pose.name
                     : QFileInfo(labelSource).fileName();
-                const QPointF planeTop = ok1 && ok2 ? (pp1 + pp2) * 0.5 : pc;
-                const qreal labelLift = highlighted ? 30.0 : 24.0;
-                const QPointF labelAnchor = planeTop + QPointF(0.0, -labelLift);
-                const QColor labelStemColor = highlighted ? QColor(95, 24, 34, 220)
-                                                          : QColor(45, 45, 45, cameraCount > 120 ? 150 : 190);
-                painter.setPen(QPen(labelStemColor, highlighted ? 1.35 : 1.0));
-                painter.drawLine(planeTop, labelAnchor);
+                const QPointF labelAnchor = directionLeader.isNull()
+                    ? center
+                    : directionLeader.p2();
+                const bool placeLabelLeft = !directionLeader.isNull()
+                    && directionLeader.dx() < 0.0;
+                const qreal labelWidth = painter.fontMetrics().horizontalAdvance(label);
+                const QPointF textOffset = placeLabelLeft
+                    ? QPointF(-labelWidth - 5.0, -2.0)
+                    : QPointF(5.0, -2.0);
                 painter.setPen(highlighted
                     ? QColor(210, 45, 65, 230)
                     : (drawAllCameraLabels ? QColor(60, 60, 60) : QColor(45, 45, 45, 170)));
-                painter.drawText(labelAnchor + QPointF(5.0, -2.0), label);
+                painter.drawText(labelAnchor + textOffset, label);
             }
         }
 

@@ -50,12 +50,16 @@ private:
 QVector<int> farToNearCameraIndices(const QVector<QVector3D> &centers,
                                     const QMatrix4x4 &worldToView);
 
+// 将目标屏幕尺寸换算成世界尺寸，并相对场景中心增强深度差异，
+// 使远处相机卡片在屏幕上大于近处卡片。
 float cameraPlaneHalfExtentForViewDepth(
     const QVector3D &center,
+    const QVector3D &referenceCenter,
     const QMatrix4x4 &worldToView,
     int viewportHeight,
     float verticalFieldOfViewDegrees = 45.0f,
-    float targetHalfExtentPixels = 28.0f);
+    float targetHalfExtentPixels = 28.0f,
+    float depthEmphasisExponent = 2.0f);
 
 int selectCameraForView(const QVector<CameraViewCandidate> &candidates,
                         const QVector3D &worldViewDirection,

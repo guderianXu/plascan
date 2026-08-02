@@ -17,18 +17,30 @@ TEST(CameraSceneViewMathTest, SortsFarCameraBeforeNearCameraRegardlessOfInputOrd
     EXPECT_EQ(farToNearCameraIndices(centers, world_to_view), QVector<int>({1, 0}));
 }
 
-TEST(CameraSceneViewMathTest, UsesLargerWorldPlaneForFartherCamera)
+TEST(CameraSceneViewMathTest, MakesFarCameraAppearLargerThanNearCamera)
 {
     QMatrix4x4 world_to_view;
     world_to_view.setToIdentity();
 
     const float near_half_extent = cameraPlaneHalfExtentForViewDepth(
-        QVector3D(0.0f, 0.0f, -4.0f), world_to_view, 1000, 45.0f, 24.0f);
+        QVector3D(0.0f, 0.0f, -6.0f),
+        QVector3D(0.0f, 0.0f, -8.0f),
+        world_to_view,
+        1000,
+        45.0f,
+        24.0f,
+        2.0f);
     const float far_half_extent = cameraPlaneHalfExtentForViewDepth(
-        QVector3D(0.0f, 0.0f, -12.0f), world_to_view, 1000, 45.0f, 24.0f);
+        QVector3D(0.0f, 0.0f, -10.0f),
+        QVector3D(0.0f, 0.0f, -8.0f),
+        world_to_view,
+        1000,
+        45.0f,
+        24.0f,
+        2.0f);
 
     EXPECT_GT(far_half_extent, near_half_extent);
-    EXPECT_NEAR(far_half_extent, near_half_extent * 3.0f, 1e-6f);
+    EXPECT_GT(far_half_extent / 10.0f, near_half_extent / 6.0f);
 }
 
 TEST(CameraSceneViewMathTest, RejectsInvalidCameraPlaneDepthInputs)
@@ -36,10 +48,22 @@ TEST(CameraSceneViewMathTest, RejectsInvalidCameraPlaneDepthInputs)
     QMatrix4x4 world_to_view;
     world_to_view.setToIdentity();
     EXPECT_EQ(cameraPlaneHalfExtentForViewDepth(
-                  QVector3D(0.0f, 0.0f, 1.0f), world_to_view, 1000),
+                  QVector3D(0.0f, 0.0f, 1.0f),
+                  QVector3D(0.0f, 0.0f, -4.0f),
+                  world_to_view,
+                  1000),
               0.0f);
     EXPECT_EQ(cameraPlaneHalfExtentForViewDepth(
-                  QVector3D(0.0f, 0.0f, -4.0f), world_to_view, 0),
+                  QVector3D(0.0f, 0.0f, -4.0f),
+                  QVector3D(0.0f, 0.0f, -4.0f),
+                  world_to_view,
+                  0),
+              0.0f);
+    EXPECT_EQ(cameraPlaneHalfExtentForViewDepth(
+                  QVector3D(0.0f, 0.0f, -4.0f),
+                  QVector3D(0.0f, 0.0f, 1.0f),
+                  world_to_view,
+                  1000),
               0.0f);
 }
 

@@ -15,6 +15,7 @@
 #include <QFutureWatcher>
 #include <QHash>
 #include <QImage>
+#include <QLineF>
 #include <QMatrix3x3>
 #include <QMatrix4x4>
 #include <QQuaternion>
@@ -281,10 +282,8 @@ private:
     void updateActiveCameraForView();
     void refreshLockedCameraImage();
     void drawFloorPivotCross(QPainter &painter) const;
-    void drawCameraDirectionArrow(QPainter &painter,
-                                  const CameraPose &pose,
-                                  float planeHalfExtent,
-                                  bool highlighted) const;
+    QLineF cameraDirectionLeaderLine(const CameraPose &pose,
+                                     float planeHalfExtent) const;
 
     // 在普通透明 QWidget 覆盖层中绘制 2D 标注：
     //   - 操控球 Gizmo（旋转环）

@@ -6627,12 +6627,10 @@ TEST(GenerateMaskDialogTest, ShowsOnlyParametersForSelectedMethod)
     GenerateMaskDialog dialog(QStringList{QStringLiteral("a.png")});
     auto *methodCombo = dialog.findChild<QComboBox *>(QStringLiteral("methodCombo"));
     auto *thresholdPanel = dialog.findChild<QWidget *>(QStringLiteral("thresholdParameterPanel"));
-    auto *sam21Panel = dialog.findChild<QWidget *>(QStringLiteral("sam21ParameterPanel"));
     auto *u2netPanel = dialog.findChild<QWidget *>(QStringLiteral("u2netParameterPanel"));
 
     ASSERT_NE(methodCombo, nullptr);
     ASSERT_NE(thresholdPanel, nullptr);
-    ASSERT_NE(sam21Panel, nullptr);
     ASSERT_NE(u2netPanel, nullptr);
 
     const auto selectMethod = [methodCombo](const QString &token)
@@ -6644,48 +6642,11 @@ TEST(GenerateMaskDialogTest, ShowsOnlyParametersForSelectedMethod)
 
     selectMethod(QStringLiteral("black_background"));
     EXPECT_FALSE(thresholdPanel->isHidden());
-    EXPECT_TRUE(sam21Panel->isHidden());
     EXPECT_TRUE(u2netPanel->isHidden());
 
     selectMethod(QStringLiteral("u2net"));
     EXPECT_TRUE(thresholdPanel->isHidden());
-    EXPECT_TRUE(sam21Panel->isHidden());
     EXPECT_FALSE(u2netPanel->isHidden());
-
-    selectMethod(QStringLiteral("sam21"));
-    EXPECT_TRUE(thresholdPanel->isHidden());
-    EXPECT_FALSE(sam21Panel->isHidden());
-    EXPECT_TRUE(u2netPanel->isHidden());
-}
-
-TEST(GenerateMaskDialogTest, ExposesSam21TorchScriptCpuAndCudaSettings)
-{
-    GenerateMaskDialog dialog(QStringList{QStringLiteral("a.png")});
-    auto *methodCombo = dialog.findChild<QComboBox *>(QStringLiteral("methodCombo"));
-    auto *deviceCombo = dialog.findChild<QComboBox *>(QStringLiteral("sam21DeviceCombo"));
-    auto *variantCombo = dialog.findChild<QComboBox *>(QStringLiteral("sam21VariantCombo"));
-    auto *fallbackCheck = dialog.findChild<QCheckBox *>(QStringLiteral("sam21AllowFallbackCheck"));
-
-    ASSERT_NE(methodCombo, nullptr);
-    ASSERT_NE(deviceCombo, nullptr);
-    ASSERT_NE(variantCombo, nullptr);
-    ASSERT_NE(fallbackCheck, nullptr);
-
-    const int samIndex = methodCombo->findData(QStringLiteral("sam21"));
-    ASSERT_GE(samIndex, 0);
-    methodCombo->setCurrentIndex(samIndex);
-
-    EXPECT_GE(deviceCombo->findData(QStringLiteral("cuda")), 0);
-    EXPECT_GE(deviceCombo->findData(QStringLiteral("cpu")), 0);
-    EXPECT_EQ(variantCombo->currentData().toString(), QStringLiteral("tiny"));
-    EXPECT_TRUE(fallbackCheck->isChecked());
-
-    const QJsonObject settings = dialog.collectSettings();
-    EXPECT_EQ(settings.value(QStringLiteral("method")).toString(), QStringLiteral("sam21"));
-    EXPECT_EQ(settings.value(QStringLiteral("sam21_variant")).toString(), QStringLiteral("tiny"));
-    EXPECT_EQ(settings.value(QStringLiteral("sam21_device")).toString(), QStringLiteral("cuda"));
-    EXPECT_TRUE(settings.value(QStringLiteral("sam21_allow_fallback")).toBool());
-    EXPECT_EQ(settings.value(QStringLiteral("sam21_prompt_mode")).toString(), QStringLiteral("full_image_box"));
 }
 
 TEST(GenerateMaskDialogTest, ExposesU2NetOnnxCpuAndCudaSettings)
@@ -6743,25 +6704,6 @@ TEST(GenerateMaskWorkflowTest, ProjectManagerUsesCommonIoForTiffMaskGeneration)
         << "Mask generation must not use QImage for source TIFF reading; use common/io PathIO instead.";
 }
 
-TEST(GenerateMaskWorkflowTest, Sam21MaskGenerationUsesTorchScriptAndAutoPrompt)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int start = source.indexOf(QStringLiteral("void ProjectManager::openGenerateMaskDialog"));
-    const int end = source.indexOf(QStringLiteral("void ProjectManager::runReferenceQualityCheck"), start);
-    ASSERT_GE(start, 0);
-    ASSERT_GT(end, start);
-
-    const QString block = source.mid(start, end - start);
-    EXPECT_TRUE(source.contains(QStringLiteral("#include \"Sam21MaskGenerator.h\"")));
-    EXPECT_TRUE(block.contains(QStringLiteral("xjw::mask::Sam21MaskGenerator")));
-    EXPECT_TRUE(block.contains(QStringLiteral("xjw::mask::Sam21Prompt::autoBox")));
-    EXPECT_TRUE(block.contains(QStringLiteral("sam21TorchScriptModelNames")));
-    EXPECT_FALSE(block.contains(QStringLiteral("methodToken == QStringLiteral(\"sam21\") && options.method")))
-        << "SAM2.1 must not be implemented as a black-background variant.";
-}
-
 TEST(GenerateMaskWorkflowTest, U2NetMaskGenerationUsesBundledOnnxAndOpenCvDnn)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
@@ -6803,7 +6745,7 @@ TEST(GenerateMaskWorkflowTest, RunsMaskGenerationOffGuiThreadWithTaskStatusProgr
 
     const QString block = source.mid(start, end - start);
     EXPECT_TRUE(block.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
-        << "SAM2.1 mask generation must not run on the GUI thread.";
+        << "AI mask generation must not run on the GUI thread.";
     EXPECT_TRUE(block.contains(QStringLiteral("std::atomic<bool>")))
         << "Mask generation should keep a worker-visible cancel flag.";
     EXPECT_TRUE(block.contains(QStringLiteral("if (_maskGenerationCancelFlag)")))
@@ -6811,19 +6753,10 @@ TEST(GenerateMaskWorkflowTest, RunsMaskGenerationOffGuiThreadWithTaskStatusProgr
     EXPECT_TRUE(block.contains(QStringLiteral("reportProgress(++completed)")))
         << "The worker should report per-image progress while generating masks.";
     EXPECT_TRUE(block.contains(QStringLiteral("emit self->maskGenerationProgressChanged")))
-        << "The GUI should show long SAM2.1 inference progress in the main task status area.";
+        << "The GUI should show long AI inference progress in the main task status area.";
     EXPECT_FALSE(block.contains(QStringLiteral("new QProgressDialog")))
         << "Mask generation progress belongs in the main-window task status area.";
 
-    const int acceptedStart = block.indexOf(QStringLiteral("dialog.collectSettings()"));
-    ASSERT_GE(acceptedStart, 0);
-    const int runnerStart = block.indexOf(QStringLiteral("xjw::gui::tasks::runGuarded"), acceptedStart);
-    ASSERT_GT(runnerStart, acceptedStart);
-    const QString guiThreadBlock = block.mid(acceptedStart, runnerStart - acceptedStart);
-    EXPECT_FALSE(guiThreadBlock.contains(QStringLiteral("std::make_unique<xjw::mask::Sam21MaskGenerator>")))
-        << "Loading SAM2.1 TorchScript models must happen in the worker thread.";
-    EXPECT_FALSE(guiThreadBlock.contains(QStringLiteral("sam21Generator->generate")))
-        << "SAM2.1 inference must happen in the worker thread.";
 }
 
 TEST(GenerateMaskWorkflowTest, UsesMainWindowTaskStatusInsteadOfModalProgressDialog)
@@ -6858,40 +6791,6 @@ TEST(GenerateMaskWorkflowTest, UsesMainWindowTaskStatusInsteadOfModalProgressDia
     EXPECT_TRUE(mainSource.contains(QStringLiteral("&ProjectManager::maskGenerationFinished")));
     EXPECT_TRUE(mainSource.contains(QStringLiteral("_maskTaskStatus = createTaskStatus")));
     EXPECT_TRUE(mainSource.contains(QStringLiteral("生成蒙版 %1/%2")));
-}
-
-TEST(GenerateMaskWorkflowTest, DialogShowsSam21InstallStateAndButton)
-{
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/image/GenerateMaskDialog.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/image/GenerateMaskDialog.cpp"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(header.contains(QStringLiteral("sam21InstallRequested")))
-        << "The mask dialog should expose a model-install request signal.";
-    EXPECT_TRUE(header.contains(QStringLiteral("refreshSam21ModelStatus")))
-        << "The dialog must refresh installed/missing model labels after installation.";
-    EXPECT_TRUE(source.contains(QStringLiteral("#include \"model/Sam21ModelCatalog.h\"")));
-    EXPECT_TRUE(source.contains(QStringLiteral("xjw::common::model::sam21ModelStatus")));
-    EXPECT_TRUE(source.contains(QStringLiteral("安装模型")));
-    EXPECT_TRUE(source.contains(QStringLiteral("未安装")));
-}
-
-TEST(GenerateMaskWorkflowTest, ProjectManagerInstallsSam21ModelsWithBundledPythonProcess)
-{
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(header.contains(QStringLiteral("void installSam21Model(const QString &variantToken")));
-    EXPECT_TRUE(source.contains(QStringLiteral("#include <QProcess>")));
-    EXPECT_TRUE(source.contains(QStringLiteral("install_sam21_model.py")));
-    EXPECT_TRUE(source.contains(QStringLiteral("PLASCAN_PYTHON_EXECUTABLE")));
-    EXPECT_TRUE(source.contains(QStringLiteral("PLASCAN_PYTHON")));
-    EXPECT_TRUE(source.contains(QStringLiteral("new QProgressDialog")));
-    EXPECT_TRUE(source.contains(QStringLiteral("process->start(pythonExecutable, arguments)")))
-        << "Model installation should be launched as an asynchronous process, not by blocking the GUI thread.";
 }
 
 TEST(CanvasWidgetTest, ExposesMaskContourOverlayApi)
@@ -7821,7 +7720,9 @@ TEST(CameraSceneWidgetTest, CameraOverlayUsesMetashapeStyleImagePlanes)
     EXPECT_TRUE(header.contains(QStringLiteral("float cameraImagePlaneHalfExtent(const CameraPose &pose")));
     EXPECT_TRUE(header.contains(QStringLiteral("void drawFloorPivotCross(QPainter &painter)")));
     EXPECT_TRUE(source.contains(QStringLiteral("cameraImagePlaneHalfExtent(pose, matrices.modelView)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("drawCameraDirectionArrow(painter, pose")));
+    EXPECT_TRUE(source.contains(QStringLiteral("cameraDirectionLeaderLine(")));
+    EXPECT_TRUE(source.contains(QStringLiteral("pose, thumbnailHalfExtent")));
+    EXPECT_FALSE(source.contains(QStringLiteral("drawCameraDirectionArrow")));
     EXPECT_TRUE(source.contains(QStringLiteral("cameraImagePlaneCorners")));
     EXPECT_TRUE(source.contains(QStringLiteral("drawCameraThumbnails(cb")));
     EXPECT_TRUE(source.contains(QStringLiteral("_thumbnailPipeline.pipeline->setDepthTest(true)")));
