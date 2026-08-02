@@ -212,12 +212,6 @@ MatchPairSelectorDialog::MatchPairSelectorDialog(ProjectManager *projectManager,
     setWindowTitle(tr("匹配查看器"));
     resize(800, 600);
 
-    // 获取 matches 目录（直接扫描，不依赖元数据）
-    if (_projectManager && !_projectManager->currentProjectPath().isEmpty()) {
-        const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(_projectManager->currentProjectPath());
-        _matchDir = QDir(assetsDir).filePath(QStringLiteral("matches"));
-    }
-
     setupUI();
 
     // ── 实时刷新：projectMetadataChanged / matchPairReady 时自动更新视图 ──
@@ -544,8 +538,7 @@ MatchPairSelectorDialog::MatchDataSnapshot MatchPairSelectorDialog::makeSnapshot
     }
 
     snapshot.projectPath = _projectManager->currentProjectPath();
-    snapshot.matchDir = _matchDir;
-    if (snapshot.matchDir.isEmpty() && !snapshot.projectPath.isEmpty())
+    if (!snapshot.projectPath.isEmpty())
     {
         snapshot.matchDir = xjw::common::project::ProjectIO::imageMatchOutputDir(snapshot.projectPath);
     }
@@ -1232,12 +1225,6 @@ void MatchPairSelectorDialog::onViewDetailedMatch()
 
 void MatchPairSelectorDialog::onRefresh()
 {
-    // 更新 matchDir（防止项目切换后路径变化）
-    if (_projectManager && !_projectManager->currentProjectPath().isEmpty()) {
-        const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(_projectManager->currentProjectPath());
-        _matchDir = QDir(assetsDir).filePath(QStringLiteral("matches"));
-    }
-
     loadProjectImages();
 
     if (!_currentImage.isEmpty()) {

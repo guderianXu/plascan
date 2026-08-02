@@ -10776,6 +10776,24 @@ TEST(MatchPairSelectorResponsivenessTest, PrioritizesCurrentImageBeforeFullCatal
         << "Starting the full scan together with the priority scan still lets the full directory scan compete for IO.";
 }
 
+TEST(MatchPairSelectorStorageTest, ResolvesUnifiedImageMatchDirectoryFromCurrentProject)
+{
+    const QString header = readProjectSourceFile(
+        QStringLiteral("src/gui/dialogs/tie_points/MatchPairSelectorDialog.h"));
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/dialogs/tie_points/MatchPairSelectorDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral(
+        "ProjectIO::imageMatchOutputDir(snapshot.projectPath)")))
+        << "The match viewer must resolve the active chunk's unified .pimatch directory.";
+    EXPECT_FALSE(source.contains(QStringLiteral("QStringLiteral(\"matches\")")))
+        << "The removed assets/matches layout must not be reconstructed locally.";
+    EXPECT_FALSE(header.contains(QStringLiteral("QString _matchDir")))
+        << "Caching a project-relative match directory makes project switching stale.";
+}
+
 TEST(MatchPairSelectorResponsivenessTest, ShowsPercentageProgressDuringFullMatchScan)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/tie_points/MatchPairSelectorDialog.h"));

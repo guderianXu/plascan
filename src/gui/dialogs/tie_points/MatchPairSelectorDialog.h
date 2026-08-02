@@ -197,8 +197,6 @@ private:
     // 当前在表格中选中的匹配对索引（-1 表示无选中）
     int _selectedMatchIndex;
 
-    // matches 目录路径（用于文件系统扫描，替代读取大 JSON 元数据）
-    QString _matchDir;
     // 防抖刷新计时器（300ms 内多次触发只刷新一次）
     QTimer *_refreshTimer = nullptr;
     QFutureWatcher<MatchInfoList> *_priorityMatchLoadWatcher = nullptr;
