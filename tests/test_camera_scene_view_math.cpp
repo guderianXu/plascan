@@ -161,15 +161,16 @@ TEST(CameraSceneViewMathTest, RejectsInvalidCameraPlaneScreenSizeInputs)
 TEST(CameraSceneViewMathTest, BuildsPerspectiveIndependentScreenLeader)
 {
     const QLineF leader = cameraPlaneLeaderLine(
-        QPointF(10.0, 20.0), QPointF(1010.0, 20.0), 50.0);
+        QPointF(10.0, 20.0), QPointF(1010.0, 20.0), 12.0, 50.0);
 
     EXPECT_FALSE(leader.isNull());
-    EXPECT_NEAR(leader.p1().x(), 10.0, 1e-6);
+    EXPECT_NEAR(leader.p1().x(), 22.0, 1e-6);
     EXPECT_NEAR(leader.p1().y(), 20.0, 1e-6);
+    EXPECT_NEAR(leader.p2().x(), 72.0, 1e-6);
     EXPECT_NEAR(leader.length(), 50.0, 1e-6);
 
     const QLineF closeProbeLeader = cameraPlaneLeaderLine(
-        QPointF(10.0, 20.0), QPointF(11.0, 20.0), 50.0);
+        QPointF(10.0, 20.0), QPointF(11.0, 20.0), 12.0, 50.0);
     EXPECT_NEAR(closeProbeLeader.length(), leader.length(), 1e-6);
 }
 
@@ -178,6 +179,14 @@ TEST(CameraSceneViewMathTest, RejectsLeaderWithoutScreenDirection)
     EXPECT_TRUE(cameraPlaneLeaderLine(
                     QPointF(4.0, 5.0),
                     QPointF(4.0, 5.0),
+                    10.0,
+                    40.0)
+                    .isNull());
+
+    EXPECT_TRUE(cameraPlaneLeaderLine(
+                    QPointF(4.0, 5.0),
+                    QPointF(8.0, 5.0),
+                    -1.0,
                     40.0)
                     .isNull());
 }

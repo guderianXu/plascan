@@ -71,9 +71,11 @@ float cameraPlaneHalfExtentForScreenSize(
     double normalHalfExtentPixels = 34.0);
 
 // 生成固定屏幕像素长度的方向引线。探针只提供方向，探针距离
-// 和单个相机的透视深度都不会改变引线长度。
+// 和单个相机的透视深度都不会改变引线长度。引线会跳过照片平面
+// 占据的起始区间，避免从照片中心穿出。
 QLineF cameraPlaneLeaderLine(const QPointF &center,
                              const QPointF &directionProbe,
+                             qreal startOffsetPixels,
                              qreal lengthPixels);
 
 // 判断一个 NDC 点是否位于投影四边形内并处在该平面之后。

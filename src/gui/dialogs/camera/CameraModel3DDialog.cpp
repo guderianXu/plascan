@@ -53,6 +53,7 @@
 #include <QMetaObject>
 #include <QPointer>
 #include <QRegularExpression>
+#include <QSet>
 #include <rhi/qrhi.h>
 #include <rhi/qshader.h>
 #include <QSizePolicy>
@@ -826,7 +827,29 @@ CameraSceneWidget::~CameraSceneWidget() = default;
 // 调用后触发重绘，场景中每个姿态点将绘制相机平面卡片和名称标注。
 void CameraSceneWidget::setCameraPoses(const QVector<CameraPose> &poses)
 {
-    _poses = poses;
+    _poses.clear();
+    _poses.reserve(poses.size());
+    QSet<QString> cameraKeys;
+    for (const CameraPose &pose : poses)
+    {
+        QString cameraKey = normalizedCameraPath(pose.imagePath);
+        if (cameraKey.isEmpty())
+        {
+            cameraKey = pose.name.trimmed();
+        }
+        if (!cameraKey.isEmpty())
+        {
+#ifdef Q_OS_WIN
+            cameraKey = cameraKey.toCaseFolded();
+#endif
+            if (cameraKeys.contains(cameraKey))
+            {
+                continue;
+            }
+            cameraKeys.insert(cameraKey);
+        }
+        _poses.push_back(pose);
+    }
     _activeCameraImagePoseIndex = -1;
     _cacheDirty = true; // 相机位置变更，缓存失效
     ++_cameraImageLoadGeneration;
@@ -2170,10 +2193,12 @@ QLineF CameraSceneWidget::cameraDirectionLeaderLine(const CameraPose &pose,
         xjw::gui::camera_scene::cameraPlaneScreenHalfExtentPixels(
             _zoomScale,
             34.0);
-    const qreal leaderLength = qMax<qreal>(34.0, screenHalfExtent + 16.0);
+    const qreal lineStartOffset = screenHalfExtent + 3.0;
+    const qreal leaderLength = qBound<qreal>(26.0, screenHalfExtent * 0.5, 44.0);
     return xjw::gui::camera_scene::cameraPlaneLeaderLine(
         center,
         center + screenDirection,
+        lineStartOffset,
         leaderLength);
 }
 
@@ -4124,6 +4149,52 @@ void CameraSceneWidget::paintOverlay(QPainter &painter)
         {
             camera_label_order.push_back(static_cast<int>(poseIndex));
         }
+
+        // 相机方位线属于二维标注层，无法直接使用 Vulkan 深度缓冲。
+        // 将所有已投影照片平面从其绘制区域中扣除，确保任何相机的
+        // 方位线都不会透过自身或其他照片平面。
+        QPainterPath cameraPlaneOcclusionPath;
+        cameraPlaneOcclusionPath.setFillRule(Qt::WindingFill);
+        for (const CameraPose &pose : _poses)
+        {
+            const float halfExtent = cameraImagePlaneHalfExtent(
+                pose, cameraMatrices.modelView);
+            const xjw::gui::camera_scene::CameraImagePlaneAxes axes =
+                xjw::gui::camera_scene::cameraImagePlaneAxes(
+                    pose.rotation, pose.uAxisSign, pose.vAxisSign);
+            const QVector<QVector3D> corners =
+                xjw::gui::camera_scene::cameraImagePlaneCorners(
+                    pose.center,
+                    axes.right,
+                    axes.up,
+                    halfExtent,
+                    halfExtent * 0.68f);
+
+            QPolygonF projectedPlane;
+            bool planeVisible = corners.size() == 4;
+            for (const QVector3D &corner : corners)
+            {
+                bool cornerOk = false;
+                const QPointF projectedCorner = projectToScreen(corner, &cornerOk);
+                if (!cornerOk)
+                {
+                    planeVisible = false;
+                    break;
+                }
+                projectedPlane.push_back(projectedCorner);
+            }
+            if (planeVisible)
+            {
+                QPainterPath planePath;
+                planePath.addPolygon(projectedPlane);
+                planePath.closeSubpath();
+                cameraPlaneOcclusionPath = cameraPlaneOcclusionPath.united(planePath);
+            }
+        }
+        QPainterPath cameraLeaderClip;
+        cameraLeaderClip.addRect(QRectF(rect()));
+        cameraLeaderClip = cameraLeaderClip.subtracted(cameraPlaneOcclusionPath);
+
         for (const int poseIndex : camera_label_order)
         {
             const CameraPose &pose = _poses.at(poseIndex);
@@ -4134,11 +4205,14 @@ void CameraSceneWidget::paintOverlay(QPainter &painter)
                 pose, thumbnailHalfExtent);
             if (!directionLeader.isNull())
             {
+                painter.save();
+                painter.setClipPath(cameraLeaderClip, Qt::IntersectClip);
                 painter.setPen(QPen(QColor(25, 25, 25, cameraCount > 120 ? 155 : 215),
                                     highlighted ? 1.25 : 1.0,
                                     Qt::SolidLine,
                                     Qt::RoundCap));
                 painter.drawLine(directionLeader);
+                painter.restore();
             }
             const bool drawCameraLabel = highlighted
                 || drawAllCameraLabels

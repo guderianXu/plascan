@@ -184,6 +184,7 @@ TEST(CameraSceneRenderContractTest, CameraCardsUseScreenSizeAndExternalBlackDire
     EXPECT_TRUE(leaderBlock.contains(QStringLiteral("pose.center - forward")));
     EXPECT_TRUE(leaderBlock.contains(QStringLiteral("cameraPlaneScreenHalfExtentPixels(")));
     EXPECT_TRUE(leaderBlock.contains(QStringLiteral("cameraPlaneLeaderLine(")));
+    EXPECT_TRUE(leaderBlock.contains(QStringLiteral("lineStartOffset")));
     EXPECT_FALSE(leaderBlock.contains(QStringLiteral("projectedCorners")));
     EXPECT_FALSE(leaderBlock.contains(QStringLiteral("headLength")));
 
@@ -197,7 +198,26 @@ TEST(CameraSceneRenderContractTest, CameraCardsUseScreenSizeAndExternalBlackDire
     EXPECT_TRUE(overlayBlock.contains(QStringLiteral("cameraDirectionLeaderLine(")));
     EXPECT_TRUE(overlayBlock.contains(QStringLiteral("pose, thumbnailHalfExtent")));
     EXPECT_TRUE(overlayBlock.contains(QStringLiteral("QColor(25, 25, 25")));
+    EXPECT_TRUE(overlayBlock.contains(QStringLiteral("cameraPlaneOcclusionPath")));
+    EXPECT_TRUE(overlayBlock.contains(QStringLiteral("cameraLeaderClip")));
+    EXPECT_TRUE(overlayBlock.contains(QStringLiteral("painter.setClipPath(cameraLeaderClip")));
     EXPECT_FALSE(overlayBlock.contains(QStringLiteral("drawCameraDirectionArrow")));
+}
+
+TEST(CameraSceneRenderContractTest, DeduplicatesCameraPosesByImageIdentity)
+{
+    const QString source = readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const qsizetype start = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::setCameraPoses"));
+    const qsizetype end = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::setShowGizmo"), start);
+
+    ASSERT_GE(start, 0);
+    ASSERT_GT(end, start);
+    const QString block = source.mid(start, end - start);
+    EXPECT_TRUE(block.contains(QStringLiteral("QSet<QString> cameraKeys")));
+    EXPECT_TRUE(block.contains(QStringLiteral("cameraKeys.contains(cameraKey)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("_poses.push_back(pose)")));
 }
 
 TEST(CameraSceneRenderContractTest, CachesImageLoadFailuresToPreventRetryStorm)

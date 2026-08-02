@@ -142,13 +142,16 @@ float cameraPlaneHalfExtentForScreenSize(
 
 QLineF cameraPlaneLeaderLine(const QPointF &center,
                              const QPointF &directionProbe,
+                             qreal startOffsetPixels,
                              qreal lengthPixels)
 {
     if (!std::isfinite(center.x())
         || !std::isfinite(center.y())
         || !std::isfinite(directionProbe.x())
         || !std::isfinite(directionProbe.y())
+        || !std::isfinite(startOffsetPixels)
         || !std::isfinite(lengthPixels)
+        || startOffsetPixels < 0.0
         || lengthPixels <= 0.0)
     {
         return {};
@@ -161,7 +164,9 @@ QLineF cameraPlaneLeaderLine(const QPointF &center,
         return {};
     }
 
-    return QLineF(center, center + direction * (lengthPixels / directionLength));
+    const QPointF unitDirection = direction / directionLength;
+    const QPointF start = center + unitDirection * startOffsetPixels;
+    return QLineF(start, start + unitDirection * lengthPixels);
 }
 
 bool pointIsBehindProjectedQuad(const QVector3D &pointNdc,
