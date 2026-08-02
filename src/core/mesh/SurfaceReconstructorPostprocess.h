@@ -53,6 +53,13 @@ int smoothSurfaceVerticesNormalAware(TriMesh *mesh,
                                      float maximumDisplacement,
                                      float maximumNormalAngleDegrees,
                                      int boundaryProtectionRings);
+int smoothSurfaceVerticesTaubinProtected(TriMesh *mesh,
+                                         int iterations,
+                                         float lambda,
+                                         float mu,
+                                         float maximumDisplacement,
+                                         float featureAngleDegrees,
+                                         int boundaryProtectionRings);
 void taubinSmooth(TriMesh *mesh, int iterations, float lambda);
 void recomputeNormals(TriMesh *mesh);
 

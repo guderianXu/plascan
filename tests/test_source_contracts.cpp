@@ -946,20 +946,18 @@ TEST(GuiAlgorithmAlignmentContractTest, ReconstructionStagesRouteToDedicatedMana
     });
 }
 
-TEST(GuiAlgorithmAlignmentContractTest, GenerateModelDialogRequiresExistingSourceArtifacts)
+TEST(GuiAlgorithmAlignmentContractTest, GenerateModelDialogOffersAutomaticDepthMaps)
 {
     const QString dialog = readSourceFile(QStringLiteral("src/gui/dialogs/reconstruction/GenerateModelDialog.cpp"));
     ASSERT_FALSE(dialog.isEmpty());
 
     expectContainsAll(dialog, {
         "重用深度图",
-        R"(settings[QStringLiteral("reuseDepthMaps")])",
-        R"(settings[QStringLiteral("depthMapSourcePath")] = sourcePath)",
-    });
-    expectNotContainsAll(dialog, {
         "自动生成深度图",
         "缺少深度图时将自动估计深度图",
         "automatic_depth_maps",
+        R"(settings[QStringLiteral("reuseDepthMaps")])",
+        R"(settings[QStringLiteral("depthMapSourcePath")] = sourcePath)",
     });
 }
 

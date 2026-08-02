@@ -333,6 +333,58 @@ ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
             &ProjectPointCloudWorkflowController::pointCloudResultReady,
             this,
             &ProjectManager::pointCloudResultReady);
+        connect(_pointCloudWorkflowController,
+            &ProjectPointCloudWorkflowController::depthMapBatchReady,
+            this,
+            [this](const QString &output_directory, int)
+            {
+                if (_pendingAutomaticModelSettings.isEmpty())
+                {
+                    return;
+                }
+                QJsonObject model_settings = _pendingAutomaticModelSettings;
+                _pendingAutomaticModelSettings = QJsonObject();
+                model_settings[QStringLiteral("source_data")] =
+                    QStringLiteral("depth_maps");
+                model_settings[QStringLiteral("source_path")] = output_directory;
+                model_settings[QStringLiteral("depthMapSourcePath")] =
+                    output_directory;
+                model_settings[QStringLiteral("reuseDepthMaps")] = true;
+                model_settings[QStringLiteral("automatic_depth_maps")] = false;
+                model_settings[QStringLiteral("force_depth_recompute")] = false;
+                model_settings[QStringLiteral("reconstruction_mode")] =
+                    QStringLiteral("depth_tsdf");
+                emit meshProgressChanged(
+                    QStringLiteral("深度图估计完成，正在生成三维模型..."),
+                    60);
+                if (!_modelManager->startMeshReconstructionAsync(model_settings))
+                {
+                    emit meshProgressFinished(false);
+                }
+            });
+        connect(_pointCloudWorkflowController,
+            &ProjectPointCloudWorkflowController::pointCloudProgressChanged,
+            this,
+            [this](const QString &stage, int percent)
+            {
+                if (!_pendingAutomaticModelSettings.isEmpty())
+                {
+                    emit meshProgressChanged(
+                        QStringLiteral("准备深度图：%1").arg(stage),
+                        std::clamp(percent * 3 / 5, 0, 59));
+                }
+            });
+        connect(_pointCloudWorkflowController,
+            &ProjectPointCloudWorkflowController::pointCloudProgressFinished,
+            this,
+            [this](bool success)
+            {
+                if (!success && !_pendingAutomaticModelSettings.isEmpty())
+                {
+                    _pendingAutomaticModelSettings = QJsonObject();
+                    emit meshProgressFinished(false);
+                }
+            });
         connect(_sparseReconstructionManager,
             &ProjectSparseReconstructionManager::atProgressChanged,
             this, &ProjectManager::atProgressChanged);
@@ -1693,9 +1745,49 @@ void ProjectManager::startGenerateModelAsync()
 
 void ProjectManager::startGenerateModelAsync(const QJsonObject &settings)
 {
-    if (_modelManager)
+    if (!_modelManager)
+    {
+        return;
+    }
+
+    const QString source_data =
+        settings.value(QStringLiteral("source_data")).toString();
+    const QString depth_source =
+        settings.value(QStringLiteral("depthMapSourcePath"))
+            .toString(settings.value(QStringLiteral("source_path")).toString())
+            .trimmed();
+    const bool automatic_depth_maps =
+        source_data == QStringLiteral("depth_maps") &&
+        (settings.value(QStringLiteral("automatic_depth_maps")).toBool(false) ||
+         depth_source.isEmpty());
+    if (!automatic_depth_maps)
     {
         _modelManager->startMeshReconstructionAsync(settings);
+        return;
+    }
+    if (!_pointCloudWorkflowController)
+    {
+        emit meshProgressFinished(false);
+        return;
+    }
+    if (!_pendingAutomaticModelSettings.isEmpty())
+    {
+        return;
+    }
+
+    _pendingAutomaticModelSettings = settings;
+    QJsonObject depth_settings = settings;
+    depth_settings[QStringLiteral("reuseDepthMaps")] = false;
+    depth_settings[QStringLiteral("force_depth_recompute")] = true;
+    depth_settings[QStringLiteral("depthFilterMode")] =
+        settings.value(QStringLiteral("depthFiltering"))
+            .toString(QStringLiteral("mild"));
+    depth_settings[QStringLiteral("calculatePointColors")] = false;
+    depth_settings[QStringLiteral("replaceDefaultPointCloud")] = false;
+    if (!_pointCloudWorkflowController->startDepthMapsOnlyAsync(depth_settings))
+    {
+        _pendingAutomaticModelSettings = QJsonObject();
+        emit meshProgressFinished(false);
     }
 }
 
@@ -1993,6 +2085,12 @@ QJsonArray ProjectManager::getAvailableAtResults() const
 
 void ProjectManager::cancelModelGeneration()
 {
+    if (!_pendingAutomaticModelSettings.isEmpty() &&
+        _pointCloudWorkflowController)
+    {
+        _pointCloudWorkflowController->cancelActiveTask();
+        return;
+    }
     if (_modelManager)
     {
         _modelManager->cancelActiveTask();

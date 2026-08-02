@@ -53,6 +53,7 @@ struct PointCloudWorkflowContext
     bool saveAfterEachStep = false;
     bool calculateColors = true;
     bool replaceDefaultPointCloud = false;
+    bool depthMapsOnly = false;
     QString depthError;
 };
 
@@ -290,6 +291,19 @@ ProjectPointCloudWorkflowController::~ProjectPointCloudWorkflowController()
 bool ProjectPointCloudWorkflowController::startCreatePointCloudAsync(
     const QJsonObject &settings)
 {
+    return startWorkflow(settings, false);
+}
+
+bool ProjectPointCloudWorkflowController::startDepthMapsOnlyAsync(
+    const QJsonObject &settings)
+{
+    return startWorkflow(settings, true);
+}
+
+bool ProjectPointCloudWorkflowController::startWorkflow(
+    const QJsonObject &settings,
+    bool depth_maps_only)
+{
     if (!_owner || !_projectData || !_projectData->hasProject())
     {
         failTask(QStringLiteral("请先打开项目，并完成正式空中三角测量。"));
@@ -298,8 +312,12 @@ bool ProjectPointCloudWorkflowController::startCreatePointCloudAsync(
     if (_isRunning)
     {
         QMessageBox::information(_parentWidget,
-                                 QStringLiteral("创建点云"),
-                                 QStringLiteral("已有点云任务正在运行，请等待或先取消当前任务。"));
+                                 depth_maps_only
+                                     ? QStringLiteral("生成模型")
+                                     : QStringLiteral("创建点云"),
+                                 depth_maps_only
+                                     ? QStringLiteral("已有深度图或点云任务正在运行，请等待或先取消当前任务。")
+                                     : QStringLiteral("已有点云任务正在运行，请等待或先取消当前任务。"));
         return false;
     }
 
@@ -338,6 +356,7 @@ bool ProjectPointCloudWorkflowController::startCreatePointCloudAsync(
         settings.value(QStringLiteral("calculatePointColors")).toBool(true);
     context->replaceDefaultPointCloud =
         settings.value(QStringLiteral("replaceDefaultPointCloud")).toBool(false);
+    context->depthMapsOnly = depth_maps_only;
 
     if (!QFileInfo::exists(context->sparseCloudPath))
     {
@@ -398,7 +417,19 @@ bool ProjectPointCloudWorkflowController::startCreatePointCloudAsync(
 
     if (can_reuse)
     {
-        startFusion(context);
+        if (context->depthMapsOnly)
+        {
+            const auto stored =
+                xjw::core::project::collectLatestStoredDepthFrames(metadata);
+            emit depthMapBatchReady(
+                context->outputDir,
+                static_cast<int>(stored.frames.size()));
+            finishTask(true);
+        }
+        else
+        {
+            startFusion(context);
+        }
     }
     else
     {
@@ -539,6 +570,27 @@ void ProjectPointCloudWorkflowController::startDepthEstimation(
                         if (context->saveAfterEachStep && self->_projectData)
                         {
                             self->_projectData->saveProjectAsync();
+                        }
+                        if (context->depthMapsOnly)
+                        {
+                            const auto stored =
+                                xjw::core::project::collectStoredDepthFramesForDirectory(
+                                    self->_projectData->metadata(),
+                                    context->outputDir);
+                            if (!stored.status.ok || stored.frames.size() < 2)
+                            {
+                                self->failTask(
+                                    stored.status.ok
+                                        ? QStringLiteral("自动估计后可用深度图不足 2 帧。")
+                                        : stored.status.errorMessage,
+                                    QStringLiteral("生成模型"));
+                                return;
+                            }
+                            emit self->depthMapBatchReady(
+                                context->outputDir,
+                                static_cast<int>(stored.frames.size()));
+                            self->finishTask(true);
+                            return;
                         }
                         self->startFusion(context);
                     });

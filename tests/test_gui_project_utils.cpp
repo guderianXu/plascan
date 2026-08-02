@@ -1941,6 +1941,32 @@ TEST(GenerateModelDialogTest, OffersAutomaticDepthMapsWithoutExistingDepthArtifa
     ASSERT_NE(source_combo, nullptr);
     EXPECT_GE(source_combo->findData(QStringLiteral("depth_maps")), 0);
     EXPECT_EQ(source_combo->currentData().toString(), QStringLiteral("depth_maps"));
+
+    auto *source_items =
+        dialog.findChild<QComboBox *>(QStringLiteral("modelSourceItemCombo"));
+    ASSERT_NE(source_items, nullptr);
+    ASSERT_EQ(source_items->count(), 1);
+    const QJsonObject automatic_candidate =
+        source_items->currentData().toJsonObject();
+    EXPECT_TRUE(automatic_candidate
+                    .value(QStringLiteral("automatic_depth_maps"))
+                    .toBool());
+    EXPECT_TRUE(automatic_candidate.value(QStringLiteral("supported")).toBool());
+
+    QSignalSpy run_spy(&dialog, &GenerateModelDialog::runRequested);
+    auto *button_box =
+        dialog.findChild<QDialogButtonBox *>(QStringLiteral("workflowButtonBox"));
+    ASSERT_NE(button_box, nullptr);
+    button_box->button(QDialogButtonBox::Ok)->click();
+    ASSERT_EQ(run_spy.count(), 1);
+    const QJsonObject submitted = run_spy.at(0).at(0).toJsonObject();
+    EXPECT_EQ(submitted.value(QStringLiteral("source_data")).toString(),
+              QStringLiteral("depth_maps"));
+    EXPECT_TRUE(submitted.value(QStringLiteral("automatic_depth_maps")).toBool());
+    EXPECT_TRUE(submitted.value(QStringLiteral("force_depth_recompute")).toBool());
+    EXPECT_TRUE(submitted.value(QStringLiteral("depthMapSourcePath"))
+                    .toString()
+                    .isEmpty());
 }
 
 TEST(GenerateModelDialogTest, ReusesDepthMapsByDefaultForLegacySettings)
@@ -13497,6 +13523,10 @@ TEST(CameraModel3DDialogTest, ObjMaterialTextureUsesFaceUvRhiPipeline)
     EXPECT_TRUE(source.contains(QStringLiteral("faceTextureIndices()->getValue")));
     EXPECT_TRUE(source.contains(QStringLiteral("ensureTexturedMeshPipeline")));
     EXPECT_TRUE(source.contains(QStringLiteral("drawTexturedMesh")));
+    EXPECT_TRUE(source.contains(QStringLiteral(
+        "self->setModelColorMode(ModelColorMode::Texture)")));
+    EXPECT_FALSE(source.contains(QStringLiteral(
+        "if (mode == ModelColorMode::Texture ||")));
     EXPECT_TRUE(header.contains(QStringLiteral("RhiTexturedMeshPipelineSet")));
     EXPECT_TRUE(vertexShader.contains(QStringLiteral("1.0 - aTexCoord.y")));
     EXPECT_TRUE(vertexShader.contains(QStringLiteral("aColor")));

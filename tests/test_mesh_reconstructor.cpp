@@ -13,6 +13,7 @@
 #include "result/OperationResult.h"
 #include "ModelWorkflowService.h"
 #include "MeshColorizer.h"
+#include "MeshFaceOrientation.h"
 #include "MeshQuadricSimplifier.h"
 #include "MeshIsotropicRemesher.h"
 #include "MeshTopologyQuality.h"
@@ -43,6 +44,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -943,6 +945,71 @@ TEST(SurfaceReconstructorPostprocessTest, NormalAwareSmoothingReducesInteriorNoi
 
     EXPECT_GT(moved, 0);
     EXPECT_LT(mesh.vertices[12].z, original[12].z);
+    for (int index = 0; index < side; ++index)
+    {
+        EXPECT_FLOAT_EQ(mesh.vertices[static_cast<std::size_t>(index)].z,
+                        original[static_cast<std::size_t>(index)].z);
+    }
+    EXPECT_FLOAT_EQ(mesh.vertices[20].z, original[20].z);
+    EXPECT_EQ(mesh.faceCount(), 32);
+}
+
+TEST(SurfaceReconstructorPostprocessTest, ProtectedTaubinSmoothingReducesNoiseWithoutMovingOpenBoundary)
+{
+    constexpr int side = 5;
+    xjw::mesh::TriMesh mesh;
+    for (int row = 0; row < side; ++row)
+    {
+        for (int column = 0; column < side; ++column)
+        {
+            xjw::mesh::MeshVertex vertex;
+            vertex.x = static_cast<float>(column);
+            vertex.y = static_cast<float>(row);
+            const bool is_interior = row > 0 && row + 1 < side &&
+                                     column > 0 && column + 1 < side;
+            vertex.z = is_interior
+                ? (((row + column) % 2 == 0) ? 0.20f : -0.20f)
+                : 0.0f;
+            mesh.vertices.push_back(vertex);
+        }
+    }
+    for (int row = 0; row + 1 < side; ++row)
+    {
+        for (int column = 0; column + 1 < side; ++column)
+        {
+            const int first = row * side + column;
+            const int second = first + 1;
+            const int third = first + side;
+            const int fourth = third + 1;
+            mesh.faces.push_back({{first, second, third}});
+            mesh.faces.push_back({{second, fourth, third}});
+        }
+    }
+    const std::vector<xjw::mesh::MeshVertex> original = mesh.vertices;
+    float absolute_height_before = 0.0f;
+    for (int row = 1; row + 1 < side; ++row)
+    {
+        for (int column = 1; column + 1 < side; ++column)
+        {
+            absolute_height_before += std::abs(
+                mesh.vertices[static_cast<std::size_t>(row * side + column)].z);
+        }
+    }
+
+    const int moved = xjw::mesh::detail::smoothSurfaceVerticesTaubinProtected(
+        &mesh, 3, 0.50f, -0.53f, 0.50f, 170.0f, 0);
+
+    float absolute_height_after = 0.0f;
+    for (int row = 1; row + 1 < side; ++row)
+    {
+        for (int column = 1; column + 1 < side; ++column)
+        {
+            absolute_height_after += std::abs(
+                mesh.vertices[static_cast<std::size_t>(row * side + column)].z);
+        }
+    }
+    EXPECT_GT(moved, 0);
+    EXPECT_LT(absolute_height_after, absolute_height_before * 0.65f);
     for (int index = 0; index < side; ++index)
     {
         EXPECT_FLOAT_EQ(mesh.vertices[static_cast<std::size_t>(index)].z,
@@ -3578,6 +3645,29 @@ TEST(DepthTsdfSurfaceBuilderTest, RobustFrameWeightingSuppressesLowTailOutlier)
     EXPECT_EQ(
         build_result.statistics.robustFrameQualityDownweightedFrameCount,
         1);
+}
+
+TEST(MeshFaceOrientationTest, RepairsAdjacentFacesWithMatchingSharedEdgeDirection)
+{
+    xjw::mesh::TriMesh mesh;
+    mesh.vertices = {
+        {0.0f, 0.0f, 0.0f},
+        {1.0f, 0.0f, 0.0f},
+        {1.0f, 1.0f, 0.0f},
+        {0.0f, 1.0f, 0.0f}};
+    mesh.faces = {
+        {{0, 1, 2}},
+        {{0, 3, 2}}};
+
+    const auto statistics = xjw::mesh::repairMeshFaceOrientation(&mesh);
+
+    EXPECT_TRUE(statistics.succeeded);
+    EXPECT_EQ(statistics.inconsistentSharedEdgeCountBefore, 1);
+    EXPECT_EQ(statistics.inconsistentSharedEdgeCountAfter, 0);
+    EXPECT_EQ(statistics.flippedFaceCount, 1);
+    EXPECT_EQ(statistics.removedContradictoryFaceCount, 0);
+    EXPECT_EQ(statistics.nonManifoldEdgeCount, 0);
+    ASSERT_EQ(mesh.faces.size(), 2U);
 }
 
 TEST(DepthTsdfSurfaceBuilderTest,
@@ -6501,6 +6591,14 @@ TEST(MeshWorkflowSettingsTest, DepthTsdfFaceTargetUsesTopologySafeOpenMeshProfil
     EXPECT_EQ(options.openMeshSmoothingIterations, 12);
     EXPECT_FLOAT_EQ(options.openMeshSmoothingMaximumDisplacementVoxels, 1.60f);
     EXPECT_FLOAT_EQ(options.openMeshSmoothingFeatureAngleDegrees, 175.0f);
+    EXPECT_EQ(options.surfaceDenoisingIterations, 8);
+    EXPECT_FLOAT_EQ(options.surfaceDenoisingLambda, 0.50f);
+    EXPECT_FLOAT_EQ(options.surfaceDenoisingMu, -0.53f);
+    EXPECT_FLOAT_EQ(options.maximumSurfaceDenoisingDisplacementVoxels, 0.75f);
+    EXPECT_FLOAT_EQ(options.maximumSurfaceDenoisingNormalAngleDegrees, 120.0f);
+    EXPECT_EQ(options.surfaceDenoisingBoundaryProtectionRings, 0);
+    EXPECT_TRUE(options.enableProtectedTaubinSurfaceDenoising);
+    EXPECT_TRUE(options.enablePostSimplificationSurfaceDenoising);
     EXPECT_EQ(options.simplificationMaximumPasses, 96);
     EXPECT_FLOAT_EQ(options.simplificationFeatureAngleDegrees, 65.0f);
     EXPECT_FLOAT_EQ(options.simplificationMaximumNormalDeviationDegrees, 65.0f);
@@ -6959,6 +7057,23 @@ TEST(MeshWorkflowSettingsTest,
     EXPECT_FLOAT_EQ(options.visibilityOccupancyCarrierBand, 1.0f);
     EXPECT_FLOAT_EQ(options.visibilityOccupancyMaximumResidual, 1.0f);
     EXPECT_FLOAT_EQ(options.visibilityOccupancyDetailBlend, 1.0f);
+}
+
+TEST(MeshWorkflowSettingsTest, HighQuality320ResolutionEnablesSurfaceDenoising)
+{
+    const QJsonObject settings{
+        {QStringLiteral("simplifyTargetFaces"), 240000}};
+
+    const auto options = xjw::mesh::workflow::depthTsdfOptionsFromSettings(
+        settings, 320);
+
+    EXPECT_EQ(options.surfaceDenoisingIterations, 8);
+    EXPECT_FLOAT_EQ(options.surfaceDenoisingLambda, 0.50f);
+    EXPECT_FLOAT_EQ(options.surfaceDenoisingMu, -0.53f);
+    EXPECT_FLOAT_EQ(options.maximumSurfaceDenoisingDisplacementVoxels, 0.75f);
+    EXPECT_FLOAT_EQ(options.maximumSurfaceDenoisingNormalAngleDegrees, 120.0f);
+    EXPECT_TRUE(options.enableProtectedTaubinSurfaceDenoising);
+    EXPECT_TRUE(options.enablePostSimplificationSurfaceDenoising);
 }
 
 TEST(MeshWorkflowSettingsTest, OrbitalCompletionDefaultsAlsoApplyBelowHighDetailProfile)
@@ -7646,6 +7761,68 @@ TEST(TextureMapperTest, AtlasPackerIsDeterministicAndAvoidsOverlap)
                 first.items[other].packedRect));
         }
     }
+}
+
+TEST(TextureMapperTest, AtlasPackerHandlesManyFragmentedChartsPromptly)
+{
+    QVector<xjw::mesh::TextureAtlasItem> items;
+    // Match the upper-bound case where every face of a 240k-face model becomes
+    // an independent chart. The previous free-rectangle implementation became
+    // effectively unbounded on this input.
+    constexpr int item_count = 240000;
+    items.reserve(item_count);
+    for (int index = 0; index < item_count; ++index)
+    {
+        const int width = 18 + (index * 37) % 173;
+        const int height = 14 + (index * 53) % 149;
+        items.push_back({index, QSize(width, height), QRect()});
+    }
+
+    const auto started_at = std::chrono::steady_clock::now();
+    const auto packed = xjw::mesh::TextureAtlasPacker::pack(
+        items, 8192, 18);
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - started_at);
+
+    ASSERT_TRUE(packed.ok);
+    ASSERT_FALSE(packed.cancelled);
+    ASSERT_EQ(packed.items.size(), item_count);
+    EXPECT_LT(elapsed.count(), 10000);
+    EXPECT_GT(packed.occupancy, 0.80);
+    for (const auto &item : packed.items)
+    {
+        EXPECT_GE(item.packedRect.left(), 18);
+        EXPECT_GE(item.packedRect.top(), 0);
+        EXPECT_LE(item.packedRect.right(), 8191);
+        EXPECT_LE(item.packedRect.bottom(), 8191);
+    }
+}
+
+TEST(TextureMapperTest, AtlasPackerCanCancelLargePackingJob)
+{
+    QVector<xjw::mesh::TextureAtlasItem> items;
+    constexpr int item_count = 20000;
+    items.reserve(item_count);
+    for (int index = 0; index < item_count; ++index)
+    {
+        items.push_back({index,
+                         QSize(24 + index % 31, 20 + index % 29),
+                         QRect()});
+    }
+
+    int cancellation_checks = 0;
+    const auto packed = xjw::mesh::TextureAtlasPacker::pack(
+        items,
+        8192,
+        18,
+        [&cancellation_checks]()
+        {
+            return ++cancellation_checks >= 2;
+        });
+
+    EXPECT_FALSE(packed.ok);
+    EXPECT_TRUE(packed.cancelled);
+    EXPECT_GE(cancellation_checks, 2);
 }
 
 TEST(TextureMapperTest, ParsesStableDialogSettingsIntoV4Configuration)

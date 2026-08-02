@@ -2445,6 +2445,231 @@ int smoothSurfaceVerticesNormalAware(TriMesh *mesh,
     return static_cast<int>(std::count(moved.cbegin(), moved.cend(), std::uint8_t{1}));
 }
 
+int smoothSurfaceVerticesTaubinProtected(TriMesh *mesh,
+                                         int iterations,
+                                         float lambda,
+                                         float mu,
+                                         float maximumDisplacement,
+                                         float featureAngleDegrees,
+                                         int boundaryProtectionRings)
+{
+    if (!mesh || mesh->vertices.empty() || mesh->faces.empty() ||
+        iterations <= 0 || !std::isfinite(lambda) || !std::isfinite(mu) ||
+        maximumDisplacement <= 0.0f)
+    {
+        return 0;
+    }
+
+    struct EdgeFaces
+    {
+        int first = -1;
+        int second = -1;
+        int count = 0;
+    };
+
+    std::vector<std::vector<int>> neighbors(mesh->vertices.size());
+    std::unordered_map<std::uint64_t, EdgeFaces> edge_faces;
+    edge_faces.reserve(mesh->faces.size() * 3);
+    std::vector<std::array<float, 3>> face_normals(mesh->faces.size());
+    for (std::size_t face_index = 0; face_index < mesh->faces.size(); ++face_index)
+    {
+        const Triangle &face = mesh->faces[face_index];
+        const MeshVertex &a = mesh->vertices[static_cast<std::size_t>(face.v[0])];
+        const MeshVertex &b = mesh->vertices[static_cast<std::size_t>(face.v[1])];
+        const MeshVertex &c = mesh->vertices[static_cast<std::size_t>(face.v[2])];
+        const float ab_x = b.x - a.x;
+        const float ab_y = b.y - a.y;
+        const float ab_z = b.z - a.z;
+        const float ac_x = c.x - a.x;
+        const float ac_y = c.y - a.y;
+        const float ac_z = c.z - a.z;
+        float nx = ab_y * ac_z - ab_z * ac_y;
+        float ny = ab_z * ac_x - ab_x * ac_z;
+        float nz = ab_x * ac_y - ab_y * ac_x;
+        const float length = std::sqrt(nx * nx + ny * ny + nz * nz);
+        if (length > 1.0e-12f)
+        {
+            nx /= length;
+            ny /= length;
+            nz /= length;
+        }
+        face_normals[face_index] = {nx, ny, nz};
+
+        const std::array<std::array<int, 2>, 3> edges{{
+            {{face.v[0], face.v[1]}},
+            {{face.v[1], face.v[2]}},
+            {{face.v[2], face.v[0]}}
+        }};
+        for (const auto &edge : edges)
+        {
+            neighbors[static_cast<std::size_t>(edge[0])].push_back(edge[1]);
+            neighbors[static_cast<std::size_t>(edge[1])].push_back(edge[0]);
+            EdgeFaces &incident = edge_faces[edgeKey(edge[0], edge[1])];
+            if (incident.count == 0)
+            {
+                incident.first = static_cast<int>(face_index);
+            }
+            else if (incident.count == 1)
+            {
+                incident.second = static_cast<int>(face_index);
+            }
+            ++incident.count;
+        }
+    }
+    for (auto &adjacent : neighbors)
+    {
+        std::sort(adjacent.begin(), adjacent.end());
+        adjacent.erase(std::unique(adjacent.begin(), adjacent.end()), adjacent.end());
+    }
+
+    std::vector<std::uint8_t> protected_vertex(mesh->vertices.size(), 0);
+    std::vector<int> sharp_edge_degree(mesh->vertices.size(), 0);
+    const float clamped_feature_angle = std::clamp(featureAngleDegrees, 1.0f, 179.0f);
+    const float feature_dot = std::cos(
+        clamped_feature_angle * 3.14159265358979323846f / 180.0f);
+    for (const auto &entry : edge_faces)
+    {
+        const int first_vertex = static_cast<int>(entry.first >> 32U);
+        const int second_vertex = static_cast<int>(entry.first & 0xffffffffU);
+        const EdgeFaces &incident = entry.second;
+        if (incident.count != 2)
+        {
+            protected_vertex[static_cast<std::size_t>(first_vertex)] = 1;
+            protected_vertex[static_cast<std::size_t>(second_vertex)] = 1;
+            continue;
+        }
+        const auto &first_normal = face_normals[static_cast<std::size_t>(incident.first)];
+        const auto &second_normal = face_normals[static_cast<std::size_t>(incident.second)];
+        const float normal_dot =
+            first_normal[0] * second_normal[0] +
+            first_normal[1] * second_normal[1] +
+            first_normal[2] * second_normal[2];
+        if (normal_dot < feature_dot)
+        {
+            ++sharp_edge_degree[static_cast<std::size_t>(first_vertex)];
+            ++sharp_edge_degree[static_cast<std::size_t>(second_vertex)];
+        }
+    }
+    for (std::size_t index = 0; index < sharp_edge_degree.size(); ++index)
+    {
+        // A coherent crease contributes at least two sharp incident edges. A
+        // single sharp edge is usually a marching-cubes spike and remains
+        // eligible for denoising.
+        if (sharp_edge_degree[index] >= 2)
+        {
+            protected_vertex[index] = 1;
+        }
+    }
+    for (int ring = 0; ring < std::max(0, boundaryProtectionRings); ++ring)
+    {
+        std::vector<std::uint8_t> expanded = protected_vertex;
+        for (std::size_t index = 0; index < protected_vertex.size(); ++index)
+        {
+            if (!protected_vertex[index])
+            {
+                continue;
+            }
+            for (const int neighbor : neighbors[index])
+            {
+                expanded[static_cast<std::size_t>(neighbor)] = 1;
+            }
+        }
+        protected_vertex = std::move(expanded);
+    }
+
+    lambda = std::clamp(lambda, 0.0f, 1.0f);
+    mu = std::clamp(mu, -1.0f, 0.0f);
+    const std::vector<MeshVertex> original = mesh->vertices;
+    std::vector<std::uint8_t> moved(mesh->vertices.size(), 0);
+    const auto apply_laplacian_step = [&](float factor)
+    {
+        const std::vector<MeshVertex> source = mesh->vertices;
+        for (std::size_t index = 0; index < source.size(); ++index)
+        {
+            const auto &adjacent = neighbors[index];
+            if (protected_vertex[index] || adjacent.size() < 3)
+            {
+                continue;
+            }
+            const MeshVertex &current = source[index];
+            float mean_edge_length = 0.0f;
+            for (const int neighbor_index : adjacent)
+            {
+                const MeshVertex &neighbor = source[static_cast<std::size_t>(neighbor_index)];
+                const float dx = neighbor.x - current.x;
+                const float dy = neighbor.y - current.y;
+                const float dz = neighbor.z - current.z;
+                mean_edge_length += std::sqrt(dx * dx + dy * dy + dz * dz);
+            }
+            mean_edge_length /= static_cast<float>(adjacent.size());
+            const float maximum_neighbor_distance = mean_edge_length * 2.5f;
+            float mean_x = 0.0f;
+            float mean_y = 0.0f;
+            float mean_z = 0.0f;
+            int accepted_neighbor_count = 0;
+            for (const int neighbor_index : adjacent)
+            {
+                const MeshVertex &neighbor = source[static_cast<std::size_t>(neighbor_index)];
+                const float dx = neighbor.x - current.x;
+                const float dy = neighbor.y - current.y;
+                const float dz = neighbor.z - current.z;
+                const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+                if (distance > maximum_neighbor_distance)
+                {
+                    continue;
+                }
+                mean_x += neighbor.x;
+                mean_y += neighbor.y;
+                mean_z += neighbor.z;
+                ++accepted_neighbor_count;
+            }
+            if (accepted_neighbor_count < 3)
+            {
+                continue;
+            }
+            const float inverse_count = 1.0f / static_cast<float>(accepted_neighbor_count);
+            MeshVertex candidate = current;
+            candidate.x += factor * (mean_x * inverse_count - current.x);
+            candidate.y += factor * (mean_y * inverse_count - current.y);
+            candidate.z += factor * (mean_z * inverse_count - current.z);
+
+            const MeshVertex &origin = original[index];
+            float offset_x = candidate.x - origin.x;
+            float offset_y = candidate.y - origin.y;
+            float offset_z = candidate.z - origin.z;
+            const float displacement = std::sqrt(
+                offset_x * offset_x + offset_y * offset_y + offset_z * offset_z);
+            if (displacement > maximumDisplacement)
+            {
+                const float scale = maximumDisplacement / displacement;
+                offset_x *= scale;
+                offset_y *= scale;
+                offset_z *= scale;
+                candidate.x = origin.x + offset_x;
+                candidate.y = origin.y + offset_y;
+                candidate.z = origin.z + offset_z;
+            }
+            const float step_x = candidate.x - current.x;
+            const float step_y = candidate.y - current.y;
+            const float step_z = candidate.z - current.z;
+            if (step_x * step_x + step_y * step_y + step_z * step_z > 1.0e-16f)
+            {
+                mesh->vertices[index].x = candidate.x;
+                mesh->vertices[index].y = candidate.y;
+                mesh->vertices[index].z = candidate.z;
+                moved[index] = 1;
+            }
+        }
+    };
+
+    for (int iteration = 0; iteration < iterations; ++iteration)
+    {
+        apply_laplacian_step(lambda);
+        apply_laplacian_step(mu);
+    }
+    return static_cast<int>(std::count(moved.cbegin(), moved.cend(), std::uint8_t{1}));
+}
+
 void simplifyVoxelMeshAdaptive(TriMesh *mesh,
                                const ReconstructionConfig &config,
                                float voxelStep)

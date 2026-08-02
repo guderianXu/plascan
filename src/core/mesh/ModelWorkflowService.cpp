@@ -1874,48 +1874,69 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
         0.0f,
         1.0f);
     const bool automatic_surface_denoising =
-        options.resolution >= 384 &&
+        options.resolution >= 256 &&
         options.simplifyTargetFaces > 0 &&
-        options.simplifyTargetFaces <= 120000 &&
+        options.simplifyTargetFaces <= 240000 &&
         settings.value(QStringLiteral("surface_type"))
                 .toString(QStringLiteral("arbitrary_3d")) ==
             QStringLiteral("arbitrary_3d");
+    const bool high_face_budget_surface_denoising =
+        automatic_surface_denoising &&
+        options.simplifyTargetFaces > 120000;
     const int automatic_surface_denoising_iterations =
-        automatic_surface_denoising ? 1 : options.surfaceDenoisingIterations;
+        automatic_surface_denoising
+            ? (high_face_budget_surface_denoising ? 8 : 1)
+            : options.surfaceDenoisingIterations;
     if (automatic_surface_denoising)
     {
-        options.surfaceDenoisingLambda = 0.30f;
-        options.maximumSurfaceDenoisingDisplacementVoxels = 0.12f;
-        options.maximumSurfaceDenoisingNormalAngleDegrees = 25.0f;
-        options.surfaceDenoisingBoundaryProtectionRings = 1;
+        options.surfaceDenoisingLambda =
+            high_face_budget_surface_denoising ? 0.50f : 0.30f;
+        options.surfaceDenoisingMu =
+            high_face_budget_surface_denoising ? -0.53f : 0.0f;
+        options.maximumSurfaceDenoisingDisplacementVoxels =
+            high_face_budget_surface_denoising ? 0.75f : 0.12f;
+        options.maximumSurfaceDenoisingNormalAngleDegrees =
+            high_face_budget_surface_denoising ? 120.0f : 25.0f;
+        options.surfaceDenoisingBoundaryProtectionRings =
+            high_face_budget_surface_denoising ? 0 : 1;
+        options.enableProtectedTaubinSurfaceDenoising =
+            high_face_budget_surface_denoising;
     }
     options.surfaceDenoisingIterations = qBound(
         0,
         settings.value(QStringLiteral("tsdfSurfaceDenoisingIterations"))
             .toInt(automatic_surface_denoising_iterations),
-        3);
+        8);
     options.surfaceDenoisingLambda = std::clamp(
         static_cast<float>(settings.value(QStringLiteral("tsdfSurfaceDenoisingLambda"))
                                .toDouble(options.surfaceDenoisingLambda)),
         0.0f,
         0.75f);
+    options.surfaceDenoisingMu = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral("tsdfSurfaceDenoisingMu"))
+                               .toDouble(options.surfaceDenoisingMu)),
+        -1.0f,
+        0.0f);
     options.maximumSurfaceDenoisingDisplacementVoxels = std::clamp(
         static_cast<float>(settings.value(
             QStringLiteral("tsdfMaximumSurfaceDenoisingDisplacementVoxels"))
                                .toDouble(options.maximumSurfaceDenoisingDisplacementVoxels)),
         0.0f,
-        0.5f);
+        1.0f);
     options.maximumSurfaceDenoisingNormalAngleDegrees = std::clamp(
         static_cast<float>(settings.value(
             QStringLiteral("tsdfMaximumSurfaceDenoisingNormalAngleDegrees"))
                                .toDouble(options.maximumSurfaceDenoisingNormalAngleDegrees)),
         5.0f,
-        60.0f);
+        170.0f);
     options.surfaceDenoisingBoundaryProtectionRings = qBound(
         0,
         settings.value(QStringLiteral("tsdfSurfaceDenoisingBoundaryProtectionRings"))
             .toInt(options.surfaceDenoisingBoundaryProtectionRings),
         2);
+    options.enableProtectedTaubinSurfaceDenoising = settings.value(
+        QStringLiteral("tsdfProtectedTaubinSurfaceDenoising"))
+        .toBool(options.enableProtectedTaubinSurfaceDenoising);
     options.enablePostSimplificationSurfaceDenoising = settings.value(
         QStringLiteral("tsdfPostSimplificationSurfaceDenoising"))
         .toBool(options.enablePostSimplificationSurfaceDenoising);

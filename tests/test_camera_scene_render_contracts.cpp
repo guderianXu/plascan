@@ -287,7 +287,8 @@ TEST(CameraSceneRenderContractTest, TiePointModesUseMetadataAndDrawLegend)
     const QString sceneSource =
         readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
     const QString mainWindowSource =
-        readProjectFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+        readProjectFile(QStringLiteral(
+            "src/gui/main_window/MainWindowProjectBindings.cpp"));
 
     EXPECT_TRUE(sceneSource.contains(QStringLiteral("loadTiePointCloudFromFile")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral("loadImageCountMetadata")));
@@ -423,13 +424,16 @@ TEST(CameraSceneRenderContractTest, PointCloudUsesOwnBoundsAndPixelSizedFloorPiv
         "qMax(0.25f, _cachedRadius * 0.045f)")));
 }
 
-TEST(CameraSceneRenderContractTest, ModelMenuGatesUnsupportedModesAndDefaultsToShaded)
+TEST(CameraSceneRenderContractTest, ModelMenuEnablesTextureAndGatesUnsupportedModes)
 {
     const QString menuSource = readProjectFile(QStringLiteral("src/gui/menu/MainMenu.cpp"));
     const QString sceneHeader =
         readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
-    const QString mainWindowSource =
-        readProjectFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    const QString sceneSource =
+        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString menuBindingsSource =
+        readProjectFile(QStringLiteral(
+            "src/gui/main_window/MainWindowMenuBindings.cpp"));
 
     EXPECT_TRUE(menuSource.contains(QStringLiteral("actionGroupModelSurfaceViewMode")));
     EXPECT_TRUE(menuSource.contains(QStringLiteral("actionModelTextureMode")));
@@ -441,7 +445,7 @@ TEST(CameraSceneRenderContractTest, ModelMenuGatesUnsupportedModesAndDefaultsToS
     EXPECT_TRUE(menuSource.contains(QStringLiteral("actionModelAssignedImageMode")));
     EXPECT_TRUE(menuSource.contains(QStringLiteral("modelModeGroup->setExclusive(true)")));
     EXPECT_TRUE(menuSource.contains(
-        QStringLiteral("_modelTextureModeAct->setEnabled(false)")));
+        QStringLiteral("_modelTextureModeAct->setEnabled(true)")));
     EXPECT_TRUE(menuSource.contains(
         QStringLiteral("_modelConfidenceModeAct->setEnabled(false)")));
     EXPECT_TRUE(menuSource.contains(
@@ -450,7 +454,9 @@ TEST(CameraSceneRenderContractTest, ModelMenuGatesUnsupportedModesAndDefaultsToS
         QStringLiteral("_modelShadedModeAct->setChecked(true)")));
     EXPECT_TRUE(sceneHeader.contains(
         QStringLiteral("_modelColorMode = ModelColorMode::Shaded")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("setModelColorMode")));
+    EXPECT_TRUE(menuBindingsSource.contains(QStringLiteral("setModelColorMode")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
+        "self->setModelColorMode(ModelColorMode::Texture)")));
 }
 
 TEST(CameraSceneRenderContractTest, ModelModesRebuildGeometryAndDrawLegends)

@@ -27,6 +27,7 @@ constexpr const char *kSourcePath = "source_path";
 constexpr const char *kDisplay = "display";
 constexpr const char *kSupported = "supported";
 constexpr const char *kNote = "note";
+constexpr const char *kAutomaticDepthMaps = "automatic_depth_maps";
 
 QString defaultSourceLabel(const QString &sourceData)
 {
@@ -357,16 +358,55 @@ void GenerateModelDialog::setSourceCandidates(const QJsonArray &candidates)
 {
     _candidates = candidates;
     _hasReusableDepthMaps = false;
+    bool has_depth_candidate = false;
+    bool can_generate_depth_maps = false;
     for (const QJsonValue &value : _candidates)
     {
         const QJsonObject candidate = value.toObject();
-        if (candidate.value(QLatin1String(kSourceData)).toString() == QStringLiteral("depth_maps"))
+        const QString source_data =
+            candidate.value(QLatin1String(kSourceData)).toString();
+        if (source_data == QStringLiteral("tie_points") &&
+            candidate.value(QLatin1String(kSupported)).toBool(false))
         {
+            can_generate_depth_maps = true;
+        }
+        if (source_data == QStringLiteral("depth_maps"))
+        {
+            has_depth_candidate = true;
             if (candidate.value(QLatin1String(kSupported)).toBool(false) &&
                 !candidate.value(QLatin1String(kSourcePath)).toString().trimmed().isEmpty())
             {
                 _hasReusableDepthMaps = true;
             }
+        }
+    }
+
+    // “深度图”是正式模型工作流，不是只有磁盘产物存在时才出现的
+    // 资源快捷方式。没有兼容批次时仍提供该入口，由工作流先估计深度图，
+    // 然后直接执行 TSDF 表面重建。
+    if (!has_depth_candidate)
+    {
+        QJsonObject automatic_depth_maps;
+        automatic_depth_maps[QLatin1String(kSourceData)] =
+            QStringLiteral("depth_maps");
+        automatic_depth_maps[QLatin1String(kSourceLabel)] =
+            QStringLiteral("深度图");
+        automatic_depth_maps[QLatin1String(kSourcePath)] = QString();
+        automatic_depth_maps[QLatin1String(kDisplay)] =
+            QStringLiteral("自动生成深度图");
+        automatic_depth_maps[QLatin1String(kSupported)] =
+            can_generate_depth_maps;
+        automatic_depth_maps[QLatin1String(kAutomaticDepthMaps)] = true;
+        automatic_depth_maps[QLatin1String(kNote)] = can_generate_depth_maps
+            ? QStringLiteral("缺少深度图时将自动估计深度图，再直接进行 TSDF 表面重建。")
+            : QStringLiteral("需要先完成通过质量门控的照片对齐，才能自动估计深度图。");
+        _candidates.prepend(automatic_depth_maps);
+
+        if (_pendingSourceData.isEmpty() ||
+            _pendingSourceData == QStringLiteral("tie_points"))
+        {
+            _pendingSourceData = QStringLiteral("depth_maps");
+            _pendingSourcePath.clear();
         }
     }
     refreshSourceTypes();
@@ -431,6 +471,13 @@ QJsonObject GenerateModelDialog::collectSettings() const
     settings[QStringLiteral("strictVolumetricMasks")] = _strictMasksCheck->isChecked();
     settings[QStringLiteral("reuseDepthMaps")] =
         _hasReusableDepthMaps && _reuseDepthMapsRequested;
+    const bool automatic_depth_maps =
+        candidate.value(QLatin1String(kAutomaticDepthMaps)).toBool(false);
+    settings[QStringLiteral("automatic_depth_maps")] = automatic_depth_maps;
+    settings[QStringLiteral("force_depth_recompute")] =
+        automatic_depth_maps ||
+        (sourceData == QStringLiteral("depth_maps") &&
+         !_hasReusableDepthMaps);
     settings[QStringLiteral("replaceDefaultModel")] = _replaceDefaultCheck->isChecked();
 
     if (sourceData == QStringLiteral("point_cloud")
@@ -645,9 +692,11 @@ void GenerateModelDialog::updateAvailability()
     }
     if (sourceData == QStringLiteral("depth_maps"))
     {
-        _statusLabel->setText(_hasReusableDepthMaps
-            ? tr("项目中存在兼容深度图，可选择是否复用；随后将直接进行 TSDF 表面重建。")
-            : tr("当前项目没有可复用的深度图，将先自动估计深度图，再进行 TSDF 表面重建。"));
+        const bool automatic_depth_maps =
+            candidate.value(QLatin1String(kAutomaticDepthMaps)).toBool(false);
+        _statusLabel->setText(automatic_depth_maps
+            ? tr("缺少深度图时将自动估计深度图，再直接进行 TSDF 表面重建。")
+            : tr("项目中存在兼容深度图，可选择是否复用；随后将直接进行 TSDF 表面重建。"));
         return;
     }
     _statusLabel->setText(note.isEmpty()

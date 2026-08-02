@@ -2,110 +2,45 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
+#include <set>
 
 namespace xjw::mesh
 {
 namespace
 {
 
-struct Placement
+struct Shelf
 {
-    int freeIndex = -1;
-    int shortSide = std::numeric_limits<int>::max();
-    int longSide = std::numeric_limits<int>::max();
+    int y = 0;
+    int height = 0;
+    int nextX = 0;
+    int remainingWidth = 0;
 };
 
-bool intersectsArea(const QRect &left, const QRect &right)
+enum class TryPackStatus
 {
-    return left.left() < right.right() + 1 &&
-           left.right() + 1 > right.left() &&
-           left.top() < right.bottom() + 1 &&
-           left.bottom() + 1 > right.top();
-}
+    Packed,
+    DoesNotFit,
+    Cancelled
+};
 
-void splitFreeRectangles(QVector<QRect> *free_rectangles, const QRect &used)
-{
-    QVector<QRect> next;
-    next.reserve(free_rectangles->size() * 2);
-    for (const QRect &free_rect : *free_rectangles)
-    {
-        if (!intersectsArea(free_rect, used))
-        {
-            next.push_back(free_rect);
-            continue;
-        }
-
-        if (used.left() > free_rect.left())
-        {
-            next.push_back(QRect(free_rect.left(),
-                                 free_rect.top(),
-                                 used.left() - free_rect.left(),
-                                 free_rect.height()));
-        }
-        if (used.right() < free_rect.right())
-        {
-            next.push_back(QRect(used.right() + 1,
-                                 free_rect.top(),
-                                 free_rect.right() - used.right(),
-                                 free_rect.height()));
-        }
-        if (used.top() > free_rect.top())
-        {
-            next.push_back(QRect(free_rect.left(),
-                                 free_rect.top(),
-                                 free_rect.width(),
-                                 used.top() - free_rect.top()));
-        }
-        if (used.bottom() < free_rect.bottom())
-        {
-            next.push_back(QRect(free_rect.left(),
-                                 used.bottom() + 1,
-                                 free_rect.width(),
-                                 free_rect.bottom() - used.bottom()));
-        }
-    }
-
-    for (int first = 0; first < next.size(); ++first)
-    {
-        if (next[first].isEmpty())
-        {
-            continue;
-        }
-        for (int second = 0; second < next.size(); ++second)
-        {
-            if (first == second || next[second].isEmpty())
-            {
-                continue;
-            }
-            if (next[second].contains(next[first]))
-            {
-                next[first] = QRect();
-                break;
-            }
-        }
-    }
-    next.erase(std::remove_if(next.begin(), next.end(), [](const QRect &rect)
-    {
-        return rect.isEmpty();
-    }), next.end());
-    *free_rectangles = std::move(next);
-}
-
-bool tryPack(const QVector<TextureAtlasItem> &source,
-             int atlas_size,
-             int reserved_left,
-             float scale,
-             QVector<TextureAtlasItem> *packed)
+TryPackStatus tryPack(const QVector<TextureAtlasItem> &source,
+                      int atlas_size,
+                      int reserved_left,
+                      float scale,
+                      const std::function<bool()> &is_cancelled,
+                      QVector<TextureAtlasItem> *packed)
 {
     QVector<TextureAtlasItem> ordered = source;
     std::stable_sort(ordered.begin(), ordered.end(), [](const auto &left, const auto &right)
     {
-        const int left_max = std::max(left.requestedSize.width(), left.requestedSize.height());
-        const int right_max = std::max(right.requestedSize.width(), right.requestedSize.height());
-        if (left_max != right_max)
+        if (left.requestedSize.height() != right.requestedSize.height())
         {
-            return left_max > right_max;
+            return left.requestedSize.height() > right.requestedSize.height();
+        }
+        if (left.requestedSize.width() != right.requestedSize.width())
+        {
+            return left.requestedSize.width() > right.requestedSize.width();
         }
         const qint64 left_area =
             static_cast<qint64>(left.requestedSize.width()) * left.requestedSize.height();
@@ -114,41 +49,54 @@ bool tryPack(const QVector<TextureAtlasItem> &source,
         return left_area != right_area ? left_area > right_area : left.id < right.id;
     });
 
-    QVector<QRect> free_rectangles{
-        QRect(reserved_left, 0, atlas_size - reserved_left, atlas_size)
-    };
-    for (TextureAtlasItem &item : ordered)
+    const int available_width = atlas_size - reserved_left;
+    QVector<Shelf> shelves;
+    shelves.reserve(std::min<qsizetype>(ordered.size(), atlas_size));
+    std::set<std::pair<int, int>> shelves_by_remaining_width;
+    int used_height = 0;
+    for (int item_index = 0; item_index < ordered.size(); ++item_index)
     {
+        if ((item_index % 1024 == 0) && is_cancelled && is_cancelled())
+        {
+            return TryPackStatus::Cancelled;
+        }
+        TextureAtlasItem &item = ordered[item_index];
         const int width = std::max(1, static_cast<int>(
             std::ceil(item.requestedSize.width() * scale)));
         const int height = std::max(1, static_cast<int>(
             std::ceil(item.requestedSize.height() * scale)));
-        Placement best;
-        for (int index = 0; index < free_rectangles.size(); ++index)
+        if (width > available_width || height > atlas_size)
         {
-            const QRect &free_rect = free_rectangles[index];
-            if (width > free_rect.width() || height > free_rect.height())
-            {
-                continue;
-            }
-            const int remaining_width = free_rect.width() - width;
-            const int remaining_height = free_rect.height() - height;
-            const int short_side = std::min(remaining_width, remaining_height);
-            const int long_side = std::max(remaining_width, remaining_height);
-            if (short_side < best.shortSide ||
-                (short_side == best.shortSide && long_side < best.longSide))
-            {
-                best = {index, short_side, long_side};
-            }
-        }
-        if (best.freeIndex < 0)
-        {
-            return false;
+            return TryPackStatus::DoesNotFit;
         }
 
-        const QRect &selected = free_rectangles[best.freeIndex];
-        item.packedRect = QRect(selected.topLeft(), QSize(width, height));
-        splitFreeRectangles(&free_rectangles, item.packedRect);
+        const auto best = shelves_by_remaining_width.lower_bound({width, -1});
+        int shelf_index = -1;
+        if (best != shelves_by_remaining_width.end())
+        {
+            shelf_index = best->second;
+            shelves_by_remaining_width.erase(best);
+        }
+        else
+        {
+            if (used_height + height > atlas_size)
+            {
+                return TryPackStatus::DoesNotFit;
+            }
+            shelf_index = shelves.size();
+            shelves.push_back({used_height, height, reserved_left, available_width});
+            used_height += height;
+        }
+
+        Shelf &shelf = shelves[shelf_index];
+        item.packedRect = QRect(shelf.nextX, shelf.y, width, height);
+        shelf.nextX += width;
+        shelf.remainingWidth -= width;
+        if (shelf.remainingWidth > 0)
+        {
+            shelves_by_remaining_width.emplace(
+                shelf.remainingWidth, shelf_index);
+        }
     }
 
     std::sort(ordered.begin(), ordered.end(), [](const auto &left, const auto &right)
@@ -156,14 +104,16 @@ bool tryPack(const QVector<TextureAtlasItem> &source,
         return left.id < right.id;
     });
     *packed = std::move(ordered);
-    return true;
+    return TryPackStatus::Packed;
 }
 
 } // namespace
 
 TextureAtlasPackingResult TextureAtlasPacker::pack(const QVector<TextureAtlasItem> &items,
                                                    int atlasSize,
-                                                   int reservedLeft)
+                                                   int reservedLeft,
+                                                   const std::function<bool()> &isCancelled,
+                                                   const std::function<void(int)> &progressFn)
 {
     TextureAtlasPackingResult result;
     if (items.isEmpty() || atlasSize <= 0 || reservedLeft < 0 || reservedLeft >= atlasSize)
@@ -188,23 +138,56 @@ TextureAtlasPackingResult TextureAtlasPacker::pack(const QVector<TextureAtlasIte
                   std::max<qint64>(requested_area, 1)) * 0.96));
     float low = 0.01f;
     QVector<TextureAtlasItem> packed;
-    if (tryPack(items, atlasSize, reservedLeft, high, &packed))
+    constexpr int search_iterations = 14;
+    constexpr int maximum_attempts = search_iterations + 3;
+    int completed_attempts = 0;
+    const auto try_pack = [&](float scale, QVector<TextureAtlasItem> *output)
+    {
+        if (progressFn)
+        {
+            progressFn(completed_attempts * 100 / maximum_attempts);
+        }
+        const TryPackStatus status = tryPack(
+            items, atlasSize, reservedLeft, scale, isCancelled, output);
+        ++completed_attempts;
+        return status;
+    };
+
+    TryPackStatus status = try_pack(high, &packed);
+    if (status == TryPackStatus::Cancelled)
+    {
+        result.cancelled = true;
+        return result;
+    }
+    if (status == TryPackStatus::Packed)
     {
         low = high;
     }
     else
     {
         QVector<TextureAtlasItem> minimum_packed;
-        if (!tryPack(items, atlasSize, reservedLeft, low, &minimum_packed))
+        status = try_pack(low, &minimum_packed);
+        if (status == TryPackStatus::Cancelled)
+        {
+            result.cancelled = true;
+            return result;
+        }
+        if (status != TryPackStatus::Packed)
         {
             return result;
         }
         packed = std::move(minimum_packed);
-        for (int iteration = 0; iteration < 18; ++iteration)
+        for (int iteration = 0; iteration < search_iterations; ++iteration)
         {
             const float candidate = (low + high) * 0.5f;
             QVector<TextureAtlasItem> trial;
-            if (tryPack(items, atlasSize, reservedLeft, candidate, &trial))
+            status = try_pack(candidate, &trial);
+            if (status == TryPackStatus::Cancelled)
+            {
+                result.cancelled = true;
+                return result;
+            }
+            if (status == TryPackStatus::Packed)
             {
                 low = candidate;
                 packed = std::move(trial);
@@ -223,7 +206,14 @@ TextureAtlasPackingResult TextureAtlasPacker::pack(const QVector<TextureAtlasIte
     result.ok = true;
     result.scale = low;
     QVector<TextureAtlasItem> final_packed;
-    if (tryPack(items, atlasSize, reservedLeft, low, &final_packed))
+    status = try_pack(low, &final_packed);
+    if (status == TryPackStatus::Cancelled)
+    {
+        result.ok = false;
+        result.cancelled = true;
+        return result;
+    }
+    if (status == TryPackStatus::Packed)
     {
         packed = std::move(final_packed);
     }
@@ -236,6 +226,10 @@ TextureAtlasPackingResult TextureAtlasPacker::pack(const QVector<TextureAtlasIte
     result.items = std::move(packed);
     result.occupancy = static_cast<double>(packed_area) /
         static_cast<double>(std::max<qint64>(available_area, 1));
+    if (progressFn)
+    {
+        progressFn(100);
+    }
     return result;
 }
 

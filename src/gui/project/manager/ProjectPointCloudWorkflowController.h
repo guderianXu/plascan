@@ -31,6 +31,7 @@ public:
     ~ProjectPointCloudWorkflowController() override;
 
     bool startCreatePointCloudAsync(const QJsonObject &settings);
+    bool startDepthMapsOnlyAsync(const QJsonObject &settings);
     void cancelActiveTask();
     bool isRunning() const;
 
@@ -38,8 +39,10 @@ signals:
     void pointCloudProgressChanged(const QString &stage, int percent);
     void pointCloudProgressFinished(bool success);
     void pointCloudResultReady(const QString &path, int pointCount);
+    void depthMapBatchReady(const QString &outputDirectory, int frameCount);
 
 private:
+    bool startWorkflow(const QJsonObject &settings, bool depthMapsOnly);
     void startDepthEstimation(
         const std::shared_ptr<PointCloudWorkflowContext> &context);
     void startFusion(

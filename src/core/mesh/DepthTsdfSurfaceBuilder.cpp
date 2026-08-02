@@ -12,6 +12,7 @@
 #include "DepthVisibilityHistogram.h"
 #include "MeshBoundaryAttribution.h"
 #include "MeshColorizer.h"
+#include "MeshFaceOrientation.h"
 #include "MeshQuadricSimplifier.h"
 #include "OpenMeshSimplifier.h"
 #include "MeshTopologyQuality.h"
@@ -42,6 +43,7 @@
 #include <new>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #ifdef MESHING_OPENMP
@@ -7630,20 +7632,56 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             options.boundarySmoothingLambda,
             options.maximumBoundarySmoothingDisplacementVoxels * maximum_voxel_size);
     }
+    const auto repair_face_orientation_safely = [](TriMesh *mesh)
+    {
+        MeshFaceOrientationStatistics statistics;
+        if (!mesh || mesh->faces.empty())
+        {
+            return std::make_pair(statistics, false);
+        }
+        TriMesh candidate = *mesh;
+        statistics = repairMeshFaceOrientation(&candidate);
+        const bool accepted =
+            statistics.succeeded &&
+            statistics.removedContradictoryFaceCount == 0 &&
+            statistics.nonManifoldEdgeCount == 0 &&
+            candidate.faceCount() == mesh->faceCount();
+        if (accepted)
+        {
+            *mesh = std::move(candidate);
+        }
+        return std::make_pair(statistics, accepted);
+    };
+    const auto pre_denoising_orientation =
+        repair_face_orientation_safely(&result.mesh);
+    result.statistics.preDenoisingFaceOrientationRepairAccepted =
+        pre_denoising_orientation.second;
+    result.statistics
+        .preDenoisingFaceOrientationInconsistentSharedEdgeCountBefore =
+        pre_denoising_orientation.first.inconsistentSharedEdgeCountBefore;
+    result.statistics.preDenoisingFaceOrientationFlippedFaceCount =
+        pre_denoising_orientation.first.flippedFaceCount;
     result.statistics.effectiveSurfaceDenoisingIterations =
         options.surfaceDenoisingIterations;
     result.statistics.effectiveSurfaceDenoisingLambda =
         options.surfaceDenoisingLambda;
+    result.statistics.effectiveSurfaceDenoisingMu =
+        options.surfaceDenoisingMu;
     result.statistics.effectiveMaximumSurfaceDenoisingDisplacementVoxels =
         options.maximumSurfaceDenoisingDisplacementVoxels;
     result.statistics.effectiveMaximumSurfaceDenoisingNormalAngleDegrees =
         options.maximumSurfaceDenoisingNormalAngleDegrees;
     result.statistics.effectiveSurfaceDenoisingBoundaryProtectionRings =
         options.surfaceDenoisingBoundaryProtectionRings;
+    result.statistics.effectiveProtectedTaubinSurfaceDenoising =
+        options.enableProtectedTaubinSurfaceDenoising;
     result.statistics.effectivePostSimplificationSurfaceDenoising =
         options.enablePostSimplificationSurfaceDenoising &&
         options.surfaceDenoisingIterations > 0;
-    if (options.surfaceDenoisingIterations > 0)
+    // Protected Taubin denoising is applied only after simplification, where
+    // its topology and normal-quality guard can reject an unsafe candidate.
+    if (options.surfaceDenoisingIterations > 0 &&
+        !options.enableProtectedTaubinSurfaceDenoising)
     {
         const float maximum_voxel_size = std::max({result.layout.voxelSize[0],
                                                    result.layout.voxelSize[1],
@@ -8740,6 +8778,26 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             return result;
         }
     }
+    reportProgress(QStringLiteral("正在统一最终网格面方向..."), 93);
+    result.statistics.finalFaceOrientationRepairAttempted = true;
+    const auto final_orientation =
+        repair_face_orientation_safely(&result.mesh);
+    result.statistics.finalFaceOrientationInconsistentSharedEdgeCountBefore =
+        final_orientation.first.inconsistentSharedEdgeCountBefore;
+    result.statistics.finalFaceOrientationInconsistentSharedEdgeCountAfter =
+        final_orientation.first.inconsistentSharedEdgeCountAfter;
+    result.statistics.finalFaceOrientationFlippedFaceCount =
+        final_orientation.first.flippedFaceCount;
+    result.statistics.finalFaceOrientationRemovedFaceCount =
+        final_orientation.first.removedContradictoryFaceCount;
+    result.statistics.finalFaceOrientationNonManifoldEdgeCount =
+        final_orientation.first.nonManifoldEdgeCount;
+    result.statistics.finalFaceOrientationRepairAccepted =
+        final_orientation.second;
+    if (postprocessCancelled())
+    {
+        return result;
+    }
     if (result.statistics.effectivePostSimplificationSurfaceDenoising)
     {
         reportProgress(
@@ -8770,15 +8828,24 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             result.layout.voxelSize[0],
             result.layout.voxelSize[1],
             result.layout.voxelSize[2]});
-        const int moved_vertex_count =
-            detail::smoothSurfaceVerticesNormalAware(
-                &candidate,
-                options.surfaceDenoisingIterations,
-                options.surfaceDenoisingLambda,
-                options.maximumSurfaceDenoisingDisplacementVoxels *
-                    maximum_voxel_size,
-                options.maximumSurfaceDenoisingNormalAngleDegrees,
-                options.surfaceDenoisingBoundaryProtectionRings);
+        const int moved_vertex_count = options.enableProtectedTaubinSurfaceDenoising
+            ? detail::smoothSurfaceVerticesTaubinProtected(
+                  &candidate,
+                  options.surfaceDenoisingIterations,
+                  options.surfaceDenoisingLambda,
+                  options.surfaceDenoisingMu,
+                  options.maximumSurfaceDenoisingDisplacementVoxels *
+                      maximum_voxel_size,
+                  options.maximumSurfaceDenoisingNormalAngleDegrees,
+                  options.surfaceDenoisingBoundaryProtectionRings)
+            : detail::smoothSurfaceVerticesNormalAware(
+                  &candidate,
+                  options.surfaceDenoisingIterations,
+                  options.surfaceDenoisingLambda,
+                  options.maximumSurfaceDenoisingDisplacementVoxels *
+                      maximum_voxel_size,
+                  options.maximumSurfaceDenoisingNormalAngleDegrees,
+                  options.surfaceDenoisingBoundaryProtectionRings);
         MeshTriangleOptimizationOptions relaxation_options;
         relaxation_options.maximumPasses = 0;
         relaxation_options.maximumFeatureAngleDegrees =
@@ -10476,12 +10543,16 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          statistics.effectiveSurfaceDenoisingIterations},
         {QStringLiteral("effective_surface_denoising_lambda"),
          statistics.effectiveSurfaceDenoisingLambda},
+        {QStringLiteral("effective_surface_denoising_mu"),
+         statistics.effectiveSurfaceDenoisingMu},
         {QStringLiteral("effective_maximum_surface_denoising_displacement_voxels"),
          statistics.effectiveMaximumSurfaceDenoisingDisplacementVoxels},
         {QStringLiteral("effective_maximum_surface_denoising_normal_angle_degrees"),
          statistics.effectiveMaximumSurfaceDenoisingNormalAngleDegrees},
         {QStringLiteral("effective_surface_denoising_boundary_protection_rings"),
          statistics.effectiveSurfaceDenoisingBoundaryProtectionRings},
+        {QStringLiteral("effective_protected_taubin_surface_denoising"),
+         statistics.effectiveProtectedTaubinSurfaceDenoising},
         {QStringLiteral("effective_post_simplification_surface_denoising"),
          statistics.effectivePostSimplificationSurfaceDenoising},
         {QStringLiteral("post_simplification_surface_denoising_attempted"),
@@ -10560,6 +10631,14 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          statistics.coherentPrimaryViewFaceCount},
         {QStringLiteral("coherent_primary_view_vertex_count"),
          statistics.coherentPrimaryViewVertexCount},
+        {QStringLiteral("pre_denoising_face_orientation_repair_accepted"),
+         statistics.preDenoisingFaceOrientationRepairAccepted},
+        {QStringLiteral(
+             "pre_denoising_face_orientation_inconsistent_shared_edge_count_before"),
+         statistics
+             .preDenoisingFaceOrientationInconsistentSharedEdgeCountBefore},
+        {QStringLiteral("pre_denoising_face_orientation_flipped_face_count"),
+         statistics.preDenoisingFaceOrientationFlippedFaceCount},
         {QStringLiteral("openmesh_simplification_attempted"),
          statistics.openMeshSimplificationAttempted},
         {QStringLiteral("effective_openmesh_simplification"),
@@ -10602,6 +10681,22 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          statistics.openMeshNonManifoldEdgeCountAfter},
         {QStringLiteral("openmesh_simplification_error"),
          statistics.openMeshSimplificationError},
+        {QStringLiteral("final_face_orientation_repair_attempted"),
+         statistics.finalFaceOrientationRepairAttempted},
+        {QStringLiteral("final_face_orientation_repair_accepted"),
+         statistics.finalFaceOrientationRepairAccepted},
+        {QStringLiteral(
+             "final_face_orientation_inconsistent_shared_edge_count_before"),
+         statistics.finalFaceOrientationInconsistentSharedEdgeCountBefore},
+        {QStringLiteral(
+             "final_face_orientation_inconsistent_shared_edge_count_after"),
+         statistics.finalFaceOrientationInconsistentSharedEdgeCountAfter},
+        {QStringLiteral("final_face_orientation_flipped_face_count"),
+         statistics.finalFaceOrientationFlippedFaceCount},
+        {QStringLiteral("final_face_orientation_removed_face_count"),
+         statistics.finalFaceOrientationRemovedFaceCount},
+        {QStringLiteral("final_face_orientation_non_manifold_edge_count"),
+         statistics.finalFaceOrientationNonManifoldEdgeCount},
         {QStringLiteral("effective_quadric_simplification"),
          statistics.effectiveQuadricSimplification},
         {QStringLiteral("quadric_simplification_accepted"),

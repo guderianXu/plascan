@@ -82,6 +82,8 @@ bool buildAndPackCharts(const TextureMappingConfig &config,
 
     QVector<bool> visited(data->geometry.size(), false);
     const int padding = std::clamp(config.padding, 2, 64);
+    int visited_face_count = 0;
+    int chart_progress_percent = 56;
     for (int seed = 0; seed < data->geometry.size(); ++seed)
     {
         if (visited[seed] || data->assignments[seed].primaryView < 0)
@@ -109,6 +111,29 @@ bool buildAndPackCharts(const TextureMappingConfig &config,
             const int face_index = pending.front();
             pending.pop();
             chart.faces.push_back(face_index);
+            ++visited_face_count;
+            if ((visited_face_count % 4096 == 0) && cancelled(config))
+            {
+                result->cancelled = true;
+                if (errorMsg)
+                {
+                    *errorMsg = "纹理映射已取消";
+                }
+                return false;
+            }
+            if ((visited_face_count % 4096 == 0) && config.progressFn)
+            {
+                const int next_percent = 56 + static_cast<int>(
+                    static_cast<qint64>(visited_face_count) * 2 /
+                    std::max<qsizetype>(data->geometry.size(), 1));
+                if (next_percent > chart_progress_percent)
+                {
+                    chart_progress_percent = next_percent;
+                    config.progressFn(
+                        "正在构建连通纹理块...",
+                        chart_progress_percent);
+                }
+            }
             for (const int neighbor : data->geometry[face_index].neighbors)
             {
                 if (neighbor < 0 || neighbor >= visited.size() || visited[neighbor] ||
@@ -152,8 +177,35 @@ bool buildAndPackCharts(const TextureMappingConfig &config,
     }
     const int atlas_size = std::clamp(config.textureSize, 1024, 16384);
     const int fallback_width = std::clamp(padding * 2 + 2, 8, 130);
+    if (config.progressFn)
+    {
+        config.progressFn(
+            "正在打包 " + std::to_string(items.size()) + " 个纹理块...",
+            59);
+    }
     const TextureAtlasPackingResult packing =
-        TextureAtlasPacker::pack(items, atlas_size, fallback_width);
+        TextureAtlasPacker::pack(
+            items,
+            atlas_size,
+            fallback_width,
+            config.isCancelled,
+            config.progressFn
+                ? std::function<void(int)>([&config](int percent)
+                  {
+                      config.progressFn(
+                          "正在打包纹理图集...",
+                          59 + std::clamp(percent, 0, 100) * 6 / 100);
+                  })
+                : std::function<void(int)>());
+    if (packing.cancelled)
+    {
+        result->cancelled = true;
+        if (errorMsg)
+        {
+            *errorMsg = "纹理映射已取消";
+        }
+        return false;
+    }
     if (!packing.ok)
     {
         if (errorMsg)

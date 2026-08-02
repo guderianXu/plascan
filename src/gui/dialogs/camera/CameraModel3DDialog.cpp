@@ -1299,6 +1299,10 @@ void CameraSceneWidget::loadModelFromPlyInternal(const QString &plyPath,
         {
             auto result = watcher->result();
             if (result) self->_cloud = std::move(*result);
+            if (!self->_isTiePointCloud && self->_cloud.hasColors())
+            {
+                self->setModelColorMode(ModelColorMode::Texture);
+            }
             self->_preferModelPointRender = !self->_isTiePointCloud && !self->_cloud.hasFaces();
             if (!self->_cloud.hasFaces())
             {
@@ -1474,6 +1478,12 @@ void CameraSceneWidget::loadModelFromObjInternal(const QString &objPath,
                     self->_preparedObjMeshBuffer = true;
                     self->_preparedObjMeshHasTexture = result.renderPreparation.hasTexture;
                 }
+                if (!self->_isTiePointCloud &&
+                    !self->_meshTextureImage.isNull() &&
+                    self->_preparedObjMeshHasTexture)
+                {
+                    self->setModelColorMode(ModelColorMode::Texture);
+                }
             }
             self->_preferModelPointRender = !self->_isTiePointCloud && !self->_cloud.hasFaces();
             self->_loading = false;
@@ -1600,8 +1610,7 @@ void CameraSceneWidget::setTiePointColorMode(TiePointColorMode mode)
 
 void CameraSceneWidget::setModelColorMode(ModelColorMode mode)
 {
-    if (mode == ModelColorMode::Texture ||
-        mode == ModelColorMode::Confidence ||
+    if (mode == ModelColorMode::Confidence ||
         mode == ModelColorMode::AssignedImage)
     {
         return;

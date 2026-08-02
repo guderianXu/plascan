@@ -266,7 +266,7 @@ public slots:
     // 异步启动正射影像制作（settings 包含影像、DEM、输出路径与核心选项）。
     void startMapProjectAsync(
         const xjw::gui::project::OrthoGenerationRequest &request);
-    // 异步启动模型生成；输入必须来自项目内已有点云、深度图或显式指定路径。
+    // 异步启动模型生成；选择深度图但没有兼容批次时先自动估计深度图。
     void startGenerateModelAsync();
     void startGenerateModelAsync(const QJsonObject &settings);
     // 使用正式空三相机和稀疏云，异步估计/复用深度图并融合稠密点云。
@@ -363,6 +363,7 @@ private:
     ProjectLifecycleController *_lifecycleController = nullptr;
     ProjectMaskWorkflowController *_maskWorkflowController = nullptr;
     quint64 _projectSessionGeneration = 0;
+    QJsonObject _pendingAutomaticModelSettings;
 
     // AT/SFM 取消标志（跨线程共享）
     std::shared_ptr<std::atomic<bool>> _atCancelFlag;

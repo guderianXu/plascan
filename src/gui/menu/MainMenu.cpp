@@ -701,7 +701,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         addModelMode(&_modelTextureModeAct,
                      QStringLiteral("actionModelTextureMode"),
                      tr("模型 — 纹理"),
-                     tr("当前版本尚未提供模型纹理生成流程"),
+                     tr("显示 OBJ/MTL 纹理；PLY 模型显示其 RGB 顶点颜色"),
                      false);
         addModelMode(&_modelShadedModeAct,
                      QStringLiteral("actionModelShadedMode"),
@@ -734,9 +734,9 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                      tr("当前模型产物未包含面片到源影像的真实映射"),
                      false);
 
-        // 这些模式只有在重建流程产出对应模型属性后才具有明确语义。
-        // 保留菜单位置便于后续接入，但不能用观察方向启发式伪装成真实产物。
-        _modelTextureModeAct->setEnabled(false);
+        // 可信度和指定影像模式只有在重建流程产出对应模型属性后才具有明确语义。
+        // 纹理模式已支持 OBJ/MTL/PNG，也作为 PLY RGB 顶点颜色显示模式。
+        _modelTextureModeAct->setEnabled(true);
         _modelConfidenceModeAct->setEnabled(false);
         _modelAssignedImageModeAct->setEnabled(false);
 

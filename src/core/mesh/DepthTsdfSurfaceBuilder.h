@@ -259,9 +259,11 @@ struct DepthTsdfOptions
     float maximumBoundarySmoothingDisplacementVoxels = 0.35f;
     int surfaceDenoisingIterations = 0;
     float surfaceDenoisingLambda = 0.45f;
+    float surfaceDenoisingMu = -0.53f;
     float maximumSurfaceDenoisingDisplacementVoxels = 0.20f;
     float maximumSurfaceDenoisingNormalAngleDegrees = 30.0f;
     int surfaceDenoisingBoundaryProtectionRings = 1;
+    bool enableProtectedTaubinSurfaceDenoising = false;
     bool enablePostSimplificationSurfaceDenoising = true;
     bool trimWeakBoundaryTips = false;
     int weakBoundaryTipTrimPasses = 1;
@@ -792,9 +794,11 @@ struct DepthTsdfStatistics
     int smoothedSurfaceVertexCount = 0;
     int effectiveSurfaceDenoisingIterations = 0;
     float effectiveSurfaceDenoisingLambda = 0.0f;
+    float effectiveSurfaceDenoisingMu = 0.0f;
     float effectiveMaximumSurfaceDenoisingDisplacementVoxels = 0.0f;
     float effectiveMaximumSurfaceDenoisingNormalAngleDegrees = 0.0f;
     int effectiveSurfaceDenoisingBoundaryProtectionRings = 0;
+    bool effectiveProtectedTaubinSurfaceDenoising = false;
     bool effectivePostSimplificationSurfaceDenoising = false;
     bool postSimplificationSurfaceDenoisingAttempted = false;
     bool postSimplificationSurfaceDenoisingAccepted = false;
@@ -829,6 +833,9 @@ struct DepthTsdfStatistics
     bool effectiveCoherentFacePrimaryViewColors = false;
     int coherentPrimaryViewFaceCount = 0;
     int coherentPrimaryViewVertexCount = 0;
+    bool preDenoisingFaceOrientationRepairAccepted = false;
+    int preDenoisingFaceOrientationInconsistentSharedEdgeCountBefore = 0;
+    int preDenoisingFaceOrientationFlippedFaceCount = 0;
     bool openMeshSimplificationAttempted = false;
     bool effectiveOpenMeshSimplification = false;
     bool openMeshSimplificationAccepted = false;
@@ -850,6 +857,13 @@ struct DepthTsdfStatistics
     int openMeshNonManifoldEdgeCountBefore = 0;
     int openMeshNonManifoldEdgeCountAfter = 0;
     QString openMeshSimplificationError;
+    bool finalFaceOrientationRepairAttempted = false;
+    bool finalFaceOrientationRepairAccepted = false;
+    int finalFaceOrientationInconsistentSharedEdgeCountBefore = 0;
+    int finalFaceOrientationInconsistentSharedEdgeCountAfter = 0;
+    int finalFaceOrientationFlippedFaceCount = 0;
+    int finalFaceOrientationRemovedFaceCount = 0;
+    int finalFaceOrientationNonManifoldEdgeCount = 0;
     bool effectiveQuadricSimplification = false;
     bool quadricSimplificationAccepted = false;
     bool quadricSimplificationBoundarySafetyRejected = false;

@@ -4,6 +4,8 @@
 #include <QSize>
 #include <QVector>
 
+#include <functional>
+
 namespace xjw::mesh
 {
 
@@ -17,6 +19,7 @@ struct TextureAtlasItem
 struct TextureAtlasPackingResult
 {
     bool ok = false;
+    bool cancelled = false;
     float scale = 1.0f;
     double occupancy = 0.0;
     QVector<TextureAtlasItem> items;
@@ -27,7 +30,9 @@ class TextureAtlasPacker
 public:
     static TextureAtlasPackingResult pack(const QVector<TextureAtlasItem> &items,
                                           int atlasSize,
-                                          int reservedLeft = 0);
+                                          int reservedLeft = 0,
+                                          const std::function<bool()> &isCancelled = {},
+                                          const std::function<void(int)> &progressFn = {});
 };
 
 } // namespace xjw::mesh
