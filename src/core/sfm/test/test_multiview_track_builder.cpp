@@ -47,6 +47,45 @@ TEST(MultiViewTrackBuilderTest, MergesConsistentPairwiseMatchesIntoTrack)
     EXPECT_EQ(result.trackLengthHistogram.at(3), 1);
 }
 
+TEST(MultiViewTrackBuilderTest, DefaultBuildMatchesExplicitDefaultOptions)
+{
+    xjw::MultiViewTrackBuilder builder;
+    builder.addMatchPair(0, 1, {{10, 20, 0.9f}});
+    builder.addMatchPair(1, 2, {{20, 30, 0.7f}});
+
+    const xjw::MultiViewTrackBuildResult default_result = builder.build();
+    const xjw::MultiViewTrackBuildResult explicit_result =
+        builder.build(xjw::MultiViewTrackBuilder::BuildOptions{});
+
+    ASSERT_EQ(default_result.tracks.size(), explicit_result.tracks.size());
+    ASSERT_EQ(default_result.trackConfidenceScores.size(),
+              explicit_result.trackConfidenceScores.size());
+    EXPECT_EQ(default_result.totalComponents, explicit_result.totalComponents);
+    EXPECT_EQ(default_result.acceptedComponents, explicit_result.acceptedComponents);
+    EXPECT_EQ(default_result.rejectedConflictComponents, explicit_result.rejectedConflictComponents);
+    EXPECT_EQ(default_result.rejectedConflictEdges, explicit_result.rejectedConflictEdges);
+    EXPECT_EQ(default_result.prunedByQualityThinning, explicit_result.prunedByQualityThinning);
+    EXPECT_EQ(default_result.prunedStationaryTracks, explicit_result.prunedStationaryTracks);
+    EXPECT_EQ(default_result.trackLengthHistogram, explicit_result.trackLengthHistogram);
+    EXPECT_EQ(default_result.trackConfidenceScores, explicit_result.trackConfidenceScores);
+    EXPECT_DOUBLE_EQ(default_result.meanTrackConfidence, explicit_result.meanTrackConfidence);
+
+    for (std::size_t track_index = 0; track_index < default_result.tracks.size(); ++track_index)
+    {
+        const xjw::Track &default_track = default_result.tracks[track_index];
+        const xjw::Track &explicit_track = explicit_result.tracks[track_index];
+        ASSERT_EQ(default_track.elements.size(), explicit_track.elements.size());
+        EXPECT_DOUBLE_EQ(default_track.confidence, explicit_track.confidence);
+        for (std::size_t element_index = 0; element_index < default_track.elements.size(); ++element_index)
+        {
+            EXPECT_EQ(default_track.elements[element_index].imageId,
+                      explicit_track.elements[element_index].imageId);
+            EXPECT_EQ(default_track.elements[element_index].featureIdx,
+                      explicit_track.elements[element_index].featureIdx);
+        }
+    }
+}
+
 TEST(MultiViewTrackBuilderTest, SplitsConflictingComponentsInsteadOfDroppingAllTracks)
 {
     xjw::MultiViewTrackBuilder builder;

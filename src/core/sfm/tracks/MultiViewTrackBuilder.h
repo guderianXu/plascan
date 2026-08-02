@@ -85,8 +85,11 @@ public:
     /// 提供关键点坐标，供静止轨迹检测和空间配额使用。
     void setImageKeypoints(ImageId imageId, const std::vector<FeatureKeypoint> &keypoints);
 
-    /// 构建确定性多视轨迹和完整诊断统计。
-    MultiViewTrackBuildResult build(const BuildOptions &options = BuildOptions()) const;
+    /// 使用默认策略构建确定性多视轨迹和完整诊断统计。
+    MultiViewTrackBuildResult build() const;
+
+    /// 使用显式策略构建确定性多视轨迹和完整诊断统计。
+    MultiViewTrackBuildResult build(const BuildOptions &options) const;
 
 private:
     struct Edge

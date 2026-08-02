@@ -130,6 +130,11 @@ void MultiViewTrackBuilder::setImageKeypoints(ImageId imageId, const std::vector
     _keypointsByImage[imageId] = keypoints;
 }
 
+MultiViewTrackBuildResult MultiViewTrackBuilder::build() const
+{
+    return build(BuildOptions{});
+}
+
 MultiViewTrackBuildResult MultiViewTrackBuilder::build(const BuildOptions &options) const
 {
     MultiViewTrackBuildResult result;
