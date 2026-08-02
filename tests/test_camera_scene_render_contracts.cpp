@@ -142,6 +142,18 @@ TEST(CameraSceneRenderContractTest, CameraCardsUseDepthEmphasisAndBlackDirection
     EXPECT_TRUE(source.contains(QStringLiteral("cameraPlaneHalfExtentForViewDepth(")));
     EXPECT_TRUE(source.contains(QStringLiteral("sceneCenter(),")));
 
+    const qsizetype extentStart = source.indexOf(
+        QStringLiteral("float CameraSceneWidget::cameraImagePlaneHalfExtent"));
+    const qsizetype highlightedStart = source.indexOf(
+        QStringLiteral("bool CameraSceneWidget::isCameraHighlighted"), extentStart);
+    ASSERT_GE(extentStart, 0);
+    ASSERT_GT(highlightedStart, extentStart);
+    const QString extentBlock = source.mid(extentStart, highlightedStart - extentStart);
+    EXPECT_TRUE(extentBlock.contains(QStringLiteral("return depthScaledExtent;")));
+    EXPECT_FALSE(extentBlock.contains(QStringLiteral("maximumExtent")));
+    EXPECT_FALSE(extentBlock.contains(QStringLiteral(
+        "qBound(minimumExtent, desiredExtent, maximumExtent)")));
+
     const qsizetype drawStart = source.indexOf(
         QStringLiteral("void CameraSceneWidget::drawCameraThumbnails"));
     const qsizetype imageStart = source.indexOf(

@@ -79,7 +79,13 @@ float cameraPlaneHalfExtentForViewDepth(
     const float worldHeightAtDepth =
         2.0f * depth * std::tan(halfFovRadians);
     const float depthRatio = std::clamp(depth / referenceDepth, 0.5f, 2.0f);
-    const float screenScale = std::pow(depthRatio, depthEmphasisExponent);
+    // 深度强调作用于屏幕尺寸，而不是世界尺寸。限制强调范围可以保留
+    // Metashape 风格的远大近小，同时防止连接点聚焦视图中的远端相机
+    // 放大到遮住点云，或近端相机缩成不可辨认的小点。
+    const float screenScale = std::clamp(
+        std::pow(depthRatio, depthEmphasisExponent),
+        0.55f,
+        1.65f);
     return worldHeightAtDepth
         * targetHalfExtentPixels
         * screenScale

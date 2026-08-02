@@ -43,6 +43,91 @@ TEST(CameraSceneViewMathTest, MakesFarCameraAppearLargerThanNearCamera)
     EXPECT_GT(far_half_extent / 10.0f, near_half_extent / 6.0f);
 }
 
+TEST(CameraSceneViewMathTest, KeepsCameraCardReadableWhenViewZoomsOut)
+{
+    constexpr int viewport_height = 1000;
+    constexpr float target_half_extent_pixels = 34.0f;
+    constexpr float half_fov_radians = 22.5f * 3.14159265358979323846f / 180.0f;
+
+    auto projectedHalfExtentPixels = [viewport_height, half_fov_radians](
+                                         float world_half_extent,
+                                         float depth)
+    {
+        return world_half_extent * viewport_height
+            / (2.0f * depth * std::tan(half_fov_radians));
+    };
+
+    QMatrix4x4 normal_view;
+    normal_view.translate(0.0f, 0.0f, -10.0f);
+    const float normal_extent = cameraPlaneHalfExtentForViewDepth(
+        QVector3D(),
+        QVector3D(),
+        normal_view,
+        viewport_height,
+        45.0f,
+        target_half_extent_pixels,
+        2.0f);
+
+    QMatrix4x4 zoomed_out_view;
+    zoomed_out_view.translate(0.0f, 0.0f, -100.0f);
+    const float zoomed_out_extent = cameraPlaneHalfExtentForViewDepth(
+        QVector3D(),
+        QVector3D(),
+        zoomed_out_view,
+        viewport_height,
+        45.0f,
+        target_half_extent_pixels,
+        2.0f);
+
+    EXPECT_NEAR(projectedHalfExtentPixels(normal_extent, 10.0f),
+                target_half_extent_pixels,
+                1e-4f);
+    EXPECT_NEAR(projectedHalfExtentPixels(zoomed_out_extent, 100.0f),
+                target_half_extent_pixels,
+                1e-4f);
+}
+
+TEST(CameraSceneViewMathTest, BoundsDepthEmphasisInScreenSpace)
+{
+    constexpr int viewport_height = 1000;
+    constexpr float target_half_extent_pixels = 24.0f;
+    constexpr float half_fov_radians = 22.5f * 3.14159265358979323846f / 180.0f;
+
+    auto projectedHalfExtentPixels = [viewport_height, half_fov_radians](
+                                         float world_half_extent,
+                                         float depth)
+    {
+        return world_half_extent * viewport_height
+            / (2.0f * depth * std::tan(half_fov_radians));
+    };
+
+    QMatrix4x4 world_to_view;
+    world_to_view.setToIdentity();
+    const float near_extent = cameraPlaneHalfExtentForViewDepth(
+        QVector3D(0.0f, 0.0f, -4.0f),
+        QVector3D(0.0f, 0.0f, -8.0f),
+        world_to_view,
+        viewport_height,
+        45.0f,
+        target_half_extent_pixels,
+        2.0f);
+    const float far_extent = cameraPlaneHalfExtentForViewDepth(
+        QVector3D(0.0f, 0.0f, -16.0f),
+        QVector3D(0.0f, 0.0f, -8.0f),
+        world_to_view,
+        viewport_height,
+        45.0f,
+        target_half_extent_pixels,
+        2.0f);
+
+    EXPECT_NEAR(projectedHalfExtentPixels(near_extent, 4.0f),
+                target_half_extent_pixels * 0.55f,
+                1e-4f);
+    EXPECT_NEAR(projectedHalfExtentPixels(far_extent, 16.0f),
+                target_half_extent_pixels * 1.65f,
+                1e-4f);
+}
+
 TEST(CameraSceneViewMathTest, RejectsInvalidCameraPlaneDepthInputs)
 {
     QMatrix4x4 world_to_view;

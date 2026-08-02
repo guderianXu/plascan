@@ -1817,8 +1817,6 @@ float CameraSceneWidget::cameraImagePlaneHalfExtent(
     const QMatrix4x4 &worldToView) const
 {
     if (_cacheDirty) invalidateCache();
-    const float radius = sceneRadius();
-
     const float depthScaledExtent =
         xjw::gui::camera_scene::cameraPlaneHalfExtentForViewDepth(
             pose.center,
@@ -1828,13 +1826,16 @@ float CameraSceneWidget::cameraImagePlaneHalfExtent(
             45.0f,
             34.0f,
             2.0f);
-    const float minimumExtent = qMax(1.0e-5f, radius * 0.002f);
-    const float maximumExtent = qMax(minimumExtent, radius * 0.32f);
-    const float fallbackExtent = qMax(minimumExtent, radius * 0.065f);
-    const float desiredExtent = depthScaledExtent > 0.0f
-        ? depthScaledExtent
-        : fallbackExtent;
-    return qBound(minimumExtent, desiredExtent, maximumExtent);
+    if (depthScaledExtent > 0.0f)
+    {
+        // 该值已经按当前投影深度从目标屏幕像素换算为世界尺寸。
+        // 不能再按点云世界半径截断，否则连接点视图缩远后，相机卡片
+        // 会重新退化为近大远小，并最终缩成不可辨认的小点。
+        return depthScaledExtent;
+    }
+
+    const float radius = sceneRadius();
+    return qMax(1.0e-5f, radius * 0.065f);
 }
 
 bool CameraSceneWidget::isCameraHighlighted(const CameraPose &pose) const
