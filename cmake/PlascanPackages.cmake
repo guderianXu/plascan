@@ -9,7 +9,17 @@ include_guard(GLOBAL)
 
 # ── Qt6 ───────────────────────────────────────────────────────────────────────
 # 合并所有模块所需组件（Network 用于异步下载可选模型资源）。
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network Concurrent ShaderTools ShaderToolsTools GuiPrivate)
+set(PLASCAN_QT_COMPONENTS
+  Core Gui Widgets Network Concurrent ShaderTools ShaderToolsTools)
+if(WIN32)
+  # vcpkg exposes private Qt modules as explicit Qt6 components.
+  list(APPEND PLASCAN_QT_COMPONENTS GuiPrivate)
+endif()
+find_package(Qt6 REQUIRED COMPONENTS ${PLASCAN_QT_COMPONENTS})
+if(NOT TARGET Qt6::GuiPrivate)
+  message(FATAL_ERROR
+    "PlaScan requires the Qt GuiPrivate target. Install the Qt base private development package.")
+endif()
 message(STATUS "plascan: found Qt6 ${Qt6_VERSION}")
 
 get_target_property(_PLASCAN_QT_GUI_PUBLIC_FEATURES Qt6::Gui QT_ENABLED_PUBLIC_FEATURES)
