@@ -28,8 +28,11 @@ QString normalizedPath(const QString &path)
         return {};
     }
 
-    const QString portable_path =
-        QDir::cleanPath(QDir::fromNativeSeparators(path.trimmed()));
+    QString portable_path = path.trimmed();
+    // Project metadata can contain paths written on another OS. Qt only
+    // treats backslashes as native separators when the current host is Windows.
+    portable_path.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    portable_path = QDir::cleanPath(portable_path);
     const bool is_windows_drive_path = portable_path.size() >= 3
         && portable_path.at(0).isLetter()
         && portable_path.at(1) == QLatin1Char(':')

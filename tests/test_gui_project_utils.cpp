@@ -12093,6 +12093,10 @@ TEST(PhotoStripWidgetTest, ContextMenuRequestsMasksForSelectedPhotos)
     ASSERT_FALSE(source.isEmpty());
     EXPECT_TRUE(source.contains(QStringLiteral("&QListWidget::customContextMenuRequested")));
     EXPECT_TRUE(source.contains(QStringLiteral("&PhotoStripWidget::showPhotoContextMenu")));
+    if (QApplication::platformName() == QStringLiteral("offscreen"))
+    {
+        GTEST_SKIP() << "The Qt offscreen plugin does not support native popup menus";
+    }
 
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
@@ -12140,6 +12144,11 @@ TEST(PhotoStripWidgetTest, ContextMenuRequestsMasksForSelectedPhotos)
 
 TEST(PhotoStripWidgetTest, ContextMenuSelectsAnUnselectedClickedPhoto)
 {
+    if (QApplication::platformName() == QStringLiteral("offscreen"))
+    {
+        GTEST_SKIP() << "The Qt offscreen plugin does not support native popup menus";
+    }
+
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
     const QString firstPath = QDir(tempDir.path()).filePath(QStringLiteral("first.png"));
