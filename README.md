@@ -21,6 +21,7 @@
 
 ```bash
 git clone --recurse-submodules https://github.com/guderianXu/plascan.git
+git submodule update --init --recursive
 cd plascan
 ```
 
