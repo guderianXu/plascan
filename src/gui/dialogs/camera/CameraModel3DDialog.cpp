@@ -3289,7 +3289,7 @@ bool CameraSceneWidget::ensureImagePipeline(QRhiResourceUpdateBatch *updates)
         QImage upload_image = image.convertToFormat(QImage::Format_RGBX8888);
         if (rhi()->isYUpInNDC())
         {
-            upload_image.flip();
+            upload_image = upload_image.mirrored();
         }
         updates->uploadTexture(_imagePipeline.texture.data(), upload_image);
         _imagePipeline.uploadedImageKey = image_key;
@@ -3473,7 +3473,7 @@ bool CameraSceneWidget::ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *u
         QImage upload_image = image.convertToFormat(QImage::Format_RGBX8888);
         if (rhi()->isYUpInNDC())
         {
-            upload_image.flip();
+            upload_image = upload_image.mirrored();
         }
         updates->uploadTexture(resource->texture.data(), upload_image);
 
