@@ -1759,11 +1759,17 @@ void ProjectManager::startGenerateModelAsync(const QJsonObject &settings)
         settings.value(QStringLiteral("depthMapSourcePath"))
             .toString(settings.value(QStringLiteral("source_path")).toString())
             .trimmed();
-    const bool automatic_depth_maps =
+    const bool reuse_depth_maps =
+        settings.value(QStringLiteral("reuseDepthMaps")).toBool(true);
+    const bool force_depth_recompute =
+        settings.value(QStringLiteral("force_depth_recompute")).toBool(false);
+    const bool prepare_depth_maps =
         source_data == QStringLiteral("depth_maps") &&
         (settings.value(QStringLiteral("automatic_depth_maps")).toBool(false) ||
+         force_depth_recompute ||
+         !reuse_depth_maps ||
          depth_source.isEmpty());
-    if (!automatic_depth_maps)
+    if (!prepare_depth_maps)
     {
         _modelManager->startMeshReconstructionAsync(settings);
         return;

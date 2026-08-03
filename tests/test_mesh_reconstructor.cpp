@@ -6998,6 +6998,38 @@ TEST(MeshWorkflowSettingsTest, DepthTsdfInterpolationControlsBoundedHoleFilling)
 }
 
 TEST(MeshWorkflowSettingsTest,
+     DisabledInterpolationSurvivesOrbitalDefaultsAndKeepsObservedSurfaceOnly)
+{
+    const QJsonObject settings{
+        {QStringLiteral("interpolation"), QStringLiteral("disabled")},
+        {QStringLiteral("simplifyTargetFaces"), 60000}
+    };
+    auto options =
+        xjw::mesh::workflow::depthTsdfOptionsFromSettings(settings, 384);
+
+    xjw::mesh::workflow::applyOrbitalDepthTsdfDefaults(
+        settings, &options, 256);
+
+    EXPECT_FALSE(options.fillSmallBoundaryHoles);
+    EXPECT_FALSE(options.enableSilhouetteAwareFinalHoleFill);
+    EXPECT_FALSE(options.enableVisibilityConstrainedFinalHoleFill);
+    EXPECT_FALSE(options.enableTinyBoundaryLoopCollapse);
+    EXPECT_FALSE(options.enableVisibilityOccupancyCompletion);
+    EXPECT_FALSE(options.enableVisualHullSignedDistanceCompletion);
+    EXPECT_FALSE(options.enableOrbitalGapBoundaryRecovery);
+    EXPECT_FALSE(options.enableOrbitalGapAdaptiveTruncation);
+    EXPECT_FALSE(options.enableGeometryZeroCrossingRecovery);
+    EXPECT_FALSE(options.enableCrossViewAnchoredSurfaceRecovery);
+    EXPECT_FALSE(options.enableGeometryZeroCrossingCellSheets);
+    EXPECT_FALSE(options.enableContourBandZeroCrossingSupport);
+    EXPECT_FALSE(options.enableSurfacePatchSupport);
+    EXPECT_FALSE(options.enableGeometryVerifiedBoundaryRecovery);
+    EXPECT_FALSE(options.adaptiveTgvRecoverUnsupportedSamples);
+    EXPECT_FALSE(options.implicitRegularizationRecoverAxialGaps);
+    EXPECT_TRUE(options.mc33RequireSupportedSignChange);
+}
+
+TEST(MeshWorkflowSettingsTest,
      OrbitalHighDetailPolicyUsesConservativeSupportedSurface)
 {
     const QJsonObject settings{

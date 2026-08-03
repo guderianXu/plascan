@@ -31,21 +31,18 @@ void main()
         ? vNormal * inversesqrt(normalLengthSquared)
         : vec3(0.0, 0.0, 1.0);
     vec3 lightDir = normalize(ubuf.uLightDirPointSize.xyz);
-    vec3 fillDir = normalize(vec3(0.60, -0.15, 0.55));
     vec3 viewDir = normalize(-vViewPosition);
     if (dot(n, viewDir) < 0.0)
     {
         n = -n;
     }
-    vec3 halfDir = normalize(lightDir + viewDir);
     float headDiffuse = max(dot(n, viewDir), 0.0);
     float keyDiffuse = max(dot(n, lightDir), 0.0);
-    float diffuse = 0.15 * headDiffuse + 0.85 * keyDiffuse;
-    float fillDiffuse = max(dot(n, fillDir), 0.0);
-    float specular = pow(max(dot(n, halfDir), 0.0), 40.0);
     vec3 baseLinear = srgbToLinear(vColor);
-    vec3 litLinear =
-        baseLinear * (0.18 + 0.72 * diffuse + 0.08 * fillDiffuse)
-        + vec3(0.025 * specular);
+    // Vertex colors are sampled from photographs and already contain illumination.
+    // Keep them as the dominant appearance signal; a second strong directional
+    // lighting pass would darken bright, low-albedo planetary imagery twice.
+    float gentleShape = 0.86 + 0.10 * keyDiffuse + 0.04 * headDiffuse;
+    vec3 litLinear = baseLinear * gentleShape;
     fragColor = vec4(linearToSrgb(litLinear), 1.0);
 }

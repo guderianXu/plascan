@@ -539,7 +539,9 @@ TEST(CameraSceneRenderContractTest, ModelModesRebuildGeometryAndDrawLegends)
     EXPECT_TRUE(modelSource.contains(QStringLiteral("generatedVertexNormals")));
     EXPECT_TRUE(vertexShader.contains(QStringLiteral("vViewPosition")));
     EXPECT_TRUE(fragmentShader.contains(QStringLiteral("dot(n, viewDir) < 0.0")));
-    EXPECT_TRUE(fragmentShader.contains(QStringLiteral("0.18 + 0.72 * diffuse")));
-    EXPECT_TRUE(fragmentShader.contains(QStringLiteral("fillDiffuse")));
-    EXPECT_TRUE(fragmentShader.contains(QStringLiteral("specular")));
+    EXPECT_TRUE(fragmentShader.contains(QStringLiteral(
+        "0.86 + 0.10 * keyDiffuse + 0.04 * headDiffuse")));
+    EXPECT_TRUE(fragmentShader.contains(QStringLiteral(
+        "Vertex colors are sampled from photographs")));
+    EXPECT_FALSE(fragmentShader.contains(QStringLiteral("0.18 + 0.72 * diffuse")));
 }

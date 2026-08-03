@@ -465,15 +465,16 @@ QJsonObject GenerateModelDialog::collectSettings() const
     settings[QStringLiteral("depthFiltering")] = _depthFilterCombo->currentData().toString();
     settings[QStringLiteral("calculateVertexColors")] = _calculateColorsCheck->isChecked();
     settings[QStringLiteral("strictVolumetricMasks")] = _strictMasksCheck->isChecked();
-    settings[QStringLiteral("reuseDepthMaps")] =
+    const bool reuse_depth_maps =
         _hasReusableDepthMaps && _reuseDepthMapsRequested;
+    settings[QStringLiteral("reuseDepthMaps")] = reuse_depth_maps;
     const bool automatic_depth_maps =
         candidate.value(QLatin1String(kAutomaticDepthMaps)).toBool(false);
     settings[QStringLiteral("automatic_depth_maps")] = automatic_depth_maps;
     settings[QStringLiteral("force_depth_recompute")] =
         automatic_depth_maps ||
         (sourceData == QStringLiteral("depth_maps") &&
-         !_hasReusableDepthMaps);
+         !reuse_depth_maps);
     settings[QStringLiteral("replaceDefaultModel")] = _replaceDefaultCheck->isChecked();
 
     if (sourceData == QStringLiteral("point_cloud")

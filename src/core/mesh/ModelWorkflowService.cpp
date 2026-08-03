@@ -409,6 +409,45 @@ WorkflowResult saveMeshAndOptionalTexture(const xjw::mesh::TriMesh &mesh,
     return result;
 }
 
+bool interpolationIsDisabled(const QJsonObject &settings)
+{
+    return settings.value(QStringLiteral("interpolation"))
+               .toString(QStringLiteral("enabled")) ==
+        QStringLiteral("disabled");
+}
+
+void enforceObservationOnlySurfacePolicy(
+    const QJsonObject &settings,
+    xjw::mesh::DepthTsdfOptions *options)
+{
+    if (!options || !interpolationIsDisabled(settings))
+    {
+        return;
+    }
+
+    // “插值禁用” must dominate automatic orbital completion defaults.  Keep
+    // only surfaces supported by integrated depth evidence; otherwise the GUI
+    // says interpolation is off while occupancy/visual-hull recovery can still
+    // bridge unobserved regions with large triangle sheets.
+    options->fillSmallBoundaryHoles = false;
+    options->enableSilhouetteAwareFinalHoleFill = false;
+    options->enableVisibilityConstrainedFinalHoleFill = false;
+    options->enableTinyBoundaryLoopCollapse = false;
+    options->enableVisibilityOccupancyCompletion = false;
+    options->enableVisualHullSignedDistanceCompletion = false;
+    options->enableOrbitalGapBoundaryRecovery = false;
+    options->enableOrbitalGapAdaptiveTruncation = false;
+    options->enableGeometryZeroCrossingRecovery = false;
+    options->enableCrossViewAnchoredSurfaceRecovery = false;
+    options->enableGeometryZeroCrossingCellSheets = false;
+    options->enableContourBandZeroCrossingSupport = false;
+    options->enableSurfacePatchSupport = false;
+    options->enableGeometryVerifiedBoundaryRecovery = false;
+    options->adaptiveTgvRecoverUnsupportedSamples = false;
+    options->implicitRegularizationRecoverAxialGaps = false;
+    options->mc33RequireSupportedSignChange = true;
+}
+
 xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
                                                  int requested_resolution)
 {
@@ -1962,6 +2001,7 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
         settings.value(QStringLiteral("tsdfWeakBoundaryTipTrimPasses"))
             .toInt(automatic_weak_boundary_trim_passes),
         4);
+    enforceObservationOnlySurfacePolicy(settings, &options);
     return options;
 }
 
@@ -2636,6 +2676,7 @@ void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
             options->visibilityHoleFillMaximumConflictViews = 0;
         }
     }
+    enforceObservationOnlySurfacePolicy(settings, options);
 }
 
 FinalSurfaceDenoisingResult applyTopologyGuardedFinalSurfaceDenoising(
@@ -3370,6 +3411,15 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
         result.payload[QStringLiteral(
             "configured_visibility_occupancy_completion")] =
             options.enableVisibilityOccupancyCompletion;
+        result.payload[QStringLiteral("configured_interpolation")] =
+            request.settings.value(QStringLiteral("interpolation"))
+                .toString(QStringLiteral("enabled"));
+        result.payload[QStringLiteral(
+            "configured_fill_small_boundary_holes")] =
+            options.fillSmallBoundaryHoles;
+        result.payload[QStringLiteral(
+            "configured_mc33_require_supported_sign_change")] =
+            options.mc33RequireSupportedSignChange;
         result.payload[QStringLiteral(
             "configured_depth_completeness_diagnostics")] =
             options.enableDepthCompletenessDiagnostics;
@@ -3410,13 +3460,15 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
         {
             request.progress(
                 QStringLiteral(
-                    "模型配置：深度帧=%1，模式=%2，TSDF=%3，目标面数=%4")
+                    "模型配置：深度帧=%1，模式=%2，TSDF=%3，目标面数=%4，插值=%5")
                     .arg(loaded.frames.size())
                     .arg(orbital_workspace
                              ? QStringLiteral("环拍目标")
                              : QStringLiteral("常规场景"))
                     .arg(options.resolution)
-                    .arg(options.simplifyTargetFaces),
+                    .arg(options.simplifyTargetFaces)
+                    .arg(request.settings.value(QStringLiteral("interpolation"))
+                             .toString(QStringLiteral("enabled"))),
                 1);
         }
         DepthTsdfResult tsdf = DepthTsdfSurfaceBuilder::build(

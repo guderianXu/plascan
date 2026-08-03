@@ -930,6 +930,9 @@ TEST(GuiAlgorithmAlignmentContractTest, ReconstructionStagesRouteToDedicatedMana
     expectContainsAll(generate_block, {
         "_pointCloudWorkflowController->startCreatePointCloudAsync(settings)",
         "_modelManager->startMeshReconstructionAsync(settings)",
+        R"(settings.value(QStringLiteral("force_depth_recompute")))",
+        R"(settings.value(QStringLiteral("reuseDepthMaps")))",
+        "prepare_depth_maps",
     });
     expectNotContainsAll(project_manager, {
         "ProjectModelGenerationWorkflow",

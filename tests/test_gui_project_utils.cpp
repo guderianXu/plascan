@@ -2144,6 +2144,39 @@ TEST(GenerateModelDialogTest, ReusesDepthMapsByDefaultForLegacySettings)
     EXPECT_TRUE(reuse_check->isChecked());
 }
 
+TEST(GenerateModelDialogTest, RecomputesExistingDepthMapsWhenReuseIsUnchecked)
+{
+    QJsonObject depth_maps;
+    depth_maps[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
+    depth_maps[QStringLiteral("source_label")] = QStringLiteral("深度图");
+    depth_maps[QStringLiteral("source_path")] = QStringLiteral("E:/tmp/mvs_output");
+    depth_maps[QStringLiteral("display")] = QStringLiteral("深度图 - mvs_output");
+    depth_maps[QStringLiteral("supported")] = true;
+
+    GenerateModelDialog dialog;
+    dialog.applySettings(QJsonObject{{QStringLiteral("reuseDepthMaps"), false}});
+    dialog.setSourceCandidates(QJsonArray{depth_maps});
+
+    auto *reuse_check =
+        dialog.findChild<QCheckBox *>(QStringLiteral("reuseDepthMapsCheck"));
+    ASSERT_NE(reuse_check, nullptr);
+    EXPECT_TRUE(reuse_check->isEnabled());
+    EXPECT_FALSE(reuse_check->isChecked());
+
+    QSignalSpy run_spy(&dialog, &GenerateModelDialog::runRequested);
+    auto *button_box =
+        dialog.findChild<QDialogButtonBox *>(QStringLiteral("workflowButtonBox"));
+    ASSERT_NE(button_box, nullptr);
+    button_box->button(QDialogButtonBox::Ok)->click();
+    ASSERT_EQ(run_spy.count(), 1);
+
+    const QJsonObject submitted = run_spy.at(0).at(0).toJsonObject();
+    EXPECT_FALSE(submitted.value(QStringLiteral("reuseDepthMaps")).toBool(true));
+    EXPECT_TRUE(submitted.value(QStringLiteral("force_depth_recompute")).toBool());
+    EXPECT_EQ(submitted.value(QStringLiteral("depthMapSourcePath")).toString(),
+              QStringLiteral("E:/tmp/mvs_output"));
+}
+
 TEST(GenerateModelDialogTest, DisablesDepthMapReuseWhenProjectHasNoDepthMaps)
 {
     QJsonObject tie_points;
