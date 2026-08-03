@@ -41,6 +41,7 @@ jobs:
             libgl1-mesa-dev \
             libxkbcommon-dev \
             libopencv-dev \
+            libapriltag-dev \
             libgdal-dev \
             libtiff-dev \
             libzip-dev \

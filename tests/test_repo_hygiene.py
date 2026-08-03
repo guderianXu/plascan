@@ -36,6 +36,7 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("ctest --test-dir build", text)
         self.assertIn("qt6-base-private-dev", text)
         self.assertIn("qt6-shadertools-dev", text)
+        self.assertIn("libapriltag-dev", text)
 
     def test_github_actions_uses_current_checkout_action(self):
         workflow_path = ROOT / ".github" / "workflows" / "ci.yml"
