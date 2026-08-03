@@ -38,6 +38,9 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("qt6-shadertools-dev", text)
         self.assertIn("libapriltag-dev", text)
 
+        packages_text = (ROOT / "cmake" / "PlascanPackages.cmake").read_text(encoding="utf-8")
+        self.assertIn("pkg_check_modules(APRILTAG REQUIRED IMPORTED_TARGET GLOBAL apriltag)", packages_text)
+
     def test_github_actions_uses_current_checkout_action(self):
         workflow_path = ROOT / ".github" / "workflows" / "ci.yml"
         text = workflow_path.read_text(encoding="utf-8")

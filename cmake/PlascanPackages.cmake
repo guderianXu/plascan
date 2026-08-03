@@ -73,7 +73,16 @@ endif()
 message(STATUS "plascan: found GDAL, target=${PLASCAN_GDAL_TARGET}")
 
 # ── AprilTag ─────────────────────────────────────────────────────────────────
-find_package(apriltag CONFIG REQUIRED)
+if(WIN32)
+  find_package(apriltag CONFIG REQUIRED)
+else()
+  # Ubuntu 24.04's apriltag CMake package exports an invalid duplicated
+  # /usr/lib/lib/<triplet> path. Its pkg-config metadata points at the real
+  # multiarch library location and is also installed by upstream on Unix.
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(APRILTAG REQUIRED IMPORTED_TARGET GLOBAL apriltag)
+  add_library(apriltag::apriltag ALIAS PkgConfig::APRILTAG)
+endif()
 message(STATUS "plascan: found AprilTag")
 
 # ── libtiff ───────────────────────────────────────────────────────────────────
