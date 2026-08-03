@@ -7091,7 +7091,8 @@ TEST(MeshWorkflowSettingsTest,
         xjw::mesh::workflow::depthTsdfOptionsFromSettings(settings, 320);
 
     EXPECT_TRUE(options.enableOpenMeshSimplification);
-    EXPECT_TRUE(options.enableMc33IsoSurfaceExtraction);
+    EXPECT_EQ(options.enableMc33IsoSurfaceExtraction,
+              xjw::mesh::Mc33IsoSurfaceExtractor::isAvailable());
 
     xjw::mesh::workflow::applyOrbitalDepthTsdfDefaults(
         settings, &options, 320);

@@ -774,7 +774,7 @@ TEST(MvsWorkspaceManifest, PreviousRevisionFrameIsNotReusableEvenWhenArtifactsMa
     EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
 }
 
-TEST(MvsWorkspaceManifest, RevisionFourteenOrbitalFrameRequiresConflictRatio)
+TEST(MvsWorkspaceManifest, CurrentOrbitalFrameRequiresConflictRatio)
 {
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
@@ -785,8 +785,7 @@ TEST(MvsWorkspaceManifest, RevisionFourteenOrbitalFrameRequiresConflictRatio)
         4,
         QStringLiteral("image_004.jpg"),
         QStringLiteral("completed"));
-    record.algorithmRevision =
-        xjw::mvs::kMvsAdaptiveGeometryConflictRatioRevision;
+    record.algorithmRevision = xjw::mvs::kMvsDepthAlgorithmRevision;
     record.sceneProfile = QStringLiteral("orbital_object");
     record.depthPng = QDir(tempDir.path()).filePath(QStringLiteral("depth_004.png"));
     record.rawDepthPath = QDir(tempDir.path()).filePath(QStringLiteral("depth_004.bin"));
