@@ -185,6 +185,31 @@ void logModelWorkflowResult(
                  'f',
                  4));
     }
+    if (payload.contains(QStringLiteral("reliably_colored_vertex_count")))
+    {
+        const int reliable_count = payload.value(QStringLiteral(
+            "reliably_colored_vertex_count")).toInt();
+        const int fallback_count = payload.value(QStringLiteral(
+            "fallback_color_vertex_count")).toInt();
+        const QString color_summary = QStringLiteral(
+            "[模型生成] 顶点颜色：可靠=%1，最佳视图回退=%2，"
+            "邻域传播=%3，固定颜色回退=%4")
+            .arg(reliable_count)
+            .arg(payload.value(QStringLiteral(
+                     "best_view_fallback_color_vertex_count")).toInt())
+            .arg(payload.value(QStringLiteral(
+                     "propagated_color_vertex_count")).toInt())
+            .arg(fallback_count);
+        if (reliable_count <= 0)
+        {
+            LOG_WARN(color_summary + QStringLiteral(
+                "；没有影像颜色投影成功，模型将显示为统一回退色"));
+        }
+        else
+        {
+            LOG_INFO(color_summary);
+        }
+    }
 }
 
 void applyWorkflowResult(ModelTaskResult *task,

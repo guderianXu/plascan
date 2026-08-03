@@ -9,6 +9,7 @@
 
 #include "PatchMatchCUDA.h"
 #include "PatchMatchPhotometricCost.h"
+#include "Logger.h"
 #include <opencv2/imgproc.hpp>
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
@@ -35,7 +36,7 @@
     cudaError_t _e = (x); \
     if (_e != cudaSuccess) { \
         const char *_cuda_msg = cudaGetErrorString(_e); \
-        fprintf(stderr,"[CUDA] %s:%d %s\n",__FILE__,__LINE__,_cuda_msg); \
+        LOG_ERROR("[MVS][PatchMatch][CUDA] %s:%d %s", __FILE__, __LINE__, _cuda_msg); \
         if (errorMsg) { \
             *errorMsg = std::string("CUDA error at ") + __FILE__ + ":" + std::to_string(__LINE__) + " " + _cuda_msg; \
         } \
@@ -1854,15 +1855,17 @@ bool PatchMatchDepthEstimator::estimateGPU(
     }
 
     // ── GPU 参数摘要 ──────────────────────────────────────────
-    fprintf(stderr, "[GPU] scaled size: %dx%d  ds=%d  src=%d  iters=%d  patch=%d\n",
-            sW, sH, ds, N, config.numIterations, config.patchHalf*2+1);
+    LOG_DEBUG("[MVS][PatchMatch][GPU] size=%dx%d ds=%d sources=%d iterations=%d patch=%d",
+              sW, sH, ds, N, config.numIterations, config.patchHalf * 2 + 1);
     for (int si = 0; si < N; ++si) 
     {
         const float *sd = srcDatas.data() + si * 16;
         const float *T_rel = sd + 13;
         float baseline = sqrtf(T_rel[0]*T_rel[0]+T_rel[1]*T_rel[1]+T_rel[2]*T_rel[2]);
         if (baseline < 1e-4f)
-            fprintf(stderr, "[GPU SRC %d] warning: near-zero baseline\n", si);
+        {
+            LOG_WARN("[MVS][PatchMatch][GPU] source=%d baseline is near zero", si);
+        }
     }
 
     const int refPx = sW * sH;
@@ -2142,13 +2145,14 @@ bool PatchMatchDepthEstimator::estimateGPU(
             dMean = cv::mean(depthS, validMask)[0];
         }
         double cMean = validCnt > 0 ? cv::mean(confS, validMask)[0] : 0;
-        fprintf(stderr, "[GPU RESULT] valid pixels: %d/%d (%.1f%%)  depth: [%.4f, %.4f] mean=%.4f  conf=%.4f\n",
-                validCnt, totalPx, 100.f*validCnt/totalPx,
-                (float)dMin, (float)dMax, (float)dMean, (float)cMean);
+        LOG_DEBUG("[MVS][PatchMatch][GPU] result valid=%d/%d (%.1f%%) depth=[%.4f,%.4f] mean=%.4f confidence=%.4f",
+                  validCnt, totalPx, 100.f * validCnt / totalPx,
+                  static_cast<float>(dMin), static_cast<float>(dMax),
+                  static_cast<float>(dMean), static_cast<float>(cMean));
 
         if (validCnt == 0) 
         {
-            fprintf(stderr, "[GPU RESULT] warning: zero valid depth pixels\n");
+            LOG_WARN("[MVS][PatchMatch][GPU] result contains zero valid depth pixels");
         }
     }
 
@@ -2187,14 +2191,14 @@ bool PatchMatchDepthEstimator::estimateGPU(
     int valid = cv::countNonZero(depthFull > 0);
     float mean = (valid>0) ? (float)cv::mean(depthFull, depthFull>0)[0] : 0.f;
     const int fullPx = depthFull.rows * depthFull.cols;
-    fprintf(stderr,
-        "[PatchMatchGPU] scaled=%dx%d full=%dx%d zNear=%.2f zFar=%.2f valid=%d/%d mean=%.2f "
-        "conf>=%.2f hint=%d iters=%d parallelSweep=%d\n",
+    LOG_DEBUG(
+        "[MVS][PatchMatch][GPU] scaled=%dx%d full=%dx%d range=[%.2f,%.2f] valid=%d/%d mean=%.2f "
+        "confidence>=%.2f hint=%d iterations=%d parallel_sweep=%d",
         sW, sH, refW, refH, zNear, zFar, valid, fullPx, mean,
-        config.confidenceThresh, hasHint?1:0, config.numIterations,
+        config.confidenceThresh, hasHint ? 1 : 0, config.numIterations,
         config.cudaUseParallelSweep ? 1 : 0);
-    fprintf(stderr,
-        "[PatchMatchGPU] gray cache refHit=%d srcHit=%d srcMiss=%d usage=%.1f/%.1f MB\n",
+    LOG_DEBUG(
+        "[MVS][PatchMatch][GPU] gray_cache ref_hit=%d source_hit=%d source_miss=%d usage=%.1f/%.1f MiB",
         refCacheHit ? 1 : 0,
         cacheHits,
         cacheMisses,
@@ -2617,8 +2621,8 @@ bool PatchMatchDepthEstimator::estimateCPU(
         confS.setTo(cv::Scalar(0.0f), invalid_reference);
     }
 
-        fprintf(stderr, "[PatchMatchCPU] %dx%d ds=%d threads=%d validRows=%d\n",
-            W, H, ds, cpuThreadCount, H);
+    LOG_DEBUG("[MVS][PatchMatch][CPU] size=%dx%d ds=%d threads=%d valid_rows=%d",
+              W, H, ds, cpuThreadCount, H);
 
     if (config.doMedianBlur && config.medianKernelSize > 1)
     {
@@ -2745,7 +2749,7 @@ bool PatchMatchDepthEstimator::estimate(
         {
             return false;
         }
-        fprintf(stderr, "[PatchMatch] GPU failed, falling back to CPU\n");
+        LOG_WARN("[MVS][PatchMatch] GPU failed; falling back to CPU");
     }
     return estimateCPU(refGray, srcGrays, refCam, srcCams,
                        zNear, zFar, config, depthOut, confOut, errorMsg,

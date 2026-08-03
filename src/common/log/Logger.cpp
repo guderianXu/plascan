@@ -1,6 +1,8 @@
 #include "Logger.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -22,6 +24,33 @@ std::tm localTime(std::time_t timeValue)
 #endif
     return tmValue;
 }
+
+Logger::Level terminalLogLevelFromEnvironment()
+{
+    const char *configured = std::getenv("PLASCAN_TERMINAL_LOG_LEVEL");
+    if (!configured)
+    {
+        return Logger::Info;
+    }
+    std::string value(configured);
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char character)
+    {
+        return static_cast<char>(std::toupper(character));
+    });
+    if (value == "DEBUG")
+    {
+        return Logger::Debug;
+    }
+    if (value == "WARN" || value == "WARNING")
+    {
+        return Logger::Warn;
+    }
+    if (value == "ERROR")
+    {
+        return Logger::Error;
+    }
+    return Logger::Info;
+}
 }
 
 Logger *Logger::instance()
@@ -32,6 +61,7 @@ Logger *Logger::instance()
 
 Logger::Logger()
     : _logDir(defaultLogDirectory())
+    , _terminalMinimumLevel(terminalLogLevelFromEnvironment())
 {
     _logFilePath = (std::filesystem::path(_logDir) / "plascan.log").string();
 }
@@ -101,6 +131,18 @@ void Logger::setMaxBackupFiles(int n)
     _maxFiles = (n < 1) ? 1 : n;
 }
 
+void Logger::setTerminalMinimumLevel(Level level)
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    _terminalMinimumLevel = level;
+}
+
+Logger::Level Logger::terminalMinimumLevel() const
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _terminalMinimumLevel;
+}
+
 void Logger::log(Level level, std::string_view message)
 {
     Entry entry;
@@ -110,7 +152,7 @@ void Logger::log(Level level, std::string_view message)
     entry.formatted = formatLine(level, entry.timestamp, entry.message);
 
     std::vector<SinkCallback> sinks;
-    bool terminalFallback = false;
+    bool write_terminal = false;
     {
         std::lock_guard<std::mutex> lock(_mutex);
         if (openLogFileLocked(false))
@@ -125,12 +167,12 @@ void Logger::log(Level level, std::string_view message)
         {
             sinks.push_back(item.second);
         }
-        terminalFallback = sinks.empty();
+        write_terminal = level >= _terminalMinimumLevel;
     }
 
-    if (terminalFallback)
+    if (write_terminal)
     {
-        writeToTerminalFallback(entry);
+        writeToTerminal(entry);
     }
 
     for (const auto &sink : sinks)
@@ -325,8 +367,9 @@ void Logger::rotateIfNeededLocked()
     openLogFileLocked(true);
 }
 
-void Logger::writeToTerminalFallback(const Entry &entry) const
+void Logger::writeToTerminal(const Entry &entry) const
 {
+    const std::lock_guard<std::mutex> lock(_terminalMutex);
     std::ostream &stream = (entry.level >= Warn) ? std::cerr : std::cout;
     stream << entry.formatted;
     stream.flush();

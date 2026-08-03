@@ -53,6 +53,8 @@ public:
 
     void setMaxFileSize(std::uintmax_t bytes);
     void setMaxBackupFiles(int n);
+    void setTerminalMinimumLevel(Level level);
+    Level terminalMinimumLevel() const;
 
     void log(Level level, std::string_view message);
     void logf(Level level, const char *fmt, ...);
@@ -100,7 +102,7 @@ private:
     void ensureLogDirectoryLocked();
     bool openLogFileLocked(bool truncate);
     void rotateIfNeededLocked();
-    void writeToTerminalFallback(const Entry &entry) const;
+    void writeToTerminal(const Entry &entry) const;
 
     mutable std::mutex _mutex;
     std::string _logDir;
@@ -108,8 +110,10 @@ private:
     std::ofstream _file;
     std::uintmax_t _maxSize{5u * 1024u * 1024u};
     int _maxFiles{3};
+    Level _terminalMinimumLevel{Info};
     int _nextSinkId{1};
     std::unordered_map<int, SinkCallback> _sinks;
+    mutable std::mutex _terminalMutex;
 };
 
 namespace logger_detail

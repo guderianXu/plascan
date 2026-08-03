@@ -10,6 +10,7 @@
 #include "DepthMapFusion.h"
 #include "MvsImagePreprocessor.h"
 #include "io/PathIO.h"
+#include "Logger.h"
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <cmath>
@@ -838,10 +839,9 @@ bool DepthMapFusion::fuseTwoViewSingleObservationFast(
     const float maxReprojSq = _config.maxReprojError * _config.maxReprojError;
     const float cosMaxNormErr = std::cos(_config.maxNormalError * static_cast<float>(M_PI) / 180.f);
 
-    fprintf(stderr,
-            "[StereoFusion] 快速并行融合: frames=2 workers=%d minNumPixels=%d\n",
-            workerCount,
-            _config.minNumPixels);
+    LOG_INFO("[MVS][深度融合] 快速双视图融合: workers=%d min_pixels=%d",
+             workerCount,
+             _config.minNumPixels);
 
     std::size_t reserveCount = 0;
     for (int fi = 0; fi < kFrameCount; ++fi)
@@ -1129,15 +1129,15 @@ bool DepthMapFusion::fuseTwoViewSingleObservationFast(
 
         const int frameValid = cv::countNonZero(frames[fi].depthMap > 0);
         const int frameFused = cv::countNonZero(_filteredDepths[fi] > 0);
-        fprintf(stderr,
-                "[StereoFusion] 快速并行帧 %d: 有效深度=%d 融合点=%d (%.1f%%)\n",
-                fi,
-                frameValid,
-                frameFused,
-                100.f * frameFused / std::max(1, frameValid));
+        LOG_DEBUG("[MVS][深度融合] 帧=%d valid=%d fused=%d yield=%.1f%%",
+                  fi,
+                  frameValid,
+                  frameFused,
+                  100.f * frameFused / std::max(1, frameValid));
     }
 
-    fprintf(stderr, "[StereoFusion] 快速并行融合完成：总点数=%d\n", (int)fusedPoints.size());
+    LOG_INFO("[MVS][深度融合] 快速双视图融合完成: points=%d",
+             static_cast<int>(fusedPoints.size()));
     if (progressCb)
     {
         progressCb("快速并行融合完毕", 1.0f);
@@ -1211,14 +1211,14 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
     _filteredDepths.resize(frames.size());
     _filteredDepths[fi] = cv::Mat::zeros(H, W, CV_32F);
 
-    fprintf(stderr,
-            "[StereoFusion] 使用已过滤深度图快速反投影: frame=0 size=%dx%d valid=%d workers=%d minNumPixels=%d neighbors=%d\n",
-            W,
-            H,
-            validCount,
-            workerCount,
-            requiredObservations,
-            static_cast<int>(neighborFrames.size()));
+    LOG_INFO("[MVS][深度融合] 快速反投影: frame=0 size=%dx%d valid=%d workers=%d "
+             "min_pixels=%d neighbors=%d",
+             W,
+             H,
+             validCount,
+             workerCount,
+             requiredObservations,
+             static_cast<int>(neighborFrames.size()));
 
     auto readWorldNormal = [&](int frameIdx, int row, int col, float &nx, float &ny, float &nz) {
         if (frameIdx < 0 || frameIdx >= static_cast<int>(frames.size()) ||
@@ -1603,13 +1603,12 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
     {
         const int fallbackRequiredObservations =
             std::clamp(_config.lowYieldFallbackMinNumPixels, 2, requiredObservations - 1);
-        fprintf(stderr,
-                "[StereoFusion] 严格流式融合产出过低: points=%d valid=%d ratio=%.4f, "
-                "fallback minNumPixels=%d\n",
-                static_cast<int>(fusedPoints.size()),
-                validCount,
-                yieldRatio,
-                fallbackRequiredObservations);
+        LOG_WARN("[MVS][深度融合] 严格流式融合产出过低: points=%d valid=%d yield=%.4f，"
+                 "fallback_min_pixels=%d",
+                 static_cast<int>(fusedPoints.size()),
+                 validCount,
+                 yieldRatio,
+                 fallbackRequiredObservations);
 
         StereoFusionConfig savedConfig = _config;
         _config.minNumPixels = fallbackRequiredObservations;
@@ -1630,15 +1629,13 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
         if (fallbackPoints.size() > fusedPoints.size())
         {
             fusedPoints = std::move(fallbackPoints);
-            fprintf(stderr,
-                    "[StereoFusion] 已采用双视一致 fallback: points=%d\n",
-                    static_cast<int>(fusedPoints.size()));
+            LOG_WARN("[MVS][深度融合] 已采用双视一致性回退: points=%d",
+                     static_cast<int>(fusedPoints.size()));
         }
     }
 
-    fprintf(stderr,
-            "[StereoFusion] 快速反投影完成: points=%d\n",
-            static_cast<int>(fusedPoints.size()));
+    LOG_INFO("[MVS][深度融合] 快速反投影完成: points=%d",
+             static_cast<int>(fusedPoints.size()));
     if (progressCb)
     {
         progressCb("快速反投影已过滤深度图完成", 1.0f);
@@ -1738,12 +1735,14 @@ bool DepthMapFusion::fuse(
         }
     }
 
-    fprintf(stderr, "[StereoFusion] 开始融合 %d 帧\n", NF);
-    fprintf(stderr, "[StereoFusion] config: minNumPixels=%d maxReprojError=%.1f "
-            "maxDepthError=%.3f maxNormalError=%.1f workerCount=%d\n",
-            _config.minNumPixels, _config.maxReprojError,
-            _config.maxDepthError, _config.maxNormalError,
-            resolveFusionWorkerCount(_config.workerCount, frames.front().depthMap.rows));
+    LOG_INFO("[MVS][深度融合] 开始: frames=%d min_pixels=%d workers=%d",
+             NF,
+             _config.minNumPixels,
+             resolveFusionWorkerCount(_config.workerCount, frames.front().depthMap.rows));
+    LOG_DEBUG("[MVS][深度融合] config reprojection_error=%.1f depth_error=%.3f normal_error=%.1f",
+              _config.maxReprojError,
+              _config.maxDepthError,
+              _config.maxNormalError);
 
     // 1. 预计算投影几何
     std::vector<FrameGeometry> geom;
@@ -1909,22 +1908,22 @@ bool DepthMapFusion::fuse(
 
         int frameValid = cv::countNonZero(frames[fi].depthMap > 0);
         int frameFused = cv::countNonZero(_filteredDepths[fi] > 0);
-        fprintf(stderr, "[StereoFusion] 帧 %d: 有效深度=%d 融合点=%d (%.1f%%)\n",
-                fi, frameValid, frameFused, 100.f * frameFused / std::max(1, frameValid));
+        LOG_DEBUG("[MVS][深度融合] 帧=%d valid=%d fused=%d yield=%.1f%%",
+                  fi, frameValid, frameFused, 100.f * frameFused / std::max(1, frameValid));
     }
 
     const FusionRejectionStats stats = rejectionStats();
-    fprintf(stderr,
-            "[StereoFusion] 融合完成：总点数=%d mask=%llu support=%llu gradient=%llu "
-            "reprojection=%llu depth=%llu normal=%llu observations=%llu\n",
-            static_cast<int>(fusedPoints.size()),
-            static_cast<unsigned long long>(stats.maskRejected),
-            static_cast<unsigned long long>(stats.supportRejected),
-            static_cast<unsigned long long>(stats.depthGradientRejected),
-            static_cast<unsigned long long>(stats.reprojectionRejected),
-            static_cast<unsigned long long>(stats.depthConsistencyRejected),
-            static_cast<unsigned long long>(stats.normalRejected),
-            static_cast<unsigned long long>(stats.insufficientObservations));
+    LOG_INFO("[MVS][深度融合] 完成: points=%d",
+             static_cast<int>(fusedPoints.size()));
+    LOG_DEBUG("[MVS][深度融合] rejected mask=%llu support=%llu gradient=%llu reprojection=%llu "
+              "depth=%llu normal=%llu observations=%llu",
+              static_cast<unsigned long long>(stats.maskRejected),
+              static_cast<unsigned long long>(stats.supportRejected),
+              static_cast<unsigned long long>(stats.depthGradientRejected),
+              static_cast<unsigned long long>(stats.reprojectionRejected),
+              static_cast<unsigned long long>(stats.depthConsistencyRejected),
+              static_cast<unsigned long long>(stats.normalRejected),
+              static_cast<unsigned long long>(stats.insufficientObservations));
 
     if (progressCb)
     {

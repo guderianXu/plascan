@@ -1247,13 +1247,12 @@ bool estimatePatchMatchWithAdaptiveCuda(
         {
             if (attemptConfig.downsampleFactor != config.downsampleFactor)
             {
-                fprintf(stderr,
-                        "[MVS] 帧 %d: %s CUDA 自适应重试成功，最终 ds=%d iters=%d patch=%d\n",
-                        refIdx,
-                        stageLabel,
-                        attemptConfig.downsampleFactor,
-                        attemptConfig.numIterations,
-                        attemptConfig.patchHalf * 2 + 1);
+                LOG_INFO("[MVS][帧 %d][PatchMatch] %s CUDA 重试成功: ds=%d iterations=%d patch=%d",
+                         refIdx,
+                         stageLabel,
+                         attemptConfig.downsampleFactor,
+                         attemptConfig.numIterations,
+                         attemptConfig.patchHalf * 2 + 1);
             }
             if (errorMsg)
             {
@@ -1287,23 +1286,21 @@ bool estimatePatchMatchWithAdaptiveCuda(
             break;
         }
 
-        fprintf(stderr,
-                "[MVS] 帧 %d: %s CUDA 显存不足，ds=%d -> ds=%d 自动重试 (%s)\n",
-                refIdx,
-                stageLabel,
-                attemptConfig.downsampleFactor,
-                nextConfig.downsampleFactor,
-                attemptError.c_str());
+        LOG_WARN("[MVS][帧 %d][PatchMatch] %s CUDA 显存不足，ds=%d -> %d 后重试: %s",
+                 refIdx,
+                 stageLabel,
+                 attemptConfig.downsampleFactor,
+                 nextConfig.downsampleFactor,
+                 attemptError.c_str());
 
         attemptConfig = nextConfig;
         attemptConfig.cudaFallbackToCpu = false;
     }
 
-    fprintf(stderr,
-            "[MVS] 帧 %d: %s CUDA 自适应重试未成功，回退 CPU (%s)\n",
-            refIdx,
-            stageLabel,
-            lastCudaError.empty() ? "未知 CUDA 错误" : lastCudaError.c_str());
+    LOG_WARN("[MVS][帧 %d][PatchMatch] %s CUDA 重试失败，回退 CPU: %s",
+             refIdx,
+             stageLabel,
+             lastCudaError.empty() ? "未知 CUDA 错误" : lastCudaError.c_str());
 
     PatchMatchConfig cpuConfig = config;
     cpuConfig.useCuda = false;
@@ -1675,13 +1672,12 @@ public:
         const cv::Mat *radius = request.prior && !request.prior->radius.empty()
             ? &request.prior->radius
             : nullptr;
-        fprintf(stderr,
-                "[MVS] 帧 %d: %s ds=%d iters=%d patch=%d\n",
-                _refIdx,
-                stage_label.c_str(),
-                request.levelConfig.patchMatch.downsampleFactor,
-                request.levelConfig.patchMatch.numIterations,
-                request.levelConfig.patchMatch.patchHalf * 2 + 1);
+        LOG_DEBUG("[MVS][帧 %d][PatchMatch] %s ds=%d iterations=%d patch=%d",
+                  _refIdx,
+                  stage_label.c_str(),
+                  request.levelConfig.patchMatch.downsampleFactor,
+                  request.levelConfig.patchMatch.numIterations,
+                  request.levelConfig.patchMatch.patchHalf * 2 + 1);
 
         if (!estimatePatchMatchWithAdaptiveCuda(stage_label.c_str(),
                                                 _refIdx,
@@ -2784,7 +2780,7 @@ void DepthMapGenerator::preloadImages()
     _projectMaskLoaded.assign(static_cast<size_t>(NV), 0);
 
     const int workerCount = preloadImagesWorkerCount(NV, _config.cpuWorkerCount);
-    fprintf(stderr, "[MVS] preloadImages(): workers=%d views=%d\n", workerCount, NV);
+    LOG_DEBUG("[MVS][预加载] workers=%d views=%d", workerCount, NV);
     if (workerCount <= 0)
     {
         return;
@@ -2840,7 +2836,7 @@ void DepthMapGenerator::preloadImages()
                         _validRegionMasks[static_cast<size_t>(i)]);
                     const int total_pixels = _validRegionMasks[static_cast<size_t>(i)].rows *
                                              _validRegionMasks[static_cast<size_t>(i)].cols;
-                    LOG_INFO(QStringLiteral("[MVS] 图像 %1: 使用项目蒙版，有效区域 %2/%3 (%4%)")
+                    LOG_DEBUG(QStringLiteral("[MVS][预加载] 图像 %1: 使用项目蒙版，有效区域 %2/%3 (%4%)")
                                  .arg(i)
                                  .arg(valid_pixels)
                                  .arg(total_pixels)
@@ -2852,8 +2848,8 @@ void DepthMapGenerator::preloadImages()
                                       1));
                     if (content_refined)
                     {
-                        LOG_INFO(QStringLiteral(
-                                     "[MVS] 图像 %1: 暗背景内部开口细化，保留项目有效区 %2%")
+                        LOG_DEBUG(QStringLiteral(
+                                     "[MVS][预加载] 图像 %1: 暗背景内部开口细化，保留项目有效区 %2%")
                                      .arg(i)
                                      .arg(100.0 * static_cast<double>(retained_ratio),
                                           0,
@@ -2886,17 +2882,21 @@ void DepthMapGenerator::preloadImages()
                 const int contentPx = static_cast<int>(std::round(coverage * totalPx));
                 if (_validRegionMasks[static_cast<size_t>(i)].empty())
                 {
-                    fprintf(stderr,
-                            "[MVS] 图像 %d: 内容掩码覆盖 %.1f%%，自动跳过内容掩码过滤 (Otsu=%.0f adaptiveThresh=%d)\n",
-                            i,
-                            coverage * 100.0f,
-                            otsuThresh,
-                            adaptiveThresh);
+                    LOG_DEBUG(
+                        "[MVS][预加载] 图像 %d: 内容掩码覆盖 %.1f%%，"
+                        "自动跳过过滤 (Otsu=%.0f adaptiveThresh=%d)",
+                        i,
+                        coverage * 100.0f,
+                        otsuThresh,
+                        adaptiveThresh);
                 }
                 else
                 {
-                    fprintf(stderr, "[MVS] 图像 %d: 内容掩码 (Otsu=%.0f adaptiveThresh=%d): %d/%d (%.1f%%)\n",
-                            i, otsuThresh, adaptiveThresh, contentPx, totalPx, coverage * 100.0f);
+                    LOG_DEBUG(
+                        "[MVS][预加载] 图像 %d: 内容掩码 "
+                        "(Otsu=%.0f adaptiveThresh=%d): %d/%d (%.1f%%)",
+                        i, otsuThresh, adaptiveThresh, contentPx, totalPx,
+                        coverage * 100.0f);
                 }
             }
 
@@ -2927,14 +2927,16 @@ void DepthMapGenerator::preloadImages()
                     clahe->apply(_grayCache[i], enhanced);
                 }
                 double newMean = cv::mean(enhanced)[0];
-                fprintf(stderr, "[MVS] 图像 %d: 低对比度 (mean=%.1f)，应用 CLAHE → mean=%.1f\n",
-                        i, imgMean, newMean);
+                LOG_DEBUG(
+                    "[MVS][预加载] 图像 %d: 低对比度 mean=%.1f，"
+                    "应用 CLAHE 后 mean=%.1f",
+                    i, imgMean, newMean);
                 _grayCache[i] = enhanced;
             }
             else
             {
-                fprintf(stderr, "[MVS] 预加载图像 %d/%d: %dx%d (mean=%.1f)\n",
-                        i+1, NV, _grayCache[i].cols, _grayCache[i].rows, imgMean);
+                LOG_DEBUG("[MVS][预加载] 图像 %d/%d: %dx%d mean=%.1f",
+                          i + 1, NV, _grayCache[i].cols, _grayCache[i].rows, imgMean);
             }
         }
     };
@@ -3007,9 +3009,9 @@ bool DepthMapGenerator::estimateDepthRange(int refIdx,
     if (visiblePointIndices.size() < 5 && minSourceViews > 0)
     {
         visiblePointIndices = visibleSparsePointIndicesForFrame(refIdx, {}, 0);
-        fprintf(stderr,
-                "[MVS] 帧 %d: 共视稀疏点不足，深度范围回退到参考帧可见点 (%zu)\n",
-                refIdx, visiblePointIndices.size());
+        LOG_DEBUG(
+            "[MVS][帧 %d][深度范围] 共视稀疏点不足，回退参考帧可见点 (%zu)",
+            refIdx, visiblePointIndices.size());
     }
     return estimateDepthRangeFromVisiblePoints(refIdx, visiblePointIndices, zNear, zFar);
 }
@@ -3068,8 +3070,9 @@ bool DepthMapGenerator::estimateDepthRangeFromVisiblePoints(
             // 航空摄影测量：典型场景深度 ≈ 基线的 0.5× ~ 100×
             zNear = maxBaseline * 0.1f;
             zFar  = maxBaseline * 100.f;
-            fprintf(stderr, "[MVS] 深度范围回退(全局基线): global_baseline=%.4f → zNear=%.4f zFar=%.4f\n",
-                    maxBaseline, zNear, zFar);
+            LOG_DEBUG(
+                "[MVS][深度范围] 回退全局基线: baseline=%.4f zNear=%.4f zFar=%.4f",
+                maxBaseline, zNear, zFar);
         } else {
             // 实在无法估计
             float dx = _sparse.maxPt[0] - _sparse.minPt[0];
@@ -3078,8 +3081,9 @@ bool DepthMapGenerator::estimateDepthRangeFromVisiblePoints(
             float diag = std::sqrt(dx*dx + dy*dy + dz*dz);
             zNear = 0.1f;
             zFar  = diag > 0 ? diag * 3.f : 100.f;
-            fprintf(stderr, "[MVS] 深度范围回退(AABB): diag=%.4f → zNear=%.4f zFar=%.4f\n",
-                    diag, zNear, zFar);
+            LOG_DEBUG(
+                "[MVS][深度范围] 回退 AABB: diag=%.4f zNear=%.4f zFar=%.4f",
+                diag, zNear, zFar);
         }
         return true;
     }
@@ -3109,9 +3113,11 @@ bool DepthMapGenerator::estimateDepthRangeFromVisiblePoints(
     zNear = std::max(zNear, 0.01f);
     zFar  = std::max(zFar,  zNear + 0.1f);
 
-    fprintf(stderr,
-            "[MVS] 帧 %d: 深度范围 IQR: Q1=%.4f Q3=%.4f IQR=%.4f fence=[%.4f, %.4f] inliers=%zu/%zu visiblePts=%zu\n",
-            refIdx, Q1, Q3, IQR, lowerFence, upperFence, inlierDepths.size(), n, visiblePointIndices.size());
+    LOG_DEBUG(
+        "[MVS][帧 %d][深度范围] Q1=%.4f Q3=%.4f IQR=%.4f "
+        "fence=[%.4f,%.4f] inliers=%zu/%zu visible=%zu",
+        refIdx, Q1, Q3, IQR, lowerFence, upperFence,
+        inlierDepths.size(), n, visiblePointIndices.size());
     return true;
 }
 
@@ -3127,9 +3133,9 @@ cv::Mat DepthMapGenerator::buildHintDepth(int refIdx,
     if (visiblePointIndices.empty() && minSourceViews > 0)
     {
         visiblePointIndices = visibleSparsePointIndicesForFrame(refIdx, {}, 0);
-        fprintf(stderr,
-                "[Hint] 帧 %d: 共视 hint 点为空，回退到参考帧可见点 (%zu)\n",
-                refIdx, visiblePointIndices.size());
+        LOG_DEBUG(
+            "[MVS][帧 %d][稀疏引导] 共视点为空，回退参考帧可见点 (%zu)",
+            refIdx, visiblePointIndices.size());
     }
 
     return buildHintDepthFromVisiblePoints(refIdx, W, H, visiblePointIndices);
@@ -3278,10 +3284,9 @@ cv::Mat DepthMapGenerator::buildHintDepthFromProjectedSamples(
     const int seedHintCnt = cv::countNonZero(hint > 0);
     if (seedHintCnt <= 0)
     {
-        fprintf(stderr,
-                "[Hint] 帧 %d: 可见稀疏点=%zu 没有可用 hint seed，跳过 hint 传播\n",
-                refIdx,
-                samples.size());
+        LOG_DEBUG(
+            "[MVS][帧 %d][稀疏引导] 可见点=%zu，无有效种子，跳过传播",
+            refIdx, samples.size());
         return cv::Mat();
     }
 
@@ -3356,10 +3361,10 @@ cv::Mat DepthMapGenerator::buildHintDepthFromProjectedSamples(
     }
 
     int hintCnt = cv::countNonZero(hint > 0);
-    fprintf(stderr,
-            "[Hint] 帧 %d: 可见稀疏点=%zu seedPixels=%d radius=%d hint覆盖=%d/%d (%.1f%%)\n",
-            refIdx, samples.size(), seedHintCnt, maxHintRadius,
-            hintCnt, W*H, 100.f*hintCnt/(W*H));
+    LOG_DEBUG(
+        "[MVS][帧 %d][稀疏引导] visible=%zu seeds=%d radius=%d coverage=%d/%d (%.1f%%)",
+        refIdx, samples.size(), seedHintCnt, maxHintRadius,
+        hintCnt, W * H, 100.0f * hintCnt / (W * H));
     return hint;
 }
 
@@ -3496,15 +3501,10 @@ cv::Mat DepthMapGenerator::buildSparseSupportMaskFromProjectedSamples(
         return cv::Mat();
     }
 
-    fprintf(stderr,
-            "[MVS] 帧 %d: 稀疏支撑掩码 seed=%d/%d radius=%d coverage=%d/%d (%.1f%%)\n",
-            refIdx,
-            seedPixels,
-            projectedSeeds,
-            radius,
-            supportPixels,
-            W * H,
-            coverage * 100.0f);
+    LOG_DEBUG(
+        "[MVS][帧 %d][稀疏支撑] seeds=%d/%d radius=%d coverage=%d/%d (%.1f%%)",
+        refIdx, seedPixels, projectedSeeds, radius, supportPixels, W * H,
+        coverage * 100.0f);
     return support;
 }
 
@@ -3592,11 +3592,10 @@ void DepthMapGenerator::applySparseSupportPrior(cv::Mat &depthMap,
         confidenceMap.size() != depthMap.size() ||
         confidenceMap.type() != CV_32F)
     {
-        fprintf(stderr,
-                "[MVS] 帧 %d: 稀疏支撑软约束 support外=%d/%d，置信图不可用，深度保持不变\n",
-                refIdx,
-                unsupportedValid,
-                beforeValid);
+        LOG_DEBUG("[MVS][帧 %d][稀疏支撑] support 外=%d/%d，置信图不可用，深度保持不变",
+                  refIdx,
+                  unsupportedValid,
+                  beforeValid);
         return;
     }
 
@@ -3614,12 +3613,11 @@ void DepthMapGenerator::applySparseSupportPrior(cv::Mat &depthMap,
         }
     }
 
-    fprintf(stderr,
-            "[MVS] 帧 %d: 稀疏支撑软约束 support外=%d/%d，置信度缩放 %.2f，深度保持不变\n",
-            refIdx,
-            unsupportedValid,
-            beforeValid,
-            kUnsupportedConfidenceScale);
+    LOG_DEBUG("[MVS][帧 %d][稀疏支撑] support 外=%d/%d，置信度缩放=%.2f，深度保持不变",
+              refIdx,
+              unsupportedValid,
+              beforeValid,
+              kUnsupportedConfidenceScale);
 }
 
 int DepthMapGenerator::removeLocalDepthOutliers(cv::Mat &depthMap,
@@ -3684,13 +3682,12 @@ int DepthMapGenerator::removeLocalDepthOutliers(cv::Mat &depthMap,
     const float removalRatio = static_cast<float>(candidateCount) / static_cast<float>(validBefore);
     if (removalRatio > maxRemovalRatio)
     {
-        fprintf(stderr,
-                "[MVS] 帧 %d: 局部深度离群过滤候选过多 %d/%d (%.1f%% > %.1f%%)，已跳过\n",
-                refIdx,
-                candidateCount,
-                validBefore,
-                removalRatio * 100.0f,
-                maxRemovalRatio * 100.0f);
+        LOG_DEBUG("[MVS][帧 %d][后处理] 局部离群候选过多 %d/%d (%.1f%% > %.1f%%)，跳过",
+                  refIdx,
+                  candidateCount,
+                  validBefore,
+                  removalRatio * 100.0f,
+                  maxRemovalRatio * 100.0f);
         return 0;
     }
 
@@ -3702,13 +3699,12 @@ int DepthMapGenerator::removeLocalDepthOutliers(cv::Mat &depthMap,
         confidenceMap.setTo(0.0f, outlierMask);
     }
 
-    fprintf(stderr,
-            "[MVS] 帧 %d: 局部深度离群过滤移除 %d/%d 像素 (kernel=%d rel=%.2f)\n",
-            refIdx,
-            candidateCount,
-            validBefore,
-            medianKernel,
-            relDepthThreshold);
+    LOG_DEBUG("[MVS][帧 %d][后处理] 局部离群移除=%d/%d kernel=%d relative_threshold=%.2f",
+              refIdx,
+              candidateCount,
+              validBefore,
+              medianKernel,
+              relDepthThreshold);
     return candidateCount;
 }
 
@@ -3768,13 +3764,12 @@ int DepthMapGenerator::removeSmallDepthComponents(cv::Mat &depthMap,
     const float removalRatio = static_cast<float>(candidateCount) / static_cast<float>(validBefore);
     if (removalRatio > maxRemovalRatio)
     {
-        fprintf(stderr,
-                "[MVS] 帧 %d: 小连通域 speckle 候选过多 %d/%d (%.1f%% > %.1f%%)，已跳过\n",
-                refIdx,
-                candidateCount,
-                validBefore,
-                removalRatio * 100.0f,
-                maxRemovalRatio * 100.0f);
+        LOG_DEBUG("[MVS][帧 %d][后处理] 小连通域候选过多 %d/%d (%.1f%% > %.1f%%)，跳过",
+                  refIdx,
+                  candidateCount,
+                  validBefore,
+                  removalRatio * 100.0f,
+                  maxRemovalRatio * 100.0f);
         return 0;
     }
 
@@ -3805,12 +3800,11 @@ int DepthMapGenerator::removeSmallDepthComponents(cv::Mat &depthMap,
         confidenceMap.setTo(0.0f, removeMask);
     }
 
-    fprintf(stderr,
-            "[MVS] 帧 %d: 小连通域 speckle 过滤移除 %d/%d 像素 (min_area=%d)\n",
-            refIdx,
-            candidateCount,
-            validBefore,
-            minComponentArea);
+    LOG_DEBUG("[MVS][帧 %d][后处理] 小连通域移除=%d/%d min_area=%d",
+              refIdx,
+              candidateCount,
+              validBefore,
+              minComponentArea);
     return candidateCount;
 }
 
@@ -3851,13 +3845,12 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
         cv::minMaxLoc(confidenceMap, &cMin, &cMax);
         const cv::Mat validMask = depthMap > 0.0f;
         const cv::Scalar cMean = cv::mean(confidenceMap, validMask);
-        fprintf(stderr,
-                "[MVS] 帧%d 置信度统计: min=%.4f max=%.4f mean=%.4f (thresh=%.4f)\n",
-                refIdx,
-                cMin,
-                cMax,
-                cMean[0],
-                confThresh);
+        LOG_DEBUG("[MVS][帧 %d][后处理] confidence min=%.4f max=%.4f mean=%.4f threshold=%.4f",
+                  refIdx,
+                  cMin,
+                  cMax,
+                  cMean[0],
+                  confThresh);
 
         if (viewCount > 2 && config.enableAdaptiveConfidenceFilter)
         {
@@ -3874,14 +3867,13 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
                     quality.recommendedFusionConfidence);
                 if (strictThreshold > confThresh)
                 {
-                    fprintf(stderr,
-                            "[MVS] 帧%d 低置信满幅深度图: coverage=%.3f mean_conf=%.3f, "
-                            "fusion confidence %.3f→%.3f\n",
-                            refIdx,
-                            quality.validCoverage,
-                            quality.meanConfidence,
-                            confThresh,
-                            strictThreshold);
+                    LOG_DEBUG("[MVS][帧 %d][后处理] 低置信满幅深度: coverage=%.3f mean_confidence=%.3f "
+                              "threshold=%.3f->%.3f",
+                              refIdx,
+                              quality.validCoverage,
+                              quality.meanConfidence,
+                              confThresh,
+                              strictThreshold);
                     confThresh = strictThreshold;
                     adaptiveConfidenceRaised = true;
                 }
@@ -3908,17 +3900,16 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
             }
 
             int validAfterConfidence = cv::countNonZero(depthMap > 0.0f);
-            fprintf(stderr,
-                    "[MVS] 帧%d 置信度过滤: %d→%d 有效像素 (thresh=%.4f)\n",
-                    refIdx,
-                    stats.validBeforePostprocess,
-                    validAfterConfidence,
-                    confThresh);
+            LOG_DEBUG("[MVS][帧 %d][后处理] 置信度过滤 %d->%d threshold=%.4f",
+                      refIdx,
+                      stats.validBeforePostprocess,
+                      validAfterConfidence,
+                      confThresh);
 
             if (!adaptiveConfidenceRaised &&
                 validAfterConfidence < stats.validBeforePostprocess / 20)
             {
-                fprintf(stderr, "[MVS] 帧%d 置信度过滤后像素太少，回退为不过滤\n", refIdx);
+                LOG_WARN("[MVS][帧 %d][后处理] 置信度过滤后像素过少，已回退为不过滤", refIdx);
                 depthMap = std::move(beforeConfidence);
                 validAfterConfidence = stats.validBeforePostprocess;
             }
@@ -3956,15 +3947,15 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
         || stats.localDepthOutlierRemoved > 0
         || stats.smallComponentRemoved > 0)
     {
-        fprintf(stderr,
-                "[MVS] 帧%d 深度后处理: before=%d after_conf=%d conf_removed=%d local_removed=%d speckle_removed=%d after=%d\n",
-                refIdx,
-                stats.validBeforePostprocess,
-                stats.validAfterConfidenceFilter,
-                stats.confidenceRemoved,
-                stats.localDepthOutlierRemoved,
-                stats.speckleRemoved,
-                stats.validAfterPostprocess);
+        LOG_DEBUG("[MVS][帧 %d][后处理] before=%d after_confidence=%d confidence_removed=%d "
+                  "local_removed=%d speckle_removed=%d after=%d",
+                  refIdx,
+                  stats.validBeforePostprocess,
+                  stats.validAfterConfidenceFilter,
+                  stats.confidenceRemoved,
+                  stats.localDepthOutlierRemoved,
+                  stats.speckleRemoved,
+                  stats.validAfterPostprocess);
     }
     return stats;
 }
@@ -4134,7 +4125,8 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
             }
             oss << sourceIndices[k];
         }
-        fprintf(stderr, "[MVS] 帧 %d: 共视评分选择源帧 [%s]\n", refIdx, oss.str().c_str());
+        LOG_DEBUG("[MVS][帧 %d][源视图] 共视评分选择 [%s]",
+                  refIdx, oss.str().c_str());
 
         if (_frameCachesReady &&
             refIdx >= 0 &&
@@ -4170,7 +4162,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
             }
             if (detailCount > 0)
             {
-                LOG_INFO(QStringLiteral("[MVS] 帧 %1 source 诊断: %2")
+                LOG_DEBUG(QStringLiteral("[MVS][帧 %1][源视图] 诊断: %2")
                              .arg(refIdx)
                              .arg(QString::fromStdString(details.str())));
             }
@@ -4185,9 +4177,8 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
         if (points.empty() && minSourceViews > 0)
         {
             points = visibleSparsePointIndicesForFrame(refIdx, {}, 0);
-            fprintf(stderr,
-                    "[MVS] 帧 %d: 共视可见稀疏点为空，回退到参考帧可见点 (%zu)\n",
-                    refIdx, points.size());
+            LOG_DEBUG("[MVS][帧 %d][稀疏引导] 共视点为空，回退参考帧可见点=%zu",
+                      refIdx, points.size());
         }
         return points;
     }();
@@ -4201,8 +4192,8 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
         // 导致可视化和 crossCheck 被海量噪声淹没。
         // 阈值 0.10 ≈ NCC > 0.1，可过滤纯随机噪声但保留弱匹配。
         pmCfg.confidenceThresh = 0.10f;
-        fprintf(stderr, "[MVS] 帧 %d: 单源视图模式，GPU confidenceThresh=0.10\n",
-                refIdx);
+        LOG_DEBUG("[MVS][帧 %d][配置] 单源视图模式，GPU confidence_threshold=0.10",
+                  refIdx);
     } else if ((int)srcGrays.size() <= 2) {
         // 2 源视图：适当降低阈值但不可过低，0.10 会保留大量低质量匹配→噪声
         pmCfg.confidenceThresh = std::min(pmCfg.confidenceThresh, 0.20f);
@@ -4217,13 +4208,12 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
     pmCfg.confidenceThresh = confidence_thresholds.patchMatch;
     result.effectivePatchMatchConfidenceThreshold = pmCfg.confidenceThresh;
 
-    // 诊断输出
+    // 详细相机诊断仅写入 Debug 日志，避免默认终端被逐帧矩阵信息淹没。
     const std::array<double, 9> refRotation = refCam.worldToCameraRotation();
     const std::array<double, 3> refCenter = refCam.cameraCenter();
-    fprintf(stderr, "\n[MVS] 帧 %d: 图像 %dx%d, 源帧 %d 个, det(R)=%.4f\n",
-            refIdx, W, H, (int)srcCams.size(), det3(refRotation.data()));
-    fprintf(stderr, "[MVS] 帧 %d: C=[%.3f, %.3f, %.3f]\n",
-            refIdx, refCenter[0], refCenter[1], refCenter[2]);
+    LOG_DEBUG("[MVS][帧 %d][配置] image=%dx%d sources=%d det_rotation=%.4f center=[%.3f,%.3f,%.3f]",
+              refIdx, W, H, static_cast<int>(srcCams.size()), det3(refRotation.data()),
+              refCenter[0], refCenter[1], refCenter[2]);
 
     // 深度范围
     stageStart = Clock::now();
@@ -4232,12 +4222,11 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
     if (depthRangeVisiblePoints.size() < 5 && minSourceViews > 0)
     {
         depthRangeVisiblePoints = visibleSparsePointIndicesForFrame(refIdx, {}, 0);
-        fprintf(stderr,
-                "[MVS] 帧 %d: 共视稀疏点不足，深度范围回退到参考帧可见点 (%zu)\n",
-                refIdx, depthRangeVisiblePoints.size());
+        LOG_DEBUG("[MVS][帧 %d][深度范围] 共视点不足，回退参考帧可见点=%zu",
+                  refIdx, depthRangeVisiblePoints.size());
     }
     estimateDepthRangeFromVisiblePoints(refIdx, depthRangeVisiblePoints, zNear, zFar);
-    fprintf(stderr, "[MVS] 帧 %d: zNear=%.4f  zFar=%.4f\n", refIdx, zNear, zFar);
+    LOG_DEBUG("[MVS][帧 %d][深度范围] near=%.4f far=%.4f", refIdx, zNear, zFar);
     timing.rangeMs = elapsedMs(stageStart, Clock::now());
     if (cancelled("深度范围估计后"))
     {
@@ -4366,13 +4355,13 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
                                     cv::BORDER_CONSTANT,
                                     cv::Scalar(0));
             }
-            fprintf(stderr, "[MVS] 帧 %d: 极线校正成功 (ref=%s)\n",
-                    refIdx, refIsCanonicalLeft ? "left" : "right");
+            LOG_DEBUG("[MVS][帧 %d][极线校正] 成功 reference=%s",
+                      refIdx, refIsCanonicalLeft ? "left" : "right");
         }
         else
         {
-            fprintf(stderr, "[MVS] 帧 %d: 极线校正失败(%s)，使用原始图像\n",
-                    refIdx, rectErr.c_str());
+            LOG_WARN("[MVS][帧 %d][极线校正] 失败，使用原始图像: %s",
+                     refIdx, rectErr.c_str());
         }
     }
     timing.rectifyMs = elapsedMs(stageStart, Clock::now());
@@ -4512,24 +4501,23 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
     result.intermediatePyramidLevels = std::move(pyramid_result.intermediateLevels);
     for (const DepthLevelSummary &summary : result.pyramidLevels)
     {
-        fprintf(stderr,
-                "[MVS] 帧 %d: Level %d ds=%d valid=%d coverage=%.1f%% confidence=%.3f elapsed=%.1f ms%s\n",
-                refIdx,
-                summary.level,
-                summary.downsampleFactor,
-                summary.validPixelCount,
-                summary.validCoverage * 100.0f,
-                summary.meanConfidence,
-                summary.elapsedMs,
-                summary.success ? "" : " failed");
+        LOG_DEBUG("[MVS][帧 %d][金字塔] level=%d ds=%d valid=%d coverage=%.1f%% "
+                  "confidence=%.3f elapsed=%.1f ms status=%s",
+                  refIdx,
+                  summary.level,
+                  summary.downsampleFactor,
+                  summary.validPixelCount,
+                  summary.validCoverage * 100.0f,
+                  summary.meanConfidence,
+                  summary.elapsedMs,
+                  summary.success ? "ok" : "failed");
     }
     if (!pyramid_result.errorMessage.empty())
     {
-        fprintf(stderr,
-                "[MVS] 帧 %d: 三级估计降级使用 Level %d (%s)\n",
-                refIdx,
-                pyramid_result.finalLevel.level,
-                pyramid_result.errorMessage.c_str());
+        LOG_WARN("[MVS][帧 %d][金字塔] 降级使用 level=%d: %s",
+                 refIdx,
+                 pyramid_result.finalLevel.level,
+                 pyramid_result.errorMessage.c_str());
     }
 
     // ── 极线校正反变换：将校正空间的深度图映射回原始图像空间 ──────────────
@@ -4548,7 +4536,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
         // Rectified normals are expressed in the rectified camera frame. Re-estimate them from
         // fused depth later instead of attaching vectors in the wrong coordinate frame.
         normalMap.release();
-        fprintf(stderr, "[MVS] 帧 %d: 深度图已从校正空间映射回原始空间\n", refIdx);
+        LOG_DEBUG("[MVS][帧 %d][极线校正] 深度图已映射回原始空间", refIdx);
     }
     result.depthCompleteness.pyramidValidCount = cv::countNonZero(depthMap > 0.0f);
     timing.patchmatchMs = elapsedMs(stageStart, Clock::now());
@@ -4569,7 +4557,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
         }
         else if (hasPreloadedMaskSlot)
         {
-            fprintf(stderr, "[MVS] 帧 %d: 内容掩码已自动跳过\n", refIdx);
+            LOG_DEBUG("[MVS][帧 %d][掩码] 内容掩码已自动跳过", refIdx);
         }
         else
         {
@@ -4580,19 +4568,18 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
                 refImg, &coverage, &otsuThresh, &adaptiveThresh);
             if (effectiveReferenceMask.empty())
             {
-                fprintf(stderr,
-                        "[MVS] 帧 %d: 内容掩码覆盖 %.1f%%，自动跳过内容掩码过滤\n",
-                        refIdx,
-                        coverage * 100.0f);
+                LOG_DEBUG("[MVS][帧 %d][掩码] 覆盖=%.1f%%，自动跳过内容掩码过滤",
+                          refIdx,
+                          coverage * 100.0f);
             }
             else
             {
-                fprintf(stderr,
-                        "[MVS] 帧 %d: 警告 - 内容掩码不可用，现场生成 (覆盖 %.1f%%, Otsu=%.0f adaptiveThresh=%d)\n",
-                        refIdx,
-                        coverage * 100.0f,
-                        otsuThresh,
-                        adaptiveThresh);
+                LOG_WARN("[MVS][帧 %d][掩码] 预加载掩码不可用，现场生成: coverage=%.1f%% otsu=%.0f "
+                         "adaptive_threshold=%d",
+                         refIdx,
+                         coverage * 100.0f,
+                         otsuThresh,
+                         adaptiveThresh);
             }
         }
 
@@ -4623,8 +4610,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
 
             if (afterMask < beforeMask)
             {
-                fprintf(stderr, "[MVS] 帧 %d: 有效区域过滤 %d→%d 有效像素\n",
-                        refIdx, beforeMask, afterMask);
+                LOG_DEBUG("[MVS][帧 %d][掩码] 有效区域过滤 %d->%d", refIdx, beforeMask, afterMask);
             }
         }
     }
@@ -4664,10 +4650,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
             refIdx);
         if (previewOutliers > 0)
         {
-            fprintf(stderr,
-                    "[MVS] 帧 %d: 输出前局部深度突刺过滤移除 %d 像素\n",
-                    refIdx,
-                    previewOutliers);
+            LOG_DEBUG("[MVS][帧 %d][后处理] 输出前局部突刺移除=%d", refIdx, previewOutliers);
         }
         result.depthCompleteness.outputFilterRemovedCount = previewOutliers;
     }
@@ -4751,7 +4734,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
         }
         return values.join(QStringLiteral(","));
     }();
-    LOG_INFO(QStringLiteral(
+    LOG_DEBUG(QStringLiteral(
                  "[MVS] 帧 %1 质量门: acceptance=%2 coverage=%3 largest_component=%4 "
                  "boundary=%5 confidence=%6 reasons=%7")
                  .arg(refIdx)
@@ -4763,13 +4746,9 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
                  .arg(result.qualityMetrics.meanConfidence, 0, 'f', 3)
                  .arg(quality_reasons));
 
-    // 统计
-    int validCnt = cv::countNonZero(depthMap > 0);
-    fprintf(stderr, "[MVS] 帧 %d: PatchMatch 完成, 有效深度像素=%d/%d (%.1f%%)\n",
-            refIdx, validCnt, W*H, 100.f * validCnt / (W*H));
     timing.filterMs = elapsedMs(stageStart, Clock::now());
     timing.totalMs = elapsedMs(totalStart, Clock::now());
-    LOG_INFO(QStringLiteral("[MVS] 帧 %1 耗时统计: source=%2 ms range=%3 ms hint=%4 ms rectify=%5 ms patchmatch=%6 ms filter=%7 ms total=%8 ms")
+    LOG_DEBUG(QStringLiteral("[MVS] 帧 %1 耗时统计: source=%2 ms range=%3 ms hint=%4 ms rectify=%5 ms patchmatch=%6 ms filter=%7 ms total=%8 ms")
                  .arg(refIdx)
                  .arg(timing.sourceMs, 0, 'f', 1)
                  .arg(timing.rangeMs, 0, 'f', 1)
@@ -5199,22 +5178,22 @@ void DepthMapGenerator::crossCheckDepthConsistency()
         _depthFrames[i].depthCompleteness.restoredFromPrefilterCount += restored_count;
         int afterValid = cv::countNonZero(depthI > 0);
         float keepRate = beforeValid > 0 ? 100.f * afterValid / beforeValid : 0.f;
-        fprintf(stderr, "[MVS] 帧%d 一致性检查(%s, 检查/修复源 %zu/%zu, 最少确认 %d, 跨视补回 %llu, 锚定插值 %llu, 两源生长 %llu/%llu): %d→%d 有效像素 (保留 %.1f%%)\n",
-                i, fewViews ? "仅移除矛盾" : "需要确认",
-                consistencySources.size(), repairSources.size(),
-                minimum_source_confirmations,
-                static_cast<unsigned long long>(repair_stats.repairedPixelCount),
-                static_cast<unsigned long long>(
-                    repair_stats.anchoredInterpolation.interpolatedPixelCount),
-                static_cast<unsigned long long>(repair_stats.twoSourceGrownPixelCount),
-                static_cast<unsigned long long>(repair_stats.twoSourceCandidatePixelCount),
-                beforeValid, afterValid, keepRate);
+        LOG_DEBUG("[MVS][帧 %d][一致性] mode=%s sources=%zu/%zu confirmations=%d "
+                  "cross_view=%llu anchored=%llu two_source=%llu/%llu valid=%d->%d retention=%.1f%%",
+                  i, fewViews ? "conflict_only" : "confirmed",
+                  consistencySources.size(), repairSources.size(),
+                  minimum_source_confirmations,
+                  static_cast<unsigned long long>(repair_stats.repairedPixelCount),
+                  static_cast<unsigned long long>(
+                      repair_stats.anchoredInterpolation.interpolatedPixelCount),
+                  static_cast<unsigned long long>(repair_stats.twoSourceGrownPixelCount),
+                  static_cast<unsigned long long>(repair_stats.twoSourceCandidatePixelCount),
+                  beforeValid, afterValid, keepRate);
 
         // 安全回退：如果保留率过低（< 10%），回退使用原始深度图
         if (afterValid < beforeValid / 10 && beforeValid > 100) 
         {
-            fprintf(stderr, "[MVS] 帧%d 一致性过滤后像素太少 (%.1f%%)，回退为原始深度图\n",
-                    i, keepRate);
+            LOG_WARN("[MVS][帧 %d][一致性] 保留率过低 %.1f%%，回退原始深度图", i, keepRate);
             depthBackup.copyTo(depthI);
             afterValid = beforeValid;
         }
@@ -5718,12 +5697,10 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             static_cast<int>(final_repair.interpolatedPixelCount);
         if (final_repair.interpolatedPixelCount > 0)
         {
-            fprintf(
-                stderr,
-                "[MVS] 帧%d 最终后处理后锚定修复 %llu 像素 (%llu 个内部连通域)\n",
-                frame_index,
-                static_cast<unsigned long long>(final_repair.interpolatedPixelCount),
-                static_cast<unsigned long long>(final_repair.acceptedComponentCount));
+            LOG_DEBUG("[MVS][帧 %d][后处理] 锚定修复 pixels=%llu components=%llu",
+                      frame_index,
+                      static_cast<unsigned long long>(final_repair.interpolatedPixelCount),
+                      static_cast<unsigned long long>(final_repair.acceptedComponentCount));
         }
         updateDepthCompletenessAfterPostprocess(
             _depthFrames[frame_index],
@@ -5900,7 +5877,7 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
         emit progressChanged(
             QStringLiteral("多视一致性：已处理 %1/%2").arg(completed_frames).arg(view_count),
             ratio);
-        LOG_INFO(QStringLiteral(
+        LOG_DEBUG(QStringLiteral(
                      "[MVS] 流式一致性 frame=%1 valid=%2->%3 sources=%4 "
                      "twoSource=%5/%6 cache=%7/%8 MiB")
                      .arg(frame_index)
@@ -6159,7 +6136,7 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
 
         previewMs = elapsedMs(previewStart, Clock::now());
         previewSaved = true;
-        LOG_INFO(QStringLiteral("[MVS] 帧 %1 %2深度预览已保存: %3 (%4x%5)")
+        LOG_DEBUG(QStringLiteral("[MVS] 帧 %1 %2深度预览已保存: %3 (%4x%5)")
                      .arg(frameIndex)
                      .arg(stageLabel)
                      .arg(QString::fromStdString(pngPath))
@@ -6474,7 +6451,7 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         }
     }
 
-    LOG_INFO(QStringLiteral("[MVS] 保存%1深度产物耗时: frame=%2 preview=%3 ms raw=%4 ms confidence=%5 ms mask=%6 ms total=%7 ms")
+    LOG_DEBUG(QStringLiteral("[MVS] 保存%1深度产物耗时: frame=%2 preview=%3 ms raw=%4 ms confidence=%5 ms mask=%6 ms total=%7 ms")
                  .arg(stageLabel)
                  .arg(frameIndex)
                  .arg(previewMs, 0, 'f', 1)
@@ -7099,6 +7076,7 @@ void DepthMapGenerator::runDepthPoseRefinementCandidateStage(
 // =============================================================================
 void DepthMapGenerator::runInBackground()
 {
+    const auto runStart = Clock::now();
     bool allOk = true;
     const int NV = static_cast<int>(_views.size());
 
@@ -7366,7 +7344,7 @@ void DepthMapGenerator::runInBackground()
     }
     if (cudaAvailable)
     {
-        LOG_INFO(QStringLiteral("[MVS] CUDA 已启用，GPU 帧并发=%1；每帧内部使用 CUDA kernel，显存不足时可降低 gpu_frame_workers")
+        LOG_DEBUG(QStringLiteral("[MVS] CUDA 已启用，GPU 帧并发=%1；每帧内部使用 CUDA kernel，显存不足时可降低 gpu_frame_workers")
                      .arg(gpuFrameWorkers));
     }
 
@@ -7489,7 +7467,9 @@ void DepthMapGenerator::runInBackground()
             emitDepthProgress(workerTag, i, true);
 
             const auto frameStart = std::chrono::steady_clock::now();
-            LOG_INFO(QStringLiteral("[MVS] 帧 %1 开始深度估计: device=%2")
+            LOG_DEBUG(QStringLiteral("[MVS][深度估计] 帧 %1/%2 开始: id=%3 device=%4")
+                         .arg(i + 1)
+                         .arg(NV)
                          .arg(i)
                          .arg(useGpu ? QStringLiteral("GPU") : QStringLiteral("CPU")));
             markManifestFrameRunning(i);
@@ -7527,7 +7507,9 @@ void DepthMapGenerator::runInBackground()
 
             if (!res.success)
             {
-                LOG_WARN(QStringLiteral("[MVS] 帧 %1 深度估计失败: device=%2 elapsed=%3 ms error=%4")
+                LOG_WARN(QStringLiteral("[MVS][深度估计] 帧 %1/%2 失败: id=%3 device=%4 elapsed=%5 ms error=%6")
+                             .arg(i + 1)
+                             .arg(NV)
                              .arg(i)
                              .arg(useGpu ? QStringLiteral("GPU") : QStringLiteral("CPU"))
                              .arg(elapsedMs, 0, 'f', 1)
@@ -7539,12 +7521,20 @@ void DepthMapGenerator::runInBackground()
             {
                 const int depthWidth = (res.depthMap && !res.depthMap->empty()) ? res.depthMap->cols : 0;
                 const int depthHeight = (res.depthMap && !res.depthMap->empty()) ? res.depthMap->rows : 0;
-                LOG_INFO(QStringLiteral("[MVS] 帧 %1 深度估计完成: device=%2 elapsed=%3 ms size=%4x%5")
+                LOG_INFO(QStringLiteral(
+                             "[MVS][深度估计] 帧 %1/%2 完成: id=%3 device=%4 size=%5x%6 "
+                             "coverage=%7 confidence=%8 acceptance=%9 elapsed=%10 ms")
+                             .arg(i + 1)
+                             .arg(NV)
                              .arg(i)
                              .arg(useGpu ? QStringLiteral("GPU") : QStringLiteral("CPU"))
-                             .arg(elapsedMs, 0, 'f', 1)
                              .arg(depthWidth)
-                             .arg(depthHeight));
+                             .arg(depthHeight)
+                             .arg(res.qualityMetrics.validCoverage, 0, 'f', 3)
+                             .arg(res.qualityMetrics.meanConfidence, 0, 'f', 3)
+                             .arg(QString::fromLatin1(depthFrameAcceptanceId(
+                                 res.qualityDecision.acceptance)))
+                             .arg(elapsedMs, 0, 'f', 1));
                 saveQueue.enqueue(i, res, QStringLiteral("初始"));
 
                 if (keepDepthFramesInMemory.load() &&
@@ -7746,6 +7736,49 @@ void DepthMapGenerator::runInBackground()
     saveQueue.stop();
 
     allOk = !anyFailure.load();
+    int successfulFrames = 0;
+    int failedFrames = 0;
+    int fusionEligibleFrames = 0;
+    double coverageSum = 0.0;
+    int coverageCount = 0;
+    for (int frameIndex = 0; frameIndex < NV; ++frameIndex)
+    {
+        const bool skipped = frameIndex < static_cast<int>(_skipFrameMask.size()) &&
+                             _skipFrameMask[static_cast<size_t>(frameIndex)] != 0;
+        if (skipped)
+        {
+            continue;
+        }
+
+        const DepthFrameResult &frame = _depthFrames[static_cast<size_t>(frameIndex)];
+        if (frame.success)
+        {
+            ++successfulFrames;
+            coverageSum += frame.qualityMetrics.validCoverage;
+            ++coverageCount;
+            if (frame.eligibleForFusion())
+            {
+                ++fusionEligibleFrames;
+            }
+        }
+        else
+        {
+            ++failedFrames;
+        }
+    }
+    LOG_INFO(QStringLiteral(
+                 "[MVS][深度估计] 批次完成: success=%1 failed=%2 skipped=%3 fusion_eligible=%4/%5 "
+                 "mean_coverage=%6 elapsed=%7 ms")
+                 .arg(successfulFrames)
+                 .arg(failedFrames)
+                 .arg(skippedFrames)
+                 .arg(fusionEligibleFrames)
+                 .arg(successfulFrames)
+                 .arg(coverageCount > 0 ? coverageSum / static_cast<double>(coverageCount) : 0.0,
+                      0,
+                      'f',
+                      3)
+                 .arg(elapsedMs(runStart, Clock::now()), 0, 'f', 1));
 
     if (_config.runFusion && !keepDepthFramesInMemory.load())
     {
@@ -7804,7 +7837,7 @@ void DepthMapGenerator::runInBackground()
         frame.sourceImageIndices = std::move(remappedSources);
     }
 
-    fprintf(stderr, "[MVS] COLMAP BFS 融合: %d 帧参与\n", (int)frames.size());
+    LOG_INFO("[MVS][深度融合] 开始: frames=%d", static_cast<int>(frames.size()));
 
     // 使用新的 StereoFusionConfig
     StereoFusionConfig fusionCfg;
@@ -7826,7 +7859,7 @@ void DepthMapGenerator::runInBackground()
         fusionCfg.minSupportViews = 1;
         fusionCfg.maxDepthError  = std::max(fusionCfg.maxDepthError, 0.08f); // 放宽至 8%
         fusionCfg.maxReprojError = std::max(fusionCfg.maxReprojError, 3.0f); // 3 像素重投影误差
-        fprintf(stderr, "[MVS] 少视图模式 (%d 帧)，minNumPixels=1, 放宽融合阈值\n", NV);
+        LOG_WARN("[MVS][深度融合] 少视图模式: frames=%d min_pixels=1，已放宽融合阈值", NV);
     }
 
     // 如果有稀疏云 AABB，设置包围盒过滤离群点
@@ -7856,18 +7889,19 @@ void DepthMapGenerator::runInBackground()
                 fusionCfg.bboxMin[k] = _sparse.minPt[k] - range * pad;
                 fusionCfg.bboxMax[k] = _sparse.maxPt[k] + range * pad;
             }
-            fprintf(stderr, "[MVS] 包围盒: [%.2f,%.2f,%.2f] ~ [%.2f,%.2f,%.2f]\n",
-                    fusionCfg.bboxMin[0], fusionCfg.bboxMin[1], fusionCfg.bboxMin[2],
-                    fusionCfg.bboxMax[0], fusionCfg.bboxMax[1], fusionCfg.bboxMax[2]);
+            LOG_DEBUG("[MVS][深度融合] bbox=[%.2f,%.2f,%.2f]-[%.2f,%.2f,%.2f]",
+                      fusionCfg.bboxMin[0], fusionCfg.bboxMin[1], fusionCfg.bboxMin[2],
+                      fusionCfg.bboxMax[0], fusionCfg.bboxMax[1], fusionCfg.bboxMax[2]);
         }
         else
         {
-            fprintf(stderr, "[MVS] 稀疏云与相机坐标系不匹配 (cloudExtent=%.1f camExtent=%.1f ratio=%.1f)"
-                            "，禁用包围盒过滤\n", cloudExtent, camExtent, scaleRatio);
+            LOG_WARN("[MVS][深度融合] 稀疏云与相机坐标系不匹配: cloud_extent=%.1f "
+                     "camera_extent=%.1f ratio=%.1f，禁用包围盒",
+                     cloudExtent, camExtent, scaleRatio);
             // 坐标系不兼容时深度初始化无先验，放宽一致性阈值至 10%
             fusionCfg.maxDepthError = std::max(fusionCfg.maxDepthError, 0.10f);
-            fprintf(stderr, "[MVS] 坐标系不兼容，自动放宽 maxDepthError → %.2f\n",
-                    fusionCfg.maxDepthError);
+            LOG_WARN("[MVS][深度融合] 坐标系不兼容，max_depth_error 放宽至 %.2f",
+                     fusionCfg.maxDepthError);
         }
     }
 
@@ -7886,7 +7920,7 @@ void DepthMapGenerator::runInBackground()
 
     if (!fuseOk)
     {
-        fprintf(stderr, "[MVS] 融合失败: %s\n", fuseErr.c_str());
+        LOG_ERROR("[MVS][深度融合] 失败: %s", fuseErr.c_str());
         emit errorOccurred(QString::fromStdString(fuseErr));
         emit finished(false);
         return;
@@ -7907,15 +7941,12 @@ void DepthMapGenerator::runInBackground()
         _filteredDepths = fusion.filteredDepths();
     }
 
-    fprintf(stderr, "[MVS] 融合完成: %d 个稠密点\n", (int)cloud.size());
+    LOG_INFO("[MVS][深度融合] 完成: points=%d", static_cast<int>(cloud.size()));
 
     if (cloud.empty())
     {
-        fprintf(stderr, "[MVS] 警告: 融合产出 0 个点，可能原因：\n"
-                        "  - 深度图质量不足（过少有效像素）\n"
-                        "  - 视图数量太少（当前 %d 帧，建议 >=3）\n"
-                        "  - 深度一致性阈值过严\n",
-                NV);
+        LOG_WARN("[MVS][深度融合] 产出 0 个点: frames=%d；可能是有效深度不足、视图过少或一致性阈值过严",
+                 NV);
         emit errorOccurred(QStringLiteral("深度图融合产出 0 个点，请尝试增加影像数量或降低融合阈值"));
     }
 
@@ -7941,7 +7972,7 @@ void DepthMapGenerator::runInBackground()
                 std::vector<DensePoint> filtered = filterOp(cloud);
                 if (filtered.empty())
                 {
-                    fprintf(stderr, "[MVS] %s 结果为空，跳过该阶段以保护点云\n", stageName);
+                    LOG_WARN("[MVS][点云过滤] %s 结果为空，跳过该阶段以保护点云", stageName);
                     return;
                 }
 
@@ -7952,13 +7983,13 @@ void DepthMapGenerator::runInBackground()
 
                 if (stageRemovedRatio > maxStageRemovalRatio || overallRetentionRatio < minOverallRetentionRatio)
                 {
-                    fprintf(stderr,
-                            "[MVS] %s 触发过滤护栏: stageRemoved=%.1f%%(上限%.1f%%), overallRetention=%.1f%%(下限%.1f%%)，保留上一阶段结果\n",
-                            stageName,
-                            stageRemovedRatio * 100.0f,
-                            maxStageRemovalRatio * 100.0f,
-                            overallRetentionRatio * 100.0f,
-                            minOverallRetentionRatio * 100.0f);
+                    LOG_WARN("[MVS][点云过滤] %s 触发护栏: removed=%.1f%% limit=%.1f%% "
+                             "overall_retention=%.1f%% minimum=%.1f%%，保留上一阶段结果",
+                             stageName,
+                             stageRemovedRatio * 100.0f,
+                             maxStageRemovalRatio * 100.0f,
+                             overallRetentionRatio * 100.0f,
+                             minOverallRetentionRatio * 100.0f);
                     return;
                 }
 
@@ -7998,15 +8029,13 @@ void DepthMapGenerator::runInBackground()
                 });
             }
 
-            fprintf(stderr, "[MVS] 过滤后剩余: %d 个稠密点\n", (int)cloud.size());
+            LOG_INFO("[MVS][点云过滤] 完成: points=%d", static_cast<int>(cloud.size()));
         }
         else
         {
-            fprintf(stderr,
-                    "[MVS] 跳过内联稠密点云过滤: points=%zu limit=%zu，保留完整融合点云；"
-                    "如需清理请运行稠密点云后处理/精炼\n",
-                    initialCount,
-                    kMaxInlineDenseFilterPoints);
+            LOG_INFO("[MVS][点云过滤] 跳过内联过滤: points=%zu limit=%zu；保留完整融合点云",
+                     initialCount,
+                     kMaxInlineDenseFilterPoints);
         }
     }
 

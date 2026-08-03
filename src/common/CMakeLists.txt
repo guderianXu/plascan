@@ -116,6 +116,7 @@ target_link_libraries(plascan_common_project PUBLIC
 set_target_properties(plascan_common_project PROPERTIES AUTOMOC ON)
 
 if(BUILD_TESTS)
+  add_subdirectory(log/test)
   add_subdirectory(io/test)
   add_subdirectory(string_utils/test)
   add_subdirectory(project/test)
