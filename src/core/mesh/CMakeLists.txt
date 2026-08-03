@@ -9,6 +9,7 @@ add_library(meshing STATIC
     DepthMapMeshBuilder.cpp
     DepthFusionFramePolicy.cpp
     DepthMeshCompleteness.cpp
+    TriangleDistanceIndex.cpp
     DepthRayMetric.cpp
     DepthTsdfSurfaceBuilder.cpp
     DepthTsdfNarrowBandActivation.cpp

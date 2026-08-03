@@ -3959,6 +3959,37 @@ TEST(DepthMeshCompletenessTest, RejectsAClosedLookingMeshThatExplainsOnlyHalfThe
     EXPECT_LT(partial.medianFrameRecall, 0.65);
 }
 
+TEST(DepthMeshCompletenessTest,
+     UsesTriangleSurfacesInsteadOfOnlyVerticesAndFaceCenters)
+{
+    const QVector<xjw::mesh::DepthTsdfFrame> frames =
+        makeSyntheticPlaneFrames(false);
+    xjw::mesh::TriMesh mesh;
+    mesh.vertices = {
+        {-2.0f, -2.0f, 2.0f},
+        {2.0f, -2.0f, 2.0f},
+        {2.0f, 2.0f, 2.0f},
+        {-2.0f, 2.0f, 2.0f}
+    };
+    mesh.faces = {
+        {{0, 1, 2}},
+        {{0, 2, 3}}
+    };
+
+    xjw::mesh::DepthMeshCompletenessOptions options;
+    options.tolerance = 0.02;
+    options.maximumDepthSamplesPerFrame = 4000;
+    options.minimumP10FrameRecall = 0.95;
+    options.minimumMedianFrameRecall = 0.95;
+
+    const auto completeness = xjw::mesh::DepthMeshCompleteness::evaluate(
+        mesh, frames, options);
+
+    ASSERT_TRUE(completeness.available);
+    EXPECT_TRUE(completeness.gatePassed);
+    EXPECT_GT(completeness.minimumFrameRecall, 0.98);
+}
+
 TEST(DepthTsdfSurfaceBuilderTest, RobustFrameRejectionRemovesBoundedLowTail)
 {
     QVector<xjw::mesh::DepthTsdfFrame> frames =
@@ -6285,6 +6316,7 @@ TEST(MeshWorkflowServiceTest, SharedModelEntryMapsSettingsAndBuildsPointCloudSou
     request.settings[QStringLiteral("smoothIter")] = 0;
     request.settings[QStringLiteral("depthFiltering")] = QStringLiteral("disabled");
     request.settings[QStringLiteral("qualityProfile")] = QStringLiteral("detail");
+    request.settings[QStringLiteral("export_format")] = QStringLiteral("OBJ");
 
     const auto result = xjw::mesh::workflow::buildModel(request);
 
@@ -6294,6 +6326,9 @@ TEST(MeshWorkflowServiceTest, SharedModelEntryMapsSettingsAndBuildsPointCloudSou
     EXPECT_EQ(result.payload.value(QStringLiteral("source_point_cloud_path")).toString(),
               request.sourcePointCloudPath);
     EXPECT_TRUE(fs::exists(result.payload.value(QStringLiteral("mesh_ply")).toString().toStdString()));
+    EXPECT_EQ(result.payload.value(QStringLiteral("final_model_format")).toString(),
+              QStringLiteral("PLY"));
+    EXPECT_TRUE(result.payload.value(QStringLiteral("model_obj")).toString().isEmpty());
 }
 
 TEST(MeshWorkflowSettingsTest, HeightFieldSourceDisablesPoissonAndMapsFiltering)
@@ -7034,6 +7069,7 @@ TEST(MeshWorkflowSettingsTest,
     EXPECT_TRUE(options.enableSurfaceEvidenceFreeSpaceVeto);
     EXPECT_TRUE(options.enableDepthCompletenessDiagnostics);
     EXPECT_TRUE(options.enforceDepthCompletenessGate);
+    EXPECT_FLOAT_EQ(options.depthCompletenessToleranceVoxels, 7.5f);
     EXPECT_TRUE(options.enableVisibilityOccupancyCompletion);
     EXPECT_EQ(options.visibilityOccupancyResolution, 72);
     EXPECT_FALSE(options.visibilityOccupancyCellBoundaryExtraction);

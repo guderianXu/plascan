@@ -4,7 +4,6 @@
 
 #include <QVector>
 
-#include <cstddef>
 #include <cstdint>
 
 namespace xjw::mesh
@@ -35,7 +34,6 @@ struct DepthMeshCompletenessStatistics
 
 struct DepthMeshCompletenessOptions
 {
-    std::size_t maximumMeshSampleCount = 400000;
     int maximumDepthSamplesPerFrame = 6000;
     double tolerance = 0.0;
     double minimumP10FrameRecall = 0.40;

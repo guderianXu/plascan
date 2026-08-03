@@ -97,7 +97,6 @@ xjw::mesh::ReconstructionConfig reconstructionConfigForDenseScene(int requestedR
 int holeFillPassesFromArea(double maxHoleArea);
 xjw::mesh::TextureMappingConfig defaultTextureConfig();
 xjw::mesh::TextureMappingConfig textureConfigFromSettings(const QJsonObject &settings);
-bool exportObjRequested(const QJsonObject &settings);
 PointCloudQualityReport evaluatePointCloudQuality(const QString &pointCloudPath,
                                                   qint64 recommendedMinimum = 200);
 

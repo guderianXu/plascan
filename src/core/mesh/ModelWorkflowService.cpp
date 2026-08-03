@@ -2,6 +2,7 @@
 
 #include "DepthMapMeshBuilder.h"
 #include "DepthConstrainedSurfaceRefiner.h"
+#include "DepthMeshCompleteness.h"
 #include "DepthTsdfSurfaceBuilder.h"
 #include "Mc33IsoSurfaceExtractor.h"
 #include "MeshColorizer.h"
@@ -44,6 +45,17 @@ struct RefinementQualityGuardResult
     double areaAfter = 0.0;
     double normalVariationBefore = 0.0;
     double normalVariationAfter = 0.0;
+};
+
+struct FinalSurfaceDenoisingResult
+{
+    bool attempted = false;
+    bool accepted = false;
+    int movedVertexCount = 0;
+    double areaBefore = 0.0;
+    double areaAfter = 0.0;
+    MeshTopologyQualityStatistics qualityBefore;
+    MeshTopologyQualityStatistics qualityAfter;
 };
 
 bool hasSameFaceIndexBuffer(const TriMesh &first, const TriMesh &second)
@@ -2302,6 +2314,15 @@ void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
     {
         options->enforceDepthCompletenessGate = true;
     }
+    if (!settings.contains(QStringLiteral(
+            "tsdfDepthCompletenessToleranceVoxels")))
+    {
+        // Orbital MVS depth is fused across a complete viewing ring and then
+        // simplified/denoised.  Judge observation support within one TSDF
+        // truncation band instead of the generic four-voxel tolerance.
+        options->depthCompletenessToleranceVoxels = std::max(
+            6.0f, options->truncationVoxels);
+    }
     if (!settings.contains(QStringLiteral("tsdfVisibilityOccupancyCompletion")))
     {
         options->enableVisibilityOccupancyCompletion = true;
@@ -2617,11 +2638,201 @@ void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
     }
 }
 
+FinalSurfaceDenoisingResult applyTopologyGuardedFinalSurfaceDenoising(
+    TriMesh *mesh,
+    int iterations,
+    float lambda,
+    float mu,
+    float maximumDisplacement,
+    float featureAngleDegrees,
+    int boundaryProtectionRings)
+{
+    FinalSurfaceDenoisingResult result;
+    if (mesh == nullptr || mesh->empty() || iterations <= 0 ||
+        lambda <= 0.0f || maximumDisplacement <= 0.0f)
+    {
+        return result;
+    }
+
+    result.attempted = true;
+    result.areaBefore = meshSurfaceArea(*mesh);
+    result.qualityBefore = evaluateMeshTopologyQuality(*mesh);
+    const MeshTopologySignature topology_before =
+        meshTopologySignature(result.qualityBefore);
+
+    TriMesh candidate = *mesh;
+    result.movedVertexCount =
+        detail::smoothSurfaceVerticesTaubinProtected(
+            &candidate,
+            iterations,
+            lambda,
+            mu,
+            maximumDisplacement,
+            featureAngleDegrees,
+            boundaryProtectionRings);
+    detail::recomputeNormals(&candidate);
+    result.areaAfter = meshSurfaceArea(candidate);
+    result.qualityAfter = evaluateMeshTopologyQuality(candidate);
+    const MeshTopologySignature topology_after =
+        meshTopologySignature(result.qualityAfter);
+
+    const double area_ratio = result.areaBefore > 1.0e-12
+        ? result.areaAfter / result.areaBefore
+        : 0.0;
+    const bool geometry_preserved =
+        result.movedVertexCount > 0 &&
+        candidate.vertexCount() == mesh->vertexCount() &&
+        candidate.faceCount() == mesh->faceCount() &&
+        hasSameFaceIndexBuffer(*mesh, candidate) &&
+        topology_after == topology_before &&
+        result.qualityAfter.validFaceCount ==
+            result.qualityBefore.validFaceCount &&
+        area_ratio >= 0.96 && area_ratio <= 1.01 &&
+        result.qualityAfter.highAspectFaceRatio <=
+            result.qualityBefore.highAspectFaceRatio + 1.0e-6 &&
+        result.qualityAfter.extremeAspectFaceRatio <=
+            result.qualityBefore.extremeAspectFaceRatio + 1.0e-6;
+    const bool normal_quality_not_worse =
+        result.qualityAfter.adjacentNormalAngleP90Degrees <=
+            result.qualityBefore.adjacentNormalAngleP90Degrees + 1.0e-6 &&
+        result.qualityAfter.adjacentNormalAngleOver30Ratio <=
+            result.qualityBefore.adjacentNormalAngleOver30Ratio + 1.0e-6;
+    const bool normal_quality_improved =
+        result.qualityAfter.adjacentNormalAngleP90Degrees <=
+            result.qualityBefore.adjacentNormalAngleP90Degrees - 0.25 ||
+        result.qualityAfter.adjacentNormalAngleOver30Ratio <=
+            result.qualityBefore.adjacentNormalAngleOver30Ratio - 0.001 ||
+        result.qualityAfter.adjacentNormalAngleMedianDegrees <=
+            result.qualityBefore.adjacentNormalAngleMedianDegrees - 0.10;
+
+    result.accepted = geometry_preserved &&
+        normal_quality_not_worse && normal_quality_improved;
+    if (result.accepted)
+    {
+        *mesh = std::move(candidate);
+    }
+    return result;
+}
+
 bool visibilityOccupancyDepthRefinementEnabled(const QJsonObject &settings,
                                                bool orbitalWorkspace)
 {
     return settings.value(QStringLiteral(
         "tsdfVisibilityOccupancyDepthRefinement")).toBool(orbitalWorkspace);
+}
+
+QString orbitalRoleForDepthFrame(const QJsonArray &roles, int refIndex)
+{
+    for (const QJsonValue &value : roles)
+    {
+        const QJsonObject role = value.toObject();
+        if (role.value(QStringLiteral("ref_index")).toInt(-1) == refIndex)
+        {
+            return role.value(QStringLiteral("role")).toString();
+        }
+    }
+    return {};
+}
+
+QStringList worstDepthCompletenessLabels(
+    const DepthMeshCompletenessStatistics &completeness,
+    const QJsonArray &orbitalRoles,
+    int maximumCount = 3)
+{
+    std::vector<DepthMeshFrameCompleteness> frames(
+        completeness.frames.cbegin(), completeness.frames.cend());
+    std::sort(
+        frames.begin(),
+        frames.end(),
+        [](const DepthMeshFrameCompleteness &lhs,
+           const DepthMeshFrameCompleteness &rhs)
+        {
+            return lhs.recall < rhs.recall;
+        });
+    QStringList labels;
+    const int count = std::min(maximumCount, static_cast<int>(frames.size()));
+    for (int index = 0; index < count; ++index)
+    {
+        const DepthMeshFrameCompleteness &frame =
+            frames[static_cast<std::size_t>(index)];
+        const QString role = orbitalRoleForDepthFrame(
+            orbitalRoles, frame.refIndex);
+        labels.push_back(
+            role.isEmpty()
+                ? QStringLiteral("%1=%2%")
+                      .arg(frame.refIndex)
+                      .arg(100.0 * frame.recall, 0, 'f', 1)
+                : QStringLiteral("%1=%2%[%3]")
+                      .arg(frame.refIndex)
+                      .arg(100.0 * frame.recall, 0, 'f', 1)
+                      .arg(role));
+    }
+    return labels;
+}
+
+void addDepthCompletenessPayload(
+    const DepthMeshCompletenessStatistics &completeness,
+    const QString &prefix,
+    QJsonObject *payload)
+{
+    if (payload == nullptr)
+    {
+        return;
+    }
+    (*payload)[prefix + QStringLiteral("available")] = completeness.available;
+    (*payload)[prefix + QStringLiteral("gate_passed")] = completeness.gatePassed;
+    (*payload)[prefix + QStringLiteral("distance_method")] =
+        QStringLiteral("exact_point_to_triangle_bvh");
+    (*payload)[prefix + QStringLiteral("tolerance")] = completeness.tolerance;
+    (*payload)[prefix + QStringLiteral("sampled_point_count")] =
+        static_cast<double>(completeness.sampledDepthPointCount);
+    (*payload)[prefix + QStringLiteral("explained_point_count")] =
+        static_cast<double>(completeness.explainedDepthPointCount);
+    (*payload)[prefix + QStringLiteral("aggregate_recall")] =
+        completeness.aggregateRecall;
+    (*payload)[prefix + QStringLiteral("minimum_frame_recall")] =
+        completeness.minimumFrameRecall;
+    (*payload)[prefix + QStringLiteral("p10_frame_recall")] =
+        completeness.p10FrameRecall;
+    (*payload)[prefix + QStringLiteral("median_frame_recall")] =
+        completeness.medianFrameRecall;
+    QJsonArray frames;
+    for (const DepthMeshFrameCompleteness &frame : completeness.frames)
+    {
+        frames.push_back(QJsonObject{
+            {QStringLiteral("ref_index"), frame.refIndex},
+            {QStringLiteral("auxiliary_surface_only"),
+             frame.auxiliarySurfaceOnly},
+            {QStringLiteral("sampled_point_count"),
+             static_cast<double>(frame.sampledDepthPointCount)},
+            {QStringLiteral("explained_point_count"),
+             static_cast<double>(frame.explainedDepthPointCount)},
+            {QStringLiteral("recall"), frame.recall}
+        });
+    }
+    (*payload)[prefix + QStringLiteral("frames")] = frames;
+}
+
+DepthMeshCompletenessStatistics evaluateDepthCompleteness(
+    const TriMesh &mesh,
+    const QVector<DepthTsdfFrame> &frames,
+    const DepthTsdfOptions &options,
+    const DepthTsdfLayout &layout)
+{
+    DepthMeshCompletenessOptions completeness_options;
+    completeness_options.maximumDepthSamplesPerFrame =
+        options.depthCompletenessMaximumSamplesPerFrame;
+    completeness_options.tolerance = std::max({
+        layout.voxelSize[0],
+        layout.voxelSize[1],
+        layout.voxelSize[2]}) *
+        std::max(1.0f, options.depthCompletenessToleranceVoxels);
+    completeness_options.minimumP10FrameRecall =
+        options.minimumDepthCompletenessP10Recall;
+    completeness_options.minimumMedianFrameRecall =
+        options.minimumDepthCompletenessMedianRecall;
+    return DepthMeshCompleteness::evaluate(
+        mesh, frames, completeness_options);
 }
 
 bool shouldUseOrbitalVisualHullCompletion(bool orbitalWorkspace,
@@ -2973,11 +3184,6 @@ xjw::mesh::TextureMappingConfig textureConfigFromSettings(const QJsonObject &set
     return config;
 }
 
-bool exportObjRequested(const QJsonObject &settings)
-{
-    return settings.value(QStringLiteral("export_format")).toString().trimmed().toUpper() == QStringLiteral("OBJ");
-}
-
 PointCloudQualityReport evaluatePointCloudQuality(const QString &pointCloudPath,
                                                   qint64 recommendedMinimum)
 {
@@ -3188,8 +3394,52 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
             "orbital_adaptive_resolution_applied")] =
             orbital_workspace &&
             options.resolution < requested_tsdf_resolution;
-        DepthTsdfResult tsdf = DepthTsdfSurfaceBuilder::build(loaded.frames, options);
+        const bool defer_depth_completeness_gate =
+            orbital_workspace &&
+            options.enableDepthCompletenessDiagnostics &&
+            options.enforceDepthCompletenessGate;
+        result.payload[QStringLiteral(
+            "depth_completeness_gate_deferred_until_final_surface")] =
+            defer_depth_completeness_gate;
+        DepthTsdfOptions build_options = options;
+        if (defer_depth_completeness_gate)
+        {
+            build_options.enforceDepthCompletenessGate = false;
+        }
+        if (request.progress)
+        {
+            request.progress(
+                QStringLiteral(
+                    "模型配置：深度帧=%1，模式=%2，TSDF=%3，目标面数=%4")
+                    .arg(loaded.frames.size())
+                    .arg(orbital_workspace
+                             ? QStringLiteral("环拍目标")
+                             : QStringLiteral("常规场景"))
+                    .arg(options.resolution)
+                    .arg(options.simplifyTargetFaces),
+                1);
+        }
+        DepthTsdfResult tsdf = DepthTsdfSurfaceBuilder::build(
+            loaded.frames, build_options);
         mergePayload(DepthTsdfSurfaceBuilder::statisticsToJson(tsdf), &result.payload);
+        result.payload[QStringLiteral(
+            "base_depth_completeness_available")] =
+            tsdf.statistics.depthCompletenessAvailable;
+        result.payload[QStringLiteral(
+            "base_depth_completeness_gate_passed")] =
+            tsdf.statistics.depthCompletenessGatePassed;
+        result.payload[QStringLiteral(
+            "base_depth_completeness_aggregate_recall")] =
+            tsdf.statistics.depthCompletenessAggregateRecall;
+        result.payload[QStringLiteral(
+            "base_depth_completeness_minimum_frame_recall")] =
+            tsdf.statistics.depthCompletenessMinimumFrameRecall;
+        result.payload[QStringLiteral(
+            "base_depth_completeness_p10_frame_recall")] =
+            tsdf.statistics.depthCompletenessP10FrameRecall;
+        result.payload[QStringLiteral(
+            "base_depth_completeness_median_frame_recall")] =
+            tsdf.statistics.depthCompletenessMedianFrameRecall;
         result.payload[QStringLiteral("tsdf_resolution_x")] = tsdf.layout.cells[0];
         result.payload[QStringLiteral("tsdf_resolution_y")] = tsdf.layout.cells[1];
         result.payload[QStringLiteral("tsdf_resolution_z")] = tsdf.layout.cells[2];
@@ -3199,6 +3449,25 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
         {
             result.errorMessage = tsdf.errorMessage;
             return result;
+        }
+        if (request.progress)
+        {
+            request.progress(
+                QStringLiteral(
+                    "基础 TSDF 完成：顶点=%1，面=%2，边界边=%3，"
+                    "深度召回率(中位/P10)=%4/%5")
+                    .arg(tsdf.mesh.vertexCount())
+                    .arg(tsdf.mesh.faceCount())
+                    .arg(tsdf.statistics.boundaryEdgeCountAfter)
+                    .arg(tsdf.statistics.depthCompletenessMedianFrameRecall,
+                         0,
+                         'f',
+                         4)
+                    .arg(tsdf.statistics.depthCompletenessP10FrameRecall,
+                         0,
+                         'f',
+                         4),
+                tsdf_progress_end);
         }
 
         const bool orbital_visual_hull_completion_enabled =
@@ -3217,14 +3486,28 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
         result.payload[QStringLiteral(
             "orbital_visual_hull_completion_requested")] =
             orbital_visual_hull_completion_requested;
+        if (request.progress)
+        {
+            request.progress(
+                orbital_visual_hull_completion_requested
+                    ? QStringLiteral(
+                          "基础表面不完整，正在启动环拍视觉外壳补全...")
+                    : QStringLiteral(
+                          "基础表面完整性满足补全策略，跳过环拍外壳补全"),
+                tsdf_progress_end);
+        }
 
         DepthMapVisualHullResult orbital_completion;
-        const TriMesh *output_mesh = &tsdf.mesh;
+        TriMesh *output_mesh = &tsdf.mesh;
         QString output_algorithm = QStringLiteral("depth_tsdf");
         if (orbital_visual_hull_completion_requested)
         {
             DepthMapVisualHullOptions completion_options;
             completion_options.strictVolumetricMasks = false;
+            completion_options.useContinuousSilhouetteField =
+                request.settings.value(QStringLiteral(
+                    "tsdfOrbitalVisualHullContinuousSilhouetteField"))
+                    .toBool(false);
             completion_options.smoothingIterations = qBound(
                 0,
                 request.settings.value(QStringLiteral(
@@ -3249,7 +3532,7 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 {
                     progress(
                         stage,
-                        96 + std::clamp(percent, 0, 100) * 3 / 100);
+                        96 + std::clamp(percent, 0, 100) / 100);
                 };
             }
             orbital_completion = DepthMapMeshBuilder::buildVisualHull(
@@ -3266,6 +3549,9 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
             result.payload[QStringLiteral(
                 "orbital_visual_hull_topology_closing_iterations")] =
                 orbital_completion.topologyClosingIterations;
+            result.payload[QStringLiteral(
+                "orbital_visual_hull_continuous_silhouette_field")] =
+                completion_options.useContinuousSilhouetteField;
             result.payload[QStringLiteral(
                 "orbital_visual_hull_completion_component_count")] =
                 orbital_completion.connectivity.componentCount;
@@ -4278,6 +4564,14 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 result.payload[QStringLiteral(
                     "orbital_visual_hull_completion_error")] =
                     orbital_completion.message;
+                if (request.progress)
+                {
+                    request.progress(
+                        QStringLiteral(
+                            "环拍外壳补全未采用：%1；继续使用基础 TSDF 表面")
+                            .arg(orbital_completion.message),
+                        97);
+                }
             }
         }
         else
@@ -5089,6 +5383,282 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 false;
         }
 
+        const bool final_surface_denoising_enabled =
+            request.settings.contains(QStringLiteral(
+                "tsdfFinalSurfaceDenoising"))
+            ? request.settings.value(QStringLiteral(
+                  "tsdfFinalSurfaceDenoising")).toBool(true)
+            : request.settings.value(QStringLiteral(
+                  "tsdfVisibilityOccupancyFinalSurfaceDenoising"))
+                  .toBool(true);
+        result.payload[QStringLiteral(
+            "configured_final_surface_denoising")] =
+            final_surface_denoising_enabled;
+        result.payload[QStringLiteral(
+            "configured_visibility_occupancy_final_surface_denoising")] =
+            final_surface_denoising_enabled;
+        if (final_surface_denoising_enabled)
+        {
+            if (request.progress)
+            {
+                request.progress(
+                    QStringLiteral("正在进行保存前的曲率保护表面降噪..."),
+                    98);
+            }
+            const int final_denoising_iterations = qBound(
+                0,
+                request.settings.value(QStringLiteral(
+                    "tsdfVisibilityOccupancyFinalSurfaceDenoisingIterations"))
+                    .toInt(std::max(8, options.surfaceDenoisingIterations)),
+                12);
+            const float final_denoising_lambda = std::clamp(
+                static_cast<float>(request.settings.value(QStringLiteral(
+                    "tsdfVisibilityOccupancyFinalSurfaceDenoisingLambda"))
+                    .toDouble(std::max(0.50f, options.surfaceDenoisingLambda))),
+                0.0f,
+                0.75f);
+            const float final_denoising_mu = std::clamp(
+                static_cast<float>(request.settings.value(QStringLiteral(
+                    "tsdfVisibilityOccupancyFinalSurfaceDenoisingMu"))
+                    .toDouble(options.surfaceDenoisingMu)),
+                -1.0f,
+                0.0f);
+            const float final_denoising_displacement_voxels = std::clamp(
+                static_cast<float>(request.settings.value(QStringLiteral(
+                    "tsdfVisibilityOccupancyFinalSurfaceDenoisingMaximumDisplacementVoxels"))
+                    .toDouble(std::max(
+                        0.75f,
+                        options.maximumSurfaceDenoisingDisplacementVoxels))),
+                0.0f,
+                1.5f);
+            const float final_denoising_feature_angle = std::clamp(
+                static_cast<float>(request.settings.value(QStringLiteral(
+                    "tsdfVisibilityOccupancyFinalSurfaceDenoisingFeatureAngleDegrees"))
+                    .toDouble(std::max(
+                        120.0f,
+                        options.maximumSurfaceDenoisingNormalAngleDegrees))),
+                5.0f,
+                170.0f);
+            const int final_denoising_boundary_rings = qBound(
+                0,
+                request.settings.value(QStringLiteral(
+                    "tsdfVisibilityOccupancyFinalSurfaceDenoisingBoundaryProtectionRings"))
+                    .toInt(0),
+                2);
+            const float maximum_voxel_size = std::max({
+                tsdf.layout.voxelSize[0],
+                tsdf.layout.voxelSize[1],
+                tsdf.layout.voxelSize[2]});
+            const FinalSurfaceDenoisingResult denoising =
+                applyTopologyGuardedFinalSurfaceDenoising(
+                    output_mesh,
+                    final_denoising_iterations,
+                    final_denoising_lambda,
+                    final_denoising_mu,
+                    final_denoising_displacement_voxels * maximum_voxel_size,
+                    final_denoising_feature_angle,
+                    final_denoising_boundary_rings);
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_surface_denoising_attempted")] =
+                denoising.attempted;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_surface_denoising_accepted")] =
+                denoising.accepted;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_surface_denoising_moved_vertices")] =
+                denoising.movedVertexCount;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_surface_denoising_area_before")] =
+                denoising.areaBefore;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_surface_denoising_area_after")] =
+                denoising.areaAfter;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_surface_denoising_normal_median_before")] =
+                denoising.qualityBefore.adjacentNormalAngleMedianDegrees;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_surface_denoising_normal_median_after")] =
+                denoising.qualityAfter.adjacentNormalAngleMedianDegrees;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_surface_denoising_normal_p90_before")] =
+                denoising.qualityBefore.adjacentNormalAngleP90Degrees;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_surface_denoising_normal_p90_after")] =
+                denoising.qualityAfter.adjacentNormalAngleP90Degrees;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_surface_denoising_normal_over_30_before")] =
+                denoising.qualityBefore.adjacentNormalAngleOver30Ratio;
+            result.payload[QStringLiteral(
+                "visibility_occupancy_final_surface_denoising_normal_over_30_after")] =
+                denoising.qualityAfter.adjacentNormalAngleOver30Ratio;
+            result.payload[QStringLiteral(
+                "final_surface_denoising_accepted")] =
+                denoising.accepted;
+            result.payload[QStringLiteral(
+                "final_surface_denoising_moved_vertices")] =
+                denoising.movedVertexCount;
+            result.payload[QStringLiteral(
+                "final_surface_denoising_normal_p90_before")] =
+                denoising.qualityBefore.adjacentNormalAngleP90Degrees;
+            result.payload[QStringLiteral(
+                "final_surface_denoising_normal_p90_after")] =
+                denoising.qualityAfter.adjacentNormalAngleP90Degrees;
+            result.payload[QStringLiteral(
+                "final_surface_denoising_normal_over_30_before")] =
+                denoising.qualityBefore.adjacentNormalAngleOver30Ratio;
+            result.payload[QStringLiteral(
+                "final_surface_denoising_normal_over_30_after")] =
+                denoising.qualityAfter.adjacentNormalAngleOver30Ratio;
+        }
+
+        if (options.enableDepthCompletenessDiagnostics)
+        {
+            if (request.progress)
+            {
+                request.progress(
+                    QStringLiteral(
+                        "正在以精确点到三角形距离检查最终模型完整性..."),
+                    99);
+            }
+            DepthMeshCompletenessStatistics final_completeness =
+                evaluateDepthCompleteness(
+                    *output_mesh, loaded.frames, options, tsdf.layout);
+            bool gap_boundary_available = false;
+            double gap_boundary_minimum_recall = 1.0;
+            for (const DepthMeshFrameCompleteness &frame :
+                 final_completeness.frames)
+            {
+                if (orbitalRoleForDepthFrame(
+                        tsdf.statistics.orbitalFrameRoles,
+                        frame.refIndex) != QStringLiteral("gap_boundary"))
+                {
+                    continue;
+                }
+                gap_boundary_available = true;
+                gap_boundary_minimum_recall = std::min(
+                    gap_boundary_minimum_recall, frame.recall);
+            }
+            const bool gap_boundary_gate_passed =
+                !gap_boundary_available ||
+                gap_boundary_minimum_recall + 1.0e-9 >=
+                    options.minimumDepthCompletenessP10Recall;
+            final_completeness.gatePassed =
+                final_completeness.gatePassed &&
+                gap_boundary_gate_passed;
+            addDepthCompletenessPayload(
+                final_completeness,
+                QStringLiteral("final_depth_completeness_"),
+                &result.payload);
+            addDepthCompletenessPayload(
+                final_completeness,
+                QStringLiteral("depth_completeness_"),
+                &result.payload);
+            result.payload[QStringLiteral(
+                "final_depth_completeness_gap_boundary_available")] =
+                gap_boundary_available;
+            result.payload[QStringLiteral(
+                "final_depth_completeness_gap_boundary_gate_passed")] =
+                gap_boundary_gate_passed;
+            result.payload[QStringLiteral(
+                "final_depth_completeness_gap_boundary_minimum_recall")] =
+                gap_boundary_available
+                    ? gap_boundary_minimum_recall
+                    : 0.0;
+            result.payload[QStringLiteral(
+                "final_depth_completeness_minimum_p10_threshold")] =
+                options.minimumDepthCompletenessP10Recall;
+            result.payload[QStringLiteral(
+                "final_depth_completeness_minimum_median_threshold")] =
+                options.minimumDepthCompletenessMedianRecall;
+            const QStringList worst_labels = worstDepthCompletenessLabels(
+                final_completeness,
+                tsdf.statistics.orbitalFrameRoles);
+            result.payload[QStringLiteral(
+                "final_depth_completeness_worst_frames")] =
+                worst_labels.join(QStringLiteral(", "));
+            if (request.progress)
+            {
+                request.progress(
+                    QStringLiteral(
+                        "最终完整性：中位=%1(阈值 %2)，P10=%3(阈值 %4)，"
+                        "最低=%5，最差视角=%6")
+                        .arg(final_completeness.medianFrameRecall, 0, 'f', 4)
+                        .arg(options.minimumDepthCompletenessMedianRecall,
+                             0,
+                             'f',
+                             4)
+                        .arg(final_completeness.p10FrameRecall, 0, 'f', 4)
+                        .arg(options.minimumDepthCompletenessP10Recall,
+                             0,
+                             'f',
+                             4)
+                        .arg(final_completeness.minimumFrameRecall,
+                             0,
+                             'f',
+                             4)
+                        .arg(worst_labels.join(QStringLiteral(", "))),
+                    99);
+            }
+            if (options.enforceDepthCompletenessGate &&
+                (!final_completeness.available ||
+                 !final_completeness.gatePassed))
+            {
+                QStringList failed_conditions;
+                if (!final_completeness.available)
+                {
+                    failed_conditions.push_back(
+                        QStringLiteral("没有足够的有效深度观测"));
+                }
+                if (final_completeness.available &&
+                    final_completeness.medianFrameRecall + 1.0e-9 <
+                        options.minimumDepthCompletenessMedianRecall)
+                {
+                    failed_conditions.push_back(
+                        QStringLiteral("中位召回率 %1 < %2")
+                            .arg(final_completeness.medianFrameRecall,
+                                 0,
+                                 'f',
+                                 4)
+                            .arg(options.minimumDepthCompletenessMedianRecall,
+                                 0,
+                                 'f',
+                                 4));
+                }
+                if (final_completeness.available &&
+                    final_completeness.p10FrameRecall + 1.0e-9 <
+                        options.minimumDepthCompletenessP10Recall)
+                {
+                    failed_conditions.push_back(
+                        QStringLiteral("P10 召回率 %1 < %2")
+                            .arg(final_completeness.p10FrameRecall,
+                                 0,
+                                 'f',
+                                 4)
+                            .arg(options.minimumDepthCompletenessP10Recall,
+                                 0,
+                                 'f',
+                                 4));
+                }
+                if (!gap_boundary_gate_passed)
+                {
+                    failed_conditions.push_back(
+                        QStringLiteral("缺口边界视角最低召回率 %1 < %2")
+                            .arg(gap_boundary_minimum_recall, 0, 'f', 4)
+                            .arg(options.minimumDepthCompletenessP10Recall,
+                                 0,
+                                 'f',
+                                 4));
+                }
+                result.errorMessage = QStringLiteral(
+                    "最终模型深度观测完整性质量门未通过：%1；"
+                    "最差视角=%2。基础 TSDF 与补全阶段均已执行，"
+                    "已停止写入不完整模型。")
+                    .arg(failed_conditions.join(QStringLiteral("；")),
+                         worst_labels.join(QStringLiteral(", ")));
+                return result;
+            }
+        }
+
         if (direct_visibility_occupancy_output)
         {
             const MeshTopologyQualityStatistics final_topology =
@@ -5171,7 +5741,7 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 output_algorithm == QStringLiteral(
                     "orbital_visual_hull_completion")
                     ? 99
-                    : (request.exportObj ? 85 : 97));
+                    : (request.exportObj ? 85 : 99));
         }
         std::function<void(const QString &, int)> output_progress = request.progress;
         if (output_algorithm == QStringLiteral(
@@ -5344,7 +5914,7 @@ WorkflowResult buildModel(const ModelBuildRequest &request)
         depth_request.outputRoot = request.outputRoot;
         depth_request.settings = request.settings;
         depth_request.reconstruction = reconstruction;
-        depth_request.exportObj = exportObjRequested(request.settings);
+        depth_request.exportObj = false;
         depth_request.texture = defaultTextureConfig();
         depth_request.texture.isCancelled = request.isCancelled;
         depth_request.isCancelled = request.isCancelled;
@@ -5359,7 +5929,7 @@ WorkflowResult buildModel(const ModelBuildRequest &request)
             : request.sourcePointCloudPath;
         mesh_request.outputRoot = request.outputRoot;
         mesh_request.reconstruction = reconstruction;
-        mesh_request.exportObj = exportObjRequested(request.settings);
+        mesh_request.exportObj = false;
         mesh_request.texture = defaultTextureConfig();
         mesh_request.progress = request.progress;
         result = buildMeshAndOptionalTexture(mesh_request);

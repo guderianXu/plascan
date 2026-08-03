@@ -459,8 +459,8 @@ QJsonObject GenerateModelDialog::collectSettings() const
             ? QStringLiteral("Height Field")
             : QStringLiteral("Poisson Surface");
     }
-    // PLY 仍会作为几何回退写出；OBJ/MTL/PNG 是工作区的高质量纹理显示路径。
-    settings[QStringLiteral("export_format")] = QStringLiteral("OBJ");
+    // 模型生成只负责网格；OBJ/MTL/纹理图由独立的“生成纹理”流程创建。
+    settings[QStringLiteral("export_format")] = QStringLiteral("PLY");
     settings[QStringLiteral("saveAfterEachStep")] = _saveEachStepCheck->isChecked();
     settings[QStringLiteral("splitIntoBlocks")] = _splitRegionCheck->isChecked();
     settings[QStringLiteral("blockSizeMeters")] = _blockSizeSpin->value();

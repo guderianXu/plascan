@@ -23,6 +23,8 @@
 
 #include <algorithm>
 #include <exception>
+#include <memory>
+#include <mutex>
 #include <utility>
 
 using xjw::gui::project::resolveLatestDenseCloudPath;
@@ -42,6 +44,13 @@ struct ResolvedModelSource
     QString sourcePointCloudPath;
     QString requestedSourcePath;
     QString outputRoot;
+};
+
+struct ModelProgressLogState
+{
+    std::mutex mutex;
+    QString lastStage;
+    int highestPercent = 0;
 };
 
 QString utcNowIso()
@@ -65,21 +74,117 @@ auto makeProgressReporter(QPointer<ProjectModelManager> manager,
                           QPointer<ProjectManager> owner,
                           const xjw::gui::project::ProjectSessionContext &session)
 {
-    return [manager, owner, session](const QString &stage, int percent)
+    const auto log_state = std::make_shared<ModelProgressLogState>();
+    return [manager, owner, session, log_state](const QString &stage, int percent)
     {
         if (!manager || !owner)
         {
             return;
         }
-        QMetaObject::invokeMethod(manager.data(), [manager, owner, session, stage, percent]()
+        bool new_stage = false;
+        int monotonic_percent = 0;
+        {
+            const std::lock_guard<std::mutex> lock(log_state->mutex);
+            log_state->highestPercent = std::max(
+                log_state->highestPercent,
+                std::clamp(percent, 0, 100));
+            monotonic_percent = log_state->highestPercent;
+            if (stage != log_state->lastStage)
+            {
+                log_state->lastStage = stage;
+                new_stage = true;
+            }
+        }
+        if (new_stage)
+        {
+            LOG_INFO(QStringLiteral("[模型生成][%1%] %2")
+                         .arg(monotonic_percent)
+                         .arg(stage));
+        }
+        QMetaObject::invokeMethod(
+            manager.data(),
+            [manager, owner, session, stage, monotonic_percent]()
         {
             if (!manager || !owner || !owner->isCurrentSession(session))
             {
                 return;
             }
-            emit manager->meshProgressChanged(stage, percent);
+            emit manager->meshProgressChanged(stage, monotonic_percent);
         }, Qt::QueuedConnection);
     };
+}
+
+void logModelWorkflowResult(
+    const xjw::mesh::workflow::WorkflowResult &workflowResult)
+{
+    if (!workflowResult.ok)
+    {
+        LOG_ERROR(QStringLiteral("[模型生成] 失败：%1")
+                      .arg(workflowResult.errorMessage));
+        const QJsonObject &payload = workflowResult.payload;
+        if (payload.value(QStringLiteral(
+                "final_depth_completeness_available")).toBool(false))
+        {
+            LOG_ERROR(QStringLiteral(
+                "[模型生成] 最终完整性：中位=%1，P10=%2，最低=%3，"
+                "最差视角=%4")
+                .arg(payload.value(QStringLiteral(
+                         "final_depth_completeness_median_frame_recall"))
+                         .toDouble(),
+                     0,
+                     'f',
+                     4)
+                .arg(payload.value(QStringLiteral(
+                         "final_depth_completeness_p10_frame_recall"))
+                         .toDouble(),
+                     0,
+                     'f',
+                     4)
+                .arg(payload.value(QStringLiteral(
+                         "final_depth_completeness_minimum_frame_recall"))
+                         .toDouble(),
+                     0,
+                     'f',
+                     4)
+                .arg(payload.value(QStringLiteral(
+                         "final_depth_completeness_worst_frames"))
+                         .toString()));
+        }
+        return;
+    }
+
+    const QJsonObject &payload = workflowResult.payload;
+    LOG_INFO(QStringLiteral(
+        "[模型生成] 完成：算法=%1，顶点=%2，面=%3，输出=%4")
+        .arg(payload.value(QStringLiteral("mesh_algorithm"))
+                 .toString(QStringLiteral("unknown")))
+        .arg(payload.value(QStringLiteral("vertex_count")).toInt())
+        .arg(payload.value(QStringLiteral("face_count")).toInt())
+        .arg(payload.value(QStringLiteral("model_ply")).toString()));
+    if (payload.value(QStringLiteral(
+            "final_depth_completeness_available")).toBool(false))
+    {
+        LOG_INFO(QStringLiteral(
+            "[模型生成] 最终完整性通过：中位=%1，P10=%2，最低=%3")
+            .arg(payload.value(QStringLiteral(
+                     "final_depth_completeness_median_frame_recall"))
+                     .toDouble(),
+                 0,
+                 'f',
+                 4)
+            .arg(payload.value(QStringLiteral(
+                     "final_depth_completeness_p10_frame_recall"))
+                     .toDouble(),
+                 0,
+                 'f',
+                 4)
+            .arg(payload.value(QStringLiteral(
+                     "final_depth_completeness_minimum_frame_recall"))
+                     .toDouble(),
+                 0,
+                 'f',
+                 4));
+    }
 }
 
 void applyWorkflowResult(ModelTaskResult *task,
@@ -188,9 +293,9 @@ QJsonObject buildTextureMappingRecord(const QJsonObject &baseRecord,
 QString meshReconstructionSuccessMessage(const QJsonObject &taskResult)
 {
     QString message = QStringLiteral(
-        "网格重建完成。\n模型: %1\n纹理模型: %2\n顶点: %3  面数: %4")
+        "模型网格生成完成。\n网格: %1\n顶点: %2  面数: %3\n"
+        "如需照片纹理，请继续执行“工作流程 > 生成纹理”。")
         .arg(taskResult.value(QStringLiteral("final_model_path")).toString())
-        .arg(taskResult.value(QStringLiteral("model_obj")).toString())
         .arg(taskResult.value(QStringLiteral("vertex_count")).toInt(-1))
         .arg(taskResult.value(QStringLiteral("face_count")).toInt(-1));
     if (!taskResult.contains(QStringLiteral("accepted_frame_count")))
@@ -539,7 +644,7 @@ void ProjectModelManager::startGenerateModelAsync()
     settings[QStringLiteral("method")] = QStringLiteral("Poisson Surface");
     settings[QStringLiteral("qualityProfile")] = QStringLiteral("balanced");
     settings[QStringLiteral("voxelDensity")] = QStringLiteral("medium");
-    settings[QStringLiteral("export_format")] = QStringLiteral("OBJ");
+    settings[QStringLiteral("export_format")] = QStringLiteral("PLY");
     startMeshReconstructionAsync(settings);
 }
 
@@ -591,6 +696,10 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
     }
 
     QJsonObject effectiveSettings = settings;
+    // 网格生成和纹理映射是两个独立工作流。这里覆盖旧项目可能保留的 OBJ 设置，
+    // 防止生成模型阶段再次触发纹理烘焙。
+    effectiveSettings[QStringLiteral("export_format")] =
+        QStringLiteral("PLY");
     if (!effectiveSettings.contains(QStringLiteral("threads")))
     {
         effectiveSettings[QStringLiteral("threads")] =
@@ -605,6 +714,20 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
         meta[QStringLiteral("mesh_reconstruction_settings")] = effectiveSettings;
         xjw::gui::project::persistProjectMeta(_projectData, meta, false);
     }
+
+    LOG_INFO(QStringLiteral(
+        "[模型生成] 启动：来源=%1，模式=%2，质量=%3，目标面数=%4，"
+        "输入=%5，输出=%6")
+        .arg(effectiveSettings.value(QStringLiteral("source_data"))
+                 .toString(QStringLiteral("point_cloud")))
+        .arg(effectiveSettings.value(QStringLiteral("reconstruction_mode"))
+                 .toString(QStringLiteral("auto")))
+        .arg(effectiveSettings.value(QStringLiteral("quality"))
+                 .toString(QStringLiteral("default")))
+        .arg(effectiveSettings.value(QStringLiteral("simplifyTargetFaces"))
+                 .toInt())
+        .arg(resolvedSource.requestedSourcePath,
+             resolvedSource.outputRoot));
 
     _isRunning = true;
     _activeCancelFlag = std::make_shared<std::atomic_bool>(false);
@@ -656,6 +779,7 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
 
             const xjw::mesh::workflow::WorkflowResult workflowResult =
                 xjw::mesh::workflow::buildModel(request);
+            logModelWorkflowResult(workflowResult);
             applyWorkflowResult(&task, workflowResult);
             return task;
         },

@@ -2061,7 +2061,7 @@ TEST(GenerateModelDialogTest, AcceptsBeforeDispatchingModelWorkflow)
     EXPECT_TRUE(accepted_when_dispatched);
     EXPECT_EQ(dialog.result(), QDialog::Accepted);
     EXPECT_EQ(dispatched_settings.value(QStringLiteral("export_format")).toString(),
-              QStringLiteral("OBJ"));
+              QStringLiteral("PLY"));
 }
 
 TEST(DepthMapMetadataTest, DemPreviewsStayOutOfMvsDepthResults)
