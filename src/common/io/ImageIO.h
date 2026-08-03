@@ -11,6 +11,8 @@
 namespace xjw::common::io
 {
 
+void ensureGdalRegistered();
+
 cv::Mat readImage(const QString &path, int flags);
 cv::Mat readImage(const QString &path, int flags, QString *errorMessage);
 cv::Mat readImage(const std::string &path, int flags);
