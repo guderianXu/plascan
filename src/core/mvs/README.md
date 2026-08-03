@@ -23,9 +23,12 @@ live under `src/core/mvs/tests/`.
   `confidence`, `valid mask`, and a config hash.
 - `DepthMapGenerator` writes frame artifacts before reporting completion. Completed frames with a matching
   config hash can be reused; failed frames can be retried.
-- Orbital depth artifacts at algorithm revision 14 persist adaptive support weight, effective view count,
-  and conflict ratio. Reuse rejects an incomplete revision-14 evidence set instead of silently interpreting
-  missing evidence as valid geometry.
+- Orbital depth artifacts at algorithm revision 15 persist adaptive support weight, effective view count,
+  conflict ratio, geometry source masks, and inverse-depth moments. Before final hole handling, projected source
+  depths are clustered into a dominant occlusion layer. A stable layer may refine a matching native depth,
+  replace a contradicted native hypothesis when at least three sources agree, or transfer a measured layer into
+  a missing supported pixel. Reuse rejects an incomplete revision-15 evidence set instead of silently
+  interpreting missing evidence as valid geometry.
 - GUI project metadata consumes manifest records. The workspace tree should refresh from metadata rather than
   treating directory scans as the primary state.
 
@@ -74,6 +77,9 @@ live under `src/core/mvs/tests/`.
   while depth inspection is active, then restored from the user's existing preferences.
 - Local outlier filtering and connected-component speckle filtering remove isolated red-depth spikes while
   preserving large smooth regions.
+- Dominant-layer selection records refined, switched, transferred, ambiguous, and unresolved pixel counts in
+  `dominant_depth_layer_selection`. Later hole repair preserves this selected-layer mask, so a measured
+  cross-view transfer is not accidentally reclassified as unconstrained spatial interpolation.
 - Speckle removal builds a component-removal lookup table and scans the depth image once. It therefore scales
   as `O(component count + pixel count)` instead of rescanning the image for every small component.
 - Advanced GUI controls map to `DepthGenConfig`: minimum consistent views, geometry consistency, maximum

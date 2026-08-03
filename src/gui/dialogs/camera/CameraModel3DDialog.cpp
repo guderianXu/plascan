@@ -1326,6 +1326,13 @@ void CameraSceneWidget::loadModelFromPlyInternal(const QString &plyPath,
             {
                 self->setModelColorMode(ModelColorMode::Texture);
             }
+            else if (!self->_isTiePointCloud && self->_cloud.hasFaces())
+            {
+                // A mesh without vertex colors should expose its actual face
+                // tessellation.  Smooth shading is still available explicitly,
+                // but it must not masquerade as vertex colour information.
+                self->setModelColorMode(ModelColorMode::Solid);
+            }
             self->_preferModelPointRender = !self->_isTiePointCloud && !self->_cloud.hasFaces();
             if (!self->_cloud.hasFaces())
             {
@@ -1506,6 +1513,14 @@ void CameraSceneWidget::loadModelFromObjInternal(const QString &objPath,
                     self->_preparedObjMeshHasTexture)
                 {
                     self->setModelColorMode(ModelColorMode::Texture);
+                }
+                else if (!self->_isTiePointCloud && self->_cloud.hasColors())
+                {
+                    self->setModelColorMode(ModelColorMode::Texture);
+                }
+                else if (!self->_isTiePointCloud && self->_cloud.hasFaces())
+                {
+                    self->setModelColorMode(ModelColorMode::Solid);
                 }
             }
             self->_preferModelPointRender = !self->_isTiePointCloud && !self->_cloud.hasFaces();

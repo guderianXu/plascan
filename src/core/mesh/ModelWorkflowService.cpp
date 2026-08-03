@@ -896,6 +896,28 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
                                    options.adaptiveGeometryMinimumObservationMultiplier)),
         0.05f,
         1.0f);
+    options.enableAdaptiveConflictRobustWeighting = settings.value(
+        QStringLiteral("tsdfAdaptiveConflictRobustWeighting"))
+        .toBool(options.enableAdaptiveConflictRobustWeighting);
+    options.adaptiveConflictWeightKnee = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfAdaptiveConflictWeightKnee"))
+                               .toDouble(options.adaptiveConflictWeightKnee)),
+        0.0f,
+        0.99f);
+    options.adaptiveConflictWeightZero = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfAdaptiveConflictWeightZero"))
+                               .toDouble(options.adaptiveConflictWeightZero)),
+        options.adaptiveConflictWeightKnee + 1.0e-6f,
+        1.0f);
+    options.minimumAdaptiveConflictWeightMultiplier = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfMinimumAdaptiveConflictWeightMultiplier"))
+                               .toDouble(
+                                   options.minimumAdaptiveConflictWeightMultiplier)),
+        0.0f,
+        1.0f);
     options.adaptiveGeometryFullIntegrationMinimumSupportWeight = std::clamp(
         static_cast<float>(settings.value(QStringLiteral(
             "tsdfAdaptiveGeometryFullIntegrationMinimumSupportWeight"))
@@ -2310,6 +2332,26 @@ void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
         options->enableEvidenceSupportWeightDecoupling = true;
     }
     if (!settings.contains(QStringLiteral(
+            "tsdfAdaptiveConflictRobustWeighting")))
+    {
+        options->enableAdaptiveConflictRobustWeighting = true;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfAdaptiveConflictWeightKnee")))
+    {
+        options->adaptiveConflictWeightKnee = 0.20f;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfAdaptiveConflictWeightZero")))
+    {
+        options->adaptiveConflictWeightZero = 0.75f;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfMinimumAdaptiveConflictWeightMultiplier")))
+    {
+        options->minimumAdaptiveConflictWeightMultiplier = 0.02f;
+    }
+    if (!settings.contains(QStringLiteral(
             "tsdfWeakEvidenceSurfaceOnlyIntegration")))
     {
         options->enableWeakEvidenceSurfaceOnlyIntegration = true;
@@ -2453,7 +2495,6 @@ void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
     {
         options->visibilityOccupancyDetailBlend = 1.0f;
     }
-
     const bool high_detail_model = options->resolution >= 384 &&
         options->simplifyTargetFaces > 0 &&
         (options->simplifyTargetFaces <= 120000 ||

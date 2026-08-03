@@ -201,6 +201,7 @@ GeoTIFF 按 R/G/B/Alpha 波段写出，以 Alpha 区分无覆盖区和真实黑�
 - MVS 稳定性：`MvsWorkspaceManifest` 记录每帧深度图状态、输入/输出路径、device、耗时、错误和配置 hash。深度图完成后写入项目 metadata，GUI 目录树按文件名自然排序刷新。
 - MVS 质量：`MvsSourcePlanner` 基于 shared tracks、几何内点、三角角、覆盖率、baseline 和序列距离规划 source view。深度图同时输出 preview、raw depth、confidence 和 valid mask，融合阶段使用同一份 source plan。
 - 模型生成：任意三维的深度源默认执行 `raw depth + confidence + valid/support mask + camera -> TSDF -> Marching Cubes`，不生成或消费密集点云中间产物。Visual Hull 与 Poisson 只保留为显式 legacy/诊断模式，TSDF 失败不会静默换算法。
+- 模型显示：未计算顶点颜色且没有纹理时按真实面法线显示三角面；存在照片派生顶点颜色或完整纹理时才显示颜色。顶点颜色、纹理和网格几何是独立产品，不会因关闭颜色而改变模型拓扑。
 - 深度检查：工作区只显示一个不可打开的聚合“深度图”节点，右键可删除整批最终层和金字塔层数据；照片工具栏的“显示深度信息”按当前照片叠加最终层或可用的金字塔诊断层，单个级别缺失不会禁用整个按钮。GUI 默认保存 Level 2/3 可视化栅格，关闭叠加后恢复原有特征点/残差显示偏好。
 - Terrain 产品：`TerrainProductManifest` 记录 DEM/DOM、error、count、confidence 和 coverage 栅格。DEM/DOM 不再只是临时图，而是带质量 artifact 的 terrain product chain。
 - 参考地形/QC：`ReconstructionQualityReport`、`PointCloudAlignment`、`DemDifference` 和 `ReferenceTerrainPrior` 支持外部 DEM/LiDAR 后验检查、点云/DEM 误差报告，以及 BA soft prior。

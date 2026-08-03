@@ -272,6 +272,281 @@ cv::Mat projectSourceDepthToReference(
     return projected;
 }
 
+DominantDepthLayerSelectionStats selectDominantProjectedDepthLayer(
+    cv::Mat &reference_depth,
+    const cv::Mat &support_mask,
+    const std::vector<cv::Mat> &projected_source_depths,
+    const cv::Mat &consistent_source_votes,
+    const cv::Mat &contradicted_source_votes,
+    const DominantDepthLayerSelectionOptions &options,
+    cv::Mat *reference_confidence,
+    cv::Mat *selected_layer_mask,
+    cv::Mat *geometry_source_mask,
+    cv::Mat *source_inverse_depth_sum,
+    cv::Mat *source_inverse_depth_squared_sum,
+    cv::Mat *selected_source_votes)
+{
+    DominantDepthLayerSelectionStats stats;
+    if (reference_depth.type() != CV_32FC1 ||
+        projected_source_depths.empty())
+    {
+        return stats;
+    }
+
+    const cv::Size size = reference_depth.size();
+    const bool has_support = support_mask.type() == CV_8UC1 &&
+        support_mask.size() == size;
+    const bool has_confidence = reference_confidence &&
+        reference_confidence->type() == CV_32FC1 &&
+        reference_confidence->size() == size;
+    const bool has_consistent_votes = consistent_source_votes.type() == CV_16UC1 &&
+        consistent_source_votes.size() == size;
+    const bool has_contradicted_votes = contradicted_source_votes.type() == CV_16UC1 &&
+        contradicted_source_votes.size() == size;
+    const bool update_selection_mask = selected_layer_mask != nullptr;
+    if (update_selection_mask &&
+        (selected_layer_mask->type() != CV_8UC1 ||
+         selected_layer_mask->size() != size))
+    {
+        *selected_layer_mask = cv::Mat(size, CV_8UC1, cv::Scalar(0));
+    }
+    const bool update_geometry = geometry_source_mask &&
+        source_inverse_depth_sum && source_inverse_depth_squared_sum &&
+        geometry_source_mask->type() == CV_16UC1 &&
+        source_inverse_depth_sum->type() == CV_32FC1 &&
+        source_inverse_depth_squared_sum->type() == CV_32FC1 &&
+        geometry_source_mask->size() == size &&
+        source_inverse_depth_sum->size() == size &&
+        source_inverse_depth_squared_sum->size() == size;
+    const bool update_votes = selected_source_votes &&
+        selected_source_votes->type() == CV_16UC1 &&
+        selected_source_votes->size() == size;
+
+    const int minimum_sources = std::max(2, options.minimumDistinctSourceCount);
+    const int minimum_replacement_sources = std::max(
+        minimum_sources, options.minimumReplacementSourceCount);
+    const float maximum_spread = std::clamp(
+        options.maximumRelativeDepthSpread, 0.001f, 0.10f);
+    const float native_agreement = std::clamp(
+        options.maximumNativeAgreementRelativeDifference,
+        maximum_spread,
+        0.20f);
+    const float blend_weight = std::clamp(
+        options.nativeConsensusBlendWeight, 0.0f, 1.0f);
+    const float maximum_correction = std::clamp(
+        options.maximumNativeRelativeCorrection, 0.0f, 0.05f);
+    const float selected_confidence = std::clamp(
+        options.selectedLayerConfidence, 0.0f, 1.0f);
+    const float ambiguous_multiplier = std::clamp(
+        options.ambiguousNativeConfidenceMultiplier, 0.0f, 1.0f);
+
+    std::vector<SourceDepthCandidate> candidates;
+    candidates.reserve(projected_source_depths.size());
+    for (int row = 0; row < reference_depth.rows; ++row)
+    {
+        float *depth_row = reference_depth.ptr<float>(row);
+        float *confidence_row = has_confidence
+            ? reference_confidence->ptr<float>(row) : nullptr;
+        for (int column = 0; column < reference_depth.cols; ++column)
+        {
+            if (has_support && support_mask.at<std::uint8_t>(row, column) == 0)
+            {
+                depth_row[column] = 0.0f;
+                if (confidence_row)
+                {
+                    confidence_row[column] = 0.0f;
+                }
+                continue;
+            }
+
+            ++stats.consideredPixelCount;
+            const float native_depth = depth_row[column];
+            const bool native_valid = validDepth(native_depth);
+            candidates.clear();
+            for (int source_ordinal = 0;
+                 source_ordinal < static_cast<int>(projected_source_depths.size());
+                 ++source_ordinal)
+            {
+                const cv::Mat &projected = projected_source_depths[
+                    static_cast<std::size_t>(source_ordinal)];
+                if (projected.type() != CV_32FC1 || projected.size() != size)
+                {
+                    continue;
+                }
+                const float candidate = projected.at<float>(row, column);
+                if (validDepth(candidate))
+                {
+                    candidates.push_back({candidate, source_ordinal});
+                }
+            }
+            std::sort(candidates.begin(), candidates.end(),
+                      [](const SourceDepthCandidate &left,
+                         const SourceDepthCandidate &right)
+                      {
+                          return left.depth < right.depth;
+                      });
+
+            int best_begin = -1;
+            int best_count = 0;
+            float best_spread = std::numeric_limits<float>::infinity();
+            float best_native_distance = std::numeric_limits<float>::infinity();
+            for (int begin = 0; begin < static_cast<int>(candidates.size()); ++begin)
+            {
+                int end = begin + 1;
+                while (end < static_cast<int>(candidates.size()) &&
+                       relativeDifference(candidates[begin].depth,
+                                          candidates[end].depth) <= maximum_spread)
+                {
+                    ++end;
+                }
+                const int count = end - begin;
+                const float median = candidates[
+                    static_cast<std::size_t>(begin + (count - 1) / 2)].depth;
+                const float spread = count > 1
+                    ? relativeDifference(candidates[begin].depth,
+                                         candidates[end - 1].depth)
+                    : 0.0f;
+                const float native_distance = native_valid
+                    ? relativeDifference(native_depth, median) : 0.0f;
+                if (count > best_count ||
+                    (count == best_count && spread < best_spread) ||
+                    (count == best_count && spread == best_spread &&
+                     native_distance < best_native_distance))
+                {
+                    best_begin = begin;
+                    best_count = count;
+                    best_spread = spread;
+                    best_native_distance = native_distance;
+                }
+            }
+
+            if (best_count < minimum_sources)
+            {
+                if (native_valid)
+                {
+                    ++stats.ambiguousNativePixelCount;
+                    if (confidence_row && has_contradicted_votes &&
+                        contradicted_source_votes.at<std::uint16_t>(row, column) > 0)
+                    {
+                        confidence_row[column] = std::clamp(
+                            confidence_row[column] * ambiguous_multiplier,
+                            0.0f,
+                            1.0f);
+                    }
+                }
+                else
+                {
+                    ++stats.unresolvedMissingPixelCount;
+                }
+                continue;
+            }
+
+            ++stats.stableLayerPixelCount;
+            const int median_index = best_begin + (best_count - 1) / 2;
+            const float selected_depth = candidates[
+                static_cast<std::size_t>(median_index)].depth;
+            bool selected_from_sources = false;
+            if (!native_valid)
+            {
+                if (!options.transferObservedDepthIntoMissingPixels)
+                {
+                    ++stats.unresolvedMissingPixelCount;
+                    continue;
+                }
+                depth_row[column] = selected_depth;
+                selected_from_sources = true;
+                ++stats.transferredMissingPixelCount;
+            }
+            else if (relativeDifference(native_depth, selected_depth) <= native_agreement)
+            {
+                const float native_inverse = 1.0f / native_depth;
+                const float selected_inverse = 1.0f / selected_depth;
+                float refined_depth = 1.0f /
+                    ((1.0f - blend_weight) * native_inverse +
+                     blend_weight * selected_inverse);
+                const float maximum_delta = native_depth * maximum_correction;
+                refined_depth = std::clamp(
+                    refined_depth,
+                    native_depth - maximum_delta,
+                    native_depth + maximum_delta);
+                if (std::fabs(refined_depth - native_depth) > 1.0e-7f)
+                {
+                    depth_row[column] = refined_depth;
+                    ++stats.refinedNativePixelCount;
+                }
+            }
+            else if (best_count >= minimum_replacement_sources &&
+                     (!has_consistent_votes || !has_contradicted_votes ||
+                      contradicted_source_votes.at<std::uint16_t>(row, column) >
+                          consistent_source_votes.at<std::uint16_t>(row, column)))
+            {
+                depth_row[column] = selected_depth;
+                selected_from_sources = true;
+                ++stats.switchedNativePixelCount;
+            }
+            else
+            {
+                ++stats.ambiguousNativePixelCount;
+                if (confidence_row)
+                {
+                    confidence_row[column] = std::clamp(
+                        confidence_row[column] * ambiguous_multiplier,
+                        0.0f,
+                        1.0f);
+                }
+                continue;
+            }
+
+            if (selected_from_sources && update_selection_mask)
+            {
+                selected_layer_mask->at<std::uint8_t>(row, column) = 255;
+            }
+            if (confidence_row && selected_from_sources)
+            {
+                confidence_row[column] = std::min(
+                    selected_confidence,
+                    std::max(confidence_row[column], selected_confidence * 0.75f));
+            }
+
+            std::uint16_t source_bits = 0;
+            float inverse_sum = 0.0f;
+            float inverse_squared_sum = 0.0f;
+            for (int candidate_index = best_begin;
+                 candidate_index < best_begin + best_count;
+                 ++candidate_index)
+            {
+                const SourceDepthCandidate &candidate = candidates[
+                    static_cast<std::size_t>(candidate_index)];
+                if (candidate.sourceOrdinal >= 0 && candidate.sourceOrdinal < 16)
+                {
+                    source_bits = static_cast<std::uint16_t>(
+                        source_bits |
+                        (static_cast<std::uint16_t>(1U) << candidate.sourceOrdinal));
+                }
+                const float inverse_depth = 1.0f / candidate.depth;
+                inverse_sum += inverse_depth;
+                inverse_squared_sum += inverse_depth * inverse_depth;
+            }
+            if (update_geometry)
+            {
+                geometry_source_mask->at<std::uint16_t>(row, column) = source_bits;
+                source_inverse_depth_sum->at<float>(row, column) = inverse_sum;
+                source_inverse_depth_squared_sum->at<float>(row, column) =
+                    inverse_squared_sum;
+            }
+            if (update_votes)
+            {
+                selected_source_votes->at<std::uint16_t>(row, column) =
+                    static_cast<std::uint16_t>(std::min(
+                        best_count,
+                        static_cast<int>(
+                            std::numeric_limits<std::uint16_t>::max())));
+            }
+        }
+    }
+    return stats;
+}
+
 CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
     cv::Mat &reference_depth,
     const cv::Mat &support_mask,
@@ -308,11 +583,19 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
         source_inverse_depth_squared_sum &&
         source_inverse_depth_squared_sum->type() == CV_32FC1 &&
         source_inverse_depth_squared_sum->size() == reference_depth.size();
-    cv::Mat strong_repaired_mask(
-        reference_depth.size(), CV_8UC1, cv::Scalar(0));
+    cv::Mat strong_repaired_mask = repaired_mask &&
+            repaired_mask->type() == CV_8UC1 &&
+            repaired_mask->size() == reference_depth.size()
+        ? repaired_mask->clone()
+        : cv::Mat(reference_depth.size(), CV_8UC1, cv::Scalar(0));
     if (repaired_mask)
     {
-        *repaired_mask = cv::Mat(reference_depth.size(), CV_8UC1, cv::Scalar(0));
+        if (repaired_mask->type() != CV_8UC1 ||
+            repaired_mask->size() != reference_depth.size())
+        {
+            *repaired_mask = cv::Mat(
+                reference_depth.size(), CV_8UC1, cv::Scalar(0));
+        }
     }
     auto interpolate_anchored_components = [&]()
     {
@@ -862,6 +1145,27 @@ QJsonObject crossViewHoleRepairStatsToJson(
         QStringLiteral("anchored_interpolation"),
         depthAnchoredHoleInterpolationStatsToJson(stats.anchoredInterpolation));
     return object;
+}
+
+QJsonObject dominantDepthLayerSelectionStatsToJson(
+    const DominantDepthLayerSelectionStats &stats)
+{
+    return {
+        {QStringLiteral("considered_pixel_count"),
+         static_cast<double>(stats.consideredPixelCount)},
+        {QStringLiteral("stable_layer_pixel_count"),
+         static_cast<double>(stats.stableLayerPixelCount)},
+        {QStringLiteral("refined_native_pixel_count"),
+         static_cast<double>(stats.refinedNativePixelCount)},
+        {QStringLiteral("switched_native_pixel_count"),
+         static_cast<double>(stats.switchedNativePixelCount)},
+        {QStringLiteral("transferred_missing_pixel_count"),
+         static_cast<double>(stats.transferredMissingPixelCount)},
+        {QStringLiteral("ambiguous_native_pixel_count"),
+         static_cast<double>(stats.ambiguousNativePixelCount)},
+        {QStringLiteral("unresolved_missing_pixel_count"),
+         static_cast<double>(stats.unresolvedMissingPixelCount)}
+    };
 }
 
 } // namespace xjw::mvs

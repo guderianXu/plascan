@@ -105,6 +105,13 @@ faces, 45 boundary edges, one component, and an 8.55-degree normal median.
 These runs verify that GUI defaults select MC33, adaptive TGV, the six-voxel
 geometry profile, and OpenMesh rather than only the explicit validation JSON.
 
+`mesh_gui_ultra_observed_openmesh.json` is the observation-only counterpart.
+It uses the same Ultra/240,000-face controls, disables interpolation, preserves
+vertex colors, and enables zero-crossing attribution. Use it to distinguish
+missing MVS depth from TSDF support-gate or extraction/post-processing holes;
+do not accept a candidate solely because projected recall passes the quality
+gate—inspect the aligned contact sheet and geometry-distance report as well.
+
 ## Depth/pose/fusion attribution
 
 `run_depth_pose_fusion_ablation.ps1` freezes declared camera, depth, fusion,

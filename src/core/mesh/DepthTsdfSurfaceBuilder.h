@@ -62,6 +62,10 @@ struct DepthTsdfOptions
     float weakNativeObservationMultiplier = 0.55f;
     float repairedObservationMultiplier = 0.70f;
     float adaptiveGeometryMinimumObservationMultiplier = 0.15f;
+    bool enableAdaptiveConflictRobustWeighting = false;
+    float adaptiveConflictWeightKnee = 0.20f;
+    float adaptiveConflictWeightZero = 0.75f;
+    float minimumAdaptiveConflictWeightMultiplier = 0.02f;
     float adaptiveGeometryFullIntegrationMinimumSupportWeight = 0.75f;
     float adaptiveGeometryFullIntegrationMinimumEffectiveViewCount = 1.75f;
     float adaptiveGeometryFullIntegrationMaximumConflictRatio = 0.20f;

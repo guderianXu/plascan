@@ -48,6 +48,30 @@ struct CrossViewHoleRepairStats
     DepthAnchoredHoleInterpolationStats anchoredInterpolation;
 };
 
+struct DominantDepthLayerSelectionOptions
+{
+    int minimumDistinctSourceCount = 2;
+    int minimumReplacementSourceCount = 3;
+    float maximumRelativeDepthSpread = 0.018f;
+    float maximumNativeAgreementRelativeDifference = 0.025f;
+    float nativeConsensusBlendWeight = 0.35f;
+    float maximumNativeRelativeCorrection = 0.010f;
+    float selectedLayerConfidence = 0.72f;
+    float ambiguousNativeConfidenceMultiplier = 0.45f;
+    bool transferObservedDepthIntoMissingPixels = true;
+};
+
+struct DominantDepthLayerSelectionStats
+{
+    std::uint64_t consideredPixelCount = 0;
+    std::uint64_t stableLayerPixelCount = 0;
+    std::uint64_t refinedNativePixelCount = 0;
+    std::uint64_t switchedNativePixelCount = 0;
+    std::uint64_t transferredMissingPixelCount = 0;
+    std::uint64_t ambiguousNativePixelCount = 0;
+    std::uint64_t unresolvedMissingPixelCount = 0;
+};
+
 cv::Mat projectSourceDepthToReference(
     const cv::Mat &sourceDepth,
     const Camera &sourceCamera,
@@ -55,6 +79,25 @@ cv::Mat projectSourceDepthToReference(
     const cv::Size &referenceSize,
     float maximumProjectionDistancePixels,
     std::uint64_t *projectedCandidateCount = nullptr);
+
+/// Selects one occlusion-aware depth layer from source depths projected into
+/// the reference view. Stable source clusters may refine a matching native
+/// hypothesis, replace a contradicted native layer, or transfer an observed
+/// layer into a missing reference pixel. Ambiguous native observations are
+/// retained with calibrated confidence instead of being hard-deleted.
+DominantDepthLayerSelectionStats selectDominantProjectedDepthLayer(
+    cv::Mat &referenceDepth,
+    const cv::Mat &supportMask,
+    const std::vector<cv::Mat> &projectedSourceDepths,
+    const cv::Mat &consistentSourceVotes,
+    const cv::Mat &contradictedSourceVotes,
+    const DominantDepthLayerSelectionOptions &options = {},
+    cv::Mat *referenceConfidence = nullptr,
+    cv::Mat *selectedLayerMask = nullptr,
+    cv::Mat *geometrySourceMask = nullptr,
+    cv::Mat *sourceInverseDepthSum = nullptr,
+    cv::Mat *sourceInverseDepthSquaredSum = nullptr,
+    cv::Mat *selectedSourceVotes = nullptr);
 
 CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
     cv::Mat &referenceDepth,
@@ -72,5 +115,8 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
 
 QJsonObject crossViewHoleRepairStatsToJson(
     const CrossViewHoleRepairStats &stats);
+
+QJsonObject dominantDepthLayerSelectionStatsToJson(
+    const DominantDepthLayerSelectionStats &stats);
 
 } // namespace xjw::mvs

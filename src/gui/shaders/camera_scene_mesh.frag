@@ -39,10 +39,18 @@ void main()
     float headDiffuse = max(dot(n, viewDir), 0.0);
     float keyDiffuse = max(dot(n, lightDir), 0.0);
     vec3 baseLinear = srgbToLinear(vColor);
-    // Vertex colors are sampled from photographs and already contain illumination.
-    // Keep them as the dominant appearance signal; a second strong directional
-    // lighting pass would darken bright, low-albedo planetary imagery twice.
-    float gentleShape = 0.86 + 0.10 * keyDiffuse + 0.04 * headDiffuse;
-    vec3 litLinear = baseLinear * gentleShape;
+    // Shaded and solid modes use two exact neutral palette colours.  They need
+    // stronger directional contrast to reveal curvature or individual faces.
+    // Photograph-derived vertex colours already contain illumination and keep
+    // the gentler path so that vertex colouring does not become a fake texture.
+    vec3 shadedPalette = vec3(239.0, 236.0, 224.0) / 255.0;
+    vec3 solidPalette = vec3(160.0, 156.0, 205.0) / 255.0;
+    float neutralDistance = min(distance(vColor, shadedPalette),
+                                distance(vColor, solidPalette));
+    float isNeutralSurface = 1.0 - step(0.008, neutralDistance);
+    float photoShape = 0.86 + 0.10 * keyDiffuse + 0.04 * headDiffuse;
+    float neutralShape = 0.38 + 0.42 * keyDiffuse + 0.20 * headDiffuse;
+    float shape = mix(photoShape, neutralShape, isNeutralSurface);
+    vec3 litLinear = baseLinear * shape;
     fragColor = vec4(linearToSrgb(litLinear), 1.0);
 }

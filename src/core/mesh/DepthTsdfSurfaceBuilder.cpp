@@ -3093,12 +3093,39 @@ float DepthTsdfSurfaceBuilder::observationEvidenceWeightMultiplier(
             ? std::clamp(
                   observation.adaptiveGeometrySupportWeight, 0.0f, 1.0f)
             : 0.0f;
-        return std::max(
+        float multiplier = std::max(
             std::clamp(
                 options.adaptiveGeometryMinimumObservationMultiplier,
                 0.05f,
                 1.0f),
             support_weight);
+        if (!options.enableAdaptiveConflictRobustWeighting ||
+            !std::isfinite(observation.adaptiveGeometryConflictRatio))
+        {
+            return multiplier;
+        }
+
+        const float conflict_ratio = std::clamp(
+            observation.adaptiveGeometryConflictRatio, 0.0f, 1.0f);
+        const float knee = std::clamp(
+            options.adaptiveConflictWeightKnee, 0.0f, 0.99f);
+        const float zero = std::clamp(
+            options.adaptiveConflictWeightZero, knee + 1.0e-6f, 1.0f);
+        const float minimum_conflict_multiplier = std::clamp(
+            options.minimumAdaptiveConflictWeightMultiplier, 0.0f, 1.0f);
+        if (conflict_ratio <= knee)
+        {
+            return multiplier;
+        }
+        if (conflict_ratio >= zero)
+        {
+            return multiplier * minimum_conflict_multiplier;
+        }
+        const float normalized = (conflict_ratio - knee) / (zero - knee);
+        const float smooth = normalized * normalized *
+            (3.0f - 2.0f * normalized);
+        return multiplier *
+            (1.0f - smooth * (1.0f - minimum_conflict_multiplier));
     }
     if (!options.enablePixelEvidenceWeighting)
     {
@@ -3194,8 +3221,15 @@ bool DepthTsdfSurfaceBuilder::observationHasStrongAdaptiveGeometryEvidence(
     const DepthTsdfObservationSample &observation,
     const DepthTsdfOptions &options)
 {
-    if (!observation.useAdaptiveGeometryEvidence ||
-        observation.usedCrossViewRepairedDepth ||
+    if (!observation.useAdaptiveGeometryEvidence)
+    {
+        return false;
+    }
+    if (observation.usedCrossViewRepairedDepth)
+    {
+        return false;
+    }
+    if (
         !std::isfinite(observation.adaptiveGeometrySupportWeight) ||
         !std::isfinite(observation.adaptiveGeometryEffectiveViewCount) ||
         !std::isfinite(observation.adaptiveGeometryConflictRatio))

@@ -5049,14 +5049,33 @@ void DepthMapGenerator::crossCheckDepthConsistency()
             occluded_votes,
             contradicted_votes);
 
-        // 剔除不一致像素
+        _depthFrames[i].crossViewRepairedMask =
+            QSharedPointer<cv::Mat>::create(
+                depthI.size(), CV_8UC1, cv::Scalar(0));
+        DominantDepthLayerSelectionStats layer_selection_stats;
         if (generate_adaptive_evidence)
         {
-            // Revision 14 keeps native orbital hypotheses and lets continuous
-            // evidence control their TSDF weight and integration band. The
-            // authoritative support mask remains a hard data-domain boundary.
+            // Revision 15 chooses one observable depth layer before TSDF.
+            // A stable projected-source cluster may refine/switch the native
+            // hypothesis or transfer measured depth into a missing pixel.
+            // Ambiguous native samples remain available at reduced confidence
+            // so consistency filtering cannot create an entire missing sector.
             depthBackup.copyTo(depthI);
             depthI.setTo(0.0f, repair_mask == 0);
+            layer_selection_stats = selectDominantProjectedDepthLayer(
+                depthI,
+                repair_mask,
+                projected_sources,
+                consistent_votes,
+                contradicted_votes,
+                {},
+                _depthFrames[i].confidence
+                    ? _depthFrames[i].confidence.data() : nullptr,
+                _depthFrames[i].crossViewRepairedMask.data(),
+                &geometry_source_mask,
+                &source_inverse_depth_sum,
+                &source_inverse_depth_squared_sum,
+                &consistent_votes);
         }
         else
         {
@@ -5081,7 +5100,6 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                     ? _depthFrames[i].confidence.data()
                     : nullptr);
         }
-        _depthFrames[i].crossViewRepairedMask = QSharedPointer<cv::Mat>::create();
         const CrossViewHoleRepairStats repair_stats =
             repairDepthHolesFromProjectedSources(
                 depthI,
@@ -5120,6 +5138,9 @@ void DepthMapGenerator::crossCheckDepthConsistency()
         _depthFrames[i].crossViewRepairDiagnostics =
             crossViewHoleRepairStatsToJson(repair_stats);
         _depthFrames[i].crossViewRepairDiagnostics.insert(
+            QStringLiteral("dominant_depth_layer_selection"),
+            dominantDepthLayerSelectionStatsToJson(layer_selection_stats));
+        _depthFrames[i].crossViewRepairDiagnostics.insert(
             QStringLiteral("weak_native_retention"),
             QJsonObject{
                 {QStringLiteral("considered_pixel_count"),
@@ -5152,7 +5173,10 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                  static_cast<double>(
                      unconfirmed_native_backfill.rejectedContradictionPixelCount)}});
         _depthFrames[i].depthCompleteness.crossViewRepairedCount +=
-            static_cast<int>(repair_stats.repairedPixelCount);
+            static_cast<int>(
+                repair_stats.repairedPixelCount +
+                layer_selection_stats.switchedNativePixelCount +
+                layer_selection_stats.transferredMissingPixelCount);
         cv::Mat restoration_mask = _depthFrames[i].supportRegionMask &&
                 !_depthFrames[i].supportRegionMask->empty()
             ? *_depthFrames[i].supportRegionMask
@@ -5520,10 +5544,27 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             contradicted_votes);
 
         const int valid_before = cv::countNonZero(reference->depth > 0.0f);
+        _depthFrames[frame_index].crossViewRepairedMask =
+            QSharedPointer<cv::Mat>::create(
+                filtered_depth.size(), CV_8UC1, cv::Scalar(0));
+        DominantDepthLayerSelectionStats layer_selection_stats;
         if (generate_adaptive_evidence)
         {
             reference->depth.copyTo(filtered_depth);
             filtered_depth.setTo(0.0f, repair_mask == 0);
+            layer_selection_stats = selectDominantProjectedDepthLayer(
+                filtered_depth,
+                repair_mask,
+                projected_sources,
+                consistent_votes,
+                contradicted_votes,
+                {},
+                filtered_confidence.empty() ? nullptr : &filtered_confidence,
+                _depthFrames[frame_index].crossViewRepairedMask.data(),
+                &geometry_source_mask,
+                &source_inverse_depth_sum,
+                &source_inverse_depth_squared_sum,
+                &consistent_votes);
         }
         else
         {
@@ -5542,8 +5583,6 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 &filtered_depth,
                 filtered_confidence.empty() ? nullptr : &filtered_confidence);
         }
-        _depthFrames[frame_index].crossViewRepairedMask =
-            QSharedPointer<cv::Mat>::create();
         const CrossViewHoleRepairStats repair_stats =
             repairDepthHolesFromProjectedSources(
                 filtered_depth,
@@ -5575,6 +5614,9 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 filtered_confidence.empty() ? nullptr : &filtered_confidence);
         _depthFrames[frame_index].crossViewRepairDiagnostics =
             crossViewHoleRepairStatsToJson(repair_stats);
+        _depthFrames[frame_index].crossViewRepairDiagnostics.insert(
+            QStringLiteral("dominant_depth_layer_selection"),
+            dominantDepthLayerSelectionStatsToJson(layer_selection_stats));
         _depthFrames[frame_index].crossViewRepairDiagnostics.insert(
             QStringLiteral("weak_native_retention"),
             QJsonObject{
@@ -5608,7 +5650,10 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                  static_cast<double>(
                      unconfirmed_native_backfill.rejectedContradictionPixelCount)}});
         _depthFrames[frame_index].depthCompleteness.crossViewRepairedCount +=
-            static_cast<int>(repair_stats.repairedPixelCount);
+            static_cast<int>(
+                repair_stats.repairedPixelCount +
+                layer_selection_stats.switchedNativePixelCount +
+                layer_selection_stats.transferredMissingPixelCount);
         cv::Mat restoration_mask = _depthFrames[frame_index].supportRegionMask &&
                 !_depthFrames[frame_index].supportRegionMask->empty()
             ? *_depthFrames[frame_index].supportRegionMask

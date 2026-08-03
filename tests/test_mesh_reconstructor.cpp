@@ -2801,6 +2801,45 @@ TEST(DepthTsdfSurfaceBuilderTest,
 }
 
 TEST(DepthTsdfSurfaceBuilderTest,
+     AdaptiveConflictWeightingSuppressesContradictedNativeLayerContinuously)
+{
+    xjw::mesh::DepthTsdfOptions options;
+    options.enableAdaptiveConflictRobustWeighting = true;
+    options.adaptiveConflictWeightKnee = 0.20f;
+    options.adaptiveConflictWeightZero = 0.75f;
+    options.minimumAdaptiveConflictWeightMultiplier = 0.02f;
+    xjw::mesh::DepthTsdfObservationSample observation;
+    observation.useAdaptiveGeometryEvidence = true;
+    observation.adaptiveGeometrySupportWeight = 0.8f;
+
+    observation.adaptiveGeometryConflictRatio = 0.20f;
+    EXPECT_FLOAT_EQ(
+        xjw::mesh::DepthTsdfSurfaceBuilder::observationEvidenceWeightMultiplier(
+            observation, options),
+        0.8f);
+
+    observation.adaptiveGeometryConflictRatio = 0.475f;
+    EXPECT_NEAR(
+        xjw::mesh::DepthTsdfSurfaceBuilder::observationEvidenceWeightMultiplier(
+            observation, options),
+        0.408f,
+        1.0e-5f);
+
+    observation.adaptiveGeometryConflictRatio = 0.75f;
+    EXPECT_NEAR(
+        xjw::mesh::DepthTsdfSurfaceBuilder::observationEvidenceWeightMultiplier(
+            observation, options),
+        0.016f,
+        1.0e-6f);
+
+    observation.usedCrossViewRepairedDepth = true;
+    EXPECT_FLOAT_EQ(
+        xjw::mesh::DepthTsdfSurfaceBuilder::observationEvidenceWeightMultiplier(
+            observation, options),
+        options.repairedObservationMultiplier);
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
      RevisionFourteenAdaptiveIntegrationGateIsInclusive)
 {
     xjw::mesh::DepthTsdfOptions options;
@@ -2813,6 +2852,17 @@ TEST(DepthTsdfSurfaceBuilderTest,
     EXPECT_TRUE(
         xjw::mesh::DepthTsdfSurfaceBuilder::
             observationHasStrongAdaptiveGeometryEvidence(observation, options));
+
+    observation.usedCrossViewRepairedDepth = true;
+    observation.geometrySupportCount = 2;
+    EXPECT_FALSE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::
+            observationHasStrongAdaptiveGeometryEvidence(observation, options));
+    observation.geometrySupportCount = 1;
+    EXPECT_FALSE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::
+            observationHasStrongAdaptiveGeometryEvidence(observation, options));
+    observation.usedCrossViewRepairedDepth = false;
     EXPECT_FALSE(
         xjw::mesh::DepthTsdfSurfaceBuilder::
             observationUsesSurfaceOnlyIntegration(observation, options));
@@ -7084,6 +7134,10 @@ TEST(MeshWorkflowSettingsTest,
     EXPECT_FLOAT_EQ(
         options.uncertaintyAdaptiveMaximumTruncationVoxels, 12.0f);
     EXPECT_TRUE(options.enablePixelEvidenceWeighting);
+    EXPECT_TRUE(options.enableAdaptiveConflictRobustWeighting);
+    EXPECT_FLOAT_EQ(options.adaptiveConflictWeightKnee, 0.20f);
+    EXPECT_FLOAT_EQ(options.adaptiveConflictWeightZero, 0.75f);
+    EXPECT_FLOAT_EQ(options.minimumAdaptiveConflictWeightMultiplier, 0.02f);
     EXPECT_TRUE(options.enableInverseDepthSpreadWeighting);
     EXPECT_FLOAT_EQ(options.inverseDepthSpreadWeightKnee, 0.005f);
     EXPECT_FLOAT_EQ(options.inverseDepthSpreadWeightZero, 0.015f);

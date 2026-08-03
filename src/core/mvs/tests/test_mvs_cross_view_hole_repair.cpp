@@ -182,6 +182,133 @@ TEST(DepthCrossViewHoleRepairTest, RejectsOversizedTwoSourceComponent)
     EXPECT_EQ(cv::countNonZero(reference(cv::Rect(28, 28, 7, 7)) > 0.0f), 0);
 }
 
+TEST(DepthCrossViewHoleRepairTest, RefinesNativeDepthTowardStableProjectedLayer)
+{
+    cv::Mat reference(1, 1, CV_32FC1, cv::Scalar(2.0f));
+    const cv::Mat support(1, 1, CV_8UC1, cv::Scalar(255));
+    const std::vector<cv::Mat> projected = {
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(2.01f)),
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(2.02f)),
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(2.01f))};
+    cv::Mat confidence(1, 1, CV_32FC1, cv::Scalar(0.9f));
+    cv::Mat consistent(1, 1, CV_16UC1, cv::Scalar(3));
+    cv::Mat contradicted(1, 1, CV_16UC1, cv::Scalar(0));
+    cv::Mat selected_mask;
+
+    const auto stats = xjw::mvs::selectDominantProjectedDepthLayer(
+        reference,
+        support,
+        projected,
+        consistent,
+        contradicted,
+        {},
+        &confidence,
+        &selected_mask);
+
+    EXPECT_EQ(stats.stableLayerPixelCount, 1U);
+    EXPECT_EQ(stats.refinedNativePixelCount, 1U);
+    EXPECT_GT(reference.at<float>(0, 0), 2.0f);
+    EXPECT_LT(reference.at<float>(0, 0), 2.01f);
+    EXPECT_EQ(selected_mask.at<std::uint8_t>(0, 0), 0);
+    EXPECT_FLOAT_EQ(confidence.at<float>(0, 0), 0.9f);
+}
+
+TEST(DepthCrossViewHoleRepairTest, SwitchesContradictedNativeDepthToDominantLayer)
+{
+    cv::Mat reference(1, 1, CV_32FC1, cv::Scalar(4.0f));
+    const cv::Mat support(1, 1, CV_8UC1, cv::Scalar(255));
+    const std::vector<cv::Mat> projected = {
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(2.0f)),
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(2.01f)),
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(2.02f))};
+    cv::Mat confidence(1, 1, CV_32FC1, cv::Scalar(0.4f));
+    cv::Mat consistent(1, 1, CV_16UC1, cv::Scalar(0));
+    cv::Mat contradicted(1, 1, CV_16UC1, cv::Scalar(3));
+    cv::Mat selected_mask;
+    cv::Mat source_mask(1, 1, CV_16UC1, cv::Scalar(0));
+    cv::Mat inverse_sum(1, 1, CV_32FC1, cv::Scalar(0.0f));
+    cv::Mat inverse_squared_sum(1, 1, CV_32FC1, cv::Scalar(0.0f));
+    cv::Mat selected_votes(1, 1, CV_16UC1, cv::Scalar(0));
+
+    const auto stats = xjw::mvs::selectDominantProjectedDepthLayer(
+        reference,
+        support,
+        projected,
+        consistent,
+        contradicted,
+        {},
+        &confidence,
+        &selected_mask,
+        &source_mask,
+        &inverse_sum,
+        &inverse_squared_sum,
+        &selected_votes);
+
+    EXPECT_EQ(stats.switchedNativePixelCount, 1U);
+    EXPECT_NEAR(reference.at<float>(0, 0), 2.01f, 1.0e-6f);
+    EXPECT_EQ(selected_mask.at<std::uint8_t>(0, 0), 255);
+    EXPECT_EQ(source_mask.at<std::uint16_t>(0, 0), 0x0007);
+    EXPECT_EQ(selected_votes.at<std::uint16_t>(0, 0), 3);
+    EXPECT_GT(inverse_sum.at<float>(0, 0), 1.0f);
+    EXPECT_GT(inverse_squared_sum.at<float>(0, 0), 0.0f);
+}
+
+TEST(DepthCrossViewHoleRepairTest, TransfersStableObservedLayerIntoMissingPixel)
+{
+    cv::Mat reference(1, 2, CV_32FC1, cv::Scalar(0.0f));
+    cv::Mat support(1, 2, CV_8UC1, cv::Scalar(255));
+    support.at<std::uint8_t>(0, 1) = 0;
+    const std::vector<cv::Mat> projected = {
+        cv::Mat(1, 2, CV_32FC1, cv::Scalar(3.0f)),
+        cv::Mat(1, 2, CV_32FC1, cv::Scalar(3.01f))};
+    cv::Mat confidence(1, 2, CV_32FC1, cv::Scalar(0.0f));
+    cv::Mat consistent(1, 2, CV_16UC1, cv::Scalar(2));
+    cv::Mat contradicted(1, 2, CV_16UC1, cv::Scalar(0));
+    cv::Mat selected_mask;
+
+    const auto stats = xjw::mvs::selectDominantProjectedDepthLayer(
+        reference,
+        support,
+        projected,
+        consistent,
+        contradicted,
+        {},
+        &confidence,
+        &selected_mask);
+
+    EXPECT_EQ(stats.transferredMissingPixelCount, 1U);
+    EXPECT_NEAR(reference.at<float>(0, 0), 3.0f, 1.0e-6f);
+    EXPECT_EQ(selected_mask.at<std::uint8_t>(0, 0), 255);
+    EXPECT_GT(confidence.at<float>(0, 0), 0.5f);
+    EXPECT_FLOAT_EQ(reference.at<float>(0, 1), 0.0f);
+    EXPECT_FLOAT_EQ(confidence.at<float>(0, 1), 0.0f);
+}
+
+TEST(DepthCrossViewHoleRepairTest, KeepsAmbiguousNativeDepthButReducesConfidence)
+{
+    cv::Mat reference(1, 1, CV_32FC1, cv::Scalar(2.0f));
+    const cv::Mat support(1, 1, CV_8UC1, cv::Scalar(255));
+    const std::vector<cv::Mat> projected = {
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(3.0f)),
+        cv::Mat(1, 1, CV_32FC1, cv::Scalar(5.0f))};
+    cv::Mat confidence(1, 1, CV_32FC1, cv::Scalar(0.8f));
+    cv::Mat consistent(1, 1, CV_16UC1, cv::Scalar(0));
+    cv::Mat contradicted(1, 1, CV_16UC1, cv::Scalar(2));
+
+    const auto stats = xjw::mvs::selectDominantProjectedDepthLayer(
+        reference,
+        support,
+        projected,
+        consistent,
+        contradicted,
+        {},
+        &confidence);
+
+    EXPECT_EQ(stats.ambiguousNativePixelCount, 1U);
+    EXPECT_FLOAT_EQ(reference.at<float>(0, 0), 2.0f);
+    EXPECT_NEAR(confidence.at<float>(0, 0), 0.36f, 1.0e-6f);
+}
+
 TEST(DepthCrossViewHoleRepairTest,
      UsesValidNativeBoundaryAsInterpolationAnchor)
 {

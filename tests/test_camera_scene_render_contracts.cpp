@@ -506,6 +506,8 @@ TEST(CameraSceneRenderContractTest, ModelMenuEnablesTextureAndGatesUnsupportedMo
     EXPECT_TRUE(menuBindingsSource.contains(QStringLiteral("setModelColorMode")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral(
         "self->setModelColorMode(ModelColorMode::Texture)")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
+        "self->setModelColorMode(ModelColorMode::Solid)")));
 }
 
 TEST(CameraSceneRenderContractTest, ModelModesRebuildGeometryAndDrawLegends)
@@ -538,10 +540,12 @@ TEST(CameraSceneRenderContractTest, ModelModesRebuildGeometryAndDrawLegends)
     EXPECT_TRUE(modelSource.contains(QStringLiteral("displayVertexNormals")));
     EXPECT_TRUE(modelSource.contains(QStringLiteral("generatedVertexNormals")));
     EXPECT_TRUE(vertexShader.contains(QStringLiteral("vViewPosition")));
+    EXPECT_TRUE(fragmentShader.contains(QStringLiteral("isNeutralSurface")));
+    EXPECT_TRUE(fragmentShader.contains(QStringLiteral("neutralShape")));
     EXPECT_TRUE(fragmentShader.contains(QStringLiteral("dot(n, viewDir) < 0.0")));
     EXPECT_TRUE(fragmentShader.contains(QStringLiteral(
         "0.86 + 0.10 * keyDiffuse + 0.04 * headDiffuse")));
     EXPECT_TRUE(fragmentShader.contains(QStringLiteral(
-        "Vertex colors are sampled from photographs")));
+        "Photograph-derived vertex colours")));
     EXPECT_FALSE(fragmentShader.contains(QStringLiteral("0.18 + 0.72 * diffuse")));
 }

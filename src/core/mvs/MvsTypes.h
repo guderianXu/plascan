@@ -218,7 +218,7 @@ struct DepthGenConfig
     MvsSceneProfile sceneProfile = MvsSceneProfile::Auto; ///< Auto 时根据相机与稀疏云几何分类
     DepthFilterMode depthFilterMode = DepthFilterMode::Moderate; ///< 显式过滤预设
     bool adaptiveDepthFilterMode = true; ///< Auto 场景下航测用中等、环拍物体用温和过滤
-    bool enableAdaptiveGeometryEvidence = true; ///< 环拍场景生成连续几何证据；当前仅影子统计
+    bool enableAdaptiveGeometryEvidence = true; ///< 环拍场景生成连续证据并执行投影主深度层选择
     DepthPoseRefinementOptions depthPoseRefinement; ///< 默认关闭；仅输出派生相机候选和诊断，不覆盖项目相机
     int crossViewHoleRepairSourceCount = 8; ///< 环拍内部孔洞修复使用的邻帧数，不改变 PatchMatch 源视图
     bool enableTwoSourceCrossViewGrowth = false; ///< 实验：从三源强核心受控恢复稳定两源缺口
