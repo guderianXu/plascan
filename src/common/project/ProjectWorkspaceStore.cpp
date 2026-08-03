@@ -658,6 +658,42 @@ void ProjectWorkspaceStore::releaseRuntime() const
     ProjectIO::unregisterRuntimeRoot(_projectPath);
 }
 
+bool ProjectWorkspaceStore::stagePackedResource(
+    const QString &sourcePath,
+    QString *stagedPath,
+    QString *errorMessage) const
+{
+    if (stagedPath)
+    {
+        stagedPath->clear();
+    }
+    const QFileInfo source(sourcePath);
+    if (!source.isFile() && !source.isDir())
+    {
+        setError(errorMessage,
+                 QStringLiteral("待打包资源不存在: %1").arg(sourcePath));
+        return false;
+    }
+
+    const QString root = runtimeRoot(errorMessage);
+    if (root.isEmpty())
+    {
+        return false;
+    }
+    const QString destination = QDir(root).filePath(
+        QStringLiteral("assets/packed/%1/%2")
+            .arg(stableToken(source.absoluteFilePath()), source.fileName()));
+    if (!copyTree(source.absoluteFilePath(), destination, errorMessage))
+    {
+        return false;
+    }
+    if (stagedPath)
+    {
+        *stagedPath = QDir::cleanPath(destination);
+    }
+    return true;
+}
+
 bool ProjectWorkspaceStore::prepareSplitMetadata(
     QJsonObject *core,
     QJsonObject *results,

@@ -9,7 +9,7 @@ namespace xjw::image_matching
 namespace
 {
 
-TEST(ImageMatchingRegistryTest, ExposesTensorRtBuiltInAlgorithms)
+TEST(ImageMatchingRegistryTest, ExposesBuiltInAlgorithmCapabilities)
 {
     const std::vector<ImageMatchingAlgorithmDescriptor> algorithms =
         ImageMatchingRegistry::descriptors();
@@ -31,6 +31,20 @@ TEST(ImageMatchingRegistryTest, ExposesTensorRtBuiltInAlgorithms)
     EXPECT_TRUE(loma->suppliesStableFeatureIds);
     EXPECT_TRUE(loma->requiresColorInput);
 }
+
+#if !defined(PLASCAN_HAS_TENSORRT)
+TEST(ImageMatchingRegistryTest, ReportsTensorRtRequirementWhenCreatingUnavailableAlgorithm)
+{
+    ASSERT_TRUE(ImageMatchingRegistry::contains(QStringLiteral("sift_lightglue")));
+    QString error;
+    const std::unique_ptr<IImageMatchingAlgorithm> algorithm =
+        ImageMatchingRegistry::create(QStringLiteral("sift_lightglue"),
+                                      ImageMatchingRuntimeConfig{},
+                                      &error);
+    EXPECT_EQ(algorithm, nullptr);
+    EXPECT_TRUE(error.contains(QStringLiteral("TensorRT"))) << error.toStdString();
+}
+#endif
 
 TEST(ImageMatchingRegistryTest, RejectsUnknownAlgorithmWithoutFallback)
 {

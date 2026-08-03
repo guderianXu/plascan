@@ -13,6 +13,7 @@
 #include <QDesktopServices>
 #include <QUrl>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QMessageBox>
 #include <QProgressDialog>

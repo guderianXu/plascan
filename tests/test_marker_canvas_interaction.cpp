@@ -99,6 +99,8 @@ TEST(MarkerCanvasInteractionTest, PhotoCommandsCreateMoveBlockAndRemoveOneProjec
     const QString project_path = directory.filePath(QStringLiteral("marker_test.plascan"));
     ASSERT_TRUE(project.createProject(project_path, QStringLiteral("marker_test")));
     ASSERT_TRUE(project.addImages({image_path}));
+    const QString project_image_path = project.getAllImages().constFirst();
+    ASSERT_FALSE(project_image_path.isEmpty());
 
     CanvasWidget canvas;
     MarkerWorkspaceController controller(&canvas, &project);
@@ -106,14 +108,18 @@ TEST(MarkerCanvasInteractionTest, PhotoCommandsCreateMoveBlockAndRemoveOneProjec
     ASSERT_TRUE(controller.openProject(&error)) << error.toStdString();
 
     ASSERT_TRUE(controller.executePhotoCommand(
-        MarkerPhotoCommand::AddNewMarker, image_path, QPointF(10.0, 20.0), {}, &error))
+        MarkerPhotoCommand::AddNewMarker,
+        project_image_path,
+        QPointF(10.0, 20.0),
+        {},
+        &error))
         << error.toStdString();
     ASSERT_EQ(controller.markerSet().markers().size(), 1);
     const QString marker_id = controller.markerSet().markers().front().id;
 
     ASSERT_TRUE(controller.executePhotoCommand(
         MarkerPhotoCommand::PlaceExistingMarker,
-        image_path,
+        project_image_path,
         QPointF(30.0, 40.0),
         marker_id,
         &error));
@@ -122,16 +128,16 @@ TEST(MarkerCanvasInteractionTest, PhotoCommandsCreateMoveBlockAndRemoveOneProjec
     EXPECT_EQ(moved_marker.projections.front().xy, QPointF(30.0, 40.0));
 
     ASSERT_TRUE(controller.executePhotoCommand(
-        MarkerPhotoCommand::BlockProjection, image_path, {}, marker_id, &error));
+        MarkerPhotoCommand::BlockProjection, project_image_path, {}, marker_id, &error));
     EXPECT_EQ(controller.markerSet().marker(marker_id).projections.front().state,
               ProjectionState::Blocked);
 
     ASSERT_TRUE(controller.executePhotoCommand(
-        MarkerPhotoCommand::UnblockProjection, image_path, {}, marker_id, &error));
+        MarkerPhotoCommand::UnblockProjection, project_image_path, {}, marker_id, &error));
     EXPECT_EQ(controller.markerSet().marker(marker_id).projections.front().state,
               ProjectionState::ManualPinned);
 
     ASSERT_TRUE(controller.executePhotoCommand(
-        MarkerPhotoCommand::RemoveProjection, image_path, {}, marker_id, &error));
+        MarkerPhotoCommand::RemoveProjection, project_image_path, {}, marker_id, &error));
     EXPECT_TRUE(controller.markerSet().marker(marker_id).projections.isEmpty());
 }

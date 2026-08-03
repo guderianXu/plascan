@@ -17,6 +17,13 @@ CLI 只消费本模块的稳定结果契约，不直接依赖 SIFT 描述子或 
 - `ImageMatchFile` 是 `.pimatch` 格式的唯一序列化入口。
 - `ImageMatchRepository` 负责对称写入、按缓存键查找和批量清理逐影像分片。
 
+## 构建配置
+
+`PLASCAN_ENABLE_TENSORRT` 在检测到 CUDA 编译器时默认开启，此时构建并注册上述两个生产算法，且要求
+TensorRT 与 CUDA Toolkit 可用。没有 CUDA 编译器的 CPU-only 构建默认关闭该选项，只构建统一数据契约、
+`.pimatch` 读写、OpenCV SIFT 基础能力和两视几何验证，用于跨平台开发与测试；算法注册表不会伪造可运行的
+TensorRT 后端。该开关不改变产品运行语义，也不会将生产匹配静默降级成 CPU 算法。
+
 ## 为什么不保存独立特征文件
 
 描述子只服务于当次 LightGlue 推理，SfM 和质量分析实际需要的是像点、跨影像对应、置信度、几何内点状态和

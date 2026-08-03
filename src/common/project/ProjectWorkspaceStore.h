@@ -26,6 +26,10 @@ public:
     bool materializeMetadata(QJsonObject *metadata,
                              QString *errorMessage = nullptr) const;
 
+    bool stagePackedResource(const QString &sourcePath,
+                             QString *stagedPath,
+                             QString *errorMessage = nullptr) const;
+
     QString runtimeRoot(QString *errorMessage = nullptr) const;
 
 private:

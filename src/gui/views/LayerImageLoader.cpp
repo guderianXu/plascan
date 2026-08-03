@@ -1,6 +1,7 @@
 #include "LayerImageLoader.h"
 
 #include "Logger.h"
+#include "io/ImageIO.h"
 #include "io/PathIO.h"
 #include "project/ProjectIO.h"
 
@@ -77,12 +78,7 @@ bool convertTo8BitGeoTiff_GDAL(const QString &inputPath,
                                double highP = 0.98,
                                bool forceUseBandNoData = true)
 {
-    static bool gdalInited = false;
-    if (!gdalInited)
-    {
-        GDALAllRegister();
-        gdalInited = true;
-    }
+    xjw::common::io::ensureGdalRegistered();
 
     const std::string inputPathUtf8 = xjw::common::io::toUtf8Path(inputPath);
     GDALDataset *ds = static_cast<GDALDataset *>(GDALOpen(inputPathUtf8.c_str(), GA_ReadOnly));
@@ -299,12 +295,7 @@ bool convertTo8BitGeoTiff_GDAL(const QString &inputPath,
 
 bool needsConvertTo8Bit_GDAL(const QString &inputPath)
 {
-    static bool gdalInited = false;
-    if (!gdalInited)
-    {
-        GDALAllRegister();
-        gdalInited = true;
-    }
+    xjw::common::io::ensureGdalRegistered();
 
     const std::string inputPathUtf8 = xjw::common::io::toUtf8Path(inputPath);
     GDALDataset *ds = static_cast<GDALDataset *>(GDALOpen(inputPathUtf8.c_str(), GA_ReadOnly));

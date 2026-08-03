@@ -109,5 +109,7 @@ endif()
 target_compile_definitions(meshing PRIVATE RELEASE)
 
 if(NOT MSVC)
-    target_compile_options(meshing PRIVATE -funroll-loops -ffast-math)
+    # Meshing explicitly rejects NaN/Inf inputs. -ffast-math permits the
+    # compiler to assume those values do not exist and invalidates the guards.
+    target_compile_options(meshing PRIVATE -funroll-loops)
 endif()

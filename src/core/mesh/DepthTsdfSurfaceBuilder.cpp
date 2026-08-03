@@ -39,6 +39,7 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <mutex>
 #include <atomic>
 #include <new>
 #include <unordered_map>
@@ -4899,6 +4900,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
     std::atomic_bool cancelled{false};
     std::atomic<int> completed_z_slices{0};
     std::atomic<int> last_progress_percent{5};
+    std::mutex progress_callback_mutex;
     const int zSamples = result.layout.cells[2] + 1;
 #ifdef MESHING_OPENMP
     const int workerCount = options.workerCount > 0 ? options.workerCount : omp_get_max_threads();
@@ -5247,17 +5249,20 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         }
         const int completed = completed_z_slices.fetch_add(1, std::memory_order_relaxed) + 1;
         const int progress_percent = 5 + completed * 65 / std::max(1, zSamples);
-        int previous_progress = last_progress_percent.load(std::memory_order_relaxed);
-        while (options.progress && progress_percent >= previous_progress + 5 &&
-               !last_progress_percent.compare_exchange_weak(
-                   previous_progress,
-                   progress_percent,
-                   std::memory_order_relaxed))
+        if (options.progress)
         {
-        }
-        if (options.progress && progress_percent >= previous_progress + 5)
-        {
-            options.progress(QStringLiteral("正在融合置信度加权 TSDF..."), progress_percent);
+            const std::lock_guard<std::mutex> progress_lock(
+                progress_callback_mutex);
+            const int previous_progress =
+                last_progress_percent.load(std::memory_order_relaxed);
+            if (progress_percent >= previous_progress + 5)
+            {
+                last_progress_percent.store(
+                    progress_percent, std::memory_order_relaxed);
+                options.progress(
+                    QStringLiteral("正在融合置信度加权 TSDF..."),
+                    progress_percent);
+            }
         }
     }
 

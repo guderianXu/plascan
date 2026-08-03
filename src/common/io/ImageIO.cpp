@@ -229,6 +229,11 @@ cv::Mat decodeImageBytes(const QString &path,
 
 } // namespace
 
+void ensureGdalRegistered()
+{
+    registerGdalOnce();
+}
+
 cv::Mat readImage(const QString &path, int flags)
 {
     return readImage(path, flags, nullptr);
