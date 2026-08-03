@@ -131,6 +131,7 @@ GenerateModelDialog::GenerateModelDialog(QWidget *parent)
 
     _sourceCombo->setObjectName(QStringLiteral("modelSourceCombo"));
     _sourceItemCombo->setObjectName(QStringLiteral("modelSourceItemCombo"));
+    _sourceItemCombo->hide();
     _surfaceTypeCombo->setObjectName(QStringLiteral("modelSurfaceTypeCombo"));
     _qualityCombo->setObjectName(QStringLiteral("modelQualityCombo"));
     _faceCountCombo->setObjectName(QStringLiteral("modelFaceCountCombo"));
@@ -156,7 +157,6 @@ GenerateModelDialog::GenerateModelDialog(QWidget *parent)
     _faceCountCombo->setCurrentIndex(2);
 
     generalForm->addRow(tr("源数据:"), _sourceCombo);
-    generalForm->addRow(tr("数据项:"), _sourceItemCombo);
     generalForm->addRow(tr("表面类型:"), _surfaceTypeCombo);
     generalForm->addRow(tr("质量:"), _qualityCombo);
     generalForm->addRow(tr("面数:"), _faceCountCombo);
@@ -235,10 +235,6 @@ GenerateModelDialog::GenerateModelDialog(QWidget *parent)
     advancedForm->addRow(QString(), _replaceDefaultCheck);
     contentLayout->addWidget(_advancedContent);
 
-    _statusLabel = new QLabel(contentWidget);
-    _statusLabel->setObjectName(QStringLiteral("workflowStatusLabel"));
-    _statusLabel->setWordWrap(true);
-    contentLayout->addWidget(_statusLabel);
     _contentScrollArea->setWidget(contentWidget);
     mainLayout->addWidget(_contentScrollArea);
 
@@ -657,7 +653,6 @@ void GenerateModelDialog::updateAvailability()
     const QJsonObject candidate = currentCandidate();
     const bool supported = candidate.value(QLatin1String(kSupported)).toBool(false);
     const QString sourceData = candidate.value(QLatin1String(kSourceData)).toString();
-    const QString note = candidate.value(QLatin1String(kNote)).toString();
     const bool hasCandidate = !sourceData.isEmpty();
 
     _reuseDepthMapsCheck->setEnabled(_hasReusableDepthMaps);
@@ -678,30 +673,6 @@ void GenerateModelDialog::updateAvailability()
 
     updateBlockControlsAvailability();
     _okButton->setEnabled(hasCandidate && supported);
-    if (!hasCandidate)
-    {
-        _statusLabel->setText(tr("当前项目还没有可用于生成模型的源数据。"));
-        return;
-    }
-    if (!supported)
-    {
-        _statusLabel->setText(note.isEmpty()
-            ? tr("该源数据当前不能直接用于生成模型。")
-            : note);
-        return;
-    }
-    if (sourceData == QStringLiteral("depth_maps"))
-    {
-        const bool automatic_depth_maps =
-            candidate.value(QLatin1String(kAutomaticDepthMaps)).toBool(false);
-        _statusLabel->setText(automatic_depth_maps
-            ? tr("缺少深度图时将自动估计深度图，再直接进行 TSDF 表面重建。")
-            : tr("项目中存在兼容深度图，可选择是否复用；随后将直接进行 TSDF 表面重建。"));
-        return;
-    }
-    _statusLabel->setText(note.isEmpty()
-        ? tr("输出: 项目目录下的 model/products/model_from_mesh.ply")
-        : note);
 }
 
 void GenerateModelDialog::updateBlockControlsAvailability()

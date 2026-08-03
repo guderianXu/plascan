@@ -61,6 +61,9 @@ TEST(WorkflowParameterDialogStyleTest, GenerateModelUsesCompactScopedLayout)
     ASSERT_NE(sourceItems, nullptr);
     EXPECT_EQ(sourceItems->sizeAdjustPolicy(), QComboBox::AdjustToMinimumContentsLengthWithIcon);
     EXPECT_EQ(sourceItems->minimumContentsLength(), 24);
+    EXPECT_TRUE(sourceItems->isHidden());
+    EXPECT_EQ(generalForm->labelForField(sourceItems), nullptr);
+    EXPECT_EQ(dialog.findChild<QLabel *>(QStringLiteral("workflowStatusLabel")), nullptr);
 
     auto *buttonBox = dialog.findChild<QDialogButtonBox *>(QStringLiteral("workflowButtonBox"));
     auto *scrollArea = dialog.findChild<QScrollArea *>(QStringLiteral("workflowParameterScrollArea"));

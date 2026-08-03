@@ -84,6 +84,5 @@ private:
     QCheckBox *_strictMasksCheck = nullptr;
     QCheckBox *_reuseDepthMapsCheck = nullptr;
     QCheckBox *_replaceDefaultCheck = nullptr;
-    QLabel *_statusLabel = nullptr;
     QPushButton *_okButton = nullptr;
 };
