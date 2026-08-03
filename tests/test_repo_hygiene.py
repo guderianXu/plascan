@@ -40,6 +40,8 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("modules: 'qtshadertools'", text)
         self.assertNotIn("qt6-base-dev", text)
         self.assertIn("libapriltag-dev", text)
+        self.assertIn("libopenmesh-dev", text)
+        self.assertIn("python3 -m pip install --disable-pip-version-check numpy", text)
 
         packages_text = (ROOT / "cmake" / "PlascanPackages.cmake").read_text(encoding="utf-8")
         self.assertIn("find_package(Qt6 6.7 REQUIRED", packages_text)

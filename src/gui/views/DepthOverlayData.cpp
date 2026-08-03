@@ -28,7 +28,18 @@ QString normalizedPath(const QString &path)
         return {};
     }
 
-    const QFileInfo file_info(QDir::fromNativeSeparators(path));
+    const QString portable_path =
+        QDir::cleanPath(QDir::fromNativeSeparators(path.trimmed()));
+    const bool is_windows_drive_path = portable_path.size() >= 3
+        && portable_path.at(0).isLetter()
+        && portable_path.at(1) == QLatin1Char(':')
+        && portable_path.at(2) == QLatin1Char('/');
+    if (is_windows_drive_path)
+    {
+        return portable_path;
+    }
+
+    const QFileInfo file_info(portable_path);
     return QDir::cleanPath(file_info.absoluteFilePath());
 }
 
@@ -39,6 +50,20 @@ bool pathsMatch(const QString &left, const QString &right)
     if (normalized_left.isEmpty() || normalized_right.isEmpty())
     {
         return false;
+    }
+
+    const bool left_is_windows_drive = normalized_left.size() >= 3
+        && normalized_left.at(0).isLetter()
+        && normalized_left.at(1) == QLatin1Char(':')
+        && normalized_left.at(2) == QLatin1Char('/');
+    const bool right_is_windows_drive = normalized_right.size() >= 3
+        && normalized_right.at(0).isLetter()
+        && normalized_right.at(1) == QLatin1Char(':')
+        && normalized_right.at(2) == QLatin1Char('/');
+    if (left_is_windows_drive || right_is_windows_drive)
+    {
+        return left_is_windows_drive && right_is_windows_drive
+            && normalized_left.compare(normalized_right, Qt::CaseInsensitive) == 0;
     }
 
 #ifdef Q_OS_WIN

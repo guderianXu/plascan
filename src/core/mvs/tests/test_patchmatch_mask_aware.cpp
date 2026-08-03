@@ -118,6 +118,11 @@ double validRatio(const cv::Mat &depth, const cv::Mat &mask)
 
 TEST(PatchMatchMaskAwareTest, CpuKeepsDepthInsideReferenceMaskOnly)
 {
+    if (!xjw::mvs::PatchMatchDepthEstimator::isCudaAvailable())
+    {
+        GTEST_SKIP() << "PatchMatch CPU reference path is built with the CUDA implementation";
+    }
+
     const EstimateResult result = estimateMaskedPlane(false);
     ASSERT_FALSE(result.depth.empty());
 

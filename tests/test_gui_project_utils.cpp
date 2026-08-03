@@ -107,6 +107,7 @@
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QStyle>
+#include <QStyleOptionButton>
 #include <QTemporaryDir>
 #include <QTextStream>
 #include <QToolBar>
@@ -7926,8 +7927,14 @@ TEST(AerialTriangulationDialogTest, ReferencePreselectionTogglesFromVisibleCheck
     ASSERT_TRUE(referencePreselectionCheck->isEnabled());
     ASSERT_FALSE(referencePreselectionCheck->isChecked());
 
-    const QPoint clickPoint(referencePreselectionCheck->rect().left() + 56,
-                            referencePreselectionCheck->rect().center().y());
+    QStyleOptionButton checkboxOption;
+    checkboxOption.initFrom(referencePreselectionCheck);
+    checkboxOption.rect = referencePreselectionCheck->rect();
+    const QPoint clickPoint = referencePreselectionCheck->style()
+        ->subElementRect(QStyle::SE_CheckBoxIndicator,
+                         &checkboxOption,
+                         referencePreselectionCheck)
+        .center();
     QTest::mouseClick(referencePreselectionCheck, Qt::LeftButton, Qt::NoModifier, clickPoint);
     QApplication::processEvents();
 
