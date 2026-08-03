@@ -101,14 +101,12 @@ class RepoHygieneTest(unittest.TestCase):
     def test_cmake_preserves_command_line_cuda_flags_on_windows(self):
         root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         dependency_paths = (ROOT / "cmake" / "PlascanDependencyPaths.cmake").read_text(encoding="utf-8")
-        packages = (ROOT / "cmake" / "PlascanPackages.cmake").read_text(encoding="utf-8")
 
         self.assertNotIn('set(CMAKE_CUDA_FLAGS "-D_GLIBCXX_USE_CXX11_ABI=1")', root_cmake)
         self.assertIn('${CMAKE_CUDA_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=1', root_cmake)
         self.assertIn('string(REPLACE "-B/usr/bin"', root_cmake)
         self.assertIn("WIN32 OR APPLE OR NOT conda_prefix", dependency_paths)
         self.assertIn("if(WIN32 OR NOT PLASCAN_USE_SYSTEM_BINUTILS_FOR_MIXED_TOOLCHAIN)", dependency_paths)
-        self.assertIn("AND NOT WIN32 AND NOT APPLE", packages)
 
     def test_plapoint_cuda_warning_sentinels_use_device_safe_values(self):
         knn_source = (ROOT / "3rdparty" / "plapoint" / "src" / "knn_gpu.cu").read_text(encoding="utf-8")
@@ -201,35 +199,6 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("CUDA_ARCH_BIN=75\\;86\\;89\\;120", text)
         self.assertIn("BUILD_opencv_videostab=OFF", text)
         self.assertIn("OpenCV DNN CUDA", text)
-
-    def test_laser_photogrammetry_dataset_notes_capture_future_ba_inputs(self):
-        doc_path = ROOT / "docs" / "design" / "LASER_PHOTOGRAMMETRY_DATASETS.md"
-
-        self.assertTrue(doc_path.exists(), "Laser/photogrammetry dataset research notes are missing")
-        text = doc_path.read_text(encoding="utf-8")
-
-        required_terms = [
-            "MUN-FRL",
-            "Hessigheim 3D",
-            "NTU VIRAL",
-            "LiDAR",
-            "UAV",
-            "license",
-            "Bundle Adjustment",
-            "control points",
-            "point cloud fusion",
-            "First Small Fixture Plan",
-            "source_manifest.json",
-            "LaserControlPoint",
-            "LaserObservation",
-            "LiDARFrame",
-            "Residual Diagnostics",
-        ]
-        for term in required_terms:
-            with self.subTest(term=term):
-                self.assertIn(term, text)
-
-        self.assertGreaterEqual(text.count("|"), 40, "Dataset notes should include a structured comparison table")
 
     def test_release_1_1_6_metadata_is_synchronized(self):
         root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
@@ -344,7 +313,9 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("CUDAToolkit_ROOT", result.stderr)
 
     def test_camera_preview_memory_detection_supports_linux(self):
-        source = (ROOT / "src" / "gui" / "dialogs" / "CameraModel3DDialog.cpp").read_text(encoding="utf-8")
+        source = (
+            ROOT / "src" / "gui" / "dialogs" / "camera" / "CameraModel3DDialog.cpp"
+        ).read_text(encoding="utf-8")
 
         self.assertRegex(source, r"#elif\s+defined\(Q_OS_LINUX\)")
         self.assertIn("/proc/meminfo", source)

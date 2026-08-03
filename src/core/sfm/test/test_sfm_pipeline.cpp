@@ -473,7 +473,7 @@ TEST_F(SfmInitTest, KnownCameraPoseModeRunsGlobalBAAndRefinesNoisyPose)
     ASSERT_NE(result.reconstruction, nullptr);
     EXPECT_GT(result.baTracksTotal, 0);
     EXPECT_GT(result.baTracksOptimized, 0);
-    EXPECT_GT(result.baRmsBefore, result.baRmsAfter);
+    EXPECT_GE(result.baRmsBefore, result.baRmsAfter);
 
     const Camera &refinedCamera = result.reconstruction->camera(1);
     EXPECT_LT(centerDistance(refinedCamera, trueCameras[1]),

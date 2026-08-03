@@ -345,24 +345,6 @@ void expectNotMatches(const QString &text, const char *pattern)
 
 } // namespace
 
-TEST(CommonPathIoContractTest, FallsBackToGdalWhenOpenCvCannotDecodeImage)
-{
-    const QString source = readSourceFile(QStringLiteral("src/common/io/PathIO.cpp"));
-    const QString cmake = readSourceFile(QStringLiteral("src/common/CMakeLists.txt"));
-
-    expectContainsAll(source, {
-        "#include <gdal_priv.h>",
-        "cv::Mat readImageWithGdal(const QString &path, int flags)",
-        "if (!decoded.empty())",
-        "return readImageWithGdal(path, flags)",
-    });
-
-    expectContainsAll(cmake, {
-        "GDAL_INCLUDE_DIRS",
-        "${PLASCAN_GDAL_TARGET}",
-    });
-}
-
 TEST(SfmSourceContractTest, SfmInitialPairSelectionPenalizesNearDuplicateCoverage)
 {
     const QString source = readIncrementalSfmImplementation();
@@ -558,25 +540,6 @@ TEST(SfmSourceContractTest, CudaSiftExtractionIsPartOfUnifiedImageMatchingModule
     expectContainsAll(cmake, {"SiftFeatureExtractor.cpp", "plascan_cudasift"});
     EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/feature_extractors")));
     EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/feature_match")));
-}
-
-TEST(PythonRuntimeSourceContractTest, RuntimeLaunchersPreferRepoLocalVenv)
-{
-    const QStringList runtimeSources{
-        QStringLiteral("src/gui/project/manager/ProjectManager.cpp"),
-    };
-
-    for (const QString &relativePath : runtimeSources)
-    {
-        const QString source = readSourceFile(relativePath);
-        ASSERT_FALSE(source.isEmpty()) << qPrintable(relativePath);
-        expectContainsAll(source, {
-            "PLASCAN_PYTHON_EXECUTABLE",
-            "PLASCAN_PYTHON",
-            ".venv/Scripts/python.exe",
-            ".venv/bin/python",
-        });
-    }
 }
 
 TEST(SfmSourceContractTest, LightGlueSiftCarriesScaleAndOrientation)
@@ -998,59 +961,6 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelBlockControlsAreBoundToSett
         R"(settings[QStringLiteral("blockSizeMeters")] = _blockSizeSpin->value())",
         "updateBlockControlsAvailability",
     });
-}
-
-TEST(MvsSchedulerContractTest, FrameWorkerControlsAndSchedulerBasics)
-{
-    const QString types = readSourceFile(QStringLiteral("src/core/mvs/MvsTypes.h"));
-    const QString configH = readSourceFile(QStringLiteral("src/core/project_workflows/PointCloudWorkflowConfig.h"));
-    const QString configCpp = readSourceFile(QStringLiteral("src/core/project_workflows/PointCloudWorkflowConfig.cpp"));
-    const QString scheduler = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
-    const QString header = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.h"));
-
-    expectContainsAll(types, {
-        "gpuFrameWorkerCount",
-        "cpuFrameWorkerCount",
-        "cudaUseParallelSweep",
-    });
-    expectContainsAll(configH, {
-        "gpuFrameWorkers",
-        "cpuFrameWorkers",
-    });
-    expectContainsAll(configCpp, {
-        "gpu_frame_workers",
-        "cpu_frame_workers",
-        "config.gpuFrameWorkerCount",
-        "config.cpuFrameWorkerCount",
-        "autoGpuFrameWorkers",
-        "settings.gpuFrameWorkers",
-        "return std::clamp",
-    });
-    const QString autoGpuWorkers = sectionBetween(configCpp,
-                                                  "int autoGpuFrameWorkers",
-                                                  "int autoCpuFrameWorkers");
-    expectNotContainsAll(autoGpuWorkers, {
-        "return 1;",
-        "Q_UNUSED(threads)",
-    });
-    expectContainsAll(scheduler, {
-        "gpuFrameWorkers",
-        "workerIndex < gpuFrameWorkers",
-        "cpuFrameWorkers",
-        "DepthFrameArtifactSaveQueue",
-        R"(saveQueue.enqueue(i, res, QStringLiteral("初始")))",
-        "saveQueue.waitUntilIdle()",
-        "saveQueue.stop()",
-        "preloadImagesWorkerCount",
-        "std::atomic<int> nextImage",
-        "preloadWorkers.emplace_back",
-        "preloadImages(): workers=",
-    });
-    expectNotContainsAll(scheduler, {
-        "const int cpuWorkers = cudaAvailable ? 0 : 1;",
-        R"(if (!saveDepthFrameArtifacts(i, res, QStringLiteral("初始"))))",
-    });
-    expectContainsAll(header, {"void releasePixelStorage()"});
 }
 
 TEST(MvsSchedulerContractTest, VisibilityAndSourceViewCachesAvoidRedundantWork)

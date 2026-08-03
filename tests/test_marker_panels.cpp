@@ -34,7 +34,7 @@ QString writePanelImage(QTemporaryDir *directory, const QString &name)
 {
     const QString path = directory->filePath(name);
     QImage image(320, 240, QImage::Format_RGB32);
-    image.fill(Qt::white);
+    image.fill(name.contains(QStringLiteral("right")) ? Qt::black : Qt::white);
     return image.save(path) ? path : QString();
 }
 
@@ -55,6 +55,10 @@ struct PanelFixture
         if (!project.createProject(directory.filePath(QStringLiteral("panel.plascan")),
                                    QStringLiteral("panel"))) return false;
         if (!project.addImages({firstImage, secondImage})) return false;
+        const QStringList projectImages = project.getAllImages();
+        if (projectImages.size() != 2) return false;
+        firstImage = projectImages[0];
+        secondImage = projectImages[1];
         controller = std::make_unique<xjw::gui::markers::MarkerWorkspaceController>(
             &canvas, &project);
         QString error;
