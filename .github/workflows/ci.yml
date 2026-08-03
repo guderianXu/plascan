@@ -18,6 +18,7 @@ jobs:
           submodules: recursive
 
       - name: Install system dependencies
+        timeout-minutes: 15
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
