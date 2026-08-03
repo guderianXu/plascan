@@ -32,6 +32,7 @@ struct MarkerSheetRenderResult
 class MarkerSheetRenderer final
 {
 public:
+    static QImage renderMarkerImage(MarkerTargetFamily family, int id, int targetPixels);
     static MarkerSheetRenderResult render(const MarkerPrintRequest &request, int dpi);
 };
 
