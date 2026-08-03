@@ -622,6 +622,7 @@ target_compile_definitions(test_gui_project_utils PRIVATE
     PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
 target_include_directories(test_gui_project_utils PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui
     ${CMAKE_SOURCE_DIR}/src/gui/config
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs
     ${CMAKE_SOURCE_DIR}/src/gui/menu
