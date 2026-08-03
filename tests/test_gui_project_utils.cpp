@@ -53,6 +53,7 @@
 #include "FeatureResidualLoader.h"
 #include "PhotoStripWidget.h"
 #include "ProjectDashboardWidget.h"
+#include "SelectionPropertiesWidget.h"
 #include "MainMenu.h"
 #include "ProjectUiHydrator.h"
 #include "GuiTaskRunner.h"
@@ -13978,6 +13979,82 @@ TEST(MainMenuTest, WorkflowMenuExposesCurrentPhotogrammetryStages)
     EXPECT_EQ(reconstructionMenu, nullptr);
     ASSERT_NE(menu.workflowAerialTriangulationAction(), nullptr);
     EXPECT_EQ(menu.workflowAerialTriangulationAction()->text(), QStringLiteral("空中三角测量..."));
+}
+
+TEST(SelectionPropertiesWidgetTest, ShowsPersistedModelAndWorkflowDetails)
+{
+    QTemporaryDir temporaryDirectory;
+    ASSERT_TRUE(temporaryDirectory.isValid());
+    const QString modelPath = temporaryDirectory.filePath(QStringLiteral("model_from_mesh.ply"));
+    QFile modelFile(modelPath);
+    ASSERT_TRUE(modelFile.open(QIODevice::WriteOnly));
+    ASSERT_TRUE(modelFile.resize(2 * 1024 * 1024));
+    modelFile.close();
+
+    const QJsonObject depthParameters{
+        {QStringLiteral("quality_profile"), QStringLiteral("highest")},
+        {QStringLiteral("filter_mode"), QStringLiteral("mild")},
+        {QStringLiteral("maximum_neighbor_count"), 16},
+        {QStringLiteral("frame_count"), 12},
+        {QStringLiteral("processing_elapsed_ms"), 1250.0},
+        {QStringLiteral("artifact_bytes"), 16.0 * 1024.0 * 1024.0}};
+    const QJsonObject reconstructionParameters{
+        {QStringLiteral("surface_type"), QStringLiteral("arbitrary_3d")},
+        {QStringLiteral("interpolation"), QStringLiteral("disabled")},
+        {QStringLiteral("strict_volumetric_masks"), false},
+        {QStringLiteral("target_faces"), 240000},
+        {QStringLiteral("processing_elapsed_ms"), 5300.0}};
+    const QJsonObject modelRecord{
+        {QStringLiteral("result_type"), QStringLiteral("mesh")},
+        {QStringLiteral("model_ply"), modelPath},
+        {QStringLiteral("final_model_path"), modelPath},
+        {QStringLiteral("final_model_format"), QStringLiteral("PLY")},
+        {QStringLiteral("vertex_count"), 43927},
+        {QStringLiteral("face_count"), 87819},
+        {QStringLiteral("has_vertex_colors"), true},
+        {QStringLiteral("vertex_color_format"), QStringLiteral("3波段, uint8")},
+        {QStringLiteral("source_data"), QStringLiteral("depth_maps")},
+        {QStringLiteral("actual_mesh_algorithm"), QStringLiteral("depth_tsdf")},
+        {QStringLiteral("configured_tsdf_resolution"), 384},
+        {QStringLiteral("tsdf_required_bytes"), 213.11 * 1024.0 * 1024.0},
+        {QStringLiteral("created_at"), QStringLiteral("2026-07-31T07:54:43Z")},
+        {QStringLiteral("software_version"), QStringLiteral("1.1.6")},
+        {QStringLiteral("depth_generation_parameters"), depthParameters},
+        {QStringLiteral("reconstruction_parameters"), reconstructionParameters}};
+    const QJsonObject metadata{
+        {QStringLiteral("model_results"), QJsonArray{modelRecord}}};
+
+    SelectionPropertiesWidget widget;
+    widget.showResourceProperties(metadata, QStringLiteral("3D模型"), modelPath);
+    auto *table = widget.findChild<QTableWidget *>();
+    ASSERT_NE(table, nullptr);
+
+    const auto valueFor = [table](const QString &name)
+    {
+        for (int row = 0; row < table->rowCount(); ++row)
+        {
+            const QTableWidgetItem *nameItem = table->item(row, 0);
+            if (nameItem && nameItem->text() == name)
+            {
+                const QTableWidgetItem *valueItem = table->item(row, 1);
+                return valueItem ? valueItem->text() : QString();
+            }
+        }
+        return QString();
+    };
+
+    EXPECT_EQ(valueFor(QStringLiteral("面")), QStringLiteral("87,819"));
+    EXPECT_EQ(valueFor(QStringLiteral("顶点")), QStringLiteral("43,927"));
+    EXPECT_EQ(valueFor(QStringLiteral("顶点颜色")), QStringLiteral("3波段, uint8"));
+    EXPECT_EQ(valueFor(QStringLiteral("质量")), QStringLiteral("超高"));
+    EXPECT_EQ(valueFor(QStringLiteral("筛选模式")), QStringLiteral("轻度"));
+    EXPECT_EQ(valueFor(QStringLiteral("最大邻域数量")), QStringLiteral("16"));
+    EXPECT_EQ(valueFor(QStringLiteral("表面类型")), QStringLiteral("任意 (3D)"));
+    EXPECT_EQ(valueFor(QStringLiteral("源数据")), QStringLiteral("深度图"));
+    EXPECT_EQ(valueFor(QStringLiteral("插值")), QStringLiteral("已禁用"));
+    EXPECT_EQ(valueFor(QStringLiteral("严格的体积掩模")), QStringLiteral("否"));
+    EXPECT_EQ(valueFor(QStringLiteral("软件版本")), QStringLiteral("1.1.6"));
+    EXPECT_EQ(valueFor(QStringLiteral("文件大小")), QStringLiteral("2.0 MB"));
 }
 
 int main(int argc, char **argv)

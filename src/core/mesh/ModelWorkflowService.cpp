@@ -360,6 +360,12 @@ WorkflowResult saveMeshAndOptionalTexture(const xjw::mesh::TriMesh &mesh,
     result.payload[QStringLiteral("model_ply")] = mesh_ply_path;
     result.payload[QStringLiteral("vertex_count")] = mesh.vertexCount();
     result.payload[QStringLiteral("face_count")] = mesh.faceCount();
+    result.payload[QStringLiteral("has_vertex_colors")] = mesh.hasVertexColors;
+    if (mesh.hasVertexColors)
+    {
+        result.payload[QStringLiteral("vertex_color_format")] =
+            QStringLiteral("3波段, uint8");
+    }
     result.payload[QStringLiteral("mesh_algorithm")] =
         QString::fromStdString(mesh_algorithm.empty() ? "unknown" : mesh_algorithm);
 

@@ -12,6 +12,7 @@
 
 #include <QDateTime>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QFutureWatcher>
 #include <QMessageBox>
@@ -28,6 +29,10 @@
 #include <utility>
 
 using xjw::gui::project::resolveLatestDenseCloudPath;
+
+#ifndef PLASCAN_VERSION
+#define PLASCAN_VERSION "unknown"
+#endif
 
 namespace
 {
@@ -254,9 +259,93 @@ void persistModelResult(ProjectData *projectData,
     xjw::gui::project::persistProjectMeta(projectData, metadata, true);
 }
 
+bool pathBelongsToDirectory(const QString &path, const QString &directory)
+{
+    if (path.isEmpty() || directory.isEmpty())
+    {
+        return false;
+    }
+    const QString normalized_path = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+    QString normalized_directory = QDir::cleanPath(QFileInfo(directory).absoluteFilePath());
+    if (!normalized_directory.endsWith(QDir::separator()))
+    {
+        normalized_directory += QDir::separator();
+    }
+    return normalized_path.startsWith(normalized_directory, Qt::CaseInsensitive);
+}
+
+QJsonObject depthGenerationSnapshot(const QJsonObject &metadata,
+                                    const QString &sourcePath)
+{
+    QJsonObject snapshot;
+    int frame_count = 0;
+    int maximum_neighbor_count = -1;
+    double processing_elapsed_ms = 0.0;
+    qint64 artifact_bytes = 0;
+
+    for (const QJsonValue &value : metadata.value(
+             QStringLiteral("depth_map_results")).toArray())
+    {
+        const QJsonObject record = value.toObject();
+        const QString output_dir = record.value(
+            QStringLiteral("mvs_output_dir")).toString();
+        const QString depth_path = record.value(
+            QStringLiteral("depth_png")).toString();
+        if (!sourcePath.isEmpty() &&
+            QDir::cleanPath(output_dir).compare(
+                QDir::cleanPath(sourcePath), Qt::CaseInsensitive) != 0 &&
+            !pathBelongsToDirectory(depth_path, sourcePath))
+        {
+            continue;
+        }
+
+        ++frame_count;
+        if (!snapshot.contains(QStringLiteral("quality_profile")))
+        {
+            snapshot[QStringLiteral("quality_profile")] = record.value(
+                QStringLiteral("quality_profile"));
+        }
+        if (!snapshot.contains(QStringLiteral("filter_mode")))
+        {
+            snapshot[QStringLiteral("filter_mode")] = record.value(
+                QStringLiteral("filter_mode"));
+        }
+        maximum_neighbor_count = std::max(
+            maximum_neighbor_count,
+            record.value(QStringLiteral("requested_source_view_count"))
+                .toInt(record.value(QStringLiteral("source_view_count")).toInt(-1)));
+        processing_elapsed_ms += record.value(
+            QStringLiteral("elapsed_ms")).toDouble(0.0);
+
+        for (const QString &path_key : {
+                 QStringLiteral("depth_png"),
+                 QStringLiteral("raw_depth_path"),
+                 QStringLiteral("raw_confidence_path"),
+                 QStringLiteral("valid_mask_path")})
+        {
+            const QFileInfo artifact_info(record.value(path_key).toString());
+            if (artifact_info.exists())
+            {
+                artifact_bytes += artifact_info.size();
+            }
+        }
+    }
+
+    if (frame_count <= 0)
+    {
+        return {};
+    }
+    snapshot[QStringLiteral("frame_count")] = frame_count;
+    snapshot[QStringLiteral("maximum_neighbor_count")] = maximum_neighbor_count;
+    snapshot[QStringLiteral("processing_elapsed_ms")] = processing_elapsed_ms;
+    snapshot[QStringLiteral("artifact_bytes")] = static_cast<double>(artifact_bytes);
+    return snapshot;
+}
+
 QJsonObject buildMeshReconstructionRecord(const QJsonObject &taskResult,
                                           const QString &denseCloudPath,
-                                          const QJsonObject &settings)
+                                          const QJsonObject &settings,
+                                          const QJsonObject &metadata)
 {
     const QString sourceData = settings.value(QStringLiteral("source_data")).toString(QStringLiteral("point_cloud"));
     const QString sourcePath = settings.value(QStringLiteral("source_path")).toString(denseCloudPath);
@@ -287,6 +376,33 @@ QJsonObject buildMeshReconstructionRecord(const QJsonObject &taskResult,
         settings.contains(QStringLiteral("qualityProfile"))
             ? settings.value(QStringLiteral("qualityProfile")).toString()
             : QStringLiteral("balanced");
+    modelRecord[QStringLiteral("software_version")] = QStringLiteral(PLASCAN_VERSION);
+    modelRecord[QStringLiteral("model_property_schema_version")] = 1;
+
+    QJsonObject reconstruction_parameters;
+    reconstruction_parameters[QStringLiteral("surface_type")] = settings.value(
+        QStringLiteral("surface_type"));
+    reconstruction_parameters[QStringLiteral("interpolation")] = settings.value(
+        QStringLiteral("interpolation"));
+    reconstruction_parameters[QStringLiteral("strict_volumetric_masks")] = settings.value(
+        QStringLiteral("strictVolumetricMasks"));
+    reconstruction_parameters[QStringLiteral("calculate_vertex_colors")] = settings.value(
+        QStringLiteral("calculateVertexColors"));
+    reconstruction_parameters[QStringLiteral("quality")] = settings.value(
+        QStringLiteral("quality"));
+    reconstruction_parameters[QStringLiteral("quality_profile")] = settings.value(
+        QStringLiteral("qualityProfile"));
+    reconstruction_parameters[QStringLiteral("target_faces")] = settings.value(
+        QStringLiteral("simplifyTargetFaces"));
+    reconstruction_parameters[QStringLiteral("processing_elapsed_ms")] = taskResult.value(
+        QStringLiteral("processing_elapsed_ms"));
+    modelRecord[QStringLiteral("reconstruction_parameters")] = reconstruction_parameters;
+
+    if (sourceData == QStringLiteral("depth_maps"))
+    {
+        modelRecord[QStringLiteral("depth_generation_parameters")] =
+            depthGenerationSnapshot(metadata, sourcePath);
+    }
     return modelRecord;
 }
 
@@ -802,8 +918,12 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
                 }
             };
 
-            const xjw::mesh::workflow::WorkflowResult workflowResult =
+            QElapsedTimer processing_timer;
+            processing_timer.start();
+            xjw::mesh::workflow::WorkflowResult workflowResult =
                 xjw::mesh::workflow::buildModel(request);
+            workflowResult.payload[QStringLiteral("processing_elapsed_ms")] =
+                static_cast<double>(processing_timer.elapsed());
             logModelWorkflowResult(workflowResult);
             applyWorkflowResult(&task, workflowResult);
             return task;
@@ -833,9 +953,11 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
                 const QString sourcePointCloudPath =
                     taskResult.value(QStringLiteral("source_point_cloud_path"))
                         .toString(resolvedSource.sourcePointCloudPath);
-                const QJsonObject modelRecord = buildMeshReconstructionRecord(taskResult,
-                                                                               sourcePointCloudPath,
-                                                                               effectiveSettings);
+                const QJsonObject modelRecord = buildMeshReconstructionRecord(
+                    taskResult,
+                    sourcePointCloudPath,
+                    effectiveSettings,
+                    self->_projectData->metadata());
                 persistModelResult(self->_projectData, modelRecord);
                 if (!effectiveSettings.value(QStringLiteral("pipeline_mode")).toBool(false))
                 {

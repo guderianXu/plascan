@@ -153,6 +153,7 @@ int main(int argc, char *argv[])
     SafeApplication app(argc, argv);
     // GNOME/桌面集成 — 必须与 .desktop 文件名一致
     app.setApplicationName(QStringLiteral("PlaScan"));
+    app.setApplicationVersion(QStringLiteral(PLASCAN_VERSION));
     app.setDesktopFileName(QStringLiteral("plascan"));
     const bool python_runtime_available = bindPythonRuntime();
     applyApplicationStyle(app);

@@ -27,11 +27,18 @@ private:
     {
         QString name;
         QString value;
+        bool sectionHeader = false;
     };
 
     void setRows(const QString &title, const QVector<PropertyRow> &rows);
     void appendFileRows(QVector<PropertyRow> *rows, const QString &path) const;
     QJsonObject findImageEntry(const QJsonObject &meta, const QString &imagePath) const;
+    QJsonObject findResourceRecord(const QJsonObject &meta,
+                                   const QString &section,
+                                   const QString &resourcePath) const;
+    QVector<PropertyRow> modelPropertyRows(const QJsonObject &meta,
+                                           const QJsonObject &record,
+                                           const QString &resourcePath) const;
     QString imageAlignedText(const QJsonObject &entry) const;
     QString cameraCenterText(const QJsonObject &entry) const;
     QString intrinsicsText(const QJsonObject &entry) const;

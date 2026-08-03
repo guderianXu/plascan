@@ -317,6 +317,23 @@ Chunk 内尚未创建的计划路径也会转换为项目 URI。外部目录不�
 因此 CLI 生成的工程可以直接由 GUI 打开，GUI 切换默认 Chunk 后 CLI 也会使用该 Chunk，
 不会固定假设目录 `1/`。
 
+## 模型属性记录
+
+`model_results` 中的网格记录除模型路径、顶点数和面数外，还保存用于属性面板复现生成过程的
+元数据：
+
+- `has_vertex_colors`、`vertex_color_format`：顶点颜色是否存在及其存储格式；
+- `depth_generation_parameters`：与模型关联的深度图质量、筛选模式、最大邻域数量、帧数、
+  累计处理时间和深度产物大小快照；
+- `reconstruction_parameters`：表面类型、插值、严格体积掩模、颜色计算、质量档位、目标面数
+  和模型处理时间；
+- `software_version`：生成模型时的 PlaScan 版本；
+- `model_property_schema_version`：模型属性快照结构版本，当前为 `1`；
+- `tsdf_required_bytes`：TSDF 布局的内存分配估算，不等同于操作系统观测到的进程峰值内存。
+
+旧工程中不存在的字段保持缺失，GUI 显示“不可用”；能够从仍存在的模型文件或深度记录可靠
+恢复的文件大小、深度参数和软件版本会在读取时补充显示，但不会静默改写工程。
+
 ## 格式兼容策略
 
 PlaScan 不打开也不自动迁移任何旧工程格式，包括旧版单体 `.plascan` ZIP，以及使用
