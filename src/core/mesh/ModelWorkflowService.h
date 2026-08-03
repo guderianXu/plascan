@@ -87,6 +87,7 @@ bool visibilityOccupancyDepthRefinementEnabled(const QJsonObject &settings,
                                                bool orbitalWorkspace);
 bool shouldUseOrbitalVisualHullCompletion(bool orbitalWorkspace,
                                           bool enabled,
+                                          bool observationOnlySurface,
                                           double aggregateProjectionRecall,
                                           int boundaryEdgeCount,
                                           int faceCount);

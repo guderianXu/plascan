@@ -7024,9 +7024,43 @@ TEST(MeshWorkflowSettingsTest,
     EXPECT_FALSE(options.enableContourBandZeroCrossingSupport);
     EXPECT_FALSE(options.enableSurfacePatchSupport);
     EXPECT_FALSE(options.enableGeometryVerifiedBoundaryRecovery);
+    EXPECT_FALSE(options.allowInvalidNearestPixelRecovery);
     EXPECT_FALSE(options.adaptiveTgvRecoverUnsupportedSamples);
     EXPECT_FALSE(options.implicitRegularizationRecoverAxialGaps);
-    EXPECT_TRUE(options.mc33RequireSupportedSignChange);
+    EXPECT_FALSE(options.mc33RequireSupportedSignChange);
+}
+
+TEST(MeshWorkflowSettingsTest,
+     DisabledInterpolationSurvivesLowDetailOrbitalEarlyReturn)
+{
+    const QJsonObject settings{
+        {QStringLiteral("interpolation"), QStringLiteral("disabled")},
+        {QStringLiteral("simplifyTargetFaces"), 240000}
+    };
+    auto options =
+        xjw::mesh::workflow::depthTsdfOptionsFromSettings(settings, 320);
+
+    EXPECT_TRUE(options.enableOpenMeshSimplification);
+    EXPECT_TRUE(options.enableMc33IsoSurfaceExtraction);
+
+    xjw::mesh::workflow::applyOrbitalDepthTsdfDefaults(
+        settings, &options, 320);
+
+    EXPECT_FALSE(options.fillSmallBoundaryHoles);
+    EXPECT_FALSE(options.enableVisibilityOccupancyCompletion);
+    EXPECT_FALSE(options.enableVisualHullSignedDistanceCompletion);
+    EXPECT_FALSE(options.enableOrbitalGapBoundaryRecovery);
+    EXPECT_FALSE(options.enableOrbitalGapAdaptiveTruncation);
+    EXPECT_FALSE(options.enableGeometryZeroCrossingRecovery);
+    EXPECT_FALSE(options.enableCrossViewAnchoredSurfaceRecovery);
+    EXPECT_FALSE(options.enableGeometryZeroCrossingCellSheets);
+    EXPECT_FALSE(options.enableContourBandZeroCrossingSupport);
+    EXPECT_FALSE(options.enableSurfacePatchSupport);
+    EXPECT_FALSE(options.enableGeometryVerifiedBoundaryRecovery);
+    EXPECT_FALSE(options.allowInvalidNearestPixelRecovery);
+    EXPECT_FALSE(options.adaptiveTgvRecoverUnsupportedSamples);
+    EXPECT_FALSE(options.implicitRegularizationRecoverAxialGaps);
+    EXPECT_FALSE(options.mc33RequireSupportedSignChange);
 }
 
 TEST(MeshWorkflowSettingsTest,
@@ -7499,17 +7533,19 @@ TEST(DepthMapMeshBuilderTest, FallsBackToHighestResolutionManifestPyramidArtifac
 TEST(MeshWorkflowSettingsTest, OrbitalVisualHullCompletionCatchesResidualOpenSurfaces)
 {
     EXPECT_TRUE(xjw::mesh::workflow::shouldUseOrbitalVisualHullCompletion(
-        true, true, 0.73, 1000, 100000));
+        true, true, false, 0.73, 1000, 100000));
     EXPECT_TRUE(xjw::mesh::workflow::shouldUseOrbitalVisualHullCompletion(
-        true, true, 0.90, 3000, 100000));
+        true, true, false, 0.90, 3000, 100000));
     EXPECT_TRUE(xjw::mesh::workflow::shouldUseOrbitalVisualHullCompletion(
-        true, true, 0.90, 285, 100000));
+        true, true, false, 0.90, 285, 100000));
     EXPECT_FALSE(xjw::mesh::workflow::shouldUseOrbitalVisualHullCompletion(
-        true, true, 0.90, 64, 100000));
+        true, true, false, 0.90, 64, 100000));
     EXPECT_FALSE(xjw::mesh::workflow::shouldUseOrbitalVisualHullCompletion(
-        false, true, 0.60, 10000, 100000));
+        false, true, false, 0.60, 10000, 100000));
     EXPECT_FALSE(xjw::mesh::workflow::shouldUseOrbitalVisualHullCompletion(
-        true, false, 0.60, 10000, 100000));
+        true, false, false, 0.60, 10000, 100000));
+    EXPECT_FALSE(xjw::mesh::workflow::shouldUseOrbitalVisualHullCompletion(
+        true, true, true, 0.60, 10000, 100000));
 }
 
 TEST(DepthMapMeshBuilderTest, VisualHullDefaultsUseBoundedSurfaceSmoothing)

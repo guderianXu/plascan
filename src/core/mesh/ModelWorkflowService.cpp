@@ -449,9 +449,15 @@ void enforceObservationOnlySurfacePolicy(
     options->enableContourBandZeroCrossingSupport = false;
     options->enableSurfacePatchSupport = false;
     options->enableGeometryVerifiedBoundaryRecovery = false;
+    options->allowInvalidNearestPixelRecovery = false;
     options->adaptiveTgvRecoverUnsupportedSamples = false;
     options->implicitRegularizationRecoverAxialGaps = false;
-    options->mc33RequireSupportedSignChange = true;
+    // "No interpolation" disables every source of synthetic geometry above,
+    // but it must still allow the iso-surface extractor to interpolate a zero
+    // crossing inside the already fused TSDF cell. Requiring both signs to
+    // carry direct sample support deleted most MC33 faces at narrow-band
+    // boundaries and turned valid measured surfaces into holes.
+    options->mc33RequireSupportedSignChange = false;
 }
 
 xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
@@ -482,7 +488,7 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
             QStringLiteral("arbitrary_3d");
     const bool automatic_openmesh_simplification =
         openMeshSimplifierAvailable() &&
-        options.resolution >= 384 &&
+        options.resolution >= 320 &&
         options.simplifyTargetFaces > 0 &&
         options.simplifyTargetFaces <= 240000 &&
         arbitrary_surface;
@@ -2455,6 +2461,11 @@ void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
           options->simplifyTargetFaces <= 240000));
     if (!high_detail_model)
     {
+        // Low-resolution and large-face orbital presets return before the
+        // detail-only defaults below.  Re-apply the user-facing interpolation
+        // contract here as well, otherwise the orbital defaults above leave
+        // occupancy completion enabled even when the dialog says disabled.
+        enforceObservationOnlySurfacePolicy(settings, options);
         return;
     }
     if (!settings.contains(QStringLiteral(
@@ -2884,11 +2895,13 @@ DepthMeshCompletenessStatistics evaluateDepthCompleteness(
 
 bool shouldUseOrbitalVisualHullCompletion(bool orbitalWorkspace,
                                           bool enabled,
+                                          bool observationOnlySurface,
                                           double aggregateProjectionRecall,
                                           int boundaryEdgeCount,
                                           int faceCount)
 {
-    if (!orbitalWorkspace || !enabled || faceCount <= 0)
+    if (!orbitalWorkspace || !enabled || observationOnlySurface ||
+        faceCount <= 0)
     {
         return false;
     }
@@ -3528,26 +3541,43 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 tsdf_progress_end);
         }
 
-        const bool orbital_visual_hull_completion_enabled =
+        const bool orbital_visual_hull_completion_configured =
             request.settings.value(QStringLiteral(
                 "tsdfOrbitalVisualHullCompletion")).toBool(true);
+        const bool observation_only_surface =
+            interpolationIsDisabled(request.settings);
+        const bool orbital_visual_hull_completion_enabled =
+            orbital_visual_hull_completion_configured &&
+            !observation_only_surface;
         const bool orbital_visual_hull_completion_requested =
             shouldUseOrbitalVisualHullCompletion(
                 orbital_workspace,
-                orbital_visual_hull_completion_enabled,
+                orbital_visual_hull_completion_configured,
+                observation_only_surface,
                 tsdf.statistics.depthCompletenessAggregateRecall,
                 tsdf.statistics.boundaryEdgeCountAfter,
                 tsdf.mesh.faceCount());
         result.payload[QStringLiteral(
+            "requested_orbital_visual_hull_completion")] =
+            orbital_visual_hull_completion_configured;
+        result.payload[QStringLiteral(
             "configured_orbital_visual_hull_completion")] =
             orbital_visual_hull_completion_enabled;
+        result.payload[QStringLiteral(
+            "orbital_visual_hull_completion_suppressed_by_disabled_interpolation")] =
+            orbital_visual_hull_completion_configured &&
+            observation_only_surface;
         result.payload[QStringLiteral(
             "orbital_visual_hull_completion_requested")] =
             orbital_visual_hull_completion_requested;
         if (request.progress)
         {
             request.progress(
-                orbital_visual_hull_completion_requested
+                observation_only_surface &&
+                        orbital_visual_hull_completion_configured
+                    ? QStringLiteral(
+                          "插值已禁用，跳过环拍视觉外壳补全，仅输出深度观测支持的表面")
+                    : orbital_visual_hull_completion_requested
                     ? QStringLiteral(
                           "基础表面不完整，正在启动环拍视觉外壳补全...")
                     : QStringLiteral(
