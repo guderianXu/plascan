@@ -25,7 +25,7 @@ PlaScan 是面向行星表面影像的摄影测量处理系统，主线是从多
   ```bash
   pgrep -af 'plascan|feature_match_cli|match_photos_cli|dense_match_cli|triangulate_cli|cmake --build|ctest' || true
   ```
-- 不要随意删除、覆盖或重生成 `testData/`、`.plascan` 工程文件、`resources/models/`、用户输出目录或大体量中间结果。需要清理磁盘或重建数据时先确认路径和用途。
+- 不要随意删除、覆盖或重生成 `testData/`、`.plascan` 工程文件、`resources/models/`。需要清理磁盘或重建数据时先确认路径和用途。
 - 子模块目录内的改动要特别谨慎。除非任务明确要求，不要重置、更新或提交 `3rdparty/plapoint`、`3rdparty/plamatrix` 的指针或内部 dirty state。
 - 仓库可能已有用户改动。只修改与当前任务相关的文件，不回滚未授权改动。
 
@@ -120,19 +120,16 @@ python scripts\env\setup_python_runtime.py --device cuda --cuda-wheel cu130
 
 若需要运行脚本本体，必须使用同时包含 torch、cv2 和相关模型依赖的 Python 环境。不要在依赖缺失时声称脚本验证通过。
 
-截至 2026-06-10，若全量 `ctest` 遇到 `TerrainDemDomTest.TerrainPipelineGeneratesDemDomFromDirectory` 中 `dom_png not found`，这是已观察到的历史失败。仍需在最终说明中单独列出，不能把全量测试描述为全部通过。
-
 ## 模型与资源
 
 - 预训练模型默认放在 `resources/models/`，也可能通过 `PLASCAN_MODEL_DIR` 指定。
 - GUI 中自动选择的模型路径应显示给用户，且实际运行配置要与显示路径一致。
-- 不要删除或替换 `.pt` 模型文件，除非任务明确要求并说明来源。
+- 不要删除或替换模型文件，除非任务明确要求并说明来源。
 - 修改模型查找逻辑时，同时考虑 CPU/CUDA 文件、Release 下载模型、源码树运行和安装后运行。
 - 修改 `docs/models/README.md`、`README.md` 或模型导出脚本时，保持模型文件名、算法名和 GUI/CLI 行为一致。
 
 ## 模块约定
 
-- `src/core/image_matching`：维护统一算法注册接口、任务内特征、几何验证和逐影像 `.pimatch` 格式；新增算法要补版本/指纹、CLI/GUI 参数、模型说明和测试。
 - `src/gui`：保持对话框、任务 runner、项目服务和主窗口职责分离。UI 文案使用中文，错误信息要能定位到路径、算法或参数。
 - `src/cli`：CLI 参数应与核心配置一致，错误输出适合脚本调用和日志排查。
 - `src/common`：只放跨模块通用能力，不把业务流程塞进 common。
@@ -140,10 +137,6 @@ python scripts\env\setup_python_runtime.py --device cuda --cuda-wheel cu130
 ## 文档同步
 
 - 新增、删除或移动核心文件后，对照并更新 `docs/PROJECT_ARCHITECTURE.md`。
-- 修改密集匹配、特征提取或 SfM 边界时，同步检查：
-  - `src/core/dense_match/README.md`
-  - `src/core/image_matching/README.md`
-  - `src/core/sfm/README.md`
 - 修改构建、依赖、模型、CLI 或 Docker 流程时，同步检查 `README.md`、`docs/models/README.md` 和 `docker/` 相关脚本说明。
 - 版本更新文档集中维护：
   - `CHANGELOG.md`：根目录版本变更索引，按版本倒序记录每个版本的主要新增、优化、修复、验证和已知问题。
