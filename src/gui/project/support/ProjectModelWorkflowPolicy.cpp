@@ -1,13 +1,12 @@
 #include "ProjectModelWorkflowPolicy.h"
 
+#include "ProjectDepthBatchLineage.h"
 #include "DepthFrameUtils.h"
 #include "ProjectWorkflowUtils.h"
 
-#include <QCryptographicHash>
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
-#include <QJsonDocument>
 #include <QtGlobal>
 
 #include <algorithm>
@@ -32,6 +31,24 @@ QString comparablePath(const QString &path)
         return QString();
     }
     return QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+}
+
+int consistentProjectInputSignatureVersion(
+    const xjw::core::project::StoredDepthFramesResult &stored_frames)
+{
+    int version = -1;
+    for (const auto &frame : stored_frames.frames)
+    {
+        if (version < 0)
+        {
+            version = frame.projectInputSignatureVersion;
+        }
+        else if (version != frame.projectInputSignatureVersion)
+        {
+            return 0;
+        }
+    }
+    return version;
 }
 
 
@@ -153,35 +170,10 @@ int expectedDepthFrameCount(const QJsonObject &project_metadata,
 QString projectDepthInputSignature(const QJsonObject &project_metadata,
                                    int aerial_triangulation_result_index)
 {
-    const QJsonArray images = project_metadata.value(QStringLiteral("images")).toArray();
-    const QJsonArray at_results =
-        project_metadata.value(QStringLiteral("aerial_triangulation_results")).toArray();
-    if (images.isEmpty() && at_results.isEmpty())
-    {
-        return QString();
-    }
-
-    QJsonObject signature_input;
-    signature_input[QStringLiteral("images")] = images;
-    int at_index = aerial_triangulation_result_index;
-    if (at_index < 0 || at_index >= at_results.size())
-    {
-        at_index = findLatestProductionAtResultIndex(project_metadata);
-    }
-    if (at_index < 0 && !at_results.isEmpty())
-    {
-        at_index = at_results.size() - 1;
-    }
-    if (at_index >= 0)
-    {
-        signature_input[QStringLiteral("aerial_triangulation_result")] =
-            at_results.at(at_index).toObject();
-    }
-
-    const QByteArray payload =
-        QJsonDocument(signature_input).toJson(QJsonDocument::Compact);
-    return QString::fromLatin1(
-        QCryptographicHash::hash(payload, QCryptographicHash::Sha256).toHex());
+    return canonicalProjectDepthInputSignature(
+        project_metadata,
+        aerial_triangulation_result_index,
+        kProjectDepthInputSignatureVersion);
 }
 
 StoredDepthBatchCompatibility assessStoredDepthBatchCompatibility(
@@ -242,25 +234,6 @@ StoredDepthBatchCompatibility assessStoredDepthBatchCompatibility(
         return result;
     }
 
-    const QString current_input_signature =
-        projectDepthInputSignature(project_metadata, aerial_triangulation_result_index);
-    const QString stored_input_signature = consistentProjectInputSignature(stored_frames);
-    if (!current_input_signature.isEmpty() && stored_input_signature.isEmpty())
-    {
-        result.reason = QStringLiteral(
-            "所选深度图批次缺少一致的工程输入签名，无法确认其相机参数与当前空三结果一致。"
-            "请从“工作流程 → 生成模型”重新估计深度图。");
-        return result;
-    }
-    if (!current_input_signature.isEmpty() &&
-        stored_input_signature != current_input_signature)
-    {
-        result.reason = QStringLiteral(
-            "所选深度图批次已过期：当前工程的影像、相机参数或空三结果已发生变化。"
-            "为避免融合错误位姿下的深度，请重新估计深度图后再生成模型。");
-        return result;
-    }
-
     const QString current_generation_id =
         selected_at_result.value(QStringLiteral("reconstruction_generation_id"))
             .toString();
@@ -280,6 +253,35 @@ StoredDepthBatchCompatibility assessStoredDepthBatchCompatibility(
             "所选深度图批次属于旧的重建代次，不能与当前相机解进行融合。"
             "请重新估计深度图后再生成模型。");
         return result;
+    }
+
+    const QString current_input_signature =
+        projectDepthInputSignature(project_metadata, aerial_triangulation_result_index);
+    const QString stored_input_signature = consistentProjectInputSignature(stored_frames);
+    if (!current_input_signature.isEmpty() && stored_input_signature.isEmpty())
+    {
+        result.reason = QStringLiteral(
+            "所选深度图批次缺少一致的工程输入签名，无法确认其相机参数与当前空三结果一致。"
+            "请从“工作流程 → 生成模型”重新估计深度图。");
+        return result;
+    }
+    if (!current_input_signature.isEmpty() &&
+        stored_input_signature != current_input_signature)
+    {
+        const int signature_version =
+            consistentProjectInputSignatureVersion(stored_frames);
+        const bool verified_legacy_batch =
+            signature_version == 1 &&
+            !current_generation_id.isEmpty() &&
+            current_generation_id == stored_generation_id &&
+            legacyDepthCamerasMatchCurrentProject(stored_frames, project_metadata);
+        if (!verified_legacy_batch)
+        {
+            result.reason = QStringLiteral(
+                "所选深度图批次已过期：当前工程的影像、相机参数或空三结果已发生变化。"
+                "为避免融合错误位姿下的深度，请重新估计深度图后再生成模型。");
+            return result;
+        }
     }
 
     result.compatible = true;

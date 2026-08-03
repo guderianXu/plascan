@@ -497,7 +497,8 @@ gui/
 │       ├── ProjectCameraInitialization.h/cpp        # 相机初始化
 │       ├── ProjectDenseWorkflowConfig.h             # 旧包含路径兼容层；实现已迁移到 core/project_workflows
 │       ├── ProjectReferenceDatasets.h               # 旧包含路径兼容层；参考数据业务已迁移到 core/project_workflows
-│       ├── ProjectModelWorkflowPolicy.h/cpp         # 模型线程预算、输入签名及深度批次完整性/代次兼容校验
+│       ├── ProjectDepthBatchLineage.h/cpp           # 路径无关的深度输入签名与旧批次逐帧相机核验
+│       ├── ProjectModelWorkflowPolicy.h/cpp         # 模型线程预算及深度批次完整性/代次兼容策略
 │       ├── ProjectSessionContext.h                  # 异步写回会话身份（项目、Chunk、generation）
 │       ├── ProjectTerrainRequests.h                 # DEM 类型化请求及边界校验
 │       ├── ProjectMetadataOperations.h/cpp          # 元数据操作
@@ -652,7 +653,9 @@ MenuWorkflowController
 
 深度图的磁盘 manifest 哈希覆盖估计参数、影像路径/大小/修改时间、相机内外参、
 匹配对质量约束和稀疏点云内容。项目结果中的深度批次还记录当前影像、相机与正式空三结果的
-输入签名；重新平差、修改相机或切换空三结果后，旧深度图不会直接参与融合或模型生成。
+输入签名；签名只覆盖稳定影像身份、相机几何和空三代次，不受外部路径归档为
+`plascan:///` URI 等存储迁移影响。旧版路径敏感签名仅在逐帧深度相机与当前工程相机一致时兼容；
+重新平差、修改相机或切换空三结果后，旧深度图仍不会直接参与融合或模型生成。
 深度结果另带 `algorithm_revision`；影响几何质量的生产算法升级会递增该值，生成模型工作流仅透明
 复用当前修订版的完整批次，旧批次保留在磁盘并先触发当前多视深度重算。
 可复用的密集点云必须与深度批次的目录、数量、配置哈希和输入签名一致，并通过 PLY 头与

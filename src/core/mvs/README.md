@@ -150,6 +150,9 @@ fixtures and then invokes `model_quality_cli` when quality validation is enabled
 - The GUI `Create Point Cloud` workflow accepts only the latest production SfM/BA result. It reuses a stored
   depth batch only when every expected frame exists and its algorithm revision, input signature, and
   reconstruction generation match; otherwise it regenerates depth artifacts before bounded streaming fusion.
+  Input signature version 2 hashes stable image identities and camera geometry rather than archive-dependent
+  paths or result bookkeeping. Legacy batches whose old path-sensitive signature changes during project
+  archiving are accepted only after every stored depth camera is verified against the current project camera.
 - `reconstruct_pipeline_cli --mvs-depth-only` is the safest validation mode for large aerial projects when the
   goal is to exercise depth scheduling, artifact persistence, cancellation, and manifest recovery without
   entering fusion, mesh, or terrain generation.

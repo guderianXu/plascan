@@ -136,6 +136,7 @@ set(GUI_HEADERS
   project/support/ProjectCameraInitialization.h
   project/support/ProjectDashboardSummary.h
   project/support/ProjectDenseWorkflowConfig.h
+  project/support/ProjectDepthBatchLineage.h
   project/support/ProjectModelWorkflowPolicy.h
   project/support/ProjectMetadataOperations.h
   project/support/ProjectReferenceDatasets.h
@@ -196,6 +197,7 @@ set(GUI_PROJECT_SOURCES
   project/support/ProjectBundleAdjustWorkflow.cpp
   project/support/ProjectCameraInitialization.cpp
   project/support/ProjectDashboardSummary.cpp
+  project/support/ProjectDepthBatchLineage.cpp
   project/support/ProjectModelWorkflowPolicy.cpp
   project/support/ProjectMetadataOperations.cpp
   project/support/ProjectReferenceTerrainBa.cpp

@@ -30,7 +30,9 @@ struct StoredDepthFrameRecord
     QStringList sourceImages;
     QString configHash;
     QString projectInputSignature;
+    int projectInputSignatureVersion = 1;
     QString reconstructionGenerationId;
+    QJsonObject cameraModel;
     int algorithmRevision = 0;
     int gridWidth = 0;
     int gridHeight = 0;

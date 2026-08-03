@@ -252,6 +252,8 @@ QJsonObject depthRecordFromArtifact(const QJsonObject &artifact,
     record[QStringLiteral("mvs_output_dir")] = context.outputDir;
     record[QStringLiteral("batch_frame_count")] = context.selectedImages.size();
     record[QStringLiteral("project_input_signature")] = context.projectInputSignature;
+    record[QStringLiteral("project_input_signature_version")] =
+        xjw::gui::project::kProjectDepthInputSignatureVersion;
     record[QStringLiteral("reconstruction_generation_id")] =
         context.reconstructionGenerationId;
     record[QStringLiteral("quality_profile")] = context.request.qualityProfile;

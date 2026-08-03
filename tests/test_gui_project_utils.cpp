@@ -1739,6 +1739,56 @@ TEST(ModelWorkflowPolicyTest, ProjectDepthInputSignatureTracksImagesCamerasAndAe
               xjw::gui::project::projectDepthInputSignature(multiple_results, 1));
 }
 
+TEST(ModelWorkflowPolicyTest, ProjectDepthInputSignatureIgnoresArchivePathRewrites)
+{
+    const QString external_path = QStringLiteral("G:/source/image_0.tif");
+    const QString archived_path = QStringLiteral(
+        "plascan:///shared/images/abc123/image_0.tif");
+
+    QJsonObject image = buildImageEntry(external_path, makeCamera(1.0, 2.0, 3.0));
+    image[QStringLiteral("image_uuid")] = QStringLiteral("stable-image-id");
+    image[QStringLiteral("mask_path")] = QStringLiteral("G:/source/image_0_mask.png");
+    QJsonObject metadata;
+    metadata[QStringLiteral("images")] = QJsonArray{image};
+    metadata[QStringLiteral("aerial_triangulation_results")] = QJsonArray{
+        QJsonObject{
+            {QStringLiteral("run_id"), QStringLiteral("run-a")},
+            {QStringLiteral("reconstruction_generation_id"), QStringLiteral("generation-a")},
+            {QStringLiteral("selected_images"), QJsonArray{external_path}},
+            {QStringLiteral("output_dir"), QStringLiteral("G:/source/sfm")}}
+    };
+    const QString external_signature =
+        xjw::gui::project::projectDepthInputSignature(metadata);
+
+    QJsonObject archived = metadata;
+    QJsonObject archived_image = image;
+    archived_image[QStringLiteral("path")] = archived_path;
+    archived_image[QStringLiteral("mask_path")] =
+        QStringLiteral("plascan:///chunk/assets/masks/image_0_mask.png");
+    archived_image[QStringLiteral("mask_updated_at")] =
+        QStringLiteral("2026-08-03T08:00:00Z");
+    archived[QStringLiteral("images")] = QJsonArray{archived_image};
+    QJsonObject archived_at =
+        archived.value(QStringLiteral("aerial_triangulation_results"))
+            .toArray()
+            .at(0)
+            .toObject();
+    archived_at[QStringLiteral("selected_images")] = QJsonArray{archived_path};
+    archived_at[QStringLiteral("output_dir")] =
+        QStringLiteral("plascan:///chunk/assets/aerial_triangulation/sfm_sparse");
+    archived[QStringLiteral("aerial_triangulation_results")] = QJsonArray{archived_at};
+
+    EXPECT_EQ(xjw::gui::project::projectDepthInputSignature(archived),
+              external_signature);
+
+    QJsonObject changed_image = archived_image;
+    changed_image[QStringLiteral("camera")] =
+        xjw::common::project::cameraToJson(makeCamera(1.01, 2.0, 3.0));
+    archived[QStringLiteral("images")] = QJsonArray{changed_image};
+    EXPECT_NE(xjw::gui::project::projectDepthInputSignature(archived),
+              external_signature);
+}
+
 TEST(ModelWorkflowPolicyTest, StoredDepthBatchCompatibilityRejectsOldReconstructionGeneration)
 {
     QTemporaryDir temp_dir;
@@ -1902,6 +1952,103 @@ TEST(ModelWorkflowPolicyTest, StoredDepthBatchCompatibilityAcceptsCurrentLineage
             temp_dir.path());
     EXPECT_TRUE(compatibility.compatible) << compatibility.reason.toStdString();
     EXPECT_EQ(compatibility.frameCount, 2);
+}
+
+TEST(ModelWorkflowPolicyTest, StoredDepthBatchCompatibilityVerifiesLegacyCamerasAfterArchiveRewrite)
+{
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    const std::array<xjw::Camera, 2> cameras{
+        makeCamera(1.0, 2.0, 3.0),
+        makeCamera(-1.0, 2.5, 3.5)};
+    QJsonArray images;
+    QJsonArray selected_images;
+    for (int index = 0; index < 2; ++index)
+    {
+        const QString path = QStringLiteral("E:/source/image_%1.jpg").arg(index);
+        QJsonObject image = buildImageEntry(path, cameras[static_cast<std::size_t>(index)]);
+        image[QStringLiteral("image_uuid")] =
+            QStringLiteral("image-id-%1").arg(index);
+        images.append(image);
+        selected_images.append(path);
+    }
+
+    QJsonObject metadata;
+    metadata[QStringLiteral("images")] = images;
+    metadata[QStringLiteral("aerial_triangulation_results")] = QJsonArray{
+        QJsonObject{
+            {QStringLiteral("run_id"), QStringLiteral("run-current")},
+            {QStringLiteral("reconstruction_generation_id"),
+             QStringLiteral("generation-current")},
+            {QStringLiteral("selected_images"), selected_images}}
+    };
+
+    QJsonArray depth_records;
+    for (int index = 0; index < 2; ++index)
+    {
+        const QString depth_png =
+            QDir(temp_dir.path()).filePath(QStringLiteral("depth_%1.png").arg(index));
+        const QString raw_depth =
+            QDir(temp_dir.path()).filePath(QStringLiteral("depth_%1.bin").arg(index));
+        for (const QString &path : {depth_png, raw_depth})
+        {
+            QFile artifact(path);
+            ASSERT_TRUE(artifact.open(QIODevice::WriteOnly));
+            artifact.write("x");
+        }
+
+        const auto &camera = cameras[static_cast<std::size_t>(index)];
+        const auto center = camera.cameraCenter();
+        const auto rotation = camera.worldToCameraRotation();
+        QJsonArray center_json;
+        QJsonArray rotation_json;
+        for (double value : center)
+        {
+            center_json.append(value);
+        }
+        for (double value : rotation)
+        {
+            rotation_json.append(value);
+        }
+        const QJsonObject camera_model{
+            {QStringLiteral("camera_center"), center_json},
+            {QStringLiteral("rotation_world_to_camera"), rotation_json},
+            {QStringLiteral("fx"), camera.focalX()},
+            {QStringLiteral("fy"), camera.focalY()},
+            {QStringLiteral("cx"), camera.principalX()},
+            {QStringLiteral("cy"), camera.principalY()}};
+        depth_records.append(QJsonObject{
+            {QStringLiteral("ref_image"),
+             QStringLiteral("plascan:///shared/images/hash-%1/image_%1.jpg").arg(index)},
+            {QStringLiteral("depth_png"), depth_png},
+            {QStringLiteral("raw_depth_path"), raw_depth},
+            {QStringLiteral("config_hash"), QStringLiteral("config-a")},
+            {QStringLiteral("project_input_signature"),
+             QStringLiteral("legacy-pre-archive-signature")},
+            {QStringLiteral("reconstruction_generation_id"),
+             QStringLiteral("generation-current")},
+            {QStringLiteral("camera_model"), camera_model},
+            {QStringLiteral("algorithm_revision"),
+             xjw::mvs::kMvsDepthAlgorithmRevision}});
+    }
+    metadata[QStringLiteral("depth_map_results")] = depth_records;
+
+    const auto compatible = xjw::gui::project::assessStoredDepthBatchCompatibility(
+        metadata, temp_dir.path());
+    EXPECT_TRUE(compatible.compatible) << compatible.reason.toStdString();
+
+    QJsonObject changed = metadata;
+    QJsonArray changed_images = changed.value(QStringLiteral("images")).toArray();
+    QJsonObject changed_image = changed_images.at(0).toObject();
+    changed_image[QStringLiteral("camera")] =
+        xjw::common::project::cameraToJson(makeCamera(1.1, 2.0, 3.0));
+    changed_images[0] = changed_image;
+    changed[QStringLiteral("images")] = changed_images;
+    const auto rejected = xjw::gui::project::assessStoredDepthBatchCompatibility(
+        changed, temp_dir.path());
+    EXPECT_FALSE(rejected.compatible);
+    EXPECT_TRUE(rejected.reason.contains(QStringLiteral("已过期")));
 }
 
 TEST(GenerateModelDialogTest, OffersAutomaticDepthMapsWithoutExistingDepthArtifacts)
