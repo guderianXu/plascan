@@ -11,6 +11,7 @@
 #include <QComboBox>
 #include <QDir>
 #include <QDoubleSpinBox>
+#include <QFile>
 #include <QFileInfo>
 #include <QGroupBox>
 #include <QJsonArray>
@@ -44,6 +45,7 @@ struct DialogFixture
     QString demPath;
     QString firstImage;
     QString secondImage;
+    QString pointCloudPath;
 
     bool createFiles()
     {
@@ -76,6 +78,21 @@ struct DialogFixture
         firstImage = QDir(directory.path()).filePath(QStringLiteral("ready.png"));
         secondImage =
             QDir(directory.path()).filePath(QStringLiteral("not_ready.png"));
+        pointCloudPath =
+            QDir(directory.path()).filePath(QStringLiteral("colored_cloud.ply"));
+        QFile pointCloudFile(pointCloudPath);
+        if (!pointCloudFile.open(QIODevice::WriteOnly | QIODevice::Text))
+        {
+            return false;
+        }
+        pointCloudFile.write(
+            "ply\nformat ascii 1.0\nelement vertex 4\n"
+            "property float x\nproperty float y\nproperty float z\n"
+            "property uchar red\nproperty uchar green\nproperty uchar blue\n"
+            "end_header\n"
+            "10 0 0 255 0 0\n0 10 0 0 255 0\n"
+            "-10 0 0 0 0 255\n0 -10 0 255 255 0\n");
+        pointCloudFile.close();
         return xjw::common::io::writeImage(
                    firstImage,
                    cv::Mat(16, 16, CV_8UC3, cv::Scalar(10, 20, 30)))
@@ -90,6 +107,7 @@ struct DialogFixture
         dialog->setAvailableImages({firstImage, secondImage});
         dialog->setProjectRoot(directory.path());
         dialog->setDefaultDemPath(demPath);
+        dialog->setDefaultPointCloudPath(pointCloudPath);
         dialog->setImageReadiness(readyImages, 1);
         ASSERT_TRUE(QMetaObject::invokeMethod(
             dialog, "estimateNow", Qt::DirectConnection));
@@ -164,6 +182,62 @@ TEST(MapProjectDialogTest, ExposesSupportedWorkflowAndActualDemDefaults)
         QDir(fixture.directory.path())
             .filePath(QStringLiteral("assets/ortho/relative_dom.tif")));
     EXPECT_EQ(runButton->text(), QStringLiteral("生成"));
+}
+
+TEST(MapProjectDialogTest, SwitchesToPointCloudPlanarAndGlobalProjection)
+{
+    DialogFixture fixture;
+    ASSERT_TRUE(fixture.createFiles());
+
+    MapProjectDialog dialog;
+    fixture.configure(&dialog, {fixture.firstImage});
+    auto *surface = requiredWidget<QComboBox>(&dialog, "orthoSurfaceCombo");
+    auto *demProjection = requiredWidget<QRadioButton>(
+        &dialog, "orthoProjectionDemGridRadio");
+    auto *planarProjection = requiredWidget<QRadioButton>(
+        &dialog, "orthoProjectionPlanarRadio");
+    auto *cylindricalProjection = requiredWidget<QRadioButton>(
+        &dialog, "orthoProjectionCylindricalRadio");
+    auto *surfacePath = requiredWidget<QLineEdit>(&dialog, "orthoDemPathEdit");
+    auto *bodyReference = requiredWidget<QWidget>(&dialog, "orthoBodyReferenceAutoCheck");
+    auto *maximumMode = requiredWidget<QRadioButton>(
+        &dialog, "orthoMaximumDimensionModeRadio");
+    ASSERT_NE(surface, nullptr);
+    surface->setCurrentIndex(surface->findData(QStringLiteral("point_cloud")));
+    EXPECT_FALSE(demProjection->isEnabled());
+    EXPECT_TRUE(planarProjection->isEnabled());
+    EXPECT_TRUE(planarProjection->isChecked());
+    EXPECT_TRUE(cylindricalProjection->isEnabled());
+    EXPECT_EQ(surfacePath->text(), fixture.pointCloudPath);
+
+    cylindricalProjection->setChecked(true);
+    maximumMode->setChecked(true);
+    EXPECT_TRUE(bodyReference->isVisibleTo(&dialog));
+
+    QJsonObject emittedSettings;
+    QSignalSpy runSpy(&dialog, &MapProjectDialog::requestRunMapProject);
+    QObject::connect(
+        &dialog,
+        &MapProjectDialog::requestRunMapProject,
+        &dialog,
+        [&emittedSettings](const QJsonObject &settings)
+        {
+            emittedSettings = settings;
+        });
+    ASSERT_TRUE(QMetaObject::invokeMethod(&dialog, "onRun", Qt::DirectConnection));
+    if (emittedSettings.isEmpty())
+    {
+        ASSERT_TRUE(runSpy.wait(5000));
+    }
+    ASSERT_FALSE(emittedSettings.isEmpty());
+    EXPECT_EQ(emittedSettings.value(QStringLiteral("projection_type")).toString(),
+              QStringLiteral("cylindrical"));
+    EXPECT_EQ(emittedSettings.value(QStringLiteral("surface_type")).toString(),
+              QStringLiteral("point_cloud"));
+    EXPECT_EQ(emittedSettings.value(QStringLiteral("color_source")).toString(),
+              QStringLiteral("point_colors"));
+    EXPECT_EQ(emittedSettings.value(QStringLiteral("point_cloud_path")).toString(),
+              fixture.pointCloudPath);
 }
 
 TEST(MapProjectDialogTest, EmitsCompleteSettingsForCustomRegion)

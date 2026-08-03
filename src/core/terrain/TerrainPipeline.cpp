@@ -7,6 +7,7 @@
 #include "ObjMtlLoader.h"
 #include "OrthoGenerationOptions.h"
 #include "OrthoProjector.h"
+#include "PointCloudDomGenerator.h"
 #include "projection/AsteroidProjection.h"
 #include "Camera.h"
 #include "io/PathIO.h"
@@ -129,6 +130,139 @@ bool resolveDemVerticalOffsetForOrtho(const QJsonObject &projectMeta,
 
     return fileNameMatchCount == 1
         && applyRelativeDemOffset(uniqueFileNameMatch, zOffset);
+}
+
+std::shared_ptr<xjw::PlaPointCloud> readTerrainPointCloud(const QString &pointCloudPath,
+                                                          QString *errorMsg)
+{
+    const std::string path = xjw::common::io::toNativeNarrowPath(pointCloudPath);
+    const QString suffix = QFileInfo(pointCloudPath).suffix().toLower();
+    try
+    {
+        if (suffix == QStringLiteral("ply"))
+        {
+            return plapoint::io::readPly<float>(path);
+        }
+        if (suffix == QStringLiteral("obj"))
+        {
+            return plapoint::io::readObj<float>(path);
+        }
+        if (suffix == QStringLiteral("xyz"))
+        {
+            return plapoint::io::readXyz<float>(path);
+        }
+    }
+    catch (const std::exception &exception)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("读取点云失败: %1")
+                .arg(QString::fromUtf8(exception.what()));
+        }
+        return {};
+    }
+    if (errorMsg)
+    {
+        *errorMsg = QStringLiteral("不支持的点云格式: %1；请选择 PLY、OBJ 或 XYZ")
+            .arg(pointCloudPath);
+    }
+    return {};
+}
+
+bool generatePointCloudOrtho(const QString &pointCloudPath,
+                             const QString &outputPath,
+                             const xjw::OrthoGenerationOptions &options,
+                             QJsonObject *result,
+                             QString *errorMsg,
+                             const std::atomic_bool *cancelFlag,
+                             const xjw::TerrainPipeline::OrthoProgressCallback &progressCallback)
+{
+    if (progressCallback)
+    {
+        progressCallback(QStringLiteral("读取彩色点云"), 0);
+    }
+    const std::shared_ptr<xjw::PlaPointCloud> cloud =
+        readTerrainPointCloud(pointCloudPath, errorMsg);
+    if (!cloud || cloud->size() == 0)
+    {
+        if (errorMsg && errorMsg->isEmpty())
+        {
+            *errorMsg = QStringLiteral("点云文件为空或无法读取");
+        }
+        return false;
+    }
+
+    xjw::PointCloudDomResult projected;
+    if (!xjw::PointCloudDomGenerator::generate(
+            *cloud, options, &projected, errorMsg, cancelFlag, progressCallback))
+    {
+        return false;
+    }
+    if (progressCallback)
+    {
+        progressCallback(QStringLiteral("写出点云正射影像"), 95);
+    }
+    const bool outputGeoTiff = outputPath.endsWith(QStringLiteral(".tif"), Qt::CaseInsensitive)
+        || outputPath.endsWith(QStringLiteral(".tiff"), Qt::CaseInsensitive);
+    if (outputGeoTiff)
+    {
+        if (!xjw::DemDomIO::writeDomGeoTiff(projected.imageBgr,
+                                            projected.validMask,
+                                            projected.reference,
+                                            outputPath,
+                                            errorMsg))
+        {
+            return false;
+        }
+    }
+    else
+    {
+        cv::Mat northUp;
+        cv::flip(projected.imageBgr, northUp, 0);
+        cv::Mat alpha;
+        cv::flip(projected.validMask, alpha, 0);
+        std::vector<cv::Mat> channels;
+        cv::split(northUp, channels);
+        channels.push_back(alpha);
+        cv::merge(channels, northUp);
+        if (!xjw::DemDomIO::writeDomImage(
+                northUp, outputPath, xjw::DomImageFormat::Png, errorMsg))
+        {
+            return false;
+        }
+    }
+    if (result)
+    {
+        QJsonObject output;
+        output[QStringLiteral("created_at")] =
+            QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+        output[QStringLiteral("output_path")] = outputPath;
+        output[QStringLiteral("point_cloud_path")] = pointCloudPath;
+        output[QStringLiteral("resolved_settings")] = projected.resolvedOptions.toResolvedJson();
+        output[QStringLiteral("projection_wkt")] = projected.reference.projection.projectionWkt;
+        output[QStringLiteral("projection_wkt_present")] =
+            !projected.reference.projection.projectionWkt.isEmpty();
+        output[QStringLiteral("dom_georeferenced")] = outputGeoTiff;
+        output[QStringLiteral("has_coverage_alpha")] = true;
+        output[QStringLiteral("input_point_count")] =
+            static_cast<double>(projected.inputPointCount);
+        output[QStringLiteral("projected_point_count")] =
+            static_cast<double>(projected.projectedPointCount);
+        output[QStringLiteral("valid_pixel_count")] =
+            static_cast<double>(projected.validPixelCount);
+        output[QStringLiteral("coverage_ratio")] = projected.coverageRatio;
+        output[QStringLiteral("width")] = projected.reference.width;
+        output[QStringLiteral("height")] = projected.reference.height;
+        output[QStringLiteral("pixel_size_x")] = projected.reference.stepX;
+        output[QStringLiteral("pixel_size_y")] = projected.reference.stepY;
+        output[QStringLiteral("algorithm_version")] = QStringLiteral("point_cloud_dom_v1");
+        *result = output;
+    }
+    if (progressCallback)
+    {
+        progressCallback(QStringLiteral("点云正射影像生成完成"), 100);
+    }
+    return true;
 }
 
 } // namespace
@@ -302,6 +436,16 @@ bool TerrainPipeline::estimateOrthoProduct(const QString &demPath,
         return false;
     }
 
+    if (options.surfaceType == OrthoSurfaceType::PointCloud)
+    {
+        const std::shared_ptr<PlaPointCloud> cloud = readTerrainPointCloud(demPath, errorMsg);
+        if (!cloud || cloud->size() == 0)
+        {
+            return false;
+        }
+        return PointCloudDomGenerator::estimate(*cloud, options, result, errorMsg);
+    }
+
     DemGridData metadata;
     if (!DemDomIO::readDemMetadata(demPath, &metadata, errorMsg))
     {
@@ -363,14 +507,6 @@ bool TerrainPipeline::generateOrthoProduct(
     const std::atomic_bool *cancelFlag,
     const OrthoProgressCallback &progressCallback)
 {
-    if (images.isEmpty())
-    {
-        if (errorMsg)
-        {
-            *errorMsg = QStringLiteral("没有可用于 DOM 生成的影像");
-        }
-        return false;
-    }
     if (cancelFlag && cancelFlag->load(std::memory_order_relaxed))
     {
         if (errorMsg)
@@ -383,6 +519,25 @@ bool TerrainPipeline::generateOrthoProduct(
     OrthoGenerationOptions options;
     if (!OrthoGenerationOptions::fromJson(settings, &options, errorMsg))
     {
+        return false;
+    }
+
+    if (options.surfaceType == OrthoSurfaceType::PointCloud)
+    {
+        return generatePointCloudOrtho(demPath,
+                                       outputPath,
+                                       options,
+                                       result,
+                                       errorMsg,
+                                       cancelFlag,
+                                       progressCallback);
+    }
+    if (images.isEmpty())
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("没有可用于 DOM 生成的影像");
+        }
         return false;
     }
 

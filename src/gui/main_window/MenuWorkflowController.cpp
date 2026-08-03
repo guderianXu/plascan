@@ -1804,6 +1804,23 @@ void MenuWorkflowController::openMapProjectDialog()
         }
         dlg->setDefaultDemPath(!latestRelativeDem.isEmpty() ? latestRelativeDem : latestAnyDem);
 
+        const QJsonArray denseResults =
+            _projectManager->currentMeta().value(QStringLiteral("dense_cloud_results")).toArray();
+        for (int index = denseResults.size() - 1; index >= 0; --index)
+        {
+            const QString candidate =
+                xjw::common::project::ProjectIO::resolveProjectResourcePath(
+                    projectPath,
+                    denseResults.at(index).toObject()
+                        .value(QStringLiteral("dense_cloud_xyz")).toString());
+            const QFileInfo candidateInfo(candidate);
+            if (!candidate.isEmpty() && candidateInfo.exists() && candidateInfo.isFile())
+            {
+                dlg->setDefaultPointCloudPath(candidate);
+                break;
+            }
+        }
+
         // 懒初始化 MapProject 记忆化管理器
         if (!_mapSetting)
         {

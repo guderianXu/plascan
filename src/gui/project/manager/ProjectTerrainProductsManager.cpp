@@ -236,10 +236,28 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
     }
 
     QJsonObject meta = _projectData->metadata();
+    const bool pointCloudMode =
+        request.options.surfaceType == xjw::OrthoSurfaceType::PointCloud;
     QString resolvedDem =
-        resolveProjectPath(request.demPath);
+        resolveProjectPath(pointCloudMode ? request.pointCloudPath : request.demPath);
     QJsonObject matchedDemRecord;
-    if (resolvedDem.isEmpty())
+    if (resolvedDem.isEmpty() && pointCloudMode)
+    {
+        const QJsonArray denseResults =
+            meta.value(QStringLiteral("dense_cloud_results")).toArray();
+        for (int index = denseResults.size() - 1; index >= 0; --index)
+        {
+            const QString candidate = resolveProjectPath(
+                denseResults.at(index).toObject()
+                    .value(QStringLiteral("dense_cloud_xyz")).toString());
+            if (!candidate.isEmpty() && QFileInfo::exists(candidate))
+            {
+                resolvedDem = candidate;
+                break;
+            }
+        }
+    }
+    if (resolvedDem.isEmpty() && !pointCloudMode)
     {
         const QJsonArray demArr = meta.value(QStringLiteral("dem_results")).toArray();
         if (!demArr.isEmpty())
@@ -261,7 +279,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
             }
         }
     }
-    if (matchedDemRecord.isEmpty())
+    if (matchedDemRecord.isEmpty() && !pointCloudMode)
     {
         const QJsonArray demArr = meta.value(QStringLiteral("dem_results")).toArray();
         for (int index = demArr.size() - 1; index >= 0; --index)
@@ -279,22 +297,27 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
     const QFileInfo resolvedDemInfo(resolvedDem);
     if (resolvedDem.isEmpty() || !resolvedDemInfo.exists() || !resolvedDemInfo.isFile())
     {
-        const QString message = QStringLiteral("找不到 DEM 文件，请先执行[创建 DEM]。");
+        const QString message = pointCloudMode
+            ? QStringLiteral("找不到彩色点云文件，请先生成或选择包含 RGB 的稠密点云。")
+            : QStringLiteral("找不到 DEM 文件，请先执行[创建 DEM]。");
         emit orthoPipelineFinished(false, message, QJsonObject());
         return;
     }
 
     QStringList sourceImages;
-    sourceImages.reserve(request.sourceImages.size());
-    for (const QString &requested_image : request.sourceImages)
+    if (!pointCloudMode)
     {
-        const QString imagePath = resolveProjectPath(requested_image);
-        if (!imagePath.isEmpty())
+        sourceImages.reserve(request.sourceImages.size());
+        for (const QString &requested_image : request.sourceImages)
         {
-            sourceImages.append(imagePath);
+            const QString imagePath = resolveProjectPath(requested_image);
+            if (!imagePath.isEmpty())
+            {
+                sourceImages.append(imagePath);
+            }
         }
     }
-    if (sourceImages.isEmpty())
+    if (sourceImages.isEmpty() && !pointCloudMode)
     {
         sourceImages = _owner->getAllImages();
         for (QString &imagePath : sourceImages)
@@ -303,7 +326,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
         }
         sourceImages.removeAll(QString());
     }
-    if (sourceImages.isEmpty())
+    if (sourceImages.isEmpty() && !pointCloudMode)
     {
         const QString message = QStringLiteral("项目中没有可用影像。");
         emit orthoPipelineFinished(false, message, QJsonObject());
@@ -314,7 +337,9 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
     if (out.isEmpty())
     {
         out = QDir(projectRoot).filePath(
-            QStringLiteral("assets/ortho/relative_dom.tif"));
+            pointCloudMode
+                ? QStringLiteral("assets/ortho/point_cloud_dom.tif")
+                : QStringLiteral("assets/ortho/relative_dom.tif"));
     }
     else if (QFileInfo(out).isRelative() && !projectRoot.isEmpty())
     {
@@ -326,7 +351,9 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
     {
         emit orthoPipelineFinished(
             false,
-            QStringLiteral("正射输出路径不能覆盖输入 DEM：%1").arg(out),
+            (pointCloudMode
+                 ? QStringLiteral("正射输出路径不能覆盖输入点云：%1")
+                 : QStringLiteral("正射输出路径不能覆盖输入 DEM：%1")).arg(out),
             QJsonObject());
         return;
     }
@@ -353,6 +380,11 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
     QJsonObject resolvedSettings = request.toResolvedSettings();
     resolvedSettings[QStringLiteral("images")] = QJsonArray::fromStringList(sourceImages);
     resolvedSettings[QStringLiteral("dem_path")] = resolvedDem;
+    if (pointCloudMode)
+    {
+        resolvedSettings[QStringLiteral("point_cloud_path")] = resolvedDem;
+        resolvedSettings[QStringLiteral("dem_path")] = QString();
+    }
     resolvedSettings[QStringLiteral("output_path")] = out;
 
     QJsonArray runtimeImages;
@@ -459,6 +491,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
                           out,
                           resolvedSettings,
                           matchedDemRecord,
+                          pointCloudMode,
                           session,
                           cancelFlag](
                               ProjectTerrainProductsManager *manager,
@@ -472,7 +505,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
 
         const bool cancelled =
             !orthoRun.ok
-            && orthoRun.error == QStringLiteral("正射影像生成已取消");
+            && orthoRun.error.contains(QStringLiteral("已取消"));
         if (cancelled)
         {
             emit manager->orthoPipelineFinished(
@@ -509,7 +542,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
 
         QJsonObject record = makeOrthoResultRecord(
             orthoResult.value(QStringLiteral("created_at")).toString(),
-            resolvedDem,
+            pointCloudMode ? QString() : resolvedDem,
             orthoResult.value(QStringLiteral("output_path")).toString(out),
             orthoResult.value(QStringLiteral("source_image_count"))
                 .toInt(static_cast<int>(sourceImages.size())),
@@ -520,6 +553,11 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
         if (!record.value(QStringLiteral("resolved_settings")).isObject())
         {
             record[QStringLiteral("resolved_settings")] = resolvedSettings;
+        }
+        if (pointCloudMode)
+        {
+            record[QStringLiteral("point_cloud_path")] = resolvedDem;
+            record[QStringLiteral("source_surface_type")] = QStringLiteral("point_cloud");
         }
         if (!matchedDemRecord.isEmpty())
         {
@@ -542,8 +580,14 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
         manager->_owner->refreshReconstructionQualityReport();
 
         emit manager->orthoPipelineProgressChanged(QStringLiteral("完成"), 100);
-        const QString completionMessage =
-            QStringLiteral("正射影像已生成：%1\n直接覆盖率：%2%；贡献相机：%3 张")
+        const QString completionMessage = pointCloudMode
+            ? QStringLiteral("点云正射影像已生成：%1\n覆盖率：%2%；投影点数：%3")
+                .arg(record.value(QStringLiteral("output_path")).toString())
+                .arg(record.value(QStringLiteral("coverage_ratio")).toDouble()
+                         * 100.0, 0, 'f', 1)
+                .arg(record.value(QStringLiteral("projected_point_count")).toDouble(),
+                     0, 'f', 0)
+            : QStringLiteral("正射影像已生成：%1\n直接覆盖率：%2%；贡献相机：%3 张")
                 .arg(record.value(QStringLiteral("output_path")).toString())
                 .arg(record.value(QStringLiteral("coverage_ratio")).toDouble()
                          * 100.0,

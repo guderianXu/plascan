@@ -334,6 +334,7 @@ core/
 │   ├── OrthoProjectorGrid.cpp  # DEM 边界裁剪、X/Y 像元、最大尺寸与像素预算规划
 │   ├── OrthoProjectorSupport.cpp # 影像/蒙版加载、颜色校正、锐度、重影和小孔洞处理
 │   ├── OrthoProjectorInternal.h # 正射投影内部帧与颜色候选结构
+│   ├── PointCloudDomGenerator.h/cpp # 彩色点云局部平面/小天体全球 DOM 栅格化
 │   ├── DemDomIO.h/cpp          # DEM 元数据/栅格、RGB+覆盖 Alpha GeoTIFF 和质量栅格 I/O
 │   ├── TerrainPipeline.h/cpp   # 地形流水线 (主入口)
 │   ├── projection/
@@ -629,25 +630,28 @@ OBJ/MTL/PNG 纹理产物。旧网格重建和模型导出对话框仍作为内�
 
 ```text
 MenuWorkflowController
-  -> MapProjectDialog（参数、DEM 元数据估算、进度与取消）
+  -> MapProjectDialog（DEM/彩色点云、投影参考、输出估算、进度与取消）
   -> ProjectManager -> ProjectTaskDispatcher
   -> ProjectTerrainProductsManager -> GuiTaskRunner::runGuarded
   -> ProjectWorkflowUtils::runOrthoProduct
-  -> TerrainPipeline -> OrthoGenerationOptions / OrthoProjector
+  -> TerrainPipeline -> OrthoGenerationOptions
+       ├─ DEM + Images -> OrthoProjector
+       └─ PointCloud + PointColors -> PointCloudDomGenerator
   -> DemDomIO（RGB+覆盖 Alpha GeoTIFF 或 RGBA PNG）
   -> project_results.ortho_results[]
 ```
 
-对话框从项目读取最新相对 DEM、影像相机和蒙版就绪数，显示 DEM 坐标系、真实 X/Y 像元、
-裁剪边界、输出宽高和预计内存。运行期间参数被锁定，`orthoPipelineStarted`、
+对话框从项目读取最新相对 DEM、稠密点云、影像相机和蒙版就绪数，显示实际坐标系、X/Y 像元、
+裁剪边界、输出宽高和预计内存。全球点云模式还显示自动或手动的天体中心、平均参考半径和
+中央经线。运行期间参数被锁定，`orthoPipelineStarted`、
 `orthoPipelineProgressChanged` 和 `orthoPipelineFinished` 把后台状态回传同一对话框；
 取消通过共享原子标志传入核心投影循环，切换项目后旧任务不会写回当前项目。
 
-当前生产正射链仅支持 `dem_grid` 地理/本地 DEM 网格投影、`dem` 表面和 `images` 颜色源。
-混合模式支持 `mosaic`、`weighted_average`、`first_valid`；尺寸可使用独立 X/Y 像元或
-最大边像素，并可与 DEM 范围相交裁剪。颜色校正、锐度权重、鲁棒重影过滤、小孔洞填充和
-项目蒙版均进入类型化核心参数。平面投影、圆柱投影和全局接缝线优化尚未实现，GUI 对应控件
-明确禁用。若有效 DEM 表面没有任何相机影像覆盖，核心直接失败，不登记全黑成果。有效覆盖
+生产正射链支持三种有效组合：`dem_grid + dem + images`、`planar + point_cloud + point_colors`
+和 `cylindrical + point_cloud + point_colors`。平面点云模式按 XY 落格并以最大 Z 选择可见颜色；
+全球模式以点云 XYZ 为体固连轴，按经纬度展开到完整 `2πR × πR` 等距圆柱网格，并将实际中心、
+参考半径、中央经线、投影 WKT 和仿射变换写入结果。尺寸可使用独立 X/Y 像元或最大边像素，
+并受统一像素预算限制。若有效 DEM 表面没有任何相机影像覆盖，核心直接失败，不登记全黑成果。有效覆盖
 会进入 GeoTIFF/PNG Alpha；当前 `ortho_projector_v1` 尚未建立逐相机地形遮挡深度缓冲，
 因此陡峭地形仍需质量复核，不能把 Alpha 当作遮挡正确性的证明。
 

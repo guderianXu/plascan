@@ -73,11 +73,25 @@ void MapProjectDialog::connectUi()
     connect(_outputEdit, &QLineEdit::textChanged, this, &MapProjectDialog::onSettingsModified);
     connect(_blendCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MapProjectDialog::onSettingsModified);
+    connect(_surfaceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MapProjectDialog::onSurfaceChanged);
+    for (QRadioButton *radio : {
+             _demGridProjectionRadio, _planarProjectionRadio, _cylindricalProjectionRadio})
+    {
+        connect(radio, &QRadioButton::toggled, this, &MapProjectDialog::onSettingsModified);
+    }
     for (QCheckBox *checkBox : {
              _fillHolesCheck, _ghostFilterCheck, _colorCorrectionCheck,
-             _sharpnessWeightingCheck, _useProjectMasksCheck})
+             _sharpnessWeightingCheck, _useProjectMasksCheck, _bodyReferenceAutoCheck})
     {
         connect(checkBox, &QCheckBox::toggled, this, &MapProjectDialog::onSettingsModified);
+    }
+    for (QDoubleSpinBox *spinBox : {
+             _bodyCenterXSpin, _bodyCenterYSpin, _bodyCenterZSpin,
+             _referenceRadiusSpin, _centralMeridianSpin})
+    {
+        connect(spinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                this, &MapProjectDialog::onSettingsModified);
     }
 
     connect(_pixelSizeRadio, &QRadioButton::toggled, this, &MapProjectDialog::onResolutionModeChanged);
@@ -126,9 +140,21 @@ void MapProjectDialog::setProjectRoot(const QString &projectRoot)
 void MapProjectDialog::setDefaultDemPath(const QString &demPath)
 {
     const QString cleanPath = demPath.trimmed();
-    if (_demEdit->text().trimmed().isEmpty() && !cleanPath.isEmpty())
+    _defaultDemPath = cleanPath;
+    if (_surfaceCombo->currentData().toString() == QStringLiteral("dem")
+        && _demEdit->text().trimmed().isEmpty() && !cleanPath.isEmpty())
     {
         _demEdit->setText(cleanPath);
+    }
+}
+
+void MapProjectDialog::setDefaultPointCloudPath(const QString &pointCloudPath)
+{
+    _defaultPointCloudPath = pointCloudPath.trimmed();
+    if (_surfaceCombo->currentData().toString() == QStringLiteral("point_cloud")
+        && _demEdit->text().trimmed().isEmpty() && !_defaultPointCloudPath.isEmpty())
+    {
+        _demEdit->setText(_defaultPointCloudPath);
     }
 }
 
@@ -199,14 +225,18 @@ void MapProjectDialog::applyImageReadiness()
 
 void MapProjectDialog::onChooseDem()
 {
+    const bool pointCloud =
+        _surfaceCombo->currentData().toString() == QStringLiteral("point_cloud");
     const QString startPath = _demEdit->text().trimmed().isEmpty()
         ? _projectRoot
         : _demEdit->text().trimmed();
     const QString path = QFileDialog::getOpenFileName(
         this,
-        tr("选择 DEM"),
+        pointCloud ? tr("选择彩色点云") : tr("选择 DEM"),
         startPath,
-        tr("DEM 栅格 (*.tif *.tiff *.img *.vrt);;所有文件 (*)"));
+        pointCloud
+            ? tr("点云 (*.ply *.obj *.xyz);;所有文件 (*)")
+            : tr("DEM 栅格 (*.tif *.tiff *.img *.vrt);;所有文件 (*)"));
     if (!path.isEmpty())
     {
         _demEdit->setText(QDir::cleanPath(path));
@@ -242,10 +272,17 @@ void MapProjectDialog::onRun()
     {
         _estimateTimer->stop();
     }
+    const bool pointCloud =
+        _surfaceCombo->currentData().toString() == QStringLiteral("point_cloud");
+    if (pointCloud)
+    {
+        _runAfterPointCloudEstimate = true;
+    }
     if (!runEstimate(true))
     {
         return;
     }
+    _runAfterPointCloudEstimate = false;
 
     const QJsonObject settings = currentSettings();
     QString errorMessage;
@@ -303,7 +340,7 @@ void MapProjectDialog::onPipelineStarted()
     setRunning(true);
     _runButton->setText(tr("生成"));
     _stageLabel->setText(tr("正在准备正射影像"));
-    _statusLabel->setText(tr("正在检查 DEM、相机参数和输出范围。"));
+    _statusLabel->setText(tr("正在检查输入表面、投影参数和输出范围。"));
     _progressBar->setValue(0);
 }
 

@@ -154,6 +154,11 @@ owner/peer 身份和算法变体为准。
 本身位于 Chunk 普通数据目录并由资源索引管理，不写入 `chunk.zip`。相同输出路径的再次生成
 会更新对应结果记录。
 
+`ortho_results[]` 同时容纳两类来源：DEM+影像记录使用 `dem_path`、`images` 和相机统计；彩色
+点云记录使用 `point_cloud_path`、`source_surface_type: "point_cloud"`、点数与覆盖统计。
+点云全球模式的 `resolved_settings` 必须保存实际采用的体中心、参考半径和中央经线，避免后续
+重复生成时悄然改变坐标框架。
+
 典型记录如下；数值仅作字段示例：
 
 ```json
@@ -215,14 +220,39 @@ owner/peer 身份和算法变体为准。
 }
 ```
 
+彩色点云全球 DOM 的关键字段示例：
+
+```json
+{
+  "output_path": "plascan:///chunk/assets/ortho/point_cloud_dom.tif",
+  "point_cloud_path": "plascan:///chunk/reconstruction/mvs/dense_cloud.ply",
+  "source_surface_type": "point_cloud",
+  "algorithm_version": "point_cloud_dom_v1",
+  "projection_wkt_present": true,
+  "projected_point_count": 12500000,
+  "coverage_ratio": 0.81,
+  "resolved_settings": {
+    "projection_type": "cylindrical",
+    "surface_type": "point_cloud",
+    "color_source": "point_colors",
+    "body_reference_auto": false,
+    "body_center_x": 0.12,
+    "body_center_y": -0.03,
+    "body_center_z": 0.08,
+    "reference_radius": 482.6,
+    "central_meridian": 0.0
+  }
+}
+```
+
 字段约定：
 
 - `resolved_settings` 保存核心实际采用的参数，不只保存对话框原始输入。像元未指定或使用
   `maximum_dimension` 时，`pixel_size_x/y` 是结合 DEM 网格后解析出的最终值；范围字段也是
   与 DEM 相交并按输出网格对齐后的值。
-- 当前稳定 token 仅支持 `projection_type=dem_grid`、`surface_type=dem` 和
-  `color_source=images`。平面、圆柱和全局接缝线优化尚未实现，GUI 对应项禁用，也不会写入
-  结果。`blend_mode` 支持 `mosaic`、`weighted_average`、`first_valid`。
+- 稳定组合为 `dem_grid + dem + images`、`planar + point_cloud + point_colors` 和
+  `cylindrical + point_cloud + point_colors`；不接受跨组合参数。`blend_mode` 只对影像颜色源
+  生效，支持 `mosaic`、`weighted_average`、`first_valid`。
 - `sizing_mode` 支持 `pixel_size`（独立 X/Y 像元）和 `maximum_dimension`（限制最长边）；
   `bounds_enabled` 控制 `min_x/min_y/max_x/max_y` 裁剪。顶层 `resolution` 是旧消费者使用的
   X 向分辨率兼容字段，新代码应读取 `pixel_size_x/y` 和 `resolved_settings`。
@@ -234,7 +264,7 @@ owner/peer 身份和算法变体为准。
   `hole_filled_pixel_count` 单独统计合成填充像元。零直接覆盖时任务失败，因此不会产生只有
   黑色像元的成功记录。
 - `.tif/.tiff` 输出为 R/G/B/Alpha 四波段 GeoTIFF，Alpha 的非零值表示直接覆盖或已完成
-  小孔洞填充的有效颜色；文件继承最终网格地理变换及可用的 DEM 投影 WKT。PNG 同样保存
+  小孔洞填充的有效颜色；文件继承最终网格地理变换及对应 DEM/点云投影 WKT。PNG 同样保存
   Alpha 但不保存地理参考。`dom_georeferenced` 和 `projection_wkt_present` 应分别判断，
   不应假设本地坐标 DEM 一定带 WKT。
 

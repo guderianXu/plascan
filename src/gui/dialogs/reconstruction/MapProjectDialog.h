@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QDialog>
+#include <QByteArray>
 #include <QJsonObject>
 #include <QStringList>
 
@@ -32,6 +33,7 @@ public:
     void setAvailableImages(const QStringList &images);
     void setProjectRoot(const QString &projectRoot);
     void setDefaultDemPath(const QString &demPath);
+    void setDefaultPointCloudPath(const QString &pointCloudPath);
     void setImageReadiness(const QStringList &cameraReadyImages, int maskCount);
 
 signals:
@@ -56,6 +58,7 @@ private slots:
     void onCancelRequested();
     void onSettingsModified();
     void onDemPathChanged();
+    void onSurfaceChanged();
     void onPixelSizeEdited();
     void onBoundsEdited();
     void onResolutionModeChanged();
@@ -94,6 +97,13 @@ private:
     QRadioButton *_planarProjectionRadio = nullptr;
     QRadioButton *_cylindricalProjectionRadio = nullptr;
     QLabel *_coordinateSystemLabel = nullptr;
+    QWidget *_bodyReferenceWidget = nullptr;
+    QCheckBox *_bodyReferenceAutoCheck = nullptr;
+    QDoubleSpinBox *_bodyCenterXSpin = nullptr;
+    QDoubleSpinBox *_bodyCenterYSpin = nullptr;
+    QDoubleSpinBox *_bodyCenterZSpin = nullptr;
+    QDoubleSpinBox *_referenceRadiusSpin = nullptr;
+    QDoubleSpinBox *_centralMeridianSpin = nullptr;
 
     QComboBox *_surfaceCombo = nullptr;
     QLineEdit *_demEdit = nullptr;
@@ -139,6 +149,8 @@ private:
     QTimer *_estimateTimer = nullptr;
 
     QString _projectRoot;
+    QString _defaultDemPath;
+    QString _defaultPointCloudPath;
     QStringList _cameraReadyImages;
     QStringList _pendingSelectedImages;
     QJsonObject _lastEstimate;
@@ -161,4 +173,8 @@ private:
     bool _running = false;
     bool _cancelRequested = false;
     bool _hasRunFinished = false;
+    bool _pointCloudEstimateRunning = false;
+    bool _runAfterPointCloudEstimate = false;
+    bool _reportPointCloudEstimateError = false;
+    QByteArray _lastPointCloudEstimateSignature;
 };

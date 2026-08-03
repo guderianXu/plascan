@@ -3,8 +3,10 @@
 #include "TerrainPipeline.h"
 
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFileInfo>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
@@ -13,6 +15,8 @@
 #include <QRadioButton>
 #include <QSpinBox>
 #include <QTimer>
+#include <QThreadPool>
+#include <QPointer>
 
 #include <algorithm>
 #include <cmath>
@@ -44,6 +48,38 @@ QString formatMemory(qint64 bytes)
         return QStringLiteral("%1 MiB").arg(mebibytes, 0, 'f', mebibytes < 10.0 ? 1 : 0);
     }
     return QStringLiteral("%1 GiB").arg(mebibytes / 1024.0, 0, 'f', 2);
+}
+
+QByteArray pointCloudEstimateSignature(QJsonObject settings)
+{
+    settings.remove(QStringLiteral("images"));
+    settings.remove(QStringLiteral("output_path"));
+    settings.remove(QStringLiteral("blend_mode"));
+    settings.remove(QStringLiteral("color_correction"));
+    settings.remove(QStringLiteral("sharpness_weighting"));
+    settings.remove(QStringLiteral("ghost_filter"));
+    settings.remove(QStringLiteral("use_project_masks"));
+    if (settings.value(QStringLiteral("pixel_size_auto")).toBool())
+    {
+        settings.remove(QStringLiteral("pixel_size_x"));
+        settings.remove(QStringLiteral("pixel_size_y"));
+        settings.remove(QStringLiteral("resolution"));
+    }
+    if (settings.value(QStringLiteral("bounds_auto")).toBool())
+    {
+        settings.remove(QStringLiteral("min_x"));
+        settings.remove(QStringLiteral("min_y"));
+        settings.remove(QStringLiteral("max_x"));
+        settings.remove(QStringLiteral("max_y"));
+    }
+    if (settings.value(QStringLiteral("body_reference_auto")).toBool())
+    {
+        settings.remove(QStringLiteral("body_center_x"));
+        settings.remove(QStringLiteral("body_center_y"));
+        settings.remove(QStringLiteral("body_center_z"));
+        settings.remove(QStringLiteral("reference_radius"));
+    }
+    return QJsonDocument(settings).toJson(QJsonDocument::Compact);
 }
 
 } // namespace
@@ -97,9 +133,12 @@ void MapProjectDialog::invalidateDemEstimate()
     _demMaxX = 0.0;
     _demMinY = 0.0;
     _demMaxY = 0.0;
-    _coordinateSystemLabel->setText(tr("等待读取 DEM 坐标系"));
+    const bool pointCloud = _surfaceCombo
+        && _surfaceCombo->currentData().toString() == QStringLiteral("point_cloud");
+    _coordinateSystemLabel->setText(pointCloud
+        ? tr("等待读取点云投影范围") : tr("等待读取 DEM 坐标系"));
     _coordinateSystemLabel->setToolTip(QString());
-    _totalSizeLabel->setText(tr("总尺寸（像素）：等待有效 DEM 范围"));
+    _totalSizeLabel->setText(tr("总尺寸（像素）：等待有效表面范围"));
     _memoryEstimateLabel->setText(tr("预计处理内存：未知"));
 }
 
@@ -129,7 +168,11 @@ bool MapProjectDialog::runEstimate(bool reportError)
     {
         if (reportError)
         {
-            QMessageBox::warning(this, tr("无法预计"), tr("请先选择有效的 DEM 文件。"));
+            const bool pointCloud =
+                _surfaceCombo->currentData().toString() == QStringLiteral("point_cloud");
+            QMessageBox::warning(this, tr("无法预计"), pointCloud
+                ? tr("请先选择有效的彩色点云文件。")
+                : tr("请先选择有效的 DEM 文件。"));
         }
         return false;
     }
@@ -146,6 +189,95 @@ bool MapProjectDialog::runEstimate(bool reportError)
         estimateSettings[QStringLiteral("bounds_enabled")] = false;
     }
 
+    const bool pointCloud =
+        estimateSettings.value(QStringLiteral("surface_type")).toString()
+        == QStringLiteral("point_cloud");
+    if (pointCloud)
+    {
+        const QByteArray signature = pointCloudEstimateSignature(estimateSettings);
+        if (!_lastEstimate.isEmpty() && signature == _lastPointCloudEstimateSignature)
+        {
+            return true;
+        }
+        _reportPointCloudEstimateError = _reportPointCloudEstimateError || reportError;
+        if (_pointCloudEstimateRunning)
+        {
+            return false;
+        }
+
+        _pointCloudEstimateRunning = true;
+        _estimateButton->setEnabled(false);
+        _coordinateSystemLabel->setText(tr("正在后台解析彩色点云..."));
+        _totalSizeLabel->setText(tr("总尺寸（像素）：正在后台预计"));
+        QPointer<MapProjectDialog> self(this);
+        QThreadPool::globalInstance()->start(
+            [self, demPath, estimateSettings, signature]()
+            {
+                QJsonObject outcome;
+                QJsonObject estimate;
+                QString error;
+                outcome[QStringLiteral("ok")] =
+                    xjw::TerrainPipeline::estimateOrthoProduct(
+                        demPath, estimateSettings, &estimate, &error);
+                outcome[QStringLiteral("estimate")] = estimate;
+                outcome[QStringLiteral("error")] = error;
+                if (!self)
+                {
+                    return;
+                }
+                QMetaObject::invokeMethod(
+                    self,
+                    [self, outcome, signature]()
+                    {
+                        if (!self)
+                        {
+                            return;
+                        }
+                        self->_pointCloudEstimateRunning = false;
+                        const QByteArray currentSignature =
+                            pointCloudEstimateSignature(self->currentSettings());
+                        if (signature != currentSignature)
+                        {
+                            self->runEstimate(false);
+                            return;
+                        }
+                        const bool ok = outcome.value(QStringLiteral("ok")).toBool();
+                        const QString error = outcome.value(QStringLiteral("error")).toString();
+                        if (ok)
+                        {
+                            self->_lastEstimate =
+                                outcome.value(QStringLiteral("estimate")).toObject();
+                            self->_lastPointCloudEstimateSignature = signature;
+                            self->updateEstimateSummary(self->_lastEstimate);
+                        }
+                        else
+                        {
+                            self->invalidateDemEstimate();
+                            self->_totalSizeLabel->setText(tr("总尺寸（像素）：无法预计"));
+                            self->_estimateButton->setToolTip(error);
+                        }
+                        self->updateControlAvailability();
+                        const bool report = self->_reportPointCloudEstimateError;
+                        self->_reportPointCloudEstimateError = false;
+                        if (!ok && report)
+                        {
+                            QMessageBox::warning(self, tr("无法预计"), error);
+                        }
+                        if (!ok)
+                        {
+                            self->_runAfterPointCloudEstimate = false;
+                        }
+                        if (ok && self->_runAfterPointCloudEstimate)
+                        {
+                            self->_runAfterPointCloudEstimate = false;
+                            QTimer::singleShot(0, self, &MapProjectDialog::onRun);
+                        }
+                    },
+                    Qt::QueuedConnection);
+            });
+        return false;
+    }
+
     QJsonObject estimate;
     QString errorMessage;
     if (!xjw::TerrainPipeline::estimateOrthoProduct(
@@ -159,7 +291,7 @@ bool MapProjectDialog::runEstimate(bool reportError)
             QMessageBox::warning(
                 this,
                 tr("无法预计"),
-                errorMessage.isEmpty() ? tr("无法读取 DEM 范围和像元信息。") : errorMessage);
+                errorMessage.isEmpty() ? tr("无法读取输入表面的范围和像元信息。") : errorMessage);
         }
         return false;
     }
@@ -182,6 +314,21 @@ void MapProjectDialog::updateEstimateSummary(const QJsonObject &estimate)
     }
     _coordinateSystemLabel->setText(coordinateSystem);
     _coordinateSystemLabel->setToolTip(coordinateSystem);
+
+    const QJsonObject resolvedSettings =
+        estimate.value(QStringLiteral("resolved_settings")).toObject();
+    if (!resolvedSettings.isEmpty()
+        && _surfaceCombo->currentData().toString() == QStringLiteral("point_cloud"))
+    {
+        _bodyCenterXSpin->setValue(
+            resolvedSettings.value(QStringLiteral("body_center_x")).toDouble());
+        _bodyCenterYSpin->setValue(
+            resolvedSettings.value(QStringLiteral("body_center_y")).toDouble());
+        _bodyCenterZSpin->setValue(
+            resolvedSettings.value(QStringLiteral("body_center_z")).toDouble());
+        _referenceRadiusSpin->setValue(
+            resolvedSettings.value(QStringLiteral("reference_radius")).toDouble());
+    }
 
     _demPixelSizeX = positiveJsonValue(
         estimate, QStringLiteral("dem_pixel_size_x"), QStringLiteral("pixel_size_x"));
@@ -254,7 +401,7 @@ void MapProjectDialog::updateLocalEstimateSummary()
     const double spanY = maxY - minY;
     if (!(spanX > 0.0) || !(spanY > 0.0))
     {
-        _totalSizeLabel->setText(tr("总尺寸（像素）：等待有效 DEM 范围"));
+        _totalSizeLabel->setText(tr("总尺寸（像素）：等待有效表面范围"));
         _memoryEstimateLabel->setText(tr("预计处理内存：未知"));
         return;
     }

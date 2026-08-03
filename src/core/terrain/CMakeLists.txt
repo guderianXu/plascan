@@ -4,6 +4,8 @@ add_library(terrain STATIC
     OrthoProjector.cpp
     OrthoProjectorGrid.cpp
     OrthoProjectorSupport.cpp
+    PointCloudDomGenerator.cpp
+    PointCloudDomSupport.cpp
     DemGridAggregator.cpp
     DemMosaic.cpp
     TerrainProductManifest.cpp

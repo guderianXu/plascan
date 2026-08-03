@@ -10,17 +10,21 @@ namespace xjw
 
 enum class OrthoProjectionType
 {
-    DemGrid
+    DemGrid,
+    Planar,
+    SimpleCylindrical
 };
 
 enum class OrthoSurfaceType
 {
-    Dem
+    Dem,
+    PointCloud
 };
 
 enum class OrthoColorSource
 {
-    Images
+    Images,
+    PointColors
 };
 
 enum class OrthoBlendMode
@@ -64,6 +68,12 @@ struct OrthoGenerationOptions
     double holeFillRadius = 3.0;
     bool useProjectMasks = false;
     qint64 maximumPixelCount = 100000000;
+    bool bodyReferenceAuto = true;
+    double bodyCenterX = 0.0;
+    double bodyCenterY = 0.0;
+    double bodyCenterZ = 0.0;
+    double referenceRadius = 0.0;
+    double centralMeridian = 0.0;
 
     static bool fromJson(const QJsonObject &settings,
                          OrthoGenerationOptions *options,
@@ -76,5 +86,8 @@ struct OrthoGenerationOptions
 
 QString orthoBlendModeToken(OrthoBlendMode mode);
 QString orthoSizingModeToken(OrthoSizingMode mode);
+QString orthoProjectionTypeToken(OrthoProjectionType type);
+QString orthoSurfaceTypeToken(OrthoSurfaceType type);
+QString orthoColorSourceToken(OrthoColorSource source);
 
 } // namespace xjw

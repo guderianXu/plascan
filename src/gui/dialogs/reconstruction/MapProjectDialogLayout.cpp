@@ -77,7 +77,7 @@ void MapProjectDialog::setupUi()
     projectionTypeLayout->setSpacing(18);
     _demGridProjectionRadio = new QRadioButton(tr("地理（跟随 DEM 网格）"), projectionTypes);
     _planarProjectionRadio = new QRadioButton(tr("平面"), projectionTypes);
-    _cylindricalProjectionRadio = new QRadioButton(tr("圆柱"), projectionTypes);
+    _cylindricalProjectionRadio = new QRadioButton(tr("全球等距圆柱"), projectionTypes);
     _demGridProjectionRadio->setObjectName(QStringLiteral("orthoProjectionDemGridRadio"));
     _planarProjectionRadio->setObjectName(QStringLiteral("orthoProjectionPlanarRadio"));
     _cylindricalProjectionRadio->setObjectName(QStringLiteral("orthoProjectionCylindricalRadio"));
@@ -85,12 +85,9 @@ void MapProjectDialog::setupUi()
     _planarProjectionRadio->setProperty("settingValue", QStringLiteral("planar"));
     _cylindricalProjectionRadio->setProperty("settingValue", QStringLiteral("cylindrical"));
     _demGridProjectionRadio->setChecked(true);
-    _planarProjectionRadio->setEnabled(false);
-    _cylindricalProjectionRadio->setEnabled(false);
-    _planarProjectionRadio->setToolTip(
-        tr("当前正射后端只支持沿 DEM 网格输出；自定义投影平面尚未实现。"));
+    _planarProjectionRadio->setToolTip(tr("保留点云局部 XY 平面，以 Z 最大值选择可见点。"));
     _cylindricalProjectionRadio->setToolTip(
-        tr("圆柱投影需要天体轴线、原点和完整投影模型，当前工作流尚未实现。"));
+        tr("按体固连经纬度展开全球表面，并写出自定义小天体投影 WKT。"));
     projectionTypeLayout->addWidget(_demGridProjectionRadio);
     projectionTypeLayout->addWidget(_planarProjectionRadio);
     projectionTypeLayout->addWidget(_cylindricalProjectionRadio);
@@ -101,6 +98,47 @@ void MapProjectDialog::setupUi()
     _coordinateSystemLabel->setWordWrap(true);
     projectionForm->addRow(tr("类型:"), projectionTypes);
     projectionForm->addRow(tr("坐标系统:"), _coordinateSystemLabel);
+
+    _bodyReferenceWidget = new QWidget(_projectionGroup);
+    auto *bodyGrid = new QGridLayout(_bodyReferenceWidget);
+    bodyGrid->setContentsMargins(0, 0, 0, 0);
+    bodyGrid->setHorizontalSpacing(6);
+    bodyGrid->setVerticalSpacing(4);
+    _bodyReferenceAutoCheck = new QCheckBox(tr("从点云自动估算中心和平均半径"), _bodyReferenceWidget);
+    _bodyReferenceAutoCheck->setObjectName(QStringLiteral("orthoBodyReferenceAutoCheck"));
+    _bodyReferenceAutoCheck->setChecked(true);
+    _bodyCenterXSpin = new QDoubleSpinBox(_bodyReferenceWidget);
+    _bodyCenterYSpin = new QDoubleSpinBox(_bodyReferenceWidget);
+    _bodyCenterZSpin = new QDoubleSpinBox(_bodyReferenceWidget);
+    _referenceRadiusSpin = new QDoubleSpinBox(_bodyReferenceWidget);
+    _centralMeridianSpin = new QDoubleSpinBox(_bodyReferenceWidget);
+    for (QDoubleSpinBox *spinBox : {_bodyCenterXSpin, _bodyCenterYSpin, _bodyCenterZSpin})
+    {
+        configureCoordinateSpin(spinBox, QString());
+    }
+    _bodyCenterXSpin->setObjectName(QStringLiteral("orthoBodyCenterXSpin"));
+    _bodyCenterYSpin->setObjectName(QStringLiteral("orthoBodyCenterYSpin"));
+    _bodyCenterZSpin->setObjectName(QStringLiteral("orthoBodyCenterZSpin"));
+    _referenceRadiusSpin->setObjectName(QStringLiteral("orthoReferenceRadiusSpin"));
+    _referenceRadiusSpin->setRange(0.0, 1.0e12);
+    _referenceRadiusSpin->setDecimals(6);
+    _referenceRadiusSpin->setSuffix(tr(" m"));
+    _referenceRadiusSpin->setKeyboardTracking(false);
+    _centralMeridianSpin->setObjectName(QStringLiteral("orthoCentralMeridianSpin"));
+    _centralMeridianSpin->setRange(-180.0, 180.0);
+    _centralMeridianSpin->setDecimals(6);
+    _centralMeridianSpin->setSuffix(tr("°"));
+    _centralMeridianSpin->setKeyboardTracking(false);
+    bodyGrid->addWidget(_bodyReferenceAutoCheck, 0, 0, 1, 6);
+    bodyGrid->addWidget(new QLabel(tr("中心 X/Y/Z:"), _bodyReferenceWidget), 1, 0);
+    bodyGrid->addWidget(_bodyCenterXSpin, 1, 1);
+    bodyGrid->addWidget(_bodyCenterYSpin, 1, 2);
+    bodyGrid->addWidget(_bodyCenterZSpin, 1, 3);
+    bodyGrid->addWidget(new QLabel(tr("半径:"), _bodyReferenceWidget), 2, 0);
+    bodyGrid->addWidget(_referenceRadiusSpin, 2, 1, 1, 2);
+    bodyGrid->addWidget(new QLabel(tr("中央经线:"), _bodyReferenceWidget), 2, 3);
+    bodyGrid->addWidget(_centralMeridianSpin, 2, 4, 1, 2);
+    projectionForm->addRow(tr("小天体参考:"), _bodyReferenceWidget);
     contentLayout->addWidget(_projectionGroup);
 
     _parametersGroup = new QGroupBox(tr("参数"), contentWidget);
@@ -110,7 +148,8 @@ void MapProjectDialog::setupUi()
     _surfaceCombo = new QComboBox(_parametersGroup);
     _surfaceCombo->setObjectName(QStringLiteral("orthoSurfaceCombo"));
     _surfaceCombo->addItem(tr("DEM"), QStringLiteral("dem"));
-    _surfaceCombo->setToolTip(tr("当前正射工作流使用 DEM 高程面进行反投影。"));
+    _surfaceCombo->addItem(tr("彩色点云"), QStringLiteral("point_cloud"));
+    _surfaceCombo->setToolTip(tr("DEM 使用相机影像着色；彩色点云直接使用点的 RGB。"));
     _demEdit = new QLineEdit(_parametersGroup);
     _demEdit->setObjectName(QStringLiteral("orthoDemPathEdit"));
     _demEdit->setPlaceholderText(tr("选择项目 DEM 或外部 DEM 栅格"));
@@ -124,6 +163,7 @@ void MapProjectDialog::setupUi()
     _colorSourceCombo = new QComboBox(_parametersGroup);
     _colorSourceCombo->setObjectName(QStringLiteral("orthoColorSourceCombo"));
     _colorSourceCombo->addItem(tr("影像"), QStringLiteral("images"));
+    _colorSourceCombo->addItem(tr("点颜色 RGB"), QStringLiteral("point_colors"));
     _refineSeamsCheck = new QCheckBox(tr("完善接缝线"), _parametersGroup);
     _refineSeamsCheck->setObjectName(QStringLiteral("orthoRefineSeamsCheck"));
     _refineSeamsCheck->setEnabled(false);
@@ -146,7 +186,7 @@ void MapProjectDialog::setupUi()
     _useProjectMasksCheck->setEnabled(false);
     _useProjectMasksCheck->setToolTip(tr("当前项目没有可用蒙版。"));
     parametersForm->addRow(tr("表面:"), _surfaceCombo);
-    parametersForm->addRow(tr("DEM:"), pathRow(_demEdit, _demBrowseButton));
+    parametersForm->addRow(tr("表面文件:"), pathRow(_demEdit, _demBrowseButton));
     parametersForm->addRow(tr("混合模式:"), _blendCombo);
     parametersForm->addRow(tr("颜色来源:"), _colorSourceCombo);
     parametersForm->addRow(QString(), _refineSeamsCheck);
@@ -286,7 +326,7 @@ void MapProjectDialog::setupUi()
     _outputBrowseButton = new QPushButton(tr("浏览..."), _outputGroup);
     _outputBrowseButton->setObjectName(QStringLiteral("orthoOutputBrowseButton"));
     auto *outputHint = new QLabel(
-        tr("建议输出 GeoTIFF（.tif），以保留 DEM 的网格范围和坐标参考。"),
+        tr("建议输出 GeoTIFF（.tif），以保留最终网格、Alpha 和坐标参考。"),
         _outputGroup);
     outputHint->setObjectName(QStringLiteral("orthoOutputHintLabel"));
     outputHint->setWordWrap(true);

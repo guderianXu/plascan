@@ -61,10 +61,34 @@ void MapProjectDialog::applySettings(const QJsonObject &settings)
 {
     _applyingSettings = true;
 
-    const QString savedDemPath = settings.value(QStringLiteral("dem_path")).toString().trimmed();
-    if (!savedDemPath.isEmpty() && QFileInfo::exists(savedDemPath))
+    const QString surfaceType =
+        settings.value(QStringLiteral("surface_type")).toString(QStringLiteral("dem"));
+    selectComboValue(_surfaceCombo, surfaceType);
+    const QString projectionType = settings.value(QStringLiteral("projection_type"))
+        .toString(surfaceType == QStringLiteral("point_cloud")
+                      ? QStringLiteral("planar")
+                      : QStringLiteral("dem_grid"));
+    _demGridProjectionRadio->setChecked(projectionType == QStringLiteral("dem_grid"));
+    _planarProjectionRadio->setChecked(projectionType == QStringLiteral("planar"));
+    _cylindricalProjectionRadio->setChecked(
+        projectionType == QStringLiteral("cylindrical")
+        || projectionType == QStringLiteral("simple_cylindrical"));
+
+    const QString savedSurfacePath = surfaceType == QStringLiteral("point_cloud")
+        ? settings.value(QStringLiteral("point_cloud_path")).toString().trimmed()
+        : settings.value(QStringLiteral("dem_path")).toString().trimmed();
+    if (!savedSurfacePath.isEmpty() && QFileInfo::exists(savedSurfacePath))
     {
-        _demEdit->setText(savedDemPath);
+        _demEdit->setText(savedSurfacePath);
+    }
+    else if (surfaceType == QStringLiteral("point_cloud")
+             && !_defaultPointCloudPath.isEmpty())
+    {
+        _demEdit->setText(_defaultPointCloudPath);
+    }
+    else if (surfaceType == QStringLiteral("dem") && !_defaultDemPath.isEmpty())
+    {
+        _demEdit->setText(_defaultDemPath);
     }
     if (settings.contains(QStringLiteral("output_path")))
     {
@@ -73,7 +97,8 @@ void MapProjectDialog::applySettings(const QJsonObject &settings)
 
     selectComboValue(_blendCombo,
                      settings.value(QStringLiteral("blend_mode")).toString(QStringLiteral("mosaic")));
-    _fillHolesCheck->setChecked(settings.value(QStringLiteral("fill_holes")).toBool(true));
+    _fillHolesCheck->setChecked(settings.value(QStringLiteral("fill_holes"))
+                                    .toBool(surfaceType != QStringLiteral("point_cloud")));
     _ghostFilterCheck->setChecked(settings.value(QStringLiteral("ghost_filter")).toBool(false));
     _colorCorrectionCheck->setChecked(
         settings.value(QStringLiteral("color_correction")).toBool(true));
@@ -82,6 +107,15 @@ void MapProjectDialog::applySettings(const QJsonObject &settings)
     _requestedUseProjectMasks =
         settings.value(QStringLiteral("use_project_masks")).toBool(false);
     _useProjectMasksCheck->setChecked(_requestedUseProjectMasks && _maskCount > 0);
+    _bodyReferenceAutoCheck->setChecked(
+        settings.value(QStringLiteral("body_reference_auto")).toBool(true));
+    _bodyCenterXSpin->setValue(settings.value(QStringLiteral("body_center_x")).toDouble());
+    _bodyCenterYSpin->setValue(settings.value(QStringLiteral("body_center_y")).toDouble());
+    _bodyCenterZSpin->setValue(settings.value(QStringLiteral("body_center_z")).toDouble());
+    _referenceRadiusSpin->setValue(
+        settings.value(QStringLiteral("reference_radius")).toDouble());
+    _centralMeridianSpin->setValue(
+        settings.value(QStringLiteral("central_meridian")).toDouble());
 
     QString sizingMode = settings.value(QStringLiteral("sizing_mode")).toString().trimmed();
     if (sizingMode.isEmpty())
@@ -180,6 +214,36 @@ void MapProjectDialog::onDemPathChanged()
     onSettingsModified();
 }
 
+void MapProjectDialog::onSurfaceChanged()
+{
+    if (!_applyingSettings)
+    {
+        _runAfterPointCloudEstimate = false;
+        const bool pointCloud =
+            _surfaceCombo->currentData().toString() == QStringLiteral("point_cloud");
+        _demEdit->setText(pointCloud ? _defaultPointCloudPath : _defaultDemPath);
+        if (pointCloud)
+        {
+            _planarProjectionRadio->setChecked(true);
+            _fillHolesCheck->setChecked(false);
+            const QString currentOutput = QDir::cleanPath(_outputEdit->text().trimmed());
+            if (currentOutput.endsWith(QStringLiteral("assets/ortho/relative_dom.tif")))
+            {
+                _outputEdit->setText(
+                    QDir(_projectRoot).filePath(QStringLiteral("assets/ortho/point_cloud_dom.tif")));
+            }
+        }
+        else
+        {
+            _demGridProjectionRadio->setChecked(true);
+        }
+        _pixelSizeUserEdited = false;
+        _boundsUserEdited = false;
+        invalidateDemEstimate();
+    }
+    onSettingsModified();
+}
+
 void MapProjectDialog::onPixelSizeEdited()
 {
     if (!_applyingSettings && !_updatingEstimate)
@@ -228,6 +292,11 @@ void MapProjectDialog::onImageSelectionChanged()
 
 void MapProjectDialog::updateControlAvailability()
 {
+    const bool pointCloud =
+        _surfaceCombo->currentData().toString() == QStringLiteral("point_cloud");
+    const bool cylindrical = pointCloud && _cylindricalProjectionRadio->isChecked();
+    _restorePixelSizeButton->setText(pointCloud ? tr("恢复估算值") : tr("恢复 DEM 值"));
+    _resetBoundsButton->setText(pointCloud ? tr("重置为点云范围") : tr("重置为 DEM 范围"));
     const bool pixelMode = _pixelSizeRadio->isChecked();
     _pixelSizeXSpin->setEnabled(!_running && pixelMode);
     _pixelSizeYSpin->setEnabled(!_running && pixelMode);
@@ -241,8 +310,30 @@ void MapProjectDialog::updateControlAvailability()
     }
     _resetBoundsButton->setEnabled(!_running && boundsEnabled && _hasDemEstimate);
     _estimateButton->setEnabled(!_running);
-    _useProjectMasksCheck->setEnabled(!_running && _maskCount > 0);
-    _demGridProjectionRadio->setEnabled(!_running);
+    _useProjectMasksCheck->setEnabled(!_running && !pointCloud && _maskCount > 0);
+    _demGridProjectionRadio->setEnabled(!_running && !pointCloud);
+    _planarProjectionRadio->setEnabled(!_running && pointCloud);
+    _cylindricalProjectionRadio->setEnabled(!_running && pointCloud);
+    _blendCombo->setEnabled(!_running && !pointCloud);
+    _colorSourceCombo->setCurrentIndex(pointCloud ? 1 : 0);
+    _colorSourceCombo->setEnabled(false);
+    _ghostFilterCheck->setEnabled(!_running && !pointCloud);
+    _colorCorrectionCheck->setEnabled(!_running && !pointCloud);
+    _sharpnessWeightingCheck->setEnabled(!_running && !pointCloud);
+    _imageToggleButton->setEnabled(!_running && !pointCloud);
+    if (pointCloud)
+    {
+        _imagePanel->setVisible(false);
+        _imageToggleButton->setChecked(false);
+    }
+    _bodyReferenceWidget->setVisible(cylindrical);
+    const bool manualBody = cylindrical && !_bodyReferenceAutoCheck->isChecked();
+    for (QDoubleSpinBox *spinBox : {
+             _bodyCenterXSpin, _bodyCenterYSpin, _bodyCenterZSpin, _referenceRadiusSpin})
+    {
+        spinBox->setEnabled(!_running && manualBody);
+    }
+    _centralMeridianSpin->setEnabled(!_running && cylindrical);
 }
 
 void MapProjectDialog::updateImageSummary()
@@ -304,10 +395,19 @@ QStringList MapProjectDialog::selectedImages() const
 QJsonObject MapProjectDialog::currentSettings() const
 {
     QJsonObject settings;
-    settings.insert(QStringLiteral("projection_type"), QStringLiteral("dem_grid"));
-    settings.insert(QStringLiteral("surface_type"), QStringLiteral("dem"));
+    const bool pointCloud =
+        _surfaceCombo->currentData().toString() == QStringLiteral("point_cloud");
+    const QString projectionType = !pointCloud
+        ? QStringLiteral("dem_grid")
+        : (_cylindricalProjectionRadio->isChecked()
+               ? QStringLiteral("cylindrical")
+               : QStringLiteral("planar"));
+    settings.insert(QStringLiteral("projection_type"), projectionType);
+    settings.insert(QStringLiteral("surface_type"), pointCloud
+        ? QStringLiteral("point_cloud") : QStringLiteral("dem"));
     settings.insert(QStringLiteral("blend_mode"), comboValue(_blendCombo, QStringLiteral("mosaic")));
-    settings.insert(QStringLiteral("color_source"), QStringLiteral("images"));
+    settings.insert(QStringLiteral("color_source"), pointCloud
+        ? QStringLiteral("point_colors") : QStringLiteral("images"));
     settings.insert(QStringLiteral("fill_holes"), _fillHolesCheck->isChecked());
     settings.insert(QStringLiteral("ghost_filter"), _ghostFilterCheck->isChecked());
     settings.insert(QStringLiteral("color_correction"), _colorCorrectionCheck->isChecked());
@@ -331,7 +431,17 @@ QJsonObject MapProjectDialog::currentSettings() const
     settings.insert(QStringLiteral("min_y"), _minYSpin->value());
     settings.insert(QStringLiteral("max_y"), _maxYSpin->value());
     settings.insert(QStringLiteral("bounds_auto"), !_boundsUserEdited);
-    settings.insert(QStringLiteral("dem_path"), _demEdit->text().trimmed());
+    settings.insert(QStringLiteral("dem_path"),
+                    pointCloud ? QString() : _demEdit->text().trimmed());
+    settings.insert(QStringLiteral("point_cloud_path"),
+                    pointCloud ? _demEdit->text().trimmed() : QString());
+    settings.insert(QStringLiteral("body_reference_auto"),
+                    _bodyReferenceAutoCheck->isChecked());
+    settings.insert(QStringLiteral("body_center_x"), _bodyCenterXSpin->value());
+    settings.insert(QStringLiteral("body_center_y"), _bodyCenterYSpin->value());
+    settings.insert(QStringLiteral("body_center_z"), _bodyCenterZSpin->value());
+    settings.insert(QStringLiteral("reference_radius"), _referenceRadiusSpin->value());
+    settings.insert(QStringLiteral("central_meridian"), _centralMeridianSpin->value());
     settings.insert(QStringLiteral("output_path"), _outputEdit->text().trimmed());
     settings.insert(QStringLiteral("images"), QJsonArray::fromStringList(selectedImages()));
     return settings;
@@ -348,18 +458,29 @@ bool MapProjectDialog::validateSettings(const QJsonObject &settings, QString *er
         return false;
     };
 
-    if (settings.value(QStringLiteral("images")).toArray().isEmpty())
+    const bool pointCloud =
+        settings.value(QStringLiteral("surface_type")).toString() == QStringLiteral("point_cloud");
+    if (!pointCloud && settings.value(QStringLiteral("images")).toArray().isEmpty())
     {
         return fail(tr("请至少勾选一张输入影像。"));
     }
-    if (_imageReadinessSet && _cameraReadyCount <= 0)
+    if (!pointCloud && _imageReadinessSet && _cameraReadyCount <= 0)
     {
         return fail(tr("所选项目没有已就绪的相机参数，请先完成相机初始化或空中三角测量。"));
     }
-    const QFileInfo demInfo(settings.value(QStringLiteral("dem_path")).toString());
-    if (!demInfo.exists() || !demInfo.isFile())
+    const QFileInfo surfaceInfo(settings.value(
+        pointCloud ? QStringLiteral("point_cloud_path") : QStringLiteral("dem_path")).toString());
+    if (!surfaceInfo.exists() || !surfaceInfo.isFile())
     {
-        return fail(tr("DEM 路径不是有效的 DEM 文件。"));
+        return fail(pointCloud
+            ? tr("点云路径不是有效的 PLY、OBJ 或 XYZ 文件。")
+            : tr("DEM 路径不是有效的 DEM 文件。"));
+    }
+    if (pointCloud && _cylindricalProjectionRadio->isChecked()
+        && !_bodyReferenceAutoCheck->isChecked()
+        && !(_referenceRadiusSpin->value() > 0.0))
+    {
+        return fail(tr("手动小天体参考半径必须大于 0。"));
     }
 
     const QString outputPath = settings.value(QStringLiteral("output_path")).toString().trimmed();

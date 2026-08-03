@@ -1,6 +1,7 @@
 #include "DemDomIO.h"
 #include "OrthoGenerationOptions.h"
 #include "OrthoProjector.h"
+#include "PointCloudDomGenerator.h"
 #include "ProjectCameraIO.h"
 #include "TerrainPipeline.h"
 #include "io/PathIO.h"
@@ -168,7 +169,7 @@ TEST(OrthoGenerationOptionsTest, RoundTripsUserFacingSettings)
     EXPECT_TRUE(resolved.value(QStringLiteral("fill_holes")).toBool());
 }
 
-TEST(OrthoGenerationOptionsTest, RejectsUnsupportedProjectionAndInvalidBounds)
+TEST(OrthoGenerationOptionsTest, RejectsInvalidCombinationAndInvalidBounds)
 {
     xjw::OrthoGenerationOptions options;
     QString error;
@@ -176,7 +177,7 @@ TEST(OrthoGenerationOptionsTest, RejectsUnsupportedProjectionAndInvalidBounds)
         QJsonObject{{QStringLiteral("projection_type"), QStringLiteral("cylindrical")}},
         &options,
         &error));
-    EXPECT_TRUE(error.contains(QStringLiteral("不支持")));
+    EXPECT_TRUE(error.contains(QStringLiteral("组合")));
 
     error.clear();
     EXPECT_FALSE(xjw::OrthoGenerationOptions::fromJson(
@@ -189,6 +190,157 @@ TEST(OrthoGenerationOptionsTest, RejectsUnsupportedProjectionAndInvalidBounds)
         &options,
         &error));
     EXPECT_TRUE(error.contains(QStringLiteral("边界")));
+}
+
+TEST(OrthoGenerationOptionsTest, AcceptsPointCloudPlanarAndGlobalModes)
+{
+    for (const QString &projection : {
+             QStringLiteral("planar"), QStringLiteral("cylindrical")})
+    {
+        xjw::OrthoGenerationOptions options;
+        QString error;
+        ASSERT_TRUE(xjw::OrthoGenerationOptions::fromJson(
+            QJsonObject{
+                {QStringLiteral("projection_type"), projection},
+                {QStringLiteral("surface_type"), QStringLiteral("point_cloud")},
+                {QStringLiteral("color_source"), QStringLiteral("point_colors")},
+                {QStringLiteral("sizing_mode"), QStringLiteral("maximum_dimension")},
+                {QStringLiteral("maximum_dimension"), 512}},
+            &options,
+            &error)) << error.toStdString();
+        EXPECT_EQ(options.surfaceType, xjw::OrthoSurfaceType::PointCloud);
+        EXPECT_EQ(options.colorSource, xjw::OrthoColorSource::PointColors);
+    }
+}
+
+TEST(PointCloudDomGeneratorTest, PlanarModeKeepsHighestPointColor)
+{
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(3, 3);
+    points(0, 0) = 0.25f; points(0, 1) = 0.25f; points(0, 2) = 1.0f;
+    points(1, 0) = 0.25f; points(1, 1) = 0.25f; points(1, 2) = 2.0f;
+    points(2, 0) = 1.25f; points(2, 1) = 1.25f; points(2, 2) = 1.0f;
+    xjw::PlaPointCloud cloud(std::move(points));
+    plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> colors(3, 3);
+    colors(0, 0) = 255; colors(0, 1) = 0; colors(0, 2) = 0;
+    colors(1, 0) = 0; colors(1, 1) = 255; colors(1, 2) = 0;
+    colors(2, 0) = 0; colors(2, 1) = 0; colors(2, 2) = 255;
+    cloud.setColors(std::move(colors));
+
+    xjw::OrthoGenerationOptions options;
+    options.projectionType = xjw::OrthoProjectionType::Planar;
+    options.surfaceType = xjw::OrthoSurfaceType::PointCloud;
+    options.colorSource = xjw::OrthoColorSource::PointColors;
+    options.pixelSizeX = 1.0;
+    options.pixelSizeY = 1.0;
+    xjw::PointCloudDomResult result;
+    QString error;
+    ASSERT_TRUE(xjw::PointCloudDomGenerator::generate(
+        cloud, options, &result, &error)) << error.toStdString();
+    ASSERT_EQ(result.imageBgr.type(), CV_8UC3);
+    EXPECT_EQ(result.imageBgr.at<cv::Vec3b>(0, 0), cv::Vec3b(0, 255, 0));
+    EXPECT_TRUE(result.reference.projection.projectionWkt.contains(QStringLiteral("LOCAL_CS")));
+}
+
+TEST(PointCloudDomGeneratorTest, RejectsCloudWithoutRgbColors)
+{
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(2, 3);
+    points(0, 0) = 0.0f; points(0, 1) = 0.0f; points(0, 2) = 0.0f;
+    points(1, 0) = 1.0f; points(1, 1) = 1.0f; points(1, 2) = 1.0f;
+    xjw::PlaPointCloud cloud(std::move(points));
+    xjw::OrthoGenerationOptions options;
+    options.projectionType = xjw::OrthoProjectionType::Planar;
+    options.surfaceType = xjw::OrthoSurfaceType::PointCloud;
+    options.colorSource = xjw::OrthoColorSource::PointColors;
+    QJsonObject estimate;
+    QString error;
+    EXPECT_FALSE(xjw::PointCloudDomGenerator::estimate(
+        cloud, options, &estimate, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("RGB")));
+}
+
+TEST(PointCloudDomGeneratorTest, GlobalModeProducesFullBodyProjectedGrid)
+{
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(4, 3);
+    points(0, 0) = 10.0f; points(0, 1) = 0.0f; points(0, 2) = 0.0f;
+    points(1, 0) = 0.0f; points(1, 1) = 10.0f; points(1, 2) = 0.0f;
+    points(2, 0) = -10.0f; points(2, 1) = 0.0f; points(2, 2) = 0.0f;
+    points(3, 0) = 0.0f; points(3, 1) = -10.0f; points(3, 2) = 0.0f;
+    xjw::PlaPointCloud cloud(std::move(points));
+    plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> colors(4, 3);
+    colors.fill(128);
+    cloud.setColors(std::move(colors));
+
+    xjw::OrthoGenerationOptions options;
+    options.projectionType = xjw::OrthoProjectionType::SimpleCylindrical;
+    options.surfaceType = xjw::OrthoSurfaceType::PointCloud;
+    options.colorSource = xjw::OrthoColorSource::PointColors;
+    options.sizingMode = xjw::OrthoSizingMode::MaximumDimension;
+    options.maximumDimension = 360;
+    xjw::PointCloudDomResult result;
+    QString error;
+    ASSERT_TRUE(xjw::PointCloudDomGenerator::generate(
+        cloud, options, &result, &error)) << error.toStdString();
+    EXPECT_EQ(result.reference.width, 360);
+    EXPECT_EQ(result.reference.height, 180);
+    EXPECT_NEAR(result.resolvedOptions.referenceRadius, 10.0, 1e-6);
+    EXPECT_TRUE(result.reference.projection.projectionWkt.contains(
+        QStringLiteral("Equirectangular")));
+    EXPECT_EQ(result.projectedPointCount, 4);
+
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString outputPath =
+        QDir(directory.path()).filePath(QStringLiteral("asteroid_global_dom.tif"));
+    ASSERT_TRUE(xjw::DemDomIO::writeDomGeoTiff(
+        result.imageBgr, result.validMask, result.reference, outputPath, &error))
+        << error.toStdString();
+    GDALDataset *dataset = static_cast<GDALDataset *>(
+        GDALOpen(outputPath.toUtf8().constData(), GA_ReadOnly));
+    ASSERT_NE(dataset, nullptr);
+    EXPECT_EQ(dataset->GetRasterCount(), 4);
+    EXPECT_FALSE(QString::fromUtf8(dataset->GetProjectionRef()).isEmpty());
+    double geoTransform[6]{};
+    EXPECT_EQ(dataset->GetGeoTransform(geoTransform), CE_None);
+    EXPECT_GT(geoTransform[1], 0.0);
+    EXPECT_LT(geoTransform[5], 0.0);
+    GDALClose(dataset);
+}
+
+TEST(PointCloudDomPipelineTest, RoutesColoredPointCloudWithoutImagesOrDem)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString pointCloudPath =
+        QDir(directory.path()).filePath(QStringLiteral("colored_cloud.ply"));
+    QFile pointCloudFile(pointCloudPath);
+    ASSERT_TRUE(pointCloudFile.open(QIODevice::WriteOnly | QIODevice::Text));
+    pointCloudFile.write(
+        "ply\nformat ascii 1.0\nelement vertex 4\n"
+        "property float x\nproperty float y\nproperty float z\n"
+        "property uchar red\nproperty uchar green\nproperty uchar blue\n"
+        "end_header\n"
+        "0 0 1 255 0 0\n1 0 2 0 255 0\n"
+        "0 1 3 0 0 255\n1 1 4 255 255 0\n");
+    pointCloudFile.close();
+
+    const QString outputPath =
+        QDir(directory.path()).filePath(QStringLiteral("planar_dom.tif"));
+    const QJsonObject settings{
+        {QStringLiteral("projection_type"), QStringLiteral("planar")},
+        {QStringLiteral("surface_type"), QStringLiteral("point_cloud")},
+        {QStringLiteral("color_source"), QStringLiteral("point_colors")},
+        {QStringLiteral("sizing_mode"), QStringLiteral("maximum_dimension")},
+        {QStringLiteral("maximum_dimension"), 32}};
+    QJsonObject result;
+    QString error;
+    ASSERT_TRUE(xjw::TerrainPipeline::generateOrthoProduct(
+        {}, pointCloudPath, outputPath, settings, {}, &result, &error))
+        << error.toStdString();
+    EXPECT_TRUE(QFileInfo::exists(outputPath));
+    EXPECT_EQ(result.value(QStringLiteral("algorithm_version")).toString(),
+              QStringLiteral("point_cloud_dom_v1"));
+    EXPECT_EQ(result.value(QStringLiteral("point_cloud_path")).toString(), pointCloudPath);
+    EXPECT_TRUE(result.value(QStringLiteral("projection_wkt_present")).toBool());
 }
 
 TEST(OrthoGridPlannerTest, SupportsIndependentPixelSizeAndCustomBounds)

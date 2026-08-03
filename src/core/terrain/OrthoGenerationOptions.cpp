@@ -24,9 +24,20 @@ bool parseProjectionType(const QString &token,
         *type = OrthoProjectionType::DemGrid;
         return true;
     }
+    if (token == QLatin1String("planar"))
+    {
+        *type = OrthoProjectionType::Planar;
+        return true;
+    }
+    if (token == QLatin1String("cylindrical")
+        || token == QLatin1String("simple_cylindrical"))
+    {
+        *type = OrthoProjectionType::SimpleCylindrical;
+        return true;
+    }
     if (errorMsg)
     {
-        *errorMsg = QStringLiteral("不支持的正射投影类型: %1；当前仅支持 dem_grid").arg(token);
+        *errorMsg = QStringLiteral("不支持的正射投影类型: %1").arg(token);
     }
     return false;
 }
@@ -40,9 +51,14 @@ bool parseSurfaceType(const QString &token,
         *type = OrthoSurfaceType::Dem;
         return true;
     }
+    if (token == QLatin1String("point_cloud"))
+    {
+        *type = OrthoSurfaceType::PointCloud;
+        return true;
+    }
     if (errorMsg)
     {
-        *errorMsg = QStringLiteral("不支持的正射表面类型: %1；当前仅支持 dem").arg(token);
+        *errorMsg = QStringLiteral("不支持的正射表面类型: %1").arg(token);
     }
     return false;
 }
@@ -56,9 +72,14 @@ bool parseColorSource(const QString &token,
         *source = OrthoColorSource::Images;
         return true;
     }
+    if (token == QLatin1String("point_colors"))
+    {
+        *source = OrthoColorSource::PointColors;
+        return true;
+    }
     if (errorMsg)
     {
-        *errorMsg = QStringLiteral("不支持的正射颜色来源: %1；当前仅支持 images").arg(token);
+        *errorMsg = QStringLiteral("不支持的正射颜色来源: %1").arg(token);
     }
     return false;
 }
@@ -131,6 +152,34 @@ QString orthoSizingModeToken(OrthoSizingMode mode)
     return mode == OrthoSizingMode::MaximumDimension
         ? QStringLiteral("maximum_dimension")
         : QStringLiteral("pixel_size");
+}
+
+QString orthoProjectionTypeToken(OrthoProjectionType type)
+{
+    switch (type)
+    {
+    case OrthoProjectionType::DemGrid:
+        return QStringLiteral("dem_grid");
+    case OrthoProjectionType::Planar:
+        return QStringLiteral("planar");
+    case OrthoProjectionType::SimpleCylindrical:
+        return QStringLiteral("cylindrical");
+    }
+    return QStringLiteral("dem_grid");
+}
+
+QString orthoSurfaceTypeToken(OrthoSurfaceType type)
+{
+    return type == OrthoSurfaceType::PointCloud
+        ? QStringLiteral("point_cloud")
+        : QStringLiteral("dem");
+}
+
+QString orthoColorSourceToken(OrthoColorSource source)
+{
+    return source == OrthoColorSource::PointColors
+        ? QStringLiteral("point_colors")
+        : QStringLiteral("images");
 }
 
 bool OrthoGenerationOptions::fromJson(const QJsonObject &settings,
@@ -213,6 +262,14 @@ bool OrthoGenerationOptions::fromJson(const QJsonObject &settings,
     parsed.maximumPixelCount =
         static_cast<qint64>(settings.value(QStringLiteral("maximum_pixel_count"))
                                 .toDouble(static_cast<double>(parsed.maximumPixelCount)));
+    parsed.bodyReferenceAuto =
+        settings.value(QStringLiteral("body_reference_auto")).toBool(true);
+    parsed.bodyCenterX = settings.value(QStringLiteral("body_center_x")).toDouble();
+    parsed.bodyCenterY = settings.value(QStringLiteral("body_center_y")).toDouble();
+    parsed.bodyCenterZ = settings.value(QStringLiteral("body_center_z")).toDouble();
+    parsed.referenceRadius = settings.value(QStringLiteral("reference_radius")).toDouble();
+    parsed.centralMeridian =
+        settings.value(QStringLiteral("central_meridian")).toDouble();
 
     if (!parsed.validate(errorMsg))
     {
@@ -225,7 +282,17 @@ bool OrthoGenerationOptions::fromJson(const QJsonObject &settings,
 bool OrthoGenerationOptions::validate(QString *errorMsg) const
 {
     QString message;
-    if (!finiteValue(pixelSizeX) || !finiteValue(pixelSizeY)
+    const bool demCombination = projectionType == OrthoProjectionType::DemGrid
+        && surfaceType == OrthoSurfaceType::Dem
+        && colorSource == OrthoColorSource::Images;
+    const bool pointCloudCombination = projectionType != OrthoProjectionType::DemGrid
+        && surfaceType == OrthoSurfaceType::PointCloud
+        && colorSource == OrthoColorSource::PointColors;
+    if (!demCombination && !pointCloudCombination)
+    {
+        message = QStringLiteral("投影、表面与颜色来源组合无效");
+    }
+    else if (!finiteValue(pixelSizeX) || !finiteValue(pixelSizeY)
         || pixelSizeX < 0.0 || pixelSizeY < 0.0)
     {
         message = QStringLiteral("正射像元大小必须为有限的非负数");
@@ -253,6 +320,17 @@ bool OrthoGenerationOptions::validate(QString *errorMsg) const
     {
         message = QStringLiteral("正射最大像素数必须大于 0");
     }
+    else if (!finiteValue(bodyCenterX) || !finiteValue(bodyCenterY)
+             || !finiteValue(bodyCenterZ) || !finiteValue(referenceRadius)
+             || !finiteValue(centralMeridian))
+    {
+        message = QStringLiteral("小天体参考参数必须为有限数值");
+    }
+    else if (projectionType == OrthoProjectionType::SimpleCylindrical
+             && !bodyReferenceAuto && referenceRadius <= 0.0)
+    {
+        message = QStringLiteral("全球圆柱投影的参考半径必须大于 0");
+    }
 
     if (!message.isEmpty())
     {
@@ -268,9 +346,9 @@ bool OrthoGenerationOptions::validate(QString *errorMsg) const
 QJsonObject OrthoGenerationOptions::toResolvedJson() const
 {
     QJsonObject object;
-    object[QStringLiteral("projection_type")] = QStringLiteral("dem_grid");
-    object[QStringLiteral("surface_type")] = QStringLiteral("dem");
-    object[QStringLiteral("color_source")] = QStringLiteral("images");
+    object[QStringLiteral("projection_type")] = orthoProjectionTypeToken(projectionType);
+    object[QStringLiteral("surface_type")] = orthoSurfaceTypeToken(surfaceType);
+    object[QStringLiteral("color_source")] = orthoColorSourceToken(colorSource);
     object[QStringLiteral("blend_mode")] = orthoBlendModeToken(blendMode);
     object[QStringLiteral("sizing_mode")] = orthoSizingModeToken(sizingMode);
     object[QStringLiteral("pixel_size_x")] = pixelSizeX;
@@ -290,6 +368,12 @@ QJsonObject OrthoGenerationOptions::toResolvedJson() const
     object[QStringLiteral("use_project_masks")] = useProjectMasks;
     object[QStringLiteral("maximum_pixel_count")] =
         static_cast<double>(maximumPixelCount);
+    object[QStringLiteral("body_reference_auto")] = bodyReferenceAuto;
+    object[QStringLiteral("body_center_x")] = bodyCenterX;
+    object[QStringLiteral("body_center_y")] = bodyCenterY;
+    object[QStringLiteral("body_center_z")] = bodyCenterZ;
+    object[QStringLiteral("reference_radius")] = referenceRadius;
+    object[QStringLiteral("central_meridian")] = centralMeridian;
     return object;
 }
 

@@ -57,6 +57,7 @@ struct OrthoGenerationRequest
 {
     QStringList sourceImages;
     QString demPath;
+    QString pointCloudPath;
     QString outputPath;
     xjw::OrthoGenerationOptions options;
 
@@ -85,6 +86,8 @@ struct OrthoGenerationRequest
             }
         }
         parsed.demPath = settings.value(QStringLiteral("dem_path")).toString().trimmed();
+        parsed.pointCloudPath =
+            settings.value(QStringLiteral("point_cloud_path")).toString().trimmed();
         parsed.outputPath = settings.value(QStringLiteral("output_path")).toString().trimmed();
         if (!xjw::OrthoGenerationOptions::fromJson(
                 settings, &parsed.options, errorMessage))
@@ -123,6 +126,7 @@ struct OrthoGenerationRequest
         QJsonObject settings = options.toResolvedJson();
         settings[QStringLiteral("images")] = QJsonArray::fromStringList(sourceImages);
         settings[QStringLiteral("dem_path")] = demPath;
+        settings[QStringLiteral("point_cloud_path")] = pointCloudPath;
         settings[QStringLiteral("output_path")] = outputPath;
         return settings;
     }
