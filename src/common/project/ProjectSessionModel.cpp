@@ -1117,7 +1117,9 @@ bool ProjectData::openProjectFromSnapshot(const ProjectOpenSnapshot &snapshot, Q
     if (assignedImageUuids)
     {
         _filesManager.setCoreData(core);
-        markDirtyIfRequested(true);
+        // Missing UUIDs are a compatibility migration performed while loading,
+        // not a user edit. Persist the stable identities in the background
+        // without making an untouched project appear modified.
         scheduleArchiveSync(true, false, true);
     }
 
@@ -2717,7 +2719,11 @@ void ProjectData::saveUiSettings(const QJsonObject &settings)
     {
         return;
     }
-    updateProjectUiState(state);
+    // Project-scoped view state is persisted automatically, but changing a
+    // panel, dock layout, or active view is not a project content edit and
+    // must not trigger an unsaved-project prompt.
+    updateProjectUiState(state, false);
+    scheduleArchiveSync(false, false, true, false, true);
 }
 
 void ProjectData::markWorkspaceDirty()

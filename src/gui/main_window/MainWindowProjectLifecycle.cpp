@@ -171,7 +171,6 @@ void MainWindow::onProjectOpened(const QString &plascanPath)
 
     const QJsonObject ui = _projectManager->loadUiSettings();
     applyUiSettings(ui);
-    persistCurrentUiSettings();
 }
 
 void MainWindow::openMarkerFocusMeasurement(const QString &markerId,

@@ -303,6 +303,40 @@ TEST(ProjectDataTest, UiSettingsDoNotDirtySessionWithoutProject)
     EXPECT_TRUE(project.currentProjectPath().isEmpty());
 }
 
+TEST(ProjectDataTest, UiSettingsDoNotDirtyProjectContent)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString projectPath = tempProjectPath(dir);
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(
+        projectPath, QStringLiteral("ui_state")));
+    ASSERT_FALSE(project.isDirty());
+
+    project.saveUiSettings(QJsonObject{
+        {QStringLiteral("workspace_visible"), false},
+        {QStringLiteral("bottom_panel"), QStringLiteral("photos")}
+    });
+
+    EXPECT_FALSE(project.isDirty());
+    QString error;
+    ASSERT_TRUE(project.saveProject(&error)) << qPrintable(error);
+    project.closeProject();
+
+    ProjectData reopened;
+    ASSERT_TRUE(reopened.openProject(projectPath, &error))
+        << qPrintable(error);
+    EXPECT_FALSE(reopened.isDirty());
+    EXPECT_FALSE(reopened.loadUiSettings()
+                     .value(QStringLiteral("workspace_visible"))
+                     .toBool(true));
+    EXPECT_EQ(reopened.loadUiSettings()
+                  .value(QStringLiteral("bottom_panel"))
+                  .toString(),
+              QStringLiteral("photos"));
+}
+
 TEST(ProjectDataTest, CreatingProjectReplacesSessionWithoutImportingPreviousResources)
 {
     QTemporaryDir dir;
@@ -1550,6 +1584,56 @@ TEST(ProjectDataTest, AssignsStableUuidToImportedImages)
     const QJsonArray reopenedImages = reopened.coreFilesMeta().value(QStringLiteral("images")).toArray();
     ASSERT_EQ(reopenedImages.size(), 1);
     EXPECT_EQ(reopenedImages[0].toObject().value(QStringLiteral("image_uuid")).toString(), firstId);
+}
+
+TEST(ProjectDataTest, OpeningLegacyImagesAssignsUuidWithoutDirtyingProject)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString projectPath = tempProjectPath(dir);
+    const QString imagePath = QDir(dir.path()).filePath(
+        QStringLiteral("legacy.jpg"));
+    writeTestFile(imagePath, QByteArray("legacy-image"));
+
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(
+        projectPath, QStringLiteral("legacy_image_identity")));
+    ASSERT_TRUE(project.addImages({imagePath}));
+    QString error;
+    ASSERT_TRUE(project.saveProject(&error)) << qPrintable(error);
+    project.closeProject();
+
+    QJsonObject legacyCore = chunkSection(
+        projectPath, PortableProjectFormat::ProjectFilesSection);
+    QJsonArray legacyImages = legacyCore.value(
+        QStringLiteral("images")).toArray();
+    ASSERT_EQ(legacyImages.size(), 1);
+    QJsonObject legacyImage = legacyImages[0].toObject();
+    legacyImage.remove(QStringLiteral("image_uuid"));
+    legacyImages[0] = legacyImage;
+    legacyCore[QStringLiteral("images")] = legacyImages;
+
+    ProjectChunkStore chunkStore(projectPath);
+    ASSERT_TRUE(chunkStore.writeChunkSections(
+        1,
+        {{QString::fromLatin1(PortableProjectFormat::ProjectFilesSection),
+          legacyCore}},
+        &error)) << qPrintable(error);
+
+    ProjectData reopened;
+    ASSERT_TRUE(reopened.openProject(projectPath, &error))
+        << qPrintable(error);
+    EXPECT_FALSE(reopened.isDirty());
+    const QJsonArray migratedImages = reopened.coreFilesMeta()
+        .value(QStringLiteral("images"))
+        .toArray();
+    ASSERT_EQ(migratedImages.size(), 1);
+    EXPECT_FALSE(migratedImages[0]
+                     .toObject()
+                     .value(QStringLiteral("image_uuid"))
+                     .toString()
+                     .isEmpty());
 }
 
 TEST(ProjectDataCameraTest, ReplaceImageCamerasClearsStaleAlignmentOutsideNewSolution)
