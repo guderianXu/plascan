@@ -12,6 +12,7 @@
 #include <QApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QFontDatabase>
 #include <QIcon>
 #include <QIODevice>
@@ -22,7 +23,9 @@
 #include <QTimer>
 #include "MainWindow.h"
 #include "Logger.h"
+#include "application/PythonRuntimeDialog.h"
 #include "platform/ProjectFileIntegration.h"
+#include "runtime/PythonRuntimeManager.h"
 #include "runtime/PythonRuntimeLocator.h"
 // 抑制 libtiff 读取 GDAL 写入的 GeoTIFF 时产生的 tag 42113 (GDAL_NODATA) 警告
 #include <tiffio.h>
@@ -99,20 +102,29 @@ void applyApplicationStyle(QApplication &app)
     app.setStyleSheet(QString::fromUtf8(styleFile.readAll()));
 }
 
-void bindPythonRuntime()
+bool bindPythonRuntime()
 {
     const QString python_path = xjw::common::runtime::resolvePythonExecutable(
         QProcessEnvironment::systemEnvironment(), QStringLiteral(PLASCAN_SOURCE_DIR));
     if (python_path.isEmpty())
     {
-        LOG_WARN("PlaScan Python runtime was not found. Configure PLASCAN_PYTHON_EXECUTABLE or initialize .venv.");
-        return;
+        LOG_WARN("PlaScan Python runtime was not found. Use Help > Update Python Environment to install it.");
+        return false;
     }
 
     const QByteArray encoded_path = python_path.toUtf8();
-    qputenv("PLASCAN_PYTHON_EXECUTABLE", encoded_path);
-    qputenv("PLASCAN_PYTHON", encoded_path);
+    if (QFileInfo(python_path).absoluteFilePath()
+        == QFileInfo(PythonRuntimeManager::managedPythonExecutable()).absoluteFilePath())
+    {
+        PythonRuntimeManager::bindManagedRuntime();
+    }
+    else
+    {
+        qputenv("PLASCAN_PYTHON_EXECUTABLE", encoded_path);
+        qputenv("PLASCAN_PYTHON", encoded_path);
+    }
     LOG_INFO("PlaScan Python runtime bound: %s", encoded_path.constData());
+    return true;
 }
 } // namespace
 
@@ -139,12 +151,11 @@ int main(int argc, char *argv[])
 
     // 创建 Qt 应用程序对象，必须在任何 Qt 对象之前创建
     SafeApplication app(argc, argv);
-    bindPythonRuntime();
-    applyApplicationStyle(app);
-
     // GNOME/桌面集成 — 必须与 .desktop 文件名一致
     app.setApplicationName(QStringLiteral("PlaScan"));
     app.setDesktopFileName(QStringLiteral("plascan"));
+    const bool python_runtime_available = bindPythonRuntime();
+    applyApplicationStyle(app);
 
     // 应用图标 — 内嵌 PNG 资源, 不依赖 SVG 插件
     QIcon appIcon(QStringLiteral(":/plascan.png"));
@@ -197,13 +208,18 @@ int main(int argc, char *argv[])
         // 创建并展示主窗口
         MainWindow mainWindow;
         mainWindow.show();
-        if (!startup_project.isEmpty())
+        QTimer::singleShot(0, &mainWindow, [&mainWindow, startup_project, python_runtime_available]()
         {
-            QTimer::singleShot(0, &mainWindow, [&mainWindow, startup_project]()
+            if (!python_runtime_available && !PythonRuntimeManager::startupPromptSuppressed())
+            {
+                PythonRuntimeDialog dialog(PythonRuntimeDialog::Mode::StartupPrompt, &mainWindow);
+                dialog.exec();
+            }
+            if (!startup_project.isEmpty())
             {
                 mainWindow.openProjectFromPath(startup_project);
-            });
-        }
+            }
+        });
 
         // 进入 Qt 事件循环，阻塞直到应用退出
         return app.exec();

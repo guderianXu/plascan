@@ -24,7 +24,7 @@ BASE_PACKAGES = [
     "opencv-python",
     "pymupdf",
     "kornia",
-    "git+https://github.com/cvg/LightGlue.git",
+    "https://github.com/cvg/LightGlue/archive/refs/heads/main.zip",
 ]
 
 TORCH_PACKAGES = [

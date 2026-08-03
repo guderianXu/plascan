@@ -7,6 +7,14 @@ install(TARGETS plascan_gui
   COMPONENT Runtime
 )
 
+install(FILES
+  "${CMAKE_SOURCE_DIR}/scripts/env/bootstrap_python_runtime.ps1"
+  "${CMAKE_SOURCE_DIR}/scripts/env/setup_python_runtime.py"
+  "${CMAKE_SOURCE_DIR}/scripts/env/env_common.py"
+  DESTINATION share/plascan/scripts/env
+  COMPONENT Runtime
+)
+
 if(WIN32)
   install(FILES
     "${CMAKE_SOURCE_DIR}/resources/plascan.png"

@@ -528,6 +528,8 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/AerialTriangulationDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/AerialTriangulationDialog.ui
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/application/AboutDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/application/PythonRuntimeDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/runtime/PythonRuntimeManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/image/GenerateMaskDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/GenerateModelDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/shared/WorkflowParameterDialogStyle.cpp
@@ -621,6 +623,7 @@ target_include_directories(test_gui_project_utils PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui/config
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs
     ${CMAKE_SOURCE_DIR}/src/gui/menu
+    ${CMAKE_SOURCE_DIR}/src/gui/runtime
     ${CMAKE_SOURCE_DIR}/src/gui/main_window
     ${CMAKE_SOURCE_DIR}/src/gui/markers
     ${CMAKE_SOURCE_DIR}/src/gui/tasks

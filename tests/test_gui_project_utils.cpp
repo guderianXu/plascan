@@ -38,6 +38,7 @@
 #include "tie_points/ThinTiePointsDialog.h"
 #include "reconstruction/AerialTriangulationDialog.h"
 #include "application/AboutDialog.h"
+#include "application/PythonRuntimeDialog.h"
 #include "camera/SurveyControlDialog.h"
 #include "image/GenerateMaskDialog.h"
 #include "reconstruction/GenerateModelDialog.h"
@@ -6498,7 +6499,58 @@ TEST(AboutDialogTest, ShowsUnconfiguredMessageWhenPythonEnvIsMissing)
     auto *pythonLabel = dialog.findChild<QLabel *>(QStringLiteral("pythonEnvironmentValueLabel"));
     ASSERT_NE(pythonLabel, nullptr);
     EXPECT_TRUE(pythonLabel->text().contains(QStringLiteral("未配置")));
-    EXPECT_TRUE(pythonLabel->text().contains(QStringLiteral("setup_python_runtime.py")));
+    EXPECT_TRUE(pythonLabel->text().contains(QStringLiteral("更新 Python 环境")));
+}
+
+TEST(PythonRuntimeDialogTest, StartupPromptSupportsDownloadDismissAndReminderSuppression)
+{
+    PythonRuntimeDialog dialog(PythonRuntimeDialog::Mode::StartupPrompt);
+
+    EXPECT_EQ(dialog.windowTitle(), QStringLiteral("需要 Python 环境"));
+    auto *suppressCheck = dialog.findChild<QCheckBox *>(
+        QStringLiteral("suppressPythonRuntimePromptCheck"));
+    auto *installButton = dialog.findChild<QPushButton *>(
+        QStringLiteral("installPythonRuntimeButton"));
+    auto *closeButton = dialog.findChild<QPushButton *>(
+        QStringLiteral("closePythonRuntimeDialogButton"));
+    ASSERT_NE(suppressCheck, nullptr);
+    ASSERT_NE(installButton, nullptr);
+    ASSERT_NE(closeButton, nullptr);
+    EXPECT_FALSE(suppressCheck->isHidden());
+    EXPECT_EQ(installButton->text(), QStringLiteral("自动下载"));
+    EXPECT_EQ(closeButton->text(), QStringLiteral("暂不处理"));
+}
+
+TEST(PythonRuntimeDialogTest, HelpModeOffersUpdateWithoutStartupReminderControl)
+{
+    PythonRuntimeDialog dialog(PythonRuntimeDialog::Mode::Update);
+
+    EXPECT_EQ(dialog.windowTitle(), QStringLiteral("更新 Python 环境"));
+    auto *suppressCheck = dialog.findChild<QCheckBox *>(
+        QStringLiteral("suppressPythonRuntimePromptCheck"));
+    auto *installButton = dialog.findChild<QPushButton *>(
+        QStringLiteral("installPythonRuntimeButton"));
+    ASSERT_NE(suppressCheck, nullptr);
+    ASSERT_NE(installButton, nullptr);
+    EXPECT_TRUE(suppressCheck->isHidden());
+    EXPECT_EQ(installButton->text(), QStringLiteral("更新或下载"));
+}
+
+TEST(PythonRuntimeLocatorTest, ResolvesManagedUserRuntimeAfterDevelopmentLocations)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString sourceRoot = QDir(tempDir.path()).filePath(QStringLiteral("source"));
+    const QString runtimeRoot = QDir(tempDir.path()).filePath(QStringLiteral("managed-runtime"));
+    const QString pythonPath = xjw::common::runtime::pythonExecutableInRuntime(runtimeRoot);
+    ASSERT_TRUE(QDir().mkpath(QFileInfo(pythonPath).absolutePath()));
+    QFile pythonFile(pythonPath);
+    ASSERT_TRUE(pythonFile.open(QIODevice::WriteOnly));
+    pythonFile.close();
+
+    const QString resolved = xjw::common::runtime::resolvePythonExecutable(
+        QProcessEnvironment(), sourceRoot, runtimeRoot);
+    EXPECT_EQ(QFileInfo(resolved).absoluteFilePath(), QFileInfo(pythonPath).absoluteFilePath());
 }
 
 TEST(PythonRuntimeLocatorTest, ResolvesRepositoryLocalVenvWhenEnvironmentIsMissing)
@@ -6675,6 +6727,16 @@ TEST(GenerateMaskDialogTest, ShowsOnlyParametersForSelectedMethod)
     selectMethod(QStringLiteral("u2net"));
     EXPECT_TRUE(thresholdPanel->isHidden());
     EXPECT_FALSE(u2netPanel->isHidden());
+}
+
+TEST(MainMenuTest, ProvidesPythonRuntimeUpdateAction)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/menu/MainMenu.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("actionUpdatePythonRuntime")));
+    EXPECT_TRUE(source.contains(QStringLiteral("PythonRuntimeDialog::Mode::Update")));
+    EXPECT_TRUE(source.contains(QStringLiteral("更新 Python 环境...")));
 }
 
 TEST(GenerateMaskDialogTest, ExposesU2NetOnnxCpuAndCudaSettings)

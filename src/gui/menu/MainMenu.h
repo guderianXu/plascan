@@ -16,7 +16,7 @@
  *   - 视图：放大、缩小、重置视图、特征点可视化、窗口面板开关
  *   - 工作流程：空三、生成模型、DEM、正射影像等高层操作
  *   - 工具：连接点、重叠度、前方交汇、工作流程报告
- *   - 帮助：关于
+ *   - 帮助：更新 Python 环境、关于
  */
 
 #include <QObject>
@@ -116,6 +116,9 @@ public:
 
     /** @brief 返回"退出"动作（已连接到 QCoreApplication::quit）。 */
     QAction *exitAction() const;
+
+    /** @brief 返回“帮助 / 更新 Python 环境”动作。 */
+    QAction *updatePythonRuntimeAction() const;
 
     // ==== 视图菜单动作 ====
 
@@ -300,6 +303,7 @@ private:
     QAction *_saveAct{};  ///< 保存项目
     QAction *_minimizeAct{}; ///< 最小化窗口
     QAction *_exitAct{};  ///< 退出应用
+    QAction *_updatePythonRuntimeAct{}; ///< 下载或更新 PlaScan 管理的 Python 环境
 
     // ---- 视图菜单动作 ----
     QAction *_zoomInAct{};    ///< 放大视图

@@ -124,6 +124,16 @@ class PythonRuntimeSetupTest(unittest.TestCase):
         self.assertIn("PLASCAN_MODEL_DIR", script)
         self.assertIn("PLASCAN_SCRIPT_DIR", script)
 
+    def test_windows_bootstrap_can_download_and_verify_python(self):
+        script = (REPO_ROOT / "scripts" / "env" / "bootstrap_python_runtime.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("https://www.python.org/ftp/python/", script)
+        self.assertIn("Get-AuthenticodeSignature", script)
+        self.assertIn("Python Software Foundation", script)
+        self.assertIn("$SetupScript", script)
+
 
 if __name__ == "__main__":
     unittest.main()

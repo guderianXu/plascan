@@ -7,6 +7,7 @@
  */
 #include "MainMenu.h"
 #include "application/AboutDialog.h"
+#include "application/PythonRuntimeDialog.h"
 #include "ToolbarButton.h"
 
 #include <QDir>
@@ -1570,6 +1571,20 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         {
             connect(_exitAct, &QAction::triggered, qApp, &QCoreApplication::quit);
         }
+        if (auto *helpMenu = findNamedChild<QMenu>(_mainWindow, "menuHelp"))
+        {
+            _updatePythonRuntimeAct = ensurePlainAction(
+                _mainWindow,
+                _mainWindow,
+                helpMenu,
+                QStringLiteral("actionUpdatePythonRuntime"),
+                tr("更新 Python 环境..."),
+                findNamedChild<QAction>(_mainWindow, "actionAbout"));
+            connect(_updatePythonRuntimeAct, &QAction::triggered, _mainWindow, [mw = _mainWindow]() {
+                PythonRuntimeDialog dialog(PythonRuntimeDialog::Mode::Update, mw);
+                dialog.exec();
+            });
+        }
         if (auto *aboutAct = findNamedChild<QAction>(_mainWindow, "actionAbout"))
         {
             connect(aboutAct, &QAction::triggered, _mainWindow, [mw = _mainWindow]() {
@@ -1818,6 +1833,13 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
 
     // ---- 帮助菜单 ----
     auto *helpMenu = _mainWindow->menuBar()->addMenu(tr("帮助"));
+    _updatePythonRuntimeAct = helpMenu->addAction(tr("更新 Python 环境..."));
+    _updatePythonRuntimeAct->setObjectName(QStringLiteral("actionUpdatePythonRuntime"));
+    connect(_updatePythonRuntimeAct, &QAction::triggered, _mainWindow, [mw = _mainWindow]() {
+        PythonRuntimeDialog dialog(PythonRuntimeDialog::Mode::Update, mw);
+        dialog.exec();
+    });
+    helpMenu->addSeparator();
     helpMenu->addAction(tr("关于"), _mainWindow, [mw = _mainWindow]() {
         AboutDialog dialog(mw);
         dialog.exec();
@@ -2129,6 +2151,7 @@ QAction *MainMenu::openAction() const { return _openAct; }
 QAction *MainMenu::saveAction() const { return _saveAct; }
 QAction *MainMenu::minimizeAction() const { return _minimizeAct; }
 QAction *MainMenu::exitAction() const { return _exitAct; }
+QAction *MainMenu::updatePythonRuntimeAction() const { return _updatePythonRuntimeAct; }
 
 QAction *MainMenu::zoomInAction() const    { return _zoomInAct; }
 QAction *MainMenu::zoomOutAction() const   { return _zoomOutAct; }

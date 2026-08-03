@@ -99,6 +99,11 @@ OpenCV DNN CPU 或在 GUI 中从 CUDA 自动回退到 CPU。
 
 `scripts/env/` 集中管理 Python 本机环境准备脚本。Python 开发环境默认创建在仓库根目录 `.venv/`，用于模型导出和验证；生产 C++ 不链接 LibTorch。
 
+安装版首次启动时会自动检查 Python 环境。若未找到，PlaScan 会询问是否下载并安装用户级专用环境；可以暂不处理，
+也可以勾选“下次启动时不再提醒”。之后可随时通过 `帮助 > 更新 Python 环境...` 补装或更新。Windows 在系统没有
+Python 时会从 python.org 下载经过数字签名校验的 Python 安装器，运行时安装到当前用户的应用数据目录，不要求管理员权限。
+自动安装需要访问 python.org、PyTorch 软件源、PyPI 和 GitHub。
+
 准备 vcpkg：
 
 ```bash

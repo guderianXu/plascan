@@ -46,8 +46,8 @@ AboutDialog::AboutDialog(const QProcessEnvironment &environment, QWidget *parent
     pythonValueLabel->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
     formLayout->addRow(tr("Python 环境:"), pythonValueLabel);
 
-    auto *hintLabel = new QLabel(tr("优先使用 PLASCAN_PYTHON_EXECUTABLE，其次使用 PLASCAN_PYTHON；"
-                                    "未配置时使用项目根目录 .venv。"),
+    auto *hintLabel = new QLabel(tr("优先使用显式配置和项目根目录 .venv；安装版也可通过“帮助 > 更新 Python 环境...”"
+                                    "下载或更新用户级环境。"),
                                   this);
     hintLabel->setObjectName(QStringLiteral("pythonEnvironmentHintLabel"));
     hintLabel->setWordWrap(true);
@@ -82,5 +82,5 @@ QString AboutDialog::pythonEnvironmentDisplayText(const QProcessEnvironment &env
         return pythonPath;
     }
 
-    return tr("未配置（请运行 scripts/env/setup_python_runtime.py 并通过开发环境启动 PlaScan）");
+    return tr("未配置（可通过“帮助 > 更新 Python 环境...”自动下载或更新）");
 }

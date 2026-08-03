@@ -34,6 +34,11 @@ Use `--dry-run` to print the clone/bootstrap/install commands without running th
 
 ## Python Runtime
 
+The installed GUI checks for Python on startup. If no runtime is available, it can download a signed Python installer
+from python.org and create a per-user managed runtime without administrator privileges. The same workflow remains available
+from `Help > Update Python Environment...`; users may dismiss the startup prompt and suppress future reminders. CPack installs
+`bootstrap_python_runtime.ps1`, `setup_python_runtime.py`, and `env_common.py` under `share/plascan/scripts/env`.
+
 The recommended development runtime is the repository-local standard-library `venv` at `.venv`. Use this runtime for
 model export helpers such as LightGlue and LoMa-R TensorRT export and for Python tests, so PlaScan development does not depend
 on a user-managed conda environment or a per-build virtual environment.
@@ -58,8 +63,8 @@ python3 scripts/env/setup_python_runtime.py --device cuda --cuda-wheel cu130
 
 Use `--skip-install` when the runtime already contains the required packages and only the generated environment
 files need to be refreshed.
-LightGlue is installed from `https://github.com/cvg/LightGlue.git`, so the full install requires `git` and network
-access to GitHub.
+LightGlue is installed from its GitHub source archive, so the full install requires network access to GitHub but does not
+require a separate `git` executable.
 
 The `.venv/` directory is intentionally ignored by git. Reuse it for development instead of creating new virtual
 environments under individual build directories. Use `--runtime-dir` only when packaging or CI needs a different

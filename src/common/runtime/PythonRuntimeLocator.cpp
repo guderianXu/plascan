@@ -5,6 +5,7 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QStandardPaths>
 
 namespace xjw::common::runtime
 {
@@ -35,6 +36,22 @@ QString runtimePythonRelativePath()
 #else
     return QStringLiteral(".venv/bin/python");
 #endif
+}
+
+QString userRuntimePythonPath(const QString &runtimeDirectory)
+{
+    if (runtimeDirectory.trimmed().isEmpty())
+    {
+        return {};
+    }
+
+    return existingFilePath(QDir(runtimeDirectory).filePath(
+#ifdef Q_OS_WIN
+        QStringLiteral("Scripts/python.exe")
+#else
+        QStringLiteral("bin/python")
+#endif
+    ));
 }
 
 QString repositoryVenvPythonPath(const QString &sourceRoot)
@@ -84,6 +101,30 @@ QString environmentPythonPath(const QProcessEnvironment &environment)
 
 QString resolvePythonExecutable(const QProcessEnvironment &environment, const QString &sourceRoot)
 {
+    return resolvePythonExecutable(environment, sourceRoot, defaultUserPythonRuntimeDirectory());
+}
+
+QString defaultUserPythonRuntimeDirectory()
+{
+    return QDir(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation))
+        .filePath(QStringLiteral("python-runtime"));
+}
+
+QString pythonExecutableInRuntime(const QString &runtimeDirectory)
+{
+    return QDir(runtimeDirectory).filePath(
+#ifdef Q_OS_WIN
+        QStringLiteral("Scripts/python.exe")
+#else
+        QStringLiteral("bin/python")
+#endif
+    );
+}
+
+QString resolvePythonExecutable(const QProcessEnvironment &environment,
+                                const QString &sourceRoot,
+                                const QString &userRuntimeDirectory)
+{
     const QString configured_path = environmentPythonPath(environment);
     if (!configured_path.isEmpty())
     {
@@ -96,7 +137,13 @@ QString resolvePythonExecutable(const QProcessEnvironment &environment, const QS
         return venv_path;
     }
 
-    return generatedEnvironmentPythonPath(sourceRoot);
+    const QString generated_path = generatedEnvironmentPythonPath(sourceRoot);
+    if (!generated_path.isEmpty())
+    {
+        return generated_path;
+    }
+
+    return userRuntimePythonPath(userRuntimeDirectory);
 }
 
 } // namespace xjw::common::runtime

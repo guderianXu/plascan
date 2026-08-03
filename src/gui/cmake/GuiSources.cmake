@@ -30,6 +30,7 @@ set(GUI_SOURCES
   menu/ToolbarButton.cpp
   menu/MainMenu.cpp
   platform/ProjectFileIntegration.cpp
+  runtime/PythonRuntimeManager.cpp
   markers/ProjectMarkerRepository.cpp
   markers/MarkerUndoCommand.cpp
   markers/MarkerOverlayItems.cpp
@@ -107,6 +108,7 @@ set(GUI_HEADERS
   menu/ToolbarButton.h
   menu/MainMenu.h
   platform/ProjectFileIntegration.h
+  runtime/PythonRuntimeManager.h
   markers/ProjectMarkerRepository.h
   markers/MarkerUndoCommand.h
   markers/MarkerOverlayItems.h
