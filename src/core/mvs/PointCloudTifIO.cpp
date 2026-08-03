@@ -1,4 +1,5 @@
 #include "PointCloudTifIO.h"
+#include "io/ImageIO.h"
 #include "io/PathIO.h"
 
 #include <gdal_priv.h>
@@ -13,16 +14,6 @@ namespace xjw
 namespace mvs
 {
 
-static void ensureGdalRegistered()
-{
-    static bool done = false;
-    if (!done)
-    {
-        GDALAllRegister();
-        done = true;
-    }
-}
-
 bool PointCloudTifIO::writeTif(const std::string &path,
                                const TriangulationResult &tri,
                                std::string *errorMsg)
@@ -33,7 +24,7 @@ bool PointCloudTifIO::writeTif(const std::string &path,
         return false;
     }
 
-    ensureGdalRegistered();
+    xjw::common::io::ensureGdalRegistered();
 
     GDALDriver *driver = GetGDALDriverManager()->GetDriverByName("GTiff");
     if (!driver)
@@ -107,7 +98,7 @@ bool PointCloudTifIO::readTif(const std::string &path,
                               TriangulationResult &tri,
                               std::string *errorMsg)
 {
-    ensureGdalRegistered();
+    xjw::common::io::ensureGdalRegistered();
 
     const std::string pathUtf8 = xjw::common::io::toUtf8Path(xjw::common::io::fromUtf8Path(path));
     GDALDataset *ds = static_cast<GDALDataset *>(GDALOpen(pathUtf8.c_str(), GA_ReadOnly));

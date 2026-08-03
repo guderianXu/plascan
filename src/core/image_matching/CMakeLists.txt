@@ -1,8 +1,20 @@
 cmake_minimum_required(VERSION 3.16)
 project(plascan_image_matching LANGUAGES CXX)
 
-find_package(TensorRT REQUIRED)
-find_package(CUDAToolkit REQUIRED)
+set(_PLASCAN_TENSORRT_DEFAULT OFF)
+if(CMAKE_CUDA_COMPILER)
+    set(_PLASCAN_TENSORRT_DEFAULT ON)
+endif()
+option(PLASCAN_ENABLE_TENSORRT "Build TensorRT image-matching backends"
+       ${_PLASCAN_TENSORRT_DEFAULT})
+unset(_PLASCAN_TENSORRT_DEFAULT)
+
+if(PLASCAN_ENABLE_TENSORRT)
+    find_package(TensorRT REQUIRED)
+    find_package(CUDAToolkit REQUIRED)
+elseif(CMAKE_CUDA_COMPILER)
+    find_package(CUDAToolkit REQUIRED)
+endif()
 
 # 统一影像匹配目标。SIFT、LightGlue、几何验证和 `.pimatch` 存储最终都会在
 # 本目标内注册，调用方只依赖 image_matching，不再分别依赖提取器和匹配器目录。
@@ -25,22 +37,27 @@ add_library(image_matching STATIC
     geometry/MatchGeometryVerifier.h
     sift/SiftFeatureExtractor.cpp
     sift/SiftFeatureExtractor.h
-    sift_lightglue/SiftLightGlueAlgorithm.cpp
-    sift_lightglue/SiftLightGlueAlgorithm.h
-    loma_r/LoMaRAlgorithm.cpp
-    loma_r/LoMaRAlgorithm.h
-    loma_r/LoMaRTensorRtBackend.cpp
-    loma_r/LoMaRTensorRtBackend.h
-    tensorrt/TensorRtSession.cpp
-    tensorrt/TensorRtSession.h
     lightglue/LightGlueFeatureBudget.h
     lightglue/LightGluePostprocessor.cpp
     lightglue/LightGluePostprocessor.h
-    lightglue/TensorRtLightGlueMatcher.cpp
-    lightglue/TensorRtLightGlueMatcher.h
 )
 
-if(CMAKE_CUDA_COMPILER)
+if(PLASCAN_ENABLE_TENSORRT)
+    target_sources(image_matching PRIVATE
+        sift_lightglue/SiftLightGlueAlgorithm.cpp
+        sift_lightglue/SiftLightGlueAlgorithm.h
+        loma_r/LoMaRAlgorithm.cpp
+        loma_r/LoMaRAlgorithm.h
+        loma_r/LoMaRTensorRtBackend.cpp
+        loma_r/LoMaRTensorRtBackend.h
+        tensorrt/TensorRtSession.cpp
+        tensorrt/TensorRtSession.h
+        lightglue/TensorRtLightGlueMatcher.cpp
+        lightglue/TensorRtLightGlueMatcher.h
+    )
+endif()
+
+if(PLASCAN_ENABLE_TENSORRT AND CMAKE_CUDA_COMPILER)
     target_sources(image_matching PRIVATE
         lightglue/TensorRtLightGluePostprocessor.cu
         lightglue/TensorRtLightGluePostprocessor.h
@@ -79,17 +96,24 @@ target_include_directories(image_matching PUBLIC
 target_link_libraries(image_matching PUBLIC
     Qt6::Core
     ${OpenCV_LIBS}
-    TensorRT::nvinfer
-    CUDA::cudart
     plascan_common_io
 )
 
-if(TARGET plascan_cudasift)
-    target_link_libraries(image_matching PUBLIC plascan_cudasift)
-    target_compile_definitions(image_matching PUBLIC PLASCAN_HAS_CUDA_SIFT=1)
+if(PLASCAN_ENABLE_TENSORRT)
+    target_link_libraries(image_matching PUBLIC
+        TensorRT::nvinfer
+        CUDA::cudart
+    )
+    target_compile_definitions(image_matching PUBLIC PLASCAN_HAS_TENSORRT=1)
 endif()
 
-target_compile_definitions(image_matching PUBLIC PLASCAN_HAS_TENSORRT=1)
+if(TARGET plascan_cudasift)
+    target_link_libraries(image_matching PUBLIC
+        plascan_cudasift
+        CUDA::cudart
+    )
+    target_compile_definitions(image_matching PUBLIC PLASCAN_HAS_CUDA_SIFT=1)
+endif()
 
 target_compile_features(image_matching PUBLIC cxx_std_20)
 

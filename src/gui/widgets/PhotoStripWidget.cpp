@@ -144,6 +144,22 @@ PhotoStripWidget::PhotoStripWidget(QWidget *parent)
             &PhotoStripWidget::showPhotoContextMenu);
 }
 
+PhotoStripWidget::~PhotoStripWidget()
+{
+    advanceThumbnailGeneration(false);
+    const QSet<QFutureWatcher<ThumbnailResult> *> watchers = _thumbnailWatchers;
+    for (QFutureWatcher<ThumbnailResult> *watcher : watchers)
+    {
+        disconnect(watcher, nullptr, this, nullptr);
+        watcher->cancel();
+    }
+    for (QFutureWatcher<ThumbnailResult> *watcher : watchers)
+    {
+        watcher->waitForFinished();
+    }
+    _thumbnailWatchers.clear();
+}
+
 void PhotoStripWidget::setProjectPath(const QString &plascanPath)
 {
     QString projectRootPath;
@@ -293,8 +309,9 @@ void PhotoStripWidget::showPhotoContextMenu(const QPoint &position)
     auto *menu = new QMenu(this);
     menu->setAttribute(Qt::WA_DeleteOnClose);
     QAction *generateAction = menu->addAction(tr("生成蒙版..."));
-    connect(generateAction, &QAction::triggered, this, [this, imagePaths]()
+    connect(generateAction, &QAction::triggered, this, [this, menu, imagePaths]()
     {
+        menu->close();
         emit generateMaskRequested(imagePaths);
     });
     menu->popup(_list->viewport()->mapToGlobal(position));
@@ -344,6 +361,7 @@ void PhotoStripWidget::startThumbnailLoad(const QString &imagePath)
 
     _thumbnailLoadsInFlight.insert(key, generation);
     auto *watcher = new QFutureWatcher<ThumbnailResult>(this);
+    _thumbnailWatchers.insert(watcher);
     const QString projectPath = _projectFilePath;
     connect(watcher, &QFutureWatcher<ThumbnailResult>::finished, this,
             [this, watcher, key, generation, projectPath]()
@@ -356,6 +374,7 @@ void PhotoStripWidget::startThumbnailLoad(const QString &imagePath)
         {
             _thumbnailLoadsInFlight.remove(key);
         }
+        _thumbnailWatchers.remove(watcher);
         watcher->deleteLater();
     });
     watcher->setFuture(QtConcurrent::run(&PhotoStripWidget::loadThumbnail, resolvedPath, projectPath));

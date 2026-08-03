@@ -468,6 +468,24 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
             BundleAdjust::backendName(baResult.usedBackend),
             baResult.backendMessage.c_str());
     }
+    if (applyBaResult && control_constraint_count == 0 &&
+        control_scale_bar_count == 0 &&
+        std::isfinite(baResult.meanRmsBefore) &&
+        std::isfinite(baResult.meanRmsAfter))
+    {
+        const double rmsTolerance = std::max(
+            1.0e-9,
+            std::abs(baResult.meanRmsBefore) * 1.0e-6);
+        if (baResult.meanRmsAfter > baResult.meanRmsBefore + rmsTolerance)
+        {
+            applyBaResult = false;
+            Logger::instance()->warnf(
+                "[BA] rejected scope=%s reason=reprojection_rms_regressed rms=%.9f->%.9f",
+                scopeName,
+                baResult.meanRmsBefore,
+                baResult.meanRmsAfter);
+        }
+    }
     const bool knownPoseGlobalBa = _sfmOptions.useKnownCameraPoses && !localOnly &&
                                    baOpt.refineCameraPose && !baOpt.cameraPosePriors.empty();
     if (knownPoseGlobalBa)
@@ -705,10 +723,13 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
     // 全局 BA：记录统计供最终结果使用（lastGlobalBA* 成员变量）
     if (!localOnly)
     {
+        const double appliedRmsAfter = applyBaResult
+            ? baResult.meanRmsAfter
+            : baResult.meanRmsBefore;
         _lastControlPointConstraintCount = control_constraint_count;
         _lastControlScaleBarConstraintCount = control_scale_bar_count;
         _lastGlobalBARmsBefore = baResult.meanRmsBefore;
-        _lastGlobalBARmsAfter = baResult.meanRmsAfter;
+        _lastGlobalBARmsAfter = appliedRmsAfter;
         _lastGlobalBATracksTotal = baResult.totalTracks;
         _lastGlobalBATracksOptimized = baResult.optimizedTracks;
         _lastGlobalBATracksFiltered = applyBaResult

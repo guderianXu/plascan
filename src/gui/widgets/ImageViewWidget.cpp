@@ -32,6 +32,17 @@ ImageViewWidget::ImageViewWidget(QWidget *parent)
 
 ImageViewWidget::~ImageViewWidget()
 {
+    const QSet<QFutureWatcher<QImage> *> watchers = _imageLoadWatchers;
+    for (QFutureWatcher<QImage> *watcher : watchers)
+    {
+        disconnect(watcher, nullptr, nullptr, nullptr);
+        watcher->cancel();
+    }
+    for (QFutureWatcher<QImage> *watcher : watchers)
+    {
+        watcher->waitForFinished();
+    }
+    _imageLoadWatchers.clear();
     clearMatchPoints();
 }
 
@@ -75,9 +86,11 @@ bool ImageViewWidget::loadImage(const QString &imagePath)
 
     // 挂监听器，解码完成后切回主线程更新视图
     auto *watcher = new QFutureWatcher<QImage>(this);
+    _imageLoadWatchers.insert(watcher);
     QPointer<ImageViewWidget> self(this);
     connect(watcher, &QFutureWatcher<QImage>::finished,
             watcher, [self, watcher, imagePath]() {
+        if (self) self->_imageLoadWatchers.remove(watcher);
         watcher->deleteLater();
         if (!self) return;
         if (self->_imagePath != imagePath) return; // 图像已被其他请求替换

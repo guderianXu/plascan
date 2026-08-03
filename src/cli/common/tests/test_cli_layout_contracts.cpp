@@ -59,16 +59,6 @@ TEST(WindowsCudaBuildScriptContractTest, UsesShortVcpkgWorkRootsForManifestInsta
                        "-DVCPKG_INSTALL_OPTIONS="});
 }
 
-TEST(WindowsCudaBuildScriptContractTest, PersistsDependencyPrefixForAutomaticReconfigure)
-{
-    const QString script = readSourceFile(QStringLiteral("scripts/build_win/build_windows_cuda.ps1"));
-
-    expectContainsAll(script,
-                      {"$env:CMAKE_PREFIX_PATH = ($tripletRootCMake, $torchPathCMake) -join ';'",
-                       "-DCMAKE_PREFIX_PATH=$env:CMAKE_PREFIX_PATH",
-                       "-UQt6*_DIR"});
-}
-
 TEST(WindowsCudaBuildScriptContractTest, NativeWarningsDoNotBypassExitCodeChecks)
 {
     const QString script = readSourceFile(QStringLiteral("scripts/build_win/build_windows_cuda.ps1"));

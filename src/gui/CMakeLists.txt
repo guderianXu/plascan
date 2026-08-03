@@ -27,27 +27,35 @@ set_source_files_properties(${PLASCAN_GUI_RESOURCES} PROPERTIES
 # plascan_gui 可执行文件
 #==============================================================================
 
-add_executable(plascan_gui
-  ${GUI_SOURCES}
-  ${GUI_DIALOG_SOURCES}
-  ${PLASCAN_GUI_RESOURCES}
-)
+if(PLASCAN_BUILD_GUI)
+  if(Qt6_VERSION VERSION_LESS "6.7")
+    message(FATAL_ERROR
+      "PlaScan GUI requires Qt 6.7 or newer for QRhiWidget. "
+      "Configure with -DPLASCAN_BUILD_GUI=OFF to build core libraries, CLI tools, and tests.")
+  endif()
 
-qt_add_shaders(plascan_gui camera_scene_shaders
-  PREFIX
-    "/shaders"
-  BASE
-    "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
-  FILES
-    shaders/camera_scene_color.vert
-    shaders/camera_scene_color.frag
-    shaders/camera_scene_mesh.vert
-    shaders/camera_scene_mesh.frag
-    shaders/camera_scene_textured_mesh.vert
-    shaders/camera_scene_textured_mesh.frag
-    shaders/camera_scene_image.vert
-    shaders/camera_scene_image.frag
-)
+  add_executable(plascan_gui
+    ${GUI_SOURCES}
+    ${GUI_DIALOG_SOURCES}
+    ${PLASCAN_GUI_RESOURCES}
+  )
+
+  qt_add_shaders(plascan_gui camera_scene_shaders
+    PREFIX
+      "/shaders"
+    BASE
+      "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
+    FILES
+      shaders/camera_scene_color.vert
+      shaders/camera_scene_color.frag
+      shaders/camera_scene_mesh.vert
+      shaders/camera_scene_mesh.frag
+      shaders/camera_scene_textured_mesh.vert
+      shaders/camera_scene_textured_mesh.frag
+      shaders/camera_scene_image.vert
+      shaders/camera_scene_image.frag
+  )
+endif()
 
 # 包含目录
 set(PLASCAN_GUI_INCLUDE_DIRECTORIES
@@ -93,12 +101,14 @@ set(PLASCAN_GUI_INCLUDE_DIRECTORIES
   ${OpenCV_INCLUDE_DIRS}
 )
 
-target_include_directories(plascan_gui PRIVATE ${PLASCAN_GUI_INCLUDE_DIRECTORIES})
+if(PLASCAN_BUILD_GUI)
+  target_include_directories(plascan_gui PRIVATE ${PLASCAN_GUI_INCLUDE_DIRECTORIES})
+  target_compile_definitions(plascan_gui PRIVATE
+    PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    PLASCAN_VERSION="${PROJECT_VERSION}"
+  )
+endif()
 target_include_directories(gui_project PRIVATE ${PLASCAN_GUI_INCLUDE_DIRECTORIES})
-target_compile_definitions(plascan_gui PRIVATE
-  PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
-  PLASCAN_VERSION="${PROJECT_VERSION}"
-)
 target_compile_definitions(gui_project PRIVATE
   PLASCAN_VERSION="${PROJECT_VERSION}"
 )
@@ -133,15 +143,16 @@ if(TARGET mvs)
   target_link_libraries(gui_project PRIVATE mvs)
 endif()
 
-if(GDAL_INCLUDE_DIRS)
-  target_include_directories(plascan_gui PRIVATE ${GDAL_INCLUDE_DIRS})
-endif()
+if(PLASCAN_BUILD_GUI)
+  if(GDAL_INCLUDE_DIRS)
+    target_include_directories(plascan_gui PRIVATE ${GDAL_INCLUDE_DIRS})
+  endif()
 
-if(TIFF_INCLUDE_DIRS)
-  target_include_directories(plascan_gui PRIVATE ${TIFF_INCLUDE_DIRS})
-endif()
+  if(TIFF_INCLUDE_DIRS)
+    target_include_directories(plascan_gui PRIVATE ${TIFF_INCLUDE_DIRS})
+  endif()
 
-include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/GuiCoreLinking.cmake)
+  include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/GuiCoreLinking.cmake)
 
 # 链接Qt和其他库
 target_link_libraries(plascan_gui PRIVATE
@@ -190,4 +201,5 @@ if(PLASCAN_EXTRA_NVRTC_RPATHS)
   set_property(TARGET plascan_gui APPEND PROPERTY BUILD_RPATH "${PLASCAN_EXTRA_NVRTC_RPATHS}")
 endif()
 
-include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/GuiInstall.cmake)
+  include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/GuiInstall.cmake)
+endif()

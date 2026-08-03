@@ -1,4 +1,5 @@
 #include "DemDomIO.h"
+#include "io/ImageIO.h"
 #include "io/PathIO.h"
 
 #include <plapoint/io/ply_io.h>
@@ -29,16 +30,6 @@ namespace xjw
 
 namespace
 {
-
-void ensureGdalRegistered()
-{
-    static bool registered = false;
-    if (!registered)
-    {
-        GDALAllRegister();
-        registered = true;
-    }
-}
 
 void readProjectionMetadata(GDALDataset *dataset,
                             DemProjectionParameters *projection)
@@ -230,7 +221,7 @@ bool writeSingleBandQualityRaster(const DemGridData &demGrid,
         return false;
     }
 
-    ensureGdalRegistered();
+    xjw::common::io::ensureGdalRegistered();
     QDir().mkpath(QFileInfo(outputPath).absolutePath());
 
     GDALDriver *driver = GetGDALDriverManager()->GetDriverByName("GTiff");
@@ -425,7 +416,7 @@ bool DemDomIO::writeDemRaster(const DemGridData &demGrid,
         return false;
     }
 
-    ensureGdalRegistered();
+    xjw::common::io::ensureGdalRegistered();
     QDir().mkpath(QFileInfo(outputPath).absolutePath());
 
     GDALDriver *driver = GetGDALDriverManager()->GetDriverByName("GTiff");
@@ -674,7 +665,7 @@ bool DemDomIO::readDemMetadata(const QString &inputPath,
         return false;
     }
 
-    ensureGdalRegistered();
+    xjw::common::io::ensureGdalRegistered();
     const std::string inputPathUtf8 = xjw::common::io::toUtf8Path(inputPath);
     GDALDataset *dataset = static_cast<GDALDataset *>(GDALOpen(inputPathUtf8.c_str(), GA_ReadOnly));
     if (!dataset)
@@ -744,7 +735,7 @@ bool DemDomIO::readDemRaster(const QString &inputPath,
         return false;
     }
 
-    ensureGdalRegistered();
+    xjw::common::io::ensureGdalRegistered();
     const std::string inputPathUtf8 = xjw::common::io::toUtf8Path(inputPath);
     GDALDataset *dataset = static_cast<GDALDataset *>(GDALOpen(inputPathUtf8.c_str(), GA_ReadOnly));
     if (!dataset)
@@ -1126,7 +1117,7 @@ bool DemDomIO::writeDomImage(const cv::Mat &domImage,
     QDir().mkpath(QFileInfo(outputPath).absolutePath());
     if (format == DomImageFormat::Tiff)
     {
-        ensureGdalRegistered();
+        xjw::common::io::ensureGdalRegistered();
         GDALDriver *driver = GetGDALDriverManager()->GetDriverByName("GTiff");
         if (!driver)
         {
@@ -1257,7 +1248,7 @@ bool DemDomIO::writeDomGeoTiff(const cv::Mat &domImage,
         return false;
     }
 
-    ensureGdalRegistered();
+    xjw::common::io::ensureGdalRegistered();
     QDir().mkpath(QFileInfo(outputPath).absolutePath());
 
     GDALDriver *driver = GetGDALDriverManager()->GetDriverByName("GTiff");

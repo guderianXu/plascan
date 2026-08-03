@@ -2642,21 +2642,29 @@ bool ProjectData::packResource(const QString &resourcePath, QString *errorMsg)
         return false;
     }
 
+    QString stagedPath;
+    if (!ProjectWorkspaceStore(_projectPath, _activeChunkDirectory)
+             .stagePackedResource(resource.absoluteFilePath(),
+                                  &stagedPath,
+                                  errorMsg))
+    {
+        return false;
+    }
+
     QJsonObject core = _filesManager.coreData();
     QJsonArray packed = core.value(QStringLiteral("packed_resources")).toArray();
-    const QString absolutePath = resource.absoluteFilePath();
     for (const QJsonValue &value : packed)
     {
         if (QDir::cleanPath(
                 value.toObject().value(QStringLiteral("path")).toString())
-            == QDir::cleanPath(absolutePath))
+            == stagedPath)
         {
             return true;
         }
     }
     packed.append(QJsonObject{
         {QStringLiteral("name"), resource.fileName()},
-        {QStringLiteral("path"), absolutePath},
+        {QStringLiteral("path"), stagedPath},
         {QStringLiteral("resource_type"),
          resource.isDir() ? QStringLiteral("directory")
                           : QStringLiteral("file")}

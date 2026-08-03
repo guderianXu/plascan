@@ -1,6 +1,7 @@
 #include "AspPointCloudMetrics.h"
 
 #include "PointCloudTifIO.h"
+#include "io/ImageIO.h"
 #include "io/PathIO.h"
 
 #include <plapoint/core/point_cloud.h>
@@ -57,7 +58,7 @@ std::shared_ptr<PlaMetricCloud> toPlaCloud(const std::vector<Point3> &points)
 
 bool readAspTif(const std::string &path, LoadedCloud &cloud, std::string *errorMessage)
 {
-    GDALAllRegister();
+    xjw::common::io::ensureGdalRegistered();
     const std::string pathUtf8 = xjw::common::io::toUtf8Path(xjw::common::io::fromUtf8Path(path));
     GDALDataset *dataset = static_cast<GDALDataset *>(GDALOpen(pathUtf8.c_str(), GA_ReadOnly));
     if (!dataset)

@@ -6,12 +6,15 @@
 
 #include <algorithm>
 #include <mutex>
+#include <stdexcept>
 
 namespace xjw::image_matching
 {
 
+#if defined(PLASCAN_HAS_TENSORRT)
 void registerSiftLightGlueAlgorithm();
 void registerLoMaRAlgorithm();
+#endif
 
 namespace
 {
@@ -39,13 +42,58 @@ QString normalizedId(const QString &algorithmId)
     return algorithmId.trimmed().toLower();
 }
 
+#if !defined(PLASCAN_HAS_TENSORRT)
+void registerUnavailableTensorRtAlgorithm(
+    const ImageMatchingAlgorithmDescriptor &descriptor)
+{
+    QString ignored_error;
+    ImageMatchingRegistry::registerAlgorithm(
+        descriptor,
+        [id = descriptor.id](const ImageMatchingRuntimeConfig &)
+            -> std::unique_ptr<IImageMatchingAlgorithm>
+        {
+            throw std::runtime_error(
+                QStringLiteral("算法 %1 不可用：PlaScan 构建时未启用 TensorRT")
+                    .arg(id)
+                    .toStdString());
+        },
+        &ignored_error);
+}
+
+void registerUnavailableTensorRtAlgorithms()
+{
+    ImageMatchingAlgorithmDescriptor sift;
+    sift.id = QStringLiteral("sift_lightglue");
+    sift.displayName = QStringLiteral("CUDA SIFT + TensorRT LightGlue");
+    sift.version = 1;
+    sift.inputModel = AlgorithmInputModel::ReusableFeatures;
+    sift.requiresCuda = true;
+    sift.suppliesStableFeatureIds = true;
+    registerUnavailableTensorRtAlgorithm(sift);
+
+    ImageMatchingAlgorithmDescriptor loma;
+    loma.id = QStringLiteral("loma_r");
+    loma.displayName = QStringLiteral("LoMa-R (TensorRT)");
+    loma.version = 1;
+    loma.inputModel = AlgorithmInputModel::ReusableFeatures;
+    loma.requiresCuda = true;
+    loma.suppliesStableFeatureIds = true;
+    loma.requiresColorInput = true;
+    registerUnavailableTensorRtAlgorithm(loma);
+}
+#endif
+
 void ensureBuiltInAlgorithms()
 {
     static std::once_flag once;
     std::call_once(once, []()
     {
+#if defined(PLASCAN_HAS_TENSORRT)
         registerSiftLightGlueAlgorithm();
         registerLoMaRAlgorithm();
+#else
+        registerUnavailableTensorRtAlgorithms();
+#endif
     });
 }
 

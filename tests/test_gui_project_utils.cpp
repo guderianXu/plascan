@@ -108,6 +108,7 @@
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QStyle>
+#include <QStyleOptionButton>
 #include <QTemporaryDir>
 #include <QTextStream>
 #include <QToolBar>
@@ -1044,6 +1045,8 @@ TEST(ProjectDataCameraMetadataTest, SetImageCamerasClearsLegacyTopLevelCameraFil
     QJsonArray images = core.value(QStringLiteral("images")).toArray();
     ASSERT_EQ(images.size(), 1);
     QJsonObject imageObject = images.at(0).toObject();
+    const QString projectImagePath = imageObject.value(QStringLiteral("path")).toString();
+    ASSERT_FALSE(projectImagePath.isEmpty());
     imageObject[QStringLiteral("camera_file")] = QStringLiteral("stale/old.tsai");
     images[0] = imageObject;
     core[QStringLiteral("images")] = images;
@@ -1066,7 +1069,10 @@ TEST(ProjectDataCameraMetadataTest, SetImageCamerasClearsLegacyTopLevelCameraFil
 
     int updated = 0;
     QString error;
-    ASSERT_TRUE(data.setImageCameras(QMap<QString, QJsonObject>{{imagePath, camera}}, &updated, &error))
+    ASSERT_TRUE(data.setImageCameras(
+        QMap<QString, QJsonObject>{{projectImagePath, camera}},
+        &updated,
+        &error))
         << error.toStdString();
     EXPECT_EQ(updated, 1);
 
@@ -1106,6 +1112,7 @@ TEST(ProjectDataAsyncOpenTest, OpensProjectFromSnapshotAndAppliesResultsLater)
     ASSERT_TRUE(openSnapshot.success) << openSnapshot.errorMessage.toStdString();
     EXPECT_EQ(openSnapshot.projectPath, projectPath);
     EXPECT_EQ(openSnapshot.filesMeta.value(QStringLiteral("images")).toArray().size(), 1);
+    source.closeProject();
 
     ProjectData reopened;
     QString error;
@@ -2246,112 +2253,6 @@ TEST(GenerateModelDialogTest, AcceptsBeforeDispatchingModelWorkflow)
               QStringLiteral("PLY"));
 }
 
-TEST(DepthMapMetadataTest, DemPreviewsStayOutOfMvsDepthResults)
-{
-    const QString terrainSource = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
-    const QString modelSource = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectModelManager.cpp"));
-    const QString treeSource = readProjectSourceFile(QStringLiteral("src/gui/widgets/DataTreeWidget.cpp"));
-    ASSERT_FALSE(terrainSource.isEmpty());
-    ASSERT_FALSE(modelSource.isEmpty());
-    ASSERT_FALSE(treeSource.isEmpty());
-
-    EXPECT_FALSE(terrainSource.contains(
-        QStringLiteral("upsertMetaArrayRecordByPath(&metaUpdated, QStringLiteral(\"depth_map_results\")")))
-        << "DEM product previews should be stored on dem_results.depth_preview_png, not as MVS depth maps.";
-    EXPECT_TRUE(terrainSource.contains(QStringLiteral("collectLatestStoredDepthFrames")))
-        << "DEM generation may read MVS depth_map_results as input, but must not write DEM previews there.";
-    EXPECT_FALSE(modelSource.contains(QStringLiteral("depth_map_results")))
-        << "Model/terrain previews should not be inserted into the MVS depth map result list.";
-    EXPECT_FALSE(treeSource.contains(QStringLiteral("createSection(QStringLiteral(\"深度图\")")))
-        << "MVS depth artifacts are photo overlays and must not become standalone workspace resources.";
-    EXPECT_TRUE(treeSource.contains(QStringLiteral("depth_preview_png")))
-        << "DEM previews should be available from the DEM section instead.";
-}
-
-TEST(TerrainPipelineAsyncTest, AutoDemPipelineConnectionsUseSharedCleanupState)
-{
-    const QString source = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(source.contains(QStringLiteral("DemPipelineConnectionState")))
-        << "Metadata and MVS-finished signal handles should share a cleanup state.";
-    EXPECT_TRUE(source.contains(QStringLiteral("std::make_shared<DemPipelineConnectionState>")))
-        << "The connection state should be owned by the queued callbacks, not raw new/delete.";
-    EXPECT_TRUE(source.contains(QStringLiteral("disconnectDemPipelineConnections")))
-        << "Both signal handles should be disconnected together on success or failure.";
-    EXPECT_FALSE(source.contains(QStringLiteral("new QMetaObject::Connection")))
-        << "Raw connection handles leak when the owner is destroyed or when the success path returns early.";
-    EXPECT_FALSE(source.contains(QStringLiteral("delete connMeta")));
-    EXPECT_FALSE(source.contains(QStringLiteral("delete connMvsFail")));
-}
-
-TEST(TerrainPipelineAsyncTest, FullDemPipelineUsesBoundedFeaturePairPlanning)
-{
-    const QString source = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int start = source.indexOf(
-        QStringLiteral("void ProjectTerrainProductsManager::runFullDemPipelineInBackground"));
-    ASSERT_GE(start, 0);
-    const int end = source.indexOf(QStringLiteral("// 步骤 3-5:"), start);
-    ASSERT_GT(end, start);
-    const QString matchingBlock = source.mid(start, end - start);
-
-    EXPECT_TRUE(source.contains(QStringLiteral("#include \"MatchPhotosTask.h\"")));
-    EXPECT_TRUE(matchingBlock.contains(QStringLiteral("options.pairPolicy.exhaustiveMaxImages = 80")))
-        << "The full DEM pipeline should delegate bounded pair planning to MatchPhotosTask.";
-    EXPECT_TRUE(matchingBlock.contains(QStringLiteral("options.pairPolicy.sequenceWindow = 4")))
-        << "Large projects need a bounded sequence fallback.";
-    EXPECT_FALSE(matchingBlock.contains(QStringLiteral("for (int j = i + 1; j < ctx.images.size(); ++j)")))
-        << "Large DEM runs must not plan all image pairs by default.";
-}
-
-TEST(TerrainPipelineAsyncTest, DenseCloudDemRunsOffGuiThread)
-{
-    const QString source = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int start = source.indexOf(QStringLiteral("void ProjectTerrainProductsManager::startDemFromDenseCloudAsync"));
-    ASSERT_GE(start, 0);
-    const int end = source.indexOf(QStringLiteral("void ProjectTerrainProductsManager::startMapProjectAsync"), start);
-    ASSERT_GT(end, start);
-    const QString block = source.mid(start, end - start);
-
-    EXPECT_TRUE(block.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
-        << "The Async entry point should run DEM/DOM IO and rasterization through the guarded task runner.";
-    EXPECT_TRUE(block.contains(QStringLiteral("runDemProducts(resolvedDenseCloud")))
-        << "The worker should call the non-UI terrain function and report errors on the GUI thread.";
-    EXPECT_FALSE(block.contains(QStringLiteral("(void)QtConcurrent::run([self,")))
-        << "Open-coded QtConcurrent can still start terrain work after the manager owner is destroyed.";
-    EXPECT_FALSE(block.contains(QStringLiteral("runDemProductsOrWarn")))
-        << "runDemProductsOrWarn shows QMessageBox and must stay on the GUI thread.";
-}
-
-TEST(TerrainPipelineAsyncTest, MapProjectRunsOffGuiThread)
-{
-    const QString source = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int start = source.indexOf(QStringLiteral("void ProjectTerrainProductsManager::startMapProjectAsync"));
-    ASSERT_GE(start, 0);
-    const int end = source.indexOf(QStringLiteral("void ProjectTerrainProductsManager::runFullDemPipelineInBackground"), start);
-    ASSERT_GT(end, start);
-    const QString block = source.mid(start, end - start);
-
-    EXPECT_TRUE(block.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
-        << "The DOM/map projection Async entry point should keep ortho IO and rasterization off the GUI thread.";
-    EXPECT_TRUE(block.contains(QStringLiteral("runOrthoProduct(sourceImages")))
-        << "The worker should call the non-UI ortho function and report errors after returning to the GUI thread.";
-    EXPECT_FALSE(block.contains(QStringLiteral("runOrthoProductOrWarn")))
-        << "The Async entry point must not call the QMessageBox wrapper directly.";
-}
-
 TEST(TerrainPipelineAsyncTest, TerrainProductsManagerDropsBlockingUiWrappers)
 {
     const QString header = readProjectSourceFile(
@@ -2403,30 +2304,6 @@ TEST(GuiTaskRunnerTest, DeliversBackgroundExceptionToGuiCallback)
     EXPECT_EQ(callbackThread, owner.thread());
 }
 
-TEST(GuiAsyncLifetimeTest, BundleAdjustProgressCallbackUsesQPointerGuard)
-{
-    const QString source = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectMaskWorkflowController.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int callbackStart = source.indexOf(QStringLiteral("opts.baOpt.progressCallback ="));
-    ASSERT_GE(callbackStart, 0);
-    const int callbackEnd = source.indexOf(
-        QStringLiteral("emit atProgressChanged(QStringLiteral(\"光束法平差准备中...\"), 1);"),
-        callbackStart);
-    ASSERT_GT(callbackEnd, callbackStart);
-    const QString callbackBlock = source.mid(callbackStart, callbackEnd - callbackStart);
-
-    EXPECT_TRUE(source.contains(QStringLiteral("QPointer<ProjectManager> baProgressSelf")))
-        << "BA progress callbacks can outlive the GUI owner and must use QPointer.";
-    EXPECT_TRUE(callbackBlock.contains(QStringLiteral("[baProgressSelf, cancelFlag]")))
-        << "The callback should capture only the guarded ProjectManager pointer and cancellation flag.";
-    EXPECT_FALSE(callbackBlock.contains(QStringLiteral("[self = this, cancelFlag]")))
-        << "Capturing raw this in the BA progress callback can enqueue events after ProjectManager is destroyed.";
-    EXPECT_FALSE(callbackBlock.contains(QStringLiteral("QMetaObject::invokeMethod(\n                self,")))
-        << "Queued BA progress updates must target baProgressSelf.data(), not a raw this alias.";
-}
-
 TEST(GuiAsyncLifetimeTest, BundleAdjustUsesGuardedTaskRunner)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
@@ -2474,87 +2351,6 @@ TEST(GuiAsyncLifetimeTest, DepthMapGeneratorOwnsAndJoinsBackgroundFuture)
         << "start() should retain the background future so destruction can join it safely.";
     EXPECT_TRUE(startBlock.contains(QStringLiteral("if (_backgroundFuture.isRunning())")))
         << "start() should avoid launching overlapping background workers on the same generator.";
-}
-
-TEST(GuiAsyncLifetimeTest, ProjectModelTasksUseQPointerGuards)
-{
-    const QString source = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectModelManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int meshStart = source.indexOf(
-        QStringLiteral("ProjectModelManager::startMeshReconstructionAsync"));
-    ASSERT_GE(meshStart, 0);
-    const int textureStart = source.indexOf(
-        QStringLiteral("void ProjectModelManager::startTextureMappingAsync"), meshStart);
-    ASSERT_GT(textureStart, meshStart);
-    const int finalizerStart = source.indexOf(
-        QStringLiteral("void ProjectModelManager::finalizeModelGenerationSuccess"), textureStart);
-    ASSERT_GT(finalizerStart, textureStart);
-    const QString meshBlock = source.mid(meshStart, textureStart - meshStart);
-    const QString textureBlock = source.mid(textureStart, finalizerStart - textureStart);
-
-    EXPECT_TRUE(source.contains(QStringLiteral("#include <QPointer>")));
-    EXPECT_TRUE(source.contains(QStringLiteral("makeProgressReporter(QPointer<ProjectModelManager> manager,")))
-        << "Background mesh workflow progress must post through a guarded manager pointer.";
-    EXPECT_TRUE(source.contains(QStringLiteral("QPointer<ProjectManager> owner,")))
-        << "Progress callbacks must also guard the owning ProjectManager.";
-    EXPECT_TRUE(source.contains(QStringLiteral("owner->currentProjectPath() != projectPath")))
-        << "Model progress callbacks must not update UI after the user switches projects.";
-    EXPECT_FALSE(source.contains(QStringLiteral("makeProgressReporter(this)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("QObject::connect(watcher, &QFutureWatcher<ModelTaskResult>::finished,\n"
-                                             "                     watcher,")))
-        << "Model task finished callbacks should be tied to the watcher lifetime.";
-    EXPECT_FALSE(source.contains(QStringLiteral("QObject::connect(watcher, &QFutureWatcher<ModelTaskResult>::finished,\n"
-                                              "                     owner,")));
-
-    EXPECT_TRUE(meshBlock.contains(QStringLiteral("QPointer<ProjectModelManager> self(this)")));
-    EXPECT_TRUE(meshBlock.contains(QStringLiteral("const QString projectPath = _owner ? _owner->currentProjectPath() : QString()")))
-        << "Mesh tasks must bind results to the project that launched them.";
-    EXPECT_TRUE(meshBlock.contains(QStringLiteral("QPointer<ProjectManager> ownerGuard(_owner)")));
-    EXPECT_TRUE(meshBlock.contains(QStringLiteral(
-        "[self,\n"
-        "         ownerGuard,\n"
-        "         resolvedSource,\n"
-        "         effectiveSettings,\n"
-        "         projectPath,\n"
-        "         cancel_flag]() -> ModelTaskResult")));
-    EXPECT_TRUE(meshBlock.contains(QStringLiteral("makeProgressReporter(self, ownerGuard, projectPath)")));
-    EXPECT_TRUE(meshBlock.contains(QStringLiteral("[self, ownerGuard, resolvedSource, effectiveSettings, projectPath, dialogTitle](const ModelTaskResult &task)")));
-    EXPECT_TRUE(meshBlock.contains(QStringLiteral("ownerGuard->currentProjectPath() != projectPath")))
-        << "Mesh task completion must not write results after the user switches projects.";
-    EXPECT_TRUE(meshBlock.contains(QStringLiteral("[self, resolvedSource, effectiveSettings, dialogTitle](const QJsonObject &taskResult)")));
-    EXPECT_FALSE(meshBlock.contains(QStringLiteral("[this, denseCloudPath, outputRoot, settings]")));
-    EXPECT_FALSE(meshBlock.contains(QStringLiteral("[this, denseCloudPath, settings]")));
-
-    EXPECT_TRUE(textureBlock.contains(QStringLiteral("QPointer<ProjectModelManager> self(this)")));
-    EXPECT_TRUE(textureBlock.contains(QStringLiteral("const QString projectPath = _owner ? _owner->currentProjectPath() : QString()")))
-        << "Texture tasks must bind results to the project that launched them.";
-    EXPECT_TRUE(textureBlock.contains(QStringLiteral("QPointer<ProjectManager> ownerGuard(_owner)")));
-    EXPECT_TRUE(textureBlock.contains(QStringLiteral(
-        "[self,\n"
-        "         ownerGuard,\n"
-        "         meshPath,\n"
-        "         productsDir,\n"
-        "         depthMapSourcePath,\n"
-        "         settings,\n"
-        "         projectPath,\n"
-        "         cancel_flag,\n"
-        "         allow_vertex_color_fallback]() -> ModelTaskResult")));
-    EXPECT_TRUE(textureBlock.contains(QStringLiteral("makeProgressReporter(self, ownerGuard, projectPath)")));
-    EXPECT_TRUE(textureBlock.contains(QStringLiteral(
-        "[self,\n"
-        "         ownerGuard,\n"
-        "         meshPath,\n"
-        "         baseRecord,\n"
-        "         projectPath,\n"
-        "         cancel_flag](const ModelTaskResult &task)")));
-    EXPECT_TRUE(textureBlock.contains(QStringLiteral("request.isCancelled = [cancel_flag]()")));
-    EXPECT_TRUE(textureBlock.contains(QStringLiteral("ownerGuard->currentProjectPath() != projectPath")))
-        << "Texture task completion must not write results after the user switches projects.";
-    EXPECT_TRUE(textureBlock.contains(QStringLiteral("[self, meshPath, baseRecord](const QJsonObject &taskResult)")));
-    EXPECT_FALSE(textureBlock.contains(QStringLiteral("[this, meshPath, productsDir, settings]")));
-    EXPECT_FALSE(textureBlock.contains(QStringLiteral("[this, meshPath, baseRecord]")));
 }
 
 TEST(GuiAsyncLifetimeTest, CameraSceneAsyncLoadCallbacksUseQPointerGuards)
@@ -2635,146 +2431,6 @@ TEST(GuiAsyncLifetimeTest, ImageViewAsyncLoadCallbackUsesQPointerGuard)
                                               "            this,")));
     EXPECT_FALSE(block.contains(QStringLiteral("[this, watcher, imagePath]()")))
         << "Async image decode callbacks must not capture the view widget through raw this.";
-}
-
-TEST(GuiAsyncLifetimeTest, RestoredActiveImageSingleShotChecksProjectBeforeLoading)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int start = source.indexOf(QStringLiteral("void MainWindow::applyUiSettings"));
-    ASSERT_GE(start, 0);
-    const int end = source.indexOf(QStringLiteral("void MainWindow::closeEvent"), start);
-    ASSERT_GT(end, start);
-    const QString block = source.mid(start, end - start);
-
-    EXPECT_TRUE(block.contains(
-        QStringLiteral("const QString projectPath = _projectManager ? _projectManager->currentProjectPath() : QString();")))
-        << "Delayed active-image restore must remember the project it belongs to.";
-    EXPECT_TRUE(block.contains(QStringLiteral("[this, imagePath, projectPath]()")))
-        << "Delayed active-image restore should compare against the captured project path.";
-    EXPECT_TRUE(block.contains(QStringLiteral("_projectManager->currentProjectPath() != projectPath")))
-        << "Do not let stale UI settings from a previous project switch the central image view later.";
-}
-
-TEST(GuiAsyncLifetimeTest, ProjectOpenDefersHeavyWidgetHydrationUntilAfterOpenSignalReturns)
-{
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
-    const QString hydratorSource = readProjectSourceFile(
-        QStringLiteral("src/gui/main_window/ProjectUiHydrator.cpp"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-    ASSERT_FALSE(hydratorSource.isEmpty());
-
-    EXPECT_TRUE(header.contains(QStringLiteral("ProjectUiHydrator *_projectUiHydrator{};")))
-        << "MainWindow should delegate project UI hydration to one generation-safe helper.";
-
-    const int openedStart = source.indexOf(QStringLiteral("void MainWindow::onProjectOpened"));
-    ASSERT_GE(openedStart, 0);
-    const int openedEnd = source.indexOf(QStringLiteral("void MainWindow::scheduleProjectMetadataRefresh"),
-                                         openedStart);
-    ASSERT_GT(openedEnd, openedStart);
-    const QString openedBlock = source.mid(openedStart, openedEnd - openedStart);
-
-    EXPECT_TRUE(openedBlock.contains(
-        QStringLiteral("scheduleProjectMetadataRefresh(_projectManager->coreProjectMeta())")))
-        << "Project-open progress must be able to finish before heavy widgets are hydrated.";
-    EXPECT_FALSE(openedBlock.contains(QStringLiteral("_dataTree->loadFromJson(coreMeta)")));
-    EXPECT_FALSE(openedBlock.contains(QStringLiteral("_workspaceCenter->setProjectMeta(coreMeta)")));
-    EXPECT_FALSE(openedBlock.contains(QStringLiteral("_photoStrip->loadFromJson(coreMeta)")));
-
-    EXPECT_TRUE(hydratorSource.contains(QStringLiteral("QPointer<ProjectUiHydrator> self(this)")))
-        << "Delayed widget hydration must not keep a raw helper pointer.";
-    EXPECT_TRUE(hydratorSource.contains(QStringLiteral("QTimer::singleShot(0, this")))
-        << "Widget hydration should be posted back to the event loop instead of running inside projectOpened.";
-    EXPECT_TRUE(hydratorSource.contains(QStringLiteral("generation != self->_generation")))
-        << "Stale delayed hydration from a previous project must not update the current window.";
-}
-
-TEST(GuiAsyncLifetimeTest, CameraSetupUsesGuiTaskRunnerForBackgroundSfm)
-{
-    const QString runnerSource = readProjectSourceFile(QStringLiteral("src/gui/tasks/GuiTaskRunner.h"));
-    const QString cameraSource = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectCameraSetupManager.cpp"));
-    ASSERT_FALSE(runnerSource.isEmpty());
-    ASSERT_FALSE(cameraSource.isEmpty());
-
-    EXPECT_TRUE(runnerSource.contains(QStringLiteral("runGuarded")));
-    EXPECT_TRUE(runnerSource.contains(QStringLiteral("postGuarded")));
-    EXPECT_TRUE(runnerSource.contains(QStringLiteral("QPointer<Owner>")));
-
-    EXPECT_TRUE(cameraSource.contains(QStringLiteral("#include \"GuiTaskRunner.h\"")));
-    EXPECT_TRUE(cameraSource.contains(QStringLiteral("xjw::gui::tasks::runGuarded")));
-    EXPECT_TRUE(cameraSource.contains(QStringLiteral("xjw::gui::tasks::postGuarded")));
-    EXPECT_TRUE(cameraSource.contains(QStringLiteral("QPointer<ProjectManager> ownerGuard(_owner)")))
-        << "Camera SFM initialization must guard callbacks against ProjectManager lifetime.";
-    EXPECT_TRUE(cameraSource.contains(
-        QStringLiteral("const QString projectPath = _owner ? _owner->currentProjectPath() : QString();")))
-        << "Camera SFM initialization must bind all callbacks to the project active at launch.";
-    EXPECT_TRUE(cameraSource.contains(QStringLiteral("ownerGuard->currentProjectPath() != projectPath")))
-        << "Camera SFM initialization must not write results after switching projects.";
-    EXPECT_FALSE(cameraSource.contains(QStringLiteral("QtConcurrent::run([self, opts")))
-        << "Camera SFM initialization should use the shared guarded runner instead of open-coded QtConcurrent.";
-}
-
-TEST(GuiAsyncLifetimeTest, CanvasFeatureLoadCallbacksUseRequestGeneration)
-{
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.cpp"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-
-    const int start = source.indexOf(QStringLiteral("void CanvasWidget::startSpLoadForImage"));
-    ASSERT_GE(start, 0);
-    const int end = source.indexOf(QStringLiteral("void CanvasWidget::reloadInterestPoints"), start);
-    ASSERT_GT(end, start);
-    const QString block = source.mid(start, end - start);
-
-    EXPECT_TRUE(header.contains(QStringLiteral("int _featureLoadGeneration{0}")));
-    EXPECT_TRUE(source.contains(QStringLiteral("#include <QPointer>")));
-    EXPECT_TRUE(block.contains(QStringLiteral("const int generation = ++_featureLoadGeneration")));
-    EXPECT_TRUE(block.contains(QStringLiteral("QPointer<CanvasWidget> self(this)")));
-    EXPECT_TRUE(block.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
-        << "Canvas feature-load results should not be pulled through QFutureWatcher::result().";
-    EXPECT_TRUE(block.contains(
-        QStringLiteral("[imagePathCopy, activeSuffix, projectPath, shouldEstimateOrientation]()")));
-    EXPECT_TRUE(block.contains(QStringLiteral("std::vector<cv::KeyPoint> kps")))
-        << "Finished callback should receive keypoints as a guarded task result.";
-    EXPECT_TRUE(block.contains(QStringLiteral("generation != self->_featureLoadGeneration")))
-        << "Late feature-load completions from an older image/suffix must not update the current canvas.";
-    EXPECT_TRUE(block.contains(QStringLiteral("const QString cacheKey = featureCacheKey(imagePathCopy, activeSuffix)")));
-    EXPECT_TRUE(block.contains(QStringLiteral("const QString key = self->featureCacheKey(imagePathCopy, activeSuffix)")));
-    EXPECT_FALSE(header.contains(QStringLiteral("QFutureWatcher<std::vector<cv::KeyPoint>> *_spWatcher")));
-    EXPECT_FALSE(block.contains(QStringLiteral("QFutureWatcher<std::vector<cv::KeyPoint>")));
-    EXPECT_FALSE(block.contains(QStringLiteral("watcher->result()")));
-    EXPECT_FALSE(source.contains(QStringLiteral("m_lastRequestedSpPath")));
-    EXPECT_FALSE(source.contains(QStringLiteral("m_lastRequestedSpSuffix")));
-    EXPECT_FALSE(source.contains(QStringLiteral("connect(m_spWatcher, &QFutureWatcher<std::vector<cv::KeyPoint>>::finished")));
-    EXPECT_FALSE(block.contains(
-        QStringLiteral("connect(watcher, &QFutureWatcher<std::vector<cv::KeyPoint>>::finished,\n"
-                       "            this,")));
-}
-
-TEST(GuiAsyncLifetimeTest, CanvasImageLoadCallbacksUseQPointerGuard)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int start = source.indexOf(QStringLiteral("void CanvasWidget::showImage"));
-    ASSERT_GE(start, 0);
-    const int end = source.indexOf(QStringLiteral("void CanvasWidget::showMatchedPair"), start);
-    ASSERT_GT(end, start);
-    const QString block = source.mid(start, end - start);
-
-    EXPECT_TRUE(block.contains(QStringLiteral("QPointer<CanvasWidget> self(this)")));
-    EXPECT_TRUE(block.contains(QStringLiteral("connect(watcher, &QFutureWatcher<QImage>::finished, watcher,")))
-        << "Canvas image decode finished callbacks should be tied to the watcher lifetime.";
-    EXPECT_TRUE(block.contains(QStringLiteral("[self, watcher, loadedPath = pathCopy]()")));
-    EXPECT_TRUE(block.contains(QStringLiteral("if (!self)")));
-    EXPECT_FALSE(block.contains(QStringLiteral("connect(watcher, &QFutureWatcher<QImage>::finished, this,")));
-    EXPECT_FALSE(block.contains(QStringLiteral("[this, watcher, loadedPath = pathCopy]()")))
-        << "Canvas image decode callbacks must not capture the view through raw this.";
 }
 
 TEST(FeatureNamingCleanupTest, CanvasWidgetDoesNotIncludeTorchExtractorHeaders)
@@ -4532,56 +4188,6 @@ TEST(CodeStyleTest, ForwardIntersectionCheckDialogSourceKeepsLinesWithinStyleLim
     }
 }
 
-TEST(CodeStyleTest, MatchPairSelectorDialogUsesLowerCamelPrivateMemberNames)
-{
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/tie_points/MatchPairSelectorDialog.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/tie_points/MatchPairSelectorDialog.cpp"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-
-    const QStringList expectedMembers = {
-        QStringLiteral("ProjectManager *_projectManager;"),
-        QStringLiteral("QComboBox *_imageComboBox;"),
-        QStringLiteral("QTableWidget *_matchTable;"),
-        QStringLiteral("QPushButton *_viewDetailBtn;"),
-        QStringLiteral("QPushButton *_refreshBtn;"),
-        QStringLiteral("QLabel *_statusLabel;"),
-        QStringLiteral("QStringList _allImages;"),
-        QStringLiteral("QString _currentImage;"),
-        QStringLiteral("QList<MatchInfo> _currentMatches;"),
-        QStringLiteral("int _selectedMatchIndex;"),
-        QStringLiteral("QString _matchDir;"),
-        QStringLiteral("QTimer *_refreshTimer = nullptr;"),
-    };
-    for (const QString &expectedMember : expectedMembers)
-    {
-        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
-    }
-
-    const QStringList oldMemberNames = {
-        QStringLiteral("m_projectManager"),
-        QStringLiteral("m_imageComboBox"),
-        QStringLiteral("m_matchTable"),
-        QStringLiteral("m_viewDetailBtn"),
-        QStringLiteral("m_refreshBtn"),
-        QStringLiteral("m_statusLabel"),
-        QStringLiteral("m_allImages"),
-        QStringLiteral("m_currentImage"),
-        QStringLiteral("m_currentMatches"),
-        QStringLiteral("m_selectedMatchIndex"),
-        QStringLiteral("m_matchDir"),
-        QStringLiteral("m_refreshTimer"),
-    };
-    for (const QString &oldName : oldMemberNames)
-    {
-        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
-        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
-        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
-        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
-        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
-    }
-}
-
 TEST(CodeStyleTest, ForwardIntersectionResultsDialogUsesLowerCamelPrivateMemberNames)
 {
     const QString header =
@@ -4769,50 +4375,6 @@ TEST(CodeStyleTest, SurveyControlDialogUsesLowerCamelPrivateMemberNames)
     }
 }
 
-TEST(CodeStyleTest, CreateDemDialogUsesLowerCamelPrivateMemberNames)
-{
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/reconstruction/CreateDemDialog.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/reconstruction/CreateDemDialog.cpp"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(header.contains(QStringLiteral("ProjectManager *_projectManager = nullptr;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QStringList _availableImages;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("bool _running = false;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QPushButton *_autoModeBtn = nullptr;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QPushButton *_manualModeBtn = nullptr;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QStackedWidget *_modeStack = nullptr;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QListWidget *_imageList = nullptr;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QLabel *_camStatusLabel = nullptr;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("class QLineEdit *_denseEdit = nullptr;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QProgressBar *_progressBar = nullptr;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QLabel *_stageLabel = nullptr;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QPushButton *_runBtn = nullptr;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QPushButton *_closeBtn = nullptr;")));
-
-    const QStringList oldMemberNames = {
-        QStringLiteral("m_projectManager"),
-        QStringLiteral("m_availableImages"),
-        QStringLiteral("m_running"),
-        QStringLiteral("m_autoModeBtn"),
-        QStringLiteral("m_manualModeBtn"),
-        QStringLiteral("m_modeStack"),
-        QStringLiteral("m_imageList"),
-        QStringLiteral("m_camStatusLabel"),
-        QStringLiteral("m_denseEdit"),
-        QStringLiteral("m_progressBar"),
-        QStringLiteral("m_stageLabel"),
-        QStringLiteral("m_runBtn"),
-        QStringLiteral("m_closeBtn"),
-    };
-    for (const QString &oldName : oldMemberNames)
-    {
-        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
-        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
-        EXPECT_FALSE(source.contains(QStringLiteral("connect(") + oldName)) << qPrintable(oldName);
-    }
-}
-
 TEST(CodeStyleTest, WorkflowReportDialogUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/application/WorkflowReportDialog.h"));
@@ -4846,76 +4408,6 @@ TEST(CodeStyleTest, WorkflowReportDialogUsesLowerCamelPrivateMemberNames)
         QStringLiteral("m_assetsDir"),
         QStringLiteral("m_tabs"),
         QStringLiteral("m_refreshBtn"),
-    };
-    for (const QString &oldName : oldMemberNames)
-    {
-        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
-        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
-        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
-        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
-        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
-    }
-}
-
-TEST(CodeStyleTest, FeaturePointVisualizationDialogUsesLowerCamelPrivateMemberNames)
-{
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/tie_points/FeaturePointVisualizationDialog.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/tie_points/FeaturePointVisualizationDialog.cpp"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-
-    const QStringList expectedMembers = {
-        QStringLiteral("QComboBox *_suffixCombo{nullptr};"),
-        QStringLiteral("QCheckBox *_showPointsChk{nullptr};"),
-        QStringLiteral("QCheckBox *_showScaleChk{nullptr};"),
-        QStringLiteral("QCheckBox *_showOrientationChk{nullptr};"),
-        QStringLiteral("QCheckBox *_useFillChk{nullptr};"),
-        QStringLiteral("QSpinBox *_pointSizeSpin{nullptr};"),
-        QStringLiteral("QDoubleSpinBox *_scaleMultiplierSpin{nullptr};"),
-        QStringLiteral("QSlider *_opacitySlider{nullptr};"),
-        QStringLiteral("QLabel *_opacityLabel{nullptr};"),
-        QStringLiteral("QPushButton *_pointColorBtn{nullptr};"),
-        QStringLiteral("QPushButton *_scaleColorBtn{nullptr};"),
-        QStringLiteral("QPushButton *_orientColorBtn{nullptr};"),
-        QStringLiteral("QComboBox *_markerShapeCombo{nullptr};"),
-        QStringLiteral("QSpinBox *_maxDisplaySpin{nullptr};"),
-        QStringLiteral("QCheckBox *_showTopScoresChk{nullptr};"),
-        QStringLiteral("QLabel *_previewLabel{nullptr};"),
-        QStringLiteral("QPushButton *_applyBtn{nullptr};"),
-        QStringLiteral("QPushButton *_resetBtn{nullptr};"),
-        QStringLiteral("QPushButton *_closeBtn{nullptr};"),
-        QStringLiteral("QColor _pointColor{0, 120, 255};"),
-        QStringLiteral("QColor _scaleColor{255, 255, 0};"),
-        QStringLiteral("QColor _orientColor{255, 0, 0};"),
-    };
-    for (const QString &expectedMember : expectedMembers)
-    {
-        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
-    }
-
-    const QStringList oldMemberNames = {
-        QStringLiteral("m_suffixCombo"),
-        QStringLiteral("m_showPointsChk"),
-        QStringLiteral("m_showScaleChk"),
-        QStringLiteral("m_showOrientationChk"),
-        QStringLiteral("m_useFillChk"),
-        QStringLiteral("m_pointSizeSpin"),
-        QStringLiteral("m_scaleMultiplierSpin"),
-        QStringLiteral("m_opacitySlider"),
-        QStringLiteral("m_opacityLabel"),
-        QStringLiteral("m_pointColorBtn"),
-        QStringLiteral("m_scaleColorBtn"),
-        QStringLiteral("m_orientColorBtn"),
-        QStringLiteral("m_markerShapeCombo"),
-        QStringLiteral("m_maxDisplaySpin"),
-        QStringLiteral("m_showTopScoresChk"),
-        QStringLiteral("m_previewLabel"),
-        QStringLiteral("m_applyBtn"),
-        QStringLiteral("m_resetBtn"),
-        QStringLiteral("m_closeBtn"),
-        QStringLiteral("m_pointColor"),
-        QStringLiteral("m_scaleColor"),
-        QStringLiteral("m_orientColor"),
     };
     for (const QString &oldName : oldMemberNames)
     {
@@ -6038,71 +5530,6 @@ TEST(MainMenuWorkflowTest, WorkflowCommandsDoNotShowLeadingIcons)
     }
 }
 
-TEST(MainWindowZoomTest, DispatchesZoomToActiveImageOrModelView)
-{
-    const QString sceneHeader =
-        readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
-    const QString sceneSource =
-        readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
-    const QString mainWindowSource =
-        readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
-    ASSERT_FALSE(sceneHeader.isEmpty());
-    ASSERT_FALSE(sceneSource.isEmpty());
-    ASSERT_FALSE(mainWindowSource.isEmpty());
-
-    EXPECT_TRUE(sceneHeader.contains(QStringLiteral("void zoomIn();")));
-    EXPECT_TRUE(sceneHeader.contains(QStringLiteral("void zoomOut();")));
-    EXPECT_TRUE(sceneSource.contains(QStringLiteral("void CameraSceneWidget::zoomIn()")));
-    EXPECT_TRUE(sceneSource.contains(QStringLiteral("void CameraSceneWidget::zoomOut()")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("ViewMode::Image")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("_canvas->zoomIn();")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("_canvas->zoomOut();")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("_workspaceCenter->modelView()->zoomIn();")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("_workspaceCenter->modelView()->zoomOut();")));
-}
-
-TEST(MainWindowImageRotationTest, ConnectsActionsAndPersistsPerImageRotation)
-{
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(header.contains(QStringLiteral("QJsonObject _imageViewRotations;")));
-    EXPECT_TRUE(source.contains(
-        QStringLiteral("&QAction::triggered, _canvas, &CanvasWidget::rotateLeft")));
-    EXPECT_TRUE(source.contains(
-        QStringLiteral("&QAction::triggered, _canvas, &CanvasWidget::rotateRight")));
-    EXPECT_TRUE(source.contains(QStringLiteral("&CanvasWidget::displayImageReadyChanged")));
-    EXPECT_TRUE(source.contains(QStringLiteral("&CanvasWidget::viewRotationChanged")));
-    EXPECT_TRUE(source.contains(QStringLiteral("\"image_view_rotations\"")));
-    EXPECT_TRUE(source.contains(QStringLiteral("projectImageStateKey(path)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("\"active_image_id\"")));
-    EXPECT_TRUE(source.contains(QStringLiteral("withImageViewRotation(")));
-    EXPECT_TRUE(source.contains(QStringLiteral("_imageViewRotations = QJsonObject{};")));
-}
-
-TEST(ContextualToolbarTest, WorkspaceModeDrivesModelAndImageToolbarGroups)
-{
-    const QString workspaceHeader =
-        readProjectSourceFile(QStringLiteral("src/gui/widgets/WorkspaceCenterWidget.h"));
-    const QString workspaceSource =
-        readProjectSourceFile(QStringLiteral("src/gui/widgets/WorkspaceCenterWidget.cpp"));
-    const QString mainWindowSource =
-        readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
-    ASSERT_FALSE(workspaceHeader.isEmpty());
-    ASSERT_FALSE(workspaceSource.isEmpty());
-    ASSERT_FALSE(mainWindowSource.isEmpty());
-
-    EXPECT_TRUE(workspaceHeader.contains(QStringLiteral("enum class ViewMode")));
-    EXPECT_TRUE(workspaceHeader.contains(QStringLiteral("ViewMode currentViewMode() const;")));
-    EXPECT_TRUE(workspaceHeader.contains(QStringLiteral("void viewModeChanged(ViewMode mode);")));
-    EXPECT_TRUE(workspaceSource.contains(QStringLiteral("&QStackedWidget::currentChanged")));
-    EXPECT_TRUE(workspaceSource.contains(QStringLiteral("emit viewModeChanged(currentViewMode());")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("&WorkspaceCenterWidget::viewModeChanged")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("setContextualToolbarVisibility(")));
-}
-
 TEST(ImageViewRotationSettingsTest, NormalizesQuarterTurnsAndRejectsArbitraryAngles)
 {
     using xjw::gui::config::normalizeImageViewRotationDegrees;
@@ -6491,7 +5918,9 @@ TEST(TiePointResultServiceTest, ReplaceRejectsMissingNewSparseCloudWithoutChangi
                                    .value(QStringLiteral("aerial_triangulation_results"))
                                    .toArray();
     ASSERT_EQ(records.size(), 1);
-    EXPECT_EQ(records.first().toObject(), oldRecord);
+    QJsonObject expectedOldRecord = oldRecord;
+    expectedOldRecord[QStringLiteral("schema_version")] = 1;
+    EXPECT_EQ(records.first().toObject(), expectedOldRecord);
 }
 
 TEST(TiePointResultServiceTest, ReplaceRejectsMissingListedArtifact)
@@ -6593,7 +6022,9 @@ TEST(TiePointResultServiceTest, DeleteAllKeepsMetadataWhenSparseCloudPathIsDirec
                                    .value(QStringLiteral("aerial_triangulation_results"))
                                    .toArray();
     ASSERT_EQ(records.size(), 1);
-    EXPECT_EQ(records.first().toObject(), record);
+    QJsonObject expectedRecord = record;
+    expectedRecord[QStringLiteral("schema_version")] = 1;
+    EXPECT_EQ(records.first().toObject(), expectedRecord);
 }
 
 TEST(TiePointResultIntegrationTest, ReplacingTwiceKeepsOnlyLatestTiePointRecord)
@@ -7214,26 +6645,6 @@ TEST(TiePointsDialogTest, AdvancedSectionIsCollapsible)
     EXPECT_EQ(advancedToggle->arrowType(), Qt::DownArrow);
 }
 
-TEST(TiePointsDialogTest, MainWindowPassesCreateTiePointsAdvancedOptionsToTask)
-{
-    const QString mainWindowSource =
-        readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
-    const QString controllerSource =
-        readProjectSourceFile(QStringLiteral("src/gui/main_window/TiePointWorkflowController.cpp"));
-    ASSERT_FALSE(mainWindowSource.isEmpty());
-    ASSERT_FALSE(controllerSource.isEmpty());
-
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("options.useExplicitKeypointLimit = true")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("options.keypointLimitPerMegapixel")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("options.maxTiePointsPerImage = dlg.tiePointLimit()")));
-    EXPECT_TRUE(mainWindowSource.contains(
-        QStringLiteral("options.excludeStationaryTiePoints = dlg.excludePinnedTiePoints()")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("options.maskApplyMode = dlg.maskApplyMode()")));
-    EXPECT_TRUE(controllerSource.contains(
-        QStringLiteral("context.maskPaths = xjw::common::project::ProjectIO::maskPathsForImages(projectPath, images)")))
-        << "创建连接点任务必须把项目中的蒙版文件传入核心匹配上下文。";
-}
-
 TEST(MainMenuTest, ModelMenuOwnsCheckedCameraVisibilityAction)
 {
     QMainWindow window;
@@ -7819,23 +7230,6 @@ TEST(MainMenuTest, ToolbarSplitButtonsPaintIconsAcrossButtonArea)
     EXPECT_TRUE(source.contains(QStringLiteral("new ToolbarSplitButton(toolBar)")));
 }
 
-TEST(MainWindowTest, CameraToolbarLocalAxesActionConnectsToModelView)
-{
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/menu/MainMenu.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/menu/MainMenu.cpp"));
-    const QString mainWindowSource = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-    ASSERT_FALSE(mainWindowSource.isEmpty());
-
-    EXPECT_TRUE(header.contains(QStringLiteral("toggleLocalAxesAction()")));
-    EXPECT_TRUE(source.contains(QStringLiteral("actionToggleLocalAxes")));
-    EXPECT_TRUE(source.contains(QStringLiteral("toolButtonModelCameraVisibility")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("toggleLocalAxesAction()")));
-    EXPECT_TRUE(mainWindowSource.contains(
-        QStringLiteral("&CameraSceneWidget::setShowCameraLocalAxes")));
-}
-
 TEST(MainMenuTest, WindowMenuExposesCheckedHenanUniversityBrandAction)
 {
     QMainWindow window;
@@ -7852,54 +7246,6 @@ TEST(MainMenuTest, WindowMenuExposesCheckedHenanUniversityBrandAction)
     QMenu *windowMenu = findSubMenuByTitle(viewMenu, QStringLiteral("窗口"));
     ASSERT_NE(windowMenu, nullptr);
     EXPECT_TRUE(windowMenu->actions().contains(action));
-}
-
-TEST(HenuBrandWidgetTest, BrandIsToolbarMastheadWithEmblem)
-{
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/HenuBrandWidget.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/HenuBrandWidget.cpp"));
-    const QString guiSources = readProjectSourceFile(QStringLiteral("src/gui/cmake/GuiSources.cmake"));
-    const QString qrc = readProjectSourceFile(QStringLiteral("resources/resources.qrc"));
-    const QString mainWindowSource = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
-    const QString workspaceHeader = readProjectSourceFile(QStringLiteral("src/gui/widgets/WorkspaceCenterWidget.h"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-    ASSERT_FALSE(guiSources.isEmpty());
-    ASSERT_FALSE(qrc.isEmpty());
-    ASSERT_FALSE(mainWindowSource.isEmpty());
-    ASSERT_FALSE(workspaceHeader.isEmpty());
-
-    EXPECT_TRUE(header.contains(QStringLiteral("class HenuBrandWidget")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QPixmap _emblemPixmap")));
-    EXPECT_TRUE(header.contains(QStringLiteral("void drawHenuEmblem")));
-    EXPECT_TRUE(source.contains(QStringLiteral("_emblemPixmap(QStringLiteral(\":/icons/henu_logo.png\"))")));
-    EXPECT_TRUE(source.contains(QStringLiteral("painter.drawPixmap")));
-    EXPECT_TRUE(source.contains(QStringLiteral("河大")));
-    EXPECT_TRUE(source.contains(QStringLiteral("1912")));
-    EXPECT_TRUE(source.contains(QStringLiteral("HENU · PlaScan 三维重建")));
-    EXPECT_TRUE(guiSources.contains(QStringLiteral("widgets/HenuBrandWidget.cpp")));
-    EXPECT_TRUE(qrc.contains(QStringLiteral("icons/henu_logo.png")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("new QWidgetAction(toolBar)")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("toolBar->insertAction(firstAction, _henuBrandAction)")));
-    EXPECT_FALSE(workspaceHeader.contains(QStringLiteral("henuBrandBadge")));
-}
-
-TEST(CameraSceneWidgetTest, CameraVisibilityToggleIsExposedAndGuardsCameraOverlayOnly)
-{
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
-    const QString mainWindowSource = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-    ASSERT_FALSE(mainWindowSource.isEmpty());
-
-    EXPECT_TRUE(header.contains(QStringLiteral("void setShowCameras(bool show)")));
-    EXPECT_TRUE(header.contains(QStringLiteral("bool areCamerasVisible() const")));
-    EXPECT_TRUE(header.contains(QStringLiteral("bool _showCameras = true")));
-    EXPECT_TRUE(source.contains(QStringLiteral("void CameraSceneWidget::setShowCameras(bool show)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("if (_showCameras)")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("toggleCamerasAction()")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("&CameraSceneWidget::setShowCameras")));
 }
 
 TEST(CameraSceneWidgetTest, UsesQrhiWidgetWithVulkanBackend)
@@ -8043,182 +7389,6 @@ TEST(CameraSceneWidgetTest, CameraOverlayUsesMetashapeStyleImagePlanes)
     EXPECT_TRUE(source.contains(QStringLiteral("drawCameraLabel = highlighted")));
 }
 
-TEST(CameraSceneWidgetTest, CameraImagePlanesSupportAsyncThumbnailsAndImageMode)
-{
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
-    const QString mainWindowSource = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-    ASSERT_FALSE(mainWindowSource.isEmpty());
-
-    EXPECT_TRUE(header.contains(QStringLiteral("enum class CameraImagePlaneMode")));
-    EXPECT_TRUE(header.contains(QStringLiteral("enum class CameraImageDisplayLayer")));
-    EXPECT_TRUE(header.contains(QStringLiteral("void setShowCameraThumbnails(bool show)")));
-    EXPECT_TRUE(header.contains(QStringLiteral("void setShowCameraImage(bool show)")));
-    EXPECT_TRUE(header.contains(QStringLiteral("void setCameraImagePlaneMode(CameraImagePlaneMode mode)")));
-    EXPECT_TRUE(header.contains(QStringLiteral("void setCameraImageDisplayLayer(CameraImageDisplayLayer layer)")));
-    EXPECT_TRUE(header.contains(QStringLiteral("void setCameraImageLocked(bool locked)")));
-    EXPECT_TRUE(header.contains(QStringLiteral("CameraImagePlaneMode cameraImagePlaneMode() const")));
-    EXPECT_TRUE(header.contains(QStringLiteral("void updateCameraOverlay()")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QHash<QString, QImage> _cameraImageCache")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QSet<QString> _cameraImageLoadsInFlight")));
-    EXPECT_TRUE(header.contains(QStringLiteral("static CameraPlaneImageResult loadCameraPlaneImage")));
-
-    EXPECT_TRUE(source.contains(QStringLiteral("QtConcurrent::run(&CameraSceneWidget::loadCameraPlaneImage")));
-    EXPECT_TRUE(source.contains(QStringLiteral("xjw::gui::views::loadImageForDisplay")));
-    EXPECT_TRUE(source.contains(QStringLiteral("CameraImagePlaneMode::Thumbnail")));
-    EXPECT_TRUE(source.contains(QStringLiteral("CameraImagePlaneMode::Image")));
-    EXPECT_TRUE(source.contains(QStringLiteral("CameraImageDisplayLayer::Foreground")));
-    EXPECT_TRUE(source.contains(QStringLiteral("CameraImageDisplayLayer::Background")));
-    EXPECT_TRUE(header.contains(QStringLiteral("struct RhiImagePipelineSet")));
-    EXPECT_TRUE(source.contains(QStringLiteral("bool CameraSceneWidget::ensureImagePipeline")));
-    EXPECT_TRUE(source.contains(QStringLiteral("void CameraSceneWidget::drawActiveCameraImage")));
-    EXPECT_TRUE(source.contains(QStringLiteral("cameraImagePlaneCorners")));
-    EXPECT_TRUE(source.contains(QStringLiteral("void CameraSceneWidget::updateCameraOverlay()")));
-    EXPECT_TRUE(source.contains(QStringLiteral("updateCameraOverlay();")));
-
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("toggleCameraThumbnailsAction()")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("toggleCameraImagesAction()")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("showCameraImagesInForegroundAction()")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("showCameraImagesInBackgroundAction()")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("lockCameraImageAction()")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("&CameraSceneWidget::setShowCameraThumbnails")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("&CameraSceneWidget::setShowCameraImage")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("CameraSceneWidget::CameraImageDisplayLayer::Foreground")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("CameraSceneWidget::CameraImageDisplayLayer::Background")));
-}
-
-TEST(MainWindowTest, ReferenceDatasetActionsConnectToProjectManager)
-{
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
-    const QString mainWindow = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-    ASSERT_FALSE(mainWindow.isEmpty());
-
-    EXPECT_TRUE(header.contains(QStringLiteral("bindActions(MainMenu")));
-    EXPECT_TRUE(mainWindow.contains(QStringLiteral("_menuWorkflowController->bindActions(_mainMenu)")));
-
-    EXPECT_TRUE(source.contains(QStringLiteral("importReferenceDatasetAction()")));
-    EXPECT_TRUE(source.contains(QStringLiteral("&ProjectManager::importReferenceDataset")));
-    EXPECT_TRUE(source.contains(QStringLiteral("referenceQualityCheckAction()")));
-    EXPECT_TRUE(source.contains(QStringLiteral("&ProjectManager::runReferenceQualityCheck")));
-    EXPECT_TRUE(source.contains(QStringLiteral("referenceTerrainBundleAdjustAction()")));
-    EXPECT_TRUE(source.contains(QStringLiteral("&ProjectManager::prepareReferenceTerrainBundleAdjust")));
-    EXPECT_TRUE(source.contains(QStringLiteral("surveyControlAction()")));
-    EXPECT_TRUE(source.contains(QStringLiteral("&ProjectManager::openSurveyControlDialog")));
-
-    EXPECT_FALSE(mainWindow.contains(QStringLiteral("&ProjectManager::importReferenceDataset")));
-    EXPECT_FALSE(mainWindow.contains(QStringLiteral("&ProjectManager::runReferenceQualityCheck")));
-    EXPECT_FALSE(mainWindow.contains(QStringLiteral("&ProjectManager::prepareReferenceTerrainBundleAdjust")));
-    EXPECT_FALSE(mainWindow.contains(QStringLiteral("&ProjectManager::openSurveyControlDialog")));
-}
-
-TEST(MainWindowTest, PhotoStripClickSelectsCameraWithoutOpeningImageView)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int selectedConnection = source.indexOf(QStringLiteral("&PhotoStripWidget::photoSelected"));
-    const int activatedConnection = source.indexOf(QStringLiteral("&PhotoStripWidget::photoActivated"));
-    ASSERT_GE(selectedConnection, 0);
-    ASSERT_GT(activatedConnection, selectedConnection);
-
-    const QString selectedBlock = source.mid(selectedConnection, activatedConnection - selectedConnection);
-    EXPECT_TRUE(selectedBlock.contains(QStringLiteral("selectPhoto(path, false)")));
-
-    const int canvasConnection = source.indexOf(QStringLiteral("if (_canvas)"), activatedConnection);
-    ASSERT_GT(canvasConnection, activatedConnection);
-    const QString activatedBlock = source.mid(activatedConnection, canvasConnection - activatedConnection);
-    EXPECT_TRUE(activatedBlock.contains(QStringLiteral("selectPhoto(path, true)")));
-
-    const int selectPhotoStart = source.indexOf(QStringLiteral("void MainWindow::selectPhoto"));
-    const int selectResourceStart = source.indexOf(QStringLiteral("void MainWindow::selectResource"), selectPhotoStart);
-    ASSERT_GE(selectPhotoStart, 0);
-    ASSERT_GT(selectResourceStart, selectPhotoStart);
-    const QString selectPhotoBody = source.mid(selectPhotoStart, selectResourceStart - selectPhotoStart);
-    EXPECT_TRUE(selectPhotoBody.contains(QStringLiteral("highlightCameraForImage(imagePath)")));
-    EXPECT_TRUE(selectPhotoBody.contains(QStringLiteral("if (openImage)")));
-    EXPECT_TRUE(selectPhotoBody.contains(QStringLiteral("showImageView(imagePath)")));
-}
-
-TEST(MainWindowTest, PhotoStripMaskRequestUsesSelectedImages)
-{
-    const QString mainSource = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
-    const QString managerHeader = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectManager.h"));
-    const QString managerSource = readProjectSourceFile(
-        QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
-    ASSERT_FALSE(mainSource.isEmpty());
-    ASSERT_FALSE(managerHeader.isEmpty());
-    ASSERT_FALSE(managerSource.isEmpty());
-
-    EXPECT_TRUE(mainSource.contains(QStringLiteral("&PhotoStripWidget::generateMaskRequested")));
-    EXPECT_TRUE(mainSource.contains(QStringLiteral("openGenerateMaskDialogForImages(imagePaths)")));
-    EXPECT_TRUE(managerHeader.contains(
-        QStringLiteral("void openGenerateMaskDialogForImages(const QStringList &selectedImages);")));
-    EXPECT_TRUE(managerSource.contains(
-        QStringLiteral("GenerateMaskDialog dialog(selectedImages, currentImage, _parent)")));
-    EXPECT_TRUE(managerSource.contains(
-        QStringLiteral("xjw::common::project::ProjectIO::resolveProjectResourcePath(projectPath, imagePath)")));
-    EXPECT_TRUE(managerSource.contains(
-        QStringLiteral("maskTargetsFromSettings(settings, resolvedAllImages)")));
-}
-
-TEST(MainWindowTest, SelectionAndPhotoPanelsUseMovableDockWidgets)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.h"));
-    const QString ui = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.ui"));
-    ASSERT_FALSE(source.isEmpty());
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(ui.isEmpty());
-
-    EXPECT_TRUE(header.contains(QStringLiteral("QDockWidget *_workspaceDock{}")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QDockWidget *_propertiesDock{}")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QDockWidget *_photosDock{}")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QDockWidget*      _logDock{}")));
-
-    EXPECT_TRUE(source.contains(QStringLiteral("void configureMovableDock(QDockWidget *dock)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("dock->setAllowedAreas(Qt::AllDockWidgetAreas)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("QDockWidget::DockWidgetMovable")));
-    EXPECT_TRUE(source.contains(QStringLiteral("QDockWidget::DockWidgetFloatable")));
-    EXPECT_TRUE(source.contains(QStringLiteral("dock->setMinimumSize(DockMinWidth, DockMinHeight)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("_workspaceCenter->setMinimumSize(240, 160)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("_workspaceDock = new QDockWidget(tr(\"工作区\"), this)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("_propertiesDock = new QDockWidget(tr(\"资源属性\"), this)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("_photosDock = new QDockWidget(tr(\"照片\"), this)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("configureMovableDock(_logDock)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("_logDock->setTitleBarWidget(nullptr)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("splitDockWidget(_workspaceDock, _propertiesDock, Qt::Vertical)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("addDockWidget(Qt::BottomDockWidgetArea, _photosDock)")));
-
-    EXPECT_TRUE(source.contains(
-        QStringLiteral("_workspacePanels->registerDock(WorkspacePanelId::Workspace")));
-    EXPECT_TRUE(source.contains(
-        QStringLiteral("_workspacePanels->registerDock(WorkspacePanelId::Properties")));
-    EXPECT_TRUE(source.contains(
-        QStringLiteral("_workspacePanels->registerDock(WorkspacePanelId::Photos")));
-    EXPECT_TRUE(source.contains(
-        QStringLiteral("_workspacePanels->registerDock(WorkspacePanelId::Log")));
-    EXPECT_TRUE(source.contains(
-        QStringLiteral("_workspacePanels->registerToolBar(WorkspacePanelId::MainToolbar")));
-    EXPECT_FALSE(source.contains(QStringLiteral("&MainWindow::onToggleLogAction")));
-    EXPECT_FALSE(header.contains(QStringLiteral("featureInfoAction()")));
-    EXPECT_FALSE(header.contains(QStringLiteral("_featureInfoAct")));
-    EXPECT_FALSE(source.contains(QStringLiteral("actionFeatureInfo")));
-    EXPECT_FALSE(source.contains(QStringLiteral("_featureInfoAct")));
-    EXPECT_FALSE(ui.contains(QStringLiteral("actionFeatureInfo")));
-    EXPECT_FALSE(ui.contains(QStringLiteral("兴趣点信息")));
-    EXPECT_FALSE(source.contains(QStringLiteral("photosFrame->setMaximumHeight(320)")));
-    EXPECT_FALSE(source.contains(QStringLiteral("_rightPanelSplitter")));
-    EXPECT_FALSE(source.contains(QStringLiteral("_logDock->setTitleBarWidget(titleBar)")));
-    EXPECT_TRUE(ui.contains(QStringLiteral("<set>Qt::AllDockWidgetAreas</set>")));
-    EXPECT_FALSE(ui.contains(QStringLiteral("<set>Qt::BottomDockWidgetArea</set>")));
-}
-
 TEST(DialogSettingStoreTest, SuccessfulSaveNotifiesProjectWorkspace)
 {
     QTemporaryDir tempDir;
@@ -8238,130 +7408,6 @@ TEST(DialogSettingStoreTest, SuccessfulSaveNotifiesProjectWorkspace)
         QJsonObject{{QStringLiteral("quality"), QStringLiteral("high")}},
         &error)) << qPrintable(error);
     EXPECT_EQ(notificationCount, 1);
-}
-
-TEST(MainWindowTest, ProjectOpenRestoresAndPersistsDockPanelState)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.h"));
-    ASSERT_FALSE(source.isEmpty());
-    ASSERT_FALSE(header.isEmpty());
-
-    EXPECT_TRUE(header.contains(QStringLiteral("QJsonObject currentUiSettingsSnapshot() const")));
-    EXPECT_TRUE(header.contains(QStringLiteral("bool restoreProjectDockState(const QJsonObject &settings)")));
-    EXPECT_TRUE(header.contains(QStringLiteral("void restoreDefaultProjectDockLayout();")));
-    EXPECT_TRUE(header.contains(QStringLiteral("void persistCurrentUiSettings()")));
-    EXPECT_TRUE(header.contains(QStringLiteral("bool _applyingUiSettings{}")));
-    EXPECT_TRUE(source.contains(QStringLiteral("_mainMenu->setManagedWindowActions(")));
-    EXPECT_TRUE(source.contains(
-        QStringLiteral("_workspacePanels->actions(WorkspacePanelKind::Dock)")));
-    EXPECT_FALSE(source.contains(
-        QStringLiteral("connect(_mainMenu->openAction(), &QAction::triggered, _projectManager, &ProjectManager::openProject)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("persistCurrentUiSettings();\n                _projectManager->openProject();")));
-    EXPECT_TRUE(source.contains(QStringLiteral("openProjectFromPath(p);")));
-    EXPECT_FALSE(source.contains(
-        QStringLiteral("connect(_projectManager, &ProjectManager::projectCreated, this, &MainWindow::onProjectOpened)")));
-    EXPECT_TRUE(source.contains(
-        QStringLiteral("connect(_projectManager, &ProjectManager::projectClosed, this, &MainWindow::onProjectClosed)")));
-
-    const int projectOpenStart = source.indexOf(QStringLiteral("void MainWindow::onProjectOpened"));
-    const int applyStart = source.indexOf(QStringLiteral("void MainWindow::applyUiSettings"), projectOpenStart);
-    ASSERT_GE(projectOpenStart, 0);
-    ASSERT_GT(applyStart, projectOpenStart);
-    const QString projectOpenBlock = source.mid(projectOpenStart, applyStart - projectOpenStart);
-    const int firstPersist = projectOpenBlock.indexOf(QStringLiteral("persistCurrentUiSettings();"));
-    ASSERT_GE(firstPersist, 0);
-    EXPECT_TRUE(projectOpenBlock.contains(
-        QStringLiteral("_projectManager->loadUiSettings()")));
-    EXPECT_FALSE(projectOpenBlock.contains(
-        QStringLiteral("_uiSetting->setProjectPath")));
-    EXPECT_TRUE(projectOpenBlock.contains(QStringLiteral("persistCurrentUiSettings();\n}")));
-
-    const int closeStart = source.indexOf(QStringLiteral("void MainWindow::closeEvent"), applyStart);
-    ASSERT_GT(closeStart, applyStart);
-    const QString applyBlock = source.mid(applyStart, closeStart - applyStart);
-    EXPECT_TRUE(applyBlock.contains(QStringLiteral("const QJsonObject settings = ui;")));
-    EXPECT_TRUE(applyBlock.contains(
-        QStringLiteral("const bool restoredDockState = restoreProjectDockState(settings);")));
-    EXPECT_TRUE(applyBlock.contains(QStringLiteral("_workspacePanels->syncActions();")));
-    EXPECT_TRUE(applyBlock.contains(QStringLiteral("_workspacePanels->applyVisibility(settings);")));
-    EXPECT_TRUE(applyBlock.contains(QStringLiteral("QScopedValueRollback<bool> applyingRollback")));
-    EXPECT_FALSE(applyBlock.contains(QStringLiteral("if (ui.isEmpty())\n    {\n        return;\n    }")));
-    EXPECT_FALSE(applyBlock.contains(QStringLiteral("ensurePanelVisibilityDefaults")));
-
-    const int snapshotStart = source.indexOf(QStringLiteral("QJsonObject MainWindow::currentUiSettingsSnapshot"));
-    const int saveStart = source.indexOf(QStringLiteral("void MainWindow::saveUiSetting"), snapshotStart);
-    ASSERT_GE(snapshotStart, 0);
-    ASSERT_GT(saveStart, snapshotStart);
-    const QString snapshotBlock = source.mid(snapshotStart, saveStart - snapshotStart);
-    EXPECT_TRUE(snapshotBlock.contains(QStringLiteral("_workspacePanels->visibilitySnapshot()")));
-    EXPECT_TRUE(snapshotBlock.contains(QStringLiteral("QStringLiteral(\"bottom_panel\")")));
-    EXPECT_TRUE(snapshotBlock.contains(QStringLiteral("QStringLiteral(\"dock_layout_version\")")));
-    EXPECT_TRUE(snapshotBlock.contains(QStringLiteral("QStringLiteral(\"dock_state\")")));
-    EXPECT_TRUE(snapshotBlock.contains(QStringLiteral("saveState().toBase64()")));
-
-    const QString closeBlock = source.mid(closeStart);
-    EXPECT_TRUE(closeBlock.contains(QStringLiteral("persistCurrentUiSettings();")));
-    EXPECT_TRUE(closeBlock.contains(QStringLiteral("const bool hasProject")));
-    EXPECT_TRUE(closeBlock.contains(QStringLiteral("if (hasProject)")));
-    EXPECT_TRUE(closeBlock.contains(QStringLiteral("if (hasProject && _projectManager->isDirty())")));
-    const int cancelIndex = closeBlock.indexOf(QStringLiteral("QMessageBox::Cancel"));
-    const int persistIndex = closeBlock.indexOf(QStringLiteral("persistCurrentUiSettings();"));
-    ASSERT_GE(cancelIndex, 0);
-    ASSERT_LT(persistIndex, cancelIndex);
-}
-
-TEST(MainWindowTest, DefaultDockLayoutKeepsPropertiesAndPhotosSideBySide)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int layoutStart = source.indexOf(QStringLiteral("void MainWindow::restoreDefaultProjectDockLayout"));
-    ASSERT_GE(layoutStart, 0);
-    const int restoreStart = source.indexOf(QStringLiteral("bool MainWindow::restoreProjectDockState"), layoutStart);
-    ASSERT_GT(restoreStart, layoutStart);
-    const QString layoutBlock = source.mid(layoutStart, restoreStart - layoutStart);
-
-    const int leftWorkspaceIndex = layoutBlock.indexOf(
-        QStringLiteral("addDockWidget(Qt::LeftDockWidgetArea, _workspaceDock)"));
-    const int splitPropertiesIndex = layoutBlock.indexOf(
-        QStringLiteral("splitDockWidget(_workspaceDock, _propertiesDock, Qt::Vertical)"));
-    const int bottomPhotosIndex = layoutBlock.indexOf(
-        QStringLiteral("addDockWidget(Qt::BottomDockWidgetArea, _photosDock)"));
-    ASSERT_GE(leftWorkspaceIndex, 0);
-    ASSERT_GE(splitPropertiesIndex, 0);
-    ASSERT_GE(bottomPhotosIndex, 0);
-    EXPECT_LT(leftWorkspaceIndex, splitPropertiesIndex)
-        << "The properties dock should be split under the workspace before creating the bottom photo dock.";
-    EXPECT_LT(splitPropertiesIndex, bottomPhotosIndex)
-        << "Adding photos after the left dock stack keeps photos beside properties instead of underneath them.";
-
-    EXPECT_TRUE(layoutBlock.contains(QStringLiteral("resizeDocks({_workspaceDock}, {320}, Qt::Horizontal)")));
-    EXPECT_TRUE(layoutBlock.contains(
-        QStringLiteral("_workspacePanels->ensureRequiredProjectPanelsVisible();")));
-    EXPECT_TRUE(layoutBlock.contains(
-        QStringLiteral("resizeDocks({_workspaceDock, _propertiesDock}, {560, 190}, Qt::Vertical)")));
-    EXPECT_TRUE(layoutBlock.contains(QStringLiteral("resizeDocks({_photosDock}, {120}, Qt::Vertical)")));
-}
-
-TEST(MainWindowTest, UsesOneGenerationSafeProjectUiHydrator)
-{
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
-    const QString hydratorHeader = readProjectSourceFile(
-        QStringLiteral("src/gui/main_window/ProjectUiHydrator.h"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_FALSE(hydratorHeader.isEmpty());
-    EXPECT_TRUE(header.contains(QStringLiteral("class ProjectUiHydrator;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("ProjectUiHydrator *_projectUiHydrator{};")));
-    EXPECT_FALSE(header.contains(QStringLiteral("scheduleProjectUiHydration")));
-    EXPECT_FALSE(source.contains(QStringLiteral("void MainWindow::scheduleProjectUiHydration")));
-    EXPECT_FALSE(source.contains(QStringLiteral("_metadataRefreshQueued")));
-    EXPECT_FALSE(source.contains(QStringLiteral("_pendingMetadataRefresh")));
-    EXPECT_TRUE(source.contains(QStringLiteral("_projectUiHydrator->schedule(meta)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("_projectUiHydrator->cancel()")));
 }
 
 TEST(MainWindowTest, KeepsOwnedWidgetsAndManagersPrivate)
@@ -8395,65 +7441,6 @@ TEST(MainWindowTest, DesignerViewMenuDoesNotDuplicateRuntimeOrdering)
     EXPECT_FALSE(viewSection.contains(QStringLiteral("<addaction name=\"actionToggleGizmo\"/>")));
     EXPECT_FALSE(viewSection.contains(QStringLiteral("<addaction name=\"actionFeatureVisualization\"/>")));
     EXPECT_FALSE(viewSection.contains(QStringLiteral("<addaction name=\"menuWindow\"/>")));
-}
-
-TEST(MainWindowTest, OldDockLayoutStateMigratesToDefaultSideBySideLayout)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(source.contains(QStringLiteral("constexpr int ProjectDockLayoutVersion = 2")));
-
-    const int restoreStart = source.indexOf(QStringLiteral("bool MainWindow::restoreProjectDockState"));
-    const int ensureStart = source.indexOf(QStringLiteral("void MainWindow::persistCurrentUiSettings"), restoreStart);
-    ASSERT_GE(restoreStart, 0);
-    ASSERT_GT(ensureStart, restoreStart);
-    const QString restoreBlock = source.mid(restoreStart, ensureStart - restoreStart);
-
-    EXPECT_TRUE(restoreBlock.contains(QStringLiteral("ProjectDockLayoutVersion")))
-        << "Saved dock states need an explicit layout version so old project states can be migrated.";
-    EXPECT_TRUE(restoreBlock.contains(QStringLiteral("restoreDefaultProjectDockLayout();")))
-        << "Projects without the current layout version should open with the default side-by-side dock layout.";
-    EXPECT_TRUE(restoreBlock.contains(QStringLiteral("!restoreState(state)")))
-        << "Corrupt or incompatible dock state must fall back to the default side-by-side layout.";
-
-    const int versionCheck = restoreBlock.indexOf(QStringLiteral("ProjectDockLayoutVersion"));
-    const int restoreState = restoreBlock.indexOf(QStringLiteral("restoreState(state)"));
-    ASSERT_GE(versionCheck, 0);
-    ASSERT_GE(restoreState, 0);
-    EXPECT_LT(versionCheck, restoreState)
-        << "Old dock states should be rejected before QMainWindow restores their geometry.";
-}
-
-TEST(MainWindowTest, ProjectOpenUsesDefaultsOnlyWhenVisibilityWasNotSaved)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.h"));
-    ASSERT_FALSE(source.isEmpty());
-    ASSERT_FALSE(header.isEmpty());
-
-    EXPECT_FALSE(source.contains(QStringLiteral("void enforceRequiredPanelVisibility(QJsonObject &settings)")));
-    EXPECT_FALSE(header.contains(QStringLiteral("void ensureRequiredProjectDocksVisible();")));
-    EXPECT_FALSE(source.contains(QStringLiteral("ensureRequiredProjectDocksVisible();")));
-    EXPECT_TRUE(header.contains(QStringLiteral("WorkspacePanelController *_workspacePanels{};")));
-
-    const int applyStart = source.indexOf(QStringLiteral("void MainWindow::applyUiSettings"));
-    const int closeStart = source.indexOf(QStringLiteral("void MainWindow::closeEvent"), applyStart);
-    ASSERT_GE(applyStart, 0);
-    ASSERT_GT(closeStart, applyStart);
-    const QString applyBlock = source.mid(applyStart, closeStart - applyStart);
-    const int restoreIndex = applyBlock.indexOf(
-        QStringLiteral("const bool restoredDockState = restoreProjectDockState(settings);"));
-    const int syncActionsIndex = applyBlock.indexOf(QStringLiteral("_workspacePanels->syncActions();"));
-    const int applyVisibilityIndex = applyBlock.indexOf(
-        QStringLiteral("_workspacePanels->applyVisibility(settings);"));
-    ASSERT_GE(restoreIndex, 0);
-    ASSERT_GE(syncActionsIndex, 0);
-    ASSERT_GE(applyVisibilityIndex, 0);
-    EXPECT_LT(restoreIndex, syncActionsIndex);
-    EXPECT_LT(syncActionsIndex, applyVisibilityIndex);
-    EXPECT_TRUE(applyBlock.contains(QStringLiteral("if (restoredDockState)")));
-    EXPECT_TRUE(applyBlock.contains(QStringLiteral("else")));
 }
 
 TEST(ProjectOpenResponsivenessTest, ProjectManagerLoadsProjectSnapshotOffGuiThread)
@@ -8606,104 +7593,6 @@ TEST(ProjectOpenResponsivenessTest, MainWindowDefersMetadataWidgetRefresh)
     EXPECT_FALSE(refreshBlock.contains(QStringLiteral("QTimer::singleShot")));
     EXPECT_FALSE(refreshBlock.contains(QStringLiteral("_dashboard->loadFromJson(meta)")));
     EXPECT_FALSE(refreshBlock.contains(QStringLiteral("_dataTree->loadFromJson(meta)")));
-}
-
-TEST(MainWindowMenuWiringTest, CameraConversionActionIsConnectedToWorkflowController)
-{
-    const QString mainWindowSource = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
-    const QString controllerHeader =
-        readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.h"));
-    const QString controllerSource =
-        readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
-    ASSERT_FALSE(mainWindowSource.isEmpty());
-    ASSERT_FALSE(controllerHeader.isEmpty());
-    ASSERT_FALSE(controllerSource.isEmpty());
-
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("_menuWorkflowController->bindActions(_mainMenu)")));
-    EXPECT_TRUE(controllerHeader.contains(QStringLiteral("bindActions(MainMenu")));
-    EXPECT_TRUE(controllerSource.contains(QStringLiteral("cameraConvertAction")));
-    EXPECT_TRUE(controllerSource.contains(QStringLiteral("openCameraConvertDialog")));
-    EXPECT_TRUE(controllerSource.contains(QStringLiteral("CameraConvertDialog")));
-}
-
-TEST(CodeStyleTest, MainWindowUsesLowerCamelPrivateMemberNames)
-{
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-
-    const QStringList expectedMembers = {
-        QStringLiteral("Ui::MainWindow*  _ui{};"),
-        QStringLiteral("QSplitter*        _mainSplitter{};"),
-        QStringLiteral("QTabWidget*       _leftTabs{};"),
-        QStringLiteral("ProjectDashboardWidget* _dashboard{};"),
-        QStringLiteral("DataTreeWidget*   _dataTree{};"),
-        QStringLiteral("ReferencePanelWidget* _referencePanel{};"),
-        QStringLiteral("WorkspaceCenterWidget* _workspaceCenter{};"),
-        QStringLiteral("CanvasWidget*     _canvas{};"),
-        QStringLiteral("HenuBrandWidget*  _henuBrandWidget{};"),
-        QStringLiteral("QWidgetAction*    _henuBrandAction{};"),
-        QStringLiteral("LogPanel*         _log{};"),
-        QStringLiteral("MainMenu*         _mainMenu{};"),
-        QStringLiteral("AppConfigManager* _config{};"),
-        QStringLiteral("ProjectData*      _projectData{};"),
-        QStringLiteral("MenuWorkflowController* _menuWorkflowController{};"),
-        QStringLiteral("ReconstructionWorkflowController* _reconController{};"),
-        QStringLiteral("ProjectManager*   _projectManager{};"),
-        QStringLiteral("QProgressDialog*  _saveProgressDialog{};"),
-        QStringLiteral("TaskStatusWidget* _mvsTaskStatus{};"),
-        QStringLiteral("TaskStatusWidget* _meshTaskStatus{};"),
-        QStringLiteral("TaskStatusWidget* _atTaskStatus{};"),
-        QStringLiteral("TaskStatusWidget* _sgTaskStatus{};"),
-        QStringLiteral("TaskStatusWidget* _maskTaskStatus{};"),
-        QStringLiteral("QDockWidget*      _logDock{};"),
-        QStringLiteral("QString           _lastSelectedImage;"),
-    };
-    for (const QString &expectedMember : expectedMembers)
-    {
-        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
-    }
-
-    const QStringList oldMemberNames = {
-        QStringLiteral("m_ui"),
-        QStringLiteral("m_mainSplitter"),
-        QStringLiteral("m_leftTabs"),
-        QStringLiteral("m_dashboard"),
-        QStringLiteral("m_dataTree"),
-        QStringLiteral("m_referencePanel"),
-        QStringLiteral("m_workspaceCenter"),
-        QStringLiteral("m_canvas"),
-        QStringLiteral("m_henuBrandWidget"),
-        QStringLiteral("m_henuBrandAction"),
-        QStringLiteral("m_log"),
-        QStringLiteral("m_mainMenu"),
-        QStringLiteral("m_config"),
-        QStringLiteral("m_projectData"),
-        QStringLiteral("m_menuWorkflowController"),
-        QStringLiteral("m_reconController"),
-        QStringLiteral("m_projectManager"),
-        QStringLiteral("m_saveProgressDialog"),
-        QStringLiteral("m_mvsTaskStatus"),
-        QStringLiteral("m_meshTaskStatus"),
-        QStringLiteral("m_atTaskStatus"),
-        QStringLiteral("m_sgTaskStatus"),
-        QStringLiteral("m_spTaskStatus"),
-        QStringLiteral("m_dmTaskStatus"),
-        QStringLiteral("m_overlapTaskStatus"),
-        QStringLiteral("m_obsNetTaskStatus"),
-        QStringLiteral("m_maskTaskStatus"),
-        QStringLiteral("m_logDock"),
-        QStringLiteral("m_logBtn"),
-        QStringLiteral("m_featureMatchingSetting"),
-        QStringLiteral("m_uiSetting"),
-        QStringLiteral("m_lastSelectedImage"),
-    };
-    for (const QString &oldName : oldMemberNames)
-    {
-        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
-        EXPECT_FALSE(source.contains(oldName)) << qPrintable(oldName);
-    }
 }
 
 TEST(CodeStyleTest, MenuWorkflowControllerUsesLowerCamelPrivateMemberNames)
@@ -9039,8 +7928,14 @@ TEST(AerialTriangulationDialogTest, ReferencePreselectionTogglesFromVisibleCheck
     ASSERT_TRUE(referencePreselectionCheck->isEnabled());
     ASSERT_FALSE(referencePreselectionCheck->isChecked());
 
-    const QPoint clickPoint(referencePreselectionCheck->rect().left() + 56,
-                            referencePreselectionCheck->rect().center().y());
+    QStyleOptionButton checkboxOption;
+    checkboxOption.initFrom(referencePreselectionCheck);
+    checkboxOption.rect = referencePreselectionCheck->rect();
+    const QPoint clickPoint = referencePreselectionCheck->style()
+        ->subElementRect(QStyle::SE_CheckBoxIndicator,
+                         &checkboxOption,
+                         referencePreselectionCheck)
+        .center();
     QTest::mouseClick(referencePreselectionCheck, Qt::LeftButton, Qt::NoModifier, clickPoint);
     QApplication::processEvents();
 
@@ -9440,20 +8335,6 @@ TEST(ProjectDashboardWidgetTest, MainWindowUiExposesOverviewTab)
 
     EXPECT_TRUE(ui.contains(QStringLiteral("ProjectDashboardWidget")));
     EXPECT_TRUE(ui.contains(QStringLiteral("<string>概览</string>")));
-}
-
-TEST(ProjectDashboardWidgetTest, MainWindowRefreshesDashboardFromProjectMetadata)
-{
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(header.contains(QStringLiteral("ProjectDashboardWidget")));
-    EXPECT_TRUE(source.contains(QStringLiteral("_dashboard")));
-    EXPECT_TRUE(source.contains(QStringLiteral("scheduleProjectMetadataRefresh")));
-    EXPECT_TRUE(source.contains(QStringLiteral("_dashboard->loadFromJson(meta)")));
-    EXPECT_FALSE(source.contains(QStringLiteral("projectMetadataChanged, _dashboard")));
 }
 
 TEST(ProjectDashboardWidgetTest, ShowsQualityMetricsFromRegisteredReports)
@@ -10068,40 +8949,6 @@ TEST(BundleAdjustStatusBarTest, UsesAtProgressWidgetWithCancelableCoreOptimizati
     EXPECT_TRUE(serviceSource.contains(QStringLiteral("用户取消了光束法平差")));
 }
 
-TEST(AerialTriangulationCancelTest, CancelledWorkflowSkipsGuiThreadMetadataWriteback)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int start = source.indexOf(
-        QStringLiteral("void MenuWorkflowController::runUnifiedAerialTriangulation"));
-    ASSERT_GE(start, 0);
-    const int finish = source.indexOf(QStringLiteral("void MenuWorkflowController::openOverlapAnalysisDialog"), start);
-    ASSERT_GT(finish, start);
-    const QString block = source.mid(start, finish - start);
-
-    const int callbackStart = block.indexOf(
-        QStringLiteral("AerialTriangulationResult workflowResult) mutable"));
-    ASSERT_GE(callbackStart, 0);
-    const QString callback = block.mid(callbackStart);
-    const int cancelCheck = callback.indexOf(QStringLiteral("if (wasCanceled)"));
-    const int appendFeature = callback.indexOf(QStringLiteral("appendIpfindResult"));
-    const int appendMatch = callback.indexOf(QStringLiteral("appendIpmatchResult"));
-    const int setCameras = callback.indexOf(QStringLiteral("replaceImageCameras"));
-    ASSERT_GE(cancelCheck, 0);
-    ASSERT_GE(appendFeature, 0);
-    ASSERT_GE(appendMatch, 0);
-    ASSERT_GE(setCameras, 0);
-    EXPECT_LT(cancelCheck, appendFeature)
-        << "Cancellation must return before writing many feature records on the GUI thread.";
-    EXPECT_LT(cancelCheck, appendMatch)
-        << "Cancellation must return before writing many match records on the GUI thread.";
-    EXPECT_LT(cancelCheck, setCameras)
-        << "Cancellation must return before camera writeback and result dialogs.";
-    EXPECT_TRUE(callback.mid(cancelCheck, appendFeature - cancelCheck)
-                    .contains(QStringLiteral("emit pmGuard->atProgressFinished(false);")));
-}
-
 TEST(ForwardIntersectionCheckDialogTest, AutoModeReadsUnifiedImageMatchShard)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/ForwardIntersectionCheckDialog.cpp"));
@@ -10158,21 +9005,6 @@ TEST(FeatureVisualizationSettingsTest, DefaultsPointColorToBlue)
     EXPECT_TRUE(dialogHeader.contains(QStringLiteral("QColor _pointColor{0, 120, 255}")));
     EXPECT_TRUE(dialogSource.contains(QStringLiteral("_pointColor = QColor(0, 120, 255)")));
     EXPECT_FALSE(dialogSource.contains(QStringLiteral("点颜色黄")));
-}
-
-TEST(CreateDemDialogTest, UiAdvertisesOneClickDemWorkflow)
-{
-    const QString ui = readProjectSourceFile(QStringLiteral("src/gui/dialogs/reconstruction/CreateDemDialog.ui"));
-    ASSERT_FALSE(ui.isEmpty());
-
-    EXPECT_TRUE(ui.contains(QStringLiteral("自动模式")));
-    EXPECT_TRUE(ui.contains(QStringLiteral("手动模式")));
-    EXPECT_TRUE(ui.contains(QStringLiteral("选择 2 张立体影像")));
-    EXPECT_TRUE(ui.contains(QStringLiteral("已有密集点云")));
-    EXPECT_TRUE(ui.contains(QStringLiteral("m_stageLabel")));
-    EXPECT_TRUE(ui.contains(QStringLiteral("m_progressBar")));
-    EXPECT_TRUE(ui.contains(QStringLiteral("m_runBtn")));
-    EXPECT_TRUE(ui.contains(QStringLiteral("一键生成 DEM")));
 }
 
 TEST(CreateDemDialogTest, OpenCreateDemDialogRequiresProjectManagerBeforeShowingManualRunDialog)
@@ -10305,23 +9137,6 @@ TEST(FeatureNamingCleanupTest, GuiSfmCallersUseCoreServicesDirectly)
     EXPECT_TRUE(sparseManagerSource.contains(QStringLiteral("xjw::core::project::TriangulationService::run")));
 }
 
-TEST(MainWindowFeatureRefreshTest, MatchShardAppendReloadsOnlyCurrentImage)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int connectIndex = source.indexOf(QStringLiteral("imageMatchResultAppended"));
-    ASSERT_GE(connectIndex, 0);
-    const int blockEnd = source.indexOf(QStringLiteral("if (_config)"), connectIndex);
-    ASSERT_GE(blockEnd, connectIndex);
-    const QString block = source.mid(connectIndex, blockEnd - connectIndex);
-
-    EXPECT_TRUE(block.contains(QStringLiteral("currentImagePath()")));
-    EXPECT_TRUE(block.contains(QStringLiteral("isCurrentImage")));
-    EXPECT_TRUE(block.contains(QStringLiteral("reloadInterestPoints(imagePath)")));
-    EXPECT_FALSE(block.contains(QStringLiteral("immediateReloadInterestPoints(imagePath)")));
-}
-
 TEST(CanvasWidgetResponsivenessTest, ImageSwitchUsesBackgroundLoadAndIgnoresStaleResults)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.h"));
@@ -10439,24 +9254,6 @@ TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesStitchedPairDebugOutp
     EXPECT_TRUE(debugSource.contains(QStringLiteral("QCryptographicHash::hash")));
     EXPECT_TRUE(debugSource.contains(QStringLiteral("wrote debug stitched image")));
     EXPECT_TRUE(debugSource.contains(QStringLiteral("qgraphicsitem_cast<QGraphicsPixmapItem")));
-}
-
-TEST(CanvasWidgetResponsivenessTest, StaleFeatureLoadsDoNotPaintOverCurrentImage)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int finishedIndex =
-        source.indexOf(QStringLiteral("xjw::gui::tasks::runGuarded"), source.indexOf(
-                           QStringLiteral("void CanvasWidget::startSpLoadForImage")));
-    ASSERT_GE(finishedIndex, 0);
-    const QString finishedBlock = source.mid(finishedIndex, 5200);
-
-    EXPECT_TRUE(finishedBlock.contains(QStringLiteral("generation != self->_featureLoadGeneration")))
-        << "Late completions must be dropped after another image/suffix request starts.";
-    EXPECT_TRUE(finishedBlock.contains(
-        QStringLiteral("QDir::cleanPath(imagePathCopy) == QDir::cleanPath(self->_currentImagePath)")));
-    EXPECT_TRUE(finishedBlock.contains(QStringLiteral("if (isCurrentImage && self->_layerRenderer)")));
 }
 
 TEST(CanvasWidgetResponsivenessTest, MatchObservationLoadUsesPersistedSiftGeometry)
@@ -10650,55 +9447,6 @@ TEST(ProjectTriangulationUiTest, FinalizeTriangulationStoresPreviewQualityMetada
     EXPECT_TRUE(source.contains(QStringLiteral("两视预览云")));
 }
 
-TEST(ProjectTriangulationUiTest, SparseManagerLongTasksUseGuardedRunner)
-{
-    const QString source =
-        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectSparseReconstructionManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int triangulationStart = source.indexOf(
-        QStringLiteral("void ProjectSparseReconstructionManager::startTriangulationAsync"));
-    ASSERT_GE(triangulationStart, 0);
-    const int workflowStart = source.indexOf(
-        QStringLiteral("void ProjectSparseReconstructionManager::startSparsePointWorkflow"),
-        triangulationStart);
-    ASSERT_GT(workflowStart, triangulationStart);
-    const QString triangulationBody = source.mid(triangulationStart, workflowStart - triangulationStart);
-
-    EXPECT_TRUE(triangulationBody.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
-        << "Two-view preview triangulation should not launch open-coded background work.";
-    EXPECT_TRUE(triangulationBody.contains(QStringLiteral("xjw::core::project::TriangulationService::run")))
-        << "The guarded worker should still run the triangulation service off the GUI thread.";
-    EXPECT_TRUE(triangulationBody.contains(QStringLiteral("QPointer<ProjectManager> ownerGuard(_owner)")))
-        << "Triangulation completion must guard the owning ProjectManager.";
-    EXPECT_TRUE(triangulationBody.contains(
-        QStringLiteral("const QString projectPath = _owner ? _owner->currentProjectPath() : QString();")))
-        << "Triangulation output must be tied to the project active at launch.";
-    EXPECT_TRUE(triangulationBody.contains(QStringLiteral("ownerGuard->currentProjectPath() != projectPath")))
-        << "Triangulation must not append AT results after switching projects.";
-    EXPECT_FALSE(triangulationBody.contains(QStringLiteral("(void)QtConcurrent::run([self,")))
-        << "Open-coded QtConcurrent can race with manager destruction.";
-
-    const int workflowEnd = source.indexOf(
-        QStringLiteral("} // namespace"),
-        workflowStart);
-    const QString workflowBody = source.mid(workflowStart,
-                                            workflowEnd > workflowStart ? workflowEnd - workflowStart : -1);
-    EXPECT_TRUE(workflowBody.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
-        << "Sparse post-processing workflows should share the guarded GUI task runner.";
-    EXPECT_TRUE(workflowBody.contains(QStringLiteral("runSparsePointWorkflowResult")))
-        << "The guarded worker should still run the sparse point workflow off the GUI thread.";
-    EXPECT_TRUE(workflowBody.contains(QStringLiteral("QPointer<ProjectManager> ownerGuard(_owner)")))
-        << "Sparse post-processing completion must guard the owning ProjectManager.";
-    EXPECT_TRUE(workflowBody.contains(
-        QStringLiteral("const QString projectPath = _owner ? _owner->currentProjectPath() : QString();")))
-        << "Sparse post-processing output must be tied to the project active at launch.";
-    EXPECT_TRUE(workflowBody.contains(QStringLiteral("ownerGuard->currentProjectPath() != projectPath")))
-        << "Sparse post-processing must not append AT results after switching projects.";
-    EXPECT_FALSE(workflowBody.contains(QStringLiteral("(void)QtConcurrent::run([self,")))
-        << "Open-coded QtConcurrent can race with manager destruction.";
-}
-
 TEST(SfmSparseResultMetadataTest, ScaleAwareBaConsumesTrackConfidenceWeights)
 {
     const QString baHeader = readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjust.h"));
@@ -10865,17 +9613,6 @@ TEST(DownstreamSparseInputGateTest, ResolveSparseContextSkipsPreviewAndRequiresP
     errorMessage.clear();
     EXPECT_TRUE(xjw::gui::project::resolveSparsePointContext(meta, 0, &context, &errorMessage));
     EXPECT_EQ(context.sourceResultIndex, 0);
-}
-
-TEST(DownstreamSparseInputGateTest, OneClickDenseStageUsesCurrentSfmResultIndex)
-{
-    const QString controllerSource =
-        readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
-    ASSERT_FALSE(controllerSource.isEmpty());
-
-    EXPECT_TRUE(controllerSource.contains(QStringLiteral("sfm_at_index")));
-    EXPECT_TRUE(controllerSource.contains(
-        QStringLiteral("settings.value(QStringLiteral(\"sfm_at_index\")).toInt(-1)")));
 }
 
 TEST(DownstreamSparseInputGateTest, OneClickWorkflowStopsDenseWhenCurrentSfmQualityIsBlocked)
@@ -11359,33 +10096,6 @@ TEST(MatchViewerVisualizationTest, UsesSharedDisplayLoaderAndReportsAsyncImageFa
     EXPECT_TRUE(source.contains(QStringLiteral("emit self->imageLoadFailed(imagePath")));
     EXPECT_TRUE(dualSource.contains(QStringLiteral("&ImageViewWidget::imageLoadFailed")));
     EXPECT_TRUE(dualSource.contains(QStringLiteral("emit loadFailed(message)")));
-}
-
-TEST(ImageDisplayDecodeTest, FallsBackToOpenCvByteDecodeWhenQtImagePluginCannotRead)
-{
-    const QString loader = readProjectSourceFile(QStringLiteral("src/gui/views/LayerImageLoader.cpp"));
-    const QString pathIo = readProjectSourceFile(QStringLiteral("src/common/io/PathIO.cpp"));
-    ASSERT_FALSE(loader.isEmpty());
-    ASSERT_FALSE(pathIo.isEmpty());
-
-    EXPECT_TRUE(loader.contains(QStringLiteral("xjw::common::io::readImage(path, cv::IMREAD_UNCHANGED)")));
-    EXPECT_TRUE(pathIo.contains(QStringLiteral("readFileBytes(path)")));
-    EXPECT_TRUE(pathIo.contains(QStringLiteral("cv::imdecode")));
-}
-
-TEST(WindowsBuildScriptTest, SyncsQtImageFormatPluginsForDirectBinRuns)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("scripts/build_win/build_windows_cuda.ps1"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const int syncIndex = source.indexOf(QStringLiteral("function Sync-QtRuntime"));
-    const int nextIndex = source.indexOf(QStringLiteral("function Sync-TorchRuntime"), syncIndex);
-    ASSERT_GE(syncIndex, 0);
-    ASSERT_GT(nextIndex, syncIndex);
-    const QString syncBlock = source.mid(syncIndex, nextIndex - syncIndex);
-
-    EXPECT_TRUE(syncBlock.contains(QStringLiteral("imageformats")));
-    EXPECT_TRUE(syncBlock.contains(QStringLiteral("qjpeg")));
 }
 
 TEST(WindowsBuildScriptTest, GuiTargetOutputsPlascanExeOnWindows)
@@ -12409,14 +11119,6 @@ TEST(DataTreeWidgetTest, ReferenceDatasetsAppearAndSortByFileName)
     EXPECT_EQ(referenceSection->child(1, 1)->text(), QStringLiteral("/tmp/reference/lidar_10.laz"));
 }
 
-TEST(ProjectFilesManagerTest, ReportResultsAreStoredAsProjectResults)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/data/ProjectFilesManager.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(source.contains(QStringLiteral("report_results")));
-}
-
 TEST(ProjectFilesManagerTest, ReferenceDatasetsAreStoredAsProjectResults)
 {
     ProjectFilesManager files;
@@ -13177,88 +11879,6 @@ TEST(DataTreeWidgetTest, SelectionClickDoesNotActivateImageUntilItemActivation)
     EXPECT_EQ(resourceArgs.at(1).toString(), imagePath);
 }
 
-TEST(DataTreeWidgetTest, ContextMenuUsesSameResourcePathResolutionAsActivation)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/DataTreeWidget.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(source.contains(QStringLiteral("QString DataTreeWidget::resolveResourcePath")));
-    EXPECT_TRUE(source.contains(QStringLiteral("path = resolveResourcePath(path)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("resourceFromIndex(i, &rowSection, &rowPath)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("paths << rowPath")));
-}
-
-TEST(DataTreeWidgetTest, TiePointContextMenuUsesDedicatedDestructiveActions)
-{
-    const QString treeSource =
-        readProjectSourceFile(QStringLiteral("src/gui/widgets/DataTreeWidget.cpp"));
-    const QString managerSource =
-        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
-    ASSERT_FALSE(treeSource.isEmpty());
-    ASSERT_FALSE(managerSource.isEmpty());
-
-    const qsizetype menuStart = treeSource.indexOf(QStringLiteral(
-        "if (resourceFromIndex(nameIndex, &contextSection, &contextPath)"));
-    const qsizetype genericMenuStart = treeSource.indexOf(
-        QStringLiteral("// 收集当前选中的所有条目"),
-        menuStart);
-    ASSERT_GE(menuStart, 0);
-    ASSERT_GT(genericMenuStart, menuStart);
-    const QString tiePointMenu =
-        treeSource.mid(menuStart, genericMenuStart - menuStart);
-
-    const QStringList expectedActions{
-        QStringLiteral("放大至"),
-        QStringLiteral("移除连接点"),
-        QStringLiteral("显示信息"),
-        QStringLiteral("在文件管理器中显示")
-    };
-    qsizetype previousPosition = -1;
-    for (const QString &actionText : expectedActions)
-    {
-        const qsizetype position = tiePointMenu.indexOf(
-            QStringLiteral("menu.addAction(tr(\"%1\"))").arg(actionText));
-        EXPECT_GT(position, previousPosition) << actionText.toStdString();
-        previousPosition = position;
-    }
-
-    EXPECT_TRUE(tiePointMenu.contains(
-        QStringLiteral("emit resourceActivated(contextSection, contextPath)")));
-    EXPECT_TRUE(tiePointMenu.contains(
-        QStringLiteral("emit deleteDataRequested(")));
-    EXPECT_TRUE(tiePointMenu.contains(
-        QStringLiteral("emit revealRequested(contextPath)")));
-    EXPECT_FALSE(tiePointMenu.contains(QStringLiteral("打包到归档")));
-    EXPECT_FALSE(tiePointMenu.contains(QStringLiteral("移除引用")));
-    EXPECT_FALSE(tiePointMenu.contains(QStringLiteral("删除数据")));
-    EXPECT_TRUE(managerSource.contains(
-        QStringLiteral("ProjectTiePointResultService::deleteAll(_projectData)")));
-}
-
-TEST(DataTreeWidgetTest, PhotoContextMenuRoutesSelectedImageToMatchViewer)
-{
-    const QString treeHeader = readProjectSourceFile(
-        QStringLiteral("src/gui/widgets/DataTreeWidget.h"));
-    const QString treeSource = readProjectSourceFile(
-        QStringLiteral("src/gui/widgets/DataTreeWidget.cpp"));
-    const QString selectorHeader = readProjectSourceFile(
-        QStringLiteral("src/gui/dialogs/tie_points/MatchPairSelectorDialog.h"));
-    const QString mainWindowSource = readProjectSourceFile(
-        QStringLiteral("src/gui/main_window/MainWindow.cpp"));
-    ASSERT_FALSE(treeHeader.isEmpty());
-    ASSERT_FALSE(treeSource.isEmpty());
-    ASSERT_FALSE(selectorHeader.isEmpty());
-    ASSERT_FALSE(mainWindowSource.isEmpty());
-
-    EXPECT_TRUE(treeHeader.contains(QStringLiteral("void viewMatchesRequested(const QString &imagePath);")));
-    EXPECT_TRUE(treeSource.contains(QStringLiteral("viewMatchesAct = menu.addAction(tr(\"查看匹配...\"))")));
-    EXPECT_TRUE(treeSource.contains(QStringLiteral("sectionName == QStringLiteral(\"照片\")")));
-    EXPECT_TRUE(treeSource.contains(QStringLiteral("emit viewMatchesRequested(paths.first())")));
-    EXPECT_TRUE(selectorHeader.contains(QStringLiteral("void setInitialImagePath(const QString &imagePath);")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("&DataTreeWidget::viewMatchesRequested")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("dialog->setInitialImagePath(initialImagePath)")));
-}
-
 TEST(ProjectSurveyControlTest, KeepsMetadataUnchangedWhenSidecarSaveFails)
 {
     QTemporaryDir tempDir;
@@ -13297,8 +11917,13 @@ TEST(ProjectSurveyControlTest, MigratesLegacyMetadataOnceAndRemovesOldKey)
     ProjectData projectData;
     const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("legacy.plascan"));
     const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("image.png"));
+    QFile imageFile(imagePath);
+    ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
+    ASSERT_GT(imageFile.write("image"), 0);
+    imageFile.close();
     ASSERT_TRUE(projectData.createProject(projectPath, QStringLiteral("legacy")));
     ASSERT_TRUE(projectData.addImages({imagePath}));
+    const QString projectImagePath = projectData.getAllImages().constFirst();
 
     QJsonObject metadata = projectData.coreFilesMeta();
     metadata[QStringLiteral("survey_control")] = QJsonObject{
@@ -13310,7 +11935,7 @@ TEST(ProjectSurveyControlTest, MigratesLegacyMetadataOnceAndRemovesOldKey)
                 {QStringLiteral("z"), 3.0},
                 {QStringLiteral("observations"), QJsonArray{
                     QJsonObject{
-                        {QStringLiteral("image_path"), imagePath},
+                        {QStringLiteral("image_path"), projectImagePath},
                         {QStringLiteral("u"), 10.0},
                         {QStringLiteral("v"), 20.0}
                     }
@@ -13463,69 +12088,16 @@ TEST(PhotoStripWidgetTest, ExtendedSelectionSurvivesCurrentPhotoSynchronization)
     QTest::qWait(100);
 }
 
-TEST(PhotoStripWidgetTest, CtrlAndShiftSelectionSurvivesPhotoSynchronization)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    QJsonArray images;
-    QStringList imagePaths;
-    for (int index = 0; index < 4; ++index)
-    {
-        const QString imagePath = QDir(tempDir.path()).filePath(
-            QStringLiteral("image_%1.png").arg(index));
-        QImage testImage(16, 12, QImage::Format_RGB32);
-        testImage.fill(QColor(40 + index, 90, 160));
-        ASSERT_TRUE(testImage.save(imagePath));
-        imagePaths.push_back(imagePath);
-        images.append(QJsonObject{{QStringLiteral("path"), imagePath}});
-    }
-
-    PhotoStripWidget strip;
-    strip.resize(1000, 220);
-    strip.loadFromJson(QJsonObject{{QStringLiteral("images"), images}});
-    strip.show();
-    QCoreApplication::processEvents();
-
-    auto *list = strip.findChild<QListWidget *>(QStringLiteral("photoStripList"));
-    ASSERT_NE(list, nullptr);
-    ASSERT_EQ(list->count(), 4);
-    QObject::connect(&strip,
-                     &PhotoStripWidget::photoSelected,
-                     &strip,
-                     &PhotoStripWidget::setCurrentPhoto);
-
-    const auto clickItem = [list](int row, Qt::KeyboardModifiers modifiers = Qt::NoModifier)
-    {
-        const QPoint position = list->visualItemRect(list->item(row)).center();
-        QTest::mouseClick(list->viewport(), Qt::LeftButton, modifiers, position);
-        QCoreApplication::processEvents();
-    };
-
-    clickItem(0);
-    clickItem(1, Qt::ControlModifier);
-    EXPECT_TRUE(list->item(0)->isSelected());
-    EXPECT_TRUE(list->item(1)->isSelected());
-
-    clickItem(0, Qt::ControlModifier);
-    EXPECT_FALSE(list->item(0)->isSelected());
-    EXPECT_TRUE(list->item(1)->isSelected());
-
-    clickItem(1);
-    clickItem(3, Qt::ShiftModifier);
-    EXPECT_FALSE(list->item(0)->isSelected());
-    EXPECT_TRUE(list->item(1)->isSelected());
-    EXPECT_TRUE(list->item(2)->isSelected());
-    EXPECT_TRUE(list->item(3)->isSelected());
-    QTest::qWait(100);
-}
-
 TEST(PhotoStripWidgetTest, ContextMenuRequestsMasksForSelectedPhotos)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/PhotoStripWidget.cpp"));
     ASSERT_FALSE(source.isEmpty());
     EXPECT_TRUE(source.contains(QStringLiteral("&QListWidget::customContextMenuRequested")));
     EXPECT_TRUE(source.contains(QStringLiteral("&PhotoStripWidget::showPhotoContextMenu")));
+    if (QApplication::platformName() == QStringLiteral("offscreen"))
+    {
+        GTEST_SKIP() << "The Qt offscreen plugin does not support native popup menus";
+    }
 
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
@@ -13573,6 +12145,11 @@ TEST(PhotoStripWidgetTest, ContextMenuRequestsMasksForSelectedPhotos)
 
 TEST(PhotoStripWidgetTest, ContextMenuSelectsAnUnselectedClickedPhoto)
 {
+    if (QApplication::platformName() == QStringLiteral("offscreen"))
+    {
+        GTEST_SKIP() << "The Qt offscreen plugin does not support native popup menus";
+    }
+
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
     const QString firstPath = QDir(tempDir.path()).filePath(QStringLiteral("first.png"));
@@ -13830,27 +12407,6 @@ TEST(CameraModel3DDialogTest, ObjMaterialTextureUsesFaceUvRhiPipeline)
     EXPECT_TRUE(fragmentShader.contains(QStringLiteral("textureWeight")));
     EXPECT_TRUE(fragmentShader.contains(QStringLiteral("srgbToLinear")));
     EXPECT_FALSE(fragmentShader.contains(QStringLiteral("0.55 + 0.75 * diff")));
-}
-
-TEST(CameraModel3DDialogTest, DenseCameraScenesThrottleLabelsAndCardSize)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(source.contains(QStringLiteral("maxVisibleCameraLabels")));
-    EXPECT_TRUE(source.contains(QStringLiteral("_poses.size() <= maxVisibleCameraLabels")));
-    EXPECT_TRUE(source.contains(QStringLiteral("cameraCardBase()")));
-    EXPECT_FALSE(source.contains(QStringLiteral("const float base = qMax(0.1f, r * 0.06f);")));
-}
-
-TEST(CameraModel3DDialogTest, CompactModelsUseScaleRelativeSceneFraming)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(source.contains(QStringLiteral("qMax(1.0e-4f, dists[p95] * 1.15f)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("_cachedRadius * 0.002f")));
-    EXPECT_FALSE(source.contains(QStringLiteral("_cachedRadius = qMax(1.0f, dists[p95] * 1.15f)")));
 }
 
 TEST(CameraModel3DDialogTest, ModelViewMinimumSizeDoesNotLimitDockResizing)

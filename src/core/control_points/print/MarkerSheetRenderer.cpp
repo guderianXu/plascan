@@ -17,7 +17,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstring>
+#include <cstdint>
 #include <memory>
 #include <stdexcept>
 
@@ -77,22 +77,34 @@ QImage aprilTagImage(MarkerTargetFamily family, int id, int targetPixels)
     {
         throw std::invalid_argument("AprilTag ID is outside the selected family range");
     }
-    std::unique_ptr<image_u8_t, decltype(&image_u8_destroy)> native_image(
-        apriltag_to_image(native_family.get(), static_cast<uint32_t>(id)),
-        image_u8_destroy);
-    if (!native_image)
+    const int total_width = native_family->total_width;
+    QImage source(total_width, total_width, QImage::Format_Grayscale8);
+    source.fill(Qt::black);
+    const auto set_white = [&](int x, int y)
     {
-        throw std::runtime_error("Failed to render AprilTag image");
+        source.scanLine(y)[x] = 255;
+    };
+
+    const int white_border_width = native_family->width_at_border +
+        (native_family->reversed_border ? 0 : 2);
+    const int white_border_start = (total_width - white_border_width) / 2;
+    for (int index = 0; index < white_border_width - 1; ++index)
+    {
+        set_white(white_border_start + index, white_border_start);
+        set_white(total_width - 1 - white_border_start, white_border_start + index);
+        set_white(white_border_start + index + 1, total_width - 1 - white_border_start);
+        set_white(white_border_start, white_border_start + index + 1);
     }
 
-    QImage source(static_cast<int>(native_image->width),
-                  static_cast<int>(native_image->height),
-                  QImage::Format_Grayscale8);
-    for (int row = 0; row < source.height(); ++row)
+    const int border_start = (total_width - native_family->width_at_border) / 2;
+    const std::uint64_t code = native_family->codes[static_cast<std::size_t>(id)];
+    for (std::uint32_t bit = 0; bit < native_family->nbits; ++bit)
     {
-        std::memcpy(source.scanLine(row),
-                    native_image->buf + static_cast<std::size_t>(row) * native_image->stride,
-                    static_cast<std::size_t>(source.width()));
+        if ((code & (std::uint64_t{1} << (native_family->nbits - bit - 1))) != 0)
+        {
+            set_white(native_family->bit_x[bit] + border_start,
+                      native_family->bit_y[bit] + border_start);
+        }
     }
     return source.scaled(targetPixels,
                          targetPixels,
@@ -148,6 +160,17 @@ QImage markerImage(MarkerTargetFamily family, int id, int targetPixels)
 }
 
 } // namespace
+
+QImage MarkerSheetRenderer::renderMarkerImage(MarkerTargetFamily family,
+                                               int id,
+                                               int targetPixels)
+{
+    if (targetPixels <= 0)
+    {
+        throw std::invalid_argument("Marker image size must be positive");
+    }
+    return markerImage(family, id, targetPixels);
+}
 
 MarkerSheetRenderResult MarkerSheetRenderer::render(const MarkerPrintRequest &request, int dpi)
 {
@@ -211,7 +234,7 @@ MarkerSheetRenderResult MarkerSheetRenderer::render(const MarkerPrintRequest &re
                 const int y = margin + row * cell_height;
                 const int id = request.ids[first + offset];
                 painter.drawImage(QRect(x, y, target_size, target_size),
-                                  markerImage(request.family, id, target_size));
+                                  renderMarkerImage(request.family, id, target_size));
                 if (request.showLabels)
                 {
                     painter.drawText(QRect(x, y + target_size, target_size, label_height),

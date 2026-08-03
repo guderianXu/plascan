@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QHash>
+#include <QFutureWatcher>
 #include <QIcon>
 #include <QImage>
 #include <QJsonObject>
@@ -18,6 +19,7 @@ class PhotoStripWidget : public QWidget
 
 public:
     explicit PhotoStripWidget(QWidget *parent = nullptr);
+    ~PhotoStripWidget() override;
     void setProjectPath(const QString &plascanPath);
 
 public slots:
@@ -56,5 +58,6 @@ private:
     QHash<QString, QList<QListWidgetItem *>> _itemsByPath;
     QHash<QString, QIcon> _thumbnailCache;
     QHash<QString, quint64> _thumbnailLoadsInFlight;
+    QSet<QFutureWatcher<ThumbnailResult> *> _thumbnailWatchers;
     quint64 _thumbnailGeneration{};
 };

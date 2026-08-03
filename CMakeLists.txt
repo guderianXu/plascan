@@ -128,6 +128,7 @@ else()
 endif()
 
 option(BUILD_TESTS "Build unit tests" ON)
+option(PLASCAN_BUILD_GUI "Build the Qt GUI application" ON)
 if(BUILD_TESTS)
   enable_testing()
 endif()
