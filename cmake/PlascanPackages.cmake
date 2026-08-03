@@ -15,7 +15,7 @@ if(WIN32)
   # vcpkg exposes private Qt modules as explicit Qt6 components.
   list(APPEND PLASCAN_QT_COMPONENTS GuiPrivate)
 endif()
-find_package(Qt6 REQUIRED COMPONENTS ${PLASCAN_QT_COMPONENTS})
+find_package(Qt6 6.7 REQUIRED COMPONENTS ${PLASCAN_QT_COMPONENTS})
 if(NOT TARGET Qt6::GuiPrivate)
   message(FATAL_ERROR
     "PlaScan requires the Qt GuiPrivate target. Install the Qt base private development package.")

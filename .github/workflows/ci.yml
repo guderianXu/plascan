@@ -31,15 +31,9 @@ jobs:
             wget \
             unzip \
             pkg-config \
-            qt6-base-dev \
-            qt6-base-private-dev \
-            qt6-base-dev-tools \
-            qt6-tools-dev \
-            qt6-tools-dev-tools \
-            qt6-shadertools-dev \
-            libqt6opengl6-dev \
             libgl1-mesa-dev \
             libxkbcommon-dev \
+            libvulkan-dev \
             libopencv-dev \
             libapriltag-dev \
             libgdal-dev \
@@ -51,6 +45,16 @@ jobs:
             libgtest-dev \
             libgmock-dev \
             libomp-dev
+
+      - name: Install Qt 6.8.3
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: 'linux'
+          target: 'desktop'
+          arch: 'linux_gcc_64'
+          modules: 'qtshadertools'
+          cache: true
 
       - name: Install CPU LibTorch
         run: |
@@ -64,7 +68,6 @@ jobs:
           if ! cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_TESTS=ON \
-            -DPLASCAN_BUILD_GUI=OFF \
             -DPLASCAN_ENABLE_CONDA=OFF \
             -DPLASCAN_ENABLE_VCPKG=OFF \
             -DTorch_DIR="$PWD/.deps/libtorch/share/cmake/Torch" 2>&1 | tee configure.log; then

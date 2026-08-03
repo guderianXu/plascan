@@ -34,12 +34,15 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("cmake -S . -B build", text)
         self.assertIn("cmake --build build", text)
         self.assertIn("ctest --test-dir build", text)
-        self.assertIn("-DPLASCAN_BUILD_GUI=OFF", text)
-        self.assertIn("qt6-base-private-dev", text)
-        self.assertIn("qt6-shadertools-dev", text)
+        self.assertNotIn("-DPLASCAN_BUILD_GUI=OFF", text)
+        self.assertIn("uses: jurplel/install-qt-action@v4", text)
+        self.assertIn("version: '6.8.3'", text)
+        self.assertIn("modules: 'qtshadertools'", text)
+        self.assertNotIn("qt6-base-dev", text)
         self.assertIn("libapriltag-dev", text)
 
         packages_text = (ROOT / "cmake" / "PlascanPackages.cmake").read_text(encoding="utf-8")
+        self.assertIn("find_package(Qt6 6.7 REQUIRED", packages_text)
         self.assertIn("pkg_check_modules(APRILTAG REQUIRED IMPORTED_TARGET GLOBAL apriltag)", packages_text)
 
     def test_github_actions_uses_current_checkout_action(self):
