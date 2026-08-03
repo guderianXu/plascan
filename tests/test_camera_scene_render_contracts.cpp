@@ -88,6 +88,35 @@ TEST(CameraSceneRenderContractTest, ThumbnailPlanesUseTheSceneDepthBuffer)
     EXPECT_FALSE(overlayBlock.contains(QStringLiteral("painter.drawPolygon(imagePlane)")));
 }
 
+TEST(CameraSceneRenderContractTest, ForegroundImageOccludesGpuAndOverlaySceneContent)
+{
+    const QString header =
+        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
+    const QString source =
+        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+
+    EXPECT_TRUE(header.contains(
+        QStringLiteral("QVector<QVector3D> displayedCameraImagePlaneCorners() const")));
+    EXPECT_TRUE(header.contains(
+        QStringLiteral("QPainterPath foregroundCameraImageOcclusionPath() const")));
+    EXPECT_TRUE(source.contains(QStringLiteral("Format_RGBX8888")));
+
+    const qsizetype overlayStart = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::paintOverlay(QPainter &painter)"));
+    const qsizetype floorCross = source.indexOf(
+        QStringLiteral("drawFloorPivotCross(painter);"), overlayStart);
+    ASSERT_GE(overlayStart, 0);
+    ASSERT_GT(floorCross, overlayStart);
+    const QString overlayBlock = source.mid(overlayStart, floorCross - overlayStart);
+    EXPECT_TRUE(overlayBlock.contains(
+        QStringLiteral("foregroundCameraImageOcclusionPath()")));
+    EXPECT_TRUE(overlayBlock.contains(
+        QStringLiteral("visibleScene.subtracted(foregroundImageOcclusion)")));
+    EXPECT_TRUE(overlayBlock.contains(
+        QStringLiteral("painter.setClipPath(visibleScene, Qt::IntersectClip)")));
+    EXPECT_TRUE(overlayBlock.contains(QStringLiteral("drawTiePointCloudOverlay(painter);")));
+}
+
 TEST(CameraSceneRenderContractTest, SolidCameraCardsUseDepthTestedGpuResourcesWhenThumbnailsAreDisabled)
 {
     const QString source = readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));

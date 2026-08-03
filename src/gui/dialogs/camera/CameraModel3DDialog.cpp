@@ -3644,27 +3644,7 @@ void CameraSceneWidget::drawActiveCameraImage(QRhiCommandBuffer *cb, const QMatr
         return;
     }
 
-    const CameraPose &pose = _poses.at(pose_index);
-    const QImage image = cachedCameraPlaneImage(pose.imagePath, CameraImagePlaneMode::Image);
-    const int image_width = pose.imageWidth > 0 ? pose.imageWidth : image.width();
-    const int image_height = pose.imageHeight > 0 ? pose.imageHeight : image.height();
-    const QVector3D forward = xjw::gui::camera_scene::cameraForwardDirection(
-        pose.rotation, pose.depthAxisFlipped);
-    const xjw::gui::camera_scene::CameraImagePlaneAxes axes =
-        xjw::gui::camera_scene::cameraImagePlaneAxes(
-            pose.rotation, pose.uAxisSign, pose.vAxisSign);
-    const QVector<QVector3D> corners = xjw::gui::camera_scene::calibratedImagePlaneCorners(
-        pose.center,
-        forward,
-        axes.right,
-        axes.up,
-        sceneCenter(),
-        pose.focalX,
-        pose.focalY,
-        pose.principalX,
-        pose.principalY,
-        image_width,
-        image_height);
+    const QVector<QVector3D> corners = displayedCameraImagePlaneCorners();
     if (corners.size() != 4)
     {
         return;
@@ -3691,6 +3671,75 @@ void CameraSceneWidget::drawActiveCameraImage(QRhiCommandBuffer *cb, const QMatr
     const QRhiCommandBuffer::VertexInput vertex_input(_imagePipeline.vertexBuffer.data(), 0);
     cb->setVertexInput(0, 1, &vertex_input);
     cb->draw(6);
+}
+
+QVector<QVector3D> CameraSceneWidget::displayedCameraImagePlaneCorners() const
+{
+    const int poseIndex = displayedCameraImagePoseIndex();
+    if (poseIndex < 0 || poseIndex >= _poses.size())
+    {
+        return {};
+    }
+
+    const CameraPose &pose = _poses.at(poseIndex);
+    const QImage image = cachedCameraPlaneImage(pose.imagePath, CameraImagePlaneMode::Image);
+    if (image.isNull())
+    {
+        return {};
+    }
+
+    const int imageWidth = pose.imageWidth > 0 ? pose.imageWidth : image.width();
+    const int imageHeight = pose.imageHeight > 0 ? pose.imageHeight : image.height();
+    const QVector3D forward = xjw::gui::camera_scene::cameraForwardDirection(
+        pose.rotation, pose.depthAxisFlipped);
+    const xjw::gui::camera_scene::CameraImagePlaneAxes axes =
+        xjw::gui::camera_scene::cameraImagePlaneAxes(
+            pose.rotation, pose.uAxisSign, pose.vAxisSign);
+    return xjw::gui::camera_scene::calibratedImagePlaneCorners(
+        pose.center,
+        forward,
+        axes.right,
+        axes.up,
+        sceneCenter(),
+        pose.focalX,
+        pose.focalY,
+        pose.principalX,
+        pose.principalY,
+        imageWidth,
+        imageHeight);
+}
+
+QPainterPath CameraSceneWidget::foregroundCameraImageOcclusionPath() const
+{
+    QPainterPath occlusionPath;
+    if (!_showCameraImage
+        || _cameraImageDisplayLayer != CameraImageDisplayLayer::Foreground)
+    {
+        return occlusionPath;
+    }
+
+    const QVector<QVector3D> corners = displayedCameraImagePlaneCorners();
+    if (corners.size() != 4)
+    {
+        return occlusionPath;
+    }
+
+    QPolygonF projectedPlane;
+    projectedPlane.reserve(corners.size());
+    for (const QVector3D &corner : corners)
+    {
+        bool projected = false;
+        const QPointF screenPoint = projectToScreen(corner, &projected);
+        if (!projected)
+        {
+            return {};
+        }
+        projectedPlane.push_back(screenPoint);
+    }
+
+    occlusionPath.addPolygon(projectedPlane);
+    occlusionPath.closeSubpath();
+    return occlusionPath;
 }
 
 void CameraSceneWidget::drawSceneGeometry(QRhiCommandBuffer *cb, SceneUniforms &uniforms)
@@ -4030,6 +4079,18 @@ void CameraSceneWidget::paintOverlay(QPainter &painter)
         return;
     }
 
+    // 前景照片是最终遮挡层。Vulkan 场景先被不透明照片覆盖，随后绘制的
+    // QWidget 叠加内容也必须使用同一照片投影区域裁剪，不能再次穿透照片。
+    painter.save();
+    const QPainterPath foregroundImageOcclusion = foregroundCameraImageOcclusionPath();
+    if (!foregroundImageOcclusion.isEmpty())
+    {
+        QPainterPath visibleScene;
+        visibleScene.addRect(QRectF(rect()));
+        visibleScene = visibleScene.subtracted(foregroundImageOcclusion);
+        painter.setClipPath(visibleScene, Qt::IntersectClip);
+    }
+
     const QPointF center2d = manipCenterScreen();
     const qreal radiusPx = manipRadiusPx();
 
@@ -4250,6 +4311,8 @@ void CameraSceneWidget::paintOverlay(QPainter &painter)
     }
 
     drawFloorPivotCross(painter);
+    painter.restore();
+
     drawTiePointLegend(painter);
     drawModelLegend(painter);
 

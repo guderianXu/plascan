@@ -44,6 +44,7 @@ class ProjectManager;
 class QWidget;
 class QLabel;
 class QPainter;
+class QPainterPath;
 class CameraSceneOverlayWidget;
 class QRhiBuffer;
 class QRhiCommandBuffer;
@@ -279,6 +280,8 @@ private:
     void requestCameraPlaneImage(const QString &imagePath, CameraImagePlaneMode mode);
     void applyCameraPlaneImage(const CameraPlaneImageResult &result);
     int displayedCameraImagePoseIndex() const;
+    QVector<QVector3D> displayedCameraImagePlaneCorners() const;
+    QPainterPath foregroundCameraImageOcclusionPath() const;
     void updateActiveCameraForView();
     void refreshLockedCameraImage();
     void drawFloorPivotCross(QPainter &painter) const;
