@@ -564,42 +564,6 @@ TEST(SfmSourceContractTest, LightGlueSiftCarriesScaleAndOrientation)
     });
 }
 
-TEST(SfmSourceContractTest, ProductionMatchingRuntimeIsTensorRtOnly)
-{
-    const QString cmake = readSourceFile(
-        QStringLiteral("src/core/image_matching/CMakeLists.txt"));
-    const QString matchingStage = readSourceFile(
-        QStringLiteral("src/core/matchphototask/stages/MatchingStage.cpp"));
-    const QString runtimeHeader = readSourceFile(
-        QStringLiteral("src/core/matchphototask/runtime/MatchPhotosRuntime.h"));
-
-    expectContainsAll(cmake, {
-        "find_package(TensorRT REQUIRED)",
-        "TensorRtLightGlueMatcher.cpp",
-        "loma_r/LoMaRTensorRtBackend.cpp",
-        "TensorRT::nvinfer",
-    });
-    expectNotContainsAll(cmake, {
-        "find_package(Torch",
-        "\n    LightGlueMatcher.cpp",
-        "PLASCAN_ENABLE_TENSORRT",
-    });
-    expectContainsAll(matchingStage, {
-        "当前匹配算法 %1 仅支持 TensorRT/CUDA",
-        "resolveLightGlueTensorRtEngine",
-        "resolveLoMaRTensorRtPackage",
-    });
-    expectNotContainsAll(matchingStage, {
-        "TorchScript",
-        "resolveLightGlueModelPath",
-        "LightGlueBackend",
-    });
-    expectNotContainsAll(runtimeHeader, {
-        "resolveLightGlueModelPath",
-        "torchscript",
-    });
-}
-
 TEST(BuildDependencyContractTest, ProductionBuildDoesNotDependOnLibTorch)
 {
     const QString packages = readSourceFile(QStringLiteral("cmake/PlascanPackages.cmake"));

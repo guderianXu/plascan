@@ -10,8 +10,10 @@
 namespace xjw::image_matching
 {
 
+#if defined(PLASCAN_HAS_TENSORRT)
 void registerSiftLightGlueAlgorithm();
 void registerLoMaRAlgorithm();
+#endif
 
 namespace
 {
@@ -44,8 +46,10 @@ void ensureBuiltInAlgorithms()
     static std::once_flag once;
     std::call_once(once, []()
     {
+#if defined(PLASCAN_HAS_TENSORRT)
         registerSiftLightGlueAlgorithm();
         registerLoMaRAlgorithm();
+#endif
     });
 }
 

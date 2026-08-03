@@ -9,10 +9,11 @@ namespace xjw::image_matching
 namespace
 {
 
-TEST(ImageMatchingRegistryTest, ExposesTensorRtBuiltInAlgorithms)
+TEST(ImageMatchingRegistryTest, ExposesOnlyAvailableBuiltInAlgorithms)
 {
     const std::vector<ImageMatchingAlgorithmDescriptor> algorithms =
         ImageMatchingRegistry::descriptors();
+#if defined(PLASCAN_HAS_TENSORRT)
     ASSERT_EQ(algorithms.size(), 2U);
 
     const auto findAlgorithm = [&](const QString &id)
@@ -30,6 +31,9 @@ TEST(ImageMatchingRegistryTest, ExposesTensorRtBuiltInAlgorithms)
     EXPECT_TRUE(loma->requiresCuda);
     EXPECT_TRUE(loma->suppliesStableFeatureIds);
     EXPECT_TRUE(loma->requiresColorInput);
+#else
+    EXPECT_TRUE(algorithms.empty());
+#endif
 }
 
 TEST(ImageMatchingRegistryTest, RejectsUnknownAlgorithmWithoutFallback)
