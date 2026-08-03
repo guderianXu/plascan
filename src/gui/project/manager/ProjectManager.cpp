@@ -347,7 +347,9 @@ ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
                 }
 
                 _automaticModelDepthPreparationActive = false;
-                if (!success)
+                const bool missing_depth_batch =
+                    success && !_pendingAutomaticModelSettings.isEmpty();
+                if (!success || missing_depth_batch)
                 {
                     _pendingAutomaticModelSettings = QJsonObject();
                     emit meshProgressFinished(false);
