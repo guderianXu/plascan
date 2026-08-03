@@ -52,6 +52,24 @@ TEST(ImageIOTest, PreservesSixteenBitTiffDepth)
     EXPECT_EQ(cv::norm(restored, source, cv::NORM_INF), 0.0);
 }
 
+TEST(ImageIOTest, ExpandsSingleBandTiffWhenColorIsRequested)
+{
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+
+    const QString path =
+        QDir(temporary.path()).filePath(QStringLiteral("单波段影像.tif"));
+    cv::Mat source(7, 9, CV_8UC1, cv::Scalar(137));
+    ASSERT_TRUE(writeImage(path, source));
+
+    QString error;
+    const cv::Mat restored = readImage(path, cv::IMREAD_COLOR, &error);
+    ASSERT_FALSE(restored.empty()) << qPrintable(error);
+    ASSERT_EQ(restored.type(), CV_8UC3);
+    EXPECT_EQ(restored.size(), source.size());
+    EXPECT_EQ(restored.at<cv::Vec3b>(3, 4), cv::Vec3b(137, 137, 137));
+}
+
 TEST(ImageIOTest, ReportsMissingImagePath)
 {
     QString error;

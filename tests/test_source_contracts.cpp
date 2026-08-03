@@ -961,6 +961,29 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelDialogOffersAutomaticDepthM
     });
 }
 
+TEST(GuiAlgorithmAlignmentContractTest, AutomaticModelDepthPreparationUsesSingleStatusTask)
+{
+    const QString header =
+        readSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.h"));
+    const QString source =
+        readSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+
+    expectContainsAll(header, {
+        "_automaticModelDepthPreparationActive",
+    });
+    expectContainsAll(source, {
+        "if (_automaticModelDepthPreparationActive)",
+        R"(emit meshProgressChanged()",
+        R"(emit pointCloudProgressChanged(stage, percent))",
+        R"(_automaticModelDepthPreparationActive = true)",
+        R"(_automaticModelDepthPreparationActive = false)",
+    });
+    expectNotContainsAll(source, {
+        R"(this, &ProjectManager::pointCloudProgressChanged)",
+        R"(this, &ProjectManager::pointCloudProgressFinished)",
+    });
+}
+
 TEST(GuiAlgorithmAlignmentContractTest, GenerateModelBlockControlsAreBoundToSettings)
 {
     const QString dialog = readSourceFile(QStringLiteral("src/gui/dialogs/reconstruction/GenerateModelDialog.cpp"));

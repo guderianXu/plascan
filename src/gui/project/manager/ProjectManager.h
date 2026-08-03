@@ -364,6 +364,7 @@ private:
     ProjectMaskWorkflowController *_maskWorkflowController = nullptr;
     quint64 _projectSessionGeneration = 0;
     QJsonObject _pendingAutomaticModelSettings;
+    bool _automaticModelDepthPreparationActive = false;
 
     // AT/SFM 取消标志（跨线程共享）
     std::shared_ptr<std::atomic<bool>> _atCancelFlag;

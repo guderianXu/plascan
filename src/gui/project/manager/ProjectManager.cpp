@@ -324,11 +324,35 @@ ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
         connect(_pointCloudWorkflowController,
             &ProjectPointCloudWorkflowController::pointCloudProgressChanged,
             this,
-            &ProjectManager::pointCloudProgressChanged);
+            [this](const QString &stage, int percent)
+            {
+                if (_automaticModelDepthPreparationActive)
+                {
+                    emit meshProgressChanged(
+                        QStringLiteral("准备深度图：%1").arg(stage),
+                        std::clamp(percent * 3 / 5, 0, 59));
+                    return;
+                }
+                emit pointCloudProgressChanged(stage, percent);
+            });
         connect(_pointCloudWorkflowController,
             &ProjectPointCloudWorkflowController::pointCloudProgressFinished,
             this,
-            &ProjectManager::pointCloudProgressFinished);
+            [this](bool success)
+            {
+                if (!_automaticModelDepthPreparationActive)
+                {
+                    emit pointCloudProgressFinished(success);
+                    return;
+                }
+
+                _automaticModelDepthPreparationActive = false;
+                if (!success)
+                {
+                    _pendingAutomaticModelSettings = QJsonObject();
+                    emit meshProgressFinished(false);
+                }
+            });
         connect(_pointCloudWorkflowController,
             &ProjectPointCloudWorkflowController::pointCloudResultReady,
             this,
@@ -359,29 +383,6 @@ ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
                     60);
                 if (!_modelManager->startMeshReconstructionAsync(model_settings))
                 {
-                    emit meshProgressFinished(false);
-                }
-            });
-        connect(_pointCloudWorkflowController,
-            &ProjectPointCloudWorkflowController::pointCloudProgressChanged,
-            this,
-            [this](const QString &stage, int percent)
-            {
-                if (!_pendingAutomaticModelSettings.isEmpty())
-                {
-                    emit meshProgressChanged(
-                        QStringLiteral("准备深度图：%1").arg(stage),
-                        std::clamp(percent * 3 / 5, 0, 59));
-                }
-            });
-        connect(_pointCloudWorkflowController,
-            &ProjectPointCloudWorkflowController::pointCloudProgressFinished,
-            this,
-            [this](bool success)
-            {
-                if (!success && !_pendingAutomaticModelSettings.isEmpty())
-                {
-                    _pendingAutomaticModelSettings = QJsonObject();
                     emit meshProgressFinished(false);
                 }
             });
@@ -1776,6 +1777,7 @@ void ProjectManager::startGenerateModelAsync(const QJsonObject &settings)
     }
 
     _pendingAutomaticModelSettings = settings;
+    _automaticModelDepthPreparationActive = true;
     QJsonObject depth_settings = settings;
     depth_settings[QStringLiteral("reuseDepthMaps")] = false;
     depth_settings[QStringLiteral("force_depth_recompute")] = true;
@@ -1787,6 +1789,7 @@ void ProjectManager::startGenerateModelAsync(const QJsonObject &settings)
     if (!_pointCloudWorkflowController->startDepthMapsOnlyAsync(depth_settings))
     {
         _pendingAutomaticModelSettings = QJsonObject();
+        _automaticModelDepthPreparationActive = false;
         emit meshProgressFinished(false);
     }
 }

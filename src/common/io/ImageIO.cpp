@@ -139,7 +139,13 @@ cv::Mat readImageWithGdal(const QString &path,
         return {};
     }
 
-    const bool gray = requestsGrayImage(flags) || band_count < 3;
+    // Match cv::imread semantics: IMREAD_COLOR always returns three BGR
+    // channels, including for a single-band TIFF.  The previous GDAL path
+    // returned CV_8UC1 for such files, so downstream vertex colorization
+    // silently skipped every view that required CV_8UC3 input.
+    const bool color_requested = flags == cv::IMREAD_COLOR;
+    const bool gray = requestsGrayImage(flags)
+        || (!color_requested && band_count < 3);
     const bool alpha = !gray
         && flags == cv::IMREAD_UNCHANGED
         && band_count >= 4;
@@ -147,10 +153,16 @@ cv::Mat readImageWithGdal(const QString &path,
     cv::Mat output(rows, cols, CV_MAKETYPE(cv_depth, channels));
 
     int band_map[4] = {1, 2, 3, 4};
-    if (!gray)
+    if (!gray && band_count >= 3)
     {
         band_map[0] = 3;
         band_map[1] = 2;
+        band_map[2] = 1;
+    }
+    else if (!gray)
+    {
+        band_map[0] = 1;
+        band_map[1] = 1;
         band_map[2] = 1;
     }
     const CPLErr result = dataset->RasterIO(
