@@ -34,6 +34,15 @@ cmake --build . -j$(nproc)
 ctest --output-on-failure
 ```
 
+GUI 需要 Qt 6.7 或更高版本（使用 `QRhiWidget`）。Ubuntu 24.04 等只提供较旧 Qt 的环境仍可构建核心库、
+CLI 和非 GUI 测试：
+
+```bash
+cmake .. -DBUILD_TESTS=ON -DPLASCAN_BUILD_GUI=OFF
+cmake --build . -j$(nproc)
+ctest --output-on-failure
+```
+
 项目通过 git submodule 引用自研点云库 [plapoint](https://github.com/guderianXu/plapoint) 和矩阵库 [plamatrix](https://github.com/guderianXu/plamatrix)，无需额外安装。
 
 ### vcpkg / CPack 跨平台构建

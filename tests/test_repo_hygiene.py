@@ -34,6 +34,7 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("cmake -S . -B build", text)
         self.assertIn("cmake --build build", text)
         self.assertIn("ctest --test-dir build", text)
+        self.assertIn("-DPLASCAN_BUILD_GUI=OFF", text)
         self.assertIn("qt6-base-private-dev", text)
         self.assertIn("qt6-shadertools-dev", text)
         self.assertIn("libapriltag-dev", text)

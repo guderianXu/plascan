@@ -64,6 +64,7 @@ jobs:
           if ! cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_TESTS=ON \
+            -DPLASCAN_BUILD_GUI=OFF \
             -DPLASCAN_ENABLE_CONDA=OFF \
             -DPLASCAN_ENABLE_VCPKG=OFF \
             -DTorch_DIR="$PWD/.deps/libtorch/share/cmake/Torch" 2>&1 | tee configure.log; then
