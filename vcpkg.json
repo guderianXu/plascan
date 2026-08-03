@@ -45,6 +45,7 @@
         "gui",
         "harfbuzz",
         "jpeg",
+        "network",
         "pcre2",
         "png",
         "testlib",

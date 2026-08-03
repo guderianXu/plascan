@@ -15,6 +15,7 @@
 class QComboBox;
 class QLabel;
 class QLineEdit;
+class QPushButton;
 class QStackedWidget;
 class QToolButton;
 
@@ -53,6 +54,8 @@ private:
     void switchAlgorithmResource();
     /// 解析显式路径或自动搜索结果，让用户看到真正生效的模型包。
     void refreshMatchingResourceStatus();
+    /// 下载当前算法所需的预构建 TensorRT 包，并将入口文件写回设置。
+    void downloadCurrentModelPackage();
 
     QComboBox *_workflowCombo = nullptr;
     QStackedWidget *_workflowPages = nullptr;
@@ -60,6 +63,7 @@ private:
     QComboBox *_lomaRKeypointBudgetCombo = nullptr;
     QLineEdit *_matchingResourceEdit = nullptr;
     QToolButton *_matchingResourceBrowseButton = nullptr;
+    QPushButton *_downloadModelButton = nullptr;
     QLabel *_matchingResourceStatusLabel = nullptr;
     QString _currentAlgorithmId;
     QString _lightGlueEnginePath;

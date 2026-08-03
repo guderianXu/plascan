@@ -8,8 +8,8 @@ include_guard(GLOBAL)
 # ==============================================================================
 
 # ── Qt6 ───────────────────────────────────────────────────────────────────────
-# 合并所有模块所需组件（Core/Gui/Widgets/Concurrent/ShaderTools/GuiPrivate）
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Concurrent ShaderTools ShaderToolsTools GuiPrivate)
+# 合并所有模块所需组件（Network 用于异步下载可选模型资源）。
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network Concurrent ShaderTools ShaderToolsTools GuiPrivate)
 message(STATUS "plascan: found Qt6 ${Qt6_VERSION}")
 
 get_target_property(_PLASCAN_QT_GUI_PUBLIC_FEATURES Qt6::Gui QT_ENABLED_PUBLIC_FEATURES)

@@ -235,3 +235,43 @@ TEST(MatchPhotosRuntimeTest, SelectsLargestSafeEngineBucketFromModelDirectory)
     EXPECT_EQ(resolved.bucketKeypoints, 4096);
     EXPECT_NE(resolved.path, QDir::cleanPath(QFileInfo(bucket2048).absoluteFilePath()));
 }
+
+TEST(MatchPhotosRuntimeTest, ResolvesLightGlueFromReleasePackageSubdirectory)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString packageDirectory = QDir(directory.path()).filePath(
+        QStringLiteral("lightglue_tensorrt"));
+    ASSERT_TRUE(QDir().mkpath(packageDirectory));
+    const QString enginePath = createEngine(packageDirectory, 4096);
+
+    ScopedEnvironment explicitEngine("PLASCAN_LIGHTGLUE_TENSORRT_ENGINE", QByteArray());
+    ScopedEnvironment modelDirectory(
+        "PLASCAN_MODEL_DIR", QFile::encodeName(directory.path()));
+    const auto resolved = xjw::matchphotos::resolveLightGlueTensorRtEngine(
+        xjw::matchphotos::MatchPhotosOptions(), 4096);
+
+    ASSERT_TRUE(resolved.isValid());
+    EXPECT_EQ(resolved.path, QDir::cleanPath(QFileInfo(enginePath).absoluteFilePath()));
+}
+
+TEST(MatchPhotosRuntimeTest, ResolvesLoMaRFromReleasePackageSubdirectory)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString packageDirectory = QDir(directory.path()).filePath(
+        QStringLiteral("loma_r_tensorrt"));
+    ASSERT_TRUE(QDir().mkpath(packageDirectory));
+    const QString manifestPath = createLoMaRPackage(packageDirectory, 2048);
+
+    ScopedEnvironment explicitPackage("PLASCAN_LOMA_R_TENSORRT_PACKAGE", QByteArray());
+    ScopedEnvironment modelDirectory(
+        "PLASCAN_MODEL_DIR", QFile::encodeName(directory.path()));
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.lomaRKeypointBudget = 2048;
+    const auto resolved = xjw::matchphotos::resolveLoMaRTensorRtPackage(options, 40000);
+
+    ASSERT_TRUE(resolved.isValid()) << qPrintable(resolved.errorMessage);
+    EXPECT_EQ(resolved.manifestPath,
+              QDir::cleanPath(QFileInfo(manifestPath).absoluteFilePath()));
+}

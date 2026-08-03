@@ -5,9 +5,14 @@
 
 #include "application/WorkflowSettingsDialog.h"
 
+#include "application/ModelPackageDownloadDialog.h"
+
 #include "ImageMatchingRegistry.h"
+#include "MatchPhotosParallelism.h"
 #include "MatchPhotosOptions.h"
 #include "MatchPhotosRuntime.h"
+#include "model/ModelAssetCatalog.h"
+#include "model/ModelFileResolver.h"
 
 #include <QColor>
 #include <QComboBox>
@@ -247,8 +252,12 @@ void WorkflowSettingsDialog::setupUi()
     _matchingResourceBrowseButton->setIcon(style()->standardIcon(QStyle::SP_DialogOpenButton));
     _matchingResourceBrowseButton->setToolTip(QStringLiteral("选择 TensorRT 模型资源"));
     _matchingResourceBrowseButton->setFixedSize(32, 30);
+    _downloadModelButton = new QPushButton(QStringLiteral("下载模型"), enginePathRow);
+    _downloadModelButton->setObjectName(QStringLiteral("aerialDownloadModelButton"));
+    _downloadModelButton->setToolTip(QStringLiteral("从 PlaScan GitHub Release 下载已校验模型"));
     enginePathLayout->addWidget(_matchingResourceEdit, 1);
     enginePathLayout->addWidget(_matchingResourceBrowseButton);
+    enginePathLayout->addWidget(_downloadModelButton);
     aerialForm->addRow(QStringLiteral("模型资源:"), enginePathRow);
 
     _matchingResourceStatusLabel = new QLabel(aerialGroup);
@@ -295,6 +304,8 @@ void WorkflowSettingsDialog::setupUi()
             _matchingResourceEdit->setText(QFileInfo(selected).absoluteFilePath());
         }
     });
+    connect(_downloadModelButton, &QPushButton::clicked,
+            this, &WorkflowSettingsDialog::downloadCurrentModelPackage);
 
     auto *buttons = new QDialogButtonBox(
         QDialogButtonBox::RestoreDefaults | QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
@@ -396,6 +407,7 @@ void WorkflowSettingsDialog::refreshAlgorithmControls()
         algorithmId == QLatin1String(kLoMaRAlgorithmId);
     _matchingResourceEdit->setEnabled(supported);
     _matchingResourceBrowseButton->setEnabled(supported);
+    _downloadModelButton->setEnabled(supported);
     _lomaRKeypointBudgetCombo->setEnabled(
         algorithmId == QLatin1String(kLoMaRAlgorithmId));
     if (supported)
@@ -405,6 +417,7 @@ void WorkflowSettingsDialog::refreshAlgorithmControls()
     else
     {
         _matchingResourceStatusLabel->setText(QStringLiteral("不适用"));
+        _downloadModelButton->setVisible(false);
     }
 }
 
@@ -473,6 +486,7 @@ void WorkflowSettingsDialog::refreshMatchingResourceStatus()
         _matchingResourceStatusLabel->setPalette(palette);
         _matchingResourceStatusLabel->setText(
             detail.isEmpty() ? QStringLiteral("未找到自动模型资源") : detail);
+        _downloadModelButton->setVisible(true);
         return;
     }
 
@@ -480,4 +494,42 @@ void WorkflowSettingsDialog::refreshMatchingResourceStatus()
     _matchingResourceStatusLabel->setPalette(palette);
     _matchingResourceStatusLabel->setText(
         QDir::toNativeSeparators(resolvedPath) + detail);
+    _downloadModelButton->setVisible(false);
+}
+
+void WorkflowSettingsDialog::downloadCurrentModelPackage()
+{
+    const QString algorithmId = _matchingAlgorithmCombo->currentData().toString();
+    xjw::common::model::ModelAssetPackage package;
+    if (algorithmId == QLatin1String(kLoMaRAlgorithmId))
+    {
+        const int requestedBudget = _lomaRKeypointBudgetCombo->currentData().toInt();
+        const int effectiveBudget = xjw::matchphotos::resolveLoMaRKeypointBudget(
+            40000,
+            requestedBudget,
+            xjw::matchphotos::queryMatchPhotosGpuMemory(0));
+        package = xjw::common::model::loMaRTensorRtPackage(effectiveBudget);
+    }
+    else if (algorithmId == QLatin1String(kSiftLightGlueAlgorithmId))
+    {
+        package = xjw::common::model::lightGlueTensorRtPackage();
+    }
+    else
+    {
+        return;
+    }
+
+    const xjw::common::model::ModelFileResolver resolver;
+    const QString targetDirectory =
+        xjw::common::model::modelPackageInstallDirectory(package, resolver);
+    QString errorMessage;
+    if (!ModelPackageDownloadDialog::downloadPackage(
+            package, targetDirectory, this, &errorMessage))
+    {
+        return;
+    }
+
+    _matchingResourceEdit->setText(
+        xjw::common::model::modelPackageEntryPoint(package, resolver));
+    refreshMatchingResourceStatus();
 }

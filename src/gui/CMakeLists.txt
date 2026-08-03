@@ -107,6 +107,7 @@ target_link_libraries(gui_project PRIVATE
   Qt6::Core
   Qt6::Gui
   Qt6::Widgets
+  Qt6::Network
   Qt6::Concurrent
   plascan_common_project
   project_workflows
@@ -143,6 +144,7 @@ target_link_libraries(plascan_gui PRIVATE
   Qt6::Gui
   Qt6::GuiPrivate
   Qt6::Widgets
+  Qt6::Network
   Qt6::Concurrent
   Qt6::ShaderTools
   plascan_common_log

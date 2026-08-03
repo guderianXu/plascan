@@ -7,7 +7,7 @@ include(CheckLanguage)
 # ── GTest ────────────────────────────────────────────────────────────────────
 find_package(GTest REQUIRED)
 include(GoogleTest)
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Test Widgets Concurrent)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Test Widgets Network Concurrent)
 find_package(Python3 COMPONENTS Interpreter)
 
 # ── 依赖 ─────────────────────────────────────────────────────────────────────
@@ -528,6 +528,7 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/AerialTriangulationDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/AerialTriangulationDialog.ui
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/application/AboutDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/application/ModelPackageDownloadDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/application/PythonRuntimeDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/runtime/PythonRuntimeManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/image/GenerateMaskDialog.cpp
@@ -604,6 +605,7 @@ target_link_libraries(test_gui_project_utils PRIVATE
     Qt6::Core
     Qt6::Concurrent
     Qt6::Gui
+    Qt6::Network
     Qt6::Test
     Qt6::Widgets
     ${OpenCV_LIBS}
@@ -695,12 +697,15 @@ gtest_discover_tests(test_map_project_dialog
 
 add_executable(test_workflow_settings_dialog
     test_workflow_settings_dialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/application/ModelPackageDownloadDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/application/WorkflowSettingsDialog.cpp
 )
 target_link_libraries(test_workflow_settings_dialog PRIVATE
     matchphototask
+    plascan_common_model
     Qt6::Core
     Qt6::Gui
+    Qt6::Network
     Qt6::Widgets
     GTest::gtest
 )

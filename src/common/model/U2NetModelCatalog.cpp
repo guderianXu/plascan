@@ -1,5 +1,7 @@
 #include "model/U2NetModelCatalog.h"
 
+#include <QDir>
+
 namespace xjw::common::model
 {
 
@@ -27,14 +29,18 @@ U2NetModelStatus u2netModelStatus(const ModelFileResolver &resolver)
     if (status.isInstalled)
     {
         status.label = QStringLiteral("已安装");
-        status.detail = QStringLiteral("模型文件：%1").arg(pickedName);
+        status.detail = QStringLiteral("模型文件：%1\n路径：%2")
+            .arg(pickedName, QDir::toNativeSeparators(status.modelPath));
         return status;
     }
 
     status.label = QStringLiteral("未安装");
     status.missingFiles = status.spec.modelFileNames;
-    status.detail = QStringLiteral("缺少：%1；请放到 PLASCAN_MODEL_DIR 或 resources/models。")
-        .arg(status.spec.modelFileNames.front());
+    const ModelInstallLocation location = resolver.installLocation();
+    status.detail = QStringLiteral("缺少：%1\n下载位置（%2）：%3")
+        .arg(status.spec.modelFileNames.front(),
+             location.label,
+             QDir::toNativeSeparators(location.directory));
     return status;
 }
 

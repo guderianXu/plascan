@@ -52,8 +52,9 @@ common/
 ├── runtime/
 │   └── PythonRuntimeLocator.h/cpp # Python 运行时路径解析（环境变量/.venv/兼容文件）
 ├── model/
-│   ├── ModelFileResolver.h/cpp # 通用模型搜索路径解析（PLASCAN_MODEL_DIR、源码树和安装目录）
-│   └── U2NetModelCatalog.h/cpp # U2Net ONNX 文件名和安装状态
+│   ├── ModelFileResolver.h/cpp # 区分源码运行、安装包和用户数据目录的模型搜索/安装位置
+│   ├── ModelAssetCatalog.h/cpp # GitHub Release 模型资产 URL、大小、SHA-256 和兼容性目录
+│   └── U2NetModelCatalog.h/cpp # U2Net ONNX 文件名、实际路径和安装状态
 ├── project/
 │   ├── ProjectIO.h/cpp # 项目目录、临时缓存、资源和产物路径规则
 │   ├── ProjectArtifactIO.cpp # 基于规范化影像路径哈希的项目产物寻址

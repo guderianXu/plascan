@@ -4,6 +4,7 @@
 #include <QComboBox>
 #include <QJsonObject>
 #include <QLineEdit>
+#include <QPushButton>
 #include <QStackedWidget>
 
 #include <gtest/gtest.h>
@@ -51,10 +52,13 @@ TEST(WorkflowSettingsDialogTest, ExposesFourWorkflowPagesAndOnlyAerialIsEditable
     auto *workflowPages = dialog.findChild<QStackedWidget *>(QStringLiteral("workflowPages"));
     auto *algorithmSelector = dialog.findChild<QComboBox *>(
         QStringLiteral("aerialMatchingAlgorithmCombo"));
+    auto *downloadButton = dialog.findChild<QPushButton *>(
+        QStringLiteral("aerialDownloadModelButton"));
 
     ASSERT_NE(workflowSelector, nullptr);
     ASSERT_NE(workflowPages, nullptr);
     ASSERT_NE(algorithmSelector, nullptr);
+    ASSERT_NE(downloadButton, nullptr);
     EXPECT_EQ(workflowSelector->count(), 4);
     EXPECT_EQ(workflowSelector->currentData().toString(),
               QStringLiteral("aerial_triangulation"));

@@ -4,6 +4,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QSet>
+#include <QStandardPaths>
 
 #include <utility>
 
@@ -24,6 +25,30 @@ QString defaultSourceRoot()
 QString cleanFilePath(const QString &path)
 {
     return QDir::cleanPath(path.trimmed());
+}
+
+QString absoluteCleanPath(const QString &path)
+{
+    if (path.trimmed().isEmpty())
+    {
+        return QString();
+    }
+    return QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+}
+
+bool pathIsInside(const QString &path, const QString &directory)
+{
+    const QString clean_path = absoluteCleanPath(path);
+    const QString clean_directory = absoluteCleanPath(directory);
+    if (clean_path.isEmpty() || clean_directory.isEmpty())
+    {
+        return false;
+    }
+
+    const QString relative = QDir(clean_directory).relativeFilePath(clean_path);
+    return relative != QStringLiteral("..")
+        && !relative.startsWith(QStringLiteral("../"))
+        && !QFileInfo(relative).isAbsolute();
 }
 
 void appendUniquePath(QStringList *paths, QSet<QString> *seen, const QString &path)
@@ -74,6 +99,12 @@ ModelFileResolver::ModelFileResolver(ModelFileSearchOptions options)
     if (_options.applicationDir.trimmed().isEmpty())
     {
         _options.applicationDir = QCoreApplication::applicationDirPath();
+    }
+    if (_options.userModelDir.trimmed().isEmpty())
+    {
+        _options.userModelDir = QDir(
+            QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation))
+            .filePath(QStringLiteral("models"));
     }
 }
 
@@ -128,13 +159,14 @@ QStringList ModelFileResolver::candidatePaths(const QString &model_name) const
     {
         appendModelPath(&candidates, &seen, qEnvironmentVariable(env_name.toUtf8().constData()), clean_model_name);
     }
-    if (!_options.sourceRoot.trimmed().isEmpty())
+    if (isSourceTreeRuntime())
     {
         appendModelPath(&candidates,
                         &seen,
                         QDir(_options.sourceRoot).filePath(QStringLiteral("resources/models")),
                         clean_model_name);
     }
+    appendModelPath(&candidates, &seen, _options.userModelDir, clean_model_name);
     if (!_options.applicationDir.trimmed().isEmpty())
     {
         const QDir app_dir(_options.applicationDir);
@@ -143,10 +175,6 @@ QStringList ModelFileResolver::candidatePaths(const QString &model_name) const
         appendModelPath(&candidates, &seen, app_dir.filePath(QStringLiteral("../../resources/models")), clean_model_name);
         appendModelPath(&candidates, &seen, app_dir.filePath(QStringLiteral("../models")), clean_model_name);
     }
-    appendModelPath(&candidates,
-                    &seen,
-                    QDir::current().filePath(QStringLiteral("resources/models")),
-                    clean_model_name);
     for (const QString &dir : _options.extraSearchDirs)
     {
         appendModelPath(&candidates, &seen, dir, clean_model_name);
@@ -156,24 +184,58 @@ QStringList ModelFileResolver::candidatePaths(const QString &model_name) const
 
 QString ModelFileResolver::defaultModelDir() const
 {
+    return installLocation().directory;
+}
+
+ModelInstallLocation ModelFileResolver::installLocation() const
+{
     const QString env_name = _options.environmentVariable.trimmed();
     if (!env_name.isEmpty())
     {
         const QString env_dir = qEnvironmentVariable(env_name.toUtf8().constData()).trimmed();
         if (!env_dir.isEmpty())
         {
-            return cleanFilePath(env_dir);
+            return {
+                cleanFilePath(env_dir),
+                QStringLiteral("PLASCAN_MODEL_DIR"),
+                ModelInstallLocationKind::EnvironmentOverride,
+            };
         }
     }
-    if (!_options.sourceRoot.trimmed().isEmpty())
+    if (isSourceTreeRuntime())
     {
-        return cleanFilePath(QDir(_options.sourceRoot).filePath(QStringLiteral("resources/models")));
+        return {
+            cleanFilePath(QDir(_options.sourceRoot).filePath(QStringLiteral("resources/models"))),
+            QStringLiteral("源码资源目录"),
+            ModelInstallLocationKind::SourceTree,
+        };
     }
-    if (!_options.applicationDir.trimmed().isEmpty())
+    if (!_options.userModelDir.trimmed().isEmpty())
     {
-        return cleanFilePath(QDir(_options.applicationDir).filePath(QStringLiteral("resources/models")));
+        return {
+            cleanFilePath(_options.userModelDir),
+            QStringLiteral("用户模型目录"),
+            ModelInstallLocationKind::UserData,
+        };
     }
-    return cleanFilePath(QDir::current().filePath(QStringLiteral("resources/models")));
+    return {
+        cleanFilePath(QDir::home().filePath(QStringLiteral(".plascan/models"))),
+        QStringLiteral("用户模型目录"),
+        ModelInstallLocationKind::UserData,
+    };
+}
+
+bool ModelFileResolver::isSourceTreeRuntime() const
+{
+    const QString source_root = absoluteCleanPath(_options.sourceRoot);
+    const QString application_dir = absoluteCleanPath(_options.applicationDir);
+    if (source_root.isEmpty() || application_dir.isEmpty())
+    {
+        return false;
+    }
+
+    const QFileInfo cmake_file(QDir(source_root).filePath(QStringLiteral("CMakeLists.txt")));
+    return cmake_file.isFile() && pathIsInside(application_dir, source_root);
 }
 
 } // namespace xjw::common::model

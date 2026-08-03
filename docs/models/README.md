@@ -3,10 +3,27 @@
 PlaScan 生产构建使用 TensorRT 匹配资源和 U2Net ONNX 蒙版模型，不链接 LibTorch。Python PyTorch 只用于
 开发机上的模型导出，不进入 C++ 运行时或安装包。
 
+## 预构建模型下载
+
+工作流程设置会检测当前匹配算法的 TensorRT 资源。资源缺失时可点击“下载模型”，程序从
+[`models-v1.0.0`](https://github.com/guderianXu/plascan/releases/tag/models-v1.0.0) Release 下载
+engine/manifest，逐文件验证长度与 SHA-256 后直接使用，不需要本机 Python 或模型转换环境。
+
+- 源码树运行：写入 `resources/models/lightglue_tensorrt` 或
+  `resources/models/loma_r_tensorrt`；
+- 安装版运行：写入 `QStandardPaths::AppLocalDataLocation/models` 下的算法子目录，避免安装目录无写权限；
+- 设置 `PLASCAN_MODEL_DIR`：优先写入该目录下的算法子目录，适合共享模型盘或自定义部署。
+
+首批 engine 由 NVIDIA GeForce RTX 5080（SM 12.0）和 TensorRT 10.16.1.11 构建。TensorRT engine
+与 GPU 架构、TensorRT/CUDA 运行时绑定；Release 下载解决的是模型分发问题，不保证跨架构反序列化。
+其他环境仍需发布对应兼容包，运行时加载失败会明确报告，不会调用 Python 现场转换或静默降级。
+Release 全部资产的离线校验值见 `docs/models/models-v1.0.0.sha256`。
+
 ## SIFT + LightGlue TensorRT
 
 SIFT 由 CUDA 实现提取，不需要权重文件。LightGlue 只使用 TensorRT，不包含 TorchScript matcher 或
-CPU 回退。engine 与 TensorRT 版本、GPU 架构、精度和固定关键点容量绑定，应在目标机器上生成。
+CPU 回退。engine 与 TensorRT 版本、GPU 架构、精度和固定关键点容量绑定；兼容机器可直接使用 Release
+预构建资源，其他机器应在目标环境生成并选择对应 engine。
 
 ```powershell
 python scripts\env\setup_python_runtime.py --device cuda --cuda-wheel cu130
@@ -78,6 +95,28 @@ LoMa-R 来源为 `davnords/loma`。其主体代码采用 MIT 许可，匹配器�
 
 `resources/models/U2Net_v1.onnx` 用于快速前景/背景分离。标准 OpenCV DNN 构建支持 CPU；CUDA 需要
 OpenCV 启用 DNN CUDA 后端。未启用时，只有用户允许回退才切换到 CPU。
+
+在“生成蒙版”中选择“AI: U2Net ONNX”时，GUI 会自动检测模型。模型缺失时可点击“下载 U2Net
+模型”，PlaScan 从 GitHub Release `models-v1.0.0` 异步下载，并在写入最终文件前验证固定大小和
+SHA-256：
+
+```text
+文件：U2Net_v1.onnx
+大小：175997641 bytes
+SHA-256：8d10d2f3bb75ae3b6d527c77944fc5e7dcd94b29809d47a739a7a728a912b491
+```
+
+下载目录按运行形态选择：
+
+- 设置 `PLASCAN_MODEL_DIR` 时写入该目录；
+- 从仓库构建目录运行时写入源码树 `resources/models/`；
+- 安装包或便携版运行时写入 Qt 的用户应用数据目录下 `models/`，不会尝试写入 `Program Files`
+  或其它只读安装目录。Windows 通常为 `%LOCALAPPDATA%/PlaScan/models`，Linux 使用对应的用户
+  数据目录。
+
+下载过程使用同目录 `.part` 临时文件，文件大小和 SHA-256 均通过后才替换最终模型。U-2-Net
+上游项目采用 Apache-2.0 许可；发布或再分发模型时必须保留上游来源与许可说明：
+<https://github.com/xuebinqin/U-2-Net>。
 
 ```powershell
 pwsh scripts\build_win\build_windows_cuda.ps1 -InstallDeps -EnableOpenCvDnnCuda

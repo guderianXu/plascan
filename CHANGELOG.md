@@ -6,6 +6,12 @@
 
 ### 新增
 
+- 工作流程设置新增 TensorRT 模型下载入口：模型缺失时按当前匹配算法和 LoMa-R 特征档位从独立
+  GitHub Model Release 异步下载，显示总字节进度，并在提交文件前校验长度与 SHA-256；源码运行写入
+  `resources/models`，安装版写入用户应用数据目录，不依赖 Python 现场转换。
+- “生成蒙版”选择“AI: U2Net ONNX”时自动检测模型；缺失时提供 GitHub Model Release 下载按钮，
+  校验 175997641 字节和固定 SHA-256 后安装。源码构建写入 `resources/models`，安装版写入用户模型目录。
+
 - 工作流程新增“创建点云”入口和独立 `ProjectDenseReconstructionManager`：从最新正式 SfM/BA 结果准备
   MVS 视图与项目蒙版，可复用兼容深度图或重新估计，并通过有界流式融合生成、登记稠密点云；主窗口提供
   独立的真实进度与取消状态。

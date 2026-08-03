@@ -30,3 +30,6 @@ logs/
 resources/models/sam2.1_hiera_tiny.pt
 resources/models/sam21_hiera_*.pt
 resources/models/U2Net_v1.onnx
+# TensorRT engine 体积大且与 GPU/TensorRT 版本绑定，通过 GitHub Release 分发。
+resources/models/lightglue_tensorrt/
+resources/models/loma_r_tensorrt/

@@ -11,8 +11,23 @@ struct ModelFileSearchOptions
 {
     QString sourceRoot;
     QString applicationDir;
+    QString userModelDir;
     QString environmentVariable = QStringLiteral("PLASCAN_MODEL_DIR");
     QStringList extraSearchDirs;
+};
+
+enum class ModelInstallLocationKind
+{
+    EnvironmentOverride,
+    SourceTree,
+    UserData
+};
+
+struct ModelInstallLocation
+{
+    QString directory;
+    QString label;
+    ModelInstallLocationKind kind = ModelInstallLocationKind::UserData;
 };
 
 class ModelFileResolver
@@ -23,9 +38,13 @@ public:
     QString findModel(const QString &modelName) const;
     QString findFirstModel(const QStringList &modelNames, QString *pickedModelName = nullptr) const;
     QStringList candidatePaths(const QString &modelName) const;
+    /// 返回当前运行形态下可写的模型根目录，不会指向受保护的安装目录。
     QString defaultModelDir() const;
+    ModelInstallLocation installLocation() const;
 
 private:
+    bool isSourceTreeRuntime() const;
+
     ModelFileSearchOptions _options;
 };
 

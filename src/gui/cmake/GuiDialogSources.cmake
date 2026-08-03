@@ -6,6 +6,8 @@ set(GUI_APPLICATION_DIALOG_SOURCES
   dialogs/application/AboutDialog.h
   dialogs/application/PythonRuntimeDialog.cpp
   dialogs/application/PythonRuntimeDialog.h
+  dialogs/application/ModelPackageDownloadDialog.cpp
+  dialogs/application/ModelPackageDownloadDialog.h
   dialogs/application/WorkflowReportDialog.cpp
   dialogs/application/WorkflowReportDialog.h
   dialogs/application/WorkflowReportDialog.ui

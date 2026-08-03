@@ -94,6 +94,16 @@ QStringList lightGlueTensorRtModelDirectories()
     appendUniqueDirectory(&directories, executableDir.filePath(QStringLiteral("../model_cache/lightglue_tensorrt")));
     appendUniqueDirectory(&directories, executableDir.filePath(QStringLiteral("../../model_cache/lightglue_tensorrt")));
     appendUniqueDirectory(&directories, QStringLiteral("models"));
+
+    // Release 下载器按算法分目录安装。保留上面的历史根目录搜索，同时显式扩展
+    // lightglue_tensorrt 子目录，确保源码运行与安装版使用完全相同的布局。
+    const QStringList modelRoots = directories;
+    for (const QString &root : modelRoots)
+    {
+        appendUniqueDirectory(
+            &directories,
+            QDir(root).filePath(QStringLiteral("lightglue_tensorrt")));
+    }
     return directories;
 }
 
@@ -113,6 +123,13 @@ QStringList loMaRTensorRtModelDirectories()
     appendUniqueDirectory(
         &directories,
         executableDir.filePath(QStringLiteral("../../model_cache/loma_r_tensorrt")));
+    const QStringList modelRoots = directories;
+    for (const QString &root : modelRoots)
+    {
+        appendUniqueDirectory(
+            &directories,
+            QDir(root).filePath(QStringLiteral("loma_r_tensorrt")));
+    }
     return directories;
 }
 

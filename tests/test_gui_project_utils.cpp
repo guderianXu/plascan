@@ -6775,6 +6775,39 @@ TEST(GenerateMaskDialogTest, ExposesU2NetOnnxCpuAndCudaSettings)
     EXPECT_DOUBLE_EQ(settings.value(QStringLiteral("u2net_mask_threshold")).toDouble(), 0.5);
 }
 
+TEST(GenerateMaskDialogTest, OffersVerifiedDownloadWhenU2NetModelIsMissing)
+{
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    xjw::common::model::ModelFileSearchOptions options;
+    options.sourceRoot = QDir(temp_dir.path()).filePath(QStringLiteral("missing_source"));
+    options.applicationDir = QDir(temp_dir.path()).filePath(QStringLiteral("installed/bin"));
+    options.userModelDir = QDir(temp_dir.path()).filePath(QStringLiteral("user_models"));
+    options.environmentVariable = QStringLiteral("PLASCAN_TEST_UNUSED_U2NET_DIR");
+
+    GenerateMaskDialog dialog(QStringList{QStringLiteral("a.png")}, QString(), nullptr, options);
+    auto *method_combo = dialog.findChild<QComboBox *>(QStringLiteral("methodCombo"));
+    auto *status_label = dialog.findChild<QLabel *>(QStringLiteral("u2netModelStatusLabel"));
+    auto *download_button = dialog.findChild<QPushButton *>(QStringLiteral("u2netDownloadButton"));
+    auto *buttons = dialog.findChild<QDialogButtonBox *>(QStringLiteral("maskDialogButtons"));
+    ASSERT_NE(method_combo, nullptr);
+    ASSERT_NE(status_label, nullptr);
+    ASSERT_NE(download_button, nullptr);
+    ASSERT_NE(buttons, nullptr);
+
+    method_combo->setCurrentIndex(method_combo->findData(QStringLiteral("u2net")));
+
+    EXPECT_TRUE(status_label->text().contains(QStringLiteral("未安装")))
+        << status_label->text().toStdString();
+    EXPECT_TRUE(status_label->text().contains(QStringLiteral("用户模型目录")))
+        << status_label->text().toStdString();
+    EXPECT_TRUE(status_label->text().contains(QDir::toNativeSeparators(options.userModelDir)));
+    EXPECT_FALSE(download_button->isHidden());
+    EXPECT_TRUE(download_button->isEnabled());
+    EXPECT_FALSE(buttons->button(QDialogButtonBox::Ok)->isEnabled());
+}
+
 TEST(GenerateMaskWorkflowTest, ProjectManagerUsesCommonIoForTiffMaskGeneration)
 {
     const QString source = readProjectSourceFile(

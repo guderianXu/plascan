@@ -17,6 +17,8 @@
 - 使用语义化版本：`vX.Y.Z`。
 - 快速迭代和未稳定版本使用预发布后缀：`vX.Y.Z-alpha.N`、`vX.Y.Z-beta.N`、`vX.Y.Z-rc.N`。
 - tag 必须从 `main` 创建，并优先使用 annotated tag。
+- 与应用版本独立的大型模型资产使用 `models-vX.Y.Z` tag，并创建为非 Latest Release；客户端目录固定
+  Release tag、文件大小和 SHA-256，发布后不得覆盖同名资产，更新模型必须递增模型版本。
 
 示例：
 

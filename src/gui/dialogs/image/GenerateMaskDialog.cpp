@@ -1,5 +1,7 @@
 #include "image/GenerateMaskDialog.h"
 
+#include "application/ModelPackageDownloadDialog.h"
+#include "model/ModelAssetCatalog.h"
 #include "model/ModelFileResolver.h"
 #include "model/U2NetModelCatalog.h"
 
@@ -18,12 +20,16 @@
 #include <QSpinBox>
 #include <QVBoxLayout>
 
+#include <utility>
+
 GenerateMaskDialog::GenerateMaskDialog(const QStringList &selectedImages,
                                        const QString &currentImage,
-                                       QWidget *parent)
+                                       QWidget *parent,
+                                       xjw::common::model::ModelFileSearchOptions modelSearchOptions)
     : QDialog(parent)
     , _selectedImages(selectedImages)
     , _currentImage(currentImage)
+    , _modelSearchOptions(std::move(modelSearchOptions))
 {
     setWindowTitle(tr("生成蒙版"));
     setModal(true);
@@ -74,6 +80,10 @@ GenerateMaskDialog::GenerateMaskDialog(const QStringList &selectedImages,
     _u2netModelStatusLabel = new QLabel(this);
     _u2netModelStatusLabel->setObjectName(QStringLiteral("u2netModelStatusLabel"));
     _u2netModelStatusLabel->setWordWrap(true);
+    _u2netModelStatusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+
+    _u2netDownloadButton = new QPushButton(tr("下载 U2Net 模型（167.8 MiB）"), this);
+    _u2netDownloadButton->setObjectName(QStringLiteral("u2netDownloadButton"));
 
     _u2netInputSizeSpin = new QSpinBox(this);
     _u2netInputSizeSpin->setObjectName(QStringLiteral("u2netInputSizeSpin"));
@@ -102,6 +112,7 @@ GenerateMaskDialog::GenerateMaskDialog(const QStringList &selectedImages,
     auto *u2net_layout = new QFormLayout(_u2netParameterPanel);
     u2net_layout->setContentsMargins(0, 0, 0, 0);
     u2net_layout->addRow(tr("U2Net 状态:"), _u2netModelStatusLabel);
+    u2net_layout->addRow(QString(), _u2netDownloadButton);
     u2net_layout->addRow(tr("U2Net 设备:"), _u2netDeviceCombo);
     u2net_layout->addRow(QString(), _u2netAllowFallbackCheck);
     u2net_layout->addRow(tr("U2Net 输入尺寸:"), _u2netInputSizeSpin);
@@ -139,21 +150,24 @@ GenerateMaskDialog::GenerateMaskDialog(const QStringList &selectedImages,
     auto *scope_group = new QGroupBox(tr("应用于"), this);
     scope_group->setLayout(scope_layout);
 
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
-    buttons->button(QDialogButtonBox::Ok)->setText(tr("OK"));
-    buttons->button(QDialogButtonBox::Cancel)->setText(tr("Cancel"));
-    connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    _buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+    _buttons->setObjectName(QStringLiteral("maskDialogButtons"));
+    _buttons->button(QDialogButtonBox::Ok)->setText(tr("OK"));
+    _buttons->button(QDialogButtonBox::Cancel)->setText(tr("Cancel"));
+    connect(_buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
+    connect(_buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     connect(_autoThresholdCheck, &QCheckBox::toggled, this, &GenerateMaskDialog::updateThresholdState);
     connect(_methodCombo, qOverload<int>(&QComboBox::currentIndexChanged),
             this, &GenerateMaskDialog::updateMethodState);
     connect(_u2netDeviceCombo, qOverload<int>(&QComboBox::currentIndexChanged),
             this, &GenerateMaskDialog::updateMethodState);
+    connect(_u2netDownloadButton, &QPushButton::clicked,
+            this, &GenerateMaskDialog::downloadU2NetModel);
 
     auto *main_layout = new QVBoxLayout(this);
     main_layout->addWidget(parameter_group);
     main_layout->addWidget(scope_group);
-    main_layout->addWidget(buttons);
+    main_layout->addWidget(_buttons);
 
     updateU2NetStatusText();
     updateMethodState();
@@ -223,8 +237,29 @@ void GenerateMaskDialog::updateU2NetStatusText()
 {
     const bool is_u2net = _methodCombo
         && _methodCombo->currentData().toString() == QLatin1String("u2net");
-    const xjw::common::model::ModelFileResolver resolver;
+    const xjw::common::model::ModelFileResolver resolver(_modelSearchOptions);
     const auto status = xjw::common::model::u2netModelStatus(resolver);
     _u2netModelStatusLabel->setEnabled(is_u2net);
     _u2netModelStatusLabel->setText(tr("状态：%1；%2").arg(status.label, status.detail));
+    _u2netDownloadButton->setVisible(is_u2net && !status.isInstalled);
+    _u2netDownloadButton->setEnabled(is_u2net && !status.isInstalled);
+    if (_buttons && _buttons->button(QDialogButtonBox::Ok))
+    {
+        _buttons->button(QDialogButtonBox::Ok)->setEnabled(!is_u2net || status.isInstalled);
+    }
+}
+
+void GenerateMaskDialog::downloadU2NetModel()
+{
+    const xjw::common::model::ModelFileResolver resolver(_modelSearchOptions);
+    const auto package = xjw::common::model::u2NetOnnxPackage();
+    const QString target_directory =
+        xjw::common::model::modelPackageInstallDirectory(package, resolver);
+
+    QString error;
+    if (ModelPackageDownloadDialog::downloadPackage(
+            package, target_directory, this, &error))
+    {
+        updateU2NetStatusText();
+    }
 }
