@@ -34,6 +34,7 @@ jobs:
             qt6-base-dev-tools \
             qt6-tools-dev \
             qt6-tools-dev-tools \
+            qt6-shadertools-dev \
             libqt6opengl6-dev \
             libgl1-mesa-dev \
             libxkbcommon-dev \
