@@ -1,6 +1,9 @@
 #pragma once
 
 #include <QWidget>
+#include <QFutureWatcher>
+#include <QImage>
+#include <QSet>
 #include <QTransform>
 #include <QRectF>
 #include <QPointF>
@@ -104,6 +107,7 @@ private:
     QVector<QGraphicsEllipseItem*> _pointItems;
     
     QString _imagePath;
+    QSet<QFutureWatcher<QImage> *> _imageLoadWatchers;
     int _highlightedIndex;
     
     // 缩放范围限制

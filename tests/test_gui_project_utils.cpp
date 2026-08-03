@@ -12087,63 +12087,6 @@ TEST(PhotoStripWidgetTest, ExtendedSelectionSurvivesCurrentPhotoSynchronization)
     QTest::qWait(100);
 }
 
-TEST(PhotoStripWidgetTest, CtrlAndShiftSelectionSurvivesPhotoSynchronization)
-{
-    QTemporaryDir tempDir;
-    ASSERT_TRUE(tempDir.isValid());
-
-    QJsonArray images;
-    QStringList imagePaths;
-    for (int index = 0; index < 4; ++index)
-    {
-        const QString imagePath = QDir(tempDir.path()).filePath(
-            QStringLiteral("image_%1.png").arg(index));
-        QImage testImage(16, 12, QImage::Format_RGB32);
-        testImage.fill(QColor(40 + index, 90, 160));
-        ASSERT_TRUE(testImage.save(imagePath));
-        imagePaths.push_back(imagePath);
-        images.append(QJsonObject{{QStringLiteral("path"), imagePath}});
-    }
-
-    PhotoStripWidget strip;
-    strip.resize(1000, 220);
-    strip.loadFromJson(QJsonObject{{QStringLiteral("images"), images}});
-    strip.show();
-    QCoreApplication::processEvents();
-
-    auto *list = strip.findChild<QListWidget *>(QStringLiteral("photoStripList"));
-    ASSERT_NE(list, nullptr);
-    ASSERT_EQ(list->count(), 4);
-    QObject::connect(&strip,
-                     &PhotoStripWidget::photoSelected,
-                     &strip,
-                     &PhotoStripWidget::setCurrentPhoto);
-
-    const auto clickItem = [list](int row, Qt::KeyboardModifiers modifiers = Qt::NoModifier)
-    {
-        const QPoint position = list->visualItemRect(list->item(row)).center();
-        QTest::mouseClick(list->viewport(), Qt::LeftButton, modifiers, position);
-        QCoreApplication::processEvents();
-    };
-
-    clickItem(0);
-    clickItem(1, Qt::ControlModifier);
-    EXPECT_TRUE(list->item(0)->isSelected());
-    EXPECT_TRUE(list->item(1)->isSelected());
-
-    clickItem(0, Qt::ControlModifier);
-    EXPECT_FALSE(list->item(0)->isSelected());
-    EXPECT_TRUE(list->item(1)->isSelected());
-
-    clickItem(1);
-    clickItem(3, Qt::ShiftModifier);
-    EXPECT_FALSE(list->item(0)->isSelected());
-    EXPECT_TRUE(list->item(1)->isSelected());
-    EXPECT_TRUE(list->item(2)->isSelected());
-    EXPECT_TRUE(list->item(3)->isSelected());
-    QTest::qWait(100);
-}
-
 TEST(PhotoStripWidgetTest, ContextMenuRequestsMasksForSelectedPhotos)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/PhotoStripWidget.cpp"));

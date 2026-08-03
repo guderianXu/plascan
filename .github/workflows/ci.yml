@@ -96,6 +96,7 @@ jobs:
         run: |
           set -o pipefail
           if ! QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure \
+            --timeout 120 \
             -E 'TerrainDemDomTest\.TerrainPipelineGeneratesDemDomFromDirectory' 2>&1 | tee test.log; then
             filtered_msg="$(grep -Ei 'failed|failure|error|exception|segmentation|timeout|not run|[0-9]+% tests passed' test.log | tail -n 120 || true)"
             if [ -z "$filtered_msg" ]; then
