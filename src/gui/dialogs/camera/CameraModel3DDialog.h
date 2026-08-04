@@ -462,7 +462,6 @@ private:
     RhiBufferSet _modelPointBuffer;
     int _modelPtCount = 0;
     float _modelPointSize = 2.4f;
-    float _pointColorScale = 1.0f;
 
     // 点云包围盒 GPU 资源。
     RhiBufferSet _lineBuffer;

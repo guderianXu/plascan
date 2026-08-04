@@ -513,7 +513,8 @@ TEST(CameraSceneRenderContractTest, ImportedPointCloudsUsePointCloudLoadersAndFi
     EXPECT_FALSE(uploadBlock.contains(QStringLiteral(
         "!_cloud.hasFaces() && !_cloud.hasNormals()")));
     EXPECT_TRUE(uploadBlock.contains(QStringLiteral(
-        "pointColorScale = maximumColorComponent <= 1.0f")));
+        "constexpr float pointColorScale = 1.0f / 255.0f")));
+    EXPECT_FALSE(uploadBlock.contains(QStringLiteral("maximumColorComponent")));
     EXPECT_TRUE(sceneHeader.contains(QStringLiteral(
         "void drawPointCloudOverlay(QPainter &painter) const;")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral(
@@ -522,7 +523,19 @@ TEST(CameraSceneRenderContractTest, ImportedPointCloudsUsePointCloudLoadersAndFi
         "constexpr std::size_t maximumOverlayPointCount = 150'000")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral("QColor::fromRgbF(")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral(
-        "_cloud.colors()->getValue(cloudIndex, 0) * _pointColorScale")));
+        "constexpr float byteScale = 1.0f / 255.0f")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
+        "matrices.modelView.mapVector(QVector3D(")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
+        "lightScale = 0.25f + 0.55f * keyDiffuse + 0.20f * headDiffuse")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
+        "return qMin(255, ((channel + 8) >> 4) << 4)")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
+        "QImage::Format_ARGB32_Premultiplied")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
+        "if (ndc.z() < pointCloudDepth[pixelIndex])")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
+        "pointCloudImage.setPixelColor(pixelX, pixelY, color)")));
 }
 
 TEST(CameraSceneRenderContractTest, PointCloudUsesOwnBoundsAndPixelSizedFloorPivot)

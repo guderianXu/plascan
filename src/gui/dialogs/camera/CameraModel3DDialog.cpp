@@ -34,6 +34,7 @@
 #include <QWheelEvent>
 #include <QCursor>
 #include <QIODevice>
+#include <QImage>
 #include <QPixmap>
 #include <QVector2D>
 #include <QJsonObject>
@@ -2603,25 +2604,9 @@ void CameraSceneWidget::uploadGpuData()
     _modelWireframeVertCount = 0;
     if (!(_cloud.size() == 0) && !_cloud.hasFaces()) {
         const bool hasColors = _cloud.hasColors();
-        _pointColorScale = 1.0f;
-        if (hasColors)
-        {
-            float maximumColorComponent = 0.0f;
-            for (std::size_t index = 0; index < _cloud.size(); ++index)
-            {
-                const plamatrix::Index pointIndex = static_cast<plamatrix::Index>(index);
-                for (int component = 0; component < 3; ++component)
-                {
-                    const float value = _cloud.colors()->getValue(pointIndex, component);
-                    if (std::isfinite(value))
-                    {
-                        maximumColorComponent = qMax(maximumColorComponent, value);
-                    }
-                }
-            }
-            // Metashape OBJ uses normalized RGB floats, while PLY commonly stores bytes.
-            _pointColorScale = maximumColorComponent <= 1.0f ? 1.0f : (1.0f / 255.0f);
-        }
+        // PointCloud stores imported colours as uint8. The OBJ reader has
+        // already converted Metashape's normalized RGB values to 0..255 bytes.
+        constexpr float pointColorScale = 1.0f / 255.0f;
         if (_isTiePointCloud)
         {
             double minimumElevation = std::numeric_limits<double>::infinity();
@@ -2690,13 +2675,13 @@ void CameraSceneWidget::uploadGpuData()
             }
             else if (hasColors) {
                 red = qBound(0.0f,
-                             _cloud.colors()->getValue(pointIndex, 0) * _pointColorScale,
+                             _cloud.colors()->getValue(pointIndex, 0) * pointColorScale,
                              1.0f);
                 green = qBound(0.0f,
-                               _cloud.colors()->getValue(pointIndex, 1) * _pointColorScale,
+                               _cloud.colors()->getValue(pointIndex, 1) * pointColorScale,
                                1.0f);
                 blue = qBound(0.0f,
-                              _cloud.colors()->getValue(pointIndex, 2) * _pointColorScale,
+                              _cloud.colors()->getValue(pointIndex, 2) * pointColorScale,
                               1.0f);
             }
 
@@ -4051,8 +4036,21 @@ void CameraSceneWidget::drawPointCloudOverlay(QPainter &painter) const
         1,
         (_cloud.size() + maximumOverlayPointCount - 1) / maximumOverlayPointCount);
     const bool hasColors = _cloud.hasColors();
+    const bool hasNormals = _cloud.hasNormals();
     const bool hasImageCounts =
         _tiePointImageCounts.size() == static_cast<qsizetype>(_cloud.size());
+    const QVector3D lightDirection = QVector3D(-0.45f, 0.70f, 0.70f).normalized();
+
+    QImage pointCloudImage;
+    QVector<float> pointCloudDepth;
+    if (!_isTiePointCloud)
+    {
+        pointCloudImage = QImage(size(), QImage::Format_ARGB32_Premultiplied);
+        pointCloudImage.fill(Qt::transparent);
+        pointCloudDepth.fill(
+            std::numeric_limits<float>::infinity(),
+            static_cast<qsizetype>(width()) * static_cast<qsizetype>(height()));
+    }
 
     QHash<QRgb, QVector<QPointF>> pointsByColor;
     pointsByColor.reserve(512);
@@ -4110,33 +4108,98 @@ void CameraSceneWidget::drawPointCloudOverlay(QPainter &painter) const
         }
         else if (hasColors)
         {
+            float lightScale = 1.0f;
+            if (!_isTiePointCloud && hasNormals)
+            {
+                QVector3D normal = matrices.modelView.mapVector(QVector3D(
+                    _cloud.normals()->getValue(cloudIndex, 0),
+                    _cloud.normals()->getValue(cloudIndex, 1),
+                    _cloud.normals()->getValue(cloudIndex, 2))).normalized();
+                const QVector3D viewPosition =
+                    (matrices.modelView * QVector4D(point, 1.0f)).toVector3D();
+                const QVector3D viewDirection = (-viewPosition).normalized();
+                if (QVector3D::dotProduct(normal, viewDirection) < 0.0f)
+                {
+                    normal = -normal;
+                }
+                const float headDiffuse = qMax(
+                    0.0f, QVector3D::dotProduct(normal, viewDirection));
+                const float keyDiffuse = qMax(
+                    0.0f, QVector3D::dotProduct(normal, lightDirection));
+                // Metashape shades oriented point clouds. Apply a similar
+                // two-sided view/key light in linear space so imported image
+                // colours retain their tonal range and surface relief.
+                lightScale = 0.25f + 0.55f * keyDiffuse + 0.20f * headDiffuse;
+            }
+
+            const auto litColorChannel = [lightScale](std::uint8_t byteValue)
+            {
+                constexpr float byteScale = 1.0f / 255.0f;
+                constexpr float gamma = 2.2f;
+                const float srgb = static_cast<float>(byteValue) * byteScale;
+                const float linear = std::pow(srgb, gamma) * lightScale;
+                return std::pow(qBound(0.0f, linear, 1.0f), 1.0f / gamma);
+            };
             color = QColor::fromRgbF(
-                qBound(0.0f,
-                       _cloud.colors()->getValue(cloudIndex, 0) * _pointColorScale,
-                       1.0f),
-                qBound(0.0f,
-                       _cloud.colors()->getValue(cloudIndex, 1) * _pointColorScale,
-                       1.0f),
-                qBound(0.0f,
-                       _cloud.colors()->getValue(cloudIndex, 2) * _pointColorScale,
-                       1.0f));
+                litColorChannel(_cloud.colors()->getValue(cloudIndex, 0)),
+                litColorChannel(_cloud.colors()->getValue(cloudIndex, 1)),
+                litColorChannel(_cloud.colors()->getValue(cloudIndex, 2)));
+        }
+
+        const QPointF screenPoint(
+            (ndc.x() * 0.5f + 0.5f) * width() + _sceneOffsetPx.x(),
+            (1.0f - (ndc.y() * 0.5f + 0.5f)) * height() + _sceneOffsetPx.y());
+        if (!_isTiePointCloud)
+        {
+            const int centerX = qRound(screenPoint.x());
+            const int centerY = qRound(screenPoint.y());
+            const int pointRadius = qMax(0, qRound(_modelPointSize * 0.5f) - 1);
+            for (int offsetY = -pointRadius; offsetY <= pointRadius; ++offsetY)
+            {
+                for (int offsetX = -pointRadius; offsetX <= pointRadius; ++offsetX)
+                {
+                    if (offsetX * offsetX + offsetY * offsetY > pointRadius * pointRadius)
+                    {
+                        continue;
+                    }
+                    const int pixelX = centerX + offsetX;
+                    const int pixelY = centerY + offsetY;
+                    if (pixelX < 0 || pixelX >= pointCloudImage.width()
+                        || pixelY < 0 || pixelY >= pointCloudImage.height())
+                    {
+                        continue;
+                    }
+                    const qsizetype pixelIndex =
+                        static_cast<qsizetype>(pixelY) * pointCloudImage.width() + pixelX;
+                    if (ndc.z() < pointCloudDepth[pixelIndex])
+                    {
+                        pointCloudDepth[pixelIndex] = ndc.z();
+                        pointCloudImage.setPixelColor(pixelX, pixelY, color);
+                    }
+                }
+            }
+            continue;
         }
 
         const auto quantizeChannel = [](int channel)
         {
-            return qMin(255, ((channel >> 5) << 5) + 16);
+            return qMin(255, ((channel + 8) >> 4) << 4);
         };
         const QRgb colorKey = qRgb(
             quantizeChannel(color.red()),
             quantizeChannel(color.green()),
             quantizeChannel(color.blue()));
-        pointsByColor[colorKey].append(QPointF(
-            (ndc.x() * 0.5f + 0.5f) * width() + _sceneOffsetPx.x(),
-            (1.0f - (ndc.y() * 0.5f + 0.5f)) * height() + _sceneOffsetPx.y()));
+        pointsByColor[colorKey].append(screenPoint);
     }
 
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing, false);
+    if (!_isTiePointCloud)
+    {
+        painter.drawImage(QPoint(0, 0), pointCloudImage);
+        painter.restore();
+        return;
+    }
     const qreal pointSize = _isTiePointCloud
         ? qMax<qreal>(2.2, xjw::gui::tie_points::pointSizeForMode(_tiePointColorMode))
         : qMax<qreal>(2.2, _modelPointSize);
