@@ -500,6 +500,20 @@ TEST(CameraSceneRenderContractTest, ImportedPointCloudsUsePointCloudLoadersAndFi
     EXPECT_TRUE(objLoaderBlock.contains(QStringLiteral("plapoint::io::readObj<float>")));
     EXPECT_TRUE(objLoaderBlock.contains(QStringLiteral(
         "if (!pointCloudResource && !result.textureWarning.isEmpty())")));
+
+    const qsizetype uploadStart = sceneSource.indexOf(
+        QStringLiteral("void CameraSceneWidget::uploadGpuData"));
+    const qsizetype pipelineStart = sceneSource.indexOf(
+        QStringLiteral("bool CameraSceneWidget::ensurePipeline"), uploadStart);
+    ASSERT_GE(uploadStart, 0);
+    ASSERT_GT(pipelineStart, uploadStart);
+    const QString uploadBlock = sceneSource.mid(uploadStart, pipelineStart - uploadStart);
+    EXPECT_TRUE(uploadBlock.contains(QStringLiteral(
+        "if (!(_cloud.size() == 0) && !_cloud.hasFaces())")));
+    EXPECT_FALSE(uploadBlock.contains(QStringLiteral(
+        "!_cloud.hasFaces() && !_cloud.hasNormals()")));
+    EXPECT_TRUE(uploadBlock.contains(QStringLiteral(
+        "pointColorScale = maximumColorComponent <= 1.0f")));
 }
 
 TEST(CameraSceneRenderContractTest, PointCloudUsesOwnBoundsAndPixelSizedFloorPivot)

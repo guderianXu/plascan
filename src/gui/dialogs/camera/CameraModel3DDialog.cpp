@@ -2597,12 +2597,31 @@ void CameraSceneWidget::uploadGpuData()
         _meshBuffer.vertexData.clear();
     }
 
-    // ── 1. 点云（_cloud，无面片且无法向量，颜色直通）──────────────────────────
+    // ── 1. 点云（_cloud，无面片；法向量可选，颜色直通）──────────────────────
     _pointCount = 0;
     _modelPtCount = 0;
     _modelWireframeVertCount = 0;
-    if (!(_cloud.size() == 0) && !_cloud.hasFaces() && !_cloud.hasNormals()) {
+    if (!(_cloud.size() == 0) && !_cloud.hasFaces()) {
         const bool hasColors = _cloud.hasColors();
+        float pointColorScale = 1.0f;
+        if (hasColors)
+        {
+            float maximumColorComponent = 0.0f;
+            for (std::size_t index = 0; index < _cloud.size(); ++index)
+            {
+                const plamatrix::Index pointIndex = static_cast<plamatrix::Index>(index);
+                for (int component = 0; component < 3; ++component)
+                {
+                    const float value = _cloud.colors()->getValue(pointIndex, component);
+                    if (std::isfinite(value))
+                    {
+                        maximumColorComponent = qMax(maximumColorComponent, value);
+                    }
+                }
+            }
+            // Metashape OBJ uses normalized RGB floats, while PLY commonly stores bytes.
+            pointColorScale = maximumColorComponent <= 1.0f ? 1.0f : (1.0f / 255.0f);
+        }
         if (_isTiePointCloud)
         {
             double minimumElevation = std::numeric_limits<double>::infinity();
@@ -2670,9 +2689,15 @@ void CameraSceneWidget::uploadGpuData()
                 blue = color.blueF();
             }
             else if (hasColors) {
-                red = _cloud.colors()->getValue(pointIndex, 0) / 255.0f;
-                green = _cloud.colors()->getValue(pointIndex, 1) / 255.0f;
-                blue = _cloud.colors()->getValue(pointIndex, 2) / 255.0f;
+                red = qBound(0.0f,
+                             _cloud.colors()->getValue(pointIndex, 0) * pointColorScale,
+                             1.0f);
+                green = qBound(0.0f,
+                               _cloud.colors()->getValue(pointIndex, 1) * pointColorScale,
+                               1.0f);
+                blue = qBound(0.0f,
+                              _cloud.colors()->getValue(pointIndex, 2) * pointColorScale,
+                              1.0f);
             }
 
             data << x << y << z << red << green << blue;
@@ -2689,7 +2714,7 @@ void CameraSceneWidget::uploadGpuData()
         }
     }
 
-    // ── 2. 网格（hasFaces）或含法向量点云（!hasFaces && hasNormals）──────────
+    // ── 2. 网格（hasFaces）──────────────────────────────────────────────────
     _meshVertCount = 0;
     _meshHasFaces = false;
     _meshHasTexture = false;
