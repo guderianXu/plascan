@@ -5,6 +5,7 @@
 #include <opencv2/core.hpp>
 #include <opencv2/core/types.hpp>
 
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
@@ -24,7 +25,12 @@ struct VocabularyOverlapConfig
     int treeDepth = 3;
     int samplePerImage = 500;
     int maxTrainingDescriptors = 50000;
+    int maxDescriptorsPerImage = 4096;
     int maxVocabularyWords = 4096;
+    int assignmentBatchRows = 65536;
+    int kmeansMaxIterations = 20;
+    int kmeansAttempts = 1;
+    double kmeansEpsilon = 1e-3;
     int topK = 8;
     int minPairsPerImage = 4;
     double minSimilarity = 0.05;
@@ -65,6 +71,8 @@ struct VocabularyOverlapPairResult
 struct VocabularyOverlapResult
 {
     int vocabularySize = 0;
+    std::uint64_t totalDescriptorCount = 0;
+    std::uint64_t assignedDescriptorCount = 0;
     std::vector<VocabularyOverlapPairResult> candidates;
     std::vector<VocabularyOverlapPairResult> acceptedPairs;
     std::string detail;
