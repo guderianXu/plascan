@@ -7382,8 +7382,8 @@ TEST(CameraSceneWidgetTest, PointCloudRenderingStaysOnVulkan)
                                                 "                        9 * int(sizeof(float)),\n"
                                                 "                        true")));
     EXPECT_TRUE(pointVertexShader.contains(QStringLiteral("layout(location = 1) in vec3 aNormal")));
-    EXPECT_TRUE(pointVertexShader.contains(QStringLiteral("gl_PointSize = 1.0")));
-    EXPECT_TRUE(pointVertexShader.contains(QStringLiteral("largePoints")));
+    EXPECT_TRUE(pointVertexShader.contains(QStringLiteral(
+        "gl_PointSize = ubuf.uLightDirPointSize.w")));
     EXPECT_FALSE(pointFragmentShader.contains(QStringLiteral("gl_PointCoord")));
     EXPECT_TRUE(pointFragmentShader.contains(QStringLiteral("normalLengthSquared > 1.0e-20")));
 }
