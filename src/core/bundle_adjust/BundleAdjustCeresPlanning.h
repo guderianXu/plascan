@@ -62,7 +62,8 @@ BACeresSolverPlan planCeresSolver(const BAOptions &options,
                                   int activeTrackCount,
                                   int observationCount,
                                   bool requestGpu,
-                                  std::uint64_t cudaFreeBytes);
+                                  std::uint64_t cudaFreeBytes,
+                                  bool sparseLinearAlgebraAvailable = true);
 
 /// 返回稳定的日志/测试名称，不返回 Ceres 枚举文本。
 const char *ceresSolverKindName(BACeresSolverKind solver);

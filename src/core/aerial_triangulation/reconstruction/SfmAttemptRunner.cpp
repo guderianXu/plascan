@@ -216,6 +216,7 @@ void configureSfmOptions(const PreparedAerialTriangulationInput &input,
     }
     options->baOptions.filterMaxReprojError = options->filterMaxReprojError;
 
+    options->useSequencePoseRecovery = input.useSequencePoseRecovery;
     options->enforceSequencePoseConsistency = input.enforceSequencePoseConsistency;
     options->sequenceLoopClosure = input.sequenceLoopClosure;
     if (input.adaptiveCameraModelFitting)

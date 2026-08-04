@@ -67,6 +67,7 @@ QJsonObject serializeSfmQualityMetrics(const SfmQualityMetrics &metrics)
     QJsonObject object;
     object.insert(QStringLiteral("registered_image_count"), metrics.registeredImageCount);
     object.insert(QStringLiteral("total_image_count"), metrics.totalImageCount);
+    object.insert(QStringLiteral("registered_image_ratio"), roundMetric(metrics.registeredImageRatio));
     object.insert(QStringLiteral("point_count"), metrics.pointCount);
     object.insert(QStringLiteral("two_view_track_count"), metrics.twoViewTrackCount);
     object.insert(QStringLiteral("multi_view_track_count"), metrics.multiViewTrackCount);

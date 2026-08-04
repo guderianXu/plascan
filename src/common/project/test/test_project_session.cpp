@@ -159,6 +159,57 @@ TEST(ProjectSessionTest, CreatesCurrentChunkProjectAndRoundTripsUris)
     EXPECT_EQ(QDir::cleanPath(materialized), QDir::cleanPath(artifact));
 }
 
+TEST(ProjectSessionTest, UpdatesImportedImageCameraFromOriginalSourcePath)
+{
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+    const QString projectPath =
+        QDir(temporary.path()).filePath(QStringLiteral("camera.plascan"));
+    const QString imagePath =
+        QDir(temporary.path()).filePath(QStringLiteral("source.png"));
+    QFile imageFile(imagePath);
+    ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
+    ASSERT_EQ(imageFile.write("image"), 5);
+    imageFile.close();
+
+    ProjectSession session;
+    QString error;
+    ASSERT_TRUE(session.create(
+        projectPath, QStringLiteral("相机写回工程"), &error))
+        << qPrintable(error);
+    ASSERT_TRUE(session.mergeImages(
+        QJsonArray{QJsonObject{{QStringLiteral("path"), imagePath}}},
+        &error)) << qPrintable(error);
+
+    const QString importedPath = session.projectFiles()
+                                     .value(QStringLiteral("images"))
+                                     .toArray()
+                                     .first()
+                                     .toObject()
+                                     .value(QStringLiteral("path"))
+                                     .toString();
+    ASSERT_NE(QDir::cleanPath(importedPath), QDir::cleanPath(imagePath));
+
+    const QJsonObject camera{
+        {QStringLiteral("fx"), 1200.0},
+        {QStringLiteral("registered"), true}
+    };
+    int updatedCount = 0;
+    ASSERT_TRUE(session.updateImageCameras(
+        QMap<QString, QJsonObject>{{imagePath, camera}},
+        &updatedCount,
+        &error)) << qPrintable(error);
+    EXPECT_EQ(updatedCount, 1);
+    EXPECT_EQ(session.projectFiles()
+                  .value(QStringLiteral("images"))
+                  .toArray()
+                  .first()
+                  .toObject()
+                  .value(QStringLiteral("camera"))
+                  .toObject(),
+              camera);
+}
+
 TEST(ProjectSessionTest, SavePrunesOnlyEmptyLegacyWorkflowDirectories)
 {
     QTemporaryDir temporary;

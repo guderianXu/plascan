@@ -151,6 +151,7 @@ SfmQualityMetrics computeSfmQualityMetrics(const std::vector<SfmQualityPoint> &p
     const double registeredRatio = metrics.totalImageCount > 0
         ? static_cast<double>(metrics.registeredImageCount) / static_cast<double>(metrics.totalImageCount)
         : 0.0;
+    metrics.registeredImageRatio = registeredRatio;
     const double twoViewRatio = metrics.pointCount > 0
         ? static_cast<double>(metrics.twoViewTrackCount) / static_cast<double>(metrics.pointCount)
         : 0.0;

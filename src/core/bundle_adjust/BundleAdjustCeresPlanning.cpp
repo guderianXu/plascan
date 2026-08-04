@@ -93,13 +93,22 @@ BACeresSolverPlan planCeresSolver(const BAOptions &options,
                                   int activeTrackCount,
                                   int observationCount,
                                   bool requestGpu,
-                                  std::uint64_t cudaFreeBytes)
+                                  std::uint64_t cudaFreeBytes,
+                                  bool sparseLinearAlgebraAvailable)
 {
     BACeresSolverPlan plan;
     const bool pointOnly =
         variableCameraCount <= 0 && calibrationParameterCount <= 0;
-    const BACeresSolverKind automaticCpuSolver =
+    BACeresSolverKind automaticCpuSolver =
         cpuSolverForScale(options, variableCameraCount, pointOnly);
+    // vcpkg 等精简 Ceres 构建可能定义 CERES_NO_SPARSE。此时选择 SPARSE_SCHUR
+    // 不会变慢，而是会在 Solver::Solve 前直接终止。改用无需稀疏 Cholesky
+    // 后端的 ITERATIVE_SCHUR，避免正式 BA 先失败再重复执行 Legacy 回退。
+    if (automaticCpuSolver == BACeresSolverKind::SparseSchur &&
+        !sparseLinearAlgebraAvailable)
+    {
+        automaticCpuSolver = BACeresSolverKind::IterativeSchur;
+    }
 
     // 显式 CPU 策略立即返回；Auto 或显式 CUDA 还需要经过设备和显存门控。
     switch (options.ceresLinearSolver)
@@ -113,8 +122,12 @@ BACeresSolverPlan planCeresSolver(const BAOptions &options,
     case BACeresLinearSolver::SparseSchurCpu:
         plan.solver = pointOnly
                           ? BACeresSolverKind::DenseQr
-                          : BACeresSolverKind::SparseSchur;
-        plan.reason = "显式选择 sparse Schur CPU";
+                          : (sparseLinearAlgebraAvailable
+                                 ? BACeresSolverKind::SparseSchur
+                                 : BACeresSolverKind::IterativeSchur);
+        plan.reason = sparseLinearAlgebraAvailable
+                          ? "显式选择 sparse Schur CPU"
+                          : "Ceres 未提供稀疏线性代数，改用 iterative Schur CPU";
         return plan;
     case BACeresLinearSolver::IterativeSchurCpu:
         plan.solver = pointOnly

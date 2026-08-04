@@ -145,6 +145,20 @@ TEST(BundleAdjustCeresPlanningTest, PointOnlyProblemUsesDenseQr)
     EXPECT_FALSE(plan.useCuda);
 }
 
+TEST(BundleAdjustCeresPlanningTest, MissingSparseLibraryUsesIterativeSchur)
+{
+    xjw::BAOptions options;
+    options.ceresLinearSolver = xjw::BACeresLinearSolver::Auto;
+    options.maxDenseSchurCameras = 50;
+    options.maxSparseSchurCameras = 500;
+
+    const auto plan = xjw::detail::planCeresSolver(
+        options, 200, 1, 10000, 50000, false, 0, false);
+
+    EXPECT_EQ(plan.solver, xjw::detail::BACeresSolverKind::IterativeSchur);
+    EXPECT_FALSE(plan.useCuda);
+}
+
 TEST(BundleAdjustCeresPlanningTest, CudaFallsBackBeforeExceedingMemoryBudget)
 {
     xjw::BAOptions options;

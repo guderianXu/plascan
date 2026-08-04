@@ -45,7 +45,7 @@ struct SfmQualityMetricsOptions
     int minTrackLength = 3; ///< 低于此值计为弱轨迹。
     double minTriangulationAngleDeg = 2.0; ///< 低于此值计为弱交会点。
     double maxReprojectionErrorPx = 3.0; ///< 高于此值计为高误差点。
-    double minRegisteredImageRatioForMvs = 0.50; ///< MVS 最低注册覆盖率。
+    double minRegisteredImageRatioForMvs = 0.80; ///< MVS 最低注册覆盖率；低于 80% 通常会造成大面积深度缺口。
     double warnTwoViewTrackRatioForMvs = 0.70; ///< 双视轨迹比例提示阈值。
     double maxTwoViewTrackRatioForMvs = 0.85; ///< 双视轨迹比例拒绝阈值。
     double maxHighReprojectionErrorRatioForMvs = 0.30; ///< 高误差点比例上限。
@@ -70,6 +70,7 @@ struct SfmQualityMetrics
 {
     int totalImageCount = 0;
     int registeredImageCount = 0;
+    double registeredImageRatio = 0.0; ///< 注册影像数/输入影像总数，便于报告直接展示覆盖率。
     int pointCount = 0;
     int twoViewTrackCount = 0;
     int multiViewTrackCount = 0;

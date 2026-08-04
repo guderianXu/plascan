@@ -484,11 +484,32 @@ bool ProjectSession::updateImageCameras(
     }
 
     QMap<QString, QJsonObject> normalizedUpdates;
+    QMap<QString, QJsonObject> uniqueUpdatesByFileName;
+    QSet<QString> ambiguousFileNames;
     for (auto it = cameraMetaByImage.constBegin();
          it != cameraMetaByImage.constEnd();
          ++it)
     {
-        normalizedUpdates.insert(normalizedImagePath(it.key()), it.value());
+        const QString normalizedPath = normalizedImagePath(it.key());
+        normalizedUpdates.insert(normalizedPath, it.value());
+
+        // CLI 会把源影像导入共享资源目录，而空三结果仍以源路径为键。
+        // 精确路径无法命中时，只允许通过唯一文件名建立别名；同名影像保持
+        // 未匹配状态，避免把一个相机解误写到另一个影像记录。
+        const QString fileName = QFileInfo(normalizedPath)
+                                     .fileName()
+                                     .toCaseFolded();
+        if (fileName.isEmpty() || ambiguousFileNames.contains(fileName))
+        {
+            continue;
+        }
+        if (uniqueUpdatesByFileName.contains(fileName))
+        {
+            uniqueUpdatesByFileName.remove(fileName);
+            ambiguousFileNames.insert(fileName);
+            continue;
+        }
+        uniqueUpdatesByFileName.insert(fileName, it.value());
     }
 
     QJsonArray images =
@@ -497,14 +518,31 @@ bool ProjectSession::updateImageCameras(
     for (int index = 0; index < images.size(); ++index)
     {
         QJsonObject image = images.at(index).toObject();
-        const auto update = normalizedUpdates.constFind(
-            normalizedImagePath(
-                image.value(QStringLiteral("path")).toString()));
-        if (update == normalizedUpdates.constEnd())
+        const QString imagePath = normalizedImagePath(
+            image.value(QStringLiteral("path")).toString());
+        const auto exactUpdate = normalizedUpdates.constFind(imagePath);
+        QJsonObject cameraUpdate;
+        if (exactUpdate != normalizedUpdates.constEnd())
+        {
+            cameraUpdate = exactUpdate.value();
+        }
+        else
+        {
+            const QString fileName = QFileInfo(imagePath)
+                                         .fileName()
+                                         .toCaseFolded();
+            const auto uniqueUpdate = uniqueUpdatesByFileName.constFind(
+                fileName);
+            if (uniqueUpdate != uniqueUpdatesByFileName.constEnd())
+            {
+                cameraUpdate = uniqueUpdate.value();
+            }
+        }
+        if (cameraUpdate.isEmpty())
         {
             continue;
         }
-        image[QStringLiteral("camera")] = update.value();
+        image[QStringLiteral("camera")] = cameraUpdate;
         images[index] = image;
         ++count;
     }

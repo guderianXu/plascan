@@ -117,6 +117,7 @@ struct PreparedAerialTriangulationInput
     bool useProjectCameraPoses = false; ///< false 时旧对齐外参不得作为当前解。
     bool adaptiveCameraModelFitting = true; ///< 最佳焦距种子后是否释放共享焦距细化。
     bool lockInputCameraPoses = false; ///< 已知位姿路径是否固定外参。
+    bool useSequencePoseRecovery = false; ///< 使用相邻序号位姿为 PnP 提供插值/外推初值和缺口恢复。
     bool enforceSequencePoseConsistency = false; ///< 可选序列相邻距离门控，默认关闭。
     bool sequenceLoopClosure = false; ///< 候选排序时评估首尾闭环连续性。
     bool useInitialPairHint = false; ///< 是否携带显式初始对提示。

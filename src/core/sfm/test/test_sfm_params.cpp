@@ -160,6 +160,10 @@ TEST(IncrementalSfmParamsTest, BracketedSequencePnpRequiresAbsoluteGeometricSupp
     EXPECT_TRUE(opts.allowBracketedSequencePnpRelaxation);
     EXPECT_TRUE(opts.allowOneSidedSequencePoseRecovery);
     EXPECT_GE(opts.oneSidedSequencePosePrefilterMaxReprojError, 96.0);
+    EXPECT_GE(opts.oneSidedSequencePnpMinInliers, 12);
+    EXPECT_LT(opts.oneSidedSequencePnpMinInliers, opts.bracketedSequencePnpMinInliers);
+    EXPECT_GE(opts.oneSidedSequencePnpMinInlierRatio, 0.025);
+    EXPECT_LE(opts.oneSidedSequencePnpMinInlierRatio, 0.10);
     EXPECT_GE(opts.bracketedSequencePnpMinInliers, 28);
     EXPECT_GE(opts.bracketedSequencePnpMinInlierRatio, 0.02);
     EXPECT_LE(opts.bracketedSequencePnpMinInlierRatio, 0.05);

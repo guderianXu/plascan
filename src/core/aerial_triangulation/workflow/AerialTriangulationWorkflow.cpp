@@ -215,11 +215,14 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     pipeline.useProjectCameraPoses = !options.resetAlignment;
     pipeline.adaptiveCameraModelFitting = options.adaptiveCameraModelFitting;
     pipeline.lockInputCameraPoses = options.lockInputCameraPoses;
-    // “照片序列”是像对候选和初始化的弱先验，不代表相机中心必须满足等距轨迹。
-    // 对环拍、变焦或物体旋转序列施加硬距离门限，会把几何验证通过的 PnP 位姿误判为异常。
-    pipeline.enforceSequencePoseConsistency = false;
-    pipeline.sequenceLoopClosure = options.referencePreselection &&
+    const bool usesPhotoSequence = options.referencePreselection &&
         normalizedToken(options.referenceMode, QStringLiteral("source_code")) == QStringLiteral("sequence");
+    // “照片序列”提供稳定的相邻位姿插值/外推初值，但不代表相机中心必须满足等距轨迹。
+    // 位姿恢复与硬距离门控必须解耦：前者帮助连续航带跨过弱纹理帧，后者在环拍、变焦
+    // 或物体旋转序列上反而可能误拒绝正确 PnP，因此保持默认关闭。
+    pipeline.useSequencePoseRecovery = usesPhotoSequence;
+    pipeline.enforceSequencePoseConsistency = false;
+    pipeline.sequenceLoopClosure = usesPhotoSequence;
     pipeline.useInitialPairHint = options.useInitialPairHint;
     pipeline.initialImageId1 = options.initialImageId1;
     pipeline.initialImageId2 = options.initialImageId2;

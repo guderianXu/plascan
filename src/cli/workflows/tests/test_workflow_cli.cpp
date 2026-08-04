@@ -645,6 +645,10 @@ TEST(PhotogrammetryWorkflowCliGTest, AerialTriangulationCliAcceptsImageOnlyListF
     EXPECT_TRUE(pipelineInput.value(QStringLiteral("adaptive_camera_model_fitting")).toBool());
     EXPECT_EQ(QDir::cleanPath(pipelineInput.value(QStringLiteral("output_dir")).toString()),
               QDir::cleanPath(chunkRoot.filePath(QStringLiteral("reconstruction/sparse/sfm_sparse"))));
+    const QString sharedImagesDir = QDir(root).filePath(QStringLiteral("headless.files/shared/images"));
+    EXPECT_TRUE(!QFileInfo::exists(sharedImagesDir) ||
+                QDir(sharedImagesDir).entryList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot).isEmpty())
+        << "--dry-run-config must not import or copy source images";
 }
 
 TEST(PhotogrammetryWorkflowCliGTest, AerialTriangulationCliAllowsSequenceReferenceWithoutCameraFiles)
@@ -683,6 +687,7 @@ TEST(PhotogrammetryWorkflowCliGTest, AerialTriangulationCliAllowsSequenceReferen
     const QJsonObject report = readJsonObject(reportPath);
     EXPECT_TRUE(report.value(QStringLiteral("success")).toBool());
     const QJsonObject pipelineInput = report.value(QStringLiteral("pipeline_input")).toObject();
+    EXPECT_TRUE(pipelineInput.value(QStringLiteral("use_sequence_pose_recovery")).toBool());
     EXPECT_TRUE(pipelineInput.value(QStringLiteral("sequence_loop_closure")).toBool());
 }
 

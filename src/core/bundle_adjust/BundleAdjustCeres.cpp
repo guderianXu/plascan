@@ -71,6 +71,18 @@ namespace xjw::detail
 namespace
 {
 
+bool hasCeresSparseLinearAlgebra()
+{
+#if defined(PLASCAN_BA_HAS_CERES) && !defined(CERES_NO_SPARSE)
+    return ceres::IsSparseLinearAlgebraLibraryTypeAvailable(ceres::SUITE_SPARSE) ||
+           ceres::IsSparseLinearAlgebraLibraryTypeAvailable(ceres::EIGEN_SPARSE) ||
+           ceres::IsSparseLinearAlgebraLibraryTypeAvailable(ceres::ACCELERATE_SPARSE) ||
+           ceres::IsSparseLinearAlgebraLibraryTypeAvailable(ceres::CUDA_SPARSE);
+#else
+    return false;
+#endif
+}
+
 double safeObservationWeight(const BAObservation &observation)
 {
     return std::isfinite(observation.weight) ? std::max(0.0, observation.weight) : 1.0;
@@ -864,7 +876,8 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
             activeTrackCount,
             result.observationCount,
             requestGpu && cudaDeviceReady,
-            cudaFreeBytes);
+            cudaFreeBytes,
+            hasCeresSparseLinearAlgebra());
     const bool useCeresCuda = solverPlan.useCuda;
     result.ceresEstimatedCudaBytes =
         solverPlan.estimatedCudaBytes;

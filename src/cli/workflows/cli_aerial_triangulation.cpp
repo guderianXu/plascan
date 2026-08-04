@@ -164,6 +164,7 @@ QJsonObject pipelineInputToJson(
     object[QStringLiteral("use_project_camera_intrinsics")] = input.useProjectCameraIntrinsics;
     object[QStringLiteral("use_project_camera_poses")] = input.useProjectCameraPoses;
     object[QStringLiteral("adaptive_camera_model_fitting")] = input.adaptiveCameraModelFitting;
+    object[QStringLiteral("use_sequence_pose_recovery")] = input.useSequencePoseRecovery;
     object[QStringLiteral("enforce_sequence_pose_consistency")] = input.enforceSequencePoseConsistency;
     object[QStringLiteral("sequence_loop_closure")] = input.sequenceLoopClosure;
     object[QStringLiteral("use_initial_pair_hint")] = input.useInitialPairHint;
@@ -463,15 +464,6 @@ int main(int argc, char *argv[])
                      qUtf8Printable(errorMessage));
         return cli::EXIT_IO_ERR;
     }
-    if (!projectSession.mergeImages(
-            xjw::cli::inputItemsToJson(items), &errorMessage)
-        || !projectSession.save(&errorMessage))
-    {
-        std::fprintf(stderr,
-                     "工程影像初始化失败: %s\n",
-                     qUtf8Printable(errorMessage));
-        return cli::EXIT_IO_ERR;
-    }
     const QString assetsDir = requestedAssetsDir.isEmpty()
         ? QDir(projectSession.activeChunkRoot())
               .filePath(QStringLiteral("assets"))
@@ -547,7 +539,8 @@ int main(int argc, char *argv[])
             QStringLiteral(
                 "reports/aerial_triangulation_cli_report.json"));
 
-    // dry-run 仍会解析默认值和派生路径，但不会提取特征、匹配影像或启动 SfM。
+    // dry-run 只解析配置并写出轻量报告。必须位于 mergeImages 之前，否则检查
+    // 444 张影像配置也会把数 GiB 原图复制进无头工程，既慢又违背 dry-run 语义。
     if (dryRunConfig)
     {
         const xjw::aerial_triangulation::AerialTriangulationResolvedConfig config =
@@ -586,6 +579,19 @@ int main(int argc, char *argv[])
         std::fprintf(stdout, "aerial_triangulation_cli_report.json=%s\n", qUtf8Printable(reportPath));
         return cli::EXIT_OK;
     }
+
+    // 正式执行才把影像导入 Chunk。导入会管理工程内共享影像资源，因此不能提前到
+    // dry-run 分支之前。导入后刷新 projectMeta，供相机内参和已有外参解析使用。
+    if (!projectSession.mergeImages(
+            xjw::cli::inputItemsToJson(items), &errorMessage)
+        || !projectSession.save(&errorMessage))
+    {
+        std::fprintf(stderr,
+                     "工程影像初始化失败: %s\n",
+                     qUtf8Printable(errorMessage));
+        return cli::EXIT_IO_ERR;
+    }
+    options.projectMeta = projectSession.mergedMetadata();
 
     // 阶段 5：共享 workflow 先按需生成/复用连接点，再执行初始像对、增量注册、三角化和 BA。
     QElapsedTimer timer;
@@ -728,7 +734,9 @@ int main(int argc, char *argv[])
         std::fprintf(stdout,
                      "image_camera.lis=%s\n",
                      qUtf8Printable(cameraExport.imageCameraList));
-        std::fprintf(stdout, "exported_cameras=%d\n", cameraExport.cameraPaths.size());
+        std::fprintf(stdout,
+                     "exported_cameras=%d\n",
+                     static_cast<int>(cameraExport.cameraPaths.size()));
     }
     std::fprintf(stdout, "aerial_triangulation_cli_report.json=%s\n", qUtf8Printable(reportPath));
     std::fprintf(stdout,

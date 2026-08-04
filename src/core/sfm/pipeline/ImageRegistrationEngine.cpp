@@ -455,16 +455,25 @@ bool IncrementalSfm::registerImage(ImageId imageId)
         return false;
     }
 
-    // PnP 求解。照片序列模式下优先使用相邻相机外推/插值得到的初值，
-    // 避免弱纹理转台数据落入错误环段的 PnP 局部解。
+    // 先执行不带运动模型的标准 PnP。照片序列外推对非等速航带只是弱先验，
+    // 若一开始就用它预过滤观测，会把原本可由全局 PnP 注册的相机排除。
     PnpOptions pnpOptions = _sfmOptions.pnpOptions;
+    pnpOptions.ransacSeed = opencv_compat::stableRansacSeed(
+        imageId,
+        static_cast<std::uint32_t>(_reconstruction->numRegisteredImages()),
+        static_cast<std::uint32_t>(worldPts.size()));
+    PnpResult pnpResult = PnpSolver::solveWithCamera(worldPts, imagePts, cam, pnpOptions);
+    bool usedSequenceRecovery = false;
+
+    // 标准 PnP 失败后，才使用相邻序号相机插值/外推的初值进行一次确定性恢复。
+    // 恢复仍必须通过真实 3D-2D 重投影内点门槛，不会直接接受外推位姿。
     Camera sequenceGuessCamera = cam;
-    const bool hasSequenceGuess = makeSequenceInitialPoseGuess(imageId, &sequenceGuessCamera);
-    if (hasSequenceGuess)
+    if (!pnpResult.success && makeSequenceInitialPoseGuess(imageId, &sequenceGuessCamera))
     {
-        pnpOptions.useInitialPose = true;
-        pnpOptions.initialCameraToWorldRotation = sequenceGuessCamera.cameraToWorldRotation();
-        pnpOptions.initialCameraCenter = sequenceGuessCamera.cameraCenter();
+        PnpOptions recoveryOptions = pnpOptions;
+        recoveryOptions.useInitialPose = true;
+        recoveryOptions.initialCameraToWorldRotation = sequenceGuessCamera.cameraToWorldRotation();
+        recoveryOptions.initialCameraCenter = sequenceGuessCamera.cameraCenter();
 
         ImageId previousImageId = kInvalidImageId;
         ImageId nextImageId = kInvalidImageId;
@@ -478,43 +487,47 @@ bool IncrementalSfm::registerImage(ImageId imageId)
                                                              1,
                                                              &nextImageId,
                                                              &nextSteps);
-        const bool isDirectlyBracketed = hasPrevious && hasNext &&
-            previousSteps == 1 && nextSteps == 1;
+        const bool hasDirectPrevious = hasPrevious && previousSteps == 1;
+        const bool hasDirectNext = hasNext && nextSteps == 1;
+        const bool isDirectlyBracketed = hasDirectPrevious && hasDirectNext;
         const bool useOneSidedRecovery = _sfmOptions.allowOneSidedSequencePoseRecovery &&
-            (hasPrevious != hasNext);
+            (hasDirectPrevious != hasDirectNext);
+        const int sequenceMinInliers = isDirectlyBracketed
+            ? _sfmOptions.bracketedSequencePnpMinInliers
+            : _sfmOptions.oneSidedSequencePnpMinInliers;
+        const double sequenceMinInlierRatio = isDirectlyBracketed
+            ? _sfmOptions.bracketedSequencePnpMinInlierRatio
+            : _sfmOptions.oneSidedSequencePnpMinInlierRatio;
         if (isDirectlyBracketed || useOneSidedRecovery)
         {
-            pnpOptions.useInitialPosePrefilter = true;
-            pnpOptions.initialPosePrefilterMaxReprojError = std::max(
-                pnpOptions.initialPosePrefilterMaxReprojError,
+            recoveryOptions.useInitialPosePrefilter = true;
+            recoveryOptions.initialPosePrefilterMaxReprojError = std::max(
+                recoveryOptions.initialPosePrefilterMaxReprojError,
                 isDirectlyBracketed
-                    ? pnpOptions.maxReprojError * 12.0
+                    ? recoveryOptions.maxReprojError * 12.0
                     : _sfmOptions.oneSidedSequencePosePrefilterMaxReprojError);
-            pnpOptions.initialPosePrefilterMinCandidates = std::max(
-                pnpOptions.minNumInliers,
-                _sfmOptions.bracketedSequencePnpMinInliers);
+            recoveryOptions.initialPosePrefilterMinCandidates = std::max(
+                recoveryOptions.minNumInliers,
+                sequenceMinInliers);
         }
         if (_sfmOptions.allowBracketedSequencePnpRelaxation &&
             (isDirectlyBracketed || useOneSidedRecovery))
         {
             // 两侧紧邻位姿为当前相机提供了强序列约束。此时允许大量候选 2D-3D
             // 对应中的低比例真实内点通过，但仍要求足够绝对内点并在随后检查相机距离。
-            pnpOptions.allowRelaxedInlierRatio = true;
-            pnpOptions.relaxedMinInlierRatio =
-                std::clamp(_sfmOptions.bracketedSequencePnpMinInlierRatio,
+            recoveryOptions.allowRelaxedInlierRatio = true;
+            recoveryOptions.relaxedMinInlierRatio =
+                std::clamp(sequenceMinInlierRatio,
                            0.0,
-                           pnpOptions.minInlierRatio);
-            pnpOptions.relaxedMinNumInliers =
-                std::max(pnpOptions.minNumInliers,
-                         _sfmOptions.bracketedSequencePnpMinInliers);
+                           recoveryOptions.minInlierRatio);
+            recoveryOptions.relaxedMinNumInliers =
+                std::max(recoveryOptions.minNumInliers,
+                         sequenceMinInliers);
         }
+        pnpResult = PnpSolver::solveWithCamera(
+            worldPts, imagePts, cam, recoveryOptions);
+        usedSequenceRecovery = true;
     }
-
-    pnpOptions.ransacSeed = opencv_compat::stableRansacSeed(
-        imageId,
-        static_cast<std::uint32_t>(_reconstruction->numRegisteredImages()),
-        static_cast<std::uint32_t>(worldPts.size()));
-    const PnpResult pnpResult = PnpSolver::solveWithCamera(worldPts, imagePts, cam, pnpOptions);
     if (!pnpResult.success)
     {
         std::ostringstream oss;
@@ -524,6 +537,7 @@ bool IncrementalSfm::registerImage(ImageId imageId)
             << ", minPnPInliers=" << _sfmOptions.pnpOptions.minNumInliers
             << ", minTrackLength=" << minTrackLengthForPnp
             << ", minInlierRatio=" << _sfmOptions.pnpOptions.minInlierRatio
+            << ", sequenceRecovery=" << (usedSequenceRecovery ? "true" : "false")
             << ", posePrefilter=" << (pnpResult.usedInitialPosePrefilter ? "true" : "false")
             << ", prefilterCandidates=" << pnpResult.prefilterCandidateCount
             << ", maxReprojError=" << _sfmOptions.pnpOptions.maxReprojError;
@@ -532,12 +546,14 @@ bool IncrementalSfm::registerImage(ImageId imageId)
     }
 
     Logger::instance()->infof("[SFM] Image %u PnP success: observations=%zu, inliers=%d, inlierRatio=%.3f, "
-                              "minTrackLength=%d, posePrefilter=%s, prefilterCandidates=%d",
+                              "minTrackLength=%d, sequenceRecovery=%s, posePrefilter=%s, "
+                              "prefilterCandidates=%d",
                               imageId,
                               worldPts.size(),
                               pnpResult.numInliers,
                               pnpResult.inlierRatio,
                               minTrackLengthForPnp,
+                              usedSequenceRecovery ? "true" : "false",
                               pnpResult.usedInitialPosePrefilter ? "true" : "false",
                               pnpResult.prefilterCandidateCount);
 
@@ -786,7 +802,7 @@ bool IncrementalSfm::validateSequencePoseConsistency(ImageId imageId,
 
 bool IncrementalSfm::makeSequenceInitialPoseGuess(ImageId imageId, Camera *guessCamera) const
 {
-    if (!guessCamera || !_sfmOptions.enforceSequencePoseConsistency || !_reconstruction ||
+    if (!guessCamera || !_sfmOptions.useSequencePoseRecovery || !_reconstruction ||
         _reconstruction->numRegisteredImages() < 2)
     {
         return false;
@@ -821,10 +837,12 @@ bool IncrementalSfm::makeSequenceInitialPoseGuess(ImageId imageId, Camera *guess
     int nextSteps = 0;
     const bool prevRegistered = findRegisteredSequenceNeighbor(imageId, -1, &prev, &prevSteps);
     const bool nextRegistered = findRegisteredSequenceNeighbor(imageId, 1, &next, &nextSteps);
+    const bool hasDirectPrevious = prevRegistered && prevSteps == 1;
+    const bool hasDirectNext = nextRegistered && nextSteps == 1;
 
     std::array<double, 3> center{};
     std::array<double, 9> rotation{};
-    if (prevRegistered && nextRegistered)
+    if (hasDirectPrevious && hasDirectNext)
     {
         const double denom = static_cast<double>(std::max(1, prevSteps + nextSteps));
         const double t = static_cast<double>(prevSteps) / denom;
@@ -838,7 +856,7 @@ bool IncrementalSfm::makeSequenceInitialPoseGuess(ImageId imageId, Camera *guess
             _reconstruction->camera(next).cameraToWorldRotation(),
             t);
     }
-    else if (prevRegistered)
+    else if (hasDirectPrevious)
     {
         ImageId prev2 = kInvalidImageId;
         int prev2Steps = 0;
@@ -856,7 +874,7 @@ bool IncrementalSfm::makeSequenceInitialPoseGuess(ImageId imageId, Camera *guess
             _reconstruction->camera(prev).cameraToWorldRotation(),
             1.0 + scale);
     }
-    else if (nextRegistered)
+    else if (hasDirectNext)
     {
         ImageId next2 = kInvalidImageId;
         int next2Steps = 0;
@@ -873,6 +891,20 @@ bool IncrementalSfm::makeSequenceInitialPoseGuess(ImageId imageId, Camera *guess
             _reconstruction->camera(next2).cameraToWorldRotation(),
             _reconstruction->camera(next).cameraToWorldRotation(),
             1.0 + scale);
+    }
+    else if (prevRegistered && nextRegistered)
+    {
+        // 当前影像位于已注册区间内部的多帧缺口时，才使用跨缺口插值。
+        // 闭环前沿的另一侧可能要绕行数百帧，不能因其“存在”就压制直接邻居外推。
+        const double denom = static_cast<double>(std::max(1, prevSteps + nextSteps));
+        const double t = static_cast<double>(prevSteps) / denom;
+        const auto prevCenter = _reconstruction->camera(prev).cameraCenter();
+        const auto nextCenter = _reconstruction->camera(next).cameraCenter();
+        center = centerAdd(centerScale(prevCenter, 1.0 - t), centerScale(nextCenter, t));
+        rotation = interpolateCameraRotation(
+            _reconstruction->camera(prev).cameraToWorldRotation(),
+            _reconstruction->camera(next).cameraToWorldRotation(),
+            t);
     }
     else
     {

@@ -65,6 +65,7 @@ TEST(SfmQualityReportTest, SummarizesTrackErrorAngleAndCoverage)
 
     EXPECT_EQ(metrics.totalImageCount, 5);
     EXPECT_EQ(metrics.registeredImageCount, 4);
+    EXPECT_NEAR(metrics.registeredImageRatio, 0.8, 1e-9);
     EXPECT_EQ(metrics.pointCount, 3);
     EXPECT_EQ(metrics.twoViewTrackCount, 1);
     EXPECT_EQ(metrics.multiViewTrackCount, 2);
@@ -79,6 +80,7 @@ TEST(SfmQualityReportTest, SummarizesTrackErrorAngleAndCoverage)
     const QJsonObject json = xjw::serializeSfmQualityMetrics(metrics);
     EXPECT_EQ(json.value(QStringLiteral("registered_image_count")).toInt(), 4);
     EXPECT_EQ(json.value(QStringLiteral("total_image_count")).toInt(), 5);
+    EXPECT_NEAR(json.value(QStringLiteral("registered_image_ratio")).toDouble(), 0.8, 1e-9);
     EXPECT_EQ(json.value(QStringLiteral("point_count")).toInt(), 3);
     EXPECT_EQ(json.value(QStringLiteral("two_view_track_count")).toInt(), 1);
     EXPECT_EQ(json.value(QStringLiteral("multi_view_track_count")).toInt(), 2);

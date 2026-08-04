@@ -98,6 +98,9 @@ struct IncrementalSfmOptions
     /// PnP 注册新影像时，3D 点至少需要的轨迹长度。无相机序列建议使用 3，
     /// 避免大量两视点把新相机吸附到错误环段；注册影像少于 3 张时内部仍允许两视点启动模型。
     int pnpMinTrackLength = 2;
+    /// 是否利用序号相邻相机插值/外推 PnP 初值并放宽有强绝对支撑的序列缺口。
+    /// 与严格距离门控分离，避免必须启用等距轨迹假设才能使用序列恢复。
+    bool useSequencePoseRecovery = false;
     /// 照片序列模式下，PnP 后检查相邻序号相机中心距离，避免闭环序列被错误跨接。
     bool enforceSequencePoseConsistency = false;
     /// 序列首尾是否按闭环相邻处理。
@@ -114,6 +117,11 @@ struct IncrementalSfmOptions
     bool allowOneSidedSequencePoseRecovery = true;
     /// 单侧外推旋转误差通常大于夹逼插值，预过滤采用更宽的像素门槛。
     double oneSidedSequencePosePrefilterMaxReprojError = 128.0;
+    /// 单侧外推只提供较弱的序列先验，使用独立的绝对内点门槛。
+    /// 不能沿用夹逼模式的 28 点门槛，否则长序列在局部纹理较弱处会永久断链。
+    int oneSidedSequencePnpMinInliers = 16;
+    /// 单侧外推 PnP 的最低内点率；仍同时要求上述绝对内点数。
+    double oneSidedSequencePnpMinInlierRatio = 0.05;
     /// 夹逼式序列 PnP 的最低内点率；仍需同时满足绝对内点数和序列距离检查。
     double bracketedSequencePnpMinInlierRatio = 0.025;
     /// 夹逼式序列 PnP 的最低绝对内点数。
