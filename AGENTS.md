@@ -161,6 +161,9 @@ python scripts\env\setup_python_runtime.py --device cuda --cuda-wheel cu130
 - GitHub Release 说明按固定结构编写：新增、优化、修复、验证、已知问题。验证项要写具体命令和通过/失败结果；若使用 `gh release create/edit`，正文优先来自 `docs/releases/vX.Y.Z*.md` 或同步内容，避免只写 `PlaScan vX.Y.Z`。
 - 若修改了版本、tag 或 Release 内容，同步维护 `CHANGELOG.md` 和 `docs/releases/` 下的对应版本文档；没有相关文件时应先创建。
 - commit 前必须重新检查 `git status --short`，确认提交内容只包含当前任务相关文件。
+- 每次向 GitHub 推送 commit、分支或 tag 前，必须先完成与改动范围相匹配的本地构建、测试和静态检查；不得把 GitHub CI 当作本地基本验证的替代品。
+- 每次 push 后必须检查该 commit 对应的 GitHub Actions / required checks，并等待全部 CI 检查通过。可使用 `gh run list --commit <sha>`、`gh run watch <run-id> --exit-status` 或 `gh pr checks --watch`；不得只确认 push 成功就结束任务。
+- 如果 CI 失败，必须读取失败日志、修复问题、重新完成本地验证并再次 push，直到 CI 通过。若因 GitHub 服务故障、权限、额度或缺失密钥等外部原因无法完成，必须在最终说明中明确列出未通过的检查和阻塞原因，且不得声称任务已全部完成。
 - 若需要 commit，Git 作者信息使用：
   ```bash
   git config user.email "guderian_xu@henu.edu.cn"
