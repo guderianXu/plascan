@@ -552,17 +552,6 @@ ResolvedLightGlueTensorRtEngine resolveLightGlueTensorRtEngine(
         return resolved;
     }
 
-    const QStringList preferredNames = {
-        QStringLiteral("lightglue_sift_fp32.engine"),
-        QStringLiteral("lightglue_sift_bucket16384_fp32.engine"),
-        QStringLiteral("lightglue_sift_bucket12288_fp32.engine"),
-        QStringLiteral("lightglue_sift_bucket8192_fp32.engine"),
-        QStringLiteral("lightglue_sift_bucket6144_fp32.engine"),
-        QStringLiteral("lightglue_sift_bucket4096_fp32.engine"),
-        QStringLiteral("lightglue_sift_bucket3072_fp32.engine"),
-        QStringLiteral("lightglue_sift_bucket2048_fp32.engine"),
-        QStringLiteral("lightglue_sift_bucket1024_fp32.engine")};
-
     resolved.searchedDirectories = lightGlueTensorRtModelDirectories();
 
     LightGlueEngineCandidate bestOnnx;
@@ -614,54 +603,10 @@ ResolvedLightGlueTensorRtEngine resolveLightGlueTensorRtEngine(
         return resolved;
     }
 
-    QSet<QString> visitedPaths;
-    LightGlueEngineCandidate best;
-    int discoveryOrder = 0;
-    for (const QString &directoryPath : resolved.searchedDirectories)
-    {
-        const QDir directory(directoryPath);
-        QStringList names = preferredNames;
-        const QStringList discovered = directory.entryList(
-            QStringList{QStringLiteral("lightglue_sift*_fp32.engine")},
-            QDir::Files,
-            QDir::Name);
-        for (const QString &name : discovered)
-        {
-            if (!names.contains(name, Qt::CaseInsensitive))
-            {
-                names.append(name);
-            }
-        }
-        for (const QString &name : names)
-        {
-            const QFileInfo info(directory.filePath(name));
-            if (!info.isFile())
-            {
-                continue;
-            }
-            const QString path = cleanPath(info.absoluteFilePath());
-            const QString identity = path.toLower();
-            if (visitedPaths.contains(identity))
-            {
-                continue;
-            }
-            visitedPaths.insert(identity);
-
-            LightGlueEngineCandidate candidate;
-            candidate.path = path;
-            candidate.name = info.fileName();
-            candidate.bucketKeypoints = lightGlueEngineBucketFromMetadata(path);
-            candidate.discoveryOrder = discoveryOrder++;
-            if (engineCandidateIsBetter(candidate, best, preferredKeypoints))
-            {
-                best = candidate;
-            }
-        }
-    }
-
-    resolved.path = best.path;
-    resolved.name = best.name;
-    resolved.bucketKeypoints = best.bucketKeypoints;
+    // 自动发现不再加载旧 Release 留在用户目录中的裸 engine。此类 plan 可能绑定
+    // 另一块 GPU 或 TensorRT 补丁版本；需要兼容使用时仍可通过显式路径选择。
+    resolved.errorMessage = QStringLiteral(
+        "未找到便携 LightGlue ONNX；请在工作流程设置中下载 models-v1.1.0 模型");
     return resolved;
 }
 
@@ -740,6 +685,16 @@ ResolvedLoMaRTensorRtPackage resolveLoMaRTensorRtPackage(
                 {
                     firstPackageError = QStringLiteral("%1: %2")
                         .arg(QFileInfo(candidate).fileName(), resolved.errorMessage);
+                }
+                continue;
+            }
+            if (resolved.featureOnnxPath.isEmpty() || resolved.matcherOnnxPath.isEmpty())
+            {
+                if (firstPackageError.isEmpty())
+                {
+                    firstPackageError = QStringLiteral(
+                        "%1 是旧版 engine 清单，请下载 models-v1.1.0 ONNX 模型包")
+                                            .arg(QFileInfo(candidate).fileName());
                 }
                 continue;
             }

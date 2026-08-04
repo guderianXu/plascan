@@ -38,7 +38,9 @@ python scripts\env\setup_python_runtime.py --device cuda --cuda-wheel cu130
 
 1. `MatchPhotosOptions::lightGlueTensorRtEnginePath`；
 2. 环境变量 `PLASCAN_LIGHTGLUE_TENSORRT_ENGINE`；
-3. 标准模型目录中的 ONNX；只有 ONNX 不存在时才兼容扫描历史本机 engine。
+3. 标准模型目录中的 ONNX。
+
+旧 `.engine` 只在用户显式选择时兼容，不参与自动发现，避免升级后继续命中另一块 GPU 生成的 plan。
 
 ## LoMa-R TensorRT
 

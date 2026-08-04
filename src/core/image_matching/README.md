@@ -69,7 +69,8 @@ LoMa-R 使用 JSON manifest 绑定共享 K3840 特征 ONNX 和动态 K 匹配 ON
 K1024/K2048/K3840 生成固定 TensorRT profile；manifest 同时记录输入尺寸、特征容量、匹配 K、
 描述子维度和 ONNX 内容指纹，禁止混用不兼容资源。运行时可通过
 `MatchPhotosOptions::lomaRTensorRtPackagePath`、环境变量
-`PLASCAN_LOMA_R_TENSORRT_PACKAGE` 或标准模型目录解析该 manifest。
+`PLASCAN_LOMA_R_TENSORRT_PACKAGE` 或标准模型目录解析该 manifest。自动发现仅接受引用 ONNX 的
+schema 2 清单；旧 schema 1 engine 清单必须显式选择，防止升级后误用其它 GPU 的 plan。
 
 同一模型目录可以并存 `loma_r_k1024_fp16.json`、`loma_r_k2048_fp16.json` 和
 `loma_r_k3840_fp16.json`。未显式指定 manifest 时，运行时根据 GPU 总显存自动选择档位：小于

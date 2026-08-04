@@ -21,12 +21,14 @@
 - 删除 `models-v1.0.0` 中绑定 RTX 5080 / TensorRT 10.16.1.11 的预构建 engine，修复 RTX 4060、
   不同 TensorRT 补丁版本等目标机器反序列化失败的问题。
 - 工作流程设置仅检查便携模型资源，不会在 GUI 主线程同步构建大型 LoMa-R engine。
+- 自动模型发现忽略旧 Release 留在用户目录中的裸 engine/schema 1 清单，避免升级后继续加载不兼容 plan；
+  需要调试历史本机 engine 时仍可显式选择。
 - 模型下载器按尚未存在的共享文件计算磁盘需求，切换 LoMa-R K 桶不再重复预留完整模型空间。
 
 ## 验证
 
 - `onnx.checker.check_model`：LightGlue、LoMa-R feature、LoMa-R dynamic matcher 全部通过。
-- Windows/MSVC：`test_matchphotos_runtime` 12/12、`test_model_file_resolver` 7/7 通过，完整 GUI 成功链接。
+- Windows/MSVC：`test_matchphotos_runtime` 13/13、`test_model_file_resolver` 7/7 通过，完整 GUI 成功链接。
 - RTX 5080 / TensorRT 10.16.1.11：LightGlue ONNX 首次构建、缓存复用及推理通过。
 - LoMa-R K1024 C++ 首次构建约 701 秒；Dino 双影像得到 666 个原始匹配、551 个几何内点。
   第二次缓存复用的完整流程为 13.55 秒，匹配和内点数量一致。

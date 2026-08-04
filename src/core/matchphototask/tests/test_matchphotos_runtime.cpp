@@ -196,9 +196,9 @@ TEST(MatchPhotosRuntimeTest, SelectsLargestLoMaRPackageWithinPreferredBudget)
 {
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
-    createLoMaRPackage(directory.path(), 1024);
-    const QString bucket2048 = createLoMaRPackage(directory.path(), 2048);
-    createLoMaRPackage(directory.path(), 3840);
+    createPortableLoMaRPackage(directory.path(), 1024);
+    const QString bucket2048 = createPortableLoMaRPackage(directory.path(), 2048);
+    createPortableLoMaRPackage(directory.path(), 3840);
 
     ScopedEnvironment explicitPackage("PLASCAN_LOMA_R_TENSORRT_PACKAGE", QByteArray());
     ScopedEnvironment modelDirectory(
@@ -206,7 +206,8 @@ TEST(MatchPhotosRuntimeTest, SelectsLargestLoMaRPackageWithinPreferredBudget)
     xjw::matchphotos::MatchPhotosOptions options;
     options.lomaRKeypointBudget = 2048;
 
-    const auto resolved = xjw::matchphotos::resolveLoMaRTensorRtPackage(options, 40000);
+    const auto resolved = xjw::matchphotos::resolveLoMaRTensorRtPackage(
+        options, 40000, false);
 
     ASSERT_TRUE(resolved.isValid()) << qPrintable(resolved.errorMessage);
     EXPECT_EQ(resolved.manifestPath,
@@ -218,8 +219,8 @@ TEST(MatchPhotosRuntimeTest, FallsBackToSmallestLoMaRPackageAboveTinyBudget)
 {
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
-    const QString bucket1024 = createLoMaRPackage(directory.path(), 1024);
-    createLoMaRPackage(directory.path(), 2048);
+    const QString bucket1024 = createPortableLoMaRPackage(directory.path(), 1024);
+    createPortableLoMaRPackage(directory.path(), 2048);
 
     ScopedEnvironment explicitPackage("PLASCAN_LOMA_R_TENSORRT_PACKAGE", QByteArray());
     ScopedEnvironment modelDirectory(
@@ -227,7 +228,8 @@ TEST(MatchPhotosRuntimeTest, FallsBackToSmallestLoMaRPackageAboveTinyBudget)
     xjw::matchphotos::MatchPhotosOptions options;
     options.lomaRKeypointBudget = 500;
 
-    const auto resolved = xjw::matchphotos::resolveLoMaRTensorRtPackage(options, 500);
+    const auto resolved = xjw::matchphotos::resolveLoMaRTensorRtPackage(
+        options, 500, false);
 
     ASSERT_TRUE(resolved.isValid()) << qPrintable(resolved.errorMessage);
     EXPECT_EQ(resolved.manifestPath,
@@ -269,25 +271,21 @@ TEST(MatchPhotosRuntimeTest, RejectsMissingExplicitTensorRtEngine)
     EXPECT_TRUE(engineName.isEmpty());
 }
 
-TEST(MatchPhotosRuntimeTest, SelectsLargestSafeEngineBucketFromModelDirectory)
+TEST(MatchPhotosRuntimeTest, IgnoresLegacyLightGlueEngineDuringAutomaticLookup)
 {
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
-    const QString bucket2048 = createEngine(directory.path(), 2048);
-    const QString bucket4096 = createEngine(directory.path(), 4096);
-    createEngine(directory.path(), 8192);
+    createEngine(directory.path(), 4096);
 
     ScopedEnvironment explicitEngine("PLASCAN_LIGHTGLUE_TENSORRT_ENGINE", QByteArray());
     ScopedEnvironment modelDirectory(
         "PLASCAN_MODEL_DIR", QFile::encodeName(directory.path()));
     const xjw::matchphotos::MatchPhotosOptions options;
 
-    const auto resolved = xjw::matchphotos::resolveLightGlueTensorRtEngine(options, 6000);
+    const auto resolved = xjw::matchphotos::resolveLightGlueTensorRtEngine(options, 4096);
 
-    ASSERT_TRUE(resolved.isValid());
-    EXPECT_EQ(resolved.path, QDir::cleanPath(QFileInfo(bucket4096).absoluteFilePath()));
-    EXPECT_EQ(resolved.bucketKeypoints, 4096);
-    EXPECT_NE(resolved.path, QDir::cleanPath(QFileInfo(bucket2048).absoluteFilePath()));
+    EXPECT_FALSE(resolved.isValid());
+    EXPECT_TRUE(resolved.errorMessage.contains(QStringLiteral("ONNX")));
 }
 
 TEST(MatchPhotosRuntimeTest, ResolvesPortableLightGlueOnnxWithoutBuildingEngine)
@@ -313,23 +311,28 @@ TEST(MatchPhotosRuntimeTest, ResolvesPortableLightGlueOnnxWithoutBuildingEngine)
     EXPECT_EQ(resolved.bucketKeypoints, 4096);
 }
 
-TEST(MatchPhotosRuntimeTest, ResolvesLightGlueFromReleasePackageSubdirectory)
+TEST(MatchPhotosRuntimeTest, ResolvesLightGlueOnnxFromReleasePackageSubdirectory)
 {
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
     const QString packageDirectory = QDir(directory.path()).filePath(
         QStringLiteral("lightglue_tensorrt"));
     ASSERT_TRUE(QDir().mkpath(packageDirectory));
-    const QString enginePath = createEngine(packageDirectory, 4096);
+    const QString onnxPath = QDir(packageDirectory).filePath(
+        QStringLiteral("lightglue_sift_bucket4096.onnx"));
+    QFile onnx(onnxPath);
+    ASSERT_TRUE(onnx.open(QIODevice::WriteOnly));
+    ASSERT_GT(onnx.write("test-onnx"), 0);
+    onnx.close();
 
     ScopedEnvironment explicitEngine("PLASCAN_LIGHTGLUE_TENSORRT_ENGINE", QByteArray());
     ScopedEnvironment modelDirectory(
         "PLASCAN_MODEL_DIR", QFile::encodeName(directory.path()));
     const auto resolved = xjw::matchphotos::resolveLightGlueTensorRtEngine(
-        xjw::matchphotos::MatchPhotosOptions(), 4096);
+        xjw::matchphotos::MatchPhotosOptions(), 4096, false);
 
     ASSERT_TRUE(resolved.isValid());
-    EXPECT_EQ(resolved.path, QDir::cleanPath(QFileInfo(enginePath).absoluteFilePath()));
+    EXPECT_EQ(resolved.path, QDir::cleanPath(QFileInfo(onnxPath).absoluteFilePath()));
 }
 
 TEST(MatchPhotosRuntimeTest, ResolvesLoMaRFromReleasePackageSubdirectory)
@@ -339,16 +342,33 @@ TEST(MatchPhotosRuntimeTest, ResolvesLoMaRFromReleasePackageSubdirectory)
     const QString packageDirectory = QDir(directory.path()).filePath(
         QStringLiteral("loma_r_tensorrt"));
     ASSERT_TRUE(QDir().mkpath(packageDirectory));
-    const QString manifestPath = createLoMaRPackage(packageDirectory, 2048);
+    const QString manifestPath = createPortableLoMaRPackage(packageDirectory, 2048);
 
     ScopedEnvironment explicitPackage("PLASCAN_LOMA_R_TENSORRT_PACKAGE", QByteArray());
     ScopedEnvironment modelDirectory(
         "PLASCAN_MODEL_DIR", QFile::encodeName(directory.path()));
     xjw::matchphotos::MatchPhotosOptions options;
     options.lomaRKeypointBudget = 2048;
-    const auto resolved = xjw::matchphotos::resolveLoMaRTensorRtPackage(options, 40000);
+    const auto resolved = xjw::matchphotos::resolveLoMaRTensorRtPackage(
+        options, 40000, false);
 
     ASSERT_TRUE(resolved.isValid()) << qPrintable(resolved.errorMessage);
     EXPECT_EQ(resolved.manifestPath,
               QDir::cleanPath(QFileInfo(manifestPath).absoluteFilePath()));
+}
+
+TEST(MatchPhotosRuntimeTest, IgnoresLegacyLoMaRManifestDuringAutomaticLookup)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    createLoMaRPackage(directory.path(), 2048);
+
+    ScopedEnvironment explicitPackage("PLASCAN_LOMA_R_TENSORRT_PACKAGE", QByteArray());
+    ScopedEnvironment modelDirectory(
+        "PLASCAN_MODEL_DIR", QFile::encodeName(directory.path()));
+    const auto resolved = xjw::matchphotos::resolveLoMaRTensorRtPackage(
+        xjw::matchphotos::MatchPhotosOptions(), 2048, false);
+
+    EXPECT_FALSE(resolved.isValid());
+    EXPECT_TRUE(resolved.errorMessage.contains(QStringLiteral("旧版")));
 }
