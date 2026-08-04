@@ -122,7 +122,6 @@ bool TriMesh::savePLY(const std::string &path, std::string *errorMsg) const
         using PlaCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
         plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(vertices.size(), 3);
         plamatrix::DenseMatrix<float, plamatrix::Device::CPU> normals(vertices.size(), 3);
-        plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(vertices.size(), 3);
         for (std::size_t i = 0; i < vertices.size(); ++i)
         {
             const auto row = static_cast<plamatrix::Index>(i);
@@ -133,9 +132,6 @@ bool TriMesh::savePLY(const std::string &path, std::string *errorMsg) const
             normals(row, 0) = vertex.nx;
             normals(row, 1) = vertex.ny;
             normals(row, 2) = vertex.nz;
-            colors(row, 0) = vertex.r;
-            colors(row, 1) = vertex.g;
-            colors(row, 2) = vertex.b;
         }
 
         plamatrix::DenseMatrix<int, plamatrix::Device::CPU> faceMatrix(faces.size(), 3);
@@ -149,7 +145,20 @@ bool TriMesh::savePLY(const std::string &path, std::string *errorMsg) const
 
         PlaCloud cloud(std::move(points));
         cloud.setNormals(std::move(normals));
-        cloud.setColors(std::move(colors));
+        if (hasVertexColors)
+        {
+            plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(
+                vertices.size(), 3);
+            for (std::size_t i = 0; i < vertices.size(); ++i)
+            {
+                const auto row = static_cast<plamatrix::Index>(i);
+                const MeshVertex &vertex = vertices[i];
+                colors(row, 0) = vertex.r;
+                colors(row, 1) = vertex.g;
+                colors(row, 2) = vertex.b;
+            }
+            cloud.setColors(std::move(colors));
+        }
         cloud.setFaces(std::move(faceMatrix));
         plapoint::io::writePly(
             xjw::common::io::toNativeNarrowPath(path), cloud, plapoint::io::PlyFormat::BinaryLE);

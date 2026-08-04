@@ -4175,6 +4175,46 @@ TEST(DepthTsdfSurfaceBuilderTest, BuildsFiniteSurfaceFromConfidenceWeightedPlane
     }
 }
 
+TEST(MeshIoTest, PlyExportOmitsDisabledVertexColorsAndPreservesEnabledColors)
+{
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    xjw::mesh::TriMesh mesh;
+    mesh.vertices.resize(3);
+    mesh.vertices[0].x = 0.0f;
+    mesh.vertices[1].x = 1.0f;
+    mesh.vertices[2].y = 1.0f;
+    for (auto &vertex : mesh.vertices)
+    {
+        vertex.nz = 1.0f;
+        vertex.r = 17;
+        vertex.g = 29;
+        vertex.b = 43;
+    }
+    mesh.faces.push_back(xjw::mesh::Triangle{{0, 1, 2}});
+
+    const QString uncolored_path =
+        QDir(temp_dir.path()).filePath(QStringLiteral("uncolored_mesh.ply"));
+    mesh.hasVertexColors = false;
+    std::string error;
+    ASSERT_TRUE(mesh.savePLY(uncolored_path.toStdString(), &error)) << error;
+    const auto uncolored = plapoint::io::readPly<float>(uncolored_path.toStdString());
+    ASSERT_NE(uncolored, nullptr);
+    EXPECT_FALSE(uncolored->hasColors());
+
+    const QString colored_path =
+        QDir(temp_dir.path()).filePath(QStringLiteral("colored_mesh.ply"));
+    mesh.hasVertexColors = true;
+    ASSERT_TRUE(mesh.savePLY(colored_path.toStdString(), &error)) << error;
+    const auto colored = plapoint::io::readPly<float>(colored_path.toStdString());
+    ASSERT_NE(colored, nullptr);
+    ASSERT_TRUE(colored->hasColors());
+    EXPECT_EQ(colored->colors()->getValue(0, 0), 17);
+    EXPECT_EQ(colored->colors()->getValue(0, 1), 29);
+    EXPECT_EQ(colored->colors()->getValue(0, 2), 43);
+}
+
 TEST(DepthTsdfSurfaceBuilderTest,
      EnforcedDepthCompletenessGateRejectsAnInsufficientSurface)
 {
