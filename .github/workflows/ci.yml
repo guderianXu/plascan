@@ -2,10 +2,27 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
   pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
+
+env:
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_MAXSIZE: 2G
+  CCACHE_COMPRESS: 'true'
 
 jobs:
   build-test:
@@ -24,11 +41,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential \
             cmake \
+            ccache \
             ninja-build \
             g++ \
             python3 \
-            wget \
-            unzip \
             pkg-config \
             libgl1-mesa-dev \
             libxkbcommon-dev \
@@ -59,11 +75,18 @@ jobs:
       - name: Install Python test dependencies
         run: python3 -m pip install --disable-pip-version-check numpy
 
-      - name: Install CPU LibTorch
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-gcc-release-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-gcc-release-
+
+      - name: Initialize compiler cache
         run: |
-          mkdir -p .deps
-          wget -q https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.6.0%2Bcpu.zip -O .deps/libtorch.zip
-          unzip -q .deps/libtorch.zip -d .deps
+          ccache --zero-stats
+          ccache --show-config
 
       - name: Configure
         run: |
@@ -73,7 +96,7 @@ jobs:
             -DBUILD_TESTS=ON \
             -DPLASCAN_ENABLE_CONDA=OFF \
             -DPLASCAN_ENABLE_VCPKG=OFF \
-            -DTorch_DIR="$PWD/.deps/libtorch/share/cmake/Torch" 2>&1 | tee configure.log; then
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache 2>&1 | tee configure.log; then
             tail_msg="$(tail -n 80 configure.log | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')"
             echo "::error title=CMake configure failed::$tail_msg"
             exit 1
@@ -96,6 +119,7 @@ jobs:
         run: |
           set -o pipefail
           if ! QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure \
+            --parallel 2 \
             --timeout 120 \
             -E 'TerrainDemDomTest\.TerrainPipelineGeneratesDemDomFromDirectory' 2>&1 | tee test.log; then
             filtered_msg="$(grep -Ei 'failed|failure|error|exception|segmentation|timeout|not run|[0-9]+% tests passed' test.log | tail -n 120 || true)"
@@ -106,3 +130,7 @@ jobs:
             echo "::error title=CTest failed::$tail_msg"
             exit 1
           fi
+
+      - name: Show compiler cache statistics
+        if: always()
+        run: ccache --show-stats

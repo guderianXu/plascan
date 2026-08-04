@@ -43,6 +43,12 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("libopenmesh-dev", text)
         self.assertIn("python3 -m pip install --disable-pip-version-check numpy", text)
         self.assertIn("--timeout 120", text)
+        self.assertIn("uses: actions/cache@v4", text)
+        self.assertIn("-DCMAKE_CXX_COMPILER_LAUNCHER=ccache", text)
+        self.assertIn("cancel-in-progress: true", text)
+        self.assertIn("paths-ignore:", text)
+        self.assertNotIn("libtorch", text.lower())
+        self.assertNotIn("Torch_DIR", text)
 
         packages_text = (ROOT / "cmake" / "PlascanPackages.cmake").read_text(encoding="utf-8")
         self.assertIn("find_package(Qt6 6.7 REQUIRED", packages_text)
