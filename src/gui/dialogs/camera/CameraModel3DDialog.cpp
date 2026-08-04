@@ -1179,7 +1179,6 @@ void CameraSceneWidget::setPointCloud(const RenderCloud &cloud)
     _currentCloudPath.clear();
     _hasFocusedGeometryBounds = false;
     _fitViewAfterLoad = false;
-    _preferModelPointRender = false;
     _cacheDirty = true;
     _gpuDirty   = true;
     update();
@@ -1218,7 +1217,7 @@ void CameraSceneWidget::loadPointCloudFromXyzInternal(const QString &xyzPath,
     _texturedMeshPipeline.uploadedTexturePath.clear();
     _hasFocusedGeometryBounds = false;
     _fitViewAfterLoad = fitAfterLoad;
-    _preferModelPointRender = false;
+    _pointCloudPointSize = 2.4f;
     _cacheDirty = true;
     _gpuDirty   = true;
     LOG_INFO(QStringLiteral("[3D] 正在加载点云: %1").arg(xyzPath));
@@ -1307,7 +1306,7 @@ void CameraSceneWidget::loadModelFromPlyInternal(const QString &plyPath,
     _texturedMeshPipeline.uploadedTexturePath.clear();
     _hasFocusedGeometryBounds = false;
     _fitViewAfterLoad = fitAfterLoad;
-    _preferModelPointRender = !tiePointCloud;
+    _pointCloudPointSize = 2.4f;
     _cacheDirty = true;
     _gpuDirty   = true;
     _loading = true;
@@ -1352,20 +1351,19 @@ void CameraSceneWidget::loadModelFromPlyInternal(const QString &plyPath,
                 // but it must not masquerade as vertex colour information.
                 self->setModelColorMode(ModelColorMode::Solid);
             }
-            self->_preferModelPointRender = !self->_isTiePointCloud && !self->_cloud.hasFaces();
             if (!self->_cloud.hasFaces())
             {
                 if (self->_cloud.size() >= 3'000'000)
                 {
-                    self->_modelPointSize = 1.1f;
+                    self->_pointCloudPointSize = 1.1f;
                 }
                 else if (self->_cloud.size() >= 1'000'000)
                 {
-                    self->_modelPointSize = 1.4f;
+                    self->_pointCloudPointSize = 1.4f;
                 }
                 else
                 {
-                    self->_modelPointSize = 2.4f;
+                    self->_pointCloudPointSize = 2.4f;
                 }
             }
             self->_loading = false;
@@ -1457,7 +1455,7 @@ void CameraSceneWidget::loadModelFromObjInternal(const QString &objPath,
     _texturedMeshPipeline.uploadedTexturePath.clear();
     _hasFocusedGeometryBounds = false;
     _fitViewAfterLoad = fitAfterLoad;
-    _preferModelPointRender = false;
+    _pointCloudPointSize = 2.4f;
     _cacheDirty = true;
     _gpuDirty = true;
     _loading = true;
@@ -1521,7 +1519,21 @@ void CameraSceneWidget::loadModelFromObjInternal(const QString &objPath,
                     self->setModelColorMode(ModelColorMode::Solid);
                 }
             }
-            self->_preferModelPointRender = !self->_isTiePointCloud && !self->_cloud.hasFaces();
+            if (!self->_cloud.hasFaces())
+            {
+                if (self->_cloud.size() >= 3'000'000)
+                {
+                    self->_pointCloudPointSize = 1.1f;
+                }
+                else if (self->_cloud.size() >= 1'000'000)
+                {
+                    self->_pointCloudPointSize = 1.4f;
+                }
+                else
+                {
+                    self->_pointCloudPointSize = 2.4f;
+                }
+            }
             self->_loading = false;
             self->_plyLoadProgressPercent = -1;
             self->_plyLoadProgressText.clear();
@@ -2454,8 +2466,6 @@ void CameraSceneWidget::initialize(QRhiCommandBuffer *cb)
     _colorPointPipeline.fragmentShaderPath = QStringLiteral(":/shaders/camera_scene_point.frag.qsb");
     _colorLinePipeline.vertexShaderPath = QStringLiteral(":/shaders/camera_scene_color.vert.qsb");
     _colorLinePipeline.fragmentShaderPath = QStringLiteral(":/shaders/camera_scene_color.frag.qsb");
-    _modelPointPipeline.vertexShaderPath = _colorPointPipeline.vertexShaderPath;
-    _modelPointPipeline.fragmentShaderPath = _colorPointPipeline.fragmentShaderPath;
     _meshTrianglePipeline.vertexShaderPath = QStringLiteral(":/shaders/camera_scene_mesh.vert.qsb");
     _meshTrianglePipeline.fragmentShaderPath = QStringLiteral(":/shaders/camera_scene_mesh.frag.qsb");
     _meshPointPipeline.vertexShaderPath = _meshTrianglePipeline.vertexShaderPath;
@@ -2474,7 +2484,6 @@ void CameraSceneWidget::releaseResources()
     _pointBuffer.vertexBuffer.reset();
     _meshBuffer.vertexBuffer.reset();
     _modelWireframeBuffer.vertexBuffer.reset();
-    _modelPointBuffer.vertexBuffer.reset();
     _lineBuffer.vertexBuffer.reset();
     _colorPointPipeline.uniformBuffer.reset();
     _colorPointPipeline.bindings.reset();
@@ -2482,9 +2491,6 @@ void CameraSceneWidget::releaseResources()
     _colorLinePipeline.uniformBuffer.reset();
     _colorLinePipeline.bindings.reset();
     _colorLinePipeline.pipeline.reset();
-    _modelPointPipeline.uniformBuffer.reset();
-    _modelPointPipeline.bindings.reset();
-    _modelPointPipeline.pipeline.reset();
     _meshTrianglePipeline.uniformBuffer.reset();
     _meshTrianglePipeline.bindings.reset();
     _meshTrianglePipeline.pipeline.reset();
@@ -2560,11 +2566,9 @@ void CameraSceneWidget::uploadGpuData()
     };
 
     _pointBuffer.vertexCount = 0;
-    _modelPointBuffer.vertexCount = 0;
     _modelWireframeBuffer.vertexCount = 0;
     _lineBuffer.vertexCount = 0;
     _pointBuffer.vertexData.clear();
-    _modelPointBuffer.vertexData.clear();
     _modelWireframeBuffer.vertexData.clear();
     _lineBuffer.vertexData.clear();
     if (use_prepared_obj_mesh)
@@ -2582,7 +2586,6 @@ void CameraSceneWidget::uploadGpuData()
 
     // ── 1. 点云（_cloud，无面片；法向量可选，颜色直通）──────────────────────
     _pointCount = 0;
-    _modelPtCount = 0;
     _modelWireframeVertCount = 0;
     if (!(_cloud.size() == 0) && !_cloud.hasFaces()) {
         const bool hasColors = _cloud.hasColors();
@@ -2681,16 +2684,8 @@ void CameraSceneWidget::uploadGpuData()
                  << normal_x << normal_y << normal_z
                  << red << green << blue;
         }
-        if (_preferModelPointRender && !_isTiePointCloud)
-        {
-            assignBuffer(_modelPointBuffer, data, int(_cloud.size()), 9);
-            _modelPtCount = (int)_cloud.size();
-        }
-        else
-        {
-            assignBuffer(_pointBuffer, data, int(_cloud.size()), 9);
-            _pointCount = (int)_cloud.size();
-        }
+        assignBuffer(_pointBuffer, data, int(_cloud.size()), 9);
+        _pointCount = static_cast<int>(_cloud.size());
     }
 
     // ── 2. 网格（hasFaces）──────────────────────────────────────────────────
@@ -2983,11 +2978,10 @@ void CameraSceneWidget::uploadGpuData()
     if (_cloud.size() > 0)
     {
         LOG_INFO(QStringLiteral(
-                     "[3D] GPU 几何缓存已准备: 点=%1，普通点缓冲=%2，模型点缓冲=%3，网格顶点=%4，"
-                     "法向量=%5，颜色=%6，面=%7")
+                     "[3D] GPU 几何缓存已准备: 点=%1，点云缓冲=%2，网格顶点=%3，"
+                     "法向量=%4，颜色=%5，面=%6")
                      .arg(_cloud.size())
                      .arg(_pointBuffer.vertexCount)
-                     .arg(_modelPointBuffer.vertexCount)
                      .arg(_meshBuffer.vertexCount)
                      .arg(_cloud.hasNormals() ? QStringLiteral("有") : QStringLiteral("无"))
                      .arg(_cloud.hasColors() ? QStringLiteral("有") : QStringLiteral("无"))
@@ -3133,6 +3127,87 @@ bool CameraSceneWidget::ensurePipeline(RhiPipelineSet *pipeline,
     return true;
 }
 
+bool CameraSceneWidget::ensurePointPipeline()
+{
+    if (_colorPointPipeline.pipeline && !_pipelinesDirty)
+    {
+        return true;
+    }
+
+    QString error;
+    const QShader vertex_shader = loadSceneShader(_colorPointPipeline.vertexShaderPath, &error);
+    if (!error.isEmpty())
+    {
+        _renderError = error;
+        return false;
+    }
+    const QShader fragment_shader = loadSceneShader(_colorPointPipeline.fragmentShaderPath, &error);
+    if (!error.isEmpty())
+    {
+        _renderError = error;
+        return false;
+    }
+
+    _colorPointPipeline.pipeline.reset();
+    _colorPointPipeline.bindings.reset();
+    _colorPointPipeline.uniformBuffer.reset(
+        rhi()->newBuffer(QRhiBuffer::Dynamic,
+                         QRhiBuffer::UniformBuffer,
+                         quint32(sizeof(SceneUniforms))));
+    if (!_colorPointPipeline.uniformBuffer->create())
+    {
+        _renderError = QStringLiteral("Vulkan 点云 uniform 缓冲创建失败。");
+        return false;
+    }
+
+    _colorPointPipeline.bindings.reset(rhi()->newShaderResourceBindings());
+    _colorPointPipeline.bindings->setBindings({
+        QRhiShaderResourceBinding::uniformBuffer(
+            0,
+            QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
+            _colorPointPipeline.uniformBuffer.data())
+    });
+    if (!_colorPointPipeline.bindings->create())
+    {
+        _renderError = QStringLiteral("Vulkan 点云 shader 资源绑定创建失败。");
+        return false;
+    }
+
+    QRhiVertexInputLayout input_layout;
+    input_layout.setBindings({
+        QRhiVertexInputBinding(9 * sizeof(float), QRhiVertexInputBinding::PerInstance)
+    });
+    input_layout.setAttributes({
+        QRhiVertexInputAttribute(0, 0, QRhiVertexInputAttribute::Float3, 0),
+        QRhiVertexInputAttribute(0, 1, QRhiVertexInputAttribute::Float3, 3 * sizeof(float)),
+        QRhiVertexInputAttribute(0, 2, QRhiVertexInputAttribute::Float3, 6 * sizeof(float)),
+    });
+
+    _colorPointPipeline.pipeline.reset(rhi()->newGraphicsPipeline());
+    _colorPointPipeline.pipeline->setTopology(QRhiGraphicsPipeline::Triangles);
+    _colorPointPipeline.pipeline->setShaderStages({
+        QRhiShaderStage(QRhiShaderStage::Vertex, vertex_shader),
+        QRhiShaderStage(QRhiShaderStage::Fragment, fragment_shader),
+    });
+    _colorPointPipeline.pipeline->setVertexInputLayout(input_layout);
+    _colorPointPipeline.pipeline->setShaderResourceBindings(
+        _colorPointPipeline.bindings.data());
+    _colorPointPipeline.pipeline->setRenderPassDescriptor(
+        renderTarget()->renderPassDescriptor());
+    _colorPointPipeline.pipeline->setSampleCount(sampleCount());
+    _colorPointPipeline.pipeline->setDepthTest(true);
+    _colorPointPipeline.pipeline->setDepthWrite(true);
+    _colorPointPipeline.pipeline->setDepthOp(QRhiGraphicsPipeline::LessOrEqual);
+    _colorPointPipeline.pipeline->setCullMode(QRhiGraphicsPipeline::None);
+
+    if (!_colorPointPipeline.pipeline->create())
+    {
+        _renderError = QStringLiteral("Vulkan 点云实例化图形管线创建失败。");
+        return false;
+    }
+    return true;
+}
+
 bool CameraSceneWidget::ensureTexturedMeshPipeline(QRhiResourceUpdateBatch *updates)
 {
     if (!_meshHasTexture || _meshTextureImage.isNull() || !updates)
@@ -3272,6 +3347,24 @@ void CameraSceneWidget::drawRhiBuffer(QRhiCommandBuffer *cb,
     const QRhiCommandBuffer::VertexInput vertexInput(buffer->vertexBuffer.data(), 0);
     cb->setVertexInput(0, 1, &vertexInput);
     cb->draw(quint32(buffer->vertexCount));
+}
+
+void CameraSceneWidget::drawPointCloud(QRhiCommandBuffer *cb,
+                                       const SceneUniforms &uniforms)
+{
+    if (!cb || !_pointBuffer.vertexBuffer || _pointBuffer.vertexCount <= 0
+        || !_colorPointPipeline.pipeline || !_colorPointPipeline.uniformBuffer)
+    {
+        return;
+    }
+
+    _colorPointPipeline.uniformBuffer->fullDynamicBufferUpdateForCurrentFrame(
+        &uniforms, sizeof(SceneUniforms));
+    cb->setGraphicsPipeline(_colorPointPipeline.pipeline.data());
+    cb->setShaderResources(_colorPointPipeline.bindings.data());
+    const QRhiCommandBuffer::VertexInput vertex_input(_pointBuffer.vertexBuffer.data(), 0);
+    cb->setVertexInput(0, 1, &vertex_input);
+    cb->draw(6, quint32(_pointBuffer.vertexCount));
 }
 
 void CameraSceneWidget::drawTexturedMesh(QRhiCommandBuffer *cb, const SceneUniforms &uniforms)
@@ -3812,13 +3905,19 @@ void CameraSceneWidget::drawSceneGeometry(QRhiCommandBuffer *cb, SceneUniforms &
 {
     const float pointDiameter = _isTiePointCloud
         ? qMax(2.4f, xjw::gui::tie_points::pointSizeForMode(_tiePointColorMode))
-        : 1.8f;
+        : _pointCloudPointSize;
     uniforms.lightDirPointSize = QVector4D(
         -0.45f,
         0.70f,
         0.70f,
         pointDiameter * float(devicePixelRatioF()));
-    drawRhiBuffer(cb, &_pointBuffer, &_colorPointPipeline, uniforms);
+    const QSize viewport_size = renderTarget() ? renderTarget()->pixelSize() : QSize();
+    uniforms.viewportSize = QVector4D(
+        qMax(1, viewport_size.width()),
+        qMax(1, viewport_size.height()),
+        0.0f,
+        0.0f);
+    drawPointCloud(cb, uniforms);
 
     uniforms.lightDirPointSize.setW(_meshHasFaces ? 1.0f : 1.5f);
     if (_modelColorMode == ModelColorMode::Wireframe && _meshHasFaces)
@@ -3839,9 +3938,6 @@ void CameraSceneWidget::drawSceneGeometry(QRhiCommandBuffer *cb, SceneUniforms &
                       _meshHasFaces ? &_meshTrianglePipeline : &_meshPointPipeline,
                       uniforms);
     }
-
-    uniforms.lightDirPointSize.setW(_modelPointSize * float(devicePixelRatioF()));
-    drawRhiBuffer(cb, &_modelPointBuffer, &_modelPointPipeline, uniforms);
 
     uniforms.lightDirPointSize.setW(1.0f);
     drawRhiBuffer(cb, &_lineBuffer, &_colorLinePipeline, uniforms);
@@ -3864,18 +3960,11 @@ void CameraSceneWidget::render(QRhiCommandBuffer *cb)
         uploadGpuData();
     }
 
-    if (!ensurePipeline(&_colorPointPipeline,
-                        int(QRhiGraphicsPipeline::Points),
-                        9 * int(sizeof(float)),
-                        true) ||
+    if (!ensurePointPipeline() ||
         !ensurePipeline(&_colorLinePipeline,
                         int(QRhiGraphicsPipeline::Lines),
                         6 * int(sizeof(float)),
                         false) ||
-        !ensurePipeline(&_modelPointPipeline,
-                        int(QRhiGraphicsPipeline::Points),
-                        9 * int(sizeof(float)),
-                        true) ||
         !ensurePipeline(&_meshTrianglePipeline,
                         int(QRhiGraphicsPipeline::Triangles),
                         _meshBuffer.strideBytes > 0
@@ -3896,7 +3985,6 @@ void CameraSceneWidget::render(QRhiCommandBuffer *cb)
     if (!ensureRhiBuffer(&_pointBuffer, updates) ||
         !ensureRhiBuffer(&_meshBuffer, updates) ||
         !ensureRhiBuffer(&_modelWireframeBuffer, updates) ||
-        !ensureRhiBuffer(&_modelPointBuffer, updates) ||
         !ensureRhiBuffer(&_lineBuffer, updates))
     {
         requestOverlayUpdate();
@@ -4143,7 +4231,7 @@ void CameraSceneWidget::drawPointCloudOverlay(QPainter &painter) const
         {
             const int centerX = qRound(screenPoint.x());
             const int centerY = qRound(screenPoint.y());
-            const int pointRadius = qMax(0, qRound(_modelPointSize * 0.5f) - 1);
+            const int pointRadius = qMax(0, qRound(_pointCloudPointSize * 0.5f) - 1);
             for (int offsetY = -pointRadius; offsetY <= pointRadius; ++offsetY)
             {
                 for (int offsetX = -pointRadius; offsetX <= pointRadius; ++offsetX)
@@ -4192,7 +4280,7 @@ void CameraSceneWidget::drawPointCloudOverlay(QPainter &painter) const
     }
     const qreal pointSize = _isTiePointCloud
         ? qMax<qreal>(2.2, xjw::gui::tie_points::pointSizeForMode(_tiePointColorMode))
-        : qMax<qreal>(2.2, _modelPointSize);
+        : qMax<qreal>(2.2, _pointCloudPointSize);
     for (auto iterator = pointsByColor.cbegin(); iterator != pointsByColor.cend(); ++iterator)
     {
         painter.setPen(QPen(

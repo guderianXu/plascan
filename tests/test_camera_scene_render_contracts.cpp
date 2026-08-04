@@ -375,8 +375,7 @@ TEST(CameraSceneRenderContractTest, TiePointsUseGpuCameraPlaneDepth)
     ASSERT_GT(renderStart, drawStart);
     const QString drawBlock = sceneSource.mid(drawStart, renderStart - drawStart);
     EXPECT_FALSE(drawBlock.contains(QStringLiteral("if (!_isTiePointCloud)")));
-    EXPECT_TRUE(drawBlock.contains(QStringLiteral(
-        "drawRhiBuffer(cb, &_pointBuffer, &_colorPointPipeline, uniforms);")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("drawPointCloud(cb, uniforms);")));
 
     const qsizetype thumbnailPipelineStart = sceneSource.indexOf(
         QStringLiteral("bool CameraSceneWidget::ensureCameraThumbnailPipeline"));
@@ -516,11 +515,11 @@ TEST(CameraSceneRenderContractTest, ImportedPointCloudsUsePointCloudLoadersAndFi
         "constexpr float pointColorScale = 1.0f / 255.0f")));
     EXPECT_FALSE(uploadBlock.contains(QStringLiteral("maximumColorComponent")));
     EXPECT_TRUE(uploadBlock.contains(QStringLiteral(
-        "assignBuffer(_modelPointBuffer, data, int(_cloud.size()), 9)")));
-    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
-        "drawRhiBuffer(cb, &_modelPointBuffer, &_modelPointPipeline, uniforms);")));
-    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
-        "drawRhiBuffer(cb, &_pointBuffer, &_colorPointPipeline, uniforms);")));
+        "assignBuffer(_pointBuffer, data, int(_cloud.size()), 9)")));
+    EXPECT_FALSE(sceneHeader.contains(QStringLiteral("_modelPointBuffer")));
+    EXPECT_FALSE(sceneHeader.contains(QStringLiteral("_modelPointPipeline")));
+    EXPECT_FALSE(sceneSource.contains(QStringLiteral("_preferModelPointRender")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral("drawPointCloud(cb, uniforms);")));
     EXPECT_FALSE(sceneSource.contains(QStringLiteral("drawPointCloudOverlay(painter);")));
 }
 

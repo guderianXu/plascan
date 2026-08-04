@@ -7261,8 +7261,10 @@ TEST(CameraSceneWidgetTest, UsesQrhiWidgetWithVulkanBackend)
     EXPECT_TRUE(header.contains(QStringLiteral("void initialize(QRhiCommandBuffer *cb) override;")));
     EXPECT_TRUE(header.contains(QStringLiteral("void render(QRhiCommandBuffer *cb) override;")));
     EXPECT_TRUE(header.contains(QStringLiteral("void releaseResources() override;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("RhiPipelineSet _modelPointPipeline;")));
-    EXPECT_TRUE(source.contains(QStringLiteral("drawRhiBuffer(cb, &_modelPointBuffer, &_modelPointPipeline, uniforms)")));
+    EXPECT_TRUE(header.contains(QStringLiteral("RhiPipelineSet _colorPointPipeline;")));
+    EXPECT_TRUE(source.contains(QStringLiteral("drawPointCloud(cb, uniforms)")));
+    EXPECT_FALSE(header.contains(QStringLiteral("_modelPointBuffer")));
+    EXPECT_FALSE(header.contains(QStringLiteral("_modelPointPipeline")));
     EXPECT_TRUE(source.contains(QStringLiteral("rhi()->clipSpaceCorrMatrix()")));
 }
 
@@ -7378,12 +7380,15 @@ TEST(CameraSceneWidgetTest, PointCloudRenderingStaysOnVulkan)
     EXPECT_TRUE(source.contains(QStringLiteral(":/shaders/camera_scene_point.frag.qsb")));
     EXPECT_TRUE(source.contains(QStringLiteral("data.reserve(static_cast<int>(_cloud.size()) * 9)")));
     EXPECT_TRUE(source.contains(QStringLiteral("_cloud.hasFaces() ? 4 : 1")));
-    EXPECT_TRUE(source.contains(QStringLiteral("int(QRhiGraphicsPipeline::Points),\n"
-                                                "                        9 * int(sizeof(float)),\n"
-                                                "                        true")));
+    EXPECT_TRUE(source.contains(QStringLiteral(
+        "QRhiVertexInputBinding(9 * sizeof(float), QRhiVertexInputBinding::PerInstance)")));
+    EXPECT_TRUE(source.contains(QStringLiteral(
+        "cb->draw(6, quint32(_pointBuffer.vertexCount))")));
     EXPECT_TRUE(pointVertexShader.contains(QStringLiteral("layout(location = 1) in vec3 aNormal")));
     EXPECT_TRUE(pointVertexShader.contains(QStringLiteral(
-        "gl_PointSize = ubuf.uLightDirPointSize.w")));
+        "corner * ubuf.uLightDirPointSize.w / viewportSize * clipPosition.w")));
+    EXPECT_TRUE(pointFragmentShader.contains(QStringLiteral(
+        "dot(vPointOffset, vPointOffset) > 1.0")));
     EXPECT_FALSE(pointFragmentShader.contains(QStringLiteral("gl_PointCoord")));
     EXPECT_TRUE(pointFragmentShader.contains(QStringLiteral("normalLengthSquared > 1.0e-20")));
 }

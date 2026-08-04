@@ -3,6 +3,7 @@
 layout(location = 0) in vec3 vNormal;
 layout(location = 1) in vec3 vColor;
 layout(location = 2) in vec3 vViewPosition;
+layout(location = 3) in vec2 vPointOffset;
 
 layout(std140, binding = 0) uniform SceneUniforms
 {
@@ -10,6 +11,7 @@ layout(std140, binding = 0) uniform SceneUniforms
     mat4 uModelView;
     mat4 uNormalMat;
     vec4 uLightDirPointSize;
+    vec4 uViewportSize;
 } ubuf;
 
 layout(location = 0) out vec4 fragColor;
@@ -26,6 +28,11 @@ vec3 linearToSrgb(vec3 color)
 
 void main()
 {
+    if (dot(vPointOffset, vPointOffset) > 1.0)
+    {
+        discard;
+    }
+
     float normalLengthSquared = dot(vNormal, vNormal);
     if (!(normalLengthSquared > 1.0e-20) || normalLengthSquared > 1.0e20)
     {

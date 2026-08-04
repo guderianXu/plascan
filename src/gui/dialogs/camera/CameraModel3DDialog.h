@@ -400,6 +400,7 @@ private:
         QMatrix4x4 modelView;
         QMatrix4x4 normalMatrix;
         QVector4D lightDirPointSize;
+        QVector4D viewportSize;
     };
 
     struct ImagePlaneUniforms
@@ -433,6 +434,7 @@ private:
                         int topology,
                         int strideBytes,
                         bool hasNormals);
+    bool ensurePointPipeline();
     bool ensureTexturedMeshPipeline(QRhiResourceUpdateBatch *updates);
     bool ensureImagePipeline(QRhiResourceUpdateBatch *updates);
     bool ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *updates);
@@ -440,6 +442,7 @@ private:
                        RhiBufferSet *buffer,
                        RhiPipelineSet *pipeline,
                        const SceneUniforms &uniforms);
+    void drawPointCloud(QRhiCommandBuffer *cb, const SceneUniforms &uniforms);
     void drawTexturedMesh(QRhiCommandBuffer *cb, const SceneUniforms &uniforms);
     void drawActiveCameraImage(QRhiCommandBuffer *cb, const QMatrix4x4 &mvp);
     void drawCameraThumbnails(QRhiCommandBuffer *cb, const QMatrix4x4 &mvp);
@@ -448,6 +451,7 @@ private:
     // 点云 GPU 资源
     RhiBufferSet _pointBuffer;
     int _pointCount = 0;
+    float _pointCloudPointSize = 2.4f;
 
     // 网格（三角面展开）GPU 资源
     RhiBufferSet _meshBuffer;
@@ -461,18 +465,12 @@ private:
     int _preparedObjVertexCount = 0;
     int _preparedObjStrideBytes = 0;
 
-    // 无面片模型（作为点云绘制）GPU 资源
-    RhiBufferSet _modelPointBuffer;
-    int _modelPtCount = 0;
-    float _modelPointSize = 2.4f;
-
     // 点云包围盒 GPU 资源。
     RhiBufferSet _lineBuffer;
     int _lineCount = 0;
 
     RhiPipelineSet _colorPointPipeline;
     RhiPipelineSet _colorLinePipeline;
-    RhiPipelineSet _modelPointPipeline;
     RhiPipelineSet _meshTrianglePipeline;
     RhiPipelineSet _meshPointPipeline;
     RhiTexturedMeshPipelineSet _texturedMeshPipeline;
@@ -514,7 +512,6 @@ private:
     int    _plyLoadProgressPercent = -1;
     QString _plyLoadProgressText;
     bool _fitViewAfterLoad = false;
-    bool _preferModelPointRender = false;
     QQuaternion _viewRot;                     // 当前视图旋转四元数
     double _zoomScale = 1.0;                  // 当前缩放系数（影响相机到场景中心的距离）
     QPointF _sceneOffsetPx = QPointF(0.0, 0.0); // 场景在屏幕空间的平移偏移（像素）
