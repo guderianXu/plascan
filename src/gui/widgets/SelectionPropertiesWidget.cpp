@@ -457,7 +457,8 @@ QVector<SelectionPropertiesWidget::PropertyRow> SelectionPropertiesWidget::model
             for (const QString &pathKey : {QStringLiteral("depth_png"),
                                            QStringLiteral("raw_depth_path"),
                                            QStringLiteral("raw_confidence_path"),
-                                           QStringLiteral("valid_mask_path")})
+                                           QStringLiteral("valid_mask_path"),
+                                           QStringLiteral("depth_provenance_path")})
             {
                 const QFileInfo artifactInfo(depthRecord.value(pathKey).toString());
                 if (artifactInfo.exists()) depthArtifactBytes += artifactInfo.size();
@@ -537,6 +538,27 @@ QVector<SelectionPropertiesWidget::PropertyRow> SelectionPropertiesWidget::model
             rows.push_back({tr("缺口定向恢复"),
                             locale.toString(targeted_recovered) +
                                 tr(" 像素")});
+        }
+        if (depthSnapshot.value(
+                QStringLiteral("depth_provenance_schema_version")).toInt() > 0)
+        {
+            rows.push_back({tr("深度来源"), {}, true});
+            rows.push_back({tr("原生 PatchMatch"),
+                            locale.toString(static_cast<qint64>(depthSnapshot.value(
+                                QStringLiteral("native_patchmatch_pixel_count"))
+                                .toDouble(0.0))) + tr(" 像素")});
+            rows.push_back({tr("定向 PatchMatch"),
+                            locale.toString(static_cast<qint64>(depthSnapshot.value(
+                                QStringLiteral("targeted_patchmatch_pixel_count"))
+                                .toDouble(0.0))) + tr(" 像素")});
+            rows.push_back({tr("跨视测量恢复"),
+                            locale.toString(static_cast<qint64>(depthSnapshot.value(
+                                QStringLiteral("cross_view_measured_pixel_count"))
+                                .toDouble(0.0))) + tr(" 像素")});
+            rows.push_back({tr("锚定插值"),
+                            locale.toString(static_cast<qint64>(depthSnapshot.value(
+                                QStringLiteral("anchored_interpolation_pixel_count"))
+                                .toDouble(0.0))) + tr(" 像素")});
         }
     }
 

@@ -69,6 +69,7 @@ struct DepthFrameResult
     QSharedPointer<cv::Mat> adaptiveGeometryConflictRatio; ///< 可观测证据中的冲突比例 [0, 1] (CV_32F)
     QSharedPointer<cv::Mat> crossViewRepairedMask; ///< 跨视图补回像素；不参与帧准入评分 (CV_8U)
     QSharedPointer<cv::Mat> targetedGapRecoveredMask; ///< 定向二源 PatchMatch 恢复像素 (CV_8U)
+    QSharedPointer<cv::Mat> depthProvenance; ///< 最终深度来源码 (CV_8U, DepthProvenance)
     QSharedPointer<cv::Mat> missingReasonMap; ///< 最终缺失像素的逐像素原因码 (CV_8U)
     QSharedPointer<cv::Mat> validMask;   ///< 最终输出空间的权威有效蒙版 (CV_8U)
     QSharedPointer<cv::Mat> supportRegionMask; ///< 项目/内容允许参与重建的区域，不含深度孔洞
@@ -127,6 +128,7 @@ struct DepthFrameResult
         adaptiveGeometryConflictRatio.clear();
         crossViewRepairedMask.clear();
         targetedGapRecoveredMask.clear();
+        depthProvenance.clear();
         missingReasonMap.clear();
         validMask.clear();
         supportRegionMask.clear();

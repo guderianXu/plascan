@@ -111,7 +111,8 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
     cv::Mat *sourceInverseDepthSum = nullptr,
     cv::Mat *sourceInverseDepthSquaredSum = nullptr,
     const Camera *referenceCamera = nullptr,
-    const cv::Mat *guideGray = nullptr);
+    const cv::Mat *guideGray = nullptr,
+    cv::Mat *anchoredInterpolationMask = nullptr);
 
 QJsonObject crossViewHoleRepairStatsToJson(
     const CrossViewHoleRepairStats &stats);

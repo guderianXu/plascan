@@ -104,6 +104,12 @@ MvsDepthFrameRecord makeRecord(int index, const QString &name, const QString &st
     record.targetedGapRecoveryDiagnostics = QJsonObject{
         {QStringLiteral("attempted"), true},
         {QStringLiteral("recovered_pixel_count"), 321}};
+    record.depthProvenancePath = QStringLiteral(
+        "depth_provenance_%1.png").arg(
+            index, 3, 10, QLatin1Char('0'));
+    record.depthProvenanceSummary = QJsonObject{
+        {QStringLiteral("available"), true},
+        {QStringLiteral("anchored_interpolation_pixel_count"), 17}};
     QJsonObject source_plan_entry;
     source_plan_entry.insert(QStringLiteral("view_index"), 7);
     source_plan_entry.insert(QStringLiteral("source_image"), QStringLiteral("source_a.jpg"));
@@ -210,12 +216,21 @@ TEST(MvsWorkspaceManifest, SavesAndLoadsFrameRecordsAtomically)
               QStringLiteral("cross_view_repaired_002.png"));
     EXPECT_EQ(loaded.frames().front().targetedGapRecoveredMaskPath,
               QStringLiteral("targeted_gap_recovered_002.png"));
+    EXPECT_EQ(loaded.frames().front().depthProvenancePath,
+              QStringLiteral("depth_provenance_002.png"));
     EXPECT_EQ(loaded.frames()
                   .front()
                   .targetedGapRecoveryDiagnostics
                   .value(QStringLiteral("recovered_pixel_count"))
                   .toInt(),
               321);
+    EXPECT_EQ(loaded.frames()
+                  .front()
+                  .depthProvenanceSummary
+                  .value(QStringLiteral(
+                      "anchored_interpolation_pixel_count"))
+                  .toInt(),
+              17);
     EXPECT_EQ(loaded.frames().front().missingReasonPath,
               QStringLiteral("missing_reason_002.png"));
     EXPECT_EQ(loaded.frames().front().missingReasonPreviewPath,
@@ -272,8 +287,11 @@ TEST(MvsWorkspaceManifest, UpdatesFailedFrameAndInvalidatesConfigMismatch)
     MvsDepthFrameRecord completed = makeRecord(3, QStringLiteral("image_003.jpg"), QStringLiteral("completed"));
     completed.depthPng = QDir(tempDir.path()).filePath(QStringLiteral("depth_003.png"));
     completed.rawDepthPath = QDir(tempDir.path()).filePath(QStringLiteral("depth_003.bin"));
+    completed.depthProvenancePath = QDir(tempDir.path()).filePath(
+        QStringLiteral("depth_003_provenance.png"));
     touchFile(completed.depthPng);
     touchFile(completed.rawDepthPath);
+    touchFile(completed.depthProvenancePath);
     manifest.markCompleted(completed);
     EXPECT_TRUE(manifest.hasReusableCompletedFrame(3, QStringLiteral("cfg-a")));
     EXPECT_FALSE(manifest.hasReusableCompletedFrame(3, QStringLiteral("cfg-b")));
@@ -800,11 +818,14 @@ TEST(MvsWorkspaceManifest, PreviousRevisionFrameIsNotReusableEvenWhenArtifactsMa
         QStringLiteral("depth_004_adaptive_geometry_effective_view_count.bin"));
     record.rawAdaptiveGeometryConflictWeightPath = QDir(tempDir.path()).filePath(
         QStringLiteral("depth_004_adaptive_geometry_conflict_weight.bin"));
+    record.depthProvenancePath = QDir(tempDir.path()).filePath(
+        QStringLiteral("depth_004_provenance.png"));
     touchFile(record.depthPng);
     touchFile(record.rawDepthPath);
     touchFile(record.rawAdaptiveGeometrySupportWeightPath);
     touchFile(record.rawAdaptiveGeometryEffectiveViewCountPath);
     touchFile(record.rawAdaptiveGeometryConflictWeightPath);
+    touchFile(record.depthProvenancePath);
     manifest.upsertFrame(record);
 
     EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
@@ -833,11 +854,14 @@ TEST(MvsWorkspaceManifest, CurrentOrbitalFrameRequiresConflictRatio)
         QStringLiteral("depth_004_adaptive_geometry_conflict_ratio.bin"));
     record.rawAdaptiveGeometryConflictWeightPath = QDir(tempDir.path()).filePath(
         QStringLiteral("depth_004_adaptive_geometry_conflict_weight.bin"));
+    record.depthProvenancePath = QDir(tempDir.path()).filePath(
+        QStringLiteral("depth_004_provenance.png"));
     touchFile(record.depthPng);
     touchFile(record.rawDepthPath);
     touchFile(record.rawAdaptiveGeometrySupportWeightPath);
     touchFile(record.rawAdaptiveGeometryEffectiveViewCountPath);
     touchFile(record.rawAdaptiveGeometryConflictWeightPath);
+    touchFile(record.depthProvenancePath);
     manifest.upsertFrame(record);
 
     EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));

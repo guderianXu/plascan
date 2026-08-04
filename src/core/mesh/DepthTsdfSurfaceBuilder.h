@@ -36,6 +36,7 @@ struct DepthTsdfFrame
     cv::Mat inverseDepthMean;
     cv::Mat inverseDepthRelativeSpread;
     cv::Mat crossViewRepairedMask;
+    cv::Mat depthProvenance;
     QVector<int> sourceIndices;
     cv::Mat depthValidMask;
     cv::Mat supportMask;
@@ -61,6 +62,7 @@ struct DepthTsdfOptions
     float unconfirmedNativeObservationMultiplier = 0.30f;
     float weakNativeObservationMultiplier = 0.55f;
     float repairedObservationMultiplier = 0.70f;
+    bool excludeAnchoredInterpolationObservations = false;
     float adaptiveGeometryMinimumObservationMultiplier = 0.15f;
     bool enableAdaptiveConflictRobustWeighting = false;
     float adaptiveConflictWeightKnee = 0.20f;
@@ -357,6 +359,7 @@ struct DepthTsdfStatistics
     std::uint64_t rejectedSupportMaskCount = 0;
     std::uint64_t supportMaskFreeSpaceUpdateCount = 0;
     std::uint64_t rejectedDepthValidCount = 0;
+    std::uint64_t rejectedInterpolationPolicyCount = 0;
     std::uint64_t rejectedDepthCount = 0;
     std::uint64_t rejectedConfidenceCount = 0;
     std::uint64_t subpixelObservationCount = 0;
@@ -952,6 +955,7 @@ struct DepthTsdfStatistics
     double topologyQualityAdjacentNormalAngleOver30Ratio = 0.0;
     bool topologyQualityStrictGatePassed = false;
     bool effectiveDepthCompletenessDiagnostics = false;
+    bool effectiveExcludeAnchoredInterpolationObservations = false;
     bool effectiveDepthCompletenessGateEnforcement = false;
     bool depthCompletenessAvailable = false;
     bool depthCompletenessGatePassed = false;
@@ -1082,7 +1086,8 @@ enum class DepthTsdfObservationFailure
     DepthValid,
     Depth,
     Confidence,
-    GeometryConsistency
+    GeometryConsistency,
+    InterpolationPolicy
 };
 
 struct DepthTsdfObservationSample
@@ -1165,7 +1170,8 @@ public:
         bool enableCrossViewConsensusDepth = false,
         float maximumCrossViewConsensusInverseDepthSpread = 0.02f,
         const cv::Mat &crossViewConsensusMask = cv::Mat(),
-        const cv::Mat &referenceAnchoredConsensusDepth = cv::Mat());
+        const cv::Mat &referenceAnchoredConsensusDepth = cv::Mat(),
+        bool excludeAnchoredInterpolation = false);
     static bool isSampleSupported(float accumulatedWeight,
                                   int distinctSupportCount,
                                   float maximumObservationWeight,

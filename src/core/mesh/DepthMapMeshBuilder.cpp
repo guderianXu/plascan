@@ -508,6 +508,9 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
                 directory, object.value(QStringLiteral("raw_inverse_depth_spread_path")).toString());
             frame.crossViewRepairedMaskPath = resolveArtifactPath(
                 directory, object.value(QStringLiteral("cross_view_repaired_mask_path")).toString());
+            frame.depthProvenancePath = resolveArtifactPath(
+                directory,
+                object.value(QStringLiteral("depth_provenance_path")).toString());
             for (const QJsonValue &source_value :
                  object.value(QStringLiteral("source_indices")).toArray())
             {

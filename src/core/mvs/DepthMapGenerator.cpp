@@ -11,6 +11,7 @@
 #include "DepthGeometryConsistency.h"
 #include "DepthFrameUtils.h"
 #include "DepthPyramidPolicy.h"
+#include "DepthProvenance.h"
 #include "EpipolarRectifier.h"
 #include "CameraBaseline.h"
 #include "MvsImagePreprocessor.h"
@@ -1553,7 +1554,8 @@ DepthAnchoredHoleInterpolationStats repairPostprocessedInternalDepthHoles(
     DepthFrameResult &result,
     cv::Mat &depth,
     cv::Mat &confidence,
-    MvsSceneProfile sceneProfile)
+    MvsSceneProfile sceneProfile,
+    cv::Mat *anchoredInterpolationMask = nullptr)
 {
     if (sceneProfile != MvsSceneProfile::OrbitalObject ||
         !result.supportRegionMask || result.supportRegionMask->empty() ||
@@ -1583,14 +1585,24 @@ DepthAnchoredHoleInterpolationStats repairPostprocessedInternalDepthHoles(
     options.maximumComponentAreaRatio = 0.25f;
     options.allowSilhouetteConnectedInterior = true;
     options.silhouetteProtectionRadiusPixels = 4;
-    return interpolateAnchoredInternalDepthHoles(
+    cv::Mat local_interpolation_mask;
+    cv::Mat *interpolation_mask = anchoredInterpolationMask
+        ? anchoredInterpolationMask : &local_interpolation_mask;
+    *interpolation_mask = cv::Mat(
+        depth.size(), CV_8UC1, cv::Scalar(0));
+    const DepthAnchoredHoleInterpolationStats stats =
+        interpolateAnchoredInternalDepthHoles(
         depth,
         support_mask,
         anchor_mask,
         nullptr,
         options,
         confidence.empty() ? nullptr : &confidence,
-        result.crossViewRepairedMask.data());
+        interpolation_mask);
+    cv::bitwise_or(*result.crossViewRepairedMask,
+                   *interpolation_mask,
+                   *result.crossViewRepairedMask);
+    return stats;
 }
 
 void updateDepthFrameQualityAfterConsistency(DepthFrameResult &result,
@@ -4925,6 +4937,8 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
     result.targetedGapRecoveredMask = targeted_gap_recovered_mask.empty()
         ? QSharedPointer<cv::Mat>()
         : QSharedPointer<cv::Mat>::create(targeted_gap_recovered_mask);
+    result.depthProvenance = QSharedPointer<cv::Mat>::create(
+        initializeDepthProvenance(depthMap, targeted_gap_recovered_mask));
     result.missingReasonMap = QSharedPointer<cv::Mat>::create(missing_reason_map);
     result.cameraModel = refCam;
     if (!depthMap.empty() && (depthMap.cols != W || depthMap.rows != H))
@@ -5258,6 +5272,7 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                     ? _depthFrames[i].confidence.data()
                     : nullptr);
         }
+        cv::Mat anchored_interpolation_mask;
         const CrossViewHoleRepairStats repair_stats =
             repairDepthHolesFromProjectedSources(
                 depthI,
@@ -5272,7 +5287,8 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                 &source_inverse_depth_squared_sum,
                 &camI,
                 i >= 0 && i < static_cast<int>(_grayCache.size())
-                    ? &_grayCache[static_cast<std::size_t>(i)] : nullptr);
+                    ? &_grayCache[static_cast<std::size_t>(i)] : nullptr,
+                &anchored_interpolation_mask);
         WeakNativeDepthRetentionOptions unconfirmed_backfill_options;
         unconfirmed_backfill_options.minimumConfirmationCount =
             std::numeric_limits<int>::max();
@@ -5377,8 +5393,26 @@ void DepthMapGenerator::crossCheckDepthConsistency()
         {
             LOG_WARN("[MVS][帧 %d][一致性] 保留率过低 %.1f%%，回退原始深度图", i, keepRate);
             depthBackup.copyTo(depthI);
+            _depthFrames[i].crossViewRepairedMask->setTo(cv::Scalar(0));
+            anchored_interpolation_mask.setTo(cv::Scalar(0));
             afterValid = beforeValid;
         }
+        if (!_depthFrames[i].depthProvenance ||
+            _depthFrames[i].depthProvenance->empty())
+        {
+            _depthFrames[i].depthProvenance = QSharedPointer<cv::Mat>::create(
+                initializeDepthProvenance(
+                    depthBackup,
+                    _depthFrames[i].targetedGapRecoveredMask
+                        ? *_depthFrames[i].targetedGapRecoveredMask : cv::Mat()));
+        }
+        updateDepthProvenance(
+            *_depthFrames[i].depthProvenance,
+            depthI,
+            _depthFrames[i].targetedGapRecoveredMask
+                ? *_depthFrames[i].targetedGapRecoveredMask : cv::Mat(),
+            *_depthFrames[i].crossViewRepairedMask,
+            anchored_interpolation_mask);
         const GeometryEvidenceMaps geometry_evidence = makeGeometryEvidenceMaps(
             depthI,
             consistent_votes,
@@ -5774,6 +5808,7 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 &filtered_depth,
                 filtered_confidence.empty() ? nullptr : &filtered_confidence);
         }
+        cv::Mat anchored_interpolation_mask;
         const CrossViewHoleRepairStats repair_stats =
             repairDepthHolesFromProjectedSources(
                 filtered_depth,
@@ -5788,7 +5823,8 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 &source_inverse_depth_squared_sum,
                 &reference_camera,
                 frame_index >= 0 && frame_index < static_cast<int>(_grayCache.size())
-                    ? &_grayCache[static_cast<std::size_t>(frame_index)] : nullptr);
+                    ? &_grayCache[static_cast<std::size_t>(frame_index)] : nullptr,
+                &anchored_interpolation_mask);
         WeakNativeDepthRetentionOptions unconfirmed_backfill_options;
         unconfirmed_backfill_options.minimumConfirmationCount =
             std::numeric_limits<int>::max();
@@ -5877,8 +5913,29 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             {
                 reference->confidence.copyTo(filtered_confidence);
             }
+            _depthFrames[frame_index].crossViewRepairedMask->setTo(
+                cv::Scalar(0));
+            anchored_interpolation_mask.setTo(cv::Scalar(0));
             valid_after = valid_before;
         }
+        if (!_depthFrames[frame_index].depthProvenance ||
+            _depthFrames[frame_index].depthProvenance->empty())
+        {
+            _depthFrames[frame_index].depthProvenance =
+                QSharedPointer<cv::Mat>::create(initializeDepthProvenance(
+                    reference->depth,
+                    _depthFrames[frame_index].targetedGapRecoveredMask
+                        ? *_depthFrames[frame_index].targetedGapRecoveredMask
+                        : cv::Mat()));
+        }
+        updateDepthProvenance(
+            *_depthFrames[frame_index].depthProvenance,
+            filtered_depth,
+            _depthFrames[frame_index].targetedGapRecoveredMask
+                ? *_depthFrames[frame_index].targetedGapRecoveredMask
+                : cv::Mat(),
+            *_depthFrames[frame_index].crossViewRepairedMask,
+            anchored_interpolation_mask);
         const float consistency_keep_rate = valid_before > 0
             ? static_cast<float>(valid_after) / static_cast<float>(valid_before)
             : 0.0f;
@@ -5925,12 +5982,22 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             view_count,
             _depthFrames[frame_index].missingReasonMap.data());
         _depthFrames[frame_index].depthPostprocessApplied = true;
+        cv::Mat final_interpolation_mask;
         const DepthAnchoredHoleInterpolationStats final_repair =
             repairPostprocessedInternalDepthHoles(
                 _depthFrames[frame_index],
                 filtered_depth,
                 filtered_confidence,
-                _effectiveSceneProfile);
+                _effectiveSceneProfile,
+                &final_interpolation_mask);
+        updateDepthProvenance(
+            *_depthFrames[frame_index].depthProvenance,
+            filtered_depth,
+            _depthFrames[frame_index].targetedGapRecoveredMask
+                ? *_depthFrames[frame_index].targetedGapRecoveredMask
+                : cv::Mat(),
+            *_depthFrames[frame_index].crossViewRepairedMask,
+            final_interpolation_mask);
         _depthFrames[frame_index].crossViewRepairDiagnostics.insert(
             QStringLiteral("postprocess_anchored_interpolation"),
             depthAnchoredHoleInterpolationStatsToJson(final_repair));
@@ -6216,6 +6283,18 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 artifact_result.targetedGapRecoveredMask =
                     QSharedPointer<cv::Mat>::create(targeted_recovered);
             }
+            const QString provenance_path = storage_dir.filePath(
+                QStringLiteral("depth_%1_provenance.png")
+                    .arg(replacement.frameIndex));
+            cv::Mat provenance = xjw::common::io::readImage(
+                xjw::common::io::toUtf8Path(provenance_path),
+                cv::IMREAD_GRAYSCALE);
+            if (!provenance.empty() && provenance.type() == CV_8UC1 &&
+                provenance.size() == filtered_depth.size())
+            {
+                artifact_result.depthProvenance =
+                    QSharedPointer<cv::Mat>::create(provenance);
+            }
             cv::Mat geometry_support;
             const xjw::common::OperationResult geometry_support_result =
                 xjw::core::project::loadDepthMatStorage(
@@ -6379,6 +6458,9 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
     const std::string targetedGapRecoveredMaskPath =
         raw_directory + "/depth_" + std::to_string(frameIndex) +
         "_targeted_gap_recovered_mask.png";
+    const std::string depthProvenancePath =
+        raw_directory + "/depth_" + std::to_string(frameIndex) +
+        "_provenance.png";
     const std::string validMaskPath =
         raw_directory + "/depth_" + std::to_string(frameIndex) + "_mask.png";
     const std::string supportMaskPath =
@@ -6662,6 +6744,36 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             recovered_mask.setTo(cv::Scalar(0), *result.depthMap <= 0.0f);
             targetedGapRecoveredMaskSaved = xjw::common::io::writeImage(
                 targetedGapRecoveredMaskPath, recovered_mask);
+        }
+    }
+    bool depthProvenanceSaved = false;
+    QJsonObject depthProvenanceSummaryJson;
+    if (saveRawDepth)
+    {
+        cv::Mat provenance = result.depthProvenance &&
+                !result.depthProvenance->empty()
+            ? result.depthProvenance->clone()
+            : initializeDepthProvenance(
+                  *result.depthMap,
+                  result.targetedGapRecoveredMask
+                      ? *result.targetedGapRecoveredMask : cv::Mat());
+        updateDepthProvenance(
+            provenance,
+            *result.depthMap,
+            result.targetedGapRecoveredMask
+                ? *result.targetedGapRecoveredMask : cv::Mat(),
+            result.crossViewRepairedMask
+                ? *result.crossViewRepairedMask : cv::Mat());
+        depthProvenanceSummaryJson = depthProvenanceSummaryToJson(
+            summarizeDepthProvenance(provenance, *result.depthMap));
+        depthProvenanceSaved = xjw::common::io::writeImage(
+            depthProvenancePath, provenance);
+        if (!depthProvenanceSaved)
+        {
+            LOG_WARN(QStringLiteral(
+                         "[MVS] 保存%1深度来源图失败: frame=%2")
+                         .arg(stageLabel)
+                         .arg(frameIndex));
         }
     }
 
@@ -7052,6 +7164,11 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
                         ? QString::fromStdString(targetedGapRecoveredMaskPath)
                         : QString());
                 level_object.insert(
+                    QStringLiteral("depth_provenance_path"),
+                    depthProvenanceSaved
+                        ? QString::fromStdString(depthProvenancePath)
+                        : QString());
+                level_object.insert(
                     QStringLiteral("missing_reason_preview_path"),
                     missingReasonPreviewSaved
                         ? QString::fromStdString(missingReasonPreviewPath)
@@ -7114,6 +7231,10 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             targetedGapRecoveredMaskSaved
                 ? QString::fromStdString(targetedGapRecoveredMaskPath)
                 : QString();
+        artifact[QStringLiteral("depth_provenance_path")] =
+            depthProvenanceSaved
+                ? QString::fromStdString(depthProvenancePath)
+                : QString();
         artifact[QStringLiteral("valid_mask_path")] = maskSaved ? QString::fromStdString(validMaskPath) : QString();
         artifact[QStringLiteral("support_mask_path")] =
             supportMaskSaved ? QString::fromStdString(supportMaskPath) : QString();
@@ -7156,6 +7277,8 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             result.crossViewRepairDiagnostics;
         artifact[QStringLiteral("targeted_gap_recovery_diagnostics")] =
             result.targetedGapRecoveryDiagnostics;
+        artifact[QStringLiteral("depth_provenance_summary")] =
+            depthProvenanceSummaryJson;
         artifact[QStringLiteral("geometry_evidence_diagnostics")] =
             geometryEvidenceDiagnostics;
         if (!result.poseRefinementDiagnostics.isEmpty())
@@ -7239,6 +7362,7 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         record.crossViewRepairDiagnostics = result.crossViewRepairDiagnostics;
         record.targetedGapRecoveryDiagnostics =
             result.targetedGapRecoveryDiagnostics;
+        record.depthProvenanceSummary = depthProvenanceSummaryJson;
         record.geometryEvidenceDiagnostics = geometryEvidenceDiagnostics;
         record.poseRefinementDiagnostics = result.poseRefinementDiagnostics;
         if (result.derivedCameraModel.isValid())
@@ -7298,6 +7422,9 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             : QString();
         record.targetedGapRecoveredMaskPath = targetedGapRecoveredMaskSaved
             ? QString::fromStdString(targetedGapRecoveredMaskPath)
+            : QString();
+        record.depthProvenancePath = depthProvenanceSaved
+            ? QString::fromStdString(depthProvenancePath)
             : QString();
         record.validMaskPath = maskSaved ? QString::fromStdString(validMaskPath) : QString();
         record.supportMaskPath = supportMaskSaved ? QString::fromStdString(supportMaskPath) : QString();
@@ -8068,12 +8195,30 @@ void DepthMapGenerator::runInBackground()
                                                                   static_cast<int>(_views.size()),
                                                                   res.missingReasonMap.data());
                 res.depthPostprocessApplied = true;
+                cv::Mat final_interpolation_mask;
                 const DepthAnchoredHoleInterpolationStats final_repair =
                     repairPostprocessedInternalDepthHoles(
                         res,
                         *res.depthMap,
                         confidence,
-                        _effectiveSceneProfile);
+                        _effectiveSceneProfile,
+                        &final_interpolation_mask);
+                if (!res.depthProvenance || res.depthProvenance->empty())
+                {
+                    res.depthProvenance = QSharedPointer<cv::Mat>::create(
+                        initializeDepthProvenance(
+                            *res.depthMap,
+                            res.targetedGapRecoveredMask
+                                ? *res.targetedGapRecoveredMask : cv::Mat()));
+                }
+                updateDepthProvenance(
+                    *res.depthProvenance,
+                    *res.depthMap,
+                    res.targetedGapRecoveredMask
+                        ? *res.targetedGapRecoveredMask : cv::Mat(),
+                    res.crossViewRepairedMask
+                        ? *res.crossViewRepairedMask : cv::Mat(),
+                    final_interpolation_mask);
                 res.crossViewRepairDiagnostics.insert(
                     QStringLiteral("postprocess_anchored_interpolation"),
                     depthAnchoredHoleInterpolationStatsToJson(final_repair));

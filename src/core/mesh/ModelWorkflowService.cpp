@@ -450,6 +450,7 @@ void enforceObservationOnlySurfacePolicy(
     options->enableSurfacePatchSupport = false;
     options->enableGeometryVerifiedBoundaryRecovery = false;
     options->allowInvalidNearestPixelRecovery = false;
+    options->excludeAnchoredInterpolationObservations = true;
     options->adaptiveTgvRecoverUnsupportedSamples = false;
     options->implicitRegularizationRecoverAxialGaps = false;
     // Observation-only output is expected to retain genuine gaps in the

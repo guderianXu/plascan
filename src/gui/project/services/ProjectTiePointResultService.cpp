@@ -226,7 +226,8 @@ QStringList collectDepthArtifactFiles(const QJsonArray &records,
         QStringLiteral("valid_mask_path"),
         QStringLiteral("missing_reason_path"),
         QStringLiteral("missing_reason_preview_path"),
-        QStringLiteral("targeted_gap_recovered_mask_path")
+        QStringLiteral("targeted_gap_recovered_mask_path"),
+        QStringLiteral("depth_provenance_path")
     };
 
     QStringList files;

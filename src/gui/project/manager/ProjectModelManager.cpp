@@ -285,6 +285,12 @@ QJsonObject depthGenerationSnapshot(const QJsonObject &metadata,
     qint64 support_pixel_count = 0;
     qint64 missing_pixel_count = 0;
     qint64 targeted_recovered_pixel_count = 0;
+    qint64 native_patchmatch_pixel_count = 0;
+    qint64 targeted_patchmatch_pixel_count = 0;
+    qint64 cross_view_measured_pixel_count = 0;
+    qint64 anchored_interpolation_pixel_count = 0;
+    qint64 unclassified_valid_pixel_count = 0;
+    bool has_depth_provenance = false;
     QJsonObject missing_reason_counts;
 
     for (const QJsonValue &value : metadata.value(
@@ -347,6 +353,28 @@ QJsonObject depthGenerationSnapshot(const QJsonObject &metadata,
                 .value(QStringLiteral("recovered_pixel_count"))
                 .toDouble(0.0));
 
+        const QJsonObject provenance_summary = record.value(
+            QStringLiteral("depth_provenance_summary")).toObject();
+        if (provenance_summary.value(QStringLiteral("available")).toBool(false))
+        {
+            has_depth_provenance = true;
+            native_patchmatch_pixel_count += static_cast<qint64>(
+                provenance_summary.value(QStringLiteral(
+                    "native_patchmatch_pixel_count")).toDouble(0.0));
+            targeted_patchmatch_pixel_count += static_cast<qint64>(
+                provenance_summary.value(QStringLiteral(
+                    "targeted_patchmatch_pixel_count")).toDouble(0.0));
+            cross_view_measured_pixel_count += static_cast<qint64>(
+                provenance_summary.value(QStringLiteral(
+                    "cross_view_measured_pixel_count")).toDouble(0.0));
+            anchored_interpolation_pixel_count += static_cast<qint64>(
+                provenance_summary.value(QStringLiteral(
+                    "anchored_interpolation_pixel_count")).toDouble(0.0));
+            unclassified_valid_pixel_count += static_cast<qint64>(
+                provenance_summary.value(QStringLiteral(
+                    "unclassified_valid_pixel_count")).toDouble(0.0));
+        }
+
         for (const QString &path_key : {
                  QStringLiteral("depth_png"),
                  QStringLiteral("raw_depth_path"),
@@ -354,7 +382,8 @@ QJsonObject depthGenerationSnapshot(const QJsonObject &metadata,
                  QStringLiteral("valid_mask_path"),
                  QStringLiteral("missing_reason_path"),
                  QStringLiteral("missing_reason_preview_path"),
-                 QStringLiteral("targeted_gap_recovered_mask_path")})
+                 QStringLiteral("targeted_gap_recovered_mask_path"),
+                 QStringLiteral("depth_provenance_path")})
         {
             const QFileInfo artifact_info(record.value(path_key).toString());
             if (artifact_info.exists())
@@ -386,6 +415,20 @@ QJsonObject depthGenerationSnapshot(const QJsonObject &metadata,
             missing_reason_counts;
         snapshot[QStringLiteral("targeted_gap_recovered_pixel_count")] =
             static_cast<double>(targeted_recovered_pixel_count);
+    }
+    if (has_depth_provenance)
+    {
+        snapshot[QStringLiteral("depth_provenance_schema_version")] = 1;
+        snapshot[QStringLiteral("native_patchmatch_pixel_count")] =
+            static_cast<double>(native_patchmatch_pixel_count);
+        snapshot[QStringLiteral("targeted_patchmatch_pixel_count")] =
+            static_cast<double>(targeted_patchmatch_pixel_count);
+        snapshot[QStringLiteral("cross_view_measured_pixel_count")] =
+            static_cast<double>(cross_view_measured_pixel_count);
+        snapshot[QStringLiteral("anchored_interpolation_pixel_count")] =
+            static_cast<double>(anchored_interpolation_pixel_count);
+        snapshot[QStringLiteral("unclassified_valid_pixel_count")] =
+            static_cast<double>(unclassified_valid_pixel_count);
     }
     return snapshot;
 }

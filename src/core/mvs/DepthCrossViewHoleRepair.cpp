@@ -559,7 +559,8 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
     cv::Mat *source_inverse_depth_sum,
     cv::Mat *source_inverse_depth_squared_sum,
     const Camera *reference_camera,
-    const cv::Mat *guide_gray)
+    const cv::Mat *guide_gray,
+    cv::Mat *anchored_interpolation_mask)
 {
     CrossViewHoleRepairStats stats;
     if (reference_depth.empty() || reference_depth.type() != CV_32FC1 ||
@@ -597,6 +598,11 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
                 reference_depth.size(), CV_8UC1, cv::Scalar(0));
         }
     }
+    if (anchored_interpolation_mask)
+    {
+        *anchored_interpolation_mask = cv::Mat(
+            reference_depth.size(), CV_8UC1, cv::Scalar(0));
+    }
     auto interpolate_anchored_components = [&]()
     {
         cv::Mat interpolation_anchor_mask = strong_repaired_mask.clone();
@@ -616,6 +622,8 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
                 }
             }
         }
+        cv::Mat *interpolation_output = anchored_interpolation_mask
+            ? anchored_interpolation_mask : repaired_mask;
         stats.anchoredInterpolation = interpolateAnchoredInternalDepthHoles(
             reference_depth,
             has_support
@@ -625,7 +633,12 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
             guide_gray,
             options.anchoredInterpolation,
             has_confidence ? reference_confidence : nullptr,
-            repaired_mask);
+            interpolation_output);
+        if (anchored_interpolation_mask && repaired_mask)
+        {
+            cv::bitwise_or(
+                *repaired_mask, *anchored_interpolation_mask, *repaired_mask);
+        }
         stats.repairedPixelCount +=
             stats.anchoredInterpolation.interpolatedPixelCount;
     };

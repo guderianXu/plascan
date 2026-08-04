@@ -21,6 +21,7 @@ set(MVS_CXX_SOURCES
     DepthCompletenessMetrics.cpp
     DepthGapTargetedRecovery.cpp
     DepthMissingReason.cpp
+    DepthProvenance.cpp
     DepthConsistencyCache.cpp
     DepthConsistencyEvidencePolicy.cpp
     DepthConsensusBiasPolicy.cpp
@@ -65,6 +66,7 @@ set(MVS_HEADERS
     DepthCompletenessMetrics.h
     DepthGapTargetedRecovery.h
     DepthMissingReason.h
+    DepthProvenance.h
     DepthConsistencyCache.h
     DepthConsistencyEvidencePolicy.h
     DepthConsensusBiasPolicy.h
@@ -266,6 +268,22 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/src/core/mvs
         )
         gtest_discover_tests(test_mvs_depth_missing_reason)
+
+        add_executable(test_mvs_depth_provenance
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_depth_provenance.cpp
+        )
+        set_target_properties(test_mvs_depth_provenance PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
+        )
+        target_link_libraries(test_mvs_depth_provenance PRIVATE
+            mvs
+            GTest::gtest_main
+            ${OpenCV_LIBS}
+        )
+        target_include_directories(test_mvs_depth_provenance PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/core/mvs
+        )
+        gtest_discover_tests(test_mvs_depth_provenance)
 
         add_executable(test_mvs_depth_consistency_evidence
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_depth_consistency_evidence.cpp

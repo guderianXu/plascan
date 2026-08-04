@@ -236,6 +236,7 @@ core/
 │   ├── DepthMissingReason.h/cpp # 逐像素缺失原因码、分类汇总和透明诊断预览
 │   ├── DepthGapTargetedRecovery.h/cpp # 以邻近实测深度为先验的缺口定向二源 PatchMatch 与合并门控
 │   ├── DepthCrossViewHoleRepair.h/cpp # 一致性过滤后以三源逆深度簇保守补回环拍对象缺面
+│   ├── DepthProvenance.h/cpp # 最终有效深度的原生/定向/跨视测量/锚定插值来源编码与统计
 │   ├── DepthFrameQualityGate.h/cpp # 深度帧 Accepted/ValidationOnly/Rejected 质量门控
 │   ├── DepthConsistencyCache.h/cpp # 有内存预算的 LRU source 邻域多视一致性缓存
 │   ├── DepthGeometryConsistency.h/cpp # 断边邻域搜索、相机基线自适应往返验证与一致性投票
@@ -704,6 +705,12 @@ PatchMatch；候选必须同时通过置信度和相对先验深度差门限，�
 产物通过 `targeted_gap_recovered_mask_path` 标记最终仍有效的恢复像素，并在
 `targeted_gap_recovery_diagnostics` 中记录请求、候选、接受及拒绝数量。该路径不对整片缺口做
 几何插值；诊断重放可用 `--disable-targeted-gap-recovery` 生成同输入 A/B 基线。
+
+最终有效深度另保存 `depth_provenance_path`（无损 `uint8` 来源码）和
+`depth_provenance_summary`。来源码区分原生 PatchMatch、缺口定向 PatchMatch、跨视图测量恢复与
+锚定插值，且所有正深度像素必须恰好属于一种来源。模型工作流选择“禁用插值”时，TSDF 仍接受
+前三类有影像测量证据的深度，只拒绝锚定插值来源，并在融合统计中单独记录策略拒绝数；旧版没有
+来源图的非当前深度批次不会被当前算法修订透明复用。
 
 MVS 源规划优先使用从当前存储匹配结果经 USAC/MAGSAC 验证的像对。空匹配文件或少于最少
 内点数的匹配只表示验证证据缺失，不能当作已证明失败；剩余源位由共享轨迹几何补足。16 视图及

@@ -98,6 +98,8 @@ QJsonObject MvsDepthFrameRecord::toJson() const
     object.insert(
         QStringLiteral("targeted_gap_recovery_diagnostics"),
         targetedGapRecoveryDiagnostics);
+    object.insert(QStringLiteral("depth_provenance_summary"),
+                  depthProvenanceSummary);
     object.insert(
         QStringLiteral("geometry_evidence_diagnostics"),
         geometryEvidenceDiagnostics);
@@ -146,6 +148,8 @@ QJsonObject MvsDepthFrameRecord::toJson() const
     object.insert(QStringLiteral("cross_view_repaired_mask_path"), crossViewRepairedMaskPath);
     object.insert(QStringLiteral("targeted_gap_recovered_mask_path"),
                   targetedGapRecoveredMaskPath);
+    object.insert(QStringLiteral("depth_provenance_path"),
+                  depthProvenancePath);
     object.insert(QStringLiteral("valid_mask_path"), validMaskPath);
     object.insert(QStringLiteral("support_mask_path"), supportMaskPath);
     object.insert(QStringLiteral("missing_reason_path"), missingReasonPath);
@@ -200,6 +204,8 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
         QStringLiteral("cross_view_repair_diagnostics")).toObject();
     record.targetedGapRecoveryDiagnostics = object.value(
         QStringLiteral("targeted_gap_recovery_diagnostics")).toObject();
+    record.depthProvenanceSummary = object.value(
+        QStringLiteral("depth_provenance_summary")).toObject();
     record.geometryEvidenceDiagnostics = object.value(
         QStringLiteral("geometry_evidence_diagnostics")).toObject();
     record.poseRefinementDiagnostics = object.value(
@@ -252,6 +258,8 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
         QStringLiteral("cross_view_repaired_mask_path")).toString();
     record.targetedGapRecoveredMaskPath = object.value(
         QStringLiteral("targeted_gap_recovered_mask_path")).toString();
+    record.depthProvenancePath = object.value(
+        QStringLiteral("depth_provenance_path")).toString();
     record.validMaskPath = object.value(QStringLiteral("valid_mask_path")).toString();
     record.supportMaskPath = object.value(QStringLiteral("support_mask_path")).toString();
     record.missingReasonPath = object.value(
@@ -468,6 +476,11 @@ void MvsWorkspaceManifest::markCompleted(const MvsDepthFrameRecord &record)
         completed.crossViewRepairDiagnostics =
             _frames[index].crossViewRepairDiagnostics;
     }
+    if (completed.depthProvenanceSummary.isEmpty() && index >= 0)
+    {
+        completed.depthProvenanceSummary =
+            _frames[index].depthProvenanceSummary;
+    }
     if (completed.qualityDecision.isEmpty() && index >= 0)
     {
         completed.qualityDecision = _frames[index].qualityDecision;
@@ -570,6 +583,13 @@ bool MvsWorkspaceManifest::hasReusableCompletedFrame(int refIndex, const QString
     }
     if (!QFileInfo::exists(record.depthPng) ||
         (!record.rawDepthPath.isEmpty() && !QFileInfo::exists(record.rawDepthPath)))
+    {
+        return false;
+    }
+
+    if (record.algorithmRevision >= kMvsDepthProvenanceRevision &&
+        (record.depthProvenancePath.isEmpty() ||
+         !QFileInfo::exists(record.depthProvenancePath)))
     {
         return false;
     }

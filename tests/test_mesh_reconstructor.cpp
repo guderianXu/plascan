@@ -5,6 +5,7 @@
 #include "DepthFusionFramePolicy.h"
 #include "DepthMeshCompleteness.h"
 #include "DepthImplicitFieldRegularizer.h"
+#include "DepthProvenance.h"
 #include "DepthVisibilityHistogram.h"
 #include "DepthTsdfSurfaceBuilder.h"
 #include "DepthTsdfCellSheetRecovery.h"
@@ -568,6 +569,82 @@ TEST(DepthTsdfSurfaceBuilderTest,
     ASSERT_TRUE(repaired.valid);
     EXPECT_FALSE(native.usedCrossViewRepairedDepth);
     EXPECT_TRUE(repaired.usedCrossViewRepairedDepth);
+}
+
+TEST(DepthTsdfSurfaceBuilderTest,
+     ObservationOnlyPolicyRejectsInterpolationButRetainsMeasuredRecovery)
+{
+    const cv::Mat depth(2, 2, CV_32FC1, cv::Scalar(2.0f));
+    auto frame = makeSamplingFrame(depth);
+    frame.depthProvenance = cv::Mat(
+        depth.size(),
+        CV_8UC1,
+        cv::Scalar(static_cast<std::uint8_t>(
+            xjw::mvs::DepthProvenance::NativePatchMatch)));
+    frame.depthProvenance.at<std::uint8_t>(0, 0) =
+        static_cast<std::uint8_t>(
+            xjw::mvs::DepthProvenance::AnchoredInterpolation);
+    frame.depthProvenance.at<std::uint8_t>(0, 1) =
+        static_cast<std::uint8_t>(
+            xjw::mvs::DepthProvenance::TargetedPatchMatch);
+    frame.depthProvenance.at<std::uint8_t>(1, 0) =
+        static_cast<std::uint8_t>(
+            xjw::mvs::DepthProvenance::CrossViewMeasured);
+
+    const auto interpolated =
+        xjw::mesh::DepthTsdfSurfaceBuilder::sampleObservation(
+            frame,
+            frame.depthValidMask,
+            cv::Point2d(0.0, 0.0),
+            0.25f,
+            false,
+            0.02f,
+            0.0f,
+            true,
+            0.0f,
+            false,
+            0.02f,
+            cv::Mat(),
+            cv::Mat(),
+            true);
+    const auto targeted =
+        xjw::mesh::DepthTsdfSurfaceBuilder::sampleObservation(
+            frame,
+            frame.depthValidMask,
+            cv::Point2d(1.0, 0.0),
+            0.25f,
+            false,
+            0.02f,
+            0.0f,
+            true,
+            0.0f,
+            false,
+            0.02f,
+            cv::Mat(),
+            cv::Mat(),
+            true);
+    const auto cross_view =
+        xjw::mesh::DepthTsdfSurfaceBuilder::sampleObservation(
+            frame,
+            frame.depthValidMask,
+            cv::Point2d(0.0, 1.0),
+            0.25f,
+            false,
+            0.02f,
+            0.0f,
+            true,
+            0.0f,
+            false,
+            0.02f,
+            cv::Mat(),
+            cv::Mat(),
+            true);
+
+    EXPECT_FALSE(interpolated.valid);
+    EXPECT_EQ(interpolated.failure,
+              xjw::mesh::DepthTsdfObservationFailure::InterpolationPolicy);
+    EXPECT_TRUE(targeted.valid);
+    EXPECT_TRUE(cross_view.valid);
 }
 
 TEST(DepthTsdfSurfaceBuilderTest, QualityTriangulationReducesInteriorAmbiguityCracks)
@@ -6479,6 +6556,23 @@ TEST(MeshWorkflowSettingsTest, DepthMapsDefaultToDepthTsdf)
 
     EXPECT_EQ(xjw::mesh::workflow::depthReconstructionModeFromSettings(settings),
               QStringLiteral("depth_tsdf"));
+}
+
+TEST(MeshWorkflowSettingsTest,
+     DisabledInterpolationExcludesSyntheticDepthObservations)
+{
+    const QJsonObject settings{
+        {QStringLiteral("source_data"), QStringLiteral("depth_maps")},
+        {QStringLiteral("interpolation"), QStringLiteral("disabled")}};
+
+    const auto options =
+        xjw::mesh::workflow::depthTsdfOptionsFromSettings(settings, 320);
+
+    EXPECT_TRUE(options.excludeAnchoredInterpolationObservations);
+    EXPECT_FALSE(options.allowInvalidNearestPixelRecovery);
+    EXPECT_FALSE(options.enableVisibilityOccupancyCompletion);
+    EXPECT_FALSE(options.enableVisualHullSignedDistanceCompletion);
+    EXPECT_FALSE(options.fillSmallBoundaryHoles);
 }
 
 TEST(MeshWorkflowSettingsTest, DepthTsdfSupportThresholdIsConfigurable)

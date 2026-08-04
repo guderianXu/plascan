@@ -1,5 +1,7 @@
 #include "DepthTsdfSurfaceBuilder.h"
 
+#include "DepthProvenance.h"
+
 #include "DepthTsdfNarrowBandActivation.h"
 #include "AdaptiveTsdfOctree.h"
 #include "ConsistentIsoSurfaceExtractor.h"
@@ -1211,6 +1213,47 @@ bool loadMask(const QString &path,
     return true;
 }
 
+bool loadByteMap(const QString &path,
+                 const cv::Size &size,
+                 cv::Mat *map,
+                 QString *reason,
+                 bool allow_resize = false)
+{
+    if (!map)
+    {
+        return false;
+    }
+    *map = xjw::common::io::readImage(
+        xjw::common::io::toUtf8Path(path), cv::IMREAD_GRAYSCALE);
+    if (map->empty())
+    {
+        if (reason)
+        {
+            *reason = QStringLiteral("byte map cannot be read");
+        }
+        return false;
+    }
+    if (map->type() == CV_8UC1 && map->size() != size && allow_resize)
+    {
+        cv::resize(*map, *map, size, 0.0, 0.0, cv::INTER_NEAREST);
+    }
+    if (map->type() != CV_8UC1 || map->size() != size)
+    {
+        if (reason)
+        {
+            *reason = QStringLiteral(
+                "expected CV_8UC1 %1x%2, got type=%3 %4x%5")
+                          .arg(size.width)
+                          .arg(size.height)
+                          .arg(map->type())
+                          .arg(map->cols)
+                          .arg(map->rows);
+        }
+        return false;
+    }
+    return true;
+}
+
 void integrateWeighted(float *value, float *weight, float observation, float observationWeight)
 {
     if (!value || !weight || observationWeight <= 0.0f)
@@ -1949,19 +1992,25 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
         const bool requires_conflict_ratio =
             requires_adaptive_orbital_evidence &&
             artifact.algorithmRevision >= 14;
+        const bool requires_depth_provenance =
+            requires_current_orbital_evidence &&
+            artifact.algorithmRevision >= 17;
         if (requires_current_orbital_evidence &&
             (artifact.geometrySupportPath.isEmpty() ||
              artifact.geometrySourceMaskPath.isEmpty() ||
              artifact.inverseDepthMeanPath.isEmpty() ||
              artifact.inverseDepthSpreadPath.isEmpty() ||
-             artifact.crossViewRepairedMaskPath.isEmpty()))
+             artifact.crossViewRepairedMaskPath.isEmpty() ||
+             (requires_depth_provenance &&
+              artifact.depthProvenancePath.isEmpty())))
         {
             result.errorMessage = frameArtifactError(
                 artifact,
                 QStringLiteral(
                     "current orbital depth evidence is incomplete; "
                     "regenerate depth maps so geometry support, source mask, "
-                    "inverse-depth statistics, and repair provenance are all present"));
+                    "inverse-depth statistics, repair provenance, and depth provenance "
+                    "are all present"));
             return result;
         }
         if (requires_adaptive_orbital_evidence &&
@@ -2246,6 +2295,26 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
             return result;
         }
 
+        if (artifact.depthProvenancePath.isEmpty())
+        {
+            frame.depthProvenance = cv::Mat(
+                frame.depth.size(),
+                CV_8UC1,
+                cv::Scalar(static_cast<std::uint8_t>(
+                    xjw::mvs::DepthProvenance::NativePatchMatch)));
+            frame.depthProvenance.setTo(cv::Scalar(0), frame.depth <= 0.0f);
+        }
+        else if (!loadByteMap(artifact.depthProvenancePath,
+                              frame.depth.size(),
+                              &frame.depthProvenance,
+                              &reason,
+                              artifact.pyramidFallback))
+        {
+            result.errorMessage = frameArtifactError(
+                artifact, QStringLiteral("depth provenance: %1").arg(reason));
+            return result;
+        }
+
         if (artifact.validMaskPath.isEmpty())
         {
             frame.depthValidMask = frame.depth > 0.0f;
@@ -2437,7 +2506,8 @@ DepthTsdfObservationSample DepthTsdfSurfaceBuilder::sampleObservation(
     bool enableCrossViewConsensusDepth,
     float maximumCrossViewConsensusInverseDepthSpread,
     const cv::Mat &crossViewConsensusMask,
-    const cv::Mat &referenceAnchoredConsensusDepth)
+    const cv::Mat &referenceAnchoredConsensusDepth,
+    bool excludeAnchoredInterpolation)
 {
     DepthTsdfObservationSample result;
     result.useAdaptiveGeometryEvidence = frame.useAdaptiveGeometryEvidence;
@@ -2456,6 +2526,14 @@ DepthTsdfObservationSample DepthTsdfSurfaceBuilder::sampleObservation(
         return matrix.type() == CV_32FC1 && matrix.size() == frame.depth.size()
             ? matrix.at<float>(row, column)
             : 0.0f;
+    };
+    auto interpolation_is_excluded = [&](int row, int column)
+    {
+        return excludeAnchoredInterpolation &&
+            frame.depthProvenance.type() == CV_8UC1 &&
+            frame.depthProvenance.size() == frame.depth.size() &&
+            xjw::mvs::isInterpolatedDepthProvenance(
+                frame.depthProvenance.at<std::uint8_t>(row, column));
     };
 
     auto consensus_depth = [&](int row,
@@ -2526,6 +2604,12 @@ DepthTsdfObservationSample DepthTsdfSurfaceBuilder::sampleObservation(
         if (effectiveDepthValidMask.at<std::uint8_t>(row, column) == 0)
         {
             sample->failure = DepthTsdfObservationFailure::DepthValid;
+            return false;
+        }
+        if (interpolation_is_excluded(row, column))
+        {
+            sample->failure =
+                DepthTsdfObservationFailure::InterpolationPolicy;
             return false;
         }
         const float depth = frame.depth.at<float>(row, column);
@@ -2608,6 +2692,7 @@ DepthTsdfObservationSample DepthTsdfSurfaceBuilder::sampleObservation(
     int candidate_count = 0;
     bool passed_support = false;
     bool passed_depth_valid = false;
+    bool passed_provenance = false;
     bool passed_depth = false;
     bool passed_confidence = false;
     const int floor_column = static_cast<int>(std::floor(pixel.x));
@@ -2639,6 +2724,11 @@ DepthTsdfObservationSample DepthTsdfSurfaceBuilder::sampleObservation(
                 continue;
             }
             passed_depth_valid = true;
+            if (interpolation_is_excluded(row, column))
+            {
+                continue;
+            }
+            passed_provenance = true;
             const float depth = frame.depth.at<float>(row, column);
             if (!std::isfinite(depth) || depth <= 0.0f)
             {
@@ -2704,11 +2794,13 @@ DepthTsdfObservationSample DepthTsdfSurfaceBuilder::sampleObservation(
             ? DepthTsdfObservationFailure::SupportMask
             : (!passed_depth_valid
                    ? DepthTsdfObservationFailure::DepthValid
-                   : (!passed_depth
+                   : (!passed_provenance
+                          ? DepthTsdfObservationFailure::InterpolationPolicy
+                          : (!passed_depth
                           ? DepthTsdfObservationFailure::Depth
                           : (!passed_confidence
                                  ? DepthTsdfObservationFailure::Confidence
-                                 : DepthTsdfObservationFailure::GeometryConsistency)));
+                                 : DepthTsdfObservationFailure::GeometryConsistency))));
         return result;
     }
 
@@ -4915,6 +5007,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
     unsigned long long supportMaskFreeSpaceSurfaceVetoCount = 0;
     unsigned long long auxiliaryOutsideSurfaceBandRejectedCount = 0;
     unsigned long long rejectedDepthValidCount = 0;
+    unsigned long long rejectedInterpolationPolicyCount = 0;
     unsigned long long rejectedDepthCount = 0;
     unsigned long long rejectedConfidenceCount = 0;
     unsigned long long subpixelObservationCount = 0;
@@ -4939,7 +5032,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
 #ifdef MESHING_OPENMP
     const int workerCount = options.workerCount > 0 ? options.workerCount : omp_get_max_threads();
 #pragma omp parallel for schedule(static) num_threads(workerCount) \
-    reduction(+:integratedVoxelUpdates,narrowBandActivationSkippedSampleCount,rejectedProjectionCount,rejectedSupportMaskCount,supportMaskFreeSpaceUpdateCount,supportMaskFreeSpaceSurfaceVetoCount,auxiliaryOutsideSurfaceBandRejectedCount,rejectedDepthValidCount,rejectedDepthCount,rejectedConfidenceCount,subpixelObservationCount,recoveredNeighborObservationCount,discontinuityRejectedCandidateCount,rejectedGeometryConsistencyCount,rejectedInvalidNearestPixelRecoveryCount,crossViewConsensusDepthObservationCount,unconfirmedNativeObservationCount,weakNativeObservationCount,repairedObservationCount,strongNativeObservationCount,inverseDepthSpreadDownweightedObservationCount,inverseDepthSpreadVeryWeakObservationCount,inverseDepthSpreadSupportLiftedObservationCount,weakEvidenceOutsideSurfaceBandRejectedCount)
+    reduction(+:integratedVoxelUpdates,narrowBandActivationSkippedSampleCount,rejectedProjectionCount,rejectedSupportMaskCount,supportMaskFreeSpaceUpdateCount,supportMaskFreeSpaceSurfaceVetoCount,auxiliaryOutsideSurfaceBandRejectedCount,rejectedDepthValidCount,rejectedInterpolationPolicyCount,rejectedDepthCount,rejectedConfidenceCount,subpixelObservationCount,recoveredNeighborObservationCount,discontinuityRejectedCandidateCount,rejectedGeometryConsistencyCount,rejectedInvalidNearestPixelRecoveryCount,crossViewConsensusDepthObservationCount,unconfirmedNativeObservationCount,weakNativeObservationCount,repairedObservationCount,strongNativeObservationCount,inverseDepthSpreadDownweightedObservationCount,inverseDepthSpreadVeryWeakObservationCount,inverseDepthSpreadSupportLiftedObservationCount,weakEvidenceOutsideSurfaceBandRejectedCount)
 #endif
     for (int z = 0; z < zSamples; ++z)
     {
@@ -5006,7 +5099,8 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                             : cv::Mat(),
                         options.enableCrossViewConsensusDepth
                             ? reference_anchored_consensus_depths[frame_index]
-                            : cv::Mat());
+                            : cv::Mat(),
+                        options.excludeAnchoredInterpolationObservations);
                     if (!observation.valid)
                     {
                         switch (observation.failure)
@@ -5022,6 +5116,9 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                             break;
                         case DepthTsdfObservationFailure::DepthValid:
                             ++rejectedDepthValidCount;
+                            break;
+                        case DepthTsdfObservationFailure::InterpolationPolicy:
+                            ++rejectedInterpolationPolicyCount;
                             break;
                         case DepthTsdfObservationFailure::Depth:
                             ++rejectedDepthCount;
@@ -5316,6 +5413,8 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
     result.statistics.auxiliaryOutsideSurfaceBandRejectedCount =
         auxiliaryOutsideSurfaceBandRejectedCount;
     result.statistics.rejectedDepthValidCount = rejectedDepthValidCount;
+    result.statistics.rejectedInterpolationPolicyCount =
+        rejectedInterpolationPolicyCount;
     result.statistics.rejectedDepthCount = rejectedDepthCount;
     result.statistics.rejectedConfidenceCount = rejectedConfidenceCount;
     result.statistics.subpixelObservationCount = subpixelObservationCount;
@@ -5353,6 +5452,8 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         options.weakNativeObservationMultiplier;
     result.statistics.effectiveRepairedObservationMultiplier =
         options.repairedObservationMultiplier;
+    result.statistics.effectiveExcludeAnchoredInterpolationObservations =
+        options.excludeAnchoredInterpolationObservations;
     result.statistics.effectiveInverseDepthSpreadWeighting =
         options.enableInverseDepthSpreadWeighting;
     result.statistics.effectiveInverseDepthSpreadWeightKnee =
@@ -9493,6 +9594,8 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          static_cast<double>(statistics.auxiliaryOutsideSurfaceBandRejectedCount)},
         {QStringLiteral("rejected_depth_valid_count"),
          static_cast<double>(statistics.rejectedDepthValidCount)},
+        {QStringLiteral("rejected_interpolation_policy_count"),
+         static_cast<double>(statistics.rejectedInterpolationPolicyCount)},
         {QStringLiteral("rejected_depth_count"),
          static_cast<double>(statistics.rejectedDepthCount)},
         {QStringLiteral("rejected_confidence_count"),
@@ -9538,6 +9641,9 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          statistics.effectiveWeakNativeObservationMultiplier},
         {QStringLiteral("effective_repaired_observation_multiplier"),
          statistics.effectiveRepairedObservationMultiplier},
+        {QStringLiteral(
+             "effective_exclude_anchored_interpolation_observations"),
+         statistics.effectiveExcludeAnchoredInterpolationObservations},
         {QStringLiteral("effective_inverse_depth_spread_weighting"),
          statistics.effectiveInverseDepthSpreadWeighting},
         {QStringLiteral("effective_inverse_depth_spread_weight_knee"),

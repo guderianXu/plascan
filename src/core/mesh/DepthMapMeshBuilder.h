@@ -28,6 +28,7 @@ struct DepthFrameArtifact
     QString inverseDepthMeanPath;
     QString inverseDepthSpreadPath;
     QString crossViewRepairedMaskPath;
+    QString depthProvenancePath;
     QVector<int> sourceIndices;
     QString previewPath;
     QString validMaskPath;

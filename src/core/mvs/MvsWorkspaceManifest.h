@@ -13,9 +13,10 @@ struct DepthGenConfig;
 
 // Increment whenever a production depth algorithm change makes persisted
 // depth maps unsuitable for transparent reuse by a newer build.
-inline constexpr int kMvsDepthAlgorithmRevision = 16;
+inline constexpr int kMvsDepthAlgorithmRevision = 17;
 inline constexpr int kMvsAdaptiveGeometryEvidenceRevision = 13;
 inline constexpr int kMvsAdaptiveGeometryConflictRatioRevision = 14;
+inline constexpr int kMvsDepthProvenanceRevision = 17;
 
 struct MvsDepthFrameRecord
 {
@@ -41,6 +42,7 @@ struct MvsDepthFrameRecord
     QJsonObject missingReasonSummary;
     QJsonObject crossViewRepairDiagnostics;
     QJsonObject targetedGapRecoveryDiagnostics;
+    QJsonObject depthProvenanceSummary;
     QJsonObject geometryEvidenceDiagnostics;
     QJsonObject poseRefinementDiagnostics;
     QJsonObject derivedCameraModel;
@@ -74,6 +76,7 @@ struct MvsDepthFrameRecord
     QString rawInverseDepthSpreadPath;
     QString crossViewRepairedMaskPath;
     QString targetedGapRecoveredMaskPath;
+    QString depthProvenancePath;
     QString validMaskPath;
     QString supportMaskPath;
     QString missingReasonPath;
