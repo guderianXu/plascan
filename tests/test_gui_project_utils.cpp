@@ -2383,7 +2383,7 @@ TEST(GuiAsyncLifetimeTest, CameraSceneAsyncLoadCallbacksUseQPointerGuards)
             QStringLiteral("connect(watcher, &QFutureWatcher<std::shared_ptr<RenderCloud>>::finished,\n"
                            "            watcher,")))
             << "Async 3D load finished callbacks should be tied to the watcher lifetime.";
-        EXPECT_TRUE(block.contains(QStringLiteral("[self, watcher, gen]()")))
+        EXPECT_TRUE(block.contains(QStringLiteral("[self, watcher, gen")))
             << "Finished callbacks from async 3D loading must not capture raw this.";
         EXPECT_TRUE(block.contains(QStringLiteral("if (!self)")));
         EXPECT_FALSE(block.contains(
@@ -2396,7 +2396,7 @@ TEST(GuiAsyncLifetimeTest, CameraSceneAsyncLoadCallbacksUseQPointerGuards)
         QStringLiteral("connect(watcher, &QFutureWatcher<ObjLoadResult>::finished,\n"
                        "            watcher,")))
         << "OBJ geometry and texture completion must remain tied to the watcher lifetime.";
-    EXPECT_TRUE(objBlock.contains(QStringLiteral("[self, watcher, gen]()")));
+    EXPECT_TRUE(objBlock.contains(QStringLiteral("[self, watcher, gen")));
     EXPECT_TRUE(objBlock.contains(QStringLiteral("if (!self)")));
     EXPECT_FALSE(objBlock.contains(
         QStringLiteral("connect(watcher, &QFutureWatcher<ObjLoadResult>::finished,\n"
@@ -12369,12 +12369,13 @@ TEST(CameraModel3DDialogTest, ObjLoadingShowsProgressOverlay)
     EXPECT_TRUE(objBlock.contains(QStringLiteral("正在加载 OBJ 模型")));
     EXPECT_TRUE(objBlock.contains(QStringLiteral("正在解析 OBJ 模型")));
     EXPECT_TRUE(objBlock.contains(QStringLiteral("loadObjWithMaterialTexture")));
-    EXPECT_TRUE(objBlock.contains(QStringLiteral("正在上传 OBJ 模型")));
+    EXPECT_TRUE(objBlock.contains(QStringLiteral("正在上传 OBJ %1")));
+    EXPECT_TRUE(objBlock.contains(QStringLiteral("pointCloudResource ? QStringLiteral(\"点云\")")));
     EXPECT_TRUE(objBlock.contains(QStringLiteral("emit plyLoadProgressChanged(gen, 0")));
     const QString queuedProgress =
         QStringLiteral("QMetaObject::invokeMethod(self.data(), [self, gen, percent, statusText]()");
     EXPECT_TRUE(objBlock.contains(queuedProgress));
-    EXPECT_TRUE(objBlock.contains(QStringLiteral("OBJ 模型加载失败或为空")));
+    EXPECT_TRUE(objBlock.contains(QStringLiteral("OBJ %1加载失败或为空")));
 }
 
 TEST(CameraModel3DDialogTest, ObjMaterialTextureUsesFaceUvRhiPipeline)
