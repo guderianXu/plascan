@@ -47,6 +47,14 @@ MvsDepthFrameRecord makeRecord(int index, const QString &name, const QString &st
         QStringLiteral("adaptive_geometry_conflict_ratio_%1.bin")
             .arg(index, 3, 10, QLatin1Char('0'));
     record.validMaskPath = QStringLiteral("mask_%1.png").arg(index, 3, 10, QLatin1Char('0'));
+    record.missingReasonPath = QStringLiteral("missing_reason_%1.png")
+                                   .arg(index, 3, 10, QLatin1Char('0'));
+    record.missingReasonPreviewPath =
+        QStringLiteral("missing_reason_preview_%1.png")
+            .arg(index, 3, 10, QLatin1Char('0'));
+    record.missingReasonSummary = QJsonObject{
+        {QStringLiteral("missing_pixel_count"), 123},
+        {QStringLiteral("schema_version"), 1}};
     record.gridWidth = 6000;
     record.gridHeight = 4000;
     record.elapsedMs = 1000 + index;
@@ -194,6 +202,16 @@ TEST(MvsWorkspaceManifest, SavesAndLoadsFrameRecordsAtomically)
               QStringLiteral("inverse_depth_spread_002.bin"));
     EXPECT_EQ(loaded.frames().front().crossViewRepairedMaskPath,
               QStringLiteral("cross_view_repaired_002.png"));
+    EXPECT_EQ(loaded.frames().front().missingReasonPath,
+              QStringLiteral("missing_reason_002.png"));
+    EXPECT_EQ(loaded.frames().front().missingReasonPreviewPath,
+              QStringLiteral("missing_reason_preview_002.png"));
+    EXPECT_EQ(loaded.frames()
+                  .front()
+                  .missingReasonSummary
+                  .value(QStringLiteral("missing_pixel_count"))
+                  .toInt(),
+              123);
     EXPECT_EQ(loaded.frames().front().gridWidth, 6000);
     EXPECT_EQ(loaded.frames().front().gridHeight, 4000);
     EXPECT_EQ(loaded.configHash(), QStringLiteral("cfg-a"));

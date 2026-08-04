@@ -482,6 +482,56 @@ QVector<SelectionPropertiesWidget::PropertyRow> SelectionPropertiesWidget::model
         rows.push_back({tr("处理时间"), elapsedText(depthElapsedMs)});
         rows.push_back({tr("深度产物大小"),
                         depthArtifactBytes >= 0 ? fileSizeText(depthArtifactBytes) : tr("不可用")});
+        if (depthSnapshot.value(
+                QStringLiteral("missing_reason_schema_version")).toInt() > 0)
+        {
+            const double missing_ratio = depthSnapshot.value(
+                QStringLiteral("missing_within_support_ratio")).toDouble(-1.0);
+            const qint64 missing_count = static_cast<qint64>(depthSnapshot.value(
+                QStringLiteral("missing_pixel_count")).toDouble(0.0));
+            rows.push_back({tr("深度缺失"),
+                            missing_ratio >= 0.0
+                                ? tr("%1（%2 像素）")
+                                      .arg(locale.toString(
+                                          missing_ratio * 100.0, 'f', 2) +
+                                           QStringLiteral("%"))
+                                      .arg(locale.toString(missing_count))
+                                : tr("不可用")});
+            const QJsonObject reason_counts = depthSnapshot.value(
+                QStringLiteral("missing_reason_counts")).toObject();
+            const QVector<QPair<QString, QString>> reason_labels{
+                {QStringLiteral("insufficient_geometry_support_pixel_count"),
+                 tr("跨视证据不足")},
+                {QStringLiteral("geometry_contradiction_pixel_count"),
+                 tr("多视几何冲突")},
+                {QStringLiteral("patchmatch_unresolved_pixel_count"),
+                 tr("PatchMatch 未求解")},
+                {QStringLiteral("low_confidence_pixel_count"),
+                 tr("低置信度剔除")},
+                {QStringLiteral("local_depth_outlier_pixel_count"),
+                 tr("局部离群剔除")},
+                {QStringLiteral("small_component_pixel_count"),
+                 tr("小连通域剔除")},
+                {QStringLiteral("unclassified_pixel_count"), tr("未分类")}};
+            QString dominant_reason = tr("无");
+            qint64 dominant_count = 0;
+            for (const auto &reason : reason_labels)
+            {
+                const qint64 count = static_cast<qint64>(
+                    reason_counts.value(reason.first).toDouble(0.0));
+                if (count > dominant_count)
+                {
+                    dominant_count = count;
+                    dominant_reason = reason.second;
+                }
+            }
+            rows.push_back({tr("主要缺失原因"),
+                            dominant_count > 0
+                                ? tr("%1（%2 像素）")
+                                      .arg(dominant_reason)
+                                      .arg(locale.toString(dominant_count))
+                                : dominant_reason});
+        }
     }
 
     rows.push_back({tr("重建参数"), {}, true});

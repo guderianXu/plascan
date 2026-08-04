@@ -282,6 +282,9 @@ QJsonObject depthGenerationSnapshot(const QJsonObject &metadata,
     int maximum_neighbor_count = -1;
     double processing_elapsed_ms = 0.0;
     qint64 artifact_bytes = 0;
+    qint64 support_pixel_count = 0;
+    qint64 missing_pixel_count = 0;
+    QJsonObject missing_reason_counts;
 
     for (const QJsonValue &value : metadata.value(
              QStringLiteral("depth_map_results")).toArray())
@@ -317,11 +320,33 @@ QJsonObject depthGenerationSnapshot(const QJsonObject &metadata,
         processing_elapsed_ms += record.value(
             QStringLiteral("elapsed_ms")).toDouble(0.0);
 
+        const QJsonObject missing_summary = record.value(
+            QStringLiteral("missing_reason_summary")).toObject();
+        support_pixel_count += static_cast<qint64>(missing_summary.value(
+            QStringLiteral("support_pixel_count")).toDouble(0.0));
+        missing_pixel_count += static_cast<qint64>(missing_summary.value(
+            QStringLiteral("missing_pixel_count")).toDouble(0.0));
+        for (const QString &reason_key : {
+                 QStringLiteral("patchmatch_unresolved_pixel_count"),
+                 QStringLiteral("low_confidence_pixel_count"),
+                 QStringLiteral("local_depth_outlier_pixel_count"),
+                 QStringLiteral("small_component_pixel_count"),
+                 QStringLiteral("geometry_contradiction_pixel_count"),
+                 QStringLiteral("insufficient_geometry_support_pixel_count"),
+                 QStringLiteral("unclassified_pixel_count")})
+        {
+            missing_reason_counts[reason_key] =
+                missing_reason_counts.value(reason_key).toDouble(0.0) +
+                missing_summary.value(reason_key).toDouble(0.0);
+        }
+
         for (const QString &path_key : {
                  QStringLiteral("depth_png"),
                  QStringLiteral("raw_depth_path"),
                  QStringLiteral("raw_confidence_path"),
-                 QStringLiteral("valid_mask_path")})
+                 QStringLiteral("valid_mask_path"),
+                 QStringLiteral("missing_reason_path"),
+                 QStringLiteral("missing_reason_preview_path")})
         {
             const QFileInfo artifact_info(record.value(path_key).toString());
             if (artifact_info.exists())
@@ -339,6 +364,19 @@ QJsonObject depthGenerationSnapshot(const QJsonObject &metadata,
     snapshot[QStringLiteral("maximum_neighbor_count")] = maximum_neighbor_count;
     snapshot[QStringLiteral("processing_elapsed_ms")] = processing_elapsed_ms;
     snapshot[QStringLiteral("artifact_bytes")] = static_cast<double>(artifact_bytes);
+    if (support_pixel_count > 0)
+    {
+        snapshot[QStringLiteral("missing_reason_schema_version")] = 1;
+        snapshot[QStringLiteral("support_pixel_count")] =
+            static_cast<double>(support_pixel_count);
+        snapshot[QStringLiteral("missing_pixel_count")] =
+            static_cast<double>(missing_pixel_count);
+        snapshot[QStringLiteral("missing_within_support_ratio")] =
+            static_cast<double>(missing_pixel_count) /
+            static_cast<double>(support_pixel_count);
+        snapshot[QStringLiteral("missing_reason_counts")] =
+            missing_reason_counts;
+    }
     return snapshot;
 }
 

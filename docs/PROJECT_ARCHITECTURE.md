@@ -233,6 +233,7 @@ core/
 │   ├── DepthPyramidPropagation.h/cpp # 父层深度中心、不确定半径和边缘感知传播
 │   ├── DepthPyramidEstimator.h/cpp # Level 3/2/1 编排与逐层摘要
 │   ├── DepthCompletenessMetrics.h/cpp # 蒙版内覆盖、小孔/大开口/边界缺失与逐阶段保留率
+│   ├── DepthMissingReason.h/cpp # 逐像素缺失原因码、分类汇总和透明诊断预览
 │   ├── DepthCrossViewHoleRepair.h/cpp # 一致性过滤后以三源逆深度簇保守补回环拍对象缺面
 │   ├── DepthFrameQualityGate.h/cpp # 深度帧 Accepted/ValidationOnly/Rejected 质量门控
 │   ├── DepthConsistencyCache.h/cpp # 有内存预算的 LRU source 邻域多视一致性缓存
@@ -689,6 +690,12 @@ Level 1/2/3 栅格及对应项目元数据，但不会删除源照片。照片�
 阈值为 3%/1.5%/0.75%，汇聚环拍阈值为 1.25%/0.8%/0.5%，并执行源到参考的往返投影检查。
 蒙版内 0.80 覆盖门槛只作用于 project/content 约束蒙版；`full_image` 航测帧沿用边缘/内部帧的
 场景化一致性阈值，不按整幅影像覆盖率误降级。
+
+最终深度帧还保存 `missing_reason_path`（无损 `uint8` 原因码）和
+`missing_reason_preview_path`（透明彩色预览）。原因码区分蒙版外、PatchMatch 未求解、低置信度、
+局部离群、小连通域、多视几何冲突、跨视证据不足和未分类缺失；被跨视修复或锚定修复重新赋值的
+像素会恢复为有效状态。`missing_reason_summary` 保存同一分类的逐帧计数和蒙版内缺失率，流式与
+常驻内存的一致性路径使用同一结构。模型属性汇总所用深度批次的缺失率和主要原因。
 
 MVS 源规划优先使用从当前存储匹配结果经 USAC/MAGSAC 验证的像对。空匹配文件或少于最少
 内点数的匹配只表示验证证据缺失，不能当作已证明失败；剩余源位由共享轨迹几何补足。16 视图及

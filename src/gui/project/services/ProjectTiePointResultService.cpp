@@ -223,7 +223,9 @@ QStringList collectDepthArtifactFiles(const QJsonArray &records,
         QStringLiteral("depth_png"),
         QStringLiteral("raw_depth_path"),
         QStringLiteral("raw_confidence_path"),
-        QStringLiteral("valid_mask_path")
+        QStringLiteral("valid_mask_path"),
+        QStringLiteral("missing_reason_path"),
+        QStringLiteral("missing_reason_preview_path")
     };
 
     QStringList files;

@@ -38,6 +38,7 @@ struct MvsDepthFrameRecord
     double validCoverage = -1.0;
     QJsonObject depthQuality;
     QJsonObject depthCompleteness;
+    QJsonObject missingReasonSummary;
     QJsonObject crossViewRepairDiagnostics;
     QJsonObject geometryEvidenceDiagnostics;
     QJsonObject poseRefinementDiagnostics;
@@ -73,6 +74,8 @@ struct MvsDepthFrameRecord
     QString crossViewRepairedMaskPath;
     QString validMaskPath;
     QString supportMaskPath;
+    QString missingReasonPath;
+    QString missingReasonPreviewPath;
     int gridWidth = 0;
     int gridHeight = 0;
     qint64 elapsedMs = 0;

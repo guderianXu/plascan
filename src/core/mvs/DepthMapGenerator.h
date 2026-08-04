@@ -15,6 +15,7 @@
 #include "DepthPyramidEstimator.h"
 #include "DepthFrameQualityGate.h"
 #include "DepthCompletenessMetrics.h"
+#include "DepthMissingReason.h"
 #include "MvsQualityReport.h"
 #include "MvsSceneClassifier.h"
 #include "DenseCloudBuilder.h"
@@ -66,6 +67,7 @@ struct DepthFrameResult
     QSharedPointer<cv::Mat> adaptiveGeometryEffectiveViewCount; ///< 连续证据有效视图数 (CV_32F)
     QSharedPointer<cv::Mat> adaptiveGeometryConflictRatio; ///< 可观测证据中的冲突比例 [0, 1] (CV_32F)
     QSharedPointer<cv::Mat> crossViewRepairedMask; ///< 跨视图补回像素；不参与帧准入评分 (CV_8U)
+    QSharedPointer<cv::Mat> missingReasonMap; ///< 最终缺失像素的逐像素原因码 (CV_8U)
     QSharedPointer<cv::Mat> validMask;   ///< 最终输出空间的权威有效蒙版 (CV_8U)
     QSharedPointer<cv::Mat> supportRegionMask; ///< 项目/内容允许参与重建的区域，不含深度孔洞
     DepthPostProcessStats depthPostprocess; ///< 融合前深度图后处理统计
@@ -121,6 +123,7 @@ struct DepthFrameResult
         adaptiveGeometryEffectiveViewCount.clear();
         adaptiveGeometryConflictRatio.clear();
         crossViewRepairedMask.clear();
+        missingReasonMap.clear();
         validMask.clear();
         supportRegionMask.clear();
         intermediatePyramidLevels.clear();
@@ -262,7 +265,8 @@ public:
                                                            cv::Mat &confidenceMap,
                                                            const FusionConfig &config,
                                                            int refIdx,
-                                                           int viewCount);
+                                                           int viewCount,
+                                                           cv::Mat *missingReasonMap = nullptr);
 
     /// CUDA PatchMatch 显存不足后的下一次重试配置
     static PatchMatchConfig nextCudaRetryPatchMatchConfig(const PatchMatchConfig &config,

@@ -90,6 +90,8 @@ QJsonObject MvsDepthFrameRecord::toJson() const
     }
     object.insert(QStringLiteral("depth_quality"), depthQuality);
     object.insert(QStringLiteral("depth_completeness"), depthCompleteness);
+    object.insert(QStringLiteral("missing_reason_summary"),
+                  missingReasonSummary);
     object.insert(
         QStringLiteral("cross_view_repair_diagnostics"),
         crossViewRepairDiagnostics);
@@ -141,6 +143,9 @@ QJsonObject MvsDepthFrameRecord::toJson() const
     object.insert(QStringLiteral("cross_view_repaired_mask_path"), crossViewRepairedMaskPath);
     object.insert(QStringLiteral("valid_mask_path"), validMaskPath);
     object.insert(QStringLiteral("support_mask_path"), supportMaskPath);
+    object.insert(QStringLiteral("missing_reason_path"), missingReasonPath);
+    object.insert(QStringLiteral("missing_reason_preview_path"),
+                  missingReasonPreviewPath);
     object.insert(QStringLiteral("grid_width"), gridWidth);
     object.insert(QStringLiteral("grid_height"), gridHeight);
     object.insert(QStringLiteral("elapsed_ms"), QString::number(elapsedMs));
@@ -184,6 +189,8 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
     record.depthQuality = object.value(QStringLiteral("depth_quality")).toObject();
     record.depthCompleteness = object.value(
         QStringLiteral("depth_completeness")).toObject();
+    record.missingReasonSummary = object.value(
+        QStringLiteral("missing_reason_summary")).toObject();
     record.crossViewRepairDiagnostics = object.value(
         QStringLiteral("cross_view_repair_diagnostics")).toObject();
     record.geometryEvidenceDiagnostics = object.value(
@@ -238,6 +245,10 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
         QStringLiteral("cross_view_repaired_mask_path")).toString();
     record.validMaskPath = object.value(QStringLiteral("valid_mask_path")).toString();
     record.supportMaskPath = object.value(QStringLiteral("support_mask_path")).toString();
+    record.missingReasonPath = object.value(
+        QStringLiteral("missing_reason_path")).toString();
+    record.missingReasonPreviewPath = object.value(
+        QStringLiteral("missing_reason_preview_path")).toString();
     record.gridWidth = object.value(QStringLiteral("grid_width")).toInt(0);
     record.gridHeight = object.value(QStringLiteral("grid_height")).toInt(0);
     const QJsonValue elapsed = object.value(QStringLiteral("elapsed_ms"));

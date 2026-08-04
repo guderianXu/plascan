@@ -3812,7 +3812,8 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
                                                                     cv::Mat &confidenceMap,
                                                                     const FusionConfig &config,
                                                                     int refIdx,
-                                                                    int viewCount)
+                                                                    int viewCount,
+                                                                    cv::Mat *missingReasonMap)
 {
     DepthPostProcessStats stats;
     if (depthMap.empty() || depthMap.type() != CV_32F)
@@ -3916,12 +3917,20 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
 
             stats.validAfterConfidenceFilter = validAfterConfidence;
             stats.confidenceRemoved = std::max(0, stats.validBeforePostprocess - validAfterConfidence);
+            if (missingReasonMap)
+            {
+                markDepthLossReason(*missingReasonMap,
+                                    beforeConfidence,
+                                    depthMap,
+                                    DepthMissingReason::LowConfidence);
+            }
         }
     }
     stats.effectiveConfidenceThreshold = confThresh;
 
     if (config.enableLocalDepthOutlierFilter)
     {
+        const cv::Mat before_local_filter = depthMap.clone();
         stats.localDepthOutlierRemoved = removeLocalDepthOutliers(
             depthMap,
             confidenceMap,
@@ -3929,10 +3938,18 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
             config.localDepthOutlierRelThresh,
             config.maxLocalDepthOutlierRemovalRatio,
             refIdx);
+        if (missingReasonMap)
+        {
+            markDepthLossReason(*missingReasonMap,
+                                before_local_filter,
+                                depthMap,
+                                DepthMissingReason::LocalDepthOutlier);
+        }
     }
 
     if (config.enableSpeckleFilter)
     {
+        const cv::Mat before_speckle_filter = depthMap.clone();
         stats.smallComponentRemoved = removeSmallDepthComponents(
             depthMap,
             confidenceMap,
@@ -3940,6 +3957,13 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
             config.maxSpeckleRemovalRatio,
             refIdx);
         stats.speckleRemoved = stats.smallComponentRemoved;
+        if (missingReasonMap)
+        {
+            markDepthLossReason(*missingReasonMap,
+                                before_speckle_filter,
+                                depthMap,
+                                DepthMissingReason::SmallComponent);
+        }
     }
 
     stats.validAfterPostprocess = cv::countNonZero(depthMap > 0.0f);
@@ -4637,6 +4661,9 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
     const DepthFilterSettings quality_filter_settings = depthFilterSettings(
         _effectiveDepthFilterMode,
         static_cast<int>(sourceIndices.size()));
+    cv::Mat missing_reason_map = initializeDepthMissingReasonMap(
+        depthMap, effectiveReferenceMask);
+    const cv::Mat before_output_filter = depthMap.clone();
     result.depthCompleteness.preOutputFilterValidCount =
         cv::countNonZero(depthMap > 0.0f);
     if (config.fusion.enableLocalDepthOutlierFilter)
@@ -4654,6 +4681,10 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
         }
         result.depthCompleteness.outputFilterRemovedCount = previewOutliers;
     }
+    markDepthLossReason(missing_reason_map,
+                        before_output_filter,
+                        depthMap,
+                        DepthMissingReason::LocalDepthOutlier);
     result.depthCompleteness.postOutputFilterValidCount =
         cv::countNonZero(depthMap > 0.0f);
     if (result.depthCompleteness.preOutputFilterValidCount > 0)
@@ -4768,6 +4799,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
         : QSharedPointer<cv::Mat>::create(supportCount);
     result.validMask = QSharedPointer<cv::Mat>::create(finalValidMask);
     result.supportRegionMask = QSharedPointer<cv::Mat>::create(effectiveReferenceMask);
+    result.missingReasonMap = QSharedPointer<cv::Mat>::create(missing_reason_map);
     result.cameraModel = refCam;
     if (!depthMap.empty() && (depthMap.cols != W || depthMap.rows != H))
     {
@@ -5235,6 +5267,22 @@ void DepthMapGenerator::crossCheckDepthConsistency()
             geometry_evidence.inverseDepthMean);
         _depthFrames[i].inverseDepthRelativeSpread = QSharedPointer<cv::Mat>::create(
             geometry_evidence.inverseDepthRelativeSpread);
+        if (!_depthFrames[i].missingReasonMap ||
+            _depthFrames[i].missingReasonMap->empty())
+        {
+            _depthFrames[i].missingReasonMap = QSharedPointer<cv::Mat>::create(
+                initializeDepthMissingReasonMap(depthBackup, repair_mask));
+        }
+        markDepthLossReason(*_depthFrames[i].missingReasonMap,
+                            depthBackup,
+                            depthI,
+                            DepthMissingReason::InsufficientGeometrySupport);
+        finalizeDepthMissingReasonMap(
+            *_depthFrames[i].missingReasonMap,
+            depthI,
+            repair_mask,
+            geometry_evidence.supportCount,
+            contradicted_votes);
         if (generate_adaptive_evidence)
         {
             const AdaptiveGeometryEvidenceMaps adaptive_evidence =
@@ -5535,6 +5583,23 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                        0.0,
                        cv::INTER_NEAREST);
         }
+        if (!_depthFrames[frame_index].missingReasonMap ||
+            _depthFrames[frame_index].missingReasonMap->empty())
+        {
+            const QString reason_path = storage_dir.filePath(
+                QStringLiteral("depth_%1_missing_reason.png").arg(frame_index));
+            cv::Mat reason_map = xjw::common::io::readImage(
+                xjw::common::io::toUtf8Path(reason_path),
+                cv::IMREAD_GRAYSCALE);
+            if (reason_map.empty() || reason_map.type() != CV_8UC1 ||
+                reason_map.size() != filtered_depth.size())
+            {
+                reason_map = initializeDepthMissingReasonMap(
+                    reference->depth, repair_mask);
+            }
+            _depthFrames[frame_index].missingReasonMap =
+                QSharedPointer<cv::Mat>::create(reason_map);
+        }
         const cv::Mat consistent_mask = makeDepthConsistencyMask(
             filtered_depth,
             static_cast<int>(source_indices.size()),
@@ -5722,12 +5787,17 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             static_cast<int>(source_indices.size()),
             _config.patchMatch.confidenceThresh,
             fusion_config.confidenceThresh).fusion;
+        markDepthLossReason(*_depthFrames[frame_index].missingReasonMap,
+                            reference->depth,
+                            filtered_depth,
+                            DepthMissingReason::InsufficientGeometrySupport);
         _depthFrames[frame_index].depthPostprocess = postprocessFusionDepthMap(
             filtered_depth,
             filtered_confidence,
             fusion_config,
             frame_index,
-            view_count);
+            view_count,
+            _depthFrames[frame_index].missingReasonMap.data());
         _depthFrames[frame_index].depthPostprocessApplied = true;
         const DepthAnchoredHoleInterpolationStats final_repair =
             repairPostprocessedInternalDepthHoles(
@@ -5765,6 +5835,12 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             geometry_source_mask,
             source_inverse_depth_sum,
             source_inverse_depth_squared_sum);
+        finalizeDepthMissingReasonMap(
+            *_depthFrames[frame_index].missingReasonMap,
+            filtered_depth,
+            repair_mask,
+            geometry_evidence.supportCount,
+            contradicted_votes);
         const AdaptiveGeometryEvidenceMaps adaptive_evidence =
             generate_adaptive_evidence
             ? makeAdaptiveGeometryEvidenceMaps(
@@ -6165,6 +6241,12 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         raw_directory + "/depth_" + std::to_string(frameIndex) + "_mask.png";
     const std::string supportMaskPath =
         raw_directory + "/depth_" + std::to_string(frameIndex) + "_support_mask.png";
+    const std::string missingReasonPath =
+        raw_directory + "/depth_" + std::to_string(frameIndex) +
+        "_missing_reason.png";
+    const std::string missingReasonPreviewPath =
+        raw_directory + "/depth_" + std::to_string(frameIndex) +
+        "_missing_reason_preview.png";
     bool previewSaved = !savePreviewPng;
     double previewMs = 0.0;
     if (savePreviewPng)
@@ -6224,6 +6306,7 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
 
     bool maskSaved = false;
     bool supportMaskSaved = false;
+    cv::Mat supportMask;
     double maskMs = 0.0;
     if (saveRawDepth)
     {
@@ -6238,7 +6321,6 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
                              .arg(stageLabel, QString::fromStdString(validMaskPath)));
             }
         }
-        cv::Mat supportMask;
         if (!result.supportRegionMask || result.supportRegionMask->empty())
         {
             supportMask = cv::Mat(result.depthMap->size(), CV_8UC1, cv::Scalar(255));
@@ -6271,6 +6353,42 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
                          .arg(stageLabel, QString::fromStdString(supportMaskPath)));
         }
         maskMs = elapsedMs(maskStart, Clock::now());
+    }
+
+    bool missingReasonSaved = false;
+    bool missingReasonPreviewSaved = false;
+    QJsonObject missingReasonSummaryJson;
+    if (saveRawDepth && !supportMask.empty())
+    {
+        cv::Mat missing_reason = result.missingReasonMap &&
+                !result.missingReasonMap->empty()
+            ? result.missingReasonMap->clone()
+            : initializeDepthMissingReasonMap(*result.depthMap, supportMask);
+        finalizeDepthMissingReasonMap(
+            missing_reason,
+            *result.depthMap,
+            supportMask,
+            result.geometrySupportCount && !result.geometrySupportCount->empty()
+                ? *result.geometrySupportCount
+                : cv::Mat());
+        const DepthMissingReasonSummary missing_summary =
+            summarizeDepthMissingReasons(missing_reason, supportMask);
+        missingReasonSummaryJson = depthMissingReasonSummaryToJson(
+            missing_summary);
+        missingReasonSaved = xjw::common::io::writeImage(
+            missingReasonPath, missing_reason);
+        const cv::Mat missing_preview = makeDepthMissingReasonPreview(
+            missing_reason);
+        missingReasonPreviewSaved = !missing_preview.empty() &&
+            xjw::common::io::writeImage(
+                missingReasonPreviewPath, missing_preview);
+        if (!missingReasonSaved || !missingReasonPreviewSaved)
+        {
+            LOG_WARN(QStringLiteral(
+                         "[MVS] 保存%1深度缺失原因诊断失败: frame=%2")
+                         .arg(stageLabel)
+                         .arg(frameIndex));
+        }
     }
 
     bool geometrySupportSaved = false;
@@ -6761,6 +6879,15 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
                                         : QString());
                 level_object.insert(QStringLiteral("valid_mask_path"),
                                     maskSaved ? QString::fromStdString(validMaskPath) : QString());
+                level_object.insert(QStringLiteral("missing_reason_path"),
+                                    missingReasonSaved
+                                        ? QString::fromStdString(missingReasonPath)
+                                        : QString());
+                level_object.insert(
+                    QStringLiteral("missing_reason_preview_path"),
+                    missingReasonPreviewSaved
+                        ? QString::fromStdString(missingReasonPreviewPath)
+                        : QString());
             }
             const auto path_it = pyramid_level_paths.find(level);
             if (path_it != pyramid_level_paths.end())
@@ -6818,6 +6945,12 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         artifact[QStringLiteral("valid_mask_path")] = maskSaved ? QString::fromStdString(validMaskPath) : QString();
         artifact[QStringLiteral("support_mask_path")] =
             supportMaskSaved ? QString::fromStdString(supportMaskPath) : QString();
+        artifact[QStringLiteral("missing_reason_path")] =
+            missingReasonSaved ? QString::fromStdString(missingReasonPath) : QString();
+        artifact[QStringLiteral("missing_reason_preview_path")] =
+            missingReasonPreviewSaved
+                ? QString::fromStdString(missingReasonPreviewPath)
+                : QString();
         artifact[QStringLiteral("ref_image")] = QString::fromStdString(_views[frameIndex].imagePath);
         artifact[QStringLiteral("source_images")] = sourceImages;
         artifact[QStringLiteral("source_indices")] = sourceIndices;
@@ -6845,6 +6978,8 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             static_cast<double>(result.qualityMetrics.validCoverage);
         artifact[QStringLiteral("depth_quality")] = depthQualityJson;
         artifact[QStringLiteral("depth_completeness")] = depthCompletenessJson;
+        artifact[QStringLiteral("missing_reason_summary")] =
+            missingReasonSummaryJson;
         artifact[QStringLiteral("cross_view_repair_diagnostics")] =
             result.crossViewRepairDiagnostics;
         artifact[QStringLiteral("geometry_evidence_diagnostics")] =
@@ -6926,6 +7061,7 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         record.validCoverage = static_cast<double>(result.qualityMetrics.validCoverage);
         record.depthQuality = depthQualityJson;
         record.depthCompleteness = depthCompletenessJson;
+        record.missingReasonSummary = missingReasonSummaryJson;
         record.crossViewRepairDiagnostics = result.crossViewRepairDiagnostics;
         record.geometryEvidenceDiagnostics = geometryEvidenceDiagnostics;
         record.poseRefinementDiagnostics = result.poseRefinementDiagnostics;
@@ -6986,6 +7122,12 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             : QString();
         record.validMaskPath = maskSaved ? QString::fromStdString(validMaskPath) : QString();
         record.supportMaskPath = supportMaskSaved ? QString::fromStdString(supportMaskPath) : QString();
+        record.missingReasonPath = missingReasonSaved
+            ? QString::fromStdString(missingReasonPath)
+            : QString();
+        record.missingReasonPreviewPath = missingReasonPreviewSaved
+            ? QString::fromStdString(missingReasonPreviewPath)
+            : QString();
         record.gridWidth = result.depthMap->cols;
         record.gridHeight = result.depthMap->rows;
         record.elapsedMs = static_cast<qint64>(std::llround(result.elapsedMs));
@@ -7744,7 +7886,8 @@ void DepthMapGenerator::runInBackground()
                                                                   confidence,
                                                                   fusion_config,
                                                                   res.refViewIdx,
-                                                                  static_cast<int>(_views.size()));
+                                                                  static_cast<int>(_views.size()),
+                                                                  res.missingReasonMap.data());
                 res.depthPostprocessApplied = true;
                 const DepthAnchoredHoleInterpolationStats final_repair =
                     repairPostprocessedInternalDepthHoles(
@@ -7771,6 +7914,14 @@ void DepthMapGenerator::runInBackground()
                     _effectiveSceneProfile,
                     _effectiveDepthFilterMode,
                     keep_rate);
+                if (res.missingReasonMap && res.supportRegionMask)
+                {
+                    finalizeDepthMissingReasonMap(
+                        *res.missingReasonMap,
+                        *res.depthMap,
+                        *res.supportRegionMask,
+                        res.geometrySupportCount ? *res.geometrySupportCount : cv::Mat());
+                }
             }
             if (_cancelled.load())
             {
