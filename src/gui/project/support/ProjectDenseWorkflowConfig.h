@@ -14,7 +14,10 @@ using xjw::core::project::buildDepthGenConfig;
 using xjw::core::project::denseGenerationSettingsFromJson;
 using xjw::core::project::denseRefineSettingsFromJson;
 using xjw::core::project::depthQualityDownsample;
+using xjw::core::project::depthQualityParameters;
 using xjw::core::project::depthQualityProfileFromId;
+using xjw::core::project::depthQualityProfileForModelQuality;
 using xjw::core::project::depthQualityProfileId;
+using xjw::core::project::depthQualityRank;
 
 } // namespace xjw::gui::project

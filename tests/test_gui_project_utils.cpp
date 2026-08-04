@@ -2152,6 +2152,72 @@ TEST(GenerateModelDialogTest, ReusesDepthMapsByDefaultForLegacySettings)
     EXPECT_TRUE(reuse_check->isChecked());
 }
 
+TEST(GenerateModelDialogTest, UltraModelQualityRequestsHighestDepthQuality)
+{
+    QJsonObject depth_maps;
+    depth_maps[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
+    depth_maps[QStringLiteral("source_label")] = QStringLiteral("深度图");
+    depth_maps[QStringLiteral("source_path")] = QStringLiteral("E:/tmp/mvs_output");
+    depth_maps[QStringLiteral("display")] = QStringLiteral("深度图 - mvs_output");
+    depth_maps[QStringLiteral("supported")] = true;
+    depth_maps[QStringLiteral("depth_quality_profile")] = QStringLiteral("highest");
+
+    GenerateModelDialog dialog;
+    dialog.applySettings(QJsonObject{{QStringLiteral("quality"), QStringLiteral("ultra")}});
+    dialog.setSourceCandidates(QJsonArray{depth_maps});
+
+    auto *label = dialog.findChild<QLabel *>(
+        QStringLiteral("effectiveDepthQualityLabel"));
+    ASSERT_NE(label, nullptr);
+    EXPECT_TRUE(label->text().contains(QStringLiteral("超高")));
+    EXPECT_TRUE(label->text().contains(QStringLiteral("16 轮")));
+
+    QSignalSpy run_spy(&dialog, &GenerateModelDialog::runRequested);
+    auto *button_box = dialog.findChild<QDialogButtonBox *>(
+        QStringLiteral("workflowButtonBox"));
+    ASSERT_NE(button_box, nullptr);
+    button_box->button(QDialogButtonBox::Ok)->click();
+    ASSERT_EQ(run_spy.count(), 1);
+    const QJsonObject submitted = run_spy.at(0).at(0).toJsonObject();
+    EXPECT_EQ(submitted.value(QStringLiteral("modelQualityProfile")).toString(),
+              QStringLiteral("detail"));
+    EXPECT_EQ(submitted.value(QStringLiteral("depthQualityProfile")).toString(),
+              QStringLiteral("highest"));
+    EXPECT_TRUE(submitted.value(QStringLiteral("reuseDepthMaps")).toBool());
+}
+
+TEST(GenerateModelDialogTest, RejectsLowerQualityReusableDepthBatch)
+{
+    QJsonObject depth_maps;
+    depth_maps[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
+    depth_maps[QStringLiteral("source_label")] = QStringLiteral("深度图");
+    depth_maps[QStringLiteral("source_path")] = QStringLiteral("E:/tmp/mvs_output");
+    depth_maps[QStringLiteral("display")] = QStringLiteral("深度图 - mvs_output");
+    depth_maps[QStringLiteral("supported")] = true;
+    depth_maps[QStringLiteral("depth_quality_profile")] = QStringLiteral("medium");
+
+    GenerateModelDialog dialog;
+    dialog.applySettings(QJsonObject{{QStringLiteral("quality"), QStringLiteral("ultra")}});
+    dialog.setSourceCandidates(QJsonArray{depth_maps});
+
+    auto *reuse_check = dialog.findChild<QCheckBox *>(
+        QStringLiteral("reuseDepthMapsCheck"));
+    ASSERT_NE(reuse_check, nullptr);
+    EXPECT_FALSE(reuse_check->isEnabled());
+    EXPECT_FALSE(reuse_check->isChecked());
+    EXPECT_TRUE(reuse_check->toolTip().contains(QStringLiteral("低于当前请求")));
+
+    QSignalSpy run_spy(&dialog, &GenerateModelDialog::runRequested);
+    auto *button_box = dialog.findChild<QDialogButtonBox *>(
+        QStringLiteral("workflowButtonBox"));
+    ASSERT_NE(button_box, nullptr);
+    button_box->button(QDialogButtonBox::Ok)->click();
+    ASSERT_EQ(run_spy.count(), 1);
+    const QJsonObject submitted = run_spy.at(0).at(0).toJsonObject();
+    EXPECT_FALSE(submitted.value(QStringLiteral("reuseDepthMaps")).toBool(true));
+    EXPECT_TRUE(submitted.value(QStringLiteral("force_depth_recompute")).toBool());
+}
+
 TEST(GenerateModelDialogTest, RecomputesExistingDepthMapsWhenReuseIsUnchecked)
 {
     QJsonObject depth_maps;
@@ -8124,6 +8190,29 @@ TEST(DepthQualityProfileTest, MapsStableIdsToFinalDownsample)
     EXPECT_EQ(depthQualityProfileId(DepthQualityProfile::Medium), QStringLiteral("medium"));
     EXPECT_EQ(depthQualityProfileFromId(QStringLiteral("high")), DepthQualityProfile::High);
     EXPECT_EQ(depthQualityProfileFromId(QStringLiteral("unknown")), DepthQualityProfile::Medium);
+    EXPECT_EQ(xjw::gui::project::depthQualityProfileForModelQuality(
+                  QStringLiteral("ultra")),
+              QStringLiteral("highest"));
+    EXPECT_EQ(xjw::gui::project::depthQualityProfileForModelQuality(
+                  QStringLiteral("high")),
+              QStringLiteral("high"));
+    EXPECT_GT(xjw::gui::project::depthQualityRank(QStringLiteral("highest")),
+              xjw::gui::project::depthQualityRank(QStringLiteral("medium")));
+}
+
+TEST(DepthQualityProfileTest, ExplicitDepthProfileOverridesMeshProfile)
+{
+    const QJsonObject json{
+        {QStringLiteral("qualityProfile"), QStringLiteral("detail")},
+        {QStringLiteral("depthQualityProfile"), QStringLiteral("highest")}
+    };
+
+    const auto settings = xjw::gui::project::denseGenerationSettingsFromJson(json);
+    EXPECT_EQ(settings.qualityProfile, QStringLiteral("highest"));
+    EXPECT_DOUBLE_EQ(settings.resScale, 1.0);
+    EXPECT_EQ(settings.iterations, 16);
+    EXPECT_EQ(settings.patchSize, 15);
+    EXPECT_EQ(settings.minViews, 8);
 }
 
 TEST(DepthQualityProfileTest, ExplicitSettingsAreNotRaisedByDefaultProfile)

@@ -54,6 +54,8 @@ MvsDepthFrameRecord makeRecord(int index, const QString &name, const QString &st
     record.algorithmRevision = xjw::mvs::kMvsDepthAlgorithmRevision;
     record.sourceImages = {QStringLiteral("source_a.jpg"), QStringLiteral("source_b.jpg")};
     record.sourceIndices = {7, 9};
+    record.qualityProfile = QStringLiteral("highest");
+    record.configuredSourceViewCount = 8;
     record.sourceViewCount = 2;
     record.requestedSourceViewCount = 4;
     record.sourceViewShortfall = 2;
@@ -151,6 +153,8 @@ TEST(MvsWorkspaceManifest, SavesAndLoadsFrameRecordsAtomically)
     EXPECT_EQ(loaded.frames().front().rawAdaptiveGeometryConflictRatioPath,
               QStringLiteral("adaptive_geometry_conflict_ratio_002.bin"));
     EXPECT_EQ(loaded.frames().front().sourceIndices, QVector<int>({7, 9}));
+    EXPECT_EQ(loaded.frames().front().qualityProfile, QStringLiteral("highest"));
+    EXPECT_EQ(loaded.frames().front().configuredSourceViewCount, 8);
     EXPECT_EQ(loaded.frames().front().requestedSourceViewCount, 4);
     EXPECT_EQ(loaded.frames().front().sourceViewShortfall, 2);
     EXPECT_EQ(

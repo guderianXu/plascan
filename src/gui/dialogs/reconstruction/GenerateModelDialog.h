@@ -66,6 +66,7 @@ private:
     QComboBox *_sourceItemCombo = nullptr;
     QComboBox *_surfaceTypeCombo = nullptr;
     QComboBox *_qualityCombo = nullptr;
+    QLabel *_effectiveDepthQualityLabel = nullptr;
     QComboBox *_faceCountCombo = nullptr;
     QCheckBox *_saveEachStepCheck = nullptr;
     QCheckBox *_splitRegionCheck = nullptr;

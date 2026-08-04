@@ -376,6 +376,11 @@ QJsonObject buildMeshReconstructionRecord(const QJsonObject &taskResult,
         settings.contains(QStringLiteral("qualityProfile"))
             ? settings.value(QStringLiteral("qualityProfile")).toString()
             : QStringLiteral("balanced");
+    modelRecord[QStringLiteral("requested_model_quality_profile")] =
+        settings.value(QStringLiteral("modelQualityProfile")).toString(
+            modelRecord.value(QStringLiteral("requested_quality_profile")).toString());
+    modelRecord[QStringLiteral("requested_depth_quality_profile")] =
+        settings.value(QStringLiteral("depthQualityProfile")).toString();
     modelRecord[QStringLiteral("software_version")] = QStringLiteral(PLASCAN_VERSION);
     modelRecord[QStringLiteral("model_property_schema_version")] = 1;
 
@@ -392,6 +397,10 @@ QJsonObject buildMeshReconstructionRecord(const QJsonObject &taskResult,
         QStringLiteral("quality"));
     reconstruction_parameters[QStringLiteral("quality_profile")] = settings.value(
         QStringLiteral("qualityProfile"));
+    reconstruction_parameters[QStringLiteral("model_quality_profile")] = settings.value(
+        QStringLiteral("modelQualityProfile"));
+    reconstruction_parameters[QStringLiteral("depth_quality_profile")] = settings.value(
+        QStringLiteral("depthQualityProfile"));
     reconstruction_parameters[QStringLiteral("target_faces")] = settings.value(
         QStringLiteral("simplifyTargetFaces"));
     reconstruction_parameters[QStringLiteral("processing_elapsed_ms")] = taskResult.value(

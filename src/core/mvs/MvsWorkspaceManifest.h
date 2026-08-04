@@ -24,6 +24,8 @@ struct MvsDepthFrameRecord
     QStringList sourceImages;
     QVector<int> sourceIndices;
     QJsonArray sourcePlan;
+    QString qualityProfile;
+    int configuredSourceViewCount = 0;
     int sourceViewCount = 0;
     int requestedSourceViewCount = 0;
     int sourceViewShortfall = 0;

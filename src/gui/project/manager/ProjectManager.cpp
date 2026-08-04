@@ -28,6 +28,7 @@
 #include "ProjectSurveyControl.h"
 #include "ProjectWorkflowUtils.h"
 #include "ProjectWorkflowReports.h"
+#include "ProjectDenseWorkflowConfig.h"
 #include "camera/SurveyControlDialog.h"
 #include "GuiTaskRunner.h"
 #include "Logger.h"
@@ -112,6 +113,45 @@ using xjw::gui::project::writeBundleAdjustReport;
 
 namespace
 {
+
+QString normalizedDepthBatchDirectory(const QString &path)
+{
+    if (path.trimmed().isEmpty())
+    {
+        return QString();
+    }
+    const QFileInfo info(path);
+    return QDir::cleanPath(
+        (info.exists() && info.isDir() ? info : QFileInfo(info.absolutePath()))
+            .absoluteFilePath());
+}
+
+QString storedDepthBatchQualityProfile(const QJsonObject &metadata,
+                                       const QString &source_path)
+{
+    const QString requested_directory = normalizedDepthBatchDirectory(source_path);
+    const QJsonArray records = metadata.value(
+        QStringLiteral("depth_map_results")).toArray();
+    for (int index = records.size() - 1; index >= 0; --index)
+    {
+        const QJsonObject record = records.at(index).toObject();
+        QString record_path = record.value(
+            QStringLiteral("mvs_output_dir")).toString();
+        if (record_path.isEmpty())
+        {
+            record_path = record.value(
+                QStringLiteral("raw_depth_path")).toString();
+        }
+        if (!requested_directory.isEmpty() &&
+            normalizedDepthBatchDirectory(record_path).compare(
+                requested_directory, Qt::CaseInsensitive) != 0)
+        {
+            continue;
+        }
+        return record.value(QStringLiteral("quality_profile")).toString();
+    }
+    return QString();
+}
 
 struct ImageFolderScan
 {
@@ -1892,10 +1932,22 @@ void ProjectManager::startGenerateModelAsync(const QJsonObject &settings)
         settings.value(QStringLiteral("reuseDepthMaps")).toBool(true);
     const bool force_depth_recompute =
         settings.value(QStringLiteral("force_depth_recompute")).toBool(false);
+    const QString requested_depth_quality = settings.value(
+        QStringLiteral("depthQualityProfile")).toString(
+            xjw::gui::project::depthQualityProfileForModelQuality(
+                settings.value(QStringLiteral("quality")).toString(
+                    QStringLiteral("high"))));
+    const QString stored_depth_quality = storedDepthBatchQualityProfile(
+        _projectData->metadata(), depth_source);
+    const bool stored_depth_quality_insufficient =
+        !stored_depth_quality.isEmpty() &&
+        xjw::gui::project::depthQualityRank(stored_depth_quality) <
+            xjw::gui::project::depthQualityRank(requested_depth_quality);
     const bool prepare_depth_maps =
         source_data == QStringLiteral("depth_maps") &&
         (settings.value(QStringLiteral("automatic_depth_maps")).toBool(false) ||
          force_depth_recompute ||
+         stored_depth_quality_insufficient ||
          !reuse_depth_maps ||
          depth_source.isEmpty());
     if (!prepare_depth_maps)
@@ -1916,6 +1968,8 @@ void ProjectManager::startGenerateModelAsync(const QJsonObject &settings)
     _pendingAutomaticModelSettings = settings;
     _automaticModelDepthPreparationActive = true;
     QJsonObject depth_settings = settings;
+    depth_settings[QStringLiteral("qualityProfile")] = requested_depth_quality;
+    depth_settings[QStringLiteral("depthQualityProfile")] = requested_depth_quality;
     depth_settings[QStringLiteral("reuseDepthMaps")] = false;
     depth_settings[QStringLiteral("force_depth_recompute")] = true;
     depth_settings[QStringLiteral("depthFilterMode")] =

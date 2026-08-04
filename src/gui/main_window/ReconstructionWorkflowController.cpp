@@ -86,7 +86,8 @@ void appendModelSourceCandidate(QJsonArray *candidates,
                                 const QString &path,
                                 const QString &displayPrefix,
                                 bool supported,
-                                const QString &note = QString())
+                                const QString &note = QString(),
+                                const QJsonObject &properties = {})
 {
     if (!candidates)
     {
@@ -111,6 +112,10 @@ void appendModelSourceCandidate(QJsonArray *candidates,
     if (!note.isEmpty())
     {
         candidate[QStringLiteral("note")] = note;
+    }
+    for (auto it = properties.constBegin(); it != properties.constEnd(); ++it)
+    {
+        candidate.insert(it.key(), it.value());
     }
     candidates->append(candidate);
 }
@@ -146,6 +151,25 @@ QJsonArray buildGenerateModelSourceCandidates(const QJsonObject &metadata)
         }
 
         seenDepthDirs.push_back(depthKey);
+        QJsonObject depth_properties;
+        depth_properties.insert(
+            QStringLiteral("depth_quality_profile"),
+            record.value(QStringLiteral("quality_profile")));
+        depth_properties.insert(
+            QStringLiteral("configured_source_view_count"),
+            record.value(QStringLiteral("configured_source_view_count")));
+        depth_properties.insert(
+            QStringLiteral("requested_source_view_count"),
+            record.value(QStringLiteral("requested_source_view_count")));
+        depth_properties.insert(
+            QStringLiteral("effective_source_view_count"),
+            record.value(QStringLiteral("source_view_count")));
+        depth_properties.insert(
+            QStringLiteral("grid_width"),
+            record.value(QStringLiteral("grid_width")));
+        depth_properties.insert(
+            QStringLiteral("grid_height"),
+            record.value(QStringLiteral("grid_height")));
         appendModelSourceCandidate(
             &candidates,
             QStringLiteral("depth_maps"),
@@ -153,7 +177,8 @@ QJsonArray buildGenerateModelSourceCandidates(const QJsonObject &metadata)
             cleanPath,
             QStringLiteral("深度图"),
             true,
-            QStringLiteral("深度图将作为生成模型入口；若该深度图目录已有融合点云，将直接复用并生成网格。"));
+            QStringLiteral("深度图将作为生成模型入口；若该深度图目录已有融合点云，将直接复用并生成网格。"),
+            depth_properties);
     }
 
     const QJsonArray denseResults =

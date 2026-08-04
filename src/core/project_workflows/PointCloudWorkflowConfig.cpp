@@ -10,38 +10,6 @@ namespace xjw::core::project {
 namespace
 {
 
-struct DepthQualityDefaults
-{
-    double resScale;
-    int iterations;
-    int patchSize;
-    int minViews;
-    float patchMatchConfidence;
-    float fusionMinConfidence;
-    int minConsistentViews;
-    float fusionRelDepthThreshold;
-    float depthConsistency;
-    float maxReprojError;
-};
-
-DepthQualityDefaults depthQualityDefaults(DepthQualityProfile profile)
-{
-    switch (profile)
-    {
-    case DepthQualityProfile::Highest:
-        return {1.0, 16, 15, 8, 0.72f, 0.75f, 4, 0.015f, 0.8f, 0.8f};
-    case DepthQualityProfile::High:
-        return {0.5, 12, 13, 7, 0.68f, 0.70f, 4, 0.020f, 1.0f, 1.0f};
-    case DepthQualityProfile::Low:
-        return {0.125, 4, 9, 3, 0.30f, 0.30f, 2, 0.050f, 2.0f, 2.0f};
-    case DepthQualityProfile::Lowest:
-        return {0.0625, 3, 7, 2, 0.22f, 0.25f, 1, 0.070f, 2.5f, 2.5f};
-    case DepthQualityProfile::Medium:
-    default:
-        return {0.25, 8, 11, 6, 0.60f, 0.65f, 3, 0.030f, 1.5f, 1.5f};
-    }
-}
-
 plapoint::ProcessingDevice processingDeviceFromString(const QString &value)
 {
     const QString normalized = value.trimmed().toLower();
@@ -126,7 +94,7 @@ void applyDenseQualityProfile(DenseGenerationSettings *parsed,
     const QString raw_profile = parsed->qualityProfile.trimmed().toLower();
     const bool custom_profile = raw_profile == QStringLiteral("custom");
     const DepthQualityProfile profile = depthQualityProfileFromId(raw_profile);
-    const DepthQualityDefaults defaults = depthQualityDefaults(profile);
+    const DepthQualityParameters defaults = depthQualityParameters(profile);
     parsed->qualityProfile = custom_profile ? QStringLiteral("custom") : depthQualityProfileId(profile);
     const bool hasResScale = hasAnyKey(settings, {"resScale"});
     const bool hasIterations = hasAnyKey(settings, {"iterations"});
@@ -214,6 +182,60 @@ int depthQualityDownsample(DepthQualityProfile profile)
     }
 }
 
+int depthQualityRank(const QString &profileId)
+{
+    switch (depthQualityProfileFromId(profileId))
+    {
+    case DepthQualityProfile::Highest:
+        return 4;
+    case DepthQualityProfile::High:
+        return 3;
+    case DepthQualityProfile::Medium:
+        return 2;
+    case DepthQualityProfile::Low:
+        return 1;
+    case DepthQualityProfile::Lowest:
+        return 0;
+    }
+    return 2;
+}
+
+QString depthQualityProfileForModelQuality(const QString &modelQuality)
+{
+    const QString normalized = modelQuality.trimmed().toLower();
+    if (normalized == QStringLiteral("ultra"))
+    {
+        return QStringLiteral("highest");
+    }
+    if (normalized == QStringLiteral("high"))
+    {
+        return QStringLiteral("high");
+    }
+    if (normalized == QStringLiteral("low"))
+    {
+        return QStringLiteral("low");
+    }
+    return QStringLiteral("medium");
+}
+
+DepthQualityParameters depthQualityParameters(DepthQualityProfile profile)
+{
+    switch (profile)
+    {
+    case DepthQualityProfile::Highest:
+        return {1.0, 16, 15, 8, 0.72f, 0.75f, 4, 0.015f, 0.8f, 0.8f};
+    case DepthQualityProfile::High:
+        return {0.5, 12, 13, 7, 0.68f, 0.70f, 4, 0.020f, 1.0f, 1.0f};
+    case DepthQualityProfile::Low:
+        return {0.125, 4, 9, 3, 0.30f, 0.30f, 2, 0.050f, 2.0f, 2.0f};
+    case DepthQualityProfile::Lowest:
+        return {0.0625, 3, 7, 2, 0.22f, 0.25f, 1, 0.070f, 2.5f, 2.5f};
+    case DepthQualityProfile::Medium:
+    default:
+        return {0.25, 8, 11, 6, 0.60f, 0.65f, 3, 0.030f, 1.5f, 1.5f};
+    }
+}
+
 DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &settings)
 {
     DenseGenerationSettings parsed;
@@ -245,7 +267,8 @@ DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &setti
     parsed.depthConsistency = static_cast<float>(settings.value(QStringLiteral("depthConsistency")).toDouble(2.0));
     parsed.maxReprojError = static_cast<float>(settings.value(QStringLiteral("maxReprojError")).toDouble(2.0));
     parsed.speckleMinArea = std::max(0, settings.value(QStringLiteral("speckleMinArea")).toInt(16));
-    parsed.qualityProfile = settings.value(QStringLiteral("qualityProfile")).toString(QStringLiteral("medium"));
+    parsed.qualityProfile = settings.value(QStringLiteral("depthQualityProfile")).toString(
+        settings.value(QStringLiteral("qualityProfile")).toString(QStringLiteral("medium")));
     parsed.sceneProfile = settings.value(QStringLiteral("sceneProfile")).toString(QStringLiteral("auto"));
     parsed.depthFilterMode = settings.value(QStringLiteral("depthFilterMode")).toString(QStringLiteral("auto"));
     parsed.saveIntermediatePyramidLevels =
@@ -271,7 +294,9 @@ xjw::mvs::DepthGenConfig buildDepthGenConfig(const DenseGenerationSettings &sett
                                              int viewCount)
 {
     xjw::mvs::DepthGenConfig config;
+    config.qualityProfile = settings.qualityProfile.toStdString();
     config.numSourceViews = std::min(settings.minViews, viewCount - 1);
+    config.configuredSourceViewCount = config.numSourceViews;
     // This configuration is used by the interactive project workflow. Leave
     // one logical worker out of the historical eight-thread budget so Qt can
     // continue processing input, painting, progress, and cancellation events.

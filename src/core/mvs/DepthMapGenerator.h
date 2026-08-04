@@ -374,6 +374,7 @@ private:
     MvsSceneClassification _sceneClassification;
     MvsSceneProfile _effectiveSceneProfile = MvsSceneProfile::OrbitalObject;
     DepthFilterMode _effectiveDepthFilterMode = DepthFilterMode::Mild;
+    int _configuredSourceViewCount = 0;
     std::atomic<bool> _cancelled{false};
     QFuture<void> _backgroundFuture;
     std::string _outputDir;

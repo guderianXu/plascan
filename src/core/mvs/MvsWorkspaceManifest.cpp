@@ -67,6 +67,9 @@ QJsonObject MvsDepthFrameRecord::toJson() const
     }
     object.insert(QStringLiteral("source_indices"), source_indices);
     object.insert(QStringLiteral("source_plan"), sourcePlan);
+    object.insert(QStringLiteral("quality_profile"), qualityProfile);
+    object.insert(QStringLiteral("configured_source_view_count"),
+                  configuredSourceViewCount);
     object.insert(QStringLiteral("source_view_count"), sourceViewCount);
     object.insert(
         QStringLiteral("requested_source_view_count"), requestedSourceViewCount);
@@ -158,6 +161,11 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
         record.sourceIndices.push_back(value.toInt(-1));
     }
     record.sourcePlan = object.value(QStringLiteral("source_plan")).toArray();
+    record.qualityProfile = object.value(
+        QStringLiteral("quality_profile")).toString();
+    record.configuredSourceViewCount = object.value(
+        QStringLiteral("configured_source_view_count")).toInt(
+            object.value(QStringLiteral("requested_source_view_count")).toInt(0));
     record.sourceViewCount = object.value(QStringLiteral("source_view_count")).toInt(0);
     record.requestedSourceViewCount = object.value(
         QStringLiteral("requested_source_view_count")).toInt(record.sourceViewCount);
@@ -655,6 +663,12 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
     root.insert(QStringLiteral("view_count"), viewCount);
     root.insert(QStringLiteral("input_signature"),
                 QString::fromStdString(config.inputSignature));
+    root.insert(QStringLiteral("quality_profile"),
+                QString::fromStdString(config.qualityProfile));
+    root.insert(QStringLiteral("configured_source_view_count"),
+                config.configuredSourceViewCount > 0
+                    ? config.configuredSourceViewCount
+                    : config.numSourceViews);
     root.insert(QStringLiteral("num_source_views"), config.numSourceViews);
     root.insert(QStringLiteral("z_near_scale"), config.zNearScale);
     root.insert(QStringLiteral("z_far_scale"), config.zFarScale);

@@ -21,6 +21,24 @@ enum class DepthQualityProfile
 QString depthQualityProfileId(DepthQualityProfile profile);
 DepthQualityProfile depthQualityProfileFromId(const QString &profileId);
 int depthQualityDownsample(DepthQualityProfile profile);
+int depthQualityRank(const QString &profileId);
+QString depthQualityProfileForModelQuality(const QString &modelQuality);
+
+struct DepthQualityParameters
+{
+    double resScale = 0.25;
+    int iterations = 8;
+    int patchSize = 11;
+    int minViews = 6;
+    float patchMatchConfidence = 0.60f;
+    float fusionMinConfidence = 0.65f;
+    int minConsistentViews = 3;
+    float fusionRelDepthThreshold = 0.03f;
+    float depthConsistency = 1.5f;
+    float maxReprojError = 1.5f;
+};
+
+DepthQualityParameters depthQualityParameters(DepthQualityProfile profile);
 
 struct DenseGenerationSettings
 {

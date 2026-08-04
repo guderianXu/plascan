@@ -28,6 +28,7 @@ constexpr const char *kDisplay = "display";
 constexpr const char *kSupported = "supported";
 constexpr const char *kNote = "note";
 constexpr const char *kAutomaticDepthMaps = "automatic_depth_maps";
+constexpr const char *kDepthQualityProfile = "depth_quality_profile";
 
 QString defaultSourceLabel(const QString &sourceData)
 {
@@ -97,6 +98,50 @@ QString qualityProfile(const QString &quality)
     return QStringLiteral("balanced");
 }
 
+QString depthQualityDisplayName(const QString &profile)
+{
+    if (profile == QStringLiteral("highest")) return QStringLiteral("超高");
+    if (profile == QStringLiteral("high")) return QStringLiteral("高");
+    if (profile == QStringLiteral("low")) return QStringLiteral("低");
+    if (profile == QStringLiteral("lowest")) return QStringLiteral("最低");
+    return QStringLiteral("中");
+}
+
+QString depthQualityProfileForModelQuality(const QString &quality)
+{
+    if (quality == QStringLiteral("ultra")) return QStringLiteral("highest");
+    if (quality == QStringLiteral("high")) return QStringLiteral("high");
+    if (quality == QStringLiteral("low")) return QStringLiteral("low");
+    return QStringLiteral("medium");
+}
+
+int depthQualityRank(const QString &profile)
+{
+    if (profile == QStringLiteral("highest")) return 4;
+    if (profile == QStringLiteral("high")) return 3;
+    if (profile == QStringLiteral("low")) return 1;
+    if (profile == QStringLiteral("lowest")) return 0;
+    return 2;
+}
+
+struct DepthQualityDisplayParameters
+{
+    double resScale = 0.25;
+    int iterations = 8;
+    int patchSize = 11;
+    int minViews = 6;
+};
+
+DepthQualityDisplayParameters depthQualityDisplayParameters(
+    const QString &profile)
+{
+    if (profile == QStringLiteral("highest")) return {1.0, 16, 15, 8};
+    if (profile == QStringLiteral("high")) return {0.5, 12, 13, 7};
+    if (profile == QStringLiteral("low")) return {0.125, 4, 9, 3};
+    if (profile == QStringLiteral("lowest")) return {0.0625, 3, 7, 2};
+    return {};
+}
+
 } // namespace
 
 GenerateModelDialog::GenerateModelDialog(QWidget *parent)
@@ -150,6 +195,11 @@ GenerateModelDialog::GenerateModelDialog(QWidget *parent)
     _qualityCombo->addItem(tr("超高"), QStringLiteral("ultra"));
     _qualityCombo->setCurrentIndex(2);
 
+    _effectiveDepthQualityLabel = new QLabel(generalGroup);
+    _effectiveDepthQualityLabel->setObjectName(
+        QStringLiteral("effectiveDepthQualityLabel"));
+    _effectiveDepthQualityLabel->setWordWrap(true);
+
     _faceCountCombo->addItem(tr("低 (60,000)"), 60000);
     _faceCountCombo->addItem(tr("中 (120,000)"), 120000);
     _faceCountCombo->addItem(tr("高 (240,000)"), 240000);
@@ -159,6 +209,7 @@ GenerateModelDialog::GenerateModelDialog(QWidget *parent)
     generalForm->addRow(tr("源数据:"), _sourceCombo);
     generalForm->addRow(tr("表面类型:"), _surfaceTypeCombo);
     generalForm->addRow(tr("质量:"), _qualityCombo);
+    generalForm->addRow(tr("深度质量:"), _effectiveDepthQualityLabel);
     generalForm->addRow(tr("面数:"), _faceCountCombo);
     generalForm->addRow(QString(), _saveEachStepCheck);
     contentLayout->addWidget(generalGroup);
@@ -438,7 +489,10 @@ QJsonObject GenerateModelDialog::collectSettings() const
     settings[QStringLiteral("source_supported")] = candidate.value(QLatin1String(kSupported)).toBool(false);
     settings[QStringLiteral("surface_type")] = surfaceType;
     settings[QStringLiteral("quality")] = quality;
+    settings[QStringLiteral("modelQualityProfile")] = qualityProfile(quality);
     settings[QStringLiteral("qualityProfile")] = qualityProfile(quality);
+    settings[QStringLiteral("depthQualityProfile")] =
+        depthQualityProfileForModelQuality(quality);
     settings[QStringLiteral("octreeDepth")] = qualityOctreeDepth(quality);
     settings[QStringLiteral("meshResolution")] = qualityMeshResolution(quality);
     settings[QStringLiteral("targetFaces")] = targetFaces;
@@ -656,13 +710,48 @@ void GenerateModelDialog::updateAvailability()
     const QString sourceData = candidate.value(QLatin1String(kSourceData)).toString();
     const bool hasCandidate = !sourceData.isEmpty();
 
-    _reuseDepthMapsCheck->setEnabled(_hasReusableDepthMaps);
-    if (_hasReusableDepthMaps)
+    const QString requested_depth_quality =
+        depthQualityProfileForModelQuality(_qualityCombo->currentData().toString());
+    const auto depth_parameters = depthQualityDisplayParameters(
+        requested_depth_quality);
+    const QString stored_depth_quality = candidate.value(
+        QLatin1String(kDepthQualityProfile)).toString();
+    const bool stored_quality_known = !stored_depth_quality.isEmpty();
+    const bool stored_quality_sufficient = !stored_quality_known ||
+        depthQualityRank(stored_depth_quality) >=
+            depthQualityRank(requested_depth_quality);
+    const bool can_reuse_depth_maps =
+        _hasReusableDepthMaps && stored_quality_sufficient;
+
+    _effectiveDepthQualityLabel->setText(
+        tr("%1（比例 %2，%3 轮，%4×%4 邻域，配置源视角 %5）")
+            .arg(depthQualityDisplayName(requested_depth_quality))
+            .arg(depth_parameters.resScale, 0, 'g', 3)
+            .arg(depth_parameters.iterations)
+            .arg(depth_parameters.patchSize)
+            .arg(depth_parameters.minViews));
+    _effectiveDepthQualityLabel->setToolTip(
+        tr("场景分类和影像对质量仍可能限制实际源视角数；运行记录会同时保存配置值与实际值。"));
+
+    _reuseDepthMapsCheck->setEnabled(can_reuse_depth_maps);
+    if (_hasReusableDepthMaps && !stored_quality_sufficient)
+    {
+        _reuseDepthMapsRequested = false;
+        const QSignalBlocker blocker(_reuseDepthMapsCheck);
+        _reuseDepthMapsCheck->setChecked(false);
+        _reuseDepthMapsCheck->setToolTip(
+            tr("现有深度图质量为“%1”，低于当前请求的“%2”；将按当前质量重新计算。")
+                .arg(depthQualityDisplayName(stored_depth_quality),
+                     depthQualityDisplayName(requested_depth_quality)));
+    }
+    else if (_hasReusableDepthMaps)
     {
         const QSignalBlocker blocker(_reuseDepthMapsCheck);
         _reuseDepthMapsCheck->setChecked(_reuseDepthMapsRequested);
-        _reuseDepthMapsCheck->setToolTip(
-            tr("复用项目中已有且兼容的深度图，避免重复估计。"));
+        _reuseDepthMapsCheck->setToolTip(stored_quality_known
+            ? tr("复用质量为“%1”的兼容深度图。")
+                  .arg(depthQualityDisplayName(stored_depth_quality))
+            : tr("复用兼容深度图；旧批次未记录质量档位。"));
     }
     else
     {

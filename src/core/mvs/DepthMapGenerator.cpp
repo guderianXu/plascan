@@ -6822,6 +6822,10 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         artifact[QStringLiteral("source_images")] = sourceImages;
         artifact[QStringLiteral("source_indices")] = sourceIndices;
         artifact[QStringLiteral("source_plan")] = sourcePlan;
+        artifact[QStringLiteral("quality_profile")] =
+            QString::fromStdString(_config.qualityProfile);
+        artifact[QStringLiteral("configured_source_view_count")] =
+            _configuredSourceViewCount;
         artifact[QStringLiteral("source_view_count")] = sourceQualitySummary.sourceViewCount;
         artifact[QStringLiteral("requested_source_view_count")] = requestedSourceViewCount;
         artifact[QStringLiteral("source_view_shortfall")] = sourceViewShortfall;
@@ -6907,6 +6911,8 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             record.sourceIndices.push_back(source_value.toInt(-1));
         }
         record.sourcePlan = sourcePlan;
+        record.qualityProfile = QString::fromStdString(_config.qualityProfile);
+        record.configuredSourceViewCount = _configuredSourceViewCount;
         record.sourceViewCount = sourceQualitySummary.sourceViewCount;
         record.requestedSourceViewCount = requestedSourceViewCount;
         record.sourceViewShortfall = sourceViewShortfall;
@@ -7156,7 +7162,10 @@ void DepthMapGenerator::runInBackground()
             ? DepthFilterMode::Moderate
             : DepthFilterMode::Mild;
     }
-    const int configured_source_count = _config.numSourceViews;
+    const int configured_source_count = _config.configuredSourceViewCount > 0
+        ? _config.configuredSourceViewCount
+        : _config.numSourceViews;
+    _configuredSourceViewCount = configured_source_count;
     _config.numSourceViews = recommendedMvsSourceViewCount(
         _effectiveSceneProfile,
         _config.patchMatch.downsampleFactor,
