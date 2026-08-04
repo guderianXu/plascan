@@ -114,7 +114,7 @@ TEST(CameraSceneRenderContractTest, ForegroundImageOccludesGpuAndOverlaySceneCon
         QStringLiteral("visibleScene.subtracted(foregroundImageOcclusion)")));
     EXPECT_TRUE(overlayBlock.contains(
         QStringLiteral("painter.setClipPath(visibleScene, Qt::IntersectClip)")));
-    EXPECT_TRUE(overlayBlock.contains(QStringLiteral("drawPointCloudOverlay(painter);")));
+    EXPECT_FALSE(overlayBlock.contains(QStringLiteral("drawPointCloudOverlay(painter);")));
 }
 
 TEST(CameraSceneRenderContractTest, SolidCameraCardsUseDepthTestedGpuResourcesWhenThumbnailsAreDisabled)
@@ -350,7 +350,7 @@ TEST(CameraSceneRenderContractTest, TiePointModesUseMetadataAndDrawLegend)
         QStringLiteral("showTiePointCloudFile(path, sidecarPath)")));
 }
 
-TEST(CameraSceneRenderContractTest, TiePointOverlayHonorsCameraPlaneDepth)
+TEST(CameraSceneRenderContractTest, TiePointsUseGpuCameraPlaneDepth)
 {
     const QString sceneHeader =
         readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
@@ -365,7 +365,7 @@ TEST(CameraSceneRenderContractTest, TiePointOverlayHonorsCameraPlaneDepth)
         QStringLiteral("TiePointColorMode::ImageCount")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral("pointIsBehindProjectedQuad")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral("CameraImagePlaneAxes")));
-    EXPECT_TRUE(sceneSource.contains(QStringLiteral("drawPointCloudOverlay(painter);")));
+    EXPECT_FALSE(sceneSource.contains(QStringLiteral("drawPointCloudOverlay(painter);")));
 
     const qsizetype drawStart = sceneSource.indexOf(
         QStringLiteral("void CameraSceneWidget::drawSceneGeometry"));
@@ -515,35 +515,13 @@ TEST(CameraSceneRenderContractTest, ImportedPointCloudsUsePointCloudLoadersAndFi
     EXPECT_TRUE(uploadBlock.contains(QStringLiteral(
         "constexpr float pointColorScale = 1.0f / 255.0f")));
     EXPECT_FALSE(uploadBlock.contains(QStringLiteral("maximumColorComponent")));
-    EXPECT_TRUE(sceneHeader.contains(QStringLiteral(
-        "void drawPointCloudOverlay(QPainter &painter) const;")));
+    EXPECT_TRUE(uploadBlock.contains(QStringLiteral(
+        "assignBuffer(_modelPointBuffer, data, int(_cloud.size()), 9)")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral(
-        "if (_cloud.size() == 0 || _cloud.hasFaces())")));
-    EXPECT_FALSE(sceneSource.contains(QStringLiteral("maximumOverlayPointCount")));
-    EXPECT_FALSE(sceneSource.contains(QStringLiteral("pointStride")));
+        "drawRhiBuffer(cb, &_modelPointBuffer, &_modelPointPipeline, uniforms);")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral(
-        "for (std::size_t index = 0; index < _cloud.size(); ++index)")));
-    EXPECT_TRUE(sceneSource.contains(QStringLiteral("QColor::fromRgbF(")));
-    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
-        "constexpr float byteScale = 1.0f / 255.0f")));
-    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
-        "matrices.modelView.mapVector(QVector3D(")));
-    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
-        "lightScale = 0.25f + 0.55f * keyDiffuse + 0.20f * headDiffuse")));
-    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
-        "return qMin(255, ((channel + 8) >> 4) << 4)")));
-    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
-        "QImage::Format_ARGB32_Premultiplied")));
-    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
-        "if (ndc.z() < pointCloudDepth[pixelIndex])")));
-    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
-        "pointCloudImage.setPixelColor(pixelX, pixelY, color)")));
-    const qsizetype pointCloudDrawStart = sceneSource.indexOf(
-        QStringLiteral("drawPointCloudOverlay(painter);"));
-    const qsizetype gizmoDrawStart = sceneSource.indexOf(
-        QStringLiteral("drawRotationGizmo(painter);"), pointCloudDrawStart);
-    ASSERT_GE(pointCloudDrawStart, 0);
-    EXPECT_GT(gizmoDrawStart, pointCloudDrawStart);
+        "drawRhiBuffer(cb, &_pointBuffer, &_colorPointPipeline, uniforms);")));
+    EXPECT_FALSE(sceneSource.contains(QStringLiteral("drawPointCloudOverlay(painter);")));
 }
 
 TEST(CameraSceneRenderContractTest, PointCloudUsesOwnBoundsAndPixelSizedFloorPivot)
