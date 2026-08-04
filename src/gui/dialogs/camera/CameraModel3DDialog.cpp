@@ -790,7 +790,7 @@ CameraSceneWidget::CameraSceneWidget(QWidget *parent)
     : QRhiWidget(parent)
 {
     setApi(QRhiWidget::Api::Vulkan);
-    setSampleCount(4);
+    setSampleCount(1);
 
     setMinimumSize(240, 160);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -1027,6 +1027,7 @@ void CameraSceneWidget::clearProjectScene()
     ++_cameraImageLoadGeneration;
     _poses.clear();
     _cloud = RenderCloud();
+    updateSampleCountForGeometry();
     _isTiePointCloud = false;
     _tiePointImageCounts.clear();
     _tiePointMetadataLoading = false;
@@ -1161,6 +1162,7 @@ void CameraSceneWidget::setPointCloud(const RenderCloud &cloud)
 {
     cancelPendingLoad();
     _cloud = cloneRenderCloud(cloud);
+    updateSampleCountForGeometry();
     _isTiePointCloud = false;
     _tiePointImageCounts.clear();
     _tiePointMetadataLoading = false;
@@ -1238,6 +1240,7 @@ void CameraSceneWidget::loadPointCloudFromXyzInternal(const QString &xyzPath,
             if (result)
             {
                 self->_cloud = std::move(*result);
+                self->updateSampleCountForGeometry();
                 LOG_INFO(QStringLiteral("[3D] 点云加载完成，共 %1 点")
                     .arg(self->_cloud.size()));
                 self->invalidateCache();
@@ -1333,7 +1336,11 @@ void CameraSceneWidget::loadModelFromPlyInternal(const QString &plyPath,
         if (gen == self->_loadGen)
         {
             auto result = watcher->result();
-            if (result) self->_cloud = std::move(*result);
+            if (result)
+            {
+                self->_cloud = std::move(*result);
+                self->updateSampleCountForGeometry();
+            }
             if (!self->_isTiePointCloud && self->_cloud.hasColors())
             {
                 self->setModelColorMode(ModelColorMode::Texture);
@@ -1482,6 +1489,7 @@ void CameraSceneWidget::loadModelFromObjInternal(const QString &objPath,
             if (result.cloud)
             {
                 self->_cloud = std::move(*result.cloud);
+                self->updateSampleCountForGeometry();
                 self->_meshTextureImage = result.textureImage;
                 self->_meshTexturePath = result.texturePath;
                 self->_texturedMeshPipeline.uploadedTexturePath.clear();
@@ -2442,10 +2450,10 @@ void CameraSceneWidget::initialize(QRhiCommandBuffer *cb)
         return;
     }
 
-    _colorPointPipeline.vertexShaderPath = QStringLiteral(":/shaders/camera_scene_color.vert.qsb");
-    _colorPointPipeline.fragmentShaderPath = QStringLiteral(":/shaders/camera_scene_color.frag.qsb");
-    _colorLinePipeline.vertexShaderPath = _colorPointPipeline.vertexShaderPath;
-    _colorLinePipeline.fragmentShaderPath = _colorPointPipeline.fragmentShaderPath;
+    _colorPointPipeline.vertexShaderPath = QStringLiteral(":/shaders/camera_scene_point.vert.qsb");
+    _colorPointPipeline.fragmentShaderPath = QStringLiteral(":/shaders/camera_scene_point.frag.qsb");
+    _colorLinePipeline.vertexShaderPath = QStringLiteral(":/shaders/camera_scene_color.vert.qsb");
+    _colorLinePipeline.fragmentShaderPath = QStringLiteral(":/shaders/camera_scene_color.frag.qsb");
     _modelPointPipeline.vertexShaderPath = _colorPointPipeline.vertexShaderPath;
     _modelPointPipeline.fragmentShaderPath = _colorPointPipeline.fragmentShaderPath;
     _meshTrianglePipeline.vertexShaderPath = QStringLiteral(":/shaders/camera_scene_mesh.vert.qsb");
@@ -2518,6 +2526,18 @@ void CameraSceneWidget::resizeEvent(QResizeEvent *event)
     }
     _pipelinesDirty = true;
     _gpuDirty = true;
+}
+
+void CameraSceneWidget::updateSampleCountForGeometry()
+{
+    const int desired_sample_count = _cloud.hasFaces() ? 4 : 1;
+    if (sampleCount() == desired_sample_count)
+    {
+        return;
+    }
+
+    setSampleCount(desired_sample_count);
+    _pipelinesDirty = true;
 }
 
 void CameraSceneWidget::uploadGpuData()
@@ -2605,8 +2625,9 @@ void CameraSceneWidget::uploadGpuData()
             }
         }
 
+        const bool has_normals = _cloud.hasNormals();
         QVector<float> data;
-        data.reserve(static_cast<int>(_cloud.size()) * 6);
+        data.reserve(static_cast<int>(_cloud.size()) * 9);
         for (std::size_t i = 0; i < _cloud.size(); ++i) {
             const plamatrix::Index pointIndex = static_cast<plamatrix::Index>(i);
             const float x = _cloud.points()(pointIndex, 0);
@@ -2647,16 +2668,27 @@ void CameraSceneWidget::uploadGpuData()
                               1.0f);
             }
 
-            data << x << y << z << red << green << blue;
+            float normal_x = 0.0f;
+            float normal_y = 0.0f;
+            float normal_z = 0.0f;
+            if (has_normals)
+            {
+                normal_x = _cloud.normals()->getValue(pointIndex, 0);
+                normal_y = _cloud.normals()->getValue(pointIndex, 1);
+                normal_z = _cloud.normals()->getValue(pointIndex, 2);
+            }
+            data << x << y << z
+                 << normal_x << normal_y << normal_z
+                 << red << green << blue;
         }
         if (_preferModelPointRender && !_isTiePointCloud)
         {
-            assignBuffer(_modelPointBuffer, data, int(_cloud.size()), 6);
+            assignBuffer(_modelPointBuffer, data, int(_cloud.size()), 9);
             _modelPtCount = (int)_cloud.size();
         }
         else
         {
-            assignBuffer(_pointBuffer, data, int(_cloud.size()), 6);
+            assignBuffer(_pointBuffer, data, int(_cloud.size()), 9);
             _pointCount = (int)_cloud.size();
         }
     }
@@ -3834,16 +3866,16 @@ void CameraSceneWidget::render(QRhiCommandBuffer *cb)
 
     if (!ensurePipeline(&_colorPointPipeline,
                         int(QRhiGraphicsPipeline::Points),
-                        6 * int(sizeof(float)),
-                        false) ||
+                        9 * int(sizeof(float)),
+                        true) ||
         !ensurePipeline(&_colorLinePipeline,
                         int(QRhiGraphicsPipeline::Lines),
                         6 * int(sizeof(float)),
                         false) ||
         !ensurePipeline(&_modelPointPipeline,
                         int(QRhiGraphicsPipeline::Points),
-                        6 * int(sizeof(float)),
-                        false) ||
+                        9 * int(sizeof(float)),
+                        true) ||
         !ensurePipeline(&_meshTrianglePipeline,
                         int(QRhiGraphicsPipeline::Triangles),
                         _meshBuffer.strideBytes > 0
@@ -4285,9 +4317,8 @@ void CameraSceneWidget::paintOverlay(QPainter &painter)
         painter.setClipPath(visibleScene, Qt::IntersectClip);
     }
 
-    // 无面点云使用稳定的 QPainter 点样式；连接点还会按三维照片平面的
-    // 投影深度剔除被遮挡点，避免点云穿透相机缩略图。
-    drawPointCloudOverlay(painter);
+    // 点云完全由 Vulkan 点图元管线绘制；覆盖层只保留交互控件和文字，
+    // 避免在每帧中通过 QPainter 再次遍历全部点。
 
     if (_showCameras)
     {

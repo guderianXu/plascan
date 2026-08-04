@@ -7347,8 +7347,40 @@ TEST(CameraSceneWidgetTest, RegistersQrhiShaderResources)
     EXPECT_TRUE(guiCmake.contains(QStringLiteral("${CMAKE_CURRENT_SOURCE_DIR}/shaders")));
     EXPECT_TRUE(guiCmake.contains(QStringLiteral("shaders/camera_scene_color.vert")));
     EXPECT_TRUE(guiCmake.contains(QStringLiteral("shaders/camera_scene_color.frag")));
+    EXPECT_TRUE(guiCmake.contains(QStringLiteral("shaders/camera_scene_point.vert")));
+    EXPECT_TRUE(guiCmake.contains(QStringLiteral("shaders/camera_scene_point.frag")));
     EXPECT_TRUE(guiCmake.contains(QStringLiteral("shaders/camera_scene_mesh.vert")));
     EXPECT_TRUE(guiCmake.contains(QStringLiteral("shaders/camera_scene_mesh.frag")));
+}
+
+TEST(CameraSceneWidgetTest, PointCloudRenderingStaysOnVulkan)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString pointVertexShader = readProjectSourceFile(
+        QStringLiteral("src/gui/shaders/camera_scene_point.vert"));
+    const QString pointFragmentShader = readProjectSourceFile(
+        QStringLiteral("src/gui/shaders/camera_scene_point.frag"));
+    ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(pointVertexShader.isEmpty());
+    ASSERT_FALSE(pointFragmentShader.isEmpty());
+
+    const int overlayStart = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::paintOverlay(QPainter &painter)"));
+    ASSERT_GE(overlayStart, 0);
+    const int overlayEnd = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::drawTiePointLegend"), overlayStart);
+    ASSERT_GT(overlayEnd, overlayStart);
+    const QString overlayBody = source.mid(overlayStart, overlayEnd - overlayStart);
+
+    EXPECT_FALSE(overlayBody.contains(QStringLiteral("drawPointCloudOverlay(painter)")));
+    EXPECT_TRUE(source.contains(QStringLiteral(":/shaders/camera_scene_point.vert.qsb")));
+    EXPECT_TRUE(source.contains(QStringLiteral(":/shaders/camera_scene_point.frag.qsb")));
+    EXPECT_TRUE(source.contains(QStringLiteral("data.reserve(static_cast<int>(_cloud.size()) * 9)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_cloud.hasFaces() ? 4 : 1")));
+    EXPECT_TRUE(pointVertexShader.contains(QStringLiteral("layout(location = 1) in vec3 aNormal")));
+    EXPECT_TRUE(pointFragmentShader.contains(QStringLiteral("gl_PointCoord")));
+    EXPECT_TRUE(pointFragmentShader.contains(QStringLiteral("normalLengthSquared <= 1.0e-20")));
 }
 
 TEST(CameraSceneWidgetTest, ModelViewDoesNotDrawInvalidWorldOriginLabel)

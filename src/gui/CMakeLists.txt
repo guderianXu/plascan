@@ -48,6 +48,8 @@ if(PLASCAN_BUILD_GUI)
     FILES
       shaders/camera_scene_color.vert
       shaders/camera_scene_color.frag
+      shaders/camera_scene_point.vert
+      shaders/camera_scene_point.frag
       shaders/camera_scene_mesh.vert
       shaders/camera_scene_mesh.frag
       shaders/camera_scene_textured_mesh.vert

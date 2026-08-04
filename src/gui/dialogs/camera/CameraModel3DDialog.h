@@ -320,6 +320,8 @@ private:
 
     // 将点云和模型数据整理为 RHI 顶点缓冲，在 render 中按需上传。
     void uploadGpuData();
+    // 点云使用单采样，三角网格使用 4x MSAA；切换资源时重建匹配的管线。
+    void updateSampleCountForGeometry();
 
     // 当点云/模型数据变更后调用，标记缓存失效并重新计算
     void invalidateCache() const;
