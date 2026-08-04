@@ -24,6 +24,7 @@
 #include "reconstruction/CreateDemDialog.h"
 #include "reconstruction/MapProjectDialog.h"
 #include "application/WorkflowReportDialog.h"
+#include "camera/CameraCalibrationDialog.h"
 #include "camera/CameraConvertDialog.h"
 
 #include "settings/DialogSettingStore.h"
@@ -306,6 +307,7 @@ void MenuWorkflowController::bindActions(MainMenu *mainMenu)
     connectAction(mainMenu->createDEMAction(), &MenuWorkflowController::openCreateDemDialog);
     connectAction(mainMenu->generateOrthoAction(), &MenuWorkflowController::openMapProjectDialog);
     connectAction(mainMenu->viewWorkflowReportAction(), &MenuWorkflowController::openWorkflowReportDialog);
+    connectAction(mainMenu->cameraCalibrationAction(), &MenuWorkflowController::openCameraCalibrationDialog);
     connectAction(mainMenu->cameraConvertAction(), &MenuWorkflowController::openCameraConvertDialog);
 
     if (!_projectManager)
@@ -1919,4 +1921,23 @@ void MenuWorkflowController::openCameraConvertDialog()
     auto *dlg = new CameraConvertDialog(_mainWindow);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->show();
+}
+
+void MenuWorkflowController::openCameraCalibrationDialog()
+{
+    if (!_mainWindow)
+    {
+        return;
+    }
+
+    const QJsonObject metadata = _projectManager
+        ? _projectManager->currentMeta()
+        : QJsonObject();
+    const QString assetsDir = _projectManager
+        ? xjw::common::project::ProjectIO::projectAssetsDir(
+              _projectManager->currentProjectPath())
+        : QString();
+    auto *dialog = new CameraCalibrationDialog(metadata, assetsDir, _mainWindow);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->show();
 }

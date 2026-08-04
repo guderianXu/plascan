@@ -40,6 +40,8 @@
 #include "application/AboutDialog.h"
 #include "application/PythonRuntimeDialog.h"
 #include "camera/SurveyControlDialog.h"
+#include "camera/CameraCalibrationData.h"
+#include "camera/CameraCalibrationDialog.h"
 #include "image/GenerateMaskDialog.h"
 #include "reconstruction/GenerateModelDialog.h"
 #include "ModelDropSupport.h"
@@ -4927,6 +4929,121 @@ TEST(MainMenuTest, ToolsMenuExposesCameraConversionAction)
         }
     }
     EXPECT_TRUE(foundInToolsMenu);
+}
+
+TEST(MainMenuTest, ToolsMenuExposesCameraCalibrationAction)
+{
+    QMainWindow window;
+    MainMenu menu(&window);
+
+    QAction *action = menu.cameraCalibrationAction();
+    ASSERT_NE(action, nullptr);
+    EXPECT_EQ(action->objectName(), QStringLiteral("actionCameraCalibration"));
+    EXPECT_TRUE(action->text().contains(QStringLiteral("相机校准")));
+
+    QMenu *toolsMenu = findTopLevelMenuByTitle(window.menuBar(), QStringLiteral("工具"));
+    ASSERT_NE(toolsMenu, nullptr);
+    EXPECT_TRUE(toolsMenu->actions().contains(action));
+}
+
+TEST(CameraCalibrationDataTest, ReconstructsInitialAndAdjustedValuesFromLatestReport)
+{
+    const QString imagePath = QStringLiteral("D:/images/camera_001.jpg");
+    QJsonObject currentCamera{
+        {QStringLiteral("model"), QStringLiteral("tsai")},
+        {QStringLiteral("intrinsics_unit"), QStringLiteral("px")},
+        {QStringLiteral("image_width"), 6000},
+        {QStringLiteral("image_height"), 4000},
+        {QStringLiteral("fu"), 5800.0},
+        {QStringLiteral("fv"), 5798.0},
+        {QStringLiteral("cu"), 2998.0},
+        {QStringLiteral("cv"), 2001.0},
+        {QStringLiteral("k1"), -0.02},
+        {QStringLiteral("p1"), 0.0001}};
+    const QJsonObject metadata{
+        {QStringLiteral("images"), QJsonArray{
+            QJsonObject{{QStringLiteral("path"), imagePath},
+                        {QStringLiteral("camera"), currentCamera}}}}};
+    const QJsonObject report{
+        {QStringLiteral("camera_comparison"), QJsonArray{
+            QJsonObject{{QStringLiteral("path"), imagePath},
+                        {QStringLiteral("name"), QStringLiteral("camera_001.jpg")},
+                        {QStringLiteral("had_before"), true},
+                        {QStringLiteral("fu_before"), 5833.333},
+                        {QStringLiteral("fv_before"), 5833.333},
+                        {QStringLiteral("cu_before"), 3000.0},
+                        {QStringLiteral("cv_before"), 2000.0},
+                        {QStringLiteral("k1_before"), 0.0},
+                        {QStringLiteral("fu_after"), 5800.0}}}}};
+
+    const auto records = xjw::gui::camera_calibration::buildCameraCalibrationRecords(
+        metadata,
+        report);
+    ASSERT_EQ(records.size(), 1);
+    EXPECT_TRUE(records.front().hasInitial);
+    EXPECT_TRUE(records.front().hasAdjusted);
+    EXPECT_DOUBLE_EQ(records.front().initial.value(QStringLiteral("fu")).toDouble(), 5833.333);
+    EXPECT_DOUBLE_EQ(records.front().initial.value(QStringLiteral("k1")).toDouble(), 0.0);
+    EXPECT_DOUBLE_EQ(records.front().adjusted.value(QStringLiteral("fu")).toDouble(), 5800.0);
+    EXPECT_DOUBLE_EQ(records.front().adjusted.value(QStringLiteral("k1")).toDouble(), -0.02);
+    EXPECT_EQ(records.front().imageWidth, 6000);
+    EXPECT_EQ(records.front().imageHeight, 4000);
+}
+
+TEST(CameraCalibrationDialogTest, ProvidesInitialAndAdjustedPages)
+{
+    const QJsonObject camera{
+        {QStringLiteral("model"), QStringLiteral("tsai")},
+        {QStringLiteral("image_width"), 1200},
+        {QStringLiteral("image_height"), 800},
+        {QStringLiteral("fu"), 900.0},
+        {QStringLiteral("fv"), 900.0},
+        {QStringLiteral("cu"), 600.0},
+        {QStringLiteral("cv"), 400.0}};
+    const QJsonObject metadata{
+        {QStringLiteral("images"), QJsonArray{
+            QJsonObject{{QStringLiteral("path"), QStringLiteral("D:/images/one.jpg")},
+                        {QStringLiteral("camera"), camera}}}}};
+
+    CameraCalibrationDialog dialog(metadata, QString());
+    auto *tabs = dialog.findChild<QTabWidget *>(QStringLiteral("cameraCalibrationTabs"));
+    ASSERT_NE(tabs, nullptr);
+    ASSERT_EQ(tabs->count(), 2);
+    EXPECT_EQ(tabs->tabText(0), QStringLiteral("初始"));
+    EXPECT_EQ(tabs->tabText(1), QStringLiteral("调整"));
+    EXPECT_NE(dialog.findChild<QTableWidget *>(QStringLiteral("cameraCalibrationPhotos")), nullptr);
+}
+
+TEST(ProjectWorkflowReportsTest, PreservesCompleteCalibrationSnapshots)
+{
+    const QString imagePath = QStringLiteral("D:/images/camera_001.jpg");
+    const QJsonObject initialCamera{
+        {QStringLiteral("fu"), 1000.0},
+        {QStringLiteral("fv"), 1001.0},
+        {QStringLiteral("cu"), 500.0},
+        {QStringLiteral("cv"), 400.0},
+        {QStringLiteral("k1"), -0.01},
+        {QStringLiteral("p2"), 0.0002}};
+    QJsonObject adjustedCamera = initialCamera;
+    adjustedCamera[QStringLiteral("fu")] = 995.0;
+    adjustedCamera[QStringLiteral("k1")] = -0.015;
+    const QJsonObject baResult{
+        {QStringLiteral("camera_count"), 1},
+        {QStringLiteral("selected_images"), QJsonArray{imagePath}}};
+
+    const QJsonObject report = xjw::gui::project::buildBundleAdjustReport(
+        baResult,
+        QMap<QString, QJsonObject>{{imagePath, initialCamera}},
+        QMap<QString, QJsonObject>{{imagePath, adjustedCamera}});
+    const QJsonArray comparisons =
+        report.value(QStringLiteral("camera_comparison")).toArray();
+    ASSERT_EQ(comparisons.size(), 1);
+    const QJsonObject comparison = comparisons.at(0).toObject();
+    EXPECT_EQ(comparison.value(QStringLiteral("initial_camera")).toObject(), initialCamera);
+    EXPECT_EQ(comparison.value(QStringLiteral("adjusted_camera")).toObject(), adjustedCamera);
+    EXPECT_DOUBLE_EQ(comparison.value(QStringLiteral("k1_before")).toDouble(), -0.01);
+    EXPECT_DOUBLE_EQ(comparison.value(QStringLiteral("k1_after")).toDouble(), -0.015);
+    EXPECT_DOUBLE_EQ(comparison.value(QStringLiteral("p2_before")).toDouble(), 0.0002);
 }
 
 TEST(MainMenuTest, ToolsMenuExposesGenerateMaskAction)

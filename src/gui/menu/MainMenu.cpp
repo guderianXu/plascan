@@ -1252,6 +1252,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         _manualPointCloudPruneAct = findNamedChild<QAction>(_mainWindow, "actionManualPointCloudPrune");
         _generateMaskAct = findNamedChild<QAction>(_mainWindow, "actionGenerateMask");
         _viewWorkflowReportAct = findNamedChild<QAction>(_mainWindow, "actionViewWorkflowReport");
+        _cameraCalibrationAct = findNamedChild<QAction>(_mainWindow, "actionCameraCalibration");
         _cameraConvertAct = findNamedChild<QAction>(_mainWindow, "actionCameraConvert");
         _surveyControlAct = findNamedChild<QAction>(_mainWindow, "actionSurveyControl");
         _detectMarkersAct = findNamedChild<QAction>(_mainWindow, "actionDetectMarkers");
@@ -1407,6 +1408,29 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
             }
         }
         installModelDisplayMenu(modelMenu);
+        if (!_cameraCalibrationAct)
+        {
+            QObject *actionParent = toolsMenu
+                ? static_cast<QObject *>(toolsMenu)
+                : static_cast<QObject *>(_mainWindow);
+            _cameraCalibrationAct = new QAction(tr("相机校准..."), actionParent);
+            _cameraCalibrationAct->setObjectName(QStringLiteral("actionCameraCalibration"));
+            _cameraCalibrationAct->setToolTip(tr("查看空中三角测量前后的相机内参及变化量"));
+            if (toolsMenu)
+            {
+                QAction *before = _cameraConvertAct
+                    ? _cameraConvertAct
+                    : _viewWorkflowReportAct;
+                if (before)
+                {
+                    toolsMenu->insertAction(before, _cameraCalibrationAct);
+                }
+                else
+                {
+                    toolsMenu->addAction(_cameraCalibrationAct);
+                }
+            }
+        }
         if (!_cameraConvertAct)
         {
             QObject *actionParent = toolsMenu
@@ -1846,8 +1870,11 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     _generateMaskAct->setObjectName(QStringLiteral("actionGenerateMask"));
     _generateMaskAct->setToolTip(tr("根据照片背景或阈值生成蒙版，并在照片视图中显示轮廓"));
 
-    // 相机格式转换：外部 benchmark/摄影测量相机 -> tsai + image_camera.lis
+    // 相机校准只读对比，以及外部相机格式转换。
     toolsMenu->addSeparator();
+    _cameraCalibrationAct = toolsMenu->addAction(tr("相机校准..."));
+    _cameraCalibrationAct->setObjectName(QStringLiteral("actionCameraCalibration"));
+    _cameraCalibrationAct->setToolTip(tr("查看空中三角测量前后的相机内参及变化量"));
     _cameraConvertAct = toolsMenu->addAction(tr("相机格式转换..."));
 
     // 参考数据：外部 DEM/LiDAR 只登记引用，用于精度检查和后续 BA 软约束
@@ -2254,6 +2281,7 @@ QAction *MainMenu::thinTiePointsAction() const             { return _thinTiePoin
 QAction *MainMenu::cleanTiePointsAction() const            { return _cleanTiePointsAct; }
 QAction *MainMenu::viewTiePointMatchesAction() const       { return _viewTiePointMatchesAct; }
 QAction *MainMenu::manualPointCloudPruneAction() const      { return _manualPointCloudPruneAct; }
+QAction *MainMenu::cameraCalibrationAction() const          { return _cameraCalibrationAct; }
 QAction *MainMenu::cameraConvertAction() const              { return _cameraConvertAct; }
 QAction *MainMenu::generateMaskAction() const               { return _generateMaskAct; }
 QAction *MainMenu::surveyControlAction() const              { return _surveyControlAct; }

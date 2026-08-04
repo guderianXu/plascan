@@ -16,6 +16,10 @@ set(GUI_APPLICATION_DIALOG_SOURCES
 )
 
 set(GUI_CAMERA_DIALOG_SOURCES
+  dialogs/camera/CameraCalibrationData.cpp
+  dialogs/camera/CameraCalibrationData.h
+  dialogs/camera/CameraCalibrationDialog.cpp
+  dialogs/camera/CameraCalibrationDialog.h
   dialogs/camera/CameraConvertDialog.cpp
   dialogs/camera/CameraConvertDialog.h
   dialogs/camera/CameraModel3DDialog.cpp

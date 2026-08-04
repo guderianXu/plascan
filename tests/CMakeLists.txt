@@ -546,6 +546,8 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/image/GenerateMaskDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/GenerateModelDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/shared/WorkflowParameterDialogStyle.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/camera/CameraCalibrationData.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/camera/CameraCalibrationDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/camera/SurveyControlDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/tie_points/CreateTiePointsDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/tie_points/ThinTiePointsDialog.cpp

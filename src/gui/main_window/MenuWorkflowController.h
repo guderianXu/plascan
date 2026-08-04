@@ -78,6 +78,9 @@ public slots:
     /// 打开通用相机格式转换对话框。
     void openCameraConvertDialog();
 
+    /// 打开只读相机校准对比窗口，查看空三前后的内参变化。
+    void openCameraCalibrationDialog();
+
 signals:
     /// 请求 MainWindow 将新的特征点显示选项应用到 CanvasWidget。
     /// @param opts 特征点显示选项，如颜色、尺寸、形状和透明度等。

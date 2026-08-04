@@ -67,6 +67,8 @@ QJsonObject buildBundleAdjustReport(const QJsonObject &baResult,
         entry[QStringLiteral("name")] = QFileInfo(normPath).fileName();
         entry[QStringLiteral("path")] = normPath;
         entry[QStringLiteral("had_before")] = !before.isEmpty();
+        entry[QStringLiteral("initial_camera")] = before;
+        entry[QStringLiteral("adjusted_camera")] = after;
         entry[QStringLiteral("fu_before")] = before.value(QStringLiteral("fu")).toDouble();
         entry[QStringLiteral("fu_after")] = after.value(QStringLiteral("fu")).toDouble();
         entry[QStringLiteral("fv_before")] = before.value(QStringLiteral("fv")).toDouble();
@@ -75,6 +77,13 @@ QJsonObject buildBundleAdjustReport(const QJsonObject &baResult,
         entry[QStringLiteral("cu_after")] = after.value(QStringLiteral("cu")).toDouble();
         entry[QStringLiteral("cv_before")] = before.value(QStringLiteral("cv")).toDouble();
         entry[QStringLiteral("cv_after")] = after.value(QStringLiteral("cv")).toDouble();
+        for (const QString &parameter : {
+                 QStringLiteral("k1"), QStringLiteral("k2"), QStringLiteral("k3"),
+                 QStringLiteral("p1"), QStringLiteral("p2")})
+        {
+            entry[parameter + QStringLiteral("_before")] = before.value(parameter);
+            entry[parameter + QStringLiteral("_after")] = after.value(parameter);
+        }
         entry[QStringLiteral("C_before")] = cB;
         entry[QStringLiteral("C_after")] = cA;
         entry[QStringLiteral("yaw_before")] = before.value(QStringLiteral("yaw_deg")).toDouble();
