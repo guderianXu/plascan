@@ -452,6 +452,11 @@ void enforceObservationOnlySurfacePolicy(
     options->allowInvalidNearestPixelRecovery = false;
     options->adaptiveTgvRecoverUnsupportedSamples = false;
     options->implicitRegularizationRecoverAxialGaps = false;
+    // Observation-only output is expected to retain genuine gaps in the
+    // measured surface. Keep completeness diagnostics for the report, but do
+    // not reject an otherwise usable mesh against thresholds designed for a
+    // completed/interpolated surface.
+    options->enforceDepthCompletenessGate = false;
     // "No interpolation" disables every source of synthetic geometry above,
     // but it must still allow the iso-surface extractor to interpolate a zero
     // crossing inside the already fused TSDF cell. Requiring both signs to

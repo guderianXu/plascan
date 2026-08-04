@@ -7117,6 +7117,8 @@ TEST(MeshWorkflowSettingsTest,
     EXPECT_FALSE(options.allowInvalidNearestPixelRecovery);
     EXPECT_FALSE(options.adaptiveTgvRecoverUnsupportedSamples);
     EXPECT_FALSE(options.implicitRegularizationRecoverAxialGaps);
+    EXPECT_TRUE(options.enableDepthCompletenessDiagnostics);
+    EXPECT_FALSE(options.enforceDepthCompletenessGate);
     EXPECT_FALSE(options.mc33RequireSupportedSignChange);
 }
 
@@ -7151,6 +7153,8 @@ TEST(MeshWorkflowSettingsTest,
     EXPECT_FALSE(options.allowInvalidNearestPixelRecovery);
     EXPECT_FALSE(options.adaptiveTgvRecoverUnsupportedSamples);
     EXPECT_FALSE(options.implicitRegularizationRecoverAxialGaps);
+    EXPECT_TRUE(options.enableDepthCompletenessDiagnostics);
+    EXPECT_FALSE(options.enforceDepthCompletenessGate);
     EXPECT_FALSE(options.mc33RequireSupportedSignChange);
 }
 
