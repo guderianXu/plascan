@@ -167,9 +167,17 @@ TEST(BundleAdjustBackendSelectionTest, LargeSharedRadialProblemUsesCeresCudaWhen
         EXPECT_EQ(decision.backend, xjw::BABackend::CeresCuda);
         EXPECT_EQ(decision.reason, "large_joint_shared_intrinsics_uses_ceres_cuda");
     }
-    else
+    else if (xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
     {
         EXPECT_EQ(decision.backend, xjw::BABackend::CeresCpu);
+        EXPECT_EQ(decision.reason, "joint_shared_intrinsics_requires_ceres");
+    }
+    else
+    {
+        // 无 Ceres 的构建只能让自动选择回到 LegacyCpu；实际求解入口随后会
+        // 明确拒绝 LegacyCpu 不支持的共享径向畸变优化，不会静默忽略参数。
+        EXPECT_EQ(decision.backend, xjw::BABackend::LegacyCpu);
+        EXPECT_EQ(decision.reason, "below_accelerated_problem_size");
     }
 }
 
