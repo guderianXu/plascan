@@ -100,7 +100,7 @@ public:
                                         const QString &level2Reason = {},
                                         const QString &level3Reason = {});
 
-    // ==== 文件/项目菜单动作 ====
+    // ==== 文件菜单动作 ====
 
     /** @brief 返回"新建项目"动作。 */
     QAction *newAction() const;
@@ -192,6 +192,12 @@ public:
     /** @brief 返回"添加文件夹"动作（批量导入目录内的所有图片）。 */
     QAction *addFolderAction() const;
 
+    /** @brief 返回“文件 / 导入 / 导入点云”动作。 */
+    QAction *importPointCloudAction() const;
+
+    /** @brief 返回“文件 / 导入 / 导入模型”动作。 */
+    QAction *importModelAction() const;
+
     /** @brief 返回"特征点可视化设置"对话框动作。 */
     QAction *featureVisualizationAction() const;
 
@@ -276,7 +282,7 @@ private:
     /** @brief 主工具栏，供外部追加快捷操作按钮。 */
     QToolBar *_toolBar{};
 
-    /** @brief "项目"顶级菜单（原名"文件"）。 */
+    /** @brief “文件”顶级菜单。 */
     QMenu *_fileMenu{};
 
     /** @brief "最近打开"子菜单，内容由 setRecentProjects 动态重建。 */
@@ -297,10 +303,12 @@ private:
     /** @brief "工具 / 标记"子菜单。 */
     QMenu *_markersMenu{};
 
-    // ---- 项目菜单中的固定动作 ----
+    // ---- 文件菜单中的固定动作 ----
     QAction *_newAct{};   ///< 新建项目
     QAction *_openAct{};  ///< 打开项目
     QAction *_saveAct{};  ///< 保存项目
+    QAction *_importPointCloudAct{}; ///< 导入 Metashape/通用点云
+    QAction *_importModelAct{}; ///< 导入 Metashape/通用模型
     QAction *_minimizeAct{}; ///< 最小化窗口
     QAction *_exitAct{};  ///< 退出应用
     QAction *_updatePythonRuntimeAct{}; ///< 下载或更新 PlaScan 管理的 Python 环境

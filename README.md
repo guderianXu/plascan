@@ -170,6 +170,11 @@ name.files/
 不会自动迁移。格式细节见
 [`docs/project/PLASCAN_PROJECT_FORMAT.md`](docs/project/PLASCAN_PROJECT_FORMAT.md)。
 
+`文件 -> 导入` 提供两个工程级入口：`导入点云...` 接受 Metashape/通用 OBJ、PLY、XYZ，
+`导入模型...` 接受 OBJ、PLY，并自动复制 OBJ 的 MTL 与纹理依赖。导入成果进入当前 Chunk 的
+`assets/imported` 并登记到工作区，可直接参与模型查看、DEM 和点云 DOM 流程；Metashape
+专有 `.psx/.oc3` 不直接读取，应先在 Metashape 中导出标准文件。
+
 ### GUI 一键工作流
 
 GUI 的 `工作流程` 菜单按处理阶段提供互相独立的工程入口：

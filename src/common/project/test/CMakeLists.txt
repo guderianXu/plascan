@@ -15,6 +15,13 @@ target_link_libraries(test_common_project_metadata PRIVATE
 )
 gtest_discover_tests(test_common_project_metadata DISCOVERY_MODE PRE_TEST)
 
+add_executable(test_project_asset_importer test_project_asset_importer.cpp)
+target_link_libraries(test_project_asset_importer PRIVATE
+  plascan_common_project
+  GTest::gtest_main
+)
+gtest_discover_tests(test_project_asset_importer DISCOVERY_MODE PRE_TEST)
+
 add_executable(test_common_project_camera_io test_project_camera_io.cpp)
 target_link_libraries(test_common_project_camera_io PRIVATE
   plascan_common_project

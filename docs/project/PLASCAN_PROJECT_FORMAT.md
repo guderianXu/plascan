@@ -112,7 +112,7 @@ doc.json
 新建但尚未处理的 Chunk 不包含空的工作流目录：
 
 ```text
-assets/{matches,tie_points,control_points,imported}
+assets/{matches,tie_points,control_points,imported/{point_clouds,models}}
 reconstruction/{sparse,mvs,model,terrain/products}
 bundle_adjust/
 reports/
@@ -317,7 +317,7 @@ Python、CUDA、模型搜索目录等机器相关配置不能写成工程资源�
 显式保存步骤：
 
 1. 影像复制到工程级共享库；其他外部文件复制到当前 Chunk 的
-   `assets/imported/<stable-token>/`。
+   `assets/imported/<type>/<name_uuid>/`。
 2. 核心和结果元数据中的路径改写为项目 URI。
 3. 从元数据引用集合增量更新资源索引；大小和修改时间未变化时复用已有 SHA-256。
 4. 将核心、结果、配置和资源索引合并成完整 Chunk `doc.json`。
@@ -331,6 +331,27 @@ Chunk 内尚未创建的计划路径也会转换为项目 URI。外部目录不�
 同一个工程。
 
 删除项目影像或资源时会删除 `.files` 中对应文件并更新索引。
+
+## 外部点云与模型导入
+
+“文件 → 导入 → 导入点云/导入模型”面向 Metashape 等软件已经导出的标准成果，不读取
+Metashape 的 `.psx`、`.files`、`.oc3` 内部数据。点云支持 OBJ、PLY、XYZ；模型支持带面的
+OBJ、PLY。OBJ 中的 `mtllib` 及 MTL 引用的常见纹理会在不越出源目录的前提下保持相对路径，
+一并复制到当前 Chunk。
+
+点云登记到 `project_results.dense_cloud_results[]`，主路径键为 `dense_cloud_xyz`；模型登记到
+`project_results.model_results[]`，主路径键为 `final_model_path`，并按格式补充 `model_obj` 或
+`model_ply`。两类记录共用以下导入字段：
+
+- `source: "metashape_import"`、`imported: true`：标识外部标准成果导入；
+- `source_file_name`、`import_format`：只保留源文件名和格式，不保存原电脑绝对路径；
+- `import_directory`、`imported_dependencies[]`：工程内主文件、MTL 和纹理的完整引用集合；
+- `vertex_count`、`face_count`、`has_vertex_colors`：扫描文件得到的实际统计；
+- 模型另含 `has_material`、`textured`，并在存在时写入 `model_mtl`、`texture_image`。
+
+删除工作区中的对应“稠密点云”或“3D模型”结果时，清理服务会删除上述依赖并逐层移除空导入
+目录。点云记录可被现有 DEM 与正射对话框直接选择；带 RGB 的点云可生成局部平面或小天体全球
+投影 DOM。
 
 ## CLI 工程会话
 

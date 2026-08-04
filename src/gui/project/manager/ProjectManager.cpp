@@ -8,6 +8,7 @@
 #include "ProjectCameraSetupManager.h"
 #include "ProjectUiCommands.h"
 #include "ProjectData.h"
+#include "project/ProjectAssetImporter.h"
 #include "project/ProjectIO.h"
 #include "ProjectCameraIO.h"
 #include "project/ProjectMatchCatalog.h"
@@ -524,6 +525,134 @@ void ProjectManager::addFolder()
             {
                 QMessageBox::information(self->_parent, QStringLiteral("提示"), error);
             }
+        });
+}
+
+void ProjectManager::importPointCloud()
+{
+    importProjectAsset(false);
+}
+
+void ProjectManager::importModel()
+{
+    importProjectAsset(true);
+}
+
+void ProjectManager::importProjectAsset(bool modelAsset)
+{
+    const QString assetName = modelAsset ? QStringLiteral("模型") : QStringLiteral("点云");
+    const QString dialogTitle = QStringLiteral("导入 Metashape %1").arg(assetName);
+    if (!ensureProjectOpen(QStringLiteral("请先打开或创建项目，再导入%1。").arg(assetName),
+                           dialogTitle))
+    {
+        return;
+    }
+
+    const QString dialogKey = modelAsset
+        ? QStringLiteral("import_model")
+        : QStringLiteral("import_point_cloud");
+    const QString filter = modelAsset
+        ? QStringLiteral("Metashape/通用模型 (*.obj *.ply);;OBJ 模型 (*.obj);;"
+                         "PLY 模型 (*.ply);;所有文件 (*)")
+        : QStringLiteral("Metashape/通用点云 (*.obj *.ply *.xyz);;OBJ 点云 (*.obj);;"
+                         "PLY 点云 (*.ply);;XYZ 点云 (*.xyz);;所有文件 (*)");
+    const QString selectedPath = QFileDialog::getOpenFileName(
+        _parent,
+        dialogTitle,
+        getLastUsedDir(dialogKey),
+        filter);
+    if (selectedPath.isEmpty())
+    {
+        return;
+    }
+    saveLastUsedDir(dialogKey, QFileInfo(selectedPath).absolutePath());
+
+    xjw::common::project::ProjectAssetImportRequest request;
+    request.type = modelAsset
+        ? xjw::common::project::ProjectAssetType::Model
+        : xjw::common::project::ProjectAssetType::PointCloud;
+    request.sourcePath = selectedPath;
+    request.projectRoot = xjw::common::project::ProjectIO::projectRootFromPlascan(
+        currentProjectPath());
+    const auto session = currentSessionContext();
+
+    xjw::gui::tasks::runGuardedWithOutcome(
+        this,
+        [request]()
+        {
+            return xjw::common::project::ProjectAssetImporter::importAsset(request);
+        },
+        [dialogTitle, modelAsset, session](
+            ProjectManager *self,
+            xjw::gui::tasks::TaskOutcome<
+                xjw::common::project::ProjectAssetImportResult> outcome)
+        {
+            if (!self || !self->_projectData)
+            {
+                return;
+            }
+            if (!self->isCurrentSession(session))
+            {
+                if (outcome.succeeded() && outcome.value->success)
+                {
+                    QDir(outcome.value->importDirectory).removeRecursively();
+                }
+                return;
+            }
+            if (!outcome.succeeded())
+            {
+                QMessageBox::critical(self->_parent,
+                                      dialogTitle,
+                                      QStringLiteral("导入失败: %1")
+                                          .arg(outcome.errorMessage));
+                return;
+            }
+
+            const xjw::common::project::ProjectAssetImportResult result =
+                std::move(*outcome.value);
+            if (!result.success)
+            {
+                QMessageBox::critical(self->_parent,
+                                      dialogTitle,
+                                      result.errorMessage.isEmpty()
+                                          ? QStringLiteral("导入失败。")
+                                          : result.errorMessage);
+                return;
+            }
+
+            if (!self->_projectData->upsertResultRecordByPath(
+                    result.resultArrayKey,
+                    result.resultPathKey,
+                    result.projectRecord,
+                    true))
+            {
+                QDir(result.importDirectory).removeRecursively();
+                QMessageBox::critical(self->_parent,
+                                      dialogTitle,
+                                      QStringLiteral("资源已读取，但无法写入项目成果记录。"));
+                return;
+            }
+
+            QString message = QStringLiteral("已导入 %1\n%2\n顶点/点数: %3")
+                                  .arg(modelAsset ? QStringLiteral("模型")
+                                                  : QStringLiteral("点云"),
+                                       result.importedPath)
+                                  .arg(result.vertexCount);
+            if (modelAsset)
+            {
+                message.append(QStringLiteral("\n面数: %1").arg(result.faceCount));
+            }
+            if (!result.warnings.isEmpty())
+            {
+                message.append(QStringLiteral("\n\n注意:\n%1")
+                                   .arg(result.warnings.join(QLatin1Char('\n'))));
+            }
+            QMessageBox::information(self->_parent, dialogTitle, message);
+            LOG_INFO(QStringLiteral("Metashape %1已导入: %2 -> %3")
+                         .arg(modelAsset ? QStringLiteral("模型")
+                                         : QStringLiteral("点云"),
+                              result.sourcePath,
+                              result.importedPath));
         });
 }
 

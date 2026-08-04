@@ -434,6 +434,20 @@ void MainWindow::setupProjectManager()
         {
             connect(_mainMenu->addFolderAction(), &QAction::triggered, _projectManager, &ProjectManager::addFolder);
         }
+        if (_mainMenu->importPointCloudAction())
+        {
+            connect(_mainMenu->importPointCloudAction(),
+                    &QAction::triggered,
+                    _projectManager,
+                    &ProjectManager::importPointCloud);
+        }
+        if (_mainMenu->importModelAction())
+        {
+            connect(_mainMenu->importModelAction(),
+                    &QAction::triggered,
+                    _projectManager,
+                    &ProjectManager::importModel);
+        }
         if (_mainMenu->saveAction())
         {
             _mainMenu->saveAction()->setEnabled(false);

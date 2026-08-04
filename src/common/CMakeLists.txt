@@ -33,6 +33,8 @@ add_library(plascan_common_project STATIC
   project/AspMatchPointReader.cpp
   project/PlascanArchive.cpp
   project/ProjectArtifactIO.cpp
+  project/ProjectAssetInspection.cpp
+  project/ProjectAssetImporter.cpp
   project/ProjectArchivePath.cpp
   project/ProjectChunkStore.cpp
   project/ProjectChunkIndex.cpp

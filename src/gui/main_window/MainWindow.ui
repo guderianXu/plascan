@@ -86,7 +86,7 @@
    </property>
    <widget class="QMenu" name="menuProject">
     <property name="title">
-     <string>项目</string>
+     <string>文件</string>
     </property>
     <widget class="QMenu" name="menuRecentProjects">
      <property name="title">
@@ -99,10 +99,19 @@
      </property>
      <addaction name="actionExportMatchedPairs"/>
     </widget>
+    <widget class="QMenu" name="menuImport">
+     <property name="title">
+      <string>导入</string>
+     </property>
+     <addaction name="actionImportPointCloud"/>
+     <addaction name="actionImportModel"/>
+    </widget>
     <addaction name="actionNewProject"/>
     <addaction name="actionOpenProject"/>
     <addaction name="menuRecentProjects"/>
     <addaction name="actionSaveProject"/>
+    <addaction name="separator"/>
+    <addaction name="menuImport"/>
     <addaction name="menuExport"/>
     <addaction name="separator"/>
     <addaction name="actionMinimize"/>
@@ -395,6 +404,22 @@
   <action name="actionAbout">
    <property name="text">
     <string>关于</string>
+   </property>
+  </action>
+  <action name="actionImportPointCloud">
+   <property name="text">
+    <string>导入点云...</string>
+   </property>
+   <property name="toolTip">
+    <string>导入 Metashape 导出的 OBJ、PLY 或 XYZ 点云</string>
+   </property>
+  </action>
+  <action name="actionImportModel">
+   <property name="text">
+    <string>导入模型...</string>
+   </property>
+   <property name="toolTip">
+    <string>导入 Metashape 导出的 OBJ 或 PLY 模型，并复制材质和纹理</string>
    </property>
   </action>
   <action name="actionUpdatePythonRuntime">

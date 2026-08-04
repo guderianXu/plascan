@@ -405,7 +405,7 @@ QIcon makePointCloudPruneToolbarIcon()
  * @brief 构造函数：在 mainWindow 上创建所有菜单项和工具栏。
  *
  * 菜单创建顺序（与菜单栏从左到右排列一致）：
- *   1. 项目菜单（新建、打开、最近打开子菜单、保存、退出）
+ *   1. 文件菜单（项目生命周期、点云/模型导入、导出、退出）
  *   2. 视图菜单（缩放、可视化设置、窗口面板子菜单）
  *   3. 工作流程菜单（空三、模型、DEM、正射影像）
  *   4. 工具菜单（连接点、重叠度、交汇、报告）
@@ -1053,16 +1053,42 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     if (findNamedChild<QAction>(_mainWindow, "actionNewProject"))
     {
         _fileMenu = findNamedChild<QMenu>(_mainWindow, "menuProject");
+        if (_fileMenu)
+        {
+            _fileMenu->setTitle(tr("文件"));
+        }
         _recentMenu = findNamedChild<QMenu>(_mainWindow, "menuRecentProjects");
         auto *viewMenu = findNamedChild<QMenu>(_mainWindow, "menuView");
         auto *windowMenu = findNamedChild<QMenu>(_mainWindow, "menuWindow");
         auto *workflowMenu = findNamedChild<QMenu>(_mainWindow, "menuWorkflow");
         auto *toolsMenu = findNamedChild<QMenu>(_mainWindow, "menuTools");
         auto *modelMenu = findNamedChild<QMenu>(_mainWindow, "menuModel");
+        auto *exportMenu = findNamedChild<QMenu>(_mainWindow, "menuExport");
 
         _newAct = findNamedChild<QAction>(_mainWindow, "actionNewProject");
         _openAct = findNamedChild<QAction>(_mainWindow, "actionOpenProject");
         _saveAct = findNamedChild<QAction>(_mainWindow, "actionSaveProject");
+        QMenu *importMenu = ensureSubMenu(_mainWindow,
+                                          _fileMenu,
+                                          QStringLiteral("menuImport"),
+                                          tr("导入"),
+                                          exportMenu ? exportMenu->menuAction() : nullptr);
+        _importPointCloudAct = ensurePlainAction(
+            _mainWindow,
+            importMenu,
+            importMenu,
+            QStringLiteral("actionImportPointCloud"),
+            tr("导入点云..."));
+        _importPointCloudAct->setToolTip(
+            tr("导入 Metashape 导出的 OBJ、PLY 或 XYZ 点云"));
+        _importModelAct = ensurePlainAction(
+            _mainWindow,
+            importMenu,
+            importMenu,
+            QStringLiteral("actionImportModel"),
+            tr("导入模型..."));
+        _importModelAct->setToolTip(
+            tr("导入 Metashape 导出的 OBJ 或 PLY 模型，并复制材质和纹理"));
         _exportMatchedPairsAct = findNamedChild<QAction>(_mainWindow, "actionExportMatchedPairs");
         _minimizeAct = findNamedChild<QAction>(_mainWindow, "actionMinimize");
         _exitAct = findNamedChild<QAction>(_mainWindow, "actionExit");
@@ -1629,9 +1655,9 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         return;
     }
 
-    // ---- 项目菜单 ----
-    // 创建顶级"项目"菜单并依次添加固定动作
-    _fileMenu = _mainWindow->menuBar()->addMenu(tr("项目"));
+    // ---- 文件菜单 ----
+    // 创建顶级“文件”菜单并依次添加项目与导入导出动作。
+    _fileMenu = _mainWindow->menuBar()->addMenu(tr("文件"));
     _newAct   = _fileMenu->addAction(tr("新建项目"));
     _openAct  = _fileMenu->addAction(tr("打开项目"));
     _saveAct  = _fileMenu->addAction(tr("保存项目"));
@@ -1639,6 +1665,17 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     // "最近打开"子菜单插入到"保存项目"之前，保持菜单项顺序符合直觉
     _recentMenu = new QMenu(tr("最近打开"), _fileMenu);
     _fileMenu->insertMenu(_saveAct, _recentMenu);
+
+    _fileMenu->addSeparator();
+    auto *importMenu = _fileMenu->addMenu(tr("导入"));
+    _importPointCloudAct = importMenu->addAction(tr("导入点云..."));
+    _importPointCloudAct->setObjectName(QStringLiteral("actionImportPointCloud"));
+    _importPointCloudAct->setToolTip(
+        tr("导入 Metashape 导出的 OBJ、PLY 或 XYZ 点云"));
+    _importModelAct = importMenu->addAction(tr("导入模型..."));
+    _importModelAct->setObjectName(QStringLiteral("actionImportModel"));
+    _importModelAct->setToolTip(
+        tr("导入 Metashape 导出的 OBJ 或 PLY 模型，并复制材质和纹理"));
 
     auto *exportMenu = _fileMenu->addMenu(tr("导出"));
     _exportMatchedPairsAct = exportMenu->addAction(tr("导出匹配对(.lis)"));
@@ -2197,6 +2234,8 @@ QAction *MainMenu::toggleHenanUniversityBrandAction() const { return _toggleHena
 
 QAction *MainMenu::addPhotoAction() const       { return _addPhotoAct; }
 QAction *MainMenu::addFolderAction() const      { return _addFolderAct; }
+QAction *MainMenu::importPointCloudAction() const { return _importPointCloudAct; }
+QAction *MainMenu::importModelAction() const { return _importModelAct; }
 QAction *MainMenu::featureVisualizationAction() const { return _featureVisualizationAct; }
 QAction *MainMenu::workflowAerialTriangulationAction() const { return _workflowAerialTriangulationAct; }
 QAction *MainMenu::workflowSettingsAction() const { return _workflowSettingsAct; }

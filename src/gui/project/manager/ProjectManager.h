@@ -157,6 +157,10 @@ public slots:
     void addPhoto();
     // 弹出文件夹选择对话框，将文件夹中所有支持格式的图片添加到项目
     void addFolder();
+    // 导入 Metashape/通用 OBJ、PLY、XYZ 点云并登记为稠密点云成果。
+    void importPointCloud();
+    // 导入 Metashape/通用 OBJ、PLY 模型，并复制 OBJ 的材质与纹理依赖。
+    void importModel();
     // 为单张影像导入 .tsai 相机文件（弹出单文件对话框）
     bool importCameraForImage(const QString &imagePath);
     // 批量按文件名匹配：选择一个含多个 .tsai 文件的目录，
@@ -383,4 +387,5 @@ private:
     // 辅助：校验项目是否已打开；失败时统一弹窗提示并返回 false
     bool ensureProjectOpen(const QString &message = QStringLiteral("请先打开项目"),
                            const QString &title = QStringLiteral("提示")) const;
+    void importProjectAsset(bool modelAsset);
 };

@@ -157,6 +157,15 @@ void collectSectionRecordArtifacts(const QString &section,
         appendUniquePath(filePaths,
                          normalizedProjectPath(projectRoot,
                                                record.value(QStringLiteral("dense_cloud_xyz")).toString()));
+        for (const QJsonValue &value : record.value(QStringLiteral("imported_dependencies")).toArray())
+        {
+            const QString dependency = normalizedProjectPath(projectRoot, value.toString());
+            appendUniquePath(filePaths, dependency);
+            appendUniquePath(dirPaths, QFileInfo(dependency).absolutePath());
+        }
+        appendUniquePath(dirPaths,
+                         normalizedProjectPath(projectRoot,
+                                               record.value(QStringLiteral("import_directory")).toString()));
         return;
     }
 
@@ -174,6 +183,15 @@ void collectSectionRecordArtifacts(const QString &section,
         {
             appendUniquePath(filePaths, normalizedProjectPath(projectRoot, record.value(key).toString()));
         }
+        for (const QJsonValue &value : record.value(QStringLiteral("imported_dependencies")).toArray())
+        {
+            const QString dependency = normalizedProjectPath(projectRoot, value.toString());
+            appendUniquePath(filePaths, dependency);
+            appendUniquePath(dirPaths, QFileInfo(dependency).absolutePath());
+        }
+        appendUniquePath(dirPaths,
+                         normalizedProjectPath(projectRoot,
+                                               record.value(QStringLiteral("import_directory")).toString()));
 
         const QString texturePath =
             normalizedProjectPath(projectRoot, record.value(QStringLiteral("texture_png")).toString());
