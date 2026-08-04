@@ -131,6 +131,7 @@ core/
 ├── overlap/                    # 重叠度分析
 │   ├── OverlapAnalyzer.h/cpp   # 影像对重叠区域计算
 │   ├── OverlapPairGraphPlanner.h/cpp # 无相机词汇召回后的连通影像对图规划
+│   ├── HierarchicalVocabularyTree.h/cpp # 层次 K-means 视觉词汇树训练与根到叶量化
 │   ├── VocabularyOverlapRetriever.h/cpp  # 基于已提取特征描述子的词汇重叠对检索
 │   └── GroundBackProjector.h/cpp  # 地面投影
 │

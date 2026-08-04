@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "HierarchicalVocabularyTree.h"
 #include "VocabularyOverlapRetriever.h"
 
 #include <opencv2/core.hpp>
@@ -57,6 +58,73 @@ xjw::VocabularyImageFeatures makeImage(const std::string &path, const cv::Mat &d
 }
 
 } // namespace
+
+TEST(HierarchicalVocabularyTreeTest, BuildsAndTraversesMultipleKMeansLevels)
+{
+    cv::Mat training(64, 4, CV_32F);
+    for (int row = 0; row < training.rows; ++row)
+    {
+        for (int column = 0; column < training.cols; ++column)
+        {
+            training.at<float>(row, column) = static_cast<float>(row) + column * 0.01f;
+        }
+    }
+
+    xjw::HierarchicalVocabularyTreeConfig config;
+    config.branchFactor = 2;
+    config.maximumDepth = 3;
+    config.maximumLeaves = 8;
+
+    xjw::HierarchicalVocabularyTree tree;
+    std::string error;
+    ASSERT_TRUE(tree.train(training, config, &error)) << error;
+
+    EXPECT_EQ(tree.actualDepth(), 3);
+    EXPECT_EQ(tree.wordCount(), 8);
+    EXPECT_EQ(tree.nodeCount(), 15);
+    const int first_word = tree.quantize(training.ptr<float>(0), training.cols);
+    const int last_word = tree.quantize(training.ptr<float>(training.rows - 1), training.cols);
+    EXPECT_GE(first_word, 0);
+    EXPECT_LT(first_word, tree.wordCount());
+    EXPECT_GE(last_word, 0);
+    EXPECT_LT(last_word, tree.wordCount());
+    EXPECT_NE(first_word, last_word);
+}
+
+TEST(HierarchicalVocabularyTreeTest, HonorsLeafLimitWithPartialFinalLevel)
+{
+    const cv::Mat training = makeGeneratedDescriptors(60, 8, 0.0f);
+    xjw::HierarchicalVocabularyTreeConfig config;
+    config.branchFactor = 3;
+    config.maximumDepth = 3;
+    config.maximumLeaves = 5;
+
+    xjw::HierarchicalVocabularyTree tree;
+    std::string error;
+    ASSERT_TRUE(tree.train(training, config, &error)) << error;
+
+    EXPECT_EQ(tree.wordCount(), 5);
+    EXPECT_LE(tree.actualDepth(), 3);
+    EXPECT_GT(tree.nodeCount(), tree.wordCount());
+}
+
+TEST(HierarchicalVocabularyTreeTest, CanCancelBetweenKMeansNodes)
+{
+    const cv::Mat training = makeGeneratedDescriptors(60, 8, 0.0f);
+    xjw::HierarchicalVocabularyTreeConfig config;
+    config.branchFactor = 3;
+    config.maximumDepth = 3;
+    config.maximumLeaves = 27;
+    config.progressCallback = [](int, int, int)
+    {
+        return false;
+    };
+
+    xjw::HierarchicalVocabularyTree tree;
+    std::string error;
+    EXPECT_FALSE(tree.train(training, config, &error));
+    EXPECT_NE(error.find("取消"), std::string::npos);
+}
 
 TEST(VocabularyOverlapRetrieverTest, RetrievesExpectedPairFromSharedDescriptors)
 {
@@ -132,7 +200,6 @@ TEST(VocabularyOverlapRetrieverTest, CapsOnlyDescriptorsUsedByVocabularyAssignme
     config.samplePerImage = 5;
     config.maxTrainingDescriptors = 15;
     config.maxDescriptorsPerImage = 6;
-    config.useFlannAssignment = false;
     config.connectComponents = false;
 
     xjw::VocabularyOverlapResult result;
@@ -145,7 +212,7 @@ TEST(VocabularyOverlapRetrieverTest, CapsOnlyDescriptorsUsedByVocabularyAssignme
     EXPECT_NE(result.detail.find("descriptors_assigned=18"), std::string::npos);
 }
 
-TEST(VocabularyOverlapRetrieverTest, SupportsLoMaRDescriptorDimensionWithFlann)
+TEST(VocabularyOverlapRetrieverTest, SupportsLoMaRDescriptorDimensionWithHierarchicalTree)
 {
     std::vector<xjw::VocabularyImageFeatures> images;
     images.push_back(makeImage("a.tif", makeGeneratedDescriptors(12, 256, 0.0f)));
@@ -158,7 +225,6 @@ TEST(VocabularyOverlapRetrieverTest, SupportsLoMaRDescriptorDimensionWithFlann)
     config.samplePerImage = 8;
     config.maxTrainingDescriptors = 24;
     config.maxDescriptorsPerImage = 8;
-    config.assignmentBatchRows = 3;
     config.connectComponents = false;
 
     xjw::VocabularyOverlapResult result;
@@ -168,7 +234,9 @@ TEST(VocabularyOverlapRetrieverTest, SupportsLoMaRDescriptorDimensionWithFlann)
     EXPECT_EQ(result.totalDescriptorCount, 36u);
     EXPECT_EQ(result.assignedDescriptorCount, 24u);
     EXPECT_NE(result.detail.find("descriptor_dims=256"), std::string::npos);
-    EXPECT_NE(result.detail.find("assignment=flann"), std::string::npos);
+    EXPECT_NE(result.detail.find("assignment=hierarchical_kmeans_tree"), std::string::npos);
+    EXPECT_EQ(result.vocabularyTreeDepth, 2);
+    EXPECT_GT(result.vocabularyTreeNodeCount, result.vocabularySize);
     EXPECT_GE(xjw::VocabularyOverlapConfig().maxDescriptorsPerImage, 3840);
 }
 
@@ -195,7 +263,6 @@ TEST(VocabularyOverlapRetrieverTest, InvertedIndexMatchesDensePairScoring)
     config.useTfidf = true;
     config.mutualTopK = true;
     config.geometryCheck = false;
-    config.useFlannAssignment = false;
     config.numThreads = 2;
 
     xjw::VocabularyOverlapResult denseResult;
@@ -242,7 +309,6 @@ TEST(VocabularyOverlapRetrieverTest, PlannerKeepsOneWayTopKWhenMutualTopKWouldDi
     config.connectComponents = false;
     config.closeSequenceLoop = false;
     config.geometryCheck = false;
-    config.useFlannAssignment = false;
     config.useInvertedIndex = false;
 
     xjw::VocabularyOverlapResult result;
@@ -285,7 +351,6 @@ TEST(VocabularyOverlapRetrieverTest, PlannerReportsConnectivityRepairInDetail)
     config.sequenceWindow = 1;
     config.closeSequenceLoop = false;
     config.geometryCheck = false;
-    config.useFlannAssignment = false;
     config.useInvertedIndex = false;
 
     xjw::VocabularyOverlapResult result;
@@ -328,10 +393,9 @@ TEST(VocabularyOverlapRetrieverTest, ProgressCallbackCanCancelDuringChunkedAssig
     config.samplePerImage = 20;
     config.maxTrainingDescriptors = 40;
     config.maxDescriptorsPerImage = 40;
-    config.assignmentBatchRows = 4;
     config.progressCallback = [&reached_assignment](const std::string &stage, int percent)
     {
-        if (stage.rfind("分配视觉词汇 ", 0) == 0)
+        if (stage.rfind("分配层次词汇树 ", 0) == 0)
         {
             reached_assignment = true;
             return percent <= 30;

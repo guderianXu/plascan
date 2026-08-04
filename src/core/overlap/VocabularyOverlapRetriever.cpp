@@ -1,14 +1,13 @@
 #include "VocabularyOverlapRetriever.h"
 
+#include "HierarchicalVocabularyTree.h"
 #include "OpenCvCompat.h"
-#include <opencv2/flann.hpp>
 
 #include <algorithm>
 #include <cstdint>
 #include <cmath>
 #include <exception>
 #include <limits>
-#include <mutex>
 #include <numeric>
 #include <sstream>
 #include <thread>
@@ -44,27 +43,6 @@ cv::Mat toFloatDescriptors(const cv::Mat &descriptors)
     cv::Mat converted;
     descriptors.convertTo(converted, CV_32F);
     return converted;
-}
-
-int boundedVocabularySize(const xjw::VocabularyOverlapConfig &config, int descriptorCount)
-{
-    const int branch = std::max(2, config.branchFactor);
-    const int depth = std::max(1, config.treeDepth);
-    const int max_words = std::max(2, config.maxVocabularyWords);
-
-    long long requested = 1;
-    for (int i = 0; i < depth; ++i)
-    {
-        requested *= branch;
-        if (requested > max_words)
-        {
-            requested = max_words;
-            break;
-        }
-    }
-
-    const int clamped = static_cast<int>(std::min<long long>(requested, descriptorCount));
-    return std::max(1, clamped);
 }
 
 cv::Mat sampleTrainingDescriptors(const std::vector<cv::Mat> &descriptors,
@@ -168,22 +146,6 @@ std::pair<int, int> decodePairKey(std::uint64_t key)
         static_cast<int>(key >> 32),
         static_cast<int>(key & 0xffffffffu)
     };
-}
-
-int nearestWordBrute(const cv::Mat &descriptor, const cv::Mat &centers)
-{
-    int best_index = 0;
-    double best_distance = std::numeric_limits<double>::max();
-    for (int center = 0; center < centers.rows; ++center)
-    {
-        const double distance = cv::norm(descriptor, centers.row(center), cv::NORM_L2SQR);
-        if (distance < best_distance)
-        {
-            best_distance = distance;
-            best_index = center;
-        }
-    }
-    return best_index;
 }
 
 void normalizeRows(cv::Mat *histograms, int threadCount)
@@ -356,122 +318,66 @@ int geometryInlierCount(const xjw::VocabularyImageFeatures &image_a,
     return count;
 }
 
-enum class AssignmentStatus
-{
-    Success,
-    Cancelled,
-    Failed
-};
 
-bool reportAssignmentProgress(const xjw::VocabularyOverlapConfig &config,
-                              std::uint64_t processedRows,
-                              std::uint64_t totalRows,
-                              std::string *errorMsg)
-{
-    const int percent = totalRows == 0
-        ? 49
-        : 30 + static_cast<int>(std::min<std::uint64_t>(
-              19, processedRows * 19 / totalRows));
-    std::ostringstream stage;
-    stage << "分配视觉词汇 " << processedRows << '/' << totalRows;
-    return reportProgress(config, stage.str(), percent, errorMsg);
-}
-
-AssignmentStatus assignWordsWithFlann(const std::vector<cv::Mat> &descriptors,
-                                      const cv::Mat &centers,
-                                      const xjw::VocabularyOverlapConfig &config,
-                                      std::vector<std::vector<int>> *wordsPerImage,
-                                      std::string *errorMsg)
+bool assignWordsWithTree(const std::vector<cv::Mat> &descriptors,
+                         const xjw::HierarchicalVocabularyTree &tree,
+                         const xjw::VocabularyOverlapConfig &config,
+                         int threadCount,
+                         std::vector<std::vector<int>> *wordsPerImage,
+                         std::string *errorMsg)
 {
     if (!wordsPerImage)
     {
-        setError(errorMsg, "视觉词汇分配输出为空");
-        return AssignmentStatus::Failed;
+        setError(errorMsg, "层次词汇树分配输出为空");
+        return false;
     }
 
-    try
-    {
-        cv::Mat centers_contiguous = centers.isContinuous() ? centers : centers.clone();
-        const std::uint64_t total_rows = std::accumulate(
-            descriptors.cbegin(), descriptors.cend(), std::uint64_t{0},
-            [](std::uint64_t total, const cv::Mat &value)
-            {
-                return total + static_cast<std::uint64_t>(value.rows);
-            });
-        if (total_rows == 0)
+    const std::uint64_t total_rows = std::accumulate(
+        descriptors.cbegin(), descriptors.cend(), std::uint64_t{0},
+        [](std::uint64_t total, const cv::Mat &value)
         {
-            setError(errorMsg, "描述子为空，无法分配词汇");
-            return AssignmentStatus::Failed;
-        }
-
-        cv::flann::Index flann(centers_contiguous, cv::flann::KDTreeIndexParams(4));
-        wordsPerImage->clear();
-        wordsPerImage->resize(descriptors.size());
-        const int batch_rows = std::max(1, config.assignmentBatchRows);
-        std::uint64_t processed_rows = 0;
-        for (std::size_t image_index = 0; image_index < descriptors.size(); ++image_index)
-        {
-            const cv::Mat &image_descriptors = descriptors[image_index];
-            std::vector<int> &words = (*wordsPerImage)[image_index];
-            words.reserve(static_cast<std::size_t>(image_descriptors.rows));
-            for (int begin = 0; begin < image_descriptors.rows; begin += batch_rows)
-            {
-                const int end = std::min(image_descriptors.rows, begin + batch_rows);
-                cv::Mat batch = image_descriptors.rowRange(begin, end);
-                if (!batch.isContinuous())
-                {
-                    batch = batch.clone();
-                }
-                cv::Mat indices(batch.rows, 1, CV_32S);
-                cv::Mat distances(batch.rows, 1, CV_32F);
-                flann.knnSearch(batch, indices, distances, 1, cv::flann::SearchParams(64));
-                for (int row = 0; row < indices.rows; ++row)
-                {
-                    words.push_back(indices.at<int>(row, 0));
-                }
-                processed_rows += static_cast<std::uint64_t>(batch.rows);
-                if (!reportAssignmentProgress(config, processed_rows, total_rows, errorMsg))
-                {
-                    return AssignmentStatus::Cancelled;
-                }
-            }
-        }
-        return AssignmentStatus::Success;
-    }
-    catch (const cv::Exception &ex)
-    {
-        setError(errorMsg, ex.what());
-        return AssignmentStatus::Failed;
-    }
-    catch (const std::exception &ex)
-    {
-        setError(errorMsg, ex.what());
-        return AssignmentStatus::Failed;
-    }
-}
-
-void assignWordsBrute(const std::vector<cv::Mat> &descriptors,
-                      const cv::Mat &centers,
-                      int threadCount,
-                      std::vector<std::vector<int>> *wordsPerImage)
-{
+            return total + static_cast<std::uint64_t>(value.rows);
+        });
     wordsPerImage->clear();
     wordsPerImage->resize(descriptors.size());
-
-#ifdef _OPENMP
-#pragma omp parallel for num_threads(threadCount) schedule(dynamic) if(threadCount > 1)
-#endif
-    for (int image_index = 0; image_index < static_cast<int>(descriptors.size()); ++image_index)
+    std::uint64_t processed_rows = 0;
+    const int image_batch = std::max(1, threadCount);
+    for (int begin = 0; begin < static_cast<int>(descriptors.size()); begin += image_batch)
     {
-        const cv::Mat &image_descriptors = descriptors[static_cast<std::size_t>(image_index)];
-        std::vector<int> words;
-        words.reserve(static_cast<std::size_t>(image_descriptors.rows));
-        for (int row = 0; row < image_descriptors.rows; ++row)
+        const int end = std::min(static_cast<int>(descriptors.size()), begin + image_batch);
+#ifdef _OPENMP
+#pragma omp parallel for num_threads(threadCount) schedule(static) if(threadCount > 1)
+#endif
+        for (int image_index = begin; image_index < end; ++image_index)
         {
-            words.push_back(nearestWordBrute(image_descriptors.row(row), centers));
+            const cv::Mat &image_descriptors = descriptors[static_cast<std::size_t>(image_index)];
+            std::vector<int> &words = (*wordsPerImage)[static_cast<std::size_t>(image_index)];
+            words.resize(static_cast<std::size_t>(image_descriptors.rows));
+            for (int row = 0; row < image_descriptors.rows; ++row)
+            {
+                words[static_cast<std::size_t>(row)] = tree.quantize(
+                    image_descriptors.ptr<float>(row),
+                    image_descriptors.cols);
+            }
         }
-        (*wordsPerImage)[static_cast<std::size_t>(image_index)] = std::move(words);
+
+        for (int image_index = begin; image_index < end; ++image_index)
+        {
+            processed_rows += static_cast<std::uint64_t>(
+                descriptors[static_cast<std::size_t>(image_index)].rows);
+        }
+        const int percent = total_rows == 0
+            ? 49
+            : 30 + static_cast<int>(std::min<std::uint64_t>(
+                  19, processed_rows * 19 / total_rows));
+        std::ostringstream stage;
+        stage << "分配层次词汇树 " << processed_rows << '/' << total_rows;
+        if (!reportProgress(config, stage.str(), percent, errorMsg))
+        {
+            return false;
+        }
     }
+    return true;
 }
 
 struct PairScoreAccumulator
@@ -796,66 +702,51 @@ bool VocabularyOverlapRetriever::retrieve(const std::vector<VocabularyImageFeatu
         return false;
     }
 
-    const int vocabulary_size = boundedVocabularySize(config, training.rows);
+    if (!reportProgress(config, "训练层次词汇树", 12, errorMsg))
+    {
+        return false;
+    }
+    HierarchicalVocabularyTreeConfig tree_config;
+    tree_config.branchFactor = config.branchFactor;
+    tree_config.maximumDepth = config.treeDepth;
+    tree_config.maximumLeaves = config.maxVocabularyWords;
+    tree_config.kmeansMaxIterations = config.kmeansMaxIterations;
+    tree_config.kmeansAttempts = config.kmeansAttempts;
+    tree_config.kmeansEpsilon = config.kmeansEpsilon;
+    tree_config.progressCallback = [&config, errorMsg](int completedNodes,
+                                                       int estimatedNodes,
+                                                       int depth)
+    {
+        const int percent = 12 + std::min(17, completedNodes * 17 / std::max(1, estimatedNodes));
+        std::ostringstream stage;
+        stage << "训练层次词汇树 节点=" << completedNodes << '/' << estimatedNodes
+              << " 深度=" << depth << '/' << std::max(1, config.treeDepth);
+        return reportProgress(config, stage.str(), percent, errorMsg);
+    };
+    HierarchicalVocabularyTree vocabulary_tree;
+    if (!vocabulary_tree.train(training, tree_config, errorMsg))
+    {
+        return false;
+    }
+    const int vocabulary_size = vocabulary_tree.wordCount();
     result->vocabularySize = vocabulary_size;
+    result->vocabularyTreeNodeCount = vocabulary_tree.nodeCount();
+    result->vocabularyTreeDepth = vocabulary_tree.actualDepth();
 
-    cv::Mat centers;
-    if (vocabulary_size == 1)
-    {
-        centers = training.row(0).clone();
-    }
-    else
-    {
-        if (!reportProgress(config, "训练视觉词汇", 12, errorMsg))
-        {
-            return false;
-        }
-        cv::Mat labels;
-        cv::setRNGSeed(0);
-        cv::kmeans(training,
-                   vocabulary_size,
-                   labels,
-                   cv::TermCriteria(cv::TermCriteria::EPS + cv::TermCriteria::MAX_ITER,
-                                    std::max(1, config.kmeansMaxIterations),
-                                    std::max(0.0, config.kmeansEpsilon)),
-                   std::max(1, config.kmeansAttempts),
-                   cv::KMEANS_PP_CENTERS,
-                   centers);
-    }
-
-    if (!reportProgress(config, "分配视觉词汇", 30, errorMsg))
+    if (!reportProgress(config, "分配层次词汇树", 30, errorMsg))
     {
         return false;
     }
 
     std::vector<std::vector<int>> words_per_image;
-    bool used_flann_assignment = false;
-    std::string assignment_error;
-    if (config.useFlannAssignment && centers.rows >= 2 && centers.cols >= 2)
+    if (!assignWordsWithTree(assignment_descriptors,
+                             vocabulary_tree,
+                             config,
+                             thread_count,
+                             &words_per_image,
+                             errorMsg))
     {
-        const AssignmentStatus assignment_status = assignWordsWithFlann(
-            assignment_descriptors,
-            centers,
-            config,
-            &words_per_image,
-            &assignment_error);
-        if (assignment_status == AssignmentStatus::Cancelled)
-        {
-            setError(errorMsg, assignment_error);
-            return false;
-        }
-        if (assignment_status == AssignmentStatus::Failed)
-        {
-            setError(errorMsg,
-                     "FLANN 视觉词汇分配失败；已停止以避免退回超大规模暴力搜索: " +
-                         assignment_error);
-            return false;
-        }
-        used_flann_assignment = true;
-    }
-    if (!used_flann_assignment)
-    {
-        assignWordsBrute(assignment_descriptors, centers, thread_count, &words_per_image);
+        return false;
     }
 
     if (!reportProgress(config, "构建 TF-IDF 直方图", 50, errorMsg))
@@ -1090,6 +981,9 @@ bool VocabularyOverlapRetriever::retrieve(const std::vector<VocabularyImageFeatu
     std::ostringstream detail;
     detail << "images=" << image_count
            << " vocabulary=" << result->vocabularySize
+           << " vocabulary_tree_nodes=" << result->vocabularyTreeNodeCount
+           << " vocabulary_tree_depth=" << result->vocabularyTreeDepth
+           << " vocabulary_tree_branch=" << std::max(2, config.branchFactor)
            << " descriptor_dims=" << descriptor_cols
            << " descriptors_total=" << result->totalDescriptorCount
            << " descriptors_assigned=" << result->assignedDescriptorCount
@@ -1097,7 +991,7 @@ bool VocabularyOverlapRetriever::retrieve(const std::vector<VocabularyImageFeatu
            << " candidates=" << result->candidates.size()
            << " accepted=" << result->acceptedPairs.size()
            << ' ' << graph_plan.detail
-           << " assignment=" << (used_flann_assignment ? "flann" : "brute")
+           << " assignment=hierarchical_kmeans_tree"
            << " pair_scoring=" << (use_inverted_index ? "inverted" : "dense")
            << " threads=" << thread_count
            << " cuda_requested=" << (config.useCuda ? 1 : 0)

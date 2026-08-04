@@ -27,7 +27,6 @@ struct VocabularyOverlapConfig
     int maxTrainingDescriptors = 50000;
     int maxDescriptorsPerImage = 4096;
     int maxVocabularyWords = 4096;
-    int assignmentBatchRows = 65536;
     int kmeansMaxIterations = 20;
     int kmeansAttempts = 1;
     double kmeansEpsilon = 1e-3;
@@ -46,7 +45,6 @@ struct VocabularyOverlapConfig
     int minInliers = 30;
     double ransacThreshold = 3.0;
     int numThreads = 0;
-    bool useFlannAssignment = true;
     bool useInvertedIndex = true;
     bool useCuda = false;
     int geometryMaxDescriptors = 2048;
@@ -71,6 +69,8 @@ struct VocabularyOverlapPairResult
 struct VocabularyOverlapResult
 {
     int vocabularySize = 0;
+    int vocabularyTreeNodeCount = 0;
+    int vocabularyTreeDepth = 0;
     std::uint64_t totalDescriptorCount = 0;
     std::uint64_t assignedDescriptorCount = 0;
     std::vector<VocabularyOverlapPairResult> candidates;

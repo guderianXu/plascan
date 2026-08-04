@@ -1,5 +1,7 @@
 add_library(overlap STATIC
     GroundBackProjector.cpp
+    HierarchicalVocabularyTree.cpp
+    HierarchicalVocabularyTree.h
     OverlapAnalyzer.cpp
     OverlapPairGraphPlanner.cpp
     OverlapPairGraphPlanner.h
