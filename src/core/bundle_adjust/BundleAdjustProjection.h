@@ -58,15 +58,20 @@ ProjectionCamera makeProjectionCamera(const Camera &camera);
  * 小于阈值则返回 false，避免把相机后方点作为合法残差。
  */
 template <typename T>
-bool projectCameraPoint(const ProjectionCamera &camera,
-                        const T &xCam,
-                        const T &yCam,
-                        const T &zCam,
-                        const T &focalX,
-                        const T &focalY,
-                        const T &principalX,
-                        const T &principalY,
-                        T *pixel)
+bool projectCameraPointWithDistortion(const ProjectionCamera &camera,
+                                      const T &xCam,
+                                      const T &yCam,
+                                      const T &zCam,
+                                      const T &focalX,
+                                      const T &focalY,
+                                      const T &principalX,
+                                      const T &principalY,
+                                      const T &radialK1,
+                                      const T &radialK2,
+                                      const T &radialK3,
+                                      const T &tangentialP1,
+                                      const T &tangentialP2,
+                                      T *pixel)
 {
     const T forwardDepth = camera.depthAxisFlipped ? -zCam : zCam;
     if (!(forwardDepth > T(1e-9)))
@@ -77,18 +82,44 @@ bool projectCameraPoint(const ProjectionCamera &camera,
     const T x = xCam / zCam;
     const T y = yCam / zCam;
     const T r2 = x * x + y * y;
-    const T radial = T(1.0) + T(camera.radialK1) * r2 +
-                     T(camera.radialK2) * r2 * r2 +
-                     T(camera.radialK3) * r2 * r2 * r2;
+    const T radial = T(1.0) + radialK1 * r2 +
+                     radialK2 * r2 * r2 + radialK3 * r2 * r2 * r2;
     const T xy2 = T(2.0) * x * y;
-    const T xd = x * radial + T(camera.tangentialP1) * xy2 +
-                 T(camera.tangentialP2) * (r2 + T(2.0) * x * x);
-    const T yd = y * radial + T(camera.tangentialP1) * (r2 + T(2.0) * y * y) +
-                 T(camera.tangentialP2) * xy2;
+    const T xd = x * radial + tangentialP1 * xy2 +
+                 tangentialP2 * (r2 + T(2.0) * x * x);
+    const T yd = y * radial + tangentialP1 * (r2 + T(2.0) * y * y) +
+                 tangentialP2 * xy2;
 
     pixel[0] = T(camera.uAxisSign) * focalX * xd + principalX;
     pixel[1] = T(camera.vAxisSign) * focalY * yd + principalY;
     return true;
+}
+
+template <typename T>
+bool projectCameraPoint(const ProjectionCamera &camera,
+                        const T &xCam,
+                        const T &yCam,
+                        const T &zCam,
+                        const T &focalX,
+                        const T &focalY,
+                        const T &principalX,
+                        const T &principalY,
+                        T *pixel)
+{
+    return projectCameraPointWithDistortion(camera,
+                                            xCam,
+                                            yCam,
+                                            zCam,
+                                            focalX,
+                                            focalY,
+                                            principalX,
+                                            principalY,
+                                            T(camera.radialK1),
+                                            T(camera.radialK2),
+                                            T(camera.radialK3),
+                                            T(camera.tangentialP1),
+                                            T(camera.tangentialP2),
+                                            pixel);
 }
 
 /// 使用固定外参、固定内参投影世界点，主要用于点块残差。
@@ -225,6 +256,64 @@ bool projectWithPoseDeltaAndFocal(const ProjectionCamera &camera,
                               pixel);
 }
 
+/**
+ * @brief 使用局部位姿、针孔内参和显式 Brown-Conrady 畸变投影。
+ *
+ * 该入口供共享自标定参数块使用；固定内参路径仍调用
+ * projectWithPoseDeltaAndFocal，避免扩大普通 BA 的参数维度。
+ */
+template <typename T>
+bool projectWithPoseDeltaAndCameraModel(const ProjectionCamera &camera,
+                                        const T *cameraDelta,
+                                        const T *world,
+                                        const T &focalX,
+                                        const T &focalY,
+                                        const T &principalX,
+                                        const T &principalY,
+                                        const T &radialK1,
+                                        const T &radialK2,
+                                        T *pixel)
+{
+    T deltaRotation[9];
+    poseDeltaRotation(cameraDelta, deltaRotation);
+
+    T updatedRotation[9];
+    for (int row = 0; row < 3; ++row)
+    {
+        for (int column = 0; column < 3; ++column)
+        {
+            T value = T(0.0);
+            for (int inner = 0; inner < 3; ++inner)
+            {
+                value += deltaRotation[row * 3 + inner] *
+                    T(camera.cameraToWorldRotation[inner * 3 + column]);
+            }
+            updatedRotation[row * 3 + column] = value;
+        }
+    }
+
+    const T dx = world[0] - (T(camera.cameraCenter[0]) + cameraDelta[3]);
+    const T dy = world[1] - (T(camera.cameraCenter[1]) + cameraDelta[4]);
+    const T dz = world[2] - (T(camera.cameraCenter[2]) + cameraDelta[5]);
+    const T xCam = updatedRotation[0] * dx + updatedRotation[3] * dy + updatedRotation[6] * dz;
+    const T yCam = updatedRotation[1] * dx + updatedRotation[4] * dy + updatedRotation[7] * dz;
+    const T zCam = updatedRotation[2] * dx + updatedRotation[5] * dy + updatedRotation[8] * dz;
+    return projectCameraPointWithDistortion(camera,
+                                            xCam,
+                                            yCam,
+                                            zCam,
+                                            focalX,
+                                            focalY,
+                                            principalX,
+                                            principalY,
+                                            radialK1,
+                                            radialK2,
+                                            T(camera.radialK3),
+                                            T(camera.tangentialP1),
+                                            T(camera.tangentialP2),
+                                            pixel);
+}
+
 /// 使用局部位姿增量和快照中的固定焦距投影。
 template <typename T>
 bool projectWithPoseDelta(const ProjectionCamera &camera,
@@ -272,7 +361,7 @@ bool projectWithPoseDeltaAndSharedFocal(const ProjectionCamera &camera,
 /**
  * @brief 使用标定组共享的完整针孔内参增量投影。
  *
- * 参数布局为 `[log(fx), log(fy/fx), dcx, dcy]`。主点使用相对偏移而不是
+ * 参数布局为 `[log(fx), log(fy/fx), dcx, dcy, k1, k2]`。主点使用相对偏移而不是
  * 绝对值，使同一标定组中不同裁剪/分辨率相机仍保留各自输入基准。
  */
 template <typename T>
@@ -285,14 +374,17 @@ bool projectWithPoseDeltaAndSharedIntrinsics(const ProjectionCamera &camera,
     using std::exp;
     const T focalX = exp(sharedIntrinsics[0]);
     const T focalY = focalX * exp(sharedIntrinsics[1]);
-    return projectWithPoseDeltaAndFocal(camera,
-                                        cameraDelta,
-                                        world,
-                                        focalX,
-                                        focalY,
-                                        T(camera.principalX) + sharedIntrinsics[2],
-                                        T(camera.principalY) + sharedIntrinsics[3],
-                                        pixel);
+    return projectWithPoseDeltaAndCameraModel(
+        camera,
+        cameraDelta,
+        world,
+        focalX,
+        focalY,
+        T(camera.principalX) + sharedIntrinsics[2],
+        T(camera.principalY) + sharedIntrinsics[3],
+        sharedIntrinsics[4],
+        sharedIntrinsics[5],
+        pixel);
 }
 
 } // namespace xjw::ba

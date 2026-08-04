@@ -163,12 +163,13 @@ BundleAdjustValidationResult validateAndNormalizeBundleAdjustOptions(
                        "BA 输入验证失败: 共享焦距范围非法");
     }
     if ((requestedOptions.refineSharedFocalAspectRatio ||
-         requestedOptions.refineSharedPrincipalPoint) &&
+         requestedOptions.refineSharedPrincipalPoint ||
+         requestedOptions.refineSharedRadialDistortion) &&
         !requestedOptions.refineSharedFocalLength)
     {
         return invalid(
             BASolveStatus::InvalidInput,
-            "BA 输入验证失败: 宽高比或主点优化必须同时启用共享焦距优化");
+            "BA 输入验证失败: 宽高比或主点优化以及径向畸变优化必须同时启用共享焦距优化");
     }
     if (!std::isfinite(requestedOptions.minSharedFocalAspectScale) ||
         !std::isfinite(requestedOptions.maxSharedFocalAspectScale) ||
@@ -188,6 +189,18 @@ BundleAdjustValidationResult validateAndNormalizeBundleAdjustOptions(
     {
         return invalid(BASolveStatus::InvalidInput,
                        "BA 输入验证失败: 扩展共享内参边界或先验非法");
+    }
+    if (!std::isfinite(requestedOptions.maxSharedRadialK1Abs) ||
+        !std::isfinite(requestedOptions.maxSharedRadialK2Abs) ||
+        !std::isfinite(requestedOptions.sharedRadialK1PriorSigma) ||
+        !std::isfinite(requestedOptions.sharedRadialK2PriorSigma) ||
+        requestedOptions.maxSharedRadialK1Abs <= 0.0 ||
+        requestedOptions.maxSharedRadialK2Abs <= 0.0 ||
+        requestedOptions.sharedRadialK1PriorSigma <= 0.0 ||
+        requestedOptions.sharedRadialK2PriorSigma <= 0.0)
+    {
+        return invalid(BASolveStatus::InvalidInput,
+                       "BA 输入验证失败: 共享径向畸变边界或先验非法");
     }
     if (!requestedOptions.cameraCalibrationGroupIds.empty() &&
         requestedOptions.cameraCalibrationGroupIds.size() != cameras.size())

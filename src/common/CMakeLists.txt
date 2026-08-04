@@ -6,6 +6,7 @@ add_library(plascan_common_log STATIC
 
 add_library(plascan_common_io STATIC
   io/ImageIO.cpp
+  io/ImageExifMetadata.cpp
   io/JsonObjectFile.cpp
   io/PathIO.cpp
 )

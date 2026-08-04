@@ -125,6 +125,9 @@ struct PreparedAerialTriangulationInput
     ImageId initialImageId2 = kInvalidImageId; ///< 初始对第二 ID。
     // 无标定相机的初始焦距，以“焦距像素 / 影像最长边”表示。
     double estimatedFocalScale = 1.2;
+    bool hasTrustedFocalPrior = false; ///< EXIF/固定镜头目录已提供可复现焦距，不再做无标定粗搜索。
+    QString focalPriorSource; ///< 诊断用来源，例如 exif_focal_length_35mm。
+    int focalPriorSampleCount = 0; ///< 批次中通过一致性检查的元数据样本数。
 
     // 以下字段只由 AerialTriangulationPipeline 为焦距候选试算设置，GUI/CLI 不直接暴露。
     // 大工程不能让每个候选都完整注册全部影像，否则一次焦距粗搜会重复执行十余次全量 SfM。

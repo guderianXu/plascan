@@ -450,3 +450,55 @@ TEST(BundleAdjustSharedFocalTest, RejectsPrincipalPointRefinementWithoutSharedFo
     EXPECT_EQ(result.solveStatus, xjw::BASolveStatus::InvalidInput);
     EXPECT_NE(result.backendMessage.find("主点优化"), std::string::npos);
 }
+
+TEST(BundleAdjustSharedFocalTest, CeresRecoversBoundedSharedRadialDistortion)
+{
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    {
+        GTEST_SKIP() << "Ceres CPU backend is not available";
+    }
+
+    std::vector<xjw::Camera> truthCameras{
+        makeCamera(-2.0, 0.0, 0.0, 1500.0),
+        makeCamera(0.0, -2.0, 0.0, 1500.0),
+        makeCamera(2.0, 0.0, 0.0, 1500.0),
+        makeCamera(0.0, 2.0, 0.0, 1500.0),
+    };
+    for (xjw::Camera &camera : truthCameras)
+    {
+        camera.setDistortion(-0.12, 0.035, 0.0, 0.0, 0.0);
+    }
+    const std::vector<xjw::Camera> initialCameras{
+        makeCamera(-2.0, 0.0, 0.0, 1500.0),
+        makeCamera(0.0, -2.0, 0.0, 1500.0),
+        makeCamera(2.0, 0.0, 0.0, 1500.0),
+        makeCamera(0.0, 2.0, 0.0, 1500.0),
+    };
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::CeresCpu;
+    options.allowBackendFallback = false;
+    options.refineCameraPose = false;
+    options.refineSharedFocalLength = true;
+    options.minSharedFocalScale = 1.0;
+    options.maxSharedFocalScale = 1.0;
+    options.refineSharedRadialDistortion = true;
+    options.maxSharedRadialK1Abs = 0.30;
+    options.maxSharedRadialK2Abs = 0.15;
+    options.sharedRadialK1PriorSigma = 1.0;
+    options.sharedRadialK2PriorSigma = 1.0;
+    options.enableControlPointConstraints = true;
+    options.controlPointWeight = 1000.0;
+    options.enablePointFilter = false;
+    options.maxIterations = 60;
+
+    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(
+        initialCameras, makeSharedFocalTracks(truthCameras), options);
+
+    ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
+    ASSERT_EQ(result.usedBackend, xjw::BABackend::CeresCpu) << result.backendMessage;
+    ASSERT_FALSE(result.refinedCameras.empty());
+    EXPECT_NEAR(result.refinedCameras.front().distortion().radialK1, -0.12, 0.02);
+    EXPECT_NEAR(result.refinedCameras.front().distortion().radialK2, 0.035, 0.03);
+    EXPECT_LT(result.meanRmsAfter, 0.25);
+}

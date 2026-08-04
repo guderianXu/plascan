@@ -328,6 +328,8 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
     result.baSharedFocalAspectScale = _lastGlobalBASharedFocalAspectScale;
     result.baSharedPrincipalOffsetX = _lastGlobalBASharedPrincipalOffsetX;
     result.baSharedPrincipalOffsetY = _lastGlobalBASharedPrincipalOffsetY;
+    result.baSharedRadialK1 = _lastGlobalBASharedRadialK1;
+    result.baSharedRadialK2 = _lastGlobalBASharedRadialK2;
     result.baRequestedBackend = _lastGlobalBARequestedBackend;
     result.baUsedBackend = _lastGlobalBAUsedBackend;
     result.baSolveStatus = _lastGlobalBASolveStatus;

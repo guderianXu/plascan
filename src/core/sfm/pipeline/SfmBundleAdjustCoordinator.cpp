@@ -38,10 +38,38 @@ bool SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
     int registeredImageCount,
     int totalImageCount)
 {
-    return !localOnly &&
-           totalImageCount >= 3 &&
-           registeredImageCount == totalImageCount &&
-           activeCameraCount == registeredImageCount;
+    if (localOnly || totalImageCount < 3 || registeredImageCount < 3 ||
+        activeCameraCount != registeredImageCount)
+    {
+        return false;
+    }
+
+    // 少量难配准影像不应阻止整个航摄块完成相机自标定。达到 90% 覆盖时，
+    // 已注册相机已经形成稳定全局网络；仍要求活动相机覆盖全部已注册影像，
+    // 从而禁止局部窗口或残缺 BA 更新共享镜头参数。
+    return static_cast<long long>(registeredImageCount) * 10LL >=
+           static_cast<long long>(totalImageCount) * 9LL;
+}
+
+bool SfmBundleAdjustCoordinator::hasIterativeGlobalBaConverged(
+    int completedRoundCount,
+    double pointChangeRate,
+    bool sharedIntrinsicsRefined,
+    double focalScaleChange,
+    double radialCoefficientChange)
+{
+    if (completedRoundCount < 2 || !std::isfinite(pointChangeRate) ||
+        pointChangeRate >= 0.01)
+    {
+        return false;
+    }
+    if (!sharedIntrinsicsRefined)
+    {
+        return true;
+    }
+    return std::isfinite(focalScaleChange) && focalScaleChange < 5.0e-4 &&
+           std::isfinite(radialCoefficientChange) &&
+           radialCoefficientChange < 5.0e-4;
 }
 
 void SfmBundleAdjustCoordinator::run(bool localOnly,
@@ -77,6 +105,8 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
             _lastGlobalBATracksFiltered = 0;
             _lastGlobalBARefinedIntrinsicCount = 0;
             _lastGlobalBASharedFocalScale = 1.0;
+            _lastGlobalBASharedRadialK1 = 0.0;
+            _lastGlobalBASharedRadialK2 = 0.0;
             _lastGlobalBARequestedBackend = _sfmOptions.baOptions.backend;
             _lastGlobalBAUsedBackend = BABackend::LegacyCpu;
             _lastGlobalBASolveStatus = BASolveStatus::NotRun;
@@ -313,6 +343,7 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
         baOpt.refineSharedFocalLength = false;
         baOpt.refineSharedFocalAspectRatio = false;
         baOpt.refineSharedPrincipalPoint = false;
+        baOpt.refineSharedRadialDistortion = false;
     }
     // SfM 协调器会固定旋转/平移规范，并在求解后恢复基线尺度，
     // 因此由调用方管理完整的 Sim(3) gauge，避免 BA 模块再自动固定第二台相机。
@@ -586,11 +617,13 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
         baResult.backendMessage.c_str());
     if (baOpt.refineSharedFocalLength ||
         baOpt.refineSharedFocalAspectRatio ||
-        baOpt.refineSharedPrincipalPoint)
+        baOpt.refineSharedPrincipalPoint ||
+        baOpt.refineSharedRadialDistortion)
     {
         Logger::instance()->infof(
             "[BA] intrinsics scope=%s applied=%s cameras=%d groups=%d "
-            "focalScale=%.8f aspectScale=%.8f principalOffsetPx=(%.4f,%.4f)",
+            "focalScale=%.8f aspectScale=%.8f principalOffsetPx=(%.4f,%.4f) "
+            "radial=(%.8f,%.8f)",
             scopeName,
             applyBaResult ? "true" : "false",
             applyBaResult ? baResult.refinedIntrinsicCount : 0,
@@ -598,7 +631,9 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
             applyBaResult ? baResult.refinedSharedFocalScale : 1.0,
             applyBaResult ? baResult.refinedSharedFocalAspectScale : 1.0,
             applyBaResult ? baResult.refinedSharedPrincipalOffsetX : 0.0,
-            applyBaResult ? baResult.refinedSharedPrincipalOffsetY : 0.0);
+            applyBaResult ? baResult.refinedSharedPrincipalOffsetY : 0.0,
+            applyBaResult ? baResult.refinedSharedRadialK1 : 0.0,
+            applyBaResult ? baResult.refinedSharedRadialK2 : 0.0);
     }
 
     // 回写优化后的相机位姿（跳过被 gauge 固定的相机）
@@ -609,6 +644,26 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
             if (i < baResult.refinedCameras.size())
             {
                 _reconstruction->camera(baImageIds[i]) = baResult.refinedCameras[i];
+            }
+        }
+
+        if (!localOnly && refineSharedIntrinsics &&
+            baResult.refinedCalibrationGroupCount == 1 &&
+            !baResult.refinedCameras.empty())
+        {
+            // 未注册影像的 PnP 会从预载相机读取内参。单一镜头组完成全局自标定后，
+            // 将同一组内参同步过去，避免最终重试继续使用零畸变/旧焦距。
+            const Camera &calibratedCamera = baResult.refinedCameras.front();
+            const Camera::Intrinsics calibratedIntrinsics = calibratedCamera.intrinsics();
+            const Camera::Distortion calibratedDistortion = calibratedCamera.distortion();
+            for (auto &[imageId, camera] : _preloadedCameras)
+            {
+                (void)imageId;
+                camera.setIntrinsics(calibratedIntrinsics.focalX,
+                                     calibratedIntrinsics.focalY,
+                                     calibratedIntrinsics.principalX,
+                                     calibratedIntrinsics.principalY);
+                camera.setDistortion(calibratedDistortion);
             }
         }
     }
@@ -796,6 +851,10 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
             applyBaResult ? baResult.refinedSharedPrincipalOffsetX : 0.0;
         _lastGlobalBASharedPrincipalOffsetY =
             applyBaResult ? baResult.refinedSharedPrincipalOffsetY : 0.0;
+        _lastGlobalBASharedRadialK1 =
+            applyBaResult ? baResult.refinedSharedRadialK1 : 0.0;
+        _lastGlobalBASharedRadialK2 =
+            applyBaResult ? baResult.refinedSharedRadialK2 : 0.0;
         _lastGlobalBARequestedBackend = baResult.requestedBackend;
         _lastGlobalBAUsedBackend = baResult.usedBackend;
         _lastGlobalBASolveStatus = baResult.solveStatus;
@@ -816,6 +875,9 @@ void IncrementalSfm::iterativeGlobalBA()
 {
     const int maxRounds = std::max(1, _sfmOptions.iterativeBARounds);
     size_t prevNumPoints = _reconstruction->numPoints3D();
+    double previousFocalScale = std::numeric_limits<double>::quiet_NaN();
+    double previousRadialK1 = std::numeric_limits<double>::quiet_NaN();
+    double previousRadialK2 = std::numeric_limits<double>::quiet_NaN();
 
     for (int round = 0; round < maxRounds; ++round)
     {
@@ -856,15 +918,46 @@ void IncrementalSfm::iterativeGlobalBA()
                                       static_cast<double>(prevNumPoints)
                                 : 1.0;
 
-        Logger::instance()->infof("[SFM]   After round %d: numPts=%zu, changeRate=%.4f", round + 1, curNumPoints,
-                      changeRate);
+        const bool sharedIntrinsicsRefined =
+            _lastGlobalBAResultApplied && _lastGlobalBARefinedIntrinsicCount > 0;
+        const double focalScaleChange =
+            sharedIntrinsicsRefined && std::isfinite(previousFocalScale)
+                ? std::abs(_lastGlobalBASharedFocalScale - previousFocalScale)
+                : std::numeric_limits<double>::infinity();
+        const double radialCoefficientChange =
+            sharedIntrinsicsRefined && std::isfinite(previousRadialK1) &&
+                    std::isfinite(previousRadialK2)
+                ? std::max(std::abs(_lastGlobalBASharedRadialK1 - previousRadialK1),
+                           std::abs(_lastGlobalBASharedRadialK2 - previousRadialK2))
+                : std::numeric_limits<double>::infinity();
 
-        if (round >= 1 && changeRate < 0.01)
+        Logger::instance()->infof(
+            "[SFM]   After round %d: numPts=%zu, pointChange=%.4f, "
+            "focalChange=%.6f, radialChange=%.6f",
+            round + 1,
+            curNumPoints,
+            changeRate,
+            focalScaleChange,
+            radialCoefficientChange);
+
+        if (SfmBundleAdjustCoordinator::hasIterativeGlobalBaConverged(
+                round + 1,
+                changeRate,
+                sharedIntrinsicsRefined,
+                focalScaleChange,
+                radialCoefficientChange))
         {
-            Logger::instance()->info("[SFM]   Converged (changeRate < 1%)");
+            Logger::instance()->info(
+                "[SFM]   Converged (point network and shared intrinsics are stable)");
             break;
         }
         prevNumPoints = curNumPoints;
+        if (sharedIntrinsicsRefined)
+        {
+            previousFocalScale = _lastGlobalBASharedFocalScale;
+            previousRadialK1 = _lastGlobalBASharedRadialK1;
+            previousRadialK2 = _lastGlobalBASharedRadialK2;
+        }
     }
 }
 

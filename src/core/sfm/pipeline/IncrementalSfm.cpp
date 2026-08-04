@@ -59,6 +59,7 @@ IncrementalSfmOptions effectiveSfmOptions(const IncrementalSfmOptions &options)
     effective.baOptions.refineSharedFocalLength = false;
     effective.baOptions.refineSharedFocalAspectRatio = false;
     effective.baOptions.refineSharedPrincipalPoint = false;
+    effective.baOptions.refineSharedRadialDistortion = false;
     effective.baOptions.logIterationProgress = false;
     effective.retryUnregisteredAfterFinalBA = false;
     return effective;

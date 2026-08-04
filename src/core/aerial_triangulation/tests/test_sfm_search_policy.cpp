@@ -290,6 +290,33 @@ TEST(SfmSearchPolicyTest, AdaptiveFocalSweepCoversNarrowFieldOfViewCameras)
     EXPECT_GE(scales.back(), 9.0);
     EXPECT_NE(std::find(scales.begin(), scales.end(), 5.2), scales.end());
     EXPECT_NE(std::find(scales.begin(), scales.end(), 9.0), scales.end());
+    EXPECT_NE(std::find(scales.begin(), scales.end(), 0.95), scales.end());
+    EXPECT_NE(std::find(scales.begin(), scales.end(), 1.0), scales.end());
+    EXPECT_NE(std::find(scales.begin(), scales.end(), 1.05), scales.end());
+}
+
+TEST(SfmSearchPolicyTest, AerialBlockPlanarityRejectsDomedFocalCandidate)
+{
+    SfmCandidateSummary flat{
+        0, 1.0, 0, 1, 64, 50000, 0.82, true};
+    flat.hasNetworkQuality = true;
+    flat.medianTriangulationAngleDeg = 10.0;
+    flat.twoViewTrackRatio = 0.84;
+    flat.observationGridCoverage = 0.125;
+    flat.hasAerialBlockGeometry = true;
+    flat.opticalAxisConcentration = 0.97;
+    flat.cameraCenterPlanarityRatio = 0.0008;
+
+    SfmCandidateSummary domed = flat;
+    domed.candidateIndex = 1;
+    domed.focalScale = 0.85;
+    domed.points3D = 53000;
+    domed.meanReprojError = 0.80;
+    domed.medianTriangulationAngleDeg = 11.0;
+    domed.cameraCenterPlanarityRatio = 0.010;
+
+    EXPECT_TRUE(xjw::aerial_triangulation::isBetterCandidate(flat, domed));
+    EXPECT_FALSE(xjw::aerial_triangulation::isBetterCandidate(domed, flat));
 }
 
 TEST(SfmSearchPolicyTest, AdaptiveReplayStopsOnlyAfterFullRegistration)

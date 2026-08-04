@@ -33,7 +33,7 @@
 
 using namespace xjw;
 
-TEST(SfmBundleAdjustCoordinatorPolicyTest, RefinesSharedIntrinsicsOnlyInCompleteGlobalSolve)
+TEST(SfmBundleAdjustCoordinatorPolicyTest, RefinesSharedIntrinsicsOnlyInMatureGlobalSolve)
 {
     EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
         false, 16, 16, 16));
@@ -41,8 +41,24 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest, RefinesSharedIntrinsicsOnlyInComplete
         true, 7, 16, 16));
     EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
         false, 2, 2, 16));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
         false, 15, 15, 16));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
+        false, 14, 14, 16));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
+        false, 14, 15, 16));
+}
+
+TEST(SfmBundleAdjustCoordinatorPolicyTest, IterativeConvergenceIncludesSharedCalibration)
+{
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::hasIterativeGlobalBaConverged(
+        2, 0.005, false, 1.0, 1.0));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::hasIterativeGlobalBaConverged(
+        1, 0.005, true, 0.0, 0.0));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::hasIterativeGlobalBaConverged(
+        2, 0.005, true, 1.0e-4, 1.0e-3));
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::hasIterativeGlobalBaConverged(
+        2, 0.005, true, 1.0e-4, 2.0e-4));
 }
 
 // ─── 工具函数：构造合成场景用于测试 ────────────────────────────

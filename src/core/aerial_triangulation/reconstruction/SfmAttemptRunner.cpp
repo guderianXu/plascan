@@ -232,10 +232,27 @@ void configureSfmOptions(const PreparedAerialTriangulationInput &input,
         // while an uncalibrated input uses the image-centre prior.
         options->baOptions.refineSharedFocalAspectRatio = false;
         options->baOptions.refineSharedPrincipalPoint = false;
-        options->baOptions.minSharedFocalScale = 0.90;
-        options->baOptions.maxSharedFocalScale = 1.10;
-        options->baOptions.maxSharedFocalStepScale = 1.12;
-        options->baOptions.maxSharedFocalIterations = 6;
+        if (input.hasTrustedFocalPrior)
+        {
+            // EXIF/固定镜头目录给出的焦距允许小幅吸收对焦和制造公差，但不能像
+            // 无标定搜索一样漂移 10%。近垂直航测中大范围焦距漂移会与高程弯曲强耦合。
+            options->baOptions.minSharedFocalScale = 0.98;
+            options->baOptions.maxSharedFocalScale = 1.02;
+            options->baOptions.maxSharedFocalStepScale = 1.02;
+            options->baOptions.maxSharedFocalIterations = 4;
+            options->baOptions.refineSharedRadialDistortion = true;
+            options->baOptions.maxSharedRadialK1Abs = 0.35;
+            options->baOptions.maxSharedRadialK2Abs = 0.20;
+            options->baOptions.sharedRadialK1PriorSigma = 0.15;
+            options->baOptions.sharedRadialK2PriorSigma = 0.08;
+        }
+        else
+        {
+            options->baOptions.minSharedFocalScale = 0.90;
+            options->baOptions.maxSharedFocalScale = 1.10;
+            options->baOptions.maxSharedFocalStepScale = 1.12;
+            options->baOptions.maxSharedFocalIterations = 6;
+        }
         if (cpuOnly && BundleAdjust::isBackendAvailable(BABackend::CeresCpu))
         {
             // 保持注册阶段与粗焦距候选相同的自动后端，避免仅因求解器不同造成
@@ -531,6 +548,8 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
                        sfmResult.baSharedPrincipalOffsetX);
     diagnostics.insert(QStringLiteral("ba_shared_principal_offset_y_px"),
                        sfmResult.baSharedPrincipalOffsetY);
+    diagnostics.insert(QStringLiteral("ba_shared_radial_k1"), sfmResult.baSharedRadialK1);
+    diagnostics.insert(QStringLiteral("ba_shared_radial_k2"), sfmResult.baSharedRadialK2);
     diagnostics.insert(QStringLiteral("ba_backend_message"),
                        QString::fromStdString(sfmResult.baBackendMessage));
     diagnostics.insert(QStringLiteral("project_intrinsic_prior_inspected"),

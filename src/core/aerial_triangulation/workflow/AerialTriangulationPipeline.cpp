@@ -9,6 +9,7 @@
 
 #include "workflow/AerialTriangulationPipeline.h"
 
+#include "CameraIntrinsicPrior.h"
 #include "ProjectCameraIO.h"
 #include "project/ProjectCommonUtils.h"
 #include "project/ProjectMetadata.h"
@@ -21,9 +22,11 @@
 
 #include <QElapsedTimer>
 #include <QFileInfo>
+#include <QImageReader>
 #include <QJsonArray>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -31,12 +34,229 @@
 #include <future>
 #include <memory>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace xjw::aerial_triangulation
 {
 namespace
 {
+
+struct AerialBlockGeometry
+{
+    bool valid = false;
+    double opticalAxisConcentration = 0.0;
+    double cameraCenterPlanarityRatio = 1.0;
+};
+
+struct BatchFocalPrior
+{
+    bool valid = false;
+    double focalScale = 0.0;
+    QString source;
+    QString make;
+    QString model;
+    int acceptedSamples = 0;
+    int inspectedSamples = 0;
+};
+
+/**
+ * @brief 从摄影块的代表影像建立一致焦距先验。
+ *
+ * 单张 EXIF 可能丢失或损坏，因此均匀抽样最多 32 张。至少 75% 样本必须可解析，
+ * 且焦距尺度极差不超过 2%，才允许跳过无标定粗搜索。这样不会把混合相机批次
+ * 或可换镜头机身误判为同一固定内参组。
+ */
+BatchFocalPrior resolveBatchFocalPrior(const QStringList &imagePaths)
+{
+    if (imagePaths.isEmpty())
+    {
+        return {};
+    }
+
+    const int inspectedCount = std::min(32, static_cast<int>(imagePaths.size()));
+    std::vector<CameraIntrinsicPrior> priors;
+    priors.reserve(static_cast<std::size_t>(inspectedCount));
+    for (int sample = 0; sample < inspectedCount; ++sample)
+    {
+        const int imageIndex = inspectedCount == 1
+            ? 0
+            : sample * (imagePaths.size() - 1) / (inspectedCount - 1);
+        const QString &path = imagePaths.at(imageIndex);
+        QImageReader reader(path);
+        const QSize size = reader.size();
+        if (!size.isValid())
+        {
+            continue;
+        }
+        const auto metadata = xjw::common::io::readImageExifMetadata(path);
+        if (!metadata.has_value())
+        {
+            continue;
+        }
+        const auto prior = estimateCameraIntrinsicPrior(
+            *metadata, size.width(), size.height());
+        if (prior.has_value() && prior->strong)
+        {
+            priors.push_back(*prior);
+        }
+    }
+
+    const int minimumAccepted = std::max(1, (inspectedCount * 3 + 3) / 4);
+    if (static_cast<int>(priors.size()) < minimumAccepted)
+    {
+        return {false, 0.0, {}, {}, {}, static_cast<int>(priors.size()), inspectedCount};
+    }
+
+    const QString make = priors.front().make.trimmed().toLower();
+    const QString model = priors.front().model.trimmed().toLower();
+    std::vector<double> scales;
+    scales.reserve(priors.size());
+    for (const CameraIntrinsicPrior &prior : priors)
+    {
+        if (prior.make.trimmed().toLower() != make ||
+            prior.model.trimmed().toLower() != model)
+        {
+            return {false, 0.0, {}, {}, {}, static_cast<int>(priors.size()), inspectedCount};
+        }
+        scales.push_back(prior.focalScale);
+    }
+    std::sort(scales.begin(), scales.end());
+    if (scales.front() <= 0.0 || scales.back() / scales.front() > 1.02)
+    {
+        return {false, 0.0, {}, {}, {}, static_cast<int>(priors.size()), inspectedCount};
+    }
+    const double medianScale = 0.5 *
+        (scales[(scales.size() - 1) / 2] + scales[scales.size() / 2]);
+    return {
+        true,
+        medianScale,
+        priors.front().source,
+        priors.front().make,
+        priors.front().model,
+        static_cast<int>(priors.size()),
+        inspectedCount,
+    };
+}
+
+/// 对 3x3 对称矩阵执行 Jacobi 对角化；这里只需要协方差特征值，避免引入额外线性代数依赖。
+std::array<double, 3> symmetricEigenvalues(std::array<double, 9> matrix)
+{
+    for (int iteration = 0; iteration < 24; ++iteration)
+    {
+        int p = 0;
+        int q = 1;
+        double largest = std::fabs(matrix[1]);
+        for (const auto [row, column] : {std::pair{0, 2}, std::pair{1, 2}})
+        {
+            const double value = std::fabs(matrix[row * 3 + column]);
+            if (value > largest)
+            {
+                largest = value;
+                p = row;
+                q = column;
+            }
+        }
+        if (largest <= 1.0e-12)
+        {
+            break;
+        }
+
+        const double app = matrix[p * 3 + p];
+        const double aqq = matrix[q * 3 + q];
+        const double apq = matrix[p * 3 + q];
+        const double angle = 0.5 * std::atan2(2.0 * apq, aqq - app);
+        const double cosine = std::cos(angle);
+        const double sine = std::sin(angle);
+
+        for (int index = 0; index < 3; ++index)
+        {
+            if (index == p || index == q)
+            {
+                continue;
+            }
+            const double aip = matrix[index * 3 + p];
+            const double aiq = matrix[index * 3 + q];
+            matrix[index * 3 + p] = matrix[p * 3 + index] = cosine * aip - sine * aiq;
+            matrix[index * 3 + q] = matrix[q * 3 + index] = sine * aip + cosine * aiq;
+        }
+        matrix[p * 3 + p] = cosine * cosine * app - 2.0 * sine * cosine * apq +
+                            sine * sine * aqq;
+        matrix[q * 3 + q] = sine * sine * app + 2.0 * sine * cosine * apq +
+                            cosine * cosine * aqq;
+        matrix[p * 3 + q] = matrix[q * 3 + p] = 0.0;
+    }
+
+    std::array<double, 3> eigenvalues{{matrix[0], matrix[4], matrix[8]}};
+    std::sort(eigenvalues.begin(), eigenvalues.end());
+    return eigenvalues;
+}
+
+/**
+ * @brief 识别近垂直平行摄影块，并量化相机中心是否出现人工穹顶。
+ *
+ * 仅当物理前向光轴高度集中时才启用平面性指标。环拍/绕飞相机朝向变化明显，
+ * 不会被航测平面先验影响。
+ */
+AerialBlockGeometry evaluateAerialBlockGeometry(const SfmReconstruction &reconstruction)
+{
+    const std::vector<ImageId> imageIds = reconstruction.registeredImageIds();
+    if (imageIds.size() < 8)
+    {
+        return {};
+    }
+
+    std::array<double, 3> meanCenter{{0.0, 0.0, 0.0}};
+    std::array<double, 3> meanAxis{{0.0, 0.0, 0.0}};
+    for (const ImageId imageId : imageIds)
+    {
+        const Camera camera = reconstruction.camera(imageId).normalizedForPositiveDepth();
+        const auto center = camera.cameraCenter();
+        const auto rotation = camera.cameraToWorldRotation();
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            meanCenter[axis] += center[axis];
+            meanAxis[axis] += rotation[axis * 3 + 2];
+        }
+    }
+    const double count = static_cast<double>(imageIds.size());
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        meanCenter[axis] /= count;
+        meanAxis[axis] /= count;
+    }
+    const double opticalAxisConcentration = std::sqrt(
+        meanAxis[0] * meanAxis[0] + meanAxis[1] * meanAxis[1] + meanAxis[2] * meanAxis[2]);
+
+    std::array<double, 9> covariance{};
+    for (const ImageId imageId : imageIds)
+    {
+        const auto center = reconstruction.camera(imageId).cameraCenter();
+        const std::array<double, 3> delta{{
+            center[0] - meanCenter[0], center[1] - meanCenter[1], center[2] - meanCenter[2]}};
+        for (int row = 0; row < 3; ++row)
+        {
+            for (int column = 0; column < 3; ++column)
+            {
+                covariance[row * 3 + column] += delta[row] * delta[column] / count;
+            }
+        }
+    }
+    const std::array<double, 3> eigenvalues = symmetricEigenvalues(covariance);
+    const double trace = std::max(0.0, eigenvalues[0]) +
+                         std::max(0.0, eigenvalues[1]) +
+                         std::max(0.0, eigenvalues[2]);
+    const double planarityRatio = trace > 1.0e-12
+        ? std::max(0.0, eigenvalues[0]) / trace
+        : 1.0;
+
+    return {
+        std::isfinite(opticalAxisConcentration) && opticalAxisConcentration >= 0.85 &&
+            std::isfinite(planarityRatio),
+        opticalAxisConcentration,
+        planarityRatio,
+    };
+}
 
 /**
  * @brief 判断每张影像是否都有可直接使用的可信内参。
@@ -158,6 +378,14 @@ SfmCandidateSummary summaryFromExecution(
     summary.observationGridCoverage = sparseQuality
         .value(QStringLiteral("observation_grid_coverage")).toObject()
         .value(QStringLiteral("mean")).toDouble();
+    if (execution.reconstruction)
+    {
+        const AerialBlockGeometry geometry =
+            evaluateAerialBlockGeometry(*execution.reconstruction);
+        summary.hasAerialBlockGeometry = geometry.valid;
+        summary.opticalAxisConcentration = geometry.opticalAxisConcentration;
+        summary.cameraCenterPlanarityRatio = geometry.cameraCenterPlanarityRatio;
+    }
     if (sequenceLoopClosure && execution.reconstruction)
     {
         std::vector<double> adjacent_distances;
@@ -254,6 +482,13 @@ QJsonObject candidateToJson(const AdaptiveFocalCandidate &candidate,
         object.insert(QStringLiteral("sequence_adjacent_distance_mad_ratio"),
                       summary->sequenceAdjacentDistanceMadRatio);
     }
+    if (summary && summary->hasAerialBlockGeometry)
+    {
+        object.insert(QStringLiteral("optical_axis_concentration"),
+                      summary->opticalAxisConcentration);
+        object.insert(QStringLiteral("camera_center_planarity_ratio"),
+                      summary->cameraCenterPlanarityRatio);
+    }
     return object;
 }
 
@@ -285,14 +520,28 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
     timer.start();
 
     const auto originalProgress = input.progressFn;
-    // 无完整相机先验时，初始焦距必须先从影像几何中估计；这与最终 BA 是否释放内参是两个独立职责。
+    const bool hasProjectOrExternalPrior = hasCompleteCameraIntrinsicPrior(input);
+    const BatchFocalPrior metadataPrior = hasProjectOrExternalPrior
+        ? BatchFocalPrior{}
+        : resolveBatchFocalPrior(input.images);
+
+    PreparedAerialTriangulationInput attemptInput = input;
+    if (metadataPrior.valid)
+    {
+        attemptInput.estimatedFocalScale = metadataPrior.focalScale;
+        attemptInput.hasTrustedFocalPrior = true;
+        attemptInput.focalPriorSource = metadataPrior.source;
+        attemptInput.focalPriorSampleCount = metadataPrior.acceptedSamples;
+    }
+
+    // 无完整相机先验且元数据也无法建立一致先验时，才从影像几何搜索初始焦距。
+    // 焦距初始化与最终 BA 是否释放少量内参是两个独立职责。
     const bool needsFocalInitializationSearch =
-        input.images.size() >= 3 && !hasCompleteCameraIntrinsicPrior(input);
+        input.images.size() >= 3 && !hasProjectOrExternalPrior && !metadataPrior.valid;
     const int focalProbeLimit = needsFocalInitializationSearch
         ? focalProbeRegistrationLimit(input.images.size())
         : 0;
 
-    PreparedAerialTriangulationInput attemptInput = input;
     attemptInput.threads = resolveSfmThreadBudget(input.threads);
     // 焦距粗搜索只比较固定内参下的几何结果。若把 BA 内参拟合混入候选，
     // 同一焦距尺度会因局部极值而产生不可比较的注册结果。
@@ -322,7 +571,7 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
     QVector<AdaptiveFocalCandidate> focalCandidates;
     std::vector<SfmCandidateSummary> candidateSummaries;
     QVector<SfmAttemptExecutionResult> candidateExecutions;
-    double selectedFocalScale = input.estimatedFocalScale;
+    double selectedFocalScale = attemptInput.estimatedFocalScale;
     bool adaptiveRefinementAccepted = false;
 
     if (needsFocalInitializationSearch)
@@ -580,7 +829,7 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
     }
     else
     {
-        focalCandidates.append(candidateFromExecution(input.estimatedFocalScale, execution));
+        focalCandidates.append(candidateFromExecution(attemptInput.estimatedFocalScale, execution));
     }
 
     // 在正式提交前固化所有焦距候选及选择结果；失败返回也保留诊断。
@@ -612,10 +861,43 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
         QStringLiteral("focal_probe_registration_limit"), focalProbeLimit);
     execution.result.sfmDiagnostics.insert(
         QStringLiteral("focal_probe_full_replay"), focalProbeLimit > 0);
+    QJsonObject metadataPriorJson{
+        {QStringLiteral("used"), metadataPrior.valid},
+        {QStringLiteral("source"), metadataPrior.source},
+        {QStringLiteral("make"), metadataPrior.make},
+        {QStringLiteral("model"), metadataPrior.model},
+        {QStringLiteral("focal_scale"), metadataPrior.focalScale},
+        {QStringLiteral("accepted_samples"), metadataPrior.acceptedSamples},
+        {QStringLiteral("inspected_samples"), metadataPrior.inspectedSamples},
+    };
+    execution.result.sfmDiagnostics.insert(
+        QStringLiteral("image_metadata_focal_prior"), metadataPriorJson);
+
+    // 正式完整解必须再次计算，不能沿用只注册 64 张影像的焦距探测指标。
+    if (execution.reconstruction)
+    {
+        const AerialBlockGeometry geometry =
+            evaluateAerialBlockGeometry(*execution.reconstruction);
+        QJsonObject aerialGeometry{
+            {QStringLiteral("detected"), geometry.valid},
+            {QStringLiteral("optical_axis_concentration"), geometry.opticalAxisConcentration},
+            {QStringLiteral("camera_center_planarity_ratio"), geometry.cameraCenterPlanarityRatio},
+        };
+        // 经验门限只用于告警，不会强制地形为平面。达到该值表示相机中心厚度
+        // 已明显超过规则航测块的正常航高波动，通常对应焦距/径向畸变穹顶。
+        const bool domingRisk = geometry.valid && geometry.cameraCenterPlanarityRatio > 0.003;
+        aerialGeometry.insert(QStringLiteral("doming_risk"), domingRisk);
+        execution.result.sfmDiagnostics.insert(
+            QStringLiteral("aerial_block_geometry"), aerialGeometry);
+        execution.result.sfmDiagnostics.insert(
+            QStringLiteral("camera_self_calibration_requires_review"), domingRisk);
+    }
 
     const bool focalInitializationSearch = focalCandidates.size() > 1;
     QString selfCalibrationStatus = QStringLiteral("trusted_prior");
-    bool selfCalibrationRequiresReview = false;
+    bool selfCalibrationRequiresReview = execution.result.sfmDiagnostics
+        .value(QStringLiteral("aerial_block_geometry")).toObject()
+        .value(QStringLiteral("doming_risk")).toBool(false);
     if (focalInitializationSearch && adaptiveRefinementAccepted)
     {
         selfCalibrationStatus = QStringLiteral("refined");

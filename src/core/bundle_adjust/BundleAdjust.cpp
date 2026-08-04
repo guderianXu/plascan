@@ -1962,15 +1962,15 @@ BABackendCapabilities BundleAdjust::backendCapabilities(BABackend backend)
     switch (backend)
     {
     case BABackend::Auto:
-        return {true, true, true, true, true, true};
+        return {true, true, true, true, true, true, true};
     case BABackend::LegacyCpu:
-        return {true, true, true, false, false, true};
+        return {true, true, true, false, false, false, true};
     case BABackend::CeresCpu:
     case BABackend::CeresCuda:
-        return {true, true, true, true, true, true};
+        return {true, true, true, true, true, true, true};
     case BABackend::NativeCuda:
         // 当前 native CUDA kernel 只联合调度各 track 的三维点更新，尚未求解相机块。
-        return {true, false, false, false, false, false};
+        return {true, false, false, false, false, false, false};
     }
     return {};
 }
@@ -2015,11 +2015,22 @@ BABackendDecision BundleAdjust::decideBackendForProblem(const BAProblemStats &st
     }
     const bool refineExtendedIntrinsics =
         options.refineSharedFocalAspectRatio ||
-        options.refineSharedPrincipalPoint;
-    if (refineExtendedIntrinsics &&
-        isBackendAvailable(BABackend::CeresCpu))
+        options.refineSharedPrincipalPoint ||
+        options.refineSharedRadialDistortion;
+    if (refineExtendedIntrinsics)
     {
-        return {BABackend::CeresCpu, "joint_shared_intrinsics_requires_ceres"};
+        if (options.refineCameraPose &&
+            isBackendAvailable(BABackend::CeresCuda) &&
+            stats.cameraCount >= std::max(1, options.minCeresCudaCameras) &&
+            stats.observationCount >= std::max(1, options.minCeresCudaObservations))
+        {
+            return {BABackend::CeresCuda,
+                    "large_joint_shared_intrinsics_uses_ceres_cuda"};
+        }
+        if (isBackendAvailable(BABackend::CeresCpu))
+        {
+            return {BABackend::CeresCpu, "joint_shared_intrinsics_requires_ceres"};
+        }
     }
     if (!options.refineCameraPose)
     {
@@ -2190,6 +2201,7 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
         const bool requiresCeresIntrinsics =
             options.refineSharedFocalAspectRatio ||
             options.refineSharedPrincipalPoint ||
+            options.refineSharedRadialDistortion ||
             (options.refineSharedFocalLength &&
              calibrationGroupCount(options, cameras.size()) > 1);
         if (requiresCeresIntrinsics)
@@ -2243,6 +2255,8 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
              !capabilities.refinesSharedFocalAspectRatio) ||
             (options.refineSharedPrincipalPoint &&
              !capabilities.refinesSharedPrincipalPoint) ||
+            (options.refineSharedRadialDistortion &&
+             !capabilities.refinesSharedRadialDistortion) ||
             ((options.enableLaserPlaneConstraints ||
               options.enableControlPointConstraints ||
               options.enableScaleBarConstraints ||

@@ -69,6 +69,7 @@ struct BABackendCapabilities
     bool refinesSharedFocalLength = false;
     bool refinesSharedFocalAspectRatio = false;
     bool refinesSharedPrincipalPoint = false;
+    bool refinesSharedRadialDistortion = false;
     bool supportsSoftConstraints = false;
 };
 
@@ -213,6 +214,9 @@ struct BAOptions
     /// 是否优化标定组共享的主点偏移量。偏移相对于每台相机输入主点应用，
     /// 因而同一标定组可以保持各自分辨率对应的基础主点。
     bool refineSharedPrincipalPoint = false;
+    /// 是否优化标定组共享的一、二阶径向畸变。仅 Ceres 联合 BA 实现；应在
+    /// 焦距已有可信先验时使用，避免 k1/k2 与焦距、高程在弱几何下共同漂移。
+    bool refineSharedRadialDistortion = false;
     /// 共享焦距相对输入焦距的最小尺度。
     double minSharedFocalScale = 0.5;
     /// 共享焦距相对输入焦距的最大尺度。
@@ -225,6 +229,11 @@ struct BAOptions
     /// 扩展内参自标定的弱先验标准差。主点按参考焦距比例，宽高比按 log 比例。
     double sharedPrincipalPointPriorSigmaFraction = 0.04;
     double sharedFocalAspectPriorSigma = 0.08;
+    /// Brown-Conrady k1/k2 的绝对边界和零中心弱先验标准差。
+    double maxSharedRadialK1Abs = 0.35;
+    double maxSharedRadialK2Abs = 0.20;
+    double sharedRadialK1PriorSigma = 0.15;
+    double sharedRadialK2PriorSigma = 0.08;
     /// 单次 LM 试探允许的最大焦距倍率，限制内参更新步长。
     double maxSharedFocalStepScale = 1.20;
     /// 每轮外层 BA 中共享焦距优化的最大内部迭代次数。
@@ -397,6 +406,8 @@ struct BAResult
     double refinedSharedFocalAspectScale = 1.0; ///< 优化后 fy/fx 相对输入比例的平均倍率
     double refinedSharedPrincipalOffsetX = 0.0; ///< 优化后的标定组平均主点 X 偏移（像素）
     double refinedSharedPrincipalOffsetY = 0.0; ///< 优化后的标定组平均主点 Y 偏移（像素）
+    double refinedSharedRadialK1 = 0.0; ///< 优化后的标定组平均 Brown-Conrady k1。
+    double refinedSharedRadialK2 = 0.0; ///< 优化后的标定组平均 Brown-Conrady k2。
 
     int laserConstraintCount = 0;          ///< 参与统计/优化的 LiDAR 点到面约束数量
     double laserRmsBeforeMeters = 0.0;     ///< 优化前 LiDAR 点到面 RMS（米）

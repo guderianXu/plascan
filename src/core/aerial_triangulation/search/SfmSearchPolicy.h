@@ -45,6 +45,9 @@ struct SfmCandidateSummary
     double medianTriangulationAngleDeg = 0.0; ///< 点交会角中位数。
     double twoViewTrackRatio = 1.0; ///< 两视点/全部点。
     double observationGridCoverage = 0.0; ///< 平均影像网格覆盖。
+    bool hasAerialBlockGeometry = false; ///< 相机光轴近似平行，可按航测块评价中心平面性。
+    double opticalAxisConcentration = 0.0; ///< 单位光轴平均向量长度，1 表示完全平行。
+    double cameraCenterPlanarityRatio = 1.0; ///< 相机中心协方差最小特征值/迹，越小越接近平面。
     bool hasClosedSequenceGeometry = false; ///< 全部序列影像注册且首尾可评估。
     double sequenceAdjacentDistanceMedian = 0.0; ///< 含闭环边的相邻中心距离中位数。
     double sequenceAdjacentDistanceMaximumRatio = 0.0; ///< 最大相邻距离/中位数。

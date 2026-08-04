@@ -61,10 +61,21 @@ double closedSequenceQualityScore(const SfmCandidateSummary &candidate)
 
 double photogrammetricQualityScore(const SfmCandidateSummary &candidate)
 {
+    const double aerialBlockQuality = candidate.hasAerialBlockGeometry
+        ? 1.0 / (1.0 + 100.0 * std::max(0.0, candidate.cameraCenterPlanarityRatio))
+        : 0.0;
+
     if (candidate.hasNetworkQuality && candidate.hasClosedSequenceGeometry)
     {
         return 0.50 * networkQualityScore(candidate) +
                0.50 * closedSequenceQualityScore(candidate);
+    }
+    if (candidate.hasNetworkQuality && candidate.hasAerialBlockGeometry)
+    {
+        // 近垂直摄影中，焦距与高程存在强相关。仅按交会角和点数会偏向
+        // 人工穹顶解，因此把相机中心平面性作为同等级的几何刚性指标。
+        return 0.65 * networkQualityScore(candidate) +
+               0.35 * aerialBlockQuality;
     }
     if (candidate.hasNetworkQuality)
     {
@@ -246,8 +257,10 @@ std::vector<int> replayCandidateIndices(
 
 std::vector<double> adaptiveFocalScaleCandidates()
 {
-    // 覆盖广角、普通视场与转台/长焦影像。Hayabusa2 ONC-T 的焦距约为图像宽度的 9 倍。
-    return {0.55, 0.70, 0.85, 1.2, 1.6, 2.0, 2.4, 2.8, 3.2, 4.0, 5.2, 6.4,
+    // 0.95~1.05 覆盖全画幅 35 mm 等常见航测相机。该区间不能只用 0.85/1.2
+    // 两端代替，否则近垂直航测块会通过弯曲相机轨迹吸收焦距误差。
+    // 同时保留转台和 Hayabusa2 ONC-T（约 9 倍影像宽度）的长焦范围。
+    return {0.55, 0.70, 0.85, 0.95, 1.0, 1.05, 1.2, 1.6, 2.0, 2.4, 2.8, 3.2, 4.0, 5.2, 6.4,
             8.0, 9.0, 10.0};
 }
 

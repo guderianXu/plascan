@@ -145,6 +145,34 @@ TEST(BundleAdjustCeresPlanningTest, PointOnlyProblemUsesDenseQr)
     EXPECT_FALSE(plan.useCuda);
 }
 
+TEST(BundleAdjustBackendSelectionTest, LargeSharedRadialProblemUsesCeresCudaWhenAvailable)
+{
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::Auto;
+    options.refineCameraPose = true;
+    options.refineSharedFocalLength = true;
+    options.refineSharedRadialDistortion = true;
+    options.minCeresCudaCameras = 50;
+    options.minCeresCudaObservations = 100000;
+
+    xjw::BAProblemStats stats;
+    stats.cameraCount = 442;
+    stats.trackCount = 360000;
+    stats.observationCount = 800000;
+
+    const xjw::BABackendDecision decision =
+        xjw::BundleAdjust::decideBackendForProblem(stats, options);
+    if (xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCuda))
+    {
+        EXPECT_EQ(decision.backend, xjw::BABackend::CeresCuda);
+        EXPECT_EQ(decision.reason, "large_joint_shared_intrinsics_uses_ceres_cuda");
+    }
+    else
+    {
+        EXPECT_EQ(decision.backend, xjw::BABackend::CeresCpu);
+    }
+}
+
 TEST(BundleAdjustCeresPlanningTest, MissingSparseLibraryUsesIterativeSchur)
 {
     xjw::BAOptions options;

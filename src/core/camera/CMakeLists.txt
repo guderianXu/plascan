@@ -2,6 +2,7 @@
 add_library(camera STATIC
 	Camera.cpp
 	CameraBaseline.cpp
+	CameraIntrinsicPrior.cpp
 	CameraFormatConverter.cpp
 	ProjectCameraIO.cpp
 )
@@ -37,6 +38,15 @@ if(BUILD_TESTS)
 		)
 		target_include_directories(test_camera_baseline PRIVATE ${CMAKE_SOURCE_DIR}/src/core/camera)
 		gtest_discover_tests(test_camera_baseline)
+
+		# EXIF 焦距与固定镜头型号目录的像素焦距换算。
+		add_executable(test_camera_intrinsic_prior test/CameraIntrinsicPrior_tests.cpp)
+		target_link_libraries(test_camera_intrinsic_prior PRIVATE
+			camera
+			GTest::gtest_main
+		)
+		target_include_directories(test_camera_intrinsic_prior PRIVATE ${CMAKE_SOURCE_DIR}/src/core/camera)
+		gtest_discover_tests(test_camera_intrinsic_prior)
 
 		# 仓库测试数据回归：TEST_DATA_DIR 使用绝对源码路径，不依赖 CTest 工作目录。
 		add_executable(test_camera_tsai test/test_tsai_loader.cpp)
