@@ -1405,45 +1405,7 @@ void CameraSceneWidget::loadModelFromPlyInternal(const QString &plyPath,
 
         try
         {
-            const PlyPreviewResult preview = readBinaryPlyPreview(plyPath, reportProgress);
-            if (preview.header.vertexCount > kMaxDirectPlyVertices && preview.header.faceCount == 0)
-            {
-                if (preview.header.valid && preview.cloud)
-                {
-                    LOG_INFO(QStringLiteral("[3D] PLY 过大，使用预览抽样: 原始 %1 点，显示 %2 点，抽样步长 %3")
-                                 .arg(preview.header.vertexCount)
-                                 .arg(preview.cloud->size())
-                                 .arg(qMax<quint64>(
-                                     1,
-                                     (preview.header.vertexCount + preview.cloud->size() - 1)
-                                         / qMax<quint64>(1, preview.cloud->size()))));
-                    return preview.cloud;
-                }
-                LOG_ERROR(QStringLiteral("[3D] PLY 文件过大，无法安全完整加载；预览加载失败: %1")
-                              .arg(preview.error));
-                return nullptr;
-            }
-            if (preview.header.vertexCount > kMaxDirectPlyVertices && preview.header.faceCount > 0)
-            {
-                reportProgress(5,
-                               QStringLiteral("正在完整加载 PLY 网格 (%1 顶点 / %2 面)...")
-                                   .arg(preview.header.vertexCount)
-                                   .arg(preview.header.faceCount));
-                LOG_INFO(QStringLiteral("[3D] PLY 网格较大，保留面片完整加载: %1 顶点 / %2 面")
-                             .arg(preview.header.vertexCount)
-                             .arg(preview.header.faceCount));
-            }
-            else if (preview.header.valid)
-            {
-                reportProgress(5,
-                               QStringLiteral("正在完整加载 PLY 点云 (%1 顶点 / %2 面)...")
-                                   .arg(preview.header.vertexCount)
-                                   .arg(preview.header.faceCount));
-            }
-            else
-            {
-                reportProgress(5, QStringLiteral("正在完整加载 PLY 点云..."));
-            }
+            reportProgress(5, QStringLiteral("正在完整加载 PLY 点云或模型（不抽稀）..."));
             return plapoint::io::readPly<float>(xjw::common::io::toNativeNarrowPath(plyPath));
         }
         catch (const std::exception &e)
@@ -4031,10 +3993,6 @@ void CameraSceneWidget::drawPointCloudOverlay(QPainter &painter) const
         }
     }
 
-    constexpr std::size_t maximumOverlayPointCount = 150'000;
-    const std::size_t pointStride = qMax<std::size_t>(
-        1,
-        (_cloud.size() + maximumOverlayPointCount - 1) / maximumOverlayPointCount);
     const bool hasColors = _cloud.hasColors();
     const bool hasNormals = _cloud.hasNormals();
     const bool hasImageCounts =
@@ -4054,7 +4012,7 @@ void CameraSceneWidget::drawPointCloudOverlay(QPainter &painter) const
 
     QHash<QRgb, QVector<QPointF>> pointsByColor;
     pointsByColor.reserve(512);
-    for (std::size_t index = 0; index < _cloud.size(); index += pointStride)
+    for (std::size_t index = 0; index < _cloud.size(); ++index)
     {
         const plamatrix::Index cloudIndex = static_cast<plamatrix::Index>(index);
         const QVector3D point(
@@ -4217,6 +4175,87 @@ void CameraSceneWidget::drawPointCloudOverlay(QPainter &painter) const
     painter.restore();
 }
 
+void CameraSceneWidget::drawRotationGizmo(QPainter &painter) const
+{
+    if (!_showGizmo)
+    {
+        return;
+    }
+
+    const QPointF center2d = manipCenterScreen();
+    const qreal radiusPx = manipRadiusPx();
+    QRadialGradient gradient(
+        center2d - QPointF(radiusPx * 0.18, radiusPx * 0.18),
+        radiusPx * 1.25);
+    gradient.setColorAt(0.0, QColor(245, 245, 248, 40));
+    gradient.setColorAt(1.0, QColor(175, 178, 186, 28));
+    painter.setPen(QPen(QColor(210, 210, 216, 44), 1.0));
+    painter.setBrush(gradient);
+    painter.drawEllipse(center2d, radiusPx, radiusPx);
+
+    const auto axisPen = [this](HoverAxis axis, const QColor &base)
+    {
+        const bool highlighted =
+            (_hoverAxis == axis) || (_dragAxis == axis && _leftDragging);
+        QColor color = base;
+        if (highlighted)
+        {
+            color = color.lighter(150);
+        }
+        return QPen(color, highlighted ? 4.0 : 2.0);
+    };
+    const auto drawGreatCircle = [&](HoverAxis axis, const QColor &color)
+    {
+        painter.setPen(axisPen(axis, color));
+        QPointF previous;
+        QPointF first;
+        bool hasPrevious = false;
+        bool previousVisible = false;
+        bool firstVisible = false;
+        for (int index = 0; index <= 128; ++index)
+        {
+            const qreal angle = (2.0 * M_PI * index) / 128.0;
+            QVector3D localPoint;
+            if (axis == HoverAxis::X)
+            {
+                localPoint = QVector3D(0.0f, float(std::cos(angle)), float(std::sin(angle)));
+            }
+            else if (axis == HoverAxis::Y)
+            {
+                localPoint = QVector3D(float(std::cos(angle)), 0.0f, float(std::sin(angle)));
+            }
+            else
+            {
+                localPoint = QVector3D(float(std::cos(angle)), float(std::sin(angle)), 0.0f);
+            }
+            const QVector3D viewPoint = applyViewRotation(localPoint);
+            const bool visible = viewPoint.z() > 0.0f;
+            const QPointF current = center2d + QPointF(
+                viewPoint.x() * radiusPx,
+                -viewPoint.y() * radiusPx);
+            if (!hasPrevious)
+            {
+                first = current;
+                firstVisible = visible;
+            }
+            else if (previousVisible && visible)
+            {
+                painter.drawLine(previous, current);
+            }
+            previous = current;
+            previousVisible = visible;
+            hasPrevious = true;
+        }
+        if (hasPrevious && firstVisible && previousVisible)
+        {
+            painter.drawLine(previous, first);
+        }
+    };
+    drawGreatCircle(HoverAxis::X, QColor(255, 110, 110, 150));
+    drawGreatCircle(HoverAxis::Y, QColor(110, 255, 150, 150));
+    drawGreatCircle(HoverAxis::Z, QColor(110, 170, 255, 150));
+}
+
 void CameraSceneWidget::paintOverlay(QPainter &painter)
 {
     if (!painter.isActive())
@@ -4245,57 +4284,6 @@ void CameraSceneWidget::paintOverlay(QPainter &painter)
         visibleScene = visibleScene.subtracted(foregroundImageOcclusion);
         painter.setClipPath(visibleScene, Qt::IntersectClip);
     }
-
-    const QPointF center2d = manipCenterScreen();
-    const qreal radiusPx = manipRadiusPx();
-
-    // ── 操控球（Gizmo）：仅当 _showGizmo 为 true 时绘制 ───────────────
-    if (_showGizmo) {
-    QRadialGradient grad(center2d - QPointF(radiusPx * 0.18, radiusPx * 0.18), radiusPx * 1.25);
-    grad.setColorAt(0.0, QColor(245, 245, 248, 40));
-    grad.setColorAt(1.0, QColor(175, 178, 186, 28));
-    painter.setPen(QPen(QColor(210, 210, 216, 44), 1.0));
-    painter.setBrush(grad);
-    painter.drawEllipse(center2d, radiusPx, radiusPx);
-
-    auto axisPen = [&](HoverAxis axis, const QColor &base) {
-        const bool hl = (_hoverAxis == axis) || (_dragAxis == axis && _leftDragging);
-        QColor cc = base;
-        if (hl) cc = cc.lighter(150);
-        return QPen(cc, hl ? 4.0 : 2.0);
-    };
-    auto drawGreatCircle = [&](HoverAxis axis, const QColor &color) {
-        painter.setPen(axisPen(axis, color));
-        QPointF prev;
-        QPointF first;
-        bool hasPrev = false;
-        bool prevVisible = false;
-        bool firstVisible = false;
-        for (int i = 0; i <= 128; ++i) {
-            const qreal t = (2.0 * M_PI * i) / 128.0;
-            QVector3D pLocal;
-            if (axis == HoverAxis::X) pLocal = QVector3D(0.0f, float(std::cos(t)), float(std::sin(t)));
-            else if (axis == HoverAxis::Y) pLocal = QVector3D(float(std::cos(t)), 0.0f, float(std::sin(t)));
-            else pLocal = QVector3D(float(std::cos(t)), float(std::sin(t)), 0.0f);
-            QVector3D pView = applyViewRotation(pLocal);
-            const bool currVisible = (pView.z() > 0.0f);
-            QPointF curr = center2d + QPointF(pView.x() * radiusPx, -pView.y() * radiusPx);
-            if (!hasPrev) {
-                first = curr;
-                firstVisible = currVisible;
-            } else {
-                if (prevVisible && currVisible) painter.drawLine(prev, curr);
-            }
-            prev = curr;
-            prevVisible = currVisible;
-            hasPrev = true;
-        }
-        if (hasPrev && firstVisible && prevVisible) painter.drawLine(prev, first);
-    };
-    drawGreatCircle(HoverAxis::X, QColor(255, 110, 110, 52));
-    drawGreatCircle(HoverAxis::Y, QColor(110, 255, 150, 52));
-    drawGreatCircle(HoverAxis::Z, QColor(110, 170, 255, 52));
-    } // end if (_showGizmo)
 
     // 无面点云使用稳定的 QPainter 点样式；连接点还会按三维照片平面的
     // 投影深度剔除被遮挡点，避免点云穿透相机缩略图。
@@ -4465,6 +4453,9 @@ void CameraSceneWidget::paintOverlay(QPainter &painter)
 
     }
 
+    // 操控球是交互前景层，必须在点云和相机标注之后绘制，避免缩小时
+    // 被高密度点云遮挡而无法识别或拖动。
+    drawRotationGizmo(painter);
     drawFloorPivotCross(painter);
     painter.restore();
 

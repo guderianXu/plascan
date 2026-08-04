@@ -519,8 +519,10 @@ TEST(CameraSceneRenderContractTest, ImportedPointCloudsUsePointCloudLoadersAndFi
         "void drawPointCloudOverlay(QPainter &painter) const;")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral(
         "if (_cloud.size() == 0 || _cloud.hasFaces())")));
+    EXPECT_FALSE(sceneSource.contains(QStringLiteral("maximumOverlayPointCount")));
+    EXPECT_FALSE(sceneSource.contains(QStringLiteral("pointStride")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral(
-        "constexpr std::size_t maximumOverlayPointCount = 150'000")));
+        "for (std::size_t index = 0; index < _cloud.size(); ++index)")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral("QColor::fromRgbF(")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral(
         "constexpr float byteScale = 1.0f / 255.0f")));
@@ -536,6 +538,12 @@ TEST(CameraSceneRenderContractTest, ImportedPointCloudsUsePointCloudLoadersAndFi
         "if (ndc.z() < pointCloudDepth[pixelIndex])")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral(
         "pointCloudImage.setPixelColor(pixelX, pixelY, color)")));
+    const qsizetype pointCloudDrawStart = sceneSource.indexOf(
+        QStringLiteral("drawPointCloudOverlay(painter);"));
+    const qsizetype gizmoDrawStart = sceneSource.indexOf(
+        QStringLiteral("drawRotationGizmo(painter);"), pointCloudDrawStart);
+    ASSERT_GE(pointCloudDrawStart, 0);
+    EXPECT_GT(gizmoDrawStart, pointCloudDrawStart);
 }
 
 TEST(CameraSceneRenderContractTest, PointCloudUsesOwnBoundsAndPixelSizedFloorPivot)

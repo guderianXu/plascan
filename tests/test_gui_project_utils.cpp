@@ -12443,29 +12443,28 @@ TEST(CameraModel3DDialogTest, CameraPhotoPlanesUseDepthTestedQrhiGeometry)
     EXPECT_FALSE(source.contains(QStringLiteral("drawImageOnCameraPlane")));
 }
 
-TEST(CameraModel3DDialogTest, LargeBinaryPlyLoadsAsBoundedStreamingPreview)
+TEST(CameraModel3DDialogTest, LargeBinaryPlyLoadsEveryPointWithoutPreviewSampling)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
     ASSERT_FALSE(source.isEmpty());
     ASSERT_FALSE(header.isEmpty());
 
-    EXPECT_TRUE(source.contains(QStringLiteral("kDefaultPreviewPlyVertices = 3'000'000")));
-    EXPECT_TRUE(source.contains(QStringLiteral("kMaxPreviewPlyVertices = 5'000'000")));
-    EXPECT_TRUE(source.contains(QStringLiteral("availableSystemMemoryBytes")));
-    EXPECT_TRUE(source.contains(QStringLiteral("choosePreviewPlyVertexLimit")));
-    EXPECT_TRUE(source.contains(QStringLiteral("kMaxPreviewPlyVertices")));
-    EXPECT_TRUE(source.contains(QStringLiteral("parsePlyPreviewHeader")));
-    EXPECT_TRUE(source.contains(QStringLiteral("readBinaryPlyPreview")));
-    EXPECT_TRUE(source.contains(QStringLiteral("faceCount")));
-    EXPECT_TRUE(source.contains(QStringLiteral("PlyPreviewProgressCallback")));
+    const qsizetype loaderStart = source.indexOf(QStringLiteral(
+        "void CameraSceneWidget::loadPointCloudFromPly"));
+    const qsizetype nextLoaderStart = source.indexOf(QStringLiteral(
+        "void CameraSceneWidget::loadModelFromObj"), loaderStart);
+    ASSERT_GE(loaderStart, 0);
+    ASSERT_GT(nextLoaderStart, loaderStart);
+    const QString loaderBlock = source.mid(loaderStart, nextLoaderStart - loaderStart);
+    EXPECT_TRUE(loaderBlock.contains(QStringLiteral("plapoint::io::readPly<float>")));
+    EXPECT_TRUE(loaderBlock.contains(QStringLiteral("不抽稀")));
+    EXPECT_FALSE(loaderBlock.contains(QStringLiteral("readBinaryPlyPreview(")));
+    EXPECT_FALSE(loaderBlock.contains(QStringLiteral("预览抽样")));
+    EXPECT_FALSE(loaderBlock.contains(QStringLiteral("sampleStride")));
     EXPECT_TRUE(source.contains(QStringLiteral("emit plyLoadProgressChanged")));
     EXPECT_TRUE(source.contains(QStringLiteral("drawPlyLoadProgressOverlay")));
     EXPECT_TRUE(source.contains(QStringLiteral("_plyLoadProgressPercent")));
-    EXPECT_TRUE(source.contains(QStringLiteral("preview.header.vertexCount > kMaxDirectPlyVertices")));
-    EXPECT_TRUE(source.contains(QStringLiteral("preview.header.faceCount == 0")));
-    EXPECT_TRUE(source.contains(QStringLiteral("file.seek(recordOffset + static_cast<qint64>(i) * preview.header.vertexStride)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("[3D] PLY 过大，使用预览抽样")));
     EXPECT_TRUE(header.contains(QStringLiteral("plyLoadProgressChanged")));
 }
 
@@ -12476,7 +12475,7 @@ TEST(CameraModel3DDialogTest, PlyLoadProgressDoesNotRegressAfterFinished)
 
     EXPECT_TRUE(source.contains(QStringLiteral("if (!_loading && percent < 100)")))
         << "Late queued PLY progress from the worker must not re-enable the loading overlay after the model loaded.";
-    EXPECT_TRUE(source.contains(QStringLiteral("正在完整加载 PLY 点云")))
+    EXPECT_TRUE(source.contains(QStringLiteral("正在完整加载 PLY 点云或模型（不抽稀）")))
         << "Direct PLY loading should advance the overlay beyond the header parsing stage.";
 }
 

@@ -301,6 +301,7 @@ private:
     void paintOverlay(QPainter &painter);
     void drawPlyLoadProgressOverlay(QPainter &painter);
     void drawPointCloudOverlay(QPainter &painter) const;
+    void drawRotationGizmo(QPainter &painter) const;
     void drawTiePointLegend(QPainter &painter) const;
     void drawModelLegend(QPainter &painter) const;
     void startTiePointMetadataLoad(const QString &sidecarPath, int generation);
