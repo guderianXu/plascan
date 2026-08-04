@@ -940,6 +940,14 @@ if(Python3_Interpreter_FOUND)
     set_tests_properties(EstimateLidarNormalsTest PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+
+    add_test(
+        NAME SummarizeMvsDepthProvenanceTest
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_summarize_mvs_depth_provenance
+    )
+    set_tests_properties(SummarizeMvsDepthProvenanceTest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
 endif()
 
 # ==============================================================================
