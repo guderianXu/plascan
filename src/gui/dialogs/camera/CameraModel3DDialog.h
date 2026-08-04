@@ -123,6 +123,10 @@ public:
     void setMesh(const RenderCloud &mesh);
     // 从 XYZ 文本文件加载点云（每行 "x y z [r g b ...]"）
     void loadPointCloudFromXyz(const QString &xyzPath);
+    // 从 PLY 点云加载并在完成后自动适应视图。
+    void loadPointCloudFromPly(const QString &plyPath);
+    // 从 OBJ 顶点点云加载；不执行模型材质、UV 和三角面渲染准备。
+    void loadPointCloudFromObj(const QString &objPath);
 
     // 从 PLY 文件加载三角网格或点云模型
     void loadModelFromPly(const QString &plyPath);
@@ -305,10 +309,12 @@ private:
                                        bool fitAfterLoad);
     void loadModelFromPlyInternal(const QString &plyPath,
                                   bool tiePointCloud,
-                                  bool fitAfterLoad);
+                                  bool fitAfterLoad,
+                                  bool pointCloudResource);
     void loadModelFromObjInternal(const QString &objPath,
                                   bool tiePointCloud,
-                                  bool fitAfterLoad);
+                                  bool fitAfterLoad,
+                                  bool pointCloudResource);
     void fitViewToLoadedGeometry();
 
     // 将点云和模型数据整理为 RHI 顶点缓冲，在 render 中按需上传。

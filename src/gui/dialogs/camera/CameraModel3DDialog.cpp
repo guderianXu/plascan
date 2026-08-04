@@ -1190,7 +1190,7 @@ void CameraSceneWidget::setMesh(const RenderCloud &mesh)
 // 从 XYZ 格式文本文件异步加载点云数据，使用 plapoint IO 解析。
 void CameraSceneWidget::loadPointCloudFromXyz(const QString &xyzPath)
 {
-    loadPointCloudFromXyzInternal(xyzPath, false, false);
+    loadPointCloudFromXyzInternal(xyzPath, false, true);
 }
 
 void CameraSceneWidget::loadPointCloudFromXyzInternal(const QString &xyzPath,
@@ -1272,12 +1272,18 @@ void CameraSceneWidget::loadPointCloudFromXyzInternal(const QString &xyzPath,
 // 从 PLY 文件异步加载网格模型或点云。
 void CameraSceneWidget::loadModelFromPly(const QString &plyPath)
 {
-    loadModelFromPlyInternal(plyPath, false, false);
+    loadModelFromPlyInternal(plyPath, false, false, false);
+}
+
+void CameraSceneWidget::loadPointCloudFromPly(const QString &plyPath)
+{
+    loadModelFromPlyInternal(plyPath, false, true, true);
 }
 
 void CameraSceneWidget::loadModelFromPlyInternal(const QString &plyPath,
                                                  bool tiePointCloud,
-                                                 bool fitAfterLoad)
+                                                 bool fitAfterLoad,
+                                                 bool pointCloudResource)
 {
     cancelPendingLoad();
     _currentCloudPath = plyPath;
@@ -1302,16 +1308,21 @@ void CameraSceneWidget::loadModelFromPlyInternal(const QString &plyPath,
     _gpuDirty   = true;
     _loading = true;
     _plyLoadProgressPercent = 0;
-    _plyLoadProgressText = QStringLiteral("正在加载密集点云...");
+    _plyLoadProgressText = pointCloudResource
+        ? QStringLiteral("正在加载 PLY 点云...")
+        : QStringLiteral("正在加载 PLY 模型...");
     update();
-    LOG_INFO(QStringLiteral("[3D] 正在加载模型: %1").arg(plyPath));
+    LOG_INFO(QStringLiteral("[3D] 正在加载 PLY %1: %2")
+                 .arg(pointCloudResource ? QStringLiteral("点云")
+                                         : QStringLiteral("模型"),
+                      plyPath));
 
     const int gen = _loadGen;
     emit plyLoadProgressChanged(gen, 0, _plyLoadProgressText);
     QPointer<CameraSceneWidget> self(this);
     auto *watcher = new QFutureWatcher<std::shared_ptr<RenderCloud>>(this);
     connect(watcher, &QFutureWatcher<std::shared_ptr<RenderCloud>>::finished,
-            watcher, [self, watcher, gen]()
+            watcher, [self, watcher, gen, pointCloudResource]()
     {
         if (!self)
         {
@@ -1352,11 +1363,16 @@ void CameraSceneWidget::loadModelFromPlyInternal(const QString &plyPath,
             self->_loading = false;
             self->_plyLoadProgressPercent = -1;
             self->_plyLoadProgressText.clear();
-            LOG_INFO(QStringLiteral("[3D] 模型加载完成，共 %1 顶点 / %2 面%3")
-                     .arg(self->_cloud.size())
-                     .arg(self->_cloud.hasFaces() ? static_cast<int>(self->_cloud.faces()->rows()) : 0)
-                     .arg(self->_cloud.hasColors() ? QStringLiteral("（含RGB颜色）")
-                                                    : QStringLiteral("（无颜色）")));
+            LOG_INFO(QStringLiteral("[3D] PLY %1加载完成，共 %2 顶点 / %3 面%4")
+                         .arg(pointCloudResource ? QStringLiteral("点云")
+                                                 : QStringLiteral("模型"))
+                         .arg(self->_cloud.size())
+                         .arg(self->_cloud.hasFaces()
+                                  ? static_cast<int>(self->_cloud.faces()->rows())
+                                  : 0)
+                         .arg(self->_cloud.hasColors()
+                                  ? QStringLiteral("（含RGB颜色）")
+                                  : QStringLiteral("（无颜色）")));
             self->invalidateCache();
             if (self->_fitViewAfterLoad)
             {
@@ -1440,12 +1456,18 @@ void CameraSceneWidget::loadModelFromPlyInternal(const QString &plyPath,
 
 void CameraSceneWidget::loadModelFromObj(const QString &objPath)
 {
-    loadModelFromObjInternal(objPath, false, false);
+    loadModelFromObjInternal(objPath, false, false, false);
+}
+
+void CameraSceneWidget::loadPointCloudFromObj(const QString &objPath)
+{
+    loadModelFromObjInternal(objPath, false, true, true);
 }
 
 void CameraSceneWidget::loadModelFromObjInternal(const QString &objPath,
                                                  bool tiePointCloud,
-                                                 bool fitAfterLoad)
+                                                 bool fitAfterLoad,
+                                                 bool pointCloudResource)
 {
     cancelPendingLoad();
     _currentCloudPath = objPath;
@@ -1470,16 +1492,21 @@ void CameraSceneWidget::loadModelFromObjInternal(const QString &objPath,
     _gpuDirty = true;
     _loading = true;
     _plyLoadProgressPercent = 0;
-    _plyLoadProgressText = QStringLiteral("正在加载 OBJ 模型...");
+    _plyLoadProgressText = pointCloudResource
+        ? QStringLiteral("正在加载 OBJ 点云...")
+        : QStringLiteral("正在加载 OBJ 模型...");
     update();
-    LOG_INFO(QStringLiteral("[3D] 正在加载 OBJ 模型: %1").arg(objPath));
+    LOG_INFO(QStringLiteral("[3D] 正在加载 OBJ %1: %2")
+                 .arg(pointCloudResource ? QStringLiteral("点云")
+                                         : QStringLiteral("模型"),
+                      objPath));
 
     const int gen = _loadGen;
     emit plyLoadProgressChanged(gen, 0, _plyLoadProgressText);
     QPointer<CameraSceneWidget> self(this);
     auto *watcher = new QFutureWatcher<ObjLoadResult>(this);
     connect(watcher, &QFutureWatcher<ObjLoadResult>::finished,
-            watcher, [self, watcher, gen]()
+            watcher, [self, watcher, gen, pointCloudResource]()
     {
         if (!self)
         {
@@ -1529,20 +1556,26 @@ void CameraSceneWidget::loadModelFromObjInternal(const QString &objPath,
             self->_plyLoadProgressText.clear();
             if (self->_cloud.size() == 0)
             {
-                LOG_ERROR(QStringLiteral("[3D] OBJ 模型加载失败或为空"));
+                LOG_ERROR(QStringLiteral("[3D] OBJ %1加载失败或为空")
+                              .arg(pointCloudResource ? QStringLiteral("点云")
+                                                      : QStringLiteral("模型")));
             }
             else
             {
-                LOG_INFO(QStringLiteral("[3D] OBJ 模型加载完成，共 %1 顶点 / %2 面%3")
+                LOG_INFO(QStringLiteral("[3D] OBJ %1加载完成，共 %2 顶点 / %3 面%4")
+                             .arg(pointCloudResource ? QStringLiteral("点云")
+                                                     : QStringLiteral("模型"))
                              .arg(self->_cloud.size())
                              .arg(self->_cloud.hasFaces() ? static_cast<int>(self->_cloud.faces()->rows()) : 0)
                              .arg(self->_meshTextureImage.isNull()
                                       ? QStringLiteral("（顶点颜色）")
                                       : QStringLiteral("（MTL 纹理）")));
-                LOG_INFO(QStringLiteral("[3D] OBJ 耗时: 解析 %1 ms，渲染数据准备 %2 ms")
+                LOG_INFO(QStringLiteral("[3D] OBJ %1耗时: 解析 %2 ms，渲染数据准备 %3 ms")
+                             .arg(pointCloudResource ? QStringLiteral("点云")
+                                                     : QStringLiteral("模型"))
                              .arg(result.parseElapsedMs)
                              .arg(result.prepareElapsedMs));
-                if (!result.textureWarning.isEmpty())
+                if (!pointCloudResource && !result.textureWarning.isEmpty())
                 {
                     LOG_WARN(QStringLiteral("[3D] %1").arg(result.textureWarning));
                 }
@@ -1558,7 +1591,8 @@ void CameraSceneWidget::loadModelFromObjInternal(const QString &objPath,
         }
         watcher->deleteLater();
     });
-    watcher->setFuture(QtConcurrent::run([objPath, self, gen]() -> ObjLoadResult
+    watcher->setFuture(QtConcurrent::run(
+        [objPath, self, gen, pointCloudResource]() -> ObjLoadResult
     {
         auto reportProgress = [self, gen](int percent, const QString &statusText)
         {
@@ -1578,15 +1612,35 @@ void CameraSceneWidget::loadModelFromObjInternal(const QString &objPath,
 
         try
         {
-            reportProgress(5, QStringLiteral("正在解析 OBJ 模型..."));
-            ObjLoadResult result = loadObjWithMaterialTexture(objPath, reportProgress);
+            reportProgress(5,
+                           pointCloudResource
+                               ? QStringLiteral("正在解析 OBJ 点云...")
+                               : QStringLiteral("正在解析 OBJ 模型..."));
+            ObjLoadResult result;
+            if (pointCloudResource)
+            {
+                QElapsedTimer timer;
+                timer.start();
+                result.cloud = plapoint::io::readObj<float>(
+                    xjw::common::io::toNativeNarrowPath(objPath));
+                result.parseElapsedMs = timer.elapsed();
+            }
+            else
+            {
+                result = loadObjWithMaterialTexture(objPath, reportProgress);
+            }
             if (!result.cloud || result.cloud->size() == 0)
             {
-                reportProgress(100, QStringLiteral("OBJ 模型为空"));
+                reportProgress(100,
+                               pointCloudResource
+                                   ? QStringLiteral("OBJ 点云为空")
+                                   : QStringLiteral("OBJ 模型为空"));
                 return result;
             }
             reportProgress(96,
-                           QStringLiteral("正在上传 OBJ 模型 (%1 顶点 / %2 面)...")
+                           QStringLiteral("正在上传 OBJ %1 (%2 顶点 / %3 面)...")
+                               .arg(pointCloudResource ? QStringLiteral("点云")
+                                                       : QStringLiteral("模型"))
                                .arg(result.cloud->size())
                                .arg(result.cloud->hasFaces()
                                         ? static_cast<int>(result.cloud->faces()->rows())
@@ -1608,11 +1662,11 @@ void CameraSceneWidget::loadTiePointCloudFromFile(const QString &pointCloudPath,
     const QString extension = QFileInfo(pointCloudPath).suffix().toLower();
     if (extension == QLatin1String("ply"))
     {
-        loadModelFromPlyInternal(pointCloudPath, true, true);
+        loadModelFromPlyInternal(pointCloudPath, true, true, true);
     }
     else if (extension == QLatin1String("obj"))
     {
-        loadModelFromObjInternal(pointCloudPath, true, true);
+        loadModelFromObjInternal(pointCloudPath, true, true, true);
     }
     else
     {

@@ -421,9 +421,9 @@ TEST(CameraSceneRenderContractTest, TiePointLoadFitsViewToLoadedGeometry)
     const QString tiePointLoadBlock =
         sceneSource.mid(tiePointLoadStart, fitViewStart - tiePointLoadStart);
     EXPECT_TRUE(tiePointLoadBlock.contains(
-        QStringLiteral("loadModelFromPlyInternal(pointCloudPath, true, true);")));
+        QStringLiteral("loadModelFromPlyInternal(pointCloudPath, true, true, true);")));
     EXPECT_TRUE(tiePointLoadBlock.contains(
-        QStringLiteral("loadModelFromObjInternal(pointCloudPath, true, true);")));
+        QStringLiteral("loadModelFromObjInternal(pointCloudPath, true, true, true);")));
     EXPECT_TRUE(tiePointLoadBlock.contains(
         QStringLiteral("loadPointCloudFromXyzInternal(pointCloudPath, true, true);")));
 
@@ -454,6 +454,52 @@ TEST(CameraSceneRenderContractTest, TiePointLoadFitsViewToLoadedGeometry)
         "if (_hasFocusedGeometryBounds)\n"
         "    {\n"
         "        return _focusedGeometryRadius;")));
+}
+
+TEST(CameraSceneRenderContractTest, ImportedPointCloudsUsePointCloudLoadersAndFitView)
+{
+    const QString sceneHeader =
+        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
+    const QString sceneSource =
+        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString workspaceSource =
+        readProjectFile(QStringLiteral("src/gui/widgets/WorkspaceCenterWidget.cpp"));
+
+    EXPECT_TRUE(sceneHeader.contains(QStringLiteral("void loadPointCloudFromPly(const QString &plyPath);")));
+    EXPECT_TRUE(sceneHeader.contains(QStringLiteral("void loadPointCloudFromObj(const QString &objPath);")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
+        "loadModelFromPlyInternal(plyPath, false, true, true);")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
+        "loadModelFromObjInternal(objPath, false, true, true);")));
+
+    const qsizetype pointCloudStart = workspaceSource.indexOf(
+        QStringLiteral("void WorkspaceCenterWidget::showPointCloudFile"));
+    const qsizetype tiePointStart = workspaceSource.indexOf(
+        QStringLiteral("void WorkspaceCenterWidget::showTiePointCloudFile"), pointCloudStart);
+    ASSERT_GE(pointCloudStart, 0);
+    ASSERT_GT(tiePointStart, pointCloudStart);
+    const QString pointCloudBlock = workspaceSource.mid(
+        pointCloudStart,
+        tiePointStart - pointCloudStart);
+    EXPECT_TRUE(pointCloudBlock.contains(QStringLiteral("loadPointCloudFromPly(pointCloudPath)")));
+    EXPECT_TRUE(pointCloudBlock.contains(QStringLiteral("loadPointCloudFromObj(pointCloudPath)")));
+    EXPECT_TRUE(pointCloudBlock.contains(QStringLiteral("loadPointCloudFromXyz(pointCloudPath)")));
+    EXPECT_TRUE(pointCloudBlock.contains(QStringLiteral("showModelView()")));
+    EXPECT_FALSE(pointCloudBlock.contains(QStringLiteral("showModelFile(pointCloudPath)")));
+
+    const qsizetype objLoaderStart = sceneSource.indexOf(
+        QStringLiteral("void CameraSceneWidget::loadModelFromObjInternal"));
+    const qsizetype tiePointLoaderStart = sceneSource.indexOf(
+        QStringLiteral("void CameraSceneWidget::loadTiePointCloudFromFile"), objLoaderStart);
+    ASSERT_GE(objLoaderStart, 0);
+    ASSERT_GT(tiePointLoaderStart, objLoaderStart);
+    const QString objLoaderBlock = sceneSource.mid(
+        objLoaderStart,
+        tiePointLoaderStart - objLoaderStart);
+    EXPECT_TRUE(objLoaderBlock.contains(QStringLiteral("if (pointCloudResource)")));
+    EXPECT_TRUE(objLoaderBlock.contains(QStringLiteral("plapoint::io::readObj<float>")));
+    EXPECT_TRUE(objLoaderBlock.contains(QStringLiteral(
+        "if (!pointCloudResource && !result.textureWarning.isEmpty())")));
 }
 
 TEST(CameraSceneRenderContractTest, PointCloudUsesOwnBoundsAndPixelSizedFloorPivot)

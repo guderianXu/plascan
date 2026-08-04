@@ -274,19 +274,24 @@ void WorkspaceCenterWidget::showPointCloudFile(const QString &pointCloudPath)
         return;
     }
     const QString ext = QFileInfo(pointCloudPath).suffix().toLower();
-    if (ext == QLatin1String("ply") || ext == QLatin1String("obj"))
+    if (ext == QLatin1String("ply"))
     {
-        showModelFile(pointCloudPath);
+        _modelView->loadPointCloudFromPly(pointCloudPath);
+    }
+    else if (ext == QLatin1String("obj"))
+    {
+        _modelView->loadPointCloudFromObj(pointCloudPath);
     }
     else
     {
         _modelView->loadPointCloudFromXyz(pointCloudPath);
-        if (_modelBtn)
-        {
-            setViewButtonText(_modelBtn, displayNameForPath(pointCloudPath), pointCloudPath);
-        }
-        showModelView();
     }
+
+    if (_modelBtn)
+    {
+        setViewButtonText(_modelBtn, displayNameForPath(pointCloudPath), pointCloudPath);
+    }
+    showModelView();
 }
 
 void WorkspaceCenterWidget::showTiePointCloudFile(const QString &pointCloudPath,
