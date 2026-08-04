@@ -95,6 +95,40 @@ QString createLoMaRPackage(const QString &directory,
     return manifestPath;
 }
 
+QString createPortableLoMaRPackage(const QString &directory,
+                                   int keypoints = 1024,
+                                   int featureKeypoints = 3840)
+{
+    const QString featureName = QStringLiteral("loma_r_features_k%1_fp16.onnx")
+                                    .arg(featureKeypoints);
+    const QString matcherName = QStringLiteral("loma_r_matcher_dynamic_fp16.onnx");
+    for (const QString &name : QStringList{featureName, matcherName})
+    {
+        QFile onnx(QDir(directory).filePath(name));
+        EXPECT_TRUE(onnx.open(QIODevice::WriteOnly));
+        EXPECT_GT(onnx.write("test-onnx"), 0);
+    }
+
+    const QJsonObject manifest{
+        {QStringLiteral("schema_version"), 2},
+        {QStringLiteral("algorithm_id"), QStringLiteral("loma_r")},
+        {QStringLiteral("algorithm_version"), 1},
+        {QStringLiteral("precision"), QStringLiteral("fp16")},
+        {QStringLiteral("feature_onnx"), featureName},
+        {QStringLiteral("matcher_onnx"), matcherName},
+        {QStringLiteral("input_width"), 784},
+        {QStringLiteral("input_height"), 784},
+        {QStringLiteral("keypoint_count"), keypoints},
+        {QStringLiteral("feature_keypoint_count"), featureKeypoints},
+        {QStringLiteral("descriptor_dimension"), 256}};
+    const QString manifestPath = QDir(directory).filePath(
+        QStringLiteral("loma_r_k%1_fp16.json").arg(keypoints));
+    QFile file(manifestPath);
+    EXPECT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write(QJsonDocument(manifest).toJson(QJsonDocument::Compact));
+    return manifestPath;
+}
+
 } // namespace
 
 TEST(MatchPhotosRuntimeTest, DefaultsToAutomaticTensorRtEngineLookup)
@@ -122,6 +156,26 @@ TEST(MatchPhotosRuntimeTest, ResolvesExplicitLoMaRTensorRtPackage)
     EXPECT_TRUE(QFileInfo::exists(resolved.matcherEnginePath));
     EXPECT_EQ(resolved.keypointCount, 2048);
     EXPECT_EQ(resolved.descriptorDimension, 256);
+}
+
+TEST(MatchPhotosRuntimeTest, ResolvesPortableLoMaRPackageWithoutBuildingEngine)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString manifestPath = createPortableLoMaRPackage(directory.path());
+
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.lomaRTensorRtPackagePath = manifestPath;
+    const auto resolved = xjw::matchphotos::resolveLoMaRTensorRtPackage(
+        options, 1024, false);
+
+    ASSERT_TRUE(resolved.isValid()) << qPrintable(resolved.errorMessage);
+    EXPECT_TRUE(QFileInfo::exists(resolved.featureOnnxPath));
+    EXPECT_TRUE(QFileInfo::exists(resolved.matcherOnnxPath));
+    EXPECT_TRUE(resolved.featureEnginePath.isEmpty());
+    EXPECT_TRUE(resolved.matcherEnginePath.isEmpty());
+    EXPECT_EQ(resolved.keypointCount, 1024);
+    EXPECT_EQ(resolved.featureKeypointCount, 3840);
 }
 
 TEST(MatchPhotosRuntimeTest, RejectsIncompleteLoMaRTensorRtPackage)
@@ -234,6 +288,29 @@ TEST(MatchPhotosRuntimeTest, SelectsLargestSafeEngineBucketFromModelDirectory)
     EXPECT_EQ(resolved.path, QDir::cleanPath(QFileInfo(bucket4096).absoluteFilePath()));
     EXPECT_EQ(resolved.bucketKeypoints, 4096);
     EXPECT_NE(resolved.path, QDir::cleanPath(QFileInfo(bucket2048).absoluteFilePath()));
+}
+
+TEST(MatchPhotosRuntimeTest, ResolvesPortableLightGlueOnnxWithoutBuildingEngine)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+
+    const QString onnxPath = directory.filePath(
+        QStringLiteral("lightglue_sift_bucket4096.onnx"));
+    QFile onnx(onnxPath);
+    ASSERT_TRUE(onnx.open(QIODevice::WriteOnly));
+    ASSERT_GT(onnx.write("test-onnx"), 0);
+    onnx.close();
+
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.lightGlueTensorRtEnginePath = onnxPath;
+    const auto resolved = xjw::matchphotos::resolveLightGlueTensorRtEngine(
+        options, 4096, false);
+
+    ASSERT_TRUE(resolved.isValid()) << qPrintable(resolved.errorMessage);
+    EXPECT_EQ(resolved.path, QDir::cleanPath(QFileInfo(onnxPath).absoluteFilePath()));
+    EXPECT_EQ(resolved.sourceOnnxPath, resolved.path);
+    EXPECT_EQ(resolved.bucketKeypoints, 4096);
 }
 
 TEST(MatchPhotosRuntimeTest, ResolvesLightGlueFromReleasePackageSubdirectory)

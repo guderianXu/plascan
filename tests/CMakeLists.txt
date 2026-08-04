@@ -155,6 +155,7 @@ target_include_directories(test_matchphotos_runtime PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/matchphototask/task
 )
 gtest_discover_tests(test_matchphotos_runtime)
+plascan_deploy_tensorrt_runtime(test_matchphotos_runtime)
 
 add_executable(test_matchphotos_pair_selector
     ${CMAKE_SOURCE_DIR}/src/core/matchphototask/tests/test_pair_selector.cpp

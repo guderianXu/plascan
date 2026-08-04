@@ -391,18 +391,19 @@ Metashape adjusted calibration 中的 `k1/k2/k3/p1/p2` 会写入 `.tsai`。
 # CUDA SIFT + TensorRT LightGlue；为 A、B 分别写一个 .pimatch 分片
 feature_match_cli -L A.tif -R B.tif `
   -o E:\project\assets\image_matches `
-  -m lightglue_sift_fp32.engine `
+  -m resources\models\lightglue_tensorrt\lightglue_sift_bucket4096.onnx `
   -a sift_lightglue --max-keypoints 40000
 ```
 
-SIFT 或 LoMa-R 描述子只存在于本次任务的内存缓存。LightGlue 和 LoMa-R 都只使用 TensorRT；最终分片保存关键点观测、
-相邻影像、置信度、几何内点和残差，不生成独立特征文件或 JSON sidecar。engine 导出、固定容量和
+SIFT 或 LoMa-R 描述子只存在于本次任务的内存缓存。LightGlue 和 LoMa-R 都只使用 TensorRT；Release
+分发 ONNX，目标机器首次使用时由 C++ TensorRT Builder 生成并缓存本机 engine。最终分片保存关键点观测、
+相邻影像、置信度、几何内点和残差，不生成独立特征文件或 JSON sidecar。ONNX 导出、固定容量和
 精度策略见 [docs/models/README.md](docs/models/README.md#sift--lightglue-tensorrt)。
 
 ### 密集重建流水线
 
 ```bash
-feature_match_cli   -L A.tif -R B.tif -o ./assets/image_matches -m lightglue_sift_fp32.engine
+feature_match_cli   -L A.tif -R B.tif -o ./assets/image_matches -m lightglue_sift_bucket4096.onnx
 rectify_cli         -L A.tif -R B.tif --camL A.txt --camR B.txt -o rect
 dense_match_cli     -L rect_L.tif -R rect_R.tif -o disp.tif --cuda --algorithm mgm
 triangulate_cli     -d disp.tif --rect rect.xml --camL A.txt --camR B.txt -o cloud.ply
@@ -410,7 +411,8 @@ triangulate_cli     -d disp.tif --rect rect.xml --camL A.txt --camR B.txt -o clo
 
 ## 模型文件
 
-从 [Releases](https://github.com/guderianXu/plascan/releases) 下载预训练模型，放置到 `resources/models/`。
+工作流程设置从 [`models-v1.1.0`](https://github.com/guderianXu/plascan/releases/tag/models-v1.1.0)
+下载便携 ONNX，并按源码运行或安装版自动选择可写模型目录。TensorRT engine 不再作为跨机器资产发布。
 
 “生成蒙版 → AI: U2Net ONNX”会自动检测 `U2Net_v1.onnx`；缺失时可直接在对话框中下载并校验。
 源码构建写入仓库 `resources/models/`，安装包运行则写入用户应用数据目录，避免修改只读安装目录。

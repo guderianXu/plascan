@@ -44,7 +44,7 @@ int main(int argc, char *argv[])
     app.add_option("-o,--output-dir", outputDirectoryArg,
                    "逐影像 .pimatch 输出目录")->required();
     app.add_option("-m,--model", enginePathArg,
-                   "算法模型资源：LightGlue .engine 或 LoMa-R JSON 清单");
+                   "算法模型资源：LightGlue .onnx/本机 .engine 或 LoMa-R JSON 清单");
     app.add_option("-a,--algorithm-id", algorithmIdArg,
                    "统一影像匹配算法 ID: sift_lightglue, loma_r")
         ->check(CLI::IsMember({"sift_lightglue", "loma_r"}));

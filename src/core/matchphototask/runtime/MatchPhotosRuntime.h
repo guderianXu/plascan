@@ -39,6 +39,9 @@ struct ResolvedLightGlueTensorRtEngine
 {
     QString path;
     QString name;
+    QString sourceOnnxPath;
+    QString environmentSummary;
+    QString errorMessage;
     int bucketKeypoints = 0;
     QStringList searchedDirectories;
 
@@ -56,18 +59,25 @@ struct ResolvedLoMaRTensorRtPackage
     QString manifestPath;
     QString featureEnginePath;
     QString matcherEnginePath;
+    QString featureOnnxPath;
+    QString matcherOnnxPath;
+    QString environmentSummary;
     int inputWidth = 0;
     int inputHeight = 0;
     int keypointCount = 0;
+    int featureKeypointCount = 0;
     int descriptorDimension = 0;
     QString errorMessage;
     QStringList searchedDirectories;
 
     bool isValid() const
     {
-        return !manifestPath.isEmpty() && !featureEnginePath.isEmpty() &&
-            !matcherEnginePath.isEmpty() && inputWidth > 0 && inputHeight > 0 &&
-            keypointCount > 0 && descriptorDimension > 0;
+        const bool hasEngines = !featureEnginePath.isEmpty() && !matcherEnginePath.isEmpty();
+        const bool hasOnnx = !featureOnnxPath.isEmpty() && !matcherOnnxPath.isEmpty();
+        return !manifestPath.isEmpty() && (hasEngines || hasOnnx) &&
+            inputWidth > 0 && inputHeight > 0 &&
+            keypointCount > 0 && featureKeypointCount >= keypointCount &&
+            descriptorDimension > 0;
     }
 };
 
@@ -88,7 +98,8 @@ bool resolveMatchPhotosPair(const MatchPhotosContext &context,
 
 ResolvedLightGlueTensorRtEngine resolveLightGlueTensorRtEngine(
     const MatchPhotosOptions &options,
-    int preferredKeypoints = 0);
+    int preferredKeypoints = 0,
+    bool prepareEngine = true);
 
 // 保留轻量路径接口供既有调用者使用；新代码需要桶容量时应使用上面的完整结果。
 QString resolveLightGlueTensorRtEnginePath(const MatchPhotosOptions &options,
@@ -96,7 +107,8 @@ QString resolveLightGlueTensorRtEnginePath(const MatchPhotosOptions &options,
 
 ResolvedLoMaRTensorRtPackage resolveLoMaRTensorRtPackage(
     const MatchPhotosOptions &options,
-    int preferredKeypoints = 0);
+    int preferredKeypoints = 0,
+    bool prepareEngines = true);
 
 int resolveFeatureKeypointLimit(const MatchPhotosOptions &options,
                                 const MatchPhotosAlgorithmPlan &plan,

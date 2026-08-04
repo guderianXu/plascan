@@ -35,6 +35,7 @@ public:
                         nvinfer1::TensorIOMode mode,
                         nvinfer1::DataType type) const;
     nvinfer1::Dims tensorShape(const char *name) const;
+    void setInputShape(const char *name, const nvinfer1::Dims &shape);
     void execute(const std::vector<TensorRtHostBinding> &bindings);
 
 private:

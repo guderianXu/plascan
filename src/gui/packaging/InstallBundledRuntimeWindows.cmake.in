@@ -64,6 +64,9 @@ endif()
 # import-table traversal cannot discover these files.
 set(_plascan_dynamic_runtime_patterns
   "cudnn*.dll"
+  "nvinfer_builder_resource_*.dll"
+  "nvinfer_plugin_*.dll"
+  "nvonnxparser*.dll"
   "nvfatbin*.dll"
   "nvrtc-builtins*.dll"
   "nvToolsExt*.dll"

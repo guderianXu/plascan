@@ -1,6 +1,7 @@
 #include "MatchPhotosRuntime.h"
 
 #include "MatchPhotosParallelism.h"
+#include "tensorrt/TensorRtEngineBuilder.h"
 
 #include "project/ProjectIO.h"
 #include "project/ProjectMetadata.h"
@@ -61,6 +62,24 @@ void appendUniqueDirectory(QStringList *directories, const QString &path)
     }
 }
 
+void keepEnvironmentModelDirectories(QStringList *directories)
+{
+    const QString configured = qEnvironmentVariable("PLASCAN_MODEL_DIR").trimmed();
+    if (!directories || configured.isEmpty())
+    {
+        return;
+    }
+    const QString root = cleanPath(QFileInfo(configured).absoluteFilePath());
+    directories->erase(
+        std::remove_if(directories->begin(), directories->end(), [&](const QString &path)
+        {
+            const QString candidate = cleanPath(QFileInfo(path).absoluteFilePath());
+            return candidate.compare(root, Qt::CaseInsensitive) != 0 &&
+                !candidate.startsWith(root + QLatin1Char('/'), Qt::CaseInsensitive);
+        }),
+        directories->end());
+}
+
 QStringList lightGlueTensorRtModelDirectories()
 {
     QStringList directories;
@@ -104,6 +123,7 @@ QStringList lightGlueTensorRtModelDirectories()
             &directories,
             QDir(root).filePath(QStringLiteral("lightglue_tensorrt")));
     }
+    keepEnvironmentModelDirectories(&directories);
     return directories;
 }
 
@@ -130,10 +150,31 @@ QStringList loMaRTensorRtModelDirectories()
             &directories,
             QDir(root).filePath(QStringLiteral("loma_r_tensorrt")));
     }
+    keepEnvironmentModelDirectories(&directories);
     return directories;
 }
 
-ResolvedLoMaRTensorRtPackage parseLoMaRPackage(const QString &manifestPath)
+image_matching::TensorRtEngineBuildResult buildOnnxEngine(
+    const QString &onnxPath,
+    const QString &engineName,
+    image_matching::TensorRtBuildPrecision precision,
+    int cudaDevice,
+    int fixedKeypointCount = 0)
+{
+    image_matching::TensorRtEngineBuildRequest request;
+    request.onnxPath = onnxPath;
+    request.cacheDirectory = QDir(QFileInfo(onnxPath).absolutePath())
+        .filePath(QStringLiteral("engines"));
+    request.engineName = engineName;
+    request.precision = precision;
+    request.cudaDevice = cudaDevice;
+    request.fixedKeypointCount = fixedKeypointCount;
+    return image_matching::ensureTensorRtEngine(request);
+}
+
+ResolvedLoMaRTensorRtPackage parseLoMaRPackage(const QString &manifestPath,
+                                               int cudaDevice,
+                                               bool prepareEngines)
 {
     ResolvedLoMaRTensorRtPackage resolved;
     const QFileInfo manifestInfo(manifestPath);
@@ -161,7 +202,8 @@ ResolvedLoMaRTensorRtPackage parseLoMaRPackage(const QString &manifestPath)
     }
 
     const QJsonObject object = document.object();
-    if (object.value(QStringLiteral("schema_version")).toInt() != 1 ||
+    const int schemaVersion = object.value(QStringLiteral("schema_version")).toInt();
+    if ((schemaVersion != 1 && schemaVersion != 2) ||
         object.value(QStringLiteral("algorithm_id")).toString() != QLatin1String("loma_r") ||
         object.value(QStringLiteral("algorithm_version")).toInt() != 1)
     {
@@ -170,7 +212,7 @@ ResolvedLoMaRTensorRtPackage parseLoMaRPackage(const QString &manifestPath)
     }
 
     const QDir directory = manifestInfo.absoluteDir();
-    const auto resolveEngine = [&](const QString &field)
+    const auto resolveFile = [&](const QString &field)
     {
         const QString configured = object.value(field).toString().trimmed();
         const QFileInfo info(QFileInfo(configured).isAbsolute()
@@ -178,25 +220,87 @@ ResolvedLoMaRTensorRtPackage parseLoMaRPackage(const QString &manifestPath)
                                  : directory.filePath(configured));
         return info.isFile() ? cleanPath(info.absoluteFilePath()) : QString();
     };
-    resolved.featureEnginePath = resolveEngine(QStringLiteral("feature_engine"));
-    resolved.matcherEnginePath = resolveEngine(QStringLiteral("matcher_engine"));
-    if (resolved.featureEnginePath.isEmpty())
+    if (schemaVersion == 1)
     {
-        resolved.errorMessage = QStringLiteral("LoMa-R feature engine 不存在");
-        return resolved;
+        resolved.featureEnginePath = resolveFile(QStringLiteral("feature_engine"));
+        resolved.matcherEnginePath = resolveFile(QStringLiteral("matcher_engine"));
+        if (resolved.featureEnginePath.isEmpty())
+        {
+            resolved.errorMessage = QStringLiteral("LoMa-R feature engine 不存在");
+            return resolved;
+        }
+        if (resolved.matcherEnginePath.isEmpty())
+        {
+            resolved.errorMessage = QStringLiteral("LoMa-R matcher engine 不存在");
+            return resolved;
+        }
     }
-    if (resolved.matcherEnginePath.isEmpty())
+    else
     {
-        resolved.errorMessage = QStringLiteral("LoMa-R matcher engine 不存在");
-        return resolved;
+        resolved.featureOnnxPath = resolveFile(QStringLiteral("feature_onnx"));
+        resolved.matcherOnnxPath = resolveFile(QStringLiteral("matcher_onnx"));
+        if (resolved.featureOnnxPath.isEmpty() || resolved.matcherOnnxPath.isEmpty())
+        {
+            resolved.errorMessage = QStringLiteral("LoMa-R ONNX 模型包不完整");
+            return resolved;
+        }
+        const QString precisionText = object.value(QStringLiteral("precision"))
+                                          .toString(QStringLiteral("fp16"))
+                                          .trimmed()
+                                          .toLower();
+        if (prepareEngines)
+        {
+            const auto precision = precisionText == QLatin1String("fp32")
+                ? image_matching::TensorRtBuildPrecision::Fp32
+                : image_matching::TensorRtBuildPrecision::Fp16;
+            const int matcherCount = object.value(QStringLiteral("keypoint_count")).toInt();
+            const int featureCount = object.value(QStringLiteral("feature_keypoint_count"))
+                                         .toInt(matcherCount);
+            const QString matcherSuffix = QStringLiteral("k%1_%2")
+                .arg(matcherCount)
+                .arg(precisionText);
+            const QString featureSuffix = QStringLiteral("k%1_%2")
+                .arg(featureCount)
+                .arg(precisionText);
+            const auto featureBuild = buildOnnxEngine(
+                resolved.featureOnnxPath,
+                QStringLiteral("loma_r_features_%1.engine").arg(featureSuffix),
+                precision,
+                cudaDevice);
+            if (!featureBuild.isValid())
+            {
+                resolved.errorMessage = QStringLiteral("LoMa-R 特征 engine 本机构建失败：%1")
+                    .arg(featureBuild.errorMessage);
+                return resolved;
+            }
+            const auto matcherBuild = buildOnnxEngine(
+                resolved.matcherOnnxPath,
+                QStringLiteral("loma_r_matcher_%1.engine").arg(matcherSuffix),
+                precision,
+                cudaDevice,
+                matcherCount);
+            if (!matcherBuild.isValid())
+            {
+                resolved.errorMessage = QStringLiteral("LoMa-R 匹配 engine 本机构建失败：%1")
+                    .arg(matcherBuild.errorMessage);
+                return resolved;
+            }
+            resolved.featureEnginePath = featureBuild.enginePath;
+            resolved.matcherEnginePath = matcherBuild.enginePath;
+            resolved.environmentSummary = featureBuild.environmentSummary;
+        }
     }
 
     resolved.inputWidth = object.value(QStringLiteral("input_width")).toInt();
     resolved.inputHeight = object.value(QStringLiteral("input_height")).toInt();
     resolved.keypointCount = object.value(QStringLiteral("keypoint_count")).toInt();
+    resolved.featureKeypointCount = object.value(QStringLiteral("feature_keypoint_count"))
+                                        .toInt(resolved.keypointCount);
     resolved.descriptorDimension = object.value(QStringLiteral("descriptor_dimension")).toInt();
     if (resolved.inputWidth <= 0 || resolved.inputHeight <= 0 ||
-        resolved.keypointCount <= 0 || resolved.descriptorDimension != 256)
+        resolved.keypointCount <= 0 ||
+        resolved.featureKeypointCount < resolved.keypointCount ||
+        resolved.descriptorDimension != 256)
     {
         resolved.errorMessage = QStringLiteral("LoMa-R manifest 的输入尺寸或特征规格无效");
         resolved.featureEnginePath.clear();
@@ -397,7 +501,8 @@ bool resolveMatchPhotosPair(const MatchPhotosContext &context,
 
 ResolvedLightGlueTensorRtEngine resolveLightGlueTensorRtEngine(
     const MatchPhotosOptions &options,
-    int preferredKeypoints)
+    int preferredKeypoints,
+    bool prepareEngine)
 {
     ResolvedLightGlueTensorRtEngine resolved;
     QString configured = options.lightGlueTensorRtEnginePath.trimmed();
@@ -408,7 +513,37 @@ ResolvedLightGlueTensorRtEngine resolveLightGlueTensorRtEngine(
     if (!configured.isEmpty())
     {
         const QFileInfo info(configured);
-        if (info.isFile())
+        if (info.isFile() && info.suffix().compare(QStringLiteral("onnx"),
+                                                   Qt::CaseInsensitive) == 0)
+        {
+            if (!prepareEngine)
+            {
+                resolved.path = cleanPath(info.absoluteFilePath());
+                resolved.name = info.fileName();
+                resolved.sourceOnnxPath = resolved.path;
+                resolved.bucketKeypoints = lightGlueEngineBucketFromMetadata(resolved.path);
+                return resolved;
+            }
+            const auto build = buildOnnxEngine(
+                info.absoluteFilePath(),
+                info.completeBaseName() + QStringLiteral("_fp32.engine"),
+                image_matching::TensorRtBuildPrecision::Fp32,
+                options.cudaDevice);
+            if (build.isValid())
+            {
+                resolved.path = build.enginePath;
+                resolved.name = QFileInfo(build.enginePath).fileName();
+                resolved.sourceOnnxPath = info.absoluteFilePath();
+                resolved.environmentSummary = build.environmentSummary;
+                resolved.bucketKeypoints = lightGlueEngineBucketFromMetadata(
+                    info.absoluteFilePath());
+            }
+            else
+            {
+                resolved.errorMessage = build.errorMessage;
+            }
+        }
+        else if (info.isFile())
         {
             resolved.path = cleanPath(info.absoluteFilePath());
             resolved.name = info.fileName();
@@ -429,6 +564,56 @@ ResolvedLightGlueTensorRtEngine resolveLightGlueTensorRtEngine(
         QStringLiteral("lightglue_sift_bucket1024_fp32.engine")};
 
     resolved.searchedDirectories = lightGlueTensorRtModelDirectories();
+
+    LightGlueEngineCandidate bestOnnx;
+    int onnxDiscoveryOrder = 0;
+    for (const QString &directoryPath : resolved.searchedDirectories)
+    {
+        const QDir directory(directoryPath);
+        const QStringList names = directory.entryList(
+            QStringList{QStringLiteral("lightglue_sift*.onnx")}, QDir::Files, QDir::Name);
+        for (const QString &name : names)
+        {
+            LightGlueEngineCandidate candidate;
+            candidate.path = cleanPath(QFileInfo(directory.filePath(name)).absoluteFilePath());
+            candidate.name = name;
+            candidate.bucketKeypoints = lightGlueEngineBucketFromMetadata(candidate.path);
+            candidate.discoveryOrder = onnxDiscoveryOrder++;
+            if (engineCandidateIsBetter(candidate, bestOnnx, preferredKeypoints))
+            {
+                bestOnnx = candidate;
+            }
+        }
+    }
+    if (!bestOnnx.path.isEmpty())
+    {
+        if (!prepareEngine)
+        {
+            resolved.path = bestOnnx.path;
+            resolved.name = bestOnnx.name;
+            resolved.sourceOnnxPath = bestOnnx.path;
+            resolved.bucketKeypoints = bestOnnx.bucketKeypoints;
+            return resolved;
+        }
+        const QFileInfo info(bestOnnx.path);
+        const auto build = buildOnnxEngine(
+            bestOnnx.path,
+            info.completeBaseName() + QStringLiteral("_fp32.engine"),
+            image_matching::TensorRtBuildPrecision::Fp32,
+            options.cudaDevice);
+        if (build.isValid())
+        {
+            resolved.path = build.enginePath;
+            resolved.name = QFileInfo(build.enginePath).fileName();
+            resolved.sourceOnnxPath = bestOnnx.path;
+            resolved.environmentSummary = build.environmentSummary;
+            resolved.bucketKeypoints = bestOnnx.bucketKeypoints;
+            return resolved;
+        }
+        resolved.errorMessage = build.errorMessage;
+        return resolved;
+    }
+
     QSet<QString> visitedPaths;
     LightGlueEngineCandidate best;
     int discoveryOrder = 0;
@@ -494,7 +679,8 @@ QString resolveLightGlueTensorRtEnginePath(const MatchPhotosOptions &options,
 
 ResolvedLoMaRTensorRtPackage resolveLoMaRTensorRtPackage(
     const MatchPhotosOptions &options,
-    int preferredKeypoints)
+    int preferredKeypoints,
+    bool prepareEngines)
 {
     QString configured = options.lomaRTensorRtPackagePath.trimmed();
     if (configured.isEmpty())
@@ -503,7 +689,7 @@ ResolvedLoMaRTensorRtPackage resolveLoMaRTensorRtPackage(
     }
     if (!configured.isEmpty())
     {
-        return parseLoMaRPackage(configured);
+        return parseLoMaRPackage(configured, options.cudaDevice, prepareEngines);
     }
 
     const int targetKeypoints = resolveLoMaRKeypointBudget(
@@ -546,7 +732,8 @@ ResolvedLoMaRTensorRtPackage resolveLoMaRTensorRtPackage(
                 continue;
             }
             visitedManifests.insert(identity);
-            ResolvedLoMaRTensorRtPackage resolved = parseLoMaRPackage(candidate);
+            ResolvedLoMaRTensorRtPackage resolved = parseLoMaRPackage(
+                candidate, options.cudaDevice, prepareEngines);
             if (!resolved.isValid())
             {
                 if (firstPackageError.isEmpty())

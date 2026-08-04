@@ -181,12 +181,11 @@ class FeatureWrapper(torch.nn.Module):
 
 
 class MatcherWrapper(torch.nn.Module):
-    """TensorRT-friendly LoMa-R forward with explicit fixed-shape attention."""
+    """TensorRT-friendly LoMa-R forward with dynamic keypoint count."""
 
     def __init__(self, model: torch.nn.Module, keypoints: int):
         super().__init__()
         self.model = model
-        self.keypoints = keypoints
         self.heads = int(model.cfg.num_heads)
         self.dimension = int(model.cfg.embed_dim)
         self.head_dimension = self.dimension // self.heads
@@ -194,10 +193,10 @@ class MatcherWrapper(torch.nn.Module):
 
     def _rotate_half(self, value: torch.Tensor) -> torch.Tensor:
         paired = value.reshape(
-            1, self.heads, self.keypoints, self.head_dimension // 2, 2
+            1, self.heads, -1, self.head_dimension // 2, 2
         )
         return torch.stack((-paired[..., 1], paired[..., 0]), dim=4).reshape(
-            1, self.heads, self.keypoints, self.head_dimension
+            1, self.heads, -1, self.head_dimension
         )
 
     def _apply_rotary(
@@ -230,14 +229,14 @@ class MatcherWrapper(torch.nn.Module):
         valid: torch.Tensor,
     ) -> torch.Tensor:
         qkv = block.Wqkv(descriptors).reshape(
-            1, self.keypoints, self.heads, self.head_dimension, 3
+            1, -1, self.heads, self.head_dimension, 3
         ).permute(0, 2, 1, 3, 4)
         query = self._apply_rotary(encoding, qkv[..., 0])
         key = self._apply_rotary(encoding, qkv[..., 1])
         context = self._attention(query, key, qkv[..., 2], valid, valid)
         message = block.out_proj(
             context.permute(0, 2, 1, 3).reshape(
-                1, self.keypoints, self.dimension
+                1, -1, self.dimension
             )
         )
         return descriptors + block.ffn(torch.cat((descriptors, message), dim=2))
@@ -252,7 +251,7 @@ class MatcherWrapper(torch.nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         def split_heads(value: torch.Tensor) -> torch.Tensor:
             return value.reshape(
-                1, self.keypoints, self.heads, self.head_dimension
+                1, -1, self.heads, self.head_dimension
             ).permute(0, 2, 1, 3)
 
         query_key0 = split_heads(block.to_qk(descriptors0))
@@ -264,7 +263,7 @@ class MatcherWrapper(torch.nn.Module):
 
         def merge_heads(value: torch.Tensor) -> torch.Tensor:
             return value.permute(0, 2, 1, 3).reshape(
-                1, self.keypoints, self.dimension
+                1, -1, self.dimension
             )
 
         message0 = block.to_out(merge_heads(message0))
@@ -315,6 +314,7 @@ def export_onnx(
     path: Path,
     input_names: list[str],
     output_names: list[str],
+    dynamic_axes: dict[str, dict[int, str]] | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.onnx.export(
@@ -323,6 +323,7 @@ def export_onnx(
         str(path),
         input_names=input_names,
         output_names=output_names,
+        dynamic_axes=dynamic_axes,
         opset_version=18,
         do_constant_folding=True,
         dynamo=False,
@@ -410,9 +411,40 @@ def main() -> None:
         matcher_onnx,
         ["keypoints0", "keypoints1", "descriptors0", "descriptors1", "valid0", "valid1"],
         ["scores"],
+        dynamic_axes={
+            "keypoints0": {1: "keypoint_count"},
+            "keypoints1": {1: "keypoint_count"},
+            "descriptors0": {1: "keypoint_count"},
+            "descriptors1": {1: "keypoint_count"},
+            "valid0": {1: "keypoint_count"},
+            "valid1": {1: "keypoint_count"},
+            "scores": {1: "keypoint_count", 2: "keypoint_count"},
+        },
     )
     if args.onnx_only:
-        print(f"ONNX models written to {output}")
+        # Release 仅发布可移植 ONNX。目标机器根据该清单构建与本机
+        # TensorRT/GPU 兼容的 engine，不能在这里写入导出机的 plan 路径。
+        metadata = {
+            "schema_version": 2,
+            "algorithm_id": "loma_r",
+            "algorithm_version": 1,
+            "source": "LoMa-R (DaD + DeDoDe-G/DINOv2 + LoMa-R)",
+            "precision": args.precision,
+            "input_width": size,
+            "input_height": size,
+            "keypoint_count": count,
+            "feature_keypoint_count": count,
+            "descriptor_dimension": 256,
+            "feature_onnx": feature_onnx.name,
+            "matcher_onnx": matcher_onnx.name,
+            "feature_onnx_sha256": sha256(feature_onnx),
+            "matcher_onnx_sha256": sha256(matcher_onnx),
+            "checkpoints": {
+                name: sha256(args.weights_dir / name) for name in REQUIRED_WEIGHTS
+            },
+        }
+        manifest.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        print(f"Portable ONNX package written to {manifest}")
         return
 
     workspace = int(max(1.0, args.workspace_gib) * 1024**3)

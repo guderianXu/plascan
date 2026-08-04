@@ -6,6 +6,9 @@
 
 ### 新增
 
+- 模型分发升级为 `models-v1.1.0` 便携 ONNX：LightGlue 与 LoMa-R 均在目标机器由 C++ TensorRT
+  Builder 首次构建并缓存 engine，最终用户不需要 Python；缓存按 TensorRT 完整版本和 GPU
+  Compute Capability 隔离。
 - 工作流程设置新增 TensorRT 模型下载入口：模型缺失时按当前匹配算法和 LoMa-R 特征档位从独立
   GitHub Model Release 异步下载，显示总字节进度，并在提交文件前校验长度与 SHA-256；源码运行写入
   `resources/models`，安装版写入用户应用数据目录，不依赖 Python 现场转换。

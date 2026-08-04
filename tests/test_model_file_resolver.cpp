@@ -173,7 +173,7 @@ TEST(ModelFileResolverTest, UsesUserDataForInstalledBinaryEvenWhenSourceCheckout
     EXPECT_EQ(QDir::cleanPath(location.directory), QDir::cleanPath(user_models));
 }
 
-TEST(ModelAssetCatalogTest, DefinesDirectlyRunnableReleasePackages)
+TEST(ModelAssetCatalogTest, DefinesPortableOnnxReleasePackages)
 {
     const auto u2net = xjw::common::model::u2NetOnnxPackage();
     ASSERT_TRUE(u2net.isValid());
@@ -185,19 +185,19 @@ TEST(ModelAssetCatalogTest, DefinesDirectlyRunnableReleasePackages)
 
     const auto light_glue = xjw::common::model::lightGlueTensorRtPackage();
     EXPECT_TRUE(light_glue.isValid());
-    EXPECT_EQ(light_glue.files.size(), 2);
-    EXPECT_EQ(light_glue.totalBytes(), 46713196);
-    EXPECT_EQ(light_glue.releaseTag, QStringLiteral("models-v1.0.0"));
-    EXPECT_TRUE(light_glue.entryPointFile.endsWith(QStringLiteral(".engine")));
+    EXPECT_EQ(light_glue.files.size(), 1);
+    EXPECT_EQ(light_glue.totalBytes(), 51072656);
+    EXPECT_EQ(light_glue.releaseTag, QStringLiteral("models-v1.1.0"));
+    EXPECT_TRUE(light_glue.entryPointFile.endsWith(QStringLiteral(".onnx")));
 
     const auto loma_r = xjw::common::model::loMaRTensorRtPackage(2048);
     EXPECT_TRUE(loma_r.isValid());
     EXPECT_EQ(loma_r.files.size(), 3);
-    EXPECT_EQ(loma_r.totalBytes(), 736243465);
+    EXPECT_EQ(loma_r.totalBytes(), 1364462782);
     EXPECT_EQ(loma_r.entryPointFile, QStringLiteral("loma_r_k2048_fp16.json"));
     for (const auto &file : loma_r.files)
     {
-        EXPECT_TRUE(file.downloadUrl.contains(QStringLiteral("models-v1.0.0")));
+        EXPECT_TRUE(file.downloadUrl.contains(QStringLiteral("models-v1.1.0")));
         EXPECT_EQ(file.sha256.size(), 64);
         EXPECT_GT(file.bytes, 0);
     }

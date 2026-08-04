@@ -82,7 +82,8 @@ ModelPackageDownloadDialog::ModelPackageDownloadDialog(
     layout->addWidget(compatibility);
 
     _detailLabel = new QLabel(
-        QStringLiteral("保存到：%1\n总大小：%2")
+        QStringLiteral("保存到：%1\n模型包大小：%2\n"
+                       "首次匹配时将在后台为本机 GPU 构建 TensorRT engine。")
             .arg(QDir::toNativeSeparators(_targetDirectory),
                  humanReadableBytes(_package.totalBytes())),
         this);
@@ -172,11 +173,12 @@ void ModelPackageDownloadDialog::start()
     }
     const QStorageInfo storage(_targetDirectory);
     constexpr qint64 kDownloadReserveBytes = 64LL * 1024LL * 1024LL;
+    const qint64 pending_bytes = pendingDownloadBytes();
     if (storage.isValid() && storage.isReady() &&
-        storage.bytesAvailable() < _package.totalBytes() + kDownloadReserveBytes)
+        storage.bytesAvailable() < pending_bytes + kDownloadReserveBytes)
     {
         fail(QStringLiteral("模型目录可用空间不足，需要约 %1（另预留 64 MiB）：%2")
-                 .arg(humanReadableBytes(_package.totalBytes()), _targetDirectory));
+                 .arg(humanReadableBytes(pending_bytes), _targetDirectory));
         return;
     }
     startNextFile();
@@ -352,6 +354,19 @@ bool ModelPackageDownloadDialog::existingFileMatches(
         return false;
     }
     return fileSha256(path).compare(asset.sha256.toLatin1(), Qt::CaseInsensitive) == 0;
+}
+
+qint64 ModelPackageDownloadDialog::pendingDownloadBytes() const
+{
+    qint64 pending = 0;
+    for (const auto &asset : _package.files)
+    {
+        if (!existingFileMatches(asset))
+        {
+            pending += std::max<qint64>(0, asset.bytes);
+        }
+    }
+    return pending;
 }
 
 void ModelPackageDownloadDialog::updateProgress(qint64 currentFileBytes)

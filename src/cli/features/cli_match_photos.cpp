@@ -341,7 +341,7 @@ int main(int argc, char *argv[])
                    "统一影像匹配算法 ID: sift_lightglue, loma_r")
         ->check(CLI::IsMember({"sift_lightglue", "loma_r"}));
     app.add_option("--lightglue-engine", lightGlueEngineArg,
-                   "TensorRT LightGlue .engine；留空时按模型目录自动查找");
+                   "LightGlue .onnx（推荐）或兼容的本机 .engine；留空时按模型目录自动查找");
     app.add_option("--loma-r-package", lomaRPackageArg,
                    "LoMa-R TensorRT JSON 清单；留空时按模型目录自动查找");
     app.add_option("--loma-r-keypoint-budget", lomaRKeypointBudget,

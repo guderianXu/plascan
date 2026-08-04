@@ -1,5 +1,8 @@
 # PlaScan Models v1.0.0
 
+> 已弃用：本版本曾发布的 TensorRT `.engine` 绑定构建机 GPU 与 TensorRT 版本，已从 GitHub Release
+> 删除。请改用 [`models-v1.1.0`](models-v1.1.0.md) 的便携 ONNX，由 PlaScan 在目标机器本地构建。
+
 发布日期：2026-08-03
 
 ## 新增
@@ -7,7 +10,7 @@
 - 发布 CUDA SIFT + TensorRT LightGlue K4096 FP32 engine、元数据和开发用 ONNX。
 - 发布 LoMa-R K1024、K2048、K3840 FP16 的 feature engine、matcher engine 和 manifest。
 - 发布 `U2Net_v1.onnx`，供“生成蒙版 -> AI: U2Net ONNX”直接下载。
-- GUI 按当前算法和 LoMa-R 档位下载可直接运行的文件，不需要 Python 导出或 TensorRT 现场构建。
+- GUI 当时按当前算法和 LoMa-R 档位下载预构建文件；该方式已被 v1.1.0 的本机构建取代。
 
 ## 优化
 

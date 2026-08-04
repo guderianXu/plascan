@@ -20,6 +20,7 @@ struct LoMaRTensorRtConfig
     int inputWidth = 784;
     int inputHeight = 784;
     int keypointCount = 2048;
+    int featureKeypointCount = 3840;
     int descriptorDimension = 256;
     int maxKeypoints = 2048;
     float matchThreshold = 0.1f;

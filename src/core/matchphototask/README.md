@@ -9,7 +9,7 @@
 
 - `algorithm/` 负责类 Metashape 策略到注册算法计划的映射，当前支持 `sift_lightglue` 和 `loma_r`。
 - `pair_selection/` 负责影像对类型、影像对选择策略和 `PairSelector`。
-- `runtime/` 负责任务级 SIFT 内存缓存、LightGlue TensorRT engine 查找、蒙版约束和 GUI 写回所需记录。
+- `runtime/` 负责任务级 SIFT 内存缓存、ONNX 资源解析、本机 TensorRT engine 缓存、蒙版约束和 GUI 写回所需记录。
 - `task/` 负责 `MatchPhotosTask`、选项、上下文和结果报告。
 - `stages/` 负责流程阶段，按算法能力加载灰度或彩色输入并执行特征与两两匹配。
 - `tie_points/` 负责最终多视图连接点 track 的构建、筛选和统计摘要。
@@ -33,11 +33,10 @@
   `.pimatch` 配置指纹，后续 SfM 只消费同一结果变体。
 - 设备为 `Auto` 时 SIFT 可优先选择 CUDA，但 LightGlue 固定使用 TensorRT/CUDA；选择 CPU、CUDA
   不可用或 engine 不兼容时会返回明确错误，不做 TorchScript/CPU 回退。
-- TensorRT engine 可通过 `lightGlueTensorRtEnginePath` 显式传入，也可由
-  `PLASCAN_LIGHTGLUE_TENSORRT_ENGINE` 指定。未显式设置时，运行时会在标准模型目录中查找
-  `lightglue_sift_fp32.engine` 或带固定关键点桶后缀的 engine。固定桶容量同时作为该后端的
-  LightGlue 输入上限，避免把超出容量的特征静默截断到不可预期的值。
-- 匹配阶段只加载解析到的 TensorRT engine。最终结果由 `ImageMatchRepository` 对称提交为“一幅影像一个
+- LightGlue ONNX 可通过 `lightGlueTensorRtEnginePath` 显式传入，也可由
+  `PLASCAN_LIGHTGLUE_TENSORRT_ENGINE` 指定。运行时按 ONNX 内容、本机 TensorRT 完整版本和 GPU
+  Compute Capability 构建环境指纹缓存；历史本机 engine 仅保留读取兼容。
+- 匹配阶段加载本机缓存的 TensorRT engine。最终结果由 `ImageMatchRepository` 对称提交为“一幅影像一个
   `.pimatch` 分片”，同一文件保存所有相邻影像，并按算法版本与配置变体隔离本影像观测、模型指纹、
   置信度和残差，避免不同特征编号空间互相覆盖。
 - 几何验证阶段使用统一 `MatchGeometryVerifier` 的 USAC/MAGSAC 基础矩阵内点。为抑制重复结构伪造的弱几何边，

@@ -33,6 +33,9 @@ public:
             config.inputWidth = _config.modelInputWidth;
             config.inputHeight = _config.modelInputHeight;
             config.keypointCount = _config.maxMatcherKeypoints;
+            config.featureKeypointCount = _config.featureKeypointCount > 0
+                ? _config.featureKeypointCount
+                : _config.maxMatcherKeypoints;
             config.descriptorDimension = _config.descriptorDimension;
             config.maxKeypoints = _config.maxKeypoints;
             config.matchThreshold = _config.matchThreshold;

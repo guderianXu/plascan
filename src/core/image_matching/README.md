@@ -9,10 +9,10 @@ CLI 只消费本模块的稳定结果契约，不直接依赖 SIFT 描述子或 
 - `ImageMatchingAlgorithm` 定义算法能力、版本、配置指纹、模型指纹、特征提取和像对匹配接口。
 - `ImageMatchingRegistry` 是算法注册入口。增加新算法时注册新的实现，不修改 SfM、项目格式或查看器。
 - `sift/` 负责 CUDA SIFT。提取结果只保存在一次 `MatchPhotosTask` 的有界内存缓存中。
-- `lightglue/` 负责 TensorRT engine 加载、执行和输出后处理，不提供 TorchScript 或 CPU 隐式回退。
+- `lightglue/` 负责本机 TensorRT engine 执行和输出后处理，不提供 TorchScript 或 CPU 隐式回退。
 - `sift_lightglue/` 组合 CUDA SIFT 与 LightGlue，并注册算法 `sift_lightglue`。
 - `loma_r/` 负责 DaD + DeDoDe-G/DINOv2 特征与 LoMa-R 匹配的 TensorRT 执行，并注册算法 `loma_r`。
-- `tensorrt/` 提供两个算法共用的静态 engine 会话、CUDA 缓冲区和张量 ABI 校验。
+- `tensorrt/` 提供 ONNX 本机构建、环境指纹缓存、engine 会话、CUDA 缓冲区和张量 ABI 校验。
 - `geometry/` 负责基础矩阵/单应模型验证和逐匹配像素残差。
 - `ImageMatchFile` 是 `.pimatch` 格式的唯一序列化入口。
 - `ImageMatchRepository` 负责对称写入、按缓存键查找和批量清理逐影像分片。
@@ -65,10 +65,10 @@ TensorRT 后端。该开关不改变产品运行语义，也不会将生产匹�
 
 ## LoMa-R TensorRT 资源
 
-LoMa-R 使用一个 JSON manifest 绑定两个静态 TensorRT engine：特征 engine 输入 RGB 影像并输出
-DaD 关键点、置信度和 DeDoDe-G 描述子；匹配 engine 输入两组固定容量的归一化关键点与描述子并输出
-匹配概率矩阵。manifest 同时记录输入分辨率、关键点容量、描述子维度和 engine 内容指纹，禁止混用
-不兼容资源。运行时可通过 `MatchPhotosOptions::lomaRTensorRtPackagePath`、环境变量
+LoMa-R 使用 JSON manifest 绑定共享 K3840 特征 ONNX 和动态 K 匹配 ONNX。目标机器按清单中的
+K1024/K2048/K3840 生成固定 TensorRT profile；manifest 同时记录输入尺寸、特征容量、匹配 K、
+描述子维度和 ONNX 内容指纹，禁止混用不兼容资源。运行时可通过
+`MatchPhotosOptions::lomaRTensorRtPackagePath`、环境变量
 `PLASCAN_LOMA_R_TENSORRT_PACKAGE` 或标准模型目录解析该 manifest。
 
 同一模型目录可以并存 `loma_r_k1024_fp16.json`、`loma_r_k2048_fp16.json` 和

@@ -250,7 +250,8 @@ void WorkflowSettingsDialog::setupUi()
     _matchingResourceEdit->setClearButtonEnabled(true);
     _matchingResourceBrowseButton = new QToolButton(enginePathRow);
     _matchingResourceBrowseButton->setIcon(style()->standardIcon(QStyle::SP_DialogOpenButton));
-    _matchingResourceBrowseButton->setToolTip(QStringLiteral("选择 TensorRT 模型资源"));
+    _matchingResourceBrowseButton->setToolTip(
+        QStringLiteral("选择 ONNX 模型或兼容的本机 TensorRT 资源"));
     _matchingResourceBrowseButton->setFixedSize(32, 30);
     _downloadModelButton = new QPushButton(QStringLiteral("下载模型"), enginePathRow);
     _downloadModelButton->setObjectName(QStringLiteral("aerialDownloadModelButton"));
@@ -294,11 +295,11 @@ void WorkflowSettingsDialog::setupUi()
             : QFileInfo(currentPath).absolutePath();
         const QString selected = QFileDialog::getOpenFileName(
             this,
-            loMaR ? QStringLiteral("选择 LoMa-R TensorRT 模型清单")
-                  : QStringLiteral("选择 TensorRT LightGlue 引擎"),
+            loMaR ? QStringLiteral("选择 LoMa-R ONNX 模型清单")
+                  : QStringLiteral("选择 LightGlue ONNX 模型"),
             startPath,
             loMaR ? QStringLiteral("LoMa-R manifest (*.json);;所有文件 (*)")
-                  : QStringLiteral("TensorRT engine (*.engine);;所有文件 (*)"));
+                  : QStringLiteral("ONNX 模型 (*.onnx);;兼容的本机 engine (*.engine);;所有文件 (*)"));
         if (!selected.isEmpty())
         {
             _matchingResourceEdit->setText(QFileInfo(selected).absoluteFilePath());
@@ -459,7 +460,8 @@ void WorkflowSettingsDialog::refreshMatchingResourceStatus()
     {
         options.lomaRTensorRtPackagePath = _matchingResourceEdit->text().trimmed();
         options.lomaRKeypointBudget = _lomaRKeypointBudgetCombo->currentData().toInt();
-        const auto resolved = xjw::matchphotos::resolveLoMaRTensorRtPackage(options, 40000);
+        const auto resolved = xjw::matchphotos::resolveLoMaRTensorRtPackage(
+            options, 40000, false);
         resolvedPath = resolved.manifestPath;
         detail = resolved.isValid()
             ? QStringLiteral("  [K=%1, D=%2, %3x%4]")
@@ -472,7 +474,8 @@ void WorkflowSettingsDialog::refreshMatchingResourceStatus()
     else
     {
         options.lightGlueTensorRtEnginePath = _matchingResourceEdit->text().trimmed();
-        const auto resolved = xjw::matchphotos::resolveLightGlueTensorRtEngine(options, 4096);
+        const auto resolved = xjw::matchphotos::resolveLightGlueTensorRtEngine(
+            options, 4096, false);
         resolvedPath = resolved.path;
         detail = resolved.bucketKeypoints > 0
             ? QStringLiteral("  [K=%1]").arg(resolved.bucketKeypoints)

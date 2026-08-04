@@ -138,7 +138,7 @@ public:
         std::vector<float> image = preprocessRgb(bgr, input.validMask,
                                                  _config.inputWidth,
                                                  _config.inputHeight);
-        const std::size_t keypointCount = static_cast<std::size_t>(_config.keypointCount);
+        const std::size_t keypointCount = static_cast<std::size_t>(_config.featureKeypointCount);
         const std::size_t descriptorDimension =
             static_cast<std::size_t>(_config.descriptorDimension);
         std::vector<float> normalizedKeypoints(keypointCount * 2U);
@@ -153,8 +153,8 @@ public:
         const int sourceWidth = bgr.cols;
         const int sourceHeight = bgr.rows;
         const int requested = _config.maxKeypoints > 0
-            ? std::min(_config.maxKeypoints, _config.keypointCount)
-            : _config.keypointCount;
+            ? std::min(_config.maxKeypoints, _config.featureKeypointCount)
+            : _config.featureKeypointCount;
         FeatureSet result;
         result.imageWidth = input.originalWidth > 0 ? input.originalWidth : sourceWidth;
         result.imageHeight = input.originalHeight > 0 ? input.originalHeight : sourceHeight;
@@ -163,7 +163,7 @@ public:
         result.scores.reserve(static_cast<std::size_t>(requested));
         std::vector<int> kept;
         kept.reserve(static_cast<std::size_t>(requested));
-        for (int index = 0; index < _config.keypointCount &&
+        for (int index = 0; index < _config.featureKeypointCount &&
                             static_cast<int>(kept.size()) < requested; ++index)
         {
             const float nx = normalizedKeypoints[static_cast<std::size_t>(index) * 2U];
@@ -232,7 +232,9 @@ private:
     void validateConfiguration() const
     {
         if (_config.inputWidth <= 0 || _config.inputHeight <= 0 ||
-            _config.keypointCount <= 0 || _config.descriptorDimension <= 0)
+            _config.keypointCount <= 0 ||
+            _config.featureKeypointCount < _config.keypointCount ||
+            _config.descriptorDimension <= 0)
         {
             throw std::invalid_argument("LoMa-R TensorRT package metadata is invalid");
         }
@@ -256,9 +258,9 @@ private:
         if (!hasFixedShape(_feature->tensorShape(kImage),
                            {1, 3, _config.inputHeight, _config.inputWidth}) ||
             !hasFixedShape(_feature->tensorShape(kKeypoints),
-                           {1, _config.keypointCount, 2}) ||
+                           {1, _config.featureKeypointCount, 2}) ||
             !hasFixedShape(_feature->tensorShape(kDescriptors),
-                           {1, _config.keypointCount, _config.descriptorDimension}))
+                           {1, _config.featureKeypointCount, _config.descriptorDimension}))
         {
             throw std::runtime_error("LoMa-R feature engine shapes do not match the manifest");
         }
@@ -285,6 +287,16 @@ private:
                                      nvinfer1::DataType::kBOOL);
             _matcher->validateTensor(kScores, nvinfer1::TensorIOMode::kOUTPUT,
                                      nvinfer1::DataType::kFLOAT);
+            const nvinfer1::Dims3 keypoints{1, _config.keypointCount, 2};
+            const nvinfer1::Dims3 descriptors{
+                1, _config.keypointCount, _config.descriptorDimension};
+            const nvinfer1::Dims2 valid{1, _config.keypointCount};
+            _matcher->setInputShape(kKeypoints0, keypoints);
+            _matcher->setInputShape(kKeypoints1, keypoints);
+            _matcher->setInputShape(kDescriptors0, descriptors);
+            _matcher->setInputShape(kDescriptors1, descriptors);
+            _matcher->setInputShape(kValid0, valid);
+            _matcher->setInputShape(kValid1, valid);
         }
         if (!hasFixedShape(_matcher->tensorShape(kScores),
                            {1, _config.keypointCount, _config.keypointCount}))

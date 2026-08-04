@@ -169,7 +169,15 @@ public:
 
     nvinfer1::Dims shape(const char *name) const
     {
-        return _engine->getTensorShape(name);
+        return _context->getTensorShape(name);
+    }
+
+    void setInputShape(const char *name, const nvinfer1::Dims &shape)
+    {
+        if (!name || !_context->setInputShape(name, shape))
+        {
+            fail(std::string("cannot set input shape for ") + (name ? name : "<null>"));
+        }
     }
 
     void execute(const std::vector<TensorRtHostBinding> &bindings)
@@ -245,6 +253,11 @@ void TensorRtSession::validateTensor(const char *name,
 nvinfer1::Dims TensorRtSession::tensorShape(const char *name) const
 {
     return _impl->shape(name);
+}
+
+void TensorRtSession::setInputShape(const char *name, const nvinfer1::Dims &shape)
+{
+    _impl->setInputShape(name, shape);
 }
 
 void TensorRtSession::execute(const std::vector<TensorRtHostBinding> &bindings)

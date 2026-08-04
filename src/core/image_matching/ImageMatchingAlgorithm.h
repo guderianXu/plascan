@@ -50,6 +50,7 @@ struct ImageMatchingRuntimeConfig
     int cudaDevice = 0;
     int maxKeypoints = 40000;
     int maxMatcherKeypoints = 0;
+    int featureKeypointCount = 0;
     int removeBorders = 16;
     float siftDetectionThreshold = 0.0005f;
     float grayscaleMin = 0.0f;

@@ -5,25 +5,26 @@ PlaScan 生产构建使用 TensorRT 匹配资源和 U2Net ONNX 蒙版模型，�
 
 ## 预构建模型下载
 
-工作流程设置会检测当前匹配算法的 TensorRT 资源。资源缺失时可点击“下载模型”，程序从
-[`models-v1.0.0`](https://github.com/guderianXu/plascan/releases/tag/models-v1.0.0) Release 下载
-engine/manifest，逐文件验证长度与 SHA-256 后直接使用，不需要本机 Python 或模型转换环境。
+工作流程设置会检测当前匹配算法的模型资源。资源缺失时可点击“下载模型”，程序从
+[`models-v1.1.0`](https://github.com/guderianXu/plascan/releases/tag/models-v1.1.0) Release 下载
+ONNX/manifest，并逐文件验证长度与 SHA-256。最终用户不需要 Python；PlaScan 的 C++ TensorRT
+Builder 会在首次使用时生成当前机器专用 engine。
 
 - 源码树运行：写入 `resources/models/lightglue_tensorrt` 或
   `resources/models/loma_r_tensorrt`；
 - 安装版运行：写入 `QStandardPaths::AppLocalDataLocation/models` 下的算法子目录，避免安装目录无写权限；
 - 设置 `PLASCAN_MODEL_DIR`：优先写入该目录下的算法子目录，适合共享模型盘或自定义部署。
 
-首批 engine 由 NVIDIA GeForce RTX 5080（SM 12.0）和 TensorRT 10.16.1.11 构建。TensorRT engine
-与 GPU 架构、TensorRT/CUDA 运行时绑定；Release 下载解决的是模型分发问题，不保证跨架构反序列化。
-其他环境仍需发布对应兼容包，运行时加载失败会明确报告，不会调用 Python 现场转换或静默降级。
-Release 全部资产的离线校验值见 `docs/models/models-v1.0.0.sha256`。
+engine 缓存键包含 ONNX SHA-256、TensorRT 完整版本、GPU Compute Capability、精度、工作区和
+优化级别。更换显卡或 TensorRT 后会进入新缓存目录并重新构建，不会反序列化旧机器的 plan。
+Windows 安装包必须携带 `nvinfer`、`nvonnxparser` 和对应架构的
+`nvinfer_builder_resource_*.dll`；源码构建则必须把完整 TensorRT SDK 传给 `TensorRT_ROOT`。
+Release 全部资产的离线校验值见 `docs/models/models-v1.1.0.sha256`。
 
 ## SIFT + LightGlue TensorRT
 
-SIFT 由 CUDA 实现提取，不需要权重文件。LightGlue 只使用 TensorRT，不包含 TorchScript matcher 或
-CPU 回退。engine 与 TensorRT 版本、GPU 架构、精度和固定关键点容量绑定；兼容机器可直接使用 Release
-预构建资源，其他机器应在目标环境生成并选择对应 engine。
+SIFT 由 CUDA 实现提取，不需要权重文件。LightGlue Release 发布固定 K4096 的 FP32 ONNX，不包含
+TorchScript matcher 或 CPU 回退。程序首次匹配时在后台构建本机 engine，后续直接复用环境指纹缓存。
 
 ```powershell
 python scripts\env\setup_python_runtime.py --device cuda --cuda-wheel cu130
@@ -33,21 +34,21 @@ python scripts\env\setup_python_runtime.py --device cuda --cuda-wheel cu130
     --precision fp32 --bucket-keypoints 4096
 ```
 
-运行时按以下顺序寻找 engine：
+运行时按以下顺序寻找 ONNX 或历史本机 engine：
 
 1. `MatchPhotosOptions::lightGlueTensorRtEnginePath`；
 2. 环境变量 `PLASCAN_LIGHTGLUE_TENSORRT_ENGINE`；
-3. 标准模型目录或构建缓存中的兼容 engine。
+3. 标准模型目录中的 ONNX；只有 ONNX 不存在时才兼容扫描历史本机 engine。
 
 ## LoMa-R TensorRT
 
-LoMa-R 使用 DaD 检测器、DeDoDe-G/DINOv2 描述子和旋转不变 LoMa-R 匹配器。生产资源是一个 JSON
-manifest 和两个固定形状 engine：
+LoMa-R 使用 DaD 检测器、DeDoDe-G/DINOv2 描述子和旋转不变 LoMa-R 匹配器。便携资源由共享的
+K3840 特征 ONNX、动态 K 匹配 ONNX 和三个 K 桶 manifest 组成：
 
-- `feature_engine`：输入 `[1,3,H,W]` RGB float，输出 `[1,K,2]` 归一化关键点、`[1,K]`
-  置信度和 `[1,K,256]` 描述子；
-- `matcher_engine`：输入两组关键点、描述子和有效位，输出 `[1,K,K]` 匹配概率矩阵；
-- manifest：记录算法/格式版本、输入尺寸、K、描述子维度、精度和两个 engine 的 SHA-256。
+- `feature_onnx`：输入 `[1,3,H,W]` RGB float，输出 `[1,3840,2]` 归一化关键点、`[1,3840]`
+  置信度和 `[1,3840,256]` 描述子；
+- `matcher_onnx`：输入动态 K 的两组关键点、描述子和有效位，输出 `[1,K,K]` 匹配概率矩阵；
+- manifest：记录特征容量、匹配 K、输入尺寸、描述子维度、精度和两个 ONNX 的 SHA-256。
 
 导出需要本地 LoMa-R 源码以及以下官方权重，不会自动下载或提交权重：
 
@@ -65,9 +66,10 @@ manifest 和两个固定形状 engine：
     --input-size 784 --keypoints 2048 --precision fp16
 ```
 
-分别以 `--keypoints 1024`、`2048` 和 `3840` 导出后，三个 manifest 和对应 engine 可以共存于
-同一目录。manifest 文件名为 `loma_r_k<K>_<precision>.json`。TensorRT 10.x 的 `ITopK`
-最多支持 3840，脚本会在请求更大 K 时直接给出错误，避免耗时导出后才构建失败。
+发布构建以 `--keypoints 3840 --onnx-only` 导出共享特征模型和动态 matcher，再生成
+`loma_r_k1024_fp16.json`、`loma_r_k2048_fp16.json`、`loma_r_k3840_fp16.json` 三个清单。
+TensorRT 10.x 的 `ITopK` 最多支持 3840，特征 engine 始终输出 3840 个候选；运行时依据清单截取
+特征并将动态 matcher 分别构建为 K1024、K2048 或 K3840 的固定 profile。
 
 运行时按以下顺序寻找 manifest：
 
@@ -89,7 +91,7 @@ LoMa-R 来源为 `davnords/loma`。其主体代码采用 MIT 许可，匹配器�
 `.match` 或 JSON sidecar。GUI 在“工作流程 -> 设置 -> 空中三角测量”中选择算法与对应资源。
 
 找不到资源、TensorRT/GPU 不兼容或显式选择 CPU 时会明确失败，不会静默切换算法。Windows 部署需要
-与构建版本一致的 `nvinfer_10.dll`。
+与构建版本一致的 `nvinfer_10.dll`、`nvonnxparser_10.dll` 和 builder resource。
 
 ## U2Net ONNX 蒙版
 
@@ -97,7 +99,7 @@ LoMa-R 来源为 `davnords/loma`。其主体代码采用 MIT 许可，匹配器�
 OpenCV 启用 DNN CUDA 后端。未启用时，只有用户允许回退才切换到 CPU。
 
 在“生成蒙版”中选择“AI: U2Net ONNX”时，GUI 会自动检测模型。模型缺失时可点击“下载 U2Net
-模型”，PlaScan 从 GitHub Release `models-v1.0.0` 异步下载，并在写入最终文件前验证固定大小和
+模型”，PlaScan 从 GitHub Release `models-v1.1.0` 异步下载，并在写入最终文件前验证固定大小和
 SHA-256：
 
 ```text

@@ -331,6 +331,7 @@ MatchPhotosStageReport MatchingStage::run(
         runtime.descriptorDimension = package.descriptorDimension;
         matcherBudget = package.keypointCount;
         runtime.maxMatcherKeypoints = matcherBudget;
+        runtime.featureKeypointCount = package.featureKeypointCount;
         // LoMa-R 官方默认门限为 0.1；工作流默认 0.15 仍可作为更严格的用户门限。
         runtime.matchThreshold = effectiveThreshold;
         modelName = QFileInfo(package.manifestPath).fileName();
@@ -342,13 +343,23 @@ MatchPhotosStageReport MatchingStage::run(
         const int requestedMatcherBudget =
             image_matching::resolveSiftLightGlueKeypointBudget(
                 algorithmPlan.maxKeypoints, budgetMemory);
+        reportMatchPhotosProgress(
+            context,
+            QStringLiteral("model_prepare"),
+            QStringLiteral("正在检查 LightGlue ONNX，并为当前 TensorRT/GPU 准备本机 engine"),
+            0,
+            1);
         const ResolvedLightGlueTensorRtEngine engine =
             resolveLightGlueTensorRtEngine(options, requestedMatcherBudget);
         if (!engine.isValid())
         {
             QString message = QStringLiteral(
-                "未找到 TensorRT LightGlue engine。请在“工作流程 - 设置”中指定 .engine，"
-                "或运行 scripts/models/export_lightglue_tensorrt.py 生成本机引擎。");
+                "未找到可用的 LightGlue ONNX/engine。请在“工作流程 - 设置”中下载 "
+                "ONNX 模型；程序会针对本机 TensorRT 和 GPU 自动构建 engine。");
+            if (!engine.errorMessage.isEmpty())
+            {
+                message += QStringLiteral("\n本机构建错误：%1").arg(engine.errorMessage);
+            }
             if (!engine.searchedDirectories.isEmpty())
             {
                 message += QStringLiteral("\n已搜索：%1")
@@ -356,6 +367,13 @@ MatchPhotosStageReport MatchingStage::run(
             }
             return makeMatchingReport(MatchPhotosStageStatus::Failed, message);
         }
+        reportMatchPhotosProgress(
+            context,
+            QStringLiteral("model_prepare"),
+            QStringLiteral("LightGlue 本机 TensorRT engine 已就绪：%1")
+                .arg(engine.environmentSummary),
+            1,
+            1);
         matcherBudget = image_matching::clampLightGlueKeypointBudgetToEngine(
             requestedMatcherBudget, engine.bucketKeypoints);
         effectiveThreshold = image_matching::resolveSiftLightGlueMatchThreshold(

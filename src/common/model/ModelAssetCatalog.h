@@ -43,13 +43,13 @@ struct ModelAssetPackage
     qint64 totalBytes() const;
 };
 
-/// 返回 RTX 50/SM 12.0 上生成的 SIFT + LightGlue K4096 运行包。
+/// 返回可在目标机器本地构建 TensorRT engine 的 LightGlue K4096 ONNX 包。
 ModelAssetPackage lightGlueTensorRtPackage();
 
 /// 返回跨平台 OpenCV DNN 可加载的 U2Net v1 ONNX 蒙版模型。
 ModelAssetPackage u2NetOnnxPackage();
 
-/// 返回指定 LoMa-R 静态 K 桶；非 1024/2048/3840 的值保守归一化为 1024。
+/// 返回 LoMa-R 共享特征/动态匹配 ONNX 与指定 K 桶清单。
 ModelAssetPackage loMaRTensorRtPackage(int keypointBudget);
 
 /// 计算包的可写安装目录。源码运行和安装版的根目录由 resolver 统一判定。

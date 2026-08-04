@@ -47,6 +47,7 @@ private:
     void finishCurrentFile();
     void fail(const QString &message);
     bool existingFileMatches(const xjw::common::model::ModelAssetFile &asset) const;
+    qint64 pendingDownloadBytes() const;
     void updateProgress(qint64 currentFileBytes = 0);
 
     xjw::common::model::ModelAssetPackage _package;

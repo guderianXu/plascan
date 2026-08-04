@@ -121,7 +121,7 @@ core/
 │   ├── lightglue/              # TensorRT LightGlue 固定桶推理与后处理
 │   ├── sift_lightglue/         # CUDA SIFT + LightGlue 组合与注册实现
 │   ├── loma_r/                 # TensorRT DaD/DeDoDe-G 特征与 LoMa-R 匹配
-│   ├── tensorrt/               # 通用 engine 会话、CUDA 缓冲和张量 ABI 校验
+│   ├── tensorrt/               # ONNX 本机构建/环境缓存、engine 会话、CUDA 缓冲和张量 ABI 校验
 │   ├── geometry/               # USAC/MAGSAC 验证及逐匹配像素残差
 │   └── tests/                  # 格式往返、损坏校验、注册和几何测试
 │
@@ -148,7 +148,7 @@ core/
 │   │   ├── PairSelectionPolicy.h/cpp # 自动/全量/序列/手动等候选策略
 │   │   └── PairSelector.h/cpp       # 合并手动、全量、序列、相机重叠和词汇召回候选
 │   ├── runtime/
-│   │   ├── MatchPhotosRuntime.h/cpp # 输出路径、LightGlue engine 查找和配置指纹
+│   │   ├── MatchPhotosRuntime.h/cpp # ONNX/manifest 解析、本机 engine 准备和配置指纹
 │   │   ├── MatchPhotosFeatureCache.h/cpp # 一次任务内的有界 SIFT 特征缓存
 │   │   ├── MatchPhotosMaskSupport.h/cpp # 连接点流程蒙版路径解析、关键点/连接点过滤
 │   │   └── MatchPhotosParallelism.h/cpp # CUDA 显存预算、LightGlue worker 和几何验证并发解析

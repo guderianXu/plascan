@@ -9,17 +9,27 @@ namespace xjw::common::model
 namespace
 {
 
-constexpr auto kModelReleaseTag = "models-v1.0.0";
+constexpr auto kModelReleaseTag = "models-v1.1.0";
 constexpr auto kReleaseBaseUrl =
-    "https://github.com/guderianXu/plascan/releases/download/models-v1.0.0/";
+    "https://github.com/guderianXu/plascan/releases/download/models-v1.1.0/";
 constexpr auto kCompatibility =
-    "预构建环境：NVIDIA GeForce RTX 5080（SM 12.0），TensorRT 10.16.1.11。"
-    "TensorRT engine 与 GPU 架构和 TensorRT 版本绑定；不兼容设备需要使用对应环境的模型包。";
+    "发布包仅包含可移植 ONNX，不包含任何开发机生成的 TensorRT engine。"
+    "PlaScan 首次使用时会依据本机 TensorRT 完整版本和 GPU Compute Capability 构建并缓存 engine。";
 
 ModelAssetFile asset(const char *name, qint64 bytes, const char *sha256)
 {
     ModelAssetFile file;
     file.fileName = QString::fromLatin1(name);
+    file.downloadUrl = QString::fromLatin1(kReleaseBaseUrl) + file.fileName;
+    file.sha256 = QString::fromLatin1(sha256);
+    file.bytes = bytes;
+    return file;
+}
+
+ModelAssetFile asset(const QString &name, qint64 bytes, const char *sha256)
+{
+    ModelAssetFile file;
+    file.fileName = name;
     file.downloadUrl = QString::fromLatin1(kReleaseBaseUrl) + file.fileName;
     file.sha256 = QString::fromLatin1(sha256);
     file.bytes = bytes;
@@ -60,19 +70,16 @@ qint64 ModelAssetPackage::totalBytes() const
 ModelAssetPackage lightGlueTensorRtPackage()
 {
     ModelAssetPackage package;
-    package.id = QStringLiteral("sift_lightglue_sm120_trt10_16");
-    package.displayName = QStringLiteral("CUDA SIFT + TensorRT LightGlue（K4096）");
+    package.id = QStringLiteral("sift_lightglue_onnx_k4096_v1");
+    package.displayName = QStringLiteral("CUDA SIFT + LightGlue ONNX（K4096）");
     package.packageDirectory = QStringLiteral("lightglue_tensorrt");
-    package.entryPointFile = QStringLiteral("lightglue_sift_bucket4096_fp32.engine");
+    package.entryPointFile = QStringLiteral("lightglue_sift_bucket4096.onnx");
     package.releaseTag = QString::fromLatin1(kModelReleaseTag);
     package.compatibilitySummary = QString::fromUtf8(kCompatibility);
     package.files = {
-        asset("lightglue_sift_bucket4096_fp32.engine",
-              46712548,
-              "4a7cbf13e1161702aa628e8c2dae1a9c976720d169a94bf6178f2add617ea59c"),
-        asset("lightglue_sift_bucket4096_fp32.engine.json",
-              648,
-              "4dbe8302a5d3b2002e11e32f6b0eefd53009f90b9de61009313bdbb038198b04"),
+        asset("lightglue_sift_bucket4096.onnx",
+              51072656,
+              "773d3de316c37e8d408312d39139352b45e2a93ba055e59cfa2806c5d54ede69"),
     };
     return package;
 }
@@ -100,55 +107,28 @@ ModelAssetPackage loMaRTensorRtPackage(int keypointBudget)
 {
     const int budget = normalizedLoMaRBudget(keypointBudget);
     ModelAssetPackage package;
-    package.id = QStringLiteral("loma_r_k%1_sm120_trt10_16").arg(budget);
-    package.displayName = QStringLiteral("LoMa-R TensorRT（K%1）").arg(budget);
+    package.id = QStringLiteral("loma_r_onnx_k%1_v1").arg(budget);
+    package.displayName = QStringLiteral("LoMa-R ONNX（K%1）").arg(budget);
     package.packageDirectory = QStringLiteral("loma_r_tensorrt");
     package.entryPointFile = QStringLiteral("loma_r_k%1_fp16.json").arg(budget);
     package.releaseTag = QString::fromLatin1(kModelReleaseTag);
     package.compatibilitySummary = QString::fromUtf8(kCompatibility);
 
-    if (budget == 3840)
-    {
-        package.files = {
-            asset("loma_r_features_k3840_fp16.engine",
-                  669429460,
-                  "e029c088d5c04a4c106c4bfc891213469dd1aa1ad157da61d56849413ff4b103"),
-            asset("loma_r_matcher_k3840_fp16.engine",
-                  172246348,
-                  "5b7366dbe21b7b5b97d6f8dce0e2be1704e0bcc41964617a81e334dbe65ee384"),
-            asset("loma_r_k3840_fp16.json",
-                  1041,
-                  "d596bdb4eff68484957f4aabd45f5457aa1849747fa1dd9ed06bf05263d67f3b"),
-        };
-    }
-    else if (budget == 2048)
-    {
-        package.files = {
-            asset("loma_r_features_k2048_fp16.engine",
-                  669356100,
-                  "f83a5727da5b484e02115a3f55edbdd0cc2732efc74cb036b412173651a32dfb"),
-            asset("loma_r_matcher_k2048_fp16.engine",
-                  66886324,
-                  "9df03784c2aa148de546f22948df7dd387ebad121113a4761a6c6a18aaa21548"),
-            asset("loma_r_k2048_fp16.json",
-                  1041,
-                  "a1f840e6bae02e98d4be4ebdd498608a09cedf8bb310cb5aeb8de696a60dbe7e"),
-        };
-    }
-    else
-    {
-        package.files = {
-            asset("loma_r_features_k1024_fp16.engine",
-                  669429100,
-                  "dd19be8bfcbb652e62b0b4a6221013d317b9512da3bdf99c586e54d3fa4137d2"),
-            asset("loma_r_matcher_k1024_fp16.engine",
-                  35432372,
-                  "5aa4e60e8a5bfe844f06132f354aafac42393c3062ad24ff3fa8146861e799c9"),
-            asset("loma_r_k1024_fp16.json",
-                  1041,
-                  "c17f4da904918de3ff9269ced3f4768f2f7eb582af771911b1b6fa6303cd70fb"),
-        };
-    }
+    const QString manifestName = QStringLiteral("loma_r_k%1_fp16.json").arg(budget);
+    const char *manifestHash = budget == 3840
+        ? "5d55026fe3e0bc59bb93bc997d928ec46940905e22c7836b831a859e1dae2715"
+        : (budget == 2048
+               ? "68ae6a68bb184375285d486384344b7a6500195d5f372e96c8b429bd8787c91e"
+               : "db3b242ed7cda10e16fd7c304844c1f809a3b37bc40af10a81c7248ca9e51aea");
+    package.files = {
+        asset("loma_r_features_k3840_fp16.onnx",
+              1318960639,
+              "2b2671850f6a79f071a171eb9b523a8807474bcde19b5ded0191b9593ed97e19"),
+        asset("loma_r_matcher_dynamic_fp16.onnx",
+              45501499,
+              "5c91444393c2245e66553e8f493e5b35dc39e8a099b9988a684391fdcdf90195"),
+        asset(manifestName, 644, manifestHash),
+    };
     return package;
 }
 

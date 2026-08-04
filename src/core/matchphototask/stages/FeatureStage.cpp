@@ -125,6 +125,12 @@ MatchPhotosStageReport FeatureStage::run(
     ResolvedLoMaRTensorRtPackage loma_package;
     if (algorithmPlan.algorithmId == QLatin1String(image_matching::kLoMaRAlgorithmId))
     {
+        reportMatchPhotosProgress(
+            context,
+            QStringLiteral("model_prepare"),
+            QStringLiteral("正在检查 LoMa-R ONNX，并为当前 TensorRT/GPU 准备本机 engine"),
+            0,
+            1);
         loma_package = resolveLoMaRTensorRtPackage(options, algorithmPlan.maxKeypoints);
         if (!loma_package.isValid())
         {
@@ -133,6 +139,13 @@ MatchPhotosStageReport FeatureStage::run(
                 QStringLiteral("LoMa-R TensorRT 模型包不可用：%1")
                     .arg(loma_package.errorMessage));
         }
+        reportMatchPhotosProgress(
+            context,
+            QStringLiteral("model_prepare"),
+            QStringLiteral("LoMa-R 本机 TensorRT engine 已就绪：%1")
+                .arg(loma_package.environmentSummary),
+            1,
+            1);
     }
 
     const bool applyMask = shouldApplyMasksToKeypoints(options);
@@ -248,6 +261,7 @@ MatchPhotosStageReport FeatureStage::run(
             runtime.modelInputWidth = loma_package.inputWidth;
             runtime.modelInputHeight = loma_package.inputHeight;
             runtime.maxMatcherKeypoints = loma_package.keypointCount;
+            runtime.featureKeypointCount = loma_package.featureKeypointCount;
             runtime.descriptorDimension = loma_package.descriptorDimension;
         }
 

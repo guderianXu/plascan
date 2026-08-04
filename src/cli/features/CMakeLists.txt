@@ -12,6 +12,7 @@ if(TARGET matchphototask)
         COMPILE_DEFINITIONS PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
         WITH_NVRTC_RPATH
     )
+    plascan_deploy_tensorrt_runtime(feature_match_cli)
 endif()
 
 if(TARGET matchphototask AND TARGET plascan_cli_photogrammetry_common)
@@ -31,6 +32,7 @@ if(TARGET matchphototask AND TARGET plascan_cli_photogrammetry_common)
         COMPILE_DEFINITIONS PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
         WITH_NVRTC_RPATH
     )
+    plascan_deploy_tensorrt_runtime(match_photos_cli)
 endif()
 
 if(BUILD_TESTS)

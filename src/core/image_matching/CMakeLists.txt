@@ -40,6 +40,7 @@ add_library(image_matching STATIC
     lightglue/LightGlueFeatureBudget.h
     lightglue/LightGluePostprocessor.cpp
     lightglue/LightGluePostprocessor.h
+    tensorrt/TensorRtEngineBuilder.h
 )
 
 if(PLASCAN_ENABLE_TENSORRT)
@@ -52,8 +53,14 @@ if(PLASCAN_ENABLE_TENSORRT)
         loma_r/LoMaRTensorRtBackend.h
         tensorrt/TensorRtSession.cpp
         tensorrt/TensorRtSession.h
+        tensorrt/TensorRtEngineBuilder.cpp
         lightglue/TensorRtLightGlueMatcher.cpp
         lightglue/TensorRtLightGlueMatcher.h
+    )
+else()
+    # CPU/Linux 开发配置仍需提供稳定符号，使资源解析代码可以编译并给出明确错误。
+    target_sources(image_matching PRIVATE
+        tensorrt/TensorRtEngineBuilderStub.cpp
     )
 endif()
 
@@ -102,6 +109,7 @@ target_link_libraries(image_matching PUBLIC
 if(PLASCAN_ENABLE_TENSORRT)
     target_link_libraries(image_matching PUBLIC
         TensorRT::nvinfer
+        TensorRT::nvonnxparser
         CUDA::cudart
     )
     target_compile_definitions(image_matching PUBLIC PLASCAN_HAS_TENSORRT=1)
