@@ -3906,23 +3906,23 @@ void CameraSceneWidget::drawSceneGeometry(QRhiCommandBuffer *cb, SceneUniforms &
     const float pointDiameter = _isTiePointCloud
         ? qMax(2.4f, xjw::gui::tie_points::pointSizeForMode(_tiePointColorMode))
         : _pointCloudPointSize;
-    uniforms.lightDirPointSize = QVector4D(
+    uniforms.lightDirPointSize = {
         -0.45f,
         0.70f,
         0.70f,
-        pointDiameter * float(devicePixelRatioF()));
+        pointDiameter * float(devicePixelRatioF())};
     const float pixel_ratio = float(devicePixelRatioF());
     const QSize viewport_size(
         qMax(1, qRound(float(width()) * pixel_ratio)),
         qMax(1, qRound(float(height()) * pixel_ratio)));
-    uniforms.viewportSize = QVector4D(
-        viewport_size.width(),
-        viewport_size.height(),
+    uniforms.viewportSize = {
+        float(viewport_size.width()),
+        float(viewport_size.height()),
         0.0f,
-        0.0f);
+        0.0f};
     drawPointCloud(cb, uniforms);
 
-    uniforms.lightDirPointSize.setW(_meshHasFaces ? 1.0f : 1.5f);
+    uniforms.lightDirPointSize[3] = _meshHasFaces ? 1.0f : 1.5f;
     if (_modelColorMode == ModelColorMode::Wireframe && _meshHasFaces)
     {
         drawRhiBuffer(cb,
@@ -3942,7 +3942,7 @@ void CameraSceneWidget::drawSceneGeometry(QRhiCommandBuffer *cb, SceneUniforms &
                       uniforms);
     }
 
-    uniforms.lightDirPointSize.setW(1.0f);
+    uniforms.lightDirPointSize[3] = 1.0f;
     drawRhiBuffer(cb, &_lineBuffer, &_colorLinePipeline, uniforms);
 }
 
@@ -4020,17 +4020,19 @@ void CameraSceneWidget::render(QRhiCommandBuffer *cb)
     cb->setViewport(QRhiViewport(0.0f, 0.0f, float(pixelSize.width()), float(pixelSize.height())));
 
     SceneUniforms uniforms;
-    uniforms.mvp = mvp;
-    uniforms.modelView = mv;
-    uniforms.normalMatrix.setToIdentity();
+    std::copy_n(mvp.constData(), 16, uniforms.mvp.begin());
+    std::copy_n(mv.constData(), 16, uniforms.modelView.begin());
+    QMatrix4x4 normal_matrix;
+    normal_matrix.setToIdentity();
     const QMatrix3x3 normal3x3 = mv.normalMatrix();
     for (int row = 0; row < 3; ++row)
     {
         for (int col = 0; col < 3; ++col)
         {
-            uniforms.normalMatrix(row, col) = normal3x3(row, col);
+            normal_matrix(row, col) = normal3x3(row, col);
         }
     }
+    std::copy_n(normal_matrix.constData(), 16, uniforms.normalMatrix.begin());
     if (_cameraImageDisplayLayer == CameraImageDisplayLayer::Background)
     {
         drawActiveCameraImage(cb, mvp);

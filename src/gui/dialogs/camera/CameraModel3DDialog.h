@@ -30,6 +30,7 @@
 #include <QVector3D>
 #include <QVector4D>
 #include <array>
+#include <cstddef>
 #include <vector>
 #include <plapoint/core/point_cloud.h>
 
@@ -394,14 +395,20 @@ private:
         bool resourcesDirty = true;
     };
 
-    struct SceneUniforms
+    struct alignas(16) SceneUniforms
     {
-        QMatrix4x4 mvp;
-        QMatrix4x4 modelView;
-        QMatrix4x4 normalMatrix;
-        QVector4D lightDirPointSize;
-        QVector4D viewportSize;
+        std::array<float, 16> mvp{};
+        std::array<float, 16> modelView{};
+        std::array<float, 16> normalMatrix{};
+        std::array<float, 4> lightDirPointSize{};
+        std::array<float, 4> viewportSize{};
     };
+    static_assert(offsetof(SceneUniforms, mvp) == 0);
+    static_assert(offsetof(SceneUniforms, modelView) == 16 * sizeof(float));
+    static_assert(offsetof(SceneUniforms, normalMatrix) == 32 * sizeof(float));
+    static_assert(offsetof(SceneUniforms, lightDirPointSize) == 48 * sizeof(float));
+    static_assert(offsetof(SceneUniforms, viewportSize) == 52 * sizeof(float));
+    static_assert(sizeof(SceneUniforms) == 56 * sizeof(float));
 
     struct ImagePlaneUniforms
     {

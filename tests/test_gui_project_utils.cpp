@@ -7357,12 +7357,15 @@ TEST(CameraSceneWidgetTest, RegistersQrhiShaderResources)
 
 TEST(CameraSceneWidgetTest, PointCloudRenderingStaysOnVulkan)
 {
+    const QString header = readProjectSourceFile(
+        QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
     const QString source = readProjectSourceFile(
         QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
     const QString pointVertexShader = readProjectSourceFile(
         QStringLiteral("src/gui/shaders/camera_scene_point.vert"));
     const QString pointFragmentShader = readProjectSourceFile(
         QStringLiteral("src/gui/shaders/camera_scene_point.frag"));
+    ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
     ASSERT_FALSE(pointVertexShader.isEmpty());
     ASSERT_FALSE(pointFragmentShader.isEmpty());
@@ -7384,6 +7387,22 @@ TEST(CameraSceneWidgetTest, PointCloudRenderingStaysOnVulkan)
         "QRhiVertexInputBinding(9 * sizeof(float), QRhiVertexInputBinding::PerInstance)")));
     EXPECT_TRUE(source.contains(QStringLiteral(
         "cb->draw(6, quint32(_pointBuffer.vertexCount))")));
+    EXPECT_TRUE(header.contains(QStringLiteral(
+        "struct alignas(16) SceneUniforms")));
+    EXPECT_TRUE(header.contains(QStringLiteral(
+        "std::array<float, 16> mvp{};")));
+    EXPECT_TRUE(header.contains(QStringLiteral(
+        "static_assert(offsetof(SceneUniforms, lightDirPointSize) == 48 * sizeof(float));")));
+    EXPECT_TRUE(header.contains(QStringLiteral(
+        "static_assert(sizeof(SceneUniforms) == 56 * sizeof(float));")));
+    EXPECT_TRUE(source.contains(QStringLiteral(
+        "std::copy_n(mvp.constData(), 16, uniforms.mvp.begin())")));
+    const qsizetype scene_uniform_start = header.indexOf(QStringLiteral("struct alignas(16) SceneUniforms"));
+    const qsizetype scene_uniform_end = header.indexOf(QStringLiteral("struct ImagePlaneUniforms"), scene_uniform_start);
+    ASSERT_GE(scene_uniform_start, 0);
+    ASSERT_GT(scene_uniform_end, scene_uniform_start);
+    EXPECT_FALSE(header.mid(scene_uniform_start, scene_uniform_end - scene_uniform_start)
+                     .contains(QStringLiteral("QMatrix4x4")));
     EXPECT_TRUE(source.contains(QStringLiteral(
         "qRound(float(width()) * pixel_ratio)")));
     EXPECT_TRUE(source.contains(QStringLiteral(
