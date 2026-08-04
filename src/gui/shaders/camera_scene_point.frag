@@ -26,14 +26,8 @@ vec3 linearToSrgb(vec3 color)
 
 void main()
 {
-    vec2 pointOffset = gl_PointCoord * 2.0 - vec2(1.0);
-    if (dot(pointOffset, pointOffset) > 1.0)
-    {
-        discard;
-    }
-
     float normalLengthSquared = dot(vNormal, vNormal);
-    if (normalLengthSquared <= 1.0e-20)
+    if (!(normalLengthSquared > 1.0e-20) || normalLengthSquared > 1.0e20)
     {
         fragColor = vec4(vColor, 1.0);
         return;

@@ -1860,11 +1860,11 @@ QVector3D CameraSceneWidget::eulerAnglesDeg() const
 }
 
 // 根据窗口尺寸自适应计算 Gizmo 操控球屏幕半径（px）
-// 范围：[30, min(w,h)*0.24]，基准为 min(w,h)*0.11
+// 范围：[42, min(w,h)*0.30]，基准为 min(w,h)*0.16
 qreal CameraSceneWidget::manipRadiusPx() const
 {
-    const qreal base = qMin(width(), height()) * 0.11;
-    return qBound<qreal>(30.0, base, qMin(width(), height()) * 0.24);
+    const qreal base = qMin(width(), height()) * 0.16;
+    return qBound<qreal>(42.0, base, qMin(width(), height()) * 0.30);
 }
 
 int CameraSceneWidget::maxVisibleCameraLabels() const
@@ -3840,7 +3840,7 @@ void CameraSceneWidget::drawSceneGeometry(QRhiCommandBuffer *cb, SceneUniforms &
                       uniforms);
     }
 
-    uniforms.lightDirPointSize.setW(_modelPointSize);
+    uniforms.lightDirPointSize.setW(_modelPointSize * float(devicePixelRatioF()));
     drawRhiBuffer(cb, &_modelPointBuffer, &_modelPointPipeline, uniforms);
 
     uniforms.lightDirPointSize.setW(1.0f);

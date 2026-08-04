@@ -19,7 +19,9 @@ layout(location = 2) out vec3 vViewPosition;
 void main()
 {
     gl_Position = ubuf.uMVP * vec4(aPos, 1.0);
-    gl_PointSize = ubuf.uLightDirPointSize.w;
+    // QRhi does not guarantee Vulkan's largePoints feature. A one-pixel point
+    // is portable and keeps every source point visible without a CPU fallback.
+    gl_PointSize = 1.0;
     vNormal = mat3(ubuf.uNormalMat) * aNormal;
     vColor = aColor;
     vViewPosition = (ubuf.uModelView * vec4(aPos, 1.0)).xyz;

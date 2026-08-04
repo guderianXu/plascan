@@ -7378,9 +7378,25 @@ TEST(CameraSceneWidgetTest, PointCloudRenderingStaysOnVulkan)
     EXPECT_TRUE(source.contains(QStringLiteral(":/shaders/camera_scene_point.frag.qsb")));
     EXPECT_TRUE(source.contains(QStringLiteral("data.reserve(static_cast<int>(_cloud.size()) * 9)")));
     EXPECT_TRUE(source.contains(QStringLiteral("_cloud.hasFaces() ? 4 : 1")));
+    EXPECT_TRUE(source.contains(QStringLiteral("int(QRhiGraphicsPipeline::Points),\n"
+                                                "                        9 * int(sizeof(float)),\n"
+                                                "                        true")));
     EXPECT_TRUE(pointVertexShader.contains(QStringLiteral("layout(location = 1) in vec3 aNormal")));
-    EXPECT_TRUE(pointFragmentShader.contains(QStringLiteral("gl_PointCoord")));
-    EXPECT_TRUE(pointFragmentShader.contains(QStringLiteral("normalLengthSquared <= 1.0e-20")));
+    EXPECT_TRUE(pointVertexShader.contains(QStringLiteral("gl_PointSize = 1.0")));
+    EXPECT_TRUE(pointVertexShader.contains(QStringLiteral("largePoints")));
+    EXPECT_FALSE(pointFragmentShader.contains(QStringLiteral("gl_PointCoord")));
+    EXPECT_TRUE(pointFragmentShader.contains(QStringLiteral("normalLengthSquared > 1.0e-20")));
+}
+
+TEST(CameraSceneWidgetTest, ModelGizmoUsesReadableScreenRadius)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("qMin(width(), height()) * 0.16")));
+    EXPECT_TRUE(source.contains(QStringLiteral("qBound<qreal>(42.0, base")));
+    EXPECT_TRUE(source.contains(QStringLiteral("qMin(width(), height()) * 0.30")));
 }
 
 TEST(CameraSceneWidgetTest, ModelViewDoesNotDrawInvalidWorldOriginLabel)
