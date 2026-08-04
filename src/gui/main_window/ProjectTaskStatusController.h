@@ -23,6 +23,8 @@ public slots:
     void showTiePointProgress(int total);
     void updateTiePointProgress(int done);
     void finishTiePointProgress(bool success);
+    void updateImageLoading(const QString &stage, int done, int total);
+    void finishImageLoading(bool success, const QString &message = QString());
 
 signals:
     void tiePointCancelRequested();
@@ -51,4 +53,5 @@ private:
     TaskStatusWidget *_aerialTriangulationStatus = nullptr;
     TaskStatusWidget *_tiePointStatus = nullptr;
     TaskStatusWidget *_maskStatus = nullptr;
+    TaskStatusWidget *_imageLoadingStatus = nullptr;
 };

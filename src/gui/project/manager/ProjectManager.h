@@ -94,6 +94,9 @@ signals:
     void maskGenerationProgressChanged(const QString &stage, int done, int total);
     // 照片蒙版生成结束（success=true 表示全部目标影像生成成功）
     void maskGenerationFinished(bool success);
+    // 影像导入进度；total=0 表示正在扫描，尚不能确定总数。
+    void imageImportProgressChanged(const QString &stage, int done, int total);
+    void imageImportFinished(bool success, const QString &message);
     // 照片蒙版生成完成后发出，供当前影像视图刷新轮廓覆盖层。
     void masksGenerated(const QStringList &imagePaths);
     /// 每对影像匹配完成时实时发出（在主线程中）
@@ -369,6 +372,7 @@ private:
     quint64 _projectSessionGeneration = 0;
     QJsonObject _pendingAutomaticModelSettings;
     bool _automaticModelDepthPreparationActive = false;
+    bool _imageImportActive = false;
 
     // AT/SFM 取消标志（跨线程共享）
     std::shared_ptr<std::atomic<bool>> _atCancelFlag;
@@ -387,5 +391,7 @@ private:
     // 辅助：校验项目是否已打开；失败时统一弹窗提示并返回 false
     bool ensureProjectOpen(const QString &message = QStringLiteral("请先打开项目"),
                            const QString &title = QStringLiteral("提示")) const;
+    void startImageImport(const QStringList &imagePaths,
+                          const QString &sourceLabel);
     void importProjectAsset(bool modelAsset);
 };

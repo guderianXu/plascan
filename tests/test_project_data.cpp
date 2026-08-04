@@ -943,6 +943,34 @@ TEST(ProjectDataTest, EmbeddedUiConfigDoesNotOverrideProjectUiState)
         1);
 }
 
+TEST(ProjectDataTest, CommitsPreparedSharedImagesWithoutRepeatingImageIo)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString projectPath = tempProjectPath(dir);
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(projectPath, QStringLiteral("prepared-images")));
+
+    const QString preparedImage = QDir(ProjectPackageLayout::sharedImagesDirectory(projectPath))
+                                      .filePath(QStringLiteral("hash/prepared.png"));
+    writeTestFile(preparedImage, QByteArray("already-copied-image"));
+
+    QString message;
+    ASSERT_TRUE(project.addImagesFromSharedStore(
+        {preparedImage, preparedImage}, 3, &message));
+    EXPECT_EQ(project.getAllImages(), QStringList{QDir::cleanPath(preparedImage)});
+    EXPECT_EQ(message, QStringLiteral("已跳过 4 张重复图片"));
+
+    const QJsonObject entry = project.coreFilesMeta()
+                                  .value(QStringLiteral("images"))
+                                  .toArray()
+                                  .first()
+                                  .toObject();
+    EXPECT_EQ(entry.value(QStringLiteral("type")).toString(), QStringLiteral("shared"));
+    EXPECT_FALSE(entry.value(QStringLiteral("image_uuid")).toString().isEmpty());
+}
+
 TEST(ProjectDataTest, SplitProjectReopensAllWorkflowAssetsAfterPairMoves)
 {
     QTemporaryDir dir;

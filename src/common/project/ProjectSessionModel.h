@@ -135,6 +135,11 @@ public:
     // === 资源管理 ===
     // 添加影像到项目；立即复制到工程级共享影像库并跨 Chunk 去重。
     bool addImages(const QStringList &imagePaths, QString *errorMsg = nullptr);
+    // 提交已经复制到工程级共享影像库的路径；仅更新当前 Chunk 元数据，不执行影像 IO。
+    // GUI 异步导入流程在后台完成哈希与复制后调用此接口。
+    bool addImagesFromSharedStore(const QStringList &projectImagePaths,
+                                  int previouslySkipped = 0,
+                                  QString *errorMsg = nullptr);
     // 添加文件夹中的影像
     bool addImagesFromFolder(const QString &folderPath, QString *errorMsg = nullptr);
     // 移除资源引用；共享影像仅在全部 Chunk 都解除引用后删除。

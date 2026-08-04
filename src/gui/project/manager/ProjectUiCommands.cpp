@@ -161,7 +161,7 @@ void ProjectUiCommands::closeProject() const
     }
 }
 
-bool ProjectUiCommands::addPhoto() const
+bool ProjectUiCommands::selectPhotos(QStringList *selectedFiles) const
 {
     if (!ensureProjectOpen())
     {
@@ -186,19 +186,9 @@ bool ProjectUiCommands::addPhoto() const
     }
 
     writeLastDir(QStringLiteral("images"), QFileInfo(files.first()).absolutePath());
-
-    QString error;
-    if (!_projectData->addImages(files, &error))
+    if (selectedFiles)
     {
-        QMessageBox::critical(_parentWidget,
-                              QStringLiteral("错误"),
-                              QStringLiteral("添加图片失败: %1").arg(error));
-        return false;
-    }
-
-    if (!error.isEmpty())
-    {
-        QMessageBox::information(_parentWidget, QStringLiteral("提示"), error);
+        *selectedFiles = files;
     }
     return true;
 }
@@ -230,30 +220,6 @@ bool ProjectUiCommands::selectImageFolder(QString *selectedFolder) const
     if (selectedFolder)
     {
         *selectedFolder = folder;
-    }
-    return true;
-}
-
-bool ProjectUiCommands::addFolder() const
-{
-    QString folder;
-    if (!selectImageFolder(&folder))
-    {
-        return false;
-    }
-
-    QString error;
-    if (!_projectData->addImagesFromFolder(folder, &error))
-    {
-        QMessageBox::critical(_parentWidget,
-                              QStringLiteral("错误"),
-                              QStringLiteral("添加文件夹失败: %1").arg(error));
-        return false;
-    }
-
-    if (!error.isEmpty())
-    {
-        QMessageBox::information(_parentWidget, QStringLiteral("提示"), error);
     }
     return true;
 }

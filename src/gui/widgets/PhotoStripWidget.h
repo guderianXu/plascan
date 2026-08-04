@@ -5,7 +5,9 @@
 #include <QIcon>
 #include <QImage>
 #include <QJsonObject>
+#include <QJsonArray>
 #include <QList>
+#include <QQueue>
 #include <QSet>
 #include <QStringList>
 #include <QWidget>
@@ -31,6 +33,8 @@ signals:
     void photoSelected(const QString &imagePath);
     void photoActivated(const QString &imagePath);
     void generateMaskRequested(const QStringList &imagePaths);
+    void imageLoadingProgressChanged(const QString &stage, int done, int total);
+    void imageLoadingFinished(bool success, const QString &message);
 
 private slots:
     void showPhotoContextMenu(const QPoint &position);
@@ -44,7 +48,10 @@ private:
     };
 
     QListWidgetItem *createItem(const QJsonObject &entry);
+    void appendImageEntry(const QJsonValue &value);
+    void processPendingImageBatch(quint64 generation);
     void startThumbnailLoad(const QString &imagePath);
+    void pumpThumbnailLoads();
     void applyThumbnail(const ThumbnailResult &result, quint64 generation, const QString &projectPath);
     void advanceThumbnailGeneration(bool clearCache);
     QStringList selectedPhotoPaths() const;
@@ -59,5 +66,11 @@ private:
     QHash<QString, QIcon> _thumbnailCache;
     QHash<QString, quint64> _thumbnailLoadsInFlight;
     QSet<QFutureWatcher<ThumbnailResult> *> _thumbnailWatchers;
+    QQueue<QString> _pendingThumbnailPaths;
+    QSet<QString> _queuedThumbnailKeys;
+    QJsonArray _pendingImageEntries;
+    int _pendingImageIndex = 0;
+    int _activeThumbnailLoads = 0;
+    bool _imageListLoading = false;
     quint64 _thumbnailGeneration{};
 };

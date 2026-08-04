@@ -7641,8 +7641,11 @@ TEST(ProjectOpenResponsivenessTest, ProjectManagerScansImageFoldersOffGuiThread)
 
     EXPECT_TRUE(commandsHeader.contains(QStringLiteral("bool selectImageFolder(QString *selectedFolder) const;")))
         << "Folder selection should be separated from the potentially slow folder scan.";
+    EXPECT_TRUE(commandsHeader.contains(QStringLiteral("bool selectPhotos(QStringList *selectedFiles) const;")))
+        << "File selection should be separated from slow image hashing and copying.";
     EXPECT_TRUE(commandsSource.contains(QStringLiteral("bool ProjectUiCommands::selectImageFolder")))
         << "The UI command layer should keep the directory dialog logic reusable.";
+    EXPECT_TRUE(commandsSource.contains(QStringLiteral("bool ProjectUiCommands::selectPhotos")));
 
     const int addStart = managerSource.indexOf(QStringLiteral("void ProjectManager::addFolder"));
     const int nextStart = managerSource.indexOf(QStringLiteral("bool ProjectManager::importCameraForImage"), addStart);
@@ -7654,8 +7657,16 @@ TEST(ProjectOpenResponsivenessTest, ProjectManagerScansImageFoldersOffGuiThread)
     EXPECT_TRUE(addBlock.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
         << "Directory scanning can touch slow disks or large folders and must not run on the GUI thread.";
     EXPECT_TRUE(addBlock.contains(QStringLiteral("scanImageFolder(folder)")));
-    EXPECT_TRUE(addBlock.contains(QStringLiteral("addImages(scan.imagePaths")))
-        << "Only the final ProjectData mutation should run back on the GUI thread.";
+    EXPECT_TRUE(addBlock.contains(QStringLiteral("startImageImport(scan.imagePaths")))
+        << "The scanned files should continue through the asynchronous import path.";
+    EXPECT_TRUE(addBlock.contains(QStringLiteral("importImagesToSharedStore(")))
+        << "Hashing and copying image content must happen in the worker.";
+    EXPECT_TRUE(addBlock.contains(QStringLiteral("addImagesFromSharedStore(")))
+        << "Only the metadata commit should run back on the GUI thread.";
+    EXPECT_TRUE(addBlock.contains(QStringLiteral("imageImportProgressChanged")))
+        << "Large image imports should report determinate GUI progress.";
+    EXPECT_FALSE(addBlock.contains(QStringLiteral("_projectData->addImages(scan.imagePaths")))
+        << "The GUI thread must not hash and copy every image.";
     EXPECT_FALSE(addBlock.contains(QStringLiteral("_uiCommands->addFolder()")))
         << "The old synchronous path scans and updates metadata inside the action handler.";
 }
@@ -12369,6 +12380,42 @@ TEST(PhotoStripWidgetTest, ThumbnailLoadingUsesSharedDisplayImageLoader)
     EXPECT_TRUE(source.contains(QStringLiteral("LayerImageLoader.h")));
     EXPECT_TRUE(source.contains(QStringLiteral("xjw::gui::views::loadImageForDisplay(imagePath, projectPath)")));
     EXPECT_FALSE(source.contains(QStringLiteral("QFileIconProvider")));
+}
+
+TEST(PhotoStripWidgetTest, LargeImageListsPopulateIncrementallyAndReportProgress)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("shared.png"));
+    QImage testImage(8, 8, QImage::Format_RGB32);
+    testImage.fill(QColor(40, 90, 160));
+    ASSERT_TRUE(testImage.save(imagePath));
+
+    PhotoStripWidget strip;
+    QSignalSpy progressSpy(&strip, &PhotoStripWidget::imageLoadingProgressChanged);
+    QSignalSpy finishedSpy(&strip, &PhotoStripWidget::imageLoadingFinished);
+
+    QJsonArray images;
+    for (int index = 0; index < 240; ++index)
+    {
+        images.append(QJsonObject{
+            {QStringLiteral("path"), imagePath},
+            {QStringLiteral("name"), QStringLiteral("image_%1.png").arg(index)}});
+    }
+
+    strip.loadFromJson(QJsonObject{{QStringLiteral("images"), images}});
+    auto *list = strip.findChild<QListWidget *>(QStringLiteral("photoStripList"));
+    ASSERT_NE(list, nullptr);
+    EXPECT_LT(list->count(), images.size())
+        << "Large lists should yield to the Qt event loop instead of building every item inline.";
+
+    QTRY_COMPARE_WITH_TIMEOUT(list->count(), images.size(), 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.count(), 1, 5000);
+    ASSERT_GT(progressSpy.count(), 1);
+    const QList<QVariant> finalProgress = progressSpy.last();
+    EXPECT_EQ(finalProgress.at(1).toInt(), images.size());
+    EXPECT_EQ(finalProgress.at(2).toInt(), images.size());
+    EXPECT_TRUE(finishedSpy.last().at(0).toBool());
 }
 
 TEST(ProjectIOTest, ResolvesProjectRelativeAndAbsoluteResourcePaths)

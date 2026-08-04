@@ -2083,10 +2083,7 @@ bool ProjectData::addImages(const QStringList &imagePaths, QString *errorMsg)
         return false;
     }
 
-    // 获取现有影像列表，准备追加
-    QJsonArray images = _filesManager.coreData().value("images").toArray();
-
-    // 构建已有路径集合用于去重
+    const QJsonArray images = _filesManager.coreData().value("images").toArray();
     QSet<QString> existingPaths;
     existingPaths.reserve(images.size());
     for (const QJsonValue &val : images) {
@@ -2095,6 +2092,8 @@ bool ProjectData::addImages(const QStringList &imagePaths, QString *errorMsg)
             existingPaths.insert(p);
     }
 
+    QStringList importedPaths;
+    importedPaths.reserve(imagePaths.size());
     int skipped = 0;
     for (const QString &srcPath : imagePaths) {
         const QString absPath = QFileInfo(srcPath).absoluteFilePath();
@@ -2115,20 +2114,66 @@ bool ProjectData::addImages(const QStringList &imagePaths, QString *errorMsg)
             continue;
         }
         existingPaths.insert(projectImagePath); // 防止同批次内重复
-
-        // 构建影像条目 JSON 对象：
-        //   path:     工程级共享影像库中的运行时绝对路径
-        //   type:     "shared" 表示跨 Chunk 内容寻址资源
-        //   added_at: UTC 时间戳，方便排序和溯源
-        QJsonObject imgObj;
-        imgObj["image_uuid"] = QUuid::createUuid().toString(QUuid::WithoutBraces);
-        imgObj["path"] = projectImagePath;
-        imgObj["type"] = "shared";
-        imgObj["added_at"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
-        images.append(imgObj);
+        importedPaths.append(projectImagePath);
     }
 
-    if (skipped > 0 && errorMsg) {
+    return addImagesFromSharedStore(importedPaths, skipped, errorMsg);
+}
+
+bool ProjectData::addImagesFromSharedStore(const QStringList &projectImagePaths,
+                                           int previouslySkipped,
+                                           QString *errorMsg)
+{
+    if (_projectPath.isEmpty())
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("没有打开的项目");
+        }
+        return false;
+    }
+
+    QJsonArray images = _filesManager.coreData().value("images").toArray();
+    QSet<QString> existingPaths;
+    existingPaths.reserve(images.size() + projectImagePaths.size());
+    for (const QJsonValue &value : images)
+    {
+        const QString path = value.toObject().value("path").toString();
+        if (!path.isEmpty())
+        {
+            existingPaths.insert(path);
+        }
+    }
+
+    int skipped = std::max(0, previouslySkipped);
+    for (const QString &projectImagePath : projectImagePaths)
+    {
+        const QString cleanPath = QDir::cleanPath(projectImagePath.trimmed());
+        if (cleanPath.isEmpty() || existingPaths.contains(cleanPath))
+        {
+            ++skipped;
+            continue;
+        }
+        if (!QFileInfo(cleanPath).isFile())
+        {
+            if (errorMsg)
+            {
+                *errorMsg = QStringLiteral("共享影像不存在: %1").arg(cleanPath);
+            }
+            return false;
+        }
+
+        existingPaths.insert(cleanPath);
+        QJsonObject image;
+        image["image_uuid"] = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        image["path"] = cleanPath;
+        image["type"] = "shared";
+        image["added_at"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+        images.append(image);
+    }
+
+    if (skipped > 0 && errorMsg)
+    {
         *errorMsg = QStringLiteral("已跳过 %1 张重复图片").arg(skipped);
     }
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QString>
+#include <QStringList>
 
 #include <functional>
 
@@ -21,9 +22,8 @@ public:
     bool openProjectFromPath(const QString &plascanPath) const;
     bool saveProject() const;
     void closeProject() const;
-    bool addPhoto() const;
+    bool selectPhotos(QStringList *selectedFiles) const;
     bool selectImageFolder(QString *selectedFolder) const;
-    bool addFolder() const;
 
 private:
     QString readLastDir(const QString &key) const;

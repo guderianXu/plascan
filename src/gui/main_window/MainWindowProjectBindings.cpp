@@ -973,6 +973,14 @@ void MainWindow::setupProjectManager()
 
     _taskStatusController = new ProjectTaskStatusController(
         _projectManager, _dashboard, statusBar(), this, this);
+    connect(_photoStrip,
+            &PhotoStripWidget::imageLoadingProgressChanged,
+            _taskStatusController,
+            &ProjectTaskStatusController::updateImageLoading);
+    connect(_photoStrip,
+            &PhotoStripWidget::imageLoadingFinished,
+            _taskStatusController,
+            &ProjectTaskStatusController::finishImageLoading);
     connect(_taskStatusController,
             &ProjectTaskStatusController::tiePointCancelRequested,
             this,

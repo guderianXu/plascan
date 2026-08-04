@@ -25,6 +25,8 @@ ProjectTaskStatusController::ProjectTaskStatusController(ProjectManager *project
     _aerialTriangulationStatus = createStatus(220, tr("正在取消空三/光束法平差..."), widgetParent);
     _tiePointStatus = createStatus(180, tr("正在取消特征匹配..."), widgetParent);
     _maskStatus = createStatus(180, tr("正在取消生成蒙版..."), widgetParent);
+    _imageLoadingStatus = createStatus(180, QString(), widgetParent);
+    _imageLoadingStatus->setCancellable(false);
 
     connect(_meshStatus, &TaskStatusWidget::cancelRequested,
             _projectManager, &ProjectManager::cancelModelGeneration);
@@ -53,6 +55,10 @@ ProjectTaskStatusController::ProjectTaskStatusController(ProjectManager *project
             this, &ProjectTaskStatusController::updateMask);
     connect(_projectManager, &ProjectManager::maskGenerationFinished,
             this, &ProjectTaskStatusController::finishMask);
+    connect(_projectManager, &ProjectManager::imageImportProgressChanged,
+            this, &ProjectTaskStatusController::updateImageLoading);
+    connect(_projectManager, &ProjectManager::imageImportFinished,
+            this, &ProjectTaskStatusController::finishImageLoading);
     refreshDashboard();
 }
 
@@ -160,6 +166,34 @@ void ProjectTaskStatusController::finishMask(bool success)
     _statusBar->showMessage(success ? tr("蒙版生成完成") : tr("蒙版生成已取消或失败"), 4000);
 }
 
+void ProjectTaskStatusController::updateImageLoading(const QString &stage, int done, int total)
+{
+    const int maximum = std::max(0, total);
+    const int value = maximum > 0 ? std::clamp(done, 0, maximum) : 0;
+    const QString text = maximum > 0
+        ? tr("%1 %2/%3").arg(stage).arg(value).arg(maximum)
+        : stage;
+    if (!_imageLoadingStatus->isActive())
+    {
+        _imageLoadingStatus->begin(text, 0, maximum);
+    }
+    else if (_imageLoadingStatus->progressMaximum() != maximum)
+    {
+        _imageLoadingStatus->begin(text, 0, maximum);
+    }
+    _imageLoadingStatus->updateProgress(text, value);
+    refreshDashboard();
+    _statusBar->showMessage(QString());
+}
+
+void ProjectTaskStatusController::finishImageLoading(bool success, const QString &message)
+{
+    _imageLoadingStatus->finish();
+    refreshDashboard();
+    const QString fallback = success ? tr("影像加载完成") : tr("影像加载已停止或失败");
+    _statusBar->showMessage(message.trimmed().isEmpty() ? fallback : message, 4000);
+}
+
 TaskStatusWidget *ProjectTaskStatusController::createStatus(int labelWidth,
                                                            const QString &cancellingText,
                                                            QWidget *widgetParent)
@@ -201,5 +235,6 @@ void ProjectTaskStatusController::refreshDashboard()
     append(tr("空三/光束法平差"), _aerialTriangulationStatus);
     append(tr("特征匹配"), _tiePointStatus);
     append(tr("生成蒙版"), _maskStatus);
+    append(tr("加载影像"), _imageLoadingStatus);
     _dashboard->setTaskSnapshots(tasks);
 }

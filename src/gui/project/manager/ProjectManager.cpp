@@ -14,6 +14,7 @@
 #include "project/ProjectMatchCatalog.h"
 #include "project/ProjectMetadata.h"
 #include "ProjectCameraImportService.h"
+#include "project/ProjectSharedImageStore.h"
 #include "ProjectBundleAdjustExecution.h"
 #include "ProjectBundleAdjustWorkflow.h"
 #include "ProjectCameraInitialization.h"
@@ -160,6 +161,59 @@ struct ImageFolderScan
     QString errorMessage;
     QStringList imagePaths;
 };
+
+struct ImageImportBatch
+{
+    bool success = false;
+    QString errorMessage;
+    QStringList projectImagePaths;
+    int skipped = 0;
+};
+
+ImageImportBatch importImagesToSharedStore(
+    const QString &projectPath,
+    const QStringList &imagePaths,
+    QSet<QString> existingPaths,
+    const std::function<void(int, int)> &progress)
+{
+    ImageImportBatch batch;
+    batch.projectImagePaths.reserve(imagePaths.size());
+    const int total = imagePaths.size();
+    const int progressStep = std::max(1, total / 200);
+    xjw::common::project::ProjectSharedImageStore store(projectPath);
+
+    for (int index = 0; index < total; ++index)
+    {
+        QString resourceUri;
+        QString projectImagePath;
+        if (!store.importImage(imagePaths.at(index),
+                               &resourceUri,
+                               &projectImagePath,
+                               &batch.errorMessage))
+        {
+            return batch;
+        }
+
+        if (existingPaths.contains(projectImagePath))
+        {
+            ++batch.skipped;
+        }
+        else
+        {
+            existingPaths.insert(projectImagePath);
+            batch.projectImagePaths.append(projectImagePath);
+        }
+
+        const int done = index + 1;
+        if (progress && (done == total || done % progressStep == 0))
+        {
+            progress(done, total);
+        }
+    }
+
+    batch.success = true;
+    return batch;
+}
 
 QStringList imageFolderNameFilters()
 {
@@ -488,9 +542,15 @@ void ProjectManager::closeProject()
 
 void ProjectManager::addPhoto()
 {
-    if (_uiCommands)
+    if (!_uiCommands || !_projectData)
     {
-        (void)_uiCommands->addPhoto();
+        return;
+    }
+
+    QStringList files;
+    if (_uiCommands->selectPhotos(&files))
+    {
+        startImageImport(files, QStringLiteral("所选文件"));
     }
 }
 
@@ -507,6 +567,17 @@ void ProjectManager::addFolder()
         return;
     }
 
+    if (_imageImportActive)
+    {
+        QMessageBox::information(_parent,
+                                 QStringLiteral("提示"),
+                                 QStringLiteral("已有影像加载任务正在运行，请等待完成后再试。"));
+        return;
+    }
+
+    _imageImportActive = true;
+    emit imageImportProgressChanged(QStringLiteral("正在扫描影像文件夹..."), 0, 0);
+
     const auto session = currentSessionContext();
     xjw::gui::tasks::runGuardedWithOutcome(
         this,
@@ -517,13 +588,22 @@ void ProjectManager::addFolder()
         [folder, session](ProjectManager *self,
                           xjw::gui::tasks::TaskOutcome<ImageFolderScan> outcome)
         {
-            if (!self || !self->_projectData || !self->isCurrentSession(session))
+            if (!self || !self->_projectData)
             {
+                return;
+            }
+
+            self->_imageImportActive = false;
+
+            if (!self->isCurrentSession(session))
+            {
+                emit self->imageImportFinished(false, QStringLiteral("项目已切换，影像加载已停止"));
                 return;
             }
 
             if (!outcome.succeeded())
             {
+                emit self->imageImportFinished(false, outcome.errorMessage);
                 QMessageBox::critical(self->_parent,
                                       QStringLiteral("错误"),
                                       QStringLiteral("添加文件夹失败: %1")
@@ -535,6 +615,7 @@ void ProjectManager::addFolder()
 
             if (!scan.success)
             {
+                emit self->imageImportFinished(false, scan.errorMessage);
                 QMessageBox::critical(self->_parent,
                                       QStringLiteral("错误"),
                                       QStringLiteral("添加文件夹失败: %1").arg(scan.errorMessage));
@@ -543,27 +624,121 @@ void ProjectManager::addFolder()
 
             if (scan.imagePaths.isEmpty())
             {
+                emit self->imageImportFinished(true, QStringLiteral("文件夹中没有找到可导入的影像"));
                 QMessageBox::information(self->_parent,
                                          QStringLiteral("提示"),
                                          QStringLiteral("文件夹中没有找到可导入的影像: %1").arg(folder));
                 return;
             }
 
-            QString error;
-            if (!self->_projectData->addImages(scan.imagePaths, &error))
+            self->startImageImport(scan.imagePaths, folder);
+        });
+}
+
+void ProjectManager::startImageImport(const QStringList &imagePaths,
+                                      const QString &sourceLabel)
+{
+    if (!_projectData || imagePaths.isEmpty())
+    {
+        return;
+    }
+    if (_imageImportActive)
+    {
+        QMessageBox::information(_parent,
+                                 QStringLiteral("提示"),
+                                 QStringLiteral("已有影像加载任务正在运行，请等待完成后再试。"));
+        return;
+    }
+
+    _imageImportActive = true;
+    const auto session = currentSessionContext();
+    const QString projectPath = currentProjectPath();
+    const QStringList currentImages = _projectData->getAllImages();
+    const QSet<QString> existingPaths(currentImages.cbegin(), currentImages.cend());
+    const QPointer<ProjectManager> owner(this);
+    const int total = imagePaths.size();
+    emit imageImportProgressChanged(QStringLiteral("正在加载影像..."), 0, total);
+
+    xjw::gui::tasks::runGuardedWithOutcome(
+        this,
+        [owner, projectPath, imagePaths, existingPaths, session]()
+        {
+            return importImagesToSharedStore(
+                projectPath,
+                imagePaths,
+                existingPaths,
+                [owner, session](int done, int progressTotal)
+                {
+                    if (!owner)
+                    {
+                        return;
+                    }
+                    xjw::gui::tasks::postGuarded(
+                        owner.data(),
+                        [session, done, progressTotal](ProjectManager *self)
+                        {
+                            if (self->_imageImportActive && self->isCurrentSession(session))
+                            {
+                                emit self->imageImportProgressChanged(
+                                    QStringLiteral("正在加载影像..."), done, progressTotal);
+                            }
+                        });
+                });
+        },
+        [session, sourceLabel, total](
+            ProjectManager *self,
+            xjw::gui::tasks::TaskOutcome<ImageImportBatch> outcome)
+        {
+            self->_imageImportActive = false;
+            if (!self->isCurrentSession(session))
             {
-                QMessageBox::critical(self->_parent,
-                                      QStringLiteral("错误"),
-                                      QStringLiteral("添加文件夹失败: %1").arg(error));
+                emit self->imageImportFinished(false, QStringLiteral("项目已切换，影像加载已停止"));
                 return;
             }
 
-            LOG_INFO(QStringLiteral("已从文件夹添加 %1 张影像: %2")
-                         .arg(scan.imagePaths.size())
-                         .arg(folder));
-            if (!error.isEmpty())
+            if (!outcome.succeeded())
             {
-                QMessageBox::information(self->_parent, QStringLiteral("提示"), error);
+                emit self->imageImportFinished(false, outcome.errorMessage);
+                QMessageBox::critical(self->_parent,
+                                      QStringLiteral("错误"),
+                                      QStringLiteral("加载影像失败: %1").arg(outcome.errorMessage));
+                return;
+            }
+
+            ImageImportBatch batch = std::move(*outcome.value);
+            if (!batch.success)
+            {
+                emit self->imageImportFinished(false, batch.errorMessage);
+                QMessageBox::critical(self->_parent,
+                                      QStringLiteral("错误"),
+                                      QStringLiteral("加载影像失败: %1").arg(batch.errorMessage));
+                return;
+            }
+
+            QString message;
+            if (!self->_projectData->addImagesFromSharedStore(
+                    batch.projectImagePaths, batch.skipped, &message))
+            {
+                emit self->imageImportFinished(false, message);
+                QMessageBox::critical(self->_parent,
+                                      QStringLiteral("错误"),
+                                      QStringLiteral("提交影像元数据失败: %1").arg(message));
+                return;
+            }
+
+            const int added = batch.projectImagePaths.size();
+            const QString finishedMessage = batch.skipped > 0
+                ? QStringLiteral("已加载 %1 张影像，跳过 %2 张重复影像")
+                      .arg(added)
+                      .arg(batch.skipped)
+                : QStringLiteral("已加载 %1 张影像").arg(added);
+            LOG_INFO(QStringLiteral("%1（来源：%2，共选择 %3 张）")
+                         .arg(finishedMessage, sourceLabel)
+                         .arg(total));
+            emit self->imageImportFinished(true, finishedMessage);
+            if (!message.isEmpty())
+            {
+                QMessageBox::information(self->_parent, QStringLiteral("提示"), message);
             }
         });
 }
