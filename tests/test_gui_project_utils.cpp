@@ -7665,6 +7665,10 @@ TEST(ProjectOpenResponsivenessTest, ProjectManagerScansImageFoldersOffGuiThread)
         << "Only the metadata commit should run back on the GUI thread.";
     EXPECT_TRUE(addBlock.contains(QStringLiteral("imageImportProgressChanged")))
         << "Large image imports should report determinate GUI progress.";
+    EXPECT_TRUE(managerSource.contains(QStringLiteral("QtConcurrent::blockingMapped(")))
+        << "Image hashing and copying should use the dedicated parallel import pool.";
+    EXPECT_TRUE(managerSource.contains(QStringLiteral("importPool.setMaxThreadCount(")))
+        << "Parallel imports must use bounded concurrency instead of flooding the global pool.";
     EXPECT_FALSE(addBlock.contains(QStringLiteral("_projectData->addImages(scan.imagePaths")))
         << "The GUI thread must not hash and copy every image.";
     EXPECT_FALSE(addBlock.contains(QStringLiteral("_uiCommands->addFolder()")))

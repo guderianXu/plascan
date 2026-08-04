@@ -8,16 +8,19 @@
 #include "ProjectFilesManager.h"
 #include "project/ProjectChunkIndex.h"
 #include "project/ProjectPackageLayout.h"
+#include "project/ProjectSharedImageStore.h"
 #include "project/PortableProjectFormat.h"
 #include "project/ProjectIO.h"
 
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTemporaryDir>
+#include <QtConcurrent/QtConcurrentRun>
 
 using xjw::common::project::PortableProjectFormat;
 using xjw::common::project::ProjectChunkIndex;
@@ -25,6 +28,7 @@ using xjw::common::project::ProjectPackageLayout;
 using xjw::common::project::ProjectIO;
 using xjw::common::project::ProjectResourceIndex;
 using xjw::common::project::ProjectResourceRef;
+using xjw::common::project::ProjectSharedImageStore;
 
 namespace {
 
@@ -969,6 +973,68 @@ TEST(ProjectDataTest, CommitsPreparedSharedImagesWithoutRepeatingImageIo)
                                   .toObject();
     EXPECT_EQ(entry.value(QStringLiteral("type")).toString(), QStringLiteral("shared"));
     EXPECT_FALSE(entry.value(QStringLiteral("image_uuid")).toString().isEmpty());
+}
+
+TEST(ProjectDataTest, ConcurrentSharedImageImportsKeepSingleContentAddressedFile)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString projectPath = tempProjectPath(dir);
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(projectPath, QStringLiteral("concurrent-images")));
+
+    QStringList sourcePaths;
+    const QByteArray content(2 * 1024 * 1024, 'x');
+    for (int index = 0; index < 8; ++index)
+    {
+        const QString path = QDir(dir.path()).filePath(
+            QStringLiteral("source_%1.tif").arg(index));
+        writeTestFile(path, content);
+        sourcePaths.append(path);
+    }
+
+    QList<QFuture<QString>> futures;
+    for (const QString &sourcePath : sourcePaths)
+    {
+        futures.append(QtConcurrent::run([projectPath, sourcePath]()
+        {
+            QString resourceUri;
+            QString materializedPath;
+            QString error;
+            if (!ProjectSharedImageStore(projectPath).importImage(
+                    sourcePath, &resourceUri, &materializedPath, &error))
+            {
+                return QStringLiteral("ERROR: %1").arg(error);
+            }
+            return materializedPath;
+        }));
+    }
+
+    QSet<QString> materializedPaths;
+    for (QFuture<QString> &future : futures)
+    {
+        future.waitForFinished();
+        const QString path = future.result();
+        const bool failed = path.startsWith(QStringLiteral("ERROR:"));
+        EXPECT_FALSE(failed) << qPrintable(path);
+        if (!failed)
+        {
+            materializedPaths.insert(QDir::cleanPath(path));
+        }
+    }
+    EXPECT_EQ(materializedPaths.size(), 1);
+
+    QDirIterator files(ProjectPackageLayout::sharedImagesDirectory(projectPath),
+                       QDir::Files | QDir::NoDotAndDotDot,
+                       QDirIterator::Subdirectories);
+    int fileCount = 0;
+    while (files.hasNext())
+    {
+        files.next();
+        ++fileCount;
+    }
+    EXPECT_EQ(fileCount, 1);
 }
 
 TEST(ProjectDataTest, SplitProjectReopensAllWorkflowAssetsAfterPairMoves)

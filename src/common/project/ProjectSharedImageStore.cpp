@@ -11,8 +11,12 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QSaveFile>
 #include <QSet>
+
+#include <array>
 
 namespace xjw::common::project
 {
@@ -74,6 +78,13 @@ QString safeFileName(const QString &path)
         name.chop(1);
     }
     return name.isEmpty() ? QStringLiteral("image.bin") : name;
+}
+
+QMutex &mutexForChecksum(const QString &checksum)
+{
+    constexpr std::size_t MutexCount = 64;
+    static std::array<QMutex, MutexCount> mutexes;
+    return mutexes.at(qHash(checksum) % MutexCount);
 }
 
 bool copyAtomically(const QString &source,
@@ -176,6 +187,10 @@ bool ProjectSharedImageStore::importImage(
     {
         return false;
     }
+
+    // 同一内容的影像会落入相同哈希目录。锁定对应分片，避免并发导入时
+    // 多个线程同时观察到空目录并各自写入一份文件。
+    QMutexLocker<QMutex> checksumLock(&mutexForChecksum(checksum));
 
     const QString hashDirectory =
         QDir(ProjectPackageLayout::sharedImagesDirectory(_projectPath))

@@ -63,12 +63,15 @@
 #include <QTextStream>
 #include <QDateTime>
 #include <QImage>
+#include <QThreadPool>
+#include <QtConcurrent/QtConcurrentMap>
 
 #include <algorithm>
 #include <atomic>
 #include <array>
 #include <limits>
 #include <memory>
+#include <mutex>
 
 using xjw::common::project::cameraFromJson;
 using xjw::common::project::cameraToJson;
@@ -170,6 +173,13 @@ struct ImageImportBatch
     int skipped = 0;
 };
 
+struct ImageImportItem
+{
+    bool success = false;
+    QString errorMessage;
+    QString projectImagePath;
+};
+
 ImageImportBatch importImagesToSharedStore(
     const QString &projectPath,
     const QStringList &imagePaths,
@@ -180,34 +190,51 @@ ImageImportBatch importImagesToSharedStore(
     batch.projectImagePaths.reserve(imagePaths.size());
     const int total = imagePaths.size();
     const int progressStep = std::max(1, total / 200);
-    xjw::common::project::ProjectSharedImageStore store(projectPath);
+    const int idealThreads = std::max(1, QThread::idealThreadCount());
+    QThreadPool importPool;
+    importPool.setMaxThreadCount(std::clamp((idealThreads + 1) / 2, 2, 8));
+    int completed = 0;
+    std::mutex progressMutex;
 
-    for (int index = 0; index < total; ++index)
-    {
-        QString resourceUri;
-        QString projectImagePath;
-        if (!store.importImage(imagePaths.at(index),
-                               &resourceUri,
-                               &projectImagePath,
-                               &batch.errorMessage))
+    const QList<ImageImportItem> imported = QtConcurrent::blockingMapped(
+        &importPool,
+        imagePaths,
+        [projectPath, total, progressStep, progress, &completed, &progressMutex](
+            const QString &imagePath)
         {
+            ImageImportItem item;
+            QString resourceUri;
+            xjw::common::project::ProjectSharedImageStore store(projectPath);
+            item.success = store.importImage(imagePath,
+                                             &resourceUri,
+                                             &item.projectImagePath,
+                                             &item.errorMessage);
+
+            std::lock_guard<std::mutex> lock(progressMutex);
+            ++completed;
+            if (progress && (completed == total || completed % progressStep == 0))
+            {
+                progress(completed, total);
+            }
+            return item;
+        });
+
+    for (const ImageImportItem &item : imported)
+    {
+        if (!item.success)
+        {
+            batch.errorMessage = item.errorMessage;
             return batch;
         }
 
-        if (existingPaths.contains(projectImagePath))
+        if (existingPaths.contains(item.projectImagePath))
         {
             ++batch.skipped;
         }
         else
         {
-            existingPaths.insert(projectImagePath);
-            batch.projectImagePaths.append(projectImagePath);
-        }
-
-        const int done = index + 1;
-        if (progress && (done == total || done % progressStep == 0))
-        {
-            progress(done, total);
+            existingPaths.insert(item.projectImagePath);
+            batch.projectImagePaths.append(item.projectImagePath);
         }
     }
 
