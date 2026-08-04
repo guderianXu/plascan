@@ -15,6 +15,7 @@
 #include "DepthPyramidEstimator.h"
 #include "DepthFrameQualityGate.h"
 #include "DepthCompletenessMetrics.h"
+#include "DepthGapTargetedRecovery.h"
 #include "DepthMissingReason.h"
 #include "MvsQualityReport.h"
 #include "MvsSceneClassifier.h"
@@ -67,12 +68,14 @@ struct DepthFrameResult
     QSharedPointer<cv::Mat> adaptiveGeometryEffectiveViewCount; ///< 连续证据有效视图数 (CV_32F)
     QSharedPointer<cv::Mat> adaptiveGeometryConflictRatio; ///< 可观测证据中的冲突比例 [0, 1] (CV_32F)
     QSharedPointer<cv::Mat> crossViewRepairedMask; ///< 跨视图补回像素；不参与帧准入评分 (CV_8U)
+    QSharedPointer<cv::Mat> targetedGapRecoveredMask; ///< 定向二源 PatchMatch 恢复像素 (CV_8U)
     QSharedPointer<cv::Mat> missingReasonMap; ///< 最终缺失像素的逐像素原因码 (CV_8U)
     QSharedPointer<cv::Mat> validMask;   ///< 最终输出空间的权威有效蒙版 (CV_8U)
     QSharedPointer<cv::Mat> supportRegionMask; ///< 项目/内容允许参与重建的区域，不含深度孔洞
     DepthPostProcessStats depthPostprocess; ///< 融合前深度图后处理统计
     DepthCompletenessDiagnostics depthCompleteness; ///< 蒙版内覆盖和逐阶段损失诊断
     QJsonObject crossViewRepairDiagnostics; ///< 跨视补回和锚定插值的逐原因统计
+    QJsonObject targetedGapRecoveryDiagnostics; ///< 缺口定向 PatchMatch 请求、接受和拒绝统计
     QJsonObject poseRefinementDiagnostics; ///< 深度约束位姿细化候选与安全门诊断
     Camera derivedCameraModel; ///< 可选派生相机候选；绝不覆盖 cameraModel 或项目相机
     std::vector<DepthLevelSummary> pyramidLevels; ///< 三级深度估计逐层摘要
@@ -123,6 +126,7 @@ struct DepthFrameResult
         adaptiveGeometryEffectiveViewCount.clear();
         adaptiveGeometryConflictRatio.clear();
         crossViewRepairedMask.clear();
+        targetedGapRecoveredMask.clear();
         missingReasonMap.clear();
         validMask.clear();
         supportRegionMask.clear();

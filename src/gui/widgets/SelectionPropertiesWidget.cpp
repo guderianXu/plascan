@@ -531,6 +531,12 @@ QVector<SelectionPropertiesWidget::PropertyRow> SelectionPropertiesWidget::model
                                       .arg(dominant_reason)
                                       .arg(locale.toString(dominant_count))
                                 : dominant_reason});
+            const qint64 targeted_recovered = static_cast<qint64>(
+                depthSnapshot.value(QStringLiteral(
+                    "targeted_gap_recovered_pixel_count")).toDouble(0.0));
+            rows.push_back({tr("缺口定向恢复"),
+                            locale.toString(targeted_recovered) +
+                                tr(" 像素")});
         }
     }
 

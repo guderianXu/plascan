@@ -19,6 +19,7 @@ set(MVS_CXX_SOURCES
     DenseCloudRefinementService.cpp
     DenseCloudQualityFilter.cpp
     DepthCompletenessMetrics.cpp
+    DepthGapTargetedRecovery.cpp
     DepthMissingReason.cpp
     DepthConsistencyCache.cpp
     DepthConsistencyEvidencePolicy.cpp
@@ -62,6 +63,7 @@ set(MVS_HEADERS
     DenseCloudRefinementService.h
     DenseCloudQualityFilter.h
     DepthCompletenessMetrics.h
+    DepthGapTargetedRecovery.h
     DepthMissingReason.h
     DepthConsistencyCache.h
     DepthConsistencyEvidencePolicy.h
@@ -232,6 +234,22 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/src/core/mvs
         )
         gtest_discover_tests(test_mvs_depth_completeness)
+
+        add_executable(test_mvs_depth_gap_targeted_recovery
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_depth_gap_targeted_recovery.cpp
+        )
+        set_target_properties(test_mvs_depth_gap_targeted_recovery PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
+        )
+        target_link_libraries(test_mvs_depth_gap_targeted_recovery PRIVATE
+            mvs
+            GTest::gtest_main
+            ${OpenCV_LIBS}
+        )
+        target_include_directories(test_mvs_depth_gap_targeted_recovery PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/core/mvs
+        )
+        gtest_discover_tests(test_mvs_depth_gap_targeted_recovery)
 
         add_executable(test_mvs_depth_missing_reason
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_depth_missing_reason.cpp

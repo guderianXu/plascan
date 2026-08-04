@@ -4645,6 +4645,129 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
     }
     result.depthCompleteness.afterMaskValidCount = cv::countNonZero(depthMap > 0.0f);
 
+    cv::Mat targeted_gap_recovered_mask;
+    DepthGapTargetedRecoveryStats targeted_gap_stats;
+    if (config.enableTargetedGapRecovery &&
+        _effectiveSceneProfile == MvsSceneProfile::OrbitalObject &&
+        !useRectified && srcGrays.size() >= 2)
+    {
+        DepthGapTargetedRecoveryOptions recovery_options;
+        recovery_options.minimumCandidateConfidence = std::clamp(
+            config.targetedGapRecoveryConfidence, 0.0f, 1.0f);
+        recovery_options.maximumCandidatePriorRelativeDifference = std::max(
+            0.0f, config.targetedGapRecoveryPriorRelativeDifference);
+        recovery_options.maximumPriorDistancePixels = std::max(
+            1, config.targetedGapRecoveryMaximumPriorDistancePixels);
+        const DepthGapTarget recovery_target = buildDepthGapTarget(
+            depthMap, effectiveReferenceMask, recovery_options);
+        targeted_gap_stats.supportPixelCount = recovery_target.supportPixelCount;
+        targeted_gap_stats.requestedGapPixelCount =
+            recovery_target.requestedGapPixelCount;
+        targeted_gap_stats.priorCoveredGapPixelCount =
+            recovery_target.priorCoveredGapPixelCount;
+        targeted_gap_stats.skippedReason = recovery_target.skippedReason;
+        if (recovery_target.valid)
+        {
+            const int recovery_source_count = std::clamp(
+                config.targetedGapRecoverySourceCount,
+                1,
+                static_cast<int>(srcGrays.size()));
+            std::vector<cv::Mat> recovery_images(
+                srcGrays.begin(), srcGrays.begin() + recovery_source_count);
+            std::vector<Camera> recovery_cameras(
+                srcCams.begin(), srcCams.begin() + recovery_source_count);
+            std::vector<cv::Mat> recovery_source_masks;
+            if (!source_valid_masks.empty())
+            {
+                recovery_source_masks.assign(
+                    source_valid_masks.begin(),
+                    source_valid_masks.begin() + recovery_source_count);
+            }
+
+            PatchMatchConfig recovery_config = pmCfg;
+            recovery_config.downsampleFactor = std::max(
+                1, pyramid_result.finalLevel.downsampleFactor);
+            recovery_config.numIterations = std::clamp(
+                std::max(6, pmCfg.numIterations / 2), 6, 10);
+            recovery_config.patchHalf = std::max(3, pmCfg.patchHalf - 1);
+            recovery_config.confidenceThresh = std::min(
+                pmCfg.confidenceThresh, 0.18f);
+            recovery_config.minimumMaskedPatchSupportRatio = std::min(
+                recovery_config.minimumMaskedPatchSupportRatio, 0.25f);
+            recovery_config.geomConsistency = false;
+
+            cv::Mat candidate_depth;
+            cv::Mat candidate_confidence;
+            std::string recovery_error;
+            const bool recovery_ok = estimatePatchMatchWithAdaptiveCuda(
+                "targeted gap PatchMatch",
+                refIdx,
+                refImg,
+                recovery_images,
+                refCam,
+                recovery_cameras,
+                zNear,
+                zFar,
+                recovery_config,
+                candidate_depth,
+                &candidate_confidence,
+                &recovery_error,
+                &recovery_target.hintDepth,
+                &recovery_target.hintRadius,
+                &recovery_target.estimationMask,
+                recovery_source_masks.empty() ? nullptr : &recovery_source_masks);
+            if (recovery_ok)
+            {
+                targeted_gap_stats = mergeTargetedDepthGapCandidates(
+                    depthMap,
+                    confMap,
+                    candidate_depth,
+                    candidate_confidence,
+                    recovery_target,
+                    &targeted_gap_recovered_mask,
+                    recovery_options);
+                if (!supportCount.empty() &&
+                    supportCount.size() == targeted_gap_recovered_mask.size())
+                {
+                    supportCount.setTo(
+                        cv::Scalar(recovery_source_count),
+                        targeted_gap_recovered_mask);
+                }
+                LOG_INFO(QStringLiteral(
+                             "[MVS] 帧 %1 缺口定向 PatchMatch: target=%2 "
+                             "candidate=%3 recovered=%4 (%5%) sources=%6")
+                             .arg(refIdx)
+                             .arg(targeted_gap_stats.priorCoveredGapPixelCount)
+                             .arg(targeted_gap_stats.candidatePixelCount)
+                             .arg(targeted_gap_stats.recoveredPixelCount)
+                             .arg(targeted_gap_stats.recoveryRatio * 100.0f,
+                                  0, 'f', 1)
+                             .arg(recovery_source_count));
+            }
+            else
+            {
+                targeted_gap_stats.attempted = true;
+                targeted_gap_stats.skippedReason = QStringLiteral(
+                    "patchmatch_failed:%1")
+                    .arg(QString::fromStdString(recovery_error));
+                LOG_WARN(QStringLiteral(
+                             "[MVS] 帧 %1 缺口定向 PatchMatch 失败: %2")
+                             .arg(refIdx)
+                             .arg(QString::fromStdString(recovery_error)));
+            }
+        }
+    }
+    else
+    {
+        targeted_gap_stats.skippedReason = !config.enableTargetedGapRecovery
+            ? QStringLiteral("disabled")
+            : (_effectiveSceneProfile != MvsSceneProfile::OrbitalObject
+                   ? QStringLiteral("non_orbital_scene")
+                   : QStringLiteral("insufficient_sources_or_rectified_pair"));
+    }
+    result.targetedGapRecoveryDiagnostics =
+        depthGapTargetedRecoveryStatsToJson(targeted_gap_stats);
+
     if (!sparseSupportMask.empty())
     {
         cv::Mat supportMask = sparseSupportMask;
@@ -4799,6 +4922,9 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
         : QSharedPointer<cv::Mat>::create(supportCount);
     result.validMask = QSharedPointer<cv::Mat>::create(finalValidMask);
     result.supportRegionMask = QSharedPointer<cv::Mat>::create(effectiveReferenceMask);
+    result.targetedGapRecoveredMask = targeted_gap_recovered_mask.empty()
+        ? QSharedPointer<cv::Mat>()
+        : QSharedPointer<cv::Mat>::create(targeted_gap_recovered_mask);
     result.missingReasonMap = QSharedPointer<cv::Mat>::create(missing_reason_map);
     result.cameraModel = refCam;
     if (!depthMap.empty() && (depthMap.cols != W || depthMap.rows != H))
@@ -6077,6 +6203,19 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             DepthFrameResult artifact_result = _depthFrames[replacement.frameIndex];
             artifact_result.depthMap = QSharedPointer<cv::Mat>::create(filtered_depth);
             artifact_result.confidence = QSharedPointer<cv::Mat>::create(filtered_confidence);
+            const QString targeted_recovered_path = storage_dir.filePath(
+                QStringLiteral("depth_%1_targeted_gap_recovered_mask.png")
+                    .arg(replacement.frameIndex));
+            cv::Mat targeted_recovered = xjw::common::io::readImage(
+                xjw::common::io::toUtf8Path(targeted_recovered_path),
+                cv::IMREAD_GRAYSCALE);
+            if (!targeted_recovered.empty() &&
+                targeted_recovered.type() == CV_8UC1 &&
+                targeted_recovered.size() == filtered_depth.size())
+            {
+                artifact_result.targetedGapRecoveredMask =
+                    QSharedPointer<cv::Mat>::create(targeted_recovered);
+            }
             cv::Mat geometry_support;
             const xjw::common::OperationResult geometry_support_result =
                 xjw::core::project::loadDepthMatStorage(
@@ -6237,6 +6376,9 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
     const std::string crossViewRepairedMaskPath =
         raw_directory + "/depth_" + std::to_string(frameIndex) +
         "_cross_view_repaired_mask.png";
+    const std::string targetedGapRecoveredMaskPath =
+        raw_directory + "/depth_" + std::to_string(frameIndex) +
+        "_targeted_gap_recovered_mask.png";
     const std::string validMaskPath =
         raw_directory + "/depth_" + std::to_string(frameIndex) + "_mask.png";
     const std::string supportMaskPath =
@@ -6499,6 +6641,27 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             repaired_mask.setTo(cv::Scalar(0), *result.depthMap <= 0.0f);
             crossViewRepairedMaskSaved = xjw::common::io::writeImage(
                 crossViewRepairedMaskPath, repaired_mask);
+        }
+    }
+    bool targetedGapRecoveredMaskSaved = false;
+    if (saveRawDepth && result.targetedGapRecoveredMask &&
+        !result.targetedGapRecoveredMask->empty())
+    {
+        cv::Mat recovered_mask = result.targetedGapRecoveredMask->clone();
+        if (recovered_mask.size() == result.depthMap->size())
+        {
+            if (recovered_mask.type() != CV_8UC1)
+            {
+                recovered_mask.convertTo(recovered_mask, CV_8UC1);
+            }
+            cv::threshold(recovered_mask,
+                          recovered_mask,
+                          0.0,
+                          255.0,
+                          cv::THRESH_BINARY);
+            recovered_mask.setTo(cv::Scalar(0), *result.depthMap <= 0.0f);
+            targetedGapRecoveredMaskSaved = xjw::common::io::writeImage(
+                targetedGapRecoveredMaskPath, recovered_mask);
         }
     }
 
@@ -6884,6 +7047,11 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
                                         ? QString::fromStdString(missingReasonPath)
                                         : QString());
                 level_object.insert(
+                    QStringLiteral("targeted_gap_recovered_mask_path"),
+                    targetedGapRecoveredMaskSaved
+                        ? QString::fromStdString(targetedGapRecoveredMaskPath)
+                        : QString());
+                level_object.insert(
                     QStringLiteral("missing_reason_preview_path"),
                     missingReasonPreviewSaved
                         ? QString::fromStdString(missingReasonPreviewPath)
@@ -6942,6 +7110,10 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             crossViewRepairedMaskSaved
                 ? QString::fromStdString(crossViewRepairedMaskPath)
                 : QString();
+        artifact[QStringLiteral("targeted_gap_recovered_mask_path")] =
+            targetedGapRecoveredMaskSaved
+                ? QString::fromStdString(targetedGapRecoveredMaskPath)
+                : QString();
         artifact[QStringLiteral("valid_mask_path")] = maskSaved ? QString::fromStdString(validMaskPath) : QString();
         artifact[QStringLiteral("support_mask_path")] =
             supportMaskSaved ? QString::fromStdString(supportMaskPath) : QString();
@@ -6982,6 +7154,8 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             missingReasonSummaryJson;
         artifact[QStringLiteral("cross_view_repair_diagnostics")] =
             result.crossViewRepairDiagnostics;
+        artifact[QStringLiteral("targeted_gap_recovery_diagnostics")] =
+            result.targetedGapRecoveryDiagnostics;
         artifact[QStringLiteral("geometry_evidence_diagnostics")] =
             geometryEvidenceDiagnostics;
         if (!result.poseRefinementDiagnostics.isEmpty())
@@ -7063,6 +7237,8 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         record.depthCompleteness = depthCompletenessJson;
         record.missingReasonSummary = missingReasonSummaryJson;
         record.crossViewRepairDiagnostics = result.crossViewRepairDiagnostics;
+        record.targetedGapRecoveryDiagnostics =
+            result.targetedGapRecoveryDiagnostics;
         record.geometryEvidenceDiagnostics = geometryEvidenceDiagnostics;
         record.poseRefinementDiagnostics = result.poseRefinementDiagnostics;
         if (result.derivedCameraModel.isValid())
@@ -7119,6 +7295,9 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             : QString();
         record.crossViewRepairedMaskPath = crossViewRepairedMaskSaved
             ? QString::fromStdString(crossViewRepairedMaskPath)
+            : QString();
+        record.targetedGapRecoveredMaskPath = targetedGapRecoveredMaskSaved
+            ? QString::fromStdString(targetedGapRecoveredMaskPath)
             : QString();
         record.validMaskPath = maskSaved ? QString::fromStdString(validMaskPath) : QString();
         record.supportMaskPath = supportMaskSaved ? QString::fromStdString(supportMaskPath) : QString();

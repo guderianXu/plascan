@@ -264,6 +264,7 @@ int main(int argc, char **argv)
     int cpuFrameWorkers = 0;
     bool saveLevels = false;
     bool depthPoseCandidates = false;
+    bool disableTargetedGapRecovery = false;
 
     app.add_option("--input-manifest", inputManifest,
                    "现有 mvs_manifest.json，用于读取影像顺序和相机")
@@ -304,6 +305,10 @@ int main(int argc, char **argv)
         "--depth-pose-candidates",
         depthPoseCandidates,
         "实验：输出深度约束派生相机候选与安全门诊断；不覆盖项目相机或重算深度");
+    app.add_flag(
+        "--disable-targeted-gap-recovery",
+        disableTargetedGapRecovery,
+        "诊断：关闭缺口定向 PatchMatch 恢复，用于同输入 A/B 对比");
     CLI11_PARSE(app, argc, argv);
 
     const QString manifestPath = QFileInfo(
@@ -458,6 +463,7 @@ int main(int argc, char **argv)
     config.sourcePairQualities = std::move(pairQualities);
     config.requireVerifiedSourcePairs = true;
     config.depthPoseRefinement.enabled = depthPoseCandidates;
+    config.enableTargetedGapRecovery = !disableTargetedGapRecovery;
 
     std::fprintf(stdout,
                  "views=%zu verified_pairs=%d failed_pairs=%d "
@@ -550,6 +556,8 @@ int main(int argc, char **argv)
         {QStringLiteral("scene_profile"), QString::fromStdString(sceneProfile)},
         {QStringLiteral("depth_filter"), QString::fromStdString(depthFilter)},
         {QStringLiteral("depth_pose_candidates"), depthPoseCandidates},
+        {QStringLiteral("targeted_gap_recovery"),
+         !disableTargetedGapRecovery},
         {QStringLiteral("depth_artifact_count"), artifacts.size()},
         {QStringLiteral("depth_artifacts"), artifacts},
         {QStringLiteral("error"), generatorError}

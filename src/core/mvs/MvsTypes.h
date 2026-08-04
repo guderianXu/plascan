@@ -223,6 +223,11 @@ struct DepthGenConfig
     bool enableAdaptiveGeometryEvidence = true; ///< 环拍场景生成连续证据并执行投影主深度层选择
     DepthPoseRefinementOptions depthPoseRefinement; ///< 默认关闭；仅输出派生相机候选和诊断，不覆盖项目相机
     int crossViewHoleRepairSourceCount = 8; ///< 环拍内部孔洞修复使用的邻帧数，不改变 PatchMatch 源视图
+    bool enableTargetedGapRecovery = true; ///< 环拍缺口用两个最优来源执行受先验约束的定向 PatchMatch
+    int targetedGapRecoverySourceCount = 2;
+    float targetedGapRecoveryConfidence = 0.28f;
+    float targetedGapRecoveryPriorRelativeDifference = 0.18f;
+    int targetedGapRecoveryMaximumPriorDistancePixels = 128;
     bool enableTwoSourceCrossViewGrowth = false; ///< 实验：从三源强核心受控恢复稳定两源缺口
     int twoSourceGrowthDistancePixels = 3;
     float twoSourceGrowthInverseDepthSpread = 0.01f;

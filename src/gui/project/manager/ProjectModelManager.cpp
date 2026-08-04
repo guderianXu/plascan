@@ -284,6 +284,7 @@ QJsonObject depthGenerationSnapshot(const QJsonObject &metadata,
     qint64 artifact_bytes = 0;
     qint64 support_pixel_count = 0;
     qint64 missing_pixel_count = 0;
+    qint64 targeted_recovered_pixel_count = 0;
     QJsonObject missing_reason_counts;
 
     for (const QJsonValue &value : metadata.value(
@@ -339,6 +340,12 @@ QJsonObject depthGenerationSnapshot(const QJsonObject &metadata,
                 missing_reason_counts.value(reason_key).toDouble(0.0) +
                 missing_summary.value(reason_key).toDouble(0.0);
         }
+        targeted_recovered_pixel_count += static_cast<qint64>(
+            record.value(QStringLiteral(
+                "targeted_gap_recovery_diagnostics"))
+                .toObject()
+                .value(QStringLiteral("recovered_pixel_count"))
+                .toDouble(0.0));
 
         for (const QString &path_key : {
                  QStringLiteral("depth_png"),
@@ -346,7 +353,8 @@ QJsonObject depthGenerationSnapshot(const QJsonObject &metadata,
                  QStringLiteral("raw_confidence_path"),
                  QStringLiteral("valid_mask_path"),
                  QStringLiteral("missing_reason_path"),
-                 QStringLiteral("missing_reason_preview_path")})
+                 QStringLiteral("missing_reason_preview_path"),
+                 QStringLiteral("targeted_gap_recovered_mask_path")})
         {
             const QFileInfo artifact_info(record.value(path_key).toString());
             if (artifact_info.exists())
@@ -376,6 +384,8 @@ QJsonObject depthGenerationSnapshot(const QJsonObject &metadata,
             static_cast<double>(support_pixel_count);
         snapshot[QStringLiteral("missing_reason_counts")] =
             missing_reason_counts;
+        snapshot[QStringLiteral("targeted_gap_recovered_pixel_count")] =
+            static_cast<double>(targeted_recovered_pixel_count);
     }
     return snapshot;
 }

@@ -167,6 +167,18 @@ TEST(MvsDepthReprocessCliContractTest, PoseRefinementIsExplicitCandidateOnlyOptI
     });
 }
 
+TEST(MvsDepthReprocessCliContractTest, TargetedGapRecoveryHasExplicitDiagnosticOptOut)
+{
+    const QString source = readSourceFile(
+        QStringLiteral("src/cli/workflows/cli_mvs_depth_reprocess.cpp"));
+
+    expectContainsAll(source, {
+        "--disable-targeted-gap-recovery",
+        "config.enableTargetedGapRecovery = !disableTargetedGapRecovery",
+        "用于同输入 A/B 对比",
+    });
+}
+
 TEST(MvsDepthReprocessCliContractTest, UsesVerifiedManifestSourcePlanWithoutPairAudit)
 {
     const QString exe = executablePath(PLASCAN_MVS_DEPTH_REPROCESS_CLI_PATH);

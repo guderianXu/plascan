@@ -98,6 +98,12 @@ MvsDepthFrameRecord makeRecord(int index, const QString &name, const QString &st
                                            .arg(index, 3, 10, QLatin1Char('0'));
     record.crossViewRepairedMaskPath = QStringLiteral("cross_view_repaired_%1.png")
                                            .arg(index, 3, 10, QLatin1Char('0'));
+    record.targetedGapRecoveredMaskPath = QStringLiteral(
+        "targeted_gap_recovered_%1.png").arg(
+            index, 3, 10, QLatin1Char('0'));
+    record.targetedGapRecoveryDiagnostics = QJsonObject{
+        {QStringLiteral("attempted"), true},
+        {QStringLiteral("recovered_pixel_count"), 321}};
     QJsonObject source_plan_entry;
     source_plan_entry.insert(QStringLiteral("view_index"), 7);
     source_plan_entry.insert(QStringLiteral("source_image"), QStringLiteral("source_a.jpg"));
@@ -202,6 +208,14 @@ TEST(MvsWorkspaceManifest, SavesAndLoadsFrameRecordsAtomically)
               QStringLiteral("inverse_depth_spread_002.bin"));
     EXPECT_EQ(loaded.frames().front().crossViewRepairedMaskPath,
               QStringLiteral("cross_view_repaired_002.png"));
+    EXPECT_EQ(loaded.frames().front().targetedGapRecoveredMaskPath,
+              QStringLiteral("targeted_gap_recovered_002.png"));
+    EXPECT_EQ(loaded.frames()
+                  .front()
+                  .targetedGapRecoveryDiagnostics
+                  .value(QStringLiteral("recovered_pixel_count"))
+                  .toInt(),
+              321);
     EXPECT_EQ(loaded.frames().front().missingReasonPath,
               QStringLiteral("missing_reason_002.png"));
     EXPECT_EQ(loaded.frames().front().missingReasonPreviewPath,
@@ -889,6 +903,15 @@ TEST(MvsWorkspaceManifest, DepthConfigHashChangesWhenRelevantSettingsChange)
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
         changed.enableAdaptiveGeometryEvidence =
             !changed.enableAdaptiveGeometryEvidence;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.enableTargetedGapRecovery = !changed.enableTargetedGapRecovery;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.targetedGapRecoveryConfidence += 0.01f;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.targetedGapRecoveryMaximumPriorDistancePixels += 1;
     });
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
         changed.depthPoseRefinement.enabled = true;

@@ -65,6 +65,11 @@ struct DenseGenerationSettings
     QString sceneProfile = QStringLiteral("auto");
     QString depthFilterMode = QStringLiteral("auto");
     bool saveIntermediatePyramidLevels = true;
+    bool enableTargetedGapRecovery = true;
+    int targetedGapRecoverySourceCount = 2;
+    float targetedGapRecoveryConfidence = 0.28f;
+    float targetedGapRecoveryPriorRelativeDifference = 0.18f;
+    int targetedGapRecoveryMaximumPriorDistancePixels = 128;
     bool enableTwoSourceCrossViewGrowth = false;
     int twoSourceGrowthDistancePixels = 3;
     float twoSourceGrowthInverseDepthSpread = 0.01f;
