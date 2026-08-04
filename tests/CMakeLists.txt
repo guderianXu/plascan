@@ -10,6 +10,17 @@ include(GoogleTest)
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Test Widgets Network Concurrent)
 find_package(Python3 COMPONENTS Interpreter)
 
+# 验证开发构建实际携带可加载的 Qt TLS 后端。真实 HTTPS 请求默认跳过，可通过
+# PLASCAN_TEST_HTTPS_URL 在集成验证时显式启用，避免离线环境下的常规 ctest 不稳定。
+add_executable(test_qt_tls_runtime test_qt_tls_runtime.cpp)
+target_link_libraries(test_qt_tls_runtime PRIVATE
+    Qt6::Core
+    Qt6::Network
+    GTest::gtest
+)
+plascan_deploy_qt_tls_runtime(test_qt_tls_runtime)
+gtest_discover_tests(test_qt_tls_runtime)
+
 # ── 依赖 ─────────────────────────────────────────────────────────────────────
 find_package(OpenCV REQUIRED)
 if(OpenCV_VERSION VERSION_GREATER_EQUAL "5.0.0")

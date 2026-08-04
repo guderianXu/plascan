@@ -408,6 +408,7 @@ function Sync-QtRuntime
 
     $qtPlatformsRoot = Join-Path $TripletRoot "Qt6\plugins\platforms"
     $qtImageFormatsRoot = Join-Path $TripletRoot "Qt6\plugins\imageformats"
+    $qtTlsRoot = Join-Path $TripletRoot "Qt6\plugins\tls"
     if (-not (Test-Path -LiteralPath $qtPlatformsRoot))
     {
         return
@@ -445,6 +446,18 @@ function Sync-QtRuntime
             {
                 Copy-Item -LiteralPath $qjpegPlugin -Destination $imageFormatsDir -Force
             }
+        }
+
+        # Qt6 的 HTTPS 实现是运行时插件。没有 tls 目录时 Qt6Network.dll 仍可加载，
+        # 但所有 HTTPS 请求都会在握手前以 `TLS initialization failed` 结束。
+        if (Test-Path -LiteralPath $qtTlsRoot)
+        {
+            $tlsDir = Join-Path $dir "tls"
+            New-Item -ItemType Directory -Force -Path $tlsDir | Out-Null
+            Get-ChildItem -LiteralPath $qtTlsRoot -Force -File -Filter "q*backend.dll" -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                    Copy-Item -LiteralPath $_.FullName -Destination $tlsDir -Force
+                }
         }
     }
 }

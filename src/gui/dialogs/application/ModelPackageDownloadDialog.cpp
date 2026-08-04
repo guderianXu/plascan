@@ -1,5 +1,6 @@
 #include "application/ModelPackageDownloadDialog.h"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QLabel>
@@ -10,6 +11,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QStorageInfo>
+#include <QSslSocket>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -150,6 +152,17 @@ void ModelPackageDownloadDialog::start()
     if (!_package.isValid())
     {
         fail(QStringLiteral("模型资产目录无效"));
+        return;
+    }
+    if (!QSslSocket::supportsSsl())
+    {
+        const QString backends = QSslSocket::availableBackends().join(QStringLiteral(", "));
+        fail(QStringLiteral(
+                 "当前程序没有可用的 HTTPS/TLS 后端，无法下载模型。\n"
+                 "请确认 Qt TLS 插件已部署：安装包应包含 plugins/tls，开发构建应包含 bin/tls。\n"
+                 "程序目录：%1\n检测到的后端：%2")
+                 .arg(QDir::toNativeSeparators(QCoreApplication::applicationDirPath()),
+                      backends.isEmpty() ? QStringLiteral("无") : backends));
         return;
     }
     if (!QDir().mkpath(_targetDirectory))

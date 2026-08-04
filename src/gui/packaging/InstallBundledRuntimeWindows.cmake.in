@@ -100,6 +100,15 @@ if(NOT EXISTS
     "${CMAKE_INSTALL_PREFIX}/plugins/platforms/qwindows.dll")
 endif()
 
+if(NOT EXISTS
+    "${CMAKE_INSTALL_PREFIX}/plugins/tls/qschannelbackend.dll" AND
+   NOT EXISTS
+    "${CMAKE_INSTALL_PREFIX}/plugins/tls/qopensslbackend.dll")
+  message(FATAL_ERROR
+    "A functional Qt TLS backend was not bundled under: "
+    "${CMAKE_INSTALL_PREFIX}/plugins/tls")
+endif()
+
 list(LENGTH _plascan_runtime_dlls _plascan_runtime_dll_count)
 message(STATUS
   "Bundled ${_plascan_runtime_dll_count} resolved Windows runtime DLLs from "

@@ -28,6 +28,10 @@ TensorRT/CUDA 运行时 DLL，避免 CMake/CTest 混用旧 vcpkg 或其它项目
 - Vulkan SDK，或等效的 Vulkan loader/header，使 vcpkg 构建的 `qtbase` 启用 Vulkan feature
 - `E:\code\plascan\build\windows-vcpkg-cuda-release\vcpkg_installed\x64-windows`
 
+脚本会把 Qt 平台、图像格式和 TLS 插件同步到 `build/bin` 与 `build/tests`。
+模型下载依赖 `bin/tls/qschannelbackend.dll`；若直接运行普通 CMake 构建，PlaScan
+目标自身的 post-build 规则也会部署该插件。
+
 如果路径不同，用参数覆盖，见“参数速查”。
 
 默认不会自动运行 vcpkg manifest install；脚本会先检查自己的
