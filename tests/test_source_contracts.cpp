@@ -449,7 +449,7 @@ TEST(SfmSourceContractTest, SequenceInitialPoseGuessDoesNotBypassPnpRegistration
     EXPECT_FALSE(sfmSource.contains(QStringLiteral("Sequence interpolation registered")));
 }
 
-TEST(SfmSourceContractTest, SequencePnpRelaxationRequiresRegisteredCamerasOnBothSides)
+TEST(SfmSourceContractTest, SequencePnpRecoveryRunsOnlyAfterStandardPnpFails)
 {
     const QString source = readIncrementalSfmImplementation();
     const QString registration = sectionBetween(source,
@@ -461,8 +461,12 @@ TEST(SfmSourceContractTest, SequencePnpRelaxationRequiresRegisteredCamerasOnBoth
         "findRegisteredSequenceNeighbor(imageId,",
         "&previousImageId",
         "&nextImageId",
-        "previousSteps == 1 && nextSteps == 1",
-        "pnpOptions.allowRelaxedInlierRatio = true",
+        "if (!pnpResult.success && makeSequenceInitialPoseGuess",
+        "hasDirectPrevious && hasDirectNext",
+        "hasDirectPrevious != hasDirectNext",
+        "recoveryOptions.allowRelaxedInlierRatio = true",
+        "oneSidedSequencePnpMinInlierRatio",
+        "oneSidedSequencePnpMinInliers",
         "bracketedSequencePnpMinInlierRatio",
         "bracketedSequencePnpMinInliers",
     });
@@ -519,7 +523,7 @@ TEST(SfmSourceContractTest, BracketedSequencePnpUsesInitialPoseCorrespondenceGat
     const QString pnp = readSourceFile(QStringLiteral("src/core/sfm/pose/PnpSolver.cpp"));
 
     expectContainsAll(registration, {
-        "pnpOptions.useInitialPosePrefilter = true",
+        "recoveryOptions.useInitialPosePrefilter = true",
         "initialPosePrefilterMaxReprojError",
     });
     expectContainsAll(pnp, {
