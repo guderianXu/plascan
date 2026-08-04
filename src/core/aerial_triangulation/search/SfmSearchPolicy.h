@@ -20,6 +20,16 @@ struct SfmWorkerBudget
     int threadsPerWorker = 0; ///< 每个 IncrementalSfm 的 CPU 线程预算。
 };
 
+struct SfmBaSchedule
+{
+    int localInterval = 1; ///< 每注册多少台相机执行一次局部 BA。
+    int localWindowImages = 1; ///< 局部 BA 邻域相机数。
+    int globalInterval = 1; ///< 每注册多少台相机执行一次中间全局 BA。
+};
+
+/// 将 0/负数线程请求解析为本机逻辑核心数，返回值始终至少为 1。
+int resolveSfmThreadBudget(int requestedThreads);
+
 /// 一个完整 SfM 候选的排序摘要。
 struct SfmCandidateSummary
 {
@@ -44,9 +54,22 @@ struct SfmCandidateSummary
 /// 在总线程预算内分配最多 4 个候选 worker，并为每个保留足够内部并行度。
 SfmWorkerBudget allocateWorkers(int candidateCount, int totalThreads);
 
+/// 大规模无先验焦距搜索的注册上限；0 表示数据规模较小，应完整评估候选。
+int focalProbeRegistrationLimit(int totalImages);
+
+/// 根据工程规模放宽中间 BA 调度；最终全局 BA 不由该策略裁剪。
+SfmBaSchedule resolveSfmBaSchedule(int totalImages,
+                                  int baseLocalInterval,
+                                  int baseLocalWindowImages,
+                                  int baseGlobalInterval);
+
 /// 按生产摄影测量质量执行严格弱序比较。
 bool isBetterCandidate(const SfmCandidateSummary &candidate,
                        const SfmCandidateSummary &reference);
+
+/// 自标定候选在注册覆盖不降、RMS/点数/网络质量仅有统计波动时可以替代粗焦距解。
+bool isAcceptableCalibrationRefinement(const SfmCandidateSummary &candidate,
+                                       const SfmCandidateSummary &reference);
 
 /// 稳定排序并保留原 candidateIndex。
 std::vector<SfmCandidateSummary> rankCandidates(

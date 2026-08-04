@@ -16,6 +16,7 @@
 #include "reconstruction/SfmAttemptRunner.h"
 #include "reconstruction/CameraIntrinsicPriorSanitizer.h"
 #include "reconstruction/MarkerPriorLoader.h"
+#include "search/SfmSearchPolicy.h"
 
 #include "io/PathIO.h"
 #include "ProjectCameraIO.h"
@@ -138,8 +139,24 @@ void configureSfmOptions(const PreparedAerialTriangulationInput &input,
     options->initMinNumInliers = preset.initMinInliers;
     options->localBAInterval = preset.localBaInterval;
     options->globalBAInterval = preset.globalBaInterval;
+    options->executionProfile = input.coarseFocalEvaluation
+        ? SfmExecutionProfile::CoarseEvaluation
+        : SfmExecutionProfile::FullRefinement;
+    options->maxRegisteredImages = input.maxRegisteredImages;
+
+    // 固定每 3/10 张执行局部/全局 BA 只适合小工程。数百张影像时，后半程每次
+    // 全局 BA 都会重新装配几十万条观测，重复次数远大于求解本身需要。大工程仍
+    // 保留局部稳姿和周期全局消漂，但让间隔随总影像数增长，最终全局 BA 不受影响。
+    const SfmBaSchedule baSchedule = resolveSfmBaSchedule(
+        input.images.size(),
+        options->localBAInterval,
+        options->localBANumImages,
+        options->globalBAInterval);
+    options->localBAInterval = baSchedule.localInterval;
+    options->localBANumImages = baSchedule.localWindowImages;
+    options->globalBAInterval = baSchedule.globalInterval;
     options->baOptions.cancelFlag = input.cancelFlag;
-    options->baOptions.numThreads = std::max(1, input.threads);
+    options->baOptions.numThreads = resolveSfmThreadBudget(input.threads);
     options->baOptions.progressCallback =
         [progress = input.progressFn,
          cancelFlag = input.cancelFlag,
@@ -204,15 +221,26 @@ void configureSfmOptions(const PreparedAerialTriangulationInput &input,
     if (input.adaptiveCameraModelFitting)
     {
         options->baOptions.refineSharedFocalLength = true;
-        options->baOptions.minSharedFocalScale = 0.65;
-        options->baOptions.maxSharedFocalScale = 1.55;
+        // The coarse focal search already resolves the dominant calibration
+        // ambiguity. Releasing focal, pixel aspect and principal point at the
+        // same time is poorly observable for a single-height orbital ring:
+        // pose error can be absorbed into an artificial fy/fx ratio or a large
+        // vertical principal-point drift, which then misaligns masks and depth
+        // maps during dense fusion. Keep the seed aspect and principal point;
+        // trusted project calibrations already carry their measured values,
+        // while an uncalibrated input uses the image-centre prior.
+        options->baOptions.refineSharedFocalAspectRatio = false;
+        options->baOptions.refineSharedPrincipalPoint = false;
+        options->baOptions.minSharedFocalScale = 0.90;
+        options->baOptions.maxSharedFocalScale = 1.10;
         options->baOptions.maxSharedFocalStepScale = 1.12;
         options->baOptions.maxSharedFocalIterations = 6;
         if (cpuOnly && BundleAdjust::isBackendAvailable(BABackend::CeresCpu))
         {
-            // CPU 模式仍使用 Ceres 联合求解焦距、位姿和三维点，避免 Legacy 分块
-            // 自标定在转台弱基线数据上出现焦距/尺度交替漂移。
-            options->baOptions.backend = BABackend::CeresCpu;
+            // 保持注册阶段与粗焦距候选相同的自动后端，避免仅因求解器不同造成
+            // 点数/RMS 波动。最终完整全局 BA 释放共享内参时，BundleAdjust 会因
+            // joint_shared_intrinsics_requires_ceres 自动切换到 Ceres 联合求解。
+            options->baOptions.backend = BABackend::Auto;
         }
         else if (!cpuOnly)
         {
@@ -332,6 +360,8 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
     if (sfmOptions.useKnownCameraPoses)
     {
         sfmOptions.baOptions.refineSharedFocalLength = false;
+        sfmOptions.baOptions.refineSharedFocalAspectRatio = false;
+        sfmOptions.baOptions.refineSharedPrincipalPoint = false;
         sfmOptions.refineKnownCameraPoseWithSoftPrior =
             !input.lockInputCameraPoses;
     }
@@ -494,6 +524,12 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
     diagnostics.insert(QStringLiteral("ba_refined_intrinsic_count"),
                        sfmResult.baRefinedIntrinsicCount);
     diagnostics.insert(QStringLiteral("ba_shared_focal_scale"), sfmResult.baSharedFocalScale);
+    diagnostics.insert(QStringLiteral("ba_shared_focal_aspect_scale"),
+                       sfmResult.baSharedFocalAspectScale);
+    diagnostics.insert(QStringLiteral("ba_shared_principal_offset_x_px"),
+                       sfmResult.baSharedPrincipalOffsetX);
+    diagnostics.insert(QStringLiteral("ba_shared_principal_offset_y_px"),
+                       sfmResult.baSharedPrincipalOffsetY);
     diagnostics.insert(QStringLiteral("ba_backend_message"),
                        QString::fromStdString(sfmResult.baBackendMessage));
     diagnostics.insert(QStringLiteral("project_intrinsic_prior_inspected"),

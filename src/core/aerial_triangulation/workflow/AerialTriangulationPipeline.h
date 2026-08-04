@@ -4,9 +4,9 @@
  * @file AerialTriangulationPipeline.h
  * @brief 连接点已就绪后的焦距搜索、SfM 候选择优和正式结果写出管线。
  *
- * Pipeline 不提取特征、不匹配影像。无可信内参时，它并行运行多个焦距初始化，
- * 使用 SfmSearchPolicy 选择摄影测量网络更可靠的模型，可选进行共享焦距细化，
- * 最后只写出胜出候选。
+ * Pipeline 不提取特征、不匹配影像。无可信内参时，它并行运行多个焦距初始化；
+ * 大规模工程先用受限注册规模探测候选，再只对最佳焦距重放一次完整 SfM/BA。
+ * SfmSearchPolicy 负责选择摄影测量网络更可靠的模型，最后只写出正式重放结果。
  */
 
 #include "model/AerialTriangulationOptions.h"

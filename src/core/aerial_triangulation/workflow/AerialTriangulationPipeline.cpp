@@ -288,13 +288,19 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
     // 无完整相机先验时，初始焦距必须先从影像几何中估计；这与最终 BA 是否释放内参是两个独立职责。
     const bool needsFocalInitializationSearch =
         input.images.size() >= 3 && !hasCompleteCameraIntrinsicPrior(input);
+    const int focalProbeLimit = needsFocalInitializationSearch
+        ? focalProbeRegistrationLimit(input.images.size())
+        : 0;
 
     PreparedAerialTriangulationInput attemptInput = input;
+    attemptInput.threads = resolveSfmThreadBudget(input.threads);
     // 焦距粗搜索只比较固定内参下的几何结果。若把 BA 内参拟合混入候选，
     // 同一焦距尺度会因局部极值而产生不可比较的注册结果。
     if (needsFocalInitializationSearch)
     {
         attemptInput.adaptiveCameraModelFitting = false;
+        attemptInput.coarseFocalEvaluation = true;
+        attemptInput.maxRegisteredImages = focalProbeLimit;
     }
     attemptInput.progressFn = [originalProgress, needsFocalInitializationSearch](
                                   const QString &stage, int percent)
@@ -360,10 +366,13 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
         std::vector<SfmAttemptExecutionResult> coarseExecutions(
             static_cast<std::size_t>(coarseCount));
         std::vector<std::shared_ptr<std::atomic<int>>> coarseProgress;
+        std::vector<std::shared_ptr<std::atomic<bool>>> coarseStarted;
         coarseProgress.reserve(static_cast<std::size_t>(coarseCount));
+        coarseStarted.reserve(static_cast<std::size_t>(coarseCount));
         for (int index = 0; index < coarseCount; ++index)
         {
             coarseProgress.push_back(std::make_shared<std::atomic<int>>(0));
+            coarseStarted.push_back(std::make_shared<std::atomic<bool>>(false));
         }
 
         std::atomic<int> nextCoarseIndex{0};
@@ -387,9 +396,12 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
                     coarseInput.estimatedFocalScale =
                         coarseScales[static_cast<std::size_t>(scaleIndex)];
                     coarseInput.adaptiveCameraModelFitting = false;
+                    coarseInput.coarseFocalEvaluation = true;
+                    coarseInput.maxRegisteredImages = focalProbeLimit;
                     coarseInput.threads = workerBudget.threadsPerWorker;
                     const std::shared_ptr<std::atomic<int>> progress =
                         coarseProgress[static_cast<std::size_t>(scaleIndex)];
+                    coarseStarted[static_cast<std::size_t>(scaleIndex)]->store(true);
                     coarseInput.progressFn = [progress](const QString &, int percent)
                     {
                         progress->store(std::clamp(percent, 0, 100));
@@ -436,17 +448,29 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
             if (originalProgress)
             {
                 int accumulatedProgress = 0;
-                for (const auto &progress : coarseProgress)
+                int runningCount = 0;
+                int highestCandidatePercent = 0;
+                for (int index = 0; index < coarseCount; ++index)
                 {
-                    accumulatedProgress += progress->load();
+                    const int candidatePercent =
+                        coarseProgress[static_cast<std::size_t>(index)]->load();
+                    accumulatedProgress += candidatePercent;
+                    highestCandidatePercent = std::max(highestCandidatePercent, candidatePercent);
+                    if (coarseStarted[static_cast<std::size_t>(index)]->load() &&
+                        candidatePercent < 100)
+                    {
+                        ++runningCount;
+                    }
                 }
                 const int aggregatePercent = coarseCount > 0
                     ? accumulatedProgress / coarseCount
                     : 100;
                 originalProgress(
-                    QStringLiteral("无相机先验焦距粗搜索：已完成 %1/%2 个候选")
+                    QStringLiteral("无相机先验焦距粗搜索：已完成 %1/%2，运行中 %3，候选内部最高 %4%")
                         .arg(completedCoarseCount.load())
-                        .arg(coarseCount),
+                        .arg(coarseCount)
+                        .arg(runningCount)
+                        .arg(highestCandidatePercent),
                     45 + aggregatePercent * 35 / 100);
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -485,8 +509,40 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
         selectedFocalScale = focalCandidates.at(selectedIndex).focalScale;
         execution = std::move(candidateExecutions[selectedIndex]);
 
+        // 大工程的候选只注册受限数量的连通影像。选出焦距后必须重新执行一次完整 SfM，
+        // 探测模型只用于排序，绝不能作为最终稀疏云或相机位姿写入工程。
+        if (focalProbeLimit > 0)
+        {
+            PreparedAerialTriangulationInput fullInput = input;
+            fullInput.estimatedFocalScale = selectedFocalScale;
+            fullInput.threads = resolveSfmThreadBudget(input.threads);
+            fullInput.coarseFocalEvaluation = false;
+            fullInput.maxRegisteredImages = 0;
+            fullInput.progressFn = [originalProgress](const QString &stage, int percent)
+            {
+                if (originalProgress)
+                {
+                    originalProgress(
+                        QStringLiteral("使用最佳焦距执行完整空三: %1").arg(stage),
+                        80 + std::clamp(percent, 0, 100) * 10 / 100);
+                }
+            };
+            execution = _attemptRunner(fullInput);
+            const int probeCoverage =
+                candidateSummaries[static_cast<std::size_t>(selectedIndex)].registeredImages;
+            adaptiveRefinementAccepted = input.adaptiveCameraModelFitting &&
+                execution.result.success &&
+                execution.result.numRegisteredImages >= probeCoverage;
+            if (input.adaptiveCameraModelFitting && !adaptiveRefinementAccepted)
+            {
+                // 联合自标定若连探测阶段已有的注册覆盖都无法保持，则用同一最佳焦距
+                // 再跑一次固定内参完整解。该回退只在自标定退化时发生，不增加正常路径成本。
+                fullInput.adaptiveCameraModelFitting = false;
+                execution = _attemptRunner(fullInput);
+            }
+        }
         // 自适应内参只在粗搜索胜出焦距附近执行一次联合细化，并再次经过同一排序门控。
-        if (input.adaptiveCameraModelFitting)
+        else if (input.adaptiveCameraModelFitting)
         {
             PreparedAerialTriangulationInput refinementInput = input;
             refinementInput.estimatedFocalScale = selectedFocalScale;
@@ -514,7 +570,8 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
                 selectedFocalScale,
                 refinedExecution,
                 input.sequenceLoopClosure);
-            if (isBetterCandidate(refinementSummary, baselineSummary))
+            if (isBetterCandidate(refinementSummary, baselineSummary) ||
+                isAcceptableCalibrationRefinement(refinementSummary, baselineSummary))
             {
                 execution = std::move(refinedExecution);
                 adaptiveRefinementAccepted = true;
@@ -551,6 +608,10 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
         QStringLiteral("adaptive_focal_seed_scale"), selectedFocalScale);
     execution.result.sfmDiagnostics.insert(
         QStringLiteral("adaptive_focal_candidates"), focalCandidateJson);
+    execution.result.sfmDiagnostics.insert(
+        QStringLiteral("focal_probe_registration_limit"), focalProbeLimit);
+    execution.result.sfmDiagnostics.insert(
+        QStringLiteral("focal_probe_full_replay"), focalProbeLimit > 0);
 
     const bool focalInitializationSearch = focalCandidates.size() > 1;
     QString selfCalibrationStatus = QStringLiteral("trusted_prior");

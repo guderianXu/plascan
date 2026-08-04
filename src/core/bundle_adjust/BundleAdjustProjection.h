@@ -64,6 +64,8 @@ bool projectCameraPoint(const ProjectionCamera &camera,
                         const T &zCam,
                         const T &focalX,
                         const T &focalY,
+                        const T &principalX,
+                        const T &principalY,
                         T *pixel)
 {
     const T forwardDepth = camera.depthAxisFlipped ? -zCam : zCam;
@@ -84,8 +86,8 @@ bool projectCameraPoint(const ProjectionCamera &camera,
     const T yd = y * radial + T(camera.tangentialP1) * (r2 + T(2.0) * y * y) +
                  T(camera.tangentialP2) * xy2;
 
-    pixel[0] = T(camera.uAxisSign) * focalX * xd + T(camera.principalX);
-    pixel[1] = T(camera.vAxisSign) * focalY * yd + T(camera.principalY);
+    pixel[0] = T(camera.uAxisSign) * focalX * xd + principalX;
+    pixel[1] = T(camera.vAxisSign) * focalY * yd + principalY;
     return true;
 }
 
@@ -112,6 +114,8 @@ bool project(const ProjectionCamera &camera, const T *world, T *pixel)
                               zCam,
                               T(camera.focalX),
                               T(camera.focalY),
+                              T(camera.principalX),
+                              T(camera.principalY),
                               pixel);
 }
 
@@ -176,6 +180,8 @@ bool projectWithPoseDeltaAndFocal(const ProjectionCamera &camera,
                                   const T *world,
                                   const T &focalX,
                                   const T &focalY,
+                                  const T &principalX,
+                                  const T &principalY,
                                   T *pixel)
 {
     T deltaRotation[9];
@@ -208,7 +214,15 @@ bool projectWithPoseDeltaAndFocal(const ProjectionCamera &camera,
     const T zCam = updatedRotation[2] * dx +
                    updatedRotation[5] * dy +
                    updatedRotation[8] * dz;
-    return projectCameraPoint(camera, xCam, yCam, zCam, focalX, focalY, pixel);
+    return projectCameraPoint(camera,
+                              xCam,
+                              yCam,
+                              zCam,
+                              focalX,
+                              focalY,
+                              principalX,
+                              principalY,
+                              pixel);
 }
 
 /// 使用局部位姿增量和快照中的固定焦距投影。
@@ -223,6 +237,8 @@ bool projectWithPoseDelta(const ProjectionCamera &camera,
                                         world,
                                         T(camera.focalX),
                                         T(camera.focalY),
+                                        T(camera.principalX),
+                                        T(camera.principalY),
                                         pixel);
 }
 
@@ -248,6 +264,34 @@ bool projectWithPoseDeltaAndSharedFocal(const ProjectionCamera &camera,
                                         world,
                                         sharedFocal,
                                         sharedFocal * T(focalAspect),
+                                        T(camera.principalX),
+                                        T(camera.principalY),
+                                        pixel);
+}
+
+/**
+ * @brief 使用标定组共享的完整针孔内参增量投影。
+ *
+ * 参数布局为 `[log(fx), log(fy/fx), dcx, dcy]`。主点使用相对偏移而不是
+ * 绝对值，使同一标定组中不同裁剪/分辨率相机仍保留各自输入基准。
+ */
+template <typename T>
+bool projectWithPoseDeltaAndSharedIntrinsics(const ProjectionCamera &camera,
+                                             const T *cameraDelta,
+                                             const T *world,
+                                             const T *sharedIntrinsics,
+                                             T *pixel)
+{
+    using std::exp;
+    const T focalX = exp(sharedIntrinsics[0]);
+    const T focalY = focalX * exp(sharedIntrinsics[1]);
+    return projectWithPoseDeltaAndFocal(camera,
+                                        cameraDelta,
+                                        world,
+                                        focalX,
+                                        focalY,
+                                        T(camera.principalX) + sharedIntrinsics[2],
+                                        T(camera.principalY) + sharedIntrinsics[3],
                                         pixel);
 }
 

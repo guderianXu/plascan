@@ -66,7 +66,7 @@ struct AerialTriangulationOptions
     QString lomaRTensorRtPackagePath; ///< LoMa-R 双 engine JSON 清单；留空时自动查找。
     int lomaRKeypointBudget = 0; ///< 0=显存感知自动选择，或 1024/2048/3840。
     QString device = QStringLiteral("auto"); ///< auto/cpu/cuda。
-    int threads = 8; ///< 整体 CPU 线程预算，不是每个并行候选的线程数。
+    int threads = 0; ///< 整体 CPU 线程预算；0 表示自动使用当前机器的逻辑核心数。
     int cudaDevice = 0; ///< CUDA 设备序号；SIFT 与 LightGlue 必须使用同一设备。
     int featureMaxImageDim = 0; ///< 特征输入最长边；0 使用质量预设。
     int cudaParallelPairs = 0; ///< 并行 GPU pair 请求值；0 由前端按显存决定。
@@ -111,7 +111,7 @@ struct PreparedAerialTriangulationInput
     QJsonObject projectMeta; ///< 解析相机内参和旧状态的只读快照。
 
     int quality = 2; ///< 已解析 SfM 质量级别，数值越大越保守/精细。
-    int threads = 8; ///< 整个焦距搜索或单次 SfM 的线程预算。
+    int threads = 8; ///< 已解析的线程预算；Workflow 会把外部的 0 转为逻辑核心数。
     QString device = QStringLiteral("auto"); ///< BA 等下游设备偏好。
     bool useProjectCameraIntrinsics = true; ///< 只使用来源可信的工程内参。
     bool useProjectCameraPoses = false; ///< false 时旧对齐外参不得作为当前解。
@@ -124,6 +124,11 @@ struct PreparedAerialTriangulationInput
     ImageId initialImageId2 = kInvalidImageId; ///< 初始对第二 ID。
     // 无标定相机的初始焦距，以“焦距像素 / 影像最长边”表示。
     double estimatedFocalScale = 1.2;
+
+    // 以下字段只由 AerialTriangulationPipeline 为焦距候选试算设置，GUI/CLI 不直接暴露。
+    // 大工程不能让每个候选都完整注册全部影像，否则一次焦距粗搜会重复执行十余次全量 SfM。
+    bool coarseFocalEvaluation = false; ///< 使用低成本候选配置，不作为最终生产结果写出。
+    int maxRegisteredImages = 0; ///< 候选最多注册影像数；0 表示不限制。
 
     std::shared_ptr<std::atomic<bool>> cancelFlag; ///< worker 间共享，只读取/置位。
     std::function<void(const QString &stage, int percent)> progressFn;

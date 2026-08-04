@@ -21,6 +21,19 @@ xjw::Camera makeCamera(double cx, double cy, double cz, double focal)
     return camera;
 }
 
+xjw::Camera makeCameraWithIntrinsics(double cameraX,
+                                     double cameraY,
+                                     double cameraZ,
+                                     double focalX,
+                                     double focalY,
+                                     double principalX,
+                                     double principalY)
+{
+    xjw::Camera camera = makeCamera(cameraX, cameraY, cameraZ, focalX);
+    camera.setIntrinsics(focalX, focalY, principalX, principalY);
+    return camera;
+}
+
 bool projectPoint(const xjw::Camera &camera,
                   const std::array<double, 3> &point,
                   double *u,
@@ -358,4 +371,82 @@ TEST(BundleAdjustSharedFocalTest, RejectsCalibrationGroupCountMismatch)
     EXPECT_FALSE(result.solutionUsable);
     EXPECT_EQ(result.solveStatus, xjw::BASolveStatus::InvalidInput);
     EXPECT_NE(result.backendMessage.find("标定分组"), std::string::npos);
+}
+
+TEST(BundleAdjustSharedFocalTest, CeresRecoversBoundedSharedPinholeIntrinsics)
+{
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    {
+        GTEST_SKIP() << "Ceres CPU backend is not available";
+    }
+
+    const std::vector<xjw::Camera> truthCameras{
+        makeCameraWithIntrinsics(-2.0, 0.0, 0.0, 1500.0, 1530.0, 485.0, 420.0),
+        makeCameraWithIntrinsics(0.0, -2.0, 0.0, 1500.0, 1530.0, 485.0, 420.0),
+        makeCameraWithIntrinsics(2.0, 0.0, 0.0, 1500.0, 1530.0, 485.0, 420.0),
+        makeCameraWithIntrinsics(0.0, 2.0, 0.0, 1500.0, 1530.0, 485.0, 420.0),
+    };
+    const std::vector<xjw::Camera> initialCameras{
+        makeCameraWithIntrinsics(-2.0, 0.0, 0.0, 1400.0, 1400.0, 512.0, 384.0),
+        makeCameraWithIntrinsics(0.0, -2.0, 0.0, 1400.0, 1400.0, 512.0, 384.0),
+        makeCameraWithIntrinsics(2.0, 0.0, 0.0, 1400.0, 1400.0, 512.0, 384.0),
+        makeCameraWithIntrinsics(0.0, 2.0, 0.0, 1400.0, 1400.0, 512.0, 384.0),
+    };
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::CeresCpu;
+    options.refineCameraPose = false;
+    options.refineSharedFocalLength = true;
+    options.refineSharedFocalAspectRatio = true;
+    options.refineSharedPrincipalPoint = true;
+    options.minSharedFocalScale = 0.8;
+    options.maxSharedFocalScale = 1.3;
+    options.minSharedFocalAspectScale = 0.9;
+    options.maxSharedFocalAspectScale = 1.15;
+    options.maxSharedPrincipalPointOffsetFraction = 0.08;
+    options.sharedPrincipalPointPriorSigmaFraction = 0.10;
+    options.sharedFocalAspectPriorSigma = 0.10;
+    options.enableControlPointConstraints = true;
+    options.controlPointWeight = 1000.0;
+    options.controlPointHuberDeltaMeters = 0.5;
+    options.enablePointFilter = false;
+    options.maxIterations = 60;
+
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(
+            initialCameras,
+            makeSharedFocalTracks(truthCameras),
+            options);
+
+    ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
+    ASSERT_EQ(result.refinedCameras.size(), initialCameras.size());
+    const xjw::Camera &camera = result.refinedCameras.front();
+    EXPECT_NEAR(camera.focalX(), 1500.0, 15.0);
+    EXPECT_NEAR(camera.focalY(), 1530.0, 20.0);
+    EXPECT_NEAR(camera.principalX(), 485.0, 8.0);
+    EXPECT_NEAR(camera.principalY(), 420.0, 8.0);
+    EXPECT_LT(result.meanRmsAfter, 0.25);
+    EXPECT_NEAR(result.refinedSharedPrincipalOffsetX, -27.0, 8.0);
+    EXPECT_NEAR(result.refinedSharedPrincipalOffsetY, 36.0, 8.0);
+}
+
+TEST(BundleAdjustSharedFocalTest, RejectsPrincipalPointRefinementWithoutSharedFocal)
+{
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-1.0, 0.0, 0.0, 900.0),
+        makeCamera(1.0, 0.0, 0.0, 900.0),
+    };
+    xjw::BAOptions options;
+    options.refineCameraPose = false;
+    options.refineSharedPrincipalPoint = true;
+
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(
+            cameras,
+            makeSharedFocalTracks(cameras),
+            options);
+
+    EXPECT_FALSE(result.solutionUsable);
+    EXPECT_EQ(result.solveStatus, xjw::BASolveStatus::InvalidInput);
+    EXPECT_NE(result.backendMessage.find("主点优化"), std::string::npos);
 }

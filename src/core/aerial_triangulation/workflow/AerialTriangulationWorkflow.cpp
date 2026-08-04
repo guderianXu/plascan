@@ -12,6 +12,7 @@
 #include "ImageMatchRepository.h"
 #include "preparation/TiePointPreparation.h"
 #include "project/ProjectIO.h"
+#include "search/SfmSearchPolicy.h"
 #include "workflow/AerialTriangulationPipeline.h"
 
 #include <QDir>
@@ -208,7 +209,7 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
         .filePath(QStringLiteral("sfm_sparse"));
     pipeline.projectMeta = options.projectMeta;
     pipeline.quality = quality.sfmQuality;
-    pipeline.threads = std::max(1, options.threads);
+    pipeline.threads = resolveSfmThreadBudget(options.threads);
     pipeline.device = normalizedToken(options.device, QStringLiteral("auto"));
     pipeline.useProjectCameraIntrinsics = true;
     pipeline.useProjectCameraPoses = !options.resetAlignment;

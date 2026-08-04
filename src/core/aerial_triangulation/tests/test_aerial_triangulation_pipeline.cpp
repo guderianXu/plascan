@@ -222,6 +222,68 @@ TEST(AerialTriangulationPipelineTest, ParallelizesCoarseFocalSearchWithinThreadB
     EXPECT_LE(maximumConcurrentAttempts.load(), 4);
 }
 
+TEST(AerialTriangulationPipelineTest, LargeDatasetProbesCandidatesAndReplaysOnlyWinnerAtFullScale)
+{
+    struct AttemptRecord
+    {
+        double focalScale = 0.0;
+        bool coarse = false;
+        int maxRegisteredImages = 0;
+    };
+
+    QVector<AttemptRecord> attempts;
+    const auto attemptRunner = [&attempts](
+                                   const xjw::aerial_triangulation::PreparedAerialTriangulationInput &input)
+    {
+        attempts.append({input.estimatedFocalScale,
+                         input.coarseFocalEvaluation,
+                         input.maxRegisteredImages});
+        xjw::aerial_triangulation::SfmAttemptExecutionResult execution;
+        execution.result.success = true;
+        execution.result.numRegisteredImages = input.coarseFocalEvaluation ? 64 : 444;
+        execution.result.numPoints3D =
+            std::abs(input.estimatedFocalScale - 5.2) < 1.0e-9 ? 2400 : 1000;
+        execution.result.meanReprojError =
+            std::abs(input.estimatedFocalScale - 5.2) < 1.0e-9 ? 0.4 : 0.8;
+        return execution;
+    };
+    const auto resultWriter = [](
+                                  const xjw::aerial_triangulation::PreparedAerialTriangulationInput &,
+                                  xjw::aerial_triangulation::SfmAttemptExecutionResult *,
+                                  QString *)
+    {
+        return true;
+    };
+
+    xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
+    for (int index = 0; index < 444; ++index)
+    {
+        input.images.append(QStringLiteral("image_%1.png").arg(index));
+    }
+    // 单 worker 使记录顺序确定；并行预算由单独策略测试覆盖。
+    input.threads = 8;
+    input.adaptiveCameraModelFitting = false;
+
+    const auto result = xjw::aerial_triangulation::AerialTriangulationPipeline(
+        attemptRunner, resultWriter).run(input);
+
+    ASSERT_TRUE(result.success);
+    EXPECT_EQ(result.numRegisteredImages, 444);
+    ASSERT_GE(attempts.size(), 2);
+    for (int index = 0; index + 1 < attempts.size(); ++index)
+    {
+        EXPECT_TRUE(attempts.at(index).coarse);
+        EXPECT_EQ(attempts.at(index).maxRegisteredImages, 64);
+    }
+    EXPECT_FALSE(attempts.back().coarse);
+    EXPECT_EQ(attempts.back().maxRegisteredImages, 0);
+    EXPECT_DOUBLE_EQ(attempts.back().focalScale, 5.2);
+    EXPECT_EQ(result.sfmDiagnostics.value(
+        QStringLiteral("focal_probe_registration_limit")).toInt(), 64);
+    EXPECT_TRUE(result.sfmDiagnostics.value(
+        QStringLiteral("focal_probe_full_replay")).toBool());
+}
+
 TEST(AerialTriangulationPipelineTest, InitializesUnknownFocalEvenWhenAdaptiveModelFittingIsDisabled)
 {
     QVector<double> attemptedScales;

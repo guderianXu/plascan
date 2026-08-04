@@ -32,6 +32,12 @@ class SfmBundleAdjustCoordinator
     /// 删除在任一有效轨迹观测中落到相机后方的三维点，并清理影像关联。
     int filterNegativeDepthPoints();
 
+    /// 共享镜头内参只能在全部影像参与的全局 BA 中更新，避免局部窗口累计漂移。
+    static bool shouldRefineSharedIntrinsics(bool localOnly,
+                                             int activeCameraCount,
+                                             int registeredImageCount,
+                                             int totalImageCount);
+
   private:
     IncrementalSfm &_owner;
 };

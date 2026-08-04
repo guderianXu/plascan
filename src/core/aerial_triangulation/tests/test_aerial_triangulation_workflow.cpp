@@ -57,6 +57,22 @@ TEST(AerialTriangulationWorkflowTest, ResolvesFrontendAndPreparedSfmSettingsSepa
     EXPECT_EQ(resolved.tiePointContext.workingDirectory, options.assetsDir);
 }
 
+TEST(AerialTriangulationWorkflowTest, ResolvesZeroThreadRequestAutomatically)
+{
+    QTemporaryDir tempDir;
+    auto options = makeBaseOptions(tempDir.path());
+    options.threads = 0;
+
+    const auto automatic =
+        xjw::aerial_triangulation::AerialTriangulationWorkflow::resolveConfig(options);
+    EXPECT_GE(automatic.pipelineInput.threads, 1);
+
+    options.threads = 13;
+    const auto explicitBudget =
+        xjw::aerial_triangulation::AerialTriangulationWorkflow::resolveConfig(options);
+    EXPECT_EQ(explicitBudget.pipelineInput.threads, 13);
+}
+
 TEST(AerialTriangulationWorkflowTest, ExplicitRuntimeLimitsOverrideQualityDefaults)
 {
     QTemporaryDir tempDir;

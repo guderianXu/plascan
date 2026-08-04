@@ -1329,7 +1329,8 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
     const bool resetCurrentAlignment =
         settings.value(QStringLiteral("reset_current_alignment")).toBool(true);
 
-    const int workflowThreads = std::max(1, settings.value(QStringLiteral("threads")).toInt(8));
+    // 工作流程对话框不要求用户维护机器相关线程数；0 在核心层解析为本机逻辑核心数。
+    const int workflowThreads = settings.value(QStringLiteral("threads")).toInt(0);
     xjw::aerial_triangulation::AerialTriangulationOptions workflowOptions;
     workflowOptions.images = images;
     workflowOptions.projectPath = projectPath;

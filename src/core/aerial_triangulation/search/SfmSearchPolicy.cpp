@@ -10,12 +10,17 @@
 
 #include <algorithm>
 #include <cmath>
+#include <thread>
 
 namespace xjw::aerial_triangulation
 {
 
 namespace
 {
+
+// 网络质量是由多个有噪声的汇总量组合而成。候选之间只有很小的分数差时，
+// 不应让单项（尤其两视轨迹比例）压过更直接的重投影误差和有效三维点数量。
+constexpr double kMaterialPhotogrammetricQualityDelta = 0.02;
 
 /// 将交会角、多视率、观测覆盖和 RMS 压缩成 [0, 1] 网络质量分数。
 double networkQualityScore(const SfmCandidateSummary &candidate)
@@ -74,6 +79,15 @@ double photogrammetricQualityScore(const SfmCandidateSummary &candidate)
 
 } // namespace
 
+int resolveSfmThreadBudget(int requestedThreads)
+{
+    if (requestedThreads > 0)
+    {
+        return requestedThreads;
+    }
+    return static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+}
+
 SfmWorkerBudget allocateWorkers(int candidateCount, int totalThreads)
 {
     if (candidateCount <= 0)
@@ -81,10 +95,40 @@ SfmWorkerBudget allocateWorkers(int candidateCount, int totalThreads)
         return {};
     }
 
-    const int safeThreads = std::max(1, totalThreads);
+    const int safeThreads = resolveSfmThreadBudget(totalThreads);
     // 每个 SfM 候选至少预留 8 个线程，同时最多并发 4 个，控制内存和 GPU 争用。
     const int workerCount = std::min({candidateCount, std::max(1, safeThreads / 8), 4});
     return {workerCount, std::max(1, safeThreads / workerCount)};
+}
+
+int focalProbeRegistrationLimit(int totalImages)
+{
+    // 小型环拍数据需要完整闭环才能可靠区分焦距；超过 96 张后，64 台已注册相机
+    // 足以形成稳定局部摄影测量网，同时把每个候选的 BA 规模限制在可交互范围。
+    return totalImages > 96 ? std::min(totalImages, 64) : 0;
+}
+
+SfmBaSchedule resolveSfmBaSchedule(int totalImages,
+                                   int baseLocalInterval,
+                                   int baseLocalWindowImages,
+                                   int baseGlobalInterval)
+{
+    SfmBaSchedule schedule{
+        std::max(1, baseLocalInterval),
+        std::max(2, baseLocalWindowImages),
+        std::max(1, baseGlobalInterval)};
+    if (totalImages <= 96)
+    {
+        return schedule;
+    }
+
+    schedule.localInterval = std::max(schedule.localInterval,
+                                      totalImages > 256 ? 8 : 6);
+    schedule.localWindowImages = std::max(schedule.localWindowImages,
+                                          totalImages > 256 ? 12 : 10);
+    schedule.globalInterval = std::max(schedule.globalInterval,
+                                       std::max(24, totalImages / 8));
+    return schedule;
 }
 
 bool isBetterCandidate(const SfmCandidateSummary &candidate,
@@ -111,7 +155,11 @@ bool isBetterCandidate(const SfmCandidateSummary &candidate,
     {
         const double candidateQuality = photogrammetricQualityScore(candidate);
         const double referenceQuality = photogrammetricQualityScore(reference);
-        if (candidateQuality != referenceQuality)
+        const double materialDelta =
+            candidate.hasClosedSequenceGeometry || reference.hasClosedSequenceGeometry
+            ? 0.0
+            : kMaterialPhotogrammetricQualityDelta;
+        if (std::abs(candidateQuality - referenceQuality) > materialDelta)
         {
             return candidateQuality > referenceQuality;
         }
@@ -131,6 +179,45 @@ bool isBetterCandidate(const SfmCandidateSummary &candidate,
         return candidate.points3D > reference.points3D;
     }
     return candidate.candidateIndex < reference.candidateIndex;
+}
+
+bool isAcceptableCalibrationRefinement(const SfmCandidateSummary &candidate,
+                                       const SfmCandidateSummary &reference)
+{
+    if (!candidate.success || !reference.success ||
+        candidate.registeredImages < reference.registeredImages)
+    {
+        return false;
+    }
+
+    const int toleratedPointLoss = std::max(
+        25,
+        static_cast<int>(std::ceil(0.02 * static_cast<double>(reference.points3D))));
+    if (candidate.points3D + toleratedPointLoss < reference.points3D)
+    {
+        return false;
+    }
+
+    const bool candidateRmsFinite = std::isfinite(candidate.meanReprojError);
+    const bool referenceRmsFinite = std::isfinite(reference.meanReprojError);
+    if (!candidateRmsFinite)
+    {
+        return false;
+    }
+    if (referenceRmsFinite &&
+        candidate.meanReprojError > reference.meanReprojError * 1.02 + 1.0e-6)
+    {
+        return false;
+    }
+
+    if ((candidate.hasNetworkQuality || candidate.hasClosedSequenceGeometry) &&
+        (reference.hasNetworkQuality || reference.hasClosedSequenceGeometry) &&
+        photogrammetricQualityScore(candidate) + kMaterialPhotogrammetricQualityDelta <
+            photogrammetricQualityScore(reference))
+    {
+        return false;
+    }
+    return true;
 }
 
 std::vector<SfmCandidateSummary> rankCandidates(

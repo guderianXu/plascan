@@ -47,10 +47,13 @@ IncrementalSfmResult IncrementalSfm::runRegistrationFromCurrentInitialization(
 
     // ---- 步骤 2：逐帧注册循环 ----
     int regCount = static_cast<int>(_reconstruction->numRegisteredImages());
+    const int registrationTarget = _sfmOptions.maxRegisteredImages > 0
+        ? std::clamp(_sfmOptions.maxRegisteredImages, 2, totalImages)
+        : totalImages;
     int iterSinceLastLocalBA = 0;
     int iterSinceLastGlobalBA = 0;
 
-    while (regCount < totalImages && !_isAborted)
+    while (regCount < registrationTarget && !_isAborted)
     {
         ImageId nextId = selectNextImage();
         if (nextId == kInvalidImageId)
@@ -140,10 +143,14 @@ IncrementalSfmResult IncrementalSfm::runRegistrationFromCurrentInitialization(
         }
 
         std::ostringstream msg;
-        msg << "Registered " << regCount << "/" << totalImages << " images, " << _reconstruction->numPoints3D()
-            << " 3D points";
+        msg << "Registered " << regCount << "/" << totalImages << " images";
+        if (registrationTarget < totalImages)
+        {
+            msg << " (focal probe target " << registrationTarget << ")";
+        }
+        msg << ", " << _reconstruction->numPoints3D() << " 3D points";
 
-        if (!reportProgress(regCount, totalImages, msg.str(), progressCb))
+        if (!reportProgress(regCount, registrationTarget, msg.str(), progressCb))
             return result;
     }
 
@@ -192,6 +199,9 @@ IncrementalSfmResult IncrementalSfm::runRegistrationFromCurrentInitialization(
     result.baTracksFiltered = _lastGlobalBATracksFiltered;
     result.baRefinedIntrinsicCount = _lastGlobalBARefinedIntrinsicCount;
     result.baSharedFocalScale = _lastGlobalBASharedFocalScale;
+    result.baSharedFocalAspectScale = _lastGlobalBASharedFocalAspectScale;
+    result.baSharedPrincipalOffsetX = _lastGlobalBASharedPrincipalOffsetX;
+    result.baSharedPrincipalOffsetY = _lastGlobalBASharedPrincipalOffsetY;
     result.baRequestedBackend = _lastGlobalBARequestedBackend;
     result.baUsedBackend = _lastGlobalBAUsedBackend;
     result.baSolveStatus = _lastGlobalBASolveStatus;

@@ -27,6 +27,32 @@ TEST(SfmSearchPolicyTest, KeepsSmallThreadBudgetsSerial)
     EXPECT_EQ(budget.threadsPerWorker, 7);
 }
 
+TEST(SfmSearchPolicyTest, ResolvesAutomaticThreadBudgetFromHardware)
+{
+    EXPECT_GE(xjw::aerial_triangulation::resolveSfmThreadBudget(0), 1);
+    EXPECT_EQ(xjw::aerial_triangulation::resolveSfmThreadBudget(13), 13);
+}
+
+TEST(SfmSearchPolicyTest, BoundsOnlyLargeFocalSearchProblems)
+{
+    EXPECT_EQ(xjw::aerial_triangulation::focalProbeRegistrationLimit(96), 0);
+    EXPECT_EQ(xjw::aerial_triangulation::focalProbeRegistrationLimit(97), 64);
+    EXPECT_EQ(xjw::aerial_triangulation::focalProbeRegistrationLimit(444), 64);
+}
+
+TEST(SfmSearchPolicyTest, ScalesIntermediateBundleAdjustmentForLargeProjects)
+{
+    const auto small = xjw::aerial_triangulation::resolveSfmBaSchedule(96, 3, 6, 10);
+    EXPECT_EQ(small.localInterval, 3);
+    EXPECT_EQ(small.localWindowImages, 6);
+    EXPECT_EQ(small.globalInterval, 10);
+
+    const auto large = xjw::aerial_triangulation::resolveSfmBaSchedule(444, 3, 6, 10);
+    EXPECT_EQ(large.localInterval, 8);
+    EXPECT_EQ(large.localWindowImages, 12);
+    EXPECT_EQ(large.globalInterval, 55);
+}
+
 TEST(SfmSearchPolicyTest, RegistrationCoverageDominatesRmsAndPointCount)
 {
     const SfmCandidateSummary full{
@@ -170,6 +196,70 @@ TEST(SfmSearchPolicyTest, BalancedQualityRejectsLongFocalSequenceOutlier)
         balanced, longFocalOutlier));
     EXPECT_FALSE(xjw::aerial_triangulation::isBetterCandidate(
         longFocalOutlier, balanced));
+}
+
+TEST(SfmSearchPolicyTest, MatureNetworkUsesRmsInsteadOfMarginalTwoViewAdvantage)
+{
+    // dino 实测：两个候选的交会角均已充分。8 倍焦距仅有略低的两视轨迹比例，
+    // 但重投影误差更高且点数更少，不能因此压过接近真实内参的 5.2 倍候选。
+    SfmCandidateSummary calibrated{
+        0, 5.2, 8, 10, 16, 6964, 0.6160913552, true};
+    calibrated.hasNetworkQuality = true;
+    calibrated.medianTriangulationAngleDeg = 44.528240;
+    calibrated.twoViewTrackRatio = 0.5493968983;
+    calibrated.observationGridCoverage = 0.103586;
+
+    SfmCandidateSummary overLongFocal{
+        1, 8.0, 8, 10, 16, 6522, 0.6594360345, true};
+    overLongFocal.hasNetworkQuality = true;
+    overLongFocal.medianTriangulationAngleDeg = 45.515531;
+    overLongFocal.twoViewTrackRatio = 0.4900337320;
+    overLongFocal.observationGridCoverage = 0.105432;
+
+    EXPECT_TRUE(xjw::aerial_triangulation::isBetterCandidate(
+        calibrated, overLongFocal));
+    EXPECT_FALSE(xjw::aerial_triangulation::isBetterCandidate(
+        overLongFocal, calibrated));
+}
+
+TEST(SfmSearchPolicyTest, AcceptsBoundedCalibrationRefinementWithStatisticalNoise)
+{
+    SfmCandidateSummary baseline{
+        0, 5.2, 8, 10, 16, 6964, 0.6160913552, true};
+    baseline.hasNetworkQuality = true;
+    baseline.medianTriangulationAngleDeg = 44.528240;
+    baseline.twoViewTrackRatio = 0.5493968983;
+    baseline.observationGridCoverage = 0.103586;
+
+    SfmCandidateSummary refined{
+        1, 5.2, 8, 10, 16, 6929, 0.6214, true};
+    refined.hasNetworkQuality = true;
+    refined.medianTriangulationAngleDeg = 44.4;
+    refined.twoViewTrackRatio = 0.551;
+    refined.observationGridCoverage = 0.103;
+
+    EXPECT_TRUE(xjw::aerial_triangulation::isAcceptableCalibrationRefinement(
+        refined, baseline));
+
+    refined.registeredImages = 15;
+    EXPECT_FALSE(xjw::aerial_triangulation::isAcceptableCalibrationRefinement(
+        refined, baseline));
+}
+
+TEST(SfmSearchPolicyTest, RejectsMateriallyDegradedCalibrationRefinement)
+{
+    const SfmCandidateSummary baseline{
+        0, 5.2, 8, 10, 16, 7000, 0.60, true};
+
+    SfmCandidateSummary highRms{
+        1, 5.2, 8, 10, 16, 7000, 0.64, true};
+    EXPECT_FALSE(xjw::aerial_triangulation::isAcceptableCalibrationRefinement(
+        highRms, baseline));
+
+    SfmCandidateSummary sparse{
+        1, 5.2, 8, 10, 16, 6700, 0.59, true};
+    EXPECT_FALSE(xjw::aerial_triangulation::isAcceptableCalibrationRefinement(
+        sparse, baseline));
 }
 
 TEST(SfmSearchPolicyTest, RankingIsDeterministicAndReplayIsLimitedToThree)

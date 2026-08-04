@@ -60,6 +60,8 @@ struct IncrementalSfmOptions
 {
     /// 正式精化或候选粗筛。粗筛会统一收紧高成本 BA 参数。
     SfmExecutionProfile executionProfile = SfmExecutionProfile::FullRefinement;
+    /// 候选探测最多注册的影像数；0 表示注册全部影像。正式重建必须保持为 0。
+    int maxRegisteredImages = 0;
 
     // --- 初始化选项 ---
     /// 初始像对最少匹配数
@@ -198,6 +200,9 @@ struct IncrementalSfmResult
     int baTracksFiltered = 0;  ///< 最终全局 BA 过滤的离群点数
     int baRefinedIntrinsicCount = 0;    ///< 最终全局 BA 中发生共享内参更新的相机数量
     double baSharedFocalScale = 1.0;    ///< 最终全局 BA 后焦距相对输入焦距的平均尺度
+    double baSharedFocalAspectScale = 1.0; ///< 最终全局 BA 后 fy/fx 比例倍率
+    double baSharedPrincipalOffsetX = 0.0; ///< 最终全局 BA 主点 X 平均偏移（像素）
+    double baSharedPrincipalOffsetY = 0.0; ///< 最终全局 BA 主点 Y 平均偏移（像素）
     BABackend baRequestedBackend = BABackend::LegacyCpu; ///< 最终全局 BA 请求后端
     BABackend baUsedBackend = BABackend::LegacyCpu;      ///< 最终全局 BA 实际后端
     BASolveStatus baSolveStatus = BASolveStatus::NotRun; ///< 最终全局 BA 求解状态
@@ -355,6 +360,9 @@ class IncrementalSfm
     int _lastGlobalBATracksFiltered = 0;
     int _lastGlobalBARefinedIntrinsicCount = 0;
     double _lastGlobalBASharedFocalScale = 1.0;
+    double _lastGlobalBASharedFocalAspectScale = 1.0;
+    double _lastGlobalBASharedPrincipalOffsetX = 0.0;
+    double _lastGlobalBASharedPrincipalOffsetY = 0.0;
     BABackend _lastGlobalBARequestedBackend = BABackend::LegacyCpu;
     BABackend _lastGlobalBAUsedBackend = BABackend::LegacyCpu;
     BASolveStatus _lastGlobalBASolveStatus = BASolveStatus::NotRun;

@@ -57,6 +57,8 @@ IncrementalSfmOptions effectiveSfmOptions(const IncrementalSfmOptions &options)
     effective.localBAInterval = std::max(effective.localBAInterval, 6);
     effective.globalBAInterval = std::numeric_limits<int>::max();
     effective.baOptions.refineSharedFocalLength = false;
+    effective.baOptions.refineSharedFocalAspectRatio = false;
+    effective.baOptions.refineSharedPrincipalPoint = false;
     effective.baOptions.logIterationProgress = false;
     effective.retryUnregisteredAfterFinalBA = false;
     return effective;

@@ -284,22 +284,22 @@ struct PoseDeltaReprojectionResidual
     }
 };
 
-struct FixedPoseSharedFocalReprojectionResidual
+struct FixedPoseSharedIntrinsicsReprojectionResidual
 {
     xjw::ba::ProjectionCamera camera;
     BAObservation observation;
 
     template <typename T>
     bool operator()(const T *const point,
-                    const T *const sharedFocalLogPixels,
+                    const T *const sharedIntrinsics,
                     T *residuals) const
     {
         const T zeroDelta[6] = {
             T(0.0), T(0.0), T(0.0), T(0.0), T(0.0), T(0.0)};
         T pixel[2] = {T(0.0), T(0.0)};
         const T sqrtWeight = T(std::sqrt(safeObservationWeight(observation)));
-        if (!xjw::ba::projectWithPoseDeltaAndSharedFocal(
-                camera, zeroDelta, point, sharedFocalLogPixels, pixel))
+        if (!xjw::ba::projectWithPoseDeltaAndSharedIntrinsics(
+                camera, zeroDelta, point, sharedIntrinsics, pixel))
         {
             residuals[0] = sqrtWeight * T(1.0e6);
             residuals[1] = sqrtWeight * T(1.0e6);
@@ -311,7 +311,7 @@ struct FixedPoseSharedFocalReprojectionResidual
     }
 };
 
-struct PoseDeltaSharedFocalReprojectionResidual
+struct PoseDeltaSharedIntrinsicsReprojectionResidual
 {
     xjw::ba::ProjectionCamera camera;
     BAObservation observation;
@@ -319,13 +319,13 @@ struct PoseDeltaSharedFocalReprojectionResidual
     template <typename T>
     bool operator()(const T *const cameraDelta,
                     const T *const point,
-                    const T *const sharedFocalLogPixels,
+                    const T *const sharedIntrinsics,
                     T *residuals) const
     {
         T pixel[2] = {T(0.0), T(0.0)};
         const T sqrtWeight = T(std::sqrt(safeObservationWeight(observation)));
-        if (!xjw::ba::projectWithPoseDeltaAndSharedFocal(
-                camera, cameraDelta, point, sharedFocalLogPixels, pixel))
+        if (!xjw::ba::projectWithPoseDeltaAndSharedIntrinsics(
+                camera, cameraDelta, point, sharedIntrinsics, pixel))
         {
             residuals[0] = sqrtWeight * T(1.0e6);
             residuals[1] = sqrtWeight * T(1.0e6);
@@ -333,6 +333,24 @@ struct PoseDeltaSharedFocalReprojectionResidual
         }
         residuals[0] = sqrtWeight * (pixel[0] - T(observation.u));
         residuals[1] = sqrtWeight * (pixel[1] - T(observation.v));
+        return true;
+    }
+};
+
+struct SharedIntrinsicsPriorResidual
+{
+    std::array<double, 4> reference{{0.0, 0.0, 0.0, 0.0}};
+    std::array<double, 4> inverseSigma{{0.0, 0.0, 0.0, 0.0}};
+
+    template <typename T>
+    bool operator()(const T *const sharedIntrinsics, T *residuals) const
+    {
+        for (int index = 0; index < 4; ++index)
+        {
+            residuals[index] = T(inverseSigma[static_cast<size_t>(index)]) *
+                               (sharedIntrinsics[index] -
+                                T(reference[static_cast<size_t>(index)]));
+        }
         return true;
     }
 };
@@ -787,7 +805,12 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         }
     }
 
-    // 按镜头/焦段标定组建立独立焦距参数。同组共享绝对焦距，不同组互不吸收误差。
+    // 按镜头/焦段标定组建立独立针孔内参参数。同组共享绝对焦距、宽高比和
+    // 主点相对偏移，不同组互不吸收误差。
+    const bool refineSharedIntrinsics =
+        options.refineSharedFocalLength ||
+        options.refineSharedFocalAspectRatio ||
+        options.refineSharedPrincipalPoint;
     std::vector<int> calibrationGroupByCamera(cameras.size(), 0);
     if (!options.cameraCalibrationGroupIds.empty())
     {
@@ -806,6 +829,8 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
     std::vector<int> calibrationParameterByCamera(cameras.size(), 0);
     std::vector<std::vector<double>> focalSamplesByGroup(
         groupIdToParameterIndex.size());
+    std::vector<std::vector<double>> aspectSamplesByGroup(
+        groupIdToParameterIndex.size());
     for (size_t cameraIndex = 0; cameraIndex < cameras.size(); ++cameraIndex)
     {
         const int parameterIndex =
@@ -817,6 +842,13 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         {
             focalSamplesByGroup[static_cast<size_t>(parameterIndex)]
                 .push_back(cameras[cameraIndex].focalX());
+            if (std::isfinite(cameras[cameraIndex].focalY()) &&
+                cameras[cameraIndex].focalY() > 0.0)
+            {
+                aspectSamplesByGroup[static_cast<size_t>(parameterIndex)]
+                    .push_back(cameras[cameraIndex].focalY() /
+                               cameras[cameraIndex].focalX());
+            }
         }
     }
 
@@ -826,7 +858,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         planCeresSolver(
             options,
             variableCameraCount,
-            options.refineSharedFocalLength
+            refineSharedIntrinsics
                 ? static_cast<int>(groupIdToParameterIndex.size())
                 : 0,
             activeTrackCount,
@@ -851,8 +883,10 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
 
     std::vector<double> sharedFocalReferencePixels(
         groupIdToParameterIndex.size(), 1.0);
-    std::vector<double> sharedFocalLogPixels(
-        groupIdToParameterIndex.size(), 0.0);
+    std::vector<double> sharedAspectReference(
+        groupIdToParameterIndex.size(), 1.0);
+    std::vector<std::array<double, 4>> sharedIntrinsicsParameters(
+        groupIdToParameterIndex.size());
     for (size_t groupIndex = 0;
          groupIndex < sharedFocalReferencePixels.size();
          ++groupIndex)
@@ -861,33 +895,111 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
             plamatrix::finiteMedian(
                 std::move(focalSamplesByGroup[groupIndex]))
                 .value_or(1.0);
-        sharedFocalLogPixels[groupIndex] =
-            std::log(sharedFocalReferencePixels[groupIndex]);
+        sharedAspectReference[groupIndex] =
+            plamatrix::finiteMedian(
+                std::move(aspectSamplesByGroup[groupIndex]))
+                .value_or(1.0);
+        sharedIntrinsicsParameters[groupIndex] = {{
+            std::log(sharedFocalReferencePixels[groupIndex]),
+            std::log(sharedAspectReference[groupIndex]),
+            0.0,
+            0.0,
+        }};
     }
 
-    if (options.refineSharedFocalLength)
+    if (refineSharedIntrinsics)
     {
         const double minimumScale = std::max(1e-6, options.minSharedFocalScale);
         const double maximumScale =
             std::max(minimumScale, options.maxSharedFocalScale);
+        const double minimumAspectScale =
+            std::max(1e-6, options.minSharedFocalAspectScale);
+        const double maximumAspectScale =
+            std::max(minimumAspectScale, options.maxSharedFocalAspectScale);
         for (size_t groupIndex = 0;
-             groupIndex < sharedFocalLogPixels.size();
+             groupIndex < sharedIntrinsicsParameters.size();
              ++groupIndex)
         {
-            double *parameter = &sharedFocalLogPixels[groupIndex];
-            problem.AddParameterBlock(parameter, 1);
-            problem.SetParameterLowerBound(
-                parameter,
-                0,
-                std::log(
+            double *parameter = sharedIntrinsicsParameters[groupIndex].data();
+            problem.AddParameterBlock(parameter, 4);
+            std::vector<int> constantIndices;
+            if (options.refineSharedFocalLength)
+            {
+                problem.SetParameterLowerBound(
+                    parameter,
+                    0,
+                    std::log(sharedFocalReferencePixels[groupIndex] * minimumScale));
+                problem.SetParameterUpperBound(
+                    parameter,
+                    0,
+                    std::log(sharedFocalReferencePixels[groupIndex] * maximumScale));
+            }
+            else
+            {
+                constantIndices.push_back(0);
+            }
+            if (options.refineSharedFocalAspectRatio)
+            {
+                problem.SetParameterLowerBound(
+                    parameter,
+                    1,
+                    std::log(sharedAspectReference[groupIndex] * minimumAspectScale));
+                problem.SetParameterUpperBound(
+                    parameter,
+                    1,
+                    std::log(sharedAspectReference[groupIndex] * maximumAspectScale));
+            }
+            else
+            {
+                constantIndices.push_back(1);
+            }
+            if (options.refineSharedPrincipalPoint)
+            {
+                const double maxOffset =
                     sharedFocalReferencePixels[groupIndex] *
-                    minimumScale));
-            problem.SetParameterUpperBound(
-                parameter,
-                0,
-                std::log(
-                    sharedFocalReferencePixels[groupIndex] *
-                    maximumScale));
+                    options.maxSharedPrincipalPointOffsetFraction;
+                for (int coordinate = 2; coordinate <= 3; ++coordinate)
+                {
+                    problem.SetParameterLowerBound(parameter, coordinate, -maxOffset);
+                    problem.SetParameterUpperBound(parameter, coordinate, maxOffset);
+                }
+            }
+            else
+            {
+                constantIndices.push_back(2);
+                constantIndices.push_back(3);
+            }
+            if (!constantIndices.empty())
+            {
+                problem.SetManifold(
+                    parameter,
+                    new ceres::SubsetManifold(4, constantIndices));
+            }
+
+            if (options.refineSharedPrincipalPoint ||
+                options.refineSharedFocalAspectRatio)
+            {
+                const double principalSigma =
+                    std::max(1e-6,
+                             sharedFocalReferencePixels[groupIndex] *
+                                 options.sharedPrincipalPointPriorSigmaFraction);
+                const double aspectSigma =
+                    std::max(1e-6, options.sharedFocalAspectPriorSigma);
+                auto *prior =
+                    new ceres::AutoDiffCostFunction<SharedIntrinsicsPriorResidual,
+                                                    4,
+                                                    4>(
+                        new SharedIntrinsicsPriorResidual{
+                            {{std::log(sharedFocalReferencePixels[groupIndex]),
+                              std::log(sharedAspectReference[groupIndex]),
+                              0.0,
+                              0.0}},
+                            {{1.0 / 0.35,
+                              1.0 / aspectSigma,
+                              1.0 / principalSigma,
+                              1.0 / principalSigma}}});
+                problem.AddResidualBlock(prior, nullptr, parameter);
+            }
         }
     }
 
@@ -906,15 +1018,15 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         problem.AddParameterBlock(pointParams[ti].data(), 3);
         for (const BAObservation &observation : validObservationsByTrack[ti])
         {
-            if (options.refineCameraPose && options.refineSharedFocalLength)
+            if (options.refineCameraPose && refineSharedIntrinsics)
             {
                 auto *cost =
-                    new ceres::AutoDiffCostFunction<PoseDeltaSharedFocalReprojectionResidual,
+                    new ceres::AutoDiffCostFunction<PoseDeltaSharedIntrinsicsReprojectionResidual,
                                                     2,
                                                     6,
                                                     3,
-                                                    1>(
-                        new PoseDeltaSharedFocalReprojectionResidual{
+                                                    4>(
+                        new PoseDeltaSharedIntrinsicsReprojectionResidual{
                             xjw::ba::makeProjectionCamera(
                                 cameras[static_cast<size_t>(observation.cameraIndex)]),
                             observation});
@@ -923,11 +1035,11 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                     makeHuberLoss(options.huberDelta),
                     cameraDeltas[static_cast<size_t>(observation.cameraIndex)].data(),
                     pointParams[ti].data(),
-                    &sharedFocalLogPixels[
+                    sharedIntrinsicsParameters[
                         static_cast<size_t>(
                             calibrationParameterByCamera[
                                 static_cast<size_t>(
-                                    observation.cameraIndex)])]);
+                                    observation.cameraIndex)])].data());
             }
             else if (options.refineCameraPose)
             {
@@ -944,25 +1056,25 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                                          cameraDeltas[static_cast<size_t>(observation.cameraIndex)].data(),
                                          pointParams[ti].data());
             }
-            else if (options.refineSharedFocalLength)
+            else if (refineSharedIntrinsics)
             {
                 auto *cost =
-                    new ceres::AutoDiffCostFunction<FixedPoseSharedFocalReprojectionResidual,
+                    new ceres::AutoDiffCostFunction<FixedPoseSharedIntrinsicsReprojectionResidual,
                                                     2,
                                                     3,
-                                                    1>(
-                        new FixedPoseSharedFocalReprojectionResidual{
+                                                    4>(
+                        new FixedPoseSharedIntrinsicsReprojectionResidual{
                             xjw::ba::makeProjectionCamera(
                                 cameras[static_cast<size_t>(observation.cameraIndex)]),
                             observation});
                 problem.AddResidualBlock(cost,
                                          makeHuberLoss(options.huberDelta),
                                          pointParams[ti].data(),
-                                         &sharedFocalLogPixels[
+                                         sharedIntrinsicsParameters[
                                              static_cast<size_t>(
                                                  calibrationParameterByCamera[
                                                      static_cast<size_t>(
-                                                         observation.cameraIndex)])]);
+                                                         observation.cameraIndex)])].data());
             }
             else
             {
@@ -1079,10 +1191,10 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
 #  endif
 
     const int totalIterationBudget = std::max(1, options.maxIterations);
-    // 自标定采用“固定焦距预热 -> 释放共享焦距”的两阶段策略。先稳定外参和点，
+    // 自标定采用“固定内参预热 -> 释放共享内参”的两阶段策略。先稳定外参和点，
     // 再释放内参可降低转台/弱基线数据中焦距吸收位姿误差的风险。
     const bool runStagedSelfCalibration =
-        options.refineSharedFocalLength &&
+        refineSharedIntrinsics &&
         options.stageSharedFocalRefinement &&
         options.sharedFocalWarmupFraction > 0.0 &&
         totalIterationBudget >= 2;
@@ -1096,9 +1208,9 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                     options.sharedFocalWarmupFraction)),
             1,
             totalIterationBudget - 1);
-        for (double &focalParameter : sharedFocalLogPixels)
+        for (auto &intrinsicsParameter : sharedIntrinsicsParameters)
         {
-            problem.SetParameterBlockConstant(&focalParameter);
+            problem.SetParameterBlockConstant(intrinsicsParameter.data());
         }
     }
 
@@ -1130,9 +1242,9 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
             (options.cancelFlag && options.cancelFlag->load());
         if (warmupSummary.IsSolutionUsable() && !warmupInterrupted)
         {
-            for (double &focalParameter : sharedFocalLogPixels)
+            for (auto &intrinsicsParameter : sharedIntrinsicsParameters)
             {
-                problem.SetParameterBlockVariable(&focalParameter);
+                problem.SetParameterBlockVariable(intrinsicsParameter.data());
             }
             const int refinementIterations =
                 totalIterationBudget - warmupIterations;
@@ -1173,7 +1285,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         }
         ceres::Solve(solverOptions, &problem, &summary);
         result.selfCalibrationStagesRun =
-            options.refineSharedFocalLength ? 1 : 0;
+            refineSharedIntrinsics ? 1 : 0;
     }
     const auto solveEnd = std::chrono::steady_clock::now();
     result.setupSeconds = std::chrono::duration<double>(setupEnd - setupStart).count();
@@ -1228,37 +1340,44 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
 
     // 阶段 5：把局部参数解码回 PlaScan Camera/BARefinedPoint。随后必须调用统一
     // 终结器重算正深度和 RMS，Ceres 的 solution usable 不能替代摄影测量质量检查。
-    std::vector<double> refinedFocalPixels(sharedFocalLogPixels.size(), 1.0);
-    for (size_t groupIndex = 0;
-         groupIndex < sharedFocalLogPixels.size();
-         ++groupIndex)
-    {
-        refinedFocalPixels[groupIndex] =
-            std::exp(sharedFocalLogPixels[groupIndex]);
-    }
     double focalScaleSum = 0.0;
+    double aspectScaleSum = 0.0;
+    double principalOffsetXSum = 0.0;
+    double principalOffsetYSum = 0.0;
     int refinedIntrinsicCount = 0;
     for (size_t ci = 0; ci < cameras.size(); ++ci)
     {
         result.refinedCameras[ci] = cameras[ci];
         result.refinedCameras[ci].applyDeltaPose(cameraDeltas[ci].data());
-        if (options.refineSharedFocalLength)
+        if (refineSharedIntrinsics)
         {
             const Camera::Intrinsics intrinsics = result.refinedCameras[ci].intrinsics();
-            const double focalAspect =
-                intrinsics.focalX > 0.0 ? intrinsics.focalY / intrinsics.focalX : 1.0;
             const size_t groupIndex =
                 static_cast<size_t>(calibrationParameterByCamera[ci]);
-            const double focalPixels = refinedFocalPixels[groupIndex];
+            const auto &parameters = sharedIntrinsicsParameters[groupIndex];
+            const double focalPixels = std::exp(parameters[0]);
+            const double focalAspect = std::exp(parameters[1]);
+            const double principalOffsetX = parameters[2];
+            const double principalOffsetY = parameters[3];
             result.refinedCameras[ci].setIntrinsics(
                 focalPixels,
                 focalPixels * focalAspect,
-                intrinsics.principalX,
-                intrinsics.principalY);
+                intrinsics.principalX + principalOffsetX,
+                intrinsics.principalY + principalOffsetY);
             focalScaleSum +=
                 focalPixels / sharedFocalReferencePixels[groupIndex];
-            if (std::abs(focalPixels - intrinsics.focalX) >
-                1.0e-8 * std::max(1.0, std::abs(intrinsics.focalX)))
+            aspectScaleSum +=
+                focalAspect / sharedAspectReference[groupIndex];
+            principalOffsetXSum += principalOffsetX;
+            principalOffsetYSum += principalOffsetY;
+            const bool changed =
+                std::abs(focalPixels - intrinsics.focalX) >
+                    1.0e-8 * std::max(1.0, std::abs(intrinsics.focalX)) ||
+                std::abs(focalPixels * focalAspect - intrinsics.focalY) >
+                    1.0e-8 * std::max(1.0, std::abs(intrinsics.focalY)) ||
+                std::abs(principalOffsetX) > 1.0e-8 ||
+                std::abs(principalOffsetY) > 1.0e-8;
+            if (changed)
             {
                 ++refinedIntrinsicCount;
             }
@@ -1317,15 +1436,22 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
     result.meanRmsBefore = countBefore > 0 ? sumBefore / static_cast<double>(countBefore) : 0.0;
     result.meanRmsAfter = countAfter > 0 ? sumAfter / static_cast<double>(countAfter) : 0.0;
     result.refinedCameraCount = options.refineCameraPose ? variableCameraCount : 0;
-    if (options.refineSharedFocalLength)
+    if (refineSharedIntrinsics)
     {
+        const double cameraCount = static_cast<double>(cameras.size());
         result.refinedSharedFocalScale =
             cameras.empty()
                 ? 1.0
-                : focalScaleSum / static_cast<double>(cameras.size());
+                : focalScaleSum / cameraCount;
+        result.refinedSharedFocalAspectScale =
+            cameras.empty() ? 1.0 : aspectScaleSum / cameraCount;
+        result.refinedSharedPrincipalOffsetX =
+            cameras.empty() ? 0.0 : principalOffsetXSum / cameraCount;
+        result.refinedSharedPrincipalOffsetY =
+            cameras.empty() ? 0.0 : principalOffsetYSum / cameraCount;
         result.refinedIntrinsicCount = refinedIntrinsicCount;
         result.refinedCalibrationGroupCount =
-            static_cast<int>(sharedFocalLogPixels.size());
+            static_cast<int>(sharedIntrinsicsParameters.size());
     }
 
     finalizeBundleAdjustResult(cameras, tracks, options, &result);

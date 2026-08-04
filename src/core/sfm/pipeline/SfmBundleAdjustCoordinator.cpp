@@ -32,6 +32,18 @@ SfmBundleAdjustCoordinator::SfmBundleAdjustCoordinator(IncrementalSfm &owner)
 {
 }
 
+bool SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
+    bool localOnly,
+    int activeCameraCount,
+    int registeredImageCount,
+    int totalImageCount)
+{
+    return !localOnly &&
+           totalImageCount >= 3 &&
+           registeredImageCount == totalImageCount &&
+           activeCameraCount == registeredImageCount;
+}
+
 void SfmBundleAdjustCoordinator::run(bool localOnly,
                                      const std::vector<ImageId> &anchorIds)
 {
@@ -281,6 +293,27 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
 
     // 构造本次 BA 选项，并显式消除无绝对约束问题的 7 自由度 gauge。
     BAOptions baOpt = _sfmOptions.baOptions;
+    if (localOnly)
+    {
+        // 局部窗口只负责稳定新注册相机，不需要沿用最终全局 BA 的 20 轮预算。
+        // 这也避免数百图工程在每个局部窗口输出整段迭代日志，造成“逐图平差”的错觉。
+        baOpt.maxIterations = std::min(baOpt.maxIterations, 10);
+        baOpt.logIterationProgress = false;
+    }
+    const bool refineSharedIntrinsics =
+        SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
+        localOnly,
+        static_cast<int>(baCameras.size()),
+        static_cast<int>(_reconstruction->registeredImageIds().size()),
+        static_cast<int>(_reconstruction->numImages()));
+    if (!refineSharedIntrinsics)
+    {
+        // 局部窗口或尚未完整注册时更新“共享”内参，会把同一镜头组拆成多个主点/焦距。
+        // 此阶段仅优化位姿和三维点，待最终全局 BA 再统一释放镜头组内参。
+        baOpt.refineSharedFocalLength = false;
+        baOpt.refineSharedFocalAspectRatio = false;
+        baOpt.refineSharedPrincipalPoint = false;
+    }
     // SfM 协调器会固定旋转/平移规范，并在求解后恢复基线尺度，
     // 因此由调用方管理完整的 Sim(3) gauge，避免 BA 模块再自动固定第二台相机。
     baOpt.gaugePolicy = BAGaugePolicy::CallerManaged;
@@ -551,6 +584,22 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
         baResult.meanRmsAfter,
         baResult.totalSeconds,
         baResult.backendMessage.c_str());
+    if (baOpt.refineSharedFocalLength ||
+        baOpt.refineSharedFocalAspectRatio ||
+        baOpt.refineSharedPrincipalPoint)
+    {
+        Logger::instance()->infof(
+            "[BA] intrinsics scope=%s applied=%s cameras=%d groups=%d "
+            "focalScale=%.8f aspectScale=%.8f principalOffsetPx=(%.4f,%.4f)",
+            scopeName,
+            applyBaResult ? "true" : "false",
+            applyBaResult ? baResult.refinedIntrinsicCount : 0,
+            applyBaResult ? baResult.refinedCalibrationGroupCount : 0,
+            applyBaResult ? baResult.refinedSharedFocalScale : 1.0,
+            applyBaResult ? baResult.refinedSharedFocalAspectScale : 1.0,
+            applyBaResult ? baResult.refinedSharedPrincipalOffsetX : 0.0,
+            applyBaResult ? baResult.refinedSharedPrincipalOffsetY : 0.0);
+    }
 
     // 回写优化后的相机位姿（跳过被 gauge 固定的相机）
     if (applyBaResult)
@@ -741,6 +790,12 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
             applyBaResult ? baResult.refinedIntrinsicCount : 0;
         _lastGlobalBASharedFocalScale =
             applyBaResult ? baResult.refinedSharedFocalScale : 1.0;
+        _lastGlobalBASharedFocalAspectScale =
+            applyBaResult ? baResult.refinedSharedFocalAspectScale : 1.0;
+        _lastGlobalBASharedPrincipalOffsetX =
+            applyBaResult ? baResult.refinedSharedPrincipalOffsetX : 0.0;
+        _lastGlobalBASharedPrincipalOffsetY =
+            applyBaResult ? baResult.refinedSharedPrincipalOffsetY : 0.0;
         _lastGlobalBARequestedBackend = baResult.requestedBackend;
         _lastGlobalBAUsedBackend = baResult.usedBackend;
         _lastGlobalBASolveStatus = baResult.solveStatus;

@@ -548,7 +548,7 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
         : (qualityLevel == 1 ? QStringLiteral("medium")
                              : (qualityLevel == 2 ? QStringLiteral("high")
                                                   : QStringLiteral("highest")));
-    workflowOptions.threads = settings.value(QStringLiteral("threads")).toInt(8);
+    workflowOptions.threads = settings.value(QStringLiteral("threads")).toInt(0);
     workflowOptions.matchingAlgorithmId =
         settings.value(QStringLiteral("algorithm_id"))
             .toString(QStringLiteral("sift_lightglue"))

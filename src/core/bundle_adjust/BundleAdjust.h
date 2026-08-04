@@ -67,6 +67,8 @@ struct BABackendCapabilities
     bool optimizesPoints = false;
     bool refinesCameraPose = false;
     bool refinesSharedFocalLength = false;
+    bool refinesSharedFocalAspectRatio = false;
+    bool refinesSharedPrincipalPoint = false;
     bool supportsSoftConstraints = false;
 };
 
@@ -205,10 +207,24 @@ struct BAOptions
     /// 是否优化所有相机共享的焦距尺度。该选项面向无相机文件/无 EXIF 的空三，
     /// 当前只释放 fu/fv 的公共 scale，主点和畸变保持固定，避免弱几何下过拟合。
     bool refineSharedFocalLength = false;
+    /// 是否优化标定组共享的 fy/fx 比例。仅由 Ceres 联合 BA 实现；默认关闭，
+    /// 避免弱几何数据把外参误差吸收到像素宽高比中。
+    bool refineSharedFocalAspectRatio = false;
+    /// 是否优化标定组共享的主点偏移量。偏移相对于每台相机输入主点应用，
+    /// 因而同一标定组可以保持各自分辨率对应的基础主点。
+    bool refineSharedPrincipalPoint = false;
     /// 共享焦距相对输入焦距的最小尺度。
     double minSharedFocalScale = 0.5;
     /// 共享焦距相对输入焦距的最大尺度。
     double maxSharedFocalScale = 4.0;
+    /// fy/fx 相对标定组输入中位数允许的最小/最大倍率。
+    double minSharedFocalAspectScale = 0.85;
+    double maxSharedFocalAspectScale = 1.18;
+    /// 主点最大偏移，以标定组参考焦距的比例表示。
+    double maxSharedPrincipalPointOffsetFraction = 0.08;
+    /// 扩展内参自标定的弱先验标准差。主点按参考焦距比例，宽高比按 log 比例。
+    double sharedPrincipalPointPriorSigmaFraction = 0.04;
+    double sharedFocalAspectPriorSigma = 0.08;
     /// 单次 LM 试探允许的最大焦距倍率，限制内参更新步长。
     double maxSharedFocalStepScale = 1.20;
     /// 每轮外层 BA 中共享焦距优化的最大内部迭代次数。
@@ -378,6 +394,9 @@ struct BAResult
     int refinedCalibrationGroupCount = 0; ///< 实际参与焦距优化的标定组数量
     int selfCalibrationStagesRun = 0;     ///< 本次自标定实际执行的求解阶段数
     double refinedSharedFocalScale = 1.0; ///< 优化后焦距相对输入焦距的平均尺度
+    double refinedSharedFocalAspectScale = 1.0; ///< 优化后 fy/fx 相对输入比例的平均倍率
+    double refinedSharedPrincipalOffsetX = 0.0; ///< 优化后的标定组平均主点 X 偏移（像素）
+    double refinedSharedPrincipalOffsetY = 0.0; ///< 优化后的标定组平均主点 Y 偏移（像素）
 
     int laserConstraintCount = 0;          ///< 参与统计/优化的 LiDAR 点到面约束数量
     double laserRmsBeforeMeters = 0.0;     ///< 优化前 LiDAR 点到面 RMS（米）

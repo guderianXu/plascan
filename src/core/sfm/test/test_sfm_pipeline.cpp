@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 
 #include "pipeline/IncrementalSfm.h"
+#include "pipeline/SfmBundleAdjustCoordinator.h"
 #include "reconstruction/SfmReconstruction.h"
 #include "common/SfmTypes.h"
 #include "graph/CorrespondenceGraph.h"
@@ -31,6 +32,18 @@
 #include <vector>
 
 using namespace xjw;
+
+TEST(SfmBundleAdjustCoordinatorPolicyTest, RefinesSharedIntrinsicsOnlyInCompleteGlobalSolve)
+{
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
+        false, 16, 16, 16));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
+        true, 7, 16, 16));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
+        false, 2, 2, 16));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
+        false, 15, 15, 16));
+}
 
 // ─── 工具函数：构造合成场景用于测试 ────────────────────────────
 
@@ -951,6 +964,7 @@ TEST(IncrementalSfmOptionsTest, CoarseExecutionProfileCapsExpensiveRefinement)
 {
     IncrementalSfmOptions options;
     options.executionProfile = SfmExecutionProfile::CoarseEvaluation;
+    options.maxRegisteredImages = 64;
     options.maxInitPairCandidates = 10;
     options.baOptions.maxIterations = 20;
     options.iterativeBARounds = 4;
@@ -965,6 +979,7 @@ TEST(IncrementalSfmOptionsTest, CoarseExecutionProfileCapsExpensiveRefinement)
     EXPECT_EQ(effective.iterativeBARounds, 1);
     EXPECT_EQ(effective.globalBAInterval, std::numeric_limits<int>::max());
     EXPECT_EQ(effective.localBAInterval, 6);
+    EXPECT_EQ(effective.maxRegisteredImages, 64);
     EXPECT_FALSE(effective.baOptions.refineSharedFocalLength);
     EXPECT_FALSE(effective.baOptions.logIterationProgress);
 }
