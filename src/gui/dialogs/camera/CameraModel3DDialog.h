@@ -300,7 +300,7 @@ private:
     void requestOverlayUpdate();
     void paintOverlay(QPainter &painter);
     void drawPlyLoadProgressOverlay(QPainter &painter);
-    void drawTiePointCloudOverlay(QPainter &painter) const;
+    void drawPointCloudOverlay(QPainter &painter) const;
     void drawTiePointLegend(QPainter &painter) const;
     void drawModelLegend(QPainter &painter) const;
     void startTiePointMetadataLoad(const QString &sidecarPath, int generation);
@@ -462,6 +462,7 @@ private:
     RhiBufferSet _modelPointBuffer;
     int _modelPtCount = 0;
     float _modelPointSize = 2.4f;
+    float _pointColorScale = 1.0f;
 
     // 点云包围盒 GPU 资源。
     RhiBufferSet _lineBuffer;

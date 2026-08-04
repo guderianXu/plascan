@@ -114,7 +114,7 @@ TEST(CameraSceneRenderContractTest, ForegroundImageOccludesGpuAndOverlaySceneCon
         QStringLiteral("visibleScene.subtracted(foregroundImageOcclusion)")));
     EXPECT_TRUE(overlayBlock.contains(
         QStringLiteral("painter.setClipPath(visibleScene, Qt::IntersectClip)")));
-    EXPECT_TRUE(overlayBlock.contains(QStringLiteral("drawTiePointCloudOverlay(painter);")));
+    EXPECT_TRUE(overlayBlock.contains(QStringLiteral("drawPointCloudOverlay(painter);")));
 }
 
 TEST(CameraSceneRenderContractTest, SolidCameraCardsUseDepthTestedGpuResourcesWhenThumbnailsAreDisabled)
@@ -357,7 +357,7 @@ TEST(CameraSceneRenderContractTest, TiePointOverlayHonorsCameraPlaneDepth)
     const QString sceneSource =
         readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
 
-    EXPECT_TRUE(sceneHeader.contains(QStringLiteral("drawTiePointCloudOverlay")));
+    EXPECT_TRUE(sceneHeader.contains(QStringLiteral("drawPointCloudOverlay")));
     EXPECT_FALSE(sceneSource.contains(QStringLiteral("_tiePointPipeline")));
     EXPECT_TRUE(sceneSource.contains(
         QStringLiteral("TiePointColorMode::Elevation")));
@@ -365,7 +365,7 @@ TEST(CameraSceneRenderContractTest, TiePointOverlayHonorsCameraPlaneDepth)
         QStringLiteral("TiePointColorMode::ImageCount")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral("pointIsBehindProjectedQuad")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral("CameraImagePlaneAxes")));
-    EXPECT_TRUE(sceneSource.contains(QStringLiteral("drawTiePointCloudOverlay(painter);")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral("drawPointCloudOverlay(painter);")));
 
     const qsizetype drawStart = sceneSource.indexOf(
         QStringLiteral("void CameraSceneWidget::drawSceneGeometry"));
@@ -374,7 +374,7 @@ TEST(CameraSceneRenderContractTest, TiePointOverlayHonorsCameraPlaneDepth)
     ASSERT_GE(drawStart, 0);
     ASSERT_GT(renderStart, drawStart);
     const QString drawBlock = sceneSource.mid(drawStart, renderStart - drawStart);
-    EXPECT_TRUE(drawBlock.contains(QStringLiteral("if (!_isTiePointCloud)")));
+    EXPECT_FALSE(drawBlock.contains(QStringLiteral("if (!_isTiePointCloud)")));
     EXPECT_TRUE(drawBlock.contains(QStringLiteral(
         "drawRhiBuffer(cb, &_pointBuffer, &_colorPointPipeline, uniforms);")));
 
@@ -514,6 +514,15 @@ TEST(CameraSceneRenderContractTest, ImportedPointCloudsUsePointCloudLoadersAndFi
         "!_cloud.hasFaces() && !_cloud.hasNormals()")));
     EXPECT_TRUE(uploadBlock.contains(QStringLiteral(
         "pointColorScale = maximumColorComponent <= 1.0f")));
+    EXPECT_TRUE(sceneHeader.contains(QStringLiteral(
+        "void drawPointCloudOverlay(QPainter &painter) const;")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
+        "if (_cloud.size() == 0 || _cloud.hasFaces())")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
+        "constexpr std::size_t maximumOverlayPointCount = 150'000")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral("QColor::fromRgbF(")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
+        "_cloud.colors()->getValue(cloudIndex, 0) * _pointColorScale")));
 }
 
 TEST(CameraSceneRenderContractTest, PointCloudUsesOwnBoundsAndPixelSizedFloorPivot)

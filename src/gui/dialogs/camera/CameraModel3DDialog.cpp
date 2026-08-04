@@ -2603,7 +2603,7 @@ void CameraSceneWidget::uploadGpuData()
     _modelWireframeVertCount = 0;
     if (!(_cloud.size() == 0) && !_cloud.hasFaces()) {
         const bool hasColors = _cloud.hasColors();
-        float pointColorScale = 1.0f;
+        _pointColorScale = 1.0f;
         if (hasColors)
         {
             float maximumColorComponent = 0.0f;
@@ -2620,7 +2620,7 @@ void CameraSceneWidget::uploadGpuData()
                 }
             }
             // Metashape OBJ uses normalized RGB floats, while PLY commonly stores bytes.
-            pointColorScale = maximumColorComponent <= 1.0f ? 1.0f : (1.0f / 255.0f);
+            _pointColorScale = maximumColorComponent <= 1.0f ? 1.0f : (1.0f / 255.0f);
         }
         if (_isTiePointCloud)
         {
@@ -2690,13 +2690,13 @@ void CameraSceneWidget::uploadGpuData()
             }
             else if (hasColors) {
                 red = qBound(0.0f,
-                             _cloud.colors()->getValue(pointIndex, 0) * pointColorScale,
+                             _cloud.colors()->getValue(pointIndex, 0) * _pointColorScale,
                              1.0f);
                 green = qBound(0.0f,
-                               _cloud.colors()->getValue(pointIndex, 1) * pointColorScale,
+                               _cloud.colors()->getValue(pointIndex, 1) * _pointColorScale,
                                1.0f);
                 blue = qBound(0.0f,
-                              _cloud.colors()->getValue(pointIndex, 2) * pointColorScale,
+                              _cloud.colors()->getValue(pointIndex, 2) * _pointColorScale,
                               1.0f);
             }
 
@@ -2973,29 +2973,6 @@ void CameraSceneWidget::uploadGpuData()
                          6);
         }
         }
-    } else if (!(_cloud.size() == 0) && !_cloud.hasFaces() && _cloud.hasNormals()) {
-        // 含法向量但无面片 → 点图元 + Phong 光照（稠密点云等）
-        const bool hasColors = _cloud.hasColors();
-        const std::size_t Nv = _cloud.size();
-        QVector<float> data;
-        data.reserve((int)Nv * 9);
-        for (std::size_t i = 0; i < Nv; ++i) {
-            data << _cloud.points()(static_cast<plamatrix::Index>(i), 0)
-                 << _cloud.points()(static_cast<plamatrix::Index>(i), 1)
-                 << _cloud.points()(static_cast<plamatrix::Index>(i), 2);
-            data << _cloud.normals()->getValue(static_cast<plamatrix::Index>(i), 0)
-                 << _cloud.normals()->getValue(static_cast<plamatrix::Index>(i), 1)
-                 << _cloud.normals()->getValue(static_cast<plamatrix::Index>(i), 2);
-            if (hasColors) {
-                data << _cloud.colors()->getValue(static_cast<plamatrix::Index>(i), 0) / 255.f
-                     << _cloud.colors()->getValue(static_cast<plamatrix::Index>(i), 1) / 255.f
-                     << _cloud.colors()->getValue(static_cast<plamatrix::Index>(i), 2) / 255.f;
-            } else {
-                data << 0.55f << 0.55f << 0.58f;
-            }
-        }
-        _meshVertCount = (int)Nv;
-        assignBuffer(_meshBuffer, data, _meshVertCount, 9);
     }
 
     // ── 3. 点云包围盒 ────────────────────────────────────────────────────
@@ -3022,6 +2999,22 @@ void CameraSceneWidget::uploadGpuData()
     else
     {
         _lineCount = 0;
+    }
+
+    if (_cloud.size() > 0)
+    {
+        LOG_INFO(QStringLiteral(
+                     "[3D] GPU 几何缓存已准备: 点=%1，普通点缓冲=%2，模型点缓冲=%3，网格顶点=%4，"
+                     "法向量=%5，颜色=%6，面=%7")
+                     .arg(_cloud.size())
+                     .arg(_pointBuffer.vertexCount)
+                     .arg(_modelPointBuffer.vertexCount)
+                     .arg(_meshBuffer.vertexCount)
+                     .arg(_cloud.hasNormals() ? QStringLiteral("有") : QStringLiteral("无"))
+                     .arg(_cloud.hasColors() ? QStringLiteral("有") : QStringLiteral("无"))
+                     .arg(_cloud.hasFaces()
+                              ? static_cast<int>(_cloud.faces()->rows())
+                              : 0));
     }
 
     _thumbnailPipeline.resourcesDirty = true;
@@ -3846,10 +3839,7 @@ void CameraSceneWidget::drawSceneGeometry(QRhiCommandBuffer *cb, SceneUniforms &
         0.70f,
         0.70f,
         pointDiameter * float(devicePixelRatioF()));
-    if (!_isTiePointCloud)
-    {
-        drawRhiBuffer(cb, &_pointBuffer, &_colorPointPipeline, uniforms);
-    }
+    drawRhiBuffer(cb, &_pointBuffer, &_colorPointPipeline, uniforms);
 
     uniforms.lightDirPointSize.setW(_meshHasFaces ? 1.0f : 1.5f);
     if (_modelColorMode == ModelColorMode::Wireframe && _meshHasFaces)
@@ -4006,9 +3996,9 @@ void CameraSceneWidget::requestOverlayUpdate()
     _overlayWidget->update();
 }
 
-void CameraSceneWidget::drawTiePointCloudOverlay(QPainter &painter) const
+void CameraSceneWidget::drawPointCloudOverlay(QPainter &painter) const
 {
-    if (!_isTiePointCloud || _cloud.size() == 0)
+    if (_cloud.size() == 0 || _cloud.hasFaces())
     {
         return;
     }
@@ -4016,7 +4006,7 @@ void CameraSceneWidget::drawTiePointCloudOverlay(QPainter &painter) const
     const SceneMatrices matrices = sceneMatrices();
     const QMatrix4x4 clipMatrix = matrices.projection * matrices.modelView;
     QVector<QVector<QVector3D>> cameraOccluders;
-    if (_showCameras)
+    if (_isTiePointCloud && _showCameras)
     {
         cameraOccluders.reserve(_poses.size());
         for (const CameraPose &pose : _poses)
@@ -4105,12 +4095,14 @@ void CameraSceneWidget::drawTiePointCloudOverlay(QPainter &painter) const
         }
 
         QColor color(115, 115, 128);
-        if (_tiePointColorMode == TiePointColorMode::Elevation)
+        if (_isTiePointCloud && _tiePointColorMode == TiePointColorMode::Elevation)
         {
             color = xjw::gui::tie_points::elevationColor(
                 point.z(), _tiePointElevationRange);
         }
-        else if (_tiePointColorMode == TiePointColorMode::ImageCount && hasImageCounts)
+        else if (_isTiePointCloud
+                 && _tiePointColorMode == TiePointColorMode::ImageCount
+                 && hasImageCounts)
         {
             color = xjw::gui::tie_points::imageCountColor(
                 _tiePointImageCounts.at(static_cast<qsizetype>(index)),
@@ -4118,10 +4110,16 @@ void CameraSceneWidget::drawTiePointCloudOverlay(QPainter &painter) const
         }
         else if (hasColors)
         {
-            color = QColor(
-                _cloud.colors()->getValue(cloudIndex, 0),
-                _cloud.colors()->getValue(cloudIndex, 1),
-                _cloud.colors()->getValue(cloudIndex, 2));
+            color = QColor::fromRgbF(
+                qBound(0.0f,
+                       _cloud.colors()->getValue(cloudIndex, 0) * _pointColorScale,
+                       1.0f),
+                qBound(0.0f,
+                       _cloud.colors()->getValue(cloudIndex, 1) * _pointColorScale,
+                       1.0f),
+                qBound(0.0f,
+                       _cloud.colors()->getValue(cloudIndex, 2) * _pointColorScale,
+                       1.0f));
         }
 
         const auto quantizeChannel = [](int channel)
@@ -4139,9 +4137,9 @@ void CameraSceneWidget::drawTiePointCloudOverlay(QPainter &painter) const
 
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing, false);
-    const qreal pointSize = qMax<qreal>(
-        2.2,
-        xjw::gui::tie_points::pointSizeForMode(_tiePointColorMode));
+    const qreal pointSize = _isTiePointCloud
+        ? qMax<qreal>(2.2, xjw::gui::tie_points::pointSizeForMode(_tiePointColorMode))
+        : qMax<qreal>(2.2, _modelPointSize);
     for (auto iterator = pointsByColor.cbegin(); iterator != pointsByColor.cend(); ++iterator)
     {
         painter.setPen(QPen(
@@ -4236,9 +4234,9 @@ void CameraSceneWidget::paintOverlay(QPainter &painter)
     drawGreatCircle(HoverAxis::Z, QColor(110, 170, 255, 52));
     } // end if (_showGizmo)
 
-    // 连接点使用稳定的 QPainter 点样式，但会先按三维照片平面的
+    // 无面点云使用稳定的 QPainter 点样式；连接点还会按三维照片平面的
     // 投影深度剔除被遮挡点，避免点云穿透相机缩略图。
-    drawTiePointCloudOverlay(painter);
+    drawPointCloudOverlay(painter);
 
     if (_showCameras)
     {
