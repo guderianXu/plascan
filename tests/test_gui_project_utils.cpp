@@ -7384,6 +7384,12 @@ TEST(CameraSceneWidgetTest, PointCloudRenderingStaysOnVulkan)
         "QRhiVertexInputBinding(9 * sizeof(float), QRhiVertexInputBinding::PerInstance)")));
     EXPECT_TRUE(source.contains(QStringLiteral(
         "cb->draw(6, quint32(_pointBuffer.vertexCount))")));
+    EXPECT_TRUE(source.contains(QStringLiteral(
+        "qRound(float(width()) * pixel_ratio)")));
+    EXPECT_TRUE(source.contains(QStringLiteral(
+        "qRound(float(height()) * pixel_ratio)")));
+    EXPECT_FALSE(source.contains(QStringLiteral(
+        "renderTarget() ? renderTarget()->pixelSize()")));
     EXPECT_TRUE(pointVertexShader.contains(QStringLiteral("layout(location = 1) in vec3 aNormal")));
     EXPECT_TRUE(pointVertexShader.contains(QStringLiteral(
         "corner * ubuf.uLightDirPointSize.w / viewportSize * clipPosition.w")));

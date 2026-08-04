@@ -3911,10 +3911,13 @@ void CameraSceneWidget::drawSceneGeometry(QRhiCommandBuffer *cb, SceneUniforms &
         0.70f,
         0.70f,
         pointDiameter * float(devicePixelRatioF()));
-    const QSize viewport_size = renderTarget() ? renderTarget()->pixelSize() : QSize();
+    const float pixel_ratio = float(devicePixelRatioF());
+    const QSize viewport_size(
+        qMax(1, qRound(float(width()) * pixel_ratio)),
+        qMax(1, qRound(float(height()) * pixel_ratio)));
     uniforms.viewportSize = QVector4D(
-        qMax(1, viewport_size.width()),
-        qMax(1, viewport_size.height()),
+        viewport_size.width(),
+        viewport_size.height(),
         0.0f,
         0.0f);
     drawPointCloud(cb, uniforms);
