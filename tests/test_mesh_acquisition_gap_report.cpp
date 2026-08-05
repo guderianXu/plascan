@@ -33,6 +33,8 @@ xjw::mesh::MeshBoundaryEdgeAttribution edge(
 {
     xjw::mesh::MeshBoundaryEdgeAttribution result;
     result.midpoint = midpoint;
+    result.firstPoint = midpoint;
+    result.secondPoint = midpoint;
     result.normal = midpoint;
     result.reason = primary;
     result.evidenceReason = cause;
@@ -112,6 +114,14 @@ TEST(MeshAcquisitionGapReportTest, AccountsForEveryEdgeAndSourceWithoutDuplicati
                   .toArray()
                   .size(),
               3);
+    EXPECT_EQ(report.value(QStringLiteral("rematch_target_count")).toInt(), 1);
+    const QJsonArray targets =
+        report.value(QStringLiteral("rematch_targets")).toArray();
+    ASSERT_EQ(targets.size(), 1);
+    EXPECT_EQ(targets[0].toObject()
+                  .value(QStringLiteral("root_cause"))
+                  .toString(),
+              QStringLiteral("depth_spread"));
 }
 
 TEST(MeshAcquisitionGapReportTest, DeclaresSourceMaskLimitBeyondSixteenFrames)

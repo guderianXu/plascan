@@ -59,6 +59,8 @@ struct MeshBoundaryEdgeAttribution
     float inverseDepthSpread = 0.0f;
     float surfaceWeightRatio = 0.0f;
     float absoluteTsdf = 0.0f;
+    std::array<float, 3> firstPoint{};
+    std::array<float, 3> secondPoint{};
     std::array<float, 3> midpoint{};
     std::array<float, 3> normal{};
     float length = 0.0f;

@@ -225,6 +225,19 @@ QJsonObject orientationBinToJson(int index, const OrientationBin &bin)
          recommended_direction}};
 }
 
+bool isRematchReason(MeshBoundaryAttributionReason reason)
+{
+    return reason == MeshBoundaryAttributionReason::SupportGateRejected ||
+        reason == MeshBoundaryAttributionReason::AbsoluteTsdfRejected ||
+        reason == MeshBoundaryAttributionReason::DepthSpreadRejected ||
+        reason == MeshBoundaryAttributionReason::SurfaceWeightRejected;
+}
+
+QJsonArray pointToJson(const std::array<float, 3> &point)
+{
+    return {point[0], point[1], point[2]};
+}
+
 } // namespace
 
 QJsonObject buildMeshAcquisitionGapReport(
@@ -350,6 +363,26 @@ QJsonObject buildMeshAcquisitionGapReport(
             {QStringLiteral("strongest_orientation_sector"), strongest_sector}});
     }
 
+    QJsonArray rematch_targets;
+    for (std::size_t index = 0; index < edges.size(); ++index)
+    {
+        const MeshBoundaryEdgeAttribution &edge = edges[index];
+        if (!isRematchReason(edge.evidenceReason))
+        {
+            continue;
+        }
+        rematch_targets.append(QJsonObject{
+            {QStringLiteral("target_index"), static_cast<double>(index)},
+            {QStringLiteral("first_point"), pointToJson(edge.firstPoint)},
+            {QStringLiteral("second_point"), pointToJson(edge.secondPoint)},
+            {QStringLiteral("midpoint"), pointToJson(edge.midpoint)},
+            {QStringLiteral("normal"), pointToJson(edge.normal)},
+            {QStringLiteral("length"), edge.length},
+            {QStringLiteral("orientation_bin"), orientationBin(edge, center)},
+            {QStringLiteral("root_cause"), reasonName(edge.evidenceReason)},
+            {QStringLiteral("source_mask"), edge.sourceMask}});
+    }
+
     const std::uint64_t acquisition_edges =
         root_causes[reasonIndex(MeshBoundaryAttributionReason::NoObservation)] +
         root_causes[reasonIndex(MeshBoundaryAttributionReason::InsufficientSource)];
@@ -394,6 +427,8 @@ QJsonObject buildMeshAcquisitionGapReport(
         {QStringLiteral("frames"), frames},
         {QStringLiteral("existing_image_rematch_edge_count"),
          static_cast<double>(rematch_edges)},
+        {QStringLiteral("rematch_target_count"), rematch_targets.size()},
+        {QStringLiteral("rematch_targets"), rematch_targets},
         {QStringLiteral("additional_capture_edge_count"),
          static_cast<double>(acquisition_edges)},
         {QStringLiteral("mesh_backend_edge_count"),

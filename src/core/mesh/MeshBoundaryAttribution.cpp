@@ -410,6 +410,8 @@ MeshBoundaryAttributionStatistics attributeMeshBoundaryEdges(
             edge.absoluteTsdf = partial_support
                 ? unsupported_minimum_absolute_tsdf
                 : minimum_absolute_tsdf;
+            edge.firstPoint = {first.x, first.y, first.z};
+            edge.secondPoint = {second.x, second.y, second.z};
             edge.midpoint = {midpoint.x, midpoint.y, midpoint.z};
             edge.normal = {
                 first.nx + second.nx,
