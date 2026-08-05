@@ -911,8 +911,5 @@ bool PatchMatchDepthEstimator::estimateCPU(
     return true;
 }
 
-
-
 } // namespace mvs
 } // namespace xjw
-

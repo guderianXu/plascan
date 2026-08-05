@@ -30,7 +30,7 @@ bool PatchMatchDepthEstimator::estimate(
     const cv::Mat                *refValidMask,
     const std::vector<cv::Mat>   *srcValidMasks)
 {
-    if (srcGrays.empty() || srcCams.empty() || srcGrays.size() != srcCams.size()) 
+    if (srcGrays.empty() || srcCams.empty() || srcGrays.size() != srcCams.size())
     {
         if (errorMsg) *errorMsg = "source frame count mismatch or empty";
         return false;
@@ -64,7 +64,7 @@ bool PatchMatchDepthEstimator::estimate(
     zNear = std::max(zNear, 0.01f);
     zFar  = std::max(zFar, zNear + 0.1f);
 
-    if (config.useCuda && isCudaAvailable()) 
+    if (config.useCuda && isCudaAvailable())
     {
         if (estimateGPU(refGray, srcGrays, refCam, srcCams,
                         zNear, zFar, config, depthOut, confOut, errorMsg,
@@ -90,4 +90,3 @@ bool PatchMatchDepthEstimator::estimate(
 
 } // namespace mvs
 } // namespace xjw
-
