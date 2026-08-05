@@ -31,10 +31,11 @@ class SummarizeMvsDepthProvenanceTest(unittest.TestCase):
             "depth_provenance_summary": {
                 "available": True,
                 "valid_pixel_count": 10,
-                "native_patchmatch_pixel_count": 6,
+                "native_patchmatch_pixel_count": 5,
                 "targeted_patchmatch_pixel_count": 1,
                 "cross_view_measured_pixel_count": 2,
                 "anchored_interpolation_pixel_count": 1,
+                "residual_patchmatch_pixel_count": 1,
                 "unclassified_valid_pixel_count": 0,
             },
             "missing_reason_summary": {
@@ -59,6 +60,7 @@ class SummarizeMvsDepthProvenanceTest(unittest.TestCase):
                 "targeted_patchmatch_pixel_count": 0,
                 "cross_view_measured_pixel_count": 0,
                 "anchored_interpolation_pixel_count": 0,
+                "residual_patchmatch_pixel_count": 0,
             }
             final = self._record(root)
             result = summarizer.summarize(
@@ -81,7 +83,7 @@ class SummarizeMvsDepthProvenanceTest(unittest.TestCase):
             ] = 1
             record["depth_provenance_summary"][
                 "native_patchmatch_pixel_count"
-            ] = 5
+            ] = 4
 
             result = summarizer.summarize(
                 {"frames": [record]}, root / "manifest.json"

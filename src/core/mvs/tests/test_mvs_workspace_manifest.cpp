@@ -958,6 +958,13 @@ TEST(MvsWorkspaceManifest, DepthConfigHashChangesWhenRelevantSettingsChange)
         changed.targetedGapRecoveryMaximumPriorDistancePixels += 1;
     });
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.enablePostConsistencyResidualReestimation =
+            !changed.enablePostConsistencyResidualReestimation;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.postConsistencyResidualMaximumLayerSpread += 0.001f;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
         changed.depthPoseRefinement.enabled = true;
     });
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {

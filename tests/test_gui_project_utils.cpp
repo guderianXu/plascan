@@ -8565,6 +8565,11 @@ TEST(DenseWorkflowConfigTest, MapsMultiHypothesisTargetedGapRecovery)
     json[QStringLiteral("enableTargetedGapSurfacePrior")] = false;
     json[QStringLiteral("targetedGapSurfacePriorMaximumAnchorSpread")] = 0.10;
     json[QStringLiteral("targetedGapSurfacePriorMaximumFitResidual")] = 0.02;
+    json[QStringLiteral("enablePostConsistencyResidualReestimation")] = true;
+    json[QStringLiteral("postConsistencyResidualSourceCount")] = 10;
+    json[QStringLiteral("postConsistencyResidualConfidence")] = 0.32;
+    json[QStringLiteral("postConsistencyResidualMaximumLayerSpread")] = 0.02;
+    json[QStringLiteral("postConsistencyResidualMaximumPriorRadius")] = 0.07;
 
     const auto settings = xjw::gui::project::denseGenerationSettingsFromJson(json);
     const auto config = xjw::gui::project::buildDepthGenConfig(settings, 16);
@@ -8576,6 +8581,11 @@ TEST(DenseWorkflowConfigTest, MapsMultiHypothesisTargetedGapRecovery)
     EXPECT_FALSE(config.enableTargetedGapSurfacePrior);
     EXPECT_FLOAT_EQ(config.targetedGapSurfacePriorMaximumAnchorSpread, 0.10f);
     EXPECT_FLOAT_EQ(config.targetedGapSurfacePriorMaximumFitResidual, 0.02f);
+    EXPECT_TRUE(config.enablePostConsistencyResidualReestimation);
+    EXPECT_EQ(config.postConsistencyResidualSourceCount, 10);
+    EXPECT_FLOAT_EQ(config.postConsistencyResidualConfidence, 0.32f);
+    EXPECT_FLOAT_EQ(config.postConsistencyResidualMaximumLayerSpread, 0.02f);
+    EXPECT_FLOAT_EQ(config.postConsistencyResidualMaximumPriorRadius, 0.07f);
 }
 
 TEST(DenseWorkflowConfigTest, DefaultCudaSchedulingKeepsGuiResponsive)

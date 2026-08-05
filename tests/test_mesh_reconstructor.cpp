@@ -590,6 +590,9 @@ TEST(DepthTsdfSurfaceBuilderTest,
     frame.depthProvenance.at<std::uint8_t>(1, 0) =
         static_cast<std::uint8_t>(
             xjw::mvs::DepthProvenance::CrossViewMeasured);
+    frame.depthProvenance.at<std::uint8_t>(1, 1) =
+        static_cast<std::uint8_t>(
+            xjw::mvs::DepthProvenance::ResidualPatchMatch);
 
     const auto interpolated =
         xjw::mesh::DepthTsdfSurfaceBuilder::sampleObservation(
@@ -639,12 +642,29 @@ TEST(DepthTsdfSurfaceBuilderTest,
             cv::Mat(),
             cv::Mat(),
             true);
+    const auto residual =
+        xjw::mesh::DepthTsdfSurfaceBuilder::sampleObservation(
+            frame,
+            frame.depthValidMask,
+            cv::Point2d(1.0, 1.0),
+            0.25f,
+            false,
+            0.02f,
+            0.0f,
+            true,
+            0.0f,
+            false,
+            0.02f,
+            cv::Mat(),
+            cv::Mat(),
+            true);
 
     EXPECT_FALSE(interpolated.valid);
     EXPECT_EQ(interpolated.failure,
               xjw::mesh::DepthTsdfObservationFailure::InterpolationPolicy);
     EXPECT_TRUE(targeted.valid);
     EXPECT_TRUE(cross_view.valid);
+    EXPECT_TRUE(residual.valid);
 }
 
 TEST(DepthTsdfSurfaceBuilderTest, QualityTriangulationReducesInteriorAmbiguityCracks)

@@ -555,6 +555,10 @@ QVector<SelectionPropertiesWidget::PropertyRow> SelectionPropertiesWidget::model
                             locale.toString(static_cast<qint64>(depthSnapshot.value(
                                 QStringLiteral("cross_view_measured_pixel_count"))
                                 .toDouble(0.0))) + tr(" 像素")});
+            rows.push_back({tr("一致性后局部 PatchMatch"),
+                            locale.toString(static_cast<qint64>(depthSnapshot.value(
+                                QStringLiteral("residual_patchmatch_pixel_count"))
+                                .toDouble(0.0))) + tr(" 像素")});
             rows.push_back({tr("锚定插值"),
                             locale.toString(static_cast<qint64>(depthSnapshot.value(
                                 QStringLiteral("anchored_interpolation_pixel_count"))

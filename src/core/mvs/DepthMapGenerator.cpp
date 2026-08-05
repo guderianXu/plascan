@@ -1376,6 +1376,29 @@ float sourceGeometryReliabilityWeight(const DepthFrameResult &reference_frame,
     return std::clamp(entry->sourceQualityScore, 0.05f, 1.0f);
 }
 
+int cameraBaselineSector(const Camera &reference_camera,
+                         const Camera &source_camera)
+{
+    const std::array<double, 3> reference_center =
+        reference_camera.cameraCenter();
+    const std::array<double, 3> source_center = source_camera.cameraCenter();
+    std::array<double, 3> delta{
+        source_center[0] - reference_center[0],
+        source_center[1] - reference_center[1],
+        source_center[2] - reference_center[2]};
+    int dominant_axis = 0;
+    for (int axis = 1; axis < 3; ++axis)
+    {
+        if (std::fabs(delta[static_cast<std::size_t>(axis)]) >
+            std::fabs(delta[static_cast<std::size_t>(dominant_axis)]))
+        {
+            dominant_axis = axis;
+        }
+    }
+    return dominant_axis * 2 +
+        (delta[static_cast<std::size_t>(dominant_axis)] >= 0.0 ? 1 : 0);
+}
+
 void accumulateDepthConsistency(const cv::Mat &referenceDepth,
                                 const Camera &referenceCamera,
                                 const cv::Mat &sourceDepth,
@@ -5667,6 +5690,341 @@ void DepthMapGenerator::crossCheckDepthConsistency()
     }
 }
 
+void DepthMapGenerator::recoverResidualDepthAfterConsistency()
+{
+    const int view_count = static_cast<int>(_views.size());
+    if (!_config.enablePostConsistencyResidualReestimation ||
+        _effectiveSceneProfile != MvsSceneProfile::OrbitalObject ||
+        view_count < 4 || static_cast<int>(_depthFrames.size()) != view_count)
+    {
+        return;
+    }
+    if (static_cast<int>(_grayCache.size()) != view_count)
+    {
+        LOG_WARN("[MVS][残余重估] 图像缓存不可用，跳过一致性后局部重估");
+        return;
+    }
+
+    std::vector<cv::Mat> frozen_depths(static_cast<std::size_t>(view_count));
+    for (int frame_index = 0; frame_index < view_count; ++frame_index)
+    {
+        if (_depthFrames[frame_index].eligibleAsConsistencySource() &&
+            _depthFrames[frame_index].depthMap &&
+            !_depthFrames[frame_index].depthMap->empty())
+        {
+            frozen_depths[static_cast<std::size_t>(frame_index)] =
+                _depthFrames[frame_index].depthMap->clone();
+        }
+    }
+
+    struct PendingResidualRecovery
+    {
+        cv::Mat depth;
+        cv::Mat confidence;
+        cv::Mat recoveredMask;
+        cv::Mat geometrySupportCount;
+        DepthResidualReestimationStats stats;
+    };
+    std::vector<PendingResidualRecovery> pending(
+        static_cast<std::size_t>(view_count));
+    const DepthResidualReestimationOptions base_options{
+        64,
+        0.001f,
+        4,
+        2,
+        2,
+        std::max(0.0f,
+                 _config.postConsistencyResidualMaximumLayerSpread),
+        std::clamp(_config.postConsistencyResidualMaximumPriorRadius,
+                   0.005f,
+                   0.25f),
+        std::clamp(_config.postConsistencyResidualConfidence, 0.0f, 1.0f)};
+
+    for (int frame_index = 0; frame_index < view_count; ++frame_index)
+    {
+        if (_cancelled.load())
+        {
+            return;
+        }
+        DepthFrameResult &frame = _depthFrames[frame_index];
+        PendingResidualRecovery &recovery =
+            pending[static_cast<std::size_t>(frame_index)];
+        if (!frame.eligibleForConsistencyCheck() || !frame.depthMap ||
+            frame.depthMap->empty() ||
+            _grayCache[static_cast<std::size_t>(frame_index)].empty())
+        {
+            recovery.stats.skippedReason = QStringLiteral("frame_unavailable");
+            continue;
+        }
+        const Camera reference_camera = frame.cameraModel.isValid()
+            ? frame.cameraModel
+            : mvsPinholeCamera(_views[frame_index].camera);
+        const std::vector<int> source_indices = orbitalHoleRepairSourceIndices(
+            _depthFrames,
+            consistencySourceIndicesForFrame(
+                _depthFrames, frame_index, view_count),
+            frame_index,
+            view_count,
+            _config.postConsistencyResidualSourceCount);
+        std::vector<cv::Mat> projected_sources;
+        std::vector<int> source_sector_ids;
+        std::vector<cv::Mat> source_images;
+        std::vector<Camera> source_cameras;
+        std::vector<cv::Mat> source_masks;
+        for (const int source_index : source_indices)
+        {
+            if (source_index < 0 || source_index >= view_count ||
+                frozen_depths[static_cast<std::size_t>(source_index)].empty() ||
+                _grayCache[static_cast<std::size_t>(source_index)].empty())
+            {
+                continue;
+            }
+            const Camera source_camera =
+                _depthFrames[source_index].cameraModel.isValid()
+                ? _depthFrames[source_index].cameraModel
+                : mvsPinholeCamera(_views[source_index].camera);
+            projected_sources.push_back(projectSourceDepthToReference(
+                frozen_depths[static_cast<std::size_t>(source_index)],
+                source_camera,
+                reference_camera,
+                frame.depthMap->size(),
+                0.8f));
+            source_sector_ids.push_back(cameraBaselineSector(
+                reference_camera, source_camera));
+            source_images.push_back(
+                _grayCache[static_cast<std::size_t>(source_index)]);
+            source_cameras.push_back(source_camera);
+            source_masks.push_back(
+                _depthFrames[source_index].supportRegionMask &&
+                    !_depthFrames[source_index].supportRegionMask->empty()
+                ? *_depthFrames[source_index].supportRegionMask
+                : cv::Mat(source_images.back().size(), CV_8UC1, cv::Scalar(255)));
+        }
+        cv::Mat support_mask = frame.supportRegionMask &&
+                !frame.supportRegionMask->empty()
+            ? *frame.supportRegionMask
+            : cv::Mat(frame.depthMap->size(), CV_8UC1, cv::Scalar(255));
+        const DepthResidualReestimationTarget target =
+            buildDepthResidualReestimationTarget(
+                *frame.depthMap,
+                support_mask,
+                projected_sources,
+                source_sector_ids,
+                base_options);
+        recovery.stats.supportPixelCount = target.supportPixelCount;
+        recovery.stats.requestedResidualPixelCount =
+            target.requestedResidualPixelCount;
+        recovery.stats.layerCoveredPixelCount = target.layerCoveredPixelCount;
+        recovery.stats.insufficientSourcePixelCount =
+            target.insufficientSourcePixelCount;
+        recovery.stats.insufficientSectorPixelCount =
+            target.insufficientSectorPixelCount;
+        recovery.stats.layerSpreadRejectedPixelCount =
+            target.layerSpreadRejectedPixelCount;
+        recovery.stats.sourceCount = static_cast<int>(source_images.size());
+        recovery.stats.skippedReason = target.skippedReason;
+        if (!target.valid || source_images.size() < 4)
+        {
+            if (recovery.stats.skippedReason.isEmpty())
+            {
+                recovery.stats.skippedReason =
+                    QStringLiteral("insufficient_patchmatch_sources");
+            }
+            continue;
+        }
+
+        std::vector<std::vector<int>> source_groups(2);
+        for (int source_ordinal = 0;
+             source_ordinal < static_cast<int>(source_images.size());
+             ++source_ordinal)
+        {
+            source_groups[static_cast<std::size_t>(source_ordinal % 2)]
+                .push_back(source_ordinal);
+        }
+        std::vector<cv::Mat> candidate_depths;
+        std::vector<cv::Mat> candidate_confidences;
+        recovery.stats.attemptedHypothesisCount = 2;
+        double minimum_hint = 0.0;
+        double maximum_hint = 0.0;
+        cv::minMaxLoc(
+            target.hintDepth,
+            &minimum_hint,
+            &maximum_hint,
+            nullptr,
+            nullptr,
+            target.residualMask);
+        const float z_near = std::max(
+            1.0e-4f, static_cast<float>(minimum_hint * 0.90));
+        const float z_far = std::max(
+            z_near * 1.01f, static_cast<float>(maximum_hint * 1.10));
+        for (const std::vector<int> &source_group : source_groups)
+        {
+            std::vector<cv::Mat> group_images;
+            std::vector<Camera> group_cameras;
+            std::vector<cv::Mat> group_masks;
+            for (const int source_ordinal : source_group)
+            {
+                group_images.push_back(
+                    source_images[static_cast<std::size_t>(source_ordinal)]);
+                group_cameras.push_back(
+                    source_cameras[static_cast<std::size_t>(source_ordinal)]);
+                group_masks.push_back(
+                    source_masks[static_cast<std::size_t>(source_ordinal)]);
+            }
+            PatchMatchConfig patch_match = _config.patchMatch;
+            patch_match.numIterations = std::clamp(
+                std::max(6, patch_match.numIterations / 2), 6, 10);
+            patch_match.patchHalf = std::max(3, patch_match.patchHalf - 1);
+            patch_match.confidenceThresh = std::min(
+                patch_match.confidenceThresh, 0.18f);
+            patch_match.minimumMaskedPatchSupportRatio = std::min(
+                patch_match.minimumMaskedPatchSupportRatio, 0.25f);
+            patch_match.geomConsistency = false;
+            patch_match.cancelFlag = &_cancelled;
+            cv::Mat candidate_depth;
+            cv::Mat candidate_confidence;
+            std::string error_message;
+            if (estimatePatchMatchWithAdaptiveCuda(
+                    "post-consistency residual PatchMatch",
+                    frame_index,
+                    _grayCache[static_cast<std::size_t>(frame_index)],
+                    group_images,
+                    reference_camera,
+                    group_cameras,
+                    z_near,
+                    z_far,
+                    patch_match,
+                    candidate_depth,
+                    &candidate_confidence,
+                    &error_message,
+                    &target.hintDepth,
+                    &target.hintRadius,
+                    &target.estimationMask,
+                    &group_masks))
+            {
+                candidate_depths.push_back(std::move(candidate_depth));
+                candidate_confidences.push_back(
+                    std::move(candidate_confidence));
+            }
+            else
+            {
+                LOG_WARN("[MVS][帧 %d][残余重估] PatchMatch 组失败: %s",
+                         frame_index,
+                         error_message.c_str());
+            }
+        }
+        recovery.stats.successfulHypothesisCount =
+            static_cast<int>(candidate_depths.size());
+        recovery.stats.failedHypothesisCount = 2 -
+            recovery.stats.successfulHypothesisCount;
+        if (candidate_depths.size() != 2)
+        {
+            recovery.stats.attempted = true;
+            recovery.stats.skippedReason =
+                QStringLiteral("incomplete_hypothesis_pair");
+            continue;
+        }
+        recovery.depth = frame.depthMap->clone();
+        recovery.confidence = frame.confidence && !frame.confidence->empty()
+            ? frame.confidence->clone()
+            : cv::Mat(frame.depthMap->size(), CV_32FC1, cv::Scalar(0.0f));
+        recovery.stats = mergeDepthResidualReestimationCandidates(
+            recovery.depth,
+            recovery.confidence,
+            candidate_depths,
+            candidate_confidences,
+            target,
+            projected_sources,
+            source_sector_ids,
+            &recovery.recoveredMask,
+            base_options);
+        recovery.stats.attemptedHypothesisCount = 2;
+        recovery.stats.successfulHypothesisCount = 2;
+        recovery.stats.sourceCount = static_cast<int>(source_images.size());
+        recovery.geometrySupportCount = target.layerSourceCount;
+        LOG_INFO("[MVS][帧 %d][残余重估] target=%d layer=%d candidate=%d "
+                 "consensus=%d recovered=%d",
+                 frame_index,
+                 recovery.stats.requestedResidualPixelCount,
+                 recovery.stats.layerCoveredPixelCount,
+                 recovery.stats.candidatePixelCount,
+                 recovery.stats.consensusCandidatePixelCount,
+                 recovery.stats.recoveredPixelCount);
+    }
+
+    if (_cancelled.load())
+    {
+        return;
+    }
+    for (int frame_index = 0; frame_index < view_count; ++frame_index)
+    {
+        DepthFrameResult &frame = _depthFrames[frame_index];
+        PendingResidualRecovery &recovery =
+            pending[static_cast<std::size_t>(frame_index)];
+        frame.residualReestimationDiagnostics =
+            depthResidualReestimationStatsToJson(recovery.stats);
+        if (recovery.stats.recoveredPixelCount <= 0 ||
+            recovery.depth.empty())
+        {
+            continue;
+        }
+        *frame.depthMap = std::move(recovery.depth);
+        if (!frame.confidence)
+        {
+            frame.confidence = QSharedPointer<cv::Mat>::create();
+        }
+        *frame.confidence = std::move(recovery.confidence);
+        frame.residualReestimatedMask = QSharedPointer<cv::Mat>::create(
+            std::move(recovery.recoveredMask));
+        if (!frame.depthProvenance || frame.depthProvenance->empty())
+        {
+            frame.depthProvenance = QSharedPointer<cv::Mat>::create(
+                initializeDepthProvenance(
+                    *frame.depthMap,
+                    frame.targetedGapRecoveredMask
+                        ? *frame.targetedGapRecoveredMask : cv::Mat()));
+        }
+        updateDepthProvenance(
+            *frame.depthProvenance,
+            *frame.depthMap,
+            frame.targetedGapRecoveredMask
+                ? *frame.targetedGapRecoveredMask : cv::Mat(),
+            frame.crossViewRepairedMask
+                ? *frame.crossViewRepairedMask : cv::Mat(),
+            cv::Mat(),
+            *frame.residualReestimatedMask);
+        if (frame.geometrySupportCount &&
+            frame.geometrySupportCount->size() ==
+                frame.residualReestimatedMask->size())
+        {
+            cv::Mat retained_support;
+            recovery.geometrySupportCount.convertTo(
+                retained_support, CV_16UC1, 1.0, 1.0);
+            cv::max(retained_support, 3, retained_support);
+            retained_support.copyTo(
+                *frame.geometrySupportCount,
+                *frame.residualReestimatedMask);
+        }
+        if (frame.inverseDepthMean &&
+            frame.inverseDepthMean->size() == frame.depthMap->size())
+        {
+            cv::Mat recovered_inverse_depth;
+            cv::divide(1.0f, *frame.depthMap, recovered_inverse_depth);
+            recovered_inverse_depth.copyTo(
+                *frame.inverseDepthMean,
+                *frame.residualReestimatedMask);
+        }
+        if (frame.inverseDepthRelativeSpread &&
+            frame.inverseDepthRelativeSpread->size() == frame.depthMap->size())
+        {
+            frame.inverseDepthRelativeSpread->setTo(
+                cv::Scalar(
+                    _config.postConsistencyResidualMaximumLayerSpread),
+                *frame.residualReestimatedMask);
+        }
+    }
+}
+
 bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
 {
     const int view_count = static_cast<int>(_views.size());
@@ -6087,6 +6445,229 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             restoration_mask);
         _depthFrames[frame_index].depthCompleteness.restoredFromPrefilterCount +=
             restored_count;
+        DepthResidualReestimationStats residual_stats;
+        cv::Mat residual_reestimated_mask;
+        if (_config.enablePostConsistencyResidualReestimation &&
+            _effectiveSceneProfile == MvsSceneProfile::OrbitalObject &&
+            static_cast<int>(_grayCache.size()) == view_count)
+        {
+            std::vector<cv::Mat> residual_projected_sources;
+            std::vector<int> residual_sector_ids;
+            std::vector<cv::Mat> residual_source_images;
+            std::vector<Camera> residual_source_cameras;
+            std::vector<cv::Mat> residual_source_masks;
+            for (int source_ordinal = 0;
+                 source_ordinal < static_cast<int>(projected_sources.size());
+                 ++source_ordinal)
+            {
+                const int source_index = repair_source_indices[
+                    static_cast<std::size_t>(source_ordinal)];
+                const cv::Mat &projected = projected_sources[
+                    static_cast<std::size_t>(source_ordinal)];
+                if (projected.empty() || source_index < 0 ||
+                    source_index >= view_count ||
+                    _grayCache[static_cast<std::size_t>(source_index)].empty())
+                {
+                    continue;
+                }
+                const Camera source_camera =
+                    _depthFrames[source_index].cameraModel.isValid()
+                    ? _depthFrames[source_index].cameraModel
+                    : mvsPinholeCamera(_views[source_index].camera);
+                residual_projected_sources.push_back(projected);
+                residual_sector_ids.push_back(cameraBaselineSector(
+                    reference_camera, source_camera));
+                residual_source_images.push_back(
+                    _grayCache[static_cast<std::size_t>(source_index)]);
+                residual_source_cameras.push_back(source_camera);
+                residual_source_masks.push_back(
+                    _depthFrames[source_index].supportRegionMask &&
+                        !_depthFrames[source_index].supportRegionMask->empty()
+                    ? *_depthFrames[source_index].supportRegionMask
+                    : cv::Mat(
+                          residual_source_images.back().size(),
+                          CV_8UC1,
+                          cv::Scalar(255)));
+            }
+            DepthResidualReestimationOptions residual_options;
+            residual_options.maximumLayerInverseDepthRelativeSpread =
+                std::max(
+                    0.0f,
+                    _config.postConsistencyResidualMaximumLayerSpread);
+            residual_options.maximumPriorRadiusRatio = std::clamp(
+                _config.postConsistencyResidualMaximumPriorRadius,
+                0.005f,
+                0.25f);
+            residual_options.minimumCandidateConfidence = std::clamp(
+                _config.postConsistencyResidualConfidence, 0.0f, 1.0f);
+            const DepthResidualReestimationTarget residual_target =
+                buildDepthResidualReestimationTarget(
+                    filtered_depth,
+                    repair_mask,
+                    residual_projected_sources,
+                    residual_sector_ids,
+                    residual_options);
+            residual_stats.supportPixelCount =
+                residual_target.supportPixelCount;
+            residual_stats.requestedResidualPixelCount =
+                residual_target.requestedResidualPixelCount;
+            residual_stats.layerCoveredPixelCount =
+                residual_target.layerCoveredPixelCount;
+            residual_stats.insufficientSourcePixelCount =
+                residual_target.insufficientSourcePixelCount;
+            residual_stats.insufficientSectorPixelCount =
+                residual_target.insufficientSectorPixelCount;
+            residual_stats.layerSpreadRejectedPixelCount =
+                residual_target.layerSpreadRejectedPixelCount;
+            residual_stats.sourceCount = static_cast<int>(
+                residual_source_images.size());
+            residual_stats.skippedReason = residual_target.skippedReason;
+            if (residual_target.valid && residual_source_images.size() >= 4)
+            {
+                std::vector<std::vector<int>> source_groups(2);
+                for (int source_ordinal = 0;
+                     source_ordinal <
+                         static_cast<int>(residual_source_images.size());
+                     ++source_ordinal)
+                {
+                    source_groups[static_cast<std::size_t>(
+                        source_ordinal % 2)].push_back(source_ordinal);
+                }
+                double minimum_hint = 0.0;
+                double maximum_hint = 0.0;
+                cv::minMaxLoc(
+                    residual_target.hintDepth,
+                    &minimum_hint,
+                    &maximum_hint,
+                    nullptr,
+                    nullptr,
+                    residual_target.residualMask);
+                const float z_near = std::max(
+                    1.0e-4f, static_cast<float>(minimum_hint * 0.90));
+                const float z_far = std::max(
+                    z_near * 1.01f,
+                    static_cast<float>(maximum_hint * 1.10));
+                std::vector<cv::Mat> candidate_depths;
+                std::vector<cv::Mat> candidate_confidences;
+                residual_stats.attemptedHypothesisCount = 2;
+                for (const std::vector<int> &source_group : source_groups)
+                {
+                    std::vector<cv::Mat> group_images;
+                    std::vector<Camera> group_cameras;
+                    std::vector<cv::Mat> group_masks;
+                    for (const int source_ordinal : source_group)
+                    {
+                        group_images.push_back(residual_source_images[
+                            static_cast<std::size_t>(source_ordinal)]);
+                        group_cameras.push_back(residual_source_cameras[
+                            static_cast<std::size_t>(source_ordinal)]);
+                        group_masks.push_back(residual_source_masks[
+                            static_cast<std::size_t>(source_ordinal)]);
+                    }
+                    PatchMatchConfig patch_match = _config.patchMatch;
+                    patch_match.numIterations = std::clamp(
+                        std::max(6, patch_match.numIterations / 2), 6, 10);
+                    patch_match.patchHalf = std::max(
+                        3, patch_match.patchHalf - 1);
+                    patch_match.confidenceThresh = std::min(
+                        patch_match.confidenceThresh, 0.18f);
+                    patch_match.minimumMaskedPatchSupportRatio = std::min(
+                        patch_match.minimumMaskedPatchSupportRatio, 0.25f);
+                    patch_match.geomConsistency = false;
+                    patch_match.cancelFlag = &_cancelled;
+                    cv::Mat candidate_depth;
+                    cv::Mat candidate_confidence;
+                    std::string residual_error;
+                    if (estimatePatchMatchWithAdaptiveCuda(
+                            "streaming post-consistency residual PatchMatch",
+                            frame_index,
+                            _grayCache[static_cast<std::size_t>(frame_index)],
+                            group_images,
+                            reference_camera,
+                            group_cameras,
+                            z_near,
+                            z_far,
+                            patch_match,
+                            candidate_depth,
+                            &candidate_confidence,
+                            &residual_error,
+                            &residual_target.hintDepth,
+                            &residual_target.hintRadius,
+                            &residual_target.estimationMask,
+                            &group_masks))
+                    {
+                        candidate_depths.push_back(
+                            std::move(candidate_depth));
+                        candidate_confidences.push_back(
+                            std::move(candidate_confidence));
+                    }
+                    else
+                    {
+                        LOG_WARN(
+                            "[MVS][帧 %d][流式残余重估] PatchMatch 组失败: %s",
+                            frame_index,
+                            residual_error.c_str());
+                    }
+                }
+                residual_stats.successfulHypothesisCount =
+                    static_cast<int>(candidate_depths.size());
+                residual_stats.failedHypothesisCount = 2 -
+                    residual_stats.successfulHypothesisCount;
+                if (candidate_depths.size() == 2)
+                {
+                    residual_stats =
+                        mergeDepthResidualReestimationCandidates(
+                            filtered_depth,
+                            filtered_confidence,
+                            candidate_depths,
+                            candidate_confidences,
+                            residual_target,
+                            residual_projected_sources,
+                            residual_sector_ids,
+                            &residual_reestimated_mask,
+                            residual_options);
+                    residual_stats.attemptedHypothesisCount = 2;
+                    residual_stats.successfulHypothesisCount = 2;
+                    residual_stats.sourceCount = static_cast<int>(
+                        residual_source_images.size());
+                    if (residual_stats.recoveredPixelCount > 0)
+                    {
+                        consistent_votes.setTo(
+                            cv::Scalar(2), residual_reestimated_mask);
+                        geometry_source_mask.setTo(
+                            cv::Scalar(3), residual_reestimated_mask);
+                        cv::Mat recovered_inverse_depth;
+                        cv::divide(
+                            1.0f, filtered_depth, recovered_inverse_depth);
+                        cv::Mat recovered_inverse_depth_sum =
+                            recovered_inverse_depth * 2.0f;
+                        recovered_inverse_depth_sum.copyTo(
+                            source_inverse_depth_sum,
+                            residual_reestimated_mask);
+                        cv::Mat recovered_inverse_depth_squared_sum =
+                            recovered_inverse_depth.mul(
+                                recovered_inverse_depth) * 2.0f;
+                        recovered_inverse_depth_squared_sum.copyTo(
+                            source_inverse_depth_squared_sum,
+                            residual_reestimated_mask);
+                    }
+                }
+                else
+                {
+                    residual_stats.attempted = true;
+                    residual_stats.skippedReason =
+                        QStringLiteral("incomplete_hypothesis_pair");
+                }
+            }
+            _depthFrames[frame_index].residualReestimationDiagnostics =
+                depthResidualReestimationStatsToJson(residual_stats);
+            if (!residual_reestimated_mask.empty())
+            {
+                _depthFrames[frame_index].residualReestimatedMask =
+                    QSharedPointer<cv::Mat>::create(
+                        residual_reestimated_mask);
+            }
+        }
         if (!filtered_confidence.empty())
         {
             filtered_confidence.setTo(0.0f, filtered_depth <= 0.0f);
@@ -6121,7 +6702,8 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 ? *_depthFrames[frame_index].targetedGapRecoveredMask
                 : cv::Mat(),
             *_depthFrames[frame_index].crossViewRepairedMask,
-            anchored_interpolation_mask);
+            anchored_interpolation_mask,
+            residual_reestimated_mask);
         const float consistency_keep_rate = valid_before > 0
             ? static_cast<float>(valid_after) / static_cast<float>(valid_before)
             : 0.0f;
@@ -6205,7 +6787,8 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 ? *_depthFrames[frame_index].targetedGapRecoveredMask
                 : cv::Mat(),
             *_depthFrames[frame_index].crossViewRepairedMask,
-            final_interpolation_mask);
+            final_interpolation_mask,
+            residual_reestimated_mask);
         _depthFrames[frame_index].crossViewRepairDiagnostics.insert(
             QStringLiteral("postprocess_anchored_interpolation"),
             depthAnchoredHoleInterpolationStatsToJson(final_repair));
@@ -6661,6 +7244,9 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
     const std::string targetedGapRecoveredMaskPath =
         raw_directory + "/depth_" + std::to_string(frameIndex) +
         "_targeted_gap_recovered_mask.png";
+    const std::string residualReestimatedMaskPath =
+        raw_directory + "/depth_" + std::to_string(frameIndex) +
+        "_residual_reestimated_mask.png";
     const std::string depthProvenancePath =
         raw_directory + "/depth_" + std::to_string(frameIndex) +
         "_provenance.png";
@@ -6949,6 +7535,27 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
                 targetedGapRecoveredMaskPath, recovered_mask);
         }
     }
+    bool residualReestimatedMaskSaved = false;
+    if (saveRawDepth && result.residualReestimatedMask &&
+        !result.residualReestimatedMask->empty())
+    {
+        cv::Mat recovered_mask = result.residualReestimatedMask->clone();
+        if (recovered_mask.size() == result.depthMap->size())
+        {
+            if (recovered_mask.type() != CV_8UC1)
+            {
+                recovered_mask.convertTo(recovered_mask, CV_8UC1);
+            }
+            cv::threshold(recovered_mask,
+                          recovered_mask,
+                          0.0,
+                          255.0,
+                          cv::THRESH_BINARY);
+            recovered_mask.setTo(cv::Scalar(0), *result.depthMap <= 0.0f);
+            residualReestimatedMaskSaved = xjw::common::io::writeImage(
+                residualReestimatedMaskPath, recovered_mask);
+        }
+    }
     bool depthProvenanceSaved = false;
     QJsonObject depthProvenanceSummaryJson;
     if (saveRawDepth)
@@ -6966,7 +7573,10 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             result.targetedGapRecoveredMask
                 ? *result.targetedGapRecoveredMask : cv::Mat(),
             result.crossViewRepairedMask
-                ? *result.crossViewRepairedMask : cv::Mat());
+                ? *result.crossViewRepairedMask : cv::Mat(),
+            cv::Mat(),
+            result.residualReestimatedMask
+                ? *result.residualReestimatedMask : cv::Mat());
         depthProvenanceSummaryJson = depthProvenanceSummaryToJson(
             summarizeDepthProvenance(provenance, *result.depthMap));
         depthProvenanceSaved = xjw::common::io::writeImage(
@@ -7367,6 +7977,11 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
                         ? QString::fromStdString(targetedGapRecoveredMaskPath)
                         : QString());
                 level_object.insert(
+                    QStringLiteral("residual_reestimated_mask_path"),
+                    residualReestimatedMaskSaved
+                        ? QString::fromStdString(residualReestimatedMaskPath)
+                        : QString());
+                level_object.insert(
                     QStringLiteral("depth_provenance_path"),
                     depthProvenanceSaved
                         ? QString::fromStdString(depthProvenancePath)
@@ -7434,6 +8049,10 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             targetedGapRecoveredMaskSaved
                 ? QString::fromStdString(targetedGapRecoveredMaskPath)
                 : QString();
+        artifact[QStringLiteral("residual_reestimated_mask_path")] =
+            residualReestimatedMaskSaved
+                ? QString::fromStdString(residualReestimatedMaskPath)
+                : QString();
         artifact[QStringLiteral("depth_provenance_path")] =
             depthProvenanceSaved
                 ? QString::fromStdString(depthProvenancePath)
@@ -7480,6 +8099,8 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             result.crossViewRepairDiagnostics;
         artifact[QStringLiteral("targeted_gap_recovery_diagnostics")] =
             result.targetedGapRecoveryDiagnostics;
+        artifact[QStringLiteral("residual_reestimation_diagnostics")] =
+            result.residualReestimationDiagnostics;
         artifact[QStringLiteral("depth_provenance_summary")] =
             depthProvenanceSummaryJson;
         artifact[QStringLiteral("geometry_evidence_diagnostics")] =
@@ -7565,6 +8186,8 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         record.crossViewRepairDiagnostics = result.crossViewRepairDiagnostics;
         record.targetedGapRecoveryDiagnostics =
             result.targetedGapRecoveryDiagnostics;
+        record.residualReestimationDiagnostics =
+            result.residualReestimationDiagnostics;
         record.depthProvenanceSummary = depthProvenanceSummaryJson;
         record.geometryEvidenceDiagnostics = geometryEvidenceDiagnostics;
         record.poseRefinementDiagnostics = result.poseRefinementDiagnostics;
@@ -7625,6 +8248,9 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             : QString();
         record.targetedGapRecoveredMaskPath = targetedGapRecoveredMaskSaved
             ? QString::fromStdString(targetedGapRecoveredMaskPath)
+            : QString();
+        record.residualReestimatedMaskPath = residualReestimatedMaskSaved
+            ? QString::fromStdString(residualReestimatedMaskPath)
             : QString();
         record.depthProvenancePath = depthProvenanceSaved
             ? QString::fromStdString(depthProvenancePath)
@@ -8344,6 +8970,11 @@ void DepthMapGenerator::runInBackground()
     {
         emit progressChanged(QStringLiteral("准备流式深度一致性检查..."),
                              static_cast<float>(NV) / (NV + 3));
+        if (_config.enablePostConsistencyResidualReestimation &&
+            _effectiveSceneProfile == MvsSceneProfile::OrbitalObject)
+        {
+            preloadImages();
+        }
         if (!crossCheckDepthConsistencyStreaming())
         {
             saveQueue.cancel();
@@ -8351,6 +8982,12 @@ void DepthMapGenerator::runInBackground()
             emit finished(false);
             return;
         }
+        _grayCache.clear();
+        _grayCache.shrink_to_fit();
+        _validRegionMasks.clear();
+        _validRegionMasks.shrink_to_fit();
+        _projectMaskLoaded.clear();
+        _projectMaskLoaded.shrink_to_fit();
     }
 
     // Experimental, default-off stage. It only emits derived camera candidates
@@ -8459,6 +9096,75 @@ void DepthMapGenerator::runInBackground()
                 saveQueue.stop();
                 emit finished(false);
                 return;
+            }
+        }
+
+        if (_config.enablePostConsistencyResidualReestimation &&
+            _effectiveSceneProfile == MvsSceneProfile::OrbitalObject)
+        {
+            emit progressChanged(
+                QStringLiteral("最终残余空洞局部重估..."),
+                static_cast<float>(NV + 1) / (NV + 3));
+            preloadImages();
+            recoverResidualDepthAfterConsistency();
+            _grayCache.clear();
+            _grayCache.shrink_to_fit();
+            _validRegionMasks.clear();
+            _validRegionMasks.shrink_to_fit();
+            _projectMaskLoaded.clear();
+            _projectMaskLoaded.shrink_to_fit();
+            if (_cancelled.load())
+            {
+                saveQueue.cancel();
+                saveQueue.stop();
+                emit finished(false);
+                return;
+            }
+        }
+
+        for (int i = 0; i < NV; ++i)
+        {
+            DepthFrameResult &res = _depthFrames[i];
+            if (res.success && res.depthMap &&
+                !res.depthMap->empty())
+            {
+                const int valid_after_recovery = cv::countNonZero(
+                    *res.depthMap > 0.0f);
+                res.depthPostprocess.validAfterPostprocess =
+                    valid_after_recovery;
+                res.validMask = QSharedPointer<cv::Mat>::create(
+                    *res.depthMap > 0.0f);
+                updateDepthCompletenessAfterPostprocess(
+                    res, *res.depthMap, res.depthPostprocess);
+                const int valid_before =
+                    res.depthPostprocess.validBeforePostprocess;
+                const float keep_rate = valid_before > 0
+                    ? static_cast<float>(valid_after_recovery) /
+                        static_cast<float>(valid_before)
+                    : 0.0f;
+                const cv::Mat empty_confidence;
+                const cv::Mat &confidence = res.confidence
+                    ? *res.confidence
+                    : empty_confidence;
+                const DepthFrameQualityDecision frozen_quality_decision =
+                    res.qualityDecision;
+                updateDepthFrameQualityAfterConsistency(
+                    res,
+                    *res.depthMap,
+                    confidence,
+                    _effectiveSceneProfile,
+                    _effectiveDepthFilterMode,
+                    keep_rate);
+                res.qualityDecision = frozen_quality_decision;
+                if (res.missingReasonMap && res.supportRegionMask)
+                {
+                    finalizeDepthMissingReasonMap(
+                        *res.missingReasonMap,
+                        *res.depthMap,
+                        *res.supportRegionMask,
+                        res.geometrySupportCount
+                            ? *res.geometrySupportCount : cv::Mat());
+                }
             }
             saveQueue.enqueue(i, res, QStringLiteral("过滤后"));
         }

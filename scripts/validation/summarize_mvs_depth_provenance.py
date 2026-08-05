@@ -15,6 +15,14 @@ PROVENANCE_KEYS = (
     "targeted_patchmatch_pixel_count",
     "cross_view_measured_pixel_count",
     "anchored_interpolation_pixel_count",
+    "residual_patchmatch_pixel_count",
+)
+
+MEASURED_PROVENANCE_KEYS = (
+    "native_patchmatch_pixel_count",
+    "targeted_patchmatch_pixel_count",
+    "cross_view_measured_pixel_count",
+    "residual_patchmatch_pixel_count",
 )
 
 
@@ -117,7 +125,7 @@ def summarize(document: dict[str, Any], input_path: Path) -> dict[str, Any]:
             )
 
     valid_count = totals["valid_pixel_count"]
-    measured_count = sum(totals[key] for key in PROVENANCE_KEYS[:3])
+    measured_count = sum(totals[key] for key in MEASURED_PROVENANCE_KEYS)
     support_count = totals["support_pixel_count"]
     return {
         "schema": "plascan.mvs.depth_provenance_validation.v1",

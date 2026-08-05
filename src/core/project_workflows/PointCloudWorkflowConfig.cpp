@@ -302,6 +302,18 @@ DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &setti
         1,
         settings.value(QStringLiteral(
             "targetedGapRecoveryMaximumPriorDistancePixels")).toInt(128));
+    parsed.enablePostConsistencyResidualReestimation = settings.value(
+        QStringLiteral("enablePostConsistencyResidualReestimation")).toBool(true);
+    parsed.postConsistencyResidualSourceCount = std::clamp(settings.value(
+        QStringLiteral("postConsistencyResidualSourceCount")).toInt(8), 4, 16);
+    parsed.postConsistencyResidualConfidence = static_cast<float>(settings.value(
+        QStringLiteral("postConsistencyResidualConfidence")).toDouble(0.30));
+    parsed.postConsistencyResidualMaximumLayerSpread = static_cast<float>(
+        settings.value(QStringLiteral(
+            "postConsistencyResidualMaximumLayerSpread")).toDouble(0.025));
+    parsed.postConsistencyResidualMaximumPriorRadius = static_cast<float>(
+        settings.value(QStringLiteral(
+            "postConsistencyResidualMaximumPriorRadius")).toDouble(0.08));
     parsed.enableTwoSourceCrossViewGrowth = settings.value(
         QStringLiteral("enableTwoSourceCrossViewGrowth")).toBool(false);
     parsed.twoSourceGrowthDistancePixels = settings.value(
@@ -391,6 +403,16 @@ xjw::mvs::DepthGenConfig buildDepthGenConfig(const DenseGenerationSettings &sett
         settings.targetedGapSurfacePriorMaximumFitResidual;
     config.targetedGapRecoveryMaximumPriorDistancePixels =
         settings.targetedGapRecoveryMaximumPriorDistancePixels;
+    config.enablePostConsistencyResidualReestimation =
+        settings.enablePostConsistencyResidualReestimation;
+    config.postConsistencyResidualSourceCount =
+        settings.postConsistencyResidualSourceCount;
+    config.postConsistencyResidualConfidence =
+        settings.postConsistencyResidualConfidence;
+    config.postConsistencyResidualMaximumLayerSpread =
+        settings.postConsistencyResidualMaximumLayerSpread;
+    config.postConsistencyResidualMaximumPriorRadius =
+        settings.postConsistencyResidualMaximumPriorRadius;
     config.enableTwoSourceCrossViewGrowth =
         settings.enableTwoSourceCrossViewGrowth;
     config.twoSourceGrowthDistancePixels =

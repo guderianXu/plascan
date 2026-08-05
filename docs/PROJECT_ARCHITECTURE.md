@@ -236,6 +236,7 @@ core/
 │   ├── DepthCompletenessMetrics.h/cpp # 蒙版内覆盖、小孔/大开口/边界缺失与逐阶段保留率
 │   ├── DepthMissingReason.h/cpp # 逐像素缺失原因码、分类汇总和透明诊断预览
 │   ├── DepthGapTargetedRecovery.h/cpp # 以邻近实测深度为先验的缺口定向二源 PatchMatch 与合并门控
+│   ├── DepthResidualReestimation.h/cpp # 一致性后冻结多视深度层引导的残余空洞局部实测恢复
 │   ├── DepthCrossViewHoleRepair.h/cpp # 一致性过滤后以三源逆深度簇保守补回环拍对象缺面
 │   ├── DepthProvenance.h/cpp # 最终有效深度的原生/定向/跨视测量/锚定插值来源编码与统计
 │   ├── DepthFrameQualityGate.h/cpp # 深度帧 Accepted/ValidationOnly/Rejected 质量门控

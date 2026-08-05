@@ -15,7 +15,8 @@ enum class DepthProvenance : std::uint8_t
     NativePatchMatch = 1,
     TargetedPatchMatch = 2,
     CrossViewMeasured = 3,
-    AnchoredInterpolation = 4
+    AnchoredInterpolation = 4,
+    ResidualPatchMatch = 5
 };
 
 struct DepthProvenanceSummary
@@ -26,6 +27,7 @@ struct DepthProvenanceSummary
     int targetedPatchMatchPixelCount = 0;
     int crossViewMeasuredPixelCount = 0;
     int anchoredInterpolationPixelCount = 0;
+    int residualPatchMatchPixelCount = 0;
     int unclassifiedValidPixelCount = 0;
 };
 
@@ -38,7 +40,8 @@ void updateDepthProvenance(
     const cv::Mat &depth,
     const cv::Mat &targetedPatchMatchMask = cv::Mat(),
     const cv::Mat &crossViewMeasuredMask = cv::Mat(),
-    const cv::Mat &anchoredInterpolationMask = cv::Mat());
+    const cv::Mat &anchoredInterpolationMask = cv::Mat(),
+    const cv::Mat &residualPatchMatchMask = cv::Mat());
 
 DepthProvenanceSummary summarizeDepthProvenance(
     const cv::Mat &provenance,

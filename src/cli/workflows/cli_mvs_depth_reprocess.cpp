@@ -564,6 +564,8 @@ int main(int argc, char **argv)
          config.targetedGapRecoveryHypothesisCount},
         {QStringLiteral("targeted_gap_surface_prior"),
          config.enableTargetedGapSurfacePrior},
+        {QStringLiteral("post_consistency_residual_reestimation"),
+         config.enablePostConsistencyResidualReestimation},
         {QStringLiteral("depth_artifact_count"), artifacts.size()},
         {QStringLiteral("depth_artifacts"), artifacts},
         {QStringLiteral("error"), generatorError}

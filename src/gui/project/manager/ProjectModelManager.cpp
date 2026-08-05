@@ -289,6 +289,7 @@ QJsonObject depthGenerationSnapshot(const QJsonObject &metadata,
     qint64 targeted_patchmatch_pixel_count = 0;
     qint64 cross_view_measured_pixel_count = 0;
     qint64 anchored_interpolation_pixel_count = 0;
+    qint64 residual_patchmatch_pixel_count = 0;
     qint64 unclassified_valid_pixel_count = 0;
     bool has_depth_provenance = false;
     QJsonObject missing_reason_counts;
@@ -370,6 +371,9 @@ QJsonObject depthGenerationSnapshot(const QJsonObject &metadata,
             anchored_interpolation_pixel_count += static_cast<qint64>(
                 provenance_summary.value(QStringLiteral(
                     "anchored_interpolation_pixel_count")).toDouble(0.0));
+            residual_patchmatch_pixel_count += static_cast<qint64>(
+                provenance_summary.value(QStringLiteral(
+                    "residual_patchmatch_pixel_count")).toDouble(0.0));
             unclassified_valid_pixel_count += static_cast<qint64>(
                 provenance_summary.value(QStringLiteral(
                     "unclassified_valid_pixel_count")).toDouble(0.0));
@@ -383,6 +387,7 @@ QJsonObject depthGenerationSnapshot(const QJsonObject &metadata,
                  QStringLiteral("missing_reason_path"),
                  QStringLiteral("missing_reason_preview_path"),
                  QStringLiteral("targeted_gap_recovered_mask_path"),
+                 QStringLiteral("residual_reestimated_mask_path"),
                  QStringLiteral("depth_provenance_path")})
         {
             const QFileInfo artifact_info(record.value(path_key).toString());
@@ -418,7 +423,7 @@ QJsonObject depthGenerationSnapshot(const QJsonObject &metadata,
     }
     if (has_depth_provenance)
     {
-        snapshot[QStringLiteral("depth_provenance_schema_version")] = 1;
+        snapshot[QStringLiteral("depth_provenance_schema_version")] = 2;
         snapshot[QStringLiteral("native_patchmatch_pixel_count")] =
             static_cast<double>(native_patchmatch_pixel_count);
         snapshot[QStringLiteral("targeted_patchmatch_pixel_count")] =
@@ -427,6 +432,8 @@ QJsonObject depthGenerationSnapshot(const QJsonObject &metadata,
             static_cast<double>(cross_view_measured_pixel_count);
         snapshot[QStringLiteral("anchored_interpolation_pixel_count")] =
             static_cast<double>(anchored_interpolation_pixel_count);
+        snapshot[QStringLiteral("residual_patchmatch_pixel_count")] =
+            static_cast<double>(residual_patchmatch_pixel_count);
         snapshot[QStringLiteral("unclassified_valid_pixel_count")] =
             static_cast<double>(unclassified_valid_pixel_count);
     }

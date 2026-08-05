@@ -20,6 +20,7 @@ set(MVS_CXX_SOURCES
     DenseCloudQualityFilter.cpp
     DepthCompletenessMetrics.cpp
     DepthGapTargetedRecovery.cpp
+    DepthResidualReestimation.cpp
     DepthMissingReason.cpp
     DepthProvenance.cpp
     DepthConsistencyCache.cpp
@@ -65,6 +66,7 @@ set(MVS_HEADERS
     DenseCloudQualityFilter.h
     DepthCompletenessMetrics.h
     DepthGapTargetedRecovery.h
+    DepthResidualReestimation.h
     DepthMissingReason.h
     DepthProvenance.h
     DepthConsistencyCache.h
@@ -239,6 +241,7 @@ if(BUILD_TESTS)
 
         add_executable(test_mvs_depth_gap_targeted_recovery
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_depth_gap_targeted_recovery.cpp
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_depth_residual_reestimation.cpp
         )
         set_target_properties(test_mvs_depth_gap_targeted_recovery PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests

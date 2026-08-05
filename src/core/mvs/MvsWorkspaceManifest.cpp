@@ -98,6 +98,9 @@ QJsonObject MvsDepthFrameRecord::toJson() const
     object.insert(
         QStringLiteral("targeted_gap_recovery_diagnostics"),
         targetedGapRecoveryDiagnostics);
+    object.insert(
+        QStringLiteral("residual_reestimation_diagnostics"),
+        residualReestimationDiagnostics);
     object.insert(QStringLiteral("depth_provenance_summary"),
                   depthProvenanceSummary);
     object.insert(
@@ -148,6 +151,8 @@ QJsonObject MvsDepthFrameRecord::toJson() const
     object.insert(QStringLiteral("cross_view_repaired_mask_path"), crossViewRepairedMaskPath);
     object.insert(QStringLiteral("targeted_gap_recovered_mask_path"),
                   targetedGapRecoveredMaskPath);
+    object.insert(QStringLiteral("residual_reestimated_mask_path"),
+                  residualReestimatedMaskPath);
     object.insert(QStringLiteral("depth_provenance_path"),
                   depthProvenancePath);
     object.insert(QStringLiteral("valid_mask_path"), validMaskPath);
@@ -204,6 +209,8 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
         QStringLiteral("cross_view_repair_diagnostics")).toObject();
     record.targetedGapRecoveryDiagnostics = object.value(
         QStringLiteral("targeted_gap_recovery_diagnostics")).toObject();
+    record.residualReestimationDiagnostics = object.value(
+        QStringLiteral("residual_reestimation_diagnostics")).toObject();
     record.depthProvenanceSummary = object.value(
         QStringLiteral("depth_provenance_summary")).toObject();
     record.geometryEvidenceDiagnostics = object.value(
@@ -258,6 +265,8 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
         QStringLiteral("cross_view_repaired_mask_path")).toString();
     record.targetedGapRecoveredMaskPath = object.value(
         QStringLiteral("targeted_gap_recovered_mask_path")).toString();
+    record.residualReestimatedMaskPath = object.value(
+        QStringLiteral("residual_reestimated_mask_path")).toString();
     record.depthProvenancePath = object.value(
         QStringLiteral("depth_provenance_path")).toString();
     record.validMaskPath = object.value(QStringLiteral("valid_mask_path")).toString();
@@ -819,6 +828,18 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
     root.insert(
         QStringLiteral("targeted_gap_recovery_maximum_prior_distance_pixels"),
         config.targetedGapRecoveryMaximumPriorDistancePixels);
+    root.insert(QStringLiteral("post_consistency_residual_reestimation"),
+                config.enablePostConsistencyResidualReestimation);
+    root.insert(QStringLiteral("post_consistency_residual_source_count"),
+                config.postConsistencyResidualSourceCount);
+    root.insert(QStringLiteral("post_consistency_residual_confidence"),
+                config.postConsistencyResidualConfidence);
+    root.insert(QStringLiteral(
+                    "post_consistency_residual_maximum_layer_spread"),
+                config.postConsistencyResidualMaximumLayerSpread);
+    root.insert(QStringLiteral(
+                    "post_consistency_residual_maximum_prior_radius"),
+                config.postConsistencyResidualMaximumPriorRadius);
     root.insert(QStringLiteral("two_source_cross_view_growth"),
                 config.enableTwoSourceCrossViewGrowth);
     root.insert(QStringLiteral("two_source_growth_distance_pixels"),
