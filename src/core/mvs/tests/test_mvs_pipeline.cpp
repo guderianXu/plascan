@@ -2063,6 +2063,42 @@ TEST(MvsPipelineTest, FusionDepthPostprocessReportsConfidenceAndLocalOutliers)
     EXPECT_FLOAT_EQ(confidence.at<float>(3, 3), 0.0f);
 }
 
+TEST(MvsPipelineTest, FusionDepthPostprocessRetainsOnlyGeometrySupportedLowConfidence)
+{
+    cv::Mat depth(5, 5, CV_32F, cv::Scalar(10.0f));
+    cv::Mat confidence(5, 5, CV_32F, cv::Scalar(0.9f));
+    confidence.at<float>(1, 1) = 0.50f;
+    confidence.at<float>(2, 2) = 0.50f;
+    confidence.at<float>(3, 3) = 0.20f;
+
+    xjw::mvs::DepthPostProcessEvidence evidence;
+    evidence.geometrySupportCount = cv::Mat(5, 5, CV_16UC1, cv::Scalar(3));
+    evidence.inverseDepthRelativeSpread = cv::Mat(5, 5, CV_32FC1, cv::Scalar(0.001f));
+    evidence.adaptiveSupportWeight = cv::Mat(5, 5, CV_32FC1, cv::Scalar(0.60f));
+    evidence.adaptiveEffectiveViewCount = cv::Mat(5, 5, CV_32FC1, cv::Scalar(3.0f));
+    evidence.adaptiveConflictRatio = cv::Mat(5, 5, CV_32FC1, cv::Scalar(0.20f));
+    evidence.geometrySupportCount.at<std::uint16_t>(2, 2) = 2;
+
+    xjw::mvs::FusionConfig config;
+    config.confidenceThresh = 0.60f;
+    config.enableAdaptiveConfidenceFilter = false;
+    config.enableLocalDepthOutlierFilter = false;
+    config.enableSpeckleFilter = false;
+
+    const xjw::mvs::DepthPostProcessStats stats =
+        xjw::mvs::DepthMapGenerator::postprocessFusionDepthMap(
+            depth, confidence, config, 0, 4, nullptr, &evidence);
+
+    EXPECT_EQ(stats.lowConfidenceCandidateCount, 3);
+    EXPECT_EQ(stats.geometrySupportedLowConfidenceRetained, 1);
+    EXPECT_EQ(stats.confidenceRemoved, 2);
+    EXPECT_EQ(stats.validAfterConfidenceFilter, 23);
+    EXPECT_FLOAT_EQ(depth.at<float>(1, 1), 10.0f);
+    EXPECT_FLOAT_EQ(confidence.at<float>(1, 1), 0.50f);
+    EXPECT_FLOAT_EQ(depth.at<float>(2, 2), 0.0f);
+    EXPECT_FLOAT_EQ(depth.at<float>(3, 3), 0.0f);
+}
+
 TEST(MvsPipelineTest, DepthFrameReleasePreservesSourceSelectionDiagnostics)
 {
     xjw::mvs::DepthFrameResult result;

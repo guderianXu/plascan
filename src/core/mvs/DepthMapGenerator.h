@@ -272,7 +272,8 @@ public:
                                                            const FusionConfig &config,
                                                            int refIdx,
                                                            int viewCount,
-                                                           cv::Mat *missingReasonMap = nullptr);
+                                                           cv::Mat *missingReasonMap = nullptr,
+                                                           const DepthPostProcessEvidence *evidence = nullptr);
 
     /// CUDA PatchMatch 显存不足后的下一次重试配置
     static PatchMatchConfig nextCudaRetryPatchMatchConfig(const PatchMatchConfig &config,

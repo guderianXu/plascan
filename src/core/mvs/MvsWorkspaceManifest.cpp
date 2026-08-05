@@ -683,6 +683,20 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
                   config.fusion.adaptiveLowMeanConfidenceThreshold);
     fusion.insert(QStringLiteral("adaptive_strict_confidence"),
                   config.fusion.adaptiveStrictConfidenceThreshold);
+    fusion.insert(QStringLiteral("geometry_supported_low_confidence_retention"),
+                  config.fusion.enableGeometrySupportedLowConfidenceRetention);
+    fusion.insert(QStringLiteral("geometry_supported_minimum_confidence"),
+                  config.fusion.geometrySupportedMinimumConfidence);
+    fusion.insert(QStringLiteral("geometry_supported_minimum_observation_count"),
+                  config.fusion.geometrySupportedMinimumObservationCount);
+    fusion.insert(QStringLiteral("geometry_supported_maximum_inverse_depth_spread"),
+                  config.fusion.geometrySupportedMaximumInverseDepthSpread);
+    fusion.insert(QStringLiteral("geometry_supported_minimum_adaptive_support_weight"),
+                  config.fusion.geometrySupportedMinimumAdaptiveSupportWeight);
+    fusion.insert(QStringLiteral("geometry_supported_minimum_adaptive_effective_views"),
+                  config.fusion.geometrySupportedMinimumAdaptiveEffectiveViews);
+    fusion.insert(QStringLiteral("geometry_supported_maximum_adaptive_conflict_ratio"),
+                  config.fusion.geometrySupportedMaximumAdaptiveConflictRatio);
     fusion.insert(QStringLiteral("sigma_fusion"), config.fusion.doSigmaFusion);
     fusion.insert(QStringLiteral("sigma_multiplier"), config.fusion.sigmaMultiplier);
     fusion.insert(QStringLiteral("inpaint"), config.fusion.doInpaint);
@@ -698,7 +712,7 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
     fusion.insert(QStringLiteral("speckle_max_removal_ratio"), config.fusion.maxSpeckleRemovalRatio);
 
     QJsonObject root;
-    root.insert(QStringLiteral("schema"), QStringLiteral("plascan.mvs.depth.config.v3"));
+    root.insert(QStringLiteral("schema"), QStringLiteral("plascan.mvs.depth.config.v4"));
     root.insert(QStringLiteral("algorithm_revision"), kMvsDepthAlgorithmRevision);
     root.insert(QStringLiteral("view_count"), viewCount);
     root.insert(QStringLiteral("input_signature"),

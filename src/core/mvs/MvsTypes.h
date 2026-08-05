@@ -85,6 +85,13 @@ struct FusionConfig
     float adaptiveFullCoverageThreshold = 0.95f; ///< 有效覆盖率超过该值时检查低置信满幅风险
     float adaptiveLowMeanConfidenceThreshold = 0.65f; ///< 平均置信度低于该值视为可疑满幅深度
     float adaptiveStrictConfidenceThreshold = 0.65f; ///< 可疑满幅深度图使用的最低融合阈值
+    bool  enableGeometrySupportedLowConfidenceRetention = true; ///< 多视几何一致时保留低置信实测深度
+    float geometrySupportedMinimumConfidence = 0.35f; ///< 几何保留仍接受的最低原始置信度
+    int   geometrySupportedMinimumObservationCount = 3; ///< 至少参考帧加两个来源共同确认
+    float geometrySupportedMaximumInverseDepthSpread = 0.006f; ///< 几何保留允许的最大逆深度相对离散度
+    float geometrySupportedMinimumAdaptiveSupportWeight = 0.50f; ///< 连续几何支持权重下限
+    float geometrySupportedMinimumAdaptiveEffectiveViews = 2.0f; ///< 连续证据有效来源数下限
+    float geometrySupportedMaximumAdaptiveConflictRatio = 0.45f; ///< 连续证据冲突比例上限
     bool  doSigmaFusion      = true;   ///< 是否做 sigma 加权深度融合
     float sigmaMultiplier    = 2.0f;   ///< sigma 乘数放宽→少剔除内点
     bool  doInpaint          = true;   ///< 对小洞做 inpaint（填补）
@@ -100,12 +107,26 @@ struct FusionConfig
 };
 
 // =============================================================================
+// 融合前低置信保留所需的跨视几何证据
+// =============================================================================
+struct DepthPostProcessEvidence
+{
+    cv::Mat geometrySupportCount; ///< 参考帧与一致来源的观测总数 (CV_16U)
+    cv::Mat inverseDepthRelativeSpread; ///< 一致观测逆深度相对标准差 (CV_32F)
+    cv::Mat adaptiveSupportWeight; ///< 连续跨视支持权重 (CV_32F)，可为空
+    cv::Mat adaptiveEffectiveViewCount; ///< 连续证据有效来源数 (CV_32F)，可为空
+    cv::Mat adaptiveConflictRatio; ///< 连续证据冲突比例 (CV_32F)，可为空
+};
+
+// =============================================================================
 // 深度图后处理统计
 // =============================================================================
 struct DepthPostProcessStats
 {
     int validBeforePostprocess = 0;       ///< 后处理前有效深度像素数
     int validAfterConfidenceFilter = 0;   ///< 置信度过滤后有效深度像素数
+    int lowConfidenceCandidateCount = 0;  ///< 低于阈值、进入置信度判定的像素数
+    int geometrySupportedLowConfidenceRetained = 0; ///< 因强多视几何证据而保留的低置信实测像素数
     int confidenceRemoved = 0;            ///< 置信度过滤移除像素数
     int localDepthOutlierRemoved = 0;     ///< 局部深度离群过滤移除像素数
     int smallComponentRemoved = 0;        ///< 小连通域 speckle 过滤移除像素数

@@ -448,6 +448,10 @@ QJsonObject depthPostProcessStatsToJson(const DepthPostProcessStats &stats)
     QJsonObject object;
     object.insert(QStringLiteral("valid_before"), stats.validBeforePostprocess);
     object.insert(QStringLiteral("valid_after_confidence_filter"), stats.validAfterConfidenceFilter);
+    object.insert(QStringLiteral("low_confidence_candidate_count"),
+                  stats.lowConfidenceCandidateCount);
+    object.insert(QStringLiteral("geometry_supported_low_confidence_retained"),
+                  stats.geometrySupportedLowConfidenceRetained);
     object.insert(QStringLiteral("confidence_removed"), stats.confidenceRemoved);
     object.insert(QStringLiteral("local_depth_outlier_removed"), stats.localDepthOutlierRemoved);
     object.insert(QStringLiteral("small_component_removed"), stats.smallComponentRemoved);
@@ -457,6 +461,32 @@ QJsonObject depthPostProcessStatsToJson(const DepthPostProcessStats &stats)
     object.insert(QStringLiteral("valid_after"), stats.validAfterPostprocess);
     object.insert(QStringLiteral("effective_confidence_threshold"), stats.effectiveConfidenceThreshold);
     return object;
+}
+
+DepthPostProcessEvidence depthPostProcessEvidence(const DepthFrameResult &frame)
+{
+    DepthPostProcessEvidence evidence;
+    if (frame.geometrySupportCount)
+    {
+        evidence.geometrySupportCount = *frame.geometrySupportCount;
+    }
+    if (frame.inverseDepthRelativeSpread)
+    {
+        evidence.inverseDepthRelativeSpread = *frame.inverseDepthRelativeSpread;
+    }
+    if (frame.adaptiveGeometrySupportWeight)
+    {
+        evidence.adaptiveSupportWeight = *frame.adaptiveGeometrySupportWeight;
+    }
+    if (frame.adaptiveGeometryEffectiveViewCount)
+    {
+        evidence.adaptiveEffectiveViewCount = *frame.adaptiveGeometryEffectiveViewCount;
+    }
+    if (frame.adaptiveGeometryConflictRatio)
+    {
+        evidence.adaptiveConflictRatio = *frame.adaptiveGeometryConflictRatio;
+    }
+    return evidence;
 }
 
 double bytesToGiB(uint64_t bytes)
@@ -3825,7 +3855,8 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
                                                                     const FusionConfig &config,
                                                                     int refIdx,
                                                                     int viewCount,
-                                                                    cv::Mat *missingReasonMap)
+                                                                    cv::Mat *missingReasonMap,
+                                                                    const DepthPostProcessEvidence *evidence)
 {
     DepthPostProcessStats stats;
     if (depthMap.empty() || depthMap.type() != CV_32F)
@@ -3896,28 +3927,90 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
         if (confThresh > 0.0f)
         {
             cv::Mat beforeConfidence = depthMap.clone();
+            const bool hasGeometryEvidence = evidence &&
+                evidence->geometrySupportCount.type() == CV_16UC1 &&
+                evidence->geometrySupportCount.size() == depthMap.size() &&
+                evidence->inverseDepthRelativeSpread.type() == CV_32FC1 &&
+                evidence->inverseDepthRelativeSpread.size() == depthMap.size();
+            const bool hasAdaptiveGeometryEvidence = hasGeometryEvidence &&
+                evidence->adaptiveSupportWeight.type() == CV_32FC1 &&
+                evidence->adaptiveSupportWeight.size() == depthMap.size() &&
+                evidence->adaptiveEffectiveViewCount.type() == CV_32FC1 &&
+                evidence->adaptiveEffectiveViewCount.size() == depthMap.size() &&
+                evidence->adaptiveConflictRatio.type() == CV_32FC1 &&
+                evidence->adaptiveConflictRatio.size() == depthMap.size();
+            int lowConfidenceCandidateCount = 0;
+            int geometrySupportedRetainedCount = 0;
 #if defined(HAS_OPENMP)
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(static) reduction(+:lowConfidenceCandidateCount, geometrySupportedRetainedCount)
 #endif
             for (int v = 0; v < depthMap.rows; ++v)
             {
                 float *depthRow = depthMap.ptr<float>(v);
                 const float *confRow = confidenceMap.ptr<float>(v);
+                const std::uint16_t *geometrySupportRow = hasGeometryEvidence
+                    ? evidence->geometrySupportCount.ptr<std::uint16_t>(v) : nullptr;
+                const float *inverseDepthSpreadRow = hasGeometryEvidence
+                    ? evidence->inverseDepthRelativeSpread.ptr<float>(v) : nullptr;
+                const float *adaptiveSupportRow = hasAdaptiveGeometryEvidence
+                    ? evidence->adaptiveSupportWeight.ptr<float>(v) : nullptr;
+                const float *adaptiveEffectiveViewRow = hasAdaptiveGeometryEvidence
+                    ? evidence->adaptiveEffectiveViewCount.ptr<float>(v) : nullptr;
+                const float *adaptiveConflictRow = hasAdaptiveGeometryEvidence
+                    ? evidence->adaptiveConflictRatio.ptr<float>(v) : nullptr;
                 for (int u = 0; u < depthMap.cols; ++u)
                 {
                     if (depthRow[u] > 0.0f && confRow[u] < confThresh)
                     {
-                        depthRow[u] = 0.0f;
+                        ++lowConfidenceCandidateCount;
+                        bool retainForGeometry =
+                            config.enableGeometrySupportedLowConfidenceRetention &&
+                            confRow[u] >= config.geometrySupportedMinimumConfidence &&
+                            hasGeometryEvidence &&
+                            geometrySupportRow[u] >=
+                                config.geometrySupportedMinimumObservationCount &&
+                            std::isfinite(inverseDepthSpreadRow[u]) &&
+                            inverseDepthSpreadRow[u] >= 0.0f &&
+                            inverseDepthSpreadRow[u] <=
+                                config.geometrySupportedMaximumInverseDepthSpread;
+                        if (retainForGeometry && hasAdaptiveGeometryEvidence)
+                        {
+                            retainForGeometry =
+                                std::isfinite(adaptiveSupportRow[u]) &&
+                                adaptiveSupportRow[u] >=
+                                    config.geometrySupportedMinimumAdaptiveSupportWeight &&
+                                std::isfinite(adaptiveEffectiveViewRow[u]) &&
+                                adaptiveEffectiveViewRow[u] >=
+                                    config.geometrySupportedMinimumAdaptiveEffectiveViews &&
+                                std::isfinite(adaptiveConflictRow[u]) &&
+                                adaptiveConflictRow[u] <=
+                                    config.geometrySupportedMaximumAdaptiveConflictRatio;
+                        }
+                        if (retainForGeometry)
+                        {
+                            ++geometrySupportedRetainedCount;
+                        }
+                        else
+                        {
+                            depthRow[u] = 0.0f;
+                        }
                     }
                 }
             }
 
+            stats.lowConfidenceCandidateCount = lowConfidenceCandidateCount;
+            stats.geometrySupportedLowConfidenceRetained =
+                geometrySupportedRetainedCount;
+
             int validAfterConfidence = cv::countNonZero(depthMap > 0.0f);
-            LOG_DEBUG("[MVS][帧 %d][后处理] 置信度过滤 %d->%d threshold=%.4f",
+            LOG_DEBUG("[MVS][帧 %d][后处理] 置信度过滤 %d->%d threshold=%.4f "
+                      "candidates=%d geometry_retained=%d",
                       refIdx,
                       stats.validBeforePostprocess,
                       validAfterConfidence,
-                      confThresh);
+                      confThresh,
+                      lowConfidenceCandidateCount,
+                      geometrySupportedRetainedCount);
 
             if (!adaptiveConfidenceRaised &&
                 validAfterConfidence < stats.validBeforePostprocess / 20)
@@ -3984,11 +4077,12 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
         || stats.smallComponentRemoved > 0)
     {
         LOG_DEBUG("[MVS][帧 %d][后处理] before=%d after_confidence=%d confidence_removed=%d "
-                  "local_removed=%d speckle_removed=%d after=%d",
+                  "geometry_retained=%d local_removed=%d speckle_removed=%d after=%d",
                   refIdx,
                   stats.validBeforePostprocess,
                   stats.validAfterConfidenceFilter,
                   stats.confidenceRemoved,
+                  stats.geometrySupportedLowConfidenceRetained,
                   stats.localDepthOutlierRemoved,
                   stats.speckleRemoved,
                   stats.validAfterPostprocess);
@@ -4995,11 +5089,15 @@ FusionFrameInput DepthMapGenerator::buildFusionFrame(const DepthFrameResult &res
             static_cast<int>(res.sourceViewIndices.size()),
             _config.patchMatch.confidenceThresh,
             fusion_config.confidenceThresh).fusion;
+        const DepthPostProcessEvidence postprocess_evidence =
+            depthPostProcessEvidence(res);
         frame.depthPostprocess = postprocessFusionDepthMap(filteredDepth,
                                                            filteredConfidence,
                                                            fusion_config,
                                                            res.refViewIdx,
-                                                           static_cast<int>(_views.size()));
+                                                           static_cast<int>(_views.size()),
+                                                           nullptr,
+                                                           &postprocess_evidence);
     }
 
     frame.depthMap   = filteredDepth;
@@ -5970,6 +6068,27 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             static_cast<int>(source_indices.size()),
             _config.patchMatch.confidenceThresh,
             fusion_config.confidenceThresh).fusion;
+        const GeometryEvidenceMaps postprocess_input_geometry_evidence =
+            makeGeometryEvidenceMaps(
+                filtered_depth,
+                consistent_votes,
+                geometry_source_mask,
+                source_inverse_depth_sum,
+                source_inverse_depth_squared_sum);
+        const AdaptiveGeometryEvidenceMaps adaptive_evidence =
+            generate_adaptive_evidence
+            ? makeAdaptiveGeometryEvidenceMaps(
+                  reference->depth, adaptive_evidence_accumulator)
+            : AdaptiveGeometryEvidenceMaps{};
+        DepthPostProcessEvidence postprocess_evidence;
+        postprocess_evidence.geometrySupportCount =
+            postprocess_input_geometry_evidence.supportCount;
+        postprocess_evidence.inverseDepthRelativeSpread =
+            postprocess_input_geometry_evidence.inverseDepthRelativeSpread;
+        postprocess_evidence.adaptiveSupportWeight = adaptive_evidence.supportWeight;
+        postprocess_evidence.adaptiveEffectiveViewCount =
+            adaptive_evidence.effectiveViewCount;
+        postprocess_evidence.adaptiveConflictRatio = adaptive_evidence.conflictRatio;
         markDepthLossReason(*_depthFrames[frame_index].missingReasonMap,
                             reference->depth,
                             filtered_depth,
@@ -5980,7 +6099,8 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             fusion_config,
             frame_index,
             view_count,
-            _depthFrames[frame_index].missingReasonMap.data());
+            _depthFrames[frame_index].missingReasonMap.data(),
+            &postprocess_evidence);
         _depthFrames[frame_index].depthPostprocessApplied = true;
         cv::Mat final_interpolation_mask;
         const DepthAnchoredHoleInterpolationStats final_repair =
@@ -6034,11 +6154,6 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             repair_mask,
             geometry_evidence.supportCount,
             contradicted_votes);
-        const AdaptiveGeometryEvidenceMaps adaptive_evidence =
-            generate_adaptive_evidence
-            ? makeAdaptiveGeometryEvidenceMaps(
-                  reference->depth, adaptive_evidence_accumulator)
-            : AdaptiveGeometryEvidenceMaps{};
         const cv::Mat &geometry_support = geometry_evidence.supportCount;
 
         const QString original_path = storage_dir.filePath(
@@ -8188,12 +8303,15 @@ void DepthMapGenerator::runInBackground()
                     static_cast<int>(res.sourceViewIndices.size()),
                     _config.patchMatch.confidenceThresh,
                     fusion_config.confidenceThresh).fusion;
+                const DepthPostProcessEvidence postprocess_evidence =
+                    depthPostProcessEvidence(res);
                 res.depthPostprocess = postprocessFusionDepthMap(*res.depthMap,
                                                                   confidence,
                                                                   fusion_config,
                                                                   res.refViewIdx,
                                                                   static_cast<int>(_views.size()),
-                                                                  res.missingReasonMap.data());
+                                                                  res.missingReasonMap.data(),
+                                                                  &postprocess_evidence);
                 res.depthPostprocessApplied = true;
                 cv::Mat final_interpolation_mask;
                 const DepthAnchoredHoleInterpolationStats final_repair =

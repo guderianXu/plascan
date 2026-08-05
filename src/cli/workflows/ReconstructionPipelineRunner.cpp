@@ -845,6 +845,8 @@ QJsonObject depthPostprocessStatsToJson(const std::vector<xjw::mvs::FusionFrameI
 {
     qint64 validBefore = 0;
     qint64 validAfterConfidence = 0;
+    qint64 lowConfidenceCandidates = 0;
+    qint64 geometrySupportedLowConfidenceRetained = 0;
     qint64 confidenceRemoved = 0;
     qint64 localDepthOutlierRemoved = 0;
     qint64 speckleRemoved = 0;
@@ -858,6 +860,9 @@ QJsonObject depthPostprocessStatsToJson(const std::vector<xjw::mvs::FusionFrameI
         const xjw::mvs::DepthPostProcessStats &stats = frames[index].depthPostprocess;
         validBefore += stats.validBeforePostprocess;
         validAfterConfidence += stats.validAfterConfidenceFilter;
+        lowConfidenceCandidates += stats.lowConfidenceCandidateCount;
+        geometrySupportedLowConfidenceRetained +=
+            stats.geometrySupportedLowConfidenceRetained;
         confidenceRemoved += stats.confidenceRemoved;
         localDepthOutlierRemoved += stats.localDepthOutlierRemoved;
         speckleRemoved += stats.speckleRemoved;
@@ -869,6 +874,10 @@ QJsonObject depthPostprocessStatsToJson(const std::vector<xjw::mvs::FusionFrameI
             {QStringLiteral("index"), static_cast<int>(index)},
             {QStringLiteral("valid_before"), stats.validBeforePostprocess},
             {QStringLiteral("valid_after_confidence"), stats.validAfterConfidenceFilter},
+            {QStringLiteral("low_confidence_candidate_count"),
+             stats.lowConfidenceCandidateCount},
+            {QStringLiteral("geometry_supported_low_confidence_retained"),
+             stats.geometrySupportedLowConfidenceRetained},
             {QStringLiteral("confidence_removed"), stats.confidenceRemoved},
             {QStringLiteral("local_depth_outlier_removed"), stats.localDepthOutlierRemoved},
             {QStringLiteral("speckle_removed"), stats.speckleRemoved},
@@ -883,6 +892,10 @@ QJsonObject depthPostprocessStatsToJson(const std::vector<xjw::mvs::FusionFrameI
         {QStringLiteral("frames"), static_cast<int>(frames.size())},
         {QStringLiteral("valid_before"), static_cast<double>(validBefore)},
         {QStringLiteral("valid_after_confidence"), static_cast<double>(validAfterConfidence)},
+        {QStringLiteral("low_confidence_candidate_count"),
+         static_cast<double>(lowConfidenceCandidates)},
+        {QStringLiteral("geometry_supported_low_confidence_retained"),
+         static_cast<double>(geometrySupportedLowConfidenceRetained)},
         {QStringLiteral("confidence_removed"), static_cast<double>(confidenceRemoved)},
         {QStringLiteral("local_depth_outlier_removed"), static_cast<double>(localDepthOutlierRemoved)},
         {QStringLiteral("speckle_removed"), static_cast<double>(speckleRemoved)},
@@ -897,6 +910,8 @@ QJsonObject depthPostprocessStatsToJson(const std::vector<xjw::mvs::DepthPostPro
 {
     qint64 validBefore = 0;
     qint64 validAfterConfidence = 0;
+    qint64 lowConfidenceCandidates = 0;
+    qint64 geometrySupportedLowConfidenceRetained = 0;
     qint64 confidenceRemoved = 0;
     qint64 localDepthOutlierRemoved = 0;
     qint64 speckleRemoved = 0;
@@ -910,6 +925,9 @@ QJsonObject depthPostprocessStatsToJson(const std::vector<xjw::mvs::DepthPostPro
         const xjw::mvs::DepthPostProcessStats &stats = statsByFrame[index];
         validBefore += stats.validBeforePostprocess;
         validAfterConfidence += stats.validAfterConfidenceFilter;
+        lowConfidenceCandidates += stats.lowConfidenceCandidateCount;
+        geometrySupportedLowConfidenceRetained +=
+            stats.geometrySupportedLowConfidenceRetained;
         confidenceRemoved += stats.confidenceRemoved;
         localDepthOutlierRemoved += stats.localDepthOutlierRemoved;
         speckleRemoved += stats.speckleRemoved;
@@ -921,6 +939,10 @@ QJsonObject depthPostprocessStatsToJson(const std::vector<xjw::mvs::DepthPostPro
             {QStringLiteral("index"), static_cast<int>(index)},
             {QStringLiteral("valid_before"), stats.validBeforePostprocess},
             {QStringLiteral("valid_after_confidence"), stats.validAfterConfidenceFilter},
+            {QStringLiteral("low_confidence_candidate_count"),
+             stats.lowConfidenceCandidateCount},
+            {QStringLiteral("geometry_supported_low_confidence_retained"),
+             stats.geometrySupportedLowConfidenceRetained},
             {QStringLiteral("confidence_removed"), stats.confidenceRemoved},
             {QStringLiteral("local_depth_outlier_removed"), stats.localDepthOutlierRemoved},
             {QStringLiteral("speckle_removed"), stats.speckleRemoved},
@@ -935,6 +957,10 @@ QJsonObject depthPostprocessStatsToJson(const std::vector<xjw::mvs::DepthPostPro
         {QStringLiteral("frames"), static_cast<int>(statsByFrame.size())},
         {QStringLiteral("valid_before"), static_cast<double>(validBefore)},
         {QStringLiteral("valid_after_confidence"), static_cast<double>(validAfterConfidence)},
+        {QStringLiteral("low_confidence_candidate_count"),
+         static_cast<double>(lowConfidenceCandidates)},
+        {QStringLiteral("geometry_supported_low_confidence_retained"),
+         static_cast<double>(geometrySupportedLowConfidenceRetained)},
         {QStringLiteral("confidence_removed"), static_cast<double>(confidenceRemoved)},
         {QStringLiteral("local_depth_outlier_removed"), static_cast<double>(localDepthOutlierRemoved)},
         {QStringLiteral("speckle_removed"), static_cast<double>(speckleRemoved)},

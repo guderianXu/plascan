@@ -919,6 +919,13 @@ TEST(MvsWorkspaceManifest, DepthConfigHashChangesWhenRelevantSettingsChange)
         changed.fusion.adaptiveStrictConfidenceThreshold -= 0.01f;
     });
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.fusion.enableGeometrySupportedLowConfidenceRetention =
+            !changed.fusion.enableGeometrySupportedLowConfidenceRetention;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.fusion.geometrySupportedMaximumInverseDepthSpread += 0.001f;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
         changed.sceneProfile = xjw::mvs::MvsSceneProfile::AerialTerrain;
     });
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
