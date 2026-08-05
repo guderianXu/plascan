@@ -32,7 +32,7 @@ class BaCudaContractsTest(unittest.TestCase):
 
         self.assertIn("options->baOptions.backend = BABackend::Auto;", source)
         self.assertIn("options->baOptions.nativeCudaMaxPointStepNorm = 1.0;", source)
-        self.assertIn("options->baOptions.minCeresCudaObservations = 150000;", source)
+        self.assertIn("options->baOptions.minCeresCudaObservations = 300000;", source)
         self.assertIn("options->baOptions.minCeresCpuObservations = 50000;", source)
         self.assertIn("options->baOptions.enableBackendQualityGate = true;", source)
         self.assertIn("options->baOptions.allowBackendFallback = true;", source)
