@@ -6,6 +6,10 @@
 
 ### 新增
 
+- 严格禁用插值的 TSDF 模型可选输出 `acquisition_gap_report.json`：逐开放边保留主归因和缺失角点根因，
+  按 12 个方位角与上/中/下 3 个高程带汇总，并列出 16 位全局几何来源对应的逐帧参与量和可解释建议。
+  Dino 的 16,096 条开放边全部完成归因且 `unclassified=0`：9,645 条适合用现有影像定向局部重算，
+  188 条明确需要补拍，6,263 条应转向等值面提取/网格后端；报告开关不改变模型 SHA-256。
 - 模型分发升级为 `models-v1.1.0` 便携 ONNX：LightGlue 与 LoMa-R 均在目标机器由 C++ TensorRT
   Builder 首次构建并缓存 engine，最终用户不需要 Python；缓存按 TensorRT 完整版本和 GPU
   Compute Capability 隔离。

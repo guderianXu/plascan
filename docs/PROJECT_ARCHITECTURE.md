@@ -307,6 +307,7 @@ core/
 │   ├── BoundaryAwareVoxelSimplifier.h/cpp # 多视图剪影保护、内部开放边界可聚类的体素简化后备
 │   ├── MeshTopologyQuality.h/cpp # 开放边/非流形/连通分量/三角形长宽比质量门及保拓扑边翻转优化
 │   ├── MeshBoundaryAttribution.h/cpp # 最终开放边归因、阶段边界统计和原因着色调试 PLY
+│   ├── MeshAcquisitionGapReport.h/cpp # 开放边根因、12×3 表面方位、逐帧来源覆盖与补拍/重算建议 JSON
 │   ├── MeshIsotropicRemesher.h/cpp # 内部高长宽比区域的短边合并、长边拆分与拓扑/法向保护
 │   ├── IsoSurfaceTopology.h/cpp # 等值面共享边/共享面键、渐近判别和歧义统计
 │   ├── ConsistentIsoSurfaceExtractor.h/cpp # 项目自有共享顶点一致等值面实验提取器

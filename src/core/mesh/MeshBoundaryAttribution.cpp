@@ -95,9 +95,14 @@ MeshBoundaryAttributionStatistics attributeMeshBoundaryEdges(
     const std::vector<std::uint16_t> &minimumInverseDepthSpread,
     const std::vector<std::uint8_t> &supported,
     const MeshBoundaryAttributionOptions &options,
-    std::vector<MeshBoundaryAttributionReason> *vertexReasons)
+    std::vector<MeshBoundaryAttributionReason> *vertexReasons,
+    std::vector<MeshBoundaryEdgeAttribution> *edgeAttributions)
 {
     MeshBoundaryAttributionStatistics statistics;
+    if (edgeAttributions != nullptr)
+    {
+        edgeAttributions->clear();
+    }
     if (vertexReasons != nullptr)
     {
         vertexReasons->assign(
@@ -165,6 +170,38 @@ MeshBoundaryAttributionStatistics attributeMeshBoundaryEdges(
             }
         }
     };
+    const auto evidence_reason = [required_sources,
+                                  maximum_spread,
+                                  minimum_surface_ratio,
+                                  maximum_absolute_tsdf](
+                                     bool has_observation,
+                                     int source_count,
+                                     float spread,
+                                     float surface_ratio,
+                                     float absolute_tsdf)
+    {
+        if (!has_observation)
+        {
+            return MeshBoundaryAttributionReason::NoObservation;
+        }
+        if (source_count < required_sources)
+        {
+            return MeshBoundaryAttributionReason::InsufficientSource;
+        }
+        if (!std::isfinite(spread) || spread > maximum_spread)
+        {
+            return MeshBoundaryAttributionReason::DepthSpreadRejected;
+        }
+        if (surface_ratio < minimum_surface_ratio)
+        {
+            return MeshBoundaryAttributionReason::SurfaceWeightRejected;
+        }
+        if (absolute_tsdf > maximum_absolute_tsdf)
+        {
+            return MeshBoundaryAttributionReason::AbsoluteTsdfRejected;
+        }
+        return MeshBoundaryAttributionReason::SupportGateRejected;
+    };
     for (const auto &[key, face_count] : edge_counts)
     {
         if (face_count != 1)
@@ -184,9 +221,18 @@ MeshBoundaryAttributionStatistics attributeMeshBoundaryEdges(
         int supported_corner_count = 0;
         bool has_observation = false;
         int maximum_source_count = 0;
+        std::uint16_t nearby_source_mask = 0;
         float minimum_spread = std::numeric_limits<float>::infinity();
         float maximum_surface_ratio = 0.0f;
         float minimum_absolute_tsdf = std::numeric_limits<float>::infinity();
+        bool unsupported_has_observation = false;
+        int observed_unsupported_corner_count = 0;
+        int unsupported_maximum_source_count = 0;
+        std::uint16_t unsupported_source_mask = 0;
+        float unsupported_minimum_spread = std::numeric_limits<float>::infinity();
+        float unsupported_maximum_surface_ratio = 0.0f;
+        float unsupported_minimum_absolute_tsdf =
+            std::numeric_limits<float>::infinity();
         for (int dz = 0; dz <= 1; ++dz)
         {
             for (int dy = 0; dy <= 1; ++dy)
@@ -204,6 +250,8 @@ MeshBoundaryAttributionStatistics attributeMeshBoundaryEdges(
                         continue;
                     }
                     has_observation = true;
+                    nearby_source_mask = static_cast<std::uint16_t>(
+                        nearby_source_mask | geometrySourceMask[index]);
                     maximum_source_count = std::max(
                         maximum_source_count,
                         bitCount(geometrySourceMask[index]));
@@ -222,12 +270,38 @@ MeshBoundaryAttributionStatistics attributeMeshBoundaryEdges(
                     minimum_absolute_tsdf = std::min(
                         minimum_absolute_tsdf,
                         std::fabs(tsdf[index]));
+                    if (supported[index] == 0)
+                    {
+                        unsupported_has_observation = true;
+                        ++observed_unsupported_corner_count;
+                        unsupported_source_mask = static_cast<std::uint16_t>(
+                            unsupported_source_mask | geometrySourceMask[index]);
+                        unsupported_maximum_source_count = std::max(
+                            unsupported_maximum_source_count,
+                            bitCount(geometrySourceMask[index]));
+                        if (encoded_spread !=
+                            std::numeric_limits<std::uint16_t>::max())
+                        {
+                            unsupported_minimum_spread = std::min(
+                                unsupported_minimum_spread,
+                                static_cast<float>(encoded_spread) / 100000.0f);
+                        }
+                        unsupported_maximum_surface_ratio = std::max(
+                            unsupported_maximum_surface_ratio,
+                            surfaceObservationWeight[index] / weight[index]);
+                        unsupported_minimum_absolute_tsdf = std::min(
+                            unsupported_minimum_absolute_tsdf,
+                            std::fabs(tsdf[index]));
+                    }
                 }
             }
         }
 
+        MeshBoundaryAttributionReason reason =
+            MeshBoundaryAttributionReason::Unclassified;
         if (supported_corner_count == 8)
         {
+            reason = MeshBoundaryAttributionReason::ExtractionOrPostprocess;
             ++statistics.extractionOrPostprocessEdgeCount;
             assign_reason(
                 lhs,
@@ -236,6 +310,7 @@ MeshBoundaryAttributionStatistics attributeMeshBoundaryEdges(
         }
         else if (supported_corner_count > 0)
         {
+            reason = MeshBoundaryAttributionReason::SupportGateRejected;
             ++statistics.supportGateRejectedEdgeCount;
             assign_reason(
                 lhs,
@@ -244,6 +319,7 @@ MeshBoundaryAttributionStatistics attributeMeshBoundaryEdges(
         }
         else if (!has_observation)
         {
+            reason = MeshBoundaryAttributionReason::NoObservation;
             ++statistics.noObservationEdgeCount;
             assign_reason(
                 lhs,
@@ -252,6 +328,7 @@ MeshBoundaryAttributionStatistics attributeMeshBoundaryEdges(
         }
         else if (maximum_source_count < required_sources)
         {
+            reason = MeshBoundaryAttributionReason::InsufficientSource;
             ++statistics.insufficientSourceEdgeCount;
             assign_reason(
                 lhs,
@@ -261,6 +338,7 @@ MeshBoundaryAttributionStatistics attributeMeshBoundaryEdges(
         else if (!std::isfinite(minimum_spread) ||
                  minimum_spread > maximum_spread)
         {
+            reason = MeshBoundaryAttributionReason::DepthSpreadRejected;
             ++statistics.depthSpreadRejectedEdgeCount;
             assign_reason(
                 lhs,
@@ -269,6 +347,7 @@ MeshBoundaryAttributionStatistics attributeMeshBoundaryEdges(
         }
         else if (maximum_surface_ratio < minimum_surface_ratio)
         {
+            reason = MeshBoundaryAttributionReason::SurfaceWeightRejected;
             ++statistics.surfaceWeightRejectedEdgeCount;
             assign_reason(
                 lhs,
@@ -277,6 +356,7 @@ MeshBoundaryAttributionStatistics attributeMeshBoundaryEdges(
         }
         else if (minimum_absolute_tsdf > maximum_absolute_tsdf)
         {
+            reason = MeshBoundaryAttributionReason::AbsoluteTsdfRejected;
             ++statistics.absoluteTsdfRejectedEdgeCount;
             assign_reason(
                 lhs,
@@ -285,11 +365,58 @@ MeshBoundaryAttributionStatistics attributeMeshBoundaryEdges(
         }
         else
         {
+            reason = MeshBoundaryAttributionReason::SupportGateRejected;
             ++statistics.supportGateRejectedEdgeCount;
             assign_reason(
                 lhs,
                 rhs,
                 MeshBoundaryAttributionReason::SupportGateRejected);
+        }
+        if (edgeAttributions != nullptr)
+        {
+            const MeshVertex &first = mesh.vertices[lhs];
+            const MeshVertex &second = mesh.vertices[rhs];
+            const float dx = second.x - first.x;
+            const float dy = second.y - first.y;
+            const float dz = second.z - first.z;
+            MeshBoundaryEdgeAttribution edge;
+            edge.firstVertex = static_cast<int>(lhs);
+            edge.secondVertex = static_cast<int>(rhs);
+            edge.reason = reason;
+            const bool partial_support =
+                supported_corner_count > 0 && supported_corner_count < 8;
+            edge.evidenceReason = partial_support
+                ? evidence_reason(unsupported_has_observation,
+                                  unsupported_maximum_source_count,
+                                  unsupported_minimum_spread,
+                                  unsupported_maximum_surface_ratio,
+                                  unsupported_minimum_absolute_tsdf)
+                : reason;
+            edge.sourceMask = partial_support
+                ? unsupported_source_mask
+                : nearby_source_mask;
+            edge.supportedCornerCount = supported_corner_count;
+            edge.observedUnsupportedCornerCount =
+                observed_unsupported_corner_count;
+            edge.maximumSourceCount = partial_support
+                ? unsupported_maximum_source_count
+                : maximum_source_count;
+            edge.inverseDepthSpread = partial_support
+                ? unsupported_minimum_spread
+                : minimum_spread;
+            edge.surfaceWeightRatio = partial_support
+                ? unsupported_maximum_surface_ratio
+                : maximum_surface_ratio;
+            edge.absoluteTsdf = partial_support
+                ? unsupported_minimum_absolute_tsdf
+                : minimum_absolute_tsdf;
+            edge.midpoint = {midpoint.x, midpoint.y, midpoint.z};
+            edge.normal = {
+                first.nx + second.nx,
+                first.ny + second.ny,
+                first.nz + second.nz};
+            edge.length = std::sqrt(dx * dx + dy * dy + dz * dz);
+            edgeAttributions->push_back(edge);
         }
     }
     const std::uint64_t classified =

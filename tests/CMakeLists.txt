@@ -967,6 +967,7 @@ add_executable(test_mesh_reconstructor
     test_visibility_occupancy_well_composed_repair.cpp
     test_visibility_occupancy_surface_builder.cpp
     test_mesh_boundary_attribution.cpp
+    test_mesh_acquisition_gap_report.cpp
     test_consistent_isosurface_extractor.cpp
     test_mc33_isosurface_extractor.cpp
     test_mesh_face_orientation.cpp

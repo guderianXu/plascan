@@ -6593,6 +6593,7 @@ TEST(MeshWorkflowSettingsTest,
     EXPECT_FALSE(options.enableVisibilityOccupancyCompletion);
     EXPECT_FALSE(options.enableVisualHullSignedDistanceCompletion);
     EXPECT_FALSE(options.fillSmallBoundaryHoles);
+    EXPECT_FALSE(options.collectAcquisitionGapReport);
 }
 
 TEST(MeshWorkflowSettingsTest, DepthTsdfSupportThresholdIsConfigurable)
@@ -6652,6 +6653,7 @@ TEST(MeshWorkflowSettingsTest, DepthTsdfObservationEdgeGatesAreConfigurable)
         {QStringLiteral("tsdfCrossViewConsensusContourBandOnly"), true},
         {QStringLiteral("tsdfMaximumCrossViewConsensusInverseDepthSpread"), 0.025},
         {QStringLiteral("tsdfCollectZeroCrossingDiagnostics"), true},
+        {QStringLiteral("tsdfAcquisitionGapReport"), true},
         {QStringLiteral("tsdfMeasuredSupportConnectivity"), true},
         {QStringLiteral("tsdfMeasuredSupportMinimumObservationWeight"), 0.66},
         {QStringLiteral("tsdfMeasuredSupportMinimumSourceCount"), 3},
@@ -6726,6 +6728,7 @@ TEST(MeshWorkflowSettingsTest, DepthTsdfObservationEdgeGatesAreConfigurable)
     EXPECT_TRUE(options.crossViewConsensusContourBandOnly);
     EXPECT_FLOAT_EQ(options.maximumCrossViewConsensusInverseDepthSpread, 0.025f);
     EXPECT_TRUE(options.collectZeroCrossingDiagnostics);
+    EXPECT_TRUE(options.collectAcquisitionGapReport);
     EXPECT_TRUE(options.enableMeasuredSupportConnectivity);
     EXPECT_FLOAT_EQ(options.measuredSupportMinimumObservationWeight, 0.66f);
     EXPECT_EQ(options.measuredSupportMinimumSourceCount, 3);

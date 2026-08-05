@@ -49,6 +49,7 @@ TEST(MeshBoundaryAttributionTest, AssignsEveryBoundaryEdgeToExtraction)
     const std::vector<std::uint8_t> supported(8, 1);
 
     std::vector<xjw::mesh::MeshBoundaryAttributionReason> reasons;
+    std::vector<xjw::mesh::MeshBoundaryEdgeAttribution> edge_attributions;
     const auto statistics = xjw::mesh::attributeMeshBoundaryEdges(
         mesh,
         layout,
@@ -59,11 +60,22 @@ TEST(MeshBoundaryAttributionTest, AssignsEveryBoundaryEdgeToExtraction)
         spread,
         supported,
         {},
-        &reasons);
+        &reasons,
+        &edge_attributions);
 
     EXPECT_EQ(statistics.boundaryEdgeCount, 4U);
     EXPECT_EQ(statistics.extractionOrPostprocessEdgeCount, 4U);
     EXPECT_EQ(statistics.unclassifiedEdgeCount, 0U);
+    ASSERT_EQ(edge_attributions.size(), 4U);
+    for (const auto &edge : edge_attributions)
+    {
+        EXPECT_EQ(
+            edge.reason,
+            xjw::mesh::MeshBoundaryAttributionReason::ExtractionOrPostprocess);
+        EXPECT_EQ(edge.evidenceReason, edge.reason);
+        EXPECT_EQ(edge.sourceMask, 0x3);
+        EXPECT_GT(edge.length, 0.0f);
+    }
     ASSERT_EQ(reasons.size(), mesh.vertices.size());
     for (const auto reason : reasons)
     {

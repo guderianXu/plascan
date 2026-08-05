@@ -48,6 +48,7 @@ add_library(meshing STATIC
     OpenMeshSimplifier.cpp
     MeshTopologyQuality.cpp
     MeshBoundaryAttribution.cpp
+    MeshAcquisitionGapReport.cpp
     MeshIsotropicRemesher.cpp
     TextureMapper.cpp
     CameraTextureMapper.cpp

@@ -22,6 +22,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
+#include <QJsonDocument>
+#include <QSaveFile>
 #include <QTextStream>
 
 #include <opencv2/imgcodecs.hpp>
@@ -1186,6 +1188,8 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
         QStringLiteral("tsdfContourBandZeroCrossingSupport")).toBool(false);
     options.collectZeroCrossingDiagnostics = settings.value(
         QStringLiteral("tsdfCollectZeroCrossingDiagnostics")).toBool(false);
+    options.collectAcquisitionGapReport = settings.value(
+        QStringLiteral("tsdfAcquisitionGapReport")).toBool(false);
     options.enableMeasuredSupportConnectivity = settings.value(
         QStringLiteral("tsdfMeasuredSupportConnectivity")).toBool(false);
     options.measuredSupportMinimumObservationWeight = std::clamp(
@@ -3560,6 +3564,8 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
         result.payload[QStringLiteral(
             "configured_triangle_quality_isotropic_remeshing")] =
             options.enableTriangleQualityIsotropicRemeshing;
+        result.payload[QStringLiteral("configured_acquisition_gap_report")] =
+            options.collectAcquisitionGapReport;
         result.payload[QStringLiteral("requested_tsdf_resolution")] =
             requested_tsdf_resolution;
         result.payload[QStringLiteral("configured_tsdf_resolution")] =
@@ -5988,6 +5994,43 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 result.payload[QStringLiteral(
                     "boundary_attribution_debug_error")] =
                     QString::fromUtf8(debug_error);
+            }
+        }
+        if (result.ok && !tsdf.acquisitionGapReport.isEmpty())
+        {
+            const QString report_path = QDir(
+                QDir(output_root).filePath(QStringLiteral("products")))
+                .filePath(QStringLiteral("acquisition_gap_report.json"));
+            QSaveFile report_file(report_path);
+            if (report_file.open(QIODevice::WriteOnly))
+            {
+                report_file.write(QJsonDocument(tsdf.acquisitionGapReport)
+                                      .toJson(QJsonDocument::Indented));
+                if (report_file.commit())
+                {
+                    result.payload[QStringLiteral("acquisition_gap_report")] =
+                        report_path;
+                    result.payload[QStringLiteral(
+                        "acquisition_gap_recommended_next_action")] =
+                        tsdf.acquisitionGapReport.value(QStringLiteral(
+                            "recommended_next_action"));
+                    result.payload[QStringLiteral(
+                        "acquisition_gap_highest_risk_sectors")] =
+                        tsdf.acquisitionGapReport.value(QStringLiteral(
+                            "highest_risk_sectors"));
+                }
+                else
+                {
+                    result.payload[QStringLiteral(
+                        "acquisition_gap_report_error")] =
+                        report_file.errorString();
+                }
+            }
+            else
+            {
+                result.payload[QStringLiteral(
+                    "acquisition_gap_report_error")] =
+                    report_file.errorString();
             }
         }
         if (result.ok && request.progress)

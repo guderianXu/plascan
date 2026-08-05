@@ -13,6 +13,7 @@
 #include "DepthImplicitFieldRegularizer.h"
 #include "DepthTsdfCellSheetRecovery.h"
 #include "DepthVisibilityHistogram.h"
+#include "MeshAcquisitionGapReport.h"
 #include "MeshBoundaryAttribution.h"
 #include "MeshColorizer.h"
 #include "MeshFaceOrientation.h"
@@ -1886,6 +1887,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::validateAllocation(
         options.enableContourBandZeroCrossingSupport ||
         options.enableMeasuredSupportConnectivity ||
         options.collectZeroCrossingDiagnostics ||
+        options.collectAcquisitionGapReport ||
         options.enableCrossViewAnchoredSurfaceRecovery ||
         options.enableGlobalImplicitRegularization ||
         options.enableAdaptiveTgvRegularization)
@@ -4822,6 +4824,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             options.enableContourBandZeroCrossingSupport ||
             options.enableMeasuredSupportConnectivity ||
             options.collectZeroCrossingDiagnostics ||
+            options.collectAcquisitionGapReport ||
             options.enableCrossViewAnchoredSurfaceRecovery ||
             options.enableGlobalImplicitRegularization ||
             options.enableAdaptiveTgvRegularization ||
@@ -5288,6 +5291,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                             options.enableContourBandZeroCrossingSupport ||
                             options.enableMeasuredSupportConnectivity ||
                             options.collectZeroCrossingDiagnostics ||
+                            options.collectAcquisitionGapReport ||
                             options.enableCrossViewAnchoredSurfaceRecovery ||
                             options.enableGlobalImplicitRegularization ||
                             options.enableAdaptiveTgvRegularization ||
@@ -7316,7 +7320,8 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             "TSDF consistent and MC33 iso-surface extractors cannot both be enabled");
         return result;
     }
-    if (options.collectZeroCrossingDiagnostics)
+    if (options.collectZeroCrossingDiagnostics ||
+        options.collectAcquisitionGapReport)
     {
         const DepthTsdfZeroCrossingStatistics zero_crossings = analyzeZeroCrossings(
             result.layout, tsdf, weight, supported);
@@ -9328,6 +9333,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         attribution_options.maximumAbsoluteTsdf =
             options.maximumContourBandAbsoluteTsdf;
         std::vector<MeshBoundaryAttributionReason> vertex_reasons;
+        std::vector<MeshBoundaryEdgeAttribution> edge_attributions;
         const MeshBoundaryAttributionStatistics attribution =
             attributeMeshBoundaryEdges(
                 result.mesh,
@@ -9339,7 +9345,8 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 minimumInverseDepthSpread,
                 supported,
                 attribution_options,
-                &vertex_reasons);
+                &vertex_reasons,
+                &edge_attributions);
         result.boundaryAttributionDebugMesh = result.mesh;
         applyMeshBoundaryAttributionColors(
             &result.boundaryAttributionDebugMesh,
@@ -9363,6 +9370,26 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             attribution.extractionOrPostprocessEdgeCount;
         result.statistics.boundaryAttributionUnclassifiedEdgeCount =
             attribution.unclassifiedEdgeCount;
+        if (options.collectAcquisitionGapReport)
+        {
+            QStringList frame_labels;
+            for (int index = 0; index < 16; ++index)
+            {
+                frame_labels.append(QString{});
+            }
+            for (const DepthTsdfFrame &frame : frames)
+            {
+                if (frame.refIndex >= 0 && frame.refIndex < 16)
+                {
+                    frame_labels[frame.refIndex] = frame.refImage;
+                }
+            }
+            result.acquisitionGapReport = buildMeshAcquisitionGapReport(
+                edge_attributions,
+                result.layout,
+                frame_labels,
+                frames.size());
+        }
     }
     result.statistics.topologyQualityStrictGatePassed =
         topology_quality.strictGatePassed;

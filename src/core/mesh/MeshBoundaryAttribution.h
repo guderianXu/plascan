@@ -5,6 +5,7 @@
 
 #include <QJsonObject>
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -45,6 +46,24 @@ enum class MeshBoundaryAttributionReason : std::uint8_t
     Unclassified
 };
 
+struct MeshBoundaryEdgeAttribution
+{
+    int firstVertex = -1;
+    int secondVertex = -1;
+    MeshBoundaryAttributionReason reason = MeshBoundaryAttributionReason::None;
+    MeshBoundaryAttributionReason evidenceReason = MeshBoundaryAttributionReason::None;
+    std::uint16_t sourceMask = 0;
+    int supportedCornerCount = 0;
+    int observedUnsupportedCornerCount = 0;
+    int maximumSourceCount = 0;
+    float inverseDepthSpread = 0.0f;
+    float surfaceWeightRatio = 0.0f;
+    float absoluteTsdf = 0.0f;
+    std::array<float, 3> midpoint{};
+    std::array<float, 3> normal{};
+    float length = 0.0f;
+};
+
 MeshBoundaryAttributionStatistics attributeMeshBoundaryEdges(
     const TriMesh &mesh,
     const DepthTsdfLayout &layout,
@@ -55,7 +74,8 @@ MeshBoundaryAttributionStatistics attributeMeshBoundaryEdges(
     const std::vector<std::uint16_t> &minimumInverseDepthSpread,
     const std::vector<std::uint8_t> &supported,
     const MeshBoundaryAttributionOptions &options = {},
-    std::vector<MeshBoundaryAttributionReason> *vertexReasons = nullptr);
+    std::vector<MeshBoundaryAttributionReason> *vertexReasons = nullptr,
+    std::vector<MeshBoundaryEdgeAttribution> *edgeAttributions = nullptr);
 
 void applyMeshBoundaryAttributionColors(
     TriMesh *mesh,

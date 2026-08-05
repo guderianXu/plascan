@@ -121,6 +121,7 @@ struct DepthTsdfOptions
     bool enableSurfacePatchSupport = false;
     bool enableContourBandZeroCrossingSupport = false;
     bool collectZeroCrossingDiagnostics = false;
+    bool collectAcquisitionGapReport = false;
     bool enableMeasuredSupportConnectivity = false;
     float measuredSupportMinimumObservationWeight = 0.60f;
     int measuredSupportMinimumSourceCount = 2;
@@ -1093,6 +1094,7 @@ struct DepthTsdfResult
     DepthTsdfStatistics statistics;
     TriMesh mesh;
     TriMesh boundaryAttributionDebugMesh;
+    QJsonObject acquisitionGapReport;
     VisibilityOccupancyCarrierFieldGrid visibilityOccupancyCarrierField;
     VisibilityOccupancyCarrierFieldGrid depthImplicitField;
 };
