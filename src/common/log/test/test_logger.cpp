@@ -60,6 +60,31 @@ TEST_F(LoggerTerminalTest, InfoTerminalLevelKeepsDebugInSinkOnly)
     EXPECT_TRUE(terminal_output.empty());
 }
 
+TEST_F(LoggerTerminalTest, ThreadMinimumLevelSuppressesOnlyScopedLowPriorityEntries)
+{
+    std::vector<Logger::Entry> received;
+    const int sink_id = Logger::instance()->registerSink(
+        [&received](const Logger::Entry &entry)
+        {
+            received.push_back(entry);
+        });
+
+    Logger::instance()->setTerminalMinimumLevel(Logger::Error);
+    {
+        Logger::ScopedThreadMinimumLevel minimum_level(Logger::Warn);
+        Logger::instance()->info("scoped-info-marker");
+        Logger::instance()->warn("scoped-warning-marker");
+    }
+    Logger::instance()->info("restored-info-marker");
+    Logger::instance()->unregisterSink(sink_id);
+
+    ASSERT_EQ(received.size(), 2u);
+    EXPECT_EQ(received[0].level, Logger::Warn);
+    EXPECT_EQ(received[0].message, "scoped-warning-marker");
+    EXPECT_EQ(received[1].level, Logger::Info);
+    EXPECT_EQ(received[1].message, "restored-info-marker");
+}
+
 } // namespace
 
 int main(int argc, char **argv)

@@ -50,7 +50,7 @@ struct SfmAttemptExecutionResult
 {
     AerialTriangulationReconstructionResult result; ///< 数值结果和诊断，尚未保证已写盘。
     std::shared_ptr<xjw::SfmReconstruction> reconstruction; ///< 成功/部分成功模型。
-    PreparedTiePointGraph graph; ///< 本次实际消费的连接点图。
+    std::shared_ptr<const PreparedTiePointGraph> graph; ///< 本次实际消费的共享只读连接点图。
 };
 
 // 单次 SfM 尝试只消费 matchphototask 落盘的多视图连接点，不读取描述子，

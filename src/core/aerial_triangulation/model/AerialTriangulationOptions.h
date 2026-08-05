@@ -24,6 +24,8 @@
 namespace xjw::aerial_triangulation
 {
 
+struct PreparedTiePointGraph;
+
 // 面向 GUI/CLI 的“对齐照片”参数。连接点前端参数在 Workflow 中转换为
 // MatchPhotosOptions，不允许继续传入纯 SfM 重建管线。
 struct AerialTriangulationOptions
@@ -107,6 +109,7 @@ struct PreparedAerialTriangulationInput
     QString projectPath; ///< 工程路径，仅供标记/结果回写上下文。
     QString markerSetPath; ///< 完整标记系统 sidecar。
     QString tiePointPath; ///< matchphototask 生成的多视连接点 JSON。
+    std::shared_ptr<const PreparedTiePointGraph> preparedTiePointGraph; ///< 本次搜索共享的只读连接点图。
     QString outputDir; ///< 正式稀疏结果目录。
     QJsonObject projectMeta; ///< 解析相机内参和旧状态的只读快照。
 

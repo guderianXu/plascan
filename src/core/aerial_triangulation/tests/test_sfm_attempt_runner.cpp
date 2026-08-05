@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <array>
+#include <memory>
 #include <vector>
 
 namespace
@@ -284,6 +285,11 @@ TEST(SfmAttemptRunnerTest, RunsKnownPoseSfmFromPreparedTiePointGraph)
 
     const QString tiePointPath = QDir(tempDir.path()).filePath(QStringLiteral("latest_tie_points.json"));
     writeJson(tiePointPath, makeKnownPoseTiePoints(imageA, imageB, cameraA, cameraB));
+    auto preparedGraph = std::make_shared<xjw::aerial_triangulation::PreparedTiePointGraph>();
+    QString graphError;
+    ASSERT_TRUE(xjw::aerial_triangulation::SfmAttemptRunner::readTiePointGraph(
+        tiePointPath, {imageA, imageB}, preparedGraph.get(), &graphError))
+        << qPrintable(graphError);
 
     const QString markerPath = QDir(tempDir.path()).filePath(QStringLiteral("markers.json"));
     xjw::control_points::MarkerSet markerSet;
@@ -313,7 +319,8 @@ TEST(SfmAttemptRunnerTest, RunsKnownPoseSfmFromPreparedTiePointGraph)
     xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
     input.images = {imageA, imageB};
     input.cameraPaths = {cameraPathA, cameraPathB};
-    input.tiePointPath = tiePointPath;
+    input.tiePointPath = QDir(tempDir.path()).filePath(QStringLiteral("already_prepared.json"));
+    input.preparedTiePointGraph = preparedGraph;
     input.markerSetPath = markerPath;
     input.outputDir = tempDir.path();
     QStringList progressStages;
@@ -328,6 +335,7 @@ TEST(SfmAttemptRunnerTest, RunsKnownPoseSfmFromPreparedTiePointGraph)
 
     ASSERT_TRUE(result.result.success) << qPrintable(result.result.errorMessage);
     ASSERT_NE(result.reconstruction, nullptr);
+    EXPECT_EQ(result.graph, preparedGraph);
     EXPECT_EQ(result.result.numRegisteredImages, 2);
     EXPECT_GE(result.result.numPoints3D, 20);
     EXPECT_EQ(result.result.sfmDiagnostics.value(QStringLiteral("marker_prior_tracks_loaded")).toInt(), 1);

@@ -496,7 +496,8 @@ QJsonObject candidateToJson(const AdaptiveFocalCandidate &candidate,
 AerialTriangulationPipeline::AerialTriangulationPipeline(
     AttemptRunner attemptRunner,
     ResultWriter resultWriter)
-    : _attemptRunner(attemptRunner ? std::move(attemptRunner)
+    : _usesProductionAttemptRunner(!attemptRunner),
+      _attemptRunner(attemptRunner ? std::move(attemptRunner)
                                    : AttemptRunner([](const PreparedAerialTriangulationInput &input)
                                      {
                                          return SfmAttemptRunner().run(input);
@@ -546,6 +547,26 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
         : 0;
 
     attemptInput.threads = resolveSfmThreadBudget(input.threads);
+    if (_usesProductionAttemptRunner)
+    {
+        if (originalProgress)
+        {
+            originalProgress(QStringLiteral("一次性读取并索引连接点图..."), 0);
+        }
+        auto sharedGraph = std::make_shared<PreparedTiePointGraph>();
+        QString graphError;
+        if (!SfmAttemptRunner::readTiePointGraph(
+                input.tiePointPath, input.images, sharedGraph.get(), &graphError))
+        {
+            AerialTriangulationReconstructionResult failed;
+            failed.success = false;
+            failed.errorMessage = graphError;
+            failed.summary = graphError;
+            failed.durationSeconds = timer.elapsed() / 1000.0;
+            return failed;
+        }
+        attemptInput.preparedTiePointGraph = std::move(sharedGraph);
+    }
     // 焦距粗搜索只比较固定内参下的几何结果。若把 BA 内参拟合混入候选，
     // 同一焦距尺度会因局部极值而产生不可比较的注册结果。
     if (needsFocalInitializationSearch)
@@ -665,7 +686,7 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
                         break;
                     }
 
-                    PreparedAerialTriangulationInput coarseInput = input;
+                    PreparedAerialTriangulationInput coarseInput = attemptInput;
                     coarseInput.estimatedFocalScale =
                         coarseScales[static_cast<std::size_t>(scaleIndex)];
                     coarseInput.adaptiveCameraModelFitting = false;
@@ -739,11 +760,12 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
                     ? accumulatedProgress / coarseCount
                     : 100;
                 originalProgress(
-                    QStringLiteral("无相机先验焦距粗搜索：已完成 %1/%2，运行中 %3/%4，候选内部最高 %5%")
+                    QStringLiteral("无相机先验焦距粗搜索：已完成 %1/%2，运行中 %3/%4，CPU线程预算 %5，候选内部最高 %6%")
                         .arg(completedCoarseCount.load())
                         .arg(coarseCount)
                         .arg(runningCount)
                         .arg(workerBudget.workerCount)
+                        .arg(workerBudget.totalThreads())
                         .arg(highestCandidatePercent),
                     5 + aggregatePercent * 75 / 100);
             }
@@ -788,6 +810,7 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
         if (focalProbeLimit > 0)
         {
             PreparedAerialTriangulationInput fullInput = input;
+            fullInput.preparedTiePointGraph = attemptInput.preparedTiePointGraph;
             fullInput.estimatedFocalScale = selectedFocalScale;
             fullInput.threads = resolveSfmThreadBudget(input.threads);
             fullInput.coarseFocalEvaluation = false;
@@ -819,6 +842,7 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
         else if (input.adaptiveCameraModelFitting)
         {
             PreparedAerialTriangulationInput refinementInput = input;
+            refinementInput.preparedTiePointGraph = attemptInput.preparedTiePointGraph;
             refinementInput.estimatedFocalScale = selectedFocalScale;
             refinementInput.progressFn = [originalProgress](const QString &stage, int percent)
             {

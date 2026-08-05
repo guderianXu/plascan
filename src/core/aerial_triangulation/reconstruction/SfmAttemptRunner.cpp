@@ -19,6 +19,7 @@
 #include "search/SfmSearchPolicy.h"
 
 #include "io/PathIO.h"
+#include "log/Logger.h"
 #include "ProjectCameraIO.h"
 #include "project/ProjectCommonUtils.h"
 #include "project/ProjectMetadata.h"
@@ -40,6 +41,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <utility>
 
@@ -297,15 +299,39 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
     const PreparedAerialTriangulationInput &input) const
 {
     SfmAttemptExecutionResult execution;
-    // 阶段 1：把持久化多视轨迹转换为 SfM 需要的每影像关键点和 pairwise matches。
-    if (!readTiePointGraph(input.tiePointPath,
-                           input.images,
-                           &execution.graph,
-                           &execution.result.errorMessage))
+    std::optional<Logger::ScopedThreadMinimumLevel> coarseLogFilter;
+    if (input.coarseFocalEvaluation)
     {
+        // 粗焦距候选会并行产生大量逐相机 INFO 日志。同步文件 sink 每行都会
+        // flush 并持有全局锁，因此这里只保留警告和错误；胜出后的正式重建仍输出完整日志。
+        coarseLogFilter.emplace(Logger::Warn);
+    }
+
+    // 阶段 1：把持久化多视轨迹转换为 SfM 需要的每影像关键点和 pairwise matches。
+    if (input.preparedTiePointGraph)
+    {
+        execution.graph = input.preparedTiePointGraph;
+    }
+    else
+    {
+        auto graph = std::make_shared<PreparedTiePointGraph>();
+        if (!readTiePointGraph(input.tiePointPath,
+                               input.images,
+                               graph.get(),
+                               &execution.result.errorMessage))
+        {
+            execution.result.summary = execution.result.errorMessage;
+            return execution;
+        }
+        execution.graph = std::move(graph);
+    }
+    if (!execution.graph)
+    {
+        execution.result.errorMessage = QStringLiteral("连接点图未准备");
         execution.result.summary = execution.result.errorMessage;
         return execution;
     }
+    const PreparedTiePointGraph &graph = *execution.graph;
 
     if (input.cancelFlag && input.cancelFlag->load())
     {
@@ -410,7 +436,7 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
         const QString &imagePath = input.images.at(index);
         imageIdByPath.insert(xjw::common::project::normalizePath(imagePath), imageId);
         const std::vector<FeatureKeypoint> keypoints =
-            execution.graph.keypointsByImage.value(imageId);
+            graph.keypointsByImage.value(imageId);
 
         if (hasCompleteCameraFiles)
         {
@@ -483,7 +509,7 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
     }
 
     // 阶段 5：连接点轨迹已展开为去重 pairwise 对应，交给 IncrementalSfm 建观测图。
-    for (const PreparedTiePointMatchPair &pair : execution.graph.matchPairs)
+    for (const PreparedTiePointMatchPair &pair : graph.matchPairs)
     {
         sfm.addMatches(pair.imageA, pair.imageB, pair.matches);
     }

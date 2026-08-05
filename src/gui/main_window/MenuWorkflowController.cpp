@@ -1331,8 +1331,9 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
     const bool resetCurrentAlignment =
         settings.value(QStringLiteral("reset_current_alignment")).toBool(true);
 
-    // 工作流程对话框不要求用户维护机器相关线程数；0 在核心层解析为本机逻辑核心数。
-    const int workflowThreads = settings.value(QStringLiteral("threads")).toInt(0);
+    // 线程数属于机器运行时能力，不能复用项目里由另一台电脑保存的历史固定值。
+    // 统一传 0，由核心层在每次启动时按当前机器逻辑线程数解析。
+    constexpr int workflowThreads = 0;
     xjw::aerial_triangulation::AerialTriangulationOptions workflowOptions;
     workflowOptions.images = images;
     workflowOptions.projectPath = projectPath;

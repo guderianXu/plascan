@@ -145,6 +145,11 @@ Logger::Level Logger::terminalMinimumLevel() const
 
 void Logger::log(Level level, std::string_view message)
 {
+    if (level < threadMinimumLevelStorage())
+    {
+        return;
+    }
+
     Entry entry;
     entry.level = level;
     entry.timestamp = currentTimestamp();

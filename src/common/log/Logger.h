@@ -35,6 +35,33 @@ public:
 
     using SinkCallback = std::function<void(const Entry &entry)>;
 
+    /**
+     * @brief Temporarily suppress low-priority log entries on the current thread.
+     *
+     * The filter is thread-local, so noisy parallel probe workers can avoid
+     * contending on the global file sink without hiding warnings from other tasks.
+     */
+    class ScopedThreadMinimumLevel
+    {
+    public:
+        explicit ScopedThreadMinimumLevel(Level level)
+            : _previous(threadMinimumLevelStorage())
+        {
+            threadMinimumLevelStorage() = level;
+        }
+
+        ~ScopedThreadMinimumLevel()
+        {
+            threadMinimumLevelStorage() = _previous;
+        }
+
+        ScopedThreadMinimumLevel(const ScopedThreadMinimumLevel &) = delete;
+        ScopedThreadMinimumLevel &operator=(const ScopedThreadMinimumLevel &) = delete;
+
+    private:
+        Level _previous;
+    };
+
     static Logger *instance();
 
     int registerSink(SinkCallback sink);
@@ -83,6 +110,12 @@ public:
 
 private:
     Logger();
+
+    static Level &threadMinimumLevelStorage()
+    {
+        static thread_local Level level = Debug;
+        return level;
+    }
 
     static std::string defaultLogDirectory();
     static std::string currentTimestamp();

@@ -49,6 +49,7 @@ public:
         const PreparedAerialTriangulationInput &input) const;
 
 private:
+    bool _usesProductionAttemptRunner = false; ///< 生产路径可在候选启动前共享连接点图。
     AttemptRunner _attemptRunner; ///< 单次候选执行器。
     ResultWriter _resultWriter; ///< 正式提交器。
 };
