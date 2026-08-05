@@ -37,6 +37,21 @@ class BaCudaContractsTest(unittest.TestCase):
         self.assertIn("options->baOptions.enableBackendQualityGate = true;", source)
         self.assertIn("options->baOptions.allowBackendFallback = true;", source)
 
+    def test_exif_focal_prior_does_not_release_radial_distortion(self):
+        source = read_text(
+            "src/core/aerial_triangulation/reconstruction/SfmAttemptRunner.cpp"
+        )
+
+        self.assertIn(
+            "options->baOptions.refineSharedRadialDistortion = false;", source
+        )
+        self.assertIn("EXIF-only", source)
+
+        pipeline = read_text(
+            "src/core/aerial_triangulation/workflow/AerialTriangulationPipeline.cpp"
+        )
+        self.assertIn("shouldRunAdaptiveCameraModelRefinement", pipeline)
+
     def test_bundle_adjust_service_records_requested_and_used_backend(self):
         source = read_text("src/gui/project/services/BundleAdjustService.cpp")
 

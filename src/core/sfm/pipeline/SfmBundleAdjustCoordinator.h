@@ -52,6 +52,13 @@ class SfmBundleAdjustCoordinator
                                           int iterationsSinceGlobalBa,
                                           int globalBaInterval);
 
+    /// 大型弱连接网的全局 BA 只使用三视图以上轨迹；两视图点留给局部稳姿和后续重三角化。
+    static bool shouldUseMultiViewOnlyGlobalBa(bool localOnly,
+                                               int activeCameraCount,
+                                               int totalTrackCount,
+                                               int twoViewTrackCount,
+                                               int multiViewTrackCount);
+
     /// 周期全局 BA 限制为两轮；最终精化保留用户配置轮数。
     static int iterativeGlobalBaRoundLimit(int configuredRounds,
                                            bool finalRefinement);

@@ -80,6 +80,20 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest, LimitsOnlyPeriodicGlobalBaRounds)
     EXPECT_EQ(SfmBundleAdjustCoordinator::iterativeGlobalBaRoundLimit(1, false), 1);
 }
 
+TEST(SfmBundleAdjustCoordinatorPolicyTest, UsesStrongTracksForLargeWeakGlobalNetwork)
+{
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(
+        false, 444, 100028, 79006, 21022));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(
+        true, 444, 100028, 79006, 21022));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(
+        false, 64, 100028, 79006, 21022));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(
+        false, 444, 10000, 6000, 4000));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(
+        false, 444, 10000, 9000, 1000));
+}
+
 // ─── 工具函数：构造合成场景用于测试 ────────────────────────────
 
 namespace {

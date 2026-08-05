@@ -533,6 +533,10 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
         attemptInput.focalPriorSource = metadataPrior.source;
         attemptInput.focalPriorSampleCount = metadataPrior.acceptedSamples;
     }
+    attemptInput.adaptiveCameraModelFitting = shouldRunAdaptiveCameraModelRefinement(
+        input.adaptiveCameraModelFitting,
+        hasProjectOrExternalPrior,
+        metadataPrior.valid);
 
     // 无完整相机先验且元数据也无法建立一致先验时，才从影像几何搜索初始焦距。
     // 焦距初始化与最终 BA 是否释放少量内参是两个独立职责。
