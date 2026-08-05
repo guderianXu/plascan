@@ -993,6 +993,7 @@ TEST(MvsSchedulerContractTest, SparseHintsUseProjectedSamplesAndPrescaledPatchMa
     const QString scheduler = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
     const QString pyramid = readSourceFile(QStringLiteral("src/core/mvs/DepthPyramidEstimator.cpp"));
     const QString cuda = readSourceFile(QStringLiteral("src/core/mvs/PatchMatchCUDA.cu"));
+    const QString cpu = readSourceFile(QStringLiteral("src/core/mvs/PatchMatchCPU.cpp"));
 
     expectContainsAll(scheduler, {
         "estimateDepthRangeFromVisiblePoints",
@@ -1077,10 +1078,14 @@ TEST(MvsSchedulerContractTest, SparseHintsUseProjectedSamplesAndPrescaledPatchMa
 
     expectContainsAll(cuda, {
         "hintDepth->cols == sW && hintDepth->rows == sH",
-        "hintDepth->cols == W && hintDepth->rows == H",
         "hintScaled = *hintDepth",
     });
-    const QString gpuBody = sectionBetween(cuda, "bool PatchMatchDepthEstimator::estimateGPU", "bool PatchMatchDepthEstimator::estimateCPU");
+    expectContainsAll(cpu, {
+        "hintDepth->cols == W && hintDepth->rows == H",
+    });
+    const QString gpuBody = sectionBetween(cuda,
+                                           "bool PatchMatchDepthEstimator::estimateGPU",
+                                           "bool PatchMatchDepthEstimator::isCudaAvailable");
     expectContainsAll(gpuBody, {
         "const int sW = std::max(1, refW / ds);",
         "const int sH = std::max(1, refH / ds);",
@@ -1094,7 +1099,8 @@ TEST(MvsSchedulerContractTest, PatchMatchRequiresRobustMultiViewPhotometricSuppo
 {
     const QString policy = readSourceFile(QStringLiteral("src/core/mvs/PatchMatchPhotometricCost.h"));
     const QString cuda = readSourceFile(QStringLiteral("src/core/mvs/PatchMatchCUDA.cu"));
-    const QString implementation = policy + cuda;
+    const QString cpu = readSourceFile(QStringLiteral("src/core/mvs/PatchMatchCPU.cpp"));
+    const QString implementation = policy + cuda + cpu;
 
     expectContainsAll(implementation, {
         "robustMultiSourceNcc",
