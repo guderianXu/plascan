@@ -87,6 +87,13 @@ constexpr quint64 kDefaultPreviewPlyVertices = 3'000'000;
 constexpr quint64 kMaxPreviewPlyVertices = 5'000'000;
 constexpr quint64 kPreviewMemoryReserveBytes = 2ull * 1024ull * 1024ull * 1024ull;
 constexpr quint64 kEstimatedPreviewBytesPerVertex = 128;
+constexpr int kCameraThumbnailWidth = 220;
+constexpr int kCameraThumbnailHeight = 160;
+constexpr int kSmallCameraAtlasSize = 2048;
+constexpr int kLargeCameraAtlasSize = 4096;
+constexpr int kSmallCameraAtlasCapacity =
+    (kSmallCameraAtlasSize / kCameraThumbnailWidth)
+    * (kSmallCameraAtlasSize / kCameraThumbnailHeight);
 
 using PlyPreviewProgressCallback = std::function<void(int, const QString &)>;
 
@@ -2146,7 +2153,7 @@ CameraSceneWidget::CameraPlaneImageResult CameraSceneWidget::loadCameraPlaneImag
 
     const QSize targetSize = mode == CameraImagePlaneMode::Image
         ? QSize(2048, 2048)
-        : QSize(220, 160);
+        : QSize(kCameraThumbnailWidth, kCameraThumbnailHeight);
     QSize source_size;
     QImage image = xjw::gui::views::loadImageForDisplay(
         imagePath, QString(), targetSize, &source_size);
@@ -2545,13 +2552,14 @@ void CameraSceneWidget::releaseResources()
     _imagePipeline.pipeline.reset();
     _imagePipeline.textureSize = QSize();
     _imagePipeline.uploadedImageKey.clear();
-    _thumbnailPipeline.resources.clear();
+    _thumbnailPipeline.atlasPages.clear();
     _thumbnailPipeline.solidResource.clear();
     _thumbnailPipeline.highlightedSolidResource.clear();
     _thumbnailPipeline.leaderBuffer.reset();
     _thumbnailPipeline.uniformBuffer.reset();
     _thumbnailPipeline.sampler.reset();
     _thumbnailPipeline.pipeline.reset();
+    _thumbnailPipeline.atlasSize = 0;
     _thumbnailPipeline.resourcesDirty = true;
     _rhiReady = false;
     _gpuDirty = true;
@@ -3631,6 +3639,69 @@ bool CameraSceneWidget::ensureSolidCameraBatchResource(
     return true;
 }
 
+bool CameraSceneWidget::ensureCameraThumbnailAtlasPage(
+    int page_index,
+    QRhiResourceUpdateBatch *updates)
+{
+    if (page_index < 0 || !updates || _thumbnailPipeline.atlasSize <= 0
+        || !_thumbnailPipeline.uniformBuffer || !_thumbnailPipeline.sampler)
+    {
+        return false;
+    }
+
+    if (_thumbnailPipeline.atlasPages.size() <= page_index)
+    {
+        _thumbnailPipeline.atlasPages.resize(page_index + 1);
+    }
+    if (_thumbnailPipeline.atlasPages.at(page_index))
+    {
+        return true;
+    }
+
+    const int columns = _thumbnailPipeline.atlasSize / kCameraThumbnailWidth;
+    const int rows = _thumbnailPipeline.atlasSize / kCameraThumbnailHeight;
+    const int vertex_capacity = qMax(6, columns * rows * 6);
+    auto page = QSharedPointer<RhiCameraThumbnailAtlasPage>::create();
+    page->vertexCapacity = vertex_capacity;
+    page->vertexBuffer.reset(rhi()->newBuffer(
+        QRhiBuffer::Dynamic,
+        QRhiBuffer::VertexBuffer,
+        vertex_capacity * 5 * int(sizeof(float))));
+    if (!page->vertexBuffer->create())
+    {
+        _renderError = QStringLiteral("Vulkan 相机纹理图集顶点缓冲创建失败。");
+        return false;
+    }
+
+    const QSize atlas_size(_thumbnailPipeline.atlasSize, _thumbnailPipeline.atlasSize);
+    page->texture.reset(rhi()->newTexture(QRhiTexture::RGBA8, atlas_size));
+    if (!page->texture->create())
+    {
+        _renderError = QStringLiteral("Vulkan 相机纹理图集创建失败：%1×%1。")
+            .arg(_thumbnailPipeline.atlasSize);
+        return false;
+    }
+
+    page->bindings.reset(rhi()->newShaderResourceBindings());
+    page->bindings->setBindings({
+        QRhiShaderResourceBinding::uniformBuffer(0,
+                                                  QRhiShaderResourceBinding::VertexStage,
+                                                  _thumbnailPipeline.uniformBuffer.data()),
+        QRhiShaderResourceBinding::sampledTexture(1,
+                                                  QRhiShaderResourceBinding::FragmentStage,
+                                                  page->texture.data(),
+                                                  _thumbnailPipeline.sampler.data())
+    });
+    if (!page->bindings->create())
+    {
+        _renderError = QStringLiteral("Vulkan 相机纹理图集 shader 资源创建失败。");
+        return false;
+    }
+
+    _thumbnailPipeline.atlasPages[page_index] = page;
+    return true;
+}
+
 bool CameraSceneWidget::ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *updates)
 {
     if (!_showCameras || !updates)
@@ -3644,11 +3715,12 @@ bool CameraSceneWidget::ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *u
         {
             _cameraThumbnailLoadCompleted = 0;
         }
-        _thumbnailPipeline.resources.clear();
+        _thumbnailPipeline.atlasPages.clear();
         _thumbnailPipeline.solidResource.clear();
         _thumbnailPipeline.highlightedSolidResource.clear();
         _thumbnailPipeline.leaderBuffer.reset();
         _thumbnailPipeline.pipeline.reset();
+        _thumbnailPipeline.atlasSize = 0;
         _thumbnailPipeline.resourcesDirty = false;
     }
 
@@ -3672,6 +3744,21 @@ bool CameraSceneWidget::ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *u
         if (!_thumbnailPipeline.sampler->create())
         {
             _renderError = QStringLiteral("Vulkan 相机缩略图采样器创建失败。");
+            return false;
+        }
+    }
+
+    if (_showCameraThumbnails && _thumbnailPipeline.atlasSize <= 0)
+    {
+        const int maximum_texture_size = rhi()->resourceLimit(QRhi::TextureSizeMax);
+        const int desired_atlas_size = _poses.size() <= kSmallCameraAtlasCapacity
+            ? kSmallCameraAtlasSize
+            : kLargeCameraAtlasSize;
+        _thumbnailPipeline.atlasSize = qMin(maximum_texture_size, desired_atlas_size);
+        if (_thumbnailPipeline.atlasSize < kCameraThumbnailWidth
+            || _thumbnailPipeline.atlasSize < kCameraThumbnailHeight)
+        {
+            _renderError = QStringLiteral("Vulkan 设备不支持相机缩略图纹理图集。");
             return false;
         }
     }
@@ -3706,80 +3793,63 @@ bool CameraSceneWidget::ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *u
     }
 
     QSet<QString> uploaded_thumbnail_keys;
+    const int atlas_columns = _thumbnailPipeline.atlasSize > 0
+        ? _thumbnailPipeline.atlasSize / kCameraThumbnailWidth
+        : 0;
+    const int atlas_rows = _thumbnailPipeline.atlasSize > 0
+        ? _thumbnailPipeline.atlasSize / kCameraThumbnailHeight
+        : 0;
+    const int atlas_slots_per_page = atlas_columns * atlas_rows;
     for (qsizetype pose_index = 0;
          _showCameraThumbnails && pose_index < _poses.size();
          ++pose_index)
     {
         const CameraPose &pose = _poses.at(pose_index);
         const CameraImagePlaneMode planeMode = CameraImagePlaneMode::Thumbnail;
-        QString planeKey = cameraPlaneImageKey(pose.imagePath, planeMode);
-        if (planeKey.isEmpty())
-        {
-            planeKey = QStringLiteral("solid|") + pose.name;
-        }
-        const QString resource_key = planeKey + QLatin1Char('#') + QString::number(pose_index);
-        if (_thumbnailPipeline.resources.contains(resource_key))
-        {
-            continue;
-        }
-
         if (pose.imagePath.isEmpty())
         {
             continue;
         }
+        const int page_index = static_cast<int>(pose_index) / atlas_slots_per_page;
+        const auto existing_page = page_index < _thumbnailPipeline.atlasPages.size()
+            ? _thumbnailPipeline.atlasPages.at(page_index)
+            : QSharedPointer<RhiCameraThumbnailAtlasPage>();
+        if (existing_page
+            && existing_page->uploadedPoseIndices.contains(static_cast<int>(pose_index)))
+        {
+            continue;
+        }
+
         requestCameraPlaneImage(pose.imagePath, planeMode);
         const QImage image = cachedCameraPlaneImage(pose.imagePath, planeMode);
         if (image.isNull())
         {
             continue;
         }
-
-        auto resource = QSharedPointer<RhiCameraThumbnailResource>::create();
-        resource->vertexBuffer.reset(rhi()->newBuffer(
-            QRhiBuffer::Dynamic,
-            QRhiBuffer::VertexBuffer,
-            6 * 5 * int(sizeof(float))));
-        if (!resource->vertexBuffer->create())
+        if (!ensureCameraThumbnailAtlasPage(page_index, updates))
         {
-            _renderError = QStringLiteral("Vulkan 相机缩略图顶点缓冲创建失败。");
             return false;
         }
 
-        resource->texture.reset(rhi()->newTexture(QRhiTexture::RGBA8, image.size()));
-        if (!resource->texture->create())
-        {
-            _renderError = QStringLiteral("Vulkan 相机缩略图纹理创建失败：%1").arg(pose.imagePath);
-            return false;
-        }
-        // 相机缩略图参与场景遮挡，统一上传为不透明纹理。
+        const auto page = _thumbnailPipeline.atlasPages.at(page_index);
+        const int slot_index = static_cast<int>(pose_index) % atlas_slots_per_page;
+        const QPoint destination(
+            (slot_index % atlas_columns) * kCameraThumbnailWidth,
+            (slot_index / atlas_columns) * kCameraThumbnailHeight);
         QImage upload_image = image.convertToFormat(QImage::Format_RGBX8888);
         if (rhi()->isYUpInNDC())
         {
             upload_image = upload_image.mirrored();
         }
-        updates->uploadTexture(resource->texture.data(), upload_image);
-
-        resource->bindings.reset(rhi()->newShaderResourceBindings());
-        resource->bindings->setBindings({
-            QRhiShaderResourceBinding::uniformBuffer(0,
-                                                      QRhiShaderResourceBinding::VertexStage,
-                                                      _thumbnailPipeline.uniformBuffer.data()),
-            QRhiShaderResourceBinding::sampledTexture(1,
-                                                      QRhiShaderResourceBinding::FragmentStage,
-                                                      resource->texture.data(),
-                                                      _thumbnailPipeline.sampler.data())
-        });
-        if (!resource->bindings->create())
-        {
-            _renderError = QStringLiteral("Vulkan 相机缩略图资源绑定创建失败。");
-            return false;
-        }
-        _thumbnailPipeline.resources.insert(resource_key, resource);
-        if (planeMode == CameraImagePlaneMode::Thumbnail)
-        {
-            uploaded_thumbnail_keys.insert(planeKey);
-            ++_cameraThumbnailLoadCompleted;
-        }
+        QRhiTextureSubresourceUploadDescription subresource(upload_image);
+        subresource.setDestinationTopLeft(destination);
+        updates->uploadTexture(
+            page->texture.data(),
+            QRhiTextureUploadDescription({QRhiTextureUploadEntry(0, 0, subresource)}));
+        page->uploadedPoseIndices.insert(static_cast<int>(pose_index));
+        page->imageSizes.insert(static_cast<int>(pose_index), upload_image.size());
+        uploaded_thumbnail_keys.insert(cameraPlaneImageKey(pose.imagePath, planeMode));
+        ++_cameraThumbnailLoadCompleted;
     }
     for (const QString &plane_key : uploaded_thumbnail_keys)
     {
@@ -3852,20 +3922,10 @@ void CameraSceneWidget::drawCameraThumbnails(QRhiCommandBuffer *cb,
         return;
     }
 
-    struct TexturedCameraDraw
-    {
-        QSharedPointer<RhiCameraThumbnailResource> resource;
-        std::array<float, 30> vertices{};
-    };
-
-    const bool draw_textured_cards = _showCameraThumbnails
-        && !_leftDragging
-        && !_middleDragging;
-    QVector<TexturedCameraDraw> textured_draws;
     QVector<float> solid_vertices;
     QVector<float> highlighted_vertices;
     QVector<float> leader_vertices;
-    textured_draws.reserve(_poses.size());
+    QVector<QVector<float>> atlas_vertices(_thumbnailPipeline.atlasPages.size());
     solid_vertices.reserve(_poses.size() * 6 * 5);
     highlighted_vertices.reserve(6 * 5);
     leader_vertices.reserve(_poses.size() * 2 * 6);
@@ -3879,8 +3939,16 @@ void CameraSceneWidget::drawCameraThumbnails(QRhiCommandBuffer *cb,
         }
     };
 
-    // 所有相机卡片和反向光轴共享同一套三维尺寸计算。拖动期间纹理卡片
-    // 自动降级为两个批次的纯色卡片，将数百次 draw call 压缩为 2 次。
+    const int atlas_columns = _thumbnailPipeline.atlasSize > 0
+        ? _thumbnailPipeline.atlasSize / kCameraThumbnailWidth
+        : 0;
+    const int atlas_rows = _thumbnailPipeline.atlasSize > 0
+        ? _thumbnailPipeline.atlasSize / kCameraThumbnailHeight
+        : 0;
+    const int atlas_slots_per_page = atlas_columns * atlas_rows;
+
+    // 所有相机卡片和反向光轴共享同一套三维尺寸计算。已加载照片按纹理
+    // 图集页合批，拖动期间也保持显示，不再降级为纯色卡片。
     const SceneMatrices matrices = sceneMatrices();
     for (qsizetype pose_index = 0; pose_index < _poses.size(); ++pose_index)
     {
@@ -3902,13 +3970,44 @@ void CameraSceneWidget::drawCameraThumbnails(QRhiCommandBuffer *cb,
         const QVector3D &p2 = corners.at(1);
         const QVector3D &p3 = corners.at(2);
         const QVector3D &p4 = corners.at(3);
+        int atlas_page_index = -1;
+        float u_min = 0.0f;
+        float u_max = 1.0f;
+        float v_min = 0.0f;
+        float v_max = 1.0f;
+        if (_showCameraThumbnails && atlas_slots_per_page > 0)
+        {
+            atlas_page_index = static_cast<int>(pose_index) / atlas_slots_per_page;
+            const auto page = atlas_page_index < _thumbnailPipeline.atlasPages.size()
+                ? _thumbnailPipeline.atlasPages.at(atlas_page_index)
+                : QSharedPointer<RhiCameraThumbnailAtlasPage>();
+            if (page
+                && page->uploadedPoseIndices.contains(static_cast<int>(pose_index)))
+            {
+                const int slot_index = static_cast<int>(pose_index) % atlas_slots_per_page;
+                const QSize image_size = page->imageSizes.value(static_cast<int>(pose_index));
+                const int atlas_x = (slot_index % atlas_columns) * kCameraThumbnailWidth;
+                const int atlas_y = (slot_index / atlas_columns) * kCameraThumbnailHeight;
+                const float atlas_size = static_cast<float>(_thumbnailPipeline.atlasSize);
+                u_min = (static_cast<float>(atlas_x) + 0.5f) / atlas_size;
+                u_max = (static_cast<float>(atlas_x + image_size.width()) - 0.5f)
+                    / atlas_size;
+                v_min = (static_cast<float>(atlas_y) + 0.5f) / atlas_size;
+                v_max = (static_cast<float>(atlas_y + image_size.height()) - 0.5f)
+                    / atlas_size;
+            }
+            else
+            {
+                atlas_page_index = -1;
+            }
+        }
         const std::array<float, 30> vertices = {
-            p1.x(), p1.y(), p1.z(), 1.0f, 0.0f,
-            p2.x(), p2.y(), p2.z(), 0.0f, 0.0f,
-            p3.x(), p3.y(), p3.z(), 0.0f, 1.0f,
-            p1.x(), p1.y(), p1.z(), 1.0f, 0.0f,
-            p3.x(), p3.y(), p3.z(), 0.0f, 1.0f,
-            p4.x(), p4.y(), p4.z(), 1.0f, 1.0f,
+            p1.x(), p1.y(), p1.z(), u_max, v_min,
+            p2.x(), p2.y(), p2.z(), u_min, v_min,
+            p3.x(), p3.y(), p3.z(), u_min, v_max,
+            p1.x(), p1.y(), p1.z(), u_max, v_min,
+            p3.x(), p3.y(), p3.z(), u_min, v_max,
+            p4.x(), p4.y(), p4.z(), u_max, v_max,
         };
 
         QVector3D leader_start;
@@ -3925,19 +4024,9 @@ void CameraSceneWidget::drawCameraThumbnails(QRhiCommandBuffer *cb,
             });
         }
 
-        QSharedPointer<RhiCameraThumbnailResource> texture_resource;
-        if (draw_textured_cards)
+        if (atlas_page_index >= 0)
         {
-            const QString plane_key = cameraPlaneImageKey(
-                pose.imagePath, CameraImagePlaneMode::Thumbnail);
-            const QString resource_key = plane_key + QLatin1Char('#')
-                + QString::number(pose_index);
-            texture_resource = _thumbnailPipeline.resources.value(resource_key);
-        }
-        if (texture_resource && texture_resource->vertexBuffer
-            && texture_resource->bindings)
-        {
-            textured_draws.push_back({texture_resource, vertices});
+            append_vertices(&atlas_vertices[atlas_page_index], vertices);
         }
         else if (isCameraHighlighted(pose))
         {
@@ -3971,9 +4060,7 @@ void CameraSceneWidget::drawCameraThumbnails(QRhiCommandBuffer *cb,
         &uniforms, sizeof(uniforms));
     cb->setGraphicsPipeline(_thumbnailPipeline.pipeline.data());
 
-    auto draw_solid_batch = [cb](
-        const QSharedPointer<RhiCameraThumbnailResource> &resource,
-        const QVector<float> &vertices)
+    auto draw_batch = [cb](const auto &resource, const QVector<float> &vertices)
     {
         if (!resource || !resource->vertexBuffer || !resource->bindings
             || vertices.isEmpty())
@@ -3989,18 +4076,15 @@ void CameraSceneWidget::drawCameraThumbnails(QRhiCommandBuffer *cb,
         cb->setVertexInput(0, 1, &vertex_input);
         cb->draw(quint32(vertices.size() / 5));
     };
-    draw_solid_batch(_thumbnailPipeline.solidResource, solid_vertices);
-    draw_solid_batch(_thumbnailPipeline.highlightedSolidResource, highlighted_vertices);
+    draw_batch(_thumbnailPipeline.solidResource, solid_vertices);
+    draw_batch(_thumbnailPipeline.highlightedSolidResource, highlighted_vertices);
 
-    for (const TexturedCameraDraw &draw : textured_draws)
+    for (qsizetype page_index = 0;
+         page_index < _thumbnailPipeline.atlasPages.size();
+         ++page_index)
     {
-        draw.resource->vertexBuffer->fullDynamicBufferUpdateForCurrentFrame(
-            draw.vertices.data(), sizeof(draw.vertices));
-        cb->setShaderResources(draw.resource->bindings.data());
-        const QRhiCommandBuffer::VertexInput vertex_input(
-            draw.resource->vertexBuffer.data(), 0);
-        cb->setVertexInput(0, 1, &vertex_input);
-        cb->draw(6);
+        draw_batch(_thumbnailPipeline.atlasPages.at(page_index),
+                   atlas_vertices.at(page_index));
     }
 }
 

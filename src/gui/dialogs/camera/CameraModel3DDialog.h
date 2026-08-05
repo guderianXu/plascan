@@ -392,15 +392,26 @@ private:
         int vertexCapacity = 0;
     };
 
+    struct RhiCameraThumbnailAtlasPage
+    {
+        QScopedPointer<QRhiBuffer> vertexBuffer;
+        QScopedPointer<QRhiTexture> texture;
+        QScopedPointer<QRhiShaderResourceBindings> bindings;
+        QSet<int> uploadedPoseIndices;
+        QHash<int, QSize> imageSizes;
+        int vertexCapacity = 0;
+    };
+
     struct RhiCameraThumbnailPipelineSet
     {
         QScopedPointer<QRhiBuffer> uniformBuffer;
         QScopedPointer<QRhiSampler> sampler;
         QScopedPointer<QRhiGraphicsPipeline> pipeline;
-        QHash<QString, QSharedPointer<RhiCameraThumbnailResource>> resources;
+        QVector<QSharedPointer<RhiCameraThumbnailAtlasPage>> atlasPages;
         QSharedPointer<RhiCameraThumbnailResource> solidResource;
         QSharedPointer<RhiCameraThumbnailResource> highlightedSolidResource;
         QScopedPointer<QRhiBuffer> leaderBuffer;
+        int atlasSize = 0;
         bool resourcesDirty = true;
     };
 
@@ -467,6 +478,8 @@ private:
         QSharedPointer<RhiCameraThumbnailResource> *resource,
         const QColor &color,
         QRhiResourceUpdateBatch *updates);
+    bool ensureCameraThumbnailAtlasPage(int page_index,
+                                        QRhiResourceUpdateBatch *updates);
     void drawRhiBuffer(QRhiCommandBuffer *cb,
                        RhiBufferSet *buffer,
                        RhiPipelineSet *pipeline,

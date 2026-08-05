@@ -55,7 +55,7 @@ TEST(CameraSceneRenderContractTest, AvoidsPerFrameSortingForOpaqueDepthWrittenTh
     ASSERT_GT(nextFunction, drawStart);
     const QString drawBlock = source.mid(drawStart, nextFunction - drawStart);
 
-    EXPECT_TRUE(drawBlock.contains(QStringLiteral("数百次 draw call 压缩为 2 次")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("已加载照片按纹理")));
     EXPECT_FALSE(drawBlock.contains(QStringLiteral("farToNearCameraIndices")));
     EXPECT_FALSE(drawBlock.contains(QStringLiteral("camera_draw_order")));
 }
@@ -80,6 +80,9 @@ TEST(CameraSceneRenderContractTest, LargeCameraImagesUseContinuousBoundedPrefetc
     EXPECT_TRUE(imageLoader.contains(QStringLiteral("reader.setScaledSize(scaled_size)")));
     EXPECT_TRUE(header.contains(QStringLiteral("drawCameraThumbnailProgressOverlay")));
     EXPECT_TRUE(source.contains(QStringLiteral("正在加载相机影像 %1/%2")));
+    EXPECT_TRUE(header.contains(QStringLiteral("RhiCameraThumbnailAtlasPage")));
+    EXPECT_TRUE(source.contains(QStringLiteral("subresource.setDestinationTopLeft")));
+    EXPECT_TRUE(source.contains(QStringLiteral("atlas_vertices")));
 }
 
 TEST(CameraSceneRenderContractTest, ProjectCameraPosesAreParsedOffTheGuiThread)
@@ -175,8 +178,9 @@ TEST(CameraSceneRenderContractTest, SolidCameraCardsUseBatchedDepthTestedGpuReso
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("ensureSolidCameraBatchResource(")));
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("setDepthTest(true)")));
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("setDepthWrite(true)")));
-    EXPECT_TRUE(drawBlock.contains(QStringLiteral("draw_solid_batch(")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("draw_batch(")));
     EXPECT_TRUE(drawBlock.contains(QStringLiteral("solid_vertices")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("atlas_vertices")));
     EXPECT_FALSE(overlayBlock.contains(QStringLiteral("QPolygonF cameraCard")));
     EXPECT_FALSE(overlayBlock.contains(QStringLiteral("painter.drawPolygon(cameraCard)")));
 }
@@ -246,8 +250,10 @@ TEST(CameraSceneRenderContractTest, CameraCardsAndDirectionLeadersShareVulkanGeo
         "fullDynamicBufferUpdateForCurrentFrame(")));
     EXPECT_TRUE(drawBlock.contains(QStringLiteral("_cameraLeaderPipeline.pipeline")));
     EXPECT_TRUE(drawBlock.contains(QStringLiteral("leader_vertices")));
-    EXPECT_TRUE(drawBlock.contains(QStringLiteral("draw_solid_batch")));
-    EXPECT_TRUE(drawBlock.contains(QStringLiteral("_leftDragging")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("draw_batch")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("atlas_vertices")));
+    EXPECT_FALSE(drawBlock.contains(QStringLiteral("_leftDragging")));
+    EXPECT_FALSE(drawBlock.contains(QStringLiteral("_middleDragging")));
 
     const qsizetype leaderStart = source.indexOf(
         QStringLiteral("bool CameraSceneWidget::cameraDirectionLeaderSegment"));
