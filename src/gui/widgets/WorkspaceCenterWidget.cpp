@@ -13,8 +13,11 @@
 #include <QPushButton>
 #include <QStackedWidget>
 #include <QFileInfo>
+#include <QFutureWatcher>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QPointer>
+#include <QtConcurrent/QtConcurrentRun>
 
 namespace {
 
@@ -35,6 +38,61 @@ void setViewButtonText(QPushButton *button, const QString &text, const QString &
     const QString cleanText = text.trimmed().isEmpty() ? QStringLiteral("-") : text.trimmed();
     button->setText(button->fontMetrics().elidedText(cleanText, Qt::ElideMiddle, 190));
     button->setToolTip(tooltip.trimmed().isEmpty() ? cleanText : tooltip);
+}
+
+QVector<CameraSceneWidget::CameraPose> cameraPosesFromImages(const QJsonArray &images)
+{
+    QVector<CameraSceneWidget::CameraPose> poses;
+    poses.reserve(images.size());
+
+    for (const QJsonValue &value : images)
+    {
+        const QJsonObject imageObject = value.toObject();
+        xjw::Camera camera;
+        if (!xjw::common::project::imageCameraFromEntry(imageObject, &camera))
+        {
+            continue;
+        }
+
+        const std::array<double, 3> cameraCenter = camera.cameraCenter();
+        const std::array<double, 9> cameraToWorldRotation = camera.cameraToWorldRotation();
+        const xjw::Camera::Intrinsics intrinsics = camera.intrinsics();
+        const QJsonObject cameraObject = imageObject.value(QStringLiteral("camera")).toObject();
+
+        CameraSceneWidget::CameraPose pose;
+        pose.imagePath = imageObject.value(QStringLiteral("path")).toString();
+        if (pose.imagePath.isEmpty())
+        {
+            pose.imagePath = imageObject.value(QStringLiteral("image_path")).toString();
+        }
+        pose.name = QFileInfo(pose.imagePath).fileName();
+        pose.center = QVector3D(
+            float(cameraCenter[0]),
+            float(cameraCenter[1]),
+            float(cameraCenter[2]));
+        pose.focalX = static_cast<float>(intrinsics.focalX);
+        pose.focalY = static_cast<float>(intrinsics.focalY);
+        pose.principalX = static_cast<float>(intrinsics.principalX);
+        pose.principalY = static_cast<float>(intrinsics.principalY);
+        pose.imageWidth = cameraObject.value(QStringLiteral("image_width")).toInt();
+        pose.imageHeight = cameraObject.value(QStringLiteral("image_height")).toInt();
+        pose.uAxisSign = intrinsics.uAxisSign;
+        pose.vAxisSign = intrinsics.vAxisSign;
+        pose.depthAxisFlipped = camera.depthAxisFlipped();
+
+        QMatrix3x3 rotation;
+        for (int row = 0; row < 3; ++row)
+        {
+            for (int column = 0; column < 3; ++column)
+            {
+                rotation(row, column) = float(cameraToWorldRotation[row * 3 + column]);
+            }
+        }
+        pose.rotation = rotation;
+        poses.push_back(pose);
+    }
+
+    return poses;
 }
 
 } // namespace
@@ -361,6 +419,7 @@ void WorkspaceCenterWidget::resetActiveView()
 
 void WorkspaceCenterWidget::clearProjectView()
 {
+    ++_cameraPoseGeneration;
     if (_canvas)
     {
         _canvas->showImage(QString());
@@ -434,61 +493,22 @@ void WorkspaceCenterWidget::setProjectMeta(const QJsonObject &meta)
 void WorkspaceCenterWidget::refreshModelFromMeta(const QJsonObject &meta)
 {
     const QJsonArray images = xjw::common::project::projectImageEntries(meta);
-    QVector<CameraSceneWidget::CameraPose> poses;
-    poses.reserve(images.size());
-
-    for (const QJsonValue &v : images)
+    const quint64 generation = ++_cameraPoseGeneration;
+    auto *watcher = new QFutureWatcher<QVector<CameraSceneWidget::CameraPose>>(this);
+    QPointer<WorkspaceCenterWidget> self(this);
+    connect(watcher,
+            &QFutureWatcher<QVector<CameraSceneWidget::CameraPose>>::finished,
+            this,
+            [self, watcher, generation]()
     {
-        const QJsonObject imageObject = v.toObject();
-        xjw::Camera camera;
-        if (!xjw::common::project::imageCameraFromEntry(imageObject, &camera))
+        if (self && generation == self->_cameraPoseGeneration && self->_modelView)
         {
-            continue;
+            self->_modelView->setCameraPoses(watcher->result());
         }
-
-        const std::array<double, 3> cameraCenter = camera.cameraCenter();
-        const std::array<double, 9> cameraToWorldRotation = camera.cameraToWorldRotation();
-        const xjw::Camera::Intrinsics intrinsics = camera.intrinsics();
-        const QJsonObject camera_object = imageObject.value(QStringLiteral("camera")).toObject();
-
-        CameraSceneWidget::CameraPose pose;
-        pose.imagePath = imageObject.value(QStringLiteral("path")).toString();
-        if (pose.imagePath.isEmpty())
-        {
-            pose.imagePath = imageObject.value(QStringLiteral("image_path")).toString();
-        }
-        const QString labelPath = pose.imagePath.isEmpty()
-            ? imageObject.value(QStringLiteral("path")).toString()
-            : pose.imagePath;
-        pose.name = QFileInfo(labelPath).fileName();
-        pose.center = QVector3D(
-            float(cameraCenter[0]),
-            float(cameraCenter[1]),
-            float(cameraCenter[2]));
-        pose.focalX = static_cast<float>(intrinsics.focalX);
-        pose.focalY = static_cast<float>(intrinsics.focalY);
-        pose.principalX = static_cast<float>(intrinsics.principalX);
-        pose.principalY = static_cast<float>(intrinsics.principalY);
-        pose.imageWidth = camera_object.value(QStringLiteral("image_width")).toInt();
-        pose.imageHeight = camera_object.value(QStringLiteral("image_height")).toInt();
-        pose.uAxisSign = intrinsics.uAxisSign;
-        pose.vAxisSign = intrinsics.vAxisSign;
-        pose.depthAxisFlipped = camera.depthAxisFlipped();
-
-        QMatrix3x3 rot;
-        for (int row = 0; row < 3; ++row)
-        {
-            for (int col = 0; col < 3; ++col)
-            {
-                rot(row, col) = float(cameraToWorldRotation[row * 3 + col]);
-            }
-        }
-        pose.rotation = rot;
-        poses.push_back(pose);
-    }
-
-    if (_modelView)
+        watcher->deleteLater();
+    });
+    watcher->setFuture(QtConcurrent::run([images]()
     {
-        _modelView->setCameraPoses(poses);
-    }
+        return cameraPosesFromImages(images);
+    }));
 }

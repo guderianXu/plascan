@@ -60,6 +60,7 @@
 #include <QSizePolicy>
 #include <QStringList>
 #include <QTextStream>
+#include <QThread>
 #include <QWidget>
 #include <algorithm>
 #include <cmath>
@@ -798,6 +799,10 @@ CameraSceneWidget::CameraSceneWidget(QWidget *parent)
     _viewRot = QQuaternion::fromEulerAngles(-25.0f, 35.0f, 0.0f); // 默认斜视角
     setFocusPolicy(Qt::StrongFocus);
     updateCursor();
+    const int ideal_threads = std::max(1, QThread::idealThreadCount());
+    _cameraImageLoadPool.setMaxThreadCount(
+        std::clamp((ideal_threads + 1) / 2, 4, 12));
+    _cameraImageLoadPool.setExpiryTimeout(10000);
 
     _overlayWidget = new CameraSceneOverlayWidget(this);
     _overlayWidget->setGeometry(rect());
@@ -855,7 +860,8 @@ void CameraSceneWidget::setCameraPoses(const QVector<CameraPose> &poses)
     _cacheDirty = true; // 相机位置变更，缓存失效
     ++_cameraImageLoadGeneration;
     _cameraImageCache.clear();
-    _cameraImageLoadsInFlight.clear();
+    _cameraImageLoadQueue.clear();
+    _cameraImageLoadsQueued.clear();
     _cameraImageLoadFailures.clear();
     _thumbnailPipeline.resourcesDirty = true;
     if (_showCameraImage)
@@ -1042,7 +1048,8 @@ void CameraSceneWidget::clearProjectScene()
     _preparedObjStrideBytes = 0;
     _currentCloudPath.clear();
     _cameraImageCache.clear();
-    _cameraImageLoadsInFlight.clear();
+    _cameraImageLoadQueue.clear();
+    _cameraImageLoadsQueued.clear();
     _cameraImageLoadFailures.clear();
     _activeCameraImagePoseIndex = -1;
     _highlightedCameraPath.clear();
@@ -1998,28 +2005,63 @@ void CameraSceneWidget::requestCameraPlaneImage(const QString &imagePath, Camera
 
     const QString key = cameraPlaneImageKey(imagePath, mode);
     if (key.isEmpty() || _cameraImageCache.contains(key) || _cameraImageLoadsInFlight.contains(key)
+        || _cameraImageLoadsQueued.contains(key)
         || _cameraImageLoadFailures.contains(key))
     {
         return;
     }
-    if (_cameraImageLoadsInFlight.size() >= 6)
-    {
-        return;
-    }
 
-    _cameraImageLoadsInFlight.insert(key);
-    auto *watcher = new QFutureWatcher<CameraPlaneImageResult>(this);
-    const int generation = _cameraImageLoadGeneration;
-    connect(watcher, &QFutureWatcher<CameraPlaneImageResult>::finished, this, [this, watcher, key]()
+    CameraPlaneImageRequest request;
+    request.path = imagePath;
+    request.mode = mode;
+    request.generation = _cameraImageLoadGeneration;
+    if (mode == CameraImagePlaneMode::Image)
     {
-        applyCameraPlaneImage(watcher->result());
-        _cameraImageLoadsInFlight.remove(key);
-        watcher->deleteLater();
-    });
-    watcher->setFuture(QtConcurrent::run(&CameraSceneWidget::loadCameraPlaneImage,
-                                         imagePath,
-                                         mode,
-                                         generation));
+        _cameraImageLoadQueue.prepend(request);
+    }
+    else
+    {
+        _cameraImageLoadQueue.enqueue(request);
+    }
+    _cameraImageLoadsQueued.insert(key);
+    pumpCameraPlaneImageLoads();
+}
+
+void CameraSceneWidget::pumpCameraPlaneImageLoads()
+{
+    const int maximum_loads = _cameraImageLoadPool.maxThreadCount();
+    while (_cameraImageLoadsInFlight.size() < maximum_loads
+           && !_cameraImageLoadQueue.isEmpty())
+    {
+        const CameraPlaneImageRequest request = _cameraImageLoadQueue.dequeue();
+        const QString key = cameraPlaneImageKey(request.path, request.mode);
+        _cameraImageLoadsQueued.remove(key);
+        if (request.generation != _cameraImageLoadGeneration || key.isEmpty()
+            || _cameraImageCache.contains(key) || _cameraImageLoadsInFlight.contains(key)
+            || _cameraImageLoadFailures.contains(key))
+        {
+            continue;
+        }
+
+        _cameraImageLoadsInFlight.insert(key);
+        auto *watcher = new QFutureWatcher<CameraPlaneImageResult>(this);
+        connect(watcher,
+                &QFutureWatcher<CameraPlaneImageResult>::finished,
+                this,
+                [this, watcher, key]()
+        {
+            applyCameraPlaneImage(watcher->result());
+            _cameraImageLoadsInFlight.remove(key);
+            watcher->deleteLater();
+            pumpCameraPlaneImageLoads();
+        });
+        watcher->setFuture(QtConcurrent::run(
+            &_cameraImageLoadPool,
+            &CameraSceneWidget::loadCameraPlaneImage,
+            request.path,
+            request.mode,
+            request.generation));
+    }
 }
 
 void CameraSceneWidget::applyCameraPlaneImage(const CameraPlaneImageResult &result)
@@ -2048,9 +2090,19 @@ void CameraSceneWidget::applyCameraPlaneImage(const CameraPlaneImageResult &resu
         return;
     }
 
-    if (_cameraImageCache.size() > 512)
+    if (result.mode == CameraImagePlaneMode::Image && _cameraImageCache.size() > 64)
     {
-        _cameraImageCache.clear();
+        for (auto it = _cameraImageCache.begin(); it != _cameraImageCache.end();)
+        {
+            if (it.key().startsWith(QStringLiteral("image|")) && it.key() != key)
+            {
+                it = _cameraImageCache.erase(it);
+            }
+            else
+            {
+                ++it;
+            }
+        }
     }
     _cameraImageCache.insert(key, result.image);
     if (result.originalSize.isValid())
@@ -3572,12 +3624,24 @@ bool CameraSceneWidget::ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *u
         }
     }
 
+    QSet<QString> uploaded_thumbnail_keys;
     for (qsizetype pose_index = 0; pose_index < _poses.size(); ++pose_index)
     {
         const CameraPose &pose = _poses.at(pose_index);
         const CameraImagePlaneMode planeMode = _showCameraThumbnails
             ? CameraImagePlaneMode::Thumbnail
             : CameraImagePlaneMode::Solid;
+        QString planeKey = cameraPlaneImageKey(pose.imagePath, planeMode);
+        if (planeKey.isEmpty())
+        {
+            planeKey = QStringLiteral("solid|") + pose.name;
+        }
+        const QString resource_key = planeKey + QLatin1Char('#') + QString::number(pose_index);
+        if (_thumbnailPipeline.resources.contains(resource_key))
+        {
+            continue;
+        }
+
         QImage image;
         if (planeMode == CameraImagePlaneMode::Thumbnail)
         {
@@ -3596,17 +3660,6 @@ bool CameraSceneWidget::ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *u
                                    : QColor(57, 112, 173, 220));
         }
         if (image.isNull())
-        {
-            continue;
-        }
-
-        QString planeKey = cameraPlaneImageKey(pose.imagePath, planeMode);
-        if (planeKey.isEmpty())
-        {
-            planeKey = QStringLiteral("solid|") + pose.name;
-        }
-        const QString resource_key = planeKey + QLatin1Char('#') + QString::number(pose_index);
-        if (_thumbnailPipeline.resources.contains(resource_key))
         {
             continue;
         }
@@ -3652,6 +3705,14 @@ bool CameraSceneWidget::ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *u
             return false;
         }
         _thumbnailPipeline.resources.insert(resource_key, resource);
+        if (planeMode == CameraImagePlaneMode::Thumbnail)
+        {
+            uploaded_thumbnail_keys.insert(planeKey);
+        }
+    }
+    for (const QString &plane_key : uploaded_thumbnail_keys)
+    {
+        _cameraImageCache.remove(plane_key);
     }
 
     if (_thumbnailPipeline.resources.isEmpty())
@@ -3722,16 +3783,9 @@ void CameraSceneWidget::drawCameraThumbnails(QRhiCommandBuffer *cb, const QMatri
     _thumbnailPipeline.uniformBuffer->fullDynamicBufferUpdateForCurrentFrame(&uniforms, sizeof(uniforms));
     cb->setGraphicsPipeline(_thumbnailPipeline.pipeline.data());
 
-    QVector<QVector3D> camera_centers;
-    camera_centers.reserve(_poses.size());
-    for (const CameraPose &pose : _poses)
-    {
-        camera_centers.push_back(pose.center);
-    }
+    // 相机卡片是开启深度写入的不透明纹理，不需要每帧重新进行远近排序。
     const SceneMatrices matrices = sceneMatrices();
-    const QVector<int> camera_draw_order = xjw::gui::camera_scene::farToNearCameraIndices(
-        camera_centers, matrices.modelView);
-    for (const int pose_index : camera_draw_order)
+    for (qsizetype pose_index = 0; pose_index < _poses.size(); ++pose_index)
     {
         const CameraPose &pose = _poses.at(pose_index);
         const CameraImagePlaneMode planeMode = _showCameraThumbnails
@@ -4445,13 +4499,12 @@ void CameraSceneWidget::paintOverlay(QPainter &painter)
         };
         const SceneMatrices cameraMatrices = sceneMatrices();
 
-        for (const CameraPose &pose : _poses)
+        if (_showCameraLocalAxes)
         {
-            const float planeHalfExtent = cameraImagePlaneHalfExtent(
-                pose, cameraMatrices.modelView);
-
-            if (_showCameraLocalAxes)
+            for (const CameraPose &pose : _poses)
             {
+                const float planeHalfExtent = cameraImagePlaneHalfExtent(
+                    pose, cameraMatrices.modelView);
                 const float localAxisLength = planeHalfExtent * 0.75f;
                 const xjw::gui::camera_scene::CameraLocalAxes localAxes =
                     xjw::gui::camera_scene::cameraLocalAxes(
@@ -4469,13 +4522,6 @@ void CameraSceneWidget::paintOverlay(QPainter &painter)
                                  QColor(45, 105, 225),
                                  1.65);
             }
-        }
-
-        QVector<int> camera_label_order;
-        camera_label_order.reserve(_poses.size());
-        for (qsizetype poseIndex = 0; poseIndex < _poses.size(); ++poseIndex)
-        {
-            camera_label_order.push_back(static_cast<int>(poseIndex));
         }
 
         // 相机方位线属于二维标注层，无法直接使用 Vulkan 深度缓冲。
@@ -4513,17 +4559,27 @@ void CameraSceneWidget::paintOverlay(QPainter &painter)
             }
             if (planeVisible)
             {
-                QPainterPath planePath;
-                planePath.addPolygon(projectedPlane);
-                planePath.closeSubpath();
-                cameraPlaneOcclusionPath = cameraPlaneOcclusionPath.united(planePath);
+                qreal signedArea = 0.0;
+                for (qsizetype index = 0; index < projectedPlane.size(); ++index)
+                {
+                    const QPointF &current = projectedPlane.at(index);
+                    const QPointF &next = projectedPlane.at(
+                        (index + 1) % projectedPlane.size());
+                    signedArea += current.x() * next.y() - next.x() * current.y();
+                }
+                if (signedArea < 0.0)
+                {
+                    std::reverse(projectedPlane.begin(), projectedPlane.end());
+                }
+                cameraPlaneOcclusionPath.addPolygon(projectedPlane);
+                cameraPlaneOcclusionPath.closeSubpath();
             }
         }
         QPainterPath cameraLeaderClip;
         cameraLeaderClip.addRect(QRectF(rect()));
         cameraLeaderClip = cameraLeaderClip.subtracted(cameraPlaneOcclusionPath);
 
-        for (const int poseIndex : camera_label_order)
+        for (qsizetype poseIndex = 0; poseIndex < _poses.size(); ++poseIndex)
         {
             const CameraPose &pose = _poses.at(poseIndex);
             const bool highlighted = isCameraHighlighted(pose);

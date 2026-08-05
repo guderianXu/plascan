@@ -19,12 +19,14 @@
 #include <QMatrix3x3>
 #include <QMatrix4x4>
 #include <QQuaternion>
+#include <QQueue>
 #include <QRect>
 #include <QRhiWidget>
 #include <QScopedPointer>
 #include <QSharedPointer>
 #include <QSet>
 #include <QSize>
+#include <QThreadPool>
 #include <QVector>
 #include <QVector2D>
 #include <QVector3D>
@@ -426,9 +428,17 @@ private:
         bool loaded = false;
     };
 
+    struct CameraPlaneImageRequest
+    {
+        QString path;
+        CameraImagePlaneMode mode = CameraImagePlaneMode::Solid;
+        int generation = 0;
+    };
+
     static CameraPlaneImageResult loadCameraPlaneImage(const QString &imagePath,
                                                        CameraImagePlaneMode mode,
                                                        int generation);
+    void pumpCameraPlaneImageLoads();
 
     bool _gpuDirty = true;  // 顶点缓冲需要重新上传
     bool _rhiReady = false;
@@ -544,7 +554,10 @@ private:
     QString _lockedCameraImageName;
     QHash<QString, QImage> _cameraImageCache;
     QSet<QString> _cameraImageLoadsInFlight;
+    QSet<QString> _cameraImageLoadsQueued;
+    QQueue<CameraPlaneImageRequest> _cameraImageLoadQueue;
     QSet<QString> _cameraImageLoadFailures;
+    QThreadPool _cameraImageLoadPool;
     int _cameraImageLoadGeneration = 0;
     QString _highlightedCameraPath;
     QString _highlightedCameraName;

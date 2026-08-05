@@ -72,4 +72,5 @@ private:
     CanvasWidget *_canvas = nullptr;
     DualImageViewer *_dualImageViewer = nullptr;
     ObservationNetworkView *_obsNetView = nullptr;
+    quint64 _cameraPoseGeneration = 0;
 };

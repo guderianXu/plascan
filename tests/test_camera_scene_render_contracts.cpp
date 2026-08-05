@@ -44,16 +44,46 @@ TEST(CameraSceneRenderContractTest, DrawsBackgroundBeforeGeometryAndForegroundAf
     EXPECT_GT(second_image_draw, foreground);
 }
 
-TEST(CameraSceneRenderContractTest, SortsThumbnailPlanesFarToNearBeforeDrawingLabels)
+TEST(CameraSceneRenderContractTest, AvoidsPerFrameSortingForOpaqueDepthWrittenThumbnails)
 {
     const QString source = readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
-    const qsizetype order = source.indexOf(QStringLiteral("farToNearCameraIndices"));
-    const qsizetype plane_loop = source.indexOf(QStringLiteral("camera_draw_order"), order);
-    const qsizetype label_loop = source.indexOf(QStringLiteral("camera_label_order"), plane_loop);
+    const qsizetype drawStart = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::drawCameraThumbnails"));
+    const qsizetype nextFunction = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::drawActiveCameraImage"), drawStart);
+    ASSERT_GE(drawStart, 0);
+    ASSERT_GT(nextFunction, drawStart);
+    const QString drawBlock = source.mid(drawStart, nextFunction - drawStart);
 
-    EXPECT_GE(order, 0);
-    EXPECT_GT(plane_loop, order);
-    EXPECT_GT(label_loop, plane_loop);
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("开启深度写入的不透明纹理")));
+    EXPECT_FALSE(drawBlock.contains(QStringLiteral("farToNearCameraIndices")));
+    EXPECT_FALSE(drawBlock.contains(QStringLiteral("camera_draw_order")));
+}
+
+TEST(CameraSceneRenderContractTest, LargeCameraImagesUseContinuousBoundedPrefetch)
+{
+    const QString header = readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
+    const QString source = readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("QThreadPool _cameraImageLoadPool")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QQueue<CameraPlaneImageRequest> _cameraImageLoadQueue")));
+    EXPECT_TRUE(source.contains(QStringLiteral("pumpCameraPlaneImageLoads();")));
+    EXPECT_TRUE(source.contains(QStringLiteral("&_cameraImageLoadPool")));
+    EXPECT_TRUE(source.contains(QStringLiteral("std::clamp((ideal_threads + 1) / 2, 4, 12)")));
+    EXPECT_FALSE(source.contains(QStringLiteral("_cameraImageLoadsInFlight.size() >= 6")));
+    EXPECT_FALSE(source.contains(QStringLiteral("_cameraImageCache.size() > 512")));
+}
+
+TEST(CameraSceneRenderContractTest, ProjectCameraPosesAreParsedOffTheGuiThread)
+{
+    const QString source = readProjectFile(QStringLiteral("src/gui/widgets/WorkspaceCenterWidget.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("QtConcurrent::run([images]()")));
+    EXPECT_TRUE(source.contains(QStringLiteral("cameraPosesFromImages(images)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("generation == self->_cameraPoseGeneration")));
 }
 
 TEST(CameraSceneRenderContractTest, ThumbnailPlanesUseTheSceneDepthBuffer)
