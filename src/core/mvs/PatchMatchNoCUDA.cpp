@@ -23,6 +23,15 @@ void PatchMatchDepthEstimator::cleanupGpuImageCache()
     // 无 CUDA 构建中无缓存，空操作
 }
 
+bool PatchMatchDepthEstimator::reserveGpuWorkspace(std::size_t,
+                                                   int,
+                                                   bool,
+                                                   bool,
+                                                   std::string *)
+{
+    return true;
+}
+
 bool PatchMatchDepthEstimator::estimateGPU(
     const cv::Mat &,
     const std::vector<cv::Mat> &,

@@ -1084,7 +1084,8 @@ TEST(MvsSchedulerContractTest, SparseHintsUseProjectedSamplesAndPrescaledPatchMa
     expectContainsAll(gpuBody, {
         "const int sW = std::max(1, refW / ds);",
         "const int sH = std::max(1, refH / ds);",
-        "getOrUploadGrayImageGpu(refGray, sW, sH, ds",
+        "getOrUploadGrayImageGpu(refGray",
+        "image_upload_lane.stream",
     });
     expectNotContainsAll(gpuBody, {"cv::resize(refGray, refScaled"});
 }

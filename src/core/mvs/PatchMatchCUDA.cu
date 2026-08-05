@@ -21,10 +21,12 @@
 #include <limits>
 #include <unordered_map>
 #include <mutex>
+#include <shared_mutex>
 #include <cstdint>
 #include <thread>
 #include <atomic>
 #include <array>
+#include <memory>
 #include <random>
 #include <utility>
 
@@ -87,38 +89,318 @@ HostPinholeCamera makeHostPinholeCamera(const Camera &camera, int downsampleFact
 }
 
 template <typename T>
-struct CudaDevicePtr
+class ReusableCudaBuffer
 {
+public:
     T *ptr = nullptr;
+    std::size_t capacity = 0;
 
-    ~CudaDevicePtr()
+    cudaError_t reserve(std::size_t count)
     {
+        if (count <= capacity)
+        {
+            return cudaSuccess;
+        }
+
+        T *replacement = nullptr;
+        const cudaError_t allocation_error = cudaMalloc(
+            reinterpret_cast<void **>(&replacement), count * sizeof(T));
+        if (allocation_error != cudaSuccess)
+        {
+            return allocation_error;
+        }
         if (ptr)
         {
             cudaFree(ptr);
         }
+        ptr = replacement;
+        capacity = count;
+        return cudaSuccess;
     }
 
-    void **out()
+    void reset()
     {
-        return reinterpret_cast<void **>(&ptr);
-    }
-
-    T *get() const
-    {
-        return ptr;
-    }
-
-    explicit operator bool() const
-    {
-        return ptr != nullptr;
-    }
-
-    operator T *() const
-    {
-        return ptr;
+        if (ptr)
+        {
+            cudaFree(ptr);
+            ptr = nullptr;
+        }
+        capacity = 0;
     }
 };
+
+template <typename T>
+class ReusablePinnedBuffer
+{
+public:
+    T *ptr = nullptr;
+    std::size_t capacity = 0;
+
+    cudaError_t reserve(std::size_t count)
+    {
+        if (count <= capacity)
+        {
+            return cudaSuccess;
+        }
+
+        T *replacement = nullptr;
+        const cudaError_t allocation_error = cudaHostAlloc(
+            reinterpret_cast<void **>(&replacement),
+            count * sizeof(T),
+            cudaHostAllocPortable);
+        if (allocation_error != cudaSuccess)
+        {
+            return allocation_error;
+        }
+        if (ptr)
+        {
+            cudaFreeHost(ptr);
+        }
+        ptr = replacement;
+        capacity = count;
+        return cudaSuccess;
+    }
+
+    void reset()
+    {
+        if (ptr)
+        {
+            cudaFreeHost(ptr);
+            ptr = nullptr;
+        }
+        capacity = 0;
+    }
+};
+
+struct PatchMatchGpuWorkspace
+{
+    cudaStream_t computeStream = nullptr;
+    cudaStream_t transferStream = nullptr;
+    cudaEvent_t uploadsReady = nullptr;
+    cudaEvent_t cancellationCheckpoint = nullptr;
+    cudaEvent_t computeReady = nullptr;
+    cudaEvent_t downloadsReady = nullptr;
+    bool initialized = false;
+
+    ReusableCudaBuffer<float> srcData;
+    ReusableCudaBuffer<float> depth;
+    ReusableCudaBuffer<float> normal;
+    ReusableCudaBuffer<float> confidence;
+    ReusableCudaBuffer<float> hint;
+    ReusableCudaBuffer<float> hintRadius;
+    ReusableCudaBuffer<float *> srcPointers;
+    ReusableCudaBuffer<std::uint8_t> referenceMask;
+    ReusableCudaBuffer<std::uint8_t> sourceMasks;
+
+    ReusablePinnedBuffer<std::uint8_t> sourceDataHost;
+    ReusablePinnedBuffer<std::uint8_t> sourcePointersHost;
+    ReusablePinnedBuffer<std::uint8_t> referenceMaskHost;
+    ReusablePinnedBuffer<std::uint8_t> sourceMasksHost;
+    ReusablePinnedBuffer<std::uint8_t> hintHost;
+    ReusablePinnedBuffer<std::uint8_t> hintRadiusHost;
+    ReusablePinnedBuffer<float> depthHost;
+    ReusablePinnedBuffer<float> confidenceHost;
+
+    cudaError_t initialize()
+    {
+        if (initialized)
+        {
+            return cudaSuccess;
+        }
+
+        cudaError_t error = cudaStreamCreateWithFlags(&computeStream, cudaStreamNonBlocking);
+        if (error != cudaSuccess)
+        {
+            return error;
+        }
+        error = cudaStreamCreateWithFlags(&transferStream, cudaStreamNonBlocking);
+        if (error != cudaSuccess)
+        {
+            reset();
+            return error;
+        }
+        for (cudaEvent_t *event : {&uploadsReady,
+                                  &cancellationCheckpoint,
+                                  &computeReady,
+                                  &downloadsReady})
+        {
+            error = cudaEventCreateWithFlags(event, cudaEventDisableTiming);
+            if (error != cudaSuccess)
+            {
+                reset();
+                return error;
+            }
+        }
+        initialized = true;
+        return cudaSuccess;
+    }
+
+    void reset()
+    {
+        if (computeStream)
+        {
+            cudaStreamSynchronize(computeStream);
+        }
+        if (transferStream)
+        {
+            cudaStreamSynchronize(transferStream);
+        }
+
+        srcData.reset();
+        depth.reset();
+        normal.reset();
+        confidence.reset();
+        hint.reset();
+        hintRadius.reset();
+        srcPointers.reset();
+        referenceMask.reset();
+        sourceMasks.reset();
+        sourceDataHost.reset();
+        sourcePointersHost.reset();
+        referenceMaskHost.reset();
+        sourceMasksHost.reset();
+        hintHost.reset();
+        hintRadiusHost.reset();
+        depthHost.reset();
+        confidenceHost.reset();
+        for (cudaEvent_t *event : {&uploadsReady,
+                                  &cancellationCheckpoint,
+                                  &computeReady,
+                                  &downloadsReady})
+        {
+            if (*event)
+            {
+                cudaEventDestroy(*event);
+                *event = nullptr;
+            }
+        }
+        if (computeStream)
+        {
+            cudaStreamDestroy(computeStream);
+            computeStream = nullptr;
+        }
+        if (transferStream)
+        {
+            cudaStreamDestroy(transferStream);
+            transferStream = nullptr;
+        }
+        initialized = false;
+    }
+};
+
+std::mutex g_patchMatchGpuExecutionMutex;
+std::shared_mutex g_patchMatchGpuCacheLifetimeMutex;
+
+PatchMatchGpuWorkspace &patchMatchGpuWorkspace()
+{
+    // Deliberately process-lifetime storage: CUDA may already be torn down during
+    // static destruction. cleanupGpuImageCache() performs the explicit release.
+    static PatchMatchGpuWorkspace *workspace = new PatchMatchGpuWorkspace();
+    return *workspace;
+}
+
+struct ImageUploadLane
+{
+    cudaStream_t stream = nullptr;
+    std::vector<std::unique_ptr<ReusablePinnedBuffer<std::uint8_t>>> hosts;
+
+    ~ImageUploadLane()
+    {
+        reset();
+    }
+
+    cudaError_t beginBatch()
+    {
+        if (!stream)
+        {
+            return cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+        }
+        // The preceding compute call waited for this lane's cache-entry events,
+        // so this normally completes immediately. It protects pinned slots if a
+        // frame aborted before entering the CUDA execution slot.
+        return cudaStreamSynchronize(stream);
+    }
+
+    ReusablePinnedBuffer<std::uint8_t> &host(std::size_t index)
+    {
+        while (hosts.size() <= index)
+        {
+            hosts.push_back(
+                std::make_unique<ReusablePinnedBuffer<std::uint8_t>>());
+        }
+        return *hosts[index];
+    }
+
+    void reset()
+    {
+        if (stream)
+        {
+            cudaStreamSynchronize(stream);
+        }
+        for (const auto &buffer : hosts)
+        {
+            buffer->reset();
+        }
+        hosts.clear();
+        if (stream)
+        {
+            cudaStreamDestroy(stream);
+            stream = nullptr;
+        }
+    }
+};
+
+ImageUploadLane &imageUploadLaneForCurrentThread()
+{
+    thread_local ImageUploadLane lane;
+    return lane;
+}
+
+class PatchMatchGpuRunGuard
+{
+public:
+    explicit PatchMatchGpuRunGuard(PatchMatchGpuWorkspace &workspace)
+        : _workspace(workspace)
+    {
+    }
+
+    ~PatchMatchGpuRunGuard()
+    {
+        if (!_completed)
+        {
+            cudaStreamSynchronize(_workspace.computeStream);
+            cudaStreamSynchronize(_workspace.transferStream);
+        }
+    }
+
+    void markCompleted()
+    {
+        _completed = true;
+    }
+
+private:
+    PatchMatchGpuWorkspace &_workspace;
+    bool _completed = false;
+};
+
+cudaError_t stageHostToDeviceCopy(ReusablePinnedBuffer<std::uint8_t> &hostBuffer,
+                                  const void *source,
+                                  std::size_t bytes,
+                                  void *destination,
+                                  cudaStream_t stream)
+{
+    const cudaError_t reserve_error = hostBuffer.reserve(bytes);
+    if (reserve_error != cudaSuccess)
+    {
+        return reserve_error;
+    }
+    std::memcpy(hostBuffer.ptr, source, bytes);
+    return cudaMemcpyAsync(destination,
+                           hostBuffer.ptr,
+                           bytes,
+                           cudaMemcpyHostToDevice,
+                           stream);
+}
 
 inline float cpuDot3(const CpuNormal &a, const CpuNormal &b)
 {
@@ -525,10 +807,12 @@ struct SrcImageCacheKeyHash
 struct SrcImageCacheEntry
 {
     float *devicePtr = nullptr;
+    cudaEvent_t readyEvent = nullptr;
     int scaledW = 0;
     int scaledH = 0;
     size_t bytes = 0;
     uint64_t lastUseTick = 0;
+    int pinCount = 0;
 };
 
 std::unordered_map<SrcImageCacheKey, SrcImageCacheEntry, SrcImageCacheKeyHash> g_srcImageGpuCache;
@@ -557,23 +841,54 @@ size_t getGrayImageGpuCacheLimitBytes()
     return limit;
 }
 
-void evictSrcImageGpuCacheIfNeeded(size_t needBytes)
+void evictSrcImageGpuCacheIfNeeded(size_t needBytes,
+                                   cudaStream_t releaseStream = nullptr)
 {
     const size_t cacheLimitBytes = getGrayImageGpuCacheLimitBytes();
     while (g_srcImageGpuCacheBytes + needBytes > cacheLimitBytes && !g_srcImageGpuCache.empty())
     {
-        auto lruIt = g_srcImageGpuCache.begin();
+        auto lruIt = g_srcImageGpuCache.end();
         for (auto it = g_srcImageGpuCache.begin(); it != g_srcImageGpuCache.end(); ++it)
         {
-            if (it->second.lastUseTick < lruIt->second.lastUseTick)
+            if (it->second.pinCount == 0 &&
+                (lruIt == g_srcImageGpuCache.end() ||
+                 it->second.lastUseTick < lruIt->second.lastUseTick))
             {
                 lruIt = it;
             }
         }
+        if (lruIt == g_srcImageGpuCache.end())
+        {
+            break;
+        }
 
         if (lruIt->second.devicePtr)
         {
-            cudaFree(lruIt->second.devicePtr);
+            if (lruIt->second.readyEvent)
+            {
+                if (releaseStream)
+                {
+                    cudaStreamWaitEvent(releaseStream,
+                                        lruIt->second.readyEvent,
+                                        0);
+                }
+                else
+                {
+                    cudaEventSynchronize(lruIt->second.readyEvent);
+                }
+            }
+            if (releaseStream)
+            {
+                cudaFreeAsync(lruIt->second.devicePtr, releaseStream);
+            }
+            else
+            {
+                cudaFree(lruIt->second.devicePtr);
+            }
+        }
+        if (lruIt->second.readyEvent)
+        {
+            cudaEventDestroy(lruIt->second.readyEvent);
         }
         g_srcImageGpuCacheBytes -= lruIt->second.bytes;
         g_srcImageGpuCache.erase(lruIt);
@@ -585,15 +900,19 @@ bool getOrUploadGrayImageGpu(
     int scaledW,
     int scaledH,
     int ds,
+    cudaStream_t transferStream,
+    ReusablePinnedBuffer<std::uint8_t> &uploadHost,
     float **devicePtrOut,
+    cudaEvent_t *readyEventOut,
+    SrcImageCacheKey *cacheKeyOut,
     bool *cacheHitOut,
     std::string *errorMsg)
 {
-    if (devicePtrOut == nullptr)
+    if (devicePtrOut == nullptr || readyEventOut == nullptr || cacheKeyOut == nullptr)
     {
         if (errorMsg)
         {
-            *errorMsg = "devicePtrOut is null";
+            *errorMsg = "CUDA image-cache output pointer is null";
         }
         return false;
     }
@@ -619,7 +938,10 @@ bool getOrUploadGrayImageGpu(
         if (it != g_srcImageGpuCache.end() && it->second.scaledW == scaledW && it->second.scaledH == scaledH)
         {
             it->second.lastUseTick = ++g_srcImageGpuCacheTick;
+            ++it->second.pinCount;
             *devicePtrOut = it->second.devicePtr;
+            *readyEventOut = it->second.readyEvent;
+            *cacheKeyOut = key;
             if (cacheHitOut)
             {
                 *cacheHitOut = true;
@@ -635,7 +957,8 @@ bool getOrUploadGrayImageGpu(
 
     const size_t bytes = static_cast<size_t>(scaledW) * static_cast<size_t>(scaledH) * sizeof(float);
     float *newDevicePtr = nullptr;
-    cudaError_t allocErr = cudaMalloc(&newDevicePtr, bytes);
+    cudaError_t allocErr = cudaMallocAsync(
+        reinterpret_cast<void **>(&newDevicePtr), bytes, transferStream);
     if (allocErr != cudaSuccess)
     {
         if (errorMsg)
@@ -645,13 +968,51 @@ bool getOrUploadGrayImageGpu(
         return false;
     }
 
-    cudaError_t copyErr = cudaMemcpy(newDevicePtr, srcFloat.ptr<float>(), bytes, cudaMemcpyHostToDevice);
-    if (copyErr != cudaSuccess)
+    const cudaError_t hostReserveError = uploadHost.reserve(bytes);
+    if (hostReserveError != cudaSuccess)
     {
-        cudaFree(newDevicePtr);
+        cudaFreeAsync(newDevicePtr, transferStream);
         if (errorMsg)
         {
-            *errorMsg = std::string("cudaMemcpy failed: ") + cudaGetErrorString(copyErr);
+            *errorMsg = std::string("cudaHostAlloc failed: ") +
+                cudaGetErrorString(hostReserveError);
+        }
+        return false;
+    }
+    std::memcpy(uploadHost.ptr, srcFloat.ptr<float>(), bytes);
+    cudaError_t copyErr = cudaMemcpyAsync(newDevicePtr,
+                                          uploadHost.ptr,
+                                          bytes,
+                                          cudaMemcpyHostToDevice,
+                                          transferStream);
+    if (copyErr != cudaSuccess)
+    {
+        cudaFreeAsync(newDevicePtr, transferStream);
+        if (errorMsg)
+        {
+            *errorMsg = std::string("cudaMemcpyAsync failed: ") + cudaGetErrorString(copyErr);
+        }
+        return false;
+    }
+
+    cudaEvent_t newReadyEvent = nullptr;
+    cudaError_t eventError = cudaEventCreateWithFlags(
+        &newReadyEvent, cudaEventDisableTiming);
+    if (eventError == cudaSuccess)
+    {
+        eventError = cudaEventRecord(newReadyEvent, transferStream);
+    }
+    if (eventError != cudaSuccess)
+    {
+        if (newReadyEvent)
+        {
+            cudaEventDestroy(newReadyEvent);
+        }
+        cudaFreeAsync(newDevicePtr, transferStream);
+        if (errorMsg)
+        {
+            *errorMsg = std::string("CUDA upload event failed: ") +
+                cudaGetErrorString(eventError);
         }
         return false;
     }
@@ -663,28 +1024,36 @@ bool getOrUploadGrayImageGpu(
         if (existing != g_srcImageGpuCache.end() && existing->second.scaledW == scaledW && existing->second.scaledH == scaledH)
         {
             existing->second.lastUseTick = ++g_srcImageGpuCacheTick;
+            ++existing->second.pinCount;
             *devicePtrOut = existing->second.devicePtr;
+            *readyEventOut = existing->second.readyEvent;
+            *cacheKeyOut = key;
             if (cacheHitOut)
             {
                 *cacheHitOut = true;
             }
-            cudaFree(newDevicePtr);
+            cudaFreeAsync(newDevicePtr, transferStream);
+            cudaEventDestroy(newReadyEvent);
             return true;
         }
 
-        evictSrcImageGpuCacheIfNeeded(bytes);
+        evictSrcImageGpuCacheIfNeeded(bytes, transferStream);
 
         SrcImageCacheEntry entry;
         entry.devicePtr = newDevicePtr;
+        entry.readyEvent = newReadyEvent;
         entry.scaledW = scaledW;
         entry.scaledH = scaledH;
         entry.bytes = bytes;
         entry.lastUseTick = ++g_srcImageGpuCacheTick;
+        entry.pinCount = 1;
 
         g_srcImageGpuCache[key] = entry;
         g_srcImageGpuCacheBytes += bytes;
 
         *devicePtrOut = newDevicePtr;
+        *readyEventOut = newReadyEvent;
+        *cacheKeyOut = key;
         if (cacheHitOut)
         {
             *cacheHitOut = false;
@@ -693,6 +1062,31 @@ bool getOrUploadGrayImageGpu(
 
     return true;
 }
+
+class SrcImageCachePinGuard
+{
+public:
+    void add(const SrcImageCacheKey &key)
+    {
+        _keys.push_back(key);
+    }
+
+    ~SrcImageCachePinGuard()
+    {
+        std::lock_guard<std::mutex> lock(g_srcImageGpuCacheMutex);
+        for (const SrcImageCacheKey &key : _keys)
+        {
+            const auto entry = g_srcImageGpuCache.find(key);
+            if (entry != g_srcImageGpuCache.end())
+            {
+                entry->second.pinCount = std::max(0, entry->second.pinCount - 1);
+            }
+        }
+    }
+
+private:
+    std::vector<SrcImageCacheKey> _keys;
+};
 
 cv::Mat resizedBinaryMask(const cv::Mat *mask, const cv::Size &targetSize)
 {
@@ -1758,6 +2152,8 @@ bool PatchMatchDepthEstimator::estimateGPU(
     const cv::Mat                *refValidMask,
     const std::vector<cv::Mat>   *srcValidMasks)
 {
+    std::shared_lock<std::shared_mutex> cache_lifetime_lock(
+        g_patchMatchGpuCacheLifetimeMutex);
     const int refW = refGray.cols, refH = refGray.rows;
     const int N    = (int)srcGrays.size();
     const int ds   = config.downsampleFactor > 0 ? config.downsampleFactor : 1;
@@ -1820,8 +2216,6 @@ bool PatchMatchDepthEstimator::estimateGPU(
         1.f / refCamS.focalX, -refCamS.principalX / refCamS.focalX,
         1.f / refCamS.focalY, -refCamS.principalY / refCamS.focalY
     };
-    CUDA_CHECK(cudaMemcpyToSymbol(c_ref_inv_K, h_inv_K, sizeof(float)*4));
-
     // ── 构建源图 srcData（每源 16 floats）───────────────────────
     std::vector<float>   srcDatas(N * 16, 0.f);
     int srcW = sW, srcH2 = sH;
@@ -1870,33 +2264,117 @@ bool PatchMatchDepthEstimator::estimateGPU(
 
     const int refPx = sW * sH;
 
-    float *d_ref=nullptr;
-    CudaDevicePtr<float> d_srcData;
-    CudaDevicePtr<float> d_depth;
-    CudaDevicePtr<float> d_normal;
-    CudaDevicePtr<float> d_conf;
-    CudaDevicePtr<float> d_hint;
-    CudaDevicePtr<float> d_hintRadius;
-    CudaDevicePtr<float*> d_srcPtrs;
-    CudaDevicePtr<std::uint8_t> d_refMask;
-    CudaDevicePtr<std::uint8_t> d_srcMasks;
+    ImageUploadLane &image_upload_lane = imageUploadLaneForCurrentThread();
+    CUDA_CHECK(image_upload_lane.beginBatch());
 
-    CUDA_CHECK(cudaMalloc(d_srcData.out(), N*16    * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(d_depth.out(),   refPx   * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(d_normal.out(),  refPx*3 * sizeof(float)));  // 法向量图
-    CUDA_CHECK(cudaMalloc(d_conf.out(),    refPx   * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(d_srcPtrs.out(), N * sizeof(float*)));
+    // Reserve room before acquiring any cache pointers. Once this frame starts
+    // collecting entries, eviction is paused until its device-to-host download
+    // completes so another upload lane cannot invalidate those pointers.
+    {
+        std::lock_guard<std::mutex> cache_lock(g_srcImageGpuCacheMutex);
+        const std::size_t conservative_batch_bytes =
+            (static_cast<std::size_t>(N) + 1) *
+            static_cast<std::size_t>(refPx) * sizeof(float);
+        evictSrcImageGpuCacheIfNeeded(conservative_batch_bytes,
+                                      image_upload_lane.stream);
+    }
+    // Upload cache misses before waiting for the serialized CUDA execution
+    // slot. With two host frame slots, this transfer stream can feed frame N+1
+    // while frame N is running PatchMatch kernels.
+    float *d_ref = nullptr;
+    std::vector<float *> hSrcPtrs(static_cast<std::size_t>(N), nullptr);
+    std::vector<cudaEvent_t> image_ready_events(
+        static_cast<std::size_t>(N) + 1, nullptr);
+    bool refCacheHit = false;
+    int cacheHits = 0;
+    int cacheMisses = 0;
+    SrcImageCachePinGuard cache_pin_guard;
+    SrcImageCacheKey reference_cache_key;
+    if (!getOrUploadGrayImageGpu(refGray,
+                                 sW,
+                                 sH,
+                                 ds,
+                                 image_upload_lane.stream,
+                                 image_upload_lane.host(0),
+                                 &d_ref,
+                                 &image_ready_events[0],
+                                 &reference_cache_key,
+                                 &refCacheHit,
+                                 errorMsg))
+    {
+        return false;
+    }
+    cache_pin_guard.add(reference_cache_key);
+    for (int source_index = 0; source_index < N; ++source_index)
+    {
+        bool cache_hit = false;
+        SrcImageCacheKey source_cache_key;
+        if (!getOrUploadGrayImageGpu(
+                srcGrays[static_cast<std::size_t>(source_index)],
+                sW,
+                sH,
+                ds,
+                image_upload_lane.stream,
+                image_upload_lane.host(static_cast<std::size_t>(source_index) + 1),
+                &hSrcPtrs[static_cast<std::size_t>(source_index)],
+                &image_ready_events[static_cast<std::size_t>(source_index) + 1],
+                &source_cache_key,
+                &cache_hit,
+                errorMsg))
+        {
+            return false;
+        }
+        cache_pin_guard.add(source_cache_key);
+        cacheHits += cache_hit ? 1 : 0;
+        cacheMisses += cache_hit ? 0 : 1;
+    }
 
-    CUDA_CHECK(cudaMemcpy(d_srcData, srcDatas.data(),     N*16*sizeof(float),    cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemset(d_conf, 0, refPx * sizeof(float)));
+    // A single CUDA execution slot protects the shared constant-memory camera
+    // parameters and persistent workspace. Two host frame workers may still
+    // overlap CPU preparation/post-processing around this section.
+    std::unique_lock<std::mutex> gpu_execution_lock(g_patchMatchGpuExecutionMutex);
+    PatchMatchGpuWorkspace &workspace = patchMatchGpuWorkspace();
+    CUDA_CHECK(workspace.initialize());
+    PatchMatchGpuRunGuard workspace_run_guard(workspace);
+    CUDA_CHECK(workspace.srcData.reserve(static_cast<std::size_t>(N) * 16));
+    CUDA_CHECK(workspace.depth.reserve(static_cast<std::size_t>(refPx)));
+    CUDA_CHECK(workspace.normal.reserve(static_cast<std::size_t>(refPx) * 3));
+    CUDA_CHECK(workspace.confidence.reserve(static_cast<std::size_t>(refPx)));
+    CUDA_CHECK(workspace.srcPointers.reserve(static_cast<std::size_t>(N)));
+
+    float *d_srcData = workspace.srcData.ptr;
+    float *d_depth = workspace.depth.ptr;
+    float *d_normal = workspace.normal.ptr;
+    float *d_conf = workspace.confidence.ptr;
+    float **d_srcPtrs = workspace.srcPointers.ptr;
+    std::uint8_t *d_refMask = nullptr;
+    std::uint8_t *d_srcMasks = nullptr;
+
+    CUDA_CHECK(cudaMemcpyToSymbolAsync(c_ref_inv_K,
+                                       h_inv_K,
+                                       sizeof(h_inv_K),
+                                       0,
+                                       cudaMemcpyHostToDevice,
+                                       workspace.computeStream));
+    CUDA_CHECK(stageHostToDeviceCopy(workspace.sourceDataHost,
+                                     srcDatas.data(),
+                                     static_cast<std::size_t>(N) * 16 * sizeof(float),
+                                     d_srcData,
+                                     workspace.transferStream));
+    CUDA_CHECK(cudaMemsetAsync(d_conf,
+                               0,
+                               static_cast<std::size_t>(refPx) * sizeof(float),
+                               workspace.computeStream));
 
     if (!ref_mask_scaled.empty())
     {
-        CUDA_CHECK(cudaMalloc(d_refMask.out(), static_cast<std::size_t>(refPx)));
-        CUDA_CHECK(cudaMemcpy(d_refMask,
-                              ref_mask_scaled.ptr<std::uint8_t>(),
-                              static_cast<std::size_t>(refPx),
-                              cudaMemcpyHostToDevice));
+        CUDA_CHECK(workspace.referenceMask.reserve(static_cast<std::size_t>(refPx)));
+        d_refMask = workspace.referenceMask.ptr;
+        CUDA_CHECK(stageHostToDeviceCopy(workspace.referenceMaskHost,
+                                         ref_mask_scaled.ptr<std::uint8_t>(),
+                                         static_cast<std::size_t>(refPx),
+                                         d_refMask,
+                                         workspace.transferStream));
     }
     if (has_source_masks)
     {
@@ -1916,56 +2394,59 @@ bool PatchMatchDepthEstimator::estimateGPU(
                         static_cast<std::size_t>(refPx));
         }
         const std::size_t source_mask_bytes = packed_masks.size() * sizeof(std::uint8_t);
-        CUDA_CHECK(cudaMalloc(d_srcMasks.out(), source_mask_bytes));
-        CUDA_CHECK(cudaMemcpy(d_srcMasks,
-                              packed_masks.data(),
-                              source_mask_bytes,
-                              cudaMemcpyHostToDevice));
+        CUDA_CHECK(workspace.sourceMasks.reserve(source_mask_bytes));
+        d_srcMasks = workspace.sourceMasks.ptr;
+        CUDA_CHECK(stageHostToDeviceCopy(workspace.sourceMasksHost,
+                                         packed_masks.data(),
+                                         source_mask_bytes,
+                                         d_srcMasks,
+                                         workspace.transferStream));
     }
 
-    std::vector<float*> hSrcPtrs(static_cast<size_t>(N), nullptr);
-    bool refCacheHit = false;
-    int cacheHits = 0;
-    int cacheMisses = 0;
-    if (!getOrUploadGrayImageGpu(refGray, sW, sH, ds, &d_ref, &refCacheHit, errorMsg))
-    {
-        return false;
-    }
-
-    for (int si = 0; si < N; ++si)
-    {
-        bool cacheHit = false;
-        if (!getOrUploadGrayImageGpu(srcGrays[si], sW, sH, ds, &hSrcPtrs[si], &cacheHit, errorMsg))
-        {
-            return false;
-        }
-        if (cacheHit)
-        {
-            ++cacheHits;
-        }
-        else
-        {
-            ++cacheMisses;
-        }
-    }
-    CUDA_CHECK(cudaMemcpy(d_srcPtrs, hSrcPtrs.data(), N * sizeof(float*), cudaMemcpyHostToDevice));
+    CUDA_CHECK(stageHostToDeviceCopy(workspace.sourcePointersHost,
+                                     hSrcPtrs.data(),
+                                     static_cast<std::size_t>(N) * sizeof(float *),
+                                     d_srcPtrs,
+                                     workspace.transferStream));
 
     bool hasHint = !hintScaled.empty();
+    float *d_hint = nullptr;
+    float *d_hintRadius = nullptr;
     if (hasHint) 
     {
-        cv::Mat hF; hintScaled.convertTo(hF, CV_32F);
-        CUDA_CHECK(cudaMalloc(d_hint.out(), refPx*sizeof(float)));
-        CUDA_CHECK(cudaMemcpy(d_hint, hF.ptr<float>(), refPx*sizeof(float), cudaMemcpyHostToDevice));
+        cv::Mat hint_float;
+        hintScaled.convertTo(hint_float, CV_32F);
+        CUDA_CHECK(workspace.hint.reserve(static_cast<std::size_t>(refPx)));
+        d_hint = workspace.hint.ptr;
+        CUDA_CHECK(stageHostToDeviceCopy(workspace.hintHost,
+                                         hint_float.ptr<float>(),
+                                         static_cast<std::size_t>(refPx) * sizeof(float),
+                                         d_hint,
+                                         workspace.transferStream));
     }
     if (hasHint && !hintRadiusScaled.empty())
     {
         cv::Mat radius_float;
         hintRadiusScaled.convertTo(radius_float, CV_32F);
-        CUDA_CHECK(cudaMalloc(d_hintRadius.out(), refPx * sizeof(float)));
-        CUDA_CHECK(cudaMemcpy(d_hintRadius,
-                              radius_float.ptr<float>(),
-                              refPx * sizeof(float),
-                              cudaMemcpyHostToDevice));
+        CUDA_CHECK(workspace.hintRadius.reserve(static_cast<std::size_t>(refPx)));
+        d_hintRadius = workspace.hintRadius.ptr;
+        CUDA_CHECK(stageHostToDeviceCopy(workspace.hintRadiusHost,
+                                         radius_float.ptr<float>(),
+                                         static_cast<std::size_t>(refPx) * sizeof(float),
+                                         d_hintRadius,
+                                         workspace.transferStream));
+    }
+
+    CUDA_CHECK(cudaEventRecord(workspace.uploadsReady, workspace.transferStream));
+    CUDA_CHECK(cudaStreamWaitEvent(workspace.computeStream, workspace.uploadsReady, 0));
+    for (const cudaEvent_t ready_event : image_ready_events)
+    {
+        if (ready_event)
+        {
+            CUDA_CHECK(cudaStreamWaitEvent(workspace.computeStream,
+                                           ready_event,
+                                           0));
+        }
     }
 
     // ── 初始化深度 + 法向量 ───────────────────────────────────────
@@ -1975,7 +2456,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
     dim3 block(bW, bH);
     dim3 grid((sW + bW - 1) / bW, (sH + bH - 1) / bH);
 
-    kernelInitDepthNormal<<<grid, block>>>(
+    kernelInitDepthNormal<<<grid, block, 0, workspace.computeStream>>>(
         d_depth, d_normal, d_hint, d_hintRadius, sW, sH, zNear, zFar, 42ULL);
     CUDA_CHECK(cudaGetLastError());
 
@@ -2000,7 +2481,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
 
         if (config.cudaUseParallelSweep)
         {
-            kernelCheckerboardSweep<<<gridPixel, blockPixel>>>(
+            kernelCheckerboardSweep<<<gridPixel, blockPixel, 0, workspace.computeStream>>>(
                 d_depth, d_normal, d_conf,
                 d_ref, sW, sH,
                 d_srcPtrs, d_srcData, srcW, srcH2, N,
@@ -2012,7 +2493,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
                 0);
             CUDA_CHECK(cudaGetLastError());
 
-            kernelCheckerboardSweep<<<gridPixel, blockPixel>>>(
+            kernelCheckerboardSweep<<<gridPixel, blockPixel, 0, workspace.computeStream>>>(
                 d_depth, d_normal, d_conf,
                 d_ref, sW, sH,
                 d_srcPtrs, d_srcData, srcW, srcH2, N,
@@ -2027,7 +2508,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
         else
         {
             // 自上而下
-            kernelSweepTB<<<gridCols, blockSweep>>>(
+            kernelSweepTB<<<gridCols, blockSweep, 0, workspace.computeStream>>>(
                 d_depth, d_normal, d_conf,
                 d_ref, sW, sH,
                 d_srcPtrs, d_srcData, srcW, srcH2, N,
@@ -2039,7 +2520,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
             CUDA_CHECK(cudaGetLastError());
 
             // 自下而上
-            kernelSweepBT<<<gridCols, blockSweep>>>(
+            kernelSweepBT<<<gridCols, blockSweep, 0, workspace.computeStream>>>(
                 d_depth, d_normal, d_conf,
                 d_ref, sW, sH,
                 d_srcPtrs, d_srcData, srcW, srcH2, N,
@@ -2051,7 +2532,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
             CUDA_CHECK(cudaGetLastError());
 
             // 自左向右
-            kernelSweepLR<<<gridRows, blockSweep>>>(
+            kernelSweepLR<<<gridRows, blockSweep, 0, workspace.computeStream>>>(
                 d_depth, d_normal, d_conf,
                 d_ref, sW, sH,
                 d_srcPtrs, d_srcData, srcW, srcH2, N,
@@ -2063,7 +2544,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
             CUDA_CHECK(cudaGetLastError());
 
             // 自右向左
-            kernelSweepRL<<<gridRows, blockSweep>>>(
+            kernelSweepRL<<<gridRows, blockSweep, 0, workspace.computeStream>>>(
                 d_depth, d_normal, d_conf,
                 d_ref, sW, sH,
                 d_srcPtrs, d_srcData, srcW, srcH2, N,
@@ -2076,9 +2557,15 @@ bool PatchMatchDepthEstimator::estimateGPU(
         }
 
         perturbation = fmaxf(perturbation * 0.5f, 0.02f);
-        if (config.cancelFlag)
+        constexpr int kCancellationCheckpointInterval = 4;
+        const bool cancellation_checkpoint = config.cancelFlag &&
+            (((iter + 1) % kCancellationCheckpointInterval) == 0 ||
+             iter + 1 == config.numIterations);
+        if (cancellation_checkpoint)
         {
-            CUDA_CHECK(cudaDeviceSynchronize());
+            CUDA_CHECK(cudaEventRecord(workspace.cancellationCheckpoint,
+                                       workspace.computeStream));
+            CUDA_CHECK(cudaEventSynchronize(workspace.cancellationCheckpoint));
             if (config.cancelFlag->load(std::memory_order_relaxed))
             {
                 if (errorMsg) *errorMsg = "PatchMatch cancelled";
@@ -2096,7 +2583,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
     // ── 深度唯一性 + 置信度过滤 ──────────────────────────────────
     if (config.enablePhotometricUniqueness)
     {
-        kernelApplyPhotometricUniqueness<<<grid, block>>>(
+        kernelApplyPhotometricUniqueness<<<grid, block, 0, workspace.computeStream>>>(
             d_depth,
             d_normal,
             d_conf,
@@ -2119,13 +2606,40 @@ bool PatchMatchDepthEstimator::estimateGPU(
             config.photometricUniquenessMinimumConfidenceScale);
         CUDA_CHECK(cudaGetLastError());
     }
-    kernelFinalizeDepth<<<grid, block>>>(d_depth, d_conf, sW, sH, config.confidenceThresh);
+    kernelFinalizeDepth<<<grid, block, 0, workspace.computeStream>>>(
+        d_depth, d_conf, sW, sH, config.confidenceThresh);
     CUDA_CHECK(cudaGetLastError());
 
-    // ── 拷回 CPU ─────────────────────────────────────────────────
+    // ── 独立传输流异步拷回固定页内存 ─────────────────────────────
+    CUDA_CHECK(workspace.depthHost.reserve(static_cast<std::size_t>(refPx)));
+    CUDA_CHECK(workspace.confidenceHost.reserve(static_cast<std::size_t>(refPx)));
+    CUDA_CHECK(cudaEventRecord(workspace.computeReady, workspace.computeStream));
+    CUDA_CHECK(cudaStreamWaitEvent(workspace.transferStream,
+                                   workspace.computeReady,
+                                   0));
+    CUDA_CHECK(cudaMemcpyAsync(workspace.depthHost.ptr,
+                               d_depth,
+                               static_cast<std::size_t>(refPx) * sizeof(float),
+                               cudaMemcpyDeviceToHost,
+                               workspace.transferStream));
+    CUDA_CHECK(cudaMemcpyAsync(workspace.confidenceHost.ptr,
+                               d_conf,
+                               static_cast<std::size_t>(refPx) * sizeof(float),
+                               cudaMemcpyDeviceToHost,
+                               workspace.transferStream));
+    CUDA_CHECK(cudaEventRecord(workspace.downloadsReady,
+                               workspace.transferStream));
+    CUDA_CHECK(cudaEventSynchronize(workspace.downloadsReady));
+
     cv::Mat depthS(sH, sW, CV_32F), confS(sH, sW, CV_32F);
-    CUDA_CHECK(cudaMemcpy(depthS.ptr<float>(), d_depth, refPx*sizeof(float), cudaMemcpyDeviceToHost));
-    CUDA_CHECK(cudaMemcpy(confS.ptr<float>(),  d_conf,  refPx*sizeof(float), cudaMemcpyDeviceToHost));
+    std::memcpy(depthS.ptr<float>(),
+                workspace.depthHost.ptr,
+                static_cast<std::size_t>(refPx) * sizeof(float));
+    std::memcpy(confS.ptr<float>(),
+                workspace.confidenceHost.ptr,
+                static_cast<std::size_t>(refPx) * sizeof(float));
+    workspace_run_guard.markCompleted();
+    gpu_execution_lock.unlock();
     if (!ref_mask_scaled.empty())
     {
         const cv::Mat invalid_reference = ref_mask_scaled == 0;
@@ -2668,19 +3182,85 @@ bool PatchMatchDepthEstimator::isCudaAvailable()
     return cnt > 0;
 }
 
+bool PatchMatchDepthEstimator::reserveGpuWorkspace(
+    std::size_t referencePixelCount,
+    int sourceCount,
+    bool reserveReferenceMask,
+    bool reserveSourceMasks,
+    std::string *errorMsg)
+{
+    if (referencePixelCount == 0 || sourceCount <= 0)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "CUDA workspace dimensions are invalid";
+        }
+        return false;
+    }
+
+    std::shared_lock<std::shared_mutex> lifetime_lock(
+        g_patchMatchGpuCacheLifetimeMutex);
+    std::unique_lock<std::mutex> execution_lock(
+        g_patchMatchGpuExecutionMutex, std::try_to_lock);
+    if (!execution_lock.owns_lock())
+    {
+        // Another frame is already using a workspace at least as large as its
+        // own finest level. Do not block this host slot: it can prepare and
+        // upload images now; estimateGPU() will grow the workspace later only
+        // if this frame is actually larger.
+        return true;
+    }
+    PatchMatchGpuWorkspace &workspace = patchMatchGpuWorkspace();
+    CUDA_CHECK(workspace.initialize());
+    CUDA_CHECK(workspace.srcData.reserve(
+        static_cast<std::size_t>(sourceCount) * 16));
+    CUDA_CHECK(workspace.srcPointers.reserve(
+        static_cast<std::size_t>(sourceCount)));
+    CUDA_CHECK(workspace.depth.reserve(referencePixelCount));
+    CUDA_CHECK(workspace.normal.reserve(referencePixelCount * 3));
+    CUDA_CHECK(workspace.confidence.reserve(referencePixelCount));
+    CUDA_CHECK(workspace.hint.reserve(referencePixelCount));
+    CUDA_CHECK(workspace.hintRadius.reserve(referencePixelCount));
+    CUDA_CHECK(workspace.depthHost.reserve(referencePixelCount));
+    CUDA_CHECK(workspace.confidenceHost.reserve(referencePixelCount));
+    if (reserveReferenceMask)
+    {
+        CUDA_CHECK(workspace.referenceMask.reserve(referencePixelCount));
+    }
+    if (reserveSourceMasks)
+    {
+        CUDA_CHECK(workspace.sourceMasks.reserve(
+            referencePixelCount * static_cast<std::size_t>(sourceCount)));
+    }
+    return true;
+}
+
 void PatchMatchDepthEstimator::cleanupGpuImageCache()
 {
+    std::unique_lock<std::shared_mutex> lifetime_lock(
+        g_patchMatchGpuCacheLifetimeMutex);
+    std::lock_guard<std::mutex> execution_lock(g_patchMatchGpuExecutionMutex);
     std::lock_guard<std::mutex> lock(g_srcImageGpuCacheMutex);
     for (auto &kv : g_srcImageGpuCache)
     {
         if (kv.second.devicePtr)
         {
+            if (kv.second.readyEvent)
+            {
+                cudaEventSynchronize(kv.second.readyEvent);
+            }
             cudaFree(kv.second.devicePtr);
             kv.second.devicePtr = nullptr;
+        }
+        if (kv.second.readyEvent)
+        {
+            cudaEventDestroy(kv.second.readyEvent);
+            kv.second.readyEvent = nullptr;
         }
     }
     g_srcImageGpuCache.clear();
     g_srcImageGpuCacheBytes = 0;
+    patchMatchGpuWorkspace().reset();
 }
 
 bool PatchMatchDepthEstimator::estimate(

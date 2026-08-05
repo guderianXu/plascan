@@ -2016,6 +2016,7 @@ DepthMapGenerator::~DepthMapGenerator()
     {
         _backgroundFuture.waitForFinished();
     }
+    PatchMatchDepthEstimator::cleanupGpuImageCache();
 }
 
 // =============================================================================
@@ -8565,7 +8566,9 @@ void DepthMapGenerator::runInBackground()
         LOG_INFO(QStringLiteral("[MVS] 深度图估计采用流式保存模式：保存后释放全分辨率深度/置信图"));
     }
 
-    // ── 阶段一：优先级队列并行估计深度图（GPU 优先高价值帧，CPU 处理其余帧）────
+    // ── 阶段一：有界三段流水线 ──────────────────────────────────────────────
+    // 两个 GPU 主机帧槽并行执行 CPU 准备/后处理；PatchMatch 内部只允许一个
+    // CUDA 执行槽，并使用独立传输流。产物由 saveQueue 在第三段异步落盘。
     int skippedFrames = 0;
     for (size_t i = 0; i < _skipFrameMask.size(); ++i)
     {
@@ -8675,8 +8678,8 @@ void DepthMapGenerator::runInBackground()
     }
     if (cudaAvailable)
     {
-        LOG_DEBUG(QStringLiteral("[MVS] CUDA 已启用，GPU 帧并发=%1；每帧内部使用 CUDA kernel，显存不足时可降低 gpu_frame_workers")
-                     .arg(gpuFrameWorkers));
+        LOG_DEBUG(QStringLiteral("[MVS] CUDA 已启用，主机帧槽=%1，CUDA 执行槽=1；CPU 准备 / GPU 计算 / CPU 后处理保存采用有界流水线")
+                      .arg(gpuFrameWorkers));
     }
 
     const size_t maxBufferedSaveTasks =

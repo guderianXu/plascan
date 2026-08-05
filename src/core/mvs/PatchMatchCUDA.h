@@ -38,6 +38,13 @@ public:
     /// 在程序退出前或不再需要 MVS 功能时调用，防止显存泄漏。
     static void cleanupGpuImageCache();
 
+    /// 按最细金字塔层一次性预留可复用 CUDA 工作区，避免逐层扩容产生隐式同步。
+    static bool reserveGpuWorkspace(std::size_t referencePixelCount,
+                                    int sourceCount,
+                                    bool reserveReferenceMask,
+                                    bool reserveSourceMasks,
+                                    std::string *errorMsg = nullptr);
+
     // ── 主接口 ──────────────────────────────────────────────────────────────
     // refGray      参考帧灰度图 (CV_8U)
     // srcGrays     源帧灰度图列表（与 srcCams 等长）

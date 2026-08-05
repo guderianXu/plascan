@@ -8590,7 +8590,7 @@ TEST(DenseWorkflowConfigTest, MapsMultiHypothesisTargetedGapRecovery)
     EXPECT_FLOAT_EQ(config.postConsistencyResidualMaximumPriorRadius, 0.07f);
 }
 
-TEST(DenseWorkflowConfigTest, DefaultCudaSchedulingKeepsGuiResponsive)
+TEST(DenseWorkflowConfigTest, DefaultCudaSchedulingUsesTwoStageHostPipeline)
 {
     QJsonObject json;
     json[QStringLiteral("threads")] = 8;
@@ -8599,9 +8599,9 @@ TEST(DenseWorkflowConfigTest, DefaultCudaSchedulingKeepsGuiResponsive)
     const auto settings = xjw::gui::project::denseGenerationSettingsFromJson(json);
     const auto config = xjw::gui::project::buildDepthGenConfig(settings, 16);
 
-    EXPECT_EQ(config.gpuFrameWorkerCount, 1);
+    EXPECT_EQ(config.gpuFrameWorkerCount, 2);
     EXPECT_EQ(config.cpuFrameWorkerCount, 0);
-    EXPECT_EQ(config.cpuWorkerCount, 7);
+    EXPECT_EQ(config.cpuWorkerCount, 3);
 }
 
 TEST(DenseWorkflowConfigTest, CpuThreadBudgetIsSharedAcrossFrameWorkers)
@@ -8618,6 +8618,23 @@ TEST(DenseWorkflowConfigTest, CpuThreadBudgetIsSharedAcrossFrameWorkers)
     EXPECT_EQ(config.gpuFrameWorkerCount, 2);
     EXPECT_EQ(config.cpuFrameWorkerCount, 2);
     EXPECT_EQ(config.cpuWorkerCount, 1);
+}
+
+TEST(MvsCudaPipelineContractTest, UsesEventsPinnedTransfersAndReusableWorkspace)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/core/mvs/PatchMatchCUDA.cu"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("kCancellationCheckpointInterval = 4")));
+    EXPECT_TRUE(source.contains(QStringLiteral("cudaEventSynchronize(workspace.cancellationCheckpoint)")));
+    EXPECT_FALSE(source.contains(QStringLiteral("CUDA_CHECK(cudaDeviceSynchronize())")));
+    EXPECT_TRUE(source.contains(QStringLiteral("cudaHostAlloc")));
+    EXPECT_TRUE(source.contains(QStringLiteral("cudaMemcpyAsync")));
+    EXPECT_TRUE(source.contains(QStringLiteral("cudaMallocAsync")));
+    EXPECT_TRUE(source.contains(QStringLiteral("cudaStreamWaitEvent")));
+    EXPECT_TRUE(source.contains(QStringLiteral("PatchMatchGpuWorkspace &workspace")));
+    EXPECT_TRUE(source.contains(QStringLiteral("imageUploadLaneForCurrentThread")));
 }
 
 TEST(DepthPyramidDiagnosticsTest, IntermediateLevelPreviewsFlowToPhotoOverlayOnly)

@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <future>
 
 namespace
 {
@@ -296,6 +297,42 @@ TEST(PatchMatchCudaRegressionTest, LegacySweepFallbackProducesDepthForSmallPlane
         GTEST_SKIP() << "CUDA PatchMatch is not available in this environment";
     }
     runCudaPatchMatchSmallPlane(false);
+}
+
+TEST(PatchMatchCudaRegressionTest, ReusesWorkspaceAcrossSequentialFrames)
+{
+    if (!xjw::mvs::PatchMatchDepthEstimator::isCudaAvailable())
+    {
+        GTEST_SKIP() << "CUDA PatchMatch is not available in this environment";
+    }
+
+    const CudaPatchMatchRunStats first = runCudaPatchMatchSmallPlane(true);
+    const CudaPatchMatchRunStats second = runCudaPatchMatchSmallPlane(true);
+    EXPECT_EQ(first.validCount, second.validCount);
+    xjw::mvs::PatchMatchDepthEstimator::cleanupGpuImageCache();
+}
+
+TEST(PatchMatchCudaRegressionTest, ConcurrentHostFrameSlotsRemainIsolated)
+{
+    if (!xjw::mvs::PatchMatchDepthEstimator::isCudaAvailable())
+    {
+        GTEST_SKIP() << "CUDA PatchMatch is not available in this environment";
+    }
+
+    auto first_future = std::async(std::launch::async, []()
+    {
+        return runCudaPatchMatchSmallPlane(true);
+    });
+    auto second_future = std::async(std::launch::async, []()
+    {
+        return runCudaPatchMatchSmallPlane(true);
+    });
+
+    const CudaPatchMatchRunStats first = first_future.get();
+    const CudaPatchMatchRunStats second = second_future.get();
+    EXPECT_GT(first.validCount, 0);
+    EXPECT_EQ(first.validCount, second.validCount);
+    xjw::mvs::PatchMatchDepthEstimator::cleanupGpuImageCache();
 }
 
 TEST(PatchMatchCudaBenchmarkTest, DISABLED_CompareParallelAndLegacySweepAfterWarmup)

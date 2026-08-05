@@ -277,6 +277,30 @@ DepthPyramidResult DepthPyramidEstimator::estimate(const DepthPyramidRequest &re
     }
 
     const int level_count = std::clamp(request.pyramidConfig.activeLevelCount, 1, 3);
+    const DepthPyramidLevelConfig &finest_level =
+        request.pyramidConfig.levels[level_count - 1];
+    if (finest_level.patchMatch.useCuda &&
+        PatchMatchDepthEstimator::isCudaAvailable())
+    {
+        const cv::Size finest_size = depthPyramidWorkingSize(
+            request.referenceImage.cols,
+            request.referenceImage.rows,
+            finest_level.patchMatch.downsampleFactor);
+        std::string reserve_error;
+        if (!PatchMatchDepthEstimator::reserveGpuWorkspace(
+                static_cast<std::size_t>(finest_size.width) *
+                    static_cast<std::size_t>(finest_size.height),
+                static_cast<int>(request.sourceImages.size()),
+                !request.referenceValidMask.empty(),
+                !request.sourceValidMasks.empty(),
+                &reserve_error))
+        {
+            result.errorMessage = reserve_error.empty()
+                ? "failed to reserve CUDA depth-pyramid workspace"
+                : reserve_error;
+            return result;
+        }
+    }
     DepthLevelResult parent;
     bool has_parent = false;
     for (int index = 0; index < level_count; ++index)

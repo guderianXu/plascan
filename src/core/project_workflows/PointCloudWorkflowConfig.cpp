@@ -56,11 +56,11 @@ int autoGpuFrameWorkers(int threads, int viewCount)
 {
     const int maxByViews = std::max(1, viewCount);
     const int maxGpuWorkers = std::min(2, maxByViews);
-    // The GUI renderer and CUDA depth estimator share the same device. Running
-    // two high-quality frames concurrently can starve Qt's OpenGL rendering and
-    // make the application appear frozen. Keep the automatic GUI-safe default
-    // at one; an explicit gpu_frame_workers value can still opt into two.
-    const int desired = std::clamp(threads, 1, 1);
+    // CUDA execution remains serialized inside PatchMatch because its camera
+    // constants and reusable workspace are shared. A second host frame slot
+    // overlaps CPU preparation/post-processing and asynchronous saving without
+    // running two memory-heavy PatchMatch kernels beside the Qt renderer.
+    const int desired = threads >= 4 && viewCount >= 2 ? 2 : 1;
     return std::clamp(desired, 1, maxGpuWorkers);
 }
 
