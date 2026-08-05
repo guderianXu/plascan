@@ -205,6 +205,7 @@ set_target_properties(plascan_gui PROPERTIES
 # 与安装包启动时都能下载 GitHub Release 中的模型资源。
 plascan_deploy_qt_tls_runtime(plascan_gui)
 plascan_deploy_tensorrt_runtime(plascan_gui)
+plascan_deploy_vcpkg_runtime(plascan_gui)
 
 if(PLASCAN_EXTRA_NVRTC_RPATHS)
   set_property(TARGET plascan_gui APPEND PROPERTY BUILD_RPATH "${PLASCAN_EXTRA_NVRTC_RPATHS}")

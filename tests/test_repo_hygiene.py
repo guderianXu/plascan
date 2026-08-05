@@ -219,6 +219,23 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("BUILD_opencv_videostab=OFF", text)
         self.assertIn("OpenCV DNN CUDA", text)
 
+    def test_gui_build_deploys_vcpkg_runtime_dlls(self):
+        module = (ROOT / "cmake" / "PlascanWindowsRuntime.cmake").read_text(
+            encoding="utf-8"
+        )
+        root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        gui_cmake = (ROOT / "src" / "gui" / "CMakeLists.txt").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("function(plascan_deploy_vcpkg_runtime target_name)", module)
+        self.assertIn("VCPKG_INSTALLED_DIR", module)
+        self.assertIn('"${_plascan_vcpkg_runtime_dir}/*.dll"', module)
+        self.assertIn("copy_if_different", module)
+        self.assertIn("COMMAND_EXPAND_LISTS", module)
+        self.assertIn("include(PlascanWindowsRuntime)", root_cmake)
+        self.assertIn("plascan_deploy_vcpkg_runtime(plascan_gui)", gui_cmake)
+
     def test_release_1_1_6_metadata_is_synchronized(self):
         root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         core_cmake = (ROOT / "src" / "core" / "CMakeLists.txt").read_text(encoding="utf-8")

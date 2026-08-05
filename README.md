@@ -81,7 +81,7 @@ cpack `
   -D "CPACK_PACKAGE_DIRECTORY=$PWD/dist/packages/windows-vcpkg-release"
 ```
 
-Windows 构建使用原生 MSVC/Ninja/PowerShell，不需要 WSL。打包后的 GUI 需要 Qt platform plugins、vcpkg 和 TensorRT/CUDA 运行时 DLL；`PLASCAN_BUNDLE_RUNTIME=ON` 时 CMake install/CPack 会按主程序和 Qt 插件的传递依赖闭包收集 DLL，并补充 Vulkan、cuDNN 和 NVRTC 等动态加载运行时。Windows 包同时内置 `U2Net_v1.onnx`。
+Windows 构建使用原生 MSVC/Ninja/PowerShell，不需要 WSL。GUI 链接后会把当前 vcpkg triplet 的运行时 DLL 增量同步到 `build/bin`，保证直接启动时包含 LAPACK/OpenBLAS 等传递依赖。打包后的 GUI 还需要 Qt platform plugins 和 TensorRT/CUDA 运行时 DLL；`PLASCAN_BUNDLE_RUNTIME=ON` 时 CMake install/CPack 会按主程序和 Qt 插件的传递依赖闭包收集 DLL，并补充 Vulkan、cuDNN 和 NVRTC 等动态加载运行时。Windows 包同时内置 `U2Net_v1.onnx`。
 
 当前 manifest 使用 vcpkg 中可用的 OpenCV 4.x port。后续 vcpkg 正式提供 OpenCV 5 后，优先通过更新 `builtin-baseline`、OpenCV feature 列表和现有 `OpenCvCompat` 兼容测试切换。
 

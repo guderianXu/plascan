@@ -137,6 +137,7 @@ plascan_configure_dependency_paths()
 include(PlascanPackages)
 include(PlascanQtRuntime)
 include(PlascanTensorRtRuntime)
+include(PlascanWindowsRuntime)
 
 # 为运行时 NVRTC builtins 解析补充 conda/pip CUDA 库目录。
 # 典型问题：libnvrtc.so 能加载，但 dlopen("libnvrtc-builtins.so.*") 在默认搜索路径中找不到。

@@ -10,7 +10,7 @@ plascan/
 │   ├── common/     # 通用工具库 (日志, IO, 模型与项目公共能力)
 │   ├── core/       # 核心算法库 (相机, 特征, 匹配, 标记控制网, SfM, MVS, LiDAR, 蒙版, 网格, 地形)
 │   └── gui/        # Qt6 图形界面
-├── cmake/          # 全局 CMake 模块 (依赖查找, 包管理)
+├── cmake/          # 全局 CMake 模块 (依赖查找、包管理、Windows 运行时部署)
 ├── 3rdparty/       # 第三方库源码 (LightGlue)
 ├── resources/      # 静态资源 (深度学习模型权重, 图标)
 ├── scripts/        # 按 models/workflows/bench/env/validation 分类的辅助脚本
