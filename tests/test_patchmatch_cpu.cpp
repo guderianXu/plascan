@@ -17,6 +17,10 @@ namespace
 struct CudaPatchMatchRunStats
 {
     int validCount = 0;
+    int roiPixelCount = 0;
+    double meanDepth = 0.0;
+    double meanConfidence = 0.0;
+    double depthRmse = 0.0;
     double elapsedMs = 0.0;
 };
 
@@ -84,7 +88,8 @@ CudaPatchMatchRunStats executeCudaPatchMatchCase(
     const xjw::Camera &refCam,
     const xjw::Camera &srcCam,
     bool useParallelSweep,
-    int iterations)
+    int iterations,
+    double expectedDepth = 10.0)
 {
     xjw::mvs::PatchMatchConfig config;
     config.useCuda = true;
@@ -127,19 +132,34 @@ CudaPatchMatchRunStats executeCudaPatchMatchCase(
                        refGray.cols * 2 / 3,
                        refGray.rows * 2 / 3);
     int validCount = 0;
+    double depthSum = 0.0;
+    double confidenceSum = 0.0;
+    double squaredDepthErrorSum = 0.0;
     for (int y = roi.y; y < roi.y + roi.height; ++y)
     {
         for (int x = roi.x; x < roi.x + roi.width; ++x)
         {
-            if (depthMap.at<float>(y, x) > 0.0f)
+            const float depth = depthMap.at<float>(y, x);
+            if (depth > 0.0f)
             {
                 ++validCount;
+                depthSum += depth;
+                confidenceSum += confidenceMap.at<float>(y, x);
+                const double depthError = static_cast<double>(depth) - expectedDepth;
+                squaredDepthErrorSum += depthError * depthError;
             }
         }
     }
 
     CudaPatchMatchRunStats stats;
     stats.validCount = validCount;
+    stats.roiPixelCount = roi.area();
+    if (validCount > 0)
+    {
+        stats.meanDepth = depthSum / static_cast<double>(validCount);
+        stats.meanConfidence = confidenceSum / static_cast<double>(validCount);
+        stats.depthRmse = std::sqrt(squaredDepthErrorSum / static_cast<double>(validCount));
+    }
     stats.elapsedMs = std::chrono::duration<double, std::milli>(stop - start).count();
     return stats;
 }
@@ -309,6 +329,8 @@ TEST(PatchMatchCudaRegressionTest, ReusesWorkspaceAcrossSequentialFrames)
     const CudaPatchMatchRunStats first = runCudaPatchMatchSmallPlane(true);
     const CudaPatchMatchRunStats second = runCudaPatchMatchSmallPlane(true);
     EXPECT_EQ(first.validCount, second.validCount);
+    EXPECT_DOUBLE_EQ(first.meanDepth, second.meanDepth);
+    EXPECT_DOUBLE_EQ(first.meanConfidence, second.meanConfidence);
     xjw::mvs::PatchMatchDepthEstimator::cleanupGpuImageCache();
 }
 
@@ -346,7 +368,7 @@ TEST(PatchMatchCudaBenchmarkTest, DISABLED_CompareParallelAndLegacySweepAfterWar
     constexpr int IMAGE_HEIGHT = 480;
     constexpr double FOCAL = 520.0;
     constexpr double BASELINE = 1.0;
-    constexpr int DISPARITY = 26;
+    constexpr int DISPARITY = 52;
 
     cv::Mat refGray = makeTexturedImage(IMAGE_WIDTH, IMAGE_HEIGHT);
     cv::Mat srcGray = makeShiftedImage(refGray, DISPARITY);
@@ -379,9 +401,36 @@ TEST(PatchMatchCudaBenchmarkTest, DISABLED_CompareParallelAndLegacySweepAfterWar
     const int pixelCount = (IMAGE_WIDTH * 2 / 3) * (IMAGE_HEIGHT * 2 / 3);
     EXPECT_GT(parallelStats.validCount, pixelCount * 0.10);
     EXPECT_GT(legacyStats.validCount, pixelCount * 0.10);
+    EXPECT_NEAR(parallelStats.meanDepth, 10.0, 1.0);
+    EXPECT_LT(parallelStats.depthRmse, 1.0);
+    EXPECT_NEAR(legacyStats.meanDepth, 10.0, 0.1);
+    EXPECT_LT(legacyStats.depthRmse, 0.1);
     std::fprintf(stderr,
                  "[PatchMatchCudaBenchmark] parallel=%.2f ms legacy=%.2f ms speedup=%.2fx\n",
                  parallelStats.elapsedMs,
                  legacyStats.elapsedMs,
                  legacyStats.elapsedMs / std::max(1e-6, parallelStats.elapsedMs));
+    std::fprintf(
+        stdout,
+        "PATCHMATCH_BASELINE_JSON={\"image_width\":%d,\"image_height\":%d,"
+        "\"iterations\":4,\"parallel\":{\"elapsed_ms\":%.3f,\"valid_count\":%d,"
+        "\"roi_pixel_count\":%d,\"mean_depth\":%.6f,\"mean_confidence\":%.6f,"
+        "\"depth_rmse\":%.6f},"
+        "\"legacy\":{\"elapsed_ms\":%.3f,\"valid_count\":%d,"
+        "\"roi_pixel_count\":%d,\"mean_depth\":%.6f,\"mean_confidence\":%.6f,"
+        "\"depth_rmse\":%.6f}}\n",
+        IMAGE_WIDTH,
+        IMAGE_HEIGHT,
+        parallelStats.elapsedMs,
+        parallelStats.validCount,
+        parallelStats.roiPixelCount,
+        parallelStats.meanDepth,
+        parallelStats.meanConfidence,
+        parallelStats.depthRmse,
+        legacyStats.elapsedMs,
+        legacyStats.validCount,
+        legacyStats.roiPixelCount,
+        legacyStats.meanDepth,
+        legacyStats.meanConfidence,
+        legacyStats.depthRmse);
 }

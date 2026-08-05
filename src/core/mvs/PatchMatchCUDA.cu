@@ -806,6 +806,10 @@ struct SrcImageCacheKeyHash
 
 struct SrcImageCacheEntry
 {
+    // Keep the OpenCV allocation alive while hostData is used as the cache key.
+    // Otherwise a later cv::Mat may reuse the same address and incorrectly hit
+    // an entry containing pixels from a different image.
+    cv::Mat hostOwner;
     float *devicePtr = nullptr;
     cudaEvent_t readyEvent = nullptr;
     int scaledW = 0;
@@ -1040,6 +1044,7 @@ bool getOrUploadGrayImageGpu(
         evictSrcImageGpuCacheIfNeeded(bytes, transferStream);
 
         SrcImageCacheEntry entry;
+        entry.hostOwner = srcGray;
         entry.devicePtr = newDevicePtr;
         entry.readyEvent = newReadyEvent;
         entry.scaledW = scaledW;
