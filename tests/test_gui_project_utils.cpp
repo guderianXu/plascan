@@ -8555,6 +8555,23 @@ TEST(DenseWorkflowConfigTest, AutoDepthFilterKeepsAdaptiveMode)
     EXPECT_TRUE(config.saveIntermediatePyramidLevels);
 }
 
+TEST(DenseWorkflowConfigTest, MapsMultiHypothesisTargetedGapRecovery)
+{
+    QJsonObject json;
+    json[QStringLiteral("targetedGapRecoverySourceCount")] = 8;
+    json[QStringLiteral("targetedGapRecoveryHypothesisCount")] = 3;
+    json[QStringLiteral("targetedGapRecoveryConsensusInverseDepthSpread")] = 0.02;
+    json[QStringLiteral("targetedGapRecoveryConsensusPriorRelativeDifference")] = 0.30;
+
+    const auto settings = xjw::gui::project::denseGenerationSettingsFromJson(json);
+    const auto config = xjw::gui::project::buildDepthGenConfig(settings, 16);
+
+    EXPECT_EQ(config.targetedGapRecoverySourceCount, 8);
+    EXPECT_EQ(config.targetedGapRecoveryHypothesisCount, 3);
+    EXPECT_FLOAT_EQ(config.targetedGapRecoveryConsensusInverseDepthSpread, 0.02f);
+    EXPECT_FLOAT_EQ(config.targetedGapRecoveryConsensusPriorRelativeDifference, 0.30f);
+}
+
 TEST(DenseWorkflowConfigTest, DefaultCudaSchedulingKeepsGuiResponsive)
 {
     QJsonObject json;

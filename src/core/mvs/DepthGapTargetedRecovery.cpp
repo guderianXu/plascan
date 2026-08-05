@@ -177,17 +177,47 @@ DepthGapTargetedRecoveryStats mergeTargetedDepthGapCandidates(
     cv::Mat *recoveredMask,
     const DepthGapTargetedRecoveryOptions &options)
 {
+    return mergeMultiHypothesisTargetedDepthGapCandidates(
+        depth,
+        confidence,
+        std::vector<cv::Mat>{candidateDepth},
+        std::vector<cv::Mat>{candidateConfidence},
+        target,
+        recoveredMask,
+        options);
+}
+
+DepthGapTargetedRecoveryStats mergeMultiHypothesisTargetedDepthGapCandidates(
+    cv::Mat &depth,
+    cv::Mat &confidence,
+    const std::vector<cv::Mat> &candidateDepths,
+    const std::vector<cv::Mat> &candidateConfidences,
+    const DepthGapTarget &target,
+    cv::Mat *recoveredMask,
+    const DepthGapTargetedRecoveryOptions &options)
+{
     DepthGapTargetedRecoveryStats stats;
     stats.supportPixelCount = target.supportPixelCount;
     stats.requestedGapPixelCount = target.requestedGapPixelCount;
     stats.priorCoveredGapPixelCount = target.priorCoveredGapPixelCount;
     stats.skippedReason = target.skippedReason;
+    stats.hypothesisCount = static_cast<int>(candidateDepths.size());
     if (!target.valid || depth.empty() || depth.type() != CV_32FC1 ||
-        candidateDepth.empty() || candidateDepth.type() != CV_32FC1 ||
-        candidateConfidence.empty() || candidateConfidence.type() != CV_32FC1 ||
+        candidateDepths.empty() ||
+        candidateDepths.size() != candidateConfidences.size() ||
         depth.size() != target.gapMask.size() ||
-        depth.size() != candidateDepth.size() ||
-        depth.size() != candidateConfidence.size())
+        !std::all_of(candidateDepths.begin(), candidateDepths.end(),
+                     [&depth](const cv::Mat &candidate)
+                     {
+                         return candidate.type() == CV_32FC1 &&
+                             candidate.size() == depth.size();
+                     }) ||
+        !std::all_of(candidateConfidences.begin(), candidateConfidences.end(),
+                     [&depth](const cv::Mat &candidate)
+                     {
+                         return candidate.type() == CV_32FC1 &&
+                             candidate.size() == depth.size();
+                     }))
     {
         if (stats.skippedReason.isEmpty())
         {
@@ -207,13 +237,24 @@ DepthGapTargetedRecoveryStats mergeTargetedDepthGapCandidates(
         options.minimumCandidateConfidence, 0.0f, 1.0f);
     const float maximum_relative_difference = std::max(
         0.0f, options.maximumCandidatePriorRelativeDifference);
+    const float maximum_consensus_relative_difference = std::max(
+        maximum_relative_difference,
+        options.maximumConsensusPriorRelativeDifference);
+    const float maximum_consensus_spread = std::max(
+        0.0f, options.maximumConsensusInverseDepthRelativeSpread);
+    const int minimum_consensus_count = std::max(
+        2, options.minimumConsensusHypothesisCount);
+    struct EligibleHypothesis
+    {
+        float inverseDepth = 0.0f;
+        float confidence = 0.0f;
+    };
+    std::vector<EligibleHypothesis> eligible;
+    eligible.reserve(candidateDepths.size());
     for (int row = 0; row < depth.rows; ++row)
     {
         float *depth_row = depth.ptr<float>(row);
         float *confidence_row = confidence.ptr<float>(row);
-        const float *candidate_depth_row = candidateDepth.ptr<float>(row);
-        const float *candidate_confidence_row =
-            candidateConfidence.ptr<float>(row);
         const float *prior_row = target.hintDepth.ptr<float>(row);
         const std::uint8_t *gap_row = target.gapMask.ptr<std::uint8_t>(row);
         std::uint8_t *recovered_row = recovered.ptr<std::uint8_t>(row);
@@ -223,31 +264,103 @@ DepthGapTargetedRecoveryStats mergeTargetedDepthGapCandidates(
             {
                 continue;
             }
-            const float candidate_depth = candidate_depth_row[column];
-            if (!std::isfinite(candidate_depth) || candidate_depth <= 0.0f)
+            eligible.clear();
+            bool has_candidate_depth = false;
+            for (std::size_t hypothesis_index = 0;
+                 hypothesis_index < candidateDepths.size();
+                 ++hypothesis_index)
+            {
+                const float candidate_depth =
+                    candidateDepths[hypothesis_index].at<float>(row, column);
+                if (!std::isfinite(candidate_depth) || candidate_depth <= 0.0f)
+                {
+                    continue;
+                }
+                has_candidate_depth = true;
+                const float candidate_confidence =
+                    candidateConfidences[hypothesis_index].at<float>(row, column);
+                if (!std::isfinite(candidate_confidence) ||
+                    candidate_confidence < minimum_confidence)
+                {
+                    continue;
+                }
+                eligible.push_back(EligibleHypothesis{
+                    1.0f / candidate_depth,
+                    candidate_confidence});
+            }
+            if (!has_candidate_depth)
             {
                 continue;
             }
             ++stats.candidatePixelCount;
-            const float candidate_confidence =
-                candidate_confidence_row[column];
-            if (!std::isfinite(candidate_confidence) ||
-                candidate_confidence < minimum_confidence)
+            if (eligible.empty())
             {
                 ++stats.rejectedConfidencePixelCount;
                 continue;
             }
+
+            const bool consensus_requested =
+                static_cast<int>(candidateDepths.size()) >= minimum_consensus_count;
+            const bool has_consensus =
+                static_cast<int>(eligible.size()) >= minimum_consensus_count;
+            if (consensus_requested && !has_consensus)
+            {
+                ++stats.rejectedInsufficientHypothesisPixelCount;
+            }
+
+            float inverse_depth_weight_sum = 0.0f;
+            float confidence_sum = 0.0f;
+            float merged_confidence = 1.0f;
+            for (const EligibleHypothesis &hypothesis : eligible)
+            {
+                inverse_depth_weight_sum +=
+                    hypothesis.inverseDepth * hypothesis.confidence;
+                confidence_sum += hypothesis.confidence;
+                merged_confidence = std::min(
+                    merged_confidence, hypothesis.confidence);
+            }
+            const float inverse_depth_mean =
+                inverse_depth_weight_sum / std::max(confidence_sum, 1.0e-6f);
+            if (!std::isfinite(inverse_depth_mean) || inverse_depth_mean <= 0.0f)
+            {
+                continue;
+            }
+            if (has_consensus)
+            {
+                float variance_sum = 0.0f;
+                for (const EligibleHypothesis &hypothesis : eligible)
+                {
+                    const float difference =
+                        hypothesis.inverseDepth - inverse_depth_mean;
+                    variance_sum += hypothesis.confidence * difference * difference;
+                }
+                const float relative_spread = std::sqrt(
+                    variance_sum / std::max(confidence_sum, 1.0e-6f)) /
+                    inverse_depth_mean;
+                if (!std::isfinite(relative_spread) ||
+                    relative_spread > maximum_consensus_spread)
+                {
+                    ++stats.rejectedHypothesisSpreadPixelCount;
+                    continue;
+                }
+                ++stats.consensusCandidatePixelCount;
+            }
+
+            const float candidate_depth = 1.0f / inverse_depth_mean;
             const float prior = prior_row[column];
             const float relative_difference = std::fabs(candidate_depth - prior) /
                 std::max(prior, 1.0e-6f);
+            const float allowed_relative_difference = has_consensus
+                ? maximum_consensus_relative_difference
+                : maximum_relative_difference;
             if (!std::isfinite(prior) || prior <= 0.0f ||
-                relative_difference > maximum_relative_difference)
+                relative_difference > allowed_relative_difference)
             {
                 ++stats.rejectedPriorPixelCount;
                 continue;
             }
             depth_row[column] = candidate_depth;
-            confidence_row[column] = candidate_confidence;
+            confidence_row[column] = merged_confidence;
             recovered_row[column] = 255;
             ++stats.recoveredPixelCount;
         }
@@ -280,9 +393,21 @@ QJsonObject depthGapTargetedRecoveryStatsToJson(
          stats.rejectedConfidencePixelCount},
         {QStringLiteral("rejected_prior_pixel_count"),
          stats.rejectedPriorPixelCount},
+        {QStringLiteral("source_count"), stats.sourceCount},
+        {QStringLiteral("attempted_hypothesis_count"),
+         stats.attemptedHypothesisCount},
+        {QStringLiteral("hypothesis_count"), stats.hypothesisCount},
+        {QStringLiteral("failed_hypothesis_count"),
+         stats.failedHypothesisCount},
+        {QStringLiteral("consensus_candidate_pixel_count"),
+         stats.consensusCandidatePixelCount},
+        {QStringLiteral("rejected_insufficient_hypothesis_pixel_count"),
+         stats.rejectedInsufficientHypothesisPixelCount},
+        {QStringLiteral("rejected_hypothesis_spread_pixel_count"),
+         stats.rejectedHypothesisSpreadPixelCount},
         {QStringLiteral("recovery_ratio"), stats.recoveryRatio},
         {QStringLiteral("skipped_reason"), stats.skippedReason},
-        {QStringLiteral("schema_version"), 1}};
+        {QStringLiteral("schema_version"), 2}};
 }
 
 } // namespace xjw::mvs

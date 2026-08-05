@@ -66,9 +66,12 @@ struct DenseGenerationSettings
     QString depthFilterMode = QStringLiteral("auto");
     bool saveIntermediatePyramidLevels = true;
     bool enableTargetedGapRecovery = true;
-    int targetedGapRecoverySourceCount = 2;
+    int targetedGapRecoverySourceCount = 6;
+    int targetedGapRecoveryHypothesisCount = 2;
     float targetedGapRecoveryConfidence = 0.28f;
     float targetedGapRecoveryPriorRelativeDifference = 0.18f;
+    float targetedGapRecoveryConsensusInverseDepthSpread = 0.025f;
+    float targetedGapRecoveryConsensusPriorRelativeDifference = 0.35f;
     int targetedGapRecoveryMaximumPriorDistancePixels = 128;
     bool enableTwoSourceCrossViewGrowth = false;
     int twoSourceGrowthDistancePixels = 3;

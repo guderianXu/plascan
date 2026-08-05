@@ -276,12 +276,20 @@ DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &setti
     parsed.enableTargetedGapRecovery = settings.value(
         QStringLiteral("enableTargetedGapRecovery")).toBool(true);
     parsed.targetedGapRecoverySourceCount = std::clamp(settings.value(
-        QStringLiteral("targetedGapRecoverySourceCount")).toInt(2), 1, 4);
+        QStringLiteral("targetedGapRecoverySourceCount")).toInt(6), 1, 8);
+    parsed.targetedGapRecoveryHypothesisCount = std::clamp(settings.value(
+        QStringLiteral("targetedGapRecoveryHypothesisCount")).toInt(2), 1, 3);
     parsed.targetedGapRecoveryConfidence = static_cast<float>(settings.value(
         QStringLiteral("targetedGapRecoveryConfidence")).toDouble(0.28));
     parsed.targetedGapRecoveryPriorRelativeDifference = static_cast<float>(
         settings.value(QStringLiteral(
             "targetedGapRecoveryPriorRelativeDifference")).toDouble(0.18));
+    parsed.targetedGapRecoveryConsensusInverseDepthSpread = static_cast<float>(
+        settings.value(QStringLiteral(
+            "targetedGapRecoveryConsensusInverseDepthSpread")).toDouble(0.025));
+    parsed.targetedGapRecoveryConsensusPriorRelativeDifference = static_cast<float>(
+        settings.value(QStringLiteral(
+            "targetedGapRecoveryConsensusPriorRelativeDifference")).toDouble(0.35));
     parsed.targetedGapRecoveryMaximumPriorDistancePixels = std::max(
         1,
         settings.value(QStringLiteral(
@@ -357,10 +365,16 @@ xjw::mvs::DepthGenConfig buildDepthGenConfig(const DenseGenerationSettings &sett
     config.enableTargetedGapRecovery = settings.enableTargetedGapRecovery;
     config.targetedGapRecoverySourceCount =
         settings.targetedGapRecoverySourceCount;
+    config.targetedGapRecoveryHypothesisCount =
+        settings.targetedGapRecoveryHypothesisCount;
     config.targetedGapRecoveryConfidence =
         settings.targetedGapRecoveryConfidence;
     config.targetedGapRecoveryPriorRelativeDifference =
         settings.targetedGapRecoveryPriorRelativeDifference;
+    config.targetedGapRecoveryConsensusInverseDepthSpread =
+        settings.targetedGapRecoveryConsensusInverseDepthSpread;
+    config.targetedGapRecoveryConsensusPriorRelativeDifference =
+        settings.targetedGapRecoveryConsensusPriorRelativeDifference;
     config.targetedGapRecoveryMaximumPriorDistancePixels =
         settings.targetedGapRecoveryMaximumPriorDistancePixels;
     config.enableTwoSourceCrossViewGrowth =

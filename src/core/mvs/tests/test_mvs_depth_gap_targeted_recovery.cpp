@@ -84,4 +84,113 @@ TEST(DepthGapTargetedRecoveryTest, MergesOnlyConfidentPriorConsistentCandidates)
     EXPECT_EQ(cv::countNonZero(recovered), 1);
 }
 
+TEST(DepthGapTargetedRecoveryTest, ConsensusAllowsCurvedSurfacePriorRelaxation)
+{
+    cv::Mat depth(12, 12, CV_32FC1, cv::Scalar(5.0f));
+    depth(cv::Rect(4, 4, 4, 4)).setTo(0.0f);
+    const cv::Mat support(12, 12, CV_8UC1, cv::Scalar(255));
+    xjw::mvs::DepthGapTargetedRecoveryOptions options;
+    options.minimumGapPixelCount = 1;
+    const auto target = xjw::mvs::buildDepthGapTarget(
+        depth, support, options);
+    ASSERT_TRUE(target.valid);
+
+    std::vector<cv::Mat> candidates;
+    candidates.emplace_back(12, 12, CV_32FC1, cv::Scalar(0.0f));
+    candidates.emplace_back(12, 12, CV_32FC1, cv::Scalar(0.0f));
+    std::vector<cv::Mat> confidences;
+    confidences.emplace_back(12, 12, CV_32FC1, cv::Scalar(0.0f));
+    confidences.emplace_back(12, 12, CV_32FC1, cv::Scalar(0.0f));
+    candidates[0].at<float>(5, 5) = 6.00f;
+    candidates[1].at<float>(5, 5) = 6.06f;
+    confidences[0].at<float>(5, 5) = 0.80f;
+    confidences[1].at<float>(5, 5) = 0.75f;
+    cv::Mat confidence;
+    cv::Mat recovered;
+
+    const auto stats =
+        xjw::mvs::mergeMultiHypothesisTargetedDepthGapCandidates(
+            depth,
+            confidence,
+            candidates,
+            confidences,
+            target,
+            &recovered,
+            options);
+
+    EXPECT_EQ(stats.hypothesisCount, 2);
+    EXPECT_EQ(stats.consensusCandidatePixelCount, 1);
+    EXPECT_EQ(stats.recoveredPixelCount, 1);
+    EXPECT_EQ(stats.rejectedPriorPixelCount, 0);
+    EXPECT_GT(depth.at<float>(5, 5), 6.0f);
+    EXPECT_LT(depth.at<float>(5, 5), 6.06f);
+    EXPECT_FLOAT_EQ(confidence.at<float>(5, 5), 0.75f);
+}
+
+TEST(DepthGapTargetedRecoveryTest, RejectsConflictingIndependentHypotheses)
+{
+    cv::Mat depth(12, 12, CV_32FC1, cv::Scalar(5.0f));
+    depth(cv::Rect(4, 4, 4, 4)).setTo(0.0f);
+    const cv::Mat support(12, 12, CV_8UC1, cv::Scalar(255));
+    xjw::mvs::DepthGapTargetedRecoveryOptions options;
+    options.minimumGapPixelCount = 1;
+    const auto target = xjw::mvs::buildDepthGapTarget(
+        depth, support, options);
+    ASSERT_TRUE(target.valid);
+
+    std::vector<cv::Mat> candidates;
+    candidates.emplace_back(12, 12, CV_32FC1, cv::Scalar(0.0f));
+    candidates.emplace_back(12, 12, CV_32FC1, cv::Scalar(0.0f));
+    std::vector<cv::Mat> confidences;
+    confidences.emplace_back(12, 12, CV_32FC1, cv::Scalar(0.9f));
+    confidences.emplace_back(12, 12, CV_32FC1, cv::Scalar(0.9f));
+    candidates[0].at<float>(5, 5) = 6.0f;
+    candidates[1].at<float>(5, 5) = 8.0f;
+    cv::Mat confidence;
+
+    const auto stats =
+        xjw::mvs::mergeMultiHypothesisTargetedDepthGapCandidates(
+            depth,
+            confidence,
+            candidates,
+            confidences,
+            target,
+            nullptr,
+            options);
+
+    EXPECT_EQ(stats.rejectedHypothesisSpreadPixelCount, 1);
+    EXPECT_EQ(stats.recoveredPixelCount, 0);
+    EXPECT_FLOAT_EQ(depth.at<float>(5, 5), 0.0f);
+}
+
+TEST(DepthGapTargetedRecoveryTest, SingleHypothesisKeepsLegacyPriorGate)
+{
+    cv::Mat depth(12, 12, CV_32FC1, cv::Scalar(5.0f));
+    depth(cv::Rect(4, 4, 4, 4)).setTo(0.0f);
+    const cv::Mat support(12, 12, CV_8UC1, cv::Scalar(255));
+    xjw::mvs::DepthGapTargetedRecoveryOptions options;
+    options.minimumGapPixelCount = 1;
+    const auto target = xjw::mvs::buildDepthGapTarget(
+        depth, support, options);
+    ASSERT_TRUE(target.valid);
+
+    cv::Mat candidate(12, 12, CV_32FC1, cv::Scalar(0.0f));
+    cv::Mat candidate_confidence(12, 12, CV_32FC1, cv::Scalar(0.9f));
+    candidate.at<float>(5, 5) = 6.0f;
+    cv::Mat confidence;
+
+    const auto stats = xjw::mvs::mergeTargetedDepthGapCandidates(
+        depth,
+        confidence,
+        candidate,
+        candidate_confidence,
+        target,
+        nullptr,
+        options);
+
+    EXPECT_EQ(stats.hypothesisCount, 1);
+    EXPECT_EQ(stats.rejectedPriorPixelCount, 1);
+    EXPECT_EQ(stats.recoveredPixelCount, 0);
+}
+
 } // namespace

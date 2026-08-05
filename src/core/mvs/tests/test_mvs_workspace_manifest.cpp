@@ -942,6 +942,12 @@ TEST(MvsWorkspaceManifest, DepthConfigHashChangesWhenRelevantSettingsChange)
         changed.targetedGapRecoveryConfidence += 0.01f;
     });
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.targetedGapRecoveryHypothesisCount += 1;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.targetedGapRecoveryConsensusInverseDepthSpread += 0.001f;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
         changed.targetedGapRecoveryMaximumPriorDistancePixels += 1;
     });
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {

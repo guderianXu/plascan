@@ -797,11 +797,19 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
                 config.enableTargetedGapRecovery);
     root.insert(QStringLiteral("targeted_gap_recovery_source_count"),
                 config.targetedGapRecoverySourceCount);
+    root.insert(QStringLiteral("targeted_gap_recovery_hypothesis_count"),
+                config.targetedGapRecoveryHypothesisCount);
     root.insert(QStringLiteral("targeted_gap_recovery_confidence"),
                 config.targetedGapRecoveryConfidence);
     root.insert(
         QStringLiteral("targeted_gap_recovery_prior_relative_difference"),
         config.targetedGapRecoveryPriorRelativeDifference);
+    root.insert(
+        QStringLiteral("targeted_gap_recovery_consensus_inverse_depth_spread"),
+        config.targetedGapRecoveryConsensusInverseDepthSpread);
+    root.insert(
+        QStringLiteral("targeted_gap_recovery_consensus_prior_relative_difference"),
+        config.targetedGapRecoveryConsensusPriorRelativeDifference);
     root.insert(
         QStringLiteral("targeted_gap_recovery_maximum_prior_distance_pixels"),
         config.targetedGapRecoveryMaximumPriorDistancePixels);

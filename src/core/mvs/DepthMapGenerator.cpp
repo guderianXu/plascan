@@ -4762,6 +4762,18 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
             config.targetedGapRecoveryConfidence, 0.0f, 1.0f);
         recovery_options.maximumCandidatePriorRelativeDifference = std::max(
             0.0f, config.targetedGapRecoveryPriorRelativeDifference);
+        recovery_options.maximumConsensusInverseDepthRelativeSpread = std::max(
+            0.0f, config.targetedGapRecoveryConsensusInverseDepthSpread);
+        recovery_options.maximumConsensusPriorRelativeDifference = std::max(
+            recovery_options.maximumCandidatePriorRelativeDifference,
+            config.targetedGapRecoveryConsensusPriorRelativeDifference);
+        if (srcGrays.size() >= 4 &&
+            config.targetedGapRecoveryHypothesisCount >= 2)
+        {
+            recovery_options.missingPriorRadiusRatio = std::max(
+                recovery_options.missingPriorRadiusRatio,
+                recovery_options.maximumConsensusPriorRelativeDifference);
+        }
         recovery_options.maximumPriorDistancePixels = std::max(
             1, config.targetedGapRecoveryMaximumPriorDistancePixels);
         const DepthGapTarget recovery_target = buildDepthGapTarget(
@@ -4778,88 +4790,156 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
                 config.targetedGapRecoverySourceCount,
                 1,
                 static_cast<int>(srcGrays.size()));
-            std::vector<cv::Mat> recovery_images(
-                srcGrays.begin(), srcGrays.begin() + recovery_source_count);
-            std::vector<Camera> recovery_cameras(
-                srcCams.begin(), srcCams.begin() + recovery_source_count);
-            std::vector<cv::Mat> recovery_source_masks;
-            if (!source_valid_masks.empty())
+            const int requested_hypothesis_count = std::clamp(
+                config.targetedGapRecoveryHypothesisCount,
+                1,
+                recovery_source_count);
+            const int hypothesis_count = recovery_source_count >= 4
+                ? std::min(requested_hypothesis_count, recovery_source_count / 2)
+                : 1;
+            std::vector<std::vector<int>> source_groups(
+                static_cast<std::size_t>(hypothesis_count));
+            for (int source_ordinal = 0;
+                 source_ordinal < recovery_source_count;
+                 ++source_ordinal)
             {
-                recovery_source_masks.assign(
-                    source_valid_masks.begin(),
-                    source_valid_masks.begin() + recovery_source_count);
+                source_groups[static_cast<std::size_t>(
+                    source_ordinal % hypothesis_count)].push_back(source_ordinal);
             }
 
-            PatchMatchConfig recovery_config = pmCfg;
-            recovery_config.downsampleFactor = std::max(
-                1, pyramid_result.finalLevel.downsampleFactor);
-            recovery_config.numIterations = std::clamp(
-                std::max(6, pmCfg.numIterations / 2), 6, 10);
-            recovery_config.patchHalf = std::max(3, pmCfg.patchHalf - 1);
-            recovery_config.confidenceThresh = std::min(
-                pmCfg.confidenceThresh, 0.18f);
-            recovery_config.minimumMaskedPatchSupportRatio = std::min(
-                recovery_config.minimumMaskedPatchSupportRatio, 0.25f);
-            recovery_config.geomConsistency = false;
-
-            cv::Mat candidate_depth;
-            cv::Mat candidate_confidence;
-            std::string recovery_error;
-            const bool recovery_ok = estimatePatchMatchWithAdaptiveCuda(
-                "targeted gap PatchMatch",
-                refIdx,
-                refImg,
-                recovery_images,
-                refCam,
-                recovery_cameras,
-                zNear,
-                zFar,
-                recovery_config,
-                candidate_depth,
-                &candidate_confidence,
-                &recovery_error,
-                &recovery_target.hintDepth,
-                &recovery_target.hintRadius,
-                &recovery_target.estimationMask,
-                recovery_source_masks.empty() ? nullptr : &recovery_source_masks);
-            if (recovery_ok)
+            std::vector<cv::Mat> candidate_depths;
+            std::vector<cv::Mat> candidate_confidences;
+            int successful_source_count = 0;
+            QStringList hypothesis_errors;
+            for (int hypothesis_index = 0;
+                 hypothesis_index < hypothesis_count;
+                 ++hypothesis_index)
             {
-                targeted_gap_stats = mergeTargetedDepthGapCandidates(
+                const std::vector<int> &source_group =
+                    source_groups[static_cast<std::size_t>(hypothesis_index)];
+                std::vector<cv::Mat> recovery_images;
+                std::vector<Camera> recovery_cameras;
+                std::vector<cv::Mat> recovery_source_masks;
+                recovery_images.reserve(source_group.size());
+                recovery_cameras.reserve(source_group.size());
+                recovery_source_masks.reserve(source_group.size());
+                for (const int source_ordinal : source_group)
+                {
+                    recovery_images.push_back(
+                        srcGrays[static_cast<std::size_t>(source_ordinal)]);
+                    recovery_cameras.push_back(
+                        srcCams[static_cast<std::size_t>(source_ordinal)]);
+                    if (!source_valid_masks.empty())
+                    {
+                        recovery_source_masks.push_back(
+                            source_valid_masks[static_cast<std::size_t>(source_ordinal)]);
+                    }
+                }
+
+                PatchMatchConfig recovery_config = pmCfg;
+                recovery_config.downsampleFactor = std::max(
+                    1, pyramid_result.finalLevel.downsampleFactor);
+                recovery_config.numIterations = std::clamp(
+                    std::max(6, pmCfg.numIterations / 2), 6, 10);
+                recovery_config.patchHalf = std::max(3, pmCfg.patchHalf - 1);
+                recovery_config.confidenceThresh = std::min(
+                    pmCfg.confidenceThresh, 0.18f);
+                recovery_config.minimumMaskedPatchSupportRatio = std::min(
+                    recovery_config.minimumMaskedPatchSupportRatio, 0.25f);
+                recovery_config.geomConsistency = false;
+
+                cv::Mat candidate_depth;
+                cv::Mat candidate_confidence;
+                std::string recovery_error;
+                const bool recovery_ok = estimatePatchMatchWithAdaptiveCuda(
+                    "targeted gap PatchMatch",
+                    refIdx,
+                    refImg,
+                    recovery_images,
+                    refCam,
+                    recovery_cameras,
+                    zNear,
+                    zFar,
+                    recovery_config,
+                    candidate_depth,
+                    &candidate_confidence,
+                    &recovery_error,
+                    &recovery_target.hintDepth,
+                    &recovery_target.hintRadius,
+                    &recovery_target.estimationMask,
+                    recovery_source_masks.empty()
+                        ? nullptr : &recovery_source_masks);
+                if (recovery_ok)
+                {
+                    candidate_depths.push_back(std::move(candidate_depth));
+                    candidate_confidences.push_back(
+                        std::move(candidate_confidence));
+                    successful_source_count +=
+                        static_cast<int>(source_group.size());
+                }
+                else
+                {
+                    hypothesis_errors.push_back(
+                        QStringLiteral("group_%1:%2")
+                            .arg(hypothesis_index)
+                            .arg(QString::fromStdString(recovery_error)));
+                }
+            }
+            if (!candidate_depths.empty())
+            {
+                targeted_gap_stats =
+                    mergeMultiHypothesisTargetedDepthGapCandidates(
                     depthMap,
                     confMap,
-                    candidate_depth,
-                    candidate_confidence,
+                    candidate_depths,
+                    candidate_confidences,
                     recovery_target,
                     &targeted_gap_recovered_mask,
                     recovery_options);
+                targeted_gap_stats.sourceCount = successful_source_count;
+                targeted_gap_stats.attemptedHypothesisCount = hypothesis_count;
+                targeted_gap_stats.failedHypothesisCount = hypothesis_count -
+                    static_cast<int>(candidate_depths.size());
                 if (!supportCount.empty() &&
                     supportCount.size() == targeted_gap_recovered_mask.size())
                 {
                     supportCount.setTo(
-                        cv::Scalar(recovery_source_count),
+                        cv::Scalar(successful_source_count),
                         targeted_gap_recovered_mask);
                 }
                 LOG_INFO(QStringLiteral(
                              "[MVS] 帧 %1 缺口定向 PatchMatch: target=%2 "
-                             "candidate=%3 recovered=%4 (%5%) sources=%6")
+                             "candidate=%3 consensus=%4 recovered=%5 (%6%) "
+                             "sources=%7 hypotheses=%8/%9")
                              .arg(refIdx)
                              .arg(targeted_gap_stats.priorCoveredGapPixelCount)
                              .arg(targeted_gap_stats.candidatePixelCount)
+                             .arg(targeted_gap_stats.consensusCandidatePixelCount)
                              .arg(targeted_gap_stats.recoveredPixelCount)
                              .arg(targeted_gap_stats.recoveryRatio * 100.0f,
                                   0, 'f', 1)
-                             .arg(recovery_source_count));
+                             .arg(successful_source_count)
+                             .arg(static_cast<int>(candidate_depths.size()))
+                             .arg(hypothesis_count));
+                if (!hypothesis_errors.isEmpty())
+                {
+                    targeted_gap_stats.skippedReason =
+                        QStringLiteral("partial_hypothesis_failure:%1")
+                            .arg(hypothesis_errors.join(QStringLiteral(";")));
+                }
             }
             else
             {
                 targeted_gap_stats.attempted = true;
+                targeted_gap_stats.attemptedHypothesisCount = hypothesis_count;
+                targeted_gap_stats.failedHypothesisCount = hypothesis_count;
                 targeted_gap_stats.skippedReason = QStringLiteral(
-                    "patchmatch_failed:%1")
-                    .arg(QString::fromStdString(recovery_error));
+                    "all_hypotheses_failed:%1")
+                    .arg(hypothesis_errors.join(QStringLiteral(";")));
                 LOG_WARN(QStringLiteral(
                              "[MVS] 帧 %1 缺口定向 PatchMatch 失败: %2")
                              .arg(refIdx)
-                             .arg(QString::fromStdString(recovery_error)));
+                             .arg(hypothesis_errors.join(QStringLiteral(";"))));
             }
         }
     }

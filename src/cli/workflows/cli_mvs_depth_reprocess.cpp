@@ -558,6 +558,10 @@ int main(int argc, char **argv)
         {QStringLiteral("depth_pose_candidates"), depthPoseCandidates},
         {QStringLiteral("targeted_gap_recovery"),
          !disableTargetedGapRecovery},
+        {QStringLiteral("targeted_gap_recovery_source_count"),
+         config.targetedGapRecoverySourceCount},
+        {QStringLiteral("targeted_gap_recovery_hypothesis_count"),
+         config.targetedGapRecoveryHypothesisCount},
         {QStringLiteral("depth_artifact_count"), artifacts.size()},
         {QStringLiteral("depth_artifacts"), artifacts},
         {QStringLiteral("error"), generatorError}

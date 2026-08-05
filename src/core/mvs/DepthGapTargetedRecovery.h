@@ -4,6 +4,8 @@
 
 #include <opencv2/core/mat.hpp>
 
+#include <vector>
+
 namespace xjw::mvs
 {
 
@@ -18,6 +20,9 @@ struct DepthGapTargetedRecoveryOptions
     float anchoredPriorRadiusRatio = 0.03f;
     float minimumCandidateConfidence = 0.28f;
     float maximumCandidatePriorRelativeDifference = 0.18f;
+    int minimumConsensusHypothesisCount = 2;
+    float maximumConsensusInverseDepthRelativeSpread = 0.025f;
+    float maximumConsensusPriorRelativeDifference = 0.35f;
 };
 
 struct DepthGapTarget
@@ -44,6 +49,13 @@ struct DepthGapTargetedRecoveryStats
     int recoveredPixelCount = 0;
     int rejectedConfidencePixelCount = 0;
     int rejectedPriorPixelCount = 0;
+    int sourceCount = 0;
+    int attemptedHypothesisCount = 0;
+    int hypothesisCount = 0;
+    int failedHypothesisCount = 0;
+    int consensusCandidatePixelCount = 0;
+    int rejectedInsufficientHypothesisPixelCount = 0;
+    int rejectedHypothesisSpreadPixelCount = 0;
     float recoveryRatio = 0.0f;
     QString skippedReason;
 };
@@ -58,6 +70,15 @@ DepthGapTargetedRecoveryStats mergeTargetedDepthGapCandidates(
     cv::Mat &confidence,
     const cv::Mat &candidateDepth,
     const cv::Mat &candidateConfidence,
+    const DepthGapTarget &target,
+    cv::Mat *recoveredMask = nullptr,
+    const DepthGapTargetedRecoveryOptions &options = {});
+
+DepthGapTargetedRecoveryStats mergeMultiHypothesisTargetedDepthGapCandidates(
+    cv::Mat &depth,
+    cv::Mat &confidence,
+    const std::vector<cv::Mat> &candidateDepths,
+    const std::vector<cv::Mat> &candidateConfidences,
     const DepthGapTarget &target,
     cv::Mat *recoveredMask = nullptr,
     const DepthGapTargetedRecoveryOptions &options = {});
