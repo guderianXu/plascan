@@ -21,6 +21,10 @@ class BaCudaContractsTest(unittest.TestCase):
         self.assertIn("manifestFeaturesValue", script)
         self.assertIn("VCPKG_MANIFEST_FEATURES=$manifestFeaturesValue", script)
 
+        manifest = read_text("vcpkg.json")
+        self.assertIn('"lapack"', manifest)
+        self.assertIn('"suitesparse"', manifest)
+
     def test_aerial_triangulation_cuda_requests_auto_ba_with_cuda_thresholds(self):
         source = read_text(
             "src/core/aerial_triangulation/reconstruction/SfmAttemptRunner.cpp"
@@ -28,7 +32,7 @@ class BaCudaContractsTest(unittest.TestCase):
 
         self.assertIn("options->baOptions.backend = BABackend::Auto;", source)
         self.assertIn("options->baOptions.nativeCudaMaxPointStepNorm = 1.0;", source)
-        self.assertIn("options->baOptions.minCeresCudaObservations = 500000;", source)
+        self.assertIn("options->baOptions.minCeresCudaObservations = 300000;", source)
         self.assertIn("options->baOptions.minCeresCpuObservations = 50000;", source)
         self.assertIn("options->baOptions.enableBackendQualityGate = true;", source)
         self.assertIn("options->baOptions.allowBackendFallback = true;", source)

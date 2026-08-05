@@ -26,8 +26,9 @@ class SfmBundleAdjustCoordinator
      */
     void run(bool localOnly = false, const std::vector<ImageId> &anchorIds = {});
 
-    /// 按“BA -> 重三角化 -> 过滤”的稳定化循环执行配置的全局优化轮次。
-    void iterative();
+    /// 按“BA -> 重三角化 -> 过滤”的稳定化循环执行全局优化。
+    /// 周期稳定化最多两轮；最终精化使用完整配置轮数并允许提前收敛。
+    void iterative(bool finalRefinement = false);
 
     /// 删除在任一有效轨迹观测中落到相机后方的三维点，并清理影像关联。
     int filterNegativeDepthPoints();
@@ -44,6 +45,16 @@ class SfmBundleAdjustCoordinator
                                               bool sharedIntrinsicsRefined,
                                               double focalScaleChange,
                                               double radialCoefficientChange);
+
+    /// 接近注册终点时跳过周期全局 BA，避免数张影像后立刻重复最终全局 BA。
+    static bool shouldRunPeriodicGlobalBa(int registeredImageCount,
+                                          int registrationTarget,
+                                          int iterationsSinceGlobalBa,
+                                          int globalBaInterval);
+
+    /// 周期全局 BA 限制为两轮；最终精化保留用户配置轮数。
+    static int iterativeGlobalBaRoundLimit(int configuredRounds,
+                                           bool finalRefinement);
 
   private:
     IncrementalSfm &_owner;

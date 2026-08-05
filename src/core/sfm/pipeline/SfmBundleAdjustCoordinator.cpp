@@ -72,15 +72,41 @@ bool SfmBundleAdjustCoordinator::hasIterativeGlobalBaConverged(
            radialCoefficientChange < 5.0e-4;
 }
 
+bool SfmBundleAdjustCoordinator::shouldRunPeriodicGlobalBa(
+    int registeredImageCount,
+    int registrationTarget,
+    int iterationsSinceGlobalBa,
+    int globalBaInterval)
+{
+    const int safe_interval = std::max(1, globalBaInterval);
+    if (iterationsSinceGlobalBa < safe_interval ||
+        registeredImageCount >= registrationTarget)
+    {
+        return false;
+    }
+
+    const int remaining_images = registrationTarget - registeredImageCount;
+    const int final_guard = std::max(2, safe_interval / 4);
+    return remaining_images > final_guard;
+}
+
+int SfmBundleAdjustCoordinator::iterativeGlobalBaRoundLimit(
+    int configuredRounds,
+    bool finalRefinement)
+{
+    const int safe_rounds = std::max(1, configuredRounds);
+    return finalRefinement ? safe_rounds : std::min(2, safe_rounds);
+}
+
 void SfmBundleAdjustCoordinator::run(bool localOnly,
                                      const std::vector<ImageId> &anchorIds)
 {
     _owner.runBundleAdjust(localOnly, anchorIds);
 }
 
-void SfmBundleAdjustCoordinator::iterative()
+void SfmBundleAdjustCoordinator::iterative(bool finalRefinement)
 {
-    _owner.iterativeGlobalBA();
+    _owner.iterativeGlobalBA(finalRefinement);
 }
 
 int SfmBundleAdjustCoordinator::filterNegativeDepthPoints()
@@ -479,20 +505,32 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
         }
     }
 
-    // 执行 BA
-    BAResult baResult = BundleAdjust::optimizePoints(baCameras, baTracks, baOpt);
+    // 在进入可能耗时数分钟的大规模求解前输出完整问题规模和自动后端决策。
+    // 之前该日志位于 optimizePoints 之后，运行中无法判断相机/观测规模，
+    // 也无法区分 CUDA 未编译和问题规模未达到阈值。
     if (baOpt.logIterationProgress)
     {
         const BAProblemStats stats = BundleAdjust::summarizeProblem(baCameras, baTracks);
+        const BABackendDecision decision = BundleAdjust::decideBackendForProblem(stats, baOpt);
         Logger::instance()->infof(
-            "[BA] problem cameras=%d tracks=%d observations=%d threads=%d backend=%s reason=%s",
+            "[BA] problem scope=%s cameras=%d tracks=%d observations=%d threads=%d "
+            "requested=%s selected=%s reason=%s ceresCudaAvailable=%s "
+            "cudaMinCameras=%d cudaMinObservations=%d",
+            scopeName,
             stats.cameraCount,
             stats.trackCount,
             stats.observationCount,
             baOpt.numThreads,
-            BundleAdjust::backendName(baResult.usedBackend),
-            baResult.backendSelectionReason.c_str());
+            BundleAdjust::backendName(baOpt.backend),
+            BundleAdjust::backendName(decision.backend),
+            decision.reason.c_str(),
+            BundleAdjust::isBackendAvailable(BABackend::CeresCuda) ? "true" : "false",
+            baOpt.minCeresCudaCameras,
+            baOpt.minCeresCudaObservations);
     }
+
+    // 执行 BA
+    BAResult baResult = BundleAdjust::optimizePoints(baCameras, baTracks, baOpt);
 
     bool gaugeNormalizationFailed = false;
     if (baResult.solutionUsable && similarityGaugeCameras.has_value())
@@ -871,9 +909,11 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
 // 内部：迭代全局 BA 精化（参考 COLMAP IterativeGlobalRefinement）
 // ============================================================
 
-void IncrementalSfm::iterativeGlobalBA()
+void IncrementalSfm::iterativeGlobalBA(bool finalRefinement)
 {
-    const int maxRounds = std::max(1, _sfmOptions.iterativeBARounds);
+    const int maxRounds = SfmBundleAdjustCoordinator::iterativeGlobalBaRoundLimit(
+        _sfmOptions.iterativeBARounds,
+        finalRefinement);
     size_t prevNumPoints = _reconstruction->numPoints3D();
     double previousFocalScale = std::numeric_limits<double>::quiet_NaN();
     double previousRadialK1 = std::numeric_limits<double>::quiet_NaN();
@@ -881,8 +921,12 @@ void IncrementalSfm::iterativeGlobalBA()
 
     for (int round = 0; round < maxRounds; ++round)
     {
-        Logger::instance()->infof("[SFM] IterativeGlobalBA round %d/%d: numPts=%zu", round + 1, maxRounds,
-                      _reconstruction->numPoints3D());
+        Logger::instance()->infof(
+            "[SFM] IterativeGlobalBA mode=%s round %d/%d: numPts=%zu",
+            finalRefinement ? "final" : "periodic",
+            round + 1,
+            maxRounds,
+            _reconstruction->numPoints3D());
 
         // (1) 过滤负深度点
         if (_sfmOptions.filterNegativeDepth)

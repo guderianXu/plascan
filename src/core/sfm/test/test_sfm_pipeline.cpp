@@ -61,6 +61,25 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest, IterativeConvergenceIncludesSharedCal
         2, 0.005, true, 1.0e-4, 2.0e-4));
 }
 
+TEST(SfmBundleAdjustCoordinatorPolicyTest, DefersPeriodicGlobalBaNearFinalRefinement)
+{
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRunPeriodicGlobalBa(
+        330, 444, 54, 55));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRunPeriodicGlobalBa(
+        440, 444, 55, 55));
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldRunPeriodicGlobalBa(
+        330, 444, 55, 55));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRunPeriodicGlobalBa(
+        444, 444, 55, 55));
+}
+
+TEST(SfmBundleAdjustCoordinatorPolicyTest, LimitsOnlyPeriodicGlobalBaRounds)
+{
+    EXPECT_EQ(SfmBundleAdjustCoordinator::iterativeGlobalBaRoundLimit(4, false), 2);
+    EXPECT_EQ(SfmBundleAdjustCoordinator::iterativeGlobalBaRoundLimit(4, true), 4);
+    EXPECT_EQ(SfmBundleAdjustCoordinator::iterativeGlobalBaRoundLimit(1, false), 1);
+}
+
 // ─── 工具函数：构造合成场景用于测试 ────────────────────────────
 
 namespace {

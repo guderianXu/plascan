@@ -137,8 +137,25 @@ IncrementalSfmResult IncrementalSfm::runRegistrationFromCurrentInitialization(
         // 全局 BA（使用迭代精化策略）
         if (iterSinceLastGlobalBA >= _sfmOptions.globalBAInterval)
         {
-            SfmBundleAdjustCoordinator(*this).iterative();
-            invalidateVisibilityCache();
+            if (SfmBundleAdjustCoordinator::shouldRunPeriodicGlobalBa(
+                    regCount,
+                    registrationTarget,
+                    iterSinceLastGlobalBA,
+                    _sfmOptions.globalBAInterval))
+            {
+                SfmBundleAdjustCoordinator(*this).iterative(false);
+                invalidateVisibilityCache();
+            }
+            else
+            {
+                Logger::instance()->infof(
+                    "[SFM] Deferred periodic global BA to final refinement: "
+                    "registered=%d target=%d remaining=%d interval=%d",
+                    regCount,
+                    registrationTarget,
+                    std::max(0, registrationTarget - regCount),
+                    _sfmOptions.globalBAInterval);
+            }
             iterSinceLastGlobalBA = 0;
         }
 
@@ -157,7 +174,7 @@ IncrementalSfmResult IncrementalSfm::runRegistrationFromCurrentInitialization(
     // ---- 步骤 3：最终全局 BA 和清理（迭代精化） ----
     if (!_isAborted && _reconstruction->numRegisteredImages() >= 2)
     {
-        SfmBundleAdjustCoordinator(*this).iterative();
+        SfmBundleAdjustCoordinator(*this).iterative(true);
         retryUnregisteredImagesAfterFinalBA(totalImages);
 
         // 过滤轨迹长度过短的不可靠三维点
@@ -284,7 +301,7 @@ int IncrementalSfm::retryUnregisteredImagesAfterFinalBA(int totalImages)
             break;
         }
 
-        SfmBundleAdjustCoordinator(*this).iterative();
+        SfmBundleAdjustCoordinator(*this).iterative(true);
         invalidateVisibilityCache();
         if (static_cast<int>(_reconstruction->numRegisteredImages()) >= totalImages)
         {

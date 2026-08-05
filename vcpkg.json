@@ -14,7 +14,13 @@
         "zstd"
       ]
     },
-    "ceres",
+    {
+      "name": "ceres",
+      "features": [
+        "lapack",
+        "suitesparse"
+      ]
+    },
     "apriltag",
     "gtest",
     "libzip",

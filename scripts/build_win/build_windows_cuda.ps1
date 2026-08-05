@@ -850,9 +850,11 @@ function Assert-CeresCudaFeatures
     }
 
     $text = Get-Content -LiteralPath $abiInfo -Raw
-    if ($text -notmatch "(?m)^features .*cuda")
+    if ($text -notmatch "(?m)^features .*cuda" -or
+        $text -notmatch "(?m)^features .*lapack" -or
+        $text -notmatch "(?m)^features .*suitesparse")
     {
-        throw "Ceres CUDA is not installed in $TripletRoot. Rerun this script with -InstallDeps -EnableCeresCudaBa:`$true."
+        throw "Ceres CUDA/LAPACK/SuiteSparse is not installed in $TripletRoot. Rerun this script with -InstallDeps -EnableCeresCudaBa:`$true."
     }
 }
 
