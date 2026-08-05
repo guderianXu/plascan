@@ -31,7 +31,6 @@
 #include <chrono>
 #include <cmath>
 #include <exception>
-#include <future>
 #include <memory>
 #include <thread>
 #include <utility>
@@ -570,13 +569,22 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
         originalProgress(QStringLiteral("读取连接点并构建观测图..."), 0);
     }
 
-    // 先执行用户给定/默认焦距候选。若已有完整内参，这也是唯一一次试算。
-    SfmAttemptExecutionResult execution = _attemptRunner(attemptInput);
+    // 有可信先验时只需一次正式试算；无先验搜索的默认焦距也进入统一并行队列，
+    // 避免先串行跑完一个候选后才启动其它候选。
+    SfmAttemptExecutionResult execution;
+    if (!needsFocalInitializationSearch)
+    {
+        execution = _attemptRunner(attemptInput);
+    }
     QVector<AdaptiveFocalCandidate> focalCandidates;
     std::vector<SfmCandidateSummary> candidateSummaries;
     QVector<SfmAttemptExecutionResult> candidateExecutions;
     double selectedFocalScale = attemptInput.estimatedFocalScale;
     bool adaptiveRefinementAccepted = false;
+    int focalSearchWorkerCount = 0;
+    int focalSearchThreadBudget = 0;
+    int focalSearchMinThreadsPerWorker = 0;
+    int focalSearchMaxThreadsPerWorker = 0;
 
     if (needsFocalInitializationSearch)
     {
@@ -600,22 +608,32 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
                 input.sequenceLoopClosure));
             candidateExecutions.append(std::move(candidateExecution));
         };
-        appendCandidate(input.estimatedFocalScale, std::move(execution));
-        execution = {};
-
         std::vector<double> coarseScales;
+        coarseScales.push_back(input.estimatedFocalScale);
         for (double focalScale : adaptiveFocalScaleCandidates())
         {
-            if (std::abs(focalScale - input.estimatedFocalScale) > 1.0e-9)
+            const bool alreadyQueued = std::any_of(
+                coarseScales.cbegin(),
+                coarseScales.cend(),
+                [focalScale](double queuedScale)
+                {
+                    return std::abs(queuedScale - focalScale) <= 1.0e-9;
+                });
+            if (!alreadyQueued)
             {
                 coarseScales.push_back(focalScale);
             }
         }
 
-        // 粗搜索按总线程预算分组并行。每个 worker 内部仍给 SfM/BA 保留多个线程，
-        // 避免候选数较多时创建过量线程并争抢 GPU/内存。
+        // 每个候选至少分配一个 worker，并把剩余逻辑线程均匀用于候选内部 BA。
+        // worker 总数和内部线程之和都严格受本机硬件预算约束，不再使用固定上限。
         const int coarseCount = static_cast<int>(coarseScales.size());
-        const SfmWorkerBudget workerBudget = allocateWorkers(coarseCount, input.threads);
+        const SfmWorkerBudget workerBudget = allocateWorkers(coarseCount, attemptInput.threads);
+        focalSearchWorkerCount = workerBudget.workerCount;
+        focalSearchThreadBudget = workerBudget.totalThreads();
+        focalSearchMinThreadsPerWorker = workerBudget.threadsPerWorker;
+        focalSearchMaxThreadsPerWorker = workerBudget.threadsPerWorker +
+            (workerBudget.workersWithExtraThread > 0 ? 1 : 0);
         std::vector<SfmAttemptExecutionResult> coarseExecutions(
             static_cast<std::size_t>(coarseCount));
         std::vector<std::shared_ptr<std::atomic<int>>> coarseProgress;
@@ -630,11 +648,13 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
 
         std::atomic<int> nextCoarseIndex{0};
         std::atomic<int> completedCoarseCount{0};
-        std::vector<std::future<void>> workers;
+        // jthread 在后续线程创建抛出异常时也会自动 join 已启动的 worker，避免
+        // 普通 std::thread 的析构触发 terminate。
+        std::vector<std::jthread> workers;
         workers.reserve(static_cast<std::size_t>(workerBudget.workerCount));
         for (int workerIndex = 0; workerIndex < workerBudget.workerCount; ++workerIndex)
         {
-            workers.push_back(std::async(std::launch::async, [&, workerIndex]()
+            workers.emplace_back([&, workerIndex]()
             {
                 (void)workerIndex;
                 while (true)
@@ -651,7 +671,7 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
                     coarseInput.adaptiveCameraModelFitting = false;
                     coarseInput.coarseFocalEvaluation = true;
                     coarseInput.maxRegisteredImages = focalProbeLimit;
-                    coarseInput.threads = workerBudget.threadsPerWorker;
+                    coarseInput.threads = workerBudget.threadsForWorker(workerIndex);
                     const std::shared_ptr<std::atomic<int>> progress =
                         coarseProgress[static_cast<std::size_t>(scaleIndex)];
                     coarseStarted[static_cast<std::size_t>(scaleIndex)]->store(true);
@@ -692,7 +712,7 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
                     progress->store(100);
                     completedCoarseCount.fetch_add(1);
                 }
-            }));
+            });
         }
 
         // 汇总所有候选的真实内部进度；不把“当前候选”误显示成整体百分比。
@@ -719,18 +739,19 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
                     ? accumulatedProgress / coarseCount
                     : 100;
                 originalProgress(
-                    QStringLiteral("无相机先验焦距粗搜索：已完成 %1/%2，运行中 %3，候选内部最高 %4%")
+                    QStringLiteral("无相机先验焦距粗搜索：已完成 %1/%2，运行中 %3/%4，候选内部最高 %5%")
                         .arg(completedCoarseCount.load())
                         .arg(coarseCount)
                         .arg(runningCount)
+                        .arg(workerBudget.workerCount)
                         .arg(highestCandidatePercent),
-                    45 + aggregatePercent * 35 / 100);
+                    5 + aggregatePercent * 75 / 100);
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
-        for (std::future<void> &worker : workers)
+        for (std::jthread &worker : workers)
         {
-            worker.get();
+            worker.join();
         }
         if (originalProgress)
         {
@@ -865,6 +886,14 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
         QStringLiteral("focal_probe_registration_limit"), focalProbeLimit);
     execution.result.sfmDiagnostics.insert(
         QStringLiteral("focal_probe_full_replay"), focalProbeLimit > 0);
+    execution.result.sfmDiagnostics.insert(
+        QStringLiteral("focal_search_worker_count"), focalSearchWorkerCount);
+    execution.result.sfmDiagnostics.insert(
+        QStringLiteral("focal_search_thread_budget"), focalSearchThreadBudget);
+    execution.result.sfmDiagnostics.insert(
+        QStringLiteral("focal_search_min_threads_per_worker"), focalSearchMinThreadsPerWorker);
+    execution.result.sfmDiagnostics.insert(
+        QStringLiteral("focal_search_max_threads_per_worker"), focalSearchMaxThreadsPerWorker);
     QJsonObject metadataPriorJson{
         {QStringLiteral("used"), metadataPrior.valid},
         {QStringLiteral("source"), metadataPrior.source},

@@ -92,11 +92,11 @@ double photogrammetricQualityScore(const SfmCandidateSummary &candidate)
 
 int resolveSfmThreadBudget(int requestedThreads)
 {
-    if (requestedThreads > 0)
-    {
-        return requestedThreads;
-    }
-    return static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+    const int hardwareThreads =
+        static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+    return requestedThreads > 0
+        ? std::clamp(requestedThreads, 1, hardwareThreads)
+        : hardwareThreads;
 }
 
 SfmWorkerBudget allocateWorkers(int candidateCount, int totalThreads)
@@ -107,9 +107,13 @@ SfmWorkerBudget allocateWorkers(int candidateCount, int totalThreads)
     }
 
     const int safeThreads = resolveSfmThreadBudget(totalThreads);
-    // 每个 SfM 候选至少预留 8 个线程，同时最多并发 4 个，控制内存和 GPU 争用。
-    const int workerCount = std::min({candidateCount, std::max(1, safeThreads / 8), 4});
-    return {workerCount, std::max(1, safeThreads / workerCount)};
+    // 粗焦距候选的大部分时间花在串行/弱并行的 PnP、三角化和图更新上。给单个
+    // 候选固定预留 8 线程会造成大量核心空闲；让每个候选先占一个 worker，再把
+    // 不能整除的逻辑线程作为内部 BA 余数分配，恰好消费全部硬件线程预算。
+    const int workerCount = std::min(candidateCount, safeThreads);
+    const int threadsPerWorker = safeThreads / workerCount;
+    const int workersWithExtraThread = safeThreads % workerCount;
+    return {workerCount, threadsPerWorker, workersWithExtraThread};
 }
 
 int focalProbeRegistrationLimit(int totalImages)

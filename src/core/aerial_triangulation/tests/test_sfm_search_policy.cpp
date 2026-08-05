@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <thread>
 #include <vector>
 
 namespace
@@ -11,26 +12,36 @@ namespace
 
 using xjw::aerial_triangulation::SfmCandidateSummary;
 
-TEST(SfmSearchPolicyTest, AllocatesFourWorkersAcrossThirtyTwoThreads)
+TEST(SfmSearchPolicyTest, UsesEveryAvailableThreadAcrossCandidates)
 {
     const auto budget = xjw::aerial_triangulation::allocateWorkers(6, 32);
+    const int availableThreads = xjw::aerial_triangulation::resolveSfmThreadBudget(32);
 
-    EXPECT_EQ(budget.workerCount, 4);
-    EXPECT_EQ(budget.threadsPerWorker, 8);
+    EXPECT_EQ(budget.workerCount, std::min(6, availableThreads));
+    EXPECT_EQ(budget.totalThreads(), availableThreads);
+    for (int workerIndex = 0; workerIndex < budget.workerCount; ++workerIndex)
+    {
+        EXPECT_GE(budget.threadsForWorker(workerIndex), 1);
+    }
 }
 
-TEST(SfmSearchPolicyTest, KeepsSmallThreadBudgetsSerial)
+TEST(SfmSearchPolicyTest, ParallelizesCandidatesWithSmallThreadBudgets)
 {
     const auto budget = xjw::aerial_triangulation::allocateWorkers(6, 7);
+    const int availableThreads = xjw::aerial_triangulation::resolveSfmThreadBudget(7);
 
-    EXPECT_EQ(budget.workerCount, 1);
-    EXPECT_EQ(budget.threadsPerWorker, 7);
+    EXPECT_EQ(budget.workerCount, std::min(6, availableThreads));
+    EXPECT_EQ(budget.totalThreads(), availableThreads);
 }
 
 TEST(SfmSearchPolicyTest, ResolvesAutomaticThreadBudgetFromHardware)
 {
+    const int hardwareThreads =
+        static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
     EXPECT_GE(xjw::aerial_triangulation::resolveSfmThreadBudget(0), 1);
-    EXPECT_EQ(xjw::aerial_triangulation::resolveSfmThreadBudget(13), 13);
+    EXPECT_EQ(xjw::aerial_triangulation::resolveSfmThreadBudget(13),
+              std::min(13, hardwareThreads));
+    EXPECT_EQ(xjw::aerial_triangulation::resolveSfmThreadBudget(100000), hardwareThreads);
 }
 
 TEST(SfmSearchPolicyTest, BoundsOnlyLargeFocalSearchProblems)
