@@ -1101,6 +1101,19 @@ void parallelForRows(int rowCount, int workerCount, Fn &&fn)
     }
 }
 
+int consistencyRowWorkerCount(const DepthGenConfig &config)
+{
+    const int hardware_threads = static_cast<int>(
+        std::max(1u, std::thread::hardware_concurrency()));
+    const int active_frame_workers = std::max(
+        1, config.gpuFrameWorkerCount + config.cpuFrameWorkerCount);
+    const int derived_budget = std::max(
+        1, config.cpuWorkerCount * active_frame_workers);
+    const int requested_budget = config.totalCpuThreadBudget > 0
+        ? config.totalCpuThreadBudget : derived_budget;
+    return std::clamp(requested_budget, 1, hardware_threads);
+}
+
 cv::Size patchMatchWorkSize(const cv::Mat &image, const PatchMatchConfig &config)
 {
     const int ds = std::max(1, config.downsampleFactor);
@@ -1545,11 +1558,17 @@ cv::Mat makeDepthConsistencyMask(const cv::Mat &referenceDepth,
                                  int minimumSourceConfirmations,
                                  const cv::Mat &consistentVotes,
                                  const cv::Mat &occludedVotes,
-                                 const cv::Mat &contradictedVotes)
+                                 const cv::Mat &contradictedVotes,
+                                 int rowWorkerCount,
+                                 const std::atomic<bool> *cancelled)
 {
     cv::Mat mask(referenceDepth.size(), CV_8U, cv::Scalar(0));
-    for (int row = 0; row < referenceDepth.rows; ++row)
+    parallelForRows(referenceDepth.rows, rowWorkerCount, [&](int row)
     {
+        if (cancelled && cancelled->load(std::memory_order_relaxed))
+        {
+            return;
+        }
         const float *depth_row = referenceDepth.ptr<float>(row);
         const uint16_t *consistent_row = consistentVotes.ptr<uint16_t>(row);
         const uint16_t *occluded_row = occludedVotes.ptr<uint16_t>(row);
@@ -1557,6 +1576,11 @@ cv::Mat makeDepthConsistencyMask(const cv::Mat &referenceDepth,
         uint8_t *mask_row = mask.ptr<uint8_t>(row);
         for (int column = 0; column < referenceDepth.cols; ++column)
         {
+            if ((column & 63) == 0 && cancelled &&
+                cancelled->load(std::memory_order_relaxed))
+            {
+                break;
+            }
             if (depth_row[column] <= 0.0f)
             {
                 continue;
@@ -1571,7 +1595,7 @@ cv::Mat makeDepthConsistencyMask(const cv::Mat &referenceDepth,
                 mask_row[column] = 255;
             }
         }
-    }
+    });
     return mask;
 }
 
@@ -5297,7 +5321,8 @@ void DepthMapGenerator::crossCheckDepthConsistency()
         // 备份，万一过滤太激进需要回退
         cv::Mat depthBackup = depthI.clone();
 
-        const int rowWorkers = std::max(1, _config.cpuWorkerCount);
+        const auto frame_start = Clock::now();
+        const int rowWorkers = consistencyRowWorkerCount(_config);
         const std::vector<int> consistencySources =
             consistencySourceIndicesForFrame(_depthFrames, i, NV);
         const std::vector<int> repairSources =
@@ -5349,6 +5374,18 @@ void DepthMapGenerator::crossCheckDepthConsistency()
              source_ordinal < static_cast<int>(repairSources.size());
              ++source_ordinal)
         {
+            const float source_progress =
+                (static_cast<float>(i) +
+                 static_cast<float>(source_ordinal) /
+                     static_cast<float>(std::max<std::size_t>(1, repairSources.size()))) /
+                static_cast<float>(NV);
+            emit progressChanged(
+                QStringLiteral("多视一致性：帧 %1/%2，源视图 %3/%4")
+                    .arg(i + 1)
+                    .arg(NV)
+                    .arg(source_ordinal + 1)
+                    .arg(repairSources.size()),
+                source_progress);
             const int j = repairSources[static_cast<std::size_t>(source_ordinal)];
             if (_cancelled.load())
             {
@@ -5406,7 +5443,10 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                     camJ,
                     camI,
                     depthI.size(),
-                    repair_options.maximumProjectionDistancePixels);
+                    repair_options.maximumProjectionDistancePixels,
+                    nullptr,
+                    rowWorkers,
+                    &_cancelled);
             }
         }
 
@@ -5429,7 +5469,19 @@ void DepthMapGenerator::crossCheckDepthConsistency()
             minimum_source_confirmations,
             consistent_votes,
             occluded_votes,
-            contradicted_votes);
+            contradicted_votes,
+            rowWorkers,
+            &_cancelled);
+
+        if (_cancelled.load())
+        {
+            return;
+        }
+        emit progressChanged(
+            QStringLiteral("多视一致性：帧 %1/%2，选择主深度层")
+                .arg(i + 1)
+                .arg(NV),
+            static_cast<float>(i) / static_cast<float>(NV));
 
         _depthFrames[i].crossViewRepairedMask =
             QSharedPointer<cv::Mat>::create(
@@ -5457,7 +5509,9 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                 &geometry_source_mask,
                 &source_inverse_depth_sum,
                 &source_inverse_depth_squared_sum,
-                &consistent_votes);
+                &consistent_votes,
+                rowWorkers,
+                &_cancelled);
         }
         else
         {
@@ -5483,6 +5537,11 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                     : nullptr);
         }
         cv::Mat anchored_interpolation_mask;
+        emit progressChanged(
+            QStringLiteral("多视一致性：帧 %1/%2，修复内部缺口")
+                .arg(i + 1)
+                .arg(NV),
+            static_cast<float>(i) / static_cast<float>(NV));
         const CrossViewHoleRepairStats repair_stats =
             repairDepthHolesFromProjectedSources(
                 depthI,
@@ -5498,7 +5557,13 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                 &camI,
                 i >= 0 && i < static_cast<int>(_grayCache.size())
                     ? &_grayCache[static_cast<std::size_t>(i)] : nullptr,
-                &anchored_interpolation_mask);
+                &anchored_interpolation_mask,
+                rowWorkers,
+                &_cancelled);
+        if (_cancelled.load())
+        {
+            return;
+        }
         WeakNativeDepthRetentionOptions unconfirmed_backfill_options;
         unconfirmed_backfill_options.minimumConfirmationCount =
             std::numeric_limits<int>::max();
@@ -5586,9 +5651,13 @@ void DepthMapGenerator::crossCheckDepthConsistency()
         _depthFrames[i].depthCompleteness.restoredFromPrefilterCount += restored_count;
         int afterValid = cv::countNonZero(depthI > 0);
         float keepRate = beforeValid > 0 ? 100.f * afterValid / beforeValid : 0.f;
-        LOG_DEBUG("[MVS][帧 %d][一致性] mode=%s sources=%zu/%zu confirmations=%d "
-                  "cross_view=%llu anchored=%llu two_source=%llu/%llu valid=%d->%d retention=%.1f%%",
+        const double frame_elapsed_ms = std::chrono::duration<double, std::milli>(
+            Clock::now() - frame_start).count();
+        LOG_INFO("[MVS][帧 %d][一致性] mode=%s workers=%d sources=%zu/%zu confirmations=%d "
+                 "cross_view=%llu anchored=%llu two_source=%llu/%llu valid=%d->%d "
+                 "retention=%.1f%% elapsed=%.1f ms",
                   i, fewViews ? "conflict_only" : "confirmed",
+                  rowWorkers,
                   consistencySources.size(), repairSources.size(),
                   minimum_source_confirmations,
                   static_cast<unsigned long long>(repair_stats.repairedPixelCount),
@@ -5596,7 +5665,7 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                       repair_stats.anchoredInterpolation.interpolatedPixelCount),
                   static_cast<unsigned long long>(repair_stats.twoSourceGrownPixelCount),
                   static_cast<unsigned long long>(repair_stats.twoSourceCandidatePixelCount),
-                  beforeValid, afterValid, keepRate);
+                  beforeValid, afterValid, keepRate, frame_elapsed_ms);
 
         // 安全回退：如果保留率过低（< 10%），回退使用原始深度图
         if (afterValid < beforeValid / 10 && beforeValid > 100) 
@@ -5688,6 +5757,12 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                                                 _effectiveSceneProfile,
                                                 _effectiveDepthFilterMode,
                                                 consistency_keep_rate);
+        emit progressChanged(
+            QStringLiteral("多视一致性：已处理 %1/%2，单帧耗时 %3 秒")
+                .arg(i + 1)
+                .arg(NV)
+                .arg(frame_elapsed_ms / 1000.0, 0, 'f', 1),
+            static_cast<float>(i + 1) / static_cast<float>(NV));
     }
 }
 
@@ -5740,6 +5815,7 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
                    0.005f,
                    0.25f),
         std::clamp(_config.postConsistencyResidualConfidence, 0.0f, 1.0f)};
+    const int row_workers = consistencyRowWorkerCount(_config);
 
     for (int frame_index = 0; frame_index < view_count; ++frame_index)
     {
@@ -5789,7 +5865,10 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
                 source_camera,
                 reference_camera,
                 frame.depthMap->size(),
-                0.8f));
+                0.8f,
+                nullptr,
+                row_workers,
+                &_cancelled));
             source_sector_ids.push_back(cameraBaselineSector(
                 reference_camera, source_camera));
             source_images.push_back(
@@ -6122,7 +6201,7 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
         }
     };
 
-    const int row_workers = std::max(1, _config.cpuWorkerCount);
+    const int row_workers = consistencyRowWorkerCount(_config);
     int completed_frames = 0;
 
     for (int frame_index = 0; frame_index < view_count; ++frame_index)
@@ -6209,6 +6288,19 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
              source_ordinal < static_cast<int>(repair_source_indices.size());
              ++source_ordinal)
         {
+            const float source_progress =
+                (static_cast<float>(completed_frames) +
+                 static_cast<float>(source_ordinal) /
+                     static_cast<float>(std::max<std::size_t>(
+                         1, repair_source_indices.size()))) /
+                static_cast<float>(std::max(1, view_count));
+            emit progressChanged(
+                QStringLiteral("流式多视一致性：帧 %1/%2，源视图 %3/%4")
+                    .arg(frame_index + 1)
+                    .arg(view_count)
+                    .arg(source_ordinal + 1)
+                    .arg(repair_source_indices.size()),
+                source_progress);
             const int source_index = repair_source_indices[
                 static_cast<std::size_t>(source_ordinal)];
             if (_cancelled.load())
@@ -6271,7 +6363,10 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                         : mvsPinholeCamera(_views[source_index].camera),
                     reference_camera,
                     filtered_depth.size(),
-                    repair_options.maximumProjectionDistancePixels);
+                    repair_options.maximumProjectionDistancePixels,
+                    nullptr,
+                    row_workers,
+                    &_cancelled);
             }
         }
 
@@ -6311,7 +6406,21 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             minimum_source_confirmations,
             consistent_votes,
             occluded_votes,
-            contradicted_votes);
+            contradicted_votes,
+            row_workers,
+            &_cancelled);
+
+        if (_cancelled.load())
+        {
+            remove_pending_files();
+            return false;
+        }
+        emit progressChanged(
+            QStringLiteral("流式多视一致性：帧 %1/%2，选择主深度层")
+                .arg(frame_index + 1)
+                .arg(view_count),
+            static_cast<float>(completed_frames) /
+                static_cast<float>(std::max(1, view_count)));
 
         const int valid_before = cv::countNonZero(reference->depth > 0.0f);
         _depthFrames[frame_index].crossViewRepairedMask =
@@ -6334,7 +6443,9 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 &geometry_source_mask,
                 &source_inverse_depth_sum,
                 &source_inverse_depth_squared_sum,
-                &consistent_votes);
+                &consistent_votes,
+                row_workers,
+                &_cancelled);
         }
         else
         {
@@ -6354,6 +6465,12 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 filtered_confidence.empty() ? nullptr : &filtered_confidence);
         }
         cv::Mat anchored_interpolation_mask;
+        emit progressChanged(
+            QStringLiteral("流式多视一致性：帧 %1/%2，修复内部缺口")
+                .arg(frame_index + 1)
+                .arg(view_count),
+            static_cast<float>(completed_frames) /
+                static_cast<float>(std::max(1, view_count)));
         const CrossViewHoleRepairStats repair_stats =
             repairDepthHolesFromProjectedSources(
                 filtered_depth,
@@ -6369,7 +6486,14 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 &reference_camera,
                 frame_index >= 0 && frame_index < static_cast<int>(_grayCache.size())
                     ? &_grayCache[static_cast<std::size_t>(frame_index)] : nullptr,
-                &anchored_interpolation_mask);
+                &anchored_interpolation_mask,
+                row_workers,
+                &_cancelled);
+        if (_cancelled.load())
+        {
+            remove_pending_files();
+            return false;
+        }
         WeakNativeDepthRetentionOptions unconfirmed_backfill_options;
         unconfirmed_backfill_options.minimumConfirmationCount =
             std::numeric_limits<int>::max();
@@ -6978,10 +7102,11 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
         emit progressChanged(
             QStringLiteral("多视一致性：已处理 %1/%2").arg(completed_frames).arg(view_count),
             ratio);
-        LOG_DEBUG(QStringLiteral(
-                     "[MVS] 流式一致性 frame=%1 valid=%2->%3 sources=%4 "
-                     "twoSource=%5/%6 cache=%7/%8 MiB")
+        LOG_INFO(QStringLiteral(
+                     "[MVS] 流式一致性 frame=%1 workers=%2 valid=%3->%4 sources=%5 "
+                     "twoSource=%6/%7 cache=%8/%9 MiB")
                      .arg(frame_index)
+                     .arg(row_workers)
                      .arg(valid_before)
                      .arg(valid_after)
                      .arg(source_indices.size())

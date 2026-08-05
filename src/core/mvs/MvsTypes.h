@@ -221,6 +221,7 @@ struct DepthGenConfig
     std::string qualityProfile = "medium"; ///< 用户请求的深度质量档位，用于产物审计
     int   numSourceViews        = 4;
     int   configuredSourceViewCount = 0; ///< 场景自适应限制前的源视角请求；0 表示与 numSourceViews 相同
+    int   totalCpuThreadBudget  = 0;     ///< 独占 CPU 后处理阶段的总线程预算；0 表示由帧调度配置推导
     int   cpuWorkerCount        = 1;     ///< 每个 CPU 帧 worker 内部的像素级线程数
     int   gpuFrameWorkerCount   = 1;     ///< CUDA 路径的帧级并发数；过大可能增加显存压力
     int   cpuFrameWorkerCount   = 1;     ///< CPU 路径的帧级并发数

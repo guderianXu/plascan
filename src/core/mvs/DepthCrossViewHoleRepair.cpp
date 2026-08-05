@@ -3,9 +3,11 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
-#include <queue>
 #include <limits>
+#include <queue>
+#include <thread>
 
 namespace xjw::mvs
 {
@@ -17,6 +19,83 @@ struct SourceDepthCandidate
     float depth = 0.0f;
     int sourceOrdinal = -1;
 };
+
+template <typename Fn>
+void parallelForRows(int row_count,
+                     int worker_count,
+                     const std::atomic<bool> *cancelled,
+                     Fn &&fn)
+{
+    if (row_count <= 0 ||
+        (cancelled && cancelled->load(std::memory_order_relaxed)))
+    {
+        return;
+    }
+    const int workers = std::clamp(std::max(1, worker_count), 1, row_count);
+    if (workers == 1)
+    {
+        for (int row = 0; row < row_count; ++row)
+        {
+            if (cancelled && cancelled->load(std::memory_order_relaxed))
+            {
+                break;
+            }
+            fn(row);
+        }
+        return;
+    }
+
+    std::atomic<int> next_row{0};
+    std::vector<std::thread> threads;
+    threads.reserve(static_cast<std::size_t>(workers));
+    for (int worker = 0; worker < workers; ++worker)
+    {
+        threads.emplace_back([&]()
+        {
+            for (;;)
+            {
+                if (cancelled && cancelled->load(std::memory_order_relaxed))
+                {
+                    break;
+                }
+                const int row = next_row.fetch_add(1, std::memory_order_relaxed);
+                if (row >= row_count)
+                {
+                    break;
+                }
+                fn(row);
+            }
+        });
+    }
+    for (std::thread &thread : threads)
+    {
+        thread.join();
+    }
+}
+
+void addStats(DominantDepthLayerSelectionStats &target,
+              const DominantDepthLayerSelectionStats &source)
+{
+    target.consideredPixelCount += source.consideredPixelCount;
+    target.stableLayerPixelCount += source.stableLayerPixelCount;
+    target.refinedNativePixelCount += source.refinedNativePixelCount;
+    target.switchedNativePixelCount += source.switchedNativePixelCount;
+    target.transferredMissingPixelCount += source.transferredMissingPixelCount;
+    target.ambiguousNativePixelCount += source.ambiguousNativePixelCount;
+    target.unresolvedMissingPixelCount += source.unresolvedMissingPixelCount;
+}
+
+void addStats(CrossViewHoleRepairStats &target,
+              const CrossViewHoleRepairStats &source)
+{
+    target.projectedCandidateCount += source.projectedCandidateCount;
+    target.consideredHolePixelCount += source.consideredHolePixelCount;
+    target.rejectedInsufficientSourceCount += source.rejectedInsufficientSourceCount;
+    target.rejectedDepthSpreadCount += source.rejectedDepthSpreadCount;
+    target.rejectedLocalDepthCount += source.rejectedLocalDepthCount;
+    target.repairedPixelCount += source.repairedPixelCount;
+    target.twoSourceCandidatePixelCount += source.twoSourceCandidatePixelCount;
+}
 
 bool validDepth(float depth)
 {
@@ -191,7 +270,9 @@ cv::Mat projectSourceDepthToReference(
     const Camera &reference_camera,
     const cv::Size &reference_size,
     float maximum_projection_distance_pixels,
-    std::uint64_t *projected_candidate_count)
+    std::uint64_t *projected_candidate_count,
+    int row_worker_count,
+    const std::atomic<bool> *cancelled)
 {
     if (projected_candidate_count)
     {
@@ -207,12 +288,22 @@ cv::Mat projectSourceDepthToReference(
     cv::Mat projected(reference_size, CV_32FC1, cv::Scalar(0.0f));
     const float maximum_distance = std::clamp(
         maximum_projection_distance_pixels, 0.25f, 1.5f);
-    std::uint64_t candidate_count = 0;
-    for (int source_row = 0; source_row < source_depth.rows; ++source_row)
-    {
+    std::atomic<std::uint64_t> candidate_count{0};
+    parallelForRows(
+        source_depth.rows,
+        row_worker_count,
+        cancelled,
+        [&](int source_row)
+        {
+        std::uint64_t row_candidate_count = 0;
         const float *source_values = source_depth.ptr<float>(source_row);
         for (int source_column = 0; source_column < source_depth.cols; ++source_column)
         {
+            if ((source_column & 63) == 0 && cancelled &&
+                cancelled->load(std::memory_order_relaxed))
+            {
+                break;
+            }
             const float source_value = source_values[source_column];
             if (!validDepth(source_value))
             {
@@ -254,20 +345,27 @@ cv::Mat projectSourceDepthToReference(
                     {
                         continue;
                     }
-                    float &stored = projected.at<float>(row, column);
                     const float candidate = static_cast<float>(reference_value);
-                    if (!validDepth(stored) || candidate < stored)
+                    float &stored_value = projected.ptr<float>(row)[column];
+                    std::atomic_ref<float> stored(stored_value);
+                    float observed = stored.load(std::memory_order_relaxed);
+                    while ((!validDepth(observed) || candidate < observed) &&
+                           !stored.compare_exchange_weak(
+                               observed,
+                               candidate,
+                               std::memory_order_relaxed,
+                               std::memory_order_relaxed))
                     {
-                        stored = candidate;
                     }
-                    ++candidate_count;
+                    ++row_candidate_count;
                 }
             }
         }
-    }
+        candidate_count.fetch_add(row_candidate_count, std::memory_order_relaxed);
+    });
     if (projected_candidate_count)
     {
-        *projected_candidate_count = candidate_count;
+        *projected_candidate_count = candidate_count.load(std::memory_order_relaxed);
     }
     return projected;
 }
@@ -284,13 +382,15 @@ DominantDepthLayerSelectionStats selectDominantProjectedDepthLayer(
     cv::Mat *geometry_source_mask,
     cv::Mat *source_inverse_depth_sum,
     cv::Mat *source_inverse_depth_squared_sum,
-    cv::Mat *selected_source_votes)
+    cv::Mat *selected_source_votes,
+    int row_worker_count,
+    const std::atomic<bool> *cancelled)
 {
-    DominantDepthLayerSelectionStats stats;
+    DominantDepthLayerSelectionStats result;
     if (reference_depth.type() != CV_32FC1 ||
         projected_source_depths.empty())
     {
-        return stats;
+        return result;
     }
 
     const cv::Size size = reference_depth.size();
@@ -340,15 +440,27 @@ DominantDepthLayerSelectionStats selectDominantProjectedDepthLayer(
     const float ambiguous_multiplier = std::clamp(
         options.ambiguousNativeConfidenceMultiplier, 0.0f, 1.0f);
 
-    std::vector<SourceDepthCandidate> candidates;
-    candidates.reserve(projected_source_depths.size());
-    for (int row = 0; row < reference_depth.rows; ++row)
-    {
+    std::vector<DominantDepthLayerSelectionStats> row_stats(
+        static_cast<std::size_t>(reference_depth.rows));
+    parallelForRows(
+        reference_depth.rows,
+        row_worker_count,
+        cancelled,
+        [&](int row)
+        {
+        DominantDepthLayerSelectionStats stats;
+        std::vector<SourceDepthCandidate> candidates;
+        candidates.reserve(projected_source_depths.size());
         float *depth_row = reference_depth.ptr<float>(row);
         float *confidence_row = has_confidence
             ? reference_confidence->ptr<float>(row) : nullptr;
         for (int column = 0; column < reference_depth.cols; ++column)
         {
+            if ((column & 63) == 0 && cancelled &&
+                cancelled->load(std::memory_order_relaxed))
+            {
+                break;
+            }
             if (has_support && support_mask.at<std::uint8_t>(row, column) == 0)
             {
                 depth_row[column] = 0.0f;
@@ -543,8 +655,13 @@ DominantDepthLayerSelectionStats selectDominantProjectedDepthLayer(
                             std::numeric_limits<std::uint16_t>::max())));
             }
         }
+        row_stats[static_cast<std::size_t>(row)] = stats;
+    });
+    for (const DominantDepthLayerSelectionStats &stats : row_stats)
+    {
+        addStats(result, stats);
     }
-    return stats;
+    return result;
 }
 
 CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
@@ -560,7 +677,9 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
     cv::Mat *source_inverse_depth_squared_sum,
     const Camera *reference_camera,
     const cv::Mat *guide_gray,
-    cv::Mat *anchored_interpolation_mask)
+    cv::Mat *anchored_interpolation_mask,
+    int row_worker_count,
+    const std::atomic<bool> *cancelled)
 {
     CrossViewHoleRepairStats stats;
     if (reference_depth.empty() || reference_depth.type() != CV_32FC1 ||
@@ -605,11 +724,19 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
     }
     auto interpolate_anchored_components = [&]()
     {
+        if (cancelled && cancelled->load(std::memory_order_relaxed))
+        {
+            return;
+        }
         cv::Mat interpolation_anchor_mask = strong_repaired_mask.clone();
         if (options.includeValidNativeInterpolationAnchors)
         {
-            for (int row = 0; row < reference_depth.rows; ++row)
-            {
+            parallelForRows(
+                reference_depth.rows,
+                row_worker_count,
+                cancelled,
+                [&](int row)
+                {
                 const float *depth_row = reference_depth.ptr<float>(row);
                 std::uint8_t *anchor_row =
                     interpolation_anchor_mask.ptr<std::uint8_t>(row);
@@ -620,7 +747,11 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
                         anchor_row[column] = 255;
                     }
                 }
-            }
+            });
+        }
+        if (cancelled && cancelled->load(std::memory_order_relaxed))
+        {
+            return;
         }
         cv::Mat *interpolation_output = anchored_interpolation_mask
             ? anchored_interpolation_mask : repaired_mask;
@@ -650,19 +781,31 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
         options.maximumLocalRelativeDepthDifference, maximum_spread, 0.20f);
     const cv::Mat original_depth = reference_depth.clone();
 
-    std::vector<SourceDepthCandidate> candidates;
-    candidates.reserve(projected_source_depths.size());
-    for (int row = 0; row < reference_depth.rows; ++row)
-    {
+    std::vector<CrossViewHoleRepairStats> initial_row_stats(
+        static_cast<std::size_t>(reference_depth.rows));
+    parallelForRows(
+        reference_depth.rows,
+        row_worker_count,
+        cancelled,
+        [&](int row)
+        {
+        CrossViewHoleRepairStats row_stats;
+        std::vector<SourceDepthCandidate> candidates;
+        candidates.reserve(projected_source_depths.size());
         float *depth_row = reference_depth.ptr<float>(row);
         for (int column = 0; column < reference_depth.cols; ++column)
         {
+            if ((column & 63) == 0 && cancelled &&
+                cancelled->load(std::memory_order_relaxed))
+            {
+                break;
+            }
             if (validDepth(depth_row[column]) ||
                 (has_support && support_mask.at<std::uint8_t>(row, column) == 0))
             {
                 continue;
             }
-            ++stats.consideredHolePixelCount;
+            ++row_stats.consideredHolePixelCount;
             candidates.clear();
             for (int source_ordinal = 0;
                  source_ordinal < static_cast<int>(projected_source_depths.size());
@@ -679,12 +822,12 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
                 if (validDepth(candidate))
                 {
                     candidates.push_back({candidate, source_ordinal});
-                    ++stats.projectedCandidateCount;
+                    ++row_stats.projectedCandidateCount;
                 }
             }
             if (static_cast<int>(candidates.size()) < minimum_sources)
             {
-                ++stats.rejectedInsufficientSourceCount;
+                ++row_stats.rejectedInsufficientSourceCount;
                 continue;
             }
             std::sort(candidates.begin(), candidates.end(),
@@ -713,7 +856,7 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
             }
             if (best_count < minimum_sources)
             {
-                ++stats.rejectedDepthSpreadCount;
+                ++row_stats.rejectedDepthSpreadCount;
                 continue;
             }
             const int reference_candidate_index = best_begin + (best_count - 1) / 2;
@@ -726,7 +869,7 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
                                           local_radius,
                                           local_threshold))
             {
-                ++stats.rejectedLocalDepthCount;
+                ++row_stats.rejectedLocalDepthCount;
                 continue;
             }
 
@@ -780,8 +923,17 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
                 repaired_mask->at<std::uint8_t>(row, column) = 255;
             }
             strong_repaired_mask.at<std::uint8_t>(row, column) = 255;
-            ++stats.repairedPixelCount;
+            ++row_stats.repairedPixelCount;
         }
+        initial_row_stats[static_cast<std::size_t>(row)] = row_stats;
+    });
+    for (const CrossViewHoleRepairStats &row_stats : initial_row_stats)
+    {
+        addStats(stats, row_stats);
+    }
+    if (cancelled && cancelled->load(std::memory_order_relaxed))
+    {
+        return stats;
     }
     if (!options.enableTwoSourceGrowth || !has_votes || !has_geometry_evidence ||
         !reference_camera || !reference_camera->isValid())
@@ -812,10 +964,23 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
     cv::Mat weak_inverse_squared_sum(
         reference_depth.size(), CV_32FC1, cv::Scalar(0.0f));
     cv::Mat weak_spread(reference_depth.size(), CV_32FC1, cv::Scalar(0.0f));
-    for (int row = 0; row < reference_depth.rows; ++row)
-    {
+    std::vector<std::uint64_t> weak_candidate_counts(
+        static_cast<std::size_t>(reference_depth.rows), 0);
+    parallelForRows(
+        reference_depth.rows,
+        row_worker_count,
+        cancelled,
+        [&](int row)
+        {
+        std::vector<SourceDepthCandidate> candidates;
+        candidates.reserve(projected_source_depths.size());
         for (int column = 0; column < reference_depth.cols; ++column)
         {
+            if ((column & 63) == 0 && cancelled &&
+                cancelled->load(std::memory_order_relaxed))
+            {
+                break;
+            }
             if (validDepth(reference_depth.at<float>(row, column)) ||
                 (has_support && support_mask.at<std::uint8_t>(row, column) == 0))
             {
@@ -916,8 +1081,16 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
             weak_inverse_sum.at<float>(row, column) = inverse_sum;
             weak_inverse_squared_sum.at<float>(row, column) = inverse_squared_sum;
             weak_spread.at<float>(row, column) = relative_spread;
-            ++stats.twoSourceCandidatePixelCount;
+            ++weak_candidate_counts[static_cast<std::size_t>(row)];
         }
+    });
+    for (const std::uint64_t count : weak_candidate_counts)
+    {
+        stats.twoSourceCandidatePixelCount += count;
+    }
+    if (cancelled && cancelled->load(std::memory_order_relaxed))
+    {
+        return stats;
     }
     if (cv::countNonZero(weak_mask) == 0)
     {
@@ -928,8 +1101,12 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
     cv::Mat candidate_surface = reference_depth.clone();
     weak_depth.copyTo(candidate_surface, weak_mask);
     cv::Mat strong_mask(reference_depth.size(), CV_8UC1, cv::Scalar(0));
-    for (int row = 0; row < reference_depth.rows; ++row)
-    {
+    parallelForRows(
+        reference_depth.rows,
+        row_worker_count,
+        cancelled,
+        [&](int row)
+        {
         for (int column = 0; column < reference_depth.cols; ++column)
         {
             if (!validDepth(reference_depth.at<float>(row, column)))
@@ -942,6 +1119,10 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
                 strong_mask.at<std::uint8_t>(row, column) = 255;
             }
         }
+    });
+    if (cancelled && cancelled->load(std::memory_order_relaxed))
+    {
+        return stats;
     }
 
     cv::Mat labels;
@@ -973,6 +1154,10 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
         reference_depth.size(), CV_16UC1, cv::Scalar(0xffff));
     for (int label = 1; label < component_count; ++label)
     {
+        if (cancelled && cancelled->load(std::memory_order_relaxed))
+        {
+            return stats;
+        }
         const int area = component_stats.at<int>(label, cv::CC_STAT_AREA);
         if (area > maximum_component_area)
         {
@@ -1029,6 +1214,10 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
 
         while (!queue.empty())
         {
+            if (cancelled && cancelled->load(std::memory_order_relaxed))
+            {
+                return stats;
+            }
             const GrowthNode node = queue.top();
             queue.pop();
             if (accepted.at<std::uint8_t>(node.row, node.column) != 0 ||

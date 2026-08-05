@@ -361,6 +361,7 @@ xjw::mvs::DepthGenConfig buildDepthGenConfig(const DenseGenerationSettings &sett
                      maxCpuWorkers);
     const int activeFrameWorkers = std::max(
         1, config.gpuFrameWorkerCount + config.cpuFrameWorkerCount);
+    config.totalCpuThreadBudget = totalThreads;
     config.cpuWorkerCount = std::max(1, totalThreads / activeFrameWorkers);
     config.patchMatch.numIterations = settings.iterations;
     config.patchMatch.patchHalf = (settings.patchSize - 1) / 2;

@@ -17,6 +17,173 @@ xjw::Camera cameraAt(double x)
     return camera;
 }
 
+TEST(DepthCrossViewHoleRepairTest, ParallelProjectionMatchesSerialNearestDepth)
+{
+    const xjw::Camera reference_camera = cameraAt(0.0);
+    const xjw::Camera source_camera = cameraAt(0.08);
+    cv::Mat source_depth(96, 128, CV_32FC1);
+    for (int row = 0; row < source_depth.rows; ++row)
+    {
+        float *values = source_depth.ptr<float>(row);
+        for (int column = 0; column < source_depth.cols; ++column)
+        {
+            values[column] = 2.0f + 0.0005f * static_cast<float>(row + column);
+        }
+    }
+    source_depth(cv::Rect(31, 23, 17, 11)).setTo(0.0f);
+
+    std::uint64_t serial_count = 0;
+    std::uint64_t parallel_count = 0;
+    const cv::Mat serial = xjw::mvs::projectSourceDepthToReference(
+        source_depth,
+        source_camera,
+        reference_camera,
+        source_depth.size(),
+        1.0f,
+        &serial_count,
+        1);
+    const cv::Mat parallel = xjw::mvs::projectSourceDepthToReference(
+        source_depth,
+        source_camera,
+        reference_camera,
+        source_depth.size(),
+        1.0f,
+        &parallel_count,
+        6);
+
+    EXPECT_EQ(parallel_count, serial_count);
+    EXPECT_EQ(cv::norm(parallel, serial, cv::NORM_INF), 0.0);
+}
+
+TEST(DepthCrossViewHoleRepairTest, ParallelProjectionHonorsPreexistingCancellation)
+{
+    const xjw::Camera reference_camera = cameraAt(0.0);
+    cv::Mat source_depth(96, 128, CV_32FC1, cv::Scalar(2.0f));
+    std::atomic<bool> cancelled{true};
+    std::uint64_t candidate_count = 99;
+
+    const cv::Mat projected = xjw::mvs::projectSourceDepthToReference(
+        source_depth,
+        cameraAt(0.08),
+        reference_camera,
+        source_depth.size(),
+        1.0f,
+        &candidate_count,
+        6,
+        &cancelled);
+
+    EXPECT_EQ(candidate_count, 0U);
+    EXPECT_EQ(cv::countNonZero(projected > 0.0f), 0);
+}
+
+TEST(DepthCrossViewHoleRepairTest, ParallelLayerSelectionMatchesSerialResult)
+{
+    cv::Mat serial_depth(48, 64, CV_32FC1, cv::Scalar(2.0f));
+    serial_depth(cv::Rect(18, 14, 12, 10)).setTo(0.0f);
+    cv::Mat parallel_depth = serial_depth.clone();
+    const cv::Mat support(serial_depth.size(), CV_8UC1, cv::Scalar(255));
+    const std::vector<cv::Mat> projected = {
+        cv::Mat(serial_depth.size(), CV_32FC1, cv::Scalar(2.01f)),
+        cv::Mat(serial_depth.size(), CV_32FC1, cv::Scalar(2.02f)),
+        cv::Mat(serial_depth.size(), CV_32FC1, cv::Scalar(2.01f))};
+    const cv::Mat consistent(serial_depth.size(), CV_16UC1, cv::Scalar(3));
+    const cv::Mat contradicted(serial_depth.size(), CV_16UC1, cv::Scalar(0));
+    cv::Mat serial_confidence(serial_depth.size(), CV_32FC1, cv::Scalar(0.8f));
+    cv::Mat parallel_confidence = serial_confidence.clone();
+    cv::Mat serial_selected;
+    cv::Mat parallel_selected;
+
+    const auto serial_stats = xjw::mvs::selectDominantProjectedDepthLayer(
+        serial_depth,
+        support,
+        projected,
+        consistent,
+        contradicted,
+        {},
+        &serial_confidence,
+        &serial_selected,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        1);
+    const auto parallel_stats = xjw::mvs::selectDominantProjectedDepthLayer(
+        parallel_depth,
+        support,
+        projected,
+        consistent,
+        contradicted,
+        {},
+        &parallel_confidence,
+        &parallel_selected,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        6);
+
+    EXPECT_EQ(cv::norm(parallel_depth, serial_depth, cv::NORM_INF), 0.0);
+    EXPECT_EQ(cv::norm(parallel_confidence, serial_confidence, cv::NORM_INF), 0.0);
+    EXPECT_EQ(cv::countNonZero(parallel_selected != serial_selected), 0);
+    EXPECT_EQ(parallel_stats.consideredPixelCount, serial_stats.consideredPixelCount);
+    EXPECT_EQ(parallel_stats.stableLayerPixelCount, serial_stats.stableLayerPixelCount);
+    EXPECT_EQ(parallel_stats.refinedNativePixelCount, serial_stats.refinedNativePixelCount);
+    EXPECT_EQ(parallel_stats.transferredMissingPixelCount,
+              serial_stats.transferredMissingPixelCount);
+}
+
+TEST(DepthCrossViewHoleRepairTest, ParallelHoleCandidateScanMatchesSerialResult)
+{
+    cv::Mat serial_depth(72, 96, CV_32FC1, cv::Scalar(2.0f));
+    serial_depth(cv::Rect(24, 18, 32, 28)).setTo(0.0f);
+    cv::Mat parallel_depth = serial_depth.clone();
+    const cv::Mat support(serial_depth.size(), CV_8UC1, cv::Scalar(255));
+    const std::vector<cv::Mat> projected = {
+        cv::Mat(serial_depth.size(), CV_32FC1, cv::Scalar(2.01f)),
+        cv::Mat(serial_depth.size(), CV_32FC1, cv::Scalar(2.02f)),
+        cv::Mat(serial_depth.size(), CV_32FC1, cv::Scalar(2.01f))};
+    cv::Mat serial_confidence(serial_depth.size(), CV_32FC1, cv::Scalar(0.0f));
+    cv::Mat parallel_confidence = serial_confidence.clone();
+    cv::Mat serial_votes(serial_depth.size(), CV_16UC1, cv::Scalar(0));
+    cv::Mat parallel_votes = serial_votes.clone();
+    cv::Mat serial_mask;
+    cv::Mat parallel_mask;
+
+    const auto serial_stats = xjw::mvs::repairDepthHolesFromProjectedSources(
+        serial_depth,
+        support,
+        projected,
+        {},
+        &serial_confidence,
+        &serial_votes,
+        &serial_mask);
+    const auto parallel_stats = xjw::mvs::repairDepthHolesFromProjectedSources(
+        parallel_depth,
+        support,
+        projected,
+        {},
+        &parallel_confidence,
+        &parallel_votes,
+        &parallel_mask,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        6);
+
+    EXPECT_EQ(cv::norm(parallel_depth, serial_depth, cv::NORM_INF), 0.0);
+    EXPECT_EQ(cv::norm(parallel_confidence, serial_confidence, cv::NORM_INF), 0.0);
+    EXPECT_EQ(cv::countNonZero(parallel_votes != serial_votes), 0);
+    EXPECT_EQ(cv::countNonZero(parallel_mask != serial_mask), 0);
+    EXPECT_EQ(parallel_stats.projectedCandidateCount,
+              serial_stats.projectedCandidateCount);
+    EXPECT_EQ(parallel_stats.consideredHolePixelCount,
+              serial_stats.consideredHolePixelCount);
+    EXPECT_EQ(parallel_stats.repairedPixelCount, serial_stats.repairedPixelCount);
+}
+
 TEST(DepthCrossViewHoleRepairTest, RepairsHoleConfirmedByTwoDistinctSources)
 {
     const xjw::Camera reference_camera = cameraAt(0.0);

@@ -7,6 +7,7 @@
 
 #include <opencv2/core.hpp>
 
+#include <atomic>
 #include <cstdint>
 #include <vector>
 
@@ -78,7 +79,9 @@ cv::Mat projectSourceDepthToReference(
     const Camera &referenceCamera,
     const cv::Size &referenceSize,
     float maximumProjectionDistancePixels,
-    std::uint64_t *projectedCandidateCount = nullptr);
+    std::uint64_t *projectedCandidateCount = nullptr,
+    int rowWorkerCount = 1,
+    const std::atomic<bool> *cancelled = nullptr);
 
 /// Selects one occlusion-aware depth layer from source depths projected into
 /// the reference view. Stable source clusters may refine a matching native
@@ -97,7 +100,9 @@ DominantDepthLayerSelectionStats selectDominantProjectedDepthLayer(
     cv::Mat *geometrySourceMask = nullptr,
     cv::Mat *sourceInverseDepthSum = nullptr,
     cv::Mat *sourceInverseDepthSquaredSum = nullptr,
-    cv::Mat *selectedSourceVotes = nullptr);
+    cv::Mat *selectedSourceVotes = nullptr,
+    int rowWorkerCount = 1,
+    const std::atomic<bool> *cancelled = nullptr);
 
 CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
     cv::Mat &referenceDepth,
@@ -112,7 +117,9 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
     cv::Mat *sourceInverseDepthSquaredSum = nullptr,
     const Camera *referenceCamera = nullptr,
     const cv::Mat *guideGray = nullptr,
-    cv::Mat *anchoredInterpolationMask = nullptr);
+    cv::Mat *anchoredInterpolationMask = nullptr,
+    int rowWorkerCount = 1,
+    const std::atomic<bool> *cancelled = nullptr);
 
 QJsonObject crossViewHoleRepairStatsToJson(
     const CrossViewHoleRepairStats &stats);
