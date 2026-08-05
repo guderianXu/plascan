@@ -63,6 +63,7 @@
 #include "HenuBrandWidget.h"
 #include "TaskStatusWidget.h"
 #include "ObjRenderPreparation.h"
+#include "LayerImageLoader.h"
 
 #include "Camera.h"
 #include "DemDomIO.h"
@@ -7638,8 +7639,8 @@ TEST(CameraSceneWidgetTest, CameraOverlayUsesMetashapeStyleImagePlanes)
         "float cameraImagePlaneHalfExtent(const CameraPose &pose,")));
     EXPECT_TRUE(header.contains(QStringLiteral("void drawFloorPivotCross(QPainter &painter)")));
     EXPECT_TRUE(source.contains(QStringLiteral("pose, matrices.modelView")));
-    EXPECT_TRUE(source.contains(QStringLiteral("cameraDirectionLeaderLine(")));
-    EXPECT_TRUE(source.contains(QStringLiteral("pose, thumbnailHalfExtent")));
+    EXPECT_TRUE(source.contains(QStringLiteral("cameraDirectionLeaderSegment(")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_cameraLeaderPipeline.pipeline")));
     EXPECT_FALSE(source.contains(QStringLiteral("drawCameraDirectionArrow")));
     EXPECT_TRUE(source.contains(QStringLiteral("cameraImagePlaneCorners")));
     EXPECT_TRUE(source.contains(QStringLiteral("drawCameraThumbnails(cb")));
@@ -9477,6 +9478,27 @@ TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesImageLoadingToDedicat
     EXPECT_TRUE(loaderHeader.contains(QStringLiteral("QImage loadImageForDisplay")));
     EXPECT_TRUE(loaderSource.contains(QStringLiteral("convertTo8BitGeoTiff_GDAL")));
     EXPECT_TRUE(loaderSource.contains(QStringLiteral("loadImageWithOpenCvByteDecode")));
+}
+
+TEST(CanvasWidgetResponsivenessTest, ImageLoaderDecodesDirectlyToRequestedThumbnailSize)
+{
+    QTemporaryDir temporaryDirectory;
+    ASSERT_TRUE(temporaryDirectory.isValid());
+    const QString imagePath = QDir(temporaryDirectory.path()).filePath(
+        QStringLiteral("large_camera.png"));
+    QImage sourceImage(QSize(1200, 800), QImage::Format_RGB32);
+    sourceImage.fill(QColor(45, 95, 145));
+    ASSERT_TRUE(sourceImage.save(imagePath));
+
+    QSize sourceSize;
+    const QImage thumbnail = xjw::gui::views::loadImageForDisplay(
+        imagePath, QString(), QSize(220, 160), &sourceSize);
+
+    EXPECT_EQ(sourceSize, QSize(1200, 800));
+    EXPECT_EQ(thumbnail.width(), 220);
+    EXPECT_LE(thumbnail.height(), 160);
+    EXPECT_NEAR(
+        static_cast<double>(thumbnail.width()) / thumbnail.height(), 1.5, 0.02);
 }
 
 TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesOverlayDrawingToDedicatedItems)

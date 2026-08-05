@@ -292,8 +292,10 @@ private:
     void updateActiveCameraForView();
     void refreshLockedCameraImage();
     void drawFloorPivotCross(QPainter &painter) const;
-    QLineF cameraDirectionLeaderLine(const CameraPose &pose,
-                                     float planeHalfExtent) const;
+    bool cameraDirectionLeaderSegment(const CameraPose &pose,
+                                      float planeHalfExtent,
+                                      QVector3D *start,
+                                      QVector3D *end) const;
 
     // 在普通透明 QWidget 覆盖层中绘制 2D 标注：
     //   - 操控球 Gizmo（旋转环）
@@ -303,6 +305,7 @@ private:
     void requestOverlayUpdate();
     void paintOverlay(QPainter &painter);
     void drawPlyLoadProgressOverlay(QPainter &painter);
+    void drawCameraThumbnailProgressOverlay(QPainter &painter) const;
     void drawPointCloudOverlay(QPainter &painter) const;
     void drawRotationGizmo(QPainter &painter) const;
     void drawTiePointLegend(QPainter &painter) const;
@@ -386,6 +389,7 @@ private:
         QScopedPointer<QRhiBuffer> vertexBuffer;
         QScopedPointer<QRhiTexture> texture;
         QScopedPointer<QRhiShaderResourceBindings> bindings;
+        int vertexCapacity = 0;
     };
 
     struct RhiCameraThumbnailPipelineSet
@@ -394,6 +398,9 @@ private:
         QScopedPointer<QRhiSampler> sampler;
         QScopedPointer<QRhiGraphicsPipeline> pipeline;
         QHash<QString, QSharedPointer<RhiCameraThumbnailResource>> resources;
+        QSharedPointer<RhiCameraThumbnailResource> solidResource;
+        QSharedPointer<RhiCameraThumbnailResource> highlightedSolidResource;
+        QScopedPointer<QRhiBuffer> leaderBuffer;
         bool resourcesDirty = true;
     };
 
@@ -450,11 +457,16 @@ private:
     bool ensurePipeline(RhiPipelineSet *pipeline,
                         int topology,
                         int strideBytes,
-                        bool hasNormals);
+                        bool hasNormals,
+                        bool depthWrite = true);
     bool ensurePointPipeline();
     bool ensureTexturedMeshPipeline(QRhiResourceUpdateBatch *updates);
     bool ensureImagePipeline(QRhiResourceUpdateBatch *updates);
     bool ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *updates);
+    bool ensureSolidCameraBatchResource(
+        QSharedPointer<RhiCameraThumbnailResource> *resource,
+        const QColor &color,
+        QRhiResourceUpdateBatch *updates);
     void drawRhiBuffer(QRhiCommandBuffer *cb,
                        RhiBufferSet *buffer,
                        RhiPipelineSet *pipeline,
@@ -462,7 +474,9 @@ private:
     void drawPointCloud(QRhiCommandBuffer *cb, const SceneUniforms &uniforms);
     void drawTexturedMesh(QRhiCommandBuffer *cb, const SceneUniforms &uniforms);
     void drawActiveCameraImage(QRhiCommandBuffer *cb, const QMatrix4x4 &mvp);
-    void drawCameraThumbnails(QRhiCommandBuffer *cb, const QMatrix4x4 &mvp);
+    void drawCameraThumbnails(QRhiCommandBuffer *cb,
+                              const QMatrix4x4 &mvp,
+                              const SceneUniforms &sceneUniforms);
     void drawSceneGeometry(QRhiCommandBuffer *cb, SceneUniforms &uniforms);
 
     // 点云 GPU 资源
@@ -488,6 +502,7 @@ private:
 
     RhiPipelineSet _colorPointPipeline;
     RhiPipelineSet _colorLinePipeline;
+    RhiPipelineSet _cameraLeaderPipeline;
     RhiPipelineSet _meshTrianglePipeline;
     RhiPipelineSet _meshPointPipeline;
     RhiTexturedMeshPipelineSet _texturedMeshPipeline;
@@ -559,6 +574,8 @@ private:
     QSet<QString> _cameraImageLoadFailures;
     QThreadPool _cameraImageLoadPool;
     int _cameraImageLoadGeneration = 0;
+    int _cameraThumbnailLoadTotal = 0;
+    int _cameraThumbnailLoadCompleted = 0;
     QString _highlightedCameraPath;
     QString _highlightedCameraName;
     bool _manualPruneMode = false;

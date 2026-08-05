@@ -55,7 +55,7 @@ TEST(CameraSceneRenderContractTest, AvoidsPerFrameSortingForOpaqueDepthWrittenTh
     ASSERT_GT(nextFunction, drawStart);
     const QString drawBlock = source.mid(drawStart, nextFunction - drawStart);
 
-    EXPECT_TRUE(drawBlock.contains(QStringLiteral("开启深度写入的不透明纹理")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("数百次 draw call 压缩为 2 次")));
     EXPECT_FALSE(drawBlock.contains(QStringLiteral("farToNearCameraIndices")));
     EXPECT_FALSE(drawBlock.contains(QStringLiteral("camera_draw_order")));
 }
@@ -64,8 +64,10 @@ TEST(CameraSceneRenderContractTest, LargeCameraImagesUseContinuousBoundedPrefetc
 {
     const QString header = readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
     const QString source = readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString imageLoader = readProjectFile(QStringLiteral("src/gui/views/LayerImageLoader.cpp"));
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(imageLoader.isEmpty());
 
     EXPECT_TRUE(header.contains(QStringLiteral("QThreadPool _cameraImageLoadPool")));
     EXPECT_TRUE(header.contains(QStringLiteral("QQueue<CameraPlaneImageRequest> _cameraImageLoadQueue")));
@@ -74,6 +76,10 @@ TEST(CameraSceneRenderContractTest, LargeCameraImagesUseContinuousBoundedPrefetc
     EXPECT_TRUE(source.contains(QStringLiteral("std::clamp((ideal_threads + 1) / 2, 4, 12)")));
     EXPECT_FALSE(source.contains(QStringLiteral("_cameraImageLoadsInFlight.size() >= 6")));
     EXPECT_FALSE(source.contains(QStringLiteral("_cameraImageCache.size() > 512")));
+    EXPECT_TRUE(source.contains(QStringLiteral("imagePath, QString(), targetSize, &source_size")));
+    EXPECT_TRUE(imageLoader.contains(QStringLiteral("reader.setScaledSize(scaled_size)")));
+    EXPECT_TRUE(header.contains(QStringLiteral("drawCameraThumbnailProgressOverlay")));
+    EXPECT_TRUE(source.contains(QStringLiteral("正在加载相机影像 %1/%2")));
 }
 
 TEST(CameraSceneRenderContractTest, ProjectCameraPosesAreParsedOffTheGuiThread)
@@ -147,7 +153,7 @@ TEST(CameraSceneRenderContractTest, ForegroundImageOccludesGpuAndOverlaySceneCon
     EXPECT_FALSE(overlayBlock.contains(QStringLiteral("drawPointCloudOverlay(painter);")));
 }
 
-TEST(CameraSceneRenderContractTest, SolidCameraCardsUseDepthTestedGpuResourcesWhenThumbnailsAreDisabled)
+TEST(CameraSceneRenderContractTest, SolidCameraCardsUseBatchedDepthTestedGpuResources)
 {
     const QString source = readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
     const qsizetype ensureStart = source.indexOf(
@@ -164,11 +170,13 @@ TEST(CameraSceneRenderContractTest, SolidCameraCardsUseDepthTestedGpuResourcesWh
     ASSERT_GE(overlayStart, 0);
     ASSERT_GT(overlayEnd, overlayStart);
     const QString ensureBlock = source.mid(ensureStart, drawStart - ensureStart);
+    const QString drawBlock = source.mid(drawStart, overlayStart - drawStart);
     const QString overlayBlock = source.mid(overlayStart, overlayEnd - overlayStart);
-    EXPECT_TRUE(ensureBlock.contains(QStringLiteral("CameraImagePlaneMode::Solid")));
-    EXPECT_TRUE(ensureBlock.contains(QStringLiteral("QImage(QSize(1, 1), QImage::Format_RGBA8888)")));
-    EXPECT_TRUE(ensureBlock.contains(QStringLiteral("image.fill(highlighted ? QColor")));
-    EXPECT_FALSE(ensureBlock.contains(QStringLiteral(".rgba()")));
+    EXPECT_TRUE(ensureBlock.contains(QStringLiteral("ensureSolidCameraBatchResource(")));
+    EXPECT_TRUE(ensureBlock.contains(QStringLiteral("setDepthTest(true)")));
+    EXPECT_TRUE(ensureBlock.contains(QStringLiteral("setDepthWrite(true)")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("draw_solid_batch(")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("solid_vertices")));
     EXPECT_FALSE(overlayBlock.contains(QStringLiteral("QPolygonF cameraCard")));
     EXPECT_FALSE(overlayBlock.contains(QStringLiteral("painter.drawPolygon(cameraCard)")));
 }
@@ -184,12 +192,17 @@ TEST(CameraSceneRenderContractTest, SelectedCameraCardUsesRedHighlight)
     ASSERT_GE(ensureStart, 0);
     ASSERT_GT(drawStart, ensureStart);
     const QString ensureBlock = source.mid(ensureStart, drawStart - ensureStart);
-    EXPECT_TRUE(ensureBlock.contains(QStringLiteral("isCameraHighlighted(pose)")));
-    EXPECT_TRUE(ensureBlock.contains(QStringLiteral("QColor(57, 112, 173, 220)")));
-    EXPECT_TRUE(ensureBlock.contains(QStringLiteral("QColor(205, 60, 70, 230)")));
+    const qsizetype drawEnd = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::drawActiveCameraImage"), drawStart);
+    ASSERT_GT(drawEnd, drawStart);
+    const QString drawBlock = source.mid(drawStart, drawEnd - drawStart);
+    EXPECT_TRUE(ensureBlock.contains(QStringLiteral("QColor(57, 112, 173)")));
+    EXPECT_TRUE(ensureBlock.contains(QStringLiteral("QColor(205, 60, 70)")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("isCameraHighlighted(pose)")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("highlightedSolidResource")));
 }
 
-TEST(CameraSceneRenderContractTest, CameraCardsUseScreenSizeAndExternalBlackDirectionLeader)
+TEST(CameraSceneRenderContractTest, CameraCardsAndDirectionLeadersShareVulkanGeometry)
 {
     const QString header =
         readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
@@ -198,7 +211,7 @@ TEST(CameraSceneRenderContractTest, CameraCardsUseScreenSizeAndExternalBlackDire
     const QString mathSource =
         readProjectFile(QStringLiteral("src/gui/views/CameraSceneViewMath.cpp"));
 
-    EXPECT_TRUE(header.contains(QStringLiteral("QLineF cameraDirectionLeaderLine")));
+    EXPECT_TRUE(header.contains(QStringLiteral("bool cameraDirectionLeaderSegment")));
     EXPECT_FALSE(header.contains(QStringLiteral("drawCameraDirectionArrow")));
     EXPECT_TRUE(source.contains(QStringLiteral("cameraPlaneHalfExtentForScreenSize(")));
     EXPECT_FALSE(source.contains(QStringLiteral("cameraPlaneHalfExtentForViewDepth(")));
@@ -231,21 +244,22 @@ TEST(CameraSceneRenderContractTest, CameraCardsUseScreenSizeAndExternalBlackDire
     EXPECT_TRUE(drawBlock.contains(QStringLiteral("pose, matrices.modelView")));
     EXPECT_TRUE(drawBlock.contains(QStringLiteral(
         "fullDynamicBufferUpdateForCurrentFrame(")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("_cameraLeaderPipeline.pipeline")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("leader_vertices")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("draw_solid_batch")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("_leftDragging")));
 
     const qsizetype leaderStart = source.indexOf(
-        QStringLiteral("QLineF CameraSceneWidget::cameraDirectionLeaderLine"));
+        QStringLiteral("bool CameraSceneWidget::cameraDirectionLeaderSegment"));
     const qsizetype manipStart = source.indexOf(
         QStringLiteral("QVector3D CameraSceneWidget::manipCenterWorld"), leaderStart);
     ASSERT_GE(leaderStart, 0);
     ASSERT_GT(manipStart, leaderStart);
     const QString leaderBlock = source.mid(leaderStart, manipStart - leaderStart);
     EXPECT_TRUE(leaderBlock.contains(QStringLiteral("cameraForwardDirection(")));
-    EXPECT_TRUE(leaderBlock.contains(QStringLiteral("pose.center - forward")));
-    EXPECT_TRUE(leaderBlock.contains(QStringLiteral("cameraPlaneScreenHalfExtentPixels(")));
-    EXPECT_TRUE(leaderBlock.contains(QStringLiteral("cameraPlaneLeaderLine(")));
-    EXPECT_TRUE(leaderBlock.contains(QStringLiteral("lineStartOffset")));
-    EXPECT_FALSE(leaderBlock.contains(QStringLiteral("projectedCorners")));
-    EXPECT_FALSE(leaderBlock.contains(QStringLiteral("headLength")));
+    EXPECT_TRUE(leaderBlock.contains(QStringLiteral("*start = pose.center")));
+    EXPECT_TRUE(leaderBlock.contains(QStringLiteral("pose.center - forward.normalized()")));
+    EXPECT_FALSE(leaderBlock.contains(QStringLiteral("projectToScreen(")));
 
     const qsizetype overlayStart = source.indexOf(
         QStringLiteral("void CameraSceneWidget::paintOverlay(QPainter &painter)"));
@@ -254,12 +268,9 @@ TEST(CameraSceneRenderContractTest, CameraCardsUseScreenSizeAndExternalBlackDire
     ASSERT_GE(overlayStart, 0);
     ASSERT_GT(overlayEnd, overlayStart);
     const QString overlayBlock = source.mid(overlayStart, overlayEnd - overlayStart);
-    EXPECT_TRUE(overlayBlock.contains(QStringLiteral("cameraDirectionLeaderLine(")));
-    EXPECT_TRUE(overlayBlock.contains(QStringLiteral("pose, thumbnailHalfExtent")));
-    EXPECT_TRUE(overlayBlock.contains(QStringLiteral("QColor(25, 25, 25")));
-    EXPECT_TRUE(overlayBlock.contains(QStringLiteral("cameraPlaneOcclusionPath")));
-    EXPECT_TRUE(overlayBlock.contains(QStringLiteral("cameraLeaderClip")));
-    EXPECT_TRUE(overlayBlock.contains(QStringLiteral("painter.setClipPath(cameraLeaderClip")));
+    EXPECT_TRUE(overlayBlock.contains(QStringLiteral("cameraDirectionLeaderSegment(")));
+    EXPECT_FALSE(overlayBlock.contains(QStringLiteral("cameraPlaneOcclusionPath")));
+    EXPECT_FALSE(overlayBlock.contains(QStringLiteral("cameraLeaderClip")));
     EXPECT_FALSE(overlayBlock.contains(QStringLiteral("drawCameraDirectionArrow")));
 }
 
@@ -425,7 +436,7 @@ TEST(CameraSceneRenderContractTest, TiePointsUseGpuCameraPlaneDepth)
     const qsizetype geometryCall = renderBlock.indexOf(
         QStringLiteral("drawSceneGeometry(cb, uniforms);"));
     const qsizetype thumbnailsCall = renderBlock.indexOf(
-        QStringLiteral("drawCameraThumbnails(cb, mvp);"));
+        QStringLiteral("drawCameraThumbnails(cb, mvp, uniforms);"));
     ASSERT_GE(geometryCall, 0);
     ASSERT_GT(thumbnailsCall, geometryCall);
 }

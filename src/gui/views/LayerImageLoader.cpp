@@ -436,13 +436,34 @@ bool isCacheFresh(const QString &inputPath, const QString &cachePath)
 namespace xjw::gui::views
 {
 
-QImage loadImageForDisplay(const QString &path, const QString &plascanPath)
+QImage loadImageForDisplay(const QString &path,
+                           const QString &plascanPath,
+                           const QSize &maximum_size,
+                           QSize *source_size)
 {
+    if (source_size)
+    {
+        *source_size = QSize();
+    }
     QImage img;
     QImageReader reader(path);
     reader.setAutoTransform(false);
     if (reader.canRead())
     {
+        const QSize reader_size = reader.size();
+        if (source_size && reader_size.isValid())
+        {
+            *source_size = reader_size;
+        }
+        if (maximum_size.isValid() && reader_size.isValid())
+        {
+            const QSize scaled_size = reader_size.scaled(maximum_size, Qt::KeepAspectRatio);
+            if (scaled_size.width() < reader_size.width()
+                || scaled_size.height() < reader_size.height())
+            {
+                reader.setScaledSize(scaled_size);
+            }
+        }
         img = reader.read();
 
         if (!img.isNull() && img.format() == QImage::Format_Grayscale16)
@@ -483,6 +504,21 @@ QImage loadImageForDisplay(const QString &path, const QString &plascanPath)
             QImageReader r2(out8);
             if (r2.canRead())
             {
+                const QSize converted_size = r2.size();
+                if (source_size && !source_size->isValid() && converted_size.isValid())
+                {
+                    *source_size = converted_size;
+                }
+                if (maximum_size.isValid() && converted_size.isValid())
+                {
+                    const QSize scaled_size = converted_size.scaled(
+                        maximum_size, Qt::KeepAspectRatio);
+                    if (scaled_size.width() < converted_size.width()
+                        || scaled_size.height() < converted_size.height())
+                    {
+                        r2.setScaledSize(scaled_size);
+                    }
+                }
                 img = r2.read();
             }
             if (img.isNull())
@@ -496,7 +532,21 @@ QImage loadImageForDisplay(const QString &path, const QString &plascanPath)
         LOG_WARN(QStringLiteral("addImageLayer: failed to load image %1").arg(path));
         return QImage();
     }
+    if (source_size && !source_size->isValid())
+    {
+        *source_size = img.size();
+    }
+    if (maximum_size.isValid()
+        && (img.width() > maximum_size.width() || img.height() > maximum_size.height()))
+    {
+        img = img.scaled(maximum_size, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
     return img;
+}
+
+QImage loadImageForDisplay(const QString &path, const QString &plascanPath)
+{
+    return loadImageForDisplay(path, plascanPath, QSize(), nullptr);
 }
 
 } // namespace xjw::gui::views
