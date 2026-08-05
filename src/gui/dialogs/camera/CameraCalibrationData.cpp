@@ -1,13 +1,19 @@
 #include "CameraCalibrationData.h"
 
+#include "ProjectCameraIO.h"
+#include "project/ProjectMetadata.h"
+
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
+#include <QImageReader>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QSize>
 
 #include <algorithm>
+#include <cmath>
 
 namespace xjw::gui::camera_calibration
 {
@@ -16,11 +22,117 @@ namespace
 
 QString normalizedPathKey(const QString &path)
 {
-    QString key = QDir::cleanPath(QDir::fromNativeSeparators(path.trimmed()));
-#ifdef Q_OS_WIN
-    key = key.toCaseFolded();
-#endif
-    return key;
+    return xjw::common::project::normalizePath(path);
+}
+
+QSize resolveImageSize(const QString &path,
+                       const QJsonObject &image,
+                       const QJsonObject &camera)
+{
+    int width = camera.value(QStringLiteral("image_width"))
+                    .toInt(image.value(QStringLiteral("width")).toInt());
+    int height = camera.value(QStringLiteral("image_height"))
+                     .toInt(image.value(QStringLiteral("height")).toInt());
+    if (width > 0 && height > 0)
+    {
+        return QSize(width, height);
+    }
+
+    const QSize size = QImageReader(path).size();
+    return size.isValid() ? size : QSize();
+}
+
+QJsonObject normalizedCalibration(const QJsonObject &camera, const QSize &imageSize)
+{
+    if (camera.isEmpty())
+    {
+        return {};
+    }
+
+    double focalX = camera.value(QStringLiteral("fu")).toDouble();
+    double focalY = camera.value(QStringLiteral("fv")).toDouble(focalX);
+    double principalX = camera.value(QStringLiteral("cu")).toDouble();
+    double principalY = camera.value(QStringLiteral("cv")).toDouble();
+    const bool millimeters = camera.value(QStringLiteral("intrinsics_unit"))
+                                  .toString()
+                                  .compare(QStringLiteral("mm"), Qt::CaseInsensitive) == 0;
+    if (millimeters)
+    {
+        const double pitch = std::max(
+            1e-12,
+            camera.value(QStringLiteral("pitch")).toDouble(1.0));
+        focalX /= pitch;
+        focalY /= pitch;
+        principalX /= pitch;
+        principalY /= pitch;
+    }
+    xjw::Camera parsed;
+    if (xjw::common::project::cameraFromJson(camera, &parsed) && parsed.isValid())
+    {
+        const xjw::Camera::Intrinsics intrinsics = parsed.intrinsics();
+        focalX = intrinsics.focalX;
+        focalY = intrinsics.focalY;
+        principalX = intrinsics.principalX;
+        principalY = intrinsics.principalY;
+    }
+
+    QJsonObject calibration{
+        {QStringLiteral("model"), camera.value(QStringLiteral("model")).toString(
+                                      QStringLiteral("brown_conrady"))},
+        {QStringLiteral("intrinsics_unit"), QStringLiteral("px")},
+        {QStringLiteral("principal_point_convention"), QStringLiteral("offset_from_image_center")},
+        {QStringLiteral("fu"), focalX},
+        {QStringLiteral("fv"), focalY},
+        {QStringLiteral("f"), std::sqrt(std::abs(focalX * focalY))},
+        {QStringLiteral("cu"), principalX},
+        {QStringLiteral("cv"), principalY},
+        {QStringLiteral("cx"), imageSize.isValid() ? principalX - imageSize.width() * 0.5
+                                                    : principalX},
+        {QStringLiteral("cy"), imageSize.isValid() ? principalY - imageSize.height() * 0.5
+                                                    : principalY},
+        {QStringLiteral("image_width"), imageSize.width()},
+        {QStringLiteral("image_height"), imageSize.height()}};
+    for (const QString &parameter : {
+             QStringLiteral("k1"), QStringLiteral("k2"), QStringLiteral("k3"),
+             QStringLiteral("p1"), QStringLiteral("p2")})
+    {
+        calibration.insert(parameter, camera.value(parameter).toDouble());
+    }
+    return calibration;
+}
+
+QJsonObject automaticInitialCalibration(const QSize &imageSize, double focalScale)
+{
+    if (!imageSize.isValid())
+    {
+        return {};
+    }
+    const double focal = std::max(imageSize.width(), imageSize.height()) *
+        std::max(0.1, focalScale);
+    return QJsonObject{
+        {QStringLiteral("model"), QStringLiteral("brown_conrady")},
+        {QStringLiteral("intrinsics_unit"), QStringLiteral("px")},
+        {QStringLiteral("principal_point_convention"), QStringLiteral("offset_from_image_center")},
+        {QStringLiteral("f"), focal},
+        {QStringLiteral("fu"), focal},
+        {QStringLiteral("fv"), focal},
+        {QStringLiteral("cu"), imageSize.width() * 0.5},
+        {QStringLiteral("cv"), imageSize.height() * 0.5},
+        {QStringLiteral("cx"), 0.0},
+        {QStringLiteral("cy"), 0.0},
+        {QStringLiteral("k1"), 0.0},
+        {QStringLiteral("k2"), 0.0},
+        {QStringLiteral("k3"), 0.0},
+        {QStringLiteral("p1"), 0.0},
+        {QStringLiteral("p2"), 0.0},
+        {QStringLiteral("image_width"), imageSize.width()},
+        {QStringLiteral("image_height"), imageSize.height()}};
+}
+
+bool isUsableProjectCamera(const QJsonObject &camera)
+{
+    xjw::Camera parsed;
+    return xjw::common::project::cameraFromJson(camera, &parsed) && parsed.isValid();
 }
 
 void copyLegacyParameter(const QJsonObject &comparison,
@@ -48,7 +160,9 @@ QJsonObject legacyCamera(const QJsonObject &comparison, const QString &suffix)
     return camera;
 }
 
-void applyImageMetadata(const QJsonObject &image, CameraCalibrationRecord *record)
+void applyImageMetadata(const QJsonObject &image,
+                        bool completedCalibrationRun,
+                        CameraCalibrationRecord *record)
 {
     if (!record)
     {
@@ -64,21 +178,119 @@ void applyImageMetadata(const QJsonObject &image, CameraCalibrationRecord *recor
     record->imageHeight = camera.value(QStringLiteral("image_height"))
                               .toInt(image.value(QStringLiteral("height")).toInt(record->imageHeight));
 
-    if (!camera.isEmpty())
+    if (!camera.isEmpty() && record->hasAdjusted && completedCalibrationRun)
     {
-        if (record->hasAdjusted)
+        QJsonObject enriched = camera;
+        for (auto it = record->adjusted.constBegin(); it != record->adjusted.constEnd(); ++it)
         {
-            record->adjusted = camera;
+            enriched.insert(it.key(), it.value());
         }
-        else if (!record->hasInitial)
+        record->adjusted = enriched;
+    }
+    else if (!camera.isEmpty() && !record->hasAdjusted && completedCalibrationRun)
+    {
+        record->adjusted = camera;
+        record->hasAdjusted = true;
+        if (record->adjustmentStatus.isEmpty())
         {
-            record->initial = camera;
-            record->hasInitial = true;
+            record->adjustmentStatus = QStringLiteral("legacy_adjusted_only");
         }
+    }
+    else if (!camera.isEmpty() && !record->hasInitial && !completedCalibrationRun)
+    {
+        record->initial = camera;
+        record->hasInitial = true;
+        record->initialSource = QStringLiteral("project_camera_prior");
+        record->adjustmentStatus = QStringLiteral("not_run");
     }
 }
 
 } // namespace
+
+QJsonArray buildCameraCalibrationComparison(
+    const QJsonObject &projectMetadata,
+    const QMap<QString, QJsonObject> &adjustedCameras,
+    const QJsonObject &sfmDiagnostics)
+{
+    QHash<QString, QJsonObject> imagesByPath;
+    for (const QJsonValue &value : projectMetadata.value(QStringLiteral("images")).toArray())
+    {
+        const QJsonObject image = value.toObject();
+        const QString path = image.value(QStringLiteral("path")).toString();
+        if (!path.isEmpty())
+        {
+            imagesByPath.insert(normalizedPathKey(path), image);
+        }
+    }
+
+    const double focalScale = sfmDiagnostics
+        .value(QStringLiteral("adaptive_focal_seed_scale"))
+        .toDouble(sfmDiagnostics.value(QStringLiteral("adaptive_focal_scale")).toDouble(1.0));
+    const QString adjustmentStatus = sfmDiagnostics
+        .value(QStringLiteral("camera_self_calibration_status"))
+        .toString(QStringLiteral("fixed"));
+    const bool refinementAccepted = sfmDiagnostics
+        .value(QStringLiteral("adaptive_camera_model_refinement_accepted"))
+        .toBool(adjustmentStatus == QStringLiteral("refined"));
+    const bool requiresReview = sfmDiagnostics
+        .value(QStringLiteral("camera_self_calibration_requires_review")).toBool(false);
+    const bool adaptiveFitting = sfmDiagnostics
+        .value(QStringLiteral("adaptive_camera_model_fitting")).toBool(false);
+    const QJsonObject metadataPrior = sfmDiagnostics
+        .value(QStringLiteral("image_metadata_focal_prior")).toObject();
+    const QString priorModel = metadataPrior.value(QStringLiteral("model")).toString();
+    const bool usedMetadataPrior = metadataPrior.value(QStringLiteral("used")).toBool(false);
+
+    QJsonArray comparisons;
+    for (auto it = adjustedCameras.constBegin(); it != adjustedCameras.constEnd(); ++it)
+    {
+        const QString path = normalizedPathKey(it.key());
+        const QJsonObject image = imagesByPath.value(path);
+        const QJsonObject projectCamera = image.value(QStringLiteral("camera")).toObject();
+        const bool usesProjectCamera = isUsableProjectCamera(projectCamera);
+        const QSize imageSize = resolveImageSize(path, image, it.value());
+        const QJsonObject initial = usesProjectCamera
+            ? normalizedCalibration(projectCamera, imageSize)
+            : automaticInitialCalibration(imageSize, focalScale);
+        const QJsonObject adjusted = normalizedCalibration(it.value(), imageSize);
+        QStringList optimized;
+        if (adaptiveFitting &&
+            (refinementAccepted || adjustmentStatus == QStringLiteral("trusted_prior")))
+        {
+            optimized = {QStringLiteral("f"), QStringLiteral("fu"), QStringLiteral("fv")};
+            if (usedMetadataPrior)
+            {
+                optimized.append(QStringLiteral("k1"));
+                optimized.append(QStringLiteral("k2"));
+            }
+        }
+        const QString effectiveStatus = adjustmentStatus == QStringLiteral("trusted_prior")
+            ? (adaptiveFitting ? QStringLiteral("trusted_prior_limited_refinement")
+                               : QStringLiteral("trusted_prior_fixed"))
+            : adjustmentStatus;
+
+        QJsonObject comparison{
+            {QStringLiteral("path"), path},
+            {QStringLiteral("name"), QFileInfo(path).fileName()},
+            {QStringLiteral("camera_model"), priorModel.isEmpty()
+                                                    ? adjusted.value(QStringLiteral("model")).toString()
+                                                    : priorModel},
+            {QStringLiteral("had_before"), !initial.isEmpty()},
+            {QStringLiteral("initial_camera"), initial},
+            {QStringLiteral("adjusted_camera"), adjusted},
+            {QStringLiteral("initial_source"), !usesProjectCamera
+                                                        ? (usedMetadataPrior
+                                                               ? QStringLiteral("image_metadata_focal_prior")
+                                                               : QStringLiteral("automatic_focal_seed"))
+                                                        : QStringLiteral("project_camera_prior")},
+            {QStringLiteral("adjustment_status"), effectiveStatus},
+            {QStringLiteral("intrinsics_refined"), !optimized.isEmpty()},
+            {QStringLiteral("requires_review"), requiresReview},
+            {QStringLiteral("optimized_parameters"), QJsonArray::fromStringList(optimized)}};
+        comparisons.append(comparison);
+    }
+    return comparisons;
+}
 
 QVector<CameraCalibrationRecord> buildCameraCalibrationRecords(
     const QJsonObject &projectMetadata,
@@ -89,6 +301,7 @@ QVector<CameraCalibrationRecord> buildCameraCalibrationRecords(
 
     const QJsonArray comparisons =
         bundleAdjustReport.value(QStringLiteral("camera_comparison")).toArray();
+    const bool completedCalibrationRun = !bundleAdjustReport.isEmpty();
     for (const QJsonValue &value : comparisons)
     {
         const QJsonObject comparison = value.toObject();
@@ -109,9 +322,18 @@ QVector<CameraCalibrationRecord> buildCameraCalibrationRecords(
         record.hasInitial = comparison.value(QStringLiteral("had_before"))
                                 .toBool(!record.initial.isEmpty());
         record.hasAdjusted = !record.adjusted.isEmpty();
+        record.initialSource = comparison.value(QStringLiteral("initial_source")).toString();
+        record.adjustmentStatus = comparison.value(QStringLiteral("adjustment_status")).toString();
+        for (const QJsonValue &parameter :
+             comparison.value(QStringLiteral("optimized_parameters")).toArray())
+        {
+            record.optimizedParameters.append(parameter.toString());
+        }
+        record.requiresReview = comparison.value(QStringLiteral("requires_review")).toBool(false);
 
         const QJsonObject preferred = record.hasAdjusted ? record.adjusted : record.initial;
-        record.model = preferred.value(QStringLiteral("model")).toString();
+        record.model = comparison.value(QStringLiteral("camera_model"))
+                           .toString(preferred.value(QStringLiteral("model")).toString());
         record.imageWidth = preferred.value(QStringLiteral("image_width")).toInt();
         record.imageHeight = preferred.value(QStringLiteral("image_height")).toInt();
 
@@ -135,12 +357,12 @@ QVector<CameraCalibrationRecord> buildCameraCalibrationRecords(
         const auto existing = recordIndexByPath.constFind(key);
         if (existing != recordIndexByPath.constEnd())
         {
-            applyImageMetadata(image, &records[*existing]);
+            applyImageMetadata(image, completedCalibrationRun, &records[*existing]);
             continue;
         }
 
         CameraCalibrationRecord record;
-        applyImageMetadata(image, &record);
+        applyImageMetadata(image, completedCalibrationRun, &record);
         recordIndexByPath.insert(key, records.size());
         records.append(record);
     }

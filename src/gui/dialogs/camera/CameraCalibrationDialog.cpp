@@ -29,16 +29,80 @@ struct ParameterDescriptor
 const QVector<ParameterDescriptor> &parameters()
 {
     static const QVector<ParameterDescriptor> descriptors{
+        {QStringLiteral("f"), QStringLiteral("f (等效焦距)"), true},
         {QStringLiteral("fu"), QStringLiteral("fx (fu)"), true},
         {QStringLiteral("fv"), QStringLiteral("fy (fv)"), true},
-        {QStringLiteral("cu"), QStringLiteral("cx (cu)"), false},
-        {QStringLiteral("cv"), QStringLiteral("cy (cv)"), false},
+        {QStringLiteral("cx"), QStringLiteral("cx (相对图像中心)"), false},
+        {QStringLiteral("cy"), QStringLiteral("cy (相对图像中心)"), false},
         {QStringLiteral("k1"), QStringLiteral("k1"), false},
         {QStringLiteral("k2"), QStringLiteral("k2"), false},
         {QStringLiteral("k3"), QStringLiteral("k3"), false},
         {QStringLiteral("p1"), QStringLiteral("p1"), false},
         {QStringLiteral("p2"), QStringLiteral("p2"), false}};
     return descriptors;
+}
+
+std::optional<double> calibrationParameter(
+    const xjw::gui::camera_calibration::CameraCalibrationRecord &record,
+    const QJsonObject &camera,
+    const QString &key)
+{
+    const bool millimeters = camera.value(QStringLiteral("intrinsics_unit"))
+                                 .toString()
+                                 .compare(QStringLiteral("mm"), Qt::CaseInsensitive) == 0;
+    const bool directValue = key.startsWith(QLatin1Char('k')) ||
+        key.startsWith(QLatin1Char('p')) || !millimeters;
+    if (directValue && camera.contains(key) && camera.value(key).isDouble())
+    {
+        return camera.value(key).toDouble();
+    }
+    const double pitch = millimeters
+        ? std::max(1e-12, camera.value(QStringLiteral("pitch")).toDouble(1.0))
+        : 1.0;
+    const auto pixelValue = [&camera, pitch](const QString &parameter) -> std::optional<double>
+    {
+        if (!camera.contains(parameter) || !camera.value(parameter).isDouble())
+        {
+            return std::nullopt;
+        }
+        return camera.value(parameter).toDouble() / pitch;
+    };
+
+    if (key == QStringLiteral("f"))
+    {
+        const auto focal = pixelValue(key);
+        if (focal.has_value())
+        {
+            return focal;
+        }
+        const auto focalX = pixelValue(QStringLiteral("fu"));
+        const auto focalY = pixelValue(QStringLiteral("fv"));
+        if (focalX.has_value() && focalY.has_value())
+        {
+            return std::sqrt(std::abs(*focalX * *focalY));
+        }
+    }
+    if (key == QStringLiteral("fu") || key == QStringLiteral("fv"))
+    {
+        return pixelValue(key);
+    }
+    if (key == QStringLiteral("cx") || key == QStringLiteral("cy"))
+    {
+        const auto centeredPrincipal = pixelValue(key);
+        if (centeredPrincipal.has_value())
+        {
+            return centeredPrincipal;
+        }
+        const bool horizontal = key == QStringLiteral("cx");
+        const auto principal = pixelValue(
+            horizontal ? QStringLiteral("cu") : QStringLiteral("cv"));
+        const int extent = horizontal ? record.imageWidth : record.imageHeight;
+        if (principal.has_value() && extent > 0)
+        {
+            return *principal - extent * 0.5;
+        }
+    }
+    return std::nullopt;
 }
 
 std::optional<double> meanParameter(
@@ -54,14 +118,14 @@ std::optional<double> meanParameter(
         const auto &record = records.at(index);
         const bool available = adjusted ? record.hasAdjusted : record.hasInitial;
         const QJsonObject &camera = adjusted ? record.adjusted : record.initial;
-        if (!available || !camera.contains(key) || !camera.value(key).isDouble())
+        if (!available)
         {
             continue;
         }
-        const double value = camera.value(key).toDouble();
-        if (std::isfinite(value))
+        const auto value = calibrationParameter(record, camera, key);
+        if (value.has_value() && std::isfinite(*value))
         {
-            sum += value;
+            sum += *value;
             ++count;
         }
     }
@@ -88,12 +152,79 @@ QTableWidgetItem *readOnlyItem(const QString &text)
     return item;
 }
 
-QString cameraUnit(const xjw::gui::camera_calibration::CameraCalibrationRecord &record)
+QString cameraUnit()
 {
-    const QJsonObject camera = record.hasAdjusted ? record.adjusted : record.initial;
-    return camera.value(QStringLiteral("intrinsics_unit")).toString() == QStringLiteral("mm")
-        ? QStringLiteral("mm")
-        : QStringLiteral("px");
+    return QStringLiteral("px");
+}
+
+bool parameterWasOptimized(
+    const QVector<xjw::gui::camera_calibration::CameraCalibrationRecord> &records,
+    const QVector<int> &indices,
+    const QString &key)
+{
+    for (const int index : indices)
+    {
+        const QStringList &optimized = records.at(index).optimizedParameters;
+        if (optimized.contains(key) ||
+            (key == QStringLiteral("f") &&
+             (optimized.contains(QStringLiteral("fu")) ||
+              optimized.contains(QStringLiteral("fv")))))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+QString initialSourceLabel(const QString &source)
+{
+    if (source == QStringLiteral("automatic_focal_seed"))
+    {
+        return QStringLiteral("影像尺寸与焦距搜索自动生成");
+    }
+    if (source == QStringLiteral("project_camera_prior"))
+    {
+        return QStringLiteral("项目相机/标定先验");
+    }
+    if (source == QStringLiteral("image_metadata_focal_prior"))
+    {
+        return QStringLiteral("EXIF/影像元数据焦距先验");
+    }
+    return source.isEmpty() ? QStringLiteral("旧版记录（来源未注明）") : source;
+}
+
+QString adjustmentStatusLabel(const QString &status)
+{
+    if (status == QStringLiteral("refined"))
+    {
+        return QStringLiteral("束平差已优化内参");
+    }
+    if (status == QStringLiteral("coarse_seed_only"))
+    {
+        return QStringLiteral("仅采用焦距搜索种子，联合调整未被接受");
+    }
+    if (status == QStringLiteral("fixed_coarse_seed"))
+    {
+        return QStringLiteral("焦距种子固定，内参未释放");
+    }
+    if (status == QStringLiteral("trusted_prior_limited_refinement"))
+    {
+        return QStringLiteral("可信先验约束下的小范围内参优化");
+    }
+    if (status == QStringLiteral("trusted_prior_fixed") ||
+        status == QStringLiteral("trusted_prior"))
+    {
+        return QStringLiteral("可信先验固定，内参未释放");
+    }
+    if (status == QStringLiteral("not_run"))
+    {
+        return QStringLiteral("尚未运行空三，没有调整值");
+    }
+    if (status == QStringLiteral("legacy_adjusted_only"))
+    {
+        return QStringLiteral("旧版空三只保存了最终值，无法可靠还原初始值");
+    }
+    return status.isEmpty() ? QStringLiteral("旧版记录（优化状态未注明）") : status;
 }
 
 } // namespace
@@ -133,7 +264,8 @@ void CameraCalibrationDialog::buildInterface()
 
     auto *root = new QVBoxLayout(this);
     auto *intro = new QLabel(
-        tr("查看空中三角测量（光束法平差）前后的相机内参。此窗口为只读，不会修改项目相机。"),
+        tr("“初始”是本次空三开始时使用的内方位先验；“调整”是连接点与束平差得到的内方位结果。"
+           "cx/cy 按相对图像中心的像素偏移显示。本窗口不显示外方位 R/C，也不会修改项目相机。"),
         this);
     intro->setWordWrap(true);
     intro->setStyleSheet(QStringLiteral(
@@ -161,10 +293,10 @@ void CameraCalibrationDialog::buildInterface()
     _initialParameters = new QTableWidget(parameters().size(), 2, _calibrationTabs);
     _initialParameters->setObjectName(QStringLiteral("initialCalibrationParameters"));
     _initialParameters->setHorizontalHeaderLabels({tr("参数"), tr("初始值")});
-    _adjustedParameters = new QTableWidget(parameters().size(), 4, _calibrationTabs);
+    _adjustedParameters = new QTableWidget(parameters().size(), 5, _calibrationTabs);
     _adjustedParameters->setObjectName(QStringLiteral("adjustedCalibrationParameters"));
     _adjustedParameters->setHorizontalHeaderLabels(
-        {tr("参数"), tr("初始值"), tr("调整值"), tr("变化")});
+        {tr("参数"), tr("初始值"), tr("调整值"), tr("变化"), tr("本次状态")});
 
     for (QTableWidget *table : {_initialParameters, _adjustedParameters})
     {
@@ -176,6 +308,7 @@ void CameraCalibrationDialog::buildInterface()
     }
     _initialParameters->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     _adjustedParameters->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    _adjustedParameters->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
     _calibrationTabs->addTab(_initialParameters, tr("初始"));
     _calibrationTabs->addTab(_adjustedParameters, tr("调整"));
     rightLayout->addWidget(_calibrationTabs, 3);
@@ -260,12 +393,27 @@ void CameraCalibrationDialog::showSelectedCameraGroup(int row)
     populatePhotoTable(group);
 
     int adjustedCount = 0;
+    QString initialSource;
+    QString adjustmentStatus;
+    bool requiresReview = false;
     for (const int index : group.recordIndices)
     {
-        adjustedCount += _records.at(index).hasAdjusted ? 1 : 0;
+        const auto &record = _records.at(index);
+        adjustedCount += record.hasAdjusted ? 1 : 0;
+        if (initialSource.isEmpty())
+        {
+            initialSource = record.initialSource;
+        }
+        if (adjustmentStatus.isEmpty())
+        {
+            adjustmentStatus = record.adjustmentStatus;
+        }
+        requiresReview = requiresReview || record.requiresReview;
     }
-    QString summary = tr("%1　·　空三调整记录：%2/%3 张")
+    QString summary = tr("%1　·　初始来源：%2　·　内参状态：%3　·　记录：%4/%5 张")
                           .arg(group.label.section(QLatin1Char('\n'), 0, 0))
+                          .arg(initialSourceLabel(initialSource))
+                          .arg(adjustmentStatusLabel(adjustmentStatus))
                           .arg(adjustedCount)
                           .arg(group.recordIndices.size());
     if (!_reportTimestamp.isEmpty())
@@ -276,22 +424,31 @@ void CameraCalibrationDialog::showSelectedCameraGroup(int row)
     {
         summary += tr("\n注意：%1").arg(_reportError);
     }
+    if (requiresReview)
+    {
+        summary += tr("\n警告：本次自标定被标记为需要复核，请结合连接点分布、穹顶效应和外方位检查。");
+    }
     _summaryLabel->setText(summary);
 }
 
 void CameraCalibrationDialog::populateParameterTables(const CameraGroup &group)
 {
-    const QString unit = cameraUnit(_records.at(group.recordIndices.first()));
+    const QString unit = cameraUnit();
     _initialParameters->setHorizontalHeaderLabels(
         {tr("参数"), tr("初始值 (%1)").arg(unit)});
     _adjustedParameters->setHorizontalHeaderLabels(
-        {tr("参数"), tr("初始值 (%1)").arg(unit), tr("调整值 (%1)").arg(unit), tr("变化")});
+        {tr("参数"), tr("初始值 (%1)").arg(unit), tr("调整值 (%1)").arg(unit),
+         tr("变化"), tr("本次状态")});
 
     for (int row = 0; row < parameters().size(); ++row)
     {
         const ParameterDescriptor &parameter = parameters().at(row);
         const auto initial = meanParameter(_records, group.recordIndices, parameter.key, false);
         const auto adjusted = meanParameter(_records, group.recordIndices, parameter.key, true);
+        const bool optimized = parameterWasOptimized(
+            _records,
+            group.recordIndices,
+            parameter.key);
 
         _initialParameters->setItem(row, 0, readOnlyItem(parameter.label));
         _initialParameters->setItem(row, 1, readOnlyItem(formatValue(initial)));
@@ -317,7 +474,7 @@ void CameraCalibrationDialog::populateParameterTables(const CameraGroup &group)
             }
         }
         auto *deltaItem = readOnlyItem(deltaText);
-        if (deltaText != QStringLiteral("—") && parameter.percentageUseful)
+        if (optimized && deltaText != QStringLiteral("—") && parameter.percentageUseful)
         {
             deltaItem->setForeground(relativeDelta > 2.0
                                          ? QColor(190, 55, 45)
@@ -326,6 +483,12 @@ void CameraCalibrationDialog::populateParameterTables(const CameraGroup &group)
                                                 : QColor(35, 135, 70)));
         }
         _adjustedParameters->setItem(row, 3, deltaItem);
+        _adjustedParameters->setItem(
+            row,
+            4,
+            readOnlyItem(!adjusted.has_value()
+                             ? tr("无调整记录")
+                             : (optimized ? tr("已优化") : tr("固定/未释放"))));
     }
 }
 
@@ -340,9 +503,13 @@ void CameraCalibrationDialog::populatePhotoTable(const CameraGroup &group)
             : QStringLiteral("—");
         const QString model = record.model.isEmpty() ? tr("通用相机") : record.model;
         QString status = tr("无相机参数");
-        if (record.hasInitial && record.hasAdjusted)
+        if (record.hasInitial && record.hasAdjusted && !record.optimizedParameters.isEmpty())
         {
-            status = tr("已调整");
+            status = tr("内参已优化");
+        }
+        else if (record.hasInitial && record.hasAdjusted)
+        {
+            status = tr("内参固定");
         }
         else if (record.hasInitial)
         {

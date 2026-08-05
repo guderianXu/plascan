@@ -452,8 +452,8 @@ gui/
 ├── dialogs/                    # 按业务域组织的参数与结果对话框
 │   ├── application/            # 关于、工作流程报告等应用级对话框
 │   ├── camera/                 # 相机校准前后对比、相机查看/转换、前方交汇、测量控制
-│   │   ├── CameraCalibrationData.h/cpp   # 合并当前相机与最新 BA 报告的初始/调整内参
-│   │   └── CameraCalibrationDialog.h/cpp # 只读校准页、相机分组与照片列表
+│   │   ├── CameraCalibrationData.h/cpp   # 固化空三输入先验/最终内参，按图像中心转换 cx/cy
+│   │   └── CameraCalibrationDialog.h/cpp # 初始/调整内参、释放状态、相机分组与照片列表
 │   ├── image/                  # 蒙版等单影像处理
 │   ├── reconstruction/         # 空三、模型、纹理、DEM/正射工作流程
 │   │   ├── MapProjectDialog.h/cpp         # 正射对话框生命周期、运行进度与取消

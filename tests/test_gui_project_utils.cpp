@@ -4991,6 +4991,127 @@ TEST(CameraCalibrationDataTest, ReconstructsInitialAndAdjustedValuesFromLatestRe
     EXPECT_EQ(records.front().imageHeight, 4000);
 }
 
+TEST(CameraCalibrationDataTest, BuildsMetashapeStyleInitialAndAdjustedIntrinsics)
+{
+    const QString imagePath = QStringLiteral("D:/images/rx1r_001.jpg");
+    const QJsonObject metadata{
+        {QStringLiteral("images"), QJsonArray{
+            QJsonObject{{QStringLiteral("path"), imagePath},
+                        {QStringLiteral("width"), 6000},
+                        {QStringLiteral("height"), 4000}}}}};
+    const QJsonObject adjustedCamera{
+        {QStringLiteral("model"), QStringLiteral("tsai")},
+        {QStringLiteral("intrinsics_unit"), QStringLiteral("px")},
+        {QStringLiteral("pitch"), 1.0},
+        {QStringLiteral("fu"), 5672.0},
+        {QStringLiteral("fv"), 5672.0},
+        {QStringLiteral("cu"), 2998.7},
+        {QStringLiteral("cv"), 1996.7},
+        {QStringLiteral("k1"), -0.042},
+        {QStringLiteral("k2"), -0.16},
+        {QStringLiteral("k3"), 0.21},
+        {QStringLiteral("p1"), -0.00008},
+        {QStringLiteral("p2"), 0.00018},
+        {QStringLiteral("C"), QJsonArray{0.0, 0.0, 0.0}},
+        {QStringLiteral("R"), QJsonArray{1.0, 0.0, 0.0,
+                                          0.0, 1.0, 0.0,
+                                          0.0, 0.0, 1.0}}};
+    const QJsonObject diagnostics{
+        {QStringLiteral("adaptive_focal_seed_scale"), 5833.333 / 6000.0},
+        {QStringLiteral("adaptive_camera_model_fitting"), true},
+        {QStringLiteral("adaptive_camera_model_refinement_accepted"), true},
+        {QStringLiteral("camera_self_calibration_status"), QStringLiteral("refined")}};
+
+    const QJsonArray comparisons =
+        xjw::gui::camera_calibration::buildCameraCalibrationComparison(
+            metadata,
+            QMap<QString, QJsonObject>{{imagePath, adjustedCamera}},
+            diagnostics);
+    ASSERT_EQ(comparisons.size(), 1);
+    const QJsonObject comparison = comparisons.at(0).toObject();
+    const QJsonObject initial = comparison.value(QStringLiteral("initial_camera")).toObject();
+    const QJsonObject adjusted = comparison.value(QStringLiteral("adjusted_camera")).toObject();
+    EXPECT_NEAR(initial.value(QStringLiteral("f")).toDouble(), 5833.333, 1e-6);
+    EXPECT_DOUBLE_EQ(initial.value(QStringLiteral("cx")).toDouble(), 0.0);
+    EXPECT_DOUBLE_EQ(initial.value(QStringLiteral("cy")).toDouble(), 0.0);
+    EXPECT_NEAR(adjusted.value(QStringLiteral("cx")).toDouble(), -1.3, 1e-9);
+    EXPECT_NEAR(adjusted.value(QStringLiteral("cy")).toDouble(), -3.3, 1e-9);
+    EXPECT_DOUBLE_EQ(adjusted.value(QStringLiteral("k1")).toDouble(), -0.042);
+    EXPECT_EQ(comparison.value(QStringLiteral("initial_source")).toString(),
+              QStringLiteral("automatic_focal_seed"));
+    EXPECT_TRUE(comparison.value(QStringLiteral("optimized_parameters"))
+                    .toArray()
+                    .contains(QStringLiteral("f")));
+}
+
+TEST(CameraCalibrationDataTest, CompletedLegacySfmReportDoesNotRelabelAdjustedAsInitial)
+{
+    const QJsonObject camera{
+        {QStringLiteral("fu"), 900.0},
+        {QStringLiteral("fv"), 900.0},
+        {QStringLiteral("cu"), 600.0},
+        {QStringLiteral("cv"), 400.0}};
+    const QJsonObject metadata{
+        {QStringLiteral("images"), QJsonArray{
+            QJsonObject{{QStringLiteral("path"), QStringLiteral("D:/images/one.jpg")},
+                        {QStringLiteral("camera"), camera}}}}};
+    const QJsonObject oldSfmReport{
+        {QStringLiteral("type"), QStringLiteral("aerial_triangulation_sfm")},
+        {QStringLiteral("mode"), QStringLiteral("sfm")}};
+
+    const auto records = xjw::gui::camera_calibration::buildCameraCalibrationRecords(
+        metadata,
+        oldSfmReport);
+    ASSERT_EQ(records.size(), 1);
+    EXPECT_FALSE(records.front().hasInitial);
+    EXPECT_TRUE(records.front().hasAdjusted);
+}
+
+TEST(CameraCalibrationDataTest, MarksExifConstrainedParametersAsReleased)
+{
+    const QString imagePath = QStringLiteral("D:/images/exif_001.jpg");
+    const QJsonObject metadata{
+        {QStringLiteral("images"), QJsonArray{
+            QJsonObject{{QStringLiteral("path"), imagePath},
+                        {QStringLiteral("width"), 4000},
+                        {QStringLiteral("height"), 3000}}}}};
+    const QJsonObject adjustedCamera{
+        {QStringLiteral("intrinsics_unit"), QStringLiteral("px")},
+        {QStringLiteral("fu"), 2985.0},
+        {QStringLiteral("fv"), 2985.0},
+        {QStringLiteral("cu"), 2000.0},
+        {QStringLiteral("cv"), 1500.0},
+        {QStringLiteral("C"), QJsonArray{0.0, 0.0, 0.0}},
+        {QStringLiteral("R"), QJsonArray{1.0, 0.0, 0.0,
+                                          0.0, 1.0, 0.0,
+                                          0.0, 0.0, 1.0}}};
+    const QJsonObject diagnostics{
+        {QStringLiteral("adaptive_focal_seed_scale"), 0.75},
+        {QStringLiteral("adaptive_camera_model_fitting"), true},
+        {QStringLiteral("camera_self_calibration_status"), QStringLiteral("trusted_prior")},
+        {QStringLiteral("image_metadata_focal_prior"),
+         QJsonObject{{QStringLiteral("used"), true},
+                     {QStringLiteral("model"), QStringLiteral("DSC-RX1R")}}}};
+
+    const QJsonObject comparison =
+        xjw::gui::camera_calibration::buildCameraCalibrationComparison(
+            metadata,
+            QMap<QString, QJsonObject>{{imagePath, adjustedCamera}},
+            diagnostics)
+            .at(0)
+            .toObject();
+    const QJsonArray optimized = comparison.value(QStringLiteral("optimized_parameters")).toArray();
+    EXPECT_EQ(comparison.value(QStringLiteral("initial_source")).toString(),
+              QStringLiteral("image_metadata_focal_prior"));
+    EXPECT_EQ(comparison.value(QStringLiteral("adjustment_status")).toString(),
+              QStringLiteral("trusted_prior_limited_refinement"));
+    EXPECT_TRUE(optimized.contains(QStringLiteral("f")));
+    EXPECT_TRUE(optimized.contains(QStringLiteral("k1")));
+    EXPECT_TRUE(optimized.contains(QStringLiteral("k2")));
+    EXPECT_FALSE(optimized.contains(QStringLiteral("cx")));
+    EXPECT_FALSE(optimized.contains(QStringLiteral("cy")));
+}
+
 TEST(CameraCalibrationDialogTest, ProvidesInitialAndAdjustedPages)
 {
     const QJsonObject camera{
@@ -5012,6 +5133,11 @@ TEST(CameraCalibrationDialogTest, ProvidesInitialAndAdjustedPages)
     ASSERT_EQ(tabs->count(), 2);
     EXPECT_EQ(tabs->tabText(0), QStringLiteral("初始"));
     EXPECT_EQ(tabs->tabText(1), QStringLiteral("调整"));
+    auto *adjustedTable = dialog.findChild<QTableWidget *>(
+        QStringLiteral("adjustedCalibrationParameters"));
+    ASSERT_NE(adjustedTable, nullptr);
+    EXPECT_EQ(adjustedTable->columnCount(), 5);
+    EXPECT_TRUE(adjustedTable->item(0, 0)->text().startsWith(QStringLiteral("f")));
     EXPECT_NE(dialog.findChild<QTableWidget *>(QStringLiteral("cameraCalibrationPhotos")), nullptr);
 }
 

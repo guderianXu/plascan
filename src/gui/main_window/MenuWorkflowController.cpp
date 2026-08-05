@@ -1482,53 +1482,17 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
     const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(projectPath);
     xjw::gui::tasks::runGuardedWithOutcome(
         this,
-        [runWorkflowOptions = std::move(workflowOptions), sfmImages, sfmOutputDir, assetsDir]() mutable
+        [runWorkflowOptions = std::move(workflowOptions)]() mutable
         {
-            xjw::aerial_triangulation::AerialTriangulationResult workflowResult =
-                xjw::aerial_triangulation::AerialTriangulationWorkflow::run(runWorkflowOptions);
-            const xjw::aerial_triangulation::AerialTriangulationReconstructionResult &result = workflowResult.reconstructionResult;
-            if (result.success && !assetsDir.isEmpty())
-            {
-                QJsonObject report;
-                report[QStringLiteral("type")] = QStringLiteral("aerial_triangulation_sfm");
-                report[QStringLiteral("mode")] = QStringLiteral("sfm");
-                report[QStringLiteral("source")] = QStringLiteral("workflow_aerial_triangulation");
-                report[QStringLiteral("timestamp")] =
-                    QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
-                report[QStringLiteral("num_images")] = sfmImages.size();
-                report[QStringLiteral("num_registered")] = result.numRegisteredImages;
-                report[QStringLiteral("num_points_3d")] = result.numPoints3D;
-                report[QStringLiteral("mean_reproj_error_px")] = result.meanReprojError;
-                report[QStringLiteral("ba_rms_before")] = result.baRmsBefore;
-                report[QStringLiteral("ba_rms_after")] = result.baRmsAfter;
-                report[QStringLiteral("ba_tracks_total")] = result.baTracksTotal;
-                report[QStringLiteral("ba_tracks_optimized")] = result.baTracksOptimized;
-                report[QStringLiteral("ba_tracks_filtered")] = result.baTracksFiltered;
-                report[QStringLiteral("duration_s")] = result.durationSeconds;
-                report[QStringLiteral("output_dir")] = sfmOutputDir;
-                report[QStringLiteral("sparse_cloud_path")] = result.sparseCloudPath;
-                report[QStringLiteral("per_camera")] = result.perCameraResiduals;
-                report[QStringLiteral("sfm_diagnostics")] = result.sfmDiagnostics;
-                report[QStringLiteral("resolved_settings")] = workflowResult.config.resolvedSettings;
-                report[QStringLiteral("tie_point_preparation_executed")] =
-                    workflowResult.tiePointPreparationExecuted;
-                report[QStringLiteral("tie_point_track_count")] =
-                    workflowResult.tiePointResult.trackCount;
-                writeLatestAndAppendHistoryReport(QDir(assetsDir).filePath(QStringLiteral("reports")),
-                                                  QStringLiteral("at_report.json"),
-                                                  QStringLiteral("at_report_history.json"),
-                                                  report);
-                writeLatestAndAppendHistoryReport(QDir(assetsDir).filePath(QStringLiteral("reports")),
-                                                  QStringLiteral("aerial_triangulation_sfm_report.json"),
-                                                  QStringLiteral("aerial_triangulation_sfm_report_history.json"),
-                                                  report);
-            }
-            return workflowResult;
+            return xjw::aerial_triangulation::AerialTriangulationWorkflow::run(
+                runWorkflowOptions);
         },
         [pmGuard,
          cancelFlag,
          sfmImages,
          sfmOutputDir,
+         assetsDir,
+         projectMeta,
          session,
          resetCurrentAlignment](MenuWorkflowController *controller,
                                 xjw::gui::tasks::TaskOutcome<
@@ -1665,6 +1629,55 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
             {
                 emit pmGuard->atProgressFinished(false);
                 return;
+            }
+
+            if (!assetsDir.isEmpty())
+            {
+                QJsonObject report;
+                report[QStringLiteral("type")] = QStringLiteral("aerial_triangulation_sfm");
+                report[QStringLiteral("mode")] = QStringLiteral("sfm");
+                report[QStringLiteral("source")] = QStringLiteral("workflow_aerial_triangulation");
+                report[QStringLiteral("timestamp")] =
+                    QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+                report[QStringLiteral("num_images")] = sfmImages.size();
+                report[QStringLiteral("num_registered")] = result.numRegisteredImages;
+                report[QStringLiteral("num_points_3d")] = result.numPoints3D;
+                report[QStringLiteral("mean_reproj_error_px")] = result.meanReprojError;
+                report[QStringLiteral("ba_rms_before")] = result.baRmsBefore;
+                report[QStringLiteral("ba_rms_after")] = result.baRmsAfter;
+                report[QStringLiteral("ba_tracks_total")] = result.baTracksTotal;
+                report[QStringLiteral("ba_tracks_optimized")] = result.baTracksOptimized;
+                report[QStringLiteral("ba_tracks_filtered")] = result.baTracksFiltered;
+                report[QStringLiteral("duration_s")] = result.durationSeconds;
+                report[QStringLiteral("output_dir")] = sfmOutputDir;
+                report[QStringLiteral("sparse_cloud_path")] = result.sparseCloudPath;
+                report[QStringLiteral("per_camera")] = result.perCameraResiduals;
+                report[QStringLiteral("sfm_diagnostics")] = result.sfmDiagnostics;
+                report[QStringLiteral("camera_comparison")] =
+                    xjw::gui::camera_calibration::buildCameraCalibrationComparison(
+                        projectMeta,
+                        result.pendingCamUpdates,
+                        result.sfmDiagnostics);
+                report[QStringLiteral("camera_calibration_semantics")] = QJsonObject{
+                    {QStringLiteral("initial"), QStringLiteral("intrinsics_at_alignment_start")},
+                    {QStringLiteral("adjusted"), QStringLiteral("intrinsics_after_bundle_adjustment")},
+                    {QStringLiteral("principal_point"), QStringLiteral("offset_from_image_center")},
+                    {QStringLiteral("excludes_extrinsics"), true}};
+                report[QStringLiteral("resolved_settings")] = workflowResult.config.resolvedSettings;
+                report[QStringLiteral("tie_point_preparation_executed")] =
+                    workflowResult.tiePointPreparationExecuted;
+                report[QStringLiteral("tie_point_track_count")] =
+                    workflowResult.tiePointResult.trackCount;
+                const QString reportsDir = QDir(assetsDir).filePath(QStringLiteral("reports"));
+                writeLatestAndAppendHistoryReport(reportsDir,
+                                                  QStringLiteral("at_report.json"),
+                                                  QStringLiteral("at_report_history.json"),
+                                                  report);
+                writeLatestAndAppendHistoryReport(
+                    reportsDir,
+                    QStringLiteral("aerial_triangulation_sfm_report.json"),
+                    QStringLiteral("aerial_triangulation_sfm_report_history.json"),
+                    report);
             }
 
             emit pmGuard->atProgressFinished(true);
