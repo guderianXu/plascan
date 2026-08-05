@@ -109,12 +109,13 @@ struct PreparedAerialTriangulationInput
     QString projectPath; ///< 工程路径，仅供标记/结果回写上下文。
     QString markerSetPath; ///< 完整标记系统 sidecar。
     QString tiePointPath; ///< matchphototask 生成的多视连接点 JSON。
-    std::shared_ptr<const PreparedTiePointGraph> preparedTiePointGraph; ///< 本次搜索共享的只读连接点图。
+    /// 同一次焦距搜索中由所有候选共享的只读连接点图。
+    std::shared_ptr<const PreparedTiePointGraph> preparedTiePointGraph;
     QString outputDir; ///< 正式稀疏结果目录。
     QJsonObject projectMeta; ///< 解析相机内参和旧状态的只读快照。
 
     int quality = 2; ///< 已解析 SfM 质量级别，数值越大越保守/精细。
-    int threads = 8; ///< 已解析的线程预算；Workflow 会把外部的 0 转为逻辑核心数。
+    int threads = 0; ///< CPU 线程预算；0 在运行时解析为当前机器逻辑线程数。
     QString device = QStringLiteral("auto"); ///< BA 等下游设备偏好。
     bool useProjectCameraIntrinsics = true; ///< 只使用来源可信的工程内参。
     bool useProjectCameraPoses = false; ///< false 时旧对齐外参不得作为当前解。

@@ -27,7 +27,7 @@ struct ReconstructionCliOptions
     bool sfmGuidedRematching = false;
     bool lockInputCameraPoses = false;
     int quality = 3;
-    int threads = 8;
+    int threads = 0; ///< 0 表示按当前机器逻辑线程数自动解析。
     int cudaParallelPairs = 1;
     int featureMaxImageDim = 0;
     std::string mvsQuality = "high";

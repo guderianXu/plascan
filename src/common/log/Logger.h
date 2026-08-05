@@ -47,7 +47,10 @@ public:
         explicit ScopedThreadMinimumLevel(Level level)
             : _previous(threadMinimumLevelStorage())
         {
-            threadMinimumLevelStorage() = level;
+            if (level > threadMinimumLevelStorage())
+            {
+                threadMinimumLevelStorage() = level;
+            }
         }
 
         ~ScopedThreadMinimumLevel()

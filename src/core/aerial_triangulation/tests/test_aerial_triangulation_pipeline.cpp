@@ -631,5 +631,13 @@ TEST(AerialTriangulationPipelineTest, RunsSfmAndWritesPreparedReconstruction)
     ASSERT_TRUE(result.success) << qPrintable(result.errorMessage);
     EXPECT_EQ(result.numRegisteredImages, 2);
     EXPECT_GE(result.numPoints3D, 20);
+    EXPECT_TRUE(result.sfmDiagnostics.value(
+        QStringLiteral("focal_search_shared_tie_point_graph")).toBool());
+    EXPECT_GE(result.sfmDiagnostics.value(
+        QStringLiteral("tie_point_graph_prepare_seconds")).toDouble(), 0.0);
+    EXPECT_GT(result.sfmDiagnostics.value(
+        QStringLiteral("tie_point_graph_track_count")).toInt(), 0);
+    EXPECT_GT(result.sfmDiagnostics.value(
+        QStringLiteral("tie_point_graph_pair_count")).toInt(), 0);
     EXPECT_TRUE(QFile::exists(result.sparseCloudPath));
 }

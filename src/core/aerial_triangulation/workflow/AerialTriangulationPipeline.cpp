@@ -547,6 +547,9 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
         : 0;
 
     attemptInput.threads = resolveSfmThreadBudget(input.threads);
+    double tiePointGraphPrepareSeconds = 0.0;
+    int preparedTiePointTrackCount = 0;
+    int preparedTiePointPairCount = 0;
     if (_usesProductionAttemptRunner)
     {
         if (originalProgress)
@@ -555,6 +558,8 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
         }
         auto sharedGraph = std::make_shared<PreparedTiePointGraph>();
         QString graphError;
+        QElapsedTimer graphTimer;
+        graphTimer.start();
         if (!SfmAttemptRunner::readTiePointGraph(
                 input.tiePointPath, input.images, sharedGraph.get(), &graphError))
         {
@@ -565,6 +570,9 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
             failed.durationSeconds = timer.elapsed() / 1000.0;
             return failed;
         }
+        tiePointGraphPrepareSeconds = graphTimer.elapsed() / 1000.0;
+        preparedTiePointTrackCount = sharedGraph->trackCount;
+        preparedTiePointPairCount = static_cast<int>(sharedGraph->matchPairs.size());
         attemptInput.preparedTiePointGraph = std::move(sharedGraph);
     }
     // 焦距粗搜索只比较固定内参下的几何结果。若把 BA 内参拟合混入候选，
@@ -918,6 +926,15 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
         QStringLiteral("focal_search_min_threads_per_worker"), focalSearchMinThreadsPerWorker);
     execution.result.sfmDiagnostics.insert(
         QStringLiteral("focal_search_max_threads_per_worker"), focalSearchMaxThreadsPerWorker);
+    execution.result.sfmDiagnostics.insert(
+        QStringLiteral("focal_search_shared_tie_point_graph"),
+        static_cast<bool>(attemptInput.preparedTiePointGraph));
+    execution.result.sfmDiagnostics.insert(
+        QStringLiteral("tie_point_graph_prepare_seconds"), tiePointGraphPrepareSeconds);
+    execution.result.sfmDiagnostics.insert(
+        QStringLiteral("tie_point_graph_track_count"), preparedTiePointTrackCount);
+    execution.result.sfmDiagnostics.insert(
+        QStringLiteral("tie_point_graph_pair_count"), preparedTiePointPairCount);
     QJsonObject metadataPriorJson{
         {QStringLiteral("used"), metadataPrior.valid},
         {QStringLiteral("source"), metadataPrior.source},

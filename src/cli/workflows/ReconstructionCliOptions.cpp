@@ -7,6 +7,7 @@
 #include <QString>
 
 #include <algorithm>
+#include <thread>
 
 namespace xjw::cli
 {
@@ -30,7 +31,8 @@ void ReconstructionCliOptions::addTo(CLI::App &app)
     app.add_flag("--lock-input-camera-poses", lockInputCameraPoses,
                  "keep input camera extrinsics fixed during known-pose SfM/BA");
     app.add_option("--quality", quality, "SFM quality level 0..3");
-    app.add_option("--threads", threads, "CPU thread count");
+    app.add_option("--threads", threads,
+                   "CPU thread count; 0 selects current hardware automatically");
     app.add_option("--cuda-parallel-pairs", cudaParallelPairs, "LightGlue CUDA parallel pair count");
     app.add_option("--feature-max-image-dim", featureMaxImageDim,
                    "deep feature max image side; 0 uses auto/adaptive quality preset, negative starts unbounded");
@@ -90,6 +92,11 @@ void ReconstructionCliOptions::addTo(CLI::App &app)
 
 void ReconstructionCliOptions::normalize()
 {
+    const int hardware_threads =
+        static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+    threads = threads > 0
+        ? std::clamp(threads, 1, hardware_threads)
+        : hardware_threads;
     if (skipTexture)
     {
         exportObj = false;
