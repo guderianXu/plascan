@@ -504,6 +504,29 @@ struct PosePriorResidual
     }
 };
 
+struct CameraPlaneResidual
+{
+    Camera camera;
+    BACameraPlaneConstraint constraint;
+
+    template <typename T>
+    bool operator()(const T *const cameraDelta, T *residuals) const
+    {
+        const auto center = camera.cameraCenter();
+        const double sigma = std::max(1.0e-9, constraint.sigmaMeters);
+        const double scale =
+            std::sqrt(std::max(0.0, constraint.weight)) / sigma;
+        residuals[0] = T(scale) *
+            (T(constraint.normal[0]) *
+                 (T(center[0]) + cameraDelta[3] - T(constraint.point[0])) +
+             T(constraint.normal[1]) *
+                 (T(center[1]) + cameraDelta[4] - T(constraint.point[1])) +
+             T(constraint.normal[2]) *
+                 (T(center[2]) + cameraDelta[5] - T(constraint.point[2])));
+        return true;
+    }
+};
+
 ceres::LossFunction *makeHuberLoss(double delta)
 {
     return delta > 0.0 ? new ceres::HuberLoss(delta) : nullptr;
@@ -1213,6 +1236,24 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         auto *cost = new ceres::AutoDiffCostFunction<PosePriorResidual, 6, 6>(
             new PosePriorResidual{cameras[ci], prior, options.cameraPosePriorWeight});
         problem.AddResidualBlock(cost, makeHuberLoss(options.cameraPosePriorHuberDelta), cameraDeltas[ci].data());
+    }
+
+    if (options.cameraPlaneConstraint.enabled)
+    {
+        for (size_t ci = 0; ci < cameras.size(); ++ci)
+        {
+            if (!problem.HasParameterBlock(cameraDeltas[ci].data()) ||
+                problem.IsParameterBlockConstant(cameraDeltas[ci].data()))
+            {
+                continue;
+            }
+            auto *cost = new ceres::AutoDiffCostFunction<CameraPlaneResidual, 1, 6>(
+                new CameraPlaneResidual{cameras[ci], options.cameraPlaneConstraint});
+            problem.AddResidualBlock(
+                cost,
+                makeHuberLoss(options.cameraPlaneHuberDelta),
+                cameraDeltas[ci].data());
+        }
     }
 
     // 阶段 4：按规划配置线性求解器。CUDA 只加速 dense 线性代数，

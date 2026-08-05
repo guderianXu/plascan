@@ -27,6 +27,94 @@ namespace xjw
 
 using namespace incremental_sfm_detail;
 
+namespace
+{
+
+struct AerialCameraPlaneEstimate
+{
+    bool valid = false;
+    std::array<double, 3> center{{0.0, 0.0, 0.0}};
+    std::array<double, 3> normal{{0.0, 0.0, 1.0}};
+    double opticalAxisConcentration = 0.0;
+    double planarityRatio = 1.0;
+    double normalRms = 0.0;
+    double spanRms = 0.0;
+};
+
+AerialCameraPlaneEstimate estimateAerialCameraPlane(
+    const std::vector<Camera> &cameras)
+{
+    AerialCameraPlaneEstimate estimate;
+    if (cameras.size() < 3)
+    {
+        return estimate;
+    }
+
+    std::array<double, 3> meanAxis{{0.0, 0.0, 0.0}};
+    for (const Camera &sourceCamera : cameras)
+    {
+        const Camera camera = sourceCamera.normalizedForPositiveDepth();
+        const auto center = camera.cameraCenter();
+        const auto rotation = camera.cameraToWorldRotation();
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            estimate.center[axis] += center[axis];
+            meanAxis[axis] += rotation[axis * 3 + 2];
+        }
+    }
+    const double count = static_cast<double>(cameras.size());
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        estimate.center[axis] /= count;
+        meanAxis[axis] /= count;
+    }
+    estimate.opticalAxisConcentration = std::sqrt(
+        meanAxis[0] * meanAxis[0] +
+        meanAxis[1] * meanAxis[1] +
+        meanAxis[2] * meanAxis[2]);
+
+    cv::Matx33d covariance = cv::Matx33d::zeros();
+    for (const Camera &camera : cameras)
+    {
+        const auto center = camera.cameraCenter();
+        const cv::Vec3d delta(center[0] - estimate.center[0],
+                             center[1] - estimate.center[1],
+                             center[2] - estimate.center[2]);
+        covariance += (delta * delta.t()) / count;
+    }
+
+    cv::Mat eigenvalues;
+    cv::Mat eigenvectors;
+    if (!cv::eigen(cv::Mat(covariance), eigenvalues, eigenvectors) ||
+        eigenvalues.total() != 3 || eigenvectors.rows != 3 || eigenvectors.cols != 3)
+    {
+        return estimate;
+    }
+    const double largest = std::max(0.0, eigenvalues.at<double>(0));
+    const double middle = std::max(0.0, eigenvalues.at<double>(1));
+    const double smallest = std::max(0.0, eigenvalues.at<double>(2));
+    const double trace = largest + middle + smallest;
+    if (!std::isfinite(trace) || trace <= 1.0e-12)
+    {
+        return estimate;
+    }
+
+    estimate.normal = {{eigenvectors.at<double>(2, 0),
+                        eigenvectors.at<double>(2, 1),
+                        eigenvectors.at<double>(2, 2)}};
+    estimate.planarityRatio = smallest / trace;
+    estimate.normalRms = std::sqrt(smallest);
+    estimate.spanRms = std::sqrt(trace);
+    estimate.valid =
+        std::isfinite(estimate.opticalAxisConcentration) &&
+        std::isfinite(estimate.planarityRatio) &&
+        std::isfinite(estimate.normalRms) &&
+        std::isfinite(estimate.spanRms);
+    return estimate;
+}
+
+} // namespace
+
 SfmBundleAdjustCoordinator::SfmBundleAdjustCoordinator(IncrementalSfm &owner)
     : _owner(owner)
 {
@@ -517,6 +605,56 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
             baOpt.backend = BABackend::CeresCpu;
         }
     }
+    AerialCameraPlaneEstimate cameraPlaneBefore;
+    bool cameraPlaneConstraintActive = false;
+    const bool completeRegistration =
+        baCameras.size() == _reconstruction->numImages();
+    if (!localOnly && _sfmOptions.stabilizeAerialCameraPlane &&
+        baCameras.size() >= 96 && control_constraint_count == 0 &&
+        control_scale_bar_count == 0 && baOpt.cameraPosePriors.empty() &&
+        BundleAdjust::isBackendAvailable(BABackend::CeresCpu))
+    {
+        cameraPlaneBefore = estimateAerialCameraPlane(baCameras);
+        if (cameraPlaneBefore.valid &&
+            cameraPlaneBefore.opticalAxisConcentration >= 0.85 &&
+            ((completeRegistration && _aerialCameraPlaneStabilizationActive) ||
+             cameraPlaneBefore.planarityRatio >=
+                 _sfmOptions.aerialCameraPlaneTriggerRatio))
+        {
+            // 增量阶段只做按需临时抑制，避免平面先验过早影响后续 PnP 和尺度。
+            // 全部影像注册完成后才锁存到剩余最终 BA 轮次，防止最后一轮回弹。
+            if (completeRegistration)
+            {
+                _aerialCameraPlaneStabilizationActive = true;
+            }
+            BACameraPlaneConstraint &constraint = baOpt.cameraPlaneConstraint;
+            constraint.enabled = true;
+            constraint.point = cameraPlaneBefore.center;
+            constraint.normal = cameraPlaneBefore.normal;
+            constraint.sigmaMeters = std::max(
+                1.0e-6,
+                cameraPlaneBefore.spanRms *
+                    _sfmOptions.aerialCameraPlaneSigmaFraction);
+            constraint.weight = _sfmOptions.aerialCameraPlaneWeight;
+            // dome/bowl 是覆盖整个航带的低频系统误差，不应像孤立粗差一样被
+            // Huber 截断。保留适中的整体权重，但对法向残差使用完整二次项，
+            // 否则离平面最远、最需要修正的航带边缘反而只得到常量梯度。
+            baOpt.cameraPlaneHuberDelta = 0.0;
+            baOpt.backend = BABackend::CeresCpu;
+            cameraPlaneConstraintActive = true;
+            Logger::instance()->infof(
+                "[BA] aerial_plane_constraint scope=global cameras=%zu "
+                "opticalAxis=%.6f planarity=%.9f normalRms=%.6f spanRms=%.6f "
+                "sigma=%.6f weight=%.3f",
+                baCameras.size(),
+                cameraPlaneBefore.opticalAxisConcentration,
+                cameraPlaneBefore.planarityRatio,
+                cameraPlaneBefore.normalRms,
+                cameraPlaneBefore.spanRms,
+                constraint.sigmaMeters,
+                constraint.weight);
+        }
+    }
     const bool hasAbsolutePoseConstraint =
         control_constraint_count > 0 ||
         std::any_of(baOpt.cameraPosePriors.begin(),
@@ -660,7 +798,10 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
         const double rmsTolerance = std::max(
             1.0e-9,
             std::abs(baResult.meanRmsBefore) * 1.0e-6);
-        if (baResult.meanRmsAfter > baResult.meanRmsBefore + rmsTolerance)
+        const double acceptedRmsGrowth = cameraPlaneConstraintActive
+            ? std::max(0.03, std::abs(baResult.meanRmsBefore) * 0.03)
+            : rmsTolerance;
+        if (baResult.meanRmsAfter > baResult.meanRmsBefore + acceptedRmsGrowth)
         {
             applyBaResult = false;
             Logger::instance()->warnf(
@@ -668,6 +809,29 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
                 scopeName,
                 baResult.meanRmsBefore,
                 baResult.meanRmsAfter);
+        }
+    }
+    if (applyBaResult && cameraPlaneConstraintActive)
+    {
+        const AerialCameraPlaneEstimate cameraPlaneAfter =
+            estimateAerialCameraPlane(baResult.refinedCameras);
+        const bool geometryImproved =
+            cameraPlaneAfter.valid &&
+            cameraPlaneAfter.planarityRatio + 1.0e-9 <
+                cameraPlaneBefore.planarityRatio;
+        Logger::instance()->infof(
+            "[BA] aerial_plane_result scope=global appliedCandidate=%s "
+            "planarity=%.9f->%.9f normalRms=%.6f->%.6f",
+            geometryImproved ? "true" : "false",
+            cameraPlaneBefore.planarityRatio,
+            cameraPlaneAfter.planarityRatio,
+            cameraPlaneBefore.normalRms,
+            cameraPlaneAfter.normalRms);
+        if (!geometryImproved)
+        {
+            applyBaResult = false;
+            Logger::instance()->warn(
+                "[BA] rejected scope=global reason=aerial_plane_geometry_not_improved");
         }
     }
     const bool knownPoseGlobalBa = _sfmOptions.useKnownCameraPoses && !localOnly &&

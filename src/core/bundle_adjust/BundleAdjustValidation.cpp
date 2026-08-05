@@ -259,6 +259,31 @@ BundleAdjustValidationResult validateAndNormalizeBundleAdjustOptions(
             BASolveStatus::InvalidInput,
             "BA 输入验证失败: native CUDA 点步长上限必须大于 0");
     }
+    if (requestedOptions.cameraPlaneConstraint.enabled)
+    {
+        const auto &constraint = requestedOptions.cameraPlaneConstraint;
+        const double normalNormSquared =
+            constraint.normal[0] * constraint.normal[0] +
+            constraint.normal[1] * constraint.normal[1] +
+            constraint.normal[2] * constraint.normal[2];
+        const bool finitePoint = std::all_of(
+            constraint.point.begin(), constraint.point.end(),
+            [](double value) { return std::isfinite(value); });
+        const bool finiteNormal = std::all_of(
+            constraint.normal.begin(), constraint.normal.end(),
+            [](double value) { return std::isfinite(value); });
+        if (!finitePoint || !finiteNormal || !std::isfinite(normalNormSquared) ||
+            std::abs(normalNormSquared - 1.0) > 1.0e-6 ||
+            !std::isfinite(constraint.sigmaMeters) || constraint.sigmaMeters <= 0.0 ||
+            !std::isfinite(constraint.weight) || constraint.weight <= 0.0 ||
+            !std::isfinite(requestedOptions.cameraPlaneHuberDelta) ||
+            requestedOptions.cameraPlaneHuberDelta < 0.0)
+        {
+            return invalid(
+                BASolveStatus::InvalidInput,
+                "BA 输入验证失败: 相机平面约束必须包含单位法向和正的 sigma/weight");
+        }
+    }
 
     std::set<int> fixedCameras;
     for (const int index : requestedOptions.fixedCameraIndices)

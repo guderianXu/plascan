@@ -142,6 +142,14 @@ struct IncrementalSfmOptions
     int globalBAInterval = 10;
     /// BA 选项
     BAOptions baOptions;
+    /// 无绝对控制的大型近垂直航测块中，抑制相机中心的 dome/bowl 低频弯曲。
+    bool stabilizeAerialCameraPlane = false;
+    /// 相机中心最小主成分占总方差达到该值时认为存在可疑弯曲。
+    double aerialCameraPlaneTriggerRatio = 0.003;
+    /// 平面约束 sigma 相对相机中心总体 RMS 跨度的比例。
+    double aerialCameraPlaneSigmaFraction = 0.01;
+    /// 平面约束整体权重；约束只作用于法向分量。
+    double aerialCameraPlaneWeight = 10.0;
 
     // --- 输入多视轨迹质量管理 ---
     /// 每张影像最多保留的 tie points，<=0 表示不限制。
@@ -384,6 +392,9 @@ class IncrementalSfm
     int _lastGlobalBAObservationCount = 0;
     double _lastGlobalBATotalSeconds = 0.0;
     std::string _lastGlobalBABackendMessage;
+    /// 航测平面稳定一旦在本次重建触发，后续全局 BA 继续保持，避免跨过阈值后
+    /// 立即释放约束并在下一轮重新产生 dome/bowl。
+    bool _aerialCameraPlaneStabilizationActive = false;
 
     /// 增量维护的可见三维点计数缓存（imageId → 可见已三角化点数）
     std::unordered_map<ImageId, size_t> _visibilityCache;
