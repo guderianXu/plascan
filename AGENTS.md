@@ -79,10 +79,10 @@ PlaScan 是面向行星表面影像的摄影测量处理系统，主线是从多
 
 ### 编译器支持
 
-- 项目必须同时支持 Windows 上的 MSVC 和 Linux/WSL 上的 GCC。任何涉及 C++、CUDA、链接关系或构建系统的改动，都应在两种编译器下验证受影响目标；公共库或核心 CMake 关系发生变化时，应尽量完成两边的默认全目标构建。
-- 优先复用已经配置好的 MSVC 与 GCC 构建目录，避免无必要地重复安装依赖。两边都可用时，只验证其中一个编译器不能视为跨平台验证完成。
-- 若当前环境缺少其中一套工具链、SDK 或第三方依赖，必须在最终说明中列出未验证的编译器、具体缺失项和已执行的另一侧验证，不能声称 MSVC/GCC 均已通过。
-- 修复跨平台构建问题时，应补充能覆盖公共语义的测试，并分别运行相关测试；编译器、链接器或平台专属测试仅在确有专属行为时使用。
+- 项目代码必须同时兼容 Windows/MSVC 和 Linux/GCC，但本地提交与推送只要求完成当前原生开发平台的构建和测试门禁。
+- 在 Windows 开发环境中，MSVC 是本地验证基准。受影响目标、相关测试和可执行的本地全量测试均通过后，即可 commit 并 push 到 GitHub；不需要为了推送额外启动 WSL 或运行 GCC 验证。
+- 在 Linux 开发环境中使用 GCC 完成同等范围的本地验证。Linux/GCC 验证也可由 GitHub CI、专门的 Linux 环境或用户明确要求的跨平台任务补充；Windows 本地缺少 WSL/GCC 不构成提交或推送阻塞。
+- 不能把单个平台的结果表述为 MSVC/GCC 均已通过。修复明确的跨平台、编译器或链接器问题时，仍应在相关平台分别验证，并补充覆盖公共语义的测试。
 
 改 C++ 后至少在 `build` 目录编译验证：
 
@@ -165,6 +165,7 @@ python scripts\env\setup_python_runtime.py --device cuda --cuda-wheel cu130
 - commit 前必须重新检查 `git status --short`，确认提交内容只包含当前任务相关文件。
 - 每次向 GitHub 推送 commit、分支或 tag 前，必须先完成与改动范围相匹配的本地构建、测试和静态检查；不得把 GitHub CI 当作本地基本验证的替代品。
 - 涉及 C++、CMake 或测试代码时，push 前必须以 GitHub CI 的构建和测试命令为基准，在本地完成充分验证；除相关目标和定向测试外，还必须运行可执行的本地全量测试（优先使用 `ctest --output-on-failure`）。开发过程中使用的 `-R`、`--gtest_filter` 或单个测试程序只能作为快速反馈，不能作为 push 前的唯一测试依据。
+- Windows 上完成 MSVC 构建、相关测试和可执行的本地全量测试后即可 push；WSL/GCC 不是 Windows 推送前置条件。推送后仍须等待 GitHub Actions 中配置的 Windows、Linux 或其它 required checks 全部通过。
 - 本地全量测试存在失败、未解释的跳过项、测试发现错误或运行环境缺失时，不得 push。应先修复代码或本地测试环境并重新验证；若确因外部依赖导致无法完成，必须停止推送并向用户说明具体阻塞，获得明确许可后才能例外处理。CI 失败后的修复在再次 push 前也必须重新执行上述完整本地验证。
 - 每次 push 后必须检查该 commit 对应的 GitHub Actions / required checks，并等待全部 CI 检查通过。可使用 `gh run list --commit <sha>`、`gh run watch <run-id> --exit-status` 或 `gh pr checks --watch`；不得只确认 push 成功就结束任务。
 - 如果 CI 失败，必须读取失败日志、修复问题、重新完成本地验证并再次 push，直到 CI 通过。若因 GitHub 服务故障、权限、额度或缺失密钥等外部原因无法完成，必须在最终说明中明确列出未通过的检查和阻塞原因，且不得声称任务已全部完成。
