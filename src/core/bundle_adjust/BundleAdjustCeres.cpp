@@ -1373,7 +1373,8 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         solveReport = summary.BriefReport();
     }
     const std::string solverReport =
-        "求解规划: " + solverPlan.reason;
+        "求解规划: solver=" + result.ceresLinearSolverName +
+        "；" + solverPlan.reason;
     result.backendMessage = cudaDeviceMessage.empty()
                                 ? solverReport + "；" + solveReport
                                 : cudaDeviceMessage + "；" +

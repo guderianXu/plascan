@@ -561,7 +561,7 @@ class IncrementalSfm
      * 循环执行：全局 BA → 过滤 → 补三角化，直到变化率 < 阈值或达到上限。
      * 每轮中先过滤负深度点（可选），再执行 BA + 点过滤。
      */
-    void iterativeGlobalBA();
+    void iterativeGlobalBA(bool finalRefinement);
 
     /**
      * @brief 过滤负深度三维点（参考 COLMAP FilterObservationsWithNegativeDepth）。

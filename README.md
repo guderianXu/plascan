@@ -89,7 +89,8 @@ Windows CUDA 开发机推荐固定使用 `scripts/build_win/build_windows_cuda.p
 `build/windows-vcpkg-cuda-release`，并使用该目录自己的 `vcpkg_installed`、CUDA 13.1 和
 构建目录自己的 TensorRT/CUDA 配置，避免其它 build cache 混入运行时 PATH。
 
-同一脚本默认启用 `ceres-cuda` manifest feature，用于 SfM/光束法平差中的 Ceres CUDA 后端。
+同一脚本默认启用 `ceres-cuda` manifest feature，用于 SfM/光束法平差中的 Ceres CUDA 后端；
+基础 Ceres 依赖同时启用 LAPACK 和 SuiteSparse，使 GPU 回退及 Linux/CPU 构建可使用稀疏 Schur 求解器。
 如果只想构建 CPU/legacy BA，可传 `-EnableCeresCudaBa:$false`。已有 `vcpkg_installed` 若仍是
 CPU 版 Ceres，脚本会提示重新运行 `-InstallDeps`，避免界面显示 CUDA 但实际只跑 CPU。
 

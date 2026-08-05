@@ -199,7 +199,9 @@ void configureSfmOptions(const PreparedAerialTriangulationInput &input,
     {
         options->baOptions.backend = BABackend::Auto;
         options->baOptions.nativeCudaMaxPointStepNorm = 1.0;
-        options->baOptions.minCeresCudaObservations = 500000;
+        // 航测块的相机 Schur 系统随相机数增长显著。让 150k 观测以上的大相机块
+        // 提前进入 CUDA 候选；最终仍由显存预算和 BA 质量门控决定是否使用结果。
+        options->baOptions.minCeresCudaObservations = 150000;
         options->baOptions.minCeresCpuObservations = 50000;
         options->baOptions.enableBackendQualityGate = true;
         options->baOptions.maxAcceptedRmsGrowth = 1.25;

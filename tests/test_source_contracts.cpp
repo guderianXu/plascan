@@ -443,7 +443,7 @@ TEST(SfmSourceContractTest, SequenceInitialPoseGuessDoesNotBypassPnpRegistration
 
     expectContainsAll(registration, {
         "registerImage(nextId)",
-        "SfmBundleAdjustCoordinator(*this).iterative()",
+        "SfmBundleAdjustCoordinator(*this).iterative(true)",
     });
     EXPECT_FALSE(sfmSource.contains(QStringLiteral("tryRegisterInterpolatedSequenceImages")));
     EXPECT_FALSE(sfmSource.contains(QStringLiteral("Sequence interpolation registered")));
@@ -491,7 +491,9 @@ TEST(SfmSourceContractTest, FinalGlobalBaRetriesUnregisteredImagesBeforePublishi
         "IncrementalSfmResult IncrementalSfm::runRegistrationFromCurrentInitialization",
         "void IncrementalSfm::resetForInitialPairTrial");
 
-    const int finalBa = indexOfOrFail(registration, "SfmBundleAdjustCoordinator(*this).iterative();");
+    const int finalBa = indexOfOrFail(
+        registration,
+        "SfmBundleAdjustCoordinator(*this).iterative(true);");
     const int retry = indexOfOrFail(registration, "retryUnregisteredImagesAfterFinalBA", finalBa);
     const int publish = indexOfOrFail(registration, "result.numRegisteredImages", retry);
     EXPECT_LT(finalBa, retry);
