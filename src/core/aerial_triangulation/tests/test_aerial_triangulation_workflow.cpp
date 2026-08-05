@@ -1,4 +1,5 @@
 #include "workflow/AerialTriangulationWorkflow.h"
+#include "search/SfmSearchPolicy.h"
 
 #include <gtest/gtest.h>
 
@@ -70,7 +71,8 @@ TEST(AerialTriangulationWorkflowTest, ResolvesZeroThreadRequestAutomatically)
     options.threads = 13;
     const auto explicitBudget =
         xjw::aerial_triangulation::AerialTriangulationWorkflow::resolveConfig(options);
-    EXPECT_EQ(explicitBudget.pipelineInput.threads, 13);
+    EXPECT_EQ(explicitBudget.pipelineInput.threads,
+              xjw::aerial_triangulation::resolveSfmThreadBudget(13));
 }
 
 TEST(AerialTriangulationWorkflowTest, ExplicitRuntimeLimitsOverrideQualityDefaults)
