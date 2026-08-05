@@ -1,8 +1,9 @@
 #pragma once
 
-#include <QWidget>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QSize>
+#include <QWidget>
 
 #include "graph/ObservationNetworkBuilder.h"
 
@@ -73,4 +74,5 @@ private:
     DualImageViewer *_dualImageViewer = nullptr;
     ObservationNetworkView *_obsNetView = nullptr;
     quint64 _cameraPoseGeneration = 0;
+    QJsonArray _cameraPoseMetadata;
 };

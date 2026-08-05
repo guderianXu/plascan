@@ -95,6 +95,27 @@ QVector<CameraSceneWidget::CameraPose> cameraPosesFromImages(const QJsonArray &i
     return poses;
 }
 
+QJsonArray cameraPoseMetadataFromImages(const QJsonArray &images)
+{
+    QJsonArray camera_metadata;
+    for (const QJsonValue &value : images)
+    {
+        const QJsonObject image = value.toObject();
+        const QJsonObject camera = image.value(QStringLiteral("camera")).toObject();
+        if (camera.isEmpty())
+        {
+            continue;
+        }
+
+        QJsonObject camera_entry;
+        camera_entry[QStringLiteral("path")] = image.value(QStringLiteral("path"));
+        camera_entry[QStringLiteral("image_path")] = image.value(QStringLiteral("image_path"));
+        camera_entry[QStringLiteral("camera")] = camera;
+        camera_metadata.append(camera_entry);
+    }
+    return camera_metadata;
+}
+
 } // namespace
 
 WorkspaceCenterWidget::WorkspaceCenterWidget(QWidget *parent)
@@ -420,6 +441,7 @@ void WorkspaceCenterWidget::resetActiveView()
 void WorkspaceCenterWidget::clearProjectView()
 {
     ++_cameraPoseGeneration;
+    _cameraPoseMetadata = QJsonArray();
     if (_canvas)
     {
         _canvas->showImage(QString());
@@ -487,6 +509,14 @@ void WorkspaceCenterWidget::showObservationNetwork(const xjw::ObservationNetwork
 
 void WorkspaceCenterWidget::setProjectMeta(const QJsonObject &meta)
 {
+    const QJsonArray images = xjw::common::project::projectImageEntries(meta);
+    const QJsonArray camera_pose_metadata = cameraPoseMetadataFromImages(images);
+    if (_cameraPoseMetadata == camera_pose_metadata)
+    {
+        return;
+    }
+
+    _cameraPoseMetadata = camera_pose_metadata;
     refreshModelFromMeta(meta);
 }
 

@@ -909,8 +909,8 @@ CameraSceneWidget::~CameraSceneWidget() = default;
 // 调用后触发重绘，场景中每个姿态点将绘制相机平面卡片和名称标注。
 void CameraSceneWidget::setCameraPoses(const QVector<CameraPose> &poses)
 {
-    _poses.clear();
-    _poses.reserve(poses.size());
+    QVector<CameraPose> deduplicated_poses;
+    deduplicated_poses.reserve(poses.size());
     QSet<QString> cameraKeys;
     for (const CameraPose &pose : poses)
     {
@@ -930,8 +930,59 @@ void CameraSceneWidget::setCameraPoses(const QVector<CameraPose> &poses)
             }
             cameraKeys.insert(cameraKey);
         }
-        _poses.push_back(pose);
+        deduplicated_poses.push_back(pose);
     }
+
+    auto same_pose = [this](const CameraPose &lhs, const CameraPose &rhs)
+    {
+        if (normalizedCameraPath(lhs.imagePath) != normalizedCameraPath(rhs.imagePath)
+            || lhs.name != rhs.name
+            || lhs.center != rhs.center
+            || lhs.focalX != rhs.focalX
+            || lhs.focalY != rhs.focalY
+            || lhs.principalX != rhs.principalX
+            || lhs.principalY != rhs.principalY
+            || lhs.imageWidth != rhs.imageWidth
+            || lhs.imageHeight != rhs.imageHeight
+            || lhs.uAxisSign != rhs.uAxisSign
+            || lhs.vAxisSign != rhs.vAxisSign
+            || lhs.depthAxisFlipped != rhs.depthAxisFlipped)
+        {
+            return false;
+        }
+        for (int row = 0; row < 3; ++row)
+        {
+            for (int column = 0; column < 3; ++column)
+            {
+                if (lhs.rotation(row, column) != rhs.rotation(row, column))
+                {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
+
+    bool poses_unchanged = _poses.size() == deduplicated_poses.size();
+    bool reusable_image_sequence = poses_unchanged;
+    for (qsizetype index = 0; index < _poses.size() && poses_unchanged; ++index)
+    {
+        poses_unchanged = same_pose(_poses.at(index), deduplicated_poses.at(index));
+    }
+    if (poses_unchanged)
+    {
+        return;
+    }
+    for (qsizetype index = 0;
+         index < _poses.size() && reusable_image_sequence;
+         ++index)
+    {
+        reusable_image_sequence =
+            normalizedCameraPath(_poses.at(index).imagePath)
+            == normalizedCameraPath(deduplicated_poses.at(index).imagePath);
+    }
+
+    _poses = std::move(deduplicated_poses);
     _cameraViewCandidates.clear();
     _cameraViewCandidates.reserve(_poses.size());
     for (qsizetype index = 0; index < _poses.size(); ++index)
@@ -947,21 +998,24 @@ void CameraSceneWidget::setCameraPoses(const QVector<CameraPose> &poses)
     }
     _activeCameraImagePoseIndex = -1;
     _cacheDirty = true; // 相机位置变更，缓存失效
-    ++_cameraImageLoadGeneration;
-    _cameraImageCache.clear();
-    _cameraImageLoadQueue.clear();
-    _cameraImageLoadsQueued.clear();
-    _cameraImageLoadFailures.clear();
-    _cameraThumbnailLoadTotal = 0;
-    for (const CameraPose &pose : _poses)
+    if (!reusable_image_sequence)
     {
-        if (!pose.imagePath.isEmpty())
+        ++_cameraImageLoadGeneration;
+        _cameraImageCache.clear();
+        _cameraImageLoadQueue.clear();
+        _cameraImageLoadsQueued.clear();
+        _cameraImageLoadFailures.clear();
+        _cameraThumbnailLoadTotal = 0;
+        for (const CameraPose &pose : _poses)
         {
-            ++_cameraThumbnailLoadTotal;
+            if (!pose.imagePath.isEmpty())
+            {
+                ++_cameraThumbnailLoadTotal;
+            }
         }
+        _cameraThumbnailLoadCompleted = 0;
+        _thumbnailPipeline.resourcesDirty = true;
     }
-    _cameraThumbnailLoadCompleted = 0;
-    _thumbnailPipeline.resourcesDirty = true;
     _thumbnailPipeline.instancesDirty = true;
     if (_showCameraImage)
     {

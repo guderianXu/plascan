@@ -329,7 +329,55 @@ TEST(CameraSceneRenderContractTest, DeduplicatesCameraPosesByImageIdentity)
     const QString block = source.mid(start, end - start);
     EXPECT_TRUE(block.contains(QStringLiteral("QSet<QString> cameraKeys")));
     EXPECT_TRUE(block.contains(QStringLiteral("cameraKeys.contains(cameraKey)")));
-    EXPECT_TRUE(block.contains(QStringLiteral("_poses.push_back(pose)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("deduplicated_poses.push_back(pose)")));
+}
+
+TEST(CameraSceneRenderContractTest, MetadataResultUpdatesDoNotReloadCameraImages)
+{
+    const QString header =
+        readProjectFile(QStringLiteral("src/gui/widgets/WorkspaceCenterWidget.h"));
+    const QString source =
+        readProjectFile(QStringLiteral("src/gui/widgets/WorkspaceCenterWidget.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const qsizetype signature_start = source.indexOf(
+        QStringLiteral("QJsonArray cameraPoseMetadataFromImages"));
+    const qsizetype signature_end = source.indexOf(
+        QStringLiteral("} // namespace"), signature_start);
+    ASSERT_GE(signature_start, 0);
+    ASSERT_GT(signature_end, signature_start);
+    const QString signature_block = source.mid(
+        signature_start, signature_end - signature_start);
+    EXPECT_TRUE(signature_block.contains(QStringLiteral("QStringLiteral(\"path\")")));
+    EXPECT_TRUE(signature_block.contains(QStringLiteral("QStringLiteral(\"image_path\")")));
+    EXPECT_TRUE(signature_block.contains(QStringLiteral("QStringLiteral(\"camera\")")));
+    EXPECT_FALSE(signature_block.contains(QStringLiteral("depth_map_results")));
+
+    EXPECT_TRUE(header.contains(QStringLiteral("QJsonArray _cameraPoseMetadata")));
+    EXPECT_TRUE(source.contains(QStringLiteral(
+        "if (_cameraPoseMetadata == camera_pose_metadata)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_cameraPoseMetadata = QJsonArray()")));
+}
+
+TEST(CameraSceneRenderContractTest, RepeatedCameraPosesPreserveLoadedThumbnailResources)
+{
+    const QString source =
+        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const qsizetype start = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::setCameraPoses"));
+    const qsizetype end = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::setShowGizmo"), start);
+    ASSERT_GE(start, 0);
+    ASSERT_GT(end, start);
+    const QString block = source.mid(start, end - start);
+
+    EXPECT_TRUE(block.contains(QStringLiteral("if (poses_unchanged)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("return;")));
+    EXPECT_TRUE(block.contains(QStringLiteral("reusable_image_sequence")));
+    EXPECT_TRUE(block.contains(QStringLiteral("if (!reusable_image_sequence)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("_cameraImageCache.clear()")));
+    EXPECT_TRUE(block.contains(QStringLiteral("_thumbnailPipeline.instancesDirty = true")));
 }
 
 TEST(CameraSceneRenderContractTest, CachesImageLoadFailuresToPreventRetryStorm)
