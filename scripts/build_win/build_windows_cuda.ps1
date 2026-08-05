@@ -20,7 +20,7 @@ param(
     [switch] $CleanRootCache,
     [switch] $InstallDeps,
     [bool] $EnableCeresCudaBa = $true,
-    [switch] $EnableOpenCvDnnCuda,
+    [bool] $EnableOpenCvDnnCuda = $true,
     [switch] $SkipVsDevCmd
 )
 
@@ -69,6 +69,27 @@ function Resolve-FullPath
 {
     param([Parameter(Mandatory = $true)][string] $Path)
     return [System.IO.Path]::GetFullPath($Path)
+}
+
+function Resolve-ReparseTargetPath
+{
+    param([Parameter(Mandatory = $true)][string] $Path)
+
+    $fullPath = Resolve-FullPath $Path
+    $item = Get-Item -LiteralPath $fullPath -Force -ErrorAction SilentlyContinue
+    if ($null -eq $item -or
+        ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0 -or
+        $null -eq $item.Target)
+    {
+        return $fullPath
+    }
+
+    $target = @($item.Target)[0]
+    if (-not [System.IO.Path]::IsPathRooted($target))
+    {
+        $target = Join-Path $item.Parent.FullName $target
+    }
+    return Resolve-FullPath $target
 }
 
 function Test-PathUnder
@@ -828,14 +849,14 @@ function Assert-OpenCvDnnCudaFeatures
     $abiInfo = Join-Path $TripletRoot "share\opencv4\vcpkg_abi_info.txt"
     if (-not (Test-Path -LiteralPath $abiInfo))
     {
-        throw "OpenCV ABI info not found: $abiInfo. Rerun with -InstallDeps -EnableOpenCvDnnCuda."
+        throw "OpenCV ABI info not found: $abiInfo. Rerun this script with -InstallDeps."
     }
 
     $text = Get-Content -LiteralPath $abiInfo -Raw
     if ($text -notmatch "(?m)^features .*cuda" -or
         $text -notmatch "(?m)^features .*dnn-cuda")
     {
-        throw "OpenCV DNN CUDA is not installed in $TripletRoot. Rerun this script with -InstallDeps -EnableOpenCvDnnCuda."
+        throw "OpenCV DNN CUDA is not installed in $TripletRoot. Rerun this script with -InstallDeps."
     }
 }
 
@@ -1038,9 +1059,6 @@ function Ensure-OpenCvCuda13OverlayPort
         [Parameter(Mandatory = $true)][string] $VcpkgPath
     )
 
-    $patchSource = Join-Path $SourceRoot "scripts\build_win\vcpkg_patches\opencv4\0024-cuda13-device-props.patch"
-    Assert-ExistingPath $patchSource "OpenCV CUDA 13 patch"
-
     $overlayRoot = Join-Path $SourceRoot "build\env\vcpkg-overlay-ports"
     New-Item -ItemType Directory -Force -Path $overlayRoot | Out-Null
 
@@ -1049,12 +1067,18 @@ function Ensure-OpenCvCuda13OverlayPort
 
     $portSource = Find-VcpkgPortDirectory -VcpkgPath $VcpkgPath -PortName "opencv4"
     Copy-Item -LiteralPath $portSource -Destination $overlayPort -Recurse -Force
-    Copy-Item -LiteralPath $patchSource -Destination (Join-Path $overlayPort "0024-cuda13-device-props.patch") -Force
 
     $portfile = Join-Path $overlayPort "portfile.cmake"
     $portfileText = Get-Content -LiteralPath $portfile -Raw
-    if ($portfileText -notmatch "0024-cuda13-device-props\.patch")
+    $portProvidesCuda13Patch = $portfileText -match "(?i)CUDA_13_SUPPORT_PATCH|opencv4-support-cuda-13"
+    if (-not $portProvidesCuda13Patch -and
+        $portfileText -notmatch "0024-cuda13-device-props\.patch")
     {
+        $patchSource = Join-Path $SourceRoot "scripts\build_win\vcpkg_patches\opencv4\0024-cuda13-device-props.patch"
+        Assert-ExistingPath $patchSource "OpenCV CUDA 13 patch"
+        Copy-Item -LiteralPath $patchSource `
+            -Destination (Join-Path $overlayPort "0024-cuda13-device-props.patch") -Force
+
         $marker = "      0023-ffmpeg8-support.patch"
         if (-not $portfileText.Contains($marker))
         {
@@ -1164,12 +1188,18 @@ if ([string]::IsNullOrWhiteSpace($VcpkgDownloadsRoot))
 }
 
 $VcpkgRoot = Resolve-FullPath $VcpkgRoot
-$VcpkgBuildtreesRoot = Resolve-FullPath $VcpkgBuildtreesRoot
-$VcpkgPackagesRoot = Resolve-FullPath $VcpkgPackagesRoot
-$VcpkgDownloadsRoot = Resolve-FullPath $VcpkgDownloadsRoot
+$VcpkgBuildtreesRoot = Resolve-ReparseTargetPath $VcpkgBuildtreesRoot
+$VcpkgPackagesRoot = Resolve-ReparseTargetPath $VcpkgPackagesRoot
+$VcpkgDownloadsRoot = Resolve-ReparseTargetPath $VcpkgDownloadsRoot
 $CudaRoot = Resolve-FullPath $CudaRoot
 $CMakeExe = Resolve-FullPath $CMakeExe
 $VsDevCmd = Resolve-FullPath $VsDevCmd
+$ninjaDir = Resolve-NinjaDirectory $CMakeExe
+if ([string]::IsNullOrWhiteSpace($ninjaDir))
+{
+    throw "Ninja executable was not found beside CMake or on PATH."
+}
+$ninjaExe = Join-Path $ninjaDir "ninja.exe"
 
 $buildRoot = Join-Path $SourceDir "build"
 $vcpkgInstalled = Join-Path $BuildDir "vcpkg_installed"
@@ -1254,6 +1284,13 @@ if (-not $SkipVsDevCmd)
 {
     Import-VsDevCmd $VsDevCmd
     $vsDevPathEntries = Capture-VsDevPathEntries
+}
+
+$windowsSdkRc = (Get-Command rc.exe -ErrorAction SilentlyContinue).Source
+$windowsSdkMt = (Get-Command mt.exe -ErrorAction SilentlyContinue).Source
+if ([string]::IsNullOrWhiteSpace($windowsSdkRc) -or [string]::IsNullOrWhiteSpace($windowsSdkMt))
+{
+    throw "Windows SDK rc.exe and mt.exe must be available after loading VsDevCmd."
 }
 
 Set-IsolatedBuildEnvironment `
@@ -1365,6 +1402,9 @@ if (-not $BuildOnly)
         "-S", $sourceDirCMake,
         "-B", $buildDirCMake,
         "-G", "Ninja",
+        "-DCMAKE_MAKE_PROGRAM=$(Convert-ToCMakePath $ninjaExe)",
+        "-DCMAKE_RC_COMPILER=$(Convert-ToCMakePath $windowsSdkRc)",
+        "-DCMAKE_MT=$(Convert-ToCMakePath $windowsSdkMt)",
         "-UVCPKG_MANIFEST_FEATURES",
         "-UQt6*_DIR",
         "-DCMAKE_BUILD_TYPE=Release",
@@ -1391,6 +1431,7 @@ if (-not $BuildOnly)
     )
     if (-not [string]::IsNullOrWhiteSpace($msvcCudaHostCompiler))
     {
+        $configureArgs += "-DCMAKE_CXX_COMPILER=$msvcCudaHostCompiler"
         $configureArgs += "-DCMAKE_CUDA_HOST_COMPILER=$msvcCudaHostCompiler"
     }
     if (-not [string]::IsNullOrWhiteSpace($msvcCudaHostCompilerDir))

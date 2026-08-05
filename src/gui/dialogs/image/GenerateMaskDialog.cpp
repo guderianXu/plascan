@@ -4,6 +4,7 @@
 #include "model/ModelAssetCatalog.h"
 #include "model/ModelFileResolver.h"
 #include "model/U2NetModelCatalog.h"
+#include "u2net/U2NetMaskGenerator.h"
 
 #include <QButtonGroup>
 #include <QCheckBox>
@@ -75,7 +76,7 @@ GenerateMaskDialog::GenerateMaskDialog(const QStringList &selectedImages,
 
     _u2netAllowFallbackCheck = new QCheckBox(tr("CUDA 不可用时回退 CPU"), this);
     _u2netAllowFallbackCheck->setObjectName(QStringLiteral("u2netAllowFallbackCheck"));
-    _u2netAllowFallbackCheck->setChecked(true);
+    _u2netAllowFallbackCheck->setChecked(false);
 
     _u2netModelStatusLabel = new QLabel(this);
     _u2netModelStatusLabel->setObjectName(QStringLiteral("u2netModelStatusLabel"));
@@ -239,8 +240,15 @@ void GenerateMaskDialog::updateU2NetStatusText()
         && _methodCombo->currentData().toString() == QLatin1String("u2net");
     const xjw::common::model::ModelFileResolver resolver(_modelSearchOptions);
     const auto status = xjw::common::model::u2netModelStatus(resolver);
+    const xjw::mask::U2NetDnnCapabilities capabilities =
+        xjw::mask::detectU2NetDnnCapabilities();
+    const QString cuda_status = capabilities.hasDnnCudaBackend
+        ? tr("CUDA 后端可用（检测到 %1 个设备）").arg(capabilities.cudaDeviceCount)
+        : tr("CUDA 后端不可用；请选择 CPU，或重新执行标准 CUDA 依赖构建");
     _u2netModelStatusLabel->setEnabled(is_u2net);
-    _u2netModelStatusLabel->setText(tr("状态：%1；%2").arg(status.label, status.detail));
+    _u2netModelStatusLabel->setText(
+        tr("状态：%1；%2\n计算后端：%3").arg(status.label, status.detail, cuda_status));
+    _u2netModelStatusLabel->setToolTip(QString::fromStdString(capabilities.summary));
     _u2netDownloadButton->setVisible(is_u2net && !status.isInstalled);
     _u2netDownloadButton->setEnabled(is_u2net && !status.isInstalled);
     if (_buttons && _buttons->button(QDialogButtonBox::Ok))

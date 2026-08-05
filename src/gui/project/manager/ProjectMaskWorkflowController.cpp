@@ -38,6 +38,8 @@ struct GenerateMaskResult
     QMap<QString, QJsonObject> recordsByImage;
     QStringList generatedImages;
     QStringList errors;
+    QString inferenceDevice;
+    QString deviceFallbackReason;
     bool cancelled = false;
 };
 
@@ -120,7 +122,7 @@ std::optional<xjw::mask::U2NetMaskGeneratorConfig> u2netConfig(const QJsonObject
     config.modelPath = std::string(modelPath.constData(), static_cast<std::size_t>(modelPath.size()));
     config.useCuda = settings.value(QStringLiteral("u2net_device")).toString(QStringLiteral("cuda"))
         == QLatin1String("cuda");
-    config.allowDeviceFallback = settings.value(QStringLiteral("u2net_allow_fallback")).toBool(true);
+    config.allowDeviceFallback = settings.value(QStringLiteral("u2net_allow_fallback")).toBool(false);
     config.inputSize = std::clamp(settings.value(QStringLiteral("u2net_input_size")).toInt(320), 128, 1024);
     config.foregroundThreshold = static_cast<float>(std::clamp(
         settings.value(QStringLiteral("u2net_mask_threshold")).toDouble(0.5), 0.01, 0.99));
@@ -290,9 +292,17 @@ void ProjectMaskWorkflowController::openDialogForImages(const QStringList &reque
                 cv::Mat generated;
                 try
                 {
-                    generated = useU2Net
-                        ? u2net->generate(source).mask
-                        : xjw::mask::generateMask(source, options);
+                    if (useU2Net)
+                    {
+                        const xjw::mask::U2NetMaskResult u2net_result = u2net->generate(source);
+                        generated = u2net_result.mask;
+                        result.inferenceDevice = QString::fromStdString(u2net_result.deviceLabel);
+                        result.deviceFallbackReason = QString::fromStdString(u2net_result.fallbackReason);
+                    }
+                    else
+                    {
+                        generated = xjw::mask::generateMask(source, options);
+                    }
                 }
                 catch (const std::exception &e)
                 {
@@ -321,6 +331,10 @@ void ProjectMaskWorkflowController::openDialogForImages(const QStringList &reque
                 QJsonObject record;
                 record.insert(QStringLiteral("mask_path"), QDir::cleanPath(maskPath));
                 record.insert(QStringLiteral("mask_method"), method);
+                if (useU2Net)
+                {
+                    record.insert(QStringLiteral("mask_inference_device"), result.inferenceDevice);
+                }
                 record.insert(QStringLiteral("mask_updated_at"), QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
                 result.recordsByImage.insert(xjw::common::project::normalizePath(imagePath), record);
                 result.generatedImages << imagePath;
@@ -387,8 +401,18 @@ void ProjectMaskWorkflowController::openDialogForImages(const QStringList &reque
                 message += QStringLiteral("\n部分失败：%1")
                                .arg(result.errors.join(QStringLiteral("; ")));
             }
+            if (!result.inferenceDevice.isEmpty())
+            {
+                message += QStringLiteral("\nU2Net 实际推理设备：%1").arg(result.inferenceDevice);
+            }
+            if (!result.deviceFallbackReason.isEmpty())
+            {
+                message += QStringLiteral("\nCUDA 回退原因：%1").arg(result.deviceFallbackReason);
+            }
             QMessageBox::information(self->_parentWidget, QStringLiteral("生成蒙版"), message);
-            LOG_INFO(QStringLiteral("蒙版生成完成: count=%1 dir=%2").arg(result.generatedImages.size()).arg(masksDir));
+            LOG_INFO(QStringLiteral("蒙版生成完成: count=%1 dir=%2 device=%3 fallback=%4")
+                         .arg(result.generatedImages.size())
+                         .arg(masksDir, result.inferenceDevice, result.deviceFallbackReason));
         });
 }
 

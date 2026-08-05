@@ -23,7 +23,7 @@ struct U2NetMaskGeneratorConfig
 {
     std::string modelPath;
     bool useCuda = false;
-    bool allowDeviceFallback = true;
+    bool allowDeviceFallback = false;
     int cudaDevice = 0;
     int inputSize = 320;
     float foregroundThreshold = 0.5f;
@@ -36,7 +36,9 @@ struct U2NetMaskResult
 {
     cv::Mat mask;
     bool usedCuda = false;
+    bool deviceFallback = false;
     std::string deviceLabel;
+    std::string fallbackReason;
 };
 
 std::string u2netDefaultModelFileName();
@@ -55,6 +57,7 @@ private:
     U2NetMaskGeneratorConfig _config;
     cv::dnn::Net _net;
     bool _usedCuda = false;
+    std::string _fallbackReason;
 
     void loadNet(bool useCuda);
     U2NetMaskResult runForward(const cv::Mat &image);

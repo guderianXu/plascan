@@ -94,16 +94,17 @@ Windows CUDA 开发机推荐固定使用 `scripts/build_win/build_windows_cuda.p
 如果只想构建 CPU/legacy BA，可传 `-EnableCeresCudaBa:$false`。已有 `vcpkg_installed` 若仍是
 CPU 版 Ceres，脚本会提示重新运行 `-InstallDeps`，避免界面显示 CUDA 但实际只跑 CPU。
 
-U2Net ONNX 蒙版的 CPU 推理只需要标准 OpenCV DNN。若要启用 OpenCV DNN CUDA 后端，需要让 vcpkg
-额外安装 `opencv-dnn-cuda` manifest feature：
+标准 Windows CUDA 构建默认同时安装 `opencv-dnn-cuda` manifest feature 和 cuDNN，使 U2Net ONNX
+蒙版真正使用 OpenCV DNN CUDA 后端。首次准备依赖时运行：
 
 ```powershell
-pwsh scripts\build_win\build_windows_cuda.ps1 -InstallDeps -EnableOpenCvDnnCuda
-pwsh scripts\build_win\build_windows_cuda.ps1 -EnableOpenCvDnnCuda
+pwsh scripts\build_win\build_windows_cuda.ps1 -InstallDeps
+pwsh scripts\build_win\build_windows_cuda.ps1
 ```
 
-不带 `-EnableOpenCvDnnCuda` 时，匹配、MVS 等 CUDA 路径不受影响，但 U2Net ONNX 会使用
-OpenCV DNN CPU 或在 GUI 中从 CUDA 自动回退到 CPU。
+脚本需要可发现的 cuDNN 开发包（`include/cudnn.h` 和 `lib/x64/cudnn.lib`），可通过 `-CudnnRoot`
+显式指定。只有明确不需要 U2Net CUDA 时才传 `-EnableOpenCvDnnCuda:$false`；GUI 默认禁止静默回退，
+选择 CUDA 但后端不可用会给出明确错误，用户勾选“CUDA 不可用时回退 CPU”后才允许回退。
 
 ### Python 环境脚本
 

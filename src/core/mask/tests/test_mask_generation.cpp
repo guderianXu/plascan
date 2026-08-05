@@ -312,7 +312,7 @@ TEST(U2NetMaskGeneratorTest, ModelFileNamesMatchBundledMetashapeStyleName)
     EXPECT_EQ(xjw::mask::u2netDefaultModelFileName(), "U2Net_v1.onnx");
     EXPECT_EQ(config.inputSize, 320);
     EXPECT_FLOAT_EQ(config.foregroundThreshold, 0.5f);
-    EXPECT_TRUE(config.allowDeviceFallback);
+    EXPECT_FALSE(config.allowDeviceFallback);
 }
 
 TEST(U2NetMaskGeneratorIntegrationTest, OnnxModelRunsOnCpuWhenPresent)
@@ -382,7 +382,7 @@ TEST(U2NetMaskGeneratorIntegrationTest, OnnxModelRunsOnCudaWhenBackendAvailable)
 
     const cv::Mat image = makeAsteroidLikeImage();
     const xjw::mask::U2NetDnnCapabilities capabilities = xjw::mask::detectU2NetDnnCapabilities();
-    if (!capabilities.opencvBuiltWithCuda || !capabilities.hasCudaDevice)
+    if (!capabilities.hasDnnCudaBackend)
     {
         GTEST_SKIP() << "OpenCV DNN CUDA backend is not available for U2Net: " << capabilities.summary;
     }
@@ -405,6 +405,37 @@ TEST(U2NetMaskGeneratorIntegrationTest, OnnxModelRunsOnCudaWhenBackendAvailable)
     {
         FAIL() << "OpenCV is CUDA-built and a CUDA device is visible, but U2Net CUDA execution failed: "
                << error.what() << "; " << capabilities.summary;
+    }
+}
+
+TEST(U2NetMaskGeneratorIntegrationTest, RejectsCudaWithoutDnnBackendInsteadOfSilentlyUsingCpu)
+{
+    const std::filesystem::path onnxPath = u2netModelPath();
+    if (!std::filesystem::exists(onnxPath))
+    {
+        GTEST_SKIP() << "U2Net_v1.onnx is not available in resources/models or PLASCAN_U2NET_MODEL.";
+    }
+
+    const xjw::mask::U2NetDnnCapabilities capabilities = xjw::mask::detectU2NetDnnCapabilities();
+    if (capabilities.hasDnnCudaBackend)
+    {
+        GTEST_SKIP() << "OpenCV DNN CUDA is available; rejection is covered by CPU-only builds.";
+    }
+
+    xjw::mask::U2NetMaskGeneratorConfig config;
+    config.modelPath = onnxPath.string();
+    config.useCuda = true;
+    config.allowDeviceFallback = false;
+
+    try
+    {
+        const xjw::mask::U2NetMaskGenerator generator(config);
+        FAIL() << "CUDA request must not silently use OpenCV DNN CPU.";
+    }
+    catch (const std::runtime_error &error)
+    {
+        EXPECT_NE(std::string(error.what()).find("OpenCV DNN CUDA backend is not available"),
+                  std::string::npos);
     }
 }
 

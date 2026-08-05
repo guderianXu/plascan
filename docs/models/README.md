@@ -97,8 +97,8 @@ LoMa-R 来源为 `davnords/loma`。其主体代码采用 MIT 许可，匹配器�
 
 ## U2Net ONNX 蒙版
 
-`resources/models/U2Net_v1.onnx` 用于快速前景/背景分离。标准 OpenCV DNN 构建支持 CPU；CUDA 需要
-OpenCV 启用 DNN CUDA 后端。未启用时，只有用户允许回退才切换到 CPU。
+`resources/models/U2Net_v1.onnx` 用于快速前景/背景分离。标准 Windows CUDA 构建默认为 OpenCV
+启用 DNN CUDA/cuDNN 后端；GUI 默认禁止静默切换设备，只有用户明确允许回退时才会切换到 CPU。
 
 在“生成蒙版”中选择“AI: U2Net ONNX”时，GUI 会自动检测模型。模型缺失时可点击“下载 U2Net
 模型”，PlaScan 从 GitHub Release `models-v1.1.0` 异步下载，并在写入最终文件前验证固定大小和
@@ -123,8 +123,8 @@ SHA-256：8d10d2f3bb75ae3b6d527c77944fc5e7dcd94b29809d47a739a7a728a912b491
 <https://github.com/xuebinqin/U-2-Net>。
 
 ```powershell
-pwsh scripts\build_win\build_windows_cuda.ps1 -InstallDeps -EnableOpenCvDnnCuda
-pwsh scripts\build_win\build_windows_cuda.ps1 -EnableOpenCvDnnCuda
+pwsh scripts\build_win\build_windows_cuda.ps1 -InstallDeps
+pwsh scripts\build_win\build_windows_cuda.ps1
 ```
 
 模型加载失败必须报告实际解析路径、请求设备和回退状态，不能静默忽略缺失资源。

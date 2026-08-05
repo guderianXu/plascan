@@ -293,12 +293,13 @@ U2NetMaskGenerator::U2NetMaskGenerator(const U2NetMaskGeneratorConfig &config)
     {
         loadNet(_config.useCuda);
     }
-    catch (const std::exception &)
+    catch (const std::exception &error)
     {
         if (!_config.useCuda || !_config.allowDeviceFallback)
         {
             throw;
         }
+        _fallbackReason = error.what();
         loadNet(false);
     }
 }
@@ -308,14 +309,11 @@ void U2NetMaskGenerator::loadNet(bool useCuda)
     if (useCuda)
     {
         const U2NetDnnCapabilities capabilities = detectU2NetDnnCapabilities();
-        if (!capabilities.opencvBuiltWithCuda)
+        if (!capabilities.hasDnnCudaBackend)
         {
             throw std::runtime_error(
-                "OpenCV was not built with CUDA support. Rebuild with vcpkg feature opencv-dnn-cuda.");
-        }
-        if (capabilities.cudaDeviceCount <= 0)
-        {
-            throw std::runtime_error("OpenCV CUDA device is not available. " + capabilities.summary);
+                "OpenCV DNN CUDA backend is not available. Rebuild the Windows CUDA preset with "
+                "opencv-dnn-cuda and cuDNN, or select CPU explicitly. " + capabilities.summary);
         }
         if (_config.cudaDevice < 0 || _config.cudaDevice >= capabilities.cudaDeviceCount)
         {
@@ -350,12 +348,13 @@ U2NetMaskResult U2NetMaskGenerator::generate(const cv::Mat &image)
     {
         return runForward(image);
     }
-    catch (const cv::Exception &)
+    catch (const cv::Exception &error)
     {
         if (!_usedCuda || !_config.allowDeviceFallback)
         {
             throw;
         }
+        _fallbackReason = error.what();
         loadNet(false);
         return runForward(image);
     }
@@ -397,7 +396,9 @@ U2NetMaskResult U2NetMaskGenerator::runForward(const cv::Mat &image)
     U2NetMaskResult result;
     cv::bitwise_not(foreground, result.mask);
     result.usedCuda = _usedCuda;
+    result.deviceFallback = !_fallbackReason.empty();
     result.deviceLabel = deviceLabel();
+    result.fallbackReason = _fallbackReason;
     return result;
 }
 

@@ -6684,7 +6684,7 @@ TEST(GenerateMaskDialogTest, ExposesU2NetOnnxCpuAndCudaSettings)
 
     EXPECT_GE(deviceCombo->findData(QStringLiteral("cuda")), 0);
     EXPECT_GE(deviceCombo->findData(QStringLiteral("cpu")), 0);
-    EXPECT_TRUE(fallbackCheck->isChecked());
+    EXPECT_FALSE(fallbackCheck->isChecked());
     EXPECT_EQ(inputSizeSpin->value(), 320);
     EXPECT_DOUBLE_EQ(thresholdSpin->value(), 0.5);
     EXPECT_TRUE(statusLabel->isEnabled());
@@ -6692,7 +6692,7 @@ TEST(GenerateMaskDialogTest, ExposesU2NetOnnxCpuAndCudaSettings)
     const QJsonObject settings = dialog.collectSettings();
     EXPECT_EQ(settings.value(QStringLiteral("method")).toString(), QStringLiteral("u2net"));
     EXPECT_EQ(settings.value(QStringLiteral("u2net_device")).toString(), QStringLiteral("cuda"));
-    EXPECT_TRUE(settings.value(QStringLiteral("u2net_allow_fallback")).toBool());
+    EXPECT_FALSE(settings.value(QStringLiteral("u2net_allow_fallback")).toBool());
     EXPECT_EQ(settings.value(QStringLiteral("u2net_input_size")).toInt(), 320);
     EXPECT_DOUBLE_EQ(settings.value(QStringLiteral("u2net_mask_threshold")).toDouble(), 0.5);
 }
@@ -6776,6 +6776,8 @@ TEST(GenerateMaskWorkflowTest, U2NetMaskGenerationUsesBundledOnnxAndOpenCvDnn)
     EXPECT_TRUE(block.contains(QStringLiteral("method == QLatin1String(\"u2net\")")));
     EXPECT_TRUE(block.contains(QStringLiteral("xjw::mask::U2NetMaskGenerator")));
     EXPECT_TRUE(block.contains(QStringLiteral("u2net->generate(source)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("mask_inference_device")));
+    EXPECT_TRUE(block.contains(QStringLiteral("U2Net 实际推理设备")));
     EXPECT_TRUE(block.contains(QStringLiteral("U2Net_v1.onnx")));
     EXPECT_TRUE(block.contains(QStringLiteral("deviceLabel()")));
 }
