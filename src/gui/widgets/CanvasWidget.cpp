@@ -158,12 +158,11 @@ void CanvasWidget::showImage(const QString &path)
     ++_featureLoadGeneration;
     ++_residualLoadGeneration;
     _singleImageReady = false;
-    _viewRotationDegrees = 0;
-    _zoomFactor = 1.0;
-    resetTransform();
     emit displayImageReadyChanged(false);
 
     // 清理旧覆盖层；影像图层在新影像加载完成后替换，避免磁盘解码期间界面空白。
+    // 此处保留当前变换，不能提前 resetTransform()：新影像异步加载期间仍显示旧影像，
+    // 提前重置会让旧影像瞬间按原始比例放大，随后又被 fitInView() 缩回。
     // NOTE: 不调用 scene()->clear() —— 那会使 QGraphicsScene 删除所有 items，
     // 导致 LayerRenderer 持有的指针变为悬空并在后续删除时造成双重释放。
     _layerRenderer->clearFeatureLayers();
@@ -239,6 +238,12 @@ void CanvasWidget::showImage(const QString &path)
         {
             return;
         }
+
+        // 新影像已经替换旧影像；在同一次事件回调内重置后立即适配，界面不会绘制
+        // 原始比例的中间帧，同时避免把上一张影像的旋转带到新影像。
+        self->resetTransform();
+        self->_viewRotationDegrees = 0;
+        self->_zoomFactor = 1.0;
         const bool isDepthMap = isDepthMapPreviewPath(loadedPath);
         if (!isDepthMap)
         {

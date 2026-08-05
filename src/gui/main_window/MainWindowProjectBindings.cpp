@@ -86,7 +86,7 @@ constexpr int SelectionPropertiesMinHeight = 80;
 constexpr int PhotosDockMinHeight = 90;
 constexpr int DockMinWidth = 160;
 constexpr int DockMinHeight = 80;
-constexpr int ProjectDockLayoutVersion = 2;
+constexpr int ProjectDockLayoutVersion = 3;
 
 void configureMovableDock(QDockWidget *dock)
 {

@@ -79,7 +79,7 @@
 
 namespace
 {
-constexpr int ProjectDockLayoutVersion = 2;
+constexpr int ProjectDockLayoutVersion = 3;
 }
 
 QJsonObject MainWindow::currentProjectMeta() const

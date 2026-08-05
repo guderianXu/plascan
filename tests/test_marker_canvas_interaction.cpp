@@ -84,6 +84,36 @@ TEST(MarkerCanvasInteractionTest, RightClickOutsideImageDoesNotEmitContext)
     EXPECT_EQ(context_spy.count(), 0);
 }
 
+TEST(MarkerCanvasInteractionTest, SwitchingImageKeepsCurrentTransformUntilReplacementIsReady)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString first_image_path = createTestImage(&directory);
+    ASSERT_FALSE(first_image_path.isEmpty());
+
+    const QString second_image_path = directory.filePath(QStringLiteral("marker_canvas_second.png"));
+    QImage second_image(1200, 320, QImage::Format_RGB32);
+    second_image.fill(Qt::black);
+    ASSERT_TRUE(second_image.save(second_image_path));
+
+    CanvasWidget canvas;
+    canvas.resize(900, 600);
+    canvas.show();
+
+    QSignalSpy ready_spy(&canvas, &CanvasWidget::displayImageReadyChanged);
+    canvas.showImage(first_image_path);
+    ASSERT_TRUE(ready_spy.wait(5000));
+
+    canvas.zoomIn();
+    const QTransform transform_before_switch = canvas.transform();
+    canvas.showImage(second_image_path);
+
+    EXPECT_EQ(canvas.transform(), transform_before_switch);
+    ASSERT_TRUE(ready_spy.wait(5000));
+    EXPECT_TRUE(canvas.hasDisplayImage());
+    EXPECT_EQ(canvas.viewRotationDegrees(), 0);
+}
+
 TEST(MarkerCanvasInteractionTest, PhotoCommandsCreateMoveBlockAndRemoveOneProjection)
 {
     using xjw::control_points::ProjectionState;

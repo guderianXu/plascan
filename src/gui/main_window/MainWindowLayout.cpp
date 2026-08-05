@@ -83,7 +83,7 @@ constexpr int SelectionPropertiesMinHeight = 80;
 constexpr int PhotosDockMinHeight = 90;
 constexpr int DockMinWidth = 160;
 constexpr int DockMinHeight = 80;
-constexpr int ProjectDockLayoutVersion = 2;
+constexpr int ProjectDockLayoutVersion = 3;
 
 void configureMovableDock(QDockWidget *dock)
 {
@@ -172,6 +172,9 @@ void MainWindow::setupUi()
                    | QMainWindow::AllowNestedDocks
                    | QMainWindow::AllowTabbedDocks
                    | QMainWindow::GroupedDragging);
+    // 左下角归左侧 Dock 区域，使“工作区 + 资源属性”占据完整左列。
+    // 照片 Dock 因而只位于中央视图下方，与三维/二维视图组成右列。
+    setCorner(Qt::BottomLeftCorner, Qt::LeftDockWidgetArea);
 
     _log = _ui->logPanel;
     _logDock = _ui->logDock;
