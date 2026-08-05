@@ -33,7 +33,13 @@
 
 using namespace xjw;
 
-TEST(SfmBundleAdjustCoordinatorPolicyTest, RefinesSharedIntrinsicsOnlyInMatureGlobalSolve)
+TEST(SfmBundleAdjustCoordinatorPolicyTest, AerialPlaneStabilizationIsOptIn)
+{
+    const IncrementalSfmOptions options;
+    EXPECT_FALSE(options.stabilizeAerialCameraPlane);
+}
+
+TEST(SfmBundleAdjustCoordinatorPolicyTest, RefinesSharedIntrinsicsOnlyAfterCompleteRegistration)
 {
     EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
         false, 16, 16, 16));
@@ -41,7 +47,7 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest, RefinesSharedIntrinsicsOnlyInMatureGl
         true, 7, 16, 16));
     EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
         false, 2, 2, 16));
-    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
         false, 15, 15, 16));
     EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
         false, 14, 14, 16));

@@ -132,11 +132,9 @@ bool SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
         return false;
     }
 
-    // 少量难配准影像不应阻止整个航摄块完成相机自标定。达到 90% 覆盖时，
-    // 已注册相机已经形成稳定全局网络；仍要求活动相机覆盖全部已注册影像，
-    // 从而禁止局部窗口或残缺 BA 更新共享镜头参数。
-    return static_cast<long long>(registeredImageCount) * 10LL >=
-           static_cast<long long>(totalImageCount) * 9LL;
+    // 共享内参会立即影响未注册影像的 PnP。只有全部影像已注册时才释放，避免
+    // 残缺网络中的焦距/畸变变化破坏最后一批影像的几何尺度和可见点关系。
+    return registeredImageCount == totalImageCount;
 }
 
 bool SfmBundleAdjustCoordinator::hasIterativeGlobalBaConverged(
