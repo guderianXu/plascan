@@ -126,6 +126,15 @@ bool hasUnsupportedConstraints(const std::vector<BATrack> &tracks,
         }
     }
 
+    if (options.cameraPlaneConstraint.enabled)
+    {
+        if (message)
+        {
+            *message = "native_cuda 首期不支持相机中心平面软约束";
+        }
+        return true;
+    }
+
     return false;
 }
 

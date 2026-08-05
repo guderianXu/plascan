@@ -2013,6 +2013,11 @@ BABackendDecision BundleAdjust::decideBackendForProblem(const BAProblemStats &st
     {
         return {options.backend, "explicit_backend"};
     }
+    if (options.cameraPlaneConstraint.enabled &&
+        isBackendAvailable(BABackend::CeresCpu))
+    {
+        return {BABackend::CeresCpu, "camera_plane_constraint_requires_ceres"};
+    }
     const bool refineExtendedIntrinsics =
         options.refineSharedFocalAspectRatio ||
         options.refineSharedPrincipalPoint ||
@@ -2089,6 +2094,24 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
     const BAOptions &options = normalizedOptions;
 
     auto runLegacy = [&](const std::string &fallbackMessage) {
+        if (options.cameraPlaneConstraint.enabled)
+        {
+            BAResult result;
+            result.requestedBackend = options.backend;
+            result.usedBackend = BABackend::LegacyCpu;
+            result.solveStatus = BASolveStatus::UnsupportedConfiguration;
+            result.solutionUsable = false;
+            result.backendFallback = options.backend != BABackend::LegacyCpu;
+            result.backendMessage = fallbackMessage +
+                                    "；legacy_cpu 不支持相机中心平面约束，未执行无约束回退";
+            result.backendSelectionReason = fallbackMessage;
+            result.totalTracks = static_cast<int>(tracks.size());
+            result.observationCount = countObservations(tracks);
+            result.refinedCameras = cameras;
+            result.points.resize(tracks.size());
+            updateDerivedResultStats(result);
+            return result;
+        }
         BAResult result = optimizePointsLegacyImpl(cameras, tracks, options);
         result.requestedBackend = options.backend;
         result.usedBackend = BABackend::LegacyCpu;
@@ -2140,7 +2163,8 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
         bool comparedWithLegacy = false;
         if (!rejectCandidate &&
             options.enableBackendQualityGate &&
-            options.compareAutoBackendWithLegacy)
+            options.compareAutoBackendWithLegacy &&
+            !options.cameraPlaneConstraint.enabled)
         {
             BAOptions legacyOptions = options;
             legacyOptions.backend = BABackend::LegacyCpu;
@@ -2198,16 +2222,19 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
 
     if (options.backend == BABackend::LegacyCpu)
     {
-        const bool requiresCeresIntrinsics =
+        const bool requiresCeresFeatures =
             options.refineSharedFocalAspectRatio ||
             options.refineSharedPrincipalPoint ||
             options.refineSharedRadialDistortion ||
+            options.cameraPlaneConstraint.enabled ||
             (options.refineSharedFocalLength &&
              calibrationGroupCount(options, cameras.size()) > 1);
-        if (requiresCeresIntrinsics)
+        if (requiresCeresFeatures)
         {
             const std::string message =
-                "legacy_cpu 不支持请求的联合共享内参优化，";
+                options.cameraPlaneConstraint.enabled
+                    ? "legacy_cpu 不支持相机中心平面约束，"
+                    : "legacy_cpu 不支持请求的联合共享内参优化，";
             if (detail::isCeresBackendCompiled() &&
                 options.allowBackendFallback)
             {
@@ -2260,6 +2287,7 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
             ((options.enableLaserPlaneConstraints ||
               options.enableControlPointConstraints ||
               options.enableScaleBarConstraints ||
+              options.cameraPlaneConstraint.enabled ||
               !options.cameraPosePriors.empty()) &&
              !capabilities.supportsSoftConstraints);
         if (unsupportedConfiguration)

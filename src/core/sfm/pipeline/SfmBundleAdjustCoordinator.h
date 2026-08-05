@@ -33,7 +33,7 @@ class SfmBundleAdjustCoordinator
     /// 删除在任一有效轨迹观测中落到相机后方的三维点，并清理影像关联。
     int filterNegativeDepthPoints();
 
-    /// 共享镜头内参只在覆盖至少 90% 影像的完整全局 BA 中更新，避免局部窗口累计漂移。
+    /// 共享镜头内参只在全部影像注册后的全局 BA 中更新，避免改变待注册影像的 PnP 几何。
     static bool shouldRefineSharedIntrinsics(bool localOnly,
                                              int activeCameraCount,
                                              int registeredImageCount,

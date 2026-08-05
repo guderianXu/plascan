@@ -263,6 +263,91 @@ TEST(BundleAdjustCeresBackendTest, AutoDiffPosePriorStabilizesCameraCenter)
     EXPECT_LT(after, before * 0.1);
 }
 
+TEST(BundleAdjustCeresBackendTest, CameraPlaneConstraintOnlyRemovesNormalDrift)
+{
+    ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
+
+    std::vector<xjw::Camera> cameras{
+        makeCamera(-2.0, 0.0, 0.0),
+        makeCamera(2.0, 0.0, 0.0),
+        makeCamera(0.0, 2.0, 1.2),
+        makeCamera(0.0, -2.0, -0.8),
+    };
+    std::vector<xjw::BATrack> tracks;
+    for (int index = 0; index < 36; ++index)
+    {
+        const std::array<double, 3> point{{
+            (static_cast<double>(index % 6) - 2.5) * 0.12,
+            (static_cast<double>(index / 6) - 2.5) * 0.12,
+            12.0 + static_cast<double>(index % 3) * 0.1,
+        }};
+        tracks.push_back(makeTrack(cameras, point, point));
+    }
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::CeresCpu;
+    options.refineCameraPose = true;
+    options.gaugePolicy = xjw::BAGaugePolicy::CallerManaged;
+    options.fixedCameraIndices = {0, 1};
+    options.enablePointFilter = false;
+    options.maxIterations = 30;
+    options.cameraPlaneConstraint.enabled = true;
+    options.cameraPlaneConstraint.point = {{0.0, 0.0, 0.0}};
+    options.cameraPlaneConstraint.normal = {{0.0, 0.0, 1.0}};
+    options.cameraPlaneConstraint.sigmaMeters = 0.05;
+    options.cameraPlaneConstraint.weight = 100.0;
+    options.cameraPlaneHuberDelta = 0.0;
+
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(cameras, tracks, options);
+
+    ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
+    ASSERT_EQ(result.refinedCameras.size(), cameras.size());
+    EXPECT_LT(std::abs(result.refinedCameras[2].cameraCenter()[2]), 0.05);
+    EXPECT_LT(std::abs(result.refinedCameras[3].cameraCenter()[2]), 0.05);
+}
+
+TEST(BundleAdjustCeresBackendTest, LegacyRequestDoesNotSilentlyIgnoreCameraPlaneConstraint)
+{
+    ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
+
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-1.0, 0.0, 0.0),
+        makeCamera(1.0, 0.0, 0.0),
+        makeCamera(0.0, 1.0, 0.4),
+    };
+    std::vector<xjw::BATrack> tracks;
+    for (int index = 0; index < 12; ++index)
+    {
+        const std::array<double, 3> point{{
+            (static_cast<double>(index % 4) - 1.5) * 0.1,
+            (static_cast<double>(index / 4) - 1.0) * 0.1,
+            10.0,
+        }};
+        tracks.push_back(makeTrack(cameras, point, point));
+    }
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::LegacyCpu;
+    options.refineCameraPose = true;
+    options.gaugePolicy = xjw::BAGaugePolicy::CallerManaged;
+    options.fixedCameraIndices = {0, 1};
+    options.enablePointFilter = false;
+    options.cameraPlaneConstraint.enabled = true;
+    options.cameraPlaneConstraint.sigmaMeters = 0.05;
+    options.cameraPlaneConstraint.weight = 100.0;
+    options.cameraPlaneHuberDelta = 0.0;
+
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(cameras, tracks, options);
+
+    ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
+    EXPECT_EQ(result.requestedBackend, xjw::BABackend::LegacyCpu);
+    EXPECT_EQ(result.usedBackend, xjw::BABackend::CeresCpu);
+    EXPECT_TRUE(result.backendFallback);
+    EXPECT_LT(std::abs(result.refinedCameras[2].cameraCenter()[2]), 0.05);
+}
+
 TEST(BundleAdjustCeresBackendTest, CeresSkipsTracksThatCannotConstrainProblem)
 {
     ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));

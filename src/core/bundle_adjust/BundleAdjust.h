@@ -180,6 +180,21 @@ struct BACameraPosePrior
 };
 
 /**
+ * @brief 相机中心平面软约束：只限制光心沿平面法向的低频漂移。
+ *
+ * 该约束不限制平面内平移和相机旋转，适合无绝对控制的近垂直航测块抑制
+ * dome/bowl 形变。平面由调用方在当前 SfM 坐标系内估计，不能当作绝对高程。
+ */
+struct BACameraPlaneConstraint
+{
+    bool enabled = false;
+    std::array<double, 3> point{{0.0, 0.0, 0.0}};
+    std::array<double, 3> normal{{0.0, 0.0, 1.0}};
+    double sigmaMeters = 1.0;
+    double weight = 1.0;
+};
+
+/**
  * @brief 轨迹：一个三维点及其在多幅图像中的观测集合。
  *
  * 轨迹表示多相机共观的同一个物方点，是光束法平差的核心数据单元。
@@ -271,6 +286,10 @@ struct BAOptions
     std::vector<BACameraPosePrior> cameraPosePriors; ///< 与 cameras 同序的可选外参软先验
     double cameraPosePriorWeight = 1000.0;           ///< 位姿先验整体权重
     double cameraPosePriorHuberDelta = 3.0;          ///< 位姿先验 Huber 阈值（归一化残差）
+
+    // ── 航测相机中心平面软约束 ───────────────────────────────────────────
+    BACameraPlaneConstraint cameraPlaneConstraint;  ///< 所有可变相机共享的光心平面约束
+    double cameraPlaneHuberDelta = 3.0;              ///< 法向归一化残差的 Huber 阈值
 
     // ── Gauge 固定 ──────────────────────────────────────────────────────────
     /// 联合 BA 的规范处理策略。默认自动锚定，避免直接调用产生奇异法方程。
