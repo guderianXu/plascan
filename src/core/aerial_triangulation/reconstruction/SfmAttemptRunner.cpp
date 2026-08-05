@@ -242,11 +242,10 @@ void configureSfmOptions(const PreparedAerialTriangulationInput &input,
             options->baOptions.maxSharedFocalScale = 1.02;
             options->baOptions.maxSharedFocalStepScale = 1.02;
             options->baOptions.maxSharedFocalIterations = 4;
-            options->baOptions.refineSharedRadialDistortion = true;
-            options->baOptions.maxSharedRadialK1Abs = 0.35;
-            options->baOptions.maxSharedRadialK2Abs = 0.20;
-            options->baOptions.sharedRadialK1PriorSigma = 0.15;
-            options->baOptions.sharedRadialK2PriorSigma = 0.08;
+            // EXIF 只提供焦距，并不等价于镜头畸变标定。近垂直航带且缺少 GCP/斜片时，
+            // k1/k2 与航高、俯仰高度相关，释放径向参数会以很低 RMS 收敛到穹顶解。
+            // 工程中已有实测畸变时会作为固定输入继续使用；EXIF-only 路径不再自估畸变。
+            options->baOptions.refineSharedRadialDistortion = false;
         }
         else
         {

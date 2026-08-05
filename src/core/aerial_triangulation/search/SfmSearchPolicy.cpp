@@ -274,4 +274,14 @@ bool shouldStopAdaptiveFocalReplay(int totalImages,
            hasProductionSparseCloud;
 }
 
+bool shouldRunAdaptiveCameraModelRefinement(bool requested,
+                                            bool hasCompleteIntrinsicPrior,
+                                            bool hasMetadataFocalPrior)
+{
+    // EXIF 焦距不是畸变标定，但在纯下视航带中比无约束自标定更可靠。完整工程
+    // 标定更不应被覆盖。只有完全缺少内参、先经多候选搜索得到焦距种子时，才
+    // 允许后续联合 BA 在种子附近细化共享内参。
+    return requested && !hasCompleteIntrinsicPrior && !hasMetadataFocalPrior;
+}
+
 } // namespace xjw::aerial_triangulation

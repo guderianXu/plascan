@@ -91,4 +91,9 @@ bool shouldStopAdaptiveFocalReplay(int totalImages,
                                    int registeredImages,
                                    bool hasProductionSparseCloud);
 
+/// 完整相机标定或一致 EXIF 焦距批次保持内参固定；仅无先验焦距搜索允许后续联合细化。
+bool shouldRunAdaptiveCameraModelRefinement(bool requested,
+                                            bool hasCompleteIntrinsicPrior,
+                                            bool hasMetadataFocalPrior);
+
 } // namespace xjw::aerial_triangulation

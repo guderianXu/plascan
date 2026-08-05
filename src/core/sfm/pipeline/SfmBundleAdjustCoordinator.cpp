@@ -90,6 +90,30 @@ bool SfmBundleAdjustCoordinator::shouldRunPeriodicGlobalBa(
     return remaining_images > final_guard;
 }
 
+bool SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(
+    bool localOnly,
+    int activeCameraCount,
+    int totalTrackCount,
+    int twoViewTrackCount,
+    int multiViewTrackCount)
+{
+    if (localOnly || activeCameraCount < 96 || totalTrackCount < 1000 ||
+        twoViewTrackCount < 0 || multiViewTrackCount < 0 ||
+        twoViewTrackCount + multiViewTrackCount != totalTrackCount)
+    {
+        return false;
+    }
+
+    // 两视图点只约束一对相机，无法为长航带提供跨影像刚性。只有弱轨迹占比达到
+    // 65%，且仍有足够多三视图轨迹覆盖相机块时才缩减全局 BA，避免小工程或本就
+    // 缺少强轨迹的工程因过滤后约束不足。完整点云会在 BA 后统一重三角化。
+    const bool weakNetwork =
+        static_cast<long long>(twoViewTrackCount) * 100LL >=
+        static_cast<long long>(totalTrackCount) * 65LL;
+    const int minimumMultiViewTracks = std::max(500, activeCameraCount * 4);
+    return weakNetwork && multiViewTrackCount >= minimumMultiViewTracks;
+}
+
 int SfmBundleAdjustCoordinator::iterativeGlobalBaRoundLimit(
     int configuredRounds,
     bool finalRefinement)
@@ -264,6 +288,60 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
     std::unordered_map<std::string, int> marker_track_indices;
 
     const auto allPtIds = _reconstruction->allPoint3DIds();
+    int globalCandidateTrackCount = 0;
+    int globalTwoViewTrackCount = 0;
+    int globalMultiViewTrackCount = 0;
+    if (!localOnly)
+    {
+        for (Point3DId pid : allPtIds)
+        {
+            if (!_reconstruction->hasPoint3D(pid))
+            {
+                continue;
+            }
+            const ScenePoint3D &point = _reconstruction->point3D(pid);
+            int activeObservationCount = 0;
+            for (const TrackElement &element : point.track.elements)
+            {
+                if (idToIdx.find(element.imageId) != idToIdx.end() &&
+                    _reconstruction->hasImage(element.imageId) &&
+                    element.featureIdx <
+                        _reconstruction->image(element.imageId).keypoints.size())
+                {
+                    ++activeObservationCount;
+                }
+            }
+            if (activeObservationCount < 2)
+            {
+                continue;
+            }
+            ++globalCandidateTrackCount;
+            if (activeObservationCount == 2)
+            {
+                ++globalTwoViewTrackCount;
+            }
+            else
+            {
+                ++globalMultiViewTrackCount;
+            }
+        }
+    }
+    const bool useMultiViewOnlyGlobalBa =
+        SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(
+            localOnly,
+            static_cast<int>(baCameras.size()),
+            globalCandidateTrackCount,
+            globalTwoViewTrackCount,
+            globalMultiViewTrackCount);
+    if (!localOnly)
+    {
+        Logger::instance()->infof(
+            "[BA] network scope=global policy=%s candidateTracks=%d twoView=%d multiView=%d",
+            useMultiViewOnlyGlobalBa ? "multi_view_only" : "all_tracks",
+            globalCandidateTrackCount,
+            globalTwoViewTrackCount,
+            globalMultiViewTrackCount);
+    }
     int control_constraint_count = 0;
     for (Point3DId pid : allPtIds)
     {
@@ -330,7 +408,11 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
         }
 
         // 至少 2 个观测才有意义
-        if (track.observations.size() >= 2)
+        const bool keepWeakPriorTrack =
+            pt.track.source == TrackSource::PriorMarker;
+        if (track.observations.size() >= 2 &&
+            (!useMultiViewOnlyGlobalBa || track.observations.size() >= 3 ||
+             keepWeakPriorTrack))
         {
             if (pt.track.source == TrackSource::PriorMarker && !pt.track.sourceId.empty())
             {
@@ -901,7 +983,9 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
         _lastGlobalBABackendFallback = baResult.backendFallback;
         _lastGlobalBAObservationCount = baResult.observationCount;
         _lastGlobalBATotalSeconds = baResult.totalSeconds;
-        _lastGlobalBABackendMessage = baResult.backendMessage;
+        _lastGlobalBABackendMessage = useMultiViewOnlyGlobalBa
+            ? "network=multi_view_only; " + baResult.backendMessage
+            : baResult.backendMessage;
     }
 }
 
