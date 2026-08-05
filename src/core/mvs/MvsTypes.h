@@ -65,6 +65,7 @@ struct PatchMatchConfig
     int   cudaBlockW           = 16;     ///< 2D kernel 线程块宽度（必须为 2 的幂）
     int   cudaBlockH           = 16;     ///< 2D kernel 线程块高度（必须为 2 的幂）
     int   cudaBlockSweep       = 32;     ///< 1D sweep kernel 线程块大小（必须为 2 的幂）
+    int   cudaDeviceIndex      = -1;     ///< CUDA 设备编号；-1 使用当前设备
 
     bool  epipolarRectified    = false;  ///< 图像已极线校正，偏向水平传播
     bool  cudaUseParallelSweep = true;   ///< CUDA 使用棋盘格像素级并行传播；false 时回退传统行列 sweep

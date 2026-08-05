@@ -357,6 +357,25 @@ TEST(PatchMatchCudaRegressionTest, ConcurrentHostFrameSlotsRemainIsolated)
     xjw::mvs::PatchMatchDepthEstimator::cleanupGpuImageCache();
 }
 
+TEST(PatchMatchCudaRegressionTest, RejectsOutOfRangeDeviceIndex)
+{
+    const int device_count = xjw::mvs::PatchMatchDepthEstimator::cudaDeviceCount();
+    if (device_count == 0)
+    {
+        GTEST_SKIP() << "CUDA PatchMatch is not available in this environment";
+    }
+
+    std::string error;
+    EXPECT_FALSE(xjw::mvs::PatchMatchDepthEstimator::reserveGpuWorkspace(
+        1024,
+        1,
+        false,
+        false,
+        &error,
+        device_count));
+    EXPECT_NE(error.find("device index"), std::string::npos);
+}
+
 TEST(PatchMatchCudaBenchmarkTest, DISABLED_CompareParallelAndLegacySweepAfterWarmup)
 {
     if (!xjw::mvs::PatchMatchDepthEstimator::isCudaAvailable())

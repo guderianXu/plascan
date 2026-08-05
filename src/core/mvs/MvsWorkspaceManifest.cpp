@@ -680,6 +680,7 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
     patch.insert(QStringLiteral("epipolar_rectified"), config.patchMatch.epipolarRectified);
     patch.insert(QStringLiteral("cuda_parallel_sweep"), config.patchMatch.cudaUseParallelSweep);
     patch.insert(QStringLiteral("cuda_fallback_to_cpu"), config.patchMatch.cudaFallbackToCpu);
+    patch.insert(QStringLiteral("cuda_device_index"), config.patchMatch.cudaDeviceIndex);
 
     QJsonObject fusion;
     fusion.insert(QStringLiteral("min_consistent_views"), config.fusion.minConsistentViews);

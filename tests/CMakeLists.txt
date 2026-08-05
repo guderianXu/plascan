@@ -85,28 +85,24 @@ gtest_discover_tests(test_project_file_integration)
 # ==============================================================================
 # test_patchmatch_cpu — CPU PatchMatch 深度恢复回归测试
 # ==============================================================================
-check_language(CUDA)
+add_executable(test_patchmatch_cpu test_patchmatch_cpu.cpp)
 if(CMAKE_CUDA_COMPILER)
-    enable_language(CUDA)
-    add_executable(test_patchmatch_cpu test_patchmatch_cpu.cpp)
     set_target_properties(test_patchmatch_cpu PROPERTIES
         CUDA_ARCHITECTURES "${PLASCAN_CUDA_ARCHITECTURES}"
     )
-    target_link_libraries(test_patchmatch_cpu PRIVATE
-        mvs
-        camera
-        ${OpenCV_LIBS}
-        GTest::gtest_main
-    )
-    target_include_directories(test_patchmatch_cpu PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/core/mvs
-        ${CMAKE_SOURCE_DIR}/src/core/camera
-        ${CMAKE_SOURCE_DIR}/src/core
-    )
-    gtest_discover_tests(test_patchmatch_cpu)
-else()
-    message(WARNING "tests: CUDA compiler not found, skipping test_patchmatch_cpu")
 endif()
+target_link_libraries(test_patchmatch_cpu PRIVATE
+    mvs
+    camera
+    ${OpenCV_LIBS}
+    GTest::gtest_main
+)
+target_include_directories(test_patchmatch_cpu PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/mvs
+    ${CMAKE_SOURCE_DIR}/src/core/camera
+    ${CMAKE_SOURCE_DIR}/src/core
+)
+gtest_discover_tests(test_patchmatch_cpu)
 
 add_executable(test_lightglue_feature_budget
     test_lightglue_feature_budget.cpp

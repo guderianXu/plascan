@@ -1,10 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 project(dense_match LANGUAGES CXX)
 
-include(CheckLanguage)
-check_language(CUDA)
-if(CMAKE_CUDA_COMPILER)
-    enable_language(CUDA)
+if(PLASCAN_ENABLE_CUDA AND CMAKE_CUDA_COMPILER)
     set(CMAKE_CUDA_STANDARD 20)
     set(CMAKE_CUDA_STANDARD_REQUIRED ON)
     set(DM_HAS_CUDA TRUE)

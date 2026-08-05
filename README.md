@@ -69,6 +69,10 @@ ctest --preset windows-vcpkg-release
 cpack --preset windows-vcpkg-release
 ```
 
+即使开发机已安装 CUDA，也可用 `-DPLASCAN_ENABLE_CUDA=OFF -DPLASCAN_ENABLE_TENSORRT=OFF`
+配置可重复的 CPU-only 构建。该配置会同时关闭 PlaMatrix/PlaPoint 的 CUDA 后端，MVS 仍编译
+并运行真实 CPU PatchMatch。
+
 `cpack --preset windows-vcpkg-release` 生成 ZIP 离线包。安装 Inno Setup 6 后，可从已配置的
 Windows Release 构建生成带开始菜单、桌面快捷方式、卸载入口和 `.plascan` 文件关联的安装程序：
 

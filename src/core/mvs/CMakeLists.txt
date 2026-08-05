@@ -37,12 +37,15 @@ set(MVS_CXX_SOURCES
     DepthPyramidEstimator.cpp
     DepthPyramidPropagation.cpp
     DepthFrameUtils.cpp
+    DepthComputeScheduler.cpp
     MvsSourcePlanner.cpp
     MvsQualityReport.cpp
     MvsSceneClassifier.cpp
     MvsImagePreprocessor.cpp
     MvsWorkspaceManifest.cpp
     MvsWorkspaceReplay.cpp
+    PatchMatchCPU.cpp
+    PatchMatchEstimator.cpp
     DenseCloudBuilder.cpp
     DepthMapGenerator.cpp
     EpipolarRectifier.cpp
@@ -92,6 +95,7 @@ set(MVS_HEADERS
     DepthPyramidEstimator.h
     DepthPyramidPropagation.h
     DepthFrameUtils.h
+    DepthComputeScheduler.h
     DenseCloudBuilder.h
     DepthMapGenerator.h
     PatchMatchPhotometricCost.h
@@ -370,32 +374,52 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/src/core/camera
             ${CMAKE_SOURCE_DIR}/src/core
         )
+        target_compile_definitions(test_mvs_types PRIVATE
+            TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/testData"
+        )
         gtest_discover_tests(test_mvs_types)
 
+        add_executable(test_depth_compute_scheduler
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_depth_compute_scheduler.cpp
+        )
+        set_target_properties(test_depth_compute_scheduler PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
+        )
+        target_link_libraries(test_depth_compute_scheduler PRIVATE
+            mvs
+            GTest::gtest_main
+        )
+        target_include_directories(test_depth_compute_scheduler PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/core/mvs
+        )
+        gtest_discover_tests(test_depth_compute_scheduler DISCOVERY_MODE PRE_TEST)
+
+        add_executable(test_mvs_pipeline
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_pipeline.cpp
+        )
         if(CMAKE_CUDA_COMPILER)
-            add_executable(test_mvs_pipeline
-                ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_pipeline.cpp
-            )
             set_target_properties(test_mvs_pipeline PROPERTIES
                 CUDA_ARCHITECTURES "${PLASCAN_CUDA_ARCHITECTURES}"
                 RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
             )
-            target_link_libraries(test_mvs_pipeline PRIVATE
-                mvs
-                camera
-                Qt6::Core
-                ${OpenCV_LIBS}
-                GTest::gtest_main
-            )
-            target_include_directories(test_mvs_pipeline PRIVATE
-                ${CMAKE_SOURCE_DIR}/src/core/mvs
-                ${CMAKE_SOURCE_DIR}/src/core/camera
-                ${CMAKE_SOURCE_DIR}/src/core
-            )
-            gtest_discover_tests(test_mvs_pipeline)
         else()
-            message(WARNING "mvs: CUDA compiler not found, skipping test_mvs_pipeline")
+            set_target_properties(test_mvs_pipeline PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
+            )
         endif()
+        target_link_libraries(test_mvs_pipeline PRIVATE
+            mvs
+            camera
+            Qt6::Core
+            ${OpenCV_LIBS}
+            GTest::gtest_main
+        )
+        target_include_directories(test_mvs_pipeline PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/core/mvs
+            ${CMAKE_SOURCE_DIR}/src/core/camera
+            ${CMAKE_SOURCE_DIR}/src/core
+        )
+        gtest_discover_tests(test_mvs_pipeline)
 
         add_executable(test_mvs_workspace_manifest
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_workspace_manifest.cpp

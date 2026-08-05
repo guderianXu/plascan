@@ -50,7 +50,7 @@ if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
 endif()
 
 # ── CUDA architecture configuration ───────────────────────────────────────────
-if(NOT PLASCAN_APPLE_SILICON)
+if(PLASCAN_ENABLE_CUDA AND NOT PLASCAN_APPLE_SILICON)
   if(NOT DEFINED PLASCAN_CUDA_ARCHITECTURES)
     set(PLASCAN_CUDA_ARCHITECTURES "75;86;89;120" CACHE STRING "Target CUDA architectures")
   endif()
@@ -106,6 +106,10 @@ endif()
 message(STATUS "plascan: found libzip, target=${PLASCAN_LIBZIP_TARGET}")
 
 # ── plamatrix (submodule) ──────────────────────────────────────────────────────
+if(NOT PLASCAN_ENABLE_CUDA)
+  set(PLAMATRIX_WITH_CUDA OFF CACHE BOOL "Build PlaMatrix with CUDA acceleration" FORCE)
+  set(PLAPOINT_WITH_CUDA OFF CACHE BOOL "Build PlaPoint with CUDA acceleration" FORCE)
+endif()
 add_subdirectory(${CMAKE_SOURCE_DIR}/3rdparty/plamatrix ${CMAKE_BINARY_DIR}/3rdparty/plamatrix)
 message(STATUS "plascan: using plamatrix from 3rdparty/")
 

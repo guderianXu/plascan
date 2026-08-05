@@ -85,6 +85,21 @@ live under `src/core/mvs/tests/`.
 - Advanced GUI controls map to `DepthGenConfig`: minimum consistent views, geometry consistency, maximum
   reprojection error, speckle area threshold, and fusion maximum image size.
 
+## Compute Backends And Scheduling
+
+- The public estimator, CPU implementation, CUDA implementation, and no-CUDA stubs are separate translation
+  units. A build configured with `PLASCAN_ENABLE_CUDA=OFF` compiles and runs the real CPU estimator even on a
+  workstation where the CUDA toolkit is installed.
+- CUDA workspaces, execution locks, upload streams, and gray-image cache keys are isolated by device index.
+  One device still serializes its constant-memory camera updates, while separate devices may execute frames
+  concurrently.
+- `DepthComputeScheduler` owns one priority queue shared by CPU and CUDA workers. Faster workers naturally take
+  more frames. OpenCL and Vulkan worker identities are reserved for later backends; no OpenCL or Vulkan kernel
+  is enabled yet.
+
+The implementation plan and current boundary are documented in
+`docs/plans/MVS_HETEROGENEOUS_COMPUTE_PLAN.md`.
+
 ## Adaptive Three-Level Depth Pyramid
 
 - The final quality profile selects the Level 1 downsample `D`: `highest/high/medium/low/lowest` map to

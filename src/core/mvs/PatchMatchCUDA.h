@@ -33,6 +33,7 @@ class PatchMatchDepthEstimator
 {
 public:
     static bool isCudaAvailable();
+    static int cudaDeviceCount();
 
     /// 释放全局 GPU 图像缓存占用的所有显存。
     /// 在程序退出前或不再需要 MVS 功能时调用，防止显存泄漏。
@@ -43,7 +44,8 @@ public:
                                     int sourceCount,
                                     bool reserveReferenceMask,
                                     bool reserveSourceMasks,
-                                    std::string *errorMsg = nullptr);
+                                    std::string *errorMsg = nullptr,
+                                    int deviceIndex = -1);
 
     // ── 主接口 ──────────────────────────────────────────────────────────────
     // refGray      参考帧灰度图 (CV_8U)

@@ -293,7 +293,8 @@ DepthPyramidResult DepthPyramidEstimator::estimate(const DepthPyramidRequest &re
                 static_cast<int>(request.sourceImages.size()),
                 !request.referenceValidMask.empty(),
                 !request.sourceValidMasks.empty(),
-                &reserve_error))
+                &reserve_error,
+                finest_level.patchMatch.cudaDeviceIndex))
         {
             result.errorMessage = reserve_error.empty()
                 ? "failed to reserve CUDA depth-pyramid workspace"

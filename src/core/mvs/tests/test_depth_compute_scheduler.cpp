@@ -1,0 +1,83 @@
+#include "DepthComputeScheduler.h"
+
+#include <gtest/gtest.h>
+
+#include <atomic>
+#include <mutex>
+#include <thread>
+#include <vector>
+
+namespace
+{
+
+using xjw::mvs::DepthComputeBackend;
+using xjw::mvs::DepthComputeScheduler;
+using xjw::mvs::DepthComputeWorker;
+using xjw::mvs::DepthFrameTask;
+
+TEST(DepthComputeSchedulerTest, ReturnsHighestPriorityFrameFirst)
+{
+    DepthComputeScheduler scheduler({{1, 10.0f}, {2, 30.0f}, {3, 20.0f}});
+    const DepthComputeWorker worker{DepthComputeBackend::Cuda, 1};
+
+    ASSERT_EQ(scheduler.takeNext(worker), 2);
+    ASSERT_EQ(scheduler.takeNext(worker), 3);
+    ASSERT_EQ(scheduler.takeNext(worker), 1);
+    EXPECT_FALSE(scheduler.takeNext(worker).has_value());
+    EXPECT_EQ(worker.id(), "CUDA:1");
+}
+
+TEST(DepthComputeSchedulerTest, SharesEachFrameOnceAcrossHeterogeneousWorkers)
+{
+    std::vector<DepthFrameTask> tasks;
+    for (int index = 0; index < 100; ++index)
+    {
+        tasks.push_back({index, static_cast<float>(index)});
+    }
+    DepthComputeScheduler scheduler(std::move(tasks));
+    std::vector<int> visits(100, 0);
+    std::mutex visits_mutex;
+
+    auto run_worker = [&scheduler, &visits, &visits_mutex](DepthComputeWorker worker)
+    {
+        while (const std::optional<int> task = scheduler.takeNext(worker))
+        {
+            {
+                std::lock_guard<std::mutex> lock(visits_mutex);
+                ++visits[static_cast<std::size_t>(*task)];
+            }
+            scheduler.complete(worker, std::chrono::milliseconds(1), true);
+        }
+    };
+
+    std::thread cuda_worker(run_worker,
+                            DepthComputeWorker{DepthComputeBackend::Cuda, 0});
+    std::thread cpu_worker(run_worker,
+                           DepthComputeWorker{DepthComputeBackend::Cpu, 0});
+    cuda_worker.join();
+    cpu_worker.join();
+
+    for (int count : visits)
+    {
+        EXPECT_EQ(count, 1);
+    }
+    EXPECT_EQ(scheduler.pendingTaskCount(), 0U);
+
+    int completed_tasks = 0;
+    for (const auto &[worker_id, stats] : scheduler.workerStats())
+    {
+        EXPECT_FALSE(worker_id.empty());
+        completed_tasks += stats.completedTasks;
+    }
+    EXPECT_EQ(completed_tasks, 100);
+}
+
+TEST(DepthComputeSchedulerTest, ReservesStableNamesForFutureBackends)
+{
+    const DepthComputeWorker opencl_worker{DepthComputeBackend::OpenCl, 2};
+    const DepthComputeWorker vulkan_worker{DepthComputeBackend::Vulkan, 3};
+    EXPECT_EQ(opencl_worker.id(), "OpenCL:2");
+    EXPECT_EQ(vulkan_worker.id(), "Vulkan:3");
+}
+
+} // namespace

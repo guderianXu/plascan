@@ -4,6 +4,7 @@
 // =============================================================================
 
 #include "DepthMapGenerator.h"
+#include "DepthComputeScheduler.h"
 #include "DenseCloudBuilder.h"
 #include "DepthConsistencyCache.h"
 #include "DepthConsistencyEvidencePolicy.h"
@@ -8707,15 +8708,16 @@ void DepthMapGenerator::runInBackground()
     std::atomic<int> activeGpuTasks{0};
     std::atomic<int> activeCpuTasks{0};
     std::atomic<bool> anyFailure{false};
-    std::mutex taskMutex;
-
     struct FramePriority
     {
         int viewIndex = -1;
         float score = 0.f;
     };
 
-    const bool cudaAvailable = _config.patchMatch.useCuda && PatchMatchDepthEstimator::isCudaAvailable();
+    const int cudaDeviceCount = _config.patchMatch.useCuda
+        ? PatchMatchDepthEstimator::cudaDeviceCount()
+        : 0;
+    const bool cudaAvailable = cudaDeviceCount > 0;
     const int cpuThreadCount = std::max(1, _config.cpuWorkerCount);
 
     std::vector<FramePriority> framePriorities;
@@ -8762,48 +8764,40 @@ void DepthMapGenerator::runInBackground()
         return a.score > b.score;
     });
 
-    std::deque<int> gpuQueue;
-    std::deque<int> cpuQueue;
-    if (cudaAvailable)
+    std::vector<DepthFrameTask> frameTasks;
+    frameTasks.reserve(framePriorities.size());
+    for (const FramePriority &priority : framePriorities)
     {
-        for (const FramePriority &priority : framePriorities)
-        {
-            gpuQueue.push_back(priority.viewIndex);
-        }
+        frameTasks.push_back({priority.viewIndex, priority.score});
     }
-    else
-    {
-        for (const FramePriority &priority : framePriorities)
-        {
-            cpuQueue.push_back(priority.viewIndex);
-        }
-    }
+    DepthComputeScheduler computeScheduler(std::move(frameTasks));
 
     const int pendingFrameCount = static_cast<int>(framePriorities.size());
     const int maxWorkersByPendingFrames = std::max(1, pendingFrameCount);
     const int maxFrameWorkers = std::min(4, maxWorkersByPendingFrames);
+    const int selectedCudaDeviceCount = _config.patchMatch.cudaDeviceIndex >= 0 ? 1 : cudaDeviceCount;
     const int gpuFrameWorkers = cudaAvailable
-        ? std::clamp(std::max(1, _config.gpuFrameWorkerCount), 1, maxFrameWorkers)
+        ? std::clamp(std::max(selectedCudaDeviceCount, _config.gpuFrameWorkerCount), 1, maxFrameWorkers)
         : 0;
     const int cpuFrameWorkers = cudaAvailable
         ? std::clamp(std::max(0, _config.cpuFrameWorkerCount), 0, maxFrameWorkers)
         : std::clamp(std::max(1, _config.cpuFrameWorkerCount), 1, maxFrameWorkers);
 
-    LOG_INFO(QStringLiteral("[MVS] 深度估计调度: cuda=%1 gpu_frame_workers=%2 cpu_frame_workers=%3 cpu_pixel_threads=%4 views=%5 gpuQueue=%6 cpuQueue=%7")
-                 .arg(cudaAvailable ? QStringLiteral("on") : QStringLiteral("off"))
+    LOG_INFO(QStringLiteral("[MVS] 深度估计调度: cuda_devices=%1 gpu_frame_workers=%2 cpu_frame_workers=%3 cpu_pixel_threads=%4 views=%5 pending=%6")
+                 .arg(cudaDeviceCount)
                  .arg(gpuFrameWorkers)
                  .arg(cpuFrameWorkers)
                  .arg(cpuThreadCount)
                  .arg(NV)
-                 .arg(static_cast<qulonglong>(gpuQueue.size()))
-                 .arg(static_cast<qulonglong>(cpuQueue.size())));
+                 .arg(static_cast<qulonglong>(computeScheduler.pendingTaskCount())));
     if (skippedFrames > 0)
     {
         LOG_INFO(QStringLiteral("[MVS] 续跑模式：跳过已存在深度图 %1 帧").arg(skippedFrames));
     }
     if (cudaAvailable)
     {
-        LOG_DEBUG(QStringLiteral("[MVS] CUDA 已启用，主机帧槽=%1，CUDA 执行槽=1；CPU 准备 / GPU 计算 / CPU 后处理保存采用有界流水线")
+        LOG_DEBUG(QStringLiteral("[MVS] CUDA 已启用，设备=%1，主机帧槽=%2；每个 CUDA 设备使用独立工作区和执行槽")
+                      .arg(cudaDeviceCount)
                       .arg(gpuFrameWorkers));
     }
 
@@ -8816,31 +8810,23 @@ void DepthMapGenerator::runInBackground()
         },
         maxBufferedSaveTasks);
 
-    auto emitDepthProgress = [this, NV, &completedTasks, &activeGpuTasks, &activeCpuTasks, &taskMutex, &gpuQueue, &cpuQueue](
+    auto emitDepthProgress = [this, NV, &completedTasks, &activeGpuTasks, &activeCpuTasks, &computeScheduler](
                                  const QString &workerTag,
                                  int frameIndex,
                                  bool pickedTask)
     {
-        int gpuPending = 0;
-        int cpuPending = 0;
-        {
-            std::lock_guard<std::mutex> lock(taskMutex);
-            gpuPending = static_cast<int>(gpuQueue.size());
-            cpuPending = static_cast<int>(cpuQueue.size());
-        }
-
         const int done = completedTasks.load();
         const int gpuActive = activeGpuTasks.load();
         const int cpuActive = activeCpuTasks.load();
+        const int pending = static_cast<int>(computeScheduler.pendingTaskCount());
         const float ratio = static_cast<float>(done) / (NV + 2);
 
-        QString stage = QStringLiteral("深度估计: 已完成 %1/%2, 运行中 GPU %3 CPU %4, 待处理 GPU %5 CPU %6")
+        QString stage = QStringLiteral("深度估计: 已完成 %1/%2, 运行中 GPU %3 CPU %4, 待处理 %5")
                             .arg(done)
                             .arg(NV)
                             .arg(gpuActive)
                             .arg(cpuActive)
-                            .arg(gpuPending)
-                            .arg(cpuPending);
+                            .arg(pending);
 
         if (pickedTask && frameIndex >= 0)
         {
@@ -8867,48 +8853,20 @@ void DepthMapGenerator::runInBackground()
                        &activeGpuTasks,
                        &activeCpuTasks,
                        &anyFailure,
-                       &taskMutex,
-                       &gpuQueue,
-                       &cpuQueue,
+                       &computeScheduler,
                        &emitDepthProgress,
-                       &saveQueue](bool useGpu) {
+                       &saveQueue](DepthComputeWorker worker) {
+        const bool useGpu = worker.backend != DepthComputeBackend::Cpu;
         DepthGenConfig workerConfig = _config;
         workerConfig.patchMatch.useCuda = useGpu;
+        workerConfig.patchMatch.cudaDeviceIndex = worker.deviceIndex;
         workerConfig.patchMatch.cancelFlag = &_cancelled;
-        const QString workerTag = useGpu ? QStringLiteral("GPU") : QStringLiteral("CPU");
+        const QString workerTag = QString::fromStdString(worker.id());
 
         while (!_cancelled)
         {
-            int i = -1;
-            {
-                std::lock_guard<std::mutex> lock(taskMutex);
-                if (useGpu)
-                {
-                    if (!gpuQueue.empty())
-                    {
-                        i = gpuQueue.front();
-                        gpuQueue.pop_front();
-                    }
-                    else if (!cpuQueue.empty())
-                    {
-                        i = cpuQueue.front();
-                        cpuQueue.pop_front();
-                    }
-                }
-                else
-                {
-                    if (!cpuQueue.empty())
-                    {
-                        i = cpuQueue.front();
-                        cpuQueue.pop_front();
-                    }
-                    else if (!gpuQueue.empty())
-                    {
-                        i = gpuQueue.front();
-                        gpuQueue.pop_front();
-                    }
-                }
-            }
+            const std::optional<int> next_task = computeScheduler.takeNext(worker);
+            const int i = next_task.value_or(-1);
 
             if (i < 0 || i >= NV)
             {
@@ -8930,7 +8888,7 @@ void DepthMapGenerator::runInBackground()
                          .arg(i + 1)
                          .arg(NV)
                          .arg(i)
-                         .arg(useGpu ? QStringLiteral("GPU") : QStringLiteral("CPU")));
+                         .arg(workerTag));
             markManifestFrameRunning(i);
 
             DepthFrameResult res = computeDepthForView(i, &workerConfig);
@@ -8951,7 +8909,8 @@ void DepthMapGenerator::runInBackground()
 
             const auto frameEnd = std::chrono::steady_clock::now();
             const double elapsedMs = std::chrono::duration<double, std::milli>(frameEnd - frameStart).count();
-            res.device = useGpu ? "GPU" : "CPU";
+            computeScheduler.complete(worker, frameEnd - frameStart, res.success);
+            res.device = worker.id();
             res.elapsedMs = elapsedMs;
 
             DepthFrameResult storedResult = res;
@@ -8970,7 +8929,7 @@ void DepthMapGenerator::runInBackground()
                              .arg(i + 1)
                              .arg(NV)
                              .arg(i)
-                             .arg(useGpu ? QStringLiteral("GPU") : QStringLiteral("CPU"))
+                             .arg(workerTag)
                              .arg(elapsedMs, 0, 'f', 1)
                              .arg(QString::fromStdString(res.errorMsg)));
                 markManifestFrameFailed(i, QString::fromStdString(res.errorMsg));
@@ -8986,7 +8945,7 @@ void DepthMapGenerator::runInBackground()
                              .arg(i + 1)
                              .arg(NV)
                              .arg(i)
-                             .arg(useGpu ? QStringLiteral("GPU") : QStringLiteral("CPU"))
+                             .arg(workerTag)
                              .arg(depthWidth)
                              .arg(depthHeight)
                              .arg(res.qualityMetrics.validCoverage, 0, 'f', 3)
@@ -9035,11 +8994,16 @@ void DepthMapGenerator::runInBackground()
 
     for (int workerIndex = 0; workerIndex < gpuFrameWorkers; ++workerIndex)
     {
-        workers.emplace_back(workerFunc, true);
+        const int device_index = _config.patchMatch.cudaDeviceIndex >= 0
+            ? _config.patchMatch.cudaDeviceIndex
+            : workerIndex % cudaDeviceCount;
+        workers.emplace_back(workerFunc,
+                             DepthComputeWorker{DepthComputeBackend::Cuda, device_index});
     }
     for (int workerIndex = 0; workerIndex < cpuFrameWorkers; ++workerIndex)
     {
-        workers.emplace_back(workerFunc, false);
+        workers.emplace_back(workerFunc,
+                             DepthComputeWorker{DepthComputeBackend::Cpu, workerIndex});
     }
 
     for (std::thread &worker : workers)
@@ -9048,6 +9012,15 @@ void DepthMapGenerator::runInBackground()
         {
             worker.join();
         }
+    }
+
+    for (const auto &[worker_id, stats] : computeScheduler.workerStats())
+    {
+        LOG_INFO(QStringLiteral("[MVS] 异构调度统计: worker=%1 completed=%2 failed=%3 elapsed=%4 ms")
+                     .arg(QString::fromStdString(worker_id))
+                     .arg(stats.completedTasks)
+                     .arg(stats.failedTasks)
+                     .arg(stats.elapsedMilliseconds, 0, 'f', 1));
     }
 
     if (_cancelled.load())
@@ -9094,6 +9067,7 @@ void DepthMapGenerator::runInBackground()
             return;
         }
     }
+
     else if (!keepDepthFramesInMemory.load() && NV >= 2)
     {
         emit progressChanged(QStringLiteral("准备流式深度一致性检查..."),

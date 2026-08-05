@@ -18,6 +18,11 @@ bool PatchMatchDepthEstimator::isCudaAvailable()
     return false;
 }
 
+int PatchMatchDepthEstimator::cudaDeviceCount()
+{
+    return 0;
+}
+
 void PatchMatchDepthEstimator::cleanupGpuImageCache()
 {
     // 无 CUDA 构建中无缓存，空操作
@@ -27,7 +32,8 @@ bool PatchMatchDepthEstimator::reserveGpuWorkspace(std::size_t,
                                                    int,
                                                    bool,
                                                    bool,
-                                                   std::string *)
+                                                   std::string *,
+                                                   int)
 {
     return true;
 }
@@ -63,17 +69,6 @@ std::vector<DensePoint> DensePointCloudCUDA::unprojectGPU(
 {
     if (errorMsg) *errorMsg = "CUDA 不可用（编译时未启用）";
     return {};
-}
-
-bool PatchMatchDepthEstimator::estimate(
-    const cv::Mat &, const std::vector<cv::Mat> &,
-    const Camera &, const std::vector<Camera> &,
-    float, float, const PatchMatchConfig &,
-    cv::Mat &, cv::Mat *, std::string *errorMsg, const cv::Mat *, const cv::Mat *,
-    const cv::Mat *, const std::vector<cv::Mat> *)
-{
-    if (errorMsg) *errorMsg = "CUDA unavailable (PatchMatch requires CUDA)";
-    return false;
 }
 
 } // namespace mvs
