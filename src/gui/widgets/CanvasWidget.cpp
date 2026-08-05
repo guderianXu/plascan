@@ -186,6 +186,7 @@ void CanvasWidget::showImage(const QString &path)
         _currentImagePath.clear();
         _layerRenderer->clear();
         resetTransform();
+        _viewRotationDegrees = 0;
         _zoomFactor = 1.0;
         return;
     }
