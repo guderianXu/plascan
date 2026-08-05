@@ -23,6 +23,11 @@ struct DepthGapTargetedRecoveryOptions
     int minimumConsensusHypothesisCount = 2;
     float maximumConsensusInverseDepthRelativeSpread = 0.025f;
     float maximumConsensusPriorRelativeDifference = 0.35f;
+    bool enableSurfaceAwarePrior = false;
+    int minimumSurfacePriorAnchorCount = 3;
+    float maximumSurfaceAnchorInverseDepthRelativeSpread = 0.12f;
+    float maximumSurfacePriorFitRelativeResidual = 0.025f;
+    float maximumSurfacePriorEnvelopeExpansion = 0.08f;
 };
 
 struct DepthGapTarget
@@ -31,11 +36,20 @@ struct DepthGapTarget
     cv::Mat gapMask;
     cv::Mat estimationMask;
     cv::Mat hintDepth;
+    cv::Mat nearestHintDepth;
     cv::Mat hintRadius;
+    cv::Mat surfacePriorMask;
+    cv::Mat priorSupportCount;
+    cv::Mat priorRelativeResidual;
     int supportPixelCount = 0;
     int requestedGapPixelCount = 0;
     int priorCoveredGapPixelCount = 0;
     float requestedGapRatio = 0.0f;
+    int surfacePriorPixelCount = 0;
+    int surfacePriorInsufficientAnchorPixelCount = 0;
+    int surfacePriorAnchorSpreadRejectedPixelCount = 0;
+    int surfacePriorFitRejectedPixelCount = 0;
+    int surfacePriorResidualRejectedPixelCount = 0;
     QString skippedReason;
 };
 
@@ -56,6 +70,12 @@ struct DepthGapTargetedRecoveryStats
     int consensusCandidatePixelCount = 0;
     int rejectedInsufficientHypothesisPixelCount = 0;
     int rejectedHypothesisSpreadPixelCount = 0;
+    int surfacePriorPixelCount = 0;
+    int surfacePriorAcceptedPixelCount = 0;
+    int surfacePriorInsufficientAnchorPixelCount = 0;
+    int surfacePriorAnchorSpreadRejectedPixelCount = 0;
+    int surfacePriorFitRejectedPixelCount = 0;
+    int surfacePriorResidualRejectedPixelCount = 0;
     float recoveryRatio = 0.0f;
     QString skippedReason;
 };

@@ -810,6 +810,12 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
     root.insert(
         QStringLiteral("targeted_gap_recovery_consensus_prior_relative_difference"),
         config.targetedGapRecoveryConsensusPriorRelativeDifference);
+    root.insert(QStringLiteral("targeted_gap_surface_prior"),
+                config.enableTargetedGapSurfacePrior);
+    root.insert(QStringLiteral("targeted_gap_surface_prior_maximum_anchor_spread"),
+                config.targetedGapSurfacePriorMaximumAnchorSpread);
+    root.insert(QStringLiteral("targeted_gap_surface_prior_maximum_fit_residual"),
+                config.targetedGapSurfacePriorMaximumFitResidual);
     root.insert(
         QStringLiteral("targeted_gap_recovery_maximum_prior_distance_pixels"),
         config.targetedGapRecoveryMaximumPriorDistancePixels);

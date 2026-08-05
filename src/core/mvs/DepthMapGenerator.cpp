@@ -4770,6 +4770,14 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
         if (srcGrays.size() >= 4 &&
             config.targetedGapRecoveryHypothesisCount >= 2)
         {
+            recovery_options.enableSurfaceAwarePrior =
+                config.enableTargetedGapSurfacePrior;
+            recovery_options.maximumSurfaceAnchorInverseDepthRelativeSpread =
+                std::max(0.0f,
+                         config.targetedGapSurfacePriorMaximumAnchorSpread);
+            recovery_options.maximumSurfacePriorFitRelativeResidual =
+                std::max(0.0f,
+                         config.targetedGapSurfacePriorMaximumFitResidual);
             recovery_options.missingPriorRadiusRatio = std::max(
                 recovery_options.missingPriorRadiusRatio,
                 recovery_options.maximumConsensusPriorRelativeDifference);

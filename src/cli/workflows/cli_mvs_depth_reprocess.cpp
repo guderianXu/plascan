@@ -562,6 +562,8 @@ int main(int argc, char **argv)
          config.targetedGapRecoverySourceCount},
         {QStringLiteral("targeted_gap_recovery_hypothesis_count"),
          config.targetedGapRecoveryHypothesisCount},
+        {QStringLiteral("targeted_gap_surface_prior"),
+         config.enableTargetedGapSurfacePrior},
         {QStringLiteral("depth_artifact_count"), artifacts.size()},
         {QStringLiteral("depth_artifacts"), artifacts},
         {QStringLiteral("error"), generatorError}

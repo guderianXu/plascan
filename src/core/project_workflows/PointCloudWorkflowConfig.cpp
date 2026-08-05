@@ -290,6 +290,14 @@ DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &setti
     parsed.targetedGapRecoveryConsensusPriorRelativeDifference = static_cast<float>(
         settings.value(QStringLiteral(
             "targetedGapRecoveryConsensusPriorRelativeDifference")).toDouble(0.35));
+    parsed.enableTargetedGapSurfacePrior = settings.value(
+        QStringLiteral("enableTargetedGapSurfacePrior")).toBool(false);
+    parsed.targetedGapSurfacePriorMaximumAnchorSpread = static_cast<float>(
+        settings.value(QStringLiteral(
+            "targetedGapSurfacePriorMaximumAnchorSpread")).toDouble(0.12));
+    parsed.targetedGapSurfacePriorMaximumFitResidual = static_cast<float>(
+        settings.value(QStringLiteral(
+            "targetedGapSurfacePriorMaximumFitResidual")).toDouble(0.025));
     parsed.targetedGapRecoveryMaximumPriorDistancePixels = std::max(
         1,
         settings.value(QStringLiteral(
@@ -375,6 +383,12 @@ xjw::mvs::DepthGenConfig buildDepthGenConfig(const DenseGenerationSettings &sett
         settings.targetedGapRecoveryConsensusInverseDepthSpread;
     config.targetedGapRecoveryConsensusPriorRelativeDifference =
         settings.targetedGapRecoveryConsensusPriorRelativeDifference;
+    config.enableTargetedGapSurfacePrior =
+        settings.enableTargetedGapSurfacePrior;
+    config.targetedGapSurfacePriorMaximumAnchorSpread =
+        settings.targetedGapSurfacePriorMaximumAnchorSpread;
+    config.targetedGapSurfacePriorMaximumFitResidual =
+        settings.targetedGapSurfacePriorMaximumFitResidual;
     config.targetedGapRecoveryMaximumPriorDistancePixels =
         settings.targetedGapRecoveryMaximumPriorDistancePixels;
     config.enableTwoSourceCrossViewGrowth =

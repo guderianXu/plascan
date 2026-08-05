@@ -3,6 +3,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -16,6 +17,336 @@ bool compatibleDepthAndMask(const cv::Mat &depth, const cv::Mat &mask)
 {
     return !depth.empty() && depth.type() == CV_32FC1 &&
         !mask.empty() && mask.type() == CV_8UC1 && depth.size() == mask.size();
+}
+
+struct DirectionalAnchorMaps
+{
+    cv::Mat depth;
+    cv::Mat distance;
+};
+
+std::array<DirectionalAnchorMaps, 4> buildDirectionalAnchorMaps(
+    const cv::Mat &depth,
+    const cv::Mat &support,
+    int maximum_distance)
+{
+    std::array<DirectionalAnchorMaps, 4> result;
+    for (DirectionalAnchorMaps &maps : result)
+    {
+        maps.depth = cv::Mat(depth.size(), CV_32FC1, cv::Scalar(0.0f));
+        maps.distance = cv::Mat(depth.size(), CV_32SC1, cv::Scalar(0));
+    }
+    const auto valid_depth = [](float value)
+    {
+        return std::isfinite(value) && value > 0.0f;
+    };
+
+    for (int row = 0; row < depth.rows; ++row)
+    {
+        float anchor_depth = 0.0f;
+        int anchor_column = -1;
+        for (int column = 0; column < depth.cols; ++column)
+        {
+            if (support.at<std::uint8_t>(row, column) == 0)
+            {
+                anchor_depth = 0.0f;
+                anchor_column = -1;
+                continue;
+            }
+            const float value = depth.at<float>(row, column);
+            if (valid_depth(value))
+            {
+                anchor_depth = value;
+                anchor_column = column;
+                continue;
+            }
+            const int distance = column - anchor_column;
+            if (anchor_column >= 0 && distance <= maximum_distance)
+            {
+                result[0].depth.at<float>(row, column) = anchor_depth;
+                result[0].distance.at<int>(row, column) = distance;
+            }
+        }
+        anchor_depth = 0.0f;
+        anchor_column = -1;
+        for (int column = depth.cols - 1; column >= 0; --column)
+        {
+            if (support.at<std::uint8_t>(row, column) == 0)
+            {
+                anchor_depth = 0.0f;
+                anchor_column = -1;
+                continue;
+            }
+            const float value = depth.at<float>(row, column);
+            if (valid_depth(value))
+            {
+                anchor_depth = value;
+                anchor_column = column;
+                continue;
+            }
+            const int distance = anchor_column - column;
+            if (anchor_column >= 0 && distance <= maximum_distance)
+            {
+                result[1].depth.at<float>(row, column) = anchor_depth;
+                result[1].distance.at<int>(row, column) = distance;
+            }
+        }
+    }
+
+    for (int column = 0; column < depth.cols; ++column)
+    {
+        float anchor_depth = 0.0f;
+        int anchor_row = -1;
+        for (int row = 0; row < depth.rows; ++row)
+        {
+            if (support.at<std::uint8_t>(row, column) == 0)
+            {
+                anchor_depth = 0.0f;
+                anchor_row = -1;
+                continue;
+            }
+            const float value = depth.at<float>(row, column);
+            if (valid_depth(value))
+            {
+                anchor_depth = value;
+                anchor_row = row;
+                continue;
+            }
+            const int distance = row - anchor_row;
+            if (anchor_row >= 0 && distance <= maximum_distance)
+            {
+                result[2].depth.at<float>(row, column) = anchor_depth;
+                result[2].distance.at<int>(row, column) = distance;
+            }
+        }
+        anchor_depth = 0.0f;
+        anchor_row = -1;
+        for (int row = depth.rows - 1; row >= 0; --row)
+        {
+            if (support.at<std::uint8_t>(row, column) == 0)
+            {
+                anchor_depth = 0.0f;
+                anchor_row = -1;
+                continue;
+            }
+            const float value = depth.at<float>(row, column);
+            if (valid_depth(value))
+            {
+                anchor_depth = value;
+                anchor_row = row;
+                continue;
+            }
+            const int distance = anchor_row - row;
+            if (anchor_row >= 0 && distance <= maximum_distance)
+            {
+                result[3].depth.at<float>(row, column) = anchor_depth;
+                result[3].distance.at<int>(row, column) = distance;
+            }
+        }
+    }
+    return result;
+}
+
+void applySurfaceAwarePrior(
+    const cv::Mat &depth,
+    const cv::Mat &support,
+    const DepthGapTargetedRecoveryOptions &options,
+    DepthGapTarget *target)
+{
+    if (!target || !options.enableSurfaceAwarePrior ||
+        target->gapMask.empty())
+    {
+        return;
+    }
+    const int maximum_distance = std::max(
+        1, options.maximumPriorDistancePixels);
+    const auto anchors = buildDirectionalAnchorMaps(
+        depth, support, maximum_distance);
+    target->surfacePriorMask = cv::Mat(
+        depth.size(), CV_8UC1, cv::Scalar(0));
+    target->priorSupportCount = cv::Mat(
+        depth.size(), CV_8UC1, cv::Scalar(0));
+    target->priorRelativeResidual = cv::Mat(
+        depth.size(), CV_32FC1, cv::Scalar(0.0f));
+
+    const int minimum_anchor_count = std::clamp(
+        options.minimumSurfacePriorAnchorCount, 3, 4);
+    const float maximum_anchor_spread = std::max(
+        0.0f, options.maximumSurfaceAnchorInverseDepthRelativeSpread);
+    const float maximum_fit_residual = std::max(
+        0.0f, options.maximumSurfacePriorFitRelativeResidual);
+    const float envelope_expansion = std::clamp(
+        options.maximumSurfacePriorEnvelopeExpansion, 0.0f, 0.5f);
+
+    for (int row = 0; row < depth.rows; ++row)
+    {
+        const std::uint8_t *gap_row = target->gapMask.ptr<std::uint8_t>(row);
+        for (int column = 0; column < depth.cols; ++column)
+        {
+            if (gap_row[column] == 0)
+            {
+                continue;
+            }
+            std::array<float, 4> inverse_depths{};
+            std::array<int, 4> distances{};
+            int anchor_count = 0;
+            float inverse_depth_sum = 0.0f;
+            float minimum_inverse_depth = std::numeric_limits<float>::max();
+            float maximum_inverse_depth = 0.0f;
+            for (int direction = 0; direction < 4; ++direction)
+            {
+                const float anchor_depth =
+                    anchors[static_cast<std::size_t>(direction)]
+                        .depth.at<float>(row, column);
+                const int distance =
+                    anchors[static_cast<std::size_t>(direction)]
+                        .distance.at<int>(row, column);
+                if (!std::isfinite(anchor_depth) || anchor_depth <= 0.0f ||
+                    distance <= 0)
+                {
+                    continue;
+                }
+                const float inverse_depth = 1.0f / anchor_depth;
+                inverse_depths[static_cast<std::size_t>(direction)] =
+                    inverse_depth;
+                distances[static_cast<std::size_t>(direction)] = distance;
+                inverse_depth_sum += inverse_depth;
+                minimum_inverse_depth = std::min(
+                    minimum_inverse_depth, inverse_depth);
+                maximum_inverse_depth = std::max(
+                    maximum_inverse_depth, inverse_depth);
+                ++anchor_count;
+            }
+            target->priorSupportCount.at<std::uint8_t>(row, column) =
+                static_cast<std::uint8_t>(anchor_count);
+            const bool has_opposing_pair =
+                (distances[0] > 0 && distances[1] > 0) ||
+                (distances[2] > 0 && distances[3] > 0);
+            if (anchor_count < minimum_anchor_count || !has_opposing_pair)
+            {
+                ++target->surfacePriorInsufficientAnchorPixelCount;
+                continue;
+            }
+
+            const float inverse_depth_mean = inverse_depth_sum /
+                static_cast<float>(anchor_count);
+            float inverse_depth_variance = 0.0f;
+            for (int direction = 0; direction < 4; ++direction)
+            {
+                if (distances[static_cast<std::size_t>(direction)] <= 0)
+                {
+                    continue;
+                }
+                const float difference =
+                    inverse_depths[static_cast<std::size_t>(direction)] -
+                    inverse_depth_mean;
+                inverse_depth_variance += difference * difference;
+            }
+            const float anchor_spread = std::sqrt(
+                inverse_depth_variance / static_cast<float>(anchor_count)) /
+                std::max(inverse_depth_mean, 1.0e-6f);
+            if (!std::isfinite(anchor_spread) ||
+                anchor_spread > maximum_anchor_spread)
+            {
+                ++target->surfacePriorAnchorSpreadRejectedPixelCount;
+                continue;
+            }
+
+            cv::Matx33f normal = cv::Matx33f::zeros();
+            cv::Vec3f right_hand_side(0.0f, 0.0f, 0.0f);
+            float weight_sum = 0.0f;
+            for (int direction = 0; direction < 4; ++direction)
+            {
+                const int distance =
+                    distances[static_cast<std::size_t>(direction)];
+                if (distance <= 0)
+                {
+                    continue;
+                }
+                const float delta_x = direction == 0
+                    ? -static_cast<float>(distance)
+                    : (direction == 1 ? static_cast<float>(distance) : 0.0f);
+                const float delta_y = direction == 2
+                    ? -static_cast<float>(distance)
+                    : (direction == 3 ? static_cast<float>(distance) : 0.0f);
+                const cv::Vec3f basis(delta_x, delta_y, 1.0f);
+                const float weight = 1.0f /
+                    std::sqrt(static_cast<float>(distance));
+                for (int first = 0; first < 3; ++first)
+                {
+                    right_hand_side[first] += weight * basis[first] *
+                        inverse_depths[static_cast<std::size_t>(direction)];
+                    for (int second = 0; second < 3; ++second)
+                    {
+                        normal(first, second) +=
+                            weight * basis[first] * basis[second];
+                    }
+                }
+                weight_sum += weight;
+            }
+            const double determinant = cv::determinant(normal);
+            if (!std::isfinite(determinant) || std::fabs(determinant) < 1.0e-6)
+            {
+                ++target->surfacePriorFitRejectedPixelCount;
+                continue;
+            }
+            const cv::Vec3f coefficients =
+                normal.inv(cv::DECOMP_SVD) * right_hand_side;
+            const float predicted_inverse_depth = coefficients[2];
+            if (!std::isfinite(predicted_inverse_depth) ||
+                predicted_inverse_depth <= 0.0f ||
+                predicted_inverse_depth <
+                    minimum_inverse_depth * (1.0f - envelope_expansion) ||
+                predicted_inverse_depth >
+                    maximum_inverse_depth * (1.0f + envelope_expansion))
+            {
+                ++target->surfacePriorFitRejectedPixelCount;
+                continue;
+            }
+
+            float weighted_squared_residual = 0.0f;
+            for (int direction = 0; direction < 4; ++direction)
+            {
+                const int distance =
+                    distances[static_cast<std::size_t>(direction)];
+                if (distance <= 0)
+                {
+                    continue;
+                }
+                const float delta_x = direction == 0
+                    ? -static_cast<float>(distance)
+                    : (direction == 1 ? static_cast<float>(distance) : 0.0f);
+                const float delta_y = direction == 2
+                    ? -static_cast<float>(distance)
+                    : (direction == 3 ? static_cast<float>(distance) : 0.0f);
+                const float fitted = coefficients[0] * delta_x +
+                    coefficients[1] * delta_y + coefficients[2];
+                const float difference = fitted -
+                    inverse_depths[static_cast<std::size_t>(direction)];
+                const float weight = 1.0f /
+                    std::sqrt(static_cast<float>(distance));
+                weighted_squared_residual += weight * difference * difference;
+            }
+            const float relative_residual = std::sqrt(
+                weighted_squared_residual / std::max(weight_sum, 1.0e-6f)) /
+                predicted_inverse_depth;
+            if (!std::isfinite(relative_residual) ||
+                relative_residual > maximum_fit_residual)
+            {
+                ++target->surfacePriorResidualRejectedPixelCount;
+                continue;
+            }
+
+            const float prior_depth = 1.0f / predicted_inverse_depth;
+            target->hintDepth.at<float>(row, column) = prior_depth;
+            target->hintRadius.at<float>(row, column) = prior_depth *
+                std::max(0.0f, options.missingPriorRadiusRatio);
+            target->surfacePriorMask.at<std::uint8_t>(row, column) = 255;
+            target->priorRelativeResidual.at<float>(row, column) =
+                relative_residual;
+            ++target->surfacePriorPixelCount;
+        }
+    }
 }
 
 } // namespace
@@ -136,6 +467,10 @@ DepthGapTarget buildDepthGapTarget(
         }
     }
 
+    target.nearestHintDepth = target.hintDepth.clone();
+    applySurfaceAwarePrior(
+        depth, normalized_support, options, &target);
+
     cv::Mat prior_covered_gap;
     cv::bitwise_and(target.gapMask, target.hintDepth > 0.0f,
                     prior_covered_gap);
@@ -163,6 +498,7 @@ DepthGapTarget buildDepthGapTarget(
                     normalized_support,
                     target.estimationMask);
     target.hintDepth.setTo(0.0f, target.estimationMask == 0);
+    target.nearestHintDepth.setTo(0.0f, target.estimationMask == 0);
     target.hintRadius.setTo(0.0f, target.estimationMask == 0);
     target.valid = true;
     return target;
@@ -200,6 +536,15 @@ DepthGapTargetedRecoveryStats mergeMultiHypothesisTargetedDepthGapCandidates(
     stats.supportPixelCount = target.supportPixelCount;
     stats.requestedGapPixelCount = target.requestedGapPixelCount;
     stats.priorCoveredGapPixelCount = target.priorCoveredGapPixelCount;
+    stats.surfacePriorPixelCount = target.surfacePriorPixelCount;
+    stats.surfacePriorInsufficientAnchorPixelCount =
+        target.surfacePriorInsufficientAnchorPixelCount;
+    stats.surfacePriorAnchorSpreadRejectedPixelCount =
+        target.surfacePriorAnchorSpreadRejectedPixelCount;
+    stats.surfacePriorFitRejectedPixelCount =
+        target.surfacePriorFitRejectedPixelCount;
+    stats.surfacePriorResidualRejectedPixelCount =
+        target.surfacePriorResidualRejectedPixelCount;
     stats.skippedReason = target.skippedReason;
     stats.hypothesisCount = static_cast<int>(candidateDepths.size());
     if (!target.valid || depth.empty() || depth.type() != CV_32FC1 ||
@@ -256,6 +601,9 @@ DepthGapTargetedRecoveryStats mergeMultiHypothesisTargetedDepthGapCandidates(
         float *depth_row = depth.ptr<float>(row);
         float *confidence_row = confidence.ptr<float>(row);
         const float *prior_row = target.hintDepth.ptr<float>(row);
+        const float *nearest_prior_row = target.nearestHintDepth.empty()
+            ? prior_row
+            : target.nearestHintDepth.ptr<float>(row);
         const std::uint8_t *gap_row = target.gapMask.ptr<std::uint8_t>(row);
         std::uint8_t *recovered_row = recovered.ptr<std::uint8_t>(row);
         for (int column = 0; column < depth.cols; ++column)
@@ -347,7 +695,9 @@ DepthGapTargetedRecoveryStats mergeMultiHypothesisTargetedDepthGapCandidates(
             }
 
             const float candidate_depth = 1.0f / inverse_depth_mean;
-            const float prior = prior_row[column];
+            const float prior = has_consensus
+                ? prior_row[column]
+                : nearest_prior_row[column];
             const float relative_difference = std::fabs(candidate_depth - prior) /
                 std::max(prior, 1.0e-6f);
             const float allowed_relative_difference = has_consensus
@@ -362,6 +712,11 @@ DepthGapTargetedRecoveryStats mergeMultiHypothesisTargetedDepthGapCandidates(
             depth_row[column] = candidate_depth;
             confidence_row[column] = merged_confidence;
             recovered_row[column] = 255;
+            if (has_consensus && !target.surfacePriorMask.empty() &&
+                target.surfacePriorMask.at<std::uint8_t>(row, column) != 0)
+            {
+                ++stats.surfacePriorAcceptedPixelCount;
+            }
             ++stats.recoveredPixelCount;
         }
     }
@@ -405,9 +760,21 @@ QJsonObject depthGapTargetedRecoveryStatsToJson(
          stats.rejectedInsufficientHypothesisPixelCount},
         {QStringLiteral("rejected_hypothesis_spread_pixel_count"),
          stats.rejectedHypothesisSpreadPixelCount},
+        {QStringLiteral("surface_prior_pixel_count"),
+         stats.surfacePriorPixelCount},
+        {QStringLiteral("surface_prior_accepted_pixel_count"),
+         stats.surfacePriorAcceptedPixelCount},
+        {QStringLiteral("surface_prior_insufficient_anchor_pixel_count"),
+         stats.surfacePriorInsufficientAnchorPixelCount},
+        {QStringLiteral("surface_prior_anchor_spread_rejected_pixel_count"),
+         stats.surfacePriorAnchorSpreadRejectedPixelCount},
+        {QStringLiteral("surface_prior_fit_rejected_pixel_count"),
+         stats.surfacePriorFitRejectedPixelCount},
+        {QStringLiteral("surface_prior_residual_rejected_pixel_count"),
+         stats.surfacePriorResidualRejectedPixelCount},
         {QStringLiteral("recovery_ratio"), stats.recoveryRatio},
         {QStringLiteral("skipped_reason"), stats.skippedReason},
-        {QStringLiteral("schema_version"), 2}};
+        {QStringLiteral("schema_version"), 3}};
 }
 
 } // namespace xjw::mvs

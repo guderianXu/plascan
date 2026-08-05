@@ -72,6 +72,9 @@ struct DenseGenerationSettings
     float targetedGapRecoveryPriorRelativeDifference = 0.18f;
     float targetedGapRecoveryConsensusInverseDepthSpread = 0.025f;
     float targetedGapRecoveryConsensusPriorRelativeDifference = 0.35f;
+    bool enableTargetedGapSurfacePrior = false;
+    float targetedGapSurfacePriorMaximumAnchorSpread = 0.12f;
+    float targetedGapSurfacePriorMaximumFitResidual = 0.025f;
     int targetedGapRecoveryMaximumPriorDistancePixels = 128;
     bool enableTwoSourceCrossViewGrowth = false;
     int twoSourceGrowthDistancePixels = 3;

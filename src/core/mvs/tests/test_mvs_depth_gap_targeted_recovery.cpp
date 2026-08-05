@@ -193,4 +193,124 @@ TEST(DepthGapTargetedRecoveryTest, SingleHypothesisKeepsLegacyPriorGate)
     EXPECT_EQ(stats.recoveredPixelCount, 0);
 }
 
+TEST(DepthGapTargetedRecoveryTest, FitsSurfacePriorAcrossPlanarInverseDepthGap)
+{
+    cv::Mat depth(24, 24, CV_32FC1);
+    for (int row = 0; row < depth.rows; ++row)
+    {
+        for (int column = 0; column < depth.cols; ++column)
+        {
+            const float inverse_depth = 0.20f +
+                0.001f * static_cast<float>(column) +
+                0.0015f * static_cast<float>(row);
+            depth.at<float>(row, column) = 1.0f / inverse_depth;
+        }
+    }
+    depth(cv::Rect(8, 8, 8, 8)).setTo(0.0f);
+    const cv::Mat support(24, 24, CV_8UC1, cv::Scalar(255));
+    xjw::mvs::DepthGapTargetedRecoveryOptions options;
+    options.minimumGapPixelCount = 1;
+    options.enableSurfaceAwarePrior = true;
+
+    const auto target = xjw::mvs::buildDepthGapTarget(
+        depth, support, options);
+
+    ASSERT_TRUE(target.valid);
+    EXPECT_GT(target.surfacePriorPixelCount, 0);
+    EXPECT_NE(target.surfacePriorMask.at<std::uint8_t>(12, 12), 0);
+    EXPECT_GE(target.priorSupportCount.at<std::uint8_t>(12, 12), 3);
+    const float expected_depth = 1.0f /
+        (0.20f + 0.001f * 12.0f + 0.0015f * 12.0f);
+    EXPECT_NEAR(target.hintDepth.at<float>(12, 12), expected_depth, 0.01f);
+
+    std::vector<cv::Mat> candidates;
+    candidates.emplace_back(24, 24, CV_32FC1, cv::Scalar(0.0f));
+    candidates.emplace_back(24, 24, CV_32FC1, cv::Scalar(0.0f));
+    std::vector<cv::Mat> confidences;
+    confidences.emplace_back(24, 24, CV_32FC1, cv::Scalar(0.8f));
+    confidences.emplace_back(24, 24, CV_32FC1, cv::Scalar(0.75f));
+    candidates[0].at<float>(12, 12) = expected_depth;
+    candidates[1].at<float>(12, 12) = expected_depth * 1.005f;
+    cv::Mat confidence;
+    const auto stats =
+        xjw::mvs::mergeMultiHypothesisTargetedDepthGapCandidates(
+            depth,
+            confidence,
+            candidates,
+            confidences,
+            target,
+            nullptr,
+            options);
+    EXPECT_EQ(stats.surfacePriorAcceptedPixelCount, 1);
+    EXPECT_EQ(stats.recoveredPixelCount, 1);
+}
+
+TEST(DepthGapTargetedRecoveryTest, RejectsSurfacePriorAcrossDepthLayerStep)
+{
+    cv::Mat depth(24, 24, CV_32FC1, cv::Scalar(4.0f));
+    depth.colRange(12, 24).setTo(8.0f);
+    depth(cv::Rect(8, 8, 8, 8)).setTo(0.0f);
+    const cv::Mat support(24, 24, CV_8UC1, cv::Scalar(255));
+    xjw::mvs::DepthGapTargetedRecoveryOptions options;
+    options.minimumGapPixelCount = 1;
+    options.enableSurfaceAwarePrior = true;
+
+    const auto target = xjw::mvs::buildDepthGapTarget(
+        depth, support, options);
+
+    ASSERT_TRUE(target.valid);
+    EXPECT_EQ(target.surfacePriorMask.at<std::uint8_t>(12, 12), 0);
+    EXPECT_GT(target.surfacePriorAnchorSpreadRejectedPixelCount, 0);
+}
+
+TEST(DepthGapTargetedRecoveryTest, SingleHypothesisFallsBackToNearestAnchorPrior)
+{
+    cv::Mat depth(24, 24, CV_32FC1, cv::Scalar(5.0f));
+    depth(cv::Rect(8, 8, 8, 8)).setTo(0.0f);
+    const cv::Mat support(24, 24, CV_8UC1, cv::Scalar(255));
+    xjw::mvs::DepthGapTargetedRecoveryOptions options;
+    options.minimumGapPixelCount = 1;
+    options.enableSurfaceAwarePrior = true;
+    auto target = xjw::mvs::buildDepthGapTarget(depth, support, options);
+    ASSERT_TRUE(target.valid);
+
+    target.hintDepth.at<float>(12, 12) = 6.0f;
+    target.nearestHintDepth.at<float>(12, 12) = 5.0f;
+    target.surfacePriorMask.at<std::uint8_t>(12, 12) = 255;
+    cv::Mat candidate_depth(24, 24, CV_32FC1, cv::Scalar(0.0f));
+    cv::Mat candidate_confidence(24, 24, CV_32FC1, cv::Scalar(0.8f));
+    candidate_depth.at<float>(12, 12) = 6.0f;
+    cv::Mat confidence;
+
+    const auto stats = xjw::mvs::mergeTargetedDepthGapCandidates(
+        depth,
+        confidence,
+        candidate_depth,
+        candidate_confidence,
+        target,
+        nullptr,
+        options);
+
+    EXPECT_EQ(stats.rejectedPriorPixelCount, 1);
+    EXPECT_EQ(stats.surfacePriorAcceptedPixelCount, 0);
+    EXPECT_EQ(stats.recoveredPixelCount, 0);
+}
+
+TEST(DepthGapTargetedRecoveryTest, DoesNotExtrapolateFromOneSidedAnchors)
+{
+    cv::Mat depth(24, 24, CV_32FC1, cv::Scalar(5.0f));
+    depth(cv::Rect(12, 0, 4, 24)).setTo(0.0f);
+    const cv::Mat support(24, 24, CV_8UC1, cv::Scalar(255));
+    xjw::mvs::DepthGapTargetedRecoveryOptions options;
+    options.minimumGapPixelCount = 1;
+    options.enableSurfaceAwarePrior = true;
+
+    const auto target = xjw::mvs::buildDepthGapTarget(
+        depth, support, options);
+
+    ASSERT_TRUE(target.valid);
+    EXPECT_EQ(target.surfacePriorMask.at<std::uint8_t>(12, 14), 0);
+    EXPECT_GT(target.surfacePriorInsufficientAnchorPixelCount, 0);
+}
+
 } // namespace

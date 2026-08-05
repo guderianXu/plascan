@@ -8562,6 +8562,9 @@ TEST(DenseWorkflowConfigTest, MapsMultiHypothesisTargetedGapRecovery)
     json[QStringLiteral("targetedGapRecoveryHypothesisCount")] = 3;
     json[QStringLiteral("targetedGapRecoveryConsensusInverseDepthSpread")] = 0.02;
     json[QStringLiteral("targetedGapRecoveryConsensusPriorRelativeDifference")] = 0.30;
+    json[QStringLiteral("enableTargetedGapSurfacePrior")] = false;
+    json[QStringLiteral("targetedGapSurfacePriorMaximumAnchorSpread")] = 0.10;
+    json[QStringLiteral("targetedGapSurfacePriorMaximumFitResidual")] = 0.02;
 
     const auto settings = xjw::gui::project::denseGenerationSettingsFromJson(json);
     const auto config = xjw::gui::project::buildDepthGenConfig(settings, 16);
@@ -8570,6 +8573,9 @@ TEST(DenseWorkflowConfigTest, MapsMultiHypothesisTargetedGapRecovery)
     EXPECT_EQ(config.targetedGapRecoveryHypothesisCount, 3);
     EXPECT_FLOAT_EQ(config.targetedGapRecoveryConsensusInverseDepthSpread, 0.02f);
     EXPECT_FLOAT_EQ(config.targetedGapRecoveryConsensusPriorRelativeDifference, 0.30f);
+    EXPECT_FALSE(config.enableTargetedGapSurfacePrior);
+    EXPECT_FLOAT_EQ(config.targetedGapSurfacePriorMaximumAnchorSpread, 0.10f);
+    EXPECT_FLOAT_EQ(config.targetedGapSurfacePriorMaximumFitResidual, 0.02f);
 }
 
 TEST(DenseWorkflowConfigTest, DefaultCudaSchedulingKeepsGuiResponsive)

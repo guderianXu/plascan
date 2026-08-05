@@ -948,6 +948,13 @@ TEST(MvsWorkspaceManifest, DepthConfigHashChangesWhenRelevantSettingsChange)
         changed.targetedGapRecoveryConsensusInverseDepthSpread += 0.001f;
     });
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.enableTargetedGapSurfacePrior =
+            !changed.enableTargetedGapSurfacePrior;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.targetedGapSurfacePriorMaximumFitResidual += 0.001f;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
         changed.targetedGapRecoveryMaximumPriorDistancePixels += 1;
     });
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
