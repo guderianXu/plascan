@@ -17,7 +17,24 @@ namespace xjw::aerial_triangulation
 struct SfmWorkerBudget
 {
     int workerCount = 0; ///< 并行候选 worker 数。
-    int threadsPerWorker = 0; ///< 每个 IncrementalSfm 的 CPU 线程预算。
+    int threadsPerWorker = 0; ///< 每个 worker 的基础线程预算。
+    int workersWithExtraThread = 0; ///< 前若干 worker 各多分配一个余数线程。
+
+    /// 返回指定 worker 的内部 SfM/BA 线程预算。
+    int threadsForWorker(int workerIndex) const
+    {
+        if (workerIndex < 0 || workerIndex >= workerCount)
+        {
+            return 0;
+        }
+        return threadsPerWorker + (workerIndex < workersWithExtraThread ? 1 : 0);
+    }
+
+    /// 返回全部候选 worker 占用的总线程预算。
+    int totalThreads() const
+    {
+        return workerCount * threadsPerWorker + workersWithExtraThread;
+    }
 };
 
 struct SfmBaSchedule
@@ -27,7 +44,7 @@ struct SfmBaSchedule
     int globalInterval = 1; ///< 每注册多少台相机执行一次中间全局 BA。
 };
 
-/// 将 0/负数线程请求解析为本机逻辑核心数，返回值始终至少为 1。
+/// 将 0/负数线程请求解析为本机逻辑核心数，并把显式请求限制在硬件预算内。
 int resolveSfmThreadBudget(int requestedThreads);
 
 /// 一个完整 SfM 候选的排序摘要。
@@ -54,7 +71,7 @@ struct SfmCandidateSummary
     double sequenceAdjacentDistanceMadRatio = 0.0; ///< 相邻距离 MAD/中位数。
 };
 
-/// 在总线程预算内分配最多 4 个候选 worker，并为每个保留足够内部并行度。
+/// 按候选数拆分全部逻辑线程；空闲线程作为余数分配给前几个 worker。
 SfmWorkerBudget allocateWorkers(int candidateCount, int totalThreads);
 
 /// 大规模无先验焦距搜索的注册上限；0 表示数据规模较小，应完整评估候选。

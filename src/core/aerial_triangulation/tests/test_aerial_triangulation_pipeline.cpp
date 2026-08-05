@@ -1,6 +1,7 @@
 #include "model/AerialTriangulationOptions.h"
 #include "model/AerialTriangulationResult.h"
 #include "reconstruction/SfmAttemptRunner.h"
+#include "search/SfmSearchPolicy.h"
 #include "workflow/AerialTriangulationPipeline.h"
 
 #include "Camera.h"
@@ -116,6 +117,7 @@ TEST(AerialTriangulationPipelineTest, ReplaysBestCoarseFocalCandidateWhenBaseCov
     {
         input.images.append(QStringLiteral("image_%1.png").arg(index));
     }
+    input.threads = 1;
     input.adaptiveCameraModelFitting = true;
 
     const xjw::aerial_triangulation::AerialTriangulationReconstructionResult result =
@@ -162,6 +164,7 @@ TEST(AerialTriangulationPipelineTest, SearchesNarrowFieldFocalCandidatesEvenWhen
     {
         input.images.append(QStringLiteral("image_%1.png").arg(index));
     }
+    input.threads = 1;
     input.adaptiveCameraModelFitting = true;
 
     const xjw::aerial_triangulation::AerialTriangulationReconstructionResult result =
@@ -187,7 +190,8 @@ TEST(AerialTriangulationPipelineTest, ParallelizesCoarseFocalSearchWithinThreadB
                !maximumConcurrentAttempts.compare_exchange_weak(observedMaximum, active))
         {
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        // 给所有显式 worker 足够的重叠窗口；真实焦距候选通常运行数秒以上。
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
         activeAttempts.fetch_sub(1);
 
         xjw::aerial_triangulation::SfmAttemptExecutionResult execution;
@@ -213,13 +217,21 @@ TEST(AerialTriangulationPipelineTest, ParallelizesCoarseFocalSearchWithinThreadB
     input.threads = 32;
     input.adaptiveCameraModelFitting = false;
 
+    const int expectedWorkers = std::min(
+        static_cast<int>(xjw::aerial_triangulation::adaptiveFocalScaleCandidates().size()),
+        xjw::aerial_triangulation::resolveSfmThreadBudget(input.threads));
+
     const auto result =
         xjw::aerial_triangulation::AerialTriangulationPipeline(
             attemptRunner, resultWriter).run(input);
 
     ASSERT_TRUE(result.success);
-    EXPECT_GE(maximumConcurrentAttempts.load(), 2);
-    EXPECT_LE(maximumConcurrentAttempts.load(), 4);
+    EXPECT_EQ(maximumConcurrentAttempts.load(), expectedWorkers);
+    EXPECT_EQ(result.sfmDiagnostics.value(
+        QStringLiteral("focal_search_worker_count")).toInt(), expectedWorkers);
+    EXPECT_EQ(result.sfmDiagnostics.value(
+        QStringLiteral("focal_search_thread_budget")).toInt(),
+        xjw::aerial_triangulation::resolveSfmThreadBudget(input.threads));
 }
 
 TEST(AerialTriangulationPipelineTest, LargeDatasetProbesCandidatesAndReplaysOnlyWinnerAtFullScale)
@@ -261,7 +273,7 @@ TEST(AerialTriangulationPipelineTest, LargeDatasetProbesCandidatesAndReplaysOnly
         input.images.append(QStringLiteral("image_%1.png").arg(index));
     }
     // 单 worker 使记录顺序确定；并行预算由单独策略测试覆盖。
-    input.threads = 8;
+    input.threads = 1;
     input.adaptiveCameraModelFitting = false;
 
     const auto result = xjw::aerial_triangulation::AerialTriangulationPipeline(
@@ -319,6 +331,7 @@ TEST(AerialTriangulationPipelineTest, InitializesUnknownFocalEvenWhenAdaptiveMod
     {
         input.images.append(QStringLiteral("image_%1.png").arg(index));
     }
+    input.threads = 1;
     input.adaptiveCameraModelFitting = false;
 
     const xjw::aerial_triangulation::AerialTriangulationReconstructionResult result =
@@ -372,6 +385,7 @@ TEST(AerialTriangulationPipelineTest, RejectsAdaptiveRefinementWhenItLosesRegist
     {
         input.images.append(QStringLiteral("image_%1.png").arg(index));
     }
+    input.threads = 1;
     input.adaptiveCameraModelFitting = true;
 
     const xjw::aerial_triangulation::AerialTriangulationReconstructionResult result =
@@ -431,6 +445,7 @@ TEST(AerialTriangulationPipelineTest, ReportsAcceptedAdaptiveFocalRefinement)
     {
         input.images.append(QStringLiteral("image_%1.png").arg(index));
     }
+    input.threads = 1;
     input.adaptiveCameraModelFitting = true;
 
     const xjw::aerial_triangulation::AerialTriangulationReconstructionResult result =
@@ -503,6 +518,7 @@ TEST(AerialTriangulationPipelineTest, LegacySfmCameraMetadataDoesNotSuppressFoca
     }
     input.projectMeta.insert(QStringLiteral("images"), images);
     input.useProjectCameraIntrinsics = true;
+    input.threads = 1;
 
     const auto result =
         xjw::aerial_triangulation::AerialTriangulationPipeline(attemptRunner, resultWriter).run(input);
