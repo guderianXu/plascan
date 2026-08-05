@@ -2,6 +2,7 @@
 
 #include "DepthProvenance.h"
 
+#include "DepthMeasuredSupportConnectivity.h"
 #include "DepthTsdfNarrowBandActivation.h"
 #include "AdaptiveTsdfOctree.h"
 #include "ConsistentIsoSurfaceExtractor.h"
@@ -1883,6 +1884,8 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::validateAllocation(
     }
     if (options.enableSurfacePatchSupport ||
         options.enableContourBandZeroCrossingSupport ||
+        options.enableMeasuredSupportConnectivity ||
+        options.collectZeroCrossingDiagnostics ||
         options.enableCrossViewAnchoredSurfaceRecovery ||
         options.enableGlobalImplicitRegularization ||
         options.enableAdaptiveTgvRegularization)
@@ -4817,6 +4820,8 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         support.assign(static_cast<std::size_t>(result.layout.sampleCount), 0);
         if (options.enableSurfacePatchSupport ||
             options.enableContourBandZeroCrossingSupport ||
+            options.enableMeasuredSupportConnectivity ||
+            options.collectZeroCrossingDiagnostics ||
             options.enableCrossViewAnchoredSurfaceRecovery ||
             options.enableGlobalImplicitRegularization ||
             options.enableAdaptiveTgvRegularization ||
@@ -5281,6 +5286,8 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                         }
                         if (options.enableSurfacePatchSupport ||
                             options.enableContourBandZeroCrossingSupport ||
+                            options.enableMeasuredSupportConnectivity ||
+                            options.collectZeroCrossingDiagnostics ||
                             options.enableCrossViewAnchoredSurfaceRecovery ||
                             options.enableGlobalImplicitRegularization ||
                             options.enableAdaptiveTgvRegularization ||
@@ -5803,6 +5810,106 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         result.statistics.singleViewSupportedSampleCount += accepted_count;
         result.statistics.geometryVerifiedSingleViewSupportedSampleCount += accepted_count;
         result.statistics.supportedSampleCount += accepted_count;
+    }
+    result.statistics.effectiveMeasuredSupportConnectivity =
+        options.enableMeasuredSupportConnectivity;
+    result.statistics.effectiveMeasuredSupportMinimumObservationWeight =
+        options.measuredSupportMinimumObservationWeight;
+    result.statistics.effectiveMeasuredSupportMinimumSourceCount =
+        options.measuredSupportMinimumSourceCount;
+    result.statistics.effectiveMeasuredSupportMinimumGeometrySupport =
+        options.measuredSupportMinimumGeometrySupport;
+    result.statistics.effectiveMeasuredSupportMaximumInverseDepthSpread =
+        options.measuredSupportMaximumInverseDepthSpread;
+    result.statistics.effectiveMeasuredSupportMinimumSurfaceWeightRatio =
+        options.measuredSupportMinimumSurfaceWeightRatio;
+    result.statistics.effectiveMeasuredSupportMaximumAbsoluteTsdf =
+        options.measuredSupportMaximumAbsoluteTsdf;
+    result.statistics.effectiveMeasuredSupportMinimumSupportedCellCorners =
+        options.measuredSupportMinimumSupportedCellCorners;
+    result.statistics.effectiveMeasuredSupportMinimumComponentCells =
+        options.measuredSupportMinimumComponentCells;
+    result.statistics.effectiveMeasuredSupportMinimumAnchorCells =
+        options.measuredSupportMinimumAnchorCells;
+    result.statistics.effectiveMeasuredSupportMaximumSingleVoteAbsoluteTsdf =
+        options.measuredSupportMaximumSingleVoteAbsoluteTsdf;
+    if (options.enableMeasuredSupportConnectivity && !geometrySourceMask.empty())
+    {
+        DepthMeasuredSupportConnectivityInput connectivity_input;
+        connectivity_input.sampleDimensions = {
+            result.layout.cells[0] + 1,
+            result.layout.cells[1] + 1,
+            result.layout.cells[2] + 1};
+        connectivity_input.tsdf = &tsdf;
+        connectivity_input.weight = &weight;
+        connectivity_input.surfaceObservationWeight = &surfaceObservationWeight;
+        connectivity_input.maximumEvidenceObservationWeight =
+            &maximumEvidenceSupportObservationWeight;
+        connectivity_input.geometrySourceMask = &geometrySourceMask;
+        connectivity_input.minimumInverseDepthSpread = &minimumInverseDepthSpread;
+        connectivity_input.maximumGeometrySupportCount =
+            &maximumGeometrySupportCount;
+        DepthMeasuredSupportConnectivityOptions connectivity_options;
+        connectivity_options.minimumObservationWeight =
+            options.measuredSupportMinimumObservationWeight;
+        connectivity_options.minimumSourceCount =
+            options.measuredSupportMinimumSourceCount;
+        connectivity_options.minimumGeometrySupport =
+            options.measuredSupportMinimumGeometrySupport;
+        connectivity_options.maximumInverseDepthSpread =
+            options.measuredSupportMaximumInverseDepthSpread;
+        connectivity_options.minimumSurfaceWeightRatio =
+            options.measuredSupportMinimumSurfaceWeightRatio;
+        connectivity_options.maximumAbsoluteTsdf =
+            options.measuredSupportMaximumAbsoluteTsdf;
+        connectivity_options.minimumSupportedCellCorners =
+            options.measuredSupportMinimumSupportedCellCorners;
+        connectivity_options.minimumComponentCells =
+            options.measuredSupportMinimumComponentCells;
+        connectivity_options.minimumAnchorCells =
+            options.measuredSupportMinimumAnchorCells;
+        connectivity_options.maximumSingleVoteAbsoluteTsdf =
+            options.measuredSupportMaximumSingleVoteAbsoluteTsdf;
+        const DepthMeasuredSupportConnectivityStatistics connectivity =
+            DepthMeasuredSupportConnectivity::recover(
+                connectivity_input, connectivity_options, &supported);
+        result.statistics.measuredSupportConsideredSampleCount =
+            connectivity.consideredSampleCount;
+        result.statistics.measuredSupportRejectedObservationWeightCount =
+            connectivity.rejectedObservationWeightCount;
+        result.statistics.measuredSupportRejectedSourceCount =
+            connectivity.rejectedSourceCount;
+        result.statistics.measuredSupportRejectedGeometrySupportCount =
+            connectivity.rejectedGeometrySupportCount;
+        result.statistics.measuredSupportRejectedDepthSpreadCount =
+            connectivity.rejectedDepthSpreadCount;
+        result.statistics.measuredSupportRejectedSurfaceWeightCount =
+            connectivity.rejectedSurfaceWeightCount;
+        result.statistics.measuredSupportRejectedAbsoluteTsdfCount =
+            connectivity.rejectedAbsoluteTsdfCount;
+        result.statistics.measuredSupportEligibleSampleCount =
+            connectivity.eligibleSampleCount;
+        result.statistics.measuredSupportRejectedZeroCrossingCount =
+            connectivity.rejectedZeroCrossingCount;
+        result.statistics.measuredSupportRecoveredSampleCount =
+            connectivity.recoveredSampleCount;
+        result.statistics.measuredSupportUnlockedCellCount =
+            connectivity.unlockedCellCount;
+        result.statistics.measuredSupportCandidateCellCount =
+            connectivity.candidateCellCount;
+        result.statistics.measuredSupportAcceptedCellCount =
+            connectivity.acceptedCellCount;
+        result.statistics.measuredSupportComponentCount =
+            connectivity.componentCount;
+        result.statistics.measuredSupportAcceptedComponentCount =
+            connectivity.acceptedComponentCount;
+        result.statistics.measuredSupportRejectedSmallComponentCount =
+            connectivity.rejectedSmallComponentCount;
+        result.statistics.measuredSupportRejectedAnchorComponentCount =
+            connectivity.rejectedAnchorComponentCount;
+        result.statistics.measuredSupportRejectedBoundaryComponentCount =
+            connectivity.rejectedBoundaryComponentCount;
+        result.statistics.supportedSampleCount += connectivity.recoveredSampleCount;
     }
     if ((options.enableSurfacePatchSupport ||
          options.enableContourBandZeroCrossingSupport ||
@@ -8125,8 +8232,9 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         TriMesh candidate = result.mesh;
         ReconstructionConfig fallback_config;
         fallback_config.resolution = options.resolution;
-        fallback_config.simplifyTargetFaces = std::max(
-            options.simplifyTargetFaces, 120000);
+        const int fallback_target_faces =
+            std::max(options.simplifyTargetFaces, 120000);
+        fallback_config.simplifyTargetFaces = fallback_target_faces;
         fallback_config.voxelSimplifyFactor = options.voxelFallbackInitialClusterFactor;
         fallback_config.minComponentFaces = options.minimumComponentFaces;
         const float maximum_voxel_size = std::max({result.layout.voxelSize[0],
@@ -8192,8 +8300,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         }
         detail::compactReferencedVertices(&candidate);
 
-        const int polish_target_faces = std::max(
-            options.simplifyTargetFaces, 120000);
+        const int polish_target_faces = fallback_target_faces;
         if (options.enableVoxelFallbackQemPolish &&
             candidate.faceCount() > polish_target_faces)
         {
@@ -9738,6 +9845,67 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          statistics.effectiveMaximumContourBandAbsoluteTsdf},
         {QStringLiteral("effective_zero_crossing_diagnostics"),
          statistics.effectiveZeroCrossingDiagnostics},
+        {QStringLiteral("effective_measured_support_connectivity"),
+         statistics.effectiveMeasuredSupportConnectivity},
+        {QStringLiteral("effective_measured_support_minimum_observation_weight"),
+         statistics.effectiveMeasuredSupportMinimumObservationWeight},
+        {QStringLiteral("effective_measured_support_minimum_source_count"),
+         statistics.effectiveMeasuredSupportMinimumSourceCount},
+        {QStringLiteral("effective_measured_support_minimum_geometry_support"),
+         statistics.effectiveMeasuredSupportMinimumGeometrySupport},
+        {QStringLiteral("effective_measured_support_maximum_inverse_depth_spread"),
+         statistics.effectiveMeasuredSupportMaximumInverseDepthSpread},
+        {QStringLiteral("effective_measured_support_minimum_surface_weight_ratio"),
+         statistics.effectiveMeasuredSupportMinimumSurfaceWeightRatio},
+        {QStringLiteral("effective_measured_support_maximum_absolute_tsdf"),
+         statistics.effectiveMeasuredSupportMaximumAbsoluteTsdf},
+        {QStringLiteral("effective_measured_support_minimum_supported_cell_corners"),
+         statistics.effectiveMeasuredSupportMinimumSupportedCellCorners},
+        {QStringLiteral("effective_measured_support_minimum_component_cells"),
+         statistics.effectiveMeasuredSupportMinimumComponentCells},
+        {QStringLiteral("effective_measured_support_minimum_anchor_cells"),
+         statistics.effectiveMeasuredSupportMinimumAnchorCells},
+        {QStringLiteral("effective_measured_support_maximum_single_vote_absolute_tsdf"),
+         statistics.effectiveMeasuredSupportMaximumSingleVoteAbsoluteTsdf},
+        {QStringLiteral("measured_support_considered_sample_count"),
+         static_cast<double>(statistics.measuredSupportConsideredSampleCount)},
+        {QStringLiteral("measured_support_rejected_observation_weight_count"),
+         static_cast<double>(
+             statistics.measuredSupportRejectedObservationWeightCount)},
+        {QStringLiteral("measured_support_rejected_source_count"),
+         static_cast<double>(statistics.measuredSupportRejectedSourceCount)},
+        {QStringLiteral("measured_support_rejected_geometry_support_count"),
+         static_cast<double>(
+             statistics.measuredSupportRejectedGeometrySupportCount)},
+        {QStringLiteral("measured_support_rejected_depth_spread_count"),
+         static_cast<double>(statistics.measuredSupportRejectedDepthSpreadCount)},
+        {QStringLiteral("measured_support_rejected_surface_weight_count"),
+         static_cast<double>(
+             statistics.measuredSupportRejectedSurfaceWeightCount)},
+        {QStringLiteral("measured_support_rejected_absolute_tsdf_count"),
+         static_cast<double>(statistics.measuredSupportRejectedAbsoluteTsdfCount)},
+        {QStringLiteral("measured_support_eligible_sample_count"),
+         static_cast<double>(statistics.measuredSupportEligibleSampleCount)},
+        {QStringLiteral("measured_support_rejected_zero_crossing_count"),
+         static_cast<double>(statistics.measuredSupportRejectedZeroCrossingCount)},
+        {QStringLiteral("measured_support_recovered_sample_count"),
+         static_cast<double>(statistics.measuredSupportRecoveredSampleCount)},
+        {QStringLiteral("measured_support_unlocked_cell_count"),
+         static_cast<double>(statistics.measuredSupportUnlockedCellCount)},
+        {QStringLiteral("measured_support_candidate_cell_count"),
+         static_cast<double>(statistics.measuredSupportCandidateCellCount)},
+        {QStringLiteral("measured_support_accepted_cell_count"),
+         static_cast<double>(statistics.measuredSupportAcceptedCellCount)},
+        {QStringLiteral("measured_support_component_count"),
+         statistics.measuredSupportComponentCount},
+        {QStringLiteral("measured_support_accepted_component_count"),
+         statistics.measuredSupportAcceptedComponentCount},
+        {QStringLiteral("measured_support_rejected_small_component_count"),
+         statistics.measuredSupportRejectedSmallComponentCount},
+        {QStringLiteral("measured_support_rejected_anchor_component_count"),
+         statistics.measuredSupportRejectedAnchorComponentCount},
+        {QStringLiteral("measured_support_rejected_boundary_component_count"),
+         statistics.measuredSupportRejectedBoundaryComponentCount},
         {QStringLiteral("effective_consistent_iso_surface_extraction"),
          statistics.effectiveConsistentIsoSurfaceExtraction},
         {QStringLiteral("effective_mc33_iso_surface_extraction"),

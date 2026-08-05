@@ -12,6 +12,7 @@ add_library(meshing STATIC
     TriangleDistanceIndex.cpp
     DepthRayMetric.cpp
     DepthTsdfSurfaceBuilder.cpp
+    DepthMeasuredSupportConnectivity.cpp
     DepthTsdfNarrowBandActivation.cpp
     BinaryGridMinCutSolver.cpp
     BinaryGridMinCutSolverFlow.cpp

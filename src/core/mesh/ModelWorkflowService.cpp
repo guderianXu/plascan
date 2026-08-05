@@ -1186,6 +1186,68 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
         QStringLiteral("tsdfContourBandZeroCrossingSupport")).toBool(false);
     options.collectZeroCrossingDiagnostics = settings.value(
         QStringLiteral("tsdfCollectZeroCrossingDiagnostics")).toBool(false);
+    options.enableMeasuredSupportConnectivity = settings.value(
+        QStringLiteral("tsdfMeasuredSupportConnectivity")).toBool(false);
+    options.measuredSupportMinimumObservationWeight = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfMeasuredSupportMinimumObservationWeight"))
+                               .toDouble(
+                                   options.measuredSupportMinimumObservationWeight)),
+        0.01f,
+        1.0f);
+    options.measuredSupportMinimumSourceCount = qBound(
+        2,
+        settings.value(QStringLiteral("tsdfMeasuredSupportMinimumSourceCount"))
+            .toInt(options.measuredSupportMinimumSourceCount),
+        16);
+    options.measuredSupportMinimumGeometrySupport = qBound(
+        2,
+        settings.value(QStringLiteral("tsdfMeasuredSupportMinimumGeometrySupport"))
+            .toInt(options.measuredSupportMinimumGeometrySupport),
+        16);
+    options.measuredSupportMaximumInverseDepthSpread = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfMeasuredSupportMaximumInverseDepthSpread"))
+                               .toDouble(
+                                   options.measuredSupportMaximumInverseDepthSpread)),
+        0.001f,
+        0.05f);
+    options.measuredSupportMinimumSurfaceWeightRatio = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfMeasuredSupportMinimumSurfaceWeightRatio"))
+                               .toDouble(
+                                   options.measuredSupportMinimumSurfaceWeightRatio)),
+        0.01f,
+        1.0f);
+    options.measuredSupportMaximumAbsoluteTsdf = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfMeasuredSupportMaximumAbsoluteTsdf"))
+                               .toDouble(options.measuredSupportMaximumAbsoluteTsdf)),
+        0.05f,
+        0.95f);
+    options.measuredSupportMinimumSupportedCellCorners = qBound(
+        1,
+        settings.value(QStringLiteral(
+            "tsdfMeasuredSupportMinimumSupportedCellCorners"))
+            .toInt(options.measuredSupportMinimumSupportedCellCorners),
+        7);
+    options.measuredSupportMinimumComponentCells = qBound(
+        1,
+        settings.value(QStringLiteral("tsdfMeasuredSupportMinimumComponentCells"))
+            .toInt(options.measuredSupportMinimumComponentCells),
+        4096);
+    options.measuredSupportMinimumAnchorCells = qBound(
+        1,
+        settings.value(QStringLiteral("tsdfMeasuredSupportMinimumAnchorCells"))
+            .toInt(options.measuredSupportMinimumAnchorCells),
+        4096);
+    options.measuredSupportMaximumSingleVoteAbsoluteTsdf = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfMeasuredSupportMaximumSingleVoteAbsoluteTsdf"))
+                               .toDouble(
+                                   options.measuredSupportMaximumSingleVoteAbsoluteTsdf)),
+        0.0f,
+        1.0f);
     options.enableConsistentIsoSurfaceExtraction = settings.value(
         QStringLiteral("tsdfConsistentIsoSurfaceExtraction")).toBool(false);
     options.enableMc33IsoSurfaceExtraction = settings.value(

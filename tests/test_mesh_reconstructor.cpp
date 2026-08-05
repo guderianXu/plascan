@@ -6652,6 +6652,14 @@ TEST(MeshWorkflowSettingsTest, DepthTsdfObservationEdgeGatesAreConfigurable)
         {QStringLiteral("tsdfCrossViewConsensusContourBandOnly"), true},
         {QStringLiteral("tsdfMaximumCrossViewConsensusInverseDepthSpread"), 0.025},
         {QStringLiteral("tsdfCollectZeroCrossingDiagnostics"), true},
+        {QStringLiteral("tsdfMeasuredSupportConnectivity"), true},
+        {QStringLiteral("tsdfMeasuredSupportMinimumObservationWeight"), 0.66},
+        {QStringLiteral("tsdfMeasuredSupportMinimumSourceCount"), 3},
+        {QStringLiteral("tsdfMeasuredSupportMinimumGeometrySupport"), 4},
+        {QStringLiteral("tsdfMeasuredSupportMaximumInverseDepthSpread"), 0.012},
+        {QStringLiteral("tsdfMeasuredSupportMinimumSurfaceWeightRatio"), 0.2},
+        {QStringLiteral("tsdfMeasuredSupportMaximumAbsoluteTsdf"), 0.35},
+        {QStringLiteral("tsdfMeasuredSupportMinimumSupportedCellCorners"), 3},
         {QStringLiteral("tsdfConsistentIsoSurfaceExtraction"), true},
         {QStringLiteral("tsdfMc33IsoSurfaceExtraction"), true},
         {QStringLiteral(
@@ -6718,6 +6726,14 @@ TEST(MeshWorkflowSettingsTest, DepthTsdfObservationEdgeGatesAreConfigurable)
     EXPECT_TRUE(options.crossViewConsensusContourBandOnly);
     EXPECT_FLOAT_EQ(options.maximumCrossViewConsensusInverseDepthSpread, 0.025f);
     EXPECT_TRUE(options.collectZeroCrossingDiagnostics);
+    EXPECT_TRUE(options.enableMeasuredSupportConnectivity);
+    EXPECT_FLOAT_EQ(options.measuredSupportMinimumObservationWeight, 0.66f);
+    EXPECT_EQ(options.measuredSupportMinimumSourceCount, 3);
+    EXPECT_EQ(options.measuredSupportMinimumGeometrySupport, 4);
+    EXPECT_FLOAT_EQ(options.measuredSupportMaximumInverseDepthSpread, 0.012f);
+    EXPECT_FLOAT_EQ(options.measuredSupportMinimumSurfaceWeightRatio, 0.2f);
+    EXPECT_FLOAT_EQ(options.measuredSupportMaximumAbsoluteTsdf, 0.35f);
+    EXPECT_EQ(options.measuredSupportMinimumSupportedCellCorners, 3);
     EXPECT_TRUE(options.enableConsistentIsoSurfaceExtraction);
     EXPECT_TRUE(options.enableMc33IsoSurfaceExtraction);
     EXPECT_TRUE(options.visibilityOccupancyCellBoundaryExtraction);
@@ -7206,7 +7222,8 @@ TEST(MeshWorkflowSettingsTest,
 {
     const QJsonObject settings{
         {QStringLiteral("interpolation"), QStringLiteral("disabled")},
-        {QStringLiteral("simplifyTargetFaces"), 60000}
+        {QStringLiteral("simplifyTargetFaces"), 60000},
+        {QStringLiteral("tsdfMeasuredSupportConnectivity"), true}
     };
     auto options =
         xjw::mesh::workflow::depthTsdfOptionsFromSettings(settings, 384);
@@ -7228,6 +7245,7 @@ TEST(MeshWorkflowSettingsTest,
     EXPECT_FALSE(options.enableContourBandZeroCrossingSupport);
     EXPECT_FALSE(options.enableSurfacePatchSupport);
     EXPECT_FALSE(options.enableGeometryVerifiedBoundaryRecovery);
+    EXPECT_TRUE(options.enableMeasuredSupportConnectivity);
     EXPECT_FALSE(options.allowInvalidNearestPixelRecovery);
     EXPECT_FALSE(options.adaptiveTgvRecoverUnsupportedSamples);
     EXPECT_FALSE(options.implicitRegularizationRecoverAxialGaps);

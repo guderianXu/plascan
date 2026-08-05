@@ -983,6 +983,18 @@ target_include_directories(test_mesh_reconstructor PRIVATE
 )
 gtest_discover_tests(test_mesh_reconstructor)
 
+add_executable(test_depth_measured_support_connectivity
+    test_depth_measured_support_connectivity.cpp
+)
+target_link_libraries(test_depth_measured_support_connectivity PRIVATE
+    meshing
+    GTest::gtest_main
+)
+target_include_directories(test_depth_measured_support_connectivity PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/mesh
+)
+gtest_discover_tests(test_depth_measured_support_connectivity)
+
 # pointcloud 模块测试迁移到 src/core/pointcloud/tests，
 # 不再在全局 tests 目录内维护该测试源码。
 

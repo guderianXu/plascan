@@ -19,6 +19,7 @@ struct CandidateCell
     int z = 0;
     bool missingNegative = false;
     bool anchor = false;
+    int normalAxis = 2;
     std::uint16_t sourceMask = 0;
     std::array<std::size_t, 8> recoverableCorners{};
     int recoverableCornerCount = 0;
@@ -139,7 +140,8 @@ recoverGeometryVerifiedZeroCrossingCellSheets(
     int minimumSheetCells,
     int minimumSheetAnchorCells,
     float maximumSingleVoteAbsoluteTsdf,
-    std::vector<std::uint8_t> *supported)
+    std::vector<std::uint8_t> *supported,
+    bool requireBoundaryReduction)
 {
     DepthTsdfZeroCrossingRecoveryStatistics statistics;
     const std::size_t sample_count =
@@ -219,6 +221,34 @@ recoverGeometryVerifiedZeroCrossingCellSheets(
                 {
                     continue;
                 }
+
+                std::array<float, 3> low_face_sum{};
+                std::array<float, 3> high_face_sum{};
+                for (int corner = 0; corner < 8; ++corner)
+                {
+                    const float value = tsdf[corners[static_cast<std::size_t>(corner)]];
+                    for (int axis = 0; axis < 3; ++axis)
+                    {
+                        if ((corner & (1 << axis)) == 0)
+                        {
+                            low_face_sum[static_cast<std::size_t>(axis)] += value;
+                        }
+                        else
+                        {
+                            high_face_sum[static_cast<std::size_t>(axis)] += value;
+                        }
+                    }
+                }
+                std::array<float, 3> axis_delta{};
+                for (int axis = 0; axis < 3; ++axis)
+                {
+                    axis_delta[static_cast<std::size_t>(axis)] = std::abs(
+                        high_face_sum[static_cast<std::size_t>(axis)] -
+                        low_face_sum[static_cast<std::size_t>(axis)]);
+                }
+                cell.normalAxis = static_cast<int>(std::distance(
+                    axis_delta.begin(),
+                    std::max_element(axis_delta.begin(), axis_delta.end())));
 
                 cell.missingNegative = supported_positive;
                 for (const std::size_t candidate : corners)
@@ -325,12 +355,60 @@ recoverGeometryVerifiedZeroCrossingCellSheets(
 
     std::vector<int> component_sizes(candidates.size(), 0);
     std::vector<int> component_anchor_counts(candidates.size(), 0);
+    std::vector<int> component_existing_interfaces(candidates.size(), 0);
+    std::vector<int> component_exposed_interfaces(candidates.size(), 0);
+    static constexpr std::array<std::array<int, 3>, 6> neighbor_offsets{{
+        {-1, 0, 0},
+        {1, 0, 0},
+        {0, -1, 0},
+        {0, 1, 0},
+        {0, 0, -1},
+        {0, 0, 1}}};
     for (int index = 0; index < static_cast<int>(candidates.size()); ++index)
     {
         const int root = findRoot(&parents, index);
+        const CandidateCell &cell = candidates[static_cast<std::size_t>(index)];
         ++component_sizes[static_cast<std::size_t>(root)];
         component_anchor_counts[static_cast<std::size_t>(root)] +=
-            candidates[static_cast<std::size_t>(index)].anchor ? 1 : 0;
+            cell.anchor ? 1 : 0;
+        for (const auto &offset : neighbor_offsets)
+        {
+            if (offset[static_cast<std::size_t>(cell.normalAxis)] != 0)
+            {
+                continue;
+            }
+            const int neighbor_x = cell.x + offset[0];
+            const int neighbor_y = cell.y + offset[1];
+            const int neighbor_z = cell.z + offset[2];
+            if (neighbor_x < 0 || neighbor_y < 0 || neighbor_z < 0 ||
+                neighbor_x >= layout.cells[0] ||
+                neighbor_y >= layout.cells[1] ||
+                neighbor_z >= layout.cells[2])
+            {
+                ++component_exposed_interfaces[static_cast<std::size_t>(root)];
+                continue;
+            }
+            const int neighbor_index = candidate_by_cell[cellIndex(
+                layout, neighbor_x, neighbor_y, neighbor_z)];
+            if (neighbor_index >= 0 &&
+                findRoot(&parents, neighbor_index) == root)
+            {
+                continue;
+            }
+            if (isExtractableCell(layout,
+                                  tsdf,
+                                  core_supported,
+                                  neighbor_x,
+                                  neighbor_y,
+                                  neighbor_z))
+            {
+                ++component_existing_interfaces[static_cast<std::size_t>(root)];
+            }
+            else
+            {
+                ++component_exposed_interfaces[static_cast<std::size_t>(root)];
+            }
+        }
     }
 
     std::vector<std::uint8_t> accepted_components(candidates.size(), 0);
@@ -351,6 +429,13 @@ recoverGeometryVerifiedZeroCrossingCellSheets(
             required_anchor_cells)
         {
             ++statistics.rejectedAnchorComponentCount;
+            continue;
+        }
+        if (requireBoundaryReduction &&
+            component_existing_interfaces[static_cast<std::size_t>(root)] <=
+                component_exposed_interfaces[static_cast<std::size_t>(root)])
+        {
+            ++statistics.rejectedBoundaryComponentCount;
             continue;
         }
         accepted_components[static_cast<std::size_t>(root)] = 1;

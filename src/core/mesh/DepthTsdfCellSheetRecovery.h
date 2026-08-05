@@ -19,6 +19,7 @@ recoverGeometryVerifiedZeroCrossingCellSheets(
     int minimumSheetCells,
     int minimumSheetAnchorCells,
     float maximumSingleVoteAbsoluteTsdf,
-    std::vector<std::uint8_t> *supported);
+    std::vector<std::uint8_t> *supported,
+    bool requireBoundaryReduction = false);
 
 } // namespace xjw::mesh
