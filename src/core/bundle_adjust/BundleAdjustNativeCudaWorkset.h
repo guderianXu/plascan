@@ -28,8 +28,8 @@ struct WorksetBuildResult
 /**
  * @brief 过滤无效观测并建立 CUDA 连续工作集。
  *
- * 轨迹至少需要两个有效观测且来自两台不同相机。权重为零的观测仍保留在工作集中，
- * 由线性化阶段自然产生零贡献；非有限坐标、越界相机和非有限观测会被跳过。
+ * 轨迹至少需要两个正权重有效观测且来自两台不同相机。零权重、非有限权重、
+ * 非有限坐标和越界相机观测都会被跳过。
  */
 WorksetBuildResult buildWorkset(const std::vector<Camera> &cameras,
                                 const std::vector<BATrack> &tracks,

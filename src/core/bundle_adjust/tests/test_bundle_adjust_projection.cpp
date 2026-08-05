@@ -60,7 +60,7 @@ TEST(BundleAdjustProjectionTest, PoseDeltaProjectionMatchesCameraUpdate)
     EXPECT_NEAR(actual[1], expected[1], 1e-9);
 }
 
-TEST(BundleAdjustProjectionTest, SharedFocalProjectionMatchesCameraUpdate)
+TEST(BundleAdjustProjectionTest, SharedIntrinsicsProjectionMatchesCameraUpdate)
 {
     xjw::Camera camera;
     camera.setIntrinsics(800.0, 760.0, 400.0, 300.0);
@@ -71,7 +71,8 @@ TEST(BundleAdjustProjectionTest, SharedFocalProjectionMatchesCameraUpdate)
 
     const double delta[6] = {-0.01, 0.02, 0.005, 0.03, 0.02, -0.01};
     const double world[3] = {1.2, 0.4, 18.0};
-    const double sharedFocalLog[1] = {std::log(960.0)};
+    const double sharedIntrinsics[6] = {
+        std::log(960.0), std::log(912.0 / 960.0), 0.0, 0.0, 0.0, 0.0};
 
     xjw::Camera updated = camera;
     updated.applyDeltaPose(delta);
@@ -81,8 +82,8 @@ TEST(BundleAdjustProjectionTest, SharedFocalProjectionMatchesCameraUpdate)
 
     const auto projectionCamera = xjw::ba::makeProjectionCamera(camera);
     double actual[2] = {0.0, 0.0};
-    ASSERT_TRUE(xjw::ba::projectWithPoseDeltaAndSharedFocal(
-        projectionCamera, delta, world, sharedFocalLog, actual));
+    ASSERT_TRUE(xjw::ba::projectWithPoseDeltaAndSharedIntrinsics(
+        projectionCamera, delta, world, sharedIntrinsics, actual));
 
     EXPECT_NEAR(actual[0], expected[0], 1e-9);
     EXPECT_NEAR(actual[1], expected[1], 1e-9);

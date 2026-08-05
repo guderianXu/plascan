@@ -14,6 +14,7 @@ add_library(bundle_adjust STATIC
     BundleAdjust.cpp
     BundleAdjustCeres.cpp
     BundleAdjustCeresPlanning.cpp
+    BundleAdjustProjection.cpp
     BundleAdjustQuality.cpp
     BundleAdjustValidation.cpp
     BundleAdjustNativeCuda.cpp
@@ -24,15 +25,18 @@ add_library(bundle_adjust STATIC
 
 target_include_directories(bundle_adjust PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/src/common
     ${CMAKE_CURRENT_SOURCE_DIR}/../camera
+)
+
+target_include_directories(bundle_adjust PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/common
 )
 
 target_link_libraries(bundle_adjust
     PUBLIC
         camera
-        plascan_common_log
     PRIVATE
+        plascan_common_log
         plamatrix::plamatrix
         $<$<BOOL:${OpenMP_CXX_FOUND}>:OpenMP::OpenMP_CXX>
 )
@@ -46,7 +50,6 @@ else()
 endif()
 
 if(OpenMP_CXX_FOUND)
-    target_compile_definitions(bundle_adjust PRIVATE HAS_OPENMP)
     message(STATUS "bundle_adjust: OpenMP 并行已启用 (${OpenMP_CXX_VERSION})")
 else()
     message(STATUS "bundle_adjust: OpenMP 未找到，将使用单线程模式")
@@ -58,7 +61,7 @@ if(BA_HAS_NATIVE_CUDA)
         CUDA_SEPARABLE_COMPILATION ON
         CUDA_RESOLVE_DEVICE_SYMBOLS ON
     )
-    target_compile_definitions(bundle_adjust PUBLIC PLASCAN_BA_HAS_NATIVE_CUDA=1)
+    target_compile_definitions(bundle_adjust PRIVATE PLASCAN_BA_HAS_NATIVE_CUDA=1)
     target_compile_options(bundle_adjust PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math -O3>
     )

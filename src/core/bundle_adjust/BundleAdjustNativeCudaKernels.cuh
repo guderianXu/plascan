@@ -10,6 +10,8 @@
 
 #include "BundleAdjustNativeCudaTypes.h"
 
+#include <string>
+
 namespace xjw::detail::native_cuda
 {
 
@@ -18,7 +20,6 @@ struct KernelRunSummary
     bool ok = false; ///< CUDA API 和数值迭代均完成，不等价于最终摄影测量质量通过。
     double initialCost = 0.0; ///< 首次线性化的加权平方残差和。
     double finalCost = 0.0; ///< 最后一次接受步后的加权平方残差和。
-    int activeObservations = 0; ///< 至少参与过一次有效线性化的观测数量。
     int acceptedSteps = 0; ///< 使目标下降并被提交的 LM 步数。
     int rejectedSteps = 0; ///< 因目标不降或数值失败而回滚的 LM 步数。
     double uploadSeconds = 0.0; ///< 主机到设备传输时间。
@@ -30,6 +31,9 @@ struct KernelRunSummary
     double releaseSeconds = 0.0; ///< 设备资源释放时间。
     char message[256] = {}; ///< 固定长度错误信息，避免跨 CUDA 边界抛异常。
 };
+
+/// 查询 CUDA runtime、设备数量和指定设备属性，不启动求解 kernel。
+bool queryNativeCudaRuntime(int deviceId, std::string *message);
 
 /**
  * @brief 在指定设备上执行独立点块 LM 优化。

@@ -122,6 +122,74 @@ BundleAdjustValidationResult invalid(BASolveStatus status, std::string message)
 
 } // namespace
 
+double sanitizedObservationWeight(const BAObservation &observation)
+{
+    return std::isfinite(observation.weight) && observation.weight > 0.0
+               ? observation.weight
+               : 0.0;
+}
+
+bool observationIsUsable(const BAObservation &observation,
+                         std::size_t cameraCount)
+{
+    return observation.cameraIndex >= 0 &&
+           static_cast<std::size_t>(observation.cameraIndex) < cameraCount &&
+           observationDataIsUsable(observation);
+}
+
+bool observationDataIsUsable(const BAObservation &observation)
+{
+    return std::isfinite(observation.u) &&
+           std::isfinite(observation.v) &&
+           sanitizedObservationWeight(observation) > 0.0;
+}
+
+BAProblemStats summarizeUsableProblem(const std::vector<Camera> &cameras,
+                                      const std::vector<BATrack> &tracks)
+{
+    BAProblemStats stats;
+    stats.cameraCount = static_cast<int>(cameras.size());
+
+    std::vector<int> cameraGeneration(cameras.size(), -1);
+    int generation = 0;
+    for (const BATrack &track : tracks)
+    {
+        if (!std::isfinite(track.initialPoint[0]) ||
+            !std::isfinite(track.initialPoint[1]) ||
+            !std::isfinite(track.initialPoint[2]))
+        {
+            continue;
+        }
+
+        ++generation;
+        int observationCount = 0;
+        int uniqueCameraCount = 0;
+        for (const BAObservation &observation : track.observations)
+        {
+            if (!observationIsUsable(observation, cameras.size()))
+            {
+                continue;
+            }
+
+            ++observationCount;
+            const std::size_t cameraIndex =
+                static_cast<std::size_t>(observation.cameraIndex);
+            if (cameraGeneration[cameraIndex] != generation)
+            {
+                cameraGeneration[cameraIndex] = generation;
+                ++uniqueCameraCount;
+            }
+        }
+
+        if (observationCount >= 2 && uniqueCameraCount >= 2)
+        {
+            ++stats.trackCount;
+            stats.observationCount += observationCount;
+        }
+    }
+    return stats;
+}
+
 BundleAdjustValidationResult validateAndNormalizeBundleAdjustOptions(
     const std::vector<Camera> &cameras,
     const std::vector<BATrack> &tracks,

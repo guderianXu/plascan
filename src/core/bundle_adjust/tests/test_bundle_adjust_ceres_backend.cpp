@@ -359,6 +359,9 @@ TEST(BundleAdjustCeresBackendTest, CeresSkipsTracksThatCannotConstrainProblem)
     };
     const std::array<double, 3> truth{{0.5, -0.4, 42.0}};
     xjw::BATrack validTrack = makeTrack(cameras, truth, {{1.0, -0.8, 44.0}});
+    validTrack.observations.push_back({0, 512.0, 384.0, 0.0});
+    validTrack.observations.push_back(
+        {1, 512.0, 384.0, std::numeric_limits<double>::quiet_NaN()});
 
     xjw::BATrack nonFiniteInitial = validTrack;
     nonFiniteInitial.initialPoint = {{std::numeric_limits<double>::quiet_NaN(), 0.0, 10.0}};
@@ -383,6 +386,7 @@ TEST(BundleAdjustCeresBackendTest, CeresSkipsTracksThatCannotConstrainProblem)
     EXPECT_FALSE(result.points[1].valid);
     EXPECT_FALSE(result.points[2].valid);
     EXPECT_EQ(result.optimizedTracks, 1);
+    EXPECT_EQ(result.observationCount, 3);
     EXPECT_EQ(result.ceresLinearSolverName, "dense_qr_cpu");
 }
 

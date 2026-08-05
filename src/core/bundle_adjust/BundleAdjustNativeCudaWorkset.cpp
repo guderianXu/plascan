@@ -1,8 +1,8 @@
 #include "BundleAdjustNativeCudaWorkset.h"
 
 #include "BundleAdjustProjection.h"
+#include "BundleAdjustValidation.h"
 
-#include <algorithm>
 #include <cmath>
 #include <set>
 
@@ -19,24 +19,7 @@ bool finitePoint(const std::array<double, 3> &point)
            std::isfinite(point[2]);
 }
 
-bool observationUsable(const BAObservation &observation, int cameraCount)
-{
-    return observation.cameraIndex >= 0 &&
-           observation.cameraIndex < cameraCount &&
-           std::isfinite(observation.u) &&
-           std::isfinite(observation.v) &&
-           std::isfinite(observation.weight) &&
-           observation.weight >= 0.0;
-}
-
-bool cameraFixed(int cameraIndex, const BAOptions &options)
-{
-    return std::find(options.fixedCameraIndices.begin(),
-                     options.fixedCameraIndices.end(),
-                     cameraIndex) != options.fixedCameraIndices.end();
-}
-
-HostCamera makeHostCamera(const Camera &camera, int originalIndex, const BAOptions &options)
+HostCamera makeHostCamera(const Camera &camera)
 {
     const xjw::ba::ProjectionCamera projection = xjw::ba::makeProjectionCamera(camera);
 
@@ -55,8 +38,6 @@ HostCamera makeHostCamera(const Camera &camera, int originalIndex, const BAOptio
     host.uAxisSign = projection.uAxisSign;
     host.vAxisSign = projection.vAxisSign;
     host.depthAxisFlipped = projection.depthAxisFlipped ? 1 : 0;
-    host.fixed = cameraFixed(originalIndex, options) ? 1 : 0;
-    host.originalIndex = originalIndex;
     return host;
 }
 
@@ -158,12 +139,11 @@ WorksetBuildResult buildWorkset(const std::vector<Camera> &cameras,
     result.workset.cameras.reserve(cameras.size());
     for (size_t i = 0; i < cameras.size(); ++i)
     {
-        result.workset.cameras.push_back(makeHostCamera(cameras[i], static_cast<int>(i), options));
+        result.workset.cameras.push_back(makeHostCamera(cameras[i]));
     }
 
-    // 三维点会压缩掉无效 track；originalTrackToPoint 保证下载后仍能构造与输入
-    // tracks 等长、索引稳定的 BAResult::points。
-    result.workset.originalTrackToPoint.assign(tracks.size(), -1);
+    // 三维点会压缩掉无效 track；HostPoint::originalTrackIndex 保证下载后仍能
+    // 构造与输入 tracks 等长、索引稳定的 BAResult::points。
     for (size_t trackIndex = 0; trackIndex < tracks.size(); ++trackIndex)
     {
         const BATrack &track = tracks[trackIndex];
@@ -176,7 +156,7 @@ WorksetBuildResult buildWorkset(const std::vector<Camera> &cameras,
         std::set<int> uniqueCameras;
         for (const BAObservation &observation : track.observations)
         {
-            if (!observationUsable(observation, static_cast<int>(cameras.size())))
+            if (!observationIsUsable(observation, cameras.size()))
             {
                 continue;
             }
@@ -200,8 +180,6 @@ WorksetBuildResult buildWorkset(const std::vector<Camera> &cameras,
         point.observationBegin = static_cast<int>(result.workset.observations.size());
         point.observationCount = static_cast<int>(observations.size());
         result.workset.points.push_back(point);
-        result.workset.originalTrackToPoint[trackIndex] = pointIndex;
-
         for (HostObservation observation : observations)
         {
             observation.pointIndex = pointIndex;

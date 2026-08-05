@@ -20,7 +20,6 @@
 #include "log/Logger.h"
 
 #include <plamatrix/ops/small_matrix.h>
-#include <plamatrix/ops/statistics.h>
 #include <plamatrix/ops/vector.h>
 
 #ifdef _OPENMP
@@ -30,7 +29,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <cstdio>
 #include <limits>
 
 namespace xjw
@@ -81,15 +79,6 @@ inline double huberLoss(double residualNorm, double delta)
         return 0.5 * residualNorm * residualNorm;
     }
     return delta * (residualNorm - 0.5 * delta);
-}
-
-inline double observationWeight(const BAObservation &observation)
-{
-    if (!std::isfinite(observation.weight))
-    {
-        return 1.0;
-    }
-    return std::max(0.0, observation.weight);
 }
 
 /**
@@ -265,12 +254,12 @@ double computeTrackRms(const std::vector<Camera> &cams, const BATrack &track, co
     double sum2 = 0.0;
     int cnt = 0;
     for (const BAObservation &obs : track.observations) {
-        if (obs.cameraIndex < 0 || obs.cameraIndex >= static_cast<int>(cams.size())) continue;
+        if (!detail::observationIsUsable(obs, cams.size())) continue;
         double uv[2] = {0.0, 0.0};
         if (!projectPoint(cams[obs.cameraIndex], X, uv)) continue;
         const double du = uv[0] - obs.u;
         const double dv = uv[1] - obs.v;
-        const double w = observationWeight(obs);
+        const double w = detail::sanitizedObservationWeight(obs);
         sum2 += w * (du * du + dv * dv);
         cnt += 2;
     }
@@ -304,45 +293,12 @@ bool scaleBarConstraintIsUsable(const BAScaleBarConstraint &constraint, std::siz
         && constraint.measuredDistanceMeters > 0.0;
 }
 
-bool pointFromRefinedOrInitial(const std::vector<BATrack> &tracks,
-                               const std::vector<BARefinedPoint> *points,
-                               int trackIndex,
-                               std::array<double, 3> *point)
-{
-    if (!point || trackIndex < 0 || static_cast<std::size_t>(trackIndex) >= tracks.size())
-    {
-        return false;
-    }
-
-    if (points)
-    {
-        if (static_cast<std::size_t>(trackIndex) >= points->size()
-            || !(*points)[static_cast<std::size_t>(trackIndex)].valid)
-        {
-            return false;
-        }
-        *point = (*points)[static_cast<std::size_t>(trackIndex)].point;
-    }
-    else
-    {
-        *point = tracks[static_cast<std::size_t>(trackIndex)].initialPoint;
-    }
-    return plamatrix::isFinite(plamatrix::Vec3<double>(*point));
-}
-
 double pointDistance(const std::array<double, 3> &a, const std::array<double, 3> &b)
 {
     const double dx = a[0] - b[0];
     const double dy = a[1] - b[1];
     const double dz = a[2] - b[2];
     return std::sqrt(dx * dx + dy * dy + dz * dz);
-}
-
-double scaleBarResidual(const BAScaleBarConstraint &constraint,
-                        const std::array<double, 3> &a,
-                        const std::array<double, 3> &b)
-{
-    return pointDistance(a, b) - constraint.measuredDistanceMeters;
 }
 
 bool scaleBarOtherEndpoint(const BAScaleBarConstraint &constraint,
@@ -373,90 +329,6 @@ bool scaleBarOtherEndpoint(const BAScaleBarConstraint &constraint,
     return true;
 }
 
-double computeTrackLaserRms(const BATrack &track, const std::array<double, 3> &X)
-{
-    if (track.laserPlaneConstraints.empty())
-    {
-        return 0.0;
-    }
-
-    double sum2 = 0.0;
-    int count = 0;
-    for (const BALaserPlaneConstraint &constraint : track.laserPlaneConstraints)
-    {
-        const double distance = laserSignedDistance(constraint, X);
-        if (!std::isfinite(distance))
-        {
-            continue;
-        }
-        sum2 += distance * distance;
-        ++count;
-    }
-    return count > 0 ? std::sqrt(sum2 / static_cast<double>(count)) : 0.0;
-}
-
-double computeTrackControlPointRms(const BATrack &track, const std::array<double, 3> &X)
-{
-    if (track.controlPointConstraints.empty())
-    {
-        return 0.0;
-    }
-
-    double sum2 = 0.0;
-    int count = 0;
-    for (const BAControlPointConstraint &constraint : track.controlPointConstraints)
-    {
-        const double distance = controlPointDistance(constraint, X);
-        if (!std::isfinite(distance))
-        {
-            continue;
-        }
-        sum2 += distance * distance;
-        ++count;
-    }
-    return count > 0 ? std::sqrt(sum2 / static_cast<double>(count)) : 0.0;
-}
-
-double computeTrackScaleBarRms(const BAOptions &opt,
-                               int trackIndex,
-                               const std::array<double, 3> &X,
-                               const std::vector<BARefinedPoint> *pointSnapshot)
-{
-    if (!pointSnapshot || opt.scaleBarConstraints.empty())
-    {
-        return 0.0;
-    }
-
-    double sum2 = 0.0;
-    int count = 0;
-    for (const BAScaleBarConstraint &constraint : opt.scaleBarConstraints)
-    {
-        if (constraint.trackIndexA != trackIndex && constraint.trackIndexB != trackIndex)
-        {
-            continue;
-        }
-        if (!scaleBarConstraintIsUsable(constraint, pointSnapshot->size()))
-        {
-            continue;
-        }
-
-        std::array<double, 3> other{};
-        if (!scaleBarOtherEndpoint(constraint, trackIndex, *pointSnapshot, &other))
-        {
-            continue;
-        }
-
-        const double residual = pointDistance(X, other) - constraint.measuredDistanceMeters;
-        if (!std::isfinite(residual))
-        {
-            continue;
-        }
-        sum2 += residual * residual;
-        ++count;
-    }
-    return count > 0 ? std::sqrt(sum2 / static_cast<double>(count)) : 0.0;
-}
-
 double computeTrackAcceptanceCost(const std::vector<Camera> &cams,
                                   const BATrack &track,
                                   const std::array<double, 3> &X,
@@ -468,8 +340,7 @@ double computeTrackAcceptanceCost(const std::vector<Camera> &cams,
     int residualCount = 0;
     for (const BAObservation &observation : track.observations)
     {
-        if (observation.cameraIndex < 0 ||
-            observation.cameraIndex >= static_cast<int>(cams.size()))
+        if (!detail::observationIsUsable(observation, cams.size()))
         {
             continue;
         }
@@ -482,7 +353,8 @@ double computeTrackAcceptanceCost(const std::vector<Camera> &cams,
         const double dv = pixel[1] - observation.v;
         const double residualNorm = std::sqrt(du * du + dv * dv);
         const double contribution =
-            observationWeight(observation) * huberLoss(residualNorm, opt.huberDelta);
+            detail::sanitizedObservationWeight(observation) *
+            huberLoss(residualNorm, opt.huberDelta);
         if (!std::isfinite(contribution))
         {
             continue;
@@ -563,163 +435,6 @@ double computeTrackAcceptanceCost(const std::vector<Camera> &cams,
     return residualCount > 0 ? cost : std::numeric_limits<double>::infinity();
 }
 
-struct LaserDistanceStats
-{
-    int count = 0;
-    double rms = 0.0;
-    double median = 0.0;
-};
-
-struct ControlPointDistanceStats
-{
-    int count = 0;
-    double rms = 0.0;
-};
-
-struct ScaleBarDistanceStats
-{
-    int count = 0;
-    double rms = 0.0;
-};
-
-std::array<double, 3> pointForConstraintStats(
-    const std::vector<BATrack> &tracks,
-    const std::vector<BARefinedPoint> *points,
-    std::size_t trackIndex)
-{
-    if (points &&
-        trackIndex < points->size() &&
-        (*points)[trackIndex].valid &&
-        plamatrix::isFinite(
-            plamatrix::Vec3<double>((*points)[trackIndex].point)))
-    {
-        return (*points)[trackIndex].point;
-    }
-
-    // 被正深度或重投影门控拒绝的点不能从约束统计中消失，否则会把
-    // “优化后没有可评估样本”误报成 0 RMS。此时保守沿用该 track 初值。
-    return tracks[trackIndex].initialPoint;
-}
-
-LaserDistanceStats computeLaserStatsForPoints(const std::vector<BATrack> &tracks,
-                                              const std::vector<BARefinedPoint> *points)
-{
-    LaserDistanceStats stats;
-    std::vector<double> distances;
-
-    for (std::size_t trackIndex = 0; trackIndex < tracks.size(); ++trackIndex)
-    {
-        const BATrack &track = tracks[trackIndex];
-        const std::array<double, 3> X =
-            pointForConstraintStats(tracks, points, trackIndex);
-
-        for (const BALaserPlaneConstraint &constraint : track.laserPlaneConstraints)
-        {
-            const double distance = std::abs(laserSignedDistance(constraint, X));
-            if (!std::isfinite(distance))
-            {
-                continue;
-            }
-            distances.push_back(distance);
-        }
-    }
-
-    stats.count = static_cast<int>(distances.size());
-    if (distances.empty())
-    {
-        return stats;
-    }
-
-    double sum2 = 0.0;
-    for (double distance : distances)
-    {
-        sum2 += distance * distance;
-    }
-    stats.rms = std::sqrt(sum2 / static_cast<double>(distances.size()));
-
-    stats.median =
-        plamatrix::finiteMedian(std::move(distances)).value_or(0.0);
-    return stats;
-}
-
-ControlPointDistanceStats computeControlPointStatsForPoints(const std::vector<BATrack> &tracks,
-                                                            const std::vector<BARefinedPoint> *points)
-{
-    ControlPointDistanceStats stats;
-    double sum2 = 0.0;
-
-    for (std::size_t trackIndex = 0; trackIndex < tracks.size(); ++trackIndex)
-    {
-        const BATrack &track = tracks[trackIndex];
-        const std::array<double, 3> X =
-            pointForConstraintStats(tracks, points, trackIndex);
-
-        for (const BAControlPointConstraint &constraint : track.controlPointConstraints)
-        {
-            const double distance = controlPointDistance(constraint, X);
-            if (!std::isfinite(distance))
-            {
-                continue;
-            }
-            sum2 += distance * distance;
-            ++stats.count;
-        }
-    }
-
-    if (stats.count > 0)
-    {
-        stats.rms = std::sqrt(sum2 / static_cast<double>(stats.count));
-    }
-    return stats;
-}
-
-ScaleBarDistanceStats computeScaleBarStatsForPoints(const std::vector<BATrack> &tracks,
-                                                    const std::vector<BARefinedPoint> *points,
-                                                    const std::vector<BAScaleBarConstraint> &constraints)
-{
-    ScaleBarDistanceStats stats;
-    double sum2 = 0.0;
-
-    for (const BAScaleBarConstraint &constraint : constraints)
-    {
-        if (!scaleBarConstraintIsUsable(constraint, tracks.size()))
-        {
-            continue;
-        }
-
-        const std::array<double, 3> a =
-            pointForConstraintStats(
-                tracks,
-                points,
-                static_cast<std::size_t>(constraint.trackIndexA));
-        const std::array<double, 3> b =
-            pointForConstraintStats(
-                tracks,
-                points,
-                static_cast<std::size_t>(constraint.trackIndexB));
-        if (!plamatrix::isFinite(plamatrix::Vec3<double>(a)) ||
-            !plamatrix::isFinite(plamatrix::Vec3<double>(b)))
-        {
-            continue;
-        }
-
-        const double residual = scaleBarResidual(constraint, a, b);
-        if (!std::isfinite(residual))
-        {
-            continue;
-        }
-
-        sum2 += residual * residual;
-        ++stats.count;
-    }
-
-    if (stats.count > 0)
-    {
-        stats.rms = std::sqrt(sum2 / static_cast<double>(stats.count));
-    }
-    return stats;
-}
-
 /**
  * @brief 对单条轨迹优化三维点坐标（固定所有相机）。
  *
@@ -755,7 +470,7 @@ BARefinedPoint optimizeOnePoint(const std::vector<Camera> &cams,
 
         for (const BAObservation &obs : track.observations)
         {
-            if (obs.cameraIndex < 0 || obs.cameraIndex >= static_cast<int>(cams.size()))
+            if (!detail::observationIsUsable(obs, cams.size()))
             {
                 continue;
             }
@@ -768,7 +483,7 @@ BARefinedPoint optimizeOnePoint(const std::vector<Camera> &cams,
             }
 
             const double r[2] = {uv[0] - obs.u, uv[1] - obs.v};
-            const double w = observationWeight(obs)
+            const double w = detail::sanitizedObservationWeight(obs)
                 * huberWeight(std::sqrt(r[0] * r[0] + r[1] * r[1]), opt.huberDelta);
             if (!(w > 0.0))
             {
@@ -1001,11 +716,13 @@ static double computeCameraCost(const Camera &cam, int cameraIndex,
         if (!points[ti].valid) continue;
         for (const BAObservation &obs : tracks[ti].observations) {
             if (obs.cameraIndex != cameraIndex) continue;
+            if (!detail::observationDataIsUsable(obs)) continue;
             double uv[2];
             if (!projectPoint(cam, points[ti].point, uv)) continue;
             double du = uv[0] - obs.u, dv = uv[1] - obs.v;
             const double residualNorm = std::sqrt(du * du + dv * dv);
-            cost += observationWeight(obs) * huberLoss(residualNorm, opt.huberDelta);
+            cost += detail::sanitizedObservationWeight(obs) *
+                    huberLoss(residualNorm, opt.huberDelta);
             ++residualCount;
         }
     }
@@ -1045,12 +762,13 @@ bool optimizeOneCamera(Camera *cam,
             const BATrack &track = tracks[ti];
             for (const BAObservation &obs : track.observations) {
                 if (obs.cameraIndex != cameraIndex) continue;
+                if (!detail::observationDataIsUsable(obs)) continue;
 
                 double uv[2] = {0.0, 0.0};
                 if (!projectPoint(*cam, pt.point, uv)) continue;
 
                 const double r[2] = {uv[0] - obs.u, uv[1] - obs.v};
-                const double w = observationWeight(obs)
+                const double w = detail::sanitizedObservationWeight(obs)
                     * huberWeight(std::sqrt(r[0] * r[0] + r[1] * r[1]), opt.huberDelta);
                 if (!(w > 0.0))
                 {
@@ -1234,8 +952,7 @@ double computeSharedFocalAcceptanceCost(const std::vector<Camera> &cameras,
         const BATrack &track = tracks[ti];
         for (const BAObservation &observation : track.observations)
         {
-            if (observation.cameraIndex < 0 ||
-                observation.cameraIndex >= static_cast<int>(cameras.size()))
+            if (!detail::observationIsUsable(observation, cameras.size()))
             {
                 continue;
             }
@@ -1250,7 +967,7 @@ double computeSharedFocalAcceptanceCost(const std::vector<Camera> &cameras,
             const double du = uv[0] - observation.u;
             const double dv = uv[1] - observation.v;
             const double residualNorm = std::sqrt(du * du + dv * dv);
-            cost += observationWeight(observation) *
+            cost += detail::sanitizedObservationWeight(observation) *
                     huberLoss(residualNorm, huberDelta);
             ++count;
         }
@@ -1333,8 +1050,8 @@ SharedFocalOptimizationResult optimizeSharedFocalScale(std::vector<Camera> *came
             const BATrack &track = tracks[ti];
             for (const BAObservation &observation : track.observations)
             {
-                if (observation.cameraIndex < 0 ||
-                    observation.cameraIndex >= static_cast<int>(cameras->size()))
+                if (!detail::observationIsUsable(
+                        observation, cameras->size()))
                 {
                     continue;
                 }
@@ -1349,7 +1066,8 @@ SharedFocalOptimizationResult optimizeSharedFocalScale(std::vector<Camera> *came
                 const double residualU = uv[0] - observation.u;
                 const double residualV = uv[1] - observation.v;
                 const double residualNorm = std::sqrt(residualU * residualU + residualV * residualV);
-                const double weight = observationWeight(observation) *
+                const double weight =
+                    detail::sanitizedObservationWeight(observation) *
                     huberWeight(residualNorm, opt.huberDelta);
                 if (!(weight > 0.0))
                 {
@@ -1432,16 +1150,6 @@ static bool isCameraFixed(int ci, const BAOptions &options)
 static bool isCancelled(const BAOptions &options)
 {
     return options.cancelFlag && options.cancelFlag->load(std::memory_order_relaxed);
-}
-
-int countObservations(const std::vector<BATrack> &tracks)
-{
-    int count = 0;
-    for (const BATrack &track : tracks)
-    {
-        count += static_cast<int>(track.observations.size());
-    }
-    return count;
 }
 
 int calibrationGroupCount(const BAOptions &options, std::size_t cameraCount)
@@ -1601,7 +1309,8 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
     const auto totalStart = std::chrono::steady_clock::now();
     BAResult result;
     result.totalTracks = static_cast<int>(tracks.size());
-    result.observationCount = countObservations(tracks);
+    result.observationCount =
+        detail::summarizeUsableProblem(cameras, tracks).observationCount;
     result.ceresLinearSolverName = "none";
     // 将相机列表拷贝到结果中，在优化过程中来回修改
     result.refinedCameras = cameras;
@@ -1654,27 +1363,6 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
         result.solveStatus = BASolveStatus::Cancelled;
         result.backendMessage = "legacy_cpu BA 在启动前被取消";
         return finishResult();
-    }
-
-    if (options.enableLaserPlaneConstraints)
-    {
-        const LaserDistanceStats beforeLaser = computeLaserStatsForPoints(tracks, nullptr);
-        result.laserConstraintCount = beforeLaser.count;
-        result.laserRmsBeforeMeters = beforeLaser.rms;
-        result.laserMedianBeforeMeters = beforeLaser.median;
-    }
-    if (options.enableControlPointConstraints)
-    {
-        const ControlPointDistanceStats beforeControl = computeControlPointStatsForPoints(tracks, nullptr);
-        result.controlPointConstraintCount = beforeControl.count;
-        result.controlPointRmsBeforeMeters = beforeControl.rms;
-    }
-    if (options.enableScaleBarConstraints)
-    {
-        const ScaleBarDistanceStats beforeScaleBars =
-            computeScaleBarStatsForPoints(tracks, nullptr, options.scaleBarConstraints);
-        result.scaleBarConstraintCount = beforeScaleBars.count;
-        result.scaleBarRmsBeforeMeters = beforeScaleBars.rms;
     }
 
     // 配置 OpenMP 线程数
@@ -1854,31 +1542,6 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
         }
     }
 
-    // 汇总全局统计数据：均值 RMS、有效轨迹数
-    double sumBefore = 0.0;
-    double sumAfter  = 0.0;
-    int cntBefore = 0;
-    int cntAfter  = 0;
-
-    for (size_t i = 0; i < tracks.size(); ++i) {
-        BARefinedPoint &p = result.points[i];
-        if (std::isfinite(p.rmsBefore)) {
-            sumBefore += p.rmsBefore;
-            ++cntBefore;
-        }
-
-        // 用最终相机位姿重新计算 rmsAfter，最终正深度和离群点判定由统一终结器完成。
-        p.rmsAfter = computeTrackRms(result.refinedCameras, tracks[i], p.point);
-        p.valid = plamatrix::isFinite(plamatrix::Vec3<double>(p.point)) && std::isfinite(p.rmsAfter);
-        if (p.valid) {
-            ++result.optimizedTracks;
-            sumAfter += p.rmsAfter;
-            ++cntAfter;
-        }
-    }
-
-    result.meanRmsBefore = (cntBefore > 0) ? (sumBefore / cntBefore) : 0.0;
-    result.meanRmsAfter  = (cntAfter  > 0) ? (sumAfter  / cntAfter)  : 0.0;
     result.refinedSharedFocalScale = averageSharedFocalScale(result.refinedCameras, cameras);
     if (options.refineSharedFocalLength &&
         std::abs(result.refinedSharedFocalScale - 1.0) > 1e-6 &&
@@ -1892,26 +1555,6 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
         result.selfCalibrationStagesRun = 1;
     }
 
-    if (options.enableLaserPlaneConstraints)
-    {
-        const LaserDistanceStats afterLaser = computeLaserStatsForPoints(tracks, &result.points);
-        result.laserConstraintCount = afterLaser.count;
-        result.laserRmsAfterMeters = afterLaser.rms;
-        result.laserMedianAfterMeters = afterLaser.median;
-    }
-    if (options.enableControlPointConstraints)
-    {
-        const ControlPointDistanceStats afterControl = computeControlPointStatsForPoints(tracks, &result.points);
-        result.controlPointConstraintCount = afterControl.count;
-        result.controlPointRmsAfterMeters = afterControl.rms;
-    }
-    if (options.enableScaleBarConstraints)
-    {
-        const ScaleBarDistanceStats afterScaleBars =
-            computeScaleBarStatsForPoints(tracks, &result.points, options.scaleBarConstraints);
-        result.scaleBarConstraintCount = afterScaleBars.count;
-        result.scaleBarRmsAfterMeters = afterScaleBars.rms;
-    }
     return finishResult();
 }
 
@@ -1999,11 +1642,7 @@ bool BundleAdjust::isBackendAvailable(BABackend backend)
 BAProblemStats BundleAdjust::summarizeProblem(const std::vector<Camera> &cameras,
                                               const std::vector<BATrack> &tracks)
 {
-    BAProblemStats stats;
-    stats.cameraCount = static_cast<int>(cameras.size());
-    stats.trackCount = static_cast<int>(tracks.size());
-    stats.observationCount = countObservations(tracks);
-    return stats;
+    return detail::summarizeUsableProblem(cameras, tracks);
 }
 
 BABackendDecision BundleAdjust::decideBackendForProblem(const BAProblemStats &stats,
@@ -2085,7 +1724,7 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
         result.solutionUsable = false;
         result.backendMessage = validation.message;
         result.totalTracks = static_cast<int>(tracks.size());
-        result.observationCount = countObservations(tracks);
+        result.observationCount = summarizeProblem(cameras, tracks).observationCount;
         result.refinedCameras = cameras;
         result.points.resize(tracks.size());
         updateDerivedResultStats(result);
@@ -2106,7 +1745,7 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
                                     "；legacy_cpu 不支持相机中心平面约束，未执行无约束回退";
             result.backendSelectionReason = fallbackMessage;
             result.totalTracks = static_cast<int>(tracks.size());
-            result.observationCount = countObservations(tracks);
+            result.observationCount = summarizeProblem(cameras, tracks).observationCount;
             result.refinedCameras = cameras;
             result.points.resize(tracks.size());
             updateDerivedResultStats(result);
@@ -2259,7 +1898,7 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
             result.backendMessage =
                 message + "当前无法回退到 ceres_cpu";
             result.totalTracks = static_cast<int>(tracks.size());
-            result.observationCount = countObservations(tracks);
+            result.observationCount = summarizeProblem(cameras, tracks).observationCount;
             result.refinedCameras = cameras;
             result.points.resize(tracks.size());
             return result;

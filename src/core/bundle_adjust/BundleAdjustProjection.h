@@ -199,6 +199,47 @@ void poseDeltaRotation(const T *cameraDelta, T *deltaRotation)
     deltaRotation[8] = T(1.0) - cosc * (wx * wx + wy * wy);
 }
 
+/// 应用局部位姿增量，并把世界点变换到更新后的相机坐标系。
+template <typename T>
+void transformWorldPointWithPoseDelta(const ProjectionCamera &camera,
+                                      const T *cameraDelta,
+                                      const T *world,
+                                      T *cameraPoint)
+{
+    T deltaRotation[9];
+    poseDeltaRotation(cameraDelta, deltaRotation);
+
+    T updatedRotation[9];
+    for (int row = 0; row < 3; ++row)
+    {
+        for (int column = 0; column < 3; ++column)
+        {
+            T value = T(0.0);
+            for (int inner = 0; inner < 3; ++inner)
+            {
+                value += deltaRotation[row * 3 + inner] *
+                         T(camera.cameraToWorldRotation[inner * 3 + column]);
+            }
+            updatedRotation[row * 3 + column] = value;
+        }
+    }
+
+    const T delta[3] = {
+        world[0] - (T(camera.cameraCenter[0]) + cameraDelta[3]),
+        world[1] - (T(camera.cameraCenter[1]) + cameraDelta[4]),
+        world[2] - (T(camera.cameraCenter[2]) + cameraDelta[5]),
+    };
+    cameraPoint[0] = updatedRotation[0] * delta[0] +
+                     updatedRotation[3] * delta[1] +
+                     updatedRotation[6] * delta[2];
+    cameraPoint[1] = updatedRotation[1] * delta[0] +
+                     updatedRotation[4] * delta[1] +
+                     updatedRotation[7] * delta[2];
+    cameraPoint[2] = updatedRotation[2] * delta[0] +
+                     updatedRotation[5] * delta[1] +
+                     updatedRotation[8] * delta[2];
+}
+
 /**
  * @brief 使用局部位姿增量和显式焦距投影世界点。
  *
@@ -215,40 +256,13 @@ bool projectWithPoseDeltaAndFocal(const ProjectionCamera &camera,
                                   const T &principalY,
                                   T *pixel)
 {
-    T deltaRotation[9];
-    poseDeltaRotation(cameraDelta, deltaRotation);
-
-    T updatedRotation[9];
-    for (int row = 0; row < 3; ++row)
-    {
-        for (int column = 0; column < 3; ++column)
-        {
-            T value = T(0.0);
-            for (int inner = 0; inner < 3; ++inner)
-            {
-                value += deltaRotation[row * 3 + inner] *
-                    T(camera.cameraToWorldRotation[inner * 3 + column]);
-            }
-            updatedRotation[row * 3 + column] = value;
-        }
-    }
-
-    const T dx = world[0] - (T(camera.cameraCenter[0]) + cameraDelta[3]);
-    const T dy = world[1] - (T(camera.cameraCenter[1]) + cameraDelta[4]);
-    const T dz = world[2] - (T(camera.cameraCenter[2]) + cameraDelta[5]);
-    const T xCam = updatedRotation[0] * dx +
-                   updatedRotation[3] * dy +
-                   updatedRotation[6] * dz;
-    const T yCam = updatedRotation[1] * dx +
-                   updatedRotation[4] * dy +
-                   updatedRotation[7] * dz;
-    const T zCam = updatedRotation[2] * dx +
-                   updatedRotation[5] * dy +
-                   updatedRotation[8] * dz;
+    T cameraPoint[3];
+    transformWorldPointWithPoseDelta(
+        camera, cameraDelta, world, cameraPoint);
     return projectCameraPoint(camera,
-                              xCam,
-                              yCam,
-                              zCam,
+                              cameraPoint[0],
+                              cameraPoint[1],
+                              cameraPoint[2],
                               focalX,
                               focalY,
                               principalX,
@@ -274,34 +288,13 @@ bool projectWithPoseDeltaAndCameraModel(const ProjectionCamera &camera,
                                         const T &radialK2,
                                         T *pixel)
 {
-    T deltaRotation[9];
-    poseDeltaRotation(cameraDelta, deltaRotation);
-
-    T updatedRotation[9];
-    for (int row = 0; row < 3; ++row)
-    {
-        for (int column = 0; column < 3; ++column)
-        {
-            T value = T(0.0);
-            for (int inner = 0; inner < 3; ++inner)
-            {
-                value += deltaRotation[row * 3 + inner] *
-                    T(camera.cameraToWorldRotation[inner * 3 + column]);
-            }
-            updatedRotation[row * 3 + column] = value;
-        }
-    }
-
-    const T dx = world[0] - (T(camera.cameraCenter[0]) + cameraDelta[3]);
-    const T dy = world[1] - (T(camera.cameraCenter[1]) + cameraDelta[4]);
-    const T dz = world[2] - (T(camera.cameraCenter[2]) + cameraDelta[5]);
-    const T xCam = updatedRotation[0] * dx + updatedRotation[3] * dy + updatedRotation[6] * dz;
-    const T yCam = updatedRotation[1] * dx + updatedRotation[4] * dy + updatedRotation[7] * dz;
-    const T zCam = updatedRotation[2] * dx + updatedRotation[5] * dy + updatedRotation[8] * dz;
+    T cameraPoint[3];
+    transformWorldPointWithPoseDelta(
+        camera, cameraDelta, world, cameraPoint);
     return projectCameraPointWithDistortion(camera,
-                                            xCam,
-                                            yCam,
-                                            zCam,
+                                            cameraPoint[0],
+                                            cameraPoint[1],
+                                            cameraPoint[2],
                                             focalX,
                                             focalY,
                                             principalX,
@@ -326,33 +319,6 @@ bool projectWithPoseDelta(const ProjectionCamera &camera,
                                         world,
                                         T(camera.focalX),
                                         T(camera.focalY),
-                                        T(camera.principalX),
-                                        T(camera.principalY),
-                                        pixel);
-}
-
-/**
- * @brief 使用对数参数化的共享水平焦距投影。
- *
- * 以 log(f) 优化可天然保证焦距为正；垂直焦距按每台相机原始 fy/fx 比例恢复，
- * 因而共享的是标定组的水平尺度，而不是强制方形像素。
- */
-template <typename T>
-bool projectWithPoseDeltaAndSharedFocal(const ProjectionCamera &camera,
-                                        const T *cameraDelta,
-                                        const T *world,
-                                        const T *sharedFocalLogPixels,
-                                        T *pixel)
-{
-    using std::exp;
-    const T sharedFocal = exp(sharedFocalLogPixels[0]);
-    const double focalAspect =
-        camera.focalX > 0.0 ? camera.focalY / camera.focalX : 1.0;
-    return projectWithPoseDeltaAndFocal(camera,
-                                        cameraDelta,
-                                        world,
-                                        sharedFocal,
-                                        sharedFocal * T(focalAspect),
                                         T(camera.principalX),
                                         T(camera.principalY),
                                         pixel);

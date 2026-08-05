@@ -30,8 +30,6 @@ struct DeviceCamera
     int uAxisSign = 1;
     int vAxisSign = 1;
     int depthAxisFlipped = 0;
-    int fixed = 0;
-    int originalIndex = -1;
 };
 
 /// HostPoint 的设备侧等价布局；观测仍按点连续分段。
@@ -77,8 +75,6 @@ inline DeviceCamera makeDeviceCamera(const HostCamera &camera)
     out.uAxisSign = camera.uAxisSign;
     out.vAxisSign = camera.vAxisSign;
     out.depthAxisFlipped = camera.depthAxisFlipped;
-    out.fixed = camera.fixed;
-    out.originalIndex = camera.originalIndex;
     return out;
 }
 

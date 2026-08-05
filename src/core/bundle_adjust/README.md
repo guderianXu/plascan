@@ -75,6 +75,8 @@ Ceres 使用一个共享绝对焦距参数块，并以 `log(focalPx)` 参数化�
   `SimilarityGaugeNormalizer` 管理，不在各后端内用不同方式重复实现。
 - Legacy 的法方程线性化与 LM trial step 使用同一个 Huber robust cost。
 - Legacy、Ceres 和 Native CUDA 统一执行正深度检查、基于全局中位数的自适应点过滤与结果统计。
+- 后端选择和求解规划只统计有限像点、正权重且形成双相机轨迹的有效观测；零权重、负权重和
+  非有限权重不会再被不同后端解释成不同残差贡献。
 - Auto 质量门控除重投影 RMS 和有效 track 比例外，还检查 LiDAR、控制点和比例尺 RMS 不得恶化。
 - 点的前后方由 `Camera::positiveDepth()` / `isPointInFront()` 定义，后端不得直接把原始相机 Z
   当作跨相机格式的统一正深度。

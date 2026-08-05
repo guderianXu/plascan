@@ -11,6 +11,7 @@
 
 #include "BundleAdjust.h"
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -23,6 +24,20 @@ struct BundleAdjustValidationResult
     BASolveStatus status = BASolveStatus::NotRun; ///< 失败时应写入 BAResult 的标准状态。
     std::string message; ///< 面向日志和 GUI 的可定位诊断信息。
 };
+
+/// 将非法、非正的观测权重统一视为零，所有后端必须使用同一语义。
+double sanitizedObservationWeight(const BAObservation &observation);
+
+/// 检查像点坐标和权重是否合法，不检查相机索引。
+bool observationDataIsUsable(const BAObservation &observation);
+
+/// 检查观测索引、像点坐标和权重是否可以进入 BA 残差。
+bool observationIsUsable(const BAObservation &observation,
+                         std::size_t cameraCount);
+
+/// 统计至少由两台相机提供有效观测的实际可用 BA 问题规模。
+BAProblemStats summarizeUsableProblem(const std::vector<Camera> &cameras,
+                                      const std::vector<BATrack> &tracks);
 
 /**
  * @brief 校验 BA 输入，并按 gauge 策略补齐自动锚定相机。

@@ -1,25 +1,201 @@
 #include "BundleAdjustQuality.h"
 
+#include "BundleAdjustValidation.h"
+
 #include <plamatrix/ops/statistics.h>
 #include <plamatrix/ops/vector.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <set>
+#include <utility>
 
 namespace xjw::detail
 {
 namespace
 {
 
-double observationWeight(const BAObservation &observation)
+struct ConstraintStats
 {
-    if (!std::isfinite(observation.weight))
+    int count = 0;
+    double rms = 0.0;
+    double median = 0.0;
+};
+
+std::array<double, 3> pointForConstraintStats(
+    const std::vector<BATrack> &tracks,
+    const std::vector<BARefinedPoint> *points,
+    std::size_t index)
+{
+    if (points && index < points->size() && (*points)[index].valid)
     {
-        return 0.0;
+        return (*points)[index].point;
     }
-    return std::max(0.0, observation.weight);
+    return tracks[index].initialPoint;
+}
+
+ConstraintStats computeLaserStats(
+    const std::vector<BATrack> &tracks,
+    const std::vector<BARefinedPoint> *points)
+{
+    std::vector<double> distances;
+    double sumSquared = 0.0;
+    for (std::size_t trackIndex = 0; trackIndex < tracks.size(); ++trackIndex)
+    {
+        const auto point =
+            pointForConstraintStats(tracks, points, trackIndex);
+        for (const BALaserPlaneConstraint &constraint :
+             tracks[trackIndex].laserPlaneConstraints)
+        {
+            const double distance =
+                (point[0] - constraint.point[0]) * constraint.normal[0] +
+                (point[1] - constraint.point[1]) * constraint.normal[1] +
+                (point[2] - constraint.point[2]) * constraint.normal[2];
+            if (!std::isfinite(distance))
+            {
+                continue;
+            }
+            const double absoluteDistance = std::abs(distance);
+            sumSquared += distance * distance;
+            distances.push_back(absoluteDistance);
+        }
+    }
+
+    ConstraintStats stats;
+    stats.count = static_cast<int>(distances.size());
+    stats.rms = stats.count > 0
+                    ? std::sqrt(sumSquared / static_cast<double>(stats.count))
+                    : 0.0;
+    if (!distances.empty())
+    {
+        stats.median =
+            plamatrix::finiteMedian(std::move(distances)).value_or(0.0);
+    }
+    return stats;
+}
+
+ConstraintStats computeControlPointStats(
+    const std::vector<BATrack> &tracks,
+    const std::vector<BARefinedPoint> *points)
+{
+    double sumSquared = 0.0;
+    int count = 0;
+    for (std::size_t trackIndex = 0; trackIndex < tracks.size(); ++trackIndex)
+    {
+        const auto point =
+            pointForConstraintStats(tracks, points, trackIndex);
+        for (const BAControlPointConstraint &constraint :
+             tracks[trackIndex].controlPointConstraints)
+        {
+            const double dx = point[0] - constraint.point[0];
+            const double dy = point[1] - constraint.point[1];
+            const double dz = point[2] - constraint.point[2];
+            const double distanceSquared = dx * dx + dy * dy + dz * dz;
+            if (!std::isfinite(distanceSquared))
+            {
+                continue;
+            }
+            sumSquared += distanceSquared;
+            ++count;
+        }
+    }
+
+    ConstraintStats stats;
+    stats.count = count;
+    stats.rms = count > 0
+                    ? std::sqrt(sumSquared / static_cast<double>(count))
+                    : 0.0;
+    return stats;
+}
+
+bool scaleBarIsUsable(const BAScaleBarConstraint &constraint,
+                      std::size_t trackCount)
+{
+    return constraint.trackIndexA >= 0 &&
+           constraint.trackIndexB >= 0 &&
+           constraint.trackIndexA != constraint.trackIndexB &&
+           static_cast<std::size_t>(constraint.trackIndexA) < trackCount &&
+           static_cast<std::size_t>(constraint.trackIndexB) < trackCount &&
+           std::isfinite(constraint.measuredDistanceMeters) &&
+           constraint.measuredDistanceMeters > 0.0;
+}
+
+ConstraintStats computeScaleBarStats(
+    const std::vector<BATrack> &tracks,
+    const std::vector<BARefinedPoint> *points,
+    const std::vector<BAScaleBarConstraint> &constraints)
+{
+    double sumSquared = 0.0;
+    int count = 0;
+    for (const BAScaleBarConstraint &constraint : constraints)
+    {
+        if (!scaleBarIsUsable(constraint, tracks.size()))
+        {
+            continue;
+        }
+
+        const auto pointA = pointForConstraintStats(
+            tracks, points, static_cast<std::size_t>(constraint.trackIndexA));
+        const auto pointB = pointForConstraintStats(
+            tracks, points, static_cast<std::size_t>(constraint.trackIndexB));
+        const double dx = pointA[0] - pointB[0];
+        const double dy = pointA[1] - pointB[1];
+        const double dz = pointA[2] - pointB[2];
+        const double residual =
+            std::sqrt(dx * dx + dy * dy + dz * dz) -
+            constraint.measuredDistanceMeters;
+        if (!std::isfinite(residual))
+        {
+            continue;
+        }
+        sumSquared += residual * residual;
+        ++count;
+    }
+
+    ConstraintStats stats;
+    stats.count = count;
+    stats.rms = count > 0
+                    ? std::sqrt(sumSquared / static_cast<double>(count))
+                    : 0.0;
+    return stats;
+}
+
+void updateConstraintStats(const std::vector<BATrack> &tracks,
+                           const BAOptions &options,
+                           BAResult *result)
+{
+    if (options.enableLaserPlaneConstraints)
+    {
+        const ConstraintStats before = computeLaserStats(tracks, nullptr);
+        const ConstraintStats after = computeLaserStats(tracks, &result->points);
+        result->laserConstraintCount = before.count;
+        result->laserRmsBeforeMeters = before.rms;
+        result->laserRmsAfterMeters = after.rms;
+        result->laserMedianBeforeMeters = before.median;
+        result->laserMedianAfterMeters = after.median;
+    }
+    if (options.enableControlPointConstraints)
+    {
+        const ConstraintStats before =
+            computeControlPointStats(tracks, nullptr);
+        const ConstraintStats after =
+            computeControlPointStats(tracks, &result->points);
+        result->controlPointConstraintCount = before.count;
+        result->controlPointRmsBeforeMeters = before.rms;
+        result->controlPointRmsAfterMeters = after.rms;
+    }
+    if (options.enableScaleBarConstraints)
+    {
+        const ConstraintStats before = computeScaleBarStats(
+            tracks, nullptr, options.scaleBarConstraints);
+        const ConstraintStats after = computeScaleBarStats(
+            tracks, &result->points, options.scaleBarConstraints);
+        result->scaleBarConstraintCount = before.count;
+        result->scaleBarRmsBeforeMeters = before.rms;
+        result->scaleBarRmsAfterMeters = after.rms;
+    }
 }
 
 double strictTrackRms(const std::vector<Camera> &cameras,
@@ -38,7 +214,7 @@ double strictTrackRms(const std::vector<Camera> &cameras,
     std::set<int> uniqueCameras;
     for (const BAObservation &observation : track.observations)
     {
-        const double weight = observationWeight(observation);
+        const double weight = sanitizedObservationWeight(observation);
         if (!(weight > 0.0))
         {
             continue;
@@ -212,6 +388,8 @@ void finalizeBundleAdjustResult(const std::vector<Camera> &inputCameras,
             ? static_cast<double>(result->optimizedTracks) /
                   static_cast<double>(result->totalTracks)
             : 0.0;
+
+    updateConstraintStats(tracks, options, result);
 
     // 数值求解器的“成功”只说明迭代正常结束。若摄影测量门控未保留任何点，
     // 必须把结果降级，防止 SfM 继续使用空或负深度模型。

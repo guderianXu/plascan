@@ -23,13 +23,11 @@ struct ProjectionResult
  * @brief 单条观测的加权线性化结果。
  *
  * residual 和雅可比均已乘以 `sqrt(observationWeight * huberWeight)`。
- * `jc` 为 2x6 相机位姿雅可比的预留存储，`jp` 为按行存储的 2x3 点雅可比；
- * 当前 native CUDA 点优化路径只填充 jp。
+ * `jp` 为按行存储的 2x3 点雅可比。
  */
 struct ObservationLinearization
 {
     double residual[2] = {0.0, 0.0};
-    double jc[12] = {0.0};
     double jp[6] = {0.0};
     double weightedCost = 0.0;
 };

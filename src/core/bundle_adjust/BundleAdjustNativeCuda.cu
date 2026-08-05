@@ -222,6 +222,58 @@ void freeDeviceBuffers(DeviceCamera *cameras,
 
 } // namespace
 
+bool queryNativeCudaRuntime(int deviceId, std::string *message)
+{
+    int deviceCount = 0;
+    const cudaError_t countStatus = cudaGetDeviceCount(&deviceCount);
+    if (countStatus != cudaSuccess)
+    {
+        if (message)
+        {
+            *message = std::string("CUDA runtime 未发现可用设备: ") +
+                       cudaGetErrorString(countStatus);
+        }
+        return false;
+    }
+    if (deviceCount <= 0)
+    {
+        if (message)
+        {
+            *message = "CUDA runtime did not report any usable devices";
+        }
+        return false;
+    }
+    if (deviceId < 0 || deviceId >= deviceCount)
+    {
+        if (message)
+        {
+            *message = "native_cuda GPU 设备越界: device=" +
+                       std::to_string(deviceId) +
+                       ", count=" + std::to_string(deviceCount);
+        }
+        return false;
+    }
+
+    cudaDeviceProp properties{};
+    const cudaError_t propertyStatus =
+        cudaGetDeviceProperties(&properties, deviceId);
+    if (propertyStatus != cudaSuccess)
+    {
+        if (message)
+        {
+            *message = std::string("读取 native_cuda GPU 设备属性失败: ") +
+                       cudaGetErrorString(propertyStatus);
+        }
+        return false;
+    }
+    if (message)
+    {
+        *message = "native_cuda GPU 可用: device=" +
+                   std::to_string(deviceId) + ", name=" + properties.name;
+    }
+    return true;
+}
+
 KernelRunSummary runNativeCudaBundleAdjust(Workset *workset,
                                            int deviceId,
                                            int maxIterations,
@@ -466,7 +518,6 @@ KernelRunSummary runNativeCudaBundleAdjust(Workset *workset,
     summary.finalCost = hostCost(hostCameras, hostPoints, workset->observations);
     summary.hostCostSeconds += elapsedSeconds(hostCostStart, Clock::now());
     summary.ok = true;
-    summary.activeObservations = static_cast<int>(workset->observations.size());
     std::snprintf(summary.message, sizeof(summary.message), "native_cuda CUDA 点块求解完成");
     return summary;
 }

@@ -30,17 +30,12 @@ TEST(NativeCudaWorksetTest, BuildsContiguousWorksetFromValidTracks)
     track.observations.push_back({0, 320.0, 240.0, 1.0});
     track.observations.push_back({1, 319.0, 240.0, 0.5});
 
-    xjw::BAOptions options;
-    options.fixedCameraIndices.push_back(0);
-
-    const auto build = xjw::detail::native_cuda::buildWorkset(cameras, {track}, options);
+    const auto build = xjw::detail::native_cuda::buildWorkset(
+        cameras, {track}, xjw::BAOptions{});
     ASSERT_TRUE(build.ok) << build.message;
     EXPECT_EQ(build.workset.cameras.size(), 2u);
     EXPECT_EQ(build.workset.points.size(), 1u);
     EXPECT_EQ(build.workset.observations.size(), 2u);
-    EXPECT_EQ(build.workset.cameras[0].fixed, 1);
-    EXPECT_EQ(build.workset.cameras[1].fixed, 0);
-    EXPECT_EQ(build.workset.originalTrackToPoint[0], 0);
     EXPECT_EQ(build.workset.points[0].observationBegin, 0);
     EXPECT_EQ(build.workset.points[0].observationCount, 2);
 }
@@ -63,7 +58,7 @@ TEST(NativeCudaWorksetTest, PreservesCameraDepthAxisConvention)
     EXPECT_EQ(build.workset.cameras[1].depthAxisFlipped, 1);
 }
 
-TEST(NativeCudaWorksetTest, FiltersInvalidTracksAndKeepsOriginalMapping)
+TEST(NativeCudaWorksetTest, FiltersInvalidTracksAndKeepsOriginalTrackIndex)
 {
     std::vector<xjw::Camera> cameras{makeCamera(), makeCamera(1.0)};
 
@@ -81,7 +76,7 @@ TEST(NativeCudaWorksetTest, FiltersInvalidTracksAndKeepsOriginalMapping)
     valid.initialPoint = {{0.0, 0.0, 6.0}};
     valid.observations.push_back({0, 320.0, 240.0, 1.0});
     valid.observations.push_back({42, 320.0, 240.0, 1.0});
-    valid.observations.push_back({1, 319.0, 240.0, 0.0});
+    valid.observations.push_back({1, 319.0, 240.0, 1.0});
 
     xjw::BAOptions options;
     const auto build = xjw::detail::native_cuda::buildWorkset(cameras,
@@ -89,15 +84,30 @@ TEST(NativeCudaWorksetTest, FiltersInvalidTracksAndKeepsOriginalMapping)
                                                               options);
 
     ASSERT_TRUE(build.ok) << build.message;
-    ASSERT_EQ(build.workset.originalTrackToPoint.size(), 3u);
-    EXPECT_EQ(build.workset.originalTrackToPoint[0], -1);
-    EXPECT_EQ(build.workset.originalTrackToPoint[1], -1);
-    EXPECT_EQ(build.workset.originalTrackToPoint[2], 0);
     ASSERT_EQ(build.workset.points.size(), 1u);
     EXPECT_EQ(build.workset.points[0].originalTrackIndex, 2);
     ASSERT_EQ(build.workset.observations.size(), 2u);
     EXPECT_EQ(build.workset.observations[0].cameraIndex, 0);
     EXPECT_EQ(build.workset.observations[1].cameraIndex, 1);
+}
+
+TEST(NativeCudaWorksetTest, IgnoresZeroAndNonFiniteObservationWeights)
+{
+    std::vector<xjw::Camera> cameras{
+        makeCamera(), makeCamera(1.0), makeCamera(2.0)};
+    xjw::BATrack track;
+    track.initialPoint = {{0.0, 0.0, 5.0}};
+    track.observations.push_back({0, 320.0, 240.0, 1.0});
+    track.observations.push_back({1, 319.0, 240.0, 0.0});
+    track.observations.push_back(
+        {2, 318.0, 240.0, std::numeric_limits<double>::quiet_NaN()});
+
+    const auto build = xjw::detail::native_cuda::buildWorkset(
+        cameras, {track}, xjw::BAOptions{});
+
+    EXPECT_FALSE(build.ok);
+    EXPECT_TRUE(build.workset.points.empty());
+    EXPECT_TRUE(build.workset.observations.empty());
 }
 
 TEST(NativeCudaWorksetTest, RejectsUnsupportedSoftConstraints)

@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 namespace
@@ -70,6 +71,32 @@ TEST(BundleAdjustQualityGateTest, AutoPointOnlyProblemUsesLegacyCpu)
 
     EXPECT_EQ(xjw::BundleAdjust::selectBackendForProblem(stats, options),
               xjw::BABackend::LegacyCpu);
+}
+
+TEST(BundleAdjustValidationTest, ProblemSummaryCountsOnlyUsableObservations)
+{
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-1.0, 0.0, 0.0),
+        makeCamera(1.0, 0.0, 0.0),
+    };
+
+    xjw::BATrack usable;
+    usable.initialPoint = {{0.0, 0.0, 5.0}};
+    usable.observations.push_back({0, 320.0, 240.0, 1.0});
+    usable.observations.push_back({1, 300.0, 240.0, 0.5});
+    usable.observations.push_back({0, 321.0, 240.0, 0.0});
+    usable.observations.push_back(
+        {1, 299.0, 240.0, std::numeric_limits<double>::quiet_NaN()});
+
+    xjw::BATrack unusable = usable;
+    unusable.observations.resize(1);
+
+    const xjw::BAProblemStats stats =
+        xjw::BundleAdjust::summarizeProblem(cameras, {usable, unusable});
+
+    EXPECT_EQ(stats.cameraCount, 2);
+    EXPECT_EQ(stats.trackCount, 1);
+    EXPECT_EQ(stats.observationCount, 2);
 }
 
 TEST(BundleAdjustQualityGateTest, AutoDoesNotSelectNativeCudaForPointOnlyProblem)

@@ -100,7 +100,10 @@ enum class BAGaugePolicy
 };
 
 /**
- * @brief BA 问题规模摘要，用于自动后端选择和日志诊断。
+ * @brief BA 可用问题规模摘要，用于自动后端选择和日志诊断。
+ *
+ * track 和 observation 只统计具有有限初值、正权重有限像点且至少被两台
+ * 不同相机观测的轨迹，避免无效输入抬高 CPU/CUDA 选择阈值。
  */
 struct BAProblemStats
 {
@@ -397,7 +400,7 @@ struct BAResult
     double setupSeconds = 0.0;                         ///< Ceres 问题构建耗时或 legacy 前处理耗时
     double solveSeconds = 0.0;                         ///< 非线性求解主体耗时
     double totalSeconds = 0.0;                         ///< BA 后端总耗时
-    int observationCount = 0;                          ///< 输入观测总数
+    int observationCount = 0;                          ///< 实际进入当前后端的有效观测数
     double nativeCudaInitialCost = 0.0;                ///< native_cuda 优化前加权重投影代价
     double nativeCudaFinalCost = 0.0;                  ///< native_cuda 优化后加权重投影代价
     int nativeCudaAcceptedSteps = 0;                   ///< native_cuda 接受的 LM trial step 数
@@ -467,7 +470,7 @@ public:
     /// 返回后端当前实现的真实能力，不能根据名称推断 CUDA 后端一定支持联合 BA。
     static BABackendCapabilities backendCapabilities(BABackend backend);
 
-    /// 统计 BA 输入规模。
+    /// 统计 BA 实际可用的问题规模。
     static BAProblemStats summarizeProblem(const std::vector<Camera> &cameras,
                                            const std::vector<BATrack> &tracks);
 

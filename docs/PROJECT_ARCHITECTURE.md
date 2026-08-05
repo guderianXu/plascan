@@ -179,7 +179,7 @@ core/
 │   ├── BundleAdjust.h/cpp      # BA 公共接口、自动后端选择、legacy CPU 后端调度、后端状态回传
 │   ├── BundleAdjustCeres.h/cpp # Ceres CPU/CUDA 后端，记录 dense Schur CPU/GPU、setup/solve 耗时和回退原因
 │   ├── BundleAdjustCeresPlanning.h/cpp # Dense/Sparse/Iterative Schur 规划和 CUDA 显存预算
-│   ├── BundleAdjustProjection.h # 与 Camera 一致的模板投影模型，供 Ceres AutoDiff 固定相机残差复用
+│   ├── BundleAdjustProjection.h/cpp # 与 Camera 一致的模板投影模型和共享相机快照转换
 │   ├── BundleAdjustValidation.h/cpp # 输入、标定组和 gauge 校验/规范化
 │   ├── BundleAdjustQuality.h/cpp # 跨后端正深度、离群点统计和物方约束质量门控
 │   ├── BundleAdjustNativeCuda.h/cpp/.cu # PlaScan 自研 CUDA 后端入口和 GPU 点块求解

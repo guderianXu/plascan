@@ -5,12 +5,10 @@
  * @brief native CUDA BA 的主机侧扁平数据布局。
  *
  * 这些结构是通用 Camera/BATrack 与设备 POD 结构之间的中间表示。索引均指向当前
- * Workset，而 `originalIndex`/`originalTrackIndex` 用于恢复调用方顺序。
+ * Workset，而 `originalTrackIndex` 用于恢复调用方顺序。
  */
 
 #include <array>
-#include <cstdint>
-#include <string>
 #include <vector>
 
 namespace xjw::detail::native_cuda
@@ -39,8 +37,6 @@ struct HostCamera
     int uAxisSign = 1; ///< 归一化横坐标到像素 u 的方向符号。
     int vAxisSign = 1; ///< 归一化纵坐标到像素 v 的方向符号。
     int depthAxisFlipped = 0; ///< 非零表示相机前方沿局部 -Z。
-    int fixed = 0; ///< 预留给联合 BA；当前点优化中相机均只读。
-    int originalIndex = -1; ///< 输入 cameras 中的索引。
 };
 
 /// 压缩后的一个待优化三维点及其连续观测区间。
@@ -66,15 +62,13 @@ struct HostObservation
  * @brief 一次 native CUDA 调用的完整主机工作集。
  *
  * observations 按 point 分段连续排列，使每个 CUDA block/线程可以顺序读取同一点
- * 的观测。`originalTrackToPoint[i] == -1` 表示输入第 i 条轨迹未进入求解。
+ * 的观测。HostPoint::originalTrackIndex 用于恢复输入轨迹顺序。
  */
 struct Workset
 {
     std::vector<HostCamera> cameras;
     std::vector<HostPoint> points;
     std::vector<HostObservation> observations;
-    std::vector<int> originalTrackToPoint;
-    std::string rejectionReason; ///< 预留的后端拒绝诊断，不参与设备上传。
 };
 
 } // namespace xjw::detail::native_cuda

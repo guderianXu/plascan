@@ -9951,18 +9951,19 @@ TEST(ProjectTriangulationUiTest, FinalizeTriangulationStoresPreviewQualityMetada
 TEST(SfmSparseResultMetadataTest, ScaleAwareBaConsumesTrackConfidenceWeights)
 {
     const QString baHeader = readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjust.h"));
-    const QString baSource = readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjust.cpp"));
+    const QString baValidation =
+        readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjustValidation.cpp"));
     const QString baInputBuilder =
         readProjectSourceFile(QStringLiteral("src/core/sfm/project/BaTrackBuilder.cpp"));
     const QString incrementalSfm = readIncrementalSfmProjectImplementation();
     ASSERT_FALSE(baHeader.isEmpty());
-    ASSERT_FALSE(baSource.isEmpty());
+    ASSERT_FALSE(baValidation.isEmpty());
     ASSERT_FALSE(baInputBuilder.isEmpty());
     ASSERT_FALSE(incrementalSfm.isEmpty());
 
     EXPECT_TRUE(baHeader.contains(QStringLiteral("double weight")));
-    EXPECT_TRUE(baSource.contains(QStringLiteral("observationWeight")));
-    EXPECT_TRUE(baSource.contains(QStringLiteral("observationWeight(obs)")));
+    EXPECT_TRUE(baValidation.contains(QStringLiteral("sanitizedObservationWeight")));
+    EXPECT_TRUE(baValidation.contains(QStringLiteral("observation.weight")));
     EXPECT_TRUE(baInputBuilder.contains(QStringLiteral("track.confidence")));
     EXPECT_TRUE(baInputBuilder.contains(QStringLiteral("baObservation.weight")));
     EXPECT_TRUE(incrementalSfm.contains(QStringLiteral("pt.track.confidence")));
