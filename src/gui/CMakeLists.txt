@@ -56,6 +56,8 @@ if(PLASCAN_BUILD_GUI)
       shaders/camera_scene_textured_mesh.frag
       shaders/camera_scene_image.vert
       shaders/camera_scene_image.frag
+      shaders/camera_scene_camera.vert
+      shaders/camera_scene_camera_leader.vert
   )
 endif()
 

@@ -24,6 +24,8 @@ TEST(CameraSceneRenderContractTest, RegistersQrhiCameraImageShaders)
     const QString cmake = readProjectFile(QStringLiteral("src/gui/CMakeLists.txt"));
     EXPECT_TRUE(cmake.contains(QStringLiteral("shaders/camera_scene_image.vert")));
     EXPECT_TRUE(cmake.contains(QStringLiteral("shaders/camera_scene_image.frag")));
+    EXPECT_TRUE(cmake.contains(QStringLiteral("shaders/camera_scene_camera.vert")));
+    EXPECT_TRUE(cmake.contains(QStringLiteral("shaders/camera_scene_camera_leader.vert")));
 }
 
 TEST(CameraSceneRenderContractTest, DrawsBackgroundBeforeGeometryAndForegroundAfterGeometry)
@@ -55,9 +57,11 @@ TEST(CameraSceneRenderContractTest, AvoidsPerFrameSortingForOpaqueDepthWrittenTh
     ASSERT_GT(nextFunction, drawStart);
     const QString drawBlock = source.mid(drawStart, nextFunction - drawStart);
 
-    EXPECT_TRUE(drawBlock.contains(QStringLiteral("已加载照片按纹理")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("draw_instances")));
     EXPECT_FALSE(drawBlock.contains(QStringLiteral("farToNearCameraIndices")));
     EXPECT_FALSE(drawBlock.contains(QStringLiteral("camera_draw_order")));
+    EXPECT_FALSE(drawBlock.contains(QStringLiteral("for (qsizetype pose_index")));
+    EXPECT_FALSE(drawBlock.contains(QStringLiteral("cameraImagePlaneHalfExtent")));
 }
 
 TEST(CameraSceneRenderContractTest, LargeCameraImagesUseContinuousBoundedPrefetch)
@@ -82,7 +86,8 @@ TEST(CameraSceneRenderContractTest, LargeCameraImagesUseContinuousBoundedPrefetc
     EXPECT_TRUE(source.contains(QStringLiteral("正在加载相机影像 %1/%2")));
     EXPECT_TRUE(header.contains(QStringLiteral("RhiCameraThumbnailAtlasPage")));
     EXPECT_TRUE(source.contains(QStringLiteral("subresource.setDestinationTopLeft")));
-    EXPECT_TRUE(source.contains(QStringLiteral("atlas_vertices")));
+    EXPECT_TRUE(source.contains(QStringLiteral("atlas_instances")));
+    EXPECT_TRUE(source.contains(QStringLiteral("QRhiVertexInputBinding::PerInstance")));
 }
 
 TEST(CameraSceneRenderContractTest, ProjectCameraPosesAreParsedOffTheGuiThread)
@@ -178,9 +183,9 @@ TEST(CameraSceneRenderContractTest, SolidCameraCardsUseBatchedDepthTestedGpuReso
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("ensureSolidCameraBatchResource(")));
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("setDepthTest(true)")));
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("setDepthWrite(true)")));
-    EXPECT_TRUE(drawBlock.contains(QStringLiteral("draw_batch(")));
-    EXPECT_TRUE(drawBlock.contains(QStringLiteral("solid_vertices")));
-    EXPECT_TRUE(drawBlock.contains(QStringLiteral("atlas_vertices")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("draw_instances")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("instanceBuffer")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("cb->draw(6")));
     EXPECT_FALSE(overlayBlock.contains(QStringLiteral("QPolygonF cameraCard")));
     EXPECT_FALSE(overlayBlock.contains(QStringLiteral("painter.drawPolygon(cameraCard)")));
 }
@@ -202,7 +207,7 @@ TEST(CameraSceneRenderContractTest, SelectedCameraCardUsesRedHighlight)
     const QString drawBlock = source.mid(drawStart, drawEnd - drawStart);
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("QColor(57, 112, 173)")));
     EXPECT_TRUE(ensureBlock.contains(QStringLiteral("QColor(205, 60, 70)")));
-    EXPECT_TRUE(drawBlock.contains(QStringLiteral("isCameraHighlighted(pose)")));
+    EXPECT_TRUE(ensureBlock.contains(QStringLiteral("isCameraHighlighted(pose)")));
     EXPECT_TRUE(drawBlock.contains(QStringLiteral("highlightedSolidResource")));
 }
 
@@ -245,13 +250,13 @@ TEST(CameraSceneRenderContractTest, CameraCardsAndDirectionLeadersShareVulkanGeo
     ASSERT_GE(drawStart, 0);
     ASSERT_GT(imageStart, drawStart);
     const QString drawBlock = source.mid(drawStart, imageStart - drawStart);
-    EXPECT_TRUE(drawBlock.contains(QStringLiteral("pose, matrices.modelView")));
     EXPECT_TRUE(drawBlock.contains(QStringLiteral(
         "fullDynamicBufferUpdateForCurrentFrame(")));
-    EXPECT_TRUE(drawBlock.contains(QStringLiteral("_cameraLeaderPipeline.pipeline")));
-    EXPECT_TRUE(drawBlock.contains(QStringLiteral("leader_vertices")));
-    EXPECT_TRUE(drawBlock.contains(QStringLiteral("draw_batch")));
-    EXPECT_TRUE(drawBlock.contains(QStringLiteral("atlas_vertices")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("leaderPipeline")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("draw_instances")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("cb->draw(2")));
+    EXPECT_FALSE(drawBlock.contains(QStringLiteral("leader_vertices")));
+    EXPECT_FALSE(drawBlock.contains(QStringLiteral("atlas_vertices")));
     EXPECT_FALSE(drawBlock.contains(QStringLiteral("_leftDragging")));
     EXPECT_FALSE(drawBlock.contains(QStringLiteral("_middleDragging")));
 
@@ -278,6 +283,37 @@ TEST(CameraSceneRenderContractTest, CameraCardsAndDirectionLeadersShareVulkanGeo
     EXPECT_FALSE(overlayBlock.contains(QStringLiteral("cameraPlaneOcclusionPath")));
     EXPECT_FALSE(overlayBlock.contains(QStringLiteral("cameraLeaderClip")));
     EXPECT_FALSE(overlayBlock.contains(QStringLiteral("drawCameraDirectionArrow")));
+}
+
+TEST(CameraSceneRenderContractTest, LargePointCloudsPrepareGpuVerticesOffTheGuiThread)
+{
+    const QString source =
+        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("PointCloudLoadResult preparePointCloudLoad")));
+    EXPECT_TRUE(source.contains(QStringLiteral("return preparePointCloudLoad(")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_preparedPointVertexData")));
+    EXPECT_TRUE(source.contains(QStringLiteral("use_prepared_point_buffer")));
+    EXPECT_TRUE(source.contains(QStringLiteral("std::nth_element(")));
+    EXPECT_FALSE(source.contains(QStringLiteral("std::sort(dists.begin(), dists.end())")));
+}
+
+TEST(CameraSceneRenderContractTest, ManualPointSelectionReusesOneProjectionMatrix)
+{
+    const QString source =
+        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const qsizetype start = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::collectPointIndicesInScreenRect"));
+    const qsizetype end = source.indexOf(
+        QStringLiteral("bool CameraSceneWidget::saveCurrentPointCloudToSource"), start);
+    ASSERT_GE(start, 0);
+    ASSERT_GT(end, start);
+    const QString block = source.mid(start, end - start);
+
+    EXPECT_TRUE(block.contains(QStringLiteral("const QMatrix4x4 clip_matrix")));
+    EXPECT_TRUE(block.contains(QStringLiteral("clip_matrix * QVector4D")));
+    EXPECT_FALSE(block.contains(QStringLiteral("projectToScreen(")));
 }
 
 TEST(CameraSceneRenderContractTest, DeduplicatesCameraPosesByImageIdentity)
@@ -442,7 +478,7 @@ TEST(CameraSceneRenderContractTest, TiePointsUseGpuCameraPlaneDepth)
     const qsizetype geometryCall = renderBlock.indexOf(
         QStringLiteral("drawSceneGeometry(cb, uniforms);"));
     const qsizetype thumbnailsCall = renderBlock.indexOf(
-        QStringLiteral("drawCameraThumbnails(cb, mvp, uniforms);"));
+        QStringLiteral("drawCameraThumbnails(cb, mvp, mv);"));
     ASSERT_GE(geometryCall, 0);
     ASSERT_GT(thumbnailsCall, geometryCall);
 }

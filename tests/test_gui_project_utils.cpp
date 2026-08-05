@@ -7708,7 +7708,8 @@ TEST(CameraSceneWidgetTest, PointCloudRenderingStaysOnVulkan)
     EXPECT_TRUE(source.contains(QStringLiteral(
         "std::copy_n(mvp.constData(), 16, uniforms.mvp.begin())")));
     const qsizetype scene_uniform_start = header.indexOf(QStringLiteral("struct alignas(16) SceneUniforms"));
-    const qsizetype scene_uniform_end = header.indexOf(QStringLiteral("struct ImagePlaneUniforms"), scene_uniform_start);
+    const qsizetype scene_uniform_end = header.indexOf(
+        QStringLiteral("struct alignas(16) ImagePlaneUniforms"), scene_uniform_start);
     ASSERT_GE(scene_uniform_start, 0);
     ASSERT_GT(scene_uniform_end, scene_uniform_start);
     EXPECT_FALSE(header.mid(scene_uniform_start, scene_uniform_end - scene_uniform_start)
@@ -7766,7 +7767,8 @@ TEST(CameraSceneWidgetTest, CameraOverlayUsesMetashapeStyleImagePlanes)
     EXPECT_TRUE(header.contains(QStringLiteral("void drawFloorPivotCross(QPainter &painter)")));
     EXPECT_TRUE(source.contains(QStringLiteral("pose, matrices.modelView")));
     EXPECT_TRUE(source.contains(QStringLiteral("cameraDirectionLeaderSegment(")));
-    EXPECT_TRUE(source.contains(QStringLiteral("_cameraLeaderPipeline.pipeline")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_thumbnailPipeline.leaderPipeline")));
+    EXPECT_TRUE(source.contains(QStringLiteral("QRhiVertexInputBinding::PerInstance")));
     EXPECT_FALSE(source.contains(QStringLiteral("drawCameraDirectionArrow")));
     EXPECT_TRUE(source.contains(QStringLiteral("cameraImagePlaneCorners")));
     EXPECT_TRUE(source.contains(QStringLiteral("drawCameraThumbnails(cb")));

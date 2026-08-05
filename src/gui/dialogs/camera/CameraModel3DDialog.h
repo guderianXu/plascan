@@ -33,11 +33,13 @@
 #include <QVector4D>
 #include <array>
 #include <cstddef>
+#include <utility>
 #include <vector>
 #include <plapoint/core/point_cloud.h>
 
-#include "TiePointVisualization.h"
+#include "CameraSceneViewMath.h"
 #include "ModelVisualization.h"
+#include "TiePointVisualization.h"
 
 /// 渲染用点云类型别名
 using RenderCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
@@ -386,20 +388,22 @@ private:
 
     struct RhiCameraThumbnailResource
     {
-        QScopedPointer<QRhiBuffer> vertexBuffer;
+        QScopedPointer<QRhiBuffer> instanceBuffer;
         QScopedPointer<QRhiTexture> texture;
         QScopedPointer<QRhiShaderResourceBindings> bindings;
-        int vertexCapacity = 0;
+        int instanceCapacity = 0;
+        int instanceCount = 0;
     };
 
     struct RhiCameraThumbnailAtlasPage
     {
-        QScopedPointer<QRhiBuffer> vertexBuffer;
+        QScopedPointer<QRhiBuffer> instanceBuffer;
         QScopedPointer<QRhiTexture> texture;
         QScopedPointer<QRhiShaderResourceBindings> bindings;
         QSet<int> uploadedPoseIndices;
         QHash<int, QSize> imageSizes;
-        int vertexCapacity = 0;
+        int instanceCapacity = 0;
+        int instanceCount = 0;
     };
 
     struct RhiCameraThumbnailPipelineSet
@@ -407,12 +411,17 @@ private:
         QScopedPointer<QRhiBuffer> uniformBuffer;
         QScopedPointer<QRhiSampler> sampler;
         QScopedPointer<QRhiGraphicsPipeline> pipeline;
+        QScopedPointer<QRhiGraphicsPipeline> leaderPipeline;
+        QScopedPointer<QRhiShaderResourceBindings> leaderBindings;
         QVector<QSharedPointer<RhiCameraThumbnailAtlasPage>> atlasPages;
         QSharedPointer<RhiCameraThumbnailResource> solidResource;
         QSharedPointer<RhiCameraThumbnailResource> highlightedSolidResource;
-        QScopedPointer<QRhiBuffer> leaderBuffer;
+        QScopedPointer<QRhiBuffer> leaderInstanceBuffer;
+        int leaderInstanceCapacity = 0;
+        int leaderInstanceCount = 0;
         int atlasSize = 0;
         bool resourcesDirty = true;
+        bool instancesDirty = true;
     };
 
     struct alignas(16) SceneUniforms
@@ -430,10 +439,18 @@ private:
     static_assert(offsetof(SceneUniforms, viewportSize) == 52 * sizeof(float));
     static_assert(sizeof(SceneUniforms) == 56 * sizeof(float));
 
-    struct ImagePlaneUniforms
+    struct alignas(16) ImagePlaneUniforms
     {
         QMatrix4x4 mvp;
     };
+
+    struct alignas(16) CameraPlaneUniforms
+    {
+        std::array<float, 16> mvp{};
+        std::array<float, 16> modelView{};
+        std::array<float, 4> viewportZoom{};
+    };
+    static_assert(sizeof(CameraPlaneUniforms) == 36 * sizeof(float));
 
     struct CameraPlaneImageResult
     {
@@ -489,7 +506,7 @@ private:
     void drawActiveCameraImage(QRhiCommandBuffer *cb, const QMatrix4x4 &mvp);
     void drawCameraThumbnails(QRhiCommandBuffer *cb,
                               const QMatrix4x4 &mvp,
-                              const SceneUniforms &sceneUniforms);
+                              const QMatrix4x4 &model_view);
     void drawSceneGeometry(QRhiCommandBuffer *cb, SceneUniforms &uniforms);
 
     // 点云 GPU 资源
@@ -508,6 +525,9 @@ private:
     QByteArray _preparedObjVertexData;
     int _preparedObjVertexCount = 0;
     int _preparedObjStrideBytes = 0;
+    bool _preparedPointBuffer = false;
+    QByteArray _preparedPointVertexData;
+    int _preparedPointVertexCount = 0;
 
     // 点云包围盒 GPU 资源。
     RhiBufferSet _lineBuffer;
@@ -515,7 +535,6 @@ private:
 
     RhiPipelineSet _colorPointPipeline;
     RhiPipelineSet _colorLinePipeline;
-    RhiPipelineSet _cameraLeaderPipeline;
     RhiPipelineSet _meshTrianglePipeline;
     RhiPipelineSet _meshPointPipeline;
     RhiTexturedMeshPipelineSet _texturedMeshPipeline;
@@ -523,6 +542,7 @@ private:
     RhiCameraThumbnailPipelineSet _thumbnailPipeline;
 
     QVector<CameraPose> _poses;             // 当前相机姿态列表
+    QVector<xjw::gui::camera_scene::CameraViewCandidate> _cameraViewCandidates;
     RenderCloud _cloud;     // 当前显示的点云或网格（源自文件或外部调用）
     bool _isTiePointCloud = false;
     TiePointColorMode _tiePointColorMode = TiePointColorMode::Color;
