@@ -146,10 +146,25 @@ powershell -NoProfile -ExecutionPolicy Bypass -File E:\code\plascan\scripts\buil
 | `-ConfigureOnly` | 只配置，不构建。 |
 | `-BuildOnly` | 只构建，不配置。 |
 | `-RunTests` | 构建后运行 CTest。 |
+| `-RunU2NetCudaDeploymentTest` | 使用仅包含部署 `bin` 和 Windows 系统目录的 PATH 运行真实 U2Net CUDA smoke test。 |
 | `-CleanConfigure` | 清理当前构建目录中除 `vcpkg_installed` 外的 CMake/编译产物。 |
 | `-CleanRootCache` | 清理根 `build` 目录旧 CMake/Ninja/Linux 残留。 |
 | `-InstallDeps` | 允许 CMake/vcpkg 自动执行 manifest install。 |
+| `-CudnnRoot <path>` | cuDNN 开发包根目录，需包含 `include/cudnn.h`、导入库以及 `bin` 或 `bin/x64` 运行库。 |
+| `-EnableOpenCvDnnCuda:<bool>` | 是否启用 OpenCV DNN CUDA/cuDNN；默认开启。 |
 | `-SkipVsDevCmd` | 跳过加载 VS Build Tools 环境，仅在当前 shell 已配置好编译器时使用。 |
+
+发布前建议运行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_win\build_windows_cuda.ps1 `
+  -Target test_mask_generation -RunU2NetCudaDeploymentTest
+```
+
+脚本会同时扫描 cuDNN 的 `bin` 与 `bin\x64`，复制全部 `cudnn*.dll`，校验 OpenCV DNN、CUDA、
+cuBLAS、cuBLAS Lt 和 cuDNN 运行库，然后在清理外部 SDK/vcpkg PATH 的子进程中执行真实 GPU 推理。
+验证通过后的发布目录不要求目标电脑单独安装 CUDA Toolkit 或 cuDNN，但目标电脑仍需受支持的
+NVIDIA GPU 和兼容的 NVIDIA 驱动。
 
 ## 排错
 

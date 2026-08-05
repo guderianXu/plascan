@@ -184,6 +184,10 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("Sync-CudaRuntime", text)
         self.assertIn("$CudaPath \"bin\\x64\"", text)
         self.assertIn("CUDA runtime DLLs", text)
+        self.assertIn("Sync-CudnnRuntime", text)
+        self.assertIn("$CudnnPath \"bin\\x64\"", text)
+        self.assertIn("Assert-U2NetCudaDeployment", text)
+        self.assertIn("RunU2NetCudaDeploymentTest", text)
         self.assertIn("VCPKG_APPLOCAL_DEPS=OFF", text)
         self.assertIn("Resolve-ReparseTargetPath", text)
         self.assertIn("CMAKE_MAKE_PROGRAM=$(Convert-ToCMakePath $ninjaExe)", text)
@@ -227,6 +231,14 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("BUILD_opencv_videostab=OFF", text)
         self.assertIn("OpenCV DNN CUDA", text)
 
+        deployment_test = (
+            ROOT / "scripts" / "build_win" / "test_u2net_cuda_deployment.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("EnvironmentVariables.Clear()", deployment_test)
+        self.assertIn('EnvironmentVariables["PATH"]', deployment_test)
+        self.assertIn("OnnxModelRunsOnCudaWhenBackendAvailable", deployment_test)
+        self.assertIn("the test may have been skipped", deployment_test)
+
     def test_gui_build_deploys_vcpkg_runtime_dlls(self):
         module = (ROOT / "cmake" / "PlascanWindowsRuntime.cmake").read_text(
             encoding="utf-8"
@@ -235,6 +247,13 @@ class RepoHygieneTest(unittest.TestCase):
         gui_cmake = (ROOT / "src" / "gui" / "CMakeLists.txt").read_text(
             encoding="utf-8"
         )
+        install_bundle = (
+            ROOT
+            / "src"
+            / "gui"
+            / "packaging"
+            / "InstallBundledRuntimeWindows.cmake.in"
+        ).read_text(encoding="utf-8")
 
         self.assertIn("function(plascan_deploy_vcpkg_runtime target_name)", module)
         self.assertIn("VCPKG_INSTALLED_DIR", module)
@@ -243,6 +262,8 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("COMMAND_EXPAND_LISTS", module)
         self.assertIn("include(PlascanWindowsRuntime)", root_cmake)
         self.assertIn("plascan_deploy_vcpkg_runtime(plascan_gui)", gui_cmake)
+        self.assertIn('"cudnn*.dll"', install_bundle)
+        self.assertIn("_plascan_dynamic_runtime_patterns", install_bundle)
 
     def test_release_1_1_6_metadata_is_synchronized(self):
         root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")

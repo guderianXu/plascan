@@ -106,6 +106,17 @@ pwsh scripts\build_win\build_windows_cuda.ps1
 显式指定。只有明确不需要 U2Net CUDA 时才传 `-EnableOpenCvDnnCuda:$false`；GUI 默认禁止静默回退，
 选择 CUDA 但后端不可用会给出明确错误，用户勾选“CUDA 不可用时回退 CPU”后才允许回退。
 
+脚本会从 cuDNN 的 `bin` 和官方归档常用的 `bin/x64` 布局收集全部 `cudnn*.dll`，并校验部署目录
+中的 OpenCV DNN、CUDA、cuBLAS 和 cuDNN 运行库。发布前可在移除 CUDA/cuDNN/vcpkg 外部 PATH 的
+子进程中执行真实 U2Net CUDA 推理：
+
+```powershell
+pwsh scripts\build_win\build_windows_cuda.ps1 -Target test_mask_generation -RunU2NetCudaDeploymentTest
+```
+
+通过该验证的发布目录不要求目标电脑另行安装 CUDA Toolkit 或 cuDNN，但仍需要受支持的 NVIDIA GPU
+以及与所打包 CUDA 运行库兼容的 NVIDIA 驱动。
+
 ### Python 环境脚本
 
 `scripts/env/` 集中管理 Python 本机环境准备脚本。Python 开发环境默认创建在仓库根目录 `.venv/`，用于模型导出和验证；生产 C++ 不链接 LibTorch。

@@ -16,6 +16,7 @@ param(
     [switch] $ConfigureOnly,
     [switch] $BuildOnly,
     [switch] $RunTests,
+    [switch] $RunU2NetCudaDeploymentTest,
     [switch] $CleanConfigure,
     [switch] $CleanRootCache,
     [switch] $InstallDeps,
@@ -750,16 +751,29 @@ function Sync-CudnnRuntime
         return
     }
 
-    $cudnnBin = Join-Path $CudnnPath "bin"
-    if (-not (Test-Path -LiteralPath $cudnnBin))
+    $cudnnBinRoots = @(
+        (Join-Path $CudnnPath "bin"),
+        (Join-Path $CudnnPath "bin\x64")
+    ) | Where-Object { Test-Path -LiteralPath $_ }
+    if ($cudnnBinRoots.Count -eq 0)
     {
-        return
+        throw "cuDNN runtime directory not found. Expected bin or bin\x64 under: $CudnnPath"
     }
 
-    $sources = @(Get-ChildItem -LiteralPath $cudnnBin -Force -File -Filter "cudnn*.dll" -ErrorAction SilentlyContinue)
+    $sources = @{}
+    foreach ($root in $cudnnBinRoots)
+    {
+        Get-ChildItem -LiteralPath $root -Force -File -Filter "cudnn*.dll" -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                if (-not $sources.ContainsKey($_.Name))
+                {
+                    $sources[$_.Name] = $_.FullName
+                }
+            }
+    }
     if ($sources.Count -eq 0)
     {
-        return
+        throw "No cuDNN runtime DLLs were found under bin or bin\x64: $CudnnPath"
     }
 
     function Copy-CudnnDllIfNeeded
@@ -791,25 +805,71 @@ function Sync-CudnnRuntime
         [void] $runtimeDirs.Add((Resolve-FullPath $dir))
     }
 
+    $vcpkgInstalledRoot = Join-Path $BuildPath "vcpkg_installed"
     foreach ($marker in @("opencv_dnn4.dll", "opencv_core4.dll"))
     {
         Get-ChildItem -LiteralPath $BuildPath -Recurse -Force -File -Filter $marker -ErrorAction SilentlyContinue |
             ForEach-Object {
                 $dir = Resolve-FullPath $_.DirectoryName
-                [void] $runtimeDirs.Add($dir)
+                if (-not (Test-PathUnder $dir $vcpkgInstalledRoot))
+                {
+                    [void] $runtimeDirs.Add($dir)
+                }
             }
     }
 
+    $sourceEntries = $sources.GetEnumerator() | Sort-Object Name
     foreach ($dir in $runtimeDirs)
     {
-        foreach ($source in $sources)
+        foreach ($entry in $sourceEntries)
         {
-            Copy-CudnnDllIfNeeded -Source $source.FullName -Destination (Join-Path $dir $source.Name)
+            $destination = Join-Path $dir $entry.Name
+            Copy-CudnnDllIfNeeded -Source $entry.Value -Destination $destination
+            if (-not (Test-Path -LiteralPath $destination))
+            {
+                throw "Failed to deploy cuDNN runtime DLL: $destination"
+            }
         }
     }
 
     Write-Host ("Synced {0} cuDNN runtime DLLs into {1} runtime director{2}." -f `
         $sources.Count, $runtimeDirs.Count, $(if ($runtimeDirs.Count -eq 1) { "y" } else { "ies" }))
+}
+
+function Assert-U2NetCudaDeployment
+{
+    param([Parameter(Mandatory = $true)][string] $BuildPath)
+
+    $runtimeDir = Join-Path $BuildPath "bin"
+    Assert-ExistingPath $runtimeDir "PlaScan runtime directory"
+
+    $requirements = @(
+        @{ Label = "OpenCV core"; Pattern = "opencv_core*.dll" },
+        @{ Label = "OpenCV DNN"; Pattern = "opencv_dnn4.dll" },
+        @{ Label = "CUDA runtime"; Pattern = "cudart64_*.dll" },
+        @{ Label = "cuBLAS"; Pattern = "cublas64_*.dll" },
+        @{ Label = "cuBLAS Lt"; Pattern = "cublasLt64_*.dll" },
+        @{ Label = "cuDNN"; Pattern = "cudnn64_*.dll" }
+    )
+
+    $missing = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($requirement in $requirements)
+    {
+        $matches = @(Get-ChildItem -LiteralPath $runtimeDir -File -Filter $requirement.Pattern `
+            -ErrorAction SilentlyContinue)
+        if ($matches.Count -eq 0)
+        {
+            [void] $missing.Add("$($requirement.Label) ($($requirement.Pattern))")
+        }
+    }
+
+    if ($missing.Count -gt 0)
+    {
+        throw "U2Net CUDA deployment is incomplete in $runtimeDir. Missing: $($missing -join ', ')"
+    }
+
+    $cudnnDlls = @(Get-ChildItem -LiteralPath $runtimeDir -File -Filter "cudnn*.dll")
+    Write-Host "Validated U2Net CUDA deployment in $runtimeDir ($($cudnnDlls.Count) cuDNN DLLs)."
 }
 
 function Assert-VcpkgInstalledPackages
@@ -1494,6 +1554,7 @@ if (-not $ConfigureOnly)
     if ($EnableOpenCvDnnCuda)
     {
         Sync-CudnnRuntime -BuildPath $BuildDir -CudnnPath $env:CUDNN_ROOT_DIR
+        Assert-U2NetCudaDeployment -BuildPath $BuildDir
     }
 
     $buildArgs = @("--build", $BuildDir, "--config", "Release", "--parallel", "$Jobs")
@@ -1517,7 +1578,25 @@ if (-not $ConfigureOnly)
     if ($EnableOpenCvDnnCuda)
     {
         Sync-CudnnRuntime -BuildPath $BuildDir -CudnnPath $env:CUDNN_ROOT_DIR
+        Assert-U2NetCudaDeployment -BuildPath $BuildDir
     }
+}
+
+if ($RunU2NetCudaDeploymentTest)
+{
+    if ($ConfigureOnly)
+    {
+        throw "RunU2NetCudaDeploymentTest requires a build; do not combine it with ConfigureOnly."
+    }
+    if (-not $EnableOpenCvDnnCuda)
+    {
+        throw "RunU2NetCudaDeploymentTest requires EnableOpenCvDnnCuda."
+    }
+
+    $deploymentTestScript = Join-Path $SourceDir "scripts\build_win\test_u2net_cuda_deployment.ps1"
+    Assert-ExistingPath $deploymentTestScript "U2Net CUDA deployment test script"
+    & $deploymentTestScript -BuildDir $BuildDir `
+        -ModelPath (Join-Path $SourceDir "resources\models\U2Net_v1.onnx")
 }
 
 if ($RunTests)

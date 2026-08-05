@@ -127,4 +127,8 @@ pwsh scripts\build_win\build_windows_cuda.ps1 -InstallDeps
 pwsh scripts\build_win\build_windows_cuda.ps1
 ```
 
+发布前使用 `-Target test_mask_generation -RunU2NetCudaDeploymentTest` 验证部署目录。该测试清空子进程
+环境中的 CUDA、cuDNN 和 vcpkg 路径，只保留构建目录 `bin` 与 Windows 系统 DLL 路径，并要求真实
+CUDA 用例通过；用例被跳过也会视为部署失败。
+
 模型加载失败必须报告实际解析路径、请求设备和回退状态，不能静默忽略缺失资源。
