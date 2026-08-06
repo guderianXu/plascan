@@ -37,6 +37,27 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest, AerialPlaneStabilizationIsOptIn)
 {
     const IncrementalSfmOptions options;
     EXPECT_FALSE(options.stabilizeAerialCameraPlane);
+    EXPECT_DOUBLE_EQ(options.aerialCameraPlaneTriggerRmsRatio, 0.003);
+}
+
+TEST(SfmBundleAdjustCoordinatorPolicyTest, DetectsAerialBendingUsingRmsRatio)
+{
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldStabilizeAerialCameraPlane(
+        false, 444, false, false, false, false, 0.97, 0.01, 0.003));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldStabilizeAerialCameraPlane(
+        false, 444, false, false, false, false, 0.97, 0.001, 0.003));
+}
+
+TEST(SfmBundleAdjustCoordinatorPolicyTest, PreventsBendingDuringFinalSelfCalibration)
+{
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldStabilizeAerialCameraPlane(
+        false, 444, false, true, true, false, 0.97, 0.001, 0.003));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldStabilizeAerialCameraPlane(
+        true, 444, false, true, true, false, 0.97, 0.01, 0.003));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldStabilizeAerialCameraPlane(
+        false, 444, true, true, true, false, 0.97, 0.01, 0.003));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldStabilizeAerialCameraPlane(
+        false, 444, false, true, true, false, 0.50, 0.01, 0.003));
 }
 
 TEST(SfmBundleAdjustCoordinatorPolicyTest, RefinesSharedIntrinsicsOnlyAfterCompleteRegistration)

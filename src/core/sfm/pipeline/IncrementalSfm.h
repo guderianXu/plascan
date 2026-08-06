@@ -144,8 +144,8 @@ struct IncrementalSfmOptions
     BAOptions baOptions;
     /// 无绝对控制的大型近垂直航测块中，抑制相机中心的 dome/bowl 低频弯曲。
     bool stabilizeAerialCameraPlane = false;
-    /// 相机中心最小主成分占总方差达到该值时认为存在可疑弯曲。
-    double aerialCameraPlaneTriggerRatio = 0.003;
+    /// 相机中心法向 RMS / 总体 RMS 跨度达到该值时认为存在可疑弯曲。
+    double aerialCameraPlaneTriggerRmsRatio = 0.003;
     /// 平面约束 sigma 相对相机中心总体 RMS 跨度的比例。
     double aerialCameraPlaneSigmaFraction = 0.01;
     /// 平面约束整体权重；约束只作用于法向分量。

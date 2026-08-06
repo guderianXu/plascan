@@ -46,6 +46,7 @@ struct AerialBlockGeometry
     bool valid = false;
     double opticalAxisConcentration = 0.0;
     double cameraCenterPlanarityRatio = 1.0;
+    double cameraCenterNormalSpanRmsRatio = 1.0;
 };
 
 struct BatchFocalPrior
@@ -248,12 +249,14 @@ AerialBlockGeometry evaluateAerialBlockGeometry(const SfmReconstruction &reconst
     const double planarityRatio = trace > 1.0e-12
         ? std::max(0.0, eigenvalues[0]) / trace
         : 1.0;
+    const double normalSpanRmsRatio = std::sqrt(std::max(0.0, planarityRatio));
 
     return {
         std::isfinite(opticalAxisConcentration) && opticalAxisConcentration >= 0.85 &&
-            std::isfinite(planarityRatio),
+            std::isfinite(planarityRatio) && std::isfinite(normalSpanRmsRatio),
         opticalAxisConcentration,
         planarityRatio,
+        normalSpanRmsRatio,
     };
 }
 
@@ -956,10 +959,13 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
             {QStringLiteral("detected"), geometry.valid},
             {QStringLiteral("optical_axis_concentration"), geometry.opticalAxisConcentration},
             {QStringLiteral("camera_center_planarity_ratio"), geometry.cameraCenterPlanarityRatio},
+            {QStringLiteral("camera_center_normal_span_rms_ratio"),
+             geometry.cameraCenterNormalSpanRmsRatio},
         };
-        // 经验门限只用于告警，不会强制地形为平面。达到该值表示相机中心厚度
-        // 已明显超过规则航测块的正常航高波动，通常对应焦距/径向畸变穹顶。
-        const bool domingRisk = geometry.valid && geometry.cameraCenterPlanarityRatio > 0.003;
+        // 使用法向 RMS / 总体 RMS 跨度，而不是它的平方（协方差方差比）。旧实现
+        // 将方差比与线性门限比较，使 1% 厚度只得到 0.0001，明显穹顶也不会告警。
+        const bool domingRisk = geometry.valid &&
+            geometry.cameraCenterNormalSpanRmsRatio > 0.003;
         aerialGeometry.insert(QStringLiteral("doming_risk"), domingRisk);
         execution.result.sfmDiagnostics.insert(
             QStringLiteral("aerial_block_geometry"), aerialGeometry);
