@@ -53,6 +53,7 @@ struct DenseGenerationSettings
     int minViews = 6;
     float patchMatchConfidence = 0.60f;
     bool useCuda = true;
+    xjw::mvs::PatchMatchBackend patchMatchBackend = xjw::mvs::PatchMatchBackend::Auto;
     float fusionMinConfidence = 0.65f;
     int fusionMaxImageDim = 2048; // 0 表示融合阶段使用深度图原始尺寸
     int minConsistentViews = 3;

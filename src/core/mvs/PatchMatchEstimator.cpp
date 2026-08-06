@@ -64,11 +64,63 @@ bool PatchMatchDepthEstimator::estimate(
     zNear = std::max(zNear, 0.01f);
     zFar  = std::max(zFar, zNear + 0.1f);
 
-    if (config.useCuda && isCudaAvailable())
+    PatchMatchBackend backend = config.backend;
+    if (backend == PatchMatchBackend::Auto)
     {
-        if (estimateGPU(refGray, srcGrays, refCam, srcCams,
-                        zNear, zFar, config, depthOut, confOut, errorMsg,
-                        hintDepth, hintRadius, refValidMask, srcValidMasks))
+        if (!config.useCuda)
+        {
+            backend = PatchMatchBackend::Cpu;
+        }
+        else if (isCudaAvailable())
+        {
+            backend = PatchMatchBackend::Cuda;
+        }
+        else if (isOpenClAvailable())
+        {
+            backend = PatchMatchBackend::OpenCl;
+        }
+        else
+        {
+            backend = PatchMatchBackend::Cpu;
+        }
+    }
+
+    bool accelerator_ok = false;
+    bool fallback_to_cpu = false;
+    const char *backend_name = nullptr;
+    if (backend == PatchMatchBackend::Cuda)
+    {
+        backend_name = "CUDA";
+        fallback_to_cpu = config.cudaFallbackToCpu;
+        if (isCudaAvailable())
+        {
+            accelerator_ok = estimateGPU(refGray, srcGrays, refCam, srcCams,
+                                         zNear, zFar, config, depthOut, confOut, errorMsg,
+                                         hintDepth, hintRadius, refValidMask, srcValidMasks);
+        }
+        else if (errorMsg)
+        {
+            *errorMsg = "CUDA backend requested but no CUDA device is available";
+        }
+    }
+    else if (backend == PatchMatchBackend::OpenCl)
+    {
+        backend_name = "OpenCL";
+        fallback_to_cpu = config.openClFallbackToCpu;
+        if (isOpenClAvailable())
+        {
+            accelerator_ok = estimateOpenCL(refGray, srcGrays, refCam, srcCams,
+                                            zNear, zFar, config, depthOut, confOut, errorMsg,
+                                            hintDepth, hintRadius, refValidMask, srcValidMasks);
+        }
+        else if (errorMsg)
+        {
+            *errorMsg = "OpenCL backend requested but no OpenCL GPU device is available";
+        }
+    }
+    if (backend_name)
+    {
+        if (accelerator_ok)
         {
             return true;
         }
@@ -77,11 +129,11 @@ bool PatchMatchDepthEstimator::estimate(
             if (errorMsg && errorMsg->empty()) *errorMsg = "PatchMatch cancelled";
             return false;
         }
-        if (!config.cudaFallbackToCpu)
+        if (!fallback_to_cpu)
         {
             return false;
         }
-        LOG_WARN("[MVS][PatchMatch] GPU failed; falling back to CPU");
+        LOG_WARN("[MVS][PatchMatch] %s failed; falling back to CPU", backend_name);
     }
     return estimateCPU(refGray, srcGrays, refCam, srcCams,
                        zNear, zFar, config, depthOut, confOut, errorMsg,

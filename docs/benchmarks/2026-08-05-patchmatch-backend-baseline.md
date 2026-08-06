@@ -63,7 +63,7 @@ GPU 灰度图缓存原先仅使用 `cv::Mat.data`、尺寸、步长和降采样�
 
 ## 后端验收基线
 
-后续 CPU、CUDA、OpenCL 或 Vulkan 后端至少需要记录：
+后续 CPU、CUDA 或 OpenCL 后端至少需要记录：
 
 - 实际 backend、设备 ID/UUID、设备名称和驱动版本；
 - 上传、计算、下载和总耗时；

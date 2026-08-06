@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <string>
@@ -68,7 +69,8 @@ struct EstimateResult
     cv::Mat confidence;
 };
 
-EstimateResult estimateMaskedPlane(bool use_cuda)
+EstimateResult estimateMaskedPlane(xjw::mvs::PatchMatchBackend backend,
+                                   int opencl_device_index = -1)
 {
     const cv::Mat reference = makeReferenceImage();
     const cv::Mat source = shiftLeft(reference);
@@ -76,8 +78,11 @@ EstimateResult estimateMaskedPlane(bool use_cuda)
     const cv::Mat source_mask = shiftLeft(reference_mask);
 
     xjw::mvs::PatchMatchConfig config;
-    config.useCuda = use_cuda;
+    config.backend = backend;
+    config.useCuda = backend == xjw::mvs::PatchMatchBackend::Cuda;
     config.cudaFallbackToCpu = false;
+    config.openClFallbackToCpu = false;
+    config.openClDeviceIndex = opencl_device_index;
     config.downsampleFactor = 1;
     config.numIterations = 2;
     config.patchHalf = 2;
@@ -118,12 +123,7 @@ double validRatio(const cv::Mat &depth, const cv::Mat &mask)
 
 TEST(PatchMatchMaskAwareTest, CpuKeepsDepthInsideReferenceMaskOnly)
 {
-    if (!xjw::mvs::PatchMatchDepthEstimator::isCudaAvailable())
-    {
-        GTEST_SKIP() << "PatchMatch CPU reference path is built with the CUDA implementation";
-    }
-
-    const EstimateResult result = estimateMaskedPlane(false);
+    const EstimateResult result = estimateMaskedPlane(xjw::mvs::PatchMatchBackend::Cpu);
     ASSERT_FALSE(result.depth.empty());
 
     const cv::Mat reference_mask = makeReferenceMask();
@@ -142,8 +142,8 @@ TEST(PatchMatchMaskAwareTest, CpuAndCudaApplyEquivalentMaskSemanticsWhenAvailabl
         GTEST_SKIP() << "CUDA is unavailable";
     }
 
-    const EstimateResult cpu = estimateMaskedPlane(false);
-    const EstimateResult gpu = estimateMaskedPlane(true);
+    const EstimateResult cpu = estimateMaskedPlane(xjw::mvs::PatchMatchBackend::Cpu);
+    const EstimateResult gpu = estimateMaskedPlane(xjw::mvs::PatchMatchBackend::Cuda);
     ASSERT_FALSE(cpu.depth.empty());
     ASSERT_FALSE(gpu.depth.empty());
 
@@ -159,6 +159,59 @@ TEST(PatchMatchMaskAwareTest, CpuAndCudaApplyEquivalentMaskSemanticsWhenAvailabl
     cv::Mat gpu_outside_depth;
     gpu.depth.copyTo(gpu_outside_depth, outside_mask);
     EXPECT_EQ(cv::countNonZero(gpu_outside_depth > 0.0f), 0);
+}
+
+TEST(PatchMatchMaskAwareTest, IntelOpenClEstimatesMaskedPlaneWhenAvailable)
+{
+    const std::vector<xjw::mvs::OpenClDeviceInfo> devices =
+        xjw::mvs::PatchMatchDepthEstimator::openClDevices();
+    const auto intel_device = std::find_if(
+        devices.cbegin(), devices.cend(), [](const xjw::mvs::OpenClDeviceInfo &device)
+        {
+            std::string vendor = device.vendor;
+            std::transform(vendor.begin(), vendor.end(), vendor.begin(), [](unsigned char character)
+            {
+                return static_cast<char>(std::tolower(character));
+            });
+            return vendor.find("intel") != std::string::npos;
+        });
+    if (intel_device == devices.cend())
+    {
+        GTEST_SKIP() << "Intel OpenCL GPU is unavailable";
+    }
+
+    const EstimateResult result = estimateMaskedPlane(
+        xjw::mvs::PatchMatchBackend::OpenCl, intel_device->index);
+    ASSERT_FALSE(result.depth.empty());
+    ASSERT_EQ(result.depth.type(), CV_32F);
+
+    const cv::Mat reference_mask = makeReferenceMask();
+    EXPECT_GT(validRatio(result.depth, reference_mask), 0.25);
+
+    cv::Mat outside_mask;
+    cv::bitwise_not(reference_mask, outside_mask);
+    cv::Mat outside_depth;
+    result.depth.copyTo(outside_depth, outside_mask);
+    EXPECT_EQ(cv::countNonZero(outside_depth > 0.0f), 0);
+
+    std::vector<float> valid_depths;
+    for (int row = 0; row < result.depth.rows; ++row)
+    {
+        for (int column = 0; column < result.depth.cols; ++column)
+        {
+            const float depth = result.depth.at<float>(row, column);
+            if (reference_mask.at<std::uint8_t>(row, column) != 0 && depth > 0.0f)
+            {
+                valid_depths.push_back(depth);
+            }
+        }
+    }
+    ASSERT_FALSE(valid_depths.empty());
+    const auto median = valid_depths.begin() + valid_depths.size() / 2;
+    std::nth_element(valid_depths.begin(), median, valid_depths.end());
+    EXPECT_NEAR(*median, kExpectedDepth, 1.0f);
+
+    xjw::mvs::PatchMatchDepthEstimator::cleanupOpenClResources();
 }
 
 TEST(PatchMatchPhotometricUniquenessTest, KeepsDistinctDepthHypothesisAtFullConfidence)

@@ -72,12 +72,10 @@ TEST(DepthComputeSchedulerTest, SharesEachFrameOnceAcrossHeterogeneousWorkers)
     EXPECT_EQ(completed_tasks, 100);
 }
 
-TEST(DepthComputeSchedulerTest, ReservesStableNamesForFutureBackends)
+TEST(DepthComputeSchedulerTest, UsesStableOpenClWorkerName)
 {
     const DepthComputeWorker opencl_worker{DepthComputeBackend::OpenCl, 2};
-    const DepthComputeWorker vulkan_worker{DepthComputeBackend::Vulkan, 3};
     EXPECT_EQ(opencl_worker.id(), "OpenCL:2");
-    EXPECT_EQ(vulkan_worker.id(), "Vulkan:3");
 }
 
 } // namespace

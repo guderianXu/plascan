@@ -36,6 +36,14 @@ namespace mvs
 // =============================================================================
 // PatchMatch 配置
 // =============================================================================
+enum class PatchMatchBackend
+{
+    Auto,
+    Cpu,
+    Cuda,
+    OpenCl
+};
+
 struct PatchMatchConfig
 {
     int   numIterations      = 16;      ///< PatchMatch 迭代次数（16轮保证宽深度范围下充分收敛）
@@ -49,6 +57,7 @@ struct PatchMatchConfig
     float photometricUniquenessMinimumMargin = 0.03f; ///< 最优 NCC 与竞争深度 NCC 的最小可信间隔
     float photometricUniquenessMinimumConfidenceScale = 0.50f; ///< 完全歧义时保留的置信度比例
     bool  useCuda            = true;
+    PatchMatchBackend backend = PatchMatchBackend::Auto;
     int   downsampleFactor   = 2;       ///< 降采样因子（2=半分辨率，速度提升约4倍）
     bool  doMedianBlur       = true;
     int   medianKernelSize   = 5;
@@ -66,10 +75,12 @@ struct PatchMatchConfig
     int   cudaBlockH           = 16;     ///< 2D kernel 线程块高度（必须为 2 的幂）
     int   cudaBlockSweep       = 32;     ///< 1D sweep kernel 线程块大小（必须为 2 的幂）
     int   cudaDeviceIndex      = -1;     ///< CUDA 设备编号；-1 使用当前设备
+    int   openClDeviceIndex    = -1;     ///< OpenCL GPU 全局编号；-1 使用首个 GPU
 
     bool  epipolarRectified    = false;  ///< 图像已极线校正，偏向水平传播
     bool  cudaUseParallelSweep = true;   ///< CUDA 使用棋盘格像素级并行传播；false 时回退传统行列 sweep
     bool  cudaFallbackToCpu    = true;   ///< CUDA 失败时是否由估计器内部直接回退 CPU
+    bool  openClFallbackToCpu  = true;   ///< OpenCL 失败时是否由估计器内部直接回退 CPU
     const std::atomic_bool *cancelFlag = nullptr; ///< 非拥有取消标志；用于长 PatchMatch 循环协作退出
 };
 

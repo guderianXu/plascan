@@ -1233,7 +1233,10 @@ bool estimatePatchMatchWithAdaptiveCuda(
     const cv::Mat *referenceValidMask,
     const std::vector<cv::Mat> *sourceValidMasks)
 {
-    const bool tryCuda = config.useCuda && PatchMatchDepthEstimator::isCudaAvailable();
+    const bool tryCuda =
+        (config.backend == PatchMatchBackend::Cuda ||
+         (config.backend == PatchMatchBackend::Auto && config.useCuda)) &&
+        PatchMatchDepthEstimator::isCudaAvailable();
     if (!tryCuda)
     {
         return PatchMatchDepthEstimator::estimate(refGray,
@@ -1334,6 +1337,7 @@ bool estimatePatchMatchWithAdaptiveCuda(
 
     PatchMatchConfig cpuConfig = config;
     cpuConfig.useCuda = false;
+    cpuConfig.backend = PatchMatchBackend::Cpu;
     cpuConfig.cudaFallbackToCpu = false;
     const bool cpuOk = PatchMatchDepthEstimator::estimate(refGray,
                                                           srcGrays,
@@ -2027,6 +2031,7 @@ DepthMapGenerator::~DepthMapGenerator()
         _backgroundFuture.waitForFinished();
     }
     PatchMatchDepthEstimator::cleanupGpuImageCache();
+    PatchMatchDepthEstimator::cleanupOpenClResources();
 }
 
 // =============================================================================
@@ -8699,10 +8704,35 @@ void DepthMapGenerator::runInBackground()
         float score = 0.f;
     };
 
-    const int cudaDeviceCount = _config.patchMatch.useCuda
+    const PatchMatchBackend configuredBackend = _config.patchMatch.backend;
+    const bool allowCuda = configuredBackend == PatchMatchBackend::Cuda ||
+        (configuredBackend == PatchMatchBackend::Auto && _config.patchMatch.useCuda);
+    const bool allowOpenCl = configuredBackend == PatchMatchBackend::OpenCl ||
+        (configuredBackend == PatchMatchBackend::Auto && _config.patchMatch.useCuda);
+    const int cudaDeviceCount = allowCuda
         ? PatchMatchDepthEstimator::cudaDeviceCount()
         : 0;
     const bool cudaAvailable = cudaDeviceCount > 0;
+    const std::vector<OpenClDeviceInfo> detectedOpenClDevices = allowOpenCl
+        ? PatchMatchDepthEstimator::openClDevices()
+        : std::vector<OpenClDeviceInfo>{};
+    std::vector<OpenClDeviceInfo> selectedOpenClDevices;
+    for (const OpenClDeviceInfo &device : detectedOpenClDevices)
+    {
+        if (_config.patchMatch.openClDeviceIndex >= 0 &&
+            device.index != _config.patchMatch.openClDeviceIndex)
+        {
+            continue;
+        }
+
+        const std::string vendor = asciiLowerCopy(device.vendor);
+        const bool duplicatesCudaDevice = configuredBackend == PatchMatchBackend::Auto &&
+            cudaAvailable && vendor.find("nvidia") != std::string::npos;
+        if (!duplicatesCudaDevice)
+        {
+            selectedOpenClDevices.push_back(device);
+        }
+    }
     const int cpuThreadCount = std::max(1, _config.cpuWorkerCount);
 
     std::vector<FramePriority> framePriorities;
@@ -8760,16 +8790,59 @@ void DepthMapGenerator::runInBackground()
     const int pendingFrameCount = static_cast<int>(framePriorities.size());
     const int maxWorkersByPendingFrames = std::max(1, pendingFrameCount);
     const int maxFrameWorkers = std::min(4, maxWorkersByPendingFrames);
-    const int selectedCudaDeviceCount = _config.patchMatch.cudaDeviceIndex >= 0 ? 1 : cudaDeviceCount;
-    const int gpuFrameWorkers = cudaAvailable
-        ? std::clamp(std::max(selectedCudaDeviceCount, _config.gpuFrameWorkerCount), 1, maxFrameWorkers)
-        : 0;
-    const int cpuFrameWorkers = cudaAvailable
+    std::vector<DepthComputeWorker> acceleratorWorkers;
+    if (cudaAvailable)
+    {
+        if (_config.patchMatch.cudaDeviceIndex >= 0 &&
+            _config.patchMatch.cudaDeviceIndex < cudaDeviceCount)
+        {
+            acceleratorWorkers.push_back(
+                {DepthComputeBackend::Cuda, _config.patchMatch.cudaDeviceIndex});
+        }
+        else if (_config.patchMatch.cudaDeviceIndex < 0)
+        {
+            for (int deviceIndex = 0; deviceIndex < cudaDeviceCount; ++deviceIndex)
+            {
+                acceleratorWorkers.push_back({DepthComputeBackend::Cuda, deviceIndex});
+            }
+        }
+    }
+    for (const OpenClDeviceInfo &device : selectedOpenClDevices)
+    {
+        acceleratorWorkers.push_back({DepthComputeBackend::OpenCl, device.index});
+    }
+
+    const std::vector<DepthComputeWorker> physicalAcceleratorWorkers = acceleratorWorkers;
+    const int requestedAcceleratorWorkers = acceleratorWorkers.empty()
+        ? 0
+        : std::clamp(std::max(static_cast<int>(acceleratorWorkers.size()),
+                              _config.gpuFrameWorkerCount),
+                     1,
+                     maxFrameWorkers);
+    for (int index = static_cast<int>(acceleratorWorkers.size());
+         index < requestedAcceleratorWorkers;
+         ++index)
+    {
+        acceleratorWorkers.push_back(
+            physicalAcceleratorWorkers[static_cast<std::size_t>(index) %
+                                       physicalAcceleratorWorkers.size()]);
+    }
+    if (static_cast<int>(acceleratorWorkers.size()) > maxFrameWorkers)
+    {
+        acceleratorWorkers.resize(static_cast<std::size_t>(maxFrameWorkers));
+    }
+
+    const int gpuFrameWorkers = static_cast<int>(acceleratorWorkers.size());
+    const bool acceleratorAvailable = gpuFrameWorkers > 0;
+    const int cpuFrameWorkers = acceleratorAvailable
         ? std::clamp(std::max(0, _config.cpuFrameWorkerCount), 0, maxFrameWorkers)
         : std::clamp(std::max(1, _config.cpuFrameWorkerCount), 1, maxFrameWorkers);
 
-    LOG_INFO(QStringLiteral("[MVS] 深度估计调度: cuda_devices=%1 gpu_frame_workers=%2 cpu_frame_workers=%3 cpu_pixel_threads=%4 views=%5 pending=%6")
+    LOG_INFO(QStringLiteral("[MVS] 深度估计调度: cuda_devices=%1 opencl_devices=%2 "
+                            "gpu_frame_workers=%3 cpu_frame_workers=%4 cpu_pixel_threads=%5 "
+                            "views=%6 pending=%7")
                  .arg(cudaDeviceCount)
+                 .arg(selectedOpenClDevices.size())
                  .arg(gpuFrameWorkers)
                  .arg(cpuFrameWorkers)
                  .arg(cpuThreadCount)
@@ -8784,6 +8857,16 @@ void DepthMapGenerator::runInBackground()
         LOG_DEBUG(QStringLiteral("[MVS] CUDA 已启用，设备=%1，主机帧槽=%2；每个 CUDA 设备使用独立工作区和执行槽")
                       .arg(cudaDeviceCount)
                       .arg(gpuFrameWorkers));
+    }
+    for (const OpenClDeviceInfo &device : selectedOpenClDevices)
+    {
+        LOG_INFO(QStringLiteral("[MVS] OpenCL GPU 已启用: index=%1 vendor=%2 device=%3 "
+                                "compute_units=%4 memory=%5 MiB")
+                     .arg(device.index)
+                     .arg(QString::fromStdString(device.vendor))
+                     .arg(QString::fromStdString(device.name))
+                     .arg(device.computeUnits)
+                     .arg(device.globalMemoryBytes / (1024ULL * 1024ULL)));
     }
 
     const size_t maxBufferedSaveTasks =
@@ -8843,8 +8926,19 @@ void DepthMapGenerator::runInBackground()
                        &saveQueue](DepthComputeWorker worker) {
         const bool useGpu = worker.backend != DepthComputeBackend::Cpu;
         DepthGenConfig workerConfig = _config;
-        workerConfig.patchMatch.useCuda = useGpu;
-        workerConfig.patchMatch.cudaDeviceIndex = worker.deviceIndex;
+        workerConfig.patchMatch.backend = worker.backend == DepthComputeBackend::Cuda
+            ? PatchMatchBackend::Cuda
+            : worker.backend == DepthComputeBackend::OpenCl
+                ? PatchMatchBackend::OpenCl
+                : PatchMatchBackend::Cpu;
+        workerConfig.patchMatch.useCuda = worker.backend == DepthComputeBackend::Cuda;
+        workerConfig.patchMatch.cudaDeviceIndex = worker.backend == DepthComputeBackend::Cuda
+            ? worker.deviceIndex
+            : -1;
+        workerConfig.patchMatch.openClDeviceIndex = worker.backend == DepthComputeBackend::OpenCl
+            ? worker.deviceIndex
+            : -1;
+        workerConfig.patchMatch.cudaFallbackToCpu = false;
         workerConfig.patchMatch.cancelFlag = &_cancelled;
         const QString workerTag = QString::fromStdString(worker.id());
 
@@ -8978,13 +9072,9 @@ void DepthMapGenerator::runInBackground()
     std::vector<std::thread> workers;
     workers.reserve(static_cast<size_t>(cpuFrameWorkers + gpuFrameWorkers));
 
-    for (int workerIndex = 0; workerIndex < gpuFrameWorkers; ++workerIndex)
+    for (const DepthComputeWorker &worker : acceleratorWorkers)
     {
-        const int device_index = _config.patchMatch.cudaDeviceIndex >= 0
-            ? _config.patchMatch.cudaDeviceIndex
-            : workerIndex % cudaDeviceCount;
-        workers.emplace_back(workerFunc,
-                             DepthComputeWorker{DepthComputeBackend::Cuda, device_index});
+        workers.emplace_back(workerFunc, worker);
     }
     for (int workerIndex = 0; workerIndex < cpuFrameWorkers; ++workerIndex)
     {

@@ -253,6 +253,22 @@ DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &setti
             ? settings.value(QStringLiteral("confidence")).toDouble()
             : settings.value(QStringLiteral("min_confidence")).toDouble(0.20));
     parsed.useCuda = settings.value(QStringLiteral("cuda")).toBool(true);
+    const QString patch_match_backend = settings.value(
+        QStringLiteral("patchMatchBackend")).toString(
+            settings.value(QStringLiteral("patchmatch_backend")).toString(
+                QStringLiteral("auto"))).trimmed().toLower();
+    if (patch_match_backend == QStringLiteral("cpu"))
+    {
+        parsed.patchMatchBackend = xjw::mvs::PatchMatchBackend::Cpu;
+    }
+    else if (patch_match_backend == QStringLiteral("cuda"))
+    {
+        parsed.patchMatchBackend = xjw::mvs::PatchMatchBackend::Cuda;
+    }
+    else if (patch_match_backend == QStringLiteral("opencl"))
+    {
+        parsed.patchMatchBackend = xjw::mvs::PatchMatchBackend::OpenCl;
+    }
     parsed.fusionMinConfidence = static_cast<float>(
         settings.value(QStringLiteral("minConfidence")).toDouble(parsed.patchMatchConfidence));
     parsed.fusionMaxImageDim = std::max(0,
@@ -368,6 +384,7 @@ xjw::mvs::DepthGenConfig buildDepthGenConfig(const DenseGenerationSettings &sett
     config.patchMatch.numSourceViews = config.numSourceViews;
     config.patchMatch.confidenceThresh = settings.patchMatchConfidence;
     config.patchMatch.useCuda = settings.useCuda;
+    config.patchMatch.backend = settings.patchMatchBackend;
     config.patchMatch.downsampleFactor = std::max(1, static_cast<int>(std::round(1.0 / settings.resScale)));
     config.patchMatch.geomConsistency = settings.geomConsistency;
     config.patchMatch.geomConsistencyMaxErr = settings.maxReprojError;

@@ -18,7 +18,8 @@ void ReconstructionCliOptions::addTo(CLI::App &app)
     app.add_option("-o,--output-dir", outputDirArg, "output directory");
     app.add_option("--chunk-id", chunkIdArg, "use the Chunk with this UUID");
     app.add_option("--chunk-name", chunkNameArg, "use the Chunk with this name");
-    app.add_option("--device", device, "auto, cpu, cuda")->check(CLI::IsMember({"auto", "cpu", "cuda"}));
+    app.add_option("--device", device, "auto, cpu, cuda")
+        ->check(CLI::IsMember({"auto", "cpu", "cuda"}));
     app.add_option("--sfm-matching-algorithm", sfmMatchingAlgorithmId,
                    "SFM image matching algorithm id: sift_lightglue or loma_r")
         ->check(CLI::IsMember({"sift_lightglue", "loma_r"}));
@@ -38,6 +39,8 @@ void ReconstructionCliOptions::addTo(CLI::App &app)
                    "deep feature max image side; 0 uses auto/adaptive quality preset, negative starts unbounded");
     app.add_option("--mvs-quality", mvsQuality, "MVS quality: highest, high, medium, low, lowest")
         ->check(CLI::IsMember({"highest", "high", "medium", "low", "lowest"}));
+    app.add_option("--mvs-backend", mvsBackend, "MVS backend: auto, cpu, cuda, opencl")
+        ->check(CLI::IsMember({"auto", "cpu", "cuda", "opencl"}));
     app.add_option("--mvs-scene-profile", mvsSceneProfile,
                    "MVS scene profile: auto, orbital_object, aerial_terrain")
         ->check(CLI::IsMember({"auto", "orbital_object", "aerial_terrain"}));
@@ -65,7 +68,7 @@ void ReconstructionCliOptions::addTo(CLI::App &app)
     app.add_option("--mvs-confidence", mvsConfidence, "MVS PatchMatch confidence threshold");
     app.add_option("--mvs-fusion-confidence", mvsFusionConfidence, "MVS fusion confidence threshold");
     app.add_option("--mvs-gpu-frame-workers", mvsGpuFrameWorkers,
-                   "MVS CUDA frame workers; 0 chooses automatically");
+                   "MVS CUDA/OpenCL frame workers; 0 chooses automatically");
     app.add_option("--mvs-cpu-frame-workers", mvsCpuFrameWorkers,
                    "MVS CPU frame workers; 0 chooses automatically");
     app.add_option("--mvs-max-frames", mvsMaxFrames,

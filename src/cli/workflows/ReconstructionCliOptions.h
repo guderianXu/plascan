@@ -31,6 +31,7 @@ struct ReconstructionCliOptions
     int cudaParallelPairs = 1;
     int featureMaxImageDim = 0;
     std::string mvsQuality = "high";
+    std::string mvsBackend = "auto";
     std::string mvsSceneProfile = "auto";
     std::string mvsDepthFilter = "auto";
     std::string mvsMaskDirArg;

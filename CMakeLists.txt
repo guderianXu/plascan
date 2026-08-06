@@ -21,6 +21,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_FIND_PACKAGE_PREFER_CONFIG ON)
 option(PLASCAN_ENABLE_CUDA "Build PlaScan CUDA backends when a CUDA compiler is available" ON)
+option(PLASCAN_ENABLE_OPENCL "Build PlaScan OpenCL GPU backends when OpenCL is available" ON)
 
 if(MSVC)
   add_compile_options(

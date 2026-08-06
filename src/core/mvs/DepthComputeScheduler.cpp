@@ -17,8 +17,6 @@ const char *depthComputeBackendName(DepthComputeBackend backend)
         return "CUDA";
     case DepthComputeBackend::OpenCl:
         return "OpenCL";
-    case DepthComputeBackend::Vulkan:
-        return "Vulkan";
     }
     return "Unknown";
 }

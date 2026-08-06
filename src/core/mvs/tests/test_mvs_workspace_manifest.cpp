@@ -906,6 +906,12 @@ TEST(MvsWorkspaceManifest, DepthConfigHashChangesWhenRelevantSettingsChange)
         changed.patchMatch.cudaUseParallelSweep = !changed.patchMatch.cudaUseParallelSweep;
     });
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.patchMatch.backend = xjw::mvs::PatchMatchBackend::OpenCl;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.patchMatch.openClDeviceIndex = 1;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
         changed.fusion.enableAdaptiveConfidenceFilter =
             !changed.fusion.enableAdaptiveConfidenceFilter;
     });

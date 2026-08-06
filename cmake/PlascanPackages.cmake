@@ -41,6 +41,16 @@ endif()
 find_package(OpenCV REQUIRED COMPONENTS ${PLASCAN_OPENCV_COMPONENTS})
 message(STATUS "plascan: found OpenCV ${OpenCV_VERSION} (${PLASCAN_OPENCV_COMPONENTS})")
 
+# ── OpenCL（可选，用于 AMD/Intel/NVIDIA 通用 GPU 计算）─────────────────────────────
+if(PLASCAN_ENABLE_OPENCL)
+  find_package(OpenCL QUIET)
+  if(OpenCL_FOUND)
+    message(STATUS "plascan: found OpenCL ${OpenCL_VERSION_STRING}")
+  else()
+    message(STATUS "plascan: OpenCL development files not found, OpenCL GPU backend disabled")
+  endif()
+endif()
+
 # ── 平台检测 ──────────────────────────────────────────────────────────────────
 set(PLASCAN_APPLE_SILICON OFF)
 set(PLASCAN_CUDA_AVAILABLE OFF)

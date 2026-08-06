@@ -420,6 +420,8 @@ TEST(ReconstructPipelineCliGTest, ExposesAdaptiveDepthPyramidOptions)
 
     expectContainsAll(source,
                       {"--mvs-quality",
+                       "--mvs-backend",
+                       "opencl",
                        "--mvs-scene-profile",
                        "--mvs-depth-filter",
                        "--mvs-save-levels",
@@ -815,6 +817,7 @@ TEST(ThreeDReconstructionCliContractTest, DefaultsMatchGuiWorkflowAndSupportsSta
 
     expectContainsAll(source, {
         R"(std::string device = "auto")",
+        R"(std::string mvsBackend = "auto")",
         "registerConsoleLogger",
         "Logger::instance()->registerSink",
         "--feature-max-image-dim",

@@ -8557,6 +8557,22 @@ TEST(DenseWorkflowConfigTest, AutoDepthFilterKeepsAdaptiveMode)
     EXPECT_FALSE(config.saveIntermediatePyramidLevels);
 }
 
+TEST(DenseWorkflowConfigTest, MapsExplicitOpenClPatchMatchBackend)
+{
+    const QJsonObject json{
+        {QStringLiteral("qualityProfile"), QStringLiteral("medium")},
+        {QStringLiteral("cuda"), true},
+        {QStringLiteral("patchMatchBackend"), QStringLiteral("opencl")}
+    };
+
+    const auto settings = xjw::gui::project::denseGenerationSettingsFromJson(json);
+    EXPECT_EQ(settings.patchMatchBackend, xjw::mvs::PatchMatchBackend::OpenCl);
+
+    const auto config = xjw::gui::project::buildDepthGenConfig(settings, 12);
+    EXPECT_EQ(config.patchMatch.backend, xjw::mvs::PatchMatchBackend::OpenCl);
+    EXPECT_GT(config.gpuFrameWorkerCount, 0);
+}
+
 TEST(DenseWorkflowConfigTest, MapsMultiHypothesisTargetedGapRecovery)
 {
     QJsonObject json;

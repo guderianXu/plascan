@@ -93,9 +93,13 @@ live under `src/core/mvs/tests/`.
 - CUDA workspaces, execution locks, upload streams, and gray-image cache keys are isolated by device index.
   One device still serializes its constant-memory camera updates, while separate devices may execute frames
   concurrently.
-- `DepthComputeScheduler` owns one priority queue shared by CPU and CUDA workers. Faster workers naturally take
-  more frames. OpenCL and Vulkan worker identities are reserved for later backends; no OpenCL or Vulkan kernel
-  is enabled yet.
+- `DepthComputeScheduler` owns one priority queue shared by CPU, CUDA, and OpenCL GPU workers. Faster workers
+  naturally take more frames. Auto mode excludes NVIDIA OpenCL devices already represented by CUDA, while
+  Intel and AMD OpenCL GPUs can process other frames concurrently.
+- The OpenCL C 1.2 backend runs inverse-depth hypothesis search, multi-source NCC, mask-aware sampling, depth
+  hints, refinement, and confidence filtering. Runtime objects are cached per OpenCL device. CPU execution
+  remains the native C++/OpenMP implementation rather than using a CPU OpenCL device.
+- MVS has no Vulkan Compute backend or placeholder interface. Vulkan remains a GUI rendering dependency only.
 
 The implementation plan and current boundary are documented in
 `docs/plans/MVS_HETEROGENEOUS_COMPUTE_PLAN.md`.
@@ -116,9 +120,9 @@ The implementation plan and current boundary are documented in
 - A finer level that retains less than 60% of the parent coverage is treated as a quality collapse. The
   estimator keeps the parent depth already resized to the final raster size and records the selected level
   and coverage-regression reason instead of publishing a severely incomplete fine result.
-- CPU and CUDA PatchMatch consume the same per-pixel search radius. The final frame is accepted,
+- CPU, CUDA, and OpenCL PatchMatch consume the same per-pixel search radius. The final frame is accepted,
   validation-only, or rejected by `DepthFrameQualityGate` before fusion.
-- CPU and CUDA PatchMatch also consume the same reference/source valid masks. Plane-homography NCC uses only
+- CPU, CUDA, and OpenCL PatchMatch also consume the same reference/source valid masks. Plane-homography NCC uses only
   samples that are foreground in the reference mask and whose four source bilinear neighbors are foreground;
   a masked patch needs at least 35% valid samples (and at least four) before it can contribute photometric
   support. Calls without masks retain the legacy all-image behavior.

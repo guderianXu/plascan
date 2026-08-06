@@ -1021,6 +1021,8 @@ QJsonObject mvsSettingsToJson(const xjw::core::project::DenseGenerationSettings 
         {QStringLiteral("depth_consistency"), denseSettings.depthConsistency},
         {QStringLiteral("max_reproj_error"), denseSettings.maxReprojError},
         {QStringLiteral("use_cuda"), denseSettings.useCuda},
+        {QStringLiteral("patchmatch_backend"),
+         static_cast<int>(denseSettings.patchMatchBackend)},
         {QStringLiteral("requested_max_frames"), requestedMaxFrames},
         {QStringLiteral("mvs_input_frames"), mvsInputFrames},
         {QStringLiteral("registered_image_count"), registeredImageCount}
@@ -1040,6 +1042,8 @@ QJsonObject mvsDepthConfigToJson(const xjw::mvs::DepthGenConfig &config)
         {QStringLiteral("patchmatch_iterations"), config.patchMatch.numIterations},
         {QStringLiteral("patch_half"), config.patchMatch.patchHalf},
         {QStringLiteral("patchmatch_confidence"), config.patchMatch.confidenceThresh},
+        {QStringLiteral("patchmatch_backend"),
+         static_cast<int>(config.patchMatch.backend)},
         {QStringLiteral("fusion_confidence"), config.fusion.confidenceThresh},
         {QStringLiteral("min_consistent_views"), config.fusion.minConsistentViews},
         {QStringLiteral("adaptive_depth_cache_memory"), config.adaptiveDepthCacheMemory},
@@ -1088,6 +1092,7 @@ xjw::cli::ReconstructionCliOptions options;
     auto &cudaParallelPairs = options.cudaParallelPairs;
     auto &featureMaxImageDim = options.featureMaxImageDim;
     auto &mvs_quality = options.mvsQuality;
+    auto &mvs_backend = options.mvsBackend;
     auto &mvs_scene_profile = options.mvsSceneProfile;
     auto &mvs_depth_filter = options.mvsDepthFilter;
     auto &mvs_mask_dir_arg = options.mvsMaskDirArg;
@@ -1650,7 +1655,17 @@ xjw::cli::ReconstructionCliOptions options;
     QDir().mkpath(mvsDir);
     xjw::core::project::DenseGenerationSettings denseSettings;
     denseSettings.threads = std::max(1, threads);
-    denseSettings.useCuda = (device == "cuda" || device == "auto");
+    denseSettings.useCuda = mvs_backend == "auto"
+        ? device != "cpu"
+        : mvs_backend != "cpu";
+    const std::string selected_mvs_backend = mvs_backend == "auto" ? device : mvs_backend;
+    denseSettings.patchMatchBackend = selected_mvs_backend == "cpu"
+        ? xjw::mvs::PatchMatchBackend::Cpu
+        : selected_mvs_backend == "cuda"
+            ? xjw::mvs::PatchMatchBackend::Cuda
+            : selected_mvs_backend == "opencl"
+                ? xjw::mvs::PatchMatchBackend::OpenCl
+                : xjw::mvs::PatchMatchBackend::Auto;
     denseSettings.pipelineMode = true;
     denseSettings.qualityProfile = QString::fromStdString(mvs_quality);
     denseSettings.resScale = mvsResScale;

@@ -18,8 +18,7 @@ enum class DepthComputeBackend
 {
     Cpu,
     Cuda,
-    OpenCl,
-    Vulkan
+    OpenCl
 };
 
 const char *depthComputeBackendName(DepthComputeBackend backend);

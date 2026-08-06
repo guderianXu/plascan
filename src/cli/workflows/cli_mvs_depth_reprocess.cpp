@@ -290,8 +290,8 @@ int main(int argc, char **argv)
     app.add_option("--depth-filter", depthFilter,
                    "过滤：auto/mild/moderate/aggressive")
         ->check(CLI::IsMember({"auto", "mild", "moderate", "aggressive"}));
-    app.add_option("--device", device, "设备：cuda/cpu")
-        ->check(CLI::IsMember({"cuda", "cpu"}));
+    app.add_option("--device", device, "设备：cuda/opencl/cpu")
+        ->check(CLI::IsMember({"cuda", "opencl", "cpu"}));
     app.add_option("--source-views", sourceViews, "请求源视图数")
         ->check(CLI::Range(1, 16));
     app.add_option("--threads", threads, "CPU 线程预算")
@@ -440,7 +440,8 @@ int main(int argc, char **argv)
         {QStringLiteral("threads"), threads},
         {QStringLiteral("gpu_frame_workers"), gpuFrameWorkers},
         {QStringLiteral("cpu_frame_workers"), cpuFrameWorkers},
-        {QStringLiteral("cuda"), device == "cuda"},
+        {QStringLiteral("cuda"), device != "cpu"},
+        {QStringLiteral("patchMatchBackend"), QString::fromStdString(device)},
         {QStringLiteral("saveIntermediatePyramidLevels"), saveLevels},
         {QStringLiteral("pipeline_mode"), true}
     };

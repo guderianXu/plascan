@@ -25,6 +25,7 @@
     "gtest",
     "libzip",
     "openmesh",
+    "opencl",
     {
       "name": "opencv",
       "default-features": false,

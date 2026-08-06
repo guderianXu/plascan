@@ -13,6 +13,14 @@ else()
     message(STATUS "mvs: CUDA 不可用，将使用 CPU 回退路径")
 endif()
 
+if(PLASCAN_ENABLE_OPENCL AND TARGET OpenCL::OpenCL)
+    set(MVS_HAS_OPENCL TRUE)
+    message(STATUS "mvs: OpenCL GPU backend enabled")
+else()
+    set(MVS_HAS_OPENCL FALSE)
+    message(STATUS "mvs: OpenCL GPU backend unavailable")
+endif()
+
 # ── 源文件 ────────────────────────────────────────────────────────────────────
 set(MVS_CXX_SOURCES
     AdaptiveGeometryEvidencePolicy.cpp
@@ -137,6 +145,12 @@ else()
     )
 endif()
 
+if(MVS_HAS_OPENCL)
+    list(APPEND MVS_CXX_SOURCES PatchMatchOpenCL.cpp)
+else()
+    list(APPEND MVS_CXX_SOURCES PatchMatchNoOpenCL.cpp)
+endif()
+
 add_library(mvs STATIC
     ${MVS_CXX_SOURCES}
     ${MVS_CUDA_SOURCES}
@@ -154,6 +168,11 @@ if(MVS_HAS_CUDA)
     target_compile_options(mvs PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math -O3>
     )
+endif()
+
+if(MVS_HAS_OPENCL)
+    target_compile_definitions(mvs PUBLIC MVS_ENABLE_OPENCL=1)
+    target_link_libraries(mvs PRIVATE OpenCL::OpenCL)
 endif()
 
 target_include_directories(mvs PUBLIC

@@ -249,7 +249,10 @@ core/
 │   ├── PatchMatchCPU.cpp        # 可独立构建的 CPU PatchMatch 实现
 │   ├── PatchMatchCUDA.cu/h     # 按设备隔离工作区与图像缓存的 CUDA 实现
 │   ├── PatchMatchNoCUDA.cpp    # 无 CUDA 构建的 GPU 接口存根
-│   ├── DepthComputeScheduler.h/cpp # CPU/CUDA/OpenCL/Vulkan 统一 worker 与优先级帧调度
+│   ├── PatchMatchOpenCL.cpp     # 跨厂商 OpenCL GPU 深度假设搜索、设备枚举与运行时缓存
+│   ├── PatchMatchOpenCLKernels.h # OpenCL C 1.2 多源 NCC/深度细化 kernel
+│   ├── PatchMatchNoOpenCL.cpp   # 无 OpenCL 构建的稳定接口存根
+│   ├── DepthComputeScheduler.h/cpp # CPU/CUDA/OpenCL 统一 worker 与优先级帧调度
 │   ├── DepthMapGenerator.h/cpp # 深度图估计、取消检查、raw depth/confidence/几何支持度/valid mask 写盘
 │   ├── DepthMapFusion.h/cpp    # 深度图融合 → 密集点云，支持 manifest source plan 和流式融合
 │   ├── DepthFrameUtils.h/cpp   # 深度帧存储与按指定输出目录选择批次

@@ -60,6 +60,7 @@ jobs:
             libgtest-dev \
             libgmock-dev \
             libopenmesh-dev \
+            ocl-icd-opencl-dev \
             libomp-dev
 
       - name: Install Qt 6.8.3

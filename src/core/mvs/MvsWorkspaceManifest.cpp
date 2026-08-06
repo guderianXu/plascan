@@ -668,6 +668,7 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
     patch.insert(QStringLiteral("photometric_uniqueness_minimum_confidence_scale"),
                  config.patchMatch.photometricUniquenessMinimumConfidenceScale);
     patch.insert(QStringLiteral("use_cuda"), config.patchMatch.useCuda);
+    patch.insert(QStringLiteral("backend"), static_cast<int>(config.patchMatch.backend));
     patch.insert(QStringLiteral("downsample_factor"), config.patchMatch.downsampleFactor);
     patch.insert(QStringLiteral("median_blur"), config.patchMatch.doMedianBlur);
     patch.insert(QStringLiteral("median_kernel"), config.patchMatch.medianKernelSize);
@@ -681,6 +682,8 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
     patch.insert(QStringLiteral("cuda_parallel_sweep"), config.patchMatch.cudaUseParallelSweep);
     patch.insert(QStringLiteral("cuda_fallback_to_cpu"), config.patchMatch.cudaFallbackToCpu);
     patch.insert(QStringLiteral("cuda_device_index"), config.patchMatch.cudaDeviceIndex);
+    patch.insert(QStringLiteral("opencl_fallback_to_cpu"), config.patchMatch.openClFallbackToCpu);
+    patch.insert(QStringLiteral("opencl_device_index"), config.patchMatch.openClDeviceIndex);
 
     QJsonObject fusion;
     fusion.insert(QStringLiteral("min_consistent_views"), config.fusion.minConsistentViews);

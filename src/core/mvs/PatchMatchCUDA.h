@@ -29,11 +29,25 @@ namespace xjw
 namespace mvs 
 {
 
+struct OpenClDeviceInfo
+{
+    int index = -1;
+    std::string name;
+    std::string vendor;
+    std::string version;
+    std::uint64_t globalMemoryBytes = 0;
+    int computeUnits = 0;
+    bool isGpu = false;
+};
+
 class PatchMatchDepthEstimator
 {
 public:
     static bool isCudaAvailable();
     static int cudaDeviceCount();
+    static bool isOpenClAvailable();
+    static std::vector<OpenClDeviceInfo> openClDevices();
+    static void cleanupOpenClResources();
 
     /// 释放全局 GPU 图像缓存占用的所有显存。
     /// 在程序退出前或不再需要 MVS 功能时调用，防止显存泄漏。
@@ -93,6 +107,20 @@ private:
         const std::vector<cv::Mat> *srcValidMasks);
 
     static bool estimateCPU(
+        const cv::Mat                          &refGray,
+        const std::vector<cv::Mat>             &srcGrays,
+        const Camera                           &refCam,
+        const std::vector<Camera>              &srcCams,
+        float zNear, float zFar,
+        const PatchMatchConfig       &config,
+        cv::Mat &depthOut, cv::Mat *confOut,
+        std::string *errorMsg,
+        const cv::Mat *hintDepth,
+        const cv::Mat *hintRadius,
+        const cv::Mat *refValidMask,
+        const std::vector<cv::Mat> *srcValidMasks);
+
+    static bool estimateOpenCL(
         const cv::Mat                          &refGray,
         const std::vector<cv::Mat>             &srcGrays,
         const Camera                           &refCam,
