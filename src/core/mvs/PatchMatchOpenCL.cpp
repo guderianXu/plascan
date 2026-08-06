@@ -430,6 +430,7 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     const cv::Mat *refValidMask,
     const std::vector<cv::Mat> *srcValidMasks)
 {
+    const auto estimate_start = std::chrono::steady_clock::now();
     const std::vector<EnumeratedOpenClDevice> devices = enumerateOpenClGpuDevices();
     const int device_index = config.openClDeviceIndex >= 0 ? config.openClDeviceIndex : 0;
     if (device_index < 0 || device_index >= static_cast<int>(devices.size()))
@@ -463,7 +464,6 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     {
         return false;
     }
-    std::lock_guard<std::mutex> execution_lock(runtime->executionMutex);
 
     const int downsample_factor = std::max(1, config.downsampleFactor);
     const int width = std::max(1, refGray.cols / downsample_factor);
@@ -626,6 +626,11 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     const float cx = static_cast<float>(reference_intrinsics.principalX) * scale;
     const float cy = static_cast<float>(reference_intrinsics.principalY) * scale;
 
+    // Buffer creation and CPU image preparation are independent per host lane.
+    // Only the shared command queue and kernel arguments require serialization.
+    const auto slot_wait_start = std::chrono::steady_clock::now();
+    std::unique_lock<std::mutex> execution_lock(runtime->executionMutex);
+    const auto slot_acquired = std::chrono::steady_clock::now();
     const std::array<cl_mem, 9> memory_arguments = {
         reference_buffer.get(),
         sources_buffer.get(),
@@ -677,7 +682,7 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         (static_cast<std::size_t>(width) + local_size[0] - 1) / local_size[0] * local_size[0],
         (static_cast<std::size_t>(height) + local_size[1] - 1) / local_size[1] * local_size[1]};
     cl_event event = nullptr;
-    const auto start = std::chrono::steady_clock::now();
+    const auto kernel_wall_start = std::chrono::steady_clock::now();
     cl_int error = clEnqueueNDRangeKernel(runtime->queue,
                                           runtime->kernel,
                                           2,
@@ -696,6 +701,21 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         return false;
     }
     error = clWaitForEvents(1, &event);
+    const auto kernel_wall_finished = std::chrono::steady_clock::now();
+    cl_ulong kernel_start_nanoseconds = 0;
+    cl_ulong kernel_end_nanoseconds = 0;
+    const bool has_kernel_profile =
+        clGetEventProfilingInfo(event,
+                                CL_PROFILING_COMMAND_START,
+                                sizeof(kernel_start_nanoseconds),
+                                &kernel_start_nanoseconds,
+                                nullptr) == CL_SUCCESS &&
+        clGetEventProfilingInfo(event,
+                                CL_PROFILING_COMMAND_END,
+                                sizeof(kernel_end_nanoseconds),
+                                &kernel_end_nanoseconds,
+                                nullptr) == CL_SUCCESS &&
+        kernel_end_nanoseconds >= kernel_start_nanoseconds;
     clReleaseEvent(event);
     if (error != CL_SUCCESS)
     {
@@ -716,6 +736,7 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
 
     cv::Mat depth_work(height, width, CV_32F);
     cv::Mat confidence_work(height, width, CV_32F);
+    const auto read_start = std::chrono::steady_clock::now();
     error = clEnqueueReadBuffer(runtime->queue,
                                 depth_buffer.get(),
                                 CL_TRUE,
@@ -745,6 +766,9 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         }
         return false;
     }
+    const auto read_finished = std::chrono::steady_clock::now();
+    execution_lock.unlock();
+    const auto postprocess_start = read_finished;
 
     if (config.doMedianBlur && config.medianKernelSize > 1)
     {
@@ -794,9 +818,25 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     }
 
     const int valid_count = cv::countNonZero(depthOut > 0.0f);
-    const double elapsed_ms = std::chrono::duration<double, std::milli>(
-        std::chrono::steady_clock::now() - start).count();
-    LOG_INFO("[MVS][PatchMatch][OpenCL] device=%s size=%dx%d sources=%d samples=%d valid=%d/%d elapsed=%.1f ms",
+    const auto estimate_finished = std::chrono::steady_clock::now();
+    const double host_prepare_ms = std::chrono::duration<double, std::milli>(
+        slot_wait_start - estimate_start).count();
+    const double slot_wait_ms = std::chrono::duration<double, std::milli>(
+        slot_acquired - slot_wait_start).count();
+    const double queue_ms = std::chrono::duration<double, std::milli>(
+        kernel_wall_finished - kernel_wall_start).count();
+    const double kernel_ms = has_kernel_profile
+        ? static_cast<double>(kernel_end_nanoseconds - kernel_start_nanoseconds) / 1.0e6
+        : queue_ms;
+    const double read_ms = std::chrono::duration<double, std::milli>(
+        read_finished - read_start).count();
+    const double postprocess_ms = std::chrono::duration<double, std::milli>(
+        estimate_finished - postprocess_start).count();
+    const double total_ms = std::chrono::duration<double, std::milli>(
+        estimate_finished - estimate_start).count();
+    LOG_INFO("[MVS][PatchMatch][OpenCL] device=%s size=%dx%d sources=%d samples=%d valid=%d/%d "
+             "prepare=%.1f ms wait=%.1f ms queue=%.1f ms kernel=%.1f ms "
+             "read=%.1f ms post=%.1f ms total=%.1f ms",
              devices[device_index].info.name.c_str(),
              width,
              height,
@@ -804,7 +844,13 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
              depth_sample_count,
              valid_count,
              depthOut.rows * depthOut.cols,
-             elapsed_ms);
+             host_prepare_ms,
+             slot_wait_ms,
+             queue_ms,
+             kernel_ms,
+             read_ms,
+             postprocess_ms,
+             total_ms);
     return true;
 }
 

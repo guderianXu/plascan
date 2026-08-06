@@ -8790,47 +8790,60 @@ void DepthMapGenerator::runInBackground()
     const int pendingFrameCount = static_cast<int>(framePriorities.size());
     const int maxWorkersByPendingFrames = std::max(1, pendingFrameCount);
     const int maxFrameWorkers = std::min(4, maxWorkersByPendingFrames);
-    std::vector<DepthComputeWorker> acceleratorWorkers;
+    std::vector<DepthComputeWorker> physicalAcceleratorWorkers;
     if (cudaAvailable)
     {
         if (_config.patchMatch.cudaDeviceIndex >= 0 &&
             _config.patchMatch.cudaDeviceIndex < cudaDeviceCount)
         {
-            acceleratorWorkers.push_back(
+            physicalAcceleratorWorkers.push_back(
                 {DepthComputeBackend::Cuda, _config.patchMatch.cudaDeviceIndex});
         }
         else if (_config.patchMatch.cudaDeviceIndex < 0)
         {
             for (int deviceIndex = 0; deviceIndex < cudaDeviceCount; ++deviceIndex)
             {
-                acceleratorWorkers.push_back({DepthComputeBackend::Cuda, deviceIndex});
+                physicalAcceleratorWorkers.push_back(
+                    {DepthComputeBackend::Cuda, deviceIndex});
             }
         }
     }
     for (const OpenClDeviceInfo &device : selectedOpenClDevices)
     {
-        acceleratorWorkers.push_back({DepthComputeBackend::OpenCl, device.index});
+        physicalAcceleratorWorkers.push_back(
+            {DepthComputeBackend::OpenCl, device.index});
     }
 
-    const std::vector<DepthComputeWorker> physicalAcceleratorWorkers = acceleratorWorkers;
-    const int requestedAcceleratorWorkers = acceleratorWorkers.empty()
-        ? 0
-        : std::clamp(std::max(static_cast<int>(acceleratorWorkers.size()),
-                              _config.gpuFrameWorkerCount),
-                     1,
-                     maxFrameWorkers);
-    for (int index = static_cast<int>(acceleratorWorkers.size());
-         index < requestedAcceleratorWorkers;
-         ++index)
-    {
-        acceleratorWorkers.push_back(
-            physicalAcceleratorWorkers[static_cast<std::size_t>(index) %
-                                       physicalAcceleratorWorkers.size()]);
-    }
-    if (static_cast<int>(acceleratorWorkers.size()) > maxFrameWorkers)
-    {
-        acceleratorWorkers.resize(static_cast<std::size_t>(maxFrameWorkers));
-    }
+    const int physicalCudaWorkers = static_cast<int>(std::count_if(
+        physicalAcceleratorWorkers.begin(),
+        physicalAcceleratorWorkers.end(),
+        [](const DepthComputeWorker &worker)
+        {
+            return worker.backend == DepthComputeBackend::Cuda;
+        }));
+    const int physicalOpenClWorkers = static_cast<int>(std::count_if(
+        physicalAcceleratorWorkers.begin(),
+        physicalAcceleratorWorkers.end(),
+        [](const DepthComputeWorker &worker)
+        {
+            return worker.backend == DepthComputeBackend::OpenCl;
+        }));
+    const int requestedCudaHostSlots = physicalCudaWorkers > 0
+        ? std::max(physicalCudaWorkers, _config.gpuFrameWorkerCount)
+        : 0;
+    // CUDA and OpenCL devices process different frames concurrently. When no
+    // CUDA device is present, a second OpenCL host lane can prepare the next
+    // frame while the device execution slot is occupied.
+    const int requestedOpenClHostSlots = physicalOpenClWorkers > 0
+        ? (physicalCudaWorkers > 0
+               ? physicalOpenClWorkers
+               : std::max(physicalOpenClWorkers, _config.gpuFrameWorkerCount))
+        : 0;
+    const std::vector<DepthComputeWorker> acceleratorWorkers =
+        buildDepthComputeWorkerPool(physicalAcceleratorWorkers,
+                                    requestedCudaHostSlots,
+                                    requestedOpenClHostSlots,
+                                    static_cast<std::size_t>(maxFrameWorkers));
 
     const int gpuFrameWorkers = static_cast<int>(acceleratorWorkers.size());
     const bool acceleratorAvailable = gpuFrameWorkers > 0;
@@ -8839,10 +8852,11 @@ void DepthMapGenerator::runInBackground()
         : std::clamp(std::max(1, _config.cpuFrameWorkerCount), 1, maxFrameWorkers);
 
     LOG_INFO(QStringLiteral("[MVS] 深度估计调度: cuda_devices=%1 opencl_devices=%2 "
-                            "gpu_frame_workers=%3 cpu_frame_workers=%4 cpu_pixel_threads=%5 "
-                            "views=%6 pending=%7")
+                            "physical_gpu_workers=%3 gpu_host_slots=%4 cpu_frame_workers=%5 "
+                            "cpu_pixel_threads=%6 views=%7 pending=%8")
                  .arg(cudaDeviceCount)
                  .arg(selectedOpenClDevices.size())
+                 .arg(physicalAcceleratorWorkers.size())
                  .arg(gpuFrameWorkers)
                  .arg(cpuFrameWorkers)
                  .arg(cpuThreadCount)
@@ -8854,9 +8868,10 @@ void DepthMapGenerator::runInBackground()
     }
     if (cudaAvailable)
     {
-        LOG_DEBUG(QStringLiteral("[MVS] CUDA 已启用，设备=%1，主机帧槽=%2；每个 CUDA 设备使用独立工作区和执行槽")
-                      .arg(cudaDeviceCount)
-                      .arg(gpuFrameWorkers));
+        LOG_DEBUG(QStringLiteral("[MVS] CUDA 已启用，设备=%1，CUDA 主机帧槽=%2；"
+                                 "每个 CUDA 设备使用独立工作区和执行槽")
+                      .arg(physicalCudaWorkers)
+                      .arg(requestedCudaHostSlots));
     }
     for (const OpenClDeviceInfo &device : selectedOpenClDevices)
     {

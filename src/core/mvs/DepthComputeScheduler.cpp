@@ -31,6 +31,65 @@ std::string DepthComputeWorker::id() const
     return result;
 }
 
+std::vector<DepthComputeWorker> buildDepthComputeWorkerPool(
+    const std::vector<DepthComputeWorker> &physicalWorkers,
+    int cudaHostSlotCount,
+    int openClHostSlotCount,
+    std::size_t maximumWorkerCount)
+{
+    if (maximumWorkerCount == 0)
+    {
+        return {};
+    }
+
+    std::vector<DepthComputeWorker> workers;
+    workers.reserve(std::min(maximumWorkerCount, physicalWorkers.size()));
+    for (const DepthComputeWorker &worker : physicalWorkers)
+    {
+        if (workers.size() >= maximumWorkerCount)
+        {
+            return workers;
+        }
+        workers.push_back(worker);
+    }
+
+    const auto add_host_slots = [&](DepthComputeBackend backend, int requestedCount)
+    {
+        std::vector<DepthComputeWorker> candidates;
+        for (const DepthComputeWorker &worker : physicalWorkers)
+        {
+            if (worker.backend == backend)
+            {
+                candidates.push_back(worker);
+            }
+        }
+        if (candidates.empty())
+        {
+            return;
+        }
+
+        std::size_t current_count = static_cast<std::size_t>(std::count_if(
+            workers.begin(), workers.end(), [backend](const DepthComputeWorker &worker)
+            {
+                return worker.backend == backend;
+            }));
+        const std::size_t target_count = std::max(
+            current_count,
+            static_cast<std::size_t>(std::max(0, requestedCount)));
+        std::size_t candidate_index = 0;
+        while (current_count < target_count && workers.size() < maximumWorkerCount)
+        {
+            workers.push_back(candidates[candidate_index % candidates.size()]);
+            ++candidate_index;
+            ++current_count;
+        }
+    };
+
+    add_host_slots(DepthComputeBackend::Cuda, cudaHostSlotCount);
+    add_host_slots(DepthComputeBackend::OpenCl, openClHostSlotCount);
+    return workers;
+}
+
 DepthComputeScheduler::DepthComputeScheduler(std::vector<DepthFrameTask> tasks)
 {
     std::stable_sort(tasks.begin(), tasks.end(), [](const DepthFrameTask &left,

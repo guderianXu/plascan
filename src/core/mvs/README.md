@@ -96,9 +96,18 @@ live under `src/core/mvs/tests/`.
 - `DepthComputeScheduler` owns one priority queue shared by CPU, CUDA, and OpenCL GPU workers. Faster workers
   naturally take more frames. Auto mode excludes NVIDIA OpenCL devices already represented by CUDA, while
   Intel and AMD OpenCL GPUs can process other frames concurrently.
+- Multi-GPU scheduling is frame-level: one depth map remains on one device, while different reference frames
+  run concurrently. Every physical accelerator is represented before host preparation lanes are duplicated.
+  With CUDA plus an Intel/AMD OpenCL GPU, the default pool keeps both devices active and adds a second CUDA host
+  lane so frame N+1 can prepare and upload while frame N owns that CUDA device's execution slot.
 - The OpenCL C 1.2 backend runs inverse-depth hypothesis search, multi-source NCC, mask-aware sampling, depth
-  hints, refinement, and confidence filtering. Runtime objects are cached per OpenCL device. CPU execution
-  remains the native C++/OpenMP implementation rather than using a CPU OpenCL device.
+  hints, refinement, and confidence filtering. Runtime objects are cached per OpenCL device. CPU packing and
+  post-processing run outside the per-device queue lock, so an OpenCL-only configuration can also overlap host
+  work through two preparation lanes. CPU execution remains the native C++/OpenMP implementation rather than
+  using a CPU OpenCL device.
+- Per-frame CUDA and OpenCL logs report preparation, device-slot wait, device execution/readback, post-processing,
+  and total time. OpenCL additionally separates command queue turnaround from profiled kernel execution. These
+  fields distinguish expected frame-pipeline overlap from a driver/queue or device-side utilization gap.
 - MVS has no Vulkan Compute backend or placeholder interface. Vulkan remains a GUI rendering dependency only.
 
 The implementation plan and current boundary are documented in

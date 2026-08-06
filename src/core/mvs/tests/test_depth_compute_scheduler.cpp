@@ -14,6 +14,7 @@ using xjw::mvs::DepthComputeBackend;
 using xjw::mvs::DepthComputeScheduler;
 using xjw::mvs::DepthComputeWorker;
 using xjw::mvs::DepthFrameTask;
+using xjw::mvs::buildDepthComputeWorkerPool;
 
 TEST(DepthComputeSchedulerTest, ReturnsHighestPriorityFrameFirst)
 {
@@ -76,6 +77,47 @@ TEST(DepthComputeSchedulerTest, UsesStableOpenClWorkerName)
 {
     const DepthComputeWorker opencl_worker{DepthComputeBackend::OpenCl, 2};
     EXPECT_EQ(opencl_worker.id(), "OpenCL:2");
+}
+
+TEST(DepthComputeSchedulerTest, PreservesPhysicalDevicesBeforeAddingCudaPreparationLane)
+{
+    const std::vector<DepthComputeWorker> physical_workers = {
+        {DepthComputeBackend::Cuda, 0},
+        {DepthComputeBackend::OpenCl, 1}};
+
+    const std::vector<DepthComputeWorker> workers = buildDepthComputeWorkerPool(
+        physical_workers, 2, 1, 4);
+
+    ASSERT_EQ(workers.size(), 3U);
+    EXPECT_EQ(workers[0].id(), "CUDA:0");
+    EXPECT_EQ(workers[1].id(), "OpenCL:1");
+    EXPECT_EQ(workers[2].id(), "CUDA:0");
+}
+
+TEST(DepthComputeSchedulerTest, AddsOpenClPreparationLaneWhenCudaIsUnavailable)
+{
+    const std::vector<DepthComputeWorker> workers = buildDepthComputeWorkerPool(
+        {{DepthComputeBackend::OpenCl, 0}}, 0, 2, 4);
+
+    ASSERT_EQ(workers.size(), 2U);
+    EXPECT_EQ(workers[0].id(), "OpenCL:0");
+    EXPECT_EQ(workers[1].id(), "OpenCL:0");
+}
+
+TEST(DepthComputeSchedulerTest, CapsWorkersWithoutDroppingEarlierPhysicalDevices)
+{
+    const std::vector<DepthComputeWorker> workers = buildDepthComputeWorkerPool(
+        {{DepthComputeBackend::Cuda, 0},
+         {DepthComputeBackend::Cuda, 1},
+         {DepthComputeBackend::OpenCl, 2}},
+        4,
+        2,
+        3);
+
+    ASSERT_EQ(workers.size(), 3U);
+    EXPECT_EQ(workers[0].id(), "CUDA:0");
+    EXPECT_EQ(workers[1].id(), "CUDA:1");
+    EXPECT_EQ(workers[2].id(), "OpenCL:2");
 }
 
 } // namespace

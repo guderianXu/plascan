@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <chrono>
 #include <limits>
 #include <unordered_map>
 #include <mutex>
@@ -1867,6 +1868,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
     const cv::Mat                *refValidMask,
     const std::vector<cv::Mat>   *srcValidMasks)
 {
+    const auto estimate_start = std::chrono::steady_clock::now();
     int device_count = 0;
     CUDA_CHECK(cudaGetDeviceCount(&device_count));
     int previous_device = 0;
@@ -2068,7 +2070,9 @@ bool PatchMatchDepthEstimator::estimateGPU(
     // A single CUDA execution slot protects the shared constant-memory camera
     // parameters and persistent workspace. Two host frame workers may still
     // overlap CPU preparation/post-processing around this section.
+    const auto slot_wait_start = std::chrono::steady_clock::now();
     std::unique_lock<std::mutex> gpu_execution_lock(device_state.executionMutex);
+    const auto slot_acquired = std::chrono::steady_clock::now();
     PatchMatchGpuWorkspace &workspace = device_state.workspace;
     CUDA_CHECK(workspace.initialize());
     PatchMatchGpuRunGuard workspace_run_guard(workspace);
@@ -2375,6 +2379,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
                 workspace.confidenceHost.ptr,
                 static_cast<std::size_t>(refPx) * sizeof(float));
     workspace_run_guard.markCompleted();
+    const auto gpu_slot_finished = std::chrono::steady_clock::now();
     gpu_execution_lock.unlock();
     if (!ref_mask_scaled.empty())
     {
@@ -2454,6 +2459,28 @@ bool PatchMatchDepthEstimator::estimateGPU(
         cacheMisses,
         static_cast<float>(getGrayImageGpuCacheBytes(device_index)) / (1024.0f * 1024.0f),
         static_cast<float>(getGrayImageGpuCacheLimitBytes()) / (1024.0f * 1024.0f));
+    const auto estimate_finished = std::chrono::steady_clock::now();
+    const double host_prepare_ms = std::chrono::duration<double, std::milli>(
+        slot_wait_start - estimate_start).count();
+    const double slot_wait_ms = std::chrono::duration<double, std::milli>(
+        slot_acquired - slot_wait_start).count();
+    const double gpu_slot_ms = std::chrono::duration<double, std::milli>(
+        gpu_slot_finished - slot_acquired).count();
+    const double postprocess_ms = std::chrono::duration<double, std::milli>(
+        estimate_finished - gpu_slot_finished).count();
+    const double total_ms = std::chrono::duration<double, std::milli>(
+        estimate_finished - estimate_start).count();
+    LOG_INFO("[MVS][PatchMatch][CUDA] device=%d size=%dx%d sources=%d "
+             "prepare=%.1f ms wait=%.1f ms gpu_slot=%.1f ms post=%.1f ms total=%.1f ms",
+             device_index,
+             sW,
+             sH,
+             N,
+             host_prepare_ms,
+             slot_wait_ms,
+             gpu_slot_ms,
+             postprocess_ms,
+             total_ms);
     return true;
 }
 

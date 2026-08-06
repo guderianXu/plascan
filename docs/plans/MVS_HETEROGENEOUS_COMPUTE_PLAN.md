@@ -57,6 +57,22 @@
 CPU 不通过 OpenCL 执行。现有 C++/OpenMP 路径没有 JIT、驱动与主机内存搬运开销，适合作为稳定回退、
 数值参考和调试路径。只有将来出现经过基准证明更快的特定 CPU OpenCL 驱动时，才重新评估。
 
+## 阶段 6：多 GPU 流水线连续性优化（已完成）
+
+- 多 GPU 采用帧级并行：一张参考帧的深度图不跨设备拆分，不同参考帧由 CUDA、Intel/AMD OpenCL
+  设备从共享队列并行领取；较快设备会自然处理更多帧。
+- worker 池先为每块物理 GPU 保留一个执行来源，再增加同设备主机准备槽。CUDA + OpenCL 默认场景下，
+  两块设备都会参与，同时为 CUDA 增加第二个主机槽，使下一帧的 CPU 准备和灰度图上传与当前帧 kernel
+  重叠，不因加入核显而退回单槽 CUDA 流水线。
+- 每块 CUDA/OpenCL GPU 仍只有一个设备执行槽，避免共享 constant memory、workspace、command queue 和
+  kernel 参数发生竞争；重复的是主机准备槽，不是让同一设备并发修改共享资源。
+- OpenCL 的设备锁缩小到 kernel 参数设置、提交、等待和结果回读。灰度缩放、相机/蒙版打包、buffer 创建
+  以及 OpenCV 后处理不再占用设备执行槽；仅 OpenCL 的机器也可利用第二个主机槽预备下一帧。
+- CUDA 日志记录 `prepare/wait/gpu_slot/post/total`，OpenCL 日志记录
+  `prepare/wait/queue/kernel/read/post/total`；其中 `queue` 是提交到完成的墙钟时间，`kernel` 是设备事件的
+  实际执行时间。`wait` 持续偏高表示同设备主机槽已成功前置准备；设备监控中的短暂空档若对应 `prepare`
+  或 `post` 偏高，则应继续优化 CPU 数据准备或后处理；`queue-kernel` 偏高则指向驱动/JIT/排队开销。
+
 ## 可行性结论
 
 项目已具备可运行的跨厂商 OpenCL GPU 深度估计和 CPU/CUDA/OpenCL 帧级异构调度。首期 OpenCL 路径
