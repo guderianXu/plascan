@@ -333,22 +333,27 @@ struct PosePriorResidual
 struct CameraPlaneResidual
 {
     Camera camera;
-    BACameraPlaneConstraint constraint;
+    std::array<double, 3> point;
+    std::array<double, 3> normal;
+    double referenceSignedDistance = 0.0;
+    double sigmaMeters = 1.0;
+    double weight = 1.0;
 
     template <typename T>
     bool operator()(const T *const cameraDelta, T *residuals) const
     {
         const auto center = camera.cameraCenter();
-        const double sigma = std::max(1.0e-9, constraint.sigmaMeters);
+        const double sigma = std::max(1.0e-9, sigmaMeters);
         const double scale =
-            std::sqrt(std::max(0.0, constraint.weight)) / sigma;
+            std::sqrt(std::max(0.0, weight)) / sigma;
         residuals[0] = T(scale) *
-            (T(constraint.normal[0]) *
-                 (T(center[0]) + cameraDelta[3] - T(constraint.point[0])) +
-             T(constraint.normal[1]) *
-                 (T(center[1]) + cameraDelta[4] - T(constraint.point[1])) +
-             T(constraint.normal[2]) *
-                 (T(center[2]) + cameraDelta[5] - T(constraint.point[2])));
+            (T(normal[0]) *
+                 (T(center[0]) + cameraDelta[3] - T(point[0])) +
+             T(normal[1]) *
+                 (T(center[1]) + cameraDelta[4] - T(point[1])) +
+             T(normal[2]) *
+                 (T(center[2]) + cameraDelta[5] - T(point[2])) -
+             T(referenceSignedDistance));
         return true;
     }
 };
@@ -1071,8 +1076,20 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
             {
                 continue;
             }
+            const BACameraPlaneConstraint &constraint =
+                options.cameraPlaneConstraint;
+            const double referenceSignedDistance =
+                constraint.referenceSignedDistances.empty()
+                    ? 0.0
+                    : constraint.referenceSignedDistances[ci];
             auto *cost = new ceres::AutoDiffCostFunction<CameraPlaneResidual, 1, 6>(
-                new CameraPlaneResidual{cameras[ci], options.cameraPlaneConstraint});
+                new CameraPlaneResidual{
+                    cameras[ci],
+                    constraint.point,
+                    constraint.normal,
+                    referenceSignedDistance,
+                    constraint.sigmaMeters,
+                    constraint.weight});
             problem.AddResidualBlock(
                 cost,
                 makeHuberLoss(options.cameraPlaneHuberDelta),

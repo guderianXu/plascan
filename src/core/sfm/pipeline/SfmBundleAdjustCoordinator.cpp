@@ -116,6 +116,31 @@ AerialCameraPlaneEstimate estimateAerialCameraPlane(
     return estimate;
 }
 
+double cameraLayerReferenceDriftRms(
+    const std::vector<Camera> &cameras,
+    const BACameraPlaneConstraint &constraint)
+{
+    if (cameras.empty() ||
+        constraint.referenceSignedDistances.size() != cameras.size())
+    {
+        return std::numeric_limits<double>::infinity();
+    }
+
+    double squaredSum = 0.0;
+    for (std::size_t index = 0; index < cameras.size(); ++index)
+    {
+        const auto center = cameras[index].cameraCenter();
+        const double signedDistance =
+            constraint.normal[0] * (center[0] - constraint.point[0]) +
+            constraint.normal[1] * (center[1] - constraint.point[1]) +
+            constraint.normal[2] * (center[2] - constraint.point[2]);
+        const double drift =
+            signedDistance - constraint.referenceSignedDistances[index];
+        squaredSum += drift * drift;
+    }
+    return std::sqrt(squaredSum / static_cast<double>(cameras.size()));
+}
+
 } // namespace
 
 SfmBundleAdjustCoordinator::SfmBundleAdjustCoordinator(IncrementalSfm &owner)
@@ -140,31 +165,14 @@ bool SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
     return registeredImageCount == totalImageCount;
 }
 
-bool SfmBundleAdjustCoordinator::shouldStabilizeAerialCameraPlane(
+bool SfmBundleAdjustCoordinator::shouldPreserveCameraLayer(
     bool localOnly,
-    int activeCameraCount,
     bool hasAbsoluteConstraint,
     bool completeRegistration,
-    bool refiningSharedIntrinsics,
-    bool stabilizationLatched,
-    double opticalAxisConcentration,
-    double normalToSpanRmsRatio,
-    double triggerRmsRatio)
+    bool refiningSharedIntrinsics)
 {
-    if (localOnly || activeCameraCount < 96 || hasAbsoluteConstraint ||
-        !std::isfinite(opticalAxisConcentration) ||
-        !std::isfinite(normalToSpanRmsRatio) ||
-        !std::isfinite(triggerRmsRatio) || triggerRmsRatio <= 0.0 ||
-        opticalAxisConcentration < 0.85)
-    {
-        return false;
-    }
-
-    // 最终释放共享焦距的首轮 BA 必须预防性稳定相机层；若等穹顶已经形成再启用，
-    // 焦距、航高和地面高程之间的弱几何会先收敛到低 RMS 的弯曲解。
-    return (completeRegistration &&
-            (refiningSharedIntrinsics || stabilizationLatched)) ||
-           normalToSpanRmsRatio >= triggerRmsRatio;
+    return !localOnly && !hasAbsoluteConstraint && completeRegistration &&
+           refiningSharedIntrinsics;
 }
 
 bool SfmBundleAdjustCoordinator::hasIterativeGlobalBaConverged(
@@ -643,56 +651,50 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
     bool cameraPlaneConstraintActive = false;
     const bool completeRegistration =
         baCameras.size() == _reconstruction->numImages();
-    const bool hasAerialAbsoluteConstraint =
+    const bool hasCameraLayerAbsoluteConstraint =
         control_constraint_count > 0 || control_scale_bar_count > 0 ||
         !baOpt.cameraPosePriors.empty();
-    if (_sfmOptions.stabilizeAerialCameraPlane &&
+    if (_sfmOptions.preserveCameraLayerDuringSelfCalibration &&
         BundleAdjust::isBackendAvailable(BABackend::CeresCpu))
     {
         cameraPlaneBefore = estimateAerialCameraPlane(baCameras);
         if (cameraPlaneBefore.valid &&
-            SfmBundleAdjustCoordinator::shouldStabilizeAerialCameraPlane(
+            SfmBundleAdjustCoordinator::shouldPreserveCameraLayer(
                 localOnly,
-                static_cast<int>(baCameras.size()),
-                hasAerialAbsoluteConstraint,
+                hasCameraLayerAbsoluteConstraint,
                 completeRegistration,
-                refiningSharedCameraModel,
-                _aerialCameraPlaneStabilizationActive,
-                cameraPlaneBefore.opticalAxisConcentration,
-                cameraPlaneBefore.normalToSpanRmsRatio,
-                _sfmOptions.aerialCameraPlaneTriggerRmsRatio))
+                refiningSharedCameraModel))
         {
-            // 增量阶段只做按需临时抑制，避免平面先验过早影响后续 PnP 和尺度。
-            // 全部影像注册完成后才锁存到剩余最终 BA 轮次，防止最后一轮回弹。
-            if (completeRegistration)
-            {
-                _aerialCameraPlaneStabilizationActive = true;
-            }
             BACameraPlaneConstraint &constraint = baOpt.cameraPlaneConstraint;
             constraint.enabled = true;
             constraint.point = cameraPlaneBefore.center;
             constraint.normal = cameraPlaneBefore.normal;
+            constraint.referenceSignedDistances.clear();
+            constraint.referenceSignedDistances.reserve(baCameras.size());
+            for (const Camera &camera : baCameras)
+            {
+                const auto center = camera.cameraCenter();
+                constraint.referenceSignedDistances.push_back(
+                    constraint.normal[0] * (center[0] - constraint.point[0]) +
+                    constraint.normal[1] * (center[1] - constraint.point[1]) +
+                    constraint.normal[2] * (center[2] - constraint.point[2]));
+            }
             constraint.sigmaMeters = std::max(
                 1.0e-6,
                 cameraPlaneBefore.spanRms *
-                    _sfmOptions.aerialCameraPlaneSigmaFraction);
-            constraint.weight = _sfmOptions.aerialCameraPlaneWeight;
-            // dome/bowl 是覆盖整个航带的低频系统误差，不应像孤立粗差一样被
-            // Huber 截断。保留适中的整体权重，但对法向残差使用完整二次项，
-            // 否则离平面最远、最需要修正的航带边缘反而只得到常量梯度。
+                    _sfmOptions.cameraLayerPreservationSigmaFraction);
+            constraint.weight = _sfmOptions.cameraLayerPreservationWeight;
+            // 这是对本轮新增漂移的正则项，不是对相机绝对形状的平面先验。
+            // 使用完整二次项，使所有相机相对各自参考偏移得到一致约束。
             baOpt.cameraPlaneHuberDelta = 0.0;
             baOpt.backend = BABackend::CeresCpu;
             cameraPlaneConstraintActive = true;
-            const bool correctiveConstraint =
-                cameraPlaneBefore.normalToSpanRmsRatio >=
-                _sfmOptions.aerialCameraPlaneTriggerRmsRatio;
             Logger::instance()->infof(
-                "[BA] aerial_plane_constraint scope=global cameras=%zu "
-                "mode=%s opticalAxis=%.6f planarityVariance=%.9f "
+                "[BA] camera_layer_preservation scope=global cameras=%zu "
+                "opticalAxis=%.6f planarityVariance=%.9f "
                 "normalSpanRmsRatio=%.9f normalRms=%.6f spanRms=%.6f "
                 "sigma=%.6f weight=%.3f",
                 baCameras.size(),
-                correctiveConstraint ? "corrective" : "preventive",
                 cameraPlaneBefore.opticalAxisConcentration,
                 cameraPlaneBefore.planarityRatio,
                 cameraPlaneBefore.normalToSpanRmsRatio,
@@ -798,6 +800,11 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
 
     // 执行 BA
     BAResult baResult = BundleAdjust::optimizePoints(baCameras, baTracks, baOpt);
+    const double cameraLayerDriftRms =
+        baResult.solutionUsable && cameraPlaneConstraintActive
+            ? cameraLayerReferenceDriftRms(
+                  baResult.refinedCameras, baOpt.cameraPlaneConstraint)
+            : std::numeric_limits<double>::infinity();
 
     bool gaugeNormalizationFailed = false;
     if (baResult.solutionUsable && similarityGaugeCameras.has_value())
@@ -860,35 +867,23 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
     }
     if (applyBaResult && cameraPlaneConstraintActive)
     {
-        const AerialCameraPlaneEstimate cameraPlaneAfter =
-            estimateAerialCameraPlane(baResult.refinedCameras);
-        const bool correctiveConstraint =
-            cameraPlaneBefore.normalToSpanRmsRatio >=
-            _sfmOptions.aerialCameraPlaneTriggerRmsRatio;
-        const bool geometryImproved =
-            cameraPlaneAfter.valid &&
-            (correctiveConstraint
-                 ? cameraPlaneAfter.normalToSpanRmsRatio + 1.0e-9 <
-                       cameraPlaneBefore.normalToSpanRmsRatio
-                 : cameraPlaneAfter.normalToSpanRmsRatio <=
-                       _sfmOptions.aerialCameraPlaneTriggerRmsRatio);
+        const double driftRatio = cameraLayerDriftRms /
+            std::max(1.0e-9, cameraPlaneBefore.spanRms);
+        const bool geometryPreserved =
+            std::isfinite(driftRatio) &&
+            driftRatio <= _sfmOptions.cameraLayerPreservationSigmaFraction;
         Logger::instance()->infof(
-            "[BA] aerial_plane_result scope=global appliedCandidate=%s "
-            "mode=%s planarityVariance=%.9f->%.9f "
-            "normalSpanRmsRatio=%.9f->%.9f normalRms=%.6f->%.6f",
-            geometryImproved ? "true" : "false",
-            correctiveConstraint ? "corrective" : "preventive",
-            cameraPlaneBefore.planarityRatio,
-            cameraPlaneAfter.planarityRatio,
-            cameraPlaneBefore.normalToSpanRmsRatio,
-            cameraPlaneAfter.normalToSpanRmsRatio,
-            cameraPlaneBefore.normalRms,
-            cameraPlaneAfter.normalRms);
-        if (!geometryImproved)
+            "[BA] camera_layer_result scope=global appliedCandidate=%s "
+            "referenceDriftRms=%.9f referenceDriftRatio=%.9f limit=%.9f",
+            geometryPreserved ? "true" : "false",
+            cameraLayerDriftRms,
+            driftRatio,
+            _sfmOptions.cameraLayerPreservationSigmaFraction);
+        if (!geometryPreserved)
         {
             applyBaResult = false;
             Logger::instance()->warn(
-                "[BA] rejected scope=global reason=aerial_plane_geometry_not_improved");
+                "[BA] rejected scope=global reason=camera_layer_reference_drift_exceeded");
         }
     }
     const bool knownPoseGlobalBa = _sfmOptions.useKnownCameraPoses && !localOnly &&

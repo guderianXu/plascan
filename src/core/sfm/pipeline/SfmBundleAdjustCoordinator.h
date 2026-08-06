@@ -59,16 +59,11 @@ class SfmBundleAdjustCoordinator
                                                int twoViewTrackCount,
                                                int multiViewTrackCount);
 
-    /// 判断大型近垂直航测块是否需要在当前全局 BA 中抑制相机层法向弯曲。
-    static bool shouldStabilizeAerialCameraPlane(bool localOnly,
-                                                 int activeCameraCount,
-                                                 bool hasAbsoluteConstraint,
-                                                 bool completeRegistration,
-                                                 bool refiningSharedIntrinsics,
-                                                 bool stabilizationLatched,
-                                                 double opticalAxisConcentration,
-                                                 double normalToSpanRmsRatio,
-                                                 double triggerRmsRatio);
+    /// 仅在最终共享内参自标定时保留当前相机层，不按影像数量或场景形状推断穹顶。
+    static bool shouldPreserveCameraLayer(bool localOnly,
+                                          bool hasAbsoluteConstraint,
+                                          bool completeRegistration,
+                                          bool refiningSharedIntrinsics);
 
     /// 周期全局 BA 限制为两轮；最终精化保留用户配置轮数。
     static int iterativeGlobalBaRoundLimit(int configuredRounds,

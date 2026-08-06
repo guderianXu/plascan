@@ -307,6 +307,51 @@ TEST(BundleAdjustCeresBackendTest, CameraPlaneConstraintOnlyRemovesNormalDrift)
     EXPECT_LT(std::abs(result.refinedCameras[3].cameraCenter()[2]), 0.05);
 }
 
+TEST(BundleAdjustCeresBackendTest, CameraLayerReferencePreservesLegitimateNonPlanarTrajectory)
+{
+    ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
+
+    std::vector<xjw::Camera> cameras{
+        makeCamera(-2.0, 0.0, 0.0),
+        makeCamera(2.0, 0.0, 0.0),
+        makeCamera(0.0, 2.0, 1.2),
+        makeCamera(0.0, -2.0, -0.8),
+    };
+    std::vector<xjw::BATrack> tracks;
+    for (int index = 0; index < 36; ++index)
+    {
+        const std::array<double, 3> point{{
+            (static_cast<double>(index % 6) - 2.5) * 0.12,
+            (static_cast<double>(index / 6) - 2.5) * 0.12,
+            12.0 + static_cast<double>(index % 3) * 0.1,
+        }};
+        tracks.push_back(makeTrack(cameras, point, point));
+    }
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::CeresCpu;
+    options.refineCameraPose = true;
+    options.gaugePolicy = xjw::BAGaugePolicy::CallerManaged;
+    options.fixedCameraIndices = {0, 1};
+    options.enablePointFilter = false;
+    options.maxIterations = 30;
+    options.cameraPlaneConstraint.enabled = true;
+    options.cameraPlaneConstraint.point = {{0.0, 0.0, 0.0}};
+    options.cameraPlaneConstraint.normal = {{0.0, 0.0, 1.0}};
+    options.cameraPlaneConstraint.referenceSignedDistances = {0.0, 0.0, 1.2, -0.8};
+    options.cameraPlaneConstraint.sigmaMeters = 0.05;
+    options.cameraPlaneConstraint.weight = 100.0;
+    options.cameraPlaneHuberDelta = 0.0;
+
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(cameras, tracks, options);
+
+    ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
+    ASSERT_EQ(result.refinedCameras.size(), cameras.size());
+    EXPECT_NEAR(result.refinedCameras[2].cameraCenter()[2], 1.2, 0.05);
+    EXPECT_NEAR(result.refinedCameras[3].cameraCenter()[2], -0.8, 0.05);
+}
+
 TEST(BundleAdjustCeresBackendTest, LegacyRequestDoesNotSilentlyIgnoreCameraPlaneConstraint)
 {
     ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));

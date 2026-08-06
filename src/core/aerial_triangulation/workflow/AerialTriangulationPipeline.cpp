@@ -962,15 +962,14 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
             {QStringLiteral("camera_center_normal_span_rms_ratio"),
              geometry.cameraCenterNormalSpanRmsRatio},
         };
-        // 使用法向 RMS / 总体 RMS 跨度，而不是它的平方（协方差方差比）。旧实现
-        // 将方差比与线性门限比较，使 1% 厚度只得到 0.0001，明显穹顶也不会告警。
-        const bool domingRisk = geometry.valid &&
-            geometry.cameraCenterNormalSpanRmsRatio > 0.003;
-        aerialGeometry.insert(QStringLiteral("doming_risk"), domingRisk);
+        // 相机中心的形状可能是真实航迹、立面或环绕轨迹，不能仅凭“厚度”推断
+        // dome/bowl。保留数值供诊断，但不再据此改变结果或标记自标定失败。
+        aerialGeometry.insert(QStringLiteral("doming_risk"), false);
+        aerialGeometry.insert(
+            QStringLiteral("doming_assessment"),
+            QStringLiteral("not_inferred_from_camera_shape"));
         execution.result.sfmDiagnostics.insert(
             QStringLiteral("aerial_block_geometry"), aerialGeometry);
-        execution.result.sfmDiagnostics.insert(
-            QStringLiteral("camera_self_calibration_requires_review"), domingRisk);
     }
 
     const bool focalInitializationSearch = focalCandidates.size() > 1;

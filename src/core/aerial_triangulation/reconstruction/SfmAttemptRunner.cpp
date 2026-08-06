@@ -220,9 +220,9 @@ void configureSfmOptions(const PreparedAerialTriangulationInput &input,
     }
     options->baOptions.filterMaxReprojError = options->filterMaxReprojError;
 
-    // 航测专用安全网：仅在协调器确认“大规模、近垂直、无绝对控制且已出现
-    // dome/bowl”时启用。普通 SfM、绕拍项目和局部 BA 不会受到影响。
-    options->stabilizeAerialCameraPlane = true;
+    // 自标定安全网只保留进入最终共享内参 BA 前已有的相机轨迹，不把相机中心
+    // 强制压到平面，因此不会把真实的弧形、立面或起伏摄影轨迹误判为 dome/bowl。
+    options->preserveCameraLayerDuringSelfCalibration = true;
 
     options->useSequencePoseRecovery = input.useSequencePoseRecovery;
     options->enforceSequencePoseConsistency = input.enforceSequencePoseConsistency;

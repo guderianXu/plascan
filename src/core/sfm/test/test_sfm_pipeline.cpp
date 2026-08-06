@@ -33,31 +33,24 @@
 
 using namespace xjw;
 
-TEST(SfmBundleAdjustCoordinatorPolicyTest, AerialPlaneStabilizationIsOptIn)
+TEST(SfmBundleAdjustCoordinatorPolicyTest, CameraLayerPreservationIsOptIn)
 {
     const IncrementalSfmOptions options;
-    EXPECT_FALSE(options.stabilizeAerialCameraPlane);
-    EXPECT_DOUBLE_EQ(options.aerialCameraPlaneTriggerRmsRatio, 0.003);
+    EXPECT_FALSE(options.preserveCameraLayerDuringSelfCalibration);
 }
 
-TEST(SfmBundleAdjustCoordinatorPolicyTest, DetectsAerialBendingUsingRmsRatio)
+TEST(SfmBundleAdjustCoordinatorPolicyTest, PreservesLayerOnlyDuringFinalSelfCalibration)
 {
-    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldStabilizeAerialCameraPlane(
-        false, 444, false, false, false, false, 0.97, 0.01, 0.003));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldStabilizeAerialCameraPlane(
-        false, 444, false, false, false, false, 0.97, 0.001, 0.003));
-}
-
-TEST(SfmBundleAdjustCoordinatorPolicyTest, PreventsBendingDuringFinalSelfCalibration)
-{
-    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldStabilizeAerialCameraPlane(
-        false, 444, false, true, true, false, 0.97, 0.001, 0.003));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldStabilizeAerialCameraPlane(
-        true, 444, false, true, true, false, 0.97, 0.01, 0.003));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldStabilizeAerialCameraPlane(
-        false, 444, true, true, true, false, 0.97, 0.01, 0.003));
-    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldStabilizeAerialCameraPlane(
-        false, 444, false, true, true, false, 0.50, 0.01, 0.003));
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldPreserveCameraLayer(
+        false, false, true, true));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldPreserveCameraLayer(
+        true, false, true, true));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldPreserveCameraLayer(
+        false, true, true, true));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldPreserveCameraLayer(
+        false, false, false, true));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldPreserveCameraLayer(
+        false, false, true, false));
 }
 
 TEST(SfmBundleAdjustCoordinatorPolicyTest, RefinesSharedIntrinsicsOnlyAfterCompleteRegistration)

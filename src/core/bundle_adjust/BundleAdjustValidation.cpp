@@ -340,8 +340,16 @@ BundleAdjustValidationResult validateAndNormalizeBundleAdjustOptions(
         const bool finiteNormal = std::all_of(
             constraint.normal.begin(), constraint.normal.end(),
             [](double value) { return std::isfinite(value); });
+        const bool validReferenceDistances =
+            constraint.referenceSignedDistances.empty() ||
+            (constraint.referenceSignedDistances.size() == cameras.size() &&
+             std::all_of(
+                 constraint.referenceSignedDistances.begin(),
+                 constraint.referenceSignedDistances.end(),
+                 [](double value) { return std::isfinite(value); }));
         if (!finitePoint || !finiteNormal || !std::isfinite(normalNormSquared) ||
             std::abs(normalNormSquared - 1.0) > 1.0e-6 ||
+            !validReferenceDistances ||
             !std::isfinite(constraint.sigmaMeters) || constraint.sigmaMeters <= 0.0 ||
             !std::isfinite(constraint.weight) || constraint.weight <= 0.0 ||
             !std::isfinite(requestedOptions.cameraPlaneHuberDelta) ||
@@ -349,7 +357,8 @@ BundleAdjustValidationResult validateAndNormalizeBundleAdjustOptions(
         {
             return invalid(
                 BASolveStatus::InvalidInput,
-                "BA 输入验证失败: 相机平面约束必须包含单位法向和正的 sigma/weight");
+                "BA 输入验证失败: 相机参考层约束必须包含单位法向、"
+                "与相机等长的有限参考距离和正的 sigma/weight");
         }
     }
 

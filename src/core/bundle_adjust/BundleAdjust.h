@@ -183,16 +183,18 @@ struct BACameraPosePrior
 };
 
 /**
- * @brief 相机中心平面软约束：只限制光心沿平面法向的低频漂移。
+ * @brief 相机中心参考层软约束：只限制光心沿参考法向的低频漂移。
  *
- * 该约束不限制平面内平移和相机旋转，适合无绝对控制的近垂直航测块抑制
- * dome/bowl 形变。平面由调用方在当前 SfM 坐标系内估计，不能当作绝对高程。
+ * `referenceSignedDistances` 非空时，每台相机保留进入 BA 前相对参考面的原始
+ * 法向偏移，因此不会把真实弧形或起伏轨迹强制压平。空数组保留旧的零距离平面
+ * 约束语义，供明确知道相机应共面的调用方使用。
  */
 struct BACameraPlaneConstraint
 {
     bool enabled = false;
     std::array<double, 3> point{{0.0, 0.0, 0.0}};
     std::array<double, 3> normal{{0.0, 0.0, 1.0}};
+    std::vector<double> referenceSignedDistances;
     double sigmaMeters = 1.0;
     double weight = 1.0;
 };
