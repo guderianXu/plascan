@@ -693,7 +693,7 @@ uint64_t retainedDepthMemoryBudgetBytes(const SystemMemorySnapshot &snapshot,
         static_cast<double>(snapshot.totalPhysicalBytes) * 0.20);
     const uint64_t reserveBytes = std::max({config.minFreeRamBytes,
                                             proportionalReserve,
-                                            largestFrameBytes * 8ull});
+                                            largestFrameBytes * static_cast<uint64_t>(8)});
     const uint64_t availableBudget = snapshot.availablePhysicalBytes > reserveBytes
         ? snapshot.availablePhysicalBytes - reserveBytes
         : 0ull;
@@ -736,7 +736,7 @@ bool memoryPressureRequiresStreaming(const DepthGenConfig &config,
 
     const uint64_t runtimeReserve = std::max(
         decision.reserveBytes,
-        decision.estimate.transientFrameBytes * 2ull);
+        decision.estimate.transientFrameBytes * static_cast<uint64_t>(2));
     if (snapshot.availablePhysicalBytes <= runtimeReserve)
     {
         return true;
