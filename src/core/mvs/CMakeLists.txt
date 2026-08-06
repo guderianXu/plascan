@@ -22,6 +22,7 @@ set(MVS_CXX_SOURCES
     DepthGapTargetedRecovery.cpp
     DepthResidualReestimation.cpp
     DepthMissingReason.cpp
+    DepthMemoryPolicy.cpp
     DepthProvenance.cpp
     DepthConsistencyCache.cpp
     DepthConsistencyEvidencePolicy.cpp
@@ -71,6 +72,7 @@ set(MVS_HEADERS
     DepthGapTargetedRecovery.h
     DepthResidualReestimation.h
     DepthMissingReason.h
+    DepthMemoryPolicy.h
     DepthProvenance.h
     DepthConsistencyCache.h
     DepthConsistencyEvidencePolicy.h
@@ -322,6 +324,21 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/src/core/mvs
         )
         gtest_discover_tests(test_mvs_adaptive_geometry_evidence_policy)
+
+        add_executable(test_mvs_depth_memory_policy
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_depth_memory_policy.cpp
+        )
+        set_target_properties(test_mvs_depth_memory_policy PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
+        )
+        target_link_libraries(test_mvs_depth_memory_policy PRIVATE
+            mvs
+            GTest::gtest_main
+        )
+        target_include_directories(test_mvs_depth_memory_policy PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/core/mvs
+        )
+        gtest_discover_tests(test_mvs_depth_memory_policy)
 
         add_executable(test_mvs_depth_pose_alignment
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_depth_pose_alignment.cpp

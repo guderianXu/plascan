@@ -272,7 +272,7 @@ DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &setti
     parsed.sceneProfile = settings.value(QStringLiteral("sceneProfile")).toString(QStringLiteral("auto"));
     parsed.depthFilterMode = settings.value(QStringLiteral("depthFilterMode")).toString(QStringLiteral("auto"));
     parsed.saveIntermediatePyramidLevels =
-        settings.value(QStringLiteral("saveIntermediatePyramidLevels")).toBool(true);
+        settings.value(QStringLiteral("saveIntermediatePyramidLevels")).toBool(false);
     parsed.enableTargetedGapRecovery = settings.value(
         QStringLiteral("enableTargetedGapRecovery")).toBool(true);
     parsed.targetedGapRecoverySourceCount = std::clamp(settings.value(

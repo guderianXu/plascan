@@ -11,6 +11,7 @@
 #include "DepthCrossViewHoleRepair.h"
 #include "DepthGeometryConsistency.h"
 #include "DepthFrameUtils.h"
+#include "DepthMemoryPolicy.h"
 #include "DepthPyramidPolicy.h"
 #include "DepthProvenance.h"
 #include "EpipolarRectifier.h"
@@ -621,53 +622,49 @@ DepthConfidenceSummary summarizeDepthConfidence(const cv::Mat &depthMap,
     return summary;
 }
 
-uint64_t adaptiveGeometryEvidenceBytesPerPixel(
-    const DepthGenConfig &config,
-    MvsSceneProfile scene_profile)
+bool usesAdaptiveGeometryEvidence(const DepthGenConfig &config,
+                                  MvsSceneProfile sceneProfile)
 {
     return config.enableAdaptiveGeometryEvidence &&
-            scene_profile == MvsSceneProfile::OrbitalObject
-        ? sizeof(float) * 3ull
-        : 0ull;
+           sceneProfile == MvsSceneProfile::OrbitalObject;
 }
 
-uint64_t estimateDepthFrameCacheBytes(
-    const std::vector<CameraView> &views,
-    const DepthGenConfig &config,
-    MvsSceneProfile scene_profile)
+std::vector<DepthMemoryFrameSize> depthMemoryFrameSizes(
+    const std::vector<CameraView> &views)
 {
-    uint64_t total = 0;
-    uint64_t largest_pixels = 0;
-    const uint64_t adaptive_output_bytes_per_pixel =
-        adaptiveGeometryEvidenceBytesPerPixel(config, scene_profile);
-    const uint64_t consistency_snapshot_bytes_per_pixel = sizeof(float) +
-        (adaptive_output_bytes_per_pixel > 0 ? sizeof(float) : 0ull);
+    std::vector<DepthMemoryFrameSize> frameSizes;
+    frameSizes.reserve(views.size());
     for (const CameraView &view : views)
     {
-        const uint64_t pixels = static_cast<uint64_t>(
-            std::max(0, view.imageWidth)) * static_cast<uint64_t>(
-            std::max(0, view.imageHeight));
-        largest_pixels = std::max(largest_pixels, pixels);
-        const uint64_t frameBytes =
-            depthFramePixelStorageBytes(view.imageWidth, view.imageHeight) +
-            pixels * (adaptive_output_bytes_per_pixel +
-                      consistency_snapshot_bytes_per_pixel);
-        if (std::numeric_limits<uint64_t>::max() - total < frameBytes)
-        {
-            return std::numeric_limits<uint64_t>::max();
-        }
-        total += frameBytes;
+        frameSizes.push_back({view.imageWidth, view.imageHeight});
     }
-    if (adaptive_output_bytes_per_pixel > 0)
-    {
-        const uint64_t accumulator_bytes = largest_pixels * sizeof(float) * 4ull;
-        if (std::numeric_limits<uint64_t>::max() - total < accumulator_bytes)
-        {
-            return std::numeric_limits<uint64_t>::max();
-        }
-        total += accumulator_bytes;
-    }
-    return total;
+    return frameSizes;
+}
+
+int maximumConsistencySourceViews(const DepthGenConfig &config)
+{
+    return std::max({config.numSourceViews,
+                     config.patchMatch.numSourceViews,
+                     config.crossViewHoleRepairSourceCount,
+                     config.postConsistencyResidualSourceCount});
+}
+
+DepthMemoryPolicyDecision evaluateDepthMemoryPolicy(
+    const std::vector<CameraView> &views,
+    const DepthGenConfig &config,
+    MvsSceneProfile sceneProfile,
+    const SystemMemorySnapshot &snapshot)
+{
+    const std::vector<DepthMemoryFrameSize> frameSizes = depthMemoryFrameSizes(views);
+    return decideDepthMemoryPolicy(
+        frameSizes,
+        maximumConsistencySourceViews(config),
+        usesAdaptiveGeometryEvidence(config, sceneProfile),
+        config.saveIntermediatePyramidLevels,
+        snapshot.valid ? snapshot.totalPhysicalBytes : 0,
+        snapshot.valid ? snapshot.availablePhysicalBytes : 0,
+        config.maxDepthCacheRamFraction,
+        config.minFreeRamBytes);
 }
 
 uint64_t largestDepthFrameBytes(const std::vector<CameraView> &views)
@@ -680,7 +677,9 @@ uint64_t largestDepthFrameBytes(const std::vector<CameraView> &views)
     return largest;
 }
 
-uint64_t retainedDepthMemoryBudgetBytes(const SystemMemorySnapshot &snapshot, const DepthGenConfig &config)
+uint64_t retainedDepthMemoryBudgetBytes(const SystemMemorySnapshot &snapshot,
+                                        const DepthGenConfig &config,
+                                        uint64_t largestFrameBytes)
 {
     if (!snapshot.valid)
     {
@@ -690,79 +689,64 @@ uint64_t retainedDepthMemoryBudgetBytes(const SystemMemorySnapshot &snapshot, co
     const double fraction = std::clamp(static_cast<double>(config.maxDepthCacheRamFraction), 0.10, 0.90);
     const uint64_t totalBudget = static_cast<uint64_t>(
         static_cast<double>(snapshot.totalPhysicalBytes) * fraction);
-    const uint64_t availableBudget = snapshot.availablePhysicalBytes > config.minFreeRamBytes
-        ? snapshot.availablePhysicalBytes - config.minFreeRamBytes
+    const uint64_t proportionalReserve = static_cast<uint64_t>(
+        static_cast<double>(snapshot.totalPhysicalBytes) * 0.20);
+    const uint64_t reserveBytes = std::max({config.minFreeRamBytes,
+                                            proportionalReserve,
+                                            largestFrameBytes * 8ull});
+    const uint64_t availableBudget = snapshot.availablePhysicalBytes > reserveBytes
+        ? snapshot.availablePhysicalBytes - reserveBytes
         : 0ull;
     return std::min(totalBudget, availableBudget);
 }
 
-bool shouldRetainAllDepthFramesInMemory(const std::vector<CameraView> &views,
-                                        const DepthGenConfig &config,
-                                        MvsSceneProfile sceneProfile,
-                                        const SystemMemorySnapshot &snapshot,
-                                        QString *reason)
+QString depthMemoryPolicyReason(const DepthMemoryPolicyDecision &decision,
+                                const SystemMemorySnapshot &snapshot)
 {
-    if (!config.adaptiveDepthCacheMemory)
+    if (decision.estimate.totalPixels == 0)
     {
-        if (reason)
-        {
-            *reason = QStringLiteral("adaptiveDepthCacheMemory=false");
-        }
-        return true;
-    }
-
-    const uint64_t requiredBytes = estimateDepthFrameCacheBytes(
-        views, config, sceneProfile);
-    if (requiredBytes == 0)
-    {
-        if (reason)
-        {
-            *reason = QStringLiteral("无有效影像尺寸，采用保守流式模式");
-        }
-        return false;
+        return QStringLiteral("无有效影像尺寸，采用保守流式模式");
     }
     if (!snapshot.valid)
     {
-        if (reason)
-        {
-            *reason = QStringLiteral("无法读取系统内存，采用保守流式模式");
-        }
-        return false;
+        return QStringLiteral("无法读取系统内存，采用保守流式模式");
     }
-
-    const uint64_t budgetBytes = retainedDepthMemoryBudgetBytes(snapshot, config);
-    if (requiredBytes <= budgetBytes)
-    {
-        if (reason)
-        {
-            *reason = QStringLiteral("预计缓存 %1 GiB <= 内存预算 %2 GiB")
-                          .arg(bytesToGiB(requiredBytes), 0, 'f', 2)
-                          .arg(bytesToGiB(budgetBytes), 0, 'f', 2);
-        }
-        return true;
-    }
-
-    if (reason)
-    {
-        *reason = QStringLiteral("预计缓存 %1 GiB > 内存预算 %2 GiB")
-                      .arg(bytesToGiB(requiredBytes), 0, 'f', 2)
-                      .arg(bytesToGiB(budgetBytes), 0, 'f', 2);
-    }
-    return false;
+    return QStringLiteral(
+               "预计峰值 %1 GiB %2 内存预算 %3 GiB（常驻=%4，快照=%5，证据=%6，"
+               "金字塔=%7，单帧临时=%8，动态保留=%9 GiB）")
+        .arg(bytesToGiB(decision.estimate.peakBytes), 0, 'f', 2)
+        .arg(decision.retainAllFrames ? QStringLiteral("<=") : QStringLiteral(">"))
+        .arg(bytesToGiB(decision.budgetBytes), 0, 'f', 2)
+        .arg(bytesToGiB(decision.estimate.residentFrameBytes), 0, 'f', 2)
+        .arg(bytesToGiB(decision.estimate.consistencySnapshotBytes), 0, 'f', 2)
+        .arg(bytesToGiB(decision.estimate.retainedEvidenceBytes), 0, 'f', 2)
+        .arg(bytesToGiB(decision.estimate.intermediatePyramidBytes), 0, 'f', 2)
+        .arg(bytesToGiB(decision.estimate.transientFrameBytes), 0, 'f', 2)
+        .arg(bytesToGiB(decision.reserveBytes), 0, 'f', 2);
 }
 
 bool memoryPressureRequiresStreaming(const DepthGenConfig &config,
                                      const SystemMemorySnapshot &snapshot,
-                                     uint64_t largestFrameBytes)
+                                     const DepthMemoryPolicyDecision &decision)
 {
     if (!config.adaptiveDepthCacheMemory || !snapshot.valid)
     {
         return false;
     }
 
-    const uint64_t transientReserve =
-        std::max<uint64_t>(config.minFreeRamBytes, largestFrameBytes * 4ull);
-    return snapshot.availablePhysicalBytes < transientReserve;
+    const uint64_t runtimeReserve = std::max(
+        decision.reserveBytes,
+        decision.estimate.transientFrameBytes * 2ull);
+    if (snapshot.availablePhysicalBytes <= runtimeReserve)
+    {
+        return true;
+    }
+
+    const uint64_t availableBudget = snapshot.availablePhysicalBytes - runtimeReserve;
+    const uint64_t totalBudget = static_cast<uint64_t>(
+        static_cast<double>(snapshot.totalPhysicalBytes) *
+        std::clamp(static_cast<double>(config.maxDepthCacheRamFraction), 0.10, 0.90));
+    return decision.estimate.peakBytes > std::min(totalBudget, availableBudget);
 }
 
 void releaseStoredDepthFramePixelStorage(std::vector<DepthFrameResult> &frames)
@@ -782,7 +766,8 @@ size_t adaptiveSaveQueueCapacity(const SystemMemorySnapshot &snapshot,
         return 2;
     }
 
-    const uint64_t budgetBytes = retainedDepthMemoryBudgetBytes(snapshot, config);
+    const uint64_t budgetBytes = retainedDepthMemoryBudgetBytes(
+        snapshot, config, largestFrameBytes);
     if (budgetBytes >= largestFrameBytes * 8ull)
     {
         return 4;
@@ -8619,16 +8604,14 @@ void DepthMapGenerator::runInBackground()
     _depthFrames.resize(NV);
     const bool savePreviewPng = !_outputDir.empty();
     const SystemMemorySnapshot initialMemory = querySystemMemorySnapshot();
-    const uint64_t estimatedDepthCacheBytes = estimateDepthFrameCacheBytes(
-        _views, _config, _effectiveSceneProfile);
+    const DepthMemoryPolicyDecision initialMemoryDecision = evaluateDepthMemoryPolicy(
+        _views, _config, _effectiveSceneProfile, initialMemory);
     const uint64_t largestFrameBytes = largestDepthFrameBytes(_views);
-    QString memoryPolicyReason;
-    bool retainDepthFrames = shouldRetainAllDepthFramesInMemory(
-        _views,
-        _config,
-        _effectiveSceneProfile,
-        initialMemory,
-        &memoryPolicyReason);
+    const bool retainDepthFrames = !_config.adaptiveDepthCacheMemory ||
+                                   initialMemoryDecision.retainAllFrames;
+    const QString memoryPolicyReason = _config.adaptiveDepthCacheMemory
+        ? depthMemoryPolicyReason(initialMemoryDecision, initialMemory)
+        : QStringLiteral("adaptiveDepthCacheMemory=false，按配置保留全部深度帧");
 
     _streamConsistencyStorageEnabled = NV >= 2 && _config.adaptiveDepthCacheMemory;
     if (_streamConsistencyStorageEnabled)
@@ -8679,12 +8662,14 @@ void DepthMapGenerator::runInBackground()
     std::atomic<bool> keepDepthFramesInMemory{retainDepthFrames};
     std::mutex depthFramesMutex;
 
-    LOG_INFO(QStringLiteral("[MVS] 深度图内存策略: mode=%1 estimatedCache=%2 GiB total=%3 GiB available=%4 GiB reserve=%5 GiB maxFraction=%6 reason=%7")
+    LOG_INFO(QStringLiteral(
+                 "[MVS] 深度图内存策略: mode=%1 estimatedPeak=%2 GiB total=%3 GiB "
+                 "available=%4 GiB reserve=%5 GiB maxFraction=%6 reason=%7")
                  .arg(retainDepthFrames ? QStringLiteral("cache") : QStringLiteral("stream"))
-                 .arg(bytesToGiB(estimatedDepthCacheBytes), 0, 'f', 2)
+                 .arg(bytesToGiB(initialMemoryDecision.estimate.peakBytes), 0, 'f', 2)
                  .arg(initialMemory.valid ? bytesToGiB(initialMemory.totalPhysicalBytes) : 0.0, 0, 'f', 2)
                  .arg(initialMemory.valid ? bytesToGiB(initialMemory.availablePhysicalBytes) : 0.0, 0, 'f', 2)
-                 .arg(bytesToGiB(_config.minFreeRamBytes), 0, 'f', 2)
+                 .arg(bytesToGiB(initialMemoryDecision.reserveBytes), 0, 'f', 2)
                  .arg(static_cast<double>(_config.maxDepthCacheRamFraction), 0, 'f', 2)
                  .arg(memoryPolicyReason));
     if (!keepDepthFramesInMemory.load())
@@ -8846,7 +8831,7 @@ void DepthMapGenerator::runInBackground()
 
     auto workerFunc = [this,
                        NV,
-                       largestFrameBytes,
+                       initialMemoryDecision,
                        &keepDepthFramesInMemory,
                        &depthFramesMutex,
                        &completedTasks,
@@ -8956,7 +8941,8 @@ void DepthMapGenerator::runInBackground()
                 saveQueue.enqueue(i, res, QStringLiteral("初始"));
 
                 if (keepDepthFramesInMemory.load() &&
-                    memoryPressureRequiresStreaming(_config, querySystemMemorySnapshot(), largestFrameBytes))
+                    memoryPressureRequiresStreaming(
+                        _config, querySystemMemorySnapshot(), initialMemoryDecision))
                 {
                     bool expected = true;
                     if (keepDepthFramesInMemory.compare_exchange_strong(expected, false))
@@ -9042,6 +9028,26 @@ void DepthMapGenerator::runInBackground()
     if (saveQueue.failed())
     {
         anyFailure = true;
+    }
+
+    if (keepDepthFramesInMemory.load() && _config.adaptiveDepthCacheMemory)
+    {
+        const SystemMemorySnapshot consistencyMemory = querySystemMemorySnapshot();
+        const DepthMemoryPolicyDecision consistencyDecision = evaluateDepthMemoryPolicy(
+            _views, _config, _effectiveSceneProfile, consistencyMemory);
+        if (!consistencyDecision.retainAllFrames ||
+            memoryPressureRequiresStreaming(
+                _config, consistencyMemory, consistencyDecision))
+        {
+            LOG_WARN(QStringLiteral(
+                         "[MVS] 进入多视一致性检查前检测到内存预算不足，"
+                         "切换为有界流式检查并释放常驻深度帧：%1")
+                         .arg(depthMemoryPolicyReason(
+                             consistencyDecision, consistencyMemory)));
+            keepDepthFramesInMemory = false;
+            std::lock_guard<std::mutex> lock(depthFramesMutex);
+            releaseStoredDepthFramePixelStorage(_depthFrames);
+        }
     }
 
     // 释放图像缓存（深度估计完毕后不再需要）

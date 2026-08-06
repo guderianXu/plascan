@@ -139,9 +139,10 @@ The implementation plan and current boundary are documented in
 - Pairwise epipolar rectification is used only when OpenCV reports a usable common valid canvas. Strongly
   convergent object-ring pairs can rectify completely outside the fixed image canvas; those pairs are
   rejected by `EpipolarRectifier` and automatically fall back to the original-camera plane-homography path.
-- Level 1 is always persisted with its summary. The GUI enables `saveIntermediatePyramidLevels` by default,
-  so Level 2/3 raw depth, confidence, support count, uncertainty, valid mask, depth preview, and confidence
-  preview are available to the per-photo overlay. The workspace tree exposes only one non-image aggregate
+- Level 1 is always persisted with its summary. Level 2/3 raw depth, confidence, support count, uncertainty,
+  valid mask, depth preview, and confidence preview are retained only when
+  `saveIntermediatePyramidLevels` is explicitly enabled for diagnostics. Production GUI runs leave it off to
+  avoid retaining debug rasters for every frame. The workspace tree exposes only one non-image aggregate
   depth-map node; it never materializes individual depth frames or previews as workspace resources.
 
 The corresponding CLI options are:
@@ -161,6 +162,10 @@ fixtures and then invokes `model_quality_cli` when quality validation is enabled
 
 - Long runs should use bounded resident depth frames. When the memory budget is tight, saved artifacts become
   the durable state and pixel storage can be released.
+- `DepthMemoryPolicy` estimates the full consistency peak, including resident frame data, immutable snapshots,
+  retained geometry evidence, projected source rasters, repair scratch space, and allocator overhead. It keeps
+  at least 20% of physical RAM (or two transient-frame working sets) free and rechecks the budget immediately
+  before consistency starts, preventing page-file thrashing from appearing as an idle hang.
 - `DepthConsistencyCache` provides a byte-budgeted LRU for source-neighborhood depth checks. Resident and
   streaming modes use the same reprojection consistency core; low memory no longer disables this quality
   stage.

@@ -8554,7 +8554,7 @@ TEST(DenseWorkflowConfigTest, AutoDepthFilterKeepsAdaptiveMode)
     EXPECT_EQ(config.sceneProfile, xjw::mvs::MvsSceneProfile::OrbitalObject);
     EXPECT_EQ(config.depthFilterMode, xjw::mvs::DepthFilterMode::Moderate);
     EXPECT_TRUE(config.adaptiveDepthFilterMode);
-    EXPECT_TRUE(config.saveIntermediatePyramidLevels);
+    EXPECT_FALSE(config.saveIntermediatePyramidLevels);
 }
 
 TEST(DenseWorkflowConfigTest, MapsMultiHypothesisTargetedGapRecovery)

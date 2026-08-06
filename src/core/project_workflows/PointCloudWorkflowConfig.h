@@ -64,7 +64,7 @@ struct DenseGenerationSettings
     QString qualityProfile = QStringLiteral("medium");
     QString sceneProfile = QStringLiteral("auto");
     QString depthFilterMode = QStringLiteral("auto");
-    bool saveIntermediatePyramidLevels = true;
+    bool saveIntermediatePyramidLevels = false;
     bool enableTargetedGapRecovery = true;
     int targetedGapRecoverySourceCount = 6;
     int targetedGapRecoveryHypothesisCount = 2;
