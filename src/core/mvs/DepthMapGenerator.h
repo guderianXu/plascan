@@ -404,6 +404,10 @@ private:
     /// 图像缓存（灰度图，预加载一次复用多次）
     std::vector<cv::Mat> _grayCache;
 
+    /// 已完成正深度归一化/去畸变的 MVS 输入；无畸变时与灰度缓存共享像素存储
+    std::vector<cv::Mat> _mvsPreparedGrayCache;
+    std::vector<Camera> _mvsPreparedCameras;
+
     /// 最终有效区域掩码（CV_8U，255=有效）。优先使用项目蒙版，无项目蒙版时回退内容检测。
     std::vector<cv::Mat> _validRegionMasks;
     std::vector<uint8_t> _projectMaskLoaded;

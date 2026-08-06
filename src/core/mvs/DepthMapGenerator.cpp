@@ -2855,8 +2855,13 @@ std::vector<size_t> DepthMapGenerator::visibleSparsePointIndicesForFrame(
 // =============================================================================
 void DepthMapGenerator::preloadImages()
 {
+    const auto preload_start = Clock::now();
     const int NV = static_cast<int>(_views.size());
     _grayCache.resize(NV);
+    _mvsPreparedGrayCache.clear();
+    _mvsPreparedGrayCache.resize(NV);
+    _mvsPreparedCameras.clear();
+    _mvsPreparedCameras.resize(NV);
     _validRegionMasks.resize(NV);
     _projectMaskLoaded.assign(static_cast<size_t>(NV), 0);
 
@@ -2868,7 +2873,13 @@ void DepthMapGenerator::preloadImages()
     }
 
     std::atomic<int> nextImage{0};
-    auto preloadOneImage = [this, NV, &nextImage]()
+    std::atomic<int> preparedImageCount{0};
+    std::atomic<int> undistortedImageCount{0};
+    auto preloadOneImage = [this,
+                            NV,
+                            &nextImage,
+                            &preparedImageCount,
+                            &undistortedImageCount]()
     {
         for (;;)
         {
@@ -3019,6 +3030,28 @@ void DepthMapGenerator::preloadImages()
                 LOG_DEBUG("[MVS][预加载] 图像 %d/%d: %dx%d mean=%.1f",
                           i + 1, NV, _grayCache[i].cols, _grayCache[i].rows, imgMean);
             }
+
+            std::string preparation_error;
+            if (!prepareMvsImage(_grayCache[static_cast<std::size_t>(i)],
+                                 _views[static_cast<std::size_t>(i)].camera,
+                                 &_mvsPreparedGrayCache[static_cast<std::size_t>(i)],
+                                 &_mvsPreparedCameras[static_cast<std::size_t>(i)],
+                                 &preparation_error))
+            {
+                LOG_WARN(QStringLiteral("[MVS][预加载] 图像 %1 的 MVS 预处理失败，"
+                                        "帧执行时重试：%2")
+                             .arg(i)
+                             .arg(QString::fromStdString(preparation_error)));
+            }
+            else
+            {
+                preparedImageCount.fetch_add(1, std::memory_order_relaxed);
+                if (_mvsPreparedGrayCache[static_cast<std::size_t>(i)].data !=
+                    _grayCache[static_cast<std::size_t>(i)].data)
+                {
+                    undistortedImageCount.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
         }
     };
 
@@ -3036,6 +3069,12 @@ void DepthMapGenerator::preloadImages()
             worker.join();
         }
     }
+    LOG_INFO(QStringLiteral("[MVS][预加载] MVS 输入缓存完成: prepared=%1/%2 "
+                            "undistorted=%3 elapsed=%4 ms")
+                 .arg(preparedImageCount.load(std::memory_order_relaxed))
+                 .arg(NV)
+                 .arg(undistortedImageCount.load(std::memory_order_relaxed))
+                 .arg(elapsedMs(preload_start, Clock::now()), 0, 'f', 1));
 }
 
 void DepthMapGenerator::refreshViewImageDimensionsFromCache()
@@ -4171,19 +4210,33 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
     {
         return result;
     }
-    cv::Mat preparedRefImage;
     Camera refCam;
-    std::string preprocessError;
-    if (!prepareMvsImage(refImg,
-                         refView.camera,
-                         &preparedRefImage,
-                         &refCam,
-                         &preprocessError))
+    const bool has_prepared_reference =
+        refIdx >= 0 &&
+        refIdx < static_cast<int>(_mvsPreparedGrayCache.size()) &&
+        refIdx < static_cast<int>(_mvsPreparedCameras.size()) &&
+        !_mvsPreparedGrayCache[static_cast<std::size_t>(refIdx)].empty() &&
+        _mvsPreparedCameras[static_cast<std::size_t>(refIdx)].isValid();
+    if (has_prepared_reference)
     {
-        result.errorMsg = "参考帧预处理失败: " + preprocessError;
-        return result;
+        refImg = _mvsPreparedGrayCache[static_cast<std::size_t>(refIdx)];
+        refCam = _mvsPreparedCameras[static_cast<std::size_t>(refIdx)];
     }
-    refImg = std::move(preparedRefImage);
+    else
+    {
+        cv::Mat prepared_ref_image;
+        std::string preprocess_error;
+        if (!prepareMvsImage(refImg,
+                             refView.camera,
+                             &prepared_ref_image,
+                             &refCam,
+                             &preprocess_error))
+        {
+            result.errorMsg = "参考帧预处理失败: " + preprocess_error;
+            return result;
+        }
+        refImg = std::move(prepared_ref_image);
+    }
     const int W = refImg.cols;
     const int H = refImg.rows;
 
@@ -4212,21 +4265,34 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
             continue;
         }
 
-        cv::Mat preparedSourceImage;
         Camera sourceCamera;
-        std::string sourcePreprocessError;
-        if (!prepareMvsImage(srcImg,
-                             _views[si].camera,
-                             &preparedSourceImage,
-                             &sourceCamera,
-                             &sourcePreprocessError))
+        const bool has_prepared_source =
+            si < static_cast<int>(_mvsPreparedGrayCache.size()) &&
+            si < static_cast<int>(_mvsPreparedCameras.size()) &&
+            !_mvsPreparedGrayCache[static_cast<std::size_t>(si)].empty() &&
+            _mvsPreparedCameras[static_cast<std::size_t>(si)].isValid();
+        if (has_prepared_source)
         {
-            LOG_WARN(QStringLiteral("[MVS] 跳过源帧 %1：影像预处理失败：%2")
-                         .arg(si)
-                         .arg(QString::fromStdString(sourcePreprocessError)));
-            continue;
+            srcImg = _mvsPreparedGrayCache[static_cast<std::size_t>(si)];
+            sourceCamera = _mvsPreparedCameras[static_cast<std::size_t>(si)];
         }
-        srcImg = std::move(preparedSourceImage);
+        else
+        {
+            cv::Mat prepared_source_image;
+            std::string source_preprocess_error;
+            if (!prepareMvsImage(srcImg,
+                                 _views[si].camera,
+                                 &prepared_source_image,
+                                 &sourceCamera,
+                                 &source_preprocess_error))
+            {
+                LOG_WARN(QStringLiteral("[MVS] 跳过源帧 %1：影像预处理失败：%2")
+                             .arg(si)
+                             .arg(QString::fromStdString(source_preprocess_error)));
+                continue;
+            }
+            srcImg = std::move(prepared_source_image);
+        }
         if (srcImg.cols != W || srcImg.rows != H)
         {
             const double scaleX = static_cast<double>(W) / std::max(1, srcImg.cols);
@@ -8831,13 +8897,11 @@ void DepthMapGenerator::runInBackground()
     const int requestedCudaHostSlots = physicalCudaWorkers > 0
         ? std::max(physicalCudaWorkers, _config.gpuFrameWorkerCount)
         : 0;
-    // CUDA and OpenCL devices process different frames concurrently. When no
-    // CUDA device is present, a second OpenCL host lane can prepare the next
-    // frame while the device execution slot is occupied.
+    // CUDA and OpenCL devices process different frames concurrently. Both
+    // backends keep a second host lane so the next frame can prepare while the
+    // current frame is executing. OpenCL owns two independent command queues.
     const int requestedOpenClHostSlots = physicalOpenClWorkers > 0
-        ? (physicalCudaWorkers > 0
-               ? physicalOpenClWorkers
-               : std::max(physicalOpenClWorkers, _config.gpuFrameWorkerCount))
+        ? std::max(physicalOpenClWorkers, _config.gpuFrameWorkerCount)
         : 0;
     const std::vector<DepthComputeWorker> acceleratorWorkers =
         buildDepthComputeWorkerPool(physicalAcceleratorWorkers,
@@ -8893,7 +8957,14 @@ void DepthMapGenerator::runInBackground()
         },
         maxBufferedSaveTasks);
 
-    auto emitDepthProgress = [this, NV, &completedTasks, &activeGpuTasks, &activeCpuTasks, &computeScheduler](
+    const int physicalGpuCount = static_cast<int>(physicalAcceleratorWorkers.size());
+    auto emitDepthProgress = [this,
+                              NV,
+                              physicalGpuCount,
+                              &completedTasks,
+                              &activeGpuTasks,
+                              &activeCpuTasks,
+                              &computeScheduler](
                                  const QString &workerTag,
                                  int frameIndex,
                                  bool pickedTask)
@@ -8904,9 +8975,12 @@ void DepthMapGenerator::runInBackground()
         const int pending = static_cast<int>(computeScheduler.pendingTaskCount());
         const float ratio = static_cast<float>(done) / (NV + 2);
 
-        QString stage = QStringLiteral("深度估计: 已完成 %1/%2, 运行中 GPU %3 CPU %4, 待处理 %5")
+        QString stage = QStringLiteral(
+                            "深度估计: 已完成 %1/%2, 物理 GPU %3, 活跃 GPU 帧槽 %4, "
+                            "CPU %5, 待处理 %6")
                             .arg(done)
                             .arg(NV)
+                            .arg(physicalGpuCount)
                             .arg(gpuActive)
                             .arg(cpuActive)
                             .arg(pending);
@@ -9120,6 +9194,10 @@ void DepthMapGenerator::runInBackground()
         saveQueue.stop();
         _grayCache.clear();
         _grayCache.shrink_to_fit();
+        _mvsPreparedGrayCache.clear();
+        _mvsPreparedGrayCache.shrink_to_fit();
+        _mvsPreparedCameras.clear();
+        _mvsPreparedCameras.shrink_to_fit();
         _validRegionMasks.clear();
         _validRegionMasks.shrink_to_fit();
         _projectMaskLoaded.clear();
@@ -9158,6 +9236,10 @@ void DepthMapGenerator::runInBackground()
     // 释放图像缓存（深度估计完毕后不再需要）
     _grayCache.clear();
     _grayCache.shrink_to_fit();
+    _mvsPreparedGrayCache.clear();
+    _mvsPreparedGrayCache.shrink_to_fit();
+    _mvsPreparedCameras.clear();
+    _mvsPreparedCameras.shrink_to_fit();
     _validRegionMasks.clear();
     _validRegionMasks.shrink_to_fit();
     _projectMaskLoaded.clear();
@@ -9197,6 +9279,10 @@ void DepthMapGenerator::runInBackground()
         }
         _grayCache.clear();
         _grayCache.shrink_to_fit();
+        _mvsPreparedGrayCache.clear();
+        _mvsPreparedGrayCache.shrink_to_fit();
+        _mvsPreparedCameras.clear();
+        _mvsPreparedCameras.shrink_to_fit();
         _validRegionMasks.clear();
         _validRegionMasks.shrink_to_fit();
         _projectMaskLoaded.clear();
@@ -9322,6 +9408,10 @@ void DepthMapGenerator::runInBackground()
             recoverResidualDepthAfterConsistency();
             _grayCache.clear();
             _grayCache.shrink_to_fit();
+            _mvsPreparedGrayCache.clear();
+            _mvsPreparedGrayCache.shrink_to_fit();
+            _mvsPreparedCameras.clear();
+            _mvsPreparedCameras.shrink_to_fit();
             _validRegionMasks.clear();
             _validRegionMasks.shrink_to_fit();
             _projectMaskLoaded.clear();

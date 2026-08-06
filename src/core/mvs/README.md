@@ -99,12 +99,15 @@ live under `src/core/mvs/tests/`.
 - Multi-GPU scheduling is frame-level: one depth map remains on one device, while different reference frames
   run concurrently. Every physical accelerator is represented before host preparation lanes are duplicated.
   With CUDA plus an Intel/AMD OpenCL GPU, the default pool keeps both devices active and adds a second CUDA host
-  lane so frame N+1 can prepare and upload while frame N owns that CUDA device's execution slot.
+  lane and a second OpenCL lane. Progress reports physical GPU count separately from active host frame slots.
 - The OpenCL C 1.2 backend runs inverse-depth hypothesis search, multi-source NCC, mask-aware sampling, depth
-  hints, refinement, and confidence filtering. Runtime objects are cached per OpenCL device. CPU packing and
-  post-processing run outside the per-device queue lock, so an OpenCL-only configuration can also overlap host
-  work through two preparation lanes. CPU execution remains the native C++/OpenMP implementation rather than
-  using a CPU OpenCL device.
+  hints, refinement, and confidence filtering. Each OpenCL GPU caches one context/program and two independent
+  command-queue/kernel lanes, so the next frame can be queued without racing kernel arguments or waiting for
+  the previous readback. CPU packing and post-processing remain outside lane ownership. CPU execution remains
+  the native C++/OpenMP implementation rather than using a CPU OpenCL device.
+- Image preload also caches the normalized/undistorted MVS image and camera. Frames reuse this prepared input
+  instead of repeating camera normalization and distortion remapping every time the same image is a reference
+  or source view; undistorted storage is shared with the gray cache when no distortion is present.
 - Per-frame CUDA and OpenCL logs report preparation, device-slot wait, device execution/readback, post-processing,
   and total time. OpenCL additionally separates command queue turnaround from profiled kernel execution. These
   fields distinguish expected frame-pipeline overlap from a driver/queue or device-side utilization gap.

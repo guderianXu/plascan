@@ -8,7 +8,9 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace
@@ -121,6 +123,25 @@ double validRatio(const cv::Mat &depth, const cv::Mat &mask)
            static_cast<double>(std::max(1, cv::countNonZero(mask)));
 }
 
+std::optional<int> intelOpenClDeviceIndex()
+{
+    const std::vector<xjw::mvs::OpenClDeviceInfo> devices =
+        xjw::mvs::PatchMatchDepthEstimator::openClDevices();
+    const auto intel_device = std::find_if(
+        devices.cbegin(), devices.cend(), [](const xjw::mvs::OpenClDeviceInfo &device)
+        {
+            std::string vendor = device.vendor;
+            std::transform(vendor.begin(), vendor.end(), vendor.begin(), [](unsigned char character)
+            {
+                return static_cast<char>(std::tolower(character));
+            });
+            return vendor.find("intel") != std::string::npos;
+        });
+    return intel_device == devices.cend()
+        ? std::nullopt
+        : std::optional<int>(intel_device->index);
+}
+
 TEST(PatchMatchMaskAwareTest, CpuKeepsDepthInsideReferenceMaskOnly)
 {
     const EstimateResult result = estimateMaskedPlane(xjw::mvs::PatchMatchBackend::Cpu);
@@ -163,25 +184,14 @@ TEST(PatchMatchMaskAwareTest, CpuAndCudaApplyEquivalentMaskSemanticsWhenAvailabl
 
 TEST(PatchMatchMaskAwareTest, IntelOpenClEstimatesMaskedPlaneWhenAvailable)
 {
-    const std::vector<xjw::mvs::OpenClDeviceInfo> devices =
-        xjw::mvs::PatchMatchDepthEstimator::openClDevices();
-    const auto intel_device = std::find_if(
-        devices.cbegin(), devices.cend(), [](const xjw::mvs::OpenClDeviceInfo &device)
-        {
-            std::string vendor = device.vendor;
-            std::transform(vendor.begin(), vendor.end(), vendor.begin(), [](unsigned char character)
-            {
-                return static_cast<char>(std::tolower(character));
-            });
-            return vendor.find("intel") != std::string::npos;
-        });
-    if (intel_device == devices.cend())
+    const std::optional<int> device_index = intelOpenClDeviceIndex();
+    if (!device_index)
     {
         GTEST_SKIP() << "Intel OpenCL GPU is unavailable";
     }
 
     const EstimateResult result = estimateMaskedPlane(
-        xjw::mvs::PatchMatchBackend::OpenCl, intel_device->index);
+        xjw::mvs::PatchMatchBackend::OpenCl, *device_index);
     ASSERT_FALSE(result.depth.empty());
     ASSERT_EQ(result.depth.type(), CV_32F);
 
@@ -211,6 +221,37 @@ TEST(PatchMatchMaskAwareTest, IntelOpenClEstimatesMaskedPlaneWhenAvailable)
     std::nth_element(valid_depths.begin(), median, valid_depths.end());
     EXPECT_NEAR(*median, kExpectedDepth, 1.0f);
 
+    xjw::mvs::PatchMatchDepthEstimator::cleanupOpenClResources();
+}
+
+TEST(PatchMatchMaskAwareTest, IntelOpenClKeepsConcurrentFrameLanesIsolatedWhenAvailable)
+{
+    const std::optional<int> device_index = intelOpenClDeviceIndex();
+    if (!device_index)
+    {
+        GTEST_SKIP() << "Intel OpenCL GPU is unavailable";
+    }
+
+    std::array<EstimateResult, 2> results;
+    std::thread first([&]()
+    {
+        results[0] = estimateMaskedPlane(
+            xjw::mvs::PatchMatchBackend::OpenCl, *device_index);
+    });
+    std::thread second([&]()
+    {
+        results[1] = estimateMaskedPlane(
+            xjw::mvs::PatchMatchBackend::OpenCl, *device_index);
+    });
+    first.join();
+    second.join();
+
+    const cv::Mat reference_mask = makeReferenceMask();
+    for (const EstimateResult &result : results)
+    {
+        ASSERT_FALSE(result.depth.empty());
+        EXPECT_GT(validRatio(result.depth, reference_mask), 0.25);
+    }
     xjw::mvs::PatchMatchDepthEstimator::cleanupOpenClResources();
 }
 

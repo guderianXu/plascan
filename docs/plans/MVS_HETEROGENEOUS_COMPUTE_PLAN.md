@@ -64,10 +64,13 @@ CPU 不通过 OpenCL 执行。现有 C++/OpenMP 路径没有 JIT、驱动与主�
 - worker 池先为每块物理 GPU 保留一个执行来源，再增加同设备主机准备槽。CUDA + OpenCL 默认场景下，
   两块设备都会参与，同时为 CUDA 增加第二个主机槽，使下一帧的 CPU 准备和灰度图上传与当前帧 kernel
   重叠，不因加入核显而退回单槽 CUDA 流水线。
-- 每块 CUDA/OpenCL GPU 仍只有一个设备执行槽，避免共享 constant memory、workspace、command queue 和
-  kernel 参数发生竞争；重复的是主机准备槽，不是让同一设备并发修改共享资源。
-- OpenCL 的设备锁缩小到 kernel 参数设置、提交、等待和结果回读。灰度缩放、相机/蒙版打包、buffer 创建
-  以及 OpenCV 后处理不再占用设备执行槽；仅 OpenCL 的机器也可利用第二个主机槽预备下一帧。
+- 每块 CUDA GPU 仍只有一个设备执行槽，避免共享 constant memory 和 workspace 发生竞争；第二个 CUDA
+  帧槽负责提前准备和上传下一帧。每块 OpenCL GPU 则使用共享 context/program 下的两个独立 command queue
+  和 kernel 对象，既避免 `clSetKernelArg` 竞争，也允许下一帧在上一帧回读前进入驱动队列。
+- 灰度缩放、相机/蒙版打包、buffer 创建以及 OpenCV 后处理不占用 OpenCL lane。影像预加载阶段还缓存
+  正深度归一化和去畸变后的 MVS 影像/相机，避免同一影像作为不同帧的参考或源视图时重复做 CPU remap。
+- 进度中的“物理 GPU”只统计真实 CUDA/OpenCL 设备；重复的主机准备/执行 lane 单独显示为“活跃 GPU
+  帧槽”，不再把 `CUDA×2 + OpenCL×1/2` 误报为三块或四块显卡。
 - CUDA 日志记录 `prepare/wait/gpu_slot/post/total`，OpenCL 日志记录
   `prepare/wait/queue/kernel/read/post/total`；其中 `queue` 是提交到完成的墙钟时间，`kernel` 是设备事件的
   实际执行时间。`wait` 持续偏高表示同设备主机槽已成功前置准备；设备监控中的短暂空档若对应 `prepare`

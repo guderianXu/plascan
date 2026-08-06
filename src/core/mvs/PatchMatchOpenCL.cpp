@@ -10,11 +10,14 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <unordered_map>
 
@@ -119,25 +122,37 @@ std::vector<EnumeratedOpenClDevice> enumerateOpenClGpuDevices()
 
 struct OpenClRuntime
 {
+    struct ExecutionLane
+    {
+        cl_command_queue queue = nullptr;
+        cl_kernel kernel = nullptr;
+        bool busy = false;
+    };
+
+    static constexpr std::size_t kExecutionLaneCount = 2;
+
     cl_context context = nullptr;
-    cl_command_queue queue = nullptr;
     cl_program program = nullptr;
-    cl_kernel kernel = nullptr;
-    std::mutex executionMutex;
+    std::array<ExecutionLane, kExecutionLaneCount> lanes;
+    std::mutex laneMutex;
+    std::condition_variable laneAvailable;
 
     ~OpenClRuntime()
     {
-        if (kernel)
+        for (ExecutionLane &lane : lanes)
         {
-            clReleaseKernel(kernel);
+            if (lane.kernel)
+            {
+                clReleaseKernel(lane.kernel);
+            }
+            if (lane.queue)
+            {
+                clReleaseCommandQueue(lane.queue);
+            }
         }
         if (program)
         {
             clReleaseProgram(program);
-        }
-        if (queue)
-        {
-            clReleaseCommandQueue(queue);
         }
         if (context)
         {
@@ -148,6 +163,94 @@ struct OpenClRuntime
 
 std::mutex g_openClRuntimeRegistryMutex;
 std::unordered_map<int, std::shared_ptr<OpenClRuntime>> g_openClRuntimes;
+
+class OpenClExecutionLaneLease
+{
+public:
+    OpenClExecutionLaneLease() = default;
+    OpenClExecutionLaneLease(std::shared_ptr<OpenClRuntime> runtime, std::size_t laneIndex)
+        : _runtime(std::move(runtime)), _laneIndex(laneIndex)
+    {
+    }
+    OpenClExecutionLaneLease(const OpenClExecutionLaneLease &) = delete;
+    OpenClExecutionLaneLease &operator=(const OpenClExecutionLaneLease &) = delete;
+    OpenClExecutionLaneLease(OpenClExecutionLaneLease &&other) noexcept
+        : _runtime(std::move(other._runtime)), _laneIndex(other._laneIndex)
+    {
+    }
+    OpenClExecutionLaneLease &operator=(OpenClExecutionLaneLease &&other) noexcept
+    {
+        if (this != &other)
+        {
+            release();
+            _runtime = std::move(other._runtime);
+            _laneIndex = other._laneIndex;
+        }
+        return *this;
+    }
+
+    ~OpenClExecutionLaneLease()
+    {
+        release();
+    }
+
+    OpenClRuntime::ExecutionLane &lane()
+    {
+        return _runtime->lanes[_laneIndex];
+    }
+
+    std::size_t laneIndex() const
+    {
+        return _laneIndex;
+    }
+
+    void release()
+    {
+        if (!_runtime)
+        {
+            return;
+        }
+        {
+            std::lock_guard<std::mutex> lock(_runtime->laneMutex);
+            _runtime->lanes[_laneIndex].busy = false;
+        }
+        _runtime->laneAvailable.notify_one();
+        _runtime.reset();
+    }
+
+private:
+    std::shared_ptr<OpenClRuntime> _runtime;
+    std::size_t _laneIndex = 0;
+};
+
+std::optional<OpenClExecutionLaneLease> acquireOpenClExecutionLane(
+    const std::shared_ptr<OpenClRuntime> &runtime,
+    const std::atomic<bool> *cancelFlag)
+{
+    std::unique_lock<std::mutex> lock(runtime->laneMutex);
+    runtime->laneAvailable.wait(lock, [&]()
+    {
+        return (cancelFlag && cancelFlag->load(std::memory_order_relaxed)) ||
+            std::any_of(runtime->lanes.begin(), runtime->lanes.end(),
+                        [](const OpenClRuntime::ExecutionLane &lane)
+                        {
+                            return !lane.busy;
+                        });
+    });
+    if (cancelFlag && cancelFlag->load(std::memory_order_relaxed))
+    {
+        return std::nullopt;
+    }
+    for (std::size_t index = 0; index < runtime->lanes.size(); ++index)
+    {
+        if (!runtime->lanes[index].busy)
+        {
+            runtime->lanes[index].busy = true;
+            return OpenClExecutionLaneLease(runtime, index);
+        }
+    }
+    return std::nullopt;
+}
 
 std::string openClError(const char *operation, cl_int error)
 {
@@ -183,17 +286,6 @@ std::shared_ptr<OpenClRuntime> openClRuntimeForDevice(
         }
         return nullptr;
     }
-    runtime->queue = clCreateCommandQueue(
-        runtime->context, device.device, CL_QUEUE_PROFILING_ENABLE, &error);
-    if (error != CL_SUCCESS || !runtime->queue)
-    {
-        if (errorMsg)
-        {
-            *errorMsg = openClError("clCreateCommandQueue", error);
-        }
-        return nullptr;
-    }
-
     const char *source = detail::kPatchMatchOpenClSource;
     const std::size_t source_length = std::strlen(source);
     runtime->program = clCreateProgramWithSource(
@@ -228,14 +320,27 @@ std::shared_ptr<OpenClRuntime> openClRuntimeForDevice(
         }
         return nullptr;
     }
-    runtime->kernel = clCreateKernel(runtime->program, "estimate_depth", &error);
-    if (error != CL_SUCCESS || !runtime->kernel)
+    for (OpenClRuntime::ExecutionLane &lane : runtime->lanes)
     {
-        if (errorMsg)
+        lane.queue = clCreateCommandQueue(
+            runtime->context, device.device, CL_QUEUE_PROFILING_ENABLE, &error);
+        if (error != CL_SUCCESS || !lane.queue)
         {
-            *errorMsg = openClError("clCreateKernel", error);
+            if (errorMsg)
+            {
+                *errorMsg = openClError("clCreateCommandQueue", error);
+            }
+            return nullptr;
         }
-        return nullptr;
+        lane.kernel = clCreateKernel(runtime->program, "estimate_depth", &error);
+        if (error != CL_SUCCESS || !lane.kernel)
+        {
+            if (errorMsg)
+            {
+                *errorMsg = openClError("clCreateKernel", error);
+            }
+            return nullptr;
+        }
     }
 
     g_openClRuntimes.emplace(device.info.index, runtime);
@@ -627,10 +732,21 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     const float cy = static_cast<float>(reference_intrinsics.principalY) * scale;
 
     // Buffer creation and CPU image preparation are independent per host lane.
-    // Only the shared command queue and kernel arguments require serialization.
+    // Each lane owns a command queue and kernel object, so two frames can be
+    // queued concurrently without racing clSetKernelArg state.
     const auto slot_wait_start = std::chrono::steady_clock::now();
-    std::unique_lock<std::mutex> execution_lock(runtime->executionMutex);
+    std::optional<OpenClExecutionLaneLease> lane_lease =
+        acquireOpenClExecutionLane(runtime, config.cancelFlag);
+    if (!lane_lease)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "PatchMatch cancelled while waiting for an OpenCL execution lane";
+        }
+        return false;
+    }
     const auto slot_acquired = std::chrono::steady_clock::now();
+    OpenClRuntime::ExecutionLane &execution_lane = lane_lease->lane();
     const std::array<cl_mem, 9> memory_arguments = {
         reference_buffer.get(),
         sources_buffer.get(),
@@ -644,14 +760,14 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     cl_uint argument_index = 0;
     for (cl_mem argument : memory_arguments)
     {
-        if (!setKernelArgument(runtime->kernel, argument_index++, argument, errorMsg))
+        if (!setKernelArgument(execution_lane.kernel, argument_index++, argument, errorMsg))
         {
             return false;
         }
     }
     const auto set_argument = [&](const auto &value)
     {
-        return setKernelArgument(runtime->kernel, argument_index++, value, errorMsg);
+        return setKernelArgument(execution_lane.kernel, argument_index++, value, errorMsg);
     };
     if (!set_argument(width)
         || !set_argument(height)
@@ -683,8 +799,8 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         (static_cast<std::size_t>(height) + local_size[1] - 1) / local_size[1] * local_size[1]};
     cl_event event = nullptr;
     const auto kernel_wall_start = std::chrono::steady_clock::now();
-    cl_int error = clEnqueueNDRangeKernel(runtime->queue,
-                                          runtime->kernel,
+    cl_int error = clEnqueueNDRangeKernel(execution_lane.queue,
+                                          execution_lane.kernel,
                                           2,
                                           nullptr,
                                           global_size,
@@ -737,7 +853,7 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     cv::Mat depth_work(height, width, CV_32F);
     cv::Mat confidence_work(height, width, CV_32F);
     const auto read_start = std::chrono::steady_clock::now();
-    error = clEnqueueReadBuffer(runtime->queue,
+    error = clEnqueueReadBuffer(execution_lane.queue,
                                 depth_buffer.get(),
                                 CL_TRUE,
                                 0,
@@ -748,7 +864,7 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
                                 nullptr);
     if (error == CL_SUCCESS)
     {
-        error = clEnqueueReadBuffer(runtime->queue,
+        error = clEnqueueReadBuffer(execution_lane.queue,
                                     confidence_buffer.get(),
                                     CL_TRUE,
                                     0,
@@ -767,7 +883,8 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         return false;
     }
     const auto read_finished = std::chrono::steady_clock::now();
-    execution_lock.unlock();
+    const std::size_t execution_lane_index = lane_lease->laneIndex();
+    lane_lease->release();
     const auto postprocess_start = read_finished;
 
     if (config.doMedianBlur && config.medianKernelSize > 1)
@@ -834,10 +951,11 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         estimate_finished - postprocess_start).count();
     const double total_ms = std::chrono::duration<double, std::milli>(
         estimate_finished - estimate_start).count();
-    LOG_INFO("[MVS][PatchMatch][OpenCL] device=%s size=%dx%d sources=%d samples=%d valid=%d/%d "
+    LOG_INFO("[MVS][PatchMatch][OpenCL] device=%s lane=%zu size=%dx%d sources=%d samples=%d valid=%d/%d "
              "prepare=%.1f ms wait=%.1f ms queue=%.1f ms kernel=%.1f ms "
              "read=%.1f ms post=%.1f ms total=%.1f ms",
              devices[device_index].info.name.c_str(),
+             execution_lane_index,
              width,
              height,
              source_count,
