@@ -23,6 +23,8 @@
 #include "LayerRenderer.h"
 #include "ProjectSessionContext.h"
 
+#include <functional>
+
 class QMainWindow;
 class QColor;
 class MainMenu;
@@ -109,7 +111,8 @@ private:
     static SparsePrerequisiteSummary summarizeSparsePrerequisites(const QStringList &images,
                                                                   const QJsonObject &meta,
                                                                   const QString &projectPath,
-                                                                  const QString &algorithmId = QString());
+                                                                  const QString &algorithmId = QString(),
+                                                                  const std::function<void(int, int)> &progressCallback = {});
     QJsonObject sanitizeAerialTriangulationReferencePreselection(const QJsonObject &settings,
                                                                 const QStringList &images) const;
     DialogSettingStore *createDialogSettingStore(const QString &settingKey);

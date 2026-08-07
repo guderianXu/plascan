@@ -595,6 +595,55 @@ bool ImageMatchFile::read(const QString &filePath,
     return deserializePayload(payload, shard, nullptr, false, errorMessage);
 }
 
+bool ImageMatchFile::readSignature(const QString &filePath,
+                                   ImageMatchFileSignature *signature,
+                                   QString *errorMessage)
+{
+    if (!signature)
+    {
+        setError(errorMessage, QStringLiteral("影像匹配签名读取目标为空"));
+        return false;
+    }
+    *signature = ImageMatchFileSignature{};
+
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        setError(errorMessage, QStringLiteral("无法打开影像匹配文件: %1").arg(filePath));
+        return false;
+    }
+    QDataStream stream(&file);
+    configureStream(&stream);
+
+    char magic[kMagicSize] = {};
+    quint32 version = 0;
+    quint64 payloadSize = 0;
+    QByteArray digest(32, Qt::Uninitialized);
+    if (stream.readRawData(magic, kMagicSize) != kMagicSize ||
+        std::memcmp(magic, kMagic, kMagicSize) != 0)
+    {
+        setError(errorMessage, QStringLiteral("不是 PlaScan 影像匹配分片: %1").arg(filePath));
+        return false;
+    }
+    stream >> version >> payloadSize;
+    if (stream.status() != QDataStream::Ok || version != kImageMatchFormatVersion ||
+        payloadSize > kMaximumPayloadBytes ||
+        stream.readRawData(digest.data(), digest.size()) != digest.size() ||
+        static_cast<quint64>(file.bytesAvailable()) != payloadSize)
+    {
+        setError(errorMessage, QStringLiteral("影像匹配容器头或 payload 长度无效: %1").arg(filePath));
+        return false;
+    }
+
+    signature->valid = true;
+    signature->formatVersion = version;
+    signature->payloadBytes = payloadSize;
+    signature->containerBytes = static_cast<std::uint64_t>(std::max<qint64>(0, file.size()));
+    signature->modifiedTimeMs = QFileInfo(filePath).lastModified().toMSecsSinceEpoch();
+    signature->payloadSha256 = std::move(digest);
+    return true;
+}
+
 bool ImageMatchFile::readSummary(const QString &filePath,
                                  ImageMatchFileSummary *summary,
                                  QString *errorMessage)

@@ -2,11 +2,12 @@
 
 /**
  * @file MatchResultCatalog.h
- * @brief 对逐影像 `.pimatch` 分片建立像对/算法变体只读索引。
+ * @brief 通过轻量 `.pidx` 对逐影像 `.pimatch` 建立像对/算法变体目录。
  *
  * 文件系统层面一幅影像只有一个分片；逻辑层面同一像对仍可在分片内部保存多个
  * algorithmId + version + configFingerprint 变体。目录器只依赖统一二进制契约，
- * 不读取 JSON sidecar，也不从文件名推断影像身份或算法。
+ * 不读取旧 JSON sidecar，也不从文件名推断影像身份或算法。缺少 `.pidx` 时会
+ * 从权威分片自动重建一次，之后仅校验固定大小的 payload 签名。
  */
 
 #include <QByteArray>
@@ -57,6 +58,8 @@ struct MatchResultCatalogConfig
     QString matchDirectory;
     QString targetImagePath;
     QStringList targetImagePaths;
+    /// 0 表示按硬件线程自动选择，但目录读取最多并行 8 路，避免机械盘随机争用。
+    int maxConcurrency = 0;
     std::function<void(int processed, int total)> progressCallback;
 };
 
@@ -66,6 +69,9 @@ struct MatchResultCatalogSummary
     int variantCount = 0;
     int compatibleVariantCount = 0;
     int incompatibleVariantCount = 0; ///< 文件损坏或版本不支持的分片数。
+    int memoryIndexHitCount = 0;
+    int persistentIndexHitCount = 0;
+    int rebuiltIndexCount = 0;
     int pairGroupCount = 0;
     QVector<MatchPairGroup> pairGroups;
 };

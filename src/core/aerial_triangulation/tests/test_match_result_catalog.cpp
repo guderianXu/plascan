@@ -1,4 +1,5 @@
 #include "ImageMatchRepository.h"
+#include "ImageMatchIndexFile.h"
 #include "preparation/MatchResultCatalog.h"
 
 #include <QDir>
@@ -81,12 +82,16 @@ TEST(MatchResultCatalogTest, ScansPerImageShardsWithoutDuplicatingSymmetricPair)
         last_total = total;
     };
 
+    xjw::image_matching::ImageMatchIndexFile::clearMemoryCache();
+
     const auto summary = xjw::aerial_triangulation::MatchResultCatalog(config).scan();
     EXPECT_EQ(summary.matchFileCount, 2);
     EXPECT_EQ(summary.pairGroupCount, 1);
     EXPECT_EQ(summary.variantCount, 1);
     EXPECT_EQ(summary.compatibleVariantCount, 1);
     EXPECT_EQ(summary.incompatibleVariantCount, 0);
+    EXPECT_EQ(summary.persistentIndexHitCount, 2);
+    EXPECT_EQ(summary.rebuiltIndexCount, 0);
     EXPECT_EQ(last_processed, 2);
     EXPECT_EQ(last_total, 2);
 
@@ -100,6 +105,42 @@ TEST(MatchResultCatalogTest, ScansPerImageShardsWithoutDuplicatingSymmetricPair)
     EXPECT_DOUBLE_EQ(group.variants.first().geometricCoverage, 1.0 / 16.0);
     EXPECT_TRUE(group.variants.first().geometryPassed);
     EXPECT_TRUE(group.variants.first().matchFilePath.endsWith(QStringLiteral(".pimatch")));
+}
+
+TEST(MatchResultCatalogTest, RebuildsOnlyMissingPersistentIndex)
+{
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+    const QString image_a = createImage(temporary.path(), QStringLiteral("A.png"));
+    const QString image_b = createImage(temporary.path(), QStringLiteral("B.png"));
+    const QString match_directory = QDir(temporary.path()).filePath(QStringLiteral("matches"));
+    xjw::image_matching::ImageMatchRepository repository(match_directory);
+    ASSERT_TRUE(repository.writePairs(
+        {makePair(image_a, image_b, QByteArrayLiteral("config-a"), 120, 90, 1000)},
+        false).success);
+
+    const QString missingIndexMatch = repository.shardPath(image_a);
+    ASSERT_TRUE(xjw::image_matching::ImageMatchIndexFile::removeForMatchFile(missingIndexMatch));
+    xjw::image_matching::ImageMatchIndexFile::clearMemoryCache();
+
+    QVector<int> progress;
+    xjw::aerial_triangulation::MatchResultCatalogConfig config;
+    config.matchDirectory = match_directory;
+    config.maxConcurrency = 4;
+    config.progressCallback = [&](int processed, int total)
+    {
+        EXPECT_EQ(total, 2);
+        progress.push_back(processed);
+    };
+    const auto summary = xjw::aerial_triangulation::MatchResultCatalog(config).scan();
+    EXPECT_EQ(summary.persistentIndexHitCount, 1);
+    EXPECT_EQ(summary.rebuiltIndexCount, 1);
+    EXPECT_EQ(progress, QVector<int>({1, 2}));
+
+    xjw::image_matching::ImageMatchIndexFile::clearMemoryCache();
+    const auto cachedSummary = xjw::aerial_triangulation::MatchResultCatalog(config).scan();
+    EXPECT_EQ(cachedSummary.persistentIndexHitCount, 2);
+    EXPECT_EQ(cachedSummary.rebuiltIndexCount, 0);
 }
 
 TEST(MatchResultCatalogTest, KeepsVariantsInsideShardAndSelectsStrongestGeometry)
