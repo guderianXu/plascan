@@ -71,12 +71,14 @@ TEST(BundleAdjustProjectionTest, SharedIntrinsicsProjectionMatchesCameraUpdate)
 
     const double delta[6] = {-0.01, 0.02, 0.005, 0.03, 0.02, -0.01};
     const double world[3] = {1.2, 0.4, 18.0};
-    const double sharedIntrinsics[6] = {
-        std::log(960.0), std::log(912.0 / 960.0), 0.0, 0.0, 0.0, 0.0};
+    const double sharedIntrinsics[9] = {
+        std::log(960.0), std::log(912.0 / 960.0), 0.0, 0.0,
+        -0.02, 0.003, -0.0004, 0.0002, -0.0003};
 
     xjw::Camera updated = camera;
     updated.applyDeltaPose(delta);
     updated.setIntrinsics(960.0, 912.0, 400.0, 300.0);
+    updated.setDistortion(-0.02, 0.003, -0.0004, 0.0002, -0.0003);
     double expected[2] = {0.0, 0.0};
     ASSERT_TRUE(updated.projectWorldPoint(world, expected));
 

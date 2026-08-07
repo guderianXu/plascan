@@ -260,12 +260,24 @@ BundleAdjustValidationResult validateAndNormalizeBundleAdjustOptions(
     }
     if (!std::isfinite(requestedOptions.maxSharedRadialK1Abs) ||
         !std::isfinite(requestedOptions.maxSharedRadialK2Abs) ||
+        !std::isfinite(requestedOptions.maxSharedRadialK3Abs) ||
+        !std::isfinite(requestedOptions.maxSharedTangentialP1Abs) ||
+        !std::isfinite(requestedOptions.maxSharedTangentialP2Abs) ||
         !std::isfinite(requestedOptions.sharedRadialK1PriorSigma) ||
         !std::isfinite(requestedOptions.sharedRadialK2PriorSigma) ||
+        !std::isfinite(requestedOptions.sharedRadialK3PriorSigma) ||
+        !std::isfinite(requestedOptions.sharedTangentialP1PriorSigma) ||
+        !std::isfinite(requestedOptions.sharedTangentialP2PriorSigma) ||
         requestedOptions.maxSharedRadialK1Abs <= 0.0 ||
         requestedOptions.maxSharedRadialK2Abs <= 0.0 ||
+        requestedOptions.maxSharedRadialK3Abs <= 0.0 ||
+        requestedOptions.maxSharedTangentialP1Abs <= 0.0 ||
+        requestedOptions.maxSharedTangentialP2Abs <= 0.0 ||
         requestedOptions.sharedRadialK1PriorSigma <= 0.0 ||
-        requestedOptions.sharedRadialK2PriorSigma <= 0.0)
+        requestedOptions.sharedRadialK2PriorSigma <= 0.0 ||
+        requestedOptions.sharedRadialK3PriorSigma <= 0.0 ||
+        requestedOptions.sharedTangentialP1PriorSigma <= 0.0 ||
+        requestedOptions.sharedTangentialP2PriorSigma <= 0.0)
     {
         return invalid(BASolveStatus::InvalidInput,
                        "BA 输入验证失败: 共享径向畸变边界或先验非法");

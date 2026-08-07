@@ -90,6 +90,29 @@ std::vector<xjw::BATrack> makeSharedFocalTracks(const std::vector<xjw::Camera> &
     return tracks;
 }
 
+std::vector<xjw::BATrack> makeWideCalibrationTracks(
+    const std::vector<xjw::Camera> &truthCameras)
+{
+    std::vector<xjw::BATrack> tracks;
+    for (int y = -6; y <= 6; ++y)
+    {
+        for (int x = -6; x <= 6; ++x)
+        {
+            const std::array<double, 3> truth{{
+                static_cast<double>(x) * 0.45,
+                static_cast<double>(y) * 0.35,
+                7.0 + static_cast<double>((x - y + 24) % 5) * 0.55,
+            }};
+            xjw::BATrack track = makeTrack(truthCameras, truth);
+            if (track.observations.size() >= 3)
+            {
+                tracks.push_back(std::move(track));
+            }
+        }
+    }
+    return tracks;
+}
+
 } // namespace
 
 TEST(BundleAdjustSharedFocalTest, SharedFocalRefinementImprovesWrongNoCameraInitialFocal)
@@ -451,7 +474,7 @@ TEST(BundleAdjustSharedFocalTest, RejectsPrincipalPointRefinementWithoutSharedFo
     EXPECT_NE(result.backendMessage.find("主点优化"), std::string::npos);
 }
 
-TEST(BundleAdjustSharedFocalTest, CeresRecoversBoundedSharedRadialDistortion)
+TEST(BundleAdjustSharedFocalTest, CeresRecoversBoundedSharedBrownConradyDistortion)
 {
     if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
     {
@@ -466,7 +489,7 @@ TEST(BundleAdjustSharedFocalTest, CeresRecoversBoundedSharedRadialDistortion)
     };
     for (xjw::Camera &camera : truthCameras)
     {
-        camera.setDistortion(-0.12, 0.035, 0.0, 0.0, 0.0);
+        camera.setDistortion(-0.12, 0.035, 0.08, 0.003, -0.002);
     }
     const std::vector<xjw::Camera> initialCameras{
         makeCamera(-2.0, 0.0, 0.0, 1500.0),
@@ -485,20 +508,35 @@ TEST(BundleAdjustSharedFocalTest, CeresRecoversBoundedSharedRadialDistortion)
     options.refineSharedRadialDistortion = true;
     options.maxSharedRadialK1Abs = 0.30;
     options.maxSharedRadialK2Abs = 0.15;
+    options.maxSharedRadialK3Abs = 0.20;
+    options.maxSharedTangentialP1Abs = 0.01;
+    options.maxSharedTangentialP2Abs = 0.01;
     options.sharedRadialK1PriorSigma = 1.0;
     options.sharedRadialK2PriorSigma = 1.0;
+    options.sharedRadialK3PriorSigma = 1.0;
+    options.sharedTangentialP1PriorSigma = 1.0;
+    options.sharedTangentialP2PriorSigma = 1.0;
     options.enableControlPointConstraints = true;
     options.controlPointWeight = 1000.0;
     options.enablePointFilter = false;
     options.maxIterations = 60;
 
     const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(
-        initialCameras, makeSharedFocalTracks(truthCameras), options);
+        initialCameras, makeWideCalibrationTracks(truthCameras), options);
 
     ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
     ASSERT_EQ(result.usedBackend, xjw::BABackend::CeresCpu) << result.backendMessage;
+    EXPECT_EQ(result.selfCalibrationStagesRun, 3);
     ASSERT_FALSE(result.refinedCameras.empty());
-    EXPECT_NEAR(result.refinedCameras.front().distortion().radialK1, -0.12, 0.02);
-    EXPECT_NEAR(result.refinedCameras.front().distortion().radialK2, 0.035, 0.03);
+    const xjw::Camera::Distortion distortion =
+        result.refinedCameras.front().distortion();
+    EXPECT_NEAR(distortion.radialK1, -0.12, 0.02);
+    EXPECT_NEAR(distortion.radialK2, 0.035, 0.03);
+    EXPECT_NEAR(distortion.radialK3, 0.08, 0.04);
+    EXPECT_NEAR(distortion.tangentialP1, 0.003, 0.001);
+    EXPECT_NEAR(distortion.tangentialP2, -0.002, 0.001);
+    EXPECT_NEAR(result.refinedSharedRadialK3, 0.08, 0.04);
+    EXPECT_NEAR(result.refinedSharedTangentialP1, 0.003, 0.001);
+    EXPECT_NEAR(result.refinedSharedTangentialP2, -0.002, 0.001);
     EXPECT_LT(result.meanRmsAfter, 0.25);
 }

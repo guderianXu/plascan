@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <future>
 #include <limits>
 #include <numeric>
 #include <optional>
@@ -42,6 +43,83 @@ struct AerialCameraPlaneEstimate
     double normalRms = 0.0;
     double spanRms = 0.0;
 };
+
+struct BrownCalibrationCoverage
+{
+    int observationCount = 0;
+    int centralObservationCount = 0;
+    int peripheralObservationCount = 0;
+    int occupiedPeripheralSectors = 0;
+    double maximumNormalizedRadius = 0.0;
+
+    bool supportsFullModel() const
+    {
+        return observationCount >= 1000 &&
+               centralObservationCount >= 50 &&
+               peripheralObservationCount >= 100 &&
+               occupiedPeripheralSectors >= 6 &&
+               maximumNormalizedRadius >= 0.40;
+    }
+};
+
+BrownCalibrationCoverage assessBrownCalibrationCoverage(
+    const std::vector<Camera> &cameras,
+    const std::vector<BATrack> &tracks)
+{
+    BrownCalibrationCoverage coverage;
+    std::array<bool, 8> occupiedSectors{};
+    constexpr double kPi = 3.14159265358979323846;
+    for (const BATrack &track : tracks)
+    {
+        for (const BAObservation &observation : track.observations)
+        {
+            if (observation.cameraIndex < 0 ||
+                observation.cameraIndex >= static_cast<int>(cameras.size()))
+            {
+                continue;
+            }
+            const Camera &camera = cameras[static_cast<size_t>(observation.cameraIndex)];
+            const double focalX = camera.focalX();
+            const double focalY = camera.focalY();
+            if (!std::isfinite(focalX) || !std::isfinite(focalY) ||
+                std::abs(focalX) <= 1.0e-9 || std::abs(focalY) <= 1.0e-9)
+            {
+                continue;
+            }
+            const double normalizedX =
+                (observation.u - camera.principalX()) / focalX;
+            const double normalizedY =
+                (observation.v - camera.principalY()) / focalY;
+            const double radius = std::hypot(normalizedX, normalizedY);
+            if (!std::isfinite(radius))
+            {
+                continue;
+            }
+            ++coverage.observationCount;
+            coverage.maximumNormalizedRadius =
+                std::max(coverage.maximumNormalizedRadius, radius);
+            if (radius <= 0.15)
+            {
+                ++coverage.centralObservationCount;
+            }
+            if (radius >= 0.35)
+            {
+                ++coverage.peripheralObservationCount;
+                double angle = std::atan2(normalizedY, normalizedX);
+                if (angle < 0.0)
+                {
+                    angle += 2.0 * kPi;
+                }
+                const int sector = std::clamp(
+                    static_cast<int>(angle * 8.0 / (2.0 * kPi)), 0, 7);
+                occupiedSectors[static_cast<size_t>(sector)] = true;
+            }
+        }
+    }
+    coverage.occupiedPeripheralSectors = static_cast<int>(std::count(
+        occupiedSectors.begin(), occupiedSectors.end(), true));
+    return coverage;
+}
 
 AerialCameraPlaneEstimate estimateAerialCameraPlane(
     const std::vector<Camera> &cameras)
@@ -282,6 +360,9 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
             _lastGlobalBASharedFocalScale = 1.0;
             _lastGlobalBASharedRadialK1 = 0.0;
             _lastGlobalBASharedRadialK2 = 0.0;
+            _lastGlobalBASharedRadialK3 = 0.0;
+            _lastGlobalBASharedTangentialP1 = 0.0;
+            _lastGlobalBASharedTangentialP2 = 0.0;
             _lastGlobalBARequestedBackend = _sfmOptions.baOptions.backend;
             _lastGlobalBAUsedBackend = BABackend::LegacyCpu;
             _lastGlobalBASolveStatus = BASolveStatus::NotRun;
@@ -584,6 +665,46 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
          baOpt.refineSharedFocalAspectRatio ||
          baOpt.refineSharedPrincipalPoint ||
          baOpt.refineSharedRadialDistortion);
+    bool hasRefinedLensSeed = false;
+    if (refiningSharedCameraModel)
+    {
+        // 最终自标定通常只占整条 SfM 的数十秒，但 20 次迭代不足以让焦距和
+        // 五项畸变在大型弱几何块中稳定。只提高完整注册后的共享内参 BA 预算；
+        // 局部、周期和块内 BA 仍保持原预算。
+        baOpt.maxIterations = std::max(baOpt.maxIterations, 60);
+        hasRefinedLensSeed = std::any_of(
+            baCameras.begin(),
+            baCameras.end(),
+            [](const Camera &camera)
+            {
+                const Camera::Distortion distortion = camera.distortion();
+                return std::abs(distortion.radialK1) > 1.0e-8 ||
+                       std::abs(distortion.radialK2) > 1.0e-8 ||
+                       std::abs(distortion.radialK3) > 1.0e-8 ||
+                       std::abs(distortion.tangentialP1) > 1.0e-8 ||
+                       std::abs(distortion.tangentialP2) > 1.0e-8;
+            });
+        if (hasRefinedLensSeed)
+        {
+            // 后续“重三角化—再平差”轮次已有稳定镜头种子，不重复固定内参预热，
+            // 把全部迭代预算用于完整模型收敛。
+            baOpt.stageSharedFocalRefinement = false;
+        }
+    }
+    if (refineSharedIntrinsics && baOpt.refineSharedRadialDistortion)
+    {
+        const BrownCalibrationCoverage coverage =
+            assessBrownCalibrationCoverage(baCameras, baTracks);
+        Logger::instance()->infof(
+            "[BA] Brown calibration coverage observations=%d central=%d "
+            "peripheral=%d sectors=%d/8 maxNormalizedRadius=%.4f fullModelCoverage=%s",
+            coverage.observationCount,
+            coverage.centralObservationCount,
+            coverage.peripheralObservationCount,
+            coverage.occupiedPeripheralSectors,
+            coverage.maximumNormalizedRadius,
+            coverage.supportsFullModel() ? "sufficient" : "weak_regularized");
+    }
     // SfM 协调器会固定旋转/平移规范，并在求解后恢复基线尺度，
     // 因此由调用方管理完整的 Sim(3) gauge，避免 BA 模块再自动固定第二台相机。
     baOpt.gaugePolicy = BAGaugePolicy::CallerManaged;
@@ -799,8 +920,92 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
             baOpt.minCeresCudaObservations);
     }
 
-    // 执行 BA
-    BAResult baResult = BundleAdjust::optimizePoints(baCameras, baTracks, baOpt);
+    // 首次自由网络自标定采用少量场景无关的焦距/低阶径向多起点，避免零畸变
+    // 产生的 dome 局部极小值锁住后续联合 BA。候选只改变镜头初值，不使用相机
+    // 轨迹平面、地面法向或无人机语义；通过同一 BA 有效轨迹率与 RMS 选择。
+    BAResult baResult;
+    if (refiningSharedCameraModel && !hasRefinedLensSeed &&
+        baCameras.size() >= 50 && baTracks.size() >= 1000)
+    {
+        struct CalibrationSeed
+        {
+            double focalScale = 1.0;
+            double radialK1 = 0.0;
+        };
+        const std::array<CalibrationSeed, 3> seeds{{
+            {1.00, 0.00},
+            {0.98, -0.04},
+            {0.96, -0.08},
+        }};
+        const int candidateThreads = std::max(
+            1, baOpt.numThreads / static_cast<int>(seeds.size()));
+        std::vector<std::future<BAResult>> candidates;
+        candidates.reserve(seeds.size());
+        for (const CalibrationSeed seed : seeds)
+        {
+            candidates.push_back(std::async(
+                std::launch::async,
+                [&, seed]()
+                {
+                    std::vector<Camera> seedCameras = baCameras;
+                    for (Camera &camera : seedCameras)
+                    {
+                        const Camera::Intrinsics intrinsics = camera.intrinsics();
+                        camera.setIntrinsics(
+                            intrinsics.focalX * seed.focalScale,
+                            intrinsics.focalY * seed.focalScale,
+                            intrinsics.principalX,
+                            intrinsics.principalY);
+                        Camera::Distortion distortion = camera.distortion();
+                        distortion.radialK1 = seed.radialK1;
+                        camera.setDistortion(distortion);
+                    }
+                    BAOptions candidateOptions = baOpt;
+                    candidateOptions.numThreads = candidateThreads;
+                    candidateOptions.progressCallback = {};
+                    candidateOptions.logIterationProgress = false;
+                    return BundleAdjust::optimizePoints(
+                        seedCameras, baTracks, candidateOptions);
+                }));
+        }
+
+        double bestScore = std::numeric_limits<double>::infinity();
+        int bestIndex = -1;
+        for (int index = 0; index < static_cast<int>(candidates.size()); ++index)
+        {
+            BAResult candidate = candidates[static_cast<size_t>(index)].get();
+            const double score = candidate.solutionUsable &&
+                    std::isfinite(candidate.meanRmsAfter)
+                ? candidate.meanRmsAfter /
+                      std::max(0.10, candidate.validTrackRatio)
+                : std::numeric_limits<double>::infinity();
+            Logger::instance()->infof(
+                "[BA] self_calibration_seed index=%d focalScale=%.3f k1=%.3f "
+                "usable=%s validTrackRatio=%.6f rms=%.6f score=%.6f",
+                index,
+                seeds[static_cast<size_t>(index)].focalScale,
+                seeds[static_cast<size_t>(index)].radialK1,
+                candidate.solutionUsable ? "true" : "false",
+                candidate.validTrackRatio,
+                candidate.meanRmsAfter,
+                score);
+            if (score < bestScore)
+            {
+                bestScore = score;
+                bestIndex = index;
+                baResult = std::move(candidate);
+            }
+        }
+        Logger::instance()->infof(
+            "[BA] self_calibration_seed selected=%d candidates=%zu threadsPerCandidate=%d",
+            bestIndex,
+            seeds.size(),
+            candidateThreads);
+    }
+    else
+    {
+        baResult = BundleAdjust::optimizePoints(baCameras, baTracks, baOpt);
+    }
     const double cameraLayerDriftRms =
         baResult.solutionUsable && cameraPlaneConstraintActive
             ? cameraLayerReferenceDriftRms(
@@ -960,7 +1165,7 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
         Logger::instance()->infof(
             "[BA] intrinsics scope=%s applied=%s cameras=%d groups=%d "
             "focalScale=%.8f aspectScale=%.8f principalOffsetPx=(%.4f,%.4f) "
-            "radial=(%.8f,%.8f)",
+            "distortion=(k1=%.8f,k2=%.8f,k3=%.8f,p1=%.8f,p2=%.8f)",
             scopeName,
             applyBaResult ? "true" : "false",
             applyBaResult ? baResult.refinedIntrinsicCount : 0,
@@ -970,7 +1175,10 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
             applyBaResult ? baResult.refinedSharedPrincipalOffsetX : 0.0,
             applyBaResult ? baResult.refinedSharedPrincipalOffsetY : 0.0,
             applyBaResult ? baResult.refinedSharedRadialK1 : 0.0,
-            applyBaResult ? baResult.refinedSharedRadialK2 : 0.0);
+            applyBaResult ? baResult.refinedSharedRadialK2 : 0.0,
+            applyBaResult ? baResult.refinedSharedRadialK3 : 0.0,
+            applyBaResult ? baResult.refinedSharedTangentialP1 : 0.0,
+            applyBaResult ? baResult.refinedSharedTangentialP2 : 0.0);
     }
 
     // 回写优化后的相机位姿（跳过被 gauge 固定的相机）
@@ -1192,6 +1400,12 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
             applyBaResult ? baResult.refinedSharedRadialK1 : 0.0;
         _lastGlobalBASharedRadialK2 =
             applyBaResult ? baResult.refinedSharedRadialK2 : 0.0;
+        _lastGlobalBASharedRadialK3 =
+            applyBaResult ? baResult.refinedSharedRadialK3 : 0.0;
+        _lastGlobalBASharedTangentialP1 =
+            applyBaResult ? baResult.refinedSharedTangentialP1 : 0.0;
+        _lastGlobalBASharedTangentialP2 =
+            applyBaResult ? baResult.refinedSharedTangentialP2 : 0.0;
         _lastGlobalBARequestedBackend = baResult.requestedBackend;
         _lastGlobalBAUsedBackend = baResult.usedBackend;
         _lastGlobalBASolveStatus = baResult.solveStatus;
@@ -1269,16 +1483,27 @@ void IncrementalSfm::iterativeGlobalBA(bool finalRefinement)
     }
     if (finalRefinement && (hierarchical_summary.applied() || recently_partitioned))
     {
-        // 块内已经完成位姿/点网稳定化；只需一次全局求解统一共享内参与接缝。
-        maxRounds = 1;
+        // 共享镜头自标定后必须重三角化并再做一次全局求解，否则输出点网仍对应
+        // 旧内参。固定内参路径保持单轮，避免大工程产生不必要的重复计算。
+        const bool refiningSharedCameraModel =
+            _sfmOptions.baOptions.refineSharedFocalLength ||
+            _sfmOptions.baOptions.refineSharedFocalAspectRatio ||
+            _sfmOptions.baOptions.refineSharedPrincipalPoint ||
+            _sfmOptions.baOptions.refineSharedRadialDistortion;
+        maxRounds = refiningSharedCameraModel ? std::min(3, maxRounds) : 1;
         Logger::instance()->info(
-            "[SFM] Final global BA limited to one seam-and-calibration refinement after hierarchical BA");
+            refiningSharedCameraModel
+                ? "[SFM] Final global BA uses up to three calibration/retriangulation rounds after hierarchical BA"
+                : "[SFM] Final global BA limited to one seam refinement after hierarchical BA");
     }
 
     size_t prevNumPoints = _reconstruction->numPoints3D();
     double previousFocalScale = std::numeric_limits<double>::quiet_NaN();
     double previousRadialK1 = std::numeric_limits<double>::quiet_NaN();
     double previousRadialK2 = std::numeric_limits<double>::quiet_NaN();
+    double previousRadialK3 = std::numeric_limits<double>::quiet_NaN();
+    double previousTangentialP1 = std::numeric_limits<double>::quiet_NaN();
+    double previousTangentialP2 = std::numeric_limits<double>::quiet_NaN();
 
     for (int round = 0; round < maxRounds; ++round)
     {
@@ -1331,14 +1556,21 @@ void IncrementalSfm::iterativeGlobalBA(bool finalRefinement)
                 : std::numeric_limits<double>::infinity();
         const double radialCoefficientChange =
             sharedIntrinsicsRefined && std::isfinite(previousRadialK1) &&
-                    std::isfinite(previousRadialK2)
-                ? std::max(std::abs(_lastGlobalBASharedRadialK1 - previousRadialK1),
-                           std::abs(_lastGlobalBASharedRadialK2 - previousRadialK2))
+                    std::isfinite(previousRadialK2) &&
+                    std::isfinite(previousRadialK3) &&
+                    std::isfinite(previousTangentialP1) &&
+                    std::isfinite(previousTangentialP2)
+                ? std::max({
+                      std::abs(_lastGlobalBASharedRadialK1 - previousRadialK1),
+                      std::abs(_lastGlobalBASharedRadialK2 - previousRadialK2),
+                      std::abs(_lastGlobalBASharedRadialK3 - previousRadialK3),
+                      std::abs(_lastGlobalBASharedTangentialP1 - previousTangentialP1),
+                      std::abs(_lastGlobalBASharedTangentialP2 - previousTangentialP2)})
                 : std::numeric_limits<double>::infinity();
 
         Logger::instance()->infof(
             "[SFM]   After round %d: numPts=%zu, pointChange=%.4f, "
-            "focalChange=%.6f, radialChange=%.6f",
+            "focalChange=%.6f, distortionChange=%.6f",
             round + 1,
             curNumPoints,
             changeRate,
@@ -1362,6 +1594,9 @@ void IncrementalSfm::iterativeGlobalBA(bool finalRefinement)
             previousFocalScale = _lastGlobalBASharedFocalScale;
             previousRadialK1 = _lastGlobalBASharedRadialK1;
             previousRadialK2 = _lastGlobalBASharedRadialK2;
+            previousRadialK3 = _lastGlobalBASharedRadialK3;
+            previousTangentialP1 = _lastGlobalBASharedTangentialP1;
+            previousTangentialP2 = _lastGlobalBASharedTangentialP2;
         }
     }
 }

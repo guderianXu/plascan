@@ -220,9 +220,10 @@ void configureSfmOptions(const PreparedAerialTriangulationInput &input,
     }
     options->baOptions.filterMaxReprojError = options->filterMaxReprojError;
 
-    // 自标定安全网只保留进入最终共享内参 BA 前已有的相机轨迹，不把相机中心
-    // 强制压到平面，因此不会把真实的弧形、立面或起伏摄影轨迹误判为 dome/bowl。
-    options->preserveCameraLayerDuringSelfCalibration = true;
+    // 不能把进入自标定前的相机层形状当作真值：错误的零畸变初值本身就可能
+    // 已经形成 dome/bowl。保持此正则关闭，任意环拍、立面和自由轨迹均只受
+    // 重投影与镜头参数弱先验约束，不引入无人机/平面场景假设。
+    options->preserveCameraLayerDuringSelfCalibration = false;
 
     options->useSequencePoseRecovery = input.useSequencePoseRecovery;
     options->enforceSequencePoseConsistency = input.enforceSequencePoseConsistency;
@@ -242,16 +243,15 @@ void configureSfmOptions(const PreparedAerialTriangulationInput &input,
         options->baOptions.refineSharedPrincipalPoint = false;
         if (input.hasTrustedFocalPrior)
         {
-            // EXIF/固定镜头目录给出的焦距允许小幅吸收对焦和制造公差，但不能像
-            // 无标定搜索一样漂移 10%。近垂直航测中大范围焦距漂移会与高程弯曲强耦合。
-            options->baOptions.minSharedFocalScale = 0.98;
-            options->baOptions.maxSharedFocalScale = 1.02;
-            options->baOptions.maxSharedFocalStepScale = 1.02;
-            options->baOptions.maxSharedFocalIterations = 4;
-            // EXIF 只提供焦距，并不等价于镜头畸变标定。近垂直航带且缺少 GCP/斜片时，
-            // k1/k2 与航高、俯仰高度相关，释放径向参数会以很低 RMS 收敛到穹顶解。
-            // 工程中已有实测畸变时会作为固定输入继续使用；EXIF-only 路径不再自估畸变。
-            options->baOptions.refineSharedRadialDistortion = false;
+            // 35mm 等效焦距存在取整、裁切和对焦误差，只作为弱先验。边界覆盖常见
+            // EXIF 量化误差，同时显著窄于完全无标定搜索。
+            options->baOptions.minSharedFocalScale = 0.94;
+            options->baOptions.maxSharedFocalScale = 1.06;
+            options->baOptions.maxSharedFocalStepScale = 1.06;
+            options->baOptions.maxSharedFocalIterations = 8;
+            // EXIF 不含镜头畸变。最终完整全局 BA 必须联合估计同一镜头组共享的
+            // k1/k2/k3/p1/p2；参数块带边界和弱先验，局部 BA 不释放这些参数。
+            options->baOptions.refineSharedRadialDistortion = true;
         }
         else
         {
@@ -259,6 +259,7 @@ void configureSfmOptions(const PreparedAerialTriangulationInput &input,
             options->baOptions.maxSharedFocalScale = 1.10;
             options->baOptions.maxSharedFocalStepScale = 1.12;
             options->baOptions.maxSharedFocalIterations = 6;
+            options->baOptions.refineSharedRadialDistortion = true;
         }
         if (cpuOnly && BundleAdjust::isBackendAvailable(BABackend::CeresCpu))
         {
@@ -589,6 +590,11 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
                        sfmResult.baSharedPrincipalOffsetY);
     diagnostics.insert(QStringLiteral("ba_shared_radial_k1"), sfmResult.baSharedRadialK1);
     diagnostics.insert(QStringLiteral("ba_shared_radial_k2"), sfmResult.baSharedRadialK2);
+    diagnostics.insert(QStringLiteral("ba_shared_radial_k3"), sfmResult.baSharedRadialK3);
+    diagnostics.insert(QStringLiteral("ba_shared_tangential_p1"),
+                       sfmResult.baSharedTangentialP1);
+    diagnostics.insert(QStringLiteral("ba_shared_tangential_p2"),
+                       sfmResult.baSharedTangentialP2);
     diagnostics.insert(QStringLiteral("ba_backend_message"),
                        QString::fromStdString(sfmResult.baBackendMessage));
     diagnostics.insert(QStringLiteral("project_intrinsic_prior_inspected"),

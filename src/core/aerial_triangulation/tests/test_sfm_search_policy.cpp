@@ -337,11 +337,11 @@ TEST(SfmSearchPolicyTest, AdaptiveReplayStopsOnlyAfterFullRegistration)
     EXPECT_TRUE(xjw::aerial_triangulation::shouldStopAdaptiveFocalReplay(16, 16, true));
 }
 
-TEST(SfmSearchPolicyTest, TrustedIntrinsicPriorSkipsWeakAerialSelfCalibration)
+TEST(SfmSearchPolicyTest, OnlyCompleteCalibrationSkipsCameraModelRefinement)
 {
     EXPECT_FALSE(xjw::aerial_triangulation::shouldRunAdaptiveCameraModelRefinement(
         true, true, false));
-    EXPECT_FALSE(xjw::aerial_triangulation::shouldRunAdaptiveCameraModelRefinement(
+    EXPECT_TRUE(xjw::aerial_triangulation::shouldRunAdaptiveCameraModelRefinement(
         true, false, true));
     EXPECT_TRUE(xjw::aerial_triangulation::shouldRunAdaptiveCameraModelRefinement(
         true, false, false));

@@ -286,6 +286,9 @@ bool projectWithPoseDeltaAndCameraModel(const ProjectionCamera &camera,
                                         const T &principalY,
                                         const T &radialK1,
                                         const T &radialK2,
+                                        const T &radialK3,
+                                        const T &tangentialP1,
+                                        const T &tangentialP2,
                                         T *pixel)
 {
     T cameraPoint[3];
@@ -301,9 +304,9 @@ bool projectWithPoseDeltaAndCameraModel(const ProjectionCamera &camera,
                                             principalY,
                                             radialK1,
                                             radialK2,
-                                            T(camera.radialK3),
-                                            T(camera.tangentialP1),
-                                            T(camera.tangentialP2),
+                                            radialK3,
+                                            tangentialP1,
+                                            tangentialP2,
                                             pixel);
 }
 
@@ -327,8 +330,9 @@ bool projectWithPoseDelta(const ProjectionCamera &camera,
 /**
  * @brief 使用标定组共享的完整针孔内参增量投影。
  *
- * 参数布局为 `[log(fx), log(fy/fx), dcx, dcy, k1, k2]`。主点使用相对偏移而不是
- * 绝对值，使同一标定组中不同裁剪/分辨率相机仍保留各自输入基准。
+ * 参数布局为 `[log(fx), log(fy/fx), dcx, dcy, k1, k2, k3, p1, p2]`。
+ * 主点使用相对偏移而不是绝对值，使同一标定组中不同裁剪/分辨率相机仍保留
+ * 各自输入基准。
  */
 template <typename T>
 bool projectWithPoseDeltaAndSharedIntrinsics(const ProjectionCamera &camera,
@@ -350,6 +354,9 @@ bool projectWithPoseDeltaAndSharedIntrinsics(const ProjectionCamera &camera,
         T(camera.principalY) + sharedIntrinsics[3],
         sharedIntrinsics[4],
         sharedIntrinsics[5],
+        sharedIntrinsics[6],
+        sharedIntrinsics[7],
+        sharedIntrinsics[8],
         pixel);
 }
 

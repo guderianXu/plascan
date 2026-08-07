@@ -235,6 +235,9 @@ struct IncrementalSfmResult
     double baSharedPrincipalOffsetY = 0.0; ///< 最终全局 BA 主点 Y 平均偏移（像素）
     double baSharedRadialK1 = 0.0;         ///< 最终全局 BA 的共享一阶径向畸变系数
     double baSharedRadialK2 = 0.0;         ///< 最终全局 BA 的共享二阶径向畸变系数
+    double baSharedRadialK3 = 0.0;         ///< 最终全局 BA 的共享三阶径向畸变系数
+    double baSharedTangentialP1 = 0.0;     ///< 最终全局 BA 的共享第一切向畸变系数
+    double baSharedTangentialP2 = 0.0;     ///< 最终全局 BA 的共享第二切向畸变系数
     BABackend baRequestedBackend = BABackend::LegacyCpu; ///< 最终全局 BA 请求后端
     BABackend baUsedBackend = BABackend::LegacyCpu;      ///< 最终全局 BA 实际后端
     BASolveStatus baSolveStatus = BASolveStatus::NotRun; ///< 最终全局 BA 求解状态
@@ -398,6 +401,9 @@ class IncrementalSfm
     double _lastGlobalBASharedPrincipalOffsetY = 0.0;
     double _lastGlobalBASharedRadialK1 = 0.0;
     double _lastGlobalBASharedRadialK2 = 0.0;
+    double _lastGlobalBASharedRadialK3 = 0.0;
+    double _lastGlobalBASharedTangentialP1 = 0.0;
+    double _lastGlobalBASharedTangentialP2 = 0.0;
     BABackend _lastGlobalBARequestedBackend = BABackend::LegacyCpu;
     BABackend _lastGlobalBAUsedBackend = BABackend::LegacyCpu;
     BASolveStatus _lastGlobalBASolveStatus = BASolveStatus::NotRun;

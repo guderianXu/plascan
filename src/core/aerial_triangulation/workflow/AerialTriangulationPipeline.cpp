@@ -604,15 +604,21 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
     // 有可信先验时只需一次正式试算；无先验搜索的默认焦距也进入统一并行队列，
     // 避免先串行跑完一个候选后才启动其它候选。
     SfmAttemptExecutionResult execution;
+    bool adaptiveRefinementAccepted = false;
     if (!needsFocalInitializationSearch)
     {
         execution = _attemptRunner(attemptInput);
+        adaptiveRefinementAccepted = attemptInput.adaptiveCameraModelFitting &&
+            execution.result.success &&
+            execution.result.sfmDiagnostics.value(
+                QStringLiteral("ba_result_applied")).toBool() &&
+            execution.result.sfmDiagnostics.value(
+                QStringLiteral("ba_refined_intrinsic_count")).toInt() > 0;
     }
     QVector<AdaptiveFocalCandidate> focalCandidates;
     std::vector<SfmCandidateSummary> candidateSummaries;
     QVector<SfmAttemptExecutionResult> candidateExecutions;
     double selectedFocalScale = attemptInput.estimatedFocalScale;
-    bool adaptiveRefinementAccepted = false;
     int focalSearchWorkerCount = 0;
     int focalSearchThreadBudget = 0;
     int focalSearchMinThreadsPerWorker = 0;
@@ -973,13 +979,24 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
     }
 
     const bool focalInitializationSearch = focalCandidates.size() > 1;
-    QString selfCalibrationStatus = QStringLiteral("trusted_prior");
+    QString selfCalibrationStatus = hasProjectOrExternalPrior
+        ? QStringLiteral("trusted_calibration")
+        : QStringLiteral("fixed_intrinsics");
     bool selfCalibrationRequiresReview = execution.result.sfmDiagnostics
         .value(QStringLiteral("aerial_block_geometry")).toObject()
         .value(QStringLiteral("doming_risk")).toBool(false);
     if (focalInitializationSearch && adaptiveRefinementAccepted)
     {
         selfCalibrationStatus = QStringLiteral("refined");
+    }
+    else if (metadataPrior.valid && adaptiveRefinementAccepted)
+    {
+        selfCalibrationStatus = QStringLiteral("refined_from_exif_focal_prior");
+    }
+    else if (metadataPrior.valid && input.adaptiveCameraModelFitting)
+    {
+        selfCalibrationStatus = QStringLiteral("exif_seed_refinement_rejected");
+        selfCalibrationRequiresReview = true;
     }
     else if (focalInitializationSearch && input.adaptiveCameraModelFitting)
     {

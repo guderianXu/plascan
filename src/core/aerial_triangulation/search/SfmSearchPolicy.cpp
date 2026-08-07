@@ -282,10 +282,10 @@ bool shouldRunAdaptiveCameraModelRefinement(bool requested,
                                             bool hasCompleteIntrinsicPrior,
                                             bool hasMetadataFocalPrior)
 {
-    // EXIF 焦距不是畸变标定，但在纯下视航带中比无约束自标定更可靠。完整工程
-    // 标定更不应被覆盖。只有完全缺少内参、先经多候选搜索得到焦距种子时，才
-    // 允许后续联合 BA 在种子附近细化共享内参。
-    return requested && !hasCompleteIntrinsicPrior && !hasMetadataFocalPrior;
+    // EXIF 只提供焦距弱先验，不包含 Brown-Conrady 镜头畸变，不能据此跳过
+    // 自标定。完整工程/外部相机标定才保持固定；元数据焦距只负责缩小焦距边界。
+    (void)hasMetadataFocalPrior;
+    return requested && !hasCompleteIntrinsicPrior;
 }
 
 } // namespace xjw::aerial_triangulation

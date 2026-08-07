@@ -108,7 +108,7 @@ bool shouldStopAdaptiveFocalReplay(int totalImages,
                                    int registeredImages,
                                    bool hasProductionSparseCloud);
 
-/// 完整相机标定或一致 EXIF 焦距批次保持内参固定；仅无先验焦距搜索允许后续联合细化。
+/// 完整相机标定保持内参固定；EXIF 焦距仅作为弱先验，仍允许联合估计镜头畸变。
 bool shouldRunAdaptiveCameraModelRefinement(bool requested,
                                             bool hasCompleteIntrinsicPrior,
                                             bool hasMetadataFocalPrior);

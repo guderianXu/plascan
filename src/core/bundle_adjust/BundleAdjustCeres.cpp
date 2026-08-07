@@ -177,13 +177,13 @@ struct PoseDeltaSharedIntrinsicsReprojectionResidual
 
 struct SharedIntrinsicsPriorResidual
 {
-    std::array<double, 6> reference{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
-    std::array<double, 6> inverseSigma{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
+    std::array<double, 9> reference{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
+    std::array<double, 9> inverseSigma{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
 
     template <typename T>
     bool operator()(const T *const sharedIntrinsics, T *residuals) const
     {
-        for (int index = 0; index < 6; ++index)
+        for (int index = 0; index < 9; ++index)
         {
             residuals[index] = T(inverseSigma[static_cast<size_t>(index)]) *
                                (sharedIntrinsics[index] -
@@ -700,6 +700,12 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         groupIdToParameterIndex.size());
     std::vector<std::vector<double>> radialK2SamplesByGroup(
         groupIdToParameterIndex.size());
+    std::vector<std::vector<double>> radialK3SamplesByGroup(
+        groupIdToParameterIndex.size());
+    std::vector<std::vector<double>> tangentialP1SamplesByGroup(
+        groupIdToParameterIndex.size());
+    std::vector<std::vector<double>> tangentialP2SamplesByGroup(
+        groupIdToParameterIndex.size());
     for (size_t cameraIndex = 0; cameraIndex < cameras.size(); ++cameraIndex)
     {
         const int parameterIndex =
@@ -729,6 +735,21 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         {
             radialK2SamplesByGroup[static_cast<size_t>(parameterIndex)]
                 .push_back(distortion.radialK2);
+        }
+        if (std::isfinite(distortion.radialK3))
+        {
+            radialK3SamplesByGroup[static_cast<size_t>(parameterIndex)]
+                .push_back(distortion.radialK3);
+        }
+        if (std::isfinite(distortion.tangentialP1))
+        {
+            tangentialP1SamplesByGroup[static_cast<size_t>(parameterIndex)]
+                .push_back(distortion.tangentialP1);
+        }
+        if (std::isfinite(distortion.tangentialP2))
+        {
+            tangentialP2SamplesByGroup[static_cast<size_t>(parameterIndex)]
+                .push_back(distortion.tangentialP2);
         }
     }
 
@@ -766,7 +787,9 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         groupIdToParameterIndex.size(), 1.0);
     std::vector<double> sharedAspectReference(
         groupIdToParameterIndex.size(), 1.0);
-    std::vector<std::array<double, 6>> sharedIntrinsicsParameters(
+    std::vector<std::array<double, 9>> sharedIntrinsicsParameters(
+        groupIdToParameterIndex.size());
+    std::vector<std::vector<int>> sharedIntrinsicConstantIndices(
         groupIdToParameterIndex.size());
     for (size_t groupIndex = 0;
          groupIndex < sharedFocalReferencePixels.size();
@@ -788,6 +811,18 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
             plamatrix::finiteMedian(
                 std::move(radialK2SamplesByGroup[groupIndex]))
                 .value_or(0.0);
+        const double radialK3Reference =
+            plamatrix::finiteMedian(
+                std::move(radialK3SamplesByGroup[groupIndex]))
+                .value_or(0.0);
+        const double tangentialP1Reference =
+            plamatrix::finiteMedian(
+                std::move(tangentialP1SamplesByGroup[groupIndex]))
+                .value_or(0.0);
+        const double tangentialP2Reference =
+            plamatrix::finiteMedian(
+                std::move(tangentialP2SamplesByGroup[groupIndex]))
+                .value_or(0.0);
         sharedIntrinsicsParameters[groupIndex] = {{
             std::log(sharedFocalReferencePixels[groupIndex]),
             std::log(sharedAspectReference[groupIndex]),
@@ -795,6 +830,9 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
             0.0,
             radialK1Reference,
             radialK2Reference,
+            radialK3Reference,
+            tangentialP1Reference,
+            tangentialP2Reference,
         }};
     }
 
@@ -812,7 +850,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
              ++groupIndex)
         {
             double *parameter = sharedIntrinsicsParameters[groupIndex].data();
-            problem.AddParameterBlock(parameter, 6);
+            problem.AddParameterBlock(parameter, 9);
             std::vector<int> constantIndices;
             if (options.refineSharedFocalLength)
             {
@@ -881,18 +919,34 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                     parameter, 5, -options.maxSharedRadialK2Abs);
                 problem.SetParameterUpperBound(
                     parameter, 5, options.maxSharedRadialK2Abs);
+                problem.SetParameterLowerBound(
+                    parameter, 6, -options.maxSharedRadialK3Abs);
+                problem.SetParameterUpperBound(
+                    parameter, 6, options.maxSharedRadialK3Abs);
+                problem.SetParameterLowerBound(
+                    parameter, 7, -options.maxSharedTangentialP1Abs);
+                problem.SetParameterUpperBound(
+                    parameter, 7, options.maxSharedTangentialP1Abs);
+                problem.SetParameterLowerBound(
+                    parameter, 8, -options.maxSharedTangentialP2Abs);
+                problem.SetParameterUpperBound(
+                    parameter, 8, options.maxSharedTangentialP2Abs);
             }
             else
             {
                 constantIndices.push_back(4);
                 constantIndices.push_back(5);
+                constantIndices.push_back(6);
+                constantIndices.push_back(7);
+                constantIndices.push_back(8);
             }
             if (!constantIndices.empty())
             {
                 problem.SetManifold(
                     parameter,
-                    new ceres::SubsetManifold(6, constantIndices));
+                    new ceres::SubsetManifold(9, constantIndices));
             }
+            sharedIntrinsicConstantIndices[groupIndex] = constantIndices;
 
             if (options.refineSharedPrincipalPoint ||
                 options.refineSharedFocalAspectRatio ||
@@ -906,21 +960,27 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                     std::max(1e-6, options.sharedFocalAspectPriorSigma);
                 auto *prior =
                     new ceres::AutoDiffCostFunction<SharedIntrinsicsPriorResidual,
-                                                    6,
-                                                    6>(
+                                                    9,
+                                                    9>(
                         new SharedIntrinsicsPriorResidual{
                             {{std::log(sharedFocalReferencePixels[groupIndex]),
                               std::log(sharedAspectReference[groupIndex]),
                               0.0,
                               0.0,
                               sharedIntrinsicsParameters[groupIndex][4],
-                              sharedIntrinsicsParameters[groupIndex][5]}},
+                              sharedIntrinsicsParameters[groupIndex][5],
+                              sharedIntrinsicsParameters[groupIndex][6],
+                              sharedIntrinsicsParameters[groupIndex][7],
+                              sharedIntrinsicsParameters[groupIndex][8]}},
                             {{1.0 / 0.35,
                               1.0 / aspectSigma,
                               1.0 / principalSigma,
                               1.0 / principalSigma,
                               1.0 / options.sharedRadialK1PriorSigma,
-                              1.0 / options.sharedRadialK2PriorSigma}}});
+                              1.0 / options.sharedRadialK2PriorSigma,
+                              1.0 / options.sharedRadialK3PriorSigma,
+                              1.0 / options.sharedTangentialP1PriorSigma,
+                              1.0 / options.sharedTangentialP2PriorSigma}}});
                 problem.AddResidualBlock(prior, nullptr, parameter);
             }
         }
@@ -948,7 +1008,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                                                     2,
                                                     6,
                                                     3,
-                                                    6>(
+                                                    9>(
                         new PoseDeltaSharedIntrinsicsReprojectionResidual{
                             xjw::ba::makeProjectionCamera(
                                 cameras[static_cast<size_t>(observation.cameraIndex)]),
@@ -985,7 +1045,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                     new ceres::AutoDiffCostFunction<FixedPoseSharedIntrinsicsReprojectionResidual,
                                                     2,
                                                     3,
-                                                    6>(
+                                                    9>(
                         new FixedPoseSharedIntrinsicsReprojectionResidual{
                             xjw::ba::makeProjectionCamera(
                                 cameras[static_cast<size_t>(observation.cameraIndex)]),
@@ -1144,8 +1204,9 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
 #  endif
 
     const int totalIterationBudget = std::max(1, options.maxIterations);
-    // 自标定采用“固定内参预热 -> 释放共享内参”的两阶段策略。先稳定外参和点，
-    // 再释放内参可降低转台/弱基线数据中焦距吸收位姿误差的风险。
+    // 自标定采用“固定内参预热 -> 焦距+k1 -> 完整 Brown 模型”的分阶段策略。
+    // 先让低阶径向项解释主要形变，再释放 k2/k3/p1/p2，可避免弱几何下高阶项
+    // 过早吸收本应由 k1 表达的穹顶误差。
     const bool runStagedSelfCalibration =
         refineSharedIntrinsics &&
         options.stageSharedFocalRefinement &&
@@ -1168,9 +1229,39 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
     }
 
     std::unique_ptr<CeresBaIterationCallback> warmupCallback;
+    std::unique_ptr<CeresBaIterationCallback> lowOrderCallback;
     std::unique_ptr<CeresBaIterationCallback> refinementCallback;
     ceres::Solver::Summary warmupSummary;
+    ceres::Solver::Summary lowOrderSummary;
     ceres::Solver::Summary summary;
+    bool lowOrderStageAttempted = false;
+    const auto applySharedIntrinsicManifolds =
+        [&](bool lowOrderDistortionOnly)
+        {
+            for (size_t groupIndex = 0;
+                 groupIndex < sharedIntrinsicsParameters.size();
+                 ++groupIndex)
+            {
+                std::vector<int> constantIndices =
+                    sharedIntrinsicConstantIndices[groupIndex];
+                if (lowOrderDistortionOnly && options.refineSharedRadialDistortion)
+                {
+                    constantIndices.insert(
+                        constantIndices.end(), {5, 6, 7, 8});
+                    std::sort(constantIndices.begin(), constantIndices.end());
+                    constantIndices.erase(
+                        std::unique(constantIndices.begin(), constantIndices.end()),
+                        constantIndices.end());
+                }
+                double *parameter = sharedIntrinsicsParameters[groupIndex].data();
+                problem.SetParameterBlockVariable(parameter);
+                problem.SetManifold(
+                    parameter,
+                    constantIndices.empty()
+                        ? nullptr
+                        : new ceres::SubsetManifold(9, constantIndices));
+            }
+        };
     const auto setupEnd = std::chrono::steady_clock::now();
     if (runStagedSelfCalibration)
     {
@@ -1195,27 +1286,67 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
             (options.cancelFlag && options.cancelFlag->load());
         if (warmupSummary.IsSolutionUsable() && !warmupInterrupted)
         {
-            for (auto &intrinsicsParameter : sharedIntrinsicsParameters)
-            {
-                problem.SetParameterBlockVariable(intrinsicsParameter.data());
-            }
-            const int refinementIterations =
+            int refinementIterations =
                 totalIterationBudget - warmupIterations;
-            solverOptions.max_num_iterations = refinementIterations;
-            solverOptions.callbacks.clear();
-            if (options.progressCallback || options.cancelFlag)
+            const bool runLowOrderDistortionStage =
+                options.refineSharedRadialDistortion &&
+                refinementIterations >= 6;
+            lowOrderStageAttempted = runLowOrderDistortionStage;
+            int refinementOffset = warmupIterations;
+            if (runLowOrderDistortionStage)
             {
-                refinementCallback =
-                    std::make_unique<CeresBaIterationCallback>(
-                        options,
-                        result.observationCount,
-                        warmupIterations,
-                        refinementIterations,
-                        totalIterationBudget);
-                solverOptions.callbacks = {refinementCallback.get()};
+                const int lowOrderIterations =
+                    std::max(2, refinementIterations / 2);
+                applySharedIntrinsicManifolds(true);
+                solverOptions.max_num_iterations = lowOrderIterations;
+                solverOptions.callbacks.clear();
+                if (options.progressCallback || options.cancelFlag)
+                {
+                    lowOrderCallback =
+                        std::make_unique<CeresBaIterationCallback>(
+                            options,
+                            result.observationCount,
+                            refinementOffset,
+                            lowOrderIterations,
+                            totalIterationBudget);
+                    solverOptions.callbacks = {lowOrderCallback.get()};
+                }
+                ceres::Solve(solverOptions, &problem, &lowOrderSummary);
+                result.selfCalibrationStagesRun = 2;
+                refinementOffset += lowOrderIterations;
+                refinementIterations -= lowOrderIterations;
             }
-            ceres::Solve(solverOptions, &problem, &summary);
-            result.selfCalibrationStagesRun = 2;
+
+            const bool lowOrderInterrupted =
+                (lowOrderCallback &&
+                 (lowOrderCallback->cancelled() ||
+                  lowOrderCallback->progressAborted())) ||
+                (options.cancelFlag && options.cancelFlag->load());
+            if (runLowOrderDistortionStage &&
+                (!lowOrderSummary.IsSolutionUsable() || lowOrderInterrupted))
+            {
+                summary = lowOrderSummary;
+            }
+            else
+            {
+                applySharedIntrinsicManifolds(false);
+                solverOptions.max_num_iterations = refinementIterations;
+                solverOptions.callbacks.clear();
+                if (options.progressCallback || options.cancelFlag)
+                {
+                    refinementCallback =
+                        std::make_unique<CeresBaIterationCallback>(
+                            options,
+                            result.observationCount,
+                            refinementOffset,
+                            refinementIterations,
+                            totalIterationBudget);
+                    solverOptions.callbacks = {refinementCallback.get()};
+                }
+                ceres::Solve(solverOptions, &problem, &summary);
+                result.selfCalibrationStagesRun =
+                    runLowOrderDistortionStage ? 3 : 2;
+            }
         }
         else
         {
@@ -1245,10 +1376,17 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
     result.solveSeconds = std::chrono::duration<double>(solveEnd - setupEnd).count();
     result.totalSeconds = std::chrono::duration<double>(solveEnd - setupStart).count();
     std::string solveReport;
-    if (runStagedSelfCalibration && result.selfCalibrationStagesRun == 2)
+    if (runStagedSelfCalibration && result.selfCalibrationStagesRun >= 2)
     {
-        solveReport = "预热: " + warmupSummary.BriefReport() +
-                      "；自标定: " + summary.BriefReport();
+        solveReport = "预热: " + warmupSummary.BriefReport();
+        if (result.selfCalibrationStagesRun == 3)
+        {
+            solveReport += "；低阶自标定: " + lowOrderSummary.BriefReport();
+        }
+        solveReport +=
+            lowOrderStageAttempted && result.selfCalibrationStagesRun == 2
+                ? "；低阶自标定: " + summary.BriefReport()
+                : "；完整自标定: " + summary.BriefReport();
     }
     else
     {
@@ -1264,10 +1402,12 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
 
     const bool cancelledByFlag =
         (warmupCallback && warmupCallback->cancelled()) ||
+        (lowOrderCallback && lowOrderCallback->cancelled()) ||
         (refinementCallback && refinementCallback->cancelled()) ||
         (options.cancelFlag && options.cancelFlag->load());
     const bool progressAborted =
         (warmupCallback && warmupCallback->progressAborted()) ||
+        (lowOrderCallback && lowOrderCallback->progressAborted()) ||
         (refinementCallback && refinementCallback->progressAborted());
     if (cancelledByFlag || progressAborted)
     {
@@ -1300,6 +1440,9 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
     double principalOffsetYSum = 0.0;
     double radialK1Sum = 0.0;
     double radialK2Sum = 0.0;
+    double radialK3Sum = 0.0;
+    double tangentialP1Sum = 0.0;
+    double tangentialP2Sum = 0.0;
     int refinedIntrinsicCount = 0;
     for (size_t ci = 0; ci < cameras.size(); ++ci)
     {
@@ -1317,6 +1460,9 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
             const double principalOffsetY = parameters[3];
             const double radialK1 = parameters[4];
             const double radialK2 = parameters[5];
+            const double radialK3 = parameters[6];
+            const double tangentialP1 = parameters[7];
+            const double tangentialP2 = parameters[8];
             result.refinedCameras[ci].setIntrinsics(
                 focalPixels,
                 focalPixels * focalAspect,
@@ -1325,6 +1471,9 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
             Camera::Distortion distortion = result.refinedCameras[ci].distortion();
             distortion.radialK1 = radialK1;
             distortion.radialK2 = radialK2;
+            distortion.radialK3 = radialK3;
+            distortion.tangentialP1 = tangentialP1;
+            distortion.tangentialP2 = tangentialP2;
             result.refinedCameras[ci].setDistortion(distortion);
             focalScaleSum +=
                 focalPixels / sharedFocalReferencePixels[groupIndex];
@@ -1334,6 +1483,9 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
             principalOffsetYSum += principalOffsetY;
             radialK1Sum += radialK1;
             radialK2Sum += radialK2;
+            radialK3Sum += radialK3;
+            tangentialP1Sum += tangentialP1;
+            tangentialP2Sum += tangentialP2;
             const bool changed =
                 std::abs(focalPixels - intrinsics.focalX) >
                     1.0e-8 * std::max(1.0, std::abs(intrinsics.focalX)) ||
@@ -1342,7 +1494,10 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                 std::abs(principalOffsetX) > 1.0e-8 ||
                 std::abs(principalOffsetY) > 1.0e-8 ||
                 std::abs(radialK1 - cameras[ci].distortion().radialK1) > 1.0e-10 ||
-                std::abs(radialK2 - cameras[ci].distortion().radialK2) > 1.0e-10;
+                std::abs(radialK2 - cameras[ci].distortion().radialK2) > 1.0e-10 ||
+                std::abs(radialK3 - cameras[ci].distortion().radialK3) > 1.0e-10 ||
+                std::abs(tangentialP1 - cameras[ci].distortion().tangentialP1) > 1.0e-10 ||
+                std::abs(tangentialP2 - cameras[ci].distortion().tangentialP2) > 1.0e-10;
             if (changed)
             {
                 ++refinedIntrinsicCount;
@@ -1368,8 +1523,11 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                           summary.termination_type == ceres::USER_SUCCESS;
         point.iterations =
             static_cast<int>(summary.iterations.size()) +
-            (result.selfCalibrationStagesRun == 2
+            (result.selfCalibrationStagesRun >= 2
                  ? static_cast<int>(warmupSummary.iterations.size())
+                 : 0) +
+            (result.selfCalibrationStagesRun == 3
+                 ? static_cast<int>(lowOrderSummary.iterations.size())
                  : 0);
     }
     result.refinedCameraCount = options.refineCameraPose ? variableCameraCount : 0;
@@ -1390,6 +1548,12 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
             cameras.empty() ? 0.0 : radialK1Sum / cameraCount;
         result.refinedSharedRadialK2 =
             cameras.empty() ? 0.0 : radialK2Sum / cameraCount;
+        result.refinedSharedRadialK3 =
+            cameras.empty() ? 0.0 : radialK3Sum / cameraCount;
+        result.refinedSharedTangentialP1 =
+            cameras.empty() ? 0.0 : tangentialP1Sum / cameraCount;
+        result.refinedSharedTangentialP2 =
+            cameras.empty() ? 0.0 : tangentialP2Sum / cameraCount;
         result.refinedIntrinsicCount = refinedIntrinsicCount;
         result.refinedCalibrationGroupCount =
             static_cast<int>(sharedIntrinsicsParameters.size());

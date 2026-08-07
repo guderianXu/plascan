@@ -225,6 +225,9 @@ IncrementalSfmResult IncrementalSfm::runRegistrationFromCurrentInitialization(
     result.baSharedPrincipalOffsetY = _lastGlobalBASharedPrincipalOffsetY;
     result.baSharedRadialK1 = _lastGlobalBASharedRadialK1;
     result.baSharedRadialK2 = _lastGlobalBASharedRadialK2;
+    result.baSharedRadialK3 = _lastGlobalBASharedRadialK3;
+    result.baSharedTangentialP1 = _lastGlobalBASharedTangentialP1;
+    result.baSharedTangentialP2 = _lastGlobalBASharedTangentialP2;
     result.baRequestedBackend = _lastGlobalBARequestedBackend;
     result.baUsedBackend = _lastGlobalBAUsedBackend;
     result.baSolveStatus = _lastGlobalBASolveStatus;
@@ -331,6 +334,9 @@ void IncrementalSfm::resetForInitialPairTrial(const SfmReconstruction &baseRecon
     _lastGlobalBASharedFocalScale = 1.0;
     _lastGlobalBASharedRadialK1 = 0.0;
     _lastGlobalBASharedRadialK2 = 0.0;
+    _lastGlobalBASharedRadialK3 = 0.0;
+    _lastGlobalBASharedTangentialP1 = 0.0;
+    _lastGlobalBASharedTangentialP2 = 0.0;
     _lastGlobalBARequestedBackend = _sfmOptions.baOptions.backend;
     _lastGlobalBAUsedBackend = BABackend::LegacyCpu;
     _lastGlobalBASolveStatus = BASolveStatus::NotRun;
