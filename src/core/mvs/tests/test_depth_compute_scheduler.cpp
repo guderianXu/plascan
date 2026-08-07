@@ -79,19 +79,19 @@ TEST(DepthComputeSchedulerTest, UsesStableOpenClWorkerName)
     EXPECT_EQ(opencl_worker.id(), "OpenCL:2");
 }
 
-TEST(DepthComputeSchedulerTest, PreservesPhysicalDevicesBeforeAddingPreparationLanes)
+TEST(DepthComputeSchedulerTest, GivesMixedOpenClBackendAnExtraPreparationWorker)
 {
     const std::vector<DepthComputeWorker> physical_workers = {
         {DepthComputeBackend::Cuda, 0},
         {DepthComputeBackend::OpenCl, 1}};
 
     const std::vector<DepthComputeWorker> workers = buildDepthComputeWorkerPool(
-        physical_workers, 2, 2, 4);
+        physical_workers, 1, 3, 4);
 
     ASSERT_EQ(workers.size(), 4U);
     EXPECT_EQ(workers[0].id(), "CUDA:0");
     EXPECT_EQ(workers[1].id(), "OpenCL:1");
-    EXPECT_EQ(workers[2].id(), "CUDA:0");
+    EXPECT_EQ(workers[2].id(), "OpenCL:1");
     EXPECT_EQ(workers[3].id(), "OpenCL:1");
 }
 

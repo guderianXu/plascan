@@ -8894,14 +8894,22 @@ void DepthMapGenerator::runInBackground()
         {
             return worker.backend == DepthComputeBackend::OpenCl;
         }));
+    const bool mixedGpuBackends = physicalCudaWorkers > 0 && physicalOpenClWorkers > 0;
+    // CUDA remains continuously occupied with one host worker per physical
+    // device. In a mixed setup, assign the remaining frame slots to OpenCL so
+    // one frame can prepare while its two execution lanes are busy. This does
+    // not allocate a third OpenCL command queue or persistent device workspace.
     const int requestedCudaHostSlots = physicalCudaWorkers > 0
-        ? std::max(physicalCudaWorkers, _config.gpuFrameWorkerCount)
+        ? (mixedGpuBackends
+               ? physicalCudaWorkers
+               : std::max(physicalCudaWorkers, _config.gpuFrameWorkerCount))
         : 0;
-    // CUDA and OpenCL devices process different frames concurrently. Both
-    // backends keep a second host lane so the next frame can prepare while the
-    // current frame is executing. OpenCL owns two independent command queues.
+    const int mixedOpenClSlots = std::max(
+        physicalOpenClWorkers, maxFrameWorkers - requestedCudaHostSlots);
     const int requestedOpenClHostSlots = physicalOpenClWorkers > 0
-        ? std::max(physicalOpenClWorkers, _config.gpuFrameWorkerCount)
+        ? (mixedGpuBackends
+               ? mixedOpenClSlots
+               : std::max(physicalOpenClWorkers, _config.gpuFrameWorkerCount))
         : 0;
     const std::vector<DepthComputeWorker> acceleratorWorkers =
         buildDepthComputeWorkerPool(physicalAcceleratorWorkers,
@@ -8916,12 +8924,15 @@ void DepthMapGenerator::runInBackground()
         : std::clamp(std::max(1, _config.cpuFrameWorkerCount), 1, maxFrameWorkers);
 
     LOG_INFO(QStringLiteral("[MVS] 深度估计调度: cuda_devices=%1 opencl_devices=%2 "
-                            "physical_gpu_workers=%3 gpu_host_slots=%4 cpu_frame_workers=%5 "
-                            "cpu_pixel_threads=%6 views=%7 pending=%8")
+                            "physical_gpu_workers=%3 gpu_host_slots=%4 "
+                            "cuda_host_slots=%5 opencl_host_slots=%6 cpu_frame_workers=%7 "
+                            "cpu_pixel_threads=%8 views=%9 pending=%10")
                  .arg(cudaDeviceCount)
                  .arg(selectedOpenClDevices.size())
                  .arg(physicalAcceleratorWorkers.size())
                  .arg(gpuFrameWorkers)
+                 .arg(requestedCudaHostSlots)
+                 .arg(requestedOpenClHostSlots)
                  .arg(cpuFrameWorkers)
                  .arg(cpuThreadCount)
                  .arg(NV)

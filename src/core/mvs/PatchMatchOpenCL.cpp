@@ -34,6 +34,7 @@ struct EnumeratedOpenClDevice
     OpenClDeviceInfo info;
     cl_platform_id platform = nullptr;
     cl_device_id device = nullptr;
+    bool hostUnifiedMemory = false;
 };
 
 std::string openClString(cl_device_id device, cl_device_info parameter)
@@ -112,6 +113,13 @@ std::vector<EnumeratedOpenClDevice> enumerateOpenClGpuDevices()
                             sizeof(entry.info.computeUnits),
                             &entry.info.computeUnits,
                             nullptr);
+            cl_bool host_unified_memory = CL_FALSE;
+            clGetDeviceInfo(device,
+                            CL_DEVICE_HOST_UNIFIED_MEMORY,
+                            sizeof(host_unified_memory),
+                            &host_unified_memory,
+                            nullptr);
+            entry.hostUnifiedMemory = host_unified_memory == CL_TRUE;
             entry.platform = platform;
             entry.device = device;
             result.push_back(std::move(entry));
@@ -141,6 +149,7 @@ struct OpenClRuntime
 
     cl_context context = nullptr;
     cl_program program = nullptr;
+    bool hostUnifiedMemory = false;
     std::array<ExecutionLane, kExecutionLaneCount> lanes;
     std::mutex laneMutex;
     std::condition_variable laneAvailable;
@@ -307,6 +316,58 @@ bool reserveOpenClBuffer(cl_context context,
     return true;
 }
 
+class OpenClHostBuffer
+{
+public:
+    OpenClHostBuffer() = default;
+    OpenClHostBuffer(const OpenClHostBuffer &) = delete;
+    OpenClHostBuffer &operator=(const OpenClHostBuffer &) = delete;
+
+    ~OpenClHostBuffer()
+    {
+        reset();
+    }
+
+    bool create(cl_context context,
+                std::size_t bytes,
+                const void *hostData,
+                std::string *errorMsg)
+    {
+        cl_int error = CL_SUCCESS;
+        _memory = clCreateBuffer(context,
+                                 CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR,
+                                 bytes,
+                                 const_cast<void *>(hostData),
+                                 &error);
+        if (error != CL_SUCCESS || !_memory)
+        {
+            if (errorMsg)
+            {
+                *errorMsg = openClError("clCreateBuffer(CL_MEM_USE_HOST_PTR)", error);
+            }
+            return false;
+        }
+        return true;
+    }
+
+    cl_mem get() const
+    {
+        return _memory;
+    }
+
+    void reset()
+    {
+        if (_memory)
+        {
+            clReleaseMemObject(_memory);
+            _memory = nullptr;
+        }
+    }
+
+private:
+    cl_mem _memory = nullptr;
+};
+
 class OpenClEvent
 {
 public:
@@ -402,6 +463,7 @@ std::shared_ptr<OpenClRuntime> openClRuntimeForDevice(
     }
 
     auto runtime = std::make_shared<OpenClRuntime>();
+    runtime->hostUnifiedMemory = device.hostUnifiedMemory;
     cl_int error = CL_SUCCESS;
     const cl_context_properties properties[] = {
         CL_CONTEXT_PLATFORM,
@@ -759,6 +821,29 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         CL_MEM_READ_ONLY,
         CL_MEM_WRITE_ONLY,
         CL_MEM_WRITE_ONLY};
+    const std::array<const void *, 7> input_data = {
+        reference_float.ptr<float>(),
+        packed_sources.data(),
+        camera_data.data(),
+        packed_reference_mask.data(),
+        packed_source_masks.data(),
+        packed_hint.data(),
+        packed_hint_radius.data()};
+
+    std::array<OpenClHostBuffer, 7> unified_input_buffers;
+    if (runtime->hostUnifiedMemory)
+    {
+        for (std::size_t index = 0; index < unified_input_buffers.size(); ++index)
+        {
+            if (!unified_input_buffers[index].create(runtime->context,
+                                                      buffer_sizes[index],
+                                                      input_data[index],
+                                                      errorMsg))
+            {
+                return false;
+            }
+        }
+    }
 
     const int patch_half = config.patchHalf;
     const int depth_sample_count = std::clamp(config.numIterations * 4, 32, 96);
@@ -782,9 +867,9 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     const float cx = static_cast<float>(reference_intrinsics.principalX) * scale;
     const float cy = static_cast<float>(reference_intrinsics.principalY) * scale;
 
-    // Each lane owns its queue, kernel, and persistent buffers. CPU preparation
-    // remains concurrent while device allocations are reused across pyramid
-    // levels and frames.
+    // Unified-memory GPUs bind large inputs directly to their host storage so
+    // integrated GPU memory does not retain a growing per-lane input high-water
+    // mark. Output buffers remain persistent; discrete GPUs reuse all buffers.
     const auto slot_wait_start = std::chrono::steady_clock::now();
     std::optional<OpenClExecutionLaneLease> lane_lease =
         acquireOpenClExecutionLane(runtime, config.cancelFlag);
@@ -798,7 +883,10 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     }
     const auto slot_acquired = std::chrono::steady_clock::now();
     OpenClRuntime::ExecutionLane &execution_lane = lane_lease->lane();
-    for (std::size_t index = 0; index < execution_lane.buffers.size(); ++index)
+    const std::size_t first_persistent_buffer = runtime->hostUnifiedMemory ? 7 : 0;
+    for (std::size_t index = first_persistent_buffer;
+         index < execution_lane.buffers.size();
+         ++index)
     {
         if (!reserveOpenClBuffer(runtime->context,
                                  execution_lane.buffers[index],
@@ -810,14 +898,18 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         }
     }
 
-    std::array<cl_mem, 9> memory_arguments;
-    std::transform(execution_lane.buffers.begin(),
-                   execution_lane.buffers.end(),
-                   memory_arguments.begin(),
-                   [](const OpenClRuntime::BufferSlot &buffer)
-                   {
-                       return buffer.memory;
-                   });
+    std::array<cl_mem, 9> memory_arguments{};
+    for (std::size_t index = 0; index < memory_arguments.size(); ++index)
+    {
+        memory_arguments[index] = runtime->hostUnifiedMemory && index < input_data.size()
+            ? unified_input_buffers[index].get()
+            : execution_lane.buffers[index].memory;
+    }
+    std::size_t retained_buffer_bytes = 0;
+    for (const OpenClRuntime::BufferSlot &buffer : execution_lane.buffers)
+    {
+        retained_buffer_bytes += buffer.memory ? buffer.capacity : 0;
+    }
     cl_uint argument_index = 0;
     for (cl_mem argument : memory_arguments)
     {
@@ -860,14 +952,6 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         (static_cast<std::size_t>(height) + local_size[1] - 1) / local_size[1] * local_size[1]};
     cv::Mat depth_work(height, width, CV_32F);
     cv::Mat confidence_work(height, width, CV_32F);
-    const std::array<const void *, 7> input_data = {
-        reference_float.ptr<float>(),
-        packed_sources.data(),
-        camera_data.data(),
-        packed_reference_mask.data(),
-        packed_source_masks.data(),
-        packed_hint.data(),
-        packed_hint_radius.data()};
 
     OpenClEvent first_write_event;
     OpenClEvent last_write_event;
@@ -876,35 +960,38 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     OpenClEvent confidence_read_event;
     OpenClQueueDrain queue_drain(execution_lane.queue);
     const auto queue_wall_start = std::chrono::steady_clock::now();
-    for (std::size_t index = 0; index < input_data.size(); ++index)
+    if (!runtime->hostUnifiedMemory)
     {
-        cl_event *event_output = nullptr;
-        if (index == 0)
+        for (std::size_t index = 0; index < input_data.size(); ++index)
         {
-            event_output = first_write_event.output();
-        }
-        else if (index + 1 == input_data.size())
-        {
-            event_output = last_write_event.output();
-        }
-        const cl_int write_error = clEnqueueWriteBuffer(execution_lane.queue,
-                                                        memory_arguments[index],
-                                                        CL_FALSE,
-                                                        0,
-                                                        buffer_sizes[index],
-                                                        input_data[index],
-                                                        0,
-                                                        nullptr,
-                                                        event_output);
-        if (write_error != CL_SUCCESS)
-        {
-            if (errorMsg)
+            cl_event *event_output = nullptr;
+            if (index == 0)
             {
-                *errorMsg = openClError("clEnqueueWriteBuffer", write_error);
+                event_output = first_write_event.output();
             }
-            return false;
+            else if (index + 1 == input_data.size())
+            {
+                event_output = last_write_event.output();
+            }
+            const cl_int write_error = clEnqueueWriteBuffer(execution_lane.queue,
+                                                            memory_arguments[index],
+                                                            CL_FALSE,
+                                                            0,
+                                                            buffer_sizes[index],
+                                                            input_data[index],
+                                                            0,
+                                                            nullptr,
+                                                            event_output);
+            if (write_error != CL_SUCCESS)
+            {
+                if (errorMsg)
+                {
+                    *errorMsg = openClError("clEnqueueWriteBuffer", write_error);
+                }
+                return false;
+            }
+            queue_drain.markPending();
         }
-        queue_drain.markPending();
     }
 
     cl_int error = clEnqueueNDRangeKernel(execution_lane.queue,
@@ -924,6 +1011,7 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         }
         return false;
     }
+    queue_drain.markPending();
 
     error = clEnqueueReadBuffer(execution_lane.queue,
                                 memory_arguments[7],
@@ -999,6 +1087,11 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         CL_PROFILING_COMMAND_END,
         read_start_nanoseconds,
         read_end_nanoseconds);
+
+    for (OpenClHostBuffer &buffer : unified_input_buffers)
+    {
+        buffer.reset();
+    }
 
     if (config.cancelFlag && config.cancelFlag->load(std::memory_order_relaxed))
     {
@@ -1086,12 +1179,15 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         estimate_finished - postprocess_start).count();
     const double total_ms = std::chrono::duration<double, std::milli>(
         estimate_finished - estimate_start).count();
-    LOG_INFO("[MVS][PatchMatch][OpenCL] device=%s lane=%zu size=%dx%d sources=%d samples=%d valid=%d/%d "
+    LOG_INFO("[MVS][PatchMatch][OpenCL] device=%s lane=%zu unified=%d retained=%.1fMiB "
+             "size=%dx%d sources=%d samples=%d valid=%d/%d "
              "prepare=%.1f ms wait=%.1f ms setup=%.1f ms queue=%.1f ms "
              "write=%.1f ms kernel=%.1f ms read=%.1f ms gap=%.1f ms "
              "post=%.1f ms total=%.1f ms",
              devices[device_index].info.name.c_str(),
              execution_lane_index,
+             runtime->hostUnifiedMemory ? 1 : 0,
+             static_cast<double>(retained_buffer_bytes) / (1024.0 * 1024.0),
              width,
              height,
              source_count,

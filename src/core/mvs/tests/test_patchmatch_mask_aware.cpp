@@ -208,7 +208,7 @@ TEST(PatchMatchMaskAwareTest, OpenClEstimatesMaskedPlaneWhenAvailable)
     xjw::mvs::PatchMatchDepthEstimator::cleanupOpenClResources();
 }
 
-TEST(PatchMatchMaskAwareTest, OpenClConcurrentFrameLanesReuseBuffersWhenAvailable)
+TEST(PatchMatchMaskAwareTest, OpenClConcurrentWorkersReuseTwoExecutionLanesWhenAvailable)
 {
     const std::vector<xjw::mvs::OpenClDeviceInfo> devices =
         xjw::mvs::PatchMatchDepthEstimator::openClDevices();
@@ -220,21 +220,22 @@ TEST(PatchMatchMaskAwareTest, OpenClConcurrentFrameLanesReuseBuffersWhenAvailabl
     for (const xjw::mvs::OpenClDeviceInfo &device : devices)
     {
         SCOPED_TRACE(device.vendor + " " + device.name);
-        std::array<EstimateResult, 4> results;
+        std::array<EstimateResult, 6> results;
         for (std::size_t round = 0; round < 2; ++round)
         {
-            std::thread first([&, round]()
+            std::array<std::thread, 3> workers;
+            for (std::size_t worker_index = 0; worker_index < workers.size(); ++worker_index)
             {
-                results[round * 2] = estimateMaskedPlane(
-                    xjw::mvs::PatchMatchBackend::OpenCl, device.index);
-            });
-            std::thread second([&, round]()
+                workers[worker_index] = std::thread([&, round, worker_index]()
+                {
+                    results[round * workers.size() + worker_index] = estimateMaskedPlane(
+                        xjw::mvs::PatchMatchBackend::OpenCl, device.index);
+                });
+            }
+            for (std::thread &worker : workers)
             {
-                results[round * 2 + 1] = estimateMaskedPlane(
-                    xjw::mvs::PatchMatchBackend::OpenCl, device.index);
-            });
-            first.join();
-            second.join();
+                worker.join();
+            }
         }
 
         const cv::Mat reference_mask = makeReferenceMask();
