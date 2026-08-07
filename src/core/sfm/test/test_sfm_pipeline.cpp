@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include "pipeline/HierarchicalBundleAdjuster.h"
 #include "pipeline/IncrementalSfm.h"
 #include "pipeline/SfmBundleAdjustCoordinator.h"
 #include "reconstruction/SfmReconstruction.h"
@@ -28,6 +29,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <random>
 #include <vector>
 
@@ -53,7 +55,7 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest, PreservesLayerOnlyDuringFinalSelfCali
         false, false, true, false));
 }
 
-TEST(SfmBundleAdjustCoordinatorPolicyTest, RefinesSharedIntrinsicsOnlyAfterCompleteRegistration)
+TEST(SfmBundleAdjustCoordinatorPolicyTest, RefinesSharedIntrinsicsAfterNearCompleteLargeRegistration)
 {
     EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
         false, 16, 16, 16));
@@ -67,6 +69,12 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest, RefinesSharedIntrinsicsOnlyAfterCompl
         false, 14, 14, 16));
     EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
         false, 14, 15, 16));
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
+        false, 437, 437, 444));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
+        false, 435, 435, 444));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
+        false, 436, 437, 444));
 }
 
 TEST(SfmBundleAdjustCoordinatorPolicyTest, IterativeConvergenceIncludesSharedCalibration)
@@ -100,10 +108,12 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest, LimitsOnlyPeriodicGlobalBaRounds)
     EXPECT_EQ(SfmBundleAdjustCoordinator::iterativeGlobalBaRoundLimit(1, false), 1);
 }
 
-TEST(SfmBundleAdjustCoordinatorPolicyTest, UsesStrongTracksForLargeWeakGlobalNetwork)
+TEST(SfmBundleAdjustCoordinatorPolicyTest, ReducesOnlyVeryLargeWellSupportedGlobalNetwork)
 {
-    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(
         false, 444, 100028, 79006, 21022));
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(
+        false, 1000, 400000, 320000, 80000));
     EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(
         true, 444, 100028, 79006, 21022));
     EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(
@@ -112,6 +122,48 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest, UsesStrongTracksForLargeWeakGlobalNet
         false, 444, 10000, 6000, 4000));
     EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(
         false, 444, 10000, 9000, 1000));
+}
+
+TEST(SfmBundleAdjustCoordinatorPolicyTest, AcceptsConsolidationThatAddsMultiviewRigidity)
+{
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldAcceptTrackConsolidation(
+        90000, 210000, 20000,
+        60000, 180000, 35000));
+}
+
+TEST(SfmBundleAdjustCoordinatorPolicyTest, RejectsConsolidationThatDropsCoverage)
+{
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldAcceptTrackConsolidation(
+        90000, 210000, 20000,
+        30000, 80000, 25000));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldAcceptTrackConsolidation(
+        90000, 210000, 20000,
+        70000, 190000, 19000));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldAcceptTrackConsolidation(
+        200, 400, 0,
+        200, 400, 0));
+}
+
+TEST(HierarchicalBundleAdjusterPolicyTest, WritesBackOnlyBlockLocalPoints)
+{
+    EXPECT_TRUE(HierarchicalBundleAdjuster::shouldWriteBackPoint(4, 4));
+    EXPECT_TRUE(HierarchicalBundleAdjuster::shouldWriteBackPoint(2, 2));
+    EXPECT_FALSE(HierarchicalBundleAdjuster::shouldWriteBackPoint(3, 4));
+    EXPECT_FALSE(HierarchicalBundleAdjuster::shouldWriteBackPoint(1, 1));
+}
+
+TEST(HierarchicalBundleAdjusterPolicyTest, RejectsGloballyInconsistentMerge)
+{
+    EXPECT_TRUE(HierarchicalBundleAdjuster::isGlobalWriteBackConsistent(
+        0.8, 10000, 0.9, 10000));
+    EXPECT_TRUE(HierarchicalBundleAdjuster::isGlobalWriteBackConsistent(
+        4.0, 10000, 4.9, 9600));
+    EXPECT_FALSE(HierarchicalBundleAdjuster::isGlobalWriteBackConsistent(
+        0.8, 10000, 66.0, 10000));
+    EXPECT_FALSE(HierarchicalBundleAdjuster::isGlobalWriteBackConsistent(
+        0.8, 10000, 0.7, 9400));
+    EXPECT_FALSE(HierarchicalBundleAdjuster::isGlobalWriteBackConsistent(
+        std::numeric_limits<double>::infinity(), 10000, 0.7, 10000));
 }
 
 // ─── 工具函数：构造合成场景用于测试 ────────────────────────────

@@ -6,6 +6,7 @@
 #include "Intersection.h"
 #include "tracks/CorrespondenceTrackThinner.h"
 #include "tracks/MultiViewTrackBuilder.h"
+#include "triangulation/Triangulator.h"
 
 #include "log/Logger.h"
 
@@ -239,9 +240,20 @@ bool SfmBundleAdjustCoordinator::shouldRefineSharedIntrinsics(
         return false;
     }
 
-    // 共享内参会立即影响未注册影像的 PnP。只有全部影像已注册时才释放，避免
-    // 残缺网络中的焦距/畸变变化破坏最后一批影像的几何尺度和可见点关系。
-    return registeredImageCount == totalImageCount;
+    if (registeredImageCount == totalImageCount)
+    {
+        return true;
+    }
+
+    // 大型工程最后少量影像可能正是因为零畸变/焦距种子不准而无法注册。允许在
+    // 已注册率达到 98% 且缺失数不超过 2% 时释放共享内参；求解后的内参会同步到
+    // 未注册影像，再由最终 PnP 重试接回。小工程仍要求完整注册，避免过早自标定。
+    const int missing_image_count = totalImageCount - registeredImageCount;
+    const int maximum_missing_count = std::max(1, totalImageCount / 50);
+    return totalImageCount >= 50 && missing_image_count > 0 &&
+           missing_image_count <= maximum_missing_count &&
+           static_cast<long long>(registeredImageCount) * 100LL >=
+               static_cast<long long>(totalImageCount) * 98LL;
 }
 
 bool SfmBundleAdjustCoordinator::shouldPreserveCameraLayer(
@@ -314,21 +326,67 @@ bool SfmBundleAdjustCoordinator::shouldUseMultiViewOnlyGlobalBa(
     int twoViewTrackCount,
     int multiViewTrackCount)
 {
-    if (localOnly || activeCameraCount < 96 || totalTrackCount < 1000 ||
+    if (localOnly || activeCameraCount < 96 || totalTrackCount < 250000 ||
         twoViewTrackCount < 0 || multiViewTrackCount < 0 ||
         twoViewTrackCount + multiViewTrackCount != totalTrackCount)
     {
         return false;
     }
 
-    // 两视图点只约束一对相机，无法为长航带提供跨影像刚性。只有弱轨迹占比达到
-    // 65%，且仍有足够多三视图轨迹覆盖相机块时才缩减全局 BA，避免小工程或本就
-    // 缺少强轨迹的工程因过滤后约束不足。完整点云会在 BA 后统一重三角化。
+    // 两视图点经 Schur 消元后仍会向相机网提供一条有效约束，弱网中过早丢弃会
+    // 进一步削弱块间连接。只对超大问题启用缩减，并要求每台相机至少有 64 条
+    // 多视轨迹；中等规模工程保留全部轨迹以优先保证整体几何。
     const bool weakNetwork =
         static_cast<long long>(twoViewTrackCount) * 100LL >=
         static_cast<long long>(totalTrackCount) * 65LL;
-    const int minimumMultiViewTracks = std::max(500, activeCameraCount * 4);
+    const int minimumMultiViewTracks = std::max(5000, activeCameraCount * 64);
     return weakNetwork && multiViewTrackCount >= minimumMultiViewTracks;
+}
+
+bool SfmBundleAdjustCoordinator::shouldAcceptTrackConsolidation(
+    std::size_t oldPointCount,
+    std::size_t oldObservationCount,
+    std::size_t oldLongTrackCount,
+    std::size_t newPointCount,
+    std::size_t newObservationCount,
+    std::size_t newLongTrackCount)
+{
+    if (newPointCount == 0 || newObservationCount < newPointCount * 2)
+    {
+        return false;
+    }
+    if (oldPointCount == 0)
+    {
+        return true;
+    }
+
+    // 合并可能把同一输入组件对应的多个二视图点重新变成一个长轨迹，因此点数
+    // 允许下降，但不能以丢失大部分观测为代价。真正需要增加的是跨相机冗余：
+    // 每个点超过最小二视观测的部分，以及至少三视的轨迹数量。
+    if (newPointCount * 2 < oldPointCount ||
+        newObservationCount * 10 < oldObservationCount * 7 ||
+        newLongTrackCount < oldLongTrackCount)
+    {
+        return false;
+    }
+
+    const std::size_t oldRedundantObservations =
+        oldObservationCount > oldPointCount * 2
+            ? oldObservationCount - oldPointCount * 2
+            : 0;
+    const std::size_t newRedundantObservations =
+        newObservationCount - newPointCount * 2;
+    const bool longTrackGain =
+        oldLongTrackCount == 0
+            ? newLongTrackCount > 0
+            : static_cast<double>(newLongTrackCount) >=
+                  static_cast<double>(oldLongTrackCount) * 1.10;
+    const bool redundancyGain =
+        oldRedundantObservations == 0
+            ? newRedundantObservations > 0
+            : static_cast<double>(newRedundantObservations) >=
+                  static_cast<double>(oldRedundantObservations) * 1.25;
+    return longTrackGain || redundancyGain;
 }
 
 int SfmBundleAdjustCoordinator::iterativeGlobalBaRoundLimit(
@@ -353,6 +411,131 @@ void SfmBundleAdjustCoordinator::iterative(bool finalRefinement)
 int SfmBundleAdjustCoordinator::filterNegativeDepthPoints()
 {
     return _owner.filterNegativeDepthPoints();
+}
+
+bool SfmBundleAdjustCoordinator::consolidateInputTracksForFinalBa()
+{
+    if (_owner._finalTrackConsolidationAttempted)
+    {
+        return false;
+    }
+    _owner._finalTrackConsolidationAttempted = true;
+
+    if (_owner._inputMultiViewTracks.empty())
+    {
+        Logger::instance()->info(
+            "[SFM] Multiview track consolidation skipped reason=no_retained_input_tracks");
+        return false;
+    }
+    if (_owner._controlNetworkApplied || !_owner._pendingPriorTracks.empty() ||
+        !_owner._pendingPriorScaleBars.empty() || !_owner._materializedPriorTracks.empty())
+    {
+        Logger::instance()->info(
+            "[SFM] Multiview track consolidation skipped reason=absolute_or_manual_constraints_present");
+        return false;
+    }
+
+    std::vector<Track> registeredTracks;
+    registeredTracks.reserve(_owner._inputMultiViewTracks.size());
+    for (const Track &inputTrack : _owner._inputMultiViewTracks)
+    {
+        Track registeredTrack;
+        registeredTrack.confidence = inputTrack.confidence;
+        registeredTrack.source = inputTrack.source;
+        registeredTrack.sourceId = inputTrack.sourceId;
+        registeredTrack.elements.reserve(inputTrack.elements.size());
+        for (const TrackElement &element : inputTrack.elements)
+        {
+            if (!_owner._reconstruction->isRegistered(element.imageId) ||
+                !_owner._reconstruction->hasCamera(element.imageId) ||
+                !_owner._reconstruction->hasImage(element.imageId))
+            {
+                continue;
+            }
+            const ImageData &image = _owner._reconstruction->image(element.imageId);
+            if (element.featureIdx >= image.keypoints.size() ||
+                element.featureIdx >= image.point3DIds.size())
+            {
+                continue;
+            }
+            registeredTrack.elements.push_back(element);
+        }
+        if (registeredTrack.length() >= 2)
+        {
+            registeredTracks.push_back(std::move(registeredTrack));
+        }
+    }
+
+    if (registeredTracks.empty())
+    {
+        Logger::instance()->info(
+            "[SFM] Multiview track consolidation skipped reason=no_tracks_on_registered_cameras");
+        return false;
+    }
+
+    auto measureNetwork = [](const SfmReconstruction &reconstruction)
+    {
+        std::array<std::size_t, 3> statistics{{0, 0, 0}};
+        statistics[0] = reconstruction.numPoints3D();
+        for (const auto &[pointId, point] : reconstruction.points3D())
+        {
+            (void)pointId;
+            statistics[1] += point.track.length();
+            if (point.track.length() >= 3)
+            {
+                ++statistics[2];
+            }
+        }
+        return statistics;
+    };
+
+    const std::array<std::size_t, 3> oldNetwork = measureNetwork(*_owner._reconstruction);
+    const auto reconstructionSnapshot =
+        std::make_shared<SfmReconstruction>(*_owner._reconstruction);
+    for (Point3DId pointId : _owner._reconstruction->allPoint3DIds())
+    {
+        _owner._reconstruction->deletePoint3D(pointId);
+    }
+
+    TriangulatorOptions options = _owner._sfmOptions.triangulatorOptions;
+    options.maxReprojError = std::max(
+        options.maxReprojError,
+        std::max(4.0, _owner._sfmOptions.filterMaxReprojError * 2.0));
+    options.completeMaxReprojError = std::max(
+        options.completeMaxReprojError,
+        std::max(12.0, _owner._sfmOptions.filterMaxReprojError * 6.0));
+    Triangulator triangulator(*_owner._reconstruction, _owner._correspondenceGraph);
+    const TriangulationStats triangulation =
+        triangulator.triangulateTracks(registeredTracks, options);
+    const std::array<std::size_t, 3> newNetwork = measureNetwork(*_owner._reconstruction);
+
+    const bool accepted = shouldAcceptTrackConsolidation(
+        oldNetwork[0], oldNetwork[1], oldNetwork[2],
+        newNetwork[0], newNetwork[1], newNetwork[2]);
+    Logger::instance()->infof(
+        "[SFM] Multiview track consolidation accepted=%s inputTracks=%zu usableTracks=%zu "
+        "points=%zu->%zu observations=%zu->%zu longTracks=%zu->%zu "
+        "createdTwoView=%d createdLong=%d rejectedTracks=%d reprojRejected=%d",
+        accepted ? "true" : "false",
+        _owner._inputMultiViewTracks.size(),
+        registeredTracks.size(),
+        oldNetwork[0],
+        newNetwork[0],
+        oldNetwork[1],
+        newNetwork[1],
+        oldNetwork[2],
+        newNetwork[2],
+        triangulation.createdTwoViewTracks,
+        triangulation.createdLongTracks,
+        triangulation.noCandidateTracks,
+        triangulation.reprojObservationRejected);
+
+    if (!accepted)
+    {
+        _owner._reconstruction = reconstructionSnapshot;
+    }
+    _owner.invalidateVisibilityCache();
+    return accepted;
 }
 
 void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> &anchorIds)
@@ -771,8 +954,6 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
     }
     AerialCameraPlaneEstimate cameraPlaneBefore;
     bool cameraPlaneConstraintActive = false;
-    const bool completeRegistration =
-        baCameras.size() == _reconstruction->numImages();
     const bool hasCameraLayerAbsoluteConstraint =
         control_constraint_count > 0 || control_scale_bar_count > 0 ||
         !baOpt.cameraPosePriors.empty();
@@ -790,7 +971,7 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
         SfmBundleAdjustCoordinator::shouldUseLowOrderAerialSelfCalibration(
             localOnly,
             hasAerialSelfCalibrationAbsoluteConstraint,
-            completeRegistration,
+            refineSharedIntrinsics,
             baOpt.refineSharedRadialDistortion,
             static_cast<int>(baCameras.size()),
             cameraPlaneBefore.opticalAxisConcentration);
@@ -829,11 +1010,15 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
     if (_sfmOptions.preserveCameraLayerDuringSelfCalibration &&
         BundleAdjust::isBackendAvailable(BABackend::CeresCpu))
     {
-        if (cameraPlaneBefore.valid &&
+        const bool stableParallelCameraLayer =
+            cameraPlaneBefore.valid &&
+            cameraPlaneBefore.opticalAxisConcentration >= 0.90 &&
+            cameraPlaneBefore.normalToSpanRmsRatio <= 0.05;
+        if (stableParallelCameraLayer &&
             SfmBundleAdjustCoordinator::shouldPreserveCameraLayer(
                 localOnly,
                 hasCameraLayerAbsoluteConstraint,
-                completeRegistration,
+                refineSharedIntrinsics,
                 refiningSharedCameraModel))
         {
             BACameraPlaneConstraint &constraint = baOpt.cameraPlaneConstraint;
@@ -988,6 +1173,7 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
         }};
         const int candidateThreads = std::max(
             1, baOpt.numThreads / static_cast<int>(seeds.size()));
+        const int candidateIterations = std::min(12, baOpt.maxIterations);
         std::vector<std::future<BAResult>> candidates;
         candidates.reserve(seeds.size());
         for (const CalibrationSeed seed : seeds)
@@ -1011,6 +1197,7 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
                     }
                     BAOptions candidateOptions = baOpt;
                     candidateOptions.numThreads = candidateThreads;
+                    candidateOptions.maxIterations = candidateIterations;
                     candidateOptions.progressCallback = {};
                     candidateOptions.logIterationProgress = false;
                     return BundleAdjust::optimizePoints(
@@ -1046,10 +1233,35 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
             }
         }
         Logger::instance()->infof(
-            "[BA] self_calibration_seed selected=%d candidates=%zu threadsPerCandidate=%d",
+            "[BA] self_calibration_seed selected=%d candidates=%zu "
+            "previewIterations=%d threadsPerCandidate=%d",
             bestIndex,
             seeds.size(),
+            candidateIterations,
             candidateThreads);
+        if (bestIndex >= 0 && baResult.solutionUsable &&
+            baResult.refinedCameras.size() == baCameras.size() &&
+            baResult.points.size() == baTracks.size())
+        {
+            std::vector<BATrack> warmTracks = baTracks;
+            for (std::size_t index = 0; index < warmTracks.size(); ++index)
+            {
+                const BARefinedPoint &point = baResult.points[index];
+                if (point.valid && std::isfinite(point.point[0]) &&
+                    std::isfinite(point.point[1]) && std::isfinite(point.point[2]))
+                {
+                    warmTracks[index].initialPoint = point.point;
+                }
+            }
+            Logger::instance()->infof(
+                "[BA] self_calibration_seed full_refinement seed=%d threads=%d "
+                "iterations=%d",
+                bestIndex,
+                baOpt.numThreads,
+                baOpt.maxIterations);
+            baResult = BundleAdjust::optimizePoints(
+                baResult.refinedCameras, warmTracks, baOpt);
+        }
     }
     else
     {
@@ -1475,6 +1687,11 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
 
 void IncrementalSfm::iterativeGlobalBA(bool finalRefinement)
 {
+    if (finalRefinement)
+    {
+        SfmBundleAdjustCoordinator(*this).consolidateInputTracksForFinalBa();
+    }
+
     int maxRounds = SfmBundleAdjustCoordinator::iterativeGlobalBaRoundLimit(
         _sfmOptions.iterativeBARounds,
         finalRefinement);

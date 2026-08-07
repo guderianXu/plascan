@@ -8,7 +8,10 @@
  * CorrespondenceGraph 只删除不属于保留轨迹的原始边，不合成新的影像对关系。
  */
 
+#include "common/SfmTypes.h"
+
 #include <cstddef>
+#include <vector>
 
 namespace xjw
 {
@@ -31,6 +34,7 @@ struct CorrespondenceTrackThinningResult
     int prunedTrackCount = 0; ///< 因配额被删除的轨迹数。
     std::size_t removedMatchCount = 0; ///< 从 CorrespondenceGraph 删除的原始匹配边数。
     std::size_t retainedMatchCount = 0; ///< 图中剩余原始匹配边数。
+    std::vector<Track> retainedTracks; ///< 与裁剪后对应图一致的完整多视轨迹。
 };
 
 /**

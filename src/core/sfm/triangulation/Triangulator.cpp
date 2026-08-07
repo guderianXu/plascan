@@ -283,71 +283,114 @@ TriangulationStats Triangulator::triangulateTracks(const std::vector<Track> &tra
         {
             Candidate best;
             double nearestRejectedExtraForTrack = std::numeric_limits<double>::infinity();
-            for (size_t left = 0; left < remainingElements.size(); ++left)
+
+            // 先用完整组件做一次多视 DLT。几何一致的正常轨迹通常一次即可得到
+            // 最长内点集，避免为每个二元/三元组合重复求解。
+            std::array<double, 3> allViewXyz;
+            if (triangulateMultiView(remainingElements, allViewXyz))
             {
-                for (size_t right = left + 1; right < remainingElements.size(); ++right)
+                best = refineCandidate(collectCandidateFromPoint(allViewXyz, false));
+            }
+
+            // 对坏桥或含离群观测的组件仍需双视种子。小轨迹穷举全部像对；
+            // 长轨迹只取相邻、跨距和均匀采样的确定性代表像对，限制最坏复杂度。
+            constexpr std::size_t kMaximumSeedPairs = 96;
+            std::vector<std::pair<std::size_t, std::size_t>> seedPairs;
+            seedPairs.reserve(std::min(
+                kMaximumSeedPairs,
+                remainingElements.size() * (remainingElements.size() - 1) / 2));
+            const auto addSeedPair = [&seedPairs](std::size_t left, std::size_t right)
+            {
+                if (left == right || seedPairs.size() >= kMaximumSeedPairs)
                 {
-                    std::array<double, 3> seedXyz;
-                    const TrackElement &leftElement = remainingElements[left];
-                    const TrackElement &rightElement = remainingElements[right];
-                    ++stats.seedPairTests;
-                    if (!triangulatePair(leftElement.imageId,
-                                         leftElement.featureIdx,
-                                         rightElement.imageId,
-                                         rightElement.featureIdx,
-                                         options,
-                                         seedXyz))
+                    return;
+                }
+                if (left > right)
+                {
+                    std::swap(left, right);
+                }
+                const std::pair<std::size_t, std::size_t> pair{left, right};
+                if (std::find(seedPairs.begin(), seedPairs.end(), pair) == seedPairs.end())
+                {
+                    seedPairs.push_back(pair);
+                }
+            };
+
+            const std::size_t elementCount = remainingElements.size();
+            const std::size_t allPairCount = elementCount * (elementCount - 1) / 2;
+            const bool allViewCandidateUsesEveryObservation =
+                best.valid && best.inlierTrack.length() == elementCount;
+            if (!allViewCandidateUsesEveryObservation &&
+                allPairCount <= kMaximumSeedPairs)
+            {
+                for (std::size_t left = 0; left < elementCount; ++left)
+                {
+                    for (std::size_t right = left + 1; right < elementCount; ++right)
                     {
-                        ++stats.seedPairRejected;
-                        continue;
+                        addSeedPair(left, right);
                     }
+                }
+            }
+            else if (!allViewCandidateUsesEveryObservation)
+            {
+                for (std::size_t index = 0; index + 1 < elementCount; ++index)
+                {
+                    addSeedPair(index, index + 1);
+                }
+                for (std::size_t index = 0; index < elementCount / 2; ++index)
+                {
+                    addSeedPair(index, elementCount - 1 - index);
+                }
 
-                    Candidate seedCandidate = refineCandidate(collectCandidateFromPoint(seedXyz, true));
-                    if (betterCandidate(seedCandidate, best))
+                const std::size_t sampleStride = std::max<std::size_t>(
+                    1, allPairCount / kMaximumSeedPairs);
+                std::size_t flatPairIndex = 0;
+                for (std::size_t left = 0;
+                     left < elementCount && seedPairs.size() < kMaximumSeedPairs;
+                     ++left)
+                {
+                    for (std::size_t right = left + 1;
+                         right < elementCount && seedPairs.size() < kMaximumSeedPairs;
+                         ++right, ++flatPairIndex)
                     {
-                        best = std::move(seedCandidate);
-                    }
-                    if (track.length() >= 3 &&
-                        seedCandidate.valid &&
-                        seedCandidate.inlierTrack.length() == 2 &&
-                        std::isfinite(seedCandidate.nearestRejectedReprojError))
-                    {
-                        nearestRejectedExtraForTrack = std::min(nearestRejectedExtraForTrack,
-                                                                seedCandidate.nearestRejectedReprojError);
-                    }
-
-                    for (size_t extra = 0; extra < remainingElements.size(); ++extra)
-                    {
-                        if (extra == left || extra == right)
+                        if (flatPairIndex % sampleStride == 0)
                         {
-                            continue;
-                        }
-
-                        const std::vector<TrackElement> seedGroup{
-                            leftElement,
-                            rightElement,
-                            remainingElements[extra],
-                        };
-                        std::array<double, 3> refinedXyz;
-                        if (!triangulateMultiView(seedGroup, refinedXyz))
-                        {
-                            continue;
-                        }
-
-                        Candidate refinedCandidate = refineCandidate(collectCandidateFromPoint(refinedXyz, false));
-                        if (betterCandidate(refinedCandidate, best))
-                        {
-                            best = std::move(refinedCandidate);
-                        }
-                        if (track.length() >= 3 &&
-                            refinedCandidate.valid &&
-                            refinedCandidate.inlierTrack.length() == 2 &&
-                            std::isfinite(refinedCandidate.nearestRejectedReprojError))
-                        {
-                            nearestRejectedExtraForTrack = std::min(nearestRejectedExtraForTrack,
-                                                                    refinedCandidate.nearestRejectedReprojError);
+                            addSeedPair(left, right);
                         }
                     }
+                }
+            }
+
+            for (const auto &[left, right] : seedPairs)
+            {
+                std::array<double, 3> seedXyz;
+                const TrackElement &leftElement = remainingElements[left];
+                const TrackElement &rightElement = remainingElements[right];
+                ++stats.seedPairTests;
+                if (!triangulatePair(leftElement.imageId,
+                                     leftElement.featureIdx,
+                                     rightElement.imageId,
+                                     rightElement.featureIdx,
+                                     options,
+                                     seedXyz))
+                {
+                    ++stats.seedPairRejected;
+                    continue;
+                }
+
+                Candidate seedCandidate = refineCandidate(collectCandidateFromPoint(seedXyz, true));
+                if (betterCandidate(seedCandidate, best))
+                {
+                    best = seedCandidate;
+                }
+                if (track.length() >= 3 &&
+                    seedCandidate.valid &&
+                    seedCandidate.inlierTrack.length() == 2 &&
+                    std::isfinite(seedCandidate.nearestRejectedReprojError))
+                {
+                    nearestRejectedExtraForTrack = std::min(
+                        nearestRejectedExtraForTrack,
+                        seedCandidate.nearestRejectedReprojError);
                 }
             }
 

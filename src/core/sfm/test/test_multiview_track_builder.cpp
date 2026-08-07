@@ -415,6 +415,42 @@ TEST(KnownPoseMultiViewTriangulationTest, RefinesNoisyThreeViewTrackBeforeReject
     EXPECT_LT(point.error, 0.32);
 }
 
+TEST(KnownPoseMultiViewTriangulationTest, ConsistentLongTrackUsesSingleMultiviewSeed)
+{
+    constexpr xjw::ImageId kImageCount = 20;
+    const std::array<double, 3> xyz = {5.0, 0.5, 80.0};
+    xjw::SfmReconstruction reconstruction;
+    xjw::CorrespondenceGraph graph;
+    xjw::Track track;
+
+    for (xjw::ImageId imageId = 0; imageId < kImageCount; ++imageId)
+    {
+        const xjw::Camera camera = makeCamera(static_cast<double>(imageId), 0.0, 0.0);
+        xjw::ImageData image;
+        image.id = imageId;
+        image.keypoints.push_back(projectPoint(camera, xyz));
+        image.point3DIds.resize(1, xjw::kInvalidPoint3DId);
+        reconstruction.addImage(image);
+        reconstruction.registerImage(imageId, camera);
+        graph.addImage(imageId, 1);
+        track.elements.push_back({imageId, 0});
+    }
+    graph.buildCorrespondences();
+
+    xjw::Triangulator triangulator(reconstruction, graph);
+    xjw::TriangulatorOptions options;
+    options.minTriAngle = 0.1;
+    options.maxReprojError = 2.0;
+    options.completeMaxReprojError = 2.0;
+    const xjw::TriangulationStats stats = triangulator.triangulateTracks({track}, options);
+
+    EXPECT_EQ(stats.numCreated, 1);
+    EXPECT_EQ(stats.createdLongTracks, 1);
+    EXPECT_EQ(stats.seedPairTests, 0);
+    ASSERT_EQ(reconstruction.numPoints3D(), 1);
+    EXPECT_EQ(reconstruction.points3D().begin()->second.track.length(), kImageCount);
+}
+
 TEST(IncrementalTriangulationTest, DoesNotReuseObservationOwnedByExistingPoint)
 {
     const xjw::Camera camera0 = makeCamera(0.0, 0.0, 0.0);

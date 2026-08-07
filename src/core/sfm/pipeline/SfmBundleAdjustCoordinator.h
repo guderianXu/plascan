@@ -30,10 +30,13 @@ class SfmBundleAdjustCoordinator
     /// 周期稳定化最多两轮；最终精化使用完整配置轮数并允许提前收敛。
     void iterative(bool finalRefinement = false);
 
+    /// 用保留的输入多视组件原子重建最终点网；质量不足时恢复原点网。
+    bool consolidateInputTracksForFinalBa();
+
     /// 删除在任一有效轨迹观测中落到相机后方的三维点，并清理影像关联。
     int filterNegativeDepthPoints();
 
-    /// 共享镜头内参只在全部影像注册后的全局 BA 中更新，避免改变待注册影像的 PnP 几何。
+    /// 共享镜头内参在完整注册或大型工程达到 98% 注册率后的全局 BA 中更新。
     static bool shouldRefineSharedIntrinsics(bool localOnly,
                                              int activeCameraCount,
                                              int registeredImageCount,
@@ -52,12 +55,20 @@ class SfmBundleAdjustCoordinator
                                           int iterationsSinceGlobalBa,
                                           int globalBaInterval);
 
-    /// 大型弱连接网的全局 BA 只使用三视图以上轨迹；两视图点留给局部稳姿和后续重三角化。
+    /// 仅在多视支撑充分的超大问题中缩减两视图轨迹；弱网保留全部相机约束。
     static bool shouldUseMultiViewOnlyGlobalBa(bool localOnly,
                                                int activeCameraCount,
                                                int totalTrackCount,
                                                int twoViewTrackCount,
                                                int multiViewTrackCount);
+
+    /// 最终点网重建只有在观测覆盖基本保持且多视冗余真实增加时才替换增量点网。
+    static bool shouldAcceptTrackConsolidation(std::size_t oldPointCount,
+                                               std::size_t oldObservationCount,
+                                               std::size_t oldLongTrackCount,
+                                               std::size_t newPointCount,
+                                               std::size_t newObservationCount,
+                                               std::size_t newLongTrackCount);
 
     /// 仅在最终共享内参自标定时保留当前相机层，不按影像数量或场景形状推断穹顶。
     static bool shouldPreserveCameraLayer(bool localOnly,

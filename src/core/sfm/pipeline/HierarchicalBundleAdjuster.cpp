@@ -7,10 +7,14 @@
 #include "log/Logger.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <cmath>
 #include <future>
+#include <limits>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace xjw
@@ -18,6 +22,77 @@ namespace xjw
 
 using hierarchical_ba_detail::BlockOutcome;
 using hierarchical_ba_detail::solveBlock;
+
+namespace
+{
+
+struct GlobalReprojectionState
+{
+    double rms = std::numeric_limits<double>::infinity();
+    std::size_t observations = 0;
+};
+
+GlobalReprojectionState evaluateGlobalReprojection(
+    const SfmReconstruction &reconstruction)
+{
+    GlobalReprojectionState state;
+    long double squared_error_sum = 0.0L;
+    for (Point3DId point_id : reconstruction.allPoint3DIds())
+    {
+        if (!reconstruction.hasPoint3D(point_id))
+        {
+            continue;
+        }
+        const ScenePoint3D &point = reconstruction.point3D(point_id);
+        const double world[3] = {point.xyz[0], point.xyz[1], point.xyz[2]};
+        for (const TrackElement &element : point.track.elements)
+        {
+            if (!reconstruction.isRegistered(element.imageId) ||
+                !reconstruction.hasCamera(element.imageId) ||
+                !reconstruction.hasImage(element.imageId))
+            {
+                continue;
+            }
+            const ImageData &image = reconstruction.image(element.imageId);
+            if (element.featureIdx >= image.keypoints.size())
+            {
+                continue;
+            }
+            double projected[2] = {0.0, 0.0};
+            if (!reconstruction.camera(element.imageId).projectWorldPoint(
+                    world, projected))
+            {
+                continue;
+            }
+            const FeatureKeypoint &keypoint = image.keypoints[element.featureIdx];
+            const double dx = projected[0] - keypoint.x;
+            const double dy = projected[1] - keypoint.y;
+            const double squared_error = dx * dx + dy * dy;
+            if (!std::isfinite(squared_error))
+            {
+                continue;
+            }
+            squared_error_sum += static_cast<long double>(squared_error);
+            ++state.observations;
+        }
+    }
+    if (state.observations > 0)
+    {
+        state.rms = std::sqrt(
+            static_cast<double>(squared_error_sum /
+                                static_cast<long double>(state.observations)));
+    }
+    return state;
+}
+
+struct PointSnapshot
+{
+    Point3DId id = kInvalidPoint3DId;
+    std::array<double, 3> xyz{{0.0, 0.0, 0.0}};
+    double error = 0.0;
+};
+
+} // namespace
 
 HierarchicalBundleAdjuster::HierarchicalBundleAdjuster(IncrementalSfm &owner)
     : _owner(owner)
@@ -51,6 +126,35 @@ int HierarchicalBundleAdjuster::resolveWorkerCount(int blockCount,
         ? configuredMaximum
         : total_threads;
     return std::max(1, std::min({blockCount, total_threads, configured_limit}));
+}
+
+bool HierarchicalBundleAdjuster::shouldWriteBackPoint(
+    std::size_t blockObservationCount,
+    std::size_t totalRegisteredObservationCount)
+{
+    return totalRegisteredObservationCount >= 2 &&
+           blockObservationCount == totalRegisteredObservationCount;
+}
+
+bool HierarchicalBundleAdjuster::isGlobalWriteBackConsistent(
+    double rmsBefore,
+    std::size_t observationsBefore,
+    double rmsAfter,
+    std::size_t observationsAfter)
+{
+    if (!std::isfinite(rmsBefore) || !std::isfinite(rmsAfter) ||
+        observationsBefore == 0 || observationsAfter == 0)
+    {
+        return false;
+    }
+    const double coverage_ratio = static_cast<double>(observationsAfter) /
+        static_cast<double>(observationsBefore);
+    if (!std::isfinite(coverage_ratio) || coverage_ratio < 0.95)
+    {
+        return false;
+    }
+    const double allowed_growth = std::max(0.25, std::abs(rmsBefore) * 0.25);
+    return rmsAfter <= rmsBefore + allowed_growth;
 }
 
 HierarchicalBaRunSummary HierarchicalBundleAdjuster::run()
@@ -240,6 +344,13 @@ HierarchicalBaRunSummary HierarchicalBundleAdjuster::run()
     {
         return left.blockIndex < right.blockIndex;
     });
+    const GlobalReprojectionState global_before =
+        evaluateGlobalReprojection(*_owner._reconstruction);
+    std::unordered_map<ImageId, Camera> camera_snapshots;
+    std::vector<PointSnapshot> point_snapshots;
+    int candidate_applied_blocks = 0;
+    int candidate_updated_cameras = 0;
+    int candidate_updated_points = 0;
     for (const BlockOutcome &outcome : outcomes)
     {
         if (!outcome.accepted)
@@ -252,7 +363,7 @@ HierarchicalBaRunSummary HierarchicalBundleAdjuster::run()
                 outcome.result.meanRmsAfter);
             continue;
         }
-        ++summary.appliedBlocks;
+        ++candidate_applied_blocks;
         std::unordered_map<ImageId, std::size_t> camera_index;
         for (std::size_t index = 0; index < outcome.cameraIds.size(); ++index)
         {
@@ -264,11 +375,15 @@ HierarchicalBaRunSummary HierarchicalBundleAdjuster::run()
             if (index != camera_index.end() &&
                 index->second < outcome.result.refinedCameras.size())
             {
+                camera_snapshots.try_emplace(
+                    image_id, _owner._reconstruction->camera(image_id));
                 _owner._reconstruction->camera(image_id) =
                     outcome.result.refinedCameras[index->second];
-                ++summary.updatedCameras;
+                ++candidate_updated_cameras;
             }
         }
+        const std::unordered_set<ImageId> active_image_ids(
+            outcome.cameraIds.begin(), outcome.cameraIds.end());
         for (std::size_t index = 0;
              index < outcome.pointIds.size() && index < outcome.result.points.size();
              ++index)
@@ -282,9 +397,76 @@ HierarchicalBaRunSummary HierarchicalBundleAdjuster::run()
                 continue;
             }
             ScenePoint3D &point = _owner._reconstruction->point3D(point_id);
+            std::size_t registered_observations = 0;
+            std::size_t block_observations = 0;
+            for (const TrackElement &element : point.track.elements)
+            {
+                if (!_owner._reconstruction->isRegistered(element.imageId))
+                {
+                    continue;
+                }
+                ++registered_observations;
+                if (active_image_ids.count(element.imageId) > 0)
+                {
+                    ++block_observations;
+                }
+            }
+            if (!shouldWriteBackPoint(block_observations, registered_observations))
+            {
+                continue;
+            }
+            point_snapshots.push_back({point_id, point.xyz, point.error});
             point.xyz = refined.point;
             point.error = refined.rmsAfter;
-            ++summary.updatedPoints;
+            ++candidate_updated_points;
+        }
+    }
+
+    const GlobalReprojectionState global_after =
+        evaluateGlobalReprojection(*_owner._reconstruction);
+    const bool globally_consistent = candidate_applied_blocks > 0 &&
+        isGlobalWriteBackConsistent(global_before.rms,
+                                    global_before.observations,
+                                    global_after.rms,
+                                    global_after.observations);
+    Logger::instance()->infof(
+        "[BA] hierarchical global_consistency accepted=%s rms=%.6f->%.6f "
+        "observations=%zu->%zu candidateBlocks=%d candidateCameras=%d "
+        "candidatePoints=%d",
+        globally_consistent ? "true" : "false",
+        global_before.rms,
+        global_after.rms,
+        global_before.observations,
+        global_after.observations,
+        candidate_applied_blocks,
+        candidate_updated_cameras,
+        candidate_updated_points);
+    if (globally_consistent)
+    {
+        summary.appliedBlocks = candidate_applied_blocks;
+        summary.updatedCameras = candidate_updated_cameras;
+        summary.updatedPoints = candidate_updated_points;
+    }
+    else
+    {
+        for (const auto &[image_id, camera] : camera_snapshots)
+        {
+            _owner._reconstruction->camera(image_id) = camera;
+        }
+        for (const PointSnapshot &snapshot : point_snapshots)
+        {
+            if (_owner._reconstruction->hasPoint3D(snapshot.id))
+            {
+                ScenePoint3D &point = _owner._reconstruction->point3D(snapshot.id);
+                point.xyz = snapshot.xyz;
+                point.error = snapshot.error;
+            }
+        }
+        if (candidate_applied_blocks > 0)
+        {
+            Logger::instance()->warn(
+                "[BA] hierarchical merge rejected reason=global_reprojection_inconsistent; "
+                "restored pre-block cameras and points");
         }
     }
 

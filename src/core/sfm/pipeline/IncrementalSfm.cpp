@@ -30,6 +30,7 @@
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 namespace xjw
 {
@@ -447,6 +448,8 @@ void IncrementalSfm::tagPriorTrackSource(Track *track) const
 IncrementalSfmResult IncrementalSfm::run(SfmProgressCallback progressCb)
 {
     IncrementalSfmResult result;
+    _inputMultiViewTracks.clear();
+    _finalTrackConsolidationAttempted = false;
     _isAborted = false;
 
     const int totalImages = static_cast<int>(_reconstruction->numImages());
@@ -477,7 +480,7 @@ IncrementalSfmResult IncrementalSfm::run(SfmProgressCallback progressCb)
         thinningOptions.maxTracksPerGridCell = _sfmOptions.maxTracksPerGridCell;
         thinningOptions.gridColumns = _sfmOptions.trackThinningGridColumns;
         thinningOptions.gridRows = _sfmOptions.trackThinningGridRows;
-        const CorrespondenceTrackThinningResult thinning =
+        CorrespondenceTrackThinningResult thinning =
             thinCorrespondenceTracks(*_reconstruction, &_correspondenceGraph, thinningOptions);
         Logger::instance()->infof(
             "[SFM] Input multiview track thinning: tracks=%d retained=%d pruned=%d "
@@ -489,6 +492,10 @@ IncrementalSfmResult IncrementalSfm::run(SfmProgressCallback progressCb)
             thinning.retainedMatchCount,
             _sfmOptions.maxTracksPerImage,
             _sfmOptions.maxTracksPerGridCell);
+        _inputMultiViewTracks = std::move(thinning.retainedTracks);
+        Logger::instance()->infof(
+            "[SFM] Retained %zu complete input tracks for final point-network consolidation",
+            _inputMultiViewTracks.size());
     }
     materializePriorTracks();
     applyPriorTrackDiagnostics(&result);

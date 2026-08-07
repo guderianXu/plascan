@@ -351,6 +351,7 @@ void IncrementalSfm::resetForInitialPairTrial(const SfmReconstruction &baseRecon
     _lastHierarchicalBAAppliedBlocks = 0;
     _lastHierarchicalBAUpdatedCameras = 0;
     _lastHierarchicalBATotalSeconds = 0.0;
+    _finalTrackConsolidationAttempted = false;
     _controlNetworkApplied = false;
     _controlNetworkResult = {};
     _controlNetworkTransform = {};

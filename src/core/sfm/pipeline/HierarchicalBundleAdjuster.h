@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+
 namespace xjw
 {
 
@@ -42,6 +44,16 @@ class HierarchicalBundleAdjuster
                                   int totalThreadCount,
                                   int configuredMaximum,
                                   bool concurrentBackendAvailable);
+
+    /// 只允许完整包含于当前活动块的点写回，跨块共享点留给最终全局 BA 统一更新。
+    static bool shouldWriteBackPoint(std::size_t blockObservationCount,
+                                     std::size_t totalRegisteredObservationCount);
+
+    /// 块结果合并后必须保持全局观测网的重投影误差和有效观测覆盖率。
+    static bool isGlobalWriteBackConsistent(double rmsBefore,
+                                            std::size_t observationsBefore,
+                                            double rmsAfter,
+                                            std::size_t observationsAfter);
 
   private:
     IncrementalSfm &_owner;

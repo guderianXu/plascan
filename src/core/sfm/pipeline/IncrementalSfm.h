@@ -419,8 +419,11 @@ class IncrementalSfm
     int _lastHierarchicalBAAppliedBlocks = 0;
     int _lastHierarchicalBAUpdatedCameras = 0;
     double _lastHierarchicalBATotalSeconds = 0.0;
-    /// 航测平面稳定一旦在本次重建触发，后续全局 BA 继续保持，避免跨过阈值后
-    /// 立即释放约束并在下一轮重新产生 dome/bowl。
+
+    /// 输入匹配在稀疏化后形成的完整多视轨迹。增量注册期间保留其组件身份，
+    /// 最终全局 BA 前用于修复被逐像三角化拆散的二视图点网。
+    std::vector<Track> _inputMultiViewTracks;
+    bool _finalTrackConsolidationAttempted = false;
 
     /// 增量维护的可见三维点计数缓存（imageId → 可见已三角化点数）
     std::unordered_map<ImageId, size_t> _visibilityCache;

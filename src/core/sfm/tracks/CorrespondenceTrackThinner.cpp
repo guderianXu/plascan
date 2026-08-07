@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace xjw
 {
@@ -74,7 +75,7 @@ CorrespondenceTrackThinningResult thinCorrespondenceTracks(
 
     // MultiViewTrackBuilder 在轨迹层应用每图/网格配额。保留集合确定后，再从原图
     // 删除不属于这些轨迹的边，确保剩余边仍全部来自真实 pairwise match。
-    const MultiViewTrackBuildResult tracks = builder.build(buildOptions);
+    MultiViewTrackBuildResult tracks = builder.build(buildOptions);
     result.retainedTrackCount = static_cast<int>(tracks.tracks.size());
     result.prunedTrackCount = tracks.prunedByQualityThinning;
     result.inputTrackCount = result.retainedTrackCount + result.prunedTrackCount;
@@ -83,6 +84,7 @@ CorrespondenceTrackThinningResult thinCorrespondenceTracks(
     {
         result.retainedMatchCount += graph->numMatchesBetween(pair.first, pair.second);
     }
+    result.retainedTracks = std::move(tracks.tracks);
     return result;
 }
 
