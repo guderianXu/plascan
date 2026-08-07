@@ -260,6 +260,15 @@ AerialBlockGeometry evaluateAerialBlockGeometry(const SfmReconstruction &reconst
     };
 }
 
+bool hasAbsoluteGeometryConstraint(
+    const PreparedAerialTriangulationInput &input,
+    const QJsonObject &diagnostics)
+{
+    return input.useProjectCameraPoses || input.lockInputCameraPoses ||
+           diagnostics.value(QStringLiteral("control_network_applied")).toBool(false) ||
+           diagnostics.value(QStringLiteral("control_point_constraints")).toInt(0) > 0;
+}
+
 /**
  * @brief 判断每张影像是否都有可直接使用的可信内参。
  *
@@ -495,6 +504,19 @@ QJsonObject candidateToJson(const AdaptiveFocalCandidate &candidate,
 }
 
 } // namespace
+
+bool AerialTriangulationPipeline::shouldFlagAerialDomingRisk(
+    bool geometryValid,
+    double opticalAxisConcentration,
+    double cameraCenterNormalSpanRmsRatio,
+    bool hasAbsoluteGeometryConstraint)
+{
+    return geometryValid && !hasAbsoluteGeometryConstraint &&
+           std::isfinite(opticalAxisConcentration) &&
+           opticalAxisConcentration >= 0.90 &&
+           std::isfinite(cameraCenterNormalSpanRmsRatio) &&
+           cameraCenterNormalSpanRmsRatio >= 0.04;
+}
 
 AerialTriangulationPipeline::AerialTriangulationPipeline(
     AttemptRunner attemptRunner,
@@ -961,6 +983,13 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
     {
         const AerialBlockGeometry geometry =
             evaluateAerialBlockGeometry(*execution.reconstruction);
+        const bool absoluteGeometryConstraint =
+            hasAbsoluteGeometryConstraint(input, execution.result.sfmDiagnostics);
+        const bool domingRisk = shouldFlagAerialDomingRisk(
+            geometry.valid,
+            geometry.opticalAxisConcentration,
+            geometry.cameraCenterNormalSpanRmsRatio,
+            absoluteGeometryConstraint);
         QJsonObject aerialGeometry{
             {QStringLiteral("detected"), geometry.valid},
             {QStringLiteral("optical_axis_concentration"), geometry.opticalAxisConcentration},
@@ -968,12 +997,17 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
             {QStringLiteral("camera_center_normal_span_rms_ratio"),
              geometry.cameraCenterNormalSpanRmsRatio},
         };
-        // 相机中心的形状可能是真实航迹、立面或环绕轨迹，不能仅凭“厚度”推断
-        // dome/bowl。保留数值供诊断，但不再据此改变结果或标记自标定失败。
-        aerialGeometry.insert(QStringLiteral("doming_risk"), false);
+        // 这里只标记复核风险，不修改或拒绝几何：没有 GPS/GCP 时无法从重投影
+        // 唯一区分真实航高变化与径向畸变/自由网漂移，强行压平会损伤真实地形。
+        aerialGeometry.insert(QStringLiteral("doming_risk"), domingRisk);
         aerialGeometry.insert(
             QStringLiteral("doming_assessment"),
-            QStringLiteral("not_inferred_from_camera_shape"));
+            domingRisk
+                ? QStringLiteral("parallel_block_curvature_requires_absolute_control_review")
+                : QStringLiteral("no_parallel_block_doming_risk_detected"));
+        aerialGeometry.insert(
+            QStringLiteral("absolute_geometry_constraint"),
+            absoluteGeometryConstraint);
         execution.result.sfmDiagnostics.insert(
             QStringLiteral("aerial_block_geometry"), aerialGeometry);
     }

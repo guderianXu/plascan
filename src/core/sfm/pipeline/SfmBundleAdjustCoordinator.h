@@ -65,6 +65,15 @@ class SfmBundleAdjustCoordinator
                                           bool completeRegistration,
                                           bool refiningSharedIntrinsics);
 
+    /// 近乎平行的完整对地航摄块采用低阶镜头自标定，避免高阶畸变吸收场景穹顶。
+    static bool shouldUseLowOrderAerialSelfCalibration(
+        bool localOnly,
+        bool hasAbsoluteConstraint,
+        bool completeRegistration,
+        bool refiningSharedRadialDistortion,
+        int activeCameraCount,
+        double opticalAxisConcentration);
+
     /// 周期全局 BA 限制为两轮；最终精化保留用户配置轮数。
     static int iterativeGlobalBaRoundLimit(int configuredRounds,
                                            bool finalRefinement);

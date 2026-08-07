@@ -540,3 +540,61 @@ TEST(BundleAdjustSharedFocalTest, CeresRecoversBoundedSharedBrownConradyDistorti
     EXPECT_NEAR(result.refinedSharedTangentialP2, -0.002, 0.001);
     EXPECT_LT(result.meanRmsAfter, 0.25);
 }
+
+TEST(BundleAdjustSharedFocalTest, CeresLowOrderModeKeepsHighOrderDistortionFixed)
+{
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    {
+        GTEST_SKIP() << "Ceres CPU backend is not available";
+    }
+
+    std::vector<xjw::Camera> truthCameras{
+        makeCamera(-2.0, 0.0, 0.0, 1500.0),
+        makeCamera(0.0, -2.0, 0.0, 1500.0),
+        makeCamera(2.0, 0.0, 0.0, 1500.0),
+        makeCamera(0.0, 2.0, 0.0, 1500.0),
+    };
+    for (xjw::Camera &camera : truthCameras)
+    {
+        camera.setDistortion(-0.10, 0.0, 0.0, 0.0, 0.0);
+    }
+    std::vector<xjw::Camera> initialCameras{
+        makeCamera(-2.0, 0.0, 0.0, 1500.0),
+        makeCamera(0.0, -2.0, 0.0, 1500.0),
+        makeCamera(2.0, 0.0, 0.0, 1500.0),
+        makeCamera(0.0, 2.0, 0.0, 1500.0),
+    };
+    for (xjw::Camera &camera : initialCameras)
+    {
+        camera.setDistortion(0.0, 0.012, -0.018, 0.001, -0.002);
+    }
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::CeresCpu;
+    options.allowBackendFallback = false;
+    options.refineCameraPose = false;
+    options.refineSharedFocalLength = true;
+    options.minSharedFocalScale = 1.0;
+    options.maxSharedFocalScale = 1.0;
+    options.refineSharedRadialDistortion = true;
+    options.refineSharedHighOrderDistortion = false;
+    options.sharedRadialK1PriorSigma = 1.0;
+    options.enableControlPointConstraints = true;
+    options.controlPointWeight = 1000.0;
+    options.enablePointFilter = false;
+    options.maxIterations = 40;
+
+    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(
+        initialCameras, makeWideCalibrationTracks(truthCameras), options);
+
+    ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
+    ASSERT_FALSE(result.refinedCameras.empty());
+    const xjw::Camera::Distortion distortion =
+        result.refinedCameras.front().distortion();
+    EXPECT_NEAR(distortion.radialK1, -0.10, 0.02);
+    EXPECT_DOUBLE_EQ(distortion.radialK2, 0.012);
+    EXPECT_DOUBLE_EQ(distortion.radialK3, -0.018);
+    EXPECT_DOUBLE_EQ(distortion.tangentialP1, 0.001);
+    EXPECT_DOUBLE_EQ(distortion.tangentialP2, -0.002);
+    EXPECT_EQ(result.selfCalibrationStagesRun, 2);
+}

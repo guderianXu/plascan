@@ -48,6 +48,13 @@ public:
     AerialTriangulationReconstructionResult run(
         const PreparedAerialTriangulationInput &input) const;
 
+    /// 对无绝对控制的近垂直摄影块标记可能的整体穹顶，提示用户复核而不强行拉平。
+    static bool shouldFlagAerialDomingRisk(
+        bool geometryValid,
+        double opticalAxisConcentration,
+        double cameraCenterNormalSpanRmsRatio,
+        bool hasAbsoluteGeometryConstraint);
+
 private:
     bool _usesProductionAttemptRunner = false; ///< 生产路径可在候选启动前共享连接点图。
     AttemptRunner _attemptRunner; ///< 单次候选执行器。

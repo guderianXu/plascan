@@ -238,6 +238,9 @@ struct BAOptions
     /// (k1/k2/k3/p1/p2)。仅 Ceres 联合 BA 实现；应配合焦距弱先验和分阶段
     /// 求解使用，避免镜头参数与外参在弱几何下同时漂移。
     bool refineSharedRadialDistortion = false;
+    /// 是否在径向畸变自标定中继续释放 k2/k3/p1/p2。关闭时仅优化 k1，
+    /// 适用于近乎平行的对地航摄块，避免高阶畸变与场景穹顶互相补偿。
+    bool refineSharedHighOrderDistortion = true;
     /// 共享焦距相对输入焦距的最小尺度。
     double minSharedFocalScale = 0.5;
     /// 共享焦距相对输入焦距的最大尺度。
@@ -247,7 +250,8 @@ struct BAOptions
     double maxSharedFocalAspectScale = 1.18;
     /// 主点最大偏移，以标定组参考焦距的比例表示。
     double maxSharedPrincipalPointOffsetFraction = 0.08;
-    /// 扩展内参自标定的弱先验标准差。主点按参考焦距比例，宽高比按 log 比例。
+    /// 扩展内参自标定的弱先验标准差。焦距和宽高比按 log 比例，主点按参考焦距比例。
+    double sharedFocalPriorSigma = 0.35;
     double sharedPrincipalPointPriorSigmaFraction = 0.04;
     double sharedFocalAspectPriorSigma = 0.08;
     /// Brown-Conrady 畸变参数的绝对边界和输入标定中心弱先验标准差。

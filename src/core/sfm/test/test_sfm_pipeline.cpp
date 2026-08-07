@@ -1149,6 +1149,24 @@ TEST_F(SfmPipelineTest, ThreeImageIncremental)
     EXPECT_GE(result.hierarchicalBATotalSeconds, 0.0);
 }
 
+TEST(SfmBundleAdjustCoordinatorPolicyTest, UsesLowOrderCalibrationForParallelAerialBlock)
+{
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldUseLowOrderAerialSelfCalibration(
+        false, false, true, true, 444, 0.98));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseLowOrderAerialSelfCalibration(
+        true, false, true, true, 444, 0.98));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseLowOrderAerialSelfCalibration(
+        false, true, true, true, 444, 0.98));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseLowOrderAerialSelfCalibration(
+        false, false, false, true, 444, 0.98));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseLowOrderAerialSelfCalibration(
+        false, false, true, false, 444, 0.98));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseLowOrderAerialSelfCalibration(
+        false, false, true, true, 444, 0.75));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldUseLowOrderAerialSelfCalibration(
+        false, false, true, true, 12, 0.98));
+}
+
 TEST_F(SfmPipelineTest, FailedHighVisibilityImageIsRetriedAfterModelGrows)
 {
     opts.autoSelectInitPair = false;

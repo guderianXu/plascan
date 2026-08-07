@@ -254,6 +254,20 @@ bool SfmBundleAdjustCoordinator::shouldPreserveCameraLayer(
            refiningSharedIntrinsics;
 }
 
+bool SfmBundleAdjustCoordinator::shouldUseLowOrderAerialSelfCalibration(
+    bool localOnly,
+    bool hasAbsoluteConstraint,
+    bool completeRegistration,
+    bool refiningSharedRadialDistortion,
+    int activeCameraCount,
+    double opticalAxisConcentration)
+{
+    return !localOnly && !hasAbsoluteConstraint && completeRegistration &&
+           refiningSharedRadialDistortion && activeCameraCount >= 20 &&
+           std::isfinite(opticalAxisConcentration) &&
+           opticalAxisConcentration >= 0.90;
+}
+
 bool SfmBundleAdjustCoordinator::hasIterativeGlobalBaConverged(
     int completedRoundCount,
     double pointChangeRate,
@@ -691,20 +705,6 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
             baOpt.stageSharedFocalRefinement = false;
         }
     }
-    if (refineSharedIntrinsics && baOpt.refineSharedRadialDistortion)
-    {
-        const BrownCalibrationCoverage coverage =
-            assessBrownCalibrationCoverage(baCameras, baTracks);
-        Logger::instance()->infof(
-            "[BA] Brown calibration coverage observations=%d central=%d "
-            "peripheral=%d sectors=%d/8 maxNormalizedRadius=%.4f fullModelCoverage=%s",
-            coverage.observationCount,
-            coverage.centralObservationCount,
-            coverage.peripheralObservationCount,
-            coverage.occupiedPeripheralSectors,
-            coverage.maximumNormalizedRadius,
-            coverage.supportsFullModel() ? "sufficient" : "weak_regularized");
-    }
     // SfM 协调器会固定旋转/平移规范，并在求解后恢复基线尺度，
     // 因此由调用方管理完整的 Sim(3) gauge，避免 BA 模块再自动固定第二台相机。
     baOpt.gaugePolicy = BAGaugePolicy::CallerManaged;
@@ -776,10 +776,59 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
     const bool hasCameraLayerAbsoluteConstraint =
         control_constraint_count > 0 || control_scale_bar_count > 0 ||
         !baOpt.cameraPosePriors.empty();
+    const bool hasAerialSelfCalibrationAbsoluteConstraint =
+        control_constraint_count > 0 ||
+        std::any_of(baOpt.cameraPosePriors.begin(),
+                    baOpt.cameraPosePriors.end(),
+                    [](const BACameraPosePrior &prior)
+                    {
+                        return prior.enabled;
+                    });
+    cameraPlaneBefore = estimateAerialCameraPlane(baCameras);
+    const bool lowOrderAerialSelfCalibration =
+        cameraPlaneBefore.valid &&
+        SfmBundleAdjustCoordinator::shouldUseLowOrderAerialSelfCalibration(
+            localOnly,
+            hasAerialSelfCalibrationAbsoluteConstraint,
+            completeRegistration,
+            baOpt.refineSharedRadialDistortion,
+            static_cast<int>(baCameras.size()),
+            cameraPlaneBefore.opticalAxisConcentration);
+    if (lowOrderAerialSelfCalibration)
+    {
+        baOpt.refineSharedHighOrderDistortion = false;
+        baOpt.sharedFocalPriorSigma = std::min(
+            baOpt.sharedFocalPriorSigma, 0.04);
+        baOpt.sharedRadialK1PriorSigma = std::min(
+            baOpt.sharedRadialK1PriorSigma, 0.05);
+        Logger::instance()->infof(
+            "[BA] aerial_self_calibration_guard scope=global cameras=%zu "
+            "opticalAxis=%.6f model=focal+k1 focalPriorSigma=%.6f "
+            "k1PriorSigma=%.6f",
+            baCameras.size(),
+            cameraPlaneBefore.opticalAxisConcentration,
+            baOpt.sharedFocalPriorSigma,
+            baOpt.sharedRadialK1PriorSigma);
+    }
+    if (refineSharedIntrinsics && baOpt.refineSharedRadialDistortion)
+    {
+        const BrownCalibrationCoverage coverage =
+            assessBrownCalibrationCoverage(baCameras, baTracks);
+        Logger::instance()->infof(
+            "[BA] Brown calibration coverage observations=%d central=%d "
+            "peripheral=%d sectors=%d/8 maxNormalizedRadius=%.4f "
+            "model=%s fullModelCoverage=%s",
+            coverage.observationCount,
+            coverage.centralObservationCount,
+            coverage.peripheralObservationCount,
+            coverage.occupiedPeripheralSectors,
+            coverage.maximumNormalizedRadius,
+            baOpt.refineSharedHighOrderDistortion ? "full_brown" : "focal+k1",
+            coverage.supportsFullModel() ? "sufficient" : "weak_regularized");
+    }
     if (_sfmOptions.preserveCameraLayerDuringSelfCalibration &&
         BundleAdjust::isBackendAvailable(BABackend::CeresCpu))
     {
-        cameraPlaneBefore = estimateAerialCameraPlane(baCameras);
         if (cameraPlaneBefore.valid &&
             SfmBundleAdjustCoordinator::shouldPreserveCameraLayer(
                 localOnly,

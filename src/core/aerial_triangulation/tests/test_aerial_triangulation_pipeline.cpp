@@ -641,3 +641,18 @@ TEST(AerialTriangulationPipelineTest, RunsSfmAndWritesPreparedReconstruction)
         QStringLiteral("tie_point_graph_pair_count")).toInt(), 0);
     EXPECT_TRUE(QFile::exists(result.sparseCloudPath));
 }
+
+TEST(AerialTriangulationPipelineTest, FlagsParallelCurvedBlockWithoutAbsoluteControl)
+{
+    using xjw::aerial_triangulation::AerialTriangulationPipeline;
+    EXPECT_TRUE(AerialTriangulationPipeline::shouldFlagAerialDomingRisk(
+        true, 0.9706, 0.0740, false));
+    EXPECT_FALSE(AerialTriangulationPipeline::shouldFlagAerialDomingRisk(
+        true, 0.9706, 0.0740, true));
+    EXPECT_FALSE(AerialTriangulationPipeline::shouldFlagAerialDomingRisk(
+        true, 0.75, 0.0740, false));
+    EXPECT_FALSE(AerialTriangulationPipeline::shouldFlagAerialDomingRisk(
+        true, 0.9706, 0.02, false));
+    EXPECT_FALSE(AerialTriangulationPipeline::shouldFlagAerialDomingRisk(
+        false, 0.9706, 0.0740, false));
+}

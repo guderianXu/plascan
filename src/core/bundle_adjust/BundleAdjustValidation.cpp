@@ -248,9 +248,11 @@ BundleAdjustValidationResult validateAndNormalizeBundleAdjustOptions(
         return invalid(BASolveStatus::InvalidInput,
                        "BA 输入验证失败: 共享焦距宽高比范围非法");
     }
-    if (!std::isfinite(requestedOptions.maxSharedPrincipalPointOffsetFraction) ||
+    if (!std::isfinite(requestedOptions.sharedFocalPriorSigma) ||
+        !std::isfinite(requestedOptions.maxSharedPrincipalPointOffsetFraction) ||
         !std::isfinite(requestedOptions.sharedPrincipalPointPriorSigmaFraction) ||
         !std::isfinite(requestedOptions.sharedFocalAspectPriorSigma) ||
+        requestedOptions.sharedFocalPriorSigma <= 0.0 ||
         requestedOptions.maxSharedPrincipalPointOffsetFraction <= 0.0 ||
         requestedOptions.sharedPrincipalPointPriorSigmaFraction <= 0.0 ||
         requestedOptions.sharedFocalAspectPriorSigma <= 0.0)

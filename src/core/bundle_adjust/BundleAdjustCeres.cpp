@@ -931,6 +931,11 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                     parameter, 8, -options.maxSharedTangentialP2Abs);
                 problem.SetParameterUpperBound(
                     parameter, 8, options.maxSharedTangentialP2Abs);
+                if (!options.refineSharedHighOrderDistortion)
+                {
+                    constantIndices.insert(
+                        constantIndices.end(), {5, 6, 7, 8});
+                }
             }
             else
             {
@@ -972,7 +977,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                               sharedIntrinsicsParameters[groupIndex][6],
                               sharedIntrinsicsParameters[groupIndex][7],
                               sharedIntrinsicsParameters[groupIndex][8]}},
-                            {{1.0 / 0.35,
+                            {{1.0 / options.sharedFocalPriorSigma,
                               1.0 / aspectSigma,
                               1.0 / principalSigma,
                               1.0 / principalSigma,
@@ -1244,7 +1249,9 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
             {
                 std::vector<int> constantIndices =
                     sharedIntrinsicConstantIndices[groupIndex];
-                if (lowOrderDistortionOnly && options.refineSharedRadialDistortion)
+                if (options.refineSharedRadialDistortion &&
+                    (lowOrderDistortionOnly ||
+                     !options.refineSharedHighOrderDistortion))
                 {
                     constantIndices.insert(
                         constantIndices.end(), {5, 6, 7, 8});
@@ -1290,6 +1297,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                 totalIterationBudget - warmupIterations;
             const bool runLowOrderDistortionStage =
                 options.refineSharedRadialDistortion &&
+                options.refineSharedHighOrderDistortion &&
                 refinementIterations >= 6;
             lowOrderStageAttempted = runLowOrderDistortionStage;
             int refinementOffset = warmupIterations;
