@@ -3,6 +3,8 @@
 #include <QSet>
 
 #include <algorithm>
+#include <cstdint>
+#include <tuple>
 
 namespace xjw
 {
@@ -169,12 +171,71 @@ void addKnownCameraOverlapPairs(PairSelectionResult *result,
     }
 }
 
+std::uint64_t indexPairKey(int indexA, int indexB)
+{
+    const std::uint32_t first = static_cast<std::uint32_t>(std::min(indexA, indexB));
+    const std::uint32_t second = static_cast<std::uint32_t>(std::max(indexA, indexB));
+    return (static_cast<std::uint64_t>(first) << 32U) | static_cast<std::uint64_t>(second);
+}
+
+QSet<quint64> topOverlapPairKeysPerImage(const std::vector<OverlapPairResult> &pairs,
+                                         int imageCount,
+                                         int topK)
+{
+    QSet<quint64> selected;
+    if (topK <= 0 || imageCount <= 0)
+    {
+        return selected;
+    }
+
+    std::vector<std::vector<const OverlapPairResult *>> incident(
+        static_cast<std::size_t>(imageCount));
+    for (const OverlapPairResult &pair : pairs)
+    {
+        const bool validIndices = pair.indexA >= 0 && pair.indexB >= 0 &&
+            pair.indexA < imageCount && pair.indexB < imageCount && pair.indexA != pair.indexB;
+        if (!validIndices)
+        {
+            continue;
+        }
+        incident[static_cast<std::size_t>(pair.indexA)].push_back(&pair);
+        incident[static_cast<std::size_t>(pair.indexB)].push_back(&pair);
+    }
+
+    for (auto &neighbors : incident)
+    {
+        std::sort(neighbors.begin(), neighbors.end(), [](const auto *lhs, const auto *rhs)
+        {
+            if (lhs->overlapScore != rhs->overlapScore)
+            {
+                return lhs->overlapScore > rhs->overlapScore;
+            }
+            return std::tie(lhs->indexA, lhs->indexB) < std::tie(rhs->indexA, rhs->indexB);
+        });
+        const int keep = std::min(topK, static_cast<int>(neighbors.size()));
+        for (int index = 0; index < keep; ++index)
+        {
+            const auto *pair = neighbors[static_cast<std::size_t>(index)];
+            selected.insert(static_cast<quint64>(indexPairKey(pair->indexA, pair->indexB)));
+        }
+    }
+    return selected;
+}
+
 void addOverlapResultPairs(PairSelectionResult *result,
                            const QStringList &images,
-                           const OverlapAnalysisResult &overlapResult)
+                           const OverlapAnalysisResult &overlapResult,
+                           int topKPerImage)
 {
+    const QSet<quint64> selected = topOverlapPairKeysPerImage(
+        overlapResult.pairs, images.size(), topKPerImage);
     for (const OverlapPairResult &pair : overlapResult.pairs)
     {
+        if (topKPerImage > 0 &&
+            !selected.contains(static_cast<quint64>(indexPairKey(pair.indexA, pair.indexB))))
+        {
+            continue;
+        }
         PairCandidate *candidate = addOrUpdateCandidate(result,
                                                         images,
                                                         pair.indexA,
@@ -188,18 +249,70 @@ void addOverlapResultPairs(PairSelectionResult *result,
     }
 }
 
+QSet<quint64> topVocabularyPairKeysPerImage(
+    const std::vector<VocabularyOverlapPairResult> &pairs,
+    int imageCount,
+    int topK)
+{
+    QSet<quint64> selected;
+    if (topK <= 0 || imageCount <= 0)
+    {
+        return selected;
+    }
+
+    std::vector<std::vector<const VocabularyOverlapPairResult *>> incident(
+        static_cast<std::size_t>(imageCount));
+    for (const VocabularyOverlapPairResult &pair : pairs)
+    {
+        if (!pair.accepted || pair.indexA < 0 || pair.indexB < 0 ||
+            pair.indexA >= imageCount || pair.indexB >= imageCount || pair.indexA == pair.indexB)
+        {
+            continue;
+        }
+        incident[static_cast<std::size_t>(pair.indexA)].push_back(&pair);
+        incident[static_cast<std::size_t>(pair.indexB)].push_back(&pair);
+    }
+
+    for (auto &neighbors : incident)
+    {
+        std::sort(neighbors.begin(), neighbors.end(), [](const auto *lhs, const auto *rhs)
+        {
+            if (lhs->bowScore != rhs->bowScore)
+            {
+                return lhs->bowScore > rhs->bowScore;
+            }
+            return std::tie(lhs->indexA, lhs->indexB) < std::tie(rhs->indexA, rhs->indexB);
+        });
+        const int keep = std::min(topK, static_cast<int>(neighbors.size()));
+        for (int index = 0; index < keep; ++index)
+        {
+            const auto *pair = neighbors[static_cast<std::size_t>(index)];
+            selected.insert(static_cast<quint64>(indexPairKey(pair->indexA, pair->indexB)));
+        }
+    }
+    return selected;
+}
+
 void addVocabularyPairs(PairSelectionResult *result,
                         const QStringList &images,
-                        const VocabularyOverlapResult &vocabularyResult)
+                        const VocabularyOverlapResult &vocabularyResult,
+                        int topKPerImage)
 {
     // 优先使用 retriever 的 acceptedPairs。
     // 如果只有 candidates，则只保留 accepted=true 的候选，避免把被拒绝的诊断行
     // 静默变成真正要执行的匹配任务。
     const std::vector<VocabularyOverlapPairResult> &pairs =
         vocabularyResult.acceptedPairs.empty() ? vocabularyResult.candidates : vocabularyResult.acceptedPairs;
+    const QSet<quint64> selected = topVocabularyPairKeysPerImage(
+        pairs, images.size(), topKPerImage);
     for (const VocabularyOverlapPairResult &pair : pairs)
     {
         if (!pair.accepted)
+        {
+            continue;
+        }
+        if (topKPerImage > 0 &&
+            !selected.contains(static_cast<quint64>(indexPairKey(pair.indexA, pair.indexB))))
         {
             continue;
         }
@@ -437,13 +550,19 @@ PairSelectionResult PairSelector::select(const PairSelectionInput &input,
         addKnownCameraOverlapPairs(&result, input.images, input.knownCameraOverlapPairs);
         if (input.cameraOverlapResult)
         {
-            addOverlapResultPairs(&result, input.images, *input.cameraOverlapResult);
+            addOverlapResultPairs(&result,
+                                  input.images,
+                                  *input.cameraOverlapResult,
+                                  policy.cameraOverlapTopKPerImage);
         }
     }
 
     if (!manualOnly && policy.includeVocabularyOverlap && input.vocabularyOverlapResult)
     {
-        addVocabularyPairs(&result, input.images, *input.vocabularyOverlapResult);
+        addVocabularyPairs(&result,
+                           input.images,
+                           *input.vocabularyOverlapResult,
+                           policy.vocabularyTopKPerImage);
     }
 
     if (!manualOnly &&
@@ -492,10 +611,21 @@ PairSelectionResult PairSelector::select(const PairSelectionInput &input,
         result.restrictPairs = true;
     }
 
-    result.detail = QStringLiteral("影像 %1 张，候选对 %2/%3，%4")
+    const auto sourceCount = [&result](PairSource source)
+    {
+        return static_cast<int>(std::count_if(
+            result.candidates.cbegin(), result.candidates.cend(), [source](const PairCandidate &candidate)
+        {
+            return std::find(candidate.sources.cbegin(), candidate.sources.cend(), source) !=
+                candidate.sources.cend();
+        }));
+    };
+    result.detail = QStringLiteral("影像 %1 张，候选对 %2/%3，位姿 %4，词汇 %5，%6")
                         .arg(result.imageCount)
                         .arg(result.allowedPairKeys.size())
                         .arg(result.allPairCount)
+                        .arg(sourceCount(PairSource::CameraOverlap))
+                        .arg(sourceCount(PairSource::VocabularyOverlap))
                         .arg(result.restrictPairs ? QStringLiteral("限制匹配对")
                                                   : QStringLiteral("全量匹配"));
     return result;

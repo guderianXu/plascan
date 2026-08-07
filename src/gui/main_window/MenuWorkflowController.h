@@ -114,7 +114,8 @@ private:
                                                                   const QString &algorithmId = QString(),
                                                                   const std::function<void(int, int)> &progressCallback = {});
     QJsonObject sanitizeAerialTriangulationReferencePreselection(const QJsonObject &settings,
-                                                                const QStringList &images) const;
+                                                                const QStringList &images,
+                                                                const QJsonObject &projectMeta) const;
     DialogSettingStore *createDialogSettingStore(const QString &settingKey);
 
     /// 将工作流程高级设置与空三主对话框设置合并；主对话框字段优先。

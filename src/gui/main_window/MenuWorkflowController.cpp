@@ -75,12 +75,97 @@ bool isSequenceReferencePreselection(const QJsonObject &settings)
            source == QStringLiteral("photo_sequence");
 }
 
+QString normalizedReferencePreselectionSource(const QJsonObject &settings)
+{
+    const QString source = settings.value(QStringLiteral("reference_preselection_source"))
+                               .toString(QStringLiteral("source_code"))
+                               .trimmed()
+                               .toLower();
+    return source == QStringLiteral("estimated_pose") ? QStringLiteral("estimated") : source;
+}
+
+QMap<QString, xjw::Camera> referenceCamerasForMode(ProjectManager *projectManager,
+                                                   const QStringList &images,
+                                                   const QJsonObject &projectMeta,
+                                                   const QString &requestedMode,
+                                                   bool *hasCamerasForAll)
+{
+    if (hasCamerasForAll)
+    {
+        *hasCamerasForAll = false;
+    }
+    if (!projectManager)
+    {
+        return {};
+    }
+
+    bool loadedAll = false;
+    const QMap<QString, xjw::Camera> allCameras =
+        projectManager->getCamerasForImages(images, &loadedAll);
+    if (!loadedAll)
+    {
+        return {};
+    }
+
+    const QString mode = requestedMode.trimmed().toLower() == QStringLiteral("estimated_pose")
+        ? QStringLiteral("estimated")
+        : requestedMode.trimmed().toLower();
+    const QMap<QString, QJsonObject> imageMetaByPath =
+        xjw::common::project::projectImageMetaByPath(projectMeta, true);
+    const QJsonArray imageEntries = xjw::common::project::projectImageEntries(projectMeta);
+    QMap<QString, xjw::Camera> filtered;
+    for (const QString &imagePath : images)
+    {
+        const QString normalized = xjw::common::project::normalizePath(imagePath);
+        const auto cameraIt = allCameras.constFind(normalized);
+        if (cameraIt == allCameras.constEnd())
+        {
+            continue;
+        }
+
+        QJsonObject imageMeta = imageMetaByPath.value(normalized);
+        if (imageMeta.isEmpty())
+        {
+            // 运行时影像通常是已解析绝对路径，而持久化元数据可能仍是 plascan URI。
+            for (const QJsonValue &value : imageEntries)
+            {
+                const QJsonObject entry = value.toObject();
+                if (xjw::common::project::pathTokenMatchesImage(
+                        entry.value(QStringLiteral("path")).toString(), imagePath))
+                {
+                    imageMeta = entry;
+                    break;
+                }
+            }
+        }
+        const QString poseSource = imageMeta.value(QStringLiteral("camera"))
+                                       .toObject()
+                                       .value(QStringLiteral("pose_source"))
+                                       .toString()
+                                       .trimmed()
+                                       .toLower();
+        const bool sfmEstimated = poseSource == QStringLiteral("sfm_estimated");
+        if ((mode == QStringLiteral("estimated") && !sfmEstimated) ||
+            (mode == QStringLiteral("source_code") && sfmEstimated))
+        {
+            continue;
+        }
+        filtered.insert(normalized, cameraIt.value());
+    }
+
+    if (hasCamerasForAll)
+    {
+        *hasCamerasForAll = filtered.size() == images.size();
+    }
+    return filtered;
+}
+
 bool shouldUseStoredGeneratedPairConstraints(const QJsonObject &settings)
 {
-    if (isSequenceReferencePreselection(settings))
+    if (settings.value(QStringLiteral("reference_preselection")).toBool(false))
     {
-        // 照片序列是用户显式选择的配对先验。历史 generated_pairs 多来自词汇树/重叠预选，
-        // 不能在空三启动时继续作为硬白名单，否则会漏掉序列边和首尾附近的闭环边。
+        // 参考来源是用户本次显式选择的配对先验。历史 generated_pairs 多来自另一次
+        // 词汇树/重叠配置，不能继续作为 ManualOnly 白名单覆盖当前位姿或序列策略。
         return false;
     }
     return true;
@@ -1137,7 +1222,8 @@ QJsonObject MenuWorkflowController::mergeAerialTriangulationSettings(
 
 QJsonObject MenuWorkflowController::sanitizeAerialTriangulationReferencePreselection(
     const QJsonObject &requestedSettings,
-    const QStringList &images) const
+    const QStringList &images,
+    const QJsonObject &projectMeta) const
 {
     QJsonObject settings = requestedSettings;
     if (!settings.value(QStringLiteral("reference_preselection")).toBool(false))
@@ -1150,15 +1236,19 @@ QJsonObject MenuWorkflowController::sanitizeAerialTriangulationReferencePreselec
     }
 
     bool hasAllReferenceCameras = false;
-    const int cameraCount = _projectManager
-        ? _projectManager->getCamerasForImages(images, &hasAllReferenceCameras).size()
-        : 0;
+    const QString referenceMode = normalizedReferencePreselectionSource(settings);
+    const int cameraCount = referenceCamerasForMode(_projectManager,
+                                                    images,
+                                                    projectMeta,
+                                                    referenceMode,
+                                                    &hasAllReferenceCameras).size();
     const bool available =
         hasAllReferenceCameras && cameraCount == images.size() && images.size() >= 2;
     if (!available)
     {
         settings[QStringLiteral("reference_preselection")] = false;
-        LOG_WARN(QStringLiteral("空中三角测量: 项目相机文件不完整，参考预选已关闭（相机 %1/%2）。")
+        LOG_WARN(QStringLiteral("空中三角测量: %1 参考位姿不完整，参考预选已关闭（相机 %2/%3）。")
+                     .arg(referenceMode)
                      .arg(cameraCount)
                      .arg(images.size()));
     }
@@ -1226,7 +1316,7 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
 
     QJsonObject runSettings = settings;
     runSettings[QStringLiteral("output_dir")] = outputRoot;
-    runSettings = sanitizeAerialTriangulationReferencePreselection(runSettings, images);
+    runSettings = sanitizeAerialTriangulationReferencePreselection(runSettings, images, projectMeta);
     const QString selectedAlgorithmId =
         runSettings.value(QStringLiteral("algorithm_id"))
             .toString(QStringLiteral("sift_lightglue"))
@@ -1437,10 +1527,22 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
         workflowOptions.referenceMode.trimmed().toLower() != QStringLiteral("sequence"))
     {
         bool hasAllReferenceCameras = false;
-        workflowOptions.referenceCameras = pm->getCamerasForImages(images, &hasAllReferenceCameras);
+        workflowOptions.referenceCameras = referenceCamerasForMode(
+            pm,
+            images,
+            projectMeta,
+            workflowOptions.referenceMode,
+            &hasAllReferenceCameras);
         if (!hasAllReferenceCameras)
         {
-            LOG_WARN(QStringLiteral("空中三角测量: 参考预选已启用，但项目相机参考不完整"));
+            LOG_WARN(QStringLiteral("空中三角测量: 参考预选已启用，但 %1 位姿不完整")
+                         .arg(workflowOptions.referenceMode));
+        }
+        else
+        {
+            LOG_INFO(QStringLiteral("空中三角测量: 已加载 %1 个 %2 参考位姿用于候选对规划")
+                         .arg(workflowOptions.referenceCameras.size())
+                         .arg(workflowOptions.referenceMode));
         }
     }
 
@@ -1462,7 +1564,7 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
     }
     else if (!useStoredGeneratedPairs)
     {
-        LOG_INFO(QStringLiteral("空中三角测量: 照片序列预选已启用，SfM 跳过历史候选配对约束"));
+        LOG_INFO(QStringLiteral("空中三角测量: 参考预选已启用，跳过历史候选配对约束并按本次来源重新规划"));
     }
     else if (storedPairsStale)
     {

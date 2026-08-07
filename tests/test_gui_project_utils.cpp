@@ -9089,9 +9089,12 @@ TEST(AerialTriangulationWorkflowTest, ReferencePreselectionRequiresCompleteCamer
     ASSERT_GT(helperEnd, helperStart);
     const QString helperBody = source.mid(helperStart, helperEnd - helperStart);
     EXPECT_TRUE(helperBody.contains(QStringLiteral("settings[QStringLiteral(\"reference_preselection\")] = false")));
-    EXPECT_TRUE(helperBody.contains(QStringLiteral("getCamerasForImages(images, &hasAllReferenceCameras)")))
-        << "后端启动前也要重新检查相机文件，不能只依赖 UI。";
+    EXPECT_TRUE(helperBody.contains(QStringLiteral("referenceCamerasForMode")))
+        << "后端启动前也要按用户选择的位姿来源重新检查相机，不能只依赖 UI。";
     EXPECT_TRUE(helperBody.contains(QStringLiteral("参考预选已关闭")));
+    EXPECT_TRUE(source.contains(QStringLiteral("pose_source")));
+    EXPECT_TRUE(source.contains(QStringLiteral("sfm_estimated")))
+        << "“已估位姿”必须只接受上一轮 SfM 写回的相机位姿。";
 
     const int startEnd = source.indexOf(
         QStringLiteral("void MenuWorkflowController::runUnifiedAerialTriangulation"),
@@ -9099,7 +9102,7 @@ TEST(AerialTriangulationWorkflowTest, ReferencePreselectionRequiresCompleteCamer
     ASSERT_GT(startEnd, workflowStart);
     const QString startBody = source.mid(workflowStart, startEnd - workflowStart);
     EXPECT_TRUE(startBody.contains(
-        QStringLiteral("sanitizeAerialTriangulationReferencePreselection(runSettings, images)")));
+        QStringLiteral("sanitizeAerialTriangulationReferencePreselection(runSettings, images, projectMeta)")));
 }
 
 TEST(AerialTriangulationWorkflowTest, TiePointPreparationUsesUnifiedDeviceMapping)
@@ -9382,7 +9385,7 @@ TEST(AerialTriangulationWorkflowTest, SfmLaunchReusesGeneratedPairConstraints)
     EXPECT_TRUE(launchBody.contains(QStringLiteral("shouldUseStoredGeneratedPairConstraints(settings)")));
     EXPECT_TRUE(launchBody.contains(QStringLiteral("? loadGeneratedPairConstraints")));
     EXPECT_TRUE(launchBody.contains(QStringLiteral(": QStringList()")));
-    EXPECT_TRUE(launchBody.contains(QStringLiteral("照片序列预选已启用，SfM 跳过历史候选配对约束")));
+    EXPECT_TRUE(launchBody.contains(QStringLiteral("参考预选已启用，跳过历史候选配对约束")));
     EXPECT_TRUE(launchBody.contains(QStringLiteral("workflowOptions.restrictPairs = true")));
     EXPECT_TRUE(launchBody.contains(QStringLiteral("workflowOptions.allowedPairs = allowedPairs")));
     EXPECT_TRUE(launchBody.contains(QStringLiteral("storedPairsStale")));

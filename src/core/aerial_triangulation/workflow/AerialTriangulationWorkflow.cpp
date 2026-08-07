@@ -305,6 +305,14 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     }
     else if (options.referencePreselection && hasReference)
     {
+        // 已有相机位姿是候选规划的主先验。即使旧 SfM 已产生弯曲，或参考地面
+        // 估计过于宽松，也不能让重叠图退化为 O(N^2) 的近全量匹配。
+        const int referenceWindow = sequenceWindowForQuality(options.quality);
+        tieOptions.pairPolicy.cameraOverlapTopKPerImage = std::max(8, referenceWindow * 3);
+        // 通用预选只补充少量外观闭环；其余候选由位姿重叠负责。
+        tieOptions.pairPolicy.vocabularyTopKPerImage = options.genericPreselection
+            ? std::max(2, referenceWindow / 2)
+            : 0;
         pairPlanningMode = referenceMode;
     }
     else if (options.referencePreselection)
@@ -359,6 +367,10 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     settings.insert(QStringLiteral("loma_r_keypoint_budget"),
                     tieOptions.lomaRKeypointBudget);
     settings.insert(QStringLiteral("pair_planning_mode"), pairPlanningMode);
+    settings.insert(QStringLiteral("camera_overlap_top_k_per_image"),
+                    tieOptions.pairPolicy.cameraOverlapTopKPerImage);
+    settings.insert(QStringLiteral("vocabulary_top_k_per_image"),
+                    tieOptions.pairPolicy.vocabularyTopKPerImage);
     settings.insert(QStringLiteral("sequence_pair_window"), tieOptions.pairPolicy.sequenceWindow);
     settings.insert(QStringLiteral("sequence_loop_closure"), pipeline.sequenceLoopClosure);
     settings.insert(QStringLiteral("keypoint_limit"), options.keypointLimit);

@@ -173,6 +173,26 @@ TEST(AerialTriangulationWorkflowTest, SequenceModeOnlyChangesPairSelectionPolicy
     EXPECT_TRUE(resolved.pipelineInput.sequenceLoopClosure);
 }
 
+TEST(AerialTriangulationWorkflowTest, EstimatedPosePreselectionBoundsReferenceAndVocabularyPairs)
+{
+    QTemporaryDir tempDir;
+    auto options = makeBaseOptions(tempDir.path());
+    options.referencePreselection = true;
+    options.referenceMode = QStringLiteral("estimated");
+    options.genericPreselection = true;
+    options.quality = QStringLiteral("highest");
+    options.referenceCameras.insert(options.images.front(), xjw::Camera{});
+
+    const auto resolved =
+        xjw::aerial_triangulation::AerialTriangulationWorkflow::resolveConfig(options);
+
+    EXPECT_TRUE(resolved.tiePointOptions.useReferencePreselection);
+    EXPECT_EQ(resolved.tiePointOptions.pairPolicy.cameraOverlapTopKPerImage, 24);
+    EXPECT_EQ(resolved.tiePointOptions.pairPolicy.vocabularyTopKPerImage, 4);
+    EXPECT_EQ(resolved.resolvedSettings.value(QStringLiteral("pair_planning_mode")).toString(),
+              QStringLiteral("estimated"));
+}
+
 TEST(AerialTriangulationWorkflowTest, MissingTiePointsRunsMatchPhotosBeforePipeline)
 {
     QTemporaryDir tempDir;

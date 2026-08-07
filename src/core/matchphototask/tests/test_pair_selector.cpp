@@ -162,6 +162,53 @@ TEST(MatchPhotosPairSelectorTest, MergesOverlapAndVocabularyCandidates)
     EXPECT_DOUBLE_EQ(vocabulary->vocabularyScore, 0.5);
 }
 
+TEST(MatchPhotosPairSelectorTest, PoseAndVocabularyTopKKeepDenseInputsBounded)
+{
+    constexpr int imageCount = 12;
+    xjw::OverlapAnalysisResult cameraOverlap;
+    xjw::VocabularyOverlapResult vocabularyOverlap;
+    for (int indexA = 0; indexA < imageCount; ++indexA)
+    {
+        for (int indexB = indexA + 1; indexB < imageCount; ++indexB)
+        {
+            const double score = 1.0 / static_cast<double>(indexB - indexA);
+            xjw::OverlapPairResult overlapPair;
+            overlapPair.indexA = indexA;
+            overlapPair.indexB = indexB;
+            overlapPair.overlapScore = score;
+            cameraOverlap.pairs.push_back(overlapPair);
+
+            xjw::VocabularyOverlapPairResult vocabularyPair;
+            vocabularyPair.indexA = indexA;
+            vocabularyPair.indexB = indexB;
+            vocabularyPair.bowScore = score;
+            vocabularyPair.accepted = true;
+            vocabularyOverlap.acceptedPairs.push_back(vocabularyPair);
+        }
+    }
+
+    xjw::matchphotos::PairSelectionInput input;
+    input.images = makeImages(imageCount);
+    input.cameraOverlapResult = &cameraOverlap;
+    input.vocabularyOverlapResult = &vocabularyOverlap;
+
+    xjw::matchphotos::PairSelectionPolicy policy;
+    policy.exhaustiveMaxImages = 1;
+    policy.useSequenceFallback = false;
+    policy.cameraOverlapTopKPerImage = 2;
+    policy.vocabularyTopKPerImage = 1;
+
+    const xjw::matchphotos::PairSelectionResult result =
+        xjw::matchphotos::PairSelector::select(input, policy);
+
+    EXPECT_TRUE(result.restrictPairs);
+    EXPECT_EQ(result.allPairCount, 66);
+    EXPECT_LE(result.candidates.size(), static_cast<std::size_t>(imageCount * 3));
+    EXPECT_LT(result.candidates.size(), static_cast<std::size_t>(result.allPairCount));
+    EXPECT_NE(findPair(result.candidates, 0, 1), nullptr);
+    EXPECT_EQ(findPair(result.candidates, 0, imageCount - 1), nullptr);
+}
+
 TEST(MatchPhotosPairSelectorTest, AutoUsesPreselectionAndRepairsInsteadOfSmallSetExhaustive)
 {
     xjw::VocabularyOverlapResult vocabularyOverlap;

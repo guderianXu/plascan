@@ -42,6 +42,14 @@ struct PairSelectionPolicy
     bool includeCameraOverlap = true;
     bool includeVocabularyOverlap = true;
     bool useSequenceFallback = true;
+
+    // 0 表示不额外裁剪。参考位姿可能因错误地面模型或已有弯曲而把大部分影像
+    // 判为重叠；按每张影像的最高分邻居投票可以把候选规模稳定在 O(N * K)。
+    int cameraOverlapTopKPerImage = 0;
+
+    // 同时启用参考与通用预选时，词汇结果只应作为少量闭环补充，不能重新把
+    // 有界的位姿候选扩张成接近全量匹配。0 保持通用匹配工作流的既有行为。
+    int vocabularyTopKPerImage = 0;
 };
 
 PairSelectionPolicy makePairSelectionPolicy(PairSelectionPreset preset);
