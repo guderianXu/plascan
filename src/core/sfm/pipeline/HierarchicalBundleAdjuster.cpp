@@ -1,0 +1,311 @@
+#include "HierarchicalBundleAdjuster.h"
+
+#include "HierarchicalBaBlockSolver.h"
+#include "IncrementalSfm.h"
+#include "graph/CovisibilityPartitioner.h"
+
+#include "log/Logger.h"
+
+#include <algorithm>
+#include <chrono>
+#include <future>
+#include <thread>
+#include <unordered_map>
+#include <vector>
+
+namespace xjw
+{
+
+using hierarchical_ba_detail::BlockOutcome;
+using hierarchical_ba_detail::solveBlock;
+
+HierarchicalBundleAdjuster::HierarchicalBundleAdjuster(IncrementalSfm &owner)
+    : _owner(owner)
+{
+}
+
+bool HierarchicalBundleAdjuster::shouldRun(bool enabled,
+                                           int registeredImageCount,
+                                           int minimumImageCount,
+                                           bool refineCameraPose)
+{
+    return enabled && refineCameraPose && minimumImageCount >= 2 &&
+        registeredImageCount >= minimumImageCount;
+}
+
+int HierarchicalBundleAdjuster::resolveWorkerCount(int blockCount,
+                                                   int totalThreadCount,
+                                                   int configuredMaximum,
+                                                   bool concurrentBackendAvailable)
+{
+    if (blockCount <= 0)
+    {
+        return 0;
+    }
+    if (!concurrentBackendAvailable)
+    {
+        return 1;
+    }
+    const int total_threads = std::max(1, totalThreadCount);
+    const int configured_limit = configuredMaximum > 0
+        ? configuredMaximum
+        : total_threads;
+    return std::max(1, std::min({blockCount, total_threads, configured_limit}));
+}
+
+HierarchicalBaRunSummary HierarchicalBundleAdjuster::run()
+{
+    HierarchicalBaRunSummary summary;
+    const int registered_count = static_cast<int>(_owner._reconstruction->numRegisteredImages());
+    if (!shouldRun(_owner._sfmOptions.enableHierarchicalBA,
+                   registered_count,
+                   _owner._sfmOptions.hierarchicalBAMinImages,
+                   _owner._sfmOptions.baOptions.refineCameraPose))
+    {
+        return summary;
+    }
+    if (_owner._sfmOptions.useKnownCameraPoses || _owner._controlNetworkApplied ||
+        !_owner._pendingPriorTracks.empty() || !_owner._pendingPriorScaleBars.empty())
+    {
+        Logger::instance()->info(
+            "[BA] hierarchical skipped reason=absolute_or_manual_constraints_present");
+        return summary;
+    }
+
+    const int repeat_threshold = std::max(
+        2, _owner._sfmOptions.hierarchicalBATargetBlockSize / 2);
+    if (_owner._lastHierarchicalBAImageCount > 0 &&
+        registered_count - _owner._lastHierarchicalBAImageCount < repeat_threshold)
+    {
+        Logger::instance()->infof(
+            "[BA] hierarchical skipped reason=model_growth_too_small registered=%d previous=%d threshold=%d",
+            registered_count,
+            _owner._lastHierarchicalBAImageCount,
+            repeat_threshold);
+        return summary;
+    }
+
+    CovisibilityPartitionOptions partition_options;
+    partition_options.targetCoreSize = static_cast<std::size_t>(
+        std::max(2, _owner._sfmOptions.hierarchicalBATargetBlockSize));
+    partition_options.overlapSize = static_cast<std::size_t>(
+        std::max(2, _owner._sfmOptions.hierarchicalBAOverlapImages));
+    const std::vector<CovisibilityBlock> blocks = CovisibilityPartitioner::partition(
+        _owner._reconstruction->registeredImageIds(),
+        _owner._correspondenceGraph,
+        partition_options);
+    if (blocks.size() < 2)
+    {
+        return summary;
+    }
+
+    summary.attempted = true;
+    summary.plannedBlocks = static_cast<int>(blocks.size());
+    const auto started = std::chrono::steady_clock::now();
+    const unsigned int hardware_threads = std::max(1u, std::thread::hardware_concurrency());
+    const int total_threads = _owner._sfmOptions.baOptions.numThreads > 0
+        ? _owner._sfmOptions.baOptions.numThreads
+        : static_cast<int>(hardware_threads);
+    const bool ceres_available = BundleAdjust::isBackendAvailable(BABackend::CeresCpu);
+    const int worker_count = resolveWorkerCount(
+        static_cast<int>(blocks.size()),
+        total_threads,
+        _owner._sfmOptions.hierarchicalBAMaxConcurrentBlocks,
+        ceres_available);
+    const int threads_per_block = std::max(1, total_threads / worker_count);
+
+    BAOptions block_options = _owner._sfmOptions.baOptions;
+    block_options.maxIterations = std::clamp(
+        _owner._sfmOptions.hierarchicalBAMaxIterations,
+        1,
+        std::max(1, _owner._sfmOptions.baOptions.maxIterations));
+    Logger::instance()->infof(
+        "[BA] hierarchical start cameras=%d blocks=%zu targetCore=%zu overlap=%zu "
+        "workers=%d threadsPerBlock=%d backend=%s iterations=%d",
+        registered_count,
+        blocks.size(),
+        partition_options.targetCoreSize,
+        partition_options.overlapSize,
+        worker_count,
+        threads_per_block,
+        ceres_available ? "ceres_cpu" : BundleAdjust::backendName(block_options.backend),
+        block_options.maxIterations);
+
+    std::unordered_map<ImageId, std::size_t> core_owner;
+    for (std::size_t block_index = 0; block_index < blocks.size(); ++block_index)
+    {
+        for (ImageId image_id : blocks[block_index].coreImageIds)
+        {
+            core_owner[image_id] = block_index;
+        }
+    }
+    std::unordered_map<Point3DId, std::size_t> point_owner;
+    for (Point3DId point_id : _owner._reconstruction->allPoint3DIds())
+    {
+        const ScenePoint3D &point = _owner._reconstruction->point3D(point_id);
+        std::unordered_map<std::size_t, int> observations_per_block;
+        for (const TrackElement &element : point.track.elements)
+        {
+            const auto owner = core_owner.find(element.imageId);
+            if (owner != core_owner.end())
+            {
+                ++observations_per_block[owner->second];
+            }
+        }
+        std::size_t best_block = 0;
+        int best_count = 0;
+        for (const auto &[block_index, count] : observations_per_block)
+        {
+            if (count > best_count || (count == best_count && block_index < best_block))
+            {
+                best_block = block_index;
+                best_count = count;
+            }
+        }
+        if (best_count > 0)
+        {
+            point_owner[point_id] = best_block;
+        }
+    }
+
+    std::vector<BlockOutcome> outcomes;
+    outcomes.reserve(blocks.size());
+    bool continue_processing = true;
+    for (std::size_t first = 0; first < blocks.size(); first += worker_count)
+    {
+        const std::size_t end = std::min(blocks.size(), first + static_cast<std::size_t>(worker_count));
+        std::vector<std::future<BlockOutcome>> futures;
+        futures.reserve(end - first);
+        for (std::size_t block_index = first; block_index < end; ++block_index)
+        {
+            futures.push_back(std::async(
+                std::launch::async,
+                [&, block_index]()
+                {
+                    return solveBlock(block_index,
+                                      blocks[block_index],
+                                      *_owner._reconstruction,
+                                      block_options,
+                                      threads_per_block,
+                                      ceres_available);
+                }));
+        }
+        for (std::future<BlockOutcome> &future : futures)
+        {
+            try
+            {
+                outcomes.push_back(future.get());
+            }
+            catch (const std::exception &error)
+            {
+                Logger::instance()->warnf(
+                    "[BA] hierarchical block failed exception=%s", error.what());
+            }
+        }
+        Logger::instance()->infof(
+            "[BA] hierarchical progress completed=%zu/%zu",
+            end,
+            blocks.size());
+        if (block_options.progressCallback)
+        {
+            double rms_sum = 0.0;
+            int rms_count = 0;
+            int valid_points = 0;
+            for (const BlockOutcome &outcome : outcomes)
+            {
+                if (outcome.accepted)
+                {
+                    rms_sum += outcome.result.meanRmsAfter;
+                    ++rms_count;
+                    valid_points += outcome.result.optimizedTracks;
+                }
+            }
+            continue_processing = block_options.progressCallback(
+                static_cast<int>(end),
+                static_cast<int>(blocks.size()),
+                rms_count > 0 ? rms_sum / static_cast<double>(rms_count) : 0.0,
+                valid_points);
+            if (!continue_processing)
+            {
+                if (block_options.cancelFlag)
+                {
+                    block_options.cancelFlag->store(true);
+                }
+                break;
+            }
+        }
+    }
+
+    std::sort(outcomes.begin(), outcomes.end(), [](const BlockOutcome &left, const BlockOutcome &right)
+    {
+        return left.blockIndex < right.blockIndex;
+    });
+    for (const BlockOutcome &outcome : outcomes)
+    {
+        if (!outcome.accepted)
+        {
+            Logger::instance()->warnf(
+                "[BA] hierarchical block rejected block=%zu status=%s rms=%.6f->%.6f",
+                outcome.blockIndex,
+                BundleAdjust::solveStatusName(outcome.result.solveStatus),
+                outcome.result.meanRmsBefore,
+                outcome.result.meanRmsAfter);
+            continue;
+        }
+        ++summary.appliedBlocks;
+        std::unordered_map<ImageId, std::size_t> camera_index;
+        for (std::size_t index = 0; index < outcome.cameraIds.size(); ++index)
+        {
+            camera_index[outcome.cameraIds[index]] = index;
+        }
+        for (ImageId image_id : blocks[outcome.blockIndex].coreImageIds)
+        {
+            const auto index = camera_index.find(image_id);
+            if (index != camera_index.end() &&
+                index->second < outcome.result.refinedCameras.size())
+            {
+                _owner._reconstruction->camera(image_id) =
+                    outcome.result.refinedCameras[index->second];
+                ++summary.updatedCameras;
+            }
+        }
+        for (std::size_t index = 0;
+             index < outcome.pointIds.size() && index < outcome.result.points.size();
+             ++index)
+        {
+            const Point3DId point_id = outcome.pointIds[index];
+            const auto owner = point_owner.find(point_id);
+            const BARefinedPoint &refined = outcome.result.points[index];
+            if (owner == point_owner.end() || owner->second != outcome.blockIndex ||
+                !refined.valid || !_owner._reconstruction->hasPoint3D(point_id))
+            {
+                continue;
+            }
+            ScenePoint3D &point = _owner._reconstruction->point3D(point_id);
+            point.xyz = refined.point;
+            point.error = refined.rmsAfter;
+            ++summary.updatedPoints;
+        }
+    }
+
+    summary.totalSeconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - started).count();
+    if (summary.applied())
+    {
+        _owner._lastHierarchicalBAImageCount = registered_count;
+    }
+    _owner._lastHierarchicalBAPlannedBlocks = summary.plannedBlocks;
+    _owner._lastHierarchicalBAAppliedBlocks = summary.appliedBlocks;
+    _owner._lastHierarchicalBAUpdatedCameras = summary.updatedCameras;
+    _owner._lastHierarchicalBATotalSeconds = summary.totalSeconds;
+    Logger::instance()->infof(
+        "[BA] hierarchical result appliedBlocks=%d/%d cameras=%d points=%d totalSeconds=%.3f",
+        summary.appliedBlocks,
+        summary.plannedBlocks,
+        summary.updatedCameras,
+        summary.updatedPoints,
+        summary.totalSeconds);
+    return summary;
+}
+
+} // namespace xjw

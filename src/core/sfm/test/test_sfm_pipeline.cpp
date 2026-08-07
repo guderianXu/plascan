@@ -1101,6 +1101,10 @@ protected:
 // 1. 三幅图像增量式重建
 TEST_F(SfmPipelineTest, ThreeImageIncremental)
 {
+    opts.hierarchicalBAMinImages = 3;
+    opts.hierarchicalBATargetBlockSize = 2;
+    opts.hierarchicalBAOverlapImages = 2;
+    opts.hierarchicalBAMaxIterations = 2;
     Camera cam0 = makeCamera(0, 0, 0);
     Camera cam1 = makeCamera(10, 0, 0);
     Camera cam2 = makeCamera(20, 0, 0);
@@ -1136,10 +1140,13 @@ TEST_F(SfmPipelineTest, ThreeImageIncremental)
 
     auto result = sfm.run();
 
-    // 两幅图像初始化成功即可（第三幅注册取决于 PnP 结果）
     EXPECT_TRUE(result.success) << result.summary;
-    EXPECT_GE(result.numRegisteredImages, 2);
+    ASSERT_EQ(result.numRegisteredImages, 3);
     EXPECT_GT(result.numPoints3D, 0);
+    EXPECT_EQ(result.hierarchicalBAPlannedBlocks, 2);
+    EXPECT_GT(result.hierarchicalBAAppliedBlocks, 0);
+    EXPECT_GT(result.hierarchicalBAUpdatedCameras, 0);
+    EXPECT_GE(result.hierarchicalBATotalSeconds, 0.0);
 }
 
 TEST_F(SfmPipelineTest, FailedHighVisibilityImageIsRetriedAfterModelGrows)

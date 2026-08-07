@@ -89,6 +89,7 @@ target_include_directories(test_reference_terrain_prior PRIVATE
 )
 
 add_sfm_test(test_multiview_track_builder sfm_core)
+add_sfm_test(test_covisibility_partitioner sfm_core)
 add_sfm_test(test_observation_network_builder sfm_core)
 add_sfm_test(test_projection_geometry sfm_core)
 add_sfm_test(test_similarity_gauge_normalizer sfm_core)

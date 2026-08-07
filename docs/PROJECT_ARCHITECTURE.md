@@ -204,6 +204,7 @@ core/
 │   ├── geometry/               # 统一投影、三角化质量和 OpenCV 相机适配
 │   ├── graph/
 │   │   ├── CorrespondenceGraph.h/cpp      # 对应关系图
+│   │   ├── CovisibilityPartitioner.h/cpp  # 确定性加权共视图重叠分块
 │   │   └── ObservationNetworkBuilder.h/cpp # PlaPoint KDTree 观测网络构建
 │   ├── tracks/
 │   │   ├── MultiViewTrackBuilder.h/cpp     # 多视轨迹合并、冲突消解和长轨迹优先筛选
@@ -405,6 +406,11 @@ SfM、BA 和创建连接点阶段使用相同的每影像限额语义。焦距�
 `sfm/pipeline/SfmBundleAdjustCoordinator` 是空三调用 `bundle_adjust` 的正式入口。它构造局部或全局
 相机/轨迹问题、固定边界相机、转发进度，并只回写 `solutionUsable=true` 的结果。无绝对控制时，
 `SimilarityGaugeNormalizer` 在全局 BA 后恢复确定性锚点和初始基线尺度；有控制点或比例尺时由绝对约束接管规范。
+注册相机达到大型问题阈值后，`CovisibilityPartitioner` 按已验证匹配数划分唯一核心和重叠边界，
+`HierarchicalBundleAdjuster` 在总线程预算内并行执行块内 BA。重叠相机固定在同一进入坐标系，核心相机和
+三维点按唯一所有权写回；`HierarchicalBaBlockSolver` 负责单块问题装配、gauge 固定与质量门控。
+周期完整全局 BA 由该块级稳定化替代，最终只执行一次共享内参与块间接缝精化。
+该调度只依赖共视网络和计算规模，不按航测、转台、相机编号或轨迹形状推断场景。
 
 `bundle_adjust` 的 `native_cuda` 后端已接入统一 BA 接口和质量门控。当前实现把有效 Camera/BATrack
 观测扁平化为 CUDA 工作集，在固定相机投影下优化三维点块；能力表明确标记它不更新相机和共享焦距，

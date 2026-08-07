@@ -201,6 +201,10 @@ IncrementalSfmResult IncrementalSfm::runRegistrationFromCurrentInitialization(
     result.meanReprojError = _reconstruction->meanReprojError();
     result.reconstruction = _reconstruction;
     result.summary = _reconstruction->summary();
+    result.hierarchicalBAPlannedBlocks = _lastHierarchicalBAPlannedBlocks;
+    result.hierarchicalBAAppliedBlocks = _lastHierarchicalBAAppliedBlocks;
+    result.hierarchicalBAUpdatedCameras = _lastHierarchicalBAUpdatedCameras;
+    result.hierarchicalBATotalSeconds = _lastHierarchicalBATotalSeconds;
 
     if (!_permanentlyFailedImages.empty())
     {
@@ -336,6 +340,11 @@ void IncrementalSfm::resetForInitialPairTrial(const SfmReconstruction &baseRecon
     _lastGlobalBAObservationCount = 0;
     _lastGlobalBATotalSeconds = 0.0;
     _lastGlobalBABackendMessage.clear();
+    _lastHierarchicalBAImageCount = 0;
+    _lastHierarchicalBAPlannedBlocks = 0;
+    _lastHierarchicalBAAppliedBlocks = 0;
+    _lastHierarchicalBAUpdatedCameras = 0;
+    _lastHierarchicalBATotalSeconds = 0.0;
     _controlNetworkApplied = false;
     _controlNetworkResult = {};
     _controlNetworkTransform = {};

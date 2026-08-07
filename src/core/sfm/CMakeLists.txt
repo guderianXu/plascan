@@ -7,6 +7,7 @@ set(SFM_CORE_SOURCES
     geometry/OpenCvCameraAdapter.cpp
     geometry/SimilarityGaugeNormalizer.cpp
     graph/CorrespondenceGraph.cpp
+    graph/CovisibilityPartitioner.cpp
     graph/ObservationNetworkBuilder.cpp
     tracks/CorrespondenceTrackThinner.cpp
     tracks/MultiViewTrackBuilder.cpp
@@ -18,6 +19,8 @@ set(SFM_CORE_SOURCES
     pipeline/IncrementalSfmDetail.cpp
     pipeline/InitialPairInitializer.cpp
     pipeline/ImageRegistrationEngine.cpp
+    pipeline/HierarchicalBaBlockSolver.cpp
+    pipeline/HierarchicalBundleAdjuster.cpp
     pipeline/KnownPoseReconstructor.cpp
     pipeline/SfmBundleAdjustCoordinator.cpp
     ReferenceTerrainPrior.cpp
@@ -31,6 +34,7 @@ set(SFM_CORE_HEADERS
     geometry/OpenCvCameraAdapter.h
     geometry/SimilarityGaugeNormalizer.h
     graph/CorrespondenceGraph.h
+    graph/CovisibilityPartitioner.h
     graph/ObservationNetworkBuilder.h
     tracks/CorrespondenceTrackThinner.h
     tracks/MultiViewTrackBuilder.h
@@ -42,6 +46,8 @@ set(SFM_CORE_HEADERS
     pipeline/IncrementalSfmDetail.h
     pipeline/InitialPairInitializer.h
     pipeline/ImageRegistrationEngine.h
+    pipeline/HierarchicalBaBlockSolver.h
+    pipeline/HierarchicalBundleAdjuster.h
     pipeline/KnownPoseReconstructor.h
     pipeline/SfmBundleAdjustCoordinator.h
     ReferenceTerrainPrior.h

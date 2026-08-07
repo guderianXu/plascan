@@ -1,4 +1,5 @@
 #include "SfmBundleAdjustCoordinator.h"
+#include "HierarchicalBundleAdjuster.h"
 #include "IncrementalSfmDetail.h"
 #include "geometry/OpenCvCameraAdapter.h"
 #include "geometry/SimilarityGaugeNormalizer.h"
@@ -1211,9 +1212,69 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
 
 void IncrementalSfm::iterativeGlobalBA(bool finalRefinement)
 {
-    const int maxRounds = SfmBundleAdjustCoordinator::iterativeGlobalBaRoundLimit(
+    int maxRounds = SfmBundleAdjustCoordinator::iterativeGlobalBaRoundLimit(
         _sfmOptions.iterativeBARounds,
         finalRefinement);
+    const int registered_count = static_cast<int>(_reconstruction->numRegisteredImages());
+    const int repeat_threshold = std::max(2, _sfmOptions.hierarchicalBATargetBlockSize / 2);
+    const bool hierarchical_schedule_active = HierarchicalBundleAdjuster::shouldRun(
+        _sfmOptions.enableHierarchicalBA,
+        registered_count,
+        _sfmOptions.hierarchicalBAMinImages,
+        _sfmOptions.baOptions.refineCameraPose) &&
+        !_sfmOptions.useKnownCameraPoses && !_controlNetworkApplied &&
+        _pendingPriorTracks.empty() && _pendingPriorScaleBars.empty();
+    const bool recently_partitioned = hierarchical_schedule_active &&
+        _lastHierarchicalBAImageCount > 0 &&
+        registered_count - _lastHierarchicalBAImageCount < repeat_threshold;
+
+    if (_sfmOptions.filterNegativeDepth && hierarchical_schedule_active && !recently_partitioned)
+    {
+        const int negative_count = filterNegativeDepthPoints();
+        if (negative_count > 0)
+        {
+            Logger::instance()->infof(
+                "[SFM] HierarchicalBA filtered %d negative-depth points", negative_count);
+        }
+    }
+
+    const HierarchicalBaRunSummary hierarchical_summary =
+        hierarchical_schedule_active
+            ? HierarchicalBundleAdjuster(*this).run()
+            : HierarchicalBaRunSummary{};
+    if (hierarchical_summary.applied())
+    {
+        Triangulator hierarchical_tri(*_reconstruction, _correspondenceGraph);
+        const int retriangulated = hierarchical_tri.retriangulatePoints(
+            _sfmOptions.filterMaxReprojError);
+        hierarchical_tri.filterPoints(
+            _sfmOptions.filterMaxReprojError,
+            _sfmOptions.filterMinTriAngle);
+        hierarchical_tri.completeTracks(_sfmOptions.triangulatorOptions);
+        Logger::instance()->infof(
+            "[SFM] HierarchicalBA point-network reconciliation retriangulated=%d points=%zu",
+            retriangulated,
+            _reconstruction->numPoints3D());
+    }
+
+    if (hierarchical_schedule_active && !finalRefinement)
+    {
+        if (hierarchical_summary.applied() || recently_partitioned)
+        {
+            Logger::instance()->info(
+                "[SFM] Periodic full global BA replaced by hierarchical block stabilization");
+            return;
+        }
+        // 块求解真实失败时保留原全局 BA 回退，不让调度优化降低鲁棒性。
+    }
+    if (finalRefinement && (hierarchical_summary.applied() || recently_partitioned))
+    {
+        // 块内已经完成位姿/点网稳定化；只需一次全局求解统一共享内参与接缝。
+        maxRounds = 1;
+        Logger::instance()->info(
+            "[SFM] Final global BA limited to one seam-and-calibration refinement after hierarchical BA");
+    }
+
     size_t prevNumPoints = _reconstruction->numPoints3D();
     double previousFocalScale = std::numeric_limits<double>::quiet_NaN();
     double previousRadialK1 = std::numeric_limits<double>::quiet_NaN();

@@ -140,6 +140,18 @@ struct IncrementalSfmOptions
     int localBANumImages = 6;
     /// 全局 BA 执行间隔（注册图像数）
     int globalBAInterval = 10;
+    /// 大型共视网络是否使用“重叠块并行 BA + 最终全局接缝精化”。
+    bool enableHierarchicalBA = true;
+    /// 注册相机达到该规模后启用分层 BA；该阈值只用于计算调度，不推断场景类型。
+    int hierarchicalBAMinImages = 128;
+    /// 每个块独占的目标核心相机数。
+    int hierarchicalBATargetBlockSize = 64;
+    /// 每个块从相邻块借用并固定的最大边界相机数。
+    int hierarchicalBAOverlapImages = 12;
+    /// 块级 BA 最大迭代数。
+    int hierarchicalBAMaxIterations = 8;
+    /// 最大并发块数，0 表示按机器逻辑线程数和实际块数自动确定。
+    int hierarchicalBAMaxConcurrentBlocks = 0;
     /// BA 选项
     BAOptions baOptions;
     /// 共享内参自标定时，是否保留进入 BA 前每台相机相对参考层的法向偏移。
@@ -205,6 +217,10 @@ struct IncrementalSfmResult
     std::string summary;          ///< 可读结果摘要
     ImageId selectedInitialImageId1 = kInvalidImageId; ///< 最终采用的初始像对第一幅影像
     ImageId selectedInitialImageId2 = kInvalidImageId; ///< 最终采用的初始像对第二幅影像
+    int hierarchicalBAPlannedBlocks = 0; ///< 最近一次分层 BA 规划块数。
+    int hierarchicalBAAppliedBlocks = 0; ///< 最近一次通过质量门控并写回的块数。
+    int hierarchicalBAUpdatedCameras = 0; ///< 最近一次块级写回的核心相机数。
+    double hierarchicalBATotalSeconds = 0.0; ///< 最近一次分层 BA 总耗时。
 
     // ── 光束法平差统计（最终一轮全局 BA 的结果）──
     double baRmsBefore = 0.0;  ///< 最终 BA 前的平均重投影 RMS（px）
@@ -347,6 +363,7 @@ class IncrementalSfm
     friend class InitialPairInitializer;
     friend class KnownPoseReconstructor;
     friend class SfmBundleAdjustCoordinator;
+    friend class HierarchicalBundleAdjuster;
 
     IncrementalSfmOptions _sfmOptions;
 
@@ -390,6 +407,12 @@ class IncrementalSfm
     int _lastGlobalBAObservationCount = 0;
     double _lastGlobalBATotalSeconds = 0.0;
     std::string _lastGlobalBABackendMessage;
+    /// 上次成功执行分层 BA 时的已注册相机数，避免同一模型重复分块。
+    int _lastHierarchicalBAImageCount = 0;
+    int _lastHierarchicalBAPlannedBlocks = 0;
+    int _lastHierarchicalBAAppliedBlocks = 0;
+    int _lastHierarchicalBAUpdatedCameras = 0;
+    double _lastHierarchicalBATotalSeconds = 0.0;
     /// 航测平面稳定一旦在本次重建触发，后续全局 BA 继续保持，避免跨过阈值后
     /// 立即释放约束并在下一轮重新产生 dome/bowl。
 

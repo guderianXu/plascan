@@ -570,6 +570,14 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
     diagnostics.insert(QStringLiteral("ba_backend_fallback"), sfmResult.baBackendFallback);
     diagnostics.insert(QStringLiteral("ba_observations"), sfmResult.baObservationCount);
     diagnostics.insert(QStringLiteral("ba_total_seconds"), sfmResult.baTotalSeconds);
+    diagnostics.insert(QStringLiteral("hierarchical_ba_planned_blocks"),
+                       sfmResult.hierarchicalBAPlannedBlocks);
+    diagnostics.insert(QStringLiteral("hierarchical_ba_applied_blocks"),
+                       sfmResult.hierarchicalBAAppliedBlocks);
+    diagnostics.insert(QStringLiteral("hierarchical_ba_updated_cameras"),
+                       sfmResult.hierarchicalBAUpdatedCameras);
+    diagnostics.insert(QStringLiteral("hierarchical_ba_total_seconds"),
+                       sfmResult.hierarchicalBATotalSeconds);
     diagnostics.insert(QStringLiteral("ba_refined_intrinsic_count"),
                        sfmResult.baRefinedIntrinsicCount);
     diagnostics.insert(QStringLiteral("ba_shared_focal_scale"), sfmResult.baSharedFocalScale);
