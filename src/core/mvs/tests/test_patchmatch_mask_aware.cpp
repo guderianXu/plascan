@@ -5,10 +5,8 @@
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cmath>
 #include <cstdint>
-#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -123,25 +121,6 @@ double validRatio(const cv::Mat &depth, const cv::Mat &mask)
            static_cast<double>(std::max(1, cv::countNonZero(mask)));
 }
 
-std::optional<int> intelOpenClDeviceIndex()
-{
-    const std::vector<xjw::mvs::OpenClDeviceInfo> devices =
-        xjw::mvs::PatchMatchDepthEstimator::openClDevices();
-    const auto intel_device = std::find_if(
-        devices.cbegin(), devices.cend(), [](const xjw::mvs::OpenClDeviceInfo &device)
-        {
-            std::string vendor = device.vendor;
-            std::transform(vendor.begin(), vendor.end(), vendor.begin(), [](unsigned char character)
-            {
-                return static_cast<char>(std::tolower(character));
-            });
-            return vendor.find("intel") != std::string::npos;
-        });
-    return intel_device == devices.cend()
-        ? std::nullopt
-        : std::optional<int>(intel_device->index);
-}
-
 TEST(PatchMatchMaskAwareTest, CpuKeepsDepthInsideReferenceMaskOnly)
 {
     const EstimateResult result = estimateMaskedPlane(xjw::mvs::PatchMatchBackend::Cpu);
@@ -182,75 +161,88 @@ TEST(PatchMatchMaskAwareTest, CpuAndCudaApplyEquivalentMaskSemanticsWhenAvailabl
     EXPECT_EQ(cv::countNonZero(gpu_outside_depth > 0.0f), 0);
 }
 
-TEST(PatchMatchMaskAwareTest, IntelOpenClEstimatesMaskedPlaneWhenAvailable)
+TEST(PatchMatchMaskAwareTest, OpenClEstimatesMaskedPlaneWhenAvailable)
 {
-    const std::optional<int> device_index = intelOpenClDeviceIndex();
-    if (!device_index)
+    const std::vector<xjw::mvs::OpenClDeviceInfo> devices =
+        xjw::mvs::PatchMatchDepthEstimator::openClDevices();
+    if (devices.empty())
     {
-        GTEST_SKIP() << "Intel OpenCL GPU is unavailable";
+        GTEST_SKIP() << "OpenCL GPU is unavailable";
     }
 
-    const EstimateResult result = estimateMaskedPlane(
-        xjw::mvs::PatchMatchBackend::OpenCl, *device_index);
-    ASSERT_FALSE(result.depth.empty());
-    ASSERT_EQ(result.depth.type(), CV_32F);
-
-    const cv::Mat reference_mask = makeReferenceMask();
-    EXPECT_GT(validRatio(result.depth, reference_mask), 0.25);
-
-    cv::Mat outside_mask;
-    cv::bitwise_not(reference_mask, outside_mask);
-    cv::Mat outside_depth;
-    result.depth.copyTo(outside_depth, outside_mask);
-    EXPECT_EQ(cv::countNonZero(outside_depth > 0.0f), 0);
-
-    std::vector<float> valid_depths;
-    for (int row = 0; row < result.depth.rows; ++row)
+    for (const xjw::mvs::OpenClDeviceInfo &device : devices)
     {
-        for (int column = 0; column < result.depth.cols; ++column)
+        SCOPED_TRACE(device.vendor + " " + device.name);
+        const EstimateResult result = estimateMaskedPlane(
+            xjw::mvs::PatchMatchBackend::OpenCl, device.index);
+        ASSERT_FALSE(result.depth.empty());
+        ASSERT_EQ(result.depth.type(), CV_32F);
+
+        const cv::Mat reference_mask = makeReferenceMask();
+        EXPECT_GT(validRatio(result.depth, reference_mask), 0.25);
+
+        cv::Mat outside_mask;
+        cv::bitwise_not(reference_mask, outside_mask);
+        cv::Mat outside_depth;
+        result.depth.copyTo(outside_depth, outside_mask);
+        EXPECT_EQ(cv::countNonZero(outside_depth > 0.0f), 0);
+
+        std::vector<float> valid_depths;
+        for (int row = 0; row < result.depth.rows; ++row)
         {
-            const float depth = result.depth.at<float>(row, column);
-            if (reference_mask.at<std::uint8_t>(row, column) != 0 && depth > 0.0f)
+            for (int column = 0; column < result.depth.cols; ++column)
             {
-                valid_depths.push_back(depth);
+                const float depth = result.depth.at<float>(row, column);
+                if (reference_mask.at<std::uint8_t>(row, column) != 0 && depth > 0.0f)
+                {
+                    valid_depths.push_back(depth);
+                }
             }
         }
+        ASSERT_FALSE(valid_depths.empty());
+        const auto median = valid_depths.begin() + valid_depths.size() / 2;
+        std::nth_element(valid_depths.begin(), median, valid_depths.end());
+        EXPECT_NEAR(*median, kExpectedDepth, 1.0f);
     }
-    ASSERT_FALSE(valid_depths.empty());
-    const auto median = valid_depths.begin() + valid_depths.size() / 2;
-    std::nth_element(valid_depths.begin(), median, valid_depths.end());
-    EXPECT_NEAR(*median, kExpectedDepth, 1.0f);
 
     xjw::mvs::PatchMatchDepthEstimator::cleanupOpenClResources();
 }
 
-TEST(PatchMatchMaskAwareTest, IntelOpenClKeepsConcurrentFrameLanesIsolatedWhenAvailable)
+TEST(PatchMatchMaskAwareTest, OpenClConcurrentFrameLanesReuseBuffersWhenAvailable)
 {
-    const std::optional<int> device_index = intelOpenClDeviceIndex();
-    if (!device_index)
+    const std::vector<xjw::mvs::OpenClDeviceInfo> devices =
+        xjw::mvs::PatchMatchDepthEstimator::openClDevices();
+    if (devices.empty())
     {
-        GTEST_SKIP() << "Intel OpenCL GPU is unavailable";
+        GTEST_SKIP() << "OpenCL GPU is unavailable";
     }
 
-    std::array<EstimateResult, 2> results;
-    std::thread first([&]()
+    for (const xjw::mvs::OpenClDeviceInfo &device : devices)
     {
-        results[0] = estimateMaskedPlane(
-            xjw::mvs::PatchMatchBackend::OpenCl, *device_index);
-    });
-    std::thread second([&]()
-    {
-        results[1] = estimateMaskedPlane(
-            xjw::mvs::PatchMatchBackend::OpenCl, *device_index);
-    });
-    first.join();
-    second.join();
+        SCOPED_TRACE(device.vendor + " " + device.name);
+        std::array<EstimateResult, 4> results;
+        for (std::size_t round = 0; round < 2; ++round)
+        {
+            std::thread first([&, round]()
+            {
+                results[round * 2] = estimateMaskedPlane(
+                    xjw::mvs::PatchMatchBackend::OpenCl, device.index);
+            });
+            std::thread second([&, round]()
+            {
+                results[round * 2 + 1] = estimateMaskedPlane(
+                    xjw::mvs::PatchMatchBackend::OpenCl, device.index);
+            });
+            first.join();
+            second.join();
+        }
 
-    const cv::Mat reference_mask = makeReferenceMask();
-    for (const EstimateResult &result : results)
-    {
-        ASSERT_FALSE(result.depth.empty());
-        EXPECT_GT(validRatio(result.depth, reference_mask), 0.25);
+        const cv::Mat reference_mask = makeReferenceMask();
+        for (const EstimateResult &result : results)
+        {
+            ASSERT_FALSE(result.depth.empty());
+            EXPECT_GT(validRatio(result.depth, reference_mask), 0.25);
+        }
     }
     xjw::mvs::PatchMatchDepthEstimator::cleanupOpenClResources();
 }

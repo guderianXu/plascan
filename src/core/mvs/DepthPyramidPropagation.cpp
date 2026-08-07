@@ -1,9 +1,9 @@
 #include "DepthPyramidPropagation.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <utility>
-#include <vector>
 
 #include <opencv2/imgproc.hpp>
 
@@ -125,109 +125,119 @@ DepthSearchPrior propagateDepthPrior(const DepthLevelResult &parent,
     constexpr float kSpatialSigma = 1.2f;
     constexpr float kColorSigma = 24.0f;
 
-    for (int row = 0; row < target_size.height; ++row)
+    cv::parallel_for_(cv::Range(0, target_size.height), [&](const cv::Range &rows)
     {
-        for (int column = 0; column < target_size.width; ++column)
+        for (int row = rows.start; row < rows.end; ++row)
         {
-            const float parent_x = (column + 0.5f) * scale_x - 0.5f;
-            const float parent_y = (row + 0.5f) * scale_y - 0.5f;
-            const int base_column = static_cast<int>(std::floor(parent_x));
-            const int base_row = static_cast<int>(std::floor(parent_y));
-            const float target_guide = guide.at<float>(row, column);
-
-            float weight_sum = 0.0f;
-            float confidence_sum = 0.0f;
-            float uncertainty_sum = 0.0f;
-            float gradient_sum = 0.0f;
-            cv::Vec3f normal_sum(0.0f, 0.0f, 0.0f);
-            std::vector<std::pair<float, float>> weighted_depths;
-            weighted_depths.reserve(16);
-
-            for (int delta_row = -1; delta_row <= 2; ++delta_row)
+            for (int column = 0; column < target_size.width; ++column)
             {
-                for (int delta_column = -1; delta_column <= 2; ++delta_column)
+                const float parent_x = (column + 0.5f) * scale_x - 0.5f;
+                const float parent_y = (row + 0.5f) * scale_y - 0.5f;
+                const int base_column = static_cast<int>(std::floor(parent_x));
+                const int base_row = static_cast<int>(std::floor(parent_y));
+                const float target_guide = guide.at<float>(row, column);
+
+                float weight_sum = 0.0f;
+                float confidence_sum = 0.0f;
+                float uncertainty_sum = 0.0f;
+                float gradient_sum = 0.0f;
+                cv::Vec3f normal_sum(0.0f, 0.0f, 0.0f);
+                std::array<std::pair<float, float>, 16> weighted_depths;
+                std::size_t weighted_depth_count = 0;
+
+                for (int delta_row = -1; delta_row <= 2; ++delta_row)
                 {
-                    const int sample_row = base_row + delta_row;
-                    const int sample_column = base_column + delta_column;
-                    if (sample_row < 0 || sample_row >= parent.depth.rows ||
-                        sample_column < 0 || sample_column >= parent.depth.cols ||
-                        !isParentValid(parent, sample_row, sample_column))
+                    for (int delta_column = -1; delta_column <= 2; ++delta_column)
                     {
-                        continue;
+                        const int sample_row = base_row + delta_row;
+                        const int sample_column = base_column + delta_column;
+                        if (sample_row < 0 || sample_row >= parent.depth.rows ||
+                            sample_column < 0 || sample_column >= parent.depth.cols ||
+                            !isParentValid(parent, sample_row, sample_column))
+                        {
+                            continue;
+                        }
+
+                        const int guide_column = std::clamp(
+                            static_cast<int>(std::lround((sample_column + 0.5f) / scale_x - 0.5f)),
+                            0,
+                            target_size.width - 1);
+                        const int guide_row = std::clamp(
+                            static_cast<int>(std::lround((sample_row + 0.5f) / scale_y - 0.5f)),
+                            0,
+                            target_size.height - 1);
+                        const float spatial_distance =
+                            (sample_column - parent_x) * (sample_column - parent_x) +
+                            (sample_row - parent_y) * (sample_row - parent_y);
+                        const float color_difference =
+                            guide.at<float>(guide_row, guide_column) - target_guide;
+                        const float weight =
+                            std::exp(-spatial_distance / (2.0f * kSpatialSigma * kSpatialSigma)) *
+                            std::exp(-(color_difference * color_difference) /
+                                     (2.0f * kColorSigma * kColorSigma));
+
+                        const float depth = parent.depth.at<float>(sample_row, sample_column);
+                        const float confidence = parentConfidence(parent, sample_row, sample_column);
+                        weight_sum += weight;
+                        weighted_depths[weighted_depth_count++] = {depth, weight};
+                        confidence_sum += weight * confidence;
+                        uncertainty_sum +=
+                            weight * parentUncertainty(parent, sample_row, sample_column, depth);
+                        gradient_sum +=
+                            weight * localDepthGradient(parent, sample_row, sample_column, depth);
+                        if (!result.normalMap.empty())
+                        {
+                            normal_sum +=
+                                weight * parent.normalMap.at<cv::Vec3f>(sample_row, sample_column);
+                        }
                     }
+                }
 
-                    const int guide_column = std::clamp(
-                        static_cast<int>(std::lround((sample_column + 0.5f) / scale_x - 0.5f)),
-                        0,
-                        target_size.width - 1);
-                    const int guide_row = std::clamp(
-                        static_cast<int>(std::lround((sample_row + 0.5f) / scale_y - 0.5f)),
-                        0,
-                        target_size.height - 1);
-                    const float spatial_distance =
-                        (sample_column - parent_x) * (sample_column - parent_x) +
-                        (sample_row - parent_y) * (sample_row - parent_y);
-                    const float color_difference = guide.at<float>(guide_row, guide_column) - target_guide;
-                    const float weight = std::exp(-spatial_distance / (2.0f * kSpatialSigma * kSpatialSigma)) *
-                                         std::exp(-(color_difference * color_difference) /
-                                                  (2.0f * kColorSigma * kColorSigma));
+                if (weight_sum <= 1e-6f)
+                {
+                    continue;
+                }
 
-                    const float depth = parent.depth.at<float>(sample_row, sample_column);
-                    const float confidence = parentConfidence(parent, sample_row, sample_column);
-                    weight_sum += weight;
-                    weighted_depths.emplace_back(depth, weight);
-                    confidence_sum += weight * confidence;
-                    uncertainty_sum += weight * parentUncertainty(parent, sample_row, sample_column, depth);
-                    gradient_sum += weight * localDepthGradient(parent, sample_row, sample_column, depth);
-                    if (!result.normalMap.empty())
+                std::sort(weighted_depths.begin(),
+                          weighted_depths.begin() + weighted_depth_count,
+                          [](const auto &left, const auto &right)
+                          {
+                              return left.first < right.first;
+                          });
+                const float median_weight = 0.5f * weight_sum;
+                float accumulated_weight = 0.0f;
+                float center = weighted_depths[weighted_depth_count - 1].first;
+                for (std::size_t index = 0; index < weighted_depth_count; ++index)
+                {
+                    const auto &[depth, weight] = weighted_depths[index];
+                    accumulated_weight += weight;
+                    if (accumulated_weight >= median_weight)
                     {
-                        normal_sum += weight * parent.normalMap.at<cv::Vec3f>(sample_row, sample_column);
+                        center = depth;
+                        break;
                     }
                 }
-            }
+                const float confidence = std::max(0.1f, confidence_sum / weight_sum);
+                const float uncertainty = uncertainty_sum / weight_sum;
+                const float gradient_radius = 0.5f * gradient_sum / weight_sum;
+                result.center.at<float>(row, column) = center;
+                result.radius.at<float>(row, column) =
+                    std::max(uncertainty, gradient_radius) / confidence;
+                result.validMask.at<uint8_t>(row, column) = 255;
 
-            if (weight_sum <= 1e-6f)
-            {
-                continue;
-            }
-
-            std::sort(weighted_depths.begin(), weighted_depths.end(),
-                      [](const auto &left, const auto &right)
-                      {
-                          return left.first < right.first;
-                      });
-            const float median_weight = 0.5f * weight_sum;
-            float accumulated_weight = 0.0f;
-            float center = weighted_depths.back().first;
-            for (const auto &[depth, weight] : weighted_depths)
-            {
-                accumulated_weight += weight;
-                if (accumulated_weight >= median_weight)
+                if (!result.normalMap.empty())
                 {
-                    center = depth;
-                    break;
+                    cv::Vec3f normal = normal_sum * (1.0f / weight_sum);
+                    const float length = std::sqrt(normal.dot(normal));
+                    if (length > 1e-6f)
+                    {
+                        normal *= 1.0f / length;
+                    }
+                    result.normalMap.at<cv::Vec3f>(row, column) = normal;
                 }
-            }
-            const float confidence = std::max(0.1f, confidence_sum / weight_sum);
-            const float uncertainty = uncertainty_sum / weight_sum;
-            const float gradient_radius = 0.5f * gradient_sum / weight_sum;
-            result.center.at<float>(row, column) = center;
-            result.radius.at<float>(row, column) =
-                std::max(uncertainty, gradient_radius) / confidence;
-            result.validMask.at<uint8_t>(row, column) = 255;
-
-            if (!result.normalMap.empty())
-            {
-                cv::Vec3f normal = normal_sum * (1.0f / weight_sum);
-                const float length = std::sqrt(normal.dot(normal));
-                if (length > 1e-6f)
-                {
-                    normal *= 1.0f / length;
-                }
-                result.normalMap.at<cv::Vec3f>(row, column) = normal;
             }
         }
-    }
+    });
     return result;
 }
 
