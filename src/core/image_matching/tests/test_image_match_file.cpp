@@ -6,6 +6,7 @@
 
 #include <QFile>
 #include <QDataStream>
+#include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
 #include <QTemporaryDir>
@@ -322,6 +323,16 @@ TEST(ImageMatchFileTest, RejectsCorruptedPayload)
     ASSERT_TRUE(file.seek(file.size() - 1));
     ASSERT_EQ(file.write(&byte, 1), 1);
     file.close();
+
+    // 部分 Linux 文件系统会把两次相邻写入折叠到同一毫秒时间戳，而轻量索引
+    // 的快速失效键按毫秒保存。显式推进修改时间，使测试稳定覆盖“签名变化后
+    // 回退完整 SHA 校验”的契约，而不依赖主机文件系统的时间分辨率。
+    QFile timestampFile(path);
+    ASSERT_TRUE(timestampFile.open(QIODevice::ReadWrite));
+    ASSERT_TRUE(timestampFile.setFileTime(
+        QDateTime::currentDateTimeUtc().addSecs(1),
+        QFileDevice::FileModificationTime));
+    timestampFile.close();
 
     ImageMatchShard shard;
     QString error;
