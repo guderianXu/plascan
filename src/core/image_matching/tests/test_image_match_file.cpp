@@ -1,4 +1,5 @@
 #include "ImageMatchFile.h"
+#include "ImageMatchIndexFile.h"
 #include "ImageMatchRepository.h"
 
 #include <gtest/gtest.h>
@@ -6,6 +7,7 @@
 #include <QFile>
 #include <QDataStream>
 #include <QDir>
+#include <QFileInfo>
 #include <QTemporaryDir>
 
 #include <limits>
@@ -103,6 +105,169 @@ TEST(ImageMatchFileTest, RoundTripsOneShardWithResidualAndFlags)
     EXPECT_TRUE(hasFlag(block.matches.front().flags, MatchRecordFlag::InTiePointTrack));
 }
 
+TEST(ImageMatchIndexFileTest, RepositoryWritesCompactPersistentIndex)
+{
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+    const QString image0 = temporary.filePath(QStringLiteral("left.png"));
+    const QString image1 = temporary.filePath(QStringLiteral("right.png"));
+    ASSERT_TRUE(createImageFile(image0));
+    ASSERT_TRUE(createImageFile(image1));
+
+    ImageMatchRepository repository(temporary.filePath(QStringLiteral("matches")));
+    ASSERT_TRUE(repository.writePairs({samplePair(image0, image1)}, false).success);
+    const QString matchPath = repository.shardPath(image0);
+    const QString indexPath = ImageMatchIndexFile::pathForMatchFile(matchPath);
+    ASSERT_TRUE(QFileInfo::exists(indexPath));
+    EXPECT_LT(QFileInfo(indexPath).size(), QFileInfo(matchPath).size());
+
+    ImageMatchIndexFile::clearMemoryCache();
+    ImageMatchFileIndex index;
+    ImageMatchIndexLoadSource source = ImageMatchIndexLoadSource::RebuiltFromMatchFile;
+    QString error;
+    ASSERT_TRUE(ImageMatchIndexFile::load(matchPath, &index, &source, &error))
+        << error.toStdString();
+    EXPECT_EQ(source, ImageMatchIndexLoadSource::PersistentIndex);
+    EXPECT_EQ(index.owner.stableId, ImageMatchFile::stableImageId(image0));
+    ASSERT_EQ(index.neighbors.size(), 1U);
+    const ImageMatchNeighborIndex &neighbor = index.neighbors.front();
+    EXPECT_EQ(neighbor.peer.stableId, ImageMatchFile::stableImageId(image1));
+    EXPECT_EQ(neighbor.rawMatchCount, 2U);
+    EXPECT_EQ(neighbor.geometryInlierCount, 1U);
+    EXPECT_TRUE(neighbor.geometryPassed);
+    EXPECT_DOUBLE_EQ(neighbor.geometricCoverage, 1.0 / 16.0);
+}
+
+TEST(ImageMatchIndexFileTest, RebuildsMissingIndexAndThenUsesMemoryCache)
+{
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+    const QString image0 = temporary.filePath(QStringLiteral("left.png"));
+    const QString image1 = temporary.filePath(QStringLiteral("right.png"));
+    ASSERT_TRUE(createImageFile(image0));
+    ASSERT_TRUE(createImageFile(image1));
+
+    ImageMatchRepository repository(temporary.filePath(QStringLiteral("matches")));
+    ASSERT_TRUE(repository.writePairs({samplePair(image0, image1)}, false).success);
+    const QString matchPath = repository.shardPath(image0);
+    ASSERT_TRUE(ImageMatchIndexFile::removeForMatchFile(matchPath));
+    ImageMatchIndexFile::clearMemoryCache();
+
+    ImageMatchFileIndex rebuilt;
+    ImageMatchIndexLoadSource source = ImageMatchIndexLoadSource::PersistentIndex;
+    QString error;
+    ASSERT_TRUE(ImageMatchIndexFile::load(matchPath, &rebuilt, &source, &error))
+        << error.toStdString();
+    EXPECT_EQ(source, ImageMatchIndexLoadSource::RebuiltFromMatchFile);
+    EXPECT_TRUE(QFileInfo::exists(ImageMatchIndexFile::pathForMatchFile(matchPath)));
+
+    ImageMatchFileIndex cached;
+    ASSERT_TRUE(ImageMatchIndexFile::load(matchPath, &cached, &source, &error))
+        << error.toStdString();
+    EXPECT_EQ(source, ImageMatchIndexLoadSource::MemoryCache);
+    EXPECT_EQ(cached.sourceSignature, rebuilt.sourceSignature);
+}
+
+TEST(ImageMatchIndexFileTest, RebuildsIndexWithCorruptedChecksum)
+{
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+    const QString image0 = temporary.filePath(QStringLiteral("left.png"));
+    const QString image1 = temporary.filePath(QStringLiteral("right.png"));
+    ASSERT_TRUE(createImageFile(image0));
+    ASSERT_TRUE(createImageFile(image1));
+
+    ImageMatchRepository repository(temporary.filePath(QStringLiteral("matches")));
+    ASSERT_TRUE(repository.writePairs({samplePair(image0, image1)}, false).success);
+    const QString matchPath = repository.shardPath(image0);
+    QFile indexFile(ImageMatchIndexFile::pathForMatchFile(matchPath));
+    ASSERT_TRUE(indexFile.open(QIODevice::ReadWrite));
+    ASSERT_GT(indexFile.size(), 64);
+    ASSERT_TRUE(indexFile.seek(indexFile.size() - 1));
+    char byte = 0;
+    ASSERT_EQ(indexFile.read(&byte, 1), 1);
+    byte ^= 0x5a;
+    ASSERT_TRUE(indexFile.seek(indexFile.size() - 1));
+    ASSERT_EQ(indexFile.write(&byte, 1), 1);
+    indexFile.close();
+
+    ImageMatchIndexFile::clearMemoryCache();
+    ImageMatchFileIndex index;
+    ImageMatchIndexLoadSource source = ImageMatchIndexLoadSource::PersistentIndex;
+    QString error;
+    ASSERT_TRUE(ImageMatchIndexFile::load(matchPath, &index, &source, &error))
+        << error.toStdString();
+    EXPECT_EQ(source, ImageMatchIndexLoadSource::RebuiltFromMatchFile);
+    EXPECT_EQ(index.neighbors.size(), 1U);
+}
+
+TEST(ImageMatchIndexFileTest, RefreshesIndexWhenMatchShardChanges)
+{
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+    const QString image0 = temporary.filePath(QStringLiteral("left.png"));
+    const QString image1 = temporary.filePath(QStringLiteral("right.png"));
+    ASSERT_TRUE(createImageFile(image0));
+    ASSERT_TRUE(createImageFile(image1));
+
+    ImageMatchRepository repository(temporary.filePath(QStringLiteral("matches")));
+    PairMatchData first = samplePair(image0, image1);
+    ASSERT_TRUE(repository.writePairs({first}, false).success);
+    const QString matchPath = repository.shardPath(image0);
+    const QString indexPath = ImageMatchIndexFile::pathForMatchFile(matchPath);
+    QFile oldIndex(indexPath);
+    ASSERT_TRUE(oldIndex.open(QIODevice::ReadOnly));
+    const QByteArray staleIndexBytes = oldIndex.readAll();
+    oldIndex.close();
+    ASSERT_FALSE(staleIndexBytes.isEmpty());
+
+    PairMatchData second = first;
+    second.configFingerprint = QByteArrayLiteral("second-config");
+    second.rawMatchCount = 1;
+    second.correspondences.resize(1);
+    ASSERT_TRUE(repository.writePairs({second}, true).success);
+
+    // 模拟异常退出遗留的旧索引：源分片头部 payload SHA 已变化，读取器必须
+    // 拒绝旧索引并从权威 `.pimatch` 重建，而不能仅依赖文件名。
+    QFile staleIndex(indexPath);
+    ASSERT_TRUE(staleIndex.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    ASSERT_EQ(staleIndex.write(staleIndexBytes), staleIndexBytes.size());
+    staleIndex.close();
+
+    ImageMatchIndexFile::clearMemoryCache();
+    ImageMatchFileIndex index;
+    ImageMatchIndexLoadSource source = ImageMatchIndexLoadSource::RebuiltFromMatchFile;
+    QString error;
+    ASSERT_TRUE(ImageMatchIndexFile::load(matchPath,
+                                          &index,
+                                          &source,
+                                          &error)) << error.toStdString();
+    EXPECT_EQ(source, ImageMatchIndexLoadSource::RebuiltFromMatchFile);
+    EXPECT_EQ(index.neighbors.size(), 2U);
+}
+
+TEST(ImageMatchIndexFileTest, RepositoryClearRemovesMatchAndIndexFiles)
+{
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+    const QString image0 = temporary.filePath(QStringLiteral("left.png"));
+    const QString image1 = temporary.filePath(QStringLiteral("right.png"));
+    ASSERT_TRUE(createImageFile(image0));
+    ASSERT_TRUE(createImageFile(image1));
+
+    ImageMatchRepository repository(temporary.filePath(QStringLiteral("matches")));
+    ASSERT_TRUE(repository.writePairs({samplePair(image0, image1)}, false).success);
+    const QString matchPath = repository.shardPath(image0);
+    const QString indexPath = ImageMatchIndexFile::pathForMatchFile(matchPath);
+    ASSERT_TRUE(QFileInfo::exists(matchPath));
+    ASSERT_TRUE(QFileInfo::exists(indexPath));
+
+    QString error;
+    ASSERT_TRUE(repository.clear(&error)) << error.toStdString();
+    EXPECT_FALSE(QFileInfo::exists(matchPath));
+    EXPECT_FALSE(QFileInfo::exists(indexPath));
+}
+
 TEST(ImageMatchFileTest, ReadsPairFromEitherDirectedShard)
 {
     QTemporaryDir temporary;
@@ -161,6 +326,14 @@ TEST(ImageMatchFileTest, RejectsCorruptedPayload)
     ImageMatchShard shard;
     QString error;
     EXPECT_FALSE(ImageMatchFile::read(path, &shard, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("SHA-256")));
+
+    // 轻量索引仍以源文件大小和修改时间参与失效判断。payload 被外部改写后
+    // 不得继续信任旧 `.pidx`，回退到完整校验时应报告同一 SHA 错误。
+    ImageMatchIndexFile::clearMemoryCache();
+    ImageMatchFileIndex index;
+    error.clear();
+    EXPECT_FALSE(ImageMatchIndexFile::load(path, &index, nullptr, &error));
     EXPECT_TRUE(error.contains(QStringLiteral("SHA-256")));
 }
 

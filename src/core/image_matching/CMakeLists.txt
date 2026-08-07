@@ -23,6 +23,8 @@ add_library(image_matching STATIC
     FeatureSet.h
     ImageMatchFile.cpp
     ImageMatchFile.h
+    ImageMatchIndexFile.cpp
+    ImageMatchIndexFile.h
     ImageMatchRepository.cpp
     ImageMatchRepository.h
     ImageMatchTypes.cpp

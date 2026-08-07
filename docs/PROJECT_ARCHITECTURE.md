@@ -116,6 +116,7 @@ core/
 │   ├── FeatureSet.h/cpp        # 任务内关键点与描述子，不持久化
 │   ├── ImageMatchTypes.h/cpp   # 观测、邻接变体、置信度、残差和标志位
 │   ├── ImageMatchFile.h/cpp    # 逐影像 `.pimatch` v1 唯一二进制读写器
+│   ├── ImageMatchIndexFile.h/cpp # 与 payload 签名绑定的轻量 `.pidx` 邻接索引及增量缓存
 │   ├── ImageMatchRepository.h/cpp # 对称写入、完整指纹键缓存和按影像查询
 │   ├── sift/                   # CUDA SIFT 提取
 │   ├── lightglue/              # TensorRT LightGlue 固定桶推理与后处理

@@ -27,6 +27,24 @@ struct ImageMatchFileSummary
     std::uint64_t payloadBytes = 0;
 };
 
+/**
+ * @brief 不读取 payload 即可取得的容器签名。
+ *
+ * payloadSha256 同时承担持久化轻量索引的缓存失效键。索引读取只比较固定大小
+ * 容器头，不会为了判断缓存是否有效再次读取全部匹配坐标。
+ */
+struct ImageMatchFileSignature
+{
+    bool valid = false;
+    std::uint32_t formatVersion = 0;
+    std::uint64_t payloadBytes = 0;
+    std::uint64_t containerBytes = 0;
+    std::int64_t modifiedTimeMs = 0;
+    QByteArray payloadSha256;
+
+    bool operator==(const ImageMatchFileSignature &) const = default;
+};
+
 class ImageMatchFile
 {
 public:
@@ -46,6 +64,11 @@ public:
     static bool read(const QString &filePath,
                      ImageMatchShard *shard,
                      QString *errorMessage = nullptr);
+
+    /// 只读取并校验固定大小容器头，不加载或散列 payload。
+    static bool readSignature(const QString &filePath,
+                              ImageMatchFileSignature *signature,
+                              QString *errorMessage = nullptr);
 
     /// 读取轻量摘要。当前实现仍验证完整 payload，但不会构造所有匹配对象。
     static bool readSummary(const QString &filePath,

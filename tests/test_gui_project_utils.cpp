@@ -9256,6 +9256,28 @@ TEST(AerialTriangulationWorkflowTest, PreflightEmitsPrerequisiteReportAndRecomme
     EXPECT_TRUE(source.contains(QStringLiteral("创建连接点流程将自动提取特征并匹配")));
 }
 
+TEST(AerialTriangulationWorkflowTest, PreflightScansMatchCatalogOnceAndReportsFileProgress)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int summaryStart = source.indexOf(
+        QStringLiteral("MenuWorkflowController::summarizeSparsePrerequisites"));
+    ASSERT_GE(summaryStart, 0);
+    const int nextFunction = source.indexOf(
+        QStringLiteral("MenuWorkflowController::sanitizeAerialTriangulationReferencePreselection"),
+        summaryStart);
+    ASSERT_GT(nextFunction, summaryStart);
+    const QString summaryBody = source.mid(summaryStart, nextFunction - summaryStart);
+    EXPECT_EQ(summaryBody.count(QStringLiteral("MatchResultCatalog(catalogConfig).scan()")), 1)
+        << "Upstream inspection must not parse the same match directory twice.";
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("catalogConfig.progressCallback = progressCallback")));
+    EXPECT_TRUE(source.contains(QStringLiteral("检查上游匹配索引 %1/%2")));
+    EXPECT_TRUE(source.contains(QStringLiteral("QMetaObject::invokeMethod(pmGuard.data()")))
+        << "Worker progress must be delivered to ProjectManager on its owning thread.";
+}
+
 TEST(AerialTriangulationWorkflowTest, DoesNotAutoRematchWhenPrerequisitesArePresent)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));

@@ -1,14 +1,17 @@
 #include "preparation/MatchResultCatalog.h"
 
-#include "ImageMatchFile.h"
+#include "ImageMatchIndexFile.h"
 
 #include <QDir>
 #include <QFileInfo>
 #include <QMap>
+#include <QSet>
 
 #include <algorithm>
-#include <array>
-#include <cmath>
+#include <atomic>
+#include <future>
+#include <mutex>
+#include <thread>
 
 namespace xjw::aerial_triangulation
 {
@@ -24,36 +27,57 @@ QString normalizedPath(const QString &path)
     return value;
 }
 
-bool sameImage(const QString &left, const QString &right)
+struct TargetImageFilter
 {
-    return !left.trimmed().isEmpty() && normalizedPath(left) == normalizedPath(right);
-}
+    QString targetStableId;
+    QString targetNormalizedPath;
+    QSet<QString> targetStableIds;
+    QSet<QString> targetNormalizedPaths;
 
-bool imageInSet(const QString &image, const QStringList &set)
-{
-    if (set.isEmpty())
+    bool contains(const image_matching::ImageIdentity &identity) const
     {
-        return true;
+        return targetStableIds.contains(identity.stableId) ||
+            targetNormalizedPaths.contains(normalizedPath(identity.path));
     }
-    return std::any_of(set.cbegin(), set.cend(),
-                       [&](const QString &candidate)
-                       {
-                           return sameImage(image, candidate);
-                       });
-}
 
-bool pairPassesFilter(const QString &imageA,
-                      const QString &imageB,
-                      const MatchResultCatalogConfig &config)
-{
-    if (!config.targetImagePath.trimmed().isEmpty() &&
-        !sameImage(imageA, config.targetImagePath) &&
-        !sameImage(imageB, config.targetImagePath))
+    bool isTarget(const image_matching::ImageIdentity &identity) const
     {
-        return false;
+        return identity.stableId == targetStableId ||
+            normalizedPath(identity.path) == targetNormalizedPath;
     }
-    return imageInSet(imageA, config.targetImagePaths) &&
-           imageInSet(imageB, config.targetImagePaths);
+
+    bool accepts(const image_matching::ImageIdentity &owner,
+                 const image_matching::ImageIdentity &peer) const
+    {
+        if (!targetStableId.isEmpty() &&
+            !isTarget(owner) && !isTarget(peer))
+        {
+            return false;
+        }
+        return targetStableIds.isEmpty() ||
+            (contains(owner) && contains(peer));
+    }
+};
+
+TargetImageFilter makeTargetImageFilter(const MatchResultCatalogConfig &config)
+{
+    TargetImageFilter filter;
+    if (!config.targetImagePath.trimmed().isEmpty())
+    {
+        filter.targetStableId = image_matching::ImageMatchFile::stableImageId(
+            config.targetImagePath);
+        filter.targetNormalizedPath = normalizedPath(config.targetImagePath);
+    }
+    filter.targetStableIds.reserve(config.targetImagePaths.size());
+    for (const QString &path : config.targetImagePaths)
+    {
+        if (!path.trimmed().isEmpty())
+        {
+            filter.targetStableIds.insert(image_matching::ImageMatchFile::stableImageId(path));
+            filter.targetNormalizedPaths.insert(normalizedPath(path));
+        }
+    }
+    return filter;
 }
 
 QString variantKey(const MatchVariant &variant)
@@ -84,66 +108,16 @@ bool betterVariant(const MatchVariant &left, const MatchVariant &right)
     return left.modifiedTime > right.modifiedTime;
 }
 
-/**
- * @brief 统计几何内点在像面的空间覆盖率。
- *
- * 单纯依赖内点数量会高估集中在局部重复纹理上的像对。这里把两幅影像分别划分为
- * 4x4 网格，计算被几何内点覆盖的格子比例后取平均。坐标和内点标志均直接来自
- * `.pimatch`，无需重新读取影像、特征文件或运行几何验证。
- */
-double geometricGridCoverage(const image_matching::ImageMatchShard &shard,
-                             const image_matching::NeighborMatchBlock &block)
+int catalogWorkerCount(const MatchResultCatalogConfig &config, int fileCount)
 {
-    constexpr int gridColumns = 4;
-    constexpr int gridRows = 4;
-    std::array<bool, gridColumns * gridRows> ownerOccupied{};
-    std::array<bool, gridColumns * gridRows> peerOccupied{};
-
-    const float ownerWidth = static_cast<float>(std::max<std::uint32_t>(1U, shard.owner.width));
-    const float ownerHeight = static_cast<float>(std::max<std::uint32_t>(1U, shard.owner.height));
-    const float peerWidth = static_cast<float>(std::max<std::uint32_t>(1U, block.peer.width));
-    const float peerHeight = static_cast<float>(std::max<std::uint32_t>(1U, block.peer.height));
-
-    auto occupy = [](float x,
-                     float y,
-                     float width,
-                     float height,
-                     std::array<bool, gridColumns * gridRows> *grid)
+    if (fileCount <= 1)
     {
-        if (!grid || !std::isfinite(x) || !std::isfinite(y))
-        {
-            return;
-        }
-        const int column = std::clamp(
-            static_cast<int>(std::floor(x / width * gridColumns)), 0, gridColumns - 1);
-        const int row = std::clamp(
-            static_cast<int>(std::floor(y / height * gridRows)), 0, gridRows - 1);
-        (*grid)[static_cast<std::size_t>(row * gridColumns + column)] = true;
-    };
-
-    for (const image_matching::MatchRecord &match : block.matches)
-    {
-        if (!image_matching::hasFlag(match.flags,
-                                     image_matching::MatchRecordFlag::GeometryInlier))
-        {
-            continue;
-        }
-        const image_matching::KeypointObservation *owner =
-            block.findOwnerObservation(match.ownerFeatureId);
-        if (!owner)
-        {
-            continue;
-        }
-        occupy(owner->x, owner->y, ownerWidth, ownerHeight, &ownerOccupied);
-        occupy(match.peerX, match.peerY, peerWidth, peerHeight, &peerOccupied);
+        return std::max(0, fileCount);
     }
-
-    const auto occupiedRatio = [](const auto &grid)
-    {
-        return static_cast<double>(std::count(grid.cbegin(), grid.cend(), true)) /
-            static_cast<double>(grid.size());
-    };
-    return 0.5 * (occupiedRatio(ownerOccupied) + occupiedRatio(peerOccupied));
+    const int requested = config.maxConcurrency > 0
+        ? config.maxConcurrency
+        : static_cast<int>(std::max(1U, std::thread::hardware_concurrency()));
+    return std::clamp(requested, 1, std::min(8, fileCount));
 }
 
 void chooseBestVariant(MatchPairGroup *group)
@@ -208,32 +182,96 @@ MatchResultCatalogSummary MatchResultCatalog::scan() const
         QStringList{pattern}, QDir::Files, QDir::Name);
     summary.matchFileCount = files.size();
 
-    QMap<QString, MatchPairGroup> groups;
-    int processed = 0;
-    for (const QFileInfo &fileInfo : files)
+    struct LoadedIndex
     {
-        image_matching::ImageMatchShard shard;
-        QString readError;
-        if (!image_matching::ImageMatchFile::read(fileInfo.absoluteFilePath(),
-                                                   &shard,
-                                                   &readError))
+        bool valid = false;
+        image_matching::ImageMatchFileIndex index;
+        image_matching::ImageMatchIndexLoadSource source =
+            image_matching::ImageMatchIndexLoadSource::RebuiltFromMatchFile;
+    };
+
+    QVector<LoadedIndex> loaded(files.size());
+    std::atomic<int> nextFile{0};
+    int processedFiles = 0;
+    std::mutex progressMutex;
+    auto worker = [&]()
+    {
+        while (true)
+        {
+            const int fileIndex = nextFile.fetch_add(1, std::memory_order_relaxed);
+            if (fileIndex >= files.size())
+            {
+                break;
+            }
+            QString readError;
+            loaded[fileIndex].valid = image_matching::ImageMatchIndexFile::load(
+                files.at(fileIndex).absoluteFilePath(),
+                &loaded[fileIndex].index,
+                &loaded[fileIndex].source,
+                &readError);
+
+            {
+                const std::lock_guard<std::mutex> lock(progressMutex);
+                ++processedFiles;
+                if (_config.progressCallback)
+                {
+                    _config.progressCallback(processedFiles, files.size());
+                }
+            }
+        }
+    };
+
+    const int workerCount = catalogWorkerCount(_config, files.size());
+    if (workerCount == 1)
+    {
+        worker();
+    }
+    else
+    {
+        std::vector<std::future<void>> futures;
+        futures.reserve(static_cast<std::size_t>(workerCount));
+        for (int workerIndex = 0; workerIndex < workerCount; ++workerIndex)
+        {
+            futures.push_back(std::async(std::launch::async, worker));
+        }
+        for (auto &future : futures)
+        {
+            future.get();
+        }
+    }
+
+    QMap<QString, MatchPairGroup> groups;
+    const TargetImageFilter targetFilter = makeTargetImageFilter(_config);
+    for (int fileIndex = 0; fileIndex < files.size(); ++fileIndex)
+    {
+        const QFileInfo &fileInfo = files.at(fileIndex);
+        const LoadedIndex &file = loaded.at(fileIndex);
+        if (!file.valid)
         {
             ++summary.incompatibleVariantCount;
-            ++processed;
-            if (_config.progressCallback)
-            {
-                _config.progressCallback(processed, files.size());
-            }
             continue;
         }
-
-        for (const image_matching::NeighborMatchBlock &block : shard.neighbors)
+        switch (file.source)
         {
-            if (!pairPassesFilter(shard.owner.path, block.peer.path, _config))
+        case image_matching::ImageMatchIndexLoadSource::MemoryCache:
+            ++summary.memoryIndexHitCount;
+            break;
+        case image_matching::ImageMatchIndexLoadSource::PersistentIndex:
+            ++summary.persistentIndexHitCount;
+            break;
+        case image_matching::ImageMatchIndexLoadSource::RebuiltFromMatchFile:
+            ++summary.rebuiltIndexCount;
+            break;
+        }
+
+        const image_matching::ImageMatchFileIndex &index = file.index;
+        for (const image_matching::ImageMatchNeighborIndex &neighbor : index.neighbors)
+        {
+            if (!targetFilter.accepts(index.owner, neighbor.peer))
             {
                 continue;
             }
-            const QString pairKey = canonicalPairKey(shard.owner.path, block.peer.path);
+            const QString pairKey = canonicalPairKey(index.owner.path, neighbor.peer.path);
             if (pairKey.isEmpty())
             {
                 continue;
@@ -241,32 +279,34 @@ MatchResultCatalogSummary MatchResultCatalog::scan() const
 
             MatchPairGroup &group = groups[pairKey];
             group.pairKey = pairKey;
-            if (normalizedPath(shard.owner.path) <= normalizedPath(block.peer.path))
+            const bool ownerIsCanonical =
+                normalizedPath(index.owner.path) <= normalizedPath(neighbor.peer.path);
+            if (ownerIsCanonical)
             {
-                group.imageA = shard.owner.path;
-                group.imageB = block.peer.path;
+                group.imageA = index.owner.path;
+                group.imageB = neighbor.peer.path;
             }
             else
             {
-                group.imageA = block.peer.path;
-                group.imageB = shard.owner.path;
+                group.imageA = neighbor.peer.path;
+                group.imageB = index.owner.path;
             }
 
             MatchVariant candidate;
             candidate.imageA = group.imageA;
             candidate.imageB = group.imageB;
-            candidate.algorithmId = block.algorithmId;
-            candidate.algorithmVersion = block.algorithmVersion;
-            candidate.configFingerprint = block.configFingerprint;
+            candidate.algorithmId = neighbor.algorithmId;
+            candidate.algorithmVersion = neighbor.algorithmVersion;
+            candidate.configFingerprint = neighbor.configFingerprint;
             candidate.matchFilePath = fileInfo.absoluteFilePath();
             candidate.peerMatchFilePath = image_matching::ImageMatchFile::filePathForImage(
-                directory.absolutePath(), block.peer.path);
-            candidate.totalMatches = static_cast<int>(block.rawMatchCount);
+                directory.absolutePath(), neighbor.peer.path);
+            candidate.totalMatches = static_cast<int>(neighbor.rawMatchCount);
             candidate.geometricVerifiedInliers =
-                static_cast<int>(block.geometryInlierCount);
-            candidate.tiePointMatches = static_cast<int>(block.tiePointMatchCount);
-            candidate.geometricCoverage = geometricGridCoverage(shard, block);
-            candidate.geometryPassed = block.geometryPassed;
+                static_cast<int>(neighbor.geometryInlierCount);
+            candidate.tiePointMatches = static_cast<int>(neighbor.tiePointMatchCount);
+            candidate.geometricCoverage = neighbor.geometricCoverage;
+            candidate.geometryPassed = neighbor.geometryPassed;
             candidate.compatible = true;
             candidate.status = QStringLiteral("compatible");
             candidate.modifiedTime = fileInfo.lastModified();
@@ -282,18 +322,12 @@ MatchResultCatalogSummary MatchResultCatalog::scan() const
             {
                 group.variants.push_back(std::move(candidate));
             }
-            else if (sameImage(shard.owner.path, group.imageA))
+            else if (ownerIsCanonical)
             {
                 // 对称分片包含同一逻辑变体。固定选择规范 imageA 的分片，使目录
                 // 扫描顺序不会改变 GUI 选中的文件路径。
                 *existing = std::move(candidate);
             }
-        }
-
-        ++processed;
-        if (_config.progressCallback)
-        {
-            _config.progressCallback(processed, files.size());
         }
     }
 

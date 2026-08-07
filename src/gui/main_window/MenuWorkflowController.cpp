@@ -358,7 +358,8 @@ MenuWorkflowController::SparsePrerequisiteSummary
 MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
                                                      const QJsonObject &meta,
                                                      const QString &projectPath,
-                                                     const QString &algorithmId)
+                                                     const QString &algorithmId,
+                                                     const std::function<void(int, int)> &progressCallback)
 {
     SparsePrerequisiteSummary summary;
     summary.imageCount = images.size();
@@ -413,6 +414,24 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
     QSet<QString> matchedPairKeys;
     QVector<QPair<QString, QString>> matchedPairs;
 
+    xjw::aerial_triangulation::MatchResultCatalogSummary catalogSummary;
+    if (!projectPath.isEmpty())
+    {
+        xjw::aerial_triangulation::MatchResultCatalogConfig catalogConfig;
+        catalogConfig.matchDirectory =
+            xjw::common::project::ProjectIO::imageMatchOutputDir(projectPath);
+        catalogConfig.targetImagePaths = images;
+        catalogConfig.progressCallback = progressCallback;
+        catalogSummary = xjw::aerial_triangulation::MatchResultCatalog(catalogConfig).scan();
+        LOG_INFO(QStringLiteral(
+                     "空三上游索引: 分片=%1 内存命中=%2 持久索引命中=%3 首次重建=%4 损坏=%5")
+                     .arg(catalogSummary.matchFileCount)
+                     .arg(catalogSummary.memoryIndexHitCount)
+                     .arg(catalogSummary.persistentIndexHitCount)
+                     .arg(catalogSummary.rebuiltIndexCount)
+                     .arg(catalogSummary.incompatibleVariantCount));
+    }
+
     auto appendPreflightPair = [&](const QString &leftToken, const QString &rightToken)
     {
         const QStringList leftAliases = nameAliases(leftToken);
@@ -432,13 +451,8 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
         }
     };
 
-    if (!projectPath.isEmpty())
+    if (!catalogSummary.pairGroups.isEmpty())
     {
-        xjw::aerial_triangulation::MatchResultCatalogConfig catalogConfig;
-        catalogConfig.matchDirectory = xjw::common::project::ProjectIO::imageMatchOutputDir(projectPath);
-        catalogConfig.targetImagePaths = images;
-        const xjw::aerial_triangulation::MatchResultCatalogSummary catalogSummary =
-            xjw::aerial_triangulation::MatchResultCatalog(catalogConfig).scan();
         for (const xjw::aerial_triangulation::MatchPairGroup &group : catalogSummary.pairGroups)
         {
             for (const xjw::aerial_triangulation::MatchVariant &variant : group.variants)
@@ -497,16 +511,10 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
         }
     };
 
-    if (!projectPath.isEmpty())
+    if (!catalogSummary.pairGroups.isEmpty())
     {
         // 无匹配或几何失败也是 `.pimatch` 中的一种确定结果。它与有效匹配
         // 共用同一格式和版本，不再维护容易失同步的 no_match_pairs.json。
-        xjw::aerial_triangulation::MatchResultCatalogConfig catalogConfig;
-        catalogConfig.matchDirectory =
-            xjw::common::project::ProjectIO::imageMatchOutputDir(projectPath);
-        catalogConfig.targetImagePaths = images;
-        const auto catalogSummary =
-            xjw::aerial_triangulation::MatchResultCatalog(catalogConfig).scan();
         for (const auto &group : catalogSummary.pairGroups)
         {
             const auto settled = std::find_if(
@@ -1228,14 +1236,36 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
     emit pm->atProgressChanged(QStringLiteral("空中三角测量: 检查上游数据..."), 0);
 
     QPointer<ProjectManager> pmGuard(pm);
+    const auto preflightProgress = [pmGuard](int processed, int total)
+    {
+        if (!pmGuard)
+        {
+            return;
+        }
+        const int percent = total <= 0
+            ? 100
+            : qBound(0, static_cast<int>((static_cast<qint64>(processed) * 100) / total), 100);
+        QMetaObject::invokeMethod(pmGuard.data(), [pmGuard, processed, total, percent]()
+        {
+            if (pmGuard)
+            {
+                emit pmGuard->atProgressChanged(
+                    QStringLiteral("空中三角测量: 检查上游匹配索引 %1/%2")
+                        .arg(processed)
+                        .arg(total),
+                    percent);
+            }
+        }, Qt::QueuedConnection);
+    };
     xjw::gui::tasks::runGuardedWithOutcome(
         this,
-        [images, projectMeta, projectPath, selectedAlgorithmId]()
+        [images, projectMeta, projectPath, selectedAlgorithmId, preflightProgress]()
         {
             return MenuWorkflowController::summarizeSparsePrerequisites(images,
                                                                         projectMeta,
                                                                         projectPath,
-                                                                        selectedAlgorithmId);
+                                                                        selectedAlgorithmId,
+                                                                        preflightProgress);
         },
         [pmGuard, runSettings, images, session, projectMeta, outputRoot](
             MenuWorkflowController *controller,

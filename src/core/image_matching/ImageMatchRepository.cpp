@@ -1,5 +1,7 @@
 #include "ImageMatchRepository.h"
 
+#include "ImageMatchIndexFile.h"
+
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -491,6 +493,13 @@ ImageMatchWriteResult ImageMatchRepository::writePairReferences(
             result.errorMessage = writeError;
             return result;
         }
+        QString indexError;
+        if (!ImageMatchIndexFile::writeForShard(path, shard, &indexError))
+        {
+            // 索引是可重建的性能缓存，不能让已经原子提交成功的权威匹配结果失败。
+            // 删除可能残留的旧索引，使下一次目录扫描从 `.pimatch` 安全重建。
+            ImageMatchIndexFile::removeForMatchFile(path);
+        }
         result.writtenFiles.append(path);
     }
 
@@ -513,9 +522,35 @@ bool ImageMatchRepository::clear(QString *errorMessage) const
     for (const QString &fileName : files)
     {
         const QString path = directory.filePath(fileName);
-        if (!QFile::remove(path))
+        const bool matchRemoved = QFile::remove(path);
+        const bool indexRemoved = ImageMatchIndexFile::removeForMatchFile(path);
+        if (!matchRemoved)
         {
             failed.append(path);
+        }
+        if (!indexRemoved)
+        {
+            failed.append(ImageMatchIndexFile::pathForMatchFile(path));
+        }
+    }
+    const QString indexPattern = QStringLiteral("*") +
+        QString::fromLatin1(kImageMatchFileSuffix) +
+        QString::fromLatin1(kImageMatchIndexFileSuffix);
+    const QStringList orphanIndexes = directory.entryList(
+        {indexPattern}, QDir::Files, QDir::Name);
+    for (const QString &fileName : orphanIndexes)
+    {
+        const QString path = directory.filePath(fileName);
+        if (!QFile::remove(path))
+        {
+            if (!failed.contains(path))
+            {
+                failed.append(path);
+            }
+        }
+        else
+        {
+            failed.removeAll(path);
         }
     }
     if (failed.isEmpty())
