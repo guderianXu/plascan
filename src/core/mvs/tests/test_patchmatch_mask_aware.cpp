@@ -1,4 +1,5 @@
 #include "PatchMatchCUDA.h"
+#include "PatchMatchOpenCLKernels.h"
 #include "PatchMatchPhotometricCost.h"
 
 #include <gtest/gtest.h>
@@ -9,10 +10,25 @@
 #include <cstdint>
 #include <string>
 #include <thread>
+#include <string>
 #include <vector>
 
 namespace
 {
+
+TEST(PatchMatchOpenClKernelContractTest, UsesLocalReferenceTileAndCoarseToFineSearch)
+{
+    const std::string prefix = xjw::mvs::detail::kPatchMatchOpenClSourcePrefix;
+    const std::string main = xjw::mvs::detail::kPatchMatchOpenClSourceMain;
+
+    EXPECT_NE(prefix.find("native_rsqrt"), std::string::npos);
+    EXPECT_NE(main.find("__local float reference_tile"), std::string::npos);
+    EXPECT_NE(main.find("barrier(CLK_LOCAL_MEM_FENCE)"), std::string::npos);
+    EXPECT_NE(main.find("coarse_samples = clamp((depth_sample_count + 1) / 2, 16, 48)"),
+              std::string::npos);
+    EXPECT_NE(main.find("refinement_samples = clamp(depth_sample_count / 4, 6, 16)"),
+              std::string::npos);
+}
 
 constexpr int kWidth = 64;
 constexpr int kHeight = 48;
@@ -208,7 +224,7 @@ TEST(PatchMatchMaskAwareTest, OpenClEstimatesMaskedPlaneWhenAvailable)
     xjw::mvs::PatchMatchDepthEstimator::cleanupOpenClResources();
 }
 
-TEST(PatchMatchMaskAwareTest, OpenClConcurrentWorkersReuseTwoExecutionLanesWhenAvailable)
+TEST(PatchMatchMaskAwareTest, OpenClConcurrentWorkersSerializeAndReuseCachedInputs)
 {
     const std::vector<xjw::mvs::OpenClDeviceInfo> devices =
         xjw::mvs::PatchMatchDepthEstimator::openClDevices();

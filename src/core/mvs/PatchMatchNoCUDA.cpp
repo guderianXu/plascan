@@ -23,6 +23,16 @@ int PatchMatchDepthEstimator::cudaDeviceCount()
     return 0;
 }
 
+std::string PatchMatchDepthEstimator::cudaDeviceName(int)
+{
+    return {};
+}
+
+std::string PatchMatchDepthEstimator::cudaDeviceIdentity(int)
+{
+    return {};
+}
+
 void PatchMatchDepthEstimator::cleanupGpuImageCache()
 {
     // 无 CUDA 构建中无缓存，空操作

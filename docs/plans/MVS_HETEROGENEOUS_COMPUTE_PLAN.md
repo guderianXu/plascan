@@ -64,11 +64,13 @@ CPU 不通过 OpenCL 执行。现有 C++/OpenMP 路径没有 JIT、驱动与主�
 - worker 池先为每块物理 GPU 保留一个执行来源，再增加同设备主机准备槽。CUDA + OpenCL 默认场景下，
   两块设备都会参与，同时为 CUDA 增加第二个主机槽，使下一帧的 CPU 准备和灰度图上传与当前帧 kernel
   重叠，不因加入核显而退回单槽 CUDA 流水线。
-- 每块 CUDA GPU 仍只有一个设备执行槽，避免共享 constant memory 和 workspace 发生竞争；第二个 CUDA
-  帧槽负责提前准备和上传下一帧。每块 OpenCL GPU 则使用共享 context/program 下的两个独立 command queue
-  和 kernel 对象，既避免 `clSetKernelArg` 竞争，也允许下一帧在上一帧回读前进入驱动队列。
-- 灰度缩放、相机/蒙版打包、buffer 创建以及 OpenCV 后处理不占用 OpenCL lane。影像预加载阶段还缓存
-  正深度归一化和去畸变后的 MVS 影像/相机，避免同一影像作为不同帧的参考或源视图时重复做 CPU remap。
+- 每块 CUDA/OpenCL GPU 都只有一个设备执行槽，避免 kernel、显存带宽和核显共享内存过度竞争；第二个
+  主机帧槽只负责提前准备下一帧。OpenCL 共享 context/program，但只创建一个 command queue/kernel。
+- OpenCL 按输入影像存储身份与工作分辨率缓存缩放后的 float 影像，并复用全部输入/输出 buffer；参考
+  patch 由 work-group 协作载入 local memory，深度假设采用粗到细搜索。相机/蒙版打包和 OpenCV 后处理
+  仍在执行槽外完成。
+- 深度估计开始前按 PCI 物理设备标识获取跨进程租约。同一 GPU 已被其它 PlaScan GUI/CLI 占用时明确
+  拒绝启动，不等待也不回退 CPU；OpenCL 运行失败同样直接报告，避免设备标签与真实执行后端不一致。
 - 进度中的“物理 GPU”只统计真实 CUDA/OpenCL 设备；重复的主机准备/执行 lane 单独显示为“活跃 GPU
   帧槽”，不再把 `CUDA×2 + OpenCL×1/2` 误报为三块或四块显卡。
 - CUDA 日志记录 `prepare/wait/gpu_slot/post/total`，OpenCL 日志记录
@@ -79,5 +81,6 @@ CPU 不通过 OpenCL 执行。现有 C++/OpenMP 路径没有 JIT、驱动与主�
 ## 可行性结论
 
 项目已具备可运行的跨厂商 OpenCL GPU 深度估计和 CPU/CUDA/OpenCL 帧级异构调度。首期 OpenCL 路径
-采用独立的并行深度假设搜索，并未逐行翻译 CUDA 的传播、法向与几何一致性 kernel；因此后续重点是
-用真实航测/环拍数据做质量和吞吐基准，再按收益补充更复杂的传播与设备缓冲复用。
+采用独立的并行深度假设搜索，并未逐行翻译 CUDA 的传播、法向与几何一致性 kernel；当前已加入有界
+输入缓存、持久 buffer、local-memory patch 分块和粗到细搜索。后续仍需用真实航测/环拍数据持续做质量
+与吞吐基准，再按收益补充更复杂的传播。

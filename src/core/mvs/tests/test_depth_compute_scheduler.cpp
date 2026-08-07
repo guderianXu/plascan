@@ -1,6 +1,10 @@
 #include "DepthComputeScheduler.h"
+#include "GpuDeviceLease.h"
 
 #include <gtest/gtest.h>
+
+#include <QCoreApplication>
+#include <QDateTime>
 
 #include <atomic>
 #include <mutex>
@@ -14,7 +18,10 @@ using xjw::mvs::DepthComputeBackend;
 using xjw::mvs::DepthComputeScheduler;
 using xjw::mvs::DepthComputeWorker;
 using xjw::mvs::DepthFrameTask;
+using xjw::mvs::GpuDeviceDescriptor;
+using xjw::mvs::GpuDeviceLeaseSet;
 using xjw::mvs::buildDepthComputeWorkerPool;
+using xjw::mvs::fallbackGpuPhysicalIdentity;
 
 TEST(DepthComputeSchedulerTest, ReturnsHighestPriorityFrameFirst)
 {
@@ -79,7 +86,7 @@ TEST(DepthComputeSchedulerTest, UsesStableOpenClWorkerName)
     EXPECT_EQ(opencl_worker.id(), "OpenCL:2");
 }
 
-TEST(DepthComputeSchedulerTest, GivesMixedOpenClBackendAnExtraPreparationWorker)
+TEST(DepthComputeSchedulerTest, CapsMixedOpenClBackendAtOnePreparationWorker)
 {
     const std::vector<DepthComputeWorker> physical_workers = {
         {DepthComputeBackend::Cuda, 0},
@@ -88,11 +95,36 @@ TEST(DepthComputeSchedulerTest, GivesMixedOpenClBackendAnExtraPreparationWorker)
     const std::vector<DepthComputeWorker> workers = buildDepthComputeWorkerPool(
         physical_workers, 1, 3, 4);
 
-    ASSERT_EQ(workers.size(), 4U);
+    ASSERT_EQ(workers.size(), 3U);
     EXPECT_EQ(workers[0].id(), "CUDA:0");
     EXPECT_EQ(workers[1].id(), "OpenCL:1");
     EXPECT_EQ(workers[2].id(), "OpenCL:1");
-    EXPECT_EQ(workers[3].id(), "OpenCL:1");
+}
+
+TEST(GpuDeviceLeaseTest, PreventsConcurrentProcessLeaseForSamePhysicalDevice)
+{
+    const std::string identity = "test-gpu-" + std::to_string(
+        QCoreApplication::applicationPid()) + "-" + std::to_string(
+        QDateTime::currentMSecsSinceEpoch());
+    const std::vector<GpuDeviceDescriptor> devices = {{identity, "Test GPU"}};
+
+    GpuDeviceLeaseSet first;
+    QString error;
+    ASSERT_TRUE(first.acquire(devices, &error)) << error.toStdString();
+
+    GpuDeviceLeaseSet second;
+    EXPECT_FALSE(second.acquire(devices, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("Test GPU")));
+}
+
+TEST(GpuDeviceLeaseTest, NormalizesFallbackIdentityDeterministically)
+{
+    EXPECT_EQ(fallbackGpuPhysicalIdentity("Advanced Micro Devices, Inc.",
+                                          "AMD Radeon(TM) Graphics",
+                                          0),
+              fallbackGpuPhysicalIdentity("Advanced Micro Devices, Inc.",
+                                          "AMD Radeon(TM) Graphics",
+                                          0));
 }
 
 TEST(DepthComputeSchedulerTest, AddsOpenClPreparationLaneWhenCudaIsUnavailable)

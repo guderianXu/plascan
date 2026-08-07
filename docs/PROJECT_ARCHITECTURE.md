@@ -254,6 +254,7 @@ core/
 │   ├── PatchMatchOpenCLKernels.h # OpenCL C 1.2 多源 NCC/深度细化 kernel
 │   ├── PatchMatchNoOpenCL.cpp   # 无 OpenCL 构建的稳定接口存根
 │   ├── DepthComputeScheduler.h/cpp # CPU/CUDA/OpenCL 统一 worker 与优先级帧调度
+│   ├── GpuDeviceLease.h/cpp     # 按 PCI 物理设备标识实施跨 GUI/CLI 进程的 GPU 独占租约
 │   ├── DepthMapGenerator.h/cpp # 深度图估计、取消检查、raw depth/confidence/几何支持度/valid mask 写盘
 │   ├── DepthMapFusion.h/cpp    # 深度图融合 → 密集点云，支持 manifest source plan 和流式融合
 │   ├── DepthFrameUtils.h/cpp   # 深度帧存储与按指定输出目录选择批次

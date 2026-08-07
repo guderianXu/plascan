@@ -66,6 +66,8 @@ TEST(PatchMatchConfigTest, DefaultParametersOptimized)
     EXPECT_FLOAT_EQ(cfg.confidenceThresh, 0.60f)
         << "Production PatchMatch confidence threshold should reject low-confidence full-frame depths";
     EXPECT_TRUE(cfg.useCuda);
+    EXPECT_FALSE(cfg.openClFallbackToCpu)
+        << "OpenCL failures must remain visible instead of running a GPU-tagged CPU fallback";
     EXPECT_EQ(cfg.cudaDeviceIndex, -1);
     EXPECT_EQ(cfg.downsampleFactor, 2);
 }

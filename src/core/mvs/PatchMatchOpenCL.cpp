@@ -3,6 +3,8 @@
 #include "PatchMatchCUDA.h"
 #include "PatchMatchOpenCLKernels.h"
 
+#include "GpuDeviceLease.h"
+
 #include "Logger.h"
 
 #include <CL/cl.h>
@@ -14,7 +16,10 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdio>
 #include <cstring>
+#include <cstdint>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -37,6 +42,16 @@ struct EnumeratedOpenClDevice
     bool hostUnifiedMemory = false;
 };
 
+struct OpenClPciBusInfo
+{
+    cl_uint domain = 0;
+    cl_uint bus = 0;
+    cl_uint device = 0;
+    cl_uint function = 0;
+};
+
+constexpr cl_device_info kOpenClDevicePciBusInfo = 0x410F;
+
 std::string openClString(cl_device_id device, cl_device_info parameter)
 {
     std::size_t size = 0;
@@ -56,7 +71,7 @@ std::string openClString(cl_device_id device, cl_device_info parameter)
     return value;
 }
 
-std::vector<EnumeratedOpenClDevice> enumerateOpenClGpuDevices()
+std::vector<EnumeratedOpenClDevice> enumerateOpenClGpuDevicesUncached()
 {
     cl_uint platform_count = 0;
     const cl_int platform_error = clGetPlatformIDs(0, nullptr, &platform_count);
@@ -120,12 +135,40 @@ std::vector<EnumeratedOpenClDevice> enumerateOpenClGpuDevices()
                             &host_unified_memory,
                             nullptr);
             entry.hostUnifiedMemory = host_unified_memory == CL_TRUE;
+            OpenClPciBusInfo pci_info;
+            if (clGetDeviceInfo(device,
+                                kOpenClDevicePciBusInfo,
+                                sizeof(pci_info),
+                                &pci_info,
+                                nullptr) == CL_SUCCESS)
+            {
+                char identity[64]{};
+                std::snprintf(identity,
+                              sizeof(identity),
+                              "pci:%04x:%02x:%02x",
+                              pci_info.domain,
+                              pci_info.bus,
+                              pci_info.device);
+                entry.info.physicalDeviceIdentity = identity;
+            }
+            else
+            {
+                entry.info.physicalDeviceIdentity = fallbackGpuPhysicalIdentity(
+                    entry.info.vendor, entry.info.name, entry.info.index);
+            }
             entry.platform = platform;
             entry.device = device;
             result.push_back(std::move(entry));
         }
     }
     return result;
+}
+
+const std::vector<EnumeratedOpenClDevice> &enumerateOpenClGpuDevices()
+{
+    static const std::vector<EnumeratedOpenClDevice> devices =
+        enumerateOpenClGpuDevicesUncached();
+    return devices;
 }
 
 struct OpenClRuntime
@@ -145,7 +188,20 @@ struct OpenClRuntime
         bool busy = false;
     };
 
-    static constexpr std::size_t kExecutionLaneCount = 2;
+    struct CachedScaledImage
+    {
+        const std::uint8_t *sourceData = nullptr;
+        std::size_t sourceStep = 0;
+        int sourceRows = 0;
+        int sourceColumns = 0;
+        int sourceType = 0;
+        cv::Size workingSize;
+        cv::Mat sourceOwner;
+        cv::Mat pixels;
+        std::uint64_t lastUse = 0;
+    };
+
+    static constexpr std::size_t kExecutionLaneCount = 1;
 
     cl_context context = nullptr;
     cl_program program = nullptr;
@@ -153,6 +209,11 @@ struct OpenClRuntime
     std::array<ExecutionLane, kExecutionLaneCount> lanes;
     std::mutex laneMutex;
     std::condition_variable laneAvailable;
+    std::mutex imageCacheMutex;
+    std::vector<std::shared_ptr<CachedScaledImage>> imageCache;
+    std::size_t imageCacheBytes = 0;
+    std::size_t imageCacheLimitBytes = 512ull * 1024ull * 1024ull;
+    std::uint64_t imageCacheClock = 0;
 
     ~OpenClRuntime()
     {
@@ -316,58 +377,6 @@ bool reserveOpenClBuffer(cl_context context,
     return true;
 }
 
-class OpenClHostBuffer
-{
-public:
-    OpenClHostBuffer() = default;
-    OpenClHostBuffer(const OpenClHostBuffer &) = delete;
-    OpenClHostBuffer &operator=(const OpenClHostBuffer &) = delete;
-
-    ~OpenClHostBuffer()
-    {
-        reset();
-    }
-
-    bool create(cl_context context,
-                std::size_t bytes,
-                const void *hostData,
-                std::string *errorMsg)
-    {
-        cl_int error = CL_SUCCESS;
-        _memory = clCreateBuffer(context,
-                                 CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR,
-                                 bytes,
-                                 const_cast<void *>(hostData),
-                                 &error);
-        if (error != CL_SUCCESS || !_memory)
-        {
-            if (errorMsg)
-            {
-                *errorMsg = openClError("clCreateBuffer(CL_MEM_USE_HOST_PTR)", error);
-            }
-            return false;
-        }
-        return true;
-    }
-
-    cl_mem get() const
-    {
-        return _memory;
-    }
-
-    void reset()
-    {
-        if (_memory)
-        {
-            clReleaseMemObject(_memory);
-            _memory = nullptr;
-        }
-    }
-
-private:
-    cl_mem _memory = nullptr;
-};
-
 class OpenClEvent
 {
 public:
@@ -464,6 +473,10 @@ std::shared_ptr<OpenClRuntime> openClRuntimeForDevice(
 
     auto runtime = std::make_shared<OpenClRuntime>();
     runtime->hostUnifiedMemory = device.hostUnifiedMemory;
+    runtime->imageCacheLimitBytes = std::clamp<std::size_t>(
+        static_cast<std::size_t>(device.info.globalMemoryBytes / 8),
+        128ull * 1024ull * 1024ull,
+        1024ull * 1024ull * 1024ull);
     cl_int error = CL_SUCCESS;
     const cl_context_properties properties[] = {
         CL_CONTEXT_PLATFORM,
@@ -479,10 +492,18 @@ std::shared_ptr<OpenClRuntime> openClRuntimeForDevice(
         }
         return nullptr;
     }
-    const char *source = detail::kPatchMatchOpenClSource;
-    const std::size_t source_length = std::strlen(source);
+    std::array<const char *, 2> sources = {
+        detail::kPatchMatchOpenClSourcePrefix,
+        detail::kPatchMatchOpenClSourceMain};
+    const std::array<std::size_t, 2> source_lengths = {
+        std::strlen(sources[0]),
+        std::strlen(sources[1])};
     runtime->program = clCreateProgramWithSource(
-        runtime->context, 1, &source, &source_length, &error);
+        runtime->context,
+        static_cast<cl_uint>(sources.size()),
+        sources.data(),
+        source_lengths.data(),
+        &error);
     if (error != CL_SUCCESS || !runtime->program)
     {
         if (errorMsg)
@@ -491,7 +512,12 @@ std::shared_ptr<OpenClRuntime> openClRuntimeForDevice(
         }
         return nullptr;
     }
-    error = clBuildProgram(runtime->program, 1, &device.device, "-cl-mad-enable", nullptr, nullptr);
+    error = clBuildProgram(runtime->program,
+                           1,
+                           &device.device,
+                           "-cl-mad-enable -cl-fast-relaxed-math",
+                           nullptr,
+                           nullptr);
     if (error != CL_SUCCESS)
     {
         std::size_t log_size = 0;
@@ -563,6 +589,98 @@ cv::Mat scaledGrayFloat(const cv::Mat &image, const cv::Size &size)
     cv::Mat result;
     scaled.convertTo(result, CV_32F, 1.0 / 255.0);
     return result.isContinuous() ? result : result.clone();
+}
+
+std::shared_ptr<OpenClRuntime::CachedScaledImage> cachedScaledGrayFloat(
+    const std::shared_ptr<OpenClRuntime> &runtime,
+    const cv::Mat &image,
+    const cv::Size &size,
+    bool *cacheHit)
+{
+    if (cacheHit)
+    {
+        *cacheHit = false;
+    }
+    const auto matches = [&image, &size](const OpenClRuntime::CachedScaledImage &entry)
+    {
+        return entry.sourceData == image.data &&
+            entry.sourceStep == image.step[0] &&
+            entry.sourceRows == image.rows &&
+            entry.sourceColumns == image.cols &&
+            entry.sourceType == image.type() &&
+            entry.workingSize == size;
+    };
+    {
+        std::lock_guard<std::mutex> lock(runtime->imageCacheMutex);
+        const auto found = std::find_if(
+            runtime->imageCache.begin(), runtime->imageCache.end(),
+            [&matches](const std::shared_ptr<OpenClRuntime::CachedScaledImage> &entry)
+            {
+                return matches(*entry);
+            });
+        if (found != runtime->imageCache.end())
+        {
+            (*found)->lastUse = ++runtime->imageCacheClock;
+            if (cacheHit)
+            {
+                *cacheHit = true;
+            }
+            return *found;
+        }
+    }
+
+    auto candidate = std::make_shared<OpenClRuntime::CachedScaledImage>();
+    candidate->sourceData = image.data;
+    candidate->sourceStep = image.step[0];
+    candidate->sourceRows = image.rows;
+    candidate->sourceColumns = image.cols;
+    candidate->sourceType = image.type();
+    candidate->workingSize = size;
+    candidate->sourceOwner = image;
+    candidate->pixels = scaledGrayFloat(image, size);
+    const std::size_t candidate_bytes = candidate->pixels.total() * candidate->pixels.elemSize();
+
+    std::lock_guard<std::mutex> lock(runtime->imageCacheMutex);
+    const auto existing = std::find_if(
+        runtime->imageCache.begin(), runtime->imageCache.end(),
+        [&matches](const std::shared_ptr<OpenClRuntime::CachedScaledImage> &entry)
+        {
+            return matches(*entry);
+        });
+    if (existing != runtime->imageCache.end())
+    {
+        (*existing)->lastUse = ++runtime->imageCacheClock;
+        if (cacheHit)
+        {
+            *cacheHit = true;
+        }
+        return *existing;
+    }
+
+    while (runtime->imageCacheBytes + candidate_bytes > runtime->imageCacheLimitBytes)
+    {
+        const auto oldest = std::min_element(
+            runtime->imageCache.begin(), runtime->imageCache.end(),
+            [](const std::shared_ptr<OpenClRuntime::CachedScaledImage> &left,
+               const std::shared_ptr<OpenClRuntime::CachedScaledImage> &right)
+            {
+                const std::uint64_t left_use = left.use_count() == 1
+                    ? left->lastUse : std::numeric_limits<std::uint64_t>::max();
+                const std::uint64_t right_use = right.use_count() == 1
+                    ? right->lastUse : std::numeric_limits<std::uint64_t>::max();
+                return left_use < right_use;
+            });
+        if (oldest == runtime->imageCache.end() || oldest->use_count() != 1)
+        {
+            break;
+        }
+        runtime->imageCacheBytes -= (*oldest)->pixels.total() * (*oldest)->pixels.elemSize();
+        runtime->imageCache.erase(oldest);
+    }
+    candidate->lastUse = ++runtime->imageCacheClock;
+    runtime->imageCacheBytes += candidate_bytes;
+    runtime->imageCache.push_back(candidate);
+    return candidate;
 }
 
 cv::Mat scaledBinaryMask(const cv::Mat *mask, const cv::Size &size)
@@ -652,7 +770,7 @@ bool PatchMatchDepthEstimator::isOpenClAvailable()
 
 std::vector<OpenClDeviceInfo> PatchMatchDepthEstimator::openClDevices()
 {
-    const std::vector<EnumeratedOpenClDevice> devices = enumerateOpenClGpuDevices();
+    const std::vector<EnumeratedOpenClDevice> &devices = enumerateOpenClGpuDevices();
     std::vector<OpenClDeviceInfo> result;
     result.reserve(devices.size());
     for (const EnumeratedOpenClDevice &device : devices)
@@ -685,7 +803,7 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     const std::vector<cv::Mat> *srcValidMasks)
 {
     const auto estimate_start = std::chrono::steady_clock::now();
-    const std::vector<EnumeratedOpenClDevice> devices = enumerateOpenClGpuDevices();
+    const std::vector<EnumeratedOpenClDevice> &devices = enumerateOpenClGpuDevices();
     const int device_index = config.openClDeviceIndex >= 0 ? config.openClDeviceIndex : 0;
     if (device_index < 0 || device_index >= static_cast<int>(devices.size()))
     {
@@ -726,12 +844,26 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     const int source_count = static_cast<int>(srcGrays.size());
     const cv::Size working_size(width, height);
 
-    const cv::Mat reference_float = scaledGrayFloat(refGray, working_size);
+    bool reference_cache_hit = false;
+    const std::shared_ptr<OpenClRuntime::CachedScaledImage> cached_reference =
+        cachedScaledGrayFloat(runtime, refGray, working_size, &reference_cache_hit);
+    const cv::Mat &reference_float = cached_reference->pixels;
     std::vector<float> packed_sources(static_cast<std::size_t>(source_count) * pixel_count);
+    std::vector<std::shared_ptr<OpenClRuntime::CachedScaledImage>> cached_sources;
+    cached_sources.reserve(srcGrays.size());
+    int source_cache_hits = 0;
     for (int source_index = 0; source_index < source_count; ++source_index)
     {
-        const cv::Mat source_float = scaledGrayFloat(
-            srcGrays[static_cast<std::size_t>(source_index)], working_size);
+        bool source_cache_hit = false;
+        const std::shared_ptr<OpenClRuntime::CachedScaledImage> cached_source =
+            cachedScaledGrayFloat(
+                runtime,
+                srcGrays[static_cast<std::size_t>(source_index)],
+                working_size,
+                &source_cache_hit);
+        source_cache_hits += source_cache_hit ? 1 : 0;
+        cached_sources.push_back(cached_source);
+        const cv::Mat &source_float = cached_source->pixels;
         std::memcpy(packed_sources.data() + static_cast<std::size_t>(source_index) * pixel_count,
                     source_float.ptr<float>(),
                     static_cast<std::size_t>(pixel_count) * sizeof(float));
@@ -830,21 +962,6 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         packed_hint.data(),
         packed_hint_radius.data()};
 
-    std::array<OpenClHostBuffer, 7> unified_input_buffers;
-    if (runtime->hostUnifiedMemory)
-    {
-        for (std::size_t index = 0; index < unified_input_buffers.size(); ++index)
-        {
-            if (!unified_input_buffers[index].create(runtime->context,
-                                                      buffer_sizes[index],
-                                                      input_data[index],
-                                                      errorMsg))
-            {
-                return false;
-            }
-        }
-    }
-
     const int patch_half = config.patchHalf;
     const int depth_sample_count = std::clamp(config.numIterations * 4, 32, 96);
     const float minimum_mask_ratio = config.minimumMaskedPatchSupportRatio;
@@ -867,9 +984,9 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     const float cx = static_cast<float>(reference_intrinsics.principalX) * scale;
     const float cy = static_cast<float>(reference_intrinsics.principalY) * scale;
 
-    // Unified-memory GPUs bind large inputs directly to their host storage so
-    // integrated GPU memory does not retain a growing per-lane input high-water
-    // mark. Output buffers remain persistent; discrete GPUs reuse all buffers.
+    // A single execution lane retains all input/output buffers. On integrated
+    // GPUs this removes per-level clCreateBuffer/clReleaseMemObject churn while
+    // the host image cache avoids repeating resize and float conversion.
     const auto slot_wait_start = std::chrono::steady_clock::now();
     std::optional<OpenClExecutionLaneLease> lane_lease =
         acquireOpenClExecutionLane(runtime, config.cancelFlag);
@@ -883,7 +1000,7 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     }
     const auto slot_acquired = std::chrono::steady_clock::now();
     OpenClRuntime::ExecutionLane &execution_lane = lane_lease->lane();
-    const std::size_t first_persistent_buffer = runtime->hostUnifiedMemory ? 7 : 0;
+    constexpr std::size_t first_persistent_buffer = 0;
     for (std::size_t index = first_persistent_buffer;
          index < execution_lane.buffers.size();
          ++index)
@@ -901,9 +1018,7 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     std::array<cl_mem, 9> memory_arguments{};
     for (std::size_t index = 0; index < memory_arguments.size(); ++index)
     {
-        memory_arguments[index] = runtime->hostUnifiedMemory && index < input_data.size()
-            ? unified_input_buffers[index].get()
-            : execution_lane.buffers[index].memory;
+        memory_arguments[index] = execution_lane.buffers[index].memory;
     }
     std::size_t retained_buffer_bytes = 0;
     for (const OpenClRuntime::BufferSlot &buffer : execution_lane.buffers)
@@ -960,38 +1075,35 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     OpenClEvent confidence_read_event;
     OpenClQueueDrain queue_drain(execution_lane.queue);
     const auto queue_wall_start = std::chrono::steady_clock::now();
-    if (!runtime->hostUnifiedMemory)
+    for (std::size_t index = 0; index < input_data.size(); ++index)
     {
-        for (std::size_t index = 0; index < input_data.size(); ++index)
+        cl_event *event_output = nullptr;
+        if (index == 0)
         {
-            cl_event *event_output = nullptr;
-            if (index == 0)
-            {
-                event_output = first_write_event.output();
-            }
-            else if (index + 1 == input_data.size())
-            {
-                event_output = last_write_event.output();
-            }
-            const cl_int write_error = clEnqueueWriteBuffer(execution_lane.queue,
-                                                            memory_arguments[index],
-                                                            CL_FALSE,
-                                                            0,
-                                                            buffer_sizes[index],
-                                                            input_data[index],
-                                                            0,
-                                                            nullptr,
-                                                            event_output);
-            if (write_error != CL_SUCCESS)
-            {
-                if (errorMsg)
-                {
-                    *errorMsg = openClError("clEnqueueWriteBuffer", write_error);
-                }
-                return false;
-            }
-            queue_drain.markPending();
+            event_output = first_write_event.output();
         }
+        else if (index + 1 == input_data.size())
+        {
+            event_output = last_write_event.output();
+        }
+        const cl_int write_error = clEnqueueWriteBuffer(execution_lane.queue,
+                                                        memory_arguments[index],
+                                                        CL_FALSE,
+                                                        0,
+                                                        buffer_sizes[index],
+                                                        input_data[index],
+                                                        0,
+                                                        nullptr,
+                                                        event_output);
+        if (write_error != CL_SUCCESS)
+        {
+            if (errorMsg)
+            {
+                *errorMsg = openClError("clEnqueueWriteBuffer", write_error);
+            }
+            return false;
+        }
+        queue_drain.markPending();
     }
 
     cl_int error = clEnqueueNDRangeKernel(execution_lane.queue,
@@ -1088,11 +1200,6 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         read_start_nanoseconds,
         read_end_nanoseconds);
 
-    for (OpenClHostBuffer &buffer : unified_input_buffers)
-    {
-        buffer.reset();
-    }
-
     if (config.cancelFlag && config.cancelFlag->load(std::memory_order_relaxed))
     {
         if (errorMsg)
@@ -1155,6 +1262,11 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     }
 
     const int valid_count = cv::countNonZero(depthOut > 0.0f);
+    std::size_t image_cache_bytes = 0;
+    {
+        std::lock_guard<std::mutex> lock(runtime->imageCacheMutex);
+        image_cache_bytes = runtime->imageCacheBytes;
+    }
     const auto estimate_finished = std::chrono::steady_clock::now();
     const double host_prepare_ms = std::chrono::duration<double, std::milli>(
         slot_wait_start - estimate_start).count();
@@ -1180,7 +1292,8 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     const double total_ms = std::chrono::duration<double, std::milli>(
         estimate_finished - estimate_start).count();
     LOG_INFO("[MVS][PatchMatch][OpenCL] device=%s lane=%zu unified=%d retained=%.1fMiB "
-             "size=%dx%d sources=%d samples=%d valid=%d/%d "
+             "image_cache=%d/%d %.1fMiB "
+             "size=%dx%d sources=%d sample_budget=%d valid=%d/%d "
              "prepare=%.1f ms wait=%.1f ms setup=%.1f ms queue=%.1f ms "
              "write=%.1f ms kernel=%.1f ms read=%.1f ms gap=%.1f ms "
              "post=%.1f ms total=%.1f ms",
@@ -1188,6 +1301,9 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
              execution_lane_index,
              runtime->hostUnifiedMemory ? 1 : 0,
              static_cast<double>(retained_buffer_bytes) / (1024.0 * 1024.0),
+             (reference_cache_hit ? 1 : 0) + source_cache_hits,
+             source_count + 1,
+             static_cast<double>(image_cache_bytes) / (1024.0 * 1024.0),
              width,
              height,
              source_count,

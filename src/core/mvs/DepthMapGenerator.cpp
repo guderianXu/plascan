@@ -11,6 +11,7 @@
 #include "DepthCrossViewHoleRepair.h"
 #include "DepthGeometryConsistency.h"
 #include "DepthFrameUtils.h"
+#include "GpuDeviceLease.h"
 #include "DepthMemoryPolicy.h"
 #include "DepthPyramidPolicy.h"
 #include "DepthProvenance.h"
@@ -8749,8 +8750,8 @@ void DepthMapGenerator::runInBackground()
     }
 
     // ── 阶段一：有界三段流水线 ──────────────────────────────────────────────
-    // 两个 GPU 主机帧槽并行执行 CPU 准备/后处理；PatchMatch 内部只允许一个
-    // CUDA 执行槽，并使用独立传输流。产物由 saveQueue 在第三段异步落盘。
+    // 两个 GPU 主机帧槽并行执行 CPU 准备/后处理；每个物理 GPU 只允许一个
+    // kernel 执行槽。产物由 saveQueue 在第三段异步落盘。
     int skippedFrames = 0;
     for (size_t i = 0; i < _skipFrameMask.size(); ++i)
     {
@@ -8880,6 +8881,50 @@ void DepthMapGenerator::runInBackground()
             {DepthComputeBackend::OpenCl, device.index});
     }
 
+    std::vector<GpuDeviceDescriptor> gpu_devices_to_lease;
+    gpu_devices_to_lease.reserve(physicalAcceleratorWorkers.size());
+    for (const DepthComputeWorker &worker : physicalAcceleratorWorkers)
+    {
+        if (worker.backend == DepthComputeBackend::Cuda)
+        {
+            const std::string name = PatchMatchDepthEstimator::cudaDeviceName(worker.deviceIndex);
+            std::string identity = PatchMatchDepthEstimator::cudaDeviceIdentity(worker.deviceIndex);
+            if (identity.empty())
+            {
+                identity = fallbackGpuPhysicalIdentity("NVIDIA", name, worker.deviceIndex);
+            }
+            gpu_devices_to_lease.push_back({identity,
+                                            name.empty()
+                                                ? "CUDA:" + std::to_string(worker.deviceIndex)
+                                                : name});
+        }
+        else if (worker.backend == DepthComputeBackend::OpenCl)
+        {
+            const auto device = std::find_if(
+                selectedOpenClDevices.cbegin(),
+                selectedOpenClDevices.cend(),
+                [&worker](const OpenClDeviceInfo &candidate)
+                {
+                    return candidate.index == worker.deviceIndex;
+                });
+            if (device != selectedOpenClDevices.cend())
+            {
+                gpu_devices_to_lease.push_back({device->physicalDeviceIdentity,
+                                                device->vendor + " " + device->name});
+            }
+        }
+    }
+    GpuDeviceLeaseSet gpu_device_leases;
+    QString gpu_lease_error;
+    if (!gpu_device_leases.acquire(gpu_devices_to_lease, &gpu_lease_error))
+    {
+        LOG_ERROR(QStringLiteral("[MVS] %1").arg(gpu_lease_error));
+        emit errorOccurred(gpu_lease_error);
+        clearFrameCaches();
+        emit finished(false);
+        return;
+    }
+
     const int physicalCudaWorkers = static_cast<int>(std::count_if(
         physicalAcceleratorWorkers.begin(),
         physicalAcceleratorWorkers.end(),
@@ -8897,15 +8942,18 @@ void DepthMapGenerator::runInBackground()
     const bool mixedGpuBackends = physicalCudaWorkers > 0 && physicalOpenClWorkers > 0;
     // CUDA remains continuously occupied with one host worker per physical
     // device. In a mixed setup, assign the remaining frame slots to OpenCL so
-    // one frame can prepare while its two execution lanes are busy. This does
-    // not allocate a third OpenCL command queue or persistent device workspace.
+    // one frame can prepare while the single execution lane is busy. Host slot
+    // duplication never allocates a second OpenCL command queue.
     const int requestedCudaHostSlots = physicalCudaWorkers > 0
         ? (mixedGpuBackends
                ? physicalCudaWorkers
                : std::max(physicalCudaWorkers, _config.gpuFrameWorkerCount))
         : 0;
-    const int mixedOpenClSlots = std::max(
-        physicalOpenClWorkers, maxFrameWorkers - requestedCudaHostSlots);
+    const int maximumOpenClPipelineSlots = std::min(
+        maxFrameWorkers, physicalOpenClWorkers * 2);
+    const int mixedOpenClSlots = std::min(
+        maximumOpenClPipelineSlots,
+        std::max(physicalOpenClWorkers, maxFrameWorkers - requestedCudaHostSlots));
     const int requestedOpenClHostSlots = physicalOpenClWorkers > 0
         ? (mixedGpuBackends
                ? mixedOpenClSlots
@@ -9039,6 +9087,7 @@ void DepthMapGenerator::runInBackground()
             ? worker.deviceIndex
             : -1;
         workerConfig.patchMatch.cudaFallbackToCpu = false;
+        workerConfig.patchMatch.openClFallbackToCpu = false;
         workerConfig.patchMatch.cancelFlag = &_cancelled;
         const QString workerTag = QString::fromStdString(worker.id());
 

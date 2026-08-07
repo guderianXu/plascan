@@ -73,9 +73,12 @@ std::vector<DepthComputeWorker> buildDepthComputeWorkerPool(
             {
                 return worker.backend == backend;
             }));
-        const std::size_t target_count = std::max(
-            current_count,
-            static_cast<std::size_t>(std::max(0, requestedCount)));
+        const std::size_t maximum_pipeline_count = candidates.size() * 2;
+        const std::size_t target_count = std::min(
+            maximum_pipeline_count,
+            std::max(
+                current_count,
+                static_cast<std::size_t>(std::max(0, requestedCount))));
         std::size_t candidate_index = 0;
         while (current_count < target_count && workers.size() < maximumWorkerCount)
         {

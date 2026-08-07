@@ -32,7 +32,7 @@ struct DepthComputeWorker
 };
 
 /// Builds frame-level host workers while keeping one worker for every physical
-/// accelerator before adding extra preparation lanes for an existing device.
+/// accelerator before adding at most one preparation lane for each device.
 std::vector<DepthComputeWorker> buildDepthComputeWorkerPool(
     const std::vector<DepthComputeWorker> &physicalWorkers,
     int cudaHostSlotCount,

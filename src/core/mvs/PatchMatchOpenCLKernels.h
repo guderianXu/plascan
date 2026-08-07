@@ -7,8 +7,11 @@ namespace mvs
 namespace detail
 {
 
-inline constexpr const char *kPatchMatchOpenClSource = R"CLC(
+inline constexpr const char *kPatchMatchOpenClSourcePrefix = R"CLC(
 #define MAX_SOURCES 16
+#define WORK_GROUP_SIZE 16
+#define MAX_PATCH_RADIUS 7
+#define REFERENCE_TILE_SIZE (WORK_GROUP_SIZE + 2 * MAX_PATCH_RADIUS)
 
 inline float sample_bilinear(__global const float *image,
                              int width,
@@ -61,11 +64,11 @@ inline float source_ncc(int center_x,
                         int center_y,
                         float depth,
                         int source_index,
-                        __global const float *reference,
-                        __global const float *sources,
+                         __local const float *reference_tile,
+                         __local const uchar *reference_mask_tile,
+                         __global const float *sources,
                         __global const float *source_cameras,
-                        __global const uchar *reference_mask,
-                        __global const uchar *source_masks,
+                         __global const uchar *source_masks,
                         int width,
                         int height,
                         int patch_half,
@@ -75,7 +78,9 @@ inline float source_ncc(int center_x,
                         float inv_fx,
                         float inv_fy,
                         float cx,
-                        float cy)
+                         float cy,
+                         int tile_origin_x,
+                         int tile_origin_y)
 {
     int pixel_count = width * height;
     __global const float *source = sources + source_index * pixel_count;
@@ -102,8 +107,10 @@ inline float source_ncc(int center_x,
             {
                 continue;
             }
-            int reference_index = reference_y * width + reference_x;
-            if (has_reference_mask && reference_mask[reference_index] == 0)
+            int tile_x = reference_x - tile_origin_x + MAX_PATCH_RADIUS;
+            int tile_y = reference_y - tile_origin_y + MAX_PATCH_RADIUS;
+            int tile_index = tile_y * REFERENCE_TILE_SIZE + tile_x;
+            if (has_reference_mask && reference_mask_tile[tile_index] == 0)
             {
                 continue;
             }
@@ -141,7 +148,7 @@ inline float source_ncc(int center_x,
                 continue;
             }
 
-            float reference_value = reference[reference_index];
+            float reference_value = reference_tile[tile_index];
             float source_value = sample_bilinear(source, width, height, source_x, source_y);
             sum_reference += reference_value;
             sum_source += source_value;
@@ -164,22 +171,26 @@ inline float source_ncc(int center_x,
         sum_reference_squared * inverse_count - mean_reference * mean_reference);
     float variance_source = fmax(0.0f,
         sum_source_squared * inverse_count - mean_source * mean_source);
-    float denominator = sqrt(variance_reference * variance_source);
-    if (denominator < 1.0e-5f)
+    float variance_product = variance_reference * variance_source;
+    if (variance_product < 1.0e-10f)
     {
         return 0.0f;
     }
     float covariance = sum_product * inverse_count - mean_reference * mean_source;
-    return clamp((covariance / denominator + 1.0f) * 0.5f, 0.0f, 1.0f);
+    return clamp((covariance * native_rsqrt(variance_product) + 1.0f) * 0.5f,
+                 0.0f,
+                 1.0f);
 }
+)CLC";
 
+inline constexpr const char *kPatchMatchOpenClSourceMain = R"CLC(
 inline float robust_depth_score(int x,
                                 int y,
                                 float depth,
-                                __global const float *reference,
+                                __local const float *reference_tile,
+                                __local const uchar *reference_mask_tile,
                                 __global const float *sources,
                                 __global const float *source_cameras,
-                                __global const uchar *reference_mask,
                                 __global const uchar *source_masks,
                                 int width,
                                 int height,
@@ -191,18 +202,21 @@ inline float robust_depth_score(int x,
                                 float inv_fx,
                                 float inv_fy,
                                 float cx,
-                                float cy)
+                                float cy,
+                                int tile_origin_x,
+                                int tile_origin_y)
 {
     float scores[MAX_SOURCES];
     int support_count = 0;
     for (int source_index = 0; source_index < source_count; ++source_index)
     {
         float score = source_ncc(x, y, depth, source_index,
-                                 reference, sources, source_cameras,
-                                 reference_mask, source_masks,
+                                 reference_tile, reference_mask_tile,
+                                 sources, source_cameras, source_masks,
                                  width, height, patch_half, minimum_mask_ratio,
                                  has_reference_mask, has_source_masks,
-                                 inv_fx, inv_fy, cx, cy);
+                                 inv_fx, inv_fy, cx, cy,
+                                 tile_origin_x, tile_origin_y);
         if (score > 0.05f)
         {
             scores[support_count++] = score;
@@ -266,6 +280,28 @@ __kernel void estimate_depth(
 {
     int x = (int)get_global_id(0);
     int y = (int)get_global_id(1);
+    int local_linear_index = (int)get_local_id(1) * WORK_GROUP_SIZE
+        + (int)get_local_id(0);
+    int tile_origin_x = (int)get_group_id(0) * WORK_GROUP_SIZE;
+    int tile_origin_y = (int)get_group_id(1) * WORK_GROUP_SIZE;
+    __local float reference_tile[REFERENCE_TILE_SIZE * REFERENCE_TILE_SIZE];
+    __local uchar reference_mask_tile[REFERENCE_TILE_SIZE * REFERENCE_TILE_SIZE];
+    for (int tile_index = local_linear_index;
+         tile_index < REFERENCE_TILE_SIZE * REFERENCE_TILE_SIZE;
+         tile_index += WORK_GROUP_SIZE * WORK_GROUP_SIZE)
+    {
+        int tile_x = tile_index % REFERENCE_TILE_SIZE;
+        int tile_y = tile_index / REFERENCE_TILE_SIZE;
+        int image_x = tile_origin_x + tile_x - MAX_PATCH_RADIUS;
+        int image_y = tile_origin_y + tile_y - MAX_PATCH_RADIUS;
+        int inside = image_x >= 0 && image_y >= 0 && image_x < width && image_y < height;
+        int image_index = inside ? image_y * width + image_x : 0;
+        reference_tile[tile_index] = inside ? reference[image_index] : 0.0f;
+        reference_mask_tile[tile_index] = inside
+            ? (has_reference_mask ? reference_mask[image_index] : (uchar)255)
+            : (uchar)0;
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
     if (x >= width || y >= height)
     {
         return;
@@ -296,7 +332,7 @@ __kernel void estimate_depth(
         }
     }
 
-    int coarse_samples = clamp(depth_sample_count, 16, 96);
+    int coarse_samples = clamp((depth_sample_count + 1) / 2, 16, 48);
     float inverse_far = 1.0f / local_far;
     float inverse_near = 1.0f / local_near;
     float inverse_step = (inverse_near - inverse_far) / (float)(coarse_samples - 1);
@@ -307,11 +343,12 @@ __kernel void estimate_depth(
         float inverse_depth = inverse_far + inverse_step * (float)sample_index;
         float depth = 1.0f / inverse_depth;
         float score = robust_depth_score(x, y, depth,
-                                         reference, sources, source_cameras,
-                                         reference_mask, source_masks,
+                                         reference_tile, reference_mask_tile,
+                                         sources, source_cameras, source_masks,
                                          width, height, source_count, patch_half,
                                          minimum_mask_ratio, has_reference_mask,
-                                         has_source_masks, inv_fx, inv_fy, cx, cy);
+                                         has_source_masks, inv_fx, inv_fy, cx, cy,
+                                         tile_origin_x, tile_origin_y);
         if (score > best_score)
         {
             best_score = score;
@@ -322,19 +359,24 @@ __kernel void estimate_depth(
     if (best_depth > 0.0f)
     {
         float best_inverse = 1.0f / best_depth;
-        float refine_step = inverse_step / 6.0f;
-        for (int refine_index = -6; refine_index <= 6; ++refine_index)
+        int refinement_samples = clamp(depth_sample_count / 4, 6, 16);
+        float refine_step = inverse_step / (float)refinement_samples;
+        int refinement_half = refinement_samples / 2;
+        for (int refine_index = -refinement_half;
+             refine_index <= refinement_half;
+             ++refine_index)
         {
             float inverse_depth = clamp(best_inverse + refine_step * (float)refine_index,
                                         inverse_far,
                                         inverse_near);
             float depth = 1.0f / inverse_depth;
             float score = robust_depth_score(x, y, depth,
-                                             reference, sources, source_cameras,
-                                             reference_mask, source_masks,
+                                             reference_tile, reference_mask_tile,
+                                             sources, source_cameras, source_masks,
                                              width, height, source_count, patch_half,
                                              minimum_mask_ratio, has_reference_mask,
-                                             has_source_masks, inv_fx, inv_fy, cx, cy);
+                                             has_source_masks, inv_fx, inv_fy, cx, cy,
+                                             tile_origin_x, tile_origin_y);
             if (score > best_score)
             {
                 best_score = score;
@@ -354,17 +396,19 @@ __kernel void estimate_depth(
                                   local_far);
         float competing_score = fmax(
             robust_depth_score(x, y, lower_depth,
-                               reference, sources, source_cameras,
-                               reference_mask, source_masks,
+                               reference_tile, reference_mask_tile,
+                               sources, source_cameras, source_masks,
                                width, height, source_count, patch_half,
                                minimum_mask_ratio, has_reference_mask,
-                               has_source_masks, inv_fx, inv_fy, cx, cy),
+                               has_source_masks, inv_fx, inv_fy, cx, cy,
+                               tile_origin_x, tile_origin_y),
             robust_depth_score(x, y, upper_depth,
-                               reference, sources, source_cameras,
-                               reference_mask, source_masks,
+                               reference_tile, reference_mask_tile,
+                               sources, source_cameras, source_masks,
                                width, height, source_count, patch_half,
                                minimum_mask_ratio, has_reference_mask,
-                               has_source_masks, inv_fx, inv_fy, cx, cy));
+                               has_source_masks, inv_fx, inv_fy, cx, cy,
+                               tile_origin_x, tile_origin_y));
         float margin_scale = clamp((best_score - competing_score) / uniqueness_minimum_margin,
                                    0.0f,
                                    1.0f);

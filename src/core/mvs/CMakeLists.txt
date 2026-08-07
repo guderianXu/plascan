@@ -47,6 +47,7 @@ set(MVS_CXX_SOURCES
     DepthPyramidPropagation.cpp
     DepthFrameUtils.cpp
     DepthComputeScheduler.cpp
+    GpuDeviceLease.cpp
     MvsSourcePlanner.cpp
     MvsQualityReport.cpp
     MvsSceneClassifier.cpp
@@ -106,6 +107,7 @@ set(MVS_HEADERS
     DepthPyramidPropagation.h
     DepthFrameUtils.h
     DepthComputeScheduler.h
+    GpuDeviceLease.h
     DenseCloudBuilder.h
     DepthMapGenerator.h
     PatchMatchPhotometricCost.h

@@ -38,6 +38,7 @@ struct OpenClDeviceInfo
     std::uint64_t globalMemoryBytes = 0;
     int computeUnits = 0;
     bool isGpu = false;
+    std::string physicalDeviceIdentity;
 };
 
 class PatchMatchDepthEstimator
@@ -45,6 +46,8 @@ class PatchMatchDepthEstimator
 public:
     static bool isCudaAvailable();
     static int cudaDeviceCount();
+    static std::string cudaDeviceName(int deviceIndex);
+    static std::string cudaDeviceIdentity(int deviceIndex);
     static bool isOpenClAvailable();
     static std::vector<OpenClDeviceInfo> openClDevices();
     static void cleanupOpenClResources();

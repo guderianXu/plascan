@@ -2502,6 +2502,31 @@ int PatchMatchDepthEstimator::cudaDeviceCount()
     return cudaGetDeviceCount(&count) == cudaSuccess ? count : 0;
 }
 
+std::string PatchMatchDepthEstimator::cudaDeviceName(int deviceIndex)
+{
+    cudaDeviceProp properties{};
+    return cudaGetDeviceProperties(&properties, deviceIndex) == cudaSuccess
+        ? std::string(properties.name)
+        : std::string();
+}
+
+std::string PatchMatchDepthEstimator::cudaDeviceIdentity(int deviceIndex)
+{
+    cudaDeviceProp properties{};
+    if (cudaGetDeviceProperties(&properties, deviceIndex) != cudaSuccess)
+    {
+        return {};
+    }
+    char identity[64]{};
+    std::snprintf(identity,
+                  sizeof(identity),
+                  "pci:%04x:%02x:%02x",
+                  properties.pciDomainID,
+                  properties.pciBusID,
+                  properties.pciDeviceID);
+    return identity;
+}
+
 bool PatchMatchDepthEstimator::reserveGpuWorkspace(
     std::size_t referencePixelCount,
     int sourceCount,
