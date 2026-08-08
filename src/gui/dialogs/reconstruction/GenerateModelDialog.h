@@ -13,7 +13,6 @@ class QPushButton;
 class QScrollArea;
 class QScreen;
 class QShowEvent;
-class QSpinBox;
 class QToolButton;
 class QWidget;
 
@@ -82,7 +81,6 @@ private:
     QWidget *_advancedContent = nullptr;
     QComboBox *_interpolationCombo = nullptr;
     QComboBox *_depthFilterCombo = nullptr;
-    QSpinBox *_threadsSpin = nullptr;
     QCheckBox *_calculateColorsCheck = nullptr;
     QCheckBox *_strictMasksCheck = nullptr;
     QCheckBox *_reuseDepthMapsCheck = nullptr;

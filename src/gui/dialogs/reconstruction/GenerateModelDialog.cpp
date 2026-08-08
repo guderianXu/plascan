@@ -1,7 +1,6 @@
 #include "reconstruction/GenerateModelDialog.h"
 #include "shared/WorkflowParameterDialogStyle.h"
 #include "PointCloudWorkflowConfig.h"
-#include "../../project/support/ProjectModelWorkflowPolicy.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -16,13 +15,9 @@
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QSizePolicy>
-#include <QSpinBox>
-#include <QThread>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWindow>
-
-#include <algorithm>
 
 namespace
 {
@@ -241,16 +236,6 @@ GenerateModelDialog::GenerateModelDialog(QWidget *parent)
     xjw::gui::dialogs::configureWorkflowComboBox(_interpolationCombo);
     xjw::gui::dialogs::configureWorkflowComboBox(_depthFilterCombo);
 
-    _threadsSpin = new QSpinBox(_advancedContent);
-    _threadsSpin->setObjectName(QStringLiteral("modelThreadsSpin"));
-    _threadsSpin->setRange(1, std::max(1, QThread::idealThreadCount()));
-    _threadsSpin->setValue(
-        xjw::gui::project::recommendedInteractiveModelWorkerCount(
-            QThread::idealThreadCount()));
-    _threadsSpin->setSuffix(tr(" 线程"));
-    _threadsSpin->setToolTip(tr(
-        "模型阶段统一使用的 CPU 工作线程数。默认使用逻辑线程总数减二。"));
-
     _calculateColorsCheck = new QCheckBox(tr("计算顶点颜色"), _advancedContent);
     _strictMasksCheck = new QCheckBox(tr("使用严格的体积掩模"), _advancedContent);
     _reuseDepthMapsCheck = new QCheckBox(tr("重用深度图"), _advancedContent);
@@ -261,7 +246,6 @@ GenerateModelDialog::GenerateModelDialog(QWidget *parent)
 
     advancedForm->addRow(tr("插值:"), _interpolationCombo);
     advancedForm->addRow(tr("深度过滤:"), _depthFilterCombo);
-    advancedForm->addRow(tr("CPU 工作线程:"), _threadsSpin);
     advancedForm->addRow(QString(), _calculateColorsCheck);
     advancedForm->addRow(QString(), _strictMasksCheck);
     advancedForm->addRow(QString(), _reuseDepthMapsCheck);
@@ -306,8 +290,6 @@ GenerateModelDialog::GenerateModelDialog(QWidget *parent)
     connect(_interpolationCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &GenerateModelDialog::emitSettingsNow);
     connect(_depthFilterCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &GenerateModelDialog::emitSettingsNow);
-    connect(_threadsSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &GenerateModelDialog::emitSettingsNow);
     connect(_calculateColorsCheck, &QCheckBox::toggled, this, &GenerateModelDialog::emitSettingsNow);
     connect(_strictMasksCheck, &QCheckBox::toggled, this, &GenerateModelDialog::emitSettingsNow);
@@ -383,9 +365,6 @@ void GenerateModelDialog::applySettings(const QJsonObject &settings)
     _reuseDepthMapsRequested = settings.value(QStringLiteral("reuseDepthMaps")).toBool(true);
     _reuseDepthMapsCheck->setChecked(_reuseDepthMapsRequested);
     _replaceDefaultCheck->setChecked(settings.value(QStringLiteral("replaceDefaultModel")).toBool(false));
-    _threadsSpin->setValue(settings.value(QStringLiteral("threads")).toInt(
-        xjw::gui::project::recommendedInteractiveModelWorkerCount(
-            QThread::idealThreadCount())));
 }
 
 void GenerateModelDialog::setSourceCandidates(const QJsonArray &candidates)
@@ -504,7 +483,6 @@ QJsonObject GenerateModelDialog::collectSettings() const
     settings[QStringLiteral("skipBoundaryBlocks")] = _skipBoundaryBlocksCheck->isChecked();
     settings[QStringLiteral("interpolation")] = _interpolationCombo->currentData().toString();
     settings[QStringLiteral("depthFiltering")] = _depthFilterCombo->currentData().toString();
-    settings[QStringLiteral("threads")] = _threadsSpin->value();
     settings[QStringLiteral("calculateVertexColors")] = _calculateColorsCheck->isChecked();
     settings[QStringLiteral("strictVolumetricMasks")] = _strictMasksCheck->isChecked();
     const bool reuse_depth_maps =

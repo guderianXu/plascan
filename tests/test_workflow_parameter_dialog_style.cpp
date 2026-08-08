@@ -16,7 +16,6 @@
 #include <QScrollBar>
 #include <QSignalSpy>
 #include <QSlider>
-#include <QSpinBox>
 #include <QToolButton>
 
 #include "reconstruction/AerialTriangulationDialog.h"
@@ -245,8 +244,7 @@ TEST(WorkflowParameterDialogStyleTest, LayoutMigrationPreservesModelSettings)
         {QStringLiteral("source_data"), QStringLiteral("point_cloud")},
         {QStringLiteral("source_path"), QStringLiteral("E:/tmp/cloud.ply")},
         {QStringLiteral("quality"), QStringLiteral("low")},
-        {QStringLiteral("targetFaces"), 60000},
-        {QStringLiteral("threads"), 7}
+        {QStringLiteral("targetFaces"), 60000}
     });
     dialog.setSourceCandidates(QJsonArray{pointCloudCandidate()});
 
@@ -260,11 +258,7 @@ TEST(WorkflowParameterDialogStyleTest, LayoutMigrationPreservesModelSettings)
     EXPECT_EQ(settings.value(QStringLiteral("source_data")).toString(), QStringLiteral("point_cloud"));
     EXPECT_EQ(settings.value(QStringLiteral("source_path")).toString(), QStringLiteral("E:/tmp/cloud.ply"));
     EXPECT_EQ(settings.value(QStringLiteral("quality")).toString(), QStringLiteral("low"));
-    EXPECT_EQ(settings.value(QStringLiteral("threads")).toInt(), 7);
-    auto *threads_spin =
-        dialog.findChild<QSpinBox *>(QStringLiteral("modelThreadsSpin"));
-    ASSERT_NE(threads_spin, nullptr);
-    EXPECT_EQ(threads_spin->value(), 7);
+    EXPECT_FALSE(settings.contains(QStringLiteral("threads")));
     EXPECT_EQ(settings.value(QStringLiteral("depthQualityProfile")).toString(),
               QStringLiteral("low"));
     EXPECT_EQ(settings.value(QStringLiteral("targetFaces")).toInt(), 60000);
