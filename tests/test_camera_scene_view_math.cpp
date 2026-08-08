@@ -462,3 +462,24 @@ TEST(CameraSceneViewMathTest, BuildsOrientedBoxAlongPointCloudPrincipalAxes)
     const QVector3D first_edge = (vertices.at(1) - vertices.at(0)).normalized();
     EXPECT_GT(std::abs(QVector3D::dotProduct(first_edge, long_axis)), 0.99f);
 }
+
+TEST(CameraSceneViewMathTest, FitsFootprintEdgeInsteadOfBiasedVarianceDirection)
+{
+    QVector<QVector3D> points{
+        {0.0f, 0.0f, 0.0f}, {10.0f, 0.0f, 0.0f},
+        {8.0f, 4.0f, 0.0f}, {0.0f, 4.0f, 0.0f},
+    };
+    for (int index = 0; index < 30; ++index)
+    {
+        points.push_back(QVector3D(0.2f + 0.01f * index,
+                                   3.5f + 0.01f * index,
+                                   0.0f));
+    }
+
+    const PointCloudPrincipalAxes axes = pointCloudPrincipalAxes(points);
+    ASSERT_TRUE(axes.valid);
+    EXPECT_GT(std::abs(QVector3D::dotProduct(axes.first, QVector3D(1, 0, 0))),
+              0.999f);
+    EXPECT_GT(std::abs(QVector3D::dotProduct(axes.third, QVector3D(0, 0, 1))),
+              0.999f);
+}

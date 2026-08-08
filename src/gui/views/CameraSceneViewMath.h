@@ -135,8 +135,8 @@ QVector<QVector3D> axisAlignedBoundingBoxLineVertices(
     const QVector3D &minimum,
     const QVector3D &maximum);
 
-// 从点云样本的协方差主方向构造显示用坐标系。只有整体尺度有效时
-// 才返回 valid，避免球形/退化数据产生不稳定方向。
+// 先由协方差估计点云支撑平面，再在该平面投影的凸包上寻找最小
+// 面积矩形方向。只有整体尺度有效时才返回 valid。
 PointCloudPrincipalAxes pointCloudPrincipalAxes(
     const QVector<QVector3D> &points);
 

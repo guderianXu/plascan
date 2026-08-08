@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 
+#include <QVector2D>
 #include <QVector4D>
 
 namespace xjw::gui::camera_scene
@@ -553,6 +554,137 @@ PointCloudPrincipalAxes pointCloudPrincipalAxes(
     if (first.isNull() || second.isNull() || third.isNull())
     {
         return result;
+    }
+
+    QVector<QVector2D> projected_points;
+    projected_points.reserve(finite_count);
+    for (const QVector3D &point : points)
+    {
+        if (!std::isfinite(point.x()) || !std::isfinite(point.y())
+            || !std::isfinite(point.z()))
+        {
+            continue;
+        }
+        const QVector3D offset = point - center;
+        projected_points.push_back(QVector2D(
+            QVector3D::dotProduct(offset, first),
+            QVector3D::dotProduct(offset, second)));
+    }
+    std::sort(projected_points.begin(), projected_points.end(),
+              [](const QVector2D &left, const QVector2D &right)
+    {
+        return left.x() < right.x()
+            || (left.x() == right.x() && left.y() < right.y());
+    });
+    projected_points.erase(
+        std::unique(projected_points.begin(), projected_points.end()),
+        projected_points.end());
+
+    const auto cross = [](const QVector2D &origin,
+                          const QVector2D &left,
+                          const QVector2D &right)
+    {
+        return static_cast<double>(left.x() - origin.x())
+                * static_cast<double>(right.y() - origin.y())
+            - static_cast<double>(left.y() - origin.y())
+                * static_cast<double>(right.x() - origin.x());
+    };
+    QVector<QVector2D> hull;
+    hull.reserve(projected_points.size() * 2);
+    for (const QVector2D &point : projected_points)
+    {
+        while (hull.size() >= 2
+               && cross(hull.at(hull.size() - 2), hull.back(), point) <= 0.0)
+        {
+            hull.pop_back();
+        }
+        hull.push_back(point);
+    }
+    const qsizetype lower_size = hull.size();
+    for (qsizetype index = projected_points.size() - 2; index >= 0; --index)
+    {
+        const QVector2D point = projected_points.at(index);
+        while (hull.size() > lower_size
+               && cross(hull.at(hull.size() - 2), hull.back(), point) <= 0.0)
+        {
+            hull.pop_back();
+        }
+        hull.push_back(point);
+    }
+    if (hull.size() > 1)
+    {
+        hull.pop_back();
+    }
+
+    // A projected sphere can have a very large sampled hull.  A bounded,
+    // uniform hull subset keeps this display-only fit predictable; the caller
+    // still projects every cloud point to compute the final enclosing bounds.
+    constexpr qsizetype MaximumHullFitPoints = 4096;
+    if (hull.size() > MaximumHullFitPoints)
+    {
+        QVector<QVector2D> reduced_hull;
+        reduced_hull.reserve(MaximumHullFitPoints);
+        for (qsizetype index = 0; index < MaximumHullFitPoints; ++index)
+        {
+            reduced_hull.push_back(hull.at(
+                index * hull.size() / MaximumHullFitPoints));
+        }
+        hull = std::move(reduced_hull);
+    }
+
+    double best_area = std::numeric_limits<double>::infinity();
+    QVector2D best_axis;
+    double best_first_extent = 0.0;
+    double best_second_extent = 0.0;
+    constexpr qsizetype MaximumCandidateEdges = 1024;
+    const qsizetype candidate_count = std::min(
+        hull.size(), MaximumCandidateEdges);
+    for (qsizetype candidate = 0; candidate < candidate_count; ++candidate)
+    {
+        const qsizetype index = candidate * hull.size() / candidate_count;
+        QVector2D axis = hull.at((index + 1) % hull.size()) - hull.at(index);
+        if (axis.lengthSquared() <= ScoreEpsilon * ScoreEpsilon)
+        {
+            continue;
+        }
+        axis.normalize();
+        const QVector2D perpendicular(-axis.y(), axis.x());
+        double minimum_first = std::numeric_limits<double>::infinity();
+        double maximum_first = -std::numeric_limits<double>::infinity();
+        double minimum_second = std::numeric_limits<double>::infinity();
+        double maximum_second = -std::numeric_limits<double>::infinity();
+        for (const QVector2D &point : hull)
+        {
+            const double along = QVector2D::dotProduct(point, axis);
+            const double across = QVector2D::dotProduct(point, perpendicular);
+            minimum_first = std::min(minimum_first, along);
+            maximum_first = std::max(maximum_first, along);
+            minimum_second = std::min(minimum_second, across);
+            maximum_second = std::max(maximum_second, across);
+        }
+        const double first_extent = maximum_first - minimum_first;
+        const double second_extent = maximum_second - minimum_second;
+        const double area = first_extent * second_extent;
+        if (area < best_area)
+        {
+            best_area = area;
+            best_axis = axis;
+            best_first_extent = first_extent;
+            best_second_extent = second_extent;
+        }
+    }
+    if (std::isfinite(best_area) && best_area > 0.0)
+    {
+        QVector3D footprint_first =
+            (first * best_axis.x() + second * best_axis.y()).normalized();
+        QVector3D footprint_second =
+            QVector3D::crossProduct(third, footprint_first).normalized();
+        if (best_second_extent > best_first_extent)
+        {
+            std::swap(footprint_first, footprint_second);
+        }
+        first = footprint_first;
+        second = QVector3D::crossProduct(third, first).normalized();
     }
 
     const auto canonicalize = [](QVector3D axis)
