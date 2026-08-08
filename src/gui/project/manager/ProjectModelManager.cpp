@@ -169,8 +169,13 @@ void logModelWorkflowResult(
     if (payload.value(QStringLiteral(
             "final_depth_completeness_available")).toBool(false))
     {
-        LOG_INFO(QStringLiteral(
-            "[模型生成] 最终完整性通过：中位=%1，P10=%2，最低=%3")
+        const bool completeness_passed = payload.value(QStringLiteral(
+            "final_depth_completeness_gate_passed")).toBool(false);
+        const QString completeness_message = QStringLiteral(
+            "[模型生成] 最终完整性%1：中位=%2，P10=%3，最低=%4")
+            .arg(completeness_passed
+                     ? QStringLiteral("通过")
+                     : QStringLiteral("未通过（当前配置未强制质量门）"))
             .arg(payload.value(QStringLiteral(
                      "final_depth_completeness_median_frame_recall"))
                      .toDouble(),
@@ -188,7 +193,15 @@ void logModelWorkflowResult(
                      .toDouble(),
                  0,
                  'f',
-                 4));
+                 4);
+        if (completeness_passed)
+        {
+            LOG_INFO(completeness_message);
+        }
+        else
+        {
+            LOG_WARN(completeness_message);
+        }
     }
     if (payload.contains(QStringLiteral("reliably_colored_vertex_count")))
     {

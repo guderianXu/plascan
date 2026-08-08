@@ -7221,7 +7221,7 @@ TEST(MeshWorkflowSettingsTest, DepthTsdfInterpolationControlsBoundedHoleFilling)
 }
 
 TEST(MeshWorkflowSettingsTest,
-     DisabledInterpolationSurvivesOrbitalDefaultsAndKeepsObservedSurfaceOnly)
+     DisabledInterpolationRetainsConstrainedOrbitalSurfaceCarrier)
 {
     const QJsonObject settings{
         {QStringLiteral("interpolation"), QStringLiteral("disabled")},
@@ -7238,10 +7238,11 @@ TEST(MeshWorkflowSettingsTest,
     EXPECT_FALSE(options.enableSilhouetteAwareFinalHoleFill);
     EXPECT_FALSE(options.enableVisibilityConstrainedFinalHoleFill);
     EXPECT_FALSE(options.enableTinyBoundaryLoopCollapse);
-    EXPECT_FALSE(options.enableVisibilityOccupancyCompletion);
+    EXPECT_TRUE(options.enableVisibilityOccupancyCompletion);
+    EXPECT_TRUE(options.visibilityOccupancyCellBoundaryExtraction);
     EXPECT_FALSE(options.enableVisualHullSignedDistanceCompletion);
-    EXPECT_FALSE(options.enableOrbitalGapBoundaryRecovery);
-    EXPECT_FALSE(options.enableOrbitalGapAdaptiveTruncation);
+    EXPECT_TRUE(options.enableOrbitalGapBoundaryRecovery);
+    EXPECT_TRUE(options.enableOrbitalGapAdaptiveTruncation);
     EXPECT_FALSE(options.enableGeometryZeroCrossingRecovery);
     EXPECT_FALSE(options.enableCrossViewAnchoredSurfaceRecovery);
     EXPECT_FALSE(options.enableGeometryZeroCrossingCellSheets);
@@ -7253,7 +7254,7 @@ TEST(MeshWorkflowSettingsTest,
     EXPECT_FALSE(options.adaptiveTgvRecoverUnsupportedSamples);
     EXPECT_FALSE(options.implicitRegularizationRecoverAxialGaps);
     EXPECT_TRUE(options.enableDepthCompletenessDiagnostics);
-    EXPECT_FALSE(options.enforceDepthCompletenessGate);
+    EXPECT_TRUE(options.enforceDepthCompletenessGate);
     EXPECT_FALSE(options.mc33RequireSupportedSignChange);
 }
 
@@ -7275,10 +7276,11 @@ TEST(MeshWorkflowSettingsTest,
         settings, &options, 320);
 
     EXPECT_FALSE(options.fillSmallBoundaryHoles);
-    EXPECT_FALSE(options.enableVisibilityOccupancyCompletion);
+    EXPECT_TRUE(options.enableVisibilityOccupancyCompletion);
+    EXPECT_TRUE(options.visibilityOccupancyCellBoundaryExtraction);
     EXPECT_FALSE(options.enableVisualHullSignedDistanceCompletion);
-    EXPECT_FALSE(options.enableOrbitalGapBoundaryRecovery);
-    EXPECT_FALSE(options.enableOrbitalGapAdaptiveTruncation);
+    EXPECT_TRUE(options.enableOrbitalGapBoundaryRecovery);
+    EXPECT_TRUE(options.enableOrbitalGapAdaptiveTruncation);
     EXPECT_FALSE(options.enableGeometryZeroCrossingRecovery);
     EXPECT_FALSE(options.enableCrossViewAnchoredSurfaceRecovery);
     EXPECT_FALSE(options.enableGeometryZeroCrossingCellSheets);
@@ -7289,7 +7291,7 @@ TEST(MeshWorkflowSettingsTest,
     EXPECT_FALSE(options.adaptiveTgvRecoverUnsupportedSamples);
     EXPECT_FALSE(options.implicitRegularizationRecoverAxialGaps);
     EXPECT_TRUE(options.enableDepthCompletenessDiagnostics);
-    EXPECT_FALSE(options.enforceDepthCompletenessGate);
+    EXPECT_TRUE(options.enforceDepthCompletenessGate);
     EXPECT_FALSE(options.mc33RequireSupportedSignChange);
 }
 

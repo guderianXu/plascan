@@ -66,6 +66,14 @@
 
 ### 优化
 
+- MVS 深度算法修订到第 22 版；超高质量环拍在自动后端且 CUDA/OpenCL 同时可用时改为 CUDA 独占
+  整批深度帧，避免动态异构队列让
+  核显抢到困难视角；OpenCL-only 仍保留运行时缓存、局部内存和单设备执行槽，并恢复完整深度候选/
+  细化采样与严格浮点构建选项。
+- “禁用插值”改为只排除插值生成的深度观测，环拍默认直接提取由深度、轮廓和自由空间共同约束的
+  闭合占据载体并在拓扑保护下向实测深度投影；无约束视觉外壳和最终三角补洞仍禁用，最终深度完整性
+  质量门继续强制执行。
+
 - TSDF 新增默认关闭的“实测支持连通性”实验路径：只提升已由真实深度积分、具备双来源和低离散证据的
   support 位，不修改任何 TSDF 数值，并对候选单元片执行非级联、锚点和切平面边界保护。Dino 严格禁用
   插值实测仅恢复 16 个样本、解锁 41 个零交叉单元，80k 面网格开放边从 16,096 增至 16,114，未达到
@@ -222,6 +230,11 @@
 - `VocabularyOverlapRetriever.cpp` 拆分 TF-IDF 词频权重计算中的超长 `document_frequency` 下标表达式，并新增源文件 120 列风格回归测试，保持 dense/inverted pair scoring 行为不变。
 - `BaInputBuilder.cpp` 拆分 BA 输入构造中影像路径规范化的超长调用，并新增源文件 120 列风格回归测试，保持控制点 track 和比例尺约束构造行为不变。
 
+### 修复
+
+- 修复模型任务只要生成成功就把未达阈值的最终完整性写成“通过”的误导日志；现在按真实
+  `final_depth_completeness_gate_passed` 输出通过或未通过。
+
 ### 不兼容变更
 
 - 删除 `src/core/feature_extractors`、`src/core/feature_match` 及 SuperPoint、SuperGlue、DISK、ALIKED、
@@ -230,6 +243,13 @@
   直接接收两幅影像并输出逐影像 `.pimatch`，旧 `.match + .match.json` 不提供兼容读取层。
 
 ### 验证
+
+- `cmake --build build/windows-vcpkg-cuda-release --config Release --parallel 16` 通过；
+  `ctest --test-dir build/windows-vcpkg-cuda-release -C Release --output-on-failure` 通过，1909 个测试通过，
+  其余为 8 个显式跳过和 1 个禁用基准。
+- Hyb2 第 22 版 CUDA-only 独立重放 14/14 帧均可融合，深度阶段 25.14 秒；第 21 版混合 CUDA/OpenCL
+  正式结果仅 4/14 帧可融合且耗时 31.67 秒。第 22 版禁用深度插值模型为 69,402 顶点/138,800 面，
+  开放边与非流形边均为 0、Euler 数为 2，最终完整性中位/P10/最低为 0.8907/0.8557/0.8326，质量门通过。
 
 - `cmake -S . -B build/windows-vcpkg-cuda-release -DBUILD_TESTS=ON` 与
   `cmake --build build/windows-vcpkg-cuda-release --parallel 32` 通过，完整生成 `plascan.exe`、MVS、mesh、

@@ -29,6 +29,9 @@ live under `src/core/mvs/tests/`.
   replace a contradicted native hypothesis when at least three sources agree, or transfer a measured layer into
   a missing supported pixel. Reuse rejects an incomplete revision-15 evidence set instead of silently
   interpreting missing evidence as valid geometry.
+- Revision 22 restores the full OpenCL coarse/refinement hypothesis budget and strict NCC square-root numerics.
+  It also keeps automatic highest-quality orbital batches entirely on CUDA when CUDA and OpenCL coexist, so
+  revision-21 artifacts produced by the reduced OpenCL search are not silently reused.
 - GUI project metadata consumes manifest records. The workspace tree should refresh from metadata rather than
   treating directory scans as the primary state.
 
@@ -94,19 +97,20 @@ live under `src/core/mvs/tests/`.
   One device still serializes its constant-memory camera updates, while separate devices may execute frames
   concurrently.
 - `DepthComputeScheduler` owns one priority queue shared by CPU, CUDA, and OpenCL GPU workers. Faster workers
-  naturally take more frames. Auto mode excludes NVIDIA OpenCL devices already represented by CUDA, while
-  Intel and AMD OpenCL GPUs can process other frames concurrently.
+  naturally take more frames. Auto mode excludes NVIDIA OpenCL devices already represented by CUDA. For the
+  highest-quality orbital profile, CUDA processes the complete batch when CUDA and Intel/AMD OpenCL coexist;
+  lower profiles and explicit OpenCL jobs can still use those OpenCL devices.
 - Multi-GPU scheduling is frame-level: one depth map remains on one device, while different reference frames
   run concurrently. Every physical accelerator is represented before host preparation lanes are duplicated.
-  With CUDA plus an Intel/AMD OpenCL GPU, the default pool keeps both devices active and adds a second CUDA host
-  preparation slot and one OpenCL preparation slot. Progress reports physical GPU count separately from active
-  host frame slots.
+  Outside the highest-quality orbital exception, CUDA plus an Intel/AMD OpenCL GPU keeps both devices active and
+  may add one preparation lane per device. Progress reports physical GPU count separately from active host slots.
 - The OpenCL C 1.2 backend runs inverse-depth hypothesis search, multi-source NCC, mask-aware sampling, depth
   hints, coarse-to-fine refinement, and confidence filtering. Each OpenCL GPU has one command-queue/kernel lane;
   a second host worker may prepare the next frame but cannot submit a competing kernel. Scaled float images and
-  all OpenCL buffers are bounded/reused, and reference patches are tiled in work-group local memory. CPU packing
-  and post-processing remain outside lane ownership. CPU execution remains the native C++/OpenMP implementation
-  rather than using a CPU OpenCL device.
+  all OpenCL buffers are bounded/reused, and reference patches are tiled in work-group local memory. The quality
+  profiles retain the full configured depth hypothesis count plus 13 refinement samples, and the program does not
+  use relaxed-math compilation. CPU packing and post-processing remain outside lane ownership. CPU execution
+  remains the native C++/OpenMP implementation rather than using a CPU OpenCL device.
 - A task-lifetime lease keyed by physical PCI identity prevents a second PlaScan GUI/CLI process from using the
   same GPU during depth estimation. OpenCL failures are reported directly instead of silently running a GPU-tagged
   frame on the CPU.

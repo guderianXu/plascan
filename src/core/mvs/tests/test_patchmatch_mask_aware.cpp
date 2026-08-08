@@ -16,17 +16,22 @@
 namespace
 {
 
-TEST(PatchMatchOpenClKernelContractTest, UsesLocalReferenceTileAndCoarseToFineSearch)
+TEST(PatchMatchOpenClKernelContractTest, RetainsQualitySamplingWithLocalReferenceTile)
 {
     const std::string prefix = xjw::mvs::detail::kPatchMatchOpenClSourcePrefix;
     const std::string main = xjw::mvs::detail::kPatchMatchOpenClSourceMain;
+    const std::string build_options =
+        xjw::mvs::detail::kPatchMatchOpenClBuildOptions;
 
-    EXPECT_NE(prefix.find("native_rsqrt"), std::string::npos);
+    EXPECT_EQ(build_options, "-cl-mad-enable");
+    EXPECT_EQ(build_options.find("fast-relaxed-math"), std::string::npos);
+    EXPECT_EQ(prefix.find("native_rsqrt"), std::string::npos);
+    EXPECT_NE(prefix.find("sqrt(variance_product)"), std::string::npos);
     EXPECT_NE(main.find("__local float reference_tile"), std::string::npos);
     EXPECT_NE(main.find("barrier(CLK_LOCAL_MEM_FENCE)"), std::string::npos);
-    EXPECT_NE(main.find("coarse_samples = clamp((depth_sample_count + 1) / 2, 16, 48)"),
+    EXPECT_NE(main.find("coarse_samples = clamp(depth_sample_count, 16, 96)"),
               std::string::npos);
-    EXPECT_NE(main.find("refinement_samples = clamp(depth_sample_count / 4, 6, 16)"),
+    EXPECT_NE(main.find("for (int refine_index = -6; refine_index <= 6; ++refine_index)"),
               std::string::npos);
 }
 

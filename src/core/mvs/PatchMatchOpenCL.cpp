@@ -515,7 +515,7 @@ std::shared_ptr<OpenClRuntime> openClRuntimeForDevice(
     error = clBuildProgram(runtime->program,
                            1,
                            &device.device,
-                           "-cl-mad-enable -cl-fast-relaxed-math",
+                           detail::kPatchMatchOpenClBuildOptions,
                            nullptr,
                            nullptr);
     if (error != CL_SUCCESS)

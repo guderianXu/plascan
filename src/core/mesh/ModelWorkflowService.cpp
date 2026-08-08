@@ -424,7 +424,7 @@ bool interpolationIsDisabled(const QJsonObject &settings)
         QStringLiteral("disabled");
 }
 
-void enforceObservationOnlySurfacePolicy(
+void enforceNoDepthInterpolationPolicy(
     const QJsonObject &settings,
     xjw::mesh::DepthTsdfOptions *options)
 {
@@ -433,38 +433,35 @@ void enforceObservationOnlySurfacePolicy(
         return;
     }
 
-    // “插值禁用” must dominate automatic orbital completion defaults.  Keep
-    // only surfaces supported by integrated depth evidence; otherwise the GUI
-    // says interpolation is off while occupancy/visual-hull recovery can still
-    // bridge unobserved regions with large triangle sheets.
+    // “插值禁用” applies to depth observations, not to the construction of a
+    // continuous surface between measured samples. Exclude every path that
+    // invents depth pixels or performs an unconstrained visual-hull fill, while
+    // retaining the orbital visibility-occupancy carrier and geometry-verified
+    // boundary recovery. Those paths are bounded by depth, silhouettes and
+    // free-space visibility and match the user-facing semantics of building a
+    // mesh without interpolating the source depth maps.
     options->fillSmallBoundaryHoles = false;
     options->enableSilhouetteAwareFinalHoleFill = false;
     options->enableVisibilityConstrainedFinalHoleFill = false;
     options->enableTinyBoundaryLoopCollapse = false;
-    options->enableVisibilityOccupancyCompletion = false;
     options->enableVisualHullSignedDistanceCompletion = false;
-    options->enableOrbitalGapBoundaryRecovery = false;
-    options->enableOrbitalGapAdaptiveTruncation = false;
-    options->enableGeometryZeroCrossingRecovery = false;
-    options->enableCrossViewAnchoredSurfaceRecovery = false;
-    options->enableGeometryZeroCrossingCellSheets = false;
-    options->enableContourBandZeroCrossingSupport = false;
-    options->enableSurfacePatchSupport = false;
-    options->enableGeometryVerifiedBoundaryRecovery = false;
+    if (!settings.contains(QStringLiteral(
+            "tsdfVisibilityOccupancyCellBoundaryExtraction")))
+    {
+        // In no-depth-interpolation mode, extract the visibility carrier
+        // itself instead of cutting it back to only the high-resolution TSDF
+        // narrow band. The carrier is already constrained by measured depth,
+        // silhouettes and free space, remains closed by construction, and is
+        // subsequently projected toward measured depth under topology guards.
+        options->visibilityOccupancyCellBoundaryExtraction = true;
+    }
     options->allowInvalidNearestPixelRecovery = false;
     options->excludeAnchoredInterpolationObservations = true;
     options->adaptiveTgvRecoverUnsupportedSamples = false;
     options->implicitRegularizationRecoverAxialGaps = false;
-    // Observation-only output is expected to retain genuine gaps in the
-    // measured surface. Keep completeness diagnostics for the report, but do
-    // not reject an otherwise usable mesh against thresholds designed for a
-    // completed/interpolated surface.
-    options->enforceDepthCompletenessGate = false;
-    // "No interpolation" disables every source of synthetic geometry above,
-    // but it must still allow the iso-surface extractor to interpolate a zero
-    // crossing inside the already fused TSDF cell. Requiring both signs to
-    // carry direct sample support deleted most MC33 faces at narrow-band
-    // boundaries and turned valid measured surfaces into holes.
+    // The iso-surface extractor must interpolate a zero crossing inside the
+    // fused TSDF cell. Requiring both signs to carry direct sample support cuts
+    // away the visibility-constrained carrier at narrow-band boundaries.
     options->mc33RequireSupportedSignChange = false;
 }
 
@@ -2107,7 +2104,7 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
         settings.value(QStringLiteral("tsdfWeakBoundaryTipTrimPasses"))
             .toInt(automatic_weak_boundary_trim_passes),
         4);
-    enforceObservationOnlySurfacePolicy(settings, &options);
+    enforceNoDepthInterpolationPolicy(settings, &options);
     return options;
 }
 
@@ -2575,10 +2572,9 @@ void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
     if (!high_detail_model)
     {
         // Low-resolution and large-face orbital presets return before the
-        // detail-only defaults below.  Re-apply the user-facing interpolation
-        // contract here as well, otherwise the orbital defaults above leave
-        // occupancy completion enabled even when the dialog says disabled.
-        enforceObservationOnlySurfacePolicy(settings, options);
+        // detail-only defaults below. Re-apply the no-depth-interpolation
+        // contract without disabling the visibility-constrained carrier.
+        enforceNoDepthInterpolationPolicy(settings, options);
         return;
     }
     if (!settings.contains(QStringLiteral(
@@ -2806,7 +2802,7 @@ void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
             options->visibilityHoleFillMaximumConflictViews = 0;
         }
     }
-    enforceObservationOnlySurfacePolicy(settings, options);
+    enforceNoDepthInterpolationPolicy(settings, options);
 }
 
 FinalSurfaceDenoisingResult applyTopologyGuardedFinalSurfaceDenoising(
@@ -3691,7 +3687,8 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 observation_only_surface &&
                         orbital_visual_hull_completion_configured
                     ? QStringLiteral(
-                          "插值已禁用，跳过环拍视觉外壳补全，仅输出深度观测支持的表面")
+                          "插值已禁用：排除插值深度，保留深度/轮廓/可见性约束的连续表面；"
+                          "跳过无约束环拍视觉外壳补全")
                     : orbital_visual_hull_completion_requested
                     ? QStringLiteral(
                           "基础表面不完整，正在启动环拍视觉外壳补全...")

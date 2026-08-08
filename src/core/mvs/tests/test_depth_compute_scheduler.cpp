@@ -22,6 +22,7 @@ using xjw::mvs::GpuDeviceDescriptor;
 using xjw::mvs::GpuDeviceLeaseSet;
 using xjw::mvs::buildDepthComputeWorkerPool;
 using xjw::mvs::fallbackGpuPhysicalIdentity;
+using xjw::mvs::preferCudaOnlyForHighestQualityOrbital;
 
 TEST(DepthComputeSchedulerTest, ReturnsHighestPriorityFrameFirst)
 {
@@ -99,6 +100,20 @@ TEST(DepthComputeSchedulerTest, CapsMixedOpenClBackendAtOnePreparationWorker)
     EXPECT_EQ(workers[0].id(), "CUDA:0");
     EXPECT_EQ(workers[1].id(), "OpenCL:1");
     EXPECT_EQ(workers[2].id(), "OpenCL:1");
+}
+
+TEST(DepthComputeSchedulerTest, HighestQualityOrbitalUsesCudaOnlyInAutomaticMode)
+{
+    EXPECT_TRUE(preferCudaOnlyForHighestQualityOrbital(
+        true, true, true, true, "highest"));
+    EXPECT_FALSE(preferCudaOnlyForHighestQualityOrbital(
+        false, true, true, true, "highest"));
+    EXPECT_FALSE(preferCudaOnlyForHighestQualityOrbital(
+        true, true, true, true, "high"));
+    EXPECT_FALSE(preferCudaOnlyForHighestQualityOrbital(
+        true, true, true, false, "highest"));
+    EXPECT_FALSE(preferCudaOnlyForHighestQualityOrbital(
+        true, false, true, true, "highest"));
 }
 
 TEST(GpuDeviceLeaseTest, PreventsConcurrentProcessLeaseForSamePhysicalDevice)

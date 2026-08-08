@@ -21,6 +21,16 @@ const char *depthComputeBackendName(DepthComputeBackend backend)
     return "Unknown";
 }
 
+bool preferCudaOnlyForHighestQualityOrbital(bool automaticBackend,
+                                            bool cudaAvailable,
+                                            bool openClAvailable,
+                                            bool orbitalScene,
+                                            const std::string &qualityProfile)
+{
+    return automaticBackend && cudaAvailable && openClAvailable &&
+        orbitalScene && qualityProfile == "highest";
+}
+
 std::string DepthComputeWorker::id() const
 {
     std::string result = depthComputeBackendName(backend);

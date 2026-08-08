@@ -8800,6 +8800,19 @@ void DepthMapGenerator::runInBackground()
             selectedOpenClDevices.push_back(device);
         }
     }
+    const bool cudaOnlyQualityMode = preferCudaOnlyForHighestQualityOrbital(
+        configuredBackend == PatchMatchBackend::Auto,
+        cudaAvailable,
+        !selectedOpenClDevices.empty(),
+        _effectiveSceneProfile == MvsSceneProfile::OrbitalObject,
+        _config.qualityProfile);
+    if (cudaOnlyQualityMode)
+    {
+        LOG_INFO(QStringLiteral(
+            "[MVS] 超高质量环拍采用 CUDA 独占深度估计；"
+            "OpenCL 设备不参与本批帧调度，避免异构数值差异造成困难视角退化"));
+        selectedOpenClDevices.clear();
+    }
     const int cpuThreadCount = std::max(1, _config.cpuWorkerCount);
 
     std::vector<FramePriority> framePriorities;

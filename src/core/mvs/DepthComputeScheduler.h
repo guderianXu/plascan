@@ -23,6 +23,16 @@ enum class DepthComputeBackend
 
 const char *depthComputeBackendName(DepthComputeBackend backend);
 
+/// Highest-quality orbital reconstruction is sensitive to backend-dependent
+/// photometric numerics. When CUDA and OpenCL are both available in automatic
+/// mode, keep every frame on CUDA so a faster integrated GPU cannot claim an
+/// arbitrary difficult view and lower the batch quality.
+bool preferCudaOnlyForHighestQualityOrbital(bool automaticBackend,
+                                            bool cudaAvailable,
+                                            bool openClAvailable,
+                                            bool orbitalScene,
+                                            const std::string &qualityProfile);
+
 struct DepthComputeWorker
 {
     DepthComputeBackend backend = DepthComputeBackend::Cpu;

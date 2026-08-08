@@ -7,6 +7,8 @@ namespace mvs
 namespace detail
 {
 
+inline constexpr const char *kPatchMatchOpenClBuildOptions = "-cl-mad-enable";
+
 inline constexpr const char *kPatchMatchOpenClSourcePrefix = R"CLC(
 #define MAX_SOURCES 16
 #define WORK_GROUP_SIZE 16
@@ -177,7 +179,7 @@ inline float source_ncc(int center_x,
         return 0.0f;
     }
     float covariance = sum_product * inverse_count - mean_reference * mean_source;
-    return clamp((covariance * native_rsqrt(variance_product) + 1.0f) * 0.5f,
+    return clamp((covariance / sqrt(variance_product) + 1.0f) * 0.5f,
                  0.0f,
                  1.0f);
 }
@@ -332,7 +334,7 @@ __kernel void estimate_depth(
         }
     }
 
-    int coarse_samples = clamp((depth_sample_count + 1) / 2, 16, 48);
+    int coarse_samples = clamp(depth_sample_count, 16, 96);
     float inverse_far = 1.0f / local_far;
     float inverse_near = 1.0f / local_near;
     float inverse_step = (inverse_near - inverse_far) / (float)(coarse_samples - 1);
@@ -359,12 +361,8 @@ __kernel void estimate_depth(
     if (best_depth > 0.0f)
     {
         float best_inverse = 1.0f / best_depth;
-        int refinement_samples = clamp(depth_sample_count / 4, 6, 16);
-        float refine_step = inverse_step / (float)refinement_samples;
-        int refinement_half = refinement_samples / 2;
-        for (int refine_index = -refinement_half;
-             refine_index <= refinement_half;
-             ++refine_index)
+        float refine_step = inverse_step / 6.0f;
+        for (int refine_index = -6; refine_index <= 6; ++refine_index)
         {
             float inverse_depth = clamp(best_inverse + refine_step * (float)refine_index,
                                         inverse_far,
