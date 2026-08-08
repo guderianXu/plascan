@@ -1,11 +1,17 @@
 #include "SparseTgvSolver.h"
 
+#include "ProcessCpuTimer.h"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
 #include <stdexcept>
 #include <vector>
+
+#ifdef MESHING_OPENMP
+#include <omp.h>
+#endif
 
 namespace xjw::mesh
 {
@@ -176,10 +182,14 @@ float l1DataProx(float value,
 
 double meanAbsoluteCurvature(
     const std::vector<float> &field,
-    const std::vector<AdaptiveTsdfOctreeNode> &nodes)
+    const std::vector<AdaptiveTsdfOctreeNode> &nodes,
+    int worker_count)
 {
     double sum = 0.0;
-    std::uint64_t count = 0;
+    unsigned long long count = 0;
+#ifdef MESHING_OPENMP
+#pragma omp parallel for schedule(static) num_threads(worker_count) if(worker_count > 1) reduction(+:sum,count)
+#endif
     for (int index = 0; index < static_cast<int>(nodes.size()); ++index)
     {
         for (int axis = 0; axis < 3; ++axis)
@@ -212,7 +222,19 @@ SparseTgvStatistics SparseTgvSolver::solve(
     }
     SparseTgvStatistics statistics;
     const auto start = std::chrono::steady_clock::now();
+    const double cpu_start = detail::processCpuTimeMilliseconds();
     const int node_count = static_cast<int>(octree->leaves.size());
+#ifdef MESHING_OPENMP
+    const int worker_count = std::max(
+        1,
+        std::min(node_count,
+                 options.workerCount > 0
+                     ? options.workerCount
+                     : omp_get_max_threads()));
+#else
+    const int worker_count = 1;
+#endif
+    statistics.effectiveWorkerCount = worker_count;
     statistics.activeNodeCount = node_count;
     if (node_count == 0)
     {
@@ -230,6 +252,9 @@ SparseTgvStatistics SparseTgvSolver::solve(
     std::vector<Vector3> extrapolated_v(node_count);
     std::vector<Vector3> first_dual(node_count);
     std::vector<Symmetric3> second_dual(node_count);
+#ifdef MESHING_OPENMP
+#pragma omp parallel for schedule(static) num_threads(worker_count) if(worker_count > 1)
+#endif
     for (int index = 0; index < node_count; ++index)
     {
         const AdaptiveTsdfOctreeNode &node = octree->leaves[index];
@@ -261,7 +286,7 @@ SparseTgvStatistics SparseTgvSolver::solve(
             8.0f);
     }
     statistics.initialMeanAbsoluteCurvature =
-        meanAbsoluteCurvature(u, octree->leaves);
+        meanAbsoluteCurvature(u, octree->leaves, worker_count);
 
     const int maximum_iterations = std::clamp(
         options.maximumIterations, 1, 1000);
@@ -273,6 +298,131 @@ SparseTgvStatistics SparseTgvSolver::solve(
     const float alpha_one = std::max(1.0e-5f, options.firstOrderWeight);
     const float alpha_zero = std::max(1.0e-5f, options.secondOrderWeight);
 
+#ifdef MESHING_OPENMP
+    bool stop = false;
+    double absolute_update_sum = 0.0;
+#pragma omp parallel num_threads(worker_count) if(worker_count > 1) shared(stop, absolute_update_sum)
+    {
+        for (int iteration = 0; iteration < maximum_iterations; ++iteration)
+        {
+#pragma omp single
+            {
+                stop = isCancelled && isCancelled();
+                statistics.cancelled = stop;
+                absolute_update_sum = 0.0;
+                if (!stop && progress &&
+                    (iteration == 0 || (iteration + 1) % 10 == 0))
+                {
+                    progress(iteration + 1, maximum_iterations);
+                }
+            }
+            if (!stop)
+            {
+#pragma omp for schedule(static)
+                for (int index = 0; index < node_count; ++index)
+                {
+                    Vector3 first = first_dual[index];
+                    for (int axis = 0; axis < 3; ++axis)
+                    {
+                        first[axis] += sigma *
+                            (forwardDifference(extrapolated_u,
+                                               octree->leaves,
+                                               index,
+                                               axis) -
+                             extrapolated_v[index][axis]);
+                    }
+                    projectVector(alpha_one, &first);
+                    first_dual[index] = first;
+
+                    Symmetric3 second = second_dual[index];
+                    second[0] += sigma * forwardVectorDifference(
+                        extrapolated_v, octree->leaves, index, 0, 0);
+                    second[1] += sigma * forwardVectorDifference(
+                        extrapolated_v, octree->leaves, index, 1, 1);
+                    second[2] += sigma * forwardVectorDifference(
+                        extrapolated_v, octree->leaves, index, 2, 2);
+                    second[3] += sigma * 0.5f *
+                        (forwardVectorDifference(
+                             extrapolated_v, octree->leaves, index, 0, 1) +
+                         forwardVectorDifference(
+                             extrapolated_v, octree->leaves, index, 1, 0));
+                    second[4] += sigma * 0.5f *
+                        (forwardVectorDifference(
+                             extrapolated_v, octree->leaves, index, 0, 2) +
+                         forwardVectorDifference(
+                             extrapolated_v, octree->leaves, index, 2, 0));
+                    second[5] += sigma * 0.5f *
+                        (forwardVectorDifference(
+                             extrapolated_v, octree->leaves, index, 1, 2) +
+                         forwardVectorDifference(
+                             extrapolated_v, octree->leaves, index, 2, 1));
+                    projectSymmetric(alpha_zero, &second);
+                    second_dual[index] = second;
+                }
+
+#pragma omp for schedule(static) reduction(+:absolute_update_sum)
+                for (int index = 0; index < node_count; ++index)
+                {
+                    const float unconstrained =
+                        u[index] + tau * backwardDivergence(
+                            first_dual, octree->leaves, index);
+                    next_u[index] = std::clamp(
+                        l1DataProx(
+                            unconstrained,
+                            data_value[index],
+                            tau * std::max(0.0f, options.dataFidelity) *
+                                data_weight[index]),
+                        -1.0f,
+                        1.0f);
+                    const Vector3 symmetric_divergence =
+                        backwardSymmetricDivergence(
+                            second_dual, octree->leaves, index);
+                    for (int component = 0; component < 3; ++component)
+                    {
+                        next_v[index][component] =
+                            v[index][component] +
+                            tau * (first_dual[index][component] +
+                                   symmetric_divergence[component]);
+                    }
+                    absolute_update_sum +=
+                        std::fabs(next_u[index] - u[index]);
+                }
+
+#pragma omp for schedule(static)
+                for (int index = 0; index < node_count; ++index)
+                {
+                    extrapolated_u[index] =
+                        next_u[index] + theta * (next_u[index] - u[index]);
+                    for (int component = 0; component < 3; ++component)
+                    {
+                        extrapolated_v[index][component] =
+                            next_v[index][component] +
+                            theta * (next_v[index][component] -
+                                     v[index][component]);
+                    }
+                }
+            }
+#pragma omp single
+            {
+                if (!stop)
+                {
+                    u.swap(next_u);
+                    v.swap(next_v);
+                    statistics.iterationCount = iteration + 1;
+                    statistics.finalMeanAbsoluteUpdate =
+                        absolute_update_sum / static_cast<double>(node_count);
+                    stop = statistics.iterationCount >= minimum_iterations &&
+                        statistics.finalMeanAbsoluteUpdate <=
+                            std::max(0.0f, options.convergenceTolerance);
+                }
+            }
+            if (stop)
+            {
+                break;
+            }
+        }
+    }
+#else
     for (int iteration = 0; iteration < maximum_iterations; ++iteration)
     {
         if (isCancelled && isCancelled())
@@ -284,10 +434,6 @@ SparseTgvStatistics SparseTgvSolver::solve(
         {
             progress(iteration + 1, maximum_iterations);
         }
-
-#ifdef MESHING_OPENMP
-#pragma omp parallel for schedule(static)
-#endif
         for (int index = 0; index < node_count; ++index)
         {
             Vector3 first = first_dual[index];
@@ -300,7 +446,6 @@ SparseTgvStatistics SparseTgvSolver::solve(
             }
             projectVector(alpha_one, &first);
             first_dual[index] = first;
-
             Symmetric3 second = second_dual[index];
             second[0] += sigma * forwardVectorDifference(
                 extrapolated_v, octree->leaves, index, 0, 0);
@@ -326,40 +471,28 @@ SparseTgvStatistics SparseTgvSolver::solve(
             projectSymmetric(alpha_zero, &second);
             second_dual[index] = second;
         }
-
         double absolute_update_sum = 0.0;
-#ifdef MESHING_OPENMP
-#pragma omp parallel for schedule(static) reduction(+:absolute_update_sum)
-#endif
         for (int index = 0; index < node_count; ++index)
         {
-            const float unconstrained =
-                u[index] + tau * backwardDivergence(
-                    first_dual, octree->leaves, index);
+            const float unconstrained = u[index] + tau * backwardDivergence(
+                first_dual, octree->leaves, index);
             next_u[index] = std::clamp(
-                l1DataProx(
-                    unconstrained,
-                    data_value[index],
-                    tau * std::max(0.0f, options.dataFidelity) *
-                        data_weight[index]),
+                l1DataProx(unconstrained,
+                           data_value[index],
+                           tau * std::max(0.0f, options.dataFidelity) *
+                               data_weight[index]),
                 -1.0f,
                 1.0f);
-            const Vector3 symmetric_divergence =
-                backwardSymmetricDivergence(
-                    second_dual, octree->leaves, index);
+            const Vector3 symmetric_divergence = backwardSymmetricDivergence(
+                second_dual, octree->leaves, index);
             for (int component = 0; component < 3; ++component)
             {
-                next_v[index][component] =
-                    v[index][component] +
+                next_v[index][component] = v[index][component] +
                     tau * (first_dual[index][component] +
                            symmetric_divergence[component]);
             }
             absolute_update_sum += std::fabs(next_u[index] - u[index]);
         }
-
-#ifdef MESHING_OPENMP
-#pragma omp parallel for schedule(static)
-#endif
         for (int index = 0; index < node_count; ++index)
         {
             extrapolated_u[index] =
@@ -368,8 +501,7 @@ SparseTgvStatistics SparseTgvSolver::solve(
             {
                 extrapolated_v[index][component] =
                     next_v[index][component] +
-                    theta * (next_v[index][component] -
-                             v[index][component]);
+                    theta * (next_v[index][component] - v[index][component]);
             }
         }
         u.swap(next_u);
@@ -384,17 +516,27 @@ SparseTgvStatistics SparseTgvSolver::solve(
             break;
         }
     }
+#endif
 
+#ifdef MESHING_OPENMP
+#pragma omp parallel for schedule(static) num_threads(worker_count) if(worker_count > 1)
+#endif
     for (int index = 0; index < node_count; ++index)
     {
         octree->leaves[index].value = u[index];
     }
     statistics.finalMeanAbsoluteCurvature =
-        meanAbsoluteCurvature(u, octree->leaves);
+        meanAbsoluteCurvature(u, octree->leaves, worker_count);
     statistics.elapsedMs =
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start)
             .count();
+    statistics.cpuTimeMs =
+        detail::processCpuTimeMilliseconds() - cpu_start;
+    statistics.cpuDuty = statistics.elapsedMs > 0 && worker_count > 0
+        ? statistics.cpuTimeMs /
+              (static_cast<double>(statistics.elapsedMs) * worker_count)
+        : 0.0;
     return statistics;
 }
 

@@ -815,6 +815,37 @@ TEST(VisibilityOccupancyHandleRepairTest, PreservesProtectedExteriorReachability
     EXPECT_EQ(result.statistics.protectedExteriorSampleCountAfter, 1U);
 }
 
+TEST(VisibilityOccupancySurfaceBuilderTest,
+     ParallelProjectionMatchesSingleThreadResult)
+{
+    const std::vector<SyntheticFrame> frames = makeSphereFrames();
+    auto single_options = makeOptions();
+    single_options.workerCount = 1;
+    const auto single = xjw::mesh::VisibilityOccupancySurfaceBuilder::build(
+        {-1.0f, -1.0f, -1.0f},
+        {1.0f, 1.0f, 1.0f},
+        makeViews(frames),
+        single_options);
+    auto parallel_options = single_options;
+    parallel_options.workerCount = 4;
+    const auto parallel = xjw::mesh::VisibilityOccupancySurfaceBuilder::build(
+        {-1.0f, -1.0f, -1.0f},
+        {1.0f, 1.0f, 1.0f},
+        makeViews(frames),
+        parallel_options);
+
+    ASSERT_TRUE(single.ok) << single.error;
+    ASSERT_TRUE(parallel.ok) << parallel.error;
+    EXPECT_EQ(single.occupied, parallel.occupied);
+    EXPECT_EQ(single.signedDistanceSamples, parallel.signedDistanceSamples);
+    EXPECT_EQ(single.statistics.depthEmptyVoteCount,
+              parallel.statistics.depthEmptyVoteCount);
+    EXPECT_EQ(single.statistics.depthFullVoteCount,
+              parallel.statistics.depthFullVoteCount);
+    EXPECT_EQ(single.statistics.effectiveWorkerCount, 1);
+    EXPECT_EQ(parallel.statistics.effectiveWorkerCount, 4);
+}
+
 TEST(VisibilityOccupancyHandleRepairTest,
      SealsUnprotectedExteriorPocketWhenTopologyImproves)
 {

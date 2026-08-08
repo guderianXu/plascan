@@ -19,6 +19,7 @@ struct SparseTgvOptions
     float dualStep = 0.12f;
     float extrapolation = 1.0f;
     float convergenceTolerance = 1.0e-4f;
+    int workerCount = 0;
 };
 
 struct SparseTgvStatistics
@@ -31,6 +32,9 @@ struct SparseTgvStatistics
     double finalMeanAbsoluteCurvature = 0.0;
     double finalMeanAbsoluteUpdate = 0.0;
     std::int64_t elapsedMs = 0;
+    double cpuTimeMs = 0.0;
+    double cpuDuty = 0.0;
+    int effectiveWorkerCount = 1;
 };
 
 class SparseTgvSolver

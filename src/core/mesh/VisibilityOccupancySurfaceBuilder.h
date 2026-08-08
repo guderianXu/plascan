@@ -55,11 +55,22 @@ struct VisibilityOccupancyOptions
     std::size_t wellComposedRepairMaximumFilledSampleCount = 1024;
     int signedDistanceMaximumSamples = 12;
     bool buildSignedDistanceSamples = true;
+    int workerCount = 0;
     std::function<bool()> isCancelled;
 };
 
 struct VisibilityOccupancyStatistics
 {
+    int effectiveWorkerCount = 1;
+    std::int64_t projectionElapsedMs = 0;
+    double projectionCpuTimeMs = 0.0;
+    double projectionCpuDuty = 0.0;
+    std::int64_t minCutElapsedMs = 0;
+    double minCutCpuTimeMs = 0.0;
+    double minCutCpuDuty = 0.0;
+    std::int64_t cleanupElapsedMs = 0;
+    double cleanupCpuTimeMs = 0.0;
+    double cleanupCpuDuty = 0.0;
     std::uint64_t sampleCount = 0;
     std::uint64_t projectedViewCount = 0;
     std::uint64_t silhouetteInsideVoteCount = 0;

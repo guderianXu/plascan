@@ -1,14 +1,22 @@
 #include "VisibilityOccupancySurfaceBuilder.h"
 
 #include "DepthRayMetric.h"
+#include "ProcessCpuTimer.h"
 #include "VisibilityOccupancyDistanceField.h"
 #include "VisibilityOccupancyCleanup.h"
 #include "VisibilityOccupancyHandleRepair.h"
 #include "VisibilityOccupancyWellComposedRepair.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <limits>
+#include <mutex>
+
+#ifdef MESHING_OPENMP
+#include <omp.h>
+#endif
 
 namespace xjw::mesh
 {
@@ -206,6 +214,19 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
     problem.sizeY = result.sampleDimensions[1];
     problem.sizeZ = result.sampleDimensions[2];
     const std::size_t node_count = problem.nodeCount();
+    const int maximum_parallel_tasks = std::max(
+        1, std::min(problem.sizeZ, static_cast<int>(node_count)));
+#ifdef MESHING_OPENMP
+    const int worker_count = std::max(
+        1,
+        std::min(maximum_parallel_tasks,
+                 options.workerCount > 0
+                     ? options.workerCount
+                     : omp_get_max_threads()));
+#else
+    const int worker_count = 1;
+#endif
+    result.statistics.effectiveWorkerCount = worker_count;
     result.statistics.sampleCount = node_count;
     problem.sourceCapacities.assign(node_count, 0);
     problem.sinkCapacities.assign(node_count, 0);
@@ -218,12 +239,39 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
     std::vector<std::uint8_t> depth_full_view_counts(node_count, 0);
     std::vector<std::uint8_t> silhouette_outside_view_counts(node_count, 0);
 
+    unsigned long long projected_view_count = 0;
+    unsigned long long silhouette_inside_vote_count = 0;
+    unsigned long long silhouette_outside_vote_count = 0;
+    unsigned long long silhouette_prior_candidate_count = 0;
+    unsigned long long silhouette_prior_sample_count = 0;
+    unsigned long long silhouette_prior_rejected_count = 0;
+    unsigned long long silhouette_prior_capacity_total = 0;
+    unsigned long long depth_empty_vote_count = 0;
+    unsigned long long depth_full_vote_count = 0;
+    std::atomic_bool projection_cancelled{false};
+    std::mutex cancellation_mutex;
+    const auto projection_start = std::chrono::steady_clock::now();
+    const double projection_cpu_start =
+        detail::processCpuTimeMilliseconds();
+#ifdef MESHING_OPENMP
+#pragma omp parallel for schedule(static) num_threads(worker_count) if(worker_count > 1) \
+    reduction(+:projected_view_count,silhouette_inside_vote_count,silhouette_outside_vote_count,silhouette_prior_candidate_count,silhouette_prior_sample_count,silhouette_prior_rejected_count,silhouette_prior_capacity_total,depth_empty_vote_count,depth_full_vote_count)
+#endif
     for (int z = 0; z < problem.sizeZ; ++z)
     {
-        if ((z & 3) == 0 && isCancelled(options))
+        if ((z & 3) == 0 &&
+            !projection_cancelled.load(std::memory_order_relaxed))
         {
-            result.cancelled = true;
-            return result;
+            const std::lock_guard<std::mutex> lock(cancellation_mutex);
+            if (!projection_cancelled.load(std::memory_order_relaxed) &&
+                isCancelled(options))
+            {
+                projection_cancelled.store(true, std::memory_order_relaxed);
+            }
+        }
+        if (projection_cancelled.load(std::memory_order_relaxed))
+        {
+            continue;
         }
         const float wz = boundsMin[2] +
             (boundsMax[2] - boundsMin[2]) *
@@ -298,11 +346,11 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
                         continue;
                     }
                     ++projected_views;
-                    ++result.statistics.projectedViewCount;
+                    ++projected_view_count;
                     if (!maskAllows(frame.supportMask, row, column))
                     {
                         ++silhouette_violations;
-                        ++result.statistics.silhouetteOutsideVoteCount;
+                        ++silhouette_outside_vote_count;
                         addCapacity(
                             weightedCapacity(
                                 options.silhouetteEmptyCapacity,
@@ -311,7 +359,7 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
                         continue;
                     }
                     ++silhouette_inside_views;
-                    ++result.statistics.silhouetteInsideVoteCount;
+                    ++silhouette_inside_vote_count;
                     if (frame.depth == nullptr || frame.depth->empty() ||
                         frame.depth->type() != CV_32FC1 ||
                         !maskAllows(frame.depthValidMask, row, column))
@@ -341,7 +389,7 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
                         options.frontTolerancePixelFootprints * footprint)
                     {
                         ++depth_empty_views;
-                        ++result.statistics.depthEmptyVoteCount;
+                        ++depth_empty_vote_count;
                         addCapacity(
                             weightedCapacity(
                                 options.depthEmptyCapacity, vote_weight),
@@ -352,7 +400,7 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
                                  footprint)
                     {
                         ++depth_full_views;
-                        ++result.statistics.depthFullVoteCount;
+                        ++depth_full_vote_count;
                         addCapacity(
                             weightedCapacity(
                                 options.depthFullCapacity, vote_weight),
@@ -367,15 +415,13 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
                         options.allowedSilhouetteViolations;
                 if (silhouette_prior_candidate)
                 {
-                    ++result.statistics
-                          .silhouetteFullPriorCandidateSampleCount;
+                    ++silhouette_prior_candidate_count;
                     if (depth_full_views >=
                         options.minimumDepthFullViewsForSilhouettePrior)
                     {
                         if (options.silhouetteFullPriorCapacity > 0)
                         {
-                            ++result.statistics
-                                  .silhouetteFullPriorSampleCount;
+                            ++silhouette_prior_sample_count;
                             const int prior_support = std::clamp(
                                 silhouette_inside_views -
                                     silhouette_violations,
@@ -387,8 +433,7 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
                             addCapacity(
                                 prior_capacity,
                                 &problem.sourceCapacities[index]);
-                            result.statistics
-                                .silhouetteFullPriorCapacityTotal +=
+                            silhouette_prior_capacity_total +=
                                 static_cast<std::uint64_t>(
                                     std::max<BinaryGridCapacity>(
                                         0,
@@ -397,8 +442,7 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
                     }
                     else
                     {
-                        ++result.statistics
-                              .silhouetteFullPriorRejectedWithoutDepthSupportSampleCount;
+                        ++silhouette_prior_rejected_count;
                     }
                 }
                 const bool protect_depth_empty =
@@ -432,9 +476,54 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
             }
         }
     }
+    result.statistics.projectionElapsedMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - projection_start)
+            .count();
+    result.statistics.projectionCpuTimeMs =
+        detail::processCpuTimeMilliseconds() - projection_cpu_start;
+    result.statistics.projectionCpuDuty =
+        result.statistics.projectionElapsedMs > 0 && worker_count > 0
+        ? result.statistics.projectionCpuTimeMs /
+              (static_cast<double>(result.statistics.projectionElapsedMs) *
+               worker_count)
+        : 0.0;
+    result.statistics.projectedViewCount = projected_view_count;
+    result.statistics.silhouetteInsideVoteCount =
+        silhouette_inside_vote_count;
+    result.statistics.silhouetteOutsideVoteCount =
+        silhouette_outside_vote_count;
+    result.statistics.silhouetteFullPriorCandidateSampleCount =
+        silhouette_prior_candidate_count;
+    result.statistics.silhouetteFullPriorSampleCount =
+        silhouette_prior_sample_count;
+    result.statistics
+        .silhouetteFullPriorRejectedWithoutDepthSupportSampleCount =
+        silhouette_prior_rejected_count;
+    result.statistics.silhouetteFullPriorCapacityTotal =
+        silhouette_prior_capacity_total;
+    result.statistics.depthEmptyVoteCount = depth_empty_vote_count;
+    result.statistics.depthFullVoteCount = depth_full_vote_count;
+    if (projection_cancelled.load(std::memory_order_relaxed))
+    {
+        result.cancelled = true;
+        return result;
+    }
 
+    const auto min_cut_start = std::chrono::steady_clock::now();
+    const double min_cut_cpu_start = detail::processCpuTimeMilliseconds();
     BinaryGridMinCutResult cut =
         BinaryGridMinCutSolver::solve(problem, options.isCancelled);
+    result.statistics.minCutElapsedMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - min_cut_start)
+            .count();
+    result.statistics.minCutCpuTimeMs =
+        detail::processCpuTimeMilliseconds() - min_cut_cpu_start;
+    result.statistics.minCutCpuDuty = result.statistics.minCutElapsedMs > 0
+        ? result.statistics.minCutCpuTimeMs /
+              static_cast<double>(result.statistics.minCutElapsedMs)
+        : 0.0;
     if (!cut.solved)
     {
         result.cancelled = cut.cancelled;
@@ -444,6 +533,8 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
         return result;
     }
     result.statistics.minCut = cut.statistics;
+    const auto cleanup_start = std::chrono::steady_clock::now();
+    const double cleanup_cpu_start = detail::processCpuTimeMilliseconds();
     result.occupied.resize(node_count, 0);
     std::vector<std::uint8_t> protected_empty(node_count, 0);
     for (std::size_t index = 0; index < node_count; ++index)
@@ -688,6 +779,17 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
     }
     if (!options.buildSignedDistanceSamples)
     {
+        result.statistics.cleanupElapsedMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - cleanup_start)
+                .count();
+        result.statistics.cleanupCpuTimeMs =
+            detail::processCpuTimeMilliseconds() - cleanup_cpu_start;
+        result.statistics.cleanupCpuDuty =
+            result.statistics.cleanupElapsedMs > 0
+            ? result.statistics.cleanupCpuTimeMs /
+                  static_cast<double>(result.statistics.cleanupElapsedMs)
+            : 0.0;
         result.ok = true;
         return result;
     }
@@ -705,6 +807,16 @@ VisibilityOccupancyResult VisibilityOccupancySurfaceBuilder::build(
     }
     result.signedDistanceSamples = distance_field.signedWorldDistance;
     result.signedDistanceSamplesAreWorldUnits = true;
+    result.statistics.cleanupElapsedMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - cleanup_start)
+            .count();
+    result.statistics.cleanupCpuTimeMs =
+        detail::processCpuTimeMilliseconds() - cleanup_cpu_start;
+    result.statistics.cleanupCpuDuty = result.statistics.cleanupElapsedMs > 0
+        ? result.statistics.cleanupCpuTimeMs /
+              static_cast<double>(result.statistics.cleanupElapsedMs)
+        : 0.0;
     result.ok = true;
     return result;
 }

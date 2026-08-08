@@ -165,6 +165,31 @@ void logModelWorkflowResult(
         .arg(payload.value(QStringLiteral("vertex_count")).toInt())
         .arg(payload.value(QStringLiteral("face_count")).toInt())
         .arg(payload.value(QStringLiteral("model_ply")).toString()));
+    if (payload.contains(QStringLiteral("effective_worker_count")))
+    {
+        const auto metric = [&payload](const char *key)
+        {
+            return payload.value(QLatin1String(key)).toDouble();
+        };
+        LOG_INFO(QStringLiteral(
+            "[模型生成] CPU阶段统计：线程=%1；TSDF=%2 ms/%3%；"
+            "八叉树=%4 ms/%5%；TGV=%6 ms/%7%；占据投影=%8 ms/%9%；"
+            "最小割=%10 ms/%11%；清理=%12 ms/%13%"
+            "（时间/并行占用率）")
+            .arg(metric("effective_worker_count"), 0, 'f', 0)
+            .arg(metric("tsdf_integration_elapsed_ms"), 0, 'f', 0)
+            .arg(metric("tsdf_integration_cpu_duty") * 100.0, 0, 'f', 1)
+            .arg(metric("adaptive_tgv_octree_elapsed_ms"), 0, 'f', 0)
+            .arg(metric("adaptive_tgv_octree_cpu_duty") * 100.0, 0, 'f', 1)
+            .arg(metric("adaptive_tgv_solver_elapsed_ms"), 0, 'f', 0)
+            .arg(metric("adaptive_tgv_solver_cpu_duty") * 100.0, 0, 'f', 1)
+            .arg(metric("visibility_occupancy_projection_elapsed_ms"), 0, 'f', 0)
+            .arg(metric("visibility_occupancy_projection_cpu_duty") * 100.0, 0, 'f', 1)
+            .arg(metric("visibility_occupancy_min_cut_elapsed_ms"), 0, 'f', 0)
+            .arg(metric("visibility_occupancy_min_cut_cpu_duty") * 100.0, 0, 'f', 1)
+            .arg(metric("visibility_occupancy_cleanup_elapsed_ms"), 0, 'f', 0)
+            .arg(metric("visibility_occupancy_cleanup_cpu_duty") * 100.0, 0, 'f', 1));
+    }
     if (payload.value(QStringLiteral(
             "final_depth_completeness_available")).toBool(false))
     {
@@ -919,7 +944,7 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
 
     LOG_INFO(QStringLiteral(
         "[模型生成] 启动：来源=%1，模式=%2，质量=%3，目标面数=%4，"
-        "输入=%5，输出=%6")
+        "CPU工作线程=%5，输入=%6，输出=%7")
         .arg(effectiveSettings.value(QStringLiteral("source_data"))
                  .toString(QStringLiteral("point_cloud")))
         .arg(effectiveSettings.value(QStringLiteral("reconstruction_mode"))
@@ -928,6 +953,7 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
                  .toString(QStringLiteral("default")))
         .arg(effectiveSettings.value(QStringLiteral("simplifyTargetFaces"))
                  .toInt())
+        .arg(effectiveSettings.value(QStringLiteral("threads")).toInt())
         .arg(resolvedSource.requestedSourcePath,
              resolvedSource.outputRoot));
 

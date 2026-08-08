@@ -19,6 +19,7 @@
 #include "MeshFaceOrientation.h"
 #include "MeshQuadricSimplifier.h"
 #include "OpenMeshSimplifier.h"
+#include "ProcessCpuTimer.h"
 #include "MeshTopologyQuality.h"
 #include "Mc33IsoSurfaceExtractor.h"
 #include "SparseTgvSolver.h"
@@ -5038,7 +5039,20 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
     std::mutex progress_callback_mutex;
     const int zSamples = result.layout.cells[2] + 1;
 #ifdef MESHING_OPENMP
-    const int workerCount = options.workerCount > 0 ? options.workerCount : omp_get_max_threads();
+    const int workerCount = std::max(
+        1,
+        std::min(zSamples,
+                 options.workerCount > 0
+                     ? options.workerCount
+                     : omp_get_max_threads()));
+#else
+    const int workerCount = 1;
+#endif
+    result.statistics.effectiveWorkerCount = workerCount;
+    const auto integration_start = std::chrono::steady_clock::now();
+    const double integration_cpu_start =
+        detail::processCpuTimeMilliseconds();
+#ifdef MESHING_OPENMP
 #pragma omp parallel for schedule(static) num_threads(workerCount) \
     reduction(+:integratedVoxelUpdates,narrowBandActivationSkippedSampleCount,rejectedProjectionCount,rejectedSupportMaskCount,supportMaskFreeSpaceUpdateCount,supportMaskFreeSpaceSurfaceVetoCount,auxiliaryOutsideSurfaceBandRejectedCount,rejectedDepthValidCount,rejectedInterpolationPolicyCount,rejectedDepthCount,rejectedConfidenceCount,subpixelObservationCount,recoveredNeighborObservationCount,discontinuityRejectedCandidateCount,rejectedGeometryConsistencyCount,rejectedInvalidNearestPixelRecoveryCount,crossViewConsensusDepthObservationCount,unconfirmedNativeObservationCount,weakNativeObservationCount,repairedObservationCount,strongNativeObservationCount,inverseDepthSpreadDownweightedObservationCount,inverseDepthSpreadVeryWeakObservationCount,inverseDepthSpreadSupportLiftedObservationCount,weakEvidenceOutsideSurfaceBandRejectedCount)
 #endif
@@ -5407,6 +5421,20 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             }
         }
     }
+
+    result.statistics.tsdfIntegrationElapsedMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - integration_start)
+            .count();
+    result.statistics.tsdfIntegrationCpuTimeMs =
+        detail::processCpuTimeMilliseconds() - integration_cpu_start;
+    result.statistics.tsdfIntegrationCpuDuty =
+        result.statistics.tsdfIntegrationElapsedMs > 0
+        ? result.statistics.tsdfIntegrationCpuTimeMs /
+              (static_cast<double>(
+                   result.statistics.tsdfIntegrationElapsedMs) *
+               workerCount)
+        : 0.0;
 
     if (cancelled.load(std::memory_order_relaxed))
     {
@@ -6508,9 +6536,12 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 options.adaptiveTgvMinimumMergeAbsoluteField;
             octree_options.maximumMergeFieldRange =
                 options.adaptiveTgvMaximumMergeFieldRange;
+            octree_options.workerCount = workerCount;
 
             AdaptiveTsdfOctreeResult octree;
             const auto octree_start = std::chrono::steady_clock::now();
+            const double octree_cpu_start =
+                detail::processCpuTimeMilliseconds();
             try
             {
                 octree = AdaptiveTsdfOctree::build(
@@ -6542,6 +6573,15 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - octree_start)
                     .count();
+            result.statistics.adaptiveTgvOctreeCpuTimeMs =
+                detail::processCpuTimeMilliseconds() - octree_cpu_start;
+            result.statistics.adaptiveTgvOctreeCpuDuty =
+                result.statistics.adaptiveTgvOctreeElapsedMs > 0
+                ? result.statistics.adaptiveTgvOctreeCpuTimeMs /
+                      (static_cast<double>(
+                           result.statistics.adaptiveTgvOctreeElapsedMs) *
+                       workerCount)
+                : 0.0;
             result.statistics.adaptiveTgvInputActiveSampleCount =
                 octree.statistics.inputActiveSampleCount;
             result.statistics.adaptiveTgvLeafCount = octree.leaves.size();
@@ -6581,6 +6621,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 options.adaptiveTgvDualStep;
             tgv_options.convergenceTolerance =
                 options.adaptiveTgvConvergenceTolerance;
+            tgv_options.workerCount = workerCount;
             const SparseTgvStatistics tgv = SparseTgvSolver::solve(
                 tgv_options,
                 &octree,
@@ -6610,6 +6651,10 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 tgv.finalMeanAbsoluteUpdate;
             result.statistics.adaptiveTgvSolverElapsedMs =
                 tgv.elapsedMs;
+            result.statistics.adaptiveTgvSolverCpuTimeMs = tgv.cpuTimeMs;
+            result.statistics.adaptiveTgvSolverCpuDuty = tgv.cpuDuty;
+            result.statistics.adaptiveTgvSolverWorkerCount =
+                tgv.effectiveWorkerCount;
             if (tgv.cancelled)
             {
                 result.errorMessage = QStringLiteral(
@@ -6998,6 +7043,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 1,
                 16);
         occupancy_options.buildSignedDistanceSamples = false;
+        occupancy_options.workerCount = workerCount;
         occupancy_options.isCancelled = options.isCancelled;
         const float minimum_full_fraction = std::clamp(
             options.visibilityOccupancyAdaptiveDepthSupportMinimumFullFraction,
@@ -7222,6 +7268,26 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 .wellComposedRepairRemainingVertexEmptyComponentDefectCount;
         result.statistics.visibilityOccupancyCutEnergy =
             occupancy.statistics.minCut.cutEnergy;
+        result.statistics.visibilityOccupancyWorkerCount =
+            occupancy.statistics.effectiveWorkerCount;
+        result.statistics.visibilityOccupancyProjectionElapsedMs =
+            occupancy.statistics.projectionElapsedMs;
+        result.statistics.visibilityOccupancyProjectionCpuTimeMs =
+            occupancy.statistics.projectionCpuTimeMs;
+        result.statistics.visibilityOccupancyProjectionCpuDuty =
+            occupancy.statistics.projectionCpuDuty;
+        result.statistics.visibilityOccupancyMinCutElapsedMs =
+            occupancy.statistics.minCutElapsedMs;
+        result.statistics.visibilityOccupancyMinCutCpuTimeMs =
+            occupancy.statistics.minCutCpuTimeMs;
+        result.statistics.visibilityOccupancyMinCutCpuDuty =
+            occupancy.statistics.minCutCpuDuty;
+        result.statistics.visibilityOccupancyCleanupElapsedMs =
+            occupancy.statistics.cleanupElapsedMs;
+        result.statistics.visibilityOccupancyCleanupCpuTimeMs =
+            occupancy.statistics.cleanupCpuTimeMs;
+        result.statistics.visibilityOccupancyCleanupCpuDuty =
+            occupancy.statistics.cleanupCpuDuty;
 
         std::vector<float> *completion_tsdf =
             visual_hull_completion_tsdf.empty()
@@ -9673,6 +9739,14 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
     QJsonObject object{
         {QStringLiteral("input_frame_count"), statistics.inputFrameCount},
         {QStringLiteral("accepted_frame_count"), statistics.acceptedFrameCount},
+        {QStringLiteral("effective_worker_count"),
+         statistics.effectiveWorkerCount},
+        {QStringLiteral("tsdf_integration_elapsed_ms"),
+         static_cast<double>(statistics.tsdfIntegrationElapsedMs)},
+        {QStringLiteral("tsdf_integration_cpu_time_ms"),
+         statistics.tsdfIntegrationCpuTimeMs},
+        {QStringLiteral("tsdf_integration_cpu_duty"),
+         statistics.tsdfIntegrationCpuDuty},
         {QStringLiteral("bounds_candidate_sample_count"),
          static_cast<double>(statistics.boundsCandidateSampleCount)},
         {QStringLiteral("bounds_trusted_sample_count"),
@@ -10426,6 +10500,27 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          statistics.visibilityOccupancyMaximumAppliedResidual},
         {QStringLiteral("visibility_occupancy_cut_energy"),
          static_cast<double>(statistics.visibilityOccupancyCutEnergy)},
+        {QStringLiteral("visibility_occupancy_worker_count"),
+         statistics.visibilityOccupancyWorkerCount},
+        {QStringLiteral("visibility_occupancy_projection_elapsed_ms"),
+         static_cast<double>(
+             statistics.visibilityOccupancyProjectionElapsedMs)},
+        {QStringLiteral("visibility_occupancy_projection_cpu_time_ms"),
+         statistics.visibilityOccupancyProjectionCpuTimeMs},
+        {QStringLiteral("visibility_occupancy_projection_cpu_duty"),
+         statistics.visibilityOccupancyProjectionCpuDuty},
+        {QStringLiteral("visibility_occupancy_min_cut_elapsed_ms"),
+         static_cast<double>(statistics.visibilityOccupancyMinCutElapsedMs)},
+        {QStringLiteral("visibility_occupancy_min_cut_cpu_time_ms"),
+         statistics.visibilityOccupancyMinCutCpuTimeMs},
+        {QStringLiteral("visibility_occupancy_min_cut_cpu_duty"),
+         statistics.visibilityOccupancyMinCutCpuDuty},
+        {QStringLiteral("visibility_occupancy_cleanup_elapsed_ms"),
+         static_cast<double>(statistics.visibilityOccupancyCleanupElapsedMs)},
+        {QStringLiteral("visibility_occupancy_cleanup_cpu_time_ms"),
+         statistics.visibilityOccupancyCleanupCpuTimeMs},
+        {QStringLiteral("visibility_occupancy_cleanup_cpu_duty"),
+         statistics.visibilityOccupancyCleanupCpuDuty},
         {QStringLiteral("adaptive_tgv_two_to_one_balanced"),
          statistics.adaptiveTgvTwoToOneBalanced},
         {QStringLiteral("adaptive_tgv_iteration_count"),
@@ -10438,8 +10533,18 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          statistics.adaptiveTgvFinalMeanAbsoluteUpdate},
         {QStringLiteral("adaptive_tgv_octree_elapsed_ms"),
          static_cast<double>(statistics.adaptiveTgvOctreeElapsedMs)},
+        {QStringLiteral("adaptive_tgv_octree_cpu_time_ms"),
+         statistics.adaptiveTgvOctreeCpuTimeMs},
+        {QStringLiteral("adaptive_tgv_octree_cpu_duty"),
+         statistics.adaptiveTgvOctreeCpuDuty},
         {QStringLiteral("adaptive_tgv_solver_elapsed_ms"),
          static_cast<double>(statistics.adaptiveTgvSolverElapsedMs)},
+        {QStringLiteral("adaptive_tgv_solver_cpu_time_ms"),
+         statistics.adaptiveTgvSolverCpuTimeMs},
+        {QStringLiteral("adaptive_tgv_solver_cpu_duty"),
+         statistics.adaptiveTgvSolverCpuDuty},
+        {QStringLiteral("adaptive_tgv_solver_worker_count"),
+         statistics.adaptiveTgvSolverWorkerCount},
         {QStringLiteral("zero_crossing_observed_cell_count"),
          static_cast<double>(statistics.zeroCrossingObservedCellCount)},
         {QStringLiteral("zero_crossing_raw_candidate_cell_count"),

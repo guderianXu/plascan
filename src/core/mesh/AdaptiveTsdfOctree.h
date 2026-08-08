@@ -14,6 +14,7 @@ struct AdaptiveTsdfOctreeOptions
     int maximumMergeLevel = 8;
     float minimumMergeAbsoluteField = 0.55f;
     float maximumMergeFieldRange = 0.15f;
+    int workerCount = 0;
 };
 
 struct AdaptiveTsdfOctreeNode

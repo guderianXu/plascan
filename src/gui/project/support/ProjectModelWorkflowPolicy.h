@@ -2,6 +2,7 @@
 
 #include <QJsonObject>
 #include <QString>
+#include <QtGlobal>
 
 namespace xjw::gui::project
 {
@@ -16,7 +17,19 @@ struct StoredDepthBatchCompatibility
     QString reason;
 };
 
-int recommendedInteractiveModelWorkerCount(int idealThreadCount);
+inline int recommendedInteractiveModelWorkerCount(int ideal_thread_count)
+{
+    const int available_threads = ideal_thread_count > 0
+        ? ideal_thread_count
+        : 4;
+    // QThread reports logical processors. On desktop CPUs with many logical
+    // processors, use the conservative physical-core estimate and reserve two
+    // cores for image decoding, the GUI and the operating system.
+    const int compute_threads = available_threads >= 16
+        ? available_threads / 2
+        : available_threads;
+    return qBound(1, compute_threads - 2, 32);
+}
 
 QString projectDepthInputSignature(const QJsonObject &project_metadata,
                                    int aerial_triangulation_result_index = -1);

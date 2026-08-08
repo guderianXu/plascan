@@ -358,6 +358,10 @@ struct DepthTsdfLayout
 
 struct DepthTsdfStatistics
 {
+    int effectiveWorkerCount = 1;
+    std::int64_t tsdfIntegrationElapsedMs = 0;
+    double tsdfIntegrationCpuTimeMs = 0.0;
+    double tsdfIntegrationCpuDuty = 0.0;
     int inputFrameCount = 0;
     int acceptedFrameCount = 0;
     std::uint64_t boundsCandidateSampleCount = 0;
@@ -622,7 +626,22 @@ struct DepthTsdfStatistics
     double adaptiveTgvFinalMeanAbsoluteCurvature = 0.0;
     double adaptiveTgvFinalMeanAbsoluteUpdate = 0.0;
     std::int64_t adaptiveTgvOctreeElapsedMs = 0;
+    double adaptiveTgvOctreeCpuTimeMs = 0.0;
+    double adaptiveTgvOctreeCpuDuty = 0.0;
     std::int64_t adaptiveTgvSolverElapsedMs = 0;
+    double adaptiveTgvSolverCpuTimeMs = 0.0;
+    double adaptiveTgvSolverCpuDuty = 0.0;
+    int adaptiveTgvSolverWorkerCount = 1;
+    int visibilityOccupancyWorkerCount = 1;
+    std::int64_t visibilityOccupancyProjectionElapsedMs = 0;
+    double visibilityOccupancyProjectionCpuTimeMs = 0.0;
+    double visibilityOccupancyProjectionCpuDuty = 0.0;
+    std::int64_t visibilityOccupancyMinCutElapsedMs = 0;
+    double visibilityOccupancyMinCutCpuTimeMs = 0.0;
+    double visibilityOccupancyMinCutCpuDuty = 0.0;
+    std::int64_t visibilityOccupancyCleanupElapsedMs = 0;
+    double visibilityOccupancyCleanupCpuTimeMs = 0.0;
+    double visibilityOccupancyCleanupCpuDuty = 0.0;
     std::uint64_t zeroCrossingObservedCellCount = 0;
     std::uint64_t zeroCrossingRawCandidateCellCount = 0;
     std::uint64_t zeroCrossingExtractableCellCount = 0;

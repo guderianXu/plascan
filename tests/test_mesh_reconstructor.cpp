@@ -4229,6 +4229,19 @@ TEST(DepthTsdfSurfaceBuilderTest, BuildsFiniteSurfaceFromConfidenceWeightedPlane
         result.statistics.postSimplificationSurfaceDenoisingAttempted);
     const QJsonObject statistics =
         xjw::mesh::DepthTsdfSurfaceBuilder::statisticsToJson(result);
+    EXPECT_TRUE(statistics.contains(QStringLiteral("effective_worker_count")));
+    EXPECT_TRUE(statistics.contains(
+        QStringLiteral("tsdf_integration_elapsed_ms")));
+    EXPECT_TRUE(statistics.contains(
+        QStringLiteral("tsdf_integration_cpu_time_ms")));
+    EXPECT_TRUE(statistics.contains(
+        QStringLiteral("tsdf_integration_cpu_duty")));
+    EXPECT_TRUE(statistics.contains(
+        QStringLiteral("adaptive_tgv_octree_cpu_duty")));
+    EXPECT_TRUE(statistics.contains(
+        QStringLiteral("adaptive_tgv_solver_cpu_duty")));
+    EXPECT_TRUE(statistics.contains(
+        QStringLiteral("visibility_occupancy_projection_cpu_duty")));
     EXPECT_GT(statistics.value(QStringLiteral("bounds_candidate_sample_count")).toDouble(),
               0.0);
     EXPECT_GT(statistics.value(QStringLiteral("bounds_trusted_sample_count")).toDouble(),
@@ -4769,6 +4782,7 @@ TEST(AdaptiveTsdfOctreeTest,
     options.maximumMergeLevel = 3;
     options.minimumMergeAbsoluteField = 0.40f;
     options.maximumMergeFieldRange = 0.35f;
+    options.workerCount = 1;
     const auto octree = xjw::mesh::AdaptiveTsdfOctree::build(
         dimensions,
         field,
@@ -4778,11 +4792,38 @@ TEST(AdaptiveTsdfOctreeTest,
         supported,
         histograms,
         options);
+    auto parallel_options = options;
+    parallel_options.workerCount = 4;
+    const auto parallel_octree = xjw::mesh::AdaptiveTsdfOctree::build(
+        dimensions,
+        field,
+        weight,
+        sources,
+        active,
+        supported,
+        histograms,
+        parallel_options);
 
     EXPECT_LT(octree.leaves.size(), sample_count);
     EXPECT_GT(octree.statistics.mergedNodeCount, 0U);
     EXPECT_TRUE(octree.statistics.twoToOneBalanced);
     EXPECT_TRUE(xjw::mesh::AdaptiveTsdfOctree::isTwoToOneBalanced(octree));
+    ASSERT_EQ(parallel_octree.leaves.size(), octree.leaves.size());
+    EXPECT_EQ(parallel_octree.statistics.mergedNodeCount,
+              octree.statistics.mergedNodeCount);
+    EXPECT_EQ(parallel_octree.statistics.balanceSplitCount,
+              octree.statistics.balanceSplitCount);
+    for (std::size_t index = 0; index < octree.leaves.size(); ++index)
+    {
+        EXPECT_EQ(parallel_octree.leaves[index].origin,
+                  octree.leaves[index].origin);
+        EXPECT_EQ(parallel_octree.leaves[index].level,
+                  octree.leaves[index].level);
+        EXPECT_EQ(parallel_octree.leaves[index].value,
+                  octree.leaves[index].value);
+        EXPECT_EQ(parallel_octree.leaves[index].faceNeighbors,
+                  octree.leaves[index].faceNeighbors);
+    }
     for (const xjw::mesh::AdaptiveTsdfOctreeNode &leaf : octree.leaves)
     {
         if (std::fabs(leaf.value) < 0.40f)
@@ -4819,12 +4860,17 @@ TEST(SparseTgvSolverTest,
 
     xjw::mesh::SparseTgvOptions options;
     options.maximumIterations = 120;
-    options.minimumIterations = 20;
+    options.minimumIterations = 120;
     options.firstOrderWeight = 0.12f;
     options.secondOrderWeight = 0.08f;
     options.dataFidelity = 0.08f;
+    xjw::mesh::AdaptiveTsdfOctreeResult parallel_octree = octree;
+    options.workerCount = 1;
     const xjw::mesh::SparseTgvStatistics statistics =
         xjw::mesh::SparseTgvSolver::solve(options, &octree);
+    options.workerCount = 4;
+    const xjw::mesh::SparseTgvStatistics parallel_statistics =
+        xjw::mesh::SparseTgvSolver::solve(options, &parallel_octree);
 
     EXPECT_TRUE(statistics.executed);
     EXPECT_GE(statistics.iterationCount, 20);
@@ -4832,6 +4878,16 @@ TEST(SparseTgvSolverTest,
               statistics.initialMeanAbsoluteCurvature);
     EXPECT_LT(octree.leaves.front().value, 0.0f);
     EXPECT_GT(octree.leaves.back().value, 0.0f);
+    EXPECT_EQ(statistics.effectiveWorkerCount, 1);
+    EXPECT_EQ(parallel_statistics.effectiveWorkerCount, 4);
+    EXPECT_EQ(parallel_statistics.iterationCount, statistics.iterationCount);
+    ASSERT_EQ(parallel_octree.leaves.size(), octree.leaves.size());
+    for (std::size_t index = 0; index < octree.leaves.size(); ++index)
+    {
+        EXPECT_NEAR(parallel_octree.leaves[index].value,
+                    octree.leaves[index].value,
+                    1.0e-6f);
+    }
 }
 
 TEST(SparseTgvSolverTest, PreservesSubBinZeroSurfacePosition)

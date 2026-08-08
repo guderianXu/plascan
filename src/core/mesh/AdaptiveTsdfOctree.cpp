@@ -6,7 +6,10 @@
 #include <limits>
 #include <stdexcept>
 #include <unordered_map>
-#include <unordered_set>
+
+#ifdef MESHING_OPENMP
+#include <omp.h>
+#endif
 
 namespace xjw::mesh
 {
@@ -41,6 +44,18 @@ struct MergeGroup
     float minimumValue = std::numeric_limits<float>::infinity();
     float maximumValue = -std::numeric_limits<float>::infinity();
 };
+
+int effectiveWorkerCount(int requested_worker_count)
+{
+#ifdef MESHING_OPENMP
+    return std::max(1, requested_worker_count > 0
+        ? requested_worker_count
+        : omp_get_max_threads());
+#else
+    (void)requested_worker_count;
+    return 1;
+#endif
+}
 
 std::unordered_map<std::uint64_t, int> buildLeafLookup(
     const std::vector<AdaptiveTsdfOctreeNode> &leaves)
@@ -134,9 +149,13 @@ void visitFaceNeighbors(const AdaptiveTsdfOctreeResult &octree,
     }
 }
 
-void rebuildFaceNeighbors(AdaptiveTsdfOctreeResult *octree)
+void rebuildFaceNeighbors(AdaptiveTsdfOctreeResult *octree,
+                          int worker_count)
 {
     const auto lookup = buildLeafLookup(octree->leaves);
+#ifdef MESHING_OPENMP
+#pragma omp parallel for schedule(static) num_threads(worker_count) if(worker_count > 1)
+#endif
     for (int leaf_index = 0;
          leaf_index < static_cast<int>(octree->leaves.size());
          ++leaf_index)
@@ -246,6 +265,7 @@ AdaptiveTsdfOctreeResult AdaptiveTsdfOctree::build(
 {
     AdaptiveTsdfOctreeResult result;
     result.dimensions = dimensions;
+    const int worker_count = effectiveWorkerCount(options.workerCount);
     const std::size_t expected_size =
         static_cast<std::size_t>(dimensions[0]) *
         static_cast<std::size_t>(dimensions[1]) *
@@ -262,8 +282,15 @@ AdaptiveTsdfOctreeResult AdaptiveTsdfOctree::build(
             "AdaptiveTsdfOctree input arrays do not match dimensions");
     }
 
+    std::vector<std::vector<AdaptiveTsdfOctreeNode>> leaves_by_z(
+        static_cast<std::size_t>(dimensions[2]));
+#ifdef MESHING_OPENMP
+#pragma omp parallel for schedule(static) num_threads(worker_count) if(worker_count > 1)
+#endif
     for (int z = 0; z < dimensions[2]; ++z)
     {
+        std::vector<AdaptiveTsdfOctreeNode> &slice_leaves =
+            leaves_by_z[static_cast<std::size_t>(z)];
         for (int y = 0; y < dimensions[1]; ++y)
         {
             for (int x = 0; x < dimensions[0]; ++x)
@@ -282,9 +309,16 @@ AdaptiveTsdfOctreeResult AdaptiveTsdfOctree::build(
                 leaf.activeSampleCount = 1;
                 leaf.supportedSampleCount = supported[index] != 0 ? 1 : 0;
                 histograms[index].accumulate(&leaf.histogram);
-                result.leaves.push_back(leaf);
+                slice_leaves.push_back(leaf);
             }
         }
+    }
+    for (std::vector<AdaptiveTsdfOctreeNode> &slice_leaves : leaves_by_z)
+    {
+        result.leaves.insert(
+            result.leaves.end(),
+            std::make_move_iterator(slice_leaves.begin()),
+            std::make_move_iterator(slice_leaves.end()));
     }
     result.statistics.inputActiveSampleCount = result.leaves.size();
 
@@ -325,11 +359,25 @@ AdaptiveTsdfOctreeResult AdaptiveTsdfOctree::build(
                 group.maximumValue, leaf.value);
         }
 
-        std::vector<std::uint8_t> merged(result.leaves.size(), 0);
-        std::vector<AdaptiveTsdfOctreeNode> parents;
+        std::vector<const MergeGroup *> merge_groups;
+        merge_groups.reserve(groups.size());
         for (const auto &[key, group] : groups)
         {
             (void)key;
+            merge_groups.push_back(&group);
+        }
+        std::vector<std::uint8_t> merge_group_accepted(
+            merge_groups.size(), 0);
+        std::vector<AdaptiveTsdfOctreeNode> candidate_parents(
+            merge_groups.size());
+#ifdef MESHING_OPENMP
+#pragma omp parallel for schedule(static) num_threads(worker_count) if(worker_count > 1)
+#endif
+        for (int group_index = 0;
+             group_index < static_cast<int>(merge_groups.size());
+             ++group_index)
+        {
+            const MergeGroup &group = *merge_groups[group_index];
             const bool crosses_zero =
                 group.minimumValue < 0.0f && group.maximumValue >= 0.0f;
             const float minimum_absolute = std::min(
@@ -344,7 +392,24 @@ AdaptiveTsdfOctreeResult AdaptiveTsdfOctree::build(
             {
                 continue;
             }
-            parents.push_back(mergedParent(group.children, result.leaves));
+            candidate_parents[group_index] = mergedParent(
+                group.children, result.leaves);
+            merge_group_accepted[group_index] = 1;
+        }
+
+        std::vector<std::uint8_t> merged(result.leaves.size(), 0);
+        std::vector<AdaptiveTsdfOctreeNode> parents;
+        parents.reserve(merge_groups.size());
+        for (std::size_t group_index = 0;
+             group_index < merge_groups.size();
+             ++group_index)
+        {
+            if (merge_group_accepted[group_index] == 0)
+            {
+                continue;
+            }
+            const MergeGroup &group = *merge_groups[group_index];
+            parents.push_back(std::move(candidate_parents[group_index]));
             for (const int child : group.children)
             {
                 merged[child] = 1;
@@ -379,7 +444,10 @@ AdaptiveTsdfOctreeResult AdaptiveTsdfOctree::build(
     for (int balance_pass = 0; balance_pass < 16; ++balance_pass)
     {
         const auto lookup = buildLeafLookup(result.leaves);
-        std::unordered_set<int> split_indices;
+        std::vector<std::uint8_t> split_leaves(result.leaves.size(), 0);
+#ifdef MESHING_OPENMP
+#pragma omp parallel for schedule(static) num_threads(worker_count) if(worker_count > 1)
+#endif
         for (int leaf_index = 0;
              leaf_index < static_cast<int>(result.leaves.size());
              ++leaf_index)
@@ -408,27 +476,25 @@ AdaptiveTsdfOctreeResult AdaptiveTsdfOctree::build(
                             result.leaves[neighbor].level;
                         if (level_difference > 1)
                         {
-                            split_indices.insert(leaf_index);
-                        }
-                        else if (level_difference < -1)
-                        {
-                            split_indices.insert(neighbor);
+                            split_leaves[leaf_index] = 1;
                         }
                     });
             }
         }
-        if (split_indices.empty())
+        const std::size_t split_count = static_cast<std::size_t>(
+            std::count(split_leaves.cbegin(), split_leaves.cend(), 1));
+        if (split_count == 0)
         {
             final_neighbors_ready = true;
             break;
         }
         std::vector<AdaptiveTsdfOctreeNode> balanced;
-        balanced.reserve(result.leaves.size() + split_indices.size() * 7);
+        balanced.reserve(result.leaves.size() + split_count * 7);
         for (int index = 0;
              index < static_cast<int>(result.leaves.size());
              ++index)
         {
-            if (split_indices.count(index) == 0)
+            if (split_leaves[index] == 0)
             {
                 balanced.push_back(result.leaves[index]);
                 continue;
@@ -440,7 +506,7 @@ AdaptiveTsdfOctreeResult AdaptiveTsdfOctree::build(
     }
     if (!final_neighbors_ready)
     {
-        rebuildFaceNeighbors(&result);
+        rebuildFaceNeighbors(&result, worker_count);
     }
     result.statistics.twoToOneBalanced = final_neighbors_ready ||
         isTwoToOneBalanced(result);

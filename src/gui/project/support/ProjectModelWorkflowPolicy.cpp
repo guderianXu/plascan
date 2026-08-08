@@ -14,12 +14,6 @@
 namespace xjw::gui::project
 {
 
-int recommendedInteractiveModelWorkerCount(int ideal_thread_count)
-{
-    const int available_threads = ideal_thread_count > 0 ? ideal_thread_count : 4;
-    return qBound(1, available_threads - 2, 8);
-}
-
 namespace
 {
 

@@ -334,6 +334,7 @@ core/
 │   ├── DepthVisibilityHistogram.h/cpp # 每个 TSDF 样本 9 字节、含精确零中心的有符号距离直方图及鲁棒统计
 │   ├── AdaptiveTsdfOctree.h/cpp # 保留零面细节的 2:1 平衡自适应八叉树与面邻接图
 │   ├── SparseTgvSolver.h/cpp # 八叉树稀疏图上的 primal-dual 二阶 TGV 隐式场求解器
+│   ├── ProcessCpuTimer.h # 跨平台进程 CPU 时间采样，用于模型子阶段并行占用率统计
 │   ├── VisibilityOccupancyTsdfCompletion.h/cpp # 深度/轮廓可见性数据项、图割占据载体与拓扑锁定 TSDF 残差融合
 │   ├── VisibilityOccupancyCleanup/HandleRepair/WellComposedRepair.* # 占据体分量、柄和良构拓扑修复
 │   ├── VisibilityOccupancyDistanceField/BoundaryExtractor/SurfaceBuilder.* # 闭合载体距离场、边界和表面构造
