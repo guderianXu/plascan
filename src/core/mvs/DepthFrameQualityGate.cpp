@@ -235,6 +235,19 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
         decision.reasons.emplace_back("output_filter_coverage_loss");
     }
 
+    if (input.fusionPostprocessRetentionRatio >= 0.0f
+        && input.fusionPostprocessRetentionRatio < 0.75f)
+    {
+        lowerAcceptance(DepthFrameAcceptance::Rejected, decision);
+        decision.reasons.emplace_back("destructive_fusion_postprocess_collapse");
+    }
+    else if (input.fusionPostprocessRetentionRatio >= 0.0f
+             && input.fusionPostprocessRetentionRatio < 0.90f)
+    {
+        lowerAcceptance(DepthFrameAcceptance::ValidationOnly, decision);
+        decision.reasons.emplace_back("fusion_postprocess_coverage_loss");
+    }
+
     if (input.hasConstrainedSupportMask
         && input.validWithinMaskRatio >= 0.0f
         && input.validWithinMaskRatio < 0.80f)

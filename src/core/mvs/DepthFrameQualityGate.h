@@ -54,6 +54,7 @@ struct DepthFrameQualityInput
     float validWithinMaskRatio = -1.0f;
     float outputFilterRetentionRatio = -1.0f;
     float consistencyRetentionRatio = -1.0f;
+    float fusionPostprocessRetentionRatio = -1.0f;
 };
 
 struct DepthFrameQualityDecision

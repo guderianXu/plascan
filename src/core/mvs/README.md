@@ -29,9 +29,10 @@ live under `src/core/mvs/tests/`.
   replace a contradicted native hypothesis when at least three sources agree, or transfer a measured layer into
   a missing supported pixel. Reuse rejects an incomplete revision-15 evidence set instead of silently
   interpreting missing evidence as valid geometry.
-- Revision 22 restores the full OpenCL coarse/refinement hypothesis budget and strict NCC square-root numerics.
-  It also keeps automatic highest-quality orbital batches entirely on CUDA when CUDA and OpenCL coexist, so
-  revision-21 artifacts produced by the reduced OpenCL search are not silently reused.
+- Revision 23 keeps the revision-22 OpenCL hypothesis budget and strict NCC numerics, samples the configured
+  patch densely, and excludes reference-mask pixels from the valid-pair denominator just like CPU/CUDA. It also
+  records fusion-postprocess retention separately from cross-view consistency, so a confidence-filter loss is
+  no longer reported as `depth_consistency_coverage_loss`. Revision-22 artifacts are not silently reused.
 - GUI project metadata consumes manifest records. The workspace tree should refresh from metadata rather than
   treating directory scans as the primary state.
 
@@ -111,6 +112,9 @@ live under `src/core/mvs/tests/`.
   profiles retain the full configured depth hypothesis count plus 13 refinement samples, and the program does not
   use relaxed-math compilation. CPU packing and post-processing remain outside lane ownership. CPU execution
   remains the native C++/OpenMP implementation rather than using a CPU OpenCL device.
+- `mvs_depth_reprocess_cli --opencl-device-index N` pins replay to one enumerated OpenCL GPU. This is intended for
+  repeatable vendor/device comparisons and prevents a heterogeneous OpenCL job from hiding per-device quality or
+  timing differences. The task-lifetime GPU lease still rejects a second process targeting the same device.
 - A task-lifetime lease keyed by physical PCI identity prevents a second PlaScan GUI/CLI process from using the
   same GPU during depth estimation. OpenCL failures are reported directly instead of silently running a GPU-tagged
   frame on the CPU.

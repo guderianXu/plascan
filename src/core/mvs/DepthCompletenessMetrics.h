@@ -46,6 +46,7 @@ struct DepthCompletenessDiagnostics
     int preFusionPostprocessValidCount = -1;
     int postConfidenceFilterValidCount = -1;
     int postFusionPostprocessValidCount = -1;
+    float fusionPostprocessRetentionRatio = -1.0f;
     int restoredFromPrefilterCount = 0;
     int restoredFromParentLevelCount = 0;
     DepthCompletenessMetrics finalMetrics;

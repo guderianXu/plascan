@@ -179,6 +179,18 @@ TEST(MvsDepthReprocessCliContractTest, TargetedGapRecoveryHasExplicitDiagnosticO
     });
 }
 
+TEST(MvsDepthReprocessCliContractTest, CanPinOneOpenClGpuForReproducibleReplay)
+{
+    const QString source = readSourceFile(
+        QStringLiteral("src/cli/workflows/cli_mvs_depth_reprocess.cpp"));
+
+    expectContainsAll(source, {
+        "--opencl-device-index",
+        "config.patchMatch.openClDeviceIndex = openClDeviceIndex",
+        "显式指定可避免多 GPU 混跑",
+    });
+}
+
 TEST(MvsDepthReprocessCliContractTest, UsesVerifiedManifestSourcePlanWithoutPairAudit)
 {
     const QString exe = executablePath(PLASCAN_MVS_DEPTH_REPROCESS_CLI_PATH);

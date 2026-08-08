@@ -262,6 +262,7 @@ int main(int argc, char **argv)
     int threads = 7;
     int gpuFrameWorkers = 1;
     int cpuFrameWorkers = 0;
+    int openClDeviceIndex = -1;
     bool saveLevels = false;
     bool depthPoseCandidates = false;
     bool disableTargetedGapRecovery = false;
@@ -300,6 +301,11 @@ int main(int argc, char **argv)
         ->check(CLI::Range(0, 2));
     app.add_option("--cpu-frame-workers", cpuFrameWorkers, "CPU 帧并发数")
         ->check(CLI::Range(0, 4));
+    app.add_option(
+        "--opencl-device-index",
+        openClDeviceIndex,
+        "OpenCL GPU 全局编号；-1 自动选择，显式指定可避免多 GPU 混跑")
+        ->check(CLI::Range(-1, 63));
     app.add_flag("--save-levels", saveLevels, "保存中间深度金字塔层");
     app.add_flag(
         "--depth-pose-candidates",
@@ -465,6 +471,7 @@ int main(int argc, char **argv)
     config.requireVerifiedSourcePairs = true;
     config.depthPoseRefinement.enabled = depthPoseCandidates;
     config.enableTargetedGapRecovery = !disableTargetedGapRecovery;
+    config.patchMatch.openClDeviceIndex = openClDeviceIndex;
 
     std::fprintf(stdout,
                  "views=%zu verified_pairs=%d failed_pairs=%d "
@@ -556,6 +563,7 @@ int main(int argc, char **argv)
         {QStringLiteral("quality"), QString::fromStdString(quality)},
         {QStringLiteral("scene_profile"), QString::fromStdString(sceneProfile)},
         {QStringLiteral("depth_filter"), QString::fromStdString(depthFilter)},
+        {QStringLiteral("opencl_device_index"), openClDeviceIndex},
         {QStringLiteral("depth_pose_candidates"), depthPoseCandidates},
         {QStringLiteral("targeted_gap_recovery"),
          !disableTargetedGapRecovery},

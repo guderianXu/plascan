@@ -88,7 +88,10 @@ inline float source_ncc(int center_x,
     __global const float *source = sources + source_index * pixel_count;
     __global const float *camera = source_cameras + source_index * 16;
     int radius = clamp(patch_half, 1, 7);
-    int step = max(1, radius / 2);
+    // Keep the same dense patch support as CUDA/CPU. Sparse stride sampling
+    // made NCC confidence depend strongly on texture phase and produced a
+    // much wider cross-view depth-error tail on orbital imagery.
+    int step = 1;
     float sum_reference = 0.0f;
     float sum_source = 0.0f;
     float sum_reference_squared = 0.0f;
@@ -101,7 +104,6 @@ inline float source_ncc(int center_x,
     {
         for (int dx = -radius; dx <= radius; dx += step)
         {
-            ++candidate_count;
             int reference_x = center_x + dx;
             int reference_y = center_y + dy;
             if (reference_x < 0 || reference_y < 0
@@ -116,6 +118,12 @@ inline float source_ncc(int center_x,
             {
                 continue;
             }
+
+            // Match the CUDA/CPU mask semantics: reference-mask exclusions
+            // are not candidate observations. Only a failed projection or
+            // source-mask lookup for a trusted reference sample contributes
+            // to the minimum valid-patch ratio denominator.
+            ++candidate_count;
 
             float normalized_x = ((float)reference_x - cx) * inv_fx;
             float normalized_y = ((float)reference_y - cy) * inv_fy;

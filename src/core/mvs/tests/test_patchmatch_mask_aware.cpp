@@ -9,8 +9,8 @@
 #include <cmath>
 #include <cstdint>
 #include <string>
-#include <thread>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace
@@ -27,6 +27,8 @@ TEST(PatchMatchOpenClKernelContractTest, RetainsQualitySamplingWithLocalReferenc
     EXPECT_EQ(build_options.find("fast-relaxed-math"), std::string::npos);
     EXPECT_EQ(prefix.find("native_rsqrt"), std::string::npos);
     EXPECT_NE(prefix.find("sqrt(variance_product)"), std::string::npos);
+    EXPECT_NE(prefix.find("reference-mask exclusions"), std::string::npos);
+    EXPECT_NE(prefix.find("int step = 1;"), std::string::npos);
     EXPECT_NE(main.find("__local float reference_tile"), std::string::npos);
     EXPECT_NE(main.find("barrier(CLK_LOCAL_MEM_FENCE)"), std::string::npos);
     EXPECT_NE(main.find("coarse_samples = clamp(depth_sample_count, 16, 96)"),

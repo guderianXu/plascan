@@ -1583,6 +1583,33 @@ TEST(DepthFrameQualityGateTest, MakesOrbitalConsistencyLossAuxiliaryBeforeCollap
               collapsed.reasons.end());
 }
 
+TEST(DepthFrameQualityGateTest, KeepsConsistencyAndFusionPostprocessLossDistinct)
+{
+    xjw::mvs::DepthFrameQualityInput input;
+    input.sceneProfile = xjw::mvs::MvsSceneProfile::OrbitalObject;
+    input.sourceViewCount = 4;
+    input.validCoverage = 0.20f;
+    input.largestComponentRatio = 0.90f;
+    input.meanConfidence = 0.80f;
+    input.multiViewConsistency = 0.95f;
+    input.outputFilterRetentionRatio = 1.0f;
+    input.consistencyRetentionRatio = 0.95f;
+    input.fusionPostprocessRetentionRatio = 0.85f;
+
+    const auto decision = xjw::mvs::evaluateDepthFrame(input);
+
+    EXPECT_EQ(decision.acceptance,
+              xjw::mvs::DepthFrameAcceptance::ValidationOnly);
+    EXPECT_NE(std::find(decision.reasons.begin(),
+                        decision.reasons.end(),
+                        std::string("fusion_postprocess_coverage_loss")),
+              decision.reasons.end());
+    EXPECT_EQ(std::find(decision.reasons.begin(),
+                        decision.reasons.end(),
+                        std::string("depth_consistency_coverage_loss")),
+              decision.reasons.end());
+}
+
 TEST(DepthGeometryConsistencyTest,
      FinalizesAdaptiveEvidenceMapsWithoutDiscardingPrefilterHypotheses)
 {

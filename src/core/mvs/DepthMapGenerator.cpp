@@ -1600,6 +1600,13 @@ void updateDepthCompletenessAfterPostprocess(DepthFrameResult &result,
         stats.validAfterConfidenceFilter;
     result.depthCompleteness.postFusionPostprocessValidCount =
         stats.validAfterPostprocess;
+    if (result.depthCompleteness.fusionPostprocessRetentionRatio < 0.0f &&
+        stats.validBeforePostprocess > 0)
+    {
+        result.depthCompleteness.fusionPostprocessRetentionRatio =
+            static_cast<float>(stats.validAfterPostprocess) /
+            static_cast<float>(stats.validBeforePostprocess);
+    }
     if (!result.supportRegionMask || result.supportRegionMask->empty())
     {
         return;
@@ -1729,6 +1736,8 @@ void updateDepthFrameQualityAfterConsistency(DepthFrameResult &result,
     quality_input.outputFilterRetentionRatio =
         result.depthCompleteness.outputFilterRetentionRatio;
     quality_input.consistencyRetentionRatio = quality_consistency_keep_rate;
+    quality_input.fusionPostprocessRetentionRatio =
+        result.depthCompleteness.fusionPostprocessRetentionRatio;
     result.qualityDecision = evaluateDepthFrame(quality_input);
 }
 
@@ -9441,18 +9450,15 @@ void DepthMapGenerator::runInBackground()
                     static_cast<int>(final_repair.interpolatedPixelCount);
                 updateDepthCompletenessAfterPostprocess(
                     res, *res.depthMap, res.depthPostprocess);
-                const int valid_before = res.depthPostprocess.validBeforePostprocess;
-                const float keep_rate = valid_before > 0
-                    ? static_cast<float>(res.depthPostprocess.validAfterPostprocess)
-                        / static_cast<float>(valid_before)
-                    : 0.0f;
+                const float consistency_keep_rate =
+                    res.depthCompleteness.consistencyRetentionRatio;
                 updateDepthFrameQualityAfterConsistency(
                     res,
                     *res.depthMap,
                     confidence,
                     _effectiveSceneProfile,
                     _effectiveDepthFilterMode,
-                    keep_rate);
+                    consistency_keep_rate);
                 if (res.missingReasonMap && res.supportRegionMask)
                 {
                     finalizeDepthMissingReasonMap(
@@ -9512,12 +9518,8 @@ void DepthMapGenerator::runInBackground()
                     *res.depthMap > 0.0f);
                 updateDepthCompletenessAfterPostprocess(
                     res, *res.depthMap, res.depthPostprocess);
-                const int valid_before =
-                    res.depthPostprocess.validBeforePostprocess;
-                const float keep_rate = valid_before > 0
-                    ? static_cast<float>(valid_after_recovery) /
-                        static_cast<float>(valid_before)
-                    : 0.0f;
+                const float consistency_keep_rate =
+                    res.depthCompleteness.consistencyRetentionRatio;
                 const cv::Mat empty_confidence;
                 const cv::Mat &confidence = res.confidence
                     ? *res.confidence
@@ -9530,7 +9532,7 @@ void DepthMapGenerator::runInBackground()
                     confidence,
                     _effectiveSceneProfile,
                     _effectiveDepthFilterMode,
-                    keep_rate);
+                    consistency_keep_rate);
                 res.qualityDecision = frozen_quality_decision;
                 if (res.missingReasonMap && res.supportRegionMask)
                 {

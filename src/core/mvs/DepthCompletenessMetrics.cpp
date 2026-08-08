@@ -348,6 +348,11 @@ QJsonObject depthCompletenessDiagnosticsToJson(
                  diagnostics.postConfidenceFilterValidCount);
     insert_count(QStringLiteral("post_fusion_postprocess_valid_count"),
                  diagnostics.postFusionPostprocessValidCount);
+    if (diagnostics.fusionPostprocessRetentionRatio >= 0.0f)
+    {
+        object.insert(QStringLiteral("fusion_postprocess_retention_ratio"),
+                      diagnostics.fusionPostprocessRetentionRatio);
+    }
     object.insert(QStringLiteral("restored_from_prefilter_count"),
                   diagnostics.restoredFromPrefilterCount);
     object.insert(QStringLiteral("restored_from_parent_level_count"),
