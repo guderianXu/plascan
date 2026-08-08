@@ -694,12 +694,12 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         addModelMode(&_modelTextureModeAct,
                      QStringLiteral("actionModelTextureMode"),
                      tr("模型 — 纹理"),
-                     tr("显示 OBJ/MTL 纹理；PLY 模型显示其 RGB 顶点颜色"),
+                     tr("优先显示 OBJ/MTL 纹理；无贴图时回退到 RGB 顶点颜色"),
                      false);
         addModelMode(&_modelShadedModeAct,
                      QStringLiteral("actionModelShadedMode"),
                      tr("模型 — 阴影"),
-                     tr("使用中性白色和平滑法线显示模型表面"),
+                     tr("保留模型顶点颜色并使用平滑法线计算明暗；无颜色时使用默认浅色"),
                      true);
         addModelMode(&_modelSolidModeAct,
                      QStringLiteral("actionModelSolidMode"),
@@ -728,7 +728,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                      false);
 
         // 可信度和指定影像模式只有在重建流程产出对应模型属性后才具有明确语义。
-        // 纹理模式已支持 OBJ/MTL/PNG，也作为 PLY RGB 顶点颜色显示模式。
+        // 纹理模式支持 OBJ/MTL/PNG，并在没有 UV 贴图时回退到 RGB 顶点颜色。
         _modelTextureModeAct->setEnabled(true);
         _modelConfidenceModeAct->setEnabled(false);
         _modelAssignedImageModeAct->setEnabled(false);

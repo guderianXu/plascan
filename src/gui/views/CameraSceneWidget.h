@@ -159,6 +159,7 @@ public:
 
 signals:
     void plyLoadProgressChanged(int generation, int percent, const QString &statusText);
+    void modelColorModeChanged(ModelColorMode mode);
     void manualPruneApplied(int removedCount, int remainingCount);
     void manualPruneUndone(int restoredCount);
     void manualPruneSaved(const QString &path, int remainingCount);

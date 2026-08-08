@@ -1086,7 +1086,7 @@ void CameraSceneWidget::loadModelFromPlyInternal(const QString &plyPath,
             }
             if (!self->_isTiePointCloud && self->_cloud.hasColors())
             {
-                self->setModelColorMode(ModelColorMode::Texture);
+                self->setModelColorMode(ModelColorMode::Shaded);
             }
             else if (!self->_isTiePointCloud && self->_cloud.hasFaces())
             {
@@ -1263,7 +1263,7 @@ void CameraSceneWidget::loadModelFromObjInternal(const QString &objPath,
                 }
                 else if (!self->_isTiePointCloud && self->_cloud.hasColors())
                 {
-                    self->setModelColorMode(ModelColorMode::Texture);
+                    self->setModelColorMode(ModelColorMode::Shaded);
                 }
                 else if (!self->_isTiePointCloud && self->_cloud.hasFaces())
                 {
@@ -1457,6 +1457,7 @@ void CameraSceneWidget::setModelColorMode(ModelColorMode mode)
     }
     _modelColorMode = mode;
     _modelVisualization.setMode(mode);
+    emit modelColorModeChanged(mode);
     _gpuDirty = true;
     _pipelinesDirty = true;
     update();

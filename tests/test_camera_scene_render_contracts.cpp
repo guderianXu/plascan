@@ -702,11 +702,17 @@ TEST(CameraSceneRenderContractTest, ModelMenuEnablesTextureAndGatesUnsupportedMo
         QStringLiteral("_modelShadedModeAct->setChecked(true)")));
     EXPECT_TRUE(sceneHeader.contains(
         QStringLiteral("_modelColorMode = ModelColorMode::Shaded")));
+    EXPECT_TRUE(sceneHeader.contains(QStringLiteral(
+        "void modelColorModeChanged(ModelColorMode mode);")));
     EXPECT_TRUE(menuBindingsSource.contains(QStringLiteral("setModelColorMode")));
+    EXPECT_TRUE(menuBindingsSource.contains(QStringLiteral(
+        "&CameraSceneWidget::modelColorModeChanged")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral(
         "self->setModelColorMode(ModelColorMode::Texture)")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral(
         "self->setModelColorMode(ModelColorMode::Solid)")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
+        "self->setModelColorMode(ModelColorMode::Shaded)")));
 }
 
 TEST(CameraSceneRenderContractTest, ModelModesRebuildGeometryAndDrawLegends)
@@ -734,6 +740,7 @@ TEST(CameraSceneRenderContractTest, ModelModesRebuildGeometryAndDrawLegends)
     EXPECT_TRUE(sceneSource.contains(QStringLiteral("drawModelLegend(painter)")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral("_modelVisualization.buildGeometry")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral("geometryInput.vertexNormals")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral("geometryInput.vertexColors.push_back")));
     EXPECT_TRUE(modelSource.contains(QStringLiteral("ModelVisualizationManager::buildGeometry")));
     EXPECT_FALSE(modelSource.contains(QStringLiteral("evaluateFaceSupport")));
     EXPECT_TRUE(modelSource.contains(QStringLiteral("displayVertexNormals")));
@@ -742,6 +749,12 @@ TEST(CameraSceneRenderContractTest, ModelModesRebuildGeometryAndDrawLegends)
     EXPECT_TRUE(fragmentShader.contains(QStringLiteral("isNeutralSurface")));
     EXPECT_TRUE(fragmentShader.contains(QStringLiteral("neutralShape")));
     EXPECT_TRUE(fragmentShader.contains(QStringLiteral("dot(n, viewDir) < 0.0")));
+    EXPECT_TRUE(fragmentShader.contains(QStringLiteral(
+        "vec3 baseLinear = srgbToLinear(vColor);")));
+    EXPECT_TRUE(fragmentShader.contains(QStringLiteral(
+        "float keyDiffuse = max(dot(n, lightDir), 0.0);")));
+    EXPECT_TRUE(fragmentShader.contains(QStringLiteral(
+        "vec3 litLinear = baseLinear * shape;")));
     EXPECT_TRUE(fragmentShader.contains(QStringLiteral(
         "0.86 + 0.10 * keyDiffuse + 0.04 * headDiffuse")));
     EXPECT_TRUE(fragmentShader.contains(QStringLiteral(

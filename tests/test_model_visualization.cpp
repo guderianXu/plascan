@@ -12,6 +12,17 @@ using xjw::gui::model_views::Triangle;
 using xjw::gui::model_views::confidenceColor;
 using xjw::gui::model_views::surfaceColor;
 
+void expectVertexColor(const QVector<float> &vertices,
+                       qsizetype cornerIndex,
+                       const QColor &expected)
+{
+    const qsizetype colorOffset = cornerIndex * 9 + 6;
+    ASSERT_GE(vertices.size(), colorOffset + 3);
+    EXPECT_NEAR(vertices.at(colorOffset), expected.redF(), 1.0e-5f);
+    EXPECT_NEAR(vertices.at(colorOffset + 1), expected.greenF(), 1.0e-5f);
+    EXPECT_NEAR(vertices.at(colorOffset + 2), expected.blueF(), 1.0e-5f);
+}
+
 TEST(ModelVisualizationTest, UsesDistinctMetashapeStyleSurfaceColors)
 {
     EXPECT_GT(surfaceColor(ColorMode::Shaded).value(), 220);
@@ -34,6 +45,58 @@ TEST(ModelVisualizationTest, DefaultsToShadedMode)
 {
     ModelVisualizationManager manager;
     EXPECT_EQ(manager.mode(), ColorMode::Shaded);
+}
+
+TEST(ModelVisualizationTest, ShadedModePreservesProvidedVertexColors)
+{
+    GeometryInput input;
+    input.positions = {
+        QVector3D(0.0f, 0.0f, 0.0f),
+        QVector3D(1.0f, 0.0f, 0.0f),
+        QVector3D(0.0f, 1.0f, 0.0f)
+    };
+    input.faces = {Triangle{{0, 1, 2}}};
+    input.vertexColors = {
+        QColor(230, 20, 40),
+        QColor(30, 210, 70),
+        QColor(50, 80, 240)
+    };
+
+    ModelVisualizationManager manager;
+    manager.setMode(ColorMode::Shaded);
+    const auto geometry = manager.buildGeometry(input);
+
+    ASSERT_EQ(geometry.filledVertices.size(), 27);
+    for (qsizetype cornerIndex = 0;
+         cornerIndex < input.vertexColors.size();
+         ++cornerIndex)
+    {
+        expectVertexColor(geometry.filledVertices,
+                          cornerIndex,
+                          input.vertexColors.at(cornerIndex));
+    }
+}
+
+TEST(ModelVisualizationTest, ShadedModeFallsBackToNeutralSurfaceWithoutVertexColors)
+{
+    GeometryInput input;
+    input.positions = {
+        QVector3D(0.0f, 0.0f, 0.0f),
+        QVector3D(1.0f, 0.0f, 0.0f),
+        QVector3D(0.0f, 1.0f, 0.0f)
+    };
+    input.faces = {Triangle{{0, 1, 2}}};
+
+    ModelVisualizationManager manager;
+    manager.setMode(ColorMode::Shaded);
+    const auto geometry = manager.buildGeometry(input);
+
+    ASSERT_EQ(geometry.filledVertices.size(), 27);
+    const QColor fallbackColor = surfaceColor(ColorMode::Shaded);
+    for (qsizetype cornerIndex = 0; cornerIndex < 3; ++cornerIndex)
+    {
+        expectVertexColor(geometry.filledVertices, cornerIndex, fallbackColor);
+    }
 }
 
 TEST(ModelVisualizationTest, DedicatedManagerBuildsSmoothAndFacetedNormals)

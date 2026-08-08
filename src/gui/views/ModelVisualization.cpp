@@ -28,8 +28,11 @@ QColor vertexColorForMode(ColorMode mode,
     switch (mode)
     {
     case ColorMode::Shaded:
+        return sourceColor.isValid()
+            ? sourceColor
+            : surfaceColor(ColorMode::Shaded);
     case ColorMode::Solid:
-        return surfaceColor(mode);
+        return surfaceColor(ColorMode::Solid);
     case ColorMode::Elevation:
         return xjw::gui::model_views::elevationColor(
             position.z(), elevationRange);

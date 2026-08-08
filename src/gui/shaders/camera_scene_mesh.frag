@@ -39,10 +39,10 @@ void main()
     float headDiffuse = max(dot(n, viewDir), 0.0);
     float keyDiffuse = max(dot(n, lightDir), 0.0);
     vec3 baseLinear = srgbToLinear(vColor);
-    // Shaded and solid modes use two exact neutral palette colours.  They need
-    // stronger directional contrast to reveal curvature or individual faces.
-    // Photograph-derived vertex colours already contain illumination and keep
-    // the gentler path so that vertex colouring does not become a fake texture.
+    // Solid mode and colourless shaded meshes use exact neutral palette colours.
+    // They need stronger directional contrast to reveal curvature or faces.
+    // Photograph-derived vertex colours in shaded meshes already contain
+    // illumination and keep the gentler path so that colours remain faithful.
     vec3 shadedPalette = vec3(239.0, 236.0, 224.0) / 255.0;
     vec3 solidPalette = vec3(160.0, 156.0, 205.0) / 255.0;
     float neutralDistance = min(distance(vColor, shadedPalette),

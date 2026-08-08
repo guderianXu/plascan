@@ -366,6 +366,41 @@ void MainWindow::setupMenuConnections()
                          CameraSceneWidget::ModelColorMode::Confidence);
         connectModelMode(_mainMenu->modelAssignedImageModeAction(),
                          CameraSceneWidget::ModelColorMode::AssignedImage);
+        connect(modelView,
+                &CameraSceneWidget::modelColorModeChanged,
+                this,
+                [this](CameraSceneWidget::ModelColorMode mode)
+        {
+            QAction *modeAction = nullptr;
+            switch (mode)
+            {
+            case CameraSceneWidget::ModelColorMode::Texture:
+                modeAction = _mainMenu->modelTextureModeAction();
+                break;
+            case CameraSceneWidget::ModelColorMode::Shaded:
+                modeAction = _mainMenu->modelShadedModeAction();
+                break;
+            case CameraSceneWidget::ModelColorMode::Solid:
+                modeAction = _mainMenu->modelSolidModeAction();
+                break;
+            case CameraSceneWidget::ModelColorMode::Wireframe:
+                modeAction = _mainMenu->modelWireframeModeAction();
+                break;
+            case CameraSceneWidget::ModelColorMode::Elevation:
+                modeAction = _mainMenu->modelElevationModeAction();
+                break;
+            case CameraSceneWidget::ModelColorMode::Confidence:
+                modeAction = _mainMenu->modelConfidenceModeAction();
+                break;
+            case CameraSceneWidget::ModelColorMode::AssignedImage:
+                modeAction = _mainMenu->modelAssignedImageModeAction();
+                break;
+            }
+            if (modeAction && !modeAction->isChecked())
+            {
+                modeAction->setChecked(true);
+            }
+        });
         if (_mainMenu->toggleCameraThumbnailsAction())
         {
             connect(_mainMenu->toggleCameraThumbnailsAction(), &QAction::toggled,
