@@ -29,10 +29,11 @@ live under `src/core/mvs/tests/`.
   replace a contradicted native hypothesis when at least three sources agree, or transfer a measured layer into
   a missing supported pixel. Reuse rejects an incomplete revision-15 evidence set instead of silently
   interpreting missing evidence as valid geometry.
-- Revision 23 keeps the revision-22 OpenCL hypothesis budget and strict NCC numerics, samples the configured
-  patch densely, and excludes reference-mask pixels from the valid-pair denominator just like CPU/CUDA. It also
-  records fusion-postprocess retention separately from cross-view consistency, so a confidence-filter loss is
-  no longer reported as `depth_consistency_coverage_loss`. Revision-22 artifacts are not silently reused.
+- Revision 24 replaces the independent OpenCL depth sweep with persistent depth/normal/score state. It initializes
+  inverse-depth hypotheses, runs race-free checkerboard plane propagation and deterministic random depth/normal
+  refinement, and applies uniqueness confidence only after convergence. Plane patches intersect every reference
+  ray before source projection, matching CUDA plane-homography geometry. Fusion-postprocess retention remains
+  distinct from cross-view consistency in quality reports. Revision-23 artifacts are not reused.
 - GUI project metadata consumes manifest records. The workspace tree should refresh from metadata rather than
   treating directory scans as the primary state.
 
@@ -105,13 +106,23 @@ live under `src/core/mvs/tests/`.
   run concurrently. Every physical accelerator is represented before host preparation lanes are duplicated.
   Outside the highest-quality orbital exception, CUDA plus an Intel/AMD OpenCL GPU keeps both devices active and
   may add one preparation lane per device. Progress reports physical GPU count separately from active host slots.
-- The OpenCL C 1.2 backend runs inverse-depth hypothesis search, multi-source NCC, mask-aware sampling, depth
-  hints, coarse-to-fine refinement, and confidence filtering. Each OpenCL GPU has one command-queue/kernel lane;
+- The OpenCL C 1.2 backend runs inverse-depth initialization, stateful plane PatchMatch, multi-source NCC,
+  mask-aware sampling, depth hints, coarse-to-fine refinement, and confidence filtering. Each OpenCL GPU has one
+  command-queue/kernel lane;
   a second host worker may prepare the next frame but cannot submit a competing kernel. Scaled float images and
   all OpenCL buffers are bounded/reused, and reference patches are tiled in work-group local memory. The quality
   profiles retain the full configured depth hypothesis count plus 13 refinement samples, and the program does not
   use relaxed-math compilation. CPU packing and post-processing remain outside lane ownership. CPU execution
   remains the native C++/OpenMP implementation rather than using a CPU OpenCL device.
+- Initialization, checkerboard propagation/refinement, final uniqueness scoring, and asynchronous readback are
+  submitted as one in-order event chain. Per-device logs report active kernel time, total chain time, command
+  count, and kernel duty ratio. Integrated GPUs use persistent host-allocatable input/output buffers; intermediate
+  depth, normal, and score state is never read back between passes.
+- The Hyb2 14-frame orbital replay on AMD `gfx1036` accepted 13/14 fusion frames without relaxing the 90% fusion
+  retention gate. Mean confidence was 0.8503, mean valid-within-mask ratio was 0.9615, and mean fusion retention
+  was 0.9216. Profiled kernel duty stayed near 100%; the summed per-frame depth time was 212.9 seconds. The one
+  validation-only frame measured 89.90% retention, so the gate was kept unchanged and no extra interpolation was
+  enabled to hide the shortfall.
 - `mvs_depth_reprocess_cli --opencl-device-index N` pins replay to one enumerated OpenCL GPU. This is intended for
   repeatable vendor/device comparisons and prevents a heterogeneous OpenCL job from hiding per-device quality or
   timing differences. The task-lifetime GPU lease still rejects a second process targeting the same device.

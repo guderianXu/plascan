@@ -13,7 +13,7 @@ struct DepthGenConfig;
 
 // Increment whenever a production depth algorithm change makes persisted
 // depth maps unsuitable for transparent reuse by a newer build.
-inline constexpr int kMvsDepthAlgorithmRevision = 23;
+inline constexpr int kMvsDepthAlgorithmRevision = 24;
 inline constexpr int kMvsAdaptiveGeometryEvidenceRevision = 13;
 inline constexpr int kMvsAdaptiveGeometryConflictRatioRevision = 14;
 inline constexpr int kMvsDepthProvenanceRevision = 17;

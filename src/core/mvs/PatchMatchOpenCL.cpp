@@ -25,6 +25,7 @@
 #include <optional>
 #include <sstream>
 #include <unordered_map>
+#include <vector>
 
 namespace xjw
 {
@@ -183,8 +184,8 @@ struct OpenClRuntime
     struct ExecutionLane
     {
         cl_command_queue queue = nullptr;
-        cl_kernel kernel = nullptr;
-        std::array<BufferSlot, 9> buffers;
+        std::array<cl_kernel, 3> kernels{};
+        std::array<BufferSlot, 10> buffers;
         bool busy = false;
     };
 
@@ -226,9 +227,12 @@ struct OpenClRuntime
                     clReleaseMemObject(buffer.memory);
                 }
             }
-            if (lane.kernel)
+            for (cl_kernel kernel : lane.kernels)
             {
-                clReleaseKernel(lane.kernel);
+                if (kernel)
+                {
+                    clReleaseKernel(kernel);
+                }
             }
             if (lane.queue)
             {
@@ -406,6 +410,76 @@ private:
     cl_event _event = nullptr;
 };
 
+bool eventProfileRange(cl_event first,
+                       cl_profiling_info firstParameter,
+                       cl_event last,
+                       cl_profiling_info lastParameter,
+                       cl_ulong &startNanoseconds,
+                       cl_ulong &endNanoseconds);
+
+class OpenClEventList
+{
+public:
+    OpenClEventList() = default;
+    OpenClEventList(const OpenClEventList &) = delete;
+    OpenClEventList &operator=(const OpenClEventList &) = delete;
+
+    ~OpenClEventList()
+    {
+        for (cl_event event : _events)
+        {
+            if (event)
+            {
+                clReleaseEvent(event);
+            }
+        }
+    }
+
+    cl_event *appendOutput()
+    {
+        _events.push_back(nullptr);
+        return &_events.back();
+    }
+
+    cl_event first() const
+    {
+        return _events.empty() ? nullptr : _events.front();
+    }
+
+    cl_event last() const
+    {
+        return _events.empty() ? nullptr : _events.back();
+    }
+
+    std::size_t size() const
+    {
+        return _events.size();
+    }
+
+    cl_ulong activeNanoseconds() const
+    {
+        cl_ulong total = 0;
+        for (cl_event event : _events)
+        {
+            cl_ulong start = 0;
+            cl_ulong end = 0;
+            if (eventProfileRange(event,
+                                  CL_PROFILING_COMMAND_START,
+                                  event,
+                                  CL_PROFILING_COMMAND_END,
+                                  start,
+                                  end))
+            {
+                total += end - start;
+            }
+        }
+        return total;
+    }
+
+private:
+    std::vector<cl_event> _events;
+};
+
 class OpenClQueueDrain
 {
 public:
@@ -492,12 +566,16 @@ std::shared_ptr<OpenClRuntime> openClRuntimeForDevice(
         }
         return nullptr;
     }
-    std::array<const char *, 2> sources = {
+    std::array<const char *, 4> sources = {
         detail::kPatchMatchOpenClSourcePrefix,
-        detail::kPatchMatchOpenClSourceMain};
-    const std::array<std::size_t, 2> source_lengths = {
+        detail::kPatchMatchOpenClSourceMain,
+        detail::kPatchMatchOpenClSourcePropagation,
+        detail::kPatchMatchOpenClSourceFinalize};
+    const std::array<std::size_t, 4> source_lengths = {
         std::strlen(sources[0]),
-        std::strlen(sources[1])};
+        std::strlen(sources[1]),
+        std::strlen(sources[2]),
+        std::strlen(sources[3])};
     runtime->program = clCreateProgramWithSource(
         runtime->context,
         static_cast<cl_uint>(sources.size()),
@@ -551,14 +629,24 @@ std::shared_ptr<OpenClRuntime> openClRuntimeForDevice(
             }
             return nullptr;
         }
-        lane.kernel = clCreateKernel(runtime->program, "estimate_depth", &error);
-        if (error != CL_SUCCESS || !lane.kernel)
+        constexpr std::array<const char *, 3> kernel_names = {
+            "initialize_planes",
+            "propagate_planes",
+            "finalize_planes"};
+        for (std::size_t kernel_index = 0;
+             kernel_index < kernel_names.size();
+             ++kernel_index)
         {
-            if (errorMsg)
+            lane.kernels[kernel_index] = clCreateKernel(
+                runtime->program, kernel_names[kernel_index], &error);
+            if (error != CL_SUCCESS || !lane.kernels[kernel_index])
             {
-                *errorMsg = openClError("clCreateKernel", error);
+                if (errorMsg)
+                {
+                    *errorMsg = openClError(kernel_names[kernel_index], error);
+                }
+                return nullptr;
             }
-            return nullptr;
         }
     }
 
@@ -933,7 +1021,9 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
 
     const std::size_t image_float_bytes =
         static_cast<std::size_t>(pixel_count) * sizeof(float);
-    const std::array<std::size_t, 9> buffer_sizes = {
+    const std::size_t normal_float_bytes =
+        static_cast<std::size_t>(pixel_count) * sizeof(cl_float4);
+    const std::array<std::size_t, 10> buffer_sizes = {
         image_float_bytes,
         packed_sources.size() * sizeof(float),
         camera_data.size() * sizeof(float),
@@ -942,17 +1032,21 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         packed_hint.size() * sizeof(float),
         packed_hint_radius.size() * sizeof(float),
         image_float_bytes,
+        normal_float_bytes,
         image_float_bytes};
-    const std::array<cl_mem_flags, 9> buffer_flags = {
-        CL_MEM_READ_ONLY,
-        CL_MEM_READ_ONLY,
-        CL_MEM_READ_ONLY,
-        CL_MEM_READ_ONLY,
-        CL_MEM_READ_ONLY,
-        CL_MEM_READ_ONLY,
-        CL_MEM_READ_ONLY,
-        CL_MEM_WRITE_ONLY,
-        CL_MEM_WRITE_ONLY};
+    const cl_mem_flags host_allocation = runtime->hostUnifiedMemory
+        ? CL_MEM_ALLOC_HOST_PTR : 0;
+    const std::array<cl_mem_flags, 10> buffer_flags = {
+        CL_MEM_READ_ONLY | host_allocation,
+        CL_MEM_READ_ONLY | host_allocation,
+        CL_MEM_READ_ONLY | host_allocation,
+        CL_MEM_READ_ONLY | host_allocation,
+        CL_MEM_READ_ONLY | host_allocation,
+        CL_MEM_READ_ONLY | host_allocation,
+        CL_MEM_READ_ONLY | host_allocation,
+        CL_MEM_READ_WRITE | host_allocation,
+        CL_MEM_READ_WRITE,
+        CL_MEM_READ_WRITE | host_allocation};
     const std::array<const void *, 7> input_data = {
         reference_float.ptr<float>(),
         packed_sources.data(),
@@ -964,6 +1058,8 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
 
     const int patch_half = config.patchHalf;
     const int depth_sample_count = std::clamp(config.numIterations * 4, 32, 96);
+    const int propagation_iterations = std::clamp(
+        (config.numIterations + 3) / 4, 2, 4);
     const float minimum_mask_ratio = config.minimumMaskedPatchSupportRatio;
     const float confidence_threshold = config.confidenceThresh;
     const float uniqueness_relative_step = config.enablePhotometricUniqueness
@@ -1015,7 +1111,7 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         }
     }
 
-    std::array<cl_mem, 9> memory_arguments{};
+    std::array<cl_mem, 10> memory_arguments{};
     for (std::size_t index = 0; index < memory_arguments.size(); ++index)
     {
         memory_arguments[index] = execution_lane.buffers[index].memory;
@@ -1025,40 +1121,47 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     {
         retained_buffer_bytes += buffer.memory ? buffer.capacity : 0;
     }
-    cl_uint argument_index = 0;
-    for (cl_mem argument : memory_arguments)
+    const auto set_common_arguments = [&](cl_kernel kernel)
     {
-        if (!setKernelArgument(execution_lane.kernel, argument_index++, argument, errorMsg))
+        cl_uint argument_index = 0;
+        for (cl_mem argument : memory_arguments)
+        {
+            if (!setKernelArgument(kernel, argument_index++, argument, errorMsg))
+            {
+                return false;
+            }
+        }
+        const auto set_argument = [&](const auto &value)
+        {
+            return setKernelArgument(kernel, argument_index++, value, errorMsg);
+        };
+        return set_argument(width)
+            && set_argument(height)
+            && set_argument(source_count)
+            && set_argument(patch_half)
+            && set_argument(depth_sample_count)
+            && set_argument(minimum_mask_ratio)
+            && set_argument(zNear)
+            && set_argument(zFar)
+            && set_argument(confidence_threshold)
+            && set_argument(uniqueness_relative_step)
+            && set_argument(uniqueness_margin)
+            && set_argument(uniqueness_scale)
+            && set_argument(reference_mask_flag)
+            && set_argument(source_mask_flag)
+            && set_argument(hint_flag)
+            && set_argument(hint_radius_flag)
+            && set_argument(inv_fx)
+            && set_argument(inv_fy)
+            && set_argument(cx)
+            && set_argument(cy);
+    };
+    for (cl_kernel kernel : execution_lane.kernels)
+    {
+        if (!set_common_arguments(kernel))
         {
             return false;
         }
-    }
-    const auto set_argument = [&](const auto &value)
-    {
-        return setKernelArgument(execution_lane.kernel, argument_index++, value, errorMsg);
-    };
-    if (!set_argument(width)
-        || !set_argument(height)
-        || !set_argument(source_count)
-        || !set_argument(patch_half)
-        || !set_argument(depth_sample_count)
-        || !set_argument(minimum_mask_ratio)
-        || !set_argument(zNear)
-        || !set_argument(zFar)
-        || !set_argument(confidence_threshold)
-        || !set_argument(uniqueness_relative_step)
-        || !set_argument(uniqueness_margin)
-        || !set_argument(uniqueness_scale)
-        || !set_argument(reference_mask_flag)
-        || !set_argument(source_mask_flag)
-        || !set_argument(hint_flag)
-        || !set_argument(hint_radius_flag)
-        || !set_argument(inv_fx)
-        || !set_argument(inv_fy)
-        || !set_argument(cx)
-        || !set_argument(cy))
-    {
-        return false;
     }
 
     const std::size_t local_size[2] = {16, 16};
@@ -1070,7 +1173,7 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
 
     OpenClEvent first_write_event;
     OpenClEvent last_write_event;
-    OpenClEvent kernel_event;
+    OpenClEventList kernel_events;
     OpenClEvent depth_read_event;
     OpenClEvent confidence_read_event;
     OpenClQueueDrain queue_drain(execution_lane.queue);
@@ -1106,26 +1209,64 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         queue_drain.markPending();
     }
 
-    cl_int error = clEnqueueNDRangeKernel(execution_lane.queue,
-                                          execution_lane.kernel,
-                                          2,
-                                          nullptr,
-                                          global_size,
-                                          local_size,
-                                          0,
-                                          nullptr,
-                                          kernel_event.output());
-    if (error != CL_SUCCESS)
+    const auto enqueue_kernel = [&](cl_kernel kernel, const char *name)
     {
-        if (errorMsg)
+        const cl_int enqueue_error = clEnqueueNDRangeKernel(
+            execution_lane.queue,
+            kernel,
+            2,
+            nullptr,
+            global_size,
+            local_size,
+            0,
+            nullptr,
+            kernel_events.appendOutput());
+        if (enqueue_error != CL_SUCCESS)
         {
-            *errorMsg = openClError("clEnqueueNDRangeKernel", error);
+            if (errorMsg)
+            {
+                *errorMsg = openClError(name, enqueue_error);
+            }
+            return false;
         }
+        queue_drain.markPending();
+        return true;
+    };
+    if (!enqueue_kernel(execution_lane.kernels[0], "initialize_planes"))
+    {
+        return false;
+    }
+    constexpr cl_uint propagation_argument_start = 30;
+    for (int iteration = 0; iteration < propagation_iterations; ++iteration)
+    {
+        const float perturbation = 0.35f * std::pow(0.5f, static_cast<float>(iteration));
+        for (int checkerboard = 0; checkerboard < 2; ++checkerboard)
+        {
+            if (!setKernelArgument(execution_lane.kernels[1],
+                                   propagation_argument_start,
+                                   checkerboard,
+                                   errorMsg)
+                || !setKernelArgument(execution_lane.kernels[1],
+                                      propagation_argument_start + 1,
+                                      iteration,
+                                      errorMsg)
+                || !setKernelArgument(execution_lane.kernels[1],
+                                      propagation_argument_start + 2,
+                                      perturbation,
+                                      errorMsg)
+                || !enqueue_kernel(execution_lane.kernels[1], "propagate_planes"))
+            {
+                return false;
+            }
+        }
+    }
+    if (!enqueue_kernel(execution_lane.kernels[2], "finalize_planes"))
+    {
         return false;
     }
     queue_drain.markPending();
 
-    error = clEnqueueReadBuffer(execution_lane.queue,
+    cl_int error = clEnqueueReadBuffer(execution_lane.queue,
                                 memory_arguments[7],
                                 CL_FALSE,
                                 0,
@@ -1137,7 +1278,7 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     if (error == CL_SUCCESS)
     {
         error = clEnqueueReadBuffer(execution_lane.queue,
-                                    memory_arguments[8],
+                                    memory_arguments[9],
                                     CL_FALSE,
                                     0,
                                     image_float_bytes,
@@ -1174,8 +1315,8 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
 
     cl_ulong write_start_nanoseconds = 0;
     cl_ulong write_end_nanoseconds = 0;
-    cl_ulong kernel_start_nanoseconds = 0;
-    cl_ulong kernel_end_nanoseconds = 0;
+    cl_ulong kernel_chain_start_nanoseconds = 0;
+    cl_ulong kernel_chain_end_nanoseconds = 0;
     cl_ulong read_start_nanoseconds = 0;
     cl_ulong read_end_nanoseconds = 0;
     const bool has_write_profile = eventProfileRange(
@@ -1186,12 +1327,12 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         write_start_nanoseconds,
         write_end_nanoseconds);
     const bool has_kernel_profile = eventProfileRange(
-        kernel_event.get(),
+        kernel_events.first(),
         CL_PROFILING_COMMAND_START,
-        kernel_event.get(),
+        kernel_events.last(),
         CL_PROFILING_COMMAND_END,
-        kernel_start_nanoseconds,
-        kernel_end_nanoseconds);
+        kernel_chain_start_nanoseconds,
+        kernel_chain_end_nanoseconds);
     const bool has_read_profile = eventProfileRange(
         depth_read_event.get(),
         CL_PROFILING_COMMAND_START,
@@ -1279,14 +1420,21 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     const double write_ms = has_write_profile
         ? static_cast<double>(write_end_nanoseconds - write_start_nanoseconds) / 1.0e6
         : 0.0;
-    const double kernel_ms = has_kernel_profile
-        ? static_cast<double>(kernel_end_nanoseconds - kernel_start_nanoseconds) / 1.0e6
+    const double kernel_chain_ms = has_kernel_profile
+        ? static_cast<double>(
+            kernel_chain_end_nanoseconds - kernel_chain_start_nanoseconds) / 1.0e6
         : queue_ms;
+    const double kernel_active_ms = has_kernel_profile
+        ? static_cast<double>(kernel_events.activeNanoseconds()) / 1.0e6
+        : kernel_chain_ms;
+    const double kernel_duty_ratio = kernel_chain_ms > 0.0
+        ? std::clamp(kernel_active_ms / kernel_chain_ms, 0.0, 1.0)
+        : 0.0;
     const double read_ms = has_read_profile
         ? static_cast<double>(read_end_nanoseconds - read_start_nanoseconds) / 1.0e6
         : 0.0;
     const double driver_gap_ms = std::max(
-        0.0, queue_ms - write_ms - kernel_ms - read_ms);
+        0.0, queue_ms - write_ms - kernel_active_ms - read_ms);
     const double postprocess_ms = std::chrono::duration<double, std::milli>(
         estimate_finished - postprocess_start).count();
     const double total_ms = std::chrono::duration<double, std::milli>(
@@ -1295,7 +1443,8 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
              "image_cache=%d/%d %.1fMiB "
              "size=%dx%d sources=%d sample_budget=%d valid=%d/%d "
              "prepare=%.1f ms wait=%.1f ms setup=%.1f ms queue=%.1f ms "
-             "write=%.1f ms kernel=%.1f ms read=%.1f ms gap=%.1f ms "
+             "write=%.1f ms kernels=%zu/%d active=%.1f ms chain=%.1f ms duty=%.1f%% "
+             "read=%.1f ms gap=%.1f ms "
              "post=%.1f ms total=%.1f ms",
              devices[device_index].info.name.c_str(),
              execution_lane_index,
@@ -1315,7 +1464,11 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
              setup_ms,
              queue_ms,
              write_ms,
-             kernel_ms,
+             kernel_events.size(),
+             propagation_iterations,
+             kernel_active_ms,
+             kernel_chain_ms,
+             kernel_duty_ratio * 100.0,
              read_ms,
              driver_gap_ms,
              postprocess_ms,

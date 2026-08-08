@@ -9,7 +9,6 @@
 #include <cmath>
 #include <cstdint>
 #include <string>
-#include <string>
 #include <thread>
 #include <vector>
 
@@ -20,6 +19,10 @@ TEST(PatchMatchOpenClKernelContractTest, RetainsQualitySamplingWithLocalReferenc
 {
     const std::string prefix = xjw::mvs::detail::kPatchMatchOpenClSourcePrefix;
     const std::string main = xjw::mvs::detail::kPatchMatchOpenClSourceMain;
+    const std::string propagation =
+        xjw::mvs::detail::kPatchMatchOpenClSourcePropagation;
+    const std::string finalize =
+        xjw::mvs::detail::kPatchMatchOpenClSourceFinalize;
     const std::string build_options =
         xjw::mvs::detail::kPatchMatchOpenClBuildOptions;
 
@@ -28,13 +31,27 @@ TEST(PatchMatchOpenClKernelContractTest, RetainsQualitySamplingWithLocalReferenc
     EXPECT_EQ(prefix.find("native_rsqrt"), std::string::npos);
     EXPECT_NE(prefix.find("sqrt(variance_product)"), std::string::npos);
     EXPECT_NE(prefix.find("reference-mask exclusions"), std::string::npos);
-    EXPECT_NE(prefix.find("int step = 1;"), std::string::npos);
+    EXPECT_NE(prefix.find("int step = clamp(patch_step, 1, 3);"),
+              std::string::npos);
+    EXPECT_NE(prefix.find("float plane_distance = depth"), std::string::npos);
+    EXPECT_NE(prefix.find("propagated_plane_depth"), std::string::npos);
     EXPECT_NE(main.find("__local float reference_tile"), std::string::npos);
     EXPECT_NE(main.find("barrier(CLK_LOCAL_MEM_FENCE)"), std::string::npos);
     EXPECT_NE(main.find("coarse_samples = clamp(depth_sample_count, 16, 96)"),
               std::string::npos);
     EXPECT_NE(main.find("for (int refine_index = -6; refine_index <= 6; ++refine_index)"),
               std::string::npos);
+    EXPECT_NE(main.find("source_count, patch_half, 1"), std::string::npos);
+    EXPECT_NE(main.find("__kernel void initialize_planes"), std::string::npos);
+    EXPECT_NE(main.find("__global float4 *normal_output"), std::string::npos);
+    EXPECT_NE(propagation.find("__kernel void propagate_planes"), std::string::npos);
+    EXPECT_NE(propagation.find("((x + y) & 1) != checkerboard"), std::string::npos);
+    EXPECT_NE(propagation.find("random_facing_normal"), std::string::npos);
+    EXPECT_NE(propagation.find("float normal_only_score"), std::string::npos);
+    EXPECT_NE(propagation.find("source_count, patch_half, 1"), std::string::npos);
+    EXPECT_NE(finalize.find("__kernel void finalize_planes"), std::string::npos);
+    EXPECT_NE(finalize.find("uniqueness_minimum_margin"), std::string::npos);
+    EXPECT_NE(finalize.find("source_count, patch_half, 1"), std::string::npos);
 }
 
 constexpr int kWidth = 64;
