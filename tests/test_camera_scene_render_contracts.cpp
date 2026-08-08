@@ -663,8 +663,7 @@ TEST(CameraSceneRenderContractTest, PointCloudUsesOwnBoundsAndPixelSizedFloorPiv
 
     EXPECT_TRUE(sceneHeader.contains(QStringLiteral("bool       _hasCloudBounds = false;")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral(
-        "axisAlignedBoundingBoxLineVertices(\n"
-        "                _cachedCloudAABBMin, _cachedCloudAABBMax)")));
+        "const QVector<QVector3D> &vertices = _cachedCloudBoxVertices;")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral(
         "constexpr qreal half_size_pixels = 7.0;")));
     EXPECT_FALSE(sceneSource.contains(QStringLiteral(

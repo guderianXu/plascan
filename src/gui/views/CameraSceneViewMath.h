@@ -32,6 +32,15 @@ struct CameraLocalAxes
     QVector3D z;
 };
 
+struct PointCloudPrincipalAxes
+{
+    QVector3D center;
+    QVector3D first;
+    QVector3D second;
+    QVector3D third;
+    bool valid = false;
+};
+
 class CameraImageSelectionState
 {
 public:
@@ -123,6 +132,17 @@ QVector<QVector3D> cameraImagePlaneCorners(const QVector3D &center,
                                            float halfHeight);
 
 QVector<QVector3D> axisAlignedBoundingBoxLineVertices(
+    const QVector3D &minimum,
+    const QVector3D &maximum);
+
+// 从点云样本的协方差主方向构造显示用坐标系。只有整体尺度有效时
+// 才返回 valid，避免球形/退化数据产生不稳定方向。
+PointCloudPrincipalAxes pointCloudPrincipalAxes(
+    const QVector<QVector3D> &points);
+
+// minimum/maximum 是相对于 axes.center、沿三个主轴的局部坐标范围。
+QVector<QVector3D> orientedBoundingBoxLineVertices(
+    const PointCloudPrincipalAxes &axes,
     const QVector3D &minimum,
     const QVector3D &maximum);
 

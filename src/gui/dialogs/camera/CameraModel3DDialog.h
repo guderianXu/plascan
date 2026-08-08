@@ -565,6 +565,7 @@ private:
     mutable QVector3D  _cachedAABBMax;
     mutable QVector3D  _cachedCloudAABBMin;
     mutable QVector3D  _cachedCloudAABBMax;
+    mutable QVector<QVector3D> _cachedCloudBoxVertices;
     mutable bool       _hasCloudBounds = false;
     mutable bool       _cacheDirty = true;
     QVector3D _focusedGeometryCenter;

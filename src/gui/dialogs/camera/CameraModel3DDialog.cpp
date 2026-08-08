@@ -1236,6 +1236,15 @@ void CameraSceneWidget::invalidateCache() const
     int count = 0;
     QVector3D mn(0, 0, 0), mx(0, 0, 0);
     QVector3D cloud_mn(0, 0, 0), cloud_mx(0, 0, 0);
+    QVector<QVector3D> cloud_axis_samples;
+    const bool needs_oriented_cloud_box = !_cloud.hasFaces();
+    const std::size_t sample_stride = std::max<std::size_t>(
+        1, (_cloud.size() + 99'999) / 100'000);
+    if (needs_oriented_cloud_box)
+    {
+        cloud_axis_samples.reserve(static_cast<qsizetype>(
+            std::min<std::size_t>(_cloud.size(), 100'000)));
+    }
 
     auto accum = [&](const QVector3D &p)
     {
@@ -1266,15 +1275,62 @@ void CameraSceneWidget::invalidateCache() const
     for (const auto &p : _poses)             accum(p.center);
     for (size_t i = 0; i < _cloud.size(); ++i)
     {
-        accum_cloud(QVector3D(_cloud.points()(static_cast<plamatrix::Index>(i), 0),
+        const QVector3D point(_cloud.points()(static_cast<plamatrix::Index>(i), 0),
                               _cloud.points()(static_cast<plamatrix::Index>(i), 1),
-                              _cloud.points()(static_cast<plamatrix::Index>(i), 2)));
+                              _cloud.points()(static_cast<plamatrix::Index>(i), 2));
+        accum_cloud(point);
+        if (needs_oriented_cloud_box && i % sample_stride == 0)
+        {
+            cloud_axis_samples.push_back(point);
+        }
     }
     _hasCloudBounds = has_cloud;
     if (has_cloud)
     {
         _cachedCloudAABBMin = cloud_mn;
         _cachedCloudAABBMax = cloud_mx;
+        const auto axes = needs_oriented_cloud_box
+            ? xjw::gui::camera_scene::pointCloudPrincipalAxes(cloud_axis_samples)
+            : xjw::gui::camera_scene::PointCloudPrincipalAxes{};
+        QVector3D local_min(std::numeric_limits<float>::max(),
+                            std::numeric_limits<float>::max(),
+                            std::numeric_limits<float>::max());
+        QVector3D local_max(std::numeric_limits<float>::lowest(),
+                            std::numeric_limits<float>::lowest(),
+                            std::numeric_limits<float>::lowest());
+        if (axes.valid)
+        {
+            for (size_t i = 0; i < _cloud.size(); ++i)
+            {
+                const QVector3D point(
+                    _cloud.points()(static_cast<plamatrix::Index>(i), 0),
+                    _cloud.points()(static_cast<plamatrix::Index>(i), 1),
+                    _cloud.points()(static_cast<plamatrix::Index>(i), 2));
+                const QVector3D offset = point - axes.center;
+                const QVector3D local(QVector3D::dotProduct(offset, axes.first),
+                                      QVector3D::dotProduct(offset, axes.second),
+                                      QVector3D::dotProduct(offset, axes.third));
+                local_min.setX(std::min(local_min.x(), local.x()));
+                local_min.setY(std::min(local_min.y(), local.y()));
+                local_min.setZ(std::min(local_min.z(), local.z()));
+                local_max.setX(std::max(local_max.x(), local.x()));
+                local_max.setY(std::max(local_max.y(), local.y()));
+                local_max.setZ(std::max(local_max.z(), local.z()));
+            }
+            _cachedCloudBoxVertices =
+                xjw::gui::camera_scene::orientedBoundingBoxLineVertices(
+                    axes, local_min, local_max);
+        }
+        if (_cachedCloudBoxVertices.isEmpty())
+        {
+            _cachedCloudBoxVertices =
+                xjw::gui::camera_scene::axisAlignedBoundingBoxLineVertices(
+                    cloud_mn, cloud_mx);
+        }
+    }
+    else
+    {
+        _cachedCloudBoxVertices.clear();
     }
 
     if (count <= 0)
@@ -3192,9 +3248,7 @@ void CameraSceneWidget::uploadGpuData()
     }
     if (_hasCloudBounds && !_cloud.hasFaces())
     {
-        const QVector<QVector3D> vertices =
-            xjw::gui::camera_scene::axisAlignedBoundingBoxLineVertices(
-                _cachedCloudAABBMin, _cachedCloudAABBMax);
+        const QVector<QVector3D> &vertices = _cachedCloudBoxVertices;
         QVector<float> line_data;
         line_data.reserve(vertices.size() * 6);
         for (const QVector3D &vertex : vertices)

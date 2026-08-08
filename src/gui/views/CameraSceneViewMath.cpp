@@ -421,6 +421,210 @@ QVector<QVector3D> axisAlignedBoundingBoxLineVertices(
     return vertices;
 }
 
+PointCloudPrincipalAxes pointCloudPrincipalAxes(
+    const QVector<QVector3D> &points)
+{
+    PointCloudPrincipalAxes result;
+    if (points.size() < 3)
+    {
+        return result;
+    }
+
+    QVector3D center;
+    int finite_count = 0;
+    for (const QVector3D &point : points)
+    {
+        if (!std::isfinite(point.x()) || !std::isfinite(point.y())
+            || !std::isfinite(point.z()))
+        {
+            continue;
+        }
+        center += point;
+        ++finite_count;
+    }
+    if (finite_count < 3)
+    {
+        return result;
+    }
+    center /= static_cast<float>(finite_count);
+
+    double covariance[3][3]{};
+    for (const QVector3D &point : points)
+    {
+        if (!std::isfinite(point.x()) || !std::isfinite(point.y())
+            || !std::isfinite(point.z()))
+        {
+            continue;
+        }
+        const QVector3D offset = point - center;
+        const double value[3]{offset.x(), offset.y(), offset.z()};
+        for (int row = 0; row < 3; ++row)
+        {
+            for (int column = row; column < 3; ++column)
+            {
+                covariance[row][column] += value[row] * value[column];
+                covariance[column][row] = covariance[row][column];
+            }
+        }
+    }
+
+    double eigenvectors[3][3]{{1.0, 0.0, 0.0},
+                              {0.0, 1.0, 0.0},
+                              {0.0, 0.0, 1.0}};
+    for (int iteration = 0; iteration < 24; ++iteration)
+    {
+        int p = 0;
+        int q = 1;
+        double largest = std::abs(covariance[p][q]);
+        for (int row = 0; row < 3; ++row)
+        {
+            for (int column = row + 1; column < 3; ++column)
+            {
+                if (std::abs(covariance[row][column]) > largest)
+                {
+                    p = row;
+                    q = column;
+                    largest = std::abs(covariance[row][column]);
+                }
+            }
+        }
+        const double diagonal_scale = std::max(
+            1.0,
+            std::abs(covariance[0][0]) + std::abs(covariance[1][1])
+                + std::abs(covariance[2][2]));
+        if (largest <= diagonal_scale * 1.0e-12)
+        {
+            break;
+        }
+
+        const double angle = 0.5 * std::atan2(
+            2.0 * covariance[p][q],
+            covariance[q][q] - covariance[p][p]);
+        const double cosine = std::cos(angle);
+        const double sine = std::sin(angle);
+        const double app = covariance[p][p];
+        const double aqq = covariance[q][q];
+        const double apq = covariance[p][q];
+        covariance[p][p] = cosine * cosine * app
+            - 2.0 * sine * cosine * apq + sine * sine * aqq;
+        covariance[q][q] = sine * sine * app
+            + 2.0 * sine * cosine * apq + cosine * cosine * aqq;
+        covariance[p][q] = 0.0;
+        covariance[q][p] = 0.0;
+        for (int index = 0; index < 3; ++index)
+        {
+            if (index != p && index != q)
+            {
+                const double aip = covariance[index][p];
+                const double aiq = covariance[index][q];
+                covariance[index][p] = cosine * aip - sine * aiq;
+                covariance[p][index] = covariance[index][p];
+                covariance[index][q] = sine * aip + cosine * aiq;
+                covariance[q][index] = covariance[index][q];
+            }
+            const double vip = eigenvectors[index][p];
+            const double viq = eigenvectors[index][q];
+            eigenvectors[index][p] = cosine * vip - sine * viq;
+            eigenvectors[index][q] = sine * vip + cosine * viq;
+        }
+    }
+
+    int order[3]{0, 1, 2};
+    std::sort(std::begin(order), std::end(order), [&](int left, int right)
+    {
+        return covariance[left][left] > covariance[right][right];
+    });
+    const double largest_eigenvalue = covariance[order[0]][order[0]];
+    if (!std::isfinite(largest_eigenvalue) || largest_eigenvalue <= 1.0e-12)
+    {
+        return result;
+    }
+
+    const auto eigenvector = [&](int column)
+    {
+        return QVector3D(static_cast<float>(eigenvectors[0][column]),
+                         static_cast<float>(eigenvectors[1][column]),
+                         static_cast<float>(eigenvectors[2][column])).normalized();
+    };
+    QVector3D first = eigenvector(order[0]);
+    QVector3D second = eigenvector(order[1]);
+    QVector3D third = QVector3D::crossProduct(first, second).normalized();
+    second = QVector3D::crossProduct(third, first).normalized();
+    if (first.isNull() || second.isNull() || third.isNull())
+    {
+        return result;
+    }
+
+    const auto canonicalize = [](QVector3D axis)
+    {
+        const float values[3]{axis.x(), axis.y(), axis.z()};
+        int largest_index = 0;
+        for (int index = 1; index < 3; ++index)
+        {
+            if (std::abs(values[index]) > std::abs(values[largest_index]))
+            {
+                largest_index = index;
+            }
+        }
+        return values[largest_index] < 0.0f ? -axis : axis;
+    };
+    first = canonicalize(first);
+    second = canonicalize(second);
+    third = QVector3D::crossProduct(first, second).normalized();
+    second = QVector3D::crossProduct(third, first).normalized();
+
+    result.center = center;
+    result.first = first;
+    result.second = second;
+    result.third = third;
+    result.valid = true;
+    return result;
+}
+
+QVector<QVector3D> orientedBoundingBoxLineVertices(
+    const PointCloudPrincipalAxes &axes,
+    const QVector3D &minimum,
+    const QVector3D &maximum)
+{
+    if (!axes.valid)
+    {
+        return {};
+    }
+    const QVector3D lower(std::min(minimum.x(), maximum.x()),
+                          std::min(minimum.y(), maximum.y()),
+                          std::min(minimum.z(), maximum.z()));
+    const QVector3D upper(std::max(minimum.x(), maximum.x()),
+                          std::max(minimum.y(), maximum.y()),
+                          std::max(minimum.z(), maximum.z()));
+    QVector<QVector3D> local_corners{
+        {lower.x(), lower.y(), lower.z()}, {upper.x(), lower.y(), lower.z()},
+        {upper.x(), upper.y(), lower.z()}, {lower.x(), upper.y(), lower.z()},
+        {lower.x(), lower.y(), upper.z()}, {upper.x(), lower.y(), upper.z()},
+        {upper.x(), upper.y(), upper.z()}, {lower.x(), upper.y(), upper.z()},
+    };
+    QVector<QVector3D> world_corners;
+    world_corners.reserve(local_corners.size());
+    for (const QVector3D &corner : local_corners)
+    {
+        world_corners.push_back(axes.center + axes.first * corner.x()
+                                + axes.second * corner.y()
+                                + axes.third * corner.z());
+    }
+    constexpr int edges[][2] = {
+        {0, 1}, {1, 2}, {2, 3}, {3, 0},
+        {4, 5}, {5, 6}, {6, 7}, {7, 4},
+        {0, 4}, {1, 5}, {2, 6}, {3, 7},
+    };
+    QVector<QVector3D> vertices;
+    vertices.reserve(24);
+    for (const auto &edge : edges)
+    {
+        vertices.push_back(world_corners.at(edge[0]));
+        vertices.push_back(world_corners.at(edge[1]));
+    }
+    return vertices;
+}
+
 QVector<QVector3D> calibratedImagePlaneCorners(const QVector3D &cameraCenter,
                                                const QVector3D &forward,
                                                const QVector3D &right,

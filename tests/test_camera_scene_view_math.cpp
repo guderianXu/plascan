@@ -435,3 +435,30 @@ TEST(CameraSceneViewMathTest, RejectsNonFinitePointCloudBoundingBox)
                     QVector3D(1.0f, 1.0f, 1.0f))
                     .isEmpty());
 }
+
+TEST(CameraSceneViewMathTest, BuildsOrientedBoxAlongPointCloudPrincipalAxes)
+{
+    const QVector3D long_axis = QVector3D(1.0f, 1.0f, 0.0f).normalized();
+    const QVector3D short_axis = QVector3D(-1.0f, 1.0f, 0.0f).normalized();
+    QVector<QVector3D> points;
+    for (int along = -4; along <= 4; ++along)
+    {
+        for (int across = -1; across <= 1; ++across)
+        {
+            points.push_back(long_axis * static_cast<float>(along)
+                             + short_axis * static_cast<float>(across)
+                             + QVector3D(0.0f, 0.0f, 0.05f * across));
+        }
+    }
+
+    const PointCloudPrincipalAxes axes = pointCloudPrincipalAxes(points);
+    ASSERT_TRUE(axes.valid);
+    EXPECT_GT(std::abs(QVector3D::dotProduct(axes.first, long_axis)), 0.99f);
+    EXPECT_GT(std::abs(QVector3D::dotProduct(axes.third, QVector3D(0, 0, 1))), 0.99f);
+
+    const QVector<QVector3D> vertices = orientedBoundingBoxLineVertices(
+        axes, QVector3D(-4.0f, -1.0f, -0.1f), QVector3D(4.0f, 1.0f, 0.1f));
+    ASSERT_EQ(vertices.size(), 24);
+    const QVector3D first_edge = (vertices.at(1) - vertices.at(0)).normalized();
+    EXPECT_GT(std::abs(QVector3D::dotProduct(first_edge, long_axis)), 0.99f);
+}
