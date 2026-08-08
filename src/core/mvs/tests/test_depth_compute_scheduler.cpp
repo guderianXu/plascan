@@ -1,5 +1,6 @@
 #include "DepthComputeScheduler.h"
 #include "GpuDeviceLease.h"
+#include "PatchMatchCUDA.h"
 
 #include <gtest/gtest.h>
 
@@ -22,7 +23,7 @@ using xjw::mvs::GpuDeviceDescriptor;
 using xjw::mvs::GpuDeviceLeaseSet;
 using xjw::mvs::buildDepthComputeWorkerPool;
 using xjw::mvs::fallbackGpuPhysicalIdentity;
-using xjw::mvs::preferCudaOnlyForHighestQualityOrbital;
+using xjw::mvs::resolveDepthComputeBackend;
 
 TEST(DepthComputeSchedulerTest, ReturnsHighestPriorityFrameFirst)
 {
@@ -36,7 +37,7 @@ TEST(DepthComputeSchedulerTest, ReturnsHighestPriorityFrameFirst)
     EXPECT_EQ(worker.id(), "CUDA:1");
 }
 
-TEST(DepthComputeSchedulerTest, SharesEachFrameOnceAcrossHeterogeneousWorkers)
+TEST(DepthComputeSchedulerTest, SharesEachFrameOnceAcrossConcurrentWorkers)
 {
     std::vector<DepthFrameTask> tasks;
     for (int index = 0; index < 100; ++index)
@@ -87,7 +88,7 @@ TEST(DepthComputeSchedulerTest, UsesStableOpenClWorkerName)
     EXPECT_EQ(opencl_worker.id(), "OpenCL:2");
 }
 
-TEST(DepthComputeSchedulerTest, CapsMixedOpenClBackendAtOnePreparationWorker)
+TEST(DepthComputeSchedulerTest, BuildsPreparationSlotsForCallerProvidedMixedPool)
 {
     const std::vector<DepthComputeWorker> physical_workers = {
         {DepthComputeBackend::Cuda, 0},
@@ -102,18 +103,32 @@ TEST(DepthComputeSchedulerTest, CapsMixedOpenClBackendAtOnePreparationWorker)
     EXPECT_EQ(workers[2].id(), "OpenCL:1");
 }
 
-TEST(DepthComputeSchedulerTest, HighestQualityOrbitalUsesCudaOnlyInAutomaticMode)
+TEST(DepthComputeSchedulerTest, AutomaticBackendUsesStrictAcceleratorPriority)
 {
-    EXPECT_TRUE(preferCudaOnlyForHighestQualityOrbital(
-        true, true, true, true, "highest"));
-    EXPECT_FALSE(preferCudaOnlyForHighestQualityOrbital(
-        false, true, true, true, "highest"));
-    EXPECT_FALSE(preferCudaOnlyForHighestQualityOrbital(
-        true, true, true, true, "high"));
-    EXPECT_FALSE(preferCudaOnlyForHighestQualityOrbital(
-        true, true, true, false, "highest"));
-    EXPECT_FALSE(preferCudaOnlyForHighestQualityOrbital(
-        true, false, true, true, "highest"));
+    EXPECT_EQ(resolveDepthComputeBackend(std::nullopt, true, true),
+              DepthComputeBackend::Cuda);
+    EXPECT_EQ(resolveDepthComputeBackend(std::nullopt, false, true),
+              DepthComputeBackend::OpenCl);
+    EXPECT_EQ(resolveDepthComputeBackend(std::nullopt, false, false),
+              DepthComputeBackend::Cpu);
+}
+
+TEST(DepthComputeSchedulerTest, ExplicitBackendIsNeverSubstituted)
+{
+    EXPECT_EQ(resolveDepthComputeBackend(DepthComputeBackend::Cuda, false, true),
+              DepthComputeBackend::Cuda);
+    EXPECT_EQ(resolveDepthComputeBackend(DepthComputeBackend::OpenCl, true, false),
+              DepthComputeBackend::OpenCl);
+    EXPECT_EQ(resolveDepthComputeBackend(DepthComputeBackend::Cpu, true, true),
+              DepthComputeBackend::Cpu);
+}
+
+TEST(PatchMatchOpenClPreparationTest, RejectsUnknownDeviceIndexWithDiagnostic)
+{
+    std::string error;
+    EXPECT_FALSE(xjw::mvs::PatchMatchDepthEstimator::prepareOpenClDevice(
+        1000000, &error));
+    EXPECT_FALSE(error.empty());
 }
 
 TEST(GpuDeviceLeaseTest, PreventsConcurrentProcessLeaseForSamePhysicalDevice)
@@ -130,6 +145,26 @@ TEST(GpuDeviceLeaseTest, PreventsConcurrentProcessLeaseForSamePhysicalDevice)
     GpuDeviceLeaseSet second;
     EXPECT_FALSE(second.acquire(devices, &error));
     EXPECT_TRUE(error.contains(QStringLiteral("Test GPU")));
+}
+
+TEST(GpuDeviceLeaseTest, BusyDeviceDoesNotPreventLeasingAnotherDevice)
+{
+    const std::string prefix = "test-gpu-pool-" + std::to_string(
+        QCoreApplication::applicationPid()) + "-" + std::to_string(
+        QDateTime::currentMSecsSinceEpoch());
+    const GpuDeviceDescriptor busy_device{prefix + "-busy", "Busy Test GPU"};
+    const GpuDeviceDescriptor free_device{prefix + "-free", "Free Test GPU"};
+
+    GpuDeviceLeaseSet occupied;
+    QString error;
+    ASSERT_TRUE(occupied.acquire({busy_device}, &error)) << error.toStdString();
+
+    GpuDeviceLeaseSet busy_candidate;
+    EXPECT_FALSE(busy_candidate.acquire({busy_device}, &error));
+
+    GpuDeviceLeaseSet free_candidate;
+    EXPECT_TRUE(free_candidate.acquire({free_device}, &error))
+        << error.toStdString();
 }
 
 TEST(GpuDeviceLeaseTest, NormalizesFallbackIdentityDeterministically)

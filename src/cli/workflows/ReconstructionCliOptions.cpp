@@ -18,7 +18,7 @@ void ReconstructionCliOptions::addTo(CLI::App &app)
     app.add_option("-o,--output-dir", outputDirArg, "output directory");
     app.add_option("--chunk-id", chunkIdArg, "use the Chunk with this UUID");
     app.add_option("--chunk-name", chunkNameArg, "use the Chunk with this name");
-    app.add_option("--device", device, "auto, cpu, cuda")
+    app.add_option("--device", device, "SFM backend: auto, cpu, cuda")
         ->check(CLI::IsMember({"auto", "cpu", "cuda"}));
     app.add_option("--sfm-matching-algorithm", sfmMatchingAlgorithmId,
                    "SFM image matching algorithm id: sift_lightglue or loma_r")
@@ -40,6 +40,9 @@ void ReconstructionCliOptions::addTo(CLI::App &app)
     app.add_option("--mvs-quality", mvsQuality, "MVS quality: highest, high, medium, low, lowest")
         ->check(CLI::IsMember({"highest", "high", "medium", "low", "lowest"}));
     app.add_option("--mvs-backend", mvsBackend, "MVS backend: auto, cpu, cuda, opencl")
+        ->check(CLI::IsMember({"auto", "cpu", "cuda", "opencl"}));
+    app.add_option("--point-cloud-backend", pointCloudBackend,
+                   "PlaPoint backend: auto, cpu, cuda, opencl; auto prefers CUDA, then OpenCL, then CPU")
         ->check(CLI::IsMember({"auto", "cpu", "cuda", "opencl"}));
     app.add_option("--mvs-scene-profile", mvsSceneProfile,
                    "MVS scene profile: auto, orbital_object, aerial_terrain")

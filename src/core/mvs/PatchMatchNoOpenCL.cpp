@@ -15,6 +15,16 @@ std::vector<OpenClDeviceInfo> PatchMatchDepthEstimator::openClDevices()
     return {};
 }
 
+bool PatchMatchDepthEstimator::prepareOpenClDevice(int,
+                                                   std::string *errorMsg)
+{
+    if (errorMsg)
+    {
+        *errorMsg = "OpenCL is unavailable in this build";
+    }
+    return false;
+}
+
 void PatchMatchDepthEstimator::resetOpenClExecutionStats()
 {
 }

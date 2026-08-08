@@ -863,6 +863,50 @@ bool PatchMatchDepthEstimator::isOpenClAvailable()
     return !enumerateOpenClGpuDevices().empty();
 }
 
+bool PatchMatchDepthEstimator::prepareOpenClDevice(int deviceIndex,
+                                                   std::string *errorMsg)
+{
+    const std::vector<EnumeratedOpenClDevice> &devices = enumerateOpenClGpuDevices();
+    if (devices.empty())
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "no OpenCL GPU device is available";
+        }
+        return false;
+    }
+
+    const EnumeratedOpenClDevice *selected_device = nullptr;
+    if (deviceIndex < 0)
+    {
+        selected_device = &devices.front();
+    }
+    else
+    {
+        const auto selected = std::find_if(
+            devices.cbegin(),
+            devices.cend(),
+            [deviceIndex](const EnumeratedOpenClDevice &candidate)
+            {
+                return candidate.info.index == deviceIndex;
+            });
+        if (selected != devices.cend())
+        {
+            selected_device = &*selected;
+        }
+    }
+
+    if (!selected_device)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "OpenCL GPU device index is outside the available device range";
+        }
+        return false;
+    }
+    return static_cast<bool>(openClRuntimeForDevice(*selected_device, errorMsg));
+}
+
 std::vector<OpenClDeviceInfo> PatchMatchDepthEstimator::openClDevices()
 {
     const std::vector<EnumeratedOpenClDevice> &devices = enumerateOpenClGpuDevices();

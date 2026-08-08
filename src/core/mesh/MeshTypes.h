@@ -53,6 +53,9 @@ struct ReconstructionConfig
     bool  enableDownsample = true;
     float downsampleVoxelScale = 0.8f;
     plapoint::ProcessingDevice preprocessingDevice = plapoint::ProcessingDevice::Auto;
+    // Poisson currently supports CUDA and CPU solvers only. Keep its backend
+    // independent so OpenCL can still accelerate preprocessing and height grids.
+    plapoint::ProcessingDevice poissonSolverDevice = plapoint::ProcessingDevice::Auto;
     bool  forcePoisson     = true;
     bool  allowHeightGridFallback = true;
     bool  orientNormalsForClosedSurface = false;

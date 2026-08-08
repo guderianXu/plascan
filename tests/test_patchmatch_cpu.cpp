@@ -198,6 +198,7 @@ TEST(PatchMatchCpuRegressionTest, RecoversFrontoParallelPlaneAtExpectedDepth)
 
     xjw::mvs::PatchMatchConfig config;
     config.useCuda = false;
+    config.backend = xjw::mvs::PatchMatchBackend::Cpu;
     config.downsampleFactor = 2;
     config.patchHalf = 2;
     config.confidenceThresh = 0.15f;

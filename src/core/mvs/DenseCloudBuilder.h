@@ -63,7 +63,8 @@ public:
     static std::vector<DensePoint> voxelDownsample(
         const std::vector<DensePoint> &cloud,
         float voxelSize,
-        plapoint::ProcessingDevice processingDevice = plapoint::ProcessingDevice::Auto);
+        plapoint::ProcessingDevice processingDevice = plapoint::ProcessingDevice::Auto,
+        plapoint::ProcessingReport *processingReport = nullptr);
 
     /// 统计离群点过滤 (Statistical Outlier Removal)
     /// 对每个点计算 k 近邻平均距离，移除偏离均值过多的点
@@ -75,7 +76,8 @@ public:
         const std::vector<DensePoint> &cloud,
         int   kNeighbors = 30,
         float stdRatio   = 1.5f,
-        plapoint::ProcessingDevice processingDevice = plapoint::ProcessingDevice::Auto);
+        plapoint::ProcessingDevice processingDevice = plapoint::ProcessingDevice::Auto,
+        plapoint::ProcessingReport *processingReport = nullptr);
 
     /// 半径离群点过滤
     /// 移除在指定半径内邻居数少于阈值的点
@@ -87,7 +89,8 @@ public:
         const std::vector<DensePoint> &cloud,
         float radius,
         int   minNeighbors = 6,
-        plapoint::ProcessingDevice processingDevice = plapoint::ProcessingDevice::Auto);
+        plapoint::ProcessingDevice processingDevice = plapoint::ProcessingDevice::Auto,
+        plapoint::ProcessingReport *processingReport = nullptr);
 };
 
 } // namespace mvs

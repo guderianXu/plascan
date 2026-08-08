@@ -32,6 +32,7 @@ struct ReconstructionCliOptions
     int featureMaxImageDim = 0;
     std::string mvsQuality = "high";
     std::string mvsBackend = "auto";
+    std::string pointCloudBackend = "auto";
     std::string mvsSceneProfile = "auto";
     std::string mvsDepthFilter = "auto";
     std::string mvsMaskDirArg;

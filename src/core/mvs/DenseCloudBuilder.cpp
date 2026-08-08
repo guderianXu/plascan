@@ -212,6 +212,22 @@ static std::vector<DensePoint> fromPointCloud(const DensePlaCloud &cloud)
     return points;
 }
 
+const char *processingDeviceName(plapoint::ProcessingDevice device)
+{
+    switch (device)
+    {
+    case plapoint::ProcessingDevice::CPU:
+        return "CPU";
+    case plapoint::ProcessingDevice::CUDA:
+        return "CUDA";
+    case plapoint::ProcessingDevice::OpenCL:
+        return "OpenCL";
+    case plapoint::ProcessingDevice::Auto:
+        return "Auto";
+    }
+    return "Unknown";
+}
+
 } // anonymous namespace
 
 // =============================================================================
@@ -220,7 +236,8 @@ static std::vector<DensePoint> fromPointCloud(const DensePlaCloud &cloud)
 std::vector<DensePoint> DenseCloudBuilder::voxelDownsample(
     const std::vector<DensePoint> &cloud,
     float voxelSize,
-    plapoint::ProcessingDevice processingDevice)
+    plapoint::ProcessingDevice processingDevice,
+    plapoint::ProcessingReport *processingReport)
 {
     if (cloud.empty() || voxelSize <= 0.0f)
     {
@@ -235,11 +252,17 @@ std::vector<DensePoint> DenseCloudBuilder::voxelDownsample(
     plapoint::ProcessingReport report;
     DensePlaCloud filtered = plapoint::voxelDownsample(
         pointCloud, voxelSize, processingDevice, &report);
+    if (processingReport)
+    {
+        *processingReport = report;
+    }
     std::vector<DensePoint> result = fromPointCloud(filtered);
 
     auto t1 = std::chrono::steady_clock::now();
-    LOG_INFO("[Voxel] plapoint 下采样完成: %d → %d 点 (设备=%d) 耗时 %.3f s",
-             N, static_cast<int>(result.size()), static_cast<int>(report.usedDevice),
+    LOG_INFO("[Voxel] plapoint 下采样完成: %d → %d 点 (请求=%s, 实际=%s) 耗时 %.3f s",
+             N, static_cast<int>(result.size()),
+             processingDeviceName(report.requestedDevice),
+             processingDeviceName(report.actualDevice),
              std::chrono::duration<double>(t1 - t0).count());
     return result;
 }
@@ -251,7 +274,8 @@ std::vector<DensePoint> DenseCloudBuilder::statisticalOutlierRemoval(
     const std::vector<DensePoint> &cloud,
     int   kNeighbors,
     float stdRatio,
-    plapoint::ProcessingDevice processingDevice)
+    plapoint::ProcessingDevice processingDevice,
+    plapoint::ProcessingReport *processingReport)
 {
     if (cloud.size() < (size_t)kNeighbors + 1)
     {
@@ -269,12 +293,17 @@ std::vector<DensePoint> DenseCloudBuilder::statisticalOutlierRemoval(
     plapoint::ProcessingReport report;
     DensePlaCloud filtered = plapoint::statisticalOutlierRemoval(
         pointCloud, kNeighbors, stdRatio, processingDevice, &removedIndices, &report);
+    if (processingReport)
+    {
+        *processingReport = report;
+    }
     std::vector<DensePoint> result = fromPointCloud(filtered);
 
     auto t3 = std::chrono::steady_clock::now();
-    LOG_INFO("[SOR] plapoint 过滤完成: %d → %d 点 (移除 %zu, %.1f%%, 设备=%d) 总耗时 %.3f s",
+    LOG_INFO("[SOR] plapoint 过滤完成: %d → %d 点 (移除 %zu, %.1f%%, 请求=%s, 实际=%s) 总耗时 %.3f s",
              N, (int)result.size(), removedIndices.size(), 100.f * removedIndices.size() / N,
-             static_cast<int>(report.usedDevice),
+             processingDeviceName(report.requestedDevice),
+             processingDeviceName(report.actualDevice),
              std::chrono::duration<double>(t3 - t0).count());
     return result;
 }
@@ -286,7 +315,8 @@ std::vector<DensePoint> DenseCloudBuilder::radiusOutlierRemoval(
     const std::vector<DensePoint> &cloud,
     float radius,
     int   minNeighbors,
-    plapoint::ProcessingDevice processingDevice)
+    plapoint::ProcessingDevice processingDevice,
+    plapoint::ProcessingReport *processingReport)
 {
     if (cloud.empty()) return cloud;
 
@@ -301,12 +331,17 @@ std::vector<DensePoint> DenseCloudBuilder::radiusOutlierRemoval(
     plapoint::ProcessingReport report;
     DensePlaCloud filtered = plapoint::radiusOutlierRemoval(
         pointCloud, radius, minNeighbors, processingDevice, &removedIndices, &report);
+    if (processingReport)
+    {
+        *processingReport = report;
+    }
     std::vector<DensePoint> result = fromPointCloud(filtered);
 
     auto t2 = std::chrono::steady_clock::now();
-    LOG_INFO("[RadiusOR] plapoint 过滤完成: %d → %d 点 (移除 %zu, %.1f%%, 设备=%d) 耗时 %.3f s",
+    LOG_INFO("[RadiusOR] plapoint 过滤完成: %d → %d 点 (移除 %zu, %.1f%%, 请求=%s, 实际=%s) 耗时 %.3f s",
              N, (int)result.size(), removedIndices.size(), 100.f * removedIndices.size() / N,
-             static_cast<int>(report.usedDevice),
+             processingDeviceName(report.requestedDevice),
+             processingDeviceName(report.actualDevice),
              std::chrono::duration<double>(t2 - t0).count());
     return result;
 }

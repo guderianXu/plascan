@@ -613,6 +613,7 @@ TEST(MvsPipelineTest, PatchMatchCpuOutputValid)
 
     xjw::mvs::PatchMatchConfig cfg;
     cfg.useCuda           = false;
+    cfg.backend           = xjw::mvs::PatchMatchBackend::Cpu;
     cfg.downsampleFactor  = 2;
     cfg.patchHalf         = 2;
     cfg.confidenceThresh  = 0.10f;
@@ -660,6 +661,7 @@ TEST(MvsPipelineTest, PatchMatchCpuHonorsPerPixelDepthRadius)
 
     xjw::mvs::PatchMatchConfig config;
     config.useCuda = false;
+    config.backend = xjw::mvs::PatchMatchBackend::Cpu;
     config.downsampleFactor = 2;
     config.patchHalf = 2;
     config.numIterations = 2;
@@ -2361,6 +2363,7 @@ TEST(MvsPipelineTest, PatchMatchToDenseCloudEndToEnd)
 
     xjw::mvs::PatchMatchConfig cfg;
     cfg.useCuda           = false;
+    cfg.backend           = xjw::mvs::PatchMatchBackend::Cpu;
     cfg.downsampleFactor  = 2;
     cfg.patchHalf         = 2;
     cfg.confidenceThresh  = 0.10f;

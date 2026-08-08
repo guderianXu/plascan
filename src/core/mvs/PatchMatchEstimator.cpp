@@ -67,11 +67,7 @@ bool PatchMatchDepthEstimator::estimate(
     PatchMatchBackend backend = config.backend;
     if (backend == PatchMatchBackend::Auto)
     {
-        if (!config.useCuda)
-        {
-            backend = PatchMatchBackend::Cpu;
-        }
-        else if (isCudaAvailable())
+        if (isCudaAvailable())
         {
             backend = PatchMatchBackend::Cuda;
         }

@@ -38,6 +38,8 @@ private:
     void onRun();
 
     QComboBox *_qualityCombo = nullptr;
+    QComboBox *_mvsBackendCombo = nullptr;
+    QComboBox *_pointCloudBackendCombo = nullptr;
     QCheckBox *_reuseDepthMapsCheck = nullptr;
     QCheckBox *_saveEachStepCheck = nullptr;
     QComboBox *_depthFilterCombo = nullptr;

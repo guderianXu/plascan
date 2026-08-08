@@ -1637,7 +1637,32 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
                 plapoint::mesh::PoissonReconstruction<float> poisson;
                 poisson.setInputCloud(poissonCloudPtr);
                 poisson.setDepth(recommendedPoissonDepth(points.size(), config.poissonDepth));
+                poisson.setProcessingDevice(config.poissonSolverDevice);
                 auto [verts, faces] = poisson.reconstruct();
+                const auto &poisson_report = poisson.lastReport();
+                const auto device_name = [](plapoint::ProcessingDevice device)
+                {
+                    switch (device)
+                    {
+                    case plapoint::ProcessingDevice::CPU:
+                        return "CPU";
+                    case plapoint::ProcessingDevice::CUDA:
+                        return "CUDA";
+                    case plapoint::ProcessingDevice::OpenCL:
+                        return "OpenCL";
+                    case plapoint::ProcessingDevice::Auto:
+                        return "Auto";
+                    }
+                    return "Unknown";
+                };
+                std::string poisson_device_stage =
+                    std::string("Poisson PCG 实际后端: ") +
+                    device_name(poisson_report.solverDevice);
+                if (poisson_report.usedFallback)
+                {
+                    poisson_device_stage += "；回退原因: " + poisson_report.fallbackReason;
+                }
+                progress(poisson_device_stage, 0.48f);
                 progress("正在传递网格顶点颜色...", 0.50f);
                 convertPoissonResultToMesh(verts, faces, poissonCloudPtr, &mesh);
                 detail::weldCoincidentVertices(&mesh, 1.0e-6f);

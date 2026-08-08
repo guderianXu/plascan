@@ -50,6 +50,7 @@ struct PointCloudWorkflowContext
     std::vector<xjw::mvs::CameraView> views;
     int atIndex = -1;
     bool reuseDepthMaps = true;
+    bool reusedDepthMaps = false;
     bool saveAfterEachStep = false;
     bool calculateColors = true;
     bool replaceDefaultPointCloud = false;
@@ -73,6 +74,53 @@ struct PointCloudTaskResult
 QString utcNowIso()
 {
     return QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+}
+
+QString patchMatchBackendId(xjw::mvs::PatchMatchBackend backend)
+{
+    switch (backend)
+    {
+    case xjw::mvs::PatchMatchBackend::Cpu:
+        return QStringLiteral("cpu");
+    case xjw::mvs::PatchMatchBackend::Cuda:
+        return QStringLiteral("cuda");
+    case xjw::mvs::PatchMatchBackend::OpenCl:
+        return QStringLiteral("opencl");
+    case xjw::mvs::PatchMatchBackend::Auto:
+        return QStringLiteral("auto");
+    }
+    return QStringLiteral("unknown");
+}
+
+QString mvsBackendFromStoredFrames(
+    const std::vector<xjw::core::project::StoredDepthFrameRecord> &frames)
+{
+    QString actual_backend;
+    for (const auto &frame : frames)
+    {
+        const QString device = frame.device.trimmed().toLower();
+        const QString backend = (device.startsWith(QStringLiteral("cuda")) ||
+                                 device.startsWith(QStringLiteral("gpu")))
+            ? QStringLiteral("cuda")
+            : device.startsWith(QStringLiteral("opencl"))
+                ? QStringLiteral("opencl")
+                : device.startsWith(QStringLiteral("cpu"))
+                    ? QStringLiteral("cpu")
+                    : QStringLiteral("unknown");
+        if (backend == QStringLiteral("unknown"))
+        {
+            continue;
+        }
+        if (actual_backend.isEmpty())
+        {
+            actual_backend = backend;
+        }
+        else if (actual_backend != backend)
+        {
+            return QStringLiteral("mixed");
+        }
+    }
+    return actual_backend.isEmpty() ? QStringLiteral("unknown") : actual_backend;
 }
 
 QString sparseCloudPathFromRecord(const QJsonObject &record)
@@ -257,6 +305,9 @@ QJsonObject depthRecordFromArtifact(const QJsonObject &artifact,
     record[QStringLiteral("reconstruction_generation_id")] =
         context.reconstructionGenerationId;
     record[QStringLiteral("quality_profile")] = context.request.qualityProfile;
+    record[QStringLiteral("mvs_backend_requested")] =
+        patchMatchBackendId(context.request.patchMatchBackend);
+    record[QStringLiteral("mvs_backend_request_applied")] = true;
     return record;
 }
 
@@ -391,10 +442,41 @@ bool ProjectPointCloudWorkflowController::startWorkflow(
     const auto compatibility =
         xjw::gui::project::assessStoredDepthBatchCompatibility(
             metadata, QString(), at_index);
-    const bool can_reuse = context->reuseDepthMaps && compatibility.compatible;
+    const auto stored = xjw::core::project::collectLatestStoredDepthFrames(metadata);
+    const QString requested_backend = patchMatchBackendId(
+        context->request.patchMatchBackend);
+    const QString stored_backend = mvsBackendFromStoredFrames(stored.frames);
+    const bool stored_backend_is_uniform =
+        stored_backend == QStringLiteral("cuda") ||
+        stored_backend == QStringLiteral("opencl") ||
+        stored_backend == QStringLiteral("cpu");
+    const bool stored_backend_matches_request = stored_backend_is_uniform &&
+        (requested_backend == QStringLiteral("auto") ||
+         requested_backend == stored_backend);
+    const bool can_reuse = context->reuseDepthMaps && compatibility.compatible &&
+        stored_backend_matches_request;
+    context->reusedDepthMaps = can_reuse;
+    if (context->reuseDepthMaps && compatibility.compatible &&
+        !stored_backend_matches_request)
+    {
+        LOG_INFO(QStringLiteral(
+            "[MVS] 已有深度图后端=%1，与当前请求=%2 不兼容；本次重新估计深度图")
+                     .arg(stored_backend, requested_backend));
+    }
+    const bool runs_point_processing = !context->depthMapsOnly || !can_reuse;
+    if (runs_point_processing)
+    {
+        const QString unavailable_reason =
+            xjw::core::project::processingDeviceUnavailableReason(
+                context->request.processingDevice);
+        if (!unavailable_reason.isEmpty())
+        {
+            failTask(unavailable_reason);
+            return false;
+        }
+    }
     if (can_reuse)
     {
-        const auto stored = xjw::core::project::collectLatestStoredDepthFrames(metadata);
         context->outputDir = stored.batchDir;
     }
     else
@@ -421,8 +503,6 @@ bool ProjectPointCloudWorkflowController::startWorkflow(
     {
         if (context->depthMapsOnly)
         {
-            const auto stored =
-                xjw::core::project::collectLatestStoredDepthFrames(metadata);
             emit depthMapBatchReady(
                 context->outputDir,
                 static_cast<int>(stored.frames.size()));
@@ -451,7 +531,8 @@ void ProjectPointCloudWorkflowController::startDepthEstimation(
         {
             return xjw::core::project::preparePointCloudInput(
                 context->sparseCloudPath,
-                context->views);
+                context->views,
+                context->request.processingDevice);
         },
         [context](
             ProjectPointCloudWorkflowController *self,
@@ -637,7 +718,11 @@ void ProjectPointCloudWorkflowController::startFusion(
         return;
     }
 
-    emit pointCloudProgressChanged(QStringLiteral("正在加载并融合深度图"), 65);
+    emit pointCloudProgressChanged(
+        QStringLiteral("正在加载并融合深度图（点云后端请求：%1）")
+            .arg(xjw::core::project::processingDeviceId(
+                context->request.processingDevice)),
+        65);
     const auto cancel_flag = _cancelFlag;
     QPointer<ProjectPointCloudWorkflowController> self(this);
     xjw::gui::tasks::runGuardedWithOutcome(
@@ -758,6 +843,29 @@ void ProjectPointCloudWorkflowController::startFusion(
                 cloud.push_back(dense);
             }
 
+            const std::size_t before_processing = cloud.size();
+            plapoint::ProcessingReport processing_report;
+            bool processing_skipped = false;
+            if (cloud.size() >= 31)
+            {
+                cloud = xjw::mvs::DenseCloudBuilder::statisticalOutlierRemoval(
+                    cloud,
+                    30,
+                    2.0f,
+                    context->request.processingDevice,
+                    &processing_report);
+                if (cloud.empty() && before_processing > 0)
+                {
+                    task.errorMessage = QStringLiteral("点云去噪后没有剩余有效点");
+                    return task;
+                }
+            }
+            else
+            {
+                processing_report.requestedDevice = context->request.processingDevice;
+                processing_skipped = true;
+            }
+
             task.pointCloudPath = QDir(context->outputDir).filePath(
                 QStringLiteral("dense_cloud.ply"));
             std::string save_error;
@@ -790,9 +898,37 @@ void ProjectPointCloudWorkflowController::startFusion(
             task.record[QStringLiteral("quality_profile")] = context->request.qualityProfile;
             task.record[QStringLiteral("depth_filter_mode")] =
                 context->request.depthFilterMode;
+            task.record[QStringLiteral("mvs_backend_requested")] =
+                patchMatchBackendId(context->request.patchMatchBackend);
+            task.record[QStringLiteral("mvs_backend_actual")] =
+                mvsBackendFromStoredFrames(stored.frames);
+            task.record[QStringLiteral("mvs_backend_selected_in_dialog")] =
+                patchMatchBackendId(context->request.patchMatchBackend);
+            task.record[QStringLiteral("mvs_backend_request_applied")] =
+                !context->reusedDepthMaps;
+            task.record[QStringLiteral("depth_maps_reused")] =
+                context->reusedDepthMaps;
             task.record[QStringLiteral("calculate_point_colors")] =
                 context->calculateColors;
             task.record[QStringLiteral("point_confidence_available")] = false;
+            task.record[QStringLiteral("point_cloud_processing")] = QJsonObject{
+                {QStringLiteral("stage"), QStringLiteral("statistical_outlier_removal")},
+                {QStringLiteral("requested"),
+                 xjw::core::project::processingDeviceId(
+                     processing_report.requestedDevice)},
+                {QStringLiteral("actual"),
+                 processing_skipped
+                     ? QStringLiteral("skipped")
+                     : xjw::core::project::processingDeviceId(
+                           processing_report.actualDevice)},
+                {QStringLiteral("used_fallback"), processing_report.usedFallback},
+                {QStringLiteral("fallback_reason"),
+                 QString::fromStdString(processing_report.fallbackReason)},
+                {QStringLiteral("input_points"),
+                 static_cast<qint64>(before_processing)},
+                {QStringLiteral("output_points"),
+                 static_cast<qint64>(cloud.size())}
+            };
             if (!stored.frames.empty())
             {
                 task.record[QStringLiteral("source_depth_config_hash")] =
@@ -833,6 +969,19 @@ void ProjectPointCloudWorkflowController::startFusion(
                 }
                 return;
             }
+
+            const QJsonObject processing =
+                result.record.value(QStringLiteral("point_cloud_processing")).toObject();
+            emit manager->pointCloudProgressChanged(
+                QStringLiteral("点云去噪完成：%1 → %2 点，请求 %3，实际 %4%5")
+                    .arg(processing.value(QStringLiteral("input_points")).toInteger())
+                    .arg(processing.value(QStringLiteral("output_points")).toInteger())
+                    .arg(processing.value(QStringLiteral("requested")).toString())
+                    .arg(processing.value(QStringLiteral("actual")).toString())
+                    .arg(processing.value(QStringLiteral("used_fallback")).toBool()
+                             ? QStringLiteral("（已回退）")
+                             : QString()),
+                97);
 
             if (context->replaceDefaultPointCloud)
             {

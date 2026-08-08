@@ -8676,7 +8676,7 @@ TEST(DenseWorkflowConfigTest, MapsMultiHypothesisTargetedGapRecovery)
     EXPECT_FLOAT_EQ(config.postConsistencyResidualMaximumPriorRadius, 0.07f);
 }
 
-TEST(DenseWorkflowConfigTest, DefaultCudaSchedulingUsesTwoStageHostPipeline)
+TEST(DenseWorkflowConfigTest, DefaultAutoSchedulingBuildsSeparateBackendPlans)
 {
     QJsonObject json;
     json[QStringLiteral("threads")] = 8;
@@ -8686,12 +8686,12 @@ TEST(DenseWorkflowConfigTest, DefaultCudaSchedulingUsesTwoStageHostPipeline)
     const auto config = xjw::gui::project::buildDepthGenConfig(settings, 16);
 
     EXPECT_EQ(config.gpuFrameWorkerCount, 2);
-    EXPECT_EQ(config.cpuFrameWorkerCount, 0);
+    EXPECT_EQ(config.cpuFrameWorkerCount, 1);
     EXPECT_EQ(config.totalCpuThreadBudget, 7);
     EXPECT_EQ(config.cpuWorkerCount, 3);
 }
 
-TEST(DenseWorkflowConfigTest, CpuThreadBudgetIsSharedAcrossFrameWorkers)
+TEST(DenseWorkflowConfigTest, CpuThreadBudgetIsSharedWithinSelectedBackendFamily)
 {
     QJsonObject json;
     json[QStringLiteral("threads")] = 8;
@@ -8705,7 +8705,7 @@ TEST(DenseWorkflowConfigTest, CpuThreadBudgetIsSharedAcrossFrameWorkers)
     EXPECT_EQ(config.gpuFrameWorkerCount, 2);
     EXPECT_EQ(config.cpuFrameWorkerCount, 2);
     EXPECT_EQ(config.totalCpuThreadBudget, 7);
-    EXPECT_EQ(config.cpuWorkerCount, 1);
+    EXPECT_EQ(config.cpuWorkerCount, 3);
 }
 
 TEST(MvsCudaPipelineContractTest, UsesEventsPinnedTransfersAndReusableWorkspace)

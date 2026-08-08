@@ -1,6 +1,7 @@
 add_plascan_cli_contract_test(test_workflow_cli
     test_workflow_cli.cpp
 )
+target_link_libraries(test_workflow_cli PRIVATE project_workflows)
 
 if(TARGET reconstruct_pipeline_cli)
     target_compile_definitions(test_workflow_cli PRIVATE

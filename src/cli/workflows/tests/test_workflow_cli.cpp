@@ -1,4 +1,5 @@
 #include "CliTestSupport.h"
+#include "PointCloudWorkflowConfig.h"
 
 // 这些测试只覆盖 GUI“工作流程”菜单对应的 CLI。
 
@@ -434,6 +435,7 @@ TEST(ReconstructPipelineCliGTest, ExposesAdaptiveDepthPyramidOptions)
                       {"--mvs-quality",
                        "--mvs-backend",
                        "opencl",
+                       "--point-cloud-backend",
                        "--mvs-scene-profile",
                        "--mvs-depth-filter",
                        "--mvs-save-levels",
@@ -442,6 +444,138 @@ TEST(ReconstructPipelineCliGTest, ExposesAdaptiveDepthPyramidOptions)
                        "depthConfig.sceneProfile",
                        "depthConfig.depthFilterMode",
                        "depthConfig.saveIntermediatePyramidLevels"});
+}
+
+TEST(ReconstructPipelineCliGTest, RoutesPlaPointBackendIndependentlyFromMvs)
+{
+    const QString options =
+        readSourceFile(QStringLiteral("src/cli/workflows/ReconstructionCliOptions.h"))
+        + readSourceFile(QStringLiteral("src/cli/workflows/ReconstructionCliOptions.cpp"));
+    const QString workflow =
+        readSourceFile(QStringLiteral("src/cli/workflows/ReconstructionPipelineRunner.cpp"));
+    const QString config =
+        readSourceFile(QStringLiteral("src/core/project_workflows/PointCloudWorkflowConfig.cpp"));
+    const QString mvs =
+        readSourceFile(QStringLiteral("src/core/mvs/MvsTypes.h"))
+        + readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString gui_workflow =
+        readSourceFile(QStringLiteral(
+            "src/core/project_workflows/PointCloudInputPreparation.cpp"))
+        + readSourceFile(QStringLiteral(
+            "src/gui/project/manager/ProjectPointCloudWorkflowController.cpp"));
+    const QString height_grid_workflow = readSourceFile(QStringLiteral(
+        "src/core/mesh/SurfaceReconstructorHeightGrid.cpp"));
+    const QString mesh_workflow =
+        readSourceFile(QStringLiteral("src/core/mesh/SurfaceReconstructor.cpp"))
+        + height_grid_workflow;
+
+    expectContainsAll(options, {
+        R"(std::string pointCloudBackend = "auto")",
+        "--point-cloud-backend",
+        "auto prefers CUDA, then OpenCL, then CPU",
+    });
+    expectContainsAll(config, {
+        R"(normalized == QStringLiteral("opencl"))",
+        "ProcessingDevice::CUDA",
+        "ProcessingDevice::OpenCL",
+        "config.pointCloudProcessingDevice = settings.processingDevice",
+    });
+    expectContainsAll(workflow, {
+        "SparseCloudPreprocessor preprocessor(point_cloud_processing_device)",
+        "denseSettings.processingDevice = point_cloud_processing_device",
+        R"(denseSettings.useCuda = mvs_backend != "cpu")",
+        "input, leafSize, processingDevice, processingReport",
+        "refineSettings.processingDevice = denseSettings.processingDevice",
+        "meshRequest.reconstruction.preprocessingDevice = denseSettings.processingDevice",
+        "requestedDevice=%4, actualDevice=%5",
+        "processingReportWasSkipped",
+        R"(QStringLiteral("skipped"))",
+        "processingDeviceUnavailableReason",
+        "dense_point_cloud_backend_actual_by_stage",
+        "mvs_backend_actual",
+    });
+    expectNotContainsAll(workflow, {
+        "refineSettings.processingDevice = denseSettings.useCuda",
+        R"(mvs_backend == "auto" ? device : mvs_backend)",
+    });
+    expectContainsAll(mvs, {
+        "pointCloudProcessingDevice",
+        "_config.pointCloudProcessingDevice",
+        "workerConfig.patchMatch.cudaFallbackToCpu = false",
+        "_config.patchMatch.cudaFallbackToCpu = false",
+        "prepareOpenClDevice",
+        "acceleratorDeviceLeases",
+        "acquire_device_lease",
+        "CUDA 重试失败，配置禁止回退 CPU",
+    });
+    expectContainsAll(gui_workflow, {
+        "SparseCloudPreprocessor preprocessor(processingDevice)",
+        "context->request.processingDevice",
+        "processingDeviceUnavailableReason",
+        "DenseCloudBuilder::statisticalOutlierRemoval",
+        "stored_backend_matches_request",
+        R"(QStringLiteral("mvs_backend_request_applied"))",
+        R"(QStringLiteral("depth_maps_reused"))",
+        R"(QStringLiteral("point_cloud_processing"))",
+        R"(QStringLiteral("mvs_backend_actual"))",
+    });
+    expectContainsAll(mesh_workflow, {
+        "poisson.setProcessingDevice(config.poissonSolverDevice)",
+        "plapoint::opencl::hasUsableOpenClDevice()",
+        "plapoint::opencl::buildHeightGrid(cloud, options)",
+    });
+    expectNotContainsAll(mesh_workflow, {
+        "poisson.setProcessingDevice(config.preprocessingDevice)",
+    });
+    const qsizetype cuda_route = height_grid_workflow.indexOf(
+        QStringLiteral("processingDevice == plapoint::ProcessingDevice::CUDA"));
+    const qsizetype opencl_route = height_grid_workflow.indexOf(
+        QStringLiteral("processingDevice == plapoint::ProcessingDevice::OpenCL"));
+    ASSERT_GE(cuda_route, 0);
+    ASSERT_GE(opencl_route, 0);
+    EXPECT_LT(cuda_route, opencl_route);
+}
+
+TEST(PointCloudWorkflowConfigGTest, AcceptsStableBackendAliases)
+{
+    const auto snake_case = xjw::core::project::denseGenerationSettingsFromJson(
+        QJsonObject{
+            {QStringLiteral("mvs_backend"), QStringLiteral("opencl")},
+            {QStringLiteral("point_cloud_backend"), QStringLiteral("cuda")},
+        });
+    EXPECT_EQ(snake_case.patchMatchBackend, xjw::mvs::PatchMatchBackend::OpenCl);
+    EXPECT_EQ(snake_case.processingDevice, plapoint::ProcessingDevice::CUDA);
+
+    const auto camel_case = xjw::core::project::denseGenerationSettingsFromJson(
+        QJsonObject{
+            {QStringLiteral("mvsBackend"), QStringLiteral("cuda")},
+            {QStringLiteral("pointCloudBackend"), QStringLiteral("opencl")},
+        });
+    EXPECT_EQ(camel_case.patchMatchBackend, xjw::mvs::PatchMatchBackend::Cuda);
+    EXPECT_EQ(camel_case.processingDevice, plapoint::ProcessingDevice::OpenCL);
+
+    const auto refine = xjw::core::project::denseRefineSettingsFromJson(
+        QJsonObject{
+            {QStringLiteral("point_cloud_backend"), QStringLiteral("cpu")},
+        });
+    EXPECT_EQ(refine.processingDevice, plapoint::ProcessingDevice::CPU);
+
+    const auto legacy_cpu = xjw::core::project::denseGenerationSettingsFromJson(
+        QJsonObject{{QStringLiteral("cuda"), false}});
+    EXPECT_EQ(legacy_cpu.patchMatchBackend, xjw::mvs::PatchMatchBackend::Cpu);
+
+    const auto explicit_auto = xjw::core::project::denseGenerationSettingsFromJson(
+        QJsonObject{
+            {QStringLiteral("cuda"), false},
+            {QStringLiteral("patchMatchBackend"), QStringLiteral("auto")},
+        });
+    EXPECT_EQ(explicit_auto.patchMatchBackend, xjw::mvs::PatchMatchBackend::Auto);
+    EXPECT_TRUE(explicit_auto.useCuda);
+
+    const xjw::mvs::DepthGenConfig cpu_config =
+        xjw::core::project::buildDepthGenConfig(legacy_cpu, 8);
+    EXPECT_EQ(cpu_config.gpuFrameWorkerCount, 0);
+    EXPECT_GT(cpu_config.cpuFrameWorkerCount, 0);
 }
 
 TEST(ReconstructPipelineCliGTest, DepthPyramidRegressionScriptCoversDinoAndUav9)

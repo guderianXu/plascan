@@ -12,7 +12,8 @@
 - C++20 编译器：MSVC 2022、GCC 11+ 或 Clang 15+。
 - CMake 3.25+ 和 Ninja。
 - Qt6、OpenCV 4、GDAL、libtiff、libzip、OpenMP、GTest 和 TensorRT（GPU 匹配）。
-- CUDA Toolkit 可选；启用后用于深度学习特征、匹配、MVS 和 dense match 加速。
+- CUDA Toolkit 可选；启用后用于深度学习特征、匹配、MVS、点云处理和 dense match 加速。
+- OpenCL SDK/loader 可选；启用后可由 AMD、Intel 或 NVIDIA GPU 加速 MVS 与点云预处理。
 - Python 3.10+ 可选；用于模型导出、数据准备和脚本化验证。
 
 ### 克隆并构建
@@ -69,9 +70,10 @@ ctest --preset windows-vcpkg-release
 cpack --preset windows-vcpkg-release
 ```
 
-即使开发机已安装 CUDA，也可用 `-DPLASCAN_ENABLE_CUDA=OFF -DPLASCAN_ENABLE_TENSORRT=OFF`
-配置可重复的 CPU-only 构建。该配置会同时关闭 PlaMatrix/PlaPoint 的 CUDA 后端，MVS 仍编译
-并运行真实 CPU PatchMatch。
+即使开发机已安装 CUDA/OpenCL，也可用
+`-DPLASCAN_ENABLE_CUDA=OFF -DPLASCAN_ENABLE_OPENCL=OFF -DPLASCAN_ENABLE_TENSORRT=OFF`
+配置可重复的 CPU-only 构建。该配置会关闭 PlaMatrix/PlaPoint 的 CUDA 后端和 PlaPoint/MVS 的
+OpenCL 后端，MVS 仍编译并运行真实 CPU PatchMatch。
 
 `cpack --preset windows-vcpkg-release` 生成 ZIP 离线包。安装 Inno Setup 6 后，可从已配置的
 Windows Release 构建生成带开始菜单、桌面快捷方式、卸载入口和 `.plascan` 文件关联的安装程序：
@@ -257,13 +259,27 @@ cmake --build build --target three_d_reconstruction_cli -j$(nproc)
 build/bin/three_d_reconstruction_cli path/to/input.lis \
   --output-dir build/测试用临时文件/three_d_reconstruction \
   --device auto \
+  --mvs-backend auto \
+  --point-cloud-backend auto \
   --quality 3 \
   --threads 8 \
   --feature-max-image-dim 0
 ```
 
-`--device auto` 是默认值：CUDA 可用时 SIFT 提取、LightGlue 匹配和 MVS PatchMatch 会使用 GPU。
-当前稀疏前端要求 CUDA/TensorRT，显式 `--device cpu` 会返回不支持错误，不会切换算法。
+三个设备参数默认都是 `auto`。`--device` 控制稀疏前端；`--mvs-backend` 控制 PatchMatch；
+`--point-cloud-backend` 控制 PlaPoint 过滤、降采样、法向估计和网格预处理。后两者自动按
+CUDA → OpenCL → CPU 选择；显式指定的后端不可用时会明确失败，不会伪装成其他设备。
+MVS 会在生成 workspace hash 和启动首帧前逐卡取得租约，并完成 OpenCL context/kernel 编译预检；
+部分 CUDA 卡忙时继续使用其余 CUDA 卡，全部 CUDA 不可用时才进入 OpenCL，再失败才使用 CPU。
+OpenCL 已覆盖高度格网，但 PlaMatrix 的 OpenCL 稀疏 PCG 尚未实现。Poisson 求解后端与点云
+预处理独立，当前自动在 CUDA 和 CPU 之间选择；因此显式 OpenCL 仍可用于前处理，而不会被误传给 Poisson。
+当前 PlaPoint OpenCL 是 CPU-owned 的兼容后端：SOR/Radius、Voxel、Normals 和 HeightGrid 都仍包含
+主机建索引、排序、属性聚合或协方差/SVD 等阶段。它可让非 NVIDIA GPU 参与计算，但是否快于原生 CPU
+取决于点数、属性和驱动，需以真实数据 benchmark 为准；超大近二维地表云或病态分布触发工作量保护时，
+Auto 会记录原因并回退 CPU，显式 OpenCL 则明确报错。
+多块 OpenCL GPU 并存时，可用 `PLAPOINT_OPENCL_DEVICE_INDEX` 指定 PlaPoint 枚举出的稳定设备索引；
+未设置时会优先选择独立显卡和计算单元较多的设备。
+当前稀疏前端仍要求 CUDA/TensorRT，显式 `--device cpu` 会返回不支持错误，不会切换算法。
 `--feature-max-image-dim 0` 表示使用质量档位的默认设置；最高质量档不会自动缩小 SIFT 输入。
 显存紧张时可手动调小，
 例如 `--feature-max-image-dim 1600`；传负数也会关闭缩放保护。
@@ -446,6 +462,8 @@ python scripts/models/export_loma_r_tensorrt.py --help
 | 功能 | Windows (NVIDIA) | Linux (NVIDIA) | macOS (Apple Silicon) |
 |------|:---:|:---:|:---:|
 | CUDA 加速 | ✅ | ✅ | ❌ (MPS via PyTorch) |
+| MVS PatchMatch | CUDA/OpenCL/CPU | CUDA/OpenCL/CPU | CPU |
+| 点云预处理 | CUDA/OpenCL/CPU | CUDA/OpenCL/CPU | CPU |
 | dense_match MGM/SGM | CUDA + CPU | CUDA + CPU | CPU only |
 | CUDA SIFT + TensorRT LightGlue | CUDA | CUDA | 不支持 |
 | TensorRT LoMa-R | CUDA | CUDA | 不支持 |
@@ -453,6 +471,9 @@ python scripts/models/export_loma_r_tensorrt.py --help
 | Qt6 GUI | ✅ | ✅ | ✅ |
 | CPack 打包 | ZIP/INNOSETUP | TGZ/DEB | TGZ |
 | Docker 构建 | — | ✅ | — |
+
+Windows/Linux 上的 AMD 与 Intel GPU 可通过 OpenCL 运行 MVS PatchMatch 和上述 PlaPoint 点云阶段；
+标准影像到模型的稀疏特征前端目前仍依赖 NVIDIA CUDA/TensorRT，因此尚不是全链路无 NVIDIA 方案。
 
 ## 开发
 

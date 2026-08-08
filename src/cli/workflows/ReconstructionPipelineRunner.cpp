@@ -255,12 +255,83 @@ QString processingDeviceLabel(plapoint::ProcessingDevice device)
     {
     case plapoint::ProcessingDevice::CPU:
         return QStringLiteral("CPU");
-    case plapoint::ProcessingDevice::GPU:
-        return QStringLiteral("GPU");
+    case plapoint::ProcessingDevice::CUDA:
+        return QStringLiteral("CUDA");
+    case plapoint::ProcessingDevice::OpenCL:
+        return QStringLiteral("OpenCL");
     case plapoint::ProcessingDevice::Auto:
         return QStringLiteral("Auto");
     }
     return QStringLiteral("Unknown");
+}
+
+bool processingReportWasSkipped(const plapoint::ProcessingReport &report)
+{
+    return report.fallbackReason.rfind("skipped:", 0) == 0;
+}
+
+QJsonObject processingReportToJson(const plapoint::ProcessingReport &report,
+                                   std::size_t beforeCount,
+                                   std::size_t afterCount)
+{
+    const bool skipped = processingReportWasSkipped(report);
+    return QJsonObject{
+        {QStringLiteral("status"),
+         skipped ? QStringLiteral("skipped") : QStringLiteral("executed")},
+        {QStringLiteral("requested"),
+         xjw::core::project::processingDeviceId(report.requestedDevice)},
+        {QStringLiteral("actual"),
+         skipped
+             ? QStringLiteral("skipped")
+             : xjw::core::project::processingDeviceId(report.actualDevice)},
+        {QStringLiteral("used_fallback"), report.usedFallback},
+        {QStringLiteral("fallback_reason"),
+         QString::fromStdString(report.fallbackReason)},
+        {QStringLiteral("input_points"), static_cast<double>(beforeCount)},
+        {QStringLiteral("output_points"), static_cast<double>(afterCount)}
+    };
+}
+
+QString mvsBackendFamily(const QString &device)
+{
+    const QString normalized = device.trimmed().toLower();
+    if (normalized.startsWith(QStringLiteral("cuda")) ||
+        normalized.startsWith(QStringLiteral("gpu")))
+    {
+        return QStringLiteral("cuda");
+    }
+    if (normalized.startsWith(QStringLiteral("opencl")))
+    {
+        return QStringLiteral("opencl");
+    }
+    if (normalized.startsWith(QStringLiteral("cpu")))
+    {
+        return QStringLiteral("cpu");
+    }
+    return QStringLiteral("unknown");
+}
+
+QString mvsBackendFromArtifacts(const QJsonArray &artifacts)
+{
+    QString actual_backend;
+    for (const QJsonValue &value : artifacts)
+    {
+        const QString backend = mvsBackendFamily(
+            value.toObject().value(QStringLiteral("device")).toString());
+        if (backend == QStringLiteral("unknown"))
+        {
+            continue;
+        }
+        if (actual_backend.isEmpty())
+        {
+            actual_backend = backend;
+        }
+        else if (actual_backend != backend)
+        {
+            return QStringLiteral("mixed");
+        }
+    }
+    return actual_backend.isEmpty() ? QStringLiteral("unknown") : actual_backend;
 }
 
 void reportPlaPointDevice(const std::function<void(const QString &, int)> &progress,
@@ -270,11 +341,15 @@ void reportPlaPointDevice(const std::function<void(const QString &, int)> &progr
                           std::size_t afterCount,
                           int percent)
 {
-    QString message = QStringLiteral("%1 [%2→%3, usedDevice=%4]")
+    const QString actual_device = processingReportWasSkipped(report)
+        ? QStringLiteral("Skipped")
+        : processingDeviceLabel(report.actualDevice);
+    QString message = QStringLiteral("%1 [%2→%3, requestedDevice=%4, actualDevice=%5]")
         .arg(stage)
         .arg(beforeCount)
         .arg(afterCount)
-        .arg(processingDeviceLabel(report.usedDevice));
+        .arg(processingDeviceLabel(report.requestedDevice))
+        .arg(actual_device);
     if (report.usedFallback)
     {
         message += QStringLiteral(" fallback=%1")
@@ -299,6 +374,7 @@ PlaCloud sorFilter(const PlaCloud &cloud,
         if (report)
         {
             report->requestedDevice = processingDevice;
+            report->actualDevice = plapoint::ProcessingDevice::CPU;
             report->usedDevice = plapoint::ProcessingDevice::CPU;
             report->usedFallback = false;
             report->fallbackReason = "skipped: point count is smaller than k + 1";
@@ -319,6 +395,7 @@ PlaCloud radiusFilter(const PlaCloud &cloud,
         if (report)
         {
             report->requestedDevice = processingDevice;
+            report->actualDevice = plapoint::ProcessingDevice::CPU;
             report->usedDevice = plapoint::ProcessingDevice::CPU;
             report->usedFallback = false;
             report->fallbackReason = "skipped: empty cloud";
@@ -338,6 +415,7 @@ PlaCloud voxelDownsample(const PlaCloud &cloud,
         if (report)
         {
             report->requestedDevice = processingDevice;
+            report->actualDevice = plapoint::ProcessingDevice::CPU;
             report->usedDevice = plapoint::ProcessingDevice::CPU;
             report->usedFallback = false;
             report->fallbackReason = "skipped: empty cloud or invalid leaf size";
@@ -448,7 +526,9 @@ float adaptivePreSorVoxelSize(const std::vector<xjw::mvs::FusedPoint> &cloud,
 
 std::vector<xjw::mvs::FusedPoint> voxelDownsampleFusedPoints(
     const std::vector<xjw::mvs::FusedPoint> &cloud,
-    float leafSize)
+    float leafSize,
+    plapoint::ProcessingDevice processingDevice,
+    plapoint::ProcessingReport *processingReport = nullptr)
 {
     if (cloud.empty() || leafSize <= 0.0f)
     {
@@ -471,7 +551,8 @@ std::vector<xjw::mvs::FusedPoint> voxelDownsampleFusedPoints(
     }
 
     PlaCloud input = fusedPointsToPointCloud(finiteCloud, true, true);
-    PlaCloud output = plapoint::voxelDownsample(input, leafSize);
+    PlaCloud output = plapoint::voxelDownsample(
+        input, leafSize, processingDevice, processingReport);
     return pointCloudToFusedPoints(output);
 }
 
@@ -480,12 +561,15 @@ struct FusedVoxelDownsampleResult
     std::vector<xjw::mvs::FusedPoint> points;
     float leafSize = 0.0f;
     int passes = 0;
+    plapoint::ProcessingReport processingReport;
+    bool hasProcessingReport = false;
 };
 
 FusedVoxelDownsampleResult voxelDownsampleFusedPointsToTarget(
     const std::vector<xjw::mvs::FusedPoint> &cloud,
     float initialLeafSize,
-    std::size_t targetPoints)
+    std::size_t targetPoints,
+    plapoint::ProcessingDevice processingDevice)
 {
     FusedVoxelDownsampleResult result;
     result.leafSize = initialLeafSize;
@@ -495,8 +579,10 @@ FusedVoxelDownsampleResult voxelDownsampleFusedPointsToTarget(
         return result;
     }
 
-    result.points = voxelDownsampleFusedPoints(cloud, result.leafSize);
+    result.points = voxelDownsampleFusedPoints(
+        cloud, result.leafSize, processingDevice, &result.processingReport);
     result.passes = 1;
+    result.hasProcessingReport = true;
 
     constexpr int kMaxPasses = 6;
     while (result.points.size() > targetPoints && result.passes < kMaxPasses)
@@ -510,7 +596,8 @@ FusedVoxelDownsampleResult voxelDownsampleFusedPointsToTarget(
             nextLeafSize = result.leafSize * 2.0f;
         }
         result.leafSize = nextLeafSize;
-        result.points = voxelDownsampleFusedPoints(cloud, result.leafSize);
+        result.points = voxelDownsampleFusedPoints(
+            cloud, result.leafSize, processingDevice, &result.processingReport);
         ++result.passes;
     }
 
@@ -545,7 +632,8 @@ QJsonObject terrainSpikeReportToJson(const xjw::mvs::TerrainHeightSpikeFilterRep
 PlaCloud refineDenseCloud(PlaCloud cloud,
                           const xjw::core::project::DenseRefineSettings &request,
                           const std::function<void(const QString &, int)> &progress,
-                          xjw::mvs::TerrainHeightSpikeFilterReport *terrainSpikeReport = nullptr)
+                          xjw::mvs::TerrainHeightSpikeFilterReport *terrainSpikeReport = nullptr,
+                          QJsonObject *processingReports = nullptr)
 {
     if (request.sorEnabled)
     {
@@ -559,6 +647,11 @@ PlaCloud refineDenseCloud(PlaCloud cloud,
                           &sorReport);
         reportPlaPointDevice(progress, QStringLiteral("统计离群点移除 (SOR)"),
                              sorReport, beforeSor, cloud.size(), 22);
+        if (processingReports)
+        {
+            (*processingReports)[QStringLiteral("statistical_outlier_removal")] =
+                processingReportToJson(sorReport, beforeSor, cloud.size());
+        }
 
         if (cloud.size() > 64)
         {
@@ -609,6 +702,11 @@ PlaCloud refineDenseCloud(PlaCloud cloud,
                                  &radiusReport);
             reportPlaPointDevice(progress, QStringLiteral("半径离群点移除"),
                                  radiusReport, beforeRadius, cloud.size(), 37);
+            if (processingReports)
+            {
+                (*processingReports)[QStringLiteral("radius_outlier_removal")] =
+                    processingReportToJson(radiusReport, beforeRadius, cloud.size());
+            }
 
         }
     }
@@ -624,6 +722,11 @@ PlaCloud refineDenseCloud(PlaCloud cloud,
                                 &voxelReport);
         reportPlaPointDevice(progress, QStringLiteral("体素下采样"),
                              voxelReport, beforeVoxel, cloud.size(), 52);
+        if (processingReports)
+        {
+            (*processingReports)[QStringLiteral("voxel_downsample")] =
+                processingReportToJson(voxelReport, beforeVoxel, cloud.size());
+        }
     }
 
     if (request.terrainSpikeFilterEnabled)
@@ -657,6 +760,11 @@ PlaCloud refineDenseCloud(PlaCloud cloud,
         cloud.setNormals(std::move(normals));
         reportPlaPointDevice(progress, QStringLiteral("估计法向量"),
                              normalReport, cloud.size(), cloud.size(), 72);
+        if (processingReports)
+        {
+            (*processingReports)[QStringLiteral("normal_estimation")] =
+                processingReportToJson(normalReport, cloud.size(), cloud.size());
+        }
     }
 
     return cloud;
@@ -791,7 +899,8 @@ bool fuseDepthMapsStreamingFromDisk(const QString &mvsDir,
             return ok;
         };
     const xjw::mvs::FusedCloudReducer cloudReducer =
-        [](std::vector<xjw::mvs::FusedPoint> *points) {
+        [processing_device = denseSettings.processingDevice](
+            std::vector<xjw::mvs::FusedPoint> *points) {
             if (!points || points->empty())
             {
                 return;
@@ -800,7 +909,8 @@ bool fuseDepthMapsStreamingFromDisk(const QString &mvsDir,
             const float leaf = adaptivePreSorVoxelSize(*points, 0.005f);
             const std::size_t before = points->size();
             FusedVoxelDownsampleResult downsample =
-                voxelDownsampleFusedPointsToTarget(*points, leaf, kTargetPoints);
+                voxelDownsampleFusedPointsToTarget(
+                    *points, leaf, kTargetPoints, processing_device);
             if (!downsample.points.empty())
             {
                 *points = std::move(downsample.points);
@@ -1021,6 +1131,8 @@ QJsonObject mvsSettingsToJson(const xjw::core::project::DenseGenerationSettings 
         {QStringLiteral("depth_consistency"), denseSettings.depthConsistency},
         {QStringLiteral("max_reproj_error"), denseSettings.maxReprojError},
         {QStringLiteral("use_cuda"), denseSettings.useCuda},
+        {QStringLiteral("point_cloud_backend"),
+         xjw::core::project::processingDeviceId(denseSettings.processingDevice)},
         {QStringLiteral("patchmatch_backend"),
          static_cast<int>(denseSettings.patchMatchBackend)},
         {QStringLiteral("requested_max_frames"), requestedMaxFrames},
@@ -1044,6 +1156,8 @@ QJsonObject mvsDepthConfigToJson(const xjw::mvs::DepthGenConfig &config)
         {QStringLiteral("patchmatch_confidence"), config.patchMatch.confidenceThresh},
         {QStringLiteral("patchmatch_backend"),
          static_cast<int>(config.patchMatch.backend)},
+        {QStringLiteral("point_cloud_backend"),
+         xjw::core::project::processingDeviceId(config.pointCloudProcessingDevice)},
         {QStringLiteral("fusion_confidence"), config.fusion.confidenceThresh},
         {QStringLiteral("min_consistent_views"), config.fusion.minConsistentViews},
         {QStringLiteral("adaptive_depth_cache_memory"), config.adaptiveDepthCacheMemory},
@@ -1093,6 +1207,7 @@ xjw::cli::ReconstructionCliOptions options;
     auto &featureMaxImageDim = options.featureMaxImageDim;
     auto &mvs_quality = options.mvsQuality;
     auto &mvs_backend = options.mvsBackend;
+    auto &point_cloud_backend = options.pointCloudBackend;
     auto &mvs_scene_profile = options.mvsSceneProfile;
     auto &mvs_depth_filter = options.mvsDepthFilter;
     auto &mvs_mask_dir_arg = options.mvsMaskDirArg;
@@ -1129,6 +1244,9 @@ xjw::cli::ReconstructionCliOptions options;
     const QString mvs_mask_dir = mvs_mask_dir_arg.empty()
         ? QString()
         : xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(mvs_mask_dir_arg));
+    const plapoint::ProcessingDevice point_cloud_processing_device =
+        xjw::core::project::processingDeviceFromString(
+            QString::fromStdString(point_cloud_backend));
     QString error;
     if (!mvs_mask_dir.isEmpty() && !QFileInfo(mvs_mask_dir).isDir())
     {
@@ -1229,6 +1347,14 @@ xjw::cli::ReconstructionCliOptions options;
     report[QStringLiteral("chunk_root")] =
         projectSession.activeChunkRoot();
     report[QStringLiteral("inputs")] = xjw::cli::inputPairsToJson(items);
+    report[QStringLiteral("point_cloud_backend_requested")] =
+        xjw::core::project::processingDeviceId(point_cloud_processing_device);
+    report[QStringLiteral("mvs_backend_requested")] =
+        QString::fromStdString(mvs_backend);
+    std::fprintf(stdout,
+                 "point_cloud_backend_requested=%s (auto priority: CUDA > OpenCL > CPU)\n",
+                 qUtf8Printable(xjw::core::project::processingDeviceId(
+                     point_cloud_processing_device)));
     if (!mvs_mask_dir.isEmpty())
     {
         report[QStringLiteral("mvs_mask_dir")] = mvs_mask_dir;
@@ -1260,6 +1386,31 @@ xjw::cli::ReconstructionCliOptions options;
         }
         return true;
     };
+
+    if (!stopAfterSfm && !skipMvs)
+    {
+        const QString unavailable_reason =
+            xjw::core::project::processingDeviceUnavailableReason(
+                point_cloud_processing_device);
+        if (!unavailable_reason.isEmpty())
+        {
+            report[QStringLiteral("status")] = QStringLiteral("failed");
+            report[QStringLiteral("reason")] = unavailable_reason;
+            report[QStringLiteral("point_cloud_backend_actual")] =
+                QStringLiteral("unavailable");
+            QJsonObject final_report;
+            if (!writeFinalReport(&final_report))
+            {
+                return cli::EXIT_IO_ERR;
+            }
+            std::fprintf(stderr,
+                         "点云处理后端不可用: %s\nreport=%s\n",
+                         qUtf8Printable(unavailable_reason),
+                         qUtf8Printable(final_report.value(
+                             QStringLiteral("report_json")).toString()));
+            return cli::EXIT_ALGO_ERR;
+        }
+    }
 
 #ifdef PLASCAN_THREE_D_ONLY
     constexpr int kTotalStages = 3;
@@ -1607,21 +1758,49 @@ xjw::cli::ReconstructionCliOptions options;
     }
 
     xjw::mvs::SparseCloud sparse;
+    QString sparse_preprocess_exception;
     {
-        xjw::mvs::SparseCloudPreprocessor preprocessor;
+        xjw::mvs::SparseCloudPreprocessor preprocessor(point_cloud_processing_device);
         xjw::mvs::PreprocessResult preprocessResult;
         std::string preprocessError;
-        if (preprocessor.run(xjw::common::io::toUtf8Path(sfmResult.sparseCloudPath),
-                             views,
-                             preprocessResult,
-                             &preprocessError))
+        try
         {
-            sparse = preprocessResult.cloud;
+            if (preprocessor.run(xjw::common::io::toUtf8Path(sfmResult.sparseCloudPath),
+                                 views,
+                                 preprocessResult,
+                                 &preprocessError))
+            {
+                sparse = preprocessResult.cloud;
+            }
+            else
+            {
+                std::fprintf(stderr,
+                             "稀疏点云预处理失败，继续尝试 MVS: %s\n",
+                             preprocessError.c_str());
+            }
         }
-        else
+        catch (const std::exception &exception)
         {
-            std::fprintf(stderr, "稀疏点云预处理失败，继续尝试 MVS: %s\n", preprocessError.c_str());
+            sparse_preprocess_exception =
+                QStringLiteral("稀疏点云预处理异常: %1")
+                    .arg(QString::fromUtf8(exception.what()));
         }
+    }
+    if (!sparse_preprocess_exception.isEmpty())
+    {
+        report[QStringLiteral("status")] = QStringLiteral("failed");
+        report[QStringLiteral("reason")] = sparse_preprocess_exception;
+        QJsonObject final_report;
+        if (!writeFinalReport(&final_report))
+        {
+            return cli::EXIT_IO_ERR;
+        }
+        std::fprintf(stderr,
+                     "%s\nreport=%s\n",
+                     qUtf8Printable(sparse_preprocess_exception),
+                     qUtf8Printable(final_report.value(
+                         QStringLiteral("report_json")).toString()));
+        return cli::EXIT_ALGO_ERR;
     }
 
     sfmJson[QStringLiteral("filtered_sparse_points")] = static_cast<int>(sparse.points.size());
@@ -1655,17 +1834,15 @@ xjw::cli::ReconstructionCliOptions options;
     QDir().mkpath(mvsDir);
     xjw::core::project::DenseGenerationSettings denseSettings;
     denseSettings.threads = std::max(1, threads);
-    denseSettings.useCuda = mvs_backend == "auto"
-        ? device != "cpu"
-        : mvs_backend != "cpu";
-    const std::string selected_mvs_backend = mvs_backend == "auto" ? device : mvs_backend;
-    denseSettings.patchMatchBackend = selected_mvs_backend == "cpu"
+    denseSettings.useCuda = mvs_backend != "cpu";
+    denseSettings.patchMatchBackend = mvs_backend == "cpu"
         ? xjw::mvs::PatchMatchBackend::Cpu
-        : selected_mvs_backend == "cuda"
+        : mvs_backend == "cuda"
             ? xjw::mvs::PatchMatchBackend::Cuda
-            : selected_mvs_backend == "opencl"
+            : mvs_backend == "opencl"
                 ? xjw::mvs::PatchMatchBackend::OpenCl
                 : xjw::mvs::PatchMatchBackend::Auto;
+    denseSettings.processingDevice = point_cloud_processing_device;
     denseSettings.pipelineMode = true;
     denseSettings.qualityProfile = QString::fromStdString(mvs_quality);
     denseSettings.resScale = mvsResScale;
@@ -1793,6 +1970,9 @@ xjw::cli::ReconstructionCliOptions options;
     QTimer::singleShot(0, &generator, &xjw::mvs::DepthMapGenerator::start);
     loop.exec();
 
+    const QString mvsBackendActual = mvsBackendFromArtifacts(depthArtifacts);
+    report[QStringLiteral("mvs_backend_actual")] = mvsBackendActual;
+
     std::vector<xjw::mvs::DepthPostProcessStats> depthPostprocessStats;
     std::vector<xjw::mvs::FusedPoint> fusedCloud;
     bool mvsOk = depthOk;
@@ -1801,6 +1981,7 @@ xjw::cli::ReconstructionCliOptions options;
     int densePointCount = 0;
     int refinedPointCount = 0;
     xjw::mvs::TerrainHeightSpikeFilterReport terrainSpikeReport;
+    QJsonObject pointProcessingReports;
     if (mvsOk && mvsDepthOnly)
     {
         const QString depthOnlyReason = QStringLiteral("用户请求只生成 MVS 深度图");
@@ -1815,6 +1996,7 @@ xjw::cli::ReconstructionCliOptions options;
                                                                         static_cast<int>(views.size()),
                                                                         originalRegisteredImageCount);
         denseReport[QStringLiteral("mvs_depth_config")] = mvsDepthConfigToJson(depthConfig);
+        denseReport[QStringLiteral("mvs_backend_actual")] = mvsBackendActual;
         report[QStringLiteral("dense")] = denseReport;
         report[QStringLiteral("status")] = QStringLiteral("ok");
         report[QStringLiteral("stop_stage")] = QStringLiteral("mvs_depth");
@@ -1867,20 +2049,31 @@ xjw::cli::ReconstructionCliOptions options;
     }
     if (mvsOk)
     {
-        if (!fuseDepthMapsStreamingFromDisk(mvsDir,
-                                            views,
-                                            denseSettings,
-                                            depthConfig,
-                                            &fusedCloud,
-                                            &depthPostprocessStats,
-                                            &error))
+        try
+        {
+            if (!fuseDepthMapsStreamingFromDisk(mvsDir,
+                                                views,
+                                                denseSettings,
+                                                depthConfig,
+                                                &fusedCloud,
+                                                &depthPostprocessStats,
+                                                &error))
+            {
+                mvsOk = false;
+                mvsError = error;
+            }
+        }
+        catch (const std::exception &exception)
         {
             mvsOk = false;
-            mvsError = error;
+            mvsError = QStringLiteral("深度图融合异常: %1")
+                           .arg(QString::fromUtf8(exception.what()));
         }
     }
     if (mvsOk)
     {
+        try
+        {
             constexpr std::size_t kLargeCloudPreVoxelThreshold = 2000000;
             constexpr std::size_t kMaxRefineInputPoints = 250000;
             std::vector<xjw::mvs::FusedPoint> preAggregatedFusedCloud;
@@ -1897,9 +2090,7 @@ xjw::cli::ReconstructionCliOptions options;
             refineSettings.normalK = 30;
             refineSettings.smoothNormals = false;
             refineSettings.threads = std::max(1, threads);
-            refineSettings.processingDevice = denseSettings.useCuda
-                ? plapoint::ProcessingDevice::GPU
-                : plapoint::ProcessingDevice::CPU;
+            refineSettings.processingDevice = denseSettings.processingDevice;
 
             if (fusedCloud.size() > kLargeCloudPreVoxelThreshold)
             {
@@ -1917,8 +2108,16 @@ xjw::cli::ReconstructionCliOptions options;
                 FusedVoxelDownsampleResult preVoxelResult = voxelDownsampleFusedPointsToTarget(
                     fusedCloud,
                     preVoxelSize,
-                    kMaxRefineInputPoints);
+                    kMaxRefineInputPoints,
+                    refineSettings.processingDevice);
                 preAggregatedFusedCloud = std::move(preVoxelResult.points);
+                if (preVoxelResult.hasProcessingReport)
+                {
+                    pointProcessingReports[QStringLiteral("pre_voxel_downsample")] =
+                        processingReportToJson(preVoxelResult.processingReport,
+                                               beforePreVoxel,
+                                               preAggregatedFusedCloud.size());
+                }
                 const double preVoxelMs = std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - preVoxelStart).count();
                 if (!preAggregatedFusedCloud.empty())
@@ -1983,6 +2182,10 @@ xjw::cli::ReconstructionCliOptions options;
                                          beforePreVoxel,
                                          refineInput.size(),
                                          18);
+                    pointProcessingReports[QStringLiteral("pre_voxel_downsample")] =
+                        processingReportToJson(preVoxelReport,
+                                               beforePreVoxel,
+                                               refineInput.size());
                     std::fprintf(stdout,
                                  "  [MVS  18%%] 完成大点云预降采样 leaf=%.6f points=%zu->%zu elapsed=%.1f ms\n",
                                  preVoxelSize,
@@ -2001,7 +2204,8 @@ xjw::cli::ReconstructionCliOptions options;
                                                                           qUtf8Printable(stage));
                                                              std::fflush(stdout);
                                                          },
-                                                         &terrainSpikeReport);
+                                                         &terrainSpikeReport,
+                                                         &pointProcessingReports);
                 const QString refinedCloudPath = QDir(mvsDir).filePath(QStringLiteral("dense_cloud_refined.ply"));
                 if (!xjw::mvs::writeDensePointCloudPly(
                         refinedCloudPath,
@@ -2019,6 +2223,13 @@ xjw::cli::ReconstructionCliOptions options;
                     refinedPointCount = static_cast<int>(refinedCloud.size());
                 }
             }
+        }
+        catch (const std::exception &exception)
+        {
+            mvsOk = false;
+            mvsError = QStringLiteral("点云细化异常: %1")
+                           .arg(QString::fromUtf8(exception.what()));
+        }
     }
 
     if (!mvsOk
@@ -2057,6 +2268,10 @@ xjw::cli::ReconstructionCliOptions options;
                                                                     static_cast<int>(views.size()),
                                                                     originalRegisteredImageCount);
     denseReport[QStringLiteral("mvs_depth_config")] = mvsDepthConfigToJson(depthConfig);
+    denseReport[QStringLiteral("mvs_backend_actual")] = mvsBackendActual;
+    denseReport[QStringLiteral("point_cloud_processing")] = pointProcessingReports;
+    report[QStringLiteral("dense_point_cloud_backend_actual_by_stage")] =
+        pointProcessingReports;
     report[QStringLiteral("dense")] = denseReport;
     mvsElapsedMs = recordTiming(QStringLiteral("mvs_elapsed_ms"), mvsStart);
 
@@ -2076,6 +2291,7 @@ xjw::cli::ReconstructionCliOptions options;
             meshResolution,
             aerialTerrain,
             preserveMeshDetail);
+        meshRequest.reconstruction.preprocessingDevice = denseSettings.processingDevice;
         meshRequest.progress = [lastMeshProgressPercent = -1,
                                 lastMeshProgressStage = QString()](const QString &stage, int percent) mutable {
             if (percent == lastMeshProgressPercent && stage == lastMeshProgressStage)

@@ -12,7 +12,8 @@ namespace xjw::core::project
 
 PointCloudInputPreparationResult preparePointCloudInput(
     const QString &sparseCloudPath,
-    const std::vector<xjw::mvs::CameraView> &views)
+    const std::vector<xjw::mvs::CameraView> &views,
+    plapoint::ProcessingDevice processingDevice)
 {
     PointCloudInputPreparationResult prepared;
     if (sparseCloudPath.trimmed().isEmpty() || !QFileInfo::exists(sparseCloudPath))
@@ -22,8 +23,7 @@ PointCloudInputPreparationResult preparePointCloudInput(
         return prepared;
     }
 
-    xjw::mvs::SparseCloudPreprocessor preprocessor(
-        plapoint::ProcessingDevice::CPU);
+    xjw::mvs::SparseCloudPreprocessor preprocessor(processingDevice);
     xjw::mvs::PreprocessResult result;
     std::string error_message;
     if (!preprocessor.run(xjw::common::io::toUtf8Path(sparseCloudPath),

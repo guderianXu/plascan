@@ -27,6 +27,7 @@
 #include "DepthPoseRefinementStage.h"
 
 #include <opencv2/core.hpp>
+#include <plapoint/core/processing_policy.h>
 
 namespace xjw
 {
@@ -56,7 +57,7 @@ struct PatchMatchConfig
     float photometricUniquenessRelativeDepthStep = 0.01f; ///< 竞争深度相对偏移（正负各一次）
     float photometricUniquenessMinimumMargin = 0.03f; ///< 最优 NCC 与竞争深度 NCC 的最小可信间隔
     float photometricUniquenessMinimumConfidenceScale = 0.50f; ///< 完全歧义时保留的置信度比例
-    bool  useCuda            = true;
+    bool  useCuda            = true;    ///< 旧版独立估计器兼容字段；生产 Auto 调度不再用它禁用 OpenCL/CUDA
     PatchMatchBackend backend = PatchMatchBackend::Auto;
     int   downsampleFactor   = 2;       ///< 降采样因子（2=半分辨率，速度提升约4倍）
     bool  doMedianBlur       = true;
@@ -79,7 +80,7 @@ struct PatchMatchConfig
 
     bool  epipolarRectified    = false;  ///< 图像已极线校正，偏向水平传播
     bool  cudaUseParallelSweep = true;   ///< CUDA 使用棋盘格像素级并行传播；false 时回退传统行列 sweep
-    bool  cudaFallbackToCpu    = true;   ///< CUDA 失败时是否由估计器内部直接回退 CPU
+    bool  cudaFallbackToCpu    = false;  ///< CUDA 失败时默认明确报错；Auto 只在任务开始前按优先级选择后端
     bool  openClFallbackToCpu  = false;  ///< OpenCL 失败时默认明确报错，避免 GPU worker 暗中占用 CPU
     const std::atomic_bool *cancelFlag = nullptr; ///< 非拥有取消标志；用于长 PatchMatch 循环协作退出
 };
@@ -230,6 +231,8 @@ struct DepthGenConfig
 {
     PatchMatchConfig patchMatch;
     FusionConfig     fusion;
+    plapoint::ProcessingDevice pointCloudProcessingDevice =
+        plapoint::ProcessingDevice::Auto; ///< 点云阶段独立后端；Auto 按 CUDA、OpenCL、CPU 选择
     std::string qualityProfile = "medium"; ///< 用户请求的深度质量档位，用于产物审计
     int   numSourceViews        = 4;
     int   configuredSourceViewCount = 0; ///< 场景自适应限制前的源视角请求；0 表示与 numSourceViews 相同

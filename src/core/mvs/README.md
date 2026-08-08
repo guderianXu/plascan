@@ -98,14 +98,17 @@ live under `src/core/mvs/tests/`.
 - CUDA workspaces, execution locks, upload streams, and gray-image cache keys are isolated by device index.
   One device still serializes its constant-memory camera updates, while separate devices may execute frames
   concurrently.
-- `DepthComputeScheduler` owns one priority queue shared by CPU, CUDA, and OpenCL GPU workers. Faster workers
-  naturally take more frames. Auto mode excludes NVIDIA OpenCL devices already represented by CUDA. For the
-  highest-quality orbital profile, CUDA processes the complete batch when CUDA and Intel/AMD OpenCL coexist;
-  lower profiles and explicit OpenCL jobs can still use those OpenCL devices.
-- Multi-GPU scheduling is frame-level: one depth map remains on one device, while different reference frames
-  run concurrently. Every physical accelerator is represented before host preparation lanes are duplicated.
-  Outside the highest-quality orbital exception, CUDA plus an Intel/AMD OpenCL GPU keeps both devices active and
-  may add one preparation lane per device. Progress reports physical GPU count separately from active host slots.
+- `DepthComputeScheduler` owns one priority queue and one worker model shared by CPU, CUDA, and OpenCL. Auto
+  resolves the whole batch with the strict priority CUDA, then OpenCL, then native CPU; it does not mix backend
+  families in one automatic job. Explicit CUDA or OpenCL requests stay strict and report an unavailable device
+  instead of silently substituting another backend. Candidate devices are leased individually before the workspace
+  hash is generated, so a busy CUDA device does not block another free CUDA device. If no CUDA device can be
+  leased, Auto proceeds to OpenCL and then CPU. OpenCL is selected only after context creation and runtime kernel
+  compilation succeed.
+- Multi-GPU scheduling is frame-level within the selected backend family: one depth map remains on one device,
+  while different reference frames may run concurrently on multiple CUDA GPUs or multiple OpenCL GPUs. Every
+  selected physical accelerator is represented before host preparation lanes are duplicated. Progress reports
+  physical GPU count separately from active host slots.
 - The OpenCL C 1.2 backend runs inverse-depth initialization, stateful plane PatchMatch, multi-source NCC,
   mask-aware sampling, depth hints, coarse-to-fine refinement, and confidence filtering. Each OpenCL GPU has one
   command-queue/kernel lane. With the default two-stage host pipeline, a second worker prepares the next frame and

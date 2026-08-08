@@ -28,6 +28,7 @@ struct StoredDepthFrameRecord
     QString rawDepthPath;
     QString rawConfidencePath;
     QStringList sourceImages;
+    QString device;
     QString configHash;
     QString projectInputSignature;
     int projectInputSignatureVersion = 1;

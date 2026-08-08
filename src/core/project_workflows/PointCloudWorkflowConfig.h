@@ -87,9 +87,19 @@ struct DenseGenerationSettings
     float twoSourceGrowthInverseDepthSpread = 0.01f;
     float twoSourceGrowthNormalAngleDegrees = 15.0f;
     int twoSourceGrowthMaximumComponentArea = 64;
+    // 独立于 PatchMatch 后端；Auto 由 PlaPoint 按 CUDA、OpenCL、CPU 选择。
     plapoint::ProcessingDevice processingDevice = plapoint::ProcessingDevice::Auto;
     bool pipelineMode = false;  // 流水线模式：跳过所有交互对话框
 };
+
+/// 解析稳定配置 token；历史 `gpu` 继续表示 CUDA，未知值收敛为 Auto。
+plapoint::ProcessingDevice processingDeviceFromString(const QString &value);
+
+/// 返回用于 CLI、日志和 JSON 报告的稳定小写后端 ID。
+QString processingDeviceId(plapoint::ProcessingDevice device);
+
+/// 显式设备不可用时返回可展示原因；Auto/CPU 或可用设备返回空字符串。
+QString processingDeviceUnavailableReason(plapoint::ProcessingDevice device);
 
 DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &settings);
 

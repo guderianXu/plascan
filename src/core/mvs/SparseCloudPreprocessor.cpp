@@ -141,6 +141,22 @@ float estimateMedianNearestNeighborDistance(const SparsePlaCloud &cloud)
     return *mid;
 }
 
+const char *processingDeviceName(plapoint::ProcessingDevice device)
+{
+    switch (device)
+    {
+    case plapoint::ProcessingDevice::CPU:
+        return "CPU";
+    case plapoint::ProcessingDevice::CUDA:
+        return "CUDA";
+    case plapoint::ProcessingDevice::OpenCL:
+        return "OpenCL";
+    case plapoint::ProcessingDevice::Auto:
+        return "Auto";
+    }
+    return "Unknown";
+}
+
 } // namespace
 
 /**
@@ -245,9 +261,13 @@ void SparseCloudPreprocessor::filterOutliers(
     pts = fromPlaCloud(filteredCloud);
 
     auto t2 = std::chrono::steady_clock::now();
-    LOG_INFO("[SparseFilter] plapoint 过滤完成: %d → %zu 点 (SOR移除 %zu, 半径移除 %zu, SOR设备=%d, 半径设备=%d) 耗时 %.3f s",
-             N, pts.size(), sorRemovedIndices.size(), radiusRemovedIndices.size(),
-             static_cast<int>(sorReport.usedDevice), static_cast<int>(radiusReport.usedDevice),
+    LOG_INFO("[SparseFilter] plapoint 过滤完成: %d → %zu 点 "
+             "(请求=%s, SOR实际=%s, 半径实际=%s, SOR移除 %zu, 半径移除 %zu) 耗时 %.3f s",
+             N, pts.size(),
+             processingDeviceName(processingDevice),
+             processingDeviceName(sorReport.actualDevice),
+             processingDeviceName(radiusReport.actualDevice),
+             sorRemovedIndices.size(), radiusRemovedIndices.size(),
              std::chrono::duration<double>(t2 - t0).count());
 }
 

@@ -3,12 +3,17 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <stdexcept>
 
 #include <plamatrix/dense/dense_matrix.h>
 #include <plapoint/core/point_cloud.h>
 #include <plapoint/gpu/cuda_check.h>
 #include <plapoint/gpu/height_grid.h>
 #include <plapoint/mesh/height_grid.h>
+#ifdef PLAPOINT_WITH_OPENCL
+#include <plapoint/opencl/height_grid.h>
+#include <plapoint/opencl/opencl_runtime.h>
+#endif
 
 namespace xjw
 {
@@ -120,7 +125,7 @@ PlaHeightGrid buildHeightGridWithRequestedDevice(
     const plapoint::mesh::HeightGridOptions<float> &options,
     plapoint::ProcessingDevice processingDevice)
 {
-    if (processingDevice == plapoint::ProcessingDevice::GPU ||
+    if (processingDevice == plapoint::ProcessingDevice::CUDA ||
         processingDevice == plapoint::ProcessingDevice::Auto)
     {
 #ifdef PLAPOINT_WITH_CUDA
@@ -132,11 +137,50 @@ PlaHeightGrid buildHeightGridWithRequestedDevice(
             }
             catch (const std::exception &)
             {
-                if (processingDevice == plapoint::ProcessingDevice::GPU)
+                if (processingDevice == plapoint::ProcessingDevice::CUDA)
                 {
                     throw;
                 }
             }
+        }
+        else if (processingDevice == plapoint::ProcessingDevice::CUDA)
+        {
+            throw std::runtime_error("CUDA height-grid device is not available");
+        }
+#else
+        if (processingDevice == plapoint::ProcessingDevice::CUDA)
+        {
+            throw std::runtime_error("PlaPoint was built without CUDA support");
+        }
+#endif
+    }
+
+    if (processingDevice == plapoint::ProcessingDevice::OpenCL ||
+        processingDevice == plapoint::ProcessingDevice::Auto)
+    {
+#ifdef PLAPOINT_WITH_OPENCL
+        if (plapoint::opencl::hasUsableOpenClDevice())
+        {
+            try
+            {
+                return plapoint::opencl::buildHeightGrid(cloud, options);
+            }
+            catch (const std::exception &)
+            {
+                if (processingDevice == plapoint::ProcessingDevice::OpenCL)
+                {
+                    throw;
+                }
+            }
+        }
+        else if (processingDevice == plapoint::ProcessingDevice::OpenCL)
+        {
+            throw std::runtime_error("OpenCL height-grid device is not available");
+        }
+#else
+        if (processingDevice == plapoint::ProcessingDevice::OpenCL)
+        {
+            throw std::runtime_error("PlaPoint was built without OpenCL support");
         }
 #endif
     }

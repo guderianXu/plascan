@@ -66,6 +66,8 @@ TEST(PatchMatchConfigTest, DefaultParametersOptimized)
     EXPECT_FLOAT_EQ(cfg.confidenceThresh, 0.60f)
         << "Production PatchMatch confidence threshold should reject low-confidence full-frame depths";
     EXPECT_TRUE(cfg.useCuda);
+    EXPECT_FALSE(cfg.cudaFallbackToCpu)
+        << "CUDA failures must remain visible after the run selects CUDA";
     EXPECT_FALSE(cfg.openClFallbackToCpu)
         << "OpenCL failures must remain visible instead of running a GPU-tagged CPU fallback";
     EXPECT_EQ(cfg.cudaDeviceIndex, -1);
@@ -86,6 +88,13 @@ TEST(PatchMatchConfigTest, PostProcessingEnabled)
     EXPECT_EQ(cfg.bilateralD, 9);
     EXPECT_GT(cfg.bilateralSigmaColor, 0.f);
     EXPECT_GT(cfg.bilateralSigmaSpace, 0.f);
+}
+
+TEST(DepthGenConfigTest, PointCloudProcessingDefaultsToOrderedAutoSelection)
+{
+    const DepthGenConfig config;
+
+    EXPECT_EQ(config.pointCloudProcessingDevice, plapoint::ProcessingDevice::Auto);
 }
 
 TEST(PatchMatchConfigTest, GeometricConsistencyEnabled)

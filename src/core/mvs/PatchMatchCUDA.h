@@ -64,6 +64,10 @@ public:
     static std::string cudaDeviceIdentity(int deviceIndex);
     static bool isOpenClAvailable();
     static std::vector<OpenClDeviceInfo> openClDevices();
+    /// Create the selected OpenCL context and compile all PatchMatch kernels.
+    /// Auto routing uses this before committing an entire batch to OpenCL.
+    static bool prepareOpenClDevice(int deviceIndex,
+                                    std::string *errorMsg = nullptr);
     static void resetOpenClExecutionStats();
     static std::vector<OpenClExecutionStats> openClExecutionStats();
     static void cleanupOpenClResources();

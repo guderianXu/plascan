@@ -280,8 +280,7 @@ DepthPyramidResult DepthPyramidEstimator::estimate(const DepthPyramidRequest &re
     const DepthPyramidLevelConfig &finest_level =
         request.pyramidConfig.levels[level_count - 1];
     if ((finest_level.patchMatch.backend == PatchMatchBackend::Cuda ||
-         (finest_level.patchMatch.backend == PatchMatchBackend::Auto &&
-          finest_level.patchMatch.useCuda)) &&
+         finest_level.patchMatch.backend == PatchMatchBackend::Auto) &&
         PatchMatchDepthEstimator::isCudaAvailable())
     {
         const cv::Size finest_size = depthPyramidWorkingSize(

@@ -21,14 +21,24 @@ const char *depthComputeBackendName(DepthComputeBackend backend)
     return "Unknown";
 }
 
-bool preferCudaOnlyForHighestQualityOrbital(bool automaticBackend,
-                                            bool cudaAvailable,
-                                            bool openClAvailable,
-                                            bool orbitalScene,
-                                            const std::string &qualityProfile)
+DepthComputeBackend resolveDepthComputeBackend(
+    std::optional<DepthComputeBackend> requestedBackend,
+    bool cudaAvailable,
+    bool openClAvailable)
 {
-    return automaticBackend && cudaAvailable && openClAvailable &&
-        orbitalScene && qualityProfile == "highest";
+    if (requestedBackend.has_value())
+    {
+        return *requestedBackend;
+    }
+    if (cudaAvailable)
+    {
+        return DepthComputeBackend::Cuda;
+    }
+    if (openClAvailable)
+    {
+        return DepthComputeBackend::OpenCl;
+    }
+    return DepthComputeBackend::Cpu;
 }
 
 std::string DepthComputeWorker::id() const

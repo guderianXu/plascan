@@ -46,6 +46,7 @@
 #include <chrono>
 #include <sstream>
 #include <functional>
+#include <memory>
 #include <limits>
 #include <fstream>
 #include <unordered_map>
@@ -1236,7 +1237,7 @@ bool estimatePatchMatchWithAdaptiveCuda(
 {
     const bool tryCuda =
         (config.backend == PatchMatchBackend::Cuda ||
-         (config.backend == PatchMatchBackend::Auto && config.useCuda)) &&
+         config.backend == PatchMatchBackend::Auto) &&
         PatchMatchDepthEstimator::isCudaAvailable();
     if (!tryCuda)
     {
@@ -1331,7 +1332,22 @@ bool estimatePatchMatchWithAdaptiveCuda(
         attemptConfig.cudaFallbackToCpu = false;
     }
 
-    LOG_WARN("[MVS][帧 %d][PatchMatch] %s CUDA 重试失败，回退 CPU: %s",
+    if (!config.cudaFallbackToCpu)
+    {
+        LOG_ERROR("[MVS][帧 %d][PatchMatch] %s CUDA 重试失败，配置禁止回退 CPU: %s",
+                  refIdx,
+                  stageLabel,
+                  lastCudaError.empty() ? "未知 CUDA 错误" : lastCudaError.c_str());
+        if (errorMsg)
+        {
+            *errorMsg = lastCudaError.empty()
+                ? std::string("CUDA PatchMatch retries exhausted")
+                : lastCudaError;
+        }
+        return false;
+    }
+
+    LOG_WARN("[MVS][帧 %d][PatchMatch] %s CUDA 重试失败，按配置回退 CPU: %s",
              refIdx,
              stageLabel,
              lastCudaError.empty() ? "未知 CUDA 错误" : lastCudaError.c_str());
@@ -8665,6 +8681,172 @@ void DepthMapGenerator::runInBackground()
                  .arg(configured_source_count)
                  .arg(QString::fromStdString(_sceneClassification.reason)));
 
+    const PatchMatchBackend configuredBackend = _config.patchMatch.backend;
+    const bool automaticAcceleration = configuredBackend == PatchMatchBackend::Auto;
+    const bool probeCuda = configuredBackend == PatchMatchBackend::Cuda ||
+        automaticAcceleration;
+    const int cudaDeviceCount = probeCuda
+        ? PatchMatchDepthEstimator::cudaDeviceCount()
+        : 0;
+
+    std::vector<DepthComputeWorker> physicalAcceleratorWorkers;
+    std::vector<std::unique_ptr<GpuDeviceLeaseSet>> acceleratorDeviceLeases;
+    QStringList acceleratorPreparationFailures;
+    auto acquire_device_lease = [&acceleratorPreparationFailures](
+                                    const GpuDeviceDescriptor &descriptor)
+        -> std::unique_ptr<GpuDeviceLeaseSet>
+    {
+        auto lease = std::make_unique<GpuDeviceLeaseSet>();
+        QString lease_error;
+        if (!lease->acquire({descriptor}, &lease_error))
+        {
+            acceleratorPreparationFailures.push_back(lease_error);
+            LOG_WARN(QStringLiteral("[MVS] %1").arg(lease_error));
+            return nullptr;
+        }
+        return lease;
+    };
+
+    auto try_add_cuda_device = [&](int device_index)
+    {
+        const std::string name = PatchMatchDepthEstimator::cudaDeviceName(device_index);
+        std::string identity = PatchMatchDepthEstimator::cudaDeviceIdentity(device_index);
+        if (identity.empty())
+        {
+            identity = fallbackGpuPhysicalIdentity("NVIDIA", name, device_index);
+        }
+        const GpuDeviceDescriptor descriptor{
+            identity,
+            name.empty() ? "CUDA:" + std::to_string(device_index) : name};
+        std::unique_ptr<GpuDeviceLeaseSet> lease = acquire_device_lease(descriptor);
+        if (!lease)
+        {
+            return;
+        }
+        physicalAcceleratorWorkers.push_back(
+            {DepthComputeBackend::Cuda, device_index});
+        acceleratorDeviceLeases.push_back(std::move(lease));
+    };
+
+    if (_config.patchMatch.cudaDeviceIndex >= 0 &&
+        _config.patchMatch.cudaDeviceIndex < cudaDeviceCount)
+    {
+        try_add_cuda_device(_config.patchMatch.cudaDeviceIndex);
+    }
+    else if (_config.patchMatch.cudaDeviceIndex < 0)
+    {
+        for (int device_index = 0; device_index < cudaDeviceCount; ++device_index)
+        {
+            try_add_cuda_device(device_index);
+        }
+    }
+    const bool cudaAvailable = !physicalAcceleratorWorkers.empty();
+    const bool probeOpenCl = configuredBackend == PatchMatchBackend::OpenCl ||
+        (automaticAcceleration && !cudaAvailable);
+    const std::vector<OpenClDeviceInfo> detectedOpenClDevices = probeOpenCl
+        ? PatchMatchDepthEstimator::openClDevices()
+        : std::vector<OpenClDeviceInfo>{};
+    std::vector<OpenClDeviceInfo> selectedOpenClDevices;
+    for (const OpenClDeviceInfo &device : detectedOpenClDevices)
+    {
+        if (_config.patchMatch.openClDeviceIndex >= 0 &&
+            device.index != _config.patchMatch.openClDeviceIndex)
+        {
+            continue;
+        }
+
+        const GpuDeviceDescriptor descriptor{
+            device.physicalDeviceIdentity,
+            device.vendor + " " + device.name};
+        std::unique_ptr<GpuDeviceLeaseSet> lease = acquire_device_lease(descriptor);
+        if (!lease)
+        {
+            continue;
+        }
+
+        std::string preparation_error;
+        if (!PatchMatchDepthEstimator::prepareOpenClDevice(
+                device.index, &preparation_error))
+        {
+            QString detail = QStringLiteral("OpenCL GPU %1 (%2) 预检失败：%3")
+                                 .arg(device.index)
+                                 .arg(QString::fromStdString(device.name))
+                                 .arg(QString::fromStdString(preparation_error));
+            if (detail.size() > 1024)
+            {
+                detail = detail.left(1021) + QStringLiteral("...");
+            }
+            acceleratorPreparationFailures.push_back(detail);
+            LOG_WARN(QStringLiteral("[MVS] %1").arg(detail));
+            continue;
+        }
+        selectedOpenClDevices.push_back(device);
+        physicalAcceleratorWorkers.push_back(
+            {DepthComputeBackend::OpenCl, device.index});
+        acceleratorDeviceLeases.push_back(std::move(lease));
+    }
+    const std::optional<DepthComputeBackend> requestedBackend =
+        configuredBackend == PatchMatchBackend::Auto
+            ? std::nullopt
+            : std::make_optional(
+                  configuredBackend == PatchMatchBackend::Cuda
+                      ? DepthComputeBackend::Cuda
+                      : configuredBackend == PatchMatchBackend::OpenCl
+                          ? DepthComputeBackend::OpenCl
+                          : DepthComputeBackend::Cpu);
+    const DepthComputeBackend effectiveBackend = resolveDepthComputeBackend(
+        requestedBackend,
+        cudaAvailable,
+        !selectedOpenClDevices.empty());
+    const bool requestedBackendUnavailable =
+        (effectiveBackend == DepthComputeBackend::Cuda && !cudaAvailable) ||
+        (effectiveBackend == DepthComputeBackend::OpenCl && selectedOpenClDevices.empty());
+    if (requestedBackendUnavailable)
+    {
+        QString message = QStringLiteral(
+            "请求的 %1 深度估计后端不可用或设备编号无效；显式后端不会自动切换到其他设备")
+                                    .arg(QString::fromLatin1(
+                                        depthComputeBackendName(effectiveBackend)));
+        if (!acceleratorPreparationFailures.isEmpty())
+        {
+            message += QStringLiteral("。%1")
+                           .arg(acceleratorPreparationFailures.join(
+                               QStringLiteral("；")));
+        }
+        LOG_ERROR(QStringLiteral("[MVS] %1").arg(message));
+        emit errorOccurred(message);
+        emit finished(false);
+        return;
+    }
+    // Resolve Auto once before computing the workspace hash. All initial and
+    // recovery passes then use one backend family, and a later run on different
+    // hardware cannot reuse frames produced by another backend family.
+    _config.patchMatch.backend = effectiveBackend == DepthComputeBackend::Cuda
+        ? PatchMatchBackend::Cuda
+        : effectiveBackend == DepthComputeBackend::OpenCl
+            ? PatchMatchBackend::OpenCl
+            : PatchMatchBackend::Cpu;
+    _config.patchMatch.useCuda = effectiveBackend == DepthComputeBackend::Cuda;
+    _config.patchMatch.cudaFallbackToCpu = false;
+    _config.patchMatch.openClFallbackToCpu = false;
+
+    const QString effective_backend_name = QString::fromLatin1(
+        depthComputeBackendName(effectiveBackend));
+    QString backend_message = configuredBackend == PatchMatchBackend::Auto
+        ? QStringLiteral("深度估计后端：Auto 已选择 %1（CUDA → OpenCL → CPU）")
+              .arg(effective_backend_name)
+        : QStringLiteral("深度估计后端：请求并使用 %1")
+              .arg(effective_backend_name);
+    if (configuredBackend == PatchMatchBackend::Auto &&
+        effectiveBackend == DepthComputeBackend::Cpu &&
+        !acceleratorPreparationFailures.isEmpty())
+    {
+        backend_message += QStringLiteral(
+            "；CUDA 租约或 OpenCL 运行时预检不可用，已继续使用 CPU");
+    }
+    LOG_INFO(QStringLiteral("[MVS] %1").arg(backend_message));
+    emit progressChanged(backend_message, 0.0f);
+
     initializeWorkspaceManifest();
 
     // ── 预加载所有图像（一次性磁盘 I/O，后续全从内存读取）────────────────────
@@ -8785,48 +8967,6 @@ void DepthMapGenerator::runInBackground()
         float score = 0.f;
     };
 
-    const PatchMatchBackend configuredBackend = _config.patchMatch.backend;
-    const bool allowCuda = configuredBackend == PatchMatchBackend::Cuda ||
-        (configuredBackend == PatchMatchBackend::Auto && _config.patchMatch.useCuda);
-    const bool allowOpenCl = configuredBackend == PatchMatchBackend::OpenCl ||
-        (configuredBackend == PatchMatchBackend::Auto && _config.patchMatch.useCuda);
-    const int cudaDeviceCount = allowCuda
-        ? PatchMatchDepthEstimator::cudaDeviceCount()
-        : 0;
-    const bool cudaAvailable = cudaDeviceCount > 0;
-    const std::vector<OpenClDeviceInfo> detectedOpenClDevices = allowOpenCl
-        ? PatchMatchDepthEstimator::openClDevices()
-        : std::vector<OpenClDeviceInfo>{};
-    std::vector<OpenClDeviceInfo> selectedOpenClDevices;
-    for (const OpenClDeviceInfo &device : detectedOpenClDevices)
-    {
-        if (_config.patchMatch.openClDeviceIndex >= 0 &&
-            device.index != _config.patchMatch.openClDeviceIndex)
-        {
-            continue;
-        }
-
-        const std::string vendor = asciiLowerCopy(device.vendor);
-        const bool duplicatesCudaDevice = configuredBackend == PatchMatchBackend::Auto &&
-            cudaAvailable && vendor.find("nvidia") != std::string::npos;
-        if (!duplicatesCudaDevice)
-        {
-            selectedOpenClDevices.push_back(device);
-        }
-    }
-    const bool cudaOnlyQualityMode = preferCudaOnlyForHighestQualityOrbital(
-        configuredBackend == PatchMatchBackend::Auto,
-        cudaAvailable,
-        !selectedOpenClDevices.empty(),
-        _effectiveSceneProfile == MvsSceneProfile::OrbitalObject,
-        _config.qualityProfile);
-    if (cudaOnlyQualityMode)
-    {
-        LOG_INFO(QStringLiteral(
-            "[MVS] 超高质量环拍采用 CUDA 独占深度估计；"
-            "OpenCL 设备不参与本批帧调度，避免异构数值差异造成困难视角退化"));
-        selectedOpenClDevices.clear();
-    }
     const int cpuThreadCount = std::max(1, _config.cpuWorkerCount);
 
     std::vector<FramePriority> framePriorities;
@@ -8884,69 +9024,16 @@ void DepthMapGenerator::runInBackground()
     const int pendingFrameCount = static_cast<int>(framePriorities.size());
     const int maxWorkersByPendingFrames = std::max(1, pendingFrameCount);
     const int maxFrameWorkers = std::min(4, maxWorkersByPendingFrames);
-    std::vector<DepthComputeWorker> physicalAcceleratorWorkers;
-    if (cudaAvailable)
+    if (effectiveBackend != DepthComputeBackend::Cpu &&
+        physicalAcceleratorWorkers.empty() && pendingFrameCount > 0)
     {
-        if (_config.patchMatch.cudaDeviceIndex >= 0 &&
-            _config.patchMatch.cudaDeviceIndex < cudaDeviceCount)
-        {
-            physicalAcceleratorWorkers.push_back(
-                {DepthComputeBackend::Cuda, _config.patchMatch.cudaDeviceIndex});
-        }
-        else if (_config.patchMatch.cudaDeviceIndex < 0)
-        {
-            for (int deviceIndex = 0; deviceIndex < cudaDeviceCount; ++deviceIndex)
-            {
-                physicalAcceleratorWorkers.push_back(
-                    {DepthComputeBackend::Cuda, deviceIndex});
-            }
-        }
-    }
-    for (const OpenClDeviceInfo &device : selectedOpenClDevices)
-    {
-        physicalAcceleratorWorkers.push_back(
-            {DepthComputeBackend::OpenCl, device.index});
-    }
-
-    std::vector<GpuDeviceDescriptor> gpu_devices_to_lease;
-    gpu_devices_to_lease.reserve(physicalAcceleratorWorkers.size());
-    for (const DepthComputeWorker &worker : physicalAcceleratorWorkers)
-    {
-        if (worker.backend == DepthComputeBackend::Cuda)
-        {
-            const std::string name = PatchMatchDepthEstimator::cudaDeviceName(worker.deviceIndex);
-            std::string identity = PatchMatchDepthEstimator::cudaDeviceIdentity(worker.deviceIndex);
-            if (identity.empty())
-            {
-                identity = fallbackGpuPhysicalIdentity("NVIDIA", name, worker.deviceIndex);
-            }
-            gpu_devices_to_lease.push_back({identity,
-                                            name.empty()
-                                                ? "CUDA:" + std::to_string(worker.deviceIndex)
-                                                : name});
-        }
-        else if (worker.backend == DepthComputeBackend::OpenCl)
-        {
-            const auto device = std::find_if(
-                selectedOpenClDevices.cbegin(),
-                selectedOpenClDevices.cend(),
-                [&worker](const OpenClDeviceInfo &candidate)
-                {
-                    return candidate.index == worker.deviceIndex;
-                });
-            if (device != selectedOpenClDevices.cend())
-            {
-                gpu_devices_to_lease.push_back({device->physicalDeviceIdentity,
-                                                device->vendor + " " + device->name});
-            }
-        }
-    }
-    GpuDeviceLeaseSet gpu_device_leases;
-    QString gpu_lease_error;
-    if (!gpu_device_leases.acquire(gpu_devices_to_lease, &gpu_lease_error))
-    {
-        LOG_ERROR(QStringLiteral("[MVS] %1").arg(gpu_lease_error));
-        emit errorOccurred(gpu_lease_error);
+        const QString backendName = QString::fromLatin1(
+            depthComputeBackendName(effectiveBackend));
+        const QString message = QStringLiteral(
+            "请求的 %1 深度估计后端不可用或设备编号无效；显式后端不会自动切换到其他设备")
+                                    .arg(backendName);
+        LOG_ERROR(QStringLiteral("[MVS] %1").arg(message));
+        emit errorOccurred(message);
         clearFrameCaches();
         emit finished(false);
         return;
@@ -8966,25 +9053,13 @@ void DepthMapGenerator::runInBackground()
         {
             return worker.backend == DepthComputeBackend::OpenCl;
         }));
-    const bool mixedGpuBackends = physicalCudaWorkers > 0 && physicalOpenClWorkers > 0;
-    // CUDA remains continuously occupied with one host worker per physical
-    // device. In a mixed setup, assign the remaining frame slots to OpenCL so
-    // one frame can prepare while the single execution lane is busy. Host slot
-    // duplication never allocates a second OpenCL command queue.
+    // Auto resolves to one backend before this pool is built. Additional host
+    // slots overlap frame preparation without mixing CUDA, OpenCL, and CPU work.
     const int requestedCudaHostSlots = physicalCudaWorkers > 0
-        ? (mixedGpuBackends
-               ? physicalCudaWorkers
-               : std::max(physicalCudaWorkers, _config.gpuFrameWorkerCount))
+        ? std::max(physicalCudaWorkers, _config.gpuFrameWorkerCount)
         : 0;
-    const int maximumOpenClPipelineSlots = std::min(
-        maxFrameWorkers, physicalOpenClWorkers * 2);
-    const int mixedOpenClSlots = std::min(
-        maximumOpenClPipelineSlots,
-        std::max(physicalOpenClWorkers, maxFrameWorkers - requestedCudaHostSlots));
     const int requestedOpenClHostSlots = physicalOpenClWorkers > 0
-        ? (mixedGpuBackends
-               ? mixedOpenClSlots
-               : std::max(physicalOpenClWorkers, _config.gpuFrameWorkerCount))
+        ? std::max(physicalOpenClWorkers, _config.gpuFrameWorkerCount)
         : 0;
     const std::vector<DepthComputeWorker> acceleratorWorkers =
         buildDepthComputeWorkerPool(physicalAcceleratorWorkers,
@@ -8993,15 +9068,15 @@ void DepthMapGenerator::runInBackground()
                                     static_cast<std::size_t>(maxFrameWorkers));
 
     const int gpuFrameWorkers = static_cast<int>(acceleratorWorkers.size());
-    const bool acceleratorAvailable = gpuFrameWorkers > 0;
-    const int cpuFrameWorkers = acceleratorAvailable
-        ? std::clamp(std::max(0, _config.cpuFrameWorkerCount), 0, maxFrameWorkers)
-        : std::clamp(std::max(1, _config.cpuFrameWorkerCount), 1, maxFrameWorkers);
+    const int cpuFrameWorkers = effectiveBackend == DepthComputeBackend::Cpu
+        ? std::clamp(std::max(1, _config.cpuFrameWorkerCount), 1, maxFrameWorkers)
+        : 0;
 
-    LOG_INFO(QStringLiteral("[MVS] 深度估计调度: cuda_devices=%1 opencl_devices=%2 "
-                            "physical_gpu_workers=%3 gpu_host_slots=%4 "
-                            "cuda_host_slots=%5 opencl_host_slots=%6 cpu_frame_workers=%7 "
-                            "cpu_pixel_threads=%8 views=%9 pending=%10")
+    LOG_INFO(QStringLiteral("[MVS] 深度估计调度: backend=%1 cuda_devices=%2 opencl_devices=%3 "
+                            "physical_gpu_workers=%4 gpu_host_slots=%5 "
+                            "cuda_host_slots=%6 opencl_host_slots=%7 cpu_frame_workers=%8 "
+                            "cpu_pixel_threads=%9 views=%10 pending=%11")
+                 .arg(QString::fromLatin1(depthComputeBackendName(effectiveBackend)))
                  .arg(cudaDeviceCount)
                  .arg(selectedOpenClDevices.size())
                  .arg(physicalAcceleratorWorkers.size())
@@ -9272,7 +9347,7 @@ void DepthMapGenerator::runInBackground()
 
     for (const auto &[worker_id, stats] : computeScheduler.workerStats())
     {
-        LOG_INFO(QStringLiteral("[MVS] 异构调度统计: worker=%1 completed=%2 failed=%3 elapsed=%4 ms")
+        LOG_INFO(QStringLiteral("[MVS] 深度调度统计: worker=%1 completed=%2 failed=%3 elapsed=%4 ms")
                      .arg(QString::fromStdString(worker_id))
                      .arg(stats.completedTasks)
                      .arg(stats.failedTasks)
@@ -9843,7 +9918,7 @@ void DepthMapGenerator::runInBackground()
             };
 
             const plapoint::ProcessingDevice pointFilterDevice =
-                _config.patchMatch.useCuda ? plapoint::ProcessingDevice::Auto : plapoint::ProcessingDevice::CPU;
+                _config.pointCloudProcessingDevice;
 
             // 第 1 遍：统计离群点过滤（SOR）— 移除 kNN 距离异常的点
             applyFilterWithGuard("SOR-1", [pointFilterDevice](const std::vector<DensePoint> &inputCloud) {

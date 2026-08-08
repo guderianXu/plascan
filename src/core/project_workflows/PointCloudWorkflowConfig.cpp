@@ -1,14 +1,18 @@
 #include "PointCloudWorkflowConfig.h"
 
+#ifdef PLAPOINT_WITH_CUDA
+#include <plapoint/gpu/cuda_check.h>
+#endif
+#ifdef PLAPOINT_WITH_OPENCL
+#include <plapoint/opencl/opencl_runtime.h>
+#endif
+
 #include <QtGlobal>
 
 #include <algorithm>
 #include <cmath>
 
 namespace xjw::core::project {
-
-namespace
-{
 
 plapoint::ProcessingDevice processingDeviceFromString(const QString &value)
 {
@@ -19,10 +23,58 @@ plapoint::ProcessingDevice processingDeviceFromString(const QString &value)
     }
     if (normalized == QStringLiteral("gpu") || normalized == QStringLiteral("cuda"))
     {
-        return plapoint::ProcessingDevice::GPU;
+        return plapoint::ProcessingDevice::CUDA;
+    }
+    if (normalized == QStringLiteral("opencl"))
+    {
+        return plapoint::ProcessingDevice::OpenCL;
     }
     return plapoint::ProcessingDevice::Auto;
 }
+
+QString processingDeviceId(plapoint::ProcessingDevice device)
+{
+    switch (device)
+    {
+    case plapoint::ProcessingDevice::CPU:
+        return QStringLiteral("cpu");
+    case plapoint::ProcessingDevice::CUDA:
+        return QStringLiteral("cuda");
+    case plapoint::ProcessingDevice::OpenCL:
+        return QStringLiteral("opencl");
+    case plapoint::ProcessingDevice::Auto:
+        return QStringLiteral("auto");
+    }
+    return QStringLiteral("unknown");
+}
+
+QString processingDeviceUnavailableReason(plapoint::ProcessingDevice device)
+{
+    if (device == plapoint::ProcessingDevice::CUDA)
+    {
+#ifdef PLAPOINT_WITH_CUDA
+        return plapoint::gpu::hasUsableCudaDevice()
+            ? QString()
+            : QStringLiteral("请求的 CUDA 点云处理后端没有可用设备");
+#else
+        return QStringLiteral("PlaPoint 构建时未启用 CUDA 点云处理后端");
+#endif
+    }
+    if (device == plapoint::ProcessingDevice::OpenCL)
+    {
+#ifdef PLAPOINT_WITH_OPENCL
+        return plapoint::opencl::hasUsableOpenClDevice()
+            ? QString()
+            : QStringLiteral("请求的 OpenCL 点云处理后端没有可用 GPU 或在线编译器");
+#else
+        return QStringLiteral("PlaPoint 构建时未启用 OpenCL 点云处理后端");
+#endif
+    }
+    return {};
+}
+
+namespace
+{
 
 xjw::mvs::MvsSceneProfile sceneProfileFromString(const QString &value)
 {
@@ -253,10 +305,16 @@ DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &setti
             ? settings.value(QStringLiteral("confidence")).toDouble()
             : settings.value(QStringLiteral("min_confidence")).toDouble(0.20));
     parsed.useCuda = settings.value(QStringLiteral("cuda")).toBool(true);
+    const bool has_backend_key = settings.contains(QStringLiteral("patchMatchBackend")) ||
+        settings.contains(QStringLiteral("patchmatch_backend")) ||
+        settings.contains(QStringLiteral("mvsBackend")) ||
+        settings.contains(QStringLiteral("mvs_backend"));
     const QString patch_match_backend = settings.value(
         QStringLiteral("patchMatchBackend")).toString(
             settings.value(QStringLiteral("patchmatch_backend")).toString(
-                QStringLiteral("auto"))).trimmed().toLower();
+                settings.value(QStringLiteral("mvsBackend")).toString(
+                    settings.value(QStringLiteral("mvs_backend")).toString(
+                        QStringLiteral("auto"))))).trimmed().toLower();
     if (patch_match_backend == QStringLiteral("cpu"))
     {
         parsed.patchMatchBackend = xjw::mvs::PatchMatchBackend::Cpu;
@@ -269,6 +327,14 @@ DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &setti
     {
         parsed.patchMatchBackend = xjw::mvs::PatchMatchBackend::OpenCl;
     }
+    if (!has_backend_key && !parsed.useCuda)
+    {
+        // Legacy settings only exposed a CUDA checkbox. Preserve `cuda=false`
+        // by migrating it to an explicit CPU backend; an explicit Auto token
+        // always means CUDA -> OpenCL -> CPU.
+        parsed.patchMatchBackend = xjw::mvs::PatchMatchBackend::Cpu;
+    }
+    parsed.useCuda = parsed.patchMatchBackend != xjw::mvs::PatchMatchBackend::Cpu;
     parsed.fusionMinConfidence = static_cast<float>(
         settings.value(QStringLiteral("minConfidence")).toDouble(parsed.patchMatchConfidence));
     parsed.fusionMaxImageDim = std::max(0,
@@ -341,7 +407,10 @@ DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &setti
     parsed.twoSourceGrowthMaximumComponentArea = settings.value(
         QStringLiteral("twoSourceGrowthMaximumComponentArea")).toInt(64);
     parsed.processingDevice = processingDeviceFromString(
-        settings.value(QStringLiteral("processingDevice")).toString(QStringLiteral("auto")));
+        settings.value(QStringLiteral("processingDevice")).toString(
+            settings.value(QStringLiteral("pointCloudBackend")).toString(
+                settings.value(QStringLiteral("point_cloud_backend")).toString(
+                    QStringLiteral("auto")))));
     parsed.pipelineMode = settings.value(QStringLiteral("pipeline_mode")).toBool(false);
     applyDenseQualityProfile(&parsed, settings);
     return parsed;
@@ -361,30 +430,33 @@ xjw::mvs::DepthGenConfig buildDepthGenConfig(const DenseGenerationSettings &sett
     const int maxByViews = std::max(1, viewCount);
     const int maxGpuWorkers = std::min(2, maxByViews);
     const int maxCpuWorkers = std::min(4, maxByViews);
-    config.gpuFrameWorkerCount = settings.useCuda
+    const bool accelerator_backend =
+        settings.patchMatchBackend != xjw::mvs::PatchMatchBackend::Cpu;
+    config.gpuFrameWorkerCount = accelerator_backend
         ? std::clamp(settings.gpuFrameWorkers > 0
                          ? settings.gpuFrameWorkers
                          : autoGpuFrameWorkers(totalThreads, viewCount),
                      1,
                      maxGpuWorkers)
         : 0;
-    config.cpuFrameWorkerCount = settings.useCuda
-        ? std::clamp(settings.cpuFrameWorkers, 0, maxCpuWorkers)
-        : std::clamp(settings.cpuFrameWorkers > 0
-                         ? settings.cpuFrameWorkers
-                         : autoCpuFrameWorkers(totalThreads, viewCount),
-                     1,
-                     maxCpuWorkers);
+    config.cpuFrameWorkerCount = std::clamp(
+        settings.cpuFrameWorkers > 0
+            ? settings.cpuFrameWorkers
+            : autoCpuFrameWorkers(totalThreads, viewCount),
+        1,
+        maxCpuWorkers);
     const int activeFrameWorkers = std::max(
-        1, config.gpuFrameWorkerCount + config.cpuFrameWorkerCount);
+        1, std::max(config.gpuFrameWorkerCount, config.cpuFrameWorkerCount));
     config.totalCpuThreadBudget = totalThreads;
     config.cpuWorkerCount = std::max(1, totalThreads / activeFrameWorkers);
     config.patchMatch.numIterations = settings.iterations;
     config.patchMatch.patchHalf = (settings.patchSize - 1) / 2;
     config.patchMatch.numSourceViews = config.numSourceViews;
     config.patchMatch.confidenceThresh = settings.patchMatchConfidence;
-    config.patchMatch.useCuda = settings.useCuda;
+    config.patchMatch.useCuda = settings.patchMatchBackend == xjw::mvs::PatchMatchBackend::Auto ||
+        settings.patchMatchBackend == xjw::mvs::PatchMatchBackend::Cuda;
     config.patchMatch.backend = settings.patchMatchBackend;
+    config.pointCloudProcessingDevice = settings.processingDevice;
     config.patchMatch.downsampleFactor = std::max(1, static_cast<int>(std::round(1.0 / settings.resScale)));
     config.patchMatch.geomConsistency = settings.geomConsistency;
     config.patchMatch.geomConsistencyMaxErr = settings.maxReprojError;
@@ -489,7 +561,10 @@ DenseRefineSettings denseRefineSettingsFromJson(const QJsonObject &settings)
     parsed.smoothNormals = settings.value(QStringLiteral("smoothIter")).toInt(0) > 0;
     parsed.threads = qMax(1, settings.value(QStringLiteral("threads")).toInt(8));
     parsed.processingDevice = processingDeviceFromString(
-        settings.value(QStringLiteral("processingDevice")).toString(QStringLiteral("auto")));
+        settings.value(QStringLiteral("processingDevice")).toString(
+            settings.value(QStringLiteral("pointCloudBackend")).toString(
+                settings.value(QStringLiteral("point_cloud_backend")).toString(
+                    QStringLiteral("auto")))));
     return parsed;
 }
 

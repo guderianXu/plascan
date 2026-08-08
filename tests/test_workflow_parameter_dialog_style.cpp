@@ -98,6 +98,10 @@ TEST(WorkflowParameterDialogStyleTest, CreatePointCloudMatchesMetashapeParameter
 
     auto *source = dialog.findChild<QLabel *>(QStringLiteral("pointCloudSourceValueLabel"));
     auto *quality = dialog.findChild<QComboBox *>(QStringLiteral("pointCloudQualityCombo"));
+    auto *mvs_backend = dialog.findChild<QComboBox *>(
+        QStringLiteral("pointCloudMvsBackendCombo"));
+    auto *point_backend = dialog.findChild<QComboBox *>(
+        QStringLiteral("pointCloudProcessingBackendCombo"));
     auto *filter = dialog.findChild<QComboBox *>(QStringLiteral("pointCloudDepthFilterCombo"));
     auto *reuse = dialog.findChild<QCheckBox *>(QStringLiteral("reuseDepthMapsCheck"));
     auto *colors = dialog.findChild<QCheckBox *>(QStringLiteral("calculatePointColorsCheck"));
@@ -107,6 +111,8 @@ TEST(WorkflowParameterDialogStyleTest, CreatePointCloudMatchesMetashapeParameter
         dialog.findChild<QCheckBox *>(QStringLiteral("replaceDefaultPointCloudCheck"));
     ASSERT_NE(source, nullptr);
     ASSERT_NE(quality, nullptr);
+    ASSERT_NE(mvs_backend, nullptr);
+    ASSERT_NE(point_backend, nullptr);
     ASSERT_NE(filter, nullptr);
     ASSERT_NE(reuse, nullptr);
     ASSERT_NE(colors, nullptr);
@@ -115,6 +121,10 @@ TEST(WorkflowParameterDialogStyleTest, CreatePointCloudMatchesMetashapeParameter
 
     EXPECT_TRUE(source->text().contains(QStringLiteral("深度图")));
     EXPECT_EQ(quality->currentData().toString(), QStringLiteral("highest"));
+    EXPECT_EQ(mvs_backend->currentData().toString(), QStringLiteral("auto"));
+    EXPECT_EQ(point_backend->currentData().toString(), QStringLiteral("auto"));
+    EXPECT_TRUE(mvs_backend->currentText().contains(QStringLiteral("CUDA")));
+    EXPECT_TRUE(mvs_backend->currentText().contains(QStringLiteral("OpenCL")));
     EXPECT_EQ(filter->currentData().toString(), QStringLiteral("mild"));
     EXPECT_TRUE(reuse->isChecked());
     EXPECT_TRUE(colors->isChecked());
@@ -129,6 +139,8 @@ TEST(WorkflowParameterDialogStyleTest, CreatePointCloudRestoresAndSubmitsEffecti
     CreatePointCloudDialog dialog;
     dialog.applySettings(QJsonObject{
         {QStringLiteral("qualityProfile"), QStringLiteral("high")},
+        {QStringLiteral("patchMatchBackend"), QStringLiteral("opencl")},
+        {QStringLiteral("processingDevice"), QStringLiteral("cuda")},
         {QStringLiteral("depthFilterMode"), QStringLiteral("aggressive")},
         {QStringLiteral("reuseDepthMaps"), false},
         {QStringLiteral("saveAfterEachStep"), true},
@@ -149,6 +161,10 @@ TEST(WorkflowParameterDialogStyleTest, CreatePointCloudRestoresAndSubmitsEffecti
               QStringLiteral("depth_maps"));
     EXPECT_EQ(settings.value(QStringLiteral("qualityProfile")).toString(),
               QStringLiteral("high"));
+    EXPECT_EQ(settings.value(QStringLiteral("patchMatchBackend")).toString(),
+              QStringLiteral("opencl"));
+    EXPECT_EQ(settings.value(QStringLiteral("processingDevice")).toString(),
+              QStringLiteral("cuda"));
     EXPECT_EQ(settings.value(QStringLiteral("depthFilterMode")).toString(),
               QStringLiteral("aggressive"));
     EXPECT_FALSE(settings.value(QStringLiteral("reuseDepthMaps")).toBool());

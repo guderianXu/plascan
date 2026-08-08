@@ -39,6 +39,22 @@ CreatePointCloudDialog::CreatePointCloudDialog(QWidget *parent)
     _qualityCombo->addItem(tr("最低"), QStringLiteral("lowest"));
     xjw::gui::dialogs::configureWorkflowComboBox(_qualityCombo);
 
+    const auto populate_backend_combo = [this](QComboBox *combo)
+    {
+        combo->addItem(tr("自动（CUDA → OpenCL → CPU）"), QStringLiteral("auto"));
+        combo->addItem(tr("CUDA"), QStringLiteral("cuda"));
+        combo->addItem(tr("OpenCL"), QStringLiteral("opencl"));
+        combo->addItem(tr("CPU"), QStringLiteral("cpu"));
+        xjw::gui::dialogs::configureWorkflowComboBox(combo);
+        combo->setToolTip(tr("显式选择的后端不可用时会明确失败；自动模式按显示顺序选择。"));
+    };
+    _mvsBackendCombo = new QComboBox(general_group);
+    _mvsBackendCombo->setObjectName(QStringLiteral("pointCloudMvsBackendCombo"));
+    populate_backend_combo(_mvsBackendCombo);
+    _pointCloudBackendCombo = new QComboBox(general_group);
+    _pointCloudBackendCombo->setObjectName(QStringLiteral("pointCloudProcessingBackendCombo"));
+    populate_backend_combo(_pointCloudBackendCombo);
+
     _reuseDepthMapsCheck = new QCheckBox(tr("重用深度图"), general_group);
     _reuseDepthMapsCheck->setObjectName(QStringLiteral("reuseDepthMapsCheck"));
     _reuseDepthMapsCheck->setChecked(true);
@@ -47,6 +63,8 @@ CreatePointCloudDialog::CreatePointCloudDialog(QWidget *parent)
 
     general_form->addRow(tr("源数据:"), source_label);
     general_form->addRow(tr("质量:"), _qualityCombo);
+    general_form->addRow(tr("深度估计设备:"), _mvsBackendCombo);
+    general_form->addRow(tr("点云处理设备:"), _pointCloudBackendCombo);
     general_form->addRow(QString(), _reuseDepthMapsCheck);
     general_form->addRow(QString(), _saveEachStepCheck);
     main_layout->addWidget(general_group);
@@ -105,7 +123,11 @@ CreatePointCloudDialog::CreatePointCloudDialog(QWidget *parent)
     connect(button_box, &QDialogButtonBox::rejected,
             this, &QDialog::reject);
 
-    for (QComboBox *combo_box : {_qualityCombo, _depthFilterCombo})
+    for (QComboBox *combo_box : {
+             _qualityCombo,
+             _mvsBackendCombo,
+             _pointCloudBackendCombo,
+             _depthFilterCombo})
     {
         connect(combo_box, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, &CreatePointCloudDialog::emitSettingsNow);
@@ -141,6 +163,8 @@ CreatePointCloudDialog::CreatePointCloudDialog(QWidget *parent)
 void CreatePointCloudDialog::applySettings(const QJsonObject &settings)
 {
     const QSignalBlocker quality_blocker(_qualityCombo);
+    const QSignalBlocker mvs_backend_blocker(_mvsBackendCombo);
+    const QSignalBlocker point_backend_blocker(_pointCloudBackendCombo);
     const QSignalBlocker reuse_blocker(_reuseDepthMapsCheck);
     const QSignalBlocker save_blocker(_saveEachStepCheck);
     const QSignalBlocker filter_blocker(_depthFilterCombo);
@@ -152,6 +176,25 @@ void CreatePointCloudDialog::applySettings(const QJsonObject &settings)
     if (quality_index >= 0)
     {
         _qualityCombo->setCurrentIndex(quality_index);
+    }
+
+    const int mvs_backend_index = _mvsBackendCombo->findData(
+        settings.value(QStringLiteral("patchMatchBackend")).toString(
+            settings.value(QStringLiteral("patchmatch_backend")).toString(
+                settings.value(QStringLiteral("mvsBackend")).toString(
+                    settings.value(QStringLiteral("mvs_backend")).toString(
+                        QStringLiteral("auto"))))));
+    if (mvs_backend_index >= 0)
+    {
+        _mvsBackendCombo->setCurrentIndex(mvs_backend_index);
+    }
+    const QString point_backend = settings.value(QStringLiteral("processingDevice")).toString(
+        settings.value(QStringLiteral("pointCloudBackend")).toString(
+            settings.value(QStringLiteral("point_cloud_backend")).toString(QStringLiteral("auto"))));
+    const int point_backend_index = _pointCloudBackendCombo->findData(point_backend);
+    if (point_backend_index >= 0)
+    {
+        _pointCloudBackendCombo->setCurrentIndex(point_backend_index);
     }
 
     const int filter_index = _depthFilterCombo->findData(
@@ -191,6 +234,10 @@ QJsonObject CreatePointCloudDialog::collectSettings() const
     QJsonObject settings;
     settings[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
     settings[QStringLiteral("qualityProfile")] = _qualityCombo->currentData().toString();
+    settings[QStringLiteral("patchMatchBackend")] =
+        _mvsBackendCombo->currentData().toString();
+    settings[QStringLiteral("processingDevice")] =
+        _pointCloudBackendCombo->currentData().toString();
     settings[QStringLiteral("depthFilterMode")] = _depthFilterCombo->currentData().toString();
     settings[QStringLiteral("reuseDepthMaps")] = _reuseDepthMapsCheck->isChecked();
     settings[QStringLiteral("force_depth_recompute")] = !_reuseDepthMapsCheck->isChecked();
@@ -244,9 +291,14 @@ void CreatePointCloudDialog::updateAvailability()
         return;
     }
 
-    _statusLabel->setText(_hasReusableDepthMaps
+    const QString device_summary = tr(
+        "深度估计：%1；点云处理：%2。实际选择会显示在任务进度和日志中。")
+                                       .arg(_mvsBackendCombo->currentText(),
+                                            _pointCloudBackendCombo->currentText());
+    _statusLabel->setText((_hasReusableDepthMaps
         ? tr("已检测到兼容深度图，可选择复用后创建点云。")
-        : tr("将从正式空三结果估计深度图并创建点云。"));
+        : tr("将从正式空三结果估计深度图并创建点云。"))
+        + QStringLiteral("\n") + device_summary);
 }
 
 void CreatePointCloudDialog::onRun()

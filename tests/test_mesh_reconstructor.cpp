@@ -5839,6 +5839,35 @@ TEST(MeshReconstructorTest, ForcePoissonUsesInputNormalsWhenPresent)
     EXPECT_EQ(algorithmUsed, "poisson");
 }
 
+TEST(MeshReconstructorTest, OpenClPreferenceDoesNotSelectUnsupportedPoissonSolver)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "plascan_mesh_poisson_backend_test";
+    const fs::path plyPath = writeSpherePointCloudWithNormals(root);
+
+    xjw::mesh::ReconstructionConfig config = fallbackMeshConfig();
+    config.poissonDepth = 4;
+    config.preprocessingDevice = plapoint::ProcessingDevice::OpenCL;
+    config.poissonSolverDevice = plapoint::ProcessingDevice::CPU;
+    config.enableDenoise = false;
+    config.enableDownsample = false;
+    config.allowHeightGridFallback = false;
+
+    xjw::mesh::TriMesh mesh;
+    std::string error;
+    std::string algorithmUsed;
+    const bool ok = xjw::mesh::SurfaceReconstructor::reconstructFromPointCloudFile(plyPath.string(),
+                                                                                   config,
+                                                                                   mesh,
+                                                                                   &error,
+                                                                                   &algorithmUsed);
+
+    ASSERT_TRUE(ok) << error;
+    EXPECT_GT(mesh.vertexCount(), 0);
+    EXPECT_GT(mesh.faceCount(), 0);
+    EXPECT_EQ(algorithmUsed, "poisson");
+}
+
 TEST(MeshReconstructorTest, PoissonTransfersSourceColorsToMeshVertices)
 {
     namespace fs = std::filesystem;
