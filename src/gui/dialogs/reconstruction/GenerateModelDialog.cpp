@@ -22,6 +22,8 @@
 #include <QVBoxLayout>
 #include <QWindow>
 
+#include <algorithm>
+
 namespace
 {
 
@@ -241,13 +243,13 @@ GenerateModelDialog::GenerateModelDialog(QWidget *parent)
 
     _threadsSpin = new QSpinBox(_advancedContent);
     _threadsSpin->setObjectName(QStringLiteral("modelThreadsSpin"));
-    _threadsSpin->setRange(1, 128);
+    _threadsSpin->setRange(1, std::max(1, QThread::idealThreadCount()));
     _threadsSpin->setValue(
         xjw::gui::project::recommendedInteractiveModelWorkerCount(
             QThread::idealThreadCount()));
     _threadsSpin->setSuffix(tr(" 线程"));
     _threadsSpin->setToolTip(tr(
-        "模型阶段统一使用的 CPU 工作线程数。默认按物理核心估算并预留两个核心。"));
+        "模型阶段统一使用的 CPU 工作线程数。默认使用逻辑线程总数减二。"));
 
     _calculateColorsCheck = new QCheckBox(tr("计算顶点颜色"), _advancedContent);
     _strictMasksCheck = new QCheckBox(tr("使用严格的体积掩模"), _advancedContent);

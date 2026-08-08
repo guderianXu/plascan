@@ -1691,7 +1691,8 @@ TEST(DepthFrameUtilsTest, StoredDepthCollectionCanSelectRequestedBatchDirectory)
 
 TEST(ModelWorkflowPolicyTest, InteractiveModelWorkersLeaveGuiHeadroom)
 {
-    EXPECT_EQ(xjw::gui::project::recommendedInteractiveModelWorkerCount(32), 14);
+    EXPECT_EQ(xjw::gui::project::recommendedInteractiveModelWorkerCount(32), 30);
+    EXPECT_EQ(xjw::gui::project::recommendedInteractiveModelWorkerCount(128), 126);
     EXPECT_EQ(xjw::gui::project::recommendedInteractiveModelWorkerCount(8), 6);
     EXPECT_EQ(xjw::gui::project::recommendedInteractiveModelWorkerCount(4), 2);
     EXPECT_EQ(xjw::gui::project::recommendedInteractiveModelWorkerCount(2), 1);
