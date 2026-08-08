@@ -889,34 +889,77 @@ __device__ inline float perturbDepth(float perturbation, float depth, curandStat
     return d_min + curand_uniform(rs) * (d_max - d_min);
 }
 
-__device__ inline uint32_t mixRngSeed(unsigned long long seed, int idx, int parity)
+__device__ inline uint32_t alignedPatchMatchHash(uint32_t value)
 {
-    uint32_t state = static_cast<uint32_t>(seed) ^ static_cast<uint32_t>(seed >> 32);
-    state ^= static_cast<uint32_t>(idx) * 747796405u;
-    state ^= static_cast<uint32_t>(parity) * 2891336453u;
-    state = (state ^ (state >> 16)) * 2246822519u;
-    state = (state ^ (state >> 13)) * 3266489917u;
-    return state ^ (state >> 16);
+    value ^= value >> 16;
+    value *= 0x7feb352du;
+    value ^= value >> 15;
+    value *= 0x846ca68bu;
+    return value ^ (value >> 16);
 }
 
-__device__ inline uint32_t xorshift32(uint32_t &state)
+__device__ inline float alignedPatchMatchRandom(uint32_t &state)
 {
-    state ^= state << 13;
-    state ^= state >> 17;
-    state ^= state << 5;
-    return state;
+    state = alignedPatchMatchHash(state + 0x9e3779b9u);
+    return static_cast<float>(state & 0x00ffffffu) * (1.0f / 16777216.0f);
 }
 
-__device__ inline float fastUniform(uint32_t &state)
+__device__ inline void faceNormalTowardCamera(int row,
+                                              int col,
+                                              float normal[3])
 {
-    return (static_cast<float>(xorshift32(state)) + 1.0f) * 2.3283064365386963e-10f;
+    const float lengthSquared = dot3(normal, normal);
+    if (!(lengthSquared > 1.0e-12f))
+    {
+        normal[0] = 0.0f;
+        normal[1] = 0.0f;
+        normal[2] = -1.0f;
+        return;
+    }
+    const float inverseLength = 1.0f / sqrtf(lengthSquared);
+    normal[0] *= inverseLength;
+    normal[1] *= inverseLength;
+    normal[2] *= inverseLength;
+    const float ray[3] = {
+        c_ref_inv_K[0] * col + c_ref_inv_K[1],
+        c_ref_inv_K[2] * row + c_ref_inv_K[3],
+        1.0f};
+    if (dot3(normal, ray) > 0.0f)
+    {
+        normal[0] = -normal[0];
+        normal[1] = -normal[1];
+        normal[2] = -normal[2];
+    }
 }
 
-__device__ inline float perturbDepthFast(float perturbation, float depth, uint32_t &state)
+__device__ inline void alignedRandomFacingNormal(int row,
+                                                  int col,
+                                                  uint32_t &state,
+                                                  float normal[3])
 {
-    float d_min = (1.f - perturbation) * depth;
-    float d_max = (1.f + perturbation) * depth;
-    return d_min + fastUniform(state) * (d_max - d_min);
+    const float z = alignedPatchMatchRandom(state) * 2.0f - 1.0f;
+    const float angle = alignedPatchMatchRandom(state) * 6.28318530718f;
+    const float radius = sqrtf(fmaxf(0.0f, 1.0f - z * z));
+    normal[0] = radius * cosf(angle);
+    normal[1] = radius * sinf(angle);
+    normal[2] = z;
+    faceNormalTowardCamera(row, col, normal);
+}
+
+__device__ inline void alignedPerturbFacingNormal(int row,
+                                                   int col,
+                                                   const float normal[3],
+                                                   float amount,
+                                                   uint32_t &state,
+                                                   float output[3])
+{
+    output[0] = normal[0]
+        + amount * (alignedPatchMatchRandom(state) * 2.0f - 1.0f);
+    output[1] = normal[1]
+        + amount * (alignedPatchMatchRandom(state) * 2.0f - 1.0f);
+    output[2] = normal[2]
+        + amount * (alignedPatchMatchRandom(state) * 2.0f - 1.0f);
+    faceNormalTowardCamera(row, col, output);
 }
 
 // =============================================================================
@@ -981,46 +1024,6 @@ __device__ void perturbNormal(int row, int col,
     }
     float inv = rsqrtf(dot3(out, out));
     out[0]*=inv; out[1]*=inv; out[2]*=inv;
-}
-
-__device__ void perturbNormalFast(int row, int col,
-                                  float perturbation,
-                                  const float n[3],
-                                  uint32_t &state,
-                                  float out[3])
-{
-    float activePerturbation = perturbation;
-    for (int trial = 0; trial < 4; ++trial)
-    {
-        float a1 = (fastUniform(state) - 0.5f) * activePerturbation;
-        float a2 = (fastUniform(state) - 0.5f) * activePerturbation;
-        float a3 = (fastUniform(state) - 0.5f) * activePerturbation;
-
-        float sa1=sinf(a1), ca1=cosf(a1);
-        float sa2=sinf(a2), ca2=cosf(a2);
-        float sa3=sinf(a3), ca3=cosf(a3);
-
-        float R[9];
-        R[0]=ca2*ca3;  R[1]=-ca2*sa3; R[2]=sa2;
-        R[3]=ca1*sa3+ca3*sa1*sa2; R[4]=ca1*ca3-sa1*sa2*sa3; R[5]=-ca2*sa1;
-        R[6]=sa1*sa3-ca1*ca3*sa2; R[7]=ca3*sa1+ca1*sa2*sa3; R[8]=ca1*ca2;
-
-        mat33MulVec3(R, n, out);
-
-        float ray[3] = { c_ref_inv_K[0]*col + c_ref_inv_K[1],
-                         c_ref_inv_K[2]*row + c_ref_inv_K[3],
-                         1.f };
-        if (dot3(out, ray) < 0.f)
-        {
-            float inv = rsqrtf(dot3(out, out));
-            out[0]*=inv; out[1]*=inv; out[2]*=inv;
-            return;
-        }
-
-        activePerturbation *= 0.5f;
-    }
-
-    out[0]=n[0]; out[1]=n[1]; out[2]=n[2];
 }
 
 // =============================================================================
@@ -1173,7 +1176,9 @@ __device__ inline void pixelDepthSearchBounds(
     float radius = hintRadius != nullptr ? hintRadius[idx] : 0.0f;
     if (!isfinite(radius) || radius <= 0.0f)
     {
-        radius = fmaxf(center * 0.3f, (zFar - zNear) * 0.01f);
+        radius = fmaxf(
+            center * kDefaultPatchMatchHintRadiusRatio,
+            (zFar - zNear) * 0.01f);
     }
     localNear = fmaxf(zNear, center - radius);
     localFar = fminf(zFar, center + radius);
@@ -1182,42 +1187,6 @@ __device__ inline void pixelDepthSearchBounds(
         localNear = zNear;
         localFar = zFar;
     }
-}
-
-/// 初始化深度图和法向量图
-__global__ void kernelInitDepthNormal(
-    float *depthMap, float *normalMap,
-    const float *hintDepth,
-    const float *hintRadius,
-    int W, int H,
-    float zNear, float zFar,
-    unsigned long long seed)
-{
-    int u = blockIdx.x * blockDim.x + threadIdx.x;
-    int v = blockIdx.y * blockDim.y + threadIdx.y;
-    if (u >= W || v >= H) return;
-    int idx = v * W + u;
-
-    curandState rs;
-    curand_init(seed + idx, 0, 0, &rs);
-
-    float localNear = zNear;
-    float localFar = zFar;
-    pixelDepthSearchBounds(idx,
-                           hintDepth,
-                           hintRadius,
-                           zNear,
-                           zFar,
-                           localNear,
-                           localFar);
-    const float z = localNear + curand_uniform(&rs) * (localFar - localNear);
-    depthMap[idx] = z;
-
-    float normal[3];
-    generateRandomNormal(v, u, &rs, normal);
-    normalMap[idx*3]   = normal[0];
-    normalMap[idx*3+1] = normal[1];
-    normalMap[idx*3+2] = normal[2];
 }
 
 // =============================================================================
@@ -1251,6 +1220,103 @@ __device__ float evalHypCost(
     }
     const float robust_ncc = robustMultiSourceNcc(scores, source_count);
     return 2.f - 2.f * robust_ncc;  // [0,2]
+}
+
+// Deterministic inverse-depth initialization shared semantically with the
+// OpenCL backend. A strong fronto-parallel seed avoids backend-specific random
+// basins before both implementations enter the same plane propagation stage.
+__global__ void kernelInitializePlanes(
+    float *depthMap, float *normalMap, float *confMap,
+    const float *refImg, int W, int H,
+    const float *const *srcImgs, const float *srcDatas, int srcW, int srcH, int numSrc,
+    const std::uint8_t *refMask, const std::uint8_t *srcMasks,
+    const float *hintDepth, const float *hintRadius,
+    float zNear, float zFar, int patchHalf,
+    int depthSampleCount,
+    float minimumMaskedSupportRatio)
+{
+    const int col = blockIdx.x * blockDim.x + threadIdx.x;
+    const int row = blockIdx.y * blockDim.y + threadIdx.y;
+    if (col >= W || row >= H)
+    {
+        return;
+    }
+
+    const int idx = row * W + col;
+    if (refMask != nullptr && refMask[idx] == 0)
+    {
+        depthMap[idx] = 0.0f;
+        normalMap[idx * 3] = 0.0f;
+        normalMap[idx * 3 + 1] = 0.0f;
+        normalMap[idx * 3 + 2] = -1.0f;
+        confMap[idx] = 0.0f;
+        return;
+    }
+
+    float localNear = zNear;
+    float localFar = zFar;
+    pixelDepthSearchBounds(idx,
+                           hintDepth,
+                           hintRadius,
+                           zNear,
+                           zFar,
+                           localNear,
+                           localFar);
+    const int coarseSamples = max(16, min(96, depthSampleCount));
+    const float inverseFar = 1.0f / localFar;
+    const float inverseNear = 1.0f / localNear;
+    const float inverseStep = (inverseNear - inverseFar)
+        / static_cast<float>(coarseSamples - 1);
+    const float normal[3] = {0.0f, 0.0f, -1.0f};
+    float bestDepth = 0.0f;
+    float bestCost = 2.0f;
+
+    for (int sampleIndex = 0; sampleIndex < coarseSamples; ++sampleIndex)
+    {
+        const float inverseDepth = inverseFar
+            + inverseStep * static_cast<float>(sampleIndex);
+        const float depth = 1.0f / inverseDepth;
+        const float cost = evalHypCost(col, row, depth, normal,
+                                       refImg, W, H,
+                                       srcImgs, srcDatas, srcW, srcH, numSrc,
+                                       refMask, srcMasks,
+                                       patchHalf, minimumMaskedSupportRatio);
+        if (cost < bestCost)
+        {
+            bestCost = cost;
+            bestDepth = depth;
+        }
+    }
+
+    if (bestDepth > 0.0f)
+    {
+        const float bestInverse = 1.0f / bestDepth;
+        const float refineStep = inverseStep / 6.0f;
+        for (int refineIndex = -6; refineIndex <= 6; ++refineIndex)
+        {
+            const float inverseDepth = fmaxf(
+                inverseFar,
+                fminf(inverseNear,
+                      bestInverse + refineStep * static_cast<float>(refineIndex)));
+            const float depth = 1.0f / inverseDepth;
+            const float cost = evalHypCost(col, row, depth, normal,
+                                           refImg, W, H,
+                                           srcImgs, srcDatas, srcW, srcH, numSrc,
+                                           refMask, srcMasks,
+                                           patchHalf, minimumMaskedSupportRatio);
+            if (cost < bestCost)
+            {
+                bestCost = cost;
+                bestDepth = depth;
+            }
+        }
+    }
+
+    depthMap[idx] = bestDepth;
+    normalMap[idx * 3] = normal[0];
+    normalMap[idx * 3 + 1] = normal[1];
+    normalMap[idx * 3 + 2] = normal[2];
+    confMap[idx] = bestDepth > 0.0f ? 1.0f - bestCost * 0.5f : 0.0f;
 }
 
 // =============================================================================
@@ -1648,7 +1714,8 @@ __global__ void kernelCheckerboardSweep(
     const float *hintDepth, const float *hintRadius,
     float zNear, float zFar, int patchHalf,
     float minimumMaskedSupportRatio,
-    float perturbation, unsigned long long seed,
+    float perturbation,
+    int iteration,
     int parity)
 {
     int col = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1687,34 +1754,6 @@ __global__ void kernelCheckerboardSweep(
                                  refMask, srcMasks,
                                  patchHalf, minimumMaskedSupportRatio);
 
-    uint32_t rngState = mixRngSeed(seed, idx, parity);
-    float randDepth = perturbDepthFast(perturbation, currDepth, rngState);
-    randDepth = fmaxf(localNear, fminf(localFar, randDepth));
-    float randNormal[3];
-    perturbNormalFast(row, col, perturbation * static_cast<float>(M_PI), currNormal, rngState, randNormal);
-
-    considerHypothesis(col, row, randDepth, randNormal,
-                       refImg, W, H,
-                       srcImgs, srcDatas, srcW, srcH, numSrc,
-                       refMask, srcMasks,
-                       localNear, localFar, patchHalf,
-                       minimumMaskedSupportRatio,
-                       &bestCost, &bestDepth, bestNormal);
-    considerHypothesis(col, row, currDepth, randNormal,
-                       refImg, W, H,
-                       srcImgs, srcDatas, srcW, srcH, numSrc,
-                       refMask, srcMasks,
-                       localNear, localFar, patchHalf,
-                       minimumMaskedSupportRatio,
-                       &bestCost, &bestDepth, bestNormal);
-    considerHypothesis(col, row, randDepth, currNormal,
-                       refImg, W, H,
-                       srcImgs, srcDatas, srcW, srcH, numSrc,
-                       refMask, srcMasks,
-                       localNear, localFar, patchHalf,
-                       minimumMaskedSupportRatio,
-                       &bestCost, &bestDepth, bestNormal);
-
     const int dRow[4] = { -1, 1, 0, 0 };
     const int dCol[4] = { 0, 0, -1, 1 };
     for (int ni = 0; ni < 4; ++ni)
@@ -1744,7 +1783,17 @@ __global__ void kernelCheckerboardSweep(
                                                static_cast<float>(neighborCol),
                                                static_cast<float>(row),
                                                static_cast<float>(col));
-        considerHypothesis(col, row, propDepth, neighborNormal,
+        if (propDepth >= localNear && propDepth <= localFar)
+        {
+            considerHypothesis(col, row, propDepth, neighborNormal,
+                               refImg, W, H,
+                               srcImgs, srcDatas, srcW, srcH, numSrc,
+                               refMask, srcMasks,
+                               localNear, localFar, patchHalf,
+                               minimumMaskedSupportRatio,
+                               &bestCost, &bestDepth, bestNormal);
+        }
+        considerHypothesis(col, row, bestDepth, neighborNormal,
                            refImg, W, H,
                            srcImgs, srcDatas, srcW, srcH, numSrc,
                            refMask, srcMasks,
@@ -1752,6 +1801,54 @@ __global__ void kernelCheckerboardSweep(
                            minimumMaskedSupportRatio,
                            &bestCost, &bestDepth, bestNormal);
     }
+
+    const float refinedDepth = bestDepth;
+    const float refinedNormal[3] = {
+        bestNormal[0], bestNormal[1], bestNormal[2]};
+    uint32_t rngState = alignedPatchMatchHash(
+        static_cast<uint32_t>(idx)
+        ^ (static_cast<uint32_t>(iteration + 1) * 0x85ebca6bu)
+        ^ (static_cast<uint32_t>(parity + 1) * 0xc2b2ae35u));
+    float randNormal[3];
+    if (iteration == 0)
+    {
+        alignedRandomFacingNormal(row, col, rngState, randNormal);
+    }
+    else
+    {
+        alignedPerturbFacingNormal(row,
+                                   col,
+                                   refinedNormal,
+                                   fmaxf(0.02f, perturbation),
+                                   rngState,
+                                   randNormal);
+    }
+    const float randomDepth = fmaxf(
+        localNear,
+        fminf(localFar,
+              refinedDepth + (alignedPatchMatchRandom(rngState) * 2.0f - 1.0f)
+                  * (localFar - localNear) * perturbation));
+    considerHypothesis(col, row, refinedDepth, randNormal,
+                       refImg, W, H,
+                       srcImgs, srcDatas, srcW, srcH, numSrc,
+                       refMask, srcMasks,
+                       localNear, localFar, patchHalf,
+                       minimumMaskedSupportRatio,
+                       &bestCost, &bestDepth, bestNormal);
+    considerHypothesis(col, row, randomDepth, refinedNormal,
+                       refImg, W, H,
+                       srcImgs, srcDatas, srcW, srcH, numSrc,
+                       refMask, srcMasks,
+                       localNear, localFar, patchHalf,
+                       minimumMaskedSupportRatio,
+                       &bestCost, &bestDepth, bestNormal);
+    considerHypothesis(col, row, randomDepth, randNormal,
+                       refImg, W, H,
+                       srcImgs, srcDatas, srcW, srcH, numSrc,
+                       refMask, srcMasks,
+                       localNear, localFar, patchHalf,
+                       minimumMaskedSupportRatio,
+                       &bestCost, &bestDepth, bestNormal);
 
     depthMap[idx] = bestDepth;
     normalMap[idx * 3] = bestNormal[0];
@@ -1788,7 +1885,7 @@ __global__ void kernelApplyPhotometricUniqueness(
 {
     const int col = blockIdx.x * blockDim.x + threadIdx.x;
     const int row = blockIdx.y * blockDim.y + threadIdx.y;
-    if (col >= W || row >= H || numSrc < 3)
+    if (col >= W || row >= H)
     {
         return;
     }
@@ -1984,7 +2081,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
     }
 
     // ── GPU 参数摘要 ──────────────────────────────────────────
-    LOG_DEBUG("[MVS][PatchMatch][GPU] size=%dx%d ds=%d sources=%d iterations=%d patch=%d",
+    LOG_DEBUG("[MVS][PatchMatch][GPU] size=%dx%d ds=%d sources=%d requested_iterations=%d patch=%d",
               sW, sH, ds, N, config.numIterations, config.patchHalf * 2 + 1);
     for (int si = 0; si < N; ++si) 
     {
@@ -2196,8 +2293,21 @@ bool PatchMatchDepthEstimator::estimateGPU(
     dim3 block(bW, bH);
     dim3 grid((sW + bW - 1) / bW, (sH + bH - 1) / bH);
 
-    kernelInitDepthNormal<<<grid, block, 0, workspace.computeStream>>>(
-        d_depth, d_normal, d_hint, d_hintRadius, sW, sH, zNear, zFar, 42ULL);
+    const int depthSampleCount = patchMatchDepthSampleCount(config.numIterations);
+    const int propagationIterations = patchMatchPropagationIterationCount(
+        config.numIterations);
+    const int sweepIterations = config.cudaUseParallelSweep
+        ? propagationIterations
+        : config.numIterations;
+    kernelInitializePlanes<<<grid, block, 0, workspace.computeStream>>>(
+        d_depth, d_normal, d_conf,
+        d_ref, sW, sH,
+        d_srcPtrs, d_srcData, srcW, srcH2, N,
+        d_refMask, d_srcMasks,
+        d_hint, d_hintRadius,
+        zNear, zFar, config.patchHalf,
+        depthSampleCount,
+        config.minimumMaskedPatchSupportRatio);
     CUDA_CHECK(cudaGetLastError());
 
     // ── 迭代传播 + 精化 ───────────────────────────────────────
@@ -2208,16 +2318,14 @@ bool PatchMatchDepthEstimator::estimateGPU(
     dim3 blockPixel(bW, bH);
     dim3 gridPixel((sW + bW - 1) / bW, (sH + bH - 1) / bH);
 
-    float perturbation = 1.0f;
-    for (int iter = 0; iter < config.numIterations; ++iter) 
+    float perturbation = 0.35f;
+    for (int iter = 0; iter < sweepIterations; ++iter)
     {
         if (config.cancelFlag && config.cancelFlag->load(std::memory_order_relaxed))
         {
             if (errorMsg) *errorMsg = "PatchMatch cancelled";
             return false;
         }
-
-        unsigned long long baseSeed = (unsigned long long)(iter + 1) * 999983ULL;
 
         if (config.cudaUseParallelSweep)
         {
@@ -2229,7 +2337,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
                 d_hint, d_hintRadius,
                 zNear, zFar, config.patchHalf,
                 config.minimumMaskedPatchSupportRatio,
-                perturbation, baseSeed,
+                perturbation, iter,
                 0);
             CUDA_CHECK(cudaGetLastError());
 
@@ -2241,7 +2349,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
                 d_hint, d_hintRadius,
                 zNear, zFar, config.patchHalf,
                 config.minimumMaskedPatchSupportRatio,
-                perturbation, baseSeed + 111111ULL,
+                perturbation, iter,
                 1);
             CUDA_CHECK(cudaGetLastError());
         }
@@ -2256,7 +2364,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
                 d_hint, d_hintRadius,
                 zNear, zFar, config.patchHalf,
                 config.minimumMaskedPatchSupportRatio,
-                perturbation, baseSeed);
+                perturbation, static_cast<unsigned long long>(iter + 1) * 999983ULL);
             CUDA_CHECK(cudaGetLastError());
 
             // 自下而上
@@ -2268,7 +2376,8 @@ bool PatchMatchDepthEstimator::estimateGPU(
                 d_hint, d_hintRadius,
                 zNear, zFar, config.patchHalf,
                 config.minimumMaskedPatchSupportRatio,
-                perturbation, baseSeed + 111111ULL);
+                perturbation,
+                static_cast<unsigned long long>(iter + 1) * 999983ULL + 111111ULL);
             CUDA_CHECK(cudaGetLastError());
 
             // 自左向右
@@ -2280,7 +2389,8 @@ bool PatchMatchDepthEstimator::estimateGPU(
                 d_hint, d_hintRadius,
                 zNear, zFar, config.patchHalf,
                 config.minimumMaskedPatchSupportRatio,
-                perturbation, baseSeed + 222222ULL);
+                perturbation,
+                static_cast<unsigned long long>(iter + 1) * 999983ULL + 222222ULL);
             CUDA_CHECK(cudaGetLastError());
 
             // 自右向左
@@ -2292,7 +2402,8 @@ bool PatchMatchDepthEstimator::estimateGPU(
                 d_hint, d_hintRadius,
                 zNear, zFar, config.patchHalf,
                 config.minimumMaskedPatchSupportRatio,
-                perturbation, baseSeed + 333333ULL);
+                perturbation,
+                static_cast<unsigned long long>(iter + 1) * 999983ULL + 333333ULL);
             CUDA_CHECK(cudaGetLastError());
         }
 
@@ -2300,7 +2411,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
         constexpr int kCancellationCheckpointInterval = 4;
         const bool cancellation_checkpoint = config.cancelFlag &&
             (((iter + 1) % kCancellationCheckpointInterval) == 0 ||
-             iter + 1 == config.numIterations);
+             iter + 1 == sweepIterations);
         if (cancellation_checkpoint)
         {
             CUDA_CHECK(cudaEventRecord(workspace.cancellationCheckpoint,
@@ -2448,9 +2559,10 @@ bool PatchMatchDepthEstimator::estimateGPU(
     const int fullPx = depthFull.rows * depthFull.cols;
     LOG_DEBUG(
         "[MVS][PatchMatch][GPU] scaled=%dx%d full=%dx%d range=[%.2f,%.2f] valid=%d/%d mean=%.2f "
-        "confidence>=%.2f hint=%d iterations=%d parallel_sweep=%d",
+        "confidence>=%.2f hint=%d depth_samples=%d propagation_passes=%d parallel_sweep=%d",
         sW, sH, refW, refH, zNear, zFar, valid, fullPx, mean,
-        config.confidenceThresh, hasHint ? 1 : 0, config.numIterations,
+        config.confidenceThresh, hasHint ? 1 : 0, depthSampleCount,
+        sweepIterations,
         config.cudaUseParallelSweep ? 1 : 0);
     LOG_DEBUG(
         "[MVS][PatchMatch][GPU] gray_cache ref_hit=%d source_hit=%d source_miss=%d usage=%.1f/%.1f MiB",

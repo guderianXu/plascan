@@ -2,6 +2,7 @@
 
 #include "PatchMatchCUDA.h"
 #include "PatchMatchOpenCLKernels.h"
+#include "PatchMatchPhotometricCost.h"
 
 #include "GpuDeviceLease.h"
 
@@ -1057,9 +1058,9 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         packed_hint_radius.data()};
 
     const int patch_half = config.patchHalf;
-    const int depth_sample_count = std::clamp(config.numIterations * 4, 32, 96);
-    const int propagation_iterations = std::clamp(
-        (config.numIterations + 3) / 4, 2, 4);
+    const int depth_sample_count = patchMatchDepthSampleCount(config.numIterations);
+    const int propagation_iterations = patchMatchPropagationIterationCount(
+        config.numIterations);
     const float minimum_mask_ratio = config.minimumMaskedPatchSupportRatio;
     const float confidence_threshold = config.confidenceThresh;
     const float uniqueness_relative_step = config.enablePhotometricUniqueness

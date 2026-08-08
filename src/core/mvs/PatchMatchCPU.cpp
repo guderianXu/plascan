@@ -549,7 +549,9 @@ bool PatchMatchDepthEstimator::estimateCPU(
                     : 0.0f;
                 if (!std::isfinite(radius) || radius <= 0.0f)
                 {
-                    radius = std::max(center * 0.3f, (zFar - zNear) * 0.01f);
+                    radius = std::max(
+                        center * kDefaultPatchMatchHintRadiusRatio,
+                        (zFar - zNear) * 0.01f);
                 }
                 local_near = std::max(zNear, center - radius);
                 local_far = std::min(zFar, center + radius);
@@ -795,7 +797,7 @@ bool PatchMatchDepthEstimator::estimateCPU(
         perturbation = std::max(perturbation * 0.5f, 0.02f);
     }
 
-    if (config.enablePhotometricUniqueness && N >= 3)
+    if (config.enablePhotometricUniqueness)
     {
         cpuParallelForLines(H, cpuThreadCount, [&](int row)
         {

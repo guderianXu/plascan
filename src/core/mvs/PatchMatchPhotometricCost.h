@@ -15,6 +15,22 @@ namespace mvs
 
 constexpr int kMaxPatchMatchSourceViews = 32;
 constexpr float kDefaultMinimumMaskedPatchSupportRatio = 0.35f;
+constexpr float kDefaultPatchMatchHintRadiusRatio = 0.05f;
+
+/// Keep CUDA and OpenCL on the same deterministic search budget. The public
+/// numIterations value controls both the coarse inverse-depth sweep and a
+/// smaller number of expensive plane-propagation passes.
+constexpr int patchMatchDepthSampleCount(int num_iterations)
+{
+    const int samples = num_iterations * 4;
+    return samples < 32 ? 32 : (samples > 96 ? 96 : samples);
+}
+
+constexpr int patchMatchPropagationIterationCount(int num_iterations)
+{
+    const int iterations = (num_iterations + 3) / 4;
+    return iterations < 2 ? 2 : (iterations > 4 ? 4 : iterations);
+}
 
 struct PatchNccAccumulator
 {
