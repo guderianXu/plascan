@@ -32,6 +32,26 @@ OpenCL 日志报告 `cuda_devices=0 opencl_devices=1 physical_gpu_workers=1`，�
 - `E:/code/test/hyb2/validation_revision25_aligned_v3_opencl_amd_depth_20260808`
 - `E:/code/test/hyb2/validation_revision25_aligned_cuda_depth_20260808`
 
+## OpenCL 单队列双缓冲复测
+
+在算法修订 25 和全部质量参数不变的情况下，把 AMD OpenCL 主机准备槽从 1 增加到 2；两个槽只在
+CPU 侧并行准备不同帧及残余重估假设，仍共享一个 command queue/kernel 执行槽。输出仍为 13/14
+帧可融合，平均置信度 0.850322、平均掩膜内有效率 0.961470、平均覆盖率 0.127206，与单槽结果逐项
+一致。
+
+新批次共执行 89 次 OpenCL 调用：首个队列开始到末个队列结束为 268.90 秒，队列累计占用
+262.03 秒（97.4%），kernel 实际活跃 261.08 秒（端到端 duty 97.1%）；调用间空档仅 6.88 秒，
+队列内传输/驱动等非 kernel 时间为 0.95 秒。任务管理器显示的间歇性尖峰不能代表同等比例的真实
+设备空闲，应优先使用这组 OpenCL profiling 计数。
+
+同版本、同参数的单槽控制批次墙钟为 273.252 秒，队列占用率 95.3%、端到端 kernel duty 95.0%、
+调用间空档 12.71 秒；双槽批次墙钟为 273.270 秒，差异仅 0.018 秒。双缓冲把真实空档缩短 45.9%，
+但未观察到吞吐收益，说明主要耗时已经是连续运行的 kernel；继续增加帧槽只会增加等待和共享内存
+压力，因此设备执行并发仍固定为 1，主机准备槽上限仍为 2。复测结果目录：
+
+- `E:/code/test/hyb2/validation_revision25_opencl_pipeline1_control_amd_depth_20260808`
+- `E:/code/test/hyb2/validation_revision25_opencl_pipeline2_amd_depth_20260808`
+
 ## 禁用插值模型结果
 
 | 后端深度 | 顶点 | 面 | 组件 | 边界边 | 非流形边 | 最终完整性中位/P10/最低 |
@@ -50,11 +70,14 @@ OpenCL 日志报告 `cuda_devices=0 opencl_devices=1 physical_gpu_workers=1`，�
 
 ```powershell
 cmake --build build/windows-vcpkg-cuda-release --target `
-  mvs_depth_reprocess_cli test_patchmatch_mask_aware test_patchmatch_cpu --parallel 8
+  mvs_depth_reprocess_cli test_patchmatch_mask_aware test_depth_compute_scheduler `
+  test_mvs_pipeline test_mvs_types --parallel 8
 
 build/windows-vcpkg-cuda-release/src/core/mvs/test_patchmatch_mask_aware.exe
-build/windows-vcpkg-cuda-release/tests/test_patchmatch_cpu.exe
+build/windows-vcpkg-cuda-release/tests/test_depth_compute_scheduler.exe
+build/windows-vcpkg-cuda-release/tests/test_mvs_pipeline.exe
+build/windows-vcpkg-cuda-release/tests/test_mvs_types.exe
 ```
 
-完整 MSVC 构建通过；`ctest --output-on-failure` 在 200.45 秒内完成，1913 个已启用测试全部通过，
+完整 MSVC 构建通过；`ctest --output-on-failure` 在 173.28 秒内完成，1913 个已启用测试全部通过，
 其中 10 个因环境或显式条件跳过，另有 1 个 CUDA benchmark 保持 disabled。

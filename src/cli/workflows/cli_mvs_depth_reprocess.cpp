@@ -260,7 +260,7 @@ int main(int argc, char **argv)
     std::string device = "cuda";
     int sourceViews = 4;
     int threads = 7;
-    int gpuFrameWorkers = 1;
+    int gpuFrameWorkers = 2;
     int cpuFrameWorkers = 0;
     int openClDeviceIndex = -1;
     bool saveLevels = false;
@@ -297,7 +297,10 @@ int main(int argc, char **argv)
         ->check(CLI::Range(1, 16));
     app.add_option("--threads", threads, "CPU 线程预算")
         ->check(CLI::Range(1, 64));
-    app.add_option("--gpu-frame-workers", gpuFrameWorkers, "GPU 帧并发数")
+    app.add_option(
+        "--gpu-frame-workers",
+        gpuFrameWorkers,
+        "GPU 主机准备槽：1=串行准备，2=单执行队列双缓冲（不会并发 kernel）")
         ->check(CLI::Range(0, 2));
     app.add_option("--cpu-frame-workers", cpuFrameWorkers, "CPU 帧并发数")
         ->check(CLI::Range(0, 4));

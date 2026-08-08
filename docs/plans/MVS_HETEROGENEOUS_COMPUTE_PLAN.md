@@ -77,6 +77,9 @@ CPU 不通过 OpenCL 执行。现有 C++/OpenMP 路径没有 JIT、驱动与主�
   `prepare/wait/queue/kernel/read/post/total`；其中 `queue` 是提交到完成的墙钟时间，`kernel` 是设备事件的
   实际执行时间。`wait` 持续偏高表示同设备主机槽已成功前置准备；设备监控中的短暂空档若对应 `prepare`
   或 `post` 偏高，则应继续优化 CPU 数据准备或后处理；`queue-kernel` 偏高则指向驱动/JIT/排队开销。
+- OpenCL 批次结束时汇总首个队列开始至末个队列结束的 `queue_occupancy`、`inter_call_idle`、
+  `queue_non_kernel` 与 `end_to_end_kernel_duty`。一致性后残余深度重估也复用双主机槽，但内部像素线程
+  预算按槽数均分，避免 CPU 过度订阅；设备执行槽和 command queue 仍各只有一个。
 
 ## 可行性结论
 

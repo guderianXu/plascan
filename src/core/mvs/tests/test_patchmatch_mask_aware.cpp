@@ -335,6 +335,7 @@ TEST(PatchMatchMaskAwareTest, OpenClConcurrentWorkersSerializeAndReuseCachedInpu
         GTEST_SKIP() << "OpenCL GPU is unavailable";
     }
 
+    xjw::mvs::PatchMatchDepthEstimator::resetOpenClExecutionStats();
     for (const xjw::mvs::OpenClDeviceInfo &device : devices)
     {
         SCOPED_TRACE(device.vendor + " " + device.name);
@@ -362,6 +363,20 @@ TEST(PatchMatchMaskAwareTest, OpenClConcurrentWorkersSerializeAndReuseCachedInpu
             ASSERT_FALSE(result.depth.empty());
             EXPECT_GT(validRatio(result.depth, reference_mask), 0.25);
         }
+    }
+    const std::vector<xjw::mvs::OpenClExecutionStats> execution_stats =
+        xjw::mvs::PatchMatchDepthEstimator::openClExecutionStats();
+    ASSERT_EQ(execution_stats.size(), devices.size());
+    for (const xjw::mvs::OpenClExecutionStats &stats : execution_stats)
+    {
+        EXPECT_GE(stats.callCount, 6U);
+        EXPECT_GT(stats.wallSpanMilliseconds, 0.0);
+        EXPECT_GT(stats.kernelActiveMilliseconds, 0.0);
+        EXPECT_GE(stats.interCallIdleMilliseconds, 0.0);
+        EXPECT_GE(stats.queueNonKernelMilliseconds, 0.0);
+        EXPECT_GE(stats.queueOccupancyRatio, stats.kernelDutyRatio);
+        EXPECT_GT(stats.kernelDutyRatio, 0.0);
+        EXPECT_LE(stats.queueOccupancyRatio, 1.0);
     }
     xjw::mvs::PatchMatchDepthEstimator::cleanupOpenClResources();
 }

@@ -21,6 +21,7 @@
 #pragma once
 
 #include "MvsTypes.h"
+#include <cstdint>
 #include <vector>
 #include <string>
 
@@ -41,6 +42,19 @@ struct OpenClDeviceInfo
     std::string physicalDeviceIdentity;
 };
 
+struct OpenClExecutionStats
+{
+    int deviceIndex = -1;
+    std::uint64_t callCount = 0;
+    double wallSpanMilliseconds = 0.0;
+    double queueMilliseconds = 0.0;
+    double kernelActiveMilliseconds = 0.0;
+    double interCallIdleMilliseconds = 0.0;
+    double queueNonKernelMilliseconds = 0.0;
+    double queueOccupancyRatio = 0.0;
+    double kernelDutyRatio = 0.0;
+};
+
 class PatchMatchDepthEstimator
 {
 public:
@@ -50,6 +64,8 @@ public:
     static std::string cudaDeviceIdentity(int deviceIndex);
     static bool isOpenClAvailable();
     static std::vector<OpenClDeviceInfo> openClDevices();
+    static void resetOpenClExecutionStats();
+    static std::vector<OpenClExecutionStats> openClExecutionStats();
     static void cleanupOpenClResources();
 
     /// 释放全局 GPU 图像缓存占用的所有显存。

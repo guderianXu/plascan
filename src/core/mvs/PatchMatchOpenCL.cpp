@@ -216,6 +216,12 @@ struct OpenClRuntime
     std::size_t imageCacheBytes = 0;
     std::size_t imageCacheLimitBytes = 512ull * 1024ull * 1024ull;
     std::uint64_t imageCacheClock = 0;
+    std::mutex executionStatsMutex;
+    std::uint64_t executionCallCount = 0;
+    std::chrono::steady_clock::time_point firstQueueStart;
+    std::chrono::steady_clock::time_point lastQueueFinish;
+    double accumulatedQueueMilliseconds = 0.0;
+    double accumulatedKernelActiveMilliseconds = 0.0;
 
     ~OpenClRuntime()
     {
@@ -869,6 +875,62 @@ std::vector<OpenClDeviceInfo> PatchMatchDepthEstimator::openClDevices()
     return result;
 }
 
+void PatchMatchDepthEstimator::resetOpenClExecutionStats()
+{
+    std::lock_guard<std::mutex> registry_lock(g_openClRuntimeRegistryMutex);
+    for (const auto &entry : g_openClRuntimes)
+    {
+        const std::shared_ptr<OpenClRuntime> &runtime = entry.second;
+        std::lock_guard<std::mutex> stats_lock(runtime->executionStatsMutex);
+        runtime->executionCallCount = 0;
+        runtime->firstQueueStart = {};
+        runtime->lastQueueFinish = {};
+        runtime->accumulatedQueueMilliseconds = 0.0;
+        runtime->accumulatedKernelActiveMilliseconds = 0.0;
+    }
+}
+
+std::vector<OpenClExecutionStats> PatchMatchDepthEstimator::openClExecutionStats()
+{
+    std::lock_guard<std::mutex> registry_lock(g_openClRuntimeRegistryMutex);
+    std::vector<OpenClExecutionStats> result;
+    result.reserve(g_openClRuntimes.size());
+    for (const auto &[device_index, runtime] : g_openClRuntimes)
+    {
+        std::lock_guard<std::mutex> stats_lock(runtime->executionStatsMutex);
+        if (runtime->executionCallCount == 0)
+        {
+            continue;
+        }
+        OpenClExecutionStats stats;
+        stats.deviceIndex = device_index;
+        stats.callCount = runtime->executionCallCount;
+        stats.wallSpanMilliseconds = std::chrono::duration<double, std::milli>(
+            runtime->lastQueueFinish - runtime->firstQueueStart).count();
+        stats.queueMilliseconds = runtime->accumulatedQueueMilliseconds;
+        stats.kernelActiveMilliseconds =
+            runtime->accumulatedKernelActiveMilliseconds;
+        stats.interCallIdleMilliseconds = std::max(
+            0.0, stats.wallSpanMilliseconds - stats.queueMilliseconds);
+        stats.queueNonKernelMilliseconds = std::max(
+            0.0, stats.queueMilliseconds - stats.kernelActiveMilliseconds);
+        if (stats.wallSpanMilliseconds > 0.0)
+        {
+            stats.queueOccupancyRatio = std::clamp(
+                stats.queueMilliseconds / stats.wallSpanMilliseconds, 0.0, 1.0);
+            stats.kernelDutyRatio = std::clamp(
+                stats.kernelActiveMilliseconds / stats.wallSpanMilliseconds, 0.0, 1.0);
+        }
+        result.push_back(stats);
+    }
+    std::sort(result.begin(), result.end(), [](const OpenClExecutionStats &left,
+                                               const OpenClExecutionStats &right)
+    {
+        return left.deviceIndex < right.deviceIndex;
+    });
+    return result;
+}
+
 void PatchMatchDepthEstimator::cleanupOpenClResources()
 {
     std::lock_guard<std::mutex> lock(g_openClRuntimeRegistryMutex);
@@ -1440,6 +1502,22 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         estimate_finished - postprocess_start).count();
     const double total_ms = std::chrono::duration<double, std::milli>(
         estimate_finished - estimate_start).count();
+    {
+        std::lock_guard<std::mutex> stats_lock(runtime->executionStatsMutex);
+        if (runtime->executionCallCount == 0 ||
+            queue_wall_start < runtime->firstQueueStart)
+        {
+            runtime->firstQueueStart = queue_wall_start;
+        }
+        if (runtime->executionCallCount == 0 ||
+            queue_wall_finished > runtime->lastQueueFinish)
+        {
+            runtime->lastQueueFinish = queue_wall_finished;
+        }
+        ++runtime->executionCallCount;
+        runtime->accumulatedQueueMilliseconds += queue_ms;
+        runtime->accumulatedKernelActiveMilliseconds += kernel_active_ms;
+    }
     LOG_INFO("[MVS][PatchMatch][OpenCL] device=%s lane=%zu unified=%d retained=%.1fMiB "
              "image_cache=%d/%d %.1fMiB "
              "size=%dx%d sources=%d sample_budget=%d valid=%d/%d "

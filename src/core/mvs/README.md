@@ -108,15 +108,17 @@ live under `src/core/mvs/tests/`.
   may add one preparation lane per device. Progress reports physical GPU count separately from active host slots.
 - The OpenCL C 1.2 backend runs inverse-depth initialization, stateful plane PatchMatch, multi-source NCC,
   mask-aware sampling, depth hints, coarse-to-fine refinement, and confidence filtering. Each OpenCL GPU has one
-  command-queue/kernel lane;
-  a second host worker may prepare the next frame but cannot submit a competing kernel. Scaled float images and
+  command-queue/kernel lane. With the default two-stage host pipeline, a second worker prepares the next frame and
+  post-consistency residual hypothesis while the current queue is busy, but cannot submit a competing kernel. Scaled float images and
   all OpenCL buffers are bounded/reused, and reference patches are tiled in work-group local memory. The quality
   profiles retain the full configured depth hypothesis count plus 13 refinement samples, and the program does not
   use relaxed-math compilation. CPU packing and post-processing remain outside lane ownership. CPU execution
   remains the native C++/OpenMP implementation rather than using a CPU OpenCL device.
 - Initialization, checkerboard propagation/refinement, final uniqueness scoring, and asynchronous readback are
   submitted as one in-order event chain. Per-device logs report active kernel time, total chain time, command
-  count, and kernel duty ratio. Integrated GPUs use persistent host-allocatable input/output buffers; intermediate
+  count, and kernel duty ratio. Batch logs additionally report the queue occupancy, inter-call idle time,
+  in-queue non-kernel time, and end-to-end kernel duty across all calls, which is the relevant measurement when an
+  operating-system GPU graph appears discontinuous. Integrated GPUs use persistent host-allocatable input/output buffers; intermediate
   depth, normal, and score state is never read back between passes.
 - The Hyb2 14-frame orbital replay on AMD `gfx1036` accepted 13/14 fusion frames without relaxing the 90% fusion
   retention gate. Mean confidence was 0.8503, mean valid-within-mask ratio was 0.9615, and mean fusion retention

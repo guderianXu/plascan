@@ -431,4 +431,5 @@ TEST(DepthGenConfigTest, DefaultConfig)
     EXPECT_FLOAT_EQ(cfg.fusion.pixelThresh, fu.pixelThresh);
     EXPECT_FALSE(cfg.depthPoseRefinement.enabled);
     EXPECT_TRUE(cfg.depthPoseRefinement.emitDerivedCameraCandidates);
+    EXPECT_EQ(cfg.gpuFrameWorkerCount, 2);
 }

@@ -15,6 +15,15 @@ std::vector<OpenClDeviceInfo> PatchMatchDepthEstimator::openClDevices()
     return {};
 }
 
+void PatchMatchDepthEstimator::resetOpenClExecutionStats()
+{
+}
+
+std::vector<OpenClExecutionStats> PatchMatchDepthEstimator::openClExecutionStats()
+{
+    return {};
+}
+
 void PatchMatchDepthEstimator::cleanupOpenClResources()
 {
 }

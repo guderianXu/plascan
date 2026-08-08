@@ -5882,9 +5882,14 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
                    0.005f,
                    0.25f),
         std::clamp(_config.postConsistencyResidualConfidence, 0.0f, 1.0f)};
-    const int row_workers = consistencyRowWorkerCount(_config);
-
-    for (int frame_index = 0; frame_index < view_count; ++frame_index)
+    const int residual_frame_workers = std::clamp(
+        _config.gpuFrameWorkerCount,
+        1,
+        std::min(2, view_count));
+    const int row_workers = std::max(
+        1,
+        consistencyRowWorkerCount(_config) / residual_frame_workers);
+    parallelForRows(view_count, residual_frame_workers, [&](int frame_index)
     {
         if (_cancelled.load())
         {
@@ -5898,7 +5903,7 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
             _grayCache[static_cast<std::size_t>(frame_index)].empty())
         {
             recovery.stats.skippedReason = QStringLiteral("frame_unavailable");
-            continue;
+            return;
         }
         const Camera reference_camera = frame.cameraModel.isValid()
             ? frame.cameraModel
@@ -5977,7 +5982,7 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
                 recovery.stats.skippedReason =
                     QStringLiteral("insufficient_patchmatch_sources");
             }
-            continue;
+            return;
         }
 
         std::vector<std::vector<int>> source_groups(2);
@@ -6069,7 +6074,7 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
             recovery.stats.attempted = true;
             recovery.stats.skippedReason =
                 QStringLiteral("incomplete_hypothesis_pair");
-            continue;
+            return;
         }
         recovery.depth = frame.depthMap->clone();
         recovery.confidence = frame.confidence && !frame.confidence->empty()
@@ -6097,7 +6102,7 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
                  recovery.stats.candidatePixelCount,
                  recovery.stats.consensusCandidatePixelCount,
                  recovery.stats.recoveredPixelCount);
-    }
+    });
 
     if (_cancelled.load())
     {
@@ -9028,6 +9033,10 @@ void DepthMapGenerator::runInBackground()
                      .arg(device.computeUnits)
                      .arg(device.globalMemoryBytes / (1024ULL * 1024ULL)));
     }
+    if (physicalOpenClWorkers > 0)
+    {
+        PatchMatchDepthEstimator::resetOpenClExecutionStats();
+    }
 
     const size_t maxBufferedSaveTasks =
         adaptiveSaveQueueCapacity(initialMemory, _config, largestFrameBytes);
@@ -9584,6 +9593,24 @@ void DepthMapGenerator::runInBackground()
         {
             ++failedFrames;
         }
+    }
+    for (const OpenClExecutionStats &stats :
+         PatchMatchDepthEstimator::openClExecutionStats())
+    {
+        LOG_INFO(QStringLiteral(
+                     "[MVS][OpenCL][批次利用率] device=%1 calls=%2 wall=%3 ms "
+                     "queue=%4 ms inter_call_idle=%5 ms queue_non_kernel=%6 ms "
+                     "queue_occupancy=%7% kernel_active=%8 ms "
+                     "end_to_end_kernel_duty=%9%")
+                     .arg(stats.deviceIndex)
+                     .arg(static_cast<qulonglong>(stats.callCount))
+                     .arg(stats.wallSpanMilliseconds, 0, 'f', 1)
+                     .arg(stats.queueMilliseconds, 0, 'f', 1)
+                     .arg(stats.interCallIdleMilliseconds, 0, 'f', 1)
+                     .arg(stats.queueNonKernelMilliseconds, 0, 'f', 1)
+                     .arg(stats.queueOccupancyRatio * 100.0, 0, 'f', 1)
+                     .arg(stats.kernelActiveMilliseconds, 0, 'f', 1)
+                     .arg(stats.kernelDutyRatio * 100.0, 0, 'f', 1));
     }
     LOG_INFO(QStringLiteral(
                  "[MVS][深度估计] 批次完成: success=%1 failed=%2 skipped=%3 fusion_eligible=%4/%5 "

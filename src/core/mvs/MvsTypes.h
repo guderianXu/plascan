@@ -235,7 +235,7 @@ struct DepthGenConfig
     int   configuredSourceViewCount = 0; ///< 场景自适应限制前的源视角请求；0 表示与 numSourceViews 相同
     int   totalCpuThreadBudget  = 0;     ///< 独占 CPU 后处理阶段的总线程预算；0 表示由帧调度配置推导
     int   cpuWorkerCount        = 1;     ///< 每个 CPU 帧 worker 内部的像素级线程数
-    int   gpuFrameWorkerCount   = 1;     ///< GPU 主机准备槽下限；同一设备的 kernel 仍由独立执行槽串行化
+    int   gpuFrameWorkerCount   = 2;     ///< GPU 主机准备槽下限；默认双缓冲，设备 kernel 仍单路串行
     int   cpuFrameWorkerCount   = 1;     ///< CPU 路径的帧级并发数
     float zNearScale            = 0.75f;  ///< IQR 内 2%ile × 0.75（原0.5太宽致PatchMatch难收敛）
     float zFarScale             = 1.5f;   ///< IQR 内 98%ile × 1.5（原2.0产生6x搜索比，现3x更合理）
