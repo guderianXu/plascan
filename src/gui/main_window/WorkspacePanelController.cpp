@@ -148,12 +148,6 @@ void WorkspacePanelController::setPanelVisible(WorkspacePanelId id,
     }
 }
 
-bool WorkspacePanelController::isPanelVisible(WorkspacePanelId id) const
-{
-    const Entry *entry = findEntry(id);
-    return entry && entry->widget && !entry->widget->isHidden();
-}
-
 bool WorkspacePanelController::registerWidget(WorkspacePanelId id,
                                               QAction *action,
                                               QWidget *widget)

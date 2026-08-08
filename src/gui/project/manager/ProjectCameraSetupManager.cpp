@@ -6,6 +6,7 @@
 #include "ProjectCameraImportService.h"
 #include "ProjectCameraInitialization.h"
 #include "ProjectResultRecords.h"
+#include "ProjectOpenGuard.h"
 #include "ProjectSfmWorkflow.h"
 #include "GuiTaskRunner.h"
 #include "Logger.h"
@@ -51,18 +52,11 @@ ProjectCameraSetupManager::ProjectCameraSetupManager(ProjectManager *owner,
             _owner, &ProjectManager::matchPairReady);
 }
 
-bool ProjectCameraSetupManager::ensureProjectOpen(const QString &message,
-                                                  const QString &title) const
-{
-    if (_projectData && _projectData->hasProject()) return true;
-    QMessageBox::warning(_parentWidget, title, message);
-    return false;
-}
-
 // ── 单张相机导入 ──────────────────────────────────────────────────────────────
 bool ProjectCameraSetupManager::importCameraForImage(const QString &imagePath)
 {
-    if (!ensureProjectOpen(QStringLiteral("请先打开或创建项目"))) return false;
+    if (!xjw::gui::project::requireOpenProject(
+            _projectData, _parentWidget, QStringLiteral("请先打开或创建项目"))) return false;
 
     const QString dir = _owner->getLastUsedDir(QStringLiteral("camera_tsai"));
     const QString tsaiPath = QFileDialog::getOpenFileName(
@@ -99,7 +93,8 @@ bool ProjectCameraSetupManager::importCameraForImage(const QString &imagePath)
 // ── 批量相机导入 ──────────────────────────────────────────────────────────────
 bool ProjectCameraSetupManager::importCamerasByFilenameBatch()
 {
-    if (!ensureProjectOpen(QStringLiteral("请先打开或创建项目"))) return false;
+    if (!xjw::gui::project::requireOpenProject(
+            _projectData, _parentWidget, QStringLiteral("请先打开或创建项目"))) return false;
 
     const QString dir = _owner->getLastUsedDir(QStringLiteral("camera_tsai"));
     const QString folder = QFileDialog::getExistingDirectory(
@@ -168,7 +163,8 @@ bool ProjectCameraSetupManager::importCamerasByFilenameBatch()
 // ── 相机内参初始化（EXIF / 默认焦距）────────────────────────────────────────
 bool ProjectCameraSetupManager::initializeCamerasFromExifOrDefault(const QJsonObject &settings)
 {
-    if (!ensureProjectOpen(QStringLiteral("请先打开或创建项目"))) return false;
+    if (!xjw::gui::project::requireOpenProject(
+            _projectData, _parentWidget, QStringLiteral("请先打开或创建项目"))) return false;
 
     QString targetErr;
     const QStringList targetImages = resolveInitTargets(_projectData, settings, &targetErr);
@@ -275,7 +271,8 @@ bool ProjectCameraSetupManager::initializeCamerasFromExifOrDefault(const QJsonOb
 // ── 相机内参初始化（手工内参）────────────────────────────────────────────────
 bool ProjectCameraSetupManager::initializeCamerasFromIntrinsics(const QJsonObject &settings)
 {
-    if (!ensureProjectOpen(QStringLiteral("请先打开或创建项目"))) return false;
+    if (!xjw::gui::project::requireOpenProject(
+            _projectData, _parentWidget, QStringLiteral("请先打开或创建项目"))) return false;
 
     QString targetErr;
     const QStringList targetImages = resolveInitTargets(_projectData, settings, &targetErr);
@@ -387,7 +384,8 @@ bool ProjectCameraSetupManager::initializeCamerasFromIntrinsics(const QJsonObjec
 // ── 使用 SFM 初始化相机位姿 ─────────────────────────────────────────────────
 bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &settings)
 {
-    if (!ensureProjectOpen(QStringLiteral("请先打开或创建项目"))) return false;
+    if (!xjw::gui::project::requireOpenProject(
+            _projectData, _parentWidget, QStringLiteral("请先打开或创建项目"))) return false;
 
     const int mode = settings.value(QStringLiteral("mode")).toInt();
     if (mode != 0 && mode != 1)

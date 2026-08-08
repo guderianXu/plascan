@@ -14,6 +14,7 @@
 #include "ProjectDashboardSummary.h"
 #include "ProjectReferenceDatasets.h"
 #include "ProjectReferenceTerrainBa.h"
+#include "ProjectBundleAdjustWorkflow.h"
 #include "ProjectCameraIO.h"
 #include "project/ProjectMatchCatalog.h"
 #include "project/ProjectMetadata.h"
@@ -522,29 +523,6 @@ TEST(DepthOverlayDataTest, DistinguishesMissingArtifactFromUncomputedLevel)
     EXPECT_EQ(status.code,
               xjw::gui::views::DepthOverlayAvailabilityCode::ArtifactMissing);
     EXPECT_TRUE(status.reason.contains(QStringLiteral("不存在")));
-}
-
-TEST(DepthOverlayControllerTest, NewRequestInvalidatesEarlierGeneration)
-{
-    const QJsonObject record{{QStringLiteral("ref_image"), QStringLiteral("E:/images/a.png")},
-                             {QStringLiteral("raw_depth_path"), QStringLiteral("final.bin")},
-                             {QStringLiteral("valid_mask_path"), QStringLiteral("final_mask.png")}};
-    xjw::gui::widgets::DepthOverlayController controller;
-    controller.setProjectMetadata(
-        QJsonObject{{QStringLiteral("depth_map_results"), QJsonArray{record}}});
-
-    controller.request(QStringLiteral("E:/images/a.png"),
-                       xjw::gui::views::DepthOverlayLevel::Final,
-                       xjw::gui::views::DepthOverlayRenderOptions{});
-    const quint64 first_generation = controller.requestGeneration();
-    controller.request(QStringLiteral("E:/images/a.png"),
-                       xjw::gui::views::DepthOverlayLevel::Level1,
-                       xjw::gui::views::DepthOverlayRenderOptions{});
-    const quint64 second_generation = controller.requestGeneration();
-
-    EXPECT_GT(second_generation, first_generation);
-    EXPECT_FALSE(controller.isCurrentGeneration(first_generation));
-    EXPECT_TRUE(controller.isCurrentGeneration(second_generation));
 }
 
 TEST(DepthOverlayControllerTest, CacheKeyIncludesLevelOpacityAndIntensity)
@@ -1289,6 +1267,20 @@ QJsonObject sparseResultRecord(int index,
     return xjw::gui::project::mergeSparseQualityIntoRecord(record, quality);
 }
 
+const xjw::gui::project::ProjectDashboardStep *dashboardStepById(
+    const xjw::gui::project::ProjectDashboardSummary &summary,
+    const QString &id)
+{
+    for (const auto &step : summary.workflowSteps)
+    {
+        if (step.id == id)
+        {
+            return &step;
+        }
+    }
+    return nullptr;
+}
+
 } // namespace
 
 TEST(ProjectSupportUtilsTest, CollectMatchedPairsUsesFilenameWithSuffix)
@@ -1328,13 +1320,14 @@ TEST(ProjectDashboardSummaryTest, EmptyMetadataShowsMissingReadOnlyWorkflow)
     EXPECT_EQ(summary.referenceDatasetCount, 0);
     EXPECT_GE(summary.workflowSteps.size(), 8);
 
-    xjw::gui::project::ProjectDashboardStep step;
-    ASSERT_TRUE(xjw::gui::project::projectDashboardStepById(summary, QStringLiteral("images"), &step));
-    EXPECT_EQ(step.state, xjw::gui::project::ProjectDashboardStepState::Missing);
-    EXPECT_TRUE(step.detail.contains(QStringLiteral("导入")));
+    const auto *image_step = dashboardStepById(summary, QStringLiteral("images"));
+    ASSERT_NE(image_step, nullptr);
+    EXPECT_EQ(image_step->state, xjw::gui::project::ProjectDashboardStepState::Missing);
+    EXPECT_TRUE(image_step->detail.contains(QStringLiteral("导入")));
 
-    ASSERT_TRUE(xjw::gui::project::projectDashboardStepById(summary, QStringLiteral("reference_lidar"), &step));
-    EXPECT_EQ(step.state, xjw::gui::project::ProjectDashboardStepState::Missing);
+    const auto *reference_step = dashboardStepById(summary, QStringLiteral("reference_lidar"));
+    ASSERT_NE(reference_step, nullptr);
+    EXPECT_EQ(reference_step->state, xjw::gui::project::ProjectDashboardStepState::Missing);
 }
 
 TEST(ProjectDashboardSummaryTest, SummarizesWorkflowReportsAndReferenceDatasets)
@@ -1404,14 +1397,15 @@ TEST(ProjectDashboardSummaryTest, SummarizesWorkflowReportsAndReferenceDatasets)
     EXPECT_EQ(summary.qualityReportCount, 2);
     EXPECT_EQ(summary.qualityReports.size(), 2);
 
-    xjw::gui::project::ProjectDashboardStep step;
-    ASSERT_TRUE(xjw::gui::project::projectDashboardStepById(summary, QStringLiteral("sparse_ba"), &step));
-    EXPECT_EQ(step.state, xjw::gui::project::ProjectDashboardStepState::Complete);
-    EXPECT_TRUE(step.detail.contains(QStringLiteral("BA")));
+    const auto *sparse_step = dashboardStepById(summary, QStringLiteral("sparse_ba"));
+    ASSERT_NE(sparse_step, nullptr);
+    EXPECT_EQ(sparse_step->state, xjw::gui::project::ProjectDashboardStepState::Complete);
+    EXPECT_TRUE(sparse_step->detail.contains(QStringLiteral("BA")));
 
-    ASSERT_TRUE(xjw::gui::project::projectDashboardStepById(summary, QStringLiteral("reference_lidar"), &step));
-    EXPECT_EQ(step.state, xjw::gui::project::ProjectDashboardStepState::Complete);
-    EXPECT_TRUE(step.detail.contains(QStringLiteral("BA约束")));
+    const auto *reference_step = dashboardStepById(summary, QStringLiteral("reference_lidar"));
+    ASSERT_NE(reference_step, nullptr);
+    EXPECT_EQ(reference_step->state, xjw::gui::project::ProjectDashboardStepState::Complete);
+    EXPECT_TRUE(reference_step->detail.contains(QStringLiteral("BA约束")));
 }
 
 TEST(ProjectDashboardSummaryTest, DoesNotMutateInputMetadata)
@@ -2424,7 +2418,7 @@ TEST(GuiAsyncLifetimeTest, DepthMapGeneratorOwnsAndJoinsBackgroundFuture)
 
 TEST(GuiAsyncLifetimeTest, CameraSceneAsyncLoadCallbacksUseQPointerGuards)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
     const auto blockBetween = [&source](const QString &begin, const QString &finish) {
@@ -2523,8 +2517,8 @@ TEST(CodeStyleTest, GuiSupportFilesUseSpacesInsteadOfTabs)
 {
     const QStringList files = {
         QStringLiteral("src/gui/config/settings/GuiSettingsStore.h"),
-        QStringLiteral("src/gui/config/settings/ProjectDialogJsonSettingBase.cpp"),
-        QStringLiteral("src/gui/config/settings/ProjectDialogJsonSettingBase.h"),
+        QStringLiteral("src/gui/config/settings/DialogSettingStore.cpp"),
+        QStringLiteral("src/gui/config/settings/DialogSettingStore.h"),
     };
 
     for (const QString &path : files)
@@ -2537,28 +2531,21 @@ TEST(CodeStyleTest, GuiSupportFilesUseSpacesInsteadOfTabs)
 
 TEST(CodeStyleTest, SettingsFilesUseLowerCamelPrivateMemberNames)
 {
-    const QString projectDialogHeader =
-        readProjectSourceFile(QStringLiteral("src/gui/config/settings/ProjectDialogJsonSettingBase.h"));
     const QString dialogStoreHeader =
         readProjectSourceFile(QStringLiteral("src/gui/config/settings/DialogSettingStore.h"));
-    const QString projectDialogSource =
-        readProjectSourceFile(QStringLiteral("src/gui/config/settings/ProjectDialogJsonSettingBase.cpp"));
     const QString dialogStoreSource =
         readProjectSourceFile(QStringLiteral("src/gui/config/settings/DialogSettingStore.cpp"));
-    ASSERT_FALSE(projectDialogHeader.isEmpty());
     ASSERT_FALSE(dialogStoreHeader.isEmpty());
-    ASSERT_FALSE(projectDialogSource.isEmpty());
     ASSERT_FALSE(dialogStoreSource.isEmpty());
 
-    EXPECT_TRUE(projectDialogHeader.contains(QStringLiteral("QString _plascanPath;")));
-    EXPECT_FALSE(projectDialogHeader.contains(QStringLiteral("m_plascanPath")));
-    EXPECT_FALSE(projectDialogSource.contains(QStringLiteral("m_plascanPath")));
-
     EXPECT_TRUE(dialogStoreHeader.contains(QStringLiteral("QString _dialogKey;")));
+    EXPECT_TRUE(dialogStoreHeader.contains(QStringLiteral("QString _plascanPath;")));
     EXPECT_TRUE(dialogStoreHeader.contains(QStringLiteral("return _dialogKey;")));
     EXPECT_TRUE(dialogStoreSource.contains(QStringLiteral(", _dialogKey(dialogKey.trimmed())")));
     EXPECT_FALSE(dialogStoreHeader.contains(QStringLiteral("m_dialogKey")));
     EXPECT_FALSE(dialogStoreSource.contains(QStringLiteral("m_dialogKey")));
+    EXPECT_FALSE(dialogStoreHeader.contains(QStringLiteral("m_plascanPath")));
+    EXPECT_FALSE(dialogStoreSource.contains(QStringLiteral("m_plascanPath")));
 }
 
 TEST(CodeStyleTest, ProjectConfigManagersUseLowerCamelPrivateMemberNames)
@@ -2610,9 +2597,9 @@ TEST(CodeStyleTest, AppConfigManagerUsesLowerCamelPrivateMemberNames)
     EXPECT_TRUE(header.contains(QStringLiteral("return &_windowState;")));
     EXPECT_TRUE(header.contains(QStringLiteral("return &_recentProjects;")));
     EXPECT_TRUE(header.contains(QStringLiteral("return &_fileDialogs;")));
-    EXPECT_TRUE(source.contains(QStringLiteral(", _windowState(this)")));
-    EXPECT_TRUE(source.contains(QStringLiteral(", _recentProjects(this)")));
-    EXPECT_TRUE(source.contains(QStringLiteral(", _fileDialogs(this)")));
+    EXPECT_FALSE(source.contains(QStringLiteral("_windowState(this)")));
+    EXPECT_FALSE(source.contains(QStringLiteral("_recentProjects(this)")));
+    EXPECT_FALSE(source.contains(QStringLiteral("_fileDialogs(this)")));
 
     const QStringList oldNames = {
         QStringLiteral("m_windowState"),
@@ -3133,9 +3120,6 @@ TEST(CodeStyleTest, ObservationNetworkViewUsesLowerCamelPrivateMemberNames)
         QStringLiteral("QVector<int> _visibleEdgeIndices;"),
         QStringLiteral("QVector<int> _visibleLabelIndices;"),
         QStringLiteral("QVector<QVector<int>> _nodeEdgeAdjacency;"),
-        QStringLiteral("QTimer *_forceTimer = nullptr;"),
-        QStringLiteral("int _forceIter = 0;"),
-        QStringLiteral("double _temp = 0.0;"),
         QStringLiteral("bool _autoFitPending = false;"),
         QStringLiteral("int _selectedNodeIndex = -1;"),
     };
@@ -3324,11 +3308,8 @@ TEST(CodeStyleTest, LayerRendererUsesLowerCamelPrivateMemberNames)
         QStringLiteral("QGraphicsScene *_scene{};"),
         QStringLiteral("QList<QGraphicsPixmapItem *> _layers{};"),
         QStringLiteral("QList<QGraphicsItem *> _featureItems{};"),
-        QStringLiteral("QList<QGraphicsItem *> _matchItems{};"),
         QStringLiteral("QRectF _imageBounds{};"),
-        QStringLiteral("QString _currentProjectPath;"),
         QStringLiteral("FeatureDisplayOptions _featureOpts;"),
-        QStringLiteral("MatchDisplayOptions _matchOpts;"),
     };
     for (const QString &expectedMember : expectedMembers)
     {
@@ -3358,8 +3339,12 @@ TEST(CodeStyleTest, LayerRendererUsesLowerCamelPrivateMemberNames)
 
 TEST(CodeStyleTest, CameraModel3DDialogUsesLowerCamelPrivateMemberNames)
 {
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString header =
+        readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"))
+        + readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
+    const QString source =
+        readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"))
+        + readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
 
@@ -4345,7 +4330,6 @@ TEST(CodeStyleTest, TextureMappingDialogUsesLowerCamelPrivateMemberNames)
 
     EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_blendCombo = nullptr;")));
     EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_texSizeCombo = nullptr;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_uvMethodCombo = nullptr;")));
     EXPECT_TRUE(header.contains(QStringLiteral("QCheckBox *_colorCorrCheck = nullptr;")));
     EXPECT_TRUE(header.contains(QStringLiteral("QCheckBox *_ghostFilterCheck = nullptr;")));
     EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_seamsMarginSpin = nullptr;")));
@@ -5171,6 +5155,102 @@ TEST(ProjectWorkflowReportsTest, PreservesCompleteCalibrationSnapshots)
     EXPECT_DOUBLE_EQ(comparison.value(QStringLiteral("k1_before")).toDouble(), -0.01);
     EXPECT_DOUBLE_EQ(comparison.value(QStringLiteral("k1_after")).toDouble(), -0.015);
     EXPECT_DOUBLE_EQ(comparison.value(QStringLiteral("p2_before")).toDouble(), 0.0002);
+}
+
+TEST(ProjectBundleAdjustWorkflowTest, BuildsActionableReferenceTerrainPreview)
+{
+    const QJsonObject terrainSummary{
+        {QStringLiteral("enabled"), true},
+        {QStringLiteral("path"), QStringLiteral("D:/reference/dem.tif")},
+        {QStringLiteral("input_tracks"), 120},
+        {QStringLiteral("associated_tracks"), 96},
+        {QStringLiteral("rms_before_m"), 0.42}};
+    const QJsonObject files{
+        {QStringLiteral("run_json"), QStringLiteral("D:/output/ba_run_summary.json")},
+        {QStringLiteral("camera_csv"), QStringLiteral("D:/output/ba_camera_metrics.csv")}};
+    const QJsonObject baResult{
+        {QStringLiteral("track_count"), 120},
+        {QStringLiteral("optimized_count"), 100},
+        {QStringLiteral("refined_camera_count"), 3},
+        {QStringLiteral("mean_rms_before"), 2.5},
+        {QStringLiteral("mean_rms_after"), 0.75},
+        {QStringLiteral("ba_requested_backend"), QStringLiteral("auto")},
+        {QStringLiteral("ba_used_backend"), QStringLiteral("ceres_cpu")},
+        {QStringLiteral("ba_valid_track_ratio"), 0.8},
+        {QStringLiteral("ba_total_seconds"), 1.25},
+        {QStringLiteral("reference_terrain_prior_summary"), terrainSummary},
+        {QStringLiteral("output_dir"), QStringLiteral("D:/output")},
+        {QStringLiteral("files"), files}};
+
+    const auto presentation =
+        xjw::gui::project::buildBundleAdjustPreviewPresentation(baResult, 4);
+
+    EXPECT_FALSE(presentation.qualityWarning);
+    EXPECT_TRUE(presentation.summaryText.contains(QStringLiteral("4 台相机")));
+    EXPECT_TRUE(presentation.summaryText.contains(QStringLiteral("2.500000 px → 0.750000 px")));
+    EXPECT_TRUE(presentation.summaryText.contains(QStringLiteral("尚未写回项目")));
+    EXPECT_TRUE(presentation.detailedText.contains(QStringLiteral("计算后端: auto → ceres_cpu")));
+    EXPECT_TRUE(presentation.detailedText.contains(QStringLiteral("参考 DEM 关联: 96 / 120")));
+    EXPECT_TRUE(presentation.detailedText.contains(QStringLiteral("D:/output/ba_run_summary.json")));
+}
+
+TEST(ProjectBundleAdjustWorkflowTest, FlagsRegressedPreviewQuality)
+{
+    const QJsonObject baResult{
+        {QStringLiteral("mean_rms_before"), 0.8},
+        {QStringLiteral("mean_rms_after"), 1.1}};
+
+    const auto presentation =
+        xjw::gui::project::buildBundleAdjustPreviewPresentation(baResult, 2);
+
+    EXPECT_TRUE(presentation.qualityWarning);
+}
+
+TEST(ProjectBundleAdjustWorkflowTest, CommitUpdatesCameraAndStoresCompactResult)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString projectPath = tempDir.filePath(QStringLiteral("ba_commit.plascan"));
+    const QString sourceImagePath = tempDir.filePath(QStringLiteral("IMG_001.JPG"));
+    QFile imageFile(sourceImagePath);
+    ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
+    imageFile.write("jpg");
+    imageFile.close();
+
+    ProjectData projectData;
+    ASSERT_TRUE(projectData.createProject(projectPath, QStringLiteral("ba_commit")));
+    ASSERT_TRUE(projectData.addImages(QStringList{sourceImagePath}));
+    const QStringList projectImages = projectData.getAllImages();
+    ASSERT_EQ(projectImages.size(), 1);
+
+    const QJsonObject adjustedCamera{
+        {QStringLiteral("model"), QStringLiteral("pinhole")},
+        {QStringLiteral("aligned"), true},
+        {QStringLiteral("fu"), 1200.0},
+        {QStringLiteral("fv"), 1200.0},
+        {QStringLiteral("C"), QJsonArray{1.0, 2.0, 3.0}}};
+    const QJsonObject baResult{
+        {QStringLiteral("track_count"), 20},
+        {QStringLiteral("mean_rms_after"), 0.6},
+        {QStringLiteral("point_preview"), QJsonArray{QJsonObject{{QStringLiteral("index"), 1}}}}};
+
+    const auto commitResult = xjw::gui::project::commitBundleAdjustPreview(
+        &projectData,
+        QMap<QString, QJsonObject>{{projectImages.front(), adjustedCamera}},
+        baResult);
+
+    ASSERT_TRUE(commitResult.success) << qPrintable(commitResult.errorMessage);
+    EXPECT_EQ(commitResult.updatedCameraCount, 1);
+    const QJsonObject storedImage =
+        projectData.coreFilesMeta().value(QStringLiteral("images")).toArray().at(0).toObject();
+    EXPECT_DOUBLE_EQ(storedImage.value(QStringLiteral("camera")).toObject()
+                         .value(QStringLiteral("fu")).toDouble(),
+                     1200.0);
+    const QJsonArray storedResults = projectData.getBundleAdjustResults();
+    ASSERT_EQ(storedResults.size(), 1);
+    EXPECT_EQ(storedResults.at(0).toObject().value(QStringLiteral("track_count")).toInt(), 20);
+    EXPECT_FALSE(storedResults.at(0).toObject().contains(QStringLiteral("point_preview")));
 }
 
 TEST(MainMenuTest, ToolsMenuExposesGenerateMaskAction)
@@ -6991,7 +7071,6 @@ TEST(MainMenuTest, ModelMenuExposesMetashapeStyleDisplayHideActions)
 
     ASSERT_NE(menu.toggleGizmoAction(), nullptr);
     ASSERT_NE(menu.toggleCamerasAction(), nullptr);
-    ASSERT_NE(menu.toggleDependentCamerasAction(), nullptr);
     ASSERT_NE(menu.toggleCameraThumbnailsAction(), nullptr);
     ASSERT_NE(menu.toggleCameraImagesAction(), nullptr);
     ASSERT_NE(menu.showCameraImagesInForegroundAction(), nullptr);
@@ -7000,7 +7079,6 @@ TEST(MainMenuTest, ModelMenuExposesMetashapeStyleDisplayHideActions)
 
     EXPECT_TRUE(displayMenu->actions().contains(menu.toggleGizmoAction()));
     EXPECT_TRUE(displayMenu->actions().contains(menu.toggleCamerasAction()));
-    EXPECT_TRUE(displayMenu->actions().contains(menu.toggleDependentCamerasAction()));
     EXPECT_TRUE(displayMenu->actions().contains(menu.toggleCameraThumbnailsAction()));
     QMenu *imageMenu = findSubMenuByTitle(displayMenu, QStringLiteral("显示图像"));
     ASSERT_NE(imageMenu, nullptr);
@@ -7012,10 +7090,6 @@ TEST(MainMenuTest, ModelMenuExposesMetashapeStyleDisplayHideActions)
     EXPECT_EQ(menu.toggleGizmoAction()->text(), QStringLiteral("显示轨迹球"));
     EXPECT_TRUE(menu.toggleGizmoAction()->isCheckable());
     EXPECT_TRUE(menu.toggleGizmoAction()->isChecked());
-
-    EXPECT_EQ(menu.toggleDependentCamerasAction()->text(), QStringLiteral("显示从属相机"));
-    EXPECT_FALSE(menu.toggleDependentCamerasAction()->isEnabled());
-    EXPECT_TRUE(menu.toggleDependentCamerasAction()->toolTip().contains(QStringLiteral("暂未建立模型与从属相机关系")));
 
     EXPECT_EQ(menu.toggleCameraThumbnailsAction()->text(), QStringLiteral("显示缩略图"));
     EXPECT_TRUE(menu.toggleCameraThumbnailsAction()->isCheckable());
@@ -7451,10 +7525,8 @@ TEST(MainMenuTest, ToolbarExposesMetashapeStyleCameraVisibilityButton)
     EXPECT_FALSE(cameraButton->icon().isNull());
 
     ASSERT_NE(menu.toggleCameraThumbnailsAction(), nullptr);
-    ASSERT_NE(menu.toggleDependentCamerasAction(), nullptr);
     ASSERT_NE(menu.toggleLocalAxesAction(), nullptr);
     EXPECT_TRUE(cameraButton->menu()->actions().contains(menu.toggleCameraThumbnailsAction()));
-    EXPECT_TRUE(cameraButton->menu()->actions().contains(menu.toggleDependentCamerasAction()));
     EXPECT_TRUE(cameraButton->menu()->actions().contains(menu.toggleLocalAxesAction()));
 
     EXPECT_EQ(menu.toggleLocalAxesAction()->text(), QStringLiteral("显示本地轴"));
@@ -7562,8 +7634,8 @@ TEST(MainMenuTest, WindowMenuExposesCheckedHenanUniversityBrandAction)
 
 TEST(CameraSceneWidgetTest, UsesQrhiWidgetWithVulkanBackend)
 {
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
 
@@ -7582,7 +7654,7 @@ TEST(CameraSceneWidgetTest, UsesQrhiWidgetWithVulkanBackend)
 
 TEST(CameraSceneWidgetTest, QrhiWidgetDoesNotPaintDirectlyWithQPainter)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
     auto cameraSceneFunctionBody = [](const QString &text, const QString &signature)
@@ -7621,8 +7693,8 @@ TEST(CameraSceneWidgetTest, QrhiWidgetDoesNotPaintDirectlyWithQPainter)
 
 TEST(CameraSceneWidgetTest, RemovesLegacyRenderingDependencies)
 {
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const QString guiCmake = readProjectSourceFile(QStringLiteral("src/gui/CMakeLists.txt"));
     const QString packages = readProjectSourceFile(QStringLiteral("cmake/PlascanPackages.cmake"));
     ASSERT_FALSE(header.isEmpty());
@@ -7670,9 +7742,9 @@ TEST(CameraSceneWidgetTest, RegistersQrhiShaderResources)
 TEST(CameraSceneWidgetTest, PointCloudRenderingStaysOnVulkan)
 {
     const QString header = readProjectSourceFile(
-        QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
+        QStringLiteral("src/gui/views/CameraSceneWidget.h"));
     const QString source = readProjectSourceFile(
-        QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+        QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const QString pointVertexShader = readProjectSourceFile(
         QStringLiteral("src/gui/shaders/camera_scene_point.vert"));
     const QString pointFragmentShader = readProjectSourceFile(
@@ -7734,7 +7806,7 @@ TEST(CameraSceneWidgetTest, PointCloudRenderingStaysOnVulkan)
 TEST(CameraSceneWidgetTest, ModelGizmoUsesReadableScreenRadius)
 {
     const QString source = readProjectSourceFile(
-        QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+        QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(source.contains(QStringLiteral("qMin(width(), height()) * 0.16")));
@@ -7744,8 +7816,8 @@ TEST(CameraSceneWidgetTest, ModelGizmoUsesReadableScreenRadius)
 
 TEST(CameraSceneWidgetTest, ModelViewDoesNotDrawInvalidWorldOriginLabel)
 {
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const QString mainWindowSource = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
@@ -7759,20 +7831,20 @@ TEST(CameraSceneWidgetTest, ModelViewDoesNotDrawInvalidWorldOriginLabel)
 
 TEST(CameraSceneWidgetTest, CameraOverlayUsesMetashapeStyleImagePlanes)
 {
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(header.contains(QStringLiteral(
         "float cameraImagePlaneHalfExtent(const CameraPose &pose,")));
     EXPECT_TRUE(header.contains(QStringLiteral("void drawFloorPivotCross(QPainter &painter)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("pose, matrices.modelView")));
+    EXPECT_TRUE(source.contains(QStringLiteral("pose, cameraMatrices.modelView")));
     EXPECT_TRUE(source.contains(QStringLiteral("cameraDirectionLeaderSegment(")));
     EXPECT_TRUE(source.contains(QStringLiteral("_thumbnailPipeline.leaderPipeline")));
     EXPECT_TRUE(source.contains(QStringLiteral("QRhiVertexInputBinding::PerInstance")));
     EXPECT_FALSE(source.contains(QStringLiteral("drawCameraDirectionArrow")));
-    EXPECT_TRUE(source.contains(QStringLiteral("cameraImagePlaneCorners")));
+    EXPECT_TRUE(source.contains(QStringLiteral("calibratedImagePlaneCorners")));
     EXPECT_TRUE(source.contains(QStringLiteral("drawCameraThumbnails(cb")));
     EXPECT_TRUE(source.contains(QStringLiteral("_thumbnailPipeline.pipeline->setDepthTest(true)")));
     EXPECT_FALSE(source.contains(QStringLiteral("painter.drawPolygon(imagePlane)")));
@@ -7975,10 +8047,8 @@ TEST(ProjectOpenResponsivenessTest, MainWindowDefersMetadataWidgetRefresh)
         << "Metadata refresh should be a named queued helper, not direct widget slots.";
 
     const int setupStart = source.indexOf(QStringLiteral("void MainWindow::setupProjectManager"));
-    const int setupEnd = source.indexOf(QStringLiteral("new ProjectTaskStatusController"), setupStart);
     ASSERT_GE(setupStart, 0);
-    ASSERT_GT(setupEnd, setupStart);
-    const QString setupBlock = source.mid(setupStart, setupEnd - setupStart);
+    const QString setupBlock = source.mid(setupStart);
 
     EXPECT_TRUE(setupBlock.contains(QStringLiteral("scheduleProjectMetadataRefresh(meta)")));
     EXPECT_FALSE(setupBlock.contains(
@@ -8010,11 +8080,10 @@ TEST(CodeStyleTest, MenuWorkflowControllerUsesLowerCamelPrivateMemberNames)
     ASSERT_FALSE(source.isEmpty());
 
     const QStringList expectedMembers = {
-        QStringLiteral("DialogSettingStore *_featurePointVisualizationSetting = nullptr;"),
-        QStringLiteral("DialogSettingStore *_baSetting = nullptr;"),
         QStringLiteral("DialogSettingStore *_mapSetting = nullptr;"),
-        QStringLiteral("DialogSettingStore *_dcSetting = nullptr;"),
         QStringLiteral("DialogSettingStore *_aerialTriangulationSetting = nullptr;"),
+        QStringLiteral("DialogSettingStore *_workflowSettingsStore = nullptr;"),
+        QStringLiteral("FeatureVisualizationController *_featureVisualizationController = nullptr;"),
         QStringLiteral("QPointer<QMainWindow> _mainWindow;"),
         QStringLiteral("ProjectManager *_projectManager = nullptr;"),
     };
@@ -8169,7 +8238,7 @@ TEST(AerialTriangulationDialogTest, UsesMetashapeStyleDefaultsAndCollectsSetting
     ASSERT_NE(advancedContent, nullptr);
 
     EXPECT_EQ(dialog.windowTitle(), QStringLiteral("空中三角测量"));
-    EXPECT_TRUE(statusLabel->isHidden());
+    EXPECT_FALSE(statusLabel->isHidden());
     ASSERT_EQ(qualityCombo->count(), 5);
     EXPECT_EQ(qualityCombo->itemText(0), QStringLiteral("最高"));
     EXPECT_EQ(qualityCombo->itemData(0).toString(), QStringLiteral("highest"));
@@ -9431,18 +9500,24 @@ TEST(MainWindowProgressTest, FeatureMatchProgressUsesTaskEstimateAndClampsDispla
 TEST(MainWindowCancelTest, FeatureMatchCancelGivesImmediateFeedbackAndEmitsSignal)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.h"));
+    const QString controllerHeader = readProjectSourceFile(
+        QStringLiteral("src/gui/main_window/ProjectTaskStatusController.h"));
     const QString source = readProjectSourceFile(
         QStringLiteral("src/gui/main_window/ProjectTaskStatusController.cpp"));
     const QString bindings = readProjectSourceFile(
         QStringLiteral("src/gui/main_window/MainWindowProjectBindings.cpp"));
     ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(controllerHeader.isEmpty());
     ASSERT_FALSE(source.isEmpty());
 
-    EXPECT_TRUE(header.contains(QStringLiteral("sgCancelRequested")));
+    EXPECT_FALSE(header.contains(QStringLiteral("sgCancelRequested")));
+    EXPECT_TRUE(controllerHeader.contains(QStringLiteral("tiePointCancelRequested")));
     EXPECT_TRUE(source.contains(QStringLiteral("正在取消特征匹配")));
     EXPECT_TRUE(source.contains(QStringLiteral("_tiePointStatus")));
     EXPECT_TRUE(source.contains(QStringLiteral("TaskStatusWidget::cancelRequested")));
-    EXPECT_TRUE(bindings.contains(QStringLiteral("&MainWindow::sgCancelRequested")));
+    EXPECT_TRUE(bindings.contains(QStringLiteral(
+        "&ProjectTaskStatusController::tiePointCancelRequested")));
+    EXPECT_TRUE(bindings.contains(QStringLiteral("&TiePointWorkflowController::cancel")));
 }
 
 TEST(BundleAdjustStatusBarTest, UsesAtProgressWidgetWithCancelableCoreOptimization)
@@ -9735,40 +9810,35 @@ TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesOverlayDrawingToDedic
 
     EXPECT_TRUE(rendererSource.contains(QStringLiteral("#include \"LayerOverlayItems.h\"")));
     EXPECT_TRUE(rendererSource.contains(QStringLiteral("createFeatureOverlayItem(keypoints, _featureOpts, _imageBounds)")));
-    EXPECT_TRUE(rendererSource.contains(QStringLiteral("createMatchOverlayItems(ptsA, ptsB, _matchOpts, bOffsetX)")));
     EXPECT_FALSE(rendererSource.contains(QStringLiteral("class BatchedFeatureOverlayItem")))
         << "Feature overlay item implementation should stay out of LayerRenderer.";
     EXPECT_FALSE(rendererSource.contains(QStringLiteral("void drawKeypoint(")))
         << "Keypoint painting details should stay out of LayerRenderer.";
-    EXPECT_FALSE(rendererSource.contains(QStringLiteral("addEllipse(a.x()-3")))
-        << "Match endpoint item construction should stay out of LayerRenderer.";
-    EXPECT_FALSE(rendererSource.contains(QStringLiteral("addLine(a.x(), a.y()")))
-        << "Match line item construction should stay out of LayerRenderer.";
-
     EXPECT_TRUE(overlayHeader.contains(QStringLiteral("createFeatureOverlayItem")));
-    EXPECT_TRUE(overlayHeader.contains(QStringLiteral("createMatchOverlayItems")));
     EXPECT_TRUE(overlaySource.contains(QStringLiteral("class BatchedFeatureOverlayItem")));
-    EXPECT_TRUE(overlaySource.contains(QStringLiteral("new QGraphicsEllipseItem(a.x() - 3")));
-    EXPECT_TRUE(overlaySource.contains(QStringLiteral("new QGraphicsLineItem(a.x(), a.y()")));
+    EXPECT_FALSE(overlayHeader.contains(QStringLiteral("createMatchOverlayItems")));
+    EXPECT_FALSE(overlaySource.contains(QStringLiteral("createMatchOverlayItems")));
 }
 
 TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesMatchObservationLoadingToDedicatedLoader)
 {
-    const QString rendererSource = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.cpp"));
+    const QString canvasSource = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.cpp"));
     const QString featureLoaderHeader = readProjectSourceFile(QStringLiteral("src/gui/views/LayerFeatureLoader.h"));
     const QString featureLoaderSource = readProjectSourceFile(QStringLiteral("src/gui/views/LayerFeatureLoader.cpp"));
-    ASSERT_FALSE(rendererSource.isEmpty());
+    ASSERT_FALSE(canvasSource.isEmpty());
     ASSERT_FALSE(featureLoaderHeader.isEmpty());
     ASSERT_FALSE(featureLoaderSource.isEmpty());
 
-    EXPECT_TRUE(rendererSource.contains(QStringLiteral("#include \"LayerFeatureLoader.h\"")));
-    EXPECT_TRUE(rendererSource.contains(QStringLiteral("loadMatchedKeypointsForImage(_currentProjectPath, imagePath)")));
-    EXPECT_FALSE(rendererSource.contains(QStringLiteral("#include \"FeatureOutput.h\"")));
-    EXPECT_FALSE(rendererSource.contains(QStringLiteral("#include \"FeatureFileIO.h\"")));
-    EXPECT_FALSE(rendererSource.contains(QStringLiteral("xjw::common::project::ProjectIO::findFeatureForImage")))
-        << "Feature sidecar lookup should stay out of the scene renderer.";
-    EXPECT_FALSE(rendererSource.contains(QStringLiteral("FeatureFileIO::read")))
-        << "Feature file decoding should stay out of the scene renderer.";
+    EXPECT_TRUE(canvasSource.contains(QStringLiteral("#include \"LayerFeatureLoader.h\"")));
+    EXPECT_TRUE(canvasSource.contains(QStringLiteral(
+        "loadMatchedKeypointsForImage(projectPath, imagePathCopy)")));
+    EXPECT_FALSE(canvasSource.contains(QStringLiteral("#include \"FeatureOutput.h\"")));
+    EXPECT_FALSE(canvasSource.contains(QStringLiteral("#include \"FeatureFileIO.h\"")));
+    EXPECT_FALSE(canvasSource.contains(QStringLiteral(
+        "xjw::common::project::ProjectIO::findFeatureForImage")))
+        << "Feature sidecar lookup should stay out of the canvas.";
+    EXPECT_FALSE(canvasSource.contains(QStringLiteral("FeatureFileIO::read")))
+        << "Feature file decoding should stay out of the canvas.";
 
     EXPECT_TRUE(featureLoaderHeader.contains(QStringLiteral("loadMatchedKeypointsFromFile")));
     EXPECT_TRUE(featureLoaderHeader.contains(QStringLiteral("loadMatchedKeypointsForImage")));
@@ -9778,26 +9848,16 @@ TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesMatchObservationLoadi
     EXPECT_FALSE(featureLoaderSource.contains(QStringLiteral("FeatureFileIO")));
 }
 
-TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesStitchedPairDebugOutput)
+TEST(CanvasWidgetResponsivenessTest, LayerRendererDoesNotRetainStitchedPairDebugOutput)
 {
     const QString rendererSource = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.cpp"));
     const QString debugHeader = readProjectSourceFile(QStringLiteral("src/gui/views/LayerStitchedDebug.h"));
     const QString debugSource = readProjectSourceFile(QStringLiteral("src/gui/views/LayerStitchedDebug.cpp"));
     ASSERT_FALSE(rendererSource.isEmpty());
-    ASSERT_FALSE(debugHeader.isEmpty());
-    ASSERT_FALSE(debugSource.isEmpty());
-
-    EXPECT_TRUE(rendererSource.contains(QStringLiteral("#include \"LayerStitchedDebug.h\"")));
-    EXPECT_TRUE(rendererSource.contains(QStringLiteral("recordStitchedImagePairDebug(")));
-    EXPECT_FALSE(rendererSource.contains(QStringLiteral("QCryptographicHash")));
-    EXPECT_FALSE(rendererSource.contains(QStringLiteral("hexSha1")));
-    EXPECT_FALSE(rendererSource.contains(QStringLiteral("wrote debug stitched image")));
-    EXPECT_FALSE(rendererSource.contains(QStringLiteral("qgraphicsitem_cast")));
-
-    EXPECT_TRUE(debugHeader.contains(QStringLiteral("recordStitchedImagePairDebug")));
-    EXPECT_TRUE(debugSource.contains(QStringLiteral("QCryptographicHash::hash")));
-    EXPECT_TRUE(debugSource.contains(QStringLiteral("wrote debug stitched image")));
-    EXPECT_TRUE(debugSource.contains(QStringLiteral("qgraphicsitem_cast<QGraphicsPixmapItem")));
+    EXPECT_TRUE(debugHeader.isEmpty());
+    EXPECT_TRUE(debugSource.isEmpty());
+    EXPECT_FALSE(rendererSource.contains(QStringLiteral("LayerStitchedDebug")));
+    EXPECT_FALSE(rendererSource.contains(QStringLiteral("recordStitchedImagePairDebug")));
 }
 
 TEST(CanvasWidgetResponsivenessTest, MatchObservationLoadUsesPersistedSiftGeometry)
@@ -11449,13 +11509,11 @@ TEST(DataTreeWidgetTest, DepthDiagnosticsCreateOnlyOneAggregateWorkspaceResource
     EXPECT_TRUE(depthSummary->text().contains(QStringLiteral("轻度过滤")));
     EXPECT_EQ(depthSummary->rowCount(), 0);
 
-    QSignalSpy imageSpy(&tree, &DataTreeWidget::imageActivated);
     QSignalSpy resourceSpy(&tree, &DataTreeWidget::resourceActivated);
     ASSERT_TRUE(QMetaObject::invokeMethod(view,
                                           "activated",
                                           Qt::DirectConnection,
                                           Q_ARG(QModelIndex, depthSummary->index())));
-    EXPECT_EQ(imageSpy.count(), 0);
     EXPECT_EQ(resourceSpy.count(), 0);
 }
 
@@ -12401,23 +12459,19 @@ TEST(DataTreeWidgetTest, SelectionClickDoesNotActivateImageUntilItemActivation)
     const QModelIndex imageIndex = photoSection->child(0, 0)->index();
     ASSERT_TRUE(imageIndex.isValid());
 
-    QSignalSpy imageSpy(&tree, &DataTreeWidget::imageActivated);
     QSignalSpy resourceSpy(&tree, &DataTreeWidget::resourceActivated);
 
     ASSERT_TRUE(QMetaObject::invokeMethod(view,
                                           "clicked",
                                           Qt::DirectConnection,
                                           Q_ARG(QModelIndex, imageIndex)));
-    EXPECT_EQ(imageSpy.count(), 0);
     EXPECT_EQ(resourceSpy.count(), 0);
 
     ASSERT_TRUE(QMetaObject::invokeMethod(view,
                                           "activated",
                                           Qt::DirectConnection,
                                           Q_ARG(QModelIndex, imageIndex)));
-    ASSERT_EQ(imageSpy.count(), 1);
     ASSERT_EQ(resourceSpy.count(), 1);
-    EXPECT_EQ(imageSpy.takeFirst().at(0).toString(), imagePath);
     const QList<QVariant> resourceArgs = resourceSpy.takeFirst();
     ASSERT_EQ(resourceArgs.size(), 2);
     EXPECT_EQ(resourceArgs.at(0).toString(), QStringLiteral("照片"));
@@ -12938,7 +12992,7 @@ TEST(CameraModel3DDialogTest, ObjReaderBenchmarkUsesConfiguredModel)
 
 TEST(CameraModel3DDialogTest, ObjLoadingShowsProgressOverlay)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
     const int objStart = source.indexOf(QStringLiteral("void CameraSceneWidget::loadModelFromObj"));
@@ -12961,8 +13015,8 @@ TEST(CameraModel3DDialogTest, ObjLoadingShowsProgressOverlay)
 
 TEST(CameraModel3DDialogTest, ObjMaterialTextureUsesFaceUvRhiPipeline)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
     const QString vertexShader = readProjectSourceFile(
         QStringLiteral("src/gui/shaders/camera_scene_textured_mesh.vert"));
     const QString fragmentShader = readProjectSourceFile(
@@ -12993,7 +13047,7 @@ TEST(CameraModel3DDialogTest, ObjMaterialTextureUsesFaceUvRhiPipeline)
 
 TEST(CameraModel3DDialogTest, ModelViewMinimumSizeDoesNotLimitDockResizing)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(source.contains(QStringLiteral("setMinimumSize(240, 160)")));
@@ -13009,13 +13063,13 @@ TEST(CameraModel3DDialogTest, UsesCameraToWorldRotationWithoutTransposeForCards)
     ASSERT_FALSE(workspaceSource.isEmpty());
 
     const QString combined = dialogSource + workspaceSource;
-    EXPECT_FALSE(combined.contains(QStringLiteral("pose.rotation = rot.transposed();")));
-    EXPECT_TRUE(combined.contains(QStringLiteral("pose.rotation = rot;")));
+    EXPECT_FALSE(combined.contains(QStringLiteral("pose.rotation = rotation.transposed();")));
+    EXPECT_TRUE(combined.contains(QStringLiteral("pose.rotation = rotation;")));
 }
 
 TEST(CameraModel3DDialogTest, CameraPhotoPlanesUseDepthTestedQrhiGeometry)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(source.contains(QStringLiteral("ensureCameraThumbnailPipeline")));
@@ -13027,8 +13081,8 @@ TEST(CameraModel3DDialogTest, CameraPhotoPlanesUseDepthTestedQrhiGeometry)
 
 TEST(CameraModel3DDialogTest, LargeBinaryPlyLoadsEveryPointWithoutPreviewSampling)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
-    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
     ASSERT_FALSE(source.isEmpty());
     ASSERT_FALSE(header.isEmpty());
 
@@ -13052,7 +13106,7 @@ TEST(CameraModel3DDialogTest, LargeBinaryPlyLoadsEveryPointWithoutPreviewSamplin
 
 TEST(CameraModel3DDialogTest, PlyLoadProgressDoesNotRegressAfterFinished)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(source.contains(QStringLiteral("if (!_loading && percent < 100)")))

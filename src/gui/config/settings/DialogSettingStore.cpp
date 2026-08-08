@@ -1,7 +1,10 @@
 #include "DialogSettingStore.h"
 
+#include "io/JsonObjectFile.h"
 #include "json/JsonObjectMerge.h"
+#include "project/ProjectIO.h"
 
+#include <QDir>
 #include <utility>
 
 DialogSettingStore::DialogSettingStore(const QString &dialogKey, QObject *parent)
@@ -12,25 +15,60 @@ DialogSettingStore::DialogSettingStore(const QString &dialogKey, QObject *parent
 
 void DialogSettingStore::setProjectPath(const QString &plascanPath)
 {
-    ProjectDialogJsonSettingBase::setProjectPath(plascanPath);
+    _plascanPath = plascanPath;
 }
 
-QJsonObject DialogSettingStore::load(QString *errorMessage) const
+QString DialogSettingStore::dialogFilePath() const
 {
+    if (_plascanPath.trimmed().isEmpty())
+    {
+        return QString();
+    }
+    const QString root = xjw::common::project::ProjectIO::projectRootFromPlascan(_plascanPath);
+    return root.isEmpty()
+        ? QString()
+        : QDir(root).filePath(QStringLiteral("project_dialog.json"));
+}
+
+QJsonObject DialogSettingStore::loadByKey(QString *errorMessage) const
+{
+    if (errorMessage)
+    {
+        errorMessage->clear();
+    }
     if (_dialogKey.isEmpty())
     {
         if (errorMessage)
         {
             *errorMessage = QStringLiteral("对话框设置键不能为空");
         }
-        return QJsonObject();
+        return {};
     }
 
-    return loadByKey(_dialogKey, errorMessage);
+    const QString path = dialogFilePath();
+    if (path.isEmpty())
+    {
+        return {};
+    }
+    const xjw::common::io::JsonObjectReadResult result =
+        xjw::common::io::readJsonObjectFile(path);
+    if (!result.success)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = result.errorMessage;
+        }
+        return {};
+    }
+    return result.object.value(_dialogKey).toObject();
 }
 
-bool DialogSettingStore::save(const QJsonObject &settings, QString *errorMessage) const
+bool DialogSettingStore::saveByKey(const QJsonObject &value, QString *errorMessage) const
 {
+    if (errorMessage)
+    {
+        errorMessage->clear();
+    }
     if (_dialogKey.isEmpty())
     {
         if (errorMessage)
@@ -40,7 +78,40 @@ bool DialogSettingStore::save(const QJsonObject &settings, QString *errorMessage
         return false;
     }
 
-    const bool saved = saveByKey(_dialogKey, settings, errorMessage);
+    const QString path = dialogFilePath();
+    if (path.isEmpty())
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("未设置有效的项目路径");
+        }
+        return false;
+    }
+
+    const xjw::common::io::JsonObjectReadResult result =
+        xjw::common::io::readJsonObjectFile(path);
+    if (!result.success)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = result.errorMessage;
+        }
+        return false;
+    }
+
+    QJsonObject root = result.object;
+    root.insert(_dialogKey, value);
+    return xjw::common::io::writeJsonObjectFileAtomic(path, root, errorMessage);
+}
+
+QJsonObject DialogSettingStore::load(QString *errorMessage) const
+{
+    return loadByKey(errorMessage);
+}
+
+bool DialogSettingStore::save(const QJsonObject &settings, QString *errorMessage) const
+{
+    const bool saved = saveByKey(settings, errorMessage);
     if (saved && _changeCallback)
     {
         _changeCallback();

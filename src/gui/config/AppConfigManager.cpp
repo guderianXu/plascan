@@ -9,14 +9,9 @@
 /**
  * @brief 构造函数。
  *
- * 通过成员初始化列表将三个子管理器的父对象设置为 this，
- * 使其生命周期与 AppConfigManager 完全绑定；当 AppConfigManager
- * 被销毁时，Qt 对象树会自动递归销毁所有子对象，无需手动 delete。
+ * 三个轻量子管理器按值持有，与 AppConfigManager 共享确定的对象生命周期。
  */
 AppConfigManager::AppConfigManager(QObject *parent)
     : QObject(parent)
-    , _windowState(this)      // 窗口状态管理器，父对象为本实例
-    , _recentProjects(this)   // 最近项目管理器，父对象为本实例
-    , _fileDialogs(this)      // 文件对话框状态管理器，父对象为本实例
 {
 }

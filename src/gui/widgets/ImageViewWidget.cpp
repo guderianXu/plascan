@@ -195,15 +195,6 @@ void ImageViewWidget::zoomOut()
     }
 }
 
-void ImageViewWidget::zoomTo(qreal factor)
-{
-    factor = qBound(MIN_ZOOM, factor, MAX_ZOOM);
-    QTransform trans;
-    trans.scale(factor, factor);
-    _view->setTransform(trans);
-    onViewChanged();
-}
-
 void ImageViewWidget::fitToView()
 {
     if (_imageItem) {

@@ -207,40 +207,6 @@ ProjectDashboardStepState readyAfter(bool prerequisiteComplete)
 
 } // namespace
 
-QString projectDashboardStepStateName(ProjectDashboardStepState state)
-{
-    switch (state)
-    {
-    case ProjectDashboardStepState::Missing:
-        return QStringLiteral("missing");
-    case ProjectDashboardStepState::Ready:
-        return QStringLiteral("ready");
-    case ProjectDashboardStepState::Complete:
-        return QStringLiteral("complete");
-    case ProjectDashboardStepState::Warning:
-        return QStringLiteral("warning");
-    }
-    return QStringLiteral("missing");
-}
-
-bool projectDashboardStepById(const ProjectDashboardSummary &summary,
-                              const QString &id,
-                              ProjectDashboardStep *step)
-{
-    for (const ProjectDashboardStep &candidate : summary.workflowSteps)
-    {
-        if (candidate.id == id)
-        {
-            if (step)
-            {
-                *step = candidate;
-            }
-            return true;
-        }
-    }
-    return false;
-}
-
 ProjectDashboardSummary buildProjectDashboardSummary(const QJsonObject &metadata)
 {
     const QJsonObject normalized = normalizeMetadata(metadata);

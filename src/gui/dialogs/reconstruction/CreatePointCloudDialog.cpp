@@ -26,10 +26,9 @@ CreatePointCloudDialog::CreatePointCloudDialog(QWidget *parent)
     auto *general_form = new QFormLayout(general_group);
     xjw::gui::dialogs::configureWorkflowForm(general_form);
 
-    _sourceCombo = new QComboBox(general_group);
-    _sourceCombo->setObjectName(QStringLiteral("pointCloudSourceCombo"));
-    _sourceCombo->addItem(tr("深度图"), QStringLiteral("depth_maps"));
-    xjw::gui::dialogs::configureWorkflowComboBox(_sourceCombo);
+    auto *source_label = new QLabel(tr("深度图（由正式空三结果生成）"), general_group);
+    source_label->setObjectName(QStringLiteral("pointCloudSourceValueLabel"));
+    source_label->setWordWrap(true);
 
     _qualityCombo = new QComboBox(general_group);
     _qualityCombo->setObjectName(QStringLiteral("pointCloudQualityCombo"));
@@ -46,7 +45,7 @@ CreatePointCloudDialog::CreatePointCloudDialog(QWidget *parent)
     _saveEachStepCheck = new QCheckBox(tr("在每个步骤完成后保存项目"), general_group);
     _saveEachStepCheck->setObjectName(QStringLiteral("savePointCloudEachStepCheck"));
 
-    general_form->addRow(tr("源数据:"), _sourceCombo);
+    general_form->addRow(tr("源数据:"), source_label);
     general_form->addRow(tr("质量:"), _qualityCombo);
     general_form->addRow(QString(), _reuseDepthMapsCheck);
     general_form->addRow(QString(), _saveEachStepCheck);
@@ -67,20 +66,25 @@ CreatePointCloudDialog::CreatePointCloudDialog(QWidget *parent)
     _calculateColorsCheck = new QCheckBox(tr("计算点颜色"), advanced_group);
     _calculateColorsCheck->setObjectName(QStringLiteral("calculatePointColorsCheck"));
     _calculateColorsCheck->setChecked(true);
-    _calculateConfidenceCheck = new QCheckBox(tr("计算点的置信度"), advanced_group);
-    _calculateConfidenceCheck->setObjectName(QStringLiteral("calculatePointConfidenceCheck"));
-    // 当前 PLY/项目点云记录没有逐点置信度通道。保留该参数位置以维持
-    // Metashape 风格布局，但在后端真正支持前禁止提交一个虚假的生效值。
-    _calculateConfidenceCheck->setChecked(false);
-    _calculateConfidenceCheck->setEnabled(false);
-    _calculateConfidenceCheck->setToolTip(
-        tr("当前点云格式暂不支持持久化逐点置信度。"));
+    auto *confidence_note = new QLabel(
+        tr("当前点云格式暂不保存逐点置信度。"), advanced_group);
+    confidence_note->setObjectName(QStringLiteral("pointCloudConfidenceNote"));
+    confidence_note->setWordWrap(true);
     _replaceDefaultCheck = new QCheckBox(tr("替换默认点云"), advanced_group);
     _replaceDefaultCheck->setObjectName(QStringLiteral("replaceDefaultPointCloudCheck"));
 
+    for (QCheckBox *check_box : {
+             _reuseDepthMapsCheck,
+             _saveEachStepCheck,
+             _calculateColorsCheck,
+             _replaceDefaultCheck})
+    {
+        xjw::gui::dialogs::configureWorkflowCheckBox(check_box);
+    }
+
     advanced_form->addRow(tr("深度过滤:"), _depthFilterCombo);
     advanced_form->addRow(QString(), _calculateColorsCheck);
-    advanced_form->addRow(QString(), _calculateConfidenceCheck);
+    advanced_form->addRow(tr("置信度:"), confidence_note);
     advanced_form->addRow(QString(), _replaceDefaultCheck);
     main_layout->addWidget(advanced_group);
 
@@ -101,7 +105,7 @@ CreatePointCloudDialog::CreatePointCloudDialog(QWidget *parent)
     connect(button_box, &QDialogButtonBox::rejected,
             this, &QDialog::reject);
 
-    for (QComboBox *combo_box : {_sourceCombo, _qualityCombo, _depthFilterCombo})
+    for (QComboBox *combo_box : {_qualityCombo, _depthFilterCombo})
     {
         connect(combo_box, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, &CreatePointCloudDialog::emitSettingsNow);
@@ -124,8 +128,7 @@ CreatePointCloudDialog::CreatePointCloudDialog(QWidget *parent)
     });
     for (QCheckBox *check_box : {
              _saveEachStepCheck,
-             _calculateColorsCheck,
-             _calculateConfidenceCheck})
+             _calculateColorsCheck})
     {
         connect(check_box, &QCheckBox::toggled,
                 this, &CreatePointCloudDialog::emitSettingsNow);
@@ -137,13 +140,11 @@ CreatePointCloudDialog::CreatePointCloudDialog(QWidget *parent)
 
 void CreatePointCloudDialog::applySettings(const QJsonObject &settings)
 {
-    const QSignalBlocker source_blocker(_sourceCombo);
     const QSignalBlocker quality_blocker(_qualityCombo);
     const QSignalBlocker reuse_blocker(_reuseDepthMapsCheck);
     const QSignalBlocker save_blocker(_saveEachStepCheck);
     const QSignalBlocker filter_blocker(_depthFilterCombo);
     const QSignalBlocker colors_blocker(_calculateColorsCheck);
-    const QSignalBlocker confidence_blocker(_calculateConfidenceCheck);
     const QSignalBlocker replace_blocker(_replaceDefaultCheck);
 
     const int quality_index = _qualityCombo->findData(
@@ -167,7 +168,6 @@ void CreatePointCloudDialog::applySettings(const QJsonObject &settings)
         settings.value(QStringLiteral("saveAfterEachStep")).toBool(false));
     _calculateColorsCheck->setChecked(
         settings.value(QStringLiteral("calculatePointColors")).toBool(true));
-    _calculateConfidenceCheck->setChecked(false);
     _replaceDefaultRequested =
         settings.value(QStringLiteral("replaceDefaultPointCloud")).toBool(false);
     _replaceDefaultCheck->setChecked(_replaceDefaultRequested);
@@ -189,7 +189,7 @@ void CreatePointCloudDialog::setProjectState(bool hasProductionSparseResult,
 QJsonObject CreatePointCloudDialog::collectSettings() const
 {
     QJsonObject settings;
-    settings[QStringLiteral("source_data")] = _sourceCombo->currentData().toString();
+    settings[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
     settings[QStringLiteral("qualityProfile")] = _qualityCombo->currentData().toString();
     settings[QStringLiteral("depthFilterMode")] = _depthFilterCombo->currentData().toString();
     settings[QStringLiteral("reuseDepthMaps")] = _reuseDepthMapsCheck->isChecked();

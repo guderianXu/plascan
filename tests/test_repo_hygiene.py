@@ -377,15 +377,15 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("foreign platform path", result.stderr)
         self.assertIn("CUDAToolkit_ROOT", result.stderr)
 
-    def test_camera_preview_memory_detection_supports_linux(self):
+    def test_camera_scene_uses_full_ply_loader_without_preview_memory_probe(self):
         source = (
-            ROOT / "src" / "gui" / "dialogs" / "camera" / "CameraModel3DDialog.cpp"
+            ROOT / "src" / "gui" / "views" / "CameraSceneWidget.cpp"
         ).read_text(encoding="utf-8")
 
-        self.assertRegex(source, r"#elif\s+defined\(Q_OS_LINUX\)")
-        self.assertIn("/proc/meminfo", source)
-        self.assertIn("MemAvailable:", source)
-        self.assertRegex(source, r"return\s+availableKb\s*\*\s*1024")
+        self.assertIn("plapoint::io::readPly<float>", source)
+        self.assertNotIn("readBinaryPlyPreview", source)
+        self.assertNotIn("/proc/meminfo", source)
+        self.assertNotIn("MemAvailable:", source)
 
 
 if __name__ == "__main__":

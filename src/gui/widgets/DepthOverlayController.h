@@ -29,7 +29,6 @@ public:
     views::DepthOverlayAvailability artifactAvailability(
         const QString &image_path,
         views::DepthOverlayLevel level) const;
-    quint64 requestGeneration() const noexcept { return _requestGeneration; }
     bool isCurrentGeneration(quint64 generation) const noexcept;
 
     static QString cacheKeyForArtifact(const views::DepthOverlayArtifact &artifact,
@@ -38,7 +37,6 @@ public:
                                        const QString &source_image_path);
 
 signals:
-    void availabilityChanged(bool available);
     void overlayReady(const QString &image_path,
                       const QImage &overlay,
                       const QImage &intensity_base);

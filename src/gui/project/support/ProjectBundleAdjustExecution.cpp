@@ -1,6 +1,6 @@
 #include "ProjectBundleAdjustExecution.h"
 
-#include "ProjectChunkStore.h"
+#include "project/ProjectChunkStore.h"
 #include "project/PortableProjectFormat.h"
 #include "project/ProjectIO.h"
 #include "ProjectReferenceTerrainBa.h"

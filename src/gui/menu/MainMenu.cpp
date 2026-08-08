@@ -543,14 +543,6 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
             displayMenu->addAction(_toggleCamerasAct);
         }
 
-        _toggleDependentCamerasAct = ensurePlainAction(_mainWindow,
-                                                       displayMenu,
-                                                       displayMenu,
-                                                       QStringLiteral("actionToggleDependentCameras"),
-                                                       tr("显示从属相机"));
-        _toggleDependentCamerasAct->setEnabled(false);
-        _toggleDependentCamerasAct->setToolTip(tr("暂未建立模型与从属相机关系，当前版本无法单独显示从属相机"));
-
         _toggleCameraThumbnailsAct = ensureCheckableAction(_mainWindow,
                                                            displayMenu,
                                                            displayMenu,
@@ -852,7 +844,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
 
     auto installCameraToolbarButton = [this]()
     {
-        if (!_toolBar || !_toggleCamerasAct || !_toggleCameraThumbnailsAct || !_toggleDependentCamerasAct)
+        if (!_toolBar || !_toggleCamerasAct || !_toggleCameraThumbnailsAct)
         {
             return;
         }
@@ -876,7 +868,6 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         auto *cameraMenu = new QMenu(_toolBar);
         cameraMenu->setObjectName(QStringLiteral("menuToolbarCameraVisibility"));
         cameraMenu->addAction(_toggleCameraThumbnailsAct);
-        cameraMenu->addAction(_toggleDependentCamerasAct);
         cameraMenu->addAction(_toggleLocalAxesAct);
         _cameraToolbarWidgetAct = xjw::gui::toolbar::createToolbarSplitButton(
             _toolBar,
@@ -2214,8 +2205,6 @@ QAction *MainMenu::newAction() const  { return _newAct; }
 QAction *MainMenu::openAction() const { return _openAct; }
 QAction *MainMenu::saveAction() const { return _saveAct; }
 QAction *MainMenu::minimizeAction() const { return _minimizeAct; }
-QAction *MainMenu::exitAction() const { return _exitAct; }
-QAction *MainMenu::updatePythonRuntimeAction() const { return _updatePythonRuntimeAct; }
 
 QAction *MainMenu::zoomInAction() const    { return _zoomInAct; }
 QAction *MainMenu::zoomOutAction() const   { return _zoomOutAct; }
@@ -2234,7 +2223,6 @@ QAction *MainMenu::depthOverlayLevel3Action() const { return _depthOverlayLevel3
 QAction *MainMenu::showDepthIntensityAction() const { return _showDepthIntensityAct; }
 QAction *MainMenu::toggleGizmoAction() const { return _toggleGizmoAct; }
 QAction *MainMenu::toggleCamerasAction() const { return _toggleCamerasAct; }
-QAction *MainMenu::toggleDependentCamerasAction() const { return _toggleDependentCamerasAct; }
 QAction *MainMenu::toggleCameraThumbnailsAction() const { return _toggleCameraThumbnailsAct; }
 QAction *MainMenu::toggleLocalAxesAction() const
 {

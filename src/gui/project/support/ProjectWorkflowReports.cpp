@@ -267,31 +267,6 @@ BundleAdjustSparseCloudExport exportBundleAdjustSparseCloud(const QJsonObject &b
     return exportResult;
 }
 
-bool writeBundleAdjustReport(const QString &reportPath,
-                             const QJsonObject &baResult,
-                             const QMap<QString, QJsonObject> &beforeCameras,
-                             const QMap<QString, QJsonObject> &afterCameras)
-{
-    if (reportPath.isEmpty())
-    {
-        return false;
-    }
-
-    const QJsonObject rep = buildBundleAdjustReport(baResult, beforeCameras, afterCameras);
-    if (rep.isEmpty())
-    {
-        return false;
-    }
-
-    QFile rf(reportPath);
-    if (!rf.open(QIODevice::WriteOnly | QIODevice::Truncate))
-    {
-        return false;
-    }
-    rf.write(QJsonDocument(rep).toJson(QJsonDocument::Compact));
-    return true;
-}
-
 bool writeLatestAndAppendHistoryReport(const QString &reportsDir,
                                        const QString &latestFileName,
                                        const QString &historyFileName,

@@ -5,10 +5,7 @@
 // 说明:
 //   观测网络可视化控件（基于 QGraphicsView）。
 //
-//   布局策略:
-//     1. 初始布局：节点均匀排布在圆上。
-//     2. Force-directed 精化（Fruchterman-Reingold，50 次迭代，
-//        由 QTimer 驱动以保持 UI 响应）。可手动触发。
+//   布局策略：根据网络规模和连通分量选择圆形或多环布局。
 //
 //   视觉设计:
 //     - 节点：圆形；半径 ∝ 度数；颜色按度数着色（蓝→绿→橙）
@@ -20,7 +17,6 @@
 #include <QColor>
 #include <QPointF>
 #include <QVector>
-#include <QTimer>
 
 // 引入算法数据结构（仅头文件，无链接依赖，算法库单独链接）
 #include "graph/ObservationNetworkBuilder.h"
@@ -34,7 +30,6 @@ class QGraphicsScene;
  * @code
  *   ObservationNetworkView *view = new ObservationNetworkView(this);
  *   view->setNetwork(network);
- *   view->startForceLayout();  // 可选，触发力导向精化
  * @endcode
  */
 class ObservationNetworkView : public QGraphicsView
@@ -42,32 +37,15 @@ class ObservationNetworkView : public QGraphicsView
     Q_OBJECT
 public:
     explicit ObservationNetworkView(QWidget *parent = nullptr);
-    ~ObservationNetworkView() override;
 
     /// 加载网络数据并刷新显示（圆形初始布局）
     void setNetwork(const xjw::ObservationNetwork &net);
-
-    /// 触发 Fruchterman-Reingold 力导向布局精化（异步，不阻塞 UI）
-    void startForceLayout();
 
     /// 重置到圆形布局
     void resetLayout();
 
     /// 清空显示
     void clearNetwork();
-
-    /// 导出当前视图为图片
-    QImage toImage(QSize size = {800, 600}) const;
-
-signals:
-    /// 用户点击节点时发射，携带节点名称和索引
-    void nodeClicked(int index, const QString &name);
-
-    /// 力导向布局完成
-    void forceLayoutDone();
-
-private slots:
-    void onForceStep();
 
 private:
     /**
@@ -175,14 +153,6 @@ private:
     QVector<int> _visibleEdgeIndices;
     QVector<int> _visibleLabelIndices;
     QVector<QVector<int>> _nodeEdgeAdjacency;
-    static constexpr double LAYOUT_AREA_SIZE = 500.0; ///< 虚拟场景边长（用于 FR 算法）
-
-    // ── 力导向 ──
-    QTimer *_forceTimer = nullptr;
-    int _forceIter = 0;
-    double _temp = 0.0;
-    static constexpr int MAX_FORCE_LAYOUT_ITERATIONS = 80;
-    static constexpr double FORCE_LAYOUT_COOL_RATE = 0.92;
     bool _autoFitPending = false;
     int _selectedNodeIndex = -1;
 

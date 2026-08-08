@@ -5,7 +5,6 @@
 class QComboBox;
 class QLineEdit;
 class QPushButton;
-class QSlider;
 
 class CleanTiePointsDialog : public QDialog
 {
@@ -34,9 +33,7 @@ private:
 
     QComboBox *_criterionCombo{};
     QLineEdit *_levelEdit{};
-    QSlider *_levelSlider{};
     QPushButton *_okButton{};
     QPushButton *_deleteButton{};
-    QPushButton *_cancelButton{};
     bool _deleteRequested = false;
 };

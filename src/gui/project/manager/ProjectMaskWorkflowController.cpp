@@ -8,6 +8,7 @@
 #include "project/ProjectIO.h"
 #include "project/ProjectMetadata.h"
 #include "ProjectMetadataOperations.h"
+#include "ProjectOpenGuard.h"
 #include "u2net/U2NetMaskGenerator.h"
 #include "io/PathIO.h"
 #include "model/ModelFileResolver.h"
@@ -155,7 +156,10 @@ void ProjectMaskWorkflowController::openDialog()
 
 void ProjectMaskWorkflowController::openDialogForImages(const QStringList &requestedImages)
 {
-    if (!ensureProjectOpen())
+    if (!xjw::gui::project::requireOpenProject(
+            _projectData,
+            _parentWidget,
+            QStringLiteral("请先打开项目，再生成照片蒙版。")))
     {
         return;
     }
@@ -419,16 +423,6 @@ void ProjectMaskWorkflowController::openDialogForImages(const QStringList &reque
 void ProjectMaskWorkflowController::cancelActiveTask()
 {
     _cancellation.requestCancellation();
-}
-
-bool ProjectMaskWorkflowController::ensureProjectOpen() const
-{
-    if (_projectData && _projectData->hasProject())
-    {
-        return true;
-    }
-    QMessageBox::warning(_parentWidget, QStringLiteral("提示"), QStringLiteral("请先打开项目，再生成照片蒙版。"));
-    return false;
 }
 
 bool ProjectMaskWorkflowController::matchesSession(const QString &projectPath, const QString &chunkId) const

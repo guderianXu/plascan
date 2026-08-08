@@ -2,8 +2,6 @@
 
 #include "LayerRenderer.h"
 
-#include <QList>
-#include <QPointF>
 #include <QRectF>
 #include <QVector>
 
@@ -22,10 +20,5 @@ QGraphicsItem *createFeatureResidualOverlayItem(
     const QVector<FeatureResidualVector> &residuals,
     const LayerRenderer::FeatureDisplayOptions &options,
     const QRectF &imageBounds);
-
-QList<QGraphicsItem *> createMatchOverlayItems(const QVector<QPointF> &ptsA,
-                                               const QVector<QPointF> &ptsB,
-                                               const LayerRenderer::MatchDisplayOptions &options,
-                                               qreal bOffsetX);
 
 } // namespace xjw::gui::views

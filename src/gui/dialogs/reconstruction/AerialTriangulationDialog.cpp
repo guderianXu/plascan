@@ -5,6 +5,7 @@
  * 本文件不执行重建算法；真正的连接点准备、增量 SfM 和 BA 由上层工作流服务负责。
  */
 #include "reconstruction/AerialTriangulationDialog.h"
+#include "shared/WorkflowParameterDialogStyle.h"
 #include "ui_AerialTriangulationDialog.h"
 
 #include <QCheckBox>
@@ -12,7 +13,6 @@
 #include <QDialogButtonBox>
 #include <QJsonObject>
 #include <QLayout>
-#include <QSizePolicy>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QToolButton>
@@ -46,27 +46,6 @@ QString comboDataOr(QComboBox *combo, const QString &fallback)
     return value.isEmpty() ? fallback : value;
 }
 
-// 固定输入控件的纵向尺寸，避免高级区域展开时布局抖动。
-void stabilizeInputControl(QWidget *widget)
-{
-    if (!widget)
-    {
-        return;
-    }
-    widget->setMinimumHeight(28);
-    widget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-}
-
-void stabilizeCheckBox(QCheckBox *checkBox)
-{
-    if (!checkBox)
-    {
-        return;
-    }
-    checkBox->setMinimumHeight(24);
-    checkBox->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-}
-
 } // namespace
 
 AerialTriangulationDialog::AerialTriangulationDialog(QWidget *parent)
@@ -82,7 +61,8 @@ AerialTriangulationDialog::~AerialTriangulationDialog() = default;
 void AerialTriangulationDialog::setupUi()
 {
     setWindowTitle(QStringLiteral("空中三角测量"));
-    _ui->m_statusLabel->hide();
+    xjw::gui::dialogs::configureWorkflowParameterDialog(this);
+    _ui->m_statusLabel->setWordWrap(true);
 
     // 中文文本只用于显示；英文 token 会原样进入工作流配置。
     _ui->m_qualityCombo->clear();
@@ -141,20 +121,25 @@ void AerialTriangulationDialog::setupUi()
     _ui->m_lockInputCameraPosesCheck->setToolTip(
         QStringLiteral("使用项目中已导入的相机内外参，并在空三和 BA 中保持外参不变。"
                        "适用于 Middlebury、COLMAP 或测量系统提供的真实标定位姿。"));
-    stabilizeInputControl(_ui->m_qualityCombo);
-    stabilizeInputControl(_ui->m_referenceSourceCombo);
-    stabilizeInputControl(_ui->m_keypointLimitSpin);
-    stabilizeInputControl(_ui->m_tiepointLimitSpin);
-    stabilizeInputControl(_ui->m_maskApplyCombo);
-    stabilizeCheckBox(_ui->m_genericPreselectionCheck);
-    stabilizeCheckBox(_ui->m_referencePreselectionCheck);
-    stabilizeCheckBox(_ui->m_resetAlignmentCheck);
-    stabilizeCheckBox(_ui->m_saveAfterEachStepCheck);
-    stabilizeCheckBox(_ui->m_excludeFixedTiePointsCheck);
-    stabilizeCheckBox(_ui->m_guidedImageMatchingCheck);
-    stabilizeCheckBox(_ui->m_adaptiveCameraModelCheck);
-    stabilizeCheckBox(_ui->m_reuseExistingMatchesCheck);
-    stabilizeCheckBox(_ui->m_lockInputCameraPosesCheck);
+    xjw::gui::dialogs::configureWorkflowComboBox(_ui->m_qualityCombo);
+    xjw::gui::dialogs::configureWorkflowComboBox(_ui->m_referenceSourceCombo);
+    xjw::gui::dialogs::configureWorkflowInputWidget(_ui->m_keypointLimitSpin);
+    xjw::gui::dialogs::configureWorkflowInputWidget(_ui->m_tiepointLimitSpin);
+    xjw::gui::dialogs::configureWorkflowComboBox(_ui->m_maskApplyCombo);
+    for (QCheckBox *check_box : {
+             _ui->m_genericPreselectionCheck,
+             _ui->m_referencePreselectionCheck,
+             _ui->m_resetAlignmentCheck,
+             _ui->m_saveAfterEachStepCheck,
+             _ui->m_excludeFixedTiePointsCheck,
+             _ui->m_guidedImageMatchingCheck,
+             _ui->m_adaptiveCameraModelCheck,
+             _ui->m_reuseExistingMatchesCheck,
+             _ui->m_lockInputCameraPosesCheck})
+    {
+        xjw::gui::dialogs::configureWorkflowCheckBox(check_box);
+    }
+    xjw::gui::dialogs::configureWorkflowButtonBox(_ui->m_buttonBox);
     setReferencePreselectionAvailable(false, 0, 0);
     setAdvancedExpanded(false);
 
@@ -246,7 +231,6 @@ void AerialTriangulationDialog::setReferencePreselectionAvailable(bool available
                                                                   int cameraCount,
                                                                   int imageCount)
 {
-    _referencePreselectionAvailable = available;
     if (!_ui || !_ui->m_referencePreselectionCheck || !_ui->m_referenceSourceCombo)
     {
         return;

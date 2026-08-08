@@ -1,19 +1,20 @@
 #include "tie_points/CleanTiePointsDialog.h"
 
+#include "shared/WorkflowParameterDialogStyle.h"
+
 #include <QComboBox>
+#include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QGroupBox>
-#include <QHBoxLayout>
 #include <QLineEdit>
 #include <QPushButton>
-#include <QSlider>
 #include <QVBoxLayout>
 
 CleanTiePointsDialog::CleanTiePointsDialog(QWidget *parent)
     : QDialog(parent)
 {
-    setWindowTitle(QStringLiteral("Clean Tie Points"));
-    setMinimumWidth(480);
+    setWindowTitle(tr("清理连接点"));
+    xjw::gui::dialogs::configureWorkflowParameterDialog(this);
     buildUi();
     updateCriterionState();
 }
@@ -56,7 +57,7 @@ void CleanTiePointsDialog::buildUi()
 
     auto *generalGroup = new QGroupBox(tr("一般"), this);
     auto *formLayout = new QFormLayout(generalGroup);
-    formLayout->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+    xjw::gui::dialogs::configureWorkflowForm(formLayout);
 
     _criterionCombo = new QComboBox(generalGroup);
     _criterionCombo->addItem(tr("请选择..."), static_cast<int>(Criterion::None));
@@ -64,27 +65,21 @@ void CleanTiePointsDialog::buildUi()
     _criterionCombo->addItem(tr("重建不确定性"), static_cast<int>(Criterion::ReconstructionUncertainty));
     _criterionCombo->addItem(tr("图像计数"), static_cast<int>(Criterion::ImageCount));
     _criterionCombo->addItem(tr("投影精度"), static_cast<int>(Criterion::ProjectionAccuracy));
+    xjw::gui::dialogs::configureWorkflowComboBox(_criterionCombo);
     formLayout->addRow(tr("标准:"), _criterionCombo);
 
     _levelEdit = new QLineEdit(generalGroup);
+    xjw::gui::dialogs::configureWorkflowInputWidget(_levelEdit);
     formLayout->addRow(tr("级别:"), _levelEdit);
     mainLayout->addWidget(generalGroup);
 
-    _levelSlider = new QSlider(Qt::Horizontal, this);
-    _levelSlider->setRange(0, 100);
-    _levelSlider->setValue(0);
-    mainLayout->addWidget(_levelSlider);
-
-    auto *buttonLayout = new QHBoxLayout();
-    buttonLayout->addStretch(1);
-    _okButton = new QPushButton(QStringLiteral("OK"), this);
-    _deleteButton = new QPushButton(tr("删除"), this);
-    _cancelButton = new QPushButton(QStringLiteral("Cancel"), this);
-    buttonLayout->addWidget(_okButton);
-    buttonLayout->addWidget(_deleteButton);
-    buttonLayout->addWidget(_cancelButton);
-    buttonLayout->addStretch(1);
-    mainLayout->addLayout(buttonLayout);
+    auto *buttonBox = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+    buttonBox->setObjectName(QStringLiteral("workflowButtonBox"));
+    _okButton = buttonBox->button(QDialogButtonBox::Ok);
+    _deleteButton = buttonBox->addButton(tr("删除"), QDialogButtonBox::DestructiveRole);
+    xjw::gui::dialogs::configureWorkflowButtonBox(buttonBox);
+    mainLayout->addWidget(buttonBox);
 
     connect(_criterionCombo, &QComboBox::currentIndexChanged, this, &CleanTiePointsDialog::updateCriterionState);
     connect(_okButton, &QPushButton::clicked, this, [this]()
@@ -97,7 +92,7 @@ void CleanTiePointsDialog::buildUi()
         _deleteRequested = true;
         accept();
     });
-    connect(_cancelButton, &QPushButton::clicked, this, &QDialog::reject);
+    connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
 }
 
 void CleanTiePointsDialog::updateCriterionState()
@@ -114,10 +109,6 @@ void CleanTiePointsDialog::updateCriterionState()
         {
             _levelEdit->clear();
         }
-    }
-    if (_levelSlider)
-    {
-        _levelSlider->setEnabled(hasCriterion);
     }
     if (_okButton)
     {

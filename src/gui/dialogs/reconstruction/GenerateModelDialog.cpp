@@ -1,5 +1,6 @@
 #include "reconstruction/GenerateModelDialog.h"
 #include "shared/WorkflowParameterDialogStyle.h"
+#include "PointCloudWorkflowConfig.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -105,41 +106,6 @@ QString depthQualityDisplayName(const QString &profile)
     if (profile == QStringLiteral("low")) return QStringLiteral("低");
     if (profile == QStringLiteral("lowest")) return QStringLiteral("最低");
     return QStringLiteral("中");
-}
-
-QString depthQualityProfileForModelQuality(const QString &quality)
-{
-    if (quality == QStringLiteral("ultra")) return QStringLiteral("highest");
-    if (quality == QStringLiteral("high")) return QStringLiteral("high");
-    if (quality == QStringLiteral("low")) return QStringLiteral("low");
-    return QStringLiteral("medium");
-}
-
-int depthQualityRank(const QString &profile)
-{
-    if (profile == QStringLiteral("highest")) return 4;
-    if (profile == QStringLiteral("high")) return 3;
-    if (profile == QStringLiteral("low")) return 1;
-    if (profile == QStringLiteral("lowest")) return 0;
-    return 2;
-}
-
-struct DepthQualityDisplayParameters
-{
-    double resScale = 0.25;
-    int iterations = 8;
-    int patchSize = 11;
-    int minViews = 6;
-};
-
-DepthQualityDisplayParameters depthQualityDisplayParameters(
-    const QString &profile)
-{
-    if (profile == QStringLiteral("highest")) return {1.0, 16, 15, 8};
-    if (profile == QStringLiteral("high")) return {0.5, 12, 13, 7};
-    if (profile == QStringLiteral("low")) return {0.125, 4, 9, 3};
-    if (profile == QStringLiteral("lowest")) return {0.0625, 3, 7, 2};
-    return {};
 }
 
 } // namespace
@@ -492,7 +458,7 @@ QJsonObject GenerateModelDialog::collectSettings() const
     settings[QStringLiteral("modelQualityProfile")] = qualityProfile(quality);
     settings[QStringLiteral("qualityProfile")] = qualityProfile(quality);
     settings[QStringLiteral("depthQualityProfile")] =
-        depthQualityProfileForModelQuality(quality);
+        xjw::core::project::depthQualityProfileForModelQuality(quality);
     settings[QStringLiteral("octreeDepth")] = qualityOctreeDepth(quality);
     settings[QStringLiteral("meshResolution")] = qualityMeshResolution(quality);
     settings[QStringLiteral("targetFaces")] = targetFaces;
@@ -711,15 +677,16 @@ void GenerateModelDialog::updateAvailability()
     const bool hasCandidate = !sourceData.isEmpty();
 
     const QString requested_depth_quality =
-        depthQualityProfileForModelQuality(_qualityCombo->currentData().toString());
-    const auto depth_parameters = depthQualityDisplayParameters(
-        requested_depth_quality);
+        xjw::core::project::depthQualityProfileForModelQuality(
+            _qualityCombo->currentData().toString());
+    const auto depth_parameters = xjw::core::project::depthQualityParameters(
+        xjw::core::project::depthQualityProfileFromId(requested_depth_quality));
     const QString stored_depth_quality = candidate.value(
         QLatin1String(kDepthQualityProfile)).toString();
     const bool stored_quality_known = !stored_depth_quality.isEmpty();
     const bool stored_quality_sufficient = !stored_quality_known ||
-        depthQualityRank(stored_depth_quality) >=
-            depthQualityRank(requested_depth_quality);
+        xjw::core::project::depthQualityRank(stored_depth_quality) >=
+            xjw::core::project::depthQualityRank(requested_depth_quality);
     const bool can_reuse_depth_maps =
         _hasReusableDepthMaps && stored_quality_sufficient;
 

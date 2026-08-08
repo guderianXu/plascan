@@ -128,8 +128,8 @@ TEST(MapProjectDialogTest, ExposesSupportedWorkflowAndActualDemDefaults)
         &dialog, "orthoProjectionPlanarRadio");
     auto *cylindricalProjection = requiredWidget<QRadioButton>(
         &dialog, "orthoProjectionCylindricalRadio");
-    auto *refineSeams =
-        requiredWidget<QCheckBox>(&dialog, "orthoRefineSeamsCheck");
+    auto *colorSource =
+        requiredWidget<QLabel>(&dialog, "orthoColorSourceLabel");
     auto *fillHoles =
         requiredWidget<QCheckBox>(&dialog, "orthoFillHolesCheck");
     auto *useMasks =
@@ -150,7 +150,7 @@ TEST(MapProjectDialogTest, ExposesSupportedWorkflowAndActualDemDefaults)
     ASSERT_NE(demProjection, nullptr);
     ASSERT_NE(planarProjection, nullptr);
     ASSERT_NE(cylindricalProjection, nullptr);
-    ASSERT_NE(refineSeams, nullptr);
+    ASSERT_NE(colorSource, nullptr);
     ASSERT_NE(fillHoles, nullptr);
     ASSERT_NE(useMasks, nullptr);
     ASSERT_NE(imageList, nullptr);
@@ -163,7 +163,9 @@ TEST(MapProjectDialogTest, ExposesSupportedWorkflowAndActualDemDefaults)
     EXPECT_TRUE(demProjection->isChecked());
     EXPECT_FALSE(planarProjection->isEnabled());
     EXPECT_FALSE(cylindricalProjection->isEnabled());
-    EXPECT_FALSE(refineSeams->isEnabled());
+    EXPECT_TRUE(colorSource->text().contains(QStringLiteral("影像")));
+    EXPECT_EQ(dialog.findChild<QCheckBox *>(
+                  QStringLiteral("orthoRefineSeamsCheck")), nullptr);
     EXPECT_TRUE(fillHoles->isChecked());
     EXPECT_TRUE(useMasks->isEnabled());
     EXPECT_FALSE(useMasks->isChecked());
@@ -199,16 +201,19 @@ TEST(MapProjectDialogTest, SwitchesToPointCloudPlanarAndGlobalProjection)
     auto *cylindricalProjection = requiredWidget<QRadioButton>(
         &dialog, "orthoProjectionCylindricalRadio");
     auto *surfacePath = requiredWidget<QLineEdit>(&dialog, "orthoDemPathEdit");
+    auto *colorSource = requiredWidget<QLabel>(&dialog, "orthoColorSourceLabel");
     auto *bodyReference = requiredWidget<QWidget>(&dialog, "orthoBodyReferenceAutoCheck");
     auto *maximumMode = requiredWidget<QRadioButton>(
         &dialog, "orthoMaximumDimensionModeRadio");
     ASSERT_NE(surface, nullptr);
+    ASSERT_NE(colorSource, nullptr);
     surface->setCurrentIndex(surface->findData(QStringLiteral("point_cloud")));
     EXPECT_FALSE(demProjection->isEnabled());
     EXPECT_TRUE(planarProjection->isEnabled());
     EXPECT_TRUE(planarProjection->isChecked());
     EXPECT_TRUE(cylindricalProjection->isEnabled());
     EXPECT_EQ(surfacePath->text(), fixture.pointCloudPath);
+    EXPECT_TRUE(colorSource->text().contains(QStringLiteral("点颜色 RGB")));
 
     cylindricalProjection->setChecked(true);
     maximumMode->setChecked(true);

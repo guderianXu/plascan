@@ -46,19 +46,13 @@ private:
     /// @return 配置参数 JSON 对象。
     QJsonObject collectSettings() const;
 
-    QComboBox *_textureTypeCombo = nullptr; ///< 纹理生成类型
-    QComboBox *_sourceCombo = nullptr;      ///< 纹理源数据
     QComboBox *_blendCombo = nullptr;       ///< 混合方式
     QComboBox *_texSizeCombo = nullptr;     ///< 纹理分辨率
-    QComboBox *_uvMethodCombo = nullptr;    ///< UV 展开方式
     QComboBox *_imageDownscaleCombo = nullptr; ///< 源影像下采样倍率
-    QCheckBox *_saveEachStepCheck = nullptr; ///< 每步完成后保存项目
     QCheckBox *_holeFillCheck = nullptr;    ///< 纹理孔洞填充
     QCheckBox *_colorCorrCheck = nullptr;   ///< 色彩一致性校正
     QCheckBox *_ghostFilterCheck = nullptr; ///< 去除鬼影
     QCheckBox *_outOfFocusFilterCheck = nullptr; ///< 焦外影像过滤
-    QCheckBox *_useAssignedImagesCheck = nullptr; ///< 仅使用指定影像
-    QCheckBox *_transferTextureCheck = nullptr; ///< 转移已有纹理
     QDoubleSpinBox *_seamsMarginSpin = nullptr; ///< 接缝边距
     QSpinBox *_paddingSpin = nullptr;       ///< 纹理填充边距
     QCheckBox *_keepUnmappedCheck = nullptr; ///< 保留无纹理区域

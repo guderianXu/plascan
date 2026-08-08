@@ -6,6 +6,7 @@
 #include "ProjectMetadataOperations.h"
 #include "ProjectResultRecords.h"
 #include "ProjectWorkflowUtils.h"
+#include "ProjectOpenGuard.h"
 #include "GuiTaskRunner.h"
 #include "Logger.h"
 #include "TerrainPipeline.h"
@@ -70,21 +71,10 @@ ProjectTerrainProductsManager::ProjectTerrainProductsManager(ProjectManager *own
     }
 }
 
-bool ProjectTerrainProductsManager::ensureProjectOpen(const QString &message,
-                                                      const QString &title) const
-{
-    if (_projectData && _projectData->hasProject())
-    {
-        return true;
-    }
-    QMessageBox::warning(_parentWidget, title, message);
-    return false;
-}
-
 void ProjectTerrainProductsManager::startDemFromPointCloudAsync(
     const xjw::gui::project::DemGenerationRequest &request)
 {
-    if (!ensureProjectOpen())
+    if (!xjw::gui::project::requireOpenProject(_projectData, _parentWidget))
     {
         return;
     }
@@ -200,7 +190,7 @@ void ProjectTerrainProductsManager::startDemFromPointCloudAsync(
 void ProjectTerrainProductsManager::startMapProjectAsync(
     const xjw::gui::project::OrthoGenerationRequest &request)
 {
-    if (!ensureProjectOpen())
+    if (!xjw::gui::project::requireOpenProject(_projectData, _parentWidget))
     {
         emit orthoPipelineFinished(false, QStringLiteral("请先打开项目"), QJsonObject());
         return;

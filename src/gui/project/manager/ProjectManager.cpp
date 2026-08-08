@@ -22,6 +22,7 @@
 #include "ProjectTiePointResultService.h"
 
 #include "ProjectMetadataOperations.h"
+#include "ProjectOpenGuard.h"
 #include "ProjectSfmWorkflow.h"
 #include "ProjectSparseWorkflow.h"
 #include "ProjectResultRecords.h"
@@ -55,6 +56,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QPointer>
+#include <QPushButton>
 #include <QThread>
 #include <cmath>
 #include <QFile>
@@ -76,6 +78,7 @@
 using xjw::common::project::cameraFromJson;
 using xjw::common::project::cameraToJson;
 using xjw::gui::project::BundleAdjustExecutionResult;
+using xjw::gui::project::buildBundleAdjustPreviewPresentation;
 using xjw::gui::project::buildSparsePointWorkflowSuccessMessage;
 using xjw::gui::project::commitBundleAdjustPreview;
 using xjw::gui::project::existingCameraImages;
@@ -96,9 +99,9 @@ using xjw::gui::project::resolveInitTargets;
 using xjw::gui::project::resolveLatestDenseCloudPath;
 using xjw::gui::project::resolveProjectOutputDir;
 using xjw::gui::project::resolveSparsePointContext;
+using xjw::gui::project::requireOpenProject;
 using xjw::gui::project::runBundleAdjustExecution;
 using xjw::gui::project::runSparsePointWorkflow;
-using xjw::gui::project::replaceMetaArrayWithLatest;
 using xjw::gui::project::replaceProjectRecordWithLatest;
 using xjw::gui::project::SparsePointContext;
 using xjw::gui::project::SparsePointOperationResult;
@@ -106,14 +109,11 @@ using xjw::gui::project::SparsePointWorkflowKind;
 using xjw::gui::project::SparsePointWorkflowSpec;
 using xjw::gui::project::sparseOperationDisplayName;
 using xjw::gui::project::sparsePointWorkflowSpec;
-using xjw::gui::project::summarizeAtResults;
 using xjw::gui::project::findLatestAtResultIndex;
 using xjw::gui::project::upsertProjectRecordByPath;
-using xjw::gui::project::upsertMetaArrayRecordByIndex;
 using xjw::gui::project::upsertMetaArrayRecordByPath;
 using xjw::gui::project::withPreparedCameras;
 using xjw::gui::project::writeJsonObjectFile;
-using xjw::gui::project::writeBundleAdjustReport;
 
 namespace
 {
@@ -386,6 +386,7 @@ ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
         const auto advanceSessionGeneration = [this]()
         {
             ++_projectSessionGeneration;
+            discardBundleAdjustPreview();
         };
         connect(_projectData, &ProjectData::projectOpened,
                 this, advanceSessionGeneration);
@@ -784,8 +785,10 @@ void ProjectManager::importProjectAsset(bool modelAsset)
 {
     const QString assetName = modelAsset ? QStringLiteral("模型") : QStringLiteral("点云");
     const QString dialogTitle = QStringLiteral("导入 Metashape %1").arg(assetName);
-    if (!ensureProjectOpen(QStringLiteral("请先打开或创建项目，再导入%1。").arg(assetName),
-                           dialogTitle))
+    if (!requireOpenProject(_projectData,
+                            _parent,
+                            QStringLiteral("请先打开或创建项目，再导入%1。").arg(assetName),
+                            dialogTitle))
     {
         return;
     }
@@ -956,14 +959,6 @@ bool ProjectManager::initializeCameraPosesWithSFM(const QJsonObject &settings)
     return _cameraSetupManager && _cameraSetupManager->initializeCameraPosesWithSFM(settings);
 }
 
-void ProjectManager::removeResource(const QString &resourcePath)
-{
-    if (_projectData)
-    {
-        _projectData->removeResource(resourcePath);
-    }
-}
-
 void ProjectManager::removeResources(const QStringList &resourcePaths)
 {
     if (_projectData)
@@ -974,7 +969,9 @@ void ProjectManager::removeResources(const QStringList &resourcePaths)
 
 void ProjectManager::importReferenceDataset()
 {
-    if (!ensureProjectOpen(QStringLiteral("请先打开项目，再导入参考 DEM/LiDAR。")))
+    if (!requireOpenProject(_projectData,
+                            _parent,
+                            QStringLiteral("请先打开项目，再导入参考 DEM/LiDAR。")))
     {
         return;
     }
@@ -1016,7 +1013,9 @@ bool ProjectManager::registerReferenceDataset(const QString &path,
 
 void ProjectManager::openSurveyControlDialog()
 {
-    if (!ensureProjectOpen(QStringLiteral("请先打开项目，再管理测绘控制点。")))
+    if (!requireOpenProject(_projectData,
+                            _parent,
+                            QStringLiteral("请先打开项目，再管理测绘控制点。")))
     {
         return;
     }
@@ -1081,7 +1080,9 @@ void ProjectManager::openGenerateMaskDialogForImages(const QStringList &requeste
 
 void ProjectManager::runReferenceQualityCheck()
 {
-    if (!ensureProjectOpen(QStringLiteral("请先打开项目，再执行点云/DEM 精度检查。")))
+    if (!requireOpenProject(_projectData,
+                            _parent,
+                            QStringLiteral("请先打开项目，再执行点云/DEM 精度检查。")))
     {
         return;
     }
@@ -1108,7 +1109,9 @@ void ProjectManager::runReferenceQualityCheck()
 
 void ProjectManager::prepareReferenceTerrainBundleAdjust()
 {
-    if (!ensureProjectOpen(QStringLiteral("请先打开项目，再使用参考地形约束重新平差。")))
+    if (!requireOpenProject(_projectData,
+                            _parent,
+                            QStringLiteral("请先打开项目，再使用参考地形约束重新平差。")))
     {
         return;
     }
@@ -1568,23 +1571,10 @@ QString ProjectManager::findMatchFileForPair(const QString &imgA, const QString 
     return _projectData ? _projectData->findMatchFile(imgA, imgB) : QString();
 }
 
-bool ProjectManager::hasTemporaryMeta() const
-{
-    return _projectData ? _projectData->hasTemporaryMetadata() : false;
-}
-
 void ProjectManager::discardTemporaryMeta()
 {
     if (_projectData) {
         _projectData->clearTemporaryMetadata();
-    }
-}
-
-void ProjectManager::writeMetadataToTempAsync(const QJsonObject &meta, bool markDirty)
-{
-    if (_projectData) {
-        _projectData->updateMetadata(meta, markDirty);
-        _projectData->scheduleTemporaryMetadataSave();
     }
 }
 
@@ -1601,16 +1591,6 @@ void ProjectManager::refreshReconstructionQualityReport()
     {
         LOG_WARN(QStringLiteral("重建质量报告刷新失败: %1").arg(reportResult.errorMessage));
     }
-}
-
-void ProjectManager::appendImageMatchResult(const ProjectImageMatchResultRecord &record)
-{
-    if (!_projectData || record.image.trimmed().isEmpty())
-    {
-        return;
-    }
-    _projectData->appendImageMatchResult(record);
-    emit imageMatchResultAppended(record.image);
 }
 
 void ProjectManager::appendImageMatchResults(
@@ -1633,7 +1613,7 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
                                             const QJsonObject &extraSettings)
 {
     // ── 前置检查（仅快速校验，不做任何 IO）───────────────────────────────
-    if (!ensureProjectOpen()) return;
+    if (!requireOpenProject(_projectData, _parent)) return;
     if (images.size() < 2) {
         QMessageBox::warning(_parent, QStringLiteral("提示"), QStringLiteral("至少需要选择两张影像"));
         return;
@@ -1642,6 +1622,17 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
         QMessageBox::warning(_parent, QStringLiteral("提示"), QStringLiteral("请指定输出目录"));
         return;
     }
+    if (_atCancelFlag)
+    {
+        QMessageBox::information(
+            _parent,
+            QStringLiteral("光束法平差"),
+            QStringLiteral("已有空三或光束法平差任务正在运行，请等待其结束或先取消当前任务。"));
+        return;
+    }
+
+    // 新一轮运行会替代尚未处理的旧预览，避免失败或取消后误提交旧结果。
+    discardBundleAdjustPreview();
 
     const QString outDir = QDir::cleanPath(outputDir);
 
@@ -1649,6 +1640,7 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
     // 单影像 `.pimatch` 分片在后台线程直接读取，避免 UI 阻塞。
     const QJsonObject coreData   = _projectData->coreFilesMeta();
     const QString     plascanPath = _projectData->currentProjectPath();
+    const auto session = currentSessionContext();
 
     const int minMatches = qMax(0, extraSettings.value(QStringLiteral("min_matches")).toInt(0));
 
@@ -1847,7 +1839,7 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
 xjw::gui::tasks::runGuardedWithOutcome(
     this,
     [self, coreData, plascanPath, images, minMatches,
-     cancelFlag, opts = std::move(opts), isDryRun = dryRun]() mutable
+     cancelFlag, opts = std::move(opts), isDryRun = dryRun, session]() mutable
     {
         auto finishTask = [self, cancelFlag](bool success)
         {
@@ -1879,13 +1871,14 @@ xjw::gui::tasks::runGuardedWithOutcome(
         }
         QMetaObject::invokeMethod(
             self.data(),
-            [self, cancelFlag]()
+            [self, cancelFlag, session]()
             {
                 if (!self)
                 {
                     return;
                 }
                 if (self->_atCancelFlag != cancelFlag ||
+                    !self->isCurrentSession(session) ||
                     cancelFlag->load(std::memory_order_relaxed))
                 {
                     return;
@@ -1906,13 +1899,14 @@ xjw::gui::tasks::runGuardedWithOutcome(
             if (self)
             {
                 QMetaObject::invokeMethod(self.data(),
-                [self, cancelFlag]()
+                [self, cancelFlag, session]()
                 {
                     if (!self)
                     {
                         return;
                     }
-                    if (self->_atCancelFlag == cancelFlag)
+                    if (self->_atCancelFlag == cancelFlag
+                        && self->isCurrentSession(session))
                     {
                         emit self->bundleAdjustPreviewReady(QJsonObject());
                     }
@@ -1929,13 +1923,19 @@ xjw::gui::tasks::runGuardedWithOutcome(
                 return;
             }
             QMetaObject::invokeMethod(self.data(),
-                [self, cancelFlag, buildStatus = executionResult.buildStatus]() {
+                [self, cancelFlag, session, buildStatus = executionResult.buildStatus]() {
                     if (!self)
                     {
                         return;
                     }
                     if (self->_atCancelFlag != cancelFlag)
                     {
+                        return;
+                    }
+                    if (!self->isCurrentSession(session))
+                    {
+                        self->_atCancelFlag.reset();
+                        emit self->atProgressFinished(false);
                         return;
                     }
                     const QString msg =
@@ -1965,7 +1965,8 @@ xjw::gui::tasks::runGuardedWithOutcome(
              cancelFlag,
              baResult = executionResult.serviceResult,
              beforeCamMeta = executionResult.beforeCamMeta,
-             isDryRun]()
+             isDryRun,
+             session]()
             {
                 if (!self)
                 {
@@ -1973,6 +1974,13 @@ xjw::gui::tasks::runGuardedWithOutcome(
                 }
                 if (self->_atCancelFlag != cancelFlag)
                 {
+                    return;
+                }
+                if (!self->isCurrentSession(session))
+                {
+                    self->_atCancelFlag.reset();
+                    self->discardBundleAdjustPreview();
+                    emit self->atProgressFinished(false);
                     return;
                 }
                 if (cancelFlag->load(std::memory_order_relaxed))
@@ -1990,17 +1998,30 @@ xjw::gui::tasks::runGuardedWithOutcome(
                         QStringLiteral("平差提示"),
                         QStringLiteral("光束法平差执行出现问题：%1").arg(baResult.errorMessage));
                 }
-                self->_pendingBaBeforeCameraMeta = beforeCamMeta;
-                self->_pendingBaCameraMeta  = baResult.pendingCamUpdates;
-                self->_pendingBaResult      = baResult.resultJson;
-                self->_hasPendingBaPreview  = !self->_pendingBaCameraMeta.isEmpty();
+                const bool has_applicable_preview =
+                    baResult.success && !isDryRun && !baResult.pendingCamUpdates.isEmpty();
+                if (has_applicable_preview)
+                {
+                    self->_pendingBaBeforeCameraMeta = beforeCamMeta;
+                    self->_pendingBaCameraMeta = baResult.pendingCamUpdates;
+                    self->_pendingBaResult = baResult.resultJson;
+                    self->_hasPendingBaPreview = true;
+                }
+                else
+                {
+                    self->discardBundleAdjustPreview();
+                }
                 emit self->bundleAdjustPreviewReady(baResult.resultJson);
                 self->_atCancelFlag.reset();
                 emit self->atProgressFinished(baResult.success);
+                if (has_applicable_preview)
+                {
+                    self->presentBundleAdjustPreview();
+                }
             },
             Qt::QueuedConnection);
     },
-    [cancelFlag](ProjectManager *manager,
+    [cancelFlag, session](ProjectManager *manager,
                  xjw::gui::tasks::TaskOutcome<void> outcome)
     {
         if (outcome.succeeded() || manager->_atCancelFlag != cancelFlag)
@@ -2010,6 +2031,10 @@ xjw::gui::tasks::runGuardedWithOutcome(
 
         manager->_atCancelFlag.reset();
         emit manager->atProgressFinished(false);
+        if (!manager->isCurrentSession(session))
+        {
+            return;
+        }
         QMessageBox::warning(manager->_parent,
                              QStringLiteral("光束法平差"),
                              outcome.errorMessage);
@@ -2107,14 +2132,6 @@ QMap<QString, xjw::Camera> ProjectManager::getCamerasForImages(
         *hasCamerasForAll = false;
 
     return result;
-}
-
-void ProjectManager::startGenerateModelAsync()
-{
-    if (_modelManager)
-    {
-        _modelManager->startGenerateModelAsync();
-    }
 }
 
 void ProjectManager::startGenerateModelAsync(const QJsonObject &settings)
@@ -2237,6 +2254,63 @@ void ProjectManager::cancelMapProject()
     }
 }
 
+void ProjectManager::presentBundleAdjustPreview()
+{
+    while (_hasPendingBaPreview && !_pendingBaCameraMeta.isEmpty())
+    {
+        const auto presentation = buildBundleAdjustPreviewPresentation(
+            _pendingBaResult,
+            _pendingBaCameraMeta.size());
+
+        QMessageBox message_box(_parent);
+        message_box.setObjectName(QStringLiteral("bundleAdjustPreviewMessageBox"));
+        message_box.setWindowTitle(QStringLiteral("参考地形约束重新平差"));
+        message_box.setIcon(presentation.qualityWarning
+                               ? QMessageBox::Warning
+                               : QMessageBox::Question);
+        message_box.setText(presentation.summaryText);
+        message_box.setInformativeText(
+            presentation.qualityWarning
+                ? QStringLiteral("关键质量指标存在警告。请展开详细信息核对后，再决定是否写回项目。")
+                : QStringLiteral("请核对指标后选择“保留结果”写回项目，或选择“丢弃结果”保持原相机参数。"));
+        if (!presentation.detailedText.isEmpty())
+        {
+            message_box.setDetailedText(presentation.detailedText);
+        }
+
+        QPushButton *keep_button = message_box.addButton(
+            QStringLiteral("保留结果"),
+            QMessageBox::AcceptRole);
+        QPushButton *discard_button = message_box.addButton(
+            QStringLiteral("丢弃结果"),
+            QMessageBox::DestructiveRole);
+        keep_button->setObjectName(QStringLiteral("keepBundleAdjustPreviewButton"));
+        discard_button->setObjectName(QStringLiteral("discardBundleAdjustPreviewButton"));
+        message_box.setDefaultButton(keep_button);
+        message_box.setEscapeButton(discard_button);
+        message_box.exec();
+
+        if (message_box.clickedButton() != keep_button)
+        {
+            discardBundleAdjustPreview();
+            LOG_INFO(QStringLiteral("BA: 用户丢弃了待提交的平差结果"));
+            return;
+        }
+
+        QString error_message;
+        if (acceptBundleAdjustPreview(&error_message))
+        {
+            return;
+        }
+
+        QMessageBox::warning(
+            _parent,
+            QStringLiteral("光束法平差"),
+            QStringLiteral("应用平差结果失败：%1\n\n结果仍保留在内存中，可重试或选择丢弃。")
+                .arg(error_message));
+    }
+}
+
 bool ProjectManager::acceptBundleAdjustPreview(QString *errorMsg)
 {
     if (!_hasPendingBaPreview || _pendingBaCameraMeta.isEmpty()) {
@@ -2300,7 +2374,8 @@ bool ProjectManager::acceptBundleAdjustPreview(QString *errorMsg)
 
     QMessageBox::information(_parent,
                              QStringLiteral("光束法平差"),
-                             QStringLiteral("已保留本次平差结果，并更新 %1 台相机参数。")
+                             QStringLiteral("已保留本次平差结果，并更新 %1 台相机参数。\n"
+                                            "详细指标可在“工具 > 查看工作流程报告”中查看。")
                                  .arg(commitResult.updatedCameraCount));
     return true;
 }
@@ -2311,77 +2386,6 @@ void ProjectManager::discardBundleAdjustPreview()
     _pendingBaBeforeCameraMeta.clear();
     _pendingBaResult = QJsonObject();
     _hasPendingBaPreview = false;
-}
-
-void ProjectManager::applyBundleAdjustForAt(const QString     &assetsDir,
-                                            const QStringList &images,
-                                            const QString     &outputDir,
-                                            const QMap<QString, QJsonObject> &beforeCameras)
-{
-    bool success = false;
-    if (_hasPendingBaPreview && !_pendingBaCameraMeta.isEmpty())
-    {
-        const auto commitResult = commitBundleAdjustPreview(_projectData,
-                                                            _pendingBaCameraMeta,
-                                                            _pendingBaResult);
-        if (commitResult.success)
-        {
-            LOG_INFO(
-                QStringLiteral("BA(AT): 已更新 %1 台相机参数").arg(commitResult.updatedCameraCount));
-            success = true;
-        } 
-        else 
-        {
-            LOG_WARN(
-                commitResult.errorMessage);
-        }
-        if (!commitResult.warningMessage.isEmpty())
-        {
-            LOG_WARN(QStringLiteral("BA(AT): %1").arg(commitResult.warningMessage));
-        }
-    } 
-    else 
-    {
-        LOG_WARN(
-            QStringLiteral("BA(AT): 没有待应用的平差预览结果，可能是相机或匹配点不足"));
-    }
-
-    const auto artifactsResult = finalizeBundleAdjustArtifacts(assetsDir,
-                                                               _pendingBaResult,
-                                                               images,
-                                                               outputDir,
-                                                               QStringLiteral("workflow_aerial_triangulation"),
-                                                               beforeCameras,
-                                                               _pendingBaCameraMeta,
-                                                               outputDir,
-                                                               false);
-    if (!artifactsResult.reportWarning.isEmpty())
-    {
-        LOG_WARN(QStringLiteral("BA(AT): %1").arg(artifactsResult.reportWarning));
-    }
-
-    if (artifactsResult.sparseCloudExport.exported)
-    {
-        replaceTiePointResult(artifactsResult.sparseCloudExport.sparseCloudPath,
-                              artifactsResult.sparseCloudExport.pointCount,
-                              images,
-                              artifactsResult.sparseCloudExport.outputDir,
-                              artifactsResult.sparseCloudExport.extraRecord);
-    }
-    else if (!artifactsResult.sparseCloudExport.errorMessage.isEmpty())
-    {
-        LOG_WARN(QStringLiteral("BA(AT): 无法导出稀疏点云文件: %1")
-                     .arg(artifactsResult.sparseCloudExport.errorMessage));
-    }
-
-    // ── 4. 清理预览缓存 ────────────────────────────────────────────────────
-    _pendingBaCameraMeta.clear();
-    _pendingBaBeforeCameraMeta.clear();
-    _pendingBaResult    = QJsonObject();
-    _hasPendingBaPreview = false;
-
-    // ── 5. 发出空三完成信号 ────────────────────────────────────────────────
-    emit atProgressFinished(success);
 }
 
 bool ProjectManager::appendIntersectionResult(const QJsonObject &result, QString *errorMsg)
@@ -2422,14 +2426,6 @@ void ProjectManager::showWarning(const QString &message, const QString &title) c
     QMessageBox::warning(_parent, title, message);
 }
 
-bool ProjectManager::ensureProjectOpen(const QString &message, const QString &title) const
-{
-    // 将“项目是否打开”校验统一收口，避免重复 if 与文案分散。
-    if (_projectData && _projectData->hasProject()) return true;
-    showWarning(message, title);
-    return false;
-}
-
 bool ProjectManager::replaceTiePointResult(const QString &sparseCloudPath,
                                            int sparsePointCount,
                                            const QStringList &selectedImages,
@@ -2457,26 +2453,6 @@ bool ProjectManager::replaceTiePointResult(const QString &sparseCloudPath,
                  .arg(result.reconstructionGenerationId));
     refreshReconstructionQualityReport();
     return true;
-}
-
-void ProjectManager::appendObsNetResult(int nodeCount,
-                                        int edgeCount,
-                                        const QString &algorithmName,
-                                        const QJsonObject &extraInfo)
-{
-    xjw::gui::project::appendObsNetResult(_projectData,
-                                          nodeCount,
-                                          edgeCount,
-                                          algorithmName,
-                                          extraInfo);
-}
-
-// ── 追加空三（SFM）结果到 aerial_triangulation_results ─────────────────
-QJsonArray ProjectManager::getAvailableAtResults() const
-{
-    return _sparseReconstructionManager
-        ? _sparseReconstructionManager->getAvailableAtResults()
-        : QJsonArray();
 }
 
 void ProjectManager::cancelModelGeneration()

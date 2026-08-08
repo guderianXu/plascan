@@ -150,6 +150,7 @@ void MapProjectDialog::setupUi()
     _surfaceCombo->addItem(tr("DEM"), QStringLiteral("dem"));
     _surfaceCombo->addItem(tr("彩色点云"), QStringLiteral("point_cloud"));
     _surfaceCombo->setToolTip(tr("DEM 使用相机影像着色；彩色点云直接使用点的 RGB。"));
+    xjw::gui::dialogs::configureWorkflowComboBox(_surfaceCombo);
     _demEdit = new QLineEdit(_parametersGroup);
     _demEdit->setObjectName(QStringLiteral("orthoDemPathEdit"));
     _demEdit->setPlaceholderText(tr("选择项目 DEM 或外部 DEM 栅格"));
@@ -160,15 +161,10 @@ void MapProjectDialog::setupUi()
     _blendCombo->addItem(tr("马赛克（默认）"), QStringLiteral("mosaic"));
     _blendCombo->addItem(tr("加权平均"), QStringLiteral("weighted_average"));
     _blendCombo->addItem(tr("首个有效影像"), QStringLiteral("first_valid"));
-    _colorSourceCombo = new QComboBox(_parametersGroup);
-    _colorSourceCombo->setObjectName(QStringLiteral("orthoColorSourceCombo"));
-    _colorSourceCombo->addItem(tr("影像"), QStringLiteral("images"));
-    _colorSourceCombo->addItem(tr("点颜色 RGB"), QStringLiteral("point_colors"));
-    _refineSeamsCheck = new QCheckBox(tr("完善接缝线"), _parametersGroup);
-    _refineSeamsCheck->setObjectName(QStringLiteral("orthoRefineSeamsCheck"));
-    _refineSeamsCheck->setEnabled(false);
-    _refineSeamsCheck->setToolTip(
-        tr("当前后端尚未实现全局接缝线优化，因此该选项不会作为运行参数提交。"));
+    xjw::gui::dialogs::configureWorkflowComboBox(_blendCombo);
+    _colorSourceLabel = new QLabel(_parametersGroup);
+    _colorSourceLabel->setObjectName(QStringLiteral("orthoColorSourceLabel"));
+    _colorSourceLabel->setWordWrap(true);
     _fillHolesCheck = new QCheckBox(tr("启用孔洞填充"), _parametersGroup);
     _fillHolesCheck->setObjectName(QStringLiteral("orthoFillHolesCheck"));
     _fillHolesCheck->setChecked(true);
@@ -188,8 +184,7 @@ void MapProjectDialog::setupUi()
     parametersForm->addRow(tr("表面:"), _surfaceCombo);
     parametersForm->addRow(tr("表面文件:"), pathRow(_demEdit, _demBrowseButton));
     parametersForm->addRow(tr("混合模式:"), _blendCombo);
-    parametersForm->addRow(tr("颜色来源:"), _colorSourceCombo);
-    parametersForm->addRow(QString(), _refineSeamsCheck);
+    parametersForm->addRow(tr("颜色来源:"), _colorSourceLabel);
     parametersForm->addRow(QString(), _fillHolesCheck);
     parametersForm->addRow(QString(), _ghostFilterCheck);
     parametersForm->addRow(QString(), _colorCorrectionCheck);

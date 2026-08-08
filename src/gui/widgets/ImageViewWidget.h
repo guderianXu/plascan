@@ -41,7 +41,6 @@ public:
     // 缩放控制
     void zoomIn();
     void zoomOut();
-    void zoomTo(qreal factor);
     void fitToView();
     void resetZoom();
     
@@ -76,9 +75,6 @@ signals:
     
     // 可见区域变化
     void visibleRectChanged(const QRectF &rect);
-    
-    // 鼠标悬停在匹配点上
-    void matchPointHovered(int index, const QPointF &scenePos);
     
     // 匹配点被点击
     void matchPointClicked(int index, const QPointF &scenePos);

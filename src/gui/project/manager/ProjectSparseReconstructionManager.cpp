@@ -7,6 +7,7 @@
 #include "ProjectResultRecords.h"
 #include "ProjectSparseWorkflow.h"
 #include "ProjectWorkflowUtils.h"
+#include "ProjectOpenGuard.h"
 #include "TriangulationService.h"
 #include "project/SparseResultQuality.h"
 #include "tasks/GuiTaskRunner.h"
@@ -31,7 +32,6 @@ using xjw::gui::project::SparsePointWorkflowResult;
 using xjw::gui::project::SparsePointWorkflowKind;
 using xjw::gui::project::SparsePointWorkflowSpec;
 using xjw::gui::project::sparsePointWorkflowSpec;
-using xjw::gui::project::summarizeAtResults;
 using xjw::gui::project::writeJsonObjectFile;
 
 ProjectSparseReconstructionManager::ProjectSparseReconstructionManager(ProjectManager *owner,
@@ -45,30 +45,13 @@ ProjectSparseReconstructionManager::ProjectSparseReconstructionManager(ProjectMa
 {
 }
 
-QJsonArray ProjectSparseReconstructionManager::getAvailableAtResults() const
-{
-    if (!_projectData || !_projectData->hasProject())
-    {
-        return QJsonArray();
-    }
-    return summarizeAtResults(_projectData->metadata());
-}
-
-bool ProjectSparseReconstructionManager::ensureProjectOpen(const QString &message,
-                                                           const QString &title) const
-{
-    if (_projectData && _projectData->hasProject())
-    {
-        return true;
-    }
-    QMessageBox::warning(_parentWidget, title, message);
-    return false;
-}
-
 void ProjectSparseReconstructionManager::startTriangulationAsync(const QJsonObject &settings)
 {
-    if (!ensureProjectOpen(QStringLiteral("请先打开项目后再执行三角化"),
-                           QStringLiteral("生成两视预览云")))
+    if (!xjw::gui::project::requireOpenProject(
+            _projectData,
+            _parentWidget,
+            QStringLiteral("请先打开项目后再执行三角化"),
+            QStringLiteral("生成两视预览云")))
     {
         return;
     }
@@ -237,7 +220,8 @@ void ProjectSparseReconstructionManager::startSparsePointWorkflow(SparsePointWor
                                                                   const QJsonObject &settings)
 {
     const SparsePointWorkflowSpec spec = sparsePointWorkflowSpec(kind);
-    if (!ensureProjectOpen(spec.projectOpenMessage, spec.title))
+    if (!xjw::gui::project::requireOpenProject(
+            _projectData, _parentWidget, spec.projectOpenMessage, spec.title))
     {
         return;
     }

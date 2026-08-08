@@ -1,81 +1,21 @@
 #include "MainWindow.h"
 
 #include "ui_MainWindow.h"
-
-#include <QApplication>
-#include <QAction>
-#include <QSplitter>
-#include <QDockWidget>
-#include <QToolBar>
-#include <QMenuBar>
-#include <QStatusBar>
-#include <QFileInfo>
-#include <QDesktopServices>
-#include <QUrl>
-#include <QJsonArray>
-#include <QJsonObject>
-#include <QMessageBox>
-#include <QProgressDialog>
-#include <QSaveFile>
-#include <QTabWidget>
-#include <QTextStream>
-#include <QCloseEvent>
-#include <QTimer>
-#include <QDir>
-#include <QDragEnterEvent>
-#include <QDropEvent>
-#include <QMimeData>
-#include <QSignalBlocker>
-#include <QSizePolicy>
-#include <QScopedValueRollback>
-#include <QWidgetAction>
-
-#include <algorithm>
-#include <utility>
-
-#include "CanvasWidget.h"
-#include "ImageViewRotationSettings.h"
-#include "ProjectCameraIO.h"
-#include "project/ProjectMatchCatalog.h"
-#include "project/ProjectMetadata.h"
-#include "LogPanel.h"
-#include "MainMenu.h"
-#include "MenuWorkflowController.h"
-#include "ReconstructionWorkflowController.h"
-#include "tie_points/CleanTiePointsDialog.h"
-#include "tie_points/CreateTiePointsDialog.h"
-#include "tie_points/MatchPairSelectorDialog.h"
-#include "MatchPhotosTask.h"
-#include "camera/ForwardIntersectionCheckDialog.h"
-#include "camera/ForwardIntersectionResultsDialog.h"
 #include "HenuBrandWidget.h"
-#include "ProjectManager.h"
-#include "project/ProjectIO.h"
-#include "ProjectData.h"
-#include "ProjectDashboardWidget.h"
-#include "PhotoStripWidget.h"
-#include "AppConfigManager.h"
-#include "DataTreeWidget.h"
-#include "ReferencePanelWidget.h"
-#include "SelectionPropertiesWidget.h"
-#include "TaskStatusWidget.h"
-#include "ObservationNetworkView.h"
-#include "graph/ObservationNetworkBuilder.h"
-#include "WorkspaceCenterWidget.h"
-#include "WorkspacePanelController.h"
-#include "ProjectUiHydrator.h"
-#include "TiePointWorkflowController.h"
-#include "camera/CameraModel3DDialog.h"
-#include "tie_points/ThinTiePointsDialog.h"
-#include "LayerRenderer.h"
 #include "Logger.h"
-#include "ModelDropSupport.h"
-#include "MarkerWorkspaceController.h"
+#include "MainMenu.h"
 #include "MarkerReferencePanel.h"
-#include "MarkerFocusMeasurementDialog.h"
-#include "DetectMarkersDialog.h"
-#include "MarkerDetectionReviewDialog.h"
-#include "PrintMarkersDialog.h"
+#include "PhotoStripWidget.h"
+#include "SelectionPropertiesWidget.h"
+#include "WorkspaceCenterWidget.h"
+
+#include <QAction>
+#include <QDockWidget>
+#include <QSizePolicy>
+#include <QSplitter>
+#include <QTabWidget>
+#include <QToolBar>
+#include <QWidgetAction>
 
 namespace
 {
@@ -83,7 +23,6 @@ constexpr int SelectionPropertiesMinHeight = 80;
 constexpr int PhotosDockMinHeight = 90;
 constexpr int DockMinWidth = 160;
 constexpr int DockMinHeight = 80;
-constexpr int ProjectDockLayoutVersion = 3;
 
 void configureMovableDock(QDockWidget *dock)
 {
@@ -98,53 +37,6 @@ void configureMovableDock(QDockWidget *dock)
                       | QDockWidget::DockWidgetFloatable);
     dock->setMinimumSize(DockMinWidth, DockMinHeight);
     dock->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
-}
-
-xjw::matchphotos::MatchPhotosProfile tiePointProfileFromAccuracy(const QString &accuracy)
-{
-    if (accuracy == QStringLiteral("highest") || accuracy == QStringLiteral("high"))
-    {
-        return xjw::matchphotos::MatchPhotosProfile::HighAccuracy;
-    }
-    if (accuracy == QStringLiteral("lowest") || accuracy == QStringLiteral("low"))
-    {
-        return xjw::matchphotos::MatchPhotosProfile::Fast;
-    }
-    return xjw::matchphotos::MatchPhotosProfile::Auto;
-}
-
-xjw::matchphotos::PairSelectionPreset pairPresetFromAccuracy(const QString &accuracy)
-{
-    if (accuracy == QStringLiteral("highest") || accuracy == QStringLiteral("high"))
-    {
-        return xjw::matchphotos::PairSelectionPreset::HighAccuracy;
-    }
-    if (accuracy == QStringLiteral("lowest") || accuracy == QStringLiteral("low"))
-    {
-        return xjw::matchphotos::PairSelectionPreset::Fast;
-    }
-    return xjw::matchphotos::PairSelectionPreset::Auto;
-}
-
-int maxImageDimFromAccuracy(const QString &accuracy)
-{
-    if (accuracy == QStringLiteral("highest"))
-    {
-        return 4096;
-    }
-    if (accuracy == QStringLiteral("high"))
-    {
-        return 3072;
-    }
-    if (accuracy == QStringLiteral("low"))
-    {
-        return 1600;
-    }
-    if (accuracy == QStringLiteral("lowest"))
-    {
-        return 1200;
-    }
-    return 2048;
 }
 
 } // namespace

@@ -1,9 +1,9 @@
 #include <gtest/gtest.h>
 
-#include "PlascanArchive.h"
-#include "ProjectChunkStore.h"
-#include "ProjectResourceStore.h"
-#include "ProjectWorkspaceStore.h"
+#include "project/PlascanArchive.h"
+#include "project/ProjectChunkStore.h"
+#include "project/ProjectResourceStore.h"
+#include "project/ProjectWorkspaceStore.h"
 #include "ProjectData.h"
 #include "ProjectFilesManager.h"
 #include "project/ProjectChunkIndex.h"

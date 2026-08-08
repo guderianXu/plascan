@@ -43,6 +43,14 @@ private:
     TaskStatusWidget *createStatus(int labelWidth,
                                    const QString &cancellingText,
                                    QWidget *widgetParent);
+    void updatePercentTask(TaskStatusWidget *status,
+                           const QString &stage,
+                           int percent,
+                           bool appendIntermediatePercent);
+    void finishTask(TaskStatusWidget *status,
+                    bool success,
+                    const QString &successMessage,
+                    const QString &failureMessage);
     void refreshDashboard();
 
     ProjectManager *_projectManager = nullptr;

@@ -45,11 +45,6 @@ BundleAdjustSparseCloudExport exportBundleAdjustSparseCloud(const QJsonObject &b
                                                             const QString &outputDir,
                                                             bool useDedicatedFileName);
 
-bool writeBundleAdjustReport(const QString &reportPath,
-                             const QJsonObject &baResult,
-                             const QMap<QString, QJsonObject> &beforeCameras,
-                             const QMap<QString, QJsonObject> &afterCameras);
-
 bool writeLatestAndAppendHistoryReport(const QString &reportsDir,
                                        const QString &latestFileName,
                                        const QString &historyFileName,

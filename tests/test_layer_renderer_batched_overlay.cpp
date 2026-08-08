@@ -65,7 +65,7 @@ TEST(LayerRendererResponsivenessTest, LargeFeatureSetUsesSingleSceneItem)
     EXPECT_EQ(countFeatureOverlayItems(scene), 0);
 }
 
-TEST(LayerRendererResponsivenessTest, ClearingFeatureLayerDoesNotDeleteMatchLayer)
+TEST(LayerRendererResponsivenessTest, ClearingFeatureLayerKeepsImageLayer)
 {
     QGraphicsScene scene;
     LayerRenderer renderer(&scene);
@@ -75,13 +75,12 @@ TEST(LayerRendererResponsivenessTest, ClearingFeatureLayerDoesNotDeleteMatchLaye
     ASSERT_TRUE(renderer.addImageLayer(image, 0));
 
     renderer.addFeatureItems(makeKeypoints(20));
-    renderer.addMatchLines({QPointF(10.0, 10.0), QPointF(20.0, 20.0)},
-                           {QPointF(12.0, 11.0), QPointF(22.0, 21.0)},
-                           0.0);
+    ASSERT_EQ(scene.items().size(), 2);
 
     renderer.clearFeatureLayers();
 
-    EXPECT_EQ(countFeatureOverlayItems(scene), 6);
+    EXPECT_EQ(countFeatureOverlayItems(scene), 0);
+    EXPECT_EQ(scene.items().size(), 1);
 }
 
 TEST(LayerRendererMaskOverlayTest, MaskContourUsesCosmeticHaloAndOutline)

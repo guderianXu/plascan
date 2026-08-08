@@ -45,7 +45,6 @@ private:
     QComboBox *_maskModeCombo{};
     QCheckBox *_guidedMatchingCheck{};
     QCheckBox *_excludePinnedTiePointsCheck{};
-    QLabel *_preselectionStatusLabel{};
     QGroupBox *_generalGroup{};
     QGroupBox *_advancedGroup{};
     QToolButton *_advancedToggle{};

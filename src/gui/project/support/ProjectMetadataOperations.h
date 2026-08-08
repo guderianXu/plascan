@@ -42,10 +42,4 @@ TiePointMutationResult replaceTiePointResult(ProjectData *projectData,
                                              const QString &outputDir,
                                              const QJsonObject &extraRecord = {});
 
-void appendObsNetResult(ProjectData *projectData,
-                        int nodeCount,
-                        int edgeCount,
-                        const QString &algorithmName,
-                        const QJsonObject &extraInfo = {});
-
 } // namespace xjw::gui::project

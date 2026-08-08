@@ -109,12 +109,6 @@ DataTreeWidget::DataTreeWidget(QWidget *parent)
         if (resourceFromIndex(idx, &section, &path))
         {
             emit resourceActivated(section, path);
-            if (section == QStringLiteral("照片")
-                || section == QStringLiteral("深度图")
-                || section == QStringLiteral("DEM")
-                || section == QStringLiteral("正射影像")) {
-                emit imageActivated(path);
-            }
         }
     });
 
@@ -143,11 +137,6 @@ void DataTreeWidget::clearProject()
     _workspaceRoot = nullptr;
     _activeChunkRoot = nullptr;
     _model->removeRows(0, _model->rowCount());
-}
-
-void DataTreeWidget::loadFromArchive(const QString &plascanPath)
-{
-    setProjectPath(plascanPath);
 }
 
 void DataTreeWidget::loadFromJson(const QJsonObject &meta)

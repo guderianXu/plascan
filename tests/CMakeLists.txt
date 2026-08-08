@@ -495,7 +495,6 @@ target_link_libraries(test_project_data PRIVATE
 target_include_directories(test_project_data PRIVATE
     ${CMAKE_SOURCE_DIR}/src/common/log
     ${CMAKE_SOURCE_DIR}/src/gui/config
-    ${CMAKE_SOURCE_DIR}/src/gui/project/archive
     ${CMAKE_SOURCE_DIR}/src/gui/project/data
 )
 gtest_discover_tests(test_project_data)
@@ -555,7 +554,6 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/main_window/WorkspacePanelController.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/main_window/ProjectUiHydrator.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ImageViewRotationSettings.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/config/settings/ProjectDialogJsonSettingBase.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/settings/DialogSettingStore.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/DepthOverlayData.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/DepthOverlayController.cpp
@@ -564,7 +562,6 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/views/FeatureResidualLoader.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/LayerOverlayItems.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/LayerRenderer.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/views/LayerStitchedDebug.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/CanvasWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerOverlayItems.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerWorkspaceController.cpp
@@ -642,7 +639,6 @@ target_include_directories(test_gui_project_utils PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui/markers
     ${CMAKE_SOURCE_DIR}/src/gui/tasks
     ${CMAKE_SOURCE_DIR}/src/gui/project
-    ${CMAKE_SOURCE_DIR}/src/gui/project/archive
     ${CMAKE_SOURCE_DIR}/src/gui/project/data
     ${CMAKE_SOURCE_DIR}/src/gui/project/manager
     ${CMAKE_SOURCE_DIR}/src/gui/project/services
@@ -711,6 +707,7 @@ add_executable(test_workflow_settings_dialog
     test_workflow_settings_dialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/application/ModelPackageDownloadDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/application/WorkflowSettingsDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/shared/WorkflowParameterDialogStyle.cpp
 )
 target_link_libraries(test_workflow_settings_dialog PRIVATE
     matchphototask
@@ -772,14 +769,23 @@ gtest_discover_tests(test_workspace_section_icons
 
 add_executable(test_workflow_parameter_dialog_style
     test_workflow_parameter_dialog_style.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/AerialTriangulationDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/AerialTriangulationDialog.ui
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/CreatePointCloudDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/GenerateModelDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/TextureMappingDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/reconstruction/TextureMappingDialog.ui
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/shared/WorkflowParameterDialogStyle.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/tie_points/CleanTiePointsDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/tie_points/CreateTiePointsDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/tie_points/ThinTiePointsDialog.cpp
 )
 set_target_properties(test_workflow_parameter_dialog_style PROPERTIES
     AUTOMOC ON
+    AUTOUIC ON
 )
 target_link_libraries(test_workflow_parameter_dialog_style PRIVATE
+    project_workflows
     Qt6::Core
     Qt6::Gui
     Qt6::Test
@@ -811,11 +817,9 @@ set_tests_properties(WorkflowParameterDialogStyleDpi200 PROPERTIES
 
 add_executable(test_layer_renderer_batched_overlay
     test_layer_renderer_batched_overlay.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/views/LayerFeatureLoader.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/LayerImageLoader.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/LayerOverlayItems.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/LayerRenderer.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/views/LayerStitchedDebug.cpp
     ${CMAKE_SOURCE_DIR}/src/common/log/Logger.cpp
 )
 set_target_properties(test_layer_renderer_batched_overlay PROPERTIES
@@ -1096,7 +1100,6 @@ target_include_directories(test_marker_detection_job_builder PRIVATE
     ${CMAKE_SOURCE_DIR}/src/common/log
     ${CMAKE_SOURCE_DIR}/src/gui/config
     ${CMAKE_SOURCE_DIR}/src/gui/markers
-    ${CMAKE_SOURCE_DIR}/src/gui/project/archive
     ${CMAKE_SOURCE_DIR}/src/gui/project/data
     ${CMAKE_SOURCE_DIR}/src/core/control_points
 )

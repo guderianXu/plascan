@@ -43,9 +43,11 @@ bool samePath(const QString &left, const QString &right)
 #endif
 }
 
-double positiveJsonValue(const QJsonObject &object,
-                         const QString &primaryKey,
-                         const QString &fallbackKey = QString())
+} // namespace
+
+double MapProjectDialog::positiveJsonValue(const QJsonObject &object,
+                                           const QString &primaryKey,
+                                           const QString &fallbackKey)
 {
     double value = object.value(primaryKey).toDouble(0.0);
     if (!(value > 0.0) && !fallbackKey.isEmpty())
@@ -54,8 +56,6 @@ double positiveJsonValue(const QJsonObject &object,
     }
     return value;
 }
-
-} // namespace
 
 void MapProjectDialog::applySettings(const QJsonObject &settings)
 {
@@ -315,8 +315,9 @@ void MapProjectDialog::updateControlAvailability()
     _planarProjectionRadio->setEnabled(!_running && pointCloud);
     _cylindricalProjectionRadio->setEnabled(!_running && pointCloud);
     _blendCombo->setEnabled(!_running && !pointCloud);
-    _colorSourceCombo->setCurrentIndex(pointCloud ? 1 : 0);
-    _colorSourceCombo->setEnabled(false);
+    _colorSourceLabel->setText(pointCloud
+        ? tr("点颜色 RGB（由表面类型决定）")
+        : tr("影像（由表面类型决定）"));
     _ghostFilterCheck->setEnabled(!_running && !pointCloud);
     _colorCorrectionCheck->setEnabled(!_running && !pointCloud);
     _sharpnessWeightingCheck->setEnabled(!_running && !pointCloud);

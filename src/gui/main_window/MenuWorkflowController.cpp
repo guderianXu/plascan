@@ -11,11 +11,10 @@
 #include "Logger.h"
 #include "project/SparseResultQuality.h"
 #include "ProjectResultRecords.h"
+#include "ProjectWorkflowReports.h"
 
 #include "GuiTaskRunner.h"
-#include "tie_points/FeaturePointVisualizationDialog.h"
-#include "CanvasWidget.h"
-#include "MainWindow.h"
+#include "FeatureVisualizationController.h"
 #include "MainMenu.h"
 #include "tie_points/MatchPairSelectorDialog.h"
 #include "reconstruction/AerialTriangulationDialog.h"
@@ -30,13 +29,11 @@
 #include "settings/DialogSettingStore.h"
 #include "settings/DialogSettingKeys.h"
 
-#include <QColor>
 #include <QCheckBox>
 #include <QDateTime>
 #include <QDebug>
 #include <QDialog>
 #include <QDir>
-#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHash>
@@ -187,62 +184,6 @@ float normalizedFeatureGrayscaleMin(const QJsonObject &settings)
     return static_cast<float>(std::clamp(value, 0.0, 1.0));
 }
 
-int sfmQualityLevelFromWorkflowQuality(const QString &quality)
-{
-    if (quality == QStringLiteral("fast"))
-    {
-        return 0;
-    }
-    if (quality == QStringLiteral("quality"))
-    {
-        return 2;
-    }
-    return 1;
-}
-
-/// 将最新报告写入 latest 文件，并把同一份报告追加到历史数组文件中。
-bool writeLatestAndAppendHistoryReport(const QString &reportsDir,
-                                       const QString &latestFileName,
-                                       const QString &historyFileName,
-                                       const QJsonObject &report)
-{
-    if (reportsDir.isEmpty() || report.isEmpty())
-    {
-        return false;
-    }
-
-    QDir().mkpath(reportsDir);
-
-    QFile latestFile(QDir(reportsDir).filePath(latestFileName));
-    if (!latestFile.open(QIODevice::WriteOnly | QIODevice::Truncate))
-    {
-        return false;
-    }
-    latestFile.write(QJsonDocument(report).toJson(QJsonDocument::Compact));
-    latestFile.close();
-
-    QJsonArray history;
-    QFile historyFile(QDir(reportsDir).filePath(historyFileName));
-    if (historyFile.open(QIODevice::ReadOnly))
-    {
-        const QJsonDocument oldDoc = QJsonDocument::fromJson(historyFile.readAll());
-        if (oldDoc.isArray())
-        {
-            history = oldDoc.array();
-        }
-        historyFile.close();
-    }
-    history.append(report);
-
-    if (!historyFile.open(QIODevice::WriteOnly | QIODevice::Truncate))
-    {
-        return false;
-    }
-    historyFile.write(QJsonDocument(history).toJson(QJsonDocument::Indented));
-    historyFile.close();
-    return true;
-}
-
 /// 从特征匹配对话框设置中读取已生成的配对约束，并检测其是否覆盖当前选图。
 QStringList loadGeneratedPairConstraints(const QString &projectPath,
                                          const QJsonObject &projectMeta,
@@ -346,12 +287,18 @@ QStringList loadGeneratedPairConstraints(const QString &projectPath,
 MenuWorkflowController::MenuWorkflowController(QMainWindow *mainWindow, QObject *parent)
     : QObject(parent)
     , _mainWindow(mainWindow)
+    , _featureVisualizationController(new FeatureVisualizationController(mainWindow, this))
 {
+    connect(_featureVisualizationController,
+            &FeatureVisualizationController::optionsChanged,
+            this,
+            &MenuWorkflowController::requestApplyFeatureDisplayOptions);
 }
 
 void MenuWorkflowController::setProjectManager(ProjectManager *projectManager)
 {
     _projectManager = projectManager;
+    _featureVisualizationController->setProjectManager(projectManager);
 }
 
 DialogSettingStore *MenuWorkflowController::createDialogSettingStore(
@@ -387,7 +334,14 @@ void MenuWorkflowController::bindActions(MainMenu *mainMenu)
                   &MenuWorkflowController::openWorkflowAerialTriangulationDialog);
     connectAction(mainMenu->workflowSettingsAction(),
                   &MenuWorkflowController::openWorkflowSettingsDialog);
-    connectAction(mainMenu->featureVisualizationAction(), &MenuWorkflowController::openFeaturePointVisualizationDialog);
+    if (mainMenu->featureVisualizationAction())
+    {
+        connect(mainMenu->featureVisualizationAction(),
+                &QAction::triggered,
+                _featureVisualizationController,
+                &FeatureVisualizationController::openDialog,
+                Qt::UniqueConnection);
+    }
     connectAction(mainMenu->overlapAnalysisAction(), &MenuWorkflowController::openOverlapAnalysisDialog);
     connectAction(mainMenu->createDEMAction(), &MenuWorkflowController::openCreateDemDialog);
     connectAction(mainMenu->generateOrthoAction(), &MenuWorkflowController::openMapProjectDialog);
@@ -414,15 +368,6 @@ void MenuWorkflowController::bindActions(MainMenu *mainMenu)
     connectProjectAction(mainMenu->referenceQualityCheckAction(), &ProjectManager::runReferenceQualityCheck);
     connectProjectAction(mainMenu->referenceTerrainBundleAdjustAction(),
                          &ProjectManager::prepareReferenceTerrainBundleAdjust);
-}
-
-QJsonObject MenuWorkflowController::colorToJson(const QColor &c)
-{
-    QJsonObject o;
-    o.insert("r", c.red());
-    o.insert("g", c.green());
-    o.insert("b", c.blue());
-    return o;
 }
 
 QStringList MenuWorkflowController::getProjectImages() const
@@ -913,183 +858,9 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
     return summary;
 }
 
-void MenuWorkflowController::openFeaturePointVisualizationDialog()
+void MenuWorkflowController::applySavedFeatureDisplayOptions(const QJsonObject &uiSettings)
 {
-    if (!_mainWindow)
-    {
-        return;
-    }
-
-    auto *mainWin = qobject_cast<MainWindow*>(_mainWindow.data());
-    auto *canvas = mainWin ? mainWin->canvas() : nullptr;
-
-    QJsonObject sv;
-    if (_projectManager)
-    {
-        if (!_featurePointVisualizationSetting)
-        {
-            _featurePointVisualizationSetting =
-                createDialogSettingStore(DialogSettingKeys::FeaturePointVisualization);
-        }
-        _featurePointVisualizationSetting->setProjectPath(_projectManager->currentProjectPath());
-        sv = _featurePointVisualizationSetting->load();
-
-    }
-
-    auto *dlg = new FeaturePointVisualizationDialog(_mainWindow);
-    dlg->setAttribute(Qt::WA_DeleteOnClose);
-
-    // 懒初始化可视化记忆化管理器并加载保存的设置
-    if (_projectManager)
-    {
-        if (!sv.isEmpty())
-        {
-            LayerRenderer::FeatureDisplayOptions opts;
-            opts.showPoints = sv.value("showPoints").toBool(opts.showPoints);
-            opts.showScale = sv.value("showScale").toBool(opts.showScale);
-            opts.showOrientation = sv.value("showOrientation").toBool(opts.showOrientation);
-            opts.showResiduals = sv.value("showResiduals").toBool(opts.showResiduals);
-            opts.residualScale = sv.value("residualScale").toDouble(opts.residualScale);
-            opts.minimumResidualPx = sv.value("minimumResidualPx").toDouble(opts.minimumResidualPx);
-            opts.maximumResidualLengthPx =
-                sv.value("maximumResidualLengthPx").toDouble(opts.maximumResidualLengthPx);
-            opts.useFill = sv.value("useFill").toBool(opts.useFill);
-            opts.pointSize = sv.value("pointSize").toInt(opts.pointSize);
-            opts.scaleMultiplier = sv.value("scaleMultiplier").toDouble(opts.scaleMultiplier);
-            opts.opacity = sv.value("opacity").toInt(opts.opacity);
-            opts.markerShape = sv.value("markerShape").toString(opts.markerShape);
-            opts.maxDisplayCount = sv.value("maxDisplayCount").toInt(opts.maxDisplayCount);
-            opts.showTopScores = sv.value("showTopScores").toBool(opts.showTopScores);
-
-            QJsonObject pc = sv.value("pointColor").toObject();
-            if (!pc.isEmpty())
-            {
-                opts.pointColor = QColor(pc["r"].toInt(), pc["g"].toInt(), pc["b"].toInt());
-            }
-            QJsonObject sc = sv.value("scaleColor").toObject();
-            if (!sc.isEmpty())
-            {
-                opts.scaleColor = QColor(sc["r"].toInt(), sc["g"].toInt(), sc["b"].toInt());
-            }
-            QJsonObject oc = sv.value("orientColor").toObject();
-            if (!oc.isEmpty())
-            {
-                opts.orientColor = QColor(oc["r"].toInt(), oc["g"].toInt(), oc["b"].toInt());
-            }
-            QJsonObject rc = sv.value("residualColor").toObject();
-            if (!rc.isEmpty())
-            {
-                opts.residualColor = QColor(rc["r"].toInt(), rc["g"].toInt(), rc["b"].toInt());
-            }
-
-            dlg->setDisplayOptions(opts);
-        }
-    }
-
-    if (canvas)
-    {
-        LayerRenderer::FeatureDisplayOptions currentOptions = dlg->getDisplayOptions();
-        currentOptions.showPoints = canvas->showsInterestPoints();
-        currentOptions.showResiduals = canvas->showsFeatureResiduals();
-        dlg->setDisplayOptions(currentOptions);
-    }
-
-    // 连接实时更新信号
-    connect(dlg, &FeaturePointVisualizationDialog::displayOptionsChanged, this,
-        [this](const LayerRenderer::FeatureDisplayOptions &opts)
-        {
-            // 发送信号给MainWindow应用到CanvasWidget
-            emit requestApplyFeatureDisplayOptions(opts);
-
-            // 保存到 project_dialog.json
-            if (_featurePointVisualizationSetting)
-            {
-                QJsonObject sv;
-                sv["showPoints"] = opts.showPoints;
-                sv["showScale"] = opts.showScale;
-                sv["showOrientation"] = opts.showOrientation;
-                sv["showResiduals"] = opts.showResiduals;
-                sv["residualScale"] = opts.residualScale;
-                sv["minimumResidualPx"] = opts.minimumResidualPx;
-                sv["maximumResidualLengthPx"] = opts.maximumResidualLengthPx;
-                sv["useFill"] = opts.useFill;
-                sv["pointSize"] = opts.pointSize;
-                sv["scaleMultiplier"] = opts.scaleMultiplier;
-                sv["opacity"] = opts.opacity;
-                sv["markerShape"] = opts.markerShape;
-                sv["maxDisplayCount"] = opts.maxDisplayCount;
-                sv["showTopScores"] = opts.showTopScores;
-                sv["pointColor"] = colorToJson(opts.pointColor);
-                sv["scaleColor"] = colorToJson(opts.scaleColor);
-                sv["orientColor"] = colorToJson(opts.orientColor);
-                sv["residualColor"] = colorToJson(opts.residualColor);
-
-                _featurePointVisualizationSetting->save(sv);
-            }
-        });
-
-    dlg->show();
-}
-
-void MenuWorkflowController::applySavedFeatureDisplayOptions(const QJsonObject &)
-{
-    if (!_projectManager)
-    {
-        return;
-    }
-
-    // 优先从 project_dialog.json 加载
-    if (!_featurePointVisualizationSetting)
-    {
-        _featurePointVisualizationSetting =
-            createDialogSettingStore(DialogSettingKeys::FeaturePointVisualization);
-    }
-    _featurePointVisualizationSetting->setProjectPath(_projectManager->currentProjectPath());
-    QJsonObject sv = _featurePointVisualizationSetting->load();
-
-    if (sv.isEmpty())
-    {
-        return;
-    }
-
-    LayerRenderer::FeatureDisplayOptions opts;
-    opts.showPoints = sv.value("showPoints").toBool(opts.showPoints);
-    opts.showScale = sv.value("showScale").toBool(opts.showScale);
-    opts.showOrientation = sv.value("showOrientation").toBool(opts.showOrientation);
-    opts.showResiduals = sv.value("showResiduals").toBool(opts.showResiduals);
-    opts.residualScale = sv.value("residualScale").toDouble(opts.residualScale);
-    opts.minimumResidualPx = sv.value("minimumResidualPx").toDouble(opts.minimumResidualPx);
-    opts.maximumResidualLengthPx =
-        sv.value("maximumResidualLengthPx").toDouble(opts.maximumResidualLengthPx);
-    opts.useFill = sv.value("useFill").toBool(opts.useFill);
-    opts.pointSize = sv.value("pointSize").toInt(opts.pointSize);
-    opts.scaleMultiplier = sv.value("scaleMultiplier").toDouble(opts.scaleMultiplier);
-    opts.opacity = sv.value("opacity").toInt(opts.opacity);
-    opts.markerShape = sv.value("markerShape").toString(opts.markerShape);
-    opts.maxDisplayCount = sv.value("maxDisplayCount").toInt(opts.maxDisplayCount);
-    opts.showTopScores = sv.value("showTopScores").toBool(opts.showTopScores);
-    QJsonObject pc = sv.value("pointColor").toObject();
-    if (!pc.isEmpty())
-    {
-        opts.pointColor = QColor(pc["r"].toInt(), pc["g"].toInt(), pc["b"].toInt());
-    }
-    QJsonObject sc = sv.value("scaleColor").toObject();
-    if (!sc.isEmpty())
-    {
-        opts.scaleColor = QColor(sc["r"].toInt(), sc["g"].toInt(), sc["b"].toInt());
-    }
-    QJsonObject oc = sv.value("orientColor").toObject();
-    if (!oc.isEmpty())
-    {
-        opts.orientColor = QColor(oc["r"].toInt(), oc["g"].toInt(), oc["b"].toInt());
-    }
-    QJsonObject rc = sv.value("residualColor").toObject();
-    if (!rc.isEmpty())
-    {
-        opts.residualColor = QColor(rc["r"].toInt(), rc["g"].toInt(), rc["b"].toInt());
-    }
-
-    emit requestApplyFeatureDisplayOptions(opts);
+    _featureVisualizationController->applySavedOptions(uiSettings);
 }
 
 void MenuWorkflowController::openWorkflowAerialTriangulationDialog()
@@ -1802,11 +1573,12 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
                 report[QStringLiteral("tie_point_track_count")] =
                     workflowResult.tiePointResult.trackCount;
                 const QString reportsDir = QDir(assetsDir).filePath(QStringLiteral("reports"));
-                writeLatestAndAppendHistoryReport(reportsDir,
-                                                  QStringLiteral("at_report.json"),
-                                                  QStringLiteral("at_report_history.json"),
-                                                  report);
-                writeLatestAndAppendHistoryReport(
+                xjw::gui::project::writeLatestAndAppendHistoryReport(
+                    reportsDir,
+                    QStringLiteral("at_report.json"),
+                    QStringLiteral("at_report_history.json"),
+                    report);
+                xjw::gui::project::writeLatestAndAppendHistoryReport(
                     reportsDir,
                     QStringLiteral("aerial_triangulation_sfm_report.json"),
                     QStringLiteral("aerial_triangulation_sfm_report_history.json"),
@@ -1847,14 +1619,8 @@ void MenuWorkflowController::openCreateDemDialog()
         return;
     }
 
-    auto *dlg = new CreateDemDialog(_projectManager, _mainWindow);
+    auto *dlg = new CreateDemDialog(_mainWindow);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
-
-    QStringList images = getProjectImages();
-    if (!images.isEmpty())
-    {
-        dlg->setAvailableImages(images);
-    }
 
     connect(dlg, &CreateDemDialog::requestRun, this,
         [this](const xjw::gui::project::DemGenerationRequest &request)

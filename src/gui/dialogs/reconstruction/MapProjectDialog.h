@@ -85,6 +85,9 @@ private:
     QStringList selectedImages() const;
     QJsonObject currentSettings() const;
     bool validateSettings(const QJsonObject &settings, QString *errorMessage) const;
+    static double positiveJsonValue(const QJsonObject &object,
+                                    const QString &primaryKey,
+                                    const QString &fallbackKey = QString());
 
     QScrollArea *_contentScrollArea = nullptr;
     QGroupBox *_projectionGroup = nullptr;
@@ -109,8 +112,7 @@ private:
     QLineEdit *_demEdit = nullptr;
     QPushButton *_demBrowseButton = nullptr;
     QComboBox *_blendCombo = nullptr;
-    QComboBox *_colorSourceCombo = nullptr;
-    QCheckBox *_refineSeamsCheck = nullptr;
+    QLabel *_colorSourceLabel = nullptr;
     QCheckBox *_fillHolesCheck = nullptr;
     QCheckBox *_ghostFilterCheck = nullptr;
     QCheckBox *_colorCorrectionCheck = nullptr;

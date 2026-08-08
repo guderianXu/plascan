@@ -1162,6 +1162,7 @@ TEST(GuiDialogLayoutContractTest, DialogSourcesAreGroupedByDomain)
 
     expectContainsAll(gui_sources, {
         "include(${CMAKE_CURRENT_LIST_DIR}/GuiDialogSources.cmake)",
+        "views/CameraSceneWidget.cpp",
         "views/CameraSceneViewMath.cpp",
         "views/ObjRenderPreparation.cpp",
     });
@@ -1195,7 +1196,7 @@ TEST(GuiDialogLayoutContractTest, DialogSourcesAreGroupedByDomain)
         "`shared/`",
     });
     EXPECT_TRUE(workspace_ui.contains(
-        QStringLiteral("<header>camera/CameraModel3DDialog.h</header>")));
+        QStringLiteral("<header>CameraSceneWidget.h</header>")));
 }
 
 TEST(GuiArchitectureContractTest, PointCloudWorkflowControllerOnlyCoordinatesCoreMvs)

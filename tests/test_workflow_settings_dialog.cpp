@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QJsonObject>
+#include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QStackedWidget>
@@ -45,7 +46,7 @@ TEST(WorkflowSettingsDialogTest, DefaultsUseWorkflowScopedSchema)
     EXPECT_FALSE(settings.contains(QStringLiteral("geometry_max_iterations")));
 }
 
-TEST(WorkflowSettingsDialogTest, ExposesFourWorkflowPagesAndOnlyAerialIsEditable)
+TEST(WorkflowSettingsDialogTest, ExposesFourWorkflowPagesAndLabelsUnavailableSettings)
 {
     WorkflowSettingsDialog dialog;
     auto *workflowSelector = dialog.findChild<QComboBox *>(QStringLiteral("workflowSelector"));
@@ -68,7 +69,12 @@ TEST(WorkflowSettingsDialogTest, ExposesFourWorkflowPagesAndOnlyAerialIsEditable
 
     workflowSelector->setCurrentIndex(
         workflowSelector->findData(QStringLiteral("reconstruction")));
-    EXPECT_FALSE(workflowPages->currentWidget()->isEnabled());
+    EXPECT_TRUE(workflowPages->currentWidget()->isEnabled());
+    auto *unavailableMessage = workflowPages->currentWidget()->findChild<QLabel *>(
+        QStringLiteral("workflowUnavailableMessage_reconstruction"));
+    ASSERT_NE(unavailableMessage, nullptr);
+    EXPECT_TRUE(unavailableMessage->text().contains(QStringLiteral("尚未开放")));
+    EXPECT_TRUE(workflowPages->currentWidget()->findChildren<QComboBox *>().isEmpty());
 }
 
 TEST(WorkflowSettingsDialogTest, SwitchesAndPersistsAlgorithmSpecificTensorRtResources)

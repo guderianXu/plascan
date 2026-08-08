@@ -15,24 +15,15 @@
  * 数据通过 QSettings("PlaScan", "plascan_gui") 持久化。
  */
 
-#include <QObject>
-
 class QMainWindow;
 
 /**
  * @class WindowStateManager
  * @brief 负责主窗口几何状态的保存与恢复。
  */
-class WindowStateManager : public QObject
+class WindowStateManager
 {
-    Q_OBJECT
 public:
-    /**
-     * @brief 构造函数。
-     * @param parent 父对象指针，用于 Qt 内存管理。
-     */
-    explicit WindowStateManager(QObject *parent = nullptr);
-
     /**
      * @brief 从 QSettings 恢复主窗口的几何尺寸和最大化/全屏状态。
      *

@@ -26,6 +26,17 @@ struct BundleAdjustArtifactsResult
     BundleAdjustSparseCloudExport sparseCloudExport;
 };
 
+struct BundleAdjustPreviewPresentation
+{
+    QString summaryText;
+    QString detailedText;
+    bool qualityWarning = false;
+};
+
+BundleAdjustPreviewPresentation buildBundleAdjustPreviewPresentation(
+    const QJsonObject &ba_result,
+    int pending_camera_count);
+
 BundleAdjustCommitResult commitBundleAdjustPreview(ProjectData *projectData,
                                                    const QMap<QString, QJsonObject> &cameraMetaByImage,
                                                    const QJsonObject &baResult);

@@ -70,13 +70,4 @@ void upsertMetaArrayRecordByPath(QJsonObject *meta,
                                  const QString &pathKey,
                                  const QJsonObject &record);
 
-void replaceMetaArrayWithLatest(QJsonObject *meta,
-                                const QString &arrayKey,
-                                const QJsonObject &record);
-
-void upsertMetaArrayRecordByIndex(QJsonObject *meta,
-                                  const QString &arrayKey,
-                                  const QJsonObject &record,
-                                  int replaceIndex);
-
 } // namespace xjw::gui::project

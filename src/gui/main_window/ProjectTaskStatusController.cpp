@@ -86,60 +86,38 @@ void ProjectTaskStatusController::finishTiePointProgress(bool success)
 
 void ProjectTaskStatusController::updateMesh(const QString &stage, int percent)
 {
-    if (!_meshStatus->isActive())
-    {
-        _meshStatus->begin(stage, 0, 100);
-    }
-    _meshStatus->updateProgress(stage, std::clamp(percent, 0, 100));
-    refreshDashboard();
-    _statusBar->showMessage(QString());
+    updatePercentTask(_meshStatus, stage, percent, false);
 }
 
 void ProjectTaskStatusController::finishMesh(bool success)
 {
-    _meshStatus->finish();
-    refreshDashboard();
-    _statusBar->showMessage(success ? tr("网格重建完成") : tr("网格重建失败"), 4000);
+    finishTask(_meshStatus, success, tr("网格重建完成"), tr("网格重建失败"));
 }
 
 void ProjectTaskStatusController::updatePointCloud(const QString &stage, int percent)
 {
-    const int value = std::clamp(percent, 0, 100);
-    const QString text = value > 0 && value < 100 ? QStringLiteral("%1 %2%").arg(stage).arg(value) : stage;
-    if (!_pointCloudStatus->isActive())
-    {
-        _pointCloudStatus->begin(text, 0, 100);
-    }
-    _pointCloudStatus->updateProgress(text, value);
-    refreshDashboard();
-    _statusBar->showMessage(QString());
+    updatePercentTask(_pointCloudStatus, stage, percent, true);
 }
 
 void ProjectTaskStatusController::finishPointCloud(bool success)
 {
-    _pointCloudStatus->finish();
-    refreshDashboard();
-    _statusBar->showMessage(success ? tr("点云创建完成") : tr("点云创建已取消或失败"), 4000);
+    finishTask(_pointCloudStatus,
+               success,
+               tr("点云创建完成"),
+               tr("点云创建已取消或失败"));
 }
 
 void ProjectTaskStatusController::updateAerialTriangulation(const QString &stage, int percent)
 {
-    const int value = std::clamp(percent, 0, 100);
-    const QString text = value > 0 && value < 100 ? QStringLiteral("%1 %2%").arg(stage).arg(value) : stage;
-    if (!_aerialTriangulationStatus->isActive())
-    {
-        _aerialTriangulationStatus->begin(text, 0, 100);
-    }
-    _aerialTriangulationStatus->updateProgress(text, value);
-    refreshDashboard();
-    _statusBar->showMessage(QString());
+    updatePercentTask(_aerialTriangulationStatus, stage, percent, true);
 }
 
 void ProjectTaskStatusController::finishAerialTriangulation(bool success)
 {
-    _aerialTriangulationStatus->finish();
-    refreshDashboard();
-    _statusBar->showMessage(success ? tr("空三/光束法平差完成") : tr("空三/光束法平差已取消或失败"), 4000);
+    finishTask(_aerialTriangulationStatus,
+               success,
+               tr("空三/光束法平差完成"),
+               tr("空三/光束法平差已取消或失败"));
 }
 
 void ProjectTaskStatusController::updateMask(const QString &stage, int done, int total)
@@ -206,6 +184,34 @@ TaskStatusWidget *ProjectTaskStatusController::createStatus(int labelWidth,
             this, &ProjectTaskStatusController::refreshDashboard);
     _statusBar->addPermanentWidget(status);
     return status;
+}
+
+void ProjectTaskStatusController::updatePercentTask(TaskStatusWidget *status,
+                                                    const QString &stage,
+                                                    int percent,
+                                                    bool appendIntermediatePercent)
+{
+    const int value = std::clamp(percent, 0, 100);
+    const QString text = appendIntermediatePercent && value > 0 && value < 100
+        ? QStringLiteral("%1 %2%").arg(stage).arg(value)
+        : stage;
+    if (!status->isActive())
+    {
+        status->begin(text, 0, 100);
+    }
+    status->updateProgress(text, value);
+    refreshDashboard();
+    _statusBar->showMessage(QString());
+}
+
+void ProjectTaskStatusController::finishTask(TaskStatusWidget *status,
+                                             bool success,
+                                             const QString &successMessage,
+                                             const QString &failureMessage)
+{
+    status->finish();
+    refreshDashboard();
+    _statusBar->showMessage(success ? successMessage : failureMessage, 4000);
 }
 
 void ProjectTaskStatusController::refreshDashboard()

@@ -3,7 +3,7 @@
 #include "ui_WorkspaceCenterWidget.h"
 
 #include "CanvasWidget.h"
-#include "camera/CameraModel3DDialog.h"
+#include "CameraSceneWidget.h"
 #include "DualImageViewer.h"
 #include "ObservationNetworkView.h"
 #include "ProjectCameraIO.h"

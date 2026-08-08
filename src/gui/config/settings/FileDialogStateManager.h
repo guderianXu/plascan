@@ -13,7 +13,6 @@
  * 数据通过 QSettings 以 "Dialogs/lastDir/<key>" 的格式持久化到系统注册表/INI 文件。
  */
 
-#include <QObject>
 #include <QString>
 
 /**
@@ -28,16 +27,9 @@
  *   appConfig->fileDialogs()->setLastDir("importPhoto", QFileInfo(selectedFile).absolutePath());
  * @endcode
  */
-class FileDialogStateManager : public QObject
+class FileDialogStateManager
 {
-    Q_OBJECT
 public:
-    /**
-     * @brief 构造函数。
-     * @param parent 父对象指针，用于 Qt 内存管理。
-     */
-    explicit FileDialogStateManager(QObject *parent = nullptr);
-
     /**
      * @brief 获取指定 key 对应对话框的上次浏览目录。
      * @param key  对话框类型标识符；空字符串时使用 "default" 键。

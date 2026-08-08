@@ -1,6 +1,7 @@
 #include "ProjectUiCommands.h"
 
 #include "ProjectData.h"
+#include "ProjectOpenGuard.h"
 
 #include <QDir>
 #include <QFileDialog>
@@ -14,7 +15,6 @@ void configureDialog(QFileDialog &dialog)
     dialog.setOption(QFileDialog::DontUseNativeDialog, true);
     dialog.setFilter(QDir::AllEntries | QDir::Hidden | QDir::AllDirs);
 }
-
 } // namespace
 
 ProjectUiCommands::ProjectUiCommands(ProjectData *projectData, QWidget *parentWidget)
@@ -163,7 +163,8 @@ void ProjectUiCommands::closeProject() const
 
 bool ProjectUiCommands::selectPhotos(QStringList *selectedFiles) const
 {
-    if (!ensureProjectOpen())
+    if (!xjw::gui::project::requireOpenProject(
+            _projectData, _parentWidget, QStringLiteral("请先打开或创建项目")))
     {
         return false;
     }
@@ -195,7 +196,8 @@ bool ProjectUiCommands::selectPhotos(QStringList *selectedFiles) const
 
 bool ProjectUiCommands::selectImageFolder(QString *selectedFolder) const
 {
-    if (!ensureProjectOpen())
+    if (!xjw::gui::project::requireOpenProject(
+            _projectData, _parentWidget, QStringLiteral("请先打开或创建项目")))
     {
         return false;
     }
@@ -243,15 +245,4 @@ void ProjectUiCommands::writeLastDir(const QString &key, const QString &dir) con
     {
         _saveLastDir(key, dir);
     }
-}
-
-bool ProjectUiCommands::ensureProjectOpen(const QString &message, const QString &title) const
-{
-    if (_projectData && _projectData->hasProject())
-    {
-        return true;
-    }
-
-    QMessageBox::warning(_parentWidget, title, message);
-    return false;
 }

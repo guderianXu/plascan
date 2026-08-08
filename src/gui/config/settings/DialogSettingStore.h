@@ -6,9 +6,7 @@
 
 #include <functional>
 
-#include "ProjectDialogJsonSettingBase.h"
-
-class DialogSettingStore : public QObject, public ProjectDialogJsonSettingBase
+class DialogSettingStore : public QObject
 {
     Q_OBJECT
 public:
@@ -23,6 +21,11 @@ public:
     void setChangeCallback(std::function<void()> callback);
 
 private:
+    QString dialogFilePath() const;
+    QJsonObject loadByKey(QString *errorMessage) const;
+    bool saveByKey(const QJsonObject &value, QString *errorMessage) const;
+
     QString _dialogKey;
+    QString _plascanPath;
     std::function<void()> _changeCallback;
 };

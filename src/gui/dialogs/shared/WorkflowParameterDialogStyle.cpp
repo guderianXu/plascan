@@ -1,3 +1,4 @@
+#include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDialog>
@@ -8,6 +9,7 @@
 #include <QScrollArea>
 #include <QSizePolicy>
 #include <QVBoxLayout>
+#include <QWidget>
 
 #include "shared/WorkflowParameterDialogStyle.h"
 
@@ -71,16 +73,42 @@ void configureWorkflowForm(QFormLayout *form)
     form->setContentsMargins(12, 12, 12, 10);
 }
 
-void configureWorkflowComboBox(QComboBox *comboBox)
+void configureWorkflowInputWidget(QWidget *widget, int minimumWidth)
+{
+    if (!widget)
+    {
+        return;
+    }
+
+    widget->setMinimumHeight(28);
+    if (minimumWidth > 0)
+    {
+        widget->setMinimumWidth(minimumWidth);
+    }
+    widget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+}
+
+void configureWorkflowCheckBox(QCheckBox *checkBox)
+{
+    if (!checkBox)
+    {
+        return;
+    }
+
+    checkBox->setMinimumHeight(24);
+    checkBox->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+}
+
+void configureWorkflowComboBox(QComboBox *comboBox, int minimumWidth)
 {
     if (!comboBox)
     {
         return;
     }
 
+    configureWorkflowInputWidget(comboBox, minimumWidth);
     comboBox->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     comboBox->setMinimumContentsLength(24);
-    comboBox->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 }
 
 void configureWorkflowButtonBox(QDialogButtonBox *buttonBox)

@@ -106,14 +106,6 @@ void DualImageViewer::highlightMatchIndex(int index)
     scheduleOverlayUpdate();
 }
 
-void DualImageViewer::highlightMatchIndices(const QVector<int> &indices)
-{
-    if (!_overlay) return;
-    _overlay->setHighlightedIndices(indices);
-    _overlay->setShowOnlyHighlighted(true);
-    scheduleOverlayUpdate();
-}
-
 void DualImageViewer::clearMatchHighlights()
 {
     if (!_overlay) return;
@@ -308,7 +300,6 @@ void DualImageViewer::setSyncMode(bool enabled)
     if (_syncEnabled == enabled) return;
     
     _syncEnabled = enabled;
-    emit syncModeChanged(enabled);
     
     // 如果启用同步，立即同步一次
     if (enabled && _leftView && _rightView) {
@@ -352,17 +343,6 @@ void DualImageViewer::clearViewer()
         _disparityOverlay->hide();
     }
     updateOverlayGeometry();
-}
-
-int DualImageViewer::totalMatchCount() const
-{
-    return _matchPtsA.size();
-}
-
-int DualImageViewer::visibleMatchCount() const
-{
-    if (!_overlay) return -1;
-    return _overlay->visibleMatches().size();
 }
 
 QString DualImageViewer::leftImagePath() const

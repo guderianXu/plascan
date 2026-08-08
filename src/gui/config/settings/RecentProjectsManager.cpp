@@ -52,14 +52,6 @@ QString projectPathKey(const QString &path)
 } // namespace
 
 /**
- * @brief 构造函数，无额外初始化逻辑。
- */
-RecentProjectsManager::RecentProjectsManager(QObject *parent)
-    : QObject(parent)
-{
-}
-
-/**
  * @brief 获取最近打开的项目路径列表。
  *
  * 直接从 QSettings 读取，确保反映磁盘的最新状态。

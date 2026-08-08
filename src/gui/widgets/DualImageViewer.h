@@ -54,7 +54,6 @@ public:
     
     // 同步模式控制
     void setSyncMode(bool enabled);
-    bool syncMode() const { return _syncEnabled; }
     
     // 获取子组件
     ImageViewWidget* leftView() const;
@@ -62,7 +61,6 @@ public:
     MatchLineOverlay* overlay() const;
     DisparityHeatmapOverlay* disparityOverlay() const;
     void setOverlayMode(int mode); // 0=sparse, 1=dense
-    int overlayMode() const { return _overlayMode; }
 
     // 快捷操作
     void fitBothViews();
@@ -70,14 +68,10 @@ public:
     void clearViewer();
     // 高亮/筛选匹配线：只显示指定索引集合或清除高亮
     void highlightMatchIndex(int index);
-    void highlightMatchIndices(const QVector<int> &indices);
     void clearMatchHighlights();
     // 控制是否显示所有匹配线（默认 true）
     void setShowAllMatches(bool showAll);
     
-    // 获取统计信息
-    int totalMatchCount() const;
-    int visibleMatchCount() const;
     QString leftImagePath() const;
     QString rightImagePath() const;
 
@@ -87,8 +81,6 @@ signals:
     void matchValidityLoaded(int validCount, int invalidCount);
     void loadFailed(const QString &error);
     
-    // 同步模式变化
-    void syncModeChanged(bool enabled);
     void markerCandidatePicked(const QPointF &pixel);
 
 protected:

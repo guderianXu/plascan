@@ -450,6 +450,7 @@ gui/
 │   ├── ProjectUiHydrator.h/cpp # 分阶段刷新项目界面，并通过代次号丢弃过期请求
 │   ├── ProjectLifecyclePresenter.h/cpp # 项目打开/保存进度、脏状态标题及关闭后保存
 │   ├── ProjectTaskStatusController.h/cpp # 状态栏任务控件、取消路由及概览快照
+│   ├── FeatureVisualizationController.h/cpp # 特征点/残差显示选项、项目级持久化与画布同步
 │   ├── MenuWorkflowController.h/cpp       # "工作流程" 菜单业务控制器
 │   ├── ReconstructionWorkflowController.h/cpp  # 生成模型/纹理工作流程对话框协调
 │   └── WorkspacePanelController.h/cpp     # Dock/工具栏可见性、菜单动作与项目状态统一管理
@@ -471,7 +472,8 @@ gui/
 │   ├── application/            # 关于、工作流程报告等应用级对话框
 │   ├── camera/                 # 相机校准前后对比、相机查看/转换、前方交汇、测量控制
 │   │   ├── CameraCalibrationData.h/cpp   # 固化空三输入先验/最终内参，按图像中心转换 cx/cy
-│   │   └── CameraCalibrationDialog.h/cpp # 初始/调整内参、释放状态、相机分组与照片列表
+│   │   ├── CameraCalibrationDialog.h/cpp # 初始/调整内参、释放状态、相机分组与照片列表
+│   │   └── CameraModel3DDialog.h/cpp      # 独立三维预览的轻量对话框外壳
 │   ├── image/                  # 蒙版等单影像处理
 │   ├── reconstruction/         # 空三、模型、纹理、DEM/正射工作流程
 │   │   ├── MapProjectDialog.h/cpp         # 正射对话框生命周期、运行进度与取消
@@ -496,10 +498,8 @@ gui/
 │
 ├── project/                    # 项目管理层
 │   ├── data/
-│   │   ├── ProjectData.h/cpp    # 项目数据入口：core/results 分域、归档与临时缓存持久化
-│   │   └── ProjectFilesManager.h/cpp  # Chunk doc.json 的 core/results 内存模型
-│   ├── archive/
-│   │   └── *.h # 指向 src/common/project 存储层的 GUI 兼容头
+│   │   ├── ProjectData.h        # common 项目会话模型的旧包含路径兼容头
+│   │   └── ProjectFilesManager.h # common 项目文档模型的旧包含路径兼容头
 │   ├── manager/
 │   │   ├── ProjectManager.h/cpp # 项目管理器；含文件菜单点云/模型异步导入与成果登记
 │   │   ├── ProjectLifecycleController.h/cpp          # 创建、异步打开/结果加载、保存与关闭
@@ -527,6 +527,7 @@ gui/
 │       ├── ProjectDepthBatchLineage.h/cpp           # 路径无关的深度输入签名与旧批次逐帧相机核验
 │       ├── ProjectModelWorkflowPolicy.h/cpp         # 模型线程预算及深度批次完整性/代次兼容策略
 │       ├── ProjectSessionContext.h                  # 异步写回会话身份（项目、Chunk、generation）
+│       ├── ProjectOpenGuard.h/cpp                   # 统一项目已打开前置检查和用户提示
 │       ├── ProjectTerrainRequests.h                 # DEM 类型化请求及边界校验
 │       ├── ProjectMetadataOperations.h/cpp          # 元数据操作
 │       ├── ProjectResultRecords.h/cpp               # 结果记录
@@ -544,23 +545,20 @@ gui/
 │   ├── LayerOverlayItems.h/cpp          # 批量特征点、残差向量与匹配覆盖层
 │   ├── LayerFeatureLoader.h/cpp         # 特征文件解析与关键点加载
 │   ├── FeatureResidualLoader.h/cpp      # 按当前影像异步筛选真实重投影残差
+│   ├── CameraSceneWidget.h/cpp           # 三维场景、相机覆盖层、模型/点云显示与交互
 │   ├── CameraSceneViewMath.h/cpp        # 相机平面、视角选择与本地轴数学
 │   └── ObjRenderPreparation.h/cpp       # OBJ 显示数据准备
 │
 ├── config/                     # 配置管理
 │   ├── AppConfigManager.h/cpp          # 应用配置
 │   ├── ImageViewRotationSettings.h/cpp # 项目级、按稳定 image_uuid 索引的查看旋转角度
-│   ├── ProjectConfigManager.h/cpp      # Chunk project_config，仅工作流参数
-│   ├── ProjectUiConfigManager.h/cpp    # 根 doc.json 的 ui_state 显示状态
-│   ├── ProjectWorkflowConfigManager.h/cpp  # 工作流配置
 │   └── settings/
-│       ├── DialogSettingStore.h/cpp    # 对话框设置记忆化存储
+│       ├── DialogSettingStore.h/cpp    # 对话框 JSON 设置的加载、保存与路径解析
 │       ├── DialogSettingKeys.h         # 各对话框设置键名
 │       ├── GuiSettingsStore.h           # GUI QSettings 工厂
 │       ├── WindowStateManager.h/cpp    # 窗口状态持久化
 │       ├── FileDialogStateManager.h/cpp # 文件对话框状态
-│       ├── RecentProjectsManager.h/cpp # 最近项目管理
-│       └── ProjectDialogJsonSettingBase.h/cpp  # JSON 设置基类
+│       └── RecentProjectsManager.h/cpp # 最近项目管理
 │
 ├── panels/
 │   └── LogPanel.h/cpp          # 日志面板 (QPlainTextEdit)
@@ -1015,7 +1013,7 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
 
 | 问题 | 位置 | 建议 |
 |------|------|------|
-| 多个 GUI 文件超 1000 行 | `gui/dialogs/`, `gui/main_window/` | 提取 UI 构建逻辑 |
+| 三维场景实现仍较大 | `gui/views/CameraSceneWidget.cpp` | 按资源加载、相机覆盖层和交互编辑继续提取真实职责 |
 | `mvs/` 和 `dense_match/` 有重复逻辑 | `SubpixelRefiner` 两个版本 | 统一到 `dense_match/` |
 | 空三真实数据回归仍需扩大 | `core/aerial_triangulation` | 持续加入环拍、航带、弱纹理和控制点数据集 |
 | 构建依赖 4 个系统符号链接 | `/lib64/libm.so.6`, `libnvrtc-builtins.so.13.0` 等 | 见 `CONTEXT.md` 系统依赖 |
@@ -1031,13 +1029,16 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
 ## GUI 模块边界（2026-08）
 
 - `src/common/project/ProjectSessionModel.*`、`ProjectDocumentModel.*` 和三类项目配置管理器负责
-  QtCore 项目会话、文档分域与持久化；`src/gui/project/data`、`src/gui/config` 只保留兼容头。
+  QtCore 项目会话、文档分域与持久化；`src/gui/project/data` 只保留必要的旧包含路径兼容头，GUI 配置层
+  直接使用 common 中的项目配置接口。
 - `src/core/project_workflows` 负责 DEM/正射、稀疏点后处理、点云参数/输入准备、参考数据检查和
   生成资源清理，通过独立 `project_workflows` 目标供 GUI、CLI 和测试复用。
 - `ProjectManager` 以门面形式持有项目生命周期、蒙版、点云、稀疏重建、模型、地形产品和相机设置
   控制器。GUI 中不存在“稠密重建管理器”；`ProjectPointCloudWorkflowController` 只协调深度估计与点云融合。
 - `MainWindow` 按布局、菜单绑定、项目绑定和 UI 状态拆分实现；项目打开/保存展示由
-  `ProjectLifecyclePresenter` 管理，状态栏任务由 `ProjectTaskStatusController` 管理。
+  `ProjectLifecyclePresenter` 管理，状态栏任务由 `ProjectTaskStatusController` 管理，特征点/残差显示配置由
+  `FeatureVisualizationController` 管理。`CameraModel3DDialog` 只保留对话框装配，三维场景职责位于
+  `views/CameraSceneWidget`。
   `DataTreeWidget` 按模型、填充、上下文菜单、资源元数据和相机对齐判定拆分实现。
 - 正射流程为 `MenuWorkflowController -> ProjectManager -> ProjectTerrainProductsManager ->`
   `project_workflows::runOrthoProduct`，请求在 GUI 边界转换为 `OrthoGenerationRequest`。

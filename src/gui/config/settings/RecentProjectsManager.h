@@ -13,7 +13,6 @@
  *   - 支持一键清空全部记录。
  */
 
-#include <QObject>
 #include <QStringList>
 
 /**
@@ -23,16 +22,9 @@
  * 所有读写操作均直接访问 QSettings，不在内存中缓存列表，
  * 因此每次调用均反映磁盘的最新状态，适合多窗口场景。
  */
-class RecentProjectsManager : public QObject
+class RecentProjectsManager
 {
-    Q_OBJECT
 public:
-    /**
-     * @brief 构造函数。
-     * @param parent 父对象指针，用于 Qt 内存管理。
-     */
-    explicit RecentProjectsManager(QObject *parent = nullptr);
-
     /**
      * @brief 获取最近打开的项目路径列表（最多 10 条，最新的排在最前）。
      * @return 项目路径字符串列表；若无记录则返回空列表。

@@ -1,5 +1,7 @@
 #include "tie_points/CreateTiePointsDialog.h"
 
+#include "shared/WorkflowParameterDialogStyle.h"
+
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -10,7 +12,6 @@
 #include <QLabel>
 #include <QLayout>
 #include <QLineEdit>
-#include <QPushButton>
 #include <QRegularExpression>
 #include <QRegularExpressionValidator>
 #include <QSizePolicy>
@@ -22,52 +23,12 @@
 namespace
 {
 
-void setEnglishDialogButtons(QDialogButtonBox *buttonBox)
-{
-    if (!buttonBox)
-    {
-        return;
-    }
-
-    if (QPushButton *okButton = buttonBox->button(QDialogButtonBox::Ok))
-    {
-        okButton->setText(QStringLiteral("OK"));
-    }
-    if (QPushButton *cancelButton = buttonBox->button(QDialogButtonBox::Cancel))
-    {
-        cancelButton->setText(QStringLiteral("Cancel"));
-    }
-}
-
 QLineEdit *makeIntegerEdit(QWidget *parent, const QString &text)
 {
     auto *edit = new QLineEdit(text, parent);
     edit->setValidator(new QRegularExpressionValidator(QRegularExpression(QStringLiteral("[0-9, ]+")), edit));
-    edit->setMinimumHeight(28);
-    edit->setMinimumWidth(240);
-    edit->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    xjw::gui::dialogs::configureWorkflowInputWidget(edit, 240);
     return edit;
-}
-
-void stabilizeComboBox(QComboBox *combo)
-{
-    if (!combo)
-    {
-        return;
-    }
-    combo->setMinimumHeight(28);
-    combo->setMinimumWidth(240);
-    combo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-}
-
-void stabilizeCheckBox(QCheckBox *checkBox)
-{
-    if (!checkBox)
-    {
-        return;
-    }
-    checkBox->setMinimumHeight(24);
-    checkBox->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 }
 
 } // namespace
@@ -76,6 +37,7 @@ CreateTiePointsDialog::CreateTiePointsDialog(QWidget *parent)
     : QDialog(parent)
 {
     setWindowTitle(tr("创建连接点"));
+    xjw::gui::dialogs::configureWorkflowParameterDialog(this);
     setMinimumWidth(560);
     buildUi();
 }
@@ -143,17 +105,10 @@ void CreateTiePointsDialog::setReferencePreselectionAvailable(bool available,
         _referencePreselectionCheck->setChecked(false);
         _referencePreselectionCheck->setToolTip(
             available
-                ? tr("使用已导入相机模型/外参生成候选匹配对。")
+                ? tr("已检测到 %1/%2 个相机参考，可生成参考预选匹配对。")
+                      .arg(cameraCount)
+                      .arg(imageCount)
                 : tr("当前项目没有完整可用的相机参考，只能使用通用预选或全量两两匹配。"));
-    }
-
-    if (_preselectionStatusLabel)
-    {
-        _preselectionStatusLabel->setText(
-            available
-                ? tr("已检测到 %1/%2 个相机参考，可启用参考预选。").arg(cameraCount).arg(imageCount)
-                : tr("未检测到完整相机参考；参考预选不可用。"));
-        _preselectionStatusLabel->setVisible(false);
     }
 }
 
@@ -256,13 +211,13 @@ void CreateTiePointsDialog::buildUi()
     _accuracyCombo->addItem(tr("高"), QStringLiteral("high"));
     _accuracyCombo->addItem(tr("最高"), QStringLiteral("highest"));
     _accuracyCombo->setCurrentIndex(_accuracyCombo->findData(QStringLiteral("highest")));
-    stabilizeComboBox(_accuracyCombo);
+    xjw::gui::dialogs::configureWorkflowComboBox(_accuracyCombo, 240);
     generalLayout->addRow(tr("精度:"), _accuracyCombo);
 
     _genericPreselectionCheck = new QCheckBox(tr("通用预选"), _generalGroup);
     _genericPreselectionCheck->setObjectName(QStringLiteral("m_genericPreselectionCheck"));
     _genericPreselectionCheck->setChecked(true);
-    stabilizeCheckBox(_genericPreselectionCheck);
+    xjw::gui::dialogs::configureWorkflowCheckBox(_genericPreselectionCheck);
     generalLayout->addRow(QString(), _genericPreselectionCheck);
 
     _referencePreselectionCheck = new QCheckBox(tr("参考预选"), _generalGroup);
@@ -270,15 +225,8 @@ void CreateTiePointsDialog::buildUi()
     _referencePreselectionCheck->setEnabled(false);
     _referencePreselectionCheck->setToolTip(
         tr("当前项目没有完整可用的相机参考，只能使用通用预选或全量两两匹配。"));
-    stabilizeCheckBox(_referencePreselectionCheck);
+    xjw::gui::dialogs::configureWorkflowCheckBox(_referencePreselectionCheck);
     generalLayout->addRow(QString(), _referencePreselectionCheck);
-
-    _preselectionStatusLabel = new QLabel(_generalGroup);
-    _preselectionStatusLabel->setObjectName(QStringLiteral("m_preselectionStatusLabel"));
-    _preselectionStatusLabel->setWordWrap(true);
-    _preselectionStatusLabel->setText(tr("未检测到完整相机参考；参考预选不可用。"));
-    _preselectionStatusLabel->setVisible(false);
-    generalLayout->addRow(QString(), _preselectionStatusLabel);
     mainLayout->addWidget(_generalGroup);
 
     auto *advancedHeader = new QWidget(this);
@@ -335,12 +283,12 @@ void CreateTiePointsDialog::buildUi()
     _maskModeCombo->addItem(tr("连接点"), QStringLiteral("tiepoints"));
     _maskModeCombo->setToolTip(
         tr("使用项目蒙版约束连接点流程：0 为有效区域，非 0 为排除区域。"));
-    stabilizeComboBox(_maskModeCombo);
+    xjw::gui::dialogs::configureWorkflowComboBox(_maskModeCombo, 240);
     advancedLayout->addRow(tr("将掩膜应用于:"), _maskModeCombo);
 
     _guidedMatchingCheck = new QCheckBox(tr("指导图像匹配"), _advancedContent);
     _guidedMatchingCheck->setObjectName(QStringLiteral("m_guidedMatchingCheck"));
-    stabilizeCheckBox(_guidedMatchingCheck);
+    xjw::gui::dialogs::configureWorkflowCheckBox(_guidedMatchingCheck);
     connect(_guidedMatchingCheck,
             &QCheckBox::toggled,
             this,
@@ -350,13 +298,14 @@ void CreateTiePointsDialog::buildUi()
     _excludePinnedTiePointsCheck = new QCheckBox(tr("不包括固定的连接点"), _advancedContent);
     _excludePinnedTiePointsCheck->setObjectName(QStringLiteral("m_excludePinnedTiePointsCheck"));
     _excludePinnedTiePointsCheck->setChecked(true);
-    stabilizeCheckBox(_excludePinnedTiePointsCheck);
+    xjw::gui::dialogs::configureWorkflowCheckBox(_excludePinnedTiePointsCheck);
     advancedLayout->addRow(QString(), _excludePinnedTiePointsCheck);
     advancedOuterLayout->addWidget(_advancedContent);
     mainLayout->addWidget(_advancedGroup);
 
     auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
-    setEnglishDialogButtons(buttonBox);
+    buttonBox->setObjectName(QStringLiteral("workflowButtonBox"));
+    xjw::gui::dialogs::configureWorkflowButtonBox(buttonBox);
     connect(buttonBox, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
     connect(_advancedToggle, &QToolButton::toggled, this, [this](bool expanded)

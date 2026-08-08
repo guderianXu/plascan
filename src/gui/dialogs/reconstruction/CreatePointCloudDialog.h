@@ -37,13 +37,11 @@ private:
     void updateAvailability();
     void onRun();
 
-    QComboBox *_sourceCombo = nullptr;
     QComboBox *_qualityCombo = nullptr;
     QCheckBox *_reuseDepthMapsCheck = nullptr;
     QCheckBox *_saveEachStepCheck = nullptr;
     QComboBox *_depthFilterCombo = nullptr;
     QCheckBox *_calculateColorsCheck = nullptr;
-    QCheckBox *_calculateConfidenceCheck = nullptr;
     QCheckBox *_replaceDefaultCheck = nullptr;
     QLabel *_statusLabel = nullptr;
     QPushButton *_okButton = nullptr;

@@ -167,16 +167,9 @@ private slots:
     // 参数: lvl - Logger::Level 枚举的整数值
     void onLogDisplayLevelChanged(int lvl);
 
-signals:
-    void sgCancelRequested();
-
 public slots:
     // 使用与“打开项目”和“最近项目”相同的异步流程打开指定工程。
     void openProjectFromPath(const QString &projectPath);
-    // 特征匹配状态栏进度（内部使用，也可外部调用）
-    void showSgProgress(int total);
-    void updateSgProgress(int done);
-    void hideSgProgress(bool ok);
 
 private slots:
     // onClearRecentRequested: 用户请求清空最近文件列表时触发的响应函数 用户请求清空最近打开列表，弹确认框后执行

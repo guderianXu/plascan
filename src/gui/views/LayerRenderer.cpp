@@ -1,8 +1,6 @@
 #include "LayerRenderer.h"
-#include "LayerFeatureLoader.h"
 #include "LayerImageLoader.h"
 #include "LayerOverlayItems.h"
-#include "LayerStitchedDebug.h"
 #include "Logger.h"
 #include "MaskGenerator.h"
 #include "io/PathIO.h"
@@ -44,16 +42,6 @@ LayerRenderer::LayerRenderer(QGraphicsScene *scene, QObject *parent)
 void LayerRenderer::setFeatureDisplayOptions(const FeatureDisplayOptions &opts)
 {
     _featureOpts = opts;
-}
-
-void LayerRenderer::setCurrentProjectPath(const QString &plascanPath)
-{
-    _currentProjectPath = plascanPath;
-}
-
-bool LayerRenderer::addImageLayer(const QString &path, int z)
-{
-    return addImageLayer(loadImageForDisplay(path, _currentProjectPath), z);
 }
 
 QImage LayerRenderer::loadImageForDisplay(const QString &path, const QString &plascanPath)
@@ -145,16 +133,6 @@ void LayerRenderer::clearDepthOverlay()
         _baseImageItem->setPos(_baseImagePosition);
     }
     _intensityBaseActive = false;
-}
-
-bool LayerRenderer::addFeatureLayerFromVwip(const QString &imagePath)
-{
-    if (!_scene) return false;
-
-    const auto keypoints = xjw::gui::views::loadMatchedKeypointsForImage(_currentProjectPath, imagePath);
-    if (keypoints.empty()) return false;
-    addFeatureItems(keypoints);
-    return true;
 }
 
 bool LayerRenderer::addMaskContourLayer(const QString &maskPath, int z)
@@ -305,117 +283,4 @@ void LayerRenderer::clear()
     _baseImageTransform = QTransform();
     _baseImagePosition = QPointF();
     _imageBounds = QRectF();
-}
-
-bool LayerRenderer::addStitchedImagePair(const QString &pathA,
-                                         const QString &pathB,
-                                         QGraphicsPixmapItem **outA,
-                                         QGraphicsPixmapItem **outB,
-                                         int gap)
-{
-    const QImage imageA = loadImageForDisplay(pathA, _currentProjectPath);
-    const QImage imageB = loadImageForDisplay(pathB, _currentProjectPath);
-    return addStitchedImagePair(imageA, imageB, pathA, pathB, outA, outB, gap);
-}
-
-bool LayerRenderer::addStitchedImagePair(const QImage &imageA,
-                                         const QImage &imageB,
-                                         const QString &sourcePathA,
-                                         const QString &sourcePathB,
-                                         QGraphicsPixmapItem **outA,
-                                         QGraphicsPixmapItem **outB,
-                                         int gap)
-{
-    if (!_scene || imageA.isNull() || imageB.isNull())
-    {
-        return false;
-    }
-
-    LOG_DEBUG(QStringLiteral("addStitchedImagePair: %1 <-> %2")
-                  .arg(sourcePathA, sourcePathB));
-
-    // clear existing image layers (we expect caller to manage state)
-    // We'll add both images using addImageLayer then reposition the second.
-    const int before = _layers.size();
-    if (!addImageLayer(imageA, 0)) return false;
-    QGraphicsPixmapItem *itemA = nullptr;
-    if (!_layers.isEmpty()) itemA = _layers.last();
-
-    if (!addImageLayer(imageB, 0)) {
-        // cleanup the first if second failed
-        if (itemA) {
-            _scene->removeItem(itemA);
-            _layers.removeOne(itemA);
-            delete itemA;
-        }
-        return false;
-    }
-    QGraphicsPixmapItem *itemB = nullptr;
-    if (!_layers.isEmpty() && _layers.size() > before + 0) itemB = _layers.last();
-
-    if (!itemA || !itemB) return false;
-
-    LOG_DEBUG(QStringLiteral("addStitchedImagePair: itemA size=%1x%2 itemB size=%3x%4")
-                  .arg(itemA->pixmap().width())
-                  .arg(itemA->pixmap().height())
-                  .arg(itemB->pixmap().width())
-                  .arg(itemB->pixmap().height()));
-
-    // position B to the right of A
-    qreal bx = itemA->pixmap().width() + gap;
-    itemB->setPos(bx, 0);
-    _imageBounds = itemA->sceneBoundingRect().united(itemB->sceneBoundingRect());
-
-    if (outA) *outA = itemA;
-    if (outB) *outB = itemB;
-
-    xjw::gui::views::recordStitchedImagePairDebug(
-        _scene,
-        _currentProjectPath,
-        sourcePathA,
-        sourcePathB,
-        itemA,
-        itemB,
-        gap);
-    return true;
-}
-
-void LayerRenderer::addMatchLines(const QVector<QPointF> &ptsA, const QVector<QPointF> &ptsB, qreal bOffsetX)
-{
-    if (!_scene) return;
-    if (!_matchOpts.showLines) return; // 如果不显示匹配线,直接返回
-    
-    clearMatchLayers();
-
-    LOG_DEBUG(QStringLiteral("addMatchLines: ptsA=%1 ptsB=%2 bOffsetX=%3")
-                  .arg(ptsA.size())
-                  .arg(ptsB.size())
-                  .arg(bOffsetX));
-
-    const auto items = xjw::gui::views::createMatchOverlayItems(ptsA, ptsB, _matchOpts, bOffsetX);
-    for (QGraphicsItem *item : items)
-    {
-        if (!item)
-        {
-            continue;
-        }
-        _scene->addItem(item);
-        _matchItems.append(item);
-    }
-}
-
-void LayerRenderer::setMatchDisplayOptions(const MatchDisplayOptions &opts)
-{
-    _matchOpts = opts;
-}
-
-void LayerRenderer::clearMatchLayers()
-{
-    for (auto *it: std::as_const(_matchItems)) {
-        if (it && _scene) {
-            _scene->removeItem(it);
-            delete it;
-        }
-    }
-    _matchItems.clear();
 }

@@ -16,7 +16,6 @@ public:
     void setCancellable(bool cancellable);
     void setCancellingText(const QString &text);
     void setLabelMinimumWidth(int width);
-    void setProgressFixedWidth(int width);
 
     void begin(const QString &statusText, int minimum, int maximum);
     void updateProgress(const QString &statusText, int value);

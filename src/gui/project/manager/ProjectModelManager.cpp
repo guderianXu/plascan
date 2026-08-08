@@ -6,6 +6,8 @@
 #include "ProjectModelWorkflowPolicy.h"
 #include "ProjectResultRecords.h"
 #include "ProjectWorkflowUtils.h"
+#include "GuiTaskRunner.h"
+#include "ProjectOpenGuard.h"
 #include "Logger.h"
 #include "ModelWorkflowService.h"
 #include "project/ProjectCommonUtils.h"
@@ -14,16 +16,13 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFileInfo>
-#include <QFutureWatcher>
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QPointer>
 #include <QStringList>
 #include <QThread>
-#include <QtConcurrent/QtConcurrent>
 
 #include <algorithm>
-#include <exception>
 #include <memory>
 #include <mutex>
 #include <utility>
@@ -664,16 +663,6 @@ QString textureMappingSuccessMessage(const QJsonObject &taskResult)
             1);
 }
 
-QString modelGenerationSuccessMessage(const QJsonObject &terrainResult)
-{
-    return QStringLiteral("模型流程完成。\n深度图: %1\n稠密点云: %2\n最终模型: %3\n顶点: %4  面数: %5")
-        .arg(terrainResult.value(QStringLiteral("depth_png")).toString())
-        .arg(terrainResult.value(QStringLiteral("dense_cloud_xyz")).toString())
-        .arg(terrainResult.value(QStringLiteral("final_model_path")).toString())
-        .arg(terrainResult.value(QStringLiteral("vertex_count")).toInt(-1))
-        .arg(terrainResult.value(QStringLiteral("face_count")).toInt(-1));
-}
-
 QString existingDenseCloudPathFromRecord(const QJsonObject &record)
 {
     const QString path = QDir::cleanPath(record.value(QStringLiteral("dense_cloud_xyz")).toString().trimmed());
@@ -820,59 +809,32 @@ bool handleTaskResult(QWidget *parentWidget,
     return true;
 }
 
-template <typename Worker, typename OnFinished>
-void runModelAsyncTask(QObject *owner,
+template <typename Owner, typename Worker, typename OnFinished>
+void runModelAsyncTask(Owner *owner,
                        Worker &&worker,
                        OnFinished &&onFinished)
 {
-    auto *watcher = new QFutureWatcher<ModelTaskResult>(owner);
-    QObject::connect(watcher, &QFutureWatcher<ModelTaskResult>::finished,
-                     watcher, [watcher, onFinished = std::forward<OnFinished>(onFinished)]() mutable {
-        ModelTaskResult task;
-        try
+    xjw::gui::tasks::runGuardedWithOutcome(
+        owner,
+        std::forward<Worker>(worker),
+        [onFinished = std::forward<OnFinished>(onFinished)](
+            Owner *,
+            xjw::gui::tasks::TaskOutcome<ModelTaskResult> outcome) mutable
         {
-            task = watcher->result();
-        }
-        catch (const std::exception &exception)
-        {
-            task.ok = false;
-            task.errMsg = QStringLiteral("异步模型任务异常: %1")
-                              .arg(QString::fromLocal8Bit(exception.what()));
-            LOG_ERROR("runModelAsyncTask finished callback caught std::exception: %s", exception.what());
-        }
-        catch (...)
-        {
-            task.ok = false;
-            task.errMsg = QStringLiteral("异步模型任务发生未知异常");
-            LOG_ERROR("runModelAsyncTask finished callback caught unknown exception");
-        }
-        watcher->deleteLater();
-        onFinished(task);
-    });
-    watcher->setFuture(QtConcurrent::run(
-        [worker = std::forward<Worker>(worker)]() mutable -> ModelTaskResult {
-            try
+            ModelTaskResult task;
+            if (outcome.succeeded())
             {
-                return worker();
+                task = std::move(*outcome.value);
             }
-            catch (const std::exception &exception)
+            else
             {
-                ModelTaskResult task;
-                task.ok = false;
-                task.errMsg = QStringLiteral("模型任务执行异常: %1")
-                                  .arg(QString::fromLocal8Bit(exception.what()));
-                LOG_ERROR("runModelAsyncTask worker caught std::exception: %s", exception.what());
-                return task;
+                task.errMsg = QStringLiteral("模型任务执行异常：%1")
+                                  .arg(outcome.errorMessage);
+                LOG_ERROR(QStringLiteral("模型异步任务失败：%1")
+                              .arg(outcome.errorMessage));
             }
-            catch (...)
-            {
-                ModelTaskResult task;
-                task.ok = false;
-                task.errMsg = QStringLiteral("模型任务执行过程中发生未知异常");
-                LOG_ERROR("runModelAsyncTask worker caught unknown exception");
-                return task;
-            }
-        }));
+            onFinished(task);
+        });
 }
 
 } // namespace
@@ -888,30 +850,9 @@ ProjectModelManager::ProjectModelManager(ProjectManager *owner,
 {
 }
 
-bool ProjectModelManager::ensureProjectOpen(const QString &message,
-                                            const QString &title) const
-{
-    if (_projectData && _projectData->hasProject())
-    {
-        return true;
-    }
-    QMessageBox::warning(_parentWidget, title, message);
-    return false;
-}
-
-void ProjectModelManager::startGenerateModelAsync()
-{
-    QJsonObject settings;
-    settings[QStringLiteral("method")] = QStringLiteral("Poisson Surface");
-    settings[QStringLiteral("qualityProfile")] = QStringLiteral("balanced");
-    settings[QStringLiteral("voxelDensity")] = QStringLiteral("medium");
-    settings[QStringLiteral("export_format")] = QStringLiteral("PLY");
-    startMeshReconstructionAsync(settings);
-}
-
 bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settings)
 {
-    if (!ensureProjectOpen(QStringLiteral("请先打开项目"), QStringLiteral("提示")))
+    if (!xjw::gui::project::requireOpenProject(_projectData, _parentWidget))
     {
         return false;
     }
@@ -1102,7 +1043,7 @@ void ProjectModelManager::cancelActiveTask()
 
 void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
 {
-    if (!ensureProjectOpen(QStringLiteral("请先打开项目"), QStringLiteral("提示")))
+    if (!xjw::gui::project::requireOpenProject(_projectData, _parentWidget))
     {
         return;
     }

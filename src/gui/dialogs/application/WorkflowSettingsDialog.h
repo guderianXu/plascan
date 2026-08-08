@@ -46,7 +46,7 @@ private:
     void setupUi();
     /// 从统一算法注册表填充匹配算法，避免 GUI 维护另一份算法清单。
     void populateMatchingAlgorithms();
-    /// 切换右侧设置页；暂未开放的页面保持只读。
+    /// 切换右侧设置页；暂未开放的页面显示明确说明。
     void setCurrentWorkflow(int index);
     /// 根据当前算法刷新其专用资源控件。
     void refreshAlgorithmControls();

@@ -30,7 +30,7 @@ TEST(CameraSceneRenderContractTest, RegistersQrhiCameraImageShaders)
 
 TEST(CameraSceneRenderContractTest, DrawsBackgroundBeforeGeometryAndForegroundAfterGeometry)
 {
-    const QString source = readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString source = readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const qsizetype background = source.indexOf(
         QStringLiteral("_cameraImageDisplayLayer == CameraImageDisplayLayer::Background"));
     const qsizetype first_image_draw = source.indexOf(QStringLiteral("drawActiveCameraImage(cb"), background);
@@ -48,7 +48,7 @@ TEST(CameraSceneRenderContractTest, DrawsBackgroundBeforeGeometryAndForegroundAf
 
 TEST(CameraSceneRenderContractTest, AvoidsPerFrameSortingForOpaqueDepthWrittenThumbnails)
 {
-    const QString source = readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString source = readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const qsizetype drawStart = source.indexOf(
         QStringLiteral("void CameraSceneWidget::drawCameraThumbnails"));
     const qsizetype nextFunction = source.indexOf(
@@ -66,8 +66,8 @@ TEST(CameraSceneRenderContractTest, AvoidsPerFrameSortingForOpaqueDepthWrittenTh
 
 TEST(CameraSceneRenderContractTest, LargeCameraImagesUseContinuousBoundedPrefetch)
 {
-    const QString header = readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
-    const QString source = readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString header = readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
+    const QString source = readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const QString imageLoader = readProjectFile(QStringLiteral("src/gui/views/LayerImageLoader.cpp"));
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
@@ -102,7 +102,7 @@ TEST(CameraSceneRenderContractTest, ProjectCameraPosesAreParsedOffTheGuiThread)
 
 TEST(CameraSceneRenderContractTest, ThumbnailPlanesUseTheSceneDepthBuffer)
 {
-    const QString source = readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString source = readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const qsizetype ensureStart = source.indexOf(
         QStringLiteral("bool CameraSceneWidget::ensureCameraThumbnailPipeline"));
     const qsizetype drawStart = source.indexOf(
@@ -135,9 +135,9 @@ TEST(CameraSceneRenderContractTest, ThumbnailPlanesUseTheSceneDepthBuffer)
 TEST(CameraSceneRenderContractTest, ForegroundImageOccludesGpuAndOverlaySceneContent)
 {
     const QString header =
-        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
     const QString source =
-        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
 
     EXPECT_TRUE(header.contains(
         QStringLiteral("QVector<QVector3D> displayedCameraImagePlaneCorners() const")));
@@ -163,7 +163,7 @@ TEST(CameraSceneRenderContractTest, ForegroundImageOccludesGpuAndOverlaySceneCon
 
 TEST(CameraSceneRenderContractTest, SolidCameraCardsUseBatchedDepthTestedGpuResources)
 {
-    const QString source = readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString source = readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const qsizetype ensureStart = source.indexOf(
         QStringLiteral("bool CameraSceneWidget::ensureCameraThumbnailPipeline"));
     const qsizetype drawStart = source.indexOf(
@@ -192,7 +192,7 @@ TEST(CameraSceneRenderContractTest, SolidCameraCardsUseBatchedDepthTestedGpuReso
 
 TEST(CameraSceneRenderContractTest, SelectedCameraCardUsesRedHighlight)
 {
-    const QString source = readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString source = readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const qsizetype ensureStart = source.indexOf(
         QStringLiteral("bool CameraSceneWidget::ensureCameraThumbnailPipeline"));
     const qsizetype drawStart = source.indexOf(
@@ -214,9 +214,9 @@ TEST(CameraSceneRenderContractTest, SelectedCameraCardUsesRedHighlight)
 TEST(CameraSceneRenderContractTest, CameraCardsAndDirectionLeadersShareVulkanGeometry)
 {
     const QString header =
-        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
     const QString source =
-        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const QString mathSource =
         readProjectFile(QStringLiteral("src/gui/views/CameraSceneViewMath.cpp"));
 
@@ -263,7 +263,7 @@ TEST(CameraSceneRenderContractTest, CameraCardsAndDirectionLeadersShareVulkanGeo
     const qsizetype leaderStart = source.indexOf(
         QStringLiteral("bool CameraSceneWidget::cameraDirectionLeaderSegment"));
     const qsizetype manipStart = source.indexOf(
-        QStringLiteral("QVector3D CameraSceneWidget::manipCenterWorld"), leaderStart);
+        QStringLiteral("QPointF CameraSceneWidget::manipCenterScreen"), leaderStart);
     ASSERT_GE(leaderStart, 0);
     ASSERT_GT(manipStart, leaderStart);
     const QString leaderBlock = source.mid(leaderStart, manipStart - leaderStart);
@@ -288,7 +288,7 @@ TEST(CameraSceneRenderContractTest, CameraCardsAndDirectionLeadersShareVulkanGeo
 TEST(CameraSceneRenderContractTest, LargePointCloudsPrepareGpuVerticesOffTheGuiThread)
 {
     const QString source =
-        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(source.contains(QStringLiteral("PointCloudLoadResult preparePointCloudLoad")));
@@ -302,11 +302,11 @@ TEST(CameraSceneRenderContractTest, LargePointCloudsPrepareGpuVerticesOffTheGuiT
 TEST(CameraSceneRenderContractTest, ManualPointSelectionReusesOneProjectionMatrix)
 {
     const QString source =
-        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const qsizetype start = source.indexOf(
         QStringLiteral("void CameraSceneWidget::collectPointIndicesInScreenRect"));
     const qsizetype end = source.indexOf(
-        QStringLiteral("bool CameraSceneWidget::saveCurrentPointCloudToSource"), start);
+        QStringLiteral("void CameraSceneWidget::queueCurrentPointCloudSave"), start);
     ASSERT_GE(start, 0);
     ASSERT_GT(end, start);
     const QString block = source.mid(start, end - start);
@@ -318,7 +318,7 @@ TEST(CameraSceneRenderContractTest, ManualPointSelectionReusesOneProjectionMatri
 
 TEST(CameraSceneRenderContractTest, DeduplicatesCameraPosesByImageIdentity)
 {
-    const QString source = readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString source = readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const qsizetype start = source.indexOf(
         QStringLiteral("void CameraSceneWidget::setCameraPoses"));
     const qsizetype end = source.indexOf(
@@ -363,7 +363,7 @@ TEST(CameraSceneRenderContractTest, MetadataResultUpdatesDoNotReloadCameraImages
 TEST(CameraSceneRenderContractTest, RepeatedCameraPosesPreserveLoadedThumbnailResources)
 {
     const QString source =
-        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const qsizetype start = source.indexOf(
         QStringLiteral("void CameraSceneWidget::setCameraPoses"));
     const qsizetype end = source.indexOf(
@@ -382,8 +382,8 @@ TEST(CameraSceneRenderContractTest, RepeatedCameraPosesPreserveLoadedThumbnailRe
 
 TEST(CameraSceneRenderContractTest, CachesImageLoadFailuresToPreventRetryStorm)
 {
-    const QString header = readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
-    const QString source = readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString header = readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
+    const QString source = readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
 
     EXPECT_TRUE(header.contains(QStringLiteral("_cameraImageLoadFailures")));
     EXPECT_TRUE(source.contains(QStringLiteral("_cameraImageLoadFailures.contains(key)")));
@@ -392,7 +392,7 @@ TEST(CameraSceneRenderContractTest, CachesImageLoadFailuresToPreventRetryStorm)
 
 TEST(CameraSceneRenderContractTest, ImageModeKeepsTheFreeOrbitViewMatrix)
 {
-    const QString source = readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString source = readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const qsizetype start = source.indexOf(QStringLiteral("CameraSceneWidget::SceneMatrices CameraSceneWidget::sceneMatrices() const"));
     const qsizetype end = source.indexOf(QStringLiteral("QPointF CameraSceneWidget::projectToScreen"), start);
 
@@ -407,7 +407,7 @@ TEST(CameraSceneRenderContractTest, ImageModeKeepsTheFreeOrbitViewMatrix)
 TEST(CameraSceneRenderContractTest, CameraImageShaderProjectsAWorldSpacePlane)
 {
     const QString vertexShader = readProjectFile(QStringLiteral("src/gui/shaders/camera_scene_image.vert"));
-    const QString source = readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString source = readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
 
     EXPECT_TRUE(vertexShader.contains(QStringLiteral("layout(location = 0) in vec3 position")));
     EXPECT_TRUE(vertexShader.contains(QStringLiteral("uniform ImagePlaneUniforms")));
@@ -420,7 +420,7 @@ TEST(CameraSceneRenderContractTest, CameraImageShaderProjectsAWorldSpacePlane)
 
 TEST(CameraSceneRenderContractTest, AutomaticImageModeHasNoFirstPhotoFallback)
 {
-    const QString source = readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString source = readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const qsizetype updateStart = source.indexOf(
         QStringLiteral("void CameraSceneWidget::updateActiveCameraForView()"));
     const qsizetype displayedStart = source.indexOf(
@@ -465,7 +465,7 @@ TEST(CameraSceneRenderContractTest, ModelMenuProvidesExclusiveTiePointColorModes
 TEST(CameraSceneRenderContractTest, TiePointModesUseMetadataAndDrawLegend)
 {
     const QString sceneSource =
-        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const QString mainWindowSource =
         readProjectFile(QStringLiteral(
             "src/gui/main_window/MainWindowProjectBindings.cpp"));
@@ -484,17 +484,18 @@ TEST(CameraSceneRenderContractTest, TiePointModesUseMetadataAndDrawLegend)
 TEST(CameraSceneRenderContractTest, TiePointsUseGpuCameraPlaneDepth)
 {
     const QString sceneHeader =
-        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
     const QString sceneSource =
-        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
 
-    EXPECT_TRUE(sceneHeader.contains(QStringLiteral("drawPointCloudOverlay")));
+    EXPECT_FALSE(sceneHeader.contains(QStringLiteral("drawPointCloudOverlay")));
+    EXPECT_FALSE(sceneSource.contains(QStringLiteral(
+        "void CameraSceneWidget::drawPointCloudOverlay")));
     EXPECT_FALSE(sceneSource.contains(QStringLiteral("_tiePointPipeline")));
     EXPECT_TRUE(sceneSource.contains(
         QStringLiteral("TiePointColorMode::Elevation")));
     EXPECT_TRUE(sceneSource.contains(
         QStringLiteral("TiePointColorMode::ImageCount")));
-    EXPECT_TRUE(sceneSource.contains(QStringLiteral("pointIsBehindProjectedQuad")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral("CameraImagePlaneAxes")));
     EXPECT_FALSE(sceneSource.contains(QStringLiteral("drawPointCloudOverlay(painter);")));
 
@@ -534,9 +535,9 @@ TEST(CameraSceneRenderContractTest, TiePointsUseGpuCameraPlaneDepth)
 TEST(CameraSceneRenderContractTest, TiePointLoadFitsViewToLoadedGeometry)
 {
     const QString sceneHeader =
-        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
     const QString sceneSource =
-        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
 
     EXPECT_TRUE(sceneHeader.contains(QStringLiteral("void fitViewToLoadedGeometry();")));
     EXPECT_TRUE(sceneHeader.contains(QStringLiteral("bool _fitViewAfterLoad = false;")));
@@ -556,6 +557,7 @@ TEST(CameraSceneRenderContractTest, TiePointLoadFitsViewToLoadedGeometry)
         QStringLiteral("loadModelFromObjInternal(pointCloudPath, true, true, true);")));
     EXPECT_TRUE(tiePointLoadBlock.contains(
         QStringLiteral("loadPointCloudFromXyzInternal(pointCloudPath, true, true);")));
+    EXPECT_FALSE(sceneSource.contains(QStringLiteral("readBinaryPlyPreview")));
 
     const qsizetype plyLoadStart =
         sceneSource.indexOf(QStringLiteral("void CameraSceneWidget::loadModelFromPlyInternal"));
@@ -589,9 +591,9 @@ TEST(CameraSceneRenderContractTest, TiePointLoadFitsViewToLoadedGeometry)
 TEST(CameraSceneRenderContractTest, ImportedPointCloudsUsePointCloudLoadersAndFitView)
 {
     const QString sceneHeader =
-        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
     const QString sceneSource =
-        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const QString workspaceSource =
         readProjectFile(QStringLiteral("src/gui/widgets/WorkspaceCenterWidget.cpp"));
 
@@ -657,9 +659,9 @@ TEST(CameraSceneRenderContractTest, ImportedPointCloudsUsePointCloudLoadersAndFi
 TEST(CameraSceneRenderContractTest, PointCloudUsesOwnBoundsAndPixelSizedFloorPivot)
 {
     const QString sceneHeader =
-        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
     const QString sceneSource =
-        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
 
     EXPECT_TRUE(sceneHeader.contains(QStringLiteral("bool       _hasCloudBounds = false;")));
     EXPECT_TRUE(sceneSource.contains(QStringLiteral(
@@ -674,9 +676,9 @@ TEST(CameraSceneRenderContractTest, ModelMenuEnablesTextureAndGatesUnsupportedMo
 {
     const QString menuSource = readProjectFile(QStringLiteral("src/gui/menu/MainMenu.cpp"));
     const QString sceneHeader =
-        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
     const QString sceneSource =
-        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const QString menuBindingsSource =
         readProjectFile(QStringLiteral(
             "src/gui/main_window/MainWindowMenuBindings.cpp"));
@@ -710,7 +712,7 @@ TEST(CameraSceneRenderContractTest, ModelMenuEnablesTextureAndGatesUnsupportedMo
 TEST(CameraSceneRenderContractTest, ModelModesRebuildGeometryAndDrawLegends)
 {
     const QString sceneSource =
-        readProjectFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const QString modelSource =
         readProjectFile(QStringLiteral("src/gui/views/ModelVisualization.cpp"));
     const QString vertexShader =

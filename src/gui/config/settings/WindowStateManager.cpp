@@ -12,14 +12,6 @@
 #include <QMainWindow>
 
 /**
- * @brief 构造函数，无额外初始化逻辑。
- */
-WindowStateManager::WindowStateManager(QObject *parent)
-    : QObject(parent)
-{
-}
-
-/**
  * @brief 从 QSettings 恢复主窗口的几何尺寸和最大化状态。
  *
  * 执行步骤：

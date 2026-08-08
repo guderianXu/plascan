@@ -209,39 +209,4 @@ void upsertMetaArrayRecordByPath(QJsonObject *meta,
     (*meta)[arrayKey] = deduped;
 }
 
-void replaceMetaArrayWithLatest(QJsonObject *meta,
-                                const QString &arrayKey,
-                                const QJsonObject &record)
-{
-    if (!meta)
-    {
-        return;
-    }
-    QJsonArray arr;
-    arr.append(record);
-    (*meta)[arrayKey] = arr;
-}
-
-void upsertMetaArrayRecordByIndex(QJsonObject *meta,
-                                  const QString &arrayKey,
-                                  const QJsonObject &record,
-                                  int replaceIndex)
-{
-    if (!meta)
-    {
-        return;
-    }
-
-    QJsonArray array = meta->value(arrayKey).toArray();
-    if (replaceIndex >= 0 && replaceIndex < array.size())
-    {
-        array[replaceIndex] = record;
-    }
-    else
-    {
-        array.append(record);
-    }
-    (*meta)[arrayKey] = array;
-}
-
 } // namespace xjw::gui::project

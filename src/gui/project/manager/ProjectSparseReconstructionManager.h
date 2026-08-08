@@ -1,7 +1,6 @@
 #pragma once
 
 #include <QObject>
-#include <QJsonArray>
 #include <QJsonObject>
 
 #include "TriangulationService.h"
@@ -24,7 +23,6 @@ public:
                                                 QWidget *parentWidget,
                                                 QObject *parent = nullptr);
 
-    QJsonArray getAvailableAtResults() const;
     void startTriangulationAsync(const QJsonObject &settings);
     void startSparseCloudOutlierRemovalAsync(const QJsonObject &settings);
     void startSparseCloudLocalOptimAsync(const QJsonObject &settings);
@@ -35,8 +33,6 @@ signals:
     void atProgressFinished(bool success);
 
 private:
-    bool ensureProjectOpen(const QString &message,
-                           const QString &title) const;
     void finalizeTriangulationSuccess(const xjw::core::project::TriangulationServiceResult &result,
                                       const QStringList &selectedImages,
                                       const xjw::core::project::TriangulationServiceOptions &options);

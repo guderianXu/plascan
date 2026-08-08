@@ -175,8 +175,6 @@ public slots:
     bool initializeCamerasFromIntrinsics(const QJsonObject &settings);
     // 使用相对定向 / 增量 SFM 为缺少相机文件或仅有内参的影像恢复初始化位姿
     bool initializeCameraPosesWithSFM(const QJsonObject &settings);
-    // 从项目元数据中移除单个资源引用（不删除磁盘文件）
-    void removeResource(const QString &resourcePath);
     // 批量移除资源引用
     void removeResources(const QStringList &resourcePaths);
     // 以外部引用方式导入 DEM/LiDAR/点云参考数据，默认用于精度检查。
@@ -237,7 +235,6 @@ public slots:
     
     // === 结果追加接口（供后台任务通过 Qt::QueuedConnection 调用） ===
     // 追加逐影像 `.pimatch` 分片索引，并立即持久化到归档。
-    void appendImageMatchResult(const ProjectImageMatchResultRecord &record);
     void appendImageMatchResults(const QVector<ProjectImageMatchResultRecord> &records);
     // 将影像-相机参数映射批量写回项目 ProjectData（供 AT 服务结果写回时调用）
     // 参数: cameras       - 影像绝对路径 → 相机 JSON 的映射
@@ -273,8 +270,6 @@ public slots:
     // 异步启动正射影像制作（settings 包含影像、DEM、输出路径与核心选项）。
     void startMapProjectAsync(
         const xjw::gui::project::OrthoGenerationRequest &request);
-    // 异步启动模型生成；选择深度图但没有兼容批次时先自动估计深度图。
-    void startGenerateModelAsync();
     void startGenerateModelAsync(const QJsonObject &settings);
     // 使用正式空三相机和稀疏云，异步估计/复用深度图并融合稠密点云。
     void startCreatePointCloudAsync(const QJsonObject &settings);
@@ -298,29 +293,16 @@ public slots:
     // settings 由调用方提供稀疏点云后处理参数。
     void startSparseCloudRefineAsync(const QJsonObject &settings);
 
-    // 获取所有空三结果的摘要列表，供模型与质量检查工作流程选择输入。
-    // 每项包含: index, created_at, image0, image1, output_dir, sparse_cloud_xyz
-    QJsonArray getAvailableAtResults() const;
     // 接受 BA 预览结果，将待写入相机参数写回项目（此后预览缓存清空）
     bool acceptBundleAdjustPreview(QString *errorMsg = nullptr);
     // 丢弃 BA 预览结果（不修改任何相机参数）
     void discardBundleAdjustPreview();
-    // 空三流程中自动应用 BA 结果：无弹窗、自动写回相机参数并发 atProgressFinished
-    void applyBundleAdjustForAt(const QString &assetsDir,
-                                const QStringList &images,
-                                const QString &outputDir,
-                                const QMap<QString, QJsonObject> &beforeCameras);
     // 用最新空三（SFM）结果替换当前连接点，并刷新 DataTree
     bool replaceTiePointResult(const QString &sparseCloudPath,
                                int sparsePointCount,
                                const QStringList &selectedImages,
                                const QString &outputDir,
                                const QJsonObject &extraRecord = {});
-
-    /// 追加观测网络构建结果到 observation_network_results，并刷新 DataTree
-    void appendObsNetResult(int nodeCount, int edgeCount,
-                            const QString &algorithmName,
-                            const QJsonObject &extraInfo = {});
 
     // 追加前方交会结果到项目元数据
     bool appendIntersectionResult(const QJsonObject &result, QString *errorMsg = nullptr);
@@ -338,10 +320,7 @@ public slots:
     QStringList getAllImages() const;                    // 获取所有影像路径
     QString findMatchFileForPair(const QString &imgA, const QString &imgB) const; // 查找匹配文件
     const ProjectData *projectData() const { return _projectData; } // 获取底层数据对象
-    bool hasTemporaryMeta() const;                      // 是否存在临时缓存
     void discardTemporaryMeta();                        // 删除临时缓存文件
-    // 更新内存元数据并异步写入临时缓存（线程安全，适合在后台任务完成时调用）
-    void writeMetadataToTempAsync(const QJsonObject &meta, bool markDirty = true);
     // 刷新重建质量报告，并将报告注册到工作区目录树。
     void refreshReconstructionQualityReport();
     // 为指定影像列表中每张影像加载对应的 xjw::Camera 对象；
@@ -388,9 +367,8 @@ private:
     // 辅助：统一提示框（默认标题“提示”）
     void showWarning(const QString &message,
                      const QString &title = QStringLiteral("提示")) const;
-    // 辅助：校验项目是否已打开；失败时统一弹窗提示并返回 false
-    bool ensureProjectOpen(const QString &message = QStringLiteral("请先打开项目"),
-                           const QString &title = QStringLiteral("提示")) const;
+    // 展示当前 BA 关键指标，并要求用户明确保留或丢弃待提交结果。
+    void presentBundleAdjustPreview();
     void startImageImport(const QStringList &imagePaths,
                           const QString &sourceLabel);
     void importProjectAsset(bool modelAsset);

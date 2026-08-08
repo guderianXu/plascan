@@ -26,7 +26,6 @@ static constexpr double NODE_MAX_RADIUS = 18.0;
 static constexpr double SCENE_SIZE = 520.0;
 static constexpr int HIGH_PERFORMANCE_NODE_THRESHOLD = 180;
 static constexpr int HIGH_PERFORMANCE_EDGE_THRESHOLD = 1600;
-static constexpr int FORCE_LAYOUT_NODE_THRESHOLD = 140;
 static constexpr int MAX_VISIBLE_EDGES_LARGE = 2500;
 static constexpr int MAX_VISIBLE_EDGES_HUGE = 1400;
 static constexpr int MAX_VISIBLE_LABELS_NORMAL = 60;
@@ -73,19 +72,10 @@ ObservationNetworkView::ObservationNetworkView(QWidget *parent)
     setOptimizationFlag(QGraphicsView::DontAdjustForAntialiasing, true);
     setCacheMode(QGraphicsView::CacheBackground);
 
-    _forceTimer = new QTimer(this);
-    _forceTimer->setInterval(16); // ~60fps
-    connect(_forceTimer, &QTimer::timeout, this, &ObservationNetworkView::onForceStep);
-}
-
-ObservationNetworkView::~ObservationNetworkView()
-{
-    _forceTimer->stop();
 }
 
 void ObservationNetworkView::clearNetwork()
 {
-    _forceTimer->stop();
     _scene->clear();
     _pos.clear();
     _nodeRadii.clear();
@@ -99,7 +89,6 @@ void ObservationNetworkView::clearNetwork()
 
 void ObservationNetworkView::setNetwork(const xjw::ObservationNetwork &net)
 {
-    _forceTimer->stop();
     resetTransform();
     _scene->clear();
     _net = net;
@@ -137,32 +126,8 @@ void ObservationNetworkView::setNetwork(const xjw::ObservationNetwork &net)
     fitNetworkInView();
 }
 
-void ObservationNetworkView::startForceLayout()
-{
-    if (_net.numNodes() <= 1)
-    {
-        emit forceLayoutDone();
-        return;
-    }
-
-    if (_net.numNodes() > FORCE_LAYOUT_NODE_THRESHOLD)
-    {
-        multiRingLayout();
-        applyPositions();
-        _autoFitPending = true;
-        fitNetworkInView();
-        emit forceLayoutDone();
-        return;
-    }
-
-    _forceIter = 0;
-    _temp = LAYOUT_AREA_SIZE * 0.15;  // 初始温度
-    _forceTimer->start();
-}
-
 void ObservationNetworkView::resetLayout()
 {
-    _forceTimer->stop();
     chooseInitialLayout();
     applyPositions();
     _autoFitPending = true;
@@ -949,80 +914,6 @@ void ObservationNetworkView::drawForeground(QPainter *painter, const QRectF &rec
 }
 
 // ---------------------------------------------------------------------------
-// Fruchterman-Reingold 力导向布局（每帧一步）
-// ---------------------------------------------------------------------------
-void ObservationNetworkView::onForceStep()
-{
-    if (_forceIter >= MAX_FORCE_LAYOUT_ITERATIONS || _net.numNodes() < 2)
-    {
-        _forceTimer->stop();
-        if (_autoFitPending)
-        {
-            fitNetworkInView();
-        }
-        emit forceLayoutDone();
-        return;
-    }
-
-    const int    n  = _net.numNodes();
-    const double k  = std::sqrt(LAYOUT_AREA_SIZE * LAYOUT_AREA_SIZE / n);
-    const double k2 = k * k;
-    QVector<QPointF> disp(n, {0, 0});
-
-    // 斥力：所有节点对
-    for (int i = 0; i < n; ++i)
-    {
-        for (int j = i + 1; j < n; ++j)
-        {
-            QPointF d = _pos[i] - _pos[j];
-            double dist2 = d.x()*d.x() + d.y()*d.y();
-            if (dist2 < 1e-6)
-            {
-                d = {1, 0};
-                dist2 = 1.0;
-            }
-            double dist  = std::sqrt(dist2);
-            double fr    = k2 / dist;
-            QPointF force = d / dist * fr;
-            disp[i] += force;
-            disp[j] -= force;
-        }
-    }
-
-    // 引力：边
-    for (const auto &e : _net.edges)
-    {
-        QPointF d = _pos[e.idx0] - _pos[e.idx1];
-        double dist = std::sqrt(d.x()*d.x() + d.y()*d.y());
-        if (dist < 1e-6) continue;
-        double fa = dist * dist / k;
-        QPointF force = d / dist * fa;
-        disp[e.idx0] -= force;
-        disp[e.idx1] += force;
-    }
-
-    // 应用位移，限制温度
-    const double half = SCENE_SIZE / 2;
-    for (int i = 0; i < n; ++i)
-    {
-        double dLen = std::sqrt(disp[i].x()*disp[i].x() + disp[i].y()*disp[i].y());
-        if (dLen > 1e-6)
-        {
-            double clamp = std::min(dLen, _temp);
-            _pos[i] += disp[i] / dLen * clamp;
-        }
-        // 限制在场景内
-        _pos[i].setX(std::clamp(_pos[i].x(), -half, SCENE_SIZE + half));
-        _pos[i].setY(std::clamp(_pos[i].y(), -half, SCENE_SIZE + half));
-    }
-
-    _temp *= FORCE_LAYOUT_COOL_RATE;
-    ++_forceIter;
-
-    applyPositions();
-}
-
-// ---------------------------------------------------------------------------
 // 交互
 // ---------------------------------------------------------------------------
 void ObservationNetworkView::mousePressEvent(QMouseEvent *event)
@@ -1035,7 +926,6 @@ void ObservationNetworkView::mousePressEvent(QMouseEvent *event)
             _selectedNodeIndex = pickedNodeIndex;
             rebuildRenderCache();
             viewport()->update();
-            emit nodeClicked(pickedNodeIndex, QString::fromStdString(_net.nodeNames[pickedNodeIndex]));
             event->accept();
             return;
         }
@@ -1125,14 +1015,4 @@ int ObservationNetworkView::pickNodeAt(const QPointF &scenePos) const
     }
 
     return bestNodeIndex;
-}
-
-QImage ObservationNetworkView::toImage(QSize size) const
-{
-    QImage img(size, QImage::Format_ARGB32_Premultiplied);
-    img.fill(Qt::transparent);
-    QPainter p(&img);
-    p.setRenderHint(QPainter::Antialiasing);
-    const_cast<ObservationNetworkView *>(this)->render(&p);
-    return img;
 }

@@ -68,7 +68,6 @@
 #include "TiePointWorkflowController.h"
 #include "ProjectTaskStatusController.h"
 #include "ProjectLifecyclePresenter.h"
-#include "camera/CameraModel3DDialog.h"
 #include "tie_points/ThinTiePointsDialog.h"
 #include "LayerRenderer.h"
 #include "Logger.h"
@@ -82,26 +81,6 @@
 
 namespace
 {
-constexpr int SelectionPropertiesMinHeight = 80;
-constexpr int PhotosDockMinHeight = 90;
-constexpr int DockMinWidth = 160;
-constexpr int DockMinHeight = 80;
-constexpr int ProjectDockLayoutVersion = 3;
-
-void configureMovableDock(QDockWidget *dock)
-{
-    if (!dock)
-    {
-        return;
-    }
-
-    dock->setAllowedAreas(Qt::AllDockWidgetAreas);
-    dock->setFeatures(QDockWidget::DockWidgetClosable
-                      | QDockWidget::DockWidgetMovable
-                      | QDockWidget::DockWidgetFloatable);
-    dock->setMinimumSize(DockMinWidth, DockMinHeight);
-    dock->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
-}
 xjw::matchphotos::MatchPhotosProfile tiePointProfileFromAccuracy(const QString &accuracy)
 {
     if (accuracy == QStringLiteral("highest") || accuracy == QStringLiteral("high"))
@@ -162,19 +141,30 @@ void MainWindow::setupProjectManager()
             &QWidget::close,
             Qt::QueuedConnection);
     _projectManager->setObjectName(QStringLiteral("ProjectManager"));
+    _taskStatusController = new ProjectTaskStatusController(
+        _projectManager, _dashboard, statusBar(), this, this);
+    connect(_photoStrip,
+            &PhotoStripWidget::imageLoadingProgressChanged,
+            _taskStatusController,
+            &ProjectTaskStatusController::updateImageLoading);
+    connect(_photoStrip,
+            &PhotoStripWidget::imageLoadingFinished,
+            _taskStatusController,
+            &ProjectTaskStatusController::finishImageLoading);
+
     _tiePointWorkflowController = new TiePointWorkflowController(_projectManager, this);
     connect(_tiePointWorkflowController,
             &TiePointWorkflowController::progressStarted,
-            this,
-            &MainWindow::showSgProgress);
+            _taskStatusController,
+            &ProjectTaskStatusController::showTiePointProgress);
     connect(_tiePointWorkflowController,
             &TiePointWorkflowController::progressUpdated,
-            this,
-            &MainWindow::updateSgProgress);
+            _taskStatusController,
+            &ProjectTaskStatusController::updateTiePointProgress);
     connect(_tiePointWorkflowController,
             &TiePointWorkflowController::progressFinished,
-            this,
-            &MainWindow::hideSgProgress);
+            _taskStatusController,
+            &ProjectTaskStatusController::finishTiePointProgress);
     connect(_tiePointWorkflowController,
             &TiePointWorkflowController::statusMessageRequested,
             this,
@@ -189,8 +179,8 @@ void MainWindow::setupProjectManager()
     {
         QMessageBox::warning(this, title, message);
     });
-    connect(this,
-            &MainWindow::sgCancelRequested,
+    connect(_taskStatusController,
+            &ProjectTaskStatusController::tiePointCancelRequested,
             _tiePointWorkflowController,
             &TiePointWorkflowController::cancel);
     _projectUiHydrator = new ProjectUiHydrator(this);
@@ -971,18 +961,4 @@ void MainWindow::setupProjectManager()
             selectPhoto(p, true);
         });
 
-    _taskStatusController = new ProjectTaskStatusController(
-        _projectManager, _dashboard, statusBar(), this, this);
-    connect(_photoStrip,
-            &PhotoStripWidget::imageLoadingProgressChanged,
-            _taskStatusController,
-            &ProjectTaskStatusController::updateImageLoading);
-    connect(_photoStrip,
-            &PhotoStripWidget::imageLoadingFinished,
-            _taskStatusController,
-            &ProjectTaskStatusController::finishImageLoading);
-    connect(_taskStatusController,
-            &ProjectTaskStatusController::tiePointCancelRequested,
-            this,
-            &MainWindow::sgCancelRequested);
 }

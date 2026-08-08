@@ -20,7 +20,6 @@ if(TARGET sfm AND TARGET bundle_adjust AND TARGET lidar)
             ${CMAKE_SOURCE_DIR}/src/core/intersection
             ${CMAKE_SOURCE_DIR}/src/core/lidar
             ${CMAKE_SOURCE_DIR}/src/core/sfm
-            ${CMAKE_SOURCE_DIR}/src/gui/project/archive
             ${CMAKE_SOURCE_DIR}/src/gui/project/data
             ${CMAKE_SOURCE_DIR}/src/gui/project/services
             ${CMAKE_SOURCE_DIR}/src/gui/project/support

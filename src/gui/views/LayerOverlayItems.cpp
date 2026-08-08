@@ -3,9 +3,7 @@
 #include <opencv2/core/types.hpp>
 
 #include <QBrush>
-#include <QGraphicsEllipseItem>
 #include <QGraphicsItem>
-#include <QGraphicsLineItem>
 #include <QPainter>
 #include <QPen>
 
@@ -292,59 +290,6 @@ QGraphicsItem *createFeatureResidualOverlayItem(
     const QRectF &imageBounds)
 {
     return new BatchedFeatureResidualOverlayItem(residuals, options, imageBounds);
-}
-
-QList<QGraphicsItem *> createMatchOverlayItems(const QVector<QPointF> &ptsA,
-                                               const QVector<QPointF> &ptsB,
-                                               const LayerRenderer::MatchDisplayOptions &options,
-                                               qreal bOffsetX)
-{
-    QList<QGraphicsItem *> items;
-    if (!options.showLines)
-    {
-        return items;
-    }
-
-    int n = qMin(ptsA.size(), ptsB.size());
-    if (options.maxDisplayCount > 0 && n > options.maxDisplayCount)
-    {
-        n = options.maxDisplayCount;
-    }
-
-    QPen linePen(options.lineColor);
-    linePen.setWidthF(static_cast<qreal>(options.lineWidth));
-    linePen.setColor(QColor(options.lineColor.red(), options.lineColor.green(),
-                            options.lineColor.blue(), options.opacity));
-
-    QPen ptPen(options.lineColor);
-    QBrush ptBrush(QColor(options.lineColor.red(), options.lineColor.green(),
-                          options.lineColor.blue(), options.opacity));
-
-    items.reserve(n * 3);
-    for (int i = 0; i < n; ++i)
-    {
-        const QPointF a = ptsA.at(i);
-        const QPointF b = ptsB.at(i);
-
-        auto *ea = new QGraphicsEllipseItem(a.x() - 3, a.y() - 3, 6, 6);
-        ea->setPen(ptPen);
-        ea->setBrush(ptBrush);
-        ea->setZValue(1001.0);
-        items.append(ea);
-
-        auto *eb = new QGraphicsEllipseItem(bOffsetX + b.x() - 3, b.y() - 3, 6, 6);
-        eb->setPen(ptPen);
-        eb->setBrush(ptBrush);
-        eb->setZValue(1001.0);
-        items.append(eb);
-
-        auto *ln = new QGraphicsLineItem(a.x(), a.y(), bOffsetX + b.x(), b.y());
-        ln->setPen(linePen);
-        ln->setZValue(1000.5);
-        items.append(ln);
-    }
-
-    return items;
 }
 
 } // namespace xjw::gui::views

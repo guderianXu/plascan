@@ -245,30 +245,4 @@ TiePointMutationResult replaceTiePointResult(ProjectData *projectData,
     return ProjectTiePointResultService::replaceCurrent(projectData, entry);
 }
 
-void appendObsNetResult(ProjectData *projectData,
-                        int nodeCount,
-                        int edgeCount,
-                        const QString &algorithmName,
-                        const QJsonObject &extraInfo)
-{
-    if (!projectData || !projectData->hasProject())
-    {
-        return;
-    }
-
-    QJsonObject entry;
-    entry[QStringLiteral("algorithm")] = algorithmName;
-    entry[QStringLiteral("node_count")] = nodeCount;
-    entry[QStringLiteral("edge_count")] = edgeCount;
-    entry[QStringLiteral("timestamp")] = QDateTime::currentDateTime().toString(Qt::ISODate);
-    for (auto it = extraInfo.begin(); it != extraInfo.end(); ++it)
-    {
-        entry[it.key()] = it.value();
-    }
-
-    projectData->replaceResultRecordWithLatest(QStringLiteral("observation_network_results"),
-                                               entry,
-                                               true);
-}
-
 } // namespace xjw::gui::project

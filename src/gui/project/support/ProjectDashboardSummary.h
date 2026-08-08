@@ -49,12 +49,6 @@ struct ProjectDashboardSummary
     QJsonArray qualityReports;
 };
 
-QString projectDashboardStepStateName(ProjectDashboardStepState state);
-
-bool projectDashboardStepById(const ProjectDashboardSummary &summary,
-                              const QString &id,
-                              ProjectDashboardStep *step);
-
 ProjectDashboardSummary buildProjectDashboardSummary(const QJsonObject &metadata);
 
 } // namespace xjw::gui::project

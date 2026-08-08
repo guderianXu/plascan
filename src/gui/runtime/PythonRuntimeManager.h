@@ -15,7 +15,6 @@ public:
     static QString setupScriptPath();
     static QString bootstrapScriptPath();
     static QString currentPythonExecutable();
-    static bool managedRuntimeAvailable();
     static bool bindManagedRuntime(QString *errorMessage = nullptr);
 
     static bool startupPromptSuppressed();

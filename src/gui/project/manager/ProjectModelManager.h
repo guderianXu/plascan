@@ -20,7 +20,6 @@ public:
                                  QWidget *parentWidget,
                                  QObject *parent = nullptr);
 
-    void startGenerateModelAsync();
     bool startMeshReconstructionAsync(const QJsonObject &settings);
     void startTextureMappingAsync(const QJsonObject &settings);
     void cancelActiveTask();
@@ -31,9 +30,6 @@ signals:
     void meshProgressFinished(bool success);
 
 private:
-    bool ensureProjectOpen(const QString &message,
-                           const QString &title) const;
-
     ProjectManager *_owner = nullptr;
     ProjectData *_projectData = nullptr;
     QWidget *_parentWidget = nullptr;

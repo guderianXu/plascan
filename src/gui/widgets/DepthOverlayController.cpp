@@ -73,7 +73,6 @@ void DepthOverlayController::request(
     const quint64 generation = ++_requestGeneration;
     const views::DepthOverlayAvailability availability = artifactAvailability(
         image_path, level);
-    emit availabilityChanged(availability.available);
     if (!availability.available)
     {
         emit overlayFailed(image_path, availability.reason);

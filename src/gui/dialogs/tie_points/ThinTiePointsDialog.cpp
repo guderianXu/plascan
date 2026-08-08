@@ -1,10 +1,11 @@
 #include "tie_points/ThinTiePointsDialog.h"
 
+#include "shared/WorkflowParameterDialogStyle.h"
+
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QLineEdit>
-#include <QPushButton>
 #include <QRegularExpression>
 #include <QRegularExpressionValidator>
 #include <QVBoxLayout>
@@ -13,7 +14,7 @@ ThinTiePointsDialog::ThinTiePointsDialog(QWidget *parent)
     : QDialog(parent)
 {
     setWindowTitle(tr("稀释连接点"));
-    setMinimumWidth(480);
+    xjw::gui::dialogs::configureWorkflowParameterDialog(this);
     buildUi();
 }
 
@@ -39,23 +40,18 @@ void ThinTiePointsDialog::buildUi()
 
     auto *generalGroup = new QGroupBox(tr("一般"), this);
     auto *formLayout = new QFormLayout(generalGroup);
-    formLayout->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+    xjw::gui::dialogs::configureWorkflowForm(formLayout);
 
     _tiePointLimitEdit = new QLineEdit(QStringLiteral("500"), generalGroup);
     _tiePointLimitEdit->setValidator(
         new QRegularExpressionValidator(QRegularExpression(QStringLiteral("[0-9, ]+")), _tiePointLimitEdit));
+    xjw::gui::dialogs::configureWorkflowInputWidget(_tiePointLimitEdit);
     formLayout->addRow(tr("连接点限制:"), _tiePointLimitEdit);
     mainLayout->addWidget(generalGroup);
 
     auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
-    if (QPushButton *okButton = buttonBox->button(QDialogButtonBox::Ok))
-    {
-        okButton->setText(QStringLiteral("OK"));
-    }
-    if (QPushButton *cancelButton = buttonBox->button(QDialogButtonBox::Cancel))
-    {
-        cancelButton->setText(QStringLiteral("Cancel"));
-    }
+    buttonBox->setObjectName(QStringLiteral("workflowButtonBox"));
+    xjw::gui::dialogs::configureWorkflowButtonBox(buttonBox);
     connect(buttonBox, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
     mainLayout->addWidget(buttonBox);

@@ -61,6 +61,4 @@ private:
     // 防止 applySettings() 批量更新控件时产生中间状态信号。
     bool _applyingSettings = false;
 
-    // 记录当前项目是否具有完整相机参考，用于提示和运行前校验。
-    bool _referencePreselectionAvailable = false;
 };

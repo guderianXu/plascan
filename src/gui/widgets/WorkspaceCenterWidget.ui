@@ -129,7 +129,7 @@
   <customwidget>
    <class>CameraSceneWidget</class>
    <extends>QWidget</extends>
-   <header>camera/CameraModel3DDialog.h</header>
+   <header>CameraSceneWidget.h</header>
   </customwidget>
   <customwidget>
    <class>CanvasWidget</class>

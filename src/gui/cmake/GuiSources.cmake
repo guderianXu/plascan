@@ -9,7 +9,6 @@ set(GUI_SOURCES
   config/settings/WindowStateManager.cpp
   config/settings/RecentProjectsManager.cpp
   config/settings/FileDialogStateManager.cpp
-  config/settings/ProjectDialogJsonSettingBase.cpp
   config/settings/DialogSettingStore.cpp
   main_window/MainWindow.cpp
   main_window/MainWindowLayout.cpp
@@ -24,6 +23,7 @@ set(GUI_SOURCES
   main_window/ProjectUiHydrator.cpp
   main_window/ProjectTaskStatusController.cpp
   main_window/ProjectLifecyclePresenter.cpp
+  main_window/FeatureVisualizationController.cpp
   main_window/ReconstructionWorkflowController.cpp
   main_window/TiePointWorkflowController.cpp
   main_window/WorkspacePanelController.cpp
@@ -53,8 +53,8 @@ set(GUI_SOURCES
   views/LayerImageLoader.cpp
   views/LayerOverlayItems.cpp
   views/LayerRenderer.cpp
-  views/LayerStitchedDebug.cpp
   views/CameraSceneViewMath.cpp
+  views/CameraSceneWidget.cpp
   views/ObjRenderPreparation.cpp
   views/TiePointVisualization.cpp
   views/ModelVisualization.cpp
@@ -84,111 +84,6 @@ set(GUI_SOURCES
   widgets/WorkspaceCenterWidget.ui
 )
 
-set(GUI_HEADERS
-  config/AppConfigManager.h
-  config/ImageViewRotationSettings.h
-  config/ProjectUiConfigManager.h
-  config/ProjectWorkflowConfigManager.h
-  config/ProjectConfigManager.h
-  config/settings/WindowStateManager.h
-  config/settings/RecentProjectsManager.h
-  config/settings/FileDialogStateManager.h
-  config/settings/GuiSettingsStore.h
-  config/settings/ProjectDialogJsonSettingBase.h
-  config/settings/DialogSettingStore.h
-  config/settings/DialogSettingKeys.h
-  main_window/MainWindow.h
-  main_window/ModelDropSupport.h
-  main_window/MenuWorkflowController.h
-  main_window/ProjectUiHydrator.h
-  main_window/ProjectTaskStatusController.h
-  main_window/ProjectLifecyclePresenter.h
-  main_window/ReconstructionWorkflowController.h
-  main_window/TiePointWorkflowController.h
-  menu/ToolbarButton.h
-  menu/MainMenu.h
-  platform/ProjectFileIntegration.h
-  runtime/PythonRuntimeManager.h
-  markers/ProjectMarkerRepository.h
-  markers/MarkerUndoCommand.h
-  markers/MarkerOverlayItems.h
-  markers/MarkerWorkspaceController.h
-  markers/MarkerProjectionPanel.h
-  markers/MarkerReferencePanel.h
-   markers/MarkerFocusMeasurementDialog.h
-  markers/MarkerTaskRunner.h
-  markers/MarkerDetectionJobBuilder.h
-  markers/DetectMarkersDialog.h
-  markers/MarkerDetectionReviewDialog.h
-  markers/PrintMarkersDialog.h
-  panels/LogPanel.h
-  project/archive/PlascanArchive.h
-  project/archive/ProjectChunkStore.h
-  project/archive/ProjectResourceStore.h
-  project/archive/ProjectWorkspaceStore.h
-  project/data/ProjectData.h
-  project/services/BundleAdjustService.h
-  project/services/ProjectCameraImportService.h
-  project/services/ProjectResourceCleanupService.h
-  project/services/ProjectTiePointResultService.h
-  project/support/ProjectBundleAdjustExecution.h
-  project/support/ProjectBundleAdjustWorkflow.h
-  project/support/ProjectCameraInitialization.h
-  project/support/ProjectDashboardSummary.h
-  project/support/ProjectDenseWorkflowConfig.h
-  project/support/ProjectDepthBatchLineage.h
-  project/support/ProjectModelWorkflowPolicy.h
-  project/support/ProjectMetadataOperations.h
-  project/support/ProjectReferenceDatasets.h
-  project/support/ProjectReferenceTerrainBa.h
-  project/support/ProjectResultRecords.h
-  project/support/ProjectSfmWorkflow.h
-  project/support/ProjectSparseWorkflow.h
-  project/support/ProjectSurveyControl.h
-  project/support/ProjectWorkflowUtils.h
-  project/support/ProjectWorkflowReports.h
-  project/manager/ProjectManager.h
-  project/manager/ProjectLifecycleController.h
-  project/manager/ProjectMaskWorkflowController.h
-  project/manager/ProjectPointCloudWorkflowController.h
-  project/manager/ProjectModelManager.h
-  project/manager/ProjectUiCommands.h
-  project/manager/ProjectSparseReconstructionManager.h
-  project/manager/ProjectTerrainProductsManager.h
-  project/manager/ProjectCameraSetupManager.h
-  tasks/GuiTaskRunner.h
-  views/DepthOverlayData.h
-  widgets/DepthOverlayController.h
-  views/LayerFeatureLoader.h
-  views/FeatureResidualLoader.h
-  views/LayerImageLoader.h
-  views/LayerOverlayItems.h
-  views/LayerRenderer.h
-  views/LayerStitchedDebug.h
-  views/CameraSceneViewMath.h
-  views/ObjRenderPreparation.h
-  views/TiePointVisualization.h
-  views/ModelVisualization.h
-  widgets/CanvasWidget.h
-  widgets/DataTreeWidget.h
-  widgets/DataTreeResourceUtils.h
-  widgets/WorkspaceSectionIcons.h
-  widgets/PhotoStripWidget.h
-  widgets/ProjectDashboardWidget.h
-  widgets/ReferencePanelWidget.h
-  widgets/SelectionPropertiesWidget.h
-  main_window/WorkspacePanelDescriptor.h
-  main_window/WorkspacePanelController.h
-  widgets/ImageViewWidget.h
-  widgets/MatchLineOverlay.h
-  widgets/DisparityHeatmapOverlay.h
-  widgets/TaskStatusWidget.h
-  widgets/DualImageViewer.h
-  widgets/HenuBrandWidget.h
-  widgets/ObservationNetworkView.h
-  widgets/WorkspaceCenterWidget.h
-)
-
 set(GUI_PROJECT_SOURCES
   project/services/BundleAdjustService.cpp
   project/services/ProjectCameraImportService.cpp
@@ -200,6 +95,7 @@ set(GUI_PROJECT_SOURCES
   project/support/ProjectDepthBatchLineage.cpp
   project/support/ProjectModelWorkflowPolicy.cpp
   project/support/ProjectMetadataOperations.cpp
+  project/support/ProjectOpenGuard.cpp
   project/support/ProjectReferenceTerrainBa.cpp
   project/support/ProjectResultRecords.cpp
   project/support/ProjectSfmWorkflow.cpp

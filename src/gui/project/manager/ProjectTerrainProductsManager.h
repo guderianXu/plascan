@@ -40,9 +40,6 @@ signals:
                                const QJsonObject &result);
 
 private:
-    bool ensureProjectOpen(const QString &message = QStringLiteral("请先打开项目"),
-                           const QString &title = QStringLiteral("提示")) const;
-
     ProjectManager *_owner = nullptr;
     ProjectData *_projectData = nullptr;
     QWidget *_parentWidget = nullptr;

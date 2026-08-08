@@ -26,10 +26,10 @@
 #include <functional>
 
 class QMainWindow;
-class QColor;
 class MainMenu;
 class ProjectManager;
 class DialogSettingStore;
+class FeatureVisualizationController;
 
 // MenuWorkflowController: 处理菜单触发后的业务流程（对话框、参数收集、任务发起）
 // MainMenu 只负责 GUI 动作定义，本类负责业务协调
@@ -52,9 +52,6 @@ public:
     void bindActions(MainMenu *mainMenu);
 
 public slots:
-    /// 打开特征点渲染选项对话框，并支持实时预览。
-    void openFeaturePointVisualizationDialog();
-
     /// 从项目 UI 设置中恢复特征点显示选项，并转发给画布层。
     /// @param ui 项目级 UI 设置 JSON，包含 feature_point_visualization 配置。
     void applySavedFeatureDisplayOptions(const QJsonObject &ui);
@@ -89,11 +86,6 @@ signals:
     void requestApplyFeatureDisplayOptions(const LayerRenderer::FeatureDisplayOptions &opts);
 
 private:
-    /// 将 QColor 序列化为包含 r、g、b 字段的 JSON 对象。
-    /// @param c 要序列化的颜色。
-    /// @return 颜色对应的 JSON 对象。
-    static QJsonObject colorToJson(const QColor &c);
-
     /// 按约定优先顺序从当前项目中收集影像绝对路径列表。
     /// @return 当前项目的影像绝对路径列表；若未打开项目则返回空列表。
     QStringList getProjectImages() const;
@@ -129,12 +121,10 @@ private:
                                        const QString &outputRoot,
                                        bool fillMissingTiePoints);
     /// 各对话框记忆化设置管理器（生命周期与控制器一致）。
-    DialogSettingStore *_featurePointVisualizationSetting = nullptr;
-    DialogSettingStore *_baSetting = nullptr;
     DialogSettingStore *_mapSetting = nullptr;
-    DialogSettingStore *_dcSetting = nullptr;
     DialogSettingStore *_aerialTriangulationSetting = nullptr;
     DialogSettingStore *_workflowSettingsStore = nullptr;
+    FeatureVisualizationController *_featureVisualizationController = nullptr;
     QPointer<QMainWindow> _mainWindow;            // 父主窗口弱引用（不拥有）
     ProjectManager *_projectManager = nullptr;    // 注入的项目管理器（非拥有引用）
 };

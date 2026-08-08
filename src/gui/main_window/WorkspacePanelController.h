@@ -33,7 +33,6 @@ public:
     void restoreDefaultVisibility();
     void ensureRequiredProjectPanelsVisible();
     void setPanelVisible(WorkspacePanelId id, bool visible, bool raise = true);
-    bool isPanelVisible(WorkspacePanelId id) const;
 
 signals:
     void visibilitySettingChanged(WorkspacePanelId id, bool visible);

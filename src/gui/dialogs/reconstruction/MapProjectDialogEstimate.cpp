@@ -24,18 +24,6 @@
 namespace
 {
 
-double positiveJsonValue(const QJsonObject &object,
-                         const QString &primaryKey,
-                         const QString &fallbackKey = QString())
-{
-    double value = object.value(primaryKey).toDouble(0.0);
-    if (!(value > 0.0) && !fallbackKey.isEmpty())
-    {
-        value = object.value(fallbackKey).toDouble(0.0);
-    }
-    return value;
-}
-
 QString formatMemory(qint64 bytes)
 {
     if (bytes <= 0)

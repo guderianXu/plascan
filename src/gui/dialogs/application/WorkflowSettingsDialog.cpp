@@ -6,6 +6,7 @@
 #include "application/WorkflowSettingsDialog.h"
 
 #include "application/ModelPackageDownloadDialog.h"
+#include "shared/WorkflowParameterDialogStyle.h"
 
 #include "ImageMatchingRegistry.h"
 #include "MatchPhotosParallelism.h"
@@ -107,26 +108,24 @@ QJsonObject normalizedSettings(const QJsonObject &settings)
     return normalized;
 }
 
-QWidget *makeReadOnlyWorkflowPage(const QString &workflowId,
-                                  const QString &title,
-                                  QWidget *parent)
+QWidget *makeUnavailableWorkflowPage(const QString &workflowId,
+                                     const QString &title,
+                                     QWidget *parent)
 {
     auto *page = new QWidget(parent);
     page->setObjectName(QStringLiteral("workflowPage_%1").arg(workflowId));
     auto *layout = new QVBoxLayout(page);
     layout->setContentsMargins(0, 0, 0, 0);
 
-    auto *group = new QGroupBox(title, page);
-    auto *form = new QFormLayout(group);
-    form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
-    auto *profile = new QComboBox(group);
-    profile->addItem(QStringLiteral("默认"));
-    form->addRow(QStringLiteral("参数方案:"), profile);
-    layout->addWidget(group);
+    auto *message = new QLabel(
+        QStringLiteral("%1 的项目级设置尚未开放。\n"
+                       "运行时请在对应工作流对话框中设置已支持的参数。")
+            .arg(title),
+        page);
+    message->setObjectName(QStringLiteral("workflowUnavailableMessage_%1").arg(workflowId));
+    message->setWordWrap(true);
+    layout->addWidget(message);
     layout->addStretch(1);
-
-    // 页面仍可通过顶部选择器查看，但整个设置区域不可编辑。
-    page->setEnabled(false);
     return page;
 }
 
@@ -194,6 +193,7 @@ QJsonObject WorkflowSettingsDialog::aerialTriangulationSettings(const QJsonObjec
 void WorkflowSettingsDialog::setupUi()
 {
     setWindowTitle(QStringLiteral("工作流程设置"));
+    xjw::gui::dialogs::configureWorkflowParameterDialog(this);
     setModal(true);
     resize(680, 360);
     setMinimumSize(580, 320);
@@ -206,6 +206,7 @@ void WorkflowSettingsDialog::setupUi()
     workflowForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     _workflowCombo = new QComboBox(this);
     _workflowCombo->setObjectName(QStringLiteral("workflowSelector"));
+    xjw::gui::dialogs::configureWorkflowComboBox(_workflowCombo);
     for (const WorkflowEntry &entry : kWorkflowEntries)
     {
         _workflowCombo->addItem(QString::fromUtf8(entry.displayName),
@@ -227,12 +228,14 @@ void WorkflowSettingsDialog::setupUi()
 
     _matchingAlgorithmCombo = new QComboBox(aerialGroup);
     _matchingAlgorithmCombo->setObjectName(QStringLiteral("aerialMatchingAlgorithmCombo"));
+    xjw::gui::dialogs::configureWorkflowComboBox(_matchingAlgorithmCombo);
     populateMatchingAlgorithms();
     aerialForm->addRow(QStringLiteral("匹配算法:"), _matchingAlgorithmCombo);
 
     _lomaRKeypointBudgetCombo = new QComboBox(aerialGroup);
     _lomaRKeypointBudgetCombo->setObjectName(
         QStringLiteral("aerialLoMaRKeypointBudgetCombo"));
+    xjw::gui::dialogs::configureWorkflowComboBox(_lomaRKeypointBudgetCombo);
     _lomaRKeypointBudgetCombo->addItem(QStringLiteral("自动（按显存）"), 0);
     _lomaRKeypointBudgetCombo->addItem(QStringLiteral("标准（1024）"), 1024);
     _lomaRKeypointBudgetCombo->addItem(QStringLiteral("高（2048）"), 2048);
@@ -246,6 +249,7 @@ void WorkflowSettingsDialog::setupUi()
     enginePathLayout->setSpacing(6);
     _matchingResourceEdit = new QLineEdit(enginePathRow);
     _matchingResourceEdit->setObjectName(QStringLiteral("aerialMatchingResourceEdit"));
+    xjw::gui::dialogs::configureWorkflowInputWidget(_matchingResourceEdit);
     _matchingResourceEdit->setPlaceholderText(QStringLiteral("自动选择本机模型资源"));
     _matchingResourceEdit->setClearButtonEnabled(true);
     _matchingResourceBrowseButton = new QToolButton(enginePathRow);
@@ -269,11 +273,11 @@ void WorkflowSettingsDialog::setupUi()
     aerialLayout->addStretch(1);
     _workflowPages->addWidget(aerialPage);
 
-    _workflowPages->addWidget(makeReadOnlyWorkflowPage(
+    _workflowPages->addWidget(makeUnavailableWorkflowPage(
         QString::fromLatin1(kReconstructionWorkflowId), QStringLiteral("三维重建"), _workflowPages));
-    _workflowPages->addWidget(makeReadOnlyWorkflowPage(
+    _workflowPages->addWidget(makeUnavailableWorkflowPage(
         QString::fromLatin1(kDemWorkflowId), QStringLiteral("创建 DEM"), _workflowPages));
-    _workflowPages->addWidget(makeReadOnlyWorkflowPage(
+    _workflowPages->addWidget(makeUnavailableWorkflowPage(
         QString::fromLatin1(kOrthomosaicWorkflowId), QStringLiteral("生成正射影像"), _workflowPages));
     rootLayout->addWidget(_workflowPages, 1);
 
@@ -311,9 +315,8 @@ void WorkflowSettingsDialog::setupUi()
     auto *buttons = new QDialogButtonBox(
         QDialogButtonBox::RestoreDefaults | QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
         this);
+    xjw::gui::dialogs::configureWorkflowButtonBox(buttons);
     buttons->button(QDialogButtonBox::RestoreDefaults)->setText(QStringLiteral("恢复默认值"));
-    buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("确定"));
-    buttons->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("取消"));
     connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     connect(buttons->button(QDialogButtonBox::RestoreDefaults), &QPushButton::clicked,

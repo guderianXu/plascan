@@ -1,79 +1,19 @@
 #include "MainWindow.h"
 
-#include "ui_MainWindow.h"
+#include "CameraSceneWidget.h"
+#include "Logger.h"
+#include "project/ProjectMatchCatalog.h"
+#include "project/ProjectIO.h"
+#include "tie_points/MatchPairSelectorDialog.h"
+#include "ProjectManager.h"
+#include "WorkspaceCenterWidget.h"
 
-#include <QApplication>
-#include <QAction>
-#include <QSplitter>
-#include <QDockWidget>
-#include <QToolBar>
-#include <QMenuBar>
-#include <QStatusBar>
+#include <QDir>
 #include <QFileInfo>
-#include <QDesktopServices>
-#include <QUrl>
-#include <QJsonObject>
 #include <QMessageBox>
 #include <QSaveFile>
-#include <QTabWidget>
+#include <QStatusBar>
 #include <QTextStream>
-#include <QCloseEvent>
-#include <QTimer>
-#include <QDir>
-#include <QDragEnterEvent>
-#include <QDropEvent>
-#include <QMimeData>
-#include <QSignalBlocker>
-#include <QSizePolicy>
-#include <QScopedValueRollback>
-#include <QWidgetAction>
-
-#include <algorithm>
-#include <utility>
-
-#include "CanvasWidget.h"
-#include "ImageViewRotationSettings.h"
-#include "ProjectCameraIO.h"
-#include "project/ProjectMatchCatalog.h"
-#include "project/ProjectMetadata.h"
-#include "LogPanel.h"
-#include "MainMenu.h"
-#include "MenuWorkflowController.h"
-#include "ReconstructionWorkflowController.h"
-#include "tie_points/CleanTiePointsDialog.h"
-#include "tie_points/CreateTiePointsDialog.h"
-#include "tie_points/MatchPairSelectorDialog.h"
-#include "MatchPhotosTask.h"
-#include "camera/ForwardIntersectionCheckDialog.h"
-#include "camera/ForwardIntersectionResultsDialog.h"
-#include "HenuBrandWidget.h"
-#include "ProjectManager.h"
-#include "project/ProjectIO.h"
-#include "ProjectData.h"
-#include "ProjectDashboardWidget.h"
-#include "PhotoStripWidget.h"
-#include "AppConfigManager.h"
-#include "DataTreeWidget.h"
-#include "ReferencePanelWidget.h"
-#include "SelectionPropertiesWidget.h"
-#include "ObservationNetworkView.h"
-#include "graph/ObservationNetworkBuilder.h"
-#include "WorkspaceCenterWidget.h"
-#include "WorkspacePanelController.h"
-#include "ProjectUiHydrator.h"
-#include "TiePointWorkflowController.h"
-#include "ProjectTaskStatusController.h"
-#include "camera/CameraModel3DDialog.h"
-#include "tie_points/ThinTiePointsDialog.h"
-#include "LayerRenderer.h"
-#include "Logger.h"
-#include "ModelDropSupport.h"
-#include "MarkerWorkspaceController.h"
-#include "MarkerReferencePanel.h"
-#include "MarkerFocusMeasurementDialog.h"
-#include "DetectMarkersDialog.h"
-#include "MarkerDetectionReviewDialog.h"
-#include "PrintMarkersDialog.h"
 
 void MainWindow::showMatchViewer(const QString &initialImagePath, bool modal)
 {
@@ -234,30 +174,3 @@ void MainWindow::onManualPointCloudPrune()
         statusBar()->showMessage(tr("已退出手动点云剔除模式"), 3500);
     }
 }
-
-
-void MainWindow::showSgProgress(int total)
-{
-    if (_taskStatusController)
-    {
-        _taskStatusController->showTiePointProgress(total);
-    }
-}
-
-void MainWindow::updateSgProgress(int done)
-{
-    if (_taskStatusController)
-    {
-        _taskStatusController->updateTiePointProgress(done);
-    }
-}
-
-void MainWindow::hideSgProgress(bool ok)
-{
-    if (_taskStatusController)
-    {
-        _taskStatusController->finishTiePointProgress(ok);
-    }
-}
-//  辅助方法
-// ============================================================

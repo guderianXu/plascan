@@ -15,10 +15,16 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSignalSpy>
+#include <QSlider>
 #include <QToolButton>
 
+#include "reconstruction/AerialTriangulationDialog.h"
 #include "reconstruction/CreatePointCloudDialog.h"
 #include "reconstruction/GenerateModelDialog.h"
+#include "reconstruction/TextureMappingDialog.h"
+#include "tie_points/CleanTiePointsDialog.h"
+#include "tie_points/CreateTiePointsDialog.h"
+#include "tie_points/ThinTiePointsDialog.h"
 
 namespace
 {
@@ -90,13 +96,13 @@ TEST(WorkflowParameterDialogStyleTest, CreatePointCloudMatchesMetashapeParameter
     ASSERT_NE(dialog.findChild<QGroupBox *>(QStringLiteral("pointCloudGeneralGroup")), nullptr);
     ASSERT_NE(dialog.findChild<QGroupBox *>(QStringLiteral("pointCloudAdvancedGroup")), nullptr);
 
-    auto *source = dialog.findChild<QComboBox *>(QStringLiteral("pointCloudSourceCombo"));
+    auto *source = dialog.findChild<QLabel *>(QStringLiteral("pointCloudSourceValueLabel"));
     auto *quality = dialog.findChild<QComboBox *>(QStringLiteral("pointCloudQualityCombo"));
     auto *filter = dialog.findChild<QComboBox *>(QStringLiteral("pointCloudDepthFilterCombo"));
     auto *reuse = dialog.findChild<QCheckBox *>(QStringLiteral("reuseDepthMapsCheck"));
     auto *colors = dialog.findChild<QCheckBox *>(QStringLiteral("calculatePointColorsCheck"));
-    auto *confidence =
-        dialog.findChild<QCheckBox *>(QStringLiteral("calculatePointConfidenceCheck"));
+    auto *confidence_note =
+        dialog.findChild<QLabel *>(QStringLiteral("pointCloudConfidenceNote"));
     auto *replace =
         dialog.findChild<QCheckBox *>(QStringLiteral("replaceDefaultPointCloudCheck"));
     ASSERT_NE(source, nullptr);
@@ -104,16 +110,17 @@ TEST(WorkflowParameterDialogStyleTest, CreatePointCloudMatchesMetashapeParameter
     ASSERT_NE(filter, nullptr);
     ASSERT_NE(reuse, nullptr);
     ASSERT_NE(colors, nullptr);
-    ASSERT_NE(confidence, nullptr);
+    ASSERT_NE(confidence_note, nullptr);
     ASSERT_NE(replace, nullptr);
 
-    EXPECT_EQ(source->currentData().toString(), QStringLiteral("depth_maps"));
+    EXPECT_TRUE(source->text().contains(QStringLiteral("深度图")));
     EXPECT_EQ(quality->currentData().toString(), QStringLiteral("highest"));
     EXPECT_EQ(filter->currentData().toString(), QStringLiteral("mild"));
     EXPECT_TRUE(reuse->isChecked());
     EXPECT_TRUE(colors->isChecked());
-    EXPECT_FALSE(confidence->isChecked());
-    EXPECT_FALSE(confidence->isEnabled());
+    EXPECT_TRUE(confidence_note->text().contains(QStringLiteral("暂不保存")));
+    EXPECT_EQ(dialog.findChild<QCheckBox *>(
+                  QStringLiteral("calculatePointConfidenceCheck")), nullptr);
     EXPECT_TRUE(replace->isEnabled());
 }
 
@@ -251,7 +258,105 @@ TEST(WorkflowParameterDialogStyleTest, LayoutMigrationPreservesModelSettings)
     EXPECT_EQ(settings.value(QStringLiteral("source_data")).toString(), QStringLiteral("point_cloud"));
     EXPECT_EQ(settings.value(QStringLiteral("source_path")).toString(), QStringLiteral("E:/tmp/cloud.ply"));
     EXPECT_EQ(settings.value(QStringLiteral("quality")).toString(), QStringLiteral("low"));
+    EXPECT_EQ(settings.value(QStringLiteral("depthQualityProfile")).toString(),
+              QStringLiteral("low"));
     EXPECT_EQ(settings.value(QStringLiteral("targetFaces")).toInt(), 60000);
+
+    auto *depthQualityLabel =
+        dialog.findChild<QLabel *>(QStringLiteral("effectiveDepthQualityLabel"));
+    ASSERT_NE(depthQualityLabel, nullptr);
+    EXPECT_TRUE(depthQualityLabel->text().contains(QStringLiteral("比例 0.125")));
+    EXPECT_TRUE(depthQualityLabel->text().contains(QStringLiteral("4 轮")));
+    EXPECT_TRUE(depthQualityLabel->text().contains(QStringLiteral("9×9 邻域")));
+    EXPECT_TRUE(depthQualityLabel->text().contains(QStringLiteral("源视角 3")));
+}
+
+TEST(WorkflowParameterDialogStyleTest, TextureMappingExplainsFixedOptionsAndKeepsStableSchema)
+{
+    TextureMappingDialog dialog;
+    EXPECT_EQ(dialog.findChild<QComboBox *>(QStringLiteral("m_textureTypeCombo")), nullptr);
+    EXPECT_EQ(dialog.findChild<QComboBox *>(QStringLiteral("m_sourceCombo")), nullptr);
+    EXPECT_EQ(dialog.findChild<QComboBox *>(QStringLiteral("m_uvMethodCombo")), nullptr);
+    EXPECT_EQ(dialog.findChild<QCheckBox *>(QStringLiteral("m_saveEachStepCheck")), nullptr);
+    EXPECT_EQ(dialog.findChild<QCheckBox *>(QStringLiteral("m_useAssignedImagesCheck")), nullptr);
+    EXPECT_EQ(dialog.findChild<QCheckBox *>(QStringLiteral("m_transferTextureCheck")), nullptr);
+
+    auto *fixed_note = dialog.findChild<QLabel *>(QStringLiteral("fixedWorkflowLabel"));
+    auto *unsupported_note = dialog.findChild<QLabel *>(QStringLiteral("unsupportedOptionsNote"));
+    ASSERT_NE(fixed_note, nullptr);
+    ASSERT_NE(unsupported_note, nullptr);
+    EXPECT_TRUE(fixed_note->text().contains(QStringLiteral("全部已定向影像")));
+    EXPECT_TRUE(unsupported_note->text().contains(QStringLiteral("不支持")));
+
+    QSignalSpy settings_spy(&dialog, &TextureMappingDialog::settingsChanged);
+    dialog.applySettings(QJsonObject{
+        {QStringLiteral("saveEachStep"), true},
+        {QStringLiteral("useAssignedImages"), true},
+        {QStringLiteral("transferTexture"), true},
+        {QStringLiteral("textureSize"), 4096}
+    });
+    EXPECT_EQ(settings_spy.count(), 0);
+
+    QSignalSpy run_spy(&dialog, &TextureMappingDialog::runRequested);
+    auto *button_box = dialog.findChild<QDialogButtonBox *>(QStringLiteral("m_buttonBox"));
+    ASSERT_NE(button_box, nullptr);
+    auto *run_button = button_box->button(QDialogButtonBox::Ok);
+    ASSERT_NE(run_button, nullptr);
+    run_button->click();
+    ASSERT_EQ(run_spy.count(), 1);
+    const QJsonObject settings = run_spy.at(0).at(0).toJsonObject();
+    EXPECT_EQ(settings.value(QStringLiteral("textureType")).toString(),
+              QStringLiteral("texture_mapping"));
+    EXPECT_EQ(settings.value(QStringLiteral("sourceData")).toString(),
+              QStringLiteral("images"));
+    EXPECT_EQ(settings.value(QStringLiteral("mappingMode")).toString(),
+              QStringLiteral("auto_projective"));
+    EXPECT_FALSE(settings.value(QStringLiteral("saveEachStep")).toBool());
+    EXPECT_FALSE(settings.value(QStringLiteral("useAssignedImages")).toBool());
+    EXPECT_FALSE(settings.value(QStringLiteral("transferTexture")).toBool());
+}
+
+TEST(WorkflowParameterDialogStyleTest, TiePointAndAerialDialogsReuseStableControlsAndButtons)
+{
+    CreateTiePointsDialog create_dialog;
+    ThinTiePointsDialog thin_dialog;
+    CleanTiePointsDialog clean_dialog;
+    AerialTriangulationDialog aerial_dialog;
+
+    for (QDialog *dialog : {
+             static_cast<QDialog *>(&create_dialog),
+             static_cast<QDialog *>(&thin_dialog),
+             static_cast<QDialog *>(&clean_dialog),
+             static_cast<QDialog *>(&aerial_dialog)})
+    {
+        auto *button_box = dialog->findChild<QDialogButtonBox *>();
+        ASSERT_NE(button_box, nullptr);
+        ASSERT_NE(button_box->button(QDialogButtonBox::Ok), nullptr);
+        ASSERT_NE(button_box->button(QDialogButtonBox::Cancel), nullptr);
+        EXPECT_EQ(button_box->button(QDialogButtonBox::Ok)->text(), QStringLiteral("确定"));
+        EXPECT_EQ(button_box->button(QDialogButtonBox::Cancel)->text(), QStringLiteral("取消"));
+    }
+
+    auto *accuracy_combo =
+        create_dialog.findChild<QComboBox *>(QStringLiteral("m_accuracyCombo"));
+    auto *generic_check =
+        create_dialog.findChild<QCheckBox *>(QStringLiteral("m_genericPreselectionCheck"));
+    ASSERT_NE(accuracy_combo, nullptr);
+    ASSERT_NE(generic_check, nullptr);
+    EXPECT_GE(accuracy_combo->minimumHeight(), 28);
+    EXPECT_GE(accuracy_combo->minimumWidth(), 240);
+    EXPECT_GE(generic_check->minimumHeight(), 24);
+    EXPECT_EQ(create_dialog.findChild<QLabel *>(
+                  QStringLiteral("m_preselectionStatusLabel")), nullptr);
+
+    EXPECT_EQ(clean_dialog.windowTitle(), QStringLiteral("清理连接点"));
+    EXPECT_EQ(clean_dialog.findChild<QSlider *>(), nullptr);
+
+    aerial_dialog.setImageCount(6);
+    auto *status = aerial_dialog.findChild<QLabel *>(QStringLiteral("m_statusLabel"));
+    ASSERT_NE(status, nullptr);
+    EXPECT_FALSE(status->isHidden());
+    EXPECT_TRUE(status->text().contains(QStringLiteral("6")));
 }
 
 TEST(WorkflowParameterDialogStyleTest, StylesheetRulesAreScopedToWorkflowDialogs)

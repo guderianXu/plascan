@@ -114,12 +114,6 @@ public:
     /** @brief 返回"最小化"动作。 */
     QAction *minimizeAction() const;
 
-    /** @brief 返回"退出"动作（已连接到 QCoreApplication::quit）。 */
-    QAction *exitAction() const;
-
-    /** @brief 返回“帮助 / 更新 Python 环境”动作。 */
-    QAction *updatePythonRuntimeAction() const;
-
     // ==== 视图菜单动作 ====
 
     /** @brief 返回"放大"动作。 */
@@ -154,9 +148,6 @@ public:
 
     /** @brief 返回"显示相机"切换动作（可检查状态）。 */
     QAction *toggleCamerasAction() const;
-
-    /** @brief 返回"显示从属相机"动作（当前未启用，保留 Metashape 风格菜单占位）。 */
-    QAction *toggleDependentCamerasAction() const;
 
     /** @brief 返回"显示缩略图"切换动作，用于控制相机影像平面显示模式。 */
     QAction *toggleCameraThumbnailsAction() const;
@@ -345,7 +336,6 @@ private:
     QAction *_manualPointCloudPruneToolbarWidgetAct{}; ///< 点云剔除按钮的工具栏包装动作
     QAction *_toggleGizmoAct{}; ///< 显示/隐藏轨迹球
     QAction *_toggleCamerasAct{}; ///< 显示/隐藏 3D 相机覆盖层
-    QAction *_toggleDependentCamerasAct{}; ///< 显示/隐藏从属相机（当前仅保留菜单占位）
     QAction *_toggleCameraThumbnailsAct{}; ///< 相机影像平面显示缩略图
     QAction *_toggleLocalAxesAct{}; ///< 工具栏相机菜单中的本地轴显示开关
     QAction *_toggleCameraImagesAct{}; ///< 显示当前相机图像平面

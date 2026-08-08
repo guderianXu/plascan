@@ -1,21 +1,16 @@
 #include "reconstruction/CreateDemDialog.h"
 #include "ui_CreateDemDialog.h"
-#include "ProjectManager.h"
 
+#include <QFileDialog>
 #include <QLabel>
 #include <QLineEdit>
-#include <QPushButton>
-#include <QStackedWidget>
-#include <QProgressBar>
-#include <QFileDialog>
 #include <QMessageBox>
+#include <QProgressBar>
+#include <QPushButton>
 
-CreateDemDialog::CreateDemDialog(ProjectManager *projectManager, QWidget *parent)
+CreateDemDialog::CreateDemDialog(QWidget *parent)
     : QDialog(parent)
-    , _projectManager(projectManager)
 {
-    setWindowTitle(tr("生成 DEM"));
-    setMinimumWidth(520);
     setupUi();
 }
 
@@ -24,19 +19,11 @@ void CreateDemDialog::setupUi()
     Ui::CreateDemDialog ui;
     ui.setupUi(this);
 
-    _autoModeBtn = ui.m_autoModeBtn;
-    _manualModeBtn = ui.m_manualModeBtn;
-    _modeStack = ui.m_modeStack;
     _denseEdit = ui.m_denseEdit;
     _stageLabel = ui.m_stageLabel;
     _progressBar = ui.m_progressBar;
     _runBtn = ui.m_runBtn;
     _closeBtn = ui.m_closeBtn;
-
-    _autoModeBtn->hide();
-    _manualModeBtn->hide();
-    _manualModeBtn->setChecked(true);
-    _modeStack->setCurrentIndex(1);
 
     connect(ui.browseDenseBtn, &QPushButton::clicked, this, &CreateDemDialog::onBrowseDenseCloud);
     connect(_denseEdit, &QLineEdit::textChanged, this, &CreateDemDialog::refreshRunButton);
@@ -116,14 +103,4 @@ void CreateDemDialog::onPipelineFinished(bool success, const QString &message)
         _stageLabel->setVisible(true);
     }
     refreshRunButton();
-}
-
-void CreateDemDialog::setAvailableImages(const QStringList &images)
-{
-    _availableImages = images;
-}
-
-void CreateDemDialog::setDefaultOutput(const QString &)
-{
-    // 输出目录现在完全自动，不需要用户指定
 }

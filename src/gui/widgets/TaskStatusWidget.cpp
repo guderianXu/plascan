@@ -59,11 +59,6 @@ void TaskStatusWidget::setLabelMinimumWidth(int width)
     _statusLabel->setMinimumWidth(width);
 }
 
-void TaskStatusWidget::setProgressFixedWidth(int width)
-{
-    _progressBar->setFixedWidth(width);
-}
-
 void TaskStatusWidget::begin(const QString &statusText, int minimum, int maximum)
 {
     _active = true;

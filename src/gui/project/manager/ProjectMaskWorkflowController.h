@@ -28,7 +28,6 @@ signals:
     void projectMetadataUpdated(const QString &projectPath);
 
 private:
-    bool ensureProjectOpen() const;
     bool matchesSession(const QString &projectPath, const QString &chunkId) const;
 
     ProjectData *_projectData = nullptr;

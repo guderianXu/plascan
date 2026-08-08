@@ -1,55 +1,65 @@
 #include "reconstruction/TextureMappingDialog.h"
+#include "shared/WorkflowParameterDialogStyle.h"
 #include "ui_TextureMappingDialog.h"
 
-#include <QComboBox>
-#include <QSpinBox>
-#include <QDoubleSpinBox>
 #include <QCheckBox>
-#include <QPushButton>
+#include <QComboBox>
+#include <QDialogButtonBox>
+#include <QDoubleSpinBox>
+#include <QSignalBlocker>
+#include <QSpinBox>
 
 TextureMappingDialog::TextureMappingDialog(QWidget *parent)
     : QDialog(parent)
 {
     Ui::TextureMappingDialog form;
     form.setupUi(this);
+    xjw::gui::dialogs::configureWorkflowParameterDialog(this);
 
-    _textureTypeCombo = form.m_textureTypeCombo;
-    _sourceCombo = form.m_sourceCombo;
     _texSizeCombo = form.m_texSizeCombo;
     _blendCombo = form.m_blendCombo;
-    _uvMethodCombo = form.m_uvMethodCombo;
     _imageDownscaleCombo = form.m_imageDownscaleCombo;
-    _saveEachStepCheck = form.m_saveEachStepCheck;
     _holeFillCheck = form.m_holeFillCheck;
     _colorCorrCheck = form.m_colorCorrCheck;
     _ghostFilterCheck = form.m_ghostFilterCheck;
     _outOfFocusFilterCheck = form.m_outOfFocusFilterCheck;
-    _useAssignedImagesCheck = form.m_useAssignedImagesCheck;
-    _transferTextureCheck = form.m_transferTextureCheck;
     _seamsMarginSpin = form.m_seamsMarginSpin;
     _paddingSpin = form.m_paddingSpin;
     _keepUnmappedCheck = form.m_keepUnmappedCheck;
 
+    for (QComboBox *combo_box : {_texSizeCombo, _blendCombo, _imageDownscaleCombo})
+    {
+        xjw::gui::dialogs::configureWorkflowComboBox(combo_box);
+    }
+    for (QCheckBox *check_box : {
+             _holeFillCheck,
+             _colorCorrCheck,
+             _ghostFilterCheck,
+             _outOfFocusFilterCheck,
+             _keepUnmappedCheck})
+    {
+        xjw::gui::dialogs::configureWorkflowCheckBox(check_box);
+    }
+    xjw::gui::dialogs::configureWorkflowInputWidget(_seamsMarginSpin);
+    xjw::gui::dialogs::configureWorkflowInputWidget(_paddingSpin);
+    xjw::gui::dialogs::configureWorkflowButtonBox(form.m_buttonBox);
+
     auto changed = [this]() { emitSettingsNow(); };
-    connect(_textureTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
-    connect(_sourceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
     connect(_texSizeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
     connect(_blendCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
-    connect(_uvMethodCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
     connect(_imageDownscaleCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
-    connect(_saveEachStepCheck, &QCheckBox::toggled, this, changed);
     connect(_holeFillCheck, &QCheckBox::toggled, this, changed);
     connect(_colorCorrCheck, &QCheckBox::toggled, this, changed);
     connect(_ghostFilterCheck, &QCheckBox::toggled, this, changed);
     connect(_outOfFocusFilterCheck, &QCheckBox::toggled, this, changed);
-    connect(_useAssignedImagesCheck, &QCheckBox::toggled, this, changed);
-    connect(_transferTextureCheck, &QCheckBox::toggled, this, changed);
     connect(_seamsMarginSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, changed);
     connect(_paddingSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, changed);
     connect(_keepUnmappedCheck, &QCheckBox::toggled, this, changed);
 
-    connect(form.m_runBtn, &QPushButton::clicked, this, &TextureMappingDialog::onRun);
-    connect(form.m_cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
+    connect(form.m_buttonBox, &QDialogButtonBox::accepted,
+            this, &TextureMappingDialog::onRun);
+    connect(form.m_buttonBox, &QDialogButtonBox::rejected,
+            this, &QDialog::reject);
 }
 
 QJsonObject TextureMappingDialog::collectSettings() const
@@ -64,10 +74,10 @@ QJsonObject TextureMappingDialog::collectSettings() const
         : (_blendCombo->currentIndex() == 2
                ? QStringLiteral("best_view")
                : QStringLiteral("natural"));
-    o["uvMethod"] = _uvMethodCombo->currentText();
+    o["uvMethod"] = QStringLiteral("自动投影（相机 chart）");
     o["mappingMode"] = QStringLiteral("auto_projective");
     o["imageDownscale"] = 1 << _imageDownscaleCombo->currentIndex();
-    o["saveEachStep"] = _saveEachStepCheck->isChecked();
+    o["saveEachStep"] = false;
     o["holeFill"] = _holeFillCheck->isChecked();
     o["holeFillMode"] = _holeFillCheck->isChecked()
         ? QStringLiteral("texture_space_small_holes")
@@ -75,8 +85,8 @@ QJsonObject TextureMappingDialog::collectSettings() const
     o["colorCorrection"] = _colorCorrCheck->isChecked();
     o["ghostFilter"] = _ghostFilterCheck->isChecked();
     o["outOfFocusFilter"] = _outOfFocusFilterCheck->isChecked();
-    o["useAssignedImages"] = _useAssignedImagesCheck->isChecked();
-    o["transferTexture"] = _transferTextureCheck->isChecked();
+    o["useAssignedImages"] = false;
+    o["transferTexture"] = false;
     o["sharpeningStrength"] = _seamsMarginSpin->value();
     o["padding"] = _paddingSpin->value();
     o["keepUnmapped"] = _keepUnmappedCheck->isChecked();
@@ -85,6 +95,17 @@ QJsonObject TextureMappingDialog::collectSettings() const
 
 void TextureMappingDialog::applySettings(const QJsonObject &s)
 {
+    const QSignalBlocker texture_size_blocker(_texSizeCombo);
+    const QSignalBlocker blend_blocker(_blendCombo);
+    const QSignalBlocker downscale_blocker(_imageDownscaleCombo);
+    const QSignalBlocker hole_fill_blocker(_holeFillCheck);
+    const QSignalBlocker color_correction_blocker(_colorCorrCheck);
+    const QSignalBlocker ghost_filter_blocker(_ghostFilterCheck);
+    const QSignalBlocker focus_filter_blocker(_outOfFocusFilterCheck);
+    const QSignalBlocker sharpening_blocker(_seamsMarginSpin);
+    const QSignalBlocker padding_blocker(_paddingSpin);
+    const QSignalBlocker keep_unmapped_blocker(_keepUnmappedCheck);
+
     if (s.contains("textureSize"))
     {
         const int i = _texSizeCombo->findText(QString::number(s["textureSize"].toInt()));
@@ -114,14 +135,6 @@ void TextureMappingDialog::applySettings(const QJsonObject &s)
             ? 1
             : (blend_mode == QStringLiteral("best_view") ? 2 : 0));
     }
-    if (s.contains("uvMethod"))
-    {
-        const int i = _uvMethodCombo->findText(s["uvMethod"].toString());
-        if (i >= 0)
-        {
-            _uvMethodCombo->setCurrentIndex(i);
-        }
-    }
     if (s.contains("padding"))
     {
         _paddingSpin->setValue(s["padding"].toInt());
@@ -130,7 +143,6 @@ void TextureMappingDialog::applySettings(const QJsonObject &s)
     {
         _keepUnmappedCheck->setChecked(s["keepUnmapped"].toBool());
     }
-    if (s.contains("saveEachStep")) _saveEachStepCheck->setChecked(s["saveEachStep"].toBool());
     if (s.contains("holeFill")) _holeFillCheck->setChecked(s["holeFill"].toBool(true));
     if (s.contains("holeFillMode"))
     {
@@ -140,8 +152,6 @@ void TextureMappingDialog::applySettings(const QJsonObject &s)
     if (s.contains("colorCorrection")) _colorCorrCheck->setChecked(s["colorCorrection"].toBool(true));
     if (s.contains("ghostFilter")) _ghostFilterCheck->setChecked(s["ghostFilter"].toBool(true));
     if (s.contains("outOfFocusFilter")) _outOfFocusFilterCheck->setChecked(s["outOfFocusFilter"].toBool());
-    if (s.contains("useAssignedImages")) _useAssignedImagesCheck->setChecked(s["useAssignedImages"].toBool());
-    if (s.contains("transferTexture")) _transferTextureCheck->setChecked(s["transferTexture"].toBool());
     if (s.contains("sharpeningStrength")) _seamsMarginSpin->setValue(s["sharpeningStrength"].toDouble(1.0));
 }
 

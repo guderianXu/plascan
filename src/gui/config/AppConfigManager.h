@@ -10,7 +10,7 @@
  *   - 最近打开项目列表（RecentProjectsManager）
  *   - 文件对话框最近目录（FileDialogStateManager）
  *
- * 所有子管理器均以 QObject 为父节点托管在本对象中，生命周期由 Qt 对象树管理。
+ * 子管理器是按值持有的轻量对象，生命周期与本聚合对象一致。
  */
 
 #include <QObject>
@@ -31,7 +31,7 @@ class AppConfigManager : public QObject
     Q_OBJECT
 public:
     /**
-     * @brief 构造函数，初始化所有子管理器并将其挂载到本对象的 Qt 对象树。
+     * @brief 构造函数，初始化所有值类型子管理器。
      * @param parent 父对象指针，用于 Qt 内存管理（通常为 nullptr 或主窗口）。
      */
     explicit AppConfigManager(QObject *parent = nullptr);

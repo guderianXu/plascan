@@ -12,14 +12,6 @@
 #include <QDir>
 
 /**
- * @brief 构造函数，无额外初始化逻辑。
- */
-FileDialogStateManager::FileDialogStateManager(QObject *parent)
-    : QObject(parent)
-{
-}
-
-/**
  * @brief 获取指定 key 对应对话框的上次浏览目录。
  *
  * 实现细节：

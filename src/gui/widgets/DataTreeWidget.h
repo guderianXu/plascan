@@ -28,8 +28,6 @@ public:
 
     // 记录当前 .plascan 路径，用于解析树中相对资源路径；不读取磁盘。
     void setProjectPath(const QString &plascanPath);
-    // 兼容旧调用：仅记录项目路径，不再直接读取归档或临时文件。
-    void loadFromArchive(const QString &plascanPath);
 public slots:
     // 直接从内存提供的 JSON 元数据刷新视图（由 ProjectManager 在修改后立即调用）
     void loadFromJson(const QJsonObject &meta);
@@ -63,9 +61,6 @@ signals:
     void removeChunkRequested(const QString &chunkId);
     void switchChunkRequested(const QString &chunkId);
 
-    // 用户在列表中“激活/点击”某个影像（单选）时发出。
-    // 上层可以据此把该影像显示到中央画布。
-    void imageActivated(const QString &resourcePath);
     // 用户点击任意资源项时发出（含所属分组），用于模型/点云联动显示。
     void resourceActivated(const QString &section, const QString &resourcePath);
     // 用户选择任意资源项时发出（含所属分组），仅用于属性/高亮等轻量联动。

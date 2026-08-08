@@ -1,5 +1,6 @@
 #include "ProjectDashboardWidget.h"
 
+#include "DataTreeResourceUtils.h"
 #include "ProjectDashboardSummary.h"
 
 #include <QFileInfo>
@@ -48,68 +49,6 @@ QString reportTypeDisplayName(QString type)
         return QStringLiteral("平差前置检查");
     }
     return type.isEmpty() ? QStringLiteral("报告") : type;
-}
-
-QString referenceTypeDisplayName(QString type)
-{
-    type = type.trimmed().toLower();
-    if (type == QStringLiteral("lidar"))
-    {
-        return QStringLiteral("LiDAR");
-    }
-    if (type == QStringLiteral("point_cloud"))
-    {
-        return QStringLiteral("点云");
-    }
-    if (type == QStringLiteral("dem"))
-    {
-        return QStringLiteral("DEM");
-    }
-    return type.isEmpty() ? QStringLiteral("参考") : type;
-}
-
-QString referenceRoleDisplayName(QString role)
-{
-    role = role.trimmed().toLower();
-    if (role == QStringLiteral("ba_prior")
-        || role == QStringLiteral("bundle_adjustment")
-        || role == QStringLiteral("reference_prior"))
-    {
-        return QStringLiteral("BA约束");
-    }
-    if (role.isEmpty()
-        || role == QStringLiteral("validation")
-        || role == QStringLiteral("quality_check"))
-    {
-        return QStringLiteral("精度检查");
-    }
-    if (role == QStringLiteral("alignment") || role == QStringLiteral("registration"))
-    {
-        return QStringLiteral("配准");
-    }
-    return role;
-}
-
-QString referenceDatasetPath(const QJsonObject &record)
-{
-    QString path = record.value(QStringLiteral("path")).toString();
-    if (path.isEmpty())
-    {
-        path = record.value(QStringLiteral("file_path")).toString();
-    }
-    if (path.isEmpty())
-    {
-        path = record.value(QStringLiteral("dem_path")).toString();
-    }
-    if (path.isEmpty())
-    {
-        path = record.value(QStringLiteral("lidar_path")).toString();
-    }
-    if (path.isEmpty())
-    {
-        path = record.value(QStringLiteral("cloud_path")).toString();
-    }
-    return path;
 }
 
 bool isVisibleTaskSnapshot(const QJsonObject &record)
@@ -445,15 +384,22 @@ void ProjectDashboardWidget::updateTables(const QJsonObject &meta)
         for (int row = 0; row < summary.referenceDatasets.size(); ++row)
         {
             const QJsonObject reference = summary.referenceDatasets.at(row).toObject();
-            const QString path = referenceDatasetPath(reference);
+            const QString path =
+                xjw::gui::widgets::data_tree::referenceDatasetPath(reference);
+            QString role = xjw::gui::widgets::data_tree::referenceDatasetRoleLabel(
+                reference.value(QStringLiteral("role")).toString());
+            if (role.isEmpty())
+            {
+                role = tr("精度检查");
+            }
             _referenceTable->setItem(row,
                                       0,
-                                      makeReadOnlyItem(referenceTypeDisplayName(
-                                          reference.value(QStringLiteral("type")).toString())));
+                                      makeReadOnlyItem(
+                                          xjw::gui::widgets::data_tree::referenceDatasetTypeLabel(
+                                              reference.value(QStringLiteral("type")).toString())));
             _referenceTable->setItem(row,
                                       1,
-                                      makeReadOnlyItem(referenceRoleDisplayName(
-                                          reference.value(QStringLiteral("role")).toString())));
+                                      makeReadOnlyItem(role));
             _referenceTable->setItem(row,
                                       2,
                                       makeReadOnlyItem(QFileInfo(path).fileName().isEmpty()

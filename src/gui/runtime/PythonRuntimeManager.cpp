@@ -119,12 +119,6 @@ QString PythonRuntimeManager::currentPythonExecutable()
         QProcessEnvironment::systemEnvironment(), QStringLiteral(PLASCAN_SOURCE_DIR));
 }
 
-bool PythonRuntimeManager::managedRuntimeAvailable()
-{
-    const QFileInfo info(managedPythonExecutable());
-    return info.exists() && info.isFile();
-}
-
 bool PythonRuntimeManager::bindManagedRuntime(QString *errorMessage)
 {
     const QString pythonPath = managedPythonExecutable();

@@ -24,7 +24,6 @@
 #include <QMouseEvent>
 #include <QContextMenuEvent>
 #include <QScrollBar>
-#include <QVariant>
 #include <QVariantMap>
 #include <QFile>
 #include <QDataStream>
@@ -167,8 +166,6 @@ void CanvasWidget::showImage(const QString &path)
     // 导致 LayerRenderer 持有的指针变为悬空并在后续删除时造成双重释放。
     _layerRenderer->clearFeatureLayers();
     _layerRenderer->clearFeatureResidualLayers();
-    // 确保清除上一次的匹配连线层，避免其干扰新的场景布局
-    _layerRenderer->clearMatchLayers();
     _layerRenderer->clearMaskLayers();
     _layerRenderer->clearDepthOverlay();
     if (_depthOverlayController)
@@ -189,18 +186,6 @@ void CanvasWidget::showImage(const QString &path)
         _viewRotationDegrees = 0;
         _zoomFactor = 1.0;
         return;
-    }
-
-    // 将当前项目路径注入渲染器，用于把非 8-bit 影像转换缓存写入项目 .plascan_tmp。
-    // 说明：CanvasWidget 不直接依赖 ProjectManager 头文件，这里通过 QObject 动态属性读取。
-    // MainWindow/ProjectManager 会在运行时设置该属性。
-    if (_layerRenderer)
-    {
-        const QVariant v = property("currentProjectPath");
-        if (v.isValid())
-        {
-            _layerRenderer->setCurrentProjectPath(v.toString());
-        }
     }
 
     // 记录当前影像路径
