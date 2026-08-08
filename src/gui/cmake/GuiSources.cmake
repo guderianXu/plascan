@@ -54,10 +54,12 @@ set(GUI_SOURCES
   views/LayerOverlayItems.cpp
   views/LayerRenderer.cpp
   views/CameraSceneViewMath.cpp
+  views/SceneGeometryPreparation.cpp
+  views/PointCloudEditPreparation.cpp
+  views/PointCloudSnapshotIO.cpp
   views/CameraSceneWidget.cpp
   views/ObjRenderPreparation.cpp
   views/TiePointVisualization.cpp
-  views/ModelVisualization.cpp
   widgets/CanvasWidget.cpp
   widgets/DataTreeWidget.cpp
   widgets/DataTreeContextMenu.cpp

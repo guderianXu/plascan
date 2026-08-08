@@ -228,6 +228,29 @@ const char *processingDeviceName(plapoint::ProcessingDevice device)
     return "Unknown";
 }
 
+void initializeProcessingReport(plapoint::ProcessingReport *report,
+                                plapoint::ProcessingDevice requestedDevice)
+{
+    if (!report)
+    {
+        return;
+    }
+
+    *report = {};
+    report->requestedDevice = requestedDevice;
+    report->actualDevice = plapoint::ProcessingDevice::CPU;
+    report->usedDevice = plapoint::ProcessingDevice::CPU;
+}
+
+void markProcessingSkipped(plapoint::ProcessingReport *report,
+                           const char *reason)
+{
+    if (report)
+    {
+        report->fallbackReason = reason;
+    }
+}
+
 } // anonymous namespace
 
 // =============================================================================
@@ -239,8 +262,11 @@ std::vector<DensePoint> DenseCloudBuilder::voxelDownsample(
     plapoint::ProcessingDevice processingDevice,
     plapoint::ProcessingReport *processingReport)
 {
+    initializeProcessingReport(processingReport, processingDevice);
     if (cloud.empty() || voxelSize <= 0.0f)
     {
+        markProcessingSkipped(
+            processingReport, "skipped: empty cloud or invalid voxel size");
         return cloud;
     }
 
@@ -277,8 +303,11 @@ std::vector<DensePoint> DenseCloudBuilder::statisticalOutlierRemoval(
     plapoint::ProcessingDevice processingDevice,
     plapoint::ProcessingReport *processingReport)
 {
+    initializeProcessingReport(processingReport, processingDevice);
     if (cloud.size() < (size_t)kNeighbors + 1)
     {
+        markProcessingSkipped(
+            processingReport, "skipped: point count is smaller than k + 1");
         return cloud;
     }
 
@@ -318,7 +347,12 @@ std::vector<DensePoint> DenseCloudBuilder::radiusOutlierRemoval(
     plapoint::ProcessingDevice processingDevice,
     plapoint::ProcessingReport *processingReport)
 {
-    if (cloud.empty()) return cloud;
+    initializeProcessingReport(processingReport, processingDevice);
+    if (cloud.empty())
+    {
+        markProcessingSkipped(processingReport, "skipped: empty cloud");
+        return cloud;
+    }
 
     const int N = (int)cloud.size();
     auto t0 = std::chrono::steady_clock::now();

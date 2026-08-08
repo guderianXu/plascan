@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <stdexcept>
+#include <string>
 
 #include <plamatrix/dense/dense_matrix.h>
 #include <plapoint/core/point_cloud.h>
@@ -82,11 +84,29 @@ HeightGrid fromPlaGrid(const PlaHeightGrid &heightGrid)
     return out;
 }
 
+int checkedHeightGridDimension(double value, const char *axis)
+{
+    const double rounded = std::round(value);
+    if (!std::isfinite(rounded) || rounded < 0.0 ||
+        rounded > static_cast<double>(std::numeric_limits<int>::max()))
+    {
+        throw std::overflow_error(
+            std::string("SurfaceReconstructor height-grid: derived ") + axis +
+            " dimension is outside the int range");
+    }
+    return std::max(8, static_cast<int>(rounded));
+}
+
 plapoint::mesh::HeightGridOptions<float> makeHeightGridOptions(
     const std::vector<PointXYZRGB> &points,
     const ReconstructionConfig &config)
 {
     plapoint::mesh::HeightGridOptions<float> options;
+    if (!std::isfinite(config.padding))
+    {
+        throw std::invalid_argument(
+            "SurfaceReconstructor height-grid: padding must be finite");
+    }
     options.padding = std::max(0.0f, config.padding);
     options.maxFillPassForFaces = std::max(0, config.holeFillPasses);
 
@@ -97,26 +117,63 @@ plapoint::mesh::HeightGridOptions<float> makeHeightGridOptions(
         return options;
     }
 
-    float minX = points[0].x;
-    float maxX = points[0].x;
-    float minY = points[0].y;
-    float maxY = points[0].y;
+    double minX = static_cast<double>(points[0].x);
+    double maxX = minX;
+    double minY = static_cast<double>(points[0].y);
+    double maxY = minY;
     for (const auto &point : points)
     {
-        minX = std::min(minX, point.x);
-        maxX = std::max(maxX, point.x);
-        minY = std::min(minY, point.y);
-        maxY = std::max(maxY, point.y);
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
+            !std::isfinite(point.z))
+        {
+            throw std::invalid_argument(
+                "SurfaceReconstructor height-grid: points must be finite");
+        }
+        const double x = static_cast<double>(point.x);
+        const double y = static_cast<double>(point.y);
+        minX = std::min(minX, x);
+        maxX = std::max(maxX, x);
+        minY = std::min(minY, y);
+        maxY = std::max(maxY, y);
     }
 
-    float dx = std::max(1e-6f, maxX - minX);
-    float dy = std::max(1e-6f, maxY - minY);
-    dx += dx * options.padding * 2.0f;
-    dy += dy * options.padding * 2.0f;
+    const double rawDx = maxX - minX;
+    const double rawDy = maxY - minY;
+    const double dx = std::max(1.0e-6, rawDx);
+    const double dy = std::max(1.0e-6, rawDy);
+    const double padding = static_cast<double>(options.padding);
+    const double paddingX = dx * padding;
+    const double paddingY = dy * padding;
+    const double paddedMinX = minX - paddingX;
+    const double paddedMaxX = maxX + paddingX;
+    const double paddedMinY = minY - paddingY;
+    const double paddedMaxY = maxY + paddingY;
+    const double floatLimit = static_cast<double>(std::numeric_limits<float>::max());
+    if (!std::isfinite(rawDx) || !std::isfinite(rawDy) ||
+        rawDx > floatLimit || rawDy > floatLimit ||
+        !std::isfinite(paddingX) || !std::isfinite(paddingY) ||
+        paddedMinX < -floatLimit || paddedMaxX > floatLimit ||
+        paddedMinY < -floatLimit || paddedMaxY > floatLimit)
+    {
+        throw std::overflow_error(
+            "SurfaceReconstructor height-grid: derived bounds exceed the float range");
+    }
+
+    const double paddedDx = dx + 2.0 * paddingX;
+    const double paddedDy = dy + 2.0 * paddingY;
+    if (!std::isfinite(paddedDx) || !std::isfinite(paddedDy) ||
+        paddedDx <= 0.0 || paddedDy <= 0.0 ||
+        paddedDx > floatLimit || paddedDy > floatLimit)
+    {
+        throw std::overflow_error(
+            "SurfaceReconstructor height-grid: derived axis span must be finite and positive");
+    }
     const int resolution = std::clamp(config.resolution, 32, 1024);
-    const float maxSpan = std::max(dx, dy);
-    options.width = std::max(8, static_cast<int>(std::round(resolution * dx / maxSpan)));
-    options.height = std::max(8, static_cast<int>(std::round(resolution * dy / maxSpan)));
+    const double maxSpan = std::max(paddedDx, paddedDy);
+    options.width = checkedHeightGridDimension(
+        static_cast<double>(resolution) * (paddedDx / maxSpan), "width");
+    options.height = checkedHeightGridDimension(
+        static_cast<double>(resolution) * (paddedDy / maxSpan), "height");
     return options;
 }
 

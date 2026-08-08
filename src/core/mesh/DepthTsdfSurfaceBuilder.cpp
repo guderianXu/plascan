@@ -43,6 +43,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <exception>
 #include <limits>
 #include <mutex>
 #include <atomic>
@@ -1961,7 +1962,15 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
 {
     const auto started_at = std::chrono::steady_clock::now();
     DepthTsdfFrameLoadResult result;
-    result.discoveredArtifactCount = artifacts.size();
+    if (artifacts.size() > std::numeric_limits<int>::max())
+    {
+        result.errorMessage = QStringLiteral("too many TSDF frame artifacts to load");
+        result.elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started_at).count();
+        return result;
+    }
+    const int artifact_count = static_cast<int>(artifacts.size());
+    result.discoveredArtifactCount = artifact_count;
 
     int maximum_workers = 1;
 #ifdef MESHING_OPENMP
@@ -1978,24 +1987,77 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
         1,
         std::max(1, std::min({8,
                               maximum_workers,
-                              static_cast<int>(artifacts.size())})));
+                              artifact_count})));
 
     std::vector<DepthTsdfFrameLoadResult> partial_results(
-        static_cast<std::size_t>(artifacts.size()));
+        static_cast<std::size_t>(artifact_count));
+    std::vector<std::exception_ptr> loading_errors(
+        static_cast<std::size_t>(artifact_count));
+    std::atomic<int> first_failed_index{artifact_count};
+    const auto record_failure = [&first_failed_index](int artifact_index) noexcept
+    {
+        int previous = first_failed_index.load(std::memory_order_relaxed);
+        while (artifact_index < previous
+               && !first_failed_index.compare_exchange_weak(
+                   previous,
+                   artifact_index,
+                   std::memory_order_relaxed,
+                   std::memory_order_relaxed))
+        {
+        }
+    };
 #ifdef MESHING_OPENMP
 #pragma omp parallel for schedule(dynamic, 1) num_threads(result.effectiveWorkerCount) \
     if(result.effectiveWorkerCount > 1)
 #endif
-    for (int artifact_index = 0; artifact_index < artifacts.size(); ++artifact_index)
+    for (int artifact_index = 0; artifact_index < artifact_count; ++artifact_index)
     {
-        partial_results[static_cast<std::size_t>(artifact_index)] =
-            loadFramesSequential(
+        if (artifact_index > first_failed_index.load(std::memory_order_relaxed))
+        {
+            continue;
+        }
+        const std::size_t result_index = static_cast<std::size_t>(artifact_index);
+        try
+        {
+            partial_results[result_index] = loadFramesSequential(
                 QVector<DepthFrameArtifact>{artifacts[artifact_index]},
                 0);
+            if (!partial_results[result_index].ok)
+            {
+                record_failure(artifact_index);
+            }
+        }
+        catch (...)
+        {
+            loading_errors[result_index] = std::current_exception();
+            record_failure(artifact_index);
+        }
     }
 
-    for (DepthTsdfFrameLoadResult &partial : partial_results)
+    for (int artifact_index = 0; artifact_index < artifact_count; ++artifact_index)
     {
+        const std::size_t result_index = static_cast<std::size_t>(artifact_index);
+        DepthTsdfFrameLoadResult &partial = partial_results[result_index];
+        if (loading_errors[result_index])
+        {
+            try
+            {
+                std::rethrow_exception(loading_errors[result_index]);
+            }
+            catch (const std::exception &error)
+            {
+                partial.errorMessage = frameArtifactError(
+                    artifacts[artifact_index],
+                    QStringLiteral("unexpected loading exception: %1")
+                        .arg(QString::fromUtf8(error.what())));
+            }
+            catch (...)
+            {
+                partial.errorMessage = frameArtifactError(
+                    artifacts[artifact_index],
+                    QStringLiteral("unexpected non-standard loading exception"));
+            }
+        }
         if (!partial.ok)
         {
             result.errorMessage = partial.errorMessage;

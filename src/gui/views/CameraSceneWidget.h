@@ -28,14 +28,20 @@
 #include <QVector2D>
 #include <QVector3D>
 #include <QVector4D>
+#include <atomic>
 #include <array>
 #include <cstddef>
+#include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 #include <plapoint/core/point_cloud.h>
 
 #include "CameraSceneViewMath.h"
 #include "ModelVisualization.h"
+#include "ObjRenderPreparation.h"
+#include "PointCloudEditPreparation.h"
+#include "SceneGeometryPreparation.h"
 #include "TiePointVisualization.h"
 
 /// 渲染用点云类型别名
@@ -114,10 +120,6 @@ public:
 
     // 设置要渲染的相机姿态列表，触发重绘
     void setCameraPoses(const QVector<CameraPose> &poses);
-    // 直接设置点云或网格模型数据（不启动异步 IO）。
-    // cloud.hasFaces() == false 时作点云渲染，true 时作 Phong 网格渲染。
-    void setPointCloud(const RenderCloud &cloud);
-
     // 从 XYZ 文本文件加载点云（每行 "x y z [r g b ...]"）
     void loadPointCloudFromXyz(const QString &xyzPath);
     // 从 PLY 点云加载并在完成后自动适应视图。
@@ -262,6 +264,7 @@ private:
     QImage cachedCameraPlaneImage(const QString &imagePath, CameraImagePlaneMode mode) const;
     void requestCameraPlaneImage(const QString &imagePath, CameraImagePlaneMode mode);
     void applyCameraPlaneImage(const CameraPlaneImageResult &result);
+    void discardQueuedCameraThumbnails();
     int displayedCameraImagePoseIndex() const;
     QVector<QVector3D> displayedCameraImagePlaneCorners() const;
     QPainterPath foregroundCameraImageOcclusionPath() const;
@@ -285,7 +288,13 @@ private:
     void drawRotationGizmo(QPainter &painter) const;
     void drawTiePointLegend(QPainter &painter) const;
     void drawModelLegend(QPainter &painter) const;
+    struct TiePointMetadataRequest
+    {
+        QString sidecarPath;
+        int generation = 0;
+    };
     void startTiePointMetadataLoad(const QString &sidecarPath, int generation);
+    void pumpTiePointMetadataLoad();
     void loadPointCloudFromXyzInternal(const QString &xyzPath,
                                        bool tiePointCloud,
                                        bool fitAfterLoad);
@@ -297,21 +306,61 @@ private:
                                   bool tiePointCloud,
                                   bool fitAfterLoad,
                                   bool pointCloudResource);
+    enum class SceneLoadFormat
+    {
+        Xyz,
+        Ply,
+        Obj
+    };
+    struct SceneLoadRequest
+    {
+        SceneLoadFormat format = SceneLoadFormat::Xyz;
+        QString path;
+        bool tiePointCloud = false;
+        bool fitAfterLoad = false;
+        bool pointCloudResource = true;
+        int generation = 0;
+    };
+    void requestSceneLoad(SceneLoadRequest request);
+    void pumpSceneLoad();
     void fitViewToLoadedGeometry();
 
+    struct RhiPipelineSet;
+
     // 将点云和模型数据整理为 RHI 顶点缓冲，在 render 中按需上传。
-    void uploadGpuData();
+    bool uploadGpuData();
+    bool failGeometryUpload(const QString &message);
+    void releaseGeometryBufferResources();
+    static void releasePipelineResources(RhiPipelineSet *pipeline);
+    void clearPreparedGeometry();
+    void applyPointPreparation(PointRenderPreparation preparation);
+    void applyCloudSpatialSummary(const CloudSpatialSummary &summary);
     // 点云使用单采样，三角网格使用 4x MSAA；切换资源时重建匹配的管线。
     void updateSampleCountForGeometry();
 
     // 当点云/模型数据变更后调用，标记缓存失效并重新计算
     void invalidateCache() const;
 
-    int removePointsInScreenRect(const QRect &screenRect);
-    void pushManualUndoSnapshot(RenderCloud snapshot);
-    void collectPointIndicesInScreenRect(const QRect &screenRect, std::vector<std::size_t> *indices) const;
-    void queueCurrentPointCloudSave();
-    void startCurrentPointCloudSave();
+    void startManualPointSelection(const QRect &screenRect);
+    struct ManualSelectionRequest
+    {
+        QByteArray vertexData;
+        QByteArray scalarData;
+        QRect screenRect;
+        QMatrix4x4 clipMatrix;
+        QSize viewportSize;
+        QPointF sceneOffset;
+        int strideBytes = 0;
+        int generation = 0;
+        int loadGeneration = 0;
+    };
+    void pumpManualPointSelection();
+    void startManualPruneApply();
+    void clearManualPointSelection();
+    void pushManualUndoDelta(PointCloudEditDelta delta);
+    void applyManualPointCloudResult(
+        PointCloudEditResult result,
+        const xjw::gui::tie_points::ScalarRange &imageCountRange);
 
     // 取消未完成的异步加载并等待结束（在新加载开始前调用）
     void cancelPendingLoad();
@@ -334,6 +383,14 @@ private:
         QString fragmentShaderPath;
     };
 
+    struct RhiIndexBufferSet
+    {
+        QScopedPointer<QRhiBuffer> indexBuffer;
+        QByteArray indexData;
+        int indexCount = 0;
+        bool dirty = true;
+    };
+
     struct RhiImagePipelineSet
     {
         QScopedPointer<QRhiBuffer> vertexBuffer;
@@ -344,6 +401,10 @@ private:
         QScopedPointer<QRhiGraphicsPipeline> pipeline;
         QSize textureSize;
         QString uploadedImageKey;
+        QString uploadedGeometryKey;
+        QVector<QVector3D> planeCorners;
+        bool geometryDirty = true;
+        bool pipelineDirty = true;
     };
 
     struct RhiTexturedMeshPipelineSet
@@ -392,9 +453,11 @@ private:
         QScopedPointer<QRhiBuffer> leaderInstanceBuffer;
         int leaderInstanceCapacity = 0;
         int leaderInstanceCount = 0;
+        int segmentInstanceCount = 0;
         int atlasSize = 0;
         bool resourcesDirty = true;
         bool instancesDirty = true;
+        bool pipelinesDirty = true;
     };
 
     struct alignas(16) SceneUniforms
@@ -404,18 +467,23 @@ private:
         std::array<float, 16> normalMatrix{};
         std::array<float, 4> lightDirPointSize{};
         std::array<float, 4> viewportSize{};
+        std::array<float, 4> renderModeFlags{};
+        std::array<float, 4> scalarRange{};
     };
     static_assert(offsetof(SceneUniforms, mvp) == 0);
     static_assert(offsetof(SceneUniforms, modelView) == 16 * sizeof(float));
     static_assert(offsetof(SceneUniforms, normalMatrix) == 32 * sizeof(float));
     static_assert(offsetof(SceneUniforms, lightDirPointSize) == 48 * sizeof(float));
     static_assert(offsetof(SceneUniforms, viewportSize) == 52 * sizeof(float));
-    static_assert(sizeof(SceneUniforms) == 56 * sizeof(float));
+    static_assert(offsetof(SceneUniforms, renderModeFlags) == 56 * sizeof(float));
+    static_assert(offsetof(SceneUniforms, scalarRange) == 60 * sizeof(float));
+    static_assert(sizeof(SceneUniforms) == 64 * sizeof(float));
 
     struct alignas(16) ImagePlaneUniforms
     {
-        QMatrix4x4 mvp;
+        std::array<float, 16> mvp{};
     };
+    static_assert(sizeof(ImagePlaneUniforms) == 16 * sizeof(float));
 
     struct alignas(16) CameraPlaneUniforms
     {
@@ -452,18 +520,27 @@ private:
     bool _rhiReady = false;
     bool _pipelinesDirty = true;
     QString _renderError;
+    QString _geometryUploadError;
     CameraSceneOverlayWidget *_overlayWidget = nullptr;
 
     bool ensureRhiBuffer(RhiBufferSet *buffer, QRhiResourceUpdateBatch *updates);
+    bool ensureRhiIndexBuffer(RhiIndexBufferSet *buffer,
+                              QRhiResourceUpdateBatch *updates);
     bool ensurePipeline(RhiPipelineSet *pipeline,
                         int topology,
                         int strideBytes,
                         bool hasNormals,
                         bool depthWrite = true);
-    bool ensurePointPipeline();
+    bool ensurePointPipeline(RhiPipelineSet *pipeline,
+                             bool highlightOnly);
     bool ensureTexturedMeshPipeline(QRhiResourceUpdateBatch *updates);
     bool ensureImagePipeline(QRhiResourceUpdateBatch *updates);
     bool ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *updates);
+    void releaseTexturedMeshPipelineResources();
+    void releaseImagePipelineResources();
+    void releaseCameraThumbnailPipelineResources();
+    void rollbackResourceUpdateState();
+    void commitResourceUpdateState();
     bool ensureSolidCameraBatchResource(
         QSharedPointer<RhiCameraThumbnailResource> *resource,
         const QColor &color,
@@ -474,6 +551,11 @@ private:
                        RhiBufferSet *buffer,
                        RhiPipelineSet *pipeline,
                        const SceneUniforms &uniforms);
+    void drawIndexedRhiBuffer(QRhiCommandBuffer *cb,
+                              RhiBufferSet *vertices,
+                              RhiIndexBufferSet *indices,
+                              RhiPipelineSet *pipeline,
+                              const SceneUniforms &uniforms);
     void drawPointCloud(QRhiCommandBuffer *cb, const SceneUniforms &uniforms);
     void drawTexturedMesh(QRhiCommandBuffer *cb, const SceneUniforms &uniforms);
     void drawActiveCameraImage(QRhiCommandBuffer *cb, const QMatrix4x4 &mvp);
@@ -484,20 +566,21 @@ private:
 
     // 点云 GPU 资源
     RhiBufferSet _pointBuffer;
+    RhiBufferSet _pointScalarBuffer;
+    RhiBufferSet _manualHighlightPointBuffer;
+    RhiBufferSet _manualHighlightScalarBuffer;
+    bool _manualHighlightBuffersReleasePending = false;
     int _pointCount = 0;
     float _pointCloudPointSize = 2.4f;
 
-    // 网格（三角面展开）GPU 资源
+    // 网格 GPU 资源：非纹理模式共享静态 VBO/IBO，UV 接缝单独展开。
     RhiBufferSet _meshBuffer;
-    RhiBufferSet _modelWireframeBuffer;
+    RhiBufferSet _texturedMeshBuffer;
+    RhiIndexBufferSet _meshTriangleIndices;
+    RhiIndexBufferSet _meshWireframeIndices;
     int _meshVertCount = 0;
-    int _modelWireframeVertCount = 0;
     bool _meshHasFaces = true;  ///< false 时用点图元绘制含法向量点云
-    bool _preparedObjMeshBuffer = false;
-    bool _preparedObjMeshHasTexture = false;
-    QByteArray _preparedObjVertexData;
-    int _preparedObjVertexCount = 0;
-    int _preparedObjStrideBytes = 0;
+    ObjRenderPreparation _preparedMesh;
     bool _preparedPointBuffer = false;
     QByteArray _preparedPointVertexData;
     int _preparedPointVertexCount = 0;
@@ -507,9 +590,10 @@ private:
     int _lineCount = 0;
 
     RhiPipelineSet _colorPointPipeline;
+    RhiPipelineSet _highlightPointPipeline;
     RhiPipelineSet _colorLinePipeline;
     RhiPipelineSet _meshTrianglePipeline;
-    RhiPipelineSet _meshPointPipeline;
+    RhiPipelineSet _meshWireframePipeline;
     RhiTexturedMeshPipelineSet _texturedMeshPipeline;
     RhiImagePipelineSet _imagePipeline;
     RhiCameraThumbnailPipelineSet _thumbnailPipeline;
@@ -520,13 +604,16 @@ private:
     bool _isTiePointCloud = false;
     TiePointColorMode _tiePointColorMode = TiePointColorMode::Color;
     ModelColorMode _modelColorMode = ModelColorMode::Shaded;
-    xjw::gui::model_views::ModelVisualizationManager _modelVisualization;
     QVector<int> _tiePointImageCounts;
+    QByteArray _tiePointScalarData;
     xjw::gui::tie_points::ScalarRange _tiePointElevationRange;
     xjw::gui::tie_points::ScalarRange _tiePointImageCountRange;
     xjw::gui::tie_points::ScalarRange _modelElevationRange;
     bool _tiePointMetadataLoading = false;
     QString _tiePointMetadataError;
+    std::optional<TiePointMetadataRequest> _pendingTiePointMetadataLoad;
+    std::shared_ptr<std::atomic_bool> _tiePointMetadataCancellation;
+    bool _tiePointMetadataWorkerActive = false;
     QImage _meshTextureImage;
     QString _meshTexturePath;
     bool _meshHasTexture = false;
@@ -541,6 +628,7 @@ private:
     mutable QVector<QVector3D> _cachedCloudBoxVertices;
     mutable bool       _hasCloudBounds = false;
     mutable bool       _cacheDirty = true;
+    CloudSpatialSummary _cloudSpatialSummary;
     QVector3D _focusedGeometryCenter;
     float _focusedGeometryRadius = 1.0f;
     bool _hasFocusedGeometryBounds = false;
@@ -548,6 +636,9 @@ private:
     // 异步加载状态
     bool   _loading      = false;
     int    _loadGen      = 0;    ///< 每次发起新加载时递增，用于丢弃过期回调
+    std::optional<SceneLoadRequest> _pendingSceneLoad;
+    std::shared_ptr<std::atomic_bool> _sceneLoadCancellation;
+    bool _sceneLoadWorkerActive = false;
     int    _plyLoadProgressPercent = -1;
     QString _plyLoadProgressText;
     bool _fitViewAfterLoad = false;
@@ -571,9 +662,14 @@ private:
     CameraImageDisplayLayer _cameraImageDisplayLayer = CameraImageDisplayLayer::Foreground;
     bool _cameraImageLocked = false;
     int _activeCameraImagePoseIndex = -1;
+    int _lockedCameraImagePoseIndex = -1;
     QString _lockedCameraImagePath;
     QString _lockedCameraImageName;
     QHash<QString, QImage> _cameraImageCache;
+    QHash<QString, int> _poseIndexByNormalizedPath;
+    QQueue<QString> _fullImageCacheLru;
+    qint64 _fullImageCacheBytes = 0;
+    QSet<int> _pendingThumbnailPoseIndices;
     QSet<QString> _cameraImageLoadsInFlight;
     QSet<QString> _cameraImageLoadsQueued;
     QQueue<CameraPlaneImageRequest> _cameraImageLoadQueue;
@@ -582,16 +678,26 @@ private:
     int _cameraImageLoadGeneration = 0;
     int _cameraThumbnailLoadTotal = 0;
     int _cameraThumbnailLoadCompleted = 0;
+    bool _thumbnailUpdateScheduled = false;
+    QSet<int> _thumbnailPoseIndicesPendingCommit;
+    QSet<QString> _thumbnailCacheKeysPendingCommit;
     QString _highlightedCameraPath;
     bool _manualPruneMode = false;
     bool _manualSelecting = false;
     QPoint _manualSelectStart;
     QRect _manualSelectRect;
-    std::vector<std::size_t> _manualPreviewIndices;
+    std::vector<PointVertexIndex> _manualPreviewIndices;
     bool _manualPreviewValid = false;
+    bool _manualPreviewUsesScreenRect = false;
+    bool _manualSelectionRunning = false;
+    bool _manualEditRunning = false;
+    std::shared_ptr<std::atomic_bool> _manualEditCancellation;
+    bool _manualDeletePending = false;
+    int _manualSelectionGeneration = 0;
+    std::optional<ManualSelectionRequest> _pendingManualSelection;
+    std::shared_ptr<std::atomic_bool> _manualSelectionCancellation;
+    bool _manualSelectionWorkerActive = false;
     QString _currentCloudPath;
-    std::vector<RenderCloud> _manualUndoStack;
+    std::vector<PointCloudEditDelta> _manualUndoStack;
     int _manualUndoLimit = 10;
-    bool _manualSaveRunning = false;
-    bool _manualSavePending = false;
 };

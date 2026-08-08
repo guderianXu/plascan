@@ -483,7 +483,7 @@ TEST(ReconstructPipelineCliGTest, RoutesPlaPointBackendIndependentlyFromMvs)
     expectContainsAll(workflow, {
         "SparseCloudPreprocessor preprocessor(point_cloud_processing_device)",
         "denseSettings.processingDevice = point_cloud_processing_device",
-        R"(denseSettings.useCuda = mvs_backend != "cpu")",
+        R"(denseSettings.useCuda = mvs_backend == "auto" || mvs_backend == "cuda")",
         "input, leafSize, processingDevice, processingReport",
         "refineSettings.processingDevice = denseSettings.processingDevice",
         "meshRequest.reconstruction.preprocessingDevice = denseSettings.processingDevice",
@@ -493,6 +493,7 @@ TEST(ReconstructPipelineCliGTest, RoutesPlaPointBackendIndependentlyFromMvs)
         "processingDeviceUnavailableReason",
         "dense_point_cloud_backend_actual_by_stage",
         "mvs_backend_actual",
+        "patchmatch_backend_id",
     });
     expectNotContainsAll(workflow, {
         "refineSettings.processingDevice = denseSettings.useCuda",
@@ -545,6 +546,7 @@ TEST(PointCloudWorkflowConfigGTest, AcceptsStableBackendAliases)
         });
     EXPECT_EQ(snake_case.patchMatchBackend, xjw::mvs::PatchMatchBackend::OpenCl);
     EXPECT_EQ(snake_case.processingDevice, plapoint::ProcessingDevice::CUDA);
+    EXPECT_FALSE(snake_case.useCuda);
 
     const auto camel_case = xjw::core::project::denseGenerationSettingsFromJson(
         QJsonObject{
@@ -553,6 +555,7 @@ TEST(PointCloudWorkflowConfigGTest, AcceptsStableBackendAliases)
         });
     EXPECT_EQ(camel_case.patchMatchBackend, xjw::mvs::PatchMatchBackend::Cuda);
     EXPECT_EQ(camel_case.processingDevice, plapoint::ProcessingDevice::OpenCL);
+    EXPECT_TRUE(camel_case.useCuda);
 
     const auto refine = xjw::core::project::denseRefineSettingsFromJson(
         QJsonObject{

@@ -280,7 +280,7 @@ void ProjectMaskWorkflowController::openDialogForImages(const QStringList &reque
                 const auto report = [&]()
                 {
                     ++completed;
-                    xjw::gui::tasks::postGuarded(guard.data(), [completed, total = targets.size()](auto *self)
+                    xjw::gui::tasks::postGuarded(guard, [completed, total = targets.size()](auto *self)
                     {
                         emit self->progressChanged(QStringLiteral("生成蒙版"), completed, total);
                     });

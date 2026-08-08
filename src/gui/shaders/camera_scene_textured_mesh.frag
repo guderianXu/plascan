@@ -10,6 +10,9 @@ layout(std140, binding = 0) uniform SceneUniforms
     mat4 uModelView;
     mat4 uNormalMat;
     vec4 uLightDirPointSize;
+    vec4 uViewportSize;
+    vec4 uRenderModeFlags;
+    vec4 uScalarRange;
 } ubuf;
 
 layout(binding = 1) uniform sampler2D modelTexture;

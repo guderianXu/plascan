@@ -31,7 +31,7 @@ void main()
     vec3 direction = normalize(instanceForward);
     vec3 worldPosition = gl_VertexIndex == 0
         ? instanceCenter
-        : instanceCenter - direction * cameraHalfExtent() * 1.35;
-    vColor = vec3(0.10);
+        : instanceCenter + direction * cameraHalfExtent() * instanceUvRect.w;
+    vColor = instanceUvRect.xyz;
     gl_Position = ubuf.uMVP * vec4(worldPosition, 1.0);
 }

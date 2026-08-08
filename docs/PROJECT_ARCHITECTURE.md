@@ -548,7 +548,10 @@ gui/
 │   ├── FeatureResidualLoader.h/cpp      # 按当前影像异步筛选真实重投影残差
 │   ├── CameraSceneWidget.h/cpp           # 三维场景、相机覆盖层、模型/点云显示与交互
 │   ├── CameraSceneViewMath.h/cpp        # 相机平面、视角选择与本地轴数学
-│   └── ObjRenderPreparation.h/cpp       # OBJ 显示数据准备
+│   ├── ObjRenderPreparation.h/cpp       # 静态网格 VBO、三角/线框 IBO 与 UV 接缝流准备
+│   ├── SceneGeometryPreparation.h/cpp   # 点云 GPU 数据、空间摘要与后台框选准备
+│   ├── PointCloudEditPreparation.h/cpp  # 点云增量删除、撤销数据与 GPU 数据重建
+│   └── PointCloudSnapshotIO.h/cpp       # 点云编辑暂存、格式分派与同目录原子替换
 │
 ├── config/                     # 配置管理
 │   ├── AppConfigManager.h/cpp          # 应用配置
@@ -911,7 +914,12 @@ chart，经确定性 MaxRects 打包后逐纹素反投影；Natural、加权平�
 GUI 的生成模型入口默认请求 OBJ，同时始终保留 `model_from_mesh.ply` 作为几何/兼容回退；项目记录保存
 `model_obj`、`model_mtl`、`texture_image`/`texture_png` 和最终显示路径。工作区选择模型时优先异步加载
 OBJ，在后台解析 MTL 与纹理图，并在 Vulkan 网格管线中按 `faceTextureIndices` 展开每个面角的 UV；
-`ObjRenderPreparation` 同时在后台生成可直接上传的交错顶点缓冲，GUI 线程只负责 GPU 上传。OBJ 读取器
+`ObjRenderPreparation` 同时在后台生成源顶点对齐的静态 VBO、三角 IBO、去重线框 IBO 和独立 UV
+接缝顶点流；Shaded、Solid、Elevation 与 Wireframe 只切换 shader uniform/索引流，不再重新展开或
+上传整张网格。`SceneGeometryPreparation` 在同一后台阶段生成点云基础 VBO、独立观测数属性以及
+中心、P95 半径、AABB/OBB 等空间摘要，GUI 线程只负责 GPU 上传；场景类型或显示开关变化后，
+失活的 VBO、IBO、模型纹理、照片纹理与缩略图图集在下一帧渲染线程中释放，避免历史最大资源常驻
+显存。OBJ 读取器
 使用连续文件缓冲、`from_chars` 和扁平三角形数组，避免逐行字符串流和嵌套面数组；相机纹理导出按
 “相机 + 空间顶点”复用 UV，只在主视图接缝处拆分纹理坐标。MTL、纹理或完整 UV 缺失时回退到顶点
 颜色，不在 GUI 主线程执行文件解析、图像读取或百万面三角形展开。照片纹理按原始颜色显示，不重复
@@ -919,6 +927,19 @@ OBJ，在后台解析 MTL 与纹理图，并在 Vulkan 网格管线中按 `faceT
 未计算顶点颜色且没有纹理的模型默认使用 `Solid` 面法线显示，用户能直接看到真实三角面；存在
 照片派生顶点颜色或完整纹理时才使用颜色显示与较柔和照明。顶点颜色只改变外观，不改变网格拓扑，
 不会再用平滑白色材质把“无颜色”伪装成“已计算颜色”。
+
+点云手动剔除与撤销只保存增量 undo，并在后台将结果写入同目录临时文件；GUI 校验当前加载代际后
+再原子替换目标文件，过期任务只清理暂存文件。保存按最终扩展名分派 XYZ、OBJ 和 PLY writer，PLY
+使用 BinaryLE，避免大点云编辑时的 ASCII 数字格式化热点。切换模型或销毁场景时会协作取消仍在
+复制属性、重建 GPU 数据或等待写盘的旧编辑任务；第三方 writer 已开始后会写完临时文件再丢弃。
+
+XYZ、PLY、OBJ 场景加载和手动框选均采用 single-flight/latest-only：旧 reader 若正处于第三方解析
+函数内会自然完成，但不会再与后续多个大任务并发；解析后的准备阶段和框选扫描使用协作取消标志，
+连接点观测 sidecar 也只保留最后请求，避免快速切换时并发解析多个大 JSON；框选索引固定为 32 位并
+限制初始预留容量。RHI 更新批次只有在 `beginPass` 消费后才提交缩略图缓存
+淘汰和上传状态；任一资源创建失败会先释放未提交批次，再恢复 VBO/IBO、纹理和图集的 dirty 状态。
+非 8-bit GeoTIFF 显示缓存按规范化源路径加锁，在目标目录暂存并原子替换，完整图与缩略图并发请求
+不会再覆盖同一个半成品 `_8.tif`。
 
 最终深度证据除几何支持数外，还保存来源相机 bit mask、逆深度均值/相对离散度和跨视图修补掩膜；
 旧清单缺少这些字段时按空证据读取。模型质量报告对每个视图保存双向边缘距离、P90 长尾位置及其
@@ -1020,7 +1041,7 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
 
 | 问题 | 位置 | 建议 |
 |------|------|------|
-| 三维场景实现仍较大 | `gui/views/CameraSceneWidget.cpp` | 按资源加载、相机覆盖层和交互编辑继续提取真实职责 |
+| 三维场景实现仍较大 | `gui/views/CameraSceneWidget.cpp` | 继续将相机图集资源生命周期提取为独立渲染器；几何准备与点云编辑已拆分 |
 | `mvs/` 和 `dense_match/` 有重复逻辑 | `SubpixelRefiner` 两个版本 | 统一到 `dense_match/` |
 | 空三真实数据回归仍需扩大 | `core/aerial_triangulation` | 持续加入环拍、航带、弱纹理和控制点数据集 |
 | 构建依赖 4 个系统符号链接 | `/lib64/libm.so.6`, `libnvrtc-builtins.so.13.0` 等 | 见 `CONTEXT.md` 系统依赖 |

@@ -334,7 +334,8 @@ DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &setti
         // always means CUDA -> OpenCL -> CPU.
         parsed.patchMatchBackend = xjw::mvs::PatchMatchBackend::Cpu;
     }
-    parsed.useCuda = parsed.patchMatchBackend != xjw::mvs::PatchMatchBackend::Cpu;
+    parsed.useCuda = parsed.patchMatchBackend == xjw::mvs::PatchMatchBackend::Auto ||
+        parsed.patchMatchBackend == xjw::mvs::PatchMatchBackend::Cuda;
     parsed.fusionMinConfidence = static_cast<float>(
         settings.value(QStringLiteral("minConfidence")).toDouble(parsed.patchMatchConfidence));
     parsed.fusionMaxImageDim = std::max(0,

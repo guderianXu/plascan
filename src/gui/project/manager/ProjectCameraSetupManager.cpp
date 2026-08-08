@@ -571,7 +571,7 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
         {
             return;
         }
-        xjw::gui::tasks::postGuarded(self.data(), [ownerGuard, session, stage, pct](ProjectCameraSetupManager *manager)
+        xjw::gui::tasks::postGuarded(self, [ownerGuard, session, stage, pct](ProjectCameraSetupManager *manager)
         {
             if (!ownerGuard || !ownerGuard->isCurrentSession(session))
             {
@@ -588,7 +588,7 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
         {
             return;
         }
-        xjw::gui::tasks::postGuarded(self.data(),
+        xjw::gui::tasks::postGuarded(self,
                                      [ownerGuard, session, img0, img1, matchPath, numMatches](
                                          ProjectCameraSetupManager *manager)
         {

@@ -9,11 +9,18 @@
 
 #include <QCryptographicHash>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QImageReader>
+#include <QMutex>
+#include <QMutexLocker>
+#include <QSaveFile>
+#include <QTemporaryFile>
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <vector>
 
 #include <cpl_conv.h>
@@ -431,6 +438,123 @@ bool isCacheFresh(const QString &inputPath, const QString &cachePath)
     return outFi.lastModified() >= inFi.lastModified();
 }
 
+QString normalizedSourcePath(const QString &path)
+{
+    const QFileInfo info(path);
+    QString normalized = info.canonicalFilePath();
+    if (normalized.isEmpty())
+    {
+        normalized = info.absoluteFilePath();
+    }
+    normalized = QDir::cleanPath(QDir::fromNativeSeparators(normalized));
+#ifdef Q_OS_WIN
+    normalized = normalized.toCaseFolded();
+#endif
+    return normalized;
+}
+
+std::shared_ptr<QMutex> cacheMutexForSource(const QString &path)
+{
+    static QMutex registry_mutex;
+    static QHash<QString, std::weak_ptr<QMutex>> mutexes;
+
+    const QString key = normalizedSourcePath(path);
+    QMutexLocker<QMutex> registry_lock(&registry_mutex);
+    const auto existing = mutexes.constFind(key);
+    if (existing != mutexes.constEnd())
+    {
+        if (std::shared_ptr<QMutex> mutex = existing.value().lock())
+        {
+            return mutex;
+        }
+    }
+
+    constexpr qsizetype maximum_stale_mutex_entries = 256;
+    if (mutexes.size() >= maximum_stale_mutex_entries)
+    {
+        for (auto iterator = mutexes.begin(); iterator != mutexes.end();)
+        {
+            if (iterator.value().expired())
+            {
+                iterator = mutexes.erase(iterator);
+            }
+            else
+            {
+                ++iterator;
+            }
+        }
+    }
+
+    auto mutex = std::make_shared<QMutex>();
+    mutexes.insert(key, mutex);
+    return mutex;
+}
+
+bool copyFileAtomically(const QString &sourcePath, const QString &destinationPath)
+{
+    QFile source(sourcePath);
+    if (!source.open(QIODevice::ReadOnly))
+    {
+        return false;
+    }
+
+    QSaveFile destination(destinationPath);
+    destination.setDirectWriteFallback(false);
+    if (!destination.open(QIODevice::WriteOnly))
+    {
+        return false;
+    }
+
+    QByteArray buffer(1024 * 1024, Qt::Uninitialized);
+    while (!source.atEnd())
+    {
+        const qint64 count = source.read(buffer.data(), buffer.size());
+        if (count < 0 || destination.write(buffer.constData(), count) != count)
+        {
+            destination.cancelWriting();
+            return false;
+        }
+    }
+    return destination.commit();
+}
+
+bool convertTo8BitCacheAtomically(const QString &inputPath, const QString &cachePath)
+{
+    const QFileInfo cache_info(cachePath);
+    QDir cache_directory(cache_info.absolutePath());
+    if (!cache_directory.mkpath(QStringLiteral(".")))
+    {
+        LOG_WARN(QStringLiteral("影像缓存目录创建失败：%1")
+                     .arg(cache_directory.absolutePath()));
+        return false;
+    }
+
+    QTemporaryFile staged_file(cache_directory.filePath(
+        QStringLiteral(".%1.XXXXXX.tmp.tif").arg(cache_info.completeBaseName())));
+    if (!staged_file.open())
+    {
+        LOG_WARN(QStringLiteral("影像缓存暂存文件创建失败：%1（%2）")
+                     .arg(cache_directory.absolutePath(), staged_file.errorString()));
+        return false;
+    }
+    const QString staged_path = staged_file.fileName();
+    staged_file.close();
+
+    if (!convertTo8BitGeoTiff_GDAL(inputPath, staged_path))
+    {
+        LOG_WARN(QStringLiteral("GeoTIFF 8 位缓存转换失败：%1")
+                     .arg(inputPath));
+        return false;
+    }
+    const bool committed = copyFileAtomically(staged_path, cachePath);
+    if (!committed)
+    {
+        LOG_WARN(QStringLiteral("影像缓存原子提交失败：%1")
+                     .arg(cachePath));
+    }
+    return committed;
+}
+
 } // namespace
 
 namespace xjw::gui::views
@@ -492,23 +616,21 @@ QImage loadImageForDisplay(const QString &path,
             : xjw::common::project::ProjectIO::projectRootFromPlascan(
                   plascanPath);
         const QString out8 = make8BitCachePath(path, projectRoot);
+        const std::shared_ptr<QMutex> cache_mutex = cacheMutexForSource(path);
+        QMutexLocker<QMutex> cache_lock(cache_mutex.get());
         const bool fresh = isCacheFresh(path, out8);
-
-        if (!fresh)
+        auto read_cached_image = [&]()
         {
-            (void)convertTo8BitGeoTiff_GDAL(path, out8);
-        }
-
-        if (QFileInfo::exists(out8))
-        {
+            QImage cached_image;
+            QSize converted_size;
+            if (!QFileInfo::exists(out8))
+            {
+                return cached_image;
+            }
             QImageReader r2(out8);
             if (r2.canRead())
             {
-                const QSize converted_size = r2.size();
-                if (source_size && !source_size->isValid() && converted_size.isValid())
-                {
-                    *source_size = converted_size;
-                }
+                converted_size = r2.size();
                 if (maximum_size.isValid() && converted_size.isValid())
                 {
                     const QSize scaled_size = converted_size.scaled(
@@ -519,12 +641,42 @@ QImage loadImageForDisplay(const QString &path,
                         r2.setScaledSize(scaled_size);
                     }
                 }
-                img = r2.read();
+                cached_image = r2.read();
             }
-            if (img.isNull())
+            if (cached_image.isNull())
             {
-                img = QImage(out8);
+                cached_image = loadImageWithOpenCvByteDecode(out8);
             }
+            if (cached_image.isNull())
+            {
+                cached_image = QImage(out8);
+            }
+            if (!cached_image.isNull() && source_size && !source_size->isValid())
+            {
+                *source_size = converted_size.isValid()
+                    ? converted_size
+                    : cached_image.size();
+            }
+            return cached_image;
+        };
+
+        bool cache_ready = fresh;
+        if (!cache_ready)
+        {
+            cache_ready = convertTo8BitCacheAtomically(path, out8);
+        }
+        QImage cached_image = cache_ready ? read_cached_image() : QImage();
+        if (fresh && cached_image.isNull())
+        {
+            // A fresh timestamp does not prove the cache is decodable. Rebuild
+            // once under the same per-source lock, preserving the old file if
+            // conversion or atomic replacement fails.
+            cache_ready = convertTo8BitCacheAtomically(path, out8);
+            cached_image = cache_ready ? read_cached_image() : QImage();
+        }
+        if (!cached_image.isNull())
+        {
+            img = std::move(cached_image);
         }
     }
     if (img.isNull())

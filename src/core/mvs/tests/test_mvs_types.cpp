@@ -90,6 +90,14 @@ TEST(PatchMatchConfigTest, PostProcessingEnabled)
     EXPECT_GT(cfg.bilateralSigmaSpace, 0.f);
 }
 
+TEST(PatchMatchConfigTest, BackendIdsAreStableAndUnambiguous)
+{
+    EXPECT_STREQ(patchMatchBackendId(PatchMatchBackend::Auto), "auto");
+    EXPECT_STREQ(patchMatchBackendId(PatchMatchBackend::Cpu), "cpu");
+    EXPECT_STREQ(patchMatchBackendId(PatchMatchBackend::Cuda), "cuda");
+    EXPECT_STREQ(patchMatchBackendId(PatchMatchBackend::OpenCl), "opencl");
+}
+
 TEST(DepthGenConfigTest, PointCloudProcessingDefaultsToOrderedAutoSelection)
 {
     const DepthGenConfig config;

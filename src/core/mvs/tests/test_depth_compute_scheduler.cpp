@@ -23,7 +23,9 @@ using xjw::mvs::GpuDeviceDescriptor;
 using xjw::mvs::GpuDeviceLeaseSet;
 using xjw::mvs::buildDepthComputeWorkerPool;
 using xjw::mvs::fallbackGpuPhysicalIdentity;
+using xjw::mvs::isUsableOpenClPatchMatchDevice;
 using xjw::mvs::resolveDepthComputeBackend;
+using xjw::mvs::resolvePatchMatchEstimatorBackend;
 
 TEST(DepthComputeSchedulerTest, ReturnsHighestPriorityFrameFirst)
 {
@@ -111,6 +113,67 @@ TEST(DepthComputeSchedulerTest, AutomaticBackendUsesStrictAcceleratorPriority)
               DepthComputeBackend::OpenCl);
     EXPECT_EQ(resolveDepthComputeBackend(std::nullopt, false, false),
               DepthComputeBackend::Cpu);
+}
+
+TEST(DepthComputeSchedulerTest, LegacyAutoAccelerationToggleForcesCpu)
+{
+    EXPECT_EQ(resolveDepthComputeBackend(std::nullopt, true, true, false),
+              DepthComputeBackend::Cpu);
+    EXPECT_EQ(resolveDepthComputeBackend(
+                  DepthComputeBackend::OpenCl, true, false, false),
+              DepthComputeBackend::OpenCl);
+}
+
+TEST(PatchMatchBackendSelectionTest, OpenClRequiresAvailableDeviceAndOnlineCompiler)
+{
+    EXPECT_TRUE(isUsableOpenClPatchMatchDevice(true, true, true, true));
+    EXPECT_FALSE(isUsableOpenClPatchMatchDevice(true, false, true, true));
+    EXPECT_FALSE(isUsableOpenClPatchMatchDevice(true, true, true, false));
+    EXPECT_FALSE(isUsableOpenClPatchMatchDevice(false, true, true, true));
+    EXPECT_FALSE(isUsableOpenClPatchMatchDevice(true, true, false, true));
+}
+
+TEST(PatchMatchBackendSelectionTest, EnumeratedOpenClDevicesAreUsable)
+{
+    const auto devices = xjw::mvs::PatchMatchDepthEstimator::openClDevices();
+    EXPECT_EQ(xjw::mvs::PatchMatchDepthEstimator::isOpenClAvailable(),
+              !devices.empty());
+    for (const xjw::mvs::OpenClDeviceInfo &device : devices)
+    {
+        EXPECT_TRUE(device.isGpu);
+        EXPECT_TRUE(device.available);
+        EXPECT_TRUE(device.compilerAvailable);
+    }
+}
+
+TEST(PatchMatchBackendSelectionTest, LegacyUseCudaFalseKeepsAutoEstimatorOnCpu)
+{
+    EXPECT_EQ(resolvePatchMatchEstimatorBackend(
+                  xjw::mvs::PatchMatchBackend::Auto, false, true, true),
+              xjw::mvs::PatchMatchBackend::Cpu);
+}
+
+TEST(PatchMatchBackendSelectionTest, ExplicitBackendOverridesLegacyAutoToggle)
+{
+    EXPECT_EQ(resolvePatchMatchEstimatorBackend(
+                  xjw::mvs::PatchMatchBackend::Cuda, false, false, true),
+              xjw::mvs::PatchMatchBackend::Cuda);
+    EXPECT_EQ(resolvePatchMatchEstimatorBackend(
+                  xjw::mvs::PatchMatchBackend::OpenCl, false, true, false),
+              xjw::mvs::PatchMatchBackend::OpenCl);
+}
+
+TEST(PatchMatchBackendSelectionTest, EnabledAutoUsesCudaThenOpenClThenCpu)
+{
+    EXPECT_EQ(resolvePatchMatchEstimatorBackend(
+                  xjw::mvs::PatchMatchBackend::Auto, true, true, true),
+              xjw::mvs::PatchMatchBackend::Cuda);
+    EXPECT_EQ(resolvePatchMatchEstimatorBackend(
+                  xjw::mvs::PatchMatchBackend::Auto, true, false, true),
+              xjw::mvs::PatchMatchBackend::OpenCl);
+    EXPECT_EQ(resolvePatchMatchEstimatorBackend(
+                  xjw::mvs::PatchMatchBackend::Auto, true, false, false),
+              xjw::mvs::PatchMatchBackend::Cpu);
 }
 
 TEST(DepthComputeSchedulerTest, ExplicitBackendIsNeverSubstituted)

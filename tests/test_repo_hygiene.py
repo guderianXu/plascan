@@ -107,6 +107,12 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("$msvcCudaHostCompiler", text)
         self.assertIn("CUDAHOSTCXX", text)
         self.assertIn("--compiler-bindir", text)
+        self.assertIn("$env:SystemRoot", text)
+        self.assertIn('$system32Dir = Join-Path $systemRoot "System32"', text)
+        self.assertIn("$system32Dir", text)
+        self.assertIn('$chcpProbe = & (Join-Path $system32Dir "cmd.exe")', text)
+        self.assertIn('$tensorRtRuntimeDir = if (', text)
+        self.assertIn('$env:TENSORRT_ROOT "bin"', text)
 
     def test_cuda_arches_are_propagated_to_native_backends(self):
         cmake_path = ROOT / "cmake" / "PlascanPackages.cmake"
@@ -186,6 +192,7 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("CUDA runtime DLLs", text)
         self.assertIn("Sync-CudnnRuntime", text)
         self.assertIn("$CudnnPath \"bin\\x64\"", text)
+        self.assertIn("$cudnnBinRoots = @(@(", text)
         self.assertIn("Assert-U2NetCudaDeployment", text)
         self.assertIn("RunU2NetCudaDeploymentTest", text)
         self.assertIn("VCPKG_APPLOCAL_DEPS=OFF", text)
@@ -211,6 +218,10 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("CudnnRoot", text)
         self.assertIn("CUDNN_ROOT_DIR", text)
         self.assertIn("build\\env\\cudnn-cu13", text)
+        self.assertIn(
+            "$cudnnPathEntries + @($env:PATH -split ';')",
+            text,
+        )
         self.assertIn("VCPKG_OVERLAY_TRIPLETS", text)
         self.assertIn(
             "VCPKG_ENV_PASSTHROUGH CUDNN_ROOT_DIR CUDNN CUDNN_PATH "

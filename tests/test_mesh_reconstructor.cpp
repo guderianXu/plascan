@@ -5479,6 +5479,7 @@ xjw::mesh::ReconstructionConfig fallbackMeshConfig()
     config.enableDenoise = false;
     config.enableDownsample = false;
     config.preprocessingDevice = plapoint::ProcessingDevice::CPU;
+    config.poissonSolverDevice = plapoint::ProcessingDevice::CPU;
     config.cleanSmallComponents = false;
     config.smoothIterations = 0;
     config.holeFillPasses = 2;

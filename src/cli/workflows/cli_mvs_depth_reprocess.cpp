@@ -449,7 +449,7 @@ int main(int argc, char **argv)
         {QStringLiteral("threads"), threads},
         {QStringLiteral("gpu_frame_workers"), gpuFrameWorkers},
         {QStringLiteral("cpu_frame_workers"), cpuFrameWorkers},
-        {QStringLiteral("cuda"), device != "cpu"},
+        {QStringLiteral("cuda"), device == "cuda"},
         {QStringLiteral("patchMatchBackend"), QString::fromStdString(device)},
         {QStringLiteral("saveIntermediatePyramidLevels"), saveLevels},
         {QStringLiteral("pipeline_mode"), true}

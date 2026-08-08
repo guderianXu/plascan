@@ -31,6 +31,7 @@
 #include <array>
 #include <cmath>
 #include <filesystem>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -219,6 +220,29 @@ xjw::mvs::DepthPyramidRequest makeSyntheticPyramidRequest()
 }
 
 } // namespace
+
+TEST(DepthMapBackgroundTaskTest, ExceptionBoundaryReportsFailureExactlyOnce)
+{
+    int task_calls = 0;
+    int failure_calls = 0;
+    QString failure_message;
+
+    xjw::mvs::detail::runDepthMapBackgroundTaskWithExceptionBoundary(
+        [&task_calls]()
+        {
+            ++task_calls;
+            throw std::runtime_error("inline PlaPoint failure");
+        },
+        [&failure_calls, &failure_message](const QString &message)
+        {
+            ++failure_calls;
+            failure_message = message;
+        });
+
+    EXPECT_EQ(task_calls, 1);
+    EXPECT_EQ(failure_calls, 1);
+    EXPECT_TRUE(failure_message.contains(QStringLiteral("inline PlaPoint failure")));
+}
 
 TEST(DepthPyramidPolicyTest, BuildsStrictThreeLevelSchedule)
 {
@@ -1324,6 +1348,7 @@ TEST(DepthGeometryConsistencyTest, FindsSubpixelNeighborAndVerifiesRoundTrip)
                     edge_aware.jointWorldPixelFootprint,
                 0.5f,
                 1.0e-5f);
+
 }
 
 TEST(DepthGeometryConsistencyTest,

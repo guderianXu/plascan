@@ -39,8 +39,25 @@ struct OpenClDeviceInfo
     std::uint64_t globalMemoryBytes = 0;
     int computeUnits = 0;
     bool isGpu = false;
+    bool available = false;
+    bool compilerAvailable = false;
     std::string physicalDeviceIdentity;
 };
+
+/// Resolve the standalone estimator backend while preserving the legacy
+/// `useCuda=false` contract for callers that have not selected an explicit
+/// backend yet.
+PatchMatchBackend resolvePatchMatchEstimatorBackend(PatchMatchBackend requestedBackend,
+                                                     bool useCuda,
+                                                     bool cudaAvailable,
+                                                     bool openClAvailable) noexcept;
+
+/// OpenCL PatchMatch compiles kernels from source, so both runtime device
+/// availability and the online compiler are mandatory.
+bool isUsableOpenClPatchMatchDevice(bool availabilityQuerySucceeded,
+                                    bool available,
+                                    bool compilerQuerySucceeded,
+                                    bool compilerAvailable) noexcept;
 
 struct OpenClExecutionStats
 {

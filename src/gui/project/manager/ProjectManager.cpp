@@ -702,7 +702,7 @@ void ProjectManager::startImageImport(const QStringList &imagePaths,
                         return;
                     }
                     xjw::gui::tasks::postGuarded(
-                        owner.data(),
+                        owner,
                         [session, done, progressTotal](ProjectManager *self)
                         {
                             if (self->_imageImportActive && self->isCurrentSession(session))

@@ -1349,7 +1349,7 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
         {
             return;
         }
-        xjw::gui::tasks::postGuarded(pmGuard.data(), [stage, percent](ProjectManager *manager)
+        xjw::gui::tasks::postGuarded(pmGuard, [stage, percent](ProjectManager *manager)
         {
             emit manager->atProgressChanged(QStringLiteral("空中三角测量: %1").arg(stage), percent);
         });
@@ -1363,7 +1363,7 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
         {
             return;
         }
-        xjw::gui::tasks::postGuarded(pmGuard.data(),
+        xjw::gui::tasks::postGuarded(pmGuard,
                                      [img0, img1, matchPath, numMatches](ProjectManager *manager)
         {
             emit manager->matchPairReady(img0, img1, matchPath, numMatches);

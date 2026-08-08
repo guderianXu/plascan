@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QCoreApplication>
 #include <QFuture>
 #include <QFutureWatcher>
 #include <QDebug>
@@ -8,8 +9,8 @@
 #include <QString>
 #include <QtConcurrent/QtConcurrent>
 
-#include <exception>
 #include <atomic>
+#include <exception>
 #include <memory>
 #include <optional>
 #include <type_traits>
@@ -62,41 +63,6 @@ private:
     std::shared_ptr<std::atomic<bool>> _flag;
 };
 
-class TaskFutureRetainer final : public QObject
-{
-public:
-    explicit TaskFutureRetainer(QObject *parent)
-        : QObject(parent)
-    {
-        connect(&_watcher, &QFutureWatcher<void>::finished, this, [this]()
-        {
-            _future = QFuture<void>();
-            deleteLater();
-        });
-    }
-
-    void retain(QFuture<void> future)
-    {
-        _future = std::move(future);
-        _watcher.setFuture(_future);
-    }
-
-private:
-    QFuture<void> _future;
-    QFutureWatcher<void> _watcher;
-};
-
-inline void retainTaskFuture(QObject *owner, const QFuture<void> &future)
-{
-    if (!owner || !future.isValid())
-    {
-        return;
-    }
-
-    auto *retainer = new TaskFutureRetainer(owner);
-    retainer->retain(future);
-}
-
 template <typename Result>
 struct TaskOutcome
 {
@@ -121,16 +87,16 @@ struct TaskOutcome<void>
 };
 
 template <typename Owner, typename Callback>
-void postGuarded(Owner *owner, Callback &&callback)
+void postGuarded(const QPointer<Owner> &owner, Callback &&callback)
 {
-    QPointer<Owner> self(owner);
-    if (!self)
+    if (!owner || !QCoreApplication::instance())
     {
         return;
     }
 
+    const QPointer<Owner> self = owner;
     auto callbackPtr = std::make_shared<std::decay_t<Callback>>(std::forward<Callback>(callback));
-    QMetaObject::invokeMethod(self.data(),
+    QMetaObject::invokeMethod(QCoreApplication::instance(),
                               [self, callbackPtr]() mutable
                               {
                                   if (!self)
@@ -145,8 +111,7 @@ void postGuarded(Owner *owner, Callback &&callback)
 template <typename Owner, typename Work, typename Finished>
 QFuture<void> runGuardedWithOutcome(Owner *owner, Work &&work, Finished &&finished)
 {
-    QPointer<Owner> self(owner);
-    if (!self)
+    if (!owner)
     {
         return QFuture<void>();
     }
@@ -157,10 +122,20 @@ QFuture<void> runGuardedWithOutcome(Owner *owner, Work &&work, Finished &&finish
 
     auto workPtr = std::make_shared<WorkFn>(std::forward<Work>(work));
     auto finishedPtr = std::make_shared<FinishedFn>(std::forward<Finished>(finished));
+    auto outcome = std::make_shared<TaskOutcome<Result>>();
+    auto *watcher = new QFutureWatcher<void>(owner);
 
-    QFuture<void> future = QtConcurrent::run([self, workPtr, finishedPtr]() mutable
+    QObject::connect(watcher,
+                     &QFutureWatcher<void>::finished,
+                     owner,
+                     [owner, watcher, finishedPtr, outcome]() mutable
     {
-        auto outcome = std::make_shared<TaskOutcome<Result>>();
+        watcher->deleteLater();
+        (*finishedPtr)(owner, std::move(*outcome));
+    });
+
+    QFuture<void> future = QtConcurrent::run([workPtr, outcome]() mutable
+    {
         try
         {
             if constexpr (std::is_void_v<Result>)
@@ -180,19 +155,8 @@ QFuture<void> runGuardedWithOutcome(Owner *owner, Work &&work, Finished &&finish
         {
             outcome->errorMessage = QStringLiteral("后台任务发生未知异常。");
         }
-
-        if (!self)
-        {
-            return;
-        }
-
-        postGuarded(self.data(),
-                    [finishedPtr, outcome](Owner *callbackOwner) mutable
-                    {
-                        (*finishedPtr)(callbackOwner, std::move(*outcome));
-                    });
     });
-    retainTaskFuture(self.data(), future);
+    watcher->setFuture(future);
     return future;
 }
 

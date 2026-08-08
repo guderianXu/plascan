@@ -1135,6 +1135,9 @@ QJsonObject mvsSettingsToJson(const xjw::core::project::DenseGenerationSettings 
          xjw::core::project::processingDeviceId(denseSettings.processingDevice)},
         {QStringLiteral("patchmatch_backend"),
          static_cast<int>(denseSettings.patchMatchBackend)},
+        {QStringLiteral("patchmatch_backend_id"),
+         QString::fromLatin1(xjw::mvs::patchMatchBackendId(
+             denseSettings.patchMatchBackend))},
         {QStringLiteral("requested_max_frames"), requestedMaxFrames},
         {QStringLiteral("mvs_input_frames"), mvsInputFrames},
         {QStringLiteral("registered_image_count"), registeredImageCount}
@@ -1834,7 +1837,7 @@ xjw::cli::ReconstructionCliOptions options;
     QDir().mkpath(mvsDir);
     xjw::core::project::DenseGenerationSettings denseSettings;
     denseSettings.threads = std::max(1, threads);
-    denseSettings.useCuda = mvs_backend != "cpu";
+    denseSettings.useCuda = mvs_backend == "auto" || mvs_backend == "cuda";
     denseSettings.patchMatchBackend = mvs_backend == "cpu"
         ? xjw::mvs::PatchMatchBackend::Cpu
         : mvs_backend == "cuda"

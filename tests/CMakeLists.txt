@@ -955,6 +955,7 @@ endif()
 # ==============================================================================
 add_executable(test_mesh_reconstructor
     test_mesh_reconstructor.cpp
+    test_surface_reconstructor_height_grid.cpp
     test_robust_surface_displacement_solver.cpp
     test_depth_ray_metric.cpp
     test_depth_tsdf_narrow_band_activation.cpp
@@ -1016,6 +1017,39 @@ target_include_directories(test_camera_scene_view_math PRIVATE
 )
 gtest_discover_tests(test_camera_scene_view_math)
 
+add_executable(test_scene_geometry_preparation
+    test_scene_geometry_preparation.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/views/SceneGeometryPreparation.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/views/PointCloudEditPreparation.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/views/CameraSceneViewMath.cpp
+)
+target_link_libraries(test_scene_geometry_preparation PRIVATE
+    plapoint::plapoint
+    Qt6::Core
+    Qt6::Gui
+    GTest::gtest_main
+)
+target_include_directories(test_scene_geometry_preparation PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui/views
+)
+gtest_discover_tests(test_scene_geometry_preparation)
+
+add_executable(test_point_cloud_snapshot_io
+    test_point_cloud_snapshot_io.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/views/PointCloudSnapshotIO.cpp
+)
+target_link_libraries(test_point_cloud_snapshot_io PRIVATE
+    plascan_common_io
+    plapoint::plapoint
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_point_cloud_snapshot_io PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/common
+    ${CMAKE_SOURCE_DIR}/src/gui/views
+)
+gtest_discover_tests(test_point_cloud_snapshot_io)
+
 add_executable(test_camera_scene_render_contracts
     test_camera_scene_render_contracts.cpp
 )
@@ -1041,21 +1075,6 @@ target_include_directories(test_tie_point_visualization PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui/views
 )
 gtest_discover_tests(test_tie_point_visualization)
-
-add_executable(test_model_visualization
-    test_model_visualization.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/views/ModelVisualization.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/views/TiePointVisualization.cpp
-)
-target_link_libraries(test_model_visualization PRIVATE
-    GTest::gtest_main
-    Qt6::Core
-    Qt6::Gui
-)
-target_include_directories(test_model_visualization PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/gui/views
-)
-gtest_discover_tests(test_model_visualization)
 
 # ==============================================================================
 # test_marker_task_runner — 标靶后台检测、真实进度与取消

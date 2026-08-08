@@ -431,7 +431,7 @@ PointCloudPrincipalAxes pointCloudPrincipalAxes(
         return result;
     }
 
-    QVector3D center;
+    double center_sum[3]{};
     int finite_count = 0;
     for (const QVector3D &point : points)
     {
@@ -440,14 +440,24 @@ PointCloudPrincipalAxes pointCloudPrincipalAxes(
         {
             continue;
         }
-        center += point;
+        center_sum[0] += static_cast<double>(point.x());
+        center_sum[1] += static_cast<double>(point.y());
+        center_sum[2] += static_cast<double>(point.z());
         ++finite_count;
     }
     if (finite_count < 3)
     {
         return result;
     }
-    center /= static_cast<float>(finite_count);
+    const double inverse_count = 1.0 / static_cast<double>(finite_count);
+    const QVector3D center(static_cast<float>(center_sum[0] * inverse_count),
+                           static_cast<float>(center_sum[1] * inverse_count),
+                           static_cast<float>(center_sum[2] * inverse_count));
+    if (!std::isfinite(center.x()) || !std::isfinite(center.y())
+        || !std::isfinite(center.z()))
+    {
+        return result;
+    }
 
     double covariance[3][3]{};
     for (const QVector3D &point : points)

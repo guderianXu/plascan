@@ -6,8 +6,10 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <exception>
 #include <limits>
 #include <numeric>
 #include <vector>
@@ -111,37 +113,60 @@ std::vector<cv::Mat> visibilityDepths(const TriMesh &mesh,
                                       int worker_count)
 {
     std::vector<cv::Mat> depths(static_cast<std::size_t>(views.size()));
+    std::vector<std::exception_ptr> loading_errors(
+        static_cast<std::size_t>(views.size()));
+    std::atomic_bool loading_failed{false};
 #ifdef MESHING_OPENMP
 #pragma omp parallel for schedule(dynamic, 1) num_threads(worker_count) if(worker_count > 1)
 #endif
     for (int view_index = 0; view_index < views.size(); ++view_index)
     {
-        const MeshColorView &view = views[view_index];
-        if (view.colorBgr.empty())
+        if (loading_failed.load(std::memory_order_relaxed))
         {
             continue;
         }
-        cv::Mat depth(view.colorBgr.size(), CV_32F,
-                      cv::Scalar(std::numeric_limits<float>::infinity()));
-        for (const MeshVertex &vertex : mesh.vertices)
+        try
         {
-            const double world[3] = {vertex.x, vertex.y, vertex.z};
-            double pixel[2]{};
-            double camera_depth = 0.0;
-            if (!view.camera.projectWorldPointWithDepth(world, pixel, camera_depth))
+            const MeshColorView &view = views[view_index];
+            if (view.colorBgr.empty())
             {
                 continue;
             }
-            const int column = static_cast<int>(std::lround(pixel[0]));
-            const int row = static_cast<int>(std::lround(pixel[1]));
-            if (row >= 0 && column >= 0 && row < depth.rows && column < depth.cols)
+            cv::Mat depth(view.colorBgr.size(), CV_32F,
+                          cv::Scalar(std::numeric_limits<float>::infinity()));
+            for (const MeshVertex &vertex : mesh.vertices)
             {
-                float &nearest = depth.at<float>(row, column);
-                nearest = std::min(nearest, static_cast<float>(camera_depth));
+                const double world[3] = {vertex.x, vertex.y, vertex.z};
+                double pixel[2]{};
+                double camera_depth = 0.0;
+                if (!view.camera.projectWorldPointWithDepth(world, pixel, camera_depth))
+                {
+                    continue;
+                }
+                const int column = static_cast<int>(std::lround(pixel[0]));
+                const int row = static_cast<int>(std::lround(pixel[1]));
+                if (row >= 0 && column >= 0 && row < depth.rows && column < depth.cols)
+                {
+                    float &nearest = depth.at<float>(row, column);
+                    nearest = std::min(nearest, static_cast<float>(camera_depth));
+                }
             }
+            cv::erode(depth, depth, cv::Mat::ones(3, 3, CV_8UC1));
+            depths[static_cast<std::size_t>(view_index)] = std::move(depth);
         }
-        cv::erode(depth, depth, cv::Mat::ones(3, 3, CV_8UC1));
-        depths[static_cast<std::size_t>(view_index)] = std::move(depth);
+        catch (...)
+        {
+            loading_errors[static_cast<std::size_t>(view_index)] =
+                std::current_exception();
+            loading_failed.store(true, std::memory_order_relaxed);
+        }
+    }
+    for (const std::exception_ptr &error : loading_errors)
+    {
+        if (error)
+        {
+            std::rethrow_exception(error);
+        }
     }
     return depths;
 }
@@ -388,6 +413,9 @@ MeshColorStatistics MeshColorizer::colorize(TriMesh *mesh,
     std::uint64_t rejected_color_outlier_count = 0;
     int reliably_colored_vertex_count = 0;
     int best_view_fallback_vertex_count = 0;
+    std::vector<std::exception_ptr> colorization_errors(
+        static_cast<std::size_t>(statistics.effectiveWorkerCount));
+    std::atomic_bool colorization_failed{false};
 #ifdef MESHING_OPENMP
 #pragma omp parallel for schedule(static) num_threads(statistics.effectiveWorkerCount) \
     if(statistics.effectiveWorkerCount > 1) \
@@ -400,174 +428,198 @@ MeshColorStatistics MeshColorizer::colorize(TriMesh *mesh,
          vertex_offset < static_cast<std::int64_t>(mesh->vertices.size());
          ++vertex_offset)
     {
-        const std::size_t vertex_index = static_cast<std::size_t>(vertex_offset);
-        MeshVertex &vertex = mesh->vertices[vertex_index];
-        std::vector<ColorCandidate> candidates;
-        candidates.reserve(static_cast<std::size_t>(views.size()));
-        ColorCandidate best_fallback;
-        bool has_best_fallback = false;
-        const double world[3] = {vertex.x, vertex.y, vertex.z};
-        for (int view_index = 0; view_index < views.size(); ++view_index)
+        if (colorization_failed.load(std::memory_order_relaxed))
         {
-            const MeshColorView &view = views[view_index];
-            if (view.colorBgr.type() != CV_8UC3 || view.depth.type() != CV_32FC1)
+            continue;
+        }
+        try
+        {
+            const std::size_t vertex_index = static_cast<std::size_t>(vertex_offset);
+            MeshVertex &vertex = mesh->vertices[vertex_index];
+            std::vector<ColorCandidate> candidates;
+            candidates.reserve(static_cast<std::size_t>(views.size()));
+            ColorCandidate best_fallback;
+            bool has_best_fallback = false;
+            const double world[3] = {vertex.x, vertex.y, vertex.z};
+            for (int view_index = 0; view_index < views.size(); ++view_index)
             {
-                continue;
-            }
-            double pixel[2]{};
-            double vertex_depth = 0.0;
-            if (!view.camera.projectWorldPointWithDepth(world, pixel, vertex_depth))
-            {
-                ++rejected_projection_count;
-                continue;
-            }
-            const int column = static_cast<int>(std::lround(pixel[0]));
-            const int row = static_cast<int>(std::lround(pixel[1]));
-            if (row < 0 || column < 0 || row >= view.colorBgr.rows || column >= view.colorBgr.cols)
-            {
-                ++rejected_projection_count;
-                continue;
-            }
-            if (view.supportMask.at<std::uint8_t>(row, column) == 0 ||
-                view.depthValidMask.at<std::uint8_t>(row, column) == 0)
-            {
-                ++rejected_mask_count;
-                continue;
-            }
-            const float observed_depth = view.depth.at<float>(row, column);
-            const float confidence = view.confidence.at<float>(row, column);
-            if (!std::isfinite(observed_depth) || observed_depth <= 0.0f ||
-                !std::isfinite(confidence) || confidence < options.minimumConfidence)
-            {
-                ++rejected_depth_count;
-                continue;
-            }
-            const float depth_tolerance = std::max(
-                options.depthToleranceVoxels * voxel_size,
-                options.relativeDepthTolerance * std::fabs(static_cast<float>(vertex_depth)));
-            const float depth_residual = std::fabs(
-                observed_depth - static_cast<float>(vertex_depth));
-            const float fallback_tolerance = std::max(
-                7.5f * voxel_size,
-                0.008f * std::fabs(static_cast<float>(vertex_depth)));
-            if (depth_residual <= fallback_tolerance)
-            {
-                const cv::Vec3f fallback_color = bilinearColor(
-                    view.colorBgr, pixel[0], pixel[1])
-                    * gains[static_cast<std::size_t>(view_index)];
-                ColorCandidate fallback;
-                fallback.blue = std::clamp(fallback_color[0], 0.0f, 255.0f);
-                fallback.green = std::clamp(fallback_color[1], 0.0f, 255.0f);
-                fallback.red = std::clamp(fallback_color[2], 0.0f, 255.0f);
-                fallback.weight = confidence * std::max(0.0f, view.qualityWeight) /
-                    (1.0f + depth_residual / std::max(fallback_tolerance, 1.0e-8f));
-                if (!has_best_fallback || fallback.weight > best_fallback.weight)
+                const MeshColorView &view = views[view_index];
+                if (view.colorBgr.type() != CV_8UC3 || view.depth.type() != CV_32FC1)
                 {
-                    best_fallback = fallback;
-                    has_best_fallback = true;
+                    continue;
+                }
+                double pixel[2]{};
+                double vertex_depth = 0.0;
+                if (!view.camera.projectWorldPointWithDepth(world, pixel, vertex_depth))
+                {
+                    ++rejected_projection_count;
+                    continue;
+                }
+                const int column = static_cast<int>(std::lround(pixel[0]));
+                const int row = static_cast<int>(std::lround(pixel[1]));
+                if (row < 0 || column < 0 || row >= view.colorBgr.rows || column >= view.colorBgr.cols)
+                {
+                    ++rejected_projection_count;
+                    continue;
+                }
+                if (view.supportMask.at<std::uint8_t>(row, column) == 0 ||
+                    view.depthValidMask.at<std::uint8_t>(row, column) == 0)
+                {
+                    ++rejected_mask_count;
+                    continue;
+                }
+                const float observed_depth = view.depth.at<float>(row, column);
+                const float confidence = view.confidence.at<float>(row, column);
+                if (!std::isfinite(observed_depth) || observed_depth <= 0.0f ||
+                    !std::isfinite(confidence) || confidence < options.minimumConfidence)
+                {
+                    ++rejected_depth_count;
+                    continue;
+                }
+                const float depth_tolerance = std::max(
+                    options.depthToleranceVoxels * voxel_size,
+                    options.relativeDepthTolerance * std::fabs(static_cast<float>(vertex_depth)));
+                const float depth_residual = std::fabs(
+                    observed_depth - static_cast<float>(vertex_depth));
+                const float fallback_tolerance = std::max(
+                    7.5f * voxel_size,
+                    0.008f * std::fabs(static_cast<float>(vertex_depth)));
+                if (depth_residual <= fallback_tolerance)
+                {
+                    const cv::Vec3f fallback_color = bilinearColor(
+                        view.colorBgr, pixel[0], pixel[1])
+                        * gains[static_cast<std::size_t>(view_index)];
+                    ColorCandidate fallback;
+                    fallback.blue = std::clamp(fallback_color[0], 0.0f, 255.0f);
+                    fallback.green = std::clamp(fallback_color[1], 0.0f, 255.0f);
+                    fallback.red = std::clamp(fallback_color[2], 0.0f, 255.0f);
+                    fallback.weight = confidence * std::max(0.0f, view.qualityWeight) /
+                        (1.0f + depth_residual / std::max(fallback_tolerance, 1.0e-8f));
+                    if (!has_best_fallback || fallback.weight > best_fallback.weight)
+                    {
+                        best_fallback = fallback;
+                        has_best_fallback = true;
+                    }
+                }
+                if (depth_residual > depth_tolerance)
+                {
+                    ++rejected_depth_count;
+                    continue;
+                }
+                const float nearest_depth = visibility_depths[static_cast<std::size_t>(view_index)]
+                                                .at<float>(row, column);
+                if (std::isfinite(nearest_depth) &&
+                    vertex_depth > nearest_depth + options.visibilityToleranceVoxels * voxel_size)
+                {
+                    ++rejected_visibility_count;
+                    continue;
+                }
+                const std::array<double, 3> center = view.camera.cameraCenter();
+                float dx = static_cast<float>(center[0]) - vertex.x;
+                float dy = static_cast<float>(center[1]) - vertex.y;
+                float dz = static_cast<float>(center[2]) - vertex.z;
+                const float length = std::sqrt(dx * dx + dy * dy + dz * dz);
+                if (length <= 1.0e-8f)
+                {
+                    ++rejected_view_angle_count;
+                    continue;
+                }
+                dx /= length; dy /= length; dz /= length;
+                const float view_cosine = std::fabs(vertex.nx * dx + vertex.ny * dy + vertex.nz * dz);
+                if (view_cosine < options.minimumViewCosine)
+                {
+                    ++rejected_view_angle_count;
+                    continue;
+                }
+                const cv::Vec3f color = bilinearColor(view.colorBgr, pixel[0], pixel[1])
+                    * gains[static_cast<std::size_t>(view_index)];
+                const float residual_score = 1.0f /
+                    std::pow(1.0f + depth_residual / std::max(depth_tolerance, 1.0e-8f), 2.0f);
+                ColorCandidate candidate;
+                candidate.blue = std::clamp(color[0], 0.0f, 255.0f);
+                candidate.green = std::clamp(color[1], 0.0f, 255.0f);
+                candidate.red = std::clamp(color[2], 0.0f, 255.0f);
+                candidate.weight = confidence * std::max(0.0f, view.qualityWeight)
+                    * std::pow(view_cosine, 4.0f) * residual_score;
+                candidates.push_back(candidate);
+                ++candidate_observation_count;
+            }
+
+            candidates = rejectColorOutliers(candidates, &rejected_color_outlier_count);
+            if (static_cast<int>(candidates.size()) < options.minimumConsistentViews)
+            {
+                if (has_best_fallback)
+                {
+                    vertex.r = static_cast<std::uint8_t>(std::clamp(
+                        std::lround(best_fallback.red), 0l, 255l));
+                    vertex.g = static_cast<std::uint8_t>(std::clamp(
+                        std::lround(best_fallback.green), 0l, 255l));
+                    vertex.b = static_cast<std::uint8_t>(std::clamp(
+                        std::lround(best_fallback.blue), 0l, 255l));
+                    colored[vertex_index] = 1;
+                    reliable_color_by_vertex[vertex_index] = {vertex.r, vertex.g, vertex.b};
+                    ++best_view_fallback_vertex_count;
+                }
+                continue;
+            }
+            std::sort(candidates.begin(), candidates.end(), [](const auto &left, const auto &right)
+            {
+                return left.weight > right.weight;
+            });
+            if (candidates.size() == 2)
+            {
+                const float dr = candidates[0].red - candidates[1].red;
+                const float dg = candidates[0].green - candidates[1].green;
+                const float db = candidates[0].blue - candidates[1].blue;
+                if (std::sqrt(dr * dr + dg * dg + db * db) > 50.0f)
+                {
+                    candidates.resize(1);
+                    ++rejected_color_outlier_count;
                 }
             }
-            if (depth_residual > depth_tolerance)
+            if (static_cast<int>(candidates.size()) > options.maximumBlendedViews)
             {
-                ++rejected_depth_count;
+                candidates.resize(static_cast<std::size_t>(options.maximumBlendedViews));
+            }
+            float red = 0.0f;
+            float green = 0.0f;
+            float blue = 0.0f;
+            float weight = 0.0f;
+            for (const ColorCandidate &candidate : candidates)
+            {
+                red += candidate.red * candidate.weight;
+                green += candidate.green * candidate.weight;
+                blue += candidate.blue * candidate.weight;
+                weight += candidate.weight;
+            }
+            if (weight <= 1.0e-8f)
+            {
                 continue;
             }
-            const float nearest_depth = visibility_depths[static_cast<std::size_t>(view_index)]
-                                            .at<float>(row, column);
-            if (std::isfinite(nearest_depth) &&
-                vertex_depth > nearest_depth + options.visibilityToleranceVoxels * voxel_size)
-            {
-                ++rejected_visibility_count;
-                continue;
-            }
-            const std::array<double, 3> center = view.camera.cameraCenter();
-            float dx = static_cast<float>(center[0]) - vertex.x;
-            float dy = static_cast<float>(center[1]) - vertex.y;
-            float dz = static_cast<float>(center[2]) - vertex.z;
-            const float length = std::sqrt(dx * dx + dy * dy + dz * dz);
-            if (length <= 1.0e-8f)
-            {
-                ++rejected_view_angle_count;
-                continue;
-            }
-            dx /= length; dy /= length; dz /= length;
-            const float view_cosine = std::fabs(vertex.nx * dx + vertex.ny * dy + vertex.nz * dz);
-            if (view_cosine < options.minimumViewCosine)
-            {
-                ++rejected_view_angle_count;
-                continue;
-            }
-            const cv::Vec3f color = bilinearColor(view.colorBgr, pixel[0], pixel[1])
-                * gains[static_cast<std::size_t>(view_index)];
-            const float residual_score = 1.0f /
-                std::pow(1.0f + depth_residual / std::max(depth_tolerance, 1.0e-8f), 2.0f);
-            ColorCandidate candidate;
-            candidate.blue = std::clamp(color[0], 0.0f, 255.0f);
-            candidate.green = std::clamp(color[1], 0.0f, 255.0f);
-            candidate.red = std::clamp(color[2], 0.0f, 255.0f);
-            candidate.weight = confidence * std::max(0.0f, view.qualityWeight)
-                * std::pow(view_cosine, 4.0f) * residual_score;
-            candidates.push_back(candidate);
-            ++candidate_observation_count;
+            vertex.r = static_cast<std::uint8_t>(std::clamp(std::lround(red / weight), 0l, 255l));
+            vertex.g = static_cast<std::uint8_t>(std::clamp(std::lround(green / weight), 0l, 255l));
+            vertex.b = static_cast<std::uint8_t>(std::clamp(std::lround(blue / weight), 0l, 255l));
+            colored[vertex_index] = 1;
+            reliable_color_by_vertex[vertex_index] = {vertex.r, vertex.g, vertex.b};
+            ++reliably_colored_vertex_count;
         }
-
-        candidates = rejectColorOutliers(candidates, &rejected_color_outlier_count);
-        if (static_cast<int>(candidates.size()) < options.minimumConsistentViews)
+        catch (...)
         {
-            if (has_best_fallback)
-            {
-                vertex.r = static_cast<std::uint8_t>(std::clamp(
-                    std::lround(best_fallback.red), 0l, 255l));
-                vertex.g = static_cast<std::uint8_t>(std::clamp(
-                    std::lround(best_fallback.green), 0l, 255l));
-                vertex.b = static_cast<std::uint8_t>(std::clamp(
-                    std::lround(best_fallback.blue), 0l, 255l));
-                colored[vertex_index] = 1;
-                reliable_color_by_vertex[vertex_index] = {vertex.r, vertex.g, vertex.b};
-                ++best_view_fallback_vertex_count;
-            }
-            continue;
+            int worker_index = 0;
+#ifdef MESHING_OPENMP
+            worker_index = omp_get_thread_num();
+#endif
+            colorization_errors[static_cast<std::size_t>(worker_index)] =
+                std::current_exception();
+            colorization_failed.store(true, std::memory_order_relaxed);
         }
-        std::sort(candidates.begin(), candidates.end(), [](const auto &left, const auto &right)
+    }
+    for (const std::exception_ptr &error : colorization_errors)
+    {
+        if (error)
         {
-            return left.weight > right.weight;
-        });
-        if (candidates.size() == 2)
-        {
-            const float dr = candidates[0].red - candidates[1].red;
-            const float dg = candidates[0].green - candidates[1].green;
-            const float db = candidates[0].blue - candidates[1].blue;
-            if (std::sqrt(dr * dr + dg * dg + db * db) > 50.0f)
-            {
-                candidates.resize(1);
-                ++rejected_color_outlier_count;
-            }
+            std::rethrow_exception(error);
         }
-        if (static_cast<int>(candidates.size()) > options.maximumBlendedViews)
-        {
-            candidates.resize(static_cast<std::size_t>(options.maximumBlendedViews));
-        }
-        float red = 0.0f;
-        float green = 0.0f;
-        float blue = 0.0f;
-        float weight = 0.0f;
-        for (const ColorCandidate &candidate : candidates)
-        {
-            red += candidate.red * candidate.weight;
-            green += candidate.green * candidate.weight;
-            blue += candidate.blue * candidate.weight;
-            weight += candidate.weight;
-        }
-        if (weight <= 1.0e-8f)
-        {
-            continue;
-        }
-        vertex.r = static_cast<std::uint8_t>(std::clamp(std::lround(red / weight), 0l, 255l));
-        vertex.g = static_cast<std::uint8_t>(std::clamp(std::lround(green / weight), 0l, 255l));
-        vertex.b = static_cast<std::uint8_t>(std::clamp(std::lround(blue / weight), 0l, 255l));
-        colored[vertex_index] = 1;
-        reliable_color_by_vertex[vertex_index] = {vertex.r, vertex.g, vertex.b};
-        ++reliably_colored_vertex_count;
     }
 
     statistics.candidateObservationCount = candidate_observation_count;

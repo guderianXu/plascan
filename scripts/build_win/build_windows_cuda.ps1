@@ -361,6 +361,27 @@ function Set-IsolatedBuildEnvironment
     $cmakeBin = Split-Path -Parent $CMakePath
     $ninjaDir = Resolve-NinjaDirectory $CMakePath
     $msvcCompilerPathEntries = Resolve-MsvcCompilerPathEntries $VcpkgPath
+    $systemRoot = if (-not [string]::IsNullOrWhiteSpace($env:SystemRoot))
+    {
+        $env:SystemRoot
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($env:WINDIR))
+    {
+        $env:WINDIR
+    }
+    else
+    {
+        throw "Windows system root is unavailable; cannot construct an isolated build PATH."
+    }
+    $system32Dir = Join-Path $systemRoot "System32"
+    $tensorRtRuntimeDir = if (-not [string]::IsNullOrWhiteSpace($env:TENSORRT_ROOT))
+    {
+        Join-Path $env:TENSORRT_ROOT "bin"
+    }
+    else
+    {
+        ""
+    }
 
     $env:VCPKG_ROOT = $VcpkgPath
     $env:VCPKG_DEFAULT_TRIPLET = "x64-windows"
@@ -408,17 +429,26 @@ function Set-IsolatedBuildEnvironment
     }
 
     $prepend = @(
+        $system32Dir,
+        $systemRoot,
         (Join-Path $tripletRoot "bin"),
         (Join-Path $tripletRoot "tools\Qt6\bin"),
         (Join-Path $CudaPath "bin"),
         (Join-Path $CudaPath "bin\x64"),
         (Join-Path $CudaPath "nvvm\bin"),
+        $tensorRtRuntimeDir,
         $cmakeBin,
         $ninjaDir
     )
 
     $env:PATH = (Get-UniqueExistingPathList ($prepend + $vsDevPathEntries + $filtered)) -join ';'
     $env:PATH = (Get-UniqueExistingPathList (@($msvcCompilerPathEntries) + @($env:PATH -split ';'))) -join ';'
+
+    $chcpProbe = & (Join-Path $system32Dir "cmd.exe") /d /c "where chcp"
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($chcpProbe -join "")))
+    {
+        throw "The isolated build PATH cannot resolve chcp.com: $env:PATH"
+    }
 }
 
 function Sync-QtRuntime
@@ -751,10 +781,10 @@ function Sync-CudnnRuntime
         return
     }
 
-    $cudnnBinRoots = @(
+    $cudnnBinRoots = @(@(
         (Join-Path $CudnnPath "bin"),
         (Join-Path $CudnnPath "bin\x64")
-    ) | Where-Object { Test-Path -LiteralPath $_ }
+    ) | Where-Object { Test-Path -LiteralPath $_ })
     if ($cudnnBinRoots.Count -eq 0)
     {
         throw "cuDNN runtime directory not found. Expected bin or bin\x64 under: $CudnnPath"
@@ -1392,11 +1422,11 @@ if ($EnableOpenCvDnnCuda)
     $env:CUDNN_PATH = $resolvedCudnnRoot
     $env:CUDNN_INCLUDE_DIR = $resolvedCudnnInclude
     $env:CUDNN_LIBRARY = $resolvedCudnnLibrary
-    $env:PATH = (Get-UniqueExistingPathList @(
+    $cudnnPathEntries = @(
         (Join-Path $resolvedCudnnRoot "bin"),
-        (Join-Path $resolvedCudnnRoot "lib\x64"),
-        ($env:PATH -split ';')
-    )) -join ';'
+        (Join-Path $resolvedCudnnRoot "lib\x64")
+    )
+    $env:PATH = (Get-UniqueExistingPathList ($cudnnPathEntries + @($env:PATH -split ';'))) -join ';'
 }
 if ($EnableCeresCudaBa)
 {

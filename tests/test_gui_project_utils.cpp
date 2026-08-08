@@ -68,6 +68,7 @@
 
 #include "Camera.h"
 #include "DemDomIO.h"
+#include "io/ImageIO.h"
 #include "io/PathIO.h"
 
 #include <plapoint/io/obj_io.h>
@@ -77,6 +78,7 @@
 #include <QColor>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDialogButtonBox>
 #include <QDockWidget>
 #include <QDir>
@@ -132,9 +134,11 @@
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
 
+#include <atomic>
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <future>
 #include <stdexcept>
 #include <vector>
 
@@ -2368,6 +2372,44 @@ TEST(GuiTaskRunnerTest, DeliversBackgroundExceptionToGuiCallback)
     EXPECT_EQ(callbackThread, owner.thread());
 }
 
+TEST(GuiTaskRunnerTest, DestroyedOwnerSuppressesFinishedCallback)
+{
+    std::atomic_bool started{false};
+    std::atomic_bool releaseWorker{false};
+    bool callbackInvoked = false;
+    auto *owner = new QObject;
+
+    QFuture<void> future = xjw::gui::tasks::runGuardedWithOutcome(
+        owner,
+        [&started, &releaseWorker]()
+        {
+            started.store(true, std::memory_order_release);
+            while (!releaseWorker.load(std::memory_order_acquire))
+            {
+                QThread::yieldCurrentThread();
+            }
+            return 42;
+        },
+        [&callbackInvoked](QObject *, xjw::gui::tasks::TaskOutcome<int>)
+        {
+            callbackInvoked = true;
+        });
+
+    QElapsedTimer startTimer;
+    startTimer.start();
+    while (!started.load(std::memory_order_acquire) && startTimer.elapsed() < 3000)
+    {
+        QThread::msleep(1);
+    }
+    EXPECT_TRUE(started.load(std::memory_order_acquire));
+    delete owner;
+    releaseWorker.store(true, std::memory_order_release);
+    future.waitForFinished();
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+
+    EXPECT_FALSE(callbackInvoked);
+}
+
 TEST(GuiAsyncLifetimeTest, BundleAdjustUsesGuardedTaskRunner)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
@@ -2417,61 +2459,29 @@ TEST(GuiAsyncLifetimeTest, DepthMapGeneratorOwnsAndJoinsBackgroundFuture)
         << "start() should avoid launching overlapping background workers on the same generator.";
 }
 
-TEST(GuiAsyncLifetimeTest, CameraSceneAsyncLoadCallbacksUseQPointerGuards)
+TEST(GuiAsyncLifetimeTest, CameraSceneLoadsUseGuardedSingleFlightCallbacks)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
     ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(header.isEmpty());
 
-    const auto blockBetween = [&source](const QString &begin, const QString &finish) {
-        const int start = source.indexOf(begin);
-        EXPECT_GE(start, 0);
-        const int end = source.indexOf(finish, start);
-        EXPECT_GT(end, start);
-        return source.mid(start, end - start);
-    };
+    const int start = source.indexOf(QStringLiteral("void CameraSceneWidget::pumpSceneLoad"));
+    const int end = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::loadTiePointCloudFromFile"), start);
+    ASSERT_GE(start, 0);
+    ASSERT_GT(end, start);
+    const QString block = source.mid(start, end - start);
 
-    const QString xyzBlock = blockBetween(
-        QStringLiteral("void CameraSceneWidget::loadPointCloudFromXyz"),
-        QStringLiteral("void CameraSceneWidget::loadModelFromPly"));
-    const QString plyBlock = blockBetween(
-        QStringLiteral("void CameraSceneWidget::loadModelFromPly"),
-        QStringLiteral("void CameraSceneWidget::loadModelFromObj"));
-    const QString objBlock = blockBetween(
-        QStringLiteral("void CameraSceneWidget::loadModelFromObj"),
-        QStringLiteral("QVector3D CameraSceneWidget::sceneCenter"));
-
-    for (const QString &block : {xyzBlock, plyBlock})
-    {
-        EXPECT_TRUE(block.contains(QStringLiteral("QPointer<CameraSceneWidget> self(this)")));
-        EXPECT_TRUE(block.contains(
-            QStringLiteral("connect(watcher, &QFutureWatcher<PointCloudLoadResult>::finished,\n"
-                           "            watcher,")))
-            << "Async 3D load finished callbacks should be tied to the watcher lifetime.";
-        EXPECT_TRUE(block.contains(QStringLiteral("[self, watcher, gen")))
-            << "Finished callbacks from async 3D loading must not capture raw this.";
-        EXPECT_TRUE(block.contains(QStringLiteral("if (!self)")));
-        EXPECT_FALSE(block.contains(
-            QStringLiteral("connect(watcher, &QFutureWatcher<PointCloudLoadResult>::finished,\n"
-                           "            this,")));
-        EXPECT_FALSE(block.contains(QStringLiteral("[this, watcher, gen]()")));
-    }
-    EXPECT_TRUE(objBlock.contains(QStringLiteral("QPointer<CameraSceneWidget> self(this)")));
-    EXPECT_TRUE(objBlock.contains(
-        QStringLiteral("connect(watcher, &QFutureWatcher<ObjLoadResult>::finished,\n"
-                       "            watcher,")))
-        << "OBJ geometry and texture completion must remain tied to the watcher lifetime.";
-    EXPECT_TRUE(objBlock.contains(QStringLiteral("[self, watcher, gen")));
-    EXPECT_TRUE(objBlock.contains(QStringLiteral("if (!self)")));
-    EXPECT_FALSE(objBlock.contains(
-        QStringLiteral("connect(watcher, &QFutureWatcher<ObjLoadResult>::finished,\n"
-                       "            this,")));
-    EXPECT_FALSE(objBlock.contains(QStringLiteral("[this, watcher, gen]()")));
-    EXPECT_TRUE(plyBlock.contains(QStringLiteral("QMetaObject::invokeMethod(self.data(), [self, gen, percent, statusText]()")))
-        << "PLY load progress emitted from a worker thread must be queued back through the guarded widget.";
-    EXPECT_TRUE(objBlock.contains(QStringLiteral("QMetaObject::invokeMethod(self.data(), [self, gen, percent, statusText]()")))
-        << "OBJ and MTL loading must keep parsing and image IO off the GUI thread.";
-    EXPECT_FALSE(plyBlock.contains(QStringLiteral("if (self)\n            {\n                emit self->plyLoadProgressChanged(gen, percent, statusText);")))
-        << "The PLY worker must not directly emit signals through a GUI object from the worker thread.";
+    EXPECT_TRUE(header.contains(QStringLiteral("std::optional<SceneLoadRequest> _pendingSceneLoad")));
+    EXPECT_TRUE(header.contains(QStringLiteral("_sceneLoadCancellation")));
+    EXPECT_TRUE(block.contains(QStringLiteral("runGuardedWithOutcome(")));
+    EXPECT_TRUE(block.contains(QStringLiteral("_sceneLoadWorkerActive = true")));
+    EXPECT_TRUE(block.contains(QStringLiteral("_sceneLoadWorkerActive = false")));
+    EXPECT_TRUE(block.contains(QStringLiteral("cancellation->load")));
+    EXPECT_TRUE(block.contains(QStringLiteral("self->pumpSceneLoad()")));
+    EXPECT_FALSE(block.contains(QStringLiteral("QMetaObject::invokeMethod(self.data()")));
+    EXPECT_FALSE(source.contains(QStringLiteral("QFutureWatcher<PointCloudLoadResult>")));
 }
 
 TEST(GuiAsyncLifetimeTest, ImageViewAsyncLoadCallbackUsesQPointerGuard)
@@ -7766,12 +7776,16 @@ TEST(CameraSceneWidgetTest, PointCloudRenderingStaysOnVulkan)
     EXPECT_FALSE(overlayBody.contains(QStringLiteral("drawPointCloudOverlay(painter)")));
     EXPECT_TRUE(source.contains(QStringLiteral(":/shaders/camera_scene_point.vert.qsb")));
     EXPECT_TRUE(source.contains(QStringLiteral(":/shaders/camera_scene_point.frag.qsb")));
-    EXPECT_TRUE(source.contains(QStringLiteral("data.reserve(static_cast<int>(_cloud.size()) * 9)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_preparedPointVertexData")));
+    EXPECT_TRUE(source.contains(QStringLiteral("use_prepared_point_buffer")));
     EXPECT_TRUE(source.contains(QStringLiteral("_cloud.hasFaces() ? 4 : 1")));
+    EXPECT_TRUE(source.contains(QStringLiteral("9 * sizeof(float),")));
     EXPECT_TRUE(source.contains(QStringLiteral(
-        "QRhiVertexInputBinding(9 * sizeof(float), QRhiVertexInputBinding::PerInstance)")));
+        "sizeof(float),\n            QRhiVertexInputBinding::PerInstance")));
     EXPECT_TRUE(source.contains(QStringLiteral(
-        "cb->draw(6, quint32(_pointBuffer.vertexCount))")));
+        "cb->draw(6, quint32(point_buffer.vertexCount))")));
+    EXPECT_TRUE(header.contains(QStringLiteral(
+        "RhiBufferSet _manualHighlightPointBuffer")));
     EXPECT_TRUE(header.contains(QStringLiteral(
         "struct alignas(16) SceneUniforms")));
     EXPECT_TRUE(header.contains(QStringLiteral(
@@ -7779,7 +7793,7 @@ TEST(CameraSceneWidgetTest, PointCloudRenderingStaysOnVulkan)
     EXPECT_TRUE(header.contains(QStringLiteral(
         "static_assert(offsetof(SceneUniforms, lightDirPointSize) == 48 * sizeof(float));")));
     EXPECT_TRUE(header.contains(QStringLiteral(
-        "static_assert(sizeof(SceneUniforms) == 56 * sizeof(float));")));
+        "static_assert(sizeof(SceneUniforms) == 64 * sizeof(float));")));
     EXPECT_TRUE(source.contains(QStringLiteral(
         "std::copy_n(mvp.constData(), 16, uniforms.mvp.begin())")));
     const qsizetype scene_uniform_start = header.indexOf(QStringLiteral("struct alignas(16) SceneUniforms"));
@@ -7797,7 +7811,7 @@ TEST(CameraSceneWidgetTest, PointCloudRenderingStaysOnVulkan)
         "renderTarget() ? renderTarget()->pixelSize()")));
     EXPECT_TRUE(pointVertexShader.contains(QStringLiteral("layout(location = 1) in vec3 aNormal")));
     EXPECT_TRUE(pointVertexShader.contains(QStringLiteral(
-        "corner * ubuf.uLightDirPointSize.w / viewportSize * clipPosition.w")));
+        "corner * ubuf.uLightDirPointSize.w * selectionScale")));
     EXPECT_TRUE(pointFragmentShader.contains(QStringLiteral(
         "dot(vPointOffset, vPointOffset) > 1.0")));
     EXPECT_FALSE(pointFragmentShader.contains(QStringLiteral("gl_PointCoord")));
@@ -7840,7 +7854,7 @@ TEST(CameraSceneWidgetTest, CameraOverlayUsesMetashapeStyleImagePlanes)
     EXPECT_TRUE(header.contains(QStringLiteral(
         "float cameraImagePlaneHalfExtent(const CameraPose &pose,")));
     EXPECT_TRUE(header.contains(QStringLiteral("void drawFloorPivotCross(QPainter &painter)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("pose, cameraMatrices.modelView")));
+    EXPECT_TRUE(source.contains(QStringLiteral("pose, camera_model_view")));
     EXPECT_TRUE(source.contains(QStringLiteral("cameraDirectionLeaderSegment(")));
     EXPECT_TRUE(source.contains(QStringLiteral("_thumbnailPipeline.leaderPipeline")));
     EXPECT_TRUE(source.contains(QStringLiteral("QRhiVertexInputBinding::PerInstance")));
@@ -9347,7 +9361,7 @@ TEST(AerialTriangulationWorkflowTest, PreflightScansMatchCatalogOnceAndReportsFi
         << "Upstream inspection must not parse the same match directory twice.";
     EXPECT_TRUE(summaryBody.contains(QStringLiteral("catalogConfig.progressCallback = progressCallback")));
     EXPECT_TRUE(source.contains(QStringLiteral("检查上游匹配索引 %1/%2")));
-    EXPECT_TRUE(source.contains(QStringLiteral("QMetaObject::invokeMethod(pmGuard.data()")))
+    EXPECT_TRUE(source.contains(QStringLiteral("xjw::gui::tasks::postGuarded(pmGuard")))
         << "Worker progress must be delivered to ProjectManager on its owning thread.";
 }
 
@@ -9798,6 +9812,185 @@ TEST(CanvasWidgetResponsivenessTest, ImageLoaderDecodesDirectlyToRequestedThumbn
     EXPECT_LE(thumbnail.height(), 160);
     EXPECT_NEAR(
         static_cast<double>(thumbnail.width()) / thumbnail.height(), 1.5, 0.02);
+}
+
+TEST(CanvasWidgetResponsivenessTest, ConcurrentGeoTiffCacheCreationIsSerializedAndAtomic)
+{
+    QTemporaryDir temporary_directory;
+    ASSERT_TRUE(temporary_directory.isValid());
+    const QString image_path = QDir(temporary_directory.path()).filePath(
+        QStringLiteral("concurrent_dem.tif"));
+
+    cv::Mat source_image(256, 384, CV_16UC1);
+    for (int y = 0; y < source_image.rows; ++y)
+    {
+        auto *row = source_image.ptr<unsigned short>(y);
+        for (int x = 0; x < source_image.cols; ++x)
+        {
+            row[x] = static_cast<unsigned short>(1 + ((x * 257 + y * 131) % 65534));
+        }
+    }
+    ASSERT_TRUE(xjw::common::io::writeImage(image_path, source_image));
+
+    constexpr int concurrent_load_count = 12;
+    std::vector<std::future<QImage>> loads;
+    loads.reserve(concurrent_load_count);
+    for (int index = 0; index < concurrent_load_count; ++index)
+    {
+        const QString requested_path = index % 2 == 0
+            ? image_path
+            : QDir(temporary_directory.path()).filePath(
+                  QStringLiteral("./concurrent_dem.tif"));
+        loads.push_back(std::async(
+            std::launch::async,
+            [requested_path]()
+            {
+                return xjw::gui::views::loadImageForDisplay(
+                    requested_path, QString(), QSize(), nullptr);
+            }));
+    }
+
+    for (auto &load : loads)
+    {
+        const QImage image = load.get();
+        ASSERT_FALSE(image.isNull());
+        EXPECT_EQ(image.size(), QSize(source_image.cols, source_image.rows));
+    }
+
+    const QString cache_path = QDir(temporary_directory.path()).filePath(
+        QStringLiteral("concurrent_dem_8.tif"));
+    const cv::Mat cached_image = xjw::common::io::readImage(
+        cache_path, cv::IMREAD_UNCHANGED);
+    ASSERT_FALSE(cached_image.empty());
+    EXPECT_EQ(cached_image.depth(), CV_8U);
+    EXPECT_EQ(cached_image.size(), source_image.size());
+    EXPECT_TRUE(QDir(temporary_directory.path())
+                    .entryList(QStringList{QStringLiteral("*.tmp*")},
+                               QDir::Files | QDir::Hidden)
+                    .isEmpty());
+}
+
+TEST(CanvasWidgetResponsivenessTest, CorruptFreshGeoTiffCacheIsRebuilt)
+{
+    QTemporaryDir temporary_directory;
+    ASSERT_TRUE(temporary_directory.isValid());
+    const QString image_path = QDir(temporary_directory.path()).filePath(
+        QStringLiteral("corrupt_cache_dem.tif"));
+    const QString cache_path = QDir(temporary_directory.path()).filePath(
+        QStringLiteral("corrupt_cache_dem_8.tif"));
+    cv::Mat source_image(48, 64, CV_16UC1);
+    for (int row = 0; row < source_image.rows; ++row)
+    {
+        for (int column = 0; column < source_image.cols; ++column)
+        {
+            source_image.at<unsigned short>(row, column) =
+                static_cast<unsigned short>(1 + row * source_image.cols + column);
+        }
+    }
+    ASSERT_TRUE(xjw::common::io::writeImage(image_path, source_image));
+    ASSERT_FALSE(xjw::gui::views::loadImageForDisplay(
+        image_path, QString(), QSize(), nullptr).isNull());
+    ASSERT_TRUE(QFileInfo(cache_path).isFile());
+
+    QFile corrupt_cache(cache_path);
+    ASSERT_TRUE(corrupt_cache.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    ASSERT_GT(corrupt_cache.write("not a tiff cache"), 0);
+    corrupt_cache.close();
+    const QDateTime source_modified = QFileInfo(image_path).lastModified();
+    ASSERT_TRUE(source_modified.isValid());
+    ASSERT_TRUE(corrupt_cache.open(QIODevice::ReadWrite));
+    ASSERT_TRUE(corrupt_cache.setFileTime(
+        source_modified.addSecs(10),
+        QFileDevice::FileModificationTime));
+    corrupt_cache.close();
+    EXPECT_GE(QFileInfo(cache_path).lastModified(), source_modified);
+
+    const QImage loaded = xjw::gui::views::loadImageForDisplay(
+        image_path, QString(), QSize(), nullptr);
+
+    ASSERT_FALSE(loaded.isNull());
+    EXPECT_EQ(loaded.size(), QSize(source_image.cols, source_image.rows));
+    const cv::Mat rebuilt_cache = xjw::common::io::readImage(
+        cache_path, cv::IMREAD_UNCHANGED);
+    ASSERT_FALSE(rebuilt_cache.empty());
+    EXPECT_EQ(rebuilt_cache.depth(), CV_8U);
+}
+
+TEST(CanvasWidgetResponsivenessTest, StaleGeoTiffCacheIsAtomicallyReplaced)
+{
+    QTemporaryDir temporary_directory;
+    ASSERT_TRUE(temporary_directory.isValid());
+    const QString image_path = QDir(temporary_directory.path()).filePath(
+        QStringLiteral("stale_cache_dem.tif"));
+    const QString cache_path = QDir(temporary_directory.path()).filePath(
+        QStringLiteral("stale_cache_dem_8.tif"));
+    cv::Mat source_image(40, 52, CV_16UC1);
+    for (int row = 0; row < source_image.rows; ++row)
+    {
+        for (int column = 0; column < source_image.cols; ++column)
+        {
+            source_image.at<unsigned short>(row, column) =
+                static_cast<unsigned short>(1 + row * source_image.cols + column);
+        }
+    }
+    ASSERT_TRUE(xjw::common::io::writeImage(image_path, source_image));
+    cv::Mat stale_cache(source_image.size(), CV_8UC1, cv::Scalar(17));
+    ASSERT_TRUE(xjw::common::io::writeImage(cache_path, stale_cache));
+    const QDateTime source_modified = QFileInfo(image_path).lastModified();
+    ASSERT_TRUE(source_modified.isValid());
+    QFile cache_file(cache_path);
+    ASSERT_TRUE(cache_file.open(QIODevice::ReadWrite));
+    ASSERT_TRUE(cache_file.setFileTime(
+        source_modified.addSecs(-10),
+        QFileDevice::FileModificationTime));
+    cache_file.close();
+    EXPECT_LT(QFileInfo(cache_path).lastModified(), source_modified);
+
+    const QImage loaded = xjw::gui::views::loadImageForDisplay(
+        image_path, QString(), QSize(), nullptr);
+
+    ASSERT_FALSE(loaded.isNull());
+    const cv::Mat rebuilt_cache = xjw::common::io::readImage(
+        cache_path, cv::IMREAD_UNCHANGED);
+    ASSERT_FALSE(rebuilt_cache.empty());
+    EXPECT_EQ(rebuilt_cache.depth(), CV_8U);
+    EXPECT_GT(cv::countNonZero(rebuilt_cache != 17), 0);
+    EXPECT_TRUE(QDir(temporary_directory.path())
+                    .entryList(QStringList{QStringLiteral("*.tmp*")},
+                               QDir::Files | QDir::Hidden)
+                    .isEmpty());
+}
+
+TEST(CanvasWidgetResponsivenessTest, GeoTiffCacheCommitFailureKeepsDirectImage)
+{
+    QTemporaryDir temporary_directory;
+    ASSERT_TRUE(temporary_directory.isValid());
+    const QString image_path = QDir(temporary_directory.path()).filePath(
+        QStringLiteral("blocked_cache_dem.tif"));
+    const QString cache_path = QDir(temporary_directory.path()).filePath(
+        QStringLiteral("blocked_cache_dem_8.tif"));
+    cv::Mat source_image(36, 44, CV_16UC1);
+    for (int row = 0; row < source_image.rows; ++row)
+    {
+        for (int column = 0; column < source_image.cols; ++column)
+        {
+            source_image.at<unsigned short>(row, column) =
+                static_cast<unsigned short>(1 + row * source_image.cols + column);
+        }
+    }
+    ASSERT_TRUE(xjw::common::io::writeImage(image_path, source_image));
+    ASSERT_TRUE(QDir().mkpath(cache_path));
+
+    const QImage loaded = xjw::gui::views::loadImageForDisplay(
+        image_path, QString(), QSize(), nullptr);
+
+    ASSERT_FALSE(loaded.isNull());
+    EXPECT_EQ(loaded.size(), QSize(source_image.cols, source_image.rows));
+    EXPECT_TRUE(QFileInfo(cache_path).isDir());
+    EXPECT_TRUE(QDir(temporary_directory.path())
+                    .entryList(QStringList{QStringLiteral("*.tmp*")},
+                               QDir::Files | QDir::Hidden)
+                    .isEmpty());
 }
 
 TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesOverlayDrawingToDedicatedItems)
@@ -12948,9 +13141,15 @@ TEST(CameraModel3DDialogTest, ObjReaderPreservesPerFaceTextureSeams)
     const ObjRenderPreparation prepared = prepareObjRenderData(*cloud, true);
     ASSERT_TRUE(prepared.isValid());
     EXPECT_TRUE(prepared.hasTexture);
-    EXPECT_EQ(prepared.vertexCount, 6);
-    EXPECT_EQ(prepared.strideBytes, 11 * static_cast<int>(sizeof(float)));
-    const float *renderVertices = reinterpret_cast<const float *>(prepared.vertexData.constData());
+    EXPECT_FALSE(prepared.hasVertexColors);
+    EXPECT_EQ(prepared.vertexCount, 4);
+    EXPECT_EQ(prepared.strideBytes, 9 * static_cast<int>(sizeof(float)));
+    EXPECT_EQ(prepared.triangleIndexCount, 6);
+    EXPECT_EQ(prepared.wireframeIndexCount, 10);
+    EXPECT_EQ(prepared.texturedVertexCount, 6);
+    EXPECT_EQ(prepared.texturedStrideBytes, 11 * static_cast<int>(sizeof(float)));
+    const float *renderVertices = reinterpret_cast<const float *>(
+        prepared.texturedVertexData.constData());
     EXPECT_FLOAT_EQ(renderVertices[6], -1.0f);
     EXPECT_FLOAT_EQ(renderVertices[7], -1.0f);
     EXPECT_FLOAT_EQ(renderVertices[8], -1.0f);
@@ -12958,6 +13157,50 @@ TEST(CameraModel3DDialogTest, ObjReaderPreservesPerFaceTextureSeams)
     EXPECT_FLOAT_EQ(renderVertices[10], 0.0f);
     EXPECT_FLOAT_EQ(renderVertices[3 * 11 + 9], 0.25f);
     EXPECT_FLOAT_EQ(renderVertices[3 * 11 + 10], 0.25f);
+}
+
+TEST(CameraModel3DDialogTest, StaticMeshPreparationPreservesSourceVertexColors)
+{
+    ObjRenderCloud cloud(3);
+    cloud.points()(0, 0) = 0.0f;
+    cloud.points()(0, 1) = 0.0f;
+    cloud.points()(0, 2) = 1.0f;
+    cloud.points()(1, 0) = 1.0f;
+    cloud.points()(1, 1) = 0.0f;
+    cloud.points()(1, 2) = 2.0f;
+    cloud.points()(2, 0) = 0.0f;
+    cloud.points()(2, 1) = 1.0f;
+    cloud.points()(2, 2) = 3.0f;
+    plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(3, 3);
+    colors(0, 0) = 255;
+    colors(0, 1) = 64;
+    colors(0, 2) = 32;
+    colors(1, 0) = 12;
+    colors(1, 1) = 200;
+    colors(1, 2) = 48;
+    colors(2, 0) = 20;
+    colors(2, 1) = 40;
+    colors(2, 2) = 240;
+    cloud.setColors(std::move(colors));
+    plamatrix::DenseMatrix<int, plamatrix::Device::CPU> faces(1, 3);
+    faces(0, 0) = 0;
+    faces(0, 1) = 1;
+    faces(0, 2) = 2;
+    cloud.setFaces(std::move(faces));
+
+    const ObjRenderPreparation prepared = prepareObjRenderData(cloud, false);
+
+    ASSERT_TRUE(prepared.isValid());
+    ASSERT_TRUE(prepared.hasVertexColors);
+    const float *vertices = reinterpret_cast<const float *>(prepared.vertexData.constData());
+    EXPECT_FLOAT_EQ(vertices[6], 1.0f);
+    EXPECT_NEAR(vertices[7], 64.0f / 255.0f, 1.0e-6f);
+    EXPECT_NEAR(vertices[8], 32.0f / 255.0f, 1.0e-6f);
+    EXPECT_DOUBLE_EQ(prepared.elevationRange.minimum, 1.0);
+    EXPECT_DOUBLE_EQ(prepared.elevationRange.maximum, 3.0);
+
+    std::atomic_bool cancelled{true};
+    EXPECT_FALSE(prepareObjRenderData(cloud, false, &cancelled).isValid());
 }
 
 TEST(CameraModel3DDialogTest, ObjReaderBenchmarkUsesConfiguredModel)
@@ -12991,7 +13234,7 @@ TEST(CameraModel3DDialogTest, ObjReaderBenchmarkUsesConfiguredModel)
               << " faces\n";
 }
 
-TEST(CameraModel3DDialogTest, ObjLoadingShowsProgressOverlay)
+TEST(CameraModel3DDialogTest, ObjLoadingShowsSingleFlightProgressOverlay)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     ASSERT_FALSE(source.isEmpty());
@@ -13002,33 +13245,33 @@ TEST(CameraModel3DDialogTest, ObjLoadingShowsProgressOverlay)
     ASSERT_GT(nextFunction, objStart);
     const QString objBlock = source.mid(objStart, nextFunction - objStart);
 
-    EXPECT_TRUE(objBlock.contains(QStringLiteral("正在加载 OBJ 模型")));
-    EXPECT_TRUE(objBlock.contains(QStringLiteral("正在解析 OBJ 模型")));
+    EXPECT_TRUE(objBlock.contains(QStringLiteral("正在加载 %1 模型")));
+    EXPECT_TRUE(objBlock.contains(QStringLiteral("SceneLoadFormat::Obj")));
     EXPECT_TRUE(objBlock.contains(QStringLiteral("loadObjWithMaterialTexture")));
-    EXPECT_TRUE(objBlock.contains(QStringLiteral("正在上传 OBJ %1")));
-    EXPECT_TRUE(objBlock.contains(QStringLiteral("pointCloudResource ? QStringLiteral(\"点云\")")));
-    EXPECT_TRUE(objBlock.contains(QStringLiteral("emit plyLoadProgressChanged(gen, 0")));
-    const QString queuedProgress =
-        QStringLiteral("QMetaObject::invokeMethod(self.data(), [self, gen, percent, statusText]()");
-    EXPECT_TRUE(objBlock.contains(queuedProgress));
-    EXPECT_TRUE(objBlock.contains(QStringLiteral("OBJ %1加载失败或为空")));
+    EXPECT_TRUE(objBlock.contains(QStringLiteral("emit plyLoadProgressChanged(_loadGen, 0")));
+    EXPECT_TRUE(objBlock.contains(QStringLiteral("_sceneLoadWorkerActive")));
+    EXPECT_TRUE(objBlock.contains(QStringLiteral("三维数据加载失败或文件为空")));
+    EXPECT_FALSE(objBlock.contains(QStringLiteral("QMetaObject::invokeMethod(self.data()")));
 }
 
 TEST(CameraModel3DDialogTest, ObjMaterialTextureUsesFaceUvRhiPipeline)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
+    const QString preparationSource = readProjectSourceFile(
+        QStringLiteral("src/gui/views/ObjRenderPreparation.cpp"));
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
     const QString vertexShader = readProjectSourceFile(
         QStringLiteral("src/gui/shaders/camera_scene_textured_mesh.vert"));
     const QString fragmentShader = readProjectSourceFile(
         QStringLiteral("src/gui/shaders/camera_scene_textured_mesh.frag"));
     ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(preparationSource.isEmpty());
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(vertexShader.isEmpty());
     ASSERT_FALSE(fragmentShader.isEmpty());
 
-    EXPECT_TRUE(source.contains(QStringLiteral("hasFaceTextureIndices")));
-    EXPECT_TRUE(source.contains(QStringLiteral("faceTextureIndices()->getValue")));
+    EXPECT_TRUE(preparationSource.contains(QStringLiteral("hasFaceTextureIndices")));
+    EXPECT_TRUE(preparationSource.contains(QStringLiteral("faceTextureIndices()->getValue")));
     EXPECT_TRUE(source.contains(QStringLiteral("ensureTexturedMeshPipeline")));
     EXPECT_TRUE(source.contains(QStringLiteral("drawTexturedMesh")));
     EXPECT_TRUE(source.contains(QStringLiteral(
@@ -13088,9 +13331,9 @@ TEST(CameraModel3DDialogTest, LargeBinaryPlyLoadsEveryPointWithoutPreviewSamplin
     ASSERT_FALSE(header.isEmpty());
 
     const qsizetype loaderStart = source.indexOf(QStringLiteral(
-        "void CameraSceneWidget::loadPointCloudFromPly"));
+        "void CameraSceneWidget::pumpSceneLoad()"));
     const qsizetype nextLoaderStart = source.indexOf(QStringLiteral(
-        "void CameraSceneWidget::loadModelFromObj"), loaderStart);
+        "void CameraSceneWidget::loadTiePointCloudFromFile"), loaderStart);
     ASSERT_GE(loaderStart, 0);
     ASSERT_GT(nextLoaderStart, loaderStart);
     const QString loaderBlock = source.mid(loaderStart, nextLoaderStart - loaderStart);

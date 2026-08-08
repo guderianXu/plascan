@@ -140,6 +140,15 @@ struct DepthFrameResult
     }
 };
 
+namespace detail
+{
+/// Run one background task and invoke the failure handler exactly once when
+/// the task throws. The handler receives a user-facing diagnostic.
+void runDepthMapBackgroundTaskWithExceptionBoundary(
+    const std::function<void()> &task,
+    const std::function<void(const QString &)> &failureHandler);
+}
+
 class DepthMapGenerator : public QObject
 {
     Q_OBJECT
@@ -314,6 +323,9 @@ private:
 
     /// 在 QtConcurrent 线程中运行的主函数
     void runInBackground();
+    void runInBackgroundImpl();
+    void clearRuntimeCachesAfterFailure();
+    void emitFinishedOnce(bool success);
 
     /// 计算单帧深度图
     DepthFrameResult computeDepthForView(int refIdx, const DepthGenConfig *configOverride = nullptr);
@@ -392,6 +404,7 @@ private:
     DepthFilterMode _effectiveDepthFilterMode = DepthFilterMode::Mild;
     int _configuredSourceViewCount = 0;
     std::atomic<bool> _cancelled{false};
+    std::atomic<bool> _finishedEmitted{false};
     QFuture<void> _backgroundFuture;
     std::string _outputDir;
     std::string _consistencyDepthDirectory;

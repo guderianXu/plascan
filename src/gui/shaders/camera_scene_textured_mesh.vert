@@ -11,6 +11,9 @@ layout(std140, binding = 0) uniform SceneUniforms
     mat4 uModelView;
     mat4 uNormalMat;
     vec4 uLightDirPointSize;
+    vec4 uViewportSize;
+    vec4 uRenderModeFlags;
+    vec4 uScalarRange;
 } ubuf;
 
 layout(location = 0) out vec3 vNormal;

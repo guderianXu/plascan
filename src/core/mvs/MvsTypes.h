@@ -45,6 +45,22 @@ enum class PatchMatchBackend
     OpenCl
 };
 
+inline const char *patchMatchBackendId(PatchMatchBackend backend) noexcept
+{
+    switch (backend)
+    {
+    case PatchMatchBackend::Auto:
+        return "auto";
+    case PatchMatchBackend::Cpu:
+        return "cpu";
+    case PatchMatchBackend::Cuda:
+        return "cuda";
+    case PatchMatchBackend::OpenCl:
+        return "opencl";
+    }
+    return "unknown";
+}
+
 struct PatchMatchConfig
 {
     int   numIterations      = 16;      ///< PatchMatch 迭代次数（16轮保证宽深度范围下充分收敛）
@@ -57,7 +73,7 @@ struct PatchMatchConfig
     float photometricUniquenessRelativeDepthStep = 0.01f; ///< 竞争深度相对偏移（正负各一次）
     float photometricUniquenessMinimumMargin = 0.03f; ///< 最优 NCC 与竞争深度 NCC 的最小可信间隔
     float photometricUniquenessMinimumConfidenceScale = 0.50f; ///< 完全歧义时保留的置信度比例
-    bool  useCuda            = true;    ///< 旧版独立估计器兼容字段；生产 Auto 调度不再用它禁用 OpenCL/CUDA
+    bool  useCuda            = true;    ///< 旧版兼容字段；Auto 下 false 强制 CPU，显式 backend 优先
     PatchMatchBackend backend = PatchMatchBackend::Auto;
     int   downsampleFactor   = 2;       ///< 降采样因子（2=半分辨率，速度提升约4倍）
     bool  doMedianBlur       = true;

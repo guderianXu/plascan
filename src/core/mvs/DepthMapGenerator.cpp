@@ -46,6 +46,7 @@
 #include <chrono>
 #include <sstream>
 #include <functional>
+#include <exception>
 #include <memory>
 #include <limits>
 #include <fstream>
@@ -3136,6 +3137,7 @@ void DepthMapGenerator::start()
     }
 
     _cancelled = false;
+    _finishedEmitted = false;
     _depthFrames.clear();
     _backgroundFuture = QtConcurrent::run([this]()
     {
@@ -8616,7 +8618,65 @@ void DepthMapGenerator::runDepthPoseRefinementCandidateStage(
 }
 
 // =============================================================================
+void DepthMapGenerator::emitFinishedOnce(bool success)
+{
+    bool expected = false;
+    if (_finishedEmitted.compare_exchange_strong(expected, true))
+    {
+        emit finished(success);
+    }
+}
+
+void DepthMapGenerator::clearRuntimeCachesAfterFailure()
+{
+    _grayCache.clear();
+    _mvsPreparedGrayCache.clear();
+    _mvsPreparedCameras.clear();
+    _validRegionMasks.clear();
+    _projectMaskLoaded.clear();
+    clearFrameCaches();
+    releaseStoredDepthFramePixelStorage(_depthFrames);
+
+    std::lock_guard<std::mutex> lock(_filteredDepthsMutex);
+    _filteredDepths.clear();
+}
+
+void detail::runDepthMapBackgroundTaskWithExceptionBoundary(
+    const std::function<void()> &task,
+    const std::function<void(const QString &)> &failureHandler)
+{
+    try
+    {
+        task();
+    }
+    catch (const std::exception &error)
+    {
+        failureHandler(QStringLiteral("MVS 后台任务异常终止：%1")
+                           .arg(QString::fromUtf8(error.what())));
+    }
+    catch (...)
+    {
+        failureHandler(QStringLiteral("MVS 后台任务异常终止：未知异常"));
+    }
+}
+
 void DepthMapGenerator::runInBackground()
+{
+    detail::runDepthMapBackgroundTaskWithExceptionBoundary(
+        [this]()
+        {
+            runInBackgroundImpl();
+        },
+        [this](const QString &message)
+        {
+            clearRuntimeCachesAfterFailure();
+            LOG_ERROR(QStringLiteral("[MVS] %1").arg(message));
+            emit errorOccurred(message);
+            emitFinishedOnce(false);
+        });
+}
+
+void DepthMapGenerator::runInBackgroundImpl()
 {
     const auto runStart = Clock::now();
     bool allOk = true;
@@ -8625,7 +8685,7 @@ void DepthMapGenerator::runInBackground()
     if (!_config.runDepthEstimation)
     {
         emit errorOccurred(QStringLiteral("当前生成器配置未启用深度估计阶段"));
-        emit finished(false);
+        emitFinishedOnce(false);
         return;
     }
 
@@ -8643,7 +8703,7 @@ void DepthMapGenerator::runInBackground()
                                   .arg(kMvsDepthAlgorithmRevision);
         LOG_ERROR(QStringLiteral("[MVS] %1").arg(error));
         emit errorOccurred(error);
-        emit finished(false);
+        emitFinishedOnce(false);
         return;
     }
     _effectiveDepthFilterMode = _config.depthFilterMode;
@@ -8682,7 +8742,8 @@ void DepthMapGenerator::runInBackground()
                  .arg(QString::fromStdString(_sceneClassification.reason)));
 
     const PatchMatchBackend configuredBackend = _config.patchMatch.backend;
-    const bool automaticAcceleration = configuredBackend == PatchMatchBackend::Auto;
+    const bool automaticAcceleration =
+        configuredBackend == PatchMatchBackend::Auto && _config.patchMatch.useCuda;
     const bool probeCuda = configuredBackend == PatchMatchBackend::Cuda ||
         automaticAcceleration;
     const int cudaDeviceCount = probeCuda
@@ -8797,7 +8858,8 @@ void DepthMapGenerator::runInBackground()
     const DepthComputeBackend effectiveBackend = resolveDepthComputeBackend(
         requestedBackend,
         cudaAvailable,
-        !selectedOpenClDevices.empty());
+        !selectedOpenClDevices.empty(),
+        _config.patchMatch.useCuda);
     const bool requestedBackendUnavailable =
         (effectiveBackend == DepthComputeBackend::Cuda && !cudaAvailable) ||
         (effectiveBackend == DepthComputeBackend::OpenCl && selectedOpenClDevices.empty());
@@ -8815,7 +8877,7 @@ void DepthMapGenerator::runInBackground()
         }
         LOG_ERROR(QStringLiteral("[MVS] %1").arg(message));
         emit errorOccurred(message);
-        emit finished(false);
+        emitFinishedOnce(false);
         return;
     }
     // Resolve Auto once before computing the workspace hash. All initial and
@@ -8832,11 +8894,21 @@ void DepthMapGenerator::runInBackground()
 
     const QString effective_backend_name = QString::fromLatin1(
         depthComputeBackendName(effectiveBackend));
-    QString backend_message = configuredBackend == PatchMatchBackend::Auto
-        ? QStringLiteral("深度估计后端：Auto 已选择 %1（CUDA → OpenCL → CPU）")
-              .arg(effective_backend_name)
-        : QStringLiteral("深度估计后端：请求并使用 %1")
-              .arg(effective_backend_name);
+    QString backend_message;
+    if (configuredBackend == PatchMatchBackend::Auto && !automaticAcceleration)
+    {
+        backend_message = QStringLiteral("深度估计后端：兼容 useCuda=false，强制使用 CPU");
+    }
+    else if (configuredBackend == PatchMatchBackend::Auto)
+    {
+        backend_message = QStringLiteral("深度估计后端：Auto 已选择 %1（CUDA → OpenCL → CPU）")
+                              .arg(effective_backend_name);
+    }
+    else
+    {
+        backend_message = QStringLiteral("深度估计后端：请求并使用 %1")
+                              .arg(effective_backend_name);
+    }
     if (configuredBackend == PatchMatchBackend::Auto &&
         effectiveBackend == DepthComputeBackend::Cpu &&
         !acceleratorPreparationFailures.isEmpty())
@@ -8856,7 +8928,7 @@ void DepthMapGenerator::runInBackground()
     if (_cancelled.load())
     {
         clearFrameCaches();
-        emit finished(false);
+        emitFinishedOnce(false);
         return;
     }
 
@@ -8865,7 +8937,7 @@ void DepthMapGenerator::runInBackground()
     if (_cancelled.load())
     {
         clearFrameCaches();
-        emit finished(false);
+        emitFinishedOnce(false);
         return;
     }
 
@@ -8905,7 +8977,7 @@ void DepthMapGenerator::runInBackground()
             emit errorOccurred(QStringLiteral("无法创建深度一致性缓存目录：%1")
                                    .arg(QString::fromStdString(_consistencyDepthDirectory)));
             clearFrameCaches();
-            emit finished(false);
+            emitFinishedOnce(false);
             return;
         }
     }
@@ -9035,7 +9107,7 @@ void DepthMapGenerator::runInBackground()
         LOG_ERROR(QStringLiteral("[MVS] %1").arg(message));
         emit errorOccurred(message);
         clearFrameCaches();
-        emit finished(false);
+        emitFinishedOnce(false);
         return;
     }
 
@@ -9369,7 +9441,7 @@ void DepthMapGenerator::runInBackground()
         _projectMaskLoaded.clear();
         _projectMaskLoaded.shrink_to_fit();
         clearFrameCaches();
-        emit finished(false);
+        emitFinishedOnce(false);
         return;
     }
 
@@ -9422,7 +9494,7 @@ void DepthMapGenerator::runInBackground()
         {
             saveQueue.cancel();
             saveQueue.stop();
-            emit finished(false);
+            emitFinishedOnce(false);
             return;
         }
     }
@@ -9440,7 +9512,7 @@ void DepthMapGenerator::runInBackground()
         {
             saveQueue.cancel();
             saveQueue.stop();
-            emit finished(false);
+            emitFinishedOnce(false);
             return;
         }
         _grayCache.clear();
@@ -9467,7 +9539,7 @@ void DepthMapGenerator::runInBackground()
             {
                 saveQueue.cancel();
                 saveQueue.stop();
-                emit finished(false);
+                emitFinishedOnce(false);
                 return;
             }
             DepthFrameResult &res = _depthFrames[i];
@@ -9556,7 +9628,7 @@ void DepthMapGenerator::runInBackground()
             {
                 saveQueue.cancel();
                 saveQueue.stop();
-                emit finished(false);
+                emitFinishedOnce(false);
                 return;
             }
         }
@@ -9583,7 +9655,7 @@ void DepthMapGenerator::runInBackground()
             {
                 saveQueue.cancel();
                 saveQueue.stop();
-                emit finished(false);
+                emitFinishedOnce(false);
                 return;
             }
         }
@@ -9713,7 +9785,7 @@ void DepthMapGenerator::runInBackground()
     if (!_config.runFusion)
     {
         emit progressChanged("完成", 1.f);
-        emit finished(allOk);
+        emitFinishedOnce(allOk);
         return;
     }
 
@@ -9731,7 +9803,7 @@ void DepthMapGenerator::runInBackground()
 
     if (frames.empty()) {
         emit errorOccurred("没有有效的深度帧，融合失败");
-        emit finished(false);
+        emitFinishedOnce(false);
         return;
     }
 
@@ -9843,7 +9915,7 @@ void DepthMapGenerator::runInBackground()
     {
         LOG_ERROR("[MVS][深度融合] 失败: %s", fuseErr.c_str());
         emit errorOccurred(QString::fromStdString(fuseErr));
-        emit finished(false);
+        emitFinishedOnce(false);
         return;
     }
 
@@ -9963,7 +10035,7 @@ void DepthMapGenerator::runInBackground()
     emit pointCloudReady(cloud);
     emit progressChanged("完成", 1.f);
     // 只要最终生成了有效点云就算成功（部分帧深度估计失败不影响最终结果）
-    emit finished(!cloud.empty());
+    emitFinishedOnce(!cloud.empty());
 }
 
 } // namespace mvs

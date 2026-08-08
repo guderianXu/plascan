@@ -76,20 +76,9 @@ QString utcNowIso()
     return QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
 }
 
-QString patchMatchBackendId(xjw::mvs::PatchMatchBackend backend)
+QString patchMatchBackendText(xjw::mvs::PatchMatchBackend backend)
 {
-    switch (backend)
-    {
-    case xjw::mvs::PatchMatchBackend::Cpu:
-        return QStringLiteral("cpu");
-    case xjw::mvs::PatchMatchBackend::Cuda:
-        return QStringLiteral("cuda");
-    case xjw::mvs::PatchMatchBackend::OpenCl:
-        return QStringLiteral("opencl");
-    case xjw::mvs::PatchMatchBackend::Auto:
-        return QStringLiteral("auto");
-    }
-    return QStringLiteral("unknown");
+    return QString::fromLatin1(xjw::mvs::patchMatchBackendId(backend));
 }
 
 QString mvsBackendFromStoredFrames(
@@ -306,7 +295,7 @@ QJsonObject depthRecordFromArtifact(const QJsonObject &artifact,
         context.reconstructionGenerationId;
     record[QStringLiteral("quality_profile")] = context.request.qualityProfile;
     record[QStringLiteral("mvs_backend_requested")] =
-        patchMatchBackendId(context.request.patchMatchBackend);
+        patchMatchBackendText(context.request.patchMatchBackend);
     record[QStringLiteral("mvs_backend_request_applied")] = true;
     return record;
 }
@@ -443,7 +432,7 @@ bool ProjectPointCloudWorkflowController::startWorkflow(
         xjw::gui::project::assessStoredDepthBatchCompatibility(
             metadata, QString(), at_index);
     const auto stored = xjw::core::project::collectLatestStoredDepthFrames(metadata);
-    const QString requested_backend = patchMatchBackendId(
+    const QString requested_backend = patchMatchBackendText(
         context->request.patchMatchBackend);
     const QString stored_backend = mvsBackendFromStoredFrames(stored.frames);
     const bool stored_backend_is_uniform =
@@ -899,11 +888,11 @@ void ProjectPointCloudWorkflowController::startFusion(
             task.record[QStringLiteral("depth_filter_mode")] =
                 context->request.depthFilterMode;
             task.record[QStringLiteral("mvs_backend_requested")] =
-                patchMatchBackendId(context->request.patchMatchBackend);
+                patchMatchBackendText(context->request.patchMatchBackend);
             task.record[QStringLiteral("mvs_backend_actual")] =
                 mvsBackendFromStoredFrames(stored.frames);
             task.record[QStringLiteral("mvs_backend_selected_in_dialog")] =
-                patchMatchBackendId(context->request.patchMatchBackend);
+                patchMatchBackendText(context->request.patchMatchBackend);
             task.record[QStringLiteral("mvs_backend_request_applied")] =
                 !context->reusedDepthMaps;
             task.record[QStringLiteral("depth_maps_reused")] =

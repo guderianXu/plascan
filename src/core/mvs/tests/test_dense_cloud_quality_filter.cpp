@@ -1,4 +1,5 @@
 #include "DenseCloudQualityFilter.h"
+#include "DenseCloudBuilder.h"
 
 #include <gtest/gtest.h>
 
@@ -109,6 +110,80 @@ DensePointCloud makeSlopedTerrainWithPlaneResidualSpike()
 }
 
 } // namespace
+
+namespace
+{
+
+void expectSkippedProcessingReport(const plapoint::ProcessingReport &report,
+                                   plapoint::ProcessingDevice requestedDevice,
+                                   const char *reason)
+{
+    EXPECT_EQ(report.requestedDevice, requestedDevice);
+    EXPECT_EQ(report.actualDevice, plapoint::ProcessingDevice::CPU);
+    EXPECT_EQ(report.usedDevice, plapoint::ProcessingDevice::CPU);
+    EXPECT_EQ(report.neighborBackend, plapoint::ProcessingNeighborBackend::None);
+    EXPECT_FALSE(report.usedFallback);
+    EXPECT_EQ(report.fallbackReason, reason);
+}
+
+} // namespace
+
+TEST(DenseCloudBuilderReportTest, VoxelNoOpInitializesReport)
+{
+    std::vector<xjw::mvs::DensePoint> cloud(1);
+    cloud.front().x = 1.0f;
+    plapoint::ProcessingReport report;
+    report.requestedDevice = plapoint::ProcessingDevice::CPU;
+    report.actualDevice = plapoint::ProcessingDevice::CUDA;
+    report.usedFallback = true;
+    report.fallbackReason = "stale";
+
+    const auto output = xjw::mvs::DenseCloudBuilder::voxelDownsample(
+        cloud, 0.0f, plapoint::ProcessingDevice::OpenCL, &report);
+
+    ASSERT_EQ(output.size(), cloud.size());
+    EXPECT_FLOAT_EQ(output.front().x, cloud.front().x);
+    expectSkippedProcessingReport(
+        report,
+        plapoint::ProcessingDevice::OpenCL,
+        "skipped: empty cloud or invalid voxel size");
+}
+
+TEST(DenseCloudBuilderReportTest, StatisticalNoOpInitializesReport)
+{
+    std::vector<xjw::mvs::DensePoint> cloud(1);
+    plapoint::ProcessingReport report;
+    report.requestedDevice = plapoint::ProcessingDevice::OpenCL;
+    report.actualDevice = plapoint::ProcessingDevice::OpenCL;
+    report.usedFallback = true;
+    report.fallbackReason = "stale";
+
+    const auto output = xjw::mvs::DenseCloudBuilder::statisticalOutlierRemoval(
+        cloud, 30, 1.2f, plapoint::ProcessingDevice::CUDA, &report);
+
+    EXPECT_EQ(output.size(), cloud.size());
+    expectSkippedProcessingReport(
+        report,
+        plapoint::ProcessingDevice::CUDA,
+        "skipped: point count is smaller than k + 1");
+}
+
+TEST(DenseCloudBuilderReportTest, RadiusNoOpInitializesReport)
+{
+    const std::vector<xjw::mvs::DensePoint> cloud;
+    plapoint::ProcessingReport report;
+    report.requestedDevice = plapoint::ProcessingDevice::CUDA;
+    report.actualDevice = plapoint::ProcessingDevice::CUDA;
+    report.usedFallback = true;
+    report.fallbackReason = "stale";
+
+    const auto output = xjw::mvs::DenseCloudBuilder::radiusOutlierRemoval(
+        cloud, 1.0f, 3, plapoint::ProcessingDevice::OpenCL, &report);
+
+    EXPECT_TRUE(output.empty());
+    expectSkippedProcessingReport(
+        report, plapoint::ProcessingDevice::OpenCL, "skipped: empty cloud");
+}
 
 TEST(DenseCloudQualityFilter, TerrainHeightSpikeFilterRemovesVerticalSpikesAndPreservesColors)
 {

@@ -10,11 +10,15 @@ layout(std140, binding = 0) uniform SceneUniforms
     mat4 uModelView;
     mat4 uNormalMat;
     vec4 uLightDirPointSize;
+    vec4 uViewportSize;
+    vec4 uRenderModeFlags;
+    vec4 uScalarRange;
 } ubuf;
 
 layout(location = 0) out vec3 vNormal;
 layout(location = 1) out vec3 vColor;
 layout(location = 2) out vec3 vViewPosition;
+layout(location = 3) out float vElevation;
 
 void main()
 {
@@ -23,4 +27,5 @@ void main()
     vNormal = mat3(ubuf.uNormalMat) * aNormal;
     vColor = aColor;
     vViewPosition = (ubuf.uModelView * vec4(aPos, 1.0)).xyz;
+    vElevation = aPos.z;
 }

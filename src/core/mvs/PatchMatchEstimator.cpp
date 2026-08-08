@@ -15,6 +15,39 @@ namespace xjw
 namespace mvs
 {
 
+PatchMatchBackend resolvePatchMatchEstimatorBackend(PatchMatchBackend requestedBackend,
+                                                     bool useCuda,
+                                                     bool cudaAvailable,
+                                                     bool openClAvailable) noexcept
+{
+    if (requestedBackend != PatchMatchBackend::Auto)
+    {
+        return requestedBackend;
+    }
+    if (!useCuda)
+    {
+        return PatchMatchBackend::Cpu;
+    }
+    if (cudaAvailable)
+    {
+        return PatchMatchBackend::Cuda;
+    }
+    if (openClAvailable)
+    {
+        return PatchMatchBackend::OpenCl;
+    }
+    return PatchMatchBackend::Cpu;
+}
+
+bool isUsableOpenClPatchMatchDevice(bool availabilityQuerySucceeded,
+                                    bool available,
+                                    bool compilerQuerySucceeded,
+                                    bool compilerAvailable) noexcept
+{
+    return availabilityQuerySucceeded && available &&
+        compilerQuerySucceeded && compilerAvailable;
+}
+
 bool PatchMatchDepthEstimator::estimate(
     const cv::Mat                &refGray,
     const std::vector<cv::Mat>   &srcGrays,
@@ -64,22 +97,15 @@ bool PatchMatchDepthEstimator::estimate(
     zNear = std::max(zNear, 0.01f);
     zFar  = std::max(zFar, zNear + 0.1f);
 
-    PatchMatchBackend backend = config.backend;
-    if (backend == PatchMatchBackend::Auto)
+    bool cuda_available = false;
+    bool opencl_available = false;
+    if (config.backend == PatchMatchBackend::Auto && config.useCuda)
     {
-        if (isCudaAvailable())
-        {
-            backend = PatchMatchBackend::Cuda;
-        }
-        else if (isOpenClAvailable())
-        {
-            backend = PatchMatchBackend::OpenCl;
-        }
-        else
-        {
-            backend = PatchMatchBackend::Cpu;
-        }
+        cuda_available = isCudaAvailable();
+        opencl_available = !cuda_available && isOpenClAvailable();
     }
+    const PatchMatchBackend backend = resolvePatchMatchEstimatorBackend(
+        config.backend, config.useCuda, cuda_available, opencl_available);
 
     bool accelerator_ok = false;
     bool fallback_to_cpu = false;

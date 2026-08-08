@@ -73,6 +73,43 @@ std::string openClString(cl_device_id device, cl_device_info parameter)
     return value;
 }
 
+bool openClBoolean(cl_device_id device, cl_device_info parameter, bool *value)
+{
+    if (!value)
+    {
+        return false;
+    }
+
+    cl_bool queried_value = CL_FALSE;
+    if (clGetDeviceInfo(device,
+                        parameter,
+                        sizeof(queried_value),
+                        &queried_value,
+                        nullptr) != CL_SUCCESS)
+    {
+        return false;
+    }
+    *value = queried_value == CL_TRUE;
+    return true;
+}
+
+bool populateOpenClUsability(cl_device_id device, OpenClDeviceInfo *info)
+{
+    if (!info)
+    {
+        return false;
+    }
+
+    const bool availability_query_succeeded = openClBoolean(
+        device, CL_DEVICE_AVAILABLE, &info->available);
+    const bool compiler_query_succeeded = openClBoolean(
+        device, CL_DEVICE_COMPILER_AVAILABLE, &info->compilerAvailable);
+    return isUsableOpenClPatchMatchDevice(availability_query_succeeded,
+                                          info->available,
+                                          compiler_query_succeeded,
+                                          info->compilerAvailable);
+}
+
 std::vector<EnumeratedOpenClDevice> enumerateOpenClGpuDevicesUncached()
 {
     cl_uint platform_count = 0;
@@ -89,6 +126,7 @@ std::vector<EnumeratedOpenClDevice> enumerateOpenClGpuDevicesUncached()
     }
 
     std::vector<EnumeratedOpenClDevice> result;
+    int global_device_index = 0;
     for (cl_platform_id platform : platforms)
     {
         cl_uint device_count = 0;
@@ -110,16 +148,28 @@ std::vector<EnumeratedOpenClDevice> enumerateOpenClGpuDevicesUncached()
                            devices.data(),
                            nullptr) != CL_SUCCESS)
         {
+            global_device_index += static_cast<int>(device_count);
             continue;
         }
         for (cl_device_id device : devices)
         {
             EnumeratedOpenClDevice entry;
-            entry.info.index = static_cast<int>(result.size());
+            entry.info.index = global_device_index++;
             entry.info.name = openClString(device, CL_DEVICE_NAME);
             entry.info.vendor = openClString(device, CL_DEVICE_VENDOR);
             entry.info.version = openClString(device, CL_DEVICE_VERSION);
             entry.info.isGpu = true;
+            if (!populateOpenClUsability(device, &entry.info))
+            {
+                LOG_WARN("[MVS][OpenCL] skipping unusable GPU index=%d vendor=%s device=%s "
+                         "available=%d compiler_available=%d",
+                         entry.info.index,
+                         entry.info.vendor.c_str(),
+                         entry.info.name.c_str(),
+                         entry.info.available ? 1 : 0,
+                         entry.info.compilerAvailable ? 1 : 0);
+                continue;
+            }
             clGetDeviceInfo(device,
                             CL_DEVICE_GLOBAL_MEM_SIZE,
                             sizeof(entry.info.globalMemoryBytes),
@@ -999,12 +1049,19 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
 {
     const auto estimate_start = std::chrono::steady_clock::now();
     const std::vector<EnumeratedOpenClDevice> &devices = enumerateOpenClGpuDevices();
-    const int device_index = config.openClDeviceIndex >= 0 ? config.openClDeviceIndex : 0;
-    if (device_index < 0 || device_index >= static_cast<int>(devices.size()))
+    const auto selected_device = config.openClDeviceIndex >= 0
+        ? std::find_if(devices.cbegin(),
+                       devices.cend(),
+                       [&config](const EnumeratedOpenClDevice &device)
+                       {
+                           return device.info.index == config.openClDeviceIndex;
+                       })
+        : devices.cbegin();
+    if (selected_device == devices.cend())
     {
         if (errorMsg)
         {
-            *errorMsg = "OpenCL GPU device index is outside the available device range";
+            *errorMsg = "OpenCL GPU device index is unavailable or outside the device range";
         }
         return false;
     }
@@ -1026,7 +1083,7 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     }
 
     const std::shared_ptr<OpenClRuntime> runtime = openClRuntimeForDevice(
-        devices[device_index], errorMsg);
+        *selected_device, errorMsg);
     if (!runtime)
     {
         return false;
@@ -1569,7 +1626,7 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
              "write=%.1f ms kernels=%zu/%d active=%.1f ms chain=%.1f ms duty=%.1f%% "
              "read=%.1f ms gap=%.1f ms "
              "post=%.1f ms total=%.1f ms",
-             devices[device_index].info.name.c_str(),
+             selected_device->info.name.c_str(),
              execution_lane_index,
              runtime->hostUnifiedMemory ? 1 : 0,
              static_cast<double>(retained_buffer_bytes) / (1024.0 * 1024.0),
