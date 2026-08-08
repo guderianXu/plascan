@@ -29,6 +29,7 @@
 #include <opencv2/imgcodecs.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <vector>
 
@@ -3464,9 +3465,23 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
 
     if (mode == QStringLiteral("depth_tsdf"))
     {
+        const auto discovery_started_at = std::chrono::steady_clock::now();
         const QVector<DepthFrameArtifact> artifacts =
             DepthMapMeshBuilder::discoverDepthFrames(request.depthMapSourcePath);
-        const DepthTsdfFrameLoadResult loaded = DepthTsdfSurfaceBuilder::loadFrames(artifacts);
+        result.payload[QStringLiteral("depth_frame_discovery_elapsed_ms")] =
+            static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - discovery_started_at).count());
+        const DepthTsdfFrameLoadResult loaded = DepthTsdfSurfaceBuilder::loadFrames(
+            artifacts,
+            request.settings.value(QStringLiteral("threads")).toInt(0));
+        result.payload[QStringLiteral("depth_frame_load_elapsed_ms")] =
+            static_cast<double>(loaded.elapsedMs);
+        result.payload[QStringLiteral("depth_frame_load_worker_count")] =
+            loaded.effectiveWorkerCount;
+        result.payload[QStringLiteral("discovered_depth_frame_count")] =
+            loaded.discoveredArtifactCount;
+        result.payload[QStringLiteral("loaded_depth_frame_count")] =
+            loaded.frames.size();
         if (!loaded.ok)
         {
             result.errorMessage = loaded.errorMessage;
@@ -3601,8 +3616,12 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                              .toString(QStringLiteral("enabled"))),
                 1);
         }
+        const auto tsdf_started_at = std::chrono::steady_clock::now();
         DepthTsdfResult tsdf = DepthTsdfSurfaceBuilder::build(
             loaded.frames, build_options);
+        result.payload[QStringLiteral("depth_tsdf_build_elapsed_ms")] =
+            static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - tsdf_started_at).count());
         mergePayload(DepthTsdfSurfaceBuilder::statisticsToJson(tsdf), &result.payload);
         result.payload[QStringLiteral(
             "base_depth_completeness_available")] =
@@ -6134,6 +6153,7 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
 
 WorkflowResult buildModel(const ModelBuildRequest &request)
 {
+    const auto started_at = std::chrono::steady_clock::now();
     const QString source_data = request.sourceData.trimmed().isEmpty()
         ? QStringLiteral("point_cloud")
         : request.sourceData.trimmed();
@@ -6172,6 +6192,9 @@ WorkflowResult buildModel(const ModelBuildRequest &request)
         result = buildMeshAndOptionalTexture(mesh_request);
     }
 
+    result.payload[QStringLiteral("model_core_elapsed_ms")] =
+        static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started_at).count());
     if (result.ok)
     {
         result.payload[QStringLiteral("source_data")] = source_data;
@@ -6213,7 +6236,8 @@ WorkflowResult buildTextureOnly(const TextureBuildRequest &request)
     {
         const QVector<DepthFrameArtifact> artifacts =
             DepthMapMeshBuilder::discoverDepthFrames(request.depthMapSourcePath);
-        const DepthTsdfFrameLoadResult loaded = DepthTsdfSurfaceBuilder::loadFrames(artifacts);
+        const DepthTsdfFrameLoadResult loaded = DepthTsdfSurfaceBuilder::loadFrames(
+            artifacts);
         if (!loaded.ok)
         {
             result.errorMessage = QStringLiteral("无法加载相机纹理源: %1").arg(loaded.errorMessage);

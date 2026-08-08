@@ -1956,7 +1956,76 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::validateAllocation(
 }
 
 DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
-    const QVector<DepthFrameArtifact> &artifacts)
+    const QVector<DepthFrameArtifact> &artifacts,
+    int requestedWorkerCount)
+{
+    const auto started_at = std::chrono::steady_clock::now();
+    DepthTsdfFrameLoadResult result;
+    result.discoveredArtifactCount = artifacts.size();
+
+    int maximum_workers = 1;
+#ifdef MESHING_OPENMP
+    maximum_workers = std::max(1, omp_get_max_threads());
+#endif
+    const int desired_workers = requestedWorkerCount > 0
+        ? requestedWorkerCount
+        : std::max(1, maximum_workers - 2);
+    // Loading one frame temporarily owns several full-resolution evidence
+    // matrices. A bounded queue keeps NVMe throughput high without multiplying
+    // the peak memory footprint by every logical CPU thread.
+    result.effectiveWorkerCount = std::clamp(
+        desired_workers,
+        1,
+        std::max(1, std::min({8,
+                              maximum_workers,
+                              static_cast<int>(artifacts.size())})));
+
+    std::vector<DepthTsdfFrameLoadResult> partial_results(
+        static_cast<std::size_t>(artifacts.size()));
+#ifdef MESHING_OPENMP
+#pragma omp parallel for schedule(dynamic, 1) num_threads(result.effectiveWorkerCount) \
+    if(result.effectiveWorkerCount > 1)
+#endif
+    for (int artifact_index = 0; artifact_index < artifacts.size(); ++artifact_index)
+    {
+        partial_results[static_cast<std::size_t>(artifact_index)] =
+            loadFramesSequential(
+                QVector<DepthFrameArtifact>{artifacts[artifact_index]},
+                0);
+    }
+
+    for (DepthTsdfFrameLoadResult &partial : partial_results)
+    {
+        if (!partial.ok)
+        {
+            result.errorMessage = partial.errorMessage;
+            result.elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - started_at).count();
+            return result;
+        }
+        for (DepthTsdfFrame &frame : partial.frames)
+        {
+            result.frames.push_back(std::move(frame));
+        }
+    }
+    if (result.frames.size() < 3)
+    {
+        result.errorMessage = QStringLiteral(
+            "TSDF requires at least 3 usable primary or auxiliary depth frames; loaded=%1")
+                                  .arg(result.frames.size());
+    }
+    else
+    {
+        result.ok = true;
+    }
+    result.elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - started_at).count();
+    return result;
+}
+
+DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFramesSequential(
+    const QVector<DepthFrameArtifact> &artifacts,
+    int minimumFrameCount)
 {
     DepthTsdfFrameLoadResult result;
     for (const DepthFrameArtifact &artifact : artifacts)
@@ -2376,10 +2445,11 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
         result.frames.push_back(std::move(frame));
     }
 
-    if (result.frames.size() < 3)
+    if (result.frames.size() < minimumFrameCount)
     {
         result.errorMessage = QStringLiteral(
-            "TSDF requires at least 3 usable primary or auxiliary depth frames; loaded=%1")
+            "TSDF requires at least %1 usable primary or auxiliary depth frames; loaded=%2")
+                                  .arg(minimumFrameCount)
                                   .arg(result.frames.size());
         return result;
     }
@@ -9293,6 +9363,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         color_options.minimumConfidence = options.minimumConfidence;
         color_options.compensateExposure = options.compensateColorExposure;
         color_options.coherentFacePrimaryViews = options.coherentFacePrimaryViewColors;
+        color_options.workerCount = options.workerCount;
         result.statistics.effectiveColorExposureCompensation =
             options.compensateColorExposure;
         result.statistics.effectiveCoherentFacePrimaryViewColors =
@@ -9324,6 +9395,8 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             color_statistics.coherentPrimaryViewFaceCount;
         result.statistics.coherentPrimaryViewVertexCount =
             color_statistics.coherentPrimaryViewVertexCount;
+        result.statistics.meshColorizationWorkerCount =
+            color_statistics.effectiveWorkerCount;
     }
     else
     {
@@ -10825,6 +10898,8 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          static_cast<qint64>(statistics.meshSimplificationElapsedMs)},
         {QStringLiteral("mesh_colorization_elapsed_ms"),
          static_cast<qint64>(statistics.meshColorizationElapsedMs)},
+        {QStringLiteral("mesh_colorization_worker_count"),
+         statistics.meshColorizationWorkerCount},
         {QStringLiteral("post_integration_elapsed_ms"),
          static_cast<qint64>(statistics.postIntegrationElapsedMs)},
         {QStringLiteral("component_filtered_face_count"),

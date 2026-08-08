@@ -789,6 +789,7 @@ struct DepthTsdfStatistics
     std::int64_t meshCleanupElapsedMs = 0;
     std::int64_t meshSimplificationElapsedMs = 0;
     std::int64_t meshColorizationElapsedMs = 0;
+    int meshColorizationWorkerCount = 1;
     std::int64_t postIntegrationElapsedMs = 0;
     int componentFilteredFaceCount = 0;
     int preSimplificationFaceCount = 0;
@@ -1123,6 +1124,9 @@ struct DepthTsdfFrameLoadResult
     bool ok = false;
     QString errorMessage;
     QVector<DepthTsdfFrame> frames;
+    std::int64_t elapsedMs = 0;
+    int effectiveWorkerCount = 1;
+    int discoveredArtifactCount = 0;
 };
 
 struct DepthTsdfBoundsResult
@@ -1217,7 +1221,9 @@ public:
     static DepthTsdfResult validateAllocation(const std::array<float, 3> &boundsMin,
                                               const std::array<float, 3> &boundsMax,
                                               const DepthTsdfOptions &options);
-    static DepthTsdfFrameLoadResult loadFrames(const QVector<DepthFrameArtifact> &artifacts);
+    static DepthTsdfFrameLoadResult loadFrames(
+        const QVector<DepthFrameArtifact> &artifacts,
+        int requestedWorkerCount = 0);
     static DepthTsdfBoundsResult estimateBounds(const QVector<DepthTsdfFrame> &frames);
     static DepthTsdfObservationSample sampleObservation(
         const DepthTsdfFrame &frame,
@@ -1338,6 +1344,11 @@ public:
     static DepthTsdfResult build(const QVector<DepthTsdfFrame> &frames,
                                  const DepthTsdfOptions &options);
     static QJsonObject statisticsToJson(const DepthTsdfResult &result);
+
+private:
+    static DepthTsdfFrameLoadResult loadFramesSequential(
+        const QVector<DepthFrameArtifact> &artifacts,
+        int minimumFrameCount);
 };
 
 } // namespace xjw::mesh

@@ -1,0 +1,21 @@
+{
+    "generate_model": {
+        "source_data": "depth_maps",
+        "surface_type": "arbitrary_3d",
+        "quality": "high",
+        "modelQualityProfile": "detail",
+        "qualityProfile": "detail",
+        "reconstruction_mode": "depth_tsdf",
+        "method": "Depth TSDF",
+        "meshResolution": 320,
+        "targetFaces": 240000,
+        "simplifyTargetFaces": 240000,
+        "interpolation": "disabled",
+        "depthFiltering": "mild",
+        "calculateVertexColors": true,
+        "strictVolumetricMasks": false,
+        "export_format": "PLY",
+        "saveAfterEachStep": false,
+        "splitIntoBlocks": false
+    }
+}

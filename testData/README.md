@@ -14,6 +14,47 @@ python testData/download_photogrammetry_testdata.py --dataset middlebury_dino_sp
 
 Large datasets are skipped unless `--include-large` is passed.
 
+## Prepare the 100-camera Agisoft aerial model benchmark
+
+`prepare_agisoft_aerial_subset.py` selects a deterministic, spatially connected
+camera block from the full `agisoft_aerial_gcps` dataset. It filters missing
+image/TSAI pairs, optionally rejects low-texture images, builds a symmetric
+nearest-neighbor graph, and preserves the selected source order. When images
+are resized, the script scales `fu`, `fv`, `cu`, and `cv` in each TSAI camera by
+the exact output dimensions.
+
+```powershell
+.\.venv\Scripts\python.exe testData\prepare_agisoft_aerial_subset.py `
+  --source testData\photogrammetry_benchmarks\agisoft_aerial_gcps\extracted\aerial_images_with_gcps `
+  --output testData\photogrammetry_benchmarks\agisoft_aerial_gcps_100\prepared\plascan `
+  --count 100 `
+  --neighbors 8 `
+  --minimum-texture-score 1000 `
+  --max-image-dim 1600
+```
+
+The prepared dataset contains `Images/`, `cameras/`, `Metadata/`,
+`image_camera.lis`, and `subset_manifest.json`. The manifest records every
+selected camera and internal adjacency edge. The current fixture has 100
+image/camera pairs and 376 internal edges in its symmetric 8-neighbor graph.
+
+For a model-generation performance A/B, first generate fixed depth artifacts
+with the explicit `aerial_terrain` scene profile. Depth estimation time is not
+part of the model benchmark. Then run:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\bench\run_model_generation_benchmark.py `
+  --exe build\windows-vcpkg-cuda-release\bin\mesh_reconstruct_cli.exe `
+  --depth-map-dir build\benchmark_runs\agisoft_aerial_gcps_100_depth_aerial_v1\headless.files\1\reconstruction\mvs `
+  --settings-json scripts\bench\agisoft_aerial_gcps_100_mesh_settings.json `
+  --output-dir build\benchmark_runs\agisoft_aerial_gcps_100_mesh_aerial_ab `
+  --parallel-workers 30
+```
+
+The runner derives serial and parallel settings from the same no-interpolation
+JSON, captures per-stage timings, verifies vertex/face counts and final PLY
+SHA-256, and writes `benchmark_results.json` plus `benchmark_results.md`.
+
 ## LiDAR / laser-constrained photogrammetry candidates
 
 The same downloader also keeps a curated registry of public datasets that may be useful when PlaScan adds

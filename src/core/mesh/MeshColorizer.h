@@ -42,6 +42,7 @@ struct MeshColorOptions
     float speckleMaximumNeighborDeviation = 28.0f;
     bool compensateExposure = false;
     bool coherentFacePrimaryViews = false;
+    int workerCount = 0;
 };
 
 struct MeshColorStatistics
@@ -60,6 +61,8 @@ struct MeshColorStatistics
     int cleanedSpeckleVertexCount = 0;
     int coherentPrimaryViewFaceCount = 0;
     int coherentPrimaryViewVertexCount = 0;
+    int effectiveWorkerCount = 1;
+    std::int64_t elapsedMs = 0;
 };
 
 class MeshColorizer

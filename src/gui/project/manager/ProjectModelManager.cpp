@@ -165,6 +165,32 @@ void logModelWorkflowResult(
         .arg(payload.value(QStringLiteral("vertex_count")).toInt())
         .arg(payload.value(QStringLiteral("face_count")).toInt())
         .arg(payload.value(QStringLiteral("model_ply")).toString()));
+    if (payload.contains(QStringLiteral("depth_frame_load_elapsed_ms")))
+    {
+        LOG_INFO(QStringLiteral(
+            "[模型生成] 全链路统计：深度帧=%1/%2，读取=%3 ms/%4线程；"
+            "TSDF主体=%5 ms；顶点颜色=%6 ms/%7线程；模型核心总计=%8 ms")
+            .arg(payload.value(QStringLiteral("loaded_depth_frame_count")).toInt())
+            .arg(payload.value(QStringLiteral("discovered_depth_frame_count")).toInt())
+            .arg(payload.value(QStringLiteral("depth_frame_load_elapsed_ms")).toDouble(),
+                 0,
+                 'f',
+                 0)
+            .arg(payload.value(QStringLiteral("depth_frame_load_worker_count")).toInt())
+            .arg(payload.value(QStringLiteral("depth_tsdf_build_elapsed_ms")).toDouble(),
+                 0,
+                 'f',
+                 0)
+            .arg(payload.value(QStringLiteral("mesh_colorization_elapsed_ms")).toDouble(),
+                 0,
+                 'f',
+                 0)
+            .arg(payload.value(QStringLiteral("mesh_colorization_worker_count")).toInt())
+            .arg(payload.value(QStringLiteral("model_core_elapsed_ms")).toDouble(),
+                 0,
+                 'f',
+                 0));
+    }
     if (payload.contains(QStringLiteral("effective_worker_count")))
     {
         const auto metric = [&payload](const char *key)

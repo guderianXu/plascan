@@ -2495,9 +2495,29 @@ TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxis
         artifacts.push_back(artifact);
     }
 
-    const auto loaded = xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(artifacts);
+    const auto loaded = xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(artifacts, 4);
     ASSERT_TRUE(loaded.ok) << loaded.errorMessage.toStdString();
     ASSERT_EQ(loaded.frames.size(), 5);
+    EXPECT_EQ(loaded.discoveredArtifactCount, artifacts.size());
+    EXPECT_GE(loaded.effectiveWorkerCount, 1);
+    EXPECT_LE(loaded.effectiveWorkerCount, 4);
+    const auto serial_loaded =
+        xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(artifacts, 1);
+    ASSERT_TRUE(serial_loaded.ok) << serial_loaded.errorMessage.toStdString();
+    ASSERT_EQ(serial_loaded.frames.size(), loaded.frames.size());
+    EXPECT_EQ(serial_loaded.effectiveWorkerCount, 1);
+    for (int index = 0; index < loaded.frames.size(); ++index)
+    {
+        EXPECT_EQ(serial_loaded.frames[index].refIndex, loaded.frames[index].refIndex);
+        EXPECT_EQ(cv::norm(serial_loaded.frames[index].depth,
+                           loaded.frames[index].depth,
+                           cv::NORM_INF),
+                  0.0);
+        EXPECT_EQ(cv::norm(serial_loaded.frames[index].geometrySupportCount,
+                           loaded.frames[index].geometrySupportCount,
+                           cv::NORM_INF),
+                  0.0);
+    }
     EXPECT_FALSE(loaded.frames.front().auxiliarySurfaceOnly);
     EXPECT_FALSE(loaded.frames.at(3).auxiliarySurfaceOnly);
     EXPECT_TRUE(loaded.frames.back().auxiliarySurfaceOnly);
@@ -5183,15 +5203,31 @@ TEST(MeshColorizerTest, ExposureCompensationAlsoAppliesToBestViewFallback)
     options.speckleCleanupPasses = 0;
     options.compensateExposure = true;
 
+    xjw::mesh::TriMesh parallel_mesh = mesh;
+    options.workerCount = 1;
     const auto statistics = xjw::mesh::MeshColorizer::colorize(
         &mesh, QVector<xjw::mesh::MeshColorView>{make_view(50), make_view(100)}, options);
+    options.workerCount = 4;
+    const auto parallel_statistics = xjw::mesh::MeshColorizer::colorize(
+        &parallel_mesh,
+        QVector<xjw::mesh::MeshColorView>{make_view(50), make_view(100)},
+        options);
 
     EXPECT_EQ(statistics.bestViewFallbackVertexCount, 3);
-    for (const auto &vertex : mesh.vertices)
+    EXPECT_EQ(parallel_statistics.bestViewFallbackVertexCount,
+              statistics.bestViewFallbackVertexCount);
+    EXPECT_EQ(parallel_statistics.candidateObservationCount,
+              statistics.candidateObservationCount);
+    ASSERT_EQ(parallel_mesh.vertices.size(), mesh.vertices.size());
+    for (std::size_t index = 0; index < mesh.vertices.size(); ++index)
     {
+        const auto &vertex = mesh.vertices[index];
         EXPECT_NEAR(vertex.r, 67, 1);
         EXPECT_NEAR(vertex.g, 67, 1);
         EXPECT_NEAR(vertex.b, 67, 1);
+        EXPECT_EQ(parallel_mesh.vertices[index].r, vertex.r);
+        EXPECT_EQ(parallel_mesh.vertices[index].g, vertex.g);
+        EXPECT_EQ(parallel_mesh.vertices[index].b, vertex.b);
     }
 }
 
