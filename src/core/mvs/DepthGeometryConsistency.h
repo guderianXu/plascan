@@ -57,7 +57,7 @@ ProjectedDepthConsistencyResult evaluateProjectedDepthConsistency(
     float relativeThreshold,
     int searchRadius = 1,
     float maximumRoundTripErrorPixels = 3.0f,
-    bool computeContinuousMetrics = false);
+    bool computeContinuousMetrics = true);
 
 AdaptiveGeometryEvidenceClass adaptiveGeometryEvidenceClass(
     const ProjectedDepthConsistencyResult &result);

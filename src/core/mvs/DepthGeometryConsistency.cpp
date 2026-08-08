@@ -523,20 +523,26 @@ ProjectedDepthConsistencyResult evaluateProjectedDepthConsistency(
             result.relativeDepthError = relative_error;
             result.roundTripErrorPixels = round_trip_error;
             result.consistentReferenceDepth = static_cast<float>(round_trip_depth);
-            result.worldSurfaceResidual =
-                worldDistance(reference_world, measured_world);
-            result.jointWorldPixelFootprint = jointWorldPixelFootprint(
-                referenceCamera,
-                referencePixel,
-                referenceDepth,
-                reference_world,
-                sourceCamera,
-                measured_depth);
-            result.continuousGeometryValid =
-                std::isfinite(result.worldSurfaceResidual) &&
-                std::isfinite(result.jointWorldPixelFootprint) &&
-                result.jointWorldPixelFootprint >
-                    std::numeric_limits<float>::epsilon();
+            // 航拍路径只消费离散一致性投票、往返误差和回投深度。
+            // 连续证据只供环拍自适应几何使用；关闭时跳过像素足迹和
+            // 三角化不确定度计算，避免为随后丢弃的结果执行多次投影。
+            if (computeContinuousMetrics)
+            {
+                result.worldSurfaceResidual =
+                    worldDistance(reference_world, measured_world);
+                result.jointWorldPixelFootprint = jointWorldPixelFootprint(
+                    referenceCamera,
+                    referencePixel,
+                    referenceDepth,
+                    reference_world,
+                    sourceCamera,
+                    measured_depth);
+                result.continuousGeometryValid =
+                    std::isfinite(result.worldSurfaceResidual) &&
+                    std::isfinite(result.jointWorldPixelFootprint) &&
+                    result.jointWorldPixelFootprint >
+                        std::numeric_limits<float>::epsilon();
+            }
         }
     }
 

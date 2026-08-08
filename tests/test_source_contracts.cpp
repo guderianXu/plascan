@@ -1055,8 +1055,10 @@ TEST(MvsSchedulerContractTest, SparseHintsUseProjectedSamplesAndPrescaledPatchMa
     expectContainsAll(cameraHeader, {"projectWorldPointWithDepth"});
     expectContainsAll(cameraSource, {
         "Camera::projectWorldPointWithDepth",
-        "return projectWorldPoint(world, pixel)",
+        "worldToCameraFromCameraToWorldPose(world, camera_point)",
+        "applyTsaiDistortion(",
     });
+    expectNotContainsAll(cameraSource, {"return projectWorldPoint(world, pixel)"});
 
     expectContainsAll(pyramid, {
         "propagateDepthPrior(parent, guide, target_size)",

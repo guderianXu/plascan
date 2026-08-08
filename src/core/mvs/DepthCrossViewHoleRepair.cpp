@@ -9,6 +9,10 @@
 #include <queue>
 #include <thread>
 
+#if defined(_OPENMP)
+#include <omp.h>
+#endif
+
 namespace xjw::mvs
 {
 namespace
@@ -44,6 +48,22 @@ void parallelForRows(int row_count,
         }
         return;
     }
+
+#if defined(_OPENMP)
+    if (!omp_in_parallel())
+    {
+#pragma omp parallel for schedule(dynamic, 1) num_threads(workers)
+        for (int row = 0; row < row_count; ++row)
+        {
+            if (cancelled && cancelled->load(std::memory_order_relaxed))
+            {
+                continue;
+            }
+            fn(row);
+        }
+        return;
+    }
+#endif
 
     std::atomic<int> next_row{0};
     std::vector<std::thread> threads;

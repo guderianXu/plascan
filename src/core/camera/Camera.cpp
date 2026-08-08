@@ -673,7 +673,28 @@ bool Camera::projectWorldPointWithDepth(const double world[3],
     {
         return false;
     }
-    return projectWorldPoint(world, pixel);
+
+    // `camera_point` 已经在上面计算过。旧实现再次调用
+    // projectWorldPoint()，会为每个像素重复一次完整的世界到相机变换；
+    // 多视深度一致性会调用数十亿次该路径，因此直接完成透视投影。
+    const double camera_z = camera_point[2];
+    if (std::fabs(camera_z) < 1.0e-9)
+    {
+        return false;
+    }
+    const double normalized_x = camera_point[0] / camera_z;
+    const double normalized_y = camera_point[1] / camera_z;
+    double distorted_x = 0.0;
+    double distorted_y = 0.0;
+    applyTsaiDistortion(
+        normalized_x, normalized_y, distorted_x, distorted_y);
+    pixel[0] = static_cast<double>(_intrinsics.uAxisSign) *
+                   (_intrinsics.focalX * distorted_x) +
+               _intrinsics.principalX;
+    pixel[1] = static_cast<double>(_intrinsics.vAxisSign) *
+                   (_intrinsics.focalY * distorted_y) +
+               _intrinsics.principalY;
+    return true;
 }
 
 double Camera::positiveDepth(const double world[3]) const
@@ -746,6 +767,19 @@ bool Camera::undistortPixel(const double pixel[2], double norm[2],
              * (pixel[0] - intrinsics.principalX) / intrinsics.focalX;
     double y = static_cast<double>(intrinsics.vAxisSign)
              * (pixel[1] - intrinsics.principalY) / intrinsics.focalY;
+
+    // MVS 统一使用去畸变后的针孔相机。零畸变时 Newton 迭代的首轮
+    // 必然得到零残差，直接返回同一解析结果可避免每个像素的函数调用、
+    // 多项式计算和收敛判断。
+    const Distortion &distortion = _distortion;
+    if (distortion.radialK1 == 0.0 && distortion.radialK2 == 0.0 &&
+        distortion.radialK3 == 0.0 && distortion.tangentialP1 == 0.0 &&
+        distortion.tangentialP2 == 0.0)
+    {
+        norm[0] = x;
+        norm[1] = y;
+        return true;
+    }
 
     for (int iter = 0; iter < maxIter; ++iter)
     {
