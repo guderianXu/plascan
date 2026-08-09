@@ -89,8 +89,14 @@ cmake --workflow --preset windows-package-release
 
 ## Linux 一键打包
 
-Linux 发布基线为 Ubuntu 24.04 x86_64、CMake 3.25+、Ninja 和 vcpkg。通用 CPU/OpenCL 包的增量
-rootfs 与正式 DEB 分别运行：
+Linux 发布基线为 Ubuntu 24.04 x86_64、CMake 3.25+、GCC/G++、`gfortran`、Ninja、`pkg-config`、
+`patchelf` 和 vcpkg。先准备宿主构建依赖，再运行通用 CPU/OpenCL 包的增量 rootfs 与正式 DEB：
+
+```bash
+sudo apt install build-essential gfortran ninja-build pkg-config patchelf
+```
+
+打包命令为：
 
 ```bash
 export VCPKG_ROOT=/path/to/vcpkg

@@ -82,7 +82,7 @@
       "binaryDir": "${sourceDir}/build/linux-vcpkg-cuda-package-release",
       "cacheVariables": {
         "PLASCAN_CUDA_ARCHITECTURES": "75;86;89;120",
-        "PLASCAN_DEBIAN_ACCELERATOR_DEPENDS": "cuda-cudart-13-1, libcublas-13-1, libcusparse-13-1, cuda-nvrtc-13-1, libnvjitlink-13-1, libnvinfer10 (>= 10.15), libnvonnxparsers10 (>= 10.15), libnvinfer-plugin10 (>= 10.15)",
+        "PLASCAN_DEBIAN_ACCELERATOR_DEPENDS": "cuda-cudart-13-1, libcublas-13-1, libcusolver-13-1, libcusparse-13-1, cuda-nvrtc-13-1, libnvjitlink-13-1, libnvinfer10 (>= 10.15), libnvonnxparsers10 (>= 10.15), libnvinfer-plugin10 (>= 10.15)",
         "PLASCAN_DEBIAN_PACKAGE_VARIANT": "cuda",
         "PLASCAN_ENABLE_CUDA": "ON",
         "PLASCAN_ENABLE_TENSORRT": "ON",

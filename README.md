@@ -61,7 +61,14 @@ cpack --preset linux-vcpkg-release
 ```
 
 Linux 正式交付建议使用 Ubuntu 24.04 x86_64 基线的一键 DEB 工作流。首次配置会由 vcpkg 构建带
-XCB/OpenSSL 的 Qt 运行时；打包前还需按下文准备两份 ONNX。日常修改代码后运行：
+XCB/OpenSSL 的 Qt 运行时；构建机还需安装 GCC/G++、`gfortran`、Ninja、`pkg-config` 和 `patchelf`。
+打包前还需按下文准备两份 ONNX。日常修改代码后运行：
+
+```bash
+sudo apt install build-essential gfortran ninja-build pkg-config patchelf
+```
+
+然后运行增量打包检查：
 
 ```bash
 export VCPKG_ROOT=/path/to/vcpkg
