@@ -4670,7 +4670,8 @@ TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
     const int workerSave = source.indexOf(
         QStringLiteral(
             "std::move(saveReservation), i, res, QStringLiteral(\"初始\")"));
-    const int waitBeforeConsistency = source.indexOf(QStringLiteral("saveQueue.waitUntilIdle()"));
+    const int waitBeforeConsistency = source.indexOf(
+        QStringLiteral("saveQueue.waitUntilIdle(&_cancelled)"));
     const int consistencyPass = source.indexOf(QStringLiteral("crossCheckDepthConsistency();"));
     const int finalSave = source.indexOf(
         QStringLiteral(
