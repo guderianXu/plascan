@@ -13,7 +13,7 @@
 - CMake 3.25+ 和 Ninja。
 - Qt6、OpenCV 4、GDAL、libtiff、libzip、OpenMP、GTest 和 TensorRT（GPU 匹配）。
 - CUDA Toolkit 可选；启用后用于深度学习特征、匹配、MVS、点云处理和 dense match 加速。
-- OpenCL SDK/loader 可选；启用后可由 AMD、Intel 或 NVIDIA GPU 加速 MVS 与点云预处理。
+- OpenCL 1.2 SDK/loader 可选；启用后可由 AMD、Intel 或 NVIDIA GPU 加速 MVS 与点云预处理。
 - Python 3.10+ 可选；用于模型导出、数据准备和脚本化验证。
 
 ### 克隆并构建
@@ -73,7 +73,7 @@ cpack --preset windows-vcpkg-release
 即使开发机已安装 CUDA/OpenCL，也可用
 `-DPLASCAN_ENABLE_CUDA=OFF -DPLASCAN_ENABLE_OPENCL=OFF -DPLASCAN_ENABLE_TENSORRT=OFF`
 配置可重复的 CPU-only 构建。该配置会关闭 PlaMatrix/PlaPoint 的 CUDA 后端和 PlaPoint/MVS 的
-OpenCL 后端，MVS 仍编译并运行真实 CPU PatchMatch。
+OpenCL 后端，同时关闭 PlaMatrix 的 OpenCL 基础设施；MVS 仍编译并运行真实 CPU PatchMatch。
 
 `cpack --preset windows-vcpkg-release` 生成 ZIP 离线包。安装 Inno Setup 6 后，可从已配置的
 Windows Release 构建生成带开始菜单、桌面快捷方式、卸载入口和 `.plascan` 文件关联的安装程序：
@@ -271,14 +271,17 @@ build/bin/three_d_reconstruction_cli path/to/input.lis \
 CUDA → OpenCL → CPU 选择；显式指定的后端不可用时会明确失败，不会伪装成其他设备。
 MVS 会在生成 workspace hash 和启动首帧前逐卡取得租约，并完成 OpenCL context/kernel 编译预检；
 部分 CUDA 卡忙时继续使用其余 CUDA 卡，全部 CUDA 不可用时才进入 OpenCL，再失败才使用 CPU。
-OpenCL 已覆盖高度格网，但 PlaMatrix 的 OpenCL 稀疏 PCG 尚未实现。Poisson 求解后端与点云
+PlaMatrix 统一提供 OpenCL 1.2 设备枚举、context/command queue、program cache、device buffer 和执行封装；
+PlaPoint 在这些公共设施之上只保留点云领域 kernel。第一阶段的 PlaPoint 高层接口仍是 CPU-owned：
+SOR/Radius、Voxel、Normals 和 HeightGrid 的输入输出驻留主机，并仍包含主机建索引、排序、属性聚合或
+协方差/SVD 等阶段。它可让非 NVIDIA GPU 参与计算，但是否快于原生 CPU 取决于点数、属性和驱动，
+需以真实数据 benchmark 为准；超大近二维地表云或病态分布触发工作量保护时，Auto 会记录原因并回退
+CPU，显式 OpenCL 则明确报错。
+这层基础设施不代表 PlaMatrix 已提供 OpenCL GEMM、SVD、CSR 或稀疏 PCG。Poisson 求解后端与点云
 预处理独立，当前自动在 CUDA 和 CPU 之间选择；因此显式 OpenCL 仍可用于前处理，而不会被误传给 Poisson。
-当前 PlaPoint OpenCL 是 CPU-owned 的兼容后端：SOR/Radius、Voxel、Normals 和 HeightGrid 都仍包含
-主机建索引、排序、属性聚合或协方差/SVD 等阶段。它可让非 NVIDIA GPU 参与计算，但是否快于原生 CPU
-取决于点数、属性和驱动，需以真实数据 benchmark 为准；超大近二维地表云或病态分布触发工作量保护时，
-Auto 会记录原因并回退 CPU，显式 OpenCL 则明确报错。
-多块 OpenCL GPU 并存时，可用 `PLAPOINT_OPENCL_DEVICE_INDEX` 指定 PlaPoint 枚举出的稳定设备索引；
-未设置时会优先选择独立显卡和计算单元较多的设备。
+多块 OpenCL GPU 并存时，可用 `PLAMATRIX_OPENCL_DEVICE_INDEX` 指定 PlaMatrix 枚举出的稳定设备索引；
+未设置时会优先选择独立显卡和计算单元较多的设备。兼容期仍接受旧的
+`PLAPOINT_OPENCL_DEVICE_INDEX`，但仅在对应 PlaMatrix 环境变量未设置时作为回退。
 当前稀疏前端仍要求 CUDA/TensorRT，显式 `--device cpu` 会返回不支持错误，不会切换算法。
 `--feature-max-image-dim 0` 表示使用质量档位的默认设置；最高质量档不会自动缩小 SIFT 输入。
 显存紧张时可手动调小，

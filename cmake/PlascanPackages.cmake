@@ -43,11 +43,11 @@ message(STATUS "plascan: found OpenCV ${OpenCV_VERSION} (${PLASCAN_OPENCV_COMPON
 
 # ── OpenCL（可选，用于 AMD/Intel/NVIDIA 通用 GPU 计算）─────────────────────────────
 if(PLASCAN_ENABLE_OPENCL)
-  find_package(OpenCL QUIET)
+  find_package(OpenCL 1.2 QUIET)
   if(OpenCL_FOUND)
     message(STATUS "plascan: found OpenCL ${OpenCL_VERSION_STRING}")
   else()
-    message(STATUS "plascan: OpenCL development files not found, OpenCL GPU backend disabled")
+    message(STATUS "plascan: OpenCL 1.2 development files not found, OpenCL GPU backend disabled")
   endif()
 endif()
 
@@ -116,15 +116,20 @@ endif()
 message(STATUS "plascan: found libzip, target=${PLASCAN_LIBZIP_TARGET}")
 
 # ── plamatrix (submodule) ──────────────────────────────────────────────────────
-if(NOT PLASCAN_ENABLE_CUDA)
+if(PLASCAN_ENABLE_CUDA AND CMAKE_CUDA_COMPILER AND NOT PLASCAN_APPLE_SILICON)
+  set(PLAMATRIX_WITH_CUDA ON CACHE BOOL "Build PlaMatrix with CUDA acceleration" FORCE)
+  set(PLAPOINT_WITH_CUDA ON CACHE BOOL "Build PlaPoint with CUDA acceleration" FORCE)
+else()
   set(PLAMATRIX_WITH_CUDA OFF CACHE BOOL "Build PlaMatrix with CUDA acceleration" FORCE)
   set(PLAPOINT_WITH_CUDA OFF CACHE BOOL "Build PlaPoint with CUDA acceleration" FORCE)
 endif()
 if(PLASCAN_ENABLE_OPENCL AND TARGET OpenCL::OpenCL)
-  set(PLAPOINT_WITH_OPENCL ON CACHE BOOL "Build PlaPoint OpenCL acceleration" FORCE)
+  set(PLAMATRIX_WITH_OPENCL ON CACHE BOOL "Build PlaMatrix OpenCL infrastructure" FORCE)
 else()
-  set(PLAPOINT_WITH_OPENCL OFF CACHE BOOL "Build PlaPoint OpenCL acceleration" FORCE)
+  set(PLAMATRIX_WITH_OPENCL OFF CACHE BOOL "Build PlaMatrix OpenCL infrastructure" FORCE)
 endif()
+set(PLAPOINT_WITH_OPENCL ${PLAMATRIX_WITH_OPENCL}
+  CACHE BOOL "Build PlaPoint OpenCL acceleration on PlaMatrix" FORCE)
 add_subdirectory(${CMAKE_SOURCE_DIR}/3rdparty/plamatrix ${CMAKE_BINARY_DIR}/3rdparty/plamatrix)
 message(STATUS "plascan: using plamatrix from 3rdparty/")
 
