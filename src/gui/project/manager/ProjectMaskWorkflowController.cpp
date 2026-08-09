@@ -142,6 +142,24 @@ ProjectMaskWorkflowController::ProjectMaskWorkflowController(ProjectData *projec
     , _projectData(projectData)
     , _parentWidget(parentWidget)
 {
+    if (_projectData)
+    {
+        connect(_projectData, &ProjectData::projectOpened,
+                this, [this](const QString &)
+        {
+            cancelActiveTask();
+        });
+        connect(_projectData, &ProjectData::projectClosed,
+                this, &ProjectMaskWorkflowController::cancelActiveTask);
+        connect(_projectData, &ProjectData::activeChunkChanged,
+                this, [this](const QString &, const QString &, int)
+        {
+            if (_running)
+            {
+                cancelActiveTask();
+            }
+        });
+    }
 }
 
 void ProjectMaskWorkflowController::setActiveImagePath(const QString &imagePath)
@@ -238,7 +256,7 @@ void ProjectMaskWorkflowController::openDialogForImages(const QStringList &reque
     QPointer<ProjectMaskWorkflowController> guard(this);
     xjw::gui::tasks::runGuardedWithOutcome(
         this,
-        [settings, targets, projectPath, cancellation, guard]()
+        [settings, targets, projectPath, chunkId, cancellation, guard]()
         {
             GenerateMaskResult result;
             const auto options = generationOptions(settings);
@@ -280,9 +298,20 @@ void ProjectMaskWorkflowController::openDialogForImages(const QStringList &reque
                 const auto report = [&]()
                 {
                     ++completed;
-                    xjw::gui::tasks::postGuarded(guard, [completed, total = targets.size()](auto *self)
+                    xjw::gui::tasks::postGuarded(
+                        guard,
+                        [completed,
+                         total = targets.size(),
+                         projectPath,
+                         chunkId,
+                         cancellation](auto *self)
                     {
-                        emit self->progressChanged(QStringLiteral("生成蒙版"), completed, total);
+                        if (!cancellation.isCancellationRequested()
+                            && self->matchesSession(projectPath, chunkId))
+                        {
+                            emit self->progressChanged(
+                                QStringLiteral("生成蒙版"), completed, total);
+                        }
                     });
                 };
                 const cv::Mat source = xjw::common::io::readImage(imagePath, cv::IMREAD_UNCHANGED);

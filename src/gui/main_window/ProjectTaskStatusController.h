@@ -8,6 +8,11 @@ class QStatusBar;
 class TaskStatusWidget;
 class QWidget;
 
+namespace xjw::gui::platform
+{
+class TaskbarProgressController;
+}
+
 class ProjectTaskStatusController final : public QObject
 {
     Q_OBJECT
@@ -38,6 +43,8 @@ private slots:
     void finishAerialTriangulation(bool success);
     void updateMask(const QString &stage, int done, int total);
     void finishMask(bool success);
+    void updateImageImport(const QString &stage, int done, int total);
+    void finishImageImport(bool success, const QString &message);
 
 private:
     TaskStatusWidget *createStatus(int labelWidth,
@@ -46,20 +53,34 @@ private:
     void updatePercentTask(TaskStatusWidget *status,
                            const QString &stage,
                            int percent,
-                           bool appendIntermediatePercent);
+                           bool appendIntermediatePercent,
+                           const QString &taskId);
     void finishTask(TaskStatusWidget *status,
                     bool success,
                     const QString &successMessage,
-                    const QString &failureMessage);
+                    const QString &failureMessage,
+                    const QString &taskId);
+    void updateImageLoadingTask(TaskStatusWidget *status,
+                                const QString &taskId,
+                                const QString &stage,
+                                int done,
+                                int total);
+    void finishImageLoadingTask(TaskStatusWidget *status,
+                                const QString &taskId,
+                                bool success,
+                                const QString &message);
+    void resetTaskProgress();
     void refreshDashboard();
 
     ProjectManager *_projectManager = nullptr;
     ProjectDashboardWidget *_dashboard = nullptr;
     QStatusBar *_statusBar = nullptr;
+    xjw::gui::platform::TaskbarProgressController *_taskbarProgress = nullptr;
     TaskStatusWidget *_meshStatus = nullptr;
     TaskStatusWidget *_pointCloudStatus = nullptr;
     TaskStatusWidget *_aerialTriangulationStatus = nullptr;
     TaskStatusWidget *_tiePointStatus = nullptr;
     TaskStatusWidget *_maskStatus = nullptr;
-    TaskStatusWidget *_imageLoadingStatus = nullptr;
+    TaskStatusWidget *_imageImportStatus = nullptr;
+    TaskStatusWidget *_photoListStatus = nullptr;
 };

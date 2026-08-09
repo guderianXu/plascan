@@ -553,6 +553,8 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/main_window/ModelDropSupport.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/main_window/WorkspacePanelController.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/main_window/ProjectUiHydrator.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/main_window/ProjectTaskStatusController.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/platform/TaskbarProgressController.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ImageViewRotationSettings.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/settings/DialogSettingStore.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/DepthOverlayData.cpp
@@ -636,6 +638,7 @@ target_include_directories(test_gui_project_utils PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui/menu
     ${CMAKE_SOURCE_DIR}/src/gui/runtime
     ${CMAKE_SOURCE_DIR}/src/gui/main_window
+    ${CMAKE_SOURCE_DIR}/src/gui/platform
     ${CMAKE_SOURCE_DIR}/src/gui/markers
     ${CMAKE_SOURCE_DIR}/src/gui/tasks
     ${CMAKE_SOURCE_DIR}/src/gui/project
@@ -660,6 +663,9 @@ target_include_directories(test_gui_project_utils PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core
     ${OpenCV_INCLUDE_DIRS}
 )
+if(WIN32)
+    target_link_libraries(test_gui_project_utils PRIVATE ole32 user32 uuid)
+endif()
 set(PLASCAN_QT_PLATFORM_PLUGIN_PATH
     "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/platforms")
 gtest_discover_tests(test_gui_project_utils

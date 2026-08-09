@@ -568,7 +568,8 @@ gui/
 │   └── LogPanel.h/cpp          # 日志面板 (QPlainTextEdit)
 │
 ├── platform/
-│   └── ProjectFileIntegration.h/cpp # 启动工程参数解析与 Windows 当前用户文件关联
+│   ├── ProjectFileIntegration.h/cpp # 启动工程参数解析与 Windows 当前用户文件关联
+│   └── TaskbarProgressController.h/cpp # 聚合项目任务进度并映射到 Windows 任务栏图标
 │
 ├── log/                        # GUI 层日志 (使用 #include 快捷方式)
 ├── cmake/                      # GUI 构建配置
@@ -1065,7 +1066,9 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
   控制器。GUI 中不存在“稠密重建管理器”；`ProjectPointCloudWorkflowController` 只协调深度估计与点云融合。
 - `MainWindow` 按布局、菜单绑定、项目绑定和 UI 状态拆分实现；项目打开/保存展示由
   `ProjectLifecyclePresenter` 管理，状态栏任务由 `ProjectTaskStatusController` 管理，特征点/残差显示配置由
-  `FeatureVisualizationController` 管理。`CameraModel3DDialog` 只保留对话框装配，三维场景职责位于
+  `FeatureVisualizationController` 管理。任务栏图标进度由 `ProjectTaskStatusController` 聚合项目打开、保存、
+  DEM、正射和后台重建任务，再通过平台适配器显示；非 Windows 平台保持无副作用。`CameraModel3DDialog`
+  只保留对话框装配，三维场景职责位于
   `views/CameraSceneWidget`。
   `DataTreeWidget` 按模型、填充、上下文菜单、资源元数据和相机对齐判定拆分实现。
 - 正射流程为 `MenuWorkflowController -> ProjectManager -> ProjectTerrainProductsManager ->`

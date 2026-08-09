@@ -23,7 +23,9 @@
 #include "LayerRenderer.h"
 #include "ProjectSessionContext.h"
 
+#include <atomic>
 #include <functional>
+#include <memory>
 
 class QMainWindow;
 class MainMenu;
@@ -119,7 +121,8 @@ private:
                                        const xjw::gui::project::ProjectSessionContext &session,
                                        const QJsonObject &projectMeta,
                                        const QString &outputRoot,
-                                       bool fillMissingTiePoints);
+                                       bool fillMissingTiePoints,
+                                       const std::shared_ptr<std::atomic<bool>> &cancelFlag);
     /// 各对话框记忆化设置管理器（生命周期与控制器一致）。
     DialogSettingStore *_mapSetting = nullptr;
     DialogSettingStore *_aerialTriangulationSetting = nullptr;

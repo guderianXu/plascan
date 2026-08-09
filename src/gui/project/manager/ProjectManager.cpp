@@ -385,8 +385,14 @@ ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
     {
         const auto advanceSessionGeneration = [this]()
         {
+            if (_atCancelFlag)
+            {
+                _atCancelFlag->store(true, std::memory_order_relaxed);
+                _atCancelFlag.reset();
+            }
             ++_projectSessionGeneration;
             discardBundleAdjustPreview();
+            emit projectSessionChanged();
         };
         connect(_projectData, &ProjectData::projectOpened,
                 this, advanceSessionGeneration);
@@ -521,6 +527,12 @@ ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
             this, &ProjectManager::demPipelineProgressChanged);
         connect(_terrainProductsManager, &ProjectTerrainProductsManager::demPipelineFinished,
             this, &ProjectManager::demPipelineFinished);
+        connect(_terrainProductsManager,
+            &ProjectTerrainProductsManager::backgroundTaskProgressChanged,
+            this,
+            &ProjectManager::backgroundTaskProgressChanged);
+        connect(_terrainProductsManager, &ProjectTerrainProductsManager::backgroundTaskFinished,
+            this, &ProjectManager::backgroundTaskFinished);
         connect(_terrainProductsManager, &ProjectTerrainProductsManager::orthoPipelineStarted,
             this, &ProjectManager::orthoPipelineStarted);
         connect(_terrainProductsManager, &ProjectTerrainProductsManager::orthoPipelineProgressChanged,
@@ -1793,10 +1805,12 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
     opts.baOpt.cancelFlag = cancelFlag;
     QPointer<ProjectManager> baProgressSelf(this);
     opts.baOpt.progressCallback =
-        [baProgressSelf, cancelFlag](int currentIteration, int maxIterations, double avgRms, int validPoints) -> bool
+        [baProgressSelf, cancelFlag, session](int currentIteration,
+                                             int maxIterations,
+                                             double avgRms,
+                                             int validPoints) -> bool
         {
-            if (!baProgressSelf ||
-                cancelFlag->load(std::memory_order_relaxed))
+            if (!baProgressSelf || cancelFlag->load(std::memory_order_relaxed))
             {
                 return false;
             }
@@ -1813,13 +1827,14 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
                 .arg(validPoints);
             QMetaObject::invokeMethod(
                 baProgressSelf.data(),
-                [baProgressSelf, cancelFlag, stage, percent]()
+                [baProgressSelf, cancelFlag, session, stage, percent]()
                 {
                     if (!baProgressSelf)
                     {
                         return;
                     }
                     if (baProgressSelf->_atCancelFlag != cancelFlag ||
+                        !baProgressSelf->isCurrentSession(session) ||
                         cancelFlag->load(std::memory_order_relaxed))
                     {
                         return;

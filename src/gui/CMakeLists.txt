@@ -145,6 +145,10 @@ if(TARGET mvs)
   target_link_libraries(gui_project PRIVATE mvs)
 endif()
 
+if(TARGET aerial_triangulation)
+  target_link_libraries(gui_project PRIVATE aerial_triangulation)
+endif()
+
 if(PLASCAN_BUILD_GUI)
   if(GDAL_INCLUDE_DIRS)
     target_include_directories(plascan_gui PRIVATE ${GDAL_INCLUDE_DIRS})
@@ -177,7 +181,7 @@ target_link_libraries(plascan_gui PRIVATE
 )
 
 if(WIN32)
-  target_link_libraries(plascan_gui PRIVATE advapi32 shell32)
+  target_link_libraries(plascan_gui PRIVATE advapi32 ole32 shell32 user32 uuid)
 endif()
 
 #==============================================================================

@@ -3,6 +3,7 @@
 #include "ProjectDashboardWidget.h"
 #include "ProjectManager.h"
 #include "TaskStatusWidget.h"
+#include "TaskbarProgressController.h"
 
 #include <QJsonArray>
 #include <QJsonObject>
@@ -19,14 +20,18 @@ ProjectTaskStatusController::ProjectTaskStatusController(ProjectManager *project
     , _projectManager(projectManager)
     , _dashboard(dashboard)
     , _statusBar(statusBar)
+    , _taskbarProgress(new xjw::gui::platform::TaskbarProgressController(
+          widgetParent, this))
 {
     _meshStatus = createStatus(220, tr("正在取消模型生成..."), widgetParent);
     _pointCloudStatus = createStatus(220, tr("正在取消点云创建..."), widgetParent);
     _aerialTriangulationStatus = createStatus(220, tr("正在取消空三/光束法平差..."), widgetParent);
     _tiePointStatus = createStatus(180, tr("正在取消特征匹配..."), widgetParent);
     _maskStatus = createStatus(180, tr("正在取消生成蒙版..."), widgetParent);
-    _imageLoadingStatus = createStatus(180, QString(), widgetParent);
-    _imageLoadingStatus->setCancellable(false);
+    _imageImportStatus = createStatus(180, QString(), widgetParent);
+    _imageImportStatus->setCancellable(false);
+    _photoListStatus = createStatus(180, QString(), widgetParent);
+    _photoListStatus->setCancellable(false);
 
     connect(_meshStatus, &TaskStatusWidget::cancelRequested,
             _projectManager, &ProjectManager::cancelModelGeneration);
@@ -56,15 +61,49 @@ ProjectTaskStatusController::ProjectTaskStatusController(ProjectManager *project
     connect(_projectManager, &ProjectManager::maskGenerationFinished,
             this, &ProjectTaskStatusController::finishMask);
     connect(_projectManager, &ProjectManager::imageImportProgressChanged,
-            this, &ProjectTaskStatusController::updateImageLoading);
+            this, &ProjectTaskStatusController::updateImageImport);
     connect(_projectManager, &ProjectManager::imageImportFinished,
-            this, &ProjectTaskStatusController::finishImageLoading);
+            this, &ProjectTaskStatusController::finishImageImport);
+    connect(_projectManager, &ProjectManager::backgroundTaskProgressChanged,
+            _taskbarProgress,
+            &xjw::gui::platform::TaskbarProgressController::updateTask);
+    connect(_projectManager, &ProjectManager::backgroundTaskFinished,
+            _taskbarProgress,
+            &xjw::gui::platform::TaskbarProgressController::finishTask);
+    connect(_projectManager, &ProjectManager::projectOpenStarted,
+            this, [this](const QString &)
+    {
+        _taskbarProgress->updateTask(QStringLiteral("project_open"), 0, 100);
+    });
+    connect(_projectManager, &ProjectManager::projectOpenProgressChanged,
+            this, [this](const QString &, int percent)
+    {
+        _taskbarProgress->updateTask(QStringLiteral("project_open"), percent, 100);
+    });
+    connect(_projectManager, &ProjectManager::projectOpenFinished,
+            this, [this](bool, const QString &)
+    {
+        _taskbarProgress->finishTask(QStringLiteral("project_open"));
+    });
+    connect(_projectManager, &ProjectManager::projectSessionChanged,
+            this, &ProjectTaskStatusController::resetTaskProgress);
+    connect(_projectManager, &ProjectManager::saveStarted,
+            this, [this]()
+    {
+        _taskbarProgress->updateTask(QStringLiteral("project_save"), 0, 0);
+    });
+    connect(_projectManager, &ProjectManager::saveFinished,
+            this, [this](bool)
+    {
+        _taskbarProgress->finishTask(QStringLiteral("project_save"));
+    });
     refreshDashboard();
 }
 
 void ProjectTaskStatusController::showTiePointProgress(int total)
 {
     _tiePointStatus->begin(tr("特征匹配 0/%1").arg(total), 0, total);
+    _taskbarProgress->updateTask(QStringLiteral("tie_points"), 0, total);
     refreshDashboard();
     _statusBar->showMessage(QString());
 }
@@ -74,29 +113,44 @@ void ProjectTaskStatusController::updateTiePointProgress(int done)
     const int total = _tiePointStatus->progressMaximum();
     const int value = std::clamp(done, 0, total);
     _tiePointStatus->updateProgress(tr("特征匹配 %1/%2").arg(value).arg(total), value);
+    _taskbarProgress->updateTask(QStringLiteral("tie_points"), value, total);
     refreshDashboard();
 }
 
 void ProjectTaskStatusController::finishTiePointProgress(bool success)
 {
+    const bool wasActive = _tiePointStatus->isActive()
+        || _taskbarProgress->hasTask(QStringLiteral("tie_points"));
     _tiePointStatus->finish();
+    _taskbarProgress->finishTask(QStringLiteral("tie_points"));
     refreshDashboard();
-    _statusBar->showMessage(success ? tr("匹配完成") : tr("匹配已取消"), 4000);
+    if (wasActive)
+    {
+        _statusBar->showMessage(success ? tr("匹配完成") : tr("匹配已取消"), 4000);
+    }
 }
 
 void ProjectTaskStatusController::updateMesh(const QString &stage, int percent)
 {
-    updatePercentTask(_meshStatus, stage, percent, false);
+    updatePercentTask(_meshStatus, stage, percent, false, QStringLiteral("mesh"));
 }
 
 void ProjectTaskStatusController::finishMesh(bool success)
 {
-    finishTask(_meshStatus, success, tr("网格重建完成"), tr("网格重建失败"));
+    finishTask(_meshStatus,
+               success,
+               tr("网格重建完成"),
+               tr("网格重建失败"),
+               QStringLiteral("mesh"));
 }
 
 void ProjectTaskStatusController::updatePointCloud(const QString &stage, int percent)
 {
-    updatePercentTask(_pointCloudStatus, stage, percent, true);
+    updatePercentTask(_pointCloudStatus,
+                      stage,
+                      percent,
+                      true,
+                      QStringLiteral("point_cloud"));
 }
 
 void ProjectTaskStatusController::finishPointCloud(bool success)
@@ -104,12 +158,17 @@ void ProjectTaskStatusController::finishPointCloud(bool success)
     finishTask(_pointCloudStatus,
                success,
                tr("点云创建完成"),
-               tr("点云创建已取消或失败"));
+               tr("点云创建已取消或失败"),
+               QStringLiteral("point_cloud"));
 }
 
 void ProjectTaskStatusController::updateAerialTriangulation(const QString &stage, int percent)
 {
-    updatePercentTask(_aerialTriangulationStatus, stage, percent, true);
+    updatePercentTask(_aerialTriangulationStatus,
+                      stage,
+                      percent,
+                      true,
+                      QStringLiteral("aerial_triangulation"));
 }
 
 void ProjectTaskStatusController::finishAerialTriangulation(bool success)
@@ -117,7 +176,8 @@ void ProjectTaskStatusController::finishAerialTriangulation(bool success)
     finishTask(_aerialTriangulationStatus,
                success,
                tr("空三/光束法平差完成"),
-               tr("空三/光束法平差已取消或失败"));
+               tr("空三/光束法平差已取消或失败"),
+               QStringLiteral("aerial_triangulation"));
 }
 
 void ProjectTaskStatusController::updateMask(const QString &stage, int done, int total)
@@ -133,43 +193,92 @@ void ProjectTaskStatusController::updateMask(const QString &stage, int done, int
         _maskStatus->begin(text, 0, maximum);
     }
     _maskStatus->updateProgress(text, value);
+    _taskbarProgress->updateTask(QStringLiteral("mask"), value, maximum);
     refreshDashboard();
     _statusBar->showMessage(QString());
 }
 
 void ProjectTaskStatusController::finishMask(bool success)
 {
+    const bool wasActive = _maskStatus->isActive()
+        || _taskbarProgress->hasTask(QStringLiteral("mask"));
     _maskStatus->finish();
+    _taskbarProgress->finishTask(QStringLiteral("mask"));
     refreshDashboard();
-    _statusBar->showMessage(success ? tr("蒙版生成完成") : tr("蒙版生成已取消或失败"), 4000);
+    if (wasActive)
+    {
+        _statusBar->showMessage(
+            success ? tr("蒙版生成完成") : tr("蒙版生成已取消或失败"), 4000);
+    }
 }
 
 void ProjectTaskStatusController::updateImageLoading(const QString &stage, int done, int total)
+{
+    updateImageLoadingTask(
+        _photoListStatus, QStringLiteral("photo_list"), stage, done, total);
+}
+
+void ProjectTaskStatusController::finishImageLoading(bool success, const QString &message)
+{
+    finishImageLoadingTask(_photoListStatus,
+                           QStringLiteral("photo_list"),
+                           success,
+                           message);
+}
+
+void ProjectTaskStatusController::updateImageImport(const QString &stage, int done, int total)
+{
+    updateImageLoadingTask(
+        _imageImportStatus, QStringLiteral("image_import"), stage, done, total);
+}
+
+void ProjectTaskStatusController::finishImageImport(bool success, const QString &message)
+{
+    finishImageLoadingTask(_imageImportStatus,
+                           QStringLiteral("image_import"),
+                           success,
+                           message);
+}
+
+void ProjectTaskStatusController::updateImageLoadingTask(TaskStatusWidget *status,
+                                                         const QString &taskId,
+                                                         const QString &stage,
+                                                         int done,
+                                                         int total)
 {
     const int maximum = std::max(0, total);
     const int value = maximum > 0 ? std::clamp(done, 0, maximum) : 0;
     const QString text = maximum > 0
         ? tr("%1 %2/%3").arg(stage).arg(value).arg(maximum)
         : stage;
-    if (!_imageLoadingStatus->isActive())
+    if (!status->isActive())
     {
-        _imageLoadingStatus->begin(text, 0, maximum);
+        status->begin(text, 0, maximum);
     }
-    else if (_imageLoadingStatus->progressMaximum() != maximum)
+    else if (status->progressMaximum() != maximum)
     {
-        _imageLoadingStatus->begin(text, 0, maximum);
+        status->begin(text, 0, maximum);
     }
-    _imageLoadingStatus->updateProgress(text, value);
+    status->updateProgress(text, value);
+    _taskbarProgress->updateTask(taskId, value, maximum);
     refreshDashboard();
     _statusBar->showMessage(QString());
 }
 
-void ProjectTaskStatusController::finishImageLoading(bool success, const QString &message)
+void ProjectTaskStatusController::finishImageLoadingTask(TaskStatusWidget *status,
+                                                         const QString &taskId,
+                                                         bool success,
+                                                         const QString &message)
 {
-    _imageLoadingStatus->finish();
+    const bool wasActive = status->isActive() || _taskbarProgress->hasTask(taskId);
+    _taskbarProgress->finishTask(taskId);
+    status->finish();
     refreshDashboard();
-    const QString fallback = success ? tr("影像加载完成") : tr("影像加载已停止或失败");
-    _statusBar->showMessage(message.trimmed().isEmpty() ? fallback : message, 4000);
+    if (wasActive)
+    {
+        const QString fallback = success ? tr("影像加载完成") : tr("影像加载已停止或失败");
+        _statusBar->showMessage(message.trimmed().isEmpty() ? fallback : message, 4000);
+    }
 }
 
 TaskStatusWidget *ProjectTaskStatusController::createStatus(int labelWidth,
@@ -189,7 +298,8 @@ TaskStatusWidget *ProjectTaskStatusController::createStatus(int labelWidth,
 void ProjectTaskStatusController::updatePercentTask(TaskStatusWidget *status,
                                                     const QString &stage,
                                                     int percent,
-                                                    bool appendIntermediatePercent)
+                                                    bool appendIntermediatePercent,
+                                                    const QString &taskId)
 {
     const int value = std::clamp(percent, 0, 100);
     const QString text = appendIntermediatePercent && value > 0 && value < 100
@@ -200,6 +310,7 @@ void ProjectTaskStatusController::updatePercentTask(TaskStatusWidget *status,
         status->begin(text, 0, 100);
     }
     status->updateProgress(text, value);
+    _taskbarProgress->updateTask(taskId, value, 100);
     refreshDashboard();
     _statusBar->showMessage(QString());
 }
@@ -207,11 +318,37 @@ void ProjectTaskStatusController::updatePercentTask(TaskStatusWidget *status,
 void ProjectTaskStatusController::finishTask(TaskStatusWidget *status,
                                              bool success,
                                              const QString &successMessage,
-                                             const QString &failureMessage)
+                                             const QString &failureMessage,
+                                             const QString &taskId)
 {
+    const bool wasActive = status->isActive() || _taskbarProgress->hasTask(taskId);
     status->finish();
+    _taskbarProgress->finishTask(taskId);
     refreshDashboard();
-    _statusBar->showMessage(success ? successMessage : failureMessage, 4000);
+    if (wasActive)
+    {
+        _statusBar->showMessage(success ? successMessage : failureMessage, 4000);
+    }
+}
+
+void ProjectTaskStatusController::resetTaskProgress()
+{
+    for (TaskStatusWidget *status : {
+             _meshStatus,
+             _pointCloudStatus,
+             _aerialTriangulationStatus,
+             _tiePointStatus,
+             _maskStatus,
+             _imageImportStatus,
+             _photoListStatus})
+    {
+        if (status)
+        {
+            status->finish();
+        }
+    }
+    _taskbarProgress->clearTasks();
+    refreshDashboard();
 }
 
 void ProjectTaskStatusController::refreshDashboard()
@@ -241,6 +378,7 @@ void ProjectTaskStatusController::refreshDashboard()
     append(tr("空三/光束法平差"), _aerialTriangulationStatus);
     append(tr("特征匹配"), _tiePointStatus);
     append(tr("生成蒙版"), _maskStatus);
-    append(tr("加载影像"), _imageLoadingStatus);
+    append(tr("导入影像"), _imageImportStatus);
+    append(tr("加载照片列表"), _photoListStatus);
     _dashboard->setTaskSnapshots(tasks);
 }

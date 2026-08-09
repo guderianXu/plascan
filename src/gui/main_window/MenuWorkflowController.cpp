@@ -1034,6 +1034,16 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
         return;
     }
 
+    auto *pm = _projectManager;
+    if (pm->hasActiveAtTask())
+    {
+        QMessageBox::information(
+            _mainWindow,
+            QStringLiteral("空中三角测量"),
+            QStringLiteral("已有空三或光束法平差任务正在运行，请等待其结束或先取消当前任务。"));
+        return;
+    }
+
     const QStringList images = getProjectImages();
     if (images.size() < 2)
     {
@@ -1073,7 +1083,6 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
         }
     }
 
-    auto *pm = _projectManager;
     const auto session = pm->currentSessionContext();
     const QString projectPath = session.projectPath;
     QString outputRoot = settings.value(QStringLiteral("output_dir")).toString().trimmed();
@@ -1094,21 +1103,28 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
             .trimmed()
             .toLower();
 
+    auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
+    pm->setAtCancelFlag(cancelFlag);
     emit pm->atProgressChanged(QStringLiteral("空中三角测量: 检查上游数据..."), 0);
 
     QPointer<ProjectManager> pmGuard(pm);
-    const auto preflightProgress = [pmGuard](int processed, int total)
+    const auto preflightProgress = [pmGuard, session, cancelFlag](int processed, int total)
     {
-        if (!pmGuard)
+        if (!pmGuard || cancelFlag->load(std::memory_order_relaxed))
         {
             return;
         }
         const int percent = total <= 0
             ? 100
             : qBound(0, static_cast<int>((static_cast<qint64>(processed) * 100) / total), 100);
-        QMetaObject::invokeMethod(pmGuard.data(), [pmGuard, processed, total, percent]()
+        QMetaObject::invokeMethod(
+            pmGuard.data(),
+            [pmGuard, session, cancelFlag, processed, total, percent]()
         {
-            if (pmGuard)
+            if (pmGuard
+                && pmGuard->ownsAtCancelFlag(cancelFlag)
+                && pmGuard->isCurrentSession(session)
+                && !cancelFlag->load(std::memory_order_relaxed))
             {
                 emit pmGuard->atProgressChanged(
                     QStringLiteral("空中三角测量: 检查上游匹配索引 %1/%2")
@@ -1128,7 +1144,7 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
                                                                         selectedAlgorithmId,
                                                                         preflightProgress);
         },
-        [pmGuard, runSettings, images, session, projectMeta, outputRoot](
+        [pmGuard, cancelFlag, runSettings, images, session, projectMeta, outputRoot](
             MenuWorkflowController *controller,
             xjw::gui::tasks::TaskOutcome<SparsePrerequisiteSummary> outcome)
         {
@@ -1137,8 +1153,23 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
                 return;
             }
 
+            const bool ownsTask = pmGuard->ownsAtCancelFlag(cancelFlag);
+            const bool currentSession = pmGuard->isCurrentSession(session);
+            if (!ownsTask || !currentSession)
+            {
+                pmGuard->clearAtCancelFlag(cancelFlag);
+                return;
+            }
+            if (cancelFlag->load(std::memory_order_relaxed))
+            {
+                pmGuard->clearAtCancelFlag(cancelFlag);
+                emit pmGuard->atProgressFinished(false);
+                return;
+            }
+
             if (!outcome.succeeded())
             {
+                pmGuard->clearAtCancelFlag(cancelFlag);
                 emit pmGuard->atProgressFinished(false);
                 QMessageBox::warning(controller->_mainWindow,
                                      QStringLiteral("空中三角测量"),
@@ -1147,15 +1178,6 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
             }
 
             const auto &prereq = *outcome.value;
-            if (!pmGuard->isCurrentSession(session))
-            {
-                emit pmGuard->atProgressFinished(false);
-                QMessageBox::warning(controller->_mainWindow,
-                                     QStringLiteral("空中三角测量"),
-                                     QStringLiteral("项目已切换，本次空三启动已取消。"));
-                return;
-            }
-
             if (!prereq.prerequisiteReport.isEmpty())
             {
                 LOG_INFO(QStringLiteral("空三前置报告: %1")
@@ -1168,6 +1190,7 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
                 runSettings.value(QStringLiteral("reuse_existing_matches")).toBool(true);
             if (prereq.blockOnMatchQuality && reuseExistingMatches)
             {
+                pmGuard->clearAtCancelFlag(cancelFlag);
                 emit pmGuard->atProgressFinished(false);
                 const QString details = prereq.warningMessages.isEmpty()
                     ? QStringLiteral("匹配阶段已完成，但没有可用于空三的连接边；请检查匹配参数、重叠对和几何验证报告。")
@@ -1191,7 +1214,8 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
                                                       session,
                                                       projectMeta,
                                                       outputRoot,
-                                                      autoFillMissing);
+                                                      autoFillMissing,
+                                                      cancelFlag);
         });
 }
 
@@ -1199,8 +1223,9 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
                                                             const QStringList &images,
                                                             const xjw::gui::project::ProjectSessionContext &session,
                                                             const QJsonObject &projectMeta,
-                                                           const QString &outputRoot,
-                                                           bool fillMissingTiePoints)
+                                                            const QString &outputRoot,
+                                                            bool fillMissingTiePoints,
+                                                            const std::shared_ptr<std::atomic<bool>> &cancelFlag)
 {
     if (!_projectManager)
     {
@@ -1208,12 +1233,11 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
     }
 
     auto *pm = _projectManager;
-    if (!pm->isCurrentSession(session))
+    if (!pm->isCurrentSession(session)
+        || !pm->ownsAtCancelFlag(cancelFlag)
+        || cancelFlag->load(std::memory_order_relaxed))
     {
-        emit pm->atProgressFinished(false);
-        QMessageBox::warning(_mainWindow,
-                             QStringLiteral("空中三角测量"),
-                             QStringLiteral("项目已切换，本次空三启动已取消。"));
+        pm->clearAtCancelFlag(cancelFlag);
         return;
     }
 
@@ -1343,35 +1367,47 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
     }
 
     QPointer<ProjectManager> pmGuard(pm);
-    workflowOptions.progressFn = [pmGuard](const QString &stage, int percent)
+    workflowOptions.progressFn = [pmGuard, session, cancelFlag](const QString &stage, int percent)
     {
-        if (!pmGuard)
+        if (!pmGuard || cancelFlag->load(std::memory_order_relaxed))
         {
             return;
         }
-        xjw::gui::tasks::postGuarded(pmGuard, [stage, percent](ProjectManager *manager)
+        xjw::gui::tasks::postGuarded(
+            pmGuard,
+            [session, cancelFlag, stage, percent](ProjectManager *manager)
         {
-            emit manager->atProgressChanged(QStringLiteral("空中三角测量: %1").arg(stage), percent);
+            if (manager->ownsAtCancelFlag(cancelFlag)
+                && manager->isCurrentSession(session)
+                && !cancelFlag->load(std::memory_order_relaxed))
+            {
+                emit manager->atProgressChanged(
+                    QStringLiteral("空中三角测量: %1").arg(stage), percent);
+            }
         });
     };
-    workflowOptions.pairMatchedFn = [pmGuard](const QString &img0,
-                                              const QString &img1,
-                                              const QString &matchPath,
-                                              int numMatches)
+    workflowOptions.pairMatchedFn = [pmGuard, session, cancelFlag](const QString &img0,
+                                                                  const QString &img1,
+                                                                  const QString &matchPath,
+                                                                  int numMatches)
     {
-        if (!pmGuard)
+        if (!pmGuard || cancelFlag->load(std::memory_order_relaxed))
         {
             return;
         }
-        xjw::gui::tasks::postGuarded(pmGuard,
-                                     [img0, img1, matchPath, numMatches](ProjectManager *manager)
+        xjw::gui::tasks::postGuarded(
+            pmGuard,
+            [session, cancelFlag, img0, img1, matchPath, numMatches](ProjectManager *manager)
         {
-            emit manager->matchPairReady(img0, img1, matchPath, numMatches);
+            if (manager->ownsAtCancelFlag(cancelFlag)
+                && manager->isCurrentSession(session)
+                && !cancelFlag->load(std::memory_order_relaxed))
+            {
+                emit manager->matchPairReady(img0, img1, matchPath, numMatches);
+            }
         });
     };
 
-    auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
-    pm->setAtCancelFlag(cancelFlag);
     workflowOptions.cancelFlag = cancelFlag;
     const xjw::aerial_triangulation::AerialTriangulationResolvedConfig resolved =
         xjw::aerial_triangulation::AerialTriangulationWorkflow::resolveConfig(workflowOptions);
@@ -1405,9 +1441,15 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
             {
                 return;
             }
+            if (!pmGuard->ownsAtCancelFlag(cancelFlag)
+                || !pmGuard->isCurrentSession(session))
+            {
+                return;
+            }
+
+            pmGuard->clearAtCancelFlag(cancelFlag);
             if (!outcome.succeeded())
             {
-                pmGuard->clearAtCancelFlag(cancelFlag);
                 emit pmGuard->atProgressFinished(false);
                 QMessageBox::warning(controller->_mainWindow,
                                      QStringLiteral("空中三角测量"),
@@ -1415,17 +1457,8 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
                 return;
             }
             auto workflowResult = std::move(*outcome.value);
-            xjw::aerial_triangulation::AerialTriangulationReconstructionResult &result = workflowResult.reconstructionResult;
-            pmGuard->clearAtCancelFlag(cancelFlag);
-            if (!pmGuard->isCurrentSession(session))
-            {
-                emit pmGuard->atProgressFinished(false);
-                QMessageBox::warning(controller->_mainWindow,
-                                     QStringLiteral("空中三角测量"),
-                                     QStringLiteral("项目已切换，本次空三结果未写回。"));
-                return;
-            }
-
+            xjw::aerial_triangulation::AerialTriangulationReconstructionResult &result =
+                workflowResult.reconstructionResult;
             const bool wasCanceled = cancelFlag->load(std::memory_order_relaxed);
             if (wasCanceled)
             {

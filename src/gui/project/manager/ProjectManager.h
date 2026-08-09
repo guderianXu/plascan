@@ -75,6 +75,8 @@ signals:
     void projectSaved(const QString &plascanPath);
     // 项目关闭后发出（数据已清空）
     void projectClosed();
+    // 项目打开、关闭或活动块切换后发出，用于作废旧会话的异步 UI 状态。
+    void projectSessionChanged();
     void projectOpenStarted(const QString &plascanPath);
     void projectOpenProgressChanged(const QString &message, int percent);
     void projectOpenFinished(bool success, const QString &message);
@@ -128,6 +130,9 @@ signals:
     // AT 流程结束（success=true 表示正常完成）
     void atProgressFinished(bool success);
 
+    // 支持并发实例的后台任务进度，供主窗口聚合到系统任务栏。
+    void backgroundTaskProgressChanged(const QString &taskId, int value, int maximum);
+    void backgroundTaskFinished(const QString &taskId);
     // DEM 流水线进度
     void demPipelineProgressChanged(const QString &stage, int percent);
     void demPipelineFinished(bool success, const QString &message);
@@ -223,6 +228,16 @@ public slots:
     void setAtCancelFlag(const std::shared_ptr<std::atomic<bool>> &flag)
     {
         _atCancelFlag = flag;
+    }
+
+    bool hasActiveAtTask() const
+    {
+        return _atCancelFlag != nullptr;
+    }
+
+    bool ownsAtCancelFlag(const std::shared_ptr<std::atomic<bool>> &flag) const
+    {
+        return _atCancelFlag == flag;
     }
 
     void clearAtCancelFlag(const std::shared_ptr<std::atomic<bool>> &flag)

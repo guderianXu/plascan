@@ -31,6 +31,9 @@ public:
     void cancelMapProject();
 
 signals:
+    // DEM/正射实例可能并发或被拒绝启动，使用唯一 ID 保持全局进度互不串线。
+    void backgroundTaskProgressChanged(const QString &taskId, int value, int maximum);
+    void backgroundTaskFinished(const QString &taskId);
     void demPipelineProgressChanged(const QString &stage, int percent);
     void demPipelineFinished(bool success, const QString &message);
     void orthoPipelineStarted();

@@ -8,7 +8,6 @@ set(GUI_SOURCES
   config/ImageViewRotationSettings.cpp
   config/settings/WindowStateManager.cpp
   config/settings/RecentProjectsManager.cpp
-  config/settings/FileDialogStateManager.cpp
   config/settings/DialogSettingStore.cpp
   main_window/MainWindow.cpp
   main_window/MainWindowLayout.cpp
@@ -30,6 +29,7 @@ set(GUI_SOURCES
   menu/ToolbarButton.cpp
   menu/MainMenu.cpp
   platform/ProjectFileIntegration.cpp
+  platform/TaskbarProgressController.cpp
   runtime/PythonRuntimeManager.cpp
   markers/ProjectMarkerRepository.cpp
   markers/MarkerUndoCommand.cpp
@@ -87,6 +87,7 @@ set(GUI_SOURCES
 )
 
 set(GUI_PROJECT_SOURCES
+  config/settings/FileDialogStateManager.cpp
   project/services/BundleAdjustService.cpp
   project/services/ProjectCameraImportService.cpp
   project/services/ProjectTiePointResultService.cpp

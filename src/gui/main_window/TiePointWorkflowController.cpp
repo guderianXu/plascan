@@ -19,6 +19,11 @@ TiePointWorkflowController::TiePointWorkflowController(ProjectManager *projectMa
     : QObject(parent)
     , _projectManager(projectManager)
 {
+    if (_projectManager)
+    {
+        connect(_projectManager, &ProjectManager::projectSessionChanged,
+                this, &TiePointWorkflowController::cancel);
+    }
 }
 
 bool TiePointWorkflowController::isRunning() const
@@ -99,8 +104,18 @@ void TiePointWorkflowController::start(xjw::matchphotos::MatchPhotosOptions opti
     _progressTimer = new QTimer(this);
     _progressTimer->setInterval(100);
     const std::shared_ptr<std::atomic_int> progressCount = _progressCount;
-    connect(_progressTimer, &QTimer::timeout, this, [this, progressCount]()
+    connect(_progressTimer, &QTimer::timeout, this,
+            [this, progressCount, projectManager, session]()
     {
+        if (!projectManager || !projectManager->isCurrentSession(session))
+        {
+            cancel();
+            if (_progressTimer)
+            {
+                _progressTimer->stop();
+            }
+            return;
+        }
         emit progressUpdated(progressCount->load());
     });
     _progressTimer->start();
@@ -116,7 +131,8 @@ void TiePointWorkflowController::start(xjw::matchphotos::MatchPhotosOptions opti
             return task.run(context);
         },
         [this, projectManager, session, taskTitle, cancelFlag](TiePointWorkflowController *,
-                                                                    xjw::gui::tasks::TaskOutcome<xjw::matchphotos::MatchPhotosResult> outcome)
+                                                               xjw::gui::tasks::TaskOutcome<
+                                                                   xjw::matchphotos::MatchPhotosResult> outcome)
         {
             if (!outcome.succeeded())
             {

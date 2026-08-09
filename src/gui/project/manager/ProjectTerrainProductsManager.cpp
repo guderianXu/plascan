@@ -16,6 +16,7 @@
 #include <QJsonArray>
 #include <QMessageBox>
 #include <QPointer>
+#include <QUuid>
 
 #include <algorithm>
 #include <cmath>
@@ -97,6 +98,8 @@ void ProjectTerrainProductsManager::startDemFromPointCloudAsync(
         return;
     }
 
+    const QString background_task_id = QStringLiteral("dem:%1").arg(
+        QUuid::createUuid().toString(QUuid::WithoutBraces));
     QString outDir = resolveProjectOutputDir(_owner->currentProjectPath(),
                                              request.outputDirectory.trimmed(),
                                              QStringLiteral("assets/dem/relative_dem"));
@@ -104,6 +107,7 @@ void ProjectTerrainProductsManager::startDemFromPointCloudAsync(
     const auto session = _owner->currentSessionContext();
     const double demResolution = request.resolution;
     const QString demType = request.dataType;
+    emit backgroundTaskProgressChanged(background_task_id, 5, 100);
     emit demPipelineProgressChanged(QStringLiteral("DEM 生成"), 5);
 
     xjw::gui::tasks::runGuardedWithOutcome(
@@ -116,10 +120,11 @@ void ProjectTerrainProductsManager::startDemFromPointCloudAsync(
                                   demType,
                                   false);
         },
-        [pointCloudPath, outDir, demResolution, demType, session](
+        [pointCloudPath, outDir, demResolution, demType, session, background_task_id](
             ProjectTerrainProductsManager *self,
             xjw::gui::tasks::TaskOutcome<TerrainPipelineResult> outcome)
         {
+            emit self->backgroundTaskFinished(background_task_id);
             if (!self->_owner ||
                 !self->_projectData ||
                 !self->_owner->isCurrentSession(session))
@@ -426,15 +431,18 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
     runtimeMeta[QStringLiteral("dem_results")] = runtimeDemResults;
 
     const auto cancelFlag = std::make_shared<std::atomic_bool>(false);
+    const QString background_task_id = QStringLiteral("ortho:%1").arg(
+        QUuid::createUuid().toString(QUuid::WithoutBraces));
     _orthoCancelFlag = cancelFlag;
     _orthoTaskChunkId = session.chunkId;
 
+    emit backgroundTaskProgressChanged(background_task_id, 0, 100);
     emit orthoPipelineStarted();
     emit orthoPipelineProgressChanged(QStringLiteral("准备正射影像生成"), 0);
 
     QPointer<ProjectTerrainProductsManager> self(this);
     const auto progressCallback =
-        [self, cancelFlag, session](
+        [self, cancelFlag, session, background_task_id](
             const QString &stage, int percent)
     {
         if (!self)
@@ -444,7 +452,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
 
         QMetaObject::invokeMethod(
             self.data(),
-            [self, cancelFlag, session, stage, percent]()
+            [self, cancelFlag, session, stage, percent, background_task_id]()
             {
                 if (!self ||
                     self->_orthoCancelFlag != cancelFlag ||
@@ -454,6 +462,8 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
                 {
                     return;
                 }
+                emit self->backgroundTaskProgressChanged(
+                    background_task_id, std::clamp(percent, 0, 99), 100);
                 emit self->orthoPipelineProgressChanged(stage, std::clamp(percent, 0, 99));
             },
             Qt::QueuedConnection);
@@ -483,10 +493,12 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
                           matchedDemRecord,
                           pointCloudMode,
                           session,
-                          cancelFlag](
+                          cancelFlag,
+                          background_task_id](
                               ProjectTerrainProductsManager *manager,
                               xjw::gui::project::TerrainPipelineResult orthoRun)
     {
+        emit manager->backgroundTaskFinished(background_task_id);
         if (manager->_orthoCancelFlag == cancelFlag)
         {
             manager->_orthoCancelFlag.reset();
@@ -594,7 +606,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
     xjw::gui::tasks::runGuardedWithOutcome(
         this,
         std::move(orthoWork),
-        [orthoFinished = std::move(orthoFinished), cancelFlag](
+        [orthoFinished = std::move(orthoFinished), cancelFlag, background_task_id](
             ProjectTerrainProductsManager *manager,
             xjw::gui::tasks::TaskOutcome<TerrainPipelineResult> outcome) mutable
         {
@@ -608,6 +620,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
                 const QString error = outcome.errorMessage.isEmpty()
                     ? QStringLiteral("正射影像后台任务失败")
                     : outcome.errorMessage;
+                emit manager->backgroundTaskFinished(background_task_id);
                 emit manager->orthoPipelineFinished(false, error, QJsonObject());
                 return;
             }

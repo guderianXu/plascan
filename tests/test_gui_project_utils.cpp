@@ -56,6 +56,8 @@
 #include "FeatureResidualLoader.h"
 #include "PhotoStripWidget.h"
 #include "ProjectDashboardWidget.h"
+#include "ProjectManager.h"
+#include "ProjectTaskStatusController.h"
 #include "SelectionPropertiesWidget.h"
 #include "MainMenu.h"
 #include "ProjectUiHydrator.h"
@@ -63,6 +65,7 @@
 #include "WorkspacePanelController.h"
 #include "HenuBrandWidget.h"
 #include "TaskStatusWidget.h"
+#include "TaskbarProgressController.h"
 #include "ObjRenderPreparation.h"
 #include "LayerImageLoader.h"
 
@@ -98,6 +101,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
+#include <QStatusBar>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QKeySequence>
@@ -139,6 +143,7 @@
 #include <cmath>
 #include <cstring>
 #include <future>
+#include <memory>
 #include <stdexcept>
 #include <vector>
 
@@ -8799,6 +8804,219 @@ TEST(TaskStatusWidgetTest, ShowsProgressAndPreservesCancellingState)
     EXPECT_FALSE(widget.isActive());
     EXPECT_FALSE(widget.isCancelling());
     EXPECT_EQ(cancelButton->text(), QStringLiteral("取消"));
+}
+
+TEST(TaskbarProgressTest, HidesProgressWhenNoTaskIsActive)
+{
+    const QVector<xjw::gui::platform::TaskbarProgressItem> items;
+
+    const auto progress = xjw::gui::platform::aggregateTaskbarProgress(items);
+
+    EXPECT_EQ(progress.state, xjw::gui::platform::TaskbarProgressState::NoProgress);
+    EXPECT_EQ(progress.value, 0);
+    EXPECT_EQ(progress.maximum, 0);
+}
+
+TEST(TaskbarProgressTest, AveragesKnownConcurrentTaskProgressAndClampsValues)
+{
+    const QVector<xjw::gui::platform::TaskbarProgressItem> items{
+        {25, 100},
+        {8, 10},
+        {150, 100}
+    };
+
+    const auto progress = xjw::gui::platform::aggregateTaskbarProgress(items);
+
+    EXPECT_EQ(progress.state, xjw::gui::platform::TaskbarProgressState::Normal);
+    EXPECT_EQ(progress.value, 683);
+    EXPECT_EQ(progress.maximum, 1000);
+}
+
+TEST(TaskbarProgressTest, UsesIndeterminateStateWhenAnyActiveTaskHasUnknownTotal)
+{
+    const QVector<xjw::gui::platform::TaskbarProgressItem> items{
+        {60, 100},
+        {0, 0}
+    };
+
+    const auto progress = xjw::gui::platform::aggregateTaskbarProgress(items);
+
+    EXPECT_EQ(progress.state, xjw::gui::platform::TaskbarProgressState::Indeterminate);
+    EXPECT_EQ(progress.value, 0);
+    EXPECT_EQ(progress.maximum, 0);
+}
+
+TEST(TaskbarProgressTest, KeepsConcurrentTaskInstancesIndependent)
+{
+    xjw::gui::platform::TaskbarProgressController controller(nullptr);
+
+    controller.updateTask(QStringLiteral("mesh"), 50, 100);
+    controller.updateTask(QStringLiteral("dem:first"), 20, 100);
+    controller.updateTask(QStringLiteral("dem:second"), 80, 100);
+    EXPECT_EQ(controller.currentProgress().value, 500);
+
+    controller.finishTask(QStringLiteral("dem:first"));
+    EXPECT_TRUE(controller.hasTask(QStringLiteral("mesh")));
+    EXPECT_TRUE(controller.hasTask(QStringLiteral("dem:second")));
+    EXPECT_EQ(controller.currentProgress().state,
+              xjw::gui::platform::TaskbarProgressState::Normal);
+    EXPECT_EQ(controller.currentProgress().value, 650);
+}
+
+TEST(TaskbarProgressTest, RestoresKnownProgressAfterIndeterminateTaskFinishes)
+{
+    xjw::gui::platform::TaskbarProgressController controller(nullptr);
+
+    controller.updateTask(QStringLiteral("point_cloud"), 40, 100);
+    controller.updateTask(QStringLiteral("project_save"), 0, 0);
+    EXPECT_EQ(controller.currentProgress().state,
+              xjw::gui::platform::TaskbarProgressState::Indeterminate);
+
+    controller.finishTask(QStringLiteral("project_save"));
+    EXPECT_EQ(controller.currentProgress().state,
+              xjw::gui::platform::TaskbarProgressState::Normal);
+    EXPECT_EQ(controller.currentProgress().value, 400);
+
+    controller.clearTasks();
+    EXPECT_EQ(controller.currentProgress().state,
+              xjw::gui::platform::TaskbarProgressState::NoProgress);
+}
+
+TEST(TaskbarProgressTest, UpdatingSameTaskIdReplacesItsPreviousProgress)
+{
+    xjw::gui::platform::TaskbarProgressController controller(nullptr);
+
+    controller.updateTask(QStringLiteral("mesh"), 10, 100);
+    controller.updateTask(QStringLiteral("mesh"), 80, 100);
+
+    EXPECT_EQ(controller.currentProgress().state,
+              xjw::gui::platform::TaskbarProgressState::Normal);
+    EXPECT_EQ(controller.currentProgress().value, 800);
+}
+
+TEST(TaskbarProgressTest, ProjectControllerKeepsIndependentWorkflowSources)
+{
+    QWidget window;
+    QStatusBar statusBar;
+    ProjectDashboardWidget dashboard;
+    ProjectData projectData;
+    ProjectManager projectManager(&projectData, &window);
+    ProjectTaskStatusController controller(
+        &projectManager, &dashboard, &statusBar, &window);
+
+    xjw::gui::platform::TaskbarProgressController *taskbar = nullptr;
+    for (QObject *child : controller.children())
+    {
+        taskbar = dynamic_cast<xjw::gui::platform::TaskbarProgressController *>(child);
+        if (taskbar)
+        {
+            break;
+        }
+    }
+    ASSERT_NE(taskbar, nullptr);
+
+    emit projectManager.meshProgressChanged(QStringLiteral("模型生成"), 50);
+    emit projectManager.backgroundTaskProgressChanged(
+        QStringLiteral("dem:first"), 25, 100);
+    EXPECT_EQ(taskbar->currentProgress().value, 375);
+
+    emit projectManager.backgroundTaskFinished(QStringLiteral("dem:first"));
+    EXPECT_EQ(taskbar->currentProgress().value, 500);
+
+    emit projectManager.saveStarted();
+    EXPECT_EQ(taskbar->currentProgress().state,
+              xjw::gui::platform::TaskbarProgressState::Indeterminate);
+    emit projectManager.saveFinished(true);
+    EXPECT_EQ(taskbar->currentProgress().value, 500);
+
+    emit projectManager.imageImportProgressChanged(
+        QStringLiteral("导入影像"), 2, 10);
+    controller.updateImageLoading(QStringLiteral("加载照片列表"), 8, 10);
+    EXPECT_TRUE(taskbar->hasTask(QStringLiteral("image_import")));
+    EXPECT_TRUE(taskbar->hasTask(QStringLiteral("photo_list")));
+
+    auto *taskTable = dashboard.findChild<QTableWidget *>(
+        QStringLiteral("dashboardTaskTable"));
+    ASSERT_NE(taskTable, nullptr);
+    const auto dashboardHasTask = [taskTable](const QString &name)
+    {
+        for (int row = 0; row < taskTable->rowCount(); ++row)
+        {
+            const QTableWidgetItem *nameItem = taskTable->item(row, 0);
+            if (nameItem && nameItem->text() == name)
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+    EXPECT_TRUE(dashboardHasTask(QStringLiteral("导入影像")));
+    EXPECT_TRUE(dashboardHasTask(QStringLiteral("加载照片列表")));
+
+    emit projectManager.imageImportFinished(true, QString());
+    EXPECT_FALSE(taskbar->hasTask(QStringLiteral("image_import")));
+    EXPECT_TRUE(taskbar->hasTask(QStringLiteral("photo_list")));
+    EXPECT_FALSE(dashboardHasTask(QStringLiteral("导入影像")));
+    EXPECT_TRUE(dashboardHasTask(QStringLiteral("加载照片列表")));
+
+    controller.finishImageLoading(true);
+    emit projectManager.meshProgressFinished(true);
+    EXPECT_EQ(taskbar->currentProgress().state,
+              xjw::gui::platform::TaskbarProgressState::NoProgress);
+
+    emit projectManager.meshProgressChanged(QStringLiteral("模型生成"), 50);
+    emit projectManager.projectOpenStarted(QStringLiteral("next.plascan"));
+    EXPECT_TRUE(taskbar->hasTask(QStringLiteral("project_open")));
+    EXPECT_TRUE(taskbar->hasTask(QStringLiteral("mesh")));
+    emit projectData.projectOpened(QStringLiteral("next.plascan"));
+    EXPECT_FALSE(taskbar->hasTask(QStringLiteral("project_open")));
+    EXPECT_FALSE(taskbar->hasTask(QStringLiteral("mesh")));
+    EXPECT_EQ(taskbar->currentProgress().state,
+              xjw::gui::platform::TaskbarProgressState::NoProgress);
+
+    emit projectManager.projectOpenProgressChanged(
+        QStringLiteral("正在启动结果数据后台加载..."), 95);
+    EXPECT_TRUE(taskbar->hasTask(QStringLiteral("project_open")));
+    EXPECT_EQ(taskbar->currentProgress().value, 950);
+    emit projectManager.projectOpenFinished(true, QStringLiteral("项目已打开"));
+    EXPECT_FALSE(taskbar->hasTask(QStringLiteral("project_open")));
+    EXPECT_EQ(taskbar->currentProgress().state,
+              xjw::gui::platform::TaskbarProgressState::NoProgress);
+
+    emit projectManager.meshProgressChanged(QStringLiteral("模型生成"), 50);
+    emit projectData.activeChunkChanged(
+        QStringLiteral("chunk-2"), QStringLiteral("Chunk 2"), 1);
+    EXPECT_FALSE(taskbar->hasTask(QStringLiteral("mesh")));
+    EXPECT_EQ(taskbar->currentProgress().state,
+              xjw::gui::platform::TaskbarProgressState::NoProgress);
+}
+
+TEST(ProjectManagerTaskLifecycleTest, ProjectOpenedCancelsAndReleasesOwnedAtTask)
+{
+    QWidget window;
+    ProjectData projectData;
+    ProjectManager projectManager(&projectData, &window);
+    const auto first = std::make_shared<std::atomic<bool>>(false);
+
+    projectManager.setAtCancelFlag(first);
+    ASSERT_TRUE(projectManager.hasActiveAtTask());
+    ASSERT_TRUE(projectManager.ownsAtCancelFlag(first));
+
+    emit projectData.projectOpened(QStringLiteral("next.plascan"));
+    EXPECT_TRUE(first->load(std::memory_order_relaxed));
+    EXPECT_FALSE(projectManager.hasActiveAtTask());
+    EXPECT_FALSE(projectManager.ownsAtCancelFlag(first));
+
+    const auto second = std::make_shared<std::atomic<bool>>(false);
+    projectManager.setAtCancelFlag(second);
+    projectManager.clearAtCancelFlag(first);
+
+    EXPECT_TRUE(projectManager.hasActiveAtTask());
+    EXPECT_TRUE(projectManager.ownsAtCancelFlag(second));
+    EXPECT_FALSE(second->load(std::memory_order_relaxed));
+
+    projectManager.clearAtCancelFlag(second);
+    EXPECT_FALSE(projectManager.hasActiveAtTask());
 }
 
 TEST(ProjectDashboardWidgetTest, LoadsMetadataIntoReadOnlyWorkflowAndReferenceSummary)
