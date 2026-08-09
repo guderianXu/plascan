@@ -1247,7 +1247,7 @@ TEST(MvsHeterogeneousSchedulingContractTest,
         "++_producerReservations",
         "++_residentTasks",
         "_residentBytes += _producerReservationBytes",
-        "if (_residentTasks == 0)",
+        "return taskResidentBytes <= _maxResidentBytes - _residentBytes;",
         "releaseProducerReservationLocked",
         "resident_bytes > reserved_bytes",
         "catch (const std::exception &exception)",
@@ -1280,7 +1280,8 @@ TEST(MvsHeterogeneousSchedulingContractTest,
         "std::vector<std::thread> workers");
     const int reservation = worker.indexOf(QStringLiteral(
         "saveQueue.reserveProducer(&_cancelled)"));
-    const int compute = worker.indexOf(QStringLiteral("computeDepthForView(i, &workerConfig)"));
+    const int compute = worker.indexOf(QStringLiteral(
+        "DepthFrameResult res = computeDepthForView("));
     const int enqueue = worker.indexOf(QStringLiteral(
         "std::move(saveReservation), i, res, QStringLiteral(\"初始\")"));
     ASSERT_GE(reservation, 0);

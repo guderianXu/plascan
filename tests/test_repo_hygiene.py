@@ -348,11 +348,18 @@ class RepoHygieneTest(unittest.TestCase):
     def test_linux_install_rules_have_single_plascan_launcher_owner(self):
         root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         gui_install = (ROOT / "src" / "gui" / "cmake" / "GuiInstall.cmake").read_text(encoding="utf-8")
+        normalized_gui_install = " ".join(gui_install.split())
 
         self.assertNotIn("resources/plascan.sh", root_cmake)
         self.assertIn("plascan_gui_launcher.sh.in", gui_install)
-        self.assertIn('install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan" DESTINATION bin)', gui_install)
-        self.assertIn('install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan" DESTINATION /usr/bin)', gui_install)
+        self.assertIn(
+            'install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan" DESTINATION bin',
+            normalized_gui_install,
+        )
+        self.assertIn(
+            'install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan" DESTINATION /usr/bin',
+            normalized_gui_install,
+        )
 
     def test_configure_with_env_rejects_foreign_platform_paths(self):
         script = ROOT / "scripts" / "env" / "configure_with_env.py"
