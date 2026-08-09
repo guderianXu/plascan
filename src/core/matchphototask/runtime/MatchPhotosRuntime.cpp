@@ -3,6 +3,7 @@
 #include "MatchPhotosParallelism.h"
 #include "tensorrt/TensorRtEngineBuilder.h"
 
+#include "model/ModelAssetCatalog.h"
 #include "project/ProjectIO.h"
 #include "project/ProjectMetadata.h"
 
@@ -156,6 +157,7 @@ QStringList loMaRTensorRtModelDirectories()
 
 image_matching::TensorRtEngineBuildResult buildOnnxEngine(
     const QString &onnxPath,
+    const QString &cacheDirectory,
     const QString &engineName,
     image_matching::TensorRtBuildPrecision precision,
     int cudaDevice,
@@ -163,8 +165,7 @@ image_matching::TensorRtEngineBuildResult buildOnnxEngine(
 {
     image_matching::TensorRtEngineBuildRequest request;
     request.onnxPath = onnxPath;
-    request.cacheDirectory = QDir(QFileInfo(onnxPath).absolutePath())
-        .filePath(QStringLiteral("engines"));
+    request.cacheDirectory = cacheDirectory;
     request.engineName = engineName;
     request.precision = precision;
     request.cudaDevice = cudaDevice;
@@ -262,8 +263,12 @@ ResolvedLoMaRTensorRtPackage parseLoMaRPackage(const QString &manifestPath,
             const QString featureSuffix = QStringLiteral("k%1_%2")
                 .arg(featureCount)
                 .arg(precisionText);
+            const QString cacheDirectory =
+                common::model::modelPackageEngineCacheDirectory(
+                    common::model::loMaRTensorRtPackage(matcherCount));
             const auto featureBuild = buildOnnxEngine(
                 resolved.featureOnnxPath,
+                cacheDirectory,
                 QStringLiteral("loma_r_features_%1.engine").arg(featureSuffix),
                 precision,
                 cudaDevice);
@@ -275,6 +280,7 @@ ResolvedLoMaRTensorRtPackage parseLoMaRPackage(const QString &manifestPath,
             }
             const auto matcherBuild = buildOnnxEngine(
                 resolved.matcherOnnxPath,
+                cacheDirectory,
                 QStringLiteral("loma_r_matcher_%1.engine").arg(matcherSuffix),
                 precision,
                 cudaDevice,
@@ -526,6 +532,8 @@ ResolvedLightGlueTensorRtEngine resolveLightGlueTensorRtEngine(
             }
             const auto build = buildOnnxEngine(
                 info.absoluteFilePath(),
+                common::model::modelPackageEngineCacheDirectory(
+                    common::model::lightGlueTensorRtPackage()),
                 info.completeBaseName() + QStringLiteral("_fp32.engine"),
                 image_matching::TensorRtBuildPrecision::Fp32,
                 options.cudaDevice);
@@ -587,6 +595,8 @@ ResolvedLightGlueTensorRtEngine resolveLightGlueTensorRtEngine(
         const QFileInfo info(bestOnnx.path);
         const auto build = buildOnnxEngine(
             bestOnnx.path,
+            common::model::modelPackageEngineCacheDirectory(
+                common::model::lightGlueTensorRtPackage()),
             info.completeBaseName() + QStringLiteral("_fp32.engine"),
             image_matching::TensorRtBuildPrecision::Fp32,
             options.cudaDevice);

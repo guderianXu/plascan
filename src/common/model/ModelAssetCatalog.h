@@ -60,4 +60,9 @@ QString modelPackageInstallDirectory(const ModelAssetPackage &package,
 QString modelPackageEntryPoint(const ModelAssetPackage &package,
                                const ModelFileResolver &resolver = ModelFileResolver());
 
+/// 返回当前运行形态下可写的 TensorRT engine 缓存目录，不会写入只读安装树。
+QString modelPackageEngineCacheDirectory(
+    const ModelAssetPackage &package,
+    const ModelFileResolver &resolver = ModelFileResolver());
+
 } // namespace xjw::common::model

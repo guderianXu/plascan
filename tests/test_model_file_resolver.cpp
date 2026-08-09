@@ -173,6 +173,51 @@ TEST(ModelFileResolverTest, UsesUserDataForInstalledBinaryEvenWhenSourceCheckout
     EXPECT_EQ(QDir::cleanPath(location.directory), QDir::cleanPath(user_models));
 }
 
+TEST(ModelAssetCatalogTest, UsesWritableUserModelRootForInstalledTensorRtCache)
+{
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString source_root = QDir(temp_dir.path()).filePath(QStringLiteral("source"));
+    const QString user_models = QDir(temp_dir.path()).filePath(QStringLiteral("user_models"));
+    writeFile(QDir(source_root).filePath(QStringLiteral("CMakeLists.txt")));
+
+    xjw::common::model::ModelFileSearchOptions options;
+    options.sourceRoot = source_root;
+    options.applicationDir = QDir(temp_dir.path()).filePath(QStringLiteral("installed/bin"));
+    options.userModelDir = user_models;
+    options.environmentVariable = QStringLiteral("PLASCAN_TEST_UNUSED_MODEL_DIR");
+    const xjw::common::model::ModelFileResolver resolver(options);
+
+    const QString cache_directory =
+        xjw::common::model::modelPackageEngineCacheDirectory(
+            xjw::common::model::lightGlueTensorRtPackage(), resolver);
+    EXPECT_EQ(QDir::cleanPath(cache_directory),
+              QDir(user_models).filePath(QStringLiteral("lightglue_tensorrt/engines")));
+    EXPECT_FALSE(cache_directory.contains(QStringLiteral("installed/resources"),
+                                          Qt::CaseInsensitive));
+}
+
+TEST(ModelAssetCatalogTest, TensorRtCacheRespectsConfiguredModelRoot)
+{
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString configured_models = QDir(temp_dir.path()).filePath(
+        QStringLiteral("configured_models"));
+    ScopedEnvVar env("PLASCAN_MODEL_DIR", configured_models);
+
+    xjw::common::model::ModelFileSearchOptions options;
+    options.sourceRoot = QDir(temp_dir.path()).filePath(QStringLiteral("missing_source"));
+    options.applicationDir = QDir(temp_dir.path()).filePath(QStringLiteral("installed/bin"));
+    options.userModelDir = QDir(temp_dir.path()).filePath(QStringLiteral("user_models"));
+    const xjw::common::model::ModelFileResolver resolver(options);
+
+    const QString cache_directory =
+        xjw::common::model::modelPackageEngineCacheDirectory(
+            xjw::common::model::loMaRTensorRtPackage(2048), resolver);
+    EXPECT_EQ(QDir::cleanPath(cache_directory),
+              QDir(configured_models).filePath(QStringLiteral("loma_r_tensorrt/engines")));
+}
+
 TEST(ModelAssetCatalogTest, DefinesPortableOnnxReleasePackages)
 {
     const auto u2net = xjw::common::model::u2NetOnnxPackage();

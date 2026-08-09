@@ -295,7 +295,10 @@ set(CPACK_PACKAGE_FILE_NAME "plascan-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}-${C
 set(CPACK_PACKAGE_DIRECTORY "${CMAKE_BINARY_DIR}/packages" CACHE PATH "CPack package output directory")
 if(WIN32)
   set(CPACK_SET_DESTDIR OFF)
-  set(CPACK_PACKAGING_INSTALL_PREFIX "PlaScan")
+  # CPack concatenates this value with its staging directory, so the leading
+  # slash is required. PlaScanCPackOptions.cmake overrides installer-specific
+  # layout after CPack selects the active generator.
+  set(CPACK_PACKAGING_INSTALL_PREFIX "/PlaScan")
   set(CPACK_COMPONENTS_ALL Runtime)
   set(CPACK_COMPONENT_RUNTIME_DISPLAY_NAME "PlaScan Runtime")
   set(CPACK_COMPONENT_RUNTIME_DESCRIPTION
@@ -332,6 +335,14 @@ else()
   set(CPACK_PACKAGING_INSTALL_PREFIX "/opt/plascan")
 endif()
 
+set(_plascan_cpack_project_config
+  "${CMAKE_BINARY_DIR}/PlaScanCPackOptions.cmake")
+configure_file(
+  "${CMAKE_SOURCE_DIR}/cmake/PlaScanCPackOptions.cmake.in"
+  "${_plascan_cpack_project_config}"
+  @ONLY)
+set(CPACK_PROJECT_CONFIG_FILE "${_plascan_cpack_project_config}")
+
 if(UNIX AND NOT APPLE)
   set(CPACK_DEBIAN_PACKAGE_MAINTAINER "PlaScan Team")
   # 离线安装优先：不依赖目标机在线拉取 Qt 等运行时依赖。
@@ -345,7 +356,8 @@ if(WIN32)
       COMPONENT Runtime
       FILES_MATCHING
       PATTERN "*.png"
-      PATTERN "*.svg")
+      PATTERN "*.svg"
+      PATTERN "models" EXCLUDE)
 endif()
 
 include(CPack)

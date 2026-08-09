@@ -70,24 +70,41 @@ ctest --preset windows-vcpkg-release
 cpack --preset windows-vcpkg-release
 ```
 
+CPack 默认启用 `PLASCAN_BUNDLE_ONNX_MODELS=ON`，并把以下两份便携模型装入只读安装树：
+
+- `resources/models/U2Net_v1.onnx`：图像掩模；
+- `resources/models/lightglue_tensorrt/lightglue_sift_bucket4096.onnx`：CUDA SIFT + LightGlue 匹配。
+
+模型默认从源码树同名路径读取，也可在配置时通过 `PLASCAN_U2NET_ONNX_PATH` 和
+`PLASCAN_LIGHTGLUE_ONNX_PATH` 指向外部文件。安装/CPack 阶段会校验固定字节数和 SHA-256；缺失、
+损坏或拿错版本都会停止打包，不再生成缺模型的残缺包。只需开发用轻量安装树时可显式设置
+`-DPLASCAN_BUNDLE_ONNX_MODELS=OFF`。干净 clone 不包含大模型，打包前按
+[模型文档](docs/models/README.md#cpack-内置模型) 下载 Release 资产到默认路径。
+
 即使开发机已安装 CUDA/OpenCL，也可用
 `-DPLASCAN_ENABLE_CUDA=OFF -DPLASCAN_ENABLE_OPENCL=OFF -DPLASCAN_ENABLE_TENSORRT=OFF`
 配置可重复的 CPU-only 构建。该配置会关闭 PlaMatrix/PlaPoint 的 CUDA 后端和 PlaPoint/MVS 的
 OpenCL 后端，同时关闭 PlaMatrix 的 OpenCL 基础设施；MVS 仍编译并运行真实 CPU PatchMatch。
 
-`cpack --preset windows-vcpkg-release` 生成 ZIP 离线包。安装 Inno Setup 6 后，可从已配置的
-Windows Release 构建生成带开始菜单、桌面快捷方式、卸载入口和 `.plascan` 文件关联的安装程序：
+`cpack --preset windows-vcpkg-release` 生成 ZIP 离线包，归档第一层即为 `PlaScan/`。全架构 CUDA/TensorRT
+ZIP 可能超过 GitHub Release 的 2 GiB 单文件上限，适合本地分发或内部制品库。使用 CMake/CPack 3.27+
+并安装 Inno Setup 6 后，可从已配置的 Windows Release 构建生成带开始菜单、桌面快捷方式、卸载入口和
+`.plascan` 文件关联的安装程序：
 
 ```powershell
 cpack `
   --config build/windows-vcpkg-cuda-release/CPackConfig.cmake `
   -G INNOSETUP `
   -C Release `
-  -D "CPACK_PACKAGING_INSTALL_PREFIX=/" `
   -D "CPACK_PACKAGE_DIRECTORY=$PWD/dist/packages/windows-vcpkg-release"
 ```
 
-Windows 构建使用原生 MSVC/Ninja/PowerShell，不需要 WSL。GUI 链接后会把当前 vcpkg triplet 的运行时 DLL 增量同步到 `build/bin`，保证直接启动时包含 LAPACK/OpenBLAS 等传递依赖。打包后的 GUI 还需要 Qt platform plugins 和 TensorRT/CUDA 运行时 DLL；`PLASCAN_BUNDLE_RUNTIME=ON` 时 CMake install/CPack 会按主程序和 Qt 插件的传递依赖闭包收集 DLL，并补充 Vulkan、cuDNN 和 NVRTC 等动态加载运行时。Windows 包同时内置 `U2Net_v1.onnx`。
+为完整保留各代 NVIDIA GPU 首次构建 TensorRT engine 所需的 builder resource，Inno Setup 默认使用
+1,900,000,000 字节分卷。CPack 会输出同名 `.exe`、一个或多个 `-N.bin` 以及
+`-INNOSETUP.sha256`；发布和安装时必须让 `.exe` 与全部 `.bin` 位于同一目录。每个 `.exe/.bin`
+资产都会在打包时强制校验为小于 2 GiB，适合分别上传到同一个 GitHub Release。
+
+Windows 构建使用原生 MSVC/Ninja/PowerShell，不需要 WSL。GUI 链接后会把当前 vcpkg triplet 的运行时 DLL 增量同步到 `build/bin`，保证直接启动时包含 LAPACK/OpenBLAS 等传递依赖。打包后的 GUI 还需要 Qt platform plugins 和 TensorRT/CUDA 运行时 DLL；`PLASCAN_BUNDLE_RUNTIME=ON` 时 CMake install/CPack 会按主程序和 Qt 插件的传递依赖闭包收集 DLL，并补充 Vulkan、cuDNN 和 NVRTC 等动态加载运行时。要让内置 LightGlue ONNX 安装后直接匹配，发布构建必须启用 CUDA/TensorRT，并携带 `nvinfer`、`nvonnxparser` 和对应架构的 builder resource；CPU-only 包即使含有 ONNX 也不具备该匹配后端。
 
 当前 manifest 使用 vcpkg 中可用的 OpenCV 4.x port。后续 vcpkg 正式提供 OpenCV 5 后，优先通过更新 `builtin-baseline`、OpenCV feature 列表和现有 `OpenCvCompat` 兼容测试切换。
 
@@ -449,6 +466,10 @@ triangulate_cli     -d disp.tif --rect rect.xml --camL A.txt --camR B.txt -o clo
 
 工作流程设置从 [`models-v1.1.0`](https://github.com/guderianXu/plascan/releases/tag/models-v1.1.0)
 下载便携 ONNX，并按源码运行或安装版自动选择可写模型目录。TensorRT engine 不再作为跨机器资产发布。
+
+标准 CPack 包已经内置 U2Net 和 LightGlue ONNX；程序会直接从安装根下的 `resources/models` 发现它们。
+安装目录中的 ONNX 只读使用，LightGlue 首次构建的本机 engine 写入用户模型目录下的
+`lightglue_tensorrt/engines`，不会尝试修改 `Program Files`、`/opt/plascan` 或便携包目录。
 
 “生成蒙版 → AI: U2Net ONNX”会自动检测 `U2Net_v1.onnx`；缺失时可直接在对话框中下载并校验。
 源码构建写入仓库 `resources/models/`，安装包运行则写入用户应用数据目录，避免修改只读安装目录。

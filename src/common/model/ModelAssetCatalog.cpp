@@ -145,4 +145,12 @@ QString modelPackageEntryPoint(const ModelAssetPackage &package,
         QDir(modelPackageInstallDirectory(package, resolver)).filePath(package.entryPointFile));
 }
 
+QString modelPackageEngineCacheDirectory(const ModelAssetPackage &package,
+                                         const ModelFileResolver &resolver)
+{
+    return QDir::cleanPath(
+        QDir(modelPackageInstallDirectory(package, resolver))
+            .filePath(QStringLiteral("engines")));
+}
+
 } // namespace xjw::common::model

@@ -1,0 +1,24 @@
+if("@CMAKE_SYSTEM_NAME@" STREQUAL "Windows")
+  if(CPACK_GENERATOR STREQUAL "ZIP")
+    set(CPACK_PACKAGING_INSTALL_PREFIX "/PlaScan")
+    set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY OFF)
+    set(CPACK_ARCHIVE_COMPONENT_INSTALL ON)
+    set(CPACK_COMPONENTS_GROUPING ALL_COMPONENTS_IN_ONE)
+  elseif(CPACK_GENERATOR STREQUAL "INNOSETUP")
+    set(CPACK_PACKAGING_INSTALL_PREFIX "/")
+    set(CPACK_INNOSETUP_SETUP_Compression "lzma2/ultra64")
+    set(CPACK_INNOSETUP_SETUP_SolidCompression "yes")
+    set(CPACK_INNOSETUP_SETUP_DiskSpanning "yes")
+    set(CPACK_INNOSETUP_SETUP_DiskSliceSize "1900000000")
+    # Inno Setup defaults SlicesPerDisk to 1. Do not emit the literal "1":
+    # CPack's boolean translator would turn it into the invalid value "yes".
+    if(DEFINED CPACK_INNOSETUP_SETUP_SlicesPerDisk
+        AND NOT CPACK_INNOSETUP_SETUP_SlicesPerDisk STREQUAL "1")
+      message(FATAL_ERROR
+        "PlaScan INNOSETUP packaging requires SlicesPerDisk=1")
+    endif()
+    unset(CPACK_INNOSETUP_SETUP_SlicesPerDisk)
+    list(APPEND CPACK_POST_BUILD_SCRIPTS
+      "@CMAKE_SOURCE_DIR@/cmake/PlaScanCollectInnoSetupPackage.cmake")
+  endif()
+endif()

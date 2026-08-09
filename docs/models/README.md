@@ -13,13 +13,46 @@ Builder 会在首次使用时生成当前机器专用 engine。
 - 源码树运行：写入 `resources/models/lightglue_tensorrt` 或
   `resources/models/loma_r_tensorrt`；
 - 安装版运行：写入 `QStandardPaths::AppLocalDataLocation/models` 下的算法子目录，避免安装目录无写权限；
-- 设置 `PLASCAN_MODEL_DIR`：优先写入该目录下的算法子目录，适合共享模型盘或自定义部署。
+- 设置 `PLASCAN_MODEL_DIR`：优先写入该目录下的算法子目录，适合共享模型盘或自定义部署；调用方必须
+  保证该目录可写，写入失败时程序不会静默改用其它缓存目录。
 
 engine 缓存键包含 ONNX SHA-256、TensorRT 完整版本、GPU Compute Capability、精度、工作区和
-优化级别。更换显卡或 TensorRT 后会进入新缓存目录并重新构建，不会反序列化旧机器的 plan。
+优化级别。缓存根与模型发现路径解耦：源码运行或设置 `PLASCAN_MODEL_DIR` 时使用对应的可写模型根，
+安装版使用 `QStandardPaths::AppLocalDataLocation/models`；LightGlue 和 LoMa-R 分别写入各自的
+`engines/<fingerprint>` 子目录。随包 ONNX 即使位于 `Program Files` 或 `/opt/plascan`，也不会被写入。
+更换显卡或 TensorRT 后会进入新缓存目录并重新构建，不会反序列化旧机器的 plan。
 Windows 安装包必须携带 `nvinfer`、`nvonnxparser` 和对应架构的
 `nvinfer_builder_resource_*.dll`；源码构建则必须把完整 TensorRT SDK 传给 `TensorRT_ROOT`。
 Release 全部资产的离线校验值见 `docs/models/models-v1.1.0.sha256`。
+
+## CPack 内置模型
+
+`PLASCAN_BUNDLE_ONNX_MODELS` 默认开启，所有 CPack 生成器使用相同的只读安装布局：
+
+```text
+resources/models/U2Net_v1.onnx
+resources/models/lightglue_tensorrt/lightglue_sift_bucket4096.onnx
+share/plascan/models/{Apache-2.0.txt,U2Net_NOTICE.md,LightGlue_NOTICE.md,models-v1.1.0.sha256}
+```
+
+默认输入为源码树中的同名文件；模型不进入 Git 历史，发布机构建前需从 `models-v1.1.0` Release 准备。
+也可以设置 `PLASCAN_U2NET_ONNX_PATH`、`PLASCAN_LIGHTGLUE_ONNX_PATH` 使用外部缓存。普通配置和编译
+不强制读取大模型；安装/CPack 阶段会执行完整校验，任一文件缺失、长度不符或 SHA-256 不符都会失败。
+开发用无模型安装树可显式关闭 `PLASCAN_BUNDLE_ONNX_MODELS`，但不能标记为开箱可用发行包。
+
+干净 clone 可在仓库根目录使用 GitHub CLI 准备默认输入：
+
+```powershell
+New-Item -ItemType Directory -Force resources\models\lightglue_tensorrt | Out-Null
+gh release download models-v1.1.0 -R guderianXu/plascan `
+  -p U2Net_v1.onnx -D resources/models --clobber
+gh release download models-v1.1.0 -R guderianXu/plascan `
+  -p lightglue_sift_bucket4096.onnx -D resources/models/lightglue_tensorrt --clobber
+```
+
+内置 U2Net 可直接由 OpenCV DNN CPU 加载。内置 LightGlue 仍要求 CUDA SIFT、TensorRT ONNX Parser
+和目标 GPU 架构对应的 builder resource；Windows 发布包应捆绑这些运行时，Linux 包则需捆绑或明确
+要求目标机安装兼容版本。安装包只分发便携 ONNX，绝不能包含开发机生成的 `.engine`。
 
 ## SIFT + LightGlue TensorRT
 

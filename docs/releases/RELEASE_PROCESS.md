@@ -56,3 +56,23 @@ GitHub Release 说明从对应 `docs/releases/vX.Y.Z*.md` 摘要生成，并保�
 - 验证命令
 - 已知问题
 - 下载或打包说明
+
+## CPack 模型门禁
+
+对外发布的可掩模、可匹配安装包必须保持 `PLASCAN_BUNDLE_ONNX_MODELS=ON`，并在打包前准备
+`models-v1.1.0` 中的 U2Net 与 LightGlue ONNX。`cmake --install`/CPack 的大小和 SHA-256 校验必须
+通过；模型缺失或校验失败时不得关闭门禁后继续发布。
+
+发布验证至少包括：
+
+- 解包 ZIP/TGZ/DEB；对 INNOSETUP 执行静默安装或检查 CPack staging，确认两份 ONNX 位于约定路径且哈希与
+  `docs/models/models-v1.1.0.sha256` 一致，并包含两份模型 notice 和 `Apache-2.0.txt`；
+- 确认安装包不含任何本机生成的 `.engine`；
+- Windows INNOSETUP 的 `.exe` 与每个 `-N.bin` 分卷都必须小于 2 GiB，并与
+  `-INNOSETUP.sha256` 一起显式上传；发布前逐项核对清单，避免漏传分卷，也不要通配整个包目录
+  而误传 ZIP 或旧制品；
+- 安装器如需 Authenticode 签名，应在 Inno Setup/ISCC 编译阶段完成；若在 CPack 完成后重新签名
+  `.exe`，必须重新生成并复核 `-INNOSETUP.sha256`；
+- 在干净的 CUDA/TensorRT 环境从内置 LightGlue ONNX 完成首次 engine 构建和一对影像匹配，随后验证
+  缓存复用，且安装树没有新增文件；
+- 使用内置 U2Net 至少完成一次 CPU 蒙版推理；Windows CUDA 发布包还需执行现有 CUDA 部署测试。

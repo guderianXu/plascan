@@ -1,6 +1,15 @@
 # 安装与打包
 
 option(PLASCAN_BUNDLE_RUNTIME "Bundle runtime shared libraries (Qt/OpenCV etc.) into install/package" ON)
+option(PLASCAN_BUNDLE_ONNX_MODELS
+  "Bundle verified U2Net and portable LightGlue ONNX models into install/package" ON)
+
+set(PLASCAN_U2NET_ONNX_PATH
+  "${CMAKE_SOURCE_DIR}/resources/models/U2Net_v1.onnx"
+  CACHE FILEPATH "U2Net ONNX model bundled into PlaScan packages")
+set(PLASCAN_LIGHTGLUE_ONNX_PATH
+  "${CMAKE_SOURCE_DIR}/resources/models/lightglue_tensorrt/lightglue_sift_bucket4096.onnx"
+  CACHE FILEPATH "Portable LightGlue ONNX model bundled into PlaScan packages")
 
 install(TARGETS plascan_gui
   RUNTIME DESTINATION bin
@@ -47,15 +56,57 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/qt.conf"
   DESTINATION bin
   COMPONENT Runtime)
 
-if(WIN32)
-  set(_plascan_u2net_model "${CMAKE_SOURCE_DIR}/resources/models/U2Net_v1.onnx")
-  if(EXISTS "${_plascan_u2net_model}")
-    install(FILES "${_plascan_u2net_model}"
-      DESTINATION resources/models
-      COMPONENT Runtime)
-  else()
-    message(WARNING "PlaScan package will not include U2Net_v1.onnx: ${_plascan_u2net_model}")
-  endif()
+if(PLASCAN_BUNDLE_ONNX_MODELS)
+  get_filename_component(PLASCAN_BUNDLED_U2NET_ONNX
+    "${PLASCAN_U2NET_ONNX_PATH}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
+  get_filename_component(PLASCAN_BUNDLED_LIGHTGLUE_ONNX
+    "${PLASCAN_LIGHTGLUE_ONNX_PATH}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
+  file(TO_CMAKE_PATH "${PLASCAN_BUNDLED_U2NET_ONNX}" PLASCAN_BUNDLED_U2NET_ONNX)
+  file(TO_CMAKE_PATH "${PLASCAN_BUNDLED_LIGHTGLUE_ONNX}" PLASCAN_BUNDLED_LIGHTGLUE_ONNX)
+
+  set(PLASCAN_U2NET_ONNX_SIZE "175997641")
+  set(PLASCAN_U2NET_ONNX_SHA256
+    "8d10d2f3bb75ae3b6d527c77944fc5e7dcd94b29809d47a739a7a728a912b491")
+  set(PLASCAN_LIGHTGLUE_ONNX_SIZE "51072656")
+  set(PLASCAN_LIGHTGLUE_ONNX_SHA256
+    "773d3de316c37e8d408312d39139352b45e2a93ba055e59cfa2806c5d54ede69")
+
+  foreach(_model_prefix IN ITEMS U2NET LIGHTGLUE)
+    if(EXISTS "${PLASCAN_BUNDLED_${_model_prefix}_ONNX}")
+      message(STATUS
+        "CPack will bundle ${_model_prefix} ONNX: "
+        "${PLASCAN_BUNDLED_${_model_prefix}_ONNX}")
+    else()
+      message(STATUS
+        "Bundled ${_model_prefix} ONNX is not present during configure; "
+        "install/CPack will require: ${PLASCAN_BUNDLED_${_model_prefix}_ONNX}")
+    endif()
+  endforeach()
+
+  set(_plascan_verify_models_script
+    "${CMAKE_CURRENT_BINARY_DIR}/VerifyBundledModels.cmake")
+  configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyBundledModels.cmake.in"
+    "${_plascan_verify_models_script}"
+    @ONLY)
+  install(SCRIPT "${_plascan_verify_models_script}"
+    COMPONENT Runtime)
+
+  install(FILES "${PLASCAN_BUNDLED_U2NET_ONNX}"
+    DESTINATION resources/models
+    RENAME U2Net_v1.onnx
+    COMPONENT Runtime)
+  install(FILES "${PLASCAN_BUNDLED_LIGHTGLUE_ONNX}"
+    DESTINATION resources/models/lightglue_tensorrt
+    RENAME lightglue_sift_bucket4096.onnx
+    COMPONENT Runtime)
+  install(FILES
+    "${CMAKE_SOURCE_DIR}/docs/models/Apache-2.0.txt"
+    "${CMAKE_SOURCE_DIR}/docs/models/U2Net_NOTICE.md"
+    "${CMAKE_SOURCE_DIR}/docs/models/LightGlue_NOTICE.md"
+    "${CMAKE_SOURCE_DIR}/docs/models/models-v1.1.0.sha256"
+    DESTINATION share/plascan/models
+    COMPONENT Runtime)
 endif()
 
 if(NOT WIN32)
