@@ -19,6 +19,7 @@
 #include <QJsonObject>
 #include <QMessageBox>
 #include <QProgressDialog>
+#include <QPushButton>
 #include <QSaveFile>
 #include <QTabWidget>
 #include <QTextStream>
@@ -440,6 +441,45 @@ void MainWindow::setupProjectManager()
                     &QAction::triggered,
                     _projectManager,
                     &ProjectManager::importModel);
+        }
+        if (_mainMenu->importReferenceAction())
+        {
+            connect(_mainMenu->importReferenceAction(), &QAction::triggered, this, [this]()
+            {
+                if (!_projectData || !_projectData->hasProject())
+                {
+                    QMessageBox::information(this,
+                                             QStringLiteral("导入参考"),
+                                             QStringLiteral("请先创建或打开项目"));
+                    return;
+                }
+
+                QMessageBox reference_type_dialog(
+                    QMessageBox::Question,
+                    QStringLiteral("导入参考"),
+                    QStringLiteral("请选择要导入的参考数据类型。\n"
+                                   "相机参考用于位置/姿态，并自动读取同目录的 GNSS_offset.txt；\n"
+                                   "标记参考用于控制点和检查点。"),
+                    QMessageBox::Cancel,
+                    this);
+                QPushButton *camera_reference_button = reference_type_dialog.addButton(
+                    QStringLiteral("相机参考（Cameras_WGS84.txt）..."), QMessageBox::ActionRole);
+                QPushButton *marker_reference_button = reference_type_dialog.addButton(
+                    QStringLiteral("标记参考（GCPs_WGS84.txt / CSV）..."), QMessageBox::ActionRole);
+                reference_type_dialog.setDefaultButton(camera_reference_button);
+                reference_type_dialog.exec();
+
+                if (reference_type_dialog.clickedButton() == camera_reference_button &&
+                    _cameraReferenceController)
+                {
+                    _cameraReferenceController->importMetashapeReference();
+                }
+                else if (reference_type_dialog.clickedButton() == marker_reference_button &&
+                         _projectManager)
+                {
+                    _projectManager->openSurveyControlDialog();
+                }
+            });
         }
         if (_mainMenu->saveAction())
         {

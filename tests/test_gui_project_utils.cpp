@@ -4994,6 +4994,68 @@ TEST(SparsePointWorkflowUtilsTest, OutlierRemovalPreservesSourcePlyRgbWhenSideca
     EXPECT_EQ(outputCloud->colors()->getValue(1, 2), 90);
 }
 
+TEST(MainMenuTest, FileImportMenuExposesReferenceAndCameraActions)
+{
+    QMainWindow window;
+    MainMenu menu(&window);
+
+    QAction *reference_action = menu.importReferenceAction();
+    QAction *camera_action = menu.importCameraAction();
+    ASSERT_NE(reference_action, nullptr);
+    ASSERT_NE(camera_action, nullptr);
+    EXPECT_EQ(reference_action->objectName(), QStringLiteral("actionImportReference"));
+    EXPECT_EQ(camera_action->objectName(), QStringLiteral("actionImportCamera"));
+    EXPECT_EQ(reference_action->text(), QStringLiteral("导入参考..."));
+    EXPECT_EQ(camera_action->text(), QStringLiteral("导入相机..."));
+    EXPECT_TRUE(reference_action->toolTip().contains(QStringLiteral("Cameras_WGS84.txt")));
+    EXPECT_TRUE(reference_action->toolTip().contains(QStringLiteral("GNSS_offset.txt")));
+    EXPECT_TRUE(reference_action->toolTip().contains(QStringLiteral("GCPs_WGS84.txt")));
+    EXPECT_TRUE(camera_action->toolTip().contains(QStringLiteral(".tsai")));
+    EXPECT_FALSE(reference_action->isEnabled());
+    EXPECT_FALSE(camera_action->isEnabled());
+
+    QMenu *file_menu = findTopLevelMenuByTitle(window.menuBar(), QStringLiteral("文件"));
+    ASSERT_NE(file_menu, nullptr);
+    QMenu *import_menu = findSubMenuByTitle(file_menu, QStringLiteral("导入"));
+    ASSERT_NE(import_menu, nullptr);
+    EXPECT_TRUE(import_menu->actions().contains(reference_action));
+    EXPECT_TRUE(import_menu->actions().contains(camera_action));
+    EXPECT_LT(import_menu->actions().indexOf(reference_action),
+              import_menu->actions().indexOf(camera_action));
+    EXPECT_LT(import_menu->actions().indexOf(camera_action),
+              import_menu->actions().indexOf(menu.importPointCloudAction()));
+}
+
+TEST(ReferenceCameraImportMenuTest, ReusesExistingImportFlowsAndTracksProjectState)
+{
+    const QString bindings = readProjectSourceFile(
+        QStringLiteral("src/gui/main_window/MainWindowProjectBindings.cpp"));
+    const QString workflow = readProjectSourceFile(
+        QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    const QString lifecycle = readProjectSourceFile(
+        QStringLiteral("src/gui/main_window/MainWindowProjectLifecycle.cpp"));
+    ASSERT_FALSE(bindings.isEmpty());
+    ASSERT_FALSE(workflow.isEmpty());
+    ASSERT_FALSE(lifecycle.isEmpty());
+
+    EXPECT_TRUE(bindings.contains(QStringLiteral("importReferenceAction()")));
+    EXPECT_TRUE(bindings.contains(QStringLiteral("_cameraReferenceController->importMetashapeReference()")));
+    EXPECT_TRUE(bindings.contains(QStringLiteral("_projectManager->openSurveyControlDialog()")));
+    EXPECT_TRUE(workflow.contains(QStringLiteral(
+        "connectAction(mainMenu->importCameraAction(), &MenuWorkflowController::openCameraCalibrationDialog)")));
+
+    const int opened_start = lifecycle.indexOf(QStringLiteral("void MainWindow::onProjectOpened"));
+    const int closed_start = lifecycle.indexOf(QStringLiteral("void MainWindow::onProjectClosed"), opened_start);
+    ASSERT_GE(opened_start, 0);
+    ASSERT_GT(closed_start, opened_start);
+    const QString opened = lifecycle.mid(opened_start, closed_start - opened_start);
+    const QString closed = lifecycle.mid(closed_start);
+    EXPECT_TRUE(opened.contains(QStringLiteral("importReferenceAction()->setEnabled(true)")));
+    EXPECT_TRUE(opened.contains(QStringLiteral("importCameraAction()->setEnabled(true)")));
+    EXPECT_TRUE(closed.contains(QStringLiteral("importReferenceAction()->setEnabled(false)")));
+    EXPECT_TRUE(closed.contains(QStringLiteral("importCameraAction()->setEnabled(false)")));
+}
+
 TEST(MainMenuTest, ToolsMenuExposesCameraConversionAction)
 {
     QMainWindow window;

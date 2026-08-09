@@ -1080,6 +1080,27 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
             tr("导入模型..."));
         _importModelAct->setToolTip(
             tr("导入 Metashape 导出的 OBJ 或 PLY 模型，并复制材质和纹理"));
+        _importReferenceAct = ensurePlainAction(
+            _mainWindow,
+            importMenu,
+            importMenu,
+            QStringLiteral("actionImportReference"),
+            tr("导入参考..."),
+            _importPointCloudAct);
+        _importReferenceAct->setToolTip(
+            tr("导入相机位置/姿态参考（Cameras_WGS84.txt，并自动读取 GNSS_offset.txt），"
+               "或标记控制点/检查点参考（GCPs_WGS84.txt、CSV）"));
+        _importCameraAct = ensurePlainAction(
+            _mainWindow,
+            importMenu,
+            importMenu,
+            QStringLiteral("actionImportCamera"),
+            tr("导入相机..."),
+            _importPointCloudAct);
+        _importCameraAct->setToolTip(
+            tr("打开相机校准窗口，为项目影像导入 .tsai 相机参数"));
+        _importReferenceAct->setEnabled(false);
+        _importCameraAct->setEnabled(false);
         _exportMatchedPairsAct = findNamedChild<QAction>(_mainWindow, "actionExportMatchedPairs");
         _minimizeAct = findNamedChild<QAction>(_mainWindow, "actionMinimize");
         _exitAct = findNamedChild<QAction>(_mainWindow, "actionExit");
@@ -1683,6 +1704,17 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
 
     _fileMenu->addSeparator();
     auto *importMenu = _fileMenu->addMenu(tr("导入"));
+    _importReferenceAct = importMenu->addAction(tr("导入参考..."));
+    _importReferenceAct->setObjectName(QStringLiteral("actionImportReference"));
+    _importReferenceAct->setToolTip(
+        tr("导入相机位置/姿态参考（Cameras_WGS84.txt，并自动读取 GNSS_offset.txt），"
+           "或标记控制点/检查点参考（GCPs_WGS84.txt、CSV）"));
+    _importReferenceAct->setEnabled(false);
+    _importCameraAct = importMenu->addAction(tr("导入相机..."));
+    _importCameraAct->setObjectName(QStringLiteral("actionImportCamera"));
+    _importCameraAct->setToolTip(
+        tr("打开相机校准窗口，为项目影像导入 .tsai 相机参数"));
+    _importCameraAct->setEnabled(false);
     _importPointCloudAct = importMenu->addAction(tr("导入点云..."));
     _importPointCloudAct->setObjectName(QStringLiteral("actionImportPointCloud"));
     _importPointCloudAct->setToolTip(
@@ -2249,6 +2281,8 @@ QAction *MainMenu::toggleHenanUniversityBrandAction() const { return _toggleHena
 
 QAction *MainMenu::addPhotoAction() const       { return _addPhotoAct; }
 QAction *MainMenu::addFolderAction() const      { return _addFolderAct; }
+QAction *MainMenu::importReferenceAction() const { return _importReferenceAct; }
+QAction *MainMenu::importCameraAction() const { return _importCameraAct; }
 QAction *MainMenu::importPointCloudAction() const { return _importPointCloudAct; }
 QAction *MainMenu::importModelAction() const { return _importModelAct; }
 QAction *MainMenu::featureVisualizationAction() const { return _featureVisualizationAct; }

@@ -103,6 +103,8 @@
      <property name="title">
       <string>导入</string>
      </property>
+     <addaction name="actionImportReference"/>
+     <addaction name="actionImportCamera"/>
      <addaction name="actionImportPointCloud"/>
      <addaction name="actionImportModel"/>
     </widget>
@@ -413,6 +415,28 @@
   <action name="actionAbout">
    <property name="text">
     <string>关于</string>
+   </property>
+  </action>
+  <action name="actionImportReference">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>导入参考...</string>
+   </property>
+   <property name="toolTip">
+    <string>导入相机位置/姿态参考（Cameras_WGS84.txt，并自动读取 GNSS_offset.txt），或标记控制点/检查点参考（GCPs_WGS84.txt、CSV）</string>
+   </property>
+  </action>
+  <action name="actionImportCamera">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>导入相机...</string>
+   </property>
+   <property name="toolTip">
+    <string>打开相机校准窗口，为项目影像导入 .tsai 相机参数</string>
    </property>
   </action>
   <action name="actionImportPointCloud">

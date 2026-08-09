@@ -346,6 +346,7 @@ void MenuWorkflowController::bindActions(MainMenu *mainMenu)
     connectAction(mainMenu->createDEMAction(), &MenuWorkflowController::openCreateDemDialog);
     connectAction(mainMenu->generateOrthoAction(), &MenuWorkflowController::openMapProjectDialog);
     connectAction(mainMenu->viewWorkflowReportAction(), &MenuWorkflowController::openWorkflowReportDialog);
+    connectAction(mainMenu->importCameraAction(), &MenuWorkflowController::openCameraCalibrationDialog);
     connectAction(mainMenu->cameraCalibrationAction(), &MenuWorkflowController::openCameraCalibrationDialog);
     connectAction(mainMenu->cameraConvertAction(), &MenuWorkflowController::openCameraConvertDialog);
 

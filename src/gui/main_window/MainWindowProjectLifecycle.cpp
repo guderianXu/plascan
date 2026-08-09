@@ -62,9 +62,20 @@ void MainWindow::onClearRecentRequested()
 
 void MainWindow::onProjectOpened(const QString &plascanPath)
 {
-    if (_mainMenu && _mainMenu->saveAction())
+    if (_mainMenu)
     {
-        _mainMenu->saveAction()->setEnabled(true);
+        if (_mainMenu->saveAction())
+        {
+            _mainMenu->saveAction()->setEnabled(true);
+        }
+        if (_mainMenu->importReferenceAction())
+        {
+            _mainMenu->importReferenceAction()->setEnabled(true);
+        }
+        if (_mainMenu->importCameraAction())
+        {
+            _mainMenu->importCameraAction()->setEnabled(true);
+        }
     }
 
     if (_dataTree)
@@ -249,6 +260,14 @@ void MainWindow::onProjectClosed()
         if (_mainMenu->saveAction())
         {
             _mainMenu->saveAction()->setEnabled(false);
+        }
+        if (_mainMenu->importReferenceAction())
+        {
+            _mainMenu->importReferenceAction()->setEnabled(false);
+        }
+        if (_mainMenu->importCameraAction())
+        {
+            _mainMenu->importCameraAction()->setEnabled(false);
         }
         _mainMenu->setImageDisplayReady(false);
         _mainMenu->setDepthOverlayAvailable(false);

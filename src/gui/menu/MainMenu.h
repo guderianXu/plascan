@@ -183,6 +183,12 @@ public:
     /** @brief 返回"添加文件夹"动作（批量导入目录内的所有图片）。 */
     QAction *addFolderAction() const;
 
+    /** @brief 返回“文件 / 导入 / 导入参考”动作。 */
+    QAction *importReferenceAction() const;
+
+    /** @brief 返回“文件 / 导入 / 导入相机”动作。 */
+    QAction *importCameraAction() const;
+
     /** @brief 返回“文件 / 导入 / 导入点云”动作。 */
     QAction *importPointCloudAction() const;
 
@@ -299,6 +305,8 @@ private:
     QAction *_newAct{};   ///< 新建项目
     QAction *_openAct{};  ///< 打开项目
     QAction *_saveAct{};  ///< 保存项目
+    QAction *_importReferenceAct{}; ///< 导入相机或标记参考数据
+    QAction *_importCameraAct{}; ///< 为项目影像导入相机参数
     QAction *_importPointCloudAct{}; ///< 导入 Metashape/通用点云
     QAction *_importModelAct{}; ///< 导入 Metashape/通用模型
     QAction *_minimizeAct{}; ///< 最小化窗口
