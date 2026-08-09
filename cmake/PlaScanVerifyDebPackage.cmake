@@ -34,8 +34,44 @@ foreach(_required_field IN ITEMS
       "DEB metadata is missing '${_required_field}':\n${_fields}")
   endif()
 endforeach()
-if(NOT _fields MATCHES "(^|\n)Package: plascan(-cuda)?(\n|$)")
+if(NOT _fields MATCHES
+   "(^|\n)Package: ${PLASCAN_EXPECTED_DEB_PACKAGE_NAME}(\n|$)")
   message(FATAL_ERROR "Unexpected DEB package name:\n${_fields}")
+endif()
+if(NOT _fields MATCHES
+   "(^|\n)Version: ${PLASCAN_EXPECTED_DEB_PACKAGE_VERSION}(\n|$)")
+  message(FATAL_ERROR "Unexpected DEB package version:\n${_fields}")
+endif()
+
+set(_expected_dependencies "${PLASCAN_EXPECTED_DEB_DEPENDS}")
+string(REPLACE ", " ";" _expected_dependencies "${_expected_dependencies}")
+foreach(_expected_dependency IN LISTS _expected_dependencies)
+  string(FIND "${_fields}" "${_expected_dependency}" _dependency_index)
+  if(_dependency_index EQUAL -1)
+    message(FATAL_ERROR
+      "DEB metadata is missing dependency '${_expected_dependency}':\n${_fields}")
+  endif()
+endforeach()
+
+if(PLASCAN_EXPECTED_DEB_PACKAGE_VARIANT STREQUAL "cuda")
+  foreach(_cuda_field IN ITEMS
+      "Provides: plascan"
+      "Conflicts: plascan"
+      "Replaces: plascan")
+    string(FIND "${_fields}" "${_cuda_field}" _cuda_field_index)
+    if(_cuda_field_index EQUAL -1)
+      message(FATAL_ERROR
+        "CUDA DEB metadata is missing '${_cuda_field}':\n${_fields}")
+    endif()
+  endforeach()
+  set(_expected_doc_path "./usr/share/doc/plascan-cuda/copyright")
+else()
+  string(FIND "${_fields}" "Conflicts: plascan-cuda" _conflicts_index)
+  if(_conflicts_index EQUAL -1)
+    message(FATAL_ERROR
+      "Portable DEB metadata is missing 'Conflicts: plascan-cuda':\n${_fields}")
+  endif()
+  set(_expected_doc_path "./usr/share/doc/plascan/copyright")
 endif()
 
 execute_process(
@@ -53,7 +89,8 @@ foreach(_required_path IN ITEMS
     "./opt/plascan/resources/models/U2Net_v1.onnx"
     "./opt/plascan/resources/models/lightglue_tensorrt/lightglue_sift_bucket4096.onnx"
     "./usr/bin/plascan"
-    "./usr/share/applications/plascan.desktop")
+    "./usr/share/applications/plascan.desktop"
+    "${_expected_doc_path}")
   string(FIND "${_contents}" "${_required_path}" _path_index)
   if(_path_index EQUAL -1)
     message(FATAL_ERROR
@@ -67,6 +104,39 @@ if(_contents MATCHES "[ ]+[.]/opt/plascan/include/" OR
   message(FATAL_ERROR
     "DEB package contains development headers, static libraries or CMake exports")
 endif()
+
+if(NOT CPACK_TOPLEVEL_DIRECTORY)
+  message(FATAL_ERROR "CPACK_TOPLEVEL_DIRECTORY is unavailable for DEB control verification")
+endif()
+set(_control_directory
+  "${CPACK_TOPLEVEL_DIRECTORY}/_plascan_deb_control_verification")
+file(REMOVE_RECURSE "${_control_directory}")
+file(MAKE_DIRECTORY "${_control_directory}")
+execute_process(
+  COMMAND "${_dpkg_deb_executable}" --control
+    "${_deb_package}" "${_control_directory}"
+  RESULT_VARIABLE _control_result
+  ERROR_VARIABLE _control_error)
+if(NOT _control_result EQUAL 0)
+  message(FATAL_ERROR
+    "Failed to extract DEB control archive: ${_control_error}")
+endif()
+find_program(_stat_executable NAMES stat REQUIRED)
+foreach(_control_script IN ITEMS postinst postrm)
+  set(_control_script_path "${_control_directory}/${_control_script}")
+  if(NOT EXISTS "${_control_script_path}")
+    message(FATAL_ERROR "DEB control script is missing: ${_control_script}")
+  endif()
+  execute_process(
+    COMMAND "${_stat_executable}" -c "%a" "${_control_script_path}"
+    OUTPUT_VARIABLE _control_mode
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    COMMAND_ERROR_IS_FATAL ANY)
+  if(NOT _control_mode STREQUAL "755")
+    message(FATAL_ERROR
+      "DEB control script ${_control_script} must be mode 755, got ${_control_mode}")
+  endif()
+endforeach()
 
 file(SIZE "${_deb_package}" _deb_size)
 message(STATUS

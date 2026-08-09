@@ -372,14 +372,6 @@ else()
   set(CPACK_PACKAGING_INSTALL_PREFIX "/opt/plascan")
 endif()
 
-set(_plascan_cpack_project_config
-  "${CMAKE_BINARY_DIR}/PlaScanCPackOptions.cmake")
-configure_file(
-  "${CMAKE_SOURCE_DIR}/cmake/PlaScanCPackOptions.cmake.in"
-  "${_plascan_cpack_project_config}"
-  @ONLY)
-set(CPACK_PROJECT_CONFIG_FILE "${_plascan_cpack_project_config}")
-
 if(UNIX AND NOT APPLE)
   set(PLASCAN_DEBIAN_PACKAGE_VARIANT "portable" CACHE STRING
     "Linux DEB package variant: portable or cuda")
@@ -411,7 +403,7 @@ if(UNIX AND NOT APPLE)
   # vcpkg 动态库随包部署，系统基础库和桌面栈由 apt 管理。
   set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
   set(CPACK_DEBIAN_PACKAGE_DEPENDS
-    "ca-certificates, libc6, libstdc++6, libgcc-s1, libgomp1, libgfortran5, libblas3, liblapack3, libgl1, libegl1, libdbus-1-3, libfontconfig1, libglib2.0-0, libx11-6, libx11-xcb1, libxext6, libxrender1, libxi6, libxrandr2, libxfixes3, libxcursor1, libxcb-cursor0, libxkbcommon0, libxkbcommon-x11-0")
+    "ca-certificates, libc6 (>= 2.39), libstdc++6 (>= 13.1), libgcc-s1, libgomp1, libgfortran5, libblas3, liblapack3, libapriltag3, ocl-icd-libopencl1, libvulkan1, libgl1, libegl1, libdbus-1-3, libfontconfig1, libglib2.0-0, libx11-6, libx11-xcb1, libxext6, libxrender1, libxi6, libxrandr2, libxfixes3, libxcursor1, libxcb-cursor0, libxkbcommon0, libxkbcommon-x11-0")
   if(PLASCAN_DEBIAN_ACCELERATOR_DEPENDS)
     string(APPEND CPACK_DEBIAN_PACKAGE_DEPENDS
       ", ${PLASCAN_DEBIAN_ACCELERATOR_DEPENDS}")
@@ -421,6 +413,14 @@ if(UNIX AND NOT APPLE)
     "${CMAKE_SOURCE_DIR}/cmake/debian/postinst"
     "${CMAKE_SOURCE_DIR}/cmake/debian/postrm")
 endif()
+
+set(_plascan_cpack_project_config
+  "${CMAKE_BINARY_DIR}/PlaScanCPackOptions.cmake")
+configure_file(
+  "${CMAKE_SOURCE_DIR}/cmake/PlaScanCPackOptions.cmake.in"
+  "${_plascan_cpack_project_config}"
+  @ONLY)
+set(CPACK_PROJECT_CONFIG_FILE "${_plascan_cpack_project_config}")
 
 if(WIN32)
   install(DIRECTORY resources/ DESTINATION share/plascan

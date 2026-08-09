@@ -45,6 +45,11 @@ if("@PLASCAN_LINUX_REQUIRE_XCB_PLUGIN@" AND
     message(FATAL_ERROR
         "[verify-linux-runtime] Qt XCB platform plugin is missing")
 endif()
+if("@PLASCAN_LINUX_REQUIRE_TLS_PLUGIN@" AND
+   NOT EXISTS "${_plugin_root}/tls/libqopensslbackend.so")
+    message(FATAL_ERROR
+        "[verify-linux-runtime] Qt OpenSSL TLS backend is missing")
+endif()
 
 file(SIZE "${_u2net_model}" _u2net_size)
 file(SHA256 "${_u2net_model}" _u2net_sha256)
@@ -106,11 +111,22 @@ foreach(_elf_target IN LISTS _elf_targets)
     if(NOT _readelf_result EQUAL 0)
         continue()
     endif()
-    if(_dynamic_section MATCHES
-       "(RPATH|RUNPATH)[^\n]*(/mnt/|/home/|/opt/vcpkg|vcpkg_installed|CMakeFiles)")
-        message(FATAL_ERROR
-            "[verify-linux-runtime] non-relocatable RUNPATH in ${_elf_target}:\n${_dynamic_section}")
-    endif()
+    string(REGEX MATCHALL
+        "(RPATH|RUNPATH)[^\n]*\\[[^]]*\\]"
+        _runtime_path_lines "${_dynamic_section}")
+    foreach(_runtime_path_line IN LISTS _runtime_path_lines)
+        string(REGEX REPLACE ".*\\[([^]]*)\\].*" "\\1"
+            _runtime_paths "${_runtime_path_line}")
+        string(REPLACE ":" ";" _runtime_paths "${_runtime_paths}")
+        foreach(_runtime_path IN LISTS _runtime_paths)
+            if(_runtime_path AND
+               NOT _runtime_path MATCHES "^[$]ORIGIN($|/)")
+                message(FATAL_ERROR
+                    "[verify-linux-runtime] only $ORIGIN-relative RPATH entries are allowed in "
+                    "${_elf_target}: ${_runtime_path_line}")
+            endif()
+        endforeach()
+    endforeach()
 endforeach()
 
 execute_process(

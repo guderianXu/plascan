@@ -1,12 +1,49 @@
 # 安装与打包
 
-option(PLASCAN_BUNDLE_RUNTIME "Bundle runtime shared libraries (Qt/OpenCV etc.) into install/package" ON)
+if(WIN32)
+  set(_plascan_bundle_runtime_default ON)
+else()
+  set(_plascan_bundle_runtime_default OFF)
+endif()
+option(PLASCAN_BUNDLE_RUNTIME
+  "Bundle runtime shared libraries (Qt/OpenCV etc.) into install/package"
+  ${_plascan_bundle_runtime_default})
+unset(_plascan_bundle_runtime_default)
 option(PLASCAN_BUNDLE_ONNX_MODELS
   "Bundle verified U2Net and portable LightGlue ONNX models into install/package" ON)
 option(PLASCAN_VERIFY_LINUX_PACKAGE_RUNTIME
   "Fail Linux install/package staging when the bundled runtime is not relocatable" OFF)
 option(PLASCAN_LINUX_REQUIRE_XCB_PLUGIN
   "Require the Qt XCB platform plugin in Linux install/package staging" OFF)
+option(PLASCAN_LINUX_REQUIRE_TLS_PLUGIN
+  "Require the Qt OpenSSL TLS backend in Linux install/package staging" OFF)
+
+if(PLASCAN_VERIFY_LINUX_PACKAGE_RUNTIME)
+  if(WIN32 OR APPLE)
+    message(FATAL_ERROR
+      "PLASCAN_VERIFY_LINUX_PACKAGE_RUNTIME is only valid on Linux")
+  endif()
+  if(NOT PLASCAN_BUNDLE_RUNTIME OR NOT PLASCAN_BUNDLE_ONNX_MODELS)
+    message(FATAL_ERROR
+      "Verified Linux packages require PLASCAN_BUNDLE_RUNTIME=ON and "
+      "PLASCAN_BUNDLE_ONNX_MODELS=ON")
+  endif()
+  if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+    message(FATAL_ERROR
+      "The verified Linux DEB presets currently support x86_64 only: "
+      "${CMAKE_SYSTEM_PROCESSOR}")
+  endif()
+  if(NOT EXISTS "/etc/os-release")
+    message(FATAL_ERROR "Cannot verify the Linux distribution without /etc/os-release")
+  endif()
+  file(READ "/etc/os-release" _plascan_os_release)
+  if(NOT _plascan_os_release MATCHES "(^|\n)ID=ubuntu(\n|$)" OR
+     NOT _plascan_os_release MATCHES "(^|\n)VERSION_ID=\"?24[.]04\"?(\n|$)")
+    message(FATAL_ERROR
+      "Verified Linux DEB builds must run on Ubuntu 24.04 x86_64. "
+      "Detected /etc/os-release:\n${_plascan_os_release}")
+  endif()
+endif()
 
 set(PLASCAN_U2NET_ONNX_PATH
   "${CMAKE_SOURCE_DIR}/resources/models/U2Net_v1.onnx"
@@ -54,11 +91,17 @@ else()
     DESTINATION /usr/share/applications
     COMPONENT Runtime
   )
+  if(PLASCAN_DEBIAN_PACKAGE_VARIANT STREQUAL "cuda")
+    set(_plascan_debian_doc_dir /usr/share/doc/plascan-cuda)
+  else()
+    set(_plascan_debian_doc_dir /usr/share/doc/plascan)
+  endif()
   install(FILES "${CMAKE_SOURCE_DIR}/LICENSE"
-    DESTINATION /usr/share/doc/plascan
+    DESTINATION "${_plascan_debian_doc_dir}"
     RENAME copyright
     COMPONENT Runtime
   )
+  unset(_plascan_debian_doc_dir)
 endif()
 
 set(PLASCAN_QT_CONF_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/packaging/qt.conf.in")
@@ -195,9 +238,7 @@ if(PLASCAN_BUNDLE_RUNTIME AND NOT WIN32)
   endif()
 
   set(PLASCAN_LINUX_RUNTIME_PREFIXES "")
-  foreach(_runtime_prefix IN ITEMS
-      "${PLASCAN_CONDA_PREFIX}"
-      "${_plascan_qt_prefix_dir}")
+  foreach(_runtime_prefix IN ITEMS "${PLASCAN_CONDA_PREFIX}")
     if(_runtime_prefix AND EXISTS "${_runtime_prefix}")
       get_filename_component(_runtime_prefix "${_runtime_prefix}" REALPATH)
       list(APPEND PLASCAN_LINUX_RUNTIME_PREFIXES "${_runtime_prefix}")
@@ -234,6 +275,16 @@ if(PLASCAN_BUNDLE_RUNTIME AND NOT WIN32)
         "${_system_runtime_dir}")
     endif()
   endforeach()
+  foreach(_runtime_library IN ITEMS
+      "${TensorRT_NVINFER_LIBRARY}"
+      "${TensorRT_NVONNXPARSER_LIBRARY}")
+    if(_runtime_library AND EXISTS "${_runtime_library}")
+      get_filename_component(_runtime_library_dir
+        "${_runtime_library}" DIRECTORY)
+      list(APPEND PLASCAN_LINUX_RUNTIME_LIBRARY_DIRS
+        "${_runtime_library_dir}")
+    endif()
+  endforeach()
   list(REMOVE_DUPLICATES PLASCAN_LINUX_RUNTIME_LIBRARY_DIRS)
 
   foreach(_plugin_group IN ITEMS
@@ -256,6 +307,13 @@ if(PLASCAN_BUNDLE_RUNTIME AND NOT WIN32)
     message(FATAL_ERROR
       "Linux package requires Qt's XCB platform plugin. Rebuild qtbase with "
       "the xcb, xkbcommon-x11, fontconfig and dbus features.")
+  endif()
+  if(PLASCAN_LINUX_REQUIRE_TLS_PLUGIN AND
+     (NOT PLASCAN_QT_PLUGINS_DIR OR
+      NOT EXISTS "${PLASCAN_QT_PLUGINS_DIR}/tls/libqopensslbackend.so"))
+    message(FATAL_ERROR
+      "Linux package requires Qt's OpenSSL TLS backend. Rebuild qtbase with "
+      "the network and openssl features.")
   endif()
 
   set(PLASCAN_GDAL_DATA_SOURCE "")

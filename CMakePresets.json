@@ -67,6 +67,7 @@
         "PLASCAN_ENABLE_OPENCL": "ON",
         "PLASCAN_ENABLE_TENSORRT": "OFF",
         "PLASCAN_LINUX_REQUIRE_XCB_PLUGIN": "ON",
+        "PLASCAN_LINUX_REQUIRE_TLS_PLUGIN": "ON",
         "PLASCAN_VERIFY_LINUX_PACKAGE_RUNTIME": "ON",
         "VCPKG_INSTALLED_DIR": "${sourceDir}/build/linux-vcpkg-package-release/vcpkg_installed"
       }
