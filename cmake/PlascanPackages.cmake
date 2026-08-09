@@ -17,6 +17,11 @@ if(WIN32)
 endif()
 find_package(Qt6 6.7 REQUIRED COMPONENTS ${PLASCAN_QT_COMPONENTS})
 if(NOT TARGET Qt6::GuiPrivate)
+  # Qt's vcpkg package exports private modules as standalone package configs on
+  # Linux instead of loading them with the public Qt6 component set.
+  find_package(Qt6GuiPrivate ${Qt6_VERSION} CONFIG QUIET)
+endif()
+if(NOT TARGET Qt6::GuiPrivate)
   message(FATAL_ERROR
     "PlaScan requires the Qt GuiPrivate target. Install the Qt base private development package.")
 endif()
