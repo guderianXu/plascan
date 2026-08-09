@@ -69,6 +69,10 @@
 
 ### 优化
 
+- Ceres 大规模联合 BA 移除重复问题扫描、逐轨观测深拷贝和 `std::set`，按相机共享投影快照与
+  Huber loss，并关闭回调不需要的逐迭代状态复制；新增真实 `sfm_sparse_points.json` + TSAI
+  重放基准。Agisoft 100 相机、88,104 tracks、261,589 observations 的 5 次中位 API 墙钟
+  从 2.484 s 降至 2.135 s，RMS 保持 `0.5743401084 -> 0.1968729905`。
 - Windows CUDA 打包新增 `windows-package-smoke` 与 `windows-package-release` 一键工作流：日常改动只
   增量更新可直接运行的未压缩 Runtime 安装树，正式交付时才执行完整 Inno Setup 分卷压缩；两条路径
   均保留 U2Net 与 LightGlue ONNX 的安装阶段哈希门禁。
@@ -306,6 +310,12 @@
 
 ### 验证
 
+- `scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Jobs 32` 通过，完成 Windows/MSVC CUDA Release
+  全量构建；设置构建产物 `bin` 到 `PATH` 并将 `PROJ_DATA` 指向 vcpkg PROJ 数据目录后，完整 CTest
+  通过，2,124 个测试实际通过，10 个按环境或可选依赖显式跳过，1 个性能基准保持 disabled。
+- Agisoft 100 相机真实连接点网络 A/B 重放 5 次：261,589 个观测的公共 BA API 中位墙钟从
+  2.484 s 降至 2.135 s，优化后快 14.0%；完整空三调用链的全局 BA internal total 从
+  2.008 s 降至 1.590 s，RMS、相机注册数、点数和观测数保持一致。
 - `cmake --build build/windows-vcpkg-cuda-release --config Release --parallel 16` 通过；
   `ctest --test-dir build/windows-vcpkg-cuda-release -C Release --output-on-failure` 通过，1909 个测试通过，
   其余为 8 个显式跳过和 1 个禁用基准。

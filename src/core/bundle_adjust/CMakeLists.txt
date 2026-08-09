@@ -68,12 +68,14 @@ if(BA_HAS_NATIVE_CUDA)
 endif()
 
 add_executable(ba_backend_benchmark
+    tools/BaBenchmarkRealDataset.cpp
     tools/ba_backend_benchmark.cpp
 )
 
 target_link_libraries(ba_backend_benchmark PRIVATE
     bundle_adjust
     camera
+    Qt6::Core
 )
 
 target_include_directories(ba_backend_benchmark PRIVATE

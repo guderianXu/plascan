@@ -361,6 +361,21 @@ python scripts/bench/run_ba_backend_benchmark.py \
   --threads 32
 ```
 
+也可以直接重放正式 SfM 输出的真实 BA 拓扑。`--dataset-json` 读取
+`sfm_sparse_points.json` 中的三维点和像点观测，`--camera-list` 按顺序加载对应 TSAI 相机；
+真实模式会关闭后端回退、质量门控对照和迭代日志，避免把第二次求解混入计时：
+
+```powershell
+build/windows-vcpkg-cuda-release/bin/ba_backend_benchmark.exe `
+  --dataset-json build/benchmark_runs/<run>/sfm_sparse_points.json `
+  --camera-list testData/photogrammetry_benchmarks/<dataset>/prepared/plascan/image_camera.lis `
+  --backend ceres_cpu --iterations 20 --threads 32 --repetitions 5 --refine-pose
+```
+
+默认按生产阈值选择 Dense/Sparse/Iterative Schur。基准调优时可用
+`--max-dense-schur-cameras` 和 `--max-sparse-schur-cameras` 强制跨过规划阈值；输出同时保留
+`seconds` 兼容字段，并报告 API 墙钟、setup/solve/total、实际后端、实际线性求解器和 RMS。
+
 调试和 benchmark 时可分阶段运行：`--stop-after-sfm` 只生成稀疏结果，`--skip-mvs` 在 SfM 后写报告并跳过后续阶段，
 `--mvs-depth-only` 只生成 MVS 深度图、raw depth、confidence、valid mask 和 manifest，并在融合、网格和 terrain 前停止；
 `--skip-mesh` 则保留 MVS 稠密点云但不生成网格。

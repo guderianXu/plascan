@@ -192,7 +192,7 @@ core/
 │   ├── BundleAdjustNativeCudaWorkset.h/cpp # 将 Camera/BATrack 扁平化为 CUDA 连续工作集
 │   ├── BundleAdjustNativeCudaTypes.h / *Kernels.cuh # CUDA 侧数据类型、点块 kernel 和设备函数
 │   ├── README.md               # 调用链、后端能力、状态、规范与质量门控
-│   ├── tools/                  # BA 后端基准工具，例如 ba_backend_benchmark
+│   ├── tools/                  # BA 后端基准及真实 sfm_sparse_points/TSAI 重放加载器
 │   └── tests/                  # BA 模块级后端、投影模型、自动选择和约束回归测试
 │
 ├── lidar/                      # LiDAR / 激光点约束

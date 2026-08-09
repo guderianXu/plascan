@@ -88,6 +88,9 @@ TEST(BundleAdjustValidationTest, ProblemSummaryCountsOnlyUsableObservations)
     usable.observations.push_back({0, 321.0, 240.0, 0.0});
     usable.observations.push_back(
         {1, 299.0, 240.0, std::numeric_limits<double>::quiet_NaN()});
+    usable.observations.push_back({-1, 320.0, 240.0, 1.0});
+    usable.observations.push_back(
+        {static_cast<int>(cameras.size()), 300.0, 240.0, 1.0});
 
     xjw::BATrack unusable = usable;
     unusable.observations.resize(1);

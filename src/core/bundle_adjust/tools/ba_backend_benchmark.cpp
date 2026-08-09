@@ -1,5 +1,4 @@
-#include "BundleAdjust.h"
-#include "Camera.h"
+#include "BaBenchmarkRealDataset.h"
 
 #include <algorithm>
 #include <array>
@@ -7,15 +6,36 @@
 #include <cmath>
 #include <cctype>
 #include <cstdlib>
+#include <filesystem>
+#include <iomanip>
 #include <iostream>
+#include <limits>
 #include <random>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace
 {
-
+struct BenchmarkSettings
+{
+    int threads = 32;
+    int iterations = 8;
+    int repetitions = 1;
+    int maxDenseSchurCameras = 200;
+    int maxSparseSchurCameras = 2000;
+    bool refinePose = false;
+    bool isolatedBackend = false;
+    double loadSeconds = 0.0;
+};
+struct RealDatasetOptions
+{
+    std::filesystem::path datasetJson;
+    std::filesystem::path cameraList;
+    std::string backends = "ceres_cpu";
+    BenchmarkSettings settings;
+};
 xjw::Camera makeCamera(double cx, double cy, double cz)
 {
     xjw::Camera camera;
@@ -26,24 +46,10 @@ xjw::Camera makeCamera(double cx, double cy, double cz)
                    {{cx, cy, cz}});
     return camera;
 }
-
-bool projectPoint(const xjw::Camera &camera, const std::array<double, 3> &point, double *u, double *v)
-{
-    const double world[3] = {point[0], point[1], point[2]};
-    double pixel[2] = {0.0, 0.0};
-    if (!camera.projectWorldPoint(world, pixel))
-    {
-        return false;
-    }
-    *u = pixel[0];
-    *v = pixel[1];
-    return true;
-}
-
 std::vector<xjw::Camera> makeCameras(int count)
 {
     std::vector<xjw::Camera> cameras;
-    cameras.reserve(static_cast<size_t>(count));
+    cameras.reserve(static_cast<std::size_t>(count));
     for (int i = 0; i < count; ++i)
     {
         const double t = (static_cast<double>(i) / std::max(1, count - 1) - 0.5) * 18.0;
@@ -51,7 +57,6 @@ std::vector<xjw::Camera> makeCameras(int count)
     }
     return cameras;
 }
-
 std::vector<xjw::BATrack> makeTracks(const std::vector<xjw::Camera> &cameras,
                                      int trackCount,
                                      int viewsPerTrack)
@@ -63,7 +68,7 @@ std::vector<xjw::BATrack> makeTracks(const std::vector<xjw::Camera> &cameras,
     std::normal_distribution<double> imageNoise(0.0, 0.05);
 
     std::vector<xjw::BATrack> tracks;
-    tracks.reserve(static_cast<size_t>(trackCount));
+    tracks.reserve(static_cast<std::size_t>(trackCount));
     for (int i = 0; i < trackCount; ++i)
     {
         const std::array<double, 3> truth{{xy(rng), xy(rng), z(rng)}};
@@ -75,24 +80,21 @@ std::vector<xjw::BATrack> makeTracks(const std::vector<xjw::Camera> &cameras,
         for (int k = 0; k < viewsPerTrack; ++k)
         {
             const int ci = (start + k * 3) % static_cast<int>(cameras.size());
-            double u = 0.0;
-            double v = 0.0;
-            if (projectPoint(cameras[static_cast<size_t>(ci)], truth, &u, &v))
+            const double world[3] = {truth[0], truth[1], truth[2]};
+            double pixel[2] = {0.0, 0.0};
+            if (cameras[static_cast<std::size_t>(ci)].projectWorldPoint(world, pixel))
             {
-                track.observations.push_back(xjw::BAObservation{ci,
-                                                                u + imageNoise(rng),
-                                                                v + imageNoise(rng),
-                                                                1.0});
+                track.observations.push_back(xjw::BAObservation{
+                    ci, pixel[0] + imageNoise(rng), pixel[1] + imageNoise(rng), 1.0});
             }
         }
         if (track.observations.size() >= 2)
         {
-            tracks.push_back(track);
+            tracks.push_back(std::move(track));
         }
     }
     return tracks;
 }
-
 std::string sanitizeField(std::string value)
 {
     std::replace(value.begin(), value.end(), ',', ';');
@@ -100,7 +102,6 @@ std::string sanitizeField(std::string value)
     std::replace(value.begin(), value.end(), '\r', ' ');
     return value;
 }
-
 std::vector<std::string> splitBackends(const std::string &raw)
 {
     std::vector<std::string> names;
@@ -119,117 +120,281 @@ std::vector<std::string> splitBackends(const std::string &raw)
     }
     return names;
 }
-
-bool shouldRunBackend(const std::vector<std::string> &requested, const std::string &name)
+bool parseBackend(const std::string &name, xjw::BABackend *backend)
 {
-    return std::find(requested.begin(), requested.end(), name) != requested.end();
+    if (name == "legacy_cpu")
+    {
+        *backend = xjw::BABackend::LegacyCpu;
+    }
+    else if (name == "ceres_cpu")
+    {
+        *backend = xjw::BABackend::CeresCpu;
+    }
+    else if (name == "ceres_cuda")
+    {
+        *backend = xjw::BABackend::CeresCuda;
+    }
+    else if (name == "native_cuda")
+    {
+        *backend = xjw::BABackend::NativeCuda;
+    }
+    else if (name == "auto")
+    {
+        *backend = xjw::BABackend::Auto;
+    }
+    else
+    {
+        return false;
+    }
+    return true;
+}
+void runCase(const std::string &name,
+             xjw::BABackend backend,
+             const xjw::ba_benchmark::BenchmarkDataset &dataset,
+             const BenchmarkSettings &settings)
+{
+    for (int repetition = 1; repetition <= settings.repetitions; ++repetition)
+    {
+        std::vector<xjw::Camera> cameras = dataset.cameras;
+        std::vector<xjw::BATrack> tracks = dataset.tracks;
+        xjw::BAOptions options;
+        options.backend = backend;
+        options.numThreads = settings.threads;
+        options.maxIterations = settings.iterations;
+        options.refineCameraPose = settings.refinePose;
+        options.enablePointFilter = false;
+        options.minCeresCudaCameras = 1;
+        options.minCeresCudaObservations = 1;
+        options.minCeresCpuObservations = 1;
+        options.maxDenseSchurCameras = settings.maxDenseSchurCameras;
+        options.maxSparseSchurCameras = settings.maxSparseSchurCameras;
+        options.allowBackendFallback = !settings.isolatedBackend;
+        options.enableBackendQualityGate = !settings.isolatedBackend;
+        options.compareAutoBackendWithLegacy = !settings.isolatedBackend;
+        options.logIterationProgress = !settings.isolatedBackend;
+        if (settings.refinePose)
+        {
+            options.fixedCameraIndices.push_back(0);
+        }
+
+        const auto started = std::chrono::steady_clock::now();
+        const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(cameras, tracks, options);
+        const double apiWallSeconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - started).count();
+
+        std::cout << name
+                  << ",repetition=" << repetition
+                  << ",cold_start=" << (repetition == 1 ? "true" : "false")
+                  << ",requested=" << xjw::BundleAdjust::backendName(result.requestedBackend)
+                  << ",used=" << xjw::BundleAdjust::backendName(result.usedBackend)
+                  << ",status=" << xjw::BundleAdjust::solveStatusName(result.solveStatus)
+                  << ",gpu=" << (result.usedGpu ? "true" : "false")
+                  << ",fallback=" << (result.backendFallback ? "true" : "false")
+                  << ",solver=" << result.ceresLinearSolverName
+                  << ",observations=" << result.observationCount
+                  << ",tracks=" << result.totalTracks
+                  << ",optimized=" << result.optimizedTracks
+                  << ",valid_ratio=" << result.validTrackRatio
+                  << ",rms_before=" << result.meanRmsBefore
+                  << ",rms_after=" << result.meanRmsAfter
+                  << ",quality_rejected=" << (result.qualityGateRejected ? "true" : "false")
+                  << ",quality_message=" << sanitizeField(result.qualityGateMessage)
+                  << ",native_initial_cost=" << result.nativeCudaInitialCost
+                  << ",native_final_cost=" << result.nativeCudaFinalCost
+                  << ",native_active_observations=" << result.nativeCudaActiveObservations
+                  << ",native_upload_seconds=" << result.nativeCudaUploadSeconds
+                  << ",native_kernel_seconds=" << result.nativeCudaKernelSeconds
+                  << ",native_download_seconds=" << result.nativeCudaDownloadSeconds
+                  << ",native_host_cost_seconds=" << result.nativeCudaHostCostSeconds
+                  << ",native_device_select_seconds=" << result.nativeCudaDeviceSelectSeconds
+                  << ",native_staging_seconds=" << result.nativeCudaStagingSeconds
+                  << ",native_release_seconds=" << result.nativeCudaReleaseSeconds
+                  << ",setup_seconds=" << result.setupSeconds
+                  << ",solve_seconds=" << result.solveSeconds
+                  << ",total_seconds=" << result.totalSeconds
+                  << ",api_wall_seconds=" << apiWallSeconds
+                  << ",seconds=" << apiWallSeconds
+                  << ",load_seconds=" << settings.loadSeconds
+                  << ",backend_reason=" << sanitizeField(result.backendSelectionReason)
+                  << ",backend_message=" << sanitizeField(result.backendMessage)
+                  << "\n" << std::flush;
+    }
+}
+int parseInteger(const std::string &value, const std::string &option, int minimum)
+{
+    char *end = nullptr;
+    const long parsed = std::strtol(value.c_str(), &end, 10);
+    if (!end || *end != '\0' || parsed < minimum || parsed > std::numeric_limits<int>::max())
+    {
+        throw std::runtime_error(option + " 需要 >= " + std::to_string(minimum) + " 的整数");
+    }
+    return static_cast<int>(parsed);
+}
+void printUsage(const char *program)
+{
+    std::cout << "用法:\n"
+              << "  " << program
+              << " [camera_count track_count views_per_track iterations threads refine_pose backends]\n"
+              << "  " << program << " --dataset-json PATH --camera-list PATH [选项]\n\n"
+              << "真实数据选项:\n"
+              << "  --backend NAME[,NAME...]              默认 ceres_cpu\n"
+              << "  --iterations N                        默认 8\n"
+              << "  --threads N                           默认 32\n"
+              << "  --repetitions N                       默认 1；第 1 轮标记为冷启动\n"
+              << "  --refine-pose                         联合优化相机位姿\n"
+              << "  --max-dense-schur-cameras N           默认 200\n"
+              << "  --max-sparse-schur-cameras N          默认 2000\n";
 }
 
-void runCase(const char *name,
-             xjw::BABackend backend,
-             const std::vector<xjw::Camera> &cameras,
-             const std::vector<xjw::BATrack> &tracks,
-             int threads,
-             int iterations,
-             bool refinePose)
+RealDatasetOptions parseRealOptions(int argc, char **argv)
 {
-    xjw::BAOptions options;
-    options.backend = backend;
-    options.numThreads = threads;
-    options.maxIterations = iterations;
-    options.refineCameraPose = refinePose;
-    options.enablePointFilter = false;
-    options.minCeresCudaCameras = 1;
-    options.minCeresCudaObservations = 1;
-    options.minCeresCpuObservations = 1;
-    options.allowBackendFallback = true;
-    options.enableBackendQualityGate = true;
-    options.compareAutoBackendWithLegacy = true;
-    if (refinePose)
+    RealDatasetOptions options;
+    options.settings.isolatedBackend = true;
+    for (int i = 1; i < argc; ++i)
     {
-        // 固定首相机，避免相机位姿参与时的整体 gauge 漂移影响基准稳定性。
-        options.fixedCameraIndices.push_back(0);
+        const std::string option = argv[i];
+        auto value = [&]() -> std::string {
+            if (++i >= argc)
+            {
+                throw std::runtime_error(option + " 缺少参数值");
+            }
+            return argv[i];
+        };
+        if (option == "--dataset-json")
+        {
+            options.datasetJson = std::filesystem::u8path(value());
+        }
+        else if (option == "--camera-list")
+        {
+            options.cameraList = std::filesystem::u8path(value());
+        }
+        else if (option == "--backend")
+        {
+            options.backends = value();
+        }
+        else if (option == "--iterations")
+        {
+            options.settings.iterations = parseInteger(value(), option, 1);
+        }
+        else if (option == "--threads")
+        {
+            options.settings.threads = parseInteger(value(), option, 1);
+        }
+        else if (option == "--repetitions")
+        {
+            options.settings.repetitions = parseInteger(value(), option, 1);
+        }
+        else if (option == "--max-dense-schur-cameras")
+        {
+            options.settings.maxDenseSchurCameras = parseInteger(value(), option, 0);
+        }
+        else if (option == "--max-sparse-schur-cameras")
+        {
+            options.settings.maxSparseSchurCameras = parseInteger(value(), option, 0);
+        }
+        else if (option == "--refine-pose")
+        {
+            options.settings.refinePose = true;
+        }
+        else if (option != "--help" && option != "-h")
+        {
+            throw std::runtime_error("未知选项: " + option);
+        }
     }
+    if (options.datasetJson.empty() || options.cameraList.empty())
+    {
+        throw std::runtime_error("真实数据模式必须同时提供 --dataset-json 和 --camera-list");
+    }
+    return options;
+}
 
-    const auto t0 = std::chrono::steady_clock::now();
-    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(cameras, tracks, options);
-    const auto t1 = std::chrono::steady_clock::now();
-    const double seconds = std::chrono::duration<double>(t1 - t0).count();
-
-    std::cout << name
-              << ",requested=" << xjw::BundleAdjust::backendName(result.requestedBackend)
-              << ",used=" << xjw::BundleAdjust::backendName(result.usedBackend)
-              << ",gpu=" << (result.usedGpu ? "true" : "false")
-              << ",fallback=" << (result.backendFallback ? "true" : "false")
-              << ",solver=" << result.ceresLinearSolverName
-              << ",observations=" << result.observationCount
-              << ",tracks=" << result.totalTracks
-              << ",optimized=" << result.optimizedTracks
-              << ",valid_ratio=" << result.validTrackRatio
-              << ",rms_before=" << result.meanRmsBefore
-              << ",rms_after=" << result.meanRmsAfter
-              << ",quality_rejected=" << (result.qualityGateRejected ? "true" : "false")
-              << ",backend_reason=" << sanitizeField(result.backendSelectionReason)
-              << ",quality_message=" << sanitizeField(result.qualityGateMessage)
-              << ",native_initial_cost=" << result.nativeCudaInitialCost
-              << ",native_final_cost=" << result.nativeCudaFinalCost
-              << ",native_active_observations=" << result.nativeCudaActiveObservations
-              << ",native_upload_seconds=" << result.nativeCudaUploadSeconds
-              << ",native_kernel_seconds=" << result.nativeCudaKernelSeconds
-              << ",native_download_seconds=" << result.nativeCudaDownloadSeconds
-              << ",native_host_cost_seconds=" << result.nativeCudaHostCostSeconds
-              << ",native_device_select_seconds=" << result.nativeCudaDeviceSelectSeconds
-              << ",native_staging_seconds=" << result.nativeCudaStagingSeconds
-              << ",native_release_seconds=" << result.nativeCudaReleaseSeconds
-              << ",setup_seconds=" << result.setupSeconds
-              << ",solve_seconds=" << result.solveSeconds
-              << ",total_seconds=" << result.totalSeconds
-              << ",seconds=" << seconds
-              << "\n";
-    std::cout << std::flush;
+void runRequestedBackends(const std::string &raw,
+                          const xjw::ba_benchmark::BenchmarkDataset &dataset,
+                          const BenchmarkSettings &settings)
+{
+    const std::vector<std::string> names = splitBackends(raw);
+    if (names.empty())
+    {
+        throw std::runtime_error("backend 列表为空");
+    }
+    for (const std::string &name : names)
+    {
+        xjw::BABackend backend;
+        if (!parseBackend(name, &backend))
+        {
+            throw std::runtime_error("未知 backend: " + name);
+        }
+        runCase(name, backend, dataset, settings);
+    }
 }
 
 } // namespace
 
 int main(int argc, char **argv)
 {
-    const int cameraCount = argc > 1 ? std::max(2, std::atoi(argv[1])) : 80;
-    const int trackCount = argc > 2 ? std::max(1, std::atoi(argv[2])) : 3000;
-    const int viewsPerTrack = argc > 3 ? std::max(2, std::atoi(argv[3])) : 8;
-    const int iterations = argc > 4 ? std::max(1, std::atoi(argv[4])) : 8;
-    const int threads = argc > 5 ? std::max(1, std::atoi(argv[5])) : 32;
-    const bool refinePose = argc > 6 ? std::atoi(argv[6]) != 0 : false;
-    const std::vector<std::string> requestedBackends =
-        splitBackends(argc > 7 ? argv[7] : "legacy_cpu,ceres_cpu,ceres_cuda,native_cuda,auto");
+    try
+    {
+        std::cout << std::setprecision(10);
+        if (argc > 1 && (std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h"))
+        {
+            printUsage(argv[0]);
+            return 0;
+        }
+        if (argc > 1 && std::string(argv[1]).starts_with("--"))
+        {
+            RealDatasetOptions options = parseRealOptions(argc, argv);
+            const auto started = std::chrono::steady_clock::now();
+            const xjw::ba_benchmark::BenchmarkDataset dataset =
+                xjw::ba_benchmark::loadRealDataset(options.datasetJson, options.cameraList);
+            options.settings.loadSeconds = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - started).count();
+            std::cout << "dataset,mode=real,cameras=" << dataset.cameras.size()
+                      << ",tracks=" << dataset.tracks.size()
+                      << ",observations=" << dataset.observations
+                      << ",iterations=" << options.settings.iterations
+                      << ",threads=" << options.settings.threads
+                      << ",refine_pose=" << (options.settings.refinePose ? "true" : "false")
+                      << ",max_dense_schur_cameras=" << options.settings.maxDenseSchurCameras
+                      << ",max_sparse_schur_cameras=" << options.settings.maxSparseSchurCameras
+                      << ",repetitions=" << options.settings.repetitions
+                      << ",load_seconds=" << options.settings.loadSeconds << "\n";
+            runRequestedBackends(options.backends, dataset, options.settings);
+            return 0;
+        }
 
-    const auto cameras = makeCameras(cameraCount);
-    const auto tracks = makeTracks(cameras, trackCount, viewsPerTrack);
-    std::cout << "dataset,cameras=" << cameras.size()
-              << ",tracks=" << tracks.size()
-              << ",views_per_track=" << viewsPerTrack
-              << ",iterations=" << iterations
-              << ",threads=" << threads
-              << ",refine_pose=" << (refinePose ? "true" : "false")
-              << "\n";
-    if (shouldRunBackend(requestedBackends, "legacy_cpu"))
-    {
-        runCase("legacy_cpu", xjw::BABackend::LegacyCpu, cameras, tracks, threads, iterations, refinePose);
+        const int cameraCount = argc > 1 ? std::max(2, std::atoi(argv[1])) : 80;
+        const int trackCount = argc > 2 ? std::max(1, std::atoi(argv[2])) : 3000;
+        const int viewsPerTrack = argc > 3 ? std::max(2, std::atoi(argv[3])) : 8;
+        BenchmarkSettings settings;
+        settings.iterations = argc > 4 ? std::max(1, std::atoi(argv[4])) : 8;
+        settings.threads = argc > 5 ? std::max(1, std::atoi(argv[5])) : 32;
+        settings.refinePose = argc > 6 ? std::atoi(argv[6]) != 0 : false;
+        const std::string backends = argc > 7 ? argv[7] : "legacy_cpu,ceres_cpu,ceres_cuda,native_cuda,auto";
+
+        const auto started = std::chrono::steady_clock::now();
+        xjw::ba_benchmark::BenchmarkDataset dataset;
+        dataset.cameras = makeCameras(cameraCount);
+        dataset.tracks = makeTracks(dataset.cameras, trackCount, viewsPerTrack);
+        for (const xjw::BATrack &track : dataset.tracks)
+        {
+            dataset.observations += track.observations.size();
+        }
+        settings.loadSeconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - started).count();
+        std::cout << "dataset,mode=synthetic,cameras=" << dataset.cameras.size()
+                  << ",tracks=" << dataset.tracks.size()
+                  << ",observations=" << dataset.observations
+                  << ",views_per_track=" << viewsPerTrack
+                  << ",iterations=" << settings.iterations
+                  << ",threads=" << settings.threads
+                  << ",refine_pose=" << (settings.refinePose ? "true" : "false")
+                  << ",load_seconds=" << settings.loadSeconds << "\n";
+        runRequestedBackends(backends, dataset, settings);
+        return 0;
     }
-    if (shouldRunBackend(requestedBackends, "ceres_cpu"))
+    catch (const std::exception &error)
     {
-        runCase("ceres_cpu", xjw::BABackend::CeresCpu, cameras, tracks, threads, iterations, refinePose);
+        std::cerr << "ba_backend_benchmark: " << error.what() << "\n";
+        return 2;
     }
-    if (shouldRunBackend(requestedBackends, "ceres_cuda"))
-    {
-        runCase("ceres_cuda", xjw::BABackend::CeresCuda, cameras, tracks, threads, iterations, refinePose);
-    }
-    if (shouldRunBackend(requestedBackends, "native_cuda"))
-    {
-        runCase("native_cuda", xjw::BABackend::NativeCuda, cameras, tracks, threads, iterations, refinePose);
-    }
-    if (shouldRunBackend(requestedBackends, "auto"))
-    {
-        runCase("auto", xjw::BABackend::Auto, cameras, tracks, threads, iterations, refinePose);
-    }
-    return 0;
 }

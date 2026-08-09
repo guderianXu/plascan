@@ -35,7 +35,6 @@
 #include <limits>
 #include <map>
 #include <memory>
-#include <set>
 #include <string>
 #include <thread>
 
@@ -74,7 +73,7 @@ bool isCameraFixed(int cameraIndex, const BAOptions &options)
 // -------------------------------------------------------------------------
 struct FixedCameraReprojectionResidual
 {
-    xjw::ba::ProjectionCamera camera;
+    const xjw::ba::ProjectionCamera *camera = nullptr;
     BAObservation observation;
 
     template <typename T>
@@ -83,7 +82,7 @@ struct FixedCameraReprojectionResidual
         T pixel[2] = {T(0.0), T(0.0)};
         const T sqrtWeight =
             T(std::sqrt(sanitizedObservationWeight(observation)));
-        if (!xjw::ba::project(camera, point, pixel))
+        if (!xjw::ba::project(*camera, point, pixel))
         {
             residuals[0] = sqrtWeight * T(1.0e6);
             residuals[1] = sqrtWeight * T(1.0e6);
@@ -97,7 +96,7 @@ struct FixedCameraReprojectionResidual
 
 struct PoseDeltaReprojectionResidual
 {
-    xjw::ba::ProjectionCamera camera;
+    const xjw::ba::ProjectionCamera *camera = nullptr;
     BAObservation observation;
 
     template <typename T>
@@ -108,7 +107,7 @@ struct PoseDeltaReprojectionResidual
         T pixel[2] = {T(0.0), T(0.0)};
         const T sqrtWeight =
             T(std::sqrt(sanitizedObservationWeight(observation)));
-        if (!xjw::ba::projectWithPoseDelta(camera, cameraDelta, point, pixel))
+        if (!xjw::ba::projectWithPoseDelta(*camera, cameraDelta, point, pixel))
         {
             residuals[0] = sqrtWeight * T(1.0e6);
             residuals[1] = sqrtWeight * T(1.0e6);
@@ -122,7 +121,7 @@ struct PoseDeltaReprojectionResidual
 
 struct FixedPoseSharedIntrinsicsReprojectionResidual
 {
-    xjw::ba::ProjectionCamera camera;
+    const xjw::ba::ProjectionCamera *camera = nullptr;
     BAObservation observation;
 
     template <typename T>
@@ -136,7 +135,7 @@ struct FixedPoseSharedIntrinsicsReprojectionResidual
         const T sqrtWeight =
             T(std::sqrt(sanitizedObservationWeight(observation)));
         if (!xjw::ba::projectWithPoseDeltaAndSharedIntrinsics(
-                camera, zeroDelta, point, sharedIntrinsics, pixel))
+                *camera, zeroDelta, point, sharedIntrinsics, pixel))
         {
             residuals[0] = sqrtWeight * T(1.0e6);
             residuals[1] = sqrtWeight * T(1.0e6);
@@ -150,7 +149,7 @@ struct FixedPoseSharedIntrinsicsReprojectionResidual
 
 struct PoseDeltaSharedIntrinsicsReprojectionResidual
 {
-    xjw::ba::ProjectionCamera camera;
+    const xjw::ba::ProjectionCamera *camera = nullptr;
     BAObservation observation;
 
     template <typename T>
@@ -163,7 +162,7 @@ struct PoseDeltaSharedIntrinsicsReprojectionResidual
         const T sqrtWeight =
             T(std::sqrt(sanitizedObservationWeight(observation)));
         if (!xjw::ba::projectWithPoseDeltaAndSharedIntrinsics(
-                camera, cameraDelta, point, sharedIntrinsics, pixel))
+                *camera, cameraDelta, point, sharedIntrinsics, pixel))
         {
             residuals[0] = sqrtWeight * T(1.0e6);
             residuals[1] = sqrtWeight * T(1.0e6);
@@ -619,8 +618,6 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
     result.requestedBackend = options.backend;
     result.usedBackend = requestGpu ? BABackend::CeresCuda : BABackend::CeresCpu;
     result.usedGpu = requestGpu;
-    result.observationCount =
-        summarizeUsableProblem(cameras, tracks).observationCount;
     for (size_t ti = 0; ti < tracks.size(); ++ti)
     {
         BARefinedPoint &point = result.points[ti];
@@ -641,6 +638,8 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
     }
 
 #ifndef PLASCAN_BA_HAS_CERES
+    result.observationCount =
+        summarizeUsableProblem(cameras, tracks).observationCount;
     result.solveStatus = BASolveStatus::BackendUnavailable;
     result.backendMessage = "Ceres 未编译进当前目标";
     return result;
@@ -680,10 +679,10 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
     std::vector<std::array<double, 3>> pointParams(tracks.size());
     std::vector<std::array<double, 3>> laserPointParams(
         result.laserRangeShots.size());
-    std::vector<std::vector<BAObservation>> validObservationsByTrack(tracks.size());
     std::vector<char> activeTrack(tracks.size(), 0);
     std::vector<char> cameraHasResidual(cameras.size(), 0);
     std::vector<char> cameraHasLaserResidual(cameras.size(), 0);
+    std::vector<xjw::ba::ProjectionCamera> projectionCameras;
     ceres::Problem problem;
     const auto setupStart = std::chrono::steady_clock::now();
 
@@ -697,29 +696,29 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
             continue;
         }
 
-        std::set<int> uniqueCameras;
-        std::vector<BAObservation> validObservations;
-        validObservations.reserve(tracks[ti].observations.size());
+        int firstCameraIndex = -1;
+        bool hasSecondDistinctCamera = false;
+        int validObservationCount = 0;
+        bool initialPointHasPositiveDepth = true;
+        double initialResidualSquared = 0.0;
+        int initialResidualCount = 0;
         for (const BAObservation &observation : tracks[ti].observations)
         {
             if (!observationIsUsable(observation, cameras.size()))
             {
                 continue;
             }
-            uniqueCameras.insert(observation.cameraIndex);
-            validObservations.push_back(observation);
-        }
 
-        if (validObservations.size() < 2 || uniqueCameras.size() < 2)
-        {
-            continue;
-        }
+            ++validObservationCount;
+            if (firstCameraIndex < 0)
+            {
+                firstCameraIndex = observation.cameraIndex;
+            }
+            else if (observation.cameraIndex != firstCameraIndex)
+            {
+                hasSecondDistinctCamera = true;
+            }
 
-        bool initialPointHasPositiveDepth = true;
-        double initialResidualSquared = 0.0;
-        int initialResidualCount = 0;
-        for (const BAObservation &observation : validObservations)
-        {
             const double world[3] = {
                 tracks[ti].initialPoint[0],
                 tracks[ti].initialPoint[1],
@@ -738,7 +737,9 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                 sanitizedObservationWeight(observation) * (du * du + dv * dv);
             initialResidualCount += 2;
         }
-        if (!initialPointHasPositiveDepth)
+        if (validObservationCount < 2 ||
+            !hasSecondDistinctCamera ||
+            !initialPointHasPositiveDepth)
         {
             continue;
         }
@@ -756,11 +757,14 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
 
         activeTrack[ti] = 1;
         ++activeTrackCount;
-        activeObservationCount += static_cast<int>(validObservations.size());
-        validObservationsByTrack[ti] = std::move(validObservations);
-        for (const int cameraIndex : uniqueCameras)
+        activeObservationCount += validObservationCount;
+        for (const BAObservation &observation : tracks[ti].observations)
         {
-            cameraHasResidual[static_cast<size_t>(cameraIndex)] = 1;
+            if (observationIsUsable(observation, cameras.size()))
+            {
+                cameraHasResidual[
+                    static_cast<size_t>(observation.cameraIndex)] = 1;
+            }
         }
     }
 
@@ -801,6 +805,14 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         result.solveStatus = BASolveStatus::InvalidInput;
         result.backendMessage = "Ceres BA 没有足够有效 track 或激光测距 shot";
         return result;
+    }
+
+    // 在创建残差前一次性填满缓存，后续不再改变容量；Problem 比缓存晚声明，
+    // 因而残差持有的指针在求解和 Problem 析构期间始终有效。
+    projectionCameras.reserve(cameras.size());
+    for (const Camera &camera : cameras)
+    {
+        projectionCameras.push_back(xjw::ba::makeProjectionCamera(camera));
     }
 
     // 阶段 2：相机使用零起点的局部 6-DOF 增量，而不是直接优化 9 元旋转矩阵。
@@ -1153,6 +1165,11 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
     //
     // 每条二维观测只选择一种重投影残差签名；控制点/激光平面挂到单点块，
     // 比例尺连接两个点块，位姿先验挂到相机增量块。
+    // Ceres Problem 允许多个残差共享同一 LossFunction，并会对重复指针只析构一次。
+    ceres::LossFunction *reprojectionLoss =
+        activeObservationCount + activeLaserMeasuredObservationCount > 0
+            ? makeHuberLoss(options.huberDelta)
+            : nullptr;
     for (size_t ti = 0; ti < tracks.size(); ++ti)
     {
         if (!activeTrack[ti])
@@ -1162,8 +1179,15 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
 
         pointParams[ti] = tracks[ti].initialPoint;
         problem.AddParameterBlock(pointParams[ti].data(), 3);
-        for (const BAObservation &observation : validObservationsByTrack[ti])
+        for (const BAObservation &observation : tracks[ti].observations)
         {
+            if (!observationIsUsable(observation, cameras.size()))
+            {
+                continue;
+            }
+
+            const size_t cameraIndex =
+                static_cast<size_t>(observation.cameraIndex);
             if (options.refineCameraPose && refineSharedIntrinsics)
             {
                 auto *cost =
@@ -1173,19 +1197,16 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                                                     3,
                                                     9>(
                         new PoseDeltaSharedIntrinsicsReprojectionResidual{
-                            xjw::ba::makeProjectionCamera(
-                                cameras[static_cast<size_t>(observation.cameraIndex)]),
+                            &projectionCameras[cameraIndex],
                             observation});
                 problem.AddResidualBlock(
                     cost,
-                    makeHuberLoss(options.huberDelta),
-                    cameraDeltas[static_cast<size_t>(observation.cameraIndex)].data(),
+                    reprojectionLoss,
+                    cameraDeltas[cameraIndex].data(),
                     pointParams[ti].data(),
                     sharedIntrinsicsParameters[
                         static_cast<size_t>(
-                            calibrationParameterByCamera[
-                                static_cast<size_t>(
-                                    observation.cameraIndex)])].data());
+                            calibrationParameterByCamera[cameraIndex])].data());
             }
             else if (options.refineCameraPose)
             {
@@ -1194,12 +1215,11 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                                                              6,
                                                              3>(
                     new PoseDeltaReprojectionResidual{
-                        xjw::ba::makeProjectionCamera(
-                            cameras[static_cast<size_t>(observation.cameraIndex)]),
+                        &projectionCameras[cameraIndex],
                         observation});
                 problem.AddResidualBlock(cost,
-                                         makeHuberLoss(options.huberDelta),
-                                         cameraDeltas[static_cast<size_t>(observation.cameraIndex)].data(),
+                                         reprojectionLoss,
+                                         cameraDeltas[cameraIndex].data(),
                                          pointParams[ti].data());
             }
             else if (refineSharedIntrinsics)
@@ -1210,26 +1230,23 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                                                     3,
                                                     9>(
                         new FixedPoseSharedIntrinsicsReprojectionResidual{
-                            xjw::ba::makeProjectionCamera(
-                                cameras[static_cast<size_t>(observation.cameraIndex)]),
+                            &projectionCameras[cameraIndex],
                             observation});
                 problem.AddResidualBlock(cost,
-                                         makeHuberLoss(options.huberDelta),
+                                         reprojectionLoss,
                                          pointParams[ti].data(),
                                          sharedIntrinsicsParameters[
                                              static_cast<size_t>(
-                                                 calibrationParameterByCamera[
-                                                     static_cast<size_t>(
-                                                         observation.cameraIndex)])].data());
+                                                 calibrationParameterByCamera[cameraIndex])].data());
             }
             else
             {
                 auto *cost = new ceres::AutoDiffCostFunction<FixedCameraReprojectionResidual, 2, 3>(
                     new FixedCameraReprojectionResidual{
-                        xjw::ba::makeProjectionCamera(cameras[static_cast<size_t>(observation.cameraIndex)]),
+                        &projectionCameras[cameraIndex],
                         observation});
                 problem.AddResidualBlock(cost,
-                                         makeHuberLoss(options.huberDelta),
+                                         reprojectionLoss,
                                          pointParams[ti].data());
             }
         }
@@ -1283,11 +1300,11 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                         3,
                         9>(
                         new PoseDeltaSharedIntrinsicsReprojectionResidual{
-                            xjw::ba::makeProjectionCamera(cameras[cameraIndex]),
+                            &projectionCameras[cameraIndex],
                             observation});
                 problem.AddResidualBlock(
                     cost,
-                    makeHuberLoss(options.huberDelta),
+                    reprojectionLoss,
                     cameraDeltas[cameraIndex].data(),
                     laserPoint,
                     sharedIntrinsicsParameters[static_cast<size_t>(
@@ -1301,11 +1318,11 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                         2,
                         6,
                         3>(new PoseDeltaReprojectionResidual{
-                        xjw::ba::makeProjectionCamera(cameras[cameraIndex]),
+                        &projectionCameras[cameraIndex],
                         observation});
                 problem.AddResidualBlock(
                     cost,
-                    makeHuberLoss(options.huberDelta),
+                    reprojectionLoss,
                     cameraDeltas[cameraIndex].data(),
                     laserPoint);
             }
@@ -1318,11 +1335,11 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                         3,
                         9>(
                         new FixedPoseSharedIntrinsicsReprojectionResidual{
-                            xjw::ba::makeProjectionCamera(cameras[cameraIndex]),
+                            &projectionCameras[cameraIndex],
                             observation});
                 problem.AddResidualBlock(
                     cost,
-                    makeHuberLoss(options.huberDelta),
+                    reprojectionLoss,
                     laserPoint,
                     sharedIntrinsicsParameters[static_cast<size_t>(
                         calibrationParameterByCamera[cameraIndex])].data());
@@ -1334,11 +1351,11 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                         FixedCameraReprojectionResidual,
                         2,
                         3>(new FixedCameraReprojectionResidual{
-                        xjw::ba::makeProjectionCamera(cameras[cameraIndex]),
+                        &projectionCameras[cameraIndex],
                         observation});
                 problem.AddResidualBlock(
                     cost,
-                    makeHuberLoss(options.huberDelta),
+                    reprojectionLoss,
                     laserPoint);
             }
         };
@@ -1486,7 +1503,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                                     : static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
     solverOptions.logging_type = ceres::SILENT;
     solverOptions.minimizer_progress_to_stdout = false;
-    solverOptions.update_state_every_iteration = true;
+    solverOptions.update_state_every_iteration = false;
 #  if !defined(CERES_NO_CUDA)
     if (useCeresCuda)
     {

@@ -45,6 +45,40 @@ double distance3d(const std::array<double, 3> &a, const std::array<double, 3> &b
     return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
 
+double huberBlockCost(double squaredResidualNorm, double delta)
+{
+    if (delta <= 0.0 || squaredResidualNorm <= delta * delta)
+    {
+        return 0.5 * squaredResidualNorm;
+    }
+    return delta * std::sqrt(squaredResidualNorm) - 0.5 * delta * delta;
+}
+
+double reprojectionHuberCost(const std::vector<xjw::Camera> &cameras,
+                             const xjw::BATrack &track,
+                             const std::array<double, 3> &point,
+                             double delta)
+{
+    double cost = 0.0;
+    for (const xjw::BAObservation &observation : track.observations)
+    {
+        double u = 0.0;
+        double v = 0.0;
+        EXPECT_GE(observation.cameraIndex, 0);
+        EXPECT_LT(observation.cameraIndex, static_cast<int>(cameras.size()));
+        EXPECT_TRUE(projectPoint(
+            cameras[static_cast<size_t>(observation.cameraIndex)],
+            point,
+            &u,
+            &v));
+        const double du = u - observation.u;
+        const double dv = v - observation.v;
+        const double squared_norm = observation.weight * (du * du + dv * dv);
+        cost += huberBlockCost(squared_norm, delta);
+    }
+    return cost;
+}
+
 std::array<double, 3> laserOrigin(
     const xjw::Camera &camera,
     const std::array<double, 3> &leverArmCameraMeters)
@@ -233,14 +267,21 @@ TEST(BundleAdjustCeresBackendTest, ProgressCancellationDoesNotPublishPartialSolu
     options.refineCameraPose = false;
     options.enablePointFilter = false;
     options.maxIterations = 25;
-    options.progressCallback = [](int, int, double, int)
+    int callbackCount = 0;
+    options.progressCallback =
+        [&callbackCount](int current, int maximum, double cost, int)
     {
+        ++callbackCount;
+        EXPECT_GE(current, 1);
+        EXPECT_LE(current, maximum);
+        EXPECT_TRUE(std::isfinite(cost));
         return false;
     };
 
     const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(cameras, {track}, options);
 
     ASSERT_EQ(result.points.size(), 1u);
+    EXPECT_EQ(callbackCount, 1);
     EXPECT_EQ(result.solveStatus, xjw::BASolveStatus::Cancelled);
     EXPECT_FALSE(result.solutionUsable);
     EXPECT_EQ(result.points.front().point, initial);
@@ -274,12 +315,13 @@ TEST(BundleAdjustCeresBackendTest, ProgressNeverExceedsConfiguredIterationCount)
     options.enablePointFilter = false;
     options.maxIterations = 1;
     options.progressCallback =
-        [&callbackCount, &largestCurrentIteration](int current, int maximum, double, int)
+        [&callbackCount, &largestCurrentIteration](int current, int maximum, double cost, int)
     {
         ++callbackCount;
         largestCurrentIteration = std::max(largestCurrentIteration, current);
         EXPECT_LE(current, maximum);
         EXPECT_EQ(maximum, 1);
+        EXPECT_TRUE(std::isfinite(cost));
         return true;
     };
 
@@ -289,6 +331,52 @@ TEST(BundleAdjustCeresBackendTest, ProgressNeverExceedsConfiguredIterationCount)
     EXPECT_TRUE(result.solutionUsable);
     EXPECT_EQ(callbackCount, 1);
     EXPECT_EQ(largestCurrentIteration, 1);
+}
+
+TEST(BundleAdjustCeresBackendTest, SharedReprojectionHuberMatchesManualRobustCost)
+{
+    ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
+
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-8.0, 0.0, 0.0),
+        makeCamera(8.0, 0.0, 0.0),
+        makeCamera(0.0, 8.0, 0.0),
+        makeCamera(0.0, -8.0, 0.0),
+    };
+    const std::array<double, 3> truth{{0.5, -0.4, 42.0}};
+    const std::array<double, 3> initial{{1.5, -1.2, 46.0}};
+    xjw::BATrack track = makeTrack(cameras, truth, initial);
+    ASSERT_EQ(track.observations.size(), cameras.size());
+    track.observations.back().u += 120.0;
+
+    xjw::BAOptions robustOptions;
+    robustOptions.backend = xjw::BABackend::CeresCpu;
+    robustOptions.refineCameraPose = false;
+    robustOptions.enablePointFilter = false;
+    robustOptions.huberDelta = 2.0;
+    robustOptions.maxIterations = 50;
+
+    const xjw::BAResult robust =
+        xjw::BundleAdjust::optimizePoints(cameras, {track}, robustOptions);
+    ASSERT_TRUE(robust.solutionUsable) << robust.backendMessage;
+    ASSERT_EQ(robust.points.size(), 1u);
+    ASSERT_TRUE(robust.points.front().valid);
+
+    const double manualCost = reprojectionHuberCost(
+        cameras, track, robust.points.front().point, robustOptions.huberDelta);
+    EXPECT_NEAR(robust.ceresFinalCost,
+                manualCost,
+                std::max(1.0e-8, manualCost * 1.0e-8));
+
+    xjw::BAOptions squaredOptions = robustOptions;
+    squaredOptions.huberDelta = 0.0;
+    const xjw::BAResult squared =
+        xjw::BundleAdjust::optimizePoints(cameras, {track}, squaredOptions);
+    ASSERT_TRUE(squared.solutionUsable) << squared.backendMessage;
+    ASSERT_EQ(squared.points.size(), 1u);
+    ASSERT_TRUE(squared.points.front().valid);
+    EXPECT_LT(distance3d(robust.points.front().point, truth),
+              distance3d(squared.points.front().point, truth) * 0.25);
 }
 
 TEST(BundleAdjustCeresBackendTest, CeresPointOnlyUsesDenseQrSolver)
@@ -508,7 +596,7 @@ TEST(BundleAdjustCeresBackendTest, LegacyRequestDoesNotSilentlyIgnoreCameraPlane
     EXPECT_LT(std::abs(result.refinedCameras[2].cameraCenter()[2]), 0.05);
 }
 
-TEST(BundleAdjustCeresBackendTest, CeresSkipsTracksThatCannotConstrainProblem)
+TEST(BundleAdjustCeresBackendTest, CeresFiltersInvalidWeightsAndRejectsDuplicateCameraTrack)
 {
     ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
 
@@ -526,12 +614,14 @@ TEST(BundleAdjustCeresBackendTest, CeresSkipsTracksThatCannotConstrainProblem)
     xjw::BATrack nonFiniteInitial = validTrack;
     nonFiniteInitial.initialPoint = {{std::numeric_limits<double>::quiet_NaN(), 0.0, 10.0}};
 
-    xjw::BATrack singleCameraTrack;
-    singleCameraTrack.initialPoint = {{0.0, 0.0, 30.0}};
-    singleCameraTrack.observations.push_back(xjw::BAObservation{0, 512.0, 384.0, 1.0});
-    singleCameraTrack.observations.push_back(xjw::BAObservation{0, 513.0, 385.0, 1.0});
+    xjw::BATrack duplicateCameraTrack;
+    duplicateCameraTrack.initialPoint = {{0.0, 0.0, 30.0}};
+    duplicateCameraTrack.observations.push_back(
+        xjw::BAObservation{0, 512.0, 384.0, 1.0});
+    duplicateCameraTrack.observations.push_back(
+        xjw::BAObservation{0, 513.0, 385.0, 1.0});
 
-    const std::vector<xjw::BATrack> tracks{validTrack, nonFiniteInitial, singleCameraTrack};
+    const std::vector<xjw::BATrack> tracks{validTrack, nonFiniteInitial, duplicateCameraTrack};
 
     xjw::BAOptions options;
     options.backend = xjw::BABackend::CeresCpu;

@@ -1,0 +1,22 @@
+#pragma once
+
+#include "BundleAdjust.h"
+
+#include <cstddef>
+#include <filesystem>
+#include <vector>
+
+namespace xjw::ba_benchmark
+{
+
+struct BenchmarkDataset
+{
+    std::vector<Camera> cameras;
+    std::vector<BATrack> tracks;
+    std::size_t observations = 0;
+};
+
+BenchmarkDataset loadRealDataset(const std::filesystem::path &datasetJson,
+                                 const std::filesystem::path &cameraList);
+
+} // namespace xjw::ba_benchmark
