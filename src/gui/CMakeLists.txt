@@ -202,8 +202,13 @@ set_target_properties(plascan_gui PROPERTIES
   CUDA_ARCHITECTURES "${PLASCAN_CUDA_ARCHITECTURES}"
   BUILD_RPATH_USE_ORIGIN TRUE
   INSTALL_RPATH "$ORIGIN/../lib"
-  INSTALL_RPATH_USE_LINK_PATH TRUE
 )
+
+if(WIN32)
+  set_property(TARGET plascan_gui PROPERTY INSTALL_RPATH_USE_LINK_PATH TRUE)
+else()
+  set_property(TARGET plascan_gui PROPERTY INSTALL_RPATH_USE_LINK_PATH FALSE)
+endif()
 
 # Qt Network 的 HTTPS 能力由 TLS 插件提供。显式部署插件，保证直接从 build/bin 启动
 # 与安装包启动时都能下载 GitHub Release 中的模型资源。

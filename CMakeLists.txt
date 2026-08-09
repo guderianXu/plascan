@@ -224,8 +224,13 @@ if(PLASCAN_DEPENDENCY_PROVIDER_SUMMARY)
 endif()
 message(STATUS "========================================")
 
-# 运行时库路径交由各目标基于真实链接结果自动生成，避免系统 Qt 与 conda Qt 混装。
-set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+# Linux 发布包必须只依赖可迁移的相对 RPATH。把 vcpkg/conda 的构建机绝对
+# 路径写进 RUNPATH 会让包在构建机上假通过、换机后立即失效。
+if(WIN32)
+  set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+else()
+  set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
+endif()
 
 #==============================================================================
 # 构建类型
@@ -276,27 +281,50 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
   endif()
 endif()
 
-if(WIN32 AND TARGET plascan_gui)
-  set(PLASCAN_PACKAGE_SMOKE_DIRECTORY
-    "${CMAKE_BINARY_DIR}/package-smoke/PlaScan"
-    CACHE PATH "Incremental PlaScan runtime staging directory")
-  add_custom_target(plascan_package_smoke
-    COMMAND "${CMAKE_COMMAND}" --install "${CMAKE_BINARY_DIR}"
-      --config "$<CONFIG>"
-      --component Runtime
-      --prefix "${PLASCAN_PACKAGE_SMOKE_DIRECTORY}"
-    DEPENDS plascan_gui
-    COMMENT "Updating the incremental PlaScan runtime staging directory"
-    USES_TERMINAL
-    VERBATIM)
+if(TARGET plascan_gui)
+  if(WIN32)
+    set(PLASCAN_PACKAGE_SMOKE_DIRECTORY
+      "${CMAKE_BINARY_DIR}/package-smoke/PlaScan"
+      CACHE PATH "Incremental PlaScan runtime staging directory")
+    add_custom_target(plascan_package_smoke
+      COMMAND "${CMAKE_COMMAND}" --install "${CMAKE_BINARY_DIR}"
+        --config "$<CONFIG>"
+        --component Runtime
+        --prefix "${PLASCAN_PACKAGE_SMOKE_DIRECTORY}"
+      DEPENDS plascan_gui
+      COMMENT "Updating the incremental PlaScan runtime staging directory"
+      USES_TERMINAL
+      VERBATIM)
+  elseif(UNIX AND NOT APPLE)
+    set(PLASCAN_PACKAGE_SMOKE_DIRECTORY
+      "${CMAKE_BINARY_DIR}/package-smoke/rootfs"
+      CACHE PATH "Incremental PlaScan Linux runtime rootfs")
+    add_custom_target(plascan_package_smoke
+      COMMAND "${CMAKE_COMMAND}" -E env
+        "DESTDIR=${PLASCAN_PACKAGE_SMOKE_DIRECTORY}"
+        "${CMAKE_COMMAND}" --install "${CMAKE_BINARY_DIR}"
+          --config "$<CONFIG>"
+          --component Runtime
+          --prefix "/opt/plascan"
+      DEPENDS plascan_gui
+      COMMENT "Updating the incremental PlaScan Linux runtime rootfs"
+      USES_TERMINAL
+      VERBATIM)
+  endif()
 endif()
 
 set(CPACK_PACKAGE_NAME "PlaScan")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
 set(CPACK_PACKAGE_VENDOR "PlaScan Team")
-set(CPACK_PACKAGE_CONTACT "plascan@example.com")
+set(CPACK_PACKAGE_CONTACT "guderianXu <guderian_xu@henu.edu.cn>")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Planetary Scanning Tool")
 set(CPACK_PACKAGE_INSTALL_DIRECTORY "PlaScan")
+set(CPACK_COMPONENTS_ALL Runtime)
+set(CPACK_COMPONENT_RUNTIME_DISPLAY_NAME "PlaScan Runtime")
+set(CPACK_COMPONENT_RUNTIME_DESCRIPTION
+  "PlaScan application, runtime libraries, plugins and bundled models")
+set(CPACK_COMPONENT_RUNTIME_HIDDEN ON)
+set(CPACK_COMPONENT_RUNTIME_REQUIRED ON)
 if(NOT CPACK_GENERATOR)
   if(WIN32)
     set(CPACK_GENERATOR "ZIP")
@@ -314,12 +342,6 @@ if(WIN32)
   # slash is required. PlaScanCPackOptions.cmake overrides installer-specific
   # layout after CPack selects the active generator.
   set(CPACK_PACKAGING_INSTALL_PREFIX "/PlaScan")
-  set(CPACK_COMPONENTS_ALL Runtime)
-  set(CPACK_COMPONENT_RUNTIME_DISPLAY_NAME "PlaScan Runtime")
-  set(CPACK_COMPONENT_RUNTIME_DESCRIPTION
-    "PlaScan application, runtime libraries, plugins and bundled models")
-  set(CPACK_COMPONENT_RUNTIME_HIDDEN ON)
-  set(CPACK_COMPONENT_RUNTIME_REQUIRED ON)
   set(CPACK_PACKAGE_EXECUTABLES "plascan" "PlaScan")
   set(CPACK_CREATE_DESKTOP_LINKS "plascan")
   set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
@@ -359,11 +381,45 @@ configure_file(
 set(CPACK_PROJECT_CONFIG_FILE "${_plascan_cpack_project_config}")
 
 if(UNIX AND NOT APPLE)
-  set(CPACK_DEBIAN_PACKAGE_MAINTAINER "PlaScan Team")
-  # 离线安装优先：不依赖目标机在线拉取 Qt 等运行时依赖。
+  set(PLASCAN_DEBIAN_PACKAGE_VARIANT "portable" CACHE STRING
+    "Linux DEB package variant: portable or cuda")
+  set_property(CACHE PLASCAN_DEBIAN_PACKAGE_VARIANT PROPERTY STRINGS
+    portable cuda)
+  set(PLASCAN_DEBIAN_ACCELERATOR_DEPENDS "" CACHE STRING
+    "Additional apt dependencies required by a CUDA/TensorRT DEB build")
+  if(PLASCAN_DEBIAN_PACKAGE_VARIANT STREQUAL "cuda")
+    set(CPACK_DEBIAN_PACKAGE_NAME "plascan-cuda")
+    set(CPACK_DEBIAN_PACKAGE_PROVIDES "plascan")
+    set(CPACK_DEBIAN_PACKAGE_CONFLICTS "plascan")
+    set(CPACK_DEBIAN_PACKAGE_REPLACES "plascan")
+  elseif(PLASCAN_DEBIAN_PACKAGE_VARIANT STREQUAL "portable")
+    set(CPACK_DEBIAN_PACKAGE_NAME "plascan")
+    set(CPACK_DEBIAN_PACKAGE_CONFLICTS "plascan-cuda")
+  else()
+    message(FATAL_ERROR
+      "Unsupported PLASCAN_DEBIAN_PACKAGE_VARIANT: ${PLASCAN_DEBIAN_PACKAGE_VARIANT}")
+  endif()
+  set(CPACK_DEBIAN_PACKAGE_MAINTAINER
+    "guderianXu <guderian_xu@henu.edu.cn>")
+  set(CPACK_DEBIAN_PACKAGE_SECTION "science")
+  set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
+  set(CPACK_DEBIAN_PACKAGE_HOMEPAGE
+    "https://github.com/guderianXu/plascan")
+  set(CPACK_DEBIAN_FILE_NAME "DEB-DEFAULT")
+  set(CPACK_DEBIAN_PACKAGE_CONTROL_STRICT_PERMISSION ON)
+  set(CPACK_DEB_COMPONENT_INSTALL OFF)
+  # vcpkg 动态库随包部署，系统基础库和桌面栈由 apt 管理。
   set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
-  set(CPACK_DEBIAN_PACKAGE_DEPENDS "libxcb-cursor0, libgl1, qt6-qpa-plugins")
+  set(CPACK_DEBIAN_PACKAGE_DEPENDS
+    "ca-certificates, libc6, libstdc++6, libgcc-s1, libgomp1, libgfortran5, libblas3, liblapack3, libgl1, libegl1, libdbus-1-3, libfontconfig1, libglib2.0-0, libx11-6, libx11-xcb1, libxext6, libxrender1, libxi6, libxrandr2, libxfixes3, libxcursor1, libxcb-cursor0, libxkbcommon0, libxkbcommon-x11-0")
+  if(PLASCAN_DEBIAN_ACCELERATOR_DEPENDS)
+    string(APPEND CPACK_DEBIAN_PACKAGE_DEPENDS
+      ", ${PLASCAN_DEBIAN_ACCELERATOR_DEPENDS}")
+  endif()
   set(CPACK_DEBIAN_COMPRESSION_TYPE "xz")
+  set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
+    "${CMAKE_SOURCE_DIR}/cmake/debian/postinst"
+    "${CMAKE_SOURCE_DIR}/cmake/debian/postrm")
 endif()
 
 if(WIN32)

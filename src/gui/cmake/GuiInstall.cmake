@@ -3,6 +3,10 @@
 option(PLASCAN_BUNDLE_RUNTIME "Bundle runtime shared libraries (Qt/OpenCV etc.) into install/package" ON)
 option(PLASCAN_BUNDLE_ONNX_MODELS
   "Bundle verified U2Net and portable LightGlue ONNX models into install/package" ON)
+option(PLASCAN_VERIFY_LINUX_PACKAGE_RUNTIME
+  "Fail Linux install/package staging when the bundled runtime is not relocatable" OFF)
+option(PLASCAN_LINUX_REQUIRE_XCB_PLUGIN
+  "Require the Qt XCB platform plugin in Linux install/package staging" OFF)
 
 set(PLASCAN_U2NET_ONNX_PATH
   "${CMAKE_SOURCE_DIR}/resources/models/U2Net_v1.onnx"
@@ -34,18 +38,26 @@ if(WIN32)
 else()
   # 应用图标 — PNG (256x256, 所有桌面环境通用)
   install(FILES "${CMAKE_SOURCE_DIR}/resources/plascan.png"
-    DESTINATION share/icons/hicolor/256x256/apps
+    DESTINATION /usr/share/icons/hicolor/256x256/apps
     RENAME plascan.png
+    COMPONENT Runtime
   )
   # SVG 备选 (供支持矢量图标的桌面环境)
   install(FILES "${CMAKE_SOURCE_DIR}/resources/plascan.svg"
-    DESTINATION share/icons/hicolor/scalable/apps
+    DESTINATION /usr/share/icons/hicolor/scalable/apps
     RENAME plascan.svg
+    COMPONENT Runtime
   )
 
   # 桌面启动器 (StartupWMClass 必须与 setDesktopFileName 一致)
   install(FILES "${CMAKE_SOURCE_DIR}/resources/plascan.desktop"
-    DESTINATION share/applications
+    DESTINATION /usr/share/applications
+    COMPONENT Runtime
+  )
+  install(FILES "${CMAKE_SOURCE_DIR}/LICENSE"
+    DESTINATION /usr/share/doc/plascan
+    RENAME copyright
+    COMPONENT Runtime
   )
 endif()
 
@@ -117,10 +129,19 @@ if(NOT WIN32)
   configure_file("${PLASCAN_LAUNCHER_TEMPLATE}" "${CMAKE_CURRENT_BINARY_DIR}/plascan_gui" @ONLY)
   configure_file("${PLASCAN_PATH_TEMPLATE}" "${CMAKE_CURRENT_BINARY_DIR}/plascan_path.sh" @ONLY)
 
-  install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan" DESTINATION bin)
-  install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan_gui" DESTINATION bin)
-  install(FILES "${CMAKE_CURRENT_BINARY_DIR}/plascan_path.sh" DESTINATION /etc/profile.d RENAME plascan.sh)
-  install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan" DESTINATION /usr/bin)
+  install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan"
+    DESTINATION bin
+    COMPONENT Runtime)
+  install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan_gui"
+    DESTINATION bin
+    COMPONENT Runtime)
+  install(FILES "${CMAKE_CURRENT_BINARY_DIR}/plascan_path.sh"
+    DESTINATION /etc/profile.d
+    RENAME plascan.sh
+    COMPONENT Runtime)
+  install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan"
+    DESTINATION /usr/bin
+    COMPONENT Runtime)
 endif()
 
 if(PLASCAN_BUNDLE_RUNTIME AND WIN32)
@@ -157,6 +178,7 @@ if(PLASCAN_BUNDLE_RUNTIME AND NOT WIN32)
     get_filename_component(_plascan_qt_lib_dir "${_plascan_qt_core_lib}" DIRECTORY)
     get_filename_component(_plascan_qt_prefix_dir "${_plascan_qt_lib_dir}" DIRECTORY)
     set(_plascan_qt_plugin_candidates
+      "${_plascan_qt_prefix_dir}/Qt6/plugins"
       "${_plascan_qt_prefix_dir}/plugins"
       "${_plascan_qt_prefix_dir}/lib/qt6/plugins"
       "${_plascan_qt_lib_dir}/qt6/plugins"
@@ -172,22 +194,100 @@ if(PLASCAN_BUNDLE_RUNTIME AND NOT WIN32)
     set(PLASCAN_QT_PLUGINS_DIR "")
   endif()
 
-  if(PLASCAN_QT_PLUGINS_DIR AND EXISTS "${PLASCAN_QT_PLUGINS_DIR}/platforms")
-    install(
-      DIRECTORY "${PLASCAN_QT_PLUGINS_DIR}/platforms/"
-      DESTINATION plugins/platforms
-      FILES_MATCHING
-      PATTERN "libq*.so*"
-    )
+  set(PLASCAN_LINUX_RUNTIME_PREFIXES "")
+  foreach(_runtime_prefix IN ITEMS
+      "${PLASCAN_CONDA_PREFIX}"
+      "${_plascan_qt_prefix_dir}")
+    if(_runtime_prefix AND EXISTS "${_runtime_prefix}")
+      get_filename_component(_runtime_prefix "${_runtime_prefix}" REALPATH)
+      list(APPEND PLASCAN_LINUX_RUNTIME_PREFIXES "${_runtime_prefix}")
+    endif()
+  endforeach()
+  if(VCPKG_INSTALLED_DIR AND VCPKG_TARGET_TRIPLET)
+    set(_vcpkg_runtime_prefix
+      "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
+    if(EXISTS "${_vcpkg_runtime_prefix}")
+      get_filename_component(_vcpkg_runtime_prefix
+        "${_vcpkg_runtime_prefix}" REALPATH)
+      list(APPEND PLASCAN_LINUX_RUNTIME_PREFIXES
+        "${_vcpkg_runtime_prefix}")
+    endif()
+  endif()
+  list(REMOVE_DUPLICATES PLASCAN_LINUX_RUNTIME_PREFIXES)
+
+  set(PLASCAN_LINUX_RUNTIME_LIBRARY_DIRS "")
+  foreach(_runtime_prefix IN LISTS PLASCAN_LINUX_RUNTIME_PREFIXES)
+    foreach(_library_suffix IN ITEMS lib lib64 bin)
+      if(EXISTS "${_runtime_prefix}/${_library_suffix}")
+        list(APPEND PLASCAN_LINUX_RUNTIME_LIBRARY_DIRS
+          "${_runtime_prefix}/${_library_suffix}")
+      endif()
+    endforeach()
+  endforeach()
+  foreach(_system_runtime_dir IN ITEMS
+      "${CUDAToolkit_LIBRARY_DIR}"
+      "${CUDAToolkit_LIBRARY_ROOT}/lib64"
+      "${TensorRT_ROOT}/lib"
+      "${TensorRT_ROOT}/lib64")
+    if(_system_runtime_dir AND EXISTS "${_system_runtime_dir}")
+      list(APPEND PLASCAN_LINUX_RUNTIME_LIBRARY_DIRS
+        "${_system_runtime_dir}")
+    endif()
+  endforeach()
+  list(REMOVE_DUPLICATES PLASCAN_LINUX_RUNTIME_LIBRARY_DIRS)
+
+  foreach(_plugin_group IN ITEMS
+      platforms imageformats tls generic platformthemes)
+    if(PLASCAN_QT_PLUGINS_DIR AND
+       EXISTS "${PLASCAN_QT_PLUGINS_DIR}/${_plugin_group}")
+      install(
+        DIRECTORY "${PLASCAN_QT_PLUGINS_DIR}/${_plugin_group}/"
+        DESTINATION "plugins/${_plugin_group}"
+        COMPONENT Runtime
+        FILES_MATCHING
+        PATTERN "libq*.so*"
+      )
+    endif()
+  endforeach()
+
+  if(PLASCAN_LINUX_REQUIRE_XCB_PLUGIN AND
+     (NOT PLASCAN_QT_PLUGINS_DIR OR
+      NOT EXISTS "${PLASCAN_QT_PLUGINS_DIR}/platforms/libqxcb.so"))
+    message(FATAL_ERROR
+      "Linux package requires Qt's XCB platform plugin. Rebuild qtbase with "
+      "the xcb, xkbcommon-x11, fontconfig and dbus features.")
   endif()
 
-  if(PLASCAN_QT_PLUGINS_DIR AND EXISTS "${PLASCAN_QT_PLUGINS_DIR}/imageformats")
-    install(
-      DIRECTORY "${PLASCAN_QT_PLUGINS_DIR}/imageformats/"
-      DESTINATION plugins/imageformats
-      FILES_MATCHING
-      PATTERN "libq*.so*"
-    )
+  set(PLASCAN_GDAL_DATA_SOURCE "")
+  set(PLASCAN_PROJ_DATA_SOURCE "")
+  foreach(_runtime_prefix IN LISTS PLASCAN_LINUX_RUNTIME_PREFIXES)
+    if(NOT PLASCAN_GDAL_DATA_SOURCE AND
+       EXISTS "${_runtime_prefix}/share/gdal")
+      set(PLASCAN_GDAL_DATA_SOURCE "${_runtime_prefix}/share/gdal")
+    endif()
+    if(NOT PLASCAN_PROJ_DATA_SOURCE AND
+       EXISTS "${_runtime_prefix}/share/proj/proj.db")
+      set(PLASCAN_PROJ_DATA_SOURCE "${_runtime_prefix}/share/proj")
+    endif()
+  endforeach()
+
+  if(PLASCAN_GDAL_DATA_SOURCE)
+    install(DIRECTORY "${PLASCAN_GDAL_DATA_SOURCE}/"
+      DESTINATION share/gdal
+      COMPONENT Runtime
+      PATTERN "*.cmake" EXCLUDE
+      PATTERN "vcpkg.*" EXCLUDE)
+  elseif(PLASCAN_VERIFY_LINUX_PACKAGE_RUNTIME)
+    message(FATAL_ERROR "Linux package requires the GDAL data directory")
+  endif()
+  if(PLASCAN_PROJ_DATA_SOURCE)
+    install(DIRECTORY "${PLASCAN_PROJ_DATA_SOURCE}/"
+      DESTINATION share/proj
+      COMPONENT Runtime
+      PATTERN "*.cmake" EXCLUDE
+      PATTERN "vcpkg.*" EXCLUDE)
+  elseif(PLASCAN_VERIFY_LINUX_PACKAGE_RUNTIME)
+    message(FATAL_ERROR "Linux package requires the PROJ data directory and proj.db")
   endif()
 
   set(PLASCAN_INSTALL_BUNDLE_SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/InstallBundledRuntime.cmake")
@@ -196,22 +296,19 @@ if(PLASCAN_BUNDLE_RUNTIME AND NOT WIN32)
     "${PLASCAN_INSTALL_BUNDLE_SCRIPT}"
     @ONLY
   )
-  install(SCRIPT "${PLASCAN_INSTALL_BUNDLE_SCRIPT}")
-endif()
+  install(SCRIPT "${PLASCAN_INSTALL_BUNDLE_SCRIPT}"
+    COMPONENT Runtime)
 
-if(NOT WIN32)
-  # 安装后更新图标缓存 (GNOME/KDE 需要)
-  install(CODE "
-    find_program(GTK_UPDATE_EXECUTABLE gtk-update-icon-cache)
-    if(GTK_UPDATE_EXECUTABLE)
-      set(_icon_dir \"\${CMAKE_INSTALL_PREFIX}/share/icons/hicolor\")
-      if(EXISTS \"\${_icon_dir}\")
-        execute_process(COMMAND \"\${GTK_UPDATE_EXECUTABLE}\" -f -t \"\${_icon_dir}\"
-          ERROR_QUIET)
-        message(STATUS \"Updated GTK icon cache: \${_icon_dir}\")
-      endif()
-    endif()
-  ")
+  if(PLASCAN_VERIFY_LINUX_PACKAGE_RUNTIME)
+    set(PLASCAN_VERIFY_LINUX_RUNTIME_SCRIPT
+      "${CMAKE_CURRENT_BINARY_DIR}/VerifyLinuxPackageRuntime.cmake")
+    configure_file(
+      "${CMAKE_CURRENT_SOURCE_DIR}/packaging/VerifyLinuxPackageRuntime.cmake.in"
+      "${PLASCAN_VERIFY_LINUX_RUNTIME_SCRIPT}"
+      @ONLY)
+    install(SCRIPT "${PLASCAN_VERIFY_LINUX_RUNTIME_SCRIPT}"
+      COMPONENT Runtime)
+  endif()
 endif()
 
 message(STATUS "plascan_gui configuration complete")

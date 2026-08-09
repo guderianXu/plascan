@@ -21,4 +21,9 @@ if("@CMAKE_SYSTEM_NAME@" STREQUAL "Windows")
     list(APPEND CPACK_POST_BUILD_SCRIPTS
       "@CMAKE_SOURCE_DIR@/cmake/PlaScanCollectInnoSetupPackage.cmake")
   endif()
+elseif("@CMAKE_SYSTEM_NAME@" STREQUAL "Linux" AND
+       CPACK_GENERATOR STREQUAL "DEB")
+  set(CPACK_PACKAGING_INSTALL_PREFIX "/opt/plascan")
+  list(APPEND CPACK_POST_BUILD_SCRIPTS
+    "@CMAKE_SOURCE_DIR@/cmake/PlaScanVerifyDebPackage.cmake")
 endif()

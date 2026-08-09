@@ -87,6 +87,44 @@ cmake --workflow --preset windows-package-release
 结果位于 `build/windows-vcpkg-cuda-release/packages/release`。该流程与 smoke 共用同一个增量 CUDA
 构建目录，但会额外执行完整 Inno Setup 压缩及分卷门禁。
 
+## Linux 一键打包
+
+Linux 发布基线为 Ubuntu 24.04 x86_64、CMake 3.25+、Ninja 和 vcpkg。通用 CPU/OpenCL 包的增量
+rootfs 与正式 DEB 分别运行：
+
+```bash
+export VCPKG_ROOT=/path/to/vcpkg
+cmake --workflow --preset linux-package-smoke
+cmake --workflow --preset linux-package-deb
+```
+
+rootfs 位于 `build/linux-vcpkg-package-release/package-smoke/rootfs`，DEB 与 SHA-256 位于
+`build/linux-vcpkg-package-release/packages/release`。正式包必须通过 staging 内动态库闭包、Qt
+XCB/offscreen 插件、GDAL/PROJ 数据、可迁移 RUNPATH、模型哈希和 DEB 内容门禁；不得通过关闭
+`PLASCAN_VERIFY_LINUX_PACKAGE_RUNTIME` 绕过失败。
+
+当前影像匹配生产后端需要 CUDA/TensorRT。需要安装后直接运行 LightGlue 时，构建机先准备 CUDA 13.1、
+TensorRT 10.15+、ONNX parser 开发库和 NVIDIA Ubuntu 软件源，再运行：
+
+```bash
+cmake --workflow --preset linux-package-cuda-smoke
+cmake --workflow --preset linux-package-cuda-deb
+```
+
+CUDA 制品位于 `build/linux-vcpkg-cuda-package-release/packages/release`，包名为 `plascan-cuda`。
+该包声明 CUDA/TensorRT 精确主版本依赖，不捆绑 NVIDIA 驱动；目标机必须有兼容驱动并启用 NVIDIA
+Ubuntu 仓库。`plascan` 与 `plascan-cuda` 使用相同安装路径并声明互斥，发布时必须明确标注适用环境。
+
+Linux 发布额外检查：
+
+- `dpkg-deb --field/--contents` 确认包名、版本、`amd64`、依赖、桌面入口及两份 ONNX，且不含 headers、
+  静态库或 CMake exports；
+- 在没有源码、vcpkg 和构建目录的环境通过 `/usr/bin/plascan` 启动 GUI，并确认所有 ELF/Qt plugins
+  的 `ldd` 无 `not found`、RUNPATH 不含构建机绝对路径；
+- 使用包内 U2Net 完成一次 CPU 掩模；CUDA 包还要从包内 LightGlue ONNX 首次生成 engine、完成匹配并
+  验证缓存复用；安装树保持只读且不包含预生成 `.engine`；
+- 安装和卸载后确认桌面数据库与图标缓存可正常刷新。
+
 ## CPack 模型门禁
 
 对外发布的可掩模、可匹配安装包必须保持 `PLASCAN_BUNDLE_ONNX_MODELS=ON`，并在打包前准备

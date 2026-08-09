@@ -61,6 +61,17 @@
         "widgets"
       ]
     },
+    {
+      "name": "qtbase",
+      "default-features": false,
+      "features": [
+        "dbus",
+        "fontconfig",
+        "openssl",
+        "xcb"
+      ],
+      "platform": "linux"
+    },
     "qtshadertools",
     "vulkan",
     "tiff"

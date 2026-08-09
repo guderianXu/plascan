@@ -1,0 +1,126 @@
+# Auto-generated at configure time. Validates the staged Linux runtime.
+
+set(_prefix "${CMAKE_INSTALL_PREFIX}")
+string(REGEX REPLACE "/$" "" _prefix "${_prefix}")
+set(_root "")
+if(DEFINED ENV{DESTDIR} AND NOT "$ENV{DESTDIR}" STREQUAL "")
+    set(_root "$ENV{DESTDIR}")
+    string(REGEX REPLACE "/$" "" _root "${_root}")
+endif()
+if(_prefix MATCHES "^/")
+    set(_physical_prefix "${_root}${_prefix}")
+else()
+    set(_physical_prefix "${_root}/${_prefix}")
+endif()
+string(REGEX REPLACE "/$" "" _physical_prefix "${_physical_prefix}")
+
+set(_app_bin "${_physical_prefix}/bin/plascan_gui.bin")
+set(_lib_dir "${_physical_prefix}/lib")
+set(_plugin_root "${_physical_prefix}/plugins")
+set(_u2net_model "${_physical_prefix}/resources/models/U2Net_v1.onnx")
+set(_lightglue_model
+    "${_physical_prefix}/resources/models/lightglue_tensorrt/lightglue_sift_bucket4096.onnx")
+
+set(_required_paths
+    "${_app_bin}"
+    "${_physical_prefix}/bin/plascan"
+    "${_physical_prefix}/bin/qt.conf"
+    "${_u2net_model}"
+    "${_lightglue_model}"
+    "${_physical_prefix}/share/proj/proj.db"
+    "${_physical_prefix}/share/gdal"
+    "${_plugin_root}/platforms/libqoffscreen.so"
+    "${_root}/usr/bin/plascan"
+    "${_root}/usr/share/applications/plascan.desktop"
+    "${_root}/usr/share/icons/hicolor/256x256/apps/plascan.png")
+foreach(_required_path IN LISTS _required_paths)
+    if(NOT EXISTS "${_required_path}")
+        message(FATAL_ERROR
+            "[verify-linux-runtime] required package path is missing: ${_required_path}")
+    endif()
+endforeach()
+
+if("@PLASCAN_LINUX_REQUIRE_XCB_PLUGIN@" AND
+   NOT EXISTS "${_plugin_root}/platforms/libqxcb.so")
+    message(FATAL_ERROR
+        "[verify-linux-runtime] Qt XCB platform plugin is missing")
+endif()
+
+file(SIZE "${_u2net_model}" _u2net_size)
+file(SHA256 "${_u2net_model}" _u2net_sha256)
+if(NOT _u2net_size EQUAL @PLASCAN_U2NET_ONNX_SIZE@ OR
+   NOT _u2net_sha256 STREQUAL "@PLASCAN_U2NET_ONNX_SHA256@")
+    message(FATAL_ERROR
+        "[verify-linux-runtime] installed U2Net ONNX failed size/SHA-256 verification")
+endif()
+file(SIZE "${_lightglue_model}" _lightglue_size)
+file(SHA256 "${_lightglue_model}" _lightglue_sha256)
+if(NOT _lightglue_size EQUAL @PLASCAN_LIGHTGLUE_ONNX_SIZE@ OR
+   NOT _lightglue_sha256 STREQUAL "@PLASCAN_LIGHTGLUE_ONNX_SHA256@")
+    message(FATAL_ERROR
+        "[verify-linux-runtime] installed LightGlue ONNX failed size/SHA-256 verification")
+endif()
+
+file(GLOB_RECURSE _engine_files
+    LIST_DIRECTORIES false
+    "${_physical_prefix}/resources/models/*.engine")
+if(_engine_files)
+    message(FATAL_ERROR
+        "[verify-linux-runtime] hardware-specific TensorRT engines must not be packaged: ${_engine_files}")
+endif()
+
+find_program(_ldd_executable NAMES ldd REQUIRED)
+find_program(_readelf_executable NAMES readelf REQUIRED)
+
+file(GLOB_RECURSE _plugins
+    LIST_DIRECTORIES false
+    "${_plugin_root}/*.so"
+    "${_plugin_root}/*.so.*")
+set(_ldd_targets "${_app_bin}" ${_plugins})
+foreach(_ldd_target IN LISTS _ldd_targets)
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}" -E env
+            "LD_LIBRARY_PATH=${_lib_dir}"
+            "${_ldd_executable}" "${_ldd_target}"
+        RESULT_VARIABLE _ldd_result
+        OUTPUT_VARIABLE _ldd_output
+        ERROR_VARIABLE _ldd_error)
+    if(NOT _ldd_result EQUAL 0 OR _ldd_output MATCHES "not found")
+        message(FATAL_ERROR
+            "[verify-linux-runtime] unresolved dependency for ${_ldd_target}:\n"
+            "${_ldd_output}\n${_ldd_error}")
+    endif()
+endforeach()
+
+file(GLOB_RECURSE _installed_libraries
+    LIST_DIRECTORIES false
+    "${_lib_dir}/*.so"
+    "${_lib_dir}/*.so.*")
+set(_elf_targets "${_app_bin}" ${_plugins} ${_installed_libraries})
+foreach(_elf_target IN LISTS _elf_targets)
+    execute_process(
+        COMMAND "${_readelf_executable}" -d "${_elf_target}"
+        RESULT_VARIABLE _readelf_result
+        OUTPUT_VARIABLE _dynamic_section
+        ERROR_QUIET)
+    if(NOT _readelf_result EQUAL 0)
+        continue()
+    endif()
+    if(_dynamic_section MATCHES
+       "(RPATH|RUNPATH)[^\n]*(/mnt/|/home/|/opt/vcpkg|vcpkg_installed|CMakeFiles)")
+        message(FATAL_ERROR
+            "[verify-linux-runtime] non-relocatable RUNPATH in ${_elf_target}:\n${_dynamic_section}")
+    endif()
+endforeach()
+
+execute_process(
+    COMMAND "${_readelf_executable}" -d "${_app_bin}"
+    OUTPUT_VARIABLE _app_dynamic_section
+    COMMAND_ERROR_IS_FATAL ANY)
+if(NOT _app_dynamic_section MATCHES "[$]ORIGIN/../lib")
+    message(FATAL_ERROR
+        "[verify-linux-runtime] app RUNPATH does not contain $ORIGIN/../lib")
+endif()
+
+message(STATUS
+    "[verify-linux-runtime] staged runtime is complete and relocatable: ${_physical_prefix}")

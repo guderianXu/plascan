@@ -76,6 +76,9 @@
 - Windows CUDA 打包新增 `windows-package-smoke` 与 `windows-package-release` 一键工作流：日常改动只
   增量更新可直接运行的未压缩 Runtime 安装树，正式交付时才执行完整 Inno Setup 分卷压缩；两条路径
   均保留 U2Net 与 LightGlue ONNX 的安装阶段哈希门禁。
+- Linux 打包新增通用与 CUDA 两套增量 rootfs/正式 DEB 工作流，修复 `DESTDIR` staging、vcpkg 动态库
+  收集、Qt XCB 插件、GDAL/PROJ 数据和桌面集成；打包阶段强制检查动态库闭包、可迁移 RUNPATH、模型
+  哈希与 DEB 内容，通用包可直接运行 U2Net CPU，CUDA 包声明 TensorRT 依赖并支持 LightGlue 匹配。
 - MVS 深度算法修订到第 28 版；Auto 深度估计由整批单后端切换为 CUDA + OpenCL 帧级异构调度：
   同时预检并租用可用 GPU，
   按 PCI 物理标识去除同一 NVIDIA GPU 的 OpenCL 重复接口；缺少标准 PCI 查询时会用 CUDA 设备名归一化

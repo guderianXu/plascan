@@ -54,6 +54,39 @@
       }
     },
     {
+      "name": "linux-vcpkg-package-release",
+      "displayName": "Linux portable DEB Release Packaging",
+      "description": "Builds the Ubuntu 24.04 x86_64 CPU/OpenCL package with bundled vcpkg runtime libraries",
+      "inherits": "linux-vcpkg-release",
+      "binaryDir": "${sourceDir}/build/linux-vcpkg-package-release",
+      "cacheVariables": {
+        "CPACK_GENERATOR": "DEB",
+        "PLASCAN_BUNDLE_ONNX_MODELS": "ON",
+        "PLASCAN_BUNDLE_RUNTIME": "ON",
+        "PLASCAN_ENABLE_CUDA": "OFF",
+        "PLASCAN_ENABLE_OPENCL": "ON",
+        "PLASCAN_ENABLE_TENSORRT": "OFF",
+        "PLASCAN_LINUX_REQUIRE_XCB_PLUGIN": "ON",
+        "PLASCAN_VERIFY_LINUX_PACKAGE_RUNTIME": "ON",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/linux-vcpkg-package-release/vcpkg_installed"
+      }
+    },
+    {
+      "name": "linux-vcpkg-cuda-package-release",
+      "displayName": "Linux CUDA/TensorRT DEB Release Packaging",
+      "description": "Builds the Ubuntu 24.04 x86_64 package with CUDA/TensorRT LightGlue matching",
+      "inherits": "linux-vcpkg-package-release",
+      "binaryDir": "${sourceDir}/build/linux-vcpkg-cuda-package-release",
+      "cacheVariables": {
+        "PLASCAN_CUDA_ARCHITECTURES": "75;86;89;120",
+        "PLASCAN_DEBIAN_ACCELERATOR_DEPENDS": "cuda-cudart-13-1, libcublas-13-1, libcusparse-13-1, cuda-nvrtc-13-1, libnvjitlink-13-1, libnvinfer10 (>= 10.15), libnvonnxparsers10 (>= 10.15), libnvinfer-plugin10 (>= 10.15)",
+        "PLASCAN_DEBIAN_PACKAGE_VARIANT": "cuda",
+        "PLASCAN_ENABLE_CUDA": "ON",
+        "PLASCAN_ENABLE_TENSORRT": "ON",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/linux-vcpkg-cuda-package-release/vcpkg_installed"
+      }
+    },
+    {
       "name": "windows-vcpkg-debug",
       "displayName": "Windows vcpkg Debug",
       "inherits": "vcpkg-base",
@@ -114,6 +147,48 @@
       "jobs": 0
     },
     {
+      "name": "linux-vcpkg-package-release",
+      "configurePreset": "linux-vcpkg-package-release",
+      "jobs": 0
+    },
+    {
+      "name": "linux-package-smoke-stage",
+      "configurePreset": "linux-vcpkg-package-release",
+      "targets": [
+        "plascan_package_smoke"
+      ],
+      "jobs": 0
+    },
+    {
+      "name": "linux-package-deb-build",
+      "configurePreset": "linux-vcpkg-package-release",
+      "targets": [
+        "plascan_gui"
+      ],
+      "jobs": 0
+    },
+    {
+      "name": "linux-vcpkg-cuda-package-release",
+      "configurePreset": "linux-vcpkg-cuda-package-release",
+      "jobs": 0
+    },
+    {
+      "name": "linux-package-cuda-smoke-stage",
+      "configurePreset": "linux-vcpkg-cuda-package-release",
+      "targets": [
+        "plascan_package_smoke"
+      ],
+      "jobs": 0
+    },
+    {
+      "name": "linux-package-cuda-deb-build",
+      "configurePreset": "linux-vcpkg-cuda-package-release",
+      "targets": [
+        "plascan_gui"
+      ],
+      "jobs": 0
+    },
+    {
       "name": "windows-vcpkg-debug",
       "configurePreset": "windows-vcpkg-debug",
       "jobs": 0
@@ -156,6 +231,20 @@
     {
       "name": "linux-vcpkg-release",
       "configurePreset": "linux-vcpkg-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-vcpkg-package-release",
+      "configurePreset": "linux-vcpkg-package-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-vcpkg-cuda-package-release",
+      "configurePreset": "linux-vcpkg-cuda-package-release",
       "output": {
         "outputOnFailure": true
       }
@@ -212,6 +301,34 @@
       }
     },
     {
+      "name": "linux-package-deb-cpack",
+      "configurePreset": "linux-vcpkg-package-release",
+      "generators": [
+        "DEB"
+      ],
+      "configurations": [
+        "Release"
+      ],
+      "variables": {
+        "CPACK_PACKAGE_CHECKSUM": "SHA256",
+        "CPACK_PACKAGE_DIRECTORY": "${sourceDir}/build/linux-vcpkg-package-release/packages/release"
+      }
+    },
+    {
+      "name": "linux-package-cuda-deb-cpack",
+      "configurePreset": "linux-vcpkg-cuda-package-release",
+      "generators": [
+        "DEB"
+      ],
+      "configurations": [
+        "Release"
+      ],
+      "variables": {
+        "CPACK_PACKAGE_CHECKSUM": "SHA256",
+        "CPACK_PACKAGE_DIRECTORY": "${sourceDir}/build/linux-vcpkg-cuda-package-release/packages/release"
+      }
+    },
+    {
       "name": "windows-vcpkg-debug",
       "configurePreset": "windows-vcpkg-debug",
       "generators": [
@@ -252,6 +369,74 @@
     }
   ],
   "workflowPresets": [
+    {
+      "name": "linux-package-smoke",
+      "displayName": "Linux incremental package smoke",
+      "description": "Incrementally builds PlaScan and updates a validated uncompressed Runtime rootfs",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "linux-vcpkg-package-release"
+        },
+        {
+          "type": "build",
+          "name": "linux-package-smoke-stage"
+        }
+      ]
+    },
+    {
+      "name": "linux-package-deb",
+      "displayName": "Linux full DEB release",
+      "description": "Incrementally builds PlaScan and creates the validated Ubuntu 24.04 DEB package",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "linux-vcpkg-package-release"
+        },
+        {
+          "type": "build",
+          "name": "linux-package-deb-build"
+        },
+        {
+          "type": "package",
+          "name": "linux-package-deb-cpack"
+        }
+      ]
+    },
+    {
+      "name": "linux-package-cuda-smoke",
+      "displayName": "Linux CUDA incremental package smoke",
+      "description": "Incrementally builds CUDA/TensorRT PlaScan and updates a validated Runtime rootfs",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "linux-vcpkg-cuda-package-release"
+        },
+        {
+          "type": "build",
+          "name": "linux-package-cuda-smoke-stage"
+        }
+      ]
+    },
+    {
+      "name": "linux-package-cuda-deb",
+      "displayName": "Linux CUDA full DEB release",
+      "description": "Builds the validated Ubuntu 24.04 CUDA/TensorRT package with bundled ONNX models",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "linux-vcpkg-cuda-package-release"
+        },
+        {
+          "type": "build",
+          "name": "linux-package-cuda-deb-build"
+        },
+        {
+          "type": "package",
+          "name": "linux-package-cuda-deb-cpack"
+        }
+      ]
+    },
     {
       "name": "windows-package-smoke",
       "displayName": "Windows CUDA incremental package smoke",
