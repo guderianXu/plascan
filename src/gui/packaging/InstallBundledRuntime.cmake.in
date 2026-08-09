@@ -105,10 +105,6 @@ file(GET_RUNTIME_DEPENDENCIES
     PRE_EXCLUDE_REGEXES "api-ms-.*" "ext-ms-.*"
     POST_EXCLUDE_REGEXES ".*/ld-linux-.*" ".*/linux-vdso[.]so.*")
 
-if(_conflicting_dependencies_FILENAMES)
-    message(FATAL_ERROR
-        "[bundle] conflicting runtime dependencies: ${_conflicting_dependencies_FILENAMES}")
-endif()
 if(_unresolved_dependencies)
     message(FATAL_ERROR
         "[bundle] unresolved runtime dependencies: ${_unresolved_dependencies}")
@@ -116,6 +112,37 @@ endif()
 
 foreach(_dependency IN LISTS _resolved_dependencies)
     _plascan_install_runtime_dependency("${_dependency}")
+endforeach()
+
+# CMake reports a conflict when the same SONAME exists in both an approved
+# vcpkg/Conda prefix and a system directory. The packaged RUNPATH intentionally
+# prefers /opt/plascan/lib, so select the single approved candidate. Multiple
+# approved candidates remain an error because their ABI cannot be disambiguated.
+foreach(_filename IN LISTS _conflicting_dependencies_FILENAMES)
+    set(_conflict_var "_conflicting_dependencies_${_filename}")
+    set(_approved_conflict_candidates "")
+    foreach(_candidate IN LISTS ${_conflict_var})
+        _plascan_is_approved_runtime("${_candidate}" _is_approved)
+        if(_is_approved)
+            list(APPEND _approved_conflict_candidates "${_candidate}")
+        endif()
+    endforeach()
+    list(REMOVE_DUPLICATES _approved_conflict_candidates)
+    list(LENGTH _approved_conflict_candidates _approved_candidate_count)
+
+    if(_approved_candidate_count GREATER 1)
+        message(FATAL_ERROR
+            "[bundle] conflicting approved candidates for ${_filename}: "
+            "${_approved_conflict_candidates}")
+    elseif(_approved_candidate_count EQUAL 1)
+        list(GET _approved_conflict_candidates 0 _approved_candidate)
+        message(STATUS
+            "[bundle] preferring approved ${_filename}: ${_approved_candidate}")
+        _plascan_install_runtime_dependency("${_approved_candidate}")
+    else()
+        message(STATUS
+            "[bundle] leaving system dependency conflict to apt: ${_filename}")
+    endif()
 endforeach()
 
 list(LENGTH _resolved_dependencies _resolved_count)
