@@ -403,7 +403,7 @@ if(UNIX AND NOT APPLE)
   # vcpkg 动态库随包部署，系统基础库和桌面栈由 apt 管理。
   set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
   set(CPACK_DEBIAN_PACKAGE_DEPENDS
-    "ca-certificates, libc6 (>= 2.39), libstdc++6 (>= 13.1), libgcc-s1, libgomp1, libgfortran5, libblas3, liblapack3, libapriltag3t64, ocl-icd-libopencl1, libvulkan1, libgl1, libegl1, libdbus-1-3, libfontconfig1, libglib2.0-0t64, libx11-6, libx11-xcb1, libxext6, libxrender1, libxi6, libxrandr2, libxfixes3, libxcursor1, libxcb1, libxcb-cursor0, libxcb-icccm4, libxcb-image0, libxcb-keysyms1, libxcb-randr0, libxcb-render-util0, libxcb-render0, libxcb-shape0, libxcb-shm0, libxcb-sync1, libxcb-xfixes0, libxcb-xkb1, libxkbcommon0, libxkbcommon-x11-0")
+    "ca-certificates, libc6 (>= 2.39), libstdc++6 (>= 13.1), libgcc-s1, libgomp1, libgfortran5, libblas3, liblapack3, libapriltag3t64, ocl-icd-libopencl1, libvulkan1, libgl1, libegl1, libdbus-1-3, libfontconfig1, libglib2.0-0t64, libx11-6, libx11-xcb1, libxext6, libxrender1, libxi6, libxrandr2, libxfixes3, libxcursor1, libxcb1, libxcb-cursor0, libxcb-icccm4, libxcb-image0, libxcb-keysyms1, libxcb-randr0, libxcb-render-util0, libxcb-render0, libxcb-shape0, libxcb-shm0, libxcb-sync1, libxcb-xfixes0, libxcb-xinput0, libxcb-xkb1, libxkbcommon0, libxkbcommon-x11-0")
   if(PLASCAN_DEBIAN_ACCELERATOR_DEPENDS)
     string(APPEND CPACK_DEBIAN_PACKAGE_DEPENDS
       ", ${PLASCAN_DEBIAN_ACCELERATOR_DEPENDS}")
