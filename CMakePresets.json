@@ -82,6 +82,24 @@
         "CPACK_GENERATOR": "ZIP",
         "VCPKG_TARGET_TRIPLET": "x64-windows"
       }
+    },
+    {
+      "name": "windows-vcpkg-cuda-release",
+      "displayName": "Windows vcpkg CUDA Release Packaging",
+      "description": "Reuses the CUDA build initialized by scripts/build_win/build_windows_cuda.ps1",
+      "inherits": "windows-vcpkg-release",
+      "binaryDir": "${sourceDir}/build/windows-vcpkg-cuda-release",
+      "cacheVariables": {
+        "CPACK_GENERATOR": "INNOSETUP",
+        "PLASCAN_BUNDLE_ONNX_MODELS": "ON",
+        "PLASCAN_BUNDLE_RUNTIME": "ON",
+        "PLASCAN_CUDA_ARCHITECTURES": "75;86;89;120",
+        "PLASCAN_ENABLE_CUDA": "ON",
+        "PLASCAN_ENABLE_TENSORRT": "ON",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/windows-vcpkg-cuda-release/vcpkg_installed",
+        "VCPKG_MANIFEST_FEATURES": "opencv-dnn-cuda;ceres-cuda",
+        "VCPKG_MANIFEST_INSTALL": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -103,6 +121,27 @@
     {
       "name": "windows-vcpkg-release",
       "configurePreset": "windows-vcpkg-release",
+      "jobs": 0
+    },
+    {
+      "name": "windows-vcpkg-cuda-release",
+      "configurePreset": "windows-vcpkg-cuda-release",
+      "jobs": 0
+    },
+    {
+      "name": "windows-package-smoke-stage",
+      "configurePreset": "windows-vcpkg-cuda-release",
+      "targets": [
+        "plascan_package_smoke"
+      ],
+      "jobs": 0
+    },
+    {
+      "name": "windows-package-release-build",
+      "configurePreset": "windows-vcpkg-cuda-release",
+      "targets": [
+        "plascan_gui"
+      ],
       "jobs": 0
     }
   ],
@@ -131,6 +170,13 @@
     {
       "name": "windows-vcpkg-release",
       "configurePreset": "windows-vcpkg-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-vcpkg-cuda-release",
+      "configurePreset": "windows-vcpkg-cuda-release",
       "output": {
         "outputOnFailure": true
       }
@@ -190,6 +236,55 @@
       "variables": {
         "CPACK_PACKAGE_DIRECTORY": "${sourceDir}/dist/packages/windows-vcpkg-release"
       }
+    },
+    {
+      "name": "windows-package-release-cpack",
+      "configurePreset": "windows-vcpkg-cuda-release",
+      "generators": [
+        "INNOSETUP"
+      ],
+      "configurations": [
+        "Release"
+      ],
+      "variables": {
+        "CPACK_PACKAGE_DIRECTORY": "${sourceDir}/build/windows-vcpkg-cuda-release/packages/release"
+      }
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "windows-package-smoke",
+      "displayName": "Windows CUDA incremental package smoke",
+      "description": "Incrementally builds PlaScan and updates an uncompressed runnable install tree",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "windows-vcpkg-cuda-release"
+        },
+        {
+          "type": "build",
+          "name": "windows-package-smoke-stage"
+        }
+      ]
+    },
+    {
+      "name": "windows-package-release",
+      "displayName": "Windows CUDA full Inno Setup release",
+      "description": "Incrementally builds PlaScan and creates the complete split Inno Setup installer",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "windows-vcpkg-cuda-release"
+        },
+        {
+          "type": "build",
+          "name": "windows-package-release-build"
+        },
+        {
+          "type": "package",
+          "name": "windows-package-release-cpack"
+        }
+      ]
     }
   ]
 }

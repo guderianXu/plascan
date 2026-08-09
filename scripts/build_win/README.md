@@ -122,6 +122,36 @@ powershell -NoProfile -ExecutionPolicy Bypass -File E:\code\plascan\scripts\buil
 - CLI：`E:\code\plascan\build\windows-vcpkg-cuda-release\bin`
 - 测试：`E:\code\plascan\build\windows-vcpkg-cuda-release\tests`
 
+### 增量安装树与正式安装器
+
+标准脚本至少成功配置一次后，在当前 PowerShell 点加载发布环境：
+
+```powershell
+. E:\code\plascan\scripts\build_win\enter_plascan_dev_shell.ps1 -NoLaunch
+```
+
+修改代码后的日常安装态验证使用未压缩的增量安装树：
+
+```powershell
+cmake --workflow --preset windows-package-smoke
+E:\code\plascan\build\windows-vcpkg-cuda-release\package-smoke\PlaScan\bin\plascan.exe
+```
+
+该流程会构建 `plascan_gui` 及其依赖，更新 Runtime 文件并校验内置 U2Net/LightGlue ONNX，不执行
+耗时的安装器压缩。依赖删除或安装布局变化时，需要先清理
+`E:\code\plascan\build\windows-vcpkg-cuda-release\package-smoke\PlaScan` 再运行。
+若 vcpkg、CUDA、cuDNN、Qt 或编译工具链发生变化，先重新执行 `build_windows_cuda.ps1`（缺依赖时
+使用 `-InstallDeps`），完成脚本中的 Qt/cuDNN/CUDA 运行时同步后再运行 workflow。
+
+准备正式交付时再执行完整分卷安装器工作流：
+
+```powershell
+cmake --workflow --preset windows-package-release
+```
+
+安装器、分卷和 SHA-256 清单位于
+`E:\code\plascan\build\windows-vcpkg-cuda-release\packages\release`。
+
 脚本会把 Qt platform plugins 同步到：
 
 - `E:\code\plascan\build\windows-vcpkg-cuda-release\bin\platforms`

@@ -57,6 +57,36 @@ GitHub Release 说明从对应 `docs/releases/vX.Y.Z*.md` 摘要生成，并保�
 - 已知问题
 - 下载或打包说明
 
+## Windows 一键打包
+
+Windows CUDA 发布构建树必须先由标准脚本初始化；全新环境或依赖缺失时运行：
+
+```powershell
+pwsh scripts\build_win\build_windows_cuda.ps1 -InstallDeps -Jobs 8
+. scripts\build_win\enter_plascan_dev_shell.ps1 -NoLaunch
+```
+
+代码迭代期间使用增量 smoke 安装树：
+
+```powershell
+cmake --workflow --preset windows-package-smoke
+```
+
+结果位于 `build/windows-vcpkg-cuda-release/package-smoke/PlaScan`。该流程会增量构建 GUI、安装 Runtime
+组件并执行 ONNX 校验，但不压缩安装器。它不会删除 staging 中已经失效的文件；依赖删除或安装布局
+变化后，应先清理这个精确目录再重新运行。smoke 结果只用于安装后功能验证，不能代替正式发布制品。
+vcpkg、CUDA、cuDNN、Qt 或工具链发生变化时，必须先重跑 `build_windows_cuda.ps1` 完成运行时同步；
+workflow 只负责源码增量构建与安装，不替代依赖准备脚本。
+
+使用 CMake/CPack 3.27+ 和 Inno Setup 6 生成正式分卷安装器：
+
+```powershell
+cmake --workflow --preset windows-package-release
+```
+
+结果位于 `build/windows-vcpkg-cuda-release/packages/release`。该流程与 smoke 共用同一个增量 CUDA
+构建目录，但会额外执行完整 Inno Setup 压缩及分卷门禁。
+
 ## CPack 模型门禁
 
 对外发布的可掩模、可匹配安装包必须保持 `PLASCAN_BUNDLE_ONNX_MODELS=ON`，并在打包前准备

@@ -69,6 +69,9 @@
 
 ### 优化
 
+- Windows CUDA 打包新增 `windows-package-smoke` 与 `windows-package-release` 一键工作流：日常改动只
+  增量更新可直接运行的未压缩 Runtime 安装树，正式交付时才执行完整 Inno Setup 分卷压缩；两条路径
+  均保留 U2Net 与 LightGlue ONNX 的安装阶段哈希门禁。
 - MVS 深度算法修订到第 27 版：粗/中层金字塔不再先放大到原图再缩回工作尺寸，同时保持原有全分辨率
   传播语义和完整深度采样预算；CPU/CUDA/OpenCL 复用当前光度得分并跳过完全相同的候选。OpenCL 将
   平面单应矩阵移出 patch 内循环、用精确流式 top-k 聚合来源、只派发棋盘格有效像素，并修复 prior

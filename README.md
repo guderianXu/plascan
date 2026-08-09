@@ -60,7 +60,7 @@ ctest --preset linux-vcpkg-release
 cpack --preset linux-vcpkg-release
 ```
 
-Windows PowerShell:
+Windows 通用 Release/ZIP（不等同于完整 CUDA/TensorRT 发布环境）：
 
 ```powershell
 $env:VCPKG_ROOT = "C:\src\vcpkg"
@@ -81,23 +81,44 @@ CPack 默认启用 `PLASCAN_BUNDLE_ONNX_MODELS=ON`，并把以下两份便携模
 `-DPLASCAN_BUNDLE_ONNX_MODELS=OFF`。干净 clone 不包含大模型，打包前按
 [模型文档](docs/models/README.md#cpack-内置模型) 下载 Release 资产到默认路径。
 
+Windows CUDA 开发机首次使用时，先用标准脚本初始化发布构建树和依赖，再进入同一套开发环境：
+
+```powershell
+# 仅全新环境或缺少依赖时需要 -InstallDeps
+pwsh scripts\build_win\build_windows_cuda.ps1 -InstallDeps -Jobs 8
+. scripts\build_win\enter_plascan_dev_shell.ps1 -NoLaunch
+```
+
+以后每次修改代码，日常验证包只需运行：
+
+```powershell
+cmake --workflow --preset windows-package-smoke
+& .\build\windows-vcpkg-cuda-release\package-smoke\PlaScan\bin\plascan.exe
+```
+
+该流程只增量构建 `plascan_gui` 及其依赖，并更新未压缩的 Runtime 安装树；不会重复执行数 GiB 的
+Inno Setup 压缩。安装阶段仍会校验 U2Net 与 LightGlue ONNX 的长度和 SHA-256，因此这个目录可以直接
+验证安装后的图像掩模和匹配。依赖被删除或安装布局发生变化时，先删除
+`build/windows-vcpkg-cuda-release/package-smoke/PlaScan`，再运行一次 smoke 流程，避免保留旧 DLL。
+升级 vcpkg、CUDA、cuDNN、Qt 或编译工具链后，应先重跑 `build_windows_cuda.ps1`（需要补依赖时加
+`-InstallDeps`），让脚本重新同步运行时，再使用上述代码增量工作流。
+
 即使开发机已安装 CUDA/OpenCL，也可用
 `-DPLASCAN_ENABLE_CUDA=OFF -DPLASCAN_ENABLE_OPENCL=OFF -DPLASCAN_ENABLE_TENSORRT=OFF`
 配置可重复的 CPU-only 构建。该配置会关闭 PlaMatrix/PlaPoint 的 CUDA 后端和 PlaPoint/MVS 的
 OpenCL 后端，同时关闭 PlaMatrix 的 OpenCL 基础设施；MVS 仍编译并运行真实 CPU PatchMatch。
 
 `cpack --preset windows-vcpkg-release` 生成 ZIP 离线包，归档第一层即为 `PlaScan/`。全架构 CUDA/TensorRT
-ZIP 可能超过 GitHub Release 的 2 GiB 单文件上限，适合本地分发或内部制品库。使用 CMake/CPack 3.27+
-并安装 Inno Setup 6 后，可从已配置的 Windows Release 构建生成带开始菜单、桌面快捷方式、卸载入口和
-`.plascan` 文件关联的安装程序：
+ZIP 可能超过 GitHub Release 的 2 GiB 单文件上限，适合本地分发或内部制品库。正式发布时需使用
+CMake/CPack 3.27+ 并安装 Inno Setup 6，然后运行完整工作流：
 
 ```powershell
-cpack `
-  --config build/windows-vcpkg-cuda-release/CPackConfig.cmake `
-  -G INNOSETUP `
-  -C Release `
-  -D "CPACK_PACKAGE_DIRECTORY=$PWD/dist/packages/windows-vcpkg-release"
+cmake --workflow --preset windows-package-release
 ```
+
+工作流先增量构建同一个 CUDA Release 目录，再生成带开始菜单、桌面快捷方式、卸载入口和 `.plascan`
+文件关联的安装程序；制品位于 `build/windows-vcpkg-cuda-release/packages/release`。只有准备正式交付时
+才需要运行它，日常改动使用 `windows-package-smoke` 即可。
 
 为完整保留各代 NVIDIA GPU 首次构建 TensorRT engine 所需的 builder resource，Inno Setup 默认使用
 1,900,000,000 字节分卷。CPack 会输出同名 `.exe`、一个或多个 `-N.bin` 以及

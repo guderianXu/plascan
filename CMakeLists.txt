@@ -276,6 +276,21 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
   endif()
 endif()
 
+if(WIN32 AND TARGET plascan_gui)
+  set(PLASCAN_PACKAGE_SMOKE_DIRECTORY
+    "${CMAKE_BINARY_DIR}/package-smoke/PlaScan"
+    CACHE PATH "Incremental PlaScan runtime staging directory")
+  add_custom_target(plascan_package_smoke
+    COMMAND "${CMAKE_COMMAND}" --install "${CMAKE_BINARY_DIR}"
+      --config "$<CONFIG>"
+      --component Runtime
+      --prefix "${PLASCAN_PACKAGE_SMOKE_DIRECTORY}"
+    DEPENDS plascan_gui
+    COMMENT "Updating the incremental PlaScan runtime staging directory"
+    USES_TERMINAL
+    VERBATIM)
+endif()
+
 set(CPACK_PACKAGE_NAME "PlaScan")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
 set(CPACK_PACKAGE_VENDOR "PlaScan Team")
