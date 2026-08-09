@@ -320,6 +320,8 @@ set(CPACK_PACKAGE_CONTACT "guderianXu <guderian_xu@henu.edu.cn>")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Planetary Scanning Tool")
 set(CPACK_PACKAGE_INSTALL_DIRECTORY "PlaScan")
 set(CPACK_COMPONENTS_ALL Runtime)
+set(CPACK_INSTALL_CMAKE_PROJECTS
+  "${CMAKE_BINARY_DIR};${CMAKE_PROJECT_NAME};Runtime;/")
 set(CPACK_COMPONENT_RUNTIME_DISPLAY_NAME "PlaScan Runtime")
 set(CPACK_COMPONENT_RUNTIME_DESCRIPTION
   "PlaScan application, runtime libraries, plugins and bundled models")
