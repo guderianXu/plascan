@@ -87,7 +87,8 @@
         "PLASCAN_DEBIAN_PACKAGE_VARIANT": "cuda",
         "PLASCAN_ENABLE_CUDA": "ON",
         "PLASCAN_ENABLE_TENSORRT": "ON",
-        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/linux-vcpkg-cuda-package-release/vcpkg_installed"
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/linux-vcpkg-cuda-package-release/vcpkg_installed",
+        "VCPKG_MANIFEST_FEATURES": "opencv-dnn-cuda;ceres-cuda"
       }
     },
     {
