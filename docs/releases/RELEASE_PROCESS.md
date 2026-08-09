@@ -110,7 +110,7 @@ XCB/offscreen 插件、GDAL/PROJ 数据、可迁移 RUNPATH、模型哈希和 DE
 `PLASCAN_VERIFY_LINUX_PACKAGE_RUNTIME` 绕过失败。
 
 当前影像匹配生产后端需要 CUDA/TensorRT。需要安装后直接运行 LightGlue 时，构建机先准备 CUDA 13.1、
-TensorRT 10.15.1 CUDA 13.1 变体、ONNX parser 开发库和 NVIDIA Ubuntu 软件源，再运行：
+cuDNN 9、TensorRT 10.15.1 CUDA 13.1 变体、ONNX parser 开发库和 NVIDIA Ubuntu 软件源，再运行：
 
 ```bash
 cmake --workflow --preset linux-package-cuda-smoke

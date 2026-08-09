@@ -88,14 +88,14 @@ sudo apt install ./build/linux-vcpkg-package-release/packages/release/plascan_1.
 算法为 CUDA SIFT + TensorRT LightGlue，因此需要完整匹配功能时使用 CUDA 变体：
 
 ```bash
-# 构建机需要 CUDA 13.1、TensorRT 10.15.1（CUDA 13.1 变体）及其 ONNX parser 开发库
+# 构建机需要 CUDA 13.1、cuDNN 9、TensorRT 10.15.1（CUDA 13.1 变体）及 ONNX parser 开发库
 cmake --workflow --preset linux-package-cuda-smoke
 cmake --workflow --preset linux-package-cuda-deb
 sudo apt install ./build/linux-vcpkg-cuda-package-release/packages/release/plascan-cuda_1.1.6_amd64.deb
 ```
 
 CUDA DEB 不捆绑 NVIDIA 驱动和受系统 ABI 约束的 CUDA/TensorRT 库，而是在包元数据中声明 CUDA
-13.1 与 TensorRT 10.15.1 CUDA 13.1 变体的精确运行时依赖；目标电脑需预先启用 NVIDIA Ubuntu
+13.1、cuDNN 9 与 TensorRT 10.15.1 CUDA 13.1 变体的运行时依赖；目标电脑需预先启用 NVIDIA Ubuntu
 仓库并安装兼容驱动，随后 `apt install ./plascan-cuda_*.deb` 会补齐运行时。vcpkg 的 Qt、OpenCV、GDAL 等非系统 `.so`、Qt
 plugins、GDAL/PROJ 数据和两份 ONNX 会装到 `/opt/plascan`，桌面入口和图标装到标准 `/usr` 路径。
 两个包互斥，不能同时安装。DEB 与 `.sha256` 位于各自构建目录的 `packages/release`；依赖或安装布局
