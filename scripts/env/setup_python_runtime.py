@@ -21,6 +21,7 @@ from env_common import default_output_dir, host_platform, repo_root as detect_re
 
 BASE_PACKAGES = [
     "numpy",
+    "scipy",
     "opencv-python",
     "pymupdf",
     "kornia",

@@ -157,6 +157,7 @@ xjw::gui::BaServiceOptions makeServiceOptions(const QStringList &selectedImages,
                                               int laserMaxSamples,
                                               bool laserUseMissingNormalsAsHeightPlanes,
                                               double laserWeight,
+                                              double laserSigma,
                                               double laserHuberDelta,
                                               bool exportEvalPlot)
 {
@@ -174,12 +175,15 @@ xjw::gui::BaServiceOptions makeServiceOptions(const QStringList &selectedImages,
     options.laserMaxSamples = laserMaxSamples;
     options.laserUseMissingNormalsAsHeightPlanes = laserUseMissingNormalsAsHeightPlanes;
     options.laserWeight = laserWeight;
+    options.laserSigmaMeters = laserSigma;
     options.laserHuberDeltaMeters = laserHuberDelta;
     options.exportEvalPlot = exportEvalPlot;
+    options.exportObservationDetails = false;
     return options;
 }
 
-QString buildStatusMessage(xjw::core::project::BaInputBuildStatus status)
+QString buildStatusMessage(xjw::core::project::BaInputBuildStatus status,
+                           const xjw::core::project::BaInputBuildResult &input)
 {
     switch (status)
     {
@@ -189,7 +193,30 @@ QString buildStatusMessage(xjw::core::project::BaInputBuildStatus status)
         return QStringLiteral("项目中可用相机少于 2 台");
     case xjw::core::project::BaInputBuildStatus::NoTracks:
     default:
-        return QStringLiteral("没有可用于 BA 的 tracks，请确认匹配 sidecar 包含 matched_points 和 matched_indices");
+    {
+        const auto &diagnostics = input.matchDiagnostics;
+        QString message = QStringLiteral(
+            "没有可用于 BA 的 tracks：相机 %1，匹配记录 %2，存在/可读分片 %3/%4，"
+            "owner 已解析 %5，几何通过/peer 已解析块 %6/%7，候选对 %8，索引观测 %9，"
+            "多视轨迹 %10，最小匹配数拒绝 %11。")
+                              .arg(input.cameras.size())
+                              .arg(diagnostics.matchResultRecordCount)
+                              .arg(diagnostics.existingShardCount)
+                              .arg(diagnostics.readableShardCount)
+                              .arg(diagnostics.resolvedOwnerShardCount)
+                              .arg(diagnostics.geometryPassedBlockCount)
+                              .arg(diagnostics.resolvedPeerBlockCount)
+                              .arg(diagnostics.acceptedPairCount)
+                              .arg(input.indexedObservationCount)
+                              .arg(input.multiViewTrackCount)
+                              .arg(diagnostics.rejectedByMinMatchesCount);
+        if (!diagnostics.firstShardReadError.isEmpty())
+        {
+            message += QStringLiteral(" 首个分片错误：%1")
+                           .arg(diagnostics.firstShardReadError);
+        }
+        return message;
+    }
     }
 }
 
@@ -341,6 +368,12 @@ void printRunSummary(const QString &label, const xjw::gui::BaServiceResult &resu
     const int observationCount = obj.value(QStringLiteral("ba_observation_count")).toInt(0);
     const double totalSeconds = obj.value(QStringLiteral("ba_total_seconds")).toDouble(0.0);
     const double validTrackRatio = obj.value(QStringLiteral("ba_valid_track_ratio")).toDouble(0.0);
+    const QString solveStatus =
+        obj.value(QStringLiteral("ba_solve_status")).toString(QStringLiteral("unknown"));
+    const int successfulSteps =
+        obj.value(QStringLiteral("ba_ceres_successful_steps")).toInt(0);
+    const int unsuccessfulSteps =
+        obj.value(QStringLiteral("ba_ceres_unsuccessful_steps")).toInt(0);
     const QString backendReason =
         obj.value(QStringLiteral("ba_backend_selection_reason")).toString();
     const QString qualityMessage =
@@ -348,7 +381,7 @@ void printRunSummary(const QString &label, const xjw::gui::BaServiceResult &resu
     xjw::cli::printUtf8(stdout,
               QStringLiteral("%1: tracks=%2 optimized=%3 observations=%4 rms_before=%5 rms_after=%6 "
                              "backend=%7 solver=%8 gpu=%9 fallback=%10 valid_ratio=%11 "
-                             "quality_rejected=%12 total_s=%13")
+                             "quality_rejected=%12 status=%13 ceres_steps=%14/%15 total_s=%16")
                   .arg(label)
                   .arg(obj.value(QStringLiteral("track_count")).toInt())
                   .arg(obj.value(QStringLiteral("optimized_count")).toInt())
@@ -361,6 +394,9 @@ void printRunSummary(const QString &label, const xjw::gui::BaServiceResult &resu
                        backendFallback ? QStringLiteral("true") : QStringLiteral("false"))
                   .arg(validTrackRatio, 0, 'f', 4)
                   .arg(qualityRejected ? QStringLiteral("true") : QStringLiteral("false"))
+                  .arg(solveStatus)
+                  .arg(successfulSteps)
+                  .arg(unsuccessfulSteps)
                   .arg(totalSeconds, 0, 'f', 3));
     if (!backendReason.isEmpty())
     {
@@ -401,6 +437,7 @@ int main(int argc, char *argv[])
     int baNativeCudaDevice = 0;
     int baMinCpuObservations = 50000;
     int baMaxCeresPointOnlyObservations = 100000;
+    double baMaxCeresInitialTrackRms = 100.0;
     int baMaxDenseSchurCameras = 200;
     int baMaxSparseSchurCameras = 2000;
     double huberDelta = 3.0;
@@ -423,12 +460,13 @@ int main(int argc, char *argv[])
     bool baEnableQualityGate = true;
     bool baCompareAutoWithLegacy = true;
 
-    double laserMaxDistance = 1.0;
+    double laserMaxDistance = 0.05;
     double laserVoxelSize = 0.0;
     double laserMaxCurvature = 0.2;
     int laserMaxSamples = 500000;
-    double laserWeight = 1.0;
-    double laserHuberDelta = 0.2;
+    double laserWeight = 0.0;
+    double laserSigma = 0.0025;
+    double laserHuberDelta = 0.05;
 
     app.add_option("project", projectPathRaw, ".plascan 项目文件")->required();
     app.add_option("--chunk-id", chunkIdRaw, "使用指定 UUID 的 Chunk");
@@ -467,6 +505,9 @@ int main(int argc, char *argv[])
     app.add_option("--ba-max-ceres-point-only-observations",
                    baMaxCeresPointOnlyObservations,
                    "point-only Ceres BA 超过该观测数时回退 legacy_cpu");
+    app.add_option("--ba-max-ceres-initial-track-rms",
+                   baMaxCeresInitialTrackRms,
+                   "Ceres 装配前初始 track RMS 粗差上限（像素），0 表示关闭");
     app.add_option("--ba-max-dense-schur-cameras",
                    baMaxDenseSchurCameras,
                    "Ceres Auto 使用 dense Schur 的最大可变相机数");
@@ -507,7 +548,8 @@ int main(int argc, char *argv[])
     app.add_option("--laser-voxel-size", laserVoxelSize, "LiDAR 点云体素降采样尺寸（米），0 表示关闭");
     app.add_option("--laser-max-curvature", laserMaxCurvature, "允许参与约束的最大曲率");
     app.add_option("--laser-max-samples", laserMaxSamples, "LiDAR map 最大采样点数");
-    app.add_option("--laser-weight", laserWeight, "LiDAR 点到面残差权重");
+    app.add_option("--laser-weight", laserWeight, "LiDAR 统计权重；0 表示按 --laser-sigma 自动取 1/sigma^2");
+    app.add_option("--laser-sigma", laserSigma, "LiDAR 点到面标准差（米），用于自动统计权重");
     app.add_option("--laser-huber-delta", laserHuberDelta, "LiDAR 残差 Huber 阈值（米）");
     app.add_flag("--ab-compare", abCompare, "一次性运行 baseline 与 LiDAR BA，并写 ba_ab_compare.json");
     app.add_flag("--fail-on-quality-gate",
@@ -559,6 +601,10 @@ int main(int argc, char *argv[])
     {
         fatalQt(QStringLiteral("LiDAR 点云不存在: %1").arg(laserCloud), cli::EXIT_IO_ERR);
     }
+    if (enableLaser && laserWeight <= 0.0 && !(laserSigma > 0.0))
+    {
+        fatalQt(QStringLiteral("自动 LiDAR 权重要求 --laser-sigma > 0"), cli::EXIT_ARG_ERR);
+    }
 
     const QJsonObject meta = projectSession.mergedMetadata();
     const QStringList selectedImages = resolveSelectedImages(meta, imageTokens);
@@ -570,7 +616,7 @@ int main(int argc, char *argv[])
         xjw::core::project::buildBaInputFromMeta(meta, selectedImages, minMatches, &baInput);
     if (buildStatus != xjw::core::project::BaInputBuildStatus::Ok)
     {
-        fatalQt(buildStatusMessage(buildStatus), cli::EXIT_ALGO_ERR);
+        fatalQt(buildStatusMessage(buildStatus, baInput), cli::EXIT_ALGO_ERR);
     }
 
     xjw::BAOptions baOptions;
@@ -593,6 +639,7 @@ int main(int argc, char *argv[])
         std::max(1e-12, baNativeCudaMaxPointStep);
     baOptions.minCeresCpuObservations = std::max(1, baMinCpuObservations);
     baOptions.maxCeresPointOnlyObservations = std::max(1, baMaxCeresPointOnlyObservations);
+    baOptions.maxCeresInitialTrackRms = std::max(0.0, baMaxCeresInitialTrackRms);
     baOptions.maxDenseSchurCameras =
         std::max(1, baMaxDenseSchurCameras);
     baOptions.maxSparseSchurCameras =
@@ -640,7 +687,7 @@ int main(int argc, char *argv[])
         xjw::gui::BaServiceOptions baselineOptions = makeServiceOptions(
             selectedImages, baselineDir, threads, dryRun, baOptions,
             false, QString(), laserMaxDistance, laserVoxelSize, laserMaxCurvature,
-            laserMaxSamples, false, laserWeight, laserHuberDelta, exportEvalPlot);
+            laserMaxSamples, false, laserWeight, laserSigma, laserHuberDelta, exportEvalPlot);
         const xjw::gui::BaServiceResult baseline = runOneBa(
             baInput.cameras, baInput.tracks, baInput, baselineOptions);
         if (!baseline.success)
@@ -655,6 +702,7 @@ int main(int argc, char *argv[])
             laserMaxSamples,
             laserUseMissingNormalsAsHeightPlanes,
             laserWeight,
+            laserSigma,
             laserHuberDelta,
             exportEvalPlot);
         const xjw::gui::BaServiceResult laser = runOneBa(
@@ -684,6 +732,28 @@ int main(int argc, char *argv[])
         projectSession.appendResult(
             QStringLiteral("bundle_adjust_results"),
             bundleAdjustRecord(QStringLiteral("laser"), laserDir, laser));
+        QJsonObject compareRecord = compareJson;
+        compareRecord[QStringLiteral("path")] = comparePath;
+        compareRecord[QStringLiteral("kind")] =
+            QStringLiteral("bundle_adjust_comparison");
+        projectSession.upsertResultByPath(
+            QStringLiteral("report_results"),
+            QStringLiteral("path"),
+            compareRecord);
+        if (failOnQualityGate && !quality_gate_passed)
+        {
+            if (!projectSession.save(&projectError))
+            {
+                fatalQt(QStringLiteral("A/B BA 已完成，但质量报告保存失败: %1")
+                            .arg(projectError),
+                        cli::EXIT_IO_ERR);
+            }
+            xjw::cli::printError(
+                QStringLiteral("LiDAR BA 质量门禁失败，未写回相机；详情见: %1")
+                    .arg(comparePath));
+            return cli::EXIT_ALGO_ERR;
+        }
+
         int updatedCameraCount = 0;
         if (!dryRun
             && !projectSession.updateImageCameras(
@@ -695,14 +765,6 @@ int main(int argc, char *argv[])
                         .arg(projectError),
                     cli::EXIT_IO_ERR);
         }
-        QJsonObject compareRecord = compareJson;
-        compareRecord[QStringLiteral("path")] = comparePath;
-        compareRecord[QStringLiteral("kind")] =
-            QStringLiteral("bundle_adjust_comparison");
-        projectSession.upsertResultByPath(
-            QStringLiteral("report_results"),
-            QStringLiteral("path"),
-            compareRecord);
         if (!projectSession.save(&projectError))
         {
             fatalQt(QStringLiteral("A/B BA 已完成，但 Chunk 写回失败: %1")
@@ -714,13 +776,6 @@ int main(int argc, char *argv[])
             QStringLiteral("已写回 Chunk %1，相机=%2")
                 .arg(projectSession.activeChunk().directory)
                 .arg(updatedCameraCount));
-        if (failOnQualityGate && !quality_gate_passed)
-        {
-            xjw::cli::printError(
-                QStringLiteral("LiDAR BA 质量门禁失败，详情见: %1")
-                    .arg(comparePath));
-            return cli::EXIT_ALGO_ERR;
-        }
         return cli::EXIT_OK;
     }
 
@@ -730,6 +785,7 @@ int main(int argc, char *argv[])
         laserMaxSamples,
         laserUseMissingNormalsAsHeightPlanes,
         laserWeight,
+        laserSigma,
         laserHuberDelta,
         exportEvalPlot);
     const xjw::gui::BaServiceResult result = runOneBa(baInput.cameras, baInput.tracks, baInput, options);

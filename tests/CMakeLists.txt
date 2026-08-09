@@ -985,6 +985,14 @@ if(Python3_Interpreter_FOUND)
     )
 
     add_test(
+        NAME PrepareTanksIgnatiusLidarBaTest
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_prepare_tanks_ignatius_lidar_ba
+    )
+    set_tests_properties(PrepareTanksIgnatiusLidarBaTest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
         NAME SummarizeMvsDepthProvenanceTest
         COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_summarize_mvs_depth_provenance
     )

@@ -41,7 +41,7 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertNotIn("qt6-base-dev", text)
         self.assertIn("libapriltag-dev", text)
         self.assertIn("libopenmesh-dev", text)
-        self.assertIn("python3 -m pip install --disable-pip-version-check numpy", text)
+        self.assertIn("python3 -m pip install --disable-pip-version-check numpy scipy", text)
         self.assertIn("--timeout 120", text)
         self.assertIn("uses: actions/cache@v4", text)
         self.assertIn("-DCMAKE_CXX_COMPILER_LAUNCHER=ccache", text)

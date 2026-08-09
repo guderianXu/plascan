@@ -196,7 +196,7 @@ struct SharedIntrinsicsPriorResidual
 struct LaserPlaneResidual
 {
     BALaserPlaneConstraint constraint;
-    double weight = 1.0;
+    double sqrtWeight = 1.0;
 
     template <typename T>
     bool operator()(const T *const point, T *residuals) const
@@ -208,8 +208,7 @@ struct LaserPlaneResidual
             dx * T(constraint.normal[0]) +
             dy * T(constraint.normal[1]) +
             dz * T(constraint.normal[2]);
-        residuals[0] =
-            T(std::sqrt(std::max(0.0, weight * constraint.weight))) * signedDistance;
+        residuals[0] = T(sqrtWeight) * signedDistance;
         return true;
     }
 };
@@ -580,6 +579,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
 
     int activeTrackCount = 0;
     int activeObservationCount = 0;
+    int rejectedInitialTrackCount = 0;
     for (size_t ti = 0; ti < tracks.size(); ++ti)
     {
         if (!plamatrix::isFinite(plamatrix::Vec3<double>(tracks[ti].initialPoint)))
@@ -606,6 +606,8 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         }
 
         bool initialPointHasPositiveDepth = true;
+        double initialResidualSquared = 0.0;
+        int initialResidualCount = 0;
         for (const BAObservation &observation : validObservations)
         {
             const double world[3] = {
@@ -620,9 +622,25 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                 initialPointHasPositiveDepth = false;
                 break;
             }
+            const double du = pixel[0] - observation.u;
+            const double dv = pixel[1] - observation.v;
+            initialResidualSquared +=
+                sanitizedObservationWeight(observation) * (du * du + dv * dv);
+            initialResidualCount += 2;
         }
         if (!initialPointHasPositiveDepth)
         {
+            continue;
+        }
+        const double initialTrackRms =
+            initialResidualCount > 0
+                ? std::sqrt(initialResidualSquared /
+                            static_cast<double>(initialResidualCount))
+                : std::numeric_limits<double>::infinity();
+        if (options.maxCeresInitialTrackRms > 0.0 &&
+            initialTrackRms > options.maxCeresInitialTrackRms)
+        {
+            ++rejectedInitialTrackCount;
             continue;
         }
 
@@ -637,6 +655,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
     }
 
     result.observationCount = activeObservationCount;
+    result.ceresRejectedInitialTracks = rejectedInitialTrackCount;
     if (activeTrackCount == 0)
     {
         const auto setupEnd = std::chrono::steady_clock::now();
@@ -1079,9 +1098,22 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         {
             for (const BALaserPlaneConstraint &constraint : tracks[ti].laserPlaneConstraints)
             {
+                const double effectiveWeight =
+                    std::max(0.0, options.laserPlaneWeight) *
+                    std::max(0.0, constraint.weight);
+                if (!(effectiveWeight > 0.0))
+                {
+                    continue;
+                }
+                const double sqrtWeight = std::sqrt(effectiveWeight);
                 auto *cost = new ceres::AutoDiffCostFunction<LaserPlaneResidual, 1, 3>(
-                    new LaserPlaneResidual{constraint, options.laserPlaneWeight});
-                problem.AddResidualBlock(cost, makeHuberLoss(options.laserHuberDeltaMeters), pointParams[ti].data());
+                    new LaserPlaneResidual{constraint, sqrtWeight});
+                // 同时缩放残差和 Huber 阈值，等价于
+                // effectiveWeight * Huber(distance, deltaMeters)，与 legacy 后端一致。
+                problem.AddResidualBlock(
+                    cost,
+                    makeHuberLoss(options.laserHuberDeltaMeters * sqrtWeight),
+                    pointParams[ti].data());
             }
         }
         if (options.enableControlPointConstraints)
@@ -1383,6 +1415,31 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
     result.setupSeconds = std::chrono::duration<double>(setupEnd - setupStart).count();
     result.solveSeconds = std::chrono::duration<double>(solveEnd - setupEnd).count();
     result.totalSeconds = std::chrono::duration<double>(solveEnd - setupStart).count();
+    const auto accumulateSummary =
+        [&result](const ceres::Solver::Summary &stageSummary)
+        {
+            result.ceresSuccessfulSteps += stageSummary.num_successful_steps;
+            result.ceresUnsuccessfulSteps += stageSummary.num_unsuccessful_steps;
+        };
+    if (runStagedSelfCalibration)
+    {
+        result.ceresInitialCost = warmupSummary.initial_cost;
+        accumulateSummary(warmupSummary);
+        if (result.selfCalibrationStagesRun == 3)
+        {
+            accumulateSummary(lowOrderSummary);
+        }
+        if (result.selfCalibrationStagesRun >= 2)
+        {
+            accumulateSummary(summary);
+        }
+    }
+    else
+    {
+        result.ceresInitialCost = summary.initial_cost;
+        accumulateSummary(summary);
+    }
+    result.ceresFinalCost = summary.final_cost;
     std::string solveReport;
     if (runStagedSelfCalibration && result.selfCalibrationStagesRun >= 2)
     {
@@ -1432,6 +1489,18 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         result.solutionUsable = false;
         result.backendMessage = "Ceres BA 解不可用，保留输入相机和三维点；" +
                                 result.backendMessage + "；" + summary.message;
+        return result;
+    }
+    if (summary.termination_type == ceres::NO_CONVERGENCE &&
+        result.ceresSuccessfulSteps == 0 &&
+        std::isfinite(result.ceresInitialCost) &&
+        result.ceresInitialCost > 1.0e-12)
+    {
+        result.solveStatus = BASolveStatus::NoConvergence;
+        result.solutionUsable = false;
+        result.backendMessage =
+            "Ceres BA 未接受任何 trial step，拒绝写回 no-op 结果；" +
+            result.backendMessage;
         return result;
     }
 

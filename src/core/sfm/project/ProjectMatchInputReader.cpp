@@ -4,6 +4,7 @@
 #include "ProjectCameraIO.h"
 #include "project/ProjectCommonUtils.h"
 
+#include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QMap>
@@ -44,18 +45,23 @@ QString normalizedPath(const QString &path)
     return xjw::common::project::normalizePath(path);
 }
 
-QString canonicalPairKey(const QString &left, const QString &right)
+QString canonicalPairKey(int leftCameraIndex, int rightCameraIndex)
 {
-    const QString normalized_left = normalizedPath(left);
-    const QString normalized_right = normalizedPath(right);
-    if (normalized_left.isEmpty() || normalized_right.isEmpty() ||
-        normalized_left == normalized_right)
+    if (leftCameraIndex < 0 || rightCameraIndex < 0 ||
+        leftCameraIndex == rightCameraIndex)
     {
         return QString();
     }
-    return normalized_left < normalized_right
-        ? normalized_left + QLatin1Char('\n') + normalized_right
-        : normalized_right + QLatin1Char('\n') + normalized_left;
+    const int first = std::min(leftCameraIndex, rightCameraIndex);
+    const int second = std::max(leftCameraIndex, rightCameraIndex);
+    return QStringLiteral("%1\n%2").arg(first).arg(second);
+}
+
+QString imageFileNameKey(const QString &path)
+{
+    return QFileInfo(QDir::fromNativeSeparators(path.trimmed()))
+        .fileName()
+        .toCaseFolded();
 }
 
 bool betterCandidate(const PairCandidate &left, const PairCandidate &right)
@@ -139,8 +145,7 @@ int cameraIndexForImageToken(const QString &imageToken,
         return direct.value();
     }
 
-    // 工程中的影像路径可能经过移动或打包。受控 token 匹配仅在规范路径无法命中
-    // 时启用，并沿用 ProjectCommonUtils 对同名歧义的约束。
+    // 该公共入口供控制点、标记等输入共同使用，只执行严格规范路径解析。
     for (auto it = cameraIndexByPath.constBegin(); it != cameraIndexByPath.constEnd(); ++it)
     {
         if (xjw::common::project::pathTokenMatchesImage(imageToken, it.key()))
@@ -149,6 +154,52 @@ int cameraIndexForImageToken(const QString &imageToken,
         }
     }
     return -1;
+}
+
+int cameraIndexForRelocatedMatchToken(
+    const QString &imageToken,
+    const QMap<QString, int> &cameraIndexByPath,
+    const QStringList &allChunkImagePaths)
+{
+    const int strictIndex = cameraIndexForImageToken(imageToken, cameraIndexByPath);
+    if (strictIndex >= 0)
+    {
+        return strictIndex;
+    }
+
+    const QString fileName = imageFileNameKey(imageToken);
+    if (fileName.isEmpty())
+    {
+        return -1;
+    }
+
+    int fullChunkMatches = 0;
+    for (const QString &path : allChunkImagePaths)
+    {
+        if (imageFileNameKey(path) == fileName)
+        {
+            ++fullChunkMatches;
+        }
+    }
+    if (fullChunkMatches != 1)
+    {
+        return -1;
+    }
+
+    int resolvedIndex = -1;
+    for (auto it = cameraIndexByPath.constBegin(); it != cameraIndexByPath.constEnd(); ++it)
+    {
+        if (imageFileNameKey(it.key()) != fileName)
+        {
+            continue;
+        }
+        if (resolvedIndex >= 0 && resolvedIndex != it.value())
+        {
+            return -1;
+        }
+        resolvedIndex = it.value();
+    }
+    return resolvedIndex;
 }
 
 bool readProjectMatchInput(const QJsonObject &meta,
@@ -171,11 +222,17 @@ bool readProjectMatchInput(const QJsonObject &meta,
     }
 
     const QJsonArray image_array = meta.value(QStringLiteral("images")).toArray();
+    QStringList allChunkImagePaths;
+    allChunkImagePaths.reserve(image_array.size());
     for (const QJsonValue &value : image_array)
     {
         const QJsonObject object = value.toObject();
         const QString normalized_path =
             normalizedPath(object.value(QStringLiteral("path")).toString());
+        if (!normalized_path.isEmpty())
+        {
+            allChunkImagePaths.append(normalized_path);
+        }
         if (!selected_normalized.contains(normalized_path))
         {
             continue;
@@ -201,6 +258,7 @@ bool readProjectMatchInput(const QJsonObject &meta,
     QMap<QString, PairCandidate> best_pairs;
     const QJsonArray match_results =
         meta.value(QStringLiteral("image_match_results")).toArray();
+    input->diagnostics.matchResultRecordCount = match_results.size();
     for (const QJsonValue &value : match_results)
     {
         const QString output_path =
@@ -213,19 +271,26 @@ bool readProjectMatchInput(const QJsonObject &meta,
             continue;
         }
         visited_files.insert(normalized_output);
+        ++input->diagnostics.existingShardCount;
 
         ImageMatchShard shard;
         QString read_error;
         if (!ImageMatchFile::read(output_path, &shard, &read_error))
         {
+            if (input->diagnostics.firstShardReadError.isEmpty())
+            {
+                input->diagnostics.firstShardReadError = read_error;
+            }
             continue;
         }
-        const int owner_index = cameraIndexForImageToken(
-            shard.owner.path, input->cameraIndexByPath);
+        ++input->diagnostics.readableShardCount;
+        const int owner_index = cameraIndexForRelocatedMatchToken(
+            shard.owner.path, input->cameraIndexByPath, allChunkImagePaths);
         if (owner_index < 0)
         {
             continue;
         }
+        ++input->diagnostics.resolvedOwnerShardCount;
 
         for (const NeighborMatchBlock &block : shard.neighbors)
         {
@@ -233,19 +298,22 @@ bool readProjectMatchInput(const QJsonObject &meta,
             {
                 continue;
             }
-            const int peer_index = cameraIndexForImageToken(
-                block.peer.path, input->cameraIndexByPath);
-            const QString pair_key = canonicalPairKey(shard.owner.path, block.peer.path);
+            ++input->diagnostics.geometryPassedBlockCount;
+            const int peer_index = cameraIndexForRelocatedMatchToken(
+                block.peer.path, input->cameraIndexByPath, allChunkImagePaths);
+            const QString pair_key = canonicalPairKey(owner_index, peer_index);
             if (peer_index < 0 || peer_index == owner_index || pair_key.isEmpty())
             {
                 continue;
             }
+            ++input->diagnostics.resolvedPeerBlockCount;
 
             PairCandidate candidate = makePairCandidate(
                 shard, block, owner_index, peer_index);
             if (minMatches > 0 &&
                 static_cast<int>(candidate.pair.observations.size()) < minMatches)
             {
+                ++input->diagnostics.rejectedByMinMatchesCount;
                 continue;
             }
 
@@ -265,6 +333,7 @@ bool readProjectMatchInput(const QJsonObject &meta,
             static_cast<int>(it.value().pair.observations.size());
         input->pairs.push_back(std::move(it.value().pair));
     }
+    input->diagnostics.acceptedPairCount = static_cast<int>(input->pairs.size());
     return true;
 }
 

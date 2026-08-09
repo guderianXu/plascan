@@ -11,6 +11,7 @@
 #include "Camera.h"
 #include "BundleAdjust.h"
 #include "model/MarkerSet.h"
+#include "project/ProjectMatchInputReader.h"
 #include "registration/ControlNetworkSolver.h"
 
 #include <QHash>
@@ -49,6 +50,7 @@ struct BaInputBuildResult
     int indexedObservationCount = 0; ///< `.pimatch` 中带稳定特征索引的观测数。
     int multiViewTrackCount = 0;
     int rejectedConflictTrackCount = 0;
+    ProjectMatchInputDiagnostics matchDiagnostics;
 
     // 旧 survey_control 输入统计。
     int surveyControlTrackCount = 0;

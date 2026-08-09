@@ -325,9 +325,19 @@ std::vector<LaserPlaneSample> readAsciiSamples(std::ifstream &input,
                                                const PlyHeader &header,
                                                const LaserConstraintMapOptions &options)
 {
+    const bool limit_during_read =
+        options.sampleInputBeforeFiltering &&
+        options.voxelSizeMeters <= 0.0 &&
+        options.maxSamples > 0 &&
+        header.vertexCount > static_cast<std::size_t>(options.maxSamples);
+    const std::size_t read_count = limit_during_read
+        ? static_cast<std::size_t>(options.maxSamples)
+        : header.vertexCount;
     std::vector<LaserPlaneSample> samples;
-    samples.reserve(header.vertexCount);
+    samples.reserve(read_count);
 
+    std::size_t selected = 0;
+    std::size_t next_vertex = 0;
     for (std::size_t vertex = 0; vertex < header.vertexCount; ++vertex)
     {
         PropertyValues values;
@@ -338,10 +348,26 @@ std::vector<LaserPlaneSample> readAsciiSamples(std::ifstream &input,
             assignProperty(&values, property.name, value);
         }
 
+        if (limit_during_read && vertex != next_vertex)
+        {
+            continue;
+        }
         LaserPlaneSample sample;
         if (makeSample(values, options, &sample))
         {
             samples.push_back(sample);
+        }
+        if (limit_during_read)
+        {
+            ++selected;
+            if (selected < read_count)
+            {
+                next_vertex = static_cast<std::size_t>(
+                    std::floor(
+                        static_cast<long double>(selected) *
+                        static_cast<long double>(header.vertexCount) /
+                        static_cast<long double>(read_count)));
+            }
         }
     }
     return samples;
@@ -351,18 +377,40 @@ std::vector<LaserPlaneSample> readBinaryLittleEndianSamples(std::ifstream &input
                                                             const PlyHeader &header,
                                                             const LaserConstraintMapOptions &options)
 {
-    std::vector<LaserPlaneSample> samples;
-    samples.reserve(header.vertexCount);
-
     std::size_t rowSize = 0;
     for (const PlyProperty &property : header.vertexProperties)
     {
         rowSize += property.size;
     }
 
+    const bool limit_during_read =
+        options.sampleInputBeforeFiltering &&
+        options.voxelSizeMeters <= 0.0 &&
+        options.maxSamples > 0 &&
+        header.vertexCount > static_cast<std::size_t>(options.maxSamples);
+    const std::size_t read_count = limit_during_read
+        ? static_cast<std::size_t>(options.maxSamples)
+        : header.vertexCount;
+    std::vector<LaserPlaneSample> samples;
+    samples.reserve(read_count);
+
     std::vector<char> row(rowSize);
-    for (std::size_t vertex = 0; vertex < header.vertexCount; ++vertex)
+    const std::streampos vertex_data_start = input.tellg();
+    for (std::size_t selected = 0; selected < read_count; ++selected)
     {
+        const std::size_t vertex = limit_during_read
+            ? static_cast<std::size_t>(
+                  std::floor(
+                      static_cast<long double>(selected) *
+                      static_cast<long double>(header.vertexCount) /
+                      static_cast<long double>(read_count)))
+            : selected;
+        if (limit_during_read)
+        {
+            input.seekg(
+                vertex_data_start +
+                static_cast<std::streamoff>(vertex * rowSize));
+        }
         input.read(row.data(), static_cast<std::streamsize>(row.size()));
         if (!input)
         {

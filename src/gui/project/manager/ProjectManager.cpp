@@ -44,6 +44,8 @@
 #include "DenseCloudBuilder.h"
 #include "Intersection.h"
 #include "BundleAdjust.h"
+#include "LaserConstraintMap.h"
+#include "io/PathIO.h"
 #include "SparseCloudValidator.h"
 #include "SurfaceReconstructor.h"
 
@@ -296,6 +298,46 @@ bool isBaPriorRole(const QString &role)
     return normalized == QLatin1String("ba_prior")
         || normalized == QLatin1String("bundle_adjustment")
         || normalized == QLatin1String("reference_prior");
+}
+
+bool validateBaPriorImport(const QString &path, QString *errorMessage)
+{
+    const QString suffix = QFileInfo(path).suffix().toLower();
+    if (suffix == QLatin1String("tif")
+        || suffix == QLatin1String("tiff")
+        || suffix == QLatin1String("vrt"))
+    {
+        return true;
+    }
+    if (suffix != QLatin1String("ply"))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral(
+                "当前 BA 软约束仅直接支持 DEM（TIF/TIFF/VRT）或 PLY 点云。\n"
+                "LAS/LAZ/COPC/XYZ/CSV 请先转换为与影像工程同坐标系的带法向 PLY。");
+        }
+        return false;
+    }
+    xjw::lidar::LaserConstraintMapOptions options;
+    options.maxSamples = 256;
+    options.useMissingNormalsAsHeightPlanes = false;
+    options.sampleInputBeforeFiltering = true;
+    xjw::lidar::LaserConstraintMap map;
+    std::string loadError;
+    if (!map.loadPly(xjw::common::io::toUtf8Path(path), options, &loadError))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral(
+                "该 PLY 没有可用的有限非零表面法向。\n"
+                "需要 vertex 的 normal_x/normal_y/normal_z（或 nx/ny/nz）字段；"
+                "环绕目标不能按水平面代替法向。\n解析信息: %1")
+                                .arg(QString::fromStdString(loadError));
+        }
+        return false;
+    }
+    return true;
 }
 
 QString firstReferenceDemPriorPath(const QJsonObject &meta)
@@ -1005,15 +1047,43 @@ void ProjectManager::importReferenceDataset()
 
     saveLastUsedDir(QStringLiteral("reference_dataset"), QFileInfo(selected).absolutePath());
 
+    const QString validationPurpose = QStringLiteral("仅用于精度检查（validation）");
+    const QString baPurpose = QStringLiteral("用于光束法平差软约束（ba_prior）");
+    bool purposeAccepted = false;
+    const QString purpose = QInputDialog::getItem(
+        _parent,
+        QStringLiteral("选择参考数据用途"),
+        QStringLiteral("该参考数据如何参与项目？"),
+        QStringList{validationPurpose, baPurpose},
+        0,
+        false,
+        &purposeAccepted);
+    if (!purposeAccepted)
+    {
+        return;
+    }
+    const QString role = purpose == baPurpose
+        ? QStringLiteral("ba_prior")
+        : QStringLiteral("validation");
+
+    QString compatibilityError;
+    if (role == QLatin1String("ba_prior")
+        && !validateBaPriorImport(selected, &compatibilityError))
+    {
+        showWarning(compatibilityError, QStringLiteral("导入 BA 参考约束"));
+        return;
+    }
+
     QString error;
-    if (!registerReferenceDataset(selected, QString(), QStringLiteral("validation"), &error))
+    if (!registerReferenceDataset(selected, QString(), role, &error))
     {
         showWarning(error.isEmpty() ? QStringLiteral("导入参考数据失败。") : error,
                     QStringLiteral("导入参考 DEM/LiDAR"));
         return;
     }
 
-    LOG_INFO(QStringLiteral("参考数据已导入: %1").arg(QFileInfo(selected).fileName()));
+    LOG_INFO(QStringLiteral("参考数据已导入: %1 role=%2")
+             .arg(QFileInfo(selected).fileName(), role));
 }
 
 bool ProjectManager::registerReferenceDataset(const QString &path,
@@ -1156,7 +1226,10 @@ void ProjectManager::prepareReferenceTerrainBundleAdjust()
     {
         QMessageBox::information(_parent,
                                  QStringLiteral("参考地形约束重新平差"),
-                                 QStringLiteral("前置检查未通过：%1。\n请先导入 role=ba_prior 的参考 DEM/LiDAR，并完成正式空三。\nJSON: %2\nCSV: %3")
+                                 QStringLiteral(
+                                     "前置检查未通过：%1。\n"
+                                     "请先导入 role=ba_prior 的参考 DEM/LiDAR，并完成正式空三。\n"
+                                     "JSON: %2\nCSV: %3")
                                      .arg(status, result.jsonPath, result.csvPath));
         return;
     }
@@ -1195,14 +1268,68 @@ void ProjectManager::prepareReferenceTerrainBundleAdjust()
             .arg(QDateTime::currentDateTimeUtc().toString(
                 QStringLiteral("yyyyMMdd_HHmmss_zzz"))));
 
+    double laserAssociationDistanceMeters = 0.05;
+    double laserSigmaMeters = 0.0025;
+    double laserHuberDeltaMeters = 0.05;
+    if (demPriorPath.isEmpty())
+    {
+        bool accepted = false;
+        laserAssociationDistanceMeters = QInputDialog::getDouble(
+            _parent,
+            QStringLiteral("LiDAR 平差参数"),
+            QStringLiteral("track 到 LiDAR 的最大关联距离（米）:"),
+            laserAssociationDistanceMeters,
+            0.0001,
+            1000.0,
+            4,
+            &accepted);
+        if (!accepted)
+        {
+            return;
+        }
+        laserSigmaMeters = QInputDialog::getDouble(
+            _parent,
+            QStringLiteral("LiDAR 平差参数"),
+            QStringLiteral("LiDAR 点到面标准差 sigma（米，权重=1/sigma²）:"),
+            laserSigmaMeters,
+            0.0001,
+            1000.0,
+            4,
+            &accepted);
+        if (!accepted)
+        {
+            return;
+        }
+        laserHuberDeltaMeters = QInputDialog::getDouble(
+            _parent,
+            QStringLiteral("LiDAR 平差参数"),
+            QStringLiteral("LiDAR Huber 阈值（米）:"),
+            laserHuberDeltaMeters,
+            0.0001,
+            1000.0,
+            4,
+            &accepted);
+        if (!accepted)
+        {
+            return;
+        }
+    }
+
     const QString prompt = demPriorPath.isEmpty()
         ? QStringLiteral("将使用 LiDAR/点云 PLY 作为 BA 点到面 soft prior 重新平差。\n\n"
                          "参考点云: %1\n"
-                         "无 normal 字段时: 按水平地形面约束使用\n"
-                         "影像数量: %2\n"
-                         "输出目录: %3\n\n"
+                         "法向字段: normal_x/normal_y/normal_z（或 nx/ny/nz）\n"
+                         "最大关联距离: %2 m\n"
+                         "标准差 sigma: %3 m（统计权重 %4）\n"
+                         "Huber 阈值: %5 m\n"
+                         "影像数量: %6\n"
+                         "输出目录: %7\n\n"
                          "继续执行？")
               .arg(laserPriorPath)
+              .arg(laserAssociationDistanceMeters, 0, 'g', 8)
+              .arg(laserSigmaMeters, 0, 'g', 8)
+              .arg(1.0 / (laserSigmaMeters * laserSigmaMeters), 0, 'g', 8)
+              .arg(laserHuberDeltaMeters, 0, 'g', 8)
               .arg(images.size())
               .arg(outputDir)
         : QStringLiteral("将使用参考 DEM 作为 BA 高程 soft prior 重新平差。\n\n"
@@ -1230,14 +1357,15 @@ void ProjectManager::prepareReferenceTerrainBundleAdjust()
     {
         extra[QStringLiteral("enable_laser_constraints")] = true;
         extra[QStringLiteral("laser_constraint_cloud_path")] = laserPriorPath;
-        extra[QStringLiteral("laser_association_max_distance_m")] = 1.0;
+        extra[QStringLiteral("laser_association_max_distance_m")] =
+            laserAssociationDistanceMeters;
         extra[QStringLiteral("laser_voxel_size_m")] = 0.0;
         extra[QStringLiteral("laser_max_curvature")] = 0.2;
         extra[QStringLiteral("laser_max_samples")] = 500000;
-        extra[QStringLiteral("laser_missing_normals_as_height_planes")] = true;
-        extra[QStringLiteral("laser_weight")] = 1.0;
-        extra[QStringLiteral("laser_huber_delta_m")] =
-            result.record.value(QStringLiteral("recommended_huber_delta_m")).toDouble(0.5);
+        extra[QStringLiteral("laser_missing_normals_as_height_planes")] = false;
+        extra[QStringLiteral("laser_weight")] = 0.0;
+        extra[QStringLiteral("laser_sigma_m")] = laserSigmaMeters;
+        extra[QStringLiteral("laser_huber_delta_m")] = laserHuberDeltaMeters;
     }
     else
     {
@@ -1672,8 +1800,10 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
     opts.dryRun           = dryRun;
     opts.threads          = threads;
     opts.baOpt.maxIterations       = qBound(3,  extraSettings.value(QStringLiteral("max_iterations")).toInt(20),  200);
-    opts.baOpt.maxPointIterations  = qBound(1,  extraSettings.value(QStringLiteral("max_point_iterations")).toInt(12), 100);
-    opts.baOpt.maxCameraIterations = qBound(1,  extraSettings.value(QStringLiteral("max_camera_iterations")).toInt(10), 100);
+    opts.baOpt.maxPointIterations = qBound(
+        1, extraSettings.value(QStringLiteral("max_point_iterations")).toInt(12), 100);
+    opts.baOpt.maxCameraIterations = qBound(
+        1, extraSettings.value(QStringLiteral("max_camera_iterations")).toInt(10), 100);
     opts.baOpt.refineCameraPose    = extraSettings.value(QStringLiteral("refine_camera_pose")).toBool(true);
     opts.baOpt.huberDelta          = extraSettings.value(QStringLiteral("huber_delta")).toDouble(3.0);
     opts.baOpt.finiteDiffEps       = extraSettings.value(QStringLiteral("finite_diff_eps")).toDouble(1e-6);
@@ -1731,6 +1861,10 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
         1,
         extraSettings.value(QStringLiteral("ba_max_ceres_point_only_observations")).toInt(
             opts.baOpt.maxCeresPointOnlyObservations));
+    opts.baOpt.maxCeresInitialTrackRms = qMax(
+        0.0,
+        extraSettings.value(QStringLiteral("ba_max_ceres_initial_track_rms")).toDouble(
+            opts.baOpt.maxCeresInitialTrackRms));
     opts.baOpt.maxDenseSchurCameras = qMax(
         1,
         extraSettings.value(QStringLiteral("ba_max_dense_schur_cameras")).toInt(
@@ -1771,11 +1905,14 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
     opts.exportCameraCsv   = extraSettings.value(QStringLiteral("export_camera_csv")).toBool(true);
     opts.exportRunJson     = extraSettings.value(QStringLiteral("export_run_json")).toBool(true);
     opts.exportEvalPlot    = extraSettings.value(QStringLiteral("export_eval_plot")).toBool(true);
+    opts.exportObservationDetails =
+        extraSettings.value(QStringLiteral("export_observation_details")).toBool(true);
     opts.enableLaserConstraints = extraSettings.value(QStringLiteral("enable_laser_constraints")).toBool(false);
-    opts.laserConstraintCloudPath = extraSettings.value(QStringLiteral("laser_constraint_cloud_path")).toString().trimmed();
+    opts.laserConstraintCloudPath =
+        extraSettings.value(QStringLiteral("laser_constraint_cloud_path")).toString().trimmed();
     opts.laserAssociationMaxDistanceMeters = qMax(
         0.0,
-        extraSettings.value(QStringLiteral("laser_association_max_distance_m")).toDouble(1.0));
+        extraSettings.value(QStringLiteral("laser_association_max_distance_m")).toDouble(0.05));
     opts.laserVoxelSizeMeters = qMax(
         0.0,
         extraSettings.value(QStringLiteral("laser_voxel_size_m")).toDouble(0.0));
@@ -1791,10 +1928,13 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
         extraSettings.value(QStringLiteral("laser_missing_normals_as_height_planes")).toBool(false);
     opts.laserWeight = qMax(
         0.0,
-        extraSettings.value(QStringLiteral("laser_weight")).toDouble(1.0));
+        extraSettings.value(QStringLiteral("laser_weight")).toDouble(0.0));
+    opts.laserSigmaMeters = qMax(
+        1e-9,
+        extraSettings.value(QStringLiteral("laser_sigma_m")).toDouble(0.0025));
     opts.laserHuberDeltaMeters = qMax(
         1e-9,
-        extraSettings.value(QStringLiteral("laser_huber_delta_m")).toDouble(0.2));
+        extraSettings.value(QStringLiteral("laser_huber_delta_m")).toDouble(0.05));
     opts.enableReferenceTerrainPrior =
         extraSettings.value(QStringLiteral("enable_reference_terrain_prior")).toBool(false);
     opts.referenceTerrainDemPath =

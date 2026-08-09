@@ -74,7 +74,7 @@ jobs:
           cache: true
 
       - name: Install Python test dependencies
-        run: python3 -m pip install --disable-pip-version-check numpy
+        run: python3 -m pip install --disable-pip-version-check numpy scipy
 
       - name: Restore compiler cache
         uses: actions/cache@v4

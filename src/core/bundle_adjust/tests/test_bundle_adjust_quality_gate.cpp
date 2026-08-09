@@ -2,6 +2,7 @@
 
 #include "BundleAdjust.h"
 #include "BundleAdjustQuality.h"
+#include "BundleAdjustValidation.h"
 #include "Camera.h"
 
 #include <array>
@@ -327,7 +328,7 @@ TEST(BundleAdjustValidationTest, RejectsNonPositiveFiniteDifferenceStep)
     EXPECT_NE(result.backendMessage.find("有限差分"), std::string::npos);
 }
 
-TEST(BundleAdjustQualityGateTest, LegacyConstraintStatsKeepRejectedTrackBaseline)
+TEST(BundleAdjustQualityGateTest, ConstraintStatsExcludeRejectedTracksFromBothSides)
 {
     const std::vector<xjw::Camera> cameras{
         makeCamera(-1.0, 0.0, 0.0),
@@ -336,6 +337,8 @@ TEST(BundleAdjustQualityGateTest, LegacyConstraintStatsKeepRejectedTrackBaseline
     const std::array<double, 3> visiblePoint{{0.0, 0.0, 5.0}};
     xjw::BATrack validTrack =
         makeTrack(cameras, visiblePoint, visiblePoint);
+    validTrack.controlPointConstraints.push_back(
+        {{{0.0, 0.0, 4.0}}, 1.0, 1.0, 0});
 
     xjw::BATrack rejectedTrack =
         makeTrack(
@@ -343,7 +346,7 @@ TEST(BundleAdjustQualityGateTest, LegacyConstraintStatsKeepRejectedTrackBaseline
             visiblePoint,
             {{0.0, 0.0, -5.0}});
     rejectedTrack.controlPointConstraints.push_back(
-        {{{0.0, 0.0, -6.0}}, 1.0, 1.0, 0});
+        {{{0.0, 0.0, -8.0}}, 1.0, 1.0, 0});
 
     xjw::BAOptions options;
     options.backend = xjw::BABackend::LegacyCpu;
@@ -359,6 +362,74 @@ TEST(BundleAdjustQualityGateTest, LegacyConstraintStatsKeepRejectedTrackBaseline
 
     ASSERT_TRUE(result.solutionUsable);
     ASSERT_EQ(result.controlPointConstraintCount, 1);
+    ASSERT_EQ(result.points.size(), 2U);
+    ASSERT_TRUE(result.points[0].valid);
+    ASSERT_FALSE(result.points[1].valid);
+    const double expected_after = std::abs(result.points[0].point[2] - 4.0);
     EXPECT_NEAR(result.controlPointRmsBeforeMeters, 1.0, 1.0e-9);
-    EXPECT_NEAR(result.controlPointRmsAfterMeters, 1.0, 1.0e-9);
+    EXPECT_NEAR(result.controlPointRmsAfterMeters, expected_after, 1.0e-9);
+}
+
+TEST(BundleAdjustValidationTest, LaserPlanesDoNotBypassAutoGaugeAnchors)
+{
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-1.0, 0.0, 0.0),
+        makeCamera(1.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> point{{0.0, 0.0, 5.0}};
+    xjw::BATrack track = makeTrack(cameras, point, point);
+    track.laserPlaneConstraints.push_back(
+        {{{0.0, 0.0, 5.0}}, {{0.0, 0.0, 1.0}}, 1.0, 0.0, 0});
+
+    xjw::BAOptions requested;
+    requested.refineCameraPose = true;
+    requested.enableLaserPlaneConstraints = true;
+    xjw::BAOptions normalized;
+    const auto validation = xjw::detail::validateAndNormalizeBundleAdjustOptions(
+        cameras, {track}, requested, &normalized);
+
+    ASSERT_TRUE(validation.ok) << validation.message;
+    EXPECT_EQ(normalized.fixedCameraIndices.size(), 2u);
+}
+
+TEST(BundleAdjustValidationTest, SinglePosePriorDoesNotClaimAbsoluteScale)
+{
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-1.0, 0.0, 0.0),
+        makeCamera(1.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> point{{0.0, 0.0, 5.0}};
+    xjw::BAOptions requested;
+    requested.refineCameraPose = true;
+    requested.cameraPosePriors.resize(cameras.size());
+    requested.cameraPosePriors[0].enabled = true;
+    requested.cameraPosePriors[0].cameraCenter = cameras[0].cameraCenter();
+
+    xjw::BAOptions normalized;
+    const auto validation = xjw::detail::validateAndNormalizeBundleAdjustOptions(
+        cameras, {makeTrack(cameras, point, point)}, requested, &normalized);
+
+    ASSERT_TRUE(validation.ok) << validation.message;
+    EXPECT_EQ(normalized.fixedCameraIndices.size(), 2U);
+}
+
+TEST(BundleAdjustValidationTest, SingleControlPointStillRequiresRigidCameraAnchor)
+{
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-1.0, 0.0, 0.0),
+        makeCamera(1.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> point{{0.0, 0.0, 5.0}};
+    xjw::BATrack track = makeTrack(cameras, point, point);
+    track.controlPointConstraints.push_back({point, 0.01, 1.0, 0});
+
+    xjw::BAOptions requested;
+    requested.refineCameraPose = true;
+    requested.enableControlPointConstraints = true;
+    xjw::BAOptions normalized;
+    const auto validation = xjw::detail::validateAndNormalizeBundleAdjustOptions(
+        cameras, {track}, requested, &normalized);
+
+    ASSERT_TRUE(validation.ok) << validation.message;
+    EXPECT_EQ(normalized.fixedCameraIndices.size(), 1U);
 }

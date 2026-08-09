@@ -183,6 +183,7 @@ BaServiceResult BundleAdjustService::run(
     xjw::BAOptions baOptions = opts.baOpt;
     xjw::lidar::LaserAssociationSummary laserAssociationSummary;
     int laserMapSampleCount = 0;
+    double effectiveLaserWeight = 0.0;
     if (opts.enableLaserConstraints)
     {
         if (opts.laserConstraintCloudPath.trimmed().isEmpty())
@@ -219,9 +220,20 @@ BaServiceResult BundleAdjustService::run(
         associationOptions.maxCurvatureForWeighting = opts.laserMaxCurvature;
         associationOptions.minQualityWeight = 0.05;
         laserAssociationSummary = xjw::lidar::attachLaserPlaneConstraints(laserMap, &tracks, associationOptions);
+        if (laserAssociationSummary.associatedTracks <= 0)
+        {
+            result.errorMessage = QStringLiteral(
+                "LiDAR 点云未关联到任何 BA track；请检查坐标系和最大关联距离（当前 %1 m）")
+                                      .arg(opts.laserAssociationMaxDistanceMeters, 0, 'g', 8);
+            return result;
+        }
 
         baOptions.enableLaserPlaneConstraints = true;
-        baOptions.laserPlaneWeight = opts.laserWeight;
+        const double sigmaMeters = std::max(1.0e-9, opts.laserSigmaMeters);
+        effectiveLaserWeight = opts.laserWeight > 0.0
+            ? opts.laserWeight
+            : 1.0 / (sigmaMeters * sigmaMeters);
+        baOptions.laserPlaneWeight = effectiveLaserWeight;
         baOptions.laserHuberDeltaMeters = opts.laserHuberDeltaMeters;
     }
 
@@ -270,6 +282,9 @@ BaServiceResult BundleAdjustService::run(
     saveObj[QStringLiteral("ba_backend_selection_reason")] =
         QString::fromUtf8(baResult.backendSelectionReason.c_str());
     saveObj[QStringLiteral("ba_quality_gate_rejected")] = baResult.qualityGateRejected;
+    saveObj[QStringLiteral("ba_solve_status")] =
+        QString::fromLatin1(xjw::BundleAdjust::solveStatusName(baResult.solveStatus));
+    saveObj[QStringLiteral("ba_solution_usable")] = baResult.solutionUsable;
     saveObj[QStringLiteral("ba_quality_gate_message")] =
         QString::fromUtf8(baResult.qualityGateMessage.c_str());
     saveObj[QStringLiteral("ba_valid_track_ratio")] = baResult.validTrackRatio;
@@ -279,6 +294,12 @@ BaServiceResult BundleAdjustService::run(
         static_cast<qint64>(baResult.ceresEstimatedCudaBytes);
     saveObj[QStringLiteral("ba_ceres_cuda_free_bytes")] =
         static_cast<qint64>(baResult.ceresCudaFreeBytes);
+    saveObj[QStringLiteral("ba_ceres_initial_cost")] = baResult.ceresInitialCost;
+    saveObj[QStringLiteral("ba_ceres_final_cost")] = baResult.ceresFinalCost;
+    saveObj[QStringLiteral("ba_ceres_successful_steps")] = baResult.ceresSuccessfulSteps;
+    saveObj[QStringLiteral("ba_ceres_unsuccessful_steps")] = baResult.ceresUnsuccessfulSteps;
+    saveObj[QStringLiteral("ba_ceres_rejected_initial_tracks")] =
+        baResult.ceresRejectedInitialTracks;
     saveObj[QStringLiteral("ba_setup_seconds")] = baResult.setupSeconds;
     saveObj[QStringLiteral("ba_solve_seconds")] = baResult.solveSeconds;
     saveObj[QStringLiteral("ba_total_seconds")] = baResult.totalSeconds;
@@ -312,6 +333,8 @@ BaServiceResult BundleAdjustService::run(
         optObj[QStringLiteral("ba_min_cpu_observations")] = baOptions.minCeresCpuObservations;
         optObj[QStringLiteral("ba_max_ceres_point_only_observations")] =
             baOptions.maxCeresPointOnlyObservations;
+        optObj[QStringLiteral("ba_max_ceres_initial_track_rms")] =
+            baOptions.maxCeresInitialTrackRms;
         optObj[QStringLiteral("ba_max_dense_schur_cameras")] =
             baOptions.maxDenseSchurCameras;
         optObj[QStringLiteral("ba_max_sparse_schur_cameras")] =
@@ -344,7 +367,10 @@ BaServiceResult BundleAdjustService::run(
         optObj[QStringLiteral("laser_missing_normals_as_height_planes")] =
             opts.laserUseMissingNormalsAsHeightPlanes;
         optObj[QStringLiteral("laser_weight")] = opts.laserWeight;
+        optObj[QStringLiteral("laser_sigma_m")] = opts.laserSigmaMeters;
+        optObj[QStringLiteral("laser_effective_weight")] = effectiveLaserWeight;
         optObj[QStringLiteral("laser_huber_delta_m")] = opts.laserHuberDeltaMeters;
+        optObj[QStringLiteral("export_observation_details")] = opts.exportObservationDetails;
         optObj[QStringLiteral("enable_control_point_constraints")] = baOptions.enableControlPointConstraints;
         optObj[QStringLiteral("control_point_weight")] = baOptions.controlPointWeight;
         optObj[QStringLiteral("control_point_huber_delta_m")] = baOptions.controlPointHuberDeltaMeters;
@@ -385,6 +411,9 @@ BaServiceResult BundleAdjustService::run(
         laserSummary[QStringLiteral("laser_rms_after_m")] = baResult.laserRmsAfterMeters;
         laserSummary[QStringLiteral("laser_median_before_m")] = baResult.laserMedianBeforeMeters;
         laserSummary[QStringLiteral("laser_median_after_m")] = baResult.laserMedianAfterMeters;
+        laserSummary[QStringLiteral("laser_sigma_m")] = opts.laserSigmaMeters;
+        laserSummary[QStringLiteral("laser_effective_weight")] = effectiveLaserWeight;
+        laserSummary[QStringLiteral("laser_huber_delta_m")] = opts.laserHuberDeltaMeters;
         saveObj[QStringLiteral("laser_constraints_summary")] = laserSummary;
     }
 
@@ -538,35 +567,38 @@ BaServiceResult BundleAdjustService::run(
         xyz.append(p.point[2]);
         one[QStringLiteral("point_xyz")] = xyz;
         QJsonArray observations;
-        for (const BAObservation &observation : tracks[static_cast<size_t>(i)].observations)
+        if (opts.exportObservationDetails)
         {
-            if (observation.cameraIndex < 0
-                || observation.cameraIndex >= static_cast<int>(cameras.size())
-                || observation.cameraIndex >= opts.imagePathByIndex.size())
+            for (const BAObservation &observation : tracks[static_cast<size_t>(i)].observations)
             {
-                continue;
+                if (observation.cameraIndex < 0
+                    || observation.cameraIndex >= static_cast<int>(cameras.size())
+                    || observation.cameraIndex >= opts.imagePathByIndex.size())
+                {
+                    continue;
+                }
+                const Camera &camera = observation.cameraIndex < static_cast<int>(baResult.refinedCameras.size())
+                    ? baResult.refinedCameras[static_cast<size_t>(observation.cameraIndex)]
+                    : cameras[static_cast<size_t>(observation.cameraIndex)];
+                double projected[2] = {0.0, 0.0};
+                const bool projectedOk = camera.projectWorldPoint(p.point.data(), projected)
+                    || camera.projectWorldPointSigned(p.point.data(), projected);
+                if (!projectedOk || !std::isfinite(projected[0]) || !std::isfinite(projected[1]))
+                {
+                    continue;
+                }
+                const double residualX = projected[0] - observation.u;
+                const double residualY = projected[1] - observation.v;
+                QJsonObject observationObject;
+                observationObject[QStringLiteral("image_id")] = observation.cameraIndex;
+                observationObject[QStringLiteral("image_path")] =
+                    opts.imagePathByIndex.at(observation.cameraIndex);
+                observationObject[QStringLiteral("xy")] = QJsonArray{observation.u, observation.v};
+                observationObject[QStringLiteral("projected_xy")] = QJsonArray{projected[0], projected[1]};
+                observationObject[QStringLiteral("residual_xy")] = QJsonArray{residualX, residualY};
+                observationObject[QStringLiteral("residual_norm_px")] = std::hypot(residualX, residualY);
+                observations.append(observationObject);
             }
-            const Camera &camera = observation.cameraIndex < static_cast<int>(baResult.refinedCameras.size())
-                ? baResult.refinedCameras[static_cast<size_t>(observation.cameraIndex)]
-                : cameras[static_cast<size_t>(observation.cameraIndex)];
-            double projected[2] = {0.0, 0.0};
-            const bool projectedOk = camera.projectWorldPoint(p.point.data(), projected)
-                || camera.projectWorldPointSigned(p.point.data(), projected);
-            if (!projectedOk || !std::isfinite(projected[0]) || !std::isfinite(projected[1]))
-            {
-                continue;
-            }
-            const double residualX = projected[0] - observation.u;
-            const double residualY = projected[1] - observation.v;
-            QJsonObject observationObject;
-            observationObject[QStringLiteral("image_id")] = observation.cameraIndex;
-            observationObject[QStringLiteral("image_path")] =
-                opts.imagePathByIndex.at(observation.cameraIndex);
-            observationObject[QStringLiteral("xy")] = QJsonArray{observation.u, observation.v};
-            observationObject[QStringLiteral("projected_xy")] = QJsonArray{projected[0], projected[1]};
-            observationObject[QStringLiteral("residual_xy")] = QJsonArray{residualX, residualY};
-            observationObject[QStringLiteral("residual_norm_px")] = std::hypot(residualX, residualY);
-            observations.append(observationObject);
         }
         one[QStringLiteral("observations")] = observations;
         pointsArr.append(one);
@@ -759,6 +791,11 @@ BaServiceResult BundleAdjustService::run(
             ts << "Ceres CUDA 显存估算/空闲(bytes): "
                << baResult.ceresEstimatedCudaBytes << "/"
                << baResult.ceresCudaFreeBytes << "\n";
+            ts << "Ceres 目标函数: " << baResult.ceresInitialCost << " -> "
+               << baResult.ceresFinalCost << "\n";
+            ts << "Ceres 接受/拒绝步: " << baResult.ceresSuccessfulSteps << "/"
+               << baResult.ceresUnsuccessfulSteps << "\n";
+            ts << "Ceres 初始粗差剔除 track: " << baResult.ceresRejectedInitialTracks << "\n";
             ts << "观测数量: "       << baResult.observationCount          << "\n";
             ts << "native CUDA 活动相机/轨迹/观测: "
                << baResult.nativeCudaActiveCameras << "/"
@@ -843,8 +880,27 @@ BaServiceResult BundleAdjustService::run(
     }
 
     // ── 组装并返回结果 ─────────────────────────────────────────────────────
-    result.success          = true;
-    result.pendingCamUpdates = pendingCamUpdates;
+    const bool missingActiveLaserConstraints =
+        opts.enableLaserConstraints && baResult.laserConstraintCount <= 0;
+    result.success = baResult.solutionUsable && !missingActiveLaserConstraints;
+    if (result.success)
+    {
+        result.pendingCamUpdates = pendingCamUpdates;
+    }
+    else if (missingActiveLaserConstraints)
+    {
+        result.errorMessage = QStringLiteral(
+            "LiDAR 约束在求解或质量过滤后全部失效，未写回相机；"
+            "请检查坐标系、关联距离和影像匹配粗差");
+    }
+    else
+    {
+        result.errorMessage = QStringLiteral("BA 求解结果不可写回（%1）: %2")
+                                  .arg(QString::fromLatin1(
+                                           xjw::BundleAdjust::solveStatusName(
+                                               baResult.solveStatus)),
+                                       QString::fromUtf8(baResult.backendMessage.c_str()));
+    }
     result.resultJson        = saveObj;
     return result;
 }

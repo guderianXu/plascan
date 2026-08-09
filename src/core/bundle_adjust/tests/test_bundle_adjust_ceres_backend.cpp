@@ -96,8 +96,104 @@ TEST(BundleAdjustCeresBackendTest, CeresCpuBackendOptimizesPointAndReportsBacken
     EXPECT_FALSE(result.backendFallback);
     EXPECT_EQ(result.solveStatus, xjw::BASolveStatus::Success);
     EXPECT_TRUE(result.solutionUsable);
+    EXPECT_GT(result.ceresSuccessfulSteps, 0);
+    EXPECT_LT(result.ceresFinalCost, result.ceresInitialCost);
     EXPECT_LT(result.meanRmsAfter, result.meanRmsBefore);
     EXPECT_LT(distance3d(result.points.front().point, truth), distance3d(initial, truth));
+}
+
+TEST(BundleAdjustCeresBackendTest, StatisticalLaserWeightReducesPointToPlaneDistance)
+{
+    ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
+
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-2.0, 0.0, 0.0),
+        makeCamera(2.0, 0.0, 0.0),
+        makeCamera(0.0, 2.0, 0.0),
+    };
+    const std::array<double, 3> initial{{0.5, 0.2, 12.0}};
+    xjw::BATrack track = makeTrack(cameras, initial, initial);
+    track.laserPlaneConstraints.push_back(
+        {{{0.0, 0.0, 10.0}}, {{0.0, 0.0, 1.0}}, 1.0, 2.0, 0});
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::CeresCpu;
+    options.refineCameraPose = false;
+    options.enablePointFilter = false;
+    options.enableLaserPlaneConstraints = true;
+    options.laserPlaneWeight = 40000.0;
+    options.laserHuberDeltaMeters = 0.02;
+    options.maxIterations = 30;
+
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(cameras, {track}, options);
+
+    ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
+    ASSERT_EQ(result.laserConstraintCount, 1);
+    EXPECT_GT(result.ceresSuccessfulSteps, 0);
+    EXPECT_LT(result.laserRmsAfterMeters, result.laserRmsBeforeMeters);
+}
+
+TEST(BundleAdjustCeresBackendTest, StationaryNonzeroResidualIsUsable)
+{
+    ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
+
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-2.0, 0.0, 0.0),
+        makeCamera(2.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> truth{{0.0, 0.0, 10.0}};
+    xjw::BATrack track = makeTrack(cameras, truth, truth);
+    ASSERT_EQ(track.observations.size(), 2U);
+    track.observations[0].v += 1.0;
+    track.observations[1].v -= 1.0;
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::CeresCpu;
+    options.refineCameraPose = false;
+    options.enablePointFilter = false;
+    options.maxIterations = 10;
+
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(cameras, {track}, options);
+
+    EXPECT_TRUE(result.solutionUsable) << result.backendMessage;
+    EXPECT_EQ(result.solveStatus, xjw::BASolveStatus::Success);
+    EXPECT_GT(result.ceresInitialCost, 0.0);
+    EXPECT_NEAR(result.ceresFinalCost, result.ceresInitialCost, 1.0e-12);
+}
+
+TEST(BundleAdjustCeresBackendTest, InitialGrossTrackGateKeepsPathologicalTrackOutOfProblem)
+{
+    ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
+
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-2.0, 0.0, 0.0),
+        makeCamera(2.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> truth{{0.0, 0.0, 10.0}};
+    xjw::BATrack validTrack = makeTrack(cameras, truth, {{0.1, 0.0, 10.5}});
+    xjw::BATrack grossTrack = makeTrack(cameras, truth, truth);
+    for (xjw::BAObservation &observation : grossTrack.observations)
+    {
+        observation.u += 1000.0;
+    }
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::CeresCpu;
+    options.refineCameraPose = false;
+    options.enablePointFilter = false;
+    options.maxCeresInitialTrackRms = 100.0;
+    options.maxIterations = 15;
+
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(cameras, {validTrack, grossTrack}, options);
+
+    ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
+    EXPECT_EQ(result.ceresRejectedInitialTracks, 1);
+    ASSERT_EQ(result.points.size(), 2u);
+    EXPECT_TRUE(result.points[0].valid);
+    EXPECT_FALSE(result.points[1].valid);
 }
 
 TEST(BundleAdjustCeresBackendTest, ProgressCancellationDoesNotPublishPartialSolution)

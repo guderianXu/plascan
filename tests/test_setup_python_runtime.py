@@ -87,6 +87,7 @@ class PythonRuntimeSetupTest(unittest.TestCase):
         self.assertIn("torch", plan.torch_packages)
         self.assertIn("torchvision", plan.torch_packages)
         self.assertIn("numpy", plan.base_packages)
+        self.assertIn("scipy", plan.base_packages)
         self.assertIn("opencv-python", plan.base_packages)
         self.assertIn("kornia", plan.base_packages)
         self.assertTrue(any("lightglue" in package.lower() for package in plan.base_packages))

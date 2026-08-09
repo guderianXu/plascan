@@ -21,6 +21,7 @@ struct LaserConstraintMapOptions
     double voxelSizeMeters = 0.0;
     int maxSamples = 500000;
     bool useMissingNormalsAsHeightPlanes = false;
+    bool sampleInputBeforeFiltering = false; ///< 快速校验模式：读取阶段均匀抽取 maxSamples 个原始顶点
 };
 
 } // namespace lidar

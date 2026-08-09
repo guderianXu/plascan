@@ -51,6 +51,20 @@ TEST(BundleAdjustCliGTest, MissingProjectFailsBeforeCreatingOutput)
     expectContainsAll(combinedOutput(result), {"项目文件不存在"});
 }
 
+TEST(BundleAdjustCliGTest, FailedStrictAbGateDoesNotWriteLaserCameras)
+{
+    const QString source = readSourceFile(
+        QStringLiteral("src/cli/reconstruction/cli_bundle_adjust.cpp"));
+    const qsizetype gateGuard = source.indexOf(
+        QStringLiteral("if (failOnQualityGate && !quality_gate_passed)"));
+    ASSERT_GE(gateGuard, 0);
+    const qsizetype cameraWriteback = source.indexOf(
+        QStringLiteral("projectSession.updateImageCameras"), gateGuard);
+    ASSERT_GE(cameraWriteback, 0);
+    EXPECT_LT(gateGuard, cameraWriteback);
+    EXPECT_NE(source.indexOf(QStringLiteral("质量门禁失败，未写回相机"), gateGuard), -1);
+}
+
 TEST(CodeStyleTest, CliBundleAdjustSourceKeepsLinesWithinStyleLimit)
 {
     const QString source = readSourceFile(

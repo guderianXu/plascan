@@ -68,6 +68,37 @@ void writeBinaryPly(const std::filesystem::path &path)
     writeBinaryPoint(out, 5.0f, 2.0f, 3.0f, 0.7f, 0.0f, 1.0f, 0.0f, 0.03f);
 }
 
+void writeIndexedBinaryPly(const std::filesystem::path &path, int pointCount)
+{
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(out.good());
+    out << "ply\n"
+        << "format binary_little_endian 1.0\n"
+        << "element vertex " << pointCount << "\n"
+        << "property float x\n"
+        << "property float y\n"
+        << "property float z\n"
+        << "property float intensity\n"
+        << "property float normal_x\n"
+        << "property float normal_y\n"
+        << "property float normal_z\n"
+        << "property float curvature\n"
+        << "end_header\n";
+    for (int index = 0; index < pointCount; ++index)
+    {
+        writeBinaryPoint(
+            out,
+            static_cast<float>(index),
+            0.0f,
+            0.0f,
+            0.0f,
+            0.0f,
+            0.0f,
+            1.0f,
+            0.01f);
+    }
+}
+
 } // namespace
 
 TEST(LaserConstraintMapTest, LoadsAsciiPlyAndFiltersInvalidPlaneSamples)
@@ -187,4 +218,25 @@ TEST(LaserConstraintMapTest, LoadsBinaryLittleEndianPlyWithNormalAndCurvatureFie
     EXPECT_NEAR(map.samples().front().point[1], 2.0, 1e-6);
     EXPECT_NEAR(map.samples().front().point[2], 3.0, 1e-6);
     EXPECT_NEAR(map.samples().front().normal[2], 1.0, 1e-6);
+}
+
+TEST(LaserConstraintMapTest, BinaryReadAppliesUniformLimitBeforeAllocatingAllVertices)
+{
+    const auto path = tempPath("plascan_lidar_binary_limited_read_test.ply");
+    writeIndexedBinaryPly(path, 10);
+
+    xjw::lidar::LaserConstraintMapOptions options;
+    options.maxCurvature = 0.2;
+    options.voxelSizeMeters = 0.0;
+    options.maxSamples = 3;
+    options.sampleInputBeforeFiltering = true;
+
+    xjw::lidar::LaserConstraintMap map;
+    std::string error;
+    ASSERT_TRUE(map.loadPly(path.string(), options, &error)) << error;
+
+    ASSERT_EQ(map.size(), 3U);
+    EXPECT_NEAR(map.samples()[0].point[0], 0.0, 1e-6);
+    EXPECT_NEAR(map.samples()[1].point[0], 3.0, 1e-6);
+    EXPECT_NEAR(map.samples()[2].point[0], 6.0, 1e-6);
 }

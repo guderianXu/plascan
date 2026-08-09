@@ -42,6 +42,8 @@ from `Help > Update Python Environment...`; users may dismiss the startup prompt
 The recommended development runtime is the repository-local standard-library `venv` at `.venv`. Use this runtime for
 model export helpers such as LightGlue and LoMa-R TensorRT export and for Python tests, so PlaScan development does not depend
 on a user-managed conda environment or a per-build virtual environment.
+The base runtime also installs NumPy and SciPy; the LiDAR benchmark adapters use SciPy's KD-tree for scalable surface-normal
+estimation instead of an all-pairs point search.
 
 Windows CUDA development runtime:
 

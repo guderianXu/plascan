@@ -22,6 +22,7 @@ void resetBuildResult(BaInputBuildResult *result)
     result->indexedObservationCount = 0;
     result->multiViewTrackCount = 0;
     result->rejectedConflictTrackCount = 0;
+    result->matchDiagnostics = {};
     result->surveyControlTrackCount = 0;
     result->surveyControlObservationCount = 0;
     result->rejectedSurveyControlPointCount = 0;
@@ -69,6 +70,7 @@ BaInputBuildStatus buildBaInputFromMeta(const QJsonObject &meta,
     // 需要读取 matchInput.cameras，移动顺序不可提前。
     appendBaTracks(matchInput, result);
     result->indexedObservationCount = matchInput.indexedObservationCount;
+    result->matchDiagnostics = matchInput.diagnostics;
     result->cameras = std::move(matchInput.cameras);
     result->imagePathByIndex = std::move(matchInput.imagePathByIndex);
     result->beforeCamMeta = std::move(matchInput.beforeCamMeta);

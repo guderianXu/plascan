@@ -10,7 +10,7 @@ namespace xjw::detail
 namespace
 {
 
-// 绝对位姿约束同时消除全局平移、旋转和尺度自由度。这里只判断约束是否存在，
+// 位姿先验消除全局刚体漂移；尺度是否同时受约束由后续的基线分析单独判断。
 // 约束数值是否合法和最终是否满足仍由后端及统一质量门控负责。
 bool hasEnabledPosePrior(const BAOptions &options)
 {
@@ -23,36 +23,210 @@ bool hasEnabledPosePrior(const BAOptions &options)
         });
 }
 
-bool hasControlPointConstraint(const std::vector<BATrack> &tracks,
-                               const BAOptions &options)
+bool isFinitePoint(const std::array<double, 3> &point)
+{
+    return std::all_of(point.begin(), point.end(), [](double value)
+    {
+        return std::isfinite(value);
+    });
+}
+
+bool hasMetricPosePriorBaseline(const BAOptions &options)
+{
+    for (size_t left = 0; left < options.cameraPosePriors.size(); ++left)
+    {
+        const BACameraPosePrior &first = options.cameraPosePriors[left];
+        if (!first.enabled || !isFinitePoint(first.cameraCenter))
+        {
+            continue;
+        }
+        for (size_t right = left + 1; right < options.cameraPosePriors.size(); ++right)
+        {
+            const BACameraPosePrior &second = options.cameraPosePriors[right];
+            if (!second.enabled || !isFinitePoint(second.cameraCenter))
+            {
+                continue;
+            }
+            double squared_distance = 0.0;
+            for (int axis = 0; axis < 3; ++axis)
+            {
+                const double delta = first.cameraCenter[axis] - second.cameraCenter[axis];
+                squared_distance += delta * delta;
+            }
+            if (squared_distance > 1.0e-16)
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool hasUsableTrackObservations(const BATrack &track)
+{
+    std::set<int> camera_indices;
+    for (const BAObservation &observation : track.observations)
+    {
+        if (observation.cameraIndex >= 0 &&
+            std::isfinite(observation.u) &&
+            std::isfinite(observation.v) &&
+            std::isfinite(observation.weight) &&
+            observation.weight > 0.0)
+        {
+            camera_indices.insert(observation.cameraIndex);
+        }
+    }
+    return camera_indices.size() >= 2;
+}
+
+double squaredDistance(const std::array<double, 3> &left,
+                       const std::array<double, 3> &right)
+{
+    double squared_distance = 0.0;
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        const double delta = left[axis] - right[axis];
+        squared_distance += delta * delta;
+    }
+    return squared_distance;
+}
+
+bool hasPosePriorBaselineToFixedCamera(const std::vector<Camera> &cameras,
+                                       const BAOptions &options,
+                                       const std::set<int> &fixedCameras)
+{
+    const size_t prior_count = std::min(cameras.size(), options.cameraPosePriors.size());
+    for (size_t prior_index = 0; prior_index < prior_count; ++prior_index)
+    {
+        const BACameraPosePrior &prior = options.cameraPosePriors[prior_index];
+        if (!prior.enabled || !isFinitePoint(prior.cameraCenter))
+        {
+            continue;
+        }
+        for (const int fixed_index : fixedCameras)
+        {
+            if (fixed_index == static_cast<int>(prior_index))
+            {
+                continue;
+            }
+            const std::array<double, 3> center =
+                cameras[static_cast<size_t>(fixed_index)].cameraCenter();
+            if (isFinitePoint(center) &&
+                squaredDistance(prior.cameraCenter, center) > 1.0e-16)
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool hasControlPointBaselineToFixedCamera(const std::vector<Camera> &cameras,
+                                          const std::vector<BATrack> &tracks,
+                                          const BAOptions &options,
+                                          const std::set<int> &fixedCameras)
 {
     if (!options.enableControlPointConstraints)
     {
         return false;
     }
-    return std::any_of(
-        tracks.begin(),
-        tracks.end(),
-        [](const BATrack &track)
+    for (const BATrack &track : tracks)
+    {
+        if (!hasUsableTrackObservations(track))
         {
-            return !track.controlPointConstraints.empty();
-        });
+            continue;
+        }
+        for (const BAControlPointConstraint &constraint : track.controlPointConstraints)
+        {
+            if (!isFinitePoint(constraint.point) ||
+                !std::isfinite(constraint.sigmaMeters) ||
+                constraint.sigmaMeters <= 0.0 ||
+                !std::isfinite(constraint.weight) ||
+                constraint.weight <= 0.0)
+            {
+                continue;
+            }
+            for (const int fixed_index : fixedCameras)
+            {
+                const std::array<double, 3> center =
+                    cameras[static_cast<size_t>(fixed_index)].cameraCenter();
+                if (isFinitePoint(center) &&
+                    squaredDistance(constraint.point, center) > 1.0e-16)
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
 }
 
-bool hasLaserConstraint(const std::vector<BATrack> &tracks,
-                        const BAOptions &options)
+bool hasCompleteControlPointGauge(const std::vector<BATrack> &tracks,
+                                  const BAOptions &options)
 {
-    if (!options.enableLaserPlaneConstraints)
+    if (!options.enableControlPointConstraints)
     {
         return false;
     }
-    return std::any_of(
-        tracks.begin(),
-        tracks.end(),
-        [](const BATrack &track)
+
+    std::vector<std::array<double, 3>> points;
+    for (const BATrack &track : tracks)
+    {
+        if (!hasUsableTrackObservations(track))
         {
-            return !track.laserPlaneConstraints.empty();
-        });
+            continue;
+        }
+        for (const BAControlPointConstraint &constraint : track.controlPointConstraints)
+        {
+            if (isFinitePoint(constraint.point) &&
+                std::isfinite(constraint.sigmaMeters) &&
+                constraint.sigmaMeters > 0.0 &&
+                std::isfinite(constraint.weight) &&
+                constraint.weight > 0.0)
+            {
+                points.push_back(constraint.point);
+            }
+        }
+    }
+
+    for (size_t first = 0; first < points.size(); ++first)
+    {
+        for (size_t second = first + 1; second < points.size(); ++second)
+        {
+            const std::array<double, 3> ab{{
+                points[second][0] - points[first][0],
+                points[second][1] - points[first][1],
+                points[second][2] - points[first][2],
+            }};
+            const double ab_squared = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+            if (ab_squared <= 1.0e-16)
+            {
+                continue;
+            }
+            for (size_t third = second + 1; third < points.size(); ++third)
+            {
+                const std::array<double, 3> ac{{
+                    points[third][0] - points[first][0],
+                    points[third][1] - points[first][1],
+                    points[third][2] - points[first][2],
+                }};
+                const double ac_squared = ac[0] * ac[0] + ac[1] * ac[1] + ac[2] * ac[2];
+                const std::array<double, 3> cross{{
+                    ab[1] * ac[2] - ab[2] * ac[1],
+                    ab[2] * ac[0] - ab[0] * ac[2],
+                    ab[0] * ac[1] - ab[1] * ac[0],
+                }};
+                const double cross_squared =
+                    cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2];
+                if (ac_squared > 1.0e-16 &&
+                    cross_squared > 1.0e-12 * ab_squared * ac_squared)
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
 }
 
 bool hasUsableScaleBar(const std::vector<BATrack> &tracks,
@@ -319,6 +493,23 @@ BundleAdjustValidationResult validateAndNormalizeBundleAdjustOptions(
             BASolveStatus::InvalidInput,
             "BA 输入验证失败: Ceres Dense/Sparse Schur 相机阈值非法");
     }
+    if (!std::isfinite(requestedOptions.maxCeresInitialTrackRms) ||
+        requestedOptions.maxCeresInitialTrackRms < 0.0)
+    {
+        return invalid(
+            BASolveStatus::InvalidInput,
+            "BA 输入验证失败: Ceres 初始 track RMS 粗差阈值必须有限且非负");
+    }
+    if (requestedOptions.enableLaserPlaneConstraints &&
+        (!std::isfinite(requestedOptions.laserPlaneWeight) ||
+         requestedOptions.laserPlaneWeight <= 0.0 ||
+         !std::isfinite(requestedOptions.laserHuberDeltaMeters) ||
+         requestedOptions.laserHuberDeltaMeters < 0.0))
+    {
+        return invalid(
+            BASolveStatus::InvalidInput,
+            "BA 输入验证失败: LiDAR 统计权重必须为正，Huber 阈值必须有限且非负");
+    }
     if (!std::isfinite(requestedOptions.maxCeresCudaMemoryFraction) ||
         requestedOptions.maxCeresCudaMemoryFraction <= 0.0 ||
         requestedOptions.maxCeresCudaMemoryFraction > 1.0)
@@ -398,14 +589,29 @@ BundleAdjustValidationResult validateAndNormalizeBundleAdjustOptions(
         return {};
     }
 
-    // 第二阶段判断调用方已经提供了哪些 gauge 信息。控制点/激光平面/位姿先验
-    // 提供绝对参考；比例尺仅消除尺度自由度，不能单独固定世界坐标原点和朝向。
+    // 第二阶段判断调用方已经提供了哪些 gauge 信息。一个位姿先验只消除刚体
+    // 自由度，至少两处非重合位姿参考才包含尺度；控制点需至少三个不共线物方点
+    // 才能完整约束 Sim(3)。比例尺只消除尺度自由度。LiDAR 点到面约束不能仅凭
+    // “存在”就视为完整 7-DOF gauge：平行或近共面法向仍可能缺少平面内
+    // 平移/旋转自由度。
+    // 因此 AutoAnchor 对 LiDAR BA 保持与纯影像 BA 相同的两相机锚定。
+    const bool completeControlPointGauge =
+        hasCompleteControlPointGauge(tracks, requestedOptions);
     const bool absolutePose =
-        hasEnabledPosePrior(requestedOptions) ||
-        hasControlPointConstraint(tracks, requestedOptions) ||
-        hasLaserConstraint(tracks, requestedOptions);
-    const bool absoluteScale =
-        absolutePose || hasUsableScaleBar(tracks, requestedOptions);
+        hasEnabledPosePrior(requestedOptions) || completeControlPointGauge;
+    bool absoluteScale =
+        hasMetricPosePriorBaseline(requestedOptions) ||
+        completeControlPointGauge ||
+        hasUsableScaleBar(tracks, requestedOptions);
+    auto refreshScaleFromFixedCameras = [&]()
+    {
+        absoluteScale =
+            absoluteScale ||
+            hasPosePriorBaselineToFixedCamera(cameras, requestedOptions, fixedCameras) ||
+            hasControlPointBaselineToFixedCamera(
+                cameras, tracks, requestedOptions, fixedCameras);
+    };
+    refreshScaleFromFixedCameras();
 
     auto hasCompleteGauge = [&]()
     {
@@ -443,6 +649,7 @@ BundleAdjustValidationResult validateAndNormalizeBundleAdjustOptions(
     {
         normalizedOptions->fixedCameraIndices.push_back(0);
         fixedCameras.insert(0);
+        refreshScaleFromFixedCameras();
     }
 
     if (!absoluteScale && fixedCameras.size() < 2)

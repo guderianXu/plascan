@@ -184,7 +184,7 @@ public slots:
     bool initializeCameraPosesWithSFM(const QJsonObject &settings);
     // 批量移除资源引用
     void removeResources(const QStringList &resourcePaths);
-    // 以外部引用方式导入 DEM/LiDAR/点云参考数据，默认用于精度检查。
+    // 以外部引用方式导入 DEM/LiDAR/点云，并选择精度检查或 BA 软约束用途。
     void importReferenceDataset();
     // 打开控制点/检查点/比例尺管理窗口，支持导入 CSV 并写入项目元数据。
     void openSurveyControlDialog();

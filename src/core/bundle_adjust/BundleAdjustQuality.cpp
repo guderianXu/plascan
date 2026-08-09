@@ -29,21 +29,34 @@ std::array<double, 3> pointForConstraintStats(
     const std::vector<BARefinedPoint> *points,
     std::size_t index)
 {
-    if (points && index < points->size() && (*points)[index].valid)
+    if (points && index < points->size())
     {
         return (*points)[index].point;
     }
     return tracks[index].initialPoint;
 }
 
+bool trackIsEligibleForConstraintStats(
+    const std::vector<BARefinedPoint> *eligiblePoints,
+    std::size_t index)
+{
+    return !eligiblePoints ||
+           (index < eligiblePoints->size() && (*eligiblePoints)[index].valid);
+}
+
 ConstraintStats computeLaserStats(
     const std::vector<BATrack> &tracks,
-    const std::vector<BARefinedPoint> *points)
+    const std::vector<BARefinedPoint> *points,
+    const std::vector<BARefinedPoint> *eligiblePoints)
 {
     std::vector<double> distances;
     double sumSquared = 0.0;
     for (std::size_t trackIndex = 0; trackIndex < tracks.size(); ++trackIndex)
     {
+        if (!trackIsEligibleForConstraintStats(eligiblePoints, trackIndex))
+        {
+            continue;
+        }
         const auto point =
             pointForConstraintStats(tracks, points, trackIndex);
         for (const BALaserPlaneConstraint &constraint :
@@ -78,12 +91,17 @@ ConstraintStats computeLaserStats(
 
 ConstraintStats computeControlPointStats(
     const std::vector<BATrack> &tracks,
-    const std::vector<BARefinedPoint> *points)
+    const std::vector<BARefinedPoint> *points,
+    const std::vector<BARefinedPoint> *eligiblePoints)
 {
     double sumSquared = 0.0;
     int count = 0;
     for (std::size_t trackIndex = 0; trackIndex < tracks.size(); ++trackIndex)
     {
+        if (!trackIsEligibleForConstraintStats(eligiblePoints, trackIndex))
+        {
+            continue;
+        }
         const auto point =
             pointForConstraintStats(tracks, points, trackIndex);
         for (const BAControlPointConstraint &constraint :
@@ -125,6 +143,7 @@ bool scaleBarIsUsable(const BAScaleBarConstraint &constraint,
 ConstraintStats computeScaleBarStats(
     const std::vector<BATrack> &tracks,
     const std::vector<BARefinedPoint> *points,
+    const std::vector<BARefinedPoint> *eligiblePoints,
     const std::vector<BAScaleBarConstraint> &constraints)
 {
     double sumSquared = 0.0;
@@ -132,6 +151,15 @@ ConstraintStats computeScaleBarStats(
     for (const BAScaleBarConstraint &constraint : constraints)
     {
         if (!scaleBarIsUsable(constraint, tracks.size()))
+        {
+            continue;
+        }
+        if (!trackIsEligibleForConstraintStats(
+                eligiblePoints,
+                static_cast<std::size_t>(constraint.trackIndexA)) ||
+            !trackIsEligibleForConstraintStats(
+                eligiblePoints,
+                static_cast<std::size_t>(constraint.trackIndexB)))
         {
             continue;
         }
@@ -168,8 +196,10 @@ void updateConstraintStats(const std::vector<BATrack> &tracks,
 {
     if (options.enableLaserPlaneConstraints)
     {
-        const ConstraintStats before = computeLaserStats(tracks, nullptr);
-        const ConstraintStats after = computeLaserStats(tracks, &result->points);
+        const ConstraintStats before =
+            computeLaserStats(tracks, nullptr, &result->points);
+        const ConstraintStats after =
+            computeLaserStats(tracks, &result->points, &result->points);
         result->laserConstraintCount = before.count;
         result->laserRmsBeforeMeters = before.rms;
         result->laserRmsAfterMeters = after.rms;
@@ -179,9 +209,9 @@ void updateConstraintStats(const std::vector<BATrack> &tracks,
     if (options.enableControlPointConstraints)
     {
         const ConstraintStats before =
-            computeControlPointStats(tracks, nullptr);
+            computeControlPointStats(tracks, nullptr, &result->points);
         const ConstraintStats after =
-            computeControlPointStats(tracks, &result->points);
+            computeControlPointStats(tracks, &result->points, &result->points);
         result->controlPointConstraintCount = before.count;
         result->controlPointRmsBeforeMeters = before.rms;
         result->controlPointRmsAfterMeters = after.rms;
@@ -189,9 +219,9 @@ void updateConstraintStats(const std::vector<BATrack> &tracks,
     if (options.enableScaleBarConstraints)
     {
         const ConstraintStats before = computeScaleBarStats(
-            tracks, nullptr, options.scaleBarConstraints);
+            tracks, nullptr, &result->points, options.scaleBarConstraints);
         const ConstraintStats after = computeScaleBarStats(
-            tracks, &result->points, options.scaleBarConstraints);
+            tracks, &result->points, &result->points, options.scaleBarConstraints);
         result->scaleBarConstraintCount = before.count;
         result->scaleBarRmsBeforeMeters = before.rms;
         result->scaleBarRmsAfterMeters = after.rms;
@@ -321,19 +351,11 @@ void finalizeBundleAdjustResult(const std::vector<Camera> &inputCameras,
     // Huber、控制点或位姿先验，因此不能直接拿求解器 cost 作为像素质量指标。
     std::vector<double> candidateRms;
     candidateRms.reserve(tracks.size());
-    double sumBefore = 0.0;
-    int countBefore = 0;
     for (size_t index = 0; index < tracks.size(); ++index)
     {
         BARefinedPoint &point = result->points[index];
         point.rmsBefore = strictTrackRms(
             inputCameras, tracks[index], tracks[index].initialPoint);
-        if (std::isfinite(point.rmsBefore))
-        {
-            sumBefore += point.rmsBefore;
-            ++countBefore;
-        }
-
         if (!point.valid)
         {
             point.rmsAfter = std::numeric_limits<double>::infinity();
@@ -361,6 +383,7 @@ void finalizeBundleAdjustResult(const std::vector<Camera> &inputCameras,
             : std::numeric_limits<double>::infinity();
 
     result->optimizedTracks = 0;
+    double sumBefore = 0.0;
     double sumAfter = 0.0;
     for (BARefinedPoint &point : result->points)
     {
@@ -371,13 +394,14 @@ void finalizeBundleAdjustResult(const std::vector<Camera> &inputCameras,
         if (point.valid)
         {
             ++result->optimizedTracks;
+            sumBefore += point.rmsBefore;
             sumAfter += point.rmsAfter;
         }
     }
 
     result->meanRmsBefore =
-        countBefore > 0
-            ? sumBefore / static_cast<double>(countBefore)
+        result->optimizedTracks > 0
+            ? sumBefore / static_cast<double>(result->optimizedTracks)
             : std::numeric_limits<double>::infinity();
     result->meanRmsAfter =
         result->optimizedTracks > 0

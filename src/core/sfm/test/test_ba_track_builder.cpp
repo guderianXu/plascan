@@ -49,3 +49,31 @@ TEST(BaTrackBuilderTest, IndexedTrackTriesLaterObservationPairWhenFirstPairIsDeg
     EXPECT_NEAR(result.tracks.front().initialPoint[1], 0.0, 1e-9);
     EXPECT_NEAR(result.tracks.front().initialPoint[2], 10.0, 1e-9);
 }
+
+TEST(ProjectMatchInputReaderTest, ResolvesRelocatedImageByUniqueFileName)
+{
+    const QMap<QString, int> cameras{
+        {QStringLiteral("E:/project/demo.files/shared/images/abc/000001.jpg"), 0},
+        {QStringLiteral("E:/project/demo.files/shared/images/def/000002.jpg"), 1}};
+    const QStringList allImages = cameras.keys();
+
+    EXPECT_EQ(xjw::core::project::cameraIndexForRelocatedMatchToken(
+                  QStringLiteral("D:/download/Ignatius/000001.jpg"), cameras, allImages),
+              0);
+    EXPECT_EQ(xjw::core::project::cameraIndexForImageToken(
+                  QStringLiteral("D:/download/Ignatius/000001.jpg"), cameras),
+              -1);
+}
+
+TEST(ProjectMatchInputReaderTest, RejectsFileNameAmbiguousInFullChunk)
+{
+    const QMap<QString, int> cameras{
+        {QStringLiteral("E:/project/demo.files/shared/images/abc/frame.jpg"), 0}};
+    const QStringList allImages{
+        QStringLiteral("E:/project/demo.files/shared/images/abc/frame.jpg"),
+        QStringLiteral("E:/project/demo.files/shared/images/def/frame.jpg")};
+
+    EXPECT_EQ(xjw::core::project::cameraIndexForRelocatedMatchToken(
+                  QStringLiteral("D:/download/scene/frame.jpg"), cameras, allImages),
+              -1);
+}

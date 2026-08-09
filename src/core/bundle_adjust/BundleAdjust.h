@@ -284,7 +284,7 @@ struct BAOptions
 
     // ── LiDAR 点到面软约束 ────────────────────────────────────────────────
     bool enableLaserPlaneConstraints = false; ///< 是否启用 BATrack 上挂载的 LiDAR 点到面约束
-    double laserPlaneWeight = 1.0;            ///< LiDAR 残差全局权重，单位相当于 1/m
+    double laserPlaneWeight = 1.0;            ///< LiDAR 统计权重，通常取 1/sigma^2，单位 1/m^2
     double laserHuberDeltaMeters = 0.2;       ///< LiDAR 点到面 Huber 阈值（米）
 
     // ── 测绘控制点软约束 ────────────────────────────────────────────────
@@ -344,6 +344,9 @@ struct BAOptions
     int minCeresCpuObservations = 50000;
     /// point-only Ceres 使用 dense QR；超出该观测规模时默认回退 legacy，避免大矩阵内存/稳定性问题。
     int maxCeresPointOnlyObservations = 100000;
+    /// Ceres 问题装配前允许的初始 track 重投影 RMS 上限（像素）；<=0 表示关闭。
+    /// 该门控仅剔除会让联合试探步进入硬正深度惩罚的 gross outlier。
+    double maxCeresInitialTrackRms = 100.0;
     /// Ceres 线性求解策略。Auto 在 CPU 上按问题规模选择 Dense/Sparse/Iterative
     /// Schur；CUDA 当前使用 Dense Schur/Dense QR，并受显存预算门禁保护。
     BACeresLinearSolver ceresLinearSolver = BACeresLinearSolver::Auto;
@@ -410,6 +413,11 @@ struct BAResult
     std::string ceresLinearSolverName = "none";        ///< Ceres 实际线性求解器名称，legacy 为 none
     std::uint64_t ceresEstimatedCudaBytes = 0;         ///< Ceres dense CUDA 工作集保守估算字节数
     std::uint64_t ceresCudaFreeBytes = 0;              ///< 求解前查询到的 CUDA 空闲显存
+    double ceresInitialCost = 0.0;                      ///< Ceres 初始鲁棒目标函数值
+    double ceresFinalCost = 0.0;                        ///< Ceres 最终鲁棒目标函数值
+    int ceresSuccessfulSteps = 0;                       ///< Ceres 接受的 trial step 数
+    int ceresUnsuccessfulSteps = 0;                     ///< Ceres 拒绝的 trial step 数
+    int ceresRejectedInitialTracks = 0;                 ///< 因初始 RMS gross gate 未进入问题的 track 数
     double setupSeconds = 0.0;                         ///< Ceres 问题构建耗时或 legacy 前处理耗时
     double solveSeconds = 0.0;                         ///< 非线性求解主体耗时
     double totalSeconds = 0.0;                         ///< BA 后端总耗时

@@ -41,6 +41,20 @@ struct ProjectMatchPair
     std::vector<ProjectMatchObservationPair> observations; ///< 通过最小匹配数门控的观测。
 };
 
+/// `.pimatch` 工程输入读取诊断，用于区分路径、格式、相机别名和匹配门控失败。
+struct ProjectMatchInputDiagnostics
+{
+    int matchResultRecordCount = 0;
+    int existingShardCount = 0;
+    int readableShardCount = 0;
+    int resolvedOwnerShardCount = 0;
+    int geometryPassedBlockCount = 0;
+    int resolvedPeerBlockCount = 0;
+    int acceptedPairCount = 0;
+    int rejectedByMinMatchesCount = 0;
+    QString firstShardReadError;
+};
+
 /// 工程读取阶段的完整输出；成员数组共享同一相机索引空间。
 struct ProjectMatchInput
 {
@@ -50,6 +64,7 @@ struct ProjectMatchInput
     QMap<QString, int> cameraIndexByPath; ///< 规范路径/受支持别名到相机下标。
     std::vector<ProjectMatchPair> pairs; ///< 当前影像集合内可用匹配。
     int indexedObservationCount = 0; ///< 成功读取的带稳定特征索引观测数。
+    ProjectMatchInputDiagnostics diagnostics; ///< 匹配分片读取与筛选计数。
 };
 
 /**
@@ -65,5 +80,16 @@ bool readProjectMatchInput(const QJsonObject &meta,
 /// 将绝对路径、规范路径或受支持的工程影像 token 解析为当前相机下标。
 int cameraIndexForImageToken(const QString &imageToken,
                              const QMap<QString, int> &cameraIndexByPath);
+
+/**
+ * @brief 解析 `.pimatch` 中可能仍指向导入前位置的影像路径。
+ *
+ * 仅在严格路径解析失败、且文件名在完整 Chunk 中唯一时允许回退。控制点、标记
+ * 等外部输入不得使用此宽松入口，避免选择子集时把同名影像静默挂错相机。
+ */
+int cameraIndexForRelocatedMatchToken(
+    const QString &imageToken,
+    const QMap<QString, int> &cameraIndexByPath,
+    const QStringList &allChunkImagePaths);
 
 } // namespace xjw::core::project

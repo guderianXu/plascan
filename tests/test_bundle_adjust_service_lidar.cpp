@@ -4,6 +4,7 @@
 #include "Camera.h"
 
 #include <QDir>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QTemporaryDir>
 
@@ -137,6 +138,77 @@ TEST(BundleAdjustServiceLidarTest, RunAppliesQualityWeightWithoutMultiplyingUser
 
     const QJsonObject optionsJson = result.resultJson.value(QStringLiteral("options")).toObject();
     EXPECT_DOUBLE_EQ(optionsJson.value(QStringLiteral("laser_weight")).toDouble(), 7.0);
+}
+
+TEST(BundleAdjustServiceLidarTest, RunDerivesStatisticalWeightFromSigma)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    std::vector<xjw::Camera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::BATrack> tracks{makeTrack()};
+    xjw::gui::BaServiceOptions options;
+    options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("ba"));
+    options.imagePathByIndex = {QStringLiteral("img0.jpg"), QStringLiteral("img1.jpg")};
+    options.exportTsai = false;
+    options.exportEvalPlot = false;
+    options.exportObservationDetails = false;
+    options.enableLaserConstraints = true;
+    options.laserConstraintCloudPath = writeLaserPlanePly(tempDir.path());
+    options.laserAssociationMaxDistanceMeters = 3.0;
+    options.laserWeight = 0.0;
+    options.laserSigmaMeters = 0.1;
+    options.laserHuberDeltaMeters = 10.0;
+    options.baOpt.refineCameraPose = false;
+    options.baOpt.enablePointFilter = false;
+
+    const auto result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
+
+    ASSERT_TRUE(result.success) << qPrintable(result.errorMessage);
+    const QJsonObject resultOptions =
+        result.resultJson.value(QStringLiteral("options")).toObject();
+    EXPECT_NEAR(resultOptions.value(QStringLiteral("laser_effective_weight")).toDouble(),
+                100.0,
+                1.0e-9);
+    EXPECT_FALSE(resultOptions.value(QStringLiteral("export_observation_details")).toBool());
+    const QJsonArray points = result.resultJson.value(QStringLiteral("points")).toArray();
+    ASSERT_EQ(points.size(), 1);
+    EXPECT_TRUE(points.at(0).toObject().value(QStringLiteral("observations")).toArray().isEmpty());
+}
+
+TEST(BundleAdjustServiceLidarTest, RunRejectsWritebackWhenAllLaserConstraintsAreFiltered)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    std::vector<xjw::Camera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::BATrack> tracks{makeTrack()};
+    tracks.front().observations[0].u += 1000.0;
+    tracks.front().observations[1].u -= 1000.0;
+
+    xjw::gui::BaServiceOptions options;
+    options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("ba"));
+    options.imagePathByIndex = {QStringLiteral("img0.jpg"), QStringLiteral("img1.jpg")};
+    options.exportTsai = false;
+    options.exportEvalPlot = false;
+    options.enableLaserConstraints = true;
+    options.laserConstraintCloudPath = writeLaserPlanePly(tempDir.path());
+    options.laserAssociationMaxDistanceMeters = 3.0;
+    options.baOpt.backend = xjw::BABackend::CeresCpu;
+    options.baOpt.refineCameraPose = false;
+    options.baOpt.maxCeresInitialTrackRms = 0.0;
+    options.baOpt.filterMaxReprojError = 2.5;
+    options.baOpt.filterSigmaFactor = 0.0;
+
+    const auto result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
+
+    EXPECT_FALSE(result.success);
+    EXPECT_TRUE(result.pendingCamUpdates.isEmpty());
+    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("LiDAR 约束在求解或质量过滤后全部失效")));
+    const QJsonObject summary =
+        result.resultJson.value(QStringLiteral("laser_constraints_summary")).toObject();
+    EXPECT_EQ(summary.value(QStringLiteral("associated_tracks")).toInt(), 1);
+    EXPECT_EQ(summary.value(QStringLiteral("laser_constraint_count")).toInt(), 0);
 }
 
 TEST(BundleAdjustServiceLidarTest, RunUsesXyzLaserCloudAsHeightPlanesWhenExplicitlyEnabled)
@@ -331,4 +403,25 @@ TEST(BundleAdjustServiceLidarTest, RunFailsClearlyWhenLaserCloudPathIsMissing)
     EXPECT_FALSE(result.success);
     EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("LiDAR"))
                 || result.errorMessage.contains(QStringLiteral("激光")));
+}
+
+
+TEST(BundleAdjustServiceLidarTest, RunFailsWhenNoTrackCanAssociateWithLaserCloud)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    std::vector<xjw::Camera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::BATrack> tracks{makeTrack()};
+    xjw::gui::BaServiceOptions options;
+    options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("ba"));
+    options.imagePathByIndex = {QStringLiteral("img0.jpg"), QStringLiteral("img1.jpg")};
+    options.enableLaserConstraints = true;
+    options.laserConstraintCloudPath = writeLaserPlanePly(tempDir.path());
+    options.laserAssociationMaxDistanceMeters = 0.01;
+
+    const auto result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
+
+    EXPECT_FALSE(result.success);
+    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("未关联")));
 }

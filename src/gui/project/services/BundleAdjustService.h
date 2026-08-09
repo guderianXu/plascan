@@ -67,13 +67,14 @@ struct BaServiceOptions
     // ── LiDAR 点到面软约束 ────────────────────────────────────────────────
     bool                enableLaserConstraints = false; ///< 是否从 LiDAR 点云生成 BA 点到面约束
     QString             laserConstraintCloudPath;       ///< 带法向/曲率字段的 LiDAR PLY
-    double              laserAssociationMaxDistanceMeters = 1.0; ///< track 到 LiDAR 平面最大关联距离
+    double              laserAssociationMaxDistanceMeters = 0.05; ///< track 到 LiDAR 平面最大关联距离
     double              laserVoxelSizeMeters = 0.0;     ///< LiDAR 约束点云体素降采样尺寸；0 表示关闭
     double              laserMaxCurvature = 0.2;        ///< 允许参与约束的最大曲率
     int                 laserMaxSamples = 500000;       ///< LiDAR map 最大采样数，防止 BA 前处理过慢
     bool                laserUseMissingNormalsAsHeightPlanes = false; ///< 将无 normal 的 XYZ 点按水平高度面解释
-    double              laserWeight = 1.0;              ///< LiDAR 残差权重
-    double              laserHuberDeltaMeters = 0.2;    ///< LiDAR 残差 Huber 阈值（米）
+    double              laserWeight = 0.0;              ///< 显式 LiDAR 统计权重；0 表示按 sigma 自动计算
+    double              laserSigmaMeters = 0.0025;      ///< 自动权重使用的 LiDAR 点到面标准差（米）
+    double              laserHuberDeltaMeters = 0.05;   ///< LiDAR 残差 Huber 阈值（米）
 
     // ── 参考 DEM/LiDAR 高程面软约束 ──────────────────────────────────────
     bool                enableReferenceTerrainPrior = false; ///< 是否将参考 DEM 作为 BA 高程软约束
@@ -97,6 +98,7 @@ struct BaServiceOptions
     bool    exportCameraCsv  = true;        ///< 是否导出相机位移 CSV
     bool    exportRunJson    = true;        ///< 是否将完整结果写入 JSON
     bool    exportEvalPlot   = true;        ///< 是否生成评估对比图（PNG）
+    bool    exportObservationDetails = true; ///< 是否在 JSON 中展开每个 track 的逐观测残差
 };
 
 // ──────────────────────────────────────────────────────────────────────────────

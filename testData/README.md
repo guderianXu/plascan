@@ -78,6 +78,61 @@ Use tags in the `--list` output as quick guidance:
 
 ## Validate LiDAR inputs for laser-constrained BA
 
+### Prepare the Tanks and Temples Ignatius object-ring benchmark
+
+`prepare_tanks_ignatius_lidar_ba.py` converts the official COLMAP camera-to-world poses into the laser ground-truth
+frame with `Ignatius_trans.txt`. It also downsamples the eight registered laser stations independently, estimates
+local PCA normals with a KD-tree, orients each station's normals toward its scanner position, and writes one bounded
+binary PLY for PlaScan's point-to-plane BA constraints.
+
+```powershell
+.\.venv\Scripts\python.exe testData\prepare_tanks_ignatius_lidar_ba.py `
+  --dataset-root testData\photogrammetry_benchmarks\tanks_ignatius_quickstart `
+  --voxel-size 0.005 `
+  --k-neighbors 24 `
+  --max-points-per-scan 100000 `
+  --max-output-points 500000 `
+  --workers -1 `
+  --overwrite
+```
+
+The generated `prepared/plascan_lidar_ba/` directory contains:
+
+- `cameras/000001.tsai` through `000263.tsai`, all expressed in the Ignatius laser frame;
+- `image_camera.lis` and `images.lis` for headless matching/reconstruction workflows;
+- `lidar/Ignatius_lidar_planes.ply` with `x/y/z`, `normal_x/normal_y/normal_z`, and `curvature` fields;
+- `summary.json` with the applied similarity scale, point counts, normal statistics, and conservative BA defaults.
+
+The official Tanks and Temples release does not include exact intrinsics. The adapter uses the benchmark's standard
+initial pinhole estimate `fx=fy=0.7*image_width` (`1344 px` for Ignatius), centered principal point, and zero
+distortion. Refine the camera model in a normal photogrammetry workflow when evaluating final accuracy.
+
+In the GUI, use **Tools -> Import reference DEM/LiDAR**, choose **BA soft constraint (`ba_prior`)**, then run
+**Reference terrain constraint re-adjustment** after a formal aerial triangulation. Point-cloud BA imports accept only
+PLY files with real surface normals; LAS/LAZ/COPC/XYZ/CSV must first be converted. Do not enable the
+"missing normals as height planes" option for an object-ring dataset.
+
+For a headless smoke test, create a 60-frame list from the start of `image_camera.lis` (the segment completes an
+approximately full orbit), run `match_photos_cli --reference-preselection`, then run `bundle_adjust_cli --ab-compare`
+on a copy of the generated project. Start with:
+
+```text
+--laser-max-distance 0.05 --laser-max-curvature 0.2 --laser-max-samples 500000
+--laser-sigma 0.0025 --laser-huber-delta 0.05 --refine-pose
+```
+
+`--laser-sigma` is converted to the statistical point-to-plane weight `1/sigma^2` (for 2.5 mm, `160000`).
+Use `--laser-weight` only when an explicit weight is required; its default `0` selects sigma-based weighting.
+The CLI writes compact per-track JSON by default, while the GUI keeps detailed per-observation residuals for its
+feature-residual viewer.
+
+Always keep a pure-image baseline, require a non-zero associated-track count, and compare both reprojection and
+LiDAR RMS. A 60-frame Ignatius smoke run with the settings above retained 4,561 laser constraints: reprojection RMS
+changed from `5.072 px` to `2.301 px`, point-to-plane RMS from `26.515 mm` to `18.405 mm`, and the absolute-distance
+median from `21.160 mm` to `6.211 mm`. These numbers validate that the constraint is active; the benchmark intrinsics
+are approximate, so they are not a final survey-accuracy claim. The A/B CLI writes the LiDAR result back into its
+input project, so always use a disposable project copy.
+
 After extracting the MUN-FRL lighthouse sample, use `validate_lidar_ba_inputs.py` to check whether the generated
 PLY streams can be used directly by the current LiDAR point-to-plane BA prototype:
 
