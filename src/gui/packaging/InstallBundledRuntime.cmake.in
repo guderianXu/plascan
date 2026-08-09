@@ -80,7 +80,8 @@ function(_plascan_install_runtime_dependency _dependency)
     endif()
 
     file(INSTALL
-        DESTINATION "${_physical_lib_dir}"
+        # file(INSTALL) applies DESTDIR itself while an install script runs.
+        DESTINATION "${_prefix}/lib"
         TYPE SHARED_LIBRARY
         FOLLOW_SYMLINK_CHAIN
         FILES "${_dependency}")

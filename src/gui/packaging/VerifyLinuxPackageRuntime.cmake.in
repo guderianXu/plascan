@@ -1,5 +1,8 @@
 # Auto-generated at configure time. Validates the staged Linux runtime.
 
+cmake_policy(PUSH)
+cmake_policy(SET CMP0012 NEW)
+
 set(_prefix "${CMAKE_INSTALL_PREFIX}")
 string(REGEX REPLACE "/$" "" _prefix "${_prefix}")
 set(_root "")
@@ -140,3 +143,5 @@ endif()
 
 message(STATUS
     "[verify-linux-runtime] staged runtime is complete and relocatable: ${_physical_prefix}")
+
+cmake_policy(POP)
