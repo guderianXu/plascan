@@ -197,12 +197,18 @@ TEST(PlanetaryLineScanCameraProjection, IterativeGroundToImageFindsPushbroomLine
 
     Camera::ImageCoordinate csm_image;
     Camera::ImageCoordinate opencv_image;
+    Camera::ImageCoordinate configured_image;
+    Camera::GroundToImageOptions options;
     ASSERT_TRUE(camera.groundToImage(
         ground, Camera::PixelConvention::CsmPixelCenter, &csm_image));
     ASSERT_TRUE(camera.groundToImage(
         ground, Camera::PixelConvention::OpenCvZeroBased, &opencv_image));
+    ASSERT_TRUE(camera.groundToImage(
+        ground, Camera::PixelConvention::CsmPixelCenter, &configured_image, options));
     EXPECT_NEAR(csm_image.line, 50.5, 1.0e-8);
     EXPECT_NEAR(csm_image.sample, 100.0, 1.0e-8);
+    EXPECT_NEAR(configured_image.line, csm_image.line, 1.0e-12);
+    EXPECT_NEAR(configured_image.sample, csm_image.sample, 1.0e-12);
     EXPECT_NEAR(opencv_image.line, csm_image.line - 0.5, 1.0e-8);
     EXPECT_NEAR(opencv_image.sample, csm_image.sample - 0.5, 1.0e-8);
 }

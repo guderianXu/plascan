@@ -167,6 +167,14 @@ bool PlanetaryLineScanCamera::applyOpticalDistortion(
 bool PlanetaryLineScanCamera::pixelRayBodyFixed(double sample,
                                                 double line,
                                                 PixelConvention convention,
+                                                ImagingRay *ray) const
+{
+    return pixelRayBodyFixed(sample, line, convention, ray, PoseBias{});
+}
+
+bool PlanetaryLineScanCamera::pixelRayBodyFixed(double sample,
+                                                double line,
+                                                PixelConvention convention,
                                                 ImagingRay *ray,
                                                 const PoseBias &bias) const
 {
@@ -193,6 +201,16 @@ bool PlanetaryLineScanCamera::pixelRayBodyFixed(double sample,
     ray->directionBodyFixed = multiply(sensor_to_body, sensor_direction);
     ray->ephemerisTimeSeconds = ephemeris_time;
     return normalize(&ray->directionBodyFixed);
+}
+
+bool PlanetaryLineScanCamera::projectAtObservedLine(
+    const Vector3 &groundBodyFixedMeters,
+    double observedLine,
+    PixelConvention convention,
+    FixedLineProjection *projection) const
+{
+    return projectAtObservedLine(
+        groundBodyFixedMeters, observedLine, convention, projection, PoseBias{});
 }
 
 bool PlanetaryLineScanCamera::projectAtObservedLine(
@@ -245,11 +263,30 @@ bool PlanetaryLineScanCamera::projectAtObservedLine(
     return true;
 }
 
-bool PlanetaryLineScanCamera::groundToImage(const Vector3 &groundBodyFixedMeters,
-                                            PixelConvention convention,
-                                            ImageCoordinate *image,
-                                            const GroundToImageOptions &options,
-                                            const PoseBias &bias) const
+bool PlanetaryLineScanCamera::groundToImage(
+    const Vector3 &groundBodyFixedMeters,
+    PixelConvention convention,
+    ImageCoordinate *image) const
+{
+    return groundToImage(
+        groundBodyFixedMeters, convention, image, GroundToImageOptions{}, PoseBias{});
+}
+
+bool PlanetaryLineScanCamera::groundToImage(
+    const Vector3 &groundBodyFixedMeters,
+    PixelConvention convention,
+    ImageCoordinate *image,
+    const GroundToImageOptions &options) const
+{
+    return groundToImage(groundBodyFixedMeters, convention, image, options, PoseBias{});
+}
+
+bool PlanetaryLineScanCamera::groundToImage(
+    const Vector3 &groundBodyFixedMeters,
+    PixelConvention convention,
+    ImageCoordinate *image,
+    const GroundToImageOptions &options,
+    const PoseBias &bias) const
 {
     if (!_isLoaded || image == nullptr || options.maximumIterations < 1
         || !(options.desiredLinePrecisionPixels > 0.0)

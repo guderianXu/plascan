@@ -124,8 +124,12 @@ public:
     bool pixelRayBodyFixed(double sample,
                            double line,
                            PixelConvention convention,
+                           ImagingRay *ray) const;
+    bool pixelRayBodyFixed(double sample,
+                           double line,
+                           PixelConvention convention,
                            ImagingRay *ray,
-                           const PoseBias &bias = PoseBias{}) const;
+                           const PoseBias &bias) const;
 
     /**
      * @brief Project a body-fixed point at an already observed pushbroom line.
@@ -137,14 +141,25 @@ public:
     bool projectAtObservedLine(const Vector3 &groundBodyFixedMeters,
                                double observedLine,
                                PixelConvention convention,
+                               FixedLineProjection *projection) const;
+    bool projectAtObservedLine(const Vector3 &groundBodyFixedMeters,
+                               double observedLine,
+                               PixelConvention convention,
                                FixedLineProjection *projection,
-                               const PoseBias &bias = PoseBias{}) const;
+                               const PoseBias &bias) const;
 
     bool groundToImage(const Vector3 &groundBodyFixedMeters,
                        PixelConvention convention,
+                       ImageCoordinate *image) const;
+    bool groundToImage(const Vector3 &groundBodyFixedMeters,
+                       PixelConvention convention,
                        ImageCoordinate *image,
-                       const GroundToImageOptions &options = GroundToImageOptions{},
-                       const PoseBias &bias = PoseBias{}) const;
+                       const GroundToImageOptions &options) const;
+    bool groundToImage(const Vector3 &groundBodyFixedMeters,
+                       PixelConvention convention,
+                       ImageCoordinate *image,
+                       const GroundToImageOptions &options,
+                       const PoseBias &bias) const;
 
 private:
     struct LineRateRecord
