@@ -62,6 +62,7 @@
       "inherits": "linux-vcpkg-release",
       "binaryDir": "${sourceDir}/build/linux-vcpkg-package-release",
       "cacheVariables": {
+        "CMAKE_INSTALL_PREFIX": "/opt/plascan",
         "CPACK_GENERATOR": "DEB",
         "PLASCAN_BUNDLE_ONNX_MODELS": "ON",
         "PLASCAN_BUNDLE_RUNTIME": "ON",

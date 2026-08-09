@@ -28,6 +28,11 @@ if(PLASCAN_VERIFY_LINUX_PACKAGE_RUNTIME)
       "Verified Linux packages require PLASCAN_BUNDLE_RUNTIME=ON and "
       "PLASCAN_BUNDLE_ONNX_MODELS=ON")
   endif()
+  if(NOT CMAKE_INSTALL_PREFIX STREQUAL "/opt/plascan")
+    message(FATAL_ERROR
+      "Verified Linux DEB builds require CMAKE_INSTALL_PREFIX=/opt/plascan: "
+      "${CMAKE_INSTALL_PREFIX}")
+  endif()
   if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     message(FATAL_ERROR
       "The verified Linux DEB presets currently support x86_64 only: "
