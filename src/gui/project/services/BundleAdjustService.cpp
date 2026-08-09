@@ -66,12 +66,23 @@ bool mergePlanetaryLaserProjectImageAliases(
         aliasesByCameraIndex->resize(imagePathByIndex.size());
     }
 
+    const auto normalize_alias_path = [](const QString &path)
+    {
+        QString normalized = path.trimmed();
+        if (normalized.isEmpty())
+        {
+            return QString();
+        }
+        normalized.replace(QLatin1Char('\\'), QLatin1Char('/'));
+        return xjw::common::project::normalizePath(normalized);
+    };
+
     QMap<QString, QString> uuidByPath;
     QMap<QString, QString> pathByUuid;
     for (const QJsonValue &value : meta.value(QStringLiteral("images")).toArray())
     {
         const QJsonObject image = value.toObject();
-        const QString path = xjw::common::project::normalizePath(
+        const QString path = normalize_alias_path(
             image.value(QStringLiteral("path")).toString());
         const QString uuid = image.value(QStringLiteral("image_uuid")).toString().trimmed();
         if (path.isEmpty() || uuid.isEmpty())
@@ -94,8 +105,7 @@ bool mergePlanetaryLaserProjectImageAliases(
 
     for (int cameraIndex = 0; cameraIndex < imagePathByIndex.size(); ++cameraIndex)
     {
-        const QString path = xjw::common::project::normalizePath(
-            imagePathByIndex.at(cameraIndex));
+        const QString path = normalize_alias_path(imagePathByIndex.at(cameraIndex));
         const QString uuid = uuidByPath.value(path);
         if (!uuid.isEmpty() && !aliasesByCameraIndex->at(cameraIndex).contains(uuid))
         {

@@ -9000,11 +9000,24 @@ TEST(DenseWorkflowConfigTest, ExplicitThreadBudgetIsNotCappedAtSeven)
 
     const auto settings = xjw::gui::project::denseGenerationSettingsFromJson(json);
     const auto config = xjw::gui::project::buildDepthGenConfig(settings, 16);
+    const int hardware_threads = static_cast<int>(
+        std::max(1u, std::thread::hardware_concurrency()));
+    const int expected_threads = std::min(8, hardware_threads);
+    const int expected_gpu_frame_workers = expected_threads >= 4 ? 2 : 1;
+    const int expected_cpu_frame_workers = std::clamp(
+        std::max(1, expected_threads / 4), 1, 4);
+    const int expected_active_frame_workers = std::max(
+        expected_gpu_frame_workers, expected_cpu_frame_workers);
 
-    EXPECT_EQ(config.gpuFrameWorkerCount, 2);
-    EXPECT_EQ(config.cpuFrameWorkerCount, 2);
-    EXPECT_EQ(config.totalCpuThreadBudget, 8);
-    EXPECT_EQ(config.cpuWorkerCount, 4);
+    EXPECT_EQ(config.gpuFrameWorkerCount, expected_gpu_frame_workers);
+    EXPECT_EQ(config.cpuFrameWorkerCount, expected_cpu_frame_workers);
+    EXPECT_EQ(config.totalCpuThreadBudget, expected_threads);
+    EXPECT_EQ(config.cpuWorkerCount,
+              std::max(1, expected_threads / expected_active_frame_workers));
+    if (hardware_threads >= 8)
+    {
+        EXPECT_EQ(config.totalCpuThreadBudget, 8);
+    }
 }
 
 TEST(DenseWorkflowConfigTest, CpuThreadBudgetIsSharedWithinSelectedBackendFamily)
@@ -9017,11 +9030,14 @@ TEST(DenseWorkflowConfigTest, CpuThreadBudgetIsSharedWithinSelectedBackendFamily
 
     const auto settings = xjw::gui::project::denseGenerationSettingsFromJson(json);
     const auto config = xjw::gui::project::buildDepthGenConfig(settings, 16);
+    const int hardware_threads = static_cast<int>(
+        std::max(1u, std::thread::hardware_concurrency()));
+    const int expected_threads = std::min(8, hardware_threads);
 
     EXPECT_EQ(config.gpuFrameWorkerCount, 2);
     EXPECT_EQ(config.cpuFrameWorkerCount, 2);
-    EXPECT_EQ(config.totalCpuThreadBudget, 8);
-    EXPECT_EQ(config.cpuWorkerCount, 4);
+    EXPECT_EQ(config.totalCpuThreadBudget, expected_threads);
+    EXPECT_EQ(config.cpuWorkerCount, std::max(1, expected_threads / 2));
 }
 
 TEST(DenseWorkflowConfigTest, MissingThreadSettingReservesTwoLogicalProcessors)
