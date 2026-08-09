@@ -11,6 +11,8 @@
 #include "BundleAdjust.h"
 #include "LaserConstraintAssociation.h"
 #include "LaserConstraintMap.h"
+#include "PlanetaryLaserBaAdapter.h"
+#include "PlanetaryLaserJson.h"
 #include "Logger.h"
 #include "ProjectCameraIO.h"
 #include "project/ProjectMatchCatalog.h"
@@ -29,11 +31,79 @@
 #include <QTextStream>
 
 #include <cmath>
+#include <utility>
 
 namespace xjw
 {
 namespace gui
 {
+
+bool mergePlanetaryLaserProjectImageAliases(
+    const QJsonObject &meta,
+    const QStringList &imagePathByIndex,
+    QVector<QStringList> *aliasesByCameraIndex,
+    QString *errorMessage)
+{
+    if (!aliasesByCameraIndex)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("行星激光影像别名输出为空");
+        }
+        return false;
+    }
+    if (!aliasesByCameraIndex->isEmpty() &&
+        aliasesByCameraIndex->size() != imagePathByIndex.size())
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("行星激光影像别名数量与 BA 相机数量不一致");
+        }
+        return false;
+    }
+    if (aliasesByCameraIndex->isEmpty())
+    {
+        aliasesByCameraIndex->resize(imagePathByIndex.size());
+    }
+
+    QMap<QString, QString> uuidByPath;
+    QMap<QString, QString> pathByUuid;
+    for (const QJsonValue &value : meta.value(QStringLiteral("images")).toArray())
+    {
+        const QJsonObject image = value.toObject();
+        const QString path = xjw::common::project::normalizePath(
+            image.value(QStringLiteral("path")).toString());
+        const QString uuid = image.value(QStringLiteral("image_uuid")).toString().trimmed();
+        if (path.isEmpty() || uuid.isEmpty())
+        {
+            continue;
+        }
+        if ((uuidByPath.contains(path) && uuidByPath.value(path) != uuid) ||
+            (pathByUuid.contains(uuid) && pathByUuid.value(uuid) != path))
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral(
+                    "工程影像 path 与 image_uuid 不是一一对应，不能安全建立行星激光别名");
+            }
+            return false;
+        }
+        uuidByPath.insert(path, uuid);
+        pathByUuid.insert(uuid, path);
+    }
+
+    for (int cameraIndex = 0; cameraIndex < imagePathByIndex.size(); ++cameraIndex)
+    {
+        const QString path = xjw::common::project::normalizePath(
+            imagePathByIndex.at(cameraIndex));
+        const QString uuid = uuidByPath.value(path);
+        if (!uuid.isEmpty() && !aliasesByCameraIndex->at(cameraIndex).contains(uuid))
+        {
+            (*aliasesByCameraIndex)[cameraIndex].append(uuid);
+        }
+    }
+    return true;
+}
 
 // ──────────────────────────────────────────────────────────────────────────────
 // 匿名命名空间：本文件内部使用的辅助工具
@@ -161,9 +231,9 @@ BaServiceResult BundleAdjustService::run(
     const QString outDir = QDir::cleanPath(opts.outputDir);
     QDir().mkpath(outDir);
 
-    // ── [DryRun] 仅统计，不执行实际计算 ──────────────────────────────────
-    if (opts.dryRun)
+    const auto makeDryRunResult = [&tracks]()
     {
+        BaServiceResult dryResult;
         QJsonObject dryObj;
         dryObj[QStringLiteral("track_count")]     = static_cast<int>(tracks.size());
         dryObj[QStringLiteral("optimized_count")] = 0;
@@ -174,9 +244,15 @@ BaServiceResult BundleAdjustService::run(
         files[QStringLiteral("points_csv")]  = QStringLiteral("[DryRun] 未生成文件");
         files[QStringLiteral("camera_csv")]  = QStringLiteral("[DryRun] 未生成文件");
         dryObj[QStringLiteral("files")]      = files;
-        result.success    = true;
-        result.resultJson = dryObj;
-        return result;
+        dryResult.success = true;
+        dryResult.resultJson = dryObj;
+        return dryResult;
+    };
+
+    // 行星测距 dry-run 仍需解析格式、检查传感器模型和完成严格影像关联。
+    if (opts.dryRun && !opts.enablePlanetaryLaserRangeConstraints)
+    {
+        return makeDryRunResult();
     }
 
     // ── LiDAR 点到面约束预处理 ────────────────────────────────────────────
@@ -184,6 +260,16 @@ BaServiceResult BundleAdjustService::run(
     xjw::lidar::LaserAssociationSummary laserAssociationSummary;
     int laserMapSampleCount = 0;
     double effectiveLaserWeight = 0.0;
+    xjw::lidar::PlanetaryLaserDataset planetaryLaserDataset;
+    xjw::lidar::PlanetaryLaserBaAdapterSummary planetaryLaserSummary;
+    QStringList planetaryLaserCameraPaths;
+    if (opts.enableLaserConstraints && opts.enablePlanetaryLaserRangeConstraints)
+    {
+        result.errorMessage = QStringLiteral(
+            "扫描点云点到面约束与行星稀疏激光测距是两种独立观测模型；"
+            "当前一次运行只能选择其中一种");
+        return result;
+    }
     if (opts.enableLaserConstraints)
     {
         if (opts.laserConstraintCloudPath.trimmed().isEmpty())
@@ -235,6 +321,119 @@ BaServiceResult BundleAdjustService::run(
             : 1.0 / (sigmaMeters * sigmaMeters);
         baOptions.laserPlaneWeight = effectiveLaserWeight;
         baOptions.laserHuberDeltaMeters = opts.laserHuberDeltaMeters;
+    }
+
+    // ── 行星稀疏激光测距 shot 预处理 ────────────────────────────────────
+    if (opts.enablePlanetaryLaserRangeConstraints)
+    {
+        if (opts.planetaryLaserDataPath.trimmed().isEmpty())
+        {
+            result.errorMessage = QStringLiteral("行星激光测距 JSON 路径未指定");
+            return result;
+        }
+        if (!QFileInfo::exists(opts.planetaryLaserDataPath))
+        {
+            result.errorMessage = QStringLiteral("行星激光测距 JSON 不存在: %1")
+                                      .arg(opts.planetaryLaserDataPath);
+            return result;
+        }
+        if (!std::isfinite(opts.planetaryLaserRangeWeight) ||
+            opts.planetaryLaserRangeWeight <= 0.0 ||
+            !std::isfinite(opts.planetaryLaserRangeHuberDeltaSigma) ||
+            opts.planetaryLaserRangeHuberDeltaSigma < 0.0)
+        {
+            result.errorMessage = QStringLiteral(
+                "行星激光测距全局权重必须为正，Huber 阈值必须有限且非负");
+            return result;
+        }
+
+        std::string laserError;
+        if (!xjw::lidar::loadPlanetaryLaserJsonFile(
+                xjw::common::io::toUtf8Path(opts.planetaryLaserDataPath),
+                opts.planetaryLaserParseOptions,
+                &planetaryLaserDataset,
+                &laserError))
+        {
+            result.errorMessage = QStringLiteral("读取行星激光测距数据失败: %1")
+                                      .arg(QString::fromStdString(laserError));
+            return result;
+        }
+
+        if (opts.imagePathByIndex.size() != static_cast<int>(cameras.size()))
+        {
+            result.errorMessage = QStringLiteral(
+                "行星激光 shot 关联要求 imagePathByIndex 与 BA 相机数量一致");
+            return result;
+        }
+        planetaryLaserCameraPaths = opts.imagePathByIndex;
+        if (!opts.planetaryLaserImageAliasesByCameraIndex.isEmpty() &&
+            opts.planetaryLaserImageAliasesByCameraIndex.size() !=
+                static_cast<int>(cameras.size()))
+        {
+            result.errorMessage = QStringLiteral(
+                "行星激光额外影像别名必须与 BA 相机数量一致");
+            return result;
+        }
+
+        xjw::lidar::PlanetaryLaserBaAdapterOptions adapterOptions;
+        adapterOptions.imageAliasesByCameraIndex.resize(cameras.size());
+        for (int cameraIndex = 0;
+             cameraIndex < planetaryLaserCameraPaths.size();
+             ++cameraIndex)
+        {
+            adapterOptions.imageAliasesByCameraIndex[static_cast<std::size_t>(cameraIndex)] = {
+                planetaryLaserCameraPaths[cameraIndex].toUtf8().toStdString(),
+                QStringLiteral("camera_index:%1").arg(cameraIndex).toStdString(),
+            };
+            if (!opts.planetaryLaserImageAliasesByCameraIndex.isEmpty())
+            {
+                for (const QString &alias :
+                     opts.planetaryLaserImageAliasesByCameraIndex[cameraIndex])
+                {
+                    const QString normalizedAlias = alias.trimmed();
+                    if (!normalizedAlias.isEmpty())
+                    {
+                        adapterOptions.imageAliasesByCameraIndex[
+                            static_cast<std::size_t>(cameraIndex)]
+                            .push_back(normalizedAlias.toUtf8().toStdString());
+                    }
+                }
+            }
+        }
+        adapterOptions.cameraCoordinateFrame =
+            opts.planetaryLaserCameraCoordinateFrame.trimmed().toUtf8().toStdString();
+        adapterOptions.cameraSensorFrame =
+            opts.planetaryLaserCameraSensorFrame.trimmed().toUtf8().toStdString();
+        adapterOptions.confirmUnknownSensorModelIsFrame =
+            opts.planetaryLaserConfirmUnknownSensorIsFrame;
+        adapterOptions.confirmUnknownRangeTypeIsOneWay =
+            opts.planetaryLaserConfirmUnknownRangeIsOneWay;
+        adapterOptions.allowUnmappedShots = opts.planetaryLaserAllowUnmappedShots;
+        adapterOptions.allowUnmappedMeasuredImages =
+            opts.planetaryLaserAllowUnmappedMeasuredImages;
+
+        std::vector<xjw::BALaserRangeConstraint> rangeConstraints;
+        if (!xjw::lidar::buildPlanetaryLaserRangeConstraints(
+                planetaryLaserDataset,
+                adapterOptions,
+                &rangeConstraints,
+                &planetaryLaserSummary,
+                &laserError))
+        {
+            result.errorMessage = QStringLiteral("行星激光测距数据无法接入 BA: %1")
+                                      .arg(QString::fromStdString(laserError));
+            return result;
+        }
+
+        baOptions.enableLaserRangeConstraints = true;
+        baOptions.laserRangeWeight = opts.planetaryLaserRangeWeight;
+        baOptions.laserRangeHuberDelta = opts.planetaryLaserRangeHuberDeltaSigma;
+        baOptions.laserRangeConstraints = std::move(rangeConstraints);
+    }
+
+    if (opts.dryRun)
+    {
+        return makeDryRunResult();
     }
 
     // ── 执行光束法平差 ─────────────────────────────────────────────────────
@@ -370,6 +569,38 @@ BaServiceResult BundleAdjustService::run(
         optObj[QStringLiteral("laser_sigma_m")] = opts.laserSigmaMeters;
         optObj[QStringLiteral("laser_effective_weight")] = effectiveLaserWeight;
         optObj[QStringLiteral("laser_huber_delta_m")] = opts.laserHuberDeltaMeters;
+        optObj[QStringLiteral("enable_planetary_laser_range_constraints")] =
+            opts.enablePlanetaryLaserRangeConstraints;
+        optObj[QStringLiteral("planetary_laser_data_path")] = opts.planetaryLaserDataPath;
+        optObj[QStringLiteral("planetary_laser_camera_coordinate_frame")] =
+            opts.planetaryLaserCameraCoordinateFrame;
+        optObj[QStringLiteral("planetary_laser_camera_sensor_frame")] =
+            opts.planetaryLaserCameraSensorFrame;
+        optObj[QStringLiteral("planetary_laser_confirm_unknown_sensor_is_frame")] =
+            opts.planetaryLaserConfirmUnknownSensorIsFrame;
+        optObj[QStringLiteral("planetary_laser_confirm_unknown_range_is_one_way")] =
+            opts.planetaryLaserConfirmUnknownRangeIsOneWay;
+        optObj[QStringLiteral("planetary_laser_allow_unmapped_shots")] =
+            opts.planetaryLaserAllowUnmappedShots;
+        optObj[QStringLiteral("planetary_laser_allow_unmapped_measured_images")] =
+            opts.planetaryLaserAllowUnmappedMeasuredImages;
+        QJsonArray planetaryLaserAliases;
+        for (int cameraIndex = 0;
+             cameraIndex < opts.planetaryLaserImageAliasesByCameraIndex.size();
+             ++cameraIndex)
+        {
+            planetaryLaserAliases.append(QJsonObject{
+                {QStringLiteral("camera_index"), cameraIndex},
+                {QStringLiteral("aliases"), QJsonArray::fromStringList(
+                     opts.planetaryLaserImageAliasesByCameraIndex.at(cameraIndex))},
+            });
+        }
+        optObj[QStringLiteral("planetary_laser_image_aliases_by_camera_index")] =
+            planetaryLaserAliases;
+        optObj[QStringLiteral("planetary_laser_range_weight")] =
+            opts.planetaryLaserRangeWeight;
+        optObj[QStringLiteral("planetary_laser_range_huber_delta_sigma")] =
+            opts.planetaryLaserRangeHuberDeltaSigma;
         optObj[QStringLiteral("export_observation_details")] = opts.exportObservationDetails;
         optObj[QStringLiteral("enable_control_point_constraints")] = baOptions.enableControlPointConstraints;
         optObj[QStringLiteral("control_point_weight")] = baOptions.controlPointWeight;
@@ -415,6 +646,102 @@ BaServiceResult BundleAdjustService::run(
         laserSummary[QStringLiteral("laser_effective_weight")] = effectiveLaserWeight;
         laserSummary[QStringLiteral("laser_huber_delta_m")] = opts.laserHuberDeltaMeters;
         saveObj[QStringLiteral("laser_constraints_summary")] = laserSummary;
+    }
+
+    if (opts.enablePlanetaryLaserRangeConstraints)
+    {
+        QJsonObject rangeSummary;
+        rangeSummary[QStringLiteral("enabled")] = true;
+        rangeSummary[QStringLiteral("mode")] = QStringLiteral("planetary_laser_range_shots");
+        rangeSummary[QStringLiteral("data_path")] = opts.planetaryLaserDataPath;
+        rangeSummary[QStringLiteral("source_format")] =
+            planetaryLaserDataset.sourceFormat ==
+                    xjw::lidar::PlanetaryLaserSourceFormat::IsisLidarDataJson
+                ? QStringLiteral("isis_lidar_data_json")
+                : QStringLiteral("plascan_si_json_v1");
+        rangeSummary[QStringLiteral("target")] =
+            QString::fromStdString(planetaryLaserDataset.reference.targetName);
+        rangeSummary[QStringLiteral("body_fixed_frame")] =
+            QString::fromStdString(planetaryLaserDataset.reference.bodyFixedFrame);
+        rangeSummary[QStringLiteral("laser_frame")] =
+            QString::fromStdString(planetaryLaserDataset.reference.laserFrame);
+        rangeSummary[QStringLiteral("sensor_model")] = QString::fromLatin1(
+            xjw::lidar::planetaryLaserSensorModelName(planetaryLaserDataset.sensorModel));
+        rangeSummary[QStringLiteral("range_type")] = QString::fromLatin1(
+            xjw::lidar::planetaryLaserRangeTypeName(planetaryLaserDataset.rangeType));
+        rangeSummary[QStringLiteral("total_shots")] = planetaryLaserSummary.totalShots;
+        rangeSummary[QStringLiteral("accepted_shots")] = planetaryLaserSummary.acceptedShots;
+        rangeSummary[QStringLiteral("fixed_point_shots")] = planetaryLaserSummary.fixedPointShots;
+        rangeSummary[QStringLiteral("constrained_point_shots")] =
+            planetaryLaserSummary.constrainedPointShots;
+        rangeSummary[QStringLiteral("free_point_shots")] = planetaryLaserSummary.freePointShots;
+        rangeSummary[QStringLiteral("skipped_unmapped_shots")] =
+            planetaryLaserSummary.skippedUnmappedShots;
+        rangeSummary[QStringLiteral("measured_image_observations")] =
+            planetaryLaserSummary.measuredImageObservations;
+        rangeSummary[QStringLiteral("ignored_projected_measures")] =
+            planetaryLaserSummary.ignoredProjectedMeasures;
+        rangeSummary[QStringLiteral("ignored_unmapped_measured_images")] =
+            planetaryLaserSummary.ignoredUnmappedMeasuredImages;
+        rangeSummary[QStringLiteral("range_constraint_count")] =
+            baResult.laserRangeConstraintCount;
+        rangeSummary[QStringLiteral("range_rms_before_m")] =
+            baResult.laserRangeRmsBeforeMeters;
+        rangeSummary[QStringLiteral("range_rms_after_m")] =
+            baResult.laserRangeRmsAfterMeters;
+        rangeSummary[QStringLiteral("range_weight")] = opts.planetaryLaserRangeWeight;
+        rangeSummary[QStringLiteral("range_huber_delta_sigma")] =
+            opts.planetaryLaserRangeHuberDeltaSigma;
+
+        QJsonArray shotResults;
+        for (std::size_t shotIndex = 0;
+             shotIndex < baResult.laserRangeShots.size() &&
+             shotIndex < baOptions.laserRangeConstraints.size();
+             ++shotIndex)
+        {
+            const xjw::BARefinedLaserRangeShot &shot = baResult.laserRangeShots[shotIndex];
+            const xjw::BALaserRangeConstraint &constraint =
+                baOptions.laserRangeConstraints[shotIndex];
+            QJsonObject shotObject;
+            shotObject[QStringLiteral("id")] = QString::fromStdString(shot.shotId);
+            shotObject[QStringLiteral("source_index")] = shot.sourceIndex;
+            shotObject[QStringLiteral("ephemeris_time_s")] = shot.ephemerisTimeSeconds;
+            shotObject[QStringLiteral("valid")] = shot.valid;
+            shotObject[QStringLiteral("point_mode")] =
+                shot.pointMode == xjw::BALaserPointMode::Constrained
+                    ? QStringLiteral("constrained")
+                    : (shot.pointMode == xjw::BALaserPointMode::Free
+                           ? QStringLiteral("free")
+                           : QStringLiteral("fixed"));
+            shotObject[QStringLiteral("camera_index")] = constraint.cameraIndex;
+            if (constraint.cameraIndex >= 0 &&
+                constraint.cameraIndex < planetaryLaserCameraPaths.size())
+            {
+                shotObject[QStringLiteral("camera_image")] =
+                    planetaryLaserCameraPaths[constraint.cameraIndex];
+            }
+            shotObject[QStringLiteral("observed_range_m")] = constraint.observedRangeMeters;
+            shotObject[QStringLiteral("range_sigma_m")] = constraint.sigmaRangeMeters;
+            shotObject[QStringLiteral("lever_arm_camera_m")] = QJsonArray{
+                constraint.leverArmCameraMeters[0],
+                constraint.leverArmCameraMeters[1],
+                constraint.leverArmCameraMeters[2]};
+            shotObject[QStringLiteral("computed_range_before_m")] =
+                shot.computedRangeBeforeMeters;
+            shotObject[QStringLiteral("computed_range_after_m")] =
+                shot.computedRangeAfterMeters;
+            shotObject[QStringLiteral("residual_before_m")] = shot.residualBeforeMeters;
+            shotObject[QStringLiteral("residual_after_m")] = shot.residualAfterMeters;
+            shotObject[QStringLiteral("normalized_residual_after")] =
+                shot.normalizedResidualAfter;
+            shotObject[QStringLiteral("refined_point_m")] = QJsonArray{
+                shot.point[0], shot.point[1], shot.point[2]};
+            shotObject[QStringLiteral("measured_image_observation_count")] =
+                static_cast<int>(constraint.measuredImageObservations.size());
+            shotResults.append(shotObject);
+        }
+        rangeSummary[QStringLiteral("shots")] = shotResults;
+        saveObj[QStringLiteral("planetary_laser_range_summary")] = rangeSummary;
     }
 
     if (baOptions.enableControlPointConstraints || baResult.controlPointConstraintCount > 0)
@@ -814,6 +1141,18 @@ BaServiceResult BundleAdjustService::run(
             ts << "后端总耗时(s): "  << baResult.totalSeconds             << "\n";
             ts << "问题构建耗时(s): " << baResult.setupSeconds             << "\n";
             ts << "求解耗时(s): "    << baResult.solveSeconds             << "\n";
+            if (opts.enablePlanetaryLaserRangeConstraints)
+            {
+                ts << "行星激光测距 shot: " << baResult.laserRangeConstraintCount << "\n";
+                ts << "行星激光 range RMS(m): "
+                   << baResult.laserRangeRmsBeforeMeters << " -> "
+                   << baResult.laserRangeRmsAfterMeters << "\n";
+                ts << "行星激光目标/坐标系: "
+                   << QString::fromStdString(planetaryLaserDataset.reference.targetName)
+                   << "/"
+                   << QString::fromStdString(planetaryLaserDataset.reference.bodyFixedFrame)
+                   << "\n";
+            }
             if (!baResult.backendSelectionReason.empty())
             {
                 ts << "后端选择说明: " << QString::fromUtf8(baResult.backendSelectionReason.c_str()) << "\n";
@@ -882,7 +1221,12 @@ BaServiceResult BundleAdjustService::run(
     // ── 组装并返回结果 ─────────────────────────────────────────────────────
     const bool missingActiveLaserConstraints =
         opts.enableLaserConstraints && baResult.laserConstraintCount <= 0;
-    result.success = baResult.solutionUsable && !missingActiveLaserConstraints;
+    const bool missingActivePlanetaryLaserConstraints =
+        opts.enablePlanetaryLaserRangeConstraints &&
+        baResult.laserRangeConstraintCount <= 0;
+    result.success = baResult.solutionUsable &&
+                     !missingActiveLaserConstraints &&
+                     !missingActivePlanetaryLaserConstraints;
     if (result.success)
     {
         result.pendingCamUpdates = pendingCamUpdates;
@@ -892,6 +1236,12 @@ BaServiceResult BundleAdjustService::run(
         result.errorMessage = QStringLiteral(
             "LiDAR 约束在求解或质量过滤后全部失效，未写回相机；"
             "请检查坐标系、关联距离和影像匹配粗差");
+    }
+    else if (missingActivePlanetaryLaserConstraints)
+    {
+        result.errorMessage = QStringLiteral(
+            "行星激光测距 shot 在求解中全部失效，未写回相机；"
+            "请检查 frame camera 声明、同期影像映射、坐标系、range 和 sigma");
     }
     else
     {

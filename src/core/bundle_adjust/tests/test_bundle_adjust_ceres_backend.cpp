@@ -45,6 +45,25 @@ double distance3d(const std::array<double, 3> &a, const std::array<double, 3> &b
     return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
 
+std::array<double, 3> laserOrigin(
+    const xjw::Camera &camera,
+    const std::array<double, 3> &leverArmCameraMeters)
+{
+    const std::array<double, 3> center = camera.cameraCenter();
+    const std::array<double, 9> rotation = camera.cameraToWorldRotation();
+    std::array<double, 3> origin = center;
+    for (int row = 0; row < 3; ++row)
+    {
+        for (int column = 0; column < 3; ++column)
+        {
+            origin[static_cast<size_t>(row)] +=
+                rotation[static_cast<size_t>(row * 3 + column)] *
+                leverArmCameraMeters[static_cast<size_t>(column)];
+        }
+    }
+    return origin;
+}
+
 xjw::BATrack makeTrack(const std::vector<xjw::Camera> &cameras,
                        const std::array<double, 3> &truth,
                        const std::array<double, 3> &initial)
@@ -709,4 +728,347 @@ TEST(BundleAdjustCeresBackendTest, CeresCudaAndCpuReachComparableRms)
     ASSERT_TRUE(cpu.points.front().valid);
     ASSERT_TRUE(gpu.points.front().valid);
     EXPECT_NEAR(gpu.meanRmsAfter, cpu.meanRmsAfter, 1e-6);
+}
+
+TEST(BundleAdjustCeresBackendTest, FreeLaserShotUsesOnlyRealMeasuredImagesAndDoesNotPolluteTrackStats)
+{
+    ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
+
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-2.0, 0.0, 0.0),
+        makeCamera(2.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> truth{{0.25, 0.15, 10.0}};
+
+    xjw::BALaserRangeConstraint shot;
+    shot.cameraIndex = 0;
+    shot.initialPoint = {{0.9, -0.6, 12.0}};
+    shot.observedRangeMeters =
+        distance3d(cameras.front().cameraCenter(), truth);
+    shot.sigmaRangeMeters = 0.02;
+    shot.pointMode = xjw::BALaserPointMode::Free;
+    shot.shotId = "free-shot-001";
+    shot.ephemerisTimeSeconds = 12345.25;
+    shot.sourceIndex = 17;
+    for (size_t cameraIndex = 0; cameraIndex < cameras.size(); ++cameraIndex)
+    {
+        double u = 0.0;
+        double v = 0.0;
+        ASSERT_TRUE(projectPoint(cameras[cameraIndex], truth, &u, &v));
+        shot.measuredImageObservations.push_back(
+            xjw::BAObservation{
+                static_cast<int>(cameraIndex), u, v, 1.0});
+    }
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::CeresCpu;
+    options.refineCameraPose = false;
+    options.gaugePolicy = xjw::BAGaugePolicy::CallerManaged;
+    options.enableLaserRangeConstraints = true;
+    options.laserRangeConstraints = {shot};
+    options.laserRangeHuberDelta = 0.0;
+    options.huberDelta = 0.0;
+    options.enablePointFilter = true;
+    options.maxIterations = 40;
+
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(cameras, {}, options);
+
+    ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
+    ASSERT_EQ(result.solveStatus, xjw::BASolveStatus::Success);
+    ASSERT_EQ(result.laserRangeShots.size(), 1u);
+    const xjw::BARefinedLaserRangeShot &refined =
+        result.laserRangeShots.front();
+    ASSERT_TRUE(refined.valid);
+    EXPECT_EQ(refined.shotId, shot.shotId);
+    EXPECT_DOUBLE_EQ(refined.ephemerisTimeSeconds,
+                     shot.ephemerisTimeSeconds);
+    EXPECT_EQ(refined.sourceIndex, shot.sourceIndex);
+    EXPECT_EQ(refined.pointMode, xjw::BALaserPointMode::Free);
+    EXPECT_LT(distance3d(refined.point, truth), 1.0e-3);
+    EXPECT_EQ(result.laserRangeConstraintCount, 1);
+    EXPECT_LT(result.laserRangeRmsAfterMeters,
+              result.laserRangeRmsBeforeMeters);
+    EXPECT_LT(std::abs(refined.normalizedResidualAfter), 1.0e-3);
+    EXPECT_EQ(result.totalTracks, 0);
+    EXPECT_EQ(result.optimizedTracks, 0);
+    EXPECT_TRUE(result.points.empty());
+}
+
+TEST(BundleAdjustCeresBackendTest, LaserRangeLeverArmUsesUpdatedCameraRotation)
+{
+    ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
+
+    const xjw::Camera camera = makeCamera(0.0, 0.0, 0.0);
+    const std::vector<xjw::Camera> cameras{camera};
+    const std::array<double, 3> leverArm{{1.0, 0.0, 0.0}};
+    const std::array<double, 3> truthLaserOrigin{{0.0, 1.0, 0.0}};
+    const std::vector<std::array<double, 3>> targetPoints{
+        {{1.0, 2.0, 8.0}},
+        {{-3.0, 1.0, 7.0}},
+        {{2.0, -4.0, 6.0}},
+        {{4.0, 3.0, 5.0}},
+        {{-2.0, -3.0, 9.0}},
+    };
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::CeresCpu;
+    options.refineCameraPose = true;
+    options.gaugePolicy = xjw::BAGaugePolicy::CallerManaged;
+    options.enableLaserRangeConstraints = true;
+    options.laserRangeHuberDelta = 0.0;
+    options.enablePointFilter = false;
+    options.maxIterations = 80;
+    options.cameraPosePriors.resize(1);
+    options.cameraPosePriors.front().enabled = true;
+    options.cameraPosePriors.front().cameraCenter = camera.cameraCenter();
+    options.cameraPosePriors.front().cameraToWorldRotation =
+        camera.cameraToWorldRotation();
+    options.cameraPosePriors.front().positionSigmaMeters = 1.0e-4;
+    options.cameraPosePriors.front().rotationSigmaDegrees = 1000.0;
+    options.cameraPosePriorWeight = 1.0;
+    options.cameraPosePriorHuberDelta = 0.0;
+    for (size_t index = 0; index < targetPoints.size(); ++index)
+    {
+        xjw::BALaserRangeConstraint shot;
+        shot.cameraIndex = 0;
+        shot.initialPoint = targetPoints[index];
+        shot.observedRangeMeters =
+            distance3d(truthLaserOrigin, targetPoints[index]);
+        shot.sigmaRangeMeters = 1.0e-3;
+        shot.leverArmCameraMeters = leverArm;
+        shot.pointMode = xjw::BALaserPointMode::Fixed;
+        shot.shotId = "lever-" + std::to_string(index);
+        shot.ephemerisTimeSeconds = static_cast<double>(index);
+        shot.sourceIndex = static_cast<int>(index);
+        options.laserRangeConstraints.push_back(shot);
+    }
+
+    const std::array<double, 3> originBefore =
+        laserOrigin(camera, leverArm);
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(cameras, {}, options);
+
+    ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
+    ASSERT_EQ(result.refinedCameras.size(), 1u);
+    const std::array<double, 3> originAfter =
+        laserOrigin(result.refinedCameras.front(), leverArm);
+    EXPECT_LT(distance3d(originAfter, truthLaserOrigin),
+              distance3d(originBefore, truthLaserOrigin) * 0.1);
+    EXPECT_LT(result.laserRangeRmsAfterMeters,
+              result.laserRangeRmsBeforeMeters * 0.05);
+    ASSERT_EQ(result.laserRangeShots.size(), targetPoints.size());
+    for (size_t index = 0; index < result.laserRangeShots.size(); ++index)
+    {
+        EXPECT_TRUE(result.laserRangeShots[index].valid);
+        EXPECT_EQ(result.laserRangeShots[index].sourceIndex,
+                  static_cast<int>(index));
+    }
+}
+
+TEST(BundleAdjustCeresBackendTest, ConstrainedLaserPointUsesFullSqrtInformationPrior)
+{
+    ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
+
+    const std::vector<xjw::Camera> cameras{makeCamera(0.0, 0.0, 0.0)};
+    const std::array<double, 3> truth{{0.2, -0.1, 10.0}};
+    xjw::BALaserRangeConstraint shot;
+    shot.cameraIndex = 0;
+    shot.initialPoint = {{1.0, -0.8, 12.0}};
+    shot.observedRangeMeters =
+        distance3d(cameras.front().cameraCenter(), truth);
+    shot.sigmaRangeMeters = 0.02;
+    shot.pointMode = xjw::BALaserPointMode::Constrained;
+    shot.pointPrior = truth;
+    shot.pointPriorSqrtInformation = {{50.0, 5.0, 0.0,
+                                       0.0, 40.0, 4.0,
+                                       0.0, 0.0, 30.0}};
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::CeresCpu;
+    options.refineCameraPose = false;
+    options.enableLaserRangeConstraints = true;
+    options.laserRangeConstraints = {shot};
+    options.laserRangeHuberDelta = 0.0;
+    options.enablePointFilter = false;
+    options.maxIterations = 40;
+
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(cameras, {}, options);
+
+    ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
+    ASSERT_EQ(result.laserRangeShots.size(), 1u);
+    ASSERT_TRUE(result.laserRangeShots.front().valid);
+    EXPECT_LT(distance3d(result.laserRangeShots.front().point, truth),
+              1.0e-3);
+    EXPECT_LT(result.laserRangeRmsAfterMeters,
+              result.laserRangeRmsBeforeMeters);
+}
+
+TEST(BundleAdjustLaserRangeValidationTest, RejectsInvalidShotFieldsAndUnobservableFreePoint)
+{
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-1.0, 0.0, 0.0),
+        makeCamera(1.0, 0.0, 0.0),
+    };
+    xjw::BALaserRangeConstraint validShot;
+    validShot.cameraIndex = 0;
+    validShot.initialPoint = {{0.0, 0.0, 10.0}};
+    validShot.observedRangeMeters = 10.0;
+    validShot.sigmaRangeMeters = 0.1;
+    validShot.pointMode = xjw::BALaserPointMode::Fixed;
+    validShot.ephemerisTimeSeconds = 42.0;
+
+    auto solve = [&](const xjw::BALaserRangeConstraint &shot)
+    {
+        xjw::BAOptions options;
+        options.backend = xjw::BABackend::CeresCpu;
+        options.refineCameraPose = false;
+        options.enableLaserRangeConstraints = true;
+        options.laserRangeConstraints = {shot};
+        options.allowBackendFallback = false;
+        return xjw::BundleAdjust::optimizePoints(cameras, {}, options);
+    };
+
+    xjw::BALaserRangeConstraint invalid = validShot;
+    invalid.pointMode = xjw::BALaserPointMode::Unspecified;
+    EXPECT_EQ(solve(invalid).solveStatus, xjw::BASolveStatus::InvalidInput);
+
+    invalid = validShot;
+    invalid.cameraIndex = -1;
+    EXPECT_EQ(solve(invalid).solveStatus, xjw::BASolveStatus::InvalidInput);
+
+    invalid = validShot;
+    invalid.observedRangeMeters = 0.0;
+    EXPECT_EQ(solve(invalid).solveStatus, xjw::BASolveStatus::InvalidInput);
+
+    invalid = validShot;
+    invalid.sigmaRangeMeters = 0.0;
+    EXPECT_EQ(solve(invalid).solveStatus, xjw::BASolveStatus::InvalidInput);
+
+    invalid = validShot;
+    invalid.initialPoint = cameras.front().cameraCenter();
+    EXPECT_EQ(solve(invalid).solveStatus, xjw::BASolveStatus::InvalidInput);
+
+    invalid = validShot;
+    invalid.leverArmCameraMeters[1] =
+        std::numeric_limits<double>::quiet_NaN();
+    EXPECT_EQ(solve(invalid).solveStatus, xjw::BASolveStatus::InvalidInput);
+
+    invalid = validShot;
+    invalid.ephemerisTimeSeconds =
+        std::numeric_limits<double>::infinity();
+    EXPECT_EQ(solve(invalid).solveStatus, xjw::BASolveStatus::InvalidInput);
+
+    invalid = validShot;
+    invalid.pointMode = xjw::BALaserPointMode::Constrained;
+    invalid.pointPrior = invalid.initialPoint;
+    invalid.pointPriorSqrtInformation = {{1.0, 0.0, 0.0,
+                                          0.0, 0.0, 0.0,
+                                          0.0, 0.0, 1.0}};
+    EXPECT_EQ(solve(invalid).solveStatus, xjw::BASolveStatus::InvalidInput);
+
+    invalid = validShot;
+    invalid.pointMode = xjw::BALaserPointMode::Free;
+    double u = 0.0;
+    double v = 0.0;
+    ASSERT_TRUE(projectPoint(cameras.front(), invalid.initialPoint, &u, &v));
+    invalid.measuredImageObservations.push_back({0, u, v, 1.0});
+    EXPECT_EQ(solve(invalid).solveStatus,
+              xjw::BASolveStatus::UnsupportedConfiguration);
+
+    xjw::BAOptions disabledOptions;
+    disabledOptions.backend = xjw::BABackend::CeresCpu;
+    disabledOptions.refineCameraPose = false;
+    disabledOptions.laserRangeConstraints = {validShot};
+    disabledOptions.allowBackendFallback = false;
+    EXPECT_EQ(
+        xjw::BundleAdjust::optimizePoints(cameras, {}, disabledOptions).solveStatus,
+        xjw::BASolveStatus::InvalidInput);
+}
+
+TEST(BundleAdjustLaserRangeBackendTest, AutoRequiresCeresAndUnsupportedBackendsDoNotIgnoreRange)
+{
+    xjw::BAOptions selectionOptions;
+    selectionOptions.backend = xjw::BABackend::Auto;
+    selectionOptions.enableLaserRangeConstraints = true;
+    const xjw::BABackendDecision decision =
+        xjw::BundleAdjust::decideBackendForProblem({}, selectionOptions);
+    EXPECT_EQ(decision.backend, xjw::BABackend::CeresCpu);
+
+    EXPECT_TRUE(xjw::BundleAdjust::backendCapabilities(
+                    xjw::BABackend::CeresCpu)
+                    .supportsLaserRangeConstraints);
+    EXPECT_FALSE(xjw::BundleAdjust::backendCapabilities(
+                     xjw::BABackend::LegacyCpu)
+                     .supportsLaserRangeConstraints);
+    EXPECT_FALSE(xjw::BundleAdjust::backendCapabilities(
+                     xjw::BABackend::NativeCuda)
+                     .supportsLaserRangeConstraints);
+
+    const std::vector<xjw::Camera> cameras{makeCamera(0.0, 0.0, 0.0)};
+    xjw::BALaserRangeConstraint shot;
+    shot.cameraIndex = 0;
+    shot.initialPoint = {{0.0, 0.0, 10.0}};
+    shot.observedRangeMeters = 10.0;
+    shot.sigmaRangeMeters = 0.1;
+    shot.pointMode = xjw::BALaserPointMode::Fixed;
+
+    for (const xjw::BABackend backend :
+         {xjw::BABackend::LegacyCpu, xjw::BABackend::NativeCuda})
+    {
+        xjw::BAOptions options;
+        options.backend = backend;
+        options.refineCameraPose = false;
+        options.enableLaserRangeConstraints = true;
+        options.laserRangeConstraints = {shot};
+        options.allowBackendFallback = false;
+        const xjw::BAResult result =
+            xjw::BundleAdjust::optimizePoints(cameras, {}, options);
+        EXPECT_EQ(result.solveStatus,
+                  xjw::BASolveStatus::UnsupportedConfiguration);
+        EXPECT_EQ(result.usedBackend, backend);
+        EXPECT_FALSE(result.solutionUsable);
+    }
+}
+
+TEST(BundleAdjustLaserRangeBackendTest, AutoQualityRejectionNeverFallsBackWithoutRangeSupport)
+{
+    ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
+
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-1.0, 0.0, 0.0),
+        makeCamera(1.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> truth{{0.0, 0.0, 10.0}};
+    const xjw::BATrack track = makeTrack(cameras, truth, {{0.1, 0.0, 10.5}});
+    xjw::BALaserRangeConstraint shot;
+    shot.cameraIndex = 0;
+    shot.initialPoint = truth;
+    shot.observedRangeMeters =
+        distance3d(cameras.front().cameraCenter(), truth);
+    shot.sigmaRangeMeters = 0.1;
+    shot.pointMode = xjw::BALaserPointMode::Fixed;
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::Auto;
+    options.refineCameraPose = false;
+    options.enablePointFilter = false;
+    options.enableLaserRangeConstraints = true;
+    options.laserRangeConstraints = {shot};
+    options.minAcceptedValidTrackRatio = 1.01;
+    options.maxIterations = 20;
+
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(cameras, {track}, options);
+
+    EXPECT_EQ(result.requestedBackend, xjw::BABackend::Auto);
+    EXPECT_EQ(result.usedBackend, xjw::BABackend::CeresCpu);
+    EXPECT_FALSE(result.backendFallback);
+    EXPECT_TRUE(result.qualityGateRejected);
+    EXPECT_FALSE(result.solutionUsable);
+    EXPECT_EQ(result.solveStatus, xjw::BASolveStatus::NumericalFailure);
+    EXPECT_EQ(result.laserRangeConstraintCount, 1);
+    EXPECT_NE(result.backendMessage.find("没有兼容的 legacy 回退"),
+              std::string::npos);
 }

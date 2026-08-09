@@ -47,6 +47,16 @@ bool hasUnsupportedConstraints(const std::vector<BATrack> &tracks,
                                const BAOptions &options,
                                std::string *message)
 {
+    if (options.enableLaserRangeConstraints ||
+        !options.laserRangeConstraints.empty())
+    {
+        if (message)
+        {
+            *message = "native_cuda 不支持行星激光测距约束";
+        }
+        return true;
+    }
+
     if (options.enableLaserPlaneConstraints)
     {
         if (message)

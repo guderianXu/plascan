@@ -71,6 +71,7 @@ struct BABackendCapabilities
     bool refinesSharedPrincipalPoint = false;
     bool refinesSharedRadialDistortion = false;
     bool supportsSoftConstraints = false;
+    bool supportsLaserRangeConstraints = false;
 };
 
 /**
@@ -142,6 +143,47 @@ struct BALaserPlaneConstraint
     double weight = 1.0;
     double initialSignedDistance = 0.0;
     int sourceFrameIndex = -1;
+};
+
+enum class BALaserPointMode
+{
+    Unspecified, ///< 未解析/未指定，输入验证会拒绝，防止缺先验被误当成 Fixed
+    Fixed,       ///< 落点固定在 initialPoint，不创建可变点自由度
+    Constrained, ///< 落点可变，并使用完整 3x3 先验平方根信息矩阵
+    Free,        ///< 落点可变，必须由至少两台相机的真实 measured 像点约束
+};
+
+/**
+ * @brief 行星激光测高 shot 的独立测距约束。
+ *
+ * shot 落点不是影像匹配 track，也不需要伪造像点。它使用世界/行星固连坐标系中的
+ * initialPoint 作为独立辅助参数块，并把 cameraIndex 对应帧相机的激光发射点与该
+ * 落点之间的距离约束到 observedRangeMeters。
+ *
+ * Fixed、Constrained、Free 三态与 ISIS 激光控制点语义对齐。Constrained 模式由
+ * pointPriorSqrtInformation（row-major）对白化后的 `W * (point - pointPrior)`
+ * 约束；该 3x3 矩阵可完整表达 ISIS aprioriMatrix 转换得到的非对角相关性。
+ * measuredImageObservations 只能放真实测量像点，ProjectedVirtual 不得传入。
+ * 当前 frame-camera MVP 仅使用 cameraIndex 的单帧刚性位姿；时间字段只保留用于
+ * 报告和未来轨迹扩展，不执行 line-scan/SPICE 轨迹插值。
+ */
+struct BALaserRangeConstraint
+{
+    int cameraIndex = -1;
+    std::array<double, 3> initialPoint{{0.0, 0.0, 0.0}};
+    double observedRangeMeters = 0.0;
+    double sigmaRangeMeters = 1.0;
+    double weight = 1.0;
+    std::array<double, 3> leverArmCameraMeters{{0.0, 0.0, 0.0}};
+    BALaserPointMode pointMode = BALaserPointMode::Unspecified;
+    std::array<double, 3> pointPrior{{0.0, 0.0, 0.0}};
+    std::array<double, 9> pointPriorSqrtInformation{{0.0, 0.0, 0.0,
+                                                     0.0, 0.0, 0.0,
+                                                     0.0, 0.0, 0.0}};
+    std::vector<BAObservation> measuredImageObservations;
+    std::string shotId;
+    double ephemerisTimeSeconds = 0.0;
+    int sourceIndex = -1;
 };
 
 /**
@@ -287,6 +329,12 @@ struct BAOptions
     double laserPlaneWeight = 1.0;            ///< LiDAR 统计权重，通常取 1/sigma^2，单位 1/m^2
     double laserHuberDeltaMeters = 0.2;       ///< LiDAR 点到面 Huber 阈值（米）
 
+    // ── 行星激光测高独立测距约束 ──────────────────────────────────────────
+    bool enableLaserRangeConstraints = false; ///< 是否启用独立 shot 的相机-落点测距约束
+    double laserRangeWeight = 1.0;            ///< 所有 shot 的全局统计权重
+    double laserRangeHuberDelta = 3.0;         ///< 标准差归一化测距残差的 Huber 阈值
+    std::vector<BALaserRangeConstraint> laserRangeConstraints; ///< 不属于 BATrack 的独立测距 shot
+
     // ── 测绘控制点软约束 ────────────────────────────────────────────────
     bool enableControlPointConstraints = false; ///< 是否启用 BATrack 上挂载的控制点约束
     double controlPointWeight = 1.0;            ///< 控制点残差全局权重
@@ -393,6 +441,27 @@ struct BARefinedPoint
 };
 
 /**
+ * @brief 独立行星激光测高 shot 的优化和质量统计结果。
+ *
+ * 数组顺序与 BAOptions::laserRangeConstraints 严格一致，shotId、时间和 sourceIndex
+ * 原样保留，便于上层报告和将来的时变轨迹扩展。
+ */
+struct BARefinedLaserRangeShot
+{
+    bool valid = false;
+    std::array<double, 3> point{{0.0, 0.0, 0.0}};
+    BALaserPointMode pointMode = BALaserPointMode::Unspecified;
+    std::string shotId;
+    double ephemerisTimeSeconds = 0.0;
+    int sourceIndex = -1;
+    double computedRangeBeforeMeters = 0.0;
+    double computedRangeAfterMeters = 0.0;
+    double residualBeforeMeters = 0.0;
+    double residualAfterMeters = 0.0;
+    double normalizedResidualAfter = 0.0;
+};
+
+/**
  * @brief 整个光束法平差的综合结果结构。
  *
  * 包含所有轨迹的优化结果、全局统计指标和优化后的相机列表。
@@ -461,6 +530,10 @@ struct BAResult
     double laserMedianBeforeMeters = 0.0;  ///< 优化前 LiDAR 点到面绝对距离中位数（米）
     double laserMedianAfterMeters = 0.0;   ///< 优化后 LiDAR 点到面绝对距离中位数（米）
 
+    int laserRangeConstraintCount = 0;       ///< 真正进入问题的独立激光测距 shot 数量
+    double laserRangeRmsBeforeMeters = 0.0;  ///< 优化前原始测距残差 RMS（米）
+    double laserRangeRmsAfterMeters = 0.0;   ///< 优化后原始测距残差 RMS（米）
+
     int controlPointConstraintCount = 0;       ///< 参与统计/优化的控制点约束数量
     double controlPointRmsBeforeMeters = 0.0;  ///< 优化前控制点 3D RMS（米）
     double controlPointRmsAfterMeters = 0.0;   ///< 优化后控制点 3D RMS（米）
@@ -470,6 +543,7 @@ struct BAResult
     double scaleBarRmsAfterMeters = 0.0;   ///< 优化后比例尺长度 RMS（米）
 
     std::vector<BARefinedPoint> points;   ///< 每条轨迹对应的点优化结果（与输入 tracks 索引一一对应）
+    std::vector<BARefinedLaserRangeShot> laserRangeShots; ///< 与输入独立测距 shot 一一对应
     std::vector<Camera> refinedCameras;   ///< 优化后的相机列表（与输入 cameras 長度相同）
 };
 

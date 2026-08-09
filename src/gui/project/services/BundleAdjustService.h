@@ -16,6 +16,7 @@
 
 #include "BundleAdjust.h"
 #include "Camera.h"
+#include "PlanetaryLaserJson.h"
 #include "quality/MarkerQualityReport.h"
 
 #include <QJsonObject>
@@ -76,6 +77,20 @@ struct BaServiceOptions
     double              laserSigmaMeters = 0.0025;      ///< 自动权重使用的 LiDAR 点到面标准差（米）
     double              laserHuberDeltaMeters = 0.05;   ///< LiDAR 残差 Huber 阈值（米）
 
+    // ── 行星稀疏激光测距 shot（ISIS/LOLA/MOLA 类）──────────────────────
+    bool                enablePlanetaryLaserRangeConstraints = false;
+    QString             planetaryLaserDataPath; ///< PlaScan SI JSON v1 或 ISIS LidarData JSON
+    xjw::lidar::PlanetaryLaserJsonParseOptions planetaryLaserParseOptions;
+    QString             planetaryLaserCameraCoordinateFrame; ///< 当前 BA 相机/track 的求解坐标系
+    QString             planetaryLaserCameraSensorFrame; ///< lever arm 所在相机/传感器坐标系
+    QVector<QStringList> planetaryLaserImageAliasesByCameraIndex; ///< ISIS serial 等额外别名，与相机同序
+    bool                planetaryLaserConfirmUnknownSensorIsFrame = false;
+    bool                planetaryLaserConfirmUnknownRangeIsOneWay = false;
+    bool                planetaryLaserAllowUnmappedShots = false;
+    bool                planetaryLaserAllowUnmappedMeasuredImages = false;
+    double              planetaryLaserRangeWeight = 1.0;
+    double              planetaryLaserRangeHuberDeltaSigma = 3.0;
+
     // ── 参考 DEM/LiDAR 高程面软约束 ──────────────────────────────────────
     bool                enableReferenceTerrainPrior = false; ///< 是否将参考 DEM 作为 BA 高程软约束
     QString             referenceTerrainDemPath;             ///< 参考 DEM GeoTIFF 路径
@@ -100,6 +115,12 @@ struct BaServiceOptions
     bool    exportEvalPlot   = true;        ///< 是否生成评估对比图（PNG）
     bool    exportObservationDetails = true; ///< 是否在 JSON 中展开每个 track 的逐观测残差
 };
+
+bool mergePlanetaryLaserProjectImageAliases(
+    const QJsonObject &meta,
+    const QStringList &imagePathByIndex,
+    QVector<QStringList> *aliasesByCameraIndex,
+    QString *errorMessage = nullptr);
 
 // ──────────────────────────────────────────────────────────────────────────────
 // BaServiceResult  — 光束法平差服务输出结果

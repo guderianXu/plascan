@@ -809,6 +809,35 @@ QString referenceDatasetTypeForPath(const QString &path)
     {
         return QStringLiteral("point_cloud");
     }
+    if (suffix == QLatin1String("json"))
+    {
+        QFile file(path);
+        if (file.open(QIODevice::ReadOnly))
+        {
+            const QJsonDocument document = QJsonDocument::fromJson(file.readAll());
+            const QJsonObject root = document.object();
+            const bool plaScanLaserSchema =
+                root.value(QStringLiteral("schema")).toString() ==
+                QLatin1String("plascan.planetary_laser_dataset");
+            const QJsonArray isisPoints = root.value(QStringLiteral("points")).toArray();
+            const QJsonObject firstIsisPoint = isisPoints.isEmpty()
+                ? QJsonObject{}
+                : isisPoints.at(0).toObject();
+            const bool isisLidarData =
+                !firstIsisPoint.isEmpty() &&
+                firstIsisPoint.value(QStringLiteral("id")).isString() &&
+                firstIsisPoint.value(QStringLiteral("time")).isDouble() &&
+                firstIsisPoint.value(QStringLiteral("range")).isDouble() &&
+                firstIsisPoint.value(QStringLiteral("sigmaRange")).isDouble() &&
+                firstIsisPoint.value(QStringLiteral("latitude")).isDouble() &&
+                firstIsisPoint.value(QStringLiteral("longitude")).isDouble() &&
+                firstIsisPoint.value(QStringLiteral("radius")).isDouble();
+            if (plaScanLaserSchema || isisLidarData)
+            {
+                return QStringLiteral("planetary_laser_shots");
+            }
+        }
+    }
     return {};
 }
 
@@ -826,6 +855,12 @@ QString normalizeReferenceDatasetType(const QString &type, const QString &path)
     if (normalized == QLatin1String("tiff") || normalized == QLatin1String("geotiff"))
     {
         normalized = QStringLiteral("dem");
+    }
+    if (normalized == QLatin1String("planetary_laser") ||
+        normalized == QLatin1String("laser_altimetry") ||
+        normalized == QLatin1String("laser_range_shots"))
+    {
+        normalized = QStringLiteral("planetary_laser_shots");
     }
     return normalized;
 }

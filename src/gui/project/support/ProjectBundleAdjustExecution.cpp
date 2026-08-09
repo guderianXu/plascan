@@ -97,6 +97,19 @@ BundleAdjustExecutionResult runBundleAdjustExecution(const QJsonObject &coreData
     result.beforeCamMeta = baInput.beforeCamMeta;
     options.imagePathByIndex = baInput.imagePathByIndex;
     options.beforeCamMeta = baInput.beforeCamMeta;
+    if (options.enablePlanetaryLaserRangeConstraints)
+    {
+        QString aliasError;
+        if (!xjw::gui::mergePlanetaryLaserProjectImageAliases(
+                meta,
+                baInput.imagePathByIndex,
+                &options.planetaryLaserImageAliasesByCameraIndex,
+                &aliasError))
+        {
+            result.serviceResult.errorMessage = aliasError;
+            return result;
+        }
+    }
     if (baInput.surveyControlTrackCount > 0 || baInput.markerControlPointConstraintCount > 0)
     {
         options.baOpt.enableControlPointConstraints = true;

@@ -41,6 +41,34 @@ class BundleAdjustCliContractsTest(unittest.TestCase):
             "未指定时写入当前 Chunk 的 bundle_adjust/<timestamp>", source
         )
 
+    def test_exposes_and_forwards_planetary_laser_range_controls(self):
+        source = (ROOT / "src/cli/reconstruction/cli_bundle_adjust.cpp").read_text(
+            encoding="utf-8"
+        )
+
+        for option in (
+            "--laser-range-data",
+            "--laser-range-camera-frame",
+            "--laser-range-camera-sensor-frame",
+            "--laser-range-image-alias",
+            "--laser-range-allow-unmapped-shots",
+            "--laser-range-allow-unmapped-measures",
+            "--laser-range-isis-target",
+            "--laser-range-isis-body-frame",
+            "--laser-range-isis-laser-frame",
+            "--laser-range-isis-sensor-model",
+            "--laser-range-isis-range-type",
+            "--laser-range-isis-lever-arm",
+        ):
+            self.assertIn(option, source)
+
+        self.assertIn("parsePlanetaryLaserImageAliases", source)
+        self.assertIn("mergePlanetaryLaserProjectImageAliases", source)
+        self.assertIn("planetaryLaserAllowUnmappedMeasuredImages", source)
+        self.assertIn("planetaryLaserParseOptions", source)
+        self.assertIn("planetaryLaserRangeWeightOption->count() > 0", source)
+        self.assertIn("planetaryLaserHuberOption->count() > 0", source)
+
 
 if __name__ == "__main__":
     unittest.main()

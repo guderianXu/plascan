@@ -31,6 +31,39 @@ bool isFinitePoint(const std::array<double, 3> &point)
     });
 }
 
+bool isUsableLaserPointSqrtInformation(
+    const std::array<double, 9> &sqrtInformation)
+{
+    double maxAbsoluteValue = 0.0;
+    for (const double value : sqrtInformation)
+    {
+        if (!std::isfinite(value))
+        {
+            return false;
+        }
+        maxAbsoluteValue = std::max(maxAbsoluteValue, std::abs(value));
+    }
+    if (!(maxAbsoluteValue > 0.0))
+    {
+        return false;
+    }
+
+    const double determinant =
+        sqrtInformation[0] *
+            (sqrtInformation[4] * sqrtInformation[8] -
+             sqrtInformation[5] * sqrtInformation[7]) -
+        sqrtInformation[1] *
+            (sqrtInformation[3] * sqrtInformation[8] -
+             sqrtInformation[5] * sqrtInformation[6]) +
+        sqrtInformation[2] *
+            (sqrtInformation[3] * sqrtInformation[7] -
+             sqrtInformation[4] * sqrtInformation[6]);
+    const double relativeRankThreshold =
+        1.0e-12 * maxAbsoluteValue * maxAbsoluteValue * maxAbsoluteValue;
+    return std::isfinite(determinant) &&
+           std::abs(determinant) > relativeRankThreshold;
+}
+
 bool hasMetricPosePriorBaseline(const BAOptions &options)
 {
     for (size_t left = 0; left < options.cameraPosePriors.size(); ++left)
@@ -510,6 +543,184 @@ BundleAdjustValidationResult validateAndNormalizeBundleAdjustOptions(
             BASolveStatus::InvalidInput,
             "BA 输入验证失败: LiDAR 统计权重必须为正，Huber 阈值必须有限且非负");
     }
+    if (!requestedOptions.enableLaserRangeConstraints &&
+        !requestedOptions.laserRangeConstraints.empty())
+    {
+        return invalid(
+            BASolveStatus::InvalidInput,
+            "BA 输入验证失败: 已提供激光测距 shot，但未启用激光测距约束");
+    }
+    if (requestedOptions.enableLaserRangeConstraints)
+    {
+        if (requestedOptions.laserRangeConstraints.empty())
+        {
+            return invalid(
+                BASolveStatus::InvalidInput,
+                "BA 输入验证失败: 已启用激光测距约束但 shot 列表为空");
+        }
+        if (!std::isfinite(requestedOptions.laserRangeWeight) ||
+            requestedOptions.laserRangeWeight <= 0.0 ||
+            !std::isfinite(requestedOptions.laserRangeHuberDelta) ||
+            requestedOptions.laserRangeHuberDelta < 0.0)
+        {
+            return invalid(
+                BASolveStatus::InvalidInput,
+                "BA 输入验证失败: 激光测距全局权重必须为正，Huber 阈值必须有限且非负");
+        }
+
+        for (size_t shotIndex = 0;
+             shotIndex < requestedOptions.laserRangeConstraints.size();
+             ++shotIndex)
+        {
+            const BALaserRangeConstraint &constraint =
+                requestedOptions.laserRangeConstraints[shotIndex];
+            const std::string prefix =
+                "BA 输入验证失败: 激光测距 shot[" +
+                std::to_string(shotIndex) + "] ";
+            if (constraint.cameraIndex < 0 ||
+                constraint.cameraIndex >= static_cast<int>(cameras.size()))
+            {
+                return invalid(BASolveStatus::InvalidInput,
+                               prefix + "cameraIndex 越界");
+            }
+            if (!isFinitePoint(constraint.initialPoint) ||
+                !isFinitePoint(constraint.leverArmCameraMeters) ||
+                !std::isfinite(constraint.observedRangeMeters) ||
+                constraint.observedRangeMeters <= 0.0 ||
+                !std::isfinite(constraint.sigmaRangeMeters) ||
+                constraint.sigmaRangeMeters <= 0.0 ||
+                !std::isfinite(constraint.weight) ||
+                constraint.weight <= 0.0 ||
+                !std::isfinite(constraint.ephemerisTimeSeconds))
+            {
+                return invalid(
+                    BASolveStatus::InvalidInput,
+                    prefix + "必须包含有限落点/杆臂/时间以及正的 range、sigma 和 weight");
+            }
+            const Camera &camera = cameras[static_cast<size_t>(constraint.cameraIndex)];
+            const std::array<double, 3> cameraCenter = camera.cameraCenter();
+            const std::array<double, 9> cameraToWorld =
+                camera.cameraToWorldRotation();
+            std::array<double, 3> emitter = cameraCenter;
+            for (int row = 0; row < 3; ++row)
+            {
+                for (int column = 0; column < 3; ++column)
+                {
+                    emitter[static_cast<size_t>(row)] +=
+                        cameraToWorld[static_cast<size_t>(row * 3 + column)] *
+                        constraint.leverArmCameraMeters[static_cast<size_t>(column)];
+                }
+            }
+            const double dx = constraint.initialPoint[0] - emitter[0];
+            const double dy = constraint.initialPoint[1] - emitter[1];
+            const double dz = constraint.initialPoint[2] - emitter[2];
+            const double initialRangeSquared = dx * dx + dy * dy + dz * dz;
+            if (!std::isfinite(initialRangeSquared) || initialRangeSquared <= 1.0e-18)
+            {
+                return invalid(
+                    BASolveStatus::InvalidInput,
+                    prefix + "初始落点不能与按杆臂换算后的激光发射位置重合");
+            }
+            const double effectiveWeight =
+                requestedOptions.laserRangeWeight * constraint.weight;
+            const double normalizedScale =
+                std::sqrt(effectiveWeight) / constraint.sigmaRangeMeters;
+            const double scaledHuberDelta =
+                requestedOptions.laserRangeHuberDelta *
+                std::sqrt(effectiveWeight);
+            if (!std::isfinite(effectiveWeight) ||
+                !std::isfinite(normalizedScale) ||
+                !std::isfinite(scaledHuberDelta))
+            {
+                return invalid(
+                    BASolveStatus::InvalidInput,
+                    prefix + "全局/shot 权重与 sigma 组合导致非有限残差尺度");
+            }
+
+            std::set<int> measuredCameras;
+            bool measuredInitialPointProjects = true;
+            for (const BAObservation &observation :
+                 constraint.measuredImageObservations)
+            {
+                if (!observationIsUsable(observation, cameras.size()))
+                {
+                    return invalid(
+                        BASolveStatus::InvalidInput,
+                        prefix + "包含非法真实 measured 像点");
+                }
+                measuredCameras.insert(observation.cameraIndex);
+                const double world[3] = {
+                    constraint.initialPoint[0],
+                    constraint.initialPoint[1],
+                    constraint.initialPoint[2],
+                };
+                double pixel[2] = {0.0, 0.0};
+                measuredInitialPointProjects =
+                    measuredInitialPointProjects &&
+                    cameras[static_cast<size_t>(observation.cameraIndex)]
+                        .projectWorldPoint(world, pixel);
+            }
+            if (!measuredInitialPointProjects)
+            {
+                return invalid(
+                    BASolveStatus::InvalidInput,
+                    prefix + "真实 measured 像点的辅助点初值必须在对应帧相机前方");
+            }
+
+            switch (constraint.pointMode)
+            {
+            case BALaserPointMode::Fixed:
+                break;
+            case BALaserPointMode::Constrained:
+                if (!isFinitePoint(constraint.pointPrior) ||
+                    !isUsableLaserPointSqrtInformation(
+                        constraint.pointPriorSqrtInformation))
+                {
+                    return invalid(
+                        BASolveStatus::InvalidInput,
+                        prefix + "Constrained 落点必须包含有限先验和满秩 3x3 平方根信息矩阵");
+                }
+                break;
+            case BALaserPointMode::Free:
+            {
+                bool hasNondegenerateBaseline = false;
+                for (auto left = measuredCameras.begin();
+                     left != measuredCameras.end() && !hasNondegenerateBaseline;
+                     ++left)
+                {
+                    auto right = left;
+                    ++right;
+                    for (; right != measuredCameras.end(); ++right)
+                    {
+                        const std::array<double, 3> leftCenter =
+                            cameras[static_cast<size_t>(*left)].cameraCenter();
+                        const std::array<double, 3> rightCenter =
+                            cameras[static_cast<size_t>(*right)].cameraCenter();
+                        if (isFinitePoint(leftCenter) &&
+                            isFinitePoint(rightCenter) &&
+                            squaredDistance(leftCenter, rightCenter) > 1.0e-16)
+                        {
+                            hasNondegenerateBaseline = true;
+                            break;
+                        }
+                    }
+                }
+                if (constraint.measuredImageObservations.size() < 2 ||
+                    measuredCameras.size() < 2 ||
+                    !hasNondegenerateBaseline)
+                {
+                    return invalid(
+                        BASolveStatus::UnsupportedConfiguration,
+                        prefix + "Free 落点至少需要两台具有非零基线相机的真实 measured 像点");
+                }
+                break;
+            }
+            default:
+                return invalid(BASolveStatus::InvalidInput,
+                               prefix + "pointMode 非法");
+            }
+        }
+    }
     if (!std::isfinite(requestedOptions.maxCeresCudaMemoryFraction) ||
         requestedOptions.maxCeresCudaMemoryFraction <= 0.0 ||
         requestedOptions.maxCeresCudaMemoryFraction > 1.0)
@@ -591,9 +802,9 @@ BundleAdjustValidationResult validateAndNormalizeBundleAdjustOptions(
 
     // 第二阶段判断调用方已经提供了哪些 gauge 信息。一个位姿先验只消除刚体
     // 自由度，至少两处非重合位姿参考才包含尺度；控制点需至少三个不共线物方点
-    // 才能完整约束 Sim(3)。比例尺只消除尺度自由度。LiDAR 点到面约束不能仅凭
-    // “存在”就视为完整 7-DOF gauge：平行或近共面法向仍可能缺少平面内
-    // 平移/旋转自由度。
+    // 才能完整约束 Sim(3)。比例尺只消除尺度自由度。LiDAR 点到面或激光测距
+    // 约束不能仅凭“存在”就视为完整 7-DOF gauge：平行/近共面法向可能缺少
+    // 平面内自由度，零杆臂测距也不能直接约束相机姿态。
     // 因此 AutoAnchor 对 LiDAR BA 保持与纯影像 BA 相同的两相机锚定。
     const bool completeControlPointGauge =
         hasCompleteControlPointGauge(tracks, requestedOptions);

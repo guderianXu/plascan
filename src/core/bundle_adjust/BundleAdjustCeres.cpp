@@ -213,6 +213,96 @@ struct LaserPlaneResidual
     }
 };
 
+struct LaserRangeResidual
+{
+    Camera camera;
+    BALaserRangeConstraint constraint;
+    double sqrtWeight = 1.0;
+
+    template <typename T>
+    bool operator()(const T *const cameraDelta,
+                    const T *const point,
+                    T *residuals) const
+    {
+        T deltaRotation[9];
+        xjw::ba::poseDeltaRotation(cameraDelta, deltaRotation);
+        const std::array<double, 9> baseRotation =
+            camera.cameraToWorldRotation();
+        T updatedRotation[9];
+        for (int row = 0; row < 3; ++row)
+        {
+            for (int column = 0; column < 3; ++column)
+            {
+                T value = T(0.0);
+                for (int inner = 0; inner < 3; ++inner)
+                {
+                    value +=
+                        deltaRotation[row * 3 + inner] *
+                        T(baseRotation[static_cast<size_t>(
+                            inner * 3 + column)]);
+                }
+                updatedRotation[row * 3 + column] = value;
+            }
+        }
+
+        const std::array<double, 3> center = camera.cameraCenter();
+        T emitter[3] = {
+            T(center[0]) + cameraDelta[3],
+            T(center[1]) + cameraDelta[4],
+            T(center[2]) + cameraDelta[5],
+        };
+        for (int row = 0; row < 3; ++row)
+        {
+            for (int column = 0; column < 3; ++column)
+            {
+                emitter[row] +=
+                    updatedRotation[row * 3 + column] *
+                    T(constraint.leverArmCameraMeters[
+                        static_cast<size_t>(column)]);
+            }
+        }
+
+        const T dx = point[0] - emitter[0];
+        const T dy = point[1] - emitter[1];
+        const T dz = point[2] - emitter[2];
+        using std::sqrt;
+        const T predictedRange = sqrt(dx * dx + dy * dy + dz * dz);
+        residuals[0] =
+            T(sqrtWeight / constraint.sigmaRangeMeters) *
+            (predictedRange - T(constraint.observedRangeMeters));
+        return true;
+    }
+};
+
+struct LaserPointPriorResidual
+{
+    std::array<double, 3> pointPrior{{0.0, 0.0, 0.0}};
+    std::array<double, 9> sqrtInformation{{0.0, 0.0, 0.0,
+                                           0.0, 0.0, 0.0,
+                                           0.0, 0.0, 0.0}};
+
+    template <typename T>
+    bool operator()(const T *const point, T *residuals) const
+    {
+        const T delta[3] = {
+            point[0] - T(pointPrior[0]),
+            point[1] - T(pointPrior[1]),
+            point[2] - T(pointPrior[2]),
+        };
+        for (int row = 0; row < 3; ++row)
+        {
+            residuals[row] = T(0.0);
+            for (int column = 0; column < 3; ++column)
+            {
+                residuals[row] +=
+                    T(sqrtInformation[static_cast<size_t>(
+                        row * 3 + column)]) * delta[column];
+            }
+        }
+        return true;
+    }
+};
+
 struct ControlPointResidual
 {
     BAControlPointConstraint constraint;
@@ -523,6 +613,9 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
     result.totalTracks = static_cast<int>(tracks.size());
     result.refinedCameras = cameras;
     result.points.resize(tracks.size());
+    result.laserRangeShots.resize(options.enableLaserRangeConstraints
+                                      ? options.laserRangeConstraints.size()
+                                      : 0);
     result.requestedBackend = options.backend;
     result.usedBackend = requestGpu ? BABackend::CeresCuda : BABackend::CeresCpu;
     result.usedGpu = requestGpu;
@@ -533,16 +626,30 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         BARefinedPoint &point = result.points[ti];
         point.point = tracks[ti].initialPoint;
     }
+    for (size_t shotIndex = 0;
+         shotIndex < result.laserRangeShots.size();
+         ++shotIndex)
+    {
+        const BALaserRangeConstraint &constraint =
+            options.laserRangeConstraints[shotIndex];
+        BARefinedLaserRangeShot &shot = result.laserRangeShots[shotIndex];
+        shot.point = constraint.initialPoint;
+        shot.pointMode = constraint.pointMode;
+        shot.shotId = constraint.shotId;
+        shot.ephemerisTimeSeconds = constraint.ephemerisTimeSeconds;
+        shot.sourceIndex = constraint.sourceIndex;
+    }
 
 #ifndef PLASCAN_BA_HAS_CERES
     result.solveStatus = BASolveStatus::BackendUnavailable;
     result.backendMessage = "Ceres 未编译进当前目标";
     return result;
 #else
-    if (cameras.empty() || tracks.empty())
+    if (cameras.empty() ||
+        (tracks.empty() && result.laserRangeShots.empty()))
     {
         result.solveStatus = BASolveStatus::InvalidInput;
-        result.backendMessage = "Ceres BA 输入相机或 track 为空";
+        result.backendMessage = "Ceres BA 输入相机为空或没有 track/激光测距 shot";
         return result;
     }
     if (options.cancelFlag && options.cancelFlag->load())
@@ -571,9 +678,12 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
     // 对齐数组中，但不会进入 Ceres Problem。
     std::vector<std::array<double, 6>> cameraDeltas(cameras.size());
     std::vector<std::array<double, 3>> pointParams(tracks.size());
+    std::vector<std::array<double, 3>> laserPointParams(
+        result.laserRangeShots.size());
     std::vector<std::vector<BAObservation>> validObservationsByTrack(tracks.size());
     std::vector<char> activeTrack(tracks.size(), 0);
     std::vector<char> cameraHasResidual(cameras.size(), 0);
+    std::vector<char> cameraHasLaserResidual(cameras.size(), 0);
     ceres::Problem problem;
     const auto setupStart = std::chrono::steady_clock::now();
 
@@ -654,15 +764,42 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         }
     }
 
+    const int activeLaserRangeCount =
+        static_cast<int>(result.laserRangeShots.size());
+    int activeLaserMeasuredObservationCount = 0;
+    if (options.enableLaserRangeConstraints)
+    {
+        for (const BALaserRangeConstraint &constraint :
+             options.laserRangeConstraints)
+        {
+            const size_t rangeCameraIndex =
+                static_cast<size_t>(constraint.cameraIndex);
+            cameraHasResidual[rangeCameraIndex] = 1;
+            cameraHasLaserResidual[rangeCameraIndex] = 1;
+            for (const BAObservation &observation :
+                 constraint.measuredImageObservations)
+            {
+                ++activeLaserMeasuredObservationCount;
+                const size_t measuredCameraIndex =
+                    static_cast<size_t>(observation.cameraIndex);
+                cameraHasResidual[measuredCameraIndex] = 1;
+                cameraHasLaserResidual[measuredCameraIndex] = 1;
+            }
+        }
+    }
+
     result.observationCount = activeObservationCount;
     result.ceresRejectedInitialTracks = rejectedInitialTrackCount;
-    if (activeTrackCount == 0)
+    const int progressResidualCount =
+        activeObservationCount + activeLaserRangeCount +
+        activeLaserMeasuredObservationCount;
+    if (activeTrackCount == 0 && activeLaserRangeCount == 0)
     {
         const auto setupEnd = std::chrono::steady_clock::now();
         result.setupSeconds = std::chrono::duration<double>(setupEnd - setupStart).count();
         result.totalSeconds = result.setupSeconds;
         result.solveStatus = BASolveStatus::InvalidInput;
-        result.backendMessage = "Ceres BA 没有足够有效 track";
+        result.backendMessage = "Ceres BA 没有足够有效 track 或激光测距 shot";
         return result;
     }
 
@@ -672,13 +809,15 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
     for (size_t ci = 0; ci < cameras.size(); ++ci)
     {
         cameraDeltas[ci] = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
-        if (!options.refineCameraPose || !cameraHasResidual[ci])
+        if (!cameraHasResidual[ci] ||
+            (!options.refineCameraPose && !cameraHasLaserResidual[ci]))
         {
             continue;
         }
 
         problem.AddParameterBlock(cameraDeltas[ci].data(), 6);
-        if (isCameraFixed(static_cast<int>(ci), options))
+        if (!options.refineCameraPose ||
+            isCameraFixed(static_cast<int>(ci), options))
         {
             problem.SetParameterBlockConstant(cameraDeltas[ci].data());
         }
@@ -781,8 +920,8 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
             refineSharedIntrinsics
                 ? static_cast<int>(groupIdToParameterIndex.size())
                 : 0,
-            activeTrackCount,
-            result.observationCount,
+            activeTrackCount + activeLaserRangeCount,
+            progressResidualCount,
             requestGpu && cudaDeviceReady,
             cudaFreeBytes,
             hasCeresSparseLinearAlgebra());
@@ -1129,6 +1268,134 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         }
     }
 
+    auto addLaserMeasuredObservation =
+        [&](const BAObservation &observation, double *laserPoint)
+        {
+            const size_t cameraIndex =
+                static_cast<size_t>(observation.cameraIndex);
+            if (options.refineCameraPose && refineSharedIntrinsics)
+            {
+                auto *cost =
+                    new ceres::AutoDiffCostFunction<
+                        PoseDeltaSharedIntrinsicsReprojectionResidual,
+                        2,
+                        6,
+                        3,
+                        9>(
+                        new PoseDeltaSharedIntrinsicsReprojectionResidual{
+                            xjw::ba::makeProjectionCamera(cameras[cameraIndex]),
+                            observation});
+                problem.AddResidualBlock(
+                    cost,
+                    makeHuberLoss(options.huberDelta),
+                    cameraDeltas[cameraIndex].data(),
+                    laserPoint,
+                    sharedIntrinsicsParameters[static_cast<size_t>(
+                        calibrationParameterByCamera[cameraIndex])].data());
+            }
+            else if (options.refineCameraPose)
+            {
+                auto *cost =
+                    new ceres::AutoDiffCostFunction<
+                        PoseDeltaReprojectionResidual,
+                        2,
+                        6,
+                        3>(new PoseDeltaReprojectionResidual{
+                        xjw::ba::makeProjectionCamera(cameras[cameraIndex]),
+                        observation});
+                problem.AddResidualBlock(
+                    cost,
+                    makeHuberLoss(options.huberDelta),
+                    cameraDeltas[cameraIndex].data(),
+                    laserPoint);
+            }
+            else if (refineSharedIntrinsics)
+            {
+                auto *cost =
+                    new ceres::AutoDiffCostFunction<
+                        FixedPoseSharedIntrinsicsReprojectionResidual,
+                        2,
+                        3,
+                        9>(
+                        new FixedPoseSharedIntrinsicsReprojectionResidual{
+                            xjw::ba::makeProjectionCamera(cameras[cameraIndex]),
+                            observation});
+                problem.AddResidualBlock(
+                    cost,
+                    makeHuberLoss(options.huberDelta),
+                    laserPoint,
+                    sharedIntrinsicsParameters[static_cast<size_t>(
+                        calibrationParameterByCamera[cameraIndex])].data());
+            }
+            else
+            {
+                auto *cost =
+                    new ceres::AutoDiffCostFunction<
+                        FixedCameraReprojectionResidual,
+                        2,
+                        3>(new FixedCameraReprojectionResidual{
+                        xjw::ba::makeProjectionCamera(cameras[cameraIndex]),
+                        observation});
+                problem.AddResidualBlock(
+                    cost,
+                    makeHuberLoss(options.huberDelta),
+                    laserPoint);
+            }
+        };
+
+    if (options.enableLaserRangeConstraints)
+    {
+        for (size_t shotIndex = 0;
+             shotIndex < options.laserRangeConstraints.size();
+             ++shotIndex)
+        {
+            const BALaserRangeConstraint &constraint =
+                options.laserRangeConstraints[shotIndex];
+            laserPointParams[shotIndex] = constraint.initialPoint;
+            double *laserPoint = laserPointParams[shotIndex].data();
+            problem.AddParameterBlock(laserPoint, 3);
+            if (constraint.pointMode == BALaserPointMode::Fixed)
+            {
+                problem.SetParameterBlockConstant(laserPoint);
+            }
+
+            const double sqrtWeight = std::sqrt(
+                options.laserRangeWeight * constraint.weight);
+            auto *rangeCost =
+                new ceres::AutoDiffCostFunction<LaserRangeResidual,
+                                                1,
+                                                6,
+                                                3>(
+                    new LaserRangeResidual{
+                        cameras[static_cast<size_t>(constraint.cameraIndex)],
+                        constraint,
+                        sqrtWeight});
+            problem.AddResidualBlock(
+                rangeCost,
+                makeHuberLoss(options.laserRangeHuberDelta * sqrtWeight),
+                cameraDeltas[static_cast<size_t>(constraint.cameraIndex)].data(),
+                laserPoint);
+
+            if (constraint.pointMode == BALaserPointMode::Constrained)
+            {
+                auto *priorCost =
+                    new ceres::AutoDiffCostFunction<LaserPointPriorResidual,
+                                                    3,
+                                                    3>(
+                        new LaserPointPriorResidual{
+                            constraint.pointPrior,
+                            constraint.pointPriorSqrtInformation});
+                problem.AddResidualBlock(priorCost, nullptr, laserPoint);
+            }
+
+            for (const BAObservation &observation :
+                 constraint.measuredImageObservations)
+            {
+                addLaserMeasuredObservation(observation, laserPoint);
+            }
+        }
+    }
+
     if (options.enableScaleBarConstraints)
     {
         for (const BAScaleBarConstraint &constraint : options.scaleBarConstraints)
@@ -1309,7 +1576,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         {
             warmupCallback = std::make_unique<CeresBaIterationCallback>(
                 options,
-                result.observationCount,
+                progressResidualCount,
                 0,
                 warmupIterations,
                 totalIterationBudget);
@@ -1345,7 +1612,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                     lowOrderCallback =
                         std::make_unique<CeresBaIterationCallback>(
                             options,
-                            result.observationCount,
+                            progressResidualCount,
                             refinementOffset,
                             lowOrderIterations,
                             totalIterationBudget);
@@ -1377,7 +1644,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                     refinementCallback =
                         std::make_unique<CeresBaIterationCallback>(
                             options,
-                            result.observationCount,
+                            progressResidualCount,
                             refinementOffset,
                             refinementIterations,
                             totalIterationBudget);
@@ -1401,7 +1668,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
             refinementCallback =
                 std::make_unique<CeresBaIterationCallback>(
                     options,
-                    result.observationCount,
+                    progressResidualCount,
                     0,
                     totalIterationBudget,
                     totalIterationBudget);
@@ -1606,6 +1873,15 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
             (result.selfCalibrationStagesRun == 3
                  ? static_cast<int>(lowOrderSummary.iterations.size())
                  : 0);
+    }
+    for (size_t shotIndex = 0;
+         shotIndex < result.laserRangeShots.size();
+         ++shotIndex)
+    {
+        BARefinedLaserRangeShot &shot = result.laserRangeShots[shotIndex];
+        shot.point = laserPointParams[shotIndex];
+        shot.valid =
+            plamatrix::isFinite(plamatrix::Vec3<double>(shot.point));
     }
     result.refinedCameraCount = options.refineCameraPose ? variableCameraCount : 0;
     if (refineSharedIntrinsics)

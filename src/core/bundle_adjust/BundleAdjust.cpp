@@ -1190,7 +1190,7 @@ bool resultFailsQualityGate(const BAResult &result,
         return true;
     }
 
-    if (!std::isfinite(result.meanRmsAfter))
+    if (result.totalTracks > 0 && !std::isfinite(result.meanRmsAfter))
     {
         if (message)
         {
@@ -1210,7 +1210,9 @@ bool resultFailsQualityGate(const BAResult &result,
     }
 
     const double maxGrowth = std::max(0.0, options.maxAcceptedRmsGrowth);
-    if (maxGrowth > 0.0 && std::isfinite(result.meanRmsBefore))
+    if (result.totalTracks > 0 &&
+        maxGrowth > 0.0 &&
+        std::isfinite(result.meanRmsBefore))
     {
         if (result.meanRmsBefore > 1e-12)
         {
@@ -1242,6 +1244,13 @@ bool resultFailsQualityGate(const BAResult &result,
             result.laserRmsAfterMeters,
             maxConstraintGrowth,
             "LiDAR 点到面约束",
+            message) ||
+        !detail::constraintRmsPassesQualityGate(
+            result.laserRangeConstraintCount,
+            result.laserRangeRmsBeforeMeters,
+            result.laserRangeRmsAfterMeters,
+            maxConstraintGrowth,
+            "行星激光测距约束",
             message) ||
         !detail::constraintRmsPassesQualityGate(
             result.controlPointConstraintCount,
@@ -1605,15 +1614,15 @@ BABackendCapabilities BundleAdjust::backendCapabilities(BABackend backend)
     switch (backend)
     {
     case BABackend::Auto:
-        return {true, true, true, true, true, true, true};
+        return {true, true, true, true, true, true, true, true};
     case BABackend::LegacyCpu:
-        return {true, true, true, false, false, false, true};
+        return {true, true, true, false, false, false, true, false};
     case BABackend::CeresCpu:
     case BABackend::CeresCuda:
-        return {true, true, true, true, true, true, true};
+        return {true, true, true, true, true, true, true, true};
     case BABackend::NativeCuda:
         // 当前 native CUDA kernel 只联合调度各 track 的三维点更新，尚未求解相机块。
-        return {true, false, false, false, false, false, false};
+        return {true, false, false, false, false, false, false, false};
     }
     return {};
 }
@@ -1651,6 +1660,11 @@ BABackendDecision BundleAdjust::decideBackendForProblem(const BAProblemStats &st
     if (options.backend != BABackend::Auto)
     {
         return {options.backend, "explicit_backend"};
+    }
+    if (options.enableLaserRangeConstraints)
+    {
+        return {BABackend::CeresCpu,
+                "planetary_laser_range_constraints_require_ceres"};
     }
     if (options.cameraPlaneConstraint.enabled &&
         isBackendAvailable(BABackend::CeresCpu))
@@ -1733,7 +1747,8 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
     const BAOptions &options = normalizedOptions;
 
     auto runLegacy = [&](const std::string &fallbackMessage) {
-        if (options.cameraPlaneConstraint.enabled)
+        if (options.cameraPlaneConstraint.enabled ||
+            options.enableLaserRangeConstraints)
         {
             BAResult result;
             result.requestedBackend = options.backend;
@@ -1741,8 +1756,11 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
             result.solveStatus = BASolveStatus::UnsupportedConfiguration;
             result.solutionUsable = false;
             result.backendFallback = options.backend != BABackend::LegacyCpu;
-            result.backendMessage = fallbackMessage +
-                                    "；legacy_cpu 不支持相机中心平面约束，未执行无约束回退";
+            result.backendMessage =
+                fallbackMessage +
+                (options.enableLaserRangeConstraints
+                     ? "；legacy_cpu 不支持行星激光测距约束，未执行无约束回退"
+                     : "；legacy_cpu 不支持相机中心平面约束，未执行无约束回退");
             result.backendSelectionReason = fallbackMessage;
             result.totalTracks = static_cast<int>(tracks.size());
             result.observationCount = summarizeProblem(cameras, tracks).observationCount;
@@ -1763,7 +1781,8 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
     };
 
     auto pointOnlyCeresTooLarge = [&]() {
-        if (options.refineCameraPose)
+        if (options.refineCameraPose ||
+            options.enableLaserRangeConstraints)
         {
             return false;
         }
@@ -1777,6 +1796,10 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
         BAOptions selectedOptions = options;
         const BABackendDecision decision = decideBackendForProblem(stats, options);
         selectedOptions.backend = decision.backend;
+        if (options.enableLaserRangeConstraints)
+        {
+            selectedOptions.allowBackendFallback = false;
+        }
         const std::string selectedName = backendName(selectedOptions.backend);
 
         if (selectedOptions.backend == BABackend::LegacyCpu)
@@ -1803,7 +1826,8 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
         if (!rejectCandidate &&
             options.enableBackendQualityGate &&
             options.compareAutoBackendWithLegacy &&
-            !options.cameraPlaneConstraint.enabled)
+            !options.cameraPlaneConstraint.enabled &&
+            !options.enableLaserRangeConstraints)
         {
             BAOptions legacyOptions = options;
             legacyOptions.backend = BABackend::LegacyCpu;
@@ -1818,6 +1842,24 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
 
         if (rejectCandidate)
         {
+            if (options.enableLaserRangeConstraints)
+            {
+                candidate.qualityGateRejected = true;
+                candidate.qualityGateMessage = qualityMessage;
+                candidate.solutionUsable = false;
+                if (candidate.solveStatus == BASolveStatus::Success ||
+                    candidate.solveStatus == BASolveStatus::NoConvergence)
+                {
+                    candidate.solveStatus = BASolveStatus::NumericalFailure;
+                }
+                candidate.backendFallback = false;
+                candidate.backendSelectionReason =
+                    "自动候选 " + selectedName +
+                    " 被质量门控拒绝；行星激光测距没有兼容的 legacy 回退";
+                candidate.backendMessage = candidate.backendSelectionReason +
+                                           "；" + qualityMessage;
+                return candidate;
+            }
             if (legacy.totalTracks <= 0)
             {
                 BAOptions legacyOptions = options;
@@ -1866,14 +1908,17 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
             options.refineSharedPrincipalPoint ||
             options.refineSharedRadialDistortion ||
             options.cameraPlaneConstraint.enabled ||
+            options.enableLaserRangeConstraints ||
             (options.refineSharedFocalLength &&
              calibrationGroupCount(options, cameras.size()) > 1);
         if (requiresCeresFeatures)
         {
             const std::string message =
-                options.cameraPlaneConstraint.enabled
-                    ? "legacy_cpu 不支持相机中心平面约束，"
-                    : "legacy_cpu 不支持请求的联合共享内参优化，";
+                options.enableLaserRangeConstraints
+                    ? "legacy_cpu 不支持行星激光测距约束，"
+                    : options.cameraPlaneConstraint.enabled
+                          ? "legacy_cpu 不支持相机中心平面约束，"
+                          : "legacy_cpu 不支持请求的联合共享内参优化，";
             if (detail::isCeresBackendCompiled() &&
                 options.allowBackendFallback)
             {
@@ -1923,12 +1968,14 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
              !capabilities.refinesSharedPrincipalPoint) ||
             (options.refineSharedRadialDistortion &&
              !capabilities.refinesSharedRadialDistortion) ||
-            ((options.enableLaserPlaneConstraints ||
-              options.enableControlPointConstraints ||
-              options.enableScaleBarConstraints ||
+             ((options.enableLaserPlaneConstraints ||
+               options.enableControlPointConstraints ||
+               options.enableScaleBarConstraints ||
               options.cameraPlaneConstraint.enabled ||
               !options.cameraPosePriors.empty()) &&
-             !capabilities.supportsSoftConstraints);
+              !capabilities.supportsSoftConstraints) ||
+             (options.enableLaserRangeConstraints &&
+              !capabilities.supportsLaserRangeConstraints);
         if (unsupportedConfiguration)
         {
             const std::string message =

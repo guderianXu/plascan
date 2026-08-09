@@ -182,8 +182,8 @@ core/
 │   └── README.md                # 工作流、支持族、sidecar 和 CLI 说明
 │
 ├── bundle_adjust/              # 光束法平差
-│   ├── BundleAdjust.h/cpp      # BA 公共接口、自动后端选择、legacy CPU 后端调度、后端状态回传
-│   ├── BundleAdjustCeres.h/cpp # Ceres CPU/CUDA 后端，记录 dense Schur CPU/GPU、setup/solve 耗时和回退原因
+│   ├── BundleAdjust.h/cpp      # BA 公共接口、独立行星激光 range shot、自动后端选择和状态回传
+│   ├── BundleAdjustCeres.h/cpp # Ceres CPU/CUDA 后端，联合普通 track、激光测距/落点及其它物方约束
 │   ├── BundleAdjustCeresPlanning.h/cpp # Dense/Sparse/Iterative Schur 规划和 CUDA 显存预算
 │   ├── BundleAdjustProjection.h/cpp # 与 Camera 一致的模板投影模型和共享相机快照转换
 │   ├── BundleAdjustValidation.h/cpp # 输入、标定组和 gauge 校验/规范化
@@ -198,7 +198,12 @@ core/
 ├── lidar/                      # LiDAR / 激光点约束
 │   ├── LaserConstraintTypes.h  # 点到面约束、地图采样和关联统计类型
 │   ├── LaserConstraintMap.h/cpp # PLY 点云读取、法线/曲率筛选、最近平面查询
-│   └── LaserConstraintAssociation.h/cpp # BA track 与 LiDAR 平面约束关联
+│   ├── LaserConstraintAssociation.h/cpp # BA track 与 LiDAR 平面约束关联
+│   ├── PlanetaryLaserShot.h/cpp # 稀疏行星测距数据集、Fixed/Constrained/Free 落点和严格语义校验
+│   ├── PlanetaryLaserJson.h/cpp # PlaScan SI JSON v1 严格解析及 ISIS 导入上下文接口
+│   ├── PlanetaryLaserIsisJson.cpp # ISIS LidarData 单位换算、球面协方差转 XYZ 和虚拟像点保护
+│   ├── PlanetaryLaserBaAdapter.h/cpp # shot/影像唯一映射、frame/杆臂检查及独立 BA 约束装配
+│   └── tests/                  # SI/ISIS 解析、协方差转换、关联歧义、模式边界与安全拒绝测试
 │
 ├── mask/                       # 照片蒙版生成与合成
 │   ├── MaskGenerator.h/cpp     # 黑背景/亮度阈值蒙版、蒙版合成和轮廓提取
@@ -411,6 +416,33 @@ SfM、BA 和创建连接点阶段使用相同的每影像限额语义。焦距�
 `sfm/ReferenceTerrainPrior.h/cpp` 把参考 DEM 或 LiDAR 局部高度面接入 BA soft prior。参考地形默认作为软约束参与诊断，
 不把已知外参硬固定；BA 报告应记录 pose prior / terrain prior 优化前后的残差。
 
+`core/lidar` 中并存两条不能混用的激光路径。`LaserConstraintMap` / `LaserConstraintAssociation` 处理带法向
+PLY 扫描表面，通过最近平面建立普通 BA track 的点到面约束；`PlanetaryLaserShot` / `PlanetaryLaserJson` /
+`PlanetaryLaserIsisJson` / `PlanetaryLaserBaAdapter` 处理 LOLA、MOLA 一类稀疏测距 shot，不要求法向，也不做
+最近邻关联。后者把每个 shot 建成独立辅助落点参数块，并用
+`(||P - (C + R * leverArm)|| - range) / sigmaRange` 约束同期相机。Fixed 落点保持常量，Constrained 落点使用
+完整 `3 x 3` XYZ 协方差白化先验，Free 落点必须由至少两台非零基线相机的真实 `measured` 像点约束。
+普通 track 与激光 shot 的点和统计完全分离。
+
+PlaScan SI JSON v1 显式保存目标、天体固连 frame、激光 frame、TDB ET 时间、单程/往返语义、杆臂和
+image measure 类型。ISIS `LidarData` 缺失的目标/frame/传感器模型/range 类型/杆臂由调用方上下文补齐；
+其 `aprioriMatrix` 按 `(latitude rad, longitude rad, radius m)` 球面协方差读取，再经球面到 XYZ 雅可比
+转换为完整米制协方差。ISIS 由落点反投影得到的 measures 始终标记为 `projected`，不会进入真实像点残差。
+当前适配器只接受唯一同期映射的静态 frame camera，严格拒绝 line-scan、未经换算的 round-trip range、
+坐标系不一致和歧义关联；真实 `measured` 像点未映射时默认失败，ISIS `serialNumber` 等产品标识由调用方按
+求解相机索引提供稳定别名，工程 `image_uuid` 由 GUI/CLI 自动按相机顺序合并。完整 ID 唯一命中优先于
+filename/stem 回退。当前一个 shot 只允许一台同期相机；ISIS 多 `simultaneousImages` 共享同一落点的完整行为
+尚未实现。像点协方差当前只接受可精确转成核心标量权重的 `sigma^2 I`；各向异性或相关矩阵明确拒绝。
+`ephemeris_time_s` 只保留到报告，尚无 SPICE/逐行时变轨迹求值。Auto 模式的 Ceres range 候选失败或被质量
+门控拒绝时直接失败，禁止回退到不支持测距约束的 Legacy。行星激光 dry-run 仍执行数据、传感器模型、
+坐标系和别名预校验；初始落点与杆臂修正后的发射点重合时也会在求解前拒绝。
+该链路由 `src/core/lidar/tests/test_planetary_laser_json.cpp` 和
+`test_planetary_laser_ba_adapter.cpp` 覆盖格式、ISIS 协方差、projected/measured 类型、像点权重与关联安全边界；
+`src/core/bundle_adjust/tests/test_bundle_adjust_ceres_backend.cpp` 覆盖 Fixed/Constrained/Free、杆臂和后端能力；
+`tests/test_bundle_adjust_service_planetary_laser.cpp` 覆盖 SI/ISIS 服务端别名/工程 UUID 关联、严格相机顺序、结果写出与
+line-scan 拒绝；`tests/test_planetary_laser_preview.cpp` 覆盖 GUI 预览和质量摘要。
+`tests/test_reference_dataset_planetary_laser.cpp` 验证 ISIS 点签名识别，并防止普通 `points` JSON 被误分类。
+
 `sfm/pipeline/SfmBundleAdjustCoordinator` 是空三调用 `bundle_adjust` 的正式入口。它构造局部或全局
 相机/轨迹问题、固定边界相机、转发进度，并只回写 `solutionUsable=true` 的结果。无绝对控制时，
 `SimilarityGaugeNormalizer` 在全局 BA 后恢复确定性锚点和初始基线尺度；有控制点或比例尺时由绝对约束接管规范。
@@ -426,6 +458,9 @@ SfM、BA 和创建连接点阶段使用相同的每影像限额语义。焦距�
 和分组共享焦距；CPU 按问题规模选择 Dense/Sparse/Iterative Schur，CUDA dense 求解前执行显存预算。
 Legacy CPU 保留小型固定焦距问题。所有后端统一返回状态、可用性、取消、回退原因和耗时，
 正常 Auto 路径只有未通过状态或质量门控时才回退，不再无条件重复完整 Legacy BA。
+行星激光 range shot 当前由 Ceres 后端实现；后端能力表和输入校验阻止 Legacy CPU / Native CUDA 静默忽略
+该约束。结果单独返回参与求解的 shot 数、优化前后 range RMS 和逐 shot 落点/残差，不污染普通影像
+重投影 RMS、track 过滤计数或有效 track 比例。
 
 无相机文件且没有用户内参时，`AerialTriangulationPipeline` 始终评估广域焦距尺度，并按注册覆盖、
 多视网络强度、点数和重投影质量排序。正式阶段重放最高质量的非默认候选，并重新自动选择初始像对。
@@ -513,7 +548,7 @@ gui/
 │   │   ├── ProjectData.h        # common 项目会话模型的旧包含路径兼容头
 │   │   └── ProjectFilesManager.h # common 项目文档模型的旧包含路径兼容头
 │   ├── manager/
-│   │   ├── ProjectManager.h/cpp # 项目管理器；含文件菜单点云/模型异步导入与成果登记
+│   │   ├── ProjectManager.h/cpp # 项目管理器；含参考激光 JSON 导入、frame/坐标系确认和 BA 启动
 │   │   ├── ProjectLifecycleController.h/cpp          # 创建、异步打开/结果加载、保存与关闭
 │   │   ├── ProjectMaskWorkflowController.h/cpp       # 蒙版对话框、异步生成、取消及结果登记
 │   │   ├── ProjectSparseReconstructionManager.h/cpp  # 稀疏重建管理
@@ -523,7 +558,7 @@ gui/
 │   │   ├── ProjectCameraSetupManager.h/cpp           # 相机设置管理
 │   │   └── ProjectUiCommands.h/cpp                   # UI 命令
 │   ├── services/
-│   │   ├── BundleAdjustService.h/cpp                 # BA 服务
+│   │   ├── BundleAdjustService.h/cpp                 # BA 服务；解析/装配行星 range shot 并写独立摘要
 │   │   ├── ProjectBaInputBuilder.h/cpp               # BA 输入构建
 │   │   ├── ProjectCameraImportService.h/cpp          # 相机导入
 │   │   ├── MetashapeCameraReferenceImporter.h/cpp    # WGS84 相机参考与 GNSS 杆臂 TXT 严格解析
@@ -618,6 +653,14 @@ Chunk 保存将核心、结果、配置和资源索引合并为一次 `doc.json`
 `.files/.plascan.lock`，避免 GUI/CLI 并发覆盖。共享影像只在所有 Chunk 都解除引用后清理。
 格式结构、路径安全规则和拒绝策略见
 [`docs/project/PLASCAN_PROJECT_FORMAT.md`](project/PLASCAN_PROJECT_FORMAT.md)。
+
+参考数据工作流将 schema 为 `plascan.planetary_laser_dataset` 的 JSON 登记为
+`planetary_laser_shots`。GUI 的 `ProjectManager` 在参考约束重新平差前加载并校验 PlaScan SI JSON，
+拒绝 line-scan 和 round-trip，要求用户显式确认当前相机求解 frame；非零杆臂还要确认传感器 frame。
+确认后的选项交给后台 `BundleAdjustService`，主线程不直接执行求解。ISIS `LidarData` 因缺少必要上下文，
+GUI 不猜测补齐；用户需通过 `bundle_adjust_cli --laser-range-isis-*` 导入，或先转换为 PlaScan SI JSON。
+服务在 `ba_run_summary.json` 的 `planetary_laser_range_summary` 中保存数据源、关联统计、range RMS 和逐 shot
+结果，无有效 shot 时不写回相机。
 
 ### 菜单结构
 
@@ -1022,6 +1065,15 @@ CLI 的输入清单与项目参数表达，不复制项目导入 UI。一键重�
 细化与点云产物写出由 `core/mvs` 服务实现，入口不保留算法副本。
 CLI 测试同样由各领域目录注册并放在对应 `tests/` 下，顶层 `tests/` 不再维护 CLI 聚合测试目标。
 
+`reconstruction/cli_bundle_adjust.cpp` 同时暴露两套显式互斥的激光入口：`--laser-cloud` 读取扫描 PLY
+并建立点到面约束；`--laser-range-data` 读取行星稀疏测距 JSON。后者要求
+`--laser-range-camera-frame`，非零杆臂还要求相机传感器 frame 与数据 `laser_frame` 一致；ISIS JSON
+通过 `--laser-range-isis-target`、`--laser-range-isis-body-frame`、`--laser-range-isis-laser-frame`、
+`--laser-range-isis-sensor-model`、`--laser-range-isis-range-type` 和 `--laser-range-isis-lever-arm` 补齐上下文。
+工程 `image_uuid` 自动按 BA 相机顺序合并；`--laser-range-image-alias CAMERA_INDEX=IMAGE_ID` 可重复提供 ISIS
+`serialNumber` 等额外稳定标识。`unknown` 语义、
+跳过未映射 shot 和忽略未映射真实 measured 像点均需单独显式开关。CLI 不进行最近时间关联或隐式坐标转换。
+
 **统一约定**：
 - `--help` / `-h` — 打印参数说明
 - `--config <file>` — JSON 配置文件（可与命令行参数合并，命令行优先）
@@ -1042,7 +1094,7 @@ CLI 测试同样由各领域目录注册并放在对应 `tests/` 下，顶层 `t
 
 阶段 2: 密集重建 (CLI 可用)
   ├─ feature_match_cli    双影像匹配  → 两个 `.pimatch` 分片
-  ├─ bundle_adjust_cli    光束法平差  → ba_run_summary.json / A-B 对比 JSON
+  ├─ bundle_adjust_cli    光束法平差  → ba_run_summary.json / A-B 对比 JSON / 行星激光 range 摘要
   ├─ marker_detect_cli    标靶检测    → plascan.marker-detections.v1 JSON
   ├─ marker_print_cli     标靶打印    → A4/Letter PDF
   ├─ rectify_cli          极线校正    → 校正影像对 + 单应矩阵 .xml

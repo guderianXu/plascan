@@ -1,6 +1,6 @@
 // =============================================================================
 // 文件: cli_bundle_adjust.cpp
-// 功能: PlaScan 光束法平差 CLI，可选 LiDAR 点到面约束和 A/B 对比
+// 功能: PlaScan 光束法平差 CLI，区分扫描点云点到面与行星稀疏激光测距
 // =============================================================================
 #include "cli_common.h"
 #include "CliConsole.h"
@@ -76,6 +76,48 @@ xjw::BABackend parseBaBackendName(const QString &raw)
     return xjw::BABackend::LegacyCpu;
 }
 
+xjw::lidar::PlanetaryLaserSensorModel parsePlanetaryLaserSensorModel(
+    const QString &raw)
+{
+    const QString value = raw.trimmed().toLower();
+    if (value == QLatin1String("frame"))
+    {
+        return xjw::lidar::PlanetaryLaserSensorModel::Frame;
+    }
+    if (value == QLatin1String("line_scan"))
+    {
+        return xjw::lidar::PlanetaryLaserSensorModel::LineScan;
+    }
+    if (value == QLatin1String("unknown"))
+    {
+        return xjw::lidar::PlanetaryLaserSensorModel::Unknown;
+    }
+    fatalQt(QStringLiteral(
+        "未知行星激光 sensor model: %1，可选 frame / line_scan / unknown").arg(raw));
+    return xjw::lidar::PlanetaryLaserSensorModel::Unknown;
+}
+
+xjw::lidar::PlanetaryLaserRangeType parsePlanetaryLaserRangeType(
+    const QString &raw)
+{
+    const QString value = raw.trimmed().toLower();
+    if (value == QLatin1String("one_way"))
+    {
+        return xjw::lidar::PlanetaryLaserRangeType::OneWay;
+    }
+    if (value == QLatin1String("round_trip"))
+    {
+        return xjw::lidar::PlanetaryLaserRangeType::RoundTrip;
+    }
+    if (value == QLatin1String("unknown"))
+    {
+        return xjw::lidar::PlanetaryLaserRangeType::Unknown;
+    }
+    fatalQt(QStringLiteral(
+        "未知行星激光 range type: %1，可选 one_way / round_trip / unknown").arg(raw));
+    return xjw::lidar::PlanetaryLaserRangeType::Unknown;
+}
+
 QStringList resolveSelectedImages(const QJsonObject &meta, const std::vector<std::string> &tokens)
 {
     QStringList selected;
@@ -135,6 +177,56 @@ bool directoryHasEntries(const QString &path)
     return dir.exists() && !dir.entryList(QDir::NoDotAndDotDot | QDir::AllEntries).isEmpty();
 }
 
+struct PlanetaryLaserCliOptions
+{
+    bool enabled = false;
+    QString dataPath;
+    QString cameraCoordinateFrame;
+    QString cameraSensorFrame;
+    xjw::lidar::PlanetaryLaserJsonParseOptions parseOptions;
+    QVector<QStringList> imageAliasesByCameraIndex;
+    bool confirmUnknownSensorIsFrame = false;
+    bool confirmUnknownRangeIsOneWay = false;
+    bool allowUnmappedShots = false;
+    bool allowUnmappedMeasuredImages = false;
+    double rangeWeight = 1.0;
+    double rangeHuberDeltaSigma = 3.0;
+};
+
+QVector<QStringList> parsePlanetaryLaserImageAliases(
+    const std::vector<std::string> &assignments,
+    int cameraCount)
+{
+    QVector<QStringList> aliases(cameraCount);
+    for (const std::string &rawAssignment : assignments)
+    {
+        const QString assignment =
+            xjw::cli::fromStdString(rawAssignment).trimmed();
+        const int separator = assignment.indexOf(QLatin1Char('='));
+        bool indexOk = false;
+        const int cameraIndex = separator > 0
+            ? assignment.left(separator).trimmed().toInt(&indexOk)
+            : -1;
+        const QString alias = separator > 0
+            ? assignment.mid(separator + 1).trimmed()
+            : QString();
+        if (!indexOk || cameraIndex < 0 || cameraIndex >= cameraCount ||
+            alias.isEmpty())
+        {
+            fatalQt(QStringLiteral(
+                "非法 --laser-range-image-alias '%1'；格式必须为 CAMERA_INDEX=IMAGE_ID，"
+                "且索引位于 [0, %2)")
+                        .arg(assignment)
+                        .arg(cameraCount));
+        }
+        if (!aliases[cameraIndex].contains(alias))
+        {
+            aliases[cameraIndex].append(alias);
+        }
+    }
+    return aliases;
+}
+
 void ensureOutputDirAllowed(const QString &outputDir, bool force)
 {
     if (directoryHasEntries(outputDir) && !force)
@@ -159,6 +251,7 @@ xjw::gui::BaServiceOptions makeServiceOptions(const QStringList &selectedImages,
                                               double laserWeight,
                                               double laserSigma,
                                               double laserHuberDelta,
+                                              const PlanetaryLaserCliOptions &planetaryLaser,
                                               bool exportEvalPlot)
 {
     xjw::gui::BaServiceOptions options;
@@ -177,6 +270,24 @@ xjw::gui::BaServiceOptions makeServiceOptions(const QStringList &selectedImages,
     options.laserWeight = laserWeight;
     options.laserSigmaMeters = laserSigma;
     options.laserHuberDeltaMeters = laserHuberDelta;
+    options.enablePlanetaryLaserRangeConstraints = planetaryLaser.enabled;
+    options.planetaryLaserDataPath = planetaryLaser.dataPath;
+    options.planetaryLaserCameraCoordinateFrame =
+        planetaryLaser.cameraCoordinateFrame;
+    options.planetaryLaserCameraSensorFrame = planetaryLaser.cameraSensorFrame;
+    options.planetaryLaserParseOptions = planetaryLaser.parseOptions;
+    options.planetaryLaserImageAliasesByCameraIndex =
+        planetaryLaser.imageAliasesByCameraIndex;
+    options.planetaryLaserConfirmUnknownSensorIsFrame =
+        planetaryLaser.confirmUnknownSensorIsFrame;
+    options.planetaryLaserConfirmUnknownRangeIsOneWay =
+        planetaryLaser.confirmUnknownRangeIsOneWay;
+    options.planetaryLaserAllowUnmappedShots = planetaryLaser.allowUnmappedShots;
+    options.planetaryLaserAllowUnmappedMeasuredImages =
+        planetaryLaser.allowUnmappedMeasuredImages;
+    options.planetaryLaserRangeWeight = planetaryLaser.rangeWeight;
+    options.planetaryLaserRangeHuberDeltaSigma =
+        planetaryLaser.rangeHuberDeltaSigma;
     options.exportEvalPlot = exportEvalPlot;
     options.exportObservationDetails = false;
     return options;
@@ -415,7 +526,8 @@ int main(int argc, char *argv[])
     QCoreApplication qtApp(argc, argv);
     Q_UNUSED(qtApp);
 
-    CLI::App app{"PlaScan 光束法平差 CLI — 支持 LiDAR 点到面约束与 A/B 对比"};
+    CLI::App app{
+        "PlaScan 光束法平差 CLI — 支持扫描 LiDAR 点到面与行星稀疏 laser-range shot"};
 
     std::string projectPathRaw;
     std::string chunkIdRaw;
@@ -423,6 +535,16 @@ int main(int argc, char *argv[])
     std::string outputDirRaw;
     std::vector<std::string> imageTokens;
     std::string laserCloudRaw;
+    std::string planetaryLaserDataRaw;
+    std::string planetaryLaserCameraFrameRaw;
+    std::string planetaryLaserCameraSensorFrameRaw;
+    std::string planetaryLaserIsisTargetRaw;
+    std::string planetaryLaserIsisBodyFrameRaw;
+    std::string planetaryLaserIsisLaserFrameRaw;
+    std::string planetaryLaserIsisSensorModelRaw = "unknown";
+    std::string planetaryLaserIsisRangeTypeRaw = "unknown";
+    std::vector<double> planetaryLaserIsisLeverArm;
+    std::vector<std::string> planetaryLaserImageAliasRaw;
     std::string baBackendRaw = "auto";
 
     int minMatches = 15;
@@ -456,6 +578,10 @@ int main(int argc, char *argv[])
     bool exportEvalPlot = false;
     bool failOnQualityGate = false;
     bool laserUseMissingNormalsAsHeightPlanes = false;
+    bool planetaryLaserConfirmUnknownSensorIsFrame = false;
+    bool planetaryLaserConfirmUnknownRangeIsOneWay = false;
+    bool planetaryLaserAllowUnmappedShots = false;
+    bool planetaryLaserAllowUnmappedMeasuredImages = false;
     bool baBackendFallback = true;
     bool baEnableQualityGate = true;
     bool baCompareAutoWithLegacy = true;
@@ -467,6 +593,8 @@ int main(int argc, char *argv[])
     double laserWeight = 0.0;
     double laserSigma = 0.0025;
     double laserHuberDelta = 0.05;
+    double planetaryLaserRangeWeight = 1.0;
+    double planetaryLaserRangeHuberDeltaSigma = 3.0;
 
     app.add_option("project", projectPathRaw, ".plascan 项目文件")->required();
     app.add_option("--chunk-id", chunkIdRaw, "使用指定 UUID 的 Chunk");
@@ -551,6 +679,58 @@ int main(int argc, char *argv[])
     app.add_option("--laser-weight", laserWeight, "LiDAR 统计权重；0 表示按 --laser-sigma 自动取 1/sigma^2");
     app.add_option("--laser-sigma", laserSigma, "LiDAR 点到面标准差（米），用于自动统计权重");
     app.add_option("--laser-huber-delta", laserHuberDelta, "LiDAR 残差 Huber 阈值（米）");
+    app.add_option("--laser-range-data",
+                   planetaryLaserDataRaw,
+                   "行星稀疏激光测距 shot：PlaScan SI JSON v1 或 ISIS LidarData JSON");
+    app.add_option("--laser-range-camera-frame",
+                   planetaryLaserCameraFrameRaw,
+                   "当前 BA 相机/track 所在坐标系；必须与数据 body_fixed_frame 一致");
+    app.add_option("--laser-range-camera-sensor-frame",
+                   planetaryLaserCameraSensorFrameRaw,
+                   "lever arm 所在相机传感器框架；非零杆臂时必须与数据 laser_frame 一致");
+    auto *planetaryLaserRangeWeightOption =
+        app.add_option("--laser-range-weight",
+                       planetaryLaserRangeWeight,
+                       "行星激光测距残差全局权重");
+    auto *planetaryLaserHuberOption =
+        app.add_option("--laser-range-huber-delta-sigma",
+                       planetaryLaserRangeHuberDeltaSigma,
+                       "按 range sigma 归一化后的 Huber 阈值");
+    app.add_flag("--laser-range-confirm-frame-camera",
+                 planetaryLaserConfirmUnknownSensorIsFrame,
+                 "数据 sensor_model=unknown 时，显式确认按静态 frame camera 处理");
+    app.add_flag("--laser-range-confirm-one-way",
+                 planetaryLaserConfirmUnknownRangeIsOneWay,
+                 "数据 range_type=unknown 时，显式确认 range 已是单程几何距离");
+    app.add_flag("--laser-range-allow-unmapped-shots",
+                 planetaryLaserAllowUnmappedShots,
+                 "显式允许跳过不属于当前选中影像集的 shot");
+    app.add_flag("--laser-range-allow-unmapped-measures",
+                 planetaryLaserAllowUnmappedMeasuredImages,
+                 "显式允许丢弃未映射到当前工程相机的真实 measured 像点");
+    app.add_option("--laser-range-image-alias",
+                   planetaryLaserImageAliasRaw,
+                   "额外影像别名，格式 CAMERA_INDEX=IMAGE_ID，可重复；"
+                   "用于把 ISIS serialNumber 映射到工程相机");
+    app.add_option("--laser-range-isis-target",
+                   planetaryLaserIsisTargetRaw,
+                   "ISIS JSON 缺失的目标天体名称，例如 MOON");
+    app.add_option("--laser-range-isis-body-frame",
+                   planetaryLaserIsisBodyFrameRaw,
+                   "ISIS JSON 缺失的天体固连框架，例如 IAU_MOON");
+    app.add_option("--laser-range-isis-laser-frame",
+                   planetaryLaserIsisLaserFrameRaw,
+                   "ISIS JSON 缺失的 lever arm 表达框架；零杆臂也必须显式提供");
+    app.add_option("--laser-range-isis-sensor-model",
+                   planetaryLaserIsisSensorModelRaw,
+                   "ISIS 数据相机模型: frame / line_scan / unknown");
+    app.add_option("--laser-range-isis-range-type",
+                   planetaryLaserIsisRangeTypeRaw,
+                   "ISIS range 语义: one_way / round_trip / unknown");
+    app.add_option("--laser-range-isis-lever-arm",
+                   planetaryLaserIsisLeverArm,
+                   "ISIS JSON 缺失的相机原点到激光发射中心杆臂，按 laser frame 表达（米，3 个数）")
+        ->expected(3);
     app.add_flag("--ab-compare", abCompare, "一次性运行 baseline 与 LiDAR BA，并写 ba_ab_compare.json");
     app.add_flag("--fail-on-quality-gate",
                  failOnQualityGate,
@@ -592,7 +772,99 @@ int main(int argc, char *argv[])
         : xjw::cli::cleanAbsolutePath(xjw::cli::fromStdString(outputDirRaw));
     const QString laserCloud = xjw::cli::fromStdString(laserCloudRaw).trimmed();
     const bool enableLaser = !laserCloud.isEmpty();
+    const QString planetaryLaserDataInput =
+        xjw::cli::fromStdString(planetaryLaserDataRaw).trimmed();
+    const QString planetaryLaserData = planetaryLaserDataInput.isEmpty()
+        ? QString()
+        : xjw::cli::cleanAbsolutePath(planetaryLaserDataInput);
+    const bool enablePlanetaryLaser = !planetaryLaserData.isEmpty();
 
+    PlanetaryLaserCliOptions planetaryLaserOptions;
+    planetaryLaserOptions.enabled = enablePlanetaryLaser;
+    planetaryLaserOptions.dataPath = planetaryLaserData;
+    planetaryLaserOptions.cameraCoordinateFrame =
+        xjw::cli::fromStdString(planetaryLaserCameraFrameRaw).trimmed();
+    planetaryLaserOptions.cameraSensorFrame =
+        xjw::cli::fromStdString(planetaryLaserCameraSensorFrameRaw).trimmed();
+    planetaryLaserOptions.confirmUnknownSensorIsFrame =
+        planetaryLaserConfirmUnknownSensorIsFrame;
+    planetaryLaserOptions.confirmUnknownRangeIsOneWay =
+        planetaryLaserConfirmUnknownRangeIsOneWay;
+    planetaryLaserOptions.allowUnmappedShots = planetaryLaserAllowUnmappedShots;
+    planetaryLaserOptions.allowUnmappedMeasuredImages =
+        planetaryLaserAllowUnmappedMeasuredImages;
+    planetaryLaserOptions.rangeWeight = planetaryLaserRangeWeight;
+    planetaryLaserOptions.rangeHuberDeltaSigma = planetaryLaserRangeHuberDeltaSigma;
+
+    const QString isisTarget =
+        xjw::cli::fromStdString(planetaryLaserIsisTargetRaw).trimmed();
+    const QString isisBodyFrame =
+        xjw::cli::fromStdString(planetaryLaserIsisBodyFrameRaw).trimmed();
+    const QString isisLaserFrame =
+        xjw::cli::fromStdString(planetaryLaserIsisLaserFrameRaw).trimmed();
+    const QString isisSensorModel =
+        xjw::cli::fromStdString(planetaryLaserIsisSensorModelRaw).trimmed().toLower();
+    const QString isisRangeType =
+        xjw::cli::fromStdString(planetaryLaserIsisRangeTypeRaw).trimmed().toLower();
+    const bool hasAnyIsisContext =
+        !isisTarget.isEmpty() || !isisBodyFrame.isEmpty() || !isisLaserFrame.isEmpty() ||
+        !planetaryLaserIsisLeverArm.empty() ||
+        isisSensorModel != QLatin1String("unknown") ||
+        isisRangeType != QLatin1String("unknown");
+    if (hasAnyIsisContext &&
+        (isisTarget.isEmpty() || isisBodyFrame.isEmpty() || isisLaserFrame.isEmpty()))
+    {
+        fatalQt(QStringLiteral(
+            "ISIS LidarData JSON 上下文必须同时指定 --laser-range-isis-target、"
+            "--laser-range-isis-body-frame 和 --laser-range-isis-laser-frame"));
+    }
+    if (hasAnyIsisContext && planetaryLaserIsisLeverArm.size() != 3)
+    {
+        fatalQt(QStringLiteral(
+            "ISIS LidarData JSON 不记录杆臂；必须显式提供 "
+            "--laser-range-isis-lever-arm x y z，确认零杆臂时请写 0 0 0"));
+    }
+    if (hasAnyIsisContext)
+    {
+        xjw::lidar::PlanetaryLaserIsisContext context;
+        context.reference.targetName = isisTarget.toStdString();
+        context.reference.bodyFixedFrame = isisBodyFrame.toStdString();
+        context.reference.laserFrame = isisLaserFrame.toStdString();
+        context.reference.timeSystem = xjw::lidar::PlanetaryLaserTimeSystem::TdbEtSeconds;
+        context.reference.latitudeType = "planetocentric";
+        context.reference.longitudeDirection = "positive_east";
+        context.sensorModel = parsePlanetaryLaserSensorModel(isisSensorModel);
+        context.rangeType = parsePlanetaryLaserRangeType(isisRangeType);
+        context.leverArmSensorMeters = {{
+            planetaryLaserIsisLeverArm[0],
+            planetaryLaserIsisLeverArm[1],
+            planetaryLaserIsisLeverArm[2],
+        }};
+        planetaryLaserOptions.parseOptions.isisContext = context;
+    }
+
+    const bool hasPlanetaryLaserOnlyArguments =
+        hasAnyIsisContext ||
+        !planetaryLaserOptions.cameraCoordinateFrame.isEmpty() ||
+        !planetaryLaserOptions.cameraSensorFrame.isEmpty() ||
+        planetaryLaserConfirmUnknownSensorIsFrame ||
+        planetaryLaserConfirmUnknownRangeIsOneWay ||
+        planetaryLaserAllowUnmappedShots ||
+        planetaryLaserAllowUnmappedMeasuredImages ||
+        planetaryLaserRangeWeightOption->count() > 0 ||
+        planetaryLaserHuberOption->count() > 0 ||
+        !planetaryLaserImageAliasRaw.empty();
+    if (!enablePlanetaryLaser && hasPlanetaryLaserOnlyArguments)
+    {
+        fatalQt(QStringLiteral(
+            "--laser-range-* 参数要求同时指定 --laser-range-data"));
+    }
+    if (abCompare && enablePlanetaryLaser)
+    {
+        fatalQt(QStringLiteral(
+            "当前 --ab-compare 只支持 --laser-cloud；行星测距请单独运行并查看"
+            " planetary_laser_range_summary"));
+    }
     if (abCompare && !enableLaser)
     {
         fatalQt(QStringLiteral("--ab-compare 需要同时指定 --laser-cloud"), cli::EXIT_ARG_ERR);
@@ -604,6 +876,31 @@ int main(int argc, char *argv[])
     if (enableLaser && laserWeight <= 0.0 && !(laserSigma > 0.0))
     {
         fatalQt(QStringLiteral("自动 LiDAR 权重要求 --laser-sigma > 0"), cli::EXIT_ARG_ERR);
+    }
+    if (enableLaser && enablePlanetaryLaser)
+    {
+        fatalQt(QStringLiteral(
+            "--laser-cloud（扫描点云点到面）与 --laser-range-data（行星稀疏测距）"
+            "是不同观测模型，当前不能在一次运行中同时指定"));
+    }
+    if (enablePlanetaryLaser && !QFileInfo::exists(planetaryLaserData))
+    {
+        fatalQt(QStringLiteral("行星激光测距 JSON 不存在: %1").arg(planetaryLaserData),
+                cli::EXIT_IO_ERR);
+    }
+    if (enablePlanetaryLaser && planetaryLaserOptions.cameraCoordinateFrame.isEmpty())
+    {
+        fatalQt(QStringLiteral(
+            "--laser-range-data 要求显式指定 --laser-range-camera-frame，"
+            "确认当前相机与激光落点位于同一坐标系"));
+    }
+    if (enablePlanetaryLaser &&
+        (!std::isfinite(planetaryLaserRangeWeight) || planetaryLaserRangeWeight <= 0.0 ||
+         !std::isfinite(planetaryLaserRangeHuberDeltaSigma) ||
+         planetaryLaserRangeHuberDeltaSigma < 0.0))
+    {
+        fatalQt(QStringLiteral(
+            "--laser-range-weight 必须为正，--laser-range-huber-delta-sigma 必须有限且非负"));
     }
 
     const QJsonObject meta = projectSession.mergedMetadata();
@@ -617,6 +914,25 @@ int main(int argc, char *argv[])
     if (buildStatus != xjw::core::project::BaInputBuildStatus::Ok)
     {
         fatalQt(buildStatusMessage(buildStatus, baInput), cli::EXIT_ALGO_ERR);
+    }
+    if (!planetaryLaserImageAliasRaw.empty())
+    {
+        planetaryLaserOptions.imageAliasesByCameraIndex =
+            parsePlanetaryLaserImageAliases(
+                planetaryLaserImageAliasRaw,
+                static_cast<int>(baInput.cameras.size()));
+    }
+    if (enablePlanetaryLaser)
+    {
+        QString aliasError;
+        if (!xjw::gui::mergePlanetaryLaserProjectImageAliases(
+                meta,
+                baInput.imagePathByIndex,
+                &planetaryLaserOptions.imageAliasesByCameraIndex,
+                &aliasError))
+        {
+            fatalQt(aliasError, cli::EXIT_ARG_ERR);
+        }
     }
 
     xjw::BAOptions baOptions;
@@ -687,7 +1003,8 @@ int main(int argc, char *argv[])
         xjw::gui::BaServiceOptions baselineOptions = makeServiceOptions(
             selectedImages, baselineDir, threads, dryRun, baOptions,
             false, QString(), laserMaxDistance, laserVoxelSize, laserMaxCurvature,
-            laserMaxSamples, false, laserWeight, laserSigma, laserHuberDelta, exportEvalPlot);
+            laserMaxSamples, false, laserWeight, laserSigma, laserHuberDelta,
+            PlanetaryLaserCliOptions{}, exportEvalPlot);
         const xjw::gui::BaServiceResult baseline = runOneBa(
             baInput.cameras, baInput.tracks, baInput, baselineOptions);
         if (!baseline.success)
@@ -704,6 +1021,7 @@ int main(int argc, char *argv[])
             laserWeight,
             laserSigma,
             laserHuberDelta,
+            PlanetaryLaserCliOptions{},
             exportEvalPlot);
         const xjw::gui::BaServiceResult laser = runOneBa(
             baInput.cameras, baInput.tracks, baInput, laserOptions);
@@ -787,6 +1105,7 @@ int main(int argc, char *argv[])
         laserWeight,
         laserSigma,
         laserHuberDelta,
+        planetaryLaserOptions,
         exportEvalPlot);
     const xjw::gui::BaServiceResult result = runOneBa(baInput.cameras, baInput.tracks, baInput, options);
     if (!result.success)
@@ -797,8 +1116,10 @@ int main(int argc, char *argv[])
     projectSession.appendResult(
         QStringLiteral("bundle_adjust_results"),
         bundleAdjustRecord(
-            enableLaser ? QStringLiteral("laser")
-                        : QStringLiteral("baseline"),
+            enablePlanetaryLaser
+                ? QStringLiteral("planetary_laser_range")
+                : (enableLaser ? QStringLiteral("laser_surface")
+                               : QStringLiteral("baseline")),
             outputDir,
             result));
     int updatedCameraCount = 0;
@@ -819,7 +1140,12 @@ int main(int argc, char *argv[])
                 cli::EXIT_IO_ERR);
     }
 
-    printRunSummary(enableLaser ? QStringLiteral("laser") : QStringLiteral("baseline"), result);
+    printRunSummary(
+        enablePlanetaryLaser
+            ? QStringLiteral("planetary_laser_range")
+            : (enableLaser ? QStringLiteral("laser_surface")
+                           : QStringLiteral("baseline")),
+        result);
     xjw::cli::printUtf8(
         stdout,
         QStringLiteral("已写回 Chunk %1，相机=%2")

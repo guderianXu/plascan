@@ -45,6 +45,7 @@
 #include "Intersection.h"
 #include "BundleAdjust.h"
 #include "LaserConstraintMap.h"
+#include "PlanetaryLaserJson.h"
 #include "io/PathIO.h"
 #include "SparseCloudValidator.h"
 #include "SurfaceReconstructor.h"
@@ -309,12 +310,32 @@ bool validateBaPriorImport(const QString &path, QString *errorMessage)
     {
         return true;
     }
+    if (suffix == QLatin1String("json"))
+    {
+        xjw::lidar::PlanetaryLaserDataset dataset;
+        std::string loadError;
+        if (!xjw::lidar::loadPlanetaryLaserJsonFile(
+                xjw::common::io::toUtf8Path(path), {}, &dataset, &loadError))
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral(
+                    "无法作为行星激光测距数据导入: %1\n"
+                    "PlaScan SI JSON 必须显式包含 target/body_fixed_frame/time/units。"
+                    "ISIS LidarData JSON 本身缺少这些上下文，请改用 bundle_adjust_cli 的 "
+                    "--laser-range-isis-* 参数，或先转换为 PlaScan SI JSON。")
+                                    .arg(QString::fromStdString(loadError));
+            }
+            return false;
+        }
+        return true;
+    }
     if (suffix != QLatin1String("ply"))
     {
         if (errorMessage)
         {
             *errorMessage = QStringLiteral(
-                "当前 BA 软约束仅直接支持 DEM（TIF/TIFF/VRT）或 PLY 点云。\n"
+                "当前 BA 软约束直接支持 DEM、扫描点云 PLY 或行星激光 SI JSON。\n"
                 "LAS/LAZ/COPC/XYZ/CSV 请先转换为与影像工程同坐标系的带法向 PLY。");
         }
         return false;
@@ -389,6 +410,27 @@ QString firstReferenceLaserPriorPath(const QJsonObject &meta)
         }
     }
     return QString();
+}
+
+QString firstPlanetaryLaserPriorPath(const QJsonObject &meta)
+{
+    const QJsonArray references = meta.value(QStringLiteral("reference_datasets")).toArray();
+    for (const QJsonValue &value : references)
+    {
+        const QJsonObject reference = value.toObject();
+        if (!isBaPriorRole(reference.value(QStringLiteral("role")).toString()) ||
+            reference.value(QStringLiteral("type")).toString().toLower() !=
+                QLatin1String("planetary_laser_shots"))
+        {
+            continue;
+        }
+        const QString path = reference.value(QStringLiteral("path")).toString().trimmed();
+        if (!path.isEmpty())
+        {
+            return path;
+        }
+    }
+    return {};
 }
 
 void appendMetaArrayRecord(QJsonObject *meta,
@@ -1035,9 +1077,10 @@ void ProjectManager::importReferenceDataset()
         _parent,
         QStringLiteral("导入参考 DEM/LiDAR"),
         getLastUsedDir(QStringLiteral("reference_dataset")),
-        QStringLiteral("参考地形/点云 (*.tif *.tiff *.vrt *.las *.laz *.copc *.ply *.xyz *.csv);;"
+        QStringLiteral("参考地形/点云/行星激光 (*.tif *.tiff *.vrt *.las *.laz *.copc *.ply *.xyz *.csv *.json);;"
                        "DEM (*.tif *.tiff *.vrt);;"
                        "LiDAR (*.las *.laz *.copc);;"
+                       "行星激光测距 shot (*.json);;"
                        "点云 (*.ply *.xyz *.csv);;"
                        "所有文件 (*)"));
     if (selected.isEmpty())
@@ -1235,14 +1278,19 @@ void ProjectManager::prepareReferenceTerrainBundleAdjust()
     }
 
     const QJsonObject meta = _projectData->metadata();
+    const QString planetaryLaserPriorPath = firstPlanetaryLaserPriorPath(meta);
     const QString demPriorPath = firstReferenceDemPriorPath(meta);
     const QString laserPriorPath = firstReferenceLaserPriorPath(meta);
-    if (demPriorPath.isEmpty() && laserPriorPath.isEmpty())
+    const bool usePlanetaryLaser = !planetaryLaserPriorPath.isEmpty();
+    const bool useDem = !usePlanetaryLaser && !demPriorPath.isEmpty();
+    const bool useLaserSurface = !usePlanetaryLaser && !useDem && !laserPriorPath.isEmpty();
+    if (!usePlanetaryLaser && !useDem && !useLaserSurface)
     {
         QMessageBox::information(_parent,
                                  QStringLiteral("参考地形约束重新平差"),
                                  QStringLiteral("前置检查通过，但未找到可直接用于 BA 的参考数据。\n"
-                                                "请导入 role=ba_prior 的 DEM（GeoTIFF/VRT），或带 LiDAR/点云类型的 PLY 文件。\n"
+                                                "请导入 role=ba_prior 的 DEM、带法向扫描点云 PLY，"
+                                                "或行星激光测距 SI JSON。\n"
                                                 "JSON: %1\nCSV: %2")
                                      .arg(result.jsonPath, result.csvPath));
         return;
@@ -1262,16 +1310,149 @@ void ProjectManager::prepareReferenceTerrainBundleAdjust()
             currentProjectPath());
     const QString outputDir = QDir(bundleAdjustDir).filePath(
         QStringLiteral("%1_%2")
-            .arg(demPriorPath.isEmpty()
-                     ? QStringLiteral("reference_laser")
-                     : QStringLiteral("reference_terrain"))
+            .arg(usePlanetaryLaser
+                     ? QStringLiteral("planetary_laser_range")
+                     : (useLaserSurface
+                            ? QStringLiteral("reference_laser_surface")
+                            : QStringLiteral("reference_terrain")))
             .arg(QDateTime::currentDateTimeUtc().toString(
                 QStringLiteral("yyyyMMdd_HHmmss_zzz"))));
 
     double laserAssociationDistanceMeters = 0.05;
     double laserSigmaMeters = 0.0025;
     double laserHuberDeltaMeters = 0.05;
-    if (demPriorPath.isEmpty())
+    xjw::lidar::PlanetaryLaserDataset planetaryLaserDataset;
+    QString planetaryCameraCoordinateFrame;
+    QString planetaryCameraSensorFrame;
+    bool confirmUnknownSensorIsFrame = false;
+    bool confirmUnknownRangeIsOneWay = false;
+    if (usePlanetaryLaser)
+    {
+        std::string laserError;
+        if (!xjw::lidar::loadPlanetaryLaserJsonFile(
+                xjw::common::io::toUtf8Path(planetaryLaserPriorPath),
+                {},
+                &planetaryLaserDataset,
+                &laserError))
+        {
+            showWarning(
+                QStringLiteral("读取行星激光 SI JSON 失败: %1")
+                    .arg(QString::fromStdString(laserError)),
+                QStringLiteral("行星激光测距平差"));
+            return;
+        }
+        if (planetaryLaserDataset.sensorModel ==
+            xjw::lidar::PlanetaryLaserSensorModel::LineScan)
+        {
+            QMessageBox::information(
+                _parent,
+                QStringLiteral("行星激光测距平差"),
+                QStringLiteral(
+                    "该数据声明为 line_scan。当前 PlaScan 只有每幅影像一个静态位姿，"
+                    "尚未实现 ISIS/SPICE 的逐行时变轨迹，因而拒绝按 frame camera 误处理。"));
+            return;
+        }
+        if (planetaryLaserDataset.rangeType ==
+            xjw::lidar::PlanetaryLaserRangeType::RoundTrip)
+        {
+            showWarning(
+                QStringLiteral("该数据 range_type=round_trip，请先按产品定义换算为单程几何距离。"),
+                QStringLiteral("行星激光测距平差"));
+            return;
+        }
+        if (planetaryLaserDataset.sensorModel ==
+            xjw::lidar::PlanetaryLaserSensorModel::Unknown)
+        {
+            confirmUnknownSensorIsFrame = QMessageBox::question(
+                _parent,
+                QStringLiteral("确认相机模型"),
+                QStringLiteral(
+                    "数据没有明确 sensor_model。只有当每个 simultaneous image 可由一个"
+                    "静态 frame-camera 位姿代表时才能继续。确认按 frame camera 处理？"),
+                QMessageBox::Yes | QMessageBox::No,
+                QMessageBox::No) == QMessageBox::Yes;
+            if (!confirmUnknownSensorIsFrame)
+            {
+                return;
+            }
+        }
+        if (planetaryLaserDataset.rangeType ==
+            xjw::lidar::PlanetaryLaserRangeType::Unknown)
+        {
+            confirmUnknownRangeIsOneWay = QMessageBox::question(
+                _parent,
+                QStringLiteral("确认测距语义"),
+                QStringLiteral(
+                    "数据没有明确 range_type。确认 range_m 已经是激光发射中心到落点的"
+                    "单程几何距离，而不是往返光程或未换算时间？"),
+                QMessageBox::Yes | QMessageBox::No,
+                QMessageBox::No) == QMessageBox::Yes;
+            if (!confirmUnknownRangeIsOneWay)
+            {
+                return;
+            }
+        }
+
+        bool frameAccepted = false;
+        const QString datasetFrame = QString::fromStdString(
+            planetaryLaserDataset.reference.bodyFixedFrame);
+        planetaryCameraCoordinateFrame = QInputDialog::getText(
+            _parent,
+            QStringLiteral("确认求解坐标系"),
+            QStringLiteral(
+                "请输入当前 BA 相机中心和普通 tracks 所在坐标系。\n"
+                "当前 MVP 不执行坐标转换，必须与激光 body_fixed_frame 完全一致："),
+            QLineEdit::Normal,
+            datasetFrame,
+            &frameAccepted).trimmed();
+        if (!frameAccepted || planetaryCameraCoordinateFrame.isEmpty())
+        {
+            return;
+        }
+        if (planetaryCameraCoordinateFrame != datasetFrame)
+        {
+            showWarning(
+                QStringLiteral("相机坐标系 %1 与激光坐标系 %2 不一致；请先完成坐标转换。")
+                    .arg(planetaryCameraCoordinateFrame, datasetFrame),
+                QStringLiteral("行星激光测距平差"));
+            return;
+        }
+
+        const bool hasNonZeroLeverArm = std::any_of(
+            planetaryLaserDataset.shots.begin(),
+            planetaryLaserDataset.shots.end(),
+            [](const xjw::lidar::PlanetaryLaserShot &shot)
+            {
+                return std::hypot(
+                    std::hypot(shot.leverArmSensorMeters[0], shot.leverArmSensorMeters[1]),
+                    shot.leverArmSensorMeters[2]) > 0.0;
+            });
+        planetaryCameraSensorFrame = QString::fromStdString(
+            planetaryLaserDataset.reference.laserFrame);
+        if (hasNonZeroLeverArm)
+        {
+            bool sensorFrameAccepted = false;
+            planetaryCameraSensorFrame = QInputDialog::getText(
+                _parent,
+                QStringLiteral("确认杆臂坐标系"),
+                QStringLiteral(
+                    "数据包含非零 lever arm。请输入杆臂所用相机/传感器坐标框架；"
+                    "当前 MVP 不执行框架旋转："),
+                QLineEdit::Normal,
+                planetaryCameraSensorFrame,
+                &sensorFrameAccepted).trimmed();
+            if (!sensorFrameAccepted ||
+                planetaryCameraSensorFrame != QString::fromStdString(
+                    planetaryLaserDataset.reference.laserFrame))
+            {
+                showWarning(
+                    QStringLiteral("非零杆臂框架不一致，无法安全建立测距方程。"),
+                    QStringLiteral("行星激光测距平差"));
+                return;
+            }
+        }
+    }
+    if (useLaserSurface)
     {
         bool accepted = false;
         laserAssociationDistanceMeters = QInputDialog::getDouble(
@@ -1315,35 +1496,69 @@ void ProjectManager::prepareReferenceTerrainBundleAdjust()
         }
     }
 
-    const QString prompt = demPriorPath.isEmpty()
-        ? QStringLiteral("将使用 LiDAR/点云 PLY 作为 BA 点到面 soft prior 重新平差。\n\n"
-                         "参考点云: %1\n"
-                         "法向字段: normal_x/normal_y/normal_z（或 nx/ny/nz）\n"
-                         "最大关联距离: %2 m\n"
-                         "标准差 sigma: %3 m（统计权重 %4）\n"
-                         "Huber 阈值: %5 m\n"
-                         "影像数量: %6\n"
-                         "输出目录: %7\n\n"
-                         "继续执行？")
-              .arg(laserPriorPath)
-              .arg(laserAssociationDistanceMeters, 0, 'g', 8)
-              .arg(laserSigmaMeters, 0, 'g', 8)
-              .arg(1.0 / (laserSigmaMeters * laserSigmaMeters), 0, 'g', 8)
-              .arg(laserHuberDeltaMeters, 0, 'g', 8)
-              .arg(images.size())
-              .arg(outputDir)
-        : QStringLiteral("将使用参考 DEM 作为 BA 高程 soft prior 重新平差。\n\n"
-                         "参考 DEM: %1\n"
-                         "影像数量: %2\n"
-                         "输出目录: %3\n\n"
-                         "继续执行？")
-              .arg(demPriorPath)
-              .arg(images.size())
-              .arg(outputDir);
+    QString prompt;
+    QString dialogTitle = QStringLiteral("参考地形约束重新平差");
+    if (usePlanetaryLaser)
+    {
+        dialogTitle = QStringLiteral("行星激光测距平差");
+        prompt = QStringLiteral(
+            "将使用 ISIS 风格的稀疏 laser-range shot 约束 frame-camera BA。\n\n"
+            "数据: %1\n"
+            "目标/坐标系: %2 / %3\n"
+            "shot 数量: %4\n"
+            "sensor/range: %5 / %6\n"
+            "Huber: 3 sigma\n"
+            "影像数量: %7\n"
+            "输出目录: %8\n\n"
+            "Projected/virtual image measures 不会作为真实像点；普通 track 的 RMS 也不会"
+            "混入 shot 统计。继续执行？")
+                     .arg(planetaryLaserPriorPath)
+                     .arg(QString::fromStdString(planetaryLaserDataset.reference.targetName))
+                     .arg(QString::fromStdString(
+                         planetaryLaserDataset.reference.bodyFixedFrame))
+                     .arg(static_cast<int>(planetaryLaserDataset.shots.size()))
+                     .arg(QString::fromLatin1(xjw::lidar::planetaryLaserSensorModelName(
+                         planetaryLaserDataset.sensorModel)))
+                     .arg(QString::fromLatin1(xjw::lidar::planetaryLaserRangeTypeName(
+                         planetaryLaserDataset.rangeType)))
+                     .arg(images.size())
+                     .arg(outputDir);
+    }
+    else if (useLaserSurface)
+    {
+        prompt = QStringLiteral(
+            "将使用扫描 LiDAR/点云 PLY 作为 BA 点到面 soft prior 重新平差。\n\n"
+            "参考点云: %1\n"
+            "法向字段: normal_x/normal_y/normal_z（或 nx/ny/nz）\n"
+            "最大关联距离: %2 m\n"
+            "标准差 sigma: %3 m（统计权重 %4）\n"
+            "Huber 阈值: %5 m\n"
+            "影像数量: %6\n"
+            "输出目录: %7\n\n"
+            "继续执行？")
+                     .arg(laserPriorPath)
+                     .arg(laserAssociationDistanceMeters, 0, 'g', 8)
+                     .arg(laserSigmaMeters, 0, 'g', 8)
+                     .arg(1.0 / (laserSigmaMeters * laserSigmaMeters), 0, 'g', 8)
+                     .arg(laserHuberDeltaMeters, 0, 'g', 8)
+                     .arg(images.size())
+                     .arg(outputDir);
+    }
+    else
+    {
+        prompt = QStringLiteral("将使用参考 DEM 作为 BA 高程 soft prior 重新平差。\n\n"
+                                "参考 DEM: %1\n"
+                                "影像数量: %2\n"
+                                "输出目录: %3\n\n"
+                                "继续执行？")
+                     .arg(demPriorPath)
+                     .arg(images.size())
+                     .arg(outputDir);
+    }
 
     const QMessageBox::StandardButton choice = QMessageBox::question(
         _parent,
-        QStringLiteral("参考地形约束重新平差"),
+        dialogTitle,
         prompt,
         QMessageBox::Yes | QMessageBox::No,
         QMessageBox::Yes);
@@ -1353,7 +1568,24 @@ void ProjectManager::prepareReferenceTerrainBundleAdjust()
     }
 
     QJsonObject extra;
-    if (demPriorPath.isEmpty())
+    if (usePlanetaryLaser)
+    {
+        extra[QStringLiteral("enable_planetary_laser_range_constraints")] = true;
+        extra[QStringLiteral("planetary_laser_data_path")] = planetaryLaserPriorPath;
+        extra[QStringLiteral("planetary_laser_camera_coordinate_frame")] =
+            planetaryCameraCoordinateFrame;
+        extra[QStringLiteral("planetary_laser_camera_sensor_frame")] =
+            planetaryCameraSensorFrame;
+        extra[QStringLiteral("planetary_laser_confirm_unknown_sensor_is_frame")] =
+            confirmUnknownSensorIsFrame;
+        extra[QStringLiteral("planetary_laser_confirm_unknown_range_is_one_way")] =
+            confirmUnknownRangeIsOneWay;
+        extra[QStringLiteral("planetary_laser_allow_unmapped_shots")] = false;
+        extra[QStringLiteral("planetary_laser_allow_unmapped_measured_images")] = false;
+        extra[QStringLiteral("planetary_laser_range_weight")] = 1.0;
+        extra[QStringLiteral("planetary_laser_range_huber_delta_sigma")] = 3.0;
+    }
+    else if (useLaserSurface)
     {
         extra[QStringLiteral("enable_laser_constraints")] = true;
         extra[QStringLiteral("laser_constraint_cloud_path")] = laserPriorPath;
@@ -1383,7 +1615,16 @@ void ProjectManager::prepareReferenceTerrainBundleAdjust()
     extra[QStringLiteral("export_camera_csv")] = true;
     extra[QStringLiteral("export_points_csv")] = true;
 
-    if (demPriorPath.isEmpty())
+    if (usePlanetaryLaser)
+    {
+        LOG_INFO(QStringLiteral(
+            "行星激光测距 BA 启动: shots=%1 data=%2 frame=%3 images=%4 output=%5")
+                     .arg(static_cast<int>(planetaryLaserDataset.shots.size()))
+                     .arg(planetaryLaserPriorPath, planetaryCameraCoordinateFrame)
+                     .arg(images.size())
+                     .arg(outputDir));
+    }
+    else if (useLaserSurface)
     {
         LOG_INFO(QStringLiteral("LiDAR 点到面 BA soft prior 启动: cloud=%1 images=%2 output=%3")
                  .arg(laserPriorPath)
@@ -1935,6 +2176,36 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
     opts.laserHuberDeltaMeters = qMax(
         1e-9,
         extraSettings.value(QStringLiteral("laser_huber_delta_m")).toDouble(0.05));
+    opts.enablePlanetaryLaserRangeConstraints =
+        extraSettings.value(
+            QStringLiteral("enable_planetary_laser_range_constraints")).toBool(false);
+    opts.planetaryLaserDataPath =
+        extraSettings.value(QStringLiteral("planetary_laser_data_path")).toString().trimmed();
+    opts.planetaryLaserCameraCoordinateFrame =
+        extraSettings.value(
+            QStringLiteral("planetary_laser_camera_coordinate_frame")).toString().trimmed();
+    opts.planetaryLaserCameraSensorFrame =
+        extraSettings.value(
+            QStringLiteral("planetary_laser_camera_sensor_frame")).toString().trimmed();
+    opts.planetaryLaserConfirmUnknownSensorIsFrame =
+        extraSettings.value(
+            QStringLiteral("planetary_laser_confirm_unknown_sensor_is_frame")).toBool(false);
+    opts.planetaryLaserConfirmUnknownRangeIsOneWay =
+        extraSettings.value(
+            QStringLiteral("planetary_laser_confirm_unknown_range_is_one_way")).toBool(false);
+    opts.planetaryLaserAllowUnmappedShots =
+        extraSettings.value(
+            QStringLiteral("planetary_laser_allow_unmapped_shots")).toBool(false);
+    opts.planetaryLaserAllowUnmappedMeasuredImages =
+        extraSettings.value(
+            QStringLiteral("planetary_laser_allow_unmapped_measured_images")).toBool(false);
+    opts.planetaryLaserRangeWeight = qMax(
+        1.0e-12,
+        extraSettings.value(QStringLiteral("planetary_laser_range_weight")).toDouble(1.0));
+    opts.planetaryLaserRangeHuberDeltaSigma = qMax(
+        0.0,
+        extraSettings.value(
+            QStringLiteral("planetary_laser_range_huber_delta_sigma")).toDouble(3.0));
     opts.enableReferenceTerrainPrior =
         extraSettings.value(QStringLiteral("enable_reference_terrain_prior")).toBool(false);
     opts.referenceTerrainDemPath =

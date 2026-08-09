@@ -89,6 +89,116 @@ ConstraintStats computeLaserStats(
     return stats;
 }
 
+double computedLaserRange(const Camera &camera,
+                          const std::array<double, 3> &leverArmCameraMeters,
+                          const std::array<double, 3> &point)
+{
+    const std::array<double, 3> center = camera.cameraCenter();
+    const std::array<double, 9> rotation = camera.cameraToWorldRotation();
+    std::array<double, 3> emitter = center;
+    for (int row = 0; row < 3; ++row)
+    {
+        for (int column = 0; column < 3; ++column)
+        {
+            emitter[static_cast<size_t>(row)] +=
+                rotation[static_cast<size_t>(row * 3 + column)] *
+                leverArmCameraMeters[static_cast<size_t>(column)];
+        }
+    }
+
+    const double dx = point[0] - emitter[0];
+    const double dy = point[1] - emitter[1];
+    const double dz = point[2] - emitter[2];
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+void updateLaserRangeStats(const std::vector<Camera> &inputCameras,
+                           const std::vector<Camera> &refinedCameras,
+                           const BAOptions &options,
+                           BAResult *result)
+{
+    if (!options.enableLaserRangeConstraints)
+    {
+        return;
+    }
+
+    const auto &constraints = options.laserRangeConstraints;
+    if (result->laserRangeShots.size() != constraints.size())
+    {
+        result->laserRangeShots.resize(constraints.size());
+    }
+
+    double sumSquaredBefore = 0.0;
+    double sumSquaredAfter = 0.0;
+    bool finiteBefore = true;
+    bool finiteAfter = true;
+    for (size_t shotIndex = 0; shotIndex < constraints.size(); ++shotIndex)
+    {
+        const BALaserRangeConstraint &constraint = constraints[shotIndex];
+        BARefinedLaserRangeShot &shot = result->laserRangeShots[shotIndex];
+        shot.shotId = constraint.shotId;
+        shot.ephemerisTimeSeconds = constraint.ephemerisTimeSeconds;
+        shot.sourceIndex = constraint.sourceIndex;
+        shot.pointMode = constraint.pointMode;
+
+        const double beforeRange = computedLaserRange(
+            inputCameras[static_cast<size_t>(constraint.cameraIndex)],
+            constraint.leverArmCameraMeters,
+            constraint.initialPoint);
+        const double beforeResidual =
+            beforeRange - constraint.observedRangeMeters;
+        shot.computedRangeBeforeMeters = beforeRange;
+        shot.residualBeforeMeters = beforeResidual;
+        finiteBefore = finiteBefore && std::isfinite(beforeResidual);
+        if (std::isfinite(beforeResidual))
+        {
+            sumSquaredBefore += beforeResidual * beforeResidual;
+        }
+
+        const bool validPoint =
+            shot.valid &&
+            plamatrix::isFinite(plamatrix::Vec3<double>(shot.point));
+        const double afterRange = validPoint
+                                      ? computedLaserRange(
+                                            refinedCameras[static_cast<size_t>(
+                                                constraint.cameraIndex)],
+                                            constraint.leverArmCameraMeters,
+                                            shot.point)
+                                      : std::numeric_limits<double>::infinity();
+        const double afterResidual =
+            afterRange - constraint.observedRangeMeters;
+        shot.computedRangeAfterMeters = afterRange;
+        shot.residualAfterMeters = afterResidual;
+        shot.normalizedResidualAfter =
+            afterResidual / constraint.sigmaRangeMeters;
+        shot.valid = validPoint &&
+                     std::isfinite(afterResidual) &&
+                     std::isfinite(shot.normalizedResidualAfter);
+        finiteAfter = finiteAfter && shot.valid;
+        if (shot.valid)
+        {
+            sumSquaredAfter += afterResidual * afterResidual;
+        }
+    }
+
+    result->laserRangeConstraintCount =
+        static_cast<int>(constraints.size());
+    if (constraints.empty())
+    {
+        result->laserRangeRmsBeforeMeters = 0.0;
+        result->laserRangeRmsAfterMeters = 0.0;
+        return;
+    }
+    result->laserRangeRmsBeforeMeters =
+        finiteBefore
+            ? std::sqrt(sumSquaredBefore / static_cast<double>(constraints.size()))
+            : std::numeric_limits<double>::infinity();
+    result->laserRangeRmsAfterMeters =
+        finiteAfter
+            ? std::sqrt(sumSquaredAfter / static_cast<double>(constraints.size()))
+            : std::numeric_limits<double>::infinity();
+}
+
 ConstraintStats computeControlPointStats(
     const std::vector<BATrack> &tracks,
     const std::vector<BARefinedPoint> *points,
@@ -190,10 +300,13 @@ ConstraintStats computeScaleBarStats(
     return stats;
 }
 
-void updateConstraintStats(const std::vector<BATrack> &tracks,
+void updateConstraintStats(const std::vector<Camera> &inputCameras,
+                           const std::vector<Camera> &refinedCameras,
+                           const std::vector<BATrack> &tracks,
                            const BAOptions &options,
                            BAResult *result)
 {
+    updateLaserRangeStats(inputCameras, refinedCameras, options, result);
     if (options.enableLaserPlaneConstraints)
     {
         const ConstraintStats before =
@@ -413,11 +526,12 @@ void finalizeBundleAdjustResult(const std::vector<Camera> &inputCameras,
                   static_cast<double>(result->totalTracks)
             : 0.0;
 
-    updateConstraintStats(tracks, options, result);
+    updateConstraintStats(inputCameras, refinedCameras, tracks, options, result);
 
     // 数值求解器的“成功”只说明迭代正常结束。若摄影测量门控未保留任何点，
     // 必须把结果降级，防止 SfM 继续使用空或负深度模型。
     if (result->optimizedTracks == 0 &&
+        result->laserRangeConstraintCount == 0 &&
         (result->solveStatus == BASolveStatus::Success ||
          result->solveStatus == BASolveStatus::NoConvergence))
     {

@@ -1,6 +1,10 @@
 add_library(lidar STATIC
     LaserConstraintAssociation.cpp
     LaserConstraintMap.cpp
+    PlanetaryLaserBaAdapter.cpp
+    PlanetaryLaserIsisJson.cpp
+    PlanetaryLaserJson.cpp
+    PlanetaryLaserShot.cpp
 )
 
 target_include_directories(lidar PUBLIC
@@ -15,3 +19,10 @@ target_link_libraries(lidar PUBLIC
     plascan_common_io
     plapoint::plapoint
 )
+
+target_link_libraries(lidar PRIVATE Qt6::Core)
+target_compile_features(lidar PUBLIC cxx_std_20)
+
+if(BUILD_TESTS)
+    add_subdirectory(tests)
+endif()

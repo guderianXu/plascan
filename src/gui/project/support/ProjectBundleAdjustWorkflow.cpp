@@ -131,6 +131,51 @@ BundleAdjustPreviewPresentation buildBundleAdjustPreviewPresentation(
                          laser_summary.value(QStringLiteral("cloud_path")).toString());
     }
 
+    const QJsonObject planetary_laser_summary =
+        ba_result.value(QStringLiteral("planetary_laser_range_summary")).toObject();
+    if (planetary_laser_summary.value(QStringLiteral("enabled")).toBool(false))
+    {
+        details.append(QStringLiteral("行星激光测距 shot: %1 / %2")
+                           .arg(planetary_laser_summary
+                                    .value(QStringLiteral("range_constraint_count"))
+                                    .toInt())
+                           .arg(planetary_laser_summary
+                                    .value(QStringLiteral("total_shots"))
+                                    .toInt()));
+        if (planetary_laser_summary.contains(QStringLiteral("range_rms_before_m")) &&
+            planetary_laser_summary.contains(QStringLiteral("range_rms_after_m")))
+        {
+            const double rangeRmsBefore = planetary_laser_summary
+                                              .value(QStringLiteral("range_rms_before_m"))
+                                              .toDouble();
+            const double rangeRmsAfter = planetary_laser_summary
+                                             .value(QStringLiteral("range_rms_after_m"))
+                                             .toDouble();
+            details.append(QStringLiteral("行星激光 range RMS: %1 m → %2 m")
+                               .arg(formattedMetric(
+                                        planetary_laser_summary,
+                                        QStringLiteral("range_rms_before_m"),
+                                        4),
+                                    formattedMetric(
+                                        planetary_laser_summary,
+                                        QStringLiteral("range_rms_after_m"),
+                                        4)));
+            presentation.qualityWarning = presentation.qualityWarning ||
+                (rangeRmsAfter > rangeRmsBefore + 1.0e-12);
+        }
+        details.append(QStringLiteral("行星激光目标/坐标系: %1 / %2")
+                           .arg(planetary_laser_summary
+                                    .value(QStringLiteral("target"))
+                                    .toString(),
+                                planetary_laser_summary
+                                    .value(QStringLiteral("body_fixed_frame"))
+                                    .toString()));
+        appendOutputPath(
+            &details,
+            QStringLiteral("行星激光数据"),
+            planetary_laser_summary.value(QStringLiteral("data_path")).toString());
+    }
+
     const QString quality_message =
         ba_result.value(QStringLiteral("ba_quality_gate_message")).toString().trimmed();
     if (!quality_message.isEmpty())

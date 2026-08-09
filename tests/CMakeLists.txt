@@ -484,6 +484,7 @@ gtest_discover_tests(test_bundle_adjust_quality_gate)
 # ==============================================================================
 add_executable(test_bundle_adjust_service_lidar
     test_bundle_adjust_service_lidar.cpp
+    test_bundle_adjust_service_planetary_laser.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/services/BundleAdjustService.cpp
     ${CMAKE_SOURCE_DIR}/src/common/log/Logger.cpp
 )
@@ -508,6 +509,29 @@ target_include_directories(test_bundle_adjust_service_lidar PRIVATE
     ${CMAKE_SOURCE_DIR}/src/common
 )
 gtest_discover_tests(test_bundle_adjust_service_lidar)
+
+add_executable(test_planetary_laser_preview
+    test_planetary_laser_preview.cpp
+)
+target_link_libraries(test_planetary_laser_preview PRIVATE
+    gui_project
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_planetary_laser_preview PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui/project/support
+)
+gtest_discover_tests(test_planetary_laser_preview)
+
+add_executable(test_reference_dataset_planetary_laser
+    test_reference_dataset_planetary_laser.cpp
+)
+target_link_libraries(test_reference_dataset_planetary_laser PRIVATE
+    project_workflows
+    Qt6::Core
+    GTest::gtest_main
+)
+gtest_discover_tests(test_reference_dataset_planetary_laser)
 
 set(PLASCAN_QT_PLATFORM_PLUGIN_PATH
     "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/platforms")
@@ -691,6 +715,7 @@ target_include_directories(test_gui_project_utils PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/image_matching
     ${CMAKE_SOURCE_DIR}/src/core/intersection
     ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
+    ${CMAKE_SOURCE_DIR}/src/core/lidar
     ${CMAKE_SOURCE_DIR}/src/core/qc
     ${CMAKE_SOURCE_DIR}/src/core/control_points
     ${CMAKE_SOURCE_DIR}/src/core/terrain
