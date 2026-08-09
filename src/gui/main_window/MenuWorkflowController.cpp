@@ -1117,22 +1117,20 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
         const int percent = total <= 0
             ? 100
             : qBound(0, static_cast<int>((static_cast<qint64>(processed) * 100) / total), 100);
-        QMetaObject::invokeMethod(
-            pmGuard.data(),
-            [pmGuard, session, cancelFlag, processed, total, percent]()
+        xjw::gui::tasks::postGuarded(pmGuard,
+            [session, cancelFlag, processed, total, percent](ProjectManager *manager)
         {
-            if (pmGuard
-                && pmGuard->ownsAtCancelFlag(cancelFlag)
-                && pmGuard->isCurrentSession(session)
+            if (manager->ownsAtCancelFlag(cancelFlag)
+                && manager->isCurrentSession(session)
                 && !cancelFlag->load(std::memory_order_relaxed))
             {
-                emit pmGuard->atProgressChanged(
+                emit manager->atProgressChanged(
                     QStringLiteral("空中三角测量: 检查上游匹配索引 %1/%2")
                         .arg(processed)
                         .arg(total),
                     percent);
             }
-        }, Qt::QueuedConnection);
+        });
     };
     xjw::gui::tasks::runGuardedWithOutcome(
         this,
