@@ -8,6 +8,8 @@
 #include <cstring>
 #include <limits>
 
+#include <QSet>
+
 namespace
 {
 
@@ -100,6 +102,81 @@ TEST(SceneGeometryPreparationTest, KeepsBasePointDataSeparateFromImageCounts)
     EXPECT_FLOAT_EQ(scalar_values[0], 8.0f);
     EXPECT_FLOAT_EQ(scalar_values[1], 3.0f);
     EXPECT_FLOAT_EQ(scalar_values[2], 12.0f);
+}
+
+TEST(SceneGeometryPreparationTest, BuildsBoundedSpatialChunksWithStableSourceMapping)
+{
+    std::vector<QVector3D> points;
+    points.reserve(512);
+    QVector<int> counts;
+    counts.reserve(512);
+    for (int index = 0; index < 512; ++index)
+    {
+        points.emplace_back(float(index % 16) / 8.0f - 1.0f,
+                            float((index / 16) % 16) / 8.0f - 1.0f,
+                            float(index / 256) * 0.25f);
+        counts.push_back(index);
+    }
+    const PointRenderPreparation prepared = preparePointRenderData(
+        makePointCloud(points), counts);
+    const QVector<PointRenderChunkPreparation> chunks = preparePointRenderChunks(
+        prepared.vertexData,
+        9 * int(sizeof(float)),
+        prepared.scalarData,
+        prepared.spatialSummary,
+        64,
+        128);
+
+    ASSERT_GT(chunks.size(), 1);
+    QSet<PointVertexIndex> sourceIndices;
+    int totalPointCount = 0;
+    for (const PointRenderChunkPreparation &chunk : chunks)
+    {
+        ASSERT_TRUE(chunk.isValid());
+        EXPECT_LE(chunk.pointCount, 64);
+        EXPECT_GE(chunk.radius, 0.0f);
+        totalPointCount += chunk.pointCount;
+        for (const PointVertexIndex sourceIndex : chunk.sourceIndices)
+        {
+            EXPECT_FALSE(sourceIndices.contains(sourceIndex));
+            sourceIndices.insert(sourceIndex);
+        }
+    }
+    EXPECT_EQ(totalPointCount, 512);
+    EXPECT_EQ(sourceIndices.size(), 512);
+}
+
+TEST(SceneGeometryPreparationTest, CullsOffscreenChunksAndHonorsPointBudget)
+{
+    auto makeChunk = [](float centerX, int pointCount)
+    {
+        PointRenderChunkPreparation chunk;
+        chunk.pointCount = pointCount;
+        chunk.sourceIndices.resize(pointCount);
+        chunk.aabbMinimum = QVector3D(centerX - 0.25f, -0.25f, 0.0f);
+        chunk.aabbMaximum = QVector3D(centerX + 0.25f, 0.25f, 0.0f);
+        chunk.center = (chunk.aabbMinimum + chunk.aabbMaximum) * 0.5f;
+        chunk.radius = 0.4f;
+        for (int index = 0; index < pointCount; ++index)
+        {
+            chunk.sourceIndices[index] = static_cast<PointVertexIndex>(index);
+        }
+        return chunk;
+    };
+    const QVector<PointRenderChunkPreparation> chunks{
+        makeChunk(0.0f, 1'000),
+        makeChunk(4.0f, 1'000)};
+    QMatrix4x4 clipMatrix;
+    clipMatrix.setToIdentity();
+
+    const PointRenderPlan plan = planPointRenderChunks(
+        chunks, clipMatrix, QSize(1000, 800), 2.0f, 250);
+
+    ASSERT_EQ(plan.drawCounts.size(), 2);
+    EXPECT_GT(plan.drawCounts.at(0), 0);
+    EXPECT_EQ(plan.drawCounts.at(1), 0);
+    EXPECT_EQ(plan.visibleChunkCount, 1);
+    EXPECT_LE(plan.visiblePointCount, 250);
 }
 
 TEST(SceneGeometryPreparationTest, SelectsFromImmutablePreparedVertices)

@@ -2,33 +2,52 @@
 #include "LayerImageLoader.h"
 #include "LayerOverlayItems.h"
 #include "Logger.h"
-#include "MaskGenerator.h"
-#include "io/PathIO.h"
 
-#include <opencv2/core/types.hpp>
-#include <opencv2/imgcodecs.hpp>
+#include <opencv2/core.hpp>
 
 #include <QGraphicsScene>
 #include <QGraphicsPixmapItem>
+#include <QCoreApplication>
 #include <QImage>
+#include <QMetaObject>
 #include <QPixmap>
 #include <QTransform>
 
 #include <QGraphicsItem>
-#include <QGraphicsPathItem>
 #include <QPainterPath>
-#include <QPen>
+#include <QPointer>
+#include <QThreadPool>
 #include <QVector>
 #include <QPointF>
+
+#include <algorithm>
+#include <atomic>
+#include <exception>
+#include <limits>
+#include <memory>
 
 namespace
 {
 
-QPen makeMaskContourPen(const QColor &color, qreal width)
+bool cancellationRequested(const std::shared_ptr<std::atomic<bool>> &cancellation)
 {
-    QPen pen(color, width, Qt::SolidLine, Qt::SquareCap, Qt::RoundJoin);
-    pen.setCosmetic(true);
-    return pen;
+    return cancellation && cancellation->load(std::memory_order_relaxed);
+}
+
+class MaskContourThreadPool final : public QThreadPool
+{
+public:
+    MaskContourThreadPool()
+    {
+        setMaxThreadCount(2);
+        setExpiryTimeout(30'000);
+    }
+};
+
+QThreadPool *maskContourThreadPool()
+{
+    static MaskContourThreadPool pool;
+    return &pool;
 }
 
 } // namespace
@@ -37,6 +56,15 @@ LayerRenderer::LayerRenderer(QGraphicsScene *scene, QObject *parent)
     : QObject(parent)
     , _scene(scene)
 {
+    _maskContourCache.setMaxCost(MaximumMaskContourCacheCost);
+}
+
+LayerRenderer::~LayerRenderer()
+{
+    if (_maskLoadCancellation)
+    {
+        _maskLoadCancellation->store(true, std::memory_order_relaxed);
+    }
 }
 
 void LayerRenderer::setFeatureDisplayOptions(const FeatureDisplayOptions &opts)
@@ -135,58 +163,143 @@ void LayerRenderer::clearDepthOverlay()
     _intensityBaseActive = false;
 }
 
-bool LayerRenderer::addMaskContourLayer(const QString &maskPath, int z)
+bool LayerRenderer::addMaskContourLayer(const QString &mask_path, int z)
 {
-    if (!_scene || maskPath.trimmed().isEmpty())
+    clearMaskLayers();
+    if (!_scene || mask_path.trimmed().isEmpty())
     {
         return false;
     }
 
-    const cv::Mat mask = xjw::common::io::readImage(maskPath, cv::IMREAD_GRAYSCALE);
-    if (mask.empty())
+    const auto source = xjw::gui::views::resolveMaskContourSource(mask_path);
+    if (!source)
     {
+        emit maskContourLayerFailed(mask_path);
         return false;
     }
 
-    const auto contours = xjw::mask::extractMaskContours(mask, true);
-    if (contours.empty())
+    const quint64 generation = _maskLoadGeneration;
+    if (const QPainterPath *cached_path = _maskContourCache.object(source->cacheKey))
     {
-        return false;
-    }
-
-    QPainterPath path;
-    for (const auto &contour : contours)
-    {
-        if (contour.size() < 2)
+        const bool installed = installMaskContourLayer(*cached_path, z);
+        if (installed)
         {
-            continue;
+            emit maskContourLayerReady(source->normalizedPath, true);
         }
-
-        path.moveTo(contour.front().x, contour.front().y);
-        for (std::size_t i = 1; i < contour.size(); ++i)
+        else
         {
-            path.lineTo(contour.at(i).x, contour.at(i).y);
+            emit maskContourLayerFailed(source->normalizedPath);
         }
-        path.closeSubpath();
+        return installed;
     }
 
-    if (path.isEmpty())
-    {
-        return false;
-    }
+    auto cancellation = std::make_shared<std::atomic<bool>>(false);
+    _maskLoadCancellation = cancellation;
+    const QPointer<LayerRenderer> self(this);
+    const xjw::gui::views::MaskContourSource source_copy = *source;
+    maskContourThreadPool()->start(
+        [self, source_copy, cancellation, generation, z]()
+        {
+            QPainterPath path;
+            QString error_message;
+            try
+            {
+                path = xjw::gui::views::extractMaskContoursPath(
+                    source_copy.normalizedPath, cancellation);
+            }
+            catch (const cv::Exception &exception)
+            {
+                error_message = QStringLiteral("OpenCV: %1")
+                    .arg(QString::fromUtf8(exception.what()));
+            }
+            catch (const std::exception &exception)
+            {
+                error_message = QString::fromUtf8(exception.what());
+            }
+            catch (...)
+            {
+                error_message = QStringLiteral("未知后台异常");
+            }
+            if (cancellationRequested(cancellation))
+            {
+                return;
+            }
 
-    auto *halo = new QGraphicsPathItem(path);
-    halo->setPen(makeMaskContourPen(QColor(0, 0, 0, 210), 4.0));
-    halo->setZValue(z);
-    _scene->addItem(halo);
-    _maskItems.append(halo);
+            QCoreApplication *application = QCoreApplication::instance();
+            if (!application)
+            {
+                return;
+            }
 
-    auto *outline = new QGraphicsPathItem(path);
-    outline->setPen(makeMaskContourPen(QColor(255, 255, 255, 245), 1.6));
-    outline->setZValue(z + 0.1);
-    _scene->addItem(outline);
-    _maskItems.append(outline);
+            QMetaObject::invokeMethod(
+                application,
+                [self,
+                 source_copy,
+                 cancellation,
+                 generation,
+                 z,
+                 path = std::move(path),
+                 error_message = std::move(error_message)]() mutable
+                {
+                    if (!self || cancellationRequested(cancellation)
+                        || generation != self->_maskLoadGeneration)
+                    {
+                        return;
+                    }
+
+                    const auto current_source = xjw::gui::views::resolveMaskContourSource(
+                        source_copy.normalizedPath);
+                    if (!current_source || current_source->cacheKey != source_copy.cacheKey)
+                    {
+                        emit self->maskContourLayerFailed(source_copy.normalizedPath);
+                        return;
+                    }
+                    if (!error_message.isEmpty())
+                    {
+                        LOG_WARN(QStringLiteral("蒙版轮廓后台提取失败：%1（%2）")
+                                     .arg(source_copy.normalizedPath, error_message));
+                        emit self->maskContourLayerFailed(source_copy.normalizedPath);
+                        return;
+                    }
+                    if (path.isEmpty())
+                    {
+                        emit self->maskContourLayerFailed(source_copy.normalizedPath);
+                        return;
+                    }
+
+                    const int element_count = std::min(
+                        path.elementCount(), std::numeric_limits<int>::max());
+                    const int cache_cost = std::max(
+                        LayerRenderer::MinimumMaskContourCacheEntryCost, element_count);
+                    self->_maskContourCache.insert(
+                        source_copy.cacheKey, new QPainterPath(path), cache_cost);
+
+                    if (!self->installMaskContourLayer(path, z))
+                    {
+                        emit self->maskContourLayerFailed(source_copy.normalizedPath);
+                        return;
+                    }
+                    emit self->maskContourLayerReady(source_copy.normalizedPath, false);
+                },
+                Qt::QueuedConnection);
+        });
     return true;
+}
+
+bool LayerRenderer::installMaskContourLayer(const QPainterPath &path, int z)
+{
+    if (!_scene || path.isEmpty())
+    {
+        return false;
+    }
+
+    const QList<QGraphicsItem *> items = xjw::gui::views::createMaskContourOverlayItems(path, z);
+    for (QGraphicsItem *item : items)
+    {
+        _scene->addItem(item);
+        _maskItems.append(item);
+    }
+    return !items.isEmpty();
 }
 
 void LayerRenderer::clearFeatureLayers()
@@ -217,6 +330,17 @@ void LayerRenderer::clearFeatureResidualLayers()
 }
 
 void LayerRenderer::clearMaskLayers()
+{
+    ++_maskLoadGeneration;
+    if (_maskLoadCancellation)
+    {
+        _maskLoadCancellation->store(true, std::memory_order_relaxed);
+        _maskLoadCancellation.reset();
+    }
+    clearMaskLayerItems();
+}
+
+void LayerRenderer::clearMaskLayerItems()
 {
     for (auto *it : std::as_const(_maskItems))
     {

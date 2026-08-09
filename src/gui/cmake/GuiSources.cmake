@@ -65,6 +65,8 @@ set(GUI_SOURCES
   views/PointCloudEditPreparation.cpp
   views/PointCloudSnapshotIO.cpp
   views/CameraSceneWidget.cpp
+  views/CameraSceneWidgetLegends.cpp
+  views/CameraSceneWidgetOverlay.cpp
   views/ObjRenderPreparation.cpp
   views/TiePointVisualization.cpp
   widgets/CanvasWidget.cpp

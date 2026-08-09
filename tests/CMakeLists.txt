@@ -1138,6 +1138,41 @@ target_compile_definitions(test_camera_scene_render_contracts PRIVATE
 )
 gtest_discover_tests(test_camera_scene_render_contracts)
 
+if(PLASCAN_QT_HAS_VULKAN AND NOT APPLE)
+    add_executable(test_camera_scene_rhi_smoke
+        test_camera_scene_rhi_smoke.cpp
+    )
+    target_link_libraries(test_camera_scene_rhi_smoke PRIVATE
+        Qt6::Core
+        Qt6::Gui
+        Qt6::GuiPrivate
+        GTest::gtest
+    )
+    qt_add_shaders(test_camera_scene_rhi_smoke camera_scene_test_shaders
+        PREFIX
+            "/shaders"
+        BASE
+            "${CMAKE_SOURCE_DIR}/src/gui/shaders"
+        FILES
+            ${CMAKE_SOURCE_DIR}/src/gui/shaders/camera_scene_mesh.vert
+            ${CMAKE_SOURCE_DIR}/src/gui/shaders/camera_scene_mesh.frag
+    )
+    if(WIN32)
+        set(_PLASCAN_RHI_SMOKE_PLATFORM "windows")
+    elseif(UNIX)
+        set(_PLASCAN_RHI_SMOKE_PLATFORM "xcb")
+    endif()
+    gtest_discover_tests(test_camera_scene_rhi_smoke
+        DISCOVERY_MODE PRE_TEST
+        PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=${_PLASCAN_RHI_SMOKE_PLATFORM}"
+            LABELS "gui;gpu;vulkan")
+    unset(_PLASCAN_RHI_SMOKE_PLATFORM)
+else()
+    message(STATUS
+        "test_camera_scene_rhi_smoke disabled: this platform's Qt build does not expose Vulkan")
+endif()
+
 add_executable(test_tie_point_visualization
     test_tie_point_visualization.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/TiePointVisualization.cpp

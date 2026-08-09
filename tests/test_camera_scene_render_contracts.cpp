@@ -9,12 +9,26 @@ namespace
 
 QString readProjectFile(const QString &relativePath)
 {
-    QFile file(QDir(QString::fromUtf8(PLASCAN_SOURCE_DIR)).filePath(relativePath));
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+    const QDir projectRoot(QString::fromUtf8(PLASCAN_SOURCE_DIR));
+    const auto readOne = [&projectRoot](const QString &path)
     {
-        return QString();
+        QFile file(projectRoot.filePath(path));
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        {
+            return QString();
+        }
+        return QString::fromUtf8(file.readAll());
+    };
+
+    QString source = readOne(relativePath);
+    if (relativePath == QStringLiteral("src/gui/views/CameraSceneWidget.cpp"))
+    {
+        source += QLatin1Char('\n')
+            + readOne(QStringLiteral("src/gui/views/CameraSceneWidgetOverlay.cpp"));
+        source += QLatin1Char('\n')
+            + readOne(QStringLiteral("src/gui/views/CameraSceneWidgetLegends.cpp"));
     }
-    return QString::fromUtf8(file.readAll());
+    return source;
 }
 
 } // namespace
@@ -73,10 +87,12 @@ TEST(CameraSceneRenderContractTest, LargeCameraImagesUseContinuousBoundedPrefetc
     ASSERT_FALSE(source.isEmpty());
     ASSERT_FALSE(imageLoader.isEmpty());
 
-    EXPECT_TRUE(header.contains(QStringLiteral("QThreadPool _cameraImageLoadPool")));
+    EXPECT_FALSE(header.contains(QStringLiteral("QThreadPool _cameraImageLoadPool")));
+    EXPECT_TRUE(header.contains(QStringLiteral("int _maximumCameraImageLoads = 4")));
     EXPECT_TRUE(header.contains(QStringLiteral("QQueue<CameraPlaneImageRequest> _cameraImageLoadQueue")));
     EXPECT_TRUE(source.contains(QStringLiteral("pumpCameraPlaneImageLoads();")));
-    EXPECT_TRUE(source.contains(QStringLiteral("&_cameraImageLoadPool")));
+    EXPECT_TRUE(source.contains(QStringLiteral("watcher->setFuture(QtConcurrent::run(")));
+    EXPECT_FALSE(source.contains(QStringLiteral("_cameraImageLoadPool.waitForDone()")));
     EXPECT_TRUE(source.contains(QStringLiteral("std::clamp((ideal_threads + 1) / 2, 4, 12)")));
     EXPECT_FALSE(source.contains(QStringLiteral("_cameraImageLoadsInFlight.size() >= 6")));
     EXPECT_FALSE(source.contains(QStringLiteral("_cameraImageCache.size() > 512")));
@@ -337,6 +353,56 @@ TEST(CameraSceneRenderContractTest, LargePointCloudsPrepareGpuVerticesOffTheGuiT
     EXPECT_FALSE(uploadBlock.contains(QStringLiteral("prepareObjRenderData(")));
     EXPECT_FALSE(uploadBlock.contains(QStringLiteral("preparePointScalarData(")));
     EXPECT_TRUE(uploadBlock.contains(QStringLiteral("不会在 GUI 线程回退重建")));
+}
+
+TEST(CameraSceneRenderContractTest, UploadedPointChunksRemainReusableAfterCpuCopiesAreReleased)
+{
+    const QString source =
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
+    const qsizetype ensure_start = source.indexOf(
+        QStringLiteral("bool CameraSceneWidget::ensureRhiBuffer"));
+    const qsizetype ensure_end = source.indexOf(
+        QStringLiteral("bool CameraSceneWidget::ensureRhiIndexBuffer"), ensure_start);
+    const qsizetype commit_start = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::commitResourceUpdateState"));
+    const qsizetype commit_end = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::resizeEvent"), commit_start);
+    ASSERT_GE(ensure_start, 0);
+    ASSERT_GT(ensure_end, ensure_start);
+    ASSERT_GE(commit_start, 0);
+    ASSERT_GT(commit_end, commit_start);
+
+    const QString ensure_block = source.mid(ensure_start, ensure_end - ensure_start);
+    const QString commit_block = source.mid(commit_start, commit_end - commit_start);
+    EXPECT_TRUE(ensure_block.contains(QStringLiteral("if (buffer->vertexCount <= 0)")));
+    EXPECT_TRUE(ensure_block.contains(QStringLiteral("if (buffer->vertexData.isEmpty())")));
+    EXPECT_TRUE(ensure_block.contains(QStringLiteral(
+        "return buffer->vertexBuffer && !buffer->dirty;")));
+    EXPECT_TRUE(commit_block.contains(QStringLiteral("chunk->points.vertexData.clear()")));
+    EXPECT_TRUE(commit_block.contains(QStringLiteral("chunk->scalars.vertexData.clear()")));
+}
+
+TEST(CameraSceneRenderContractTest, OversizedMeshTexturesArePreparedOffTheRenderThread)
+{
+    const QString source =
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
+    const qsizetype prepare_start = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::prepareMeshTextureUploadImage"));
+    const qsizetype ensure_start = source.indexOf(
+        QStringLiteral("bool CameraSceneWidget::ensureTexturedMeshPipeline"), prepare_start);
+    const qsizetype ensure_end = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::drawTexturedMesh"), ensure_start);
+    ASSERT_GE(prepare_start, 0);
+    ASSERT_GT(ensure_start, prepare_start);
+    ASSERT_GT(ensure_end, ensure_start);
+
+    const QString prepare_block = source.mid(prepare_start, ensure_start - prepare_start);
+    const QString ensure_block = source.mid(ensure_start, ensure_end - ensure_start);
+    EXPECT_TRUE(prepare_block.contains(QStringLiteral("runGuardedWithOutcome(")));
+    EXPECT_TRUE(prepare_block.contains(QStringLiteral("source_image.scaled(")));
+    EXPECT_FALSE(ensure_block.contains(QStringLiteral("_meshTextureImage.scaled(")));
+    EXPECT_TRUE(ensure_block.contains(QStringLiteral(
+        "prepareMeshTextureUploadImage(maximumTextureSize)")));
 }
 
 TEST(CameraSceneRenderContractTest, SceneLoadsAreSingleFlightAndLatestOnly)
@@ -976,7 +1042,8 @@ TEST(CameraSceneRenderContractTest, TiePointsUseGpuCameraPlaneDepth)
     ASSERT_GT(renderStart, drawStart);
     const QString drawBlock = sceneSource.mid(drawStart, renderStart - drawStart);
     EXPECT_FALSE(drawBlock.contains(QStringLiteral("if (!_isTiePointCloud)")));
-    EXPECT_TRUE(drawBlock.contains(QStringLiteral("drawPointCloud(cb, uniforms);")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral(
+        "drawPointCloud(cb, uniforms, clipMatrix);")));
 
     const qsizetype thumbnailPipelineStart = sceneSource.indexOf(
         QStringLiteral("bool CameraSceneWidget::ensureCameraThumbnailPipeline"));
@@ -994,7 +1061,7 @@ TEST(CameraSceneRenderContractTest, TiePointsUseGpuCameraPlaneDepth)
 
     const QString renderBlock = sceneSource.mid(renderStart);
     const qsizetype geometryCall = renderBlock.indexOf(
-        QStringLiteral("drawSceneGeometry(cb, uniforms);"));
+        QStringLiteral("drawSceneGeometry(cb, uniforms, mvp);"));
     const qsizetype thumbnailsCall = renderBlock.indexOf(
         QStringLiteral("drawCameraThumbnails(cb, mvp, mv);"));
     ASSERT_GE(geometryCall, 0);
@@ -1119,7 +1186,8 @@ TEST(CameraSceneRenderContractTest, ImportedPointCloudsUsePointCloudLoadersAndFi
     EXPECT_FALSE(sceneHeader.contains(QStringLiteral("_modelPointBuffer")));
     EXPECT_FALSE(sceneHeader.contains(QStringLiteral("_modelPointPipeline")));
     EXPECT_FALSE(sceneSource.contains(QStringLiteral("_preferModelPointRender")));
-    EXPECT_TRUE(sceneSource.contains(QStringLiteral("drawPointCloud(cb, uniforms);")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral(
+        "drawPointCloud(cb, uniforms, clipMatrix);")));
     EXPECT_FALSE(sceneSource.contains(QStringLiteral("drawPointCloudOverlay(painter);")));
 }
 

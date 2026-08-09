@@ -26,6 +26,13 @@ class DualImageViewer : public QWidget
     Q_OBJECT
 
 public:
+    enum class DisparityTarget
+    {
+        LeftImage,
+        RightImage
+    };
+    Q_ENUM(DisparityTarget)
+
     explicit DualImageViewer(QWidget *parent = nullptr);
     ~DualImageViewer() override;
 
@@ -61,6 +68,8 @@ public:
     MatchLineOverlay* overlay() const;
     DisparityHeatmapOverlay* disparityOverlay() const;
     void setOverlayMode(int mode); // 0=sparse, 1=dense
+    void setDisparityTarget(DisparityTarget target);
+    DisparityTarget disparityTarget() const { return _disparityTarget; }
 
     // 快捷操作
     void fitBothViews();
@@ -117,6 +126,7 @@ private:
     QPointer<MatchLineOverlay> _overlay;
     QPointer<DisparityHeatmapOverlay> _disparityOverlay;
     int _overlayMode = 0;
+    DisparityTarget _disparityTarget = DisparityTarget::LeftImage;
     
     bool _syncEnabled;
     bool _syncing; // 防止递归同步

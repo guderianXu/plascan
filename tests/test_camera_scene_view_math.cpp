@@ -3,6 +3,8 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
+
 #include "CameraSceneViewMath.h"
 
 using namespace xjw::gui::camera_scene;
@@ -15,6 +17,38 @@ TEST(CameraSceneViewMathTest, SortsFarCameraBeforeNearCameraRegardlessOfInputOrd
                                      QVector3D(0.0f, 0.0f, -9.0f)};
 
     EXPECT_EQ(farToNearCameraIndices(centers, world_to_view), QVector<int>({1, 0}));
+}
+
+TEST(CameraSceneViewMathTest, PreservesPortraitViewportAspectRatio)
+{
+    EXPECT_FLOAT_EQ(
+        xjw::gui::camera_scene::sceneViewportAspectRatio(600, 1200),
+        0.5f);
+    EXPECT_FLOAT_EQ(
+        xjw::gui::camera_scene::sceneViewportAspectRatio(1200, 600),
+        2.0f);
+    EXPECT_FLOAT_EQ(
+        xjw::gui::camera_scene::sceneViewportAspectRatio(0, 0),
+        1.0f);
+}
+
+TEST(CameraSceneViewMathTest, BoundsSceneZoomAgainstExtremeWheelInput)
+{
+    using namespace xjw::gui::camera_scene;
+
+    EXPECT_DOUBLE_EQ(boundedSceneZoomScale(1.0, 1.1), 1.1);
+    EXPECT_DOUBLE_EQ(
+        boundedSceneZoomScale(1.0, std::numeric_limits<double>::max()),
+        MaximumSceneZoomScale);
+    EXPECT_DOUBLE_EQ(
+        boundedSceneZoomScale(1.0, std::numeric_limits<double>::min()),
+        MinimumSceneZoomScale);
+    EXPECT_DOUBLE_EQ(
+        boundedSceneZoomScale(8.0, -1.0),
+        8.0);
+    EXPECT_DOUBLE_EQ(
+        boundedSceneZoomScale(8.0, 1.0, 2'000.0, -1.0),
+        2'000.0);
 }
 
 TEST(CameraSceneViewMathTest, CancelsPerspectiveDepthAtFixedSceneZoom)

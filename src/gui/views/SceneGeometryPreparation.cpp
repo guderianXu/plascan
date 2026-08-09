@@ -8,6 +8,8 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <numeric>
+#include <utility>
 
 namespace
 {
@@ -35,6 +37,113 @@ QVector3D cloudPoint(const SceneRenderCloud &cloud, std::size_t index)
     return QVector3D(cloud.points()(row, 0),
                      cloud.points()(row, 1),
                      cloud.points()(row, 2));
+}
+
+int pointChunkCellCoordinate(float value,
+                             float minimum,
+                             float maximum,
+                             int gridDimension)
+{
+    const float extent = maximum - minimum;
+    if (!std::isfinite(value) || !std::isfinite(extent) || extent <= 1.0e-20f)
+    {
+        return 0;
+    }
+    const float normalized = std::clamp((value - minimum) / extent, 0.0f, 1.0f);
+    return std::min(gridDimension - 1,
+                    static_cast<int>(normalized * gridDimension));
+}
+
+bool chunkIsVisible(const PointRenderChunkPreparation &chunk,
+                    const QMatrix4x4 &clipMatrix,
+                    const QSize &viewportSize,
+                    double *projectedAreaPixels)
+{
+    if (projectedAreaPixels)
+    {
+        *projectedAreaPixels = 0.0;
+    }
+    if (chunk.pointCount <= 0
+        || chunk.sourceIndices.size() != chunk.pointCount
+        || viewportSize.isEmpty())
+    {
+        return false;
+    }
+
+    const QVector3D minimum = chunk.aabbMinimum;
+    const QVector3D maximum = chunk.aabbMaximum;
+    const QVector<QVector3D> corners = {
+        {minimum.x(), minimum.y(), minimum.z()},
+        {maximum.x(), minimum.y(), minimum.z()},
+        {minimum.x(), maximum.y(), minimum.z()},
+        {maximum.x(), maximum.y(), minimum.z()},
+        {minimum.x(), minimum.y(), maximum.z()},
+        {maximum.x(), minimum.y(), maximum.z()},
+        {minimum.x(), maximum.y(), maximum.z()},
+        {maximum.x(), maximum.y(), maximum.z()}};
+
+    QVector<QVector4D> clipCorners;
+    clipCorners.reserve(corners.size());
+    for (const QVector3D &corner : corners)
+    {
+        clipCorners.push_back(clipMatrix * QVector4D(corner, 1.0f));
+    }
+
+    const auto allOutside = [&clipCorners](const auto &predicate)
+    {
+        return std::all_of(clipCorners.cbegin(), clipCorners.cend(), predicate);
+    };
+    constexpr float epsilon = 1.0e-6f;
+    if (allOutside([epsilon](const QVector4D &value) { return value.w() <= epsilon; })
+        || allOutside([](const QVector4D &value) { return value.x() < -value.w(); })
+        || allOutside([](const QVector4D &value) { return value.x() > value.w(); })
+        || allOutside([](const QVector4D &value) { return value.y() < -value.w(); })
+        || allOutside([](const QVector4D &value) { return value.y() > value.w(); })
+        || allOutside([](const QVector4D &value) { return value.z() > value.w(); }))
+    {
+        return false;
+    }
+
+    float minimumNdcX = 1.0f;
+    float minimumNdcY = 1.0f;
+    float maximumNdcX = -1.0f;
+    float maximumNdcY = -1.0f;
+    bool hasProjectedCorner = false;
+    for (const QVector4D &corner : std::as_const(clipCorners))
+    {
+        if (!std::isfinite(corner.w()) || corner.w() <= epsilon)
+        {
+            continue;
+        }
+        const float x = std::clamp(corner.x() / corner.w(), -1.0f, 1.0f);
+        const float y = std::clamp(corner.y() / corner.w(), -1.0f, 1.0f);
+        minimumNdcX = std::min(minimumNdcX, x);
+        minimumNdcY = std::min(minimumNdcY, y);
+        maximumNdcX = std::max(maximumNdcX, x);
+        maximumNdcY = std::max(maximumNdcY, y);
+        hasProjectedCorner = true;
+    }
+    if (projectedAreaPixels)
+    {
+        if (!hasProjectedCorner)
+        {
+            *projectedAreaPixels = static_cast<double>(viewportSize.width())
+                * static_cast<double>(viewportSize.height());
+        }
+        else
+        {
+            const double widthPixels = std::max(
+                1.0,
+                static_cast<double>(maximumNdcX - minimumNdcX)
+                    * 0.5 * viewportSize.width());
+            const double heightPixels = std::max(
+                1.0,
+                static_cast<double>(maximumNdcY - minimumNdcY)
+                    * 0.5 * viewportSize.height());
+            *projectedAreaPixels = widthPixels * heightPixels;
+        }
+    }
+    return true;
 }
 
 } // namespace
@@ -310,7 +419,238 @@ PointRenderPreparation preparePointRenderData(
         return {};
     }
     result.pointCount = static_cast<int>(cloud.size());
+    result.chunks = preparePointRenderChunks(
+        result.vertexData,
+        stride_floats * int(sizeof(float)),
+        result.scalarData,
+        result.spatialSummary,
+        262'144,
+        524'288,
+        cancellationFlag);
     return result;
+}
+
+QVector<PointRenderChunkPreparation> preparePointRenderChunks(
+    const QByteArray &vertexData,
+    int strideBytes,
+    const QByteArray &scalarData,
+    const CloudSpatialSummary &spatialSummary,
+    int maximumPointsPerChunk,
+    int minimumPointCountForChunking,
+    const std::atomic_bool *cancellationFlag)
+{
+    QVector<PointRenderChunkPreparation> chunks;
+    if (!spatialSummary.valid
+        || strideBytes < 3 * int(sizeof(float))
+        || strideBytes % int(sizeof(float)) != 0
+        || vertexData.isEmpty()
+        || vertexData.size() % strideBytes != 0
+        || maximumPointsPerChunk <= 0
+        || minimumPointCountForChunking <= 0
+        || isCancellationRequested(cancellationFlag))
+    {
+        return chunks;
+    }
+
+    const qsizetype pointCount = vertexData.size() / strideBytes;
+    if (pointCount < minimumPointCountForChunking
+        || pointCount > static_cast<qsizetype>(
+            std::numeric_limits<PointVertexIndex>::max()))
+    {
+        return chunks;
+    }
+
+    const int desiredChunkCount = std::max(
+        1,
+        static_cast<int>((pointCount + maximumPointsPerChunk - 1)
+                         / maximumPointsPerChunk));
+    const int gridDimension = std::max(
+        1,
+        static_cast<int>(std::ceil(std::cbrt(
+            static_cast<double>(desiredChunkCount)))));
+    const int cellCount = gridDimension * gridDimension * gridDimension;
+    std::vector<std::vector<PointVertexIndex>> cellIndices(
+        static_cast<std::size_t>(cellCount));
+    const float *vertices = reinterpret_cast<const float *>(vertexData.constData());
+    const int strideFloats = strideBytes / int(sizeof(float));
+    for (qsizetype index = 0; index < pointCount; ++index)
+    {
+        if (static_cast<std::size_t>(index) % kCancellationCheckInterval == 0
+            && isCancellationRequested(cancellationFlag))
+        {
+            return {};
+        }
+        const float *point = vertices + index * strideFloats;
+        const int x = pointChunkCellCoordinate(
+            point[0],
+            spatialSummary.aabbMinimum.x(),
+            spatialSummary.aabbMaximum.x(),
+            gridDimension);
+        const int y = pointChunkCellCoordinate(
+            point[1],
+            spatialSummary.aabbMinimum.y(),
+            spatialSummary.aabbMaximum.y(),
+            gridDimension);
+        const int z = pointChunkCellCoordinate(
+            point[2],
+            spatialSummary.aabbMinimum.z(),
+            spatialSummary.aabbMaximum.z(),
+            gridDimension);
+        const int cellIndex = x + gridDimension * (y + gridDimension * z);
+        cellIndices[static_cast<std::size_t>(cellIndex)].push_back(
+            static_cast<PointVertexIndex>(index));
+    }
+
+    const bool hasScalars = scalarData.size() == pointCount * int(sizeof(float));
+    const float *scalars = hasScalars
+        ? reinterpret_cast<const float *>(scalarData.constData())
+        : nullptr;
+    for (int cellIndex = 0; cellIndex < cellCount; ++cellIndex)
+    {
+        std::vector<PointVertexIndex> &indices =
+            cellIndices[static_cast<std::size_t>(cellIndex)];
+        if (indices.empty())
+        {
+            continue;
+        }
+        if (isCancellationRequested(cancellationFlag))
+        {
+            return {};
+        }
+
+        // 用与元素个数互质的步长重排。这样 LOD 绘制连续前缀时仍能覆盖
+        // 整个空间块，而不是只显示文件中相邻的一小段点。
+        const std::size_t count = indices.size();
+        std::size_t step = count > 1 ? count / 2 + 1 : 1;
+        while (count > 1 && std::gcd(step, count) != 1)
+        {
+            ++step;
+        }
+        const std::size_t offset = count > 0
+            ? (static_cast<std::size_t>(cellIndex) * 2'654'435'761ULL) % count
+            : 0;
+
+        for (std::size_t groupStart = 0;
+             groupStart < count;
+             groupStart += static_cast<std::size_t>(maximumPointsPerChunk))
+        {
+            const std::size_t groupCount = std::min(
+                static_cast<std::size_t>(maximumPointsPerChunk),
+                count - groupStart);
+            PointRenderChunkPreparation chunk;
+            chunk.pointCount = static_cast<int>(groupCount);
+            chunk.vertexData.resize(
+                static_cast<qsizetype>(groupCount) * strideBytes);
+            chunk.scalarData.resize(
+                static_cast<qsizetype>(groupCount) * int(sizeof(float)));
+            chunk.sourceIndices.resize(static_cast<qsizetype>(groupCount));
+            char *chunkVertices = chunk.vertexData.data();
+            float *chunkScalars = reinterpret_cast<float *>(chunk.scalarData.data());
+            for (std::size_t destinationIndex = 0;
+                 destinationIndex < groupCount;
+                 ++destinationIndex)
+            {
+                const std::size_t sequenceIndex = groupStart + destinationIndex;
+                const std::size_t permuted = (offset + sequenceIndex * step) % count;
+                const PointVertexIndex sourceIndex = indices[permuted];
+                chunk.sourceIndices[static_cast<qsizetype>(destinationIndex)] = sourceIndex;
+                std::memcpy(
+                    chunkVertices + static_cast<qsizetype>(destinationIndex) * strideBytes,
+                    vertexData.constData() + static_cast<qsizetype>(sourceIndex) * strideBytes,
+                    static_cast<std::size_t>(strideBytes));
+                chunkScalars[destinationIndex] = scalars ? scalars[sourceIndex] : 0.0f;
+
+                const float *point = vertices
+                    + static_cast<std::size_t>(sourceIndex) * strideFloats;
+                const QVector3D position(point[0], point[1], point[2]);
+                if (destinationIndex == 0)
+                {
+                    chunk.aabbMinimum = position;
+                    chunk.aabbMaximum = position;
+                }
+                else
+                {
+                    chunk.aabbMinimum.setX(std::min(chunk.aabbMinimum.x(), position.x()));
+                    chunk.aabbMinimum.setY(std::min(chunk.aabbMinimum.y(), position.y()));
+                    chunk.aabbMinimum.setZ(std::min(chunk.aabbMinimum.z(), position.z()));
+                    chunk.aabbMaximum.setX(std::max(chunk.aabbMaximum.x(), position.x()));
+                    chunk.aabbMaximum.setY(std::max(chunk.aabbMaximum.y(), position.y()));
+                    chunk.aabbMaximum.setZ(std::max(chunk.aabbMaximum.z(), position.z()));
+                }
+            }
+            chunk.center = (chunk.aabbMinimum + chunk.aabbMaximum) * 0.5f;
+            chunk.radius = (chunk.aabbMaximum - chunk.center).length();
+            chunks.push_back(std::move(chunk));
+        }
+    }
+    return chunks;
+}
+
+PointRenderPlan planPointRenderChunks(
+    const QVector<PointRenderChunkPreparation> &chunks,
+    const QMatrix4x4 &clipMatrix,
+    const QSize &viewportSize,
+    float pointDiameterPixels,
+    qint64 maximumVisiblePoints)
+{
+    PointRenderPlan plan;
+    plan.drawCounts.resize(chunks.size());
+    if (chunks.isEmpty() || viewportSize.isEmpty() || maximumVisiblePoints <= 0)
+    {
+        return plan;
+    }
+
+    const double pointArea = std::max(
+        1.0,
+        static_cast<double>(pointDiameterPixels)
+            * static_cast<double>(pointDiameterPixels));
+    qint64 requestedPoints = 0;
+    for (qsizetype index = 0; index < chunks.size(); ++index)
+    {
+        const PointRenderChunkPreparation &chunk = chunks.at(index);
+        double projectedArea = 0.0;
+        if (!chunkIsVisible(chunk, clipMatrix, viewportSize, &projectedArea))
+        {
+            continue;
+        }
+        const double minimumSampleCount = std::min(64.0, double(chunk.pointCount));
+        const int areaDrivenCount = static_cast<int>(std::clamp(
+            std::ceil(projectedArea / pointArea),
+            minimumSampleCount,
+            static_cast<double>(chunk.pointCount)));
+        plan.drawCounts[index] = areaDrivenCount;
+        requestedPoints += areaDrivenCount;
+        ++plan.visibleChunkCount;
+    }
+
+    if (requestedPoints > maximumVisiblePoints)
+    {
+        const double scale = static_cast<double>(maximumVisiblePoints)
+            / static_cast<double>(requestedPoints);
+        requestedPoints = 0;
+        for (int &drawCount : plan.drawCounts)
+        {
+            if (drawCount <= 0)
+            {
+                continue;
+            }
+            drawCount = std::max(1, static_cast<int>(std::floor(drawCount * scale)));
+            requestedPoints += drawCount;
+        }
+    }
+    for (qsizetype index = 0;
+         requestedPoints > maximumVisiblePoints && index < plan.drawCounts.size();
+         ++index)
+    {
+        int &drawCount = plan.drawCounts[index];
+        const qint64 removable = std::min<qint64>(
+            std::max(0, drawCount - 1),
+            requestedPoints - maximumVisiblePoints);
+        drawCount -= static_cast<int>(removable);
+        requestedPoints -= removable;
+    }
+    plan.visiblePointCount = requestedPoints;
+    return plan;
 }
 
 std::vector<PointVertexIndex> selectPointVertexIndices(

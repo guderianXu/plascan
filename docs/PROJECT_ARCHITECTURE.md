@@ -530,12 +530,13 @@ gui/
 │   ├── shared/                 # 对话框共享样式与布局辅助
 │   └── README.md               # 分类规则与新增对话框约束
 │
-├── widgets/                    # 自定义 Qt 控件 (10 个)
+├── widgets/                    # 自定义 Qt 控件
 │   ├── CanvasWidget.h/cpp              # 2D 影像/图层渲染画布；整体视图旋转不修改影像或摄影测量坐标
 │   ├── ImageViewWidget.h/cpp           # 2D 影像缩放/平移控件
-│   ├── DualImageViewer.h/cpp           # 双图并列查看器 (左右影像 + 匹配线)
+│   ├── DualImageViewer.h/cpp           # 双图并列查看器，显式选择稀疏连线或左右影像视差目标
 │   ├── MatchLineOverlay.h/cpp          # 匹配线叠加层 (稀疏 → 连线)
-│   ├── DisparityHeatmapOverlay.h/cpp   # 视差热力图叠加层 (密集 → 热力图/新增)
+│   ├── DisparityHeatmapOverlay.h/cpp   # 异步视差热力图，按目标 viewport 变换做像素配准
+│   ├── PhotoStripWidget.h/cpp          # 可视区缩略图、有界预取队列与 LRU 缓存
 │   ├── DataTreeWidget.h/cpp            # Metashape 式工作区汇总 → Chunk → 资源分组树
 │   ├── WorkspaceSectionIcons.h/cpp     # 工作区、Chunk、影像及成果类型语义图标
 │   ├── ReferencePanelWidget.h/cpp      # 相机参考、标记、标尺三段树及源值/估计值/误差模式
@@ -590,13 +591,15 @@ gui/
 │
 ├── views/
 │   ├── LayerRenderer.h/cpp             # 图层渲染器
-│   ├── LayerOverlayItems.h/cpp          # 批量特征点、残差向量与匹配覆盖层
+│   ├── LayerOverlayItems.h/cpp          # 批量特征/残差覆盖层及后台蒙版轮廓数据准备
 │   ├── LayerFeatureLoader.h/cpp         # 特征文件解析与关键点加载
 │   ├── FeatureResidualLoader.h/cpp      # 按当前影像异步筛选真实重投影残差
-│   ├── CameraSceneWidget.h/cpp           # 三维场景、相机覆盖层、模型/点云显示与交互
+│   ├── CameraSceneWidget.h/cpp           # 三维场景生命周期、模型/点云与相机的 RHI 渲染及交互
+│   ├── CameraSceneWidgetOverlay.cpp      # 三维场景的 QPainter 交互覆盖层与相机标签绘制
+│   ├── CameraSceneWidgetLegends.cpp      # 三维场景的图例和后台加载进度绘制
 │   ├── CameraSceneViewMath.h/cpp        # 相机平面、视角选择与本地轴数学
 │   ├── ObjRenderPreparation.h/cpp       # 静态网格 VBO、三角/线框 IBO 与 UV 接缝流准备
-│   ├── SceneGeometryPreparation.h/cpp   # 点云 GPU 数据、空间摘要与后台框选准备
+│   ├── SceneGeometryPreparation.h/cpp   # 点云 GPU 数据、空间分块、视锥/LOD 计划与后台框选
 │   ├── PointCloudEditPreparation.h/cpp  # 点云增量删除、撤销数据与 GPU 数据重建
 │   └── PointCloudSnapshotIO.h/cpp       # 点云编辑暂存、格式分派与同目录原子替换
 │
@@ -978,7 +981,7 @@ chart，经确定性 MaxRects 打包后逐纹素反投影；Natural、加权平�
 和峰值内存估算；`camera_projected_atlas_v3` 仅作为配置级兼容回退保留。
 GUI 的生成模型入口默认请求 OBJ，同时始终保留 `model_from_mesh.ply` 作为几何/兼容回退；项目记录保存
 `model_obj`、`model_mtl`、`texture_image`/`texture_png` 和最终显示路径。工作区选择模型时优先异步加载
-OBJ，在后台解析 MTL 与纹理图，并在 Vulkan 网格管线中按 `faceTextureIndices` 展开每个面角的 UV；
+OBJ，在后台解析 MTL 与纹理图，并在 QRhi 网格管线中按 `faceTextureIndices` 展开每个面角的 UV；
 `ObjRenderPreparation` 同时在后台生成源顶点对齐的静态 VBO、三角 IBO、去重线框 IBO 和独立 UV
 接缝顶点流；Shaded、Solid、Elevation 与 Wireframe 只切换 shader uniform/索引流，不再重新展开或
 上传整张网格。`SceneGeometryPreparation` 在同一后台阶段生成点云基础 VBO、独立观测数属性以及
@@ -1115,7 +1118,7 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
 
 | 问题 | 位置 | 建议 |
 |------|------|------|
-| 三维场景实现仍较大 | `gui/views/CameraSceneWidget.cpp` | 继续将相机图集资源生命周期提取为独立渲染器；几何准备与点云编辑已拆分 |
+| 三维场景实现仍较大 | `gui/views/CameraSceneWidget.cpp` | 覆盖层、几何准备与点云编辑已拆分；继续将相机图集资源生命周期提取为独立渲染器 |
 | `mvs/` 和 `dense_match/` 有重复逻辑 | `SubpixelRefiner` 两个版本 | 统一到 `dense_match/` |
 | 空三真实数据回归仍需扩大 | `core/aerial_triangulation` | 持续加入环拍、航带、弱纹理和控制点数据集 |
 | 构建依赖 4 个系统符号链接 | `/lib64/libm.so.6`, `libnvrtc-builtins.so.13.0` 等 | 见 `CONTEXT.md` 系统依赖 |

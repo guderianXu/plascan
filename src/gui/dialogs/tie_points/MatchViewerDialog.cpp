@@ -31,6 +31,7 @@
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QSignalBlocker>
+#include <QVBoxLayout>
 
 namespace
 {
@@ -129,6 +130,8 @@ MatchViewerDialog::MatchViewerDialog(const QString &imgA, const QString &imgB,
 
     _viewer = new DualImageViewer(_sparseTab);
     form.sparseLayout->addWidget(_viewer);
+    auto *dense_view_layout = new QVBoxLayout(_denseTab);
+    dense_view_layout->setContentsMargins(0, 0, 0, 0);
 
     connect(_syncModeChk, &QCheckBox::toggled, this, &MatchViewerDialog::onSyncModeToggled);
     connect(_fitBtn, &QPushButton::clicked, this, &MatchViewerDialog::onFitToView);
@@ -167,10 +170,13 @@ MatchViewerDialog::MatchViewerDialog(const QString &imgA, const QString &imgB,
             this, &MatchViewerDialog::onDenseRangeChanged);
 
     // 标签页切换处理
-    connect(_tabWidget, &QTabWidget::currentChanged, this, [this](int idx)
+    connect(_tabWidget, &QTabWidget::currentChanged, this,
+            [this, sparse_view_layout = form.sparseLayout, dense_view_layout](int idx)
     {
         if (_viewer)
         {
+            QVBoxLayout *target_layout = idx == 1 ? dense_view_layout : sparse_view_layout;
+            target_layout->addWidget(_viewer);
             _viewer->setOverlayMode(idx);
             // 切换密集显示选项可见性
             if (_denseDisplayGroup)
@@ -187,6 +193,8 @@ MatchViewerDialog::MatchViewerDialog(const QString &imgA, const QString &imgB,
     connect(_viewer, &DualImageViewer::matchValidityLoaded,
             this, &MatchViewerDialog::onMatchValidityLoaded);
     connect(_viewer, &DualImageViewer::loadFailed,
+            this, &MatchViewerDialog::onLoadFailed);
+    connect(_viewer->disparityOverlay(), &DisparityHeatmapOverlay::loadFailed,
             this, &MatchViewerDialog::onLoadFailed);
     
     // 从 project_dialog.json 恢复上次保存的显示参数（若已设置项目路径）
@@ -209,6 +217,8 @@ MatchViewerDialog* MatchViewerDialog::forDenseMatch(
 {
     auto *dlg = new MatchViewerDialog(imgA, imgB, QString(), parent);
     dlg->_disparityFile = disparityFile;
+    // 稠密匹配输出以第一张（参考）影像的像素坐标为基准。
+    dlg->_viewer->setDisparityTarget(DualImageViewer::DisparityTarget::LeftImage);
     dlg->setInitialTab(1);
     if (!disparityFile.isEmpty())
         dlg->_viewer->disparityOverlay()->loadDisparity(disparityFile);

@@ -66,6 +66,7 @@ DualImageViewer::DualImageViewer(QWidget *parent)
     // 创建视差热力图覆盖层
     _disparityOverlay = new DisparityHeatmapOverlay(this);
     _disparityOverlay->hide();
+    setDisparityTarget(DisparityTarget::LeftImage);
 }
 
 ImageViewWidget* DualImageViewer::leftView() const
@@ -91,9 +92,30 @@ DisparityHeatmapOverlay* DualImageViewer::disparityOverlay() const
 void DualImageViewer::setOverlayMode(int mode)
 {
     _overlayMode = mode;
-    _overlay->setVisible(mode == 0);
-    _disparityOverlay->setVisible(mode == 1);
+    if (_overlay)
+    {
+        _overlay->setVisible(mode == 0);
+    }
+    if (_disparityOverlay)
+    {
+        _disparityOverlay->setVisible(mode == 1);
+        _disparityOverlay->syncToTargetViewport();
+    }
     scheduleOverlayUpdate();
+}
+
+void DualImageViewer::setDisparityTarget(DisparityTarget target)
+{
+    _disparityTarget = target;
+    if (!_disparityOverlay)
+    {
+        return;
+    }
+    ImageViewWidget *target_view = target == DisparityTarget::LeftImage
+        ? _leftView.data()
+        : _rightView.data();
+    _disparityOverlay->setTargetView(target_view);
+    _disparityOverlay->setVisible(_overlayMode == 1);
 }
 
 void DualImageViewer::highlightMatchIndex(int index)
@@ -340,6 +362,7 @@ void DualImageViewer::clearViewer()
     }
     if (_disparityOverlay)
     {
+        _disparityOverlay->clear();
         _disparityOverlay->hide();
     }
     updateOverlayGeometry();
@@ -393,6 +416,10 @@ void DualImageViewer::updateOverlayNow()
     updateOverlayGeometry();
     // 防护：若组件已经被删除或指针失效则不进行更新
     if (!_overlay || !_leftView || !_rightView) return;
+    if (_overlayMode != 0)
+    {
+        return;
+    }
     _overlay->updateOverlay();
     
     // 同步点的可见性：仅显示在两边都可见的匹配点
@@ -424,11 +451,11 @@ void DualImageViewer::updateOverlayGeometry()
     if (_overlay) {
         _overlay->setGeometry(rect());
         _overlay->raise();
-        _overlay->show();
+        _overlay->setVisible(_overlayMode == 0);
     }
     if (_disparityOverlay) {
-        _disparityOverlay->setGeometry(rect());
-        _disparityOverlay->raise();
+        _disparityOverlay->syncToTargetViewport();
+        _disparityOverlay->setVisible(_overlayMode == 1);
     }
 }
 

@@ -48,7 +48,13 @@ jobs:
             pkg-config \
             libgl1-mesa-dev \
             libxkbcommon-dev \
+            libxkbcommon-x11-0 \
+            libxcb-cursor0 \
             libvulkan-dev \
+            mesa-vulkan-drivers \
+            vulkan-tools \
+            xvfb \
+            xauth \
             libopencv-dev \
             libapriltag-dev \
             libgdal-dev \
@@ -119,7 +125,8 @@ jobs:
       - name: Test
         run: |
           set -o pipefail
-          if ! QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure \
+          if ! xvfb-run -a env QT_QPA_PLATFORM=offscreen \
+            ctest --test-dir build --output-on-failure \
             --parallel 2 \
             --timeout 120 \
             -E 'TerrainDemDomTest\.TerrainPipelineGeneratesDemDomFromDirectory' 2>&1 | tee test.log; then

@@ -11,6 +11,9 @@
 namespace xjw::gui::camera_scene
 {
 
+inline constexpr double MinimumSceneZoomScale = 1.0e-3;
+inline constexpr double MaximumSceneZoomScale = 1.0e3;
+
 struct CameraViewCandidate
 {
     int index = -1;
@@ -43,6 +46,18 @@ struct PointCloudPrincipalAxes
 
 QVector<int> farToNearCameraIndices(const QVector<QVector3D> &centers,
                                     const QMatrix4x4 &worldToView);
+
+// 返回真实视口宽高比。竖向窗口必须保留小于 1 的 aspect，不能按横向
+// 窗口处理，否则模型和相机平面会被横向压缩。
+float sceneViewportAspectRatio(int width, int height);
+
+// 应用一次缩放并限制到可计算的范围，避免极端滚轮输入把观察距离或
+// near plane 推到 0、无穷或 NaN。
+double boundedSceneZoomScale(
+    double currentScale,
+    double factor,
+    double minimumScale = MinimumSceneZoomScale,
+    double maximumScale = MaximumSceneZoomScale);
 
 // 相机卡片的目标屏幕半尺寸只由全局缩放倍率决定。
 // 缩远场景时持续增大，缩近时持续减小，但使用缓增长曲线避免

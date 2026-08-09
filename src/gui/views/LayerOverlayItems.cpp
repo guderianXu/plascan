@@ -1,20 +1,42 @@
 #include "LayerOverlayItems.h"
+#include "MaskGenerator.h"
+#include "io/PathIO.h"
 
 #include <opencv2/core/types.hpp>
+#include <opencv2/imgcodecs.hpp>
 
 #include <QBrush>
+#include <QDir>
+#include <QFileInfo>
 #include <QGraphicsItem>
+#include <QGraphicsPathItem>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPen>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <memory>
+#include <optional>
 #include <utility>
 
 namespace
 {
 
 constexpr double kPi = 3.14159265358979323846;
+
+bool cancellationRequested(const std::shared_ptr<std::atomic<bool>> &cancellation)
+{
+    return cancellation && cancellation->load(std::memory_order_relaxed);
+}
+
+QPen makeMaskContourPen(const QColor &color, qreal width)
+{
+    QPen pen(color, width, Qt::SolidLine, Qt::SquareCap, Qt::RoundJoin);
+    pen.setCosmetic(true);
+    return pen;
+}
 
 class BatchedFeatureOverlayItem : public QGraphicsItem
 {
@@ -276,6 +298,88 @@ private:
 
 namespace xjw::gui::views
 {
+
+std::optional<MaskContourSource> resolveMaskContourSource(const QString &mask_path)
+{
+    const QFileInfo file_info(mask_path.trimmed());
+    if (!file_info.exists() || !file_info.isFile())
+    {
+        return std::nullopt;
+    }
+    const QString canonical_path = file_info.canonicalFilePath();
+    const QString normalized_path = QDir::cleanPath(
+        canonical_path.isEmpty() ? file_info.absoluteFilePath() : canonical_path);
+    if (normalized_path.isEmpty())
+    {
+        return std::nullopt;
+    }
+    return MaskContourSource{
+        normalized_path,
+        QStringLiteral("%1\n%2\n%3")
+            .arg(normalized_path)
+            .arg(file_info.lastModified().toMSecsSinceEpoch())
+            .arg(file_info.size())};
+}
+
+QPainterPath extractMaskContoursPath(
+    const QString &mask_path,
+    const std::shared_ptr<std::atomic<bool>> &cancellation)
+{
+    if (cancellationRequested(cancellation))
+    {
+        return {};
+    }
+    const cv::Mat mask = xjw::common::io::readImage(mask_path, cv::IMREAD_GRAYSCALE);
+    if (mask.empty() || cancellationRequested(cancellation))
+    {
+        return {};
+    }
+    const auto contours = xjw::mask::extractMaskContours(mask, true);
+    if (contours.empty() || cancellationRequested(cancellation))
+    {
+        return {};
+    }
+    QPainterPath path;
+    for (const auto &contour : contours)
+    {
+        if (cancellationRequested(cancellation))
+        {
+            return {};
+        }
+        if (contour.size() < 2)
+        {
+            continue;
+        }
+        path.moveTo(contour.front().x, contour.front().y);
+        for (std::size_t i = 1; i < contour.size(); ++i)
+        {
+            if ((i & 0x3ffU) == 0U && cancellationRequested(cancellation))
+            {
+                return {};
+            }
+            path.lineTo(contour.at(i).x, contour.at(i).y);
+        }
+        path.closeSubpath();
+    }
+    return path;
+}
+
+QList<QGraphicsItem *> createMaskContourOverlayItems(const QPainterPath &path, int z)
+{
+    if (path.isEmpty())
+    {
+        return {};
+    }
+
+    auto *halo = new QGraphicsPathItem(path);
+    halo->setPen(makeMaskContourPen(QColor(0, 0, 0, 210), 4.0));
+    halo->setZValue(z);
+
+    auto *outline = new QGraphicsPathItem(path);
+    outline->setPen(makeMaskContourPen(QColor(255, 255, 255, 245), 1.6));
+    outline->setZValue(z + 0.1);
+    return {halo, outline};
+}
 
 QGraphicsItem *createFeatureOverlayItem(const std::vector<cv::KeyPoint> &keypoints,
                                         const LayerRenderer::FeatureDisplayOptions &options,

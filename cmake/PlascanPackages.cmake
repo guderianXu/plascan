@@ -29,10 +29,12 @@ message(STATUS "plascan: found Qt6 ${Qt6_VERSION}")
 
 get_target_property(_PLASCAN_QT_GUI_PUBLIC_FEATURES Qt6::Gui QT_ENABLED_PUBLIC_FEATURES)
 list(FIND _PLASCAN_QT_GUI_PUBLIC_FEATURES vulkan _PLASCAN_QT_GUI_VULKAN_FEATURE_INDEX)
+set(PLASCAN_QT_HAS_VULKAN ON)
 if(_PLASCAN_QT_GUI_VULKAN_FEATURE_INDEX EQUAL -1)
-  message(FATAL_ERROR
-    "PlaScan Vulkan rendering requires QtGui built with Vulkan support. "
-    "Install Vulkan SDK/loader/headers and rebuild the vcpkg Qt package.")
+  set(PLASCAN_QT_HAS_VULKAN OFF)
+  message(WARNING
+    "QtGui was built without Vulkan support. PlaScan will use the platform "
+    "QRhi fallback backend (D3D11 on Windows or OpenGL elsewhere).")
 endif()
 
 # ── OpenCV ────────────────────────────────────────────────────────────────────

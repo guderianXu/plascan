@@ -2,7 +2,7 @@
 // 文件: CameraSceneWidget.h
 // 功能: 可复用相机三维场景控件声明
 // 职责:
-//   - CameraSceneWidget: 基于 Qt RHI/Vulkan 的三维交互场景控件，
+//   - CameraSceneWidget: 基于 Qt RHI 的三维交互场景控件，
 //                        支持相机姿态、点云、PLY 网格和 OBJ/MTL 纹理模型渲染
 // =============================================================================
 
@@ -23,7 +23,6 @@
 #include <QSharedPointer>
 #include <QSet>
 #include <QSize>
-#include <QThreadPool>
 #include <QVector>
 #include <QVector2D>
 #include <QVector3D>
@@ -62,7 +61,7 @@ class QResizeEvent;
 
 // =============================================================================
 // CameraSceneWidget
-// 继承自 QRhiWidget，提供基于 Vulkan 后端的三维场景渲染控件。
+// 继承自 QRhiWidget，提供跨 Vulkan、D3D11、Metal 和 OpenGL 后端的三维场景渲染控件。
 // 使用 QRhiBuffer + .qsb shader（顶点色、Phong 光照和 UV 纹理 shader）
 // 功能包括：
 //   - 渲染相机姿态（位置+相机卡片）、点云（xyz）、PLY 网格和 OBJ/MTL 纹理模型
@@ -114,7 +113,7 @@ public:
         Foreground
     };
 
-    // 构造函数，初始化 Vulkan 渲染控件并设置默认视角
+    // 构造函数，初始化 RHI 渲染控件并设置默认视角
     explicit CameraSceneWidget(QWidget *parent = nullptr);
     ~CameraSceneWidget() override;
 
@@ -168,7 +167,7 @@ signals:
     void manualPruneSaveFailed(const QString &errorMessage);
 
 protected:
-    // RHI 初始化：创建 Vulkan 渲染资源和管线。
+    // RHI 初始化：创建当前图形后端的渲染资源和管线。
     void initialize(QRhiCommandBuffer *cb) override;
 
     // 主渲染函数：清屏 → 绘制点云/模型与相机图像层 → 更新覆盖层。
@@ -334,6 +333,7 @@ private:
     static void releasePipelineResources(RhiPipelineSet *pipeline);
     void clearPreparedGeometry();
     void applyPointPreparation(PointRenderPreparation preparation);
+    void applyPointChunkScalarData(const QByteArray &scalarData);
     void applyCloudSpatialSummary(const CloudSpatialSummary &summary);
     // 点云使用单采样，三角网格使用 4x MSAA；切换资源时重建匹配的管线。
     void updateSampleCountForGeometry();
@@ -364,6 +364,8 @@ private:
 
     // 取消未完成的异步加载并等待结束（在新加载开始前调用）
     void cancelPendingLoad();
+    void cancelMeshTexturePreparation();
+    void prepareMeshTextureUploadImage(int maximumTextureSize);
 
     struct RhiBufferSet
     {
@@ -389,6 +391,18 @@ private:
         QByteArray indexData;
         int indexCount = 0;
         bool dirty = true;
+    };
+
+    struct RhiPointChunk
+    {
+        RhiBufferSet points;
+        RhiBufferSet scalars;
+        QVector<PointVertexIndex> sourceIndices;
+        QVector3D aabbMinimum;
+        QVector3D aabbMaximum;
+        QVector3D center;
+        float radius = 0.0f;
+        int pointCount = 0;
     };
 
     struct RhiImagePipelineSet
@@ -518,9 +532,15 @@ private:
 
     bool _gpuDirty = true;  // 顶点缓冲需要重新上传
     bool _rhiReady = false;
+    bool _backendFallbackScheduled = false;
+    bool _backendFallbackActive = false;
     bool _pipelinesDirty = true;
     QString _renderError;
+    QString _renderWarning;
     QString _geometryUploadError;
+    bool _texturedMeshResourceFailed = false;
+    bool _cameraResourceFailed = false;
+    bool _activeImageResourceFailed = false;
     CameraSceneOverlayWidget *_overlayWidget = nullptr;
 
     bool ensureRhiBuffer(RhiBufferSet *buffer, QRhiResourceUpdateBatch *updates);
@@ -556,17 +576,22 @@ private:
                               RhiIndexBufferSet *indices,
                               RhiPipelineSet *pipeline,
                               const SceneUniforms &uniforms);
-    void drawPointCloud(QRhiCommandBuffer *cb, const SceneUniforms &uniforms);
+    void drawPointCloud(QRhiCommandBuffer *cb,
+                        const SceneUniforms &uniforms,
+                        const QMatrix4x4 &clipMatrix);
     void drawTexturedMesh(QRhiCommandBuffer *cb, const SceneUniforms &uniforms);
     void drawActiveCameraImage(QRhiCommandBuffer *cb, const QMatrix4x4 &mvp);
     void drawCameraThumbnails(QRhiCommandBuffer *cb,
                               const QMatrix4x4 &mvp,
                               const QMatrix4x4 &model_view);
-    void drawSceneGeometry(QRhiCommandBuffer *cb, SceneUniforms &uniforms);
+    void drawSceneGeometry(QRhiCommandBuffer *cb,
+                           SceneUniforms &uniforms,
+                           const QMatrix4x4 &clipMatrix);
 
     // 点云 GPU 资源
     RhiBufferSet _pointBuffer;
     RhiBufferSet _pointScalarBuffer;
+    QVector<QSharedPointer<RhiPointChunk>> _pointChunks;
     RhiBufferSet _manualHighlightPointBuffer;
     RhiBufferSet _manualHighlightScalarBuffer;
     bool _manualHighlightBuffersReleasePending = false;
@@ -584,6 +609,7 @@ private:
     bool _preparedPointBuffer = false;
     QByteArray _preparedPointVertexData;
     int _preparedPointVertexCount = 0;
+    QVector<PointRenderChunkPreparation> _preparedPointChunks;
 
     // 点云包围盒 GPU 资源。
     RhiBufferSet _lineBuffer;
@@ -615,8 +641,12 @@ private:
     std::shared_ptr<std::atomic_bool> _tiePointMetadataCancellation;
     bool _tiePointMetadataWorkerActive = false;
     QImage _meshTextureImage;
+    QImage _meshTextureUploadImage;
     QString _meshTexturePath;
     bool _meshHasTexture = false;
+    std::shared_ptr<std::atomic_bool> _meshTexturePreparationCancellation;
+    bool _meshTexturePreparationActive = false;
+    int _meshTexturePreparationMaximumSize = 0;
 
     // 场景中心/半径/包围盒缓存（避免每帧遍历大量点）
     mutable QVector3D  _cachedCenter;
@@ -674,7 +704,7 @@ private:
     QSet<QString> _cameraImageLoadsQueued;
     QQueue<CameraPlaneImageRequest> _cameraImageLoadQueue;
     QSet<QString> _cameraImageLoadFailures;
-    QThreadPool _cameraImageLoadPool;
+    int _maximumCameraImageLoads = 4;
     int _cameraImageLoadGeneration = 0;
     int _cameraThumbnailLoadTotal = 0;
     int _cameraThumbnailLoadCompleted = 0;

@@ -81,6 +81,44 @@ QVector<int> farToNearCameraIndices(const QVector<QVector3D> &centers,
     return indices;
 }
 
+float sceneViewportAspectRatio(int width, int height)
+{
+    return static_cast<float>(std::max(1, width))
+        / static_cast<float>(std::max(1, height));
+}
+
+double boundedSceneZoomScale(double currentScale,
+                             double factor,
+                             double minimumScale,
+                             double maximumScale)
+{
+    const double safeMinimum = std::isfinite(minimumScale) && minimumScale > 0.0
+        ? minimumScale
+        : MinimumSceneZoomScale;
+    const double safeMaximum = std::isfinite(maximumScale) && maximumScale >= safeMinimum
+        ? maximumScale
+        : std::max(MaximumSceneZoomScale, safeMinimum);
+    if (!std::isfinite(currentScale)
+        || !std::isfinite(factor)
+        || currentScale <= 0.0
+        || factor <= 0.0
+        || safeMinimum != minimumScale
+        || safeMaximum != maximumScale)
+    {
+        const double safeCurrent = std::isfinite(currentScale) && currentScale > 0.0
+            ? currentScale
+            : 1.0;
+        return std::clamp(safeCurrent, safeMinimum, safeMaximum);
+    }
+
+    const double nextScale = currentScale * factor;
+    if (!std::isfinite(nextScale))
+    {
+        return factor > 1.0 ? safeMaximum : safeMinimum;
+    }
+    return std::clamp(nextScale, safeMinimum, safeMaximum);
+}
+
 double cameraPlaneScreenHalfExtentPixels(double zoomScale,
                                          double normalHalfExtentPixels)
 {

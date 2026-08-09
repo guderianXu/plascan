@@ -48,6 +48,7 @@
 #include "ModelDropSupport.h"
 #include "DataTreeWidget.h"
 #include "CanvasWidget.h"
+#include "DisparityHeatmapOverlay.h"
 #include "DualImageViewer.h"
 #include "ImageViewWidget.h"
 #include "MatchLineOverlay.h"
@@ -1256,13 +1257,27 @@ QLabel *findLabelContaining(QWidget *root, const QString &text)
 
 QString readProjectSourceFile(const QString &relativePath)
 {
-    const QString projectRoot = QFileInfo(QStringLiteral(TEST_DATA_DIR)).absoluteDir().absolutePath();
-    QFile file(QDir(projectRoot).filePath(relativePath));
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+    const QDir projectRoot(
+        QFileInfo(QStringLiteral(TEST_DATA_DIR)).absoluteDir().absolutePath());
+    const auto readOne = [&projectRoot](const QString &path)
     {
-        return QString();
+        QFile file(projectRoot.filePath(path));
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        {
+            return QString();
+        }
+        return QString::fromUtf8(file.readAll());
+    };
+
+    QString source = readOne(relativePath);
+    if (relativePath == QStringLiteral("src/gui/views/CameraSceneWidget.cpp"))
+    {
+        source += QLatin1Char('\n')
+            + readOne(QStringLiteral("src/gui/views/CameraSceneWidgetOverlay.cpp"));
+        source += QLatin1Char('\n')
+            + readOne(QStringLiteral("src/gui/views/CameraSceneWidgetLegends.cpp"));
     }
-    return QString::fromUtf8(file.readAll());
+    return source;
 }
 
 QString readIncrementalSfmProjectImplementation()
@@ -4698,12 +4713,118 @@ TEST(DisparityHeatmapOverlayTest, InvalidPixelsUseAlphaMask)
 
     EXPECT_TRUE(source.contains(QStringLiteral("QImage::Format_RGBA8888")))
         << "Heatmap storage should carry alpha so invalid disparity can be transparent.";
-    EXPECT_TRUE(source.contains(QStringLiteral("alphaRow[col] = validRow[col] ? 255 : 0")))
+    EXPECT_TRUE(source.contains(QStringLiteral(
+        "pixel[3] = settings.showInvalid || validRow[col] ? 255 : 0")))
         << "Invalid disparity pixels should be masked out, not colorized as low disparity.";
     EXPECT_TRUE(source.contains(QStringLiteral("if (_showInvalid)")))
         << "setShowInvalid() must affect the rendered invalid-pixel state.";
     EXPECT_TRUE(header.contains(QStringLiteral("QImage heatmapImage() const")))
         << "Tests and callers need a mask-aware image accessor.";
+}
+
+TEST(DisparityHeatmapOverlayTest, BuildsMaskAwareHeatmapOffTheGuiCallbackPath)
+{
+    DisparityHeatmapOverlay overlay;
+    QSignalSpy ready_spy(&overlay, &DisparityHeatmapOverlay::heatmapReady);
+    QSignalSpy failure_spy(&overlay, &DisparityHeatmapOverlay::loadFailed);
+
+    cv::Mat disparity(1, 3, CV_32FC1);
+    disparity.at<float>(0, 0) = 0.0f;
+    disparity.at<float>(0, 1) = 1.0f;
+    disparity.at<float>(0, 2) = 2.0f;
+    ASSERT_TRUE(overlay.loadDisparity(disparity));
+
+    QTRY_COMPARE_WITH_TIMEOUT(ready_spy.count(), 1, 5000);
+    ASSERT_EQ(failure_spy.count(), 0);
+    const QImage masked_image = overlay.heatmapImage();
+    ASSERT_EQ(masked_image.size(), QSize(3, 1));
+    EXPECT_EQ(masked_image.pixelColor(0, 0).alpha(), 0);
+    EXPECT_EQ(masked_image.pixelColor(1, 0).alpha(), 255);
+    EXPECT_EQ(masked_image.pixelColor(2, 0).alpha(), 255);
+
+    overlay.setShowInvalid(true);
+    QTRY_COMPARE_WITH_TIMEOUT(ready_spy.count(), 2, 5000);
+    EXPECT_EQ(overlay.heatmapImage().pixelColor(0, 0).alpha(), 255);
+}
+
+TEST(DisparityHeatmapOverlayTest, LatestDisparityRequestWins)
+{
+    DisparityHeatmapOverlay overlay;
+    QSignalSpy ready_spy(&overlay, &DisparityHeatmapOverlay::heatmapReady);
+
+    const cv::Mat large_disparity(2048, 2048, CV_32FC1, cv::Scalar(10.0f));
+    const cv::Mat latest_disparity(2, 4, CV_32FC1, cv::Scalar(20.0f));
+    ASSERT_TRUE(overlay.loadDisparity(large_disparity));
+    ASSERT_TRUE(overlay.loadDisparity(latest_disparity));
+
+    QTRY_COMPARE_WITH_TIMEOUT(overlay.heatmapImage().size(), QSize(4, 2), 5000);
+    QTest::qWait(100);
+    EXPECT_EQ(overlay.heatmapImage().size(), QSize(4, 2));
+    EXPECT_GE(ready_spy.count(), 1);
+}
+
+TEST(DisparityHeatmapOverlayTest, TracksExplicitImageViewportTransform)
+{
+    DualImageViewer viewer;
+    viewer.resize(900, 600);
+    viewer.show();
+    QCoreApplication::processEvents();
+
+    DisparityHeatmapOverlay *overlay = viewer.disparityOverlay();
+    ASSERT_NE(overlay, nullptr);
+    viewer.setDisparityTarget(DualImageViewer::DisparityTarget::LeftImage);
+    viewer.setOverlayMode(1);
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(overlay->isVisible());
+    EXPECT_FALSE(viewer.overlay()->isVisible());
+    ASSERT_EQ(overlay->targetView(), viewer.leftView());
+    ASSERT_EQ(overlay->parentWidget(), viewer.leftView()->view()->viewport());
+    EXPECT_EQ(overlay->geometry(), viewer.leftView()->view()->viewport()->rect());
+
+    viewer.leftView()->view()->scene()->setSceneRect(0.0, 0.0, 1200.0, 800.0);
+    viewer.leftView()->setTransform(QTransform::fromScale(2.0, 2.0));
+    viewer.leftView()->view()->centerOn(QPointF(450.0, 300.0));
+    QCoreApplication::processEvents();
+
+    const QPointF scene_point(420.25, 275.75);
+    const QPoint expected_left = viewer.leftView()->view()->mapFromScene(scene_point);
+    const QPointF mapped_left = overlay->mapSceneToOverlay(scene_point);
+    EXPECT_NEAR(mapped_left.x(), expected_left.x(), 1.0);
+    EXPECT_NEAR(mapped_left.y(), expected_left.y(), 1.0);
+
+    viewer.setDisparityTarget(DualImageViewer::DisparityTarget::RightImage);
+    ASSERT_EQ(overlay->targetView(), viewer.rightView());
+    ASSERT_EQ(overlay->parentWidget(), viewer.rightView()->view()->viewport());
+    EXPECT_EQ(overlay->geometry(), viewer.rightView()->view()->viewport()->rect());
+    EXPECT_TRUE(overlay->isVisible());
+    EXPECT_FALSE(viewer.overlay()->isVisible());
+}
+
+TEST(DisparityHeatmapOverlayTest, PaintUsesSceneTransformWithoutPerFramePixmapScaling)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/widgets/DisparityHeatmapOverlay.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("painter.setWorldTransform(sceneToOverlayTransform())")));
+    EXPECT_FALSE(source.contains(QStringLiteral("_heatmap.scaled(")))
+        << "Heatmap resampling must not allocate a new pixmap in every paint event.";
+    EXPECT_TRUE(source.contains(QStringLiteral("QtConcurrent::run(")))
+        << "Disparity decoding and colorization should stay off the GUI thread.";
+}
+
+TEST(DisparityHeatmapOverlayTest, DenseTabKeepsSharedImageViewerVisible)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/dialogs/tie_points/MatchViewerDialog.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("new QVBoxLayout(_denseTab)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("target_layout->addWidget(_viewer)")))
+        << "The dense tab must host the image viewer instead of showing an empty tab.";
+    EXPECT_TRUE(source.contains(QStringLiteral(
+        "setDisparityTarget(DualImageViewer::DisparityTarget::LeftImage)")))
+        << "Dense disparity coordinates are defined against the first/reference image.";
 }
 
 TEST(SparseResultQualityTest, BuildsHistogramAndClassifiesPairwisePreview)
@@ -5240,6 +5361,11 @@ TEST(CameraCalibrationDataTest, MarksExifConstrainedParametersAsReleased)
     const QJsonObject diagnostics{
         {QStringLiteral("adaptive_focal_seed_scale"), 0.75},
         {QStringLiteral("adaptive_camera_model_fitting"), true},
+        {QStringLiteral("adaptive_camera_model_fitting_applied"), true},
+        {QStringLiteral("ba_intrinsic_parameter_enabled"),
+         QJsonObject{{QStringLiteral("f"), true},
+                     {QStringLiteral("k1"), true},
+                     {QStringLiteral("k2"), true}}},
         {QStringLiteral("camera_self_calibration_status"), QStringLiteral("trusted_prior")},
         {QStringLiteral("image_metadata_focal_prior"),
          QJsonObject{{QStringLiteral("used"), true},
@@ -5262,6 +5388,46 @@ TEST(CameraCalibrationDataTest, MarksExifConstrainedParametersAsReleased)
     EXPECT_TRUE(optimized.contains(QStringLiteral("k2")));
     EXPECT_FALSE(optimized.contains(QStringLiteral("cx")));
     EXPECT_FALSE(optimized.contains(QStringLiteral("cy")));
+}
+
+TEST(CameraCalibrationDataTest, RequestedButFixedCalibrationIsNotReportedAsRefined)
+{
+    const QString imagePath = QStringLiteral("D:/images/fixed_001.jpg");
+    const QJsonObject metadata{
+        {QStringLiteral("images"), QJsonArray{
+            QJsonObject{{QStringLiteral("path"), imagePath},
+                        {QStringLiteral("width"), 4000},
+                        {QStringLiteral("height"), 3000}}}}};
+    const QJsonObject adjustedCamera{
+        {QStringLiteral("intrinsics_unit"), QStringLiteral("px")},
+        {QStringLiteral("fu"), 2985.0},
+        {QStringLiteral("fv"), 2985.0},
+        {QStringLiteral("cu"), 2000.0},
+        {QStringLiteral("cv"), 1500.0},
+        {QStringLiteral("C"), QJsonArray{0.0, 0.0, 0.0}},
+        {QStringLiteral("R"), QJsonArray{1.0, 0.0, 0.0,
+                                          0.0, 1.0, 0.0,
+                                          0.0, 0.0, 1.0}}};
+    const QJsonObject diagnostics{
+        {QStringLiteral("adaptive_camera_model_fitting"), true},
+        {QStringLiteral("adaptive_camera_model_fitting_requested"), true},
+        {QStringLiteral("adaptive_camera_model_fitting_scheduled"), false},
+        {QStringLiteral("adaptive_camera_model_fitting_effective"), false},
+        {QStringLiteral("adaptive_camera_model_fitting_applied"), false},
+        {QStringLiteral("camera_self_calibration_status"), QStringLiteral("trusted_prior")}};
+
+    const QJsonObject comparison =
+        xjw::gui::camera_calibration::buildCameraCalibrationComparison(
+            metadata,
+            QMap<QString, QJsonObject>{{imagePath, adjustedCamera}},
+            diagnostics)
+            .at(0)
+            .toObject();
+
+    EXPECT_EQ(comparison.value(QStringLiteral("adjustment_status")).toString(),
+              QStringLiteral("trusted_prior_fixed"));
+    EXPECT_FALSE(comparison.value(QStringLiteral("intrinsics_refined")).toBool());
+    EXPECT_TRUE(comparison.value(QStringLiteral("optimized_parameters")).toArray().isEmpty());
 }
 
 TEST(CameraCalibrationDialogTest, ProvidesInitialAndAdjustedPages)
@@ -7895,7 +8061,7 @@ TEST(MainMenuTest, WindowMenuExposesCheckedHenanUniversityBrandAction)
     EXPECT_TRUE(windowMenu->actions().contains(action));
 }
 
-TEST(CameraSceneWidgetTest, UsesQrhiWidgetWithVulkanBackend)
+TEST(CameraSceneWidgetTest, UsesQrhiWidgetWithPreferredAndFallbackBackends)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
@@ -7904,12 +8070,19 @@ TEST(CameraSceneWidgetTest, UsesQrhiWidgetWithVulkanBackend)
 
     EXPECT_TRUE(header.contains(QStringLiteral("#include <QRhiWidget>")));
     EXPECT_TRUE(header.contains(QStringLiteral("class CameraSceneWidget : public QRhiWidget")));
-    EXPECT_TRUE(source.contains(QStringLiteral("setApi(QRhiWidget::Api::Vulkan)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("setApi(preferredSceneApi())")));
+    EXPECT_TRUE(source.contains(QStringLiteral("return QRhiWidget::Api::Vulkan")));
+    EXPECT_TRUE(source.contains(QStringLiteral("return QRhiWidget::Api::Direct3D11")));
+    EXPECT_TRUE(source.contains(QStringLiteral("&QRhiWidget::renderFailed")));
+    EXPECT_TRUE(header.contains(QStringLiteral("bool _backendFallbackScheduled = false")));
+    EXPECT_TRUE(header.contains(QStringLiteral("bool _backendFallbackActive = false")));
+    EXPECT_TRUE(source.contains(QStringLiteral("if (_backendFallbackScheduled)")));
     EXPECT_TRUE(header.contains(QStringLiteral("void initialize(QRhiCommandBuffer *cb) override;")));
     EXPECT_TRUE(header.contains(QStringLiteral("void render(QRhiCommandBuffer *cb) override;")));
     EXPECT_TRUE(header.contains(QStringLiteral("void releaseResources() override;")));
     EXPECT_TRUE(header.contains(QStringLiteral("RhiPipelineSet _colorPointPipeline;")));
-    EXPECT_TRUE(source.contains(QStringLiteral("drawPointCloud(cb, uniforms)")));
+    EXPECT_TRUE(source.contains(QStringLiteral(
+        "drawPointCloud(cb, uniforms, clipMatrix)")));
     EXPECT_FALSE(header.contains(QStringLiteral("_modelPointBuffer")));
     EXPECT_FALSE(header.contains(QStringLiteral("_modelPointPipeline")));
     EXPECT_TRUE(source.contains(QStringLiteral("rhi()->clipSpaceCorrMatrix()")));
@@ -8002,7 +8175,7 @@ TEST(CameraSceneWidgetTest, RegistersQrhiShaderResources)
     EXPECT_TRUE(guiCmake.contains(QStringLiteral("shaders/camera_scene_mesh.frag")));
 }
 
-TEST(CameraSceneWidgetTest, PointCloudRenderingStaysOnVulkan)
+TEST(CameraSceneWidgetTest, PointCloudRenderingStaysOnQrhiGpu)
 {
     const QString header = readProjectSourceFile(
         QStringLiteral("src/gui/views/CameraSceneWidget.h"));
@@ -8035,7 +8208,9 @@ TEST(CameraSceneWidgetTest, PointCloudRenderingStaysOnVulkan)
     EXPECT_TRUE(source.contains(QStringLiteral(
         "sizeof(float),\n            QRhiVertexInputBinding::PerInstance")));
     EXPECT_TRUE(source.contains(QStringLiteral(
-        "cb->draw(6, quint32(point_buffer.vertexCount))")));
+        "cb->draw(6, quint32(instanceCount))")));
+    EXPECT_TRUE(source.contains(QStringLiteral("planPointRenderChunks(")));
+    EXPECT_TRUE(header.contains(QStringLiteral("_pointChunks")));
     EXPECT_TRUE(header.contains(QStringLiteral(
         "RhiBufferSet _manualHighlightPointBuffer")));
     EXPECT_TRUE(header.contains(QStringLiteral(
@@ -13574,8 +13749,59 @@ TEST(PhotoStripWidgetTest, ThumbnailLoadingUsesSharedDisplayImageLoader)
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(source.contains(QStringLiteral("LayerImageLoader.h")));
-    EXPECT_TRUE(source.contains(QStringLiteral("xjw::gui::views::loadImageForDisplay(imagePath, projectPath)")));
+    EXPECT_TRUE(source.contains(QStringLiteral(
+        "imagePath, projectPath, QSize(ThumbWidth, ThumbHeight), nullptr")));
+    EXPECT_TRUE(source.contains(QStringLiteral("scheduleVisibleThumbnailLoads")));
+    EXPECT_TRUE(source.contains(QStringLiteral("MaximumPendingThumbnailLoads")));
+    EXPECT_TRUE(source.contains(QStringLiteral("MaximumThumbnailCacheEntries")));
+    EXPECT_TRUE(source.contains(QStringLiteral("thumbnailLoadPool()")));
+    EXPECT_TRUE(source.contains(QStringLiteral("thumbnailCacheKey(")));
+    EXPECT_TRUE(source.contains(QStringLiteral("lastModified().toMSecsSinceEpoch()")));
+    EXPECT_TRUE(source.contains(QStringLiteral("cancellation->load")));
+    EXPECT_FALSE(source.contains(QStringLiteral("watcher->waitForFinished()")));
     EXPECT_FALSE(source.contains(QStringLiteral("QFileIconProvider")));
+}
+
+TEST(PhotoStripWidgetTest, ThumbnailLoadingFollowsVisibleViewport)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    QJsonArray images;
+    for (int index = 0; index < 48; ++index)
+    {
+        const QString imagePath = QDir(tempDir.path()).filePath(
+            QStringLiteral("image_%1.png").arg(index, 2, 10, QLatin1Char('0')));
+        QImage image(16, 12, QImage::Format_RGB32);
+        image.fill(QColor::fromHsv((index * 31) % 360, 180, 210));
+        ASSERT_TRUE(image.save(imagePath));
+        images.append(QJsonObject{{QStringLiteral("path"), imagePath}});
+    }
+
+    PhotoStripWidget strip;
+    strip.resize(260, 180);
+    strip.loadFromJson(QJsonObject{{QStringLiteral("images"), images}});
+    strip.show();
+
+    auto *list = strip.findChild<QListWidget *>(QStringLiteral("photoStripList"));
+    ASSERT_NE(list, nullptr);
+    ASSERT_EQ(list->count(), images.size());
+    QListWidgetItem *firstItem = list->item(0);
+    QListWidgetItem *lastItem = list->item(list->count() - 1);
+    ASSERT_NE(firstItem, nullptr);
+    ASSERT_NE(lastItem, nullptr);
+
+    const qint64 firstPlaceholderKey = firstItem->icon().cacheKey();
+    const qint64 lastPlaceholderKey = lastItem->icon().cacheKey();
+    QTRY_VERIFY_WITH_TIMEOUT(
+        firstItem->icon().cacheKey() != firstPlaceholderKey, 5000);
+    QTest::qWait(200);
+    EXPECT_EQ(lastItem->icon().cacheKey(), lastPlaceholderKey)
+        << "Off-screen photos must not all be decoded when the project opens.";
+
+    list->scrollToItem(lastItem, QAbstractItemView::PositionAtCenter);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        lastItem->icon().cacheKey() != lastPlaceholderKey, 5000);
 }
 
 TEST(PhotoStripWidgetTest, LargeImageListsPopulateIncrementallyAndReportProgress)
