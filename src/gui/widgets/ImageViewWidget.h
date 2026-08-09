@@ -93,7 +93,6 @@ private slots:
 private:
     void setupView();
     void updatePointsVisibility();
-    qreal calculateZoomFactor() const;
     
     QGraphicsView *_view;
     QGraphicsScene *_scene;

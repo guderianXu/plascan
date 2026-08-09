@@ -132,10 +132,6 @@ private:
     // 在 GUI 线程采集后台扫描所需快照
     MatchDataSnapshot makeSnapshot() const;
     
-    // 解析指定影像与其他影像的所有匹配信息
-    // imagePath — 当前选中影像的完整路径
-    // 返回值    — 所有与之存在匹配关系的 MatchInfo 列表
-    QList<MatchInfo> parseMatchDataForImage(const QString &imagePath);
     static MatchInfoList parsePriorityMatchDataForImageFromSnapshot(const MatchDataSnapshot &snapshot,
                                                                     const QString &imagePath);
     static MatchInfoList parseMatchDataForImageFromSnapshot(const MatchDataSnapshot &snapshot,
@@ -143,33 +139,11 @@ private:
                                                             const MatchScanProgressCallback &progressCallback =
                                                                 MatchScanProgressCallback());
 
-    QList<MatchInfo> loadOverlapCandidatesForImage(const QString &imagePath,
-                                                   const QSet<QString> &seenPairKeys,
-                                                   const QMap<QString, QString> &baseToPath) const;
     static MatchInfoList loadOverlapCandidatesForImageFromSnapshot(
         const MatchDataSnapshot &snapshot,
         const QString &imagePath,
         const QSet<QString> &seenPairKeys,
         const QMap<QString, QString> &baseToPath);
-    
-    // 在项目元数据和逐影像分片中查找包含指定像对的 `.pimatch` 路径
-    // imgA, imgB — 两张影像的完整路径
-    // 返回值     — 找到的 owner 分片路径，未找到返回空字符串
-    QString findMatchFile(const QString &imgA, const QString &imgB);
-    static QString findMatchFileInSnapshot(const MatchDataSnapshot &snapshot,
-                                           const QString &imgA,
-                                           const QString &imgB);
-    
-    // 读取 `.pimatch` 中对应的邻接块，统计匹配点数量并返回 MatchInfo
-    // imgA      — 参考影像路径（仅用于上下文，不直接使用）
-    // imgB      — 匹配影像路径
-    // matchFile — owner `.pimatch` 分片路径
-    // 返回值    — 包含统计结果的 MatchInfo 结构体
-    MatchInfo getMatchStatistics(const QString &imgA, const QString &imgB, 
-                                 const QString &matchFile);
-    static MatchInfo getMatchStatisticsFromFile(const QString &imgA,
-                                                const QString &imgB,
-                                                const QString &matchFile);
 
 private:
     // 项目管理器指针，用于获取影像列表和匹配元数据

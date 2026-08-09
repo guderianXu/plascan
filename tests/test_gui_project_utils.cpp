@@ -10755,7 +10755,7 @@ TEST(MatchPairSelectorOverlapCandidatesTest, ListsOverlapPairsEvenWhenNoMatchFil
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(header.contains(QStringLiteral("overlapCandidate")));
-    EXPECT_TRUE(header.contains(QStringLiteral("loadOverlapCandidatesForImage")));
+    EXPECT_TRUE(header.contains(QStringLiteral("loadOverlapCandidatesForImageFromSnapshot")));
     EXPECT_TRUE(source.contains(QStringLiteral("vocabulary_overlap_pairs.json")));
     EXPECT_TRUE(source.contains(QStringLiteral("vocabulary_overlap_pairs.lis")));
     EXPECT_TRUE(source.contains(QStringLiteral("重叠候选")));
@@ -10799,8 +10799,9 @@ TEST(MatchPairSelectorResponsivenessTest, DefersHeavyMatchScanToBackgroundWorker
 
     const int loadStart = source.indexOf(QStringLiteral("void MatchPairSelectorDialog::loadMatchPairsForImage"));
     ASSERT_GE(loadStart, 0);
-    const int parseStart = source.indexOf(QStringLiteral("QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::parseMatchDataForImage"),
-                                          loadStart);
+    const int parseStart = source.indexOf(
+        QStringLiteral("MatchPairSelectorDialog::parsePriorityMatchDataForImageFromSnapshot"),
+        loadStart);
     ASSERT_GT(parseStart, loadStart);
     const QString loadBody = source.mid(loadStart, parseStart - loadStart);
 

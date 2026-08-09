@@ -45,7 +45,6 @@ public:
                              QString *error = nullptr);
 
     const control_points::MarkerSet &markerSet() const noexcept;
-    QUndoStack *undoStack() const noexcept;
     bool updateMarkerProperties(
         const control_points::MarkerId &markerId,
         const QString &label,

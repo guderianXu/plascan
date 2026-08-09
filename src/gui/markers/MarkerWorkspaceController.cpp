@@ -193,11 +193,6 @@ const control_points::MarkerSet &MarkerWorkspaceController::markerSet() const no
     return _repository->markerSet();
 }
 
-QUndoStack *MarkerWorkspaceController::undoStack() const noexcept
-{
-    return _undoStack;
-}
-
 bool MarkerWorkspaceController::updateMarkerProperties(
     const control_points::MarkerId &markerId,
     const QString &label,

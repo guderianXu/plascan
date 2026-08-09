@@ -41,23 +41,6 @@ struct PointCloudPrincipalAxes
     bool valid = false;
 };
 
-class CameraImageSelectionState
-{
-public:
-    void setActiveIndex(int index) { _activeIndex = index; }
-    int activeIndex() const { return _activeIndex; }
-    void setLocked(bool locked) { _locked = locked; }
-    bool isLocked() const { return _locked; }
-    int resolveAutomaticIndex(int automaticIndex) const
-    {
-        return _locked && _activeIndex >= 0 ? _activeIndex : automaticIndex;
-    }
-
-private:
-    int _activeIndex = -1;
-    bool _locked = false;
-};
-
 QVector<int> farToNearCameraIndices(const QVector<QVector3D> &centers,
                                     const QMatrix4x4 &worldToView);
 

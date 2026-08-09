@@ -18,7 +18,6 @@ public:
 
     bool createNewProject(QString *createdPath = nullptr) const;
     bool selectProjectByDialog(QString *selectedPath) const;
-    bool openProjectByDialog(QString *openedPath = nullptr) const;
     bool openProjectFromPath(const QString &plascanPath) const;
     bool saveProject() const;
     void closeProject() const;

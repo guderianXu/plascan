@@ -73,26 +73,6 @@ bool ProjectUiCommands::createNewProject(QString *createdPath) const
     return true;
 }
 
-bool ProjectUiCommands::openProjectByDialog(QString *openedPath) const
-{
-    QString plascanPath;
-    if (!selectProjectByDialog(&plascanPath))
-    {
-        return false;
-    }
-
-    if (!openProjectFromPath(plascanPath))
-    {
-        return false;
-    }
-
-    if (openedPath)
-    {
-        *openedPath = plascanPath;
-    }
-    return true;
-}
-
 bool ProjectUiCommands::selectProjectByDialog(QString *selectedPath) const
 {
     QFileDialog dialog(_parentWidget,

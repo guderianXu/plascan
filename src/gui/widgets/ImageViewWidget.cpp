@@ -364,8 +364,3 @@ void ImageViewWidget::updatePointsVisibility()
                       pointSize, pointSize);
     }
 }
-
-qreal ImageViewWidget::calculateZoomFactor() const
-{
-    return currentTransform().m11();
-}

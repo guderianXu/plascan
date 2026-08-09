@@ -311,17 +311,6 @@ TEST(CameraSceneViewMathTest, InvalidIntrinsicsUseFiniteFortyFiveDegreeFallback)
     }
 }
 
-TEST(CameraSceneViewMathTest, LockKeepsActiveCameraUntilUnlocked)
-{
-    CameraImageSelectionState state;
-    state.setActiveIndex(3);
-    state.setLocked(true);
-    EXPECT_EQ(state.resolveAutomaticIndex(7), 3);
-
-    state.setLocked(false);
-    EXPECT_EQ(state.resolveAutomaticIndex(7), 7);
-}
-
 TEST(CameraSceneViewMathTest, BuildsImagePlaneInCameraWorldCoordinates)
 {
     const QVector<QVector3D> corners = cameraImagePlaneCorners(

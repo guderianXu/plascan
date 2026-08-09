@@ -734,11 +734,6 @@ void MatchPairSelectorDialog::onMatchPairsLoaded()
     _scanProgressBar->setVisible(false);
 }
 
-QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::parseMatchDataForImage(const QString &imagePath)
-{
-    return parseMatchDataForImageFromSnapshot(makeSnapshot(), imagePath);
-}
-
 MatchPairSelectorDialog::MatchInfoList MatchPairSelectorDialog::parsePriorityMatchDataForImageFromSnapshot(
     const MatchDataSnapshot &snapshot,
     const QString &imagePath)
@@ -936,14 +931,6 @@ MatchPairSelectorDialog::MatchInfoList MatchPairSelectorDialog::parseMatchDataFo
     return matches;
 }
 
-QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::loadOverlapCandidatesForImage(
-    const QString &imagePath,
-    const QSet<QString> &seenPairKeys,
-    const QMap<QString, QString> &baseToPath) const
-{
-    return loadOverlapCandidatesForImageFromSnapshot(makeSnapshot(), imagePath, seenPairKeys, baseToPath);
-}
-
 MatchPairSelectorDialog::MatchInfoList MatchPairSelectorDialog::loadOverlapCandidatesForImageFromSnapshot(
     const MatchDataSnapshot &snapshot,
     const QString &imagePath,
@@ -1074,79 +1061,6 @@ MatchPairSelectorDialog::MatchInfoList MatchPairSelectorDialog::loadOverlapCandi
         return a.imageName < b.imageName;
     });
     return candidates;
-}
-
-QString MatchPairSelectorDialog::findMatchFile(const QString &imgA, const QString &imgB)
-{
-    return findMatchFileInSnapshot(makeSnapshot(), imgA, imgB);
-}
-
-QString MatchPairSelectorDialog::findMatchFileInSnapshot(const MatchDataSnapshot &snapshot,
-                                                         const QString &imgA,
-                                                         const QString &imgB)
-{
-    Q_UNUSED(imgB)
-    if (snapshot.matchDir.trimmed().isEmpty())
-    {
-        return QString();
-    }
-    const QString path = xjw::image_matching::ImageMatchFile::filePathForImage(
-        snapshot.matchDir, imgA);
-    return QFileInfo::exists(path) ? path : QString();
-}
-
-MatchPairSelectorDialog::MatchInfo MatchPairSelectorDialog::getMatchStatistics(
-    const QString &imgA, const QString &imgB, const QString &matchFile)
-{
-    return getMatchStatisticsFromFile(imgA, imgB, matchFile);
-}
-
-MatchPairSelectorDialog::MatchInfo MatchPairSelectorDialog::getMatchStatisticsFromFile(
-    const QString &imgA,
-    const QString &imgB,
-    const QString &matchFile)
-{
-    MatchInfo info;
-    info.imagePath = imgB;
-    info.imageName = QFileInfo(imgB).fileName();
-    info.matchFilePath = matchFile;
-    info.totalPoints = 0;
-    info.validPoints = 0;
-    info.invalidPoints = 0;
-    info.availableAlgorithms = tr("SIFT-LightGlue");
-    info.status = tr("可查看");
-
-    xjw::image_matching::ImageMatchShard shard;
-    QString readError;
-    if (!xjw::image_matching::ImageMatchFile::read(matchFile, &shard, &readError))
-    {
-        info.status = tr("不可用：无法读取匹配文件");
-        return info;
-    }
-
-    const QString peerId = xjw::image_matching::ImageMatchFile::stableImageId(imgB);
-    for (const xjw::image_matching::NeighborMatchBlock &block : shard.neighbors)
-    {
-        if (block.peer.stableId != peerId)
-        {
-            continue;
-        }
-        if (static_cast<int>(block.geometryInlierCount) < info.validPoints)
-        {
-            continue;
-        }
-        info.algorithm = block.algorithmId;
-        info.totalPoints = static_cast<int>(block.rawMatchCount);
-        info.hasInlierStats = true;
-        info.validPoints = block.tiePointMatchCount > 0
-            ? static_cast<int>(block.tiePointMatchCount)
-            : static_cast<int>(block.geometryInlierCount);
-        info.invalidPoints = std::max(0, info.totalPoints - info.validPoints);
-        info.hasTrackValidity = block.tiePointMatchCount > 0;
-        info.status = info.hasTrackValidity ? tr("已对齐") : tr("可查看");
-    }
-    
-    return info;
 }
 
 void MatchPairSelectorDialog::onMatchPairSelected(int row, int column)
