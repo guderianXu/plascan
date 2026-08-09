@@ -46,7 +46,7 @@ struct DenseGenerationSettings
     QString outputDir;
     double resScale = 0.5;
     int iterations = 6;
-    int threads = 8;
+    int threads = 0; // 0 表示自动使用逻辑线程数减 2
     int gpuFrameWorkers = 0; // 0 表示按线程数和视图数自动选择
     int cpuFrameWorkers = 0; // 0 表示按线程数和视图数自动选择
     int patchSize = 11;

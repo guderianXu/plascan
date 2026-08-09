@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QJsonObject>
 #include <QPointer>
+#include <QStringList>
 
 #include <atomic>
 #include <memory>
@@ -11,6 +12,66 @@ class ProjectData;
 class ProjectManager;
 class QWidget;
 struct PointCloudWorkflowContext;
+
+namespace xjw::gui::project
+{
+
+inline QString classifyStoredMvsBackendDevices(const QStringList &devices)
+{
+    bool has_cuda = false;
+    bool has_opencl = false;
+    bool has_cpu = false;
+    for (const QString &value : devices)
+    {
+        const QString device = value.trimmed().toLower();
+        has_cuda = has_cuda || device.startsWith(QStringLiteral("cuda")) ||
+            device.startsWith(QStringLiteral("gpu"));
+        has_opencl = has_opencl || device.startsWith(QStringLiteral("opencl"));
+        has_cpu = has_cpu || device.startsWith(QStringLiteral("cpu"));
+    }
+
+    if (has_cuda && has_opencl && !has_cpu)
+    {
+        return QStringLiteral("hybrid");
+    }
+
+    const int backend_count = static_cast<int>(has_cuda) +
+        static_cast<int>(has_opencl) + static_cast<int>(has_cpu);
+    if (backend_count > 1)
+    {
+        return QStringLiteral("mixed");
+    }
+    if (has_cuda)
+    {
+        return QStringLiteral("cuda");
+    }
+    if (has_opencl)
+    {
+        return QStringLiteral("opencl");
+    }
+    if (has_cpu)
+    {
+        return QStringLiteral("cpu");
+    }
+    return QStringLiteral("unknown");
+}
+
+inline bool canReuseStoredMvsBackend(const QString &requestedBackend,
+                                     const QString &storedBackend)
+{
+    const QString requested_backend = requestedBackend.trimmed().toLower();
+    const QString stored_backend = storedBackend.trimmed().toLower();
+    const bool stored_backend_is_uniform = stored_backend == QStringLiteral("cuda") ||
+        stored_backend == QStringLiteral("opencl") ||
+        stored_backend == QStringLiteral("cpu");
+    if (requested_backend == QStringLiteral("auto"))
+    {
+        return stored_backend_is_uniform || stored_backend == QStringLiteral("hybrid");
+    }
+    return stored_backend_is_uniform && requested_backend == stored_backend;
+}
+
+} // namespace xjw::gui::project
 
 /**
  * @brief “创建点云”工作流的 GUI 协调器。

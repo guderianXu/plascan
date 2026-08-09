@@ -16,6 +16,21 @@ namespace mvs
 namespace
 {
 
+std::string normalizedAlphanumeric(const std::string &value)
+{
+    std::string normalized;
+    normalized.reserve(value.size());
+    for (const char item : value)
+    {
+        const unsigned char character = static_cast<unsigned char>(item);
+        if (std::isalnum(character))
+        {
+            normalized.push_back(static_cast<char>(std::tolower(character)));
+        }
+    }
+    return normalized;
+}
+
 QString lockPathForIdentity(const std::string &identity)
 {
     const QByteArray digest = QCryptographicHash::hash(
@@ -89,17 +104,26 @@ std::string fallbackGpuPhysicalIdentity(const std::string &vendor,
                                         const std::string &name,
                                         int deviceIndex)
 {
-    std::string normalized;
-    normalized.reserve(vendor.size() + name.size());
-    for (const char value : vendor + " " + name)
-    {
-        const unsigned char character = static_cast<unsigned char>(value);
-        if (std::isalnum(character))
-        {
-            normalized.push_back(static_cast<char>(std::tolower(character)));
-        }
-    }
+    const std::string normalized = normalizedAlphanumeric(vendor + " " + name);
     return "name:" + normalized + ":" + std::to_string(std::max(0, deviceIndex));
+}
+
+std::string normalizedGpuDeviceName(const std::string &name)
+{
+    return normalizedAlphanumeric(name);
+}
+
+bool shouldSkipUnstableOpenClCudaAlias(const std::string &openClVendor,
+                                       const std::string &physicalIdentity,
+                                       bool cudaSelected)
+{
+    if (!cudaSelected || physicalIdentity.starts_with("pci:"))
+    {
+        return false;
+    }
+
+    const std::string normalized_vendor = normalizedAlphanumeric(openClVendor);
+    return normalized_vendor.find("nvidia") != std::string::npos;
 }
 
 } // namespace mvs

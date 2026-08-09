@@ -102,7 +102,7 @@ void ReconstructionCliOptions::normalize()
         static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
     threads = threads > 0
         ? std::clamp(threads, 1, hardware_threads)
-        : hardware_threads;
+        : std::max(1, hardware_threads - 2);
     if (skipTexture)
     {
         exportObj = false;

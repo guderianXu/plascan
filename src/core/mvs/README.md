@@ -112,17 +112,41 @@ live under `src/core/mvs/tests/`.
 - CUDA workspaces, execution locks, upload streams, and gray-image cache keys are isolated by device index.
   One device still serializes its constant-memory camera updates, while separate devices may execute frames
   concurrently.
-- `DepthComputeScheduler` owns one priority queue and one worker model shared by CPU, CUDA, and OpenCL. Auto
-  resolves the whole batch with the strict priority CUDA, then OpenCL, then native CPU; it does not mix backend
-  families in one automatic job. Explicit CUDA or OpenCL requests stay strict and report an unavailable device
-  instead of silently substituting another backend. Candidate devices are leased individually before the workspace
-  hash is generated, so a busy CUDA device does not block another free CUDA device. If no CUDA device can be
-  leased, Auto proceeds to OpenCL and then CPU. OpenCL is selected only after context creation and runtime kernel
-  compilation succeed.
-- Multi-GPU scheduling is frame-level within the selected backend family: one depth map remains on one device,
-  while different reference frames may run concurrently on multiple CUDA GPUs or multiple OpenCL GPUs. Every
-  selected physical accelerator is represented before host preparation lanes are duplicated. Progress reports
-  physical GPU count separately from active host slots.
+- `DepthComputeScheduler` owns one priority queue and one worker model shared by CPU, CUDA, and OpenCL. Auto probes
+  both CUDA and OpenCL, then uses every successfully leased physical accelerator across the two backend families.
+  A physical PCI identity is admitted only once. When an OpenCL driver cannot expose the standard PCI identity,
+  the device name is matched to the CUDA inventory; an unresolved NVIDIA OpenCL interface is conservatively skipped
+  while CUDA is active. The same NVIDIA GPU therefore cannot acquire two leases or two execution lanes through
+  different APIs. Explicit CUDA or OpenCL requests remain strict and never silently substitute another backend.
+- Heterogeneous scheduling is frame-level: one depth map remains on one device, while different reference frames
+  may run concurrently on CUDA discrete GPUs and OpenCL integrated GPUs. Every selected physical accelerator is
+  represented before host preparation lanes are duplicated, and each physical GPU retains one kernel execution
+  lane. Progress reports physical GPU count separately from active host slots.
+- Auto reserves an initial calibration frame for each participating accelerator and tracks an exponential moving
+  average of its frame time. Faster devices naturally claim more work. Near the queue tail, a slower device stops
+  claiming frames when its projected completion time, including in-flight work, is no better than the fastest
+  calibrated device clearing its in-flight work and every remaining frame that backend can actually claim. A
+  cross-backend retry excluded from the fastest backend therefore keeps an eligible slower backend awake. This
+  prevents both integrated-GPU stragglers and an ineligible-fastest-worker retry deadlock. If no accelerator can be
+  prepared and leased, Auto uses native CPU; CPU is not mixed into an active CUDA/OpenCL batch.
+- A first frame failure in heterogeneous Auto is returned once to a different backend. The failing physical worker
+  stops taking ordinary frames while a healthy alternative exists, and a device paused by the tail-profitability
+  gate can be reactivated for the retry. A second failure is final; single-backend and explicit jobs keep their
+  strict failure behavior, so retry cannot become an unbounded or silent fallback loop.
+- Streaming hybrid jobs use two artifact-saving workers behind task-count and actual resident-byte limits. The
+  queue accounts for producers waiting to enter plus queued and active `cv::Mat` allocations, keeps the existing
+  stage barriers and manifest lock, and falls back to one saver for cached or single-GPU jobs. Aggregate wall time,
+  worker busy time, producer wait, peak resident tasks/bytes, and failure counts expose whether storage still
+  starves GPU submission. Producer accounting transfers only after queue insertion commits; compute and saver
+  thread exceptions are contained and release in-flight state, and the final filtered-save barrier observes
+  cancellation instead of continuing into fusion. The same cancellation token is wired into the BFS fusion loops.
+- An absent CPU-thread setting resolves to the machine's logical thread count minus two. Explicit CLI budgets are
+  honored up to the hardware limit instead of being capped at seven. Frame compute divides that total by the actual
+  CUDA/OpenCL host-slot count and distributes the integer remainder; each slot's OpenMP post-processing observes
+  that share, while preload, visibility, standalone consistency, and fusion stages retain the full budget.
+- A heterogeneous batch keeps the stable `auto` token in its workspace hash and records `CUDA:N` or `OpenCL:N` for
+  each frame. GUI project metadata reports the combined batch as `hybrid`; Auto may reuse either a compatible
+  uniform batch or a compatible hybrid batch, while an explicit backend may reuse only the same uniform family.
 - The OpenCL C 1.2 backend runs inverse-depth initialization, stateful plane PatchMatch, multi-source NCC,
   mask-aware sampling, depth hints, coarse-to-fine refinement, and confidence filtering. Each OpenCL GPU has one
   command-queue/kernel lane. With the default two-stage host pipeline, a second worker prepares the next frame and
@@ -144,11 +168,12 @@ live under `src/core/mvs/tests/`.
   validation-only frame measured 89.90% retention, so the gate was kept unchanged and no extra interpolation was
   enabled to hide the shortfall.
 - `mvs_depth_reprocess_cli --opencl-device-index N` pins replay to one enumerated OpenCL GPU. This is intended for
-  repeatable vendor/device comparisons and prevents a heterogeneous OpenCL job from hiding per-device quality or
+  repeatable vendor/device comparisons and prevents an Auto heterogeneous job from hiding per-device quality or
   timing differences. The task-lifetime GPU lease still rejects a second process targeting the same device.
 - A task-lifetime lease keyed by physical PCI identity prevents a second PlaScan GUI/CLI process from using the
-  same GPU during depth estimation. OpenCL failures are reported directly instead of silently running a GPU-tagged
-  frame on the CPU.
+  same GPU during depth estimation. Standard OpenCL PCI identity is preferred; CUDA-name matching closes the common
+  cross-API fallback gap. OpenCL failures are reported directly instead of silently running a GPU-tagged frame on
+  the CPU.
 - Image preload also caches the normalized/undistorted MVS image and camera. Frames reuse this prepared input
   instead of repeating camera normalization and distortion remapping every time the same image is a reference
   or source view; undistorted storage is shared with the gray cache when no distortion is present.

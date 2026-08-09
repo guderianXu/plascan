@@ -1135,6 +1135,175 @@ TEST(MvsSchedulerContractTest, FinalPyramidLevelKeepsConfiguredIterationBudget)
     });
 }
 
+TEST(MvsHeterogeneousSchedulingContractTest,
+     AutoCombinesDistinctCudaAndOpenClButKeepsExplicitRequestsStrict)
+{
+    const QString generator =
+        readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString scheduler_header =
+        readSourceFile(QStringLiteral("src/core/mvs/DepthComputeScheduler.h"));
+    const QString scheduler_source =
+        readSourceFile(QStringLiteral("src/core/mvs/DepthComputeScheduler.cpp"));
+    const QString opencl_source =
+        readSourceFile(QStringLiteral("src/core/mvs/PatchMatchOpenCL.cpp"));
+
+    expectContainsAll(generator, {
+        "const bool probeOpenCl = configuredBackend == PatchMatchBackend::OpenCl ||",
+        "selectedPhysicalDeviceIdentities.contains(descriptor.physicalIdentity)",
+        "shouldSkipUnstableOpenClCudaAlias",
+        "const bool heterogeneousAuto = configuredBackend == PatchMatchBackend::Auto",
+        "_config.patchMatch.backend = heterogeneousAuto",
+        "_config.patchMatch.cudaFallbackToCpu = false",
+        "_config.patchMatch.openClFallbackToCpu = false",
+    });
+    expectNotContainsAll(generator, {
+        "(automaticAcceleration && !cudaAvailable)",
+        "Auto resolves to one backend before this pool is built",
+    });
+    EXPECT_GE(countOccurrences(
+                  generator,
+                  "selectedPhysicalDeviceIdentities.insert(descriptor.physicalIdentity)"),
+              2);
+
+    const QString scheduler_wiring = sectionBetween(
+        generator,
+        "const std::vector<DepthComputeWorker> acceleratorWorkers",
+        "const int gpuFrameWorkers");
+    expectContainsAll(scheduler_wiring, {
+        "const bool benefitAwareScheduling = heterogeneousAuto",
+        "DepthComputeScheduler computeScheduler",
+        "benefitAwareScheduling, acceleratorWorkers",
+    });
+
+    expectContainsAll(scheduler_header + scheduler_source, {
+        "enableBenefitAwareScheduling",
+        "emaElapsedMilliseconds",
+        "DepthTaskClaimStatus",
+        "DepthTaskClaim",
+        "claimNext",
+        "waitForStateChange",
+        "shouldPauseAtQueueTail",
+        "DepthTaskCompletionResult",
+        "retryScheduled",
+        "findPendingCrossBackendRetry",
+    });
+    expectContainsAll(opencl_source, {
+        "cudaPhysicalIdentityForOpenClName",
+        "normalizedGpuDeviceName",
+        "fallbackGpuPhysicalIdentity",
+    });
+}
+
+TEST(MvsHeterogeneousSchedulingContractTest,
+     StreamingHybridUsesByteBoundedParallelArtifactSaving)
+{
+    const QString generator =
+        readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+
+    expectContainsAll(generator, {
+        "depthFrameResultResidentBytes",
+        "_maxResidentTasks",
+        "_maxResidentBytes",
+        "ProducerReservation",
+        "reserveProducer(",
+        "_producerReservations",
+        "_peakResidentTasks",
+        "_maxEnqueueWait",
+        "const size_t saveWorkerCount = !retainDepthFrames",
+        "physicalGpuCount >= 2",
+        "深度产物保存队列统计",
+    });
+
+    expectContainsAll(generator, {
+        "activeFrameWorkerCount",
+        "minimumCpuThreadsPerWorker",
+        "cpuThreadRemainder",
+        "assigned_cpu_threads",
+        "cpu_thread_budget=%9",
+        "workerConfig.cpuWorkerCount = std::max(1, assignedCpuThreadCount)",
+        "omp_set_num_threads(std::max(1, assignedCpuThreadCount))",
+        "fusionCfg.workerCount    = resolvedTotalCpuThreadBudget(_config)",
+    });
+
+    const QString capacity_policy = sectionBetween(
+        generator,
+        "uint64_t adaptiveSaveQueueResidentByteCapacity",
+        "int preloadImagesWorkerCount");
+    expectContainsAll(capacity_policy, {
+        "estimatedSaveQueueProducerBytes(largestFrameBytes)",
+        "if (snapshot.valid)",
+        "byteCapacity = std::min(byteCapacity, memoryBudget)",
+    });
+    expectNotContainsAll(capacity_policy, {
+        "if (memoryBudget > 0)",
+    });
+
+    const QString save_queue = sectionBetween(
+        generator,
+        "class DepthFrameArtifactSaveQueue",
+        "bool writeFastDepthMatStorage");
+    expectContainsAll(save_queue, {
+        "canAcceptLocked(_producerReservationBytes)",
+        "++_producerReservations",
+        "++_residentTasks",
+        "_residentBytes += _producerReservationBytes",
+        "if (_residentTasks == 0)",
+        "releaseProducerReservationLocked",
+        "resident_bytes > reserved_bytes",
+        "catch (const std::exception &exception)",
+        "saved = _saveFn(task.frameIndex, task.result, task.stageLabel)",
+        "save_exception_occurred",
+        "waitUntilIdle(const std::atomic<bool> *cancelFlag",
+    });
+    const int queue_insert = save_queue.indexOf(
+        QStringLiteral("_tasks.push_back(std::move(task))"));
+    const int reservation_transfer = save_queue.indexOf(
+        QStringLiteral("reservation.disarm()"), queue_insert);
+    ASSERT_GE(queue_insert, 0);
+    ASSERT_GE(reservation_transfer, 0);
+    EXPECT_LT(queue_insert, reservation_transfer)
+        << "Queue insertion must commit before producer reservation accounting transfers.";
+    const int save_call = save_queue.indexOf(QStringLiteral("saved = _saveFn("));
+    const int active_release = save_queue.indexOf(
+        QStringLiteral("--_activeTasks"), save_call);
+    const int exception_log = save_queue.indexOf(
+        QStringLiteral("if (save_exception_occurred)"), active_release);
+    ASSERT_GE(save_call, 0);
+    ASSERT_GE(active_release, 0);
+    ASSERT_GE(exception_log, 0);
+    EXPECT_LT(active_release, exception_log)
+        << "Saver accounting must complete before exception diagnostics are formatted.";
+
+    const QString worker = sectionBetween(
+        generator,
+        "auto workerFunc =",
+        "std::vector<std::thread> workers");
+    const int reservation = worker.indexOf(QStringLiteral(
+        "saveQueue.reserveProducer(&_cancelled)"));
+    const int compute = worker.indexOf(QStringLiteral("computeDepthForView(i, &workerConfig)"));
+    const int enqueue = worker.indexOf(QStringLiteral(
+        "std::move(saveReservation), i, res, QStringLiteral(\"初始\")"));
+    ASSERT_GE(reservation, 0);
+    ASSERT_GE(compute, 0);
+    ASSERT_GE(enqueue, 0);
+    EXPECT_LT(reservation, compute)
+        << "A complete producer result must be reserved before depth computation allocates it.";
+    EXPECT_LT(compute, enqueue);
+
+    expectContainsAll(worker, {
+        "catch (const std::exception &exception)",
+        "computeScheduler.complete(",
+        "saveQueue.cancel()",
+        "workerExceptionReported.exchange(true)",
+    });
+    expectContainsAll(generator, {
+        "!saveQueue.waitUntilIdle(&_cancelled)",
+        "allOk = !anyFailure.load() && !_cancelled.load()",
+        "fusionCfg.cancelFlag = std::shared_ptr<std::atomic_bool>",
+        "[MVS][深度融合] 收到取消请求",
+    });
+}
+
 TEST(MeshReconstructionContractTest, ClosedSurfaceNormalsUseNeighborhoodConsistency)
 {
     const QString source = readSourceFile(QStringLiteral("src/core/mesh/SurfaceReconstructor.cpp"));

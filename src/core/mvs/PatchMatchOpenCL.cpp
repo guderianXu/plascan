@@ -110,6 +110,33 @@ bool populateOpenClUsability(cl_device_id device, OpenClDeviceInfo *info)
                                           info->compilerAvailable);
 }
 
+std::string cudaPhysicalIdentityForOpenClName(const std::string &openClName)
+{
+    const std::string opencl_name = normalizedGpuDeviceName(openClName);
+    if (opencl_name.empty())
+    {
+        return {};
+    }
+
+    const int cuda_device_count = PatchMatchDepthEstimator::cudaDeviceCount();
+    for (int device_index = 0; device_index < cuda_device_count; ++device_index)
+    {
+        if (normalizedGpuDeviceName(
+                PatchMatchDepthEstimator::cudaDeviceName(device_index)) !=
+            opencl_name)
+        {
+            continue;
+        }
+        const std::string identity =
+            PatchMatchDepthEstimator::cudaDeviceIdentity(device_index);
+        if (!identity.empty())
+        {
+            return identity;
+        }
+    }
+    return {};
+}
+
 std::vector<EnumeratedOpenClDevice> enumerateOpenClGpuDevicesUncached()
 {
     cl_uint platform_count = 0;
@@ -205,8 +232,13 @@ std::vector<EnumeratedOpenClDevice> enumerateOpenClGpuDevicesUncached()
             }
             else
             {
-                entry.info.physicalDeviceIdentity = fallbackGpuPhysicalIdentity(
-                    entry.info.vendor, entry.info.name, entry.info.index);
+                entry.info.physicalDeviceIdentity =
+                    cudaPhysicalIdentityForOpenClName(entry.info.name);
+                if (entry.info.physicalDeviceIdentity.empty())
+                {
+                    entry.info.physicalDeviceIdentity = fallbackGpuPhysicalIdentity(
+                        entry.info.vendor, entry.info.name, entry.info.index);
+                }
             }
             entry.platform = platform;
             entry.device = device;

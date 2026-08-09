@@ -192,6 +192,22 @@ TEST(MvsDepthReprocessCliContractTest, CanPinOneOpenClGpuForReproducibleReplay)
     });
 }
 
+TEST(MvsDepthReprocessCliContractTest, AutoEnablesCudaAndOpenClReplayScheduling)
+{
+    const QString source = readSourceFile(
+        QStringLiteral("src/cli/workflows/cli_mvs_depth_reprocess.cpp"));
+
+    expectContainsAll(source, {
+        "设备：auto/cuda/opencl/cpu",
+        "CLI::IsMember({\"auto\", \"cuda\", \"opencl\", \"cpu\"})",
+        "std::string device = \"auto\"",
+        "device == \"cuda\" || device == \"auto\"",
+        "{QStringLiteral(\"patchMatchBackend\"), QString::fromStdString(device)}",
+        "int threads = 0",
+        "CPU 线程预算；0=逻辑线程数减 2",
+    });
+}
+
 TEST(MvsDepthReprocessCliContractTest, UsesVerifiedManifestSourcePlanWithoutPairAudit)
 {
     const QString exe = executablePath(PLASCAN_MVS_DEPTH_REPROCESS_CLI_PATH);
@@ -444,6 +460,22 @@ TEST(ReconstructPipelineCliGTest, ExposesAdaptiveDepthPyramidOptions)
                        "depthConfig.sceneProfile",
                        "depthConfig.depthFilterMode",
                        "depthConfig.saveIntermediatePyramidLevels"});
+}
+
+TEST(ReconstructPipelineCliGTest, ReportsCudaAndOpenClDepthFramesAsHybrid)
+{
+    const QString source = readSourceFile(
+        QStringLiteral("src/cli/workflows/ReconstructionPipelineRunner.cpp"));
+    const QString classification = sectionBetween(
+        source, "QString mvsBackendFromArtifacts", "void reportPlaPointDevice");
+
+    expectContainsAll(classification, {
+        "has_cuda",
+        "has_opencl",
+        "has_cpu",
+        "return QStringLiteral(\"hybrid\")",
+        "return QStringLiteral(\"mixed\")",
+    });
 }
 
 TEST(ReconstructPipelineCliGTest, RoutesPlaPointBackendIndependentlyFromMvs)

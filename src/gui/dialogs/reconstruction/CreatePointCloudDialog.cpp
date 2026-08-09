@@ -39,21 +39,30 @@ CreatePointCloudDialog::CreatePointCloudDialog(QWidget *parent)
     _qualityCombo->addItem(tr("最低"), QStringLiteral("lowest"));
     xjw::gui::dialogs::configureWorkflowComboBox(_qualityCombo);
 
-    const auto populate_backend_combo = [this](QComboBox *combo)
+    const auto populate_backend_combo = [this](QComboBox *combo,
+                                               const QString &auto_text,
+                                               const QString &tool_tip)
     {
-        combo->addItem(tr("自动（CUDA → OpenCL → CPU）"), QStringLiteral("auto"));
+        combo->addItem(auto_text, QStringLiteral("auto"));
         combo->addItem(tr("CUDA"), QStringLiteral("cuda"));
         combo->addItem(tr("OpenCL"), QStringLiteral("opencl"));
         combo->addItem(tr("CPU"), QStringLiteral("cpu"));
         xjw::gui::dialogs::configureWorkflowComboBox(combo);
-        combo->setToolTip(tr("显式选择的后端不可用时会明确失败；自动模式按显示顺序选择。"));
+        combo->setToolTip(tool_tip);
     };
     _mvsBackendCombo = new QComboBox(general_group);
     _mvsBackendCombo->setObjectName(QStringLiteral("pointCloudMvsBackendCombo"));
-    populate_backend_combo(_mvsBackendCombo);
+    populate_backend_combo(
+        _mvsBackendCombo,
+        tr("自动异构（CUDA + OpenCL，按收益调度）"),
+        tr("自动模式会同时探测 CUDA 独显和 OpenCL 核显，按实测收益把不同深度帧分配到各设备；"
+           "每块 GPU 同时只执行一个内核任务。显式选择的后端不可用时会明确失败。"));
     _pointCloudBackendCombo = new QComboBox(general_group);
     _pointCloudBackendCombo->setObjectName(QStringLiteral("pointCloudProcessingBackendCombo"));
-    populate_backend_combo(_pointCloudBackendCombo);
+    populate_backend_combo(
+        _pointCloudBackendCombo,
+        tr("自动（CUDA → OpenCL → CPU）"),
+        tr("显式选择的后端不可用时会明确失败；自动模式按显示顺序选择。"));
 
     _reuseDepthMapsCheck = new QCheckBox(tr("重用深度图"), general_group);
     _reuseDepthMapsCheck->setObjectName(QStringLiteral("reuseDepthMapsCheck"));

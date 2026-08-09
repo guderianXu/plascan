@@ -1,6 +1,10 @@
 #include "DepthComputeScheduler.h"
 
 #include <algorithm>
+#include <charconv>
+#include <cmath>
+#include <limits>
+#include <utility>
 
 namespace xjw
 {
@@ -54,6 +58,47 @@ std::string DepthComputeWorker::id() const
         result += ":" + std::to_string(deviceIndex);
     }
     return result;
+}
+
+std::optional<DepthComputeWorker> depthComputeWorkerFromId(
+    std::string_view workerId)
+{
+    const auto parse_backend = [workerId](std::string_view backend_name,
+                                           DepthComputeBackend backend)
+        -> std::optional<DepthComputeWorker>
+    {
+        if (workerId == backend_name)
+        {
+            return DepthComputeWorker{backend, -1};
+        }
+        if (workerId.size() <= backend_name.size() + 1 ||
+            workerId.substr(0, backend_name.size()) != backend_name ||
+            workerId[backend_name.size()] != ':')
+        {
+            return std::nullopt;
+        }
+
+        const std::string_view index_text = workerId.substr(backend_name.size() + 1);
+        int device_index = -1;
+        const auto [end, error] = std::from_chars(
+            index_text.data(), index_text.data() + index_text.size(), device_index);
+        if (error != std::errc{} || end != index_text.data() + index_text.size() ||
+            device_index < 0)
+        {
+            return std::nullopt;
+        }
+        return DepthComputeWorker{backend, device_index};
+    };
+
+    if (const auto worker = parse_backend("CUDA", DepthComputeBackend::Cuda))
+    {
+        return worker;
+    }
+    if (const auto worker = parse_backend("OpenCL", DepthComputeBackend::OpenCl))
+    {
+        return worker;
+    }
+    return parse_backend("CPU", DepthComputeBackend::Cpu);
 }
 
 std::vector<DepthComputeWorker> buildDepthComputeWorkerPool(
@@ -118,7 +163,10 @@ std::vector<DepthComputeWorker> buildDepthComputeWorkerPool(
     return workers;
 }
 
-DepthComputeScheduler::DepthComputeScheduler(std::vector<DepthFrameTask> tasks)
+DepthComputeScheduler::DepthComputeScheduler(
+    std::vector<DepthFrameTask> tasks,
+    bool enableBenefitAwareScheduling,
+    std::vector<DepthComputeWorker> participatingWorkers)
 {
     std::stable_sort(tasks.begin(), tasks.end(), [](const DepthFrameTask &left,
                                                      const DepthFrameTask &right)
@@ -129,40 +177,417 @@ DepthComputeScheduler::DepthComputeScheduler(std::vector<DepthFrameTask> tasks)
     {
         if (task.viewIndex >= 0)
         {
-            _pendingViewIndices.push_back(task.viewIndex);
+            _pendingTasks.push_back({task.viewIndex, 0, std::nullopt});
         }
     }
+
+    for (const DepthComputeWorker &worker : participatingWorkers)
+    {
+        const std::string worker_id = worker.id();
+        if (std::find(_participatingWorkerIds.begin(),
+                      _participatingWorkerIds.end(),
+                      worker_id) != _participatingWorkerIds.end())
+        {
+            continue;
+        }
+        _participatingWorkerIds.push_back(worker_id);
+    }
+    _benefitAwareSchedulingEnabled = enableBenefitAwareScheduling &&
+                                     _participatingWorkerIds.size() > 1 &&
+                                     _pendingTasks.size() >=
+                                         _participatingWorkerIds.size();
+    for (const std::string &worker_id : _participatingWorkerIds)
+    {
+        _workerSchedulingStates.try_emplace(worker_id);
+    }
 }
 
-std::optional<int> DepthComputeScheduler::takeNext(const DepthComputeWorker &worker)
+DepthTaskClaim DepthComputeScheduler::claimNext(const DepthComputeWorker &worker)
 {
     std::lock_guard<std::mutex> lock(_mutex);
-    _workerStats.try_emplace(worker.id());
-    if (_pendingViewIndices.empty())
+    const std::string worker_id = worker.id();
+    _workerStats.try_emplace(worker_id);
+
+    if (!_benefitAwareSchedulingEnabled)
     {
-        return std::nullopt;
+        if (_pendingTasks.empty())
+        {
+            return {DepthTaskClaimStatus::Exhausted, -1, _revision};
+        }
+        WorkerSchedulingState &state = _workerSchedulingStates[worker_id];
+        return assignNextTask(worker, state, _pendingTasks.begin());
     }
-    const int view_index = _pendingViewIndices.front();
-    _pendingViewIndices.pop_front();
-    return view_index;
+
+    auto state_it = _workerSchedulingStates.find(worker_id);
+    if (state_it == _workerSchedulingStates.end() ||
+        state_it->second.failureRetired)
+    {
+        return {DepthTaskClaimStatus::Retire, -1, _revision};
+    }
+
+    WorkerSchedulingState &state = state_it->second;
+    if (state.retirementPending)
+    {
+        if (state.inFlightTasks > 0)
+        {
+            return {DepthTaskClaimStatus::Retry, -1, _revision};
+        }
+        const PendingTaskIterator recovery_it =
+            findPendingCrossBackendRetry(worker);
+        if (recovery_it != _pendingTasks.end())
+        {
+            return assignNextTask(worker, state, recovery_it);
+        }
+        state.retirementPending = false;
+        state.failureRetired = true;
+        advanceRevision();
+        return {DepthTaskClaimStatus::Retire, -1, _revision};
+    }
+    if (_pendingTasks.empty())
+    {
+        return {_inFlightTasks.empty() ? DepthTaskClaimStatus::Exhausted
+                                       : DepthTaskClaimStatus::Retry,
+                -1,
+                _revision};
+    }
+
+    const PendingTaskIterator task_it = findEligibleTask(worker);
+    if (task_it == _pendingTasks.end())
+    {
+        return {DepthTaskClaimStatus::Retry, -1, _revision};
+    }
+
+    if (!state.calibrationSucceeded)
+    {
+        if (state.calibrationInFlight)
+        {
+            return {DepthTaskClaimStatus::Retry, -1, _revision};
+        }
+        state.calibrationInFlight = true;
+        return assignNextTask(worker, state, task_it);
+    }
+
+    if (shouldReserveForCalibration())
+    {
+        return {DepthTaskClaimStatus::Retry, -1, _revision};
+    }
+    if (shouldPauseAtQueueTail(worker_id))
+    {
+        if (!state.pausedForBenefit)
+        {
+            state.pausedForBenefit = true;
+            advanceRevision();
+        }
+        return {DepthTaskClaimStatus::Retry, -1, _revision};
+    }
+    state.pausedForBenefit = false;
+    return assignNextTask(worker, state, task_it);
 }
 
-void DepthComputeScheduler::complete(
+bool DepthComputeScheduler::waitForStateChange(
+    std::uint64_t observedRevision,
+    std::chrono::milliseconds maximumWait)
+{
+    std::unique_lock<std::mutex> lock(_mutex);
+    return _stateChanged.wait_for(lock, maximumWait, [this, observedRevision]
+    {
+        return _revision != observedRevision;
+    });
+}
+
+DepthTaskCompletionResult DepthComputeScheduler::complete(
     const DepthComputeWorker &worker,
+    int viewIndex,
     std::chrono::duration<double, std::milli> elapsed,
     bool success)
 {
     std::lock_guard<std::mutex> lock(_mutex);
-    DepthComputeWorkerStats &stats = _workerStats[worker.id()];
+    const std::string worker_id = worker.id();
+    const auto task_it = _inFlightTasks.find(viewIndex);
+    if (task_it == _inFlightTasks.end() ||
+        task_it->second.workerId != worker_id)
+    {
+        return {};
+    }
+
+    const InFlightTask completed_task = task_it->second;
+    _inFlightTasks.erase(task_it);
+    DepthTaskCompletionResult result;
+    result.accepted = true;
+
+    DepthComputeWorkerStats &stats = _workerStats[worker_id];
     ++stats.completedTasks;
+    stats.successfulTasks += success ? 1 : 0;
     stats.failedTasks += success ? 0 : 1;
-    stats.elapsedMilliseconds += elapsed.count();
+    const double elapsed_milliseconds = elapsed.count();
+    stats.elapsedMilliseconds += elapsed_milliseconds;
+
+    if (success && std::isfinite(elapsed_milliseconds) &&
+        elapsed_milliseconds > 0.0)
+    {
+        constexpr double duration_ema_alpha = 0.35;
+        if (stats.emaElapsedMilliseconds <= 0.0)
+        {
+            stats.emaElapsedMilliseconds = elapsed_milliseconds;
+        }
+        else
+        {
+            stats.emaElapsedMilliseconds =
+                duration_ema_alpha * elapsed_milliseconds +
+                (1.0 - duration_ema_alpha) * stats.emaElapsedMilliseconds;
+        }
+    }
+
+    WorkerSchedulingState &state = _workerSchedulingStates[worker_id];
+    state.inFlightTasks = std::max(0, state.inFlightTasks - 1);
+    if (_benefitAwareSchedulingEnabled && isParticipatingWorker(worker_id))
+    {
+        if (!state.calibrationSucceeded)
+        {
+            state.calibrationInFlight = false;
+            if (success && stats.emaElapsedMilliseconds > 0.0)
+            {
+                state.calibrationSucceeded = true;
+            }
+        }
+
+        if (!success && hasHealthyAlternativeBackend(worker))
+        {
+            state.pausedForBenefit = false;
+            reactivateAlternativeBackends(worker);
+            if (completed_task.retryCount == 0)
+            {
+                _pendingTasks.push_front(
+                    {viewIndex, 1, completed_task.backend});
+                result.retryScheduled = true;
+            }
+            state.retirementPending =
+                findPendingCrossBackendRetry(worker) != _pendingTasks.end();
+            state.failureRetired = !state.retirementPending;
+            result.workerRetired = state.failureRetired;
+        }
+    }
+    advanceRevision();
+    return result;
+}
+
+DepthComputeScheduler::PendingTaskIterator
+DepthComputeScheduler::findEligibleTask(const DepthComputeWorker &worker)
+{
+    return std::find_if(
+        _pendingTasks.begin(), _pendingTasks.end(), [&worker](const PendingTask &task)
+        {
+            return !task.excludedBackend.has_value() ||
+                   *task.excludedBackend != worker.backend;
+        });
+}
+
+DepthComputeScheduler::PendingTaskIterator
+DepthComputeScheduler::findPendingCrossBackendRetry(
+    const DepthComputeWorker &worker)
+{
+    return std::find_if(
+        _pendingTasks.begin(), _pendingTasks.end(), [&worker](const PendingTask &task)
+        {
+            return task.retryCount > 0 && task.excludedBackend.has_value() &&
+                   *task.excludedBackend != worker.backend;
+        });
+}
+
+DepthTaskClaim DepthComputeScheduler::assignNextTask(
+    const DepthComputeWorker &worker,
+    WorkerSchedulingState &state,
+    PendingTaskIterator taskIt)
+{
+    const PendingTask task = *taskIt;
+    _pendingTasks.erase(taskIt);
+    ++state.assignedTasks;
+    ++state.inFlightTasks;
+    _inFlightTasks.insert_or_assign(
+        task.viewIndex,
+        InFlightTask{worker.id(), worker.backend, task.retryCount});
+    advanceRevision();
+    return {DepthTaskClaimStatus::Task, task.viewIndex, _revision};
+}
+
+bool DepthComputeScheduler::isParticipatingWorker(
+    const std::string &workerId) const
+{
+    return std::find(_participatingWorkerIds.begin(),
+                     _participatingWorkerIds.end(),
+                     workerId) != _participatingWorkerIds.end();
+}
+
+bool DepthComputeScheduler::hasHealthyAlternativeBackend(
+    const DepthComputeWorker &worker) const
+{
+    return std::any_of(
+        _participatingWorkerIds.begin(),
+        _participatingWorkerIds.end(),
+        [this, &worker](const std::string &participant_id)
+        {
+            if (participant_id == worker.id())
+            {
+                return false;
+            }
+            const auto participant = depthComputeWorkerFromId(participant_id);
+            const auto state_it = _workerSchedulingStates.find(participant_id);
+            return participant.has_value() &&
+                   participant->backend != worker.backend &&
+                   state_it != _workerSchedulingStates.end() &&
+                   !state_it->second.retirementPending &&
+                   !state_it->second.failureRetired;
+        });
+}
+
+void DepthComputeScheduler::reactivateAlternativeBackends(
+    const DepthComputeWorker &worker)
+{
+    for (const std::string &participant_id : _participatingWorkerIds)
+    {
+        const auto participant = depthComputeWorkerFromId(participant_id);
+        auto state_it = _workerSchedulingStates.find(participant_id);
+        if (participant.has_value() &&
+            participant->backend != worker.backend &&
+            state_it != _workerSchedulingStates.end() &&
+            !state_it->second.retirementPending &&
+            !state_it->second.failureRetired)
+        {
+            state_it->second.pausedForBenefit = false;
+        }
+    }
+}
+
+bool DepthComputeScheduler::shouldReserveForCalibration() const
+{
+    std::size_t required_calibration_tasks = 0;
+    for (const std::string &participant_id : _participatingWorkerIds)
+    {
+        const auto state_it = _workerSchedulingStates.find(participant_id);
+        if (state_it != _workerSchedulingStates.end() &&
+            !state_it->second.failureRetired &&
+            !state_it->second.retirementPending &&
+            !state_it->second.calibrationSucceeded &&
+            !state_it->second.calibrationInFlight)
+        {
+            const auto participant = depthComputeWorkerFromId(participant_id);
+            const bool has_eligible_task = participant.has_value() &&
+                std::any_of(
+                    _pendingTasks.begin(),
+                    _pendingTasks.end(),
+                    [&participant](const PendingTask &task)
+                    {
+                        return !task.excludedBackend.has_value() ||
+                               *task.excludedBackend != participant->backend;
+                    });
+            required_calibration_tasks += has_eligible_task ? 1U : 0U;
+        }
+    }
+    return _pendingTasks.size() <= required_calibration_tasks;
+}
+
+bool DepthComputeScheduler::shouldPauseAtQueueTail(
+    const std::string &workerId) const
+{
+    const auto worker_state_it = _workerSchedulingStates.find(workerId);
+    const auto worker_stats_it = _workerStats.find(workerId);
+    if (worker_state_it == _workerSchedulingStates.end() ||
+        worker_stats_it == _workerStats.end() ||
+        !worker_state_it->second.calibrationSucceeded ||
+        worker_stats_it->second.emaElapsedMilliseconds <= 0.0)
+    {
+        return false;
+    }
+
+    double fastest_elapsed_milliseconds = std::numeric_limits<double>::infinity();
+    int fastest_in_flight_tasks = 0;
+    std::string fastest_worker_id;
+    for (const std::string &participant_id : _participatingWorkerIds)
+    {
+        const auto state_it = _workerSchedulingStates.find(participant_id);
+        const auto stats_it = _workerStats.find(participant_id);
+        if (state_it == _workerSchedulingStates.end() ||
+            state_it->second.failureRetired ||
+            state_it->second.retirementPending)
+        {
+            continue;
+        }
+        if (!state_it->second.calibrationSucceeded ||
+            stats_it == _workerStats.end() ||
+            stats_it->second.successfulTasks == 0 ||
+            stats_it->second.emaElapsedMilliseconds <= 0.0)
+        {
+            return false;
+        }
+        if (stats_it->second.emaElapsedMilliseconds < fastest_elapsed_milliseconds)
+        {
+            fastest_elapsed_milliseconds = stats_it->second.emaElapsedMilliseconds;
+            fastest_in_flight_tasks = state_it->second.inFlightTasks;
+            fastest_worker_id = participant_id;
+        }
+    }
+
+    if (fastest_worker_id.empty() || fastest_worker_id == workerId)
+    {
+        return false;
+    }
+
+    const auto candidate_worker = depthComputeWorkerFromId(workerId);
+    const auto fastest_worker = depthComputeWorkerFromId(fastest_worker_id);
+    if (!candidate_worker.has_value() || !fastest_worker.has_value())
+    {
+        return false;
+    }
+
+    const auto is_eligible_for_backend = [](const PendingTask &task,
+                                             DepthComputeBackend backend)
+    {
+        return !task.excludedBackend.has_value() ||
+               *task.excludedBackend != backend;
+    };
+    const std::size_t fastest_eligible_pending_tasks =
+        static_cast<std::size_t>(std::count_if(
+            _pendingTasks.begin(),
+            _pendingTasks.end(),
+            [&is_eligible_for_backend, &fastest_worker](const PendingTask &task)
+            {
+                return is_eligible_for_backend(task, fastest_worker->backend);
+            }));
+    const bool candidate_must_drain_exclusive_task = std::any_of(
+        _pendingTasks.begin(),
+        _pendingTasks.end(),
+        [&is_eligible_for_backend,
+         &candidate_worker,
+         &fastest_worker](const PendingTask &task)
+        {
+            return is_eligible_for_backend(task, candidate_worker->backend) &&
+                   !is_eligible_for_backend(task, fastest_worker->backend);
+        });
+    if (candidate_must_drain_exclusive_task)
+    {
+        return false;
+    }
+
+    const double candidate_finish_milliseconds =
+        static_cast<double>(worker_state_it->second.inFlightTasks + 1) *
+        worker_stats_it->second.emaElapsedMilliseconds;
+    const double fastest_queue_clear_milliseconds =
+        static_cast<double>(fastest_in_flight_tasks +
+                            static_cast<int>(fastest_eligible_pending_tasks)) *
+        fastest_elapsed_milliseconds;
+    return candidate_finish_milliseconds >= fastest_queue_clear_milliseconds;
+}
+
+void DepthComputeScheduler::advanceRevision()
+{
+    ++_revision;
+    _stateChanged.notify_all();
 }
 
 std::size_t DepthComputeScheduler::pendingTaskCount() const
 {
     std::lock_guard<std::mutex> lock(_mutex);
-    return _pendingViewIndices.size();
+    return _pendingTasks.size();
 }
 
 std::unordered_map<std::string, DepthComputeWorkerStats>

@@ -313,25 +313,41 @@ QString mvsBackendFamily(const QString &device)
 
 QString mvsBackendFromArtifacts(const QJsonArray &artifacts)
 {
-    QString actual_backend;
+    bool has_cuda = false;
+    bool has_opencl = false;
+    bool has_cpu = false;
     for (const QJsonValue &value : artifacts)
     {
         const QString backend = mvsBackendFamily(
             value.toObject().value(QStringLiteral("device")).toString());
-        if (backend == QStringLiteral("unknown"))
-        {
-            continue;
-        }
-        if (actual_backend.isEmpty())
-        {
-            actual_backend = backend;
-        }
-        else if (actual_backend != backend)
-        {
-            return QStringLiteral("mixed");
-        }
+        has_cuda = has_cuda || backend == QStringLiteral("cuda");
+        has_opencl = has_opencl || backend == QStringLiteral("opencl");
+        has_cpu = has_cpu || backend == QStringLiteral("cpu");
     }
-    return actual_backend.isEmpty() ? QStringLiteral("unknown") : actual_backend;
+
+    if (has_cuda && has_opencl && !has_cpu)
+    {
+        return QStringLiteral("hybrid");
+    }
+    const int backend_count = static_cast<int>(has_cuda) +
+        static_cast<int>(has_opencl) + static_cast<int>(has_cpu);
+    if (backend_count > 1)
+    {
+        return QStringLiteral("mixed");
+    }
+    if (has_cuda)
+    {
+        return QStringLiteral("cuda");
+    }
+    if (has_opencl)
+    {
+        return QStringLiteral("opencl");
+    }
+    if (has_cpu)
+    {
+        return QStringLiteral("cpu");
+    }
+    return QStringLiteral("unknown");
 }
 
 void reportPlaPointDevice(const std::function<void(const QString &, int)> &progress,

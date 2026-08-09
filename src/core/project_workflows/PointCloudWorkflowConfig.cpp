@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <thread>
 
 namespace xjw::core::project {
 
@@ -121,6 +122,17 @@ int autoCpuFrameWorkers(int threads, int viewCount)
     const int maxByViews = std::max(1, viewCount);
     const int maxCpuWorkers = std::min(4, maxByViews);
     return std::clamp(std::max(1, threads / 4), 1, maxCpuWorkers);
+}
+
+int resolvedDenseThreadBudget(int requestedThreads)
+{
+    const int hardware_threads = static_cast<int>(
+        std::max(1u, std::thread::hardware_concurrency()));
+    if (requestedThreads > 0)
+    {
+        return std::clamp(requestedThreads, 1, hardware_threads);
+    }
+    return std::max(1, hardware_threads - 2);
 }
 
 bool hasAnyKey(const QJsonObject &settings, std::initializer_list<const char *> keys)
@@ -295,7 +307,8 @@ DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &setti
     parsed.outputDir = settings.value(QStringLiteral("output_dir")).toString();
     parsed.resScale = settings.value(QStringLiteral("resScale")).toDouble(0.5);
     parsed.iterations = settings.value(QStringLiteral("iterations")).toInt(6);
-    parsed.threads = std::max(1, settings.value(QStringLiteral("threads")).toInt(8));
+    parsed.threads = resolvedDenseThreadBudget(
+        settings.value(QStringLiteral("threads")).toInt(0));
     parsed.gpuFrameWorkers = std::max(0, settings.value(QStringLiteral("gpu_frame_workers")).toInt(0));
     parsed.cpuFrameWorkers = std::max(0, settings.value(QStringLiteral("cpu_frame_workers")).toInt(0));
     parsed.patchSize = settings.value(QStringLiteral("patchSize")).toInt(11);
@@ -424,10 +437,10 @@ xjw::mvs::DepthGenConfig buildDepthGenConfig(const DenseGenerationSettings &sett
     config.qualityProfile = settings.qualityProfile.toStdString();
     config.numSourceViews = std::min(settings.minViews, viewCount - 1);
     config.configuredSourceViewCount = config.numSourceViews;
-    // This configuration is used by the interactive project workflow. Leave
-    // one logical worker out of the historical eight-thread budget so Qt can
-    // continue processing input, painting, progress, and cancellation events.
-    const int totalThreads = std::clamp(settings.threads, 1, 7);
+    // The GUI no longer exposes a manual worker control. Auto reserves two
+    // logical processors for Qt and the operating system; explicit CLI values
+    // are still honored up to the machine's logical thread count.
+    const int totalThreads = resolvedDenseThreadBudget(settings.threads);
     const int maxByViews = std::max(1, viewCount);
     const int maxGpuWorkers = std::min(2, maxByViews);
     const int maxCpuWorkers = std::min(4, maxByViews);

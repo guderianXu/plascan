@@ -1,11 +1,14 @@
 #pragma once
 
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -40,6 +43,10 @@ struct DepthComputeWorker
     std::string id() const;
 };
 
+/// Parses the stable worker identifiers produced by DepthComputeWorker::id().
+/// Unknown backends, malformed indices, and negative device indices are rejected.
+std::optional<DepthComputeWorker> depthComputeWorkerFromId(std::string_view workerId);
+
 /// Builds frame-level host workers while keeping one worker for every physical
 /// accelerator before adding at most one preparation lane for each device.
 std::vector<DepthComputeWorker> buildDepthComputeWorkerPool(
@@ -57,27 +64,119 @@ struct DepthFrameTask
 struct DepthComputeWorkerStats
 {
     int completedTasks = 0;
+    int successfulTasks = 0;
     int failedTasks = 0;
     double elapsedMilliseconds = 0.0;
+    double emaElapsedMilliseconds = 0.0;
+};
+
+enum class DepthTaskClaimStatus
+{
+    /// One frame was removed from the shared queue and is owned by this caller.
+    Task,
+    /// The worker remains available but is waiting for calibration, a more
+    /// profitable tail assignment, or an in-flight retry decision.
+    Retry,
+    /// The physical worker failed while another backend remained available.
+    Retire,
+    /// No queued frames remain.
+    Exhausted
+};
+
+struct DepthTaskClaim
+{
+    DepthTaskClaimStatus status = DepthTaskClaimStatus::Exhausted;
+    int viewIndex = -1;
+    std::uint64_t revision = 0;
+};
+
+struct DepthTaskCompletionResult
+{
+    /// False means that the view was not owned by this physical worker. No
+    /// scheduler state or statistics are changed for a rejected completion.
+    bool accepted = false;
+    /// A failed first attempt was returned to the queue for another backend.
+    bool retryScheduled = false;
+    /// This worker failed while a healthy alternative backend remained.
+    bool workerRetired = false;
 };
 
 class DepthComputeScheduler
 {
 public:
-    explicit DepthComputeScheduler(std::vector<DepthFrameTask> tasks);
+    explicit DepthComputeScheduler(
+        std::vector<DepthFrameTask> tasks,
+        bool enableBenefitAwareScheduling = false,
+        std::vector<DepthComputeWorker> participatingWorkers = {});
 
-    std::optional<int> takeNext(const DepthComputeWorker &worker);
-    void complete(const DepthComputeWorker &worker,
-                  std::chrono::duration<double, std::milli> elapsed,
-                  bool success);
+    DepthTaskClaim claimNext(const DepthComputeWorker &worker);
+    /// Waits without a lost-wakeup race after a Retry claim. The caller passes
+    /// the revision carried by that claim and still supplies a short timeout so
+    /// external cancellation can be observed promptly.
+    bool waitForStateChange(std::uint64_t observedRevision,
+                            std::chrono::milliseconds maximumWait);
+    /// Completes the exact frame returned by claimNext(). In heterogeneous
+    /// benefit-aware mode, a first failure can be requeued once for a different
+    /// backend; retryScheduled tells the caller not to publish a final failure yet.
+    DepthTaskCompletionResult complete(
+        const DepthComputeWorker &worker,
+        int viewIndex,
+        std::chrono::duration<double, std::milli> elapsed,
+        bool success);
 
     std::size_t pendingTaskCount() const;
     std::unordered_map<std::string, DepthComputeWorkerStats> workerStats() const;
 
 private:
+    struct PendingTask
+    {
+        int viewIndex = -1;
+        int retryCount = 0;
+        std::optional<DepthComputeBackend> excludedBackend;
+    };
+
+    struct InFlightTask
+    {
+        std::string workerId;
+        DepthComputeBackend backend = DepthComputeBackend::Cpu;
+        int retryCount = 0;
+    };
+
+    struct WorkerSchedulingState
+    {
+        int assignedTasks = 0;
+        int inFlightTasks = 0;
+        bool calibrationInFlight = false;
+        bool calibrationSucceeded = false;
+        bool pausedForBenefit = false;
+        bool retirementPending = false;
+        bool failureRetired = false;
+    };
+
+    using PendingTaskIterator = std::deque<PendingTask>::iterator;
+
+    PendingTaskIterator findEligibleTask(const DepthComputeWorker &worker);
+    PendingTaskIterator findPendingCrossBackendRetry(
+        const DepthComputeWorker &worker);
+    DepthTaskClaim assignNextTask(const DepthComputeWorker &worker,
+                                  WorkerSchedulingState &state,
+                                  PendingTaskIterator taskIt);
+    bool isParticipatingWorker(const std::string &workerId) const;
+    bool hasHealthyAlternativeBackend(const DepthComputeWorker &worker) const;
+    void reactivateAlternativeBackends(const DepthComputeWorker &worker);
+    bool shouldReserveForCalibration() const;
+    bool shouldPauseAtQueueTail(const std::string &workerId) const;
+    void advanceRevision();
+
     mutable std::mutex _mutex;
-    std::deque<int> _pendingViewIndices;
+    std::condition_variable _stateChanged;
+    std::deque<PendingTask> _pendingTasks;
+    std::unordered_map<int, InFlightTask> _inFlightTasks;
     std::unordered_map<std::string, DepthComputeWorkerStats> _workerStats;
+    std::unordered_map<std::string, WorkerSchedulingState> _workerSchedulingStates;
+    std::vector<std::string> _participatingWorkerIds;
+    bool _benefitAwareSchedulingEnabled = false;
+    std::uint64_t _revision = 0;
 };
 
 } // namespace mvs

@@ -108,32 +108,13 @@ QString resolvedSceneProfile(const QJsonObject &settings,
 QString mvsBackendFromStoredFrames(
     const std::vector<xjw::core::project::StoredDepthFrameRecord> &frames)
 {
-    QString actual_backend;
+    QStringList devices;
+    devices.reserve(static_cast<qsizetype>(frames.size()));
     for (const auto &frame : frames)
     {
-        const QString device = frame.device.trimmed().toLower();
-        const QString backend = (device.startsWith(QStringLiteral("cuda")) ||
-                                 device.startsWith(QStringLiteral("gpu")))
-            ? QStringLiteral("cuda")
-            : device.startsWith(QStringLiteral("opencl"))
-                ? QStringLiteral("opencl")
-                : device.startsWith(QStringLiteral("cpu"))
-                    ? QStringLiteral("cpu")
-                    : QStringLiteral("unknown");
-        if (backend == QStringLiteral("unknown"))
-        {
-            continue;
-        }
-        if (actual_backend.isEmpty())
-        {
-            actual_backend = backend;
-        }
-        else if (actual_backend != backend)
-        {
-            return QStringLiteral("mixed");
-        }
+        devices.push_back(frame.device);
     }
-    return actual_backend.isEmpty() ? QStringLiteral("unknown") : actual_backend;
+    return xjw::gui::project::classifyStoredMvsBackendDevices(devices);
 }
 
 QString sceneProfileFromStoredFrames(
@@ -495,13 +476,9 @@ bool ProjectPointCloudWorkflowController::startWorkflow(
     const QString requested_backend = patchMatchBackendText(
         context->request.patchMatchBackend);
     const QString stored_backend = mvsBackendFromStoredFrames(stored.frames);
-    const bool stored_backend_is_uniform =
-        stored_backend == QStringLiteral("cuda") ||
-        stored_backend == QStringLiteral("opencl") ||
-        stored_backend == QStringLiteral("cpu");
-    const bool stored_backend_matches_request = stored_backend_is_uniform &&
-        (requested_backend == QStringLiteral("auto") ||
-         requested_backend == stored_backend);
+    const bool stored_backend_matches_request =
+        xjw::gui::project::canReuseStoredMvsBackend(
+            requested_backend, stored_backend);
     const bool can_reuse = context->reuseDepthMaps && compatibility.compatible &&
         stored_backend_matches_request;
     context->reusedDepthMaps = can_reuse;

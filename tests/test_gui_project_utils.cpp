@@ -57,6 +57,7 @@
 #include "PhotoStripWidget.h"
 #include "ProjectDashboardWidget.h"
 #include "ProjectManager.h"
+#include "ProjectPointCloudWorkflowController.h"
 #include "ProjectTaskStatusController.h"
 #include "SelectionPropertiesWidget.h"
 #include "MainMenu.h"
@@ -138,6 +139,7 @@
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <array>
 #include <cmath>
@@ -145,6 +147,7 @@
 #include <future>
 #include <memory>
 #include <stdexcept>
+#include <thread>
 #include <vector>
 
 TEST(DepthOverlayDataTest, ResolvesExactReferenceAndRequestedLevels)
@@ -4665,11 +4668,13 @@ TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
     ASSERT_FALSE(source.isEmpty());
 
     const int workerSave = source.indexOf(
-        QStringLiteral("saveQueue.enqueue(i, res, QStringLiteral(\"初始\"))"));
+        QStringLiteral(
+            "std::move(saveReservation), i, res, QStringLiteral(\"初始\")"));
     const int waitBeforeConsistency = source.indexOf(QStringLiteral("saveQueue.waitUntilIdle()"));
     const int consistencyPass = source.indexOf(QStringLiteral("crossCheckDepthConsistency();"));
     const int finalSave = source.indexOf(
-        QStringLiteral("saveQueue.enqueue(i, res, QStringLiteral(\"过滤后\"))"));
+        QStringLiteral(
+            "std::move(saveReservation), i, res, QStringLiteral(\"过滤后\")"));
 
     ASSERT_GE(workerSave, 0);
     ASSERT_GE(waitBeforeConsistency, 0);
@@ -8903,6 +8908,56 @@ TEST(DenseWorkflowConfigTest, MapsExplicitOpenClPatchMatchBackend)
     EXPECT_GT(config.gpuFrameWorkerCount, 0);
 }
 
+TEST(MvsBackendMetadataTest, ClassifiesCudaAndOpenClFramesAsHybrid)
+{
+    using xjw::gui::project::classifyStoredMvsBackendDevices;
+
+    EXPECT_EQ(classifyStoredMvsBackendDevices(
+                  {QStringLiteral("CUDA:0"), QStringLiteral("OpenCL:1")}),
+              QStringLiteral("hybrid"));
+    EXPECT_EQ(classifyStoredMvsBackendDevices(
+                  {QStringLiteral("CUDA:0"), QStringLiteral("CUDA:0")}),
+              QStringLiteral("cuda"));
+    EXPECT_EQ(classifyStoredMvsBackendDevices(
+                  {QStringLiteral("OpenCL:1"), QStringLiteral("OpenCL:1")}),
+              QStringLiteral("opencl"));
+    EXPECT_EQ(classifyStoredMvsBackendDevices(
+                  {QStringLiteral("CUDA:0"), QStringLiteral("CPU")}),
+              QStringLiteral("mixed"));
+    EXPECT_EQ(classifyStoredMvsBackendDevices({QStringLiteral("unavailable")}),
+              QStringLiteral("unknown"));
+}
+
+TEST(MvsBackendMetadataTest, AutoReusesUniformOrHybridAndExplicitRequiresMatch)
+{
+    using xjw::gui::project::canReuseStoredMvsBackend;
+
+    EXPECT_TRUE(canReuseStoredMvsBackend(QStringLiteral("auto"), QStringLiteral("cuda")));
+    EXPECT_TRUE(canReuseStoredMvsBackend(QStringLiteral("auto"), QStringLiteral("opencl")));
+    EXPECT_TRUE(canReuseStoredMvsBackend(QStringLiteral("auto"), QStringLiteral("cpu")));
+    EXPECT_TRUE(canReuseStoredMvsBackend(QStringLiteral("auto"), QStringLiteral("hybrid")));
+    EXPECT_FALSE(canReuseStoredMvsBackend(QStringLiteral("auto"), QStringLiteral("mixed")));
+
+    EXPECT_TRUE(canReuseStoredMvsBackend(QStringLiteral("cuda"), QStringLiteral("cuda")));
+    EXPECT_TRUE(canReuseStoredMvsBackend(QStringLiteral("opencl"), QStringLiteral("opencl")));
+    EXPECT_FALSE(canReuseStoredMvsBackend(QStringLiteral("cuda"), QStringLiteral("opencl")));
+    EXPECT_FALSE(canReuseStoredMvsBackend(QStringLiteral("cuda"), QStringLiteral("hybrid")));
+    EXPECT_FALSE(canReuseStoredMvsBackend(QStringLiteral("opencl"), QStringLiteral("hybrid")));
+}
+
+TEST(CreatePointCloudDialogContractTest, AutoMvsOptionKeepsTokenAndExplainsHybridScheduling)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/dialogs/reconstruction/CreatePointCloudDialog.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(
+        QStringLiteral("自动异构（CUDA + OpenCL，按收益调度）")));
+    EXPECT_TRUE(source.contains(QStringLiteral(
+        "combo->addItem(auto_text, QStringLiteral(\"auto\"))")));
+    EXPECT_TRUE(source.contains(QStringLiteral("每块 GPU 同时只执行一个内核任务")));
+}
+
 TEST(DenseWorkflowConfigTest, MapsMultiHypothesisTargetedGapRecovery)
 {
     QJsonObject json;
@@ -8936,7 +8991,7 @@ TEST(DenseWorkflowConfigTest, MapsMultiHypothesisTargetedGapRecovery)
     EXPECT_FLOAT_EQ(config.postConsistencyResidualMaximumPriorRadius, 0.07f);
 }
 
-TEST(DenseWorkflowConfigTest, DefaultAutoSchedulingBuildsSeparateBackendPlans)
+TEST(DenseWorkflowConfigTest, ExplicitThreadBudgetIsNotCappedAtSeven)
 {
     QJsonObject json;
     json[QStringLiteral("threads")] = 8;
@@ -8946,9 +9001,9 @@ TEST(DenseWorkflowConfigTest, DefaultAutoSchedulingBuildsSeparateBackendPlans)
     const auto config = xjw::gui::project::buildDepthGenConfig(settings, 16);
 
     EXPECT_EQ(config.gpuFrameWorkerCount, 2);
-    EXPECT_EQ(config.cpuFrameWorkerCount, 1);
-    EXPECT_EQ(config.totalCpuThreadBudget, 7);
-    EXPECT_EQ(config.cpuWorkerCount, 3);
+    EXPECT_EQ(config.cpuFrameWorkerCount, 2);
+    EXPECT_EQ(config.totalCpuThreadBudget, 8);
+    EXPECT_EQ(config.cpuWorkerCount, 4);
 }
 
 TEST(DenseWorkflowConfigTest, CpuThreadBudgetIsSharedWithinSelectedBackendFamily)
@@ -8964,8 +9019,21 @@ TEST(DenseWorkflowConfigTest, CpuThreadBudgetIsSharedWithinSelectedBackendFamily
 
     EXPECT_EQ(config.gpuFrameWorkerCount, 2);
     EXPECT_EQ(config.cpuFrameWorkerCount, 2);
-    EXPECT_EQ(config.totalCpuThreadBudget, 7);
-    EXPECT_EQ(config.cpuWorkerCount, 3);
+    EXPECT_EQ(config.totalCpuThreadBudget, 8);
+    EXPECT_EQ(config.cpuWorkerCount, 4);
+}
+
+TEST(DenseWorkflowConfigTest, MissingThreadSettingReservesTwoLogicalProcessors)
+{
+    const auto settings = xjw::gui::project::denseGenerationSettingsFromJson(
+        QJsonObject{});
+    const int hardware_threads = static_cast<int>(
+        std::max(1u, std::thread::hardware_concurrency()));
+    const int expected_threads = std::max(1, hardware_threads - 2);
+
+    EXPECT_EQ(settings.threads, expected_threads);
+    const auto config = xjw::gui::project::buildDepthGenConfig(settings, 16);
+    EXPECT_EQ(config.totalCpuThreadBudget, expected_threads);
 }
 
 TEST(MvsCudaPipelineContractTest, UsesEventsPinnedTransfersAndReusableWorkspace)

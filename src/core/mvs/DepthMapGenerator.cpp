@@ -52,6 +52,7 @@
 #include <limits>
 #include <fstream>
 #include <unordered_map>
+#include <unordered_set>
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -783,6 +784,49 @@ size_t adaptiveSaveQueueCapacity(const SystemMemorySnapshot &snapshot,
     return 2;
 }
 
+uint64_t estimatedSaveQueueProducerBytes(uint64_t largestFrameBytes)
+{
+    constexpr uint64_t kFallbackResidentBytes = 512ull * 1024ull * 1024ull;
+    constexpr uint64_t kEstimatedResultToDepthConfidenceRatio = 8;
+
+    if (largestFrameBytes == 0)
+    {
+        return kFallbackResidentBytes;
+    }
+    return largestFrameBytes >
+            std::numeric_limits<uint64_t>::max() /
+                kEstimatedResultToDepthConfidenceRatio
+        ? std::numeric_limits<uint64_t>::max()
+        : largestFrameBytes * kEstimatedResultToDepthConfidenceRatio;
+}
+
+uint64_t adaptiveSaveQueueResidentByteCapacity(
+    const SystemMemorySnapshot &snapshot,
+    const DepthGenConfig &config,
+    uint64_t largestFrameBytes,
+    size_t maxResidentTasks)
+{
+    constexpr uint64_t kMaximumResidentBytes = 4ull * 1024ull * 1024ull * 1024ull;
+
+    const uint64_t estimatedTaskBytes =
+        estimatedSaveQueueProducerBytes(largestFrameBytes);
+
+    const uint64_t residentTaskCount = static_cast<uint64_t>(
+        std::max<size_t>(1, maxResidentTasks));
+    uint64_t byteCapacity = estimatedTaskBytes >
+            std::numeric_limits<uint64_t>::max() / residentTaskCount
+        ? std::numeric_limits<uint64_t>::max()
+        : estimatedTaskBytes * residentTaskCount;
+
+    const uint64_t memoryBudget = retainedDepthMemoryBudgetBytes(
+        snapshot, config, largestFrameBytes);
+    if (snapshot.valid)
+    {
+        byteCapacity = std::min(byteCapacity, memoryBudget);
+    }
+    return std::max<uint64_t>(1, std::min(byteCapacity, kMaximumResidentBytes));
+}
+
 int preloadImagesWorkerCount(int viewCount, int requestedThreads)
 {
     if (viewCount <= 1)
@@ -800,11 +844,111 @@ class DepthFrameArtifactSaveQueue
 public:
     using SaveFn = std::function<bool(int, const DepthFrameResult &, const QString &)>;
 
-    explicit DepthFrameArtifactSaveQueue(SaveFn saveFn, size_t maxBufferedTasks = 2)
-        : m_saveFn(std::move(saveFn))
-        , m_maxBufferedTasks(std::max<size_t>(1, maxBufferedTasks))
-        , m_worker(&DepthFrameArtifactSaveQueue::run, this)
+    class ProducerReservation
     {
+    public:
+        ProducerReservation() = default;
+
+        ProducerReservation(const ProducerReservation &) = delete;
+        ProducerReservation &operator=(const ProducerReservation &) = delete;
+
+        ProducerReservation(ProducerReservation &&other) noexcept
+            : _owner(other._owner)
+            , _residentBytes(other._residentBytes)
+        {
+            other.disarm();
+        }
+
+        ProducerReservation &operator=(ProducerReservation &&other) noexcept
+        {
+            if (this != &other)
+            {
+                reset();
+                _owner = other._owner;
+                _residentBytes = other._residentBytes;
+                other.disarm();
+            }
+            return *this;
+        }
+
+        ~ProducerReservation()
+        {
+            reset();
+        }
+
+        explicit operator bool() const
+        {
+            return _owner != nullptr;
+        }
+
+        void reset()
+        {
+            if (_owner == nullptr)
+            {
+                return;
+            }
+
+            DepthFrameArtifactSaveQueue *owner = _owner;
+            const uint64_t resident_bytes = _residentBytes;
+            disarm();
+            owner->releaseProducerReservation(resident_bytes);
+        }
+
+    private:
+        friend class DepthFrameArtifactSaveQueue;
+
+        ProducerReservation(DepthFrameArtifactSaveQueue *owner,
+                            uint64_t residentBytes)
+            : _owner(owner)
+            , _residentBytes(residentBytes)
+        {
+        }
+
+        void disarm()
+        {
+            _owner = nullptr;
+            _residentBytes = 0;
+        }
+
+        DepthFrameArtifactSaveQueue *_owner = nullptr;
+        uint64_t _residentBytes = 0;
+    };
+
+    explicit DepthFrameArtifactSaveQueue(SaveFn saveFn,
+                                         size_t workerCount,
+                                         size_t maxResidentTasks,
+                                         uint64_t maxResidentBytes,
+                                         uint64_t producerReservationBytes)
+        : _saveFn(std::move(saveFn))
+        , _workerCount(std::clamp<size_t>(workerCount, 1, 2))
+        , _maxResidentTasks(std::max<size_t>(1, maxResidentTasks))
+        , _maxResidentBytes(std::max<uint64_t>(1, maxResidentBytes))
+        , _producerReservationBytes(std::max<uint64_t>(1, producerReservationBytes))
+    {
+        _workers.reserve(_workerCount);
+        try
+        {
+            for (size_t worker_index = 0; worker_index < _workerCount; ++worker_index)
+            {
+                _workers.emplace_back(&DepthFrameArtifactSaveQueue::run, this);
+            }
+        }
+        catch (...)
+        {
+            {
+                std::lock_guard<std::mutex> lock(_mutex);
+                _stopping = true;
+            }
+            _cv.notify_all();
+            for (std::thread &worker : _workers)
+            {
+                if (worker.joinable())
+                {
+                    worker.join();
+                }
+            }
+            throw;
+        }
     }
 
     ~DepthFrameArtifactSaveQueue()
@@ -812,72 +956,421 @@ public:
         stop();
     }
 
-    void enqueue(int frameIndex, const DepthFrameResult &result, const QString &stageLabel)
+    ProducerReservation reserveProducer(
+        const std::atomic<bool> *cancelFlag = nullptr)
     {
+        const auto wait_start = std::chrono::steady_clock::now();
         {
-            std::unique_lock<std::mutex> lock(m_mutex);
-            m_capacityCv.wait(lock, [this]() {
-                return m_stopping || m_tasks.size() < m_maxBufferedTasks;
-            });
-            if (m_stopping)
+            std::unique_lock<std::mutex> lock(_mutex);
+            while (!_stopping &&
+                   !(cancelFlag && cancelFlag->load()) &&
+                   !canAcceptLocked(_producerReservationBytes))
             {
-                return;
+                _capacityCv.wait_for(lock, std::chrono::milliseconds(25));
             }
-            m_tasks.push_back(SaveTask{frameIndex, result, stageLabel});
+            const auto reservation_time = std::chrono::steady_clock::now();
+            const auto reservation_wait = reservation_time - wait_start;
+            _enqueueWait += reservation_wait;
+            _maxEnqueueWait = std::max(_maxEnqueueWait, reservation_wait);
+            if (_stopping || (cancelFlag && cancelFlag->load()))
+            {
+                return {};
+            }
+
+            if (!_wallStarted)
+            {
+                _wallStarted = true;
+                _wallStart = reservation_time;
+            }
+            _lastActivity = reservation_time;
+            ++_producerReservations;
+            ++_residentTasks;
+            _residentBytes += _producerReservationBytes;
+            _peakResidentTasks = std::max(_peakResidentTasks, _residentTasks);
+            _peakResidentBytes = std::max(_peakResidentBytes, _residentBytes);
         }
-        m_cv.notify_one();
+        return ProducerReservation(this, _producerReservationBytes);
     }
 
-    void waitUntilIdle()
+    void enqueue(ProducerReservation &&reservation,
+                 int frameIndex,
+                 const DepthFrameResult &result,
+                 QString stageLabel)
     {
-        std::unique_lock<std::mutex> lock(m_mutex);
-        m_idleCv.wait(lock, [this]() {
-            return m_tasks.empty() && m_activeTasks == 0;
-        });
+        if (reservation._owner != this)
+        {
+            _failed = true;
+            LOG_ERROR(QStringLiteral(
+                "[MVS] 深度产物保存队列收到无效的生产者内存预约"));
+            return;
+        }
+
+        uint64_t reserved_bytes_for_log = 0;
+        uint64_t resident_bytes = 0;
+        bool queued = false;
+        bool reservation_too_small = false;
+        QString enqueue_exception;
+        try
+        {
+            resident_bytes = depthFrameResultResidentBytes(result);
+            SaveTask task{
+                frameIndex, result, std::move(stageLabel), resident_bytes};
+
+            std::lock_guard<std::mutex> lock(_mutex);
+            const uint64_t reserved_bytes = reservation._residentBytes;
+            reserved_bytes_for_log = reserved_bytes;
+            if (_stopping)
+            {
+                releaseProducerReservationLocked(reserved_bytes);
+                reservation.disarm();
+            }
+            else if (resident_bytes > reserved_bytes)
+            {
+                // The reservation is a conservative upper bound for all matrices
+                // currently retained by DepthFrameResult. Failing closed here keeps
+                // the configured/4 GiB limit a real upper bound if that structure is
+                // extended without updating the estimate.
+                releaseProducerReservationLocked(reserved_bytes);
+                reservation.disarm();
+                _failed = true;
+                ++_failedTasks;
+                reservation_too_small = true;
+            }
+            else
+            {
+                // Commit the queue insertion before transferring reservation
+                // accounting. std::deque::push_back has a strong exception
+                // guarantee, so an allocation failure leaves the armed RAII
+                // reservation to release the producer slot and bytes.
+                _tasks.push_back(std::move(task));
+                --_producerReservations;
+                _residentBytes -= std::min(_residentBytes, reserved_bytes);
+                _residentBytes += resident_bytes;
+                reservation.disarm();
+                _lastActivity = std::chrono::steady_clock::now();
+                queued = true;
+            }
+        }
+        catch (const std::exception &exception)
+        {
+            enqueue_exception = QString::fromUtf8(exception.what());
+        }
+        catch (...)
+        {
+            enqueue_exception = QStringLiteral("未知异常");
+        }
+        if (!enqueue_exception.isEmpty())
+        {
+            {
+                std::lock_guard<std::mutex> lock(_mutex);
+                _failed = true;
+                ++_failedTasks;
+            }
+            LOG_ERROR(QStringLiteral(
+                          "[MVS] 深度帧 %1 保存任务入队异常：%2")
+                          .arg(frameIndex)
+                          .arg(enqueue_exception));
+        }
+        _capacityCv.notify_all();
+        if (reservation_too_small)
+        {
+            LOG_ERROR(QStringLiteral(
+                          "[MVS] 深度帧 %1 保存预约不足: reserved=%2 MiB actual=%3 MiB；"
+                          "为保持保存队列内存硬上限，本帧未入队")
+                          .arg(frameIndex)
+                          .arg(static_cast<double>(reserved_bytes_for_log) /
+                                   (1024.0 * 1024.0),
+                               0,
+                               'f',
+                               1)
+                          .arg(static_cast<double>(resident_bytes) /
+                                   (1024.0 * 1024.0),
+                               0,
+                               'f',
+                               1));
+        }
+        if (queued)
+        {
+            _cv.notify_one();
+        }
+    }
+
+    bool waitUntilIdle(const std::atomic<bool> *cancelFlag = nullptr)
+    {
+        std::unique_lock<std::mutex> lock(_mutex);
+        const auto idle = [this]()
+        {
+            return _tasks.empty() && _activeTasks == 0 &&
+                _producerReservations == 0;
+        };
+        while (!idle())
+        {
+            if (cancelFlag && cancelFlag->load())
+            {
+                return false;
+            }
+            if (cancelFlag)
+            {
+                _idleCv.wait_for(lock, std::chrono::milliseconds(25));
+            }
+            else
+            {
+                _idleCv.wait(lock);
+            }
+        }
+        return true;
     }
 
     void cancel()
     {
         {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            m_dropPendingTasks = true;
-            m_stopping = true;
-            m_tasks.clear();
-            if (m_activeTasks == 0)
+            std::lock_guard<std::mutex> lock(_mutex);
+            _dropPendingTasks = true;
+            _stopping = true;
+            dropPendingTasksLocked();
+            if (_wallStarted)
             {
-                m_idleCv.notify_all();
+                _lastActivity = std::chrono::steady_clock::now();
+            }
+            if (_activeTasks == 0 && _producerReservations == 0)
+            {
+                _idleCv.notify_all();
             }
         }
-        m_capacityCv.notify_all();
-        m_cv.notify_all();
+        _capacityCv.notify_all();
+        _cv.notify_all();
     }
 
     void stop()
     {
         {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            m_stopping = true;
+            std::lock_guard<std::mutex> lock(_mutex);
+            _stopping = true;
         }
-        m_capacityCv.notify_all();
-        m_cv.notify_all();
-        if (m_worker.joinable())
+        _capacityCv.notify_all();
+        _cv.notify_all();
+        for (std::thread &worker : _workers)
         {
-            m_worker.join();
+            if (worker.joinable())
+            {
+                worker.join();
+            }
         }
+        logSummaryOnce();
     }
 
     bool failed() const
     {
-        return m_failed.load();
+        return _failed.load();
     }
 
 private:
+    struct MatAllocationSpan
+    {
+        std::uintptr_t begin = 0;
+        std::uintptr_t end = 0;
+    };
+
     struct SaveTask
     {
         int frameIndex = -1;
         DepthFrameResult result;
         QString stageLabel;
+        uint64_t residentBytes = 0;
     };
+
+    static void appendMatAllocationSpan(
+        const cv::Mat &matrix,
+        std::vector<MatAllocationSpan> &spans)
+    {
+        if (matrix.empty() || matrix.datastart == nullptr || matrix.dataend == nullptr)
+        {
+            return;
+        }
+
+        const std::uintptr_t begin = reinterpret_cast<std::uintptr_t>(matrix.datastart);
+        const std::uintptr_t end = reinterpret_cast<std::uintptr_t>(matrix.dataend);
+        if (end > begin)
+        {
+            spans.push_back({begin, end});
+        }
+    }
+
+    static void appendSharedMatAllocationSpan(
+        const QSharedPointer<cv::Mat> &matrix,
+        std::vector<MatAllocationSpan> &spans)
+    {
+        if (matrix)
+        {
+            appendMatAllocationSpan(*matrix, spans);
+        }
+    }
+
+    static uint64_t depthFrameResultResidentBytes(const DepthFrameResult &result)
+    {
+        std::vector<MatAllocationSpan> spans;
+        spans.reserve(32 + result.intermediatePyramidLevels.size() * 6);
+        appendSharedMatAllocationSpan(result.depthMap, spans);
+        appendSharedMatAllocationSpan(result.confidence, spans);
+        appendSharedMatAllocationSpan(result.normalMap, spans);
+        appendSharedMatAllocationSpan(result.supportCount, spans);
+        appendSharedMatAllocationSpan(result.geometrySupportCount, spans);
+        appendSharedMatAllocationSpan(result.geometrySourceMask, spans);
+        appendSharedMatAllocationSpan(result.inverseDepthMean, spans);
+        appendSharedMatAllocationSpan(result.inverseDepthRelativeSpread, spans);
+        appendSharedMatAllocationSpan(result.adaptiveGeometrySupportWeight, spans);
+        appendSharedMatAllocationSpan(result.adaptiveGeometryEffectiveViewCount, spans);
+        appendSharedMatAllocationSpan(result.adaptiveGeometryConflictRatio, spans);
+        appendSharedMatAllocationSpan(result.crossViewRepairedMask, spans);
+        appendSharedMatAllocationSpan(result.targetedGapRecoveredMask, spans);
+        appendSharedMatAllocationSpan(result.residualReestimatedMask, spans);
+        appendSharedMatAllocationSpan(result.depthProvenance, spans);
+        appendSharedMatAllocationSpan(result.missingReasonMap, spans);
+        appendSharedMatAllocationSpan(result.validMask, spans);
+        appendSharedMatAllocationSpan(result.supportRegionMask, spans);
+        for (const DepthLevelResult &level : result.intermediatePyramidLevels)
+        {
+            appendMatAllocationSpan(level.depth, spans);
+            appendMatAllocationSpan(level.normalMap, spans);
+            appendMatAllocationSpan(level.confidence, spans);
+            appendMatAllocationSpan(level.supportCount, spans);
+            appendMatAllocationSpan(level.uncertainty, spans);
+            appendMatAllocationSpan(level.validMask, spans);
+        }
+
+        if (spans.empty())
+        {
+            return 0;
+        }
+        std::sort(spans.begin(), spans.end(), [](const MatAllocationSpan &left,
+                                                  const MatAllocationSpan &right)
+        {
+            return left.begin < right.begin ||
+                (left.begin == right.begin && left.end < right.end);
+        });
+
+        uint64_t resident_bytes = 0;
+        std::uintptr_t allocation_begin = spans.front().begin;
+        std::uintptr_t allocation_end = spans.front().end;
+        for (size_t index = 1; index < spans.size(); ++index)
+        {
+            const MatAllocationSpan &span = spans[index];
+            if (span.begin <= allocation_end)
+            {
+                allocation_end = std::max(allocation_end, span.end);
+                continue;
+            }
+            resident_bytes += static_cast<uint64_t>(allocation_end - allocation_begin);
+            allocation_begin = span.begin;
+            allocation_end = span.end;
+        }
+        resident_bytes += static_cast<uint64_t>(allocation_end - allocation_begin);
+        return resident_bytes;
+    }
+
+    bool canAcceptLocked(uint64_t taskResidentBytes) const
+    {
+        if (_residentTasks == 0)
+        {
+            return true;
+        }
+        if (_residentTasks >= _maxResidentTasks ||
+            _residentBytes >= _maxResidentBytes)
+        {
+            return false;
+        }
+        return taskResidentBytes <= _maxResidentBytes - _residentBytes;
+    }
+
+    void releaseProducerReservationLocked(uint64_t residentBytes)
+    {
+        if (_producerReservations == 0 || _residentTasks == 0)
+        {
+            return;
+        }
+        --_producerReservations;
+        --_residentTasks;
+        _residentBytes -= std::min(_residentBytes, residentBytes);
+        _lastActivity = std::chrono::steady_clock::now();
+        if (_tasks.empty() && _activeTasks == 0 &&
+            _producerReservations == 0)
+        {
+            _idleCv.notify_all();
+        }
+    }
+
+    void releaseProducerReservation(uint64_t residentBytes)
+    {
+        {
+            std::lock_guard<std::mutex> lock(_mutex);
+            releaseProducerReservationLocked(residentBytes);
+        }
+        _capacityCv.notify_all();
+    }
+
+    void dropPendingTasksLocked()
+    {
+        for (const SaveTask &task : _tasks)
+        {
+            _residentBytes -= std::min(_residentBytes, task.residentBytes);
+        }
+        _residentTasks -= std::min(_residentTasks, _tasks.size());
+        _tasks.clear();
+    }
+
+    void logSummaryOnce()
+    {
+        std::chrono::steady_clock::duration wall;
+        std::chrono::steady_clock::duration enqueue_wait;
+        std::chrono::steady_clock::duration max_enqueue_wait;
+        std::chrono::steady_clock::duration busy;
+        uint64_t peak_resident_bytes = 0;
+        size_t peak_resident_tasks = 0;
+        size_t saved_tasks = 0;
+        size_t failed_tasks = 0;
+        {
+            std::lock_guard<std::mutex> lock(_mutex);
+            if (_summaryLogged)
+            {
+                return;
+            }
+            _summaryLogged = true;
+            if (_wallStarted && _lastActivity >= _wallStart)
+            {
+                wall = _lastActivity - _wallStart;
+            }
+            enqueue_wait = _enqueueWait;
+            max_enqueue_wait = _maxEnqueueWait;
+            busy = _busy;
+            peak_resident_bytes = _peakResidentBytes;
+            peak_resident_tasks = _peakResidentTasks;
+            saved_tasks = _savedTasks;
+            failed_tasks = _failedTasks;
+        }
+
+        const double wall_ms = std::chrono::duration<double, std::milli>(wall).count();
+        const double enqueue_wait_ms =
+            std::chrono::duration<double, std::milli>(enqueue_wait).count();
+        const double max_enqueue_wait_ms =
+            std::chrono::duration<double, std::milli>(max_enqueue_wait).count();
+        const double busy_ms = std::chrono::duration<double, std::milli>(busy).count();
+        LOG_INFO(QStringLiteral(
+                     "[MVS] 深度产物保存队列统计: workers=%1 task_limit=%2 "
+                     "byte_limit=%3 MiB wall=%4 ms enqueue_wait_total=%5 ms "
+                     "enqueue_wait_max=%6 ms busy=%7 ms peak_resident_tasks=%8 "
+                     "peak_resident=%9 MiB saved=%10 failed=%11")
+                     .arg(_workerCount)
+                     .arg(_maxResidentTasks)
+                     .arg(static_cast<double>(_maxResidentBytes) / (1024.0 * 1024.0), 0, 'f', 1)
+                     .arg(wall_ms, 0, 'f', 1)
+                     .arg(enqueue_wait_ms, 0, 'f', 1)
+                     .arg(max_enqueue_wait_ms, 0, 'f', 1)
+                     .arg(busy_ms, 0, 'f', 1)
+                     .arg(peak_resident_tasks)
+                     .arg(static_cast<double>(peak_resident_bytes) / (1024.0 * 1024.0), 0, 'f', 1)
+                     .arg(saved_tasks)
+                     .arg(failed_tasks));
+    }
 
     void run()
     {
@@ -885,77 +1378,150 @@ private:
         {
             SaveTask task;
             {
-                std::unique_lock<std::mutex> lock(m_mutex);
-                m_cv.wait(lock, [this]() {
-                    return m_stopping || !m_tasks.empty();
+                std::unique_lock<std::mutex> lock(_mutex);
+                _cv.wait(lock, [this]() {
+                    return _stopping || !_tasks.empty();
                 });
 
-                if (m_tasks.empty())
+                if (_tasks.empty())
                 {
-                    if (m_stopping)
+                    if (_stopping)
                     {
                         break;
                     }
                     continue;
                 }
 
-                if (m_dropPendingTasks)
+                if (_dropPendingTasks)
                 {
-                    m_tasks.clear();
-                    if (m_activeTasks == 0)
+                    dropPendingTasksLocked();
+                    if (_activeTasks == 0 && _producerReservations == 0)
                     {
-                        m_idleCv.notify_all();
+                        _idleCv.notify_all();
                     }
-                    if (m_stopping)
+                    if (_stopping)
                     {
                         break;
                     }
                     continue;
                 }
 
-                task = m_tasks.front();
-                m_tasks.pop_front();
-                ++m_activeTasks;
-                m_capacityCv.notify_one();
+                task = std::move(_tasks.front());
+                _tasks.pop_front();
+                ++_activeTasks;
             }
 
-            if (!m_saveFn(task.frameIndex, task.result, task.stageLabel))
+            const auto busy_start = std::chrono::steady_clock::now();
+            bool saved = false;
+            bool save_exception_occurred = false;
+            std::array<char, 512> save_exception{};
+            try
             {
-                m_failed = true;
+                saved = _saveFn(task.frameIndex, task.result, task.stageLabel);
+            }
+            catch (const std::exception &exception)
+            {
+                save_exception_occurred = true;
+                std::snprintf(save_exception.data(),
+                              save_exception.size(),
+                              "%s",
+                              exception.what());
+            }
+            catch (...)
+            {
+                save_exception_occurred = true;
+                std::snprintf(save_exception.data(),
+                              save_exception.size(),
+                              "%s",
+                              "unknown exception");
+            }
+            const auto busy_end = std::chrono::steady_clock::now();
+            const auto busy_elapsed = busy_end - busy_start;
+            if (!saved)
+            {
+                _failed = true;
             }
 
             {
-                std::lock_guard<std::mutex> lock(m_mutex);
-                --m_activeTasks;
-                if (m_tasks.empty() && m_activeTasks == 0)
+                std::lock_guard<std::mutex> lock(_mutex);
+                _busy += busy_elapsed;
+                if (saved)
                 {
-                    m_idleCv.notify_all();
+                    ++_savedTasks;
+                }
+                else
+                {
+                    ++_failedTasks;
+                }
+                --_activeTasks;
+                --_residentTasks;
+                _residentBytes -= std::min(_residentBytes, task.residentBytes);
+                _lastActivity = std::max(_lastActivity, busy_end);
+                if (_tasks.empty() && _activeTasks == 0 &&
+                    _producerReservations == 0)
+                {
+                    _idleCv.notify_all();
+                }
+            }
+            _capacityCv.notify_all();
+            if (save_exception_occurred)
+            {
+                // Accounting is already complete. Keep diagnostic formatting
+                // behind a second exception boundary so low-memory logging can
+                // never escape this std::thread.
+                try
+                {
+                    LOG_ERROR(QStringLiteral(
+                                  "[MVS] 深度帧 %1 保存线程异常：%2")
+                                  .arg(task.frameIndex)
+                                  .arg(QString::fromUtf8(save_exception.data())));
+                }
+                catch (...)
+                {
                 }
             }
         }
 
         {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            if (m_tasks.empty() && m_activeTasks == 0)
+            std::lock_guard<std::mutex> lock(_mutex);
+            if (_tasks.empty() && _activeTasks == 0 &&
+                _producerReservations == 0)
             {
-                m_idleCv.notify_all();
+                _idleCv.notify_all();
             }
-            m_capacityCv.notify_all();
         }
+        _capacityCv.notify_all();
     }
 
-    SaveFn m_saveFn;
-    std::deque<SaveTask> m_tasks;
-    mutable std::mutex m_mutex;
-    std::condition_variable m_cv;
-    std::condition_variable m_capacityCv;
-    std::condition_variable m_idleCv;
-    std::thread m_worker;
-    std::atomic<bool> m_failed{false};
-    size_t m_maxBufferedTasks = 1;
-    bool m_stopping = false;
-    bool m_dropPendingTasks = false;
-    int m_activeTasks = 0;
+    SaveFn _saveFn;
+    std::deque<SaveTask> _tasks;
+    mutable std::mutex _mutex;
+    std::condition_variable _cv;
+    std::condition_variable _capacityCv;
+    std::condition_variable _idleCv;
+    std::vector<std::thread> _workers;
+    std::atomic<bool> _failed{false};
+    size_t _workerCount = 1;
+    size_t _maxResidentTasks = 1;
+    uint64_t _maxResidentBytes = 1;
+    uint64_t _producerReservationBytes = 1;
+    uint64_t _residentBytes = 0;
+    uint64_t _peakResidentBytes = 0;
+    size_t _residentTasks = 0;
+    size_t _producerReservations = 0;
+    size_t _peakResidentTasks = 0;
+    size_t _savedTasks = 0;
+    size_t _failedTasks = 0;
+    std::chrono::steady_clock::duration _enqueueWait{};
+    std::chrono::steady_clock::duration _maxEnqueueWait{};
+    std::chrono::steady_clock::duration _busy{};
+    std::chrono::steady_clock::time_point _wallStart{};
+    std::chrono::steady_clock::time_point _lastActivity{};
+    bool _stopping = false;
+    bool _dropPendingTasks = false;
+    bool _summaryLogged = false;
+    bool _wallStarted = false;
+    int _activeTasks = 0;
 };
 
 bool writeFastDepthMatStorage(const std::string &path, const cv::Mat &matrix, std::string *errorMsg)
@@ -1095,7 +1661,7 @@ void parallelForRows(int rowCount, int workerCount, Fn &&fn)
     }
 }
 
-int consistencyRowWorkerCount(const DepthGenConfig &config)
+int resolvedTotalCpuThreadBudget(const DepthGenConfig &config)
 {
     const int hardware_threads = static_cast<int>(
         std::max(1u, std::thread::hardware_concurrency()));
@@ -1221,6 +1787,37 @@ bool isCudaMemoryFailure(const std::string &message)
     return lower.find("out of memory") != std::string::npos
         || lower.find("cuda_error_memory") != std::string::npos
         || (lower.find("cuda") != std::string::npos && lower.find("memory") != std::string::npos);
+}
+
+PatchMatchConfig patchMatchConfigForRecordedWorker(
+    PatchMatchConfig config,
+    std::string_view workerId)
+{
+    std::optional<DepthComputeWorker> worker = depthComputeWorkerFromId(workerId);
+    if (!worker && asciiLowerCopy(workerId) == "gpu")
+    {
+        worker = DepthComputeWorker{DepthComputeBackend::Cuda, -1};
+    }
+    if (!worker)
+    {
+        return config;
+    }
+
+    config.backend = worker->backend == DepthComputeBackend::Cuda
+        ? PatchMatchBackend::Cuda
+        : worker->backend == DepthComputeBackend::OpenCl
+            ? PatchMatchBackend::OpenCl
+            : PatchMatchBackend::Cpu;
+    config.useCuda = worker->backend == DepthComputeBackend::Cuda;
+    config.cudaDeviceIndex = worker->backend == DepthComputeBackend::Cuda
+        ? worker->deviceIndex
+        : -1;
+    config.openClDeviceIndex = worker->backend == DepthComputeBackend::OpenCl
+        ? worker->deviceIndex
+        : -1;
+    config.cudaFallbackToCpu = false;
+    config.openClFallbackToCpu = false;
+    return config;
 }
 
 bool estimatePatchMatchWithAdaptiveCuda(
@@ -2409,7 +3006,7 @@ void DepthMapGenerator::prepareFrameCaches()
 #ifdef _OPENMP
     {
         const int hwThreads = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
-        const int requested = std::max(1, _config.cpuWorkerCount);
+        const int requested = resolvedTotalCpuThreadBudget(_config);
         visibilityWorkerCount = pointCount >= kParallelVisibilityPointThreshold && NV > 1
             ? std::clamp(std::min(requested, hwThreads), 1, 16)
             : 1;
@@ -2992,7 +3589,8 @@ void DepthMapGenerator::preloadImages()
     _validRegionMasks.resize(NV);
     _projectMaskLoaded.assign(static_cast<size_t>(NV), 0);
 
-    const int workerCount = preloadImagesWorkerCount(NV, _config.cpuWorkerCount);
+    const int workerCount = preloadImagesWorkerCount(
+        NV, resolvedTotalCpuThreadBudget(_config));
     LOG_DEBUG("[MVS][预加载] workers=%d views=%d", workerCount, NV);
     if (workerCount <= 0)
     {
@@ -5508,7 +6106,7 @@ void DepthMapGenerator::crossCheckDepthConsistency()
         const cv::Mat &depthBackup = origDepths[static_cast<std::size_t>(i)];
 
         const auto frame_start = Clock::now();
-        const int rowWorkers = consistencyRowWorkerCount(_config);
+        const int rowWorkers = resolvedTotalCpuThreadBudget(_config);
         const std::vector<int> consistencySources =
             consistencySourceIndicesForFrame(_depthFrames, i, NV);
         const std::vector<int> repairSources =
@@ -6024,7 +6622,7 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
         std::min(2, view_count));
     const int row_workers = std::max(
         1,
-        consistencyRowWorkerCount(_config) / residual_frame_workers);
+        resolvedTotalCpuThreadBudget(_config) / residual_frame_workers);
     parallelForRows(view_count, residual_frame_workers, [&](int frame_index)
     {
         if (_cancelled.load())
@@ -6173,7 +6771,8 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
                 group_masks.push_back(
                     source_masks[static_cast<std::size_t>(source_ordinal)]);
             }
-            PatchMatchConfig patch_match = _config.patchMatch;
+            PatchMatchConfig patch_match = patchMatchConfigForRecordedWorker(
+                _config.patchMatch, frame.device);
             patch_match.numIterations = std::clamp(
                 std::max(6, patch_match.numIterations / 2), 6, 10);
             patch_match.patchHalf = std::max(3, patch_match.patchHalf - 1);
@@ -6423,7 +7022,7 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
         }
     };
 
-    const int row_workers = consistencyRowWorkerCount(_config);
+    const int row_workers = resolvedTotalCpuThreadBudget(_config);
     int completed_frames = 0;
 
     for (int frame_index = 0; frame_index < view_count; ++frame_index)
@@ -6958,7 +7557,9 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                         group_masks.push_back(residual_source_masks[
                             static_cast<std::size_t>(source_ordinal)]);
                     }
-                    PatchMatchConfig patch_match = _config.patchMatch;
+                    PatchMatchConfig patch_match = patchMatchConfigForRecordedWorker(
+                        _config.patchMatch,
+                        _depthFrames[static_cast<std::size_t>(frame_index)].device);
                     patch_match.numIterations = std::clamp(
                         std::max(6, patch_match.numIterations / 2), 6, 10);
                     patch_match.patchHalf = std::max(
@@ -8867,6 +9468,13 @@ void DepthMapGenerator::runInBackgroundImpl()
     const auto runStart = Clock::now();
     bool allOk = true;
     const int NV = static_cast<int>(_views.size());
+    const int runCpuThreadBudget = resolvedTotalCpuThreadBudget(_config);
+#ifdef _OPENMP
+    // This background thread owns the serial preparation, consistency, and
+    // fusion stages. Keep their implicit OpenMP teams inside the same budget
+    // used by frame workers instead of falling back to all logical CPUs.
+    omp_set_num_threads(runCpuThreadBudget);
+#endif
 
     if (!_config.runDepthEstimation)
     {
@@ -8938,6 +9546,7 @@ void DepthMapGenerator::runInBackgroundImpl()
 
     std::vector<DepthComputeWorker> physicalAcceleratorWorkers;
     std::vector<std::unique_ptr<GpuDeviceLeaseSet>> acceleratorDeviceLeases;
+    std::unordered_set<std::string> selectedPhysicalDeviceIdentities;
     QStringList acceleratorPreparationFailures;
     auto acquire_device_lease = [&acceleratorPreparationFailures](
                                     const GpuDeviceDescriptor &descriptor)
@@ -8972,6 +9581,7 @@ void DepthMapGenerator::runInBackgroundImpl()
         }
         physicalAcceleratorWorkers.push_back(
             {DepthComputeBackend::Cuda, device_index});
+        selectedPhysicalDeviceIdentities.insert(descriptor.physicalIdentity);
         acceleratorDeviceLeases.push_back(std::move(lease));
     };
 
@@ -8989,7 +9599,7 @@ void DepthMapGenerator::runInBackgroundImpl()
     }
     const bool cudaAvailable = !physicalAcceleratorWorkers.empty();
     const bool probeOpenCl = configuredBackend == PatchMatchBackend::OpenCl ||
-        (automaticAcceleration && !cudaAvailable);
+        automaticAcceleration;
     const std::vector<OpenClDeviceInfo> detectedOpenClDevices = probeOpenCl
         ? PatchMatchDepthEstimator::openClDevices()
         : std::vector<OpenClDeviceInfo>{};
@@ -9005,6 +9615,25 @@ void DepthMapGenerator::runInBackgroundImpl()
         const GpuDeviceDescriptor descriptor{
             device.physicalDeviceIdentity,
             device.vendor + " " + device.name};
+        if (selectedPhysicalDeviceIdentities.contains(descriptor.physicalIdentity))
+        {
+            LOG_DEBUG(QStringLiteral(
+                          "[MVS] 跳过与已选 CUDA 设备重复的 OpenCL 接口: index=%1 device=%2 identity=%3")
+                          .arg(device.index)
+                          .arg(QString::fromStdString(device.name))
+                          .arg(QString::fromStdString(descriptor.physicalIdentity)));
+            continue;
+        }
+        if (shouldSkipUnstableOpenClCudaAlias(
+                device.vendor, descriptor.physicalIdentity, cudaAvailable))
+        {
+            LOG_WARN(QStringLiteral(
+                         "[MVS] 跳过无法取得稳定 PCI 身份的 NVIDIA OpenCL 接口："
+                         "index=%1 device=%2；CUDA 已接管该厂商设备，避免重复执行通道")
+                         .arg(device.index)
+                         .arg(QString::fromStdString(device.name)));
+            continue;
+        }
         std::unique_ptr<GpuDeviceLeaseSet> lease = acquire_device_lease(descriptor);
         if (!lease)
         {
@@ -9030,6 +9659,7 @@ void DepthMapGenerator::runInBackgroundImpl()
         selectedOpenClDevices.push_back(device);
         physicalAcceleratorWorkers.push_back(
             {DepthComputeBackend::OpenCl, device.index});
+        selectedPhysicalDeviceIdentities.insert(descriptor.physicalIdentity);
         acceleratorDeviceLeases.push_back(std::move(lease));
     }
     const std::optional<DepthComputeBackend> requestedBackend =
@@ -9046,9 +9676,12 @@ void DepthMapGenerator::runInBackgroundImpl()
         cudaAvailable,
         !selectedOpenClDevices.empty(),
         _config.patchMatch.useCuda);
+    const bool openClAvailable = !selectedOpenClDevices.empty();
+    const bool heterogeneousAuto = configuredBackend == PatchMatchBackend::Auto &&
+        automaticAcceleration && cudaAvailable && openClAvailable;
     const bool requestedBackendUnavailable =
         (effectiveBackend == DepthComputeBackend::Cuda && !cudaAvailable) ||
-        (effectiveBackend == DepthComputeBackend::OpenCl && selectedOpenClDevices.empty());
+        (effectiveBackend == DepthComputeBackend::OpenCl && !openClAvailable);
     if (requestedBackendUnavailable)
     {
         QString message = QStringLiteral(
@@ -9066,15 +9699,18 @@ void DepthMapGenerator::runInBackgroundImpl()
         emitFinishedOnce(false);
         return;
     }
-    // Resolve Auto once before computing the workspace hash. All initial and
-    // recovery passes then use one backend family, and a later run on different
-    // hardware cannot reuse frames produced by another backend family.
-    _config.patchMatch.backend = effectiveBackend == DepthComputeBackend::Cuda
-        ? PatchMatchBackend::Cuda
-        : effectiveBackend == DepthComputeBackend::OpenCl
-            ? PatchMatchBackend::OpenCl
-            : PatchMatchBackend::Cpu;
-    _config.patchMatch.useCuda = effectiveBackend == DepthComputeBackend::Cuda;
+    // A heterogeneous Auto batch retains the Auto token in the workspace hash;
+    // single-family and explicit batches keep the resolved strict backend. This
+    // prevents a CUDA-only resume from silently reusing a CUDA+OpenCL workset.
+    _config.patchMatch.backend = heterogeneousAuto
+        ? PatchMatchBackend::Auto
+        : effectiveBackend == DepthComputeBackend::Cuda
+            ? PatchMatchBackend::Cuda
+            : effectiveBackend == DepthComputeBackend::OpenCl
+                ? PatchMatchBackend::OpenCl
+                : PatchMatchBackend::Cpu;
+    _config.patchMatch.useCuda = heterogeneousAuto ||
+        effectiveBackend == DepthComputeBackend::Cuda;
     _config.patchMatch.cudaFallbackToCpu = false;
     _config.patchMatch.openClFallbackToCpu = false;
 
@@ -9087,8 +9723,11 @@ void DepthMapGenerator::runInBackgroundImpl()
     }
     else if (configuredBackend == PatchMatchBackend::Auto)
     {
-        backend_message = QStringLiteral("深度估计后端：Auto 已选择 %1（CUDA → OpenCL → CPU）")
-                              .arg(effective_backend_name);
+        backend_message = heterogeneousAuto
+            ? QStringLiteral(
+                  "深度估计后端：Auto 异构调度已启用 CUDA + OpenCL（逐帧收益调度）")
+            : QStringLiteral("深度估计后端：Auto 已选择 %1")
+                  .arg(effective_backend_name);
     }
     else
     {
@@ -9225,8 +9864,6 @@ void DepthMapGenerator::runInBackgroundImpl()
         float score = 0.f;
     };
 
-    const int cpuThreadCount = std::max(1, _config.cpuWorkerCount);
-
     std::vector<FramePriority> framePriorities;
     framePriorities.reserve(static_cast<size_t>(NV));
     for (int i = 0; i < NV; ++i)
@@ -9277,11 +9914,11 @@ void DepthMapGenerator::runInBackgroundImpl()
     {
         frameTasks.push_back({priority.viewIndex, priority.score});
     }
-    DepthComputeScheduler computeScheduler(std::move(frameTasks));
-
     const int pendingFrameCount = static_cast<int>(framePriorities.size());
     const int maxWorkersByPendingFrames = std::max(1, pendingFrameCount);
-    const int maxFrameWorkers = std::min(4, maxWorkersByPendingFrames);
+    const int maxFrameWorkers = std::min(
+        std::max(4, static_cast<int>(physicalAcceleratorWorkers.size())),
+        maxWorkersByPendingFrames);
     if (effectiveBackend != DepthComputeBackend::Cpu &&
         physicalAcceleratorWorkers.empty() && pendingFrameCount > 0)
     {
@@ -9311,8 +9948,9 @@ void DepthMapGenerator::runInBackgroundImpl()
         {
             return worker.backend == DepthComputeBackend::OpenCl;
         }));
-    // Auto resolves to one backend before this pool is built. Additional host
-    // slots overlap frame preparation without mixing CUDA, OpenCL, and CPU work.
+    // Every leased physical accelerator is represented first. Additional host
+    // slots overlap frame preparation, while the per-device execution locks
+    // retain one kernel lane for each physical GPU.
     const int requestedCudaHostSlots = physicalCudaWorkers > 0
         ? std::max(physicalCudaWorkers, _config.gpuFrameWorkerCount)
         : 0;
@@ -9324,17 +9962,35 @@ void DepthMapGenerator::runInBackgroundImpl()
                                     requestedCudaHostSlots,
                                     requestedOpenClHostSlots,
                                     static_cast<std::size_t>(maxFrameWorkers));
+    const bool benefitAwareScheduling = heterogeneousAuto &&
+        frameTasks.size() >= physicalAcceleratorWorkers.size();
+    DepthComputeScheduler computeScheduler(
+        std::move(frameTasks), benefitAwareScheduling, acceleratorWorkers);
 
     const int gpuFrameWorkers = static_cast<int>(acceleratorWorkers.size());
     const int cpuFrameWorkers = effectiveBackend == DepthComputeBackend::Cpu
         ? std::clamp(std::max(1, _config.cpuFrameWorkerCount), 1, maxFrameWorkers)
         : 0;
+    const int activeFrameWorkerCount = std::max(
+        1, gpuFrameWorkers + cpuFrameWorkers);
+    const int totalCpuThreadBudget = runCpuThreadBudget;
+    const int minimumCpuThreadsPerWorker = std::max(
+        1, totalCpuThreadBudget / activeFrameWorkerCount);
+    const int cpuThreadRemainder = std::max(
+        0, totalCpuThreadBudget -
+            minimumCpuThreadsPerWorker * activeFrameWorkerCount);
+    const int maximumCpuThreadsPerWorker = minimumCpuThreadsPerWorker +
+        (cpuThreadRemainder > 0 ? 1 : 0);
 
+    const QString scheduling_backend_name = heterogeneousAuto
+        ? QStringLiteral("Hybrid(CUDA+OpenCL)")
+        : QString::fromLatin1(depthComputeBackendName(effectiveBackend));
     LOG_INFO(QStringLiteral("[MVS] 深度估计调度: backend=%1 cuda_devices=%2 opencl_devices=%3 "
                             "physical_gpu_workers=%4 gpu_host_slots=%5 "
                             "cuda_host_slots=%6 opencl_host_slots=%7 cpu_frame_workers=%8 "
-                            "cpu_pixel_threads=%9 views=%10 pending=%11")
-                 .arg(QString::fromLatin1(depthComputeBackendName(effectiveBackend)))
+                            "cpu_thread_budget=%9 cpu_pixel_threads=%10..%11 views=%12 "
+                            "pending=%13 benefit_aware=%14")
+                 .arg(scheduling_backend_name)
                  .arg(cudaDeviceCount)
                  .arg(selectedOpenClDevices.size())
                  .arg(physicalAcceleratorWorkers.size())
@@ -9342,9 +9998,12 @@ void DepthMapGenerator::runInBackgroundImpl()
                  .arg(requestedCudaHostSlots)
                  .arg(requestedOpenClHostSlots)
                  .arg(cpuFrameWorkers)
-                 .arg(cpuThreadCount)
+                 .arg(totalCpuThreadBudget)
+                 .arg(minimumCpuThreadsPerWorker)
+                 .arg(maximumCpuThreadsPerWorker)
                  .arg(NV)
-                 .arg(static_cast<qulonglong>(computeScheduler.pendingTaskCount())));
+                 .arg(static_cast<qulonglong>(computeScheduler.pendingTaskCount()))
+                 .arg(benefitAwareScheduling ? 1 : 0));
     if (skippedFrames > 0)
     {
         LOG_INFO(QStringLiteral("[MVS] 续跑模式：跳过已存在深度图 %1 帧").arg(skippedFrames));
@@ -9371,26 +10030,33 @@ void DepthMapGenerator::runInBackgroundImpl()
         PatchMatchDepthEstimator::resetOpenClExecutionStats();
     }
 
+    const int physicalGpuCount = static_cast<int>(physicalAcceleratorWorkers.size());
+    const size_t saveWorkerCount = !retainDepthFrames && physicalGpuCount >= 2
+        ? 2
+        : 1;
     const size_t maxBufferedSaveTasks =
         adaptiveSaveQueueCapacity(initialMemory, _config, largestFrameBytes);
+    const size_t maxResidentSaveTasks = maxBufferedSaveTasks + saveWorkerCount;
+    const uint64_t maxResidentSaveBytes = adaptiveSaveQueueResidentByteCapacity(
+        initialMemory,
+        _config,
+        largestFrameBytes,
+        maxResidentSaveTasks);
+    const uint64_t producerSaveReservationBytes =
+        estimatedSaveQueueProducerBytes(largestFrameBytes);
     DepthFrameArtifactSaveQueue saveQueue(
         [this](int frameIndex, const DepthFrameResult &result, const QString &stageLabel)
         {
             return saveDepthFrameArtifacts(frameIndex, result, stageLabel);
         },
-        maxBufferedSaveTasks);
+        saveWorkerCount,
+        maxResidentSaveTasks,
+        maxResidentSaveBytes,
+        producerSaveReservationBytes);
 
-    const int physicalGpuCount = static_cast<int>(physicalAcceleratorWorkers.size());
-    auto emitDepthProgress = [this,
-                              NV,
-                              physicalGpuCount,
-                              &completedTasks,
-                              &activeGpuTasks,
-                              &activeCpuTasks,
-                              &computeScheduler](
-                                 const QString &workerTag,
-                                 int frameIndex,
-                                 bool pickedTask)
+    auto emitDepthProgress =
+        [this, NV, physicalGpuCount, &completedTasks, &activeGpuTasks, &activeCpuTasks, &computeScheduler](
+            const QString& workerTag, int frameIndex, bool pickedTask)
     {
         const int done = completedTasks.load();
         const int gpuActive = activeGpuTasks.load();
@@ -9424,6 +10090,7 @@ void DepthMapGenerator::runInBackgroundImpl()
         emit progressChanged(stage, ratio);
     };
 
+    std::atomic<bool> workerExceptionReported{false};
     auto workerFunc = [this,
                        NV,
                        initialMemoryDecision,
@@ -9435,58 +10102,204 @@ void DepthMapGenerator::runInBackgroundImpl()
                        &anyFailure,
                        &computeScheduler,
                        &emitDepthProgress,
-                       &saveQueue](DepthComputeWorker worker) {
+                       &saveQueue,
+                       &workerExceptionReported](DepthComputeWorker worker, int assignedCpuThreadCount)
+    {
+#ifdef _OPENMP
+        // Each host slot is a separate std::thread. Set its OpenMP ICV so
+        // implicit post-processing regions do not each expand to all CPUs.
+        omp_set_num_threads(std::max(1, assignedCpuThreadCount));
+#endif
         const bool useGpu = worker.backend != DepthComputeBackend::Cpu;
         DepthGenConfig workerConfig = _config;
-        workerConfig.patchMatch.backend = worker.backend == DepthComputeBackend::Cuda
-            ? PatchMatchBackend::Cuda
-            : worker.backend == DepthComputeBackend::OpenCl
-                ? PatchMatchBackend::OpenCl
-                : PatchMatchBackend::Cpu;
+        workerConfig.cpuWorkerCount = std::max(1, assignedCpuThreadCount);
+        workerConfig.patchMatch.backend = worker.backend == DepthComputeBackend::Cuda     ? PatchMatchBackend::Cuda
+                                          : worker.backend == DepthComputeBackend::OpenCl ? PatchMatchBackend::OpenCl
+                                                                                          : PatchMatchBackend::Cpu;
         workerConfig.patchMatch.useCuda = worker.backend == DepthComputeBackend::Cuda;
-        workerConfig.patchMatch.cudaDeviceIndex = worker.backend == DepthComputeBackend::Cuda
-            ? worker.deviceIndex
-            : -1;
-        workerConfig.patchMatch.openClDeviceIndex = worker.backend == DepthComputeBackend::OpenCl
-            ? worker.deviceIndex
-            : -1;
+        workerConfig.patchMatch.cudaDeviceIndex = worker.backend == DepthComputeBackend::Cuda ? worker.deviceIndex : -1;
+        workerConfig.patchMatch.openClDeviceIndex =
+            worker.backend == DepthComputeBackend::OpenCl ? worker.deviceIndex : -1;
         workerConfig.patchMatch.cudaFallbackToCpu = false;
         workerConfig.patchMatch.openClFallbackToCpu = false;
         workerConfig.patchMatch.cancelFlag = &_cancelled;
         const QString workerTag = QString::fromStdString(worker.id());
+        int claimedViewIndex = -1;
+        bool completionReported = false;
+        bool activeTask = false;
+        auto claimedFrameStart = std::chrono::steady_clock::now();
 
-        while (!_cancelled)
+        const auto run_worker = [&]()
         {
-            const std::optional<int> next_task = computeScheduler.takeNext(worker);
-            const int i = next_task.value_or(-1);
-
-            if (i < 0 || i >= NV)
+            while (!_cancelled)
             {
-                break;
-            }
+                const DepthTaskClaim claim = computeScheduler.claimNext(worker);
+                if (claim.status == DepthTaskClaimStatus::Retry)
+                {
+                    computeScheduler.waitForStateChange(claim.revision, std::chrono::milliseconds(25));
+                    continue;
+                }
+                if (claim.status != DepthTaskClaimStatus::Task)
+                {
+                    break;
+                }
+                const int i = claim.viewIndex;
+                if (i < 0 || i >= NV)
+                {
+                    const DepthTaskCompletionResult completion =
+                        computeScheduler.complete(worker, i, std::chrono::milliseconds(0), false);
+                    if (!completion.retryScheduled)
+                    {
+                        anyFailure = true;
+                    }
+                    continue;
+                }
 
-            if (useGpu)
-            {
-                activeGpuTasks.fetch_add(1);
-            }
-            else
-            {
-                activeCpuTasks.fetch_add(1);
-            }
-            emitDepthProgress(workerTag, i, true);
+                claimedViewIndex = i;
+                completionReported = false;
+                claimedFrameStart = std::chrono::steady_clock::now();
 
-            const auto frameStart = std::chrono::steady_clock::now();
-            LOG_DEBUG(QStringLiteral("[MVS][深度估计] 帧 %1/%2 开始: id=%3 device=%4")
-                         .arg(i + 1)
-                         .arg(NV)
-                         .arg(i)
-                         .arg(workerTag));
-            markManifestFrameRunning(i);
+                DepthFrameArtifactSaveQueue::ProducerReservation saveReservation =
+                    saveQueue.reserveProducer(&_cancelled);
+                if (!saveReservation || _cancelled.load())
+                {
+                    break;
+                }
 
-            DepthFrameResult res = computeDepthForView(i, &workerConfig);
-            if (_cancelled.load())
-            {
-                LOG_INFO(QStringLiteral("[MVS] 帧 %1 收到取消请求，跳过结果保存").arg(i));
+                if (useGpu)
+                {
+                    activeGpuTasks.fetch_add(1);
+                }
+                else
+                {
+                    activeCpuTasks.fetch_add(1);
+                }
+                activeTask = true;
+                emitDepthProgress(workerTag, i, true);
+
+                const auto frameStart = claimedFrameStart;
+                LOG_DEBUG(QStringLiteral("[MVS][深度估计] 帧 %1/%2 开始: id=%3 device=%4")
+                              .arg(i + 1)
+                              .arg(NV)
+                              .arg(i)
+                              .arg(workerTag));
+                markManifestFrameRunning(i);
+
+                DepthFrameResult res = computeDepthForView(i, &workerConfig);
+                if (_cancelled.load())
+                {
+                    LOG_INFO(QStringLiteral("[MVS] 帧 %1 收到取消请求，跳过结果保存").arg(i));
+                    if (useGpu)
+                    {
+                        activeGpuTasks.fetch_sub(1);
+                    }
+                    else
+                    {
+                        activeCpuTasks.fetch_sub(1);
+                    }
+                    activeTask = false;
+                    emitDepthProgress(workerTag, i, false);
+                    break;
+                }
+
+                const auto frameEnd = std::chrono::steady_clock::now();
+                const double elapsedMs = std::chrono::duration<double, std::milli>(frameEnd - frameStart).count();
+                const DepthTaskCompletionResult completion =
+                    computeScheduler.complete(worker, i, frameEnd - frameStart, res.success);
+                completionReported = completion.accepted;
+                res.device = worker.id();
+                res.elapsedMs = elapsedMs;
+
+                if (!completion.accepted)
+                {
+                    res.success = false;
+                    res.errorMsg = "depth scheduler rejected frame completion ownership";
+                }
+
+                if (!res.success && completion.retryScheduled)
+                {
+                    LOG_WARN(QStringLiteral("[MVS][深度估计] 帧 %1/%2 在 %3 失败，将由其他后端限次重试: "
+                                            "id=%4 elapsed=%5 ms error=%6")
+                                 .arg(i + 1)
+                                 .arg(NV)
+                                 .arg(workerTag)
+                                 .arg(i)
+                                 .arg(elapsedMs, 0, 'f', 1)
+                                 .arg(QString::fromStdString(res.errorMsg)));
+                    if (useGpu)
+                    {
+                        activeGpuTasks.fetch_sub(1);
+                    }
+                    else
+                    {
+                        activeCpuTasks.fetch_sub(1);
+                    }
+                    activeTask = false;
+                    claimedViewIndex = -1;
+                    emitDepthProgress(workerTag, i, false);
+                    continue;
+                }
+
+                DepthFrameResult storedResult = res;
+                if (!keepDepthFramesInMemory.load())
+                {
+                    storedResult.releasePixelStorage();
+                }
+                {
+                    std::lock_guard<std::mutex> lock(depthFramesMutex);
+                    _depthFrames[i] = storedResult;
+                }
+
+                if (!res.success)
+                {
+                    LOG_WARN(QStringLiteral("[MVS][深度估计] 帧 %1/%2 失败: id=%3 device=%4 elapsed=%5 ms error=%6")
+                                 .arg(i + 1)
+                                 .arg(NV)
+                                 .arg(i)
+                                 .arg(workerTag)
+                                 .arg(elapsedMs, 0, 'f', 1)
+                                 .arg(QString::fromStdString(res.errorMsg)));
+                    markManifestFrameFailed(i, QString::fromStdString(res.errorMsg));
+                    anyFailure = true;
+                }
+                else
+                {
+                    const int depthWidth = (res.depthMap && !res.depthMap->empty()) ? res.depthMap->cols : 0;
+                    const int depthHeight = (res.depthMap && !res.depthMap->empty()) ? res.depthMap->rows : 0;
+                    LOG_INFO(QStringLiteral("[MVS][深度估计] 帧 %1/%2 完成: id=%3 device=%4 size=%5x%6 "
+                                            "coverage=%7 confidence=%8 acceptance=%9 elapsed=%10 ms")
+                                 .arg(i + 1)
+                                 .arg(NV)
+                                 .arg(i)
+                                 .arg(workerTag)
+                                 .arg(depthWidth)
+                                 .arg(depthHeight)
+                                 .arg(res.qualityMetrics.validCoverage, 0, 'f', 3)
+                                 .arg(res.qualityMetrics.meanConfidence, 0, 'f', 3)
+                                 .arg(QString::fromLatin1(depthFrameAcceptanceId(res.qualityDecision.acceptance)))
+                                 .arg(elapsedMs, 0, 'f', 1));
+                    saveQueue.enqueue(std::move(saveReservation), i, res, QStringLiteral("初始"));
+
+                    if (keepDepthFramesInMemory.load() &&
+                        memoryPressureRequiresStreaming(_config, querySystemMemorySnapshot(), initialMemoryDecision))
+                    {
+                        bool expected = true;
+                        if (keepDepthFramesInMemory.compare_exchange_strong(expected, false))
+                        {
+                            LOG_WARN(QStringLiteral("[MVS] 内存压力升高，切换为流式保存并释放已缓存深度图；"
+                                                    "后续使用有界 LRU 继续多视一致性检查"));
+                            std::lock_guard<std::mutex> lock(depthFramesMutex);
+                            releaseStoredDepthFramePixelStorage(_depthFrames);
+                        }
+                    }
+                }
+
+                emit depthMapReady(res);
+                if (!keepDepthFramesInMemory.load())
+                {
+                    res.releasePixelStorage();
+                }
+                const int done = completedTasks.fetch_add(1) + 1;
                 if (useGpu)
                 {
                     activeGpuTasks.fetch_sub(1);
@@ -9495,104 +10308,127 @@ void DepthMapGenerator::runInBackgroundImpl()
                 {
                     activeCpuTasks.fetch_sub(1);
                 }
+                activeTask = false;
+                claimedViewIndex = -1;
+                Q_UNUSED(done);
                 emitDepthProgress(workerTag, i, false);
-                break;
             }
+        };
 
-            const auto frameEnd = std::chrono::steady_clock::now();
-            const double elapsedMs = std::chrono::duration<double, std::milli>(frameEnd - frameStart).count();
-            computeScheduler.complete(worker, frameEnd - frameStart, res.success);
-            res.device = worker.id();
-            res.elapsedMs = elapsedMs;
-
-            DepthFrameResult storedResult = res;
-            if (!keepDepthFramesInMemory.load())
+        try
+        {
+            run_worker();
+        }
+        catch (const std::exception &exception)
+        {
+            if (activeTask)
             {
-                storedResult.releasePixelStorage();
-            }
-            {
-                std::lock_guard<std::mutex> lock(depthFramesMutex);
-                _depthFrames[i] = storedResult;
-            }
-
-            if (!res.success)
-            {
-                LOG_WARN(QStringLiteral("[MVS][深度估计] 帧 %1/%2 失败: id=%3 device=%4 elapsed=%5 ms error=%6")
-                             .arg(i + 1)
-                             .arg(NV)
-                             .arg(i)
-                             .arg(workerTag)
-                             .arg(elapsedMs, 0, 'f', 1)
-                             .arg(QString::fromStdString(res.errorMsg)));
-                markManifestFrameFailed(i, QString::fromStdString(res.errorMsg));
-                anyFailure = true;
-            }
-            else
-            {
-                const int depthWidth = (res.depthMap && !res.depthMap->empty()) ? res.depthMap->cols : 0;
-                const int depthHeight = (res.depthMap && !res.depthMap->empty()) ? res.depthMap->rows : 0;
-                LOG_INFO(QStringLiteral(
-                             "[MVS][深度估计] 帧 %1/%2 完成: id=%3 device=%4 size=%5x%6 "
-                             "coverage=%7 confidence=%8 acceptance=%9 elapsed=%10 ms")
-                             .arg(i + 1)
-                             .arg(NV)
-                             .arg(i)
-                             .arg(workerTag)
-                             .arg(depthWidth)
-                             .arg(depthHeight)
-                             .arg(res.qualityMetrics.validCoverage, 0, 'f', 3)
-                             .arg(res.qualityMetrics.meanConfidence, 0, 'f', 3)
-                             .arg(QString::fromLatin1(depthFrameAcceptanceId(
-                                 res.qualityDecision.acceptance)))
-                             .arg(elapsedMs, 0, 'f', 1));
-                saveQueue.enqueue(i, res, QStringLiteral("初始"));
-
-                if (keepDepthFramesInMemory.load() &&
-                    memoryPressureRequiresStreaming(
-                        _config, querySystemMemorySnapshot(), initialMemoryDecision))
+                if (useGpu)
                 {
-                    bool expected = true;
-                    if (keepDepthFramesInMemory.compare_exchange_strong(expected, false))
-                    {
-                        LOG_WARN(QStringLiteral(
-                            "[MVS] 内存压力升高，切换为流式保存并释放已缓存深度图；"
-                            "后续使用有界 LRU 继续多视一致性检查"));
-                        std::lock_guard<std::mutex> lock(depthFramesMutex);
-                        releaseStoredDepthFramePixelStorage(_depthFrames);
-                    }
+                    activeGpuTasks.fetch_sub(1);
+                }
+                else
+                {
+                    activeCpuTasks.fetch_sub(1);
+                }
+                activeTask = false;
+            }
+            if (claimedViewIndex >= 0 && !completionReported)
+            {
+                try
+                {
+                    computeScheduler.complete(
+                        worker, claimedViewIndex, std::chrono::steady_clock::now() - claimedFrameStart, false);
+                }
+                catch (...)
+                {
+                    // The whole batch is cancelled below; never let an error
+                    // while repairing scheduler state escape a std::thread.
                 }
             }
-
-            emit depthMapReady(res);
-            if (!keepDepthFramesInMemory.load())
+            anyFailure = true;
+            _cancelled = true;
+            saveQueue.cancel();
+            if (!workerExceptionReported.exchange(true))
             {
-                res.releasePixelStorage();
+                const QString message = QStringLiteral("MVS 深度计算线程异常终止（%1，帧 %2）：%3")
+                                            .arg(workerTag)
+                                            .arg(claimedViewIndex)
+                                            .arg(QString::fromUtf8(exception.what()));
+                LOG_ERROR(QStringLiteral("[MVS] %1").arg(message));
+                emit errorOccurred(message);
             }
-            const int done = completedTasks.fetch_add(1) + 1;
-            if (useGpu)
+        }
+        catch (...)
+        {
+            if (activeTask)
             {
-                activeGpuTasks.fetch_sub(1);
+                if (useGpu)
+                {
+                    activeGpuTasks.fetch_sub(1);
+                }
+                else
+                {
+                    activeCpuTasks.fetch_sub(1);
+                }
+                activeTask = false;
             }
-            else
+            if (claimedViewIndex >= 0 && !completionReported)
             {
-                activeCpuTasks.fetch_sub(1);
+                try
+                {
+                    computeScheduler.complete(
+                        worker, claimedViewIndex, std::chrono::steady_clock::now() - claimedFrameStart, false);
+                }
+                catch (...)
+                {
+                }
             }
-            Q_UNUSED(done);
-            emitDepthProgress(workerTag, i, false);
+            anyFailure = true;
+            _cancelled = true;
+            saveQueue.cancel();
+            if (!workerExceptionReported.exchange(true))
+            {
+                const QString message = QStringLiteral("MVS 深度计算线程异常终止（%1，帧 %2）：未知异常")
+                                            .arg(workerTag)
+                                            .arg(claimedViewIndex);
+                LOG_ERROR(QStringLiteral("[MVS] %1").arg(message));
+                emit errorOccurred(message);
+            }
         }
     };
 
     std::vector<std::thread> workers;
     workers.reserve(static_cast<size_t>(cpuFrameWorkers + gpuFrameWorkers));
 
-    for (const DepthComputeWorker &worker : acceleratorWorkers)
+    int workerThreadIndex = 0;
+    const auto assigned_cpu_threads = [&](int workerIndex)
+    { return minimumCpuThreadsPerWorker + (workerIndex < cpuThreadRemainder ? 1 : 0); };
+    try
     {
-        workers.emplace_back(workerFunc, worker);
+        for (const DepthComputeWorker &worker : acceleratorWorkers)
+        {
+            workers.emplace_back(workerFunc, worker, assigned_cpu_threads(workerThreadIndex++));
+        }
+        for (int workerIndex = 0; workerIndex < cpuFrameWorkers; ++workerIndex)
+        {
+            workers.emplace_back(workerFunc,
+                                 DepthComputeWorker{DepthComputeBackend::Cpu, workerIndex},
+                                 assigned_cpu_threads(workerThreadIndex++));
+        }
     }
-    for (int workerIndex = 0; workerIndex < cpuFrameWorkers; ++workerIndex)
+    catch (...)
     {
-        workers.emplace_back(workerFunc,
-                             DepthComputeWorker{DepthComputeBackend::Cpu, workerIndex});
+        _cancelled = true;
+        saveQueue.cancel();
+        for (std::thread &worker : workers)
+        {
+            if (worker.joinable())
+            {
+                worker.join();
+            }
+        }
+        throw;
     }
 
     for (std::thread &worker : workers)
@@ -9605,11 +10441,15 @@ void DepthMapGenerator::runInBackgroundImpl()
 
     for (const auto &[worker_id, stats] : computeScheduler.workerStats())
     {
-        LOG_INFO(QStringLiteral("[MVS] 深度调度统计: worker=%1 completed=%2 failed=%3 elapsed=%4 ms")
+        LOG_INFO(QStringLiteral(
+                     "[MVS] 深度调度统计: worker=%1 completed=%2 successful=%3 "
+                     "failed=%4 elapsed=%5 ms ema=%6 ms")
                      .arg(QString::fromStdString(worker_id))
                      .arg(stats.completedTasks)
+                     .arg(stats.successfulTasks)
                      .arg(stats.failedTasks)
-                     .arg(stats.elapsedMilliseconds, 0, 'f', 1));
+                     .arg(stats.elapsedMilliseconds, 0, 'f', 1)
+                     .arg(stats.emaElapsedMilliseconds, 0, 'f', 1));
     }
 
     if (_cancelled.load())
@@ -9631,7 +10471,14 @@ void DepthMapGenerator::runInBackgroundImpl()
         return;
     }
 
-    saveQueue.waitUntilIdle();
+    if (!saveQueue.waitUntilIdle(&_cancelled))
+    {
+        saveQueue.cancel();
+        saveQueue.stop();
+        clearFrameCaches();
+        emitFinishedOnce(false);
+        return;
+    }
     if (saveQueue.failed())
     {
         anyFailure = true;
@@ -9848,6 +10695,20 @@ void DepthMapGenerator::runInBackgroundImpl()
 
         for (int i = 0; i < NV; ++i)
         {
+            if (_cancelled.load())
+            {
+                break;
+            }
+            DepthFrameArtifactSaveQueue::ProducerReservation saveReservation =
+                saveQueue.reserveProducer(&_cancelled);
+            if (!saveReservation)
+            {
+                if (!_cancelled.load())
+                {
+                    anyFailure = true;
+                }
+                break;
+            }
             DepthFrameResult &res = _depthFrames[i];
             if (res.success && res.depthMap &&
                 !res.depthMap->empty())
@@ -9886,9 +10747,20 @@ void DepthMapGenerator::runInBackgroundImpl()
                             ? *res.geometrySupportCount : cv::Mat());
                 }
             }
-            saveQueue.enqueue(i, res, QStringLiteral("过滤后"));
+            if (_cancelled.load())
+            {
+                break;
+            }
+            saveQueue.enqueue(
+                std::move(saveReservation), i, res, QStringLiteral("过滤后"));
         }
-        saveQueue.waitUntilIdle();
+        if (_cancelled.load() || !saveQueue.waitUntilIdle(&_cancelled))
+        {
+            saveQueue.cancel();
+            saveQueue.stop();
+            emitFinishedOnce(false);
+            return;
+        }
         if (saveQueue.failed())
         {
             anyFailure = true;
@@ -9896,7 +10768,13 @@ void DepthMapGenerator::runInBackgroundImpl()
     }
     saveQueue.stop();
 
-    allOk = !anyFailure.load();
+    if (_cancelled.load())
+    {
+        emitFinishedOnce(false);
+        return;
+    }
+
+    allOk = !anyFailure.load() && !_cancelled.load();
     int successfulFrames = 0;
     int failedFrames = 0;
     int fusionEligibleFrames = 0;
@@ -9970,8 +10848,11 @@ void DepthMapGenerator::runInBackgroundImpl()
 
     if (!_config.runFusion)
     {
-        emit progressChanged("完成", 1.f);
-        emitFinishedOnce(allOk);
+        if (!_cancelled.load())
+        {
+            emit progressChanged("完成", 1.f);
+        }
+        emitFinishedOnce(allOk && !_cancelled.load());
         return;
     }
 
@@ -9981,6 +10862,11 @@ void DepthMapGenerator::runInBackgroundImpl()
     std::vector<FusionFrameInput> frames;
     for (const auto &fr : _depthFrames)
     {
+        if (_cancelled.load())
+        {
+            emitFinishedOnce(false);
+            return;
+        }
         if (fr.eligibleForFusion() && fr.depthMap && !fr.depthMap->empty())
         {
             frames.push_back(buildFusionFrame(fr));
@@ -9995,6 +10881,11 @@ void DepthMapGenerator::runInBackgroundImpl()
 
     for (auto &frame : frames)
     {
+        if (_cancelled.load())
+        {
+            emitFinishedOnce(false);
+            return;
+        }
         if (frame.sourceImageIndices.empty())
         {
             continue;
@@ -10024,9 +10915,15 @@ void DepthMapGenerator::runInBackgroundImpl()
     fusionCfg.maxReprojError = _config.fusion.pixelThresh;
     fusionCfg.maxDepthError  = _config.fusion.relDepthThresh;
     fusionCfg.checkNumImages = std::min(50, NV);
-    fusionCfg.workerCount    = std::max(1, _config.cpuWorkerCount);
+    fusionCfg.workerCount    = resolvedTotalCpuThreadBudget(_config);
     fusionCfg.requireValidMask = true;
     fusionCfg.minSupportViews = std::max(1, _config.fusion.minConsistentViews - 1);
+    // StereoFusionConfig historically owns a shared cancellation token. This
+    // non-owning view is safe because the fusion object cannot outlive this
+    // generator method, and it lets the existing inner row/BFS checks observe
+    // GUI cancellation without copying an atomic value.
+    fusionCfg.cancelFlag = std::shared_ptr<std::atomic_bool>(
+        &_cancelled, [](std::atomic_bool *) {});
     fusionCfg.maxLocalDepthGradient = _config.fusion.enableLocalDepthOutlierFilter
         ? _config.fusion.localDepthOutlierRelThresh
         : 0.0f;
@@ -10099,6 +10996,12 @@ void DepthMapGenerator::runInBackgroundImpl()
 
     if (!fuseOk)
     {
+        if (_cancelled.load())
+        {
+            LOG_INFO("[MVS][深度融合] 收到取消请求");
+            emitFinishedOnce(false);
+            return;
+        }
         LOG_ERROR("[MVS][深度融合] 失败: %s", fuseErr.c_str());
         emit errorOccurred(QString::fromStdString(fuseErr));
         emitFinishedOnce(false);
@@ -10109,6 +11012,11 @@ void DepthMapGenerator::runInBackgroundImpl()
     cloud.reserve(fusedPoints.size());
     for (const FusedPoint &point : fusedPoints)
     {
+        if (_cancelled.load())
+        {
+            emitFinishedOnce(false);
+            return;
+        }
         cloud.push_back(DensePoint{
             point.x, point.y, point.z,
             point.r, point.g, point.b});
@@ -10142,13 +11050,17 @@ void DepthMapGenerator::runInBackgroundImpl()
 
             auto applyFilterWithGuard = [&](const char *stageName, auto &&filterOp)
             {
-                if (cloud.size() < 100)
+                if (_cancelled.load() || cloud.size() < 100)
                 {
                     return;
                 }
 
                 const std::size_t beforeCount = cloud.size();
                 std::vector<DensePoint> filtered = filterOp(cloud);
+                if (_cancelled.load())
+                {
+                    return;
+                }
                 if (filtered.empty())
                 {
                     LOG_WARN("[MVS][点云过滤] %s 结果为空，跳过该阶段以保护点云", stageName);
@@ -10218,10 +11130,16 @@ void DepthMapGenerator::runInBackgroundImpl()
         }
     }
 
+    if (_cancelled.load())
+    {
+        emitFinishedOnce(false);
+        return;
+    }
+
     emit pointCloudReady(cloud);
     emit progressChanged("完成", 1.f);
     // 只要最终生成了有效点云就算成功（部分帧深度估计失败不影响最终结果）
-    emitFinishedOnce(!cloud.empty());
+    emitFinishedOnce(!cloud.empty() && !_cancelled.load());
 }
 
 } // namespace mvs
