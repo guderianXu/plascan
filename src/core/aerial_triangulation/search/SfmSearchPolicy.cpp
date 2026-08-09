@@ -268,6 +268,65 @@ std::vector<double> adaptiveFocalScaleCandidates()
             8.0, 9.0, 10.0};
 }
 
+std::vector<double> adaptiveFocalCoarseScaleCandidates()
+{
+    // 八个锚点覆盖完整尺度表的关键摄影测量区间。9 倍尺度必须留在第一阶段，
+    // 避免 ONC-T 等长焦行星相机只有在普通焦距候选胜出后才有机会被评估。
+    return {0.55, 0.85, 1.0, 1.2, 2.4, 4.0, 5.2, 9.0};
+}
+
+std::vector<double> adaptiveFocalRefinementScaleCandidates(
+    const std::vector<SfmCandidateSummary> &rankedCandidates,
+    const std::vector<double> &evaluatedScales,
+    int maxSeedCount)
+{
+    if (maxSeedCount <= 0 || rankedCandidates.empty())
+    {
+        return {};
+    }
+
+    constexpr double kScaleTolerance = 1.0e-9;
+    const std::vector<double> allScales = adaptiveFocalScaleCandidates();
+    std::vector<double> refinementScales;
+    const auto alreadyEvaluated = [&](double scale)
+    {
+        return std::any_of(evaluatedScales.cbegin(), evaluatedScales.cend(), [scale](double value)
+        {
+            return std::abs(value - scale) <= kScaleTolerance;
+        }) || std::any_of(refinementScales.cbegin(), refinementScales.cend(), [scale](double value)
+        {
+            return std::abs(value - scale) <= kScaleTolerance;
+        });
+    };
+
+    const int seedCount = std::min(maxSeedCount, static_cast<int>(rankedCandidates.size()));
+    for (int seedIndex = 0; seedIndex < seedCount; ++seedIndex)
+    {
+        const double seedScale = rankedCandidates[static_cast<std::size_t>(seedIndex)].focalScale;
+        const auto upper = std::lower_bound(allScales.cbegin(), allScales.cend(), seedScale);
+        if (upper != allScales.cbegin())
+        {
+            const double lowerScale = *std::prev(upper);
+            if (!alreadyEvaluated(lowerScale))
+            {
+                refinementScales.push_back(lowerScale);
+            }
+        }
+
+        auto upperNeighbor = upper;
+        if (upperNeighbor != allScales.cend() &&
+            std::abs(*upperNeighbor - seedScale) <= kScaleTolerance)
+        {
+            ++upperNeighbor;
+        }
+        if (upperNeighbor != allScales.cend() && !alreadyEvaluated(*upperNeighbor))
+        {
+            refinementScales.push_back(*upperNeighbor);
+        }
+    }
+    return refinementScales;
+}
+
 bool shouldStopAdaptiveFocalReplay(int totalImages,
                                    int registeredImages,
                                    bool hasProductionSparseCloud)

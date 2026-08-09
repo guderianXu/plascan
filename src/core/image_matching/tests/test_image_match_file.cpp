@@ -300,6 +300,82 @@ TEST(ImageMatchFileTest, ReadsPairFromEitherDirectedShard)
     EXPECT_NE(repository.shardPath(image0), repository.shardPath(image1));
 }
 
+TEST(ImageMatchFileTest, LoadsRawMatchesByConfigurationPrefixWhenGeometryChanges)
+{
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+    const QString image0 = temporary.filePath(QStringLiteral("left.png"));
+    const QString image1 = temporary.filePath(QStringLiteral("right.png"));
+    ASSERT_TRUE(createImageFile(image0));
+    ASSERT_TRUE(createImageFile(image1));
+
+    PairMatchData expected = samplePair(image0, image1);
+    const QByteArray rawFingerprint(32, 'r');
+    expected.configFingerprint = rawFingerprint + QByteArray(32, 'a');
+    ImageMatchRepository repository(temporary.filePath(QStringLiteral("matches")));
+    ASSERT_TRUE(repository.writePairs({expected}, false).success);
+
+    PairMatchData exact;
+    QString error;
+    EXPECT_FALSE(repository.loadPair(image0,
+                                     image1,
+                                     expected.algorithmId,
+                                     expected.algorithmVersion,
+                                     rawFingerprint + QByteArray(32, 'b'),
+                                     expected.modelFingerprint,
+                                     &exact,
+                                     &error));
+    EXPECT_TRUE(error.isEmpty());
+
+    PairMatchData reusableRaw;
+    ASSERT_TRUE(repository.loadPairWithConfigPrefix(image0,
+                                                    image1,
+                                                    expected.algorithmId,
+                                                    expected.algorithmVersion,
+                                                    rawFingerprint,
+                                                    expected.modelFingerprint,
+                                                    &reusableRaw,
+                                                    &error)) << error.toStdString();
+    EXPECT_EQ(reusableRaw.configFingerprint, expected.configFingerprint);
+    EXPECT_EQ(reusableRaw.correspondences.size(), expected.correspondences.size());
+}
+
+TEST(ImageMatchFileTest, DoesNotRewriteUnchangedShardsOrIndexes)
+{
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+    const QString image0 = temporary.filePath(QStringLiteral("left.png"));
+    const QString image1 = temporary.filePath(QStringLiteral("right.png"));
+    ASSERT_TRUE(createImageFile(image0));
+    ASSERT_TRUE(createImageFile(image1));
+
+    const PairMatchData pair = samplePair(image0, image1);
+    ImageMatchRepository repository(temporary.filePath(QStringLiteral("matches")));
+    const ImageMatchWriteResult first = repository.writePairs({pair}, false);
+    ASSERT_TRUE(first.success) << first.errorMessage.toStdString();
+    ASSERT_EQ(first.writtenFiles.size(), 2);
+
+    const QString matchPath = repository.shardPath(image0);
+    const QString indexPath = ImageMatchIndexFile::pathForMatchFile(matchPath);
+    const QDateTime sentinel = QDateTime::currentDateTimeUtc().addSecs(-30);
+    QFile matchFile(matchPath);
+    QFile indexFile(indexPath);
+    ASSERT_TRUE(matchFile.open(QIODevice::ReadWrite));
+    ASSERT_TRUE(matchFile.setFileTime(sentinel, QFileDevice::FileModificationTime));
+    matchFile.close();
+    ASSERT_TRUE(indexFile.open(QIODevice::ReadWrite));
+    ASSERT_TRUE(indexFile.setFileTime(sentinel, QFileDevice::FileModificationTime));
+    indexFile.close();
+    const qint64 matchModified = QFileInfo(matchPath).lastModified().toMSecsSinceEpoch();
+    const qint64 indexModified = QFileInfo(indexPath).lastModified().toMSecsSinceEpoch();
+
+    const ImageMatchWriteResult second = repository.writePairs({pair}, true);
+    ASSERT_TRUE(second.success) << second.errorMessage.toStdString();
+    EXPECT_TRUE(second.writtenFiles.isEmpty());
+    EXPECT_EQ(QFileInfo(matchPath).lastModified().toMSecsSinceEpoch(), matchModified);
+    EXPECT_EQ(QFileInfo(indexPath).lastModified().toMSecsSinceEpoch(), indexModified);
+}
+
 TEST(ImageMatchFileTest, RejectsCorruptedPayload)
 {
     QTemporaryDir temporary;
@@ -346,6 +422,46 @@ TEST(ImageMatchFileTest, RejectsCorruptedPayload)
     error.clear();
     EXPECT_FALSE(ImageMatchIndexFile::load(path, &index, nullptr, &error));
     EXPECT_TRUE(error.contains(QStringLiteral("SHA-256")));
+}
+
+TEST(ImageMatchFileTest, RecoversPairFromReverseShardWhenPreferredShardIsCorrupted)
+{
+    QTemporaryDir temporary;
+    ASSERT_TRUE(temporary.isValid());
+    const QString image0 = temporary.filePath(QStringLiteral("left.png"));
+    const QString image1 = temporary.filePath(QStringLiteral("right.png"));
+    ASSERT_TRUE(createImageFile(image0));
+    ASSERT_TRUE(createImageFile(image1));
+
+    const PairMatchData expected = samplePair(image0, image1);
+    ImageMatchRepository repository(temporary.filePath(QStringLiteral("matches")));
+    ASSERT_TRUE(repository.writePairs({expected}, false).success);
+
+    QFile damaged(repository.shardPath(image0));
+    ASSERT_TRUE(damaged.open(QIODevice::ReadWrite));
+    ASSERT_GT(damaged.size(), 64);
+    ASSERT_TRUE(damaged.seek(damaged.size() - 1));
+    char byte = 0;
+    ASSERT_EQ(damaged.read(&byte, 1), 1);
+    byte ^= 0x5a;
+    ASSERT_TRUE(damaged.seek(damaged.size() - 1));
+    ASSERT_EQ(damaged.write(&byte, 1), 1);
+    damaged.close();
+
+    PairMatchData recovered;
+    QString error;
+    ASSERT_TRUE(repository.loadPair(image0,
+                                    image1,
+                                    expected.algorithmId,
+                                    expected.algorithmVersion,
+                                    expected.configFingerprint,
+                                    expected.modelFingerprint,
+                                    &recovered,
+                                    &error)) << error.toStdString();
+    EXPECT_TRUE(error.isEmpty());
+    EXPECT_EQ(recovered.correspondences.size(), expected.correspondences.size());
+    EXPECT_EQ(recovered.image0.path, expected.image0.path);
+    EXPECT_EQ(recovered.image1.path, expected.image1.path);
 }
 
 TEST(ImageMatchFileTest, RejectsPayloadLengthThatCannotFitReaderBuffer)

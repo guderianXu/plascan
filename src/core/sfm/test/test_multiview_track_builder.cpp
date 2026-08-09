@@ -218,6 +218,56 @@ TEST(CorrespondenceGraphTest, CanonicalizesFeatureIndicesForReversedImagePair)
     EXPECT_EQ(correspondences.front().featureIdx, 2u);
 }
 
+TEST(CorrespondenceGraphTest, UsesDeterministicCachedConnectivityCounts)
+{
+    xjw::CorrespondenceGraph graph;
+    for (xjw::ImageId imageId = 0; imageId < 4; ++imageId)
+    {
+        graph.addImage(imageId, 4);
+    }
+
+    graph.addMatches(0, 2, {{0, 0, 0.9f}, {1, 1, 0.8f}});
+    graph.addMatches(1, 0, {{0, 0, 0.9f}});
+    graph.addMatches(0, 1, {{1, 1, 0.8f}, {2, 2, 0.7f}});
+    graph.addMatches(3, 0, {{0, 0, 0.9f}, {1, 1, 0.8f}});
+
+    const std::vector<xjw::ImageId> connected = graph.connectedImages(0);
+    ASSERT_EQ(connected.size(), 3u);
+    EXPECT_EQ(connected[0], 1u);
+    EXPECT_EQ(connected[1], 2u);
+    EXPECT_EQ(connected[2], 3u);
+
+    const auto topConnected = graph.topConnectedImages(0, 3);
+    ASSERT_EQ(topConnected.size(), 3u);
+    EXPECT_EQ(topConnected[0].first, 1u);
+    EXPECT_EQ(topConnected[0].second, 3u);
+    EXPECT_EQ(topConnected[1].first, 2u);
+    EXPECT_EQ(topConnected[1].second, 2u);
+    EXPECT_EQ(topConnected[2].first, 3u);
+    EXPECT_EQ(topConnected[2].second, 2u);
+}
+
+TEST(CorrespondenceGraphTest, RebuildsConnectivityAfterTrackRetention)
+{
+    xjw::CorrespondenceGraph graph;
+    graph.addImage(0, 2);
+    graph.addImage(1, 1);
+    graph.addImage(2, 1);
+    graph.addMatches(0, 1, {{0, 0, 0.9f}});
+    graph.addMatches(0, 2, {{1, 0, 0.8f}});
+
+    xjw::Track selectedTrack;
+    selectedTrack.elements = {{0, 0}, {1, 0}};
+    EXPECT_EQ(graph.retainMatchesInTracks({selectedTrack}), 1u);
+
+    const std::vector<xjw::ImageId> connected = graph.connectedImages(0);
+    ASSERT_EQ(connected.size(), 1u);
+    EXPECT_EQ(connected.front(), 1u);
+    EXPECT_TRUE(graph.connectedImages(2).empty());
+    ASSERT_EQ(graph.topConnectedImages(0, 1).size(), 1u);
+    EXPECT_EQ(graph.topConnectedImages(0, 1).front().first, 1u);
+}
+
 TEST(CorrespondenceTrackThinnerTest, EnforcesPerImageLimitAndPrefersLongTracks)
 {
     xjw::SfmReconstruction reconstruction;

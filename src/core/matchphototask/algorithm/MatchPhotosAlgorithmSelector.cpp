@@ -75,6 +75,13 @@ int resolveMaxKeypoints(const MatchPhotosOptions &options)
     return defaultMaxKeypoints(options.profile);
 }
 
+float resolveSiftDetectionThreshold(MatchPhotosProfile profile)
+{
+    // cudaSift 的阈值会在 SiftFeatureExtractor 内转换到其原生量纲。
+    // 快速模式减少低响应点，其余模式保留低纹理摄影测量所需的较密检测。
+    return profile == MatchPhotosProfile::Fast ? 0.003f : 0.0005f;
+}
+
 } // namespace
 
 MatchPhotosAlgorithmPlan MatchPhotosAlgorithmSelector::select(const MatchPhotosOptions &options)
@@ -125,6 +132,7 @@ MatchPhotosAlgorithmPlan MatchPhotosAlgorithmSelector::select(const MatchPhotosO
     plan.enableGuidedMatching = options.enableGuidedMatching;
     plan.maxImageDim = options.maxImageDim;
     plan.maxKeypoints = resolveMaxKeypoints(options);
+    plan.siftDetectionThreshold = resolveSiftDetectionThreshold(options.profile);
     plan.reason = QStringLiteral("%1 在任务内存中提取并匹配特征；只持久化最终 "
                                  ".pimatch 观测，不写中间特征文件。")
                       .arg(plan.displayName);

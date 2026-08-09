@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <utility>
 
 namespace xjw::image_matching
 {
@@ -528,6 +529,18 @@ bool ImageMatchFile::write(const QString &filePath,
                            ImageMatchShard shard,
                            QString *errorMessage)
 {
+    return writeIfChanged(filePath, std::move(shard), nullptr, errorMessage);
+}
+
+bool ImageMatchFile::writeIfChanged(const QString &filePath,
+                                    ImageMatchShard shard,
+                                    bool *changed,
+                                    QString *errorMessage)
+{
+    if (changed)
+    {
+        *changed = false;
+    }
     if (!shard.owner.isValid())
     {
         setError(errorMessage, QStringLiteral("无法写入没有所属影像身份的匹配分片"));
@@ -544,6 +557,20 @@ bool ImageMatchFile::write(const QString &filePath,
     {
         setError(errorMessage, QStringLiteral("影像匹配分片超过当前 QByteArray 安全上限"));
         return false;
+    }
+
+    // 不能只比较容器头中的摘要：文件正文可能被外部破坏而头部仍保持原值。
+    // readContainer 会完整校验 SHA-256；只有权威 payload 确实一致时才跳过写盘。
+    if (QFileInfo::exists(filePath))
+    {
+        QByteArray existingPayload;
+        std::uint32_t existingVersion = 0;
+        QString ignoredError;
+        if (readContainer(filePath, &existingPayload, &existingVersion, &ignoredError) &&
+            existingVersion == kImageMatchFormatVersion && existingPayload == payload)
+        {
+            return true;
+        }
     }
 
     const QFileInfo outputInfo(filePath);
@@ -572,6 +599,10 @@ bool ImageMatchFile::write(const QString &filePath,
     {
         setError(errorMessage, QStringLiteral("提交影像匹配文件失败: %1").arg(filePath));
         return false;
+    }
+    if (changed)
+    {
+        *changed = true;
     }
     return true;
 }

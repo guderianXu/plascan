@@ -5,6 +5,8 @@
 // 以确保从源头减少外点。
 // ============================================================
 
+#include <future>
+
 #include <gtest/gtest.h>
 #include <opencv2/core.hpp>
 #include "triangulation/Triangulator.h"
@@ -495,6 +497,74 @@ TEST(PnpParamsTest, DeterministicSeedIsIndependentOfExternalOpenCvRngState)
     for (std::size_t i = 0; i < first.R.size(); ++i)
     {
         EXPECT_DOUBLE_EQ(first.R[i], second.R[i]);
+    }
+}
+
+TEST(PnpParamsTest, DeterministicSeedRestoresCallingThreadOpenCvRngState)
+{
+    const LowRatioPnpCase data = makeLowRatioPnpCase();
+    PnpOptions opts;
+    opts.maxIterations = 5000;
+    opts.minNumInliers = 10;
+    opts.allowRelaxedInlierRatio = true;
+    opts.ransacSeed = 20260809;
+
+    cv::setRNGSeed(314159);
+    cv::RNG expectedRng = cv::theRNG();
+    const unsigned expectedNext = expectedRng.next();
+
+    static_cast<void>(PnpSolver::solve(data.worldPoints,
+                                       data.imagePoints,
+                                       data.fu,
+                                       data.fv,
+                                       data.cu,
+                                       data.cv,
+                                       1,
+                                       1,
+                                       false,
+                                       opts));
+
+    EXPECT_EQ(cv::theRNG().next(), expectedNext);
+}
+
+TEST(PnpParamsTest, DeterministicSeedProducesSameResultAcrossConcurrentWorkers)
+{
+    const LowRatioPnpCase data = makeLowRatioPnpCase();
+    PnpOptions opts;
+    opts.maxIterations = 5000;
+    opts.minNumInliers = 10;
+    opts.allowRelaxedInlierRatio = true;
+    opts.ransacSeed = 20260809;
+
+    std::vector<std::future<PnpResult>> futures;
+    futures.reserve(8);
+    for (int worker = 0; worker < 8; ++worker)
+    {
+        futures.push_back(std::async(std::launch::async, [&data, opts]()
+        {
+            return PnpSolver::solve(data.worldPoints,
+                                    data.imagePoints,
+                                    data.fu,
+                                    data.fv,
+                                    data.cu,
+                                    data.cv,
+                                    1,
+                                    1,
+                                    false,
+                                    opts);
+        }));
+    }
+
+    const PnpResult reference = futures.front().get();
+    ASSERT_TRUE(reference.success);
+    for (std::size_t worker = 1; worker < futures.size(); ++worker)
+    {
+        const PnpResult result = futures[worker].get();
+        EXPECT_EQ(result.success, reference.success);
+        EXPECT_EQ(result.numInliers, reference.numInliers);
+        EXPECT_EQ(result.inlierMask, reference.inlierMask);
+        EXPECT_EQ(result.C, reference.C);
+        EXPECT_EQ(result.R, reference.R);
     }
 }
 

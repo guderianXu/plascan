@@ -568,11 +568,6 @@ void MainWindow::setupProjectManager()
                     options.useReferencePreselection = dlg.useReferencePreselection();
                     options.maskApplyMode = dlg.maskApplyMode();
                     options.reuseExistingMatches = true;
-                    if (options.maskApplyMode == QStringLiteral("keypoints"))
-                    {
-                        // 关键点蒙版改变的是特征文件本身，不能复用旧的未过滤特征。
-                        options.reuseExistingMatches = false;
-                    }
                     options.pairPolicy = xjw::matchphotos::makePairSelectionPolicy(
                         pairPresetFromAccuracy(dlg.accuracy()));
                     options.pairPolicy.includeVocabularyOverlap = options.useGenericPreselection;

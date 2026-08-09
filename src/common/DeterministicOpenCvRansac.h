@@ -3,7 +3,6 @@
 #include <opencv2/core.hpp>
 
 #include <cstdint>
-#include <mutex>
 #include <utility>
 
 namespace xjw::opencv_compat
@@ -28,23 +27,37 @@ inline int stableRansacSeed(std::uint32_t value0,
     return static_cast<int>(hash & 0x7fffffffu);
 }
 
-inline std::mutex &deterministicRansacMutex()
+class ScopedOpenCvRngSeed
 {
-    static std::mutex mutex;
-    return mutex;
-}
+public:
+    explicit ScopedOpenCvRngSeed(int seed)
+        : _previousRng(cv::theRNG())
+    {
+        cv::setRNGSeed(seed);
+    }
+
+    ~ScopedOpenCvRngSeed()
+    {
+        cv::theRNG() = _previousRng;
+    }
+
+    ScopedOpenCvRngSeed(const ScopedOpenCvRngSeed &) = delete;
+    ScopedOpenCvRngSeed &operator=(const ScopedOpenCvRngSeed &) = delete;
+
+private:
+    cv::RNG _previousRng;
+};
 
 /**
- * @brief 在短临界区内设置稳定种子并调用依赖 OpenCV 默认 RNG 的 RANSAC。
+ * @brief 在线程局部 RNG 上设置稳定种子并调用依赖 OpenCV 默认 RNG 的 RANSAC。
  *
- * OpenCV 的部分鲁棒估计接口使用进程/线程默认 RNG。并行评估多个 SfM
- * 候选时，如果不把“设种子 + 求解”绑定为一个原子操作，正式解会依赖线程调度。
+ * 支持的 OpenCV 版本通过 TLS 实现 cv::theRNG()。保存并恢复调用线程的 RNG
+ * 状态既能隔离外部随机状态，也允许多个 SfM 候选真正并行执行鲁棒估计。
  */
 template <typename Callable>
 decltype(auto) runDeterministicRansac(int seed, Callable &&callable)
 {
-    std::lock_guard<std::mutex> lock(deterministicRansacMutex());
-    cv::setRNGSeed(seed);
+    const ScopedOpenCvRngSeed scopedSeed(seed);
     return std::forward<Callable>(callable)();
 }
 

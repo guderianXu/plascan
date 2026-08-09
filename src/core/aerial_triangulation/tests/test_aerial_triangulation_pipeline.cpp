@@ -199,6 +199,10 @@ TEST(AerialTriangulationPipelineTest, ParallelizesCoarseFocalSearchWithinThreadB
         execution.result.numRegisteredImages = 16;
         execution.result.numPoints3D = 1000;
         execution.result.meanReprojError = 0.5;
+        execution.result.sfmDiagnostics.insert(
+            QStringLiteral("sparse_quality"),
+            QJsonObject{{QStringLiteral("quality_gate"),
+                         QJsonObject{{QStringLiteral("acceptable_for_mvs"), true}}}});
         return execution;
     };
     const auto resultWriter = [](
@@ -218,7 +222,8 @@ TEST(AerialTriangulationPipelineTest, ParallelizesCoarseFocalSearchWithinThreadB
     input.adaptiveCameraModelFitting = false;
 
     const int expectedWorkers = std::min(
-        static_cast<int>(xjw::aerial_triangulation::adaptiveFocalScaleCandidates().size()),
+        static_cast<int>(
+            xjw::aerial_triangulation::adaptiveFocalCoarseScaleCandidates().size()),
         xjw::aerial_triangulation::resolveSfmThreadBudget(input.threads));
 
     const auto result =
@@ -232,6 +237,144 @@ TEST(AerialTriangulationPipelineTest, ParallelizesCoarseFocalSearchWithinThreadB
     EXPECT_EQ(result.sfmDiagnostics.value(
         QStringLiteral("focal_search_thread_budget")).toInt(),
         xjw::aerial_triangulation::resolveSfmThreadBudget(input.threads));
+}
+
+TEST(AerialTriangulationPipelineTest, CompleteCoarseModelOnlyEvaluatesTopSeedNeighborhoods)
+{
+    std::atomic<int> attemptCount{0};
+    const auto attemptRunner = [&attemptCount](
+                                   const xjw::aerial_triangulation::PreparedAerialTriangulationInput &)
+    {
+        attemptCount.fetch_add(1);
+        xjw::aerial_triangulation::SfmAttemptExecutionResult execution;
+        execution.result.success = true;
+        execution.result.numRegisteredImages = 16;
+        execution.result.numPoints3D = 1000;
+        execution.result.meanReprojError = 0.5;
+        execution.result.sfmDiagnostics.insert(
+            QStringLiteral("sparse_quality"),
+            QJsonObject{{QStringLiteral("quality_gate"),
+                         QJsonObject{{QStringLiteral("acceptable_for_mvs"), true}}}});
+        return execution;
+    };
+    const auto resultWriter = [](
+                                  const xjw::aerial_triangulation::PreparedAerialTriangulationInput &,
+                                  xjw::aerial_triangulation::SfmAttemptExecutionResult *,
+                                  QString *)
+    {
+        return true;
+    };
+
+    xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
+    for (int index = 0; index < 16; ++index)
+    {
+        input.images.append(QStringLiteral("image_%1.png").arg(index));
+    }
+    input.threads = 4;
+    input.adaptiveCameraModelFitting = false;
+
+    const auto result = xjw::aerial_triangulation::AerialTriangulationPipeline(
+        attemptRunner, resultWriter).run(input);
+
+    ASSERT_TRUE(result.success);
+    EXPECT_FALSE(result.sfmDiagnostics.value(
+        QStringLiteral("focal_search_exhaustive_fallback")).toBool());
+    EXPECT_EQ(result.sfmDiagnostics.value(
+        QStringLiteral("focal_search_coarse_candidate_count")).toInt(), 8);
+    EXPECT_EQ(result.sfmDiagnostics.value(
+        QStringLiteral("focal_search_refinement_candidate_count")).toInt(), 3);
+    EXPECT_EQ(attemptCount.load(), 11);
+    EXPECT_LT(attemptCount.load(),
+              static_cast<int>(
+                  xjw::aerial_triangulation::adaptiveFocalScaleCandidates().size()));
+}
+
+TEST(AerialTriangulationPipelineTest, CompleteButPoorCoarseModelFallsBackToFullFocalRange)
+{
+    std::atomic<int> attemptCount{0};
+    const auto attemptRunner = [&attemptCount](
+                                   const xjw::aerial_triangulation::PreparedAerialTriangulationInput &)
+    {
+        attemptCount.fetch_add(1);
+        xjw::aerial_triangulation::SfmAttemptExecutionResult execution;
+        execution.result.success = true;
+        execution.result.numRegisteredImages = 16;
+        execution.result.numPoints3D = 1000;
+        execution.result.meanReprojError = 0.5;
+        execution.result.sfmDiagnostics.insert(
+            QStringLiteral("sparse_quality"),
+            QJsonObject{{QStringLiteral("quality_gate"),
+                         QJsonObject{{QStringLiteral("acceptable_for_mvs"), false}}}});
+        return execution;
+    };
+    const auto resultWriter = [](
+                                  const xjw::aerial_triangulation::PreparedAerialTriangulationInput &,
+                                  xjw::aerial_triangulation::SfmAttemptExecutionResult *,
+                                  QString *)
+    {
+        return true;
+    };
+
+    xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
+    for (int index = 0; index < 16; ++index)
+    {
+        input.images.append(QStringLiteral("image_%1.png").arg(index));
+    }
+    input.threads = 2;
+    input.adaptiveCameraModelFitting = false;
+
+    const auto result = xjw::aerial_triangulation::AerialTriangulationPipeline(
+        attemptRunner, resultWriter).run(input);
+
+    ASSERT_TRUE(result.success);
+    EXPECT_TRUE(result.sfmDiagnostics.value(
+        QStringLiteral("focal_search_exhaustive_fallback")).toBool());
+    EXPECT_EQ(attemptCount.load(), static_cast<int>(
+        xjw::aerial_triangulation::adaptiveFocalScaleCandidates().size()));
+}
+
+TEST(AerialTriangulationPipelineTest, IncompleteCoarseSearchFallsBackToFullFocalRange)
+{
+    QVector<double> attemptedScales;
+    const auto attemptRunner = [&attemptedScales](
+                                   const xjw::aerial_triangulation::PreparedAerialTriangulationInput &input)
+    {
+        attemptedScales.append(input.estimatedFocalScale);
+        xjw::aerial_triangulation::SfmAttemptExecutionResult execution;
+        execution.result.success = std::abs(input.estimatedFocalScale - 10.0) < 1.0e-9;
+        execution.result.numRegisteredImages = execution.result.success ? 16 : 4;
+        execution.result.numPoints3D = execution.result.success ? 1200 : 0;
+        execution.result.meanReprojError = execution.result.success ? 0.4 : 2.0;
+        return execution;
+    };
+    const auto resultWriter = [](
+                                  const xjw::aerial_triangulation::PreparedAerialTriangulationInput &,
+                                  xjw::aerial_triangulation::SfmAttemptExecutionResult *,
+                                  QString *)
+    {
+        return true;
+    };
+
+    xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
+    for (int index = 0; index < 16; ++index)
+    {
+        input.images.append(QStringLiteral("image_%1.png").arg(index));
+    }
+    input.threads = 1;
+    input.adaptiveCameraModelFitting = false;
+
+    const auto result = xjw::aerial_triangulation::AerialTriangulationPipeline(
+        attemptRunner, resultWriter).run(input);
+
+    ASSERT_TRUE(result.success);
+    EXPECT_TRUE(result.sfmDiagnostics.value(
+        QStringLiteral("focal_search_exhaustive_fallback")).toBool());
+    EXPECT_GT(result.sfmDiagnostics.value(
+        QStringLiteral("focal_search_fallback_candidate_count")).toInt(), 0);
+    EXPECT_NE(std::find(attemptedScales.cbegin(), attemptedScales.cend(), 10.0),
+              attemptedScales.cend());
+    EXPECT_DOUBLE_EQ(result.sfmDiagnostics.value(
+        QStringLiteral("adaptive_focal_scale")).toDouble(), 10.0);
 }
 
 TEST(AerialTriangulationPipelineTest, LargeDatasetProbesCandidatesAndReplaysOnlyWinnerAtFullScale)

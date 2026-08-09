@@ -14,9 +14,10 @@
 
 #include "common/SfmTypes.h"
 
+#include <span>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
-#include <string>
 #include <vector>
 
 namespace xjw {
@@ -120,7 +121,7 @@ public:
      * @param featureIdx  特征索引
      * @return 对应关系列表
      */
-    std::vector<Correspondence> findCorrespondences(
+    std::span<const Correspondence> findCorrespondences(
         ImageId imageId, FeatureIdx featureIdx) const;
 
     /**
@@ -154,7 +155,14 @@ private:
     std::unordered_map<ImageId, std::vector<std::vector<Correspondence>>>
         correspondences;
 
+    /// 邻接索引：imageId → (neighborImageId → pair match count)。
+    /// 在匹配写入/裁剪时同步维护，避免注册和 BA 查询反复扫描全部像对。
+    std::unordered_map<ImageId, std::unordered_map<ImageId, size_t>>
+        _connectedMatchCounts;
+
     std::unordered_map<std::uint64_t, std::string> priorTrackByObservation;
+
+    void rebuildConnectedMatchCounts();
 
     /// 查询用的空匹配列表（避免返回悬空引用）
     static const std::vector<FeatureMatch> EMPTY_MATCHES;

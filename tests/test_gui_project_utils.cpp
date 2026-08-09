@@ -9706,9 +9706,9 @@ TEST(AerialTriangulationWorkflowTest, TiePointPreparationPassesMaskOptionsToMatc
         << "空三对话框的掩膜参数必须传给创建连接点任务。";
     EXPECT_TRUE(optionsBody.contains(QStringLiteral("options.maskApplyMode")));
     EXPECT_TRUE(optionsBody.contains(
-        QStringLiteral("tieOptions.reuseExistingMatches = options.reuseExistingMatches &&")))
-        << "将掩膜应用于关键点时，旧匹配分片可能来自不同蒙版，必须强制重算匹配。";
-    EXPECT_TRUE(optionsBody.contains(
+        QStringLiteral("tieOptions.reuseExistingMatches = options.reuseExistingMatches")))
+        << "匹配分片应由包含掩膜模式和文件指纹的缓存键判断兼容性，不能按模式禁用复用。";
+    EXPECT_FALSE(optionsBody.contains(
         QStringLiteral("tieOptions.maskApplyMode != QStringLiteral(\"keypoints\")")));
 
     const int unifiedStart = source.indexOf(

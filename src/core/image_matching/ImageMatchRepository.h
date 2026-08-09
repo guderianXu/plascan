@@ -10,6 +10,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <memory>
 #include <vector>
 
 namespace xjw::image_matching
@@ -23,6 +24,8 @@ struct ImageMatchWriteResult
     int imageCount = 0;
     int pairCount = 0;
 };
+
+struct ImageMatchRepositoryReadCache;
 
 class ImageMatchRepository
 {
@@ -52,6 +55,22 @@ public:
                   QString *errorMessage = nullptr) const;
 
     /**
+     * @brief 按配置指纹前缀读取可复用的原始匹配。
+     *
+     * 匹配任务把固定长度的原始匹配指纹放在完整配置指纹开头，并在其后追加
+     * 几何验证指纹。几何参数变化时，本接口允许复用坐标对应，但调用方必须
+     * 重新执行几何验证。若存在多个兼容变体，优先返回创建时间最新的一项。
+     */
+    bool loadPairWithConfigPrefix(const QString &image0Path,
+                                  const QString &image1Path,
+                                  const QString &algorithmId,
+                                  std::uint32_t algorithmVersion,
+                                  const QByteArray &configFingerprintPrefix,
+                                  const QByteArray &modelFingerprint,
+                                  PairMatchData *pair,
+                                  QString *errorMessage = nullptr) const;
+
+    /**
      * @brief 将一批对称像对一次性写成所有影像分片。
      *
      * preserveOtherVariants=true 时，会保留同一影像中缓存键不同的算法变体；
@@ -74,7 +93,13 @@ public:
     bool clear(QString *errorMessage = nullptr) const;
 
 private:
+    std::shared_ptr<const ImageMatchShard> loadShardCached(
+        const QString &imagePath,
+        QString *errorMessage) const;
+    void invalidateCachedShard(const QString &imagePath) const;
+
     QString _directory;
+    std::shared_ptr<ImageMatchRepositoryReadCache> _readCache;
 };
 
 } // namespace xjw::image_matching

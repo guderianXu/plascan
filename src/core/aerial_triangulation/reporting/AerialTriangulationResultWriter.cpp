@@ -229,7 +229,9 @@ bool AerialTriangulationResultWriter::write(
     QString writeError;
     if (!xjw::common::io::writeFileBytesAtomic(
             sidecarPath,
-            QJsonDocument(sidecar).toJson(QJsonDocument::Indented),
+            // 稀疏点逐观测 sidecar 可能达到数十 MiB；消费者均按 JSON 解析，
+            // 无需在关键路径为人工缩进额外分配和写盘。
+            QJsonDocument(sidecar).toJson(QJsonDocument::Compact),
             &writeError))
     {
         return fail(writeError.isEmpty()

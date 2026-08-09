@@ -4,7 +4,12 @@
 #include "MatchPhotosParallelism.h"
 #include "MatchPhotosRuntime.h"
 
+#include <QCryptographicHash>
 #include <QElapsedTimer>
+#include <QJsonDocument>
+#include <QJsonObject>
+
+#include <opencv2/core/version.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -15,6 +20,28 @@
 
 namespace xjw::matchphotos
 {
+
+QByteArray geometryVerificationFingerprint(const MatchPhotosOptions &options)
+{
+    // schema_version 必须在几何实现、内点标志或质量门语义变化时递增。
+    // OpenCV 版本也参与键，避免库升级后继续信任不同 USAC 实现生成的内点集。
+    QJsonObject object;
+    object[QStringLiteral("schema_version")] = 1;
+    object[QStringLiteral("enabled")] = options.enableGeometryVerification;
+    object[QStringLiteral("model")] = QStringLiteral("fundamental");
+    object[QStringLiteral("reprojection_threshold_pixels")] =
+        options.geometryReprojThreshold;
+    object[QStringLiteral("minimum_inliers")] = options.geometryMinInliers;
+    object[QStringLiteral("maximum_iterations")] =
+        std::max(100, options.geometryMaxIterations);
+    object[QStringLiteral("confidence")] = 0.9999;
+    object[QStringLiteral("random_seed")] = 0;
+    object[QStringLiteral("quality_gate_version")] = 1;
+    object[QStringLiteral("opencv_version")] = QString::fromLatin1(CV_VERSION);
+    return QCryptographicHash::hash(
+        QJsonDocument(object).toJson(QJsonDocument::Compact),
+        QCryptographicHash::Sha256);
+}
 
 bool passesGeometryQualityGate(int rawMatchCount,
                                int inlierCount,
@@ -105,6 +132,65 @@ VerificationInput makeVerificationInput(const image_matching::PairMatchData &pai
     return input;
 }
 
+bool hasCompleteReusableGeometry(const MatchPhotosMatchRecord &record,
+                                 const MatchPhotosOptions &options,
+                                 const QByteArray &expectedFingerprint)
+{
+    if (!record.pairData ||
+        !record.settings.value(QStringLiteral("geometry_cache_reusable")).toBool(false) ||
+        record.settings.value(QStringLiteral("geometry_config_fingerprint")).toString() !=
+            QString::fromLatin1(expectedFingerprint.toHex()))
+    {
+        return false;
+    }
+
+    const image_matching::PairMatchData &pair = *record.pairData;
+    const int rawCount = static_cast<int>(pair.correspondences.size());
+    if (pair.rawMatchCount != static_cast<std::uint32_t>(rawCount) ||
+        pair.geometryInlierCount > pair.rawMatchCount)
+    {
+        return false;
+    }
+
+    const int flaggedInliers = static_cast<int>(std::count_if(
+        pair.correspondences.cbegin(),
+        pair.correspondences.cend(),
+        [](const image_matching::PairCorrespondence &correspondence)
+        {
+            return image_matching::hasFlag(
+                correspondence.flags,
+                image_matching::MatchRecordFlag::GeometryInlier);
+        }));
+    const bool expectedPassed = pair.geometryModel != image_matching::GeometryModel::None &&
+        passesGeometryQualityGate(rawCount,
+                                  static_cast<int>(pair.geometryInlierCount),
+                                  options.geometryMinInliers);
+    return flaggedInliers == static_cast<int>(pair.geometryInlierCount) &&
+        pair.geometryPassed == expectedPassed;
+}
+
+void updateGeometryRecordMetadata(MatchPhotosMatchRecord *record, bool verified)
+{
+    if (!record || !record->pairData)
+    {
+        return;
+    }
+
+    const image_matching::PairMatchData &pair = *record->pairData;
+    const int rawCount = static_cast<int>(pair.correspondences.size());
+    const int inlierCount = static_cast<int>(pair.geometryInlierCount);
+    record->matchCount = rawCount;
+    record->geometricInlierCount = inlierCount;
+    record->passedGeometry = pair.geometryPassed;
+    record->settings[QStringLiteral("geometry_verified")] = verified;
+    record->settings[QStringLiteral("geometry_passed")] = pair.geometryPassed;
+    record->settings[QStringLiteral("geometry_raw_matches")] = rawCount;
+    record->settings[QStringLiteral("geometric_inliers")] = inlierCount;
+    record->settings[QStringLiteral("geometry_inlier_ratio")] = rawCount > 0
+        ? static_cast<double>(inlierCount) / static_cast<double>(rawCount)
+        : 0.0;
+}
+
 void applyVerification(const image_matching::MatchGeometryResult &geometry,
                        int minimumInliers,
                        MatchPhotosMatchRecord *record)
@@ -136,16 +222,7 @@ void applyVerification(const image_matching::MatchGeometryResult &geometry,
             : -1.0f;
     }
 
-    record->matchCount = rawCount;
-    record->geometricInlierCount = geometry.inlierCount;
-    record->passedGeometry = passed;
-    record->settings[QStringLiteral("geometry_verified")] = true;
-    record->settings[QStringLiteral("geometry_passed")] = passed;
-    record->settings[QStringLiteral("geometry_raw_matches")] = rawCount;
-    record->settings[QStringLiteral("geometric_inliers")] = geometry.inlierCount;
-    record->settings[QStringLiteral("geometry_inlier_ratio")] = rawCount > 0
-        ? static_cast<double>(geometry.inlierCount) / static_cast<double>(rawCount)
-        : 0.0;
+    updateGeometryRecordMetadata(record, true);
 }
 
 } // namespace
@@ -176,14 +253,17 @@ MatchPhotosStageReport GeometryVerifyStage::run(
                 continue;
             }
             auto &pair = *record.pairData;
+            pair.rawMatchCount = static_cast<std::uint32_t>(pair.correspondences.size());
             pair.geometryPassed = true;
             pair.geometryInlierCount = pair.rawMatchCount;
+            pair.geometryModel = image_matching::GeometryModel::None;
+            pair.geometryMatrix = {};
             for (auto &correspondence : pair.correspondences)
             {
                 correspondence.flags = withGeometryFlag(correspondence.flags, true);
+                correspondence.residualPixels = -1.0f;
             }
-            record.passedGeometry = true;
-            record.geometricInlierCount = record.matchCount;
+            updateGeometryRecordMetadata(&record, false);
             ++accepted;
         }
         return makeGeometryReport(MatchPhotosStageStatus::Skipped,
@@ -201,13 +281,45 @@ MatchPhotosStageReport GeometryVerifyStage::run(
     geometryOptions.confidence = 0.9999;
     geometryOptions.randomSeed = 0;
 
+    const QByteArray expectedFingerprint = geometryVerificationFingerprint(options);
     const int totalPairs = static_cast<int>(matchRecords->size());
+    std::vector<int> workIndices;
+    workIndices.reserve(matchRecords->size());
+    int reusedPairs = 0;
+    int reusedPassedPairs = 0;
+    int reusedInliers = 0;
+    for (int index = 0; index < totalPairs; ++index)
+    {
+        MatchPhotosMatchRecord &record =
+            (*matchRecords)[static_cast<std::size_t>(index)];
+        if (!hasCompleteReusableGeometry(record, options, expectedFingerprint))
+        {
+            workIndices.push_back(index);
+            continue;
+        }
+        ++reusedPairs;
+        updateGeometryRecordMetadata(&record, true);
+        reusedPassedPairs += record.passedGeometry ? 1 : 0;
+        reusedInliers += record.geometricInlierCount;
+    }
+
+    if (workIndices.empty())
+    {
+        return makeGeometryReport(
+            MatchPhotosStageStatus::Completed,
+            QStringLiteral("几何验证缓存全命中：复用 %1 对，通过 %2 对，内点 %3，未运行 USAC")
+                .arg(reusedPairs)
+                .arg(reusedPassedPairs)
+                .arg(reusedInliers),
+            reusedPassedPairs);
+    }
+
     const int workerCount = resolveGeometryVerificationWorkers(
-        totalPairs, std::thread::hardware_concurrency());
+        static_cast<int>(workIndices.size()), std::thread::hardware_concurrency());
     std::atomic_int nextIndex{0};
-    std::atomic_int completed{0};
-    std::atomic_int passedPairs{0};
-    std::atomic_int totalInliers{0};
+    std::atomic_int completed{reusedPairs};
+    std::atomic_int passedPairs{reusedPassedPairs};
+    std::atomic_int totalInliers{reusedInliers};
     std::mutex callbackMutex;
     QElapsedTimer timer;
     timer.start();
@@ -220,11 +332,12 @@ MatchPhotosStageReport GeometryVerifyStage::run(
         {
             while (!shouldCancelMatchPhotos(context))
             {
-                const int index = nextIndex.fetch_add(1);
-                if (index >= totalPairs)
+                const int workIndex = nextIndex.fetch_add(1);
+                if (workIndex >= static_cast<int>(workIndices.size()))
                 {
                     break;
                 }
+                const int index = workIndices[static_cast<std::size_t>(workIndex)];
                 MatchPhotosMatchRecord &record =
                     (*matchRecords)[static_cast<std::size_t>(index)];
                 if (record.pairData)
@@ -271,11 +384,12 @@ MatchPhotosStageReport GeometryVerifyStage::run(
     const int failedPairs = totalPairs - passedPairs.load();
     return makeGeometryReport(
         MatchPhotosStageStatus::Completed,
-        QStringLiteral("几何验证完成：通过 %1 对，失败 %2 对，内点 %3，"
-                       "CPU worker %4，总计 %5 ms")
+        QStringLiteral("几何验证完成：通过 %1 对，失败 %2 对，内点 %3，复用 %4 对，"
+                       "CPU worker %5，总计 %6 ms")
             .arg(passedPairs.load())
             .arg(failedPairs)
             .arg(totalInliers.load())
+            .arg(reusedPairs)
             .arg(workerCount)
             .arg(timer.elapsed()),
         passedPairs.load());

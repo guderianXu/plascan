@@ -306,6 +306,47 @@ TEST(SfmSearchPolicyTest, AdaptiveFocalSweepCoversNarrowFieldOfViewCameras)
     EXPECT_NE(std::find(scales.begin(), scales.end(), 1.05), scales.end());
 }
 
+TEST(SfmSearchPolicyTest, CoarseFocalSweepUsesEightDeterministicRangeAnchors)
+{
+    const std::vector<double> scales =
+        xjw::aerial_triangulation::adaptiveFocalCoarseScaleCandidates();
+
+    ASSERT_EQ(scales.size(), 8u);
+    EXPECT_TRUE(std::is_sorted(scales.cbegin(), scales.cend()));
+    EXPECT_NE(std::find(scales.cbegin(), scales.cend(), 0.55), scales.cend());
+    EXPECT_NE(std::find(scales.cbegin(), scales.cend(), 1.2), scales.cend());
+    EXPECT_NE(std::find(scales.cbegin(), scales.cend(), 5.2), scales.cend());
+    EXPECT_NE(std::find(scales.cbegin(), scales.cend(), 9.0), scales.cend());
+}
+
+TEST(SfmSearchPolicyTest, FocalRefinementExpandsTopTwoSeedsToUnevaluatedNeighbors)
+{
+    const std::vector<SfmCandidateSummary> ranked{
+        {4, 5.2, 0, 1, 16, 2400, 0.4, true},
+        {1, 1.0, 0, 1, 16, 1800, 0.5, true},
+        {3, 2.4, 0, 1, 16, 1600, 0.6, true},
+    };
+    const std::vector<double> refinement =
+        xjw::aerial_triangulation::adaptiveFocalRefinementScaleCandidates(
+            ranked, {1.0, 5.2}, 2);
+
+    const std::vector<double> expected{4.0, 6.4, 0.95, 1.05};
+    EXPECT_EQ(refinement, expected);
+}
+
+TEST(SfmSearchPolicyTest, LongFocalAnchorRefinesThroughTenTimesImageWidth)
+{
+    const std::vector<SfmCandidateSummary> ranked{
+        {0, 9.0, 0, 1, 16, 2400, 0.4, true},
+    };
+    const std::vector<double> refinement =
+        xjw::aerial_triangulation::adaptiveFocalRefinementScaleCandidates(
+            ranked, xjw::aerial_triangulation::adaptiveFocalCoarseScaleCandidates(), 1);
+
+    const std::vector<double> expected{8.0, 10.0};
+    EXPECT_EQ(refinement, expected);
+}
+
 TEST(SfmSearchPolicyTest, AerialBlockPlanarityRejectsDomedFocalCandidate)
 {
     SfmCandidateSummary flat{

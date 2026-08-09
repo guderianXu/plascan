@@ -28,6 +28,11 @@ struct MatchPhotosAlgorithmPlan
 
     int maxImageDim = 2048;
     int maxKeypoints = 8192;
+    // 已解析的特征提取配置必须与匹配缓存键共用，避免 profile 改变实际
+    // 检测行为后仍误命中旧的 `.pimatch`。
+    int featureSchemaVersion = 1;
+    int featureRemoveBorders = 16;
+    float siftDetectionThreshold = 0.0005f;
 
     QString reason;
     QString validationError;

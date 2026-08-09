@@ -350,6 +350,20 @@ TEST(AerialTriangulationWorkflowTest, ResetAlignmentReusesExistingMatchesByDefau
     EXPECT_TRUE(reuseResolved.pipelineInput.useProjectCameraPoses);
 }
 
+TEST(AerialTriangulationWorkflowTest, KeypointMasksUseFingerprintBasedMatchReuse)
+{
+    QTemporaryDir tempDir;
+    auto options = makeBaseOptions(tempDir.path());
+    options.maskApplyMode = QStringLiteral("keypoints");
+    options.reuseExistingMatches = true;
+
+    const auto resolved =
+        xjw::aerial_triangulation::AerialTriangulationWorkflow::resolveConfig(options);
+
+    EXPECT_TRUE(resolved.tiePointOptions.reuseExistingMatches);
+    EXPECT_EQ(resolved.tiePointOptions.maskApplyMode, QStringLiteral("keypoints"));
+}
+
 TEST(AerialTriangulationWorkflowTest, DisablingMatchReuseForcesTiePointRebuild)
 {
     QTemporaryDir tempDir;

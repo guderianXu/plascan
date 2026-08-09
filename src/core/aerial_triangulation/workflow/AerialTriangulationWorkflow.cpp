@@ -284,8 +284,9 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     tieOptions.excludeStationaryTiePoints = options.excludeFixedTiePoints;
     tieOptions.stationaryTiePointMaxPixelMotion = std::max(
         0.0f, options.stationaryTiePointMaxPixelMotion);
-    tieOptions.reuseExistingMatches = options.reuseExistingMatches &&
-        tieOptions.maskApplyMode != QStringLiteral("keypoints");
+    // 原始匹配缓存键包含蒙版应用阶段及两侧蒙版文件指纹。keypoints 模式下
+    // 只有完全相同的蒙版输入才能命中，因此无需再无条件禁用安全缓存复用。
+    tieOptions.reuseExistingMatches = options.reuseExistingMatches;
 
     // 第五阶段：解析 pair 预选。无参考相机时不得启用位姿参考预选；照片序列
     // 使用索引窗口和首尾闭环，不伪造参考相机文件。

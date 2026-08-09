@@ -37,13 +37,6 @@ MatchPhotosStageReport makeFeatureReport(MatchPhotosStageStatus status,
     return report;
 }
 
-float siftDetectionThreshold(const MatchPhotosOptions &options)
-{
-    // cudaSift 的阈值会在 SiftFeatureExtractor 内转换到其原生量纲。
-    // 快速模式减少低响应点，其余模式保持低纹理摄影测量场景所需的较密检测。
-    return options.profile == MatchPhotosProfile::Fast ? 0.003f : 0.0005f;
-}
-
 cv::Mat resizeImage(const cv::Mat &image, int maximumDimension, double *scale)
 {
     if (scale)
@@ -250,8 +243,8 @@ MatchPhotosStageReport FeatureStage::run(
         image_matching::ImageMatchingRuntimeConfig runtime;
         runtime.cudaDevice = options.cudaDevice;
         runtime.maxKeypoints = prepared.effectiveKeypointLimit;
-        runtime.removeBorders = 16;
-        runtime.siftDetectionThreshold = siftDetectionThreshold(options);
+        runtime.removeBorders = algorithmPlan.featureRemoveBorders;
+        runtime.siftDetectionThreshold = algorithmPlan.siftDetectionThreshold;
         // 注册算法均要求 CUDA。不能静默切换到另一实现后仍沿用相同算法版本。
         runtime.allowCpuSiftFallback = false;
         if (algorithmPlan.algorithmId == QLatin1String(image_matching::kLoMaRAlgorithmId))

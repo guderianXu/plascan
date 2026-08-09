@@ -35,6 +35,16 @@ struct SparseQualityReport
 class QualityReportWriter
 {
 public:
+    /**
+     * @brief 仅计算焦距候选排序需要的网络质量摘要。
+     *
+     * 该路径不构造逐点、逐观测或逐相机 QJsonArray，适合并行候选结束后的快速排序。
+     */
+    static QJsonObject buildSparseQualitySummary(
+        const PreparedAerialTriangulationInput &input,
+        const xjw::SfmReconstruction &reconstruction,
+        const AerialTriangulationReconstructionResult &result);
+
     /// 根据最终重建和工作流上下文生成报告，不修改 reconstruction/result。
     static SparseQualityReport build(
         const PreparedAerialTriangulationInput &input,

@@ -336,9 +336,8 @@ QJsonObject sparseQualityFromExecution(
     {
         return {};
     }
-    const SparseQualityReport report = QualityReportWriter::build(
+    return QualityReportWriter::buildSparseQualitySummary(
         input, *execution.reconstruction, execution.result);
-    return report.diagnostics.value(QStringLiteral("sparse_quality")).toObject();
 }
 
 /**
@@ -503,6 +502,154 @@ QJsonObject candidateToJson(const AdaptiveFocalCandidate &candidate,
     return object;
 }
 
+struct FocalSearchBatchResult
+{
+    std::vector<SfmAttemptExecutionResult> executions;
+    SfmWorkerBudget workerBudget;
+};
+
+/**
+ * @brief 并行执行一个确定顺序的焦距候选批次。
+ *
+ * 结果槽位与 scales 一一对应，因此完成先后不会影响后续稳定排序。
+ */
+FocalSearchBatchResult runFocalSearchBatch(
+    const AerialTriangulationPipeline::AttemptRunner &attemptRunner,
+    const PreparedAerialTriangulationInput &baseInput,
+    const std::vector<double> &scales,
+    int focalProbeLimit,
+    const std::function<void(const QString &, int)> &progressFn,
+    const QString &stageName,
+    int progressBase,
+    int progressSpan)
+{
+    FocalSearchBatchResult batch;
+    const int candidateCount = static_cast<int>(scales.size());
+    if (candidateCount <= 0)
+    {
+        return batch;
+    }
+
+    batch.workerBudget = allocateWorkers(candidateCount, baseInput.threads);
+    batch.executions.resize(static_cast<std::size_t>(candidateCount));
+    std::vector<std::shared_ptr<std::atomic<int>>> candidateProgress;
+    std::vector<std::shared_ptr<std::atomic<bool>>> candidateStarted;
+    candidateProgress.reserve(static_cast<std::size_t>(candidateCount));
+    candidateStarted.reserve(static_cast<std::size_t>(candidateCount));
+    for (int index = 0; index < candidateCount; ++index)
+    {
+        candidateProgress.push_back(std::make_shared<std::atomic<int>>(0));
+        candidateStarted.push_back(std::make_shared<std::atomic<bool>>(false));
+    }
+
+    std::atomic<int> nextCandidateIndex{0};
+    std::atomic<int> completedCandidateCount{0};
+    std::vector<std::jthread> workers;
+    workers.reserve(static_cast<std::size_t>(batch.workerBudget.workerCount));
+    for (int workerIndex = 0; workerIndex < batch.workerBudget.workerCount; ++workerIndex)
+    {
+        workers.emplace_back([&, workerIndex]()
+        {
+            while (true)
+            {
+                const int scaleIndex = nextCandidateIndex.fetch_add(1);
+                if (scaleIndex >= candidateCount)
+                {
+                    break;
+                }
+
+                PreparedAerialTriangulationInput candidateInput = baseInput;
+                candidateInput.estimatedFocalScale = scales[static_cast<std::size_t>(scaleIndex)];
+                candidateInput.adaptiveCameraModelFitting = false;
+                candidateInput.coarseFocalEvaluation = true;
+                candidateInput.maxRegisteredImages = focalProbeLimit;
+                candidateInput.threads = batch.workerBudget.threadsForWorker(workerIndex);
+                const std::shared_ptr<std::atomic<int>> progress =
+                    candidateProgress[static_cast<std::size_t>(scaleIndex)];
+                candidateStarted[static_cast<std::size_t>(scaleIndex)]->store(true);
+                candidateInput.progressFn = [progress](const QString &, int percent)
+                {
+                    progress->store(std::clamp(percent, 0, 100));
+                };
+
+                try
+                {
+                    batch.executions[static_cast<std::size_t>(scaleIndex)] =
+                        attemptRunner(candidateInput);
+                }
+                catch (const std::exception &error)
+                {
+                    SfmAttemptExecutionResult failed;
+                    failed.result.success = false;
+                    failed.result.errorMessage =
+                        QStringLiteral("焦距候选 %1 执行异常: %2")
+                            .arg(candidateInput.estimatedFocalScale)
+                            .arg(QString::fromUtf8(error.what()));
+                    failed.result.summary = failed.result.errorMessage;
+                    batch.executions[static_cast<std::size_t>(scaleIndex)] = std::move(failed);
+                }
+                catch (...)
+                {
+                    SfmAttemptExecutionResult failed;
+                    failed.result.success = false;
+                    failed.result.errorMessage =
+                        QStringLiteral("焦距候选 %1 执行时发生未知异常")
+                            .arg(candidateInput.estimatedFocalScale);
+                    failed.result.summary = failed.result.errorMessage;
+                    batch.executions[static_cast<std::size_t>(scaleIndex)] = std::move(failed);
+                }
+
+                progress->store(100);
+                completedCandidateCount.fetch_add(1);
+            }
+        });
+    }
+
+    while (completedCandidateCount.load() < candidateCount)
+    {
+        if (progressFn)
+        {
+            int accumulatedProgress = 0;
+            int runningCount = 0;
+            int highestCandidatePercent = 0;
+            for (int index = 0; index < candidateCount; ++index)
+            {
+                const int percent = candidateProgress[static_cast<std::size_t>(index)]->load();
+                accumulatedProgress += percent;
+                highestCandidatePercent = std::max(highestCandidatePercent, percent);
+                if (candidateStarted[static_cast<std::size_t>(index)]->load() && percent < 100)
+                {
+                    ++runningCount;
+                }
+            }
+            const int aggregatePercent = accumulatedProgress / candidateCount;
+            progressFn(
+                QStringLiteral("%1：已完成 %2/%3，运行中 %4/%5，CPU线程预算 %6，候选内部最高 %7%")
+                    .arg(stageName)
+                    .arg(completedCandidateCount.load())
+                    .arg(candidateCount)
+                    .arg(runningCount)
+                    .arg(batch.workerBudget.workerCount)
+                    .arg(batch.workerBudget.totalThreads())
+                    .arg(highestCandidatePercent),
+                progressBase + aggregatePercent * progressSpan / 100);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    for (std::jthread &worker : workers)
+    {
+        worker.join();
+    }
+    if (progressFn)
+    {
+        progressFn(QStringLiteral("%1：已完成 %2/%2 个候选")
+                       .arg(stageName)
+                       .arg(candidateCount),
+                   progressBase + progressSpan);
+    }
+    return batch;
+}
+
 } // namespace
 
 bool AerialTriangulationPipeline::shouldFlagAerialDomingRisk(
@@ -645,16 +792,27 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
     int focalSearchThreadBudget = 0;
     int focalSearchMinThreadsPerWorker = 0;
     int focalSearchMaxThreadsPerWorker = 0;
+    int focalSearchCoarseCandidateCount = 0;
+    int focalSearchRefinementCandidateCount = 0;
+    int focalSearchFallbackCandidateCount = 0;
+    bool focalSearchExhaustiveFallback = false;
 
     if (needsFocalInitializationSearch)
     {
+        PreparedAerialTriangulationInput focalQualityInput = input;
+        if (focalProbeLimit > 0 && focalQualityInput.images.size() > focalProbeLimit)
+        {
+            // probe 只承诺注册 focalProbeLimit 台相机；摘要门控也必须使用相同评估规模，
+            // 否则会把 64/444 误判为注册覆盖不足并无条件触发全尺度回退。
+            focalQualityInput.images.resize(focalProbeLimit);
+        }
         // 每个候选保留独立重建对象和同一口径质量摘要，不能交叉复用相机状态。
         const auto appendCandidate = [&](double focalScale,
                                          SfmAttemptExecutionResult candidateExecution)
         {
             const int candidateIndex = focalCandidates.size();
             const QJsonObject sparseQuality =
-                sparseQualityFromExecution(input, candidateExecution);
+                sparseQualityFromExecution(focalQualityInput, candidateExecution);
             if (!sparseQuality.isEmpty())
             {
                 candidateExecution.result.sfmDiagnostics.insert(
@@ -668,161 +826,51 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
                 input.sequenceLoopClosure));
             candidateExecutions.append(std::move(candidateExecution));
         };
-        std::vector<double> coarseScales;
-        coarseScales.push_back(input.estimatedFocalScale);
-        for (double focalScale : adaptiveFocalScaleCandidates())
+        constexpr double kFocalScaleTolerance = 1.0e-9;
+        std::vector<double> evaluatedScales;
+        evaluatedScales.push_back(input.estimatedFocalScale);
+        for (double focalScale : adaptiveFocalCoarseScaleCandidates())
         {
             const bool alreadyQueued = std::any_of(
-                coarseScales.cbegin(),
-                coarseScales.cend(),
+                evaluatedScales.cbegin(),
+                evaluatedScales.cend(),
                 [focalScale](double queuedScale)
                 {
-                    return std::abs(queuedScale - focalScale) <= 1.0e-9;
+                    return std::abs(queuedScale - focalScale) <= kFocalScaleTolerance;
                 });
             if (!alreadyQueued)
             {
-                coarseScales.push_back(focalScale);
+                evaluatedScales.push_back(focalScale);
             }
         }
-
-        // 每个候选至少分配一个 worker，并把剩余逻辑线程均匀用于候选内部 BA。
-        // worker 总数和内部线程之和都严格受本机硬件预算约束，不再使用固定上限。
-        const int coarseCount = static_cast<int>(coarseScales.size());
-        const SfmWorkerBudget workerBudget = allocateWorkers(coarseCount, attemptInput.threads);
-        focalSearchWorkerCount = workerBudget.workerCount;
-        focalSearchThreadBudget = workerBudget.totalThreads();
-        focalSearchMinThreadsPerWorker = workerBudget.threadsPerWorker;
-        focalSearchMaxThreadsPerWorker = workerBudget.threadsPerWorker +
-            (workerBudget.workersWithExtraThread > 0 ? 1 : 0);
-        std::vector<SfmAttemptExecutionResult> coarseExecutions(
-            static_cast<std::size_t>(coarseCount));
-        std::vector<std::shared_ptr<std::atomic<int>>> coarseProgress;
-        std::vector<std::shared_ptr<std::atomic<bool>>> coarseStarted;
-        coarseProgress.reserve(static_cast<std::size_t>(coarseCount));
-        coarseStarted.reserve(static_cast<std::size_t>(coarseCount));
-        for (int index = 0; index < coarseCount; ++index)
+        focalSearchCoarseCandidateCount = static_cast<int>(evaluatedScales.size());
+        const auto updateWorkerDiagnostics = [&](const SfmWorkerBudget &budget)
         {
-            coarseProgress.push_back(std::make_shared<std::atomic<int>>(0));
-            coarseStarted.push_back(std::make_shared<std::atomic<bool>>(false));
-        }
-
-        std::atomic<int> nextCoarseIndex{0};
-        std::atomic<int> completedCoarseCount{0};
-        // jthread 在后续线程创建抛出异常时也会自动 join 已启动的 worker，避免
-        // 普通 std::thread 的析构触发 terminate。
-        std::vector<std::jthread> workers;
-        workers.reserve(static_cast<std::size_t>(workerBudget.workerCount));
-        for (int workerIndex = 0; workerIndex < workerBudget.workerCount; ++workerIndex)
-        {
-            workers.emplace_back([&, workerIndex]()
+            if (budget.workerCount <= 0)
             {
-                (void)workerIndex;
-                while (true)
-                {
-                    const int scaleIndex = nextCoarseIndex.fetch_add(1);
-                    if (scaleIndex >= coarseCount)
-                    {
-                        break;
-                    }
-
-                    PreparedAerialTriangulationInput coarseInput = attemptInput;
-                    coarseInput.estimatedFocalScale =
-                        coarseScales[static_cast<std::size_t>(scaleIndex)];
-                    coarseInput.adaptiveCameraModelFitting = false;
-                    coarseInput.coarseFocalEvaluation = true;
-                    coarseInput.maxRegisteredImages = focalProbeLimit;
-                    coarseInput.threads = workerBudget.threadsForWorker(workerIndex);
-                    const std::shared_ptr<std::atomic<int>> progress =
-                        coarseProgress[static_cast<std::size_t>(scaleIndex)];
-                    coarseStarted[static_cast<std::size_t>(scaleIndex)]->store(true);
-                    coarseInput.progressFn = [progress](const QString &, int percent)
-                    {
-                        progress->store(std::clamp(percent, 0, 100));
-                    };
-
-                    try
-                    {
-                        coarseExecutions[static_cast<std::size_t>(scaleIndex)] =
-                            _attemptRunner(coarseInput);
-                    }
-                    catch (const std::exception &error)
-                    {
-                        SfmAttemptExecutionResult failed;
-                        failed.result.success = false;
-                        failed.result.errorMessage =
-                            QStringLiteral("焦距候选 %1 执行异常: %2")
-                                .arg(coarseInput.estimatedFocalScale)
-                                .arg(QString::fromUtf8(error.what()));
-                        failed.result.summary = failed.result.errorMessage;
-                        coarseExecutions[static_cast<std::size_t>(scaleIndex)] =
-                            std::move(failed);
-                    }
-                    catch (...)
-                    {
-                        SfmAttemptExecutionResult failed;
-                        failed.result.success = false;
-                        failed.result.errorMessage =
-                            QStringLiteral("焦距候选 %1 执行时发生未知异常")
-                                .arg(coarseInput.estimatedFocalScale);
-                        failed.result.summary = failed.result.errorMessage;
-                        coarseExecutions[static_cast<std::size_t>(scaleIndex)] =
-                            std::move(failed);
-                    }
-
-                    progress->store(100);
-                    completedCoarseCount.fetch_add(1);
-                }
-            });
-        }
-
-        // 汇总所有候选的真实内部进度；不把“当前候选”误显示成整体百分比。
-        while (completedCoarseCount.load() < coarseCount)
-        {
-            if (originalProgress)
-            {
-                int accumulatedProgress = 0;
-                int runningCount = 0;
-                int highestCandidatePercent = 0;
-                for (int index = 0; index < coarseCount; ++index)
-                {
-                    const int candidatePercent =
-                        coarseProgress[static_cast<std::size_t>(index)]->load();
-                    accumulatedProgress += candidatePercent;
-                    highestCandidatePercent = std::max(highestCandidatePercent, candidatePercent);
-                    if (coarseStarted[static_cast<std::size_t>(index)]->load() &&
-                        candidatePercent < 100)
-                    {
-                        ++runningCount;
-                    }
-                }
-                const int aggregatePercent = coarseCount > 0
-                    ? accumulatedProgress / coarseCount
-                    : 100;
-                originalProgress(
-                    QStringLiteral("无相机先验焦距粗搜索：已完成 %1/%2，运行中 %3/%4，CPU线程预算 %5，候选内部最高 %6%")
-                        .arg(completedCoarseCount.load())
-                        .arg(coarseCount)
-                        .arg(runningCount)
-                        .arg(workerBudget.workerCount)
-                        .arg(workerBudget.totalThreads())
-                        .arg(highestCandidatePercent),
-                    5 + aggregatePercent * 75 / 100);
+                return;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-        for (std::jthread &worker : workers)
+            focalSearchWorkerCount = std::max(focalSearchWorkerCount, budget.workerCount);
+            focalSearchThreadBudget = std::max(focalSearchThreadBudget, budget.totalThreads());
+            focalSearchMinThreadsPerWorker = focalSearchMinThreadsPerWorker > 0
+                ? std::min(focalSearchMinThreadsPerWorker, budget.threadsPerWorker)
+                : budget.threadsPerWorker;
+            focalSearchMaxThreadsPerWorker = std::max(
+                focalSearchMaxThreadsPerWorker,
+                budget.threadsPerWorker + (budget.workersWithExtraThread > 0 ? 1 : 0));
+        };
+        const auto appendBatch = [&](const std::vector<double> &scales,
+                                     FocalSearchBatchResult batch)
         {
-            worker.join();
-        }
-        if (originalProgress)
-        {
-            originalProgress(
-                QStringLiteral("无相机先验焦距粗搜索：已完成 %1/%1 个候选")
-                    .arg(coarseCount),
-                80);
-        }
-
-        if (input.cancelFlag && input.cancelFlag->load())
+            updateWorkerDiagnostics(batch.workerBudget);
+            for (int scaleIndex = 0; scaleIndex < static_cast<int>(scales.size()); ++scaleIndex)
+            {
+                appendCandidate(
+                    scales[static_cast<std::size_t>(scaleIndex)],
+                    std::move(batch.executions[static_cast<std::size_t>(scaleIndex)]));
+            }
+        };
+        const auto cancelledResult = [&]()
         {
             AerialTriangulationReconstructionResult cancelled;
             cancelled.success = false;
@@ -830,12 +878,93 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
             cancelled.summary = cancelled.errorMessage;
             cancelled.durationSeconds = timer.elapsed() / 1000.0;
             return cancelled;
-        }
-        for (int scaleIndex = 0; scaleIndex < coarseCount; ++scaleIndex)
+        };
+
+        appendBatch(
+            evaluatedScales,
+            runFocalSearchBatch(
+                _attemptRunner,
+                attemptInput,
+                evaluatedScales,
+                focalProbeLimit,
+                originalProgress,
+                QStringLiteral("无相机先验焦距粗搜索"),
+                5,
+                50));
+        if (input.cancelFlag && input.cancelFlag->load())
         {
-            appendCandidate(
-                coarseScales[static_cast<std::size_t>(scaleIndex)],
-                std::move(coarseExecutions[static_cast<std::size_t>(scaleIndex)]));
+            return cancelledResult();
+        }
+
+        const std::vector<SfmCandidateSummary> rankedCoarse = rankCandidates(candidateSummaries);
+        const int evaluationTarget = focalProbeLimit > 0
+            ? focalProbeLimit
+            : static_cast<int>(input.images.size());
+        const int bestCoarseIndex = rankedCoarse.empty()
+            ? -1
+            : rankedCoarse.front().candidateIndex;
+        const bool coarsePassesSparseQualityGate = bestCoarseIndex >= 0 &&
+            bestCoarseIndex < static_cast<int>(candidateExecutions.size()) &&
+            candidateExecutions[bestCoarseIndex].result.sfmDiagnostics
+                .value(QStringLiteral("sparse_quality")).toObject()
+                .value(QStringLiteral("quality_gate")).toObject()
+                .value(QStringLiteral("acceptable_for_mvs")).toBool(false);
+        const bool coarseHasProductionCloud = !rankedCoarse.empty() &&
+            rankedCoarse.front().success &&
+            shouldStopAdaptiveFocalReplay(
+                evaluationTarget,
+                rankedCoarse.front().registeredImages,
+                rankedCoarse.front().points3D > 0) &&
+            coarsePassesSparseQualityGate;
+
+        std::vector<double> secondStageScales;
+        if (coarseHasProductionCloud)
+        {
+            secondStageScales = adaptiveFocalRefinementScaleCandidates(
+                rankedCoarse, evaluatedScales, 2);
+            focalSearchRefinementCandidateCount = static_cast<int>(secondStageScales.size());
+        }
+        else
+        {
+            // 粗锚点无法建立完整生产模型时恢复旧的全尺度覆盖，避免弱纹理、极端
+            // 视场或局部收敛使粗到细策略丢失唯一可用焦距。
+            focalSearchExhaustiveFallback = true;
+            for (const double scale : adaptiveFocalScaleCandidates())
+            {
+                const bool alreadyEvaluated = std::any_of(
+                    evaluatedScales.cbegin(), evaluatedScales.cend(), [scale](double value)
+                    {
+                        return std::abs(value - scale) <= kFocalScaleTolerance;
+                    });
+                if (!alreadyEvaluated)
+                {
+                    secondStageScales.push_back(scale);
+                }
+            }
+            focalSearchFallbackCandidateCount = static_cast<int>(secondStageScales.size());
+        }
+
+        if (!secondStageScales.empty())
+        {
+            appendBatch(
+                secondStageScales,
+                runFocalSearchBatch(
+                    _attemptRunner,
+                    attemptInput,
+                    secondStageScales,
+                    focalProbeLimit,
+                    originalProgress,
+                    focalSearchExhaustiveFallback
+                        ? QStringLiteral("焦距全尺度兜底搜索")
+                        : QStringLiteral("最佳焦距邻域细化"),
+                    55,
+                    25));
+            evaluatedScales.insert(
+                evaluatedScales.end(), secondStageScales.cbegin(), secondStageScales.cend());
+        }
+        if (input.cancelFlag && input.cancelFlag->load())
+        {
+            return cancelledResult();
         }
 
         // 排序首要目标是注册完整性，其次才是网络刚性、闭环连续性、RMS 和点数。
@@ -843,6 +972,8 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
         const int selectedIndex = ranked.empty() ? 0 : ranked.front().candidateIndex;
         selectedFocalScale = focalCandidates.at(selectedIndex).focalScale;
         execution = std::move(candidateExecutions[selectedIndex]);
+        // 排序完成后只保留胜出重建，及时释放其它候选的相机、点云和观测内存。
+        candidateExecutions.clear();
 
         // 大工程的候选只注册受限数量的连通影像。选出焦距后必须重新执行一次完整 SfM，
         // 探测模型只用于排序，绝不能作为最终稀疏云或相机位姿写入工程。
@@ -957,6 +1088,21 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
         QStringLiteral("focal_search_min_threads_per_worker"), focalSearchMinThreadsPerWorker);
     execution.result.sfmDiagnostics.insert(
         QStringLiteral("focal_search_max_threads_per_worker"), focalSearchMaxThreadsPerWorker);
+    execution.result.sfmDiagnostics.insert(
+        QStringLiteral("focal_search_coarse_candidate_count"),
+        focalSearchCoarseCandidateCount);
+    execution.result.sfmDiagnostics.insert(
+        QStringLiteral("focal_search_refinement_candidate_count"),
+        focalSearchRefinementCandidateCount);
+    execution.result.sfmDiagnostics.insert(
+        QStringLiteral("focal_search_fallback_candidate_count"),
+        focalSearchFallbackCandidateCount);
+    execution.result.sfmDiagnostics.insert(
+        QStringLiteral("focal_search_exhaustive_fallback"),
+        focalSearchExhaustiveFallback);
+    execution.result.sfmDiagnostics.insert(
+        QStringLiteral("focal_search_evaluated_candidate_count"),
+        focalCandidates.size());
     execution.result.sfmDiagnostics.insert(
         QStringLiteral("focal_search_shared_tie_point_graph"),
         static_cast<bool>(attemptInput.preparedTiePointGraph));

@@ -1,4 +1,5 @@
 #include "reporting/AerialTriangulationResultWriter.h"
+#include "reporting/QualityReportWriter.h"
 
 #include "Camera.h"
 #include "reconstruction/SfmReconstruction.h"
@@ -65,6 +66,14 @@ TEST(AerialTriangulationResultWriterTest, WritesSparseCloudSidecarAndQualityMeta
     execution.result.numPoints3D = 1;
     execution.result.baTracksTotal = 1;
     execution.result.baTracksOptimized = 1;
+
+    const QJsonObject qualitySummary =
+        xjw::aerial_triangulation::QualityReportWriter::buildSparseQualitySummary(
+            input, *reconstruction, execution.result);
+    EXPECT_EQ(qualitySummary.value(QStringLiteral("point_count")).toInt(), 1);
+    EXPECT_TRUE(qualitySummary.contains(QStringLiteral("triangulation_angle")));
+    EXPECT_FALSE(qualitySummary.contains(QStringLiteral("points")));
+    EXPECT_FALSE(qualitySummary.contains(QStringLiteral("per_camera_residuals")));
 
     QString errorMessage;
     ASSERT_TRUE(xjw::aerial_triangulation::AerialTriangulationResultWriter().write(

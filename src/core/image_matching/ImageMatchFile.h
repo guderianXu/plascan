@@ -60,6 +60,17 @@ public:
                       ImageMatchShard shard,
                       QString *errorMessage = nullptr);
 
+    /**
+     * @brief 仅在规范化后的 payload 变化时原子写入分片。
+     *
+     * changed 在成功时表示文件内容是否实际提交。现有文件会经过完整容器和
+     * SHA-256 校验后再比较，不能因只信任头部摘要而保留已损坏 payload。
+     */
+    static bool writeIfChanged(const QString &filePath,
+                               ImageMatchShard shard,
+                               bool *changed,
+                               QString *errorMessage = nullptr);
+
     /// 读取并校验完整分片。任何版本、长度或 SHA-256 错误都会显式失败。
     static bool read(const QString &filePath,
                      ImageMatchShard *shard,

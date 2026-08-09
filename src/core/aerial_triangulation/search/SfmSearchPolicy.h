@@ -103,6 +103,20 @@ std::vector<int> replayCandidateIndices(
 /// 返回覆盖广角、普通相机、长焦/行星相机的无量纲焦距初始化集合。
 std::vector<double> adaptiveFocalScaleCandidates();
 
+/// 返回第一阶段代表尺度；保持广角、常用航测焦距和约 9 倍影像宽度的长焦锚点。
+std::vector<double> adaptiveFocalCoarseScaleCandidates();
+
+/**
+ * @brief 从粗搜排序前列候选生成第二阶段相邻尺度。
+ *
+ * 每个 seed 在完整尺度表中最多扩展左右各一个相邻尺度，已评估尺度会被跳过。
+ * 返回顺序只由 rankedCandidates 和固定尺度表决定，保证跨线程数确定性。
+ */
+std::vector<double> adaptiveFocalRefinementScaleCandidates(
+    const std::vector<SfmCandidateSummary> &rankedCandidates,
+    const std::vector<double> &evaluatedScales,
+    int maxSeedCount = 2);
+
 /// 已全量注册且存在生产稀疏云时可提前停止更多焦距重放。
 bool shouldStopAdaptiveFocalReplay(int totalImages,
                                    int registeredImages,

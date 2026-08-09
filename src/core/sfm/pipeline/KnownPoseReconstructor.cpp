@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <limits>
 #include <numeric>
 #include <sstream>
@@ -680,37 +681,92 @@ void IncrementalSfm::refineKnownCameraPosesWithPnp()
     }
 
     const std::vector<ImageId> imageIds = _reconstruction->registeredImageIds();
+
+    // 输入相机和相机中心范围在整轮 PnP 中保持不变。一次加载可避免 .tsai
+    // 路径在逐影像循环中被重复打开，并将原来的 O(N^2) 相机读取降为 O(N)。
+    std::unordered_map<ImageId, Camera> inputCameras;
+    inputCameras.reserve(imageIds.size());
+    std::vector<std::array<double, 3>> inputCenters;
+    inputCenters.reserve(imageIds.size());
     for (ImageId imageId : imageIds)
     {
-        if (!_reconstruction->hasCamera(imageId) || !_reconstruction->hasImage(imageId))
+        Camera inputCamera;
+        if (getCamera(imageId, inputCamera))
+        {
+            inputCenters.push_back(inputCamera.cameraCenter());
+            inputCameras.emplace(imageId, std::move(inputCamera));
+        }
+    }
+    const double inputExtent = centerExtent(inputCenters);
+    const double maxAcceptedMove = std::max(0.5, inputExtent * 0.05);
+
+    struct PnpCorrespondences
+    {
+        std::vector<std::array<double, 3>> worldPoints;
+        std::vector<std::array<double, 2>> imagePoints;
+    };
+
+    // 倒排一次全部轨迹，替代“每张影像扫描全部三维点”的 O(N * points)
+    // 数据收集。轨迹理论上每幅影像只有一个观测，这里仍保留首个有效观测语义。
+    std::unordered_map<ImageId, PnpCorrespondences> correspondencesByImage;
+    correspondencesByImage.reserve(imageIds.size());
+    for (ImageId imageId : imageIds)
+    {
+        if (_reconstruction->hasCamera(imageId) && _reconstruction->hasImage(imageId))
+        {
+            correspondencesByImage.try_emplace(imageId);
+        }
+    }
+
+    for (Point3DId pointId : _reconstruction->allPoint3DIds())
+    {
+        if (!_reconstruction->hasPoint3D(pointId))
         {
             continue;
         }
 
-        std::vector<std::array<double, 3>> worldPoints;
-        std::vector<std::array<double, 2>> imagePoints;
-        const ImageData &image = _reconstruction->image(imageId);
-        for (Point3DId pointId : _reconstruction->allPoint3DIds())
+        const ScenePoint3D &point = _reconstruction->point3D(pointId);
+        for (std::size_t elementIndex = 0; elementIndex < point.track.elements.size(); ++elementIndex)
         {
-            if (!_reconstruction->hasPoint3D(pointId))
+            const TrackElement &element = point.track.elements[elementIndex];
+            const auto correspondencesIt = correspondencesByImage.find(element.imageId);
+            if (correspondencesIt == correspondencesByImage.end())
             {
                 continue;
             }
 
-            const ScenePoint3D &point = _reconstruction->point3D(pointId);
-            for (const TrackElement &element : point.track.elements)
-            {
-                if (element.imageId != imageId || element.featureIdx >= image.keypoints.size())
+            const ImageData &image = _reconstruction->image(element.imageId);
+            const bool alreadyIndexed = std::any_of(
+                point.track.elements.begin(),
+                point.track.elements.begin() + static_cast<std::ptrdiff_t>(elementIndex),
+                [&](const TrackElement &previous)
                 {
-                    continue;
-                }
-
-                const FeatureKeypoint &keypoint = image.keypoints[element.featureIdx];
-                worldPoints.push_back(point.xyz);
-                imagePoints.push_back({{static_cast<double>(keypoint.x), static_cast<double>(keypoint.y)}});
-                break;
+                    return previous.imageId == element.imageId &&
+                        previous.featureIdx < image.keypoints.size();
+                });
+            if (element.featureIdx >= image.keypoints.size() || alreadyIndexed)
+            {
+                continue;
             }
+
+            const FeatureKeypoint &keypoint = image.keypoints[element.featureIdx];
+            PnpCorrespondences &correspondences = correspondencesIt->second;
+            correspondences.worldPoints.push_back(point.xyz);
+            correspondences.imagePoints.push_back(
+                {{static_cast<double>(keypoint.x), static_cast<double>(keypoint.y)}});
         }
+    }
+
+    for (ImageId imageId : imageIds)
+    {
+        const auto correspondencesIt = correspondencesByImage.find(imageId);
+        if (correspondencesIt == correspondencesByImage.end())
+        {
+            continue;
+        }
+
+        const std::vector<std::array<double, 3>> &worldPoints = correspondencesIt->second.worldPoints;
+        const std::vector<std::array<double, 2>> &imagePoints = correspondencesIt->second.imagePoints;
 
         if (static_cast<int>(worldPoints.size()) < std::max(6, _sfmOptions.pnpOptions.minNumInliers))
         {
@@ -729,30 +785,16 @@ void IncrementalSfm::refineKnownCameraPosesWithPnp()
             continue;
         }
 
-        Camera inputCamera;
-        const double inputExtent = [&]()
-        {
-            std::vector<std::array<double, 3>> centers;
-            for (ImageId id : imageIds)
-            {
-                Camera cam;
-                if (getCamera(id, cam))
-                {
-                    centers.push_back(cam.cameraCenter());
-                }
-            }
-            return centerExtent(centers);
-        }();
-        const double maxAcceptedMove = std::max(0.5, inputExtent * 0.05);
         Camera candidate = before;
         candidate.setPose(pnp.R, pnp.C);
-        if (getCamera(imageId, inputCamera) &&
-            pointDistance(candidate.cameraCenter(), inputCamera.cameraCenter()) > maxAcceptedMove)
+        const auto inputCameraIt = inputCameras.find(imageId);
+        if (inputCameraIt != inputCameras.end() &&
+            pointDistance(candidate.cameraCenter(), inputCameraIt->second.cameraCenter()) > maxAcceptedMove)
         {
             Logger::instance()->warnf(
                 "[SFM] Known-pose PnP refinement rejected for image %u: move from prior %.3f > %.3f",
                 imageId,
-                pointDistance(candidate.cameraCenter(), inputCamera.cameraCenter()),
+                pointDistance(candidate.cameraCenter(), inputCameraIt->second.cameraCenter()),
                 maxAcceptedMove);
             continue;
         }

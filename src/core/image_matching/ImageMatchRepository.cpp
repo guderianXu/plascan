@@ -11,11 +11,33 @@
 #include <cmath>
 #include <limits>
 #include <map>
+#include <memory>
+#include <mutex>
 
 namespace xjw::image_matching
 {
+
+struct ImageMatchRepositoryReadCache
+{
+    struct Entry
+    {
+        ImageMatchFileSignature signature;
+        std::shared_ptr<const ImageMatchShard> shard;
+        std::uint64_t accessSerial = 0;
+    };
+
+    std::mutex mutex;
+    QHash<QString, Entry> entries;
+    std::uint64_t nextAccessSerial = 0;
+    std::uint64_t cachedPayloadBytes = 0;
+};
+
 namespace
 {
+
+constexpr qsizetype kMaximumCachedMatchShards = 16;
+constexpr std::uint64_t kMaximumCachedMatchPayloadBytes = 256ull * 1024ull * 1024ull;
+constexpr std::uint64_t kMaximumSingleCachedMatchPayloadBytes = 64ull * 1024ull * 1024ull;
 
 QString canonicalPath(const QString &path)
 {
@@ -191,6 +213,30 @@ bool identityMatchesCurrentFile(const ImageIdentity &stored, const QString &imag
         stored.modifiedTimeMs == current.modifiedTimeMs;
 }
 
+const NeighborMatchBlock *findNeighborWithConfigPrefix(
+    const ImageMatchShard &shard,
+    const QString &peerStableId,
+    const QString &algorithmId,
+    std::uint32_t algorithmVersion,
+    const QByteArray &configFingerprintPrefix,
+    const QByteArray &modelFingerprint)
+{
+    const NeighborMatchBlock *selected = nullptr;
+    for (const NeighborMatchBlock &block : shard.neighbors)
+    {
+        const bool compatible = block.peer.stableId == peerStableId &&
+            block.algorithmId.compare(algorithmId, Qt::CaseInsensitive) == 0 &&
+            block.algorithmVersion == algorithmVersion &&
+            block.configFingerprint.startsWith(configFingerprintPrefix) &&
+            (modelFingerprint.isEmpty() || block.modelFingerprint == modelFingerprint);
+        if (compatible && (!selected || block.createdTimeMs > selected->createdTimeMs))
+        {
+            selected = &block;
+        }
+    }
+    return selected;
+}
+
 PairMatchData pairFromDirectedBlock(const ImageMatchShard &ownerShard,
                                     const NeighborMatchBlock &block,
                                     bool reverseOutput)
@@ -247,7 +293,7 @@ PairMatchData pairFromDirectedBlock(const ImageMatchShard &ownerShard,
 }
 
 void mergePeerObservationMetadata(PairMatchData *pair,
-                                  const ImageMatchShard &peerShard)
+                                   const ImageMatchShard &peerShard)
 {
     if (!pair)
     {
@@ -287,10 +333,111 @@ void mergePeerObservationMetadata(PairMatchData *pair,
     }
 }
 
+const NeighborMatchBlock *findRequestedBlock(
+    const ImageMatchShard &shard,
+    const QString &peerStableId,
+    const QString &algorithmId,
+    std::uint32_t algorithmVersion,
+    const QByteArray &configFingerprint,
+    const QByteArray &modelFingerprint,
+    bool matchConfigPrefix)
+{
+    return matchConfigPrefix
+        ? findNeighborWithConfigPrefix(shard,
+                                       peerStableId,
+                                       algorithmId,
+                                       algorithmVersion,
+                                       configFingerprint,
+                                       modelFingerprint)
+        : shard.findNeighbor(peerStableId,
+                             algorithmId,
+                             algorithmVersion,
+                             configFingerprint,
+                             modelFingerprint);
+}
+
+template <typename ShardLoader>
+bool loadPairImpl(ShardLoader &&loadShard,
+                  const QString &image0Path,
+                  const QString &image1Path,
+                  const QString &algorithmId,
+                  std::uint32_t algorithmVersion,
+                  const QByteArray &configFingerprint,
+                  const QByteArray &modelFingerprint,
+                  bool matchConfigPrefix,
+                  PairMatchData *pair,
+                  QString *errorMessage)
+{
+    const QString id0 = ImageMatchFile::stableImageId(image0Path);
+    const QString id1 = ImageMatchFile::stableImageId(image1Path);
+    QString firstError;
+    const std::shared_ptr<const ImageMatchShard> shard = loadShard(image0Path, &firstError);
+    if (shard)
+    {
+        const NeighborMatchBlock *block = findRequestedBlock(
+            *shard,
+            id1,
+            algorithmId,
+            algorithmVersion,
+            configFingerprint,
+            modelFingerprint,
+            matchConfigPrefix);
+        if (block && identityMatchesCurrentFile(block->peer, image1Path))
+        {
+            *pair = pairFromDirectedBlock(*shard, *block, false);
+            // owner 邻接块为快速单文件浏览保存了对端坐标，但尺度、方向和响应值只在
+            // 对端对应算法变体中保存一份。缓存复用时补读对端分片，避免再次提交
+            // 结果时把这些 SIFT 属性退化为默认值。
+            QString ignoredError;
+            const std::shared_ptr<const ImageMatchShard> peerShard =
+                loadShard(image1Path, &ignoredError);
+            if (peerShard)
+            {
+                mergePeerObservationMetadata(pair, *peerShard);
+            }
+            return true;
+        }
+    }
+    QString secondError;
+    const std::shared_ptr<const ImageMatchShard> reverseShard =
+        loadShard(image1Path, &secondError);
+    if (reverseShard)
+    {
+        const NeighborMatchBlock *block = findRequestedBlock(
+            *reverseShard,
+            id0,
+            algorithmId,
+            algorithmVersion,
+            configFingerprint,
+            modelFingerprint,
+            matchConfigPrefix);
+        if (block && identityMatchesCurrentFile(block->peer, image0Path))
+        {
+            *pair = pairFromDirectedBlock(*reverseShard, *block, true);
+            QString ignoredError;
+            const std::shared_ptr<const ImageMatchShard> peerShard =
+                loadShard(image0Path, &ignoredError);
+            if (peerShard)
+            {
+                mergePeerObservationMetadata(pair, *peerShard);
+            }
+            return true;
+        }
+    }
+    if (errorMessage)
+    {
+        // 单侧分片可能被外部破坏；只要对侧权威分片仍完整，就应允许按反向
+        // 邻接块恢复像对。双方都无法提供结果时再报告首个真实读取错误。
+        *errorMessage = !firstError.isEmpty() ? firstError : secondError;
+    }
+    return false;
+}
+
 } // namespace
 
 ImageMatchRepository::ImageMatchRepository(QString directory)
-    : _directory(QDir::cleanPath(std::move(directory)))
+    : _directory(QDir::cleanPath(std::move(directory))),
+      _readCache(std::make_shared<ImageMatchRepositoryReadCache>())
 {
 }
 
@@ -308,25 +455,128 @@ bool ImageMatchRepository::loadShard(const QString &imagePath,
                                      ImageMatchShard *shard,
                                      QString *errorMessage) const
 {
+    if (errorMessage)
+    {
+        errorMessage->clear();
+    }
+    if (!shard)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("影像匹配分片读取目标为空");
+        }
+        return false;
+    }
+    const std::shared_ptr<const ImageMatchShard> cached =
+        loadShardCached(imagePath, errorMessage);
+    if (!cached)
+    {
+        return false;
+    }
+    *shard = *cached;
+    return true;
+}
+
+std::shared_ptr<const ImageMatchShard> ImageMatchRepository::loadShardCached(
+    const QString &imagePath,
+    QString *errorMessage) const
+{
     const QString path = shardPath(imagePath);
     if (!QFileInfo::exists(path))
     {
-        return false;
+        return {};
     }
-    if (!ImageMatchFile::read(path, shard, errorMessage))
+
+    ImageMatchFileSignature signature;
+    if (!ImageMatchFile::readSignature(path, &signature, errorMessage))
     {
-        return false;
+        return {};
     }
-    if (!identityMatchesCurrentFile(shard->owner, imagePath))
+    const QString cacheKey = ImageMatchFile::stableImageId(imagePath);
+    {
+        std::lock_guard lock(_readCache->mutex);
+        auto iterator = _readCache->entries.find(cacheKey);
+        if (iterator != _readCache->entries.end() &&
+            iterator->signature == signature && iterator->shard &&
+            identityMatchesCurrentFile(iterator->shard->owner, imagePath))
+        {
+            iterator->accessSerial = ++_readCache->nextAccessSerial;
+            return iterator->shard;
+        }
+    }
+
+    auto loaded = std::make_shared<ImageMatchShard>();
+    if (!ImageMatchFile::read(path, loaded.get(), errorMessage))
+    {
+        return {};
+    }
+    if (!identityMatchesCurrentFile(loaded->owner, imagePath))
     {
         if (errorMessage)
         {
             *errorMessage = QStringLiteral("影像内容或修改时间已变化，匹配分片不能复用: %1")
                 .arg(imagePath);
         }
-        return false;
+        return {};
     }
-    return true;
+
+    {
+        std::lock_guard lock(_readCache->mutex);
+        auto existing = _readCache->entries.find(cacheKey);
+        if (existing != _readCache->entries.end())
+        {
+            _readCache->cachedPayloadBytes -= std::min(
+                _readCache->cachedPayloadBytes,
+                existing->signature.payloadBytes);
+            _readCache->entries.erase(existing);
+        }
+
+        if (signature.payloadBytes > kMaximumSingleCachedMatchPayloadBytes)
+        {
+            return loaded;
+        }
+
+        while (!_readCache->entries.isEmpty() &&
+               (_readCache->entries.size() >= kMaximumCachedMatchShards ||
+                _readCache->cachedPayloadBytes + signature.payloadBytes >
+                    kMaximumCachedMatchPayloadBytes))
+        {
+            auto oldest = _readCache->entries.begin();
+            for (auto iterator = _readCache->entries.begin();
+                 iterator != _readCache->entries.end();
+                 ++iterator)
+            {
+                if (iterator->accessSerial < oldest->accessSerial)
+                {
+                    oldest = iterator;
+                }
+            }
+            _readCache->cachedPayloadBytes -= std::min(
+                _readCache->cachedPayloadBytes,
+                oldest->signature.payloadBytes);
+            _readCache->entries.erase(oldest);
+        }
+        _readCache->entries.insert(
+            cacheKey,
+            {signature, loaded, ++_readCache->nextAccessSerial});
+        _readCache->cachedPayloadBytes += signature.payloadBytes;
+    }
+    return loaded;
+}
+
+void ImageMatchRepository::invalidateCachedShard(const QString &imagePath) const
+{
+    std::lock_guard lock(_readCache->mutex);
+    const QString cacheKey = ImageMatchFile::stableImageId(imagePath);
+    const auto iterator = _readCache->entries.find(cacheKey);
+    if (iterator == _readCache->entries.end())
+    {
+        return;
+    }
+    _readCache->cachedPayloadBytes -= std::min(
+        _readCache->cachedPayloadBytes,
+        iterator->signature.payloadBytes);
+    _readCache->entries.erase(iterator);
 }
 
 bool ImageMatchRepository::loadPair(const QString &image0Path,
@@ -351,60 +601,59 @@ bool ImageMatchRepository::loadPair(const QString &image0Path,
         return false;
     }
 
-    const QString id0 = ImageMatchFile::stableImageId(image0Path);
-    const QString id1 = ImageMatchFile::stableImageId(image1Path);
-    ImageMatchShard shard;
-    QString firstError;
-    if (loadShard(image0Path, &shard, &firstError))
+    return loadPairImpl([this](const QString &path, QString *error)
+                        {
+                            return loadShardCached(path, error);
+                        },
+                        image0Path,
+                        image1Path,
+                        algorithmId,
+                        algorithmVersion,
+                        configFingerprint,
+                        modelFingerprint,
+                        false,
+                        pair,
+                        errorMessage);
+}
+
+bool ImageMatchRepository::loadPairWithConfigPrefix(
+    const QString &image0Path,
+    const QString &image1Path,
+    const QString &algorithmId,
+    std::uint32_t algorithmVersion,
+    const QByteArray &configFingerprintPrefix,
+    const QByteArray &modelFingerprint,
+    PairMatchData *pair,
+    QString *errorMessage) const
+{
+    if (errorMessage)
     {
-        const NeighborMatchBlock *block = shard.findNeighbor(
-            id1, algorithmId, algorithmVersion, configFingerprint, modelFingerprint);
-        if (block && identityMatchesCurrentFile(block->peer, image1Path))
-        {
-            *pair = pairFromDirectedBlock(shard, *block, false);
-            // owner 邻接块为快速单文件浏览保存了对端坐标，但尺度、方向和响应值只在
-            // 对端对应算法变体中保存一份。缓存复用时补读对端分片，避免再次提交
-            // 结果时把这些 SIFT 属性退化为默认值。
-            ImageMatchShard peerShard;
-            QString ignoredError;
-            if (loadShard(image1Path, &peerShard, &ignoredError))
-            {
-                mergePeerObservationMetadata(pair, peerShard);
-            }
-            return true;
-        }
+        errorMessage->clear();
     }
-    else if (!firstError.isEmpty())
+    if (!pair || configFingerprintPrefix.isEmpty())
     {
         if (errorMessage)
         {
-            *errorMessage = firstError;
+            *errorMessage = pair
+                ? QStringLiteral("原始匹配配置指纹前缀为空")
+                : QStringLiteral("像对缓存读取目标为空");
         }
         return false;
     }
 
-    QString secondError;
-    if (loadShard(image1Path, &shard, &secondError))
-    {
-        const NeighborMatchBlock *block = shard.findNeighbor(
-            id0, algorithmId, algorithmVersion, configFingerprint, modelFingerprint);
-        if (block && identityMatchesCurrentFile(block->peer, image0Path))
-        {
-            *pair = pairFromDirectedBlock(shard, *block, true);
-            ImageMatchShard peerShard;
-            QString ignoredError;
-            if (loadShard(image0Path, &peerShard, &ignoredError))
-            {
-                mergePeerObservationMetadata(pair, peerShard);
-            }
-            return true;
-        }
-    }
-    else if (!secondError.isEmpty() && errorMessage)
-    {
-        *errorMessage = secondError;
-    }
-    return false;
+    return loadPairImpl([this](const QString &path, QString *error)
+                        {
+                            return loadShardCached(path, error);
+                        },
+                        image0Path,
+                        image1Path,
+                        algorithmId,
+                        algorithmVersion,
+                        configFingerprintPrefix,
+                        modelFingerprint,
+                        true,
+                        pair,
+                        errorMessage);
 }
 
 ImageMatchWriteResult ImageMatchRepository::writePairs(
@@ -488,19 +737,27 @@ ImageMatchWriteResult ImageMatchRepository::writePairReferences(
         shard.normalize();
         const QString path = shardPath(shard.owner.path);
         QString writeError;
-        if (!ImageMatchFile::write(path, shard, &writeError))
+        bool changed = false;
+        if (!ImageMatchFile::writeIfChanged(path, shard, &changed, &writeError))
         {
             result.errorMessage = writeError;
             return result;
         }
         QString indexError;
-        if (!ImageMatchIndexFile::writeForShard(path, shard, &indexError))
+        const bool indexMissing = !QFileInfo::exists(
+            ImageMatchIndexFile::pathForMatchFile(path));
+        if ((changed || indexMissing) &&
+            !ImageMatchIndexFile::writeForShard(path, shard, &indexError))
         {
             // 索引是可重建的性能缓存，不能让已经原子提交成功的权威匹配结果失败。
             // 删除可能残留的旧索引，使下一次目录扫描从 `.pimatch` 安全重建。
             ImageMatchIndexFile::removeForMatchFile(path);
         }
-        result.writtenFiles.append(path);
+        if (changed)
+        {
+            invalidateCachedShard(shard.owner.path);
+            result.writtenFiles.append(path);
+        }
     }
 
     result.success = true;
@@ -555,6 +812,9 @@ bool ImageMatchRepository::clear(QString *errorMessage) const
     }
     if (failed.isEmpty())
     {
+        std::lock_guard lock(_readCache->mutex);
+        _readCache->entries.clear();
+        _readCache->cachedPayloadBytes = 0;
         return true;
     }
     if (errorMessage)

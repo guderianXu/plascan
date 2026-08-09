@@ -47,17 +47,25 @@ void CorrespondenceGraph::addMatches(
 
     ImagePair pair(id1, id2);
     auto &storedMatches = pairMatches[pair];
+    const std::size_t addedMatchCount = matches.size();
     if (id1 <= id2)
     {
         storedMatches.insert(storedMatches.end(), matches.begin(), matches.end());
-        return;
+    }
+    else
+    {
+        // ImagePair 始终按图像 ID 升序存储，反向输入时必须同步交换特征索引。
+        storedMatches.reserve(storedMatches.size() + matches.size());
+        for (const FeatureMatch &match : matches)
+        {
+            storedMatches.push_back({match.idx2, match.idx1, match.score});
+        }
     }
 
-    // ImagePair 始终按图像 ID 升序存储，反向输入时必须同步交换特征索引。
-    storedMatches.reserve(storedMatches.size() + matches.size());
-    for (const FeatureMatch &match : matches)
+    _connectedMatchCounts[id1][id2] += addedMatchCount;
+    if (id1 != id2)
     {
-        storedMatches.push_back({match.idx2, match.idx1, match.score});
+        _connectedMatchCounts[id2][id1] += addedMatchCount;
     }
 }
 
@@ -218,7 +226,26 @@ std::size_t CorrespondenceGraph::retainMatchesInTracks(const std::vector<Track> 
     }
 
     correspondences.clear();
+    rebuildConnectedMatchCounts();
     return removedCount;
+}
+
+void CorrespondenceGraph::rebuildConnectedMatchCounts()
+{
+    _connectedMatchCounts.clear();
+    for (const auto &[pair, matches] : pairMatches)
+    {
+        if (matches.empty())
+        {
+            continue;
+        }
+
+        _connectedMatchCounts[pair.first][pair.second] = matches.size();
+        if (pair.first != pair.second)
+        {
+            _connectedMatchCounts[pair.second][pair.first] = matches.size();
+        }
+    }
 }
 
 // ---- 查询接口 ----
@@ -238,7 +265,7 @@ const std::vector<FeatureMatch> &CorrespondenceGraph::matchesBetween(
     return (it != pairMatches.end()) ? it->second : EMPTY_MATCHES;
 }
 
-std::vector<CorrespondenceGraph::Correspondence>
+std::span<const CorrespondenceGraph::Correspondence>
 CorrespondenceGraph::findCorrespondences(
     ImageId imageId, FeatureIdx featureIdx) const
 {
@@ -257,23 +284,23 @@ CorrespondenceGraph::findCorrespondences(
 std::vector<ImageId> CorrespondenceGraph::connectedImages(
     ImageId imageId) const
 {
-    std::unordered_set<ImageId> neighborImageIds;
-    for (auto &[pair, matches] : pairMatches)
+    const auto imageIt = _connectedMatchCounts.find(imageId);
+    if (imageIt == _connectedMatchCounts.end())
     {
-        if (matches.empty())
+        return {};
+    }
+
+    std::vector<ImageId> neighborImageIds;
+    neighborImageIds.reserve(imageIt->second.size());
+    for (const auto &[neighborImageId, matchCount] : imageIt->second)
+    {
+        if (matchCount > 0)
         {
-            continue;
-        }
-        if (pair.first == imageId)
-        {
-            neighborImageIds.insert(pair.second);
-        }
-        if (pair.second == imageId)
-        {
-            neighborImageIds.insert(pair.first);
+            neighborImageIds.push_back(neighborImageId);
         }
     }
-    return {neighborImageIds.begin(), neighborImageIds.end()};
+    std::sort(neighborImageIds.begin(), neighborImageIds.end());
+    return neighborImageIds;
 }
 
 std::vector<std::pair<ImageId, size_t>>
@@ -281,19 +308,18 @@ CorrespondenceGraph::topConnectedImages(
     ImageId imageId, size_t topN) const
 {
     std::vector<std::pair<ImageId, size_t>> result;
-    for (auto &[pair, matches] : pairMatches)
+    const auto imageIt = _connectedMatchCounts.find(imageId);
+    if (imageIt == _connectedMatchCounts.end())
     {
-        if (matches.empty())
+        return result;
+    }
+
+    result.reserve(imageIt->second.size());
+    for (const auto &[neighborImageId, matchCount] : imageIt->second)
+    {
+        if (matchCount > 0)
         {
-            continue;
-        }
-        if (pair.first == imageId)
-        {
-            result.emplace_back(pair.second, matches.size());
-        }
-        else if (pair.second == imageId)
-        {
-            result.emplace_back(pair.first, matches.size());
+            result.emplace_back(neighborImageId, matchCount);
         }
     }
 
@@ -303,7 +329,11 @@ CorrespondenceGraph::topConnectedImages(
         result.end(),
         [](const auto &leftItem, const auto &rightItem)
         {
-            return leftItem.second > rightItem.second;
+            if (leftItem.second != rightItem.second)
+            {
+                return leftItem.second > rightItem.second;
+            }
+            return leftItem.first < rightItem.first;
         });
 
     if (result.size() > topN)

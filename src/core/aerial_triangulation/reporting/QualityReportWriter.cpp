@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -108,18 +109,24 @@ QSize inferImageSize(const PreparedAerialTriangulationInput &input,
                  std::max(1, static_cast<int>(std::ceil(maxY)) + 1));
 }
 
-} // namespace
-
-SparseQualityReport QualityReportWriter::build(
-    const PreparedAerialTriangulationInput &input,
-    const SfmReconstruction &reconstruction,
-    const AerialTriangulationReconstructionResult &result)
+struct CollectedSparseQuality
 {
-    SparseQualityReport report;
     std::vector<SfmQualityPoint> qualityPoints;
     std::unordered_map<ImageId, std::pair<double, int>> cameraErrors;
+    std::optional<QJsonArray> serializedPoints;
+};
 
-    // 第一阶段：用正式发布门槛筛选点，并记录每个观测的投影残差。
+/**
+ * @brief 一次遍历收集网络质量；只有正式报告路径才序列化逐点明细。
+ */
+CollectedSparseQuality collectSparseQuality(const SfmReconstruction &reconstruction,
+                                            bool serializeDetails)
+{
+    CollectedSparseQuality collected;
+    if (serializeDetails)
+    {
+        collected.serializedPoints.emplace();
+    }
     for (const Point3DId pointId : reconstruction.allPoint3DIds())
     {
         if (!reconstruction.hasPoint3D(pointId))
@@ -133,11 +140,15 @@ SparseQualityReport QualityReportWriter::build(
         }
 
         const double triangulationAngle = maximumTriangulationAngleDegrees(reconstruction, point);
-        QJsonArray observations;
         SfmQualityPoint qualityPoint;
         qualityPoint.trackLength = static_cast<int>(point.track.length());
         qualityPoint.reprojectionErrorPx = point.error;
         qualityPoint.triangulationAngleDeg = triangulationAngle;
+        std::optional<QJsonArray> observations;
+        if (serializeDetails)
+        {
+            observations.emplace();
+        }
 
         for (const TrackElement &element : point.track.elements)
         {
@@ -152,6 +163,13 @@ SparseQualityReport QualityReportWriter::build(
             }
 
             const FeatureKeypoint &keypoint = image.keypoints[element.featureIdx];
+            qualityPoint.observations.push_back(
+                {static_cast<int>(element.imageId), keypoint.x, keypoint.y});
+            if (!serializeDetails)
+            {
+                continue;
+            }
+
             QJsonObject observation{
                 {QStringLiteral("image_id"), static_cast<int>(element.imageId)},
                 {QStringLiteral("image_path"), QString::fromStdString(image.imagePath)},
@@ -159,10 +177,8 @@ SparseQualityReport QualityReportWriter::build(
                 {QStringLiteral("feature_idx"), static_cast<int>(element.featureIdx)},
                 {QStringLiteral("xy"), QJsonArray{keypoint.x, keypoint.y}},
             };
-            qualityPoint.observations.push_back(
-                {static_cast<int>(element.imageId), keypoint.x, keypoint.y});
-            cameraErrors[element.imageId].first += point.error;
-            ++cameraErrors[element.imageId].second;
+            collected.cameraErrors[element.imageId].first += point.error;
+            ++collected.cameraErrors[element.imageId].second;
 
             if (reconstruction.hasCamera(element.imageId))
             {
@@ -182,37 +198,31 @@ SparseQualityReport QualityReportWriter::build(
                                        std::hypot(residualX, residualY));
                 }
             }
-            observations.append(observation);
+            observations->append(observation);
         }
 
-        report.points.append(QJsonObject{
-            {QStringLiteral("track_len"), static_cast<int>(point.track.length())},
-            {QStringLiteral("rms_reproj_px"), point.error},
-            {QStringLiteral("triangulation_angle_deg"), triangulationAngle},
-            {QStringLiteral("min_tri_angle_deg"), triangulationAngle},
-            {QStringLiteral("point_xyz"), QJsonArray{point.xyz[0], point.xyz[1], point.xyz[2]}},
-            {QStringLiteral("observations"), observations},
-        });
-        qualityPoints.push_back(std::move(qualityPoint));
+        if (serializeDetails)
+        {
+            collected.serializedPoints->append(QJsonObject{
+                {QStringLiteral("track_len"), static_cast<int>(point.track.length())},
+                {QStringLiteral("rms_reproj_px"), point.error},
+                {QStringLiteral("triangulation_angle_deg"), triangulationAngle},
+                {QStringLiteral("min_tri_angle_deg"), triangulationAngle},
+                {QStringLiteral("point_xyz"), QJsonArray{point.xyz[0], point.xyz[1], point.xyz[2]}},
+                {QStringLiteral("observations"), *observations},
+            });
+        }
+        collected.qualityPoints.push_back(std::move(qualityPoint));
     }
+    return collected;
+}
 
-    // 第二阶段：为全部输入影像输出记录，包括未注册影像，便于 GUI 直接定位缺口。
-    for (int index = 0; index < input.images.size(); ++index)
-    {
-        const ImageId imageId = static_cast<ImageId>(index);
-        const auto error = cameraErrors.find(imageId);
-        const bool registered = reconstruction.isRegistered(imageId);
-        const double residual = registered && error != cameraErrors.end() && error->second.second > 0
-            ? error->second.first / error->second.second
-            : (registered ? result.meanReprojError : 0.0);
-        report.perCameraResiduals.append(QJsonObject{
-            {QStringLiteral("path"), input.images.at(index)},
-            {QStringLiteral("registered"), registered},
-            {QStringLiteral("residual_px"), residual},
-        });
-    }
-
-    // 第三阶段：汇总注册覆盖、轨迹长度、交会角、误差和影像网格覆盖。
+QJsonObject buildSparseQualitySummaryObject(
+    const PreparedAerialTriangulationInput &input,
+    const SfmReconstruction &reconstruction,
+    const AerialTriangulationReconstructionResult &result,
+    const std::vector<SfmQualityPoint> &qualityPoints)
+{
     const QSize imageSize = inferImageSize(input, reconstruction);
     SfmQualityMetricsOptions qualityOptions;
     qualityOptions.totalImageCount = input.images.size();
@@ -226,6 +236,50 @@ SparseQualityReport QualityReportWriter::build(
     QJsonObject sparseQuality = serializeSfmQualityMetrics(
         computeSfmQualityMetrics(qualityPoints, qualityOptions));
     sparseQuality.insert(QStringLiteral("mean_reprojection_error_px"), result.meanReprojError);
+    return sparseQuality;
+}
+
+} // namespace
+
+QJsonObject QualityReportWriter::buildSparseQualitySummary(
+    const PreparedAerialTriangulationInput &input,
+    const SfmReconstruction &reconstruction,
+    const AerialTriangulationReconstructionResult &result)
+{
+    const CollectedSparseQuality collected = collectSparseQuality(reconstruction, false);
+    return buildSparseQualitySummaryObject(
+        input, reconstruction, result, collected.qualityPoints);
+}
+
+SparseQualityReport QualityReportWriter::build(
+    const PreparedAerialTriangulationInput &input,
+    const SfmReconstruction &reconstruction,
+    const AerialTriangulationReconstructionResult &result)
+{
+    SparseQualityReport report;
+    CollectedSparseQuality collected = collectSparseQuality(reconstruction, true);
+    report.points = std::move(*collected.serializedPoints);
+
+    // 第二阶段：为全部输入影像输出记录，包括未注册影像，便于 GUI 直接定位缺口。
+    for (int index = 0; index < input.images.size(); ++index)
+    {
+        const ImageId imageId = static_cast<ImageId>(index);
+        const auto error = collected.cameraErrors.find(imageId);
+        const bool registered = reconstruction.isRegistered(imageId);
+        const double residual = registered && error != collected.cameraErrors.end() &&
+            error->second.second > 0
+            ? error->second.first / error->second.second
+            : (registered ? result.meanReprojError : 0.0);
+        report.perCameraResiduals.append(QJsonObject{
+            {QStringLiteral("path"), input.images.at(index)},
+            {QStringLiteral("registered"), registered},
+            {QStringLiteral("residual_px"), residual},
+        });
+    }
+
+    // 第三阶段：汇总注册覆盖、轨迹长度、交会角、误差和影像网格覆盖。
+    const QJsonObject sparseQuality = buildSparseQualitySummaryObject(
+        input, reconstruction, result, collected.qualityPoints);
 
     // 第四阶段：保留 attempt 诊断，并追加最终模型重新计算的稳定质量字段。
     report.diagnostics = result.sfmDiagnostics;
