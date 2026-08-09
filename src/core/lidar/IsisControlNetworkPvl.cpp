@@ -1,5 +1,7 @@
 #include "IsisControlNetworkPvl.h"
 
+#include "io/PathIO.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -393,7 +395,7 @@ bool loadIsisControlNetworkPvlFile(const std::string &path,
                                    IsisControlNetwork *network,
                                    std::string *errorMessage)
 {
-    std::ifstream stream(path, std::ios::binary);
+    std::ifstream stream = common::io::openInputFile(path);
     if (!stream)
     {
         setError(errorMessage, "failed to open ISIS control network PVL: " + path);

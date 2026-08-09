@@ -66,11 +66,18 @@ TEST(PlanetaryLineScanBaCliGTest, SourceKeepsApproximationAndFreshOutputGuards)
 
     const qsizetype withLaserSolve = source.indexOf(
         QStringLiteral("options.enableLaserRangeConstraints = true"));
+    const qsizetype secondSolverCall = source.indexOf(
+        QStringLiteral("runPlanetaryLineScanBundleAdjust"), withLaserSolve);
+    const qsizetype solverFailureGuard = source.indexOf(
+        QStringLiteral("line-scan BA with laser failed"), secondSolverCall);
     const qsizetype firstArtifactWrite = source.indexOf(
         QStringLiteral("writePlanetaryLineScanBaArtifacts"), withLaserSolve);
     ASSERT_GE(withLaserSolve, 0);
+    ASSERT_GE(secondSolverCall, 0);
+    ASSERT_GE(solverFailureGuard, 0);
     ASSERT_GE(firstArtifactWrite, 0);
-    EXPECT_LT(withLaserSolve, firstArtifactWrite);
+    EXPECT_LT(secondSolverCall, firstArtifactWrite);
+    EXPECT_LT(solverFailureGuard, firstArtifactWrite);
 }
 
 #ifdef PLASCAN_PLANETARY_LINE_SCAN_BA_CLI_PATH

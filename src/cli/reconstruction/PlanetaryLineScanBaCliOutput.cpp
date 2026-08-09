@@ -41,7 +41,9 @@ std::array<double, 3> localOrigin(const lidar::PlanetaryLineScanBaResult &result
     {
         for (int axis = 0; axis < 3; ++axis)
         {
-            origin[axis] += point.refinedBodyFixedMeters[axis];
+            // Both A/B solves start from the same triangulated network. Using
+            // that stable reference makes their local PLY files directly overlayable.
+            origin[axis] += point.initialBodyFixedMeters[axis];
         }
     }
     for (double &coordinate : origin)

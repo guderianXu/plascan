@@ -222,7 +222,8 @@ sample/line 统一减 `0.5`；ISIS LidarData 的 projected measures 只可用于
   局部坐标 PLY。所有运行必须显式给出 `--accept-approximate-usgscsm-interpolation`，使用激光时还必须
   给出 `--assume-zero-laser-lever-arm`。输出 JSON 同时记录 P0、输入声明的 Lagrange、实际采用的
   Hermite/SLERP、range origin 和每景 6DoF 偏差模型，避免把近似误解为完整仪器标定。若输出目录
-  已含该工具的旧产物，CLI 会拒绝运行，防止无激光/有激光结果跨运行混合。
+  已含该工具的旧产物，CLI 会拒绝运行，防止无激光/有激光结果跨运行混合。A/B 的局部坐标 PLY
+  共同使用初始控制网质心作为原点，可以直接叠加比较；绝对 PLY 始终保持 `MOON_ME` 米制坐标。
 
 CLI 示例：
 

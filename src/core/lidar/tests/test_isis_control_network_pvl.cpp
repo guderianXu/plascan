@@ -2,6 +2,9 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <string>
 
 namespace
@@ -46,6 +49,17 @@ Object = ControlNetwork
 End_Object
 End
 )pvl";
+
+struct ScopedTestDirectory
+{
+    std::filesystem::path path;
+
+    ~ScopedTestDirectory()
+    {
+        std::error_code error;
+        std::filesystem::remove_all(path, error);
+    }
+};
 
 } // namespace
 
@@ -117,4 +131,28 @@ End_Object
     std::string error;
     EXPECT_FALSE(xjw::lidar::parseIsisControlNetworkPvl(pvl, &network, &error));
     EXPECT_NE(error.find("duplicate camera serial"), std::string::npos);
+}
+
+TEST(IsisControlNetworkPvlTest, LoadsUtf8FilePath)
+{
+    const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+    ScopedTestDirectory directory{
+        std::filesystem::temp_directory_path() /
+        ("plascan_isis_control_network_" + std::to_string(nonce))};
+    ASSERT_TRUE(std::filesystem::create_directories(directory.path));
+
+    const std::filesystem::path path = directory.path /
+        std::filesystem::path(u8"月球控制网.pvl");
+    std::ofstream stream(path, std::ios::binary);
+    ASSERT_TRUE(stream.is_open());
+    stream << kTwoPointNetwork;
+    stream.close();
+
+    const std::u8string utf8Path = path.generic_u8string();
+    const std::string pathString(utf8Path.begin(), utf8Path.end());
+    xjw::lidar::IsisControlNetwork network;
+    std::string error;
+    ASSERT_TRUE(xjw::lidar::loadIsisControlNetworkPvlFile(
+        pathString, &network, &error)) << error;
+    EXPECT_EQ(network.points.size(), 2u);
 }
