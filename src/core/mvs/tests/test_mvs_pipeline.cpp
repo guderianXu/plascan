@@ -651,6 +651,40 @@ TEST(DepthPyramidEstimatorTest, RetainsCoarseAndMiddleLevelsOnlyWhenRequested)
     EXPECT_EQ(result.finalLevel.level, 1);
 }
 
+TEST(DepthPyramidEstimatorTest, FirstLevelGateRejectionAbortsWithoutParentFallback)
+{
+    RecordingPatchMatchBackend backend;
+    xjw::mvs::DepthPyramidEstimator estimator(&backend);
+    xjw::mvs::DepthPyramidRequest request = makeSyntheticPyramidRequest();
+    int gate_calls = 0;
+    request.firstLevelCompletionGate =
+        [&gate_calls](const xjw::mvs::DepthLevelSummary &summary,
+                      std::string *error_message)
+    {
+        ++gate_calls;
+        EXPECT_EQ(summary.level, 3);
+        EXPECT_TRUE(summary.success);
+        if (error_message)
+        {
+            *error_message = "calibration_probe_unprofitable";
+        }
+        return false;
+    };
+
+    const xjw::mvs::DepthPyramidResult result = estimator.estimate(request);
+
+    EXPECT_FALSE(result.success);
+    EXPECT_EQ(gate_calls, 1);
+    EXPECT_EQ(backend.downsampleCalls(), (std::vector<int>{4}));
+    EXPECT_TRUE(result.finalLevel.depth.empty());
+    EXPECT_TRUE(result.intermediateLevels.empty());
+    ASSERT_EQ(result.levelSummaries.size(), 1U);
+    EXPECT_FALSE(result.levelSummaries.front().success);
+    EXPECT_EQ(result.levelSummaries.front().errorMessage,
+              "calibration_probe_unprofitable");
+    EXPECT_EQ(result.errorMessage, "calibration_probe_unprofitable");
+}
+
 TEST(DepthPyramidEstimatorTest, FallsBackToParentWhenFineCoverageCollapses)
 {
     CollapsingFinePatchMatchBackend backend;
@@ -2309,6 +2343,60 @@ TEST(MvsPipelineTest, SparseSeedDepthOverlayDoesNotPropagateAcrossFineHint)
         << "Fine sparse overlay should stamp local seeds only; full propagation is reserved for coarse hints.";
     EXPECT_FLOAT_EQ(seedOnly.at<float>(32, 32), 10.0f);
     EXPECT_FLOAT_EQ(seedOnly.at<float>(0, 0), 0.0f);
+}
+
+TEST(MvsPipelineTest, SparseSupportSpanStampMatchesMorphologicalDilation)
+{
+    constexpr int width = 640;
+    constexpr int height = 480;
+    constexpr int radius = 40;
+    std::vector<xjw::mvs::ProjectedSparseDepthSample> samples;
+    cv::Mat seeds(height, width, CV_8U, cv::Scalar(0));
+    for (int row = 0; row < 4; ++row)
+    {
+        for (int column = 0; column < 5; ++column)
+        {
+            const int x = 70 + column * 120;
+            const int y = 60 + row * 100;
+            xjw::mvs::ProjectedSparseDepthSample sample;
+            sample.uNorm = static_cast<float>(x) / static_cast<float>(width);
+            sample.vNorm = static_cast<float>(y) / static_cast<float>(height);
+            sample.depth = 10.0f;
+            samples.push_back(sample);
+            seeds.at<uint8_t>(y, x) = 255;
+        }
+    }
+    const std::array<cv::Point, 4> border_points = {
+        cv::Point(0, 0),
+        cv::Point(width - 1, 0),
+        cv::Point(0, height - 1),
+        cv::Point(width - 1, height - 1)};
+    for (const cv::Point &point : border_points)
+    {
+        xjw::mvs::ProjectedSparseDepthSample sample;
+        sample.uNorm = static_cast<float>(point.x) / static_cast<float>(width);
+        sample.vNorm = static_cast<float>(point.y) / static_cast<float>(height);
+        sample.depth = 10.0f;
+        samples.push_back(sample);
+        seeds.at<uint8_t>(point.y, point.x) = 255;
+    }
+    samples.push_back(samples.front());
+    xjw::mvs::ProjectedSparseDepthSample rejected_sample = samples.front();
+    rejected_sample.depth = -1.0f;
+    samples.push_back(rejected_sample);
+
+    const cv::Mat support =
+        xjw::mvs::DepthMapGenerator::buildSparseSupportMaskFromProjectedSamples(
+            0, width, height, samples);
+    ASSERT_FALSE(support.empty());
+
+    cv::Mat expected;
+    const cv::Mat kernel = cv::getStructuringElement(
+        cv::MORPH_ELLIPSE,
+        cv::Size(radius * 2 + 1, radius * 2 + 1));
+    cv::dilate(seeds, expected, kernel);
+    EXPECT_EQ(cv::countNonZero(support != expected), 0)
+        << "Span stamping must preserve the exact sparse-support mask.";
 }
 
 TEST(MvsPipelineTest, SparseSupportPriorKeepsDepthAndSoftensConfidence)

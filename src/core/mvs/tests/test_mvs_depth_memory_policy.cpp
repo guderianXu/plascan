@@ -73,3 +73,54 @@ TEST(DepthMemoryPolicyTest, InvalidFrameDimensionsUseConservativeStreaming)
     EXPECT_FALSE(decision.retainAllFrames);
     EXPECT_EQ(decision.estimate.totalPixels, 0u);
 }
+
+TEST(DepthMemoryPolicyTest, SaveQueuePreservesConcurrentTransientWorkingSet)
+{
+    const uint64_t budget = xjw::mvs::calculateDepthSaveQueueBudgetBytes(
+        gibibytes(16),
+        gibibytes(12),
+        0.60f,
+        gibibytes(2),
+        gibibytes(3),
+        2,
+        gibibytes(1));
+
+    EXPECT_EQ(budget, gibibytes(6));
+}
+
+TEST(DepthMemoryPolicyTest, SaveQueueStopsGrowingWhenReserveConsumesAvailableMemory)
+{
+    const uint64_t budget = xjw::mvs::calculateDepthSaveQueueBudgetBytes(
+        gibibytes(16),
+        gibibytes(5),
+        0.60f,
+        gibibytes(2),
+        gibibytes(3),
+        2,
+        gibibytes(1));
+
+    EXPECT_EQ(budget, 0u);
+}
+
+TEST(DepthMemoryPolicyTest, SaveQueueReserveScalesWithActiveFrameWorkers)
+{
+    const uint64_t twoWorkerBudget = xjw::mvs::calculateDepthSaveQueueBudgetBytes(
+        gibibytes(20),
+        gibibytes(18),
+        0.90f,
+        gibibytes(2),
+        gibibytes(3),
+        2,
+        gibibytes(1));
+    const uint64_t fourWorkerBudget = xjw::mvs::calculateDepthSaveQueueBudgetBytes(
+        gibibytes(20),
+        gibibytes(18),
+        0.90f,
+        gibibytes(2),
+        gibibytes(3),
+        4,
+        gibibytes(1));
+
+    EXPECT_EQ(twoWorkerBudget, gibibytes(12));
+    EXPECT_EQ(fourWorkerBudget, gibibytes(6));
+}

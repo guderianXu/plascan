@@ -4,6 +4,7 @@
 
 #include <array>
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -37,6 +38,20 @@ public:
                           std::string *errorMessage) = 0;
 };
 
+struct DepthLevelSummary
+{
+    int level = 1;
+    int downsampleFactor = 1;
+    int validPixelCount = 0;
+    float validCoverage = 0.0f;
+    float meanConfidence = 0.0f;
+    float meanSupportViews = 0.0f;
+    float depthDiscontinuityRatio = 0.0f;
+    double elapsedMs = 0.0;
+    bool success = false;
+    std::string errorMessage;
+};
+
 struct DepthPyramidRequest
 {
     cv::Mat referenceImage;
@@ -51,20 +66,11 @@ struct DepthPyramidRequest
     DepthPyramidConfig pyramidConfig;
     std::array<cv::Mat, 3> sparseDepthHints;
     const std::atomic_bool *cancelFlag = nullptr;
-};
-
-struct DepthLevelSummary
-{
-    int level = 1;
-    int downsampleFactor = 1;
-    int validPixelCount = 0;
-    float validCoverage = 0.0f;
-    float meanConfidence = 0.0f;
-    float meanSupportViews = 0.0f;
-    float depthDiscontinuityRatio = 0.0f;
-    double elapsedMs = 0.0;
-    bool success = false;
-    std::string errorMessage;
+    /// Optional calibration gate invoked after the first successful pyramid
+    /// level. Rejecting it aborts the complete frame; the coarse result is
+    /// diagnostic-only and must never be returned as a parent fallback.
+    std::function<bool(const DepthLevelSummary &, std::string *)>
+        firstLevelCompletionGate;
 };
 
 struct DepthPyramidResult

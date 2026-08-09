@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <span>
 
@@ -49,6 +50,15 @@ DepthMemoryPolicyDecision decideDepthMemoryPolicy(
     uint64_t availablePhysicalBytes,
     float maximumRamFraction,
     uint64_t minimumFreeBytes);
+
+uint64_t calculateDepthSaveQueueBudgetBytes(
+    uint64_t totalPhysicalBytes,
+    uint64_t availablePhysicalBytes,
+    float maximumRamFraction,
+    uint64_t minimumFreeBytes,
+    uint64_t transientFrameBytes,
+    std::size_t concurrentFrameWorkers,
+    uint64_t producerWorkingSetReserveBytes);
 
 } // namespace mvs
 } // namespace xjw

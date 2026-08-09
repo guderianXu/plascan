@@ -149,5 +149,38 @@ DepthMemoryPolicyDecision decideDepthMemoryPolicy(
     return decision;
 }
 
+uint64_t calculateDepthSaveQueueBudgetBytes(
+    uint64_t totalPhysicalBytes,
+    uint64_t availablePhysicalBytes,
+    float maximumRamFraction,
+    uint64_t minimumFreeBytes,
+    uint64_t transientFrameBytes,
+    std::size_t concurrentFrameWorkers,
+    uint64_t producerWorkingSetReserveBytes)
+{
+    if (totalPhysicalBytes == 0 || availablePhysicalBytes == 0)
+    {
+        return 0;
+    }
+
+    const uint64_t proportionalReserve = static_cast<uint64_t>(
+        static_cast<double>(totalPhysicalBytes) * kMinimumDynamicReserveFraction);
+    const uint64_t transientReserveBytes = saturatingMultiply(
+        transientFrameBytes,
+        static_cast<uint64_t>(std::max<std::size_t>(1, concurrentFrameWorkers)));
+    const uint64_t reserveBytes = std::max({minimumFreeBytes,
+                                            proportionalReserve,
+                                            transientReserveBytes,
+                                            producerWorkingSetReserveBytes});
+    const double fraction = std::clamp(
+        static_cast<double>(maximumRamFraction), 0.10, 0.90);
+    const uint64_t totalBudget = static_cast<uint64_t>(
+        static_cast<double>(totalPhysicalBytes) * fraction);
+    const uint64_t availableBudget = availablePhysicalBytes > reserveBytes
+        ? availablePhysicalBytes - reserveBytes
+        : 0;
+    return std::min(totalBudget, availableBudget);
+}
+
 } // namespace mvs
 } // namespace xjw

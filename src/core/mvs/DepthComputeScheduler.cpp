@@ -264,7 +264,7 @@ DepthTaskClaim DepthComputeScheduler::claimNext(const DepthComputeWorker &worker
             return {DepthTaskClaimStatus::Retry, -1, _revision};
         }
         state.calibrationInFlight = true;
-        return assignNextTask(worker, state, task_it);
+        return assignNextTask(worker, state, task_it, true);
     }
 
     if (shouldReserveForCalibration())
@@ -397,7 +397,8 @@ DepthComputeScheduler::findPendingCrossBackendRetry(
 DepthTaskClaim DepthComputeScheduler::assignNextTask(
     const DepthComputeWorker &worker,
     WorkerSchedulingState &state,
-    PendingTaskIterator taskIt)
+    PendingTaskIterator taskIt,
+    bool calibrationProbe)
 {
     const PendingTask task = *taskIt;
     _pendingTasks.erase(taskIt);
@@ -405,9 +406,14 @@ DepthTaskClaim DepthComputeScheduler::assignNextTask(
     ++state.inFlightTasks;
     _inFlightTasks.insert_or_assign(
         task.viewIndex,
-        InFlightTask{worker.id(), worker.backend, task.retryCount});
+        InFlightTask{
+            worker.id(), worker.backend, task.retryCount, calibrationProbe});
     advanceRevision();
-    return {DepthTaskClaimStatus::Task, task.viewIndex, _revision};
+    return {
+        DepthTaskClaimStatus::Task,
+        task.viewIndex,
+        _revision,
+        calibrationProbe};
 }
 
 bool DepthComputeScheduler::isParticipatingWorker(
@@ -595,6 +601,112 @@ DepthComputeScheduler::workerStats() const
 {
     std::lock_guard<std::mutex> lock(_mutex);
     return _workerStats;
+}
+
+std::optional<double>
+DepthComputeScheduler::fastestSuccessfulAlternativeBackendEmaMilliseconds(
+    const DepthComputeWorker &worker) const
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    return fastestSuccessfulAlternativeBackendEmaMillisecondsLocked(worker);
+}
+
+std::optional<double>
+DepthComputeScheduler::tryRejectUnprofitableCalibrationProbe(
+    const DepthComputeWorker &worker,
+    int viewIndex,
+    double coarseLevelElapsedMilliseconds,
+    std::chrono::duration<double, std::milli> probeElapsed)
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_benefitAwareSchedulingEnabled ||
+        !std::isfinite(coarseLevelElapsedMilliseconds))
+    {
+        return std::nullopt;
+    }
+
+    const std::string worker_id = worker.id();
+    const auto task_it = _inFlightTasks.find(viewIndex);
+    const auto state_it = _workerSchedulingStates.find(worker_id);
+    if (task_it == _inFlightTasks.end() ||
+        task_it->second.workerId != worker_id ||
+        !task_it->second.calibrationProbe ||
+        task_it->second.retryCount != 0 ||
+        state_it == _workerSchedulingStates.end() ||
+        state_it->second.failureRetired ||
+        state_it->second.retirementPending)
+    {
+        return std::nullopt;
+    }
+
+    const std::optional<double> alternative_elapsed =
+        fastestSuccessfulAlternativeBackendEmaMillisecondsLocked(worker);
+    if (!alternative_elapsed.has_value() ||
+        coarseLevelElapsedMilliseconds < *alternative_elapsed)
+    {
+        return std::nullopt;
+    }
+
+    // Commit the retry insertion before changing ownership so a deque-growth
+    // exception leaves the calibration probe's scheduler state untouched.
+    _pendingTasks.push_front(
+        {viewIndex, task_it->second.retryCount + 1, worker.backend});
+    _inFlightTasks.erase(task_it);
+
+    DepthComputeWorkerStats &stats = _workerStats[worker_id];
+    ++stats.completedTasks;
+    ++stats.failedTasks;
+    const double probe_elapsed_milliseconds = probeElapsed.count();
+    if (std::isfinite(probe_elapsed_milliseconds) &&
+        probe_elapsed_milliseconds > 0.0)
+    {
+        stats.elapsedMilliseconds += probe_elapsed_milliseconds;
+    }
+
+    WorkerSchedulingState &state = state_it->second;
+    state.inFlightTasks = std::max(0, state.inFlightTasks - 1);
+    state.calibrationInFlight = false;
+    state.calibrationSucceeded = false;
+    state.pausedForBenefit = false;
+    state.retirementPending = false;
+    state.failureRetired = true;
+    reactivateAlternativeBackends(worker);
+    advanceRevision();
+    return alternative_elapsed;
+}
+
+std::optional<double>
+DepthComputeScheduler::fastestSuccessfulAlternativeBackendEmaMillisecondsLocked(
+    const DepthComputeWorker &worker) const
+{
+    double fastest_elapsed_milliseconds =
+        std::numeric_limits<double>::infinity();
+    for (const std::string &participant_id : _participatingWorkerIds)
+    {
+        const auto participant = depthComputeWorkerFromId(participant_id);
+        const auto state_it = _workerSchedulingStates.find(participant_id);
+        const auto stats_it = _workerStats.find(participant_id);
+        if (!participant.has_value() ||
+            participant->backend == worker.backend ||
+            state_it == _workerSchedulingStates.end() ||
+            state_it->second.retirementPending ||
+            state_it->second.failureRetired ||
+            stats_it == _workerStats.end() ||
+            stats_it->second.successfulTasks <= 0 ||
+            !std::isfinite(stats_it->second.emaElapsedMilliseconds) ||
+            stats_it->second.emaElapsedMilliseconds <= 0.0)
+        {
+            continue;
+        }
+        fastest_elapsed_milliseconds = std::min(
+            fastest_elapsed_milliseconds,
+            stats_it->second.emaElapsedMilliseconds);
+    }
+    if (!std::isfinite(fastest_elapsed_milliseconds))
+    {
+        return std::nullopt;
+    }
+    return fastest_elapsed_milliseconds;
 }
 
 } // namespace mvs

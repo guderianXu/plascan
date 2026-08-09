@@ -88,6 +88,10 @@ struct DepthTaskClaim
     DepthTaskClaimStatus status = DepthTaskClaimStatus::Exhausted;
     int viewIndex = -1;
     std::uint64_t revision = 0;
+    /// True only for the first task used to establish this physical worker's
+    /// throughput. Callers may use a cheaper probe path before committing to
+    /// the complete frame.
+    bool calibrationProbe = false;
 };
 
 struct DepthTaskCompletionResult
@@ -126,6 +130,20 @@ public:
 
     std::size_t pendingTaskCount() const;
     std::unordered_map<std::string, DepthComputeWorkerStats> workerStats() const;
+    /// Returns the fastest successful whole-frame EMA reported by a healthy
+    /// participating backend other than worker.backend.
+    std::optional<double> fastestSuccessfulAlternativeBackendEmaMilliseconds(
+        const DepthComputeWorker &worker) const;
+    /// Atomically rejects a still-owned first calibration probe only when a
+    /// healthy, successfully calibrated alternative backend remains faster.
+    /// A returned EMA means the frame was requeued for that backend and the
+    /// current physical worker was retired; nullopt means the caller must keep
+    /// computing the current pyramid.
+    std::optional<double> tryRejectUnprofitableCalibrationProbe(
+        const DepthComputeWorker &worker,
+        int viewIndex,
+        double coarseLevelElapsedMilliseconds,
+        std::chrono::duration<double, std::milli> probeElapsed);
 
 private:
     struct PendingTask
@@ -140,6 +158,7 @@ private:
         std::string workerId;
         DepthComputeBackend backend = DepthComputeBackend::Cpu;
         int retryCount = 0;
+        bool calibrationProbe = false;
     };
 
     struct WorkerSchedulingState
@@ -160,12 +179,16 @@ private:
         const DepthComputeWorker &worker);
     DepthTaskClaim assignNextTask(const DepthComputeWorker &worker,
                                   WorkerSchedulingState &state,
-                                  PendingTaskIterator taskIt);
+                                  PendingTaskIterator taskIt,
+                                  bool calibrationProbe = false);
     bool isParticipatingWorker(const std::string &workerId) const;
     bool hasHealthyAlternativeBackend(const DepthComputeWorker &worker) const;
     void reactivateAlternativeBackends(const DepthComputeWorker &worker);
     bool shouldReserveForCalibration() const;
     bool shouldPauseAtQueueTail(const std::string &workerId) const;
+    std::optional<double>
+    fastestSuccessfulAlternativeBackendEmaMillisecondsLocked(
+        const DepthComputeWorker &worker) const;
     void advanceRevision();
 
     mutable std::mutex _mutex;

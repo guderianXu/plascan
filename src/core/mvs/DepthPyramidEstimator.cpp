@@ -480,6 +480,19 @@ DepthPyramidResult DepthPyramidEstimator::estimate(const DepthPyramidRequest &re
             }
             break;
         }
+        if (index == 0 && request.firstLevelCompletionGate)
+        {
+            std::string gate_error;
+            if (!request.firstLevelCompletionGate(summary, &gate_error))
+            {
+                result.errorMessage = gate_error.empty()
+                    ? "first pyramid level rejected by completion gate"
+                    : std::move(gate_error);
+                result.levelSummaries.back().success = false;
+                result.levelSummaries.back().errorMessage = result.errorMessage;
+                return result;
+            }
+        }
 
         constexpr float kMinimumCoverageRetention = 0.60f;
         if (has_parent && parent_coverage > 0.0f &&

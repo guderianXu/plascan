@@ -328,7 +328,11 @@ private:
     void emitFinishedOnce(bool success);
 
     /// 计算单帧深度图
-    DepthFrameResult computeDepthForView(int refIdx, const DepthGenConfig *configOverride = nullptr);
+    DepthFrameResult computeDepthForView(
+        int refIdx,
+        const DepthGenConfig *configOverride = nullptr,
+        const std::function<bool(const DepthLevelSummary &, std::string *)>
+            &firstLevelCompletionGate = {});
 
     /// 预计算 MVS 可见性与源视图候选，避免每帧重复全量扫描稀疏点
     void prepareFrameCaches();
