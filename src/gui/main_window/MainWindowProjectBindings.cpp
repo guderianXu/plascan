@@ -11,6 +11,8 @@
 #include <QStatusBar>
 #include <QFileInfo>
 #include <QDesktopServices>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QUrl>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -30,6 +32,7 @@
 #include <QSizePolicy>
 #include <QScopedValueRollback>
 #include <QWidgetAction>
+#include <QVBoxLayout>
 
 #include <algorithm>
 #include <utility>
@@ -74,6 +77,8 @@
 #include "ModelDropSupport.h"
 #include "MarkerWorkspaceController.h"
 #include "MarkerReferencePanel.h"
+#include "reference/CameraReferenceController.h"
+#include "reference/ProjectCameraReferenceRepository.h"
 #include "MarkerFocusMeasurementDialog.h"
 #include "DetectMarkersDialog.h"
 #include "MarkerDetectionReviewDialog.h"
@@ -224,7 +229,12 @@ void MainWindow::setupProjectManager()
     });
     _markerWorkspaceController = new xjw::gui::markers::MarkerWorkspaceController(
         _canvas, _projectData, this);
-    _markerReferencePanel->setController(_markerWorkspaceController);
+    _cameraReferenceRepository =
+        new xjw::gui::reference::ProjectCameraReferenceRepository(_projectData, this);
+    _cameraReferenceController = new xjw::gui::reference::CameraReferenceController(
+        _projectData, _cameraReferenceRepository, this, this);
+    _referencePanel->setMarkerController(_markerWorkspaceController);
+    _referencePanel->setCameraReferenceRepository(_cameraReferenceRepository);
     connect(_markerWorkspaceController,
             &xjw::gui::markers::MarkerWorkspaceController::persistenceError,
             this,
@@ -236,13 +246,6 @@ void MainWindow::setupProjectManager()
             &xjw::gui::markers::MarkerWorkspaceController::focusMeasurementRequested,
             this,
             &MainWindow::openMarkerFocusMeasurement);
-    connect(_markerReferencePanel,
-            &xjw::gui::markers::MarkerReferencePanel::focusMeasurementRequested,
-            this,
-            [this](const QString &markerId)
-    {
-        openMarkerFocusMeasurement(markerId, _canvas ? _canvas->currentImagePath() : QString());
-    });
     if (_mainMenu && _mainMenu->detectMarkersAction())
     {
         connect(_mainMenu->detectMarkersAction(), &QAction::triggered, this, [this]()
@@ -937,28 +940,64 @@ void MainWindow::setupProjectManager()
         }
     });
 
-    connect(_referencePanel, &ReferencePanelWidget::exactImportRequested,
-        _projectManager, &ProjectManager::importCameraForImage);
-    connect(_referencePanel, &ReferencePanelWidget::batchImportRequested,
-        _projectManager, &ProjectManager::importCamerasByFilenameBatch);
-    connect(_referencePanel, &ReferencePanelWidget::clearCameraRequested,
-        this, [this](const QStringList &paths)
-        {
-            int cleared = 0;
-            QString err;
-            if (_projectManager->clearImageCameras(paths, &cleared, &err))
-            {
-                LOG_INFO(QStringLiteral("已清除 %1 张影像的相机参数").arg(cleared));
-            }
-            else
-            {
-                LOG_WARN(QStringLiteral("清除相机参数失败: %1").arg(err));
-            }
-        });
     connect(_referencePanel, &ReferencePanelWidget::imageActivated,
         this, [this](const QString &p)
         {
             selectPhoto(p, true);
         });
+    connect(_referencePanel, &ReferencePanelWidget::markerActivated,
+            this, [this](const QString &markerId)
+    {
+        openMarkerFocusMeasurement(markerId, _canvas ? _canvas->currentImagePath() : QString());
+    });
+    connect(_referencePanel, &ReferencePanelWidget::markerPropertiesRequested,
+            this, [this](const QString &markerId)
+    {
+        auto *dialog = new QDialog(this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->setWindowTitle(QStringLiteral("标记属性"));
+        dialog->resize(760, 640);
+        auto *layout = new QVBoxLayout(dialog);
+        auto *panel = new xjw::gui::markers::MarkerReferencePanel(dialog);
+        panel->setController(_markerWorkspaceController);
+        panel->selectMarker(markerId);
+        layout->addWidget(panel, 1);
+        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
+        connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+        layout->addWidget(buttons);
+        connect(panel,
+                &xjw::gui::markers::MarkerReferencePanel::focusMeasurementRequested,
+                this,
+                [this](const QString &id)
+        {
+            openMarkerFocusMeasurement(id, _canvas ? _canvas->currentImagePath() : QString());
+        });
+        dialog->show();
+    });
+    connect(_projectManager, &ProjectManager::surveyControlChanged, this, [this]()
+    {
+        QString error;
+        if (!_markerWorkspaceController->openProject(&error))
+        {
+            QMessageBox::warning(this, QStringLiteral("标记参考"), error);
+        }
+    });
+    connect(_referencePanel, &ReferencePanelWidget::importMarkerReferencesRequested,
+            this, [this]()
+    {
+        _projectManager->openSurveyControlDialog();
+    });
+    connect(_referencePanel,
+            &ReferencePanelWidget::importCameraReferencesRequested,
+            _cameraReferenceController,
+            &xjw::gui::reference::CameraReferenceController::importMetashapeReference);
+    connect(_referencePanel,
+            &ReferencePanelWidget::exportCameraReferencesRequested,
+            _cameraReferenceController,
+            &xjw::gui::reference::CameraReferenceController::exportReferences);
+    connect(_referencePanel,
+            &ReferencePanelWidget::cameraReferenceSettingsRequested,
+            _cameraReferenceController,
+            &xjw::gui::reference::CameraReferenceController::showSettingsSummary);
 
 }

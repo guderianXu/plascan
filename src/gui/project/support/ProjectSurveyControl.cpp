@@ -11,6 +11,9 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QSaveFile>
+#include <QSet>
+
+#include <cmath>
 
 namespace xjw::gui::project
 {
@@ -48,6 +51,61 @@ bool restoreSidecar(const QString &path, bool existed, const QByteArray &bytes)
         return false;
     }
     return file.commit();
+}
+
+void applyAgisoftWgs84Defaults(const QString &path,
+                               control_points::MarkerCsvImportOptions *options)
+{
+    if (!options)
+    {
+        return;
+    }
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+    {
+        return;
+    }
+    QString header;
+    while (!file.atEnd())
+    {
+        QString candidate = QString::fromUtf8(file.readLine()).trimmed();
+        if (!candidate.isEmpty() && candidate.front() == QChar::ByteOrderMark)
+        {
+            candidate.remove(0, 1);
+        }
+        if (!candidate.trimmed().isEmpty())
+        {
+            header = candidate.trimmed();
+            break;
+        }
+    }
+    QSet<QString> columns;
+    const QStringList fields = header.split(QLatin1Char('\t'), Qt::SkipEmptyParts);
+    for (QString field : fields)
+    {
+        field = field.trimmed().toCaseFolded();
+        if (field.startsWith(QLatin1Char('#')))
+        {
+            field.remove(0, 1);
+        }
+        columns.insert(field);
+    }
+    const bool agisoftWgs84 = columns.contains(QStringLiteral("name"))
+        && columns.contains(QStringLiteral("lat"))
+        && columns.contains(QStringLiteral("lon"))
+        && columns.contains(QStringLiteral("ell.h(m)"));
+    if (!agisoftWgs84)
+    {
+        return;
+    }
+    if (options->defaultRole.trimmed().isEmpty())
+    {
+        options->defaultRole = QStringLiteral("control");
+    }
+    options->sourceCrs = QStringLiteral("EPSG:4979");
+    options->axisOrder = QStringLiteral("longitude_latitude");
+    options->verticalDatum = QStringLiteral("ellipsoidal");
+    options->verticalUnit = QStringLiteral("m");
 }
 
 SurveyControlProjectImportResult publishMarkerSet(ProjectData *projectData,
@@ -130,6 +188,7 @@ SurveyControlProjectImportResult importSurveyControlCsv(ProjectData *projectData
     control_points::MarkerCsvImportOptions options;
     options.defaultRole = defaultRole;
     options.imageIdentityByPath = imageIdentityMap(*projectData);
+    applyAgisoftWgs84Defaults(csvPath, &options);
     const auto imported = control_points::readMarkerCsvFile(csvPath, options);
     if (!imported.ok)
     {
@@ -163,6 +222,100 @@ SurveyControlProjectImportResult migrateLegacySurveyControl(ProjectData *project
         return result;
     }
     return publishMarkerSet(projectData, migrated.markerSet);
+}
+
+QJsonObject surveyControlDialogMetadata(ProjectData *projectData, QString *errorMessage)
+{
+    if (errorMessage)
+    {
+        errorMessage->clear();
+    }
+    if (!projectData || !projectData->hasProject())
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("项目未打开，无法读取标记参考");
+        }
+        return {};
+    }
+
+    const QString sidecarPath =
+        xjw::common::project::ProjectIO::markerSetPath(projectData->currentProjectPath());
+    const control_points::MarkerSetIoResult loaded =
+        control_points::MarkerSetStore(sidecarPath).load();
+    if (!loaded.ok)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = loaded.error;
+        }
+        return {};
+    }
+
+    QJsonArray controlPoints;
+    QJsonArray checkPoints;
+    QHash<QString, QString> labels;
+    for (const control_points::Marker &marker : loaded.markerSet.markers())
+    {
+        labels.insert(marker.id, marker.label);
+        if (marker.role == control_points::MarkerRole::TieMarker)
+        {
+            continue;
+        }
+        QJsonObject point{
+            {QStringLiteral("id"), marker.label},
+            {QStringLiteral("enabled"), marker.enabled}
+        };
+        if (marker.referenceCoordinate)
+        {
+            const control_points::ReferenceCoordinate &reference =
+                *marker.referenceCoordinate;
+            point[QStringLiteral("x")] = reference.x;
+            point[QStringLiteral("y")] = reference.y;
+            point[QStringLiteral("z")] = reference.z;
+            point[QStringLiteral("sigma_m")] =
+                (reference.sigmaX + reference.sigmaY + reference.sigmaZ) / 3.0;
+        }
+        if (marker.role == control_points::MarkerRole::ControlPoint)
+        {
+            controlPoints.append(point);
+        }
+        else
+        {
+            checkPoints.append(point);
+        }
+    }
+
+    QJsonArray scaleBars;
+    for (const control_points::ScaleBar &scaleBar : loaded.markerSet.scaleBars())
+    {
+        QJsonObject value{
+            {QStringLiteral("id"), scaleBar.label},
+            {QStringLiteral("from_id"), labels.value(scaleBar.firstMarkerId,
+                                                       scaleBar.firstMarkerId)},
+            {QStringLiteral("to_id"), labels.value(scaleBar.secondMarkerId,
+                                                     scaleBar.secondMarkerId)},
+            {QStringLiteral("measured_m"), scaleBar.measuredDistance},
+            {QStringLiteral("sigma_m"), scaleBar.sigma},
+            {QStringLiteral("enabled"), scaleBar.enabled}
+        };
+        if (std::isfinite(scaleBar.estimatedDistance))
+        {
+            value[QStringLiteral("estimated_m")] = scaleBar.estimatedDistance;
+        }
+        if (std::isfinite(scaleBar.residual))
+        {
+            value[QStringLiteral("residual_m")] = scaleBar.residual;
+        }
+        scaleBars.append(value);
+    }
+
+    return QJsonObject{
+        {QStringLiteral("source_path"), sidecarPath},
+        {QStringLiteral("control_points"), controlPoints},
+        {QStringLiteral("check_points"), checkPoints},
+        {QStringLiteral("scale_bars"), scaleBars}
+    };
 }
 
 } // namespace xjw::gui::project

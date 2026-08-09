@@ -1,6 +1,6 @@
 # PlaScan 项目架构文档
 
-行星表面摄影测量处理系统。最后更新: 2026-07-14。
+行星表面摄影测量处理系统。最后更新: 2026-08-09。
 
 ## 顶层目录
 
@@ -109,6 +109,11 @@ core/
 │       ├── CameraFormatConverter_tests.cpp
 │       ├── test_tsai_loader.cpp
 │       └── test.cpp
+│
+├── camera_reference/           # 独立于解算相机的外部导航参考观测
+│   ├── model/                  # 相机参考源、原始/已转换观测、杆臂和稳定 image_uuid 绑定
+│   ├── io/                     # camera_reference_set.json 严格 schema 与 QSaveFile 原子读写
+│   └── tests/                  # 缺文件、往返、损坏及高版本拒绝测试
 │
 ├── image_matching/             # 唯一局部特征/匹配/持久化模块
 │   ├── ImageMatchingAlgorithm.h/cpp # 可扩展算法接口、能力和版本契约
@@ -469,6 +474,11 @@ gui/
 │   ├── MarkerDetectionReviewDialog.h/cpp # 候选预览、归入已有标记或丢弃
 │   └── PrintMarkersDialog.h/cpp        # 标靶物理布局和 PDF 输出
 │
+├── reference/                  # Metashape-like 参考面板的数据模型与项目协调
+│   ├── CameraReferenceTreeModel.h/cpp  # 相机源值、解算估计值、误差及未匹配记录树
+│   ├── ProjectCameraReferenceRepository.h/cpp # 独立 sidecar 生命周期与 metadata 摘要
+│   └── CameraReferenceController.h/cpp # Metashape TXT 导入、源值导出和安全状态说明
+│
 ├── dialogs/                    # 按业务域组织的参数与结果对话框
 │   ├── application/            # 关于、工作流程报告等应用级对话框
 │   ├── camera/                 # 相机校准前后对比、相机查看/转换、前方交汇、测量控制
@@ -493,7 +503,8 @@ gui/
 │   ├── DisparityHeatmapOverlay.h/cpp   # 视差热力图叠加层 (密集 → 热力图/新增)
 │   ├── DataTreeWidget.h/cpp            # Metashape 式工作区汇总 → Chunk → 资源分组树
 │   ├── WorkspaceSectionIcons.h/cpp     # 工作区、Chunk、影像及成果类型语义图标
-│   ├── ReferencePanelWidget.h/cpp      # 参考信息面板
+│   ├── ReferencePanelWidget.h/cpp      # 相机参考、标记、标尺三段树及源值/估计值/误差模式
+│   ├── ReferenceMarkerModels.h/cpp     # 控制/检查点及控制/检查标尺汇总模型
 │   ├── ObservationNetworkView.h/cpp    # 观测网络可视化
 │   └── WorkspaceCenterWidget.h/cpp     # 工作区布局管理及模型/影像/对比/观测网络模式通知
 │
@@ -515,6 +526,7 @@ gui/
 │   │   ├── BundleAdjustService.h/cpp                 # BA 服务
 │   │   ├── ProjectBaInputBuilder.h/cpp               # BA 输入构建
 │   │   ├── ProjectCameraImportService.h/cpp          # 相机导入
+│   │   ├── MetashapeCameraReferenceImporter.h/cpp    # WGS84 相机参考与 GNSS 杆臂 TXT 严格解析
 │   │   ├── ProjectTriangulationService.h/cpp         # 三角化服务
 │   │   ├── ProjectResourceCleanupService.h           # 旧包含路径兼容层；实现位于 core/project_workflows
 │   │   └── ProjectTiePointResultService.h/cpp        # 单一当前连接点、覆盖清理与真实删除
@@ -534,7 +546,7 @@ gui/
 │       ├── ProjectResultRecords.h/cpp               # 结果记录
 │       ├── ProjectSfmWorkflow.h/cpp                 # SfM 工作流
 │       ├── ProjectSparseWorkflow.h/cpp              # 稀疏工作流
-│       ├── ProjectSurveyControl.h/cpp               # GCP/检查点/比例尺 CSV 导入和项目 metadata 持久化
+│       ├── ProjectSurveyControl.h/cpp               # GCP/检查点/比例尺 CSV/Agisoft TXT 导入与 sidecar 摘要
 │       ├── ProjectWorkflowUtils.h/cpp               # 工作流工具
 │       └── ProjectWorkflowReports.h/cpp             # 工作流报告
 │
@@ -591,6 +603,11 @@ PlaScan 工程采用 Metashape 式 `name.plascan + name.files` 结构。
 按需创建，空 Chunk 只包含 `chunk.zip`。GUI 和 CLI 的 BA 运行产物统一写入当前 Chunk
 的 `bundle_adjust/<run>/`，不再混入 `assets/`；生效相机参数仍写回 Chunk 文档，
 综合报告继续位于 `reports/`。
+其中 `images[*].camera` 只表示导入/初始化/空三得到的相机模型与当前解算结果；外部
+GNSS/IMU/POS 观测独立存入 `assets/camera_references/camera_reference_set.json`，按
+`image_uuid` 绑定，并同时保留 raw 与 resolved 状态。未完成 CRS、姿态轴向和杆臂方向
+归一化的 raw 数据可以在“参考”面板查看，但不会静默标记为可用 BA 先验。控制点、检查点
+和标尺继续存入 `assets/control_points/marker_set.json`。
 `ProjectWorkspaceStore` 继续兼容 `plascan:///workspace/...` 逻辑 URI，但只在当前 Chunk
 数字目录内解析，不再使用根级 `workspace/`。旧版根级 `workspace/` 分体工程和旧版
 单体工程均明确拒绝加载，并保持旧文件不变。归档条目在组合物理路径前执行跨平台名称、

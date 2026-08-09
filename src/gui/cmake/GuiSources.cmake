@@ -31,6 +31,13 @@ set(GUI_SOURCES
   platform/ProjectFileIntegration.cpp
   platform/TaskbarProgressController.cpp
   runtime/PythonRuntimeManager.cpp
+  project/services/MetashapeCameraReferenceImporter.cpp
+  reference/CameraReferenceController.cpp
+  reference/CameraReferenceCsvExporter.cpp
+  reference/CameraReferenceProjectIdentity.cpp
+  reference/CameraReferenceTreeModel.cpp
+  reference/MetashapeCameraReferenceSetBuilder.cpp
+  reference/ProjectCameraReferenceRepository.cpp
   markers/ProjectMarkerRepository.cpp
   markers/MarkerUndoCommand.cpp
   markers/MarkerOverlayItems.cpp
@@ -72,6 +79,7 @@ set(GUI_SOURCES
   widgets/PhotoStripWidget.cpp
   widgets/ProjectDashboardWidget.cpp
   widgets/ReferencePanelWidget.cpp
+  widgets/ReferenceMarkerModels.cpp
   widgets/SelectionPropertiesWidget.cpp
   widgets/ImageViewWidget.cpp
   widgets/ImageViewWidget.ui

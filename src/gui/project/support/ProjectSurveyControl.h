@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QJsonObject>
 #include <QString>
 
 class ProjectData;
@@ -21,5 +22,8 @@ SurveyControlProjectImportResult importSurveyControlCsv(ProjectData *projectData
                                                         const QString &defaultRole);
 
 SurveyControlProjectImportResult migrateLegacySurveyControl(ProjectData *projectData);
+
+QJsonObject surveyControlDialogMetadata(ProjectData *projectData,
+                                        QString *errorMessage = nullptr);
 
 } // namespace xjw::gui::project

@@ -170,6 +170,7 @@ void applyImageMetadata(const QJsonObject &image,
     }
 
     const QJsonObject camera = image.value(QStringLiteral("camera")).toObject();
+    record->hasProjectCamera = !camera.isEmpty();
     record->path = image.value(QStringLiteral("path")).toString(record->path);
     record->name = QFileInfo(record->path).fileName();
     record->model = camera.value(QStringLiteral("model")).toString(record->model);

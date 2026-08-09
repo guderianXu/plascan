@@ -7,6 +7,7 @@
 
 class QLabel;
 class QListWidget;
+class QPushButton;
 class QTableWidget;
 class QTabWidget;
 
@@ -19,8 +20,17 @@ public:
                                      const QString &projectAssetsDir,
                                      QWidget *parent = nullptr);
 
+signals:
+    void importCameraForImageRequested(const QString &imagePath);
+    void batchImportRequested();
+    void clearCamerasRequested(const QStringList &imagePaths);
+
 private slots:
     void showSelectedCameraGroup(int row);
+    void updateCameraActionAvailability();
+    void requestImportForSelectedPhoto();
+    void requestBatchImport();
+    void requestClearSelectedCameras();
 
 private:
     struct CameraGroup
@@ -34,9 +44,13 @@ private:
     void populateParameterTables(const CameraGroup &group);
     void populatePhotoTable(const CameraGroup &group);
     void showEmptyState();
+    QStringList selectedPhotoPaths() const;
+    QStringList selectedConfiguredPhotoPaths() const;
 
     QVector<xjw::gui::camera_calibration::CameraCalibrationRecord> _records;
     QVector<CameraGroup> _groups;
+    bool _hasProject = false;
+    bool _hasProjectImages = false;
     QString _reportTimestamp;
     QString _reportError;
     QListWidget *_cameraGroups = nullptr;
@@ -45,4 +59,7 @@ private:
     QTableWidget *_adjustedParameters = nullptr;
     QTableWidget *_photoTable = nullptr;
     QLabel *_summaryLabel = nullptr;
+    QPushButton *_importSelectedButton = nullptr;
+    QPushButton *_batchImportButton = nullptr;
+    QPushButton *_clearSelectedButton = nullptr;
 };

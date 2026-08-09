@@ -30,6 +30,11 @@ TEST(ProjectIOTest, ResolvesCanonicalProjectDirectories)
               QDir(temp_dir.path()).filePath(QStringLiteral("assets/image_matches")));
     EXPECT_EQ(ProjectIO::maskOutputDir(project_path),
               QDir(temp_dir.path()).filePath(QStringLiteral("assets/masks")));
+    EXPECT_EQ(ProjectIO::projectCameraReferencesDir(project_path),
+              QDir(temp_dir.path()).filePath(QStringLiteral("assets/camera_references")));
+    EXPECT_EQ(ProjectIO::cameraReferenceSetPath(project_path),
+              QDir(temp_dir.path()).filePath(
+                  QStringLiteral("assets/camera_references/camera_reference_set.json")));
 }
 
 TEST(ProjectIOTest, ResolvesRelativeResourcesAgainstProjectRoot)

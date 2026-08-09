@@ -55,7 +55,12 @@ class ProjectLifecyclePresenter;
 namespace xjw::gui::markers
 {
 class MarkerWorkspaceController;
-class MarkerReferencePanel;
+}
+
+namespace xjw::gui::reference
+{
+class CameraReferenceController;
+class ProjectCameraReferenceRepository;
 }
 
 namespace Ui {
@@ -121,7 +126,7 @@ private:
     PhotoStripWidget *_photoStrip{};
     ProjectDashboardWidget* _dashboard{};              // 项目概览与工作流状态（只读）
     DataTreeWidget*   _dataTree{};                     // 工作区资源树（照片/匹配/点云/DEM 等分组）
-    ReferencePanelWidget* _referencePanel{};           // 参考面板（相机参数外参导入）
+    ReferencePanelWidget* _referencePanel{};           // 外部参考观测（相机、标记、标尺）
     WorkspaceCenterWidget* _workspaceCenter{};         // 中央工作区（影像画布 + 三维模型视图）
     CanvasWidget*     _canvas{};                       // 影像画布（从 workspaceCenter 获取的直接引用）
     WorkspacePanelController *_workspacePanels{};      // Dock/工具栏可见性与菜单动作统一管理
@@ -143,7 +148,8 @@ private:
     ReconstructionWorkflowController* _reconController{}; // 模型与纹理工作流程控制器
     ProjectManager*   _projectManager{};               // 项目生命周期管理（新建/打开/保存/关闭）
     xjw::gui::markers::MarkerWorkspaceController *_markerWorkspaceController{};
-    xjw::gui::markers::MarkerReferencePanel *_markerReferencePanel{};
+    xjw::gui::reference::CameraReferenceController *_cameraReferenceController{};
+    xjw::gui::reference::ProjectCameraReferenceRepository *_cameraReferenceRepository{};
     QDockWidget*      _logDock{};                      // 日志 Dock 窗口容器
     bool _applyingUiSettings{};                        // 正在恢复项目 UI，阻止中间态写回
     QJsonObject _imageViewRotations;                   // 按稳定 image_uuid 保存的查看旋转角度

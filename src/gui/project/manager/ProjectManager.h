@@ -99,6 +99,8 @@ signals:
     // 影像导入进度；total=0 表示正在扫描，尚不能确定总数。
     void imageImportProgressChanged(const QString &stage, int done, int total);
     void imageImportFinished(bool success, const QString &message);
+    // 控制点、检查点或比例尺 sidecar 成功更新后发出。
+    void surveyControlChanged();
     // 照片蒙版生成完成后发出，供当前影像视图刷新轮廓覆盖层。
     void masksGenerated(const QStringList &imagePaths);
     /// 每对影像匹配完成时实时发出（在主线程中）

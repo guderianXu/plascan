@@ -21,6 +21,7 @@ struct CameraCalibrationRecord
     QJsonObject adjusted;
     bool hasInitial = false;
     bool hasAdjusted = false;
+    bool hasProjectCamera = false;
     QString initialSource;
     QString adjustmentStatus;
     QStringList optimizedParameters;

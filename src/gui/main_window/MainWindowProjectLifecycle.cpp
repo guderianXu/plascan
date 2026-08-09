@@ -16,6 +16,7 @@
 #include "ProjectManager.h"
 #include "ProjectUiHydrator.h"
 #include "ReferencePanelWidget.h"
+#include "reference/ProjectCameraReferenceRepository.h"
 #include "SelectionPropertiesWidget.h"
 #include "WorkspaceCenterWidget.h"
 #include "WorkspacePanelController.h"
@@ -92,6 +93,16 @@ void MainWindow::onProjectOpened(const QString &plascanPath)
             QMessageBox::warning(this,
                                  QStringLiteral("加载标记点"),
                                  QStringLiteral("标记点数据未加载：%1").arg(marker_error));
+        }
+    }
+    if (_cameraReferenceRepository)
+    {
+        QString referenceError;
+        if (!_cameraReferenceRepository->open(&referenceError))
+        {
+            QMessageBox::warning(this,
+                                 QStringLiteral("加载相机参考"),
+                                 QStringLiteral("相机参考数据未加载：%1").arg(referenceError));
         }
     }
     if (_workspaceCenter)
@@ -228,6 +239,10 @@ void MainWindow::onProjectClosed()
     if (_markerWorkspaceController)
     {
         _markerWorkspaceController->closeProject();
+    }
+    if (_cameraReferenceRepository)
+    {
+        _cameraReferenceRepository->reset();
     }
     if (_mainMenu)
     {

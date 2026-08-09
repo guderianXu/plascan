@@ -70,6 +70,7 @@ set(PLASCAN_GUI_INCLUDE_DIRECTORIES
   ${CMAKE_CURRENT_SOURCE_DIR}/menu
   ${CMAKE_CURRENT_SOURCE_DIR}/platform
   ${CMAKE_CURRENT_SOURCE_DIR}/runtime
+  ${CMAKE_CURRENT_SOURCE_DIR}/reference
   ${CMAKE_CURRENT_SOURCE_DIR}/markers
   ${CMAKE_CURRENT_SOURCE_DIR}/panels
   ${CMAKE_CURRENT_SOURCE_DIR}/project
@@ -84,6 +85,7 @@ set(PLASCAN_GUI_INCLUDE_DIRECTORIES
   ${CMAKE_SOURCE_DIR}/src/core/intersection
   ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
   ${CMAKE_SOURCE_DIR}/src/core/camera
+  ${CMAKE_SOURCE_DIR}/src/core/camera_reference
   ${CMAKE_SOURCE_DIR}/src/core/lidar
   ${CMAKE_SOURCE_DIR}/src/core/mask
   ${CMAKE_SOURCE_DIR}/src/core/qc

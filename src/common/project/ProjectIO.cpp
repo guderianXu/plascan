@@ -159,6 +159,20 @@ QString ProjectIO::markerDetectionReviewPath(const QString &plascanPath)
     return QDir(directory).filePath(QStringLiteral("detection_review.json"));
 }
 
+QString ProjectIO::projectCameraReferencesDir(const QString &plascanPath)
+{
+    const QString assets = projectAssetsDir(plascanPath);
+    if (assets.isEmpty()) return QString();
+    return QDir(assets).filePath(QStringLiteral("camera_references"));
+}
+
+QString ProjectIO::cameraReferenceSetPath(const QString &plascanPath)
+{
+    const QString directory = projectCameraReferencesDir(plascanPath);
+    if (directory.isEmpty()) return QString();
+    return QDir(directory).filePath(QStringLiteral("camera_reference_set.json"));
+}
+
 QString ProjectIO::tmpDir(const QString &plascanPath)
 {
     const QString root = projectRootFromPlascan(plascanPath);

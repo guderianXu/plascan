@@ -1873,6 +1873,9 @@ void MenuWorkflowController::openCameraCalibrationDialog()
         return;
     }
 
+    const auto session = _projectManager
+        ? _projectManager->currentSessionContext()
+        : xjw::gui::project::ProjectSessionContext{};
     const QJsonObject metadata = _projectManager
         ? _projectManager->currentMeta()
         : QJsonObject();
@@ -1882,5 +1885,64 @@ void MenuWorkflowController::openCameraCalibrationDialog()
         : QString();
     auto *dialog = new CameraCalibrationDialog(metadata, assetsDir, _mainWindow);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
+    if (_projectManager)
+    {
+        connect(_projectManager,
+                &ProjectManager::projectSessionChanged,
+                dialog,
+                &QDialog::close);
+    }
+    auto sessionIsCurrent = [this, session]()
+    {
+        return _projectManager && _projectManager->isCurrentSession(session);
+    };
+    auto reopenAfterChange = [this, dialog, sessionIsCurrent](bool changed)
+    {
+        if (!changed || !sessionIsCurrent())
+        {
+            return;
+        }
+        dialog->close();
+        QTimer::singleShot(0, this, &MenuWorkflowController::openCameraCalibrationDialog);
+    };
+    connect(dialog,
+            &CameraCalibrationDialog::importCameraForImageRequested,
+            this,
+            [this, reopenAfterChange, sessionIsCurrent](const QString &imagePath)
+    {
+        if (sessionIsCurrent())
+        {
+            reopenAfterChange(_projectManager->importCameraForImage(imagePath));
+        }
+    });
+    connect(dialog,
+            &CameraCalibrationDialog::batchImportRequested,
+            this,
+            [this, reopenAfterChange, sessionIsCurrent]()
+    {
+        if (sessionIsCurrent())
+        {
+            reopenAfterChange(_projectManager->importCamerasByFilenameBatch());
+        }
+    });
+    connect(dialog,
+            &CameraCalibrationDialog::clearCamerasRequested,
+            this,
+            [this, reopenAfterChange, sessionIsCurrent](const QStringList &imagePaths)
+    {
+        if (!sessionIsCurrent())
+        {
+            return;
+        }
+        int clearedCount = 0;
+        QString error;
+        const bool changed = _projectManager->clearImageCameras(
+            imagePaths, &clearedCount, &error);
+        if (!changed && !error.isEmpty())
+        {
+            QMessageBox::warning(_mainWindow, tr("清除相机"), error);
+        }
+        reopenAfterChange(changed && clearedCount > 0);
+    });
     dialog->show();
 }

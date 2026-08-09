@@ -153,7 +153,7 @@ QString roleForRow(const QHash<QString, QString> &row, const MarkerCsvImportOpti
     const bool has_scale_fields = !firstValue(row, {"from_id", "point_a", "start_id"}).isEmpty()
         || !firstValue(row, {"to_id", "point_b", "end_id"}).isEmpty()
         || !firstValue(row, {"measured_m", "distance_m", "length_m"}).isEmpty();
-    return has_scale_fields ? QStringLiteral("scale_bar") : QStringLiteral("control");
+    return has_scale_fields ? QStringLiteral("scale_bar") : QString();
 }
 
 QString normalizedPath(const QString &path)
@@ -200,17 +200,30 @@ MarkerCsvImportResult parseMarkerCsv(const QString &csvText, const MarkerCsvImpo
     for (int index = 0; index < lines.size(); ++index)
     {
         if (lines[index].trimmed().isEmpty()) continue;
-        delimiter = unquotedDelimiterCount(lines[index], QLatin1Char(';'))
-                > unquotedDelimiterCount(lines[index], QLatin1Char(','))
-            ? QLatin1Char(';') : QLatin1Char(',');
+        const int comma_count = unquotedDelimiterCount(lines[index], QLatin1Char(','));
+        const int semicolon_count = unquotedDelimiterCount(lines[index], QLatin1Char(';'));
+        const int tab_count = unquotedDelimiterCount(lines[index], QLatin1Char('\t'));
+        if (semicolon_count > comma_count && semicolon_count >= tab_count)
+        {
+            delimiter = QLatin1Char(';');
+        }
+        else if (tab_count > comma_count && tab_count > semicolon_count)
+        {
+            delimiter = QLatin1Char('\t');
+        }
         headers = splitCsvLine(lines[index], delimiter);
         for (QString &header : headers) header = normalizeKey(header);
+        if (!headers.isEmpty() && headers.front().startsWith(QLatin1Char('#')))
+        {
+            headers.front().remove(0, 1);
+        }
         header_line = index;
         break;
     }
-    if (header_line < 0 || !headers.contains(QStringLiteral("id")))
+    if (header_line < 0
+        || (!headers.contains(QStringLiteral("id")) && !headers.contains(QStringLiteral("name"))))
     {
-        result.error = QStringLiteral("Marker CSV 为空或缺少 id 表头");
+        result.error = QStringLiteral("Marker CSV 为空或缺少 id/Name 表头");
         return result;
     }
 
@@ -260,9 +273,10 @@ MarkerCsvImportResult parseMarkerCsv(const QString &csvText, const MarkerCsvImpo
             double x = 0.0;
             double y = 0.0;
             double z = 0.0;
-            if (!parseFiniteDouble(firstValue(row, {"x", "e", "east", "longitude"}), &x)
-                || !parseFiniteDouble(firstValue(row, {"y", "n", "north", "latitude"}), &y)
-                || !parseFiniteDouble(firstValue(row, {"z", "h", "height", "elevation"}), &z))
+            if (!parseFiniteDouble(firstValue(row, {"x", "e", "east", "longitude", "lon"}), &x)
+                || !parseFiniteDouble(firstValue(row, {"y", "n", "north", "latitude", "lat"}), &y)
+                || !parseFiniteDouble(
+                    firstValue(row, {"z", "h", "height", "elevation", "ell.h(m)"}), &z))
             {
                 result.error = QStringLiteral("第 %1 行缺少有效 x/y/z 坐标").arg(line_index + 1);
                 return result;

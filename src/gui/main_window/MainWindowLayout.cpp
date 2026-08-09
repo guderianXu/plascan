@@ -4,7 +4,6 @@
 #include "HenuBrandWidget.h"
 #include "Logger.h"
 #include "MainMenu.h"
-#include "MarkerReferencePanel.h"
 #include "PhotoStripWidget.h"
 #include "SelectionPropertiesWidget.h"
 #include "WorkspaceCenterWidget.h"
@@ -49,8 +48,6 @@ void MainWindow::setupUi()
     _dashboard = _ui->dashboardWidget;
     _dataTree = _ui->dataTree;
     _referencePanel = _ui->referencePanel;
-    _markerReferencePanel = new xjw::gui::markers::MarkerReferencePanel(_leftTabs);
-    _leftTabs->addTab(_markerReferencePanel, QStringLiteral("标记"));
     _workspaceCenter = _ui->workspaceCenter;
     _canvas       = _workspaceCenter->canvas();
     if (centralWidget())

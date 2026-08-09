@@ -98,9 +98,10 @@ void SurveyControlDialog::setupUi()
     _statusLabel = new QLabel(summaryBox);
     _statusLabel->setObjectName(QStringLiteral("surveyControlStatusLabel"));
     _statusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    _importCsvButton = new QPushButton(tr("导入 CSV..."), summaryBox);
+    _importCsvButton = new QPushButton(tr("导入 CSV/TXT..."), summaryBox);
     _importCsvButton->setObjectName(QStringLiteral("surveyControlImportCsvButton"));
-    _importCsvButton->setToolTip(tr("导入包含控制点、检查点和比例尺的 CSV 文件"));
+    _importCsvButton->setToolTip(
+        tr("导入控制点、检查点和比例尺 CSV，或 Agisoft GCPs_WGS84.txt"));
     connect(_importCsvButton, &QPushButton::clicked, this, &SurveyControlDialog::importCsvRequested);
 
     summaryLayout->addWidget(_summaryLabel, 0, 0);

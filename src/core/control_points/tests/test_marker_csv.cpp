@@ -79,3 +79,42 @@ TEST(MarkerCsvTest, RoundTripPreservesReferenceMetadata)
     EXPECT_DOUBLE_EQ(reference.sigmaZ, 0.05);
 }
 
+TEST(MarkerCsvTest, ImportsAgisoftWgs84TabSeparatedCoordinatesInTraditionalGisOrder)
+{
+    const QString csv = QStringLiteral(
+        "#Name\tLat\tLon\tEll.H(m)\t\n"
+        "1\t59.84424741\t31.4656473\t54.454\t\n");
+    cp::MarkerCsvImportOptions options;
+    options.defaultRole = QStringLiteral("control");
+    options.sourceCrs = QStringLiteral("EPSG:4979");
+    options.axisOrder = QStringLiteral("longitude_latitude");
+    options.verticalDatum = QStringLiteral("ellipsoidal");
+    options.verticalUnit = QStringLiteral("m");
+
+    const cp::MarkerCsvImportResult result = cp::parseMarkerCsv(csv, options);
+
+    ASSERT_TRUE(result.ok) << qPrintable(result.error);
+    ASSERT_EQ(result.markerSet.markers().size(), 1);
+    const cp::Marker &marker = result.markerSet.markers().front();
+    EXPECT_EQ(marker.label, QStringLiteral("1"));
+    EXPECT_EQ(marker.role, cp::MarkerRole::ControlPoint);
+    ASSERT_TRUE(marker.referenceCoordinate.has_value());
+    const cp::ReferenceCoordinate &reference = marker.referenceCoordinate.value();
+    EXPECT_DOUBLE_EQ(reference.x, 31.4656473);
+    EXPECT_DOUBLE_EQ(reference.y, 59.84424741);
+    EXPECT_DOUBLE_EQ(reference.z, 54.454);
+    EXPECT_EQ(reference.sourceCrs, QStringLiteral("EPSG:4979"));
+    EXPECT_EQ(reference.axisOrder, QStringLiteral("longitude_latitude"));
+    EXPECT_EQ(reference.verticalDatum, QStringLiteral("ellipsoidal"));
+    EXPECT_EQ(reference.verticalUnit, QStringLiteral("m"));
+    EXPECT_TRUE(reference.referenceUsable) << qPrintable(reference.referenceError);
+}
+
+TEST(MarkerCsvTest, RejectsCoordinateRowsWithoutRoleOrExplicitDefault)
+{
+    const cp::MarkerCsvImportResult result = cp::parseMarkerCsv(
+        QStringLiteral("id,x,y,z\nGCP001,1,2,3\n"));
+
+    EXPECT_FALSE(result.ok);
+    EXPECT_TRUE(result.error.contains(QStringLiteral("role")));
+}

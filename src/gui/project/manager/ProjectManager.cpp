@@ -1034,7 +1034,13 @@ void ProjectManager::openSurveyControlDialog()
     }
 
     SurveyControlDialog dialog(_parent);
-    dialog.setSurveyControlMetadata(_projectData->metadata().value(QStringLiteral("survey_control")).toObject());
+    QString metadataError;
+    dialog.setSurveyControlMetadata(
+        xjw::gui::project::surveyControlDialogMetadata(_projectData, &metadataError));
+    if (!metadataError.isEmpty())
+    {
+        dialog.setStatusMessage(metadataError);
+    }
 
     connect(&dialog, &SurveyControlDialog::importCsvRequested, this, [this, &dialog]()
     {
@@ -1042,7 +1048,7 @@ void ProjectManager::openSurveyControlDialog()
             &dialog,
             QStringLiteral("导入测绘控制 CSV"),
             getLastUsedDir(QStringLiteral("survey_control")),
-            QStringLiteral("控制点 CSV (*.csv);;所有文件 (*)"));
+            QStringLiteral("控制点数据 (*.csv *.txt);;CSV 文件 (*.csv);;所有文件 (*)"));
         if (selected.isEmpty())
         {
             return;
@@ -1061,11 +1067,13 @@ void ProjectManager::openSurveyControlDialog()
             return;
         }
 
-        dialog.setSurveyControlMetadata(_projectData->metadata().value(QStringLiteral("survey_control")).toObject());
+        dialog.setSurveyControlMetadata(
+            xjw::gui::project::surveyControlDialogMetadata(_projectData));
         dialog.setStatusMessage(QStringLiteral("已导入：控制点 %1，检查点 %2，比例尺 %3")
                                     .arg(result.controlPointCount)
                                     .arg(result.checkPointCount)
                                     .arg(result.scaleBarCount));
+        emit surveyControlChanged();
         LOG_INFO(QStringLiteral("测绘控制 CSV 已导入: %1 controls=%2 checks=%3 scale_bars=%4")
                  .arg(QFileInfo(selected).fileName())
                  .arg(result.controlPointCount)

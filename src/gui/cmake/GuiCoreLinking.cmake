@@ -26,6 +26,11 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/core/CMakeLists.txt)
     message(WARNING "plascan_core camera target not available - 相机导入功能将不可用")
   endif()
 
+  if(TARGET camera_reference)
+    message(STATUS "plascan_gui: linking against camera_reference target")
+    target_link_libraries(plascan_gui PRIVATE camera_reference)
+  endif()
+
   if(TARGET intersection)
     message(STATUS "plascan_gui: linking against intersection target")
     target_link_libraries(plascan_gui PRIVATE intersection)

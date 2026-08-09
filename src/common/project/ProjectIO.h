@@ -63,6 +63,11 @@ public:
     static QString markerSetPath(const QString &plascanPath);
     static QString markerDetectionReviewPath(const QString &plascanPath);
 
+    // 返回 assets/camera_references/ 目录及相机导航参考 sidecar 的标准路径。
+    // 该数据与 images[*].camera 解算结果相互独立。
+    static QString projectCameraReferencesDir(const QString &plascanPath);
+    static QString cameraReferenceSetPath(const QString &plascanPath);
+
     // 返回 .plascan_tmp/ 临时目录的绝对路径
     static QString tmpDir(const QString &plascanPath);
 

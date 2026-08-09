@@ -2501,6 +2501,8 @@ bool ProjectData::clearImageCameras(const QStringList &imagePaths,
         QJsonObject imgObj = images[i].toObject();
         const QString imgPath = QDir::cleanPath(QFileInfo(imgObj.value("path").toString()).absoluteFilePath());
         if (!normalizedSet.contains(imgPath)) continue;
+        const QJsonObject camera = imgObj.value(QStringLiteral("camera")).toObject();
+        if (camera.isEmpty()) continue;
 
         imgObj.remove(QStringLiteral("camera"));
         images[i] = imgObj;

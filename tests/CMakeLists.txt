@@ -82,6 +82,43 @@ if(WIN32)
 endif()
 gtest_discover_tests(test_project_file_integration)
 
+add_executable(test_metashape_camera_reference_importer
+    test_metashape_camera_reference_importer.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/services/MetashapeCameraReferenceImporter.cpp
+)
+target_link_libraries(test_metashape_camera_reference_importer PRIVATE
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_metashape_camera_reference_importer PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui/project/services
+)
+gtest_discover_tests(test_metashape_camera_reference_importer)
+
+add_executable(test_reference_models
+    test_reference_models.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/reference/CameraReferenceCsvExporter.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/reference/CameraReferenceProjectIdentity.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/reference/CameraReferenceTreeModel.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/reference/MetashapeCameraReferenceSetBuilder.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/reference/ProjectCameraReferenceRepository.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/ReferenceMarkerModels.cpp
+)
+target_link_libraries(test_reference_models PRIVATE
+    camera_reference
+    control_points
+    plascan_common_project
+    Qt6::Core
+    Qt6::Gui
+    GTest::gtest_main
+)
+target_include_directories(test_reference_models PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui
+    ${CMAKE_SOURCE_DIR}/src/gui/project/data
+)
+set_target_properties(test_reference_models PROPERTIES AUTOMOC ON)
+gtest_discover_tests(test_reference_models)
+
 # ==============================================================================
 # test_patchmatch_cpu — CPU PatchMatch 深度恢复回归测试
 # ==============================================================================

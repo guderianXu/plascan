@@ -1074,6 +1074,32 @@ TEST(ProjectDataCameraMetadataTest, SetImageCamerasClearsLegacyTopLevelCameraFil
               QStringLiteral("fresh/new.tsai"));
 }
 
+TEST(ProjectDataCameraMetadataTest, ClearImageCamerasSkipsImagesWithoutCamera)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString projectPath = QDir(tempDir.path()).filePath(
+        QStringLiteral("camera_clear_noop.plascan"));
+    const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("IMG_004.JPG"));
+    QFile imageFile(imagePath);
+    ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
+    ASSERT_GT(imageFile.write("jpg"), 0);
+    imageFile.close();
+
+    ProjectData data;
+    ASSERT_TRUE(data.createProject(projectPath, QStringLiteral("camera_clear_noop")));
+    ASSERT_TRUE(data.addImages(QStringList{imagePath}));
+    const QJsonObject before = data.coreFilesMeta();
+    const QString storedPath = before.value(QStringLiteral("images"))
+        .toArray().at(0).toObject().value(QStringLiteral("path")).toString();
+
+    int cleared = -1;
+    QString error;
+    EXPECT_FALSE(data.clearImageCameras(QStringList{storedPath}, &cleared, &error));
+    EXPECT_EQ(cleared, 0);
+    EXPECT_EQ(data.coreFilesMeta(), before);
+}
+
 TEST(ProjectDataAsyncOpenTest, OpensProjectFromSnapshotAndAppliesResultsLater)
 {
     QTemporaryDir tempDir;
@@ -2847,28 +2873,40 @@ TEST(CodeStyleTest, ReferencePanelWidgetUsesLowerCamelPrivateMemberNames)
     ASSERT_FALSE(source.isEmpty());
 
     const QStringList expectedMembers = {
-        QStringLiteral("QTableWidget *_table{};"),
-        QStringLiteral("QPushButton *_exactImportBtn{};"),
-        QStringLiteral("QPushButton *_batchImportBtn{};"),
-        QStringLiteral("QPushButton *_clearCameraBtn{};"),
+        QStringLiteral("QTreeView *_cameraTree = nullptr;"),
+        QStringLiteral("QTreeView *_markerTree = nullptr;"),
+        QStringLiteral("QTreeView *_scaleBarTree = nullptr;"),
+        QStringLiteral("QAction *_importCameraAction = nullptr;"),
+        QStringLiteral("QAction *_importMarkerAction = nullptr;"),
+        QStringLiteral("QAction *_sourceModeAction = nullptr;"),
+        QStringLiteral("QAction *_estimatedModeAction = nullptr;"),
+        QStringLiteral("QAction *_errorModeAction = nullptr;"),
     };
     for (const QString &expectedMember : expectedMembers)
     {
         EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
     }
 
-    const QStringList oldMemberNames = {
+    const QStringList removedMemberNames = {
+        QStringLiteral("_table"),
+        QStringLiteral("_exactImportBtn"),
+        QStringLiteral("_batchImportBtn"),
+        QStringLiteral("_clearCameraBtn"),
         QStringLiteral("m_table"),
         QStringLiteral("m_exactImportBtn"),
         QStringLiteral("m_batchImportBtn"),
         QStringLiteral("m_clearCameraBtn"),
     };
-    for (const QString &oldName : oldMemberNames)
+    for (const QString &removedName : removedMemberNames)
     {
-        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
-        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
-        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(header.contains(removedName)) << qPrintable(removedName);
+        EXPECT_FALSE(source.contains(removedName)) << qPrintable(removedName);
     }
+
+    const QRegularExpression legacyMemberPattern(
+        QStringLiteral(R"(\bm_[A-Za-z][A-Za-z0-9_]*\b)"));
+    EXPECT_FALSE(legacyMemberPattern.match(header).hasMatch());
+    EXPECT_FALSE(legacyMemberPattern.match(source).hasMatch());
 }
 
 TEST(CodeStyleTest, TaskStatusWidgetUsesLowerCamelPrivateMemberNames)
@@ -5160,6 +5198,8 @@ TEST(CameraCalibrationDataTest, MarksExifConstrainedParametersAsReleased)
 
 TEST(CameraCalibrationDialogTest, ProvidesInitialAndAdjustedPages)
 {
+    const QString configuredImagePath = QStringLiteral("D:/images/one.jpg");
+    const QString unconfiguredImagePath = QStringLiteral("D:/images/without_camera.jpg");
     const QJsonObject camera{
         {QStringLiteral("model"), QStringLiteral("tsai")},
         {QStringLiteral("image_width"), 1200},
@@ -5170,8 +5210,11 @@ TEST(CameraCalibrationDialogTest, ProvidesInitialAndAdjustedPages)
         {QStringLiteral("cv"), 400.0}};
     const QJsonObject metadata{
         {QStringLiteral("images"), QJsonArray{
-            QJsonObject{{QStringLiteral("path"), QStringLiteral("D:/images/one.jpg")},
-                        {QStringLiteral("camera"), camera}}}}};
+            QJsonObject{{QStringLiteral("path"), configuredImagePath},
+                        {QStringLiteral("camera"), camera}},
+            QJsonObject{{QStringLiteral("path"), unconfiguredImagePath},
+                        {QStringLiteral("width"), 1200},
+                        {QStringLiteral("height"), 800}}}}};
 
     CameraCalibrationDialog dialog(metadata, QString());
     auto *tabs = dialog.findChild<QTabWidget *>(QStringLiteral("cameraCalibrationTabs"));
@@ -5184,7 +5227,97 @@ TEST(CameraCalibrationDialogTest, ProvidesInitialAndAdjustedPages)
     ASSERT_NE(adjustedTable, nullptr);
     EXPECT_EQ(adjustedTable->columnCount(), 5);
     EXPECT_TRUE(adjustedTable->item(0, 0)->text().startsWith(QStringLiteral("f")));
-    EXPECT_NE(dialog.findChild<QTableWidget *>(QStringLiteral("cameraCalibrationPhotos")), nullptr);
+
+    auto *photoTable = dialog.findChild<QTableWidget *>(QStringLiteral("cameraCalibrationPhotos"));
+    auto *cameraGroups = dialog.findChild<QListWidget *>(QStringLiteral("cameraCalibrationGroups"));
+    auto *importButton = dialog.findChild<QPushButton *>(
+        QStringLiteral("cameraCalibrationImportSelectedButton"));
+    auto *batchImportButton = dialog.findChild<QPushButton *>(
+        QStringLiteral("cameraCalibrationBatchImportButton"));
+    auto *clearButton = dialog.findChild<QPushButton *>(
+        QStringLiteral("cameraCalibrationClearSelectedButton"));
+    ASSERT_NE(photoTable, nullptr);
+    ASSERT_NE(cameraGroups, nullptr);
+    ASSERT_NE(importButton, nullptr);
+    ASSERT_NE(batchImportButton, nullptr);
+    ASSERT_NE(clearButton, nullptr);
+    EXPECT_FALSE(importButton->isEnabled());
+    EXPECT_TRUE(batchImportButton->isEnabled());
+    EXPECT_FALSE(clearButton->isEnabled());
+
+    int unconfiguredGroupRow = -1;
+    int unconfiguredPhotoRow = -1;
+    for (int groupRow = 0; groupRow < cameraGroups->count(); ++groupRow)
+    {
+        cameraGroups->setCurrentRow(groupRow);
+        for (int photoRow = 0; photoRow < photoTable->rowCount(); ++photoRow)
+        {
+            const QTableWidgetItem *nameItem = photoTable->item(photoRow, 0);
+            if (nameItem && nameItem->data(Qt::UserRole).toString() == unconfiguredImagePath)
+            {
+                unconfiguredGroupRow = groupRow;
+                unconfiguredPhotoRow = photoRow;
+                break;
+            }
+        }
+        if (unconfiguredPhotoRow >= 0)
+        {
+            break;
+        }
+    }
+    ASSERT_GE(unconfiguredGroupRow, 0);
+    ASSERT_GE(unconfiguredPhotoRow, 0);
+    EXPECT_EQ(photoTable->item(unconfiguredPhotoRow, 0)->text(),
+              QStringLiteral("without_camera.jpg"));
+    EXPECT_EQ(photoTable->item(unconfiguredPhotoRow, 3)->text(),
+              QStringLiteral("无相机参数"));
+
+    QSignalSpy importSpy(&dialog, &CameraCalibrationDialog::importCameraForImageRequested);
+    QSignalSpy batchImportSpy(&dialog, &CameraCalibrationDialog::batchImportRequested);
+    QSignalSpy clearSpy(&dialog, &CameraCalibrationDialog::clearCamerasRequested);
+    ASSERT_TRUE(importSpy.isValid());
+    ASSERT_TRUE(batchImportSpy.isValid());
+    ASSERT_TRUE(clearSpy.isValid());
+
+    photoTable->selectRow(unconfiguredPhotoRow);
+    EXPECT_TRUE(importButton->isEnabled());
+    EXPECT_FALSE(clearButton->isEnabled());
+
+    importButton->click();
+    ASSERT_EQ(importSpy.count(), 1);
+    EXPECT_EQ(importSpy.takeFirst().at(0).toString(), unconfiguredImagePath);
+
+    clearButton->click();
+    EXPECT_EQ(clearSpy.count(), 0);
+
+    int configuredPhotoRow = -1;
+    for (int groupRow = 0; groupRow < cameraGroups->count(); ++groupRow)
+    {
+        cameraGroups->setCurrentRow(groupRow);
+        for (int photoRow = 0; photoRow < photoTable->rowCount(); ++photoRow)
+        {
+            const QTableWidgetItem *nameItem = photoTable->item(photoRow, 0);
+            if (nameItem && nameItem->data(Qt::UserRole).toString() == configuredImagePath)
+            {
+                configuredPhotoRow = photoRow;
+                break;
+            }
+        }
+        if (configuredPhotoRow >= 0)
+        {
+            break;
+        }
+    }
+    ASSERT_GE(configuredPhotoRow, 0);
+    photoTable->selectRow(configuredPhotoRow);
+    EXPECT_TRUE(clearButton->isEnabled());
+    clearButton->click();
+    ASSERT_EQ(clearSpy.count(), 1);
+    EXPECT_EQ(clearSpy.takeFirst().at(0).toStringList(),
+              QStringList{configuredImagePath});
+
+    batchImportButton->click();
+    EXPECT_EQ(batchImportSpy.count(), 1);
 }
 
 TEST(ProjectWorkflowReportsTest, PreservesCompleteCalibrationSnapshots)
@@ -12355,6 +12488,42 @@ TEST(ProjectSurveyControlTest, ImportsCsvIntoProjectMetadata)
     EXPECT_EQ(reportRecord.value(QStringLiteral("control_point_count")).toInt(), 1);
     EXPECT_EQ(reportRecord.value(QStringLiteral("check_point_count")).toInt(), 1);
     EXPECT_EQ(reportRecord.value(QStringLiteral("scale_bar_count")).toInt(), 1);
+}
+
+TEST(ProjectSurveyControlTest, DetectsAgisoftWgs84HeaderAfterBomAndBlankLines)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    ProjectData projectData;
+    const QString projectPath = QDir(tempDir.path()).filePath(
+        QStringLiteral("agisoft_gcp_project.plascan"));
+    ASSERT_TRUE(projectData.createProject(projectPath, QStringLiteral("agisoft_gcp_project")));
+
+    const QString txtPath = QDir(tempDir.path()).filePath(QStringLiteral("GCPs_WGS84.txt"));
+    QFile file(txtPath);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    ASSERT_GT(file.write(QByteArray("\xEF\xBB\xBF", 3)
+                         + "\n\n#Name\tLat\tLon\tEll.H(m)\t\n"
+                           "1\t59.84424741\t31.4656473\t54.454\t\n"),
+              0);
+    file.close();
+
+    const auto result = xjw::gui::project::importSurveyControlCsv(
+        &projectData, txtPath, QString());
+    ASSERT_TRUE(result.imported) << qPrintable(result.errorMessage);
+    EXPECT_EQ(result.controlPointCount, 1);
+
+    const auto loaded = xjw::control_points::MarkerSetStore(
+        xjw::common::project::ProjectIO::markerSetPath(projectPath)).load();
+    ASSERT_TRUE(loaded.ok) << qPrintable(loaded.error);
+    ASSERT_EQ(loaded.markerSet.markers().size(), 1);
+    const auto &referenceCoordinate =
+        loaded.markerSet.markers().front().referenceCoordinate.value();
+    EXPECT_EQ(referenceCoordinate.sourceCrs, QStringLiteral("EPSG:4979"));
+    EXPECT_EQ(referenceCoordinate.verticalDatum, QStringLiteral("ellipsoidal"));
+    EXPECT_TRUE(referenceCoordinate.referenceUsable)
+        << qPrintable(referenceCoordinate.referenceError);
 }
 
 TEST(SurveyControlDialogTest, PopulatesTablesFromProjectMetadata)

@@ -1,18 +1,27 @@
 #include "CameraCalibrationDialog.h"
 
+#include "project/ProjectMetadata.h"
+
 #include <QAbstractItemView>
 #include <QColor>
 #include <QDialogButtonBox>
+#include <QFileInfo>
 #include <QHeaderView>
+#include <QHBoxLayout>
+#include <QItemSelectionModel>
+#include <QJsonArray>
 #include <QLabel>
 #include <QListWidget>
 #include <QMap>
+#include <QPushButton>
+#include <QSet>
 #include <QSplitter>
 #include <QStyle>
 #include <QTableWidget>
 #include <QTabWidget>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <cmath>
 #include <optional>
 
@@ -227,6 +236,68 @@ QString adjustmentStatusLabel(const QString &status)
     return status.isEmpty() ? QStringLiteral("旧版记录（优化状态未注明）") : status;
 }
 
+QJsonObject projectFilesMetadata(const QJsonObject &metadata)
+{
+    if (metadata.value(QStringLiteral("images")).isArray())
+    {
+        return metadata;
+    }
+    return metadata.value(QStringLiteral("project_files")).toObject();
+}
+
+QString normalizedImagePathKey(const QString &path)
+{
+    return xjw::common::project::normalizePath(path);
+}
+
+void appendImagesWithoutCameraRecords(
+    const QJsonArray &images,
+    QVector<xjw::gui::camera_calibration::CameraCalibrationRecord> *records)
+{
+    if (!records)
+    {
+        return;
+    }
+
+    QSet<QString> existingPaths;
+    for (const auto &record : *records)
+    {
+        existingPaths.insert(normalizedImagePathKey(record.path));
+    }
+
+    for (const QJsonValue &value : images)
+    {
+        const QJsonObject image = value.toObject();
+        const QString path = image.value(QStringLiteral("path")).toString().trimmed();
+        const QString pathKey = normalizedImagePathKey(path);
+        if (path.isEmpty() || existingPaths.contains(pathKey))
+        {
+            continue;
+        }
+
+        const QJsonObject camera = image.value(QStringLiteral("camera")).toObject();
+        xjw::gui::camera_calibration::CameraCalibrationRecord record;
+        record.path = path;
+        record.name = QFileInfo(path).fileName();
+        if (record.name.isEmpty())
+        {
+            record.name = path;
+        }
+        record.model = camera.value(QStringLiteral("model")).toString();
+        record.imageWidth = camera.value(QStringLiteral("image_width"))
+                                .toInt(image.value(QStringLiteral("width")).toInt());
+        record.imageHeight = camera.value(QStringLiteral("image_height"))
+                                 .toInt(image.value(QStringLiteral("height")).toInt());
+        records->append(record);
+        existingPaths.insert(pathKey);
+    }
+
+    std::sort(records->begin(), records->end(), [](const auto &left, const auto &right)
+    {
+        return QString::localeAwareCompare(left.name, right.name) < 0;
+    });
+}
+
 } // namespace
 
 CameraCalibrationDialog::CameraCalibrationDialog(const QJsonObject &projectMetadata,
@@ -234,14 +305,20 @@ CameraCalibrationDialog::CameraCalibrationDialog(const QJsonObject &projectMetad
                                                  QWidget *parent)
     : QDialog(parent)
 {
+    const QJsonObject projectFiles = projectFilesMetadata(projectMetadata);
+    const QJsonArray projectImages = projectFiles.value(QStringLiteral("images")).toArray();
+    _hasProject = !projectMetadata.isEmpty();
+    _hasProjectImages = !projectImages.isEmpty();
+
     const QJsonObject report =
         xjw::gui::camera_calibration::readLatestCameraCalibrationReport(
             projectAssetsDir,
             &_reportError);
     _reportTimestamp = report.value(QStringLiteral("timestamp")).toString();
     _records = xjw::gui::camera_calibration::buildCameraCalibrationRecords(
-        projectMetadata,
+        projectFiles,
         report);
+    appendImagesWithoutCameraRecords(projectImages, &_records);
 
     buildInterface();
     buildGroups();
@@ -253,6 +330,7 @@ CameraCalibrationDialog::CameraCalibrationDialog(const QJsonObject &projectMetad
     {
         _cameraGroups->setCurrentRow(0);
     }
+    updateCameraActionAvailability();
 }
 
 void CameraCalibrationDialog::buildInterface()
@@ -265,7 +343,8 @@ void CameraCalibrationDialog::buildInterface()
     auto *root = new QVBoxLayout(this);
     auto *intro = new QLabel(
         tr("“初始”是本次空三开始时使用的内方位先验；“调整”是连接点与束平差得到的内方位结果。"
-           "cx/cy 按相对图像中心的像素偏移显示。本窗口不显示外方位 R/C，也不会修改项目相机。"),
+           "cx/cy 按相对图像中心的像素偏移显示。本窗口不显示外方位 R/C；下方按钮用于导入或清除"
+           "项目相机参数。导航/GNSS 参考请在左侧“参考”面板管理。"),
         this);
     intro->setWordWrap(true);
     intro->setStyleSheet(QStringLiteral(
@@ -324,6 +403,7 @@ void CameraCalibrationDialog::buildInterface()
     _photoTable->setHorizontalHeaderLabels(
         {tr("图像"), tr("分辨率"), tr("相机模型"), tr("校准状态")});
     _photoTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    _photoTable->setSelectionMode(QAbstractItemView::ExtendedSelection);
     _photoTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     _photoTable->setAlternatingRowColors(true);
     _photoTable->verticalHeader()->setVisible(false);
@@ -338,12 +418,33 @@ void CameraCalibrationDialog::buildInterface()
     splitter->setStretchFactor(1, 1);
     root->addWidget(splitter, 1);
 
+    auto *cameraActions = new QHBoxLayout();
+    _importSelectedButton = new QPushButton(tr("为所选影像导入相机…"), this);
+    _importSelectedButton->setObjectName(QStringLiteral("cameraCalibrationImportSelectedButton"));
+    _batchImportButton = new QPushButton(tr("按文件名批量导入…"), this);
+    _batchImportButton->setObjectName(QStringLiteral("cameraCalibrationBatchImportButton"));
+    _clearSelectedButton = new QPushButton(tr("清除所选相机"), this);
+    _clearSelectedButton->setObjectName(QStringLiteral("cameraCalibrationClearSelectedButton"));
+    cameraActions->addWidget(_importSelectedButton);
+    cameraActions->addWidget(_batchImportButton);
+    cameraActions->addWidget(_clearSelectedButton);
+    cameraActions->addStretch(1);
+    root->addLayout(cameraActions);
+
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     root->addWidget(buttons);
 
     connect(_cameraGroups, &QListWidget::currentRowChanged,
             this, &CameraCalibrationDialog::showSelectedCameraGroup);
+    connect(_photoTable, &QTableWidget::itemSelectionChanged,
+            this, &CameraCalibrationDialog::updateCameraActionAvailability);
+    connect(_importSelectedButton, &QPushButton::clicked,
+            this, &CameraCalibrationDialog::requestImportForSelectedPhoto);
+    connect(_batchImportButton, &QPushButton::clicked,
+            this, &CameraCalibrationDialog::requestBatchImport);
+    connect(_clearSelectedButton, &QPushButton::clicked,
+            this, &CameraCalibrationDialog::requestClearSelectedCameras);
 }
 
 void CameraCalibrationDialog::buildGroups()
@@ -352,7 +453,9 @@ void CameraCalibrationDialog::buildGroups()
     for (int index = 0; index < _records.size(); ++index)
     {
         const auto &record = _records.at(index);
-        const QString model = record.model.trimmed().isEmpty()
+        const QString model = !record.hasInitial && !record.hasAdjusted
+            ? tr("未配置相机")
+            : record.model.trimmed().isEmpty()
             ? tr("通用相机")
             : record.model;
         const QString resolution = record.imageWidth > 0 && record.imageHeight > 0
@@ -494,6 +597,7 @@ void CameraCalibrationDialog::populateParameterTables(const CameraGroup &group)
 
 void CameraCalibrationDialog::populatePhotoTable(const CameraGroup &group)
 {
+    _photoTable->clearSelection();
     _photoTable->setRowCount(group.recordIndices.size());
     for (int row = 0; row < group.recordIndices.size(); ++row)
     {
@@ -519,12 +623,16 @@ void CameraCalibrationDialog::populatePhotoTable(const CameraGroup &group)
         {
             status = tr("仅调整值");
         }
-        _photoTable->setItem(row, 0, readOnlyItem(record.name));
-        _photoTable->item(row, 0)->setToolTip(record.path);
+        auto *nameItem = readOnlyItem(record.name);
+        nameItem->setData(Qt::UserRole, record.path);
+        nameItem->setData(Qt::UserRole + 1, record.hasProjectCamera);
+        nameItem->setToolTip(record.path);
+        _photoTable->setItem(row, 0, nameItem);
         _photoTable->setItem(row, 1, readOnlyItem(resolution));
         _photoTable->setItem(row, 2, readOnlyItem(model));
         _photoTable->setItem(row, 3, readOnlyItem(status));
     }
+    updateCameraActionAvailability();
 }
 
 void CameraCalibrationDialog::showEmptyState()
@@ -535,4 +643,90 @@ void CameraCalibrationDialog::showEmptyState()
     _cameraGroups->setEnabled(false);
     _calibrationTabs->setEnabled(false);
     _photoTable->setRowCount(0);
+    updateCameraActionAvailability();
+}
+
+QStringList CameraCalibrationDialog::selectedPhotoPaths() const
+{
+    QStringList paths;
+    if (!_photoTable || !_photoTable->selectionModel())
+    {
+        return paths;
+    }
+
+    const QModelIndexList selectedRows = _photoTable->selectionModel()->selectedRows(0);
+    for (const QModelIndex &index : selectedRows)
+    {
+        const QTableWidgetItem *item = _photoTable->item(index.row(), 0);
+        const QString path = item ? item->data(Qt::UserRole).toString().trimmed() : QString();
+        if (!path.isEmpty() && !paths.contains(path))
+        {
+            paths.append(path);
+        }
+    }
+    return paths;
+}
+
+QStringList CameraCalibrationDialog::selectedConfiguredPhotoPaths() const
+{
+    QStringList paths;
+    if (!_photoTable || !_photoTable->selectionModel())
+    {
+        return paths;
+    }
+    for (const QModelIndex &index : _photoTable->selectionModel()->selectedRows(0))
+    {
+        const QTableWidgetItem *item = _photoTable->item(index.row(), 0);
+        const QString path = item ? item->data(Qt::UserRole).toString().trimmed() : QString();
+        const bool hasCamera = item && item->data(Qt::UserRole + 1).toBool();
+        if (hasCamera && !path.isEmpty() && !paths.contains(path))
+        {
+            paths.append(path);
+        }
+    }
+    return paths;
+}
+
+void CameraCalibrationDialog::updateCameraActionAvailability()
+{
+    const QStringList selectedPaths = selectedPhotoPaths();
+    if (_importSelectedButton)
+    {
+        _importSelectedButton->setEnabled(_hasProject && selectedPaths.size() == 1);
+    }
+    if (_batchImportButton)
+    {
+        _batchImportButton->setEnabled(_hasProject && _hasProjectImages);
+    }
+    if (_clearSelectedButton)
+    {
+        _clearSelectedButton->setEnabled(
+            _hasProject && !selectedConfiguredPhotoPaths().isEmpty());
+    }
+}
+
+void CameraCalibrationDialog::requestImportForSelectedPhoto()
+{
+    const QStringList selectedPaths = selectedPhotoPaths();
+    if (_hasProject && selectedPaths.size() == 1)
+    {
+        emit importCameraForImageRequested(selectedPaths.first());
+    }
+}
+
+void CameraCalibrationDialog::requestBatchImport()
+{
+    if (_hasProject && _hasProjectImages)
+    {
+        emit batchImportRequested();
+    }
+}
+
+void CameraCalibrationDialog::requestClearSelectedCameras()
+{
+    const QStringList selectedPaths = selectedConfiguredPhotoPaths();
+    if (_hasProject && !selectedPaths.isEmpty())
+    {
+        emit clearCamerasRequested(selectedPaths);
+    }
 }

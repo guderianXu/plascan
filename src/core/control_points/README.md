@@ -61,6 +61,11 @@ marker_print_cli --family tag36h11 --ids 1,2,3 --diameter-mm 30 `
   --family tag36h11 --expected-ids 1,2,3 --dpi 600
 ```
 
+测绘控制导入同时支持标准逗号/分号 CSV 和 Agisoft `GCPs_WGS84.txt` 制表符格式。
+Agisoft 表头 `#Name, Lat, Lon, Ell.H(m)` 会明确映射为
+`id, y=Lat, x=Lon, z=Ell.H`；GUI 为该格式补充 `EPSG:4979`、经度/纬度轴序、
+椭球高和米单位，普通无 CRS CSV 仍要求调用方明确提供角色及坐标参考信息。
+
 ## 目录
 
 ```text

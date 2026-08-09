@@ -13,6 +13,7 @@ endfunction()
 
 plascan_core_add_optional_module(image_matching "Image Matching")
 plascan_core_add_optional_module(camera "Camera")
+plascan_core_add_optional_module(camera_reference "Camera Reference")
 plascan_core_add_optional_module(intersection "Intersection")
 plascan_core_add_optional_module(bundle_adjust "BundleAdjust")
 plascan_core_add_optional_module(overlap "Overlap")
