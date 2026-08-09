@@ -11,9 +11,11 @@ inline constexpr const char *kPatchMatchOpenClBuildOptions = "-cl-mad-enable";
 
 inline constexpr const char *kPatchMatchOpenClSourcePrefix = R"CLC(
 #define MAX_SOURCES 16
+#define MAX_ROBUST_SUPPORT (MAX_SOURCES / 2 + 1)
 #define WORK_GROUP_SIZE 16
 #define MAX_PATCH_RADIUS 7
 #define REFERENCE_TILE_SIZE (WORK_GROUP_SIZE + 2 * MAX_PATCH_RADIUS)
+#define CHECKERBOARD_TILE_WIDTH (2 * WORK_GROUP_SIZE + 2 * MAX_PATCH_RADIUS)
 
 inline float sample_bilinear(__global const float *image,
                              int width,
@@ -130,6 +132,17 @@ inline float4 perturb_facing_normal(float4 normal,
     return face_normal_toward_camera(normal + amount * perturbation, ray);
 }
 
+inline int same_plane_hypothesis(float left_depth,
+                                 float4 left_normal,
+                                 float right_depth,
+                                 float4 right_normal)
+{
+    return left_depth == right_depth
+        && left_normal.x == right_normal.x
+        && left_normal.y == right_normal.y
+        && left_normal.z == right_normal.z;
+}
+
 inline float propagated_plane_depth(int from_x,
                                     int from_y,
                                     float from_depth,
@@ -151,6 +164,59 @@ inline float propagated_plane_depth(int from_x,
     float plane_distance = from_depth * dot(normal.xyz, from_ray);
     float depth = plane_distance / denominator;
     return depth > 0.0f && isfinite(depth) ? depth : 0.0f;
+}
+
+inline void compose_plane_homography(float4 normal,
+                                     float plane_distance,
+                                     __global const float *camera,
+                                     float inv_fx,
+                                     float inv_fy,
+                                     float cx,
+                                     float cy,
+                                     __private float *homography)
+{
+    float inverse_cx = -cx * inv_fx;
+    float inverse_cy = -cy * inv_fy;
+    float inverse_distance = 1.0f / plane_distance;
+    float3 inverse_distance_normal = normal.xyz * inverse_distance;
+
+    float source_x_column = camera[0]
+        * (camera[4] + inverse_distance_normal.x * camera[13])
+        + camera[1] * (camera[10] + inverse_distance_normal.x * camera[15]);
+    float source_x_row = camera[0]
+        * (camera[5] + inverse_distance_normal.y * camera[13])
+        + camera[1] * (camera[11] + inverse_distance_normal.y * camera[15]);
+    float source_x_offset = camera[0]
+        * (camera[6] + inverse_distance_normal.z * camera[13])
+        + camera[1] * (camera[12] + inverse_distance_normal.z * camera[15]);
+    float source_y_column = camera[2]
+        * (camera[7] + inverse_distance_normal.x * camera[14])
+        + camera[3] * (camera[10] + inverse_distance_normal.x * camera[15]);
+    float source_y_row = camera[2]
+        * (camera[8] + inverse_distance_normal.y * camera[14])
+        + camera[3] * (camera[11] + inverse_distance_normal.y * camera[15]);
+    float source_y_offset = camera[2]
+        * (camera[9] + inverse_distance_normal.z * camera[14])
+        + camera[3] * (camera[12] + inverse_distance_normal.z * camera[15]);
+    float source_z_column = camera[10]
+        + inverse_distance_normal.x * camera[15];
+    float source_z_row = camera[11]
+        + inverse_distance_normal.y * camera[15];
+    float source_z_offset = camera[12]
+        + inverse_distance_normal.z * camera[15];
+
+    homography[0] = inv_fx * source_x_column;
+    homography[1] = inv_fy * source_x_row;
+    homography[2] = source_x_offset
+        + inverse_cx * source_x_column + inverse_cy * source_x_row;
+    homography[3] = inv_fx * source_y_column;
+    homography[4] = inv_fy * source_y_row;
+    homography[5] = source_y_offset
+        + inverse_cx * source_y_column + inverse_cy * source_y_row;
+    homography[6] = inv_fx * source_z_column;
+    homography[7] = inv_fy * source_z_row;
+    homography[8] = source_z_offset
+        + inverse_cx * source_z_column + inverse_cy * source_z_row;
 }
 
 inline float source_ncc(int center_x,
@@ -175,7 +241,8 @@ inline float source_ncc(int center_x,
                         float cx,
                          float cy,
                          int tile_origin_x,
-                         int tile_origin_y)
+                         int tile_origin_y,
+                         int reference_tile_stride)
 {
     int pixel_count = width * height;
     __global const float *source = sources + source_index * pixel_count;
@@ -195,21 +262,58 @@ inline float source_ncc(int center_x,
     float3 center_ray = reference_ray(
         center_x, center_y, inv_fx, inv_fy, cx, cy);
     float plane_distance = depth * dot(normal.xyz, center_ray);
+    if (plane_distance == 0.0f || !isfinite(plane_distance))
+    {
+        return 0.0f;
+    }
+    float homography[9];
+    compose_plane_homography(normal,
+                             plane_distance,
+                             camera,
+                             inv_fx,
+                             inv_fy,
+                             cx,
+                             cy,
+                             homography);
 
     for (int dy = -radius; dy <= radius; dy += step)
     {
-        for (int dx = -radius; dx <= radius; dx += step)
+        int reference_y = center_y + dy;
+        if (reference_y < 0 || reference_y >= height)
+        {
+            continue;
+        }
+        int first_reference_x = center_x - radius;
+        float projected_x = homography[0] * (float)first_reference_x
+            + homography[1] * (float)reference_y + homography[2];
+        float projected_y = homography[3] * (float)first_reference_x
+            + homography[4] * (float)reference_y + homography[5];
+        float projected_z = homography[6] * (float)first_reference_x
+            + homography[7] * (float)reference_y + homography[8];
+        float plane_denominator = normal.x
+                * (((float)first_reference_x - cx) * inv_fx)
+            + normal.y * (((float)reference_y - cy) * inv_fy)
+            + normal.z;
+        float projected_x_step = homography[0] * (float)step;
+        float projected_y_step = homography[3] * (float)step;
+        float projected_z_step = homography[6] * (float)step;
+        float plane_denominator_step = normal.x * inv_fx * (float)step;
+        for (int dx = -radius;
+             dx <= radius;
+             dx += step,
+             projected_x += projected_x_step,
+             projected_y += projected_y_step,
+             projected_z += projected_z_step,
+             plane_denominator += plane_denominator_step)
         {
             int reference_x = center_x + dx;
-            int reference_y = center_y + dy;
-            if (reference_x < 0 || reference_y < 0
-                || reference_x >= width || reference_y >= height)
+            if (reference_x < 0 || reference_x >= width)
             {
                 continue;
             }
             int tile_x = reference_x - tile_origin_x + MAX_PATCH_RADIUS;
             int tile_y = reference_y - tile_origin_y + MAX_PATCH_RADIUS;
-            int tile_index = tile_y * REFERENCE_TILE_SIZE + tile_x;
+            int tile_index = tile_y * reference_tile_stride + tile_x;
             if (has_reference_mask && reference_mask_tile[tile_index] == 0)
             {
                 continue;
@@ -221,9 +325,6 @@ inline float source_ncc(int center_x,
             // to the minimum valid-patch ratio denominator.
             ++candidate_count;
 
-            float3 patch_ray = reference_ray(
-                reference_x, reference_y, inv_fx, inv_fy, cx, cy);
-            float plane_denominator = dot(normal.xyz, patch_ray);
             if (fabs(plane_denominator) < 1.0e-6f)
             {
                 continue;
@@ -233,20 +334,12 @@ inline float source_ncc(int center_x,
             {
                 continue;
             }
-            float normalized_x = patch_ray.x;
-            float normalized_y = patch_ray.y;
-            float transformed_x = camera[4] * normalized_x
-                + camera[5] * normalized_y + camera[6] + camera[13] / patch_depth;
-            float transformed_y = camera[7] * normalized_x
-                + camera[8] * normalized_y + camera[9] + camera[14] / patch_depth;
-            float transformed_z = camera[10] * normalized_x
-                + camera[11] * normalized_y + camera[12] + camera[15] / patch_depth;
-            if (!(transformed_z > 1.0e-6f))
+            if (!(projected_z > 1.0e-6f))
             {
                 continue;
             }
-            float source_x = camera[0] * transformed_x / transformed_z + camera[1];
-            float source_y = camera[2] * transformed_y / transformed_z + camera[3];
+            float source_x = projected_x / projected_z;
+            float source_y = projected_y / projected_z;
             if (!source_mask_valid(source_masks,
                                    source_index,
                                    pixel_count,
@@ -302,7 +395,7 @@ inline float source_ncc(int center_x,
 )CLC";
 
 inline constexpr const char *kPatchMatchOpenClSourceMain = R"CLC(
-inline float robust_depth_score(int x,
+static inline float robust_depth_score(int x,
                                 int y,
                                 float depth,
                                 float4 normal,
@@ -324,10 +417,17 @@ inline float robust_depth_score(int x,
                                 float cx,
                                 float cy,
                                 int tile_origin_x,
-                                int tile_origin_y)
+                                int tile_origin_y,
+                                int reference_tile_stride)
 {
-    float scores[MAX_SOURCES];
+    int required_support = source_count <= 2 ? source_count : source_count / 2 + 1;
+    float strongest[MAX_ROBUST_SUPPORT];
+    for (int index = 0; index < required_support; ++index)
+    {
+        strongest[index] = 0.0f;
+    }
     int support_count = 0;
+    int stored_count = 0;
     for (int source_index = 0; source_index < source_count; ++source_index)
     {
         float score = source_ncc(x, y, depth, normal, source_index,
@@ -337,33 +437,44 @@ inline float robust_depth_score(int x,
                                  minimum_mask_ratio,
                                  has_reference_mask, has_source_masks,
                                  inv_fx, inv_fy, cx, cy,
-                                 tile_origin_x, tile_origin_y);
-        if (score > 0.05f)
+                                 tile_origin_x, tile_origin_y,
+                                 reference_tile_stride);
+        if (!(score > 0.05f))
         {
-            scores[support_count++] = score;
+            continue;
+        }
+
+        ++support_count;
+        if (stored_count == required_support
+            && score <= strongest[required_support - 1])
+        {
+            continue;
+        }
+        int insert_at = stored_count < required_support
+            ? stored_count
+            : required_support - 1;
+        while (insert_at > 0 && strongest[insert_at - 1] < score)
+        {
+            if (insert_at < required_support)
+            {
+                strongest[insert_at] = strongest[insert_at - 1];
+            }
+            --insert_at;
+        }
+        strongest[insert_at] = score;
+        if (stored_count < required_support)
+        {
+            ++stored_count;
         }
     }
-    int required_support = source_count <= 2 ? source_count : source_count / 2 + 1;
-    if (support_count < required_support)
+    if (support_count < required_support || stored_count < required_support)
     {
         return 0.0f;
-    }
-    for (int left = 0; left < support_count; ++left)
-    {
-        for (int right = left + 1; right < support_count; ++right)
-        {
-            if (scores[right] > scores[left])
-            {
-                float value = scores[left];
-                scores[left] = scores[right];
-                scores[right] = value;
-            }
-        }
     }
     float sum = 0.0f;
     for (int index = 0; index < required_support; ++index)
     {
-        sum += scores[index];
+        sum += strongest[index];
     }
     return sum / (float)required_support;
 }
@@ -475,7 +586,8 @@ __kernel void initialize_planes(
                                          width, height, source_count, patch_half, 1,
                                          minimum_mask_ratio, has_reference_mask,
                                          has_source_masks, inv_fx, inv_fy, cx, cy,
-                                         tile_origin_x, tile_origin_y);
+                                         tile_origin_x, tile_origin_y,
+                                         REFERENCE_TILE_SIZE);
         if (score > best_score)
         {
             best_score = score;
@@ -499,7 +611,8 @@ __kernel void initialize_planes(
                                              width, height, source_count, patch_half, 1,
                                              minimum_mask_ratio, has_reference_mask,
                                              has_source_masks, inv_fx, inv_fy, cx, cy,
-                                             tile_origin_x, tile_origin_y);
+                                             tile_origin_x, tile_origin_y,
+                                             REFERENCE_TILE_SIZE);
             if (score > best_score)
             {
                 best_score = score;
@@ -551,20 +664,21 @@ __kernel void propagate_planes(
     int iteration,
     float perturbation)
 {
-    int x = (int)get_global_id(0);
+    int compact_x = (int)get_global_id(0);
     int y = (int)get_global_id(1);
+    int x = compact_x * 2 + ((y + checkerboard) & 1);
     int local_linear_index = (int)get_local_id(1) * WORK_GROUP_SIZE
         + (int)get_local_id(0);
-    int tile_origin_x = (int)get_group_id(0) * WORK_GROUP_SIZE;
+    int tile_origin_x = (int)get_group_id(0) * 2 * WORK_GROUP_SIZE;
     int tile_origin_y = (int)get_group_id(1) * WORK_GROUP_SIZE;
-    __local float reference_tile[REFERENCE_TILE_SIZE * REFERENCE_TILE_SIZE];
-    __local uchar reference_mask_tile[REFERENCE_TILE_SIZE * REFERENCE_TILE_SIZE];
+    __local float reference_tile[CHECKERBOARD_TILE_WIDTH * REFERENCE_TILE_SIZE];
+    __local uchar reference_mask_tile[CHECKERBOARD_TILE_WIDTH * REFERENCE_TILE_SIZE];
     for (int tile_index = local_linear_index;
-         tile_index < REFERENCE_TILE_SIZE * REFERENCE_TILE_SIZE;
+         tile_index < CHECKERBOARD_TILE_WIDTH * REFERENCE_TILE_SIZE;
          tile_index += WORK_GROUP_SIZE * WORK_GROUP_SIZE)
     {
-        int tile_x = tile_index % REFERENCE_TILE_SIZE;
-        int tile_y = tile_index / REFERENCE_TILE_SIZE;
+        int tile_x = tile_index % CHECKERBOARD_TILE_WIDTH;
+        int tile_y = tile_index / CHECKERBOARD_TILE_WIDTH;
         int image_x = tile_origin_x + tile_x - MAX_PATCH_RADIUS;
         int image_y = tile_origin_y + tile_y - MAX_PATCH_RADIUS;
         int inside = image_x >= 0 && image_y >= 0 && image_x < width && image_y < height;
@@ -575,7 +689,7 @@ __kernel void propagate_planes(
             : (uchar)0;
     }
     barrier(CLK_LOCAL_MEM_FENCE);
-    if (x >= width || y >= height || ((x + y) & 1) != checkerboard)
+    if (x >= width || y >= height)
     {
         return;
     }
@@ -630,15 +744,22 @@ __kernel void propagate_planes(
         float candidate_depth = propagated_plane_depth(
             neighbor_x, neighbor_y, neighbor_depth, neighbor_normal,
             x, y, inv_fx, inv_fy, cx, cy);
+        float candidate_score = 0.0f;
+        int has_candidate_score = 0;
         if (candidate_depth >= local_near && candidate_depth <= local_far)
         {
-            float candidate_score = robust_depth_score(
-                x, y, candidate_depth, neighbor_normal,
-                reference_tile, reference_mask_tile,
-                sources, source_cameras, source_masks,
-                width, height, source_count, patch_half, 1,
-                minimum_mask_ratio, has_reference_mask, has_source_masks,
-                inv_fx, inv_fy, cx, cy, tile_origin_x, tile_origin_y);
+            candidate_score = same_plane_hypothesis(
+                candidate_depth, neighbor_normal, best_depth, best_normal)
+                ? best_score
+                : robust_depth_score(
+                    x, y, candidate_depth, neighbor_normal,
+                    reference_tile, reference_mask_tile,
+                    sources, source_cameras, source_masks,
+                    width, height, source_count, patch_half, 1,
+                    minimum_mask_ratio, has_reference_mask, has_source_masks,
+                    inv_fx, inv_fy, cx, cy, tile_origin_x, tile_origin_y,
+                    CHECKERBOARD_TILE_WIDTH);
+            has_candidate_score = 1;
             if (candidate_score > best_score)
             {
                 best_depth = candidate_depth;
@@ -650,13 +771,19 @@ __kernel void propagate_planes(
         // A propagated plane changes depth and normal together. Also testing
         // the neighbor normal at the current depth lets the surface orientation
         // converge without forcing an otherwise worse depth displacement.
-        float normal_only_score = robust_depth_score(
-            x, y, best_depth, neighbor_normal,
-            reference_tile, reference_mask_tile,
-            sources, source_cameras, source_masks,
-            width, height, source_count, patch_half, 1,
-            minimum_mask_ratio, has_reference_mask, has_source_masks,
-            inv_fx, inv_fy, cx, cy, tile_origin_x, tile_origin_y);
+        float normal_only_score = same_plane_hypothesis(
+            best_depth, neighbor_normal, best_depth, best_normal)
+            ? best_score
+            : (has_candidate_score && candidate_depth == best_depth
+                ? candidate_score
+                : robust_depth_score(
+                    x, y, best_depth, neighbor_normal,
+                    reference_tile, reference_mask_tile,
+                    sources, source_cameras, source_masks,
+                    width, height, source_count, patch_half, 1,
+                    minimum_mask_ratio, has_reference_mask, has_source_masks,
+                    inv_fx, inv_fy, cx, cy, tile_origin_x, tile_origin_y,
+                    CHECKERBOARD_TILE_WIDTH));
         if (normal_only_score > best_score)
         {
             best_normal = neighbor_normal;
@@ -686,13 +813,21 @@ __kernel void propagate_planes(
         {
             continue;
         }
+        if (same_plane_hypothesis(candidate_depths[candidate],
+                                  candidate_normals[candidate],
+                                  best_depth,
+                                  best_normal))
+        {
+            continue;
+        }
         float candidate_score = robust_depth_score(
             x, y, candidate_depths[candidate], candidate_normals[candidate],
             reference_tile, reference_mask_tile,
             sources, source_cameras, source_masks,
             width, height, source_count, patch_half, 1,
             minimum_mask_ratio, has_reference_mask, has_source_masks,
-            inv_fx, inv_fy, cx, cy, tile_origin_x, tile_origin_y);
+            inv_fx, inv_fy, cx, cy, tile_origin_x, tile_origin_y,
+            CHECKERBOARD_TILE_WIDTH);
         if (candidate_score > best_score)
         {
             best_depth = candidate_depths[candidate];
@@ -780,48 +915,40 @@ __kernel void finalize_planes(
         return;
     }
 
-    float local_near = z_near;
-    float local_far = z_far;
-    if (has_hint && hint_depth[index] > 0.0f && isfinite(hint_depth[index]))
-    {
-        float radius = has_hint_radius ? hint_radius[index] : 0.0f;
-        if (!(radius > 0.0f))
-        {
-            radius = fmax(0.05f * hint_depth[index], 0.01f * (z_far - z_near));
-        }
-        local_near = fmax(z_near, hint_depth[index] - radius);
-        local_far = fmin(z_far, hint_depth[index] + radius);
-    }
-
-    best_score = robust_depth_score(
-        x, y, best_depth, best_normal,
-        reference_tile, reference_mask_tile,
-        sources, source_cameras, source_masks,
-        width, height, source_count, patch_half, 1,
-        minimum_mask_ratio, has_reference_mask, has_source_masks,
-        inv_fx, inv_fy, cx, cy, tile_origin_x, tile_origin_y);
     float confidence = best_score;
     if (uniqueness_minimum_margin > 0.0f)
     {
-        float lower_depth = clamp(
-            best_depth * (1.0f - uniqueness_relative_step), local_near, local_far);
-        float upper_depth = clamp(
-            best_depth * (1.0f + uniqueness_relative_step), local_near, local_far);
-        float competing_score = fmax(
-            robust_depth_score(
+        float lower_depth = fmax(
+            z_near, best_depth * (1.0f - uniqueness_relative_step));
+        float upper_depth = fmin(
+            z_far, best_depth * (1.0f + uniqueness_relative_step));
+        float minimum_distinct_depth = fmax(
+            1.0e-6f, best_depth * uniqueness_relative_step * 0.25f);
+        float lower_score = 0.0f;
+        if (best_depth - lower_depth >= minimum_distinct_depth)
+        {
+            lower_score = robust_depth_score(
                 x, y, lower_depth, best_normal,
                 reference_tile, reference_mask_tile,
                 sources, source_cameras, source_masks,
                 width, height, source_count, patch_half, 1,
                 minimum_mask_ratio, has_reference_mask, has_source_masks,
-                inv_fx, inv_fy, cx, cy, tile_origin_x, tile_origin_y),
-            robust_depth_score(
+                inv_fx, inv_fy, cx, cy, tile_origin_x, tile_origin_y,
+                REFERENCE_TILE_SIZE);
+        }
+        float upper_score = 0.0f;
+        if (upper_depth - best_depth >= minimum_distinct_depth)
+        {
+            upper_score = robust_depth_score(
                 x, y, upper_depth, best_normal,
                 reference_tile, reference_mask_tile,
                 sources, source_cameras, source_masks,
                 width, height, source_count, patch_half, 1,
                 minimum_mask_ratio, has_reference_mask, has_source_masks,
-                inv_fx, inv_fy, cx, cy, tile_origin_x, tile_origin_y));
+                inv_fx, inv_fy, cx, cy, tile_origin_x, tile_origin_y,
+                REFERENCE_TILE_SIZE);
+        }
+        float competing_score = fmax(lower_score, upper_score);
         float margin_scale = clamp(
             (best_score - competing_score) / uniqueness_minimum_margin,
             0.0f,

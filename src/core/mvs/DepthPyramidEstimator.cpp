@@ -7,7 +7,10 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <sstream>
+#include <vector>
 
 #include <opencv2/imgproc.hpp>
 
@@ -111,16 +114,74 @@ void mergeSparseHint(DepthSearchPrior &prior, const cv::Mat &sparse_hint, cv::Si
     prior.validMask.setTo(cv::Scalar(255), sparse_mask);
 }
 
-cv::Mat nativeLevelArtifact(const cv::Mat &artifact, const cv::Size &working_size)
+std::vector<int> virtualNearestRoundTripIndices(int native_extent,
+                                                int logical_extent,
+                                                int target_extent)
 {
-    if (artifact.empty() || artifact.size() == working_size)
+    std::vector<int> indices(static_cast<std::size_t>(target_extent));
+    const double target_to_logical_scale =
+        static_cast<double>(logical_extent) / target_extent;
+    const double logical_to_native_scale =
+        static_cast<double>(native_extent) / logical_extent;
+    for (int target_index = 0; target_index < target_extent; ++target_index)
+    {
+        const int logical_index = std::min(
+            static_cast<int>(target_index * target_to_logical_scale),
+            logical_extent - 1);
+        indices[static_cast<std::size_t>(target_index)] = std::min(
+            static_cast<int>(logical_index * logical_to_native_scale),
+            native_extent - 1);
+    }
+    return indices;
+}
+
+cv::Mat legacySummaryArtifact(const cv::Mat &artifact,
+                              const cv::Size &full_resolution,
+                              const cv::Size &working_size)
+{
+    if (artifact.empty())
     {
         return artifact;
     }
 
-    cv::Mat native_artifact;
-    cv::resize(artifact, native_artifact, working_size, 0.0, 0.0, cv::INTER_NEAREST);
-    return native_artifact;
+    const std::vector<int> source_columns = virtualNearestRoundTripIndices(
+        artifact.cols, full_resolution.width, working_size.width);
+    const std::vector<int> source_rows = virtualNearestRoundTripIndices(
+        artifact.rows, full_resolution.height, working_size.height);
+    bool identity_columns = artifact.cols == working_size.width;
+    for (int column = 0; identity_columns && column < working_size.width; ++column)
+    {
+        identity_columns = source_columns[static_cast<std::size_t>(column)] == column;
+    }
+    bool identity_rows = artifact.rows == working_size.height;
+    for (int row = 0; identity_rows && row < working_size.height; ++row)
+    {
+        identity_rows = source_rows[static_cast<std::size_t>(row)] == row;
+    }
+    if (identity_columns && identity_rows)
+    {
+        return artifact;
+    }
+
+    cv::Mat sampled(working_size, artifact.type());
+    const std::size_t element_size = artifact.elemSize();
+    cv::parallel_for_(cv::Range(0, working_size.height), [&](const cv::Range &rows)
+    {
+        for (int row = rows.start; row < rows.end; ++row)
+        {
+            const std::uint8_t *source = artifact.ptr(
+                source_rows[static_cast<std::size_t>(row)]);
+            std::uint8_t *destination = sampled.ptr(row);
+            for (int column = 0; column < working_size.width; ++column)
+            {
+                std::memcpy(destination + static_cast<std::size_t>(column) * element_size,
+                            source + static_cast<std::size_t>(
+                                source_columns[static_cast<std::size_t>(column)]) * element_size,
+                            element_size);
+            }
+        }
+    });
+    return sampled;
 }
 
 cv::Mat resizedValidMask(const cv::Mat &valid_mask, const cv::Size &target_size)
@@ -130,25 +191,47 @@ cv::Mat resizedValidMask(const cv::Mat &valid_mask, const cv::Size &target_size)
         return cv::Mat();
     }
 
-    cv::Mat binary_mask;
+    cv::Mat byte_mask;
     if (valid_mask.type() == CV_8U)
     {
-        cv::compare(valid_mask, 0, binary_mask, cv::CMP_GT);
+        byte_mask = valid_mask;
     }
     else
     {
         cv::Mat converted;
         valid_mask.convertTo(converted, CV_8U);
-        cv::compare(converted, 0, binary_mask, cv::CMP_GT);
+        cv::compare(converted, 0, byte_mask, cv::CMP_GT);
     }
-    if (binary_mask.size() == target_size)
+    if (byte_mask.size() == target_size)
     {
-        return binary_mask;
+        return byte_mask;
     }
 
     cv::Mat resized_mask;
-    cv::resize(binary_mask, resized_mask, target_size, 0.0, 0.0, cv::INTER_NEAREST);
+    cv::resize(byte_mask, resized_mask, target_size, 0.0, 0.0, cv::INTER_NEAREST);
     return resized_mask;
+}
+
+void resizeLevelResultArtifacts(DepthLevelResult &result, const cv::Size &target_size)
+{
+    auto resize_artifact = [&target_size](cv::Mat &artifact)
+    {
+        if (artifact.empty() || artifact.size() == target_size)
+        {
+            return;
+        }
+
+        cv::Mat resized;
+        cv::resize(artifact, resized, target_size, 0.0, 0.0, cv::INTER_NEAREST);
+        artifact = std::move(resized);
+    };
+
+    resize_artifact(result.depth);
+    resize_artifact(result.normalMap);
+    resize_artifact(result.confidence);
+    resize_artifact(result.supportCount);
+    resize_artifact(result.uncertainty);
+    resize_artifact(result.validMask);
 }
 
 void applyValidMaskToPrior(DepthSearchPrior &prior, const cv::Mat &valid_mask)
@@ -225,19 +308,22 @@ DepthLevelSummary summarizeLevel(const DepthLevelResult &level,
         full_resolution.width,
         full_resolution.height,
         level.downsampleFactor);
-    const cv::Mat native_depth = nativeLevelArtifact(level.depth, working_size);
+    const cv::Mat native_depth = legacySummaryArtifact(
+        level.depth, full_resolution, working_size);
     const cv::Mat valid_mask = native_depth > 0.0f;
     summary.validPixelCount = cv::countNonZero(valid_mask);
     summary.validCoverage = static_cast<float>(summary.validPixelCount) /
                             std::max(1, native_depth.rows * native_depth.cols);
     if (!level.confidence.empty() && summary.validPixelCount > 0)
     {
-        const cv::Mat native_confidence = nativeLevelArtifact(level.confidence, working_size);
+        const cv::Mat native_confidence = legacySummaryArtifact(
+            level.confidence, full_resolution, working_size);
         summary.meanConfidence = static_cast<float>(cv::mean(native_confidence, valid_mask)[0]);
     }
     if (!level.supportCount.empty() && summary.validPixelCount > 0)
     {
-        const cv::Mat native_support = nativeLevelArtifact(level.supportCount, working_size);
+        const cv::Mat native_support = legacySummaryArtifact(
+            level.supportCount, full_resolution, working_size);
         summary.meanSupportViews = static_cast<float>(cv::mean(native_support, valid_mask)[0]);
     }
     summary.depthDiscontinuityRatio = measureDepthDiscontinuityRatio(native_depth);
@@ -313,7 +399,9 @@ DepthPyramidResult DepthPyramidEstimator::estimate(const DepthPyramidRequest &re
             return result;
         }
 
-        const DepthPyramidLevelConfig &level_config = request.pyramidConfig.levels[index];
+        DepthPyramidLevelConfig level_config = request.pyramidConfig.levels[index];
+        const bool is_final_level = index + 1 == level_count;
+        level_config.patchMatch.returnNativeResolution = !is_final_level;
         const cv::Size target_size = depthPyramidWorkingSize(
             request.referenceImage.cols,
             request.referenceImage.rows,
@@ -334,7 +422,11 @@ DepthPyramidResult DepthPyramidEstimator::estimate(const DepthPyramidRequest &re
             const cv::Mat &guide = request.guideImage.empty()
                 ? request.referenceImage
                 : request.guideImage;
-            prior = propagateDepthPrior(parent, guide, target_size);
+            prior = propagateDepthPrior(
+                parent,
+                guide,
+                target_size,
+                request.referenceImage.size());
         }
         mergeSparseHint(prior, request.sparseDepthHints[index], target_size);
         applyValidMaskToPrior(prior, level_valid_mask);
@@ -357,6 +449,12 @@ DepthPyramidResult DepthPyramidEstimator::estimate(const DepthPyramidRequest &re
         const bool level_ok = _backend->estimate(backend_request, level_result, &level_error);
         if (level_ok)
         {
+            if (!is_final_level)
+            {
+                // Backends which support native output avoid a full-resolution upscale entirely.
+                // Normalizing here also keeps legacy/custom backends on the same pyramid contract.
+                resizeLevelResultArtifacts(level_result, target_size);
+            }
             applyValidMaskToLevelResult(level_result, level_valid_mask);
         }
         const double elapsed_ms = std::chrono::duration<double, std::milli>(
@@ -408,6 +506,9 @@ DepthPyramidResult DepthPyramidEstimator::estimate(const DepthPyramidRequest &re
 
     if (has_parent)
     {
+        // The public estimator contract remains full-sized even when a finer level fails and the
+        // selected fallback is an internally native-resolution parent.
+        resizeLevelResultArtifacts(parent, request.referenceImage.size());
         result.finalLevel = std::move(parent);
         result.success = true;
     }

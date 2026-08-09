@@ -381,6 +381,44 @@ ProjectedDepthConsistencyResult evaluateProjectedDepthConsistency(
         return result;
     }
 
+    return evaluateProjectedDepthConsistencyFromReferenceWorld(
+        referenceCamera,
+        referencePixel,
+        referenceDepth,
+        {reference_world[0], reference_world[1], reference_world[2]},
+        sourceCamera,
+        sourceDepth,
+        relativeThreshold,
+        searchRadius,
+        maximumRoundTripErrorPixels,
+        computeContinuousMetrics);
+}
+
+ProjectedDepthConsistencyResult evaluateProjectedDepthConsistencyFromReferenceWorld(
+    const Camera &referenceCamera,
+    const cv::Point2f &referencePixel,
+    float referenceDepth,
+    const std::array<double, 3> &referenceWorld,
+    const Camera &sourceCamera,
+    const cv::Mat &sourceDepth,
+    float relativeThreshold,
+    int searchRadius,
+    float maximumRoundTripErrorPixels,
+    bool computeContinuousMetrics)
+{
+    ProjectedDepthConsistencyResult result;
+    if (!referenceCamera.isValid() || !sourceCamera.isValid() ||
+        sourceDepth.empty() || sourceDepth.type() != CV_32F ||
+        !std::isfinite(referenceDepth) || referenceDepth <= 0.0f ||
+        !std::isfinite(referenceWorld[0]) ||
+        !std::isfinite(referenceWorld[1]) ||
+        !std::isfinite(referenceWorld[2]))
+    {
+        return result;
+    }
+    const double reference_world[3] = {
+        referenceWorld[0], referenceWorld[1], referenceWorld[2]};
+
     double projected_source_pixel[2] = {0.0, 0.0};
     double expected_source_depth = 0.0;
     if (!sourceCamera.projectWorldPointWithDepth(

@@ -75,12 +75,43 @@ struct DepthResidualReestimationStats
     QString skippedReason;
 };
 
+struct DepthResidualReestimationPreflight
+{
+    bool shouldProjectSources = false;
+    cv::Mat normalizedSupport;
+    cv::Mat residualMask;
+    int supportPixelCount = 0;
+    int requestedResidualPixelCount = 0;
+    float requestedResidualRatio = 0.0f;
+    QString skippedReason;
+};
+
+/**
+ * @brief Cheap missing-in-support gate evaluated before source reprojection.
+ *
+ * This mirrors the initial pixel-count and ratio checks performed by
+ * buildDepthResidualReestimationTarget(), but does not allocate projected
+ * source maps or alter the reference depth.
+ */
+DepthResidualReestimationPreflight inspectDepthResidualReestimationNeed(
+    const cv::Mat &referenceDepth,
+    const cv::Mat &supportMask,
+    const DepthResidualReestimationOptions &options = {});
+
 DepthResidualReestimationTarget buildDepthResidualReestimationTarget(
     const cv::Mat &referenceDepth,
     const cv::Mat &supportMask,
     const std::vector<cv::Mat> &projectedSourceDepths,
     const std::vector<int> &sourceSectorIds,
     const DepthResidualReestimationOptions &options = {});
+
+DepthResidualReestimationTarget buildDepthResidualReestimationTarget(
+    const cv::Mat &referenceDepth,
+    const cv::Mat &supportMask,
+    const std::vector<cv::Mat> &projectedSourceDepths,
+    const std::vector<int> &sourceSectorIds,
+    const DepthResidualReestimationOptions &options,
+    DepthResidualReestimationPreflight preflight);
 
 DepthResidualReestimationStats mergeDepthResidualReestimationCandidates(
     cv::Mat &depth,

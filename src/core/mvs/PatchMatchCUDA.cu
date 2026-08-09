@@ -1687,6 +1687,13 @@ __device__ inline void considerHypothesis(
     }
 
     candidateDepth = fmaxf(zNear, fminf(zFar, candidateDepth));
+    if (candidateDepth == *bestDepth &&
+        candidateNormal[0] == bestNormal[0] &&
+        candidateNormal[1] == bestNormal[1] &&
+        candidateNormal[2] == bestNormal[2])
+    {
+        return;
+    }
     const float cost = evalHypCost(col, row, candidateDepth, candidateNormal,
                                    refImg, W, H,
                                    srcImgs, srcDatas, srcW, srcH, numSrc,
@@ -1718,13 +1725,14 @@ __global__ void kernelCheckerboardSweep(
     int iteration,
     int parity)
 {
-    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    const int compactCol = blockIdx.x * blockDim.x + threadIdx.x;
     int row = blockIdx.y * blockDim.y + threadIdx.y;
-    if (col >= W || row >= H)
+    if (row >= H)
     {
         return;
     }
-    if (((row + col) & 1) != parity)
+    const int col = compactCol * 2 + ((row + parity) & 1);
+    if (col >= W)
     {
         return;
     }
@@ -1748,11 +1756,8 @@ __global__ void kernelCheckerboardSweep(
 
     float bestDepth = currDepth;
     float bestNormal[3] = { currNormal[0], currNormal[1], currNormal[2] };
-    float bestCost = evalHypCost(col, row, bestDepth, bestNormal,
-                                 refImg, W, H,
-                                 srcImgs, srcDatas, srcW, srcH, numSrc,
-                                 refMask, srcMasks,
-                                 patchHalf, minimumMaskedSupportRatio);
+    const float currentNcc = fmaxf(0.0f, fminf(1.0f, confMap[idx]));
+    float bestCost = 2.0f - 2.0f * currentNcc;
 
     const int dRow[4] = { -1, 1, 0, 0 };
     const int dCol[4] = { 0, 0, -1, 1 };
@@ -2316,7 +2321,8 @@ bool PatchMatchDepthEstimator::estimateGPU(
     dim3 gridCols((sW + bS - 1) / bS);
     dim3 gridRows((sH + bS - 1) / bS);
     dim3 blockPixel(bW, bH);
-    dim3 gridPixel((sW + bW - 1) / bW, (sH + bH - 1) / bH);
+    const int checkerboardWidth = (sW + 1) / 2;
+    dim3 gridPixel((checkerboardWidth + bW - 1) / bW, (sH + bH - 1) / bH);
 
     float perturbation = 0.35f;
     for (int iter = 0; iter < sweepIterations; ++iter)
@@ -2542,7 +2548,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
 
     // ── 上采样到原始分辨率 ───────────────────────────────────────
     cv::Mat depthFull = depthS, confFull = confS;
-    if (ds > 1) 
+    if (ds > 1 && !config.returnNativeResolution)
     {
         // 深度图和置信度图必须使用最近邻插值上采样，避免在有效/无效像素
         // 边界产生错误的中间值（双线性插值会把 0 和 valid 混合出
@@ -2556,11 +2562,11 @@ bool PatchMatchDepthEstimator::estimateGPU(
 
     int valid = cv::countNonZero(depthFull > 0);
     float mean = (valid>0) ? (float)cv::mean(depthFull, depthFull>0)[0] : 0.f;
-    const int fullPx = depthFull.rows * depthFull.cols;
+    const int outputPx = depthFull.rows * depthFull.cols;
     LOG_DEBUG(
-        "[MVS][PatchMatch][GPU] scaled=%dx%d full=%dx%d range=[%.2f,%.2f] valid=%d/%d mean=%.2f "
+        "[MVS][PatchMatch][GPU] scaled=%dx%d output=%dx%d range=[%.2f,%.2f] valid=%d/%d mean=%.2f "
         "confidence>=%.2f hint=%d depth_samples=%d propagation_passes=%d parallel_sweep=%d",
-        sW, sH, refW, refH, zNear, zFar, valid, fullPx, mean,
+        sW, sH, depthFull.cols, depthFull.rows, zNear, zFar, valid, outputPx, mean,
         config.confidenceThresh, hasHint ? 1 : 0, depthSampleCount,
         sweepIterations,
         config.cudaUseParallelSweep ? 1 : 0);

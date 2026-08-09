@@ -72,6 +72,8 @@ TEST(PatchMatchConfigTest, DefaultParametersOptimized)
         << "OpenCL failures must remain visible instead of running a GPU-tagged CPU fallback";
     EXPECT_EQ(cfg.cudaDeviceIndex, -1);
     EXPECT_EQ(cfg.downsampleFactor, 2);
+    EXPECT_FALSE(cfg.returnNativeResolution)
+        << "Standalone PatchMatch callers must retain the historical full-size output contract";
 }
 
 TEST(PatchMatchConfigTest, PostProcessingEnabled)

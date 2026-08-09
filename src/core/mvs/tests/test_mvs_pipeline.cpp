@@ -31,6 +31,7 @@
 #include <array>
 #include <cmath>
 #include <filesystem>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -131,17 +132,24 @@ public:
                   std::string *error_message) override
     {
         _downsampleCalls.push_back(request.levelConfig.patchMatch.downsampleFactor);
+        _nativeOutputCalls.push_back(request.levelConfig.patchMatch.returnNativeResolution);
         _validMaskSizes.push_back(request.referenceValidMask.size());
         _validMaskValues.push_back(request.referenceValidMask.empty()
                                        ? -1
                                        : cv::countNonZero(request.referenceValidMask));
         result.level = request.levelConfig.level;
         result.downsampleFactor = request.levelConfig.patchMatch.downsampleFactor;
-        result.depth = cv::Mat(request.referenceImage.size(), CV_32F, cv::Scalar(10.0f));
-        result.confidence = cv::Mat(request.referenceImage.size(), CV_32F, cv::Scalar(0.8f));
-        result.supportCount = cv::Mat(request.referenceImage.size(), CV_16U, cv::Scalar(4));
-        result.uncertainty = cv::Mat(request.referenceImage.size(), CV_32F, cv::Scalar(0.2f));
-        result.validMask = cv::Mat(request.referenceImage.size(), CV_8U, cv::Scalar(255));
+        const cv::Size output_size = request.levelConfig.patchMatch.returnNativeResolution
+            ? xjw::mvs::depthPyramidWorkingSize(
+                  request.referenceImage.cols,
+                  request.referenceImage.rows,
+                  request.levelConfig.patchMatch.downsampleFactor)
+            : request.referenceImage.size();
+        result.depth = cv::Mat(output_size, CV_32F, cv::Scalar(10.0f));
+        result.confidence = cv::Mat(output_size, CV_32F, cv::Scalar(0.8f));
+        result.supportCount = cv::Mat(output_size, CV_16U, cv::Scalar(4));
+        result.uncertainty = cv::Mat(output_size, CV_32F, cv::Scalar(0.2f));
+        result.validMask = cv::Mat(output_size, CV_8U, cv::Scalar(255));
         if (error_message)
         {
             error_message->clear();
@@ -159,6 +167,11 @@ public:
         return _validMaskSizes;
     }
 
+    const std::vector<bool> &nativeOutputCalls() const
+    {
+        return _nativeOutputCalls;
+    }
+
     const std::vector<int> &validMaskValues() const
     {
         return _validMaskValues;
@@ -166,6 +179,7 @@ public:
 
 private:
     std::vector<int> _downsampleCalls;
+    std::vector<bool> _nativeOutputCalls;
     std::vector<cv::Size> _validMaskSizes;
     std::vector<int> _validMaskValues;
 };
@@ -518,6 +532,40 @@ TEST(DepthPyramidPropagationTest, PreservesDepthStepAndExpandsLowConfidenceRadiu
     EXPECT_EQ(prior.validMask.at<uint8_t>(6, 7), 255);
 }
 
+TEST(DepthPyramidPropagationTest, FactorizedSpatialWeightMatchesCombinedExponential)
+{
+    constexpr float spatial_sigma = 1.2f;
+    constexpr float denominator = 2.0f * spatial_sigma * spatial_sigma;
+    constexpr int parent_extent = 7;
+    constexpr int target_extent = 13;
+    const float scale = static_cast<float>(parent_extent) / target_extent;
+
+    for (int target_row = 0; target_row < target_extent; ++target_row)
+    {
+        const float parent_y = (target_row + 0.5f) * scale - 0.5f;
+        const int base_row = static_cast<int>(std::floor(parent_y));
+        for (int target_column = 0; target_column < target_extent; ++target_column)
+        {
+            const float parent_x = (target_column + 0.5f) * scale - 0.5f;
+            const int base_column = static_cast<int>(std::floor(parent_x));
+            for (int delta_row = -1; delta_row <= 2; ++delta_row)
+            {
+                for (int delta_column = -1; delta_column <= 2; ++delta_column)
+                {
+                    const float offset_x = base_column + delta_column - parent_x;
+                    const float offset_y = base_row + delta_row - parent_y;
+                    const float combined = std::exp(
+                        -(offset_x * offset_x + offset_y * offset_y) / denominator);
+                    const float factorized =
+                        std::exp(-(offset_x * offset_x) / denominator) *
+                        std::exp(-(offset_y * offset_y) / denominator);
+                    EXPECT_NEAR(factorized, combined, 5.0e-7f);
+                }
+            }
+        }
+    }
+}
+
 TEST(DepthPyramidPropagationTest, DoesNotInventIntermediateDepthAtLowContrastStep)
 {
     xjw::mvs::DepthLevelResult parent;
@@ -537,6 +585,30 @@ TEST(DepthPyramidPropagationTest, DoesNotInventIntermediateDepthAtLowContrastSte
         << "A depth prior must select one side of a discontinuity, not average both surfaces.";
 }
 
+TEST(DepthPyramidPropagationTest, ExcludesNonFiniteParentDepthFromPreparedResources)
+{
+    xjw::mvs::DepthLevelResult parent;
+    parent.depth = cv::Mat(3, 3, CV_32F,
+                           cv::Scalar(std::numeric_limits<float>::infinity()));
+    parent.depth.at<float>(1, 1) = 7.0f;
+    parent.confidence = cv::Mat(3, 3, CV_32F, cv::Scalar(0.8f));
+    parent.validMask = cv::Mat(3, 3, CV_8U, cv::Scalar(255));
+
+    const cv::Mat guide(6, 6, CV_8U, cv::Scalar(100));
+    const xjw::mvs::DepthSearchPrior prior =
+        xjw::mvs::propagateDepthPrior(parent, guide, guide.size());
+
+    ASSERT_EQ(cv::countNonZero(prior.validMask), guide.rows * guide.cols);
+    for (int row = 0; row < prior.center.rows; ++row)
+    {
+        for (int column = 0; column < prior.center.cols; ++column)
+        {
+            EXPECT_FLOAT_EQ(prior.center.at<float>(row, column), 7.0f);
+            EXPECT_TRUE(std::isfinite(prior.radius.at<float>(row, column)));
+        }
+    }
+}
+
 TEST(DepthPyramidEstimatorTest, RunsCoarseMiddleFineAndReturnsFinalLevel)
 {
     RecordingPatchMatchBackend backend;
@@ -545,6 +617,7 @@ TEST(DepthPyramidEstimatorTest, RunsCoarseMiddleFineAndReturnsFinalLevel)
     const xjw::mvs::DepthPyramidResult result = estimator.estimate(makeSyntheticPyramidRequest());
 
     EXPECT_EQ(backend.downsampleCalls(), (std::vector<int>{4, 2, 1}));
+    EXPECT_EQ(backend.nativeOutputCalls(), (std::vector<bool>{true, true, false}));
     ASSERT_TRUE(result.success) << result.errorMessage;
     EXPECT_EQ(result.finalLevel.level, 1);
     EXPECT_EQ(result.levelSummaries.size(), 3u);
@@ -573,6 +646,8 @@ TEST(DepthPyramidEstimatorTest, RetainsCoarseAndMiddleLevelsOnlyWhenRequested)
     ASSERT_EQ(result.intermediateLevels.size(), 2u);
     EXPECT_EQ(result.intermediateLevels[0].level, 3);
     EXPECT_EQ(result.intermediateLevels[1].level, 2);
+    EXPECT_EQ(result.intermediateLevels[0].depth.size(), cv::Size(200, 160));
+    EXPECT_EQ(result.intermediateLevels[1].depth.size(), cv::Size(400, 320));
     EXPECT_EQ(result.finalLevel.level, 1);
 }
 
@@ -586,6 +661,10 @@ TEST(DepthPyramidEstimatorTest, FallsBackToParentWhenFineCoverageCollapses)
     ASSERT_TRUE(result.success) << result.errorMessage;
     EXPECT_EQ(result.finalLevel.level, 2);
     EXPECT_EQ(result.finalLevel.depth.size(), cv::Size(800, 640));
+    EXPECT_EQ(result.finalLevel.confidence.size(), cv::Size(800, 640));
+    EXPECT_EQ(result.finalLevel.supportCount.size(), cv::Size(800, 640));
+    EXPECT_EQ(result.finalLevel.uncertainty.size(), cv::Size(800, 640));
+    EXPECT_EQ(result.finalLevel.validMask.size(), cv::Size(800, 640));
     ASSERT_EQ(result.levelSummaries.size(), 3U);
     EXPECT_FALSE(result.levelSummaries.back().success);
     EXPECT_NE(result.errorMessage.find("coverage regression"), std::string::npos);
@@ -737,6 +816,71 @@ TEST(MvsPipelineTest, PatchMatchCpuOutputValid)
 
     EXPECT_GT(valid, roi.area() * 0.30)
         << "CPU PatchMatch should yield > 30% valid pixels in ROI";
+
+    cfg.returnNativeResolution = true;
+    cv::Mat native_depth;
+    cv::Mat native_confidence;
+    ASSERT_TRUE(xjw::mvs::PatchMatchDepthEstimator::estimate(
+        ref,
+        {src},
+        refCam,
+        {srcCam},
+        4.0f,
+        20.0f,
+        cfg,
+        native_depth,
+        &native_confidence,
+        &err)) << err;
+    EXPECT_EQ(native_depth.size(), cv::Size(W / 2, H / 2));
+    EXPECT_EQ(native_confidence.size(), native_depth.size());
+
+    cv::Mat restored_depth;
+    cv::Mat restored_confidence;
+    cv::resize(native_depth, restored_depth, depth.size(), 0.0, 0.0, cv::INTER_NEAREST);
+    cv::resize(native_confidence,
+               restored_confidence,
+               conf.size(),
+               0.0,
+               0.0,
+               cv::INTER_NEAREST);
+    EXPECT_EQ(cv::countNonZero(restored_depth != depth), 0);
+    EXPECT_EQ(cv::countNonZero(restored_confidence != conf), 0);
+}
+
+TEST(MvsPipelineTest, PatchMatchRejectsNonPositiveIterationCount)
+{
+    constexpr int width = 16;
+    constexpr int height = 12;
+    cv::Mat reference = makeSyntheticGray(width, height);
+    cv::Mat source = makeShifted(reference, 1);
+    const double identity[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    const double reference_center[3] = {0, 0, 0};
+    const double source_center[3] = {1, 0, 0};
+
+    xjw::mvs::PatchMatchConfig config;
+    config.backend = xjw::mvs::PatchMatchBackend::Cpu;
+    config.useCuda = false;
+    config.numIterations = 0;
+
+    cv::Mat depth;
+    cv::Mat confidence;
+    std::string error;
+    EXPECT_FALSE(xjw::mvs::PatchMatchDepthEstimator::estimate(
+        reference,
+        {source},
+        makeMvsCamera(32.0, 32.0, width * 0.5, height * 0.5,
+                      identity, reference_center),
+        {makeMvsCamera(32.0, 32.0, width * 0.5, height * 0.5,
+                       identity, source_center)},
+        1.0f,
+        10.0f,
+        config,
+        depth,
+        &confidence,
+        &error));
+    EXPECT_EQ(error, "PatchMatch iteration count must be positive");
+    EXPECT_TRUE(depth.empty());
+    EXPECT_TRUE(confidence.empty());
 }
 
 TEST(MvsPipelineTest, PatchMatchCpuHonorsPerPixelDepthRadius)
@@ -1460,6 +1604,69 @@ TEST(DepthGeometryConsistencyTest,
         0.5f * (reference_pixel_size + target_epipolar_uncertainty),
         1.0e-4f);
     EXPECT_GT(result.jointWorldPixelFootprint, 5.0f * 0.1f);
+}
+
+TEST(DepthGeometryConsistencyTest,
+     ReusedReferenceWorldPreservesConsistencyResultExactly)
+{
+    constexpr double identity[9] = {1.0, 0.0, 0.0,
+                                    0.0, 1.0, 0.0,
+                                    0.0, 0.0, 1.0};
+    constexpr double reference_center[3] = {0.0, 0.0, 0.0};
+    constexpr double source_center[3] = {0.25, 0.0, 0.0};
+    const xjw::Camera reference_camera = makeMvsCamera(
+        120.0, 120.0, 16.0, 16.0, identity, reference_center);
+    const xjw::Camera source_camera = makeMvsCamera(
+        120.0, 120.0, 16.0, 16.0, identity, source_center);
+    const cv::Point2f reference_pixel(16.0f, 16.0f);
+    constexpr float reference_depth = 12.0f;
+    const double pixel[2] = {reference_pixel.x, reference_pixel.y};
+    double world[3] = {};
+    ASSERT_TRUE(reference_camera.unprojectPixel(
+        pixel, reference_depth, world));
+    double projected[2] = {};
+    double source_depth_value = 0.0;
+    ASSERT_TRUE(source_camera.projectWorldPointWithDepth(
+        world, projected, source_depth_value));
+    cv::Mat source_depth(33, 33, CV_32FC1, cv::Scalar(0.0f));
+    source_depth.at<float>(
+        static_cast<int>(std::lround(projected[1])),
+        static_cast<int>(std::lround(projected[0]))) =
+            static_cast<float>(source_depth_value);
+
+    const auto direct = xjw::mvs::evaluateProjectedDepthConsistency(
+        reference_camera,
+        reference_pixel,
+        reference_depth,
+        source_camera,
+        source_depth,
+        0.01f,
+        1,
+        3.0f,
+        true);
+    const auto reused =
+        xjw::mvs::evaluateProjectedDepthConsistencyFromReferenceWorld(
+            reference_camera,
+            reference_pixel,
+            reference_depth,
+            {world[0], world[1], world[2]},
+            source_camera,
+            source_depth,
+            0.01f,
+            1,
+            3.0f,
+            true);
+
+    EXPECT_EQ(reused.evidence, direct.evidence);
+    EXPECT_EQ(reused.sourcePixel, direct.sourcePixel);
+    EXPECT_FLOAT_EQ(reused.relativeDepthError, direct.relativeDepthError);
+    EXPECT_FLOAT_EQ(reused.roundTripErrorPixels, direct.roundTripErrorPixels);
+    EXPECT_FLOAT_EQ(
+        reused.consistentReferenceDepth, direct.consistentReferenceDepth);
+    EXPECT_FLOAT_EQ(reused.worldSurfaceResidual, direct.worldSurfaceResidual);
+    EXPECT_FLOAT_EQ(
+        reused.jointWorldPixelFootprint, direct.jointWorldPixelFootprint);
+    EXPECT_EQ(reused.continuousGeometryValid, direct.continuousGeometryValid);
 }
 
 TEST(DepthGeometryConsistencyTest,

@@ -30,6 +30,45 @@ std::vector<cv::Mat> projectedDepths(
     return projected;
 }
 
+TEST(DepthResidualReestimationTest,
+     PreflightCountsOnlyMissingPixelsInsideSupport)
+{
+    cv::Mat depth(16, 16, CV_32FC1, cv::Scalar(0.0f));
+    cv::Mat support(16, 16, CV_8UC1, cv::Scalar(0));
+    support(cv::Rect(4, 4, 4, 4)).setTo(cv::Scalar(255));
+    depth(cv::Rect(4, 4, 4, 4)).setTo(cv::Scalar(5.0f));
+    depth.at<float>(6, 6) = 0.0f;
+    auto options = testOptions();
+    options.minimumResidualPixelCount = 2;
+
+    const auto preflight =
+        xjw::mvs::inspectDepthResidualReestimationNeed(
+            depth, support, options);
+
+    EXPECT_EQ(preflight.supportPixelCount, 16);
+    EXPECT_EQ(preflight.requestedResidualPixelCount, 1);
+    EXPECT_FLOAT_EQ(preflight.requestedResidualRatio, 1.0f / 16.0f);
+    EXPECT_FALSE(preflight.shouldProjectSources);
+    EXPECT_EQ(preflight.skippedReason,
+              QStringLiteral("residual_below_threshold"));
+}
+
+TEST(DepthResidualReestimationTest,
+     PreflightAllowsExistingValidResidualTarget)
+{
+    cv::Mat depth(16, 16, CV_32FC1, cv::Scalar(5.0f));
+    depth.at<float>(8, 8) = 0.0f;
+    const cv::Mat support(16, 16, CV_8UC1, cv::Scalar(255));
+
+    const auto preflight =
+        xjw::mvs::inspectDepthResidualReestimationNeed(
+            depth, support, testOptions());
+
+    EXPECT_TRUE(preflight.shouldProjectSources);
+    EXPECT_EQ(preflight.requestedResidualPixelCount, 1);
+    EXPECT_TRUE(preflight.skippedReason.isEmpty());
+}
+
 TEST(DepthResidualReestimationTest, BuildsLayerFromIndependentSectors)
 {
     cv::Mat depth(16, 16, CV_32FC1, cv::Scalar(5.0f));

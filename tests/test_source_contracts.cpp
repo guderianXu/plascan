@@ -1062,7 +1062,8 @@ TEST(MvsSchedulerContractTest, SparseHintsUseProjectedSamplesAndPrescaledPatchMa
     expectNotContainsAll(cameraSource, {"return projectWorldPoint(world, pixel)"});
 
     expectContainsAll(pyramid, {
-        "propagateDepthPrior(parent, guide, target_size)",
+        "prior = propagateDepthPrior(",
+        "request.referenceImage.size())",
         "mergeSparseHint(prior, request.sparseDepthHints[index], target_size)",
         "hint.copyTo(prior.center, sparse_mask)",
     });

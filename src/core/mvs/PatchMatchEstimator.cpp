@@ -63,6 +63,11 @@ bool PatchMatchDepthEstimator::estimate(
     const cv::Mat                *refValidMask,
     const std::vector<cv::Mat>   *srcValidMasks)
 {
+    if (config.numIterations <= 0)
+    {
+        if (errorMsg) *errorMsg = "PatchMatch iteration count must be positive";
+        return false;
+    }
     if (srcGrays.empty() || srcCams.empty() || srcGrays.size() != srcCams.size())
     {
         if (errorMsg) *errorMsg = "source frame count mismatch or empty";

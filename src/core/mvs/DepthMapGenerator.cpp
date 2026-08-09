@@ -35,6 +35,7 @@
 #include <QStringList>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
+#include <array>
 #include <cmath>
 #include <algorithm>
 #include <atomic>
@@ -376,10 +377,8 @@ QString makeMvsDepthInputHash(const DepthGenConfig &config,
     return QString::fromLatin1(hash.result().toHex());
 }
 
-std::string mvsSourcePairKey(const std::string &imageA, const std::string &imageB)
+std::string mvsSourcePairKey(const QString &keyA, const QString &keyB)
 {
-    const QString keyA = normalizedMvsPathKey(imageA);
-    const QString keyB = normalizedMvsPathKey(imageB);
     if (keyA.isEmpty() || keyB.isEmpty() || keyA == keyB)
     {
         return std::string();
@@ -391,14 +390,20 @@ std::string mvsSourcePairKey(const std::string &imageA, const std::string &image
     return pairKey.toStdString();
 }
 
+std::string mvsSourcePairKey(const std::string &imageA, const std::string &imageB)
+{
+    return mvsSourcePairKey(
+        normalizedMvsPathKey(imageA), normalizedMvsPathKey(imageB));
+}
+
 struct MvsSourcePairQualityLookup
 {
     std::unordered_map<std::string, MvsSourcePairQuality> qualitiesByPairKey;
 
-    const MvsSourcePairQuality *find(const std::string &imageA,
-                                     const std::string &imageB) const
+    const MvsSourcePairQuality *findNormalized(const QString &imageAKey,
+                                               const QString &imageBKey) const
     {
-        const std::string key = mvsSourcePairKey(imageA, imageB);
+        const std::string key = mvsSourcePairKey(imageAKey, imageBKey);
         if (key.empty())
         {
             return nullptr;
@@ -1420,13 +1425,18 @@ int cameraBaselineSector(const Camera &reference_camera,
         (delta[static_cast<std::size_t>(dominant_axis)] >= 0.0 ? 1 : 0);
 }
 
+struct DepthConsistencySourceInput
+{
+    cv::Mat depth;
+    Camera camera;
+    cv::Mat confidence;
+    float reliabilityWeight = 1.0f;
+    int sourceOrdinal = -1;
+};
+
 void accumulateDepthConsistency(const cv::Mat &referenceDepth,
                                 const Camera &referenceCamera,
-                                const cv::Mat &sourceDepth,
-                                const Camera &sourceCamera,
-                                const cv::Mat *sourceConfidence,
-                                float sourceReliabilityWeight,
-                                int sourceOrdinal,
+                                const std::vector<DepthConsistencySourceInput> &sources,
                                 float relativeThreshold,
                                 int rowWorkers,
                                 const std::atomic<bool> &cancelled,
@@ -1439,6 +1449,10 @@ void accumulateDepthConsistency(const cv::Mat &referenceDepth,
                                 cv::Mat &sourceInverseDepthSquaredSum,
                                 AdaptiveGeometryEvidenceAccumulatorMaps *adaptiveEvidence)
 {
+    if (sources.empty())
+    {
+        return;
+    }
     const bool accumulate_adaptive_evidence =
         adaptiveEvidence &&
         adaptiveEvidence->positiveSupport.type() == CV_32FC1 &&
@@ -1482,80 +1496,113 @@ void accumulateDepthConsistency(const cv::Mat &referenceDepth,
             {
                 continue;
             }
-            const ProjectedDepthConsistencyResult result =
-                evaluateProjectedDepthConsistency(
-                    referenceCamera,
-                    cv::Point2f(static_cast<float>(column), static_cast<float>(row)),
-                    reference_depth,
-                    sourceCamera,
-                    sourceDepth,
-                    relativeThreshold,
-                    1,
-                    3.0f,
-                    accumulate_adaptive_evidence);
-            if (accumulate_adaptive_evidence)
+            const cv::Point2f reference_pixel(
+                static_cast<float>(column), static_cast<float>(row));
+            const double pixel[2] = {
+                static_cast<double>(reference_pixel.x),
+                static_cast<double>(reference_pixel.y)};
+            double world[3] = {0.0, 0.0, 0.0};
+            if (!referenceCamera.unprojectPixel(pixel, reference_depth, world))
             {
-                AdaptiveGeometryEvidenceObservation observation;
-                observation.worldResidual = result.worldSurfaceResidual;
-                observation.worldPixelFootprint = result.jointWorldPixelFootprint;
-                observation.roundTripResidualPixels = result.roundTripErrorPixels;
-                observation.reliabilityWeight = std::clamp(
-                    sourceReliabilityWeight, 0.0f, 1.0f);
-                if (sourceConfidence && !sourceConfidence->empty() &&
-                    sourceConfidence->type() == CV_32FC1 &&
-                    sourceConfidence->size() == sourceDepth.size() &&
-                    result.sourcePixel.x >= 0 &&
-                    result.sourcePixel.x < sourceConfidence->cols &&
-                    result.sourcePixel.y >= 0 &&
-                    result.sourcePixel.y < sourceConfidence->rows)
-                {
-                    const float source_confidence = sourceConfidence->at<float>(
-                        result.sourcePixel.y, result.sourcePixel.x);
-                    observation.reliabilityWeight *=
-                        std::isfinite(source_confidence)
-                        ? std::clamp(source_confidence, 0.0f, 1.0f)
-                        : 0.0f;
-                }
-                observation.evidenceClass = adaptiveGeometryEvidenceClass(result);
-                AdaptiveGeometryEvidenceAccumulator accumulator;
-                accumulator.positiveSupport = adaptive_positive_row[column];
-                accumulator.squaredPositiveSupport = adaptive_squared_row[column];
-                accumulator.conflict = adaptive_conflict_row[column];
-                accumulator.observable = adaptive_observable_row[column];
-                accumulator.add(observation);
-                adaptive_positive_row[column] = accumulator.positiveSupport;
-                adaptive_squared_row[column] = accumulator.squaredPositiveSupport;
-                adaptive_conflict_row[column] = accumulator.conflict;
-                adaptive_observable_row[column] = accumulator.observable;
+                // Preserve the former per-source evaluation semantics on the
+                // exceptional unprojection failure path: every source would
+                // have contributed one unverifiable observation.
+                unverifiable_row[column] = static_cast<std::uint16_t>(
+                    unverifiable_row[column] + sources.size());
+                continue;
             }
-            switch (result.evidence)
+            const std::array<double, 3> reference_world = {
+                world[0], world[1], world[2]};
+
+            // Preserve the source-plan order for each pixel.  This keeps the
+            // exact floating accumulation order while amortizing reference
+            // unprojection and row-worker dispatch across all source views.
+            for (const DepthConsistencySourceInput &source : sources)
             {
-            case DepthConsistencyEvidence::Consistent:
-                ++consistent_row[column];
-                if (sourceOrdinal >= 0 && sourceOrdinal < 16)
+                const ProjectedDepthConsistencyResult result =
+                    evaluateProjectedDepthConsistencyFromReferenceWorld(
+                        referenceCamera,
+                        reference_pixel,
+                        reference_depth,
+                        reference_world,
+                        source.camera,
+                        source.depth,
+                        relativeThreshold,
+                        1,
+                        3.0f,
+                        accumulate_adaptive_evidence);
+                if (accumulate_adaptive_evidence)
                 {
-                    source_mask_row[column] = static_cast<std::uint16_t>(
-                        source_mask_row[column] |
-                        (static_cast<std::uint16_t>(1U) << sourceOrdinal));
+                    AdaptiveGeometryEvidenceObservation observation;
+                    observation.worldResidual = result.worldSurfaceResidual;
+                    observation.worldPixelFootprint = result.jointWorldPixelFootprint;
+                    observation.roundTripResidualPixels = result.roundTripErrorPixels;
+                    observation.reliabilityWeight = std::clamp(
+                        source.reliabilityWeight, 0.0f, 1.0f);
+                    if (!source.confidence.empty() &&
+                        source.confidence.type() == CV_32FC1 &&
+                        source.confidence.size() == source.depth.size() &&
+                        result.sourcePixel.x >= 0 &&
+                        result.sourcePixel.x < source.confidence.cols &&
+                        result.sourcePixel.y >= 0 &&
+                        result.sourcePixel.y < source.confidence.rows)
+                    {
+                        const float source_confidence =
+                            source.confidence.at<float>(
+                                result.sourcePixel.y, result.sourcePixel.x);
+                        observation.reliabilityWeight *=
+                            std::isfinite(source_confidence)
+                            ? std::clamp(source_confidence, 0.0f, 1.0f)
+                            : 0.0f;
+                    }
+                    observation.evidenceClass =
+                        adaptiveGeometryEvidenceClass(result);
+                    AdaptiveGeometryEvidenceAccumulator accumulator;
+                    accumulator.positiveSupport = adaptive_positive_row[column];
+                    accumulator.squaredPositiveSupport =
+                        adaptive_squared_row[column];
+                    accumulator.conflict = adaptive_conflict_row[column];
+                    accumulator.observable = adaptive_observable_row[column];
+                    accumulator.add(observation);
+                    adaptive_positive_row[column] = accumulator.positiveSupport;
+                    adaptive_squared_row[column] =
+                        accumulator.squaredPositiveSupport;
+                    adaptive_conflict_row[column] = accumulator.conflict;
+                    adaptive_observable_row[column] = accumulator.observable;
                 }
-                if (result.consistentReferenceDepth > 0.0f &&
-                    std::isfinite(result.consistentReferenceDepth))
+                switch (result.evidence)
                 {
-                    const float inverse_depth = 1.0f / result.consistentReferenceDepth;
-                    inverse_sum_row[column] += inverse_depth;
-                    inverse_squared_sum_row[column] += inverse_depth * inverse_depth;
+                case DepthConsistencyEvidence::Consistent:
+                    ++consistent_row[column];
+                    if (source.sourceOrdinal >= 0 &&
+                        source.sourceOrdinal < 16)
+                    {
+                        source_mask_row[column] = static_cast<std::uint16_t>(
+                            source_mask_row[column] |
+                            (static_cast<std::uint16_t>(1U) <<
+                             source.sourceOrdinal));
+                    }
+                    if (result.consistentReferenceDepth > 0.0f &&
+                        std::isfinite(result.consistentReferenceDepth))
+                    {
+                        const float inverse_depth =
+                            1.0f / result.consistentReferenceDepth;
+                        inverse_sum_row[column] += inverse_depth;
+                        inverse_squared_sum_row[column] +=
+                            inverse_depth * inverse_depth;
+                    }
+                    break;
+                case DepthConsistencyEvidence::Occluded:
+                    ++occluded_row[column];
+                    break;
+                case DepthConsistencyEvidence::Contradicted:
+                    ++contradicted_row[column];
+                    break;
+                case DepthConsistencyEvidence::Unverifiable:
+                default:
+                    ++unverifiable_row[column];
+                    break;
                 }
-                break;
-            case DepthConsistencyEvidence::Occluded:
-                ++occluded_row[column];
-                break;
-            case DepthConsistencyEvidence::Contradicted:
-                ++contradicted_row[column];
-                break;
-            case DepthConsistencyEvidence::Unverifiable:
-            default:
-                ++unverifiable_row[column];
-                break;
             }
         }
     });
@@ -1605,6 +1652,53 @@ cv::Mat makeDepthConsistencyMask(const cv::Mat &referenceDepth,
         }
     });
     return mask;
+}
+
+struct DepthConsistencyVoteTotals
+{
+    std::uint64_t consistent = 0;
+    std::uint64_t occluded = 0;
+    std::uint64_t contradicted = 0;
+    std::uint64_t unverifiable = 0;
+};
+
+DepthConsistencyVoteTotals summarizeDepthConsistencyVotes(
+    const cv::Mat &consistentVotes,
+    const cv::Mat &occludedVotes,
+    const cv::Mat &contradictedVotes,
+    const cv::Mat &unverifiableVotes,
+    int rowWorkerCount)
+{
+    std::array<std::atomic<std::uint64_t>, 4> totals{};
+    parallelForRows(consistentVotes.rows, rowWorkerCount, [&](int row)
+    {
+        const std::uint16_t *consistent_row =
+            consistentVotes.ptr<std::uint16_t>(row);
+        const std::uint16_t *occluded_row =
+            occludedVotes.ptr<std::uint16_t>(row);
+        const std::uint16_t *contradicted_row =
+            contradictedVotes.ptr<std::uint16_t>(row);
+        const std::uint16_t *unverifiable_row =
+            unverifiableVotes.ptr<std::uint16_t>(row);
+        std::array<std::uint64_t, 4> row_totals{};
+        for (int column = 0; column < consistentVotes.cols; ++column)
+        {
+            row_totals[0] += consistent_row[column];
+            row_totals[1] += occluded_row[column];
+            row_totals[2] += contradicted_row[column];
+            row_totals[3] += unverifiable_row[column];
+        }
+        for (std::size_t index = 0; index < totals.size(); ++index)
+        {
+            totals[index].fetch_add(
+                row_totals[index], std::memory_order_relaxed);
+        }
+    });
+    return {
+        totals[0].load(std::memory_order_relaxed),
+        totals[1].load(std::memory_order_relaxed),
+        totals[2].load(std::memory_order_relaxed),
+        totals[3].load(std::memory_order_relaxed)};
 }
 
 void updateDepthCompletenessAfterPostprocess(DepthFrameResult &result,
@@ -2440,10 +2534,13 @@ void DepthMapGenerator::prepareFrameCaches()
 
     _frameCachesReady = true;
     std::vector<std::string> activeImagePaths;
+    std::vector<QString> activeImagePathKeys;
     activeImagePaths.reserve(_views.size());
+    activeImagePathKeys.reserve(_views.size());
     for (const CameraView &view : _views)
     {
         activeImagePaths.push_back(view.imagePath);
+        activeImagePathKeys.push_back(normalizedMvsPathKey(view.imagePath));
     }
     const std::vector<MvsSourcePairQuality> activePairQualities =
         filterMvsSourcePairQualitiesForImages(_config.sourcePairQualities, activeImagePaths);
@@ -2562,9 +2659,10 @@ void DepthMapGenerator::prepareFrameCaches()
         bool referenceHasPairQuality = false;
         for (const RankedSourceCandidate &candidate : rankedSourceCandidates)
         {
-            if (pairQualityLookup.find(
-                    _views[static_cast<size_t>(refIdx)].imagePath,
-                    _views[static_cast<size_t>(candidate.viewIndex)].imagePath))
+            if (pairQualityLookup.findNormalized(
+                    activeImagePathKeys[static_cast<std::size_t>(refIdx)],
+                    activeImagePathKeys[
+                        static_cast<std::size_t>(candidate.viewIndex)]))
             {
                 referenceHasPairQuality = true;
                 break;
@@ -2609,9 +2707,11 @@ void DepthMapGenerator::prepareFrameCaches()
             MvsSourceCandidate sourceCandidate;
             sourceCandidate.viewIndex = candidate.viewIndex;
             sourceCandidate.sharedTracks = candidate.commonVisiblePoints;
-            const MvsSourcePairQuality *pairQuality = pairQualityLookup.find(
-                _views[static_cast<size_t>(refIdx)].imagePath,
-                _views[static_cast<size_t>(candidate.viewIndex)].imagePath);
+            const MvsSourcePairQuality *pairQuality =
+                pairQualityLookup.findNormalized(
+                    activeImagePathKeys[static_cast<std::size_t>(refIdx)],
+                    activeImagePathKeys[
+                        static_cast<std::size_t>(candidate.viewIndex)]);
             const bool pairVerificationFailed = pairQuality
                 && pairQuality->hasVerificationStatistics
                 && !pairQuality->verified;
@@ -5403,8 +5503,9 @@ void DepthMapGenerator::crossCheckDepthConsistency()
             ? _depthFrames[i].cameraModel
             : mvsPinholeCamera(_views[i].camera);
 
-        // 备份，万一过滤太激进需要回退
-        cv::Mat depthBackup = depthI.clone();
+        // origDepths 本就是为防止顺序处理级联修改而保留的快照，
+        // 同时作为本帧回退源，避免再复制一张全分辨率深度图。
+        const cv::Mat &depthBackup = origDepths[static_cast<std::size_t>(i)];
 
         const auto frame_start = Clock::now();
         const int rowWorkers = consistencyRowWorkerCount(_config);
@@ -5454,6 +5555,8 @@ void DepthMapGenerator::crossCheckDepthConsistency()
         {
             projected_sources.resize(repairSources.size());
         }
+        std::vector<DepthConsistencySourceInput> consistency_inputs;
+        consistency_inputs.reserve(consistencySources.size());
 
         for (int source_ordinal = 0;
              source_ordinal < static_cast<int>(repairSources.size());
@@ -5493,32 +5596,19 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                     consistencySources.begin(), consistencySources.end(), j) !=
                 consistencySources.end())
             {
-                accumulateDepthConsistency(depthI,
-                                           camI,
-                                           depthJ,
-                                           camJ,
-                                           generate_adaptive_evidence &&
-                                                   !origConfidences[
-                                                        static_cast<std::size_t>(j)].empty()
-                                               ? &origConfidences[
-                                                     static_cast<std::size_t>(j)]
-                                               : nullptr,
-                                           sourceGeometryReliabilityWeight(
-                                               _depthFrames[i], j),
-                                           source_ordinal,
-                                           relThresh,
-                                           rowWorkers,
-                                           _cancelled,
-                                           consistent_votes,
-                                           occluded_votes,
-                                           contradicted_votes,
-                                           unverifiable_votes,
-                                           geometry_source_mask,
-                                           source_inverse_depth_sum,
-                                           source_inverse_depth_squared_sum,
-                                           generate_adaptive_evidence
-                                               ? &adaptive_evidence_accumulator
-                                               : nullptr);
+                DepthConsistencySourceInput input;
+                input.depth = depthJ;
+                input.camera = camJ;
+                if (generate_adaptive_evidence &&
+                    !origConfidences[static_cast<std::size_t>(j)].empty())
+                {
+                    input.confidence =
+                        origConfidences[static_cast<std::size_t>(j)];
+                }
+                input.reliabilityWeight = sourceGeometryReliabilityWeight(
+                    _depthFrames[i], j);
+                input.sourceOrdinal = source_ordinal;
+                consistency_inputs.push_back(std::move(input));
             }
             if (_effectiveSceneProfile == MvsSceneProfile::OrbitalObject)
             {
@@ -5534,6 +5624,24 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                     &_cancelled);
             }
         }
+
+        accumulateDepthConsistency(
+            depthI,
+            camI,
+            consistency_inputs,
+            relThresh,
+            rowWorkers,
+            _cancelled,
+            consistent_votes,
+            occluded_votes,
+            contradicted_votes,
+            unverifiable_votes,
+            geometry_source_mask,
+            source_inverse_depth_sum,
+            source_inverse_depth_squared_sum,
+            generate_adaptive_evidence
+                ? &adaptive_evidence_accumulator
+                : nullptr);
 
         cv::Mat repair_mask = _depthFrames[i].supportRegionMask &&
                 !_depthFrames[i].supportRegionMask->empty()
@@ -5826,14 +5934,21 @@ void DepthMapGenerator::crossCheckDepthConsistency()
         _depthFrames[i].depthCompleteness.postConsistencyValidCount = afterValid;
         _depthFrames[i].depthCompleteness.consistencyRetentionRatio =
             consistency_keep_rate;
+        const DepthConsistencyVoteTotals vote_totals =
+            summarizeDepthConsistencyVotes(
+                consistent_votes,
+                occluded_votes,
+                contradicted_votes,
+                unverifiable_votes,
+                rowWorkers);
         _depthFrames[i].depthCompleteness.consistencyConfirmedObservationCount =
-            static_cast<int>(cv::sum(consistent_votes)[0]);
+            static_cast<int>(vote_totals.consistent);
         _depthFrames[i].depthCompleteness.consistencyOccludedObservationCount =
-            static_cast<int>(cv::sum(occluded_votes)[0]);
+            static_cast<int>(vote_totals.occluded);
         _depthFrames[i].depthCompleteness.consistencyContradictedObservationCount =
-            static_cast<int>(cv::sum(contradicted_votes)[0]);
+            static_cast<int>(vote_totals.contradicted);
         _depthFrames[i].depthCompleteness.consistencyUnverifiableObservationCount =
-            static_cast<int>(cv::sum(unverifiable_votes)[0]);
+            static_cast<int>(vote_totals.unverifiable);
         _depthFrames[i].depthCompleteness.consistencyRejectedPixelCount =
             std::max(0, beforeValid - afterValid);
         updateDepthFrameQualityAfterConsistency(_depthFrames[i],
@@ -5873,8 +5988,11 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
             _depthFrames[frame_index].depthMap &&
             !_depthFrames[frame_index].depthMap->empty())
         {
+            // Recovery writes only to pending results until all frame workers
+            // have joined, so cv::Mat's shared immutable view is a sufficient
+            // snapshot here; cloning every full-resolution frame is redundant.
             frozen_depths[static_cast<std::size_t>(frame_index)] =
-                _depthFrames[frame_index].depthMap->clone();
+                *_depthFrames[frame_index].depthMap;
         }
     }
 
@@ -5933,6 +6051,23 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
             frame_index,
             view_count,
             _config.postConsistencyResidualSourceCount);
+        cv::Mat support_mask = frame.supportRegionMask &&
+                !frame.supportRegionMask->empty()
+            ? *frame.supportRegionMask
+            : cv::Mat(frame.depthMap->size(), CV_8UC1, cv::Scalar(255));
+        DepthResidualReestimationPreflight preflight =
+            inspectDepthResidualReestimationNeed(
+                *frame.depthMap,
+                support_mask,
+                base_options);
+        recovery.stats.supportPixelCount = preflight.supportPixelCount;
+        recovery.stats.requestedResidualPixelCount =
+            preflight.requestedResidualPixelCount;
+        recovery.stats.skippedReason = preflight.skippedReason;
+        if (!preflight.shouldProjectSources)
+        {
+            return;
+        }
         std::vector<cv::Mat> projected_sources;
         std::vector<int> source_sector_ids;
         std::vector<cv::Mat> source_images;
@@ -5970,17 +6105,14 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
                 ? *_depthFrames[source_index].supportRegionMask
                 : cv::Mat(source_images.back().size(), CV_8UC1, cv::Scalar(255)));
         }
-        cv::Mat support_mask = frame.supportRegionMask &&
-                !frame.supportRegionMask->empty()
-            ? *frame.supportRegionMask
-            : cv::Mat(frame.depthMap->size(), CV_8UC1, cv::Scalar(255));
         const DepthResidualReestimationTarget target =
             buildDepthResidualReestimationTarget(
                 *frame.depthMap,
                 support_mask,
                 projected_sources,
                 source_sector_ids,
-                base_options);
+                base_options,
+                std::move(preflight));
         recovery.stats.supportPixelCount = target.supportPixelCount;
         recovery.stats.requestedResidualPixelCount =
             target.requestedResidualPixelCount;
@@ -6373,6 +6505,43 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
         {
             projected_sources.resize(repair_source_indices.size());
         }
+        std::vector<DepthConsistencyCache::FrameHandle>
+            consistency_source_handles;
+        std::vector<DepthConsistencySourceInput> consistency_inputs;
+        consistency_source_handles.reserve(source_indices.size());
+        consistency_inputs.reserve(source_indices.size());
+        uint64_t consistency_batch_bytes = 0;
+        const uint64_t estimated_source_bytes = std::max<uint64_t>(
+            largest_frame_bytes,
+            static_cast<uint64_t>(reference->byteSize()));
+        const uint64_t consistency_batch_budget = std::max<uint64_t>(
+            estimated_source_bytes,
+            cache_budget > reference->byteSize()
+                ? cache_budget - static_cast<uint64_t>(reference->byteSize())
+                : estimated_source_bytes);
+        auto flush_consistency_batch = [&]()
+        {
+            accumulateDepthConsistency(
+                reference->depth,
+                reference_camera,
+                consistency_inputs,
+                relative_threshold,
+                row_workers,
+                _cancelled,
+                consistent_votes,
+                occluded_votes,
+                contradicted_votes,
+                unverifiable_votes,
+                geometry_source_mask,
+                source_inverse_depth_sum,
+                source_inverse_depth_squared_sum,
+                generate_adaptive_evidence
+                    ? &adaptive_evidence_accumulator
+                    : nullptr);
+            consistency_inputs.clear();
+            consistency_source_handles.clear();
+            consistency_batch_bytes = 0;
+        };
 
         for (int source_ordinal = 0;
              source_ordinal < static_cast<int>(repair_source_indices.size());
@@ -6404,6 +6573,20 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 continue;
             }
 
+            const bool is_consistency_source = std::find(
+                source_indices.begin(), source_indices.end(), source_index) !=
+                source_indices.end();
+            if (!consistency_inputs.empty() &&
+                (!is_consistency_source ||
+                 consistency_batch_bytes + estimated_source_bytes >
+                    consistency_batch_budget))
+            {
+                // Release pinned consistency handles before acquiring a
+                // repair-only source, leaving one transient-frame slot in the
+                // bounded cache instead of exceeding the budget by one frame.
+                flush_consistency_batch();
+            }
+
             const DepthConsistencyCache::FrameHandle source =
                 cache.acquire(source_index, &load_error);
             if (!source || source->depth.empty())
@@ -6414,34 +6597,29 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                              .arg(QString::fromStdString(load_error)));
                 continue;
             }
-            if (std::find(
-                    source_indices.begin(), source_indices.end(), source_index) !=
-                source_indices.end())
+            if (is_consistency_source)
             {
-                accumulateDepthConsistency(
-                    reference->depth,
-                    reference_camera,
-                    source->depth,
+                const uint64_t source_bytes = static_cast<uint64_t>(
+                    source->byteSize());
+                if (!consistency_inputs.empty() &&
+                    consistency_batch_bytes + source_bytes >
+                        consistency_batch_budget)
+                {
+                    flush_consistency_batch();
+                }
+                DepthConsistencySourceInput input;
+                input.depth = source->depth;
+                input.camera =
                     _depthFrames[source_index].cameraModel.isValid()
-                        ? _depthFrames[source_index].cameraModel
-                        : mvsPinholeCamera(_views[source_index].camera),
-                    source->confidence.empty() ? nullptr : &source->confidence,
-                    sourceGeometryReliabilityWeight(
-                        _depthFrames[frame_index], source_index),
-                    source_ordinal,
-                    relative_threshold,
-                    row_workers,
-                    _cancelled,
-                    consistent_votes,
-                    occluded_votes,
-                    contradicted_votes,
-                    unverifiable_votes,
-                    geometry_source_mask,
-                    source_inverse_depth_sum,
-                    source_inverse_depth_squared_sum,
-                    generate_adaptive_evidence
-                        ? &adaptive_evidence_accumulator
-                        : nullptr);
+                    ? _depthFrames[source_index].cameraModel
+                    : mvsPinholeCamera(_views[source_index].camera);
+                input.confidence = source->confidence;
+                input.reliabilityWeight = sourceGeometryReliabilityWeight(
+                    _depthFrames[frame_index], source_index);
+                input.sourceOrdinal = source_ordinal;
+                consistency_inputs.push_back(std::move(input));
+                consistency_source_handles.push_back(source);
+                consistency_batch_bytes += source_bytes;
             }
             if (_effectiveSceneProfile == MvsSceneProfile::OrbitalObject)
             {
@@ -6459,6 +6637,7 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                     &_cancelled);
             }
         }
+        flush_consistency_batch();
 
         cv::Mat repair_mask = _depthFrames[frame_index].supportRegionMask &&
                 !_depthFrames[frame_index].supportRegionMask->empty()
@@ -6928,14 +7107,21 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             valid_after;
         _depthFrames[frame_index].depthCompleteness.consistencyRetentionRatio =
             consistency_keep_rate;
+        const DepthConsistencyVoteTotals vote_totals =
+            summarizeDepthConsistencyVotes(
+                consistent_votes,
+                occluded_votes,
+                contradicted_votes,
+                unverifiable_votes,
+                row_workers);
         _depthFrames[frame_index].depthCompleteness.consistencyConfirmedObservationCount =
-            static_cast<int>(cv::sum(consistent_votes)[0]);
+            static_cast<int>(vote_totals.consistent);
         _depthFrames[frame_index].depthCompleteness.consistencyOccludedObservationCount =
-            static_cast<int>(cv::sum(occluded_votes)[0]);
+            static_cast<int>(vote_totals.occluded);
         _depthFrames[frame_index].depthCompleteness.consistencyContradictedObservationCount =
-            static_cast<int>(cv::sum(contradicted_votes)[0]);
+            static_cast<int>(vote_totals.contradicted);
         _depthFrames[frame_index].depthCompleteness.consistencyUnverifiableObservationCount =
-            static_cast<int>(cv::sum(unverifiable_votes)[0]);
+            static_cast<int>(vote_totals.unverifiable);
         _depthFrames[frame_index].depthCompleteness.consistencyRejectedPixelCount =
             std::max(0, valid_before - valid_after);
 

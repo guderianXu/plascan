@@ -31,7 +31,8 @@ struct DepthSearchPrior
 
 DepthSearchPrior propagateDepthPrior(const DepthLevelResult &parent,
                                     const cv::Mat &guideImage,
-                                    cv::Size targetSize);
+                                    cv::Size targetSize,
+                                    cv::Size parentLogicalSize = cv::Size());
 
 } // namespace mvs
 } // namespace xjw

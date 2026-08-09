@@ -57,12 +57,71 @@ float relativeSpread(const std::vector<float> &values, int begin, int end)
 
 } // namespace
 
+DepthResidualReestimationPreflight inspectDepthResidualReestimationNeed(
+    const cv::Mat &referenceDepth,
+    const cv::Mat &supportMask,
+    const DepthResidualReestimationOptions &options)
+{
+    DepthResidualReestimationPreflight preflight;
+    if (referenceDepth.empty() || referenceDepth.type() != CV_32FC1 ||
+        supportMask.empty() || supportMask.type() != CV_8UC1 ||
+        supportMask.size() != referenceDepth.size())
+    {
+        preflight.skippedReason = QStringLiteral("invalid_inputs");
+        return preflight;
+    }
+
+    cv::compare(
+        supportMask, 0, preflight.normalizedSupport, cv::CMP_GT);
+    preflight.supportPixelCount = cv::countNonZero(
+        preflight.normalizedSupport);
+    cv::bitwise_and(
+        preflight.normalizedSupport,
+        referenceDepth <= 0.0f,
+        preflight.residualMask);
+    preflight.requestedResidualPixelCount = cv::countNonZero(
+        preflight.residualMask);
+    preflight.requestedResidualRatio = preflight.supportPixelCount > 0
+        ? static_cast<float>(preflight.requestedResidualPixelCount) /
+            static_cast<float>(preflight.supportPixelCount)
+        : 0.0f;
+    if (preflight.requestedResidualPixelCount <
+            std::max(1, options.minimumResidualPixelCount) ||
+        preflight.requestedResidualRatio <
+            std::max(0.0f, options.minimumResidualRatio))
+    {
+        preflight.skippedReason = QStringLiteral("residual_below_threshold");
+        return preflight;
+    }
+
+    preflight.shouldProjectSources = true;
+    return preflight;
+}
+
 DepthResidualReestimationTarget buildDepthResidualReestimationTarget(
     const cv::Mat &referenceDepth,
     const cv::Mat &supportMask,
     const std::vector<cv::Mat> &projectedSourceDepths,
     const std::vector<int> &sourceSectorIds,
     const DepthResidualReestimationOptions &options)
+{
+    return buildDepthResidualReestimationTarget(
+        referenceDepth,
+        supportMask,
+        projectedSourceDepths,
+        sourceSectorIds,
+        options,
+        inspectDepthResidualReestimationNeed(
+            referenceDepth, supportMask, options));
+}
+
+DepthResidualReestimationTarget buildDepthResidualReestimationTarget(
+    const cv::Mat &referenceDepth,
+    const cv::Mat &supportMask,
+    const std::vector<cv::Mat> &projectedSourceDepths,
+    const std::vector<int> &sourceSectorIds,
+    const DepthResidualReestimationOptions &options,
+    DepthResidualReestimationPreflight preflight)
 {
     DepthResidualReestimationTarget target;
     if (referenceDepth.empty() || referenceDepth.type() != CV_32FC1 ||
@@ -82,26 +141,27 @@ DepthResidualReestimationTarget buildDepthResidualReestimationTarget(
         return target;
     }
 
-    cv::Mat normalized_support;
-    cv::compare(supportMask, 0, normalized_support, cv::CMP_GT);
-    target.supportPixelCount = cv::countNonZero(normalized_support);
-    cv::bitwise_and(
-        normalized_support,
-        referenceDepth <= 0.0f,
-        target.residualMask);
-    target.requestedResidualPixelCount = cv::countNonZero(target.residualMask);
-    target.requestedResidualRatio = target.supportPixelCount > 0
-        ? static_cast<float>(target.requestedResidualPixelCount) /
-            static_cast<float>(target.supportPixelCount)
-        : 0.0f;
-    if (target.requestedResidualPixelCount <
-            std::max(1, options.minimumResidualPixelCount) ||
-        target.requestedResidualRatio <
-            std::max(0.0f, options.minimumResidualRatio))
+    target.supportPixelCount = preflight.supportPixelCount;
+    target.requestedResidualPixelCount =
+        preflight.requestedResidualPixelCount;
+    target.requestedResidualRatio = preflight.requestedResidualRatio;
+    target.skippedReason = preflight.skippedReason;
+    if (!preflight.shouldProjectSources)
     {
-        target.skippedReason = QStringLiteral("residual_below_threshold");
         return target;
     }
+    if (preflight.normalizedSupport.empty() ||
+        preflight.normalizedSupport.type() != CV_8UC1 ||
+        preflight.normalizedSupport.size() != referenceDepth.size() ||
+        preflight.residualMask.empty() ||
+        preflight.residualMask.type() != CV_8UC1 ||
+        preflight.residualMask.size() != referenceDepth.size())
+    {
+        target.skippedReason = QStringLiteral("invalid_preflight");
+        return target;
+    }
+    cv::Mat normalized_support = std::move(preflight.normalizedSupport);
+    target.residualMask = std::move(preflight.residualMask);
 
     target.hintDepth = cv::Mat(
         referenceDepth.size(), CV_32FC1, cv::Scalar(0.0f));

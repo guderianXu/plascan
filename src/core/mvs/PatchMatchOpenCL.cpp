@@ -1125,15 +1125,15 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
 
     const cv::Mat reference_mask = scaledBinaryMask(refValidMask, working_size);
     const bool has_reference_mask = !reference_mask.empty();
-    std::vector<std::uint8_t> packed_reference_mask(static_cast<std::size_t>(pixel_count), 255);
+    std::vector<std::uint8_t> packed_reference_mask;
     if (has_reference_mask)
     {
+        packed_reference_mask.resize(static_cast<std::size_t>(pixel_count));
         std::memcpy(packed_reference_mask.data(),
                     reference_mask.ptr<std::uint8_t>(),
                     packed_reference_mask.size());
     }
-    std::vector<std::uint8_t> packed_source_masks(
-        static_cast<std::size_t>(source_count) * pixel_count, 255);
+    std::vector<std::uint8_t> packed_source_masks;
     bool has_source_masks = false;
     if (srcValidMasks)
     {
@@ -1145,7 +1145,12 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
             {
                 continue;
             }
-            has_source_masks = true;
+            if (!has_source_masks)
+            {
+                packed_source_masks.resize(
+                    static_cast<std::size_t>(source_count) * pixel_count, 255);
+                has_source_masks = true;
+            }
             std::memcpy(packed_source_masks.data() +
                             static_cast<std::size_t>(source_index) * pixel_count,
                         source_mask.ptr<std::uint8_t>(),
@@ -1153,8 +1158,8 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         }
     }
 
-    std::vector<float> packed_hint(static_cast<std::size_t>(pixel_count), 0.0f);
-    std::vector<float> packed_hint_radius(static_cast<std::size_t>(pixel_count), 0.0f);
+    std::vector<float> packed_hint;
+    std::vector<float> packed_hint_radius;
     bool has_hint = hintDepth && !hintDepth->empty();
     bool has_hint_radius = has_hint && hintRadius && !hintRadius->empty();
     auto copy_scaled_float = [&working_size](const cv::Mat &source, std::vector<float> &destination)
@@ -1176,10 +1181,12 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     };
     if (has_hint)
     {
+        packed_hint.resize(static_cast<std::size_t>(pixel_count));
         copy_scaled_float(*hintDepth, packed_hint);
     }
     if (has_hint_radius)
     {
+        packed_hint_radius.resize(static_cast<std::size_t>(pixel_count));
         copy_scaled_float(*hintRadius, packed_hint_radius);
     }
 
@@ -1187,14 +1194,19 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         static_cast<std::size_t>(pixel_count) * sizeof(float);
     const std::size_t normal_float_bytes =
         static_cast<std::size_t>(pixel_count) * sizeof(cl_float4);
+    // Optional inputs are guarded by explicit kernel flags. Keep their lane
+    // buffers valid with one scalar instead of allocating and uploading a
+    // full-frame placeholder on every pyramid level.
+    const std::uint8_t dummy_mask = 255;
+    const float dummy_float = 0.0f;
     const std::array<std::size_t, 10> buffer_sizes = {
         image_float_bytes,
         packed_sources.size() * sizeof(float),
         camera_data.size() * sizeof(float),
-        packed_reference_mask.size(),
-        packed_source_masks.size(),
-        packed_hint.size() * sizeof(float),
-        packed_hint_radius.size() * sizeof(float),
+        has_reference_mask ? packed_reference_mask.size() : sizeof(dummy_mask),
+        has_source_masks ? packed_source_masks.size() : sizeof(dummy_mask),
+        has_hint ? packed_hint.size() * sizeof(float) : sizeof(dummy_float),
+        has_hint_radius ? packed_hint_radius.size() * sizeof(float) : sizeof(dummy_float),
         image_float_bytes,
         normal_float_bytes,
         image_float_bytes};
@@ -1215,10 +1227,10 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         reference_float.ptr<float>(),
         packed_sources.data(),
         camera_data.data(),
-        packed_reference_mask.data(),
-        packed_source_masks.data(),
-        packed_hint.data(),
-        packed_hint_radius.data()};
+        has_reference_mask ? packed_reference_mask.data() : &dummy_mask,
+        has_source_masks ? packed_source_masks.data() : &dummy_mask,
+        has_hint ? packed_hint.data() : &dummy_float,
+        has_hint_radius ? packed_hint_radius.data() : &dummy_float};
 
     const int patch_half = config.patchHalf;
     const int depth_sample_count = patchMatchDepthSampleCount(config.numIterations);
@@ -1332,6 +1344,11 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     const std::size_t global_size[2] = {
         (static_cast<std::size_t>(width) + local_size[0] - 1) / local_size[0] * local_size[0],
         (static_cast<std::size_t>(height) + local_size[1] - 1) / local_size[1] * local_size[1]};
+    const std::size_t checkerboard_width =
+        (static_cast<std::size_t>(width) + 1) / 2;
+    const std::size_t checkerboard_global_size[2] = {
+        (checkerboard_width + local_size[0] - 1) / local_size[0] * local_size[0],
+        global_size[1]};
     cv::Mat depth_work(height, width, CV_32F);
     cv::Mat confidence_work(height, width, CV_32F);
 
@@ -1373,14 +1390,16 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         queue_drain.markPending();
     }
 
-    const auto enqueue_kernel = [&](cl_kernel kernel, const char *name)
+    const auto enqueue_kernel = [&](cl_kernel kernel,
+                                    const char *name,
+                                    const std::size_t *kernel_global_size)
     {
         const cl_int enqueue_error = clEnqueueNDRangeKernel(
             execution_lane.queue,
             kernel,
             2,
             nullptr,
-            global_size,
+            kernel_global_size,
             local_size,
             0,
             nullptr,
@@ -1396,7 +1415,9 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         queue_drain.markPending();
         return true;
     };
-    if (!enqueue_kernel(execution_lane.kernels[0], "initialize_planes"))
+    if (!enqueue_kernel(execution_lane.kernels[0],
+                        "initialize_planes",
+                        global_size))
     {
         return false;
     }
@@ -1418,13 +1439,17 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
                                       propagation_argument_start + 2,
                                       perturbation,
                                       errorMsg)
-                || !enqueue_kernel(execution_lane.kernels[1], "propagate_planes"))
+                || !enqueue_kernel(execution_lane.kernels[1],
+                                   "propagate_planes",
+                                   checkerboard_global_size))
             {
                 return false;
             }
         }
     }
-    if (!enqueue_kernel(execution_lane.kernels[2], "finalize_planes"))
+    if (!enqueue_kernel(execution_lane.kernels[2],
+                        "finalize_planes",
+                        global_size))
     {
         return false;
     }
@@ -1539,7 +1564,7 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         filtered.copyTo(depth_work, valid_mask);
     }
 
-    if (downsample_factor > 1)
+    if (downsample_factor > 1 && !config.returnNativeResolution)
     {
         cv::resize(depth_work,
                    depthOut,

@@ -35,7 +35,12 @@ TEST(PatchMatchOpenClKernelContractTest, RetainsQualitySamplingWithLocalReferenc
     EXPECT_NE(prefix.find("int step = clamp(patch_step, 1, 3);"),
               std::string::npos);
     EXPECT_NE(prefix.find("float plane_distance = depth"), std::string::npos);
+    EXPECT_NE(prefix.find("compose_plane_homography"), std::string::npos);
+    EXPECT_NE(prefix.find("projected_x += projected_x_step"), std::string::npos);
+    EXPECT_EQ(prefix.find("local_depth_sample_count"), std::string::npos);
     EXPECT_NE(prefix.find("propagated_plane_depth"), std::string::npos);
+    EXPECT_EQ(main.find("float scores[MAX_SOURCES]"), std::string::npos);
+    EXPECT_NE(main.find("float strongest[MAX_ROBUST_SUPPORT]"), std::string::npos);
     EXPECT_NE(main.find("__local float reference_tile"), std::string::npos);
     EXPECT_NE(main.find("barrier(CLK_LOCAL_MEM_FENCE)"), std::string::npos);
     EXPECT_NE(main.find("coarse_samples = clamp(depth_sample_count, 16, 96)"),
@@ -47,16 +52,28 @@ TEST(PatchMatchOpenClKernelContractTest, RetainsQualitySamplingWithLocalReferenc
     EXPECT_NE(main.find("0.05f * hint_depth[index]"), std::string::npos);
     EXPECT_NE(main.find("__global float4 *normal_output"), std::string::npos);
     EXPECT_NE(propagation.find("__kernel void propagate_planes"), std::string::npos);
-    EXPECT_NE(propagation.find("((x + y) & 1) != checkerboard"), std::string::npos);
+    EXPECT_NE(propagation.find("compact_x * 2 + ((y + checkerboard) & 1)"),
+              std::string::npos);
+    EXPECT_NE(propagation.find("CHECKERBOARD_TILE_WIDTH"), std::string::npos);
+    EXPECT_NE(propagation.find("same_plane_hypothesis"), std::string::npos);
     EXPECT_NE(propagation.find("random_facing_normal"), std::string::npos);
     EXPECT_NE(propagation.find("float normal_only_score"), std::string::npos);
     EXPECT_NE(propagation.find("0.05f * hint_depth[index]"), std::string::npos);
     EXPECT_NE(propagation.find("source_count, patch_half, 1"), std::string::npos);
     EXPECT_NE(finalize.find("__kernel void finalize_planes"), std::string::npos);
-    EXPECT_NE(finalize.find("0.05f * hint_depth[index]"), std::string::npos);
+    EXPECT_EQ(finalize.find("0.05f * hint_depth[index]"), std::string::npos);
     EXPECT_EQ(finalize.find("source_count >= 3"), std::string::npos);
     EXPECT_NE(finalize.find("uniqueness_minimum_margin"), std::string::npos);
+    EXPECT_NE(finalize.find("best_depth * uniqueness_relative_step * 0.25f"),
+              std::string::npos);
+    EXPECT_NE(finalize.find("best_depth - lower_depth >= minimum_distinct_depth"),
+              std::string::npos);
+    EXPECT_NE(finalize.find("upper_depth - best_depth >= minimum_distinct_depth"),
+              std::string::npos);
+    EXPECT_EQ(finalize.find("local_near, local_far"), std::string::npos);
     EXPECT_NE(finalize.find("source_count, patch_half, 1"), std::string::npos);
+    EXPECT_NE(finalize.find("float confidence = best_score"), std::string::npos);
+    EXPECT_EQ(finalize.find("best_score = robust_depth_score"), std::string::npos);
 }
 
 TEST(PatchMatchBackendAlignmentTest, UsesOneSharedSearchBudget)
@@ -70,8 +87,9 @@ TEST(PatchMatchBackendAlignmentTest, UsesOneSharedSearchBudget)
     EXPECT_FLOAT_EQ(xjw::mvs::kDefaultPatchMatchHintRadiusRatio, 0.05f);
 }
 
-constexpr int kWidth = 64;
-constexpr int kHeight = 48;
+// Odd dimensions exercise the compact checkerboard tail work-group on both axes.
+constexpr int kWidth = 65;
+constexpr int kHeight = 49;
 constexpr int kDisparity = 5;
 constexpr float kExpectedDepth = 10.0f;
 
@@ -126,7 +144,12 @@ struct EstimateResult
 };
 
 EstimateResult estimateMaskedPlane(xjw::mvs::PatchMatchBackend backend,
-                                   int opencl_device_index = -1)
+                                   int opencl_device_index = -1,
+                                   bool include_optional_inputs = true,
+                                   int downsample_factor = 1,
+                                   bool return_native_resolution = false,
+                                   float hint_center = kExpectedDepth,
+                                   float hint_radius = 0.25f)
 {
     const cv::Mat reference = makeReferenceImage();
     const cv::Mat source = shiftLeft(reference);
@@ -139,15 +162,16 @@ EstimateResult estimateMaskedPlane(xjw::mvs::PatchMatchBackend backend,
     config.cudaFallbackToCpu = false;
     config.openClFallbackToCpu = false;
     config.openClDeviceIndex = opencl_device_index;
-    config.downsampleFactor = 1;
+    config.downsampleFactor = downsample_factor;
+    config.returnNativeResolution = return_native_resolution;
     config.numIterations = 2;
     config.patchHalf = 2;
     config.confidenceThresh = 0.05f;
     config.doMedianBlur = false;
     config.doBilateralFilter = false;
 
-    cv::Mat hint(kHeight, kWidth, CV_32F, cv::Scalar(kExpectedDepth));
-    cv::Mat radius(kHeight, kWidth, CV_32F, cv::Scalar(0.25f));
+    cv::Mat hint(kHeight, kWidth, CV_32F, cv::Scalar(hint_center));
+    cv::Mat radius(kHeight, kWidth, CV_32F, cv::Scalar(hint_radius));
     EstimateResult result;
     std::string error;
     const std::vector<cv::Mat> source_masks{source_mask};
@@ -162,10 +186,10 @@ EstimateResult estimateMaskedPlane(xjw::mvs::PatchMatchBackend backend,
         result.depth,
         &result.confidence,
         &error,
-        &hint,
-        &radius,
-        &reference_mask,
-        &source_masks)) << error;
+        include_optional_inputs ? &hint : nullptr,
+        include_optional_inputs ? &radius : nullptr,
+        include_optional_inputs ? &reference_mask : nullptr,
+        include_optional_inputs ? &source_masks : nullptr)) << error;
     return result;
 }
 
@@ -199,6 +223,35 @@ double medianRelativeDepthDifference(const cv::Mat &lhs,
         }
     }
 
+    if (differences.empty())
+    {
+        return std::numeric_limits<double>::infinity();
+    }
+    const auto median = differences.begin() + differences.size() / 2;
+    std::nth_element(differences.begin(), median, differences.end());
+    return *median;
+}
+
+double medianAbsoluteConfidenceDifference(const EstimateResult &lhs,
+                                          const EstimateResult &rhs,
+                                          const cv::Mat &mask)
+{
+    std::vector<float> differences;
+    for (int row = 0; row < lhs.depth.rows; ++row)
+    {
+        for (int column = 0; column < lhs.depth.cols; ++column)
+        {
+            if (mask.at<std::uint8_t>(row, column) == 0 ||
+                lhs.depth.at<float>(row, column) <= 0.0f ||
+                rhs.depth.at<float>(row, column) <= 0.0f)
+            {
+                continue;
+            }
+            differences.push_back(std::abs(
+                lhs.confidence.at<float>(row, column) -
+                rhs.confidence.at<float>(row, column)));
+        }
+    }
     if (differences.empty())
     {
         return std::numeric_limits<double>::infinity();
@@ -295,6 +348,32 @@ TEST(PatchMatchMaskAwareTest, OpenClEstimatesMaskedPlaneWhenAvailable)
     xjw::mvs::PatchMatchDepthEstimator::cleanupOpenClResources();
 }
 
+TEST(PatchMatchMaskAwareTest, OpenClSupportsNativeResolutionWithoutOptionalInputs)
+{
+    const std::vector<xjw::mvs::OpenClDeviceInfo> devices =
+        xjw::mvs::PatchMatchDepthEstimator::openClDevices();
+    if (devices.empty())
+    {
+        GTEST_SKIP() << "OpenCL GPU is unavailable";
+    }
+
+    for (const xjw::mvs::OpenClDeviceInfo &device : devices)
+    {
+        SCOPED_TRACE(device.vendor + " " + device.name);
+        const EstimateResult result = estimateMaskedPlane(
+            xjw::mvs::PatchMatchBackend::OpenCl,
+            device.index,
+            false,
+            2,
+            true);
+        ASSERT_FALSE(result.depth.empty());
+        EXPECT_EQ(result.depth.size(), cv::Size(kWidth / 2, kHeight / 2));
+        EXPECT_EQ(result.confidence.size(), result.depth.size());
+    }
+
+    xjw::mvs::PatchMatchDepthEstimator::cleanupOpenClResources();
+}
+
 TEST(PatchMatchBackendAlignmentTest, CudaAndOpenClConvergeOnSameMaskedPlaneWhenAvailable)
 {
     if (!xjw::mvs::PatchMatchDepthEstimator::isCudaAvailable())
@@ -322,6 +401,56 @@ TEST(PatchMatchBackendAlignmentTest, CudaAndOpenClConvergeOnSameMaskedPlaneWhenA
         EXPECT_LT(
             medianRelativeDepthDifference(cuda.depth, opencl.depth, reference_mask),
             0.02);
+    }
+    xjw::mvs::PatchMatchDepthEstimator::cleanupOpenClResources();
+}
+
+TEST(PatchMatchBackendAlignmentTest, CudaAndOpenClAlignAtHintUpperBoundaryWhenAvailable)
+{
+    if (!xjw::mvs::PatchMatchDepthEstimator::isCudaAvailable())
+    {
+        GTEST_SKIP() << "CUDA is unavailable";
+    }
+    const std::vector<xjw::mvs::OpenClDeviceInfo> devices =
+        xjw::mvs::PatchMatchDepthEstimator::openClDevices();
+    if (devices.empty())
+    {
+        GTEST_SKIP() << "OpenCL GPU is unavailable";
+    }
+
+    // The true depth is exactly the upper propagated-prior boundary. The
+    // uniqueness probes must still use the global search interval on every
+    // backend instead of comparing the best plane with a clamped duplicate.
+    const EstimateResult cuda = estimateMaskedPlane(
+        xjw::mvs::PatchMatchBackend::Cuda,
+        -1,
+        true,
+        1,
+        false,
+        9.75f,
+        0.25f);
+    ASSERT_FALSE(cuda.depth.empty());
+    const cv::Mat reference_mask = makeReferenceMask();
+    const double cuda_ratio = validRatio(cuda.depth, reference_mask);
+    for (const xjw::mvs::OpenClDeviceInfo &device : devices)
+    {
+        SCOPED_TRACE(device.vendor + " " + device.name);
+        const EstimateResult opencl = estimateMaskedPlane(
+            xjw::mvs::PatchMatchBackend::OpenCl,
+            device.index,
+            true,
+            1,
+            false,
+            9.75f,
+            0.25f);
+        ASSERT_FALSE(opencl.depth.empty());
+        EXPECT_NEAR(validRatio(opencl.depth, reference_mask), cuda_ratio, 0.02);
+        EXPECT_LT(
+            medianRelativeDepthDifference(cuda.depth, opencl.depth, reference_mask),
+            0.02);
+        EXPECT_LT(
+            medianAbsoluteConfidenceDifference(cuda, opencl, reference_mask),
+            0.10);
     }
     xjw::mvs::PatchMatchDepthEstimator::cleanupOpenClResources();
 }

@@ -613,7 +613,10 @@ bool PatchMatchDepthEstimator::estimateCPU(
     }
 
     cv::Mat depthS(H, W, CV_32F, cv::Scalar(0.f));
-    cv::Mat confS(H, W, CV_32F, cv::Scalar(0.f));
+    // A negative value marks hypotheses whose photometric score has not been
+    // evaluated yet. Once scored, the NCC is invariant across propagation
+    // sweeps and can be reused instead of evaluating the current plane again.
+    cv::Mat confS(H, W, CV_32F, cv::Scalar(-1.f));
     cv::Mat normalS(H, W, CV_32FC3, cv::Scalar(0.f, 0.f, -1.f));
 
     cpuParallelForLines(H, cpuThreadCount, [&](int row) {
@@ -679,10 +682,30 @@ bool PatchMatchDepthEstimator::estimateCPU(
                     currNormal
                 }};
 
-                float bestCost = 2.f;
+                const float cached_ncc = confS.at<float>(idxRow, col);
+                float bestCost = cached_ncc >= 0.0f
+                    ? 2.0f - 2.0f * std::clamp(cached_ncc, 0.0f, 1.0f)
+                    : 2.0f;
                 int bestIndex = 0;
-                for (int hi = 0; hi < 5; ++hi)
+                const int first_hypothesis = cached_ncc >= 0.0f ? 1 : 0;
+                for (int hi = first_hypothesis; hi < 5; ++hi)
                 {
+                    bool duplicate = false;
+                    for (int previous = 0; previous < hi; ++previous)
+                    {
+                        duplicate = dep[hi] == dep[previous] &&
+                            nor[hi][0] == nor[previous][0] &&
+                            nor[hi][1] == nor[previous][1] &&
+                            nor[hi][2] == nor[previous][2];
+                        if (duplicate)
+                        {
+                            break;
+                        }
+                    }
+                    if (duplicate)
+                    {
+                        continue;
+                    }
                     const float cost = cpuEvalHypCost(col, row, dep[hi], nor[hi],
                                                       refF, srcF,
                                                       ref_mask_scaled, source_masks_scaled,
@@ -752,10 +775,30 @@ bool PatchMatchDepthEstimator::estimateCPU(
                     currNormal
                 }};
 
-                float bestCost = 2.f;
+                const float cached_ncc = confS.at<float>(row, col);
+                float bestCost = cached_ncc >= 0.0f
+                    ? 2.0f - 2.0f * std::clamp(cached_ncc, 0.0f, 1.0f)
+                    : 2.0f;
                 int bestIndex = 0;
-                for (int hi = 0; hi < 5; ++hi)
+                const int first_hypothesis = cached_ncc >= 0.0f ? 1 : 0;
+                for (int hi = first_hypothesis; hi < 5; ++hi)
                 {
+                    bool duplicate = false;
+                    for (int previous = 0; previous < hi; ++previous)
+                    {
+                        duplicate = dep[hi] == dep[previous] &&
+                            nor[hi][0] == nor[previous][0] &&
+                            nor[hi][1] == nor[previous][1] &&
+                            nor[hi][2] == nor[previous][2];
+                        if (duplicate)
+                        {
+                            break;
+                        }
+                    }
+                    if (duplicate)
+                    {
+                        continue;
+                    }
                     const float cost = cpuEvalHypCost(col, row, dep[hi], nor[hi],
                                                       refF, srcF,
                                                       ref_mask_scaled, source_masks_scaled,
@@ -899,7 +942,7 @@ bool PatchMatchDepthEstimator::estimateCPU(
 
     cv::Mat depthFull = depthS;
     cv::Mat confFull = confS;
-    if (ds > 1)
+    if (ds > 1 && !config.returnNativeResolution)
     {
         cv::resize(depthS, depthFull, cv::Size(refW, refH), 0, 0, cv::INTER_NEAREST);
         cv::resize(confS, confFull, cv::Size(refW, refH), 0, 0, cv::INTER_NEAREST);

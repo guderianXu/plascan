@@ -8,6 +8,8 @@
 
 #include <opencv2/core.hpp>
 
+#include <array>
+
 namespace xjw
 {
 namespace mvs
@@ -52,6 +54,26 @@ ProjectedDepthConsistencyResult evaluateProjectedDepthConsistency(
     const Camera &referenceCamera,
     const cv::Point2f &referencePixel,
     float referenceDepth,
+    const Camera &sourceCamera,
+    const cv::Mat &sourceDepth,
+    float relativeThreshold,
+    int searchRadius = 1,
+    float maximumRoundTripErrorPixels = 3.0f,
+    bool computeContinuousMetrics = true);
+
+/**
+ * @brief Evaluate one source view using an already unprojected reference point.
+ *
+ * The reference world point is independent of the source view.  Callers that
+ * compare one reference pixel against several sources can therefore unproject
+ * it once and reuse the exact double-precision result without changing source
+ * order or vote accumulation semantics.
+ */
+ProjectedDepthConsistencyResult evaluateProjectedDepthConsistencyFromReferenceWorld(
+    const Camera &referenceCamera,
+    const cv::Point2f &referencePixel,
+    float referenceDepth,
+    const std::array<double, 3> &referenceWorld,
     const Camera &sourceCamera,
     const cv::Mat &sourceDepth,
     float relativeThreshold,

@@ -40,6 +40,14 @@ live under `src/core/mvs/tests/`.
   aerial triangulation remain a prior only. Revision-25 depth batches are regenerated so an earlier scene
   misclassification cannot be reused by fusion. Revision-26 GUI reuse also requires a consistent classified
   scene profile plus complete `acceptance` and `fusion_eligible` metadata for every frame.
+- Revision 27 reduces depth-estimation work without enabling interpolation or weakening quality gates. Coarse and
+  middle pyramid levels remain at their native working resolution, propagated priors keep the original global
+  inverse-depth hypothesis count, and CPU/CUDA/OpenCL propagation reuses already-scored
+  hypotheses. OpenCL additionally composes one plane homography per source and hypothesis, performs exact streaming
+  top-k aggregation, dispatches only active checkerboard pixels, and applies the same globally bounded distinct-depth
+  uniqueness probes as CPU/CUDA. Multi-view consistency reuses each reference
+  unprojection across its ordered source batch, while residual recovery skips source reprojection when the measured
+  missing-support region is already below its configured threshold. Revision-26 artifacts are regenerated.
 - GUI project metadata consumes manifest records. The workspace tree should refresh from metadata rather than
   treating directory scans as the primary state.
 
@@ -119,9 +127,10 @@ live under `src/core/mvs/tests/`.
   mask-aware sampling, depth hints, coarse-to-fine refinement, and confidence filtering. Each OpenCL GPU has one
   command-queue/kernel lane. With the default two-stage host pipeline, a second worker prepares the next frame and
   post-consistency residual hypothesis while the current queue is busy, but cannot submit a competing kernel. Scaled float images and
-  all OpenCL buffers are bounded/reused, and reference patches are tiled in work-group local memory. The quality
-  profiles retain the full configured depth hypothesis count plus 13 refinement samples, and the program does not
-  use relaxed-math compilation. CPU packing and post-processing remain outside lane ownership. CPU execution
+  all OpenCL buffers are bounded/reused, and reference patches are tiled in work-group local memory. Every quality
+  profile retains its configured full inverse-depth hypothesis count, including inside propagated priors, followed
+  by 13 refinement samples; the program does not use relaxed-math compilation. CPU
+  packing and post-processing remain outside lane ownership. CPU execution
   remains the native C++/OpenMP implementation rather than using a CPU OpenCL device.
 - Initialization, checkerboard propagation/refinement, final uniqueness scoring, and asynchronous readback are
   submitted as one in-order event chain. Per-device logs report active kernel time, total chain time, command

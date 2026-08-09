@@ -76,6 +76,7 @@ struct PatchMatchConfig
     bool  useCuda            = true;    ///< 旧版兼容字段；Auto 下 false 强制 CPU，显式 backend 优先
     PatchMatchBackend backend = PatchMatchBackend::Auto;
     int   downsampleFactor   = 2;       ///< 降采样因子（2=半分辨率，速度提升约4倍）
+    bool  returnNativeResolution = false; ///< 仅返回 PatchMatch 工作分辨率；默认保持对外全尺寸契约
     bool  doMedianBlur       = true;
     int   medianKernelSize   = 5;
     bool  doBilateralFilter  = true;
