@@ -31,6 +31,7 @@
 #include <cmath>
 #include <limits>
 #include <random>
+#include <unordered_map>
 #include <vector>
 
 using namespace xjw;
@@ -39,6 +40,169 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest, CameraLayerPreservationIsOptIn)
 {
     const IncrementalSfmOptions options;
     EXPECT_FALSE(options.preserveCameraLayerDuringSelfCalibration);
+}
+
+TEST(SfmBundleAdjustCoordinatorPolicyTest,
+     PreservesAppliedAdaptiveDiagnosticsAcrossNoOpAndSkippedRounds)
+{
+    SfmAdaptiveCameraModelDiagnosticSnapshot firstRound;
+    firstRound.evaluated = true;
+    firstRound.applied = true;
+    firstRound.parameterMask[static_cast<std::size_t>(
+        BAIntrinsicParameter::FocalLength)] = true;
+    firstRound.parameterMask[static_cast<std::size_t>(
+        BAIntrinsicParameter::RadialK1)] = true;
+    firstRound.modelName = "f+k1";
+
+    auto merged =
+        SfmBundleAdjustCoordinator::mergeAdaptiveCameraModelDiagnostics(
+            {}, firstRound);
+    ASSERT_TRUE(merged.shouldReplaceEvidence);
+    ASSERT_TRUE(merged.accumulated.applied);
+
+    SfmAdaptiveCameraModelDiagnosticSnapshot noOpRound;
+    noOpRound.evaluated = true;
+    noOpRound.parameterMask[static_cast<std::size_t>(
+        BAIntrinsicParameter::FocalLength)] = true;
+    noOpRound.modelName = "f";
+    merged = SfmBundleAdjustCoordinator::mergeAdaptiveCameraModelDiagnostics(
+        merged.accumulated, noOpRound);
+
+    EXPECT_TRUE(merged.accumulated.evaluated);
+    EXPECT_TRUE(merged.accumulated.applied);
+    EXPECT_FALSE(merged.shouldReplaceEvidence);
+    EXPECT_EQ(merged.accumulated.modelName, "f+k1");
+    EXPECT_TRUE(merged.accumulated.parameterMask[static_cast<std::size_t>(
+        BAIntrinsicParameter::FocalLength)]);
+    EXPECT_TRUE(merged.accumulated.parameterMask[static_cast<std::size_t>(
+        BAIntrinsicParameter::RadialK1)]);
+
+    const auto skipped =
+        SfmBundleAdjustCoordinator::mergeAdaptiveCameraModelDiagnostics(
+            merged.accumulated, {});
+    EXPECT_FALSE(skipped.shouldReplaceEvidence);
+    EXPECT_TRUE(skipped.accumulated.evaluated);
+    EXPECT_TRUE(skipped.accumulated.applied);
+    EXPECT_EQ(skipped.accumulated.modelName, "f+k1");
+    EXPECT_EQ(
+        skipped.accumulated.parameterMask,
+        merged.accumulated.parameterMask);
+}
+
+TEST(SfmBundleAdjustCoordinatorPolicyTest,
+     CalibrationSeedRefreshPreservesStableReferenceMetrics)
+{
+    std::vector<Camera> before(2);
+    for (Camera &camera : before)
+    {
+        camera.setIntrinsics(1000.0, 1010.0, 512.0, 384.0);
+    }
+    BAResult result;
+    result.refinedCameras = before;
+    result.refinedCameras[0].setIntrinsics(
+        980.0, 989.8, 512.0, 384.0);
+    Camera::Distortion distortion = result.refinedCameras[0].distortion();
+    distortion.radialK1 = -0.02;
+    result.refinedCameras[0].setDistortion(distortion);
+    result.refinedSharedFocalScale = 1.234;
+    result.refinedSharedFocalAspectScale = 0.987;
+    result.refinedSharedPrincipalOffsetX = 3.25;
+    result.refinedSharedPrincipalOffsetY = -2.75;
+    result.refinedSharedRadialK1 = -0.031;
+
+    SfmBundleAdjustCoordinator::refreshCalibrationSeedApplicationCount(
+        before, &result);
+
+    EXPECT_EQ(result.refinedIntrinsicCount, 1);
+    EXPECT_DOUBLE_EQ(result.refinedSharedFocalScale, 1.234);
+    EXPECT_DOUBLE_EQ(result.refinedSharedFocalAspectScale, 0.987);
+    EXPECT_DOUBLE_EQ(result.refinedSharedPrincipalOffsetX, 3.25);
+    EXPECT_DOUBLE_EQ(result.refinedSharedPrincipalOffsetY, -2.75);
+    EXPECT_DOUBLE_EQ(result.refinedSharedRadialK1, -0.031);
+}
+
+TEST(SfmBundleAdjustCoordinatorPolicyTest,
+     FocalOnlyRefinementCountsAsReusableCalibrationSeed)
+{
+    std::vector<Camera> references(2);
+    for (Camera &camera : references)
+    {
+        camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
+    }
+    std::vector<Camera> current = references;
+    current[0].setIntrinsics(980.0, 980.0, 512.0, 384.0);
+
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::hasReusableCalibrationSeed(
+        current, references, true, false));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::hasReusableCalibrationSeed(
+        references, references, true, false));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::hasReusableCalibrationSeed(
+        current, references, false, true));
+
+    Camera::Distortion distortion = current[0].distortion();
+    distortion.radialK1 = -0.02;
+    current[0].setDistortion(distortion);
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::hasReusableCalibrationSeed(
+        current, references, false, true));
+}
+
+TEST(SfmBundleAdjustCoordinatorPolicyTest,
+     PersistentIntrinsicReferencesSurviveIndependentGlobalBaCalls)
+{
+    const std::vector<ImageId> firstIds{2, 5};
+    std::vector<Camera> firstCameras(2);
+    for (Camera &camera : firstCameras)
+    {
+        camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
+    }
+    std::unordered_map<ImageId, Camera> referencesByImageId;
+    const std::vector<Camera> firstReferences =
+        SfmBundleAdjustCoordinator::buildPersistentIntrinsicReferences(
+            firstIds, firstCameras, &referencesByImageId);
+    ASSERT_EQ(firstReferences.size(), 2u);
+
+    std::vector<Camera> secondCameras = firstCameras;
+    for (Camera &camera : secondCameras)
+    {
+        camera.setIntrinsics(1100.0, 1100.0, 512.0, 384.0);
+    }
+    const std::vector<Camera> secondReferences =
+        SfmBundleAdjustCoordinator::buildPersistentIntrinsicReferences(
+            firstIds, secondCameras, &referencesByImageId);
+    ASSERT_EQ(secondReferences.size(), 2u);
+    EXPECT_DOUBLE_EQ(secondReferences[0].focalX(), 1000.0);
+    EXPECT_DOUBLE_EQ(secondReferences[1].focalX(), 1000.0);
+
+    const std::vector<ImageId> retryIds{2, 5, 9};
+    secondCameras.push_back(Camera{});
+    secondCameras.back().setIntrinsics(900.0, 900.0, 512.0, 384.0);
+    const std::vector<Camera> retryReferences =
+        SfmBundleAdjustCoordinator::buildPersistentIntrinsicReferences(
+            retryIds, secondCameras, &referencesByImageId);
+    ASSERT_EQ(retryReferences.size(), 3u);
+    EXPECT_DOUBLE_EQ(retryReferences[0].focalX(), 1000.0);
+    EXPECT_DOUBLE_EQ(retryReferences[1].focalX(), 1000.0);
+    EXPECT_DOUBLE_EQ(retryReferences[2].focalX(), 900.0);
+}
+
+TEST(SfmBundleAdjustCoordinatorPolicyTest,
+     IntrinsicConvergenceDoesNotAverageOpposingCalibrationGroups)
+{
+    std::vector<Camera> references(2);
+    for (Camera &camera : references)
+    {
+        camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
+    }
+    const std::vector<Camera> previous = references;
+    std::vector<Camera> current = references;
+    current[0].setIntrinsics(1010.0, 1010.0, 512.0, 384.0);
+    current[1].setIntrinsics(990.0, 990.0, 512.0, 384.0);
+
+    EXPECT_NEAR(
+        SfmBundleAdjustCoordinator::maximumCameraIntrinsicChange(
+            previous, current, references),
+        0.01,
+        1.0e-12);
 }
 
 TEST(SfmBundleAdjustCoordinatorPolicyTest, PreservesLayerOnlyDuringFinalSelfCalibration)
@@ -80,13 +244,13 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest, RefinesSharedIntrinsicsAfterNearCompl
 TEST(SfmBundleAdjustCoordinatorPolicyTest, IterativeConvergenceIncludesSharedCalibration)
 {
     EXPECT_TRUE(SfmBundleAdjustCoordinator::hasIterativeGlobalBaConverged(
-        2, 0.005, false, 1.0, 1.0));
+        2, 0.005, false, 1.0));
     EXPECT_FALSE(SfmBundleAdjustCoordinator::hasIterativeGlobalBaConverged(
-        1, 0.005, true, 0.0, 0.0));
+        1, 0.005, true, 0.0));
     EXPECT_FALSE(SfmBundleAdjustCoordinator::hasIterativeGlobalBaConverged(
-        2, 0.005, true, 1.0e-4, 1.0e-3));
+        2, 0.005, true, 1.0e-3));
     EXPECT_TRUE(SfmBundleAdjustCoordinator::hasIterativeGlobalBaConverged(
-        2, 0.005, true, 1.0e-4, 2.0e-4));
+        2, 0.005, true, 2.0e-4));
 }
 
 TEST(SfmBundleAdjustCoordinatorPolicyTest, DefersPeriodicGlobalBaNearFinalRefinement)
@@ -1160,6 +1324,7 @@ TEST_F(SfmPipelineTest, ThreeImageIncremental)
     Camera cam0 = makeCamera(0, 0, 0);
     Camera cam1 = makeCamera(10, 0, 0);
     Camera cam2 = makeCamera(20, 0, 0);
+    opts.baOptions.sharedIntrinsicReferenceCameras = {cam0, cam1, cam2};
 
     auto points = generatePoints(300, 10, 0, 50, 5.0);
 

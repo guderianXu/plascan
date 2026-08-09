@@ -11,6 +11,7 @@
 
 #include "CameraIntrinsicPrior.h"
 #include "ProjectCameraIO.h"
+#include "io/PathIO.h"
 #include "project/ProjectCommonUtils.h"
 #include "project/ProjectMetadata.h"
 #include "reporting/AerialTriangulationResultWriter.h"
@@ -261,10 +262,10 @@ AerialBlockGeometry evaluateAerialBlockGeometry(const SfmReconstruction &reconst
 }
 
 bool hasAbsoluteGeometryConstraint(
-    const PreparedAerialTriangulationInput &input,
+    bool hasCompleteKnownPosePrior,
     const QJsonObject &diagnostics)
 {
-    return input.useProjectCameraPoses || input.lockInputCameraPoses ||
+    return hasCompleteKnownPosePrior ||
            diagnostics.value(QStringLiteral("control_network_applied")).toBool(false) ||
            diagnostics.value(QStringLiteral("control_point_constraints")).toInt(0) > 0;
 }
@@ -275,13 +276,26 @@ bool hasAbsoluteGeometryConstraint(
  * 独立相机文件优先；工程内参必须带可信来源且能反序列化为有效 Camera。
  * 由上一次 SfM 写回的 intrinsic_source=sfm_estimated 不作为新一轮初始化真值。
  */
-bool hasCompleteCameraIntrinsicPrior(const PreparedAerialTriangulationInput &input)
+bool hasCompleteExternalCameraFiles(const PreparedAerialTriangulationInput &input)
 {
-    if (input.cameraPaths.size() == input.images.size() && !input.images.isEmpty() &&
+    return input.cameraPaths.size() == input.images.size() && !input.images.isEmpty() &&
         std::all_of(input.cameraPaths.cbegin(), input.cameraPaths.cend(), [](const QString &path)
         {
-            return !path.trimmed().isEmpty() && QFileInfo::exists(path);
-        }))
+            if (path.trimmed().isEmpty() || !QFileInfo::exists(path))
+            {
+                return false;
+            }
+            Camera camera;
+            return camera.loadFromFile(xjw::common::io::toUtf8Path(path)) &&
+                   camera.isValid();
+        });
+}
+
+bool hasCompleteCameraIntrinsicPrior(
+    const PreparedAerialTriangulationInput &input,
+    bool hasCompleteExternalCameras)
+{
+    if (hasCompleteExternalCameras)
     {
         return true;
     }
@@ -311,6 +325,57 @@ bool hasCompleteCameraIntrinsicPrior(const PreparedAerialTriangulationInput &inp
         }
     }
     return !input.images.isEmpty();
+}
+
+/// 与正式 AttemptRunner 使用同一规则判断是否能复用一整组真实外参。
+bool hasCompleteKnownCameraPosePrior(
+    const PreparedAerialTriangulationInput &input,
+    bool hasCompleteExternalCameras)
+{
+    if (hasCompleteExternalCameras)
+    {
+        return true;
+    }
+    if (!input.useProjectCameraPoses || input.projectMeta.isEmpty())
+    {
+        return false;
+    }
+
+    const QMap<QString, QJsonObject> imageMeta =
+        xjw::common::project::projectImageMetaByPath(input.projectMeta, true);
+    for (const QString &imagePath : input.images)
+    {
+        const auto metadata = imageMeta.constFind(
+            xjw::common::project::normalizePath(imagePath));
+        if (metadata == imageMeta.cend())
+        {
+            return false;
+        }
+        const QJsonObject cameraObject =
+            metadata.value().value(QStringLiteral("camera")).toObject();
+        Camera camera;
+        if (cameraObject.value(
+                QStringLiteral("pose_initialized_as_identity")).toBool(false) ||
+            !xjw::common::project::cameraFromJson(cameraObject, &camera) ||
+            !camera.isValid())
+        {
+            return false;
+        }
+    }
+    return !input.images.isEmpty();
+}
+
+/// 自标定只有在 BA 确实提交了至少一个内参更新后才算生效。
+bool hasAppliedAdaptiveCameraModelRefinement(
+    const SfmAttemptExecutionResult &execution)
+{
+    return execution.result.success &&
+           execution.result.sfmDiagnostics.value(
+               QStringLiteral(
+                   "ba_adaptive_camera_model_fitting_evaluated")).toBool(false) &&
+           execution.result.sfmDiagnostics.value(
+               QStringLiteral(
+                   "ba_adaptive_camera_model_fitting_applied")).toBool(false);
 }
 
 /// 从一次完整执行提取仅供焦距搜索排序的轻量指标。
@@ -692,8 +757,13 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
     timer.start();
 
     const auto originalProgress = input.progressFn;
-    const bool hasProjectOrExternalPrior = hasCompleteCameraIntrinsicPrior(input);
-    const BatchFocalPrior metadataPrior = hasProjectOrExternalPrior
+    const bool hasCompleteExternalCameras = hasCompleteExternalCameraFiles(input);
+    const bool hasProjectOrExternalPrior = hasCompleteCameraIntrinsicPrior(
+        input, hasCompleteExternalCameras);
+    const bool hasCompleteKnownPosePrior = hasCompleteKnownCameraPosePrior(
+        input, hasCompleteExternalCameras);
+    const BatchFocalPrior metadataPrior =
+        hasProjectOrExternalPrior || hasCompleteKnownPosePrior
         ? BatchFocalPrior{}
         : resolveBatchFocalPrior(input.images);
 
@@ -705,15 +775,20 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
         attemptInput.focalPriorSource = metadataPrior.source;
         attemptInput.focalPriorSampleCount = metadataPrior.acceptedSamples;
     }
-    attemptInput.adaptiveCameraModelFitting = shouldRunAdaptiveCameraModelRefinement(
-        input.adaptiveCameraModelFitting,
-        hasProjectOrExternalPrior,
-        metadataPrior.valid);
+    const bool adaptiveCameraModelFittingRequested = input.adaptiveCameraModelFitting;
+    const bool adaptiveCameraModelFittingScheduled =
+        shouldRunAdaptiveCameraModelRefinement(
+            input.adaptiveCameraModelFitting,
+            hasProjectOrExternalPrior,
+            metadataPrior.valid) &&
+        !hasCompleteKnownPosePrior;
+    attemptInput.adaptiveCameraModelFitting = adaptiveCameraModelFittingScheduled;
 
     // 无完整相机先验且元数据也无法建立一致先验时，才从影像几何搜索初始焦距。
     // 焦距初始化与最终 BA 是否释放少量内参是两个独立职责。
     const bool needsFocalInitializationSearch =
-        input.images.size() >= 3 && !hasProjectOrExternalPrior && !metadataPrior.valid;
+        input.images.size() >= 3 && !hasProjectOrExternalPrior &&
+        !hasCompleteKnownPosePrior && !metadataPrior.valid;
     const int focalProbeLimit = needsFocalInitializationSearch
         ? focalProbeRegistrationLimit(input.images.size())
         : 0;
@@ -774,15 +849,12 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
     // 避免先串行跑完一个候选后才启动其它候选。
     SfmAttemptExecutionResult execution;
     bool adaptiveRefinementAccepted = false;
+    bool adaptiveRefinementRejected = false;
     if (!needsFocalInitializationSearch)
     {
         execution = _attemptRunner(attemptInput);
         adaptiveRefinementAccepted = attemptInput.adaptiveCameraModelFitting &&
-            execution.result.success &&
-            execution.result.sfmDiagnostics.value(
-                QStringLiteral("ba_result_applied")).toBool() &&
-            execution.result.sfmDiagnostics.value(
-                QStringLiteral("ba_refined_intrinsic_count")).toInt() > 0;
+            hasAppliedAdaptiveCameraModelRefinement(execution);
     }
     QVector<AdaptiveFocalCandidate> focalCandidates;
     std::vector<SfmCandidateSummary> candidateSummaries;
@@ -985,6 +1057,7 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
             fullInput.threads = resolveSfmThreadBudget(input.threads);
             fullInput.coarseFocalEvaluation = false;
             fullInput.maxRegisteredImages = 0;
+            fullInput.adaptiveCameraModelFitting = adaptiveCameraModelFittingScheduled;
             fullInput.progressFn = [originalProgress](const QString &stage, int percent)
             {
                 if (originalProgress)
@@ -997,23 +1070,25 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
             execution = _attemptRunner(fullInput);
             const int probeCoverage =
                 candidateSummaries[static_cast<std::size_t>(selectedIndex)].registeredImages;
-            adaptiveRefinementAccepted = input.adaptiveCameraModelFitting &&
-                execution.result.success &&
+            adaptiveRefinementAccepted = adaptiveCameraModelFittingScheduled &&
+                hasAppliedAdaptiveCameraModelRefinement(execution) &&
                 execution.result.numRegisteredImages >= probeCoverage;
-            if (input.adaptiveCameraModelFitting && !adaptiveRefinementAccepted)
+            if (adaptiveCameraModelFittingScheduled && !adaptiveRefinementAccepted)
             {
                 // 联合自标定若连探测阶段已有的注册覆盖都无法保持，则用同一最佳焦距
                 // 再跑一次固定内参完整解。该回退只在自标定退化时发生，不增加正常路径成本。
+                adaptiveRefinementRejected = true;
                 fullInput.adaptiveCameraModelFitting = false;
                 execution = _attemptRunner(fullInput);
             }
         }
         // 自适应内参只在粗搜索胜出焦距附近执行一次联合细化，并再次经过同一排序门控。
-        else if (input.adaptiveCameraModelFitting)
+        else if (adaptiveCameraModelFittingScheduled)
         {
             PreparedAerialTriangulationInput refinementInput = input;
             refinementInput.preparedTiePointGraph = attemptInput.preparedTiePointGraph;
             refinementInput.estimatedFocalScale = selectedFocalScale;
+            refinementInput.adaptiveCameraModelFitting = adaptiveCameraModelFittingScheduled;
             refinementInput.progressFn = [originalProgress](const QString &stage, int percent)
             {
                 if (originalProgress)
@@ -1038,11 +1113,16 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
                 selectedFocalScale,
                 refinedExecution,
                 input.sequenceLoopClosure);
-            if (isBetterCandidate(refinementSummary, baselineSummary) ||
-                isAcceptableCalibrationRefinement(refinementSummary, baselineSummary))
+            if (hasAppliedAdaptiveCameraModelRefinement(refinedExecution) &&
+                (isBetterCandidate(refinementSummary, baselineSummary) ||
+                 isAcceptableCalibrationRefinement(refinementSummary, baselineSummary)))
             {
                 execution = std::move(refinedExecution);
                 adaptiveRefinementAccepted = true;
+            }
+            else
+            {
+                adaptiveRefinementRejected = true;
             }
         }
     }
@@ -1062,12 +1142,77 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
         }
         focalCandidateJson.append(candidateToJson(focalCandidates.at(index), summary));
     }
+    const bool adaptiveCameraModelFittingEvaluated =
+        adaptiveCameraModelFittingScheduled &&
+        execution.result.sfmDiagnostics.value(
+            QStringLiteral(
+                "ba_adaptive_camera_model_fitting_evaluated")).toBool(false);
+    const QString adaptiveCameraModel = execution.result.sfmDiagnostics
+        .value(QStringLiteral("ba_adaptive_camera_model")).toString();
+    const bool adaptiveCameraModelFittingEffective =
+        adaptiveCameraModelFittingEvaluated &&
+        (adaptiveCameraModel.isEmpty() ||
+         adaptiveCameraModel != QStringLiteral("fixed"));
+    const bool adaptiveCameraModelFittingApplied =
+        adaptiveCameraModelFittingEffective && adaptiveRefinementAccepted &&
+        execution.result.sfmDiagnostics.value(
+            QStringLiteral(
+                "ba_adaptive_camera_model_fitting_applied")).toBool(false);
+    QString adaptiveCameraModelFittingSkipReason;
+    if (!adaptiveCameraModelFittingRequested)
+    {
+        adaptiveCameraModelFittingSkipReason = QStringLiteral("not_requested");
+    }
+    else if (hasCompleteKnownPosePrior)
+    {
+        adaptiveCameraModelFittingSkipReason = QStringLiteral("known_pose_input");
+    }
+    else if (!adaptiveCameraModelFittingScheduled && hasProjectOrExternalPrior)
+    {
+        adaptiveCameraModelFittingSkipReason = QStringLiteral("complete_intrinsic_prior");
+    }
+    else if (!adaptiveCameraModelFittingScheduled)
+    {
+        adaptiveCameraModelFittingSkipReason = QStringLiteral("policy_disabled");
+    }
+    else if (adaptiveRefinementRejected)
+    {
+        adaptiveCameraModelFittingSkipReason = QStringLiteral("refinement_rejected");
+    }
+    else if (!adaptiveCameraModelFittingEvaluated)
+    {
+        adaptiveCameraModelFittingSkipReason = QStringLiteral("not_evaluated");
+    }
+    else if (!adaptiveCameraModelFittingEffective)
+    {
+        adaptiveCameraModelFittingSkipReason =
+            QStringLiteral("no_observable_parameters");
+    }
+    else if (!adaptiveCameraModelFittingApplied)
+    {
+        adaptiveCameraModelFittingSkipReason = QStringLiteral("not_applied");
+    }
     execution.result.sfmDiagnostics.insert(
         QStringLiteral("adaptive_focal_search"), focalCandidates.size() > 1);
     execution.result.sfmDiagnostics.insert(
         QStringLiteral("focal_initialization_search"), focalCandidates.size() > 1);
     execution.result.sfmDiagnostics.insert(
-        QStringLiteral("adaptive_camera_model_fitting"), input.adaptiveCameraModelFitting);
+        QStringLiteral("adaptive_camera_model_fitting"), adaptiveCameraModelFittingRequested);
+    execution.result.sfmDiagnostics.insert(
+        QStringLiteral("adaptive_camera_model_fitting_requested"),
+        adaptiveCameraModelFittingRequested);
+    execution.result.sfmDiagnostics.insert(
+        QStringLiteral("adaptive_camera_model_fitting_scheduled"),
+        adaptiveCameraModelFittingScheduled);
+    execution.result.sfmDiagnostics.insert(
+        QStringLiteral("adaptive_camera_model_fitting_effective"),
+        adaptiveCameraModelFittingEffective);
+    execution.result.sfmDiagnostics.insert(
+        QStringLiteral("adaptive_camera_model_fitting_applied"),
+        adaptiveCameraModelFittingApplied);
+    execution.result.sfmDiagnostics.insert(
+        QStringLiteral("adaptive_camera_model_fitting_skip_reason"),
+        adaptiveCameraModelFittingSkipReason);
     execution.result.sfmDiagnostics.insert(
         QStringLiteral("adaptive_camera_model_refinement_accepted"), adaptiveRefinementAccepted);
     execution.result.sfmDiagnostics.insert(
@@ -1130,7 +1275,9 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
         const AerialBlockGeometry geometry =
             evaluateAerialBlockGeometry(*execution.reconstruction);
         const bool absoluteGeometryConstraint =
-            hasAbsoluteGeometryConstraint(input, execution.result.sfmDiagnostics);
+            hasAbsoluteGeometryConstraint(
+                hasCompleteKnownPosePrior,
+                execution.result.sfmDiagnostics);
         const bool domingRisk = shouldFlagAerialDomingRisk(
             geometry.valid,
             geometry.opticalAxisConcentration,
@@ -1159,9 +1306,11 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
     }
 
     const bool focalInitializationSearch = focalCandidates.size() > 1;
-    QString selfCalibrationStatus = hasProjectOrExternalPrior
-        ? QStringLiteral("trusted_calibration")
-        : QStringLiteral("fixed_intrinsics");
+    QString selfCalibrationStatus = hasCompleteKnownPosePrior
+        ? QStringLiteral("known_pose_fixed_calibration")
+        : (hasProjectOrExternalPrior
+               ? QStringLiteral("trusted_prior")
+               : QStringLiteral("fixed_intrinsics"));
     bool selfCalibrationRequiresReview = execution.result.sfmDiagnostics
         .value(QStringLiteral("aerial_block_geometry")).toObject()
         .value(QStringLiteral("doming_risk")).toBool(false);
@@ -1173,12 +1322,12 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
     {
         selfCalibrationStatus = QStringLiteral("refined_from_exif_focal_prior");
     }
-    else if (metadataPrior.valid && input.adaptiveCameraModelFitting)
+    else if (metadataPrior.valid && adaptiveCameraModelFittingScheduled)
     {
         selfCalibrationStatus = QStringLiteral("exif_seed_refinement_rejected");
         selfCalibrationRequiresReview = true;
     }
-    else if (focalInitializationSearch && input.adaptiveCameraModelFitting)
+    else if (focalInitializationSearch && adaptiveCameraModelFittingScheduled)
     {
         selfCalibrationStatus = QStringLiteral("coarse_seed_only");
         selfCalibrationRequiresReview = true;

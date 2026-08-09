@@ -343,6 +343,41 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
     result.baObservationCount = _lastGlobalBAObservationCount;
     result.baTotalSeconds = _lastGlobalBATotalSeconds;
     result.baBackendMessage = _lastGlobalBABackendMessage;
+    result.baAdaptiveCameraModelFittingEvaluated =
+        _lastGlobalBAAdaptiveCameraModelFittingEvaluated;
+    result.baAdaptiveCameraModelFittingApplied =
+        _lastGlobalBAAdaptiveCameraModelFittingApplied;
+    result.baIntrinsicParameterMask = _lastGlobalBAIntrinsicParameterMask;
+    result.baIntrinsicParameterReliability =
+        _lastGlobalBAIntrinsicParameterReliability;
+    result.baIntrinsicParameterIncrementalInformationScore =
+        _lastGlobalBAIntrinsicParameterIncrementalInformationScore;
+    result.baIntrinsicParameterSensitivity =
+        _lastGlobalBAIntrinsicParameterSensitivity;
+    result.baAdaptiveCameraModel = _lastGlobalBAAdaptiveCameraModel;
+    result.baAdaptiveCameraModelReason = _lastGlobalBAAdaptiveCameraModelReason;
+    result.baCameraModelGeometryStrength =
+        _lastGlobalBACameraModelGeometryStrength;
+    result.baCameraModelOpticalAxisConcentration =
+        _lastGlobalBACameraModelOpticalAxisConcentration;
+    result.baCameraModelMedianTriangulationAngle =
+        _lastGlobalBACameraModelMedianTriangulationAngle;
+    result.baCameraModelNormalizedRadiusP90 =
+        _lastGlobalBACameraModelNormalizedRadiusP90;
+    result.baCameraModelOccupiedPeripheralSectors =
+        _lastGlobalBACameraModelOccupiedPeripheralSectors;
+    result.baCameraModelObservationCount =
+        _lastGlobalBACameraModelObservationCount;
+    result.baCameraModelMultiViewTrackRatio =
+        _lastGlobalBACameraModelMultiViewTrackRatio;
+    result.baCameraModelObservationSupport =
+        _lastGlobalBACameraModelObservationSupport;
+    result.baCameraModelPeripheralCoverage =
+        _lastGlobalBACameraModelPeripheralCoverage;
+    result.baCameraModelSectorCoverage =
+        _lastGlobalBACameraModelSectorCoverage;
+    result.baCameraModelImageAxisBalance =
+        _lastGlobalBACameraModelImageAxisBalance;
 
     int finalLongTrackCount = 0;
     int finalTwoViewTrackCount = 0;

@@ -13,6 +13,20 @@
 namespace xjw
 {
 
+struct SfmAdaptiveCameraModelDiagnosticSnapshot
+{
+    bool evaluated = false;
+    bool applied = false;
+    BAIntrinsicParameterMask parameterMask{};
+    std::string modelName;
+};
+
+struct SfmAdaptiveCameraModelDiagnosticMergeResult
+{
+    SfmAdaptiveCameraModelDiagnosticSnapshot accumulated;
+    bool shouldReplaceEvidence = false;
+};
+
 /// 负责 BA 调度，不拥有 IncrementalSfm。
 class SfmBundleAdjustCoordinator
 {
@@ -46,8 +60,7 @@ class SfmBundleAdjustCoordinator
     static bool hasIterativeGlobalBaConverged(int completedRoundCount,
                                               double pointChangeRate,
                                               bool sharedIntrinsicsRefined,
-                                              double focalScaleChange,
-                                              double radialCoefficientChange);
+                                              double maximumIntrinsicChange);
 
     /// 接近注册终点时跳过周期全局 BA，避免数张影像后立刻重复最终全局 BA。
     static bool shouldRunPeriodicGlobalBa(int registeredImageCount,
@@ -88,6 +101,37 @@ class SfmBundleAdjustCoordinator
     /// 周期全局 BA 限制为两轮；最终精化保留用户配置轮数。
     static int iterativeGlobalBaRoundLimit(int configuredRounds,
                                            bool finalRefinement);
+
+    /// 累计多轮自适应模型诊断；已应用模型不会被后续 no-op 或跳过轮覆盖。
+    static SfmAdaptiveCameraModelDiagnosticMergeResult
+    mergeAdaptiveCameraModelDiagnostics(
+        const SfmAdaptiveCameraModelDiagnosticSnapshot &previous,
+        const SfmAdaptiveCameraModelDiagnosticSnapshot &current);
+
+    /// 多起点预览改变了 warm start 后，只重算相对本轮输入的实际应用数量。
+    /// 焦距尺度、宽高比和主点等指标仍保留求解器给出的稳定参考语义。
+    static void refreshCalibrationSeedApplicationCount(
+        const std::vector<Camera> &before,
+        BAResult *result);
+
+    /// 判断当前内参是否已包含可复用的焦距或 k1 种子，避免后续迭代重复多起点预览。
+    static bool hasReusableCalibrationSeed(
+        const std::vector<Camera> &current,
+        const std::vector<Camera> &stableReferences,
+        bool focalEnabled,
+        bool radialK1Enabled);
+
+    /// 首次见到影像时保存内参参考，后续独立全局 BA 调用仍按 ImageId 复用原锚点。
+    static std::vector<Camera> buildPersistentIntrinsicReferences(
+        const std::vector<ImageId> &imageIds,
+        const std::vector<Camera> &current,
+        std::unordered_map<ImageId, Camera> *referencesByImageId);
+
+    /// 按相机计算两轮内参最大归一化变化，避免多标定组反向变化在全局平均中抵消。
+    static double maximumCameraIntrinsicChange(
+        const std::vector<Camera> &previous,
+        const std::vector<Camera> &current,
+        const std::vector<Camera> &stableReferences);
 
   private:
     IncrementalSfm &_owner;

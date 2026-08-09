@@ -21,6 +21,7 @@
 #include "io/PathIO.h"
 #include "log/Logger.h"
 #include "ProjectCameraIO.h"
+#include "BundleAdjustAdaptiveCameraModel.h"
 #include "project/ProjectCommonUtils.h"
 #include "project/ProjectMetadata.h"
 #include "pipeline/IncrementalSfm.h"
@@ -130,7 +131,7 @@ Camera cameraWithIdentityPose(Camera camera)
  * @brief 根据工作流输入统一配置 IncrementalSfm 和 BA。
  *
  * GPU/CPU 仅影响 BA 后端选择；特征与匹配已经在上游完成。自适应相机模型拟合
- * 会开启共享焦距联合优化，但已知完整相机位姿时保持输入内参稳定。
+ * 会声明共享 Brown 内参上限，并在最终全局 BA 前逐项筛选；完整已知位姿保持输入内参稳定。
  */
 void configureSfmOptions(const PreparedAerialTriangulationInput &input,
                          const std::shared_ptr<std::atomic<int>> &registeredProgress,
@@ -230,17 +231,14 @@ void configureSfmOptions(const PreparedAerialTriangulationInput &input,
     options->sequenceLoopClosure = input.sequenceLoopClosure;
     if (input.adaptiveCameraModelFitting)
     {
+        options->adaptiveCameraModelFitting = true;
+        // 参考 MetaShape 用户手册公开的“声明最大模型、按数据证据自适应选择参数”概念。
+        // 这里只声明 PlaScan 允许的最大 Brown 模型，实际自由度由独立评分选择。
         options->baOptions.refineSharedFocalLength = true;
-        // The coarse focal search already resolves the dominant calibration
-        // ambiguity. Releasing focal, pixel aspect and principal point at the
-        // same time is poorly observable for a single-height orbital ring:
-        // pose error can be absorbed into an artificial fy/fx ratio or a large
-        // vertical principal-point drift, which then misaligns masks and depth
-        // maps during dense fusion. Keep the seed aspect and principal point;
-        // trusted project calibrations already carry their measured values,
-        // while an uncalibrated input uses the image-centre prior.
-        options->baOptions.refineSharedFocalAspectRatio = false;
-        options->baOptions.refineSharedPrincipalPoint = false;
+        options->baOptions.refineSharedFocalAspectRatio = true;
+        options->baOptions.refineSharedPrincipalPoint = true;
+        options->baOptions.refineSharedRadialDistortion = true;
+        options->baOptions.refineSharedHighOrderDistortion = true;
         if (input.hasTrustedFocalPrior)
         {
             // 35mm 等效焦距存在取整、裁切和对焦误差，只作为弱先验。边界覆盖常见
@@ -249,9 +247,6 @@ void configureSfmOptions(const PreparedAerialTriangulationInput &input,
             options->baOptions.maxSharedFocalScale = 1.06;
             options->baOptions.maxSharedFocalStepScale = 1.06;
             options->baOptions.maxSharedFocalIterations = 8;
-            // EXIF 不含镜头畸变。最终完整全局 BA 必须联合估计同一镜头组共享的
-            // k1/k2/k3/p1/p2；参数块带边界和弱先验，局部 BA 不释放这些参数。
-            options->baOptions.refineSharedRadialDistortion = true;
         }
         else
         {
@@ -259,7 +254,6 @@ void configureSfmOptions(const PreparedAerialTriangulationInput &input,
             options->baOptions.maxSharedFocalScale = 1.10;
             options->baOptions.maxSharedFocalStepScale = 1.12;
             options->baOptions.maxSharedFocalIterations = 6;
-            options->baOptions.refineSharedRadialDistortion = true;
         }
         if (cpuOnly && BundleAdjust::isBackendAvailable(BABackend::CeresCpu))
         {
@@ -347,9 +341,16 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
 
     // 阶段 2：相机来源优先级为完整相机文件、可信工程相机、影像尺寸估算。
     const bool hasCompleteCameraFiles = input.cameraPaths.size() == input.images.size() &&
+        !input.images.isEmpty() &&
         std::all_of(input.cameraPaths.cbegin(), input.cameraPaths.cend(), [](const QString &path)
         {
-            return !path.trimmed().isEmpty() && QFileInfo::exists(path);
+            if (path.trimmed().isEmpty() || !QFileInfo::exists(path))
+            {
+                return false;
+            }
+            Camera camera;
+            return camera.loadFromFile(xjw::common::io::toUtf8Path(path)) &&
+                   camera.isValid();
         });
 
     QMap<QString, QJsonObject> projectCameraByPath;
@@ -409,9 +410,15 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
     sfmOptions.useKnownCameraPoses = hasCompleteCameraFiles || hasCompleteProjectPoseCameras;
     if (sfmOptions.useKnownCameraPoses)
     {
+        // 完整已知位姿路径复用输入相机标定，不再运行自由网络自标定。否则 adaptive
+        // 已打开的径向/高阶参数会与这里冻结的焦距形成不合法且不可观的混合模型。
+        sfmOptions.adaptiveCameraModelFitting = false;
         sfmOptions.baOptions.refineSharedFocalLength = false;
         sfmOptions.baOptions.refineSharedFocalAspectRatio = false;
         sfmOptions.baOptions.refineSharedPrincipalPoint = false;
+        sfmOptions.baOptions.refineSharedRadialDistortion = false;
+        sfmOptions.baOptions.refineSharedHighOrderDistortion = false;
+        sfmOptions.baOptions.useSharedIntrinsicParameterMask = false;
         sfmOptions.refineKnownCameraPoseWithSoftPrior =
             !input.lockInputCameraPoses;
     }
@@ -450,7 +457,8 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
 
         const QString normalizedPath = xjw::common::project::normalizePath(imagePath);
         const auto projectCamera = projectCameraByPath.constFind(normalizedPath);
-        if (input.useProjectCameraIntrinsics && projectCamera != projectCameraByPath.cend())
+        if ((input.useProjectCameraIntrinsics || input.useProjectCameraPoses) &&
+            projectCamera != projectCameraByPath.cend())
         {
             Camera camera;
             if (xjw::common::project::cameraFromJson(projectCamera.value(), &camera) &&
@@ -581,6 +589,79 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
                        sfmResult.hierarchicalBATotalSeconds);
     diagnostics.insert(QStringLiteral("ba_refined_intrinsic_count"),
                        sfmResult.baRefinedIntrinsicCount);
+    diagnostics.insert(QStringLiteral("ba_adaptive_camera_model_fitting_evaluated"),
+                       sfmResult.baAdaptiveCameraModelFittingEvaluated);
+    diagnostics.insert(QStringLiteral("ba_adaptive_camera_model_fitting_applied"),
+                       sfmResult.baAdaptiveCameraModelFittingApplied);
+    diagnostics.insert(QStringLiteral("ba_adaptive_camera_model"),
+                       QString::fromStdString(sfmResult.baAdaptiveCameraModel));
+    diagnostics.insert(QStringLiteral("ba_adaptive_camera_model_reason"),
+                       QString::fromStdString(sfmResult.baAdaptiveCameraModelReason));
+    QJsonObject intrinsicParameterEnabled;
+    QJsonObject intrinsicParameterReliability;
+    QJsonObject intrinsicParameterIncrementalInformationScore;
+    QJsonObject intrinsicParameterSensitivity;
+    for (std::size_t index = 0; index < kBAIntrinsicParameterCount; ++index)
+    {
+        const auto parameter = static_cast<BAIntrinsicParameter>(index);
+        const QString parameterName = QString::fromLatin1(
+            baIntrinsicParameterName(parameter));
+        intrinsicParameterEnabled.insert(
+            parameterName, sfmResult.baIntrinsicParameterMask[index]);
+        intrinsicParameterReliability.insert(
+            parameterName, sfmResult.baIntrinsicParameterReliability[index]);
+        intrinsicParameterIncrementalInformationScore.insert(
+            parameterName,
+            sfmResult.baIntrinsicParameterIncrementalInformationScore[index]);
+        intrinsicParameterSensitivity.insert(
+            parameterName,
+            sfmResult.baIntrinsicParameterSensitivity[index]);
+    }
+    diagnostics.insert(QStringLiteral("ba_intrinsic_parameter_enabled"),
+                       intrinsicParameterEnabled);
+    diagnostics.insert(QStringLiteral("ba_intrinsic_parameter_reliability"),
+                       intrinsicParameterReliability);
+    diagnostics.insert(
+        QStringLiteral("ba_intrinsic_parameter_incremental_information_score"),
+        intrinsicParameterIncrementalInformationScore);
+    diagnostics.insert(QStringLiteral("ba_intrinsic_parameter_sensitivity"),
+                       intrinsicParameterSensitivity);
+    QJsonObject cameraModelObservability;
+    cameraModelObservability.insert(
+        QStringLiteral("geometry_strength"),
+        sfmResult.baCameraModelGeometryStrength);
+    cameraModelObservability.insert(
+        QStringLiteral("optical_axis_concentration"),
+        sfmResult.baCameraModelOpticalAxisConcentration);
+    cameraModelObservability.insert(
+        QStringLiteral("median_triangulation_angle_degrees"),
+        sfmResult.baCameraModelMedianTriangulationAngle);
+    cameraModelObservability.insert(
+        QStringLiteral("normalized_radius_p90"),
+        sfmResult.baCameraModelNormalizedRadiusP90);
+    cameraModelObservability.insert(
+        QStringLiteral("occupied_peripheral_sectors"),
+        sfmResult.baCameraModelOccupiedPeripheralSectors);
+    cameraModelObservability.insert(
+        QStringLiteral("observation_count"),
+        sfmResult.baCameraModelObservationCount);
+    cameraModelObservability.insert(
+        QStringLiteral("multi_view_track_ratio"),
+        sfmResult.baCameraModelMultiViewTrackRatio);
+    cameraModelObservability.insert(
+        QStringLiteral("observation_support"),
+        sfmResult.baCameraModelObservationSupport);
+    cameraModelObservability.insert(
+        QStringLiteral("peripheral_coverage"),
+        sfmResult.baCameraModelPeripheralCoverage);
+    cameraModelObservability.insert(
+        QStringLiteral("sector_coverage"),
+        sfmResult.baCameraModelSectorCoverage);
+    cameraModelObservability.insert(
+        QStringLiteral("image_axis_balance"),
+        sfmResult.baCameraModelImageAxisBalance);
+    diagnostics.insert(QStringLiteral("ba_camera_model_observability"),
+                       cameraModelObservability);
     diagnostics.insert(QStringLiteral("ba_shared_focal_scale"), sfmResult.baSharedFocalScale);
     diagnostics.insert(QStringLiteral("ba_shared_focal_aspect_scale"),
                        sfmResult.baSharedFocalAspectScale);

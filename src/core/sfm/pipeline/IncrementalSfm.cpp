@@ -61,6 +61,10 @@ IncrementalSfmOptions effectiveSfmOptions(const IncrementalSfmOptions &options)
     effective.baOptions.refineSharedFocalAspectRatio = false;
     effective.baOptions.refineSharedPrincipalPoint = false;
     effective.baOptions.refineSharedRadialDistortion = false;
+    effective.baOptions.refineSharedHighOrderDistortion = false;
+    effective.baOptions.useSharedIntrinsicParameterMask = false;
+    effective.baOptions.cameraCalibrationGroupIds.clear();
+    effective.baOptions.sharedIntrinsicReferenceCameras.clear();
     effective.baOptions.logIterationProgress = false;
     effective.retryUnregisteredAfterFinalBA = false;
     return effective;
@@ -450,6 +454,7 @@ IncrementalSfmResult IncrementalSfm::run(SfmProgressCallback progressCb)
     IncrementalSfmResult result;
     _inputMultiViewTracks.clear();
     _finalTrackConsolidationAttempted = false;
+    _stableIntrinsicReferenceByImageId.clear();
     _isAborted = false;
 
     const int totalImages = static_cast<int>(_reconstruction->numImages());

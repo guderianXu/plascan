@@ -30,10 +30,12 @@
 #include "BundleAdjust.h"
 #include "Camera.h"
 
+#include <array>
 #include <functional>
 #include <limits>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -154,6 +156,8 @@ struct IncrementalSfmOptions
     int hierarchicalBAMaxConcurrentBlocks = 0;
     /// BA 选项
     BAOptions baOptions;
+    /// 是否按当前重建几何和影像覆盖逐项选择可观测的共享内参。
+    bool adaptiveCameraModelFitting = false;
     /// 共享内参自标定时，是否保留进入 BA 前每台相机相对参考层的法向偏移。
     bool preserveCameraLayerDuringSelfCalibration = false;
     /// 参考层漂移约束 sigma 相对相机中心总体 RMS 跨度的比例。
@@ -229,10 +233,10 @@ struct IncrementalSfmResult
     int baTracksOptimized = 0; ///< 最终全局 BA 成功优化轨迹数
     int baTracksFiltered = 0;  ///< 最终全局 BA 过滤的离群点数
     int baRefinedIntrinsicCount = 0;    ///< 最终全局 BA 中发生共享内参更新的相机数量
-    double baSharedFocalScale = 1.0;    ///< 最终全局 BA 后焦距相对输入焦距的平均尺度
-    double baSharedFocalAspectScale = 1.0; ///< 最终全局 BA 后 fy/fx 比例倍率
-    double baSharedPrincipalOffsetX = 0.0; ///< 最终全局 BA 主点 X 平均偏移（像素）
-    double baSharedPrincipalOffsetY = 0.0; ///< 最终全局 BA 主点 Y 平均偏移（像素）
+    double baSharedFocalScale = 1.0; ///< 最终全局 BA 后焦距相对稳定参考的平均尺度
+    double baSharedFocalAspectScale = 1.0; ///< 最终全局 BA 后 fy/fx 相对稳定参考的倍率
+    double baSharedPrincipalOffsetX = 0.0; ///< 最终全局 BA 主点 X 相对稳定参考的偏移（像素）
+    double baSharedPrincipalOffsetY = 0.0; ///< 最终全局 BA 主点 Y 相对稳定参考的偏移（像素）
     double baSharedRadialK1 = 0.0;         ///< 最终全局 BA 的共享一阶径向畸变系数
     double baSharedRadialK2 = 0.0;         ///< 最终全局 BA 的共享二阶径向畸变系数
     double baSharedRadialK3 = 0.0;         ///< 最终全局 BA 的共享三阶径向畸变系数
@@ -247,6 +251,28 @@ struct IncrementalSfmResult
     int baObservationCount = 0;                         ///< 最终全局 BA 观测数量
     double baTotalSeconds = 0.0;                        ///< 最终全局 BA 总耗时
     std::string baBackendMessage;                       ///< 后端选择、回退或失败原因
+    bool baAdaptiveCameraModelFittingEvaluated = false; ///< 是否执行了逐参数模型可靠性评估
+    bool baAdaptiveCameraModelFittingApplied = false;   ///< 自适应内参结果是否通过质量门并写回
+    BAIntrinsicParameterMask baIntrinsicParameterMask{}; ///< 最终全局 BA 的有效共享内参掩码
+    std::array<double, kBAIntrinsicParameterCount>
+        baIntrinsicParameterReliability{};              ///< 各共享内参可靠度 [0, 1]
+    std::array<double, kBAIntrinsicParameterCount>
+        baIntrinsicParameterIncrementalInformationScore{}; ///< 消元后的增量信息评分 [0, 1]
+    std::array<double, kBAIntrinsicParameterCount>
+        baIntrinsicParameterSensitivity{};              ///< 典型参数扰动的像点响应 [0, 1]
+    std::string baAdaptiveCameraModel;                  ///< 有效模型名称，例如 f+k1
+    std::string baAdaptiveCameraModelReason;            ///< 模型选择原因
+    double baCameraModelGeometryStrength = 0.0;         ///< 几何强度 [0, 1]
+    double baCameraModelOpticalAxisConcentration = 0.0; ///< 光轴集中度 [0, 1]
+    double baCameraModelMedianTriangulationAngle = 0.0; ///< 轨迹中值交会角（度）
+    double baCameraModelNormalizedRadiusP90 = 0.0;      ///< 归一化像高半径 P90
+    int baCameraModelOccupiedPeripheralSectors = 0;     ///< 外围覆盖扇区数 [0, 8]
+    int baCameraModelObservationCount = 0;              ///< 参与可观测性评估的有效观测数
+    double baCameraModelMultiViewTrackRatio = 0.0;      ///< 三视及以上活动轨迹比例
+    double baCameraModelObservationSupport = 0.0;       ///< 观测数量支撑度 [0, 1]
+    double baCameraModelPeripheralCoverage = 0.0;       ///< 外围像点覆盖度 [0, 1]
+    double baCameraModelSectorCoverage = 0.0;           ///< 外围方向覆盖度 [0, 1]
+    double baCameraModelImageAxisBalance = 0.0;         ///< 水平/垂直像面平衡度 [0, 1]
     int priorTracksAccepted = 0;
     int priorTracksRejected = 0;
     int priorObservationsAccepted = 0;
@@ -382,6 +408,9 @@ class IncrementalSfm
     /// 预设的相机对象（imageId → Camera），由 addImageWithCamera 填充
     std::unordered_map<ImageId, Camera> _preloadedCameras;
 
+    /// 整次增量重建生命周期内稳定的自标定参考；后续全局/重试 BA 不重新锚定已优化内参。
+    std::unordered_map<ImageId, Camera> _stableIntrinsicReferenceByImageId;
+
     /// 最近一次内部操作的错误描述（供 run() 写入 result.summary）
     std::string _lastErrorMessage;
 
@@ -413,6 +442,28 @@ class IncrementalSfm
     int _lastGlobalBAObservationCount = 0;
     double _lastGlobalBATotalSeconds = 0.0;
     std::string _lastGlobalBABackendMessage;
+    bool _lastGlobalBAAdaptiveCameraModelFittingEvaluated = false;
+    bool _lastGlobalBAAdaptiveCameraModelFittingApplied = false;
+    BAIntrinsicParameterMask _lastGlobalBAIntrinsicParameterMask{};
+    std::array<double, kBAIntrinsicParameterCount>
+        _lastGlobalBAIntrinsicParameterReliability{};
+    std::array<double, kBAIntrinsicParameterCount>
+        _lastGlobalBAIntrinsicParameterIncrementalInformationScore{};
+    std::array<double, kBAIntrinsicParameterCount>
+        _lastGlobalBAIntrinsicParameterSensitivity{};
+    std::string _lastGlobalBAAdaptiveCameraModel;
+    std::string _lastGlobalBAAdaptiveCameraModelReason;
+    double _lastGlobalBACameraModelGeometryStrength = 0.0;
+    double _lastGlobalBACameraModelOpticalAxisConcentration = 0.0;
+    double _lastGlobalBACameraModelMedianTriangulationAngle = 0.0;
+    double _lastGlobalBACameraModelNormalizedRadiusP90 = 0.0;
+    int _lastGlobalBACameraModelOccupiedPeripheralSectors = 0;
+    int _lastGlobalBACameraModelObservationCount = 0;
+    double _lastGlobalBACameraModelMultiViewTrackRatio = 0.0;
+    double _lastGlobalBACameraModelObservationSupport = 0.0;
+    double _lastGlobalBACameraModelPeripheralCoverage = 0.0;
+    double _lastGlobalBACameraModelSectorCoverage = 0.0;
+    double _lastGlobalBACameraModelImageAxisBalance = 0.0;
     /// 上次成功执行分层 BA 时的已注册相机数，避免同一模型重复分块。
     int _lastHierarchicalBAImageCount = 0;
     int _lastHierarchicalBAPlannedBlocks = 0;
@@ -592,8 +643,14 @@ class IncrementalSfm
      *
      * @param localOnly  是否仅局部 BA（仅优化最近注册图像的邻域）
      * @param anchorIds  局部 BA 时锚定的图像 ID
+     * @param stableIntrinsicReferences 本次迭代各轮共用的内参参考；nullptr 使用配置值
+     * @param allowCalibrationSeedSearch 是否允许本轮执行大型自标定多起点预览
      */
-    void runBundleAdjust(bool localOnly = false, const std::vector<ImageId> &anchorIds = {});
+    void runBundleAdjust(
+        bool localOnly = false,
+        const std::vector<ImageId> &anchorIds = {},
+        const std::vector<Camera> *stableIntrinsicReferences = nullptr,
+        bool allowCalibrationSeedSearch = true);
 
     /**
      * @brief 迭代全局 BA 精化（参考 COLMAP IterativeGlobalRefinement）。

@@ -94,6 +94,7 @@ BlockOutcome solveBlock(std::size_t block_index,
     options.refineSharedPrincipalPoint = false;
     options.refineSharedRadialDistortion = false;
     options.cameraCalibrationGroupIds.clear();
+    options.sharedIntrinsicReferenceCameras.clear();
     options.cameraPosePriors.clear();
     options.enableControlPointConstraints = false;
     options.enableScaleBarConstraints = false;

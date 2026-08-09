@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cmath>
+#include <string>
 #include <vector>
 
 namespace
@@ -250,7 +251,7 @@ TEST(BundleAdjustSharedFocalTest, CeresUsesOneAbsoluteFocalForHeterogeneousInput
     }
 }
 
-TEST(BundleAdjustSharedFocalTest, AutoBackendCanSelectCeresForSharedFocal)
+TEST(BundleAdjustSharedFocalTest, LargeFocalOnlyProblemUsesCeresCudaWhenAvailable)
 {
     xjw::BAProblemStats stats;
     stats.cameraCount = 120;
@@ -265,19 +266,21 @@ TEST(BundleAdjustSharedFocalTest, AutoBackendCanSelectCeresForSharedFocal)
     options.minCeresCudaObservations = 1;
     options.minCeresCpuObservations = 1;
 
-    const xjw::BABackend selected =
-        xjw::BundleAdjust::selectBackendForProblem(stats, options);
+    const xjw::BABackendDecision decision =
+        xjw::BundleAdjust::decideBackendForProblem(stats, options);
     if (xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCuda))
     {
-        EXPECT_EQ(selected, xjw::BABackend::CeresCuda);
+        EXPECT_EQ(decision.backend, xjw::BABackend::CeresCuda);
+        EXPECT_EQ(decision.reason, "large_joint_shared_focal_uses_ceres_cuda");
     }
     else if (xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
     {
-        EXPECT_EQ(selected, xjw::BABackend::CeresCpu);
+        EXPECT_EQ(decision.backend, xjw::BABackend::CeresCpu);
+        EXPECT_EQ(decision.reason, "joint_shared_focal_requires_ceres");
     }
     else
     {
-        EXPECT_EQ(selected, xjw::BABackend::LegacyCpu);
+        EXPECT_EQ(decision.backend, xjw::BABackend::LegacyCpu);
     }
 }
 
@@ -597,4 +600,181 @@ TEST(BundleAdjustSharedFocalTest, CeresLowOrderModeKeepsHighOrderDistortionFixed
     EXPECT_DOUBLE_EQ(distortion.tangentialP1, 0.001);
     EXPECT_DOUBLE_EQ(distortion.tangentialP2, -0.002);
     EXPECT_EQ(result.selfCalibrationStagesRun, 2);
+}
+
+TEST(BundleAdjustSharedFocalTest, LegacyRespectsDisabledFocalParameterMask)
+{
+    const std::vector<xjw::Camera> truthCameras{
+        makeCamera(-2.0, 0.0, 0.0, 1500.0),
+        makeCamera(0.0, -2.0, 0.0, 1500.0),
+        makeCamera(2.0, 0.0, 0.0, 1500.0),
+        makeCamera(0.0, 2.0, 0.0, 1500.0),
+    };
+    const std::vector<xjw::Camera> initialCameras{
+        makeCamera(-2.0, 0.0, 0.0, 900.0),
+        makeCamera(0.0, -2.0, 0.0, 900.0),
+        makeCamera(2.0, 0.0, 0.0, 900.0),
+        makeCamera(0.0, 2.0, 0.0, 900.0),
+    };
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::LegacyCpu;
+    options.refineCameraPose = false;
+    options.refineSharedFocalLength = true;
+    options.useSharedIntrinsicParameterMask = true;
+    options.sharedIntrinsicParameterMask.fill(false);
+    options.enableControlPointConstraints = true;
+    options.controlPointWeight = 100.0;
+    options.enablePointFilter = false;
+    options.maxIterations = 8;
+
+    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(
+        initialCameras, makeSharedFocalTracks(truthCameras), options);
+
+    ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
+    ASSERT_EQ(result.refinedCameras.size(), initialCameras.size());
+    EXPECT_EQ(result.refinedIntrinsicCount, 0);
+    for (std::size_t index = 0; index < initialCameras.size(); ++index)
+    {
+        EXPECT_DOUBLE_EQ(
+            result.refinedCameras[index].focalX(),
+            initialCameras[index].focalX());
+        EXPECT_DOUBLE_EQ(
+            result.refinedCameras[index].focalY(),
+            initialCameras[index].focalY());
+    }
+}
+
+TEST(BundleAdjustSharedFocalTest, LegacyProjectsWarmStartIntoStableFocalBounds)
+{
+    const std::vector<xjw::Camera> referenceCameras{
+        makeCamera(-2.0, 0.0, 0.0, 1000.0),
+        makeCamera(0.0, -2.0, 0.0, 1000.0),
+        makeCamera(2.0, 0.0, 0.0, 1000.0),
+        makeCamera(0.0, 2.0, 0.0, 1000.0),
+    };
+    std::vector<xjw::Camera> warmCameras = referenceCameras;
+    for (xjw::Camera &camera : warmCameras)
+    {
+        camera.setIntrinsics(1200.0, 900.0, 512.0, 384.0);
+    }
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::LegacyCpu;
+    options.refineCameraPose = false;
+    options.refineSharedFocalLength = true;
+    options.sharedIntrinsicReferenceCameras = referenceCameras;
+    options.minSharedFocalScale = 0.95;
+    options.maxSharedFocalScale = 1.05;
+    options.enableControlPointConstraints = true;
+    options.controlPointWeight = 100.0;
+    options.enablePointFilter = false;
+    options.maxIterations = 2;
+
+    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(
+        warmCameras, makeSharedFocalTracks(warmCameras), options);
+
+    ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
+    ASSERT_EQ(result.refinedCameras.size(), warmCameras.size());
+    EXPECT_NEAR(result.refinedSharedFocalScale, 1.05, 1.0e-12);
+    for (const xjw::Camera &camera : result.refinedCameras)
+    {
+        EXPECT_NEAR(camera.focalX(), 1050.0, 1.0e-8);
+        EXPECT_NEAR(camera.focalY(), 787.5, 1.0e-8);
+    }
+}
+
+TEST(BundleAdjustSharedFocalTest, LegacyRejectsMultipleCalibrationGroups)
+{
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-2.0, 0.0, 0.0, 1000.0),
+        makeCamera(0.0, -2.0, 0.0, 1000.0),
+        makeCamera(2.0, 0.0, 0.0, 1200.0),
+        makeCamera(0.0, 2.0, 0.0, 1200.0),
+    };
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::LegacyCpu;
+    options.allowBackendFallback = false;
+    options.refineSharedFocalLength = true;
+    options.cameraCalibrationGroupIds = {0, 0, 1, 1};
+
+    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(
+        cameras, makeSharedFocalTracks(cameras), options);
+
+    EXPECT_FALSE(result.solutionUsable);
+    EXPECT_EQ(
+        result.solveStatus,
+        xjw::BASolveStatus::UnsupportedConfiguration);
+    EXPECT_NE(
+        result.backendMessage.find("多标定组"),
+        std::string::npos);
+}
+
+TEST(BundleAdjustSharedFocalTest,
+     AutoDoesNotQualityFallbackMultipleGroupsToLegacy)
+{
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    {
+        GTEST_SKIP() << "Ceres CPU backend is not available";
+    }
+
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-2.0, 0.0, 0.0, 1000.0),
+        makeCamera(0.0, -2.0, 0.0, 1000.0),
+        makeCamera(2.0, 0.0, 0.0, 1200.0),
+        makeCamera(0.0, 2.0, 0.0, 1200.0),
+    };
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::Auto;
+    options.refineCameraPose = false;
+    options.refineSharedFocalLength = true;
+    options.cameraCalibrationGroupIds = {0, 0, 1, 1};
+    options.enableBackendQualityGate = true;
+    options.minAcceptedValidTrackRatio = 1.1;
+    options.enablePointFilter = false;
+    options.stageSharedFocalRefinement = false;
+    options.maxIterations = 2;
+
+    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(
+        cameras, makeSharedFocalTracks(cameras), options);
+
+    EXPECT_FALSE(result.solutionUsable);
+    EXPECT_EQ(result.usedBackend, xjw::BABackend::CeresCpu);
+    EXPECT_NE(
+        result.backendMessage.find("没有兼容的 legacy 回退"),
+        std::string::npos);
+}
+
+TEST(BundleAdjustSharedFocalTest,
+     AutoDoesNotQualityFallbackFocalPriorToLegacy)
+{
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    {
+        GTEST_SKIP() << "Ceres CPU backend is not available";
+    }
+
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-2.0, 0.0, 0.0, 1000.0),
+        makeCamera(0.0, -2.0, 0.0, 1000.0),
+        makeCamera(2.0, 0.0, 0.0, 1000.0),
+        makeCamera(0.0, 2.0, 0.0, 1000.0),
+    };
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::Auto;
+    options.refineCameraPose = false;
+    options.refineSharedFocalLength = true;
+    options.enableBackendQualityGate = true;
+    options.minAcceptedValidTrackRatio = 1.1;
+    options.enablePointFilter = false;
+    options.stageSharedFocalRefinement = false;
+    options.maxIterations = 2;
+
+    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(
+        cameras, makeSharedFocalTracks(cameras), options);
+
+    EXPECT_FALSE(result.solutionUsable);
+    EXPECT_EQ(result.usedBackend, xjw::BABackend::CeresCpu);
+    EXPECT_NE(
+        result.backendMessage.find("稳定参考先验"),
+        std::string::npos);
 }

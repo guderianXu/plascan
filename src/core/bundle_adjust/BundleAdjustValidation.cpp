@@ -430,17 +430,29 @@ BundleAdjustValidationResult validateAndNormalizeBundleAdjustOptions(
         return invalid(BASolveStatus::InvalidInput,
                        "BA 输入验证失败: 鲁棒核、有限差分或收敛参数非法");
     }
-    if (requestedOptions.refineSharedFocalLength &&
+    const auto parameterEnabled = [&](BAIntrinsicParameter parameter)
+    {
+        return sharedIntrinsicParameterEnabled(requestedOptions, parameter);
+    };
+    const bool sharedFocalEnabled = parameterEnabled(
+        BAIntrinsicParameter::FocalLength);
+    if (sharedFocalEnabled &&
         (!(requestedOptions.minSharedFocalScale > 0.0) ||
          requestedOptions.maxSharedFocalScale < requestedOptions.minSharedFocalScale))
     {
         return invalid(BASolveStatus::InvalidInput,
                        "BA 输入验证失败: 共享焦距范围非法");
     }
-    if ((requestedOptions.refineSharedFocalAspectRatio ||
-         requestedOptions.refineSharedPrincipalPoint ||
-         requestedOptions.refineSharedRadialDistortion) &&
-        !requestedOptions.refineSharedFocalLength)
+    const bool extendedSharedIntrinsicEnabled =
+        parameterEnabled(BAIntrinsicParameter::FocalAspectRatio) ||
+        parameterEnabled(BAIntrinsicParameter::PrincipalPointX) ||
+        parameterEnabled(BAIntrinsicParameter::PrincipalPointY) ||
+        parameterEnabled(BAIntrinsicParameter::RadialK1) ||
+        parameterEnabled(BAIntrinsicParameter::RadialK2) ||
+        parameterEnabled(BAIntrinsicParameter::RadialK3) ||
+        parameterEnabled(BAIntrinsicParameter::TangentialP1) ||
+        parameterEnabled(BAIntrinsicParameter::TangentialP2);
+    if (extendedSharedIntrinsicEnabled && !sharedFocalEnabled)
     {
         return invalid(
             BASolveStatus::InvalidInput,
@@ -497,6 +509,38 @@ BundleAdjustValidationResult validateAndNormalizeBundleAdjustOptions(
         return invalid(
             BASolveStatus::InvalidInput,
             "BA 输入验证失败: 相机标定分组数量必须与相机数量一致");
+    }
+    if (!requestedOptions.sharedIntrinsicReferenceCameras.empty() &&
+        requestedOptions.sharedIntrinsicReferenceCameras.size() !=
+            cameras.size())
+    {
+        return invalid(
+            BASolveStatus::InvalidInput,
+            "BA 输入验证失败: 共享内参参考相机数量必须与相机数量一致");
+    }
+    if (std::any_of(
+            requestedOptions.sharedIntrinsicReferenceCameras.begin(),
+            requestedOptions.sharedIntrinsicReferenceCameras.end(),
+            [](const Camera &camera)
+            {
+                const Camera::Intrinsics intrinsics = camera.intrinsics();
+                const Camera::Distortion distortion = camera.distortion();
+                return !camera.isValid() ||
+                       !std::isfinite(intrinsics.focalX) ||
+                       !std::isfinite(intrinsics.focalY) ||
+                       intrinsics.focalX <= 0.0 || intrinsics.focalY <= 0.0 ||
+                       !std::isfinite(intrinsics.principalX) ||
+                       !std::isfinite(intrinsics.principalY) ||
+                       !std::isfinite(distortion.radialK1) ||
+                       !std::isfinite(distortion.radialK2) ||
+                       !std::isfinite(distortion.radialK3) ||
+                       !std::isfinite(distortion.tangentialP1) ||
+                       !std::isfinite(distortion.tangentialP2);
+            }))
+    {
+        return invalid(
+            BASolveStatus::InvalidInput,
+            "BA 输入验证失败: 共享内参参考相机包含非法标定参数");
     }
     if (std::any_of(
             requestedOptions.cameraCalibrationGroupIds.begin(),

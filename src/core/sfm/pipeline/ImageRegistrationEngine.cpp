@@ -237,6 +237,41 @@ IncrementalSfmResult IncrementalSfm::runRegistrationFromCurrentInitialization(
     result.baObservationCount = _lastGlobalBAObservationCount;
     result.baTotalSeconds = _lastGlobalBATotalSeconds;
     result.baBackendMessage = _lastGlobalBABackendMessage;
+    result.baAdaptiveCameraModelFittingEvaluated =
+        _lastGlobalBAAdaptiveCameraModelFittingEvaluated;
+    result.baAdaptiveCameraModelFittingApplied =
+        _lastGlobalBAAdaptiveCameraModelFittingApplied;
+    result.baIntrinsicParameterMask = _lastGlobalBAIntrinsicParameterMask;
+    result.baIntrinsicParameterReliability =
+        _lastGlobalBAIntrinsicParameterReliability;
+    result.baIntrinsicParameterIncrementalInformationScore =
+        _lastGlobalBAIntrinsicParameterIncrementalInformationScore;
+    result.baIntrinsicParameterSensitivity =
+        _lastGlobalBAIntrinsicParameterSensitivity;
+    result.baAdaptiveCameraModel = _lastGlobalBAAdaptiveCameraModel;
+    result.baAdaptiveCameraModelReason = _lastGlobalBAAdaptiveCameraModelReason;
+    result.baCameraModelGeometryStrength =
+        _lastGlobalBACameraModelGeometryStrength;
+    result.baCameraModelOpticalAxisConcentration =
+        _lastGlobalBACameraModelOpticalAxisConcentration;
+    result.baCameraModelMedianTriangulationAngle =
+        _lastGlobalBACameraModelMedianTriangulationAngle;
+    result.baCameraModelNormalizedRadiusP90 =
+        _lastGlobalBACameraModelNormalizedRadiusP90;
+    result.baCameraModelOccupiedPeripheralSectors =
+        _lastGlobalBACameraModelOccupiedPeripheralSectors;
+    result.baCameraModelObservationCount =
+        _lastGlobalBACameraModelObservationCount;
+    result.baCameraModelMultiViewTrackRatio =
+        _lastGlobalBACameraModelMultiViewTrackRatio;
+    result.baCameraModelObservationSupport =
+        _lastGlobalBACameraModelObservationSupport;
+    result.baCameraModelPeripheralCoverage =
+        _lastGlobalBACameraModelPeripheralCoverage;
+    result.baCameraModelSectorCoverage =
+        _lastGlobalBACameraModelSectorCoverage;
+    result.baCameraModelImageAxisBalance =
+        _lastGlobalBACameraModelImageAxisBalance;
     applyControlNetworkDiagnostics(&result);
 
     return result;
@@ -332,6 +367,9 @@ void IncrementalSfm::resetForInitialPairTrial(const SfmReconstruction &baseRecon
     _lastGlobalBATracksFiltered = 0;
     _lastGlobalBARefinedIntrinsicCount = 0;
     _lastGlobalBASharedFocalScale = 1.0;
+    _lastGlobalBASharedFocalAspectScale = 1.0;
+    _lastGlobalBASharedPrincipalOffsetX = 0.0;
+    _lastGlobalBASharedPrincipalOffsetY = 0.0;
     _lastGlobalBASharedRadialK1 = 0.0;
     _lastGlobalBASharedRadialK2 = 0.0;
     _lastGlobalBASharedRadialK3 = 0.0;
@@ -346,6 +384,25 @@ void IncrementalSfm::resetForInitialPairTrial(const SfmReconstruction &baseRecon
     _lastGlobalBAObservationCount = 0;
     _lastGlobalBATotalSeconds = 0.0;
     _lastGlobalBABackendMessage.clear();
+    _lastGlobalBAAdaptiveCameraModelFittingEvaluated = false;
+    _lastGlobalBAAdaptiveCameraModelFittingApplied = false;
+    _lastGlobalBAIntrinsicParameterMask.fill(false);
+    _lastGlobalBAIntrinsicParameterReliability.fill(0.0);
+    _lastGlobalBAIntrinsicParameterIncrementalInformationScore.fill(0.0);
+    _lastGlobalBAIntrinsicParameterSensitivity.fill(0.0);
+    _lastGlobalBAAdaptiveCameraModel.clear();
+    _lastGlobalBAAdaptiveCameraModelReason.clear();
+    _lastGlobalBACameraModelGeometryStrength = 0.0;
+    _lastGlobalBACameraModelOpticalAxisConcentration = 0.0;
+    _lastGlobalBACameraModelMedianTriangulationAngle = 0.0;
+    _lastGlobalBACameraModelNormalizedRadiusP90 = 0.0;
+    _lastGlobalBACameraModelOccupiedPeripheralSectors = 0;
+    _lastGlobalBACameraModelObservationCount = 0;
+    _lastGlobalBACameraModelMultiViewTrackRatio = 0.0;
+    _lastGlobalBACameraModelObservationSupport = 0.0;
+    _lastGlobalBACameraModelPeripheralCoverage = 0.0;
+    _lastGlobalBACameraModelSectorCoverage = 0.0;
+    _lastGlobalBACameraModelImageAxisBalance = 0.0;
     _lastHierarchicalBAImageCount = 0;
     _lastHierarchicalBAPlannedBlocks = 0;
     _lastHierarchicalBAAppliedBlocks = 0;

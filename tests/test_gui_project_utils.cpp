@@ -5361,6 +5361,11 @@ TEST(CameraCalibrationDataTest, MarksExifConstrainedParametersAsReleased)
     const QJsonObject diagnostics{
         {QStringLiteral("adaptive_focal_seed_scale"), 0.75},
         {QStringLiteral("adaptive_camera_model_fitting"), true},
+        {QStringLiteral("adaptive_camera_model_fitting_applied"), true},
+        {QStringLiteral("ba_intrinsic_parameter_enabled"),
+         QJsonObject{{QStringLiteral("f"), true},
+                     {QStringLiteral("k1"), true},
+                     {QStringLiteral("k2"), true}}},
         {QStringLiteral("camera_self_calibration_status"), QStringLiteral("trusted_prior")},
         {QStringLiteral("image_metadata_focal_prior"),
          QJsonObject{{QStringLiteral("used"), true},
@@ -5383,6 +5388,46 @@ TEST(CameraCalibrationDataTest, MarksExifConstrainedParametersAsReleased)
     EXPECT_TRUE(optimized.contains(QStringLiteral("k2")));
     EXPECT_FALSE(optimized.contains(QStringLiteral("cx")));
     EXPECT_FALSE(optimized.contains(QStringLiteral("cy")));
+}
+
+TEST(CameraCalibrationDataTest, RequestedButFixedCalibrationIsNotReportedAsRefined)
+{
+    const QString imagePath = QStringLiteral("D:/images/fixed_001.jpg");
+    const QJsonObject metadata{
+        {QStringLiteral("images"), QJsonArray{
+            QJsonObject{{QStringLiteral("path"), imagePath},
+                        {QStringLiteral("width"), 4000},
+                        {QStringLiteral("height"), 3000}}}}};
+    const QJsonObject adjustedCamera{
+        {QStringLiteral("intrinsics_unit"), QStringLiteral("px")},
+        {QStringLiteral("fu"), 2985.0},
+        {QStringLiteral("fv"), 2985.0},
+        {QStringLiteral("cu"), 2000.0},
+        {QStringLiteral("cv"), 1500.0},
+        {QStringLiteral("C"), QJsonArray{0.0, 0.0, 0.0}},
+        {QStringLiteral("R"), QJsonArray{1.0, 0.0, 0.0,
+                                          0.0, 1.0, 0.0,
+                                          0.0, 0.0, 1.0}}};
+    const QJsonObject diagnostics{
+        {QStringLiteral("adaptive_camera_model_fitting"), true},
+        {QStringLiteral("adaptive_camera_model_fitting_requested"), true},
+        {QStringLiteral("adaptive_camera_model_fitting_scheduled"), false},
+        {QStringLiteral("adaptive_camera_model_fitting_effective"), false},
+        {QStringLiteral("adaptive_camera_model_fitting_applied"), false},
+        {QStringLiteral("camera_self_calibration_status"), QStringLiteral("trusted_prior")}};
+
+    const QJsonObject comparison =
+        xjw::gui::camera_calibration::buildCameraCalibrationComparison(
+            metadata,
+            QMap<QString, QJsonObject>{{imagePath, adjustedCamera}},
+            diagnostics)
+            .at(0)
+            .toObject();
+
+    EXPECT_EQ(comparison.value(QStringLiteral("adjustment_status")).toString(),
+              QStringLiteral("trusted_prior_fixed"));
+    EXPECT_FALSE(comparison.value(QStringLiteral("intrinsics_refined")).toBool());
+    EXPECT_TRUE(comparison.value(QStringLiteral("optimized_parameters")).toArray().isEmpty());
 }
 
 TEST(CameraCalibrationDialogTest, ProvidesInitialAndAdjustedPages)

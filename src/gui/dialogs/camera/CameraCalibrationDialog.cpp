@@ -225,6 +225,10 @@ QString adjustmentStatusLabel(const QString &status)
     {
         return QStringLiteral("可信先验固定，内参未释放");
     }
+    if (status == QStringLiteral("known_pose_fixed_calibration"))
+    {
+        return QStringLiteral("复用已知位姿与标定，内参未释放");
+    }
     if (status == QStringLiteral("not_run"))
     {
         return QStringLiteral("尚未运行空三，没有调整值");

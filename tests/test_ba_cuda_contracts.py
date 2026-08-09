@@ -37,20 +37,21 @@ class BaCudaContractsTest(unittest.TestCase):
         self.assertIn("options->baOptions.enableBackendQualityGate = true;", source)
         self.assertIn("options->baOptions.allowBackendFallback = true;", source)
 
-    def test_exif_focal_prior_does_not_release_radial_distortion(self):
+    def test_adaptive_camera_model_declares_full_model_then_filters_parameters(self):
         source = read_text(
             "src/core/aerial_triangulation/reconstruction/SfmAttemptRunner.cpp"
         )
 
-        self.assertIn(
-            "options->baOptions.refineSharedRadialDistortion = false;", source
-        )
-        self.assertIn("EXIF-only", source)
+        self.assertIn("options->adaptiveCameraModelFitting = true;", source)
+        self.assertIn("options->baOptions.refineSharedFocalAspectRatio = true;", source)
+        self.assertIn("options->baOptions.refineSharedPrincipalPoint = true;", source)
+        self.assertIn("options->baOptions.refineSharedRadialDistortion = true;", source)
 
-        pipeline = read_text(
-            "src/core/aerial_triangulation/workflow/AerialTriangulationPipeline.cpp"
+        coordinator = read_text(
+            "src/core/sfm/pipeline/SfmBundleAdjustCoordinator.cpp"
         )
-        self.assertIn("shouldRunAdaptiveCameraModelRefinement", pipeline)
+        self.assertIn("assessAdaptiveCameraModel", coordinator)
+        self.assertIn("applyAdaptiveCameraModel", coordinator)
 
     def test_bundle_adjust_service_records_requested_and_used_backend(self):
         source = read_text("src/gui/project/services/BundleAdjustService.cpp")

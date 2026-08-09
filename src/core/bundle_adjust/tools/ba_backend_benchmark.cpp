@@ -1,4 +1,5 @@
 #include "BaBenchmarkRealDataset.h"
+#include "BundleAdjustAdaptiveCameraModel.h"
 
 #include <algorithm>
 #include <array>
@@ -28,6 +29,19 @@ struct BenchmarkSettings
     bool refinePose = false;
     bool isolatedBackend = false;
     double loadSeconds = 0.0;
+    std::string cameraModel = "fixed";
+};
+
+struct CameraModelRunInfo
+{
+    std::string effectiveModel = "fixed";
+    bool assessmentValid = false;
+    int activeCameraCount = 0;
+    double assessmentSeconds = 0.0;
+    double policySeconds = 0.0;
+    xjw::BAIntrinsicParameterMask enabled{};
+    std::array<double, xjw::kBAIntrinsicParameterCount> reliability{};
+    std::string assessmentReason = "not_requested";
 };
 struct RealDatasetOptions
 {
@@ -148,6 +162,87 @@ bool parseBackend(const std::string &name, xjw::BABackend *backend)
     }
     return true;
 }
+
+void enableFullSharedCameraModel(xjw::BAOptions *options)
+{
+    options->refineSharedFocalLength = true;
+    options->refineSharedFocalAspectRatio = true;
+    options->refineSharedPrincipalPoint = true;
+    options->refineSharedRadialDistortion = true;
+    options->refineSharedHighOrderDistortion = true;
+}
+
+CameraModelRunInfo configureCameraModel(
+    const BenchmarkSettings &settings,
+    const std::vector<xjw::Camera> &cameras,
+    const std::vector<xjw::BATrack> &tracks,
+    xjw::BAOptions *options)
+{
+    CameraModelRunInfo info;
+    if (settings.cameraModel == "fixed")
+    {
+        return info;
+    }
+
+    enableFullSharedCameraModel(options);
+    if (settings.cameraModel == "full")
+    {
+        info.enabled.fill(true);
+        info.effectiveModel = xjw::adaptiveCameraModelName(info.enabled);
+        return info;
+    }
+
+    const auto policyStarted = std::chrono::steady_clock::now();
+    const auto assessmentStarted = std::chrono::steady_clock::now();
+    const xjw::BAAdaptiveCameraModelAssessment assessment =
+        xjw::assessAdaptiveCameraModel(cameras, tracks, options);
+    info.assessmentSeconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - assessmentStarted).count();
+    xjw::applyAdaptiveCameraModel(assessment, options);
+    info.policySeconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - policyStarted).count();
+    info.assessmentValid = assessment.valid;
+    info.activeCameraCount = assessment.activeCameraCount;
+    info.enabled = options->sharedIntrinsicParameterMask;
+    info.reliability = assessment.reliability;
+    info.effectiveModel = xjw::adaptiveCameraModelName(info.enabled);
+    info.assessmentReason = assessment.reason;
+    return info;
+}
+
+void appendCameraModelMetrics(std::ostream &stream,
+                              const BenchmarkSettings &settings,
+                              const CameraModelRunInfo &info,
+                              const xjw::BAResult &result,
+                              double apiWallSeconds)
+{
+    const bool modelApplied = settings.cameraModel != "fixed" &&
+                              result.solutionUsable &&
+                              !result.qualityGateRejected &&
+                              result.refinedIntrinsicCount > 0;
+    stream << ",camera_model_requested=" << settings.cameraModel
+           << ",camera_model_effective=" << info.effectiveModel
+           << ",camera_model_applied="
+           << (modelApplied ? "true" : "false")
+           << ",camera_model_assessment_valid="
+           << (info.assessmentValid ? "true" : "false")
+           << ",camera_model_assessment_seconds=" << info.assessmentSeconds
+           << ",camera_model_policy_seconds=" << info.policySeconds
+           << ",end_to_end_seconds=" << apiWallSeconds + info.policySeconds
+           << ",camera_model_assessment_reason="
+           << sanitizeField(info.assessmentReason)
+           << ",camera_model_active_cameras=" << info.activeCameraCount;
+    for (std::size_t index = 0; index < xjw::kBAIntrinsicParameterCount; ++index)
+    {
+        const auto parameter = static_cast<xjw::BAIntrinsicParameter>(index);
+        const char *parameterName = xjw::baIntrinsicParameterName(parameter);
+        stream << ",intrinsic_" << parameterName << "_enabled="
+               << (info.enabled[index] ? "true" : "false")
+               << ",intrinsic_" << parameterName << "_reliability="
+               << info.reliability[index];
+    }
+}
+
 void runCase(const std::string &name,
              xjw::BABackend backend,
              const xjw::ba_benchmark::BenchmarkDataset &dataset,
@@ -176,6 +271,9 @@ void runCase(const std::string &name,
         {
             options.fixedCameraIndices.push_back(0);
         }
+
+        const CameraModelRunInfo cameraModelInfo = configureCameraModel(
+            settings, cameras, tracks, &options);
 
         const auto started = std::chrono::steady_clock::now();
         const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(cameras, tracks, options);
@@ -216,8 +314,10 @@ void runCase(const std::string &name,
                   << ",seconds=" << apiWallSeconds
                   << ",load_seconds=" << settings.loadSeconds
                   << ",backend_reason=" << sanitizeField(result.backendSelectionReason)
-                  << ",backend_message=" << sanitizeField(result.backendMessage)
-                  << "\n" << std::flush;
+                  << ",backend_message=" << sanitizeField(result.backendMessage);
+        appendCameraModelMetrics(
+            std::cout, settings, cameraModelInfo, result, apiWallSeconds);
+        std::cout << "\n" << std::flush;
     }
 }
 int parseInteger(const std::string &value, const std::string &option, int minimum)
@@ -242,6 +342,7 @@ void printUsage(const char *program)
               << "  --threads N                           默认 32\n"
               << "  --repetitions N                       默认 1；第 1 轮标记为冷启动\n"
               << "  --refine-pose                         联合优化相机位姿\n"
+              << "  --camera-model fixed|full|adaptive    默认 fixed；控制共享内参自标定模型\n"
               << "  --max-dense-schur-cameras N           默认 200\n"
               << "  --max-sparse-schur-cameras N          默认 2000\n";
 }
@@ -283,6 +384,17 @@ RealDatasetOptions parseRealOptions(int argc, char **argv)
         else if (option == "--repetitions")
         {
             options.settings.repetitions = parseInteger(value(), option, 1);
+        }
+        else if (option == "--camera-model")
+        {
+            options.settings.cameraModel = value();
+            if (options.settings.cameraModel != "fixed" &&
+                options.settings.cameraModel != "full" &&
+                options.settings.cameraModel != "adaptive")
+            {
+                throw std::runtime_error(
+                    "--camera-model 必须是 fixed、full 或 adaptive");
+            }
         }
         else if (option == "--max-dense-schur-cameras")
         {
@@ -354,6 +466,7 @@ int main(int argc, char **argv)
                       << ",iterations=" << options.settings.iterations
                       << ",threads=" << options.settings.threads
                       << ",refine_pose=" << (options.settings.refinePose ? "true" : "false")
+                      << ",camera_model=" << options.settings.cameraModel
                       << ",max_dense_schur_cameras=" << options.settings.maxDenseSchurCameras
                       << ",max_sparse_schur_cameras=" << options.settings.maxSparseSchurCameras
                       << ",repetitions=" << options.settings.repetitions
@@ -388,6 +501,7 @@ int main(int argc, char **argv)
                   << ",iterations=" << settings.iterations
                   << ",threads=" << settings.threads
                   << ",refine_pose=" << (settings.refinePose ? "true" : "false")
+                  << ",camera_model=" << settings.cameraModel
                   << ",load_seconds=" << settings.loadSeconds << "\n";
         runRequestedBackends(backends, dataset, settings);
         return 0;

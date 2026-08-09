@@ -186,6 +186,7 @@ core/
 │   ├── BundleAdjust.h/cpp      # BA 公共接口、独立行星激光 range shot、自动后端选择和状态回传
 │   ├── BundleAdjustCeres.h/cpp # Ceres CPU/CUDA 后端，联合普通 track、激光测距/落点及其它物方约束
 │   ├── BundleAdjustCeresPlanning.h/cpp # Dense/Sparse/Iterative Schur 规划和 CUDA 显存预算
+│   ├── BundleAdjustAdaptiveCameraModel.h/cpp # 基于粗解几何、像面覆盖和约化信息矩阵的逐内参可靠性策略
 │   ├── BundleAdjustProjection.h/cpp # 与 Camera 一致的模板投影模型和共享相机快照转换
 │   ├── BundleAdjustValidation.h/cpp # 输入、标定组和 gauge 校验/规范化
 │   ├── BundleAdjustQuality.h/cpp # 跨后端正深度、离群点统计和物方约束质量门控
@@ -466,6 +467,14 @@ line-scan 拒绝；`tests/test_planetary_laser_preview.cpp` 覆盖 GUI 预览和
 三维点按唯一所有权写回；`HierarchicalBaBlockSolver` 负责单块问题装配、gauge 固定与质量门控。
 周期完整全局 BA 由该块级稳定化替代，最终只执行一次共享内参与块间接缝精化。
 该调度只依赖共视网络和计算规模，不按航测、转台、相机编号或轨迹形状推断场景。
+最终共享内参 BA 同样不硬分类“对地/环拍”：`BundleAdjustAdaptiveCameraModel` 在粗解上对
+`f/aspect/cx/cy/k1/k2/k3/p1/p2` 分别计算结构消元后的增量信息评分、典型扰动敏感度和几何/像面覆盖证据，
+再生成 Ceres `SubsetManifold` 掩码。弱平行块保留低阶模型，汇聚、多高度且外围覆盖充分时才逐项扩展；
+请求、调度、有效和实际写回状态连同逐参数可靠度、门控证据均进入 SfM 诊断。完整已知位姿路径固定
+输入标定；多轮重三角化/BA 对已应用状态做累计，后续 no-op 不会把前轮有效自标定误判成失败。多起点与
+迭代轮次可沿用上一轮内参作为数值初值，但所有相对边界和弱先验都锚定到 `IncrementalSfm::run()`
+生命周期内按影像 ID 保存的首次有效标定参考，周期性、最终和重试全局 BA 不会逐调用复合漂移；单次迭代的多起点
+只在首轮执行，局部/分块固定内参子问题不携带全局位置式参考，且不允许 Legacy 做不等价模型回退。
 
 `bundle_adjust` 的 `native_cuda` 后端已接入统一 BA 接口和质量门控。当前实现把有效 Camera/BATrack
 观测扁平化为 CUDA 工作集，在固定相机投影下优化三维点块；能力表明确标记它不更新相机和共享焦距，

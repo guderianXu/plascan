@@ -6,7 +6,7 @@
 //
 // 算法概述：
 //   - Legacy CPU：采用点、相机交替优化，高斯牛顿/LM 与有限差分雅可比
-//   - Ceres CPU/CUDA：联合优化三维点、相机位姿及可选标定组共享焦距
+//   - Ceres CPU/CUDA：联合优化三维点、相机位姿及可选标定组共享内参
 //   - Native CUDA：显式固定相机的三维点块优化，不冒充完整联合 BA
 //   - 所有后端统一执行正深度、离群点、约束质量和结果可写回检查
 // ============================================================
@@ -99,6 +99,32 @@ enum class BAGaugePolicy
     RequireExplicitGauge,
     CallerManaged,
 };
+
+/**
+ * @brief 共享相机模型参数在 Ceres 9 维参数块中的稳定索引。
+ *
+ * 顺序必须与 BundleAdjustProjection::projectWithPoseDeltaAndSharedIntrinsics
+ * 保持一致。显式枚举让自适应相机模型可以逐参数冻结，而不是把所有高阶
+ * Brown-Conrady 系数作为一个不可分割的开关。
+ */
+enum class BAIntrinsicParameter : std::uint8_t
+{
+    FocalLength = 0,
+    FocalAspectRatio,
+    PrincipalPointX,
+    PrincipalPointY,
+    RadialK1,
+    RadialK2,
+    RadialK3,
+    TangentialP1,
+    TangentialP2,
+    Count,
+};
+
+inline constexpr std::size_t kBAIntrinsicParameterCount =
+    static_cast<std::size_t>(BAIntrinsicParameter::Count);
+using BAIntrinsicParameterMask =
+    std::array<bool, kBAIntrinsicParameterCount>;
 
 /**
  * @brief BA 可用问题规模摘要，用于自动后端选择和日志诊断。
@@ -283,6 +309,11 @@ struct BAOptions
     /// 是否在径向畸变自标定中继续释放 k2/k3/p1/p2。关闭时仅优化 k1，
     /// 适用于近乎平行的对地航摄块，避免高阶畸变与场景穹顶互相补偿。
     bool refineSharedHighOrderDistortion = true;
+    /// 是否使用逐参数共享内参掩码。false 保持上述兼容开关的旧行为；true 时
+    /// 兼容开关定义允许的最大模型，本掩码再冻结可靠性不足的单个参数。
+    bool useSharedIntrinsicParameterMask = false;
+    BAIntrinsicParameterMask sharedIntrinsicParameterMask{{
+        true, true, true, true, true, true, true, true, true}};
     /// 共享焦距相对输入焦距的最小尺度。
     double minSharedFocalScale = 0.5;
     /// 共享焦距相对输入焦距的最大尺度。
@@ -312,9 +343,14 @@ struct BAOptions
     /// 每轮外层 BA 中共享焦距优化的最大内部迭代次数。
     int maxSharedFocalIterations = 6;
     /// 每台相机所属的内参标定组。为空表示所有相机共享组 0；非空时长度必须
-    /// 与 cameras 相同，同组相机共享一个焦距参数，不同组独立自标定。
+    /// 与 cameras 相同，同组相机共享一个内参参数块，不同组独立自标定。
     std::vector<int> cameraCalibrationGroupIds;
-    /// 是否先固定焦距稳定相机/三维点，再释放各标定组焦距。
+    /// 共享内参的稳定参考相机。为空时以本次输入 cameras 为参考；非空时必须与
+    /// cameras 等长且 reference[i] 对应 cameras[i] 的同一像素坐标系。多轮 BA 可
+    /// 更新求解初值，同时继续相对同一参考设置焦距/宽高比范围、主点偏移和 Ceres 先验；
+    /// Brown-Conrady 畸变硬边界仍是绝对范围。
+    std::vector<Camera> sharedIntrinsicReferenceCameras;
+    /// 是否先固定共享内参稳定相机/三维点，再释放各标定组内参。
     bool stageSharedFocalRefinement = true;
     /// 分阶段自标定中用于固定焦距预热的迭代比例。
     double sharedFocalWarmupFraction = 0.35;
@@ -440,6 +476,44 @@ struct BARefinedPoint
     int iterations = 0;      ///< 实际迭代次数
 };
 
+/// 同时遵守兼容开关与逐参数掩码，作为所有 BA 后端和调度层的统一生效判定。
+inline bool sharedIntrinsicParameterEnabled(
+    const BAOptions &options,
+    BAIntrinsicParameter parameter)
+{
+    bool enabled = false;
+    switch (parameter)
+    {
+    case BAIntrinsicParameter::FocalLength:
+        enabled = options.refineSharedFocalLength;
+        break;
+    case BAIntrinsicParameter::FocalAspectRatio:
+        enabled = options.refineSharedFocalAspectRatio;
+        break;
+    case BAIntrinsicParameter::PrincipalPointX:
+    case BAIntrinsicParameter::PrincipalPointY:
+        enabled = options.refineSharedPrincipalPoint;
+        break;
+    case BAIntrinsicParameter::RadialK1:
+        enabled = options.refineSharedRadialDistortion;
+        break;
+    case BAIntrinsicParameter::RadialK2:
+    case BAIntrinsicParameter::RadialK3:
+    case BAIntrinsicParameter::TangentialP1:
+    case BAIntrinsicParameter::TangentialP2:
+        enabled = options.refineSharedRadialDistortion &&
+                  options.refineSharedHighOrderDistortion;
+        break;
+    case BAIntrinsicParameter::Count:
+        return false;
+    }
+
+    const std::size_t index = static_cast<std::size_t>(parameter);
+    return enabled &&
+           (!options.useSharedIntrinsicParameterMask ||
+            options.sharedIntrinsicParameterMask[index]);
+}
+
 /**
  * @brief 独立行星激光测高 shot 的优化和质量统计结果。
  *
@@ -511,13 +585,13 @@ struct BAResult
     double meanRmsBefore = 0.0; ///< 优化前所有轩迹重投影 RMS 的均値
     double meanRmsAfter = 0.0;  ///< 优化后所有轨迹重投影 RMS 的均値
     int refinedCameraCount = 0; ///< 最后一轮中实际被更新的相机数量
-    int refinedIntrinsicCount = 0;        ///< 发生共享焦距更新的相机数量
-    int refinedCalibrationGroupCount = 0; ///< 实际参与焦距优化的标定组数量
+    int refinedIntrinsicCount = 0;        ///< 至少一项共享内参发生更新的相机数量
+    int refinedCalibrationGroupCount = 0; ///< 实际参与共享内参优化的标定组数量
     int selfCalibrationStagesRun = 0;     ///< 本次自标定实际执行的求解阶段数
-    double refinedSharedFocalScale = 1.0; ///< 优化后焦距相对输入焦距的平均尺度
-    double refinedSharedFocalAspectScale = 1.0; ///< 优化后 fy/fx 相对输入比例的平均倍率
-    double refinedSharedPrincipalOffsetX = 0.0; ///< 优化后的标定组平均主点 X 偏移（像素）
-    double refinedSharedPrincipalOffsetY = 0.0; ///< 优化后的标定组平均主点 Y 偏移（像素）
+    double refinedSharedFocalScale = 1.0; ///< 优化后焦距相对稳定参考焦距的平均尺度
+    double refinedSharedFocalAspectScale = 1.0; ///< 优化后 fy/fx 相对稳定参考比例的平均倍率
+    double refinedSharedPrincipalOffsetX = 0.0; ///< 相对稳定参考的标定组平均主点 X 偏移（像素）
+    double refinedSharedPrincipalOffsetY = 0.0; ///< 相对稳定参考的标定组平均主点 Y 偏移（像素）
     double refinedSharedRadialK1 = 0.0; ///< 优化后的标定组平均 Brown-Conrady k1。
     double refinedSharedRadialK2 = 0.0; ///< 优化后的标定组平均 Brown-Conrady k2。
     double refinedSharedRadialK3 = 0.0; ///< 优化后的标定组平均 Brown-Conrady k3。

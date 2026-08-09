@@ -331,6 +331,98 @@ TEST(BundleAdjustValidationTest, RejectsNonPositiveFiniteDifferenceStep)
     EXPECT_NE(result.backendMessage.find("有限差分"), std::string::npos);
 }
 
+TEST(BundleAdjustValidationTest, IgnoresLegacyFlagsDisabledByIntrinsicMask)
+{
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-1.0, 0.0, 0.0),
+        makeCamera(1.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> point{{0.0, 0.0, 5.0}};
+    const std::vector<xjw::BATrack> tracks{
+        makeTrack(cameras, point, point)};
+    xjw::BAOptions options;
+    options.refineSharedFocalLength = false;
+    options.refineSharedRadialDistortion = true;
+    options.useSharedIntrinsicParameterMask = true;
+    options.sharedIntrinsicParameterMask.fill(false);
+    xjw::BAOptions normalized;
+
+    const xjw::detail::BundleAdjustValidationResult validation =
+        xjw::detail::validateAndNormalizeBundleAdjustOptions(
+            cameras, tracks, options, &normalized);
+
+    EXPECT_TRUE(validation.ok) << validation.message;
+}
+
+TEST(BundleAdjustValidationTest, RejectsMismatchedStableIntrinsicReferences)
+{
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-1.0, 0.0, 0.0),
+        makeCamera(1.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> point{{0.0, 0.0, 5.0}};
+    const std::vector<xjw::BATrack> tracks{
+        makeTrack(cameras, point, point)};
+    xjw::BAOptions options;
+    options.refineSharedFocalLength = true;
+    options.sharedIntrinsicReferenceCameras = {cameras.front()};
+    xjw::BAOptions normalized;
+
+    const xjw::detail::BundleAdjustValidationResult validation =
+        xjw::detail::validateAndNormalizeBundleAdjustOptions(
+            cameras, tracks, options, &normalized);
+
+    EXPECT_FALSE(validation.ok);
+    EXPECT_EQ(validation.status, xjw::BASolveStatus::InvalidInput);
+    EXPECT_NE(validation.message.find("参考相机数量"), std::string::npos);
+}
+
+TEST(BundleAdjustValidationTest,
+     RejectsMismatchedCalibrationGroupsWhenIntrinsicsAreFixed)
+{
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-1.0, 0.0, 0.0),
+        makeCamera(1.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> point{{0.0, 0.0, 5.0}};
+    const std::vector<xjw::BATrack> tracks{
+        makeTrack(cameras, point, point)};
+    xjw::BAOptions options;
+    options.cameraCalibrationGroupIds = {0};
+    xjw::BAOptions normalized;
+
+    const xjw::detail::BundleAdjustValidationResult validation =
+        xjw::detail::validateAndNormalizeBundleAdjustOptions(
+            cameras, tracks, options, &normalized);
+
+    EXPECT_FALSE(validation.ok);
+    EXPECT_EQ(validation.status, xjw::BASolveStatus::InvalidInput);
+    EXPECT_NE(validation.message.find("标定分组数量"), std::string::npos);
+}
+
+TEST(BundleAdjustValidationTest,
+     RejectsMismatchedStableReferencesWhenIntrinsicsAreFixed)
+{
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-1.0, 0.0, 0.0),
+        makeCamera(1.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> point{{0.0, 0.0, 5.0}};
+    const std::vector<xjw::BATrack> tracks{
+        makeTrack(cameras, point, point)};
+    xjw::BAOptions options;
+    options.sharedIntrinsicReferenceCameras = {cameras.front()};
+    xjw::BAOptions normalized;
+
+    const xjw::detail::BundleAdjustValidationResult validation =
+        xjw::detail::validateAndNormalizeBundleAdjustOptions(
+            cameras, tracks, options, &normalized);
+
+    EXPECT_FALSE(validation.ok);
+    EXPECT_EQ(validation.status, xjw::BASolveStatus::InvalidInput);
+    EXPECT_NE(validation.message.find("参考相机数量"), std::string::npos);
+}
+
 TEST(BundleAdjustQualityGateTest, ConstraintStatsExcludeRejectedTracksFromBothSides)
 {
     const std::vector<xjw::Camera> cameras{

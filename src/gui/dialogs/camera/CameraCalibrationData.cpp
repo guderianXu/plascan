@@ -13,6 +13,7 @@
 #include <QSize>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace xjw::gui::camera_calibration
@@ -235,8 +236,17 @@ QJsonArray buildCameraCalibrationComparison(
         .toBool(adjustmentStatus == QStringLiteral("refined"));
     const bool requiresReview = sfmDiagnostics
         .value(QStringLiteral("camera_self_calibration_requires_review")).toBool(false);
-    const bool adaptiveFitting = sfmDiagnostics
+    const bool adaptiveFittingRequested = sfmDiagnostics
         .value(QStringLiteral("adaptive_camera_model_fitting")).toBool(false);
+    const bool hasExplicitAdaptiveApplication = sfmDiagnostics.contains(
+        QStringLiteral("adaptive_camera_model_fitting_applied"));
+    const bool adaptiveFittingApplied = hasExplicitAdaptiveApplication
+        ? sfmDiagnostics.value(
+              QStringLiteral("adaptive_camera_model_fitting_applied")).toBool(false)
+        : adaptiveFittingRequested &&
+              (refinementAccepted || adjustmentStatus == QStringLiteral("trusted_prior"));
+    const QJsonObject enabledParameters = sfmDiagnostics
+        .value(QStringLiteral("ba_intrinsic_parameter_enabled")).toObject();
     const QJsonObject metadataPrior = sfmDiagnostics
         .value(QStringLiteral("image_metadata_focal_prior")).toObject();
     const QString priorModel = metadataPrior.value(QStringLiteral("model")).toString();
@@ -255,19 +265,37 @@ QJsonArray buildCameraCalibrationComparison(
             : automaticInitialCalibration(imageSize, focalScale);
         const QJsonObject adjusted = normalizedCalibration(it.value(), imageSize);
         QStringList optimized;
-        if (adaptiveFitting &&
-            (refinementAccepted || adjustmentStatus == QStringLiteral("trusted_prior")))
+        if (adaptiveFittingApplied)
         {
-            optimized = {QStringLiteral("f"), QStringLiteral("fu"), QStringLiteral("fv")};
-            if (usedMetadataPrior)
+            if (!enabledParameters.isEmpty())
             {
-                optimized.append(QStringLiteral("k1"));
-                optimized.append(QStringLiteral("k2"));
+                static const std::array<const char *, 9> parameterNames{{
+                    "f", "aspect", "cx", "cy", "k1", "k2", "k3", "p1", "p2",
+                }};
+                for (const char *parameterName : parameterNames)
+                {
+                    const QString name = QString::fromLatin1(parameterName);
+                    if (enabledParameters.value(name).toBool(false))
+                    {
+                        optimized.append(name);
+                    }
+                }
+            }
+            else
+            {
+                // 兼容旧报告：旧格式只记录是否运行，没有逐参数掩码。
+                optimized = {QStringLiteral("f"), QStringLiteral("fu"), QStringLiteral("fv")};
+                if (usedMetadataPrior)
+                {
+                    optimized.append(QStringLiteral("k1"));
+                    optimized.append(QStringLiteral("k2"));
+                }
             }
         }
         const QString effectiveStatus = adjustmentStatus == QStringLiteral("trusted_prior")
-            ? (adaptiveFitting ? QStringLiteral("trusted_prior_limited_refinement")
-                               : QStringLiteral("trusted_prior_fixed"))
+            ? (adaptiveFittingApplied
+                   ? QStringLiteral("trusted_prior_limited_refinement")
+                   : QStringLiteral("trusted_prior_fixed"))
             : adjustmentStatus;
 
         QJsonObject comparison{

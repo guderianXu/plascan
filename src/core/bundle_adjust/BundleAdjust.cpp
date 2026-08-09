@@ -908,12 +908,6 @@ double averageSharedFocalScale(const std::vector<Camera> &cameras,
             sum += camera.focalX() / reference.focalX();
             ++count;
         }
-        if (std::isfinite(camera.focalY()) && std::isfinite(reference.focalY()) &&
-            std::abs(reference.focalY()) > 1e-12)
-        {
-            sum += camera.focalY() / reference.focalY();
-            ++count;
-        }
     }
     return count > 0 ? sum / static_cast<double>(count) : 1.0;
 }
@@ -1011,7 +1005,9 @@ SharedFocalOptimizationResult optimizeSharedFocalScale(std::vector<Camera> *came
                                                        const BAOptions &opt)
 {
     SharedFocalOptimizationResult result;
-    if (!cameras || !points || !opt.refineSharedFocalLength ||
+    if (!cameras || !points ||
+        !sharedIntrinsicParameterEnabled(
+            opt, BAIntrinsicParameter::FocalLength) ||
         cameras->size() < 2 || tracks.empty())
     {
         return result;
@@ -1022,9 +1018,16 @@ SharedFocalOptimizationResult optimizeSharedFocalScale(std::vector<Camera> *came
     const double maxStepScale = std::max(1.01, opt.maxSharedFocalStepScale);
     const double maxLogStep = std::log(maxStepScale);
 
-    double currentScale = std::clamp(averageSharedFocalScale(*cameras, referenceCameras),
-                                     minScale,
-                                     maxScale);
+    const double inputScale =
+        averageSharedFocalScale(*cameras, referenceCameras);
+    double currentScale = std::clamp(inputScale, minScale, maxScale);
+    if (std::abs(currentScale - inputScale) > 1.0e-12)
+    {
+        applySharedFocalScale(
+            cameras,
+            currentScale / std::max(inputScale, 1.0e-12));
+        result.updated = true;
+    }
     double currentCost =
         computeSharedFocalAcceptanceCost(*cameras, tracks, *points, opt.huberDelta);
     if (!std::isfinite(currentCost))
@@ -1162,6 +1165,49 @@ int calibrationGroupCount(const BAOptions &options, std::size_t cameraCount)
     std::sort(groups.begin(), groups.end());
     groups.erase(std::unique(groups.begin(), groups.end()), groups.end());
     return static_cast<int>(groups.size());
+}
+
+std::string legacyUnsupportedConfigurationReason(
+    const BAOptions &options,
+    std::size_t cameraCount)
+{
+    if (options.enableLaserRangeConstraints)
+    {
+        return "legacy_cpu 不支持行星激光测距约束";
+    }
+    if (options.cameraPlaneConstraint.enabled)
+    {
+        return "legacy_cpu 不支持相机中心平面约束";
+    }
+
+    const bool extendedSharedIntrinsics =
+        sharedIntrinsicParameterEnabled(
+            options, BAIntrinsicParameter::FocalAspectRatio) ||
+        sharedIntrinsicParameterEnabled(
+            options, BAIntrinsicParameter::PrincipalPointX) ||
+        sharedIntrinsicParameterEnabled(
+            options, BAIntrinsicParameter::PrincipalPointY) ||
+        sharedIntrinsicParameterEnabled(
+            options, BAIntrinsicParameter::RadialK1) ||
+        sharedIntrinsicParameterEnabled(
+            options, BAIntrinsicParameter::RadialK2) ||
+        sharedIntrinsicParameterEnabled(
+            options, BAIntrinsicParameter::RadialK3) ||
+        sharedIntrinsicParameterEnabled(
+            options, BAIntrinsicParameter::TangentialP1) ||
+        sharedIntrinsicParameterEnabled(
+            options, BAIntrinsicParameter::TangentialP2);
+    if (extendedSharedIntrinsics)
+    {
+        return "legacy_cpu 不支持扩展共享内参优化";
+    }
+    if (sharedIntrinsicParameterEnabled(
+            options, BAIntrinsicParameter::FocalLength) &&
+        calibrationGroupCount(options, cameraCount) > 1)
+    {
+        return "legacy_cpu 不支持多标定组共享焦距优化";
+    }
+    return {};
 }
 
 void updateDerivedResultStats(BAResult &result)
@@ -1323,6 +1369,10 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
     result.ceresLinearSolverName = "none";
     // 将相机列表拷贝到结果中，在优化过程中来回修改
     result.refinedCameras = cameras;
+    const std::vector<Camera> &intrinsicReferenceCameras =
+        options.sharedIntrinsicReferenceCameras.empty()
+            ? cameras
+            : options.sharedIntrinsicReferenceCameras;
     result.points.resize(tracks.size());
     bool callbackAborted = false;
 
@@ -1456,11 +1506,12 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
 
         // 阶段二补充：无相机参数空三可只释放所有影像共享的焦距尺度。
         // 这里不优化主点/畸变，避免转台或弱基线数据把几何误差吸收到过多内参自由度里。
-        if (options.refineSharedFocalLength)
+        if (sharedIntrinsicParameterEnabled(
+                options, BAIntrinsicParameter::FocalLength))
         {
             const SharedFocalOptimizationResult focalResult =
                 optimizeSharedFocalScale(&result.refinedCameras,
-                                         cameras,
+                                         intrinsicReferenceCameras,
                                          tracks,
                                          &result.points,
                                          options);
@@ -1551,14 +1602,19 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
         }
     }
 
-    result.refinedSharedFocalScale = averageSharedFocalScale(result.refinedCameras, cameras);
-    if (options.refineSharedFocalLength &&
-        std::abs(result.refinedSharedFocalScale - 1.0) > 1e-6 &&
+    result.refinedSharedFocalScale = averageSharedFocalScale(
+        result.refinedCameras, intrinsicReferenceCameras);
+    const double focalScaleFromInput = averageSharedFocalScale(
+        result.refinedCameras, cameras);
+    const bool sharedFocalEnabled = sharedIntrinsicParameterEnabled(
+        options, BAIntrinsicParameter::FocalLength);
+    if (sharedFocalEnabled &&
+        std::abs(focalScaleFromInput - 1.0) > 1e-6 &&
         result.refinedIntrinsicCount == 0)
     {
         result.refinedIntrinsicCount = static_cast<int>(result.refinedCameras.size());
     }
-    if (options.refineSharedFocalLength)
+    if (sharedFocalEnabled)
     {
         result.refinedCalibrationGroupCount = 1;
         result.selfCalibrationStagesRun = 1;
@@ -1671,10 +1727,25 @@ BABackendDecision BundleAdjust::decideBackendForProblem(const BAProblemStats &st
     {
         return {BABackend::CeresCpu, "camera_plane_constraint_requires_ceres"};
     }
+    const bool refineSharedFocal = sharedIntrinsicParameterEnabled(
+        options, BAIntrinsicParameter::FocalLength);
     const bool refineExtendedIntrinsics =
-        options.refineSharedFocalAspectRatio ||
-        options.refineSharedPrincipalPoint ||
-        options.refineSharedRadialDistortion;
+        sharedIntrinsicParameterEnabled(
+            options, BAIntrinsicParameter::FocalAspectRatio) ||
+        sharedIntrinsicParameterEnabled(
+            options, BAIntrinsicParameter::PrincipalPointX) ||
+        sharedIntrinsicParameterEnabled(
+            options, BAIntrinsicParameter::PrincipalPointY) ||
+        sharedIntrinsicParameterEnabled(
+            options, BAIntrinsicParameter::RadialK1) ||
+        sharedIntrinsicParameterEnabled(
+            options, BAIntrinsicParameter::RadialK2) ||
+        sharedIntrinsicParameterEnabled(
+            options, BAIntrinsicParameter::RadialK3) ||
+        sharedIntrinsicParameterEnabled(
+            options, BAIntrinsicParameter::TangentialP1) ||
+        sharedIntrinsicParameterEnabled(
+            options, BAIntrinsicParameter::TangentialP2);
     if (refineExtendedIntrinsics)
     {
         if (options.refineCameraPose &&
@@ -1690,6 +1761,22 @@ BABackendDecision BundleAdjust::decideBackendForProblem(const BAProblemStats &st
             return {BABackend::CeresCpu, "joint_shared_intrinsics_requires_ceres"};
         }
     }
+    if (refineSharedFocal)
+    {
+        // 共享焦距需要和相机、三维点放在同一个非线性问题中，并使用稳定参考先验。
+        if (options.refineCameraPose &&
+            isBackendAvailable(BABackend::CeresCuda) &&
+            stats.cameraCount >= std::max(1, options.minCeresCudaCameras) &&
+            stats.observationCount >= std::max(1, options.minCeresCudaObservations))
+        {
+            return {BABackend::CeresCuda,
+                    "large_joint_shared_focal_uses_ceres_cuda"};
+        }
+        if (isBackendAvailable(BABackend::CeresCpu))
+        {
+            return {BABackend::CeresCpu, "joint_shared_focal_requires_ceres"};
+        }
+    }
     if (!options.refineCameraPose)
     {
         return {BABackend::LegacyCpu, "point_only_prefers_legacy_cpu"};
@@ -1699,13 +1786,6 @@ BABackendDecision BundleAdjust::decideBackendForProblem(const BAProblemStats &st
         stats.observationCount >= std::max(1, options.minCeresCudaObservations))
     {
         return {BABackend::CeresCuda, "ceres_cuda_problem_size"};
-    }
-    if (options.refineSharedFocalLength &&
-        isBackendAvailable(BABackend::CeresCpu))
-    {
-        // 共享焦距必须和相机、三维点放在同一个非线性问题中求解。
-        // 即使问题较小，也优先使用联合 Ceres，而不是退回 Legacy 分块交替更新。
-        return {BABackend::CeresCpu, "joint_shared_focal_requires_ceres"};
     }
     if (isBackendAvailable(BABackend::CeresCpu) &&
         stats.observationCount >= std::max(1, options.minCeresCpuObservations))
@@ -1745,10 +1825,20 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
         return result;
     }
     const BAOptions &options = normalizedOptions;
+    const std::string legacyDirectUnsupportedReason =
+        legacyUnsupportedConfigurationReason(options, cameras.size());
+    std::string legacyFallbackUnsupportedReason =
+        legacyDirectUnsupportedReason;
+    if (legacyFallbackUnsupportedReason.empty() &&
+        sharedIntrinsicParameterEnabled(
+            options, BAIntrinsicParameter::FocalLength))
+    {
+        legacyFallbackUnsupportedReason =
+            "legacy_cpu 不支持联合共享焦距的稳定参考先验语义";
+    }
 
     auto runLegacy = [&](const std::string &fallbackMessage) {
-        if (options.cameraPlaneConstraint.enabled ||
-            options.enableLaserRangeConstraints)
+        if (!legacyFallbackUnsupportedReason.empty())
         {
             BAResult result;
             result.requestedBackend = options.backend;
@@ -1756,11 +1846,9 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
             result.solveStatus = BASolveStatus::UnsupportedConfiguration;
             result.solutionUsable = false;
             result.backendFallback = options.backend != BABackend::LegacyCpu;
-            result.backendMessage =
-                fallbackMessage +
-                (options.enableLaserRangeConstraints
-                     ? "；legacy_cpu 不支持行星激光测距约束，未执行无约束回退"
-                     : "；legacy_cpu 不支持相机中心平面约束，未执行无约束回退");
+            result.backendMessage = fallbackMessage + "；" +
+                                    legacyFallbackUnsupportedReason +
+                                    "，未执行不等价回退";
             result.backendSelectionReason = fallbackMessage;
             result.totalTracks = static_cast<int>(tracks.size());
             result.observationCount = summarizeProblem(cameras, tracks).observationCount;
@@ -1786,6 +1874,14 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
         {
             return false;
         }
+        for (std::size_t index = 0; index < kBAIntrinsicParameterCount; ++index)
+        {
+            if (sharedIntrinsicParameterEnabled(
+                    options, static_cast<BAIntrinsicParameter>(index)))
+            {
+                return false;
+            }
+        }
         const BAProblemStats stats = summarizeProblem(cameras, tracks);
         return stats.observationCount > std::max(1, options.maxCeresPointOnlyObservations);
     };
@@ -1804,6 +1900,26 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
 
         if (selectedOptions.backend == BABackend::LegacyCpu)
         {
+            if (!legacyDirectUnsupportedReason.empty())
+            {
+                BAResult result;
+                result.requestedBackend = BABackend::Auto;
+                result.usedBackend = BABackend::LegacyCpu;
+                result.solveStatus = BASolveStatus::UnsupportedConfiguration;
+                result.solutionUsable = false;
+                result.backendFallback = false;
+                result.backendSelectionReason =
+                    "自动选择 legacy_cpu: " + decision.reason;
+                result.backendMessage = result.backendSelectionReason +
+                                        "；" +
+                                        legacyDirectUnsupportedReason;
+                result.totalTracks = static_cast<int>(tracks.size());
+                result.observationCount = stats.observationCount;
+                result.refinedCameras = cameras;
+                result.points.resize(tracks.size());
+                updateDerivedResultStats(result);
+                return result;
+            }
             BAResult result = optimizePointsLegacyImpl(cameras, tracks, selectedOptions);
             result.requestedBackend = BABackend::Auto;
             result.usedBackend = BABackend::LegacyCpu;
@@ -1826,8 +1942,7 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
         if (!rejectCandidate &&
             options.enableBackendQualityGate &&
             options.compareAutoBackendWithLegacy &&
-            !options.cameraPlaneConstraint.enabled &&
-            !options.enableLaserRangeConstraints)
+            legacyFallbackUnsupportedReason.empty())
         {
             BAOptions legacyOptions = options;
             legacyOptions.backend = BABackend::LegacyCpu;
@@ -1842,7 +1957,7 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
 
         if (rejectCandidate)
         {
-            if (options.enableLaserRangeConstraints)
+            if (!legacyFallbackUnsupportedReason.empty())
             {
                 candidate.qualityGateRejected = true;
                 candidate.qualityGateMessage = qualityMessage;
@@ -1855,7 +1970,9 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
                 candidate.backendFallback = false;
                 candidate.backendSelectionReason =
                     "自动候选 " + selectedName +
-                    " 被质量门控拒绝；行星激光测距没有兼容的 legacy 回退";
+                    " 被质量门控拒绝；" +
+                    legacyFallbackUnsupportedReason +
+                    "，没有兼容的 legacy 回退";
                 candidate.backendMessage = candidate.backendSelectionReason +
                                            "；" + qualityMessage;
                 return candidate;
@@ -1903,22 +2020,10 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
 
     if (options.backend == BABackend::LegacyCpu)
     {
-        const bool requiresCeresFeatures =
-            options.refineSharedFocalAspectRatio ||
-            options.refineSharedPrincipalPoint ||
-            options.refineSharedRadialDistortion ||
-            options.cameraPlaneConstraint.enabled ||
-            options.enableLaserRangeConstraints ||
-            (options.refineSharedFocalLength &&
-             calibrationGroupCount(options, cameras.size()) > 1);
-        if (requiresCeresFeatures)
+        if (!legacyDirectUnsupportedReason.empty())
         {
             const std::string message =
-                options.enableLaserRangeConstraints
-                    ? "legacy_cpu 不支持行星激光测距约束，"
-                    : options.cameraPlaneConstraint.enabled
-                          ? "legacy_cpu 不支持相机中心平面约束，"
-                          : "legacy_cpu 不支持请求的联合共享内参优化，";
+                legacyDirectUnsupportedReason + "，";
             if (detail::isCeresBackendCompiled() &&
                 options.allowBackendFallback)
             {
@@ -1961,12 +2066,27 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
         const BABackendCapabilities capabilities = backendCapabilities(BABackend::NativeCuda);
         const bool unsupportedConfiguration =
             (options.refineCameraPose && !capabilities.refinesCameraPose) ||
-            (options.refineSharedFocalLength && !capabilities.refinesSharedFocalLength) ||
-            (options.refineSharedFocalAspectRatio &&
+            (sharedIntrinsicParameterEnabled(
+                 options, BAIntrinsicParameter::FocalLength) &&
+             !capabilities.refinesSharedFocalLength) ||
+            (sharedIntrinsicParameterEnabled(
+                 options, BAIntrinsicParameter::FocalAspectRatio) &&
              !capabilities.refinesSharedFocalAspectRatio) ||
-            (options.refineSharedPrincipalPoint &&
+            ((sharedIntrinsicParameterEnabled(
+                  options, BAIntrinsicParameter::PrincipalPointX) ||
+              sharedIntrinsicParameterEnabled(
+                  options, BAIntrinsicParameter::PrincipalPointY)) &&
              !capabilities.refinesSharedPrincipalPoint) ||
-            (options.refineSharedRadialDistortion &&
+            ((sharedIntrinsicParameterEnabled(
+                  options, BAIntrinsicParameter::RadialK1) ||
+              sharedIntrinsicParameterEnabled(
+                  options, BAIntrinsicParameter::RadialK2) ||
+              sharedIntrinsicParameterEnabled(
+                  options, BAIntrinsicParameter::RadialK3) ||
+              sharedIntrinsicParameterEnabled(
+                  options, BAIntrinsicParameter::TangentialP1) ||
+              sharedIntrinsicParameterEnabled(
+                  options, BAIntrinsicParameter::TangentialP2)) &&
              !capabilities.refinesSharedRadialDistortion) ||
              ((options.enableLaserPlaneConstraints ||
                options.enableControlPointConstraints ||

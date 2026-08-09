@@ -386,6 +386,23 @@ target_include_directories(test_bundle_adjust_shared_focal PRIVATE
 gtest_discover_tests(test_bundle_adjust_shared_focal)
 
 # ==============================================================================
+# test_bundle_adjust_adaptive_camera_model — 逐参数相机模型可靠性与 Ceres 掩码
+# ==============================================================================
+add_executable(test_bundle_adjust_adaptive_camera_model
+    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust/tests/test_bundle_adjust_adaptive_camera_model.cpp
+)
+target_link_libraries(test_bundle_adjust_adaptive_camera_model PRIVATE
+    bundle_adjust
+    camera
+    GTest::gtest_main
+)
+target_include_directories(test_bundle_adjust_adaptive_camera_model PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
+    ${CMAKE_SOURCE_DIR}/src/core/camera
+)
+gtest_discover_tests(test_bundle_adjust_adaptive_camera_model)
+
+# ==============================================================================
 # test_bundle_adjust_ceres_backend — BA Ceres/GPU 后端选择与回退
 # ==============================================================================
 if(NOT TARGET Ceres::ceres)

@@ -12,6 +12,7 @@ endif()
 
 add_library(bundle_adjust STATIC
     BundleAdjust.cpp
+    BundleAdjustAdaptiveCameraModel.cpp
     BundleAdjustCeres.cpp
     BundleAdjustCeresPlanning.cpp
     BundleAdjustProjection.cpp
