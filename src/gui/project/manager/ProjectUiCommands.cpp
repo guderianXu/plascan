@@ -152,7 +152,8 @@ bool ProjectUiCommands::selectPhotos(QStringList *selectedFiles) const
     QFileDialog dialog(_parentWidget,
                        QStringLiteral("添加图片"),
                        readLastDir(QStringLiteral("images")),
-                       QStringLiteral("图片文件 (*.tif *.tiff *.TIF *.TIFF *.png *.PNG *.jpg *.jpeg *.JPG *.JPEG)"));
+                       QStringLiteral("影像文件 (*.tif *.tiff *.TIF *.TIFF *.png *.PNG "
+                                      "*.jpg *.jpeg *.JPG *.JPEG *.img *.IMG *.cub *.CUB)"));
     configureDialog(dialog);
     dialog.setAcceptMode(QFileDialog::AcceptOpen);
     dialog.setFileMode(QFileDialog::ExistingFiles);

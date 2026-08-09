@@ -258,7 +258,11 @@ QStringList imageFolderNameFilters()
         QStringLiteral("*.jpg"),
         QStringLiteral("*.jpeg"),
         QStringLiteral("*.JPG"),
-        QStringLiteral("*.JPEG")
+        QStringLiteral("*.JPEG"),
+        QStringLiteral("*.img"),
+        QStringLiteral("*.IMG"),
+        QStringLiteral("*.cub"),
+        QStringLiteral("*.CUB")
     };
 }
 

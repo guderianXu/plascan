@@ -100,6 +100,7 @@ core/
 │
 ├── camera/                     # 相机模型
 │   ├── Camera.h/cpp            # 唯一相机模型：内参、Brown-Conrady 畸变、位姿和正深度归一化
+│   ├── PlanetaryLineScanCamera*.h/cpp # USGSCSM ISD 逐行时间、月固系时变姿轨与 LRO NAC 投影
 │   ├── CameraBaseline.h/cpp    # 相机中心基线、指定点三角交会角和平均深度/基线比
 │   ├── CameraFormatConverter.h/cpp # Middlebury/EPFL 等外部相机 -> tsai + image_camera.lis
 │   ├── ProjectCameraIO.h/cpp   # Camera JSON/TSAI 与项目元数据适配
@@ -203,6 +204,8 @@ core/
 │   ├── PlanetaryLaserJson.h/cpp # PlaScan SI JSON v1 严格解析及 ISIS 导入上下文接口
 │   ├── PlanetaryLaserIsisJson.cpp # ISIS LidarData 单位换算、球面协方差转 XYZ 和虚拟像点保护
 │   ├── PlanetaryLaserBaAdapter.h/cpp # shot/影像唯一映射、frame/杆臂检查及独立 BA 约束装配
+│   ├── IsisControlNetworkPvl.h/cpp # ISIS 文本控制网、PointType 和一基像素量测解析
+│   ├── PlanetaryLineScanBundleAdjust*.h/cpp # USGSCSM 推扫控制网、逐行投影和稀疏 range 联合 Ceres P0
 │   └── tests/                  # SI/ISIS 解析、协方差转换、关联歧义、模式边界与安全拒绝测试
 │
 ├── mask/                       # 照片蒙版生成与合成
@@ -436,6 +439,18 @@ filename/stem 回退。当前一个 shot 只允许一台同期相机；ISIS 多 
 `ephemeris_time_s` 只保留到报告，尚无 SPICE/逐行时变轨迹求值。Auto 模式的 Ceres range 候选失败或被质量
 门控拒绝时直接失败，禁止回退到不支持测距约束的 Legacy。行星激光 dry-run 仍执行数据、传感器模型、
 坐标系和别名预校验；初始落点与杆臂修正后的发射点重合时也会在求解前拒绝。
+
+LRO NAC / LOLA 推扫数据不经过上述静态适配器，而使用独立
+`camera/PlanetaryLineScanCamera` 与 `lidar/PlanetaryLineScanBundleAdjust` P0。相机从 USGSCSM ISD 解析
+逐行曝光时间、Hermite 位置、四元数姿态和 LRO NAC 畸变；控制网 PVL 的 ISIS `(1,1)` 像素中心在
+投影边界统一转换到 CSM `(0.5,0.5)`。普通 Free 控制点以观测行瞬时射线三角化，range 默认在 shot
+TDB ET 求相机中心；`isis_line` 仅用于上游回归时复现虚拟 measure 的行时刻，虚拟像点不会进入影像残差。
+P0 每景只优化月固系一个 6DoF 刚性偏差，并明确限制为 `MOON_ME`、单程、单同期影像、零杆臂和 Free
+控制点；遇到 Fixed/Constrained 控制点或非零杆臂会拒绝，防止丢失地面先验或仪器外参。名义姿轨
+当前直接采用原始 ISD Hermite/SLERP，尚未复刻 USGSCSM 重采样后的 4/8 阶 Lagrange 状态求值。
+独立 CLI 因此要求显式接受该插值近似，并拒绝复用已有本工具产物的输出目录，避免误当成官方模型或
+把不同运行的无激光/有激光结果混合。
+
 该链路由 `src/core/lidar/tests/test_planetary_laser_json.cpp` 和
 `test_planetary_laser_ba_adapter.cpp` 覆盖格式、ISIS 协方差、projected/measured 类型、像点权重与关联安全边界；
 `src/core/bundle_adjust/tests/test_bundle_adjust_ceres_backend.cpp` 覆盖 Fixed/Constrained/Free、杆臂和后端能力；

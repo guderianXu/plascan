@@ -28,6 +28,27 @@ if(TARGET sfm AND TARGET bundle_adjust AND TARGET lidar)
     )
 endif()
 
+if(TARGET lidar)
+    get_target_property(_plascan_has_planetary_linescan_ba
+        lidar PLASCAN_HAS_PLANETARY_LINE_SCAN_BA)
+endif()
+
+if(TARGET lidar AND TARGET camera AND _plascan_has_planetary_linescan_ba)
+    add_plascan_cli(planetary_linescan_ba_cli
+        SOURCE cli_planetary_linescan_ba.cpp
+        SOURCES PlanetaryLineScanBaCliOutput.cpp
+        LIBRARIES
+            lidar
+            camera
+            Qt6::Core
+        INCLUDE_DIRECTORIES
+            ${CMAKE_SOURCE_DIR}/src/core/camera
+            ${CMAKE_SOURCE_DIR}/src/core/lidar
+    )
+endif()
+
+unset(_plascan_has_planetary_linescan_ba)
+
 if(BUILD_TESTS)
     add_subdirectory(tests)
 endif()

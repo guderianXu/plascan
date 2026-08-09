@@ -1,8 +1,8 @@
 # 行星摄影测量稀疏激光测距平差
 
-> 状态：静态 frame-camera 首版已实现
+> 状态：静态 frame-camera 链路与独立 USGSCSM line-scan P0 均已实现
 > 适用范围：行星轨道器、着陆器或巡视器的稀疏激光测高/测距 shot 与多视影像联合平差
-> 当前边界：支持 PlaScan SI JSON v1 和带外部上下文的 ISIS `LidarData` JSON；不支持 line-scan/SPICE 时变轨迹
+> 当前边界：通用 BA 支持静态 frame camera；专用 P0 支持 LRO NAC ISD 时变姿轨、ISIS PVL 自由控制点和零杆臂 LOLA range
 
 ## 1. 两类激光约束是独立模式
 
@@ -30,7 +30,7 @@ r_ref = w_ref * (uL + d(uL) - piR(P))
 
 ## 2. 当前测距方程
 
-对静态 frame camera，定义：
+对静态 frame camera，或 line-scan 在观测历元 `t` 的瞬时相机，定义：
 
 - `B`：当前 BA 与落点共同使用的天体固连坐标系；
 - `C_B`：相机中心在 `B` 中的位置；
@@ -41,7 +41,7 @@ r_ref = w_ref * (uL + d(uL) - piR(P))
 
 ```text
 L_B     = C_B + R_BC * ell_C
-rho_hat = ||P_B - L_B||
+rho_hat = ||P_B - L_B(t)||
 r_rho   = sqrt(w_global * w_shot) * (rho_hat - rho_obs) / sigma_rho
 ```
 
@@ -184,7 +184,7 @@ C_xyz = J * C_spherical * J^T
 
 ## 6. 数据关联与严格安全边界
 
-当前适配器只处理静态 frame camera：
+通用 `PlanetaryLaserBaAdapter` 只处理静态 frame camera：
 
 1. `simultaneous_image_ids` 通过工程影像路径、文件名、stem、工程 ID 或调用方提供的稳定别名映射相机。
 2. 匹配按特异性逐级进行：规范化完整 ID 唯一命中后立即采用，只有完整 ID 未命中时才回退到文件名和 stem；弱别名歧义不会覆盖已经唯一命中的完整 ISIS serial。
@@ -196,17 +196,33 @@ C_xyz = J * C_spherical * J^T
 8. 当前相机/track 坐标系字符串必须与 `reference.body_fixed_frame` 完全一致；适配器不执行隐式坐标转换。
 9. 非零杆臂时，调用方声明的相机传感器 frame 必须与 `reference.laser_frame` 完全一致；当前不做传感器 frame 旋转。
 10. `round_trip` 被拒绝；必须先按产品定义换算成单程几何距离。`unknown` 只有在调用方显式确认后才能按单程处理。
-11. `line_scan` 被拒绝。`ephemeris_time_s` 当前仅用于保留来源和报告，不驱动相机轨迹求值。
+11. `line_scan` 在通用适配器中仍被拒绝，不能把推扫影像压成单一静态位姿。
 
-这意味着当前实现可以验证 frame-camera 稀疏斜距联合平差链路，但不能把轨道器推扫影像的单个位姿冒充 shot 历元位姿。完整 line-scan 支持仍需 SPICE/等价轨迹、逐行曝光时间、位置和姿态插值、时钟与 frame 变换。
+轨道器推扫数据改走独立 `PlanetaryLineScanCamera` / `PlanetaryLineScanBundleAdjust`：它从 USGSCSM
+ISD 读取分段行曝光时间、Hermite 位置和四元数姿态，在每条控制量测的观测行求瞬时射线，在
+laser shot ET 求相机中心。ISIS PVL 的左上像素中心是 `(1, 1)`，进入 CSM `(0.5, 0.5)` 约定前
+sample/line 统一减 `0.5`；ISIS LidarData 的 projected measures 只可用于 `isis_line` 兼容模式的
+曝光时刻定位，仍不作为真实重投影观测。
+
+当前 line-scan P0 只接受 `MOON / MOON_ME`、单程 range、一个同期影像、零激光杆臂和 Free 控制点。
+每景优化一个月固系 6DoF 刚性偏差；Fixed/Constrained 控制点因尚未导入地面先验会明确拒绝，不能
+静默降为 Free。零杆臂使 range 不直接约束姿态；完整 LOLA→NAC boresight、杆臂、时钟偏差、光行时、
+逐节点姿轨/jitter 调整仍属于后续模型。名义轨迹当前直接对原始 ISD 做 Hermite 位置与 SLERP 姿态插值；
+尚未逐项复刻 USGSCSM 把状态重采样后再做 4/8 阶 Lagrange 的实现，输出 JSON 会显式记录该插值模型。
 
 ## 7. 求解、服务、CLI 与 GUI
 
 - 核心 `bundle_adjust` 通过独立 `BALaserRangeConstraint` 参数块接入 Ceres CPU/CUDA BA；Legacy CPU 和 Native CUDA 不会静默忽略该能力，自动后端选择要求支持测距约束。Ceres 候选失败或被质量门控拒绝时直接报告失败，不会回退到不支持 range 的 Legacy。
 - `BundleAdjustService` 加载 JSON、按求解相机顺序建立影像别名、调用适配器并写出 `planetary_laser_range_summary`，其中包含接受/跳过 shot、fixed/constrained/free 数量、忽略的 projected measures、range RMS 前后值，以及逐 shot 优化落点、相机索引和相机坐标系杆臂。服务拒绝用未建立索引对应关系的影像列表猜测相机顺序。
 - 行星激光 dry-run 仍会执行 JSON、传感器模型、坐标系和影像别名预校验；它只跳过实际求解与结果写回，不能让无效输入伪装成检查成功。
-- CLI 使用 `--laser-range-data`；必须显式提供 `--laser-range-camera-frame`。ISIS 输入还要提供目标、body frame、laser frame、相机模型、range 类型和三分量杆臂上下文；工程 UUID 自动合并，`--laser-range-image-alias` 用于把 ISIS `serialNumber` 等产品标识绑定到明确的相机索引。
+- CLI 使用 `--laser-range-data`；必须显式提供 `--laser-range-camera-frame`。ISIS 输入还要提供目标、body frame、laser frame、相机模型、range 类型和三分量杆臂上下文；工程 UUID 自动合并，`--laser-range-image-alias` 用于把 ISIS `serialNumber` 等产品标识绑定到明确的相机索引。只有显式给出 `--laser-range-allow-unmapped-measures` 时，才允许忽略未映射的真实 `measured` 像点。
 - GUI 将合法 PlaScan SI JSON 识别为 `planetary_laser_shots` 参考数据。执行“参考地形约束重新平差”时优先选择该数据，要求用户确认求解坐标系；非零杆臂还要求确认传感器 frame。预览和质量提示单独显示 shot 数、目标/frame、数据路径与 range RMS。GUI 当前不补录 ISIS 缺失上下文，ISIS JSON 应通过 CLI 或先转换为 PlaScan SI JSON。
+- `planetary_linescan_ba_cli` 是独立的推扫 P0 入口，接收重复的 `--isd` / `--serial`、ISIS
+  `--control-network` 和可选 `--laser-data`，一次输出无激光/有激光 A/B、逐 shot 残差 CSV、月固系及
+  局部坐标 PLY。所有运行必须显式给出 `--accept-approximate-usgscsm-interpolation`，使用激光时还必须
+  给出 `--assume-zero-laser-lever-arm`。输出 JSON 同时记录 P0、输入声明的 Lagrange、实际采用的
+  Hermite/SLERP、range origin 和每景 6DoF 偏差模型，避免把近似误解为完整仪器标定。若输出目录
+  已含该工具的旧产物，CLI 会拒绝运行，防止无激光/有激光结果跨运行混合。
 
 CLI 示例：
 
@@ -217,6 +233,19 @@ bundle_adjust_cli project.plascan `
   --laser-range-camera-sensor-frame LRO_LOLA `
   --laser-range-weight 1.0 `
   --laser-range-huber-delta-sigma 3.0
+```
+
+LRO NAC / LOLA 推扫 P0 示例：
+
+```powershell
+planetary_linescan_ba_cli `
+  --isd lidarObservationImage1.isd --isd lidarObservationImage2.isd `
+  --serial "LRO/1/286265995:36824/NACL" `
+  --serial "LRO/1/286272781:34203/NACL" `
+  --control-network network.pvl --laser-data lidarData.json `
+  --assume-zero-laser-lever-arm --accept-approximate-usgscsm-interpolation `
+  --laser-time-mode shot_et `
+  --output-dir results/linescan_laser_ab
 ```
 
 ## 8. 可观性与解释限制
@@ -242,10 +271,12 @@ bundle_adjust_cli project.plascan `
 - `BundleAdjustService` 的 SI/ISIS 端到端关联、严格相机顺序、结果/杆臂写出和 line-scan 拒绝；
 - GUI 平差预览和质量摘要中的行星激光 shot/range 指标，包括初始零残差退化为正残差的告警；
 - 参考数据识别只把具有 ISIS `id/time/range/sigmaRange/latitude/longitude/radius` 点签名的 JSON 判为 LidarData，不会把普通 `points` 数组误分类；CLI 单独给出 range 权重或 Huber 参数而未给数据文件时会明确报错。
+- USGSCSM line-scan ISD 的时间、姿轨、LRO NAC 畸变、像素射线和固定行投影；ISIS `(1,1)` 到
+  CSM `(0.5,0.5)` 的半像素回归；合成 20 m range 偏差的无激光/有激光联合 BA 恢复。
 
 后续工作按以下边界推进：
 
 1. 引入统一 SPICE 时间、天体 frame 和仪器 frame 变换层。
-2. 为 line-scan 建立逐行曝光时间及 `C_B(t)`、`R_BC(t)` 轨迹参数化。
-3. 在真实标定数据支持下增加 boresight、时钟偏差、光行时及相关协方差模型。
+2. 把 P0 每景刚性偏差扩展为受先验约束的逐节点姿轨/jitter 参数化，并导入 Fixed/Constrained 控制点。
+3. 在真实标定数据支持下增加 LOLA→NAC boresight、非零杆臂、时钟偏差、光行时及相关协方差模型。
 4. 增加按 shot 时间和影像曝光覆盖构建 `simultaneous_image_ids` 的预处理工具；求解器本身继续禁止隐式最近时间关联。

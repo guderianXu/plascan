@@ -1,6 +1,9 @@
 # 生产静态库：Camera/Tsai I/O、坐标归一化和外部格式转换器。
 add_library(camera STATIC
 	Camera.cpp
+	PlanetaryLineScanCamera.cpp
+	PlanetaryLineScanCameraIsd.cpp
+	PlanetaryLineScanProjection.cpp
 	CameraBaseline.cpp
 	CameraIntrinsicPrior.cpp
 	CameraFormatConverter.cpp
@@ -29,6 +32,22 @@ if(BUILD_TESTS)
 		)
 		target_include_directories(test_camera_unit PRIVATE ${CMAKE_SOURCE_DIR}/src/core/camera)
 		gtest_discover_tests(test_camera_unit)
+
+		# USGSCSM ISD 推扫相机的时间、姿轨、焦平面和投影回归测试。
+		add_executable(test_planetary_line_scan_camera
+			test/PlanetaryLineScanCamera_tests.cpp
+		)
+		target_link_libraries(test_planetary_line_scan_camera PRIVATE
+			camera
+			GTest::gtest_main
+		)
+		target_include_directories(test_planetary_line_scan_camera PRIVATE
+			${CMAKE_SOURCE_DIR}/src/core/camera
+		)
+		target_compile_definitions(test_planetary_line_scan_camera PRIVATE
+			PLANETARY_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/testData"
+		)
+		gtest_discover_tests(test_planetary_line_scan_camera)
 
 		# 相机中心距离、三角交会角与深度/基线比的统一摄影测量几何测试。
 		add_executable(test_camera_baseline test/CameraBaseline_tests.cpp)

@@ -51,6 +51,77 @@ TEST(BundleAdjustCliGTest, MissingProjectFailsBeforeCreatingOutput)
     expectContainsAll(combinedOutput(result), {"项目文件不存在"});
 }
 
+TEST(PlanetaryLineScanBaCliGTest, SourceKeepsApproximationAndFreshOutputGuards)
+{
+    const QString source = readSourceFile(
+        QStringLiteral("src/cli/reconstruction/cli_planetary_linescan_ba.cpp"));
+
+    expectContainsAll(source, {
+        "--accept-approximate-usgscsm-interpolation",
+        "--assume-zero-laser-lever-arm",
+        "firstExistingArtifact",
+        "output directory already contains",
+        "Publish the A/B artifacts only after both solves succeed",
+    });
+
+    const qsizetype withLaserSolve = source.indexOf(
+        QStringLiteral("options.enableLaserRangeConstraints = true"));
+    const qsizetype firstArtifactWrite = source.indexOf(
+        QStringLiteral("writePlanetaryLineScanBaArtifacts"), withLaserSolve);
+    ASSERT_GE(withLaserSolve, 0);
+    ASSERT_GE(firstArtifactWrite, 0);
+    EXPECT_LT(withLaserSolve, firstArtifactWrite);
+}
+
+#ifdef PLASCAN_PLANETARY_LINE_SCAN_BA_CLI_PATH
+TEST(PlanetaryLineScanBaCliGTest, RequiresExplicitApproximationAcceptance)
+{
+    const QString exe = executablePath(PLASCAN_PLANETARY_LINE_SCAN_BA_CLI_PATH);
+    SKIP_IF_MISSING_EXECUTABLE(exe);
+
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const CliResult result = runCli(exe, {
+        QStringLiteral("--isd"), QStringLiteral("missing_a.isd"),
+        QStringLiteral("--isd"), QStringLiteral("missing_b.isd"),
+        QStringLiteral("--serial"), QStringLiteral("CAMERA_A"),
+        QStringLiteral("--serial"), QStringLiteral("CAMERA_B"),
+        QStringLiteral("--control-network"), QStringLiteral("missing.pvl"),
+        QStringLiteral("--output-dir"), tempDir.path(),
+    });
+
+    EXPECT_NE(result.exitCode, 0);
+    expectContainsAll(combinedOutput(result), {
+        "--accept-approximate-usgscsm-interpolation",
+        "not an exact ALE/USGSCSM Lagrange evaluation",
+    });
+}
+
+TEST(PlanetaryLineScanBaCliGTest, LaserRequiresExplicitZeroLeverArmAcceptance)
+{
+    const QString exe = executablePath(PLASCAN_PLANETARY_LINE_SCAN_BA_CLI_PATH);
+    SKIP_IF_MISSING_EXECUTABLE(exe);
+
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const CliResult result = runCli(exe, {
+        QStringLiteral("--isd"), QStringLiteral("missing_a.isd"),
+        QStringLiteral("--isd"), QStringLiteral("missing_b.isd"),
+        QStringLiteral("--serial"), QStringLiteral("CAMERA_A"),
+        QStringLiteral("--serial"), QStringLiteral("CAMERA_B"),
+        QStringLiteral("--control-network"), QStringLiteral("missing.pvl"),
+        QStringLiteral("--laser-data"), QStringLiteral("missing.json"),
+        QStringLiteral("--accept-approximate-usgscsm-interpolation"),
+        QStringLiteral("--output-dir"), tempDir.path(),
+    });
+
+    EXPECT_NE(result.exitCode, 0);
+    expectContainsAll(combinedOutput(result), {
+        "--laser-data requires --assume-zero-laser-lever-arm",
+    });
+}
+#endif
+
 TEST(BundleAdjustCliGTest, FailedStrictAbGateDoesNotWriteLaserCameras)
 {
     const QString source = readSourceFile(

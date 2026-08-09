@@ -9,6 +9,13 @@ if(TARGET bundle_adjust_cli)
     add_dependencies(test_reconstruction_cli bundle_adjust_cli)
 endif()
 
+if(TARGET planetary_linescan_ba_cli)
+    target_compile_definitions(test_reconstruction_cli PRIVATE
+        PLASCAN_PLANETARY_LINE_SCAN_BA_CLI_PATH="$<TARGET_FILE:planetary_linescan_ba_cli>"
+    )
+    add_dependencies(test_reconstruction_cli planetary_linescan_ba_cli)
+endif()
+
 find_package(Python3 QUIET COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
     add_test(
