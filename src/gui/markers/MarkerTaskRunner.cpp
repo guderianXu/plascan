@@ -112,8 +112,10 @@ ImageDetectionResult detectImage(const MarkerDetectionImage &input,
     return result;
 }
 
+// The pool reads this implicitly shared job from multiple threads. Keep the
+// value const so Qt containers never detach during concurrent indexing.
 void runDetectionJob(QPromise<MarkerDetectionTaskResult> &promise,
-                     MarkerDetectionJob job,
+                     const MarkerDetectionJob job,
                      std::shared_ptr<MarkerTaskSharedState> state)
 {
     MarkerDetectionTaskResult result;
