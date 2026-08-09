@@ -398,6 +398,7 @@ if(UNIX AND NOT APPLE)
   set(CPACK_DEBIAN_PACKAGE_HOMEPAGE
     "https://github.com/guderianXu/plascan")
   set(CPACK_DEBIAN_FILE_NAME "DEB-DEFAULT")
+  set(CPACK_PACKAGING_INSTALL_PREFIX "/opt/plascan")
   set(CPACK_DEBIAN_PACKAGE_CONTROL_STRICT_PERMISSION ON)
   set(CPACK_DEB_COMPONENT_INSTALL OFF)
   # vcpkg 动态库随包部署，系统基础库和桌面栈由 apt 管理。
