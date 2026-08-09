@@ -41,6 +41,10 @@
 #include <opencv2/imgcodecs.hpp>
 
 #include <QDir>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QStringList>
 #include <QTemporaryDir>
 
 #include <array>
@@ -2499,6 +2503,8 @@ TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxis
     ASSERT_TRUE(loaded.ok) << loaded.errorMessage.toStdString();
     ASSERT_EQ(loaded.frames.size(), 5);
     EXPECT_EQ(loaded.discoveredArtifactCount, artifacts.size());
+    EXPECT_EQ(loaded.primaryFrameCount, 4);
+    EXPECT_EQ(loaded.auxiliaryFrameCount, 1);
     EXPECT_GE(loaded.effectiveWorkerCount, 1);
     EXPECT_LE(loaded.effectiveWorkerCount, 4);
     const auto serial_loaded =
@@ -2521,6 +2527,86 @@ TEST(DepthTsdfSurfaceBuilderTest, LoadsProductionArtifactsAndEstimatesCameraAxis
     EXPECT_FALSE(loaded.frames.front().auxiliarySurfaceOnly);
     EXPECT_FALSE(loaded.frames.at(3).auxiliarySurfaceOnly);
     EXPECT_TRUE(loaded.frames.back().auxiliarySurfaceOnly);
+
+    auto auxiliary_only_artifacts = artifacts;
+    for (auto &artifact : auxiliary_only_artifacts)
+    {
+        artifact.acceptance = QStringLiteral("validation_only");
+        artifact.fusionEligible = false;
+        artifact.validWithinMaskRatio = 0.62;
+        artifact.consistencyRetentionRatio = 0.55;
+        artifact.qualityReasons = {
+            QStringLiteral("fusion_postprocess_coverage_loss")
+        };
+    }
+    const auto auxiliary_only =
+        xjw::mesh::DepthTsdfSurfaceBuilder::loadFrames(auxiliary_only_artifacts, 2);
+    ASSERT_TRUE(auxiliary_only.ok) << auxiliary_only.errorMessage.toStdString();
+    EXPECT_EQ(auxiliary_only.primaryFrameCount, 0);
+    EXPECT_EQ(auxiliary_only.auxiliaryFrameCount, 5);
+
+    QJsonArray auxiliary_frames_json;
+    for (int index = 0; index < auxiliary_only_artifacts.size(); ++index)
+    {
+        const auto &artifact = auxiliary_only_artifacts[index];
+        auxiliary_frames_json.append(QJsonObject{
+            {QStringLiteral("ref_index"), index},
+            {QStringLiteral("status"), QStringLiteral("completed")},
+            {QStringLiteral("acceptance"), QStringLiteral("validation_only")},
+            {QStringLiteral("fusion_eligible"), false},
+            {QStringLiteral("scene_profile"), QStringLiteral("aerial_terrain")},
+            {QStringLiteral("raw_depth_path"), artifact.depthPath},
+            {QStringLiteral("raw_confidence_path"), artifact.confidencePath},
+            {QStringLiteral("valid_mask_path"), artifact.validMaskPath},
+            {QStringLiteral("support_mask_path"), artifact.supportMaskPath},
+            {QStringLiteral("grid_width"), 32},
+            {QStringLiteral("grid_height"), 24},
+            {QStringLiteral("camera_model"), QJsonObject{
+                {QStringLiteral("fx"), 30.0},
+                {QStringLiteral("fy"), 30.0},
+                {QStringLiteral("cx"), 16.0},
+                {QStringLiteral("cy"), 12.0},
+                {QStringLiteral("rotation_world_to_camera"),
+                 QJsonArray{1.0, 0.0, 0.0,
+                            0.0, 1.0, 0.0,
+                            0.0, 0.0, 1.0}},
+                {QStringLiteral("translation_world_to_camera"),
+                 QJsonArray{0.0, 0.0, 0.0}},
+                {QStringLiteral("camera_center"),
+                 QJsonArray{0.05 * index, 0.0, 0.0}}}}
+        });
+    }
+    const QString manifest_path = directory.filePath(
+        QStringLiteral("mvs_manifest.json"));
+    std::ofstream manifest(manifest_path.toStdString(), std::ios::binary);
+    manifest << QJsonDocument(QJsonObject{
+        {QStringLiteral("frames"), auxiliary_frames_json}})
+                    .toJson(QJsonDocument::Compact)
+                    .toStdString();
+    manifest.close();
+
+    xjw::mesh::workflow::DepthMapMeshBuildRequest mesh_request;
+    mesh_request.depthMapSourcePath = directory.path();
+    mesh_request.outputRoot = directory.filePath(QStringLiteral("model"));
+    mesh_request.settings[QStringLiteral("reconstruction_mode")] =
+        QStringLiteral("depth_tsdf");
+    QStringList mesh_progress_stages;
+    mesh_request.progress = [&mesh_progress_stages](const QString &stage, int)
+    {
+        mesh_progress_stages.push_back(stage);
+    };
+    const auto auxiliary_mesh =
+        xjw::mesh::workflow::buildMeshFromDepthMaps(mesh_request);
+    EXPECT_FALSE(auxiliary_mesh.ok);
+    EXPECT_EQ(auxiliary_mesh.payload.value(
+                  QStringLiteral("loaded_primary_depth_frame_count")).toInt(),
+              0);
+    EXPECT_EQ(auxiliary_mesh.payload.value(
+                  QStringLiteral("loaded_auxiliary_depth_frame_count")).toInt(),
+              5);
+    EXPECT_TRUE(auxiliary_mesh.errorMessage.contains(
+        QStringLiteral("没有可用的主融合深度帧")));
+    EXPECT_TRUE(mesh_progress_stages.isEmpty());
     EXPECT_EQ(loaded.frames.front().depth.type(), CV_32FC1);
     EXPECT_EQ(loaded.frames.front().confidence.type(), CV_32FC1);
     EXPECT_EQ(loaded.frames.front().geometrySupportCount.type(), CV_16UC1);

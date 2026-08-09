@@ -10,6 +10,7 @@
 #include <QtGlobal>
 
 #include <algorithm>
+#include <set>
 
 namespace xjw::gui::project
 {
@@ -159,6 +160,151 @@ int expectedDepthFrameCount(const QJsonObject &project_metadata,
     return qMax(expected_count, available_frame_count);
 }
 
+QString normalizedSceneProfile(const QString &profile)
+{
+    return profile.trimmed().toLower();
+}
+
+bool isExplicitSceneProfile(const QString &profile)
+{
+    const QString normalized = normalizedSceneProfile(profile);
+    return normalized == QStringLiteral("aerial_terrain") ||
+        normalized == QStringLiteral("orbital_object");
+}
+
+QString sceneProfileDisplayName(const QString &profile)
+{
+    const QString normalized = normalizedSceneProfile(profile);
+    if (normalized == QStringLiteral("aerial_terrain"))
+    {
+        return QStringLiteral("航拍地形");
+    }
+    if (normalized == QStringLiteral("orbital_object"))
+    {
+        return QStringLiteral("环拍目标");
+    }
+    return normalized.isEmpty() ? QStringLiteral("未记录") : normalized;
+}
+
+QString depthBatchSceneCompatibilityReason(
+    const xjw::core::project::StoredDepthFramesResult &stored_frames,
+    const QString &expected_scene_profile)
+{
+    std::set<QString> stored_profiles;
+    int missing_profile_count = 0;
+    for (const auto &frame : stored_frames.frames)
+    {
+        const QString profile = normalizedSceneProfile(frame.sceneProfile);
+        if (profile.isEmpty())
+        {
+            ++missing_profile_count;
+        }
+        else
+        {
+            stored_profiles.insert(profile);
+        }
+    }
+
+    if (stored_profiles.size() > 1 ||
+        (!stored_profiles.empty() && missing_profile_count > 0))
+    {
+        return QStringLiteral(
+            "所选深度图批次的场景类型记录不一致，不能安全复用。"
+            "请按当前场景重新估计完整深度图批次。");
+    }
+    if (!stored_profiles.empty() &&
+        !isExplicitSceneProfile(*stored_profiles.begin()))
+    {
+        return QStringLiteral(
+            "所选深度图批次记录了无法识别的场景类型“%1”，不能安全复用。"
+            "请重新估计深度图后再生成模型。")
+            .arg(*stored_profiles.begin());
+    }
+
+    const QString expected_profile = normalizedSceneProfile(expected_scene_profile);
+    if (stored_profiles.empty())
+    {
+        if (isExplicitSceneProfile(expected_profile))
+        {
+            return QStringLiteral(
+                "所选深度图批次缺少场景类型记录，无法确认它与当前%1策略兼容。"
+                "请重新估计深度图后再生成模型。")
+                .arg(sceneProfileDisplayName(expected_profile));
+        }
+        return QStringLiteral(
+            "所选深度图批次缺少自动分类得到的场景类型记录，不能安全复用。"
+            "请重新估计深度图后再生成模型。");
+    }
+    if (!isExplicitSceneProfile(expected_profile))
+    {
+        return QString();
+    }
+
+    const QString stored_profile = *stored_profiles.begin();
+    if (stored_profile != expected_profile)
+    {
+        return QStringLiteral(
+            "所选深度图批次按%1策略生成，但当前工程需要%2策略，不能安全复用。"
+            "请按当前场景重新估计深度图后再生成模型。")
+            .arg(sceneProfileDisplayName(stored_profile),
+                 sceneProfileDisplayName(expected_profile));
+    }
+    return QString();
+}
+
+QString depthBatchFusionEligibilityReason(
+    const xjw::core::project::StoredDepthFramesResult &stored_frames)
+{
+    constexpr int kMinimumPrimaryFrameCount = 1;
+
+    int accepted_count = 0;
+    int validation_only_count = 0;
+    int fusion_eligible_count = 0;
+    int primary_frame_count = 0;
+    bool has_complete_quality_metadata = true;
+    for (const auto &frame : stored_frames.frames)
+    {
+        const QString acceptance = frame.acceptance.trimmed().toLower();
+        has_complete_quality_metadata = has_complete_quality_metadata &&
+            !acceptance.isEmpty() && frame.fusionEligibilityKnown;
+        if (acceptance == QStringLiteral("accepted"))
+        {
+            ++accepted_count;
+        }
+        else if (acceptance == QStringLiteral("validation_only"))
+        {
+            ++validation_only_count;
+        }
+        if (frame.fusionEligible)
+        {
+            ++fusion_eligible_count;
+        }
+        if (acceptance == QStringLiteral("accepted") && frame.fusionEligible)
+        {
+            ++primary_frame_count;
+        }
+    }
+
+    if (!has_complete_quality_metadata)
+    {
+        return QStringLiteral(
+            "所选深度图批次缺少完整的帧质量资格记录（acceptance/fusion_eligible），"
+            "无法确认它能安全进入多视融合。请重新估计深度图后再生成模型。");
+    }
+    if (primary_frame_count < kMinimumPrimaryFrameCount)
+    {
+        return QStringLiteral(
+            "所选深度图批次没有足够的融合主帧：accepted=%1，fusion_eligible=%2，"
+            "validation_only=%3；至少需要 %4 帧同时满足 accepted 和 fusion_eligible。"
+            "辅助验证帧不能替代多相机 TSDF 主输入，请重新估计深度图。")
+            .arg(accepted_count)
+            .arg(fusion_eligible_count)
+            .arg(validation_only_count)
+            .arg(kMinimumPrimaryFrameCount);
+    }
+    return QString();
+}
+
 } // namespace
 
 QString projectDepthInputSignature(const QJsonObject &project_metadata,
@@ -173,7 +319,8 @@ QString projectDepthInputSignature(const QJsonObject &project_metadata,
 StoredDepthBatchCompatibility assessStoredDepthBatchCompatibility(
     const QJsonObject &project_metadata,
     const QString &depth_map_source_path,
-    int aerial_triangulation_result_index)
+    int aerial_triangulation_result_index,
+    const QString &expected_scene_profile)
 {
     StoredDepthBatchCompatibility result;
     const auto stored_frames = depth_map_source_path.trimmed().isEmpty()
@@ -197,6 +344,8 @@ StoredDepthBatchCompatibility assessStoredDepthBatchCompatibility(
     const QJsonObject selected_at_result = selectedAerialTriangulationResult(
         project_metadata,
         aerial_triangulation_result_index);
+    const QString effective_expected_scene_profile = normalizedSceneProfile(
+        expected_scene_profile);
     const int expected_frame_count = qMax(
         expectedDepthFrameCount(project_metadata,
                                 stored_frames.batchDir,
@@ -225,6 +374,23 @@ StoredDepthBatchCompatibility assessStoredDepthBatchCompatibility(
         result.reason = QStringLiteral(
             "所选深度图批次由旧版算法生成，不能作为当前模型的几何输入。"
             "请重新估计深度图后再生成模型。");
+        return result;
+    }
+
+    const QString scene_compatibility_reason = depthBatchSceneCompatibilityReason(
+        stored_frames,
+        effective_expected_scene_profile);
+    if (!scene_compatibility_reason.isEmpty())
+    {
+        result.reason = scene_compatibility_reason;
+        return result;
+    }
+
+    const QString fusion_eligibility_reason = depthBatchFusionEligibilityReason(
+        stored_frames);
+    if (!fusion_eligibility_reason.isEmpty())
+    {
+        result.reason = fusion_eligibility_reason;
         return result;
     }
 

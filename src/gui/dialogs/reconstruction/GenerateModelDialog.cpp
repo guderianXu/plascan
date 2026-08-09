@@ -30,6 +30,9 @@ constexpr const char *kSupported = "supported";
 constexpr const char *kNote = "note";
 constexpr const char *kAutomaticDepthMaps = "automatic_depth_maps";
 constexpr const char *kDepthQualityProfile = "depth_quality_profile";
+constexpr const char *kDepthBatchCompatible = "depth_batch_compatible";
+constexpr const char *kDepthBatchCompatibilityReason =
+    "depth_batch_compatibility_reason";
 
 QString defaultSourceLabel(const QString &sourceData)
 {
@@ -359,6 +362,26 @@ void GenerateModelDialog::applySettings(const QJsonObject &settings)
         }
     }
 
+    const QString interpolation = settings.value(QStringLiteral("interpolation")).toString();
+    if (!interpolation.isEmpty())
+    {
+        const int index = _interpolationCombo->findData(interpolation);
+        if (index >= 0)
+        {
+            _interpolationCombo->setCurrentIndex(index);
+        }
+    }
+
+    const QString depth_filtering = settings.value(QStringLiteral("depthFiltering")).toString();
+    if (!depth_filtering.isEmpty())
+    {
+        const int index = _depthFilterCombo->findData(depth_filtering);
+        if (index >= 0)
+        {
+            _depthFilterCombo->setCurrentIndex(index);
+        }
+    }
+
     _saveEachStepCheck->setChecked(settings.value(QStringLiteral("saveAfterEachStep")).toBool(false));
     _calculateColorsCheck->setChecked(settings.value(QStringLiteral("calculateVertexColors")).toBool(true));
     _strictMasksCheck->setChecked(settings.value(QStringLiteral("strictVolumetricMasks")).toBool(false));
@@ -387,6 +410,7 @@ void GenerateModelDialog::setSourceCandidates(const QJsonArray &candidates)
         {
             has_depth_candidate = true;
             if (candidate.value(QLatin1String(kSupported)).toBool(false) &&
+                candidate.value(QLatin1String(kDepthBatchCompatible)).toBool(true) &&
                 !candidate.value(QLatin1String(kSourcePath)).toString().trimmed().isEmpty())
             {
                 _hasReusableDepthMaps = true;
@@ -485,8 +509,11 @@ QJsonObject GenerateModelDialog::collectSettings() const
     settings[QStringLiteral("depthFiltering")] = _depthFilterCombo->currentData().toString();
     settings[QStringLiteral("calculateVertexColors")] = _calculateColorsCheck->isChecked();
     settings[QStringLiteral("strictVolumetricMasks")] = _strictMasksCheck->isChecked();
+    const bool selected_depth_batch_compatible =
+        candidate.value(QLatin1String(kDepthBatchCompatible)).toBool(true);
     const bool reuse_depth_maps =
-        _hasReusableDepthMaps && _reuseDepthMapsRequested;
+        _hasReusableDepthMaps && selected_depth_batch_compatible &&
+        _reuseDepthMapsRequested;
     settings[QStringLiteral("reuseDepthMaps")] = reuse_depth_maps;
     const bool automatic_depth_maps =
         candidate.value(QLatin1String(kAutomaticDepthMaps)).toBool(false);
@@ -687,8 +714,11 @@ void GenerateModelDialog::updateAvailability()
     const bool stored_quality_sufficient = !stored_quality_known ||
         xjw::core::project::depthQualityRank(stored_depth_quality) >=
             xjw::core::project::depthQualityRank(requested_depth_quality);
+    const bool selected_depth_batch_compatible =
+        candidate.value(QLatin1String(kDepthBatchCompatible)).toBool(true);
     const bool can_reuse_depth_maps =
-        _hasReusableDepthMaps && stored_quality_sufficient;
+        _hasReusableDepthMaps && selected_depth_batch_compatible &&
+        stored_quality_sufficient;
 
     _effectiveDepthQualityLabel->setText(
         tr("%1（比例 %2，%3 轮，%4×%4 邻域，配置源视角 %5）")
@@ -701,7 +731,20 @@ void GenerateModelDialog::updateAvailability()
         tr("场景分类和影像对质量仍可能限制实际源视角数；运行记录会同时保存配置值与实际值。"));
 
     _reuseDepthMapsCheck->setEnabled(can_reuse_depth_maps);
-    if (_hasReusableDepthMaps && !stored_quality_sufficient)
+    if (sourceData == QStringLiteral("depth_maps") &&
+        !selected_depth_batch_compatible)
+    {
+        _reuseDepthMapsRequested = false;
+        const QSignalBlocker blocker(_reuseDepthMapsCheck);
+        _reuseDepthMapsCheck->setChecked(false);
+        const QString incompatibility_reason = candidate.value(
+            QLatin1String(kDepthBatchCompatibilityReason)).toString();
+        _reuseDepthMapsCheck->setToolTip(incompatibility_reason.isEmpty()
+            ? tr("现有深度图与当前工程不兼容；将自动重新估计深度图。")
+            : tr("现有深度图与当前工程不兼容；将自动重新估计：%1")
+                  .arg(incompatibility_reason));
+    }
+    else if (_hasReusableDepthMaps && !stored_quality_sufficient)
     {
         _reuseDepthMapsRequested = false;
         const QSignalBlocker blocker(_reuseDepthMapsCheck);

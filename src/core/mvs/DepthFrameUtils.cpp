@@ -188,6 +188,14 @@ StoredDepthFramesResult collectStoredDepthFramesInDirectory(const QJsonArray &de
         frame.reconstructionGenerationId =
             record.value(QStringLiteral("reconstruction_generation_id")).toString();
         frame.cameraModel = record.value(QStringLiteral("camera_model")).toObject();
+        frame.sceneProfile = record.value(QStringLiteral("scene_profile")).toString();
+        frame.acceptance = record.value(QStringLiteral("acceptance")).toString(
+            record.value(QStringLiteral("quality_decision"))
+                .toObject()
+                .value(QStringLiteral("acceptance"))
+                .toString());
+        frame.fusionEligibilityKnown = record.contains(QStringLiteral("fusion_eligible"));
+        frame.fusionEligible = record.value(QStringLiteral("fusion_eligible")).toBool(false);
         frame.gridWidth = record.value(QStringLiteral("grid_width")).toInt();
         frame.gridHeight = record.value(QStringLiteral("grid_height")).toInt();
         if (!frame.refImage.isEmpty() && depthFrameArtifactsExist(frame))

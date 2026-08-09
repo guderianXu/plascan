@@ -929,7 +929,8 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
             xjw::gui::project::assessStoredDepthBatchCompatibility(
                 _projectData->metadata(),
                 depth_source_path,
-                settings.value(QStringLiteral("at_index")).toInt(-1));
+                settings.value(QStringLiteral("at_index")).toInt(-1),
+                settings.value(QStringLiteral("sceneProfile")).toString());
         if (!batch_compatibility.compatible)
         {
             QMessageBox::warning(_parentWidget,

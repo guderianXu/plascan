@@ -300,6 +300,79 @@ TEST(MvsSceneClassifierTest, DetectsAerialCameraLayout)
     EXPECT_FALSE(classification.reason.empty());
 }
 
+TEST(MvsSceneClassifierTest, DetectsLongAerialStripWithoutGlobalCenterConvergence)
+{
+    std::vector<xjw::mvs::CameraView> views;
+    for (int index = -5; index <= 5; ++index)
+    {
+        xjw::mvs::CameraView view;
+        view.imageWidth = 640;
+        view.imageHeight = 480;
+        view.camera.setIntrinsics(500.0, 500.0, 320.0, 240.0);
+        view.camera.setPose(
+            std::array<double, 9>{1.0, 0.0, 0.0,
+                                  0.0, 1.0, 0.0,
+                                  0.0, 0.0, 1.0},
+            std::array<double, 3>{static_cast<double>(index * 40), 0.0, -10.0});
+        view.camera.setAxisDirections(1, 1);
+        view.camera.setDepthAxisFlipped(false);
+        views.push_back(std::move(view));
+    }
+
+    xjw::mvs::SparseCloud sparse;
+    for (int x = -200; x <= 200; x += 10)
+    {
+        for (int y = -5; y <= 5; ++y)
+        {
+            sparse.points.push_back({static_cast<float>(x),
+                                     static_cast<float>(y),
+                                     0.01f * static_cast<float>((x + y) % 3)});
+        }
+    }
+
+    const xjw::mvs::MvsSceneClassification classification =
+        xjw::mvs::classifyMvsScene(views, sparse);
+
+    EXPECT_EQ(classification.profile, xjw::mvs::MvsSceneProfile::AerialTerrain);
+    EXPECT_GE(classification.downLookingConsistency, 0.75f);
+    EXPECT_LT(classification.opticalAxisConvergence, 0.50f);
+    EXPECT_LE(classification.planeThicknessRatio, 0.20f);
+}
+
+TEST(MvsSceneClassifierTest, KeepsTwoSidedPlanarCaptureOrbital)
+{
+    std::vector<xjw::mvs::CameraView> views;
+    for (int index = 0; index < 8; ++index)
+    {
+        const bool below_plane = index < 4;
+        xjw::mvs::CameraView view;
+        view.imageWidth = 640;
+        view.imageHeight = 480;
+        view.camera.setIntrinsics(500.0, 500.0, 320.0, 240.0);
+        view.camera.setPose(
+            below_plane
+                ? std::array<double, 9>{1.0, 0.0, 0.0,
+                                        0.0, 1.0, 0.0,
+                                        0.0, 0.0, 1.0}
+                : std::array<double, 9>{1.0, 0.0, 0.0,
+                                        0.0, -1.0, 0.0,
+                                        0.0, 0.0, -1.0},
+            std::array<double, 3>{static_cast<double>((index % 4) * 2 - 3),
+                                  0.0,
+                                  below_plane ? -10.0 : 10.0});
+        view.camera.setAxisDirections(1, 1);
+        view.camera.setDepthAxisFlipped(false);
+        views.push_back(std::move(view));
+    }
+
+    const xjw::mvs::MvsSceneClassification classification =
+        xjw::mvs::classifyMvsScene(views, makePlanarSparseCloud());
+
+    EXPECT_EQ(classification.profile, xjw::mvs::MvsSceneProfile::OrbitalObject);
+    EXPECT_GE(classification.downLookingConsistency, 0.75f);
+    EXPECT_LE(classification.planeThicknessRatio, 0.20f);
+}
+
 TEST(MvsSceneClassifierTest, FallsBackToOrbitalForNonPlanarCloud)
 {
     const std::vector<xjw::mvs::CameraView> views = makeDownLookingGridViews(3, 3);

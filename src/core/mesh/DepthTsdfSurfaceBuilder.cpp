@@ -2067,6 +2067,14 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
         }
         for (DepthTsdfFrame &frame : partial.frames)
         {
+            if (frame.auxiliarySurfaceOnly)
+            {
+                ++result.auxiliaryFrameCount;
+            }
+            else
+            {
+                ++result.primaryFrameCount;
+            }
             result.frames.push_back(std::move(frame));
         }
     }

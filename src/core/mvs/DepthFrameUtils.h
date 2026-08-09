@@ -34,6 +34,10 @@ struct StoredDepthFrameRecord
     int projectInputSignatureVersion = 1;
     QString reconstructionGenerationId;
     QJsonObject cameraModel;
+    QString sceneProfile;
+    QString acceptance;
+    bool fusionEligible = false;
+    bool fusionEligibilityKnown = false;
     int algorithmRevision = 0;
     int gridWidth = 0;
     int gridHeight = 0;

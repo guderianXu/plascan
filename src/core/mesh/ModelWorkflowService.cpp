@@ -3482,9 +3482,24 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
             loaded.discoveredArtifactCount;
         result.payload[QStringLiteral("loaded_depth_frame_count")] =
             loaded.frames.size();
+        result.payload[QStringLiteral("loaded_primary_depth_frame_count")] =
+            loaded.primaryFrameCount;
+        result.payload[QStringLiteral("loaded_auxiliary_depth_frame_count")] =
+            loaded.auxiliaryFrameCount;
         if (!loaded.ok)
         {
             result.errorMessage = loaded.errorMessage;
+            return result;
+        }
+        if (loaded.primaryFrameCount == 0)
+        {
+            result.errorMessage = QStringLiteral(
+                "TSDF 没有可用的主融合深度帧：发现=%1，加载=%2，辅助=%3。"
+                "该深度批次可能使用了错误的场景类型或破坏性后处理；"
+                "请按当前场景配置重新估计深度图，不能仅修改清单标签。")
+                                      .arg(loaded.discoveredArtifactCount)
+                                      .arg(loaded.frames.size())
+                                      .arg(loaded.auxiliaryFrameCount);
             return result;
         }
 

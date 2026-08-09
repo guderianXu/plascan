@@ -288,6 +288,30 @@ TEST(WorkflowParameterDialogStyleTest, LayoutMigrationPreservesModelSettings)
     EXPECT_TRUE(depthQualityLabel->text().contains(QStringLiteral("源视角 3")));
 }
 
+TEST(WorkflowParameterDialogStyleTest, GenerateModelRestoresDepthPostProcessingSettings)
+{
+    GenerateModelDialog dialog;
+    dialog.applySettings(QJsonObject{
+        {QStringLiteral("source_data"), QStringLiteral("point_cloud")},
+        {QStringLiteral("source_path"), QStringLiteral("E:/tmp/cloud.ply")},
+        {QStringLiteral("interpolation"), QStringLiteral("disabled")},
+        {QStringLiteral("depthFiltering"), QStringLiteral("aggressive")}
+    });
+    dialog.setSourceCandidates(QJsonArray{pointCloudCandidate()});
+
+    QSignalSpy run_spy(&dialog, &GenerateModelDialog::runRequested);
+    auto *button_box = dialog.findChild<QDialogButtonBox *>(QStringLiteral("workflowButtonBox"));
+    ASSERT_NE(button_box, nullptr);
+    button_box->button(QDialogButtonBox::Ok)->click();
+    ASSERT_EQ(run_spy.count(), 1);
+
+    const QJsonObject settings = run_spy.at(0).at(0).toJsonObject();
+    EXPECT_EQ(settings.value(QStringLiteral("interpolation")).toString(),
+              QStringLiteral("disabled"));
+    EXPECT_EQ(settings.value(QStringLiteral("depthFiltering")).toString(),
+              QStringLiteral("aggressive"));
+}
+
 TEST(WorkflowParameterDialogStyleTest, TextureMappingExplainsFixedOptionsAndKeepsStableSchema)
 {
     TextureMappingDialog dialog;

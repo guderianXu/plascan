@@ -81,6 +81,30 @@ QString patchMatchBackendText(xjw::mvs::PatchMatchBackend backend)
     return QString::fromLatin1(xjw::mvs::patchMatchBackendId(backend));
 }
 
+QString resolvedSceneProfile(const QJsonObject &settings,
+                             QString *resolution_source = nullptr)
+{
+    const QString configured_profile = settings.value(
+        QStringLiteral("sceneProfile")).toString(QStringLiteral("auto"))
+                                            .trimmed()
+                                            .toLower();
+    if (configured_profile == QStringLiteral("aerial_terrain") ||
+        configured_profile == QStringLiteral("orbital_object"))
+    {
+        if (resolution_source)
+        {
+            *resolution_source = QStringLiteral("explicit");
+        }
+        return configured_profile;
+    }
+
+    if (resolution_source)
+    {
+        *resolution_source = QStringLiteral("geometry_classifier");
+    }
+    return QStringLiteral("auto");
+}
+
 QString mvsBackendFromStoredFrames(
     const std::vector<xjw::core::project::StoredDepthFrameRecord> &frames)
 {
@@ -110,6 +134,29 @@ QString mvsBackendFromStoredFrames(
         }
     }
     return actual_backend.isEmpty() ? QStringLiteral("unknown") : actual_backend;
+}
+
+QString sceneProfileFromStoredFrames(
+    const std::vector<xjw::core::project::StoredDepthFrameRecord> &frames)
+{
+    QString actual_profile;
+    for (const auto &frame : frames)
+    {
+        const QString profile = frame.sceneProfile.trimmed().toLower();
+        if (profile.isEmpty())
+        {
+            continue;
+        }
+        if (actual_profile.isEmpty())
+        {
+            actual_profile = profile;
+        }
+        else if (actual_profile != profile)
+        {
+            return QStringLiteral("mixed");
+        }
+    }
+    return actual_profile.isEmpty() ? QStringLiteral("unknown") : actual_profile;
 }
 
 QString sparseCloudPathFromRecord(const QJsonObject &record)
@@ -380,10 +427,17 @@ bool ProjectPointCloudWorkflowController::startWorkflow(
         return false;
     }
 
+    QJsonObject effective_settings = settings;
+    QString scene_profile_source;
+    const QString scene_profile = resolvedSceneProfile(
+        settings, &scene_profile_source);
+    effective_settings[QStringLiteral("sceneProfile")] = scene_profile;
+
     auto context = std::make_shared<PointCloudWorkflowContext>();
     context->session = _owner->currentSessionContext();
-    context->settings = settings;
-    context->request = xjw::core::project::denseGenerationSettingsFromJson(settings);
+    context->settings = effective_settings;
+    context->request = xjw::core::project::denseGenerationSettingsFromJson(
+        effective_settings);
     context->atIndex = at_index;
     context->sparseCloudPath = sparseCloudPathFromRecord(at_record);
     context->selectedImages = selectedImagesFromRecord(at_record);
@@ -399,6 +453,9 @@ bool ProjectPointCloudWorkflowController::startWorkflow(
     context->replaceDefaultPointCloud =
         settings.value(QStringLiteral("replaceDefaultPointCloud")).toBool(false);
     context->depthMapsOnly = depth_maps_only;
+    LOG_INFO(QStringLiteral(
+        "[MVS] 场景策略：profile=%1 source=%2")
+                 .arg(scene_profile, scene_profile_source));
 
     if (!QFileInfo::exists(context->sparseCloudPath))
     {
@@ -430,7 +487,10 @@ bool ProjectPointCloudWorkflowController::startWorkflow(
 
     const auto compatibility =
         xjw::gui::project::assessStoredDepthBatchCompatibility(
-            metadata, QString(), at_index);
+            metadata,
+            QString(),
+            at_index,
+            context->request.sceneProfile);
     const auto stored = xjw::core::project::collectLatestStoredDepthFrames(metadata);
     const QString requested_backend = patchMatchBackendText(
         context->request.patchMatchBackend);
@@ -445,6 +505,13 @@ bool ProjectPointCloudWorkflowController::startWorkflow(
     const bool can_reuse = context->reuseDepthMaps && compatibility.compatible &&
         stored_backend_matches_request;
     context->reusedDepthMaps = can_reuse;
+    if (context->reuseDepthMaps && !compatibility.compatible &&
+        compatibility.frameCount > 0)
+    {
+        LOG_INFO(QStringLiteral(
+            "[MVS] 已有深度图批次不兼容：%1 本次将重新估计深度图。")
+                     .arg(compatibility.reason));
+    }
     if (context->reuseDepthMaps && compatibility.compatible &&
         !stored_backend_matches_request)
     {
@@ -887,6 +954,8 @@ void ProjectPointCloudWorkflowController::startFusion(
             task.record[QStringLiteral("quality_profile")] = context->request.qualityProfile;
             task.record[QStringLiteral("depth_filter_mode")] =
                 context->request.depthFilterMode;
+            task.record[QStringLiteral("scene_profile")] =
+                sceneProfileFromStoredFrames(stored.frames);
             task.record[QStringLiteral("mvs_backend_requested")] =
                 patchMatchBackendText(context->request.patchMatchBackend);
             task.record[QStringLiteral("mvs_backend_actual")] =

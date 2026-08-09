@@ -130,8 +130,11 @@ MvsSceneClassification classifyMvsScene(const std::vector<CameraView> &views,
     double convergence_sum = 0.0;
     int convergent_count = 0;
     int down_looking_count = 0;
+    int positive_plane_side_count = 0;
+    int negative_plane_side_count = 0;
     int valid_camera_count = 0;
     constexpr double kMinimumAlignment = 0.8191520443;
+    const double plane_side_epsilon = std::max(1e-9, largest_cloud_scale * 1e-6);
 
     for (const CameraView &view : views)
     {
@@ -146,16 +149,33 @@ MvsSceneClassification classifyMvsScene(const std::vector<CameraView> &views,
         const Vec3 optical_axis = normalize(Vec3(rotation[6], rotation[7], rotation[8]));
         const Vec3 direction_to_cloud = normalize(cloud_center - center);
         const double convergence = optical_axis.dot(direction_to_cloud);
+        const double signed_plane_distance = plane_normal.dot(center - cloud_center);
+        const double plane_axis_alignment = optical_axis.dot(plane_normal);
+        const double forward_plane_distance = std::abs(plane_axis_alignment) > 1e-12
+            ? -signed_plane_distance / plane_axis_alignment
+            : -1.0;
 
         camera_centers.push_back(center);
         convergence_sum += std::max(-1.0, std::min(1.0, convergence));
         ++valid_camera_count;
+        if (signed_plane_distance > plane_side_epsilon)
+        {
+            ++positive_plane_side_count;
+        }
+        else if (signed_plane_distance < -plane_side_epsilon)
+        {
+            ++negative_plane_side_count;
+        }
         if (convergence >= kMinimumAlignment)
         {
             ++convergent_count;
         }
-        if (convergence >= kMinimumAlignment &&
-            std::abs(optical_axis.dot(plane_normal)) >= kMinimumAlignment)
+        // Aerial cameras need to look approximately along the terrain normal
+        // and meet the fitted terrain plane in front of the camera. Do not
+        // require the optical axis to point at the global sparse-cloud centre:
+        // that assumption rejects valid cameras near the ends of long strips.
+        if (std::abs(plane_axis_alignment) >= kMinimumAlignment &&
+            forward_plane_distance > plane_side_epsilon)
         {
             ++down_looking_count;
         }
@@ -168,6 +188,11 @@ MvsSceneClassification classifyMvsScene(const std::vector<CameraView> &views,
     }
     result.opticalAxisConvergence = static_cast<float>(convergence_sum / valid_camera_count);
     result.downLookingConsistency = static_cast<float>(down_looking_count) / valid_camera_count;
+    const int off_plane_camera_count = positive_plane_side_count + negative_plane_side_count;
+    const float camera_side_consistency = off_plane_camera_count > 0
+        ? static_cast<float>(std::max(positive_plane_side_count, negative_plane_side_count)) /
+            off_plane_camera_count
+        : 0.0f;
 
     cv::Vec3d camera_eigenvalues;
     cv::Matx33d camera_eigenvectors;
@@ -179,6 +204,7 @@ MvsSceneClassification classifyMvsScene(const std::vector<CameraView> &views,
     }
 
     const bool aerial = result.downLookingConsistency >= 0.75f &&
+                        camera_side_consistency >= 0.75f &&
                         result.planeThicknessRatio <= 0.20f;
     result.profile = aerial ? MvsSceneProfile::AerialTerrain : MvsSceneProfile::OrbitalObject;
 
@@ -187,6 +213,7 @@ MvsSceneClassification classifyMvsScene(const std::vector<CameraView> &views,
             << ": down-looking=" << result.downLookingConsistency
             << ", convergence=" << result.opticalAxisConvergence
             << ", plane-thickness=" << result.planeThicknessRatio
+            << ", camera-side=" << camera_side_consistency
             << ", convergent-cameras=" << convergent_count << '/' << valid_camera_count;
     result.reason = message.str();
     return result;

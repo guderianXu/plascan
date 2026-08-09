@@ -1127,6 +1127,8 @@ struct DepthTsdfFrameLoadResult
     std::int64_t elapsedMs = 0;
     int effectiveWorkerCount = 1;
     int discoveredArtifactCount = 0;
+    int primaryFrameCount = 0;
+    int auxiliaryFrameCount = 0;
 };
 
 struct DepthTsdfBoundsResult

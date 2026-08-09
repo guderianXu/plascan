@@ -796,7 +796,8 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelDepthMapsUseDirectMeshWorkf
     expectContainsAll(dialog, {
         R"(settings[QStringLiteral("depthMapSourcePath")] = sourcePath)",
         R"(settings[QStringLiteral("reuseDepthMaps")] =)",
-        R"(_hasReusableDepthMaps && _reuseDepthMapsRequested)",
+        R"(_hasReusableDepthMaps && selected_depth_batch_compatible)",
+        R"(settings[QStringLiteral("force_depth_recompute")] =)",
     });
 
     expectContainsAll(manager, {

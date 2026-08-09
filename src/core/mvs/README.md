@@ -34,6 +34,12 @@ live under `src/core/mvs/tests/`.
   refinement, and applies uniqueness confidence only after convergence. Plane patches intersect every reference
   ray before source projection, matching CUDA plane-homography geometry. Fusion-postprocess retention remains
   distinct from cross-view consistency in quality reports. Revision-23 artifacts are not reused.
+- Revision 26 makes `MvsSceneClassifier` the single source of truth for automatic aerial/orbital selection.
+  Long aerial strips are recognized from camera-to-terrain plane intersection, same-side camera consistency,
+  and sparse-cloud planarity rather than convergence on the global cloud centre. Camera-layout diagnostics from
+  aerial triangulation remain a prior only. Revision-25 depth batches are regenerated so an earlier scene
+  misclassification cannot be reused by fusion. Revision-26 GUI reuse also requires a consistent classified
+  scene profile plus complete `acceptance` and `fusion_eligible` metadata for every frame.
 - GUI project metadata consumes manifest records. The workspace tree should refresh from metadata rather than
   treating directory scans as the primary state.
 

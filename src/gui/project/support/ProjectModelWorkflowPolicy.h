@@ -33,6 +33,7 @@ QString projectDepthInputSignature(const QJsonObject &project_metadata,
 StoredDepthBatchCompatibility assessStoredDepthBatchCompatibility(
     const QJsonObject &project_metadata,
     const QString &depth_map_source_path = QString(),
-    int aerial_triangulation_result_index = -1);
+    int aerial_triangulation_result_index = -1,
+    const QString &expected_scene_profile = QString());
 
 } // namespace xjw::gui::project

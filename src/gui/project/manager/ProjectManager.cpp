@@ -23,6 +23,7 @@
 
 #include "ProjectMetadataOperations.h"
 #include "ProjectOpenGuard.h"
+#include "ProjectModelWorkflowPolicy.h"
 #include "ProjectSfmWorkflow.h"
 #include "ProjectSparseWorkflow.h"
 #include "ProjectResultRecords.h"
@@ -2177,10 +2178,21 @@ void ProjectManager::startGenerateModelAsync(const QJsonObject &settings)
         !stored_depth_quality.isEmpty() &&
         xjw::gui::project::depthQualityRank(stored_depth_quality) <
             xjw::gui::project::depthQualityRank(requested_depth_quality);
+    const auto stored_depth_compatibility =
+        source_data == QStringLiteral("depth_maps") && !depth_source.isEmpty()
+            ? xjw::gui::project::assessStoredDepthBatchCompatibility(
+                  _projectData->metadata(),
+                  depth_source,
+                  settings.value(QStringLiteral("at_index")).toInt(-1),
+                  settings.value(QStringLiteral("sceneProfile")).toString())
+            : xjw::gui::project::StoredDepthBatchCompatibility{};
+    const bool stored_depth_batch_incompatible =
+        !depth_source.isEmpty() && !stored_depth_compatibility.compatible;
     const bool prepare_depth_maps =
         source_data == QStringLiteral("depth_maps") &&
         (settings.value(QStringLiteral("automatic_depth_maps")).toBool(false) ||
          force_depth_recompute ||
+         stored_depth_batch_incompatible ||
          stored_depth_quality_insufficient ||
          !reuse_depth_maps ||
          depth_source.isEmpty());
@@ -2188,6 +2200,12 @@ void ProjectManager::startGenerateModelAsync(const QJsonObject &settings)
     {
         _modelManager->startMeshReconstructionAsync(settings);
         return;
+    }
+    if (stored_depth_batch_incompatible)
+    {
+        LOG_INFO(QStringLiteral(
+            "[模型生成] 现有深度图批次不兼容，将自动重新估计：%1")
+                     .arg(stored_depth_compatibility.reason));
     }
     if (!_pointCloudWorkflowController)
     {

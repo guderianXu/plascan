@@ -170,6 +170,16 @@ QJsonArray buildGenerateModelSourceCandidates(const QJsonObject &metadata)
         depth_properties.insert(
             QStringLiteral("grid_height"),
             record.value(QStringLiteral("grid_height")));
+        const auto compatibility =
+            xjw::gui::project::assessStoredDepthBatchCompatibility(
+                metadata,
+                cleanPath);
+        depth_properties.insert(
+            QStringLiteral("depth_batch_compatible"),
+            compatibility.compatible);
+        depth_properties.insert(
+            QStringLiteral("depth_batch_compatibility_reason"),
+            compatibility.reason);
         appendModelSourceCandidate(
             &candidates,
             QStringLiteral("depth_maps"),
@@ -177,7 +187,13 @@ QJsonArray buildGenerateModelSourceCandidates(const QJsonObject &metadata)
             cleanPath,
             QStringLiteral("深度图"),
             true,
-            QStringLiteral("深度图将作为生成模型入口；若该深度图目录已有融合点云，将直接复用并生成网格。"),
+            compatibility.compatible
+                ? QStringLiteral(
+                      "深度图将作为生成模型入口；若该深度图目录已有融合点云，"
+                      "将直接复用并生成网格。")
+                : QStringLiteral(
+                      "该深度图批次与当前工程不兼容，生成模型前将自动重新估计深度图：%1")
+                      .arg(compatibility.reason),
             depth_properties);
     }
 
