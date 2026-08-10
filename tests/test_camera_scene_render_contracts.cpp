@@ -60,6 +60,46 @@ TEST(CameraSceneRenderContractTest, DrawsBackgroundBeforeGeometryAndForegroundAf
     EXPECT_GT(second_image_draw, foreground);
 }
 
+TEST(CameraSceneInteractionContractTest, UsesMetashapeStyleNavigationOutsideTheGizmo)
+{
+    const QString header =
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
+    const QString source =
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
+    const QString viewMath =
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneViewMath.cpp"));
+    const QString taskStatus =
+        readProjectFile(QStringLiteral("src/gui/main_window/MainWindowTaskStatus.cpp"));
+    const qsizetype pressStart = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::mousePressEvent"));
+    const qsizetype moveStart = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::mouseMoveEvent"), pressStart);
+    const qsizetype releaseStart = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::mouseReleaseEvent"), moveStart);
+    ASSERT_GE(pressStart, 0);
+    ASSERT_GT(moveStart, pressStart);
+    ASSERT_GT(releaseStart, moveStart);
+    const QString pressBlock = source.mid(pressStart, moveStart - pressStart);
+    const QString moveBlock = source.mid(moveStart, releaseStart - moveStart);
+
+    EXPECT_TRUE(header.contains(QStringLiteral("enum class LeftDragMode")));
+    EXPECT_TRUE(header.contains(QStringLiteral("Pan,")));
+    EXPECT_TRUE(header.contains(QStringLiteral("Orbit,")));
+    EXPECT_TRUE(header.contains(QStringLiteral("GizmoOrbit,")));
+    EXPECT_TRUE(pressBlock.contains(QStringLiteral(
+        "_leftDragMode = LeftDragMode::Pan")));
+    EXPECT_TRUE(pressBlock.contains(QStringLiteral(
+        "_leftDragMode = LeftDragMode::Orbit")));
+    EXPECT_TRUE(pressBlock.contains(QStringLiteral("_rightDragging = true")));
+    EXPECT_TRUE(pressBlock.contains(QStringLiteral("isInsideRotationGizmo")));
+    EXPECT_TRUE(moveBlock.contains(QStringLiteral(
+        "_manualSelecting && (event->buttons() & Qt::LeftButton)")));
+    EXPECT_TRUE(moveBlock.contains(QStringLiteral("applyOrbitDrag(delta)")));
+    EXPECT_TRUE(viewMath.contains(QStringLiteral("orbitSceneViewRotation")));
+    EXPECT_TRUE(taskStatus.contains(QStringLiteral("鼠标左键拖拽框选")));
+    EXPECT_TRUE(taskStatus.contains(QStringLiteral("右键拖拽可环绕查看")));
+}
+
 TEST(CameraSceneRenderContractTest, AvoidsPerFrameSortingForOpaqueDepthWrittenThumbnails)
 {
     const QString source = readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
@@ -276,7 +316,7 @@ TEST(CameraSceneRenderContractTest, CameraCardsDirectionLeadersAndLocalAxesUseBa
     EXPECT_TRUE(drawBlock.contains(QStringLiteral("segmentInstanceCount")));
     EXPECT_FALSE(drawBlock.contains(QStringLiteral("leader_vertices")));
     EXPECT_FALSE(drawBlock.contains(QStringLiteral("atlas_vertices")));
-    EXPECT_TRUE(drawBlock.contains(QStringLiteral("!_leftDragging && !_middleDragging")));
+    EXPECT_TRUE(drawBlock.contains(QStringLiteral("!isNavigationDragging()")));
 
     const qsizetype leaderStart = source.indexOf(
         QStringLiteral("bool CameraSceneWidget::cameraDirectionLeaderSegment"));

@@ -3,7 +3,7 @@
 
 #include <gtest/gtest.h>
 
-#include <limits>
+#include <QtMath>
 
 #include "CameraSceneViewMath.h"
 
@@ -49,6 +49,24 @@ TEST(CameraSceneViewMathTest, BoundsSceneZoomAgainstExtremeWheelInput)
     EXPECT_DOUBLE_EQ(
         boundedSceneZoomScale(8.0, 1.0, 2'000.0, -1.0),
         2'000.0);
+}
+
+TEST(CameraSceneViewMathTest, OrbitsAcrossCanvasWithoutUsingGizmoRadius)
+{
+    const QQuaternion identity;
+    const QQuaternion yaw = orbitSceneViewRotation(
+        identity, QVector2D(100.0f, 0.0f), 0.1f);
+    const QQuaternion pitch = orbitSceneViewRotation(
+        identity, QVector2D(0.0f, 100.0f), 0.1f);
+
+    const QVector3D yawed = yaw.rotatedVector(QVector3D(0.0f, 0.0f, 1.0f));
+    const QVector3D pitched = pitch.rotatedVector(QVector3D(0.0f, 0.0f, 1.0f));
+    EXPECT_NEAR(yawed.x(), std::sin(qDegreesToRadians(10.0f)), 1.0e-5f);
+    EXPECT_NEAR(yawed.y(), 0.0f, 1.0e-5f);
+    EXPECT_NEAR(pitched.x(), 0.0f, 1.0e-5f);
+    EXPECT_NEAR(pitched.y(), -std::sin(qDegreesToRadians(10.0f)), 1.0e-5f);
+    EXPECT_NEAR(yaw.length(), 1.0f, 1.0e-5f);
+    EXPECT_NEAR(pitch.length(), 1.0f, 1.0e-5f);
 }
 
 TEST(CameraSceneViewMathTest, CancelsPerspectiveDepthAtFixedSceneZoom)

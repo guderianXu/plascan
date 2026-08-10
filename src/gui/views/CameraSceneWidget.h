@@ -65,8 +65,8 @@ class QResizeEvent;
 // 使用 QRhiBuffer + .qsb shader（顶点色、Phong 光照和 UV 纹理 shader）
 // 功能包括：
 //   - 渲染相机姿态（位置+相机卡片）、点云（xyz）、PLY 网格和 OBJ/MTL 纹理模型
-//   - Arcball 自由旋转、单轴环旋转（X/Y/Z）
-//   - 滚轮缩放、中键平移
+//   - Metashape 风格画布导航：左键平移、右键/ Ctrl+左键环绕、滚轮缩放
+//   - 中央轨迹球 Arcball 自由旋转和 X/Y/Z 单轴环旋转
 //   - 实时显示坐标轴指示器和欧拉角信息
 // =============================================================================
 class CameraSceneWidget : public QRhiWidget
@@ -179,10 +179,10 @@ protected:
     // 视口尺寸变化时标记资源和投影参数需要更新。
     void resizeEvent(QResizeEvent *event) override;
 
-    // 鼠标按下：记录初始旋转状态，区分左键旋转与中键平移
+    // 鼠标按下：区分画布平移/环绕、Gizmo 旋转与显式框选工具
     void mousePressEvent(QMouseEvent *event) override;
 
-    // 鼠标移动：Arcball 自由旋转 / 单轴环旋转 / 中键平移 / 悬停高亮检测
+    // 鼠标移动：画布平移/环绕、Arcball、单轴旋转和悬停高亮检测
     void mouseMoveEvent(QMouseEvent *event) override;
 
     // 鼠标释放：清除拖拽状态，恢复光标
@@ -206,6 +206,14 @@ private:
         X,    // 绕 X 轴旋转（红色环）
         Y,    // 绕 Y 轴旋转（绿色环）
         Z     // 绕 Z 轴旋转（蓝色环）
+    };
+    enum class LeftDragMode
+    {
+        None,
+        Pan,
+        Orbit,
+        GizmoOrbit,
+        GizmoAxis
     };
     struct SceneMatrices
     {
@@ -241,12 +249,20 @@ private:
     // 根据鼠标位置检测当前最近的旋转轴环（距离 <12px 判定为悬停）
     HoverAxis pickHoverAxis(const QPoint &mousePos) const;
 
+    // 中央 Gizmo 仅在自身圆形范围内接管左键，画布其余区域使用导航手势。
+    bool isInsideRotationGizmo(const QPoint &mousePos) const;
+
     // 计算指定轴环在鼠标附近切线方向（单位向量，用于单轴旋转的拖拽量计算）
     QVector2D pickAxisTangent(const QPoint &mousePos, HoverAxis axis) const;
 
     // Arcball：将屏幕位置映射到单位球面（xy=屏幕坐标系，z指向观察者）
     // 若鼠标在球内则返回球面点，否则投影到赤道圆
     QVector3D arcballVector(const QPoint &mousePos) const;
+
+    // 画布环绕不依赖 Gizmo 半径，使用稳定的屏幕水平/垂直旋转。
+    void applyOrbitDrag(const QPoint &pixelDelta);
+
+    bool isNavigationDragging() const;
 
     // 将场景平移偏移量限制在合理范围（±45% 画布尺寸），避免场景移出屏幕
     void clampSceneOffset();
@@ -678,8 +694,10 @@ private:
     QPoint _lastMousePos;                     // 上一帧鼠标位置（用于增量计算）
     HoverAxis _hoverAxis = HoverAxis::None;   // 当前鼠标悬停的轴（高亮显示）
     HoverAxis _dragAxis = HoverAxis::None;    // 当前拖拽激活的轴
-    bool _leftDragging = false;               // 左键是否正在拖拽
-    bool _middleDragging = false;             // 中键是否正在拖拽（平移）
+    bool _leftDragging = false;               // 左键导航或 Gizmo 拖拽
+    bool _middleDragging = false;             // 中键平移
+    bool _rightDragging = false;              // 右键画布环绕
+    LeftDragMode _leftDragMode = LeftDragMode::None;
     QVector2D _dragAxisDir;                   // 单轴旋转时的切线方向（屏幕空间）
     // Arcball 按下时记录的状态（用于从初始旋转叠加增量，避免浮点漂移）
     QVector3D  _arcballPressVector;  // 按下时球面坐标向量

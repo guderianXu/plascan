@@ -6,6 +6,7 @@
 #include <QPointF>
 #include <QQuaternion>
 #include <QVector>
+#include <QVector2D>
 #include <QVector3D>
 
 namespace xjw::gui::camera_scene
@@ -58,6 +59,13 @@ double boundedSceneZoomScale(
     double factor,
     double minimumScale = MinimumSceneZoomScale,
     double maximumScale = MaximumSceneZoomScale);
+
+// Metashape 风格的画布环绕：水平拖动绕屏幕竖轴旋转，垂直拖动绕屏幕横轴旋转。
+// 与中央 Gizmo 的 Arcball 投影分离，避免画布远离轨迹球时退化为赤道平面旋转。
+QQuaternion orbitSceneViewRotation(
+    const QQuaternion &currentRotation,
+    const QVector2D &pixelDelta,
+    float degreesPerPixel = 0.28f);
 
 // 相机卡片的目标屏幕半尺寸只由全局缩放倍率决定。
 // 缩远场景时持续增大，缩近时持续减小，但使用缓增长曲线避免

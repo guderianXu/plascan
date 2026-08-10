@@ -121,7 +121,7 @@ void CameraSceneWidget::paintOverlay(QPainter &painter)
         visibleScene = visibleScene.subtracted(foregroundImageOcclusion);
         painter.setClipPath(visibleScene, Qt::IntersectClip);
     }
-    const bool interactive_camera_motion = _leftDragging || _middleDragging;
+    const bool interactive_camera_motion = isNavigationDragging();
 
     // 点云完全由 RHI 点图元管线绘制；覆盖层只保留交互控件和文字，
     // 避免在每帧中通过 QPainter 再次遍历全部点。
@@ -243,7 +243,7 @@ void CameraSceneWidget::paintOverlay(QPainter &painter)
 
         painter.setPen(QColor(235, 80, 80));
         QString manual_status = tr(
-            "手动剔除模式：右键框选高亮，前进侧键删除，Ctrl+Z 撤销（已选 %1）")
+            "手动剔除：左键框选，右键环绕，中键平移，前进侧键删除，Ctrl+Z 撤销（已选 %1）")
             .arg(static_cast<int>(_manualPreviewIndices.size()));
         if (_manualSelectionRunning)
         {

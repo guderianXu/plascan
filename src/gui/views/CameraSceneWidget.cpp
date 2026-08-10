@@ -4,8 +4,8 @@
 // 内容:
 //   - CameraSceneWidget：Qt RHI 三维渲染控件
 //       · 点云 / PLY 模型 / 相机平面卡片渲染（QRhiBuffer + .qsb shader）
-//       · Arcball 自由旋转 + 单轴环旋转（X/Y/Z Gizmo）
-//       · 中键平移、滚轮缩放
+//       · Metashape 风格画布导航（左键平移、右键/ Ctrl+左键环绕）
+//       · 中央 Arcball + X/Y/Z 单轴环旋转、滚轮缩放
 //       · 透明 QWidget 覆盖层（Gizmo 环、坐标轴、相机卡片、欧拉角）
 // =============================================================================
 #include "CameraSceneWidget.h"
@@ -347,6 +347,8 @@ CameraSceneWidget::CameraSceneWidget(QWidget *parent)
     setMouseTracking(true); // 启用鼠标追踪，以便在无按键时检测悬停轴
     _viewRot = QQuaternion::fromEulerAngles(-25.0f, 35.0f, 0.0f); // 默认斜视角
     setFocusPolicy(Qt::StrongFocus);
+    setToolTip(tr(
+        "左键拖动平移；右键或 Ctrl+左键拖动环绕；滚轮缩放；中央轨迹球用于自由/单轴旋转"));
     updateCursor();
     const int ideal_threads = std::max(1, QThread::idealThreadCount());
     _maximumCameraImageLoads = std::clamp((ideal_threads + 1) / 2, 4, 12);
@@ -590,6 +592,12 @@ void CameraSceneWidget::setShowGizmo(bool show)
     if (_showGizmo != show)
     {
         _showGizmo = show;
+        if (!_showGizmo)
+        {
+            _hoverAxis = HoverAxis::None;
+            _dragAxis = HoverAxis::None;
+        }
+        updateCursor();
         updateCameraOverlay();
     }
 }
@@ -2233,6 +2241,16 @@ CameraSceneWidget::HoverAxis CameraSceneWidget::pickHoverAxis(const QPoint &mous
     return HoverAxis::Z;
 }
 
+bool CameraSceneWidget::isInsideRotationGizmo(const QPoint &mousePos) const
+{
+    if (!_showGizmo)
+    {
+        return false;
+    }
+    return QLineF(QPointF(mousePos), manipCenterScreen()).length()
+        <= manipRadiusPx() + 12.0;
+}
+
 // 计算鼠标附近指定轴环的切线方向（屏幕空间单位向量）。
 // 用于将鼠标拖拽距离投影到切线方向以计算旋转角度。
 QVector2D CameraSceneWidget::pickAxisTangent(const QPoint &mousePos, HoverAxis axis) const
@@ -2308,6 +2326,18 @@ QVector3D CameraSceneWidget::arcballVector(const QPoint &mousePos) const
     return QVector3D(x / len, y / len, 0.0f);
 }
 
+void CameraSceneWidget::applyOrbitDrag(const QPoint &pixelDelta)
+{
+    _viewRot = xjw::gui::camera_scene::orbitSceneViewRotation(
+        _viewRot,
+        QVector2D(float(pixelDelta.x()), float(pixelDelta.y())));
+}
+
+bool CameraSceneWidget::isNavigationDragging() const
+{
+    return _leftDragging || _middleDragging || _rightDragging;
+}
+
 // 平移偏移量无限制（允许将模型拖出视口外）
 void CameraSceneWidget::clampSceneOffset()
 {
@@ -2315,8 +2345,9 @@ void CameraSceneWidget::clampSceneOffset()
 }
 
 // 根据当前的悬停轴/拖拽状态更新鼠标光标样式：
-//   - 中键拖拽中        → 四向移动光标
-//   - 左键自由旋转中    → 闭合手型光标
+//   - 左键画布平移/中键平移 → 四向移动光标
+//   - 右键/ Ctrl+左键环绕  → 闭合手型光标
+//   - Gizmo 自由旋转中      → 闭合手型光标
 //   - 悬停/拖拽 X/Y/Z 环 → 带颜色和字母的自定义圆形光标
 //   - 默认              → 开放手型光标
 void CameraSceneWidget::updateCursor()
@@ -2339,25 +2370,40 @@ void CameraSceneWidget::updateCursor()
         return QCursor(pm, 12, 12);
     };
 
-    if (_middleDragging) {
-        setCursor(Qt::SizeAllCursor); // 中键平移中
+    if (_middleDragging
+        || (_leftDragging && _leftDragMode == LeftDragMode::Pan))
+    {
+        setCursor(Qt::SizeAllCursor);
         return;
     }
-    if (_leftDragging && _dragAxis == HoverAxis::None) {
-        setCursor(Qt::ClosedHandCursor); // Arcball 自由旋转中
+    if (_rightDragging
+        || (_leftDragging
+            && (_leftDragMode == LeftDragMode::Orbit
+                || _leftDragMode == LeftDragMode::GizmoOrbit)))
+    {
+        setCursor(Qt::ClosedHandCursor);
         return;
     }
 
     // 优先显示当前拖拽轴（若无则显示悬停轴）
-    HoverAxis axis = (_leftDragging ? _dragAxis : _hoverAxis);
+    HoverAxis axis = (_leftDragging
+                      && _leftDragMode == LeftDragMode::GizmoAxis)
+        ? _dragAxis
+        : _hoverAxis;
     if (axis == HoverAxis::X) {
         setCursor(axisCursor(QColor(255, 120, 120), QStringLiteral("X")));
     } else if (axis == HoverAxis::Y) {
         setCursor(axisCursor(QColor(120, 255, 120), QStringLiteral("Y")));
     } else if (axis == HoverAxis::Z) {
         setCursor(axisCursor(QColor(120, 180, 255), QStringLiteral("Z")));
-    } else {
-        setCursor(Qt::OpenHandCursor); // 空闲时显示开放手型
+    }
+    else if (_manualPruneMode && !isInsideRotationGizmo(mapFromGlobal(QCursor::pos())))
+    {
+        setCursor(Qt::CrossCursor);
+    }
+    else
+    {
+        setCursor(Qt::OpenHandCursor);
     }
 }
 
@@ -4502,7 +4548,7 @@ void CameraSceneWidget::drawCameraThumbnails(QRhiCommandBuffer *cb,
         &uniforms, sizeof(uniforms));
 
     const int segment_draw_count = _showCameraLocalAxes
-            && !_leftDragging && !_middleDragging
+            && !isNavigationDragging()
         ? _thumbnailPipeline.segmentInstanceCount
         : _thumbnailPipeline.leaderInstanceCount;
     if (_thumbnailPipeline.leaderPipeline
@@ -5482,23 +5528,7 @@ bool CameraSceneWidget::undoLastManualPrune(QString *errorMessage)
 void CameraSceneWidget::mousePressEvent(QMouseEvent *event)
 {
     setFocus();
-
-    if (_manualPruneMode && event->button() == Qt::RightButton)
-    {
-        if (_manualEditRunning)
-        {
-            event->accept();
-            return;
-        }
-        clearManualPointSelection();
-        _manualSelecting = true;
-        _manualSelectStart = event->pos();
-        _manualSelectRect = QRect(_manualSelectStart, _manualSelectStart);
-        updateCursor();
-        event->accept();
-        update();
-        return;
-    }
+    _lastMousePos = event->pos();
 
     if (_manualPruneMode && event->button() == Qt::ForwardButton)
     {
@@ -5515,34 +5545,85 @@ void CameraSceneWidget::mousePressEvent(QMouseEvent *event)
         return;
     }
 
+    const bool control_pressed = event->modifiers().testFlag(Qt::ControlModifier);
+    const HoverAxis pressed_axis = _showGizmo
+        ? pickHoverAxis(event->pos())
+        : HoverAxis::None;
+    const bool inside_gizmo = isInsideRotationGizmo(event->pos());
+
+    // 与 Metashape 一致，框选只属于显式选择工具。中央 Gizmo 和 Ctrl 修饰的
+    // 左键仍保留导航能力，避免进入编辑模式后无法调整观察角度。
+    if (_manualPruneMode
+        && event->button() == Qt::LeftButton
+        && !control_pressed
+        && pressed_axis == HoverAxis::None
+        && !inside_gizmo)
+    {
+        if (_manualEditRunning)
+        {
+            event->accept();
+            return;
+        }
+        clearManualPointSelection();
+        _manualSelecting = true;
+        _manualSelectStart = event->pos();
+        _manualSelectRect = QRect(_manualSelectStart, _manualSelectStart);
+        updateCursor();
+        event->accept();
+        update();
+        return;
+    }
+
     if (_manualPruneMode
         && (event->button() == Qt::LeftButton
-            || event->button() == Qt::MiddleButton))
+            || event->button() == Qt::MiddleButton
+            || event->button() == Qt::RightButton))
     {
         clearManualPointSelection();
     }
 
-    _lastMousePos = event->pos();
-    if (event->button() == Qt::LeftButton) {
+    if (event->button() == Qt::LeftButton)
+    {
         _leftDragging = true;
-        _dragAxis = _hoverAxis;
-        // 无论单轴还是自由旋转，均记录按下时的旋转状态
-        _viewRotAtPress = _viewRot;
-        if (_dragAxis != HoverAxis::None) {
+        _dragAxis = HoverAxis::None;
+        if (control_pressed)
+        {
+            _leftDragMode = LeftDragMode::Orbit;
+        }
+        else if (pressed_axis != HoverAxis::None)
+        {
+            _leftDragMode = LeftDragMode::GizmoAxis;
+            _dragAxis = pressed_axis;
+            _viewRotAtPress = _viewRot;
             _dragAxisDir = pickAxisTangent(event->pos(), _dragAxis);
-            // 注意：Y 轴环的屏幕切线方向在参数化时与鼠标拖拽方向有符号差，
-            // 在多数情况下需要翻转切线方向以使鼠标向右/上时视图按直觉旋转。
-            // 仅对 Y 轴做翻转修正，避免对 X/Z 轴产生副作用。
-            if (_dragAxis == HoverAxis::Y) _dragAxisDir = -_dragAxisDir;
-        } else {
-            // Arcball 自由旋转：记录按下那一刻球面坐标
+            if (_dragAxis == HoverAxis::Y)
+            {
+                _dragAxisDir = -_dragAxisDir;
+            }
+        }
+        else if (inside_gizmo)
+        {
+            _leftDragMode = LeftDragMode::GizmoOrbit;
+            _viewRotAtPress = _viewRot;
             _arcballPressVector = arcballVector(event->pos());
+        }
+        else
+        {
+            _leftDragMode = LeftDragMode::Pan;
         }
         updateCursor();
         event->accept();
         return;
     }
-    if (event->button() == Qt::MiddleButton) {
+    if (event->button() == Qt::RightButton)
+    {
+        _rightDragging = true;
+        updateCursor();
+        event->accept();
+        return;
+    }
+    if (event->button() == Qt::MiddleButton)
+    {
         _middleDragging = true;
         updateCursor();
         event->accept();
@@ -5553,7 +5634,7 @@ void CameraSceneWidget::mousePressEvent(QMouseEvent *event)
 
 void CameraSceneWidget::mouseMoveEvent(QMouseEvent *event)
 {
-    if (_manualPruneMode && _manualSelecting && (event->buttons() & Qt::RightButton))
+    if (_manualPruneMode && _manualSelecting && (event->buttons() & Qt::LeftButton))
     {
         _manualSelectRect = QRect(_manualSelectStart, event->pos()).normalized();
         _manualPreviewIndices.clear();
@@ -5564,58 +5645,95 @@ void CameraSceneWidget::mouseMoveEvent(QMouseEvent *event)
     }
 
     const QPoint delta = event->pos() - _lastMousePos;
+    bool navigation_handled = false;
+    bool rotation_changed = false;
 
-    if (_leftDragging && (event->buttons() & Qt::LeftButton)) {
-        if (_dragAxis == HoverAxis::None) {
-            // ── Arcball 自由旋转 ──────────────────────────────────────────────
-            // 将当前鼠标投影到球面，计算从按下点到当前点的旋转，
-            // 再䈛到按下时保存的初始视图旋转上——
-            // 这样球面上最始点击处就会一直跟随鼠标移动。
+    if (_leftDragging && (event->buttons() & Qt::LeftButton))
+    {
+        navigation_handled = true;
+        if (_leftDragMode == LeftDragMode::Pan)
+        {
+            _sceneOffsetPx += QPointF(delta.x(), delta.y());
+            clampSceneOffset();
+        }
+        else if (_leftDragMode == LeftDragMode::Orbit)
+        {
+            applyOrbitDrag(delta);
+            rotation_changed = true;
+        }
+        else if (_leftDragMode == LeftDragMode::GizmoOrbit)
+        {
             const QVector3D v2 = arcballVector(event->pos());
             const QVector3D axis = QVector3D::crossProduct(_arcballPressVector, v2);
-            if (axis.lengthSquared() > 1e-10f) {
+            if (axis.lengthSquared() > 1e-10f)
+            {
                 const float dot = qBound(-1.0f,
                     QVector3D::dotProduct(_arcballPressVector, v2), 1.0f);
                 const float angleDeg = qRadiansToDegrees(std::acos(dot));
                 const QQuaternion delta_q =
                     QQuaternion::fromAxisAndAngle(axis.normalized(), angleDeg);
-                // 应用到按下时的初始旋转（非增量式，避免浮点漂移）
                 _viewRot = (delta_q * _viewRotAtPress).normalized();
+                rotation_changed = true;
             }
-        } else {
-            // ── 单轴环旋转 ─────────────────────────────────────────────────────
-            // 目标：环面的法向方向（即 X/Y/Z 轴在当前世界空间中的指向）固定不动，
-            //       环只在自身平面内"自旋"，看起来像环面始终保持水平/垂直。
-            // 实现：将本地轴转换到世界空间 axisView，绕 axisView 前乘旋转。
-            //       前乘（世界空间旋转）效果：环法向不变，环平面姿态不变，
-            //       场景内容（相机等）绕该轴旋转。
+        }
+        else if (_leftDragMode == LeftDragMode::GizmoAxis)
+        {
             const QVector2D d(float(delta.x()), float(delta.y()));
             const float scalar = QVector2D::dotProduct(d, _dragAxisDir);
             const float ang = scalar * 0.35f;
-            // 取该环的本地法向轴，转换为当前视图下的世界方向
             QVector3D localAxis;
-            if (_dragAxis == HoverAxis::X)      localAxis = QVector3D(1.0f, 0.0f, 0.0f);
-            else if (_dragAxis == HoverAxis::Y) localAxis = QVector3D(0.0f, 1.0f, 0.0f);
-            else                                  localAxis = QVector3D(0.0f, 0.0f, 1.0f);
+            if (_dragAxis == HoverAxis::X)
+            {
+                localAxis = QVector3D(1.0f, 0.0f, 0.0f);
+            }
+            else if (_dragAxis == HoverAxis::Y)
+            {
+                localAxis = QVector3D(0.0f, 1.0f, 0.0f);
+            }
+            else
+            {
+                localAxis = QVector3D(0.0f, 0.0f, 1.0f);
+            }
             const QVector3D axisWorld = applyViewRotation(localAxis).normalized();
-            // 绕世界空间轴前乘：new_rot = qa_world * old_rot
-            // 这样环的法向量方向(axisWorld)在此次旋转后保持恒定
             const QQuaternion qa = QQuaternion::fromAxisAndAngle(axisWorld, ang);
             _viewRot = (qa * _viewRot).normalized();
+            rotation_changed = true;
         }
+    }
+    else if (_rightDragging && (event->buttons() & Qt::RightButton))
+    {
+        navigation_handled = true;
+        applyOrbitDrag(delta);
+        rotation_changed = true;
+    }
+    else if (_middleDragging && (event->buttons() & Qt::MiddleButton))
+    {
+        navigation_handled = true;
+        _sceneOffsetPx += QPointF(delta.x(), delta.y());
+        clampSceneOffset();
+    }
+
+    if (rotation_changed)
+    {
         if (_showCameraImage && !_cameraImageLocked)
         {
             updateActiveCameraForView();
         }
+    }
+    if (navigation_handled)
+    {
         update();
-    } else if (_middleDragging && (event->buttons() & Qt::MiddleButton)) {
-        // 中键平移：1:1 映射鼠标像素，无论缩放倍率如何，拖拽同量始终移动同距离
-        _sceneOffsetPx += QPointF(delta.x(), delta.y());
-        clampSceneOffset();
-        update();
-    } else {
-        const HoverAxis newHover = pickHoverAxis(event->pos());
-        if (newHover != _hoverAxis) {
+        _lastMousePos = event->pos();
+        event->accept();
+        return;
+    }
+
+    {
+        const HoverAxis newHover = _showGizmo
+            ? pickHoverAxis(event->pos())
+            : HoverAxis::None;
+        if (newHover != _hoverAxis)
+        {
             _hoverAxis = newHover;
             updateCursor();
             update();
@@ -5628,7 +5746,7 @@ void CameraSceneWidget::mouseMoveEvent(QMouseEvent *event)
 
 void CameraSceneWidget::mouseReleaseEvent(QMouseEvent *event)
 {
-    if (_manualPruneMode && event->button() == Qt::RightButton)
+    if (_manualPruneMode && _manualSelecting && event->button() == Qt::LeftButton)
     {
         _manualSelecting = false;
         _manualSelectRect = _manualSelectRect.normalized();
@@ -5639,11 +5757,18 @@ void CameraSceneWidget::mouseReleaseEvent(QMouseEvent *event)
         return;
     }
 
-    if (event->button() == Qt::LeftButton) {
+    if (event->button() == Qt::LeftButton)
+    {
         _leftDragging = false;
+        _leftDragMode = LeftDragMode::None;
         _dragAxis = HoverAxis::None;
     }
-    if (event->button() == Qt::MiddleButton) {
+    if (event->button() == Qt::RightButton)
+    {
+        _rightDragging = false;
+    }
+    if (event->button() == Qt::MiddleButton)
+    {
         _middleDragging = false;
     }
     updateCursor();
@@ -5653,7 +5778,8 @@ void CameraSceneWidget::mouseReleaseEvent(QMouseEvent *event)
 
 void CameraSceneWidget::wheelEvent(QWheelEvent *event)
 {
-    if (_leftDragging || _middleDragging) {
+    if (isNavigationDragging())
+    {
         event->ignore();
         return;
     }
@@ -5689,6 +5815,10 @@ void CameraSceneWidget::resetView()
     _sceneOffsetPx = QPointF();
     _hoverAxis = HoverAxis::None;
     _dragAxis = HoverAxis::None;
+    _leftDragging = false;
+    _middleDragging = false;
+    _rightDragging = false;
+    _leftDragMode = LeftDragMode::None;
     if (_showCameraImage && !_cameraImageLocked)
     {
         updateActiveCameraForView();

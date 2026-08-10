@@ -119,6 +119,27 @@ double boundedSceneZoomScale(double currentScale,
     return std::clamp(nextScale, safeMinimum, safeMaximum);
 }
 
+QQuaternion orbitSceneViewRotation(const QQuaternion &currentRotation,
+                                   const QVector2D &pixelDelta,
+                                   float degreesPerPixel)
+{
+    if (!std::isfinite(pixelDelta.x())
+        || !std::isfinite(pixelDelta.y())
+        || !std::isfinite(degreesPerPixel)
+        || degreesPerPixel <= 0.0f)
+    {
+        return currentRotation.normalized();
+    }
+
+    const QQuaternion yaw = QQuaternion::fromAxisAndAngle(
+        QVector3D(0.0f, 1.0f, 0.0f),
+        pixelDelta.x() * degreesPerPixel);
+    const QQuaternion pitch = QQuaternion::fromAxisAndAngle(
+        QVector3D(1.0f, 0.0f, 0.0f),
+        pixelDelta.y() * degreesPerPixel);
+    return (pitch * yaw * currentRotation).normalized();
+}
+
 double cameraPlaneScreenHalfExtentPixels(double zoomScale,
                                          double normalHalfExtentPixels)
 {
