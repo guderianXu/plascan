@@ -986,6 +986,20 @@ TEST(MvsSchedulerContractTest, VisibilityAndSourceViewCachesAvoidRedundantWork)
               indexOfOrFail(frameCacheBlock, "sampledMedianAngle(refIdx, candidate.viewIndex)"));
 }
 
+TEST(MvsSchedulerContractTest, LargeHybridBatchKeepsBoundedOpenClFullFrame)
+{
+    const QString scheduler =
+        readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+
+    expectContainsAll(scheduler, {
+        "recommendedOpenClFullFrameFloorPerDevice(",
+        "schedulingPolicy.guaranteedOpenClFullFramesPerDevice",
+        "schedulingPolicy.maximumOpenClInFlightTasksPerDevice",
+        "!claim.requiresFullFrame",
+        "OpenCL完整帧 %1/%2",
+    });
+}
+
 TEST(MvsSchedulerContractTest, SparseHintsUseProjectedSamplesAndPrescaledPatchMatchInputs)
 {
     const QString cameraHeader = readSourceFile(QStringLiteral("src/core/camera/Camera.h"));

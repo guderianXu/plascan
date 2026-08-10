@@ -7,6 +7,7 @@
 #include <QCoreApplication>
 #include <QDateTime>
 
+#include <algorithm>
 #include <atomic>
 #include <mutex>
 #include <thread>
@@ -16,6 +17,7 @@ namespace
 {
 
 using xjw::mvs::DepthComputeBackend;
+using xjw::mvs::DepthComputeSchedulingPolicy;
 using xjw::mvs::DepthComputeScheduler;
 using xjw::mvs::DepthComputeWorker;
 using xjw::mvs::DepthTaskCompletionResult;
@@ -29,6 +31,7 @@ using xjw::mvs::depthComputeWorkerFromId;
 using xjw::mvs::fallbackGpuPhysicalIdentity;
 using xjw::mvs::isUsableOpenClPatchMatchDevice;
 using xjw::mvs::normalizedGpuDeviceName;
+using xjw::mvs::recommendedOpenClFullFrameFloorPerDevice;
 using xjw::mvs::resolveDepthComputeBackend;
 using xjw::mvs::resolvePatchMatchEstimatorBackend;
 using xjw::mvs::shouldSkipUnstableOpenClCudaAlias;
@@ -49,6 +52,16 @@ TEST(DepthComputeSchedulerTest, ReturnsHighestPriorityFrameFirst)
     EXPECT_EQ(claim.viewIndex, 1);
     EXPECT_EQ(scheduler.claimNext(worker).status, DepthTaskClaimStatus::Exhausted);
     EXPECT_EQ(worker.id(), "CUDA:1");
+}
+
+TEST(DepthComputeSchedulerTest, OpenClFloorScalesWithPhysicalCudaDevices)
+{
+    EXPECT_EQ(recommendedOpenClFullFrameFloorPerDevice(true, 63, 1, 1), 0);
+    EXPECT_EQ(recommendedOpenClFullFrameFloorPerDevice(true, 64, 1, 1), 1);
+    EXPECT_EQ(recommendedOpenClFullFrameFloorPerDevice(true, 127, 2, 1), 0);
+    EXPECT_EQ(recommendedOpenClFullFrameFloorPerDevice(true, 128, 2, 1), 1);
+    EXPECT_EQ(recommendedOpenClFullFrameFloorPerDevice(false, 100, 1, 1), 0);
+    EXPECT_EQ(recommendedOpenClFullFrameFloorPerDevice(true, 100, 1, 0), 0);
 }
 
 TEST(DepthComputeSchedulerTest, SharesEachFrameOnceAcrossConcurrentWorkers)
@@ -213,6 +226,251 @@ TEST(DepthComputeSchedulerTest, AtomicallyRequeuesUnprofitableCalibrationProbe)
     EXPECT_EQ(stats.at(opencl_worker.id()).failedTasks, 1);
     EXPECT_DOUBLE_EQ(stats.at(opencl_worker.id()).elapsedMilliseconds, 51.0);
     EXPECT_DOUBLE_EQ(stats.at(opencl_worker.id()).emaElapsedMilliseconds, 0.0);
+}
+
+TEST(DepthComputeSchedulerTest, GuaranteedOpenClFrameRunsPastCoarseGate)
+{
+    const DepthComputeWorker cuda_worker{DepthComputeBackend::Cuda, 0};
+    const DepthComputeWorker opencl_worker{DepthComputeBackend::OpenCl, 1};
+    DepthComputeSchedulingPolicy policy;
+    policy.guaranteedOpenClFullFramesPerDevice = 1;
+    policy.maximumOpenClInFlightTasksPerDevice = 1;
+    DepthComputeScheduler scheduler(
+        {{1, 8.0f},
+         {2, 7.0f},
+         {3, 6.0f},
+         {4, 5.0f},
+         {5, 4.0f},
+         {6, 3.0f},
+         {7, 2.0f},
+         {8, 1.0f}},
+        true,
+        {cuda_worker, opencl_worker, opencl_worker},
+        policy);
+
+    const DepthTaskClaim cuda_calibration = scheduler.claimNext(cuda_worker);
+    ASSERT_EQ(cuda_calibration.status, DepthTaskClaimStatus::Task);
+    ASSERT_TRUE(scheduler.complete(
+        cuda_worker,
+        cuda_calibration.viewIndex,
+        std::chrono::milliseconds(10),
+        true).accepted);
+
+    const DepthTaskClaim opencl_calibration = scheduler.claimNext(opencl_worker);
+    ASSERT_EQ(opencl_calibration.status, DepthTaskClaimStatus::Task);
+    EXPECT_TRUE(opencl_calibration.calibrationProbe);
+    EXPECT_TRUE(opencl_calibration.requiresFullFrame);
+    EXPECT_EQ(scheduler.claimNext(opencl_worker).status,
+              DepthTaskClaimStatus::Retry);
+    EXPECT_FALSE(scheduler.tryRejectUnprofitableCalibrationProbe(
+        opencl_worker,
+        opencl_calibration.viewIndex,
+        100.0,
+        std::chrono::milliseconds(101)).has_value());
+
+    // Let CUDA drain enough of the queue while the protected OpenCL frame is
+    // running. The successful full frame satisfies the floor, after which the
+    // normal tail-benefit rule prevents a second slow assignment.
+    for (int completed = 0; completed < 4; ++completed)
+    {
+        const DepthTaskClaim cuda_claim = scheduler.claimNext(cuda_worker);
+        ASSERT_EQ(cuda_claim.status, DepthTaskClaimStatus::Task);
+        ASSERT_TRUE(scheduler.complete(
+            cuda_worker,
+            cuda_claim.viewIndex,
+            std::chrono::milliseconds(10),
+            true).accepted);
+    }
+    ASSERT_TRUE(scheduler.complete(
+        opencl_worker,
+        opencl_calibration.viewIndex,
+        std::chrono::milliseconds(100),
+        true).accepted);
+    EXPECT_EQ(scheduler.claimNext(opencl_worker).status,
+              DepthTaskClaimStatus::Retry);
+}
+
+TEST(DepthComputeSchedulerTest, FailedGuaranteedOpenClFrameRetriesOnceOnCuda)
+{
+    const DepthComputeWorker cuda_worker{DepthComputeBackend::Cuda, 0};
+    const DepthComputeWorker opencl_worker{DepthComputeBackend::OpenCl, 1};
+    DepthComputeSchedulingPolicy policy;
+    policy.guaranteedOpenClFullFramesPerDevice = 1;
+    policy.maximumOpenClInFlightTasksPerDevice = 1;
+    DepthComputeScheduler scheduler(
+        {{1, 4.0f}, {2, 3.0f}, {3, 2.0f}, {4, 1.0f}},
+        true,
+        {cuda_worker, opencl_worker},
+        policy);
+
+    const DepthTaskClaim cuda_calibration = scheduler.claimNext(cuda_worker);
+    ASSERT_EQ(cuda_calibration.status, DepthTaskClaimStatus::Task);
+    ASSERT_TRUE(scheduler.complete(
+        cuda_worker,
+        cuda_calibration.viewIndex,
+        std::chrono::milliseconds(10),
+        true).accepted);
+
+    const DepthTaskClaim protected_opencl = scheduler.claimNext(opencl_worker);
+    ASSERT_EQ(protected_opencl.status, DepthTaskClaimStatus::Task);
+    ASSERT_TRUE(protected_opencl.requiresFullFrame);
+    const DepthTaskCompletionResult failed_opencl = scheduler.complete(
+        opencl_worker,
+        protected_opencl.viewIndex,
+        std::chrono::milliseconds(100),
+        false);
+    EXPECT_TRUE(failed_opencl.accepted);
+    EXPECT_TRUE(failed_opencl.retryScheduled);
+    EXPECT_TRUE(failed_opencl.workerRetired);
+    EXPECT_EQ(scheduler.claimNext(opencl_worker).status,
+              DepthTaskClaimStatus::Retire);
+
+    const DepthTaskClaim cuda_retry = scheduler.claimNext(cuda_worker);
+    ASSERT_EQ(cuda_retry.status, DepthTaskClaimStatus::Task);
+    EXPECT_EQ(cuda_retry.viewIndex, protected_opencl.viewIndex);
+    const DepthTaskCompletionResult retry_completion = scheduler.complete(
+        cuda_worker,
+        cuda_retry.viewIndex,
+        std::chrono::milliseconds(10),
+        true);
+    EXPECT_TRUE(retry_completion.accepted);
+    EXPECT_FALSE(retry_completion.retryScheduled);
+}
+
+TEST(DepthComputeSchedulerTest, GuaranteesOneFrameForEachPhysicalOpenClDevice)
+{
+    const DepthComputeWorker cuda_worker{DepthComputeBackend::Cuda, 0};
+    const DepthComputeWorker first_opencl{DepthComputeBackend::OpenCl, 1};
+    const DepthComputeWorker second_opencl{DepthComputeBackend::OpenCl, 2};
+    DepthComputeSchedulingPolicy policy;
+    policy.guaranteedOpenClFullFramesPerDevice = 1;
+    policy.maximumOpenClInFlightTasksPerDevice = 1;
+    DepthComputeScheduler scheduler(
+        {{1, 6.0f},
+         {2, 5.0f},
+         {3, 4.0f},
+         {4, 3.0f},
+         {5, 2.0f},
+         {6, 1.0f}},
+        true,
+        {cuda_worker, first_opencl, first_opencl, second_opencl, second_opencl},
+        policy);
+
+    const DepthTaskClaim cuda_calibration = scheduler.claimNext(cuda_worker);
+    ASSERT_EQ(cuda_calibration.status, DepthTaskClaimStatus::Task);
+    ASSERT_TRUE(scheduler.complete(
+        cuda_worker,
+        cuda_calibration.viewIndex,
+        std::chrono::milliseconds(10),
+        true).accepted);
+
+    const DepthTaskClaim first_claim = scheduler.claimNext(first_opencl);
+    ASSERT_EQ(first_claim.status, DepthTaskClaimStatus::Task);
+    EXPECT_TRUE(first_claim.requiresFullFrame);
+    EXPECT_EQ(scheduler.claimNext(first_opencl).status,
+              DepthTaskClaimStatus::Retry);
+
+    const DepthTaskClaim second_claim = scheduler.claimNext(second_opencl);
+    ASSERT_EQ(second_claim.status, DepthTaskClaimStatus::Task);
+    EXPECT_TRUE(second_claim.requiresFullFrame);
+    EXPECT_NE(second_claim.viewIndex, first_claim.viewIndex);
+    EXPECT_EQ(scheduler.claimNext(second_opencl).status,
+              DepthTaskClaimStatus::Retry);
+}
+
+TEST(DepthComputeSchedulerTest, ConcurrentOpenClSlotsKeepOnePhysicalFrameInFlight)
+{
+    const DepthComputeWorker cuda_worker{DepthComputeBackend::Cuda, 0};
+    const DepthComputeWorker opencl_worker{DepthComputeBackend::OpenCl, 1};
+    DepthComputeSchedulingPolicy policy;
+    policy.guaranteedOpenClFullFramesPerDevice = 1;
+    policy.maximumOpenClInFlightTasksPerDevice = 1;
+    std::vector<DepthFrameTask> tasks;
+    for (int index = 0; index < 10; ++index)
+    {
+        tasks.push_back({index, static_cast<float>(10 - index)});
+    }
+    DepthComputeScheduler scheduler(
+        std::move(tasks),
+        true,
+        {cuda_worker, opencl_worker, opencl_worker},
+        policy);
+
+    constexpr int contender_count = 8;
+    std::atomic<bool> start{false};
+    std::vector<DepthTaskClaimStatus> statuses(contender_count);
+    std::vector<std::thread> contenders;
+    contenders.reserve(contender_count);
+    for (int index = 0; index < contender_count; ++index)
+    {
+        contenders.emplace_back([&scheduler,
+                                 &opencl_worker,
+                                 &start,
+                                 &statuses,
+                                 index]
+        {
+            while (!start.load(std::memory_order_acquire))
+            {
+                std::this_thread::yield();
+            }
+            statuses[static_cast<std::size_t>(index)] =
+                scheduler.claimNext(opencl_worker).status;
+        });
+    }
+    start.store(true, std::memory_order_release);
+    for (std::thread &contender : contenders)
+    {
+        contender.join();
+    }
+
+    EXPECT_EQ(std::count(statuses.begin(),
+                         statuses.end(),
+                         DepthTaskClaimStatus::Task),
+              1);
+    EXPECT_EQ(std::count(statuses.begin(),
+                         statuses.end(),
+                         DepthTaskClaimStatus::Retry),
+              contender_count - 1);
+}
+
+TEST(DepthComputeSchedulerTest, FastOpenClMayClaimNormalFrameAfterFloor)
+{
+    const DepthComputeWorker cuda_worker{DepthComputeBackend::Cuda, 0};
+    const DepthComputeWorker opencl_worker{DepthComputeBackend::OpenCl, 1};
+    DepthComputeSchedulingPolicy policy;
+    policy.guaranteedOpenClFullFramesPerDevice = 1;
+    policy.maximumOpenClInFlightTasksPerDevice = 1;
+    DepthComputeScheduler scheduler(
+        {{1, 6.0f},
+         {2, 5.0f},
+         {3, 4.0f},
+         {4, 3.0f},
+         {5, 2.0f},
+         {6, 1.0f}},
+        true,
+        {cuda_worker, opencl_worker},
+        policy);
+
+    const DepthTaskClaim cuda_calibration = scheduler.claimNext(cuda_worker);
+    ASSERT_EQ(cuda_calibration.status, DepthTaskClaimStatus::Task);
+    ASSERT_TRUE(scheduler.complete(
+        cuda_worker,
+        cuda_calibration.viewIndex,
+        std::chrono::milliseconds(100),
+        true).accepted);
+    const DepthTaskClaim protected_opencl = scheduler.claimNext(opencl_worker);
+    ASSERT_EQ(protected_opencl.status, DepthTaskClaimStatus::Task);
+    ASSERT_TRUE(protected_opencl.requiresFullFrame);
+    ASSERT_TRUE(scheduler.complete(
+        opencl_worker,
+        protected_opencl.viewIndex,
+        std::chrono::milliseconds(50),
+        true).accepted);
+
+    const DepthTaskClaim normal_opencl = scheduler.claimNext(opencl_worker);
+    ASSERT_EQ(normal_opencl.status, DepthTaskClaimStatus::Task);
+    EXPECT_FALSE(normal_opencl.calibrationProbe);
+    EXPECT_FALSE(normal_opencl.requiresFullFrame);
 }
 
 TEST(DepthComputeSchedulerTest, KeepsProbeWhenAlternativeRetiresBeforeAtomicGate)
@@ -387,6 +645,64 @@ TEST(DepthComputeSchedulerTest, SlowInFlightTaskPreventsSecondTailClaim)
     ASSERT_EQ(scheduler.claimNext(slow_worker).status,
               DepthTaskClaimStatus::Task);
     EXPECT_EQ(scheduler.claimNext(slow_worker).status,
+              DepthTaskClaimStatus::Retry);
+}
+
+TEST(DepthComputeSchedulerTest, TailEstimateUsesPhysicalCudaSlotThroughput)
+{
+    const DepthComputeWorker cuda_slot{DepthComputeBackend::Cuda, 0};
+    const DepthComputeWorker opencl_worker{DepthComputeBackend::OpenCl, 1};
+    DepthComputeScheduler scheduler(
+        {{1, 6.0f},
+         {2, 5.0f},
+         {3, 4.0f},
+         {4, 3.0f},
+         {5, 2.0f},
+         {6, 1.0f}},
+        true,
+        {cuda_slot, cuda_slot, opencl_worker});
+
+    const DepthTaskClaim cuda_calibration = scheduler.claimNext(cuda_slot);
+    ASSERT_EQ(cuda_calibration.status, DepthTaskClaimStatus::Task);
+    ASSERT_TRUE(scheduler.complete(
+        cuda_slot,
+        cuda_calibration.viewIndex,
+        std::chrono::milliseconds(100),
+        true).accepted);
+    const DepthTaskClaim opencl_calibration = scheduler.claimNext(opencl_worker);
+    ASSERT_EQ(opencl_calibration.status, DepthTaskClaimStatus::Task);
+    ASSERT_TRUE(scheduler.complete(
+        opencl_worker,
+        opencl_calibration.viewIndex,
+        std::chrono::milliseconds(250),
+        true).accepted);
+
+    const DepthTaskClaim first_saturated = scheduler.claimNext(cuda_slot);
+    const DepthTaskClaim second_saturated = scheduler.claimNext(cuda_slot);
+    ASSERT_EQ(first_saturated.status, DepthTaskClaimStatus::Task);
+    ASSERT_EQ(second_saturated.status, DepthTaskClaimStatus::Task);
+    ASSERT_TRUE(scheduler.complete(
+        cuda_slot,
+        first_saturated.viewIndex,
+        std::chrono::milliseconds(100),
+        true).accepted);
+    const DepthTaskClaim replacement = scheduler.claimNext(cuda_slot);
+    ASSERT_EQ(replacement.status, DepthTaskClaimStatus::Task);
+    ASSERT_TRUE(scheduler.complete(
+        cuda_slot,
+        second_saturated.viewIndex,
+        std::chrono::milliseconds(200),
+        true).accepted);
+    const auto physical_cuda_service =
+        scheduler.fastestSuccessfulAlternativeBackendEmaMilliseconds(
+            opencl_worker);
+    ASSERT_TRUE(physical_cuda_service.has_value());
+    EXPECT_DOUBLE_EQ(*physical_cuda_service, 100.0);
+
+    // The second saturated completion took 200 ms with two frames in flight,
+    // establishing 100 ms physical service. Host-frame EMA is 135 ms here and
+    // would incorrectly give the 250 ms OpenCL worker the final queued task.
+    EXPECT_EQ(scheduler.claimNext(opencl_worker).status,
               DepthTaskClaimStatus::Retry);
 }
 

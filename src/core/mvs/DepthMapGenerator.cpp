@@ -10043,8 +10043,28 @@ void DepthMapGenerator::runInBackgroundImpl()
                                     static_cast<std::size_t>(maxFrameWorkers));
     const bool benefitAwareScheduling = heterogeneousAuto &&
         frameTasks.size() >= physicalAcceleratorWorkers.size();
+    // Retain one bounded full-frame OpenCL contribution for large hybrid
+    // batches, then return to measured tail-benefit scheduling. Smaller
+    // batches keep the cheap coarse-level profitability gate so an asymmetric
+    // accelerator cannot create a long tail.
+    DepthComputeSchedulingPolicy schedulingPolicy;
+    schedulingPolicy.guaranteedOpenClFullFramesPerDevice =
+        recommendedOpenClFullFrameFloorPerDevice(
+            benefitAwareScheduling,
+            frameTasks.size(),
+            physicalCudaWorkers,
+            physicalOpenClWorkers);
+    schedulingPolicy.maximumOpenClInFlightTasksPerDevice =
+        benefitAwareScheduling && physicalOpenClWorkers > 0 ? 1 : 0;
     DepthComputeScheduler computeScheduler(
-        std::move(frameTasks), benefitAwareScheduling, acceleratorWorkers);
+        std::move(frameTasks),
+        benefitAwareScheduling,
+        acceleratorWorkers,
+        schedulingPolicy);
+    const int guaranteedOpenClFullFrameTarget =
+        physicalOpenClWorkers *
+        schedulingPolicy.guaranteedOpenClFullFramesPerDevice;
+    std::atomic<int> completedGuaranteedOpenClFullFrames{0};
 
     const int gpuFrameWorkers = static_cast<int>(acceleratorWorkers.size());
     const int cpuFrameWorkers = effectiveBackend == DepthComputeBackend::Cpu
@@ -10068,7 +10088,8 @@ void DepthMapGenerator::runInBackgroundImpl()
                             "physical_gpu_workers=%4 gpu_host_slots=%5 "
                             "cuda_host_slots=%6 opencl_host_slots=%7 cpu_frame_workers=%8 "
                             "cpu_thread_budget=%9 cpu_pixel_threads=%10..%11 views=%12 "
-                            "pending=%13 benefit_aware=%14")
+                            "pending=%13 benefit_aware=%14 opencl_full_frame_floor=%15 "
+                            "opencl_inflight_limit=%16")
                  .arg(scheduling_backend_name)
                  .arg(cudaDeviceCount)
                  .arg(selectedOpenClDevices.size())
@@ -10082,7 +10103,9 @@ void DepthMapGenerator::runInBackgroundImpl()
                  .arg(maximumCpuThreadsPerWorker)
                  .arg(NV)
                  .arg(static_cast<qulonglong>(computeScheduler.pendingTaskCount()))
-                 .arg(benefitAwareScheduling ? 1 : 0));
+                 .arg(benefitAwareScheduling ? 1 : 0)
+                 .arg(guaranteedOpenClFullFrameTarget)
+                 .arg(schedulingPolicy.maximumOpenClInFlightTasksPerDevice));
     if (skippedFrames > 0)
     {
         LOG_INFO(QStringLiteral("[MVS] 续跑模式：跳过已存在深度图 %1 帧").arg(skippedFrames));
@@ -10179,6 +10202,8 @@ void DepthMapGenerator::runInBackgroundImpl()
          &activeCudaTasks,
          &activeOpenClTasks,
          &activeCpuTasks,
+         guaranteedOpenClFullFrameTarget,
+         &completedGuaranteedOpenClFullFrames,
          &computeScheduler](
             const QString& workerTag, int frameIndex, bool pickedTask)
     {
@@ -10201,6 +10226,12 @@ void DepthMapGenerator::runInBackgroundImpl()
                             .arg(openClActive)
                             .arg(cpuActive)
                             .arg(pending);
+        if (guaranteedOpenClFullFrameTarget > 0)
+        {
+            stage += QStringLiteral(", OpenCL完整帧 %1/%2")
+                         .arg(completedGuaranteedOpenClFullFrames.load())
+                         .arg(guaranteedOpenClFullFrameTarget);
+        }
 
         if (pickedTask && frameIndex >= 0)
         {
@@ -10229,6 +10260,8 @@ void DepthMapGenerator::runInBackgroundImpl()
                        &activeCudaTasks,
                        &activeOpenClTasks,
                        &activeCpuTasks,
+                       guaranteedOpenClFullFrameTarget,
+                       &completedGuaranteedOpenClFullFrames,
                        &anyFailure,
                        &computeScheduler,
                        &emitDepthProgress,
@@ -10322,12 +10355,22 @@ void DepthMapGenerator::runInBackgroundImpl()
                               .arg(NV)
                               .arg(i)
                               .arg(workerTag));
+                if (claim.requiresFullFrame)
+                {
+                    LOG_INFO(QStringLiteral(
+                                 "[MVS][深度估计] %1 已领取保留的 OpenCL 完整帧 %2/%3；"
+                                 "该帧不会在粗层校准后回迁")
+                                 .arg(workerTag)
+                                 .arg(i + 1)
+                                 .arg(NV));
+                }
                 markManifestFrameRunning(i);
 
                 std::function<bool(const DepthLevelSummary &, std::string *)>
                     first_level_completion_gate;
                 bool calibration_probe_requeued = false;
-                if (benefitAwareScheduling && claim.calibrationProbe)
+                if (benefitAwareScheduling && claim.calibrationProbe &&
+                    !claim.requiresFullFrame)
                 {
                     first_level_completion_gate =
                         [&computeScheduler,
@@ -10408,6 +10451,20 @@ void DepthMapGenerator::runInBackgroundImpl()
                 {
                     res.success = false;
                     res.errorMsg = "depth scheduler rejected frame completion ownership";
+                }
+                else if (res.success && claim.requiresFullFrame &&
+                         worker.backend == DepthComputeBackend::OpenCl)
+                {
+                    const int completed_opencl_full_frames =
+                        completedGuaranteedOpenClFullFrames.fetch_add(1) + 1;
+                    LOG_INFO(QStringLiteral(
+                                 "[MVS][深度估计] OpenCL 保留完整帧已完成: %1/%2 "
+                                 "device=%3 frame=%4 elapsed=%5 ms")
+                                 .arg(completed_opencl_full_frames)
+                                 .arg(guaranteedOpenClFullFrameTarget)
+                                 .arg(workerTag)
+                                 .arg(i + 1)
+                                 .arg(elapsedMs, 0, 'f', 1));
                 }
 
                 if (!res.success && completion.retryScheduled)
@@ -10616,6 +10673,13 @@ void DepthMapGenerator::runInBackgroundImpl()
                      .arg(stats.failedTasks)
                      .arg(stats.elapsedMilliseconds, 0, 'f', 1)
                      .arg(stats.emaElapsedMilliseconds, 0, 'f', 1));
+    }
+    if (guaranteedOpenClFullFrameTarget > 0)
+    {
+        LOG_INFO(QStringLiteral(
+                     "[MVS] OpenCL 完整帧贡献: completed=%1 target=%2")
+                     .arg(completedGuaranteedOpenClFullFrames.load())
+                     .arg(guaranteedOpenClFullFrameTarget));
     }
 
     if (_cancelled.load())

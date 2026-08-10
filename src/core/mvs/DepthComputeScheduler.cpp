@@ -11,6 +11,31 @@ namespace xjw
 namespace mvs
 {
 
+namespace
+{
+
+constexpr std::size_t kMinimumOpenClContributionFramesPerCudaDevice = 64;
+
+} // namespace
+
+int recommendedOpenClFullFrameFloorPerDevice(
+    bool benefitAwareScheduling,
+    std::size_t pendingTaskCount,
+    int physicalCudaDeviceCount,
+    int physicalOpenClDeviceCount)
+{
+    if (!benefitAwareScheduling || physicalOpenClDeviceCount <= 0)
+    {
+        return 0;
+    }
+
+    const std::size_t cuda_device_count = static_cast<std::size_t>(
+        std::max(1, physicalCudaDeviceCount));
+    const std::size_t minimum_batch_size =
+        kMinimumOpenClContributionFramesPerCudaDevice * cuda_device_count;
+    return pendingTaskCount >= minimum_batch_size ? 1 : 0;
+}
+
 const char *depthComputeBackendName(DepthComputeBackend backend)
 {
     switch (backend)
@@ -166,8 +191,14 @@ std::vector<DepthComputeWorker> buildDepthComputeWorkerPool(
 DepthComputeScheduler::DepthComputeScheduler(
     std::vector<DepthFrameTask> tasks,
     bool enableBenefitAwareScheduling,
-    std::vector<DepthComputeWorker> participatingWorkers)
+    std::vector<DepthComputeWorker> participatingWorkers,
+    DepthComputeSchedulingPolicy policy)
+    : _policy(policy)
 {
+    _policy.guaranteedOpenClFullFramesPerDevice = std::max(
+        0, _policy.guaranteedOpenClFullFramesPerDevice);
+    _policy.maximumOpenClInFlightTasksPerDevice = std::max(
+        0, _policy.maximumOpenClInFlightTasksPerDevice);
     std::stable_sort(tasks.begin(), tasks.end(), [](const DepthFrameTask &left,
                                                      const DepthFrameTask &right)
     {
@@ -210,11 +241,18 @@ DepthTaskClaim DepthComputeScheduler::claimNext(const DepthComputeWorker &worker
 
     if (!_benefitAwareSchedulingEnabled)
     {
+        WorkerSchedulingState &state = _workerSchedulingStates[worker_id];
+        if (worker.backend == DepthComputeBackend::OpenCl &&
+            _policy.maximumOpenClInFlightTasksPerDevice > 0 &&
+            state.inFlightTasks >=
+                _policy.maximumOpenClInFlightTasksPerDevice)
+        {
+            return {DepthTaskClaimStatus::Retry, -1, _revision};
+        }
         if (_pendingTasks.empty())
         {
             return {DepthTaskClaimStatus::Exhausted, -1, _revision};
         }
-        WorkerSchedulingState &state = _workerSchedulingStates[worker_id];
         return assignNextTask(worker, state, _pendingTasks.begin());
     }
 
@@ -226,6 +264,12 @@ DepthTaskClaim DepthComputeScheduler::claimNext(const DepthComputeWorker &worker
     }
 
     WorkerSchedulingState &state = state_it->second;
+    if (worker.backend == DepthComputeBackend::OpenCl &&
+        _policy.maximumOpenClInFlightTasksPerDevice > 0 &&
+        state.inFlightTasks >= _policy.maximumOpenClInFlightTasksPerDevice)
+    {
+        return {DepthTaskClaimStatus::Retry, -1, _revision};
+    }
     if (state.retirementPending)
     {
         if (state.inFlightTasks > 0)
@@ -264,7 +308,18 @@ DepthTaskClaim DepthComputeScheduler::claimNext(const DepthComputeWorker &worker
             return {DepthTaskClaimStatus::Retry, -1, _revision};
         }
         state.calibrationInFlight = true;
-        return assignNextTask(worker, state, task_it, true);
+        return assignNextTask(
+            worker,
+            state,
+            task_it,
+            true,
+            needsGuaranteedFullFrame(worker, state));
+    }
+
+    if (needsGuaranteedFullFrame(worker, state))
+    {
+        state.pausedForBenefit = false;
+        return assignNextTask(worker, state, task_it, false, true);
     }
 
     if (shouldReserveForCalibration())
@@ -316,6 +371,7 @@ DepthTaskCompletionResult DepthComputeScheduler::complete(
     result.accepted = true;
 
     DepthComputeWorkerStats &stats = _workerStats[worker_id];
+    WorkerSchedulingState &state = _workerSchedulingStates[worker_id];
     ++stats.completedTasks;
     stats.successfulTasks += success ? 1 : 0;
     stats.failedTasks += success ? 0 : 1;
@@ -336,10 +392,48 @@ DepthTaskCompletionResult DepthComputeScheduler::complete(
                 duration_ema_alpha * elapsed_milliseconds +
                 (1.0 - duration_ema_alpha) * stats.emaElapsedMilliseconds;
         }
+
+        if (state.inFlightTasks > 1)
+        {
+            if (!state.discardedFirstSaturatedCompletion)
+            {
+                // The first completion after filling a second host slot often
+                // contains no queue wait. It cannot establish serialized GPU
+                // service time, so wait for the next saturated completion.
+                state.discardedFirstSaturatedCompletion = true;
+            }
+            else
+            {
+                const double physical_service_sample =
+                    elapsed_milliseconds /
+                    static_cast<double>(state.inFlightTasks);
+                if (state.emaPhysicalServiceMilliseconds <= 0.0)
+                {
+                    state.emaPhysicalServiceMilliseconds =
+                        physical_service_sample;
+                }
+                else
+                {
+                    state.emaPhysicalServiceMilliseconds =
+                        duration_ema_alpha * physical_service_sample +
+                        (1.0 - duration_ema_alpha) *
+                            state.emaPhysicalServiceMilliseconds;
+                }
+                ++state.physicalServiceSamples;
+            }
+        }
     }
 
-    WorkerSchedulingState &state = _workerSchedulingStates[worker_id];
     state.inFlightTasks = std::max(0, state.inFlightTasks - 1);
+    if (completed_task.requiresFullFrame)
+    {
+        state.guaranteedFullFramesInFlight = std::max(
+            0, state.guaranteedFullFramesInFlight - 1);
+        if (success)
+        {
+            ++state.successfulGuaranteedFullFrames;
+        }
+    }
     if (_benefitAwareSchedulingEnabled && isParticipatingWorker(worker_id))
     {
         if (!state.calibrationSucceeded)
@@ -398,22 +492,40 @@ DepthTaskClaim DepthComputeScheduler::assignNextTask(
     const DepthComputeWorker &worker,
     WorkerSchedulingState &state,
     PendingTaskIterator taskIt,
-    bool calibrationProbe)
+    bool calibrationProbe,
+    bool requiresFullFrame)
 {
     const PendingTask task = *taskIt;
     _pendingTasks.erase(taskIt);
     ++state.assignedTasks;
     ++state.inFlightTasks;
+    state.guaranteedFullFramesInFlight += requiresFullFrame ? 1 : 0;
     _inFlightTasks.insert_or_assign(
         task.viewIndex,
         InFlightTask{
-            worker.id(), worker.backend, task.retryCount, calibrationProbe});
+            worker.id(),
+            worker.backend,
+            task.retryCount,
+            calibrationProbe,
+            requiresFullFrame});
     advanceRevision();
     return {
         DepthTaskClaimStatus::Task,
         task.viewIndex,
         _revision,
-        calibrationProbe};
+        calibrationProbe,
+        requiresFullFrame};
+}
+
+bool DepthComputeScheduler::needsGuaranteedFullFrame(
+    const DepthComputeWorker &worker,
+    const WorkerSchedulingState &state) const
+{
+    return _benefitAwareSchedulingEnabled &&
+           worker.backend == DepthComputeBackend::OpenCl &&
+           state.successfulGuaranteedFullFrames +
+                   state.guaranteedFullFramesInFlight <
+               _policy.guaranteedOpenClFullFramesPerDevice;
 }
 
 bool DepthComputeScheduler::isParticipatingWorker(
@@ -472,9 +584,7 @@ bool DepthComputeScheduler::shouldReserveForCalibration() const
         const auto state_it = _workerSchedulingStates.find(participant_id);
         if (state_it != _workerSchedulingStates.end() &&
             !state_it->second.failureRetired &&
-            !state_it->second.retirementPending &&
-            !state_it->second.calibrationSucceeded &&
-            !state_it->second.calibrationInFlight)
+            !state_it->second.retirementPending)
         {
             const auto participant = depthComputeWorkerFromId(participant_id);
             const bool has_eligible_task = participant.has_value() &&
@@ -486,7 +596,27 @@ bool DepthComputeScheduler::shouldReserveForCalibration() const
                         return !task.excludedBackend.has_value() ||
                                *task.excludedBackend != participant->backend;
                     });
-            required_calibration_tasks += has_eligible_task ? 1U : 0U;
+            if (!has_eligible_task)
+            {
+                continue;
+            }
+
+            int required_tasks = 0;
+            if (!state_it->second.calibrationSucceeded &&
+                !state_it->second.calibrationInFlight)
+            {
+                required_tasks = 1;
+            }
+            if (participant->backend == DepthComputeBackend::OpenCl)
+            {
+                required_tasks = std::max(
+                    required_tasks,
+                    _policy.guaranteedOpenClFullFramesPerDevice -
+                        state_it->second.successfulGuaranteedFullFrames -
+                        state_it->second.guaranteedFullFramesInFlight);
+            }
+            required_calibration_tasks += static_cast<std::size_t>(
+                std::max(0, required_tasks));
         }
     }
     return _pendingTasks.size() <= required_calibration_tasks;
@@ -525,9 +655,17 @@ bool DepthComputeScheduler::shouldPauseAtQueueTail(
         {
             return false;
         }
-        if (stats_it->second.emaElapsedMilliseconds < fastest_elapsed_milliseconds)
+        const double physical_service_milliseconds =
+            state_it->second.physicalServiceSamples > 0
+            ? state_it->second.emaPhysicalServiceMilliseconds
+            : stats_it->second.emaElapsedMilliseconds;
+        if (physical_service_milliseconds < fastest_elapsed_milliseconds)
         {
-            fastest_elapsed_milliseconds = stats_it->second.emaElapsedMilliseconds;
+            // Duplicate host slots overlap preparation around one serialized
+            // physical GPU queue. Prefer service samples observed while more
+            // than one slot was actually in flight; never infer doubled
+            // throughput merely because a second slot has just been claimed.
+            fastest_elapsed_milliseconds = physical_service_milliseconds;
             fastest_in_flight_tasks = state_it->second.inFlightTasks;
             fastest_worker_id = participant_id;
         }
@@ -574,9 +712,13 @@ bool DepthComputeScheduler::shouldPauseAtQueueTail(
         return false;
     }
 
+    const double candidate_service_milliseconds =
+        worker_state_it->second.physicalServiceSamples > 0
+        ? worker_state_it->second.emaPhysicalServiceMilliseconds
+        : worker_stats_it->second.emaElapsedMilliseconds;
     const double candidate_finish_milliseconds =
         static_cast<double>(worker_state_it->second.inFlightTasks + 1) *
-        worker_stats_it->second.emaElapsedMilliseconds;
+        candidate_service_milliseconds;
     const double fastest_queue_clear_milliseconds =
         static_cast<double>(fastest_in_flight_tasks +
                             static_cast<int>(fastest_eligible_pending_tasks)) *
@@ -631,6 +773,7 @@ DepthComputeScheduler::tryRejectUnprofitableCalibrationProbe(
     if (task_it == _inFlightTasks.end() ||
         task_it->second.workerId != worker_id ||
         !task_it->second.calibrationProbe ||
+        task_it->second.requiresFullFrame ||
         task_it->second.retryCount != 0 ||
         state_it == _workerSchedulingStates.end() ||
         state_it->second.failureRetired ||
@@ -698,9 +841,16 @@ DepthComputeScheduler::fastestSuccessfulAlternativeBackendEmaMillisecondsLocked(
         {
             continue;
         }
+        const double effective_elapsed_milliseconds =
+            state_it->second.physicalServiceSamples > 0 &&
+                    std::isfinite(
+                        state_it->second.emaPhysicalServiceMilliseconds) &&
+                    state_it->second.emaPhysicalServiceMilliseconds > 0.0
+                ? state_it->second.emaPhysicalServiceMilliseconds
+                : stats_it->second.emaElapsedMilliseconds;
         fastest_elapsed_milliseconds = std::min(
             fastest_elapsed_milliseconds,
-            stats_it->second.emaElapsedMilliseconds);
+            effective_elapsed_milliseconds);
     }
     if (!std::isfinite(fastest_elapsed_milliseconds))
     {

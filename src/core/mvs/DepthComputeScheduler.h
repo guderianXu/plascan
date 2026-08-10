@@ -92,7 +92,32 @@ struct DepthTaskClaim
     /// throughput. Callers may use a cheaper probe path before committing to
     /// the complete frame.
     bool calibrationProbe = false;
+    /// This task is part of the bounded OpenCL contribution floor and must run
+    /// through the complete depth pyramid instead of being rejected after the
+    /// coarse calibration level.
+    bool requiresFullFrame = false;
 };
+
+struct DepthComputeSchedulingPolicy
+{
+    /// Per physical OpenCL device. A value of one lets a sufficiently large
+    /// hybrid batch measure and retain one useful complete iGPU frame.
+    int guaranteedOpenClFullFramesPerDevice = 0;
+    /// Duplicate host preparation slots share one physical OpenCL queue. Keep
+    /// their frame backlog bounded so a slow iGPU cannot create a long tail.
+    /// Zero leaves legacy callers unlimited; the hybrid generator explicitly
+    /// selects one for its bounded iGPU lane.
+    int maximumOpenClInFlightTasksPerDevice = 0;
+};
+
+/// Returns a bounded per-device OpenCL contribution floor for a hybrid batch.
+/// The threshold scales with physical CUDA throughput so adding CUDA devices
+/// cannot turn the iGPU contribution into an avoidable queue tail.
+int recommendedOpenClFullFrameFloorPerDevice(
+    bool benefitAwareScheduling,
+    std::size_t pendingTaskCount,
+    int physicalCudaDeviceCount,
+    int physicalOpenClDeviceCount);
 
 struct DepthTaskCompletionResult
 {
@@ -111,7 +136,8 @@ public:
     explicit DepthComputeScheduler(
         std::vector<DepthFrameTask> tasks,
         bool enableBenefitAwareScheduling = false,
-        std::vector<DepthComputeWorker> participatingWorkers = {});
+        std::vector<DepthComputeWorker> participatingWorkers = {},
+        DepthComputeSchedulingPolicy policy = {});
 
     DepthTaskClaim claimNext(const DepthComputeWorker &worker);
     /// Waits without a lost-wakeup race after a Retry claim. The caller passes
@@ -130,8 +156,9 @@ public:
 
     std::size_t pendingTaskCount() const;
     std::unordered_map<std::string, DepthComputeWorkerStats> workerStats() const;
-    /// Returns the fastest successful whole-frame EMA reported by a healthy
-    /// participating backend other than worker.backend.
+    /// Returns the fastest successful physical-device service EMA reported by
+    /// a healthy alternative backend, falling back to whole-frame latency
+    /// until saturated host-slot samples exist.
     std::optional<double> fastestSuccessfulAlternativeBackendEmaMilliseconds(
         const DepthComputeWorker &worker) const;
     /// Atomically rejects a still-owned first calibration probe only when a
@@ -159,6 +186,7 @@ private:
         DepthComputeBackend backend = DepthComputeBackend::Cpu;
         int retryCount = 0;
         bool calibrationProbe = false;
+        bool requiresFullFrame = false;
     };
 
     struct WorkerSchedulingState
@@ -170,6 +198,11 @@ private:
         bool pausedForBenefit = false;
         bool retirementPending = false;
         bool failureRetired = false;
+        int successfulGuaranteedFullFrames = 0;
+        int guaranteedFullFramesInFlight = 0;
+        bool discardedFirstSaturatedCompletion = false;
+        int physicalServiceSamples = 0;
+        double emaPhysicalServiceMilliseconds = 0.0;
     };
 
     using PendingTaskIterator = std::deque<PendingTask>::iterator;
@@ -180,7 +213,10 @@ private:
     DepthTaskClaim assignNextTask(const DepthComputeWorker &worker,
                                   WorkerSchedulingState &state,
                                   PendingTaskIterator taskIt,
-                                  bool calibrationProbe = false);
+                                  bool calibrationProbe = false,
+                                  bool requiresFullFrame = false);
+    bool needsGuaranteedFullFrame(const DepthComputeWorker &worker,
+                                  const WorkerSchedulingState &state) const;
     bool isParticipatingWorker(const std::string &workerId) const;
     bool hasHealthyAlternativeBackend(const DepthComputeWorker &worker) const;
     void reactivateAlternativeBackends(const DepthComputeWorker &worker);
@@ -198,6 +234,7 @@ private:
     std::unordered_map<std::string, DepthComputeWorkerStats> _workerStats;
     std::unordered_map<std::string, WorkerSchedulingState> _workerSchedulingStates;
     std::vector<std::string> _participatingWorkerIds;
+    DepthComputeSchedulingPolicy _policy;
     bool _benefitAwareSchedulingEnabled = false;
     std::uint64_t _revision = 0;
 };
