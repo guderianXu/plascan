@@ -26,6 +26,9 @@
 #include "tie_points/CreateTiePointsDialog.h"
 #include "tie_points/ThinTiePointsDialog.h"
 
+#include <algorithm>
+#include <cstring>
+
 namespace
 {
 
@@ -417,8 +420,17 @@ TEST(WorkflowParameterDialogStyleTest, StylesheetRulesAreScopedToWorkflowDialogs
 
 int main(int argc, char **argv)
 {
+    const bool lists_tests = std::any_of(argv, argv + argc, [](const char *argument)
+    {
+        return argument && std::strcmp(argument, "--gtest_list_tests") == 0;
+    });
+    testing::InitGoogleTest(&argc, argv);
+    if (lists_tests)
+    {
+        return RUN_ALL_TESTS();
+    }
+
     qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
     QApplication app(argc, argv);
-    testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }

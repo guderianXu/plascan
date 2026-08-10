@@ -10,6 +10,9 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cstring>
+
 namespace
 {
 
@@ -186,9 +189,18 @@ TEST(WorkflowSettingsDialogTest, MigratesLegacyFlatSettingsWithoutKeepingTuningF
 
 int main(int argc, char **argv)
 {
+    const bool lists_tests = std::any_of(argv, argv + argc, [](const char *argument)
+    {
+        return argument && std::strcmp(argument, "--gtest_list_tests") == 0;
+    });
+    ::testing::InitGoogleTest(&argc, argv);
+    if (lists_tests)
+    {
+        return RUN_ALL_TESTS();
+    }
+
     // 对话框测试不需要桌面会话；固定 offscreen 避免 CI 和远程开发机依赖显示器。
     qputenv("QT_QPA_PLATFORM", QByteArrayLiteral("offscreen"));
     QApplication application(argc, argv);
-    ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }

@@ -773,7 +773,9 @@ endif()
 set(PLASCAN_QT_PLATFORM_PLUGIN_PATH
     "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/platforms")
 gtest_discover_tests(test_gui_project_utils
-    DISCOVERY_TIMEOUT 60
+    # This target links most GUI and photogrammetry modules. Its first launch
+    # can exceed one minute on a cold Windows runner while binaries are scanned.
+    DISCOVERY_TIMEOUT 180
     DISCOVERY_MODE PRE_TEST
     PROPERTIES
         ENVIRONMENT

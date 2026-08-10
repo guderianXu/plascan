@@ -597,6 +597,27 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertNotIn("/proc/meminfo", source)
         self.assertNotIn("MemAvailable:", source)
 
+    def test_gui_gtest_discovery_does_not_initialize_qapplication(self):
+        gui_test_sources = [
+            "test_gui_project_utils.cpp",
+            "test_map_project_dialog.cpp",
+            "test_workspace_section_icons.cpp",
+            "test_workflow_settings_dialog.cpp",
+            "test_workflow_parameter_dialog_style.cpp",
+        ]
+
+        for source_name in gui_test_sources:
+            with self.subTest(source=source_name):
+                source = (ROOT / "tests" / source_name).read_text(encoding="utf-8")
+                self.assertIn('"--gtest_list_tests"', source)
+                discovery_guard = source.rfind("if (lists_tests)")
+                application_start = max(
+                    source.rfind("QApplication app("),
+                    source.rfind("QApplication application("),
+                )
+                self.assertGreater(discovery_guard, 0)
+                self.assertGreater(application_start, discovery_guard)
+
 
 if __name__ == "__main__":
     unittest.main()
