@@ -9,7 +9,7 @@ param(
     [string] $VsDevCmd = "C:\BuildTools\Common7\Tools\VsDevCmd.bat",
     [string] $CMakeExe = "C:\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
     [string] $CudaRoot = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1",
-    [string] $CudnnRoot = "",
+    [string] $TensorRtRoot = "",
     [string] $Target = "",
     [string] $CTestRegex = "",
     [int] $Jobs = 0,
@@ -17,12 +17,12 @@ param(
     [switch] $ConfigureOnly,
     [switch] $BuildOnly,
     [switch] $RunTests,
+    [switch] $RunU2NetTensorRtDeploymentTest,
     [switch] $RunU2NetCudaDeploymentTest,
     [switch] $CleanConfigure,
     [switch] $CleanRootCache,
     [switch] $InstallDeps,
     [bool] $EnableCeresCudaBa = $true,
-    [bool] $EnableOpenCvDnnCuda = $true,
     [switch] $SkipVsDevCmd
 )
 
@@ -310,6 +310,65 @@ function Get-UniqueExistingPathList
         }
     }
     return $result.ToArray()
+}
+
+function Resolve-TensorRtSdkRoot
+{
+    param(
+        [string] $RequestedRoot,
+        [string] $BuildPath
+    )
+
+    $cachedRoot = ""
+    if (-not [string]::IsNullOrWhiteSpace($BuildPath))
+    {
+        $cachePath = Join-Path $BuildPath "CMakeCache.txt"
+        if (Test-Path -LiteralPath $cachePath)
+        {
+            $cacheEntry = @(Get-Content -LiteralPath $cachePath |
+                Where-Object { $_ -match '^TensorRT_ROOT:PATH=' }) | Select-Object -First 1
+            if (-not [string]::IsNullOrWhiteSpace($cacheEntry))
+            {
+                $cachedRoot = $cacheEntry -replace '^TensorRT_ROOT:PATH=', ''
+            }
+        }
+    }
+
+    $candidates = @(
+        $RequestedRoot,
+        [Environment]::GetEnvironmentVariable("TENSORRT_ROOT"),
+        [Environment]::GetEnvironmentVariable("TensorRT_ROOT"),
+        $cachedRoot
+    )
+    foreach ($candidate in (Get-UniqueExistingPathList $candidates))
+    {
+        if (-not (Test-Path -LiteralPath $candidate))
+        {
+            continue
+        }
+
+        $resolved = Resolve-FullPath $candidate
+        $includeDir = Join-Path $resolved "include"
+        $libraryRoots = @(
+            (Join-Path $resolved "lib"),
+            (Join-Path $resolved "lib\x64")
+        ) | Where-Object { Test-Path -LiteralPath $_ }
+        $hasNvInfer = @($libraryRoots | ForEach-Object {
+            Get-ChildItem -LiteralPath $_ -File -Filter "nvinfer*.lib" -ErrorAction SilentlyContinue
+        }).Count -gt 0
+        $hasOnnxParser = @($libraryRoots | ForEach-Object {
+            Get-ChildItem -LiteralPath $_ -File -Filter "nvonnxparser*.lib" -ErrorAction SilentlyContinue
+        }).Count -gt 0
+        if ((Test-Path -LiteralPath (Join-Path $includeDir "NvInferRuntime.h")) -and
+            (Test-Path -LiteralPath (Join-Path $includeDir "NvOnnxParser.h")) -and
+            $hasNvInfer -and $hasOnnxParser)
+        {
+            return $resolved
+        }
+    }
+
+    throw "TensorRT SDK root is required. Pass -TensorRtRoot or set TENSORRT_ROOT to a directory " +
+        "containing include, import libraries, runtime DLLs, ONNX parser, and builder resources."
 }
 
 function Resolve-NinjaDirectory
@@ -770,44 +829,68 @@ function Sync-OpenCvRuntime
         $sources.Count, $runtimeDirs.Count, $(if ($runtimeDirs.Count -eq 1) { "y" } else { "ies" }))
 }
 
-function Sync-CudnnRuntime
+function Sync-TensorRtRuntime
 {
     param(
         [Parameter(Mandatory = $true)][string] $BuildPath,
-        [Parameter(Mandatory = $true)][string] $CudnnPath
+        [Parameter(Mandatory = $true)][string] $TensorRtPath
     )
 
-    if (-not (Test-Path -LiteralPath $BuildPath) -or -not (Test-Path -LiteralPath $CudnnPath))
-    {
-        return
-    }
-
-    $cudnnBinRoots = @(@(
-        (Join-Path $CudnnPath "bin"),
-        (Join-Path $CudnnPath "bin\x64")
+    $tensorRtDllRoots = @(@(
+        (Join-Path $TensorRtPath "bin"),
+        (Join-Path $TensorRtPath "lib"),
+        (Join-Path $TensorRtPath "lib\x64")
     ) | Where-Object { Test-Path -LiteralPath $_ })
-    if ($cudnnBinRoots.Count -eq 0)
+    if ($tensorRtDllRoots.Count -eq 0)
     {
-        throw "cuDNN runtime directory not found. Expected bin or bin\x64 under: $CudnnPath"
+        throw "TensorRT runtime directory not found under: $TensorRtPath"
     }
 
-    $sources = @{}
-    foreach ($root in $cudnnBinRoots)
+    $patterns = @(
+        "nvinfer.dll",
+        "nvinfer_*.dll",
+        "nvinfer_plugin.dll",
+        "nvinfer_plugin_*.dll",
+        "nvinfer_builder_resource_*.dll",
+        "nvonnxparser.dll",
+        "nvonnxparser_*.dll"
+    )
+    $sources = [ordered]@{}
+    foreach ($root in $tensorRtDllRoots)
     {
-        Get-ChildItem -LiteralPath $root -Force -File -Filter "cudnn*.dll" -ErrorAction SilentlyContinue |
-            ForEach-Object {
-                if (-not $sources.ContainsKey($_.Name))
-                {
-                    $sources[$_.Name] = $_.FullName
+        foreach ($pattern in $patterns)
+        {
+            Get-ChildItem -LiteralPath $root -Force -File -Filter $pattern -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                    if (-not $sources.Contains($_.Name))
+                    {
+                        $sources[$_.Name] = $_.FullName
+                    }
                 }
-            }
-    }
-    if ($sources.Count -eq 0)
-    {
-        throw "No cuDNN runtime DLLs were found under bin or bin\x64: $CudnnPath"
+        }
     }
 
-    function Copy-CudnnDllIfNeeded
+    $requiredPatterns = @(
+        @{ Label = "TensorRT runtime"; Pattern = "^nvinfer(_[0-9]+)?\.dll$" },
+        @{ Label = "TensorRT ONNX parser"; Pattern = "^nvonnxparser(_[0-9]+)?\.dll$" },
+        @{ Label = "TensorRT plugin runtime"; Pattern = "^nvinfer_plugin(_[0-9]+)?\.dll$" },
+        @{ Label = "TensorRT builder resources"; Pattern = "^nvinfer_builder_resource_.+\.dll$" }
+    )
+    $missing = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($requirement in $requiredPatterns)
+    {
+        $matches = @($sources.Keys | Where-Object { $_ -match $requirement.Pattern })
+        if ($matches.Count -eq 0)
+        {
+            [void] $missing.Add($requirement.Label)
+        }
+    }
+    if ($missing.Count -gt 0)
+    {
+        throw "TensorRT SDK is incomplete under $TensorRtPath. Missing: $($missing -join ', ')"
+    }
+
+    function Copy-TensorRtDllIfNeeded
     {
         param(
             [Parameter(Mandatory = $true)][string] $Source,
@@ -819,55 +902,66 @@ function Sync-CudnnRuntime
         {
             $src = Get-Item -LiteralPath $Source
             $dst = Get-Item -LiteralPath $Destination
-            $copy = ($src.Length -ne $dst.Length) -or ($src.LastWriteTimeUtc -gt $dst.LastWriteTimeUtc)
+            $copy = ($src.Length -ne $dst.Length) -or
+                ($src.LastWriteTimeUtc -gt $dst.LastWriteTimeUtc)
         }
-
         if ($copy)
         {
             Copy-Item -LiteralPath $Source -Destination $Destination -Force
         }
     }
 
-    $runtimeDirs = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
-    foreach ($relativeDir in @("bin", "tests"))
-    {
-        $dir = Join-Path $BuildPath $relativeDir
-        New-Item -ItemType Directory -Path $dir -Force | Out-Null
-        [void] $runtimeDirs.Add((Resolve-FullPath $dir))
-    }
-
-    $vcpkgInstalledRoot = Join-Path $BuildPath "vcpkg_installed"
-    foreach ($marker in @("opencv_dnn4.dll", "opencv_core4.dll"))
-    {
-        Get-ChildItem -LiteralPath $BuildPath -Recurse -Force -File -Filter $marker -ErrorAction SilentlyContinue |
-            ForEach-Object {
-                $dir = Resolve-FullPath $_.DirectoryName
-                if (-not (Test-PathUnder $dir $vcpkgInstalledRoot))
-                {
-                    [void] $runtimeDirs.Add($dir)
-                }
-            }
-    }
-
-    $sourceEntries = $sources.GetEnumerator() | Sort-Object Name
+    $runtimeDirs = @(
+        (Join-Path $BuildPath "bin"),
+        (Join-Path $BuildPath "tests")
+    )
     foreach ($dir in $runtimeDirs)
     {
-        foreach ($entry in $sourceEntries)
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        foreach ($entry in $sources.GetEnumerator())
         {
             $destination = Join-Path $dir $entry.Name
-            Copy-CudnnDllIfNeeded -Source $entry.Value -Destination $destination
+            Copy-TensorRtDllIfNeeded -Source $entry.Value -Destination $destination
             if (-not (Test-Path -LiteralPath $destination))
             {
-                throw "Failed to deploy cuDNN runtime DLL: $destination"
+                throw "Failed to deploy TensorRT runtime DLL: $destination"
             }
         }
     }
 
-    Write-Host ("Synced {0} cuDNN runtime DLLs into {1} runtime director{2}." -f `
-        $sources.Count, $runtimeDirs.Count, $(if ($runtimeDirs.Count -eq 1) { "y" } else { "ies" }))
+    Write-Host ("Synced {0} TensorRT runtime DLLs into bin and tests." -f $sources.Count)
 }
 
-function Assert-U2NetCudaDeployment
+function Remove-StaleCudnnRuntime
+{
+    param([Parameter(Mandatory = $true)][string] $BuildPath)
+
+    $removed = 0
+    foreach ($relativeDir in @("bin", "tests"))
+    {
+        $runtimeDir = Join-Path $BuildPath $relativeDir
+        if (-not (Test-Path -LiteralPath $runtimeDir))
+        {
+            continue
+        }
+
+        Get-ChildItem -LiteralPath $runtimeDir -Recurse -Force -File -Filter "cudnn*.dll" `
+            -ErrorAction SilentlyContinue | ForEach-Object {
+                if (-not (Test-PathUnder $_.FullName $BuildPath))
+                {
+                    throw "Refusing to remove stale cuDNN DLL outside build directory: $($_.FullName)"
+                }
+                Remove-Item -LiteralPath $_.FullName -Force
+                $removed++
+            }
+    }
+    if ($removed -gt 0)
+    {
+        Write-Host "Removed $removed stale cuDNN runtime DLL(s); OpenCV is CPU-only."
+    }
+}
+
+function Assert-U2NetTensorRtDeployment
 {
     param([Parameter(Mandatory = $true)][string] $BuildPath)
 
@@ -876,11 +970,17 @@ function Assert-U2NetCudaDeployment
 
     $requirements = @(
         @{ Label = "OpenCV core"; Pattern = "opencv_core*.dll" },
-        @{ Label = "OpenCV DNN"; Pattern = "opencv_dnn4.dll" },
+        @{ Label = "OpenCV DNN CPU"; Pattern = "opencv_dnn*.dll" },
+        @{ Label = "TensorRT runtime"; Pattern = "nvinfer_*.dll"; Regex = "^nvinfer_[0-9]+\.dll$" },
+        @{ Label = "TensorRT ONNX parser"; Pattern = "nvonnxparser_*.dll"; Regex = "^nvonnxparser_[0-9]+\.dll$" },
+        @{ Label = "TensorRT plugin runtime"; Pattern = "nvinfer_plugin_*.dll" },
+        @{ Label = "TensorRT builder resource"; Pattern = "nvinfer_builder_resource_*.dll" },
         @{ Label = "CUDA runtime"; Pattern = "cudart64_*.dll" },
         @{ Label = "cuBLAS"; Pattern = "cublas64_*.dll" },
         @{ Label = "cuBLAS Lt"; Pattern = "cublasLt64_*.dll" },
-        @{ Label = "cuDNN"; Pattern = "cudnn64_*.dll" }
+        @{ Label = "NVRTC"; Pattern = "nvrtc64_*.dll" },
+        @{ Label = "NVRTC builtins"; Pattern = "nvrtc-builtins64_*.dll" },
+        @{ Label = "nvFatbin"; Pattern = "nvfatbin_*.dll" }
     )
 
     $missing = New-Object 'System.Collections.Generic.List[string]'
@@ -888,19 +988,28 @@ function Assert-U2NetCudaDeployment
     {
         $matches = @(Get-ChildItem -LiteralPath $runtimeDir -File -Filter $requirement.Pattern `
             -ErrorAction SilentlyContinue)
+        if ($requirement.ContainsKey("Regex"))
+        {
+            $matches = @($matches | Where-Object { $_.Name -match $requirement.Regex })
+        }
         if ($matches.Count -eq 0)
         {
             [void] $missing.Add("$($requirement.Label) ($($requirement.Pattern))")
         }
     }
-
     if ($missing.Count -gt 0)
     {
-        throw "U2Net CUDA deployment is incomplete in $runtimeDir. Missing: $($missing -join ', ')"
+        throw "U2Net TensorRT deployment is incomplete in $runtimeDir. Missing: $($missing -join ', ')"
     }
 
-    $cudnnDlls = @(Get-ChildItem -LiteralPath $runtimeDir -File -Filter "cudnn*.dll")
-    Write-Host "Validated U2Net CUDA deployment in $runtimeDir ($($cudnnDlls.Count) cuDNN DLLs)."
+    $cudnnDlls = @(Get-ChildItem -LiteralPath $runtimeDir -Recurse -File -Filter "cudnn*.dll" `
+        -ErrorAction SilentlyContinue)
+    if ($cudnnDlls.Count -gt 0)
+    {
+        throw "U2Net TensorRT deployment must not contain cuDNN DLLs: $($cudnnDlls.FullName -join ', ')"
+    }
+
+    Write-Host "Validated CPU-only OpenCV + U2Net TensorRT runtime deployment in $runtimeDir."
 }
 
 function Assert-VcpkgInstalledPackages
@@ -933,7 +1042,7 @@ function Assert-VcpkgInstalledPackages
     }
 }
 
-function Assert-OpenCvDnnCudaFeatures
+function Assert-OpenCvCpuOnlyFeatures
 {
     param([Parameter(Mandatory = $true)][string] $TripletRoot)
 
@@ -943,11 +1052,27 @@ function Assert-OpenCvDnnCudaFeatures
         throw "OpenCV ABI info not found: $abiInfo. Rerun this script with -InstallDeps."
     }
 
-    $text = Get-Content -LiteralPath $abiInfo -Raw
-    if ($text -notmatch "(?m)^features .*cuda" -or
-        $text -notmatch "(?m)^features .*dnn-cuda")
+    $featureLine = @(Get-Content -LiteralPath $abiInfo | Where-Object { $_ -match '^features\s+' }) |
+        Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($featureLine))
     {
-        throw "OpenCV DNN CUDA is not installed in $TripletRoot. Rerun this script with -InstallDeps."
+        throw "OpenCV ABI feature list is missing from: $abiInfo"
+    }
+
+    $features = @((($featureLine -replace '^features\s+', '') -split ';') |
+        ForEach-Object { $_.Trim().ToLowerInvariant() } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($features -notcontains "dnn")
+    {
+        throw "OpenCV DNN CPU support is missing in $TripletRoot. Rerun this script with -InstallDeps."
+    }
+
+    $forbidden = @(@("cuda", "cudnn", "dnn-cuda") |
+        Where-Object { $features -contains $_ })
+    if ($forbidden.Count -gt 0)
+    {
+        throw "OpenCV must remain CPU-only, but its vcpkg ABI enables: $($forbidden -join ', '). " +
+            "Remove the stale vcpkg_installed directory or rerun this script with -InstallDeps."
     }
 }
 
@@ -968,123 +1093,6 @@ function Assert-CeresCudaFeatures
     {
         throw "Ceres CUDA/LAPACK/SuiteSparse is not installed in $TripletRoot. Rerun this script with -InstallDeps -EnableCeresCudaBa:`$true."
     }
-}
-
-function Test-CudnnDevRoot
-{
-    param([Parameter(Mandatory = $true)][string] $Root)
-
-    if ([string]::IsNullOrWhiteSpace($Root))
-    {
-        return $false
-    }
-
-    $include = Join-Path $Root "include\cudnn.h"
-    $libX64 = Join-Path $Root "lib\x64\cudnn.lib"
-    $lib = Join-Path $Root "lib\cudnn.lib"
-    return (Test-Path -LiteralPath $include) -and
-           ((Test-Path -LiteralPath $libX64) -or (Test-Path -LiteralPath $lib))
-}
-
-function Resolve-CudnnRootFromIncludeDir
-{
-    param([string] $IncludeDir)
-
-    if ([string]::IsNullOrWhiteSpace($IncludeDir))
-    {
-        return ""
-    }
-
-    $resolved = Resolve-FullPath $IncludeDir
-    if ((Split-Path -Leaf $resolved) -ieq "include")
-    {
-        return (Split-Path -Parent $resolved)
-    }
-    return $resolved
-}
-
-function Resolve-CudnnRootFromLibraryPath
-{
-    param([string] $LibraryPath)
-
-    if ([string]::IsNullOrWhiteSpace($LibraryPath))
-    {
-        return ""
-    }
-
-    $resolved = Resolve-FullPath $LibraryPath
-    if ((Split-Path -Leaf $resolved) -ieq "cudnn.lib")
-    {
-        $libDir = Split-Path -Parent $resolved
-        if ((Split-Path -Leaf $libDir) -ieq "x64")
-        {
-            $libDir = Split-Path -Parent $libDir
-        }
-        if ((Split-Path -Leaf $libDir) -ieq "lib")
-        {
-            return (Split-Path -Parent $libDir)
-        }
-    }
-    return $resolved
-}
-
-function Resolve-CudnnDevRoot
-{
-    param([Parameter(Mandatory = $true)][string] $SourceRoot)
-
-    $candidates = @()
-    if (-not [string]::IsNullOrWhiteSpace($CudnnRoot))
-    {
-        $candidates += $CudnnRoot
-    }
-
-    foreach ($envName in @("CUDNN_ROOT_DIR", "CUDNN", "CUDNN_PATH", "cudnn"))
-    {
-        $value = [Environment]::GetEnvironmentVariable($envName)
-        if (-not [string]::IsNullOrWhiteSpace($value))
-        {
-            $candidates += $value
-        }
-    }
-
-    $candidates += Resolve-CudnnRootFromIncludeDir ([Environment]::GetEnvironmentVariable("CUDNN_INCLUDE_DIR"))
-    $candidates += Resolve-CudnnRootFromLibraryPath ([Environment]::GetEnvironmentVariable("CUDNN_LIBRARY"))
-    $candidates += (Join-Path $SourceRoot "build\env\cudnn-cu13")
-
-    foreach ($candidate in (Get-UniqueExistingPathList $candidates))
-    {
-        if ([string]::IsNullOrWhiteSpace($candidate))
-        {
-            continue
-        }
-
-        $resolved = Resolve-FullPath $candidate
-        if (Test-CudnnDevRoot $resolved)
-        {
-            return $resolved
-        }
-    }
-
-    $joined = ($candidates | Select-Object -Unique) -join ", "
-    throw "OpenCV DNN CUDA requires cuDNN developer files. Expected include\cudnn.h and lib\x64\cudnn.lib under one of: $joined"
-}
-
-function Ensure-CudnnOverlayTriplet
-{
-    param([Parameter(Mandatory = $true)][string] $SourceRoot)
-
-    $tripletDir = Join-Path $SourceRoot "build\env\vcpkg-triplets"
-    New-Item -ItemType Directory -Force -Path $tripletDir | Out-Null
-
-    $tripletFile = Join-Path $tripletDir "x64-windows.cmake"
-    @(
-        "set(VCPKG_TARGET_ARCHITECTURE x64)",
-        "set(VCPKG_CRT_LINKAGE dynamic)",
-        "set(VCPKG_LIBRARY_LINKAGE dynamic)",
-        "set(VCPKG_ENV_PASSTHROUGH CUDNN_ROOT_DIR CUDNN CUDNN_PATH CUDNN_INCLUDE_DIR CUDNN_LIBRARY cudnn)"
-    ) | Set-Content -Encoding ASCII -Path $tripletFile
-
-    return (Resolve-FullPath $tripletDir)
 }
 
 function Find-VcpkgPortDirectory
@@ -1143,69 +1151,6 @@ function Find-VcpkgPortDirectory
     throw "Unable to locate vcpkg port '$PortName'. Run vcpkg manifest install once, or seed the vcpkg registry cache."
 }
 
-function Ensure-OpenCvCuda13OverlayPort
-{
-    param(
-        [Parameter(Mandatory = $true)][string] $SourceRoot,
-        [Parameter(Mandatory = $true)][string] $VcpkgPath
-    )
-
-    $overlayRoot = Join-Path $SourceRoot "build\env\vcpkg-overlay-ports"
-    New-Item -ItemType Directory -Force -Path $overlayRoot | Out-Null
-
-    $overlayPort = Join-Path $overlayRoot "opencv4"
-    Remove-SafeItem -Path $overlayPort -AllowedRoot $overlayRoot
-
-    $portSource = Find-VcpkgPortDirectory -VcpkgPath $VcpkgPath -PortName "opencv4"
-    Copy-Item -LiteralPath $portSource -Destination $overlayPort -Recurse -Force
-
-    $portfile = Join-Path $overlayPort "portfile.cmake"
-    $portfileText = Get-Content -LiteralPath $portfile -Raw
-    $portProvidesCuda13Patch = $portfileText -match "(?i)CUDA_13_SUPPORT_PATCH|opencv4-support-cuda-13"
-    if (-not $portProvidesCuda13Patch -and
-        $portfileText -notmatch "0024-cuda13-device-props\.patch")
-    {
-        $patchSource = Join-Path $SourceRoot "scripts\build_win\vcpkg_patches\opencv4\0024-cuda13-device-props.patch"
-        Assert-ExistingPath $patchSource "OpenCV CUDA 13 patch"
-        Copy-Item -LiteralPath $patchSource `
-            -Destination (Join-Path $overlayPort "0024-cuda13-device-props.patch") -Force
-
-        $marker = "      0023-ffmpeg8-support.patch"
-        if (-not $portfileText.Contains($marker))
-        {
-            throw "Unable to inject OpenCV CUDA 13 patch into generated overlay port: $portfile"
-        }
-
-        $portfileText = $portfileText.Replace($marker, "$marker`r`n      0024-cuda13-device-props.patch")
-        Set-Content -LiteralPath $portfile -Encoding ASCII -Value $portfileText
-    }
-
-    $portfileText = Get-Content -LiteralPath $portfile -Raw
-    if ($portfileText -notmatch "CUDA_ARCH_BIN=75;86;89;120")
-    {
-        $marker = 'if("halide" IN_LIST FEATURES)'
-        if (-not $portfileText.Contains($marker))
-        {
-            throw "Unable to inject OpenCV CUDA architectures into generated overlay port: $portfile"
-        }
-
-        $cudaArchBlock = @'
-if("cuda" IN_LIST FEATURES)
-  list(APPEND ADDITIONAL_BUILD_FLAGS
-    "-DCUDA_ARCH_BIN=75\;86\;89\;120"
-    "-DCUDA_ARCH_PTX="
-    "-DBUILD_opencv_videostab=OFF"
-  )
-endif()
-
-'@
-        $portfileText = $portfileText.Replace($marker, $cudaArchBlock + $marker)
-        Set-Content -LiteralPath $portfile -Encoding ASCII -Value $portfileText
-    }
-
-    return (Resolve-FullPath $overlayRoot)
-}
-
 function Ensure-CeresCuda13OverlayPort
 {
     param(
@@ -1213,7 +1158,9 @@ function Ensure-CeresCuda13OverlayPort
         [Parameter(Mandatory = $true)][string] $VcpkgPath
     )
 
-    $overlayRoot = Join-Path $SourceRoot "build\env\vcpkg-overlay-ports"
+    # Keep the Ceres overlay isolated. Reusing the historical shared overlay root
+    # could make a stale OpenCV CUDA port override the CPU-only manifest port.
+    $overlayRoot = Join-Path $SourceRoot "build\env\vcpkg-overlay-ports-ceres"
     New-Item -ItemType Directory -Force -Path $overlayRoot | Out-Null
 
     $overlayPort = Join-Path $overlayRoot "ceres"
@@ -1283,6 +1230,8 @@ $VcpkgBuildtreesRoot = Resolve-ReparseTargetPath $VcpkgBuildtreesRoot
 $VcpkgPackagesRoot = Resolve-ReparseTargetPath $VcpkgPackagesRoot
 $VcpkgDownloadsRoot = Resolve-ReparseTargetPath $VcpkgDownloadsRoot
 $CudaRoot = Resolve-FullPath $CudaRoot
+$TensorRtRoot = Resolve-TensorRtSdkRoot -RequestedRoot $TensorRtRoot -BuildPath $BuildDir
+$env:TENSORRT_ROOT = $TensorRtRoot
 $CMakeExe = Resolve-FullPath $CMakeExe
 $VsDevCmd = Resolve-FullPath $VsDevCmd
 $ninjaDir = Resolve-NinjaDirectory $CMakeExe
@@ -1303,10 +1252,10 @@ $vcpkgInstalledCMake = Convert-ToCMakePath $vcpkgInstalled
 $vcpkgBuildtreesRootCMake = Convert-ToCMakePath $VcpkgBuildtreesRoot
 $vcpkgPackagesRootCMake = Convert-ToCMakePath $VcpkgPackagesRoot
 $vcpkgDownloadsRootCMake = Convert-ToCMakePath $VcpkgDownloadsRoot
-$vcpkgOverlayTripletsCMake = ""
 $vcpkgOverlayPortsCMake = ""
 $cudaRootCMake = Convert-ToCMakePath $CudaRoot
 $cudaNvccCMake = Convert-ToCMakePath $cudaNvcc
+$tensorRtRootCMake = Convert-ToCMakePath $TensorRtRoot
 $vcpkgToolchainCMake = Convert-ToCMakePath $vcpkgToolchain
 
 if (-not (Test-PathUnder $BuildDir $buildRoot))
@@ -1423,29 +1372,6 @@ if ($msvcCompilerPathEntries.Count -gt 0)
     }
 }
 
-if ($EnableOpenCvDnnCuda)
-{
-    $resolvedCudnnRoot = Resolve-CudnnDevRoot $SourceDir
-    $vcpkgOverlayTripletsCMake = Convert-ToCMakePath (Ensure-CudnnOverlayTriplet $SourceDir)
-    $vcpkgOverlayPortsCMake = Convert-ToCMakePath (Ensure-OpenCvCuda13OverlayPort -SourceRoot $SourceDir -VcpkgPath $VcpkgRoot)
-    $resolvedCudnnInclude = Join-Path $resolvedCudnnRoot "include"
-    $resolvedCudnnLibrary = Join-Path $resolvedCudnnRoot "lib\x64\cudnn.lib"
-    if (-not (Test-Path -LiteralPath $resolvedCudnnLibrary))
-    {
-        $resolvedCudnnLibrary = Join-Path $resolvedCudnnRoot "lib\cudnn.lib"
-    }
-    $env:CUDNN_ROOT_DIR = $resolvedCudnnRoot
-    $env:CUDNN = $resolvedCudnnRoot
-    $env:cudnn = $resolvedCudnnRoot
-    $env:CUDNN_PATH = $resolvedCudnnRoot
-    $env:CUDNN_INCLUDE_DIR = $resolvedCudnnInclude
-    $env:CUDNN_LIBRARY = $resolvedCudnnLibrary
-    $cudnnPathEntries = @(
-        (Join-Path $resolvedCudnnRoot "bin"),
-        (Join-Path $resolvedCudnnRoot "lib\x64")
-    )
-    $env:PATH = (Get-UniqueExistingPathList ($cudnnPathEntries + @($env:PATH -split ';'))) -join ';'
-}
 if ($EnableCeresCudaBa)
 {
     $vcpkgOverlayPortsCMake = Convert-ToCMakePath (Ensure-CeresCuda13OverlayPort -SourceRoot $SourceDir -VcpkgPath $VcpkgRoot)
@@ -1455,22 +1381,17 @@ New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 Sync-VcpkgRuntime -BuildPath $BuildDir -TripletRoot $vcpkgTripletRoot
 Sync-MsvcRuntime -BuildPath $BuildDir -VcpkgPath $VcpkgRoot
 Sync-CudaRuntime -BuildPath $BuildDir -CudaPath $CudaRoot
+Sync-TensorRtRuntime -BuildPath $BuildDir -TensorRtPath $TensorRtRoot
 Sync-QtRuntime -BuildPath $BuildDir -TripletRoot $vcpkgTripletRoot
 Sync-OpenCvRuntime -BuildPath $BuildDir -TripletRoot $vcpkgTripletRoot
-if ($EnableOpenCvDnnCuda)
-{
-    Sync-CudnnRuntime -BuildPath $BuildDir -CudnnPath $env:CUDNN_ROOT_DIR
-}
+Remove-StaleCudnnRuntime -BuildPath $BuildDir
 if (-not $InstallDeps)
 {
     Assert-VcpkgInstalledPackages $vcpkgTripletRoot
+    Assert-OpenCvCpuOnlyFeatures $vcpkgTripletRoot
     if ($EnableCeresCudaBa)
     {
         Assert-CeresCudaFeatures $vcpkgTripletRoot
-    }
-    if ($EnableOpenCvDnnCuda)
-    {
-        Assert-OpenCvDnnCudaFeatures $vcpkgTripletRoot
     }
 }
 
@@ -1483,10 +1404,7 @@ Write-Host "  Buildtrees: $VcpkgBuildtreesRoot"
 Write-Host "  Packages:   $VcpkgPackagesRoot"
 Write-Host "  Downloads:  $VcpkgDownloadsRoot"
 Write-Host "  CUDA:      $CudaRoot"
-if ($EnableOpenCvDnnCuda)
-{
-    Write-Host "  cuDNN:     $env:CUDNN_ROOT_DIR"
-}
+Write-Host "  TensorRT:  $TensorRtRoot"
 if (-not [string]::IsNullOrWhiteSpace($vcpkgOverlayPortsCMake))
 {
     Write-Host "  Overlay:   $vcpkgOverlayPortsCMake"
@@ -1497,7 +1415,8 @@ if (-not [string]::IsNullOrWhiteSpace($msvcCudaHostCompiler))
 }
 Write-Host "  Prefix:    $env:CMAKE_PREFIX_PATH"
 Write-Host "  Ceres BA CUDA: $(if ($EnableCeresCudaBa) { 'enabled' } else { 'disabled' })"
-Write-Host "  OpenCV DNN CUDA: $(if ($EnableOpenCvDnnCuda) { 'enabled' } else { 'disabled' })"
+Write-Host "  OpenCV DNN: CPU-only"
+Write-Host "  U2Net GPU: TensorRT"
 
 if (-not $BuildOnly)
 {
@@ -1514,6 +1433,7 @@ if (-not $BuildOnly)
         "-DCMAKE_RC_COMPILER=$(Convert-ToCMakePath $windowsSdkRc)",
         "-DCMAKE_MT=$(Convert-ToCMakePath $windowsSdkMt)",
         "-UVCPKG_MANIFEST_FEATURES",
+        "-UVCPKG_OVERLAY_PORTS",
         "-UQt6*_DIR",
         "-DCMAKE_BUILD_TYPE=Release",
         "-DCMAKE_TOOLCHAIN_FILE=$vcpkgToolchainCMake",
@@ -1529,6 +1449,8 @@ if (-not $BuildOnly)
         "-DPLASCAN_ENABLE_VCPKG=ON",
         "-DPLASCAN_BUNDLE_RUNTIME=ON",
         "-DBUILD_TESTS=ON",
+        "-DPLASCAN_ENABLE_TENSORRT=ON",
+        "-DTensorRT_ROOT=$tensorRtRootCMake",
         "-DCUDAToolkit_ROOT=$cudaRootCMake",
         "-DCUDA_TOOLKIT_ROOT_DIR=$cudaRootCMake",
         "-DCMAKE_CUDA_COMPILER=$cudaNvccCMake",
@@ -1546,26 +1468,10 @@ if (-not $BuildOnly)
     {
         $configureArgs += "-DCMAKE_CUDA_FLAGS=--compiler-bindir=$msvcCudaHostCompilerDir"
     }
-    # 历史等价项：仅启用 OpenCV DNN CUDA 时会生成 -DVCPKG_MANIFEST_FEATURES=opencv-dnn-cuda。
     $manifestFeaturesValue = ""
-    if ($EnableOpenCvDnnCuda)
-    {
-        $manifestFeaturesValue = "opencv-dnn-cuda"
-    }
     if ($EnableCeresCudaBa)
     {
-        if ([string]::IsNullOrWhiteSpace($manifestFeaturesValue))
-        {
-            $manifestFeaturesValue = "ceres-cuda"
-        }
-        else
-        {
-            $manifestFeaturesValue = "$manifestFeaturesValue;ceres-cuda"
-        }
-    }
-    if (-not [string]::IsNullOrWhiteSpace($vcpkgOverlayTripletsCMake))
-    {
-        $configureArgs += "-DVCPKG_OVERLAY_TRIPLETS=$vcpkgOverlayTripletsCMake"
+        $manifestFeaturesValue = "ceres-cuda"
     }
     if (-not [string]::IsNullOrWhiteSpace($vcpkgOverlayPortsCMake))
     {
@@ -1582,10 +1488,7 @@ if (-not $BuildOnly)
     {
         throw "CMake configure failed with exit code $configureExitCode"
     }
-    if ($EnableOpenCvDnnCuda)
-    {
-        Assert-OpenCvDnnCudaFeatures $vcpkgTripletRoot
-    }
+    Assert-OpenCvCpuOnlyFeatures $vcpkgTripletRoot
     if ($EnableCeresCudaBa)
     {
         Assert-CeresCudaFeatures $vcpkgTripletRoot
@@ -1597,13 +1500,11 @@ if (-not $ConfigureOnly)
     Sync-VcpkgRuntime -BuildPath $BuildDir -TripletRoot $vcpkgTripletRoot
     Sync-MsvcRuntime -BuildPath $BuildDir -VcpkgPath $VcpkgRoot
     Sync-CudaRuntime -BuildPath $BuildDir -CudaPath $CudaRoot
+    Sync-TensorRtRuntime -BuildPath $BuildDir -TensorRtPath $TensorRtRoot
     Sync-QtRuntime -BuildPath $BuildDir -TripletRoot $vcpkgTripletRoot
     Sync-OpenCvRuntime -BuildPath $BuildDir -TripletRoot $vcpkgTripletRoot
-    if ($EnableOpenCvDnnCuda)
-    {
-        Sync-CudnnRuntime -BuildPath $BuildDir -CudnnPath $env:CUDNN_ROOT_DIR
-        Assert-U2NetCudaDeployment -BuildPath $BuildDir
-    }
+    Remove-StaleCudnnRuntime -BuildPath $BuildDir
+    Assert-OpenCvCpuOnlyFeatures $vcpkgTripletRoot
 
     $buildArgs = @("--build", $BuildDir, "--config", "Release", "--parallel", "$Jobs")
     if (-not [string]::IsNullOrWhiteSpace($Target))
@@ -1621,28 +1522,28 @@ if (-not $ConfigureOnly)
     Sync-VcpkgRuntime -BuildPath $BuildDir -TripletRoot $vcpkgTripletRoot
     Sync-MsvcRuntime -BuildPath $BuildDir -VcpkgPath $VcpkgRoot
     Sync-CudaRuntime -BuildPath $BuildDir -CudaPath $CudaRoot
+    Sync-TensorRtRuntime -BuildPath $BuildDir -TensorRtPath $TensorRtRoot
     Sync-QtRuntime -BuildPath $BuildDir -TripletRoot $vcpkgTripletRoot
     Sync-OpenCvRuntime -BuildPath $BuildDir -TripletRoot $vcpkgTripletRoot
-    if ($EnableOpenCvDnnCuda)
-    {
-        Sync-CudnnRuntime -BuildPath $BuildDir -CudnnPath $env:CUDNN_ROOT_DIR
-        Assert-U2NetCudaDeployment -BuildPath $BuildDir
-    }
+    Remove-StaleCudnnRuntime -BuildPath $BuildDir
+    Assert-U2NetTensorRtDeployment -BuildPath $BuildDir
 }
 
 if ($RunU2NetCudaDeploymentTest)
 {
+    Write-Warning "RunU2NetCudaDeploymentTest is deprecated; using the TensorRT deployment test."
+    $RunU2NetTensorRtDeploymentTest = $true
+}
+
+if ($RunU2NetTensorRtDeploymentTest)
+{
     if ($ConfigureOnly)
     {
-        throw "RunU2NetCudaDeploymentTest requires a build; do not combine it with ConfigureOnly."
-    }
-    if (-not $EnableOpenCvDnnCuda)
-    {
-        throw "RunU2NetCudaDeploymentTest requires EnableOpenCvDnnCuda."
+        throw "RunU2NetTensorRtDeploymentTest requires a build; do not combine it with ConfigureOnly."
     }
 
-    $deploymentTestScript = Join-Path $SourceDir "scripts\build_win\test_u2net_cuda_deployment.ps1"
-    Assert-ExistingPath $deploymentTestScript "U2Net CUDA deployment test script"
+    $deploymentTestScript = Join-Path $SourceDir "scripts\build_win\test_u2net_tensorrt_deployment.ps1"
+    Assert-ExistingPath $deploymentTestScript "U2Net TensorRT deployment test script"
     & $deploymentTestScript -BuildDir $BuildDir `
         -ModelPath (Join-Path $SourceDir "resources\models\U2Net_v1.onnx")
 }

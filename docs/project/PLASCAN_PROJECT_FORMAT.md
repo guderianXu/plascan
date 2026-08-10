@@ -302,6 +302,11 @@ plascan:///resources/reference/<resource_id>/control.csv
 SHA-256 生成文件键，因此不同目录下的同名影像不会覆盖彼此。按文件名或 stem 查找
 只允许唯一候选，存在多个候选时返回歧义错误。
 
+U2Net 蒙版记录保存 `mask_method: "u2net"`，并以 `mask_inference_backend`、
+`mask_inference_device`、`mask_inference_precision` 记录实际使用的 TensorRT/OpenCV CPU
+后端、设备和精度；`mask_model_sha256` 是本次实际加载 ONNX 文件的 SHA-256，不是
+绑定开发机的 engine 标识。TensorRT engine 只位于用户本地缓存，不写入工程资源。
+
 Python、CUDA、模型搜索目录等机器相关配置不能写成工程资源路径。
 
 添加影像时立即计算 SHA-256 并复制到 `shared/images/<sha256>/`。多个 Chunk 导入内容

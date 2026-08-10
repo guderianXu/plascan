@@ -1,18 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 project(plascan_image_matching LANGUAGES CXX)
 
-set(_PLASCAN_TENSORRT_DEFAULT OFF)
-if(CMAKE_CUDA_COMPILER)
-    set(_PLASCAN_TENSORRT_DEFAULT ON)
-endif()
-option(PLASCAN_ENABLE_TENSORRT "Build TensorRT image-matching backends"
-       ${_PLASCAN_TENSORRT_DEFAULT})
-unset(_PLASCAN_TENSORRT_DEFAULT)
-
-if(PLASCAN_ENABLE_TENSORRT)
-    find_package(TensorRT REQUIRED)
-    find_package(CUDAToolkit REQUIRED)
-elseif(CMAKE_CUDA_COMPILER)
+if(NOT PLASCAN_ENABLE_TENSORRT AND CMAKE_CUDA_COMPILER)
     find_package(CUDAToolkit REQUIRED)
 endif()
 
@@ -53,16 +42,9 @@ if(PLASCAN_ENABLE_TENSORRT)
         loma_r/LoMaRAlgorithm.h
         loma_r/LoMaRTensorRtBackend.cpp
         loma_r/LoMaRTensorRtBackend.h
-        tensorrt/TensorRtSession.cpp
         tensorrt/TensorRtSession.h
-        tensorrt/TensorRtEngineBuilder.cpp
         lightglue/TensorRtLightGlueMatcher.cpp
         lightglue/TensorRtLightGlueMatcher.h
-    )
-else()
-    # CPU/Linux 开发配置仍需提供稳定符号，使资源解析代码可以编译并给出明确错误。
-    target_sources(image_matching PRIVATE
-        tensorrt/TensorRtEngineBuilderStub.cpp
     )
 endif()
 
@@ -106,16 +88,8 @@ target_link_libraries(image_matching PUBLIC
     Qt6::Core
     ${OpenCV_LIBS}
     plascan_common_io
+    plascan_inference
 )
-
-if(PLASCAN_ENABLE_TENSORRT)
-    target_link_libraries(image_matching PUBLIC
-        TensorRT::nvinfer
-        TensorRT::nvonnxparser
-        CUDA::cudart
-    )
-    target_compile_definitions(image_matching PUBLIC PLASCAN_HAS_TENSORRT=1)
-endif()
 
 if(TARGET plascan_cudasift)
     target_link_libraries(image_matching PUBLIC

@@ -154,28 +154,25 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("(void)min_z;", icp_source)
         self.assertIn("(void)max_z;", icp_source)
 
-    def test_vcpkg_manifest_has_optional_opencv_dnn_cuda_feature(self):
+    def test_vcpkg_manifest_keeps_opencv_dnn_cpu_only(self):
         manifest = json.loads((ROOT / "vcpkg.json").read_text(encoding="utf-8"))
         base_opencv_dependency = next(
             dependency for dependency in manifest.get("dependencies", [])
             if isinstance(dependency, dict) and dependency.get("name") == "opencv"
         )
-        self.assertIn("dnn", set(base_opencv_dependency.get("features", [])))
-
-        optional_features = manifest.get("features", {})
-        self.assertIn("opencv-dnn-cuda", optional_features)
-        feature_dependencies = optional_features["opencv-dnn-cuda"].get("dependencies", [])
-        opencv_dependency = next(
-            dependency for dependency in feature_dependencies
-            if isinstance(dependency, dict) and dependency.get("name") == "opencv"
-        )
-        opencv_features = set(opencv_dependency.get("features", []))
-
-        self.assertIn("cuda", opencv_features)
+        opencv_features = set(base_opencv_dependency.get("features", []))
         self.assertIn("dnn", opencv_features)
-        self.assertIn("dnn-cuda", opencv_features)
+        self.assertTrue({"cuda", "cudnn", "dnn-cuda"}.isdisjoint(opencv_features))
+        self.assertNotIn("opencv-dnn-cuda", manifest.get("features", {}))
 
-    def test_windows_cuda_build_script_exposes_opencv_dnn_cuda_switch(self):
+        presets = json.loads((ROOT / "CMakePresets.json").read_text(encoding="utf-8"))
+        for preset in presets.get("configurePresets", []):
+            manifest_features = preset.get("cacheVariables", {}).get(
+                "VCPKG_MANIFEST_FEATURES", ""
+            )
+            self.assertNotIn("opencv-dnn-cuda", manifest_features)
+
+    def test_windows_cuda_build_script_deploys_u2net_tensorrt_without_cudnn(self):
         script_path = ROOT / "scripts" / "build_win" / "build_windows_cuda.ps1"
         text = script_path.read_text(encoding="utf-8")
 
@@ -190,10 +187,10 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("Sync-CudaRuntime", text)
         self.assertIn("$CudaPath \"bin\\x64\"", text)
         self.assertIn("CUDA runtime DLLs", text)
-        self.assertIn("Sync-CudnnRuntime", text)
-        self.assertIn("$CudnnPath \"bin\\x64\"", text)
-        self.assertIn("$cudnnBinRoots = @(@(", text)
-        self.assertIn("Assert-U2NetCudaDeployment", text)
+        self.assertIn("Sync-TensorRtRuntime", text)
+        self.assertIn("nvinfer_builder_resource_*.dll", text)
+        self.assertIn("Assert-U2NetTensorRtDeployment", text)
+        self.assertIn("RunU2NetTensorRtDeploymentTest", text)
         self.assertIn("RunU2NetCudaDeploymentTest", text)
         self.assertIn("VCPKG_APPLOCAL_DEPS=OFF", text)
         self.assertIn("Resolve-ReparseTargetPath", text)
@@ -201,54 +198,44 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("CMAKE_CXX_COMPILER=$msvcCudaHostCompiler", text)
         self.assertIn("CMAKE_RC_COMPILER=$(Convert-ToCMakePath $windowsSdkRc)", text)
         self.assertIn("CMAKE_MT=$(Convert-ToCMakePath $windowsSdkMt)", text)
-        self.assertIn("EnableOpenCvDnnCuda", text)
-        self.assertIn("[bool] $EnableOpenCvDnnCuda = $true", text)
+        self.assertNotIn("EnableOpenCvDnnCuda", text)
+        self.assertNotIn("Sync-CudnnRuntime", text)
+        self.assertNotIn("CUDNN_ROOT_DIR", text)
         self.assertIn("EnableCeresCudaBa", text)
         self.assertIn("-UVCPKG_MANIFEST_FEATURES", text)
-        self.assertIn("VCPKG_MANIFEST_FEATURES=opencv-dnn-cuda", text)
+        self.assertIn("-UVCPKG_OVERLAY_PORTS", text)
         self.assertIn("manifestFeaturesValue", text)
-        self.assertIn('$manifestFeaturesValue = "$manifestFeaturesValue;ceres-cuda"', text)
-        self.assertIn("Assert-OpenCvDnnCudaFeatures", text)
+        self.assertIn('$manifestFeaturesValue = "ceres-cuda"', text)
+        self.assertIn("Assert-OpenCvCpuOnlyFeatures", text)
         self.assertIn("Assert-CeresCudaFeatures", text)
         self.assertIn(
             "if ($EnableCeresCudaBa)\n{\n    $vcpkgOverlayPortsCMake = Convert-ToCMakePath "
             "(Ensure-CeresCuda13OverlayPort",
             text,
         )
-        self.assertIn("CudnnRoot", text)
-        self.assertIn("CUDNN_ROOT_DIR", text)
-        self.assertIn("build\\env\\cudnn-cu13", text)
-        self.assertIn(
-            "$cudnnPathEntries + @($env:PATH -split ';')",
-            text,
-        )
-        self.assertIn("VCPKG_OVERLAY_TRIPLETS", text)
-        self.assertIn(
-            "VCPKG_ENV_PASSTHROUGH CUDNN_ROOT_DIR CUDNN CUDNN_PATH "
-            "CUDNN_INCLUDE_DIR CUDNN_LIBRARY cudnn",
-            text,
-        )
+        self.assertIn("TensorRtRoot", text)
+        self.assertIn("TensorRT_ROOT", text)
         self.assertIn("Ensure-CeresCuda13OverlayPort", text)
+        self.assertIn("vcpkg-overlay-ports-ceres", text)
+        self.assertNotIn('"build\\env\\vcpkg-overlay-ports"', text)
         self.assertIn("CMAKE_CUDA_STANDARD=17", text)
         self.assertIn("CMAKE_CUDA_FLAGS=--std=c++17", text)
         self.assertIn("CMAKE_CUDA_ARCHITECTURES=75\\;86\\;89\\;120", text)
-        self.assertIn("Ensure-OpenCvCuda13OverlayPort", text)
-        self.assertIn("0024-cuda13-device-props.patch", text)
-        self.assertIn("portProvidesCuda13Patch", text)
-        self.assertIn("CUDA_13_SUPPORT_PATCH|opencv4-support-cuda-13", text)
+        self.assertNotIn("Ensure-OpenCvCuda13OverlayPort", text)
         self.assertIn("VCPKG_OVERLAY_PORTS", text)
         self.assertIn('if (-not [string]::IsNullOrWhiteSpace($vcpkgOverlayPortsCMake))', text)
-        self.assertIn("CUDA_ARCH_BIN=75\\;86\\;89\\;120", text)
-        self.assertIn("BUILD_opencv_videostab=OFF", text)
-        self.assertIn("OpenCV DNN CUDA", text)
+        self.assertIn("OpenCV DNN: CPU-only", text)
 
         deployment_test = (
-            ROOT / "scripts" / "build_win" / "test_u2net_cuda_deployment.ps1"
+            ROOT / "scripts" / "build_win" / "test_u2net_tensorrt_deployment.ps1"
         ).read_text(encoding="utf-8")
         self.assertIn("EnvironmentVariables.Clear()", deployment_test)
         self.assertIn('EnvironmentVariables["PATH"]', deployment_test)
-        self.assertIn("OnnxModelRunsOnCudaWhenBackendAvailable", deployment_test)
-        self.assertIn("the test may have been skipped", deployment_test)
+        self.assertIn("OnnxModelRunsOnTensorRtWhenAvailable", deployment_test)
+        self.assertIn("TensorRT available", deployment_test)
+        self.assertIn("nvinfer_builder_resource_*.dll", deployment_test)
+        self.assertIn('Name -like "cudnn*.dll"', deployment_test)
+        self.assertIn("it may have been skipped", deployment_test)
 
     def test_gui_build_deploys_vcpkg_runtime_dlls(self):
         module = (ROOT / "cmake" / "PlascanWindowsRuntime.cmake").read_text(
@@ -265,6 +252,9 @@ class RepoHygieneTest(unittest.TestCase):
             / "packaging"
             / "InstallBundledRuntimeWindows.cmake.in"
         ).read_text(encoding="utf-8")
+        tensorrt_runtime = (
+            ROOT / "cmake" / "PlascanTensorRtRuntime.cmake"
+        ).read_text(encoding="utf-8")
 
         self.assertIn("function(plascan_deploy_vcpkg_runtime target_name)", module)
         self.assertIn("VCPKG_INSTALLED_DIR", module)
@@ -273,8 +263,14 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("COMMAND_EXPAND_LISTS", module)
         self.assertIn("include(PlascanWindowsRuntime)", root_cmake)
         self.assertIn("plascan_deploy_vcpkg_runtime(plascan_gui)", gui_cmake)
-        self.assertIn('"cudnn*.dll"', install_bundle)
+        self.assertNotIn('  "cudnn*.dll"', install_bundle)
+        self.assertIn('"nvinfer_builder_resource_*.dll"', install_bundle)
+        self.assertIn("must not bundle cuDNN", install_bundle)
         self.assertIn("_plascan_dynamic_runtime_patterns", install_bundle)
+        self.assertIn('"${CUDAToolkit_BIN_DIR}/x64"', tensorrt_runtime)
+        self.assertIn('"${_plascan_cuda_runtime_dir}/cublas64_*.dll"', tensorrt_runtime)
+        self.assertIn('"${_plascan_cuda_runtime_dir}/nvrtc64_*.dll"', tensorrt_runtime)
+        self.assertIn("nvinfer_builder_resource_", tensorrt_runtime)
 
     def test_release_1_1_7_metadata_is_synchronized(self):
         root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")

@@ -75,7 +75,7 @@ cmake --workflow --preset windows-package-smoke
 结果位于 `build/windows-vcpkg-cuda-release/package-smoke/PlaScan`。该流程会增量构建 GUI、安装 Runtime
 组件并执行 ONNX 校验，但不压缩安装器。它不会删除 staging 中已经失效的文件；依赖删除或安装布局
 变化后，应先清理这个精确目录再重新运行。smoke 结果只用于安装后功能验证，不能代替正式发布制品。
-vcpkg、CUDA、cuDNN、Qt 或工具链发生变化时，必须先重跑 `build_windows_cuda.ps1` 完成运行时同步；
+vcpkg、CUDA、TensorRT、Qt 或工具链发生变化时，必须先重跑 `build_windows_cuda.ps1` 完成运行时同步；
 workflow 只负责源码增量构建与安装，不替代依赖准备脚本。
 
 使用 CMake/CPack 3.27+ 和 Inno Setup 6 生成正式分卷安装器：
@@ -111,8 +111,8 @@ rootfs 位于 `build/linux-vcpkg-package-release/package-smoke/rootfs`，DEB 与
 XCB/offscreen 插件、GDAL/PROJ 数据、可迁移 RUNPATH、模型哈希和 DEB 内容门禁；不得通过关闭
 `PLASCAN_VERIFY_LINUX_PACKAGE_RUNTIME` 绕过失败。
 
-当前影像匹配生产后端需要 CUDA/TensorRT。需要安装后直接运行 LightGlue 时，构建机先准备 CUDA 13.1、
-cuDNN 9、TensorRT 10.15.1 CUDA 13.1 变体、ONNX parser 开发库和 NVIDIA Ubuntu 软件源，再运行：
+当前影像匹配和 U2Net GPU 后端需要 CUDA/TensorRT。构建机先准备 CUDA 13.1、TensorRT 10.15.1
+CUDA 13.1 变体、ONNX parser 开发库、完整 Builder/runtime 和 NVIDIA Ubuntu 软件源，再运行：
 
 ```bash
 cmake --workflow --preset linux-package-cuda-smoke
@@ -153,4 +153,7 @@ Linux 发布额外检查：
   `.exe`，必须重新生成并复核 `-INNOSETUP.sha256`；
 - 在干净的 CUDA/TensorRT 环境分别从内置 LightGlue 和 LoMa-R ONNX 完成首次 engine 构建和一对影像
   匹配，随后验证缓存复用，且所有 engine 只写入用户模型缓存，安装树没有新增文件；
-- 使用内置 U2Net 至少完成一次 CPU 蒙版推理；Windows CUDA 发布包还需执行现有 CUDA 部署测试。
+- 使用内置 U2Net 至少完成一次 OpenCV CPU 蒙版推理；Windows CUDA 发布包还必须执行
+  `build_windows_cuda.ps1 -Target test_mask_generation -RunU2NetTensorRtDeploymentTest`，确认 OpenCV ABI
+  不含 `cuda/cudnn/dnn-cuda`、安装树没有 cuDNN 或预生成 engine，并在无外部 SDK PATH 的全新缓存中
+  从 ONNX 完成 TensorRT engine 首次构建和真实推理。

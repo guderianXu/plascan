@@ -87,14 +87,14 @@ sudo apt install ./build/linux-vcpkg-package-release/packages/release/plascan_1.
 算法为 CUDA SIFT + TensorRT LightGlue，因此需要完整匹配功能时使用 CUDA 变体：
 
 ```bash
-# 构建机需要 CUDA 13.1、cuDNN 9、TensorRT 10.15.1（CUDA 13.1 变体）及 ONNX parser 开发库
+# 构建机需要 CUDA 13.1、TensorRT 10.15.1（CUDA 13.1 变体）及 ONNX parser 开发库
 cmake --workflow --preset linux-package-cuda-smoke
 cmake --workflow --preset linux-package-cuda-deb
 sudo apt install ./build/linux-vcpkg-cuda-package-release/packages/release/plascan-cuda_1.1.7_amd64.deb
 ```
 
 CUDA DEB 不捆绑 NVIDIA 驱动和受系统 ABI 约束的 CUDA/TensorRT 库，而是在包元数据中声明 CUDA
-13.1、cuDNN 9 与 TensorRT 10.15.1 CUDA 13.1 变体的运行时依赖；目标电脑需预先启用 NVIDIA Ubuntu
+13.1 与 TensorRT 10.15.1 CUDA 13.1 变体的运行时依赖；目标电脑需预先启用 NVIDIA Ubuntu
 仓库并安装兼容驱动，随后 `apt install ./plascan-cuda_*.deb` 会补齐运行时。vcpkg 的 Qt、OpenCV、GDAL 等非系统 `.so`、Qt
 plugins、GDAL/PROJ 数据和两份 ONNX 会装到 `/opt/plascan`，桌面入口和图标装到标准 `/usr` 路径。
 两个包互斥，不能同时安装。DEB 与 `.sha256` 位于各自构建目录的 `packages/release`；依赖或安装布局
@@ -143,7 +143,7 @@ cmake --workflow --preset windows-package-smoke
 Inno Setup 压缩。安装阶段仍会校验 U2Net、LightGlue 和 LoMa-R 五文件模型包的长度与 SHA-256，
 因此这个目录可以直接验证安装后的图像掩模和两种匹配算法。依赖被删除或安装布局发生变化时，先删除
 `build/windows-vcpkg-cuda-release/package-smoke/PlaScan`，再运行一次 smoke 流程，避免保留旧 DLL。
-升级 vcpkg、CUDA、cuDNN、Qt 或编译工具链后，应先重跑 `build_windows_cuda.ps1`（需要补依赖时加
+升级 vcpkg、CUDA、TensorRT、Qt 或编译工具链后，应先重跑 `build_windows_cuda.ps1`（需要补依赖时加
 `-InstallDeps`），让脚本重新同步运行时，再使用上述代码增量工作流。
 
 即使开发机已安装 CUDA/OpenCL，也可用
@@ -172,7 +172,7 @@ cmake --workflow --preset windows-package-release
 `-INNOSETUP.sha256`；发布和安装时必须让 `.exe` 与全部 `.bin` 位于同一目录。每个 `.exe/.bin`
 资产都会在打包时强制校验为小于 2 GiB，适合分别上传到同一个 GitHub Release。
 
-Windows 构建使用原生 MSVC/Ninja/PowerShell，不需要 WSL。GUI 链接后会把当前 vcpkg triplet 的运行时 DLL 增量同步到 `build/bin`，保证直接启动时包含 LAPACK/OpenBLAS 等传递依赖。打包后的 GUI 还需要 Qt platform plugins 和 TensorRT/CUDA 运行时 DLL；`PLASCAN_BUNDLE_RUNTIME=ON` 时 CMake install/CPack 会按主程序和 Qt 插件的传递依赖闭包收集 DLL，并补充 Vulkan、cuDNN 和 NVRTC 等动态加载运行时。要让内置 LightGlue ONNX 安装后直接匹配，发布构建必须启用 CUDA/TensorRT，并携带 `nvinfer`、`nvonnxparser` 和对应架构的 builder resource；CPU-only 包即使含有 ONNX 也不具备该匹配后端。
+Windows 构建使用原生 MSVC/Ninja/PowerShell，不需要 WSL。GUI 链接后会把当前 vcpkg triplet 的运行时 DLL 增量同步到 `build/bin`，保证直接启动时包含 LAPACK/OpenBLAS 等传递依赖。打包后的 GUI 还需要 Qt platform plugins 和 TensorRT/CUDA 运行时 DLL；`PLASCAN_BUNDLE_RUNTIME=ON` 时 CMake install/CPack 会按主程序和 Qt 插件的传递依赖闭包收集 DLL，并补充 Vulkan、TensorRT Builder、NVRTC 和 nvFatbin 等动态加载运行时。要让内置 U2Net、LightGlue 和 LoMa-R ONNX 安装后直接使用 GPU，发布构建必须启用 CUDA/TensorRT，并携带 `nvinfer`、`nvonnxparser`、plugin 和对应架构的 builder resource；OpenCV 始终保持 CPU-only，安装包不得携带 cuDNN 或开发机生成的 `.engine`。
 
 当前 manifest 使用 vcpkg 中可用的 OpenCV 4.x port。后续 vcpkg 正式提供 OpenCV 5 后，优先通过更新 `builtin-baseline`、OpenCV feature 列表和现有 `OpenCvCompat` 兼容测试切换。
 
@@ -185,28 +185,25 @@ Windows CUDA 开发机推荐固定使用 `scripts/build_win/build_windows_cuda.p
 如果只想构建 CPU/legacy BA，可传 `-EnableCeresCudaBa:$false`。已有 `vcpkg_installed` 若仍是
 CPU 版 Ceres，脚本会提示重新运行 `-InstallDeps`，避免界面显示 CUDA 但实际只跑 CPU。
 
-标准 Windows CUDA 构建默认同时安装 `opencv-dnn-cuda` manifest feature 和 cuDNN，使 U2Net ONNX
-蒙版真正使用 OpenCV DNN CUDA 后端。首次准备依赖时运行：
+标准 Windows CUDA 构建由 TensorRT 加速 U2Net ONNX，OpenCV 只保留 CPU DNN 作为回退，不安装
+`opencv-dnn-cuda`，也不链接或分发 cuDNN。首次准备依赖时运行：
 
 ```powershell
 pwsh scripts\build_win\build_windows_cuda.ps1 -InstallDeps
 pwsh scripts\build_win\build_windows_cuda.ps1
 ```
 
-脚本需要可发现的 cuDNN 开发包（`include/cudnn.h` 和 `lib/x64/cudnn.lib`），可通过 `-CudnnRoot`
-显式指定。只有明确不需要 U2Net CUDA 时才传 `-EnableOpenCvDnnCuda:$false`；GUI 默认禁止静默回退，
-选择 CUDA 但后端不可用会给出明确错误，用户勾选“CUDA 不可用时回退 CPU”后才允许回退。
-
-脚本会从 cuDNN 的 `bin` 和官方归档常用的 `bin/x64` 布局收集全部 `cudnn*.dll`，并校验部署目录
-中的 OpenCV DNN、CUDA、cuBLAS 和 cuDNN 运行库。发布前可在移除 CUDA/cuDNN/vcpkg 外部 PATH 的
-子进程中执行真实 U2Net CUDA 推理：
+脚本通过 `-TensorRtRoot` 或 `TENSORRT_ROOT` 查找完整 TensorRT SDK，收集 runtime、ONNX parser、plugin、
+全部 GPU 架构 builder resource 和所需 CUDA DLL。它会拒绝带 CUDA/cuDNN feature 的 OpenCV ABI，清除
+旧运行目录残留的 `cudnn*.dll`。发布前可在移除 CUDA/TensorRT/vcpkg 外部 PATH 的子进程中，从 ONNX
+首次构建本机 engine 并执行真实 U2Net TensorRT 推理：
 
 ```powershell
-pwsh scripts\build_win\build_windows_cuda.ps1 -Target test_mask_generation -RunU2NetCudaDeploymentTest
+pwsh scripts\build_win\build_windows_cuda.ps1 -Target test_mask_generation -RunU2NetTensorRtDeploymentTest
 ```
 
-通过该验证的发布目录不要求目标电脑另行安装 CUDA Toolkit 或 cuDNN，但仍需要受支持的 NVIDIA GPU
-以及与所打包 CUDA 运行库兼容的 NVIDIA 驱动。
+通过该验证的发布目录不要求目标电脑安装 CUDA Toolkit、TensorRT SDK、cuDNN、vcpkg 或 Python，但仍
+需要受支持的 NVIDIA GPU 以及与所打包 CUDA/TensorRT 运行库兼容的 NVIDIA 驱动。
 
 ### Python 环境脚本
 
@@ -577,11 +574,14 @@ triangulate_cli     -d disp.tif --rect rect.xml --camL A.txt --camR B.txt -o clo
 下载便携 ONNX，并按源码运行或安装版自动选择可写模型目录。TensorRT engine 不再作为跨机器资产发布。
 
 标准 CPack 包已经内置 U2Net 和 LightGlue ONNX；程序会直接从安装根下的 `resources/models` 发现它们。
-安装目录中的 ONNX 只读使用，LightGlue 首次构建的本机 engine 写入用户模型目录下的
-`lightglue_tensorrt/engines`，不会尝试修改 `Program Files`、`/opt/plascan` 或便携包目录。
+安装目录中的 ONNX 只读使用。U2Net 首次构建的本机 engine 写入用户本地应用数据目录下
+`models/u2net/engines/<fingerprint>`，LightGlue 和 LoMa-R 使用各自的 engine 缓存；程序不会尝试修改
+`Program Files`、`/opt/plascan` 或便携包目录，也不会把绑定 GPU/TensorRT 版本的 engine 打进安装包。
 
 “生成蒙版 → AI: U2Net ONNX”会自动检测 `U2Net_v1.onnx`；缺失时可直接在对话框中下载并校验。
 源码构建写入仓库 `resources/models/`，安装包运行则写入用户应用数据目录，避免修改只读安装目录。
+NVIDIA GPU 默认使用 TensorRT FP16/FP32，TensorRT 不可用时按用户设置明确报错或回退 OpenCV CPU；
+OpenCV 不使用 CUDA/cuDNN。
 
 或通过导出脚本生成：
 
@@ -600,6 +600,7 @@ python scripts/models/export_loma_r_tensorrt.py --help
 | dense_match MGM/SGM | CUDA + CPU | CUDA + CPU | CPU only |
 | CUDA SIFT + TensorRT LightGlue | CUDA | CUDA | 不支持 |
 | TensorRT LoMa-R | CUDA | CUDA | 不支持 |
+| U2Net 蒙版 | TensorRT/CPU | TensorRT/CPU | CPU |
 | 全部 CLI 工具 | ✅ | ✅ | ✅ |
 | Qt6 GUI | ✅ | ✅ | ✅ |
 | CPack 打包 | ZIP/INNOSETUP | TGZ/DEB | TGZ |

@@ -143,8 +143,8 @@ E:\code\plascan\build\windows-vcpkg-cuda-release\package-smoke\PlaScan\bin\plasc
 该流程会构建 `plascan_gui` 及其依赖，更新 Runtime 文件并校验内置 U2Net/LightGlue ONNX，不执行
 耗时的安装器压缩。依赖删除或安装布局变化时，需要先清理
 `E:\code\plascan\build\windows-vcpkg-cuda-release\package-smoke\PlaScan` 再运行。
-若 vcpkg、CUDA、cuDNN、Qt 或编译工具链发生变化，先重新执行 `build_windows_cuda.ps1`（缺依赖时
-使用 `-InstallDeps`），完成脚本中的 Qt/cuDNN/CUDA 运行时同步后再运行 workflow。
+若 vcpkg、CUDA、TensorRT、Qt 或编译工具链发生变化，先重新执行 `build_windows_cuda.ps1`（缺依赖时
+使用 `-InstallDeps`），完成脚本中的 Qt/TensorRT/CUDA 运行时同步后再运行 workflow。
 
 准备正式交付时再执行完整分卷安装器工作流：
 
@@ -173,6 +173,7 @@ cmake --workflow --preset windows-package-release
 | `-VsDevCmd <path>` | VS Build Tools 环境脚本。 |
 | `-CMakeExe <path>` | CMake 可执行文件路径。 |
 | `-CudaRoot <path>` | CUDA Toolkit 根目录，默认 CUDA 13.1。 |
+| `-TensorRtRoot <path>` | TensorRT SDK 根目录；未指定时读取 `TENSORRT_ROOT`。必须包含 ONNX parser 和全部 builder resource。 |
 | `-Target <name>` | 只构建指定 CMake target，例如 `plascan_gui`。 |
 | `-CTestRegex <regex>` | `ctest -R` 过滤表达式。 |
 | `-Jobs <n>` | 并行构建线程数，默认 CPU 核心数。 |
@@ -180,25 +181,26 @@ cmake --workflow --preset windows-package-release
 | `-ConfigureOnly` | 只配置，不构建。 |
 | `-BuildOnly` | 只构建，不配置。 |
 | `-RunTests` | 构建后运行 CTest。 |
-| `-RunU2NetCudaDeploymentTest` | 使用仅包含部署 `bin` 和 Windows 系统目录的 PATH 运行真实 U2Net CUDA smoke test。 |
+| `-RunU2NetTensorRtDeploymentTest` | 使用仅包含部署 `bin` 和 Windows 系统目录的 PATH，在全新用户缓存中构建 engine 并运行真实 U2Net TensorRT smoke test。 |
+| `-RunU2NetCudaDeploymentTest` | 旧名称兼容入口；会输出弃用警告并执行同一 TensorRT smoke test。 |
 | `-CleanConfigure` | 清理当前构建目录中除 `vcpkg_installed` 外的 CMake/编译产物。 |
 | `-CleanRootCache` | 清理根 `build` 目录旧 CMake/Ninja/Linux 残留。 |
 | `-InstallDeps` | 允许 CMake/vcpkg 自动执行 manifest install。 |
-| `-CudnnRoot <path>` | cuDNN 开发包根目录，需包含 `include/cudnn.h`、导入库以及 `bin` 或 `bin/x64` 运行库。 |
-| `-EnableOpenCvDnnCuda:<bool>` | 是否启用 OpenCV DNN CUDA/cuDNN；默认开启。 |
 | `-SkipVsDevCmd` | 跳过加载 VS Build Tools 环境，仅在当前 shell 已配置好编译器时使用。 |
 
 发布前建议运行：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_win\build_windows_cuda.ps1 `
-  -Target test_mask_generation -RunU2NetCudaDeploymentTest
+  -Target test_mask_generation -RunU2NetTensorRtDeploymentTest
 ```
 
-脚本会同时扫描 cuDNN 的 `bin` 与 `bin\x64`，复制全部 `cudnn*.dll`，校验 OpenCV DNN、CUDA、
-cuBLAS、cuBLAS Lt 和 cuDNN 运行库，然后在清理外部 SDK/vcpkg PATH 的子进程中执行真实 GPU 推理。
-验证通过后的发布目录不要求目标电脑单独安装 CUDA Toolkit 或 cuDNN，但目标电脑仍需受支持的
-NVIDIA GPU 和兼容的 NVIDIA 驱动。
+脚本强制校验 vcpkg OpenCV ABI 只包含 CPU DNN，不允许 `cuda`、`cudnn` 或 `dnn-cuda` feature；旧构建
+目录中的 `cudnn*.dll` 会从运行目录移除。随后脚本复制并校验 TensorRT runtime、ONNX parser、plugin、
+全部 builder resource，以及 CUDA runtime、cuBLAS、NVRTC 和 nvFatbin。在清空外部 SDK/vcpkg PATH 的
+子进程中，测试会使用全新用户缓存从便携 ONNX 首次构建 engine 并执行真实 GPU 推理；用例跳过也会失败。
+验证通过后的发布目录不要求目标电脑安装 CUDA Toolkit、TensorRT SDK、vcpkg、Python 或 cuDNN，只需
+受支持的 NVIDIA GPU 和与随包 CUDA/TensorRT 运行库兼容的 NVIDIA 驱动。
 
 ## 排错
 

@@ -7170,7 +7170,7 @@ TEST(MainMenuTest, ProvidesPythonRuntimeUpdateAction)
     EXPECT_TRUE(source.contains(QStringLiteral("更新 Python 环境...")));
 }
 
-TEST(GenerateMaskDialogTest, ExposesU2NetOnnxCpuAndCudaSettings)
+TEST(GenerateMaskDialogTest, ExposesU2NetTensorRtAndOpenCvCpuSettings)
 {
     GenerateMaskDialog dialog(QStringList{QStringLiteral("a.png")});
     auto *methodCombo = dialog.findChild<QComboBox *>(QStringLiteral("methodCombo"));
@@ -7191,16 +7191,23 @@ TEST(GenerateMaskDialogTest, ExposesU2NetOnnxCpuAndCudaSettings)
     ASSERT_GE(u2netIndex, 0);
     methodCombo->setCurrentIndex(u2netIndex);
 
-    EXPECT_GE(deviceCombo->findData(QStringLiteral("cuda")), 0);
+    EXPECT_GE(deviceCombo->findData(QStringLiteral("auto")), 0);
+    EXPECT_GE(deviceCombo->findData(QStringLiteral("tensorrt")), 0);
     EXPECT_GE(deviceCombo->findData(QStringLiteral("cpu")), 0);
     EXPECT_FALSE(fallbackCheck->isChecked());
+    EXPECT_FALSE(fallbackCheck->isEnabled());
+    deviceCombo->setCurrentIndex(deviceCombo->findData(QStringLiteral("tensorrt")));
+    EXPECT_TRUE(fallbackCheck->isEnabled());
+    deviceCombo->setCurrentIndex(deviceCombo->findData(QStringLiteral("auto")));
     EXPECT_EQ(inputSizeSpin->value(), 320);
     EXPECT_DOUBLE_EQ(thresholdSpin->value(), 0.5);
     EXPECT_TRUE(statusLabel->isEnabled());
+    EXPECT_FALSE(inputSizeSpin->isEnabled());
 
     const QJsonObject settings = dialog.collectSettings();
     EXPECT_EQ(settings.value(QStringLiteral("method")).toString(), QStringLiteral("u2net"));
-    EXPECT_EQ(settings.value(QStringLiteral("u2net_device")).toString(), QStringLiteral("cuda"));
+    EXPECT_EQ(settings.value(QStringLiteral("u2net_backend")).toString(), QStringLiteral("auto"));
+    EXPECT_EQ(settings.value(QStringLiteral("u2net_device")).toString(), QStringLiteral("auto"));
     EXPECT_FALSE(settings.value(QStringLiteral("u2net_allow_fallback")).toBool());
     EXPECT_EQ(settings.value(QStringLiteral("u2net_input_size")).toInt(), 320);
     EXPECT_DOUBLE_EQ(settings.value(QStringLiteral("u2net_mask_threshold")).toDouble(), 0.5);
@@ -7259,7 +7266,7 @@ TEST(GenerateMaskWorkflowTest, ProjectManagerUsesCommonIoForTiffMaskGeneration)
         << "Mask generation must not use QImage for source TIFF reading; use common/io PathIO instead.";
 }
 
-TEST(GenerateMaskWorkflowTest, U2NetMaskGenerationUsesBundledOnnxAndOpenCvDnn)
+TEST(GenerateMaskWorkflowTest, U2NetMaskGenerationUsesTensorRtWithOpenCvCpuFallback)
 {
     const QString source = readProjectSourceFile(
         QStringLiteral("src/gui/project/manager/ProjectMaskWorkflowController.cpp"));
@@ -7286,9 +7293,13 @@ TEST(GenerateMaskWorkflowTest, U2NetMaskGenerationUsesBundledOnnxAndOpenCvDnn)
     EXPECT_TRUE(block.contains(QStringLiteral("xjw::mask::U2NetMaskGenerator")));
     EXPECT_TRUE(block.contains(QStringLiteral("u2net->generate(source)")));
     EXPECT_TRUE(block.contains(QStringLiteral("mask_inference_device")));
-    EXPECT_TRUE(block.contains(QStringLiteral("U2Net 实际推理设备")));
+    EXPECT_TRUE(block.contains(QStringLiteral("mask_inference_backend")));
+    EXPECT_TRUE(block.contains(QStringLiteral("mask_inference_precision")));
+    EXPECT_TRUE(block.contains(QStringLiteral("U2Net 实际推理")));
     EXPECT_TRUE(block.contains(QStringLiteral("U2Net_v1.onnx")));
-    EXPECT_TRUE(block.contains(QStringLiteral("deviceLabel()")));
+    EXPECT_TRUE(block.contains(QStringLiteral("u2netBackendTypeToken")));
+    EXPECT_TRUE(block.contains(QStringLiteral("u2netInferencePrecisionToken")));
+    EXPECT_TRUE(block.contains(QStringLiteral("engineReused()")));
 }
 
 TEST(GenerateMaskWorkflowTest, RunsMaskGenerationOffGuiThreadWithTaskStatusProgress)

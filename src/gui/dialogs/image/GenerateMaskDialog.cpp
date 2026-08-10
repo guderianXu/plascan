@@ -71,10 +71,11 @@ GenerateMaskDialog::GenerateMaskDialog(const QStringList &selectedImages,
 
     _u2netDeviceCombo = new QComboBox(this);
     _u2netDeviceCombo->setObjectName(QStringLiteral("u2netDeviceCombo"));
-    _u2netDeviceCombo->addItem(tr("CUDA"), QStringLiteral("cuda"));
-    _u2netDeviceCombo->addItem(tr("CPU"), QStringLiteral("cpu"));
+    _u2netDeviceCombo->addItem(tr("自动（推荐）"), QStringLiteral("auto"));
+    _u2netDeviceCombo->addItem(tr("TensorRT GPU"), QStringLiteral("tensorrt"));
+    _u2netDeviceCombo->addItem(tr("OpenCV CPU"), QStringLiteral("cpu"));
 
-    _u2netAllowFallbackCheck = new QCheckBox(tr("CUDA 不可用时回退 CPU"), this);
+    _u2netAllowFallbackCheck = new QCheckBox(tr("TensorRT 失败时回退 OpenCV CPU"), this);
     _u2netAllowFallbackCheck->setObjectName(QStringLiteral("u2netAllowFallbackCheck"));
     _u2netAllowFallbackCheck->setChecked(false);
 
@@ -88,9 +89,10 @@ GenerateMaskDialog::GenerateMaskDialog(const QStringList &selectedImages,
 
     _u2netInputSizeSpin = new QSpinBox(this);
     _u2netInputSizeSpin->setObjectName(QStringLiteral("u2netInputSizeSpin"));
-    _u2netInputSizeSpin->setRange(128, 1024);
-    _u2netInputSizeSpin->setSingleStep(32);
-    _u2netInputSizeSpin->setValue(320);
+    _u2netInputSizeSpin->setRange(xjw::mask::kU2NetModelInputSize,
+                                  xjw::mask::kU2NetModelInputSize);
+    _u2netInputSizeSpin->setValue(xjw::mask::kU2NetModelInputSize);
+    _u2netInputSizeSpin->setToolTip(tr("随附 U2Net ONNX 的固定输入尺寸"));
 
     _u2netMaskThresholdSpin = new QDoubleSpinBox(this);
     _u2netMaskThresholdSpin->setObjectName(QStringLiteral("u2netMaskThresholdSpin"));
@@ -183,7 +185,11 @@ QJsonObject GenerateMaskDialog::collectSettings() const
     settings.insert(QStringLiteral("threshold"), _thresholdSpin->value());
     settings.insert(QStringLiteral("morphology_radius"), _morphologyRadiusSpin->value());
     settings.insert(QStringLiteral("min_component_area"), _minComponentAreaSpin->value());
-    settings.insert(QStringLiteral("u2net_device"), _u2netDeviceCombo->currentData().toString());
+    const QString u2net_backend = _u2netDeviceCombo->currentData().toString();
+    settings.insert(QStringLiteral("u2net_backend"), u2net_backend);
+    // Keep the legacy key readable by older project builds. New values deliberately
+    // describe the inference backend rather than an OpenCV CUDA device.
+    settings.insert(QStringLiteral("u2net_device"), u2net_backend);
     settings.insert(QStringLiteral("u2net_allow_fallback"), _u2netAllowFallbackCheck->isChecked());
     settings.insert(QStringLiteral("u2net_input_size"), _u2netInputSizeSpin->value());
     settings.insert(QStringLiteral("u2net_mask_threshold"), _u2netMaskThresholdSpin->value());
@@ -227,8 +233,10 @@ void GenerateMaskDialog::updateMethodState()
     _minComponentAreaSpin->setEnabled(!is_u2net);
     _u2netModelStatusLabel->setEnabled(is_u2net);
     _u2netDeviceCombo->setEnabled(is_u2net);
-    _u2netAllowFallbackCheck->setEnabled(is_u2net);
-    _u2netInputSizeSpin->setEnabled(is_u2net);
+    const bool force_tensorrt = _u2netDeviceCombo
+        && _u2netDeviceCombo->currentData().toString() == QLatin1String("tensorrt");
+    _u2netAllowFallbackCheck->setEnabled(is_u2net && force_tensorrt);
+    _u2netInputSizeSpin->setEnabled(false);
     _u2netMaskThresholdSpin->setEnabled(is_u2net);
     updateU2NetStatusText();
     updateThresholdState();
@@ -238,22 +246,47 @@ void GenerateMaskDialog::updateU2NetStatusText()
 {
     const bool is_u2net = _methodCombo
         && _methodCombo->currentData().toString() == QLatin1String("u2net");
+    if (!is_u2net)
+    {
+        _u2netModelStatusLabel->setEnabled(false);
+        _u2netDownloadButton->setVisible(false);
+        if (_buttons && _buttons->button(QDialogButtonBox::Ok))
+        {
+            _buttons->button(QDialogButtonBox::Ok)->setEnabled(true);
+        }
+        return;
+    }
+
     const xjw::common::model::ModelFileResolver resolver(_modelSearchOptions);
     const auto status = xjw::common::model::u2netModelStatus(resolver);
-    const xjw::mask::U2NetDnnCapabilities capabilities =
-        xjw::mask::detectU2NetDnnCapabilities();
-    const QString cuda_status = capabilities.hasDnnCudaBackend
-        ? tr("CUDA 后端可用（检测到 %1 个设备）").arg(capabilities.cudaDeviceCount)
-        : tr("CUDA 后端不可用；请选择 CPU，或重新执行标准 CUDA 依赖构建");
-    _u2netModelStatusLabel->setEnabled(is_u2net);
+    static const xjw::mask::U2NetInferenceCapabilities capabilities =
+        xjw::mask::detectU2NetInferenceCapabilities();
+    QString backend_status;
+    if (capabilities.tensorRtAvailable)
+    {
+        backend_status = tr("TensorRT %1 可用；GPU：%2；%3")
+            .arg(QString::fromStdString(capabilities.tensorRtVersion),
+                 QString::fromStdString(capabilities.gpuName),
+                 capabilities.supportsFp16 ? tr("优先 FP16") : tr("使用 FP32"));
+    }
+    else if (capabilities.tensorRtCompiled)
+    {
+        backend_status = tr("TensorRT 已编译但当前不可用：%1；自动模式将使用 OpenCV CPU")
+            .arg(QString::fromStdString(capabilities.errorMessage));
+    }
+    else
+    {
+        backend_status = tr("当前构建未启用 TensorRT；自动模式将使用 OpenCV CPU");
+    }
+    _u2netModelStatusLabel->setEnabled(true);
     _u2netModelStatusLabel->setText(
-        tr("状态：%1；%2\n计算后端：%3").arg(status.label, status.detail, cuda_status));
+        tr("状态：%1；%2\n计算后端：%3").arg(status.label, status.detail, backend_status));
     _u2netModelStatusLabel->setToolTip(QString::fromStdString(capabilities.summary));
-    _u2netDownloadButton->setVisible(is_u2net && !status.isInstalled);
-    _u2netDownloadButton->setEnabled(is_u2net && !status.isInstalled);
+    _u2netDownloadButton->setVisible(!status.isInstalled);
+    _u2netDownloadButton->setEnabled(!status.isInstalled);
     if (_buttons && _buttons->button(QDialogButtonBox::Ok))
     {
-        _buttons->button(QDialogButtonBox::Ok)->setEnabled(!is_u2net || status.isInstalled);
+        _buttons->button(QDialogButtonBox::Ok)->setEnabled(status.isInstalled);
     }
 }
 

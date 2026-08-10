@@ -93,7 +93,7 @@ ModelAssetPackage u2NetOnnxPackage()
     package.entryPointFile = QStringLiteral("U2Net_v1.onnx");
     package.releaseTag = QString::fromLatin1(kModelReleaseTag);
     package.compatibilitySummary = QStringLiteral(
-        "OpenCV DNN CPU 可直接使用；CUDA 取决于本机 OpenCV DNN CUDA 后端。"
+        "OpenCV DNN CPU 可直接使用；NVIDIA GPU 使用本机首次构建的 TensorRT engine。"
         "模型来源于 U-2-Net（Apache-2.0）。");
     package.files = {
         asset("U2Net_v1.onnx",

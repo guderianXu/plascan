@@ -1,5 +1,6 @@
 set(_plascan_runtime_source "@PLASCAN_WINDOWS_RUNTIME_DIR@")
 set(_plascan_executable "${_plascan_runtime_source}/plascan.exe")
+set(_plascan_tensorrt_enabled "@PLASCAN_ENABLE_TENSORRT@")
 
 if(NOT IS_DIRECTORY "${_plascan_runtime_source}")
   message(FATAL_ERROR
@@ -9,6 +10,19 @@ endif()
 if(NOT EXISTS "${_plascan_executable}")
   message(FATAL_ERROR
     "PlaScan executable does not exist: ${_plascan_executable}")
+endif()
+
+file(GLOB_RECURSE _plascan_forbidden_accelerator_files
+  LIST_DIRECTORIES false
+  "${_plascan_runtime_source}/cudnn*.dll"
+  "${_plascan_runtime_source}/*.engine"
+  "${_plascan_runtime_source}/*.plan")
+if(_plascan_forbidden_accelerator_files)
+  list(JOIN _plascan_forbidden_accelerator_files ", "
+    _plascan_forbidden_accelerator_text)
+  message(FATAL_ERROR
+    "Portable PlaScan must not bundle cuDNN or machine-specific TensorRT "
+    "engines: ${_plascan_forbidden_accelerator_text}")
 endif()
 
 set(_plascan_plugin_groups
@@ -60,14 +74,17 @@ if(_plascan_unresolved_dlls)
     "${_plascan_unresolved_text}")
 endif()
 
-# Vulkan, cuDNN and NVRTC load parts of their runtime dynamically, so PE
+# Vulkan, TensorRT Builder and NVRTC load parts of their runtime dynamically, so PE
 # import-table traversal cannot discover these files.
 set(_plascan_dynamic_runtime_patterns
-  "cudnn*.dll"
+  "cudart64_*.dll"
+  "cublas64_*.dll"
+  "cublasLt64_*.dll"
   "nvinfer_builder_resource_*.dll"
   "nvinfer_plugin_*.dll"
   "nvonnxparser*.dll"
   "nvfatbin*.dll"
+  "nvrtc64_*.dll"
   "nvrtc-builtins*.dll"
   "nvToolsExt*.dll"
   "vulkan-1.dll")
@@ -78,8 +95,49 @@ foreach(_plascan_dynamic_pattern IN LISTS _plascan_dynamic_runtime_patterns)
   list(APPEND _plascan_runtime_dlls ${_plascan_dynamic_runtime_dlls})
 endforeach()
 
+if(_plascan_tensorrt_enabled)
+  set(_plascan_required_tensorrt_patterns
+    "nvinfer_[0-9]*.dll"
+    "nvonnxparser_[0-9]*.dll"
+    "nvinfer_plugin_*.dll"
+    "nvinfer_builder_resource_*.dll"
+    "cudart64_*.dll"
+    "cublas64_*.dll"
+    "cublasLt64_*.dll"
+    "nvrtc64_*.dll"
+    "nvrtc-builtins64_*.dll"
+    "nvfatbin_*.dll")
+  set(_plascan_missing_tensorrt_runtime)
+  foreach(_plascan_required_pattern IN LISTS
+          _plascan_required_tensorrt_patterns)
+    file(GLOB _plascan_required_matches
+      LIST_DIRECTORIES false
+      "${_plascan_runtime_source}/${_plascan_required_pattern}")
+    if(NOT _plascan_required_matches)
+      list(APPEND _plascan_missing_tensorrt_runtime
+        "${_plascan_required_pattern}")
+    endif()
+  endforeach()
+  if(_plascan_missing_tensorrt_runtime)
+    list(JOIN _plascan_missing_tensorrt_runtime ", "
+      _plascan_missing_tensorrt_text)
+    message(FATAL_ERROR
+      "TensorRT portable deployment is incomplete in "
+      "${_plascan_runtime_source}. Missing: ${_plascan_missing_tensorrt_text}")
+  endif()
+endif()
+
 list(REMOVE_DUPLICATES _plascan_runtime_dlls)
 list(SORT _plascan_runtime_dlls)
+
+foreach(_plascan_runtime_dll IN LISTS _plascan_runtime_dlls)
+  get_filename_component(_plascan_runtime_name "${_plascan_runtime_dll}" NAME)
+  if(_plascan_runtime_name MATCHES "^cudnn.*\\.dll$")
+    message(FATAL_ERROR
+      "Resolved runtime dependency unexpectedly includes cuDNN: "
+      "${_plascan_runtime_dll}")
+  endif()
+endforeach()
 
 if(NOT _plascan_runtime_dlls)
   message(FATAL_ERROR

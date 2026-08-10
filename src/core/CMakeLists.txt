@@ -1,6 +1,19 @@
 cmake_minimum_required(VERSION 3.16)
 project(PlaScanCore VERSION 1.1.7 LANGUAGES CXX)
 
+set(_PLASCAN_TENSORRT_DEFAULT OFF)
+if(CMAKE_CUDA_COMPILER)
+  set(_PLASCAN_TENSORRT_DEFAULT ON)
+endif()
+option(PLASCAN_ENABLE_TENSORRT "Build PlaScan TensorRT inference backends"
+       ${_PLASCAN_TENSORRT_DEFAULT})
+unset(_PLASCAN_TENSORRT_DEFAULT)
+
+if(PLASCAN_ENABLE_TENSORRT)
+  find_package(TensorRT REQUIRED)
+  find_package(CUDAToolkit REQUIRED)
+endif()
+
 
 function(plascan_core_add_optional_module moduleDir moduleLabel)
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${moduleDir}/CMakeLists.txt")
@@ -11,6 +24,7 @@ function(plascan_core_add_optional_module moduleDir moduleLabel)
   endif()
 endfunction()
 
+plascan_core_add_optional_module(inference "Inference")
 plascan_core_add_optional_module(image_matching "Image Matching")
 plascan_core_add_optional_module(camera "Camera")
 plascan_core_add_optional_module(camera_reference "Camera Reference")

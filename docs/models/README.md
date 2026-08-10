@@ -17,8 +17,8 @@ Builder 会在首次使用时生成当前机器专用 engine。
   保证该目录可写，写入失败时程序不会静默改用其它缓存目录。
 
 engine 缓存键包含 ONNX SHA-256、TensorRT 完整版本、GPU Compute Capability、精度、工作区和
-优化级别。缓存根与模型发现路径解耦：源码运行或设置 `PLASCAN_MODEL_DIR` 时使用对应的可写模型根，
-安装版使用 `QStandardPaths::AppLocalDataLocation/models`；LightGlue 和 LoMa-R 分别写入各自的
+优化级别。缓存根与模型发现路径解耦：安装版使用 `QStandardPaths::AppLocalDataLocation/models`；
+U2Net 写入 `u2net/engines/<fingerprint>`，LightGlue 和 LoMa-R 写入各自的
 `engines/<fingerprint>` 子目录。随包 ONNX 即使位于 `Program Files` 或 `/opt/plascan`，也不会被写入。
 更换显卡或 TensorRT 后会进入新缓存目录并重新构建，不会反序列化旧机器的 plan。
 Windows 安装包必须携带 `nvinfer`、`nvonnxparser` 和对应架构的
@@ -58,9 +58,10 @@ gh release download models-v1.1.0 -R guderianXu/plascan `
   -p 'loma_r_*' -D resources/models/loma_r_tensorrt --clobber
 ```
 
-内置 U2Net 可直接由 OpenCV DNN CPU 加载。内置 LightGlue 与 LoMa-R 仍要求 CUDA、TensorRT ONNX
-Parser 和目标 GPU 架构对应的 builder resource；Windows 发布包应捆绑这些运行时，Linux 包则需捆绑
-或明确要求目标机安装兼容版本。安装包只分发便携 ONNX，绝不能包含开发机生成的 `.engine`。
+内置 U2Net 可由 OpenCV DNN CPU 加载，也可像 LightGlue 与 LoMa-R 一样在 NVIDIA GPU 上使用 TensorRT。
+TensorRT 路径要求 CUDA、ONNX Parser 和目标 GPU 架构对应的 builder resource；Windows 发布包应捆绑
+这些运行时，Linux 包则需捆绑或明确要求目标机安装兼容版本。安装包只分发便携 ONNX，绝不能包含开发机
+生成的 `.engine`，也不再为了 U2Net 携带 cuDNN。
 
 ## SIFT + LightGlue TensorRT
 
@@ -139,8 +140,10 @@ LoMa-R 来源为 `davnords/loma`。其主体代码采用 MIT 许可，匹配器�
 
 ## U2Net ONNX 蒙版
 
-`resources/models/U2Net_v1.onnx` 用于快速前景/背景分离。标准 Windows CUDA 构建默认为 OpenCV
-启用 DNN CUDA/cuDNN 后端；GUI 默认禁止静默切换设备，只有用户明确允许回退时才会切换到 CPU。
+`resources/models/U2Net_v1.onnx` 用于快速前景/背景分离。标准 Windows CUDA 构建使用 TensorRT
+FP16/FP32 加速，OpenCV 永久保持 CPU-only，只作为无 TensorRT/GPU 环境的回退后端。自动模式优先
+TensorRT；强制 TensorRT 时默认禁止静默回退，只有用户明确允许后才会切换到 OpenCV CPU。随附模型
+使用固定 `1×3×320×320` 输入，GUI 会显示并锁定该真实生效尺寸。
 
 在“生成蒙版”中选择“AI: U2Net ONNX”时，GUI 会自动检测模型。模型缺失时可点击“下载 U2Net
 模型”，PlaScan 从 GitHub Release `models-v1.1.0` 异步下载，并在写入最终文件前验证固定大小和
@@ -169,8 +172,10 @@ pwsh scripts\build_win\build_windows_cuda.ps1 -InstallDeps
 pwsh scripts\build_win\build_windows_cuda.ps1
 ```
 
-发布前使用 `-Target test_mask_generation -RunU2NetCudaDeploymentTest` 验证部署目录。该测试清空子进程
-环境中的 CUDA、cuDNN 和 vcpkg 路径，只保留构建目录 `bin` 与 Windows 系统 DLL 路径，并要求真实
-CUDA 用例通过；用例被跳过也会视为部署失败。
+发布前使用 `-Target test_mask_generation -RunU2NetTensorRtDeploymentTest` 验证部署目录。该测试检查
+OpenCV vcpkg ABI 不含 `cuda`、`cudnn`、`dnn-cuda`，并确认部署目录具有 TensorRT runtime、ONNX parser、
+plugin、builder resource 及 CUDA 运行库，且不含 cuDNN 或预生成 engine。随后清空子进程中的外部
+CUDA/TensorRT/vcpkg PATH，在全新用户缓存中从 ONNX 首次构建 engine 并执行真实 TensorRT 推理；用例
+被跳过也会视为部署失败。
 
 模型加载失败必须报告实际解析路径、请求设备和回退状态，不能静默忽略缺失资源。

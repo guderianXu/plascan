@@ -4,6 +4,21 @@
 
 ## Unreleased
 
+### 新增
+
+- U2Net 蒙版新增 TensorRT FP16/FP32 后端：发布包分发可移植 ONNX，首次使用时在用户本地应用数据目录
+  构建并按模型、GPU 和 TensorRT 环境指纹缓存本机 engine；OpenCV DNN CPU 继续作为明确回退路径。
+
+### 优化
+
+- Windows CUDA 免安装部署现在收集并校验 TensorRT runtime、ONNX parser、plugin、全部 builder resource
+  以及所需 CUDA DLL，可在没有 CUDA Toolkit、TensorRT SDK、vcpkg 和 Python 的目标机首次构建 U2Net engine。
+
+### 修复
+
+- OpenCV vcpkg 依赖固定为 CPU-only DNN，移除 `opencv-dnn-cuda` 和 cuDNN 构建/分发链路；部署门禁拒绝
+  OpenCV CUDA ABI、cuDNN DLL 和绑定开发机的预生成 TensorRT engine。
+
 ## v1.1.7 - 2026-08-10
 
 ### 新增

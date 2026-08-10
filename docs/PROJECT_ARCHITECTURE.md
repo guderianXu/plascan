@@ -119,6 +119,13 @@ core/
 │   ├── io/                     # camera_reference_set.json 严格 schema 与 QSaveFile 原子读写
 │   └── tests/                  # 缺文件、往返、损坏及高版本拒绝测试
 │
+├── inference/                  # 跨业务模块复用的推理基础设施
+│   └── tensorrt/               # TensorRT 能力、ONNX Builder、环境指纹缓存、Session 与张量 ABI
+│       ├── TensorRtCapabilities*.h/cpp # 编译态/运行态能力和 CPU stub
+│       ├── TensorRtEngineBuilder*.h/cpp # ONNX 首次构建、精度选择和 engine 元数据
+│       ├── TensorRtEngineCache.h/cpp # GPU/TensorRT/模型指纹隔离及损坏失效
+│       └── TensorRtSession.h/cpp # CUDA 缓冲、张量形状校验和推理会话
+│
 ├── image_matching/             # 唯一局部特征/匹配/持久化模块
 │   ├── ImageMatchingAlgorithm.h/cpp # 可扩展算法接口、能力和版本契约
 │   ├── ImageMatchingRegistry.h/cpp  # 算法注册入口；sift_lightglue / loma_r
@@ -131,7 +138,7 @@ core/
 │   ├── lightglue/              # TensorRT LightGlue 固定桶推理与后处理
 │   ├── sift_lightglue/         # CUDA SIFT + LightGlue 组合与注册实现
 │   ├── loma_r/                 # TensorRT DaD/DeDoDe-G 特征与 LoMa-R 匹配
-│   ├── tensorrt/               # ONNX 本机构建/环境缓存、engine 会话、CUDA 缓冲和张量 ABI 校验
+│   ├── tensorrt/               # 面向旧匹配调用点的通用 inference TensorRT 兼容适配
 │   ├── geometry/               # USAC/MAGSAC 验证及逐匹配像素残差
 │   └── tests/                  # 格式往返、损坏校验、注册和几何测试
 │
@@ -215,7 +222,14 @@ core/
 ├── mask/                       # 照片蒙版生成与合成
 │   ├── MaskGenerator.h/cpp     # 黑背景/亮度阈值蒙版、蒙版合成和轮廓提取
 │   └── u2net/                  # U2Net ONNX 自动蒙版子模块
-│       └── U2NetMaskGenerator.h/cpp # OpenCV DNN 推理，CPU 可用、CUDA 取决于 OpenCV DNN 后端
+│       ├── U2NetMaskGenerator.h/cpp # Auto/TensorRT/OpenCV CPU 后端选择、回退策略与状态
+│       ├── U2NetTensorRtBackend.cpp # ONNX 首次构建/复用本机 engine 并执行 GPU 推理
+│       ├── U2NetOpenCvCpuBackend.cpp # 永久 CPU-only 的 OpenCV DNN 回退实现
+│       └── U2NetImageProcessing.h/cpp # 两后端共享的预处理和掩膜后处理
+│
+│   U2Net 发布边界：安装包只携带可移植 ONNX；TensorRT engine 在目标机首次使用时写入用户本地应用
+│   数据目录的 `models/u2net/engines/<fingerprint>`，不写回安装树也不进入安装包。OpenCV 不链接
+│   CUDA/cuDNN，Windows 便携包不分发 cuDNN DLL。
 │
 ├── sfm/                        # Structure-from-Motion
 │   ├── common/                 # SfM 公共类型和共享并查集

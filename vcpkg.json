@@ -87,20 +87,6 @@
           ]
         }
       ]
-    },
-    "opencv-dnn-cuda": {
-      "description": "Enable OpenCV DNN CUDA backend for ONNX inference such as U2Net masks.",
-      "dependencies": [
-        {
-          "name": "opencv",
-          "default-features": false,
-          "features": [
-            "cuda",
-            "dnn",
-            "dnn-cuda"
-          ]
-        }
-      ]
     }
   }
 }

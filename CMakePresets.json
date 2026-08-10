@@ -83,12 +83,12 @@
       "binaryDir": "${sourceDir}/build/linux-vcpkg-cuda-package-release",
       "cacheVariables": {
         "PLASCAN_CUDA_ARCHITECTURES": "75;86;89;120",
-        "PLASCAN_DEBIAN_ACCELERATOR_DEPENDS": "cuda-cudart-13-1, libcublas-13-1, libcusolver-13-1, libcusparse-13-1, cuda-nvrtc-13-1, libnvjitlink-13-1, libcudnn9-cuda-13, libnvinfer10 (= 10.15.1.29-1+cuda13.1), libnvonnxparsers10 (= 10.15.1.29-1+cuda13.1), libnvinfer-plugin10 (= 10.15.1.29-1+cuda13.1)",
+        "PLASCAN_DEBIAN_ACCELERATOR_DEPENDS": "cuda-cudart-13-1, libcublas-13-1, libcusolver-13-1, libcusparse-13-1, cuda-nvrtc-13-1, libnvjitlink-13-1, libnvinfer10 (= 10.15.1.29-1+cuda13.1), libnvonnxparsers10 (= 10.15.1.29-1+cuda13.1), libnvinfer-plugin10 (= 10.15.1.29-1+cuda13.1)",
         "PLASCAN_DEBIAN_PACKAGE_VARIANT": "cuda",
         "PLASCAN_ENABLE_CUDA": "ON",
         "PLASCAN_ENABLE_TENSORRT": "ON",
         "VCPKG_INSTALLED_DIR": "${sourceDir}/build/linux-vcpkg-cuda-package-release/vcpkg_installed",
-        "VCPKG_MANIFEST_FEATURES": "opencv-dnn-cuda;ceres-cuda"
+        "VCPKG_MANIFEST_FEATURES": "ceres-cuda"
       }
     },
     {
@@ -136,7 +136,7 @@
         "PLASCAN_ENABLE_CUDA": "ON",
         "PLASCAN_ENABLE_TENSORRT": "ON",
         "VCPKG_INSTALLED_DIR": "${sourceDir}/build/windows-vcpkg-cuda-release/vcpkg_installed",
-        "VCPKG_MANIFEST_FEATURES": "opencv-dnn-cuda;ceres-cuda",
+        "VCPKG_MANIFEST_FEATURES": "ceres-cuda",
         "VCPKG_MANIFEST_INSTALL": "OFF"
       }
     }

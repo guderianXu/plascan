@@ -1,415 +1,366 @@
 #include "U2NetMaskGenerator.h"
 
-#include <opencv2/core/cuda.hpp>
-#include <opencv2/imgproc.hpp>
+#include "U2NetInferenceBackend.h"
+#include "U2NetImageProcessing.h"
+#include "inference/tensorrt/TensorRtCapabilities.h"
+
+#include <QCryptographicHash>
+#include <QFile>
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <sstream>
 #include <stdexcept>
-#include <vector>
+#include <utility>
 
 namespace xjw::mask
 {
-namespace
-{
-
-cv::Mat toBgr8(const cv::Mat &image)
-{
-    if (image.empty())
+    namespace
     {
-        return {};
-    }
 
-    cv::Mat image8;
-    if (image.depth() == CV_8U)
-    {
-        image8 = image;
-    }
-    else
-    {
-        cv::normalize(image, image8, 0, 255, cv::NORM_MINMAX, CV_8U);
-    }
-
-    cv::Mat bgr;
-    if (image8.channels() == 1)
-    {
-        cv::cvtColor(image8, bgr, cv::COLOR_GRAY2BGR);
-    }
-    else if (image8.channels() == 3)
-    {
-        bgr = image8.clone();
-    }
-    else if (image8.channels() == 4)
-    {
-        cv::cvtColor(image8, bgr, cv::COLOR_BGRA2BGR);
-    }
-    else
-    {
-        throw std::runtime_error("U2Net only supports 1, 3, or 4 channel images.");
-    }
-    return bgr;
-}
-
-cv::Mat makeU2NetBlob(const cv::Mat &image, int inputSize)
-{
-    const int size = std::clamp(inputSize, 128, 2048);
-    cv::Mat bgr = toBgr8(image);
-    cv::Mat rgb;
-    cv::cvtColor(bgr, rgb, cv::COLOR_BGR2RGB);
-
-    cv::Mat resized;
-    cv::resize(rgb, resized, cv::Size(size, size), 0.0, 0.0, cv::INTER_LINEAR);
-
-    cv::Mat normalized;
-    resized.convertTo(normalized, CV_32FC3, 1.0 / 255.0);
-
-    std::vector<cv::Mat> channels;
-    cv::split(normalized, channels);
-    const double mean[3] = {0.485, 0.456, 0.406};
-    const double stddev[3] = {0.229, 0.224, 0.225};
-    for (int i = 0; i < 3; ++i)
-    {
-        channels[i] = (channels[i] - mean[i]) / stddev[i];
-    }
-    cv::merge(channels, normalized);
-
-    return cv::dnn::blobFromImage(normalized, 1.0, cv::Size(), cv::Scalar(), false, false, CV_32F);
-}
-
-cv::Mat firstOutputPlane(const cv::Mat &output)
-{
-    if (output.empty())
-    {
-        return {};
-    }
-
-    if (output.dims == 4)
-    {
-        const int height = output.size[2];
-        const int width = output.size[3];
-        return cv::Mat(height, width, CV_32F, const_cast<float *>(output.ptr<float>())).clone();
-    }
-
-    if (output.dims == 3)
-    {
-        const int height = output.size[1];
-        const int width = output.size[2];
-        return cv::Mat(height, width, CV_32F, const_cast<float *>(output.ptr<float>())).clone();
-    }
-
-    if (output.dims == 2)
-    {
-        return output.clone();
-    }
-
-    return {};
-}
-
-cv::Mat normalizeProbability(const cv::Mat &scores)
-{
-    if (scores.empty())
-    {
-        return {};
-    }
-
-    cv::Mat floatScores;
-    scores.convertTo(floatScores, CV_32F);
-
-    double minValue = 0.0;
-    double maxValue = 0.0;
-    cv::minMaxLoc(floatScores, &minValue, &maxValue);
-    if (maxValue - minValue > 1e-6)
-    {
-        floatScores = (floatScores - minValue) / (maxValue - minValue);
-    }
-    else
-    {
-        floatScores.setTo(0.0f);
-    }
-    return floatScores;
-}
-
-cv::Mat forwardFusedOutput(cv::dnn::Net &net)
-{
-    const std::vector<std::string> outputNames = net.getUnconnectedOutLayersNames();
-    if (outputNames.empty())
-    {
-        return net.forward();
-    }
-
-    std::vector<cv::Mat> outputs;
-    net.forward(outputs, outputNames);
-    if (outputs.empty())
-    {
-        return {};
-    }
-
-    // U2Net exports the fused final saliency map first, followed by side outputs.
-    // cv::dnn::Net::forward() may return a different unconnected output for multi-output ONNX models.
-    return outputs.front();
-}
-
-cv::Mat filterForeground(const cv::Mat &foreground,
-                         int morphologyRadius,
-                         int minComponentArea,
-                         bool keepLargestComponent)
-{
-    cv::Mat clean = foreground.clone();
-    if (morphologyRadius > 0)
-    {
-        const int radius = std::clamp(morphologyRadius, 1, 64);
-        const cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE,
-                                                         cv::Size(radius * 2 + 1, radius * 2 + 1));
-        cv::morphologyEx(clean, clean, cv::MORPH_OPEN, kernel);
-        cv::morphologyEx(clean, clean, cv::MORPH_CLOSE, kernel);
-    }
-
-    cv::Mat labels;
-    cv::Mat stats;
-    cv::Mat centroids;
-    const int components = cv::connectedComponentsWithStats(clean, labels, stats, centroids, 8, CV_32S);
-    if (components <= 1)
-    {
-        return clean;
-    }
-
-    const int minArea = std::max(1, minComponentArea);
-    int largestLabel = -1;
-    int largestArea = 0;
-    for (int label = 1; label < components; ++label)
-    {
-        const int area = stats.at<int>(label, cv::CC_STAT_AREA);
-        if (area > largestArea)
+        std::string toUtf8(const QString& value)
         {
-            largestArea = area;
-            largestLabel = label;
+            const QByteArray bytes = value.toUtf8();
+            return std::string(bytes.constData(), static_cast<std::size_t>(bytes.size()));
         }
-    }
 
-    cv::Mat filtered = cv::Mat::zeros(clean.size(), CV_8UC1);
-    for (int label = 1; label < components; ++label)
-    {
-        const int area = stats.at<int>(label, cv::CC_STAT_AREA);
-        const bool keep = keepLargestComponent ? (label == largestLabel) : (area >= minArea);
-        if (keep && area >= minArea)
+        std::string normalizedToken(std::string token)
         {
-            filtered.setTo(255, labels == label);
+            std::transform(token.begin(),
+                           token.end(),
+                           token.begin(),
+                           [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+            token.erase(std::remove_if(token.begin(),
+                                       token.end(),
+                                       [](char value)
+                                       {
+                                           return value == '-' || value == '_' ||
+                                                  std::isspace(static_cast<unsigned char>(value));
+                                       }),
+                        token.end());
+            return token;
         }
-    }
-    return filtered;
-}
 
-int cudaDeviceCount()
-{
-    try
-    {
-        return cv::cuda::getCudaEnabledDeviceCount();
-    }
-    catch (const cv::Exception &)
-    {
-        return 0;
-    }
-}
-
-bool buildInfoFlagEnabled(const std::string &buildInfo, const std::string &label)
-{
-    const std::size_t labelPos = buildInfo.find(label);
-    if (labelPos == std::string::npos)
-    {
-        return false;
-    }
-
-    const std::size_t lineEnd = buildInfo.find('\n', labelPos);
-    const std::string line = buildInfo.substr(labelPos, lineEnd == std::string::npos
-                                                            ? std::string::npos
-                                                            : lineEnd - labelPos);
-    return line.find("YES") != std::string::npos;
-}
-
-bool dnnCudaTargetAvailable()
-{
-    try
-    {
-        const std::vector<cv::dnn::Target> targets = cv::dnn::getAvailableTargets(cv::dnn::DNN_BACKEND_CUDA);
-        return std::find(targets.begin(), targets.end(), cv::dnn::DNN_TARGET_CUDA) != targets.end() ||
-               std::find(targets.begin(), targets.end(), cv::dnn::DNN_TARGET_CUDA_FP16) != targets.end();
-    }
-    catch (const cv::Exception &)
-    {
-        return false;
-    }
-}
-
-const char *yesNo(bool value)
-{
-    return value ? "yes" : "no";
-}
-
-} // namespace
-
-std::string u2netDefaultModelFileName()
-{
-    return "U2Net_v1.onnx";
-}
-
-U2NetDnnCapabilities detectU2NetDnnCapabilities()
-{
-    U2NetDnnCapabilities capabilities;
-    const std::string buildInfo = cv::getBuildInformation();
-    capabilities.cudaDeviceCount = cudaDeviceCount();
-    capabilities.hasCudaDevice = capabilities.cudaDeviceCount > 0;
-    const bool hasDnnCudaTarget = dnnCudaTargetAvailable();
-    const bool buildInfoReportsCuda = buildInfoFlagEnabled(buildInfo, "NVIDIA CUDA");
-
-    capabilities.opencvBuiltWithCuda = buildInfoReportsCuda || capabilities.hasCudaDevice || hasDnnCudaTarget;
-    capabilities.opencvBuiltWithCudnn = buildInfoFlagEnabled(buildInfo, "cuDNN");
-    capabilities.hasDnnCudaBackend = hasDnnCudaTarget && capabilities.hasCudaDevice;
-
-    std::ostringstream out;
-    out << "OpenCV DNN CPU available"
-        << "; OpenCV CUDA build=" << yesNo(capabilities.opencvBuiltWithCuda)
-        << "; OpenCV cuDNN build=" << yesNo(capabilities.opencvBuiltWithCudnn)
-        << "; CUDA devices=" << capabilities.cudaDeviceCount
-        << "; DNN CUDA target=" << yesNo(hasDnnCudaTarget)
-        << "; DNN CUDA backend=" << (capabilities.hasDnnCudaBackend ? "available" : "unavailable");
-    capabilities.summary = out.str();
-    return capabilities;
-}
-
-U2NetMaskGenerator::U2NetMaskGenerator(const U2NetMaskGeneratorConfig &config)
-    : _config(config)
-{
-    if (_config.modelPath.empty())
-    {
-        throw std::runtime_error("U2Net ONNX model path is empty.");
-    }
-    if (!std::filesystem::exists(std::filesystem::u8path(_config.modelPath)))
-    {
-        throw std::runtime_error("U2Net ONNX model does not exist: " + _config.modelPath);
-    }
-
-    try
-    {
-        loadNet(_config.useCuda);
-    }
-    catch (const std::exception &error)
-    {
-        if (!_config.useCuda || !_config.allowDeviceFallback)
+        std::string sha256File(const std::string& path)
         {
-            throw;
-        }
-        _fallbackReason = error.what();
-        loadNet(false);
-    }
-}
+            QFile file(QString::fromUtf8(path.c_str()));
+            if (!file.open(QIODevice::ReadOnly))
+            {
+                throw std::runtime_error("Cannot read the U2Net ONNX model for SHA-256: " + path);
+            }
 
-void U2NetMaskGenerator::loadNet(bool useCuda)
-{
-    if (useCuda)
+            QCryptographicHash hash(QCryptographicHash::Sha256);
+            while (!file.atEnd())
+            {
+                const QByteArray block = file.read(4 * 1024 * 1024);
+                if (block.isEmpty() && file.error() != QFileDevice::NoError)
+                {
+                    throw std::runtime_error("Failed to calculate the U2Net ONNX SHA-256: " + path);
+                }
+                hash.addData(block);
+            }
+            return hash.result().toHex().toStdString();
+        }
+
+    } // namespace
+
+    std::string u2netDefaultModelFileName()
     {
-        const U2NetDnnCapabilities capabilities = detectU2NetDnnCapabilities();
-        if (!capabilities.hasDnnCudaBackend)
+        return "U2Net_v1.onnx";
+    }
+
+    std::string u2netBackendTypeToken(U2NetBackendType backend)
+    {
+        switch (backend)
         {
-            throw std::runtime_error(
-                "OpenCV DNN CUDA backend is not available. Rebuild the Windows CUDA preset with "
-                "opencv-dnn-cuda and cuDNN, or select CPU explicitly. " + capabilities.summary);
+        case U2NetBackendType::Auto:
+            return "auto";
+        case U2NetBackendType::TensorRt:
+            return "tensorrt";
+        case U2NetBackendType::OpenCvCpu:
+            return "opencv_cpu";
         }
-        if (_config.cudaDevice < 0 || _config.cudaDevice >= capabilities.cudaDeviceCount)
+        return "auto";
+    }
+
+    std::string u2netBackendTypeLabel(U2NetBackendType backend)
+    {
+        switch (backend)
         {
-            throw std::runtime_error("Requested U2Net CUDA device is out of range.");
+        case U2NetBackendType::Auto:
+            return "Auto";
+        case U2NetBackendType::TensorRt:
+            return "TensorRT GPU";
+        case U2NetBackendType::OpenCvCpu:
+            return "OpenCV CPU";
         }
-        cv::cuda::setDevice(_config.cudaDevice);
+        return "Auto";
     }
 
-    _net = cv::dnn::readNetFromONNX(_config.modelPath);
-    if (_net.empty())
+    std::optional<U2NetBackendType> parseU2NetBackendType(const std::string& token)
     {
-        throw std::runtime_error("Failed to load U2Net ONNX model: " + _config.modelPath);
-    }
-
-    if (useCuda)
-    {
-        _net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
-        _net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
-        _usedCuda = true;
-    }
-    else
-    {
-        _net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
-        _net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
-        _usedCuda = false;
-    }
-}
-
-U2NetMaskResult U2NetMaskGenerator::generate(const cv::Mat &image)
-{
-    try
-    {
-        return runForward(image);
-    }
-    catch (const cv::Exception &error)
-    {
-        if (!_usedCuda || !_config.allowDeviceFallback)
+        const std::string normalized = normalizedToken(token);
+        if (normalized == "auto")
         {
-            throw;
+            return U2NetBackendType::Auto;
         }
-        _fallbackReason = error.what();
-        loadNet(false);
-        return runForward(image);
+        if (normalized == "tensorrt" || normalized == "cuda" || normalized == "gpu")
+        {
+            return U2NetBackendType::TensorRt;
+        }
+        if (normalized == "opencvcpu" || normalized == "cpu")
+        {
+            return U2NetBackendType::OpenCvCpu;
+        }
+        return std::nullopt;
     }
-}
 
-U2NetMaskResult U2NetMaskGenerator::runForward(const cv::Mat &image)
-{
-    if (image.empty())
+    std::string u2netInferencePrecisionToken(U2NetInferencePrecision precision)
     {
-        return {};
+        switch (precision)
+        {
+        case U2NetInferencePrecision::Fp16:
+            return "fp16";
+        case U2NetInferencePrecision::Fp32:
+            return "fp32";
+        case U2NetInferencePrecision::Unknown:
+            return "unknown";
+        }
+        return "unknown";
     }
 
-    const cv::Mat blob = makeU2NetBlob(image, _config.inputSize);
-    _net.setInput(blob);
-
-    cv::Mat output = forwardFusedOutput(_net);
-    cv::Mat probability = normalizeProbability(firstOutputPlane(output));
-    if (probability.empty())
+    U2NetInferenceCapabilities detectU2NetInferenceCapabilities(int cudaDevice)
     {
-        throw std::runtime_error("U2Net ONNX output is empty or has an unsupported shape.");
+        const inference::TensorRtCapabilities detected = inference::queryTensorRtCapabilities(cudaDevice);
+        U2NetInferenceCapabilities result;
+        result.tensorRtCompiled = detected.compiled;
+        result.tensorRtAvailable = detected.isAvailable();
+        result.hasCudaDevice = detected.cudaAvailable;
+        result.cudaDeviceCount = detected.deviceCount;
+        result.supportsFp16 = detected.fastFp16;
+        result.tensorRtVersion = toUtf8(detected.tensorRtVersion);
+        result.gpuName = toUtf8(detected.gpuName);
+        result.errorMessage = toUtf8(detected.errorMessage);
+
+        std::ostringstream summary;
+        summary << "OpenCV DNN CPU available; TensorRT compiled=" << (result.tensorRtCompiled ? "yes" : "no")
+                << "; TensorRT backend=" << (result.tensorRtAvailable ? "available" : "unavailable")
+                << "; CUDA devices=" << result.cudaDeviceCount
+                << "; FP16=" << (result.supportsFp16 ? "available" : "unavailable");
+        if (!result.gpuName.empty())
+        {
+            summary << "; GPU=" << result.gpuName;
+        }
+        if (!result.errorMessage.empty())
+        {
+            summary << "; reason=" << result.errorMessage;
+        }
+        result.summary = summary.str();
+        return result;
     }
 
-    cv::Mat fullResolution;
-    cv::resize(probability, fullResolution, image.size(), 0.0, 0.0, cv::INTER_LINEAR);
+    class U2NetMaskGenerator::Impl
+    {
+    public:
+        explicit Impl(U2NetMaskGeneratorConfig config) : _config(std::move(config))
+        {
+            if (_config.modelPath.empty())
+            {
+                throw std::runtime_error("U2Net ONNX model path is empty.");
+            }
+            if (!std::filesystem::exists(std::filesystem::u8path(_config.modelPath)))
+            {
+                throw std::runtime_error("U2Net ONNX model does not exist: " + _config.modelPath);
+            }
+            _modelSha256 = sha256File(_config.modelPath);
+            if (_config.inputSize != kU2NetModelInputSize)
+            {
+                throw std::invalid_argument("The bundled U2Net ONNX model requires a fixed 320x320 input.");
+            }
+            initializeBackend();
+        }
 
-    cv::Mat foregroundFloat;
-    cv::threshold(fullResolution,
-                  foregroundFloat,
-                  std::clamp(_config.foregroundThreshold, 0.01f, 0.99f),
-                  255.0,
-                  cv::THRESH_BINARY);
-    cv::Mat foreground;
-    foregroundFloat.convertTo(foreground, CV_8U);
-    foreground = filterForeground(foreground,
-                                  _config.morphologyRadius,
-                                  _config.minComponentArea,
-                                  _config.keepLargestComponent);
+        U2NetMaskResult generate(const cv::Mat& image)
+        {
+            if (image.empty())
+            {
+                return makeResult({});
+            }
 
-    U2NetMaskResult result;
-    cv::bitwise_not(foreground, result.mask);
-    result.usedCuda = _usedCuda;
-    result.deviceFallback = !_fallbackReason.empty();
-    result.deviceLabel = deviceLabel();
-    result.fallbackReason = _fallbackReason;
-    return result;
-}
+            const cv::Mat blob = makeU2NetBlob(image, _config.inputSize);
+            cv::Mat probability;
+            try
+            {
+                probability = inferProbability(blob);
+            }
+            catch (const std::exception& error)
+            {
+                if (_backend->metadata().backend != U2NetBackendType::TensorRt || !canFallback())
+                {
+                    throw;
+                }
+                activateCpuBackend(error.what());
+                probability = inferProbability(blob);
+            }
 
-bool U2NetMaskGenerator::usedCuda() const
-{
-    return _usedCuda;
-}
+            cv::Mat mask = makeU2NetMask(probability,
+                                         image.size(),
+                                         _config.foregroundThreshold,
+                                         _config.morphologyRadius,
+                                         _config.minComponentArea,
+                                         _config.keepLargestComponent);
+            return makeResult(std::move(mask));
+        }
 
-std::string U2NetMaskGenerator::deviceLabel() const
-{
-    return _usedCuda ? "CUDA" : "CPU";
-}
+        const U2NetBackendMetadata& metadata() const
+        {
+            return _backend->metadata();
+        }
+        const std::string& fallbackReason() const
+        {
+            return _fallbackReason;
+        }
+        const std::string& modelSha256() const
+        {
+            return _modelSha256;
+        }
+
+    private:
+        void initializeBackend()
+        {
+            if (_config.backend == U2NetBackendType::OpenCvCpu)
+            {
+                _backend = createU2NetOpenCvCpuBackend(_config);
+                return;
+            }
+
+            try
+            {
+                _backend = createU2NetTensorRtBackend(_config);
+            }
+            catch (const std::exception& error)
+            {
+                if (!canFallback())
+                {
+                    throw std::runtime_error(std::string("U2Net TensorRT backend initialization failed: ") +
+                                             error.what());
+                }
+                activateCpuBackend(error.what());
+            }
+        }
+
+        bool canFallback() const
+        {
+            return _config.backend == U2NetBackendType::Auto || _config.allowDeviceFallback;
+        }
+
+        void activateCpuBackend(const std::string& reason)
+        {
+            _fallbackReason = reason;
+            if (_config.statusCallback)
+            {
+                _config.statusCallback("U2Net TensorRT 不可用，正在回退到 OpenCV CPU：" + reason);
+            }
+            try
+            {
+                _backend = createU2NetOpenCvCpuBackend(_config);
+            }
+            catch (const std::exception& cpuError)
+            {
+                throw std::runtime_error("U2Net TensorRT failed (" + reason +
+                                         "); OpenCV CPU fallback also failed: " + cpuError.what());
+            }
+        }
+
+        cv::Mat inferProbability(const cv::Mat& blob)
+        {
+            return u2netProbabilityFromOutput(_backend->forward(blob));
+        }
+
+        U2NetMaskResult makeResult(cv::Mat mask) const
+        {
+            const U2NetBackendMetadata& metadata = _backend->metadata();
+            U2NetMaskResult result;
+            result.mask = std::move(mask);
+            result.requestedBackend = _config.backend;
+            result.actualBackend = metadata.backend;
+            result.precision = metadata.precision;
+            result.usedCuda = metadata.backend == U2NetBackendType::TensorRt;
+            result.deviceFallback = !_fallbackReason.empty();
+            result.engineReused = metadata.engineReused;
+            result.deviceLabel = metadata.deviceLabel;
+            result.fallbackReason = _fallbackReason;
+            result.enginePath = metadata.enginePath;
+            result.fusedOutputName = metadata.fusedOutputName;
+            result.environmentSummary = metadata.environmentSummary;
+            result.modelSha256 = _modelSha256;
+            return result;
+        }
+
+        U2NetMaskGeneratorConfig _config;
+        std::unique_ptr<U2NetInferenceBackend> _backend;
+        std::string _fallbackReason;
+        std::string _modelSha256;
+    };
+
+    U2NetMaskGenerator::U2NetMaskGenerator(const U2NetMaskGeneratorConfig& config)
+        : _impl(std::make_unique<Impl>(config))
+    {
+    }
+
+    U2NetMaskGenerator::~U2NetMaskGenerator() = default;
+    U2NetMaskGenerator::U2NetMaskGenerator(U2NetMaskGenerator&&) noexcept = default;
+    U2NetMaskGenerator& U2NetMaskGenerator::operator=(U2NetMaskGenerator&&) noexcept = default;
+
+    U2NetMaskResult U2NetMaskGenerator::generate(const cv::Mat& image)
+    {
+        return _impl->generate(image);
+    }
+
+    bool U2NetMaskGenerator::usedCuda() const
+    {
+        return actualBackend() == U2NetBackendType::TensorRt;
+    }
+
+    U2NetBackendType U2NetMaskGenerator::actualBackend() const
+    {
+        return _impl->metadata().backend;
+    }
+
+    U2NetInferencePrecision U2NetMaskGenerator::precision() const
+    {
+        return _impl->metadata().precision;
+    }
+
+    std::string U2NetMaskGenerator::deviceLabel() const
+    {
+        return _impl->metadata().deviceLabel;
+    }
+
+    bool U2NetMaskGenerator::engineReused() const
+    {
+        return _impl->metadata().engineReused;
+    }
+
+    std::string U2NetMaskGenerator::enginePath() const
+    {
+        return _impl->metadata().enginePath;
+    }
+
+    std::string U2NetMaskGenerator::environmentSummary() const
+    {
+        return _impl->metadata().environmentSummary;
+    }
+
+    std::string U2NetMaskGenerator::modelSha256() const
+    {
+        return _impl->modelSha256();
+    }
+
+    std::string U2NetMaskGenerator::fallbackReason() const
+    {
+        return _impl->fallbackReason();
+    }
 
 } // namespace xjw::mask
