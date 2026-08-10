@@ -65,6 +65,11 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("windows-msvc-cpu:", text)
         self.assertIn("cmake --preset windows-vcpkg-release", text)
         self.assertIn("--test-dir build/windows-vcpkg-release", text)
+        self.assertIn("-DVCPKG_HOST_TRIPLET=x64-windows-ci-release", text)
+        self.assertIn("-DVCPKG_TARGET_TRIPLET=x64-windows-ci-release", text)
+        self.assertIn("cmake/vcpkg-triplets", text)
+        self.assertIn("vcpkg_installed/x64-windows-ci-release/bin", text)
+        self.assertIn("'cmake/vcpkg-triplets/**'", text)
         self.assertIn("uses: jurplel/install-qt-action@v4", text)
         self.assertIn("version: '6.8.3'", text)
         self.assertIn("modules: 'qtshadertools'", text)
@@ -83,6 +88,16 @@ class RepoHygieneTest(unittest.TestCase):
         packages_text = (ROOT / "cmake" / "PlascanPackages.cmake").read_text(encoding="utf-8")
         self.assertIn("find_package(Qt6 6.7 REQUIRED", packages_text)
         self.assertIn("pkg_check_modules(APRILTAG REQUIRED IMPORTED_TARGET GLOBAL apriltag)", packages_text)
+
+        windows_ci_triplet = (
+            ROOT / "cmake" / "vcpkg-triplets" / "x64-windows-ci-release.cmake"
+        )
+        self.assertTrue(windows_ci_triplet.exists())
+        triplet_text = windows_ci_triplet.read_text(encoding="utf-8")
+        self.assertIn("set(VCPKG_TARGET_ARCHITECTURE x64)", triplet_text)
+        self.assertIn("set(VCPKG_CRT_LINKAGE dynamic)", triplet_text)
+        self.assertIn("set(VCPKG_LIBRARY_LINKAGE dynamic)", triplet_text)
+        self.assertIn("set(VCPKG_BUILD_TYPE release)", triplet_text)
 
     def test_release_packages_are_gated_by_platform_tests(self):
         workflow_path = ROOT / ".github" / "workflows" / "ci.yml"

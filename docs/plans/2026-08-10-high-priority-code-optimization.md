@@ -335,12 +335,15 @@ Linux/GCC 使用对应 `linux-vcpkg-release` preset 在 Linux 环境或 CI 中�
 ### 2026-08-10 本地验证结果
 
 - Windows/MSVC + CUDA/TensorRT 完整构建通过。
-- CTest 全量门禁 2411/2411 通过；此前仅剩的共享影像两代 tombstone 测试和 MVS 私有成员源码契约测试
-  已修正，并分别定向复测 1/1 通过。
+- CTest 全量门禁 2418/2418 通过；共发现 2419 项，其中 1 项 GPU 性能基准按设计禁用，11 项因未配置
+  外部夹具/网络/OBJ 基准、Qt offscreen 原生菜单限制或可选 MC33 依赖而按设计跳过。此前仅剩的共享影像
+  两代 tombstone 测试和 MVS 私有成员源码契约测试已修正，并分别定向复测 1/1 通过。
 - Windows package smoke 通过，包含 BiRefNet 两项模型资产校验和 87 个运行时 DLL 校验。
 - Headless smoke 通过：在 GUI、GUI 测试、Conda、CUDA、TensorRT 全关闭且 cache 注入伪 Conda 路径时，
   `PLASCAN_EFFECTIVE_CONDA_PREFIX` 为空、构建图无 GUI 目标，`reconstruct_pipeline_cli` 成功生成。
 - Python `unittest discover` 115/115 通过；本轮 9 个 Python 脚本通过 `py_compile`。
+- Windows CPU CI 使用专用 `x64-windows-ci-release` host/target triplet，只构建 Release 依赖；vcpkg manifest
+  dry-run 确认不再解析通用 `x64-windows` 双配置依赖，workflow YAML 与仓库规范测试通过。
 - Dense Match/CLI 65/65、MVS 相关 95/95、项目清理/项目数据/模型生命周期组合 85/85 通过；CUDA
   代价函数与 CPU parity 门禁通过。
 - LoMa-R K1024/K2048/K3840 三个 manifest 均为 644 字节，SHA-256 与 `models-v1.1.0` 发布清单一致。
