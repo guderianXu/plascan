@@ -10413,12 +10413,18 @@ TEST(FeatureNamingCleanupTest, ProjectManagerDoesNotIncludeLegacyTorchAlgorithmH
 
 TEST(FeatureNamingCleanupTest, UnifiedMatchingRuntimeDoesNotDependOnLibTorch)
 {
-    const QString cmake = readProjectSourceFile(
+    const QString matchingCmake = readProjectSourceFile(
         QStringLiteral("src/core/image_matching/CMakeLists.txt"));
-    ASSERT_FALSE(cmake.isEmpty());
-    EXPECT_TRUE(cmake.contains(QStringLiteral("TensorRT::nvinfer")));
-    EXPECT_FALSE(cmake.contains(QStringLiteral("TORCH_LIBRARIES")));
-    EXPECT_FALSE(cmake.contains(QStringLiteral("find_package(Torch")));
+    const QString inferenceCmake = readProjectSourceFile(
+        QStringLiteral("src/core/inference/CMakeLists.txt"));
+    ASSERT_FALSE(matchingCmake.isEmpty());
+    ASSERT_FALSE(inferenceCmake.isEmpty());
+    EXPECT_TRUE(matchingCmake.contains(QStringLiteral("plascan_inference")));
+    EXPECT_TRUE(inferenceCmake.contains(QStringLiteral("TensorRT::nvinfer")));
+    EXPECT_FALSE(matchingCmake.contains(QStringLiteral("TORCH_LIBRARIES")));
+    EXPECT_FALSE(matchingCmake.contains(QStringLiteral("find_package(Torch")));
+    EXPECT_FALSE(inferenceCmake.contains(QStringLiteral("TORCH_LIBRARIES")));
+    EXPECT_FALSE(inferenceCmake.contains(QStringLiteral("find_package(Torch")));
 }
 
 TEST(FeatureNamingCleanupTest, GuiTestsDoNotCompileObsoleteCompatibilityTranslationUnits)
