@@ -32,6 +32,7 @@ class MainMenu;
 class ProjectManager;
 class DialogSettingStore;
 class FeatureVisualizationController;
+class CreateDemDialog;
 
 // MenuWorkflowController: 处理菜单触发后的业务流程（对话框、参数收集、任务发起）
 // MainMenu 只负责 GUI 动作定义，本类负责业务协调
@@ -128,6 +129,7 @@ private:
     DialogSettingStore *_aerialTriangulationSetting = nullptr;
     DialogSettingStore *_workflowSettingsStore = nullptr;
     FeatureVisualizationController *_featureVisualizationController = nullptr;
+    QPointer<CreateDemDialog> _createDemDialog;
     QPointer<QMainWindow> _mainWindow;            // 父主窗口弱引用（不拥有）
     ProjectManager *_projectManager = nullptr;    // 注入的项目管理器（非拥有引用）
 };

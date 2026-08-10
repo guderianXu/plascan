@@ -1093,6 +1093,7 @@ bool ProjectData::openProjectFromSnapshot(const ProjectOpenSnapshot &snapshot, Q
     _filesManager.setData(QJsonObject());
     _configManager.setData(QJsonObject());
     _resultsLoaded = false;
+    _resultsLoading = false;
     _resultsDirtyForArchive = false;
     _coreFileDirtyForArchive = false;
     _configDirtyForArchive = false;
@@ -1802,6 +1803,7 @@ void ProjectData::closeProject()
     _configManager.setData(QJsonObject());
     _isDirty = false;
     _resultsLoaded = false;
+    _resultsLoading = false;
     _resultsDirtyForArchive = false;
     _coreFileDirtyForArchive = false;
     _configDirtyForArchive = false;
@@ -1875,12 +1877,22 @@ void ProjectData::updateMetadata(const QJsonObject &meta, bool markDirty)
 }
 
 // 惰性加载 project_results.json：仅在首次访问 results 时读归档
-void ProjectData::ensureResultsLoaded() const
+bool ProjectData::ensureResultsLoaded() const
 {
-    if (_resultsLoaded) return;
-    _resultsLoaded = true;   // 先置位，防止递归
-
-    if (_projectPath.isEmpty()) return;
+    if (_resultsLoaded)
+    {
+        return true;
+    }
+    if (_resultsLoading || _projectPath.isEmpty())
+    {
+        return false;
+    }
+    _resultsLoading = true;
+    const auto loading_guard = qScopeGuard(
+        [this]()
+        {
+            _resultsLoading = false;
+        });
 
     // 尝试从 tmp 先加载（崩溃恢复）
     const QString tmpPath = tempResultsPath();
@@ -1898,11 +1910,14 @@ void ProjectData::ensureResultsLoaded() const
                 {
                     LOG_WARN(QStringLiteral("解析临时项目结果资源失败: %1")
                                  .arg(materializeError));
-                    return;
                 }
-                _filesManager.setResultsData(results);
-                LOG_INFO(QStringLiteral("从临时目录加载 results"));
-                return;
+                else
+                {
+                    _filesManager.setResultsData(results);
+                    _resultsLoaded = true;
+                    LOG_INFO(QStringLiteral("从临时目录加载 results"));
+                    return true;
+                }
             }
         }
     }
@@ -1913,7 +1928,7 @@ void ProjectData::ensureResultsLoaded() const
             _activeChunkDirectory, &document, &err))
     {
         LOG_WARN(QStringLiteral("读取 Chunk doc.json 失败: %1").arg(err));
-        return;
+        return false;
     }
     QJsonObject results = document.value(
         QString::fromLatin1(
@@ -1925,10 +1940,12 @@ void ProjectData::ensureResultsLoaded() const
     {
         LOG_WARN(QStringLiteral("解析项目结果资源失败: %1")
                      .arg(materializeError));
-        return;
+        return false;
     }
     _filesManager.setResultsData(results);
+    _resultsLoaded = true;
     LOG_INFO(QStringLiteral("从 Chunk doc.json 加载 project_results"));
+    return true;
 }
 
 void ProjectData::updateConfig(const QJsonObject &config, bool markDirty)
@@ -2534,6 +2551,12 @@ bool ProjectData::appendIntersectionResult(const QJsonObject &result, QString *e
     return true;
 }
 
+QJsonObject ProjectData::metadataIncludingResults() const
+{
+    ensureResultsLoaded();
+    return _filesManager.data();
+}
+
 QJsonArray ProjectData::getIntersectionResults() const
 {
     ensureResultsLoaded();
@@ -2565,7 +2588,10 @@ bool ProjectData::appendResultRecord(const QString &arrayKey,
         return false;
     }
 
-    ensureResultsLoaded();
+    if (!ensureResultsLoaded())
+    {
+        return false;
+    }
     QJsonObject results = _filesManager.resultsData();
     QJsonArray array = results.value(arrayKey).toArray();
     array.append(versionedResultRecord(record));
@@ -2588,7 +2614,10 @@ bool ProjectData::upsertResultRecordByPath(const QString &arrayKey,
         return false;
     }
 
-    ensureResultsLoaded();
+    if (!ensureResultsLoaded())
+    {
+        return false;
+    }
     QJsonObject results = _filesManager.resultsData();
     const QString targetPath = record.value(pathKey).toString();
     const QString normalizedTargetPath =
@@ -2626,7 +2655,10 @@ bool ProjectData::upsertResultRecordByIndex(const QString &arrayKey,
         return false;
     }
 
-    ensureResultsLoaded();
+    if (!ensureResultsLoaded())
+    {
+        return false;
+    }
     QJsonObject results = _filesManager.resultsData();
     QJsonArray array = results.value(arrayKey).toArray();
     if (replaceIndex >= 0 && replaceIndex < array.size())
@@ -2655,7 +2687,10 @@ bool ProjectData::replaceResultRecordWithLatest(const QString &arrayKey,
         return false;
     }
 
-    ensureResultsLoaded();
+    if (!ensureResultsLoaded())
+    {
+        return false;
+    }
     QJsonObject results = _filesManager.resultsData();
     results[arrayKey] =
         QJsonArray{versionedResultRecord(record)};
@@ -2802,7 +2837,11 @@ QJsonObject ProjectData::loadUiSettings() const
 
 void ProjectData::appendImageMatchResult(const ProjectImageMatchResultRecord &record)
 {
-    ensureResultsLoaded();
+    if (!ensureResultsLoaded())
+    {
+        LOG_WARN(QStringLiteral("项目结果尚未成功加载，拒绝追加影像匹配结果"));
+        return;
+    }
     _filesManager.appendImageMatchResult(record);
 
     markDirtyIfRequested(true);
@@ -2818,7 +2857,11 @@ void ProjectData::appendImageMatchResults(
         return;
     }
 
-    ensureResultsLoaded();
+    if (!ensureResultsLoaded())
+    {
+        LOG_WARN(QStringLiteral("项目结果尚未成功加载，拒绝批量追加影像匹配结果"));
+        return;
+    }
     _filesManager.appendImageMatchResults(records);
 
     markDirtyIfRequested(true);

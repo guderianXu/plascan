@@ -4,6 +4,7 @@
 #include <plamatrix/dense/dense_matrix.h>
 
 #include <QString>
+#include <QMap>
 
 #include <opencv2/core.hpp>
 
@@ -42,6 +43,7 @@ struct DemProjectionParameters
     QString projectionWkt;
     double originX = 0.0;
     double originY = 0.0;
+    QMap<QString, QString> metadata;
 };
 
 /**

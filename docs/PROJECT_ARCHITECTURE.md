@@ -369,11 +369,15 @@ core/
 │   ├── OrthoProjectorSupport.cpp # 影像/蒙版加载、颜色校正、锐度、重影和小孔洞处理
 │   ├── OrthoProjectorInternal.h # 正射投影内部帧与颜色候选结构
 │   ├── PointCloudDomGenerator.h/cpp # 彩色点云局部平面/小天体全球 DOM 栅格化
+│   ├── SmallBodyGlobalProducts.h/cpp # 体固连全球产品参数、共享栅格与结果 DTO
+│   ├── SmallBodyMeshRaycaster.h/cpp # BVH + Möller–Trumbore 体心径向网格求交、颜色/UV 插值
+│   ├── SmallBodyGlobalProductGenerator.h/cpp # 0–360°径向 DEM、高程 DEM、DOM 与质量产品
+│   ├── GlobalTerrainReportRenderer.h/cpp # 核心侧稳定生成全球产品四联 PNG
 │   ├── DemDomIO.h/cpp          # DEM 元数据/栅格、RGB+覆盖 Alpha GeoTIFF 和质量栅格 I/O
 │   ├── TerrainPipeline.h/cpp   # 地形流水线 (主入口)
 │   ├── projection/
 │   │   └── AsteroidProjection.h/cpp  # 小行星投影
-│   └── tests/ (6 个测试)
+│   └── tests/                  # 平面/正射、质量栅格与小天体全球产品测试
 │
 ├── qc/                         # 重建质量检查和外部参考验证
 │   ├── ReconstructionQualityReport.h/cpp # 注册影像、track、重投影、MVS/DEM 覆盖率、GCP/检查点/比例尺报告
@@ -540,6 +544,7 @@ gui/
 │
 ├── dialogs/                    # 按业务域组织的参数与结果对话框
 │   ├── application/            # 关于、工作流程报告等应用级对话框
+│   │   └── reporting/GlobalTerrainReportPage.h/cpp # 当前 Chunk 全球 DEM/DOM 四联图与坐标警告
 │   ├── camera/                 # 相机校准前后对比、相机查看/转换、前方交汇、测量控制
 │   │   ├── CameraCalibrationData.h/cpp   # 固化空三输入先验/最终内参，按图像中心转换 cx/cy
 │   │   ├── CameraCalibrationDialog.h/cpp # 初始/调整内参、释放状态、相机分组与照片列表
@@ -579,7 +584,7 @@ gui/
 │   │   ├── ProjectSparseReconstructionManager.h/cpp  # 稀疏重建管理
 │   │   ├── ProjectPointCloudWorkflowController.h/cpp # 点云工作流协调：深度估计/复用、流式融合与结果登记
 │   │   ├── ProjectModelManager.h/cpp                 # 从已有点云/深度图生成模型，不隐式启动稠密流程
-│   │   ├── ProjectTerrainProductsManager.h/cpp       # 从已有点云生成 DEM，以及正射后台任务与结果登记
+│   │   ├── ProjectTerrainProductsManager.h/cpp       # 局部 DEM、原生小天体全球 DEM/DOM、取消与 Chunk 隔离登记
 │   │   ├── ProjectCameraSetupManager.h/cpp           # 相机设置管理
 │   │   └── ProjectUiCommands.h/cpp                   # UI 命令
 │   ├── services/
@@ -1086,7 +1091,8 @@ cli/
 工程型入口通过 `plascan_common_project` 的 `ProjectSession` 创建或打开根索引指定的默认
 Chunk，统一处理项目 URI、共享影像、产物目录、相机与结果写回；也可通过 `--chunk-id`
 或 `--chunk-name` 显式选择 Chunk。旧工程不会由 CLI 隐式迁移。
-`workflows/` 提供空中三角测量、三维重建 CLI、生成模型和 DEM/正射完整流水线；GUI 不再提供旧版
+`workflows/` 提供空中三角测量、三维重建 CLI、生成模型、DEM/正射完整流水线，以及原生
+`small_body_terrain_cli` 全球径向 DEM/DOM 入口；GUI 不再提供旧版
 “三维重建”一键对话框，改由空三、密集处理和生成模型入口分阶段执行。菜单中的项目输入操作通过
 CLI 的输入清单与项目参数表达，不复制项目导入 UI。一键重建的深度融合、密集点云
 细化与点云产物写出由 `core/mvs` 服务实现，入口不保留算法副本。

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "SmallBodyGlobalProducts.h"
+
 #include <QString>
 #include <QJsonObject>
 #include <QStringList>
@@ -123,6 +125,16 @@ public:
                                       double demResolution,
                                       QJsonObject *result,
                                       QString *errorMsg = nullptr);
+
+    /** 从体固连闭合网格生成全球径向 DEM、DOM、可靠性和四联图报告。 */
+    static bool generateSmallBodyGlobalProducts(
+        const QString &surfacePath,
+        const QString &outputDir,
+        const SmallBodyGlobalOptions &options,
+        QJsonObject *result,
+        QString *errorMsg = nullptr,
+        const std::atomic_bool *cancelFlag = nullptr,
+        const OrthoProgressCallback &progressCallback = {});
 
     /**
      * @brief 从带纹理 OBJ 同时生成三种小天体投影的 DEM+DOM GeoTIFF 产品。

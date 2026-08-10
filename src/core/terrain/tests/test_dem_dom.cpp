@@ -670,6 +670,62 @@ TEST_F(TerrainDemDomTest, DomGeneratorTexturedMeshProducesColorOutput)
     EXPECT_GT(cv::countNonZero(gray), 0);
 }
 
+TEST_F(TerrainDemDomTest, ObjMtlLoaderResolvesTextureRelativeToMtlDirectory)
+{
+    const fs::path material_dir = _tempDir / "materials";
+    const fs::path texture_dir = _tempDir / "textures";
+    fs::create_directories(material_dir);
+    fs::create_directories(texture_dir);
+    cv::imwrite((texture_dir / "nested.png").string(),
+                cv::Mat(2, 2, CV_8UC3, cv::Scalar(10, 20, 30)));
+    {
+        std::ofstream mtl(material_dir / "nested.mtl");
+        mtl << "newmtl mat0\nmap_Kd ../textures/nested.png\n";
+    }
+
+    const fs::path obj_path = _tempDir / "nested.obj";
+    {
+        std::ofstream obj(obj_path);
+        obj << "mtllib materials/nested.mtl\n"
+            << "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
+            << "vt 0 0\nvt 1 0\nvt 0 1\n"
+            << "usemtl mat0\nf 1/1 2/2 3/3\n";
+    }
+
+    TerrainMeshInput mesh_input;
+    QString error;
+    ASSERT_TRUE(ObjMtlLoader::load(
+        QString::fromStdString(obj_path.string()), &mesh_input, &error))
+        << error.toStdString();
+    ASSERT_FALSE(mesh_input.texture.empty());
+    EXPECT_EQ(mesh_input.texture.at<cv::Vec3b>(0, 0), cv::Vec3b(10, 20, 30));
+}
+
+TEST_F(TerrainDemDomTest, ObjMtlLoaderRejectsMultipleFaceMaterials)
+{
+    const fs::path mtl_path = _tempDir / "multiple.mtl";
+    {
+        std::ofstream mtl(mtl_path);
+        mtl << "newmtl first\nmap_Kd first.png\n"
+            << "newmtl second\nmap_Kd second.png\n";
+    }
+    const fs::path obj_path = _tempDir / "multiple.obj";
+    {
+        std::ofstream obj(obj_path);
+        obj << "mtllib multiple.mtl\n"
+            << "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\n"
+            << "vt 0 0\nvt 1 0\nvt 0 1\nvt 1 1\n"
+            << "usemtl first\nf 1/1 2/2 3/3\n"
+            << "usemtl second\nf 2/2 4/4 3/3\n";
+    }
+
+    TerrainMeshInput mesh_input;
+    QString error;
+    EXPECT_FALSE(ObjMtlLoader::load(
+        QString::fromStdString(obj_path.string()), &mesh_input, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("多个 usemtl")));
+}
+
 TEST_F(TerrainDemDomTest, TerrainPipelineGeneratesDemDomFromSingleObjMtl)
 {
     writeColorTexture("pipeline_single.png");

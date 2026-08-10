@@ -1029,7 +1029,7 @@ QJsonObject MenuWorkflowController::sanitizeAerialTriangulationReferencePreselec
 
 void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject &settings)
 {
-    if (!_projectManager)
+    if (!_projectManager || _projectManager->currentProjectPath().trimmed().isEmpty())
     {
         QMessageBox::warning(_mainWindow, QStringLiteral("空中三角测量"), QStringLiteral("请先打开项目"));
         return;
@@ -1645,14 +1645,28 @@ void MenuWorkflowController::openCreateDemDialog()
     {
         return;
     }
-    if (!_projectManager)
+    if (!_projectManager || _projectManager->currentProjectPath().trimmed().isEmpty())
     {
         QMessageBox::warning(_mainWindow, QStringLiteral("生成 DEM"), QStringLiteral("请先打开项目"));
         return;
     }
 
+    if (_createDemDialog)
+    {
+        _createDemDialog->show();
+        _createDemDialog->raise();
+        _createDemDialog->activateWindow();
+        return;
+    }
+
     auto *dlg = new CreateDemDialog(_mainWindow);
+    _createDemDialog = dlg;
     dlg->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dlg, &QObject::destroyed, this,
+            [this]()
+            {
+                _createDemDialog = nullptr;
+            });
 
     connect(dlg, &CreateDemDialog::requestRun, this,
         [this](const xjw::gui::project::DemGenerationRequest &request)
@@ -1673,10 +1687,20 @@ void MenuWorkflowController::openCreateDemDialog()
                 pmGuard->startDemFromPointCloudAsync(request);
             });
     });
+    connect(dlg, &CreateDemDialog::requestCancel, this,
+            [this]()
+            {
+                if (_projectManager)
+                {
+                    _projectManager->cancelDemGeneration();
+                }
+            });
 
     // 进度反馈 → 对话框内显示
     if (_projectManager)
     {
+        connect(_projectManager, &ProjectManager::projectSessionChanged,
+                dlg, &QObject::deleteLater);
         connect(_projectManager, &ProjectManager::demPipelineProgressChanged,
                 dlg, &CreateDemDialog::onPipelineProgress);
         connect(_projectManager, &ProjectManager::demPipelineFinished,
@@ -1730,6 +1754,11 @@ void MenuWorkflowController::openMapProjectDialog()
         for (int index = demResults.size() - 1; index >= 0; --index)
         {
             const QJsonObject record = demResults.at(index).toObject();
+            if (record.value(QStringLiteral("terrain_mode")).toString()
+                == QLatin1String("small_body_global"))
+            {
+                continue;
+            }
             const QString candidate =
                 xjw::common::project::ProjectIO::resolveProjectResourcePath(
                     projectPath,
@@ -1850,8 +1879,21 @@ void MenuWorkflowController::openWorkflowReportDialog()
         assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(_projectManager->currentProjectPath());
     }
 
-    auto *dlg = new WorkflowReportDialog(assetsDir, _mainWindow);
+    const QJsonObject metadata = _projectManager
+        ? _projectManager->currentMeta() : QJsonObject();
+    auto *dlg = new WorkflowReportDialog(assetsDir, metadata, _mainWindow);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
+    if (_projectManager)
+    {
+        connect(_projectManager, &ProjectManager::projectSessionChanged,
+                dlg, &QObject::deleteLater);
+        connect(_projectManager, &ProjectManager::projectMetadataChanged, dlg,
+                [dlg](const QJsonObject &updatedMetadata)
+                {
+                    dlg->setProjectMetadata(updatedMetadata);
+                    dlg->refresh();
+                });
+    }
     dlg->show();
 }
 

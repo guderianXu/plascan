@@ -1,5 +1,9 @@
 add_library(terrain STATIC
     TerrainPipeline.cpp
+    SmallBodyGlobalProducts.cpp
+    SmallBodyGlobalProductGenerator.cpp
+    SmallBodyMeshRaycaster.cpp
+    GlobalTerrainReportRenderer.cpp
     OrthoGenerationOptions.cpp
     OrthoProjector.cpp
     OrthoProjectorGrid.cpp
@@ -160,6 +164,24 @@ if(BUILD_TESTS)
     )
 
     gtest_discover_tests(test_dem_quality_rasters)
+
+    add_executable(test_small_body_global_products
+        tests/test_small_body_global_products.cpp
+    )
+
+    target_link_libraries(test_small_body_global_products PRIVATE
+        terrain
+        Qt6::Core
+        Qt6::Gui
+        ${OpenCV_LIBS}
+        GTest::gtest_main
+    )
+
+    target_include_directories(test_small_body_global_products PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+
+    gtest_discover_tests(test_small_body_global_products)
 
     # terrain_stereo_test / stereo_pipeline_test / stereo_pipeline_benchmark
     # require the old pointcloud module which has been removed.

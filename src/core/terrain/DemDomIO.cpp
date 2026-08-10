@@ -7,12 +7,14 @@
 #include <plapoint/mesh/height_grid.h>
 
 #include <QDir>
+#include <QByteArray>
 #include <QFile>
 #include <QFileInfo>
 #include <QTextStream>
 
 #include <gdal_priv.h>
 #include <cpl_conv.h>
+#include <cpl_error.h>
 #include <ogr_spatialref.h>
 
 #include <opencv2/imgcodecs.hpp>
@@ -31,6 +33,90 @@ namespace xjw
 namespace
 {
 
+class GdalDatasetHandle final
+{
+public:
+    explicit GdalDatasetHandle(GDALDataset *dataset = nullptr)
+        : _dataset(dataset)
+    {
+    }
+
+    ~GdalDatasetHandle()
+    {
+        close();
+    }
+
+    GdalDatasetHandle(const GdalDatasetHandle &) = delete;
+    GdalDatasetHandle &operator=(const GdalDatasetHandle &) = delete;
+
+    explicit operator bool() const
+    {
+        return _dataset != nullptr;
+    }
+
+    GDALDataset *get() const
+    {
+        return _dataset;
+    }
+
+    GDALDataset *operator->() const
+    {
+        return _dataset;
+    }
+
+    CPLErr close()
+    {
+        GDALDataset *dataset = std::exchange(_dataset, nullptr);
+        if (!dataset)
+        {
+            return CE_None;
+        }
+#if GDAL_VERSION_NUM >= 3070000
+        return GDALClose(dataset);
+#else
+        CPLErrorReset();
+        GDALClose(dataset);
+        return CPLGetLastErrorType() >= CE_Failure ? CE_Failure : CE_None;
+#endif
+    }
+
+private:
+    GDALDataset *_dataset = nullptr;
+};
+
+bool finalizeWrittenDataset(GdalDatasetHandle *dataset,
+                            const QString &outputPath,
+                            QString *errorMessage)
+{
+    if (!dataset || !dataset->get())
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("GDAL 输出数据集已关闭：%1").arg(outputPath);
+        }
+        return false;
+    }
+
+#if GDAL_VERSION_NUM >= 3070000
+    const CPLErr flush_error = GDALFlushCache(dataset->get());
+#else
+    CPLErrorReset();
+    GDALFlushCache(dataset->get());
+    const CPLErr flush_error =
+        CPLGetLastErrorType() >= CE_Failure ? CE_Failure : CE_None;
+#endif
+    const CPLErr close_error = dataset->close();
+    if (flush_error == CE_None && close_error == CE_None)
+    {
+        return true;
+    }
+    if (errorMessage)
+    {
+        *errorMessage = QStringLiteral("GDAL 刷新或关闭输出文件失败：%1").arg(outputPath);
+    }
+    return false;
+}
+
 void readProjectionMetadata(GDALDataset *dataset,
                             DemProjectionParameters *projection)
 {
@@ -39,6 +125,7 @@ void readProjectionMetadata(GDALDataset *dataset,
         return;
     }
 
+    projection->metadata.clear();
     const char *projectionRef = dataset->GetProjectionRef();
     if (projectionRef && projectionRef[0] != '\0')
     {
@@ -50,6 +137,57 @@ void readProjectionMetadata(GDALDataset *dataset,
     {
         projection->coordinateSystem = QString::fromUtf8(name);
     }
+    char **metadata = dataset->GetMetadata();
+    for (int index = 0; metadata && metadata[index]; ++index)
+    {
+        const QString entry = QString::fromUtf8(metadata[index]);
+        const qsizetype separator = entry.indexOf(QLatin1Char('='));
+        if (separator > 0)
+        {
+            projection->metadata.insert(entry.left(separator), entry.mid(separator + 1));
+        }
+    }
+}
+
+bool writeProjectionMetadata(GDALDataset *dataset,
+                             const DemProjectionParameters &projection,
+                             QString *errorMessage)
+{
+    if (!dataset)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("GDAL 数据集为空，无法写入投影元数据");
+        }
+        return false;
+    }
+    if (!projection.projectionWkt.isEmpty())
+    {
+        const QByteArray wkt = projection.projectionWkt.toUtf8();
+        if (dataset->SetProjection(wkt.constData()) != CE_None)
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("GDAL 拒绝写入投影 WKT：%1")
+                                    .arg(projection.coordinateSystem);
+            }
+            return false;
+        }
+    }
+    for (auto it = projection.metadata.cbegin(); it != projection.metadata.cend(); ++it)
+    {
+        const QByteArray key = it.key().toUtf8();
+        const QByteArray value = it.value().toUtf8();
+        if (dataset->SetMetadataItem(key.constData(), value.constData()) != CE_None)
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("GDAL 无法写入元数据字段：%1").arg(it.key());
+            }
+            return false;
+        }
+    }
+    return true;
 }
 
 bool isNorthUpGeoTransform(const double geoTransform[6])
@@ -238,12 +376,12 @@ bool writeSingleBandQualityRaster(const DemGridData &demGrid,
     createOptions = CSLSetNameValue(createOptions, "COMPRESS", "LZW");
     createOptions = CSLSetNameValue(createOptions, "TILED", "YES");
     const std::string outputPathUtf8 = xjw::common::io::toUtf8Path(outputPath);
-    GDALDataset *dataset = driver->Create(outputPathUtf8.c_str(),
-                                          demGrid.width,
-                                          demGrid.height,
-                                          1,
-                                          dataType,
-                                          createOptions);
+    GdalDatasetHandle dataset(driver->Create(outputPathUtf8.c_str(),
+                                             demGrid.width,
+                                             demGrid.height,
+                                             1,
+                                             dataType,
+                                             createOptions));
     CSLDestroy(createOptions);
     if (!dataset)
     {
@@ -261,23 +399,44 @@ bool writeSingleBandQualityRaster(const DemGridData &demGrid,
         demMaxY(demGrid) + demGrid.stepY * 0.5,
         0.0,
         -demGrid.stepY};
-    dataset->SetGeoTransform(geoTransform);
-    if (!demGrid.projection.projectionWkt.isEmpty())
+    if (dataset->SetGeoTransform(geoTransform) != CE_None)
     {
-        dataset->SetProjection(demGrid.projection.projectionWkt.toStdString().c_str());
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("GDAL 无法写入质量栅格地理变换: %1")
+                            .arg(outputPath);
+        }
+        return false;
+    }
+    DemProjectionParameters quality_projection = demGrid.projection;
+    quality_projection.metadata.remove(QStringLiteral("BAND_UNIT"));
+    quality_projection.metadata.remove(QStringLiteral("PRODUCT_TYPE"));
+    quality_projection.metadata.remove(QStringLiteral("VERTICAL_REFERENCE"));
+    quality_projection.metadata.remove(QStringLiteral("VALUE_SEMANTICS"));
+    if (!writeProjectionMetadata(dataset.get(), quality_projection, errorMsg))
+    {
+        return false;
     }
 
     GDALRasterBand *band = dataset->GetRasterBand(1);
     if (!band)
     {
-        GDALClose(dataset);
         if (errorMsg)
         {
             *errorMsg = QStringLiteral("GDAL DEM 质量栅格波段创建失败: %1").arg(outputPath);
         }
         return false;
     }
-    band->SetNoDataValue(noDataValue);
+
+    if (band->SetNoDataValue(noDataValue) != CE_None)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("GDAL 无法写入质量栅格 NoData: %1")
+                            .arg(outputPath);
+        }
+        return false;
+    }
 
     cv::Mat raster;
     if (dataType == GDT_Float32)
@@ -335,7 +494,6 @@ bool writeSingleBandQualityRaster(const DemGridData &demGrid,
                                         dataType,
                                         0,
                                         0);
-    GDALClose(dataset);
     if (error != CE_None)
     {
         if (errorMsg)
@@ -344,7 +502,7 @@ bool writeSingleBandQualityRaster(const DemGridData &demGrid,
         }
         return false;
     }
-    return true;
+    return finalizeWrittenDataset(&dataset, outputPath, errorMsg);
 }
 
 } // namespace
@@ -436,12 +594,12 @@ bool DemDomIO::writeDemRaster(const DemGridData &demGrid,
     const GDALDataType dataType = format == DemRasterFormat::UInt16Tiff ? GDT_UInt16 : GDT_Float32;
     const int nBands = (format == DemRasterFormat::Float32Tiff && demGrid.hasWorldXY()) ? 4 : 1;
     const std::string outputPathUtf8 = xjw::common::io::toUtf8Path(outputPath);
-    GDALDataset *dataset = driver->Create(outputPathUtf8.c_str(),
-                                          demGrid.width,
-                                          demGrid.height,
-                                          nBands,
-                                          dataType,
-                                          createOptions);
+    GdalDatasetHandle dataset(driver->Create(outputPathUtf8.c_str(),
+                                             demGrid.width,
+                                             demGrid.height,
+                                             nBands,
+                                             dataType,
+                                             createOptions));
     CSLDestroy(createOptions);
     if (!dataset)
     {
@@ -459,21 +617,47 @@ bool DemDomIO::writeDemRaster(const DemGridData &demGrid,
         demMaxY(demGrid) + demGrid.stepY * 0.5,
         0.0,
         -demGrid.stepY};
-    dataset->SetGeoTransform(geoTransform);
-    if (!demGrid.projection.projectionWkt.isEmpty())
+    if (dataset->SetGeoTransform(geoTransform) != CE_None)
     {
-        dataset->SetProjection(demGrid.projection.projectionWkt.toStdString().c_str());
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("GDAL 无法写入 DEM 地理变换: %1").arg(outputPath);
+        }
+        return false;
+    }
+    if (!writeProjectionMetadata(dataset.get(), demGrid.projection, errorMsg))
+    {
+        return false;
     }
 
     GDALRasterBand *band = dataset->GetRasterBand(1);
     if (!band)
     {
-        GDALClose(dataset);
         if (errorMsg)
         {
             *errorMsg = QStringLiteral("GDAL DEM 波段创建失败: %1").arg(outputPath);
         }
         return false;
+    }
+
+    const QString band_unit =
+        demGrid.projection.metadata.value(QStringLiteral("BAND_UNIT")).trimmed();
+    if (!band_unit.isEmpty())
+    {
+        const QByteArray band_unit_utf8 = band_unit.toUtf8();
+        for (int band_index = 1; band_index <= nBands; ++band_index)
+        {
+            GDALRasterBand *unit_band = dataset->GetRasterBand(band_index);
+            if (!unit_band || unit_band->SetUnitType(band_unit_utf8.constData()) != CE_None)
+            {
+                if (errorMsg)
+                {
+                    *errorMsg = QStringLiteral("GDAL 设置 DEM 波段单位失败: %1")
+                                    .arg(outputPath);
+                }
+                return false;
+            }
+        }
     }
 
     if (format == DemRasterFormat::UInt16Tiff)
@@ -504,7 +688,15 @@ bool DemDomIO::writeDemRaster(const DemGridData &demGrid,
             }
         }
         cv::Mat writeRaster = flipForRasterWrite(u16);
-        band->SetNoDataValue(0.0);
+        if (band->SetNoDataValue(0.0) != CE_None)
+        {
+            if (errorMsg)
+            {
+                *errorMsg = QStringLiteral("GDAL 无法写入 UInt16 DEM NoData: %1")
+                                .arg(outputPath);
+            }
+            return false;
+        }
         const CPLErr error = band->RasterIO(GF_Write,
                                             0,
                                             0,
@@ -516,7 +708,6 @@ bool DemDomIO::writeDemRaster(const DemGridData &demGrid,
                                             GDT_UInt16,
                                             0,
                                             0);
-        GDALClose(dataset);
         if (error != CE_None)
         {
             if (errorMsg)
@@ -525,8 +716,7 @@ bool DemDomIO::writeDemRaster(const DemGridData &demGrid,
             }
             return false;
         }
-
-        return true;
+        return finalizeWrittenDataset(&dataset, outputPath, errorMsg);
     }
 
     if (nBands == 4)
@@ -602,7 +792,6 @@ bool DemDomIO::writeDemRaster(const DemGridData &demGrid,
                 writeOk = false;
             }
         }
-        GDALClose(dataset);
         if (!writeOk)
         {
             if (errorMsg)
@@ -611,11 +800,12 @@ bool DemDomIO::writeDemRaster(const DemGridData &demGrid,
             }
             return false;
         }
-
-        return true;
+        return finalizeWrittenDataset(&dataset, outputPath, errorMsg);
     }
 
-    cv::Mat floatRaster(demGrid.height, demGrid.width, CV_32F, cv::Scalar(-9999.0f));
+    const float no_data_value = std::numeric_limits<float>::quiet_NaN();
+    cv::Mat floatRaster(
+        demGrid.height, demGrid.width, CV_32F, cv::Scalar(no_data_value));
     for (int row = 0; row < demGrid.height; ++row)
     {
         for (int col = 0; col < demGrid.width; ++col)
@@ -627,7 +817,15 @@ bool DemDomIO::writeDemRaster(const DemGridData &demGrid,
         }
     }
     cv::Mat writeRaster = flipForRasterWrite(floatRaster);
-    band->SetNoDataValue(-9999.0);
+    if (band->SetNoDataValue(static_cast<double>(no_data_value)) != CE_None)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("GDAL 无法写入 Float32 DEM NoData: %1")
+                            .arg(outputPath);
+        }
+        return false;
+    }
     const CPLErr error = band->RasterIO(GF_Write,
                                         0,
                                         0,
@@ -639,7 +837,6 @@ bool DemDomIO::writeDemRaster(const DemGridData &demGrid,
                                         GDT_Float32,
                                         0,
                                         0);
-    GDALClose(dataset);
     if (error != CE_None)
     {
         if (errorMsg)
@@ -648,8 +845,7 @@ bool DemDomIO::writeDemRaster(const DemGridData &demGrid,
         }
         return false;
     }
-
-    return true;
+    return finalizeWrittenDataset(&dataset, outputPath, errorMsg);
 }
 
 bool DemDomIO::readDemMetadata(const QString &inputPath,
@@ -717,6 +913,15 @@ bool DemDomIO::readDemMetadata(const QString &inputPath,
     }
 
     readProjectionMetadata(dataset, &metadata.projection);
+    if (GDALRasterBand *metadata_band = dataset->GetRasterBand(1))
+    {
+        const char *unit_type = metadata_band->GetUnitType();
+        if (unit_type && *unit_type != '\0')
+        {
+            metadata.projection.metadata[QStringLiteral("BAND_UNIT")] =
+                QString::fromUtf8(unit_type);
+        }
+    }
     GDALClose(dataset);
     *demGrid = std::move(metadata);
     return true;
@@ -890,6 +1095,15 @@ bool DemDomIO::readDemRaster(const QString &inputPath,
     }
 
     readProjectionMetadata(dataset, &demGrid->projection);
+    if (GDALRasterBand *metadata_band = dataset->GetRasterBand(1))
+    {
+        const char *unit_type = metadata_band->GetUnitType();
+        if (unit_type && *unit_type != '\0')
+        {
+            demGrid->projection.metadata[QStringLiteral("BAND_UNIT")] =
+                QString::fromUtf8(unit_type);
+        }
+    }
 
     GDALClose(dataset);
     return true;
@@ -1132,12 +1346,12 @@ bool DemDomIO::writeDomImage(const cv::Mat &domImage,
         createOptions = CSLSetNameValue(createOptions, "COMPRESS", "LZW");
         createOptions = CSLSetNameValue(createOptions, "TILED", "YES");
         const std::string outputPathUtf8 = xjw::common::io::toUtf8Path(outputPath);
-        GDALDataset *dataset = driver->Create(outputPathUtf8.c_str(),
-                                              domImage.cols,
-                                              domImage.rows,
-                                              domImage.channels(),
-                                              GDT_Byte,
-                                              createOptions);
+        GdalDatasetHandle dataset(driver->Create(outputPathUtf8.c_str(),
+                                                 domImage.cols,
+                                                 domImage.rows,
+                                                 domImage.channels(),
+                                                 GDT_Byte,
+                                                 createOptions));
         CSLDestroy(createOptions);
         if (!dataset)
         {
@@ -1174,7 +1388,6 @@ bool DemDomIO::writeDomImage(const cv::Mat &domImage,
                                         0,
                                         0) != CE_None)
             {
-                GDALClose(dataset);
                 if (errorMsg)
                 {
                     *errorMsg = QStringLiteral("GDAL 写出 DOM TIFF 波段失败: %1").arg(outputPath);
@@ -1183,8 +1396,7 @@ bool DemDomIO::writeDomImage(const cv::Mat &domImage,
             }
         }
 
-        GDALClose(dataset);
-        return true;
+        return finalizeWrittenDataset(&dataset, outputPath, errorMsg);
     }
 
     if (!xjw::common::io::writeImage(outputPath, domImage))
@@ -1267,12 +1479,12 @@ bool DemDomIO::writeDomGeoTiff(const cv::Mat &domImage,
 
     const std::string outputPathUtf8 = xjw::common::io::toUtf8Path(outputPath);
     const int bandCount = domImage.channels() + (validMask.empty() ? 0 : 1);
-    GDALDataset *dataset = driver->Create(outputPathUtf8.c_str(),
-                                          domImage.cols,
-                                          domImage.rows,
-                                          bandCount,
-                                          GDT_Byte,
-                                          createOptions);
+    GdalDatasetHandle dataset(driver->Create(outputPathUtf8.c_str(),
+                                             domImage.cols,
+                                             domImage.rows,
+                                             bandCount,
+                                             GDT_Byte,
+                                             createOptions));
     CSLDestroy(createOptions);
     if (!dataset)
     {
@@ -1298,11 +1510,19 @@ bool DemDomIO::writeDomGeoTiff(const cv::Mat &domImage,
         maxY + domStepY * 0.5,
         0.0,
         -domStepY};
-    dataset->SetGeoTransform(geoTransform);
-
-    if (!demGrid.projection.projectionWkt.isEmpty())
+    if (dataset->SetGeoTransform(geoTransform) != CE_None)
     {
-        dataset->SetProjection(demGrid.projection.projectionWkt.toStdString().c_str());
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("GDAL 无法写入 DOM 地理变换: %1")
+                            .arg(outputPath);
+        }
+        return false;
+    }
+
+    if (!writeProjectionMetadata(dataset.get(), demGrid.projection, errorMsg))
+    {
+        return false;
     }
 
     std::vector<cv::Mat> channels;
@@ -1331,7 +1551,6 @@ bool DemDomIO::writeDomGeoTiff(const cv::Mat &domImage,
                                     0,
                                     0) != CE_None)
         {
-            GDALClose(dataset);
             if (errorMsg)
             {
                 *errorMsg = QStringLiteral("GDAL 写出 DOM GeoTIFF 波段失败: %1").arg(outputPath);
@@ -1363,7 +1582,6 @@ bool DemDomIO::writeDomGeoTiff(const cv::Mat &domImage,
                                    0,
                                    0) != CE_None)
         {
-            GDALClose(dataset);
             if (errorMsg)
             {
                 *errorMsg =
@@ -1374,8 +1592,7 @@ bool DemDomIO::writeDomGeoTiff(const cv::Mat &domImage,
         }
     }
 
-    GDALClose(dataset);
-    return true;
+    return finalizeWrittenDataset(&dataset, outputPath, errorMsg);
 }
 
 } // namespace xjw

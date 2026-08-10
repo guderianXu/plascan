@@ -281,7 +281,7 @@ GUI 的 `工作流程` 菜单按处理阶段提供互相独立的工程入口：
 |------|------|------|
 | `空中三角测量` | 相机外参、连接点和正式稀疏点云 | 只负责影像对齐和 BA，不自动进入密集重建 |
 | `生成模型` | PLY/OBJ 三维模型 | 从当前项目已有的连接点、深度图或点云生成模型 |
-| `创建 DEM` | `dem.tif`、`depth_map.png`、可选 DEM 网格模型 | 自动模式从立体影像开始，手动模式可直接使用已有密集点云 |
+| `创建 DEM` | 局部 DEM，或全球径向 DEM、高程 DEM、DOM、可靠性与四联图报告 | 局部模式使用点云；小天体模式使用已处于体固连坐标的闭合 PLY/OBJ 三角网 |
 | `生成正射影像` | 带覆盖 Alpha 的 DOM GeoTIFF/PNG | 可按 DEM+影像反投影，或从彩色点云生成局部平面/小天体全球 DOM |
 
 旧版 `工作流程 -> 三维重建` 一键对话框已移除；空三、密集处理、模型和地形产品由各自入口显式启动。
@@ -296,6 +296,32 @@ GeoTIFF 按 R/G/B/Alpha 波段写出，以 Alpha 区分无覆盖区和真实黑�
 地理变换和 DEM WKT；点云平面路径写入本地米制 `LOCAL_CS`；全球路径写入以参考半径定义的
 自定义小天体 `Equirectangular` WKT 和北向上仿射变换。当前全球体固连轴方向沿输入点云 XYZ，
 因此跨批次拼接前应保证点云已统一到稳定的天体坐标框架。
+
+“创建 DEM”中的“小天体全球径向 DEM + DOM”由 C++ 核心直接完成，不调用 Python/Matplotlib
+脚本。核心从体心向行星中心经纬网的每个像元发射射线，以 BVH 加速的精确射线—三角形求交
+获得半径，重心插值 PLY 顶点色或单图集 OBJ 纹理，并在同一 0–360° 正东经网格输出 `radial_dem.tif`、
+`elevation_dem.tif`、带 Alpha 的 `dom.tif`、可靠性/覆盖栅格和四联图 PNG。可靠性表示面法向与
+径向夹角的几何代理，不等同于多视支持度或测量精度；没有外部参考 DEM 时，报告右下角显示
+hillshade，不会生成虚假的“官方误差”。模型必须已经位于体固连坐标系；`J2000`、`ICRF` 等
+惯性系会被明确拒绝。所有坐标框架名称均标记为“用户声明、未验证”；若暂时只能确认轴向稳定，
+可使用 `MODEL_LOCAL_BODY_FIXED`，不能冒充 IAU/SPICE 官方经纬网。由于 PLY/OBJ 不自带可靠的长度单位，GUI 和 CLI
+都要求明确按 `m` 或 `km` 解释顶点坐标，核心统一换算为米并写入报告；参考半径和手动体心始终以米
+输入。DOM 只接受 OBJ 纹理+UV 或 PLY/OBJ 的 RGB 顶点颜色，无真实颜色来源时会明确失败，不会输出
+固定灰色占位图；多材质或多纹理 OBJ 会明确失败，避免把第一张纹理错误套到全部面。
+
+同一能力也提供正式原生 CLI：
+
+```bash
+small_body_terrain_cli \
+  --surface path/to/body_fixed_model.ply \
+  --output-dir path/to/global_terrain \
+  --target Ryugu \
+  --body-fixed-frame RYUGU_FIXED \
+  --surface-unit m \
+  --reference-radius-m 448 \
+  --angular-resolution-deg 0.1 \
+  --manual-center --center-x 0 --center-y 0 --center-z 0
+```
 
 ### 重建链路状态
 

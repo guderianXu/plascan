@@ -4,8 +4,8 @@
  <widget class="QDialog" name="CreateDemDialog">
   <property name="minimumSize">
    <size>
-    <width>520</width>
-    <height>0</height>
+    <width>720</width>
+    <height>560</height>
    </size>
   </property>
   <property name="windowTitle">
@@ -16,9 +16,37 @@
     <number>10</number>
    </property>
    <item>
-    <widget class="QLabel" name="manualHintLabel">
+    <layout class="QFormLayout" name="modeFormLayout">
+     <property name="fieldGrowthPolicy">
+      <enum>QFormLayout::AllNonFixedFieldsGrow</enum>
+     </property>
+     <item row="0" column="0">
+      <widget class="QLabel" name="modeLabel">
+       <property name="text">
+        <string>产品模式：</string>
+       </property>
+      </widget>
+     </item>
+     <item row="0" column="1">
+      <widget class="QComboBox" name="m_modeCombo">
+       <item>
+        <property name="text">
+         <string>局部平面 DEM</string>
+        </property>
+       </item>
+       <item>
+        <property name="text">
+         <string>小天体全球径向 DEM + DOM</string>
+        </property>
+       </item>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <widget class="QLabel" name="m_hintLabel">
      <property name="text">
-      <string>选择已有点云文件作为 DEM 输入。</string>
+      <string>选择已有点云文件生成局部平面相对 DEM。</string>
      </property>
      <property name="wordWrap">
       <bool>true</bool>
@@ -26,47 +54,333 @@
     </widget>
    </item>
    <item>
-    <layout class="QHBoxLayout" name="denseCloudRow">
-     <item>
-      <widget class="QLineEdit" name="m_denseEdit">
-       <property name="placeholderText">
-        <string>请选择点云文件</string>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="QPushButton" name="browseDenseBtn">
-       <property name="minimumSize">
-        <size>
-         <width>64</width>
-         <height>0</height>
-        </size>
-       </property>
-       <property name="maximumSize">
-        <size>
-         <width>64</width>
-         <height>16777215</height>
-        </size>
-       </property>
-       <property name="text">
-        <string>浏览...</string>
-       </property>
-      </widget>
-     </item>
-    </layout>
-   </item>
-   <item>
-    <spacer name="manualSpacer">
-     <property name="orientation">
-      <enum>Qt::Vertical</enum>
+    <widget class="QStackedWidget" name="m_optionsStack">
+     <property name="currentIndex">
+      <number>0</number>
      </property>
-     <property name="sizeHint" stdset="0">
-      <size>
-       <width>20</width>
-       <height>40</height>
-      </size>
-     </property>
-    </spacer>
+     <widget class="QWidget" name="planarPage">
+      <layout class="QVBoxLayout" name="planarLayout">
+       <item>
+        <layout class="QFormLayout" name="planarFormLayout">
+         <property name="fieldGrowthPolicy">
+          <enum>QFormLayout::AllNonFixedFieldsGrow</enum>
+         </property>
+         <item row="0" column="0">
+          <widget class="QLabel" name="denseCloudLabel">
+           <property name="text">
+            <string>点云文件：</string>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="1">
+          <layout class="QHBoxLayout" name="denseCloudRow">
+           <item>
+            <widget class="QLineEdit" name="m_denseEdit">
+             <property name="placeholderText">
+              <string>请选择 PLY/LAS/LAZ 点云文件</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="browseDenseBtn">
+             <property name="minimumSize">
+              <size>
+               <width>72</width>
+               <height>0</height>
+              </size>
+             </property>
+             <property name="text">
+              <string>浏览...</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <widget class="QLabel" name="planarNoteLabel">
+         <property name="text">
+          <string>平面模式沿用现有相对高程处理，自动输出到项目 assets/dem/relative_dem。</string>
+         </property>
+         <property name="wordWrap">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <spacer name="planarSpacer">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>20</width>
+           <height>220</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="globalPage">
+      <layout class="QVBoxLayout" name="globalLayout">
+       <item>
+        <widget class="QLabel" name="frameWarningLabel">
+         <property name="styleSheet">
+          <string notr="true">QLabel { color: #8a4b08; background: #fff4d6; border: 1px solid #e0b45c; border-radius: 4px; padding: 8px; }</string>
+         </property>
+         <property name="text">
+           <string>坐标系警告：输入网格必须已位于目标天体的体固连坐标系，并明确选择顶点坐标单位。J2000、ICRF 等惯性系模型必须先按观测时刻转换；默认 MODEL_LOCAL_BODY_FIXED 仅表示本地假定体固系，不等同于官方 IAU/SPICE 参考框架。</string>
+         </property>
+         <property name="wordWrap">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <layout class="QFormLayout" name="globalFormLayout">
+         <property name="fieldGrowthPolicy">
+          <enum>QFormLayout::AllNonFixedFieldsGrow</enum>
+         </property>
+         <item row="0" column="0">
+          <widget class="QLabel" name="surfaceLabel">
+           <property name="text">
+            <string>三角网格：</string>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="1">
+          <layout class="QHBoxLayout" name="surfaceRow">
+           <item>
+            <widget class="QLineEdit" name="m_surfaceEdit">
+             <property name="placeholderText">
+              <string>请选择体固连 PLY/OBJ 闭合三角网格</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="browseSurfaceBtn">
+             <property name="minimumSize">
+              <size>
+               <width>72</width>
+               <height>0</height>
+              </size>
+             </property>
+             <property name="text">
+              <string>浏览...</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </item>
+         <item row="1" column="0">
+          <widget class="QLabel" name="targetNameLabel">
+           <property name="text">
+            <string>目标名称：</string>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="1">
+          <widget class="QLineEdit" name="m_targetNameEdit">
+           <property name="text">
+            <string>Small Body</string>
+           </property>
+           <property name="placeholderText">
+            <string>例如 RYUGU</string>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="0">
+          <widget class="QLabel" name="bodyFixedFrameLabel">
+           <property name="text">
+            <string>体固连 frame：</string>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="1">
+          <widget class="QLineEdit" name="m_bodyFixedFrameEdit">
+           <property name="text">
+            <string>MODEL_LOCAL_BODY_FIXED</string>
+           </property>
+          </widget>
+         </item>
+         <item row="3" column="0">
+          <widget class="QLabel" name="angularResolutionLabel">
+           <property name="text">
+            <string>角分辨率：</string>
+           </property>
+          </widget>
+         </item>
+         <item row="3" column="1">
+          <widget class="QDoubleSpinBox" name="m_angularResolutionSpin">
+           <property name="decimals">
+            <number>4</number>
+           </property>
+           <property name="minimum">
+            <double>0.010000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>90.000000000000000</double>
+           </property>
+           <property name="singleStep">
+            <double>0.050000000000000</double>
+           </property>
+           <property name="value">
+            <double>0.250000000000000</double>
+           </property>
+           <property name="suffix">
+            <string>°</string>
+           </property>
+          </widget>
+         </item>
+         <item row="4" column="0">
+          <widget class="QLabel" name="referenceRadiusLabel">
+           <property name="text">
+            <string>参考半径：</string>
+           </property>
+          </widget>
+         </item>
+         <item row="4" column="1">
+          <widget class="QDoubleSpinBox" name="m_referenceRadiusSpin">
+           <property name="decimals">
+            <number>6</number>
+           </property>
+           <property name="minimum">
+            <double>0.000000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>1000000000000.000000000000000</double>
+           </property>
+           <property name="singleStep">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="specialValueText">
+            <string>0 = 自动（顶点半径中位数）</string>
+           </property>
+           <property name="suffix">
+            <string> m</string>
+           </property>
+          </widget>
+         </item>
+         <item row="5" column="0">
+          <widget class="QLabel" name="bodyCenterLabel">
+           <property name="text">
+            <string>体心：</string>
+           </property>
+          </widget>
+         </item>
+         <item row="5" column="1">
+          <layout class="QVBoxLayout" name="bodyCenterLayout">
+           <item>
+            <widget class="QCheckBox" name="m_automaticCenterCheck">
+             <property name="text">
+              <string>自动估计体心（网格顶点均值）</string>
+             </property>
+             <property name="checked">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="centerXyzLayout">
+             <item>
+              <widget class="QLabel" name="centerXLabel">
+               <property name="text">
+                <string>X</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QDoubleSpinBox" name="m_centerXSpin">
+               <property name="decimals"><number>6</number></property>
+               <property name="minimum"><double>-1000000000000.000000000000000</double></property>
+               <property name="maximum"><double>1000000000000.000000000000000</double></property>
+               <property name="suffix"><string> m</string></property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="centerYLabel">
+               <property name="text"><string>Y</string></property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QDoubleSpinBox" name="m_centerYSpin">
+               <property name="decimals"><number>6</number></property>
+               <property name="minimum"><double>-1000000000000.000000000000000</double></property>
+               <property name="maximum"><double>1000000000000.000000000000000</double></property>
+               <property name="suffix"><string> m</string></property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="centerZLabel">
+               <property name="text"><string>Z</string></property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QDoubleSpinBox" name="m_centerZSpin">
+               <property name="decimals"><number>6</number></property>
+               <property name="minimum"><double>-1000000000000.000000000000000</double></property>
+               <property name="maximum"><double>1000000000000.000000000000000</double></property>
+               <property name="suffix"><string> m</string></property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+          </layout>
+         </item>
+         <item row="6" column="0">
+          <widget class="QLabel" name="centralMeridianLabel">
+           <property name="text">
+            <string>中央经线：</string>
+           </property>
+          </widget>
+         </item>
+          <item row="6" column="1">
+          <widget class="QDoubleSpinBox" name="m_centralMeridianSpin">
+           <property name="decimals">
+            <number>6</number>
+           </property>
+           <property name="minimum">
+            <double>-180.000000000000000</double>
+           </property>
+           <property name="maximum">
+            <double>180.000000000000000</double>
+           </property>
+           <property name="singleStep">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="suffix">
+            <string>°</string>
+           </property>
+           </widget>
+          </item>
+          <item row="7" column="0">
+           <widget class="QLabel" name="surfaceUnitLabel">
+            <property name="text">
+             <string>网格坐标单位：</string>
+            </property>
+           </widget>
+          </item>
+          <item row="7" column="1">
+           <widget class="QComboBox" name="m_surfaceUnitCombo">
+            <item>
+             <property name="text">
+              <string>米（m）</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>千米（km，输出自动换算为 m）</string>
+             </property>
+            </item>
+           </widget>
+          </item>
+         </layout>
+       </item>
+      </layout>
+     </widget>
+    </widget>
    </item>
    <item>
     <widget class="QLabel" name="m_stageLabel">
@@ -110,7 +424,7 @@
       <widget class="QPushButton" name="m_runBtn">
        <property name="minimumSize">
         <size>
-         <width>80</width>
+         <width>140</width>
          <height>0</height>
         </size>
        </property>

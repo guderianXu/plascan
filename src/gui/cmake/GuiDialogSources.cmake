@@ -11,6 +11,8 @@ set(GUI_APPLICATION_DIALOG_SOURCES
   dialogs/application/WorkflowReportDialog.cpp
   dialogs/application/WorkflowReportDialog.h
   dialogs/application/WorkflowReportDialog.ui
+  dialogs/application/reporting/GlobalTerrainReportPage.cpp
+  dialogs/application/reporting/GlobalTerrainReportPage.h
   dialogs/application/WorkflowSettingsDialog.cpp
   dialogs/application/WorkflowSettingsDialog.h
 )

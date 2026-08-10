@@ -112,6 +112,8 @@ public:
     // === 元数据访问 ===
     // 获取当前已加载的运行时元数据；getter 不执行文件 IO。
     QJsonObject metadata() const { return _filesManager.data(); }
+    /// 返回包含惰性 results 字段的完整当前 Chunk 元数据。
+    QJsonObject metadataIncludingResults() const;
     // 获取核心数据（仅 project_files 字段，不触发惰性加载，快速）
     QJsonObject coreFilesMeta() const { return _filesManager.coreData(); }
     // 更新运行时元数据
@@ -245,6 +247,7 @@ private:
     ProjectConfigManager _configManager;           // Chunk project_config 字段管理
     bool _isDirty = false;                         // 是否有未保存更改
     mutable bool _resultsLoaded = false;           // project_results 字段是否已载入内存
+    mutable bool _resultsLoading = false;          // 防止惰性加载重入，不把失败误标为已加载
 
     // 防抖归档写入：每次 appendIpfind/appendIpmatch/setImageCameras 不再单次打开 ZIP，
     // 而是启动 2s 单射定时器，到期一次性批量写入
@@ -265,7 +268,7 @@ private:
     std::unique_ptr<xjw::common::project::ProjectLock> _projectLock;
 
     // 惰性加载 results：仅在首次访问时读取 project_results.json
-    void ensureResultsLoaded() const;
+    bool ensureResultsLoaded() const;
     void markDirtyIfRequested(bool markDirty);
     void emitCurrentMetadataChanged();
     void scheduleArchiveSync(bool coreDirty,

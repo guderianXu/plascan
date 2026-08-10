@@ -9,13 +9,19 @@
 #include "ProjectOpenGuard.h"
 #include "GuiTaskRunner.h"
 #include "Logger.h"
+#include "DemDomIO.h"
 #include "TerrainPipeline.h"
 
+#include <QDateTime>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QMessageBox>
 #include <QPointer>
+#include <QRegularExpression>
+#include <QSaveFile>
 #include <QUuid>
 
 #include <algorithm>
@@ -42,6 +48,254 @@ QString normalizedAbsolutePath(const QString &path)
     return QDir::cleanPath(QFileInfo(path).absoluteFilePath());
 }
 
+bool pathsReferToSameLocation(const QString &left, const QString &right)
+{
+#if defined(Q_OS_WIN)
+    constexpr Qt::CaseSensitivity case_sensitivity = Qt::CaseInsensitive;
+#else
+    constexpr Qt::CaseSensitivity case_sensitivity = Qt::CaseSensitive;
+#endif
+    return normalizedAbsolutePath(left).compare(
+               normalizedAbsolutePath(right), case_sensitivity) == 0;
+}
+
+QString safeStorageComponent(QString value)
+{
+    value = value.trimmed();
+    value.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9._-]")),
+                  QStringLiteral("_"));
+    return value.isEmpty() ? QStringLiteral("default_chunk") : value;
+}
+
+bool isSmallBodyGlobalDemRecord(const QJsonObject &record)
+{
+    return record.value(QStringLiteral("terrain_mode")).toString()
+        == QLatin1String("small_body_global");
+}
+
+bool isSmallBodyGlobalDemFile(const QString &path)
+{
+    xjw::DemGridData metadata;
+    QString metadata_error;
+    if (!xjw::DemDomIO::readDemMetadata(path, &metadata, &metadata_error))
+    {
+        return false;
+    }
+
+    const auto &items = metadata.projection.metadata;
+    const QString vertical_reference =
+        items.value(QStringLiteral("VERTICAL_REFERENCE")).trimmed().toLower();
+    if (vertical_reference == QLatin1String("radial_distance_from_body_center")
+        || vertical_reference == QLatin1String("elevation_above_reference_radius"))
+    {
+        return true;
+    }
+
+    return !items.value(QStringLiteral("BODY_FIXED_FRAME")).trimmed().isEmpty()
+        && items.value(QStringLiteral("LATITUDE_TYPE")).compare(
+               QLatin1String("planetocentric"), Qt::CaseInsensitive) == 0
+        && items.value(QStringLiteral("LONGITUDE_DOMAIN")).compare(
+               QLatin1String("0_360"), Qt::CaseInsensitive) == 0;
+}
+
+bool pathIsInsideDirectory(const QString &directoryPath, const QString &path)
+{
+    const QString relative = QDir::fromNativeSeparators(
+        QDir(directoryPath).relativeFilePath(path));
+    return relative != QLatin1String("..")
+        && !relative.startsWith(QLatin1String("../"))
+        && !QFileInfo(relative).isAbsolute();
+}
+
+QString portableReportPath(const QString &path,
+                           const QString &projectRoot,
+                           const QString &reportDirectory)
+{
+    if (path.trimmed().isEmpty() || QFileInfo(path).isRelative())
+    {
+        return QDir::fromNativeSeparators(path);
+    }
+    if (!pathIsInsideDirectory(projectRoot, path))
+    {
+        return QDir::fromNativeSeparators(path);
+    }
+    return QDir::fromNativeSeparators(
+        QDir(reportDirectory).relativeFilePath(path));
+}
+
+QString projectStoragePath(const QString &projectRoot, const QString &path)
+{
+    if (path.trimmed().isEmpty() || QFileInfo(path).isRelative()
+        || !pathIsInsideDirectory(projectRoot, path))
+    {
+        return QDir::fromNativeSeparators(path);
+    }
+    return QDir::fromNativeSeparators(QDir(projectRoot).relativeFilePath(path));
+}
+
+bool copyPortableReportAtomically(const QString &sourcePath,
+                                  const QString &destinationPath,
+                                  const QString &projectRoot,
+                                  QString *errorMessage)
+{
+    if (errorMessage)
+    {
+        errorMessage->clear();
+    }
+    if (sourcePath.trimmed().isEmpty() || destinationPath.trimmed().isEmpty())
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("全球地形报告路径为空。");
+        }
+        return false;
+    }
+    if (normalizedAbsolutePath(sourcePath) == normalizedAbsolutePath(destinationPath))
+    {
+        return QFileInfo::exists(sourcePath);
+    }
+
+    QFile source(sourcePath);
+    if (!source.open(QIODevice::ReadOnly))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("无法读取生成的全球地形报告：%1（%2）")
+                                .arg(sourcePath, source.errorString());
+        }
+        return false;
+    }
+    const QByteArray contents = source.readAll();
+    if (source.error() != QFileDevice::NoError)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("读取生成的全球地形报告失败：%1（%2）")
+                                .arg(sourcePath, source.errorString());
+        }
+        return false;
+    }
+
+    QJsonParseError parse_error;
+    const QJsonDocument source_document = QJsonDocument::fromJson(contents, &parse_error);
+    if (parse_error.error != QJsonParseError::NoError || !source_document.isObject())
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("生成的全球地形报告不是有效 JSON：%1（%2）")
+                                .arg(sourcePath, parse_error.errorString());
+        }
+        return false;
+    }
+
+    const QString destination_dir = QFileInfo(destinationPath).absolutePath();
+    if (!QDir().mkpath(destination_dir))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("无法创建项目报告目录：%1").arg(destination_dir);
+        }
+        return false;
+    }
+
+    QJsonObject portable_report = source_document.object();
+    portable_report[QStringLiteral("source_surface")] = portableReportPath(
+        portable_report.value(QStringLiteral("source_surface")).toString(),
+        projectRoot,
+        destination_dir);
+    QJsonObject artifacts = portable_report.value(QStringLiteral("artifacts")).toObject();
+    for (auto iterator = artifacts.begin(); iterator != artifacts.end(); ++iterator)
+    {
+        if (iterator.value().isString())
+        {
+            iterator.value() = portableReportPath(
+                iterator.value().toString(), projectRoot, destination_dir);
+        }
+    }
+    portable_report[QStringLiteral("artifacts")] = artifacts;
+    portable_report[QStringLiteral("path_semantics")] =
+        QStringLiteral("relative paths are relative to this report JSON");
+    const QByteArray portable_contents =
+        QJsonDocument(portable_report).toJson(QJsonDocument::Indented);
+
+    QSaveFile destination(destinationPath);
+    if (!destination.open(QIODevice::WriteOnly))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("无法写入项目全球地形报告：%1（%2）")
+                                .arg(destinationPath, destination.errorString());
+        }
+        return false;
+    }
+    if (destination.write(portable_contents) != portable_contents.size()
+        || !destination.commit())
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("原子提交项目全球地形报告失败：%1（%2）")
+                                .arg(destinationPath, destination.errorString());
+        }
+        return false;
+    }
+    return true;
+}
+
+TerrainPipelineResult runSmallBodyGlobalProducts(
+    const QString &surfacePath,
+    const QString &outputDir,
+    const QString &projectReportPath,
+    const QString &projectRoot,
+    const xjw::SmallBodyGlobalOptions &options,
+    const std::atomic_bool *cancelFlag,
+    const xjw::TerrainPipeline::OrthoProgressCallback &progressCallback)
+{
+    TerrainPipelineResult result;
+    const auto rollback_run = [&]()
+    {
+        QFile::remove(projectReportPath);
+        QDir(outputDir).removeRecursively();
+    };
+    result.ok = xjw::TerrainPipeline::generateSmallBodyGlobalProducts(
+        surfacePath, outputDir, options, &result.payload, &result.error,
+        cancelFlag, progressCallback);
+    if (!result.ok)
+    {
+        rollback_run();
+        return result;
+    }
+
+    if (cancelFlag && cancelFlag->load(std::memory_order_relaxed))
+    {
+        result.ok = false;
+        result.error = QStringLiteral("小天体全球 DEM/DOM 生成已取消。");
+        rollback_run();
+        return result;
+    }
+
+    const QString generated_report =
+        result.payload.value(QStringLiteral("report_json")).toString();
+    QString copy_error;
+    if (!copyPortableReportAtomically(
+            generated_report, projectReportPath, projectRoot, &copy_error))
+    {
+        result.ok = false;
+        result.error = QStringLiteral("全球产品已生成，但报告复制到项目目录失败：%1")
+                           .arg(copy_error);
+        rollback_run();
+        return result;
+    }
+    if (cancelFlag && cancelFlag->load(std::memory_order_relaxed))
+    {
+        result.ok = false;
+        result.error = QStringLiteral("小天体全球 DEM/DOM 生成已取消。");
+        rollback_run();
+        return result;
+    }
+    result.payload[QStringLiteral("project_report_json")] = projectReportPath;
+    return result;
+}
+
 } // namespace
 
 
@@ -54,16 +308,30 @@ ProjectTerrainProductsManager::ProjectTerrainProductsManager(ProjectManager *own
     , _projectData(projectData)
     , _parentWidget(parentWidget)
 {
+    if (_owner)
+    {
+        connect(_owner, &ProjectManager::projectSessionChanged, this,
+                [this]()
+                {
+                    cancelDemGeneration();
+                    cancelMapProject();
+                });
+    }
     if (_projectData)
     {
         connect(_projectData, &ProjectData::projectClosed, this,
                 [this]()
                 {
+                    cancelDemGeneration();
                     cancelMapProject();
                 });
         connect(_projectData, &ProjectData::activeChunkChanged, this,
                 [this](const QString &chunkId, const QString &, int)
                 {
+                    if (_demCancelFlag && chunkId != _demTaskChunkId)
+                    {
+                        cancelDemGeneration();
+                    }
                     if (_orthoCancelFlag && chunkId != _orthoTaskChunkId)
                     {
                         cancelMapProject();
@@ -77,6 +345,16 @@ void ProjectTerrainProductsManager::startDemFromPointCloudAsync(
 {
     if (!xjw::gui::project::requireOpenProject(_projectData, _parentWidget))
     {
+        emit demPipelineFinished(false, QStringLiteral("请先打开项目。"));
+        return;
+    }
+
+    if (!_demTaskId.isEmpty())
+    {
+        const QString message = QStringLiteral(
+            "已有 DEM/DOM 任务正在运行，请等待其完成后再启动新任务。");
+        QMessageBox::warning(_parentWidget, QStringLiteral("创建 DEM/DOM"), message);
+        emit demPipelineFinished(false, message);
         return;
     }
 
@@ -85,6 +363,12 @@ void ProjectTerrainProductsManager::startDemFromPointCloudAsync(
     {
         QMessageBox::warning(_parentWidget, QStringLiteral("创建 DEM"), requestError);
         emit demPipelineFinished(false, requestError);
+        return;
+    }
+
+    if (request.isSmallBodyGlobal())
+    {
+        startSmallBodyGlobalAsync(request);
         return;
     }
 
@@ -107,6 +391,8 @@ void ProjectTerrainProductsManager::startDemFromPointCloudAsync(
     const auto session = _owner->currentSessionContext();
     const double demResolution = request.resolution;
     const QString demType = request.dataType;
+    _demTaskId = background_task_id;
+    _demTaskChunkId = session.chunkId;
     emit backgroundTaskProgressChanged(background_task_id, 5, 100);
     emit demPipelineProgressChanged(QStringLiteral("DEM 生成"), 5);
 
@@ -125,6 +411,12 @@ void ProjectTerrainProductsManager::startDemFromPointCloudAsync(
             xjw::gui::tasks::TaskOutcome<TerrainPipelineResult> outcome)
         {
             emit self->backgroundTaskFinished(background_task_id);
+            if (self->_demTaskId != background_task_id)
+            {
+                return;
+            }
+            self->_demTaskId.clear();
+            self->_demTaskChunkId.clear();
             if (!self->_owner ||
                 !self->_projectData ||
                 !self->_owner->isCurrentSession(session))
@@ -189,6 +481,454 @@ void ProjectTerrainProductsManager::startDemFromPointCloudAsync(
                     .arg(terrainResult.value(QStringLiteral("depth_png")).toString())
                     .arg(pointCloudPath)
                     .arg(terrainResult.value(QStringLiteral("relative_z_offset")).toDouble(0.0), 0, 'f', 6));
+        });
+}
+
+void ProjectTerrainProductsManager::startSmallBodyGlobalAsync(
+    const xjw::gui::project::DemGenerationRequest &request)
+{
+    if (!_demTaskId.isEmpty())
+    {
+        const QString message = QStringLiteral("已有小天体全球 DEM/DOM 任务正在运行，请等待其完成。");
+        QMessageBox::warning(_parentWidget, QStringLiteral("创建全球 DEM/DOM"), message);
+        emit demPipelineFinished(false, message);
+        return;
+    }
+
+    const auto session = _owner->currentSessionContext();
+    const QString surface_path =
+        xjw::common::project::ProjectIO::resolveProjectResourcePath(
+            session.projectPath, request.sourceSurfacePath.trimmed());
+    const QFileInfo surface_info(surface_path);
+    if (surface_path.isEmpty() || !surface_info.exists() || !surface_info.isFile())
+    {
+        const QString message = QStringLiteral("指定的体固连三角网格不存在：\n%1")
+                                    .arg(surface_path.isEmpty()
+                                             ? request.sourceSurfacePath
+                                             : surface_path);
+        QMessageBox::warning(_parentWidget, QStringLiteral("创建全球 DEM/DOM"), message);
+        emit demPipelineFinished(false, message);
+        return;
+    }
+
+    const QString suffix = surface_info.suffix().toLower();
+    if (suffix != QLatin1String("ply") && suffix != QLatin1String("obj"))
+    {
+        const QString message = QStringLiteral("全球 DEM/DOM 输入必须是 PLY 或 OBJ 三角网格：\n%1")
+                                    .arg(surface_path);
+        QMessageBox::warning(_parentWidget, QStringLiteral("创建全球 DEM/DOM"), message);
+        emit demPipelineFinished(false, message);
+        return;
+    }
+
+    const QString output_root = resolveProjectOutputDir(
+        session.projectPath,
+        request.outputDirectory.trimmed(),
+        QStringLiteral("assets/dem/small_body_global"));
+    if (output_root.isEmpty())
+    {
+        const QString message = QStringLiteral("无法解析全球 DEM/DOM 输出根目录。");
+        QMessageBox::warning(_parentWidget, QStringLiteral("创建全球 DEM/DOM"), message);
+        emit demPipelineFinished(false, message);
+        return;
+    }
+    const QString chunk_component = safeStorageComponent(session.chunkId);
+    const QString run_component = QStringLiteral("%1_%2")
+        .arg(QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyyMMdd_HHmmss_zzz")),
+             QUuid::createUuid().toString(QUuid::WithoutBraces));
+    const QString output_dir = QDir(output_root).filePath(
+        QStringLiteral("%1/%2").arg(chunk_component, run_component));
+    if (!QDir().mkpath(output_dir))
+    {
+        const QString message = QStringLiteral("无法创建全球 DEM/DOM 输出目录：%1")
+                                    .arg(output_dir);
+        QMessageBox::warning(_parentWidget, QStringLiteral("创建全球 DEM/DOM"), message);
+        emit demPipelineFinished(false, message);
+        return;
+    }
+
+    const QString assets_dir =
+        xjw::common::project::ProjectIO::projectAssetsDir(session.projectPath);
+    if (assets_dir.isEmpty())
+    {
+        const QString message = QStringLiteral("无法解析当前项目的 assets 目录。");
+        QMessageBox::warning(_parentWidget, QStringLiteral("创建全球 DEM/DOM"), message);
+        emit demPipelineFinished(false, message);
+        return;
+    }
+    const QString project_report_path = QDir(assets_dir).filePath(
+        QStringLiteral("reports/small_body_global/%1/%2.json")
+            .arg(chunk_component, run_component));
+    const QString project_root = QFileInfo(assets_dir).absolutePath();
+
+    const auto cancel_flag = std::make_shared<std::atomic_bool>(false);
+    const QString background_task_id = QStringLiteral("dem-global:%1").arg(
+        QUuid::createUuid().toString(QUuid::WithoutBraces));
+    _demCancelFlag = cancel_flag;
+    _demTaskId = background_task_id;
+    _demTaskChunkId = session.chunkId;
+
+    emit backgroundTaskProgressChanged(background_task_id, 0, 100);
+    emit demPipelineProgressChanged(QStringLiteral("准备小天体全球 DEM/DOM"), 0);
+
+    QPointer<ProjectTerrainProductsManager> self(this);
+    const auto progress_callback =
+        [self, cancel_flag, session, background_task_id](const QString &stage, int percent)
+    {
+        if (!self)
+        {
+            return;
+        }
+        QMetaObject::invokeMethod(
+            self.data(),
+            [self, cancel_flag, session, stage, percent, background_task_id]()
+            {
+                if (!self
+                    || self->_demCancelFlag != cancel_flag
+                    || !self->_owner
+                    || !self->_projectData
+                    || !self->_owner->isCurrentSession(session))
+                {
+                    return;
+                }
+                const int bounded_percent = std::clamp(percent, 0, 99);
+                emit self->backgroundTaskProgressChanged(
+                    background_task_id, bounded_percent, 100);
+                emit self->demPipelineProgressChanged(stage, bounded_percent);
+            },
+            Qt::QueuedConnection);
+    };
+
+    xjw::SmallBodyGlobalOptions options;
+    options.targetName = request.smallBodyOptions.targetName;
+    options.bodyFixedFrame = request.smallBodyOptions.bodyFixedFrame;
+    options.surfaceCoordinateUnit = request.smallBodyOptions.surfaceCoordinateUnit;
+    options.automaticCenter = request.smallBodyOptions.automaticCenter;
+    options.bodyCenter = cv::Vec3d(request.smallBodyOptions.bodyCenterX,
+                                   request.smallBodyOptions.bodyCenterY,
+                                   request.smallBodyOptions.bodyCenterZ);
+    options.referenceRadiusM = request.smallBodyOptions.referenceRadiusM;
+    options.angularResolutionDeg = request.smallBodyOptions.angularResolutionDeg;
+    options.centralMeridianDeg = request.smallBodyOptions.centralMeridianDeg;
+    options.maximumPixelCount = request.smallBodyOptions.maximumPixelCount;
+    options.writeReportPreview = request.smallBodyOptions.writeReportPreview;
+    xjw::gui::tasks::runGuardedWithOutcome(
+        this,
+        [surface_path,
+         output_dir,
+         project_report_path,
+         project_root,
+         options,
+         cancel_flag,
+         progress_callback]()
+        {
+            return runSmallBodyGlobalProducts(
+                surface_path,
+                output_dir,
+                project_report_path,
+                project_root,
+                options,
+                cancel_flag.get(),
+                progress_callback);
+        },
+        [surface_path,
+         output_dir,
+         project_report_path,
+         project_root,
+         options,
+         session,
+         cancel_flag,
+         background_task_id](
+            ProjectTerrainProductsManager *manager,
+            xjw::gui::tasks::TaskOutcome<TerrainPipelineResult> outcome)
+        {
+            emit manager->backgroundTaskFinished(background_task_id);
+            const auto rollback_generated_run = [&]()
+            {
+                QFile::remove(project_report_path);
+                QDir(output_dir).removeRecursively();
+            };
+            if (manager->_demTaskId != background_task_id)
+            {
+                rollback_generated_run();
+                return;
+            }
+            manager->_demTaskId.clear();
+            if (manager->_demCancelFlag == cancel_flag)
+            {
+                manager->_demCancelFlag.reset();
+                manager->_demTaskChunkId.clear();
+            }
+
+            if (!manager->_owner
+                || !manager->_projectData
+                || !manager->_owner->isCurrentSession(session))
+            {
+                rollback_generated_run();
+                emit manager->demPipelineFinished(
+                    false, QStringLiteral("项目已切换，全球 DEM/DOM 结果未写入当前项目。"));
+                return;
+            }
+
+            if (!outcome.succeeded())
+            {
+                rollback_generated_run();
+                const QString error = outcome.errorMessage.isEmpty()
+                    ? QStringLiteral("小天体全球 DEM/DOM 后台任务失败。")
+                    : outcome.errorMessage;
+                QMessageBox::warning(
+                    manager->_parentWidget,
+                    QStringLiteral("创建全球 DEM/DOM"),
+                    QStringLiteral("处理失败：%1").arg(error));
+                emit manager->demPipelineFinished(false, error);
+                return;
+            }
+
+            const TerrainPipelineResult terrain_run = std::move(*outcome.value);
+            if (cancel_flag->load(std::memory_order_relaxed))
+            {
+                rollback_generated_run();
+                const QString error = QStringLiteral("小天体全球 DEM/DOM 生成已取消。");
+                emit manager->demPipelineFinished(false, error);
+                return;
+            }
+            if (!terrain_run.ok)
+            {
+                const bool cancelled = cancel_flag->load(std::memory_order_relaxed)
+                    || terrain_run.error.contains(QStringLiteral("取消"));
+                const QString error = cancelled
+                    ? QStringLiteral("小天体全球 DEM/DOM 生成已取消。")
+                    : terrain_run.error;
+                if (!cancelled)
+                {
+                    QMessageBox::warning(
+                        manager->_parentWidget,
+                        QStringLiteral("创建全球 DEM/DOM"),
+                        QStringLiteral("处理失败：%1").arg(error));
+                }
+                rollback_generated_run();
+                emit manager->demPipelineFinished(false, error);
+                return;
+            }
+
+            const QJsonObject terrain_result = terrain_run.payload;
+            const QString radial_dem_path =
+                terrain_result.value(QStringLiteral("radial_dem_tif")).toString();
+            const QString elevation_dem_path =
+                terrain_result.value(QStringLiteral("elevation_dem_tif")).toString();
+            const QString dom_path =
+                terrain_result.value(QStringLiteral("dom_tif")).toString();
+            const QString generated_report_path =
+                terrain_result.value(QStringLiteral("report_json")).toString();
+            const QString radial_dem_storage =
+                projectStoragePath(project_root, radial_dem_path);
+            const QString elevation_dem_storage =
+                projectStoragePath(project_root, elevation_dem_path);
+            const QString dom_storage = projectStoragePath(project_root, dom_path);
+            const QString output_storage = projectStoragePath(project_root, output_dir);
+            const QString report_storage =
+                projectStoragePath(project_root, project_report_path);
+            const QString generated_report_storage =
+                projectStoragePath(project_root, generated_report_path);
+            const QString preview_path =
+                terrain_result.value(QStringLiteral("preview_png")).toString();
+            const QString preview_storage =
+                projectStoragePath(project_root, preview_path);
+            const QString source_surface_storage =
+                projectStoragePath(project_root, surface_path);
+            const QStringList required_products{
+                radial_dem_path,
+                elevation_dem_path,
+                dom_path,
+                project_report_path
+            };
+            for (const QString &path : required_products)
+            {
+                if (path.trimmed().isEmpty() || !QFileInfo::exists(path))
+                {
+                    rollback_generated_run();
+                    const QString error = QStringLiteral(
+                        "全球 DEM/DOM 管线返回成功，但必要产物不存在：%1").arg(path);
+                    QMessageBox::warning(
+                        manager->_parentWidget,
+                        QStringLiteral("创建全球 DEM/DOM"),
+                        error);
+                    emit manager->demPipelineFinished(false, error);
+                    return;
+                }
+            }
+
+            QString created_at =
+                terrain_result.value(QStringLiteral("created_at")).toString();
+            if (created_at.isEmpty())
+            {
+                created_at = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+            }
+            const QJsonObject frame =
+                terrain_result.value(QStringLiteral("frame")).toObject();
+            const QJsonObject grid =
+                terrain_result.value(QStringLiteral("grid")).toObject();
+            const QJsonObject metrics =
+                terrain_result.value(QStringLiteral("metrics")).toObject();
+            const QJsonValue solid_angle_coverage = metrics.value(
+                QStringLiteral("solid_angle_weighted_coverage_ratio"));
+            const double angular_resolution =
+                grid.value(QStringLiteral("angular_resolution_deg"))
+                    .toDouble(options.angularResolutionDeg);
+
+            const auto decorate_dem_record =
+                [&](QJsonObject *record,
+                    const QString &resultType,
+                    const QString &verticalReference,
+                    const QString &demReference)
+            {
+                (*record)[QStringLiteral("result_type")] = resultType;
+                (*record)[QStringLiteral("terrain_mode")] =
+                    QStringLiteral("small_body_global");
+                (*record)[QStringLiteral("source_surface")] = source_surface_storage;
+                (*record)[QStringLiteral("source_surface_type")] =
+                    QStringLiteral("triangle_mesh");
+                (*record)[QStringLiteral("target_name")] =
+                    frame.value(QStringLiteral("target_name"));
+                (*record)[QStringLiteral("body_fixed_frame")] =
+                    frame.value(QStringLiteral("body_fixed_frame"));
+                (*record)[QStringLiteral("frame_status")] =
+                    frame.value(QStringLiteral("frame_status"));
+                (*record)[QStringLiteral("body_center_xyz_m")] =
+                    frame.value(QStringLiteral("center_xyz_m"));
+                (*record)[QStringLiteral("reference_radius_m")] =
+                    frame.value(QStringLiteral("reference_radius_m"));
+                (*record)[QStringLiteral("central_meridian_deg")] =
+                    frame.value(QStringLiteral("central_meridian_deg"));
+                (*record)[QStringLiteral("angular_resolution_deg")] =
+                    angular_resolution;
+                (*record)[QStringLiteral("resolution_unit")] = QStringLiteral("degree");
+                (*record)[QStringLiteral("vertical_reference")] = verticalReference;
+                (*record)[QStringLiteral("dem_reference")] = demReference;
+                (*record)[QStringLiteral("coverage_ratio")] =
+                    metrics.value(QStringLiteral("coverage_ratio"));
+                (*record)[QStringLiteral("solid_angle_weighted_coverage_ratio")] =
+                    solid_angle_coverage;
+                (*record)[QStringLiteral("report_json")] = report_storage;
+                (*record)[QStringLiteral("generated_report_json")] =
+                    generated_report_storage;
+                (*record)[QStringLiteral("preview_png")] = preview_storage;
+            };
+
+            QJsonObject radial_record = makeDemResultRecord(
+                created_at,
+                output_storage,
+                QString(),
+                radial_dem_storage,
+                QStringLiteral("float32"),
+                angular_resolution,
+                QString(),
+                QStringList());
+            decorate_dem_record(
+                &radial_record,
+                QStringLiteral("small_body_global_radial_dem"),
+                QStringLiteral("radial_distance_from_body_center"),
+                QStringLiteral("body_center"));
+
+            QJsonObject elevation_record = makeDemResultRecord(
+                created_at,
+                output_storage,
+                QString(),
+                elevation_dem_storage,
+                QStringLiteral("float32"),
+                angular_resolution,
+                QString(),
+                QStringList());
+            decorate_dem_record(
+                &elevation_record,
+                QStringLiteral("small_body_global_elevation_dem"),
+                QStringLiteral("elevation_above_reference_radius"),
+                QStringLiteral("reference_radius"));
+
+            QJsonObject dom_payload;
+            dom_payload[QStringLiteral("terrain_mode")] =
+                QStringLiteral("small_body_global");
+            dom_payload[QStringLiteral("result_type")] =
+                QStringLiteral("small_body_global_dom");
+            dom_payload[QStringLiteral("source_surface")] = source_surface_storage;
+            dom_payload[QStringLiteral("source_surface_type")] =
+                QStringLiteral("triangle_mesh");
+            dom_payload[QStringLiteral("target_name")] =
+                frame.value(QStringLiteral("target_name"));
+            dom_payload[QStringLiteral("body_fixed_frame")] =
+                frame.value(QStringLiteral("body_fixed_frame"));
+            dom_payload[QStringLiteral("frame_status")] =
+                frame.value(QStringLiteral("frame_status"));
+            dom_payload[QStringLiteral("central_meridian_deg")] =
+                frame.value(QStringLiteral("central_meridian_deg"));
+            dom_payload[QStringLiteral("angular_resolution_deg")] =
+                angular_resolution;
+            dom_payload[QStringLiteral("resolution_unit")] = QStringLiteral("degree");
+            dom_payload[QStringLiteral("coverage_ratio")] =
+                metrics.value(QStringLiteral("coverage_ratio"));
+            dom_payload[QStringLiteral("solid_angle_weighted_coverage_ratio")] =
+                solid_angle_coverage;
+            dom_payload[QStringLiteral("report_json")] = report_storage;
+            dom_payload[QStringLiteral("preview_png")] = preview_storage;
+            QJsonObject dom_record = makeOrthoResultRecord(
+                created_at,
+                radial_dem_storage,
+                dom_storage,
+                0,
+                QStringList(),
+                true,
+                angular_resolution,
+                dom_payload);
+
+            QJsonObject report_record = terrain_result;
+            report_record[QStringLiteral("result_type")] =
+                QStringLiteral("small_body_global_terrain_report");
+            report_record[QStringLiteral("path")] = report_storage;
+            report_record[QStringLiteral("json_path")] = report_storage;
+            report_record[QStringLiteral("source_report_path")] =
+                generated_report_storage;
+            report_record[QStringLiteral("preview_path")] = preview_storage;
+            report_record[QStringLiteral("preview_png")] = preview_storage;
+            report_record[QStringLiteral("radial_dem_tif")] = radial_dem_storage;
+            report_record[QStringLiteral("elevation_dem_tif")] = elevation_dem_storage;
+            report_record[QStringLiteral("dom_tif")] = dom_storage;
+
+            const bool records_saved =
+                manager->_projectData->upsertResultRecordByPath(
+                    QStringLiteral("dem_results"), QStringLiteral("dem_tif"), radial_record, true)
+                && manager->_projectData->upsertResultRecordByPath(
+                    QStringLiteral("dem_results"), QStringLiteral("dem_tif"), elevation_record, true)
+                && manager->_projectData->upsertResultRecordByPath(
+                    QStringLiteral("ortho_results"), QStringLiteral("output_path"), dom_record, true)
+                && manager->_projectData->upsertResultRecordByPath(
+                    QStringLiteral("report_results"), QStringLiteral("path"), report_record, true);
+            if (!records_saved)
+            {
+                const QString error = QStringLiteral(
+                    "全球 DEM/DOM 已生成，但写入当前 Chunk 的项目成果记录失败。");
+                QMessageBox::warning(
+                    manager->_parentWidget, QStringLiteral("创建全球 DEM/DOM"), error);
+                emit manager->demPipelineFinished(false, error);
+                return;
+            }
+            manager->_owner->refreshReconstructionQualityReport();
+
+            emit manager->demPipelineProgressChanged(QStringLiteral("完成"), 100);
+            emit manager->demPipelineFinished(
+                true, QStringLiteral("小天体全球 DEM/DOM 生成完成"));
+            QMessageBox::information(
+                manager->_parentWidget,
+                QStringLiteral("创建全球 DEM/DOM"),
+                QStringLiteral(
+                    "处理完成。\n径向 DEM: %1\n高程 DEM: %2\nDOM: %3\n报告: %4\n固体角加权覆盖率: %5%")
+                    .arg(radial_dem_path,
+                         elevation_dem_path,
+                         dom_path,
+                         project_report_path)
+                    .arg(solid_angle_coverage.toDouble() * 100.0,
+                         0,
+                         'f',
+                         2));
         });
 }
 
@@ -260,6 +1000,10 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
             for (int index = demArr.size() - 1; index >= 0; --index)
             {
                 const QJsonObject record = demArr.at(index).toObject();
+                if (isSmallBodyGlobalDemRecord(record))
+                {
+                    continue;
+                }
                 const QString candidate = resolveProjectPath(
                     record.value(QStringLiteral("dem_tif")).toString());
                 if (!candidate.isEmpty() && QFileInfo::exists(candidate))
@@ -282,7 +1026,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
             const QJsonObject record = demArr.at(index).toObject();
             const QString candidate = resolveProjectPath(
                 record.value(QStringLiteral("dem_tif")).toString());
-            if (QDir::cleanPath(candidate) == QDir::cleanPath(resolvedDem))
+            if (pathsReferToSameLocation(candidate, resolvedDem))
             {
                 matchedDemRecord = record;
                 break;
@@ -295,6 +1039,22 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
         const QString message = pointCloudMode
             ? QStringLiteral("找不到彩色点云文件，请先生成或选择包含 RGB 的稠密点云。")
             : QStringLiteral("找不到 DEM 文件，请先执行[创建 DEM]。");
+        emit orthoPipelineFinished(false, message, QJsonObject());
+        return;
+    }
+    if (!pointCloudMode && isSmallBodyGlobalDemRecord(matchedDemRecord))
+    {
+        const QString message = QStringLiteral(
+            "小天体全球径向 DEM 使用经纬度网格，不能作为局部平面正射反投影的 DEM。"
+            "请改用局部平面 DEM，全球 DOM 已由全球地形管线直接生成。");
+        emit orthoPipelineFinished(false, message, QJsonObject());
+        return;
+    }
+    if (!pointCloudMode && isSmallBodyGlobalDemFile(resolvedDem))
+    {
+        const QString message = QStringLiteral(
+            "所选 GeoTIFF 的元数据表明它是体固连经纬网径向/高程 DEM，"
+            "不能进入局部平面正射反投影。请使用局部平面 DEM；全球 DOM 已由全球地形管线生成。");
         emit orthoPipelineFinished(false, message, QJsonObject());
         return;
     }
@@ -342,7 +1102,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
     }
     out = QDir::cleanPath(out);
     const QString normalizedOutput = normalizedAbsolutePath(out);
-    if (normalizedOutput == normalizedAbsolutePath(resolvedDem))
+    if (pathsReferToSameLocation(normalizedOutput, resolvedDem))
     {
         emit orthoPipelineFinished(
             false,
@@ -352,7 +1112,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
             QJsonObject());
         return;
     }
-    if (normalizedOutput == normalizedAbsolutePath(projectPath))
+    if (pathsReferToSameLocation(normalizedOutput, projectPath))
     {
         emit orthoPipelineFinished(
             false,
@@ -362,7 +1122,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
     }
     for (const QString &imagePath : sourceImages)
     {
-        if (normalizedOutput == normalizedAbsolutePath(imagePath))
+        if (pathsReferToSameLocation(normalizedOutput, imagePath))
         {
             emit orthoPipelineFinished(
                 false,
@@ -399,7 +1159,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
         }
         if (!maskPath.isEmpty())
         {
-            if (normalizedOutput == normalizedAbsolutePath(maskPath))
+            if (pathsReferToSameLocation(normalizedOutput, maskPath))
             {
                 emit orthoPipelineFinished(
                     false,
@@ -420,6 +1180,10 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
     for (const QJsonValue &value : storedDemResults)
     {
         QJsonObject record = value.toObject();
+        if (isSmallBodyGlobalDemRecord(record))
+        {
+            continue;
+        }
         const QString demPath =
             resolveProjectPath(record.value(QStringLiteral("dem_tif")).toString());
         if (!demPath.isEmpty())
@@ -633,5 +1397,13 @@ void ProjectTerrainProductsManager::cancelMapProject()
     if (_orthoCancelFlag)
     {
         _orthoCancelFlag->store(true, std::memory_order_relaxed);
+    }
+}
+
+void ProjectTerrainProductsManager::cancelDemGeneration()
+{
+    if (_demCancelFlag)
+    {
+        _demCancelFlag->store(true, std::memory_order_relaxed);
     }
 }

@@ -21,6 +21,17 @@ if(TARGET meshing)
     )
 endif()
 
+if(TARGET terrain)
+    add_plascan_cli(small_body_terrain_cli
+        SOURCE cli_small_body_terrain.cpp
+        LIBRARIES terrain Qt6::Core Qt6::Gui
+        INCLUDE_DIRECTORIES
+            ${CMAKE_SOURCE_DIR}/src/common
+            ${CMAKE_SOURCE_DIR}/src/core/terrain
+            ${OpenCV_INCLUDE_DIRS}
+    )
+endif()
+
 set(workflow_cli_base_targets
     image_matching
     matchphototask

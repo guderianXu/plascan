@@ -25,6 +25,7 @@ public:
 
     void startDemFromPointCloudAsync(
         const xjw::gui::project::DemGenerationRequest &request);
+    void cancelDemGeneration();
 
     void startMapProjectAsync(
         const xjw::gui::project::OrthoGenerationRequest &request);
@@ -43,9 +44,15 @@ signals:
                                const QJsonObject &result);
 
 private:
+    void startSmallBodyGlobalAsync(
+        const xjw::gui::project::DemGenerationRequest &request);
+
     ProjectManager *_owner = nullptr;
     ProjectData *_projectData = nullptr;
     QWidget *_parentWidget = nullptr;
+    std::shared_ptr<std::atomic_bool> _demCancelFlag;
+    QString _demTaskId;
+    QString _demTaskChunkId;
     std::shared_ptr<std::atomic_bool> _orthoCancelFlag;
     QString _orthoTaskChunkId;
 };

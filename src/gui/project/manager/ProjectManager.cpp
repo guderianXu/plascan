@@ -1941,7 +1941,7 @@ QJsonObject ProjectManager::currentMeta() const
     }
 
     return xjw::gui::project::ProjectTiePointResultService::metadataWithCurrentOnly(
-        _projectData->metadata(),
+        _projectData->metadataIncludingResults(),
         _projectData->currentProjectPath());
 }
 
@@ -2690,6 +2690,14 @@ void ProjectManager::startDemFromPointCloudAsync(
     if (_terrainProductsManager)
     {
         _terrainProductsManager->startDemFromPointCloudAsync(request);
+    }
+}
+
+void ProjectManager::cancelDemGeneration()
+{
+    if (_terrainProductsManager)
+    {
+        _terrainProductsManager->cancelDemGeneration();
     }
 }
 

@@ -3,6 +3,7 @@
 // =============================================================================
 
 #include "application/WorkflowReportDialog.h"
+#include "application/reporting/GlobalTerrainReportPage.h"
 #include "ui_WorkflowReportDialog.h"
 
 #include <QApplication>
@@ -307,13 +308,69 @@ static QString fmtPercent(int n, int d) {
 }
 
 WorkflowReportDialog::WorkflowReportDialog(const QString &projectAssetsDir, QWidget *parent)
+    : WorkflowReportDialog(projectAssetsDir, QJsonObject(), parent)
+{
+}
+
+WorkflowReportDialog::WorkflowReportDialog(const QString &projectAssetsDir,
+                                           const QJsonObject &projectMetadata,
+                                           QWidget *parent)
     : QDialog(parent)
     , _assetsDir(projectAssetsDir)
+    , _projectMetadata(projectMetadata)
 {
     setWindowTitle(tr("工作流程历史报告"));
     setMinimumSize(750, 600);
     resize(860, 700);
     buildUi();
+}
+
+QJsonObject WorkflowReportDialog::loadGlobalTerrainReport() const
+{
+    const QJsonArray reports =
+        _projectMetadata.value(QStringLiteral("report_results")).toArray();
+    for (int index = reports.size() - 1; index >= 0; --index)
+    {
+        const QJsonObject record = reports.at(index).toObject();
+        if (record.value(QStringLiteral("result_type")).toString()
+            != QLatin1String("small_body_global_terrain_report"))
+        {
+            continue;
+        }
+        QString path = record.value(QStringLiteral("json_path")).toString();
+        if (path.isEmpty())
+        {
+            path = record.value(QStringLiteral("path")).toString();
+        }
+        if (QFileInfo(path).isRelative())
+        {
+            const QString normalized_path = QDir::fromNativeSeparators(path);
+            path = normalized_path.startsWith(QLatin1String("assets/"))
+                ? QDir(QFileInfo(_assetsDir).absolutePath()).filePath(normalized_path)
+                : QDir(_assetsDir).filePath(normalized_path);
+        }
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly))
+        {
+            continue;
+        }
+        QJsonParseError error;
+        const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &error);
+        if (error.error == QJsonParseError::NoError && document.isObject())
+        {
+            QJsonObject report = document.object();
+            report[QStringLiteral("_report_directory")] =
+                QFileInfo(path).absolutePath();
+            return report;
+        }
+    }
+    return _projectMetadata.isEmpty()
+        ? loadReport(QStringLiteral("small_body_global_report.json")) : QJsonObject();
+}
+
+void WorkflowReportDialog::setProjectMetadata(const QJsonObject &projectMetadata)
+{
+    _projectMetadata = projectMetadata;
 }
 
 QJsonObject WorkflowReportDialog::loadReport(const QString &name) const
@@ -418,14 +475,26 @@ void WorkflowReportDialog::buildUi()
     _tabs->addTab(buildAtTab(),    tr("✈ 空中三角测量"));
     _tabs->addTab(buildDenseTab(), tr("☁ 稠密点云"));
     _tabs->addTab(buildMeshTab(),  tr("▲ 三维模型"));
+    _tabs->addTab(buildGlobalTerrainTab(), tr("◎ 全球 DEM/DOM"));
 }
 
 void WorkflowReportDialog::refresh()
 {
-    _tabs->removeTab(2); _tabs->removeTab(1); _tabs->removeTab(0);
+    while (_tabs->count() > 0)
+    {
+        QWidget *page = _tabs->widget(0);
+        _tabs->removeTab(0);
+        delete page;
+    }
     _tabs->addTab(buildAtTab(),    tr("✈ 空中三角测量"));
     _tabs->addTab(buildDenseTab(), tr("☁ 稠密点云"));
     _tabs->addTab(buildMeshTab(),  tr("▲ 三维模型"));
+    _tabs->addTab(buildGlobalTerrainTab(), tr("◎ 全球 DEM/DOM"));
+}
+
+QWidget *WorkflowReportDialog::buildGlobalTerrainTab()
+{
+    return new GlobalTerrainReportPage(loadGlobalTerrainReport());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

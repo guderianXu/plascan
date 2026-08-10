@@ -284,6 +284,7 @@ public slots:
                                 const QJsonObject &extraSettings);
     void startDemFromPointCloudAsync(
         const xjw::gui::project::DemGenerationRequest &request);
+    void cancelDemGeneration();
     // 异步启动正射影像制作（settings 包含影像、DEM、输出路径与核心选项）。
     void startMapProjectAsync(
         const xjw::gui::project::OrthoGenerationRequest &request);

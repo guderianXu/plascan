@@ -8,6 +8,7 @@
 #include "OrthoGenerationOptions.h"
 #include "OrthoProjector.h"
 #include "PointCloudDomGenerator.h"
+#include "SmallBodyGlobalProductGenerator.h"
 #include "projection/AsteroidProjection.h"
 #include "Camera.h"
 #include "io/PathIO.h"
@@ -1076,6 +1077,38 @@ bool TerrainPipeline::generateFromObjMtlDir(const QString &dirPath,
         *result = output;
     }
 
+    return true;
+}
+
+bool TerrainPipeline::generateSmallBodyGlobalProducts(
+    const QString &surfacePath,
+    const QString &outputDir,
+    const SmallBodyGlobalOptions &options,
+    QJsonObject *result,
+    QString *errorMsg,
+    const std::atomic_bool *cancelFlag,
+    const OrthoProgressCallback &progressCallback)
+{
+    SmallBodyGlobalProducts products;
+    if (!SmallBodyGlobalProductGenerator::generate(
+            surfacePath, outputDir, options, &products, errorMsg,
+            cancelFlag, progressCallback))
+    {
+        return false;
+    }
+    if (result)
+    {
+        QJsonObject output = products.report;
+        output[QStringLiteral("report_json")] = products.reportPath;
+        output[QStringLiteral("preview_png")] = products.previewPath;
+        output[QStringLiteral("radial_dem_tif")] = products.radialDemPath;
+        output[QStringLiteral("elevation_dem_tif")] = products.elevationDemPath;
+        output[QStringLiteral("dom_tif")] = products.domPath;
+        output[QStringLiteral("reliability_tif")] = products.reliabilityPath;
+        output[QStringLiteral("coverage_tif")] = products.coveragePath;
+        output[QStringLiteral("ambiguity_tif")] = products.ambiguityPath;
+        *result = output;
+    }
     return true;
 }
 

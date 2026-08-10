@@ -2,10 +2,11 @@
 // 文件: WorkflowReportDialog.h
 // 功能: 工作流程历史报告查看器
 //
-//   显示三个标签页：
+//   显示四个标签页：
 //   - 空中三角测量（AT）：含平差精度对比折线/柱状图、相机注册率、重投影误差等
 //   - 稠密点云生成：点数统计、文件路径
 //   - 三维模型生成：顶点/面片数、文件路径
+//   - 全球 DEM/DOM：核心生成的预览、覆盖统计、坐标约定和产物路径
 //
 //   报告数据从项目资产目录下的 reports/*.json 文件读取，
 //   由工作流完成时由 MenuWorkflowController 写入。
@@ -88,9 +89,13 @@ class WorkflowReportDialog : public QDialog
 public:
     explicit WorkflowReportDialog(const QString &projectAssetsDir,
                                   QWidget *parent = nullptr);
+    WorkflowReportDialog(const QString &projectAssetsDir,
+                         const QJsonObject &projectMetadata,
+                         QWidget *parent = nullptr);
 
     // 强制刷新（重新从磁盘读取报告文件）
     void refresh();
+    void setProjectMetadata(const QJsonObject &projectMetadata);
 
 private:
     void buildUi();
@@ -98,9 +103,11 @@ private:
     QWidget *buildAtReportPage(const QJsonObject &report);
     QWidget *buildDenseTab();
     QWidget *buildMeshTab();
+    QWidget *buildGlobalTerrainTab();
 
     // 从 assets/reports/at_report.json 等读取
     QJsonObject loadReport(const QString &name) const;
+    QJsonObject loadGlobalTerrainReport() const;
     QJsonArray loadReportHistory(const QString &name) const;
 
     // 辅助：创建带标题、数值和颜色的统计卡片
@@ -116,6 +123,7 @@ private:
     static QLabel *makeKVLabel(const QString &key, const QString &value);
 
     QString _assetsDir;
+    QJsonObject _projectMetadata;
     QTabWidget *_tabs = nullptr;
     QPushButton *_refreshBtn = nullptr;
 };
