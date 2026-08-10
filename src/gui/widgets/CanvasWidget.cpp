@@ -275,9 +275,13 @@ void CanvasWidget::setProjectMetadata(const QJsonObject &metadata)
     {
         return;
     }
-    _depthOverlayController->setProjectMetadata(metadata);
+    const bool current_depth_changed = _depthOverlayController->setProjectMetadata(
+        metadata, _currentImagePath);
     _depthOverlayController->setProjectPath(property("currentProjectPath").toString());
-    refreshDepthOverlay();
+    if (current_depth_changed)
+    {
+        refreshDepthOverlay();
+    }
 }
 
 void CanvasWidget::setDepthOverlayEnabled(bool enabled)

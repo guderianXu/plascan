@@ -256,6 +256,49 @@ TEST(DepthOverlayControllerTest, AnyArtifactRemainsAvailableWhenSelectedLevelIsM
         QStringLiteral("E:/images/a.png"), xjw::gui::views::DepthOverlayLevel::Level2));
 }
 
+TEST(DepthOverlayControllerTest, UnrelatedFrameCompletionDoesNotCancelCurrentOverlayLoad)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString image_path = directory.filePath(QStringLiteral("current.png"));
+    const QString depth_path = directory.filePath(QStringLiteral("current.bin"));
+    const QString mask_path = directory.filePath(QStringLiteral("current_mask.png"));
+    ASSERT_TRUE(QImage(2, 1, QImage::Format_RGB32).save(image_path));
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        depth_path, (cv::Mat_<float>(1, 2) << 2.0f, 4.0f)).ok);
+    ASSERT_TRUE(cv::imwrite(mask_path.toStdString(),
+                           cv::Mat(1, 2, CV_8UC1, cv::Scalar(255))));
+
+    const QJsonObject current_record{
+        {QStringLiteral("ref_image"), image_path},
+        {QStringLiteral("raw_depth_path"), depth_path},
+        {QStringLiteral("valid_mask_path"), mask_path}
+    };
+    xjw::gui::widgets::DepthOverlayController controller;
+    controller.setProjectMetadata(QJsonObject{
+        {QStringLiteral("depth_map_results"), QJsonArray{current_record}}
+    });
+    QSignalSpy ready_spy(
+        &controller,
+        &xjw::gui::widgets::DepthOverlayController::overlayReady);
+
+    controller.request(
+        image_path,
+        xjw::gui::views::DepthOverlayLevel::Final,
+        xjw::gui::views::DepthOverlayRenderOptions{});
+    const QJsonObject other_record{
+        {QStringLiteral("ref_image"), directory.filePath(QStringLiteral("other.png"))},
+        {QStringLiteral("raw_depth_path"), directory.filePath(QStringLiteral("other.bin"))},
+        {QStringLiteral("valid_mask_path"), directory.filePath(QStringLiteral("other_mask.png"))}
+    };
+    EXPECT_FALSE(controller.setProjectMetadata(
+        QJsonObject{{QStringLiteral("depth_map_results"),
+                     QJsonArray{current_record, other_record}}},
+        image_path));
+
+    QTRY_COMPARE_WITH_TIMEOUT(ready_spy.count(), 1, 5000);
+}
+
 TEST(DepthOverlayDataTest, RejectsArtifactWithoutRequiredValidMask)
 {
     const QJsonObject metadata{
@@ -654,6 +697,53 @@ TEST(CanvasDepthOverlayTest, SuppressesDiagnosticsWithoutChangingUserPreferences
     EXPECT_FALSE(canvas.featureDiagnosticsSuppressed());
     EXPECT_TRUE(canvas.showsInterestPoints());
     EXPECT_TRUE(canvas.showsFeatureResiduals());
+}
+
+TEST(CanvasDepthOverlayTest, ShowsCurrentFrameAsSoonAsItsDepthRecordArrives)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+
+    const QString image_path = directory.filePath(QStringLiteral("current.png"));
+    const QString depth_path = directory.filePath(QStringLiteral("current.bin"));
+    const QString mask_path = directory.filePath(QStringLiteral("current_mask.png"));
+    QImage image(16, 12, QImage::Format_RGB32);
+    image.fill(Qt::darkGray);
+    ASSERT_TRUE(image.save(image_path));
+    ASSERT_TRUE(xjw::core::project::writeDepthMatStorage(
+        depth_path, cv::Mat(12, 16, CV_32FC1, cv::Scalar(3.0f))).ok);
+    ASSERT_TRUE(cv::imwrite(mask_path.toStdString(),
+                           cv::Mat(12, 16, CV_8UC1, cv::Scalar(255))));
+
+    CanvasWidget canvas;
+    canvas.setProperty("currentProjectPath", directory.filePath(QStringLiteral("test.plascan")));
+    canvas.showImage(image_path);
+    QTRY_VERIFY_WITH_TIMEOUT(canvas.hasDisplayImage(), 5000);
+    canvas.setDepthOverlayEnabled(true);
+    EXPECT_FALSE(canvas.depthOverlayVisible());
+
+    const QJsonObject current_record{
+        {QStringLiteral("ref_image"), image_path},
+        {QStringLiteral("raw_depth_path"), depth_path},
+        {QStringLiteral("valid_mask_path"), mask_path},
+        {QStringLiteral("grid_width"), 16},
+        {QStringLiteral("grid_height"), 12}
+    };
+    canvas.setProjectMetadata(QJsonObject{
+        {QStringLiteral("depth_map_results"), QJsonArray{current_record}}
+    });
+
+    QTRY_VERIFY_WITH_TIMEOUT(canvas.depthOverlayVisible(), 5000);
+
+    const QJsonObject other_record{
+        {QStringLiteral("ref_image"), directory.filePath(QStringLiteral("other.png"))},
+        {QStringLiteral("raw_depth_path"), directory.filePath(QStringLiteral("other.bin"))},
+        {QStringLiteral("valid_mask_path"), directory.filePath(QStringLiteral("other_mask.png"))}
+    };
+    canvas.setProjectMetadata(QJsonObject{
+        {QStringLiteral("depth_map_results"), QJsonArray{current_record, other_record}}
+    });
+    EXPECT_TRUE(canvas.depthOverlayVisible());
 }
 
 namespace {

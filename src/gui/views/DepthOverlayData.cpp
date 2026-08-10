@@ -206,21 +206,6 @@ bool hasRequiredArtifactPaths(const DepthOverlayArtifact &artifact)
         && !artifact.validMaskPath.trimmed().isEmpty();
 }
 
-std::optional<QJsonObject> latestDepthRecord(const QJsonObject &project_metadata,
-                                             const QString &image_path)
-{
-    const QJsonArray records = project_metadata.value(QStringLiteral("depth_map_results")).toArray();
-    for (qsizetype record_index = records.size() - 1; record_index >= 0; --record_index)
-    {
-        const QJsonObject record = records.at(record_index).toObject();
-        if (pathsMatch(record.value(QStringLiteral("ref_image")).toString(), image_path))
-        {
-            return record;
-        }
-    }
-    return std::nullopt;
-}
-
 QString resolvedArtifactPath(const QString &path, const QString &project_path)
 {
     if (path.trimmed().isEmpty())
@@ -265,6 +250,22 @@ QImage buildIntensityBase(const QImage &source_image,
 }
 
 } // namespace
+
+std::optional<QJsonObject> resolveDepthOverlayRecord(
+    const QJsonObject &project_metadata,
+    const QString &image_path)
+{
+    const QJsonArray records = project_metadata.value(QStringLiteral("depth_map_results")).toArray();
+    for (qsizetype record_index = records.size() - 1; record_index >= 0; --record_index)
+    {
+        const QJsonObject record = records.at(record_index).toObject();
+        if (pathsMatch(record.value(QStringLiteral("ref_image")).toString(), image_path))
+        {
+            return record;
+        }
+    }
+    return std::nullopt;
+}
 
 std::optional<DepthOverlayArtifact> resolveDepthOverlayArtifact(
     const QJsonObject &project_metadata,
@@ -317,7 +318,7 @@ DepthOverlayAvailability resolveDepthOverlayAvailability(
     const QString &project_path)
 {
     DepthOverlayAvailability result;
-    const auto record = latestDepthRecord(project_metadata, image_path);
+    const auto record = resolveDepthOverlayRecord(project_metadata, image_path);
     if (!record)
     {
         result.reason = QStringLiteral("当前照片没有深度图记录。");

@@ -60,6 +60,10 @@ struct DepthOverlayAvailability
     QString reason;
 };
 
+std::optional<QJsonObject> resolveDepthOverlayRecord(
+    const QJsonObject &project_metadata,
+    const QString &image_path);
+
 std::optional<DepthOverlayArtifact> resolveDepthOverlayArtifact(
     const QJsonObject &project_metadata,
     const QString &image_path,

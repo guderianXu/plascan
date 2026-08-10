@@ -40,16 +40,26 @@ DepthOverlayController::DepthOverlayController(QObject *parent)
 {
 }
 
-void DepthOverlayController::setProjectMetadata(const QJsonObject &metadata)
+bool DepthOverlayController::setProjectMetadata(
+    const QJsonObject &metadata,
+    const QString &observed_image_path)
 {
     if (_metadata == metadata)
     {
-        return;
+        return false;
     }
+
+    const bool observed_record_changed = observed_image_path.trimmed().isEmpty()
+        || views::resolveDepthOverlayRecord(_metadata, observed_image_path)
+            != views::resolveDepthOverlayRecord(metadata, observed_image_path);
     _metadata = metadata;
-    cancelPending();
-    _cache.clear();
-    _cacheBytes = 0;
+    if (observed_record_changed)
+    {
+        cancelPending();
+        _cache.clear();
+        _cacheBytes = 0;
+    }
+    return observed_record_changed;
 }
 
 void DepthOverlayController::setProjectPath(const QString &project_path)
