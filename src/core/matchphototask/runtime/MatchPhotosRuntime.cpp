@@ -4,6 +4,7 @@
 #include "tensorrt/TensorRtEngineBuilder.h"
 
 #include "model/ModelAssetCatalog.h"
+#include "model/ModelFileResolver.h"
 #include "project/ProjectIO.h"
 #include "project/ProjectMetadata.h"
 
@@ -15,7 +16,6 @@
 #include <QJsonDocument>
 #include <QRegularExpression>
 #include <QSet>
-#include <QStandardPaths>
 
 #include <algorithm>
 #include <cmath>
@@ -63,96 +63,63 @@ void appendUniqueDirectory(QStringList *directories, const QString &path)
     }
 }
 
-void keepEnvironmentModelDirectories(QStringList *directories)
+QStringList tensorRtModelDirectories(const QString &package_directory)
 {
-    const QString configured = qEnvironmentVariable("PLASCAN_MODEL_DIR").trimmed();
-    if (!directories || configured.isEmpty())
+    QStringList directories;
+    const common::model::ModelFileResolver resolver;
+    const QStringList model_roots = resolver.searchDirectories();
+    for (const QString &root : model_roots)
     {
-        return;
+        appendUniqueDirectory(&directories, root);
+        appendUniqueDirectory(&directories, QDir(root).filePath(package_directory));
     }
-    const QString root = cleanPath(QFileInfo(configured).absoluteFilePath());
-    directories->erase(
-        std::remove_if(directories->begin(), directories->end(), [&](const QString &path)
+
+#ifdef PLASCAN_SOURCE_DIR
+    const QDir source_directory(QStringLiteral(PLASCAN_SOURCE_DIR));
+    const QString source_models = cleanPath(
+        QFileInfo(source_directory.filePath(QStringLiteral("resources/models")))
+            .absoluteFilePath());
+    bool source_tree_runtime = false;
+    for (const QString &root : model_roots)
+    {
+        if (cleanPath(QFileInfo(root).absoluteFilePath())
+                .compare(source_models, Qt::CaseInsensitive) == 0)
         {
-            const QString candidate = cleanPath(QFileInfo(path).absoluteFilePath());
-            return candidate.compare(root, Qt::CaseInsensitive) != 0 &&
-                !candidate.startsWith(root + QLatin1Char('/'), Qt::CaseInsensitive);
-        }),
-        directories->end());
+            source_tree_runtime = true;
+            break;
+        }
+    }
+    if (source_tree_runtime)
+    {
+        appendUniqueDirectory(
+            &directories,
+            source_directory.filePath(
+                QStringLiteral("build/model_cache/%1").arg(package_directory)));
+    }
+#endif
+
+    const QDir executable_dir(QCoreApplication::applicationDirPath());
+    appendUniqueDirectory(
+        &directories,
+        executable_dir.filePath(QStringLiteral("../model_cache/%1").arg(package_directory)));
+    appendUniqueDirectory(
+        &directories,
+        executable_dir.filePath(QStringLiteral("../../model_cache/%1").arg(package_directory)));
+    appendUniqueDirectory(&directories, QStringLiteral("models"));
+    appendUniqueDirectory(
+        &directories,
+        QDir(QStringLiteral("models")).filePath(package_directory));
+    return directories;
 }
 
 QStringList lightGlueTensorRtModelDirectories()
 {
-    QStringList directories;
-    const QString environmentDirectory = qEnvironmentVariable("PLASCAN_MODEL_DIR").trimmed();
-    if (!environmentDirectory.isEmpty())
-    {
-        appendUniqueDirectory(&directories, environmentDirectory);
-    }
-
-    const QString applicationModels = QDir(
-        QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation))
-        .filePath(QStringLiteral("models"));
-    appendUniqueDirectory(&directories, applicationModels);
-
-#ifdef PLASCAN_SOURCE_DIR
-    const QDir sourceDirectory(QStringLiteral(PLASCAN_SOURCE_DIR));
-    appendUniqueDirectory(
-        &directories,
-        sourceDirectory.filePath(QStringLiteral("build/model_cache/lightglue_tensorrt")));
-    appendUniqueDirectory(
-        &directories,
-        sourceDirectory.filePath(QStringLiteral("resources/models")));
-#endif
-
-    const QString executableDirectory = QCoreApplication::applicationDirPath();
-    const QDir executableDir(executableDirectory);
-    appendUniqueDirectory(&directories, executableDir.filePath(QStringLiteral("models")));
-    appendUniqueDirectory(&directories, executableDir.filePath(QStringLiteral("../models")));
-    appendUniqueDirectory(&directories, executableDir.filePath(QStringLiteral("../resources/models")));
-    appendUniqueDirectory(&directories, executableDir.filePath(QStringLiteral("../../resources/models")));
-    appendUniqueDirectory(&directories, executableDir.filePath(QStringLiteral("../model_cache/lightglue_tensorrt")));
-    appendUniqueDirectory(&directories, executableDir.filePath(QStringLiteral("../../model_cache/lightglue_tensorrt")));
-    appendUniqueDirectory(&directories, QStringLiteral("models"));
-
-    // Release 下载器按算法分目录安装。保留上面的历史根目录搜索，同时显式扩展
-    // lightglue_tensorrt 子目录，确保源码运行与安装版使用完全相同的布局。
-    const QStringList modelRoots = directories;
-    for (const QString &root : modelRoots)
-    {
-        appendUniqueDirectory(
-            &directories,
-            QDir(root).filePath(QStringLiteral("lightglue_tensorrt")));
-    }
-    keepEnvironmentModelDirectories(&directories);
-    return directories;
+    return tensorRtModelDirectories(QStringLiteral("lightglue_tensorrt"));
 }
 
 QStringList loMaRTensorRtModelDirectories()
 {
-    QStringList directories = lightGlueTensorRtModelDirectories();
-#ifdef PLASCAN_SOURCE_DIR
-    appendUniqueDirectory(
-        &directories,
-        QDir(QStringLiteral(PLASCAN_SOURCE_DIR))
-            .filePath(QStringLiteral("build/model_cache/loma_r_tensorrt")));
-#endif
-    const QDir executableDir(QCoreApplication::applicationDirPath());
-    appendUniqueDirectory(
-        &directories,
-        executableDir.filePath(QStringLiteral("../model_cache/loma_r_tensorrt")));
-    appendUniqueDirectory(
-        &directories,
-        executableDir.filePath(QStringLiteral("../../model_cache/loma_r_tensorrt")));
-    const QStringList modelRoots = directories;
-    for (const QString &root : modelRoots)
-    {
-        appendUniqueDirectory(
-            &directories,
-            QDir(root).filePath(QStringLiteral("loma_r_tensorrt")));
-    }
-    keepEnvironmentModelDirectories(&directories);
-    return directories;
+    return tensorRtModelDirectories(QStringLiteral("loma_r_tensorrt"));
 }
 
 image_matching::TensorRtEngineBuildResult buildOnnxEngine(
@@ -406,7 +373,9 @@ bool loMaRPackageIsBetter(const ResolvedLoMaRTensorRtPackage &candidate,
     }
     if (candidate.keypointCount == current.keypointCount)
     {
-        return candidate.manifestPath < current.manifestPath;
+        // 搜索目录按“显式环境目录 -> 安装资源 -> 兼容缓存”排列；同一档位
+        // 必须保留先发现的模型，不能再用绝对路径字典序打乱该优先级。
+        return false;
     }
     return candidateWithinBudget
         ? candidate.keypointCount > current.keypointCount
@@ -688,7 +657,7 @@ ResolvedLoMaRTensorRtPackage resolveLoMaRTensorRtPackage(
             }
             visitedManifests.insert(identity);
             ResolvedLoMaRTensorRtPackage resolved = parseLoMaRPackage(
-                candidate, options.cudaDevice, prepareEngines);
+                candidate, options.cudaDevice, false);
             if (!resolved.isValid())
             {
                 if (firstPackageError.isEmpty())
@@ -716,6 +685,13 @@ ResolvedLoMaRTensorRtPackage resolveLoMaRTensorRtPackage(
     }
     if (best.isValid())
     {
+        if (prepareEngines)
+        {
+            ResolvedLoMaRTensorRtPackage prepared = parseLoMaRPackage(
+                best.manifestPath, options.cudaDevice, true);
+            prepared.searchedDirectories = unresolved.searchedDirectories;
+            return prepared;
+        }
         best.searchedDirectories = unresolved.searchedDirectories;
         return best;
     }

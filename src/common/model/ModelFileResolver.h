@@ -37,6 +37,8 @@ public:
 
     QString findModel(const QString &modelName) const;
     QString findFirstModel(const QStringList &modelNames, QString *pickedModelName = nullptr) const;
+    /// 返回按优先级排列的模型根目录，供需要扫描 manifest 的模块复用。
+    QStringList searchDirectories() const;
     QStringList candidatePaths(const QString &modelName) const;
     /// 返回当前运行形态下可写的模型根目录，不会指向受保护的安装目录。
     QString defaultModelDir() const;

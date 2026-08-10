@@ -129,6 +129,7 @@
       "binaryDir": "${sourceDir}/build/windows-vcpkg-cuda-release",
       "cacheVariables": {
         "CPACK_GENERATOR": "INNOSETUP",
+        "PLASCAN_BUNDLE_LOMA_R_MODELS": "ON",
         "PLASCAN_BUNDLE_ONNX_MODELS": "ON",
         "PLASCAN_BUNDLE_RUNTIME": "ON",
         "PLASCAN_CUDA_ARCHITECTURES": "75;86;89;120",

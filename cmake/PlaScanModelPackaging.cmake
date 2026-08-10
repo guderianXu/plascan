@@ -14,7 +14,7 @@ function(plascan_verify_bundled_model)
   if(NOT EXISTS "${MODEL_FILE}" OR IS_DIRECTORY "${MODEL_FILE}")
     message(FATAL_ERROR
       "Bundled ${MODEL_LABEL} model is missing: ${MODEL_FILE}\n"
-      "Download the models-v1.1.0 asset or configure its PLASCAN_*_ONNX_PATH "
+      "Download the models-v1.1.0 asset or configure its PLASCAN_* model input "
       "before running cmake --install or CPack.")
   endif()
 

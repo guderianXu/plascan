@@ -11,6 +11,8 @@ option(PLASCAN_BUNDLE_RUNTIME
 unset(_plascan_bundle_runtime_default)
 option(PLASCAN_BUNDLE_ONNX_MODELS
   "Bundle verified U2Net and portable LightGlue ONNX models into install/package" ON)
+option(PLASCAN_BUNDLE_LOMA_R_MODELS
+  "Bundle verified portable LoMa-R ONNX models and manifests into install/package" OFF)
 option(PLASCAN_VERIFY_LINUX_PACKAGE_RUNTIME
   "Fail Linux install/package staging when the bundled runtime is not relocatable" OFF)
 option(PLASCAN_LINUX_REQUIRE_XCB_PLUGIN
@@ -56,6 +58,14 @@ set(PLASCAN_U2NET_ONNX_PATH
 set(PLASCAN_LIGHTGLUE_ONNX_PATH
   "${CMAKE_SOURCE_DIR}/resources/models/lightglue_tensorrt/lightglue_sift_bucket4096.onnx"
   CACHE FILEPATH "Portable LightGlue ONNX model bundled into PlaScan packages")
+set(PLASCAN_LOMA_R_MODEL_DIR
+  "${CMAKE_SOURCE_DIR}/resources/models/loma_r_tensorrt"
+  CACHE PATH "Directory containing portable LoMa-R ONNX models and manifests")
+
+if(PLASCAN_BUNDLE_LOMA_R_MODELS AND NOT PLASCAN_BUNDLE_ONNX_MODELS)
+  message(FATAL_ERROR
+    "PLASCAN_BUNDLE_LOMA_R_MODELS requires PLASCAN_BUNDLE_ONNX_MODELS=ON")
+endif()
 
 install(TARGETS plascan_gui
   RUNTIME DESTINATION bin
@@ -124,12 +134,43 @@ if(PLASCAN_BUNDLE_ONNX_MODELS)
   file(TO_CMAKE_PATH "${PLASCAN_BUNDLED_U2NET_ONNX}" PLASCAN_BUNDLED_U2NET_ONNX)
   file(TO_CMAKE_PATH "${PLASCAN_BUNDLED_LIGHTGLUE_ONNX}" PLASCAN_BUNDLED_LIGHTGLUE_ONNX)
 
+  if(PLASCAN_BUNDLE_LOMA_R_MODELS)
+    get_filename_component(PLASCAN_BUNDLED_LOMA_R_MODEL_DIR
+      "${PLASCAN_LOMA_R_MODEL_DIR}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
+    file(TO_CMAKE_PATH
+      "${PLASCAN_BUNDLED_LOMA_R_MODEL_DIR}"
+      PLASCAN_BUNDLED_LOMA_R_MODEL_DIR)
+    set(PLASCAN_BUNDLED_LOMA_R_FEATURE_ONNX
+      "${PLASCAN_BUNDLED_LOMA_R_MODEL_DIR}/loma_r_features_k3840_fp16.onnx")
+    set(PLASCAN_BUNDLED_LOMA_R_MATCHER_ONNX
+      "${PLASCAN_BUNDLED_LOMA_R_MODEL_DIR}/loma_r_matcher_dynamic_fp16.onnx")
+    set(PLASCAN_BUNDLED_LOMA_R_MANIFEST_K1024
+      "${PLASCAN_BUNDLED_LOMA_R_MODEL_DIR}/loma_r_k1024_fp16.json")
+    set(PLASCAN_BUNDLED_LOMA_R_MANIFEST_K2048
+      "${PLASCAN_BUNDLED_LOMA_R_MODEL_DIR}/loma_r_k2048_fp16.json")
+    set(PLASCAN_BUNDLED_LOMA_R_MANIFEST_K3840
+      "${PLASCAN_BUNDLED_LOMA_R_MODEL_DIR}/loma_r_k3840_fp16.json")
+  endif()
+
   set(PLASCAN_U2NET_ONNX_SIZE "175997641")
   set(PLASCAN_U2NET_ONNX_SHA256
     "8d10d2f3bb75ae3b6d527c77944fc5e7dcd94b29809d47a739a7a728a912b491")
   set(PLASCAN_LIGHTGLUE_ONNX_SIZE "51072656")
   set(PLASCAN_LIGHTGLUE_ONNX_SHA256
     "773d3de316c37e8d408312d39139352b45e2a93ba055e59cfa2806c5d54ede69")
+  set(PLASCAN_LOMA_R_FEATURE_ONNX_SIZE "1318960639")
+  set(PLASCAN_LOMA_R_FEATURE_ONNX_SHA256
+    "2b2671850f6a79f071a171eb9b523a8807474bcde19b5ded0191b9593ed97e19")
+  set(PLASCAN_LOMA_R_MATCHER_ONNX_SIZE "45501499")
+  set(PLASCAN_LOMA_R_MATCHER_ONNX_SHA256
+    "5c91444393c2245e66553e8f493e5b35dc39e8a099b9988a684391fdcdf90195")
+  set(PLASCAN_LOMA_R_MANIFEST_SIZE "644")
+  set(PLASCAN_LOMA_R_MANIFEST_K1024_SHA256
+    "db3b242ed7cda10e16fd7c304844c1f809a3b37bc40af10a81c7248ca9e51aea")
+  set(PLASCAN_LOMA_R_MANIFEST_K2048_SHA256
+    "68ae6a68bb184375285d486384344b7a6500195d5f372e96c8b429bd8787c91e")
+  set(PLASCAN_LOMA_R_MANIFEST_K3840_SHA256
+    "5d55026fe3e0bc59bb93bc997d928ec46940905e22c7836b831a859e1dae2715")
 
   foreach(_model_prefix IN ITEMS U2NET LIGHTGLUE)
     if(EXISTS "${PLASCAN_BUNDLED_${_model_prefix}_ONNX}")
@@ -143,8 +184,30 @@ if(PLASCAN_BUNDLE_ONNX_MODELS)
     endif()
   endforeach()
 
+  if(PLASCAN_BUNDLE_LOMA_R_MODELS)
+    foreach(_loma_r_asset IN ITEMS
+        PLASCAN_BUNDLED_LOMA_R_FEATURE_ONNX
+        PLASCAN_BUNDLED_LOMA_R_MATCHER_ONNX
+        PLASCAN_BUNDLED_LOMA_R_MANIFEST_K1024
+        PLASCAN_BUNDLED_LOMA_R_MANIFEST_K2048
+        PLASCAN_BUNDLED_LOMA_R_MANIFEST_K3840)
+      if(EXISTS "${${_loma_r_asset}}")
+        message(STATUS "CPack will bundle LoMa-R asset: ${${_loma_r_asset}}")
+      else()
+        message(STATUS
+          "Bundled LoMa-R asset is not present during configure; "
+          "install/CPack will require: ${${_loma_r_asset}}")
+      endif()
+    endforeach()
+  endif()
+
   set(_plascan_verify_models_script
     "${CMAKE_CURRENT_BINARY_DIR}/VerifyBundledModels.cmake")
+  set(PLASCAN_VERIFY_BUNDLE_ONNX_MODELS ON)
+  set(PLASCAN_VERIFY_BUNDLE_LOMA_R_MODELS OFF)
+  if(PLASCAN_BUNDLE_LOMA_R_MODELS)
+    set(PLASCAN_VERIFY_BUNDLE_LOMA_R_MODELS ON)
+  endif()
   configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyBundledModels.cmake.in"
     "${_plascan_verify_models_script}"
@@ -160,13 +223,56 @@ if(PLASCAN_BUNDLE_ONNX_MODELS)
     DESTINATION resources/models/lightglue_tensorrt
     RENAME lightglue_sift_bucket4096.onnx
     COMPONENT Runtime)
-  install(FILES
+  if(PLASCAN_BUNDLE_LOMA_R_MODELS)
+    install(FILES
+      "${PLASCAN_BUNDLED_LOMA_R_FEATURE_ONNX}"
+      "${PLASCAN_BUNDLED_LOMA_R_MATCHER_ONNX}"
+      "${PLASCAN_BUNDLED_LOMA_R_MANIFEST_K1024}"
+      "${PLASCAN_BUNDLED_LOMA_R_MANIFEST_K2048}"
+      "${PLASCAN_BUNDLED_LOMA_R_MANIFEST_K3840}"
+      DESTINATION resources/models/loma_r_tensorrt
+      COMPONENT Runtime)
+  endif()
+
+  set(_plascan_model_notices
     "${CMAKE_SOURCE_DIR}/docs/models/Apache-2.0.txt"
     "${CMAKE_SOURCE_DIR}/docs/models/U2Net_NOTICE.md"
     "${CMAKE_SOURCE_DIR}/docs/models/LightGlue_NOTICE.md"
-    "${CMAKE_SOURCE_DIR}/docs/models/models-v1.1.0.sha256"
+    "${CMAKE_SOURCE_DIR}/docs/models/models-v1.1.0.sha256")
+  if(PLASCAN_BUNDLE_LOMA_R_MODELS)
+    list(APPEND _plascan_model_notices
+      "${CMAKE_SOURCE_DIR}/docs/models/LoMa-R_NOTICE.md")
+  endif()
+  install(FILES ${_plascan_model_notices}
     DESTINATION share/plascan/models
     COMPONENT Runtime)
+  unset(_plascan_model_notices)
+
+  install(CODE [=[
+    set(_plascan_physical_prefix "${CMAKE_INSTALL_PREFIX}")
+    if(DEFINED ENV{DESTDIR} AND NOT "$ENV{DESTDIR}" STREQUAL "")
+      set(_plascan_destdir "$ENV{DESTDIR}")
+      string(REGEX REPLACE "[/\\\\]$" "" _plascan_destdir "${_plascan_destdir}")
+      if(CMAKE_INSTALL_PREFIX MATCHES "^[/\\\\]")
+        set(_plascan_physical_prefix
+          "${_plascan_destdir}${CMAKE_INSTALL_PREFIX}")
+      else()
+        set(_plascan_physical_prefix
+          "${_plascan_destdir}/${CMAKE_INSTALL_PREFIX}")
+      endif()
+    endif()
+    file(GLOB_RECURSE _plascan_bundled_engines
+      LIST_DIRECTORIES FALSE
+      "${_plascan_physical_prefix}/resources/models/*.engine")
+    if(_plascan_bundled_engines)
+      list(JOIN _plascan_bundled_engines ", " _plascan_bundled_engine_text)
+      message(FATAL_ERROR
+        "PlaScan packages must not contain machine-specific TensorRT engines: "
+        "${_plascan_bundled_engine_text}")
+    endif()
+    unset(_plascan_physical_prefix)
+    unset(_plascan_destdir)
+  ]=] COMPONENT Runtime)
 endif()
 
 if(NOT WIN32)

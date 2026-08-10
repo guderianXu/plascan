@@ -271,21 +271,56 @@ TEST(MatchPhotosRuntimeTest, RejectsMissingExplicitTensorRtEngine)
     EXPECT_TRUE(engineName.isEmpty());
 }
 
-TEST(MatchPhotosRuntimeTest, IgnoresLegacyLightGlueEngineDuringAutomaticLookup)
+TEST(MatchPhotosRuntimeTest, PrefersPortableLightGlueOnnxOverLegacyAutomaticEngine)
 {
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
     createEngine(directory.path(), 4096);
+    const QString packageDirectory = QDir(directory.path()).filePath(
+        QStringLiteral("lightglue_tensorrt"));
+    ASSERT_TRUE(QDir().mkpath(packageDirectory));
+    const QString onnxPath = QDir(packageDirectory).filePath(
+        QStringLiteral("lightglue_sift_bucket4096.onnx"));
+    QFile onnx(onnxPath);
+    ASSERT_TRUE(onnx.open(QIODevice::WriteOnly));
+    ASSERT_GT(onnx.write("test-onnx"), 0);
+    onnx.close();
 
     ScopedEnvironment explicitEngine("PLASCAN_LIGHTGLUE_TENSORRT_ENGINE", QByteArray());
     ScopedEnvironment modelDirectory(
         "PLASCAN_MODEL_DIR", QFile::encodeName(directory.path()));
     const xjw::matchphotos::MatchPhotosOptions options;
 
-    const auto resolved = xjw::matchphotos::resolveLightGlueTensorRtEngine(options, 4096);
+    const auto resolved = xjw::matchphotos::resolveLightGlueTensorRtEngine(
+        options, 4096, false);
 
-    EXPECT_FALSE(resolved.isValid());
-    EXPECT_TRUE(resolved.errorMessage.contains(QStringLiteral("ONNX")));
+    ASSERT_TRUE(resolved.isValid()) << qPrintable(resolved.errorMessage);
+    EXPECT_EQ(resolved.path, QDir::cleanPath(QFileInfo(onnxPath).absoluteFilePath()));
+    EXPECT_EQ(resolved.sourceOnnxPath, resolved.path);
+}
+
+TEST(MatchPhotosRuntimeTest, NeverUsesLegacyLightGlueEngineDuringAutomaticLookup)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString legacyEngine = createEngine(directory.path(), 4096);
+
+    ScopedEnvironment explicitEngine("PLASCAN_LIGHTGLUE_TENSORRT_ENGINE", QByteArray());
+    ScopedEnvironment modelDirectory(
+        "PLASCAN_MODEL_DIR", QFile::encodeName(directory.path()));
+    const auto resolved = xjw::matchphotos::resolveLightGlueTensorRtEngine(
+        xjw::matchphotos::MatchPhotosOptions(), 4096, false);
+
+    EXPECT_NE(resolved.path,
+              QDir::cleanPath(QFileInfo(legacyEngine).absoluteFilePath()));
+    if (resolved.isValid())
+    {
+        EXPECT_FALSE(resolved.sourceOnnxPath.isEmpty());
+    }
+    else
+    {
+        EXPECT_TRUE(resolved.errorMessage.contains(QStringLiteral("ONNX")));
+    }
 }
 
 TEST(MatchPhotosRuntimeTest, ResolvesPortableLightGlueOnnxWithoutBuildingEngine)
@@ -357,11 +392,15 @@ TEST(MatchPhotosRuntimeTest, ResolvesLoMaRFromReleasePackageSubdirectory)
               QDir::cleanPath(QFileInfo(manifestPath).absoluteFilePath()));
 }
 
-TEST(MatchPhotosRuntimeTest, IgnoresLegacyLoMaRManifestDuringAutomaticLookup)
+TEST(MatchPhotosRuntimeTest, PrefersPortableLoMaRPackageOverLegacyAutomaticManifest)
 {
     QTemporaryDir directory;
     ASSERT_TRUE(directory.isValid());
     createLoMaRPackage(directory.path(), 2048);
+    const QString packageDirectory = QDir(directory.path()).filePath(
+        QStringLiteral("loma_r_tensorrt"));
+    ASSERT_TRUE(QDir().mkpath(packageDirectory));
+    const QString manifestPath = createPortableLoMaRPackage(packageDirectory, 2048);
 
     ScopedEnvironment explicitPackage("PLASCAN_LOMA_R_TENSORRT_PACKAGE", QByteArray());
     ScopedEnvironment modelDirectory(
@@ -369,6 +408,60 @@ TEST(MatchPhotosRuntimeTest, IgnoresLegacyLoMaRManifestDuringAutomaticLookup)
     const auto resolved = xjw::matchphotos::resolveLoMaRTensorRtPackage(
         xjw::matchphotos::MatchPhotosOptions(), 2048, false);
 
-    EXPECT_FALSE(resolved.isValid());
-    EXPECT_TRUE(resolved.errorMessage.contains(QStringLiteral("旧版")));
+    ASSERT_TRUE(resolved.isValid()) << qPrintable(resolved.errorMessage);
+    EXPECT_EQ(resolved.manifestPath,
+              QDir::cleanPath(QFileInfo(manifestPath).absoluteFilePath()));
+    EXPECT_FALSE(resolved.featureOnnxPath.isEmpty());
+    EXPECT_FALSE(resolved.matcherOnnxPath.isEmpty());
+}
+
+TEST(MatchPhotosRuntimeTest, NeverUsesLegacyLoMaRManifestDuringAutomaticLookup)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString legacyManifest = createLoMaRPackage(directory.path(), 2048);
+
+    ScopedEnvironment explicitPackage("PLASCAN_LOMA_R_TENSORRT_PACKAGE", QByteArray());
+    ScopedEnvironment modelDirectory(
+        "PLASCAN_MODEL_DIR", QFile::encodeName(directory.path()));
+    const auto resolved = xjw::matchphotos::resolveLoMaRTensorRtPackage(
+        xjw::matchphotos::MatchPhotosOptions(), 2048, false);
+
+    EXPECT_NE(resolved.manifestPath,
+              QDir::cleanPath(QFileInfo(legacyManifest).absoluteFilePath()));
+    if (resolved.isValid())
+    {
+        EXPECT_FALSE(resolved.featureOnnxPath.isEmpty());
+        EXPECT_FALSE(resolved.matcherOnnxPath.isEmpty());
+    }
+    else
+    {
+        EXPECT_TRUE(resolved.errorMessage.contains(QStringLiteral("旧版")));
+    }
+}
+
+TEST(MatchPhotosRuntimeTest, PreservesModelDirectoryPriorityForEqualLoMaRBucket)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+
+    const QString preferredOriginal = createPortableLoMaRPackage(directory.path(), 2048);
+    const QString preferredManifest = directory.filePath(
+        QStringLiteral("loma_r_z2048_fp16.json"));
+    ASSERT_TRUE(QFile::rename(preferredOriginal, preferredManifest));
+
+    const QString packageDirectory = QDir(directory.path()).filePath(
+        QStringLiteral("loma_r_tensorrt"));
+    ASSERT_TRUE(QDir().mkpath(packageDirectory));
+    createPortableLoMaRPackage(packageDirectory, 2048);
+
+    ScopedEnvironment explicitPackage("PLASCAN_LOMA_R_TENSORRT_PACKAGE", QByteArray());
+    ScopedEnvironment modelDirectory(
+        "PLASCAN_MODEL_DIR", QFile::encodeName(directory.path()));
+    const auto resolved = xjw::matchphotos::resolveLoMaRTensorRtPackage(
+        xjw::matchphotos::MatchPhotosOptions(), 2048, false);
+
+    ASSERT_TRUE(resolved.isValid()) << qPrintable(resolved.errorMessage);
+    EXPECT_EQ(resolved.manifestPath,
+              QDir::cleanPath(QFileInfo(preferredManifest).absoluteFilePath()));
 }

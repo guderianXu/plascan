@@ -27,32 +27,40 @@ Release 全部资产的离线校验值见 `docs/models/models-v1.1.0.sha256`。
 
 ## CPack 内置模型
 
-`PLASCAN_BUNDLE_ONNX_MODELS` 默认开启，所有 CPack 生成器使用相同的只读安装布局：
+`PLASCAN_BUNDLE_ONNX_MODELS` 默认开启，安装 U2Net 与 LightGlue；Windows CUDA 打包 preset 另外开启
+`PLASCAN_BUNDLE_LOMA_R_MODELS`，把完整的 LoMa-R 便携包一并安装。模型均使用只读安装布局：
 
 ```text
 resources/models/U2Net_v1.onnx
 resources/models/lightglue_tensorrt/lightglue_sift_bucket4096.onnx
-share/plascan/models/{Apache-2.0.txt,U2Net_NOTICE.md,LightGlue_NOTICE.md,models-v1.1.0.sha256}
+resources/models/loma_r_tensorrt/loma_r_features_k3840_fp16.onnx
+resources/models/loma_r_tensorrt/loma_r_matcher_dynamic_fp16.onnx
+resources/models/loma_r_tensorrt/loma_r_k{1024,2048,3840}_fp16.json
+share/plascan/models/{Apache-2.0.txt,U2Net_NOTICE.md,LightGlue_NOTICE.md,LoMa-R_NOTICE.md,models-v1.1.0.sha256}
 ```
 
 默认输入为源码树中的同名文件；模型不进入 Git 历史，发布机构建前需从 `models-v1.1.0` Release 准备。
-也可以设置 `PLASCAN_U2NET_ONNX_PATH`、`PLASCAN_LIGHTGLUE_ONNX_PATH` 使用外部缓存。普通配置和编译
-不强制读取大模型；安装/CPack 阶段会执行完整校验，任一文件缺失、长度不符或 SHA-256 不符都会失败。
-开发用无模型安装树可显式关闭 `PLASCAN_BUNDLE_ONNX_MODELS`，但不能标记为开箱可用发行包。
+也可以设置 `PLASCAN_U2NET_ONNX_PATH`、`PLASCAN_LIGHTGLUE_ONNX_PATH` 或
+`PLASCAN_LOMA_R_MODEL_DIR` 使用外部缓存。普通配置和编译不强制读取大模型；安装/CPack 阶段会执行
+完整校验，任一文件缺失、长度不符或 SHA-256 不符都会失败。LoMa-R 使用显式五文件白名单，任何本机
+`.engine` 都不会进入安装包。开发用无模型安装树可显式关闭对应开关，但不能标记为开箱可用发行包。
 
 干净 clone 可在仓库根目录使用 GitHub CLI 准备默认输入：
 
 ```powershell
-New-Item -ItemType Directory -Force resources\models\lightglue_tensorrt | Out-Null
+New-Item -ItemType Directory -Force `
+  resources\models\lightglue_tensorrt,resources\models\loma_r_tensorrt | Out-Null
 gh release download models-v1.1.0 -R guderianXu/plascan `
   -p U2Net_v1.onnx -D resources/models --clobber
 gh release download models-v1.1.0 -R guderianXu/plascan `
   -p lightglue_sift_bucket4096.onnx -D resources/models/lightglue_tensorrt --clobber
+gh release download models-v1.1.0 -R guderianXu/plascan `
+  -p 'loma_r_*' -D resources/models/loma_r_tensorrt --clobber
 ```
 
-内置 U2Net 可直接由 OpenCV DNN CPU 加载。内置 LightGlue 仍要求 CUDA SIFT、TensorRT ONNX Parser
-和目标 GPU 架构对应的 builder resource；Windows 发布包应捆绑这些运行时，Linux 包则需捆绑或明确
-要求目标机安装兼容版本。安装包只分发便携 ONNX，绝不能包含开发机生成的 `.engine`。
+内置 U2Net 可直接由 OpenCV DNN CPU 加载。内置 LightGlue 与 LoMa-R 仍要求 CUDA、TensorRT ONNX
+Parser 和目标 GPU 架构对应的 builder resource；Windows 发布包应捆绑这些运行时，Linux 包则需捆绑
+或明确要求目标机安装兼容版本。安装包只分发便携 ONNX，绝不能包含开发机生成的 `.engine`。
 
 ## SIFT + LightGlue TensorRT
 
@@ -117,7 +125,8 @@ K3840。GUI 的“工作流程设置 -> 空中三角测量 -> LoMa-R 特征档�
 路径优先级最高。旧版通用文件名仍可被扫描，便于已有本机模型平滑迁移。
 
 LoMa-R 来源为 `davnords/loma`。其主体代码采用 MIT 许可，匹配器继承 LightGlue 的 Apache-2.0 许可；
-权重再分发遵循上游项目条款，PlaScan 仓库不包含这些权重。
+权重再分发遵循上游项目条款。PlaScan Git 仓库不提交这些大文件，发布机构建从独立 Model Release
+下载并校验，归属说明见 [`LoMa-R_NOTICE.md`](LoMa-R_NOTICE.md)。
 
 ## 匹配输出
 

@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+## v1.1.7 - 2026-08-10
+
 ### 新增
 
 - 空三新增参考 MetaShape 公开工作流概念、由 PlaScan 独立实现的自适应相机模型策略：不再硬编码完整
@@ -76,6 +78,9 @@
 
 ### 优化
 
+- Windows CUDA CPack 安装包新增 LoMa-R 两个共享 ONNX 与三个 K 档清单的固定大小/SHA-256 门禁，
+  与 U2Net、LightGlue 一起使用安装根 `resources/models` 的开箱即用布局；匹配模块统一复用公共模型根
+  搜索顺序，安装态不再误命中编译期源码目录，TensorRT engine 只写入用户缓存且禁止进入安装包。
 - Ceres 大规模联合 BA 移除重复问题扫描、逐轨观测深拷贝和 `std::set`，按相机共享投影快照与
   Huber loss，并关闭回调不需要的逐迭代状态复制；新增真实 `sfm_sparse_points.json` + TSAI
   重放基准。Agisoft 100 相机、88,104 tracks、261,589 observations 的 5 次中位 API 墙钟
@@ -85,6 +90,10 @@
 - Windows CUDA 打包新增 `windows-package-smoke` 与 `windows-package-release` 一键工作流：日常改动只
   增量更新可直接运行的未压缩 Runtime 安装树，正式交付时才执行完整 Inno Setup 分卷压缩；两条路径
   均保留 U2Net 与 LightGlue ONNX 的安装阶段哈希门禁。
+- Windows Inno 正式包保留 `lzma2/ultra64` 与 solid compression，同时默认启用 4 个 LZMA2 block
+  threads 和独立压缩进程；大型 ONNX/TensorRT 载荷可并行压缩，线程数可通过
+  `PLASCAN_INNO_LZMA_BLOCK_THREADS` 按发布机内存调整；本机正式流程由 1863.8 秒降至 595.9 秒，
+  约加速 3.13 倍。
 - Linux 打包新增通用与 CUDA 两套增量 rootfs/正式 DEB 工作流，修复 `DESTDIR` staging、vcpkg 动态库
   收集、Qt XCB 插件、GDAL/PROJ 数据和桌面集成；打包阶段强制检查动态库闭包、可迁移 RUNPATH、模型
   哈希与 DEB 内容，通用包可直接运行 U2Net CPU，CUDA 包声明 TensorRT 依赖并支持 LightGlue 匹配。

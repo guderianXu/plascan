@@ -25,9 +25,9 @@
 ```bash
 git switch main
 git pull --ff-only origin main
-git tag -a v1.1.6 -m "PlaScan v1.1.6"
+git tag -a v1.1.7 -m "PlaScan v1.1.7"
 git push origin main
-git push origin v1.1.6
+git push origin v1.1.7
 ```
 
 ## Release 文档
@@ -85,7 +85,9 @@ cmake --workflow --preset windows-package-release
 ```
 
 结果位于 `build/windows-vcpkg-cuda-release/packages/release`。该流程与 smoke 共用同一个增量 CUDA
-构建目录，但会额外执行完整 Inno Setup 压缩及分卷门禁。
+构建目录，但会额外执行完整 Inno Setup 压缩及分卷门禁。Inno 默认使用
+`PLASCAN_INNO_LZMA_BLOCK_THREADS=4` 对 LZMA2 大文件分块并行压缩；发布机内存不足时可降为 `2`，不得
+通过关闭分卷、模型哈希或 `.engine` 禁入门禁换取速度。
 
 ## Linux 一键打包
 
@@ -134,19 +136,21 @@ Linux 发布额外检查：
 ## CPack 模型门禁
 
 对外发布的可掩模、可匹配安装包必须保持 `PLASCAN_BUNDLE_ONNX_MODELS=ON`，并在打包前准备
-`models-v1.1.0` 中的 U2Net 与 LightGlue ONNX。`cmake --install`/CPack 的大小和 SHA-256 校验必须
-通过；模型缺失或校验失败时不得关闭门禁后继续发布。
+`models-v1.1.0` 中的 U2Net 与 LightGlue ONNX。Windows CUDA 安装包还必须保持
+`PLASCAN_BUNDLE_LOMA_R_MODELS=ON`，准备 LoMa-R 两个共享 ONNX 和三个 K 档 manifest。
+`cmake --install`/CPack 的大小和 SHA-256 校验必须通过；模型缺失或校验失败时不得关闭门禁后继续发布。
 
 发布验证至少包括：
 
-- 解包 ZIP/TGZ/DEB；对 INNOSETUP 执行静默安装或检查 CPack staging，确认两份 ONNX 位于约定路径且哈希与
-  `docs/models/models-v1.1.0.sha256` 一致，并包含两份模型 notice 和 `Apache-2.0.txt`；
+- 解包 ZIP/TGZ/DEB；对 INNOSETUP 执行静默安装或检查 CPack staging。Linux 包确认 U2Net/LightGlue
+  两份 ONNX；Windows CUDA 包确认 U2Net、LightGlue 与 LoMa-R 五文件模型包共七项资产位于约定路径，
+  哈希与 `docs/models/models-v1.1.0.sha256` 一致，并包含三份模型 notice 和 `Apache-2.0.txt`；
 - 确认安装包不含任何本机生成的 `.engine`；
 - Windows INNOSETUP 的 `.exe` 与每个 `-N.bin` 分卷都必须小于 2 GiB，并与
   `-INNOSETUP.sha256` 一起显式上传；发布前逐项核对清单，避免漏传分卷，也不要通配整个包目录
   而误传 ZIP 或旧制品；
 - 安装器如需 Authenticode 签名，应在 Inno Setup/ISCC 编译阶段完成；若在 CPack 完成后重新签名
   `.exe`，必须重新生成并复核 `-INNOSETUP.sha256`；
-- 在干净的 CUDA/TensorRT 环境从内置 LightGlue ONNX 完成首次 engine 构建和一对影像匹配，随后验证
-  缓存复用，且安装树没有新增文件；
+- 在干净的 CUDA/TensorRT 环境分别从内置 LightGlue 和 LoMa-R ONNX 完成首次 engine 构建和一对影像
+  匹配，随后验证缓存复用，且所有 engine 只写入用户模型缓存，安装树没有新增文件；
 - 使用内置 U2Net 至少完成一次 CPU 蒙版推理；Windows CUDA 发布包还需执行现有 CUDA 部署测试。

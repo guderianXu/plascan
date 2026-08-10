@@ -173,6 +173,65 @@ TEST(ModelFileResolverTest, UsesUserDataForInstalledBinaryEvenWhenSourceCheckout
     EXPECT_EQ(QDir::cleanPath(location.directory), QDir::cleanPath(user_models));
 }
 
+TEST(ModelFileResolverTest, FindsBundledModelsRelativeToInstalledExecutable)
+{
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    const QString source_root = QDir(temp_dir.path()).filePath(QStringLiteral("source"));
+    const QString install_root = QDir(temp_dir.path()).filePath(QStringLiteral("PlaScan"));
+    const QString application_dir = QDir(install_root).filePath(QStringLiteral("bin"));
+    const QString bundled_models = QDir(install_root).filePath(QStringLiteral("resources/models"));
+    const QString u2net_path = QDir(bundled_models).filePath(QStringLiteral("U2Net_v1.onnx"));
+    const QString loma_manifest = QDir(bundled_models).filePath(
+        QStringLiteral("loma_r_tensorrt/loma_r_k2048_fp16.json"));
+    writeFile(QDir(source_root).filePath(QStringLiteral("CMakeLists.txt")));
+    writeFile(QDir(source_root).filePath(QStringLiteral("resources/models/source-only.onnx")));
+    writeFile(u2net_path);
+    writeFile(loma_manifest);
+
+    xjw::common::model::ModelFileSearchOptions options;
+    options.sourceRoot = source_root;
+    options.applicationDir = application_dir;
+    options.userModelDir = QDir(temp_dir.path()).filePath(QStringLiteral("user_models"));
+    options.environmentVariable = QStringLiteral("PLASCAN_TEST_UNUSED_MODEL_DIR");
+    const xjw::common::model::ModelFileResolver resolver(options);
+
+    EXPECT_EQ(QDir::cleanPath(resolver.findModel(QStringLiteral("U2Net_v1.onnx"))),
+              QDir::cleanPath(u2net_path));
+    EXPECT_EQ(QDir::cleanPath(resolver.findModel(
+                  QStringLiteral("loma_r_tensorrt/loma_r_k2048_fp16.json"))),
+              QDir::cleanPath(loma_manifest));
+    EXPECT_TRUE(resolver.findModel(QStringLiteral("source-only.onnx")).isEmpty());
+    EXPECT_TRUE(resolver.searchDirectories().contains(QDir::cleanPath(bundled_models)));
+}
+
+TEST(ModelFileResolverTest, FallsBackToBundledModelAfterEmptyEnvironmentDirectory)
+{
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    const QString environment_models = QDir(temp_dir.path()).filePath(QStringLiteral("override"));
+    const QString application_dir = QDir(temp_dir.path()).filePath(QStringLiteral("PlaScan/bin"));
+    const QString bundled_model = QDir(temp_dir.path()).filePath(
+        QStringLiteral("PlaScan/resources/models/U2Net_v1.onnx"));
+    ASSERT_TRUE(QDir().mkpath(environment_models));
+    writeFile(bundled_model);
+    ScopedEnvVar env("PLASCAN_MODEL_DIR", environment_models);
+
+    xjw::common::model::ModelFileSearchOptions options;
+    options.sourceRoot = QDir(temp_dir.path()).filePath(QStringLiteral("missing_source"));
+    options.applicationDir = application_dir;
+    options.userModelDir = QDir(temp_dir.path()).filePath(QStringLiteral("user_models"));
+    const xjw::common::model::ModelFileResolver resolver(options);
+    const QStringList directories = resolver.searchDirectories();
+
+    ASSERT_FALSE(directories.isEmpty());
+    EXPECT_EQ(QDir::cleanPath(directories.front()), QDir::cleanPath(environment_models));
+    EXPECT_EQ(QDir::cleanPath(resolver.findModel(QStringLiteral("U2Net_v1.onnx"))),
+              QDir::cleanPath(bundled_model));
+}
+
 TEST(ModelAssetCatalogTest, UsesWritableUserModelRootForInstalledTensorRtCache)
 {
     QTemporaryDir temp_dir;

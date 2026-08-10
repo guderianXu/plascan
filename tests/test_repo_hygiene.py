@@ -276,27 +276,27 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn('"cudnn*.dll"', install_bundle)
         self.assertIn("_plascan_dynamic_runtime_patterns", install_bundle)
 
-    def test_release_1_1_6_metadata_is_synchronized(self):
+    def test_release_1_1_7_metadata_is_synchronized(self):
         root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         core_cmake = (ROOT / "src" / "core" / "CMakeLists.txt").read_text(encoding="utf-8")
         manifest = json.loads((ROOT / "vcpkg.json").read_text(encoding="utf-8"))
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-        release_doc = ROOT / "docs" / "releases" / "v1.1.6.md"
+        release_doc = ROOT / "docs" / "releases" / "v1.1.7.md"
 
-        self.assertIn("project(PlaScan VERSION 1.1.6", root_cmake)
-        self.assertIn("project(PlaScanCore VERSION 1.1.6", core_cmake)
-        self.assertEqual(manifest.get("version-string"), "1.1.6")
-        self.assertIn("## v1.1.6 - 2026-06-21", changelog)
-        self.assertTrue(release_doc.exists(), "v1.1.6 release notes are missing")
+        self.assertIn("project(PlaScan VERSION 1.1.7", root_cmake)
+        self.assertIn("project(PlaScanCore VERSION 1.1.7", core_cmake)
+        self.assertEqual(manifest.get("version-string"), "1.1.7")
+        self.assertIn("## v1.1.7 - 2026-08-10", changelog)
+        self.assertTrue(release_doc.exists(), "v1.1.7 release notes are missing")
 
         release_text = release_doc.read_text(encoding="utf-8")
         for required in [
             "MVS",
             "CUDA",
-            "LiDAR",
-            "test_gui_project_utils",
+            "LoMa-R",
+            "U2Net",
             "GitHub Actions",
-            "v1.1.6",
+            "v1.1.7",
         ]:
             with self.subTest(required=required):
                 self.assertIn(required, release_text)

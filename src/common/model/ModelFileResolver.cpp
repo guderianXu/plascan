@@ -139,6 +139,51 @@ QString ModelFileResolver::findFirstModel(const QStringList &model_names,
     return QString();
 }
 
+QStringList ModelFileResolver::searchDirectories() const
+{
+    QStringList directories;
+    QSet<QString> seen;
+
+    const QString env_name = _options.environmentVariable.trimmed();
+    if (!env_name.isEmpty())
+    {
+        appendUniquePath(&directories,
+                         &seen,
+                         qEnvironmentVariable(env_name.toUtf8().constData()));
+    }
+    if (isSourceTreeRuntime())
+    {
+        appendUniquePath(&directories,
+                         &seen,
+                         QDir(_options.sourceRoot).filePath(QStringLiteral("resources/models")));
+    }
+    appendUniquePath(&directories, &seen, _options.userModelDir);
+    if (!_options.applicationDir.trimmed().isEmpty())
+    {
+        const QDir app_dir(_options.applicationDir);
+        appendUniquePath(&directories,
+                         &seen,
+                         app_dir.filePath(QStringLiteral("resources/models")));
+        appendUniquePath(&directories,
+                         &seen,
+                         app_dir.filePath(QStringLiteral("models")));
+        appendUniquePath(&directories,
+                         &seen,
+                         app_dir.filePath(QStringLiteral("../resources/models")));
+        appendUniquePath(&directories,
+                         &seen,
+                         app_dir.filePath(QStringLiteral("../../resources/models")));
+        appendUniquePath(&directories,
+                         &seen,
+                         app_dir.filePath(QStringLiteral("../models")));
+    }
+    for (const QString &dir : _options.extraSearchDirs)
+    {
+        appendUniquePath(&directories, &seen, dir);
+    }
+    return directories;
+}
+
 QStringList ModelFileResolver::candidatePaths(const QString &model_name) const
 {
     const QString clean_model_name = model_name.trimmed();
@@ -154,28 +199,7 @@ QStringList ModelFileResolver::candidatePaths(const QString &model_name) const
         appendUniquePath(&candidates, &seen, clean_model_name);
     }
 
-    const QString env_name = _options.environmentVariable.trimmed();
-    if (!env_name.isEmpty())
-    {
-        appendModelPath(&candidates, &seen, qEnvironmentVariable(env_name.toUtf8().constData()), clean_model_name);
-    }
-    if (isSourceTreeRuntime())
-    {
-        appendModelPath(&candidates,
-                        &seen,
-                        QDir(_options.sourceRoot).filePath(QStringLiteral("resources/models")),
-                        clean_model_name);
-    }
-    appendModelPath(&candidates, &seen, _options.userModelDir, clean_model_name);
-    if (!_options.applicationDir.trimmed().isEmpty())
-    {
-        const QDir app_dir(_options.applicationDir);
-        appendModelPath(&candidates, &seen, app_dir.filePath(QStringLiteral("resources/models")), clean_model_name);
-        appendModelPath(&candidates, &seen, app_dir.filePath(QStringLiteral("../resources/models")), clean_model_name);
-        appendModelPath(&candidates, &seen, app_dir.filePath(QStringLiteral("../../resources/models")), clean_model_name);
-        appendModelPath(&candidates, &seen, app_dir.filePath(QStringLiteral("../models")), clean_model_name);
-    }
-    for (const QString &dir : _options.extraSearchDirs)
+    for (const QString &dir : searchDirectories())
     {
         appendModelPath(&candidates, &seen, dir, clean_model_name);
     }

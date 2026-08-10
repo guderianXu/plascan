@@ -14260,7 +14260,7 @@ TEST(SelectionPropertiesWidgetTest, ShowsPersistedModelAndWorkflowDetails)
         {QStringLiteral("configured_tsdf_resolution"), 384},
         {QStringLiteral("tsdf_required_bytes"), 213.11 * 1024.0 * 1024.0},
         {QStringLiteral("created_at"), QStringLiteral("2026-07-31T07:54:43Z")},
-        {QStringLiteral("software_version"), QStringLiteral("1.1.6")},
+        {QStringLiteral("software_version"), QStringLiteral("1.1.7")},
         {QStringLiteral("depth_generation_parameters"), depthParameters},
         {QStringLiteral("reconstruction_parameters"), reconstructionParameters}};
     const QJsonObject metadata{
@@ -14295,7 +14295,7 @@ TEST(SelectionPropertiesWidgetTest, ShowsPersistedModelAndWorkflowDetails)
     EXPECT_EQ(valueFor(QStringLiteral("源数据")), QStringLiteral("深度图"));
     EXPECT_EQ(valueFor(QStringLiteral("插值")), QStringLiteral("已禁用"));
     EXPECT_EQ(valueFor(QStringLiteral("严格的体积掩模")), QStringLiteral("否"));
-    EXPECT_EQ(valueFor(QStringLiteral("软件版本")), QStringLiteral("1.1.6"));
+    EXPECT_EQ(valueFor(QStringLiteral("软件版本")), QStringLiteral("1.1.7"));
     EXPECT_EQ(valueFor(QStringLiteral("文件大小")), QStringLiteral("2.0 MB"));
 }
 

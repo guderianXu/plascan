@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.16)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=1")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=1")
 
-project(PlaScan VERSION 1.1.6 LANGUAGES CXX)
+project(PlaScan VERSION 1.1.7 LANGUAGES CXX)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 if(WIN32)
@@ -339,6 +339,13 @@ endif()
 set(CPACK_PACKAGE_FILE_NAME "plascan-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
 set(CPACK_PACKAGE_DIRECTORY "${CMAKE_BINARY_DIR}/packages" CACHE PATH "CPack package output directory")
 if(WIN32)
+  set(PLASCAN_INNO_LZMA_BLOCK_THREADS "4" CACHE STRING
+    "Parallel LZMA2 block threads used by the Inno Setup release package")
+  if(NOT PLASCAN_INNO_LZMA_BLOCK_THREADS MATCHES "^[1-9][0-9]*$" OR
+      PLASCAN_INNO_LZMA_BLOCK_THREADS GREATER 256)
+    message(FATAL_ERROR
+      "PLASCAN_INNO_LZMA_BLOCK_THREADS must be an integer from 1 to 256")
+  endif()
   set(CPACK_SET_DESTDIR OFF)
   # CPack concatenates this value with its staging directory, so the leading
   # slash is required. PlaScanCPackOptions.cmake overrides installer-specific

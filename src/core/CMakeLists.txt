@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(PlaScanCore VERSION 1.1.6 LANGUAGES CXX)
+project(PlaScanCore VERSION 1.1.7 LANGUAGES CXX)
 
 
 function(plascan_core_add_optional_module moduleDir moduleLabel)

@@ -80,7 +80,7 @@ build/linux-vcpkg-package-release/package-smoke/rootfs/opt/plascan/bin/plascan
 
 ```bash
 cmake --workflow --preset linux-package-deb
-sudo apt install ./build/linux-vcpkg-package-release/packages/release/plascan_1.1.6_amd64.deb
+sudo apt install ./build/linux-vcpkg-package-release/packages/release/plascan_1.1.7_amd64.deb
 ```
 
 通用包可在没有 CUDA 的 Ubuntu 24.04 x86_64 电脑直接启动并运行 U2Net CPU 掩模；当前生产影像匹配
@@ -90,7 +90,7 @@ sudo apt install ./build/linux-vcpkg-package-release/packages/release/plascan_1.
 # 构建机需要 CUDA 13.1、cuDNN 9、TensorRT 10.15.1（CUDA 13.1 变体）及 ONNX parser 开发库
 cmake --workflow --preset linux-package-cuda-smoke
 cmake --workflow --preset linux-package-cuda-deb
-sudo apt install ./build/linux-vcpkg-cuda-package-release/packages/release/plascan-cuda_1.1.6_amd64.deb
+sudo apt install ./build/linux-vcpkg-cuda-package-release/packages/release/plascan-cuda_1.1.7_amd64.deb
 ```
 
 CUDA DEB 不捆绑 NVIDIA 驱动和受系统 ABI 约束的 CUDA/TensorRT 库，而是在包元数据中声明 CUDA
@@ -110,14 +110,17 @@ python scripts\env\run_tests.py --preset windows-vcpkg-release
 cpack --preset windows-vcpkg-release
 ```
 
-CPack 默认启用 `PLASCAN_BUNDLE_ONNX_MODELS=ON`，并把以下两份便携模型装入只读安装树：
+CPack 默认启用 `PLASCAN_BUNDLE_ONNX_MODELS=ON`，安装 U2Net 与 LightGlue。Windows CUDA 打包 preset
+还会启用 `PLASCAN_BUNDLE_LOMA_R_MODELS=ON`，把 LoMa-R 完整便携模型包一并装入只读安装树：
 
 - `resources/models/U2Net_v1.onnx`：图像掩模；
 - `resources/models/lightglue_tensorrt/lightglue_sift_bucket4096.onnx`：CUDA SIFT + LightGlue 匹配。
+- `resources/models/loma_r_tensorrt/`：LoMa-R 共享特征/动态匹配 ONNX 和 K1024/K2048/K3840 清单。
 
-模型默认从源码树同名路径读取，也可在配置时通过 `PLASCAN_U2NET_ONNX_PATH` 和
-`PLASCAN_LIGHTGLUE_ONNX_PATH` 指向外部文件。安装/CPack 阶段会校验固定字节数和 SHA-256；缺失、
-损坏或拿错版本都会停止打包，不再生成缺模型的残缺包。只需开发用轻量安装树时可显式设置
+模型默认从源码树同名路径读取，也可在配置时通过 `PLASCAN_U2NET_ONNX_PATH`、
+`PLASCAN_LIGHTGLUE_ONNX_PATH` 和 `PLASCAN_LOMA_R_MODEL_DIR` 指向外部缓存。安装/CPack 阶段会校验
+固定字节数和 SHA-256；缺失、损坏或拿错版本都会停止打包，且任何本机 `.engine` 都禁止进入安装包。
+只需开发用轻量安装树时可显式设置
 `-DPLASCAN_BUNDLE_ONNX_MODELS=OFF`。干净 clone 不包含大模型，打包前按
 [模型文档](docs/models/README.md#cpack-内置模型) 下载 Release 资产到默认路径。
 
@@ -137,8 +140,8 @@ cmake --workflow --preset windows-package-smoke
 ```
 
 该流程只增量构建 `plascan_gui` 及其依赖，并更新未压缩的 Runtime 安装树；不会重复执行数 GiB 的
-Inno Setup 压缩。安装阶段仍会校验 U2Net 与 LightGlue ONNX 的长度和 SHA-256，因此这个目录可以直接
-验证安装后的图像掩模和匹配。依赖被删除或安装布局发生变化时，先删除
+Inno Setup 压缩。安装阶段仍会校验 U2Net、LightGlue 和 LoMa-R 五文件模型包的长度与 SHA-256，
+因此这个目录可以直接验证安装后的图像掩模和两种匹配算法。依赖被删除或安装布局发生变化时，先删除
 `build/windows-vcpkg-cuda-release/package-smoke/PlaScan`，再运行一次 smoke 流程，避免保留旧 DLL。
 升级 vcpkg、CUDA、cuDNN、Qt 或编译工具链后，应先重跑 `build_windows_cuda.ps1`（需要补依赖时加
 `-InstallDeps`），让脚本重新同步运行时，再使用上述代码增量工作流。
@@ -155,6 +158,10 @@ CMake/CPack 3.27+ 并安装 Inno Setup 6，然后运行完整工作流：
 ```powershell
 cmake --workflow --preset windows-package-release
 ```
+
+正式 Inno 包继续使用 `lzma2/ultra64` 与 solid compression，但默认通过
+`PLASCAN_INNO_LZMA_BLOCK_THREADS=4` 并行压缩大文件；内存较小的发布机可降为 `2`，高核心数且内存充足
+时可在配置 preset 中提高。日常开发仍优先使用不压缩的 `windows-package-smoke`。
 
 工作流先增量构建同一个 CUDA Release 目录，再生成带开始菜单、桌面快捷方式、卸载入口和 `.plascan`
 文件关联的安装程序；制品位于 `build/windows-vcpkg-cuda-release/packages/release`。只有准备正式交付时
