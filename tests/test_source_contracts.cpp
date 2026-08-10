@@ -98,6 +98,23 @@ TEST(ProjectCommonModuleContractTest, DeletedGuiProjectIoDirectoryIsNotAnInclude
     EXPECT_FALSE(buildDefinitions.contains(QStringLiteral("src/gui/project/io")));
 }
 
+TEST(GuiStyleContractTest, WorkspaceTreeUsesApplicationColorsInsteadOfSystemPalette)
+{
+    const QString treeSource =
+        readSourceFile(QStringLiteral("src/gui/widgets/DataTreeWidget.cpp"));
+    const QString applicationStyle =
+        readSourceFile(QStringLiteral("resources/styles/app.qss"));
+
+    EXPECT_FALSE(treeSource.contains(QStringLiteral("palette(")));
+    expectContainsAll(applicationStyle, {
+        "QTreeView,",
+        "background: #ffffff;",
+        "QTreeView::item:selected,",
+        "background: #dbeafe;",
+        "color: #102a43;",
+    });
+}
+
 TEST(SfmModuleContractTest, ObsoleteFiltersAndCompatibilityAliasesAreRemoved)
 {
     const QString processorHeader =

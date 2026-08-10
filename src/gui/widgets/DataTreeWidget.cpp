@@ -56,16 +56,11 @@ DataTreeWidget::DataTreeWidget(QWidget *parent)
     _view->setStyleSheet(QStringLiteral(
         "QTreeView {"
         "  border: none;"
-        "  background: palette(base);"
         "  outline: 0;"
         "}"
         "QTreeView::item {"
         "  min-height: 23px;"
         "  padding: 1px 2px;"
-        "}"
-        "QTreeView::item:selected {"
-        "  background: palette(highlight);"
-        "  color: palette(highlighted-text);"
         "}"));
     // 隐藏“路径/存储”两列
     _view->setColumnHidden(1, true);
