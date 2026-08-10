@@ -45,6 +45,11 @@ class HierarchicalBundleAdjuster
                                   int configuredMaximum,
                                   bool concurrentBackendAvailable);
 
+    /// 将不能整除的线程余数分配给批次前部 worker，保证每批消费完整预算。
+    static int resolveWorkerThreadCount(int totalThreadCount,
+                                        int activeWorkerCount,
+                                        int workerIndex);
+
     /// 只允许完整包含于当前活动块的点写回，跨块共享点留给最终全局 BA 统一更新。
     static bool shouldWriteBackPoint(std::size_t blockObservationCount,
                                      std::size_t totalRegisteredObservationCount);

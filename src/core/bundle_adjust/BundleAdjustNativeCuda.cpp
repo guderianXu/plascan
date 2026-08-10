@@ -168,7 +168,11 @@ BAResult optimizePointsWithNativeCuda(const std::vector<Camera> &cameras,
         result.points[static_cast<size_t>(optimizedPoint.originalTrackIndex)] = refined;
     }
     // 阶段 4：应用所有后端共享的质量门，数值完成不等于结果可安全写回。
+    const auto postprocessStart = std::chrono::steady_clock::now();
     finalizeBundleAdjustResult(cameras, tracks, options, &result);
+    result.postprocessSeconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - postprocessStart).count();
+    result.totalSeconds += result.postprocessSeconds;
     return result;
 #endif
 

@@ -511,6 +511,8 @@ BaServiceResult BundleAdjustService::run(
         baResult.ceresRejectedInitialTracks;
     saveObj[QStringLiteral("ba_setup_seconds")] = baResult.setupSeconds;
     saveObj[QStringLiteral("ba_solve_seconds")] = baResult.solveSeconds;
+    saveObj[QStringLiteral("ba_postprocess_seconds")] =
+        baResult.postprocessSeconds;
     saveObj[QStringLiteral("ba_total_seconds")] = baResult.totalSeconds;
     saveObj[QStringLiteral("ba_observation_count")] = baResult.observationCount;
     saveObj[QStringLiteral("ba_native_cuda_initial_cost")] = baResult.nativeCudaInitialCost;
@@ -1151,6 +1153,7 @@ BaServiceResult BundleAdjustService::run(
             ts << "后端总耗时(s): "  << baResult.totalSeconds             << "\n";
             ts << "问题构建耗时(s): " << baResult.setupSeconds             << "\n";
             ts << "求解耗时(s): "    << baResult.solveSeconds             << "\n";
+            ts << "质量检查耗时(s): " << baResult.postprocessSeconds       << "\n";
             if (opts.enablePlanetaryLaserRangeConstraints)
             {
                 ts << "行星激光测距 shot: " << baResult.laserRangeConstraintCount << "\n";

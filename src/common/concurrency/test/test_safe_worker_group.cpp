@@ -9,13 +9,44 @@
 #include <stop_token>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace
 {
 
 using xjw::common::concurrency::SafeWorkerGroup;
 using xjw::common::concurrency::WorkerFailureState;
+using xjw::common::concurrency::parallelForIndices;
 using xjw::common::concurrency::runWorkerGroup;
+
+TEST(SafeWorkerGroupTest, ParallelForIndicesVisitsEveryItemExactlyOnce)
+{
+    std::vector<std::atomic_int> visits(257);
+    parallelForIndices(visits.size(), 8, [&](std::size_t index)
+    {
+        ++visits[index];
+    });
+
+    for (const std::atomic_int &visit : visits)
+    {
+        EXPECT_EQ(visit.load(), 1);
+    }
+}
+
+TEST(SafeWorkerGroupTest, ParallelForIndicesSupportsSerialAndEmptyRanges)
+{
+    int sum = 0;
+    parallelForIndices(6, 1, [&](std::size_t index)
+    {
+        sum += static_cast<int>(index);
+    });
+    parallelForIndices(0, 16, [&](std::size_t)
+    {
+        ADD_FAILURE() << "empty range must not invoke task";
+    });
+
+    EXPECT_EQ(sum, 15);
+}
 
 TEST(SafeWorkerGroupTest, WorkerExceptionIsRethrownAfterEveryWorkerJoins)
 {

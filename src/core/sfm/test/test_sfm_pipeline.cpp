@@ -2035,6 +2035,73 @@ TEST_F(RetriangulationTest, RecomputeReprojErrors)
     EXPECT_NE(pt.error, 999.0) << "Error should have been updated";
 }
 
+TEST_F(RetriangulationTest, ParallelPostProcessingMatchesSerialResults)
+{
+    constexpr int pointCount = 96;
+    addRegisteredImage(0, cam0, pointCount);
+    addRegisteredImage(1, cam1, pointCount);
+    addRegisteredImage(2, cam2, pointCount);
+
+    for (int index = 0; index < pointCount; ++index)
+    {
+        const double trueX = 2.0 + static_cast<double>(index) * 0.08;
+        const double trueY = static_cast<double>(index % 7) * 0.03;
+        const double trueZ = 45.0 + static_cast<double>(index % 5);
+        double u0 = 0.0;
+        double v0 = 0.0;
+        double u1 = 0.0;
+        double v1 = 0.0;
+        double u2 = 0.0;
+        double v2 = 0.0;
+        ASSERT_TRUE(projectPoint(cam0, trueX, trueY, trueZ, u0, v0));
+        ASSERT_TRUE(projectPoint(cam1, trueX, trueY, trueZ, u1, v1));
+        ASSERT_TRUE(projectPoint(cam2, trueX, trueY, trueZ, u2, v2));
+        recon.image(0).keypoints[static_cast<std::size_t>(index)] =
+            {static_cast<float>(u0), static_cast<float>(v0)};
+        recon.image(1).keypoints[static_cast<std::size_t>(index)] =
+            {static_cast<float>(u1), static_cast<float>(v1)};
+        recon.image(2).keypoints[static_cast<std::size_t>(index)] =
+            {static_cast<float>(u2), static_cast<float>(v2)};
+        addPointWithTrack(
+            trueX + 0.4,
+            trueY - 0.2,
+            trueZ + 0.6,
+            {{0, static_cast<FeatureIdx>(index)},
+             {1, static_cast<FeatureIdx>(index)},
+             {2, static_cast<FeatureIdx>(index)}});
+    }
+
+    SfmReconstruction serialReconstruction = recon;
+    SfmReconstruction parallelReconstruction = recon;
+    Triangulator serialTriangulator(serialReconstruction, graph, 1);
+    Triangulator parallelTriangulator(parallelReconstruction, graph, 8);
+
+    const int serialImproved = serialTriangulator.retriangulatePoints(2.0);
+    const int parallelImproved = parallelTriangulator.retriangulatePoints(2.0);
+    EXPECT_EQ(serialImproved, parallelImproved);
+    serialTriangulator.recomputeReprojErrors();
+    parallelTriangulator.recomputeReprojErrors();
+
+    for (Point3DId pointId : serialReconstruction.allPoint3DIds())
+    {
+        ASSERT_TRUE(parallelReconstruction.hasPoint3D(pointId));
+        const ScenePoint3D &serialPoint = serialReconstruction.point3D(pointId);
+        const ScenePoint3D &parallelPoint = parallelReconstruction.point3D(pointId);
+        for (std::size_t coordinate = 0; coordinate < 3; ++coordinate)
+        {
+            EXPECT_NEAR(serialPoint.xyz[coordinate],
+                        parallelPoint.xyz[coordinate],
+                        1.0e-10);
+        }
+        EXPECT_NEAR(serialPoint.error, parallelPoint.error, 1.0e-10);
+    }
+
+    EXPECT_EQ(serialTriangulator.filterPoints(100.0, 0.0),
+              parallelTriangulator.filterPoints(100.0, 0.0));
+    EXPECT_EQ(serialTriangulator.filterShortTracks(2),
+              parallelTriangulator.filterShortTracks(2));
+}
+
 // 5. completeTracks 跳过深度为负的观测
 TEST_F(RetriangulationTest, CompleteTracksSkipsNegativeDepth)
 {

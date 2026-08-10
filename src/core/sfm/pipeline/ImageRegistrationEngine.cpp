@@ -5,6 +5,7 @@
 #include "Intersection.h"
 #include "tracks/CorrespondenceTrackThinner.h"
 #include "tracks/MultiViewTrackBuilder.h"
+#include "concurrency/SafeWorkerGroup.h"
 
 #include "log/Logger.h"
 
@@ -13,10 +14,12 @@
 #include <opencv2/core.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <numeric>
 #include <sstream>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -118,7 +121,9 @@ IncrementalSfmResult IncrementalSfm::runRegistrationFromCurrentInitialization(
 
         // 三角化新注册图像
         std::vector<Point3DId> previousPointIds = _reconstruction->image(nextId).point3DIds;
-        Triangulator triangulator(*_reconstruction, _correspondenceGraph);
+        Triangulator triangulator(*_reconstruction,
+                                  _correspondenceGraph,
+                                  _sfmOptions.baOptions.numThreads);
         triangulator.triangulateImage(nextId, _sfmOptions.triangulatorOptions);
         updateVisibilityCacheForImage(nextId, previousPointIds);
 
@@ -178,7 +183,9 @@ IncrementalSfmResult IncrementalSfm::runRegistrationFromCurrentInitialization(
         retryUnregisteredImagesAfterFinalBA(totalImages);
 
         // 过滤轨迹长度过短的不可靠三维点
-        Triangulator finalTri(*_reconstruction, _correspondenceGraph);
+        Triangulator finalTri(*_reconstruction,
+                              _correspondenceGraph,
+                              _sfmOptions.baOptions.numThreads);
         if (_sfmOptions.filterMinTrackLen > 1)
         {
             int nShort = finalTri.filterShortTracks(_sfmOptions.filterMinTrackLen);
@@ -190,7 +197,9 @@ IncrementalSfmResult IncrementalSfm::runRegistrationFromCurrentInitialization(
     // ---- 步骤 4：用最新相机位姿重算重投影误差（确保统计精确） ----
     if (!_isAborted && _reconstruction->numRegisteredImages() >= 2)
     {
-        Triangulator finalReprojTri(*_reconstruction, _correspondenceGraph);
+        Triangulator finalReprojTri(*_reconstruction,
+                                    _correspondenceGraph,
+                                    _sfmOptions.baOptions.numThreads);
         finalReprojTri.recomputeReprojErrors();
     }
 
@@ -326,7 +335,9 @@ int IncrementalSfm::retryUnregisteredImagesAfterFinalBA(int totalImages)
             }
 
             std::vector<Point3DId> previousPointIds = _reconstruction->image(imageId).point3DIds;
-            Triangulator triangulator(*_reconstruction, _correspondenceGraph);
+            Triangulator triangulator(*_reconstruction,
+                                      _correspondenceGraph,
+                                      _sfmOptions.baOptions.numThreads);
             triangulator.triangulateImage(imageId, _sfmOptions.triangulatorOptions);
             updateVisibilityCacheForImage(imageId, previousPointIds);
             ++registeredThisPass;
@@ -1016,20 +1027,32 @@ bool IncrementalSfm::makeSequenceInitialPoseGuess(ImageId imageId, Camera *guess
 
 void IncrementalSfm::rebuildVisibilityCache()
 {
+    const auto visibilityStarted = std::chrono::steady_clock::now();
     _visibilityCache.clear();
-    auto allIds = _reconstruction->allImageIds();
-
+    const auto allIds = _reconstruction->allImageIds();
+    std::vector<ImageId> pendingIds;
+    pendingIds.reserve(allIds.size());
     for (ImageId id : allIds)
     {
-        if (_reconstruction->isRegistered(id))
+        if (!_reconstruction->isRegistered(id))
         {
-            continue;
+            pendingIds.push_back(id);
         }
+    }
 
+    const int minTrackLengthForPnp = effectivePnpMinTrackLength(
+        _sfmOptions, _reconstruction->numRegisteredImages());
+    std::vector<std::size_t> visibleCounts(pendingIds.size(), 0);
+    const int threadCount = _sfmOptions.baOptions.numThreads > 0
+        ? _sfmOptions.baOptions.numThreads
+        : static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+
+    common::concurrency::parallelForIndices(
+        pendingIds.size(), static_cast<std::size_t>(threadCount), [&](std::size_t pendingIndex)
+        {
+        const ImageId id = pendingIds[pendingIndex];
         size_t numVisible = 0;
-        auto neighbors = _correspondenceGraph.connectedImages(id);
-        const int minTrackLengthForPnp =
-            effectivePnpMinTrackLength(_sfmOptions, _reconstruction->numRegisteredImages());
+        const auto neighbors = _correspondenceGraph.connectedImages(id);
         for (ImageId nid : neighbors)
         {
             if (!_reconstruction->isRegistered(nid))
@@ -1050,9 +1073,27 @@ void IncrementalSfm::rebuildVisibilityCache()
             }
         }
 
-        _visibilityCache[id] = numVisible;
+        visibleCounts[pendingIndex] = numVisible;
+        });
+
+    for (std::size_t pendingIndex = 0;
+         pendingIndex < pendingIds.size();
+         ++pendingIndex)
+    {
+        _visibilityCache[pendingIds[pendingIndex]] =
+            visibleCounts[pendingIndex];
     }
     _visibilityCacheDirty = false;
+    if (pendingIds.size() >= 32)
+    {
+        const double elapsedSeconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - visibilityStarted).count();
+        Logger::instance()->infof(
+            "[SFM] visibility_cache rebuilt pending=%zu threads=%d seconds=%.3f",
+            pendingIds.size(),
+            threadCount,
+            elapsedSeconds);
+    }
 }
 
 void IncrementalSfm::invalidateVisibilityCache()

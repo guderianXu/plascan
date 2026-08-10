@@ -34,6 +34,8 @@ Auto 也不会在 `refineCameraPose=true` 时选择它。
 ## 性能策略
 
 - Ceres 重投影、物方约束和相机位姿先验使用 AutoDiff/解析导数，不再在热点路径执行中央数值微分。
+- Ceres 问题装配前的 track 有效性/初始 RMS 检查和求解后的统一质量检查共享 `numThreads`
+  线程预算并行执行；track 相机唯一性检查不再为每条轨迹分配 `std::set`。
 - Ceres CPU 的 Auto 策略按可变相机规模选择 Dense Schur、Sparse Schur 或
   Iterative Schur；point-only 问题使用 Dense QR。
 - Ceres CUDA 在创建求解器前保守估算 dense 工作集，并与当前空闲显存预算比较。
@@ -56,7 +58,7 @@ Auto 也不会在 `refineCameraPose=true` 时选择它。
 - `BASolveStatus`：成功、未收敛、取消、输入无效、配置不支持、后端不可用或数值失败。
 - `solutionUsable`：求解器结果是否允许调用方使用。
 - 请求/实际后端、回退标记与原因。
-- 相机、轨迹、观测规模，RMS，setup/solve/total 耗时。
+- 相机、轨迹、观测规模，RMS，setup/solve/postprocess/total 耗时。
 
 取消、数值失败或不可用结果不会修改调用方传入的相机和三维点。Auto 先运行一个满足能力和规模条件的
 候选后端，只有状态不可用或 RMS、有效轨迹等质量门控失败时才运行回退后端。SfM 协调层另行记录

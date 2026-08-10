@@ -1,6 +1,7 @@
 #include "BundleAdjustQuality.h"
 
 #include "BundleAdjustValidation.h"
+#include "concurrency/SafeWorkerGroup.h"
 
 #include <plamatrix/ops/statistics.h>
 #include <plamatrix/ops/vector.h>
@@ -9,7 +10,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
-#include <set>
+#include <thread>
 #include <utility>
 
 namespace xjw::detail
@@ -354,7 +355,8 @@ double strictTrackRms(const std::vector<Camera> &cameras,
     // 继续平均。否则后端可通过把困难观测推到相机后方来获得虚假的低 RMS。
     double sumSquared = 0.0;
     int residualCount = 0;
-    std::set<int> uniqueCameras;
+    int firstCameraIndex = -1;
+    bool hasSecondDistinctCamera = false;
     for (const BAObservation &observation : track.observations)
     {
         const double weight = sanitizedObservationWeight(observation);
@@ -385,10 +387,17 @@ double strictTrackRms(const std::vector<Camera> &cameras,
         const double dv = pixel[1] - observation.v;
         sumSquared += weight * (du * du + dv * dv);
         residualCount += 2;
-        uniqueCameras.insert(observation.cameraIndex);
+        if (firstCameraIndex < 0)
+        {
+            firstCameraIndex = observation.cameraIndex;
+        }
+        else if (observation.cameraIndex != firstCameraIndex)
+        {
+            hasSecondDistinctCamera = true;
+        }
     }
 
-    if (residualCount < 4 || uniqueCameras.size() < 2)
+    if (residualCount < 4 || !hasSecondDistinctCamera)
     {
         return std::numeric_limits<double>::infinity();
     }
@@ -462,27 +471,42 @@ void finalizeBundleAdjustResult(const std::vector<Camera> &inputCameras,
 
     // 先对所有后端结果使用同一投影实现重算前后 RMS。后端内部 cost 可能包含
     // Huber、控制点或位姿先验，因此不能直接拿求解器 cost 作为像素质量指标。
+    std::vector<double> candidateRmsByTrack(
+        tracks.size(), std::numeric_limits<double>::infinity());
+    const std::size_t qualityWorkerCount = static_cast<std::size_t>(
+        options.numThreads > 0
+            ? options.numThreads
+            : std::max(1u, std::thread::hardware_concurrency()));
+    common::concurrency::parallelForIndices(
+        tracks.size(), qualityWorkerCount, [&](std::size_t index)
+        {
+            BARefinedPoint &point = result->points[index];
+            point.rmsBefore = strictTrackRms(
+                inputCameras, tracks[index], tracks[index].initialPoint);
+            if (!point.valid)
+            {
+                point.rmsAfter = std::numeric_limits<double>::infinity();
+                return;
+            }
+
+            point.rmsAfter = strictTrackRms(
+                refinedCameras, tracks[index], point.point);
+            point.valid =
+                plamatrix::isFinite(plamatrix::Vec3<double>(point.point)) &&
+                std::isfinite(point.rmsAfter);
+            if (point.valid)
+            {
+                candidateRmsByTrack[index] = point.rmsAfter;
+            }
+        });
+
     std::vector<double> candidateRms;
     candidateRms.reserve(tracks.size());
-    for (size_t index = 0; index < tracks.size(); ++index)
+    for (double rms : candidateRmsByTrack)
     {
-        BARefinedPoint &point = result->points[index];
-        point.rmsBefore = strictTrackRms(
-            inputCameras, tracks[index], tracks[index].initialPoint);
-        if (!point.valid)
+        if (std::isfinite(rms))
         {
-            point.rmsAfter = std::numeric_limits<double>::infinity();
-            continue;
-        }
-
-        point.rmsAfter = strictTrackRms(
-            refinedCameras, tracks[index], point.point);
-        point.valid =
-            plamatrix::isFinite(plamatrix::Vec3<double>(point.point)) &&
-            std::isfinite(point.rmsAfter);
-        if (point.valid)
-        {
-            candidateRms.push_back(point.rmsAfter);
+            candidateRms.push_back(rms);
         }
     }
 

@@ -14,6 +14,7 @@
 #include "BundleAdjustProjection.h"
 #include "BundleAdjustQuality.h"
 #include "BundleAdjustValidation.h"
+#include "concurrency/SafeWorkerGroup.h"
 
 #include <plamatrix/ops/statistics.h>
 #include <plamatrix/ops/vector.h>
@@ -723,6 +724,10 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         return result;
     }
 
+    const int ceresThreadCount = options.numThreads > 0
+        ? options.numThreads
+        : static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+
     bool cudaDeviceReady = requestGpu;
     std::uint64_t cudaFreeBytes = 0;
     std::string cudaDeviceMessage;
@@ -745,84 +750,99 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
     std::vector<std::array<double, 3>> laserPointParams(
         result.laserRangeShots.size());
     std::vector<char> activeTrack(tracks.size(), 0);
+    std::vector<int> activeObservationsByTrack(tracks.size(), 0);
+    std::vector<char> rejectedInitialTrack(tracks.size(), 0);
     std::vector<char> cameraHasResidual(cameras.size(), 0);
     std::vector<char> cameraHasLaserResidual(cameras.size(), 0);
     std::vector<xjw::ba::ProjectionCamera> projectionCameras;
     ceres::Problem problem;
     const auto setupStart = std::chrono::steady_clock::now();
 
+    common::concurrency::parallelForIndices(
+        tracks.size(), static_cast<std::size_t>(ceresThreadCount), [&](std::size_t ti)
+        {
+            if (!plamatrix::isFinite(
+                    plamatrix::Vec3<double>(tracks[ti].initialPoint)))
+            {
+                return;
+            }
+
+            int firstCameraIndex = -1;
+            bool hasSecondDistinctCamera = false;
+            int validObservationCount = 0;
+            bool initialPointHasPositiveDepth = true;
+            double initialResidualSquared = 0.0;
+            int initialResidualCount = 0;
+            for (const BAObservation &observation : tracks[ti].observations)
+            {
+                if (!observationIsUsable(observation, cameras.size()))
+                {
+                    continue;
+                }
+
+                ++validObservationCount;
+                if (firstCameraIndex < 0)
+                {
+                    firstCameraIndex = observation.cameraIndex;
+                }
+                else if (observation.cameraIndex != firstCameraIndex)
+                {
+                    hasSecondDistinctCamera = true;
+                }
+
+                const double world[3] = {
+                    tracks[ti].initialPoint[0],
+                    tracks[ti].initialPoint[1],
+                    tracks[ti].initialPoint[2],
+                };
+                double pixel[2] = {0.0, 0.0};
+                if (!cameras[static_cast<size_t>(observation.cameraIndex)]
+                         .projectWorldPoint(world, pixel))
+                {
+                    initialPointHasPositiveDepth = false;
+                    break;
+                }
+                const double du = pixel[0] - observation.u;
+                const double dv = pixel[1] - observation.v;
+                initialResidualSquared +=
+                    sanitizedObservationWeight(observation) *
+                    (du * du + dv * dv);
+                initialResidualCount += 2;
+            }
+            if (validObservationCount < 2 ||
+                !hasSecondDistinctCamera ||
+                !initialPointHasPositiveDepth)
+            {
+                return;
+            }
+            const double initialTrackRms =
+                initialResidualCount > 0
+                    ? std::sqrt(initialResidualSquared /
+                                static_cast<double>(initialResidualCount))
+                    : std::numeric_limits<double>::infinity();
+            if (options.maxCeresInitialTrackRms > 0.0 &&
+                initialTrackRms > options.maxCeresInitialTrackRms)
+            {
+                rejectedInitialTrack[ti] = 1;
+                return;
+            }
+
+            activeTrack[ti] = 1;
+            activeObservationsByTrack[ti] = validObservationCount;
+        });
+
     int activeTrackCount = 0;
     int activeObservationCount = 0;
     int rejectedInitialTrackCount = 0;
-    for (size_t ti = 0; ti < tracks.size(); ++ti)
+    for (std::size_t ti = 0; ti < tracks.size(); ++ti)
     {
-        if (!plamatrix::isFinite(plamatrix::Vec3<double>(tracks[ti].initialPoint)))
+        rejectedInitialTrackCount += rejectedInitialTrack[ti] != 0 ? 1 : 0;
+        if (!activeTrack[ti])
         {
             continue;
         }
-
-        int firstCameraIndex = -1;
-        bool hasSecondDistinctCamera = false;
-        int validObservationCount = 0;
-        bool initialPointHasPositiveDepth = true;
-        double initialResidualSquared = 0.0;
-        int initialResidualCount = 0;
-        for (const BAObservation &observation : tracks[ti].observations)
-        {
-            if (!observationIsUsable(observation, cameras.size()))
-            {
-                continue;
-            }
-
-            ++validObservationCount;
-            if (firstCameraIndex < 0)
-            {
-                firstCameraIndex = observation.cameraIndex;
-            }
-            else if (observation.cameraIndex != firstCameraIndex)
-            {
-                hasSecondDistinctCamera = true;
-            }
-
-            const double world[3] = {
-                tracks[ti].initialPoint[0],
-                tracks[ti].initialPoint[1],
-                tracks[ti].initialPoint[2],
-            };
-            double pixel[2] = {0.0, 0.0};
-            if (!cameras[static_cast<size_t>(observation.cameraIndex)]
-                     .projectWorldPoint(world, pixel))
-            {
-                initialPointHasPositiveDepth = false;
-                break;
-            }
-            const double du = pixel[0] - observation.u;
-            const double dv = pixel[1] - observation.v;
-            initialResidualSquared +=
-                sanitizedObservationWeight(observation) * (du * du + dv * dv);
-            initialResidualCount += 2;
-        }
-        if (validObservationCount < 2 ||
-            !hasSecondDistinctCamera ||
-            !initialPointHasPositiveDepth)
-        {
-            continue;
-        }
-        const double initialTrackRms =
-            initialResidualCount > 0
-                ? std::sqrt(initialResidualSquared /
-                            static_cast<double>(initialResidualCount))
-                : std::numeric_limits<double>::infinity();
-        if (options.maxCeresInitialTrackRms > 0.0 &&
-            initialTrackRms > options.maxCeresInitialTrackRms)
-        {
-            ++rejectedInitialTrackCount;
-            continue;
-        }
-
-        activeTrack[ti] = 1;
         ++activeTrackCount;
-        activeObservationCount += validObservationCount;
+        activeObservationCount += activeObservationsByTrack[ti];
         for (const BAObservation &observation : tracks[ti].observations)
         {
             if (observationIsUsable(observation, cameras.size()))
@@ -1706,9 +1726,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         solverOptions.preconditioner_type = ceres::SCHUR_JACOBI;
         break;
     }
-    solverOptions.num_threads = options.numThreads > 0
-                                    ? options.numThreads
-                                    : static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+    solverOptions.num_threads = ceresThreadCount;
     solverOptions.logging_type = ceres::SILENT;
     solverOptions.minimizer_progress_to_stdout = false;
     solverOptions.update_state_every_iteration = false;
@@ -2191,7 +2209,11 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
             static_cast<int>(sharedIntrinsicsParameters.size());
     }
 
+    const auto postprocessStart = std::chrono::steady_clock::now();
     finalizeBundleAdjustResult(cameras, tracks, options, &result);
+    result.postprocessSeconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - postprocessStart).count();
+    result.totalSeconds += result.postprocessSeconds;
     return result;
 #endif
 }

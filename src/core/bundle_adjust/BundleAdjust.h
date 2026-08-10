@@ -563,6 +563,7 @@ struct BAResult
     int ceresRejectedInitialTracks = 0;                 ///< 因初始 RMS gross gate 未进入问题的 track 数
     double setupSeconds = 0.0;                         ///< Ceres 问题构建耗时或 legacy 前处理耗时
     double solveSeconds = 0.0;                         ///< 非线性求解主体耗时
+    double postprocessSeconds = 0.0;                   ///< 统一 RMS、正深度与离群点质量检查耗时
     double totalSeconds = 0.0;                         ///< BA 后端总耗时
     int observationCount = 0;                          ///< 实际进入当前后端的有效观测数
     double nativeCudaInitialCost = 0.0;                ///< native_cuda 优化前加权重投影代价

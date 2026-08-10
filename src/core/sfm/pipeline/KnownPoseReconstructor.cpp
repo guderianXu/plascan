@@ -86,7 +86,9 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
             triangulationPolicy.acceptedWithAdapted);
     }
 
-    Triangulator triangulator(*_reconstruction, _correspondenceGraph);
+    Triangulator triangulator(*_reconstruction,
+                              _correspondenceGraph,
+                              _sfmOptions.baOptions.numThreads);
     int createdPoints = 0;
     int continuedObservations = 0;
     int completedObservations = 0;
@@ -305,7 +307,9 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
         refineKnownCameraPosesWithPnp();
         SfmBundleAdjustCoordinator(*this).run(false);
 
-        Triangulator baTriangulator(*_reconstruction, _correspondenceGraph);
+        Triangulator baTriangulator(*_reconstruction,
+                                    _correspondenceGraph,
+                                    _sfmOptions.baOptions.numThreads);
         baRetriangulated = baTriangulator.retriangulatePoints(triangulationPolicy.triangulatorOptions.maxReprojError);
         baCompletedObservations = baTriangulator.completeTracks(triangulationPolicy.triangulatorOptions);
         baFilteredPoints = baTriangulator.filterPoints(_sfmOptions.filterMaxReprojError,

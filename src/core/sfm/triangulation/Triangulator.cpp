@@ -1,5 +1,6 @@
 #include "Triangulator.h"
 #include "geometry/OpenCvCameraAdapter.h"
+#include "concurrency/SafeWorkerGroup.h"
 
 #include "log/Logger.h"
 
@@ -7,14 +8,23 @@
 #include <opencv2/core.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
+#include <thread>
 
 namespace xjw
 {
 
-Triangulator::Triangulator(SfmReconstruction &reconstruction, const CorrespondenceGraph &graph)
-    : _reconstruction(reconstruction), _correspondenceGraph(graph)
+Triangulator::Triangulator(SfmReconstruction &reconstruction,
+                           const CorrespondenceGraph &graph,
+                           int threadCount)
+    : _reconstruction(reconstruction),
+      _correspondenceGraph(graph),
+      _threadCount(threadCount > 0
+                       ? threadCount
+                       : static_cast<int>(
+                             std::max(1u, std::thread::hardware_concurrency())))
 {
 }
 
@@ -544,27 +554,29 @@ double Triangulator::computeReprojError(const std::array<double, 3> &xyz, ImageI
 
 int Triangulator::filterPoints(double maxReprojError, double minTriAngle)
 {
-    int numFiltered = 0;
     auto allIds = _reconstruction.allPoint3DIds();
+    std::vector<char> shouldFilter(allIds.size(), 0);
 
-    for (Point3DId pid : allIds)
-    {
+    common::concurrency::parallelForIndices(
+        allIds.size(), static_cast<std::size_t>(_threadCount), [&](std::size_t pointIndex)
+        {
+        const Point3DId pid = allIds[pointIndex];
         if (!_reconstruction.hasPoint3D(pid))
         {
-            continue;
+            return;
         }
         const auto &pt = _reconstruction.point3D(pid);
 
-        bool shouldFilter = false;
+        bool filterPoint = false;
 
         // 使用已存储的重投影 RMS 误差（BA 后由 recomputeReprojErrors 更新）
         if (!std::isfinite(pt.error) || pt.error > maxReprojError)
         {
-            shouldFilter = true;
+            filterPoint = true;
         }
 
         // 检查三角化角：遍历所有观测相机对，取最大角
-        if (!shouldFilter && pt.track.length() >= 2)
+        if (!filterPoint && pt.track.length() >= 2)
         {
             double maxAngle = 0.0;
             const auto &elems = pt.track.elements;
@@ -607,13 +619,19 @@ int Triangulator::filterPoints(double maxReprojError, double minTriAngle)
 
             if (maxAngle < minTriAngle)
             {
-                shouldFilter = true;
+                filterPoint = true;
             }
         }
 
-        if (shouldFilter)
+        shouldFilter[pointIndex] = filterPoint ? 1 : 0;
+        });
+
+    int numFiltered = 0;
+    for (std::size_t pointIndex = 0; pointIndex < allIds.size(); ++pointIndex)
+    {
+        if (shouldFilter[pointIndex])
         {
-            _reconstruction.deletePoint3D(pid);
+            _reconstruction.deletePoint3D(allIds[pointIndex]);
             ++numFiltered;
         }
     }
@@ -625,14 +643,16 @@ int Triangulator::filterPoints(double maxReprojError, double minTriAngle)
 
 int Triangulator::filterShortTracks(int minTrackLen)
 {
-    int numFiltered = 0;
     auto allIds = _reconstruction.allPoint3DIds();
+    std::vector<char> shouldFilter(allIds.size(), 0);
 
-    for (Point3DId pid : allIds)
-    {
+    common::concurrency::parallelForIndices(
+        allIds.size(), static_cast<std::size_t>(_threadCount), [&](std::size_t pointIndex)
+        {
+        const Point3DId pid = allIds[pointIndex];
         if (!_reconstruction.hasPoint3D(pid))
         {
-            continue;
+            return;
         }
         const auto &pt = _reconstruction.point3D(pid);
 
@@ -648,7 +668,16 @@ int Triangulator::filterShortTracks(int minTrackLen)
 
         if (validObs < minTrackLen)
         {
-            _reconstruction.deletePoint3D(pid);
+            shouldFilter[pointIndex] = 1;
+        }
+        });
+
+    int numFiltered = 0;
+    for (std::size_t pointIndex = 0; pointIndex < allIds.size(); ++pointIndex)
+    {
+        if (shouldFilter[pointIndex])
+        {
+            _reconstruction.deletePoint3D(allIds[pointIndex]);
             ++numFiltered;
         }
     }
@@ -860,17 +889,26 @@ bool Triangulator::triangulateMultiView(const std::vector<TrackElement> &observa
 
 int Triangulator::retriangulatePoints(double maxReprojError)
 {
-    int improved = 0;
+    const auto started = std::chrono::steady_clock::now();
     auto allIds = _reconstruction.allPoint3DIds();
-
-    for (Point3DId pid : allIds)
+    struct RetriangulationUpdate
     {
+        bool apply = false;
+        std::array<double, 3> xyz{};
+        double error = 0.0;
+    };
+    std::vector<RetriangulationUpdate> updates(allIds.size());
+
+    common::concurrency::parallelForIndices(
+        allIds.size(), static_cast<std::size_t>(_threadCount), [&](std::size_t pointIndex)
+        {
+        const Point3DId pid = allIds[pointIndex];
         if (!_reconstruction.hasPoint3D(pid))
-            continue;
-        auto &pt = _reconstruction.point3D(pid);
+            return;
+        const auto &pt = _reconstruction.point3D(pid);
 
         if (pt.track.length() < 2)
-            continue;
+            return;
 
         // 计算原始平均重投影误差
         double oldAvgErr = 0.0;
@@ -892,7 +930,7 @@ int Triangulator::retriangulatePoints(double maxReprojError)
         // 多视图重三角化
         std::array<double, 3> newXyz;
         if (!triangulateMultiView(pt.track.elements, newXyz))
-            continue;
+            return;
 
         // 检查新坐标在所有观测相机中深度为正
         bool allPositive = true;
@@ -905,7 +943,7 @@ int Triangulator::retriangulatePoints(double maxReprojError)
             }
         }
         if (!allPositive)
-            continue;
+            return;
 
         // 计算新的平均重投影误差
         double newAvgErr = 0.0;
@@ -924,19 +962,37 @@ int Triangulator::retriangulatePoints(double maxReprojError)
 
         // 如果新误差超过阈值，或者比旧误差更差且旧误差本身已经不错，跳过
         if (newAvgErr > maxReprojError && newAvgErr >= oldAvgErr)
-            continue;
+            return;
 
         // 只在新结果更好时更新
         if (newAvgErr < oldAvgErr || oldAvgErr > maxReprojError)
         {
-            pt.xyz = newXyz;
-            pt.error = newAvgErr;
-            ++improved;
+            updates[pointIndex] = {true, newXyz, newAvgErr};
         }
+        });
+
+    int improved = 0;
+    for (std::size_t pointIndex = 0; pointIndex < allIds.size(); ++pointIndex)
+    {
+        if (!updates[pointIndex].apply ||
+            !_reconstruction.hasPoint3D(allIds[pointIndex]))
+        {
+            continue;
+        }
+        auto &point = _reconstruction.point3D(allIds[pointIndex]);
+        point.xyz = updates[pointIndex].xyz;
+        point.error = updates[pointIndex].error;
+        ++improved;
     }
 
-    Logger::instance()->infof("[Triangulator] retriangulatePoints: improved %d / %zu points", improved,
-                              allIds.size());
+    const double elapsedSeconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - started).count();
+    Logger::instance()->infof(
+        "[Triangulator] retriangulatePoints: improved %d / %zu points, threads=%d, seconds=%.3f",
+        improved,
+        allIds.size(),
+        _threadCount,
+        elapsedSeconds);
     return improved;
 }
 
@@ -945,11 +1001,15 @@ int Triangulator::retriangulatePoints(double maxReprojError)
 void Triangulator::recomputeReprojErrors()
 {
     auto allIds = _reconstruction.allPoint3DIds();
-    for (Point3DId pid : allIds)
-    {
+    std::vector<double> errors(allIds.size(), 0.0);
+    std::vector<char> hasPoint(allIds.size(), 0);
+    common::concurrency::parallelForIndices(
+        allIds.size(), static_cast<std::size_t>(_threadCount), [&](std::size_t pointIndex)
+        {
+        const Point3DId pid = allIds[pointIndex];
         if (!_reconstruction.hasPoint3D(pid))
-            continue;
-        auto &pt = _reconstruction.point3D(pid);
+            return;
+        const auto &pt = _reconstruction.point3D(pid);
 
         double sumErr = 0.0;
         int cnt = 0;
@@ -962,7 +1022,18 @@ void Triangulator::recomputeReprojErrors()
                 ++cnt;
             }
         }
-        pt.error = (cnt > 0) ? (sumErr / cnt) : 0.0;
+        errors[pointIndex] = (cnt > 0) ? (sumErr / cnt) : 0.0;
+        hasPoint[pointIndex] = 1;
+        });
+
+    for (std::size_t pointIndex = 0; pointIndex < allIds.size(); ++pointIndex)
+    {
+        if (hasPoint[pointIndex] &&
+            _reconstruction.hasPoint3D(allIds[pointIndex]))
+        {
+            _reconstruction.point3D(allIds[pointIndex]).error =
+                errors[pointIndex];
+        }
     }
 }
 

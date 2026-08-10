@@ -181,3 +181,25 @@ TEST(HierarchicalBundleAdjusterPolicyTest, AllocatesWorkersFromActualThreadBudge
     EXPECT_EQ(xjw::HierarchicalBundleAdjuster::resolveWorkerCount(20, 32, 0, false), 1);
     EXPECT_EQ(xjw::HierarchicalBundleAdjuster::resolveWorkerCount(0, 32, 0, true), 0);
 }
+
+TEST(HierarchicalBundleAdjusterPolicyTest, DistributesEveryThreadAcrossActiveWorkers)
+{
+    int totalAssigned = 0;
+    for (int workerIndex = 0; workerIndex < 7; ++workerIndex)
+    {
+        const int assigned =
+            xjw::HierarchicalBundleAdjuster::resolveWorkerThreadCount(
+                32, 7, workerIndex);
+        EXPECT_GE(assigned, 4);
+        EXPECT_LE(assigned, 5);
+        totalAssigned += assigned;
+    }
+    EXPECT_EQ(totalAssigned, 32);
+
+    EXPECT_EQ(
+        xjw::HierarchicalBundleAdjuster::resolveWorkerThreadCount(32, 3, 0),
+        11);
+    EXPECT_EQ(
+        xjw::HierarchicalBundleAdjuster::resolveWorkerThreadCount(32, 3, 2),
+        10);
+}

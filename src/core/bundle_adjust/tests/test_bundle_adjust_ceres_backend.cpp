@@ -153,6 +153,11 @@ TEST(BundleAdjustCeresBackendTest, CeresCpuBackendOptimizesPointAndReportsBacken
     EXPECT_LT(result.ceresFinalCost, result.ceresInitialCost);
     EXPECT_LT(result.meanRmsAfter, result.meanRmsBefore);
     EXPECT_LT(distance3d(result.points.front().point, truth), distance3d(initial, truth));
+    EXPECT_GE(result.postprocessSeconds, 0.0);
+    EXPECT_NEAR(result.totalSeconds,
+                result.setupSeconds + result.solveSeconds +
+                    result.postprocessSeconds,
+                1.0e-9);
 }
 
 TEST(BundleAdjustCeresBackendTest, StatisticalLaserWeightReducesPointToPlaneDistance)

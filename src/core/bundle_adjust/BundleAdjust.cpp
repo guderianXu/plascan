@@ -1377,7 +1377,10 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
     bool callbackAborted = false;
 
     auto finishResult = [&]() -> BAResult {
+        const auto postprocessStart = std::chrono::steady_clock::now();
         detail::finalizeBundleAdjustResult(cameras, tracks, options, &result);
+        result.postprocessSeconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - postprocessStart).count();
         if (result.solveStatus == BASolveStatus::NotRun)
         {
             if (isCancelled(options) || callbackAborted)
@@ -1406,7 +1409,8 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
         }
         const auto totalEnd = std::chrono::steady_clock::now();
         result.totalSeconds = std::chrono::duration<double>(totalEnd - totalStart).count();
-        result.solveSeconds = result.totalSeconds;
+        result.solveSeconds = std::max(
+            0.0, result.totalSeconds - result.postprocessSeconds);
         updateDerivedResultStats(result);
         return result;
     };
@@ -1989,6 +1993,7 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
             }
             legacy.setupSeconds += candidate.setupSeconds;
             legacy.solveSeconds += candidate.solveSeconds;
+            legacy.postprocessSeconds += candidate.postprocessSeconds;
             legacy.totalSeconds += candidate.totalSeconds;
             legacy.backendFallback = true;
             legacy.qualityGateRejected = true;
@@ -2005,6 +2010,7 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
         {
             candidate.setupSeconds += legacy.setupSeconds;
             candidate.solveSeconds += legacy.solveSeconds;
+            candidate.postprocessSeconds += legacy.postprocessSeconds;
             candidate.totalSeconds += legacy.totalSeconds;
         }
         if (!candidate.backendMessage.empty())
@@ -2149,6 +2155,7 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
             BAResult fallback = runLegacy(message);
             fallback.setupSeconds += result.setupSeconds;
             fallback.solveSeconds += result.solveSeconds;
+            fallback.postprocessSeconds += result.postprocessSeconds;
             fallback.totalSeconds += result.totalSeconds;
             return fallback;
         }
@@ -2194,6 +2201,7 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
                 BAResult fallback = runLegacy(message);
                 fallback.setupSeconds += result.setupSeconds;
                 fallback.solveSeconds += result.solveSeconds;
+                fallback.postprocessSeconds += result.postprocessSeconds;
                 fallback.totalSeconds += result.totalSeconds;
                 return fallback;
             }
@@ -2246,6 +2254,7 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
                 BAResult fallback = runLegacy(message);
                 fallback.setupSeconds += result.setupSeconds;
                 fallback.solveSeconds += result.solveSeconds;
+                fallback.postprocessSeconds += result.postprocessSeconds;
                 fallback.totalSeconds += result.totalSeconds;
                 return fallback;
             }
@@ -2291,6 +2300,7 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
                 BAResult fallback = runLegacy(message);
                 fallback.setupSeconds += result.setupSeconds;
                 fallback.solveSeconds += result.solveSeconds;
+                fallback.postprocessSeconds += result.postprocessSeconds;
                 fallback.totalSeconds += result.totalSeconds;
                 return fallback;
             }

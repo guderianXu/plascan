@@ -561,7 +561,9 @@ bool IncrementalSfm::initializeFromPair(ImageId id1, ImageId id2)
                       validCount, invalidCount, angleFailCount, reprojFailCount);
     }
 
-    Triangulator triangulator(*_reconstruction, _correspondenceGraph);
+    Triangulator triangulator(*_reconstruction,
+                              _correspondenceGraph,
+                              _sfmOptions.baOptions.numThreads);
     auto triStats = triangulator.triangulateImage(id1, _sfmOptions.triangulatorOptions);
     triangulator.triangulateImage(id2, _sfmOptions.triangulatorOptions);
 

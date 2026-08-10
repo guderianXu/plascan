@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <exception>
@@ -310,6 +311,52 @@ void runWorkerGroup(std::size_t worker_count,
         }
     }
     group.waitAndRethrow();
+}
+
+/**
+ * @brief 使用动态任务分配并行遍历 `[0, item_count)`。
+ *
+ * 每个索引只会执行一次。调用方应让不同索引写入互不重叠的结果槽位，并在
+ * 本函数返回后统一提交对共享容器的结构性修改。
+ */
+template <typename Fn>
+void parallelForIndices(std::size_t item_count,
+                        std::size_t maximum_worker_count,
+                        Fn &&task)
+{
+    if (item_count == 0)
+    {
+        return;
+    }
+
+    const std::size_t worker_count = std::min(
+        item_count,
+        std::max<std::size_t>(1, maximum_worker_count));
+    if (worker_count == 1)
+    {
+        for (std::size_t index = 0; index < item_count; ++index)
+        {
+            std::invoke(task, index);
+        }
+        return;
+    }
+
+    std::atomic<std::size_t> next_index{0};
+    runWorkerGroup(
+        worker_count,
+        [&](std::stop_token stop_token)
+        {
+            while (!stop_token.stop_requested())
+            {
+                const std::size_t index = next_index.fetch_add(
+                    1, std::memory_order_relaxed);
+                if (index >= item_count)
+                {
+                    break;
+                }
+                std::invoke(task, index);
+            }
+        });
 }
 
 } // namespace xjw::common::concurrency

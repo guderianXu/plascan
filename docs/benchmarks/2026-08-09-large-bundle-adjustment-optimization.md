@@ -116,6 +116,18 @@ build/windows-vcpkg-cuda-release/bin/ba_backend_benchmark.exe `
 强制 Sparse 使用 `--max-dense-schur-cameras 1 --max-sparse-schur-cameras 2000`；强制 Iterative
 再把 `--max-sparse-schur-cameras` 设为 1。
 
+### 2026-08-10 线程利用率复核
+
+在 20 逻辑线程 Windows CUDA Release 构建上，对新增的 track 初筛、统一质量检查并行路径做合成规模复核。
+222 相机、89,000 tracks、534,000 observations 的 4 轮 Ceres CPU Sparse Schur 墙钟为 2.159 秒；
+444 相机、170,000 tracks、1,020,000 observations 为 4.260 秒。后者相对同机修改前的 4.869 秒缩短
+约 12.5%，RMS 保持 `6.501487469 -> 0.04212604832 px`。
+
+同一 444 相机输入强制 Iterative Schur 为 5.608 秒，强制 Dense Schur（8 轮上限，实际 7 轮收敛）为
+6.389 秒，均慢于 Sparse Schur 的 4.862 秒。因此没有为了提高任务管理器中的 CPU 百分比而替换最终全局
+BA 求解器。低利用率的剩余主因是 SuiteSparse Cholesky 的有限并行度；生产优化集中在求解前后独立轨迹、
+点处理和分层 BA 块间并发。该合成对照只验证规模与数值一致性，不替代真实航测数据基准。
+
 ## 正式空三调用链复核
 
 复用 1,035 个匹配对和几何验证缓存，完整重建阶段两次都注册 100/100 相机并生成 88,104 个点：

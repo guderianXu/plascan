@@ -309,6 +309,7 @@ void runCase(const std::string &name,
                   << ",native_release_seconds=" << result.nativeCudaReleaseSeconds
                   << ",setup_seconds=" << result.setupSeconds
                   << ",solve_seconds=" << result.solveSeconds
+                  << ",postprocess_seconds=" << result.postprocessSeconds
                   << ",total_seconds=" << result.totalSeconds
                   << ",api_wall_seconds=" << apiWallSeconds
                   << ",seconds=" << apiWallSeconds
@@ -334,7 +335,8 @@ void printUsage(const char *program)
 {
     std::cout << "用法:\n"
               << "  " << program
-              << " [camera_count track_count views_per_track iterations threads refine_pose backends]\n"
+              << " [camera_count track_count views_per_track iterations threads refine_pose backends"
+                 " max_dense_schur_cameras max_sparse_schur_cameras]\n"
               << "  " << program << " --dataset-json PATH --camera-list PATH [选项]\n\n"
               << "真实数据选项:\n"
               << "  --backend NAME[,NAME...]              默认 ceres_cpu\n"
@@ -483,6 +485,12 @@ int main(int argc, char **argv)
         settings.threads = argc > 5 ? std::max(1, std::atoi(argv[5])) : 32;
         settings.refinePose = argc > 6 ? std::atoi(argv[6]) != 0 : false;
         const std::string backends = argc > 7 ? argv[7] : "legacy_cpu,ceres_cpu,ceres_cuda,native_cuda,auto";
+        settings.maxDenseSchurCameras = argc > 8
+            ? std::max(0, std::atoi(argv[8]))
+            : settings.maxDenseSchurCameras;
+        settings.maxSparseSchurCameras = argc > 9
+            ? std::max(0, std::atoi(argv[9]))
+            : settings.maxSparseSchurCameras;
 
         const auto started = std::chrono::steady_clock::now();
         xjw::ba_benchmark::BenchmarkDataset dataset;
@@ -502,6 +510,8 @@ int main(int argc, char **argv)
                   << ",threads=" << settings.threads
                   << ",refine_pose=" << (settings.refinePose ? "true" : "false")
                   << ",camera_model=" << settings.cameraModel
+                  << ",max_dense_schur_cameras=" << settings.maxDenseSchurCameras
+                  << ",max_sparse_schur_cameras=" << settings.maxSparseSchurCameras
                   << ",load_seconds=" << settings.loadSeconds << "\n";
         runRequestedBackends(backends, dataset, settings);
         return 0;

@@ -613,7 +613,9 @@ bool SfmBundleAdjustCoordinator::consolidateInputTracksForFinalBa()
     options.completeMaxReprojError = std::max(
         options.completeMaxReprojError,
         std::max(12.0, _owner._sfmOptions.filterMaxReprojError * 6.0));
-    Triangulator triangulator(*_owner._reconstruction, _owner._correspondenceGraph);
+    Triangulator triangulator(*_owner._reconstruction,
+                              _owner._correspondenceGraph,
+                              _owner._sfmOptions.baOptions.numThreads);
     const TriangulationStats triangulation =
         triangulator.triangulateTracks(registeredTracks, options);
     const std::array<std::size_t, 3> newNetwork = measureNetwork(*_owner._reconstruction);
@@ -1639,7 +1641,8 @@ void IncrementalSfm::runBundleAdjust(
     }
     Logger::instance()->infof(
         "[BA] result scope=%s cameras=%zu tracks=%zu observations=%d requested=%s used=%s "
-        "status=%s usable=%s applied=%s fallback=%s rms=%.6f->%.6f totalSeconds=%.3f message=%s",
+        "status=%s usable=%s applied=%s fallback=%s rms=%.6f->%.6f "
+        "seconds(setup=%.3f solve=%.3f post=%.3f total=%.3f) message=%s",
         scopeName,
         baCameras.size(),
         baTracks.size(),
@@ -1652,6 +1655,9 @@ void IncrementalSfm::runBundleAdjust(
         baResult.backendFallback ? "true" : "false",
         baResult.meanRmsBefore,
         baResult.meanRmsAfter,
+        baResult.setupSeconds,
+        baResult.solveSeconds,
+        baResult.postprocessSeconds,
         baResult.totalSeconds,
         baResult.backendMessage.c_str());
     if (baOpt.refineSharedFocalLength ||
@@ -2021,7 +2027,9 @@ void IncrementalSfm::iterativeGlobalBA(bool finalRefinement)
             : HierarchicalBaRunSummary{};
     if (hierarchical_summary.applied())
     {
-        Triangulator hierarchical_tri(*_reconstruction, _correspondenceGraph);
+        Triangulator hierarchical_tri(*_reconstruction,
+                                      _correspondenceGraph,
+                                      _sfmOptions.baOptions.numThreads);
         const int retriangulated = hierarchical_tri.retriangulatePoints(
             _sfmOptions.filterMaxReprojError);
         hierarchical_tri.filterPoints(
@@ -2124,7 +2132,9 @@ void IncrementalSfm::iterativeGlobalBA(bool finalRefinement)
         }
 
         // (3) 利用 BA 后更新的相机位姿重三角化所有 3D 点（参考 COLMAP Retriangulate）
-        Triangulator tri(*_reconstruction, _correspondenceGraph);
+        Triangulator tri(*_reconstruction,
+                         _correspondenceGraph,
+                         _sfmOptions.baOptions.numThreads);
         int nRetri = tri.retriangulatePoints(_sfmOptions.filterMaxReprojError);
         if (nRetri > 0)
         {

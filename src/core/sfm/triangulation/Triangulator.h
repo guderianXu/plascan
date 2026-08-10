@@ -86,7 +86,9 @@ class Triangulator
      * @param reconstruction  重建容器引用
      * @param graph           对应关系图引用
      */
-    Triangulator(SfmReconstruction &reconstruction, const CorrespondenceGraph &graph);
+    Triangulator(SfmReconstruction &reconstruction,
+                 const CorrespondenceGraph &graph,
+                 int threadCount = 1);
 
     /**
      * @brief 对新注册的图像执行三角化。
@@ -173,6 +175,7 @@ class Triangulator
   private:
     SfmReconstruction &_reconstruction;
     const CorrespondenceGraph &_correspondenceGraph;
+    int _threadCount = 1;
 
     /**
      * @brief 尝试对两个特征执行双目三角化。

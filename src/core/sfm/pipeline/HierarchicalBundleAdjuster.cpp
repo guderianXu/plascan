@@ -128,6 +128,20 @@ int HierarchicalBundleAdjuster::resolveWorkerCount(int blockCount,
     return std::max(1, std::min({blockCount, total_threads, configured_limit}));
 }
 
+int HierarchicalBundleAdjuster::resolveWorkerThreadCount(int totalThreadCount,
+                                                         int activeWorkerCount,
+                                                         int workerIndex)
+{
+    const int total_threads = std::max(1, totalThreadCount);
+    const int active_workers = std::clamp(
+        activeWorkerCount, 1, total_threads);
+    const int normalized_index = std::clamp(
+        workerIndex, 0, active_workers - 1);
+    const int base_threads = total_threads / active_workers;
+    const int extra_threads = total_threads % active_workers;
+    return base_threads + (normalized_index < extra_threads ? 1 : 0);
+}
+
 bool HierarchicalBundleAdjuster::shouldWriteBackPoint(
     std::size_t blockObservationCount,
     std::size_t totalRegisteredObservationCount)
@@ -216,7 +230,10 @@ HierarchicalBaRunSummary HierarchicalBundleAdjuster::run()
         total_threads,
         _owner._sfmOptions.hierarchicalBAMaxConcurrentBlocks,
         ceres_available);
-    const int threads_per_block = std::max(1, total_threads / worker_count);
+    const int minimum_threads_per_block = resolveWorkerThreadCount(
+        total_threads, worker_count, worker_count - 1);
+    const int maximum_threads_per_block = resolveWorkerThreadCount(
+        total_threads, worker_count, 0);
 
     BAOptions block_options = _owner._sfmOptions.baOptions;
     block_options.maxIterations = std::clamp(
@@ -225,13 +242,14 @@ HierarchicalBaRunSummary HierarchicalBundleAdjuster::run()
         std::max(1, _owner._sfmOptions.baOptions.maxIterations));
     Logger::instance()->infof(
         "[BA] hierarchical start cameras=%d blocks=%zu targetCore=%zu overlap=%zu "
-        "workers=%d threadsPerBlock=%d backend=%s iterations=%d",
+        "workers=%d threadsPerBlock=%d-%d backend=%s iterations=%d",
         registered_count,
         blocks.size(),
         partition_options.targetCoreSize,
         partition_options.overlapSize,
         worker_count,
-        threads_per_block,
+        minimum_threads_per_block,
+        maximum_threads_per_block,
         ceres_available ? "ceres_cpu" : BundleAdjust::backendName(block_options.backend),
         block_options.maxIterations);
 
@@ -278,19 +296,23 @@ HierarchicalBaRunSummary HierarchicalBundleAdjuster::run()
     for (std::size_t first = 0; first < blocks.size(); first += worker_count)
     {
         const std::size_t end = std::min(blocks.size(), first + static_cast<std::size_t>(worker_count));
+        const int active_worker_count = static_cast<int>(end - first);
         std::vector<std::future<BlockOutcome>> futures;
         futures.reserve(end - first);
         for (std::size_t block_index = first; block_index < end; ++block_index)
         {
+            const int worker_index = static_cast<int>(block_index - first);
+            const int block_thread_count = resolveWorkerThreadCount(
+                total_threads, active_worker_count, worker_index);
             futures.push_back(std::async(
                 std::launch::async,
-                [&, block_index]()
+                [&, block_index, block_thread_count]()
                 {
                     return solveBlock(block_index,
                                       blocks[block_index],
                                       *_owner._reconstruction,
                                       block_options,
-                                      threads_per_block,
+                                      block_thread_count,
                                       ceres_available);
                 }));
         }
