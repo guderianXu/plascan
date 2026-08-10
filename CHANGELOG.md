@@ -627,6 +627,22 @@
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CanvasWidgetResponsivenessTest.LayerRendererDelegatesStitchedPairDebugOutput|test_layer_renderer_batched_overlay" --output-on-failure` 通过，2/2。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "FeatureNamingCleanupTest.ProjectManagerDoesNotIncludeLegacyTorchAlgorithmHeaders" --output-on-failure` 通过，1/1；`plascan_gui` 重新编译 `ProjectManager.cpp` 时未再输出 LibTorch C4267 warning。
 
+- `ctest --test-dir build/windows-vcpkg-cuda-release -C Release --output-on-failure` 通过，2227 个可运行测试
+  全部成功；1 个 CUDA benchmark 保持 disabled，10 个外部数据/交互测试按设计 skip。
+- `cmake --workflow --preset windows-package-smoke` 与 `cmake --workflow --preset windows-package-release`
+  均通过；正式包只含预期 7 项 ONNX/manifest 且不含 `.engine`，4 个 LZMA2 block threads 将流程耗时
+  从 1863.8 秒降至 595.9 秒。
+- 安装态 `feature_match_cli-validation.exe` 在无显式权重路径下完成 LoMa-R 与 LightGlue 真实匹配；LightGlue
+  首次构建/缓存复用分别为 25.7/0.8 秒，安装树保持 0 个 `.engine`。U2Net CPU 与 CUDA 清洁部署推理
+  均通过。
+- GitHub Actions `CI / build-test` 的 push 构建与测试通过。
+
+### 已知问题
+
+- LoMa-R 与 LightGlue 会在目标电脑首次使用时为当前 GPU/TensorRT 构建本机 engine；首次运行慢于缓存命中。
+- Windows CUDA 安装包包含多架构 TensorRT 运行库与约 1.59 GB（1.48 GiB）模型，下载体积较大。
+- `PatchMatchCudaBenchmarkTest.CompareParallelAndLegacySweepAfterWarmup` 仍为 disabled benchmark。
+
 ## v1.1.6 - 2026-06-21
 
 ### 新增
