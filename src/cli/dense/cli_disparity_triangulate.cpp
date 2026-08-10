@@ -18,6 +18,7 @@
 #include <QByteArray>
 #include <QFile>
 #include <QIODevice>
+#include <cmath>
 #include <cstdint>
 #include <string>
 
@@ -25,7 +26,7 @@ int main(int argc, char *argv[])
 {
     CLI::App app{"PlaScan 视差三角化工具 — 视差图 → 密集点云 .ply"};
 
-    std::string dispPath, rectPath, camL, camR, outPath, intensityImagePath;
+    std::string dispPath, rectPath, camL, camR, outPath, intensityImagePath, validMaskPath;
     app.add_option("-d,--disparity", dispPath, "视差图路径 (.tif)")->required();
     app.add_option("--rect", rectPath, "校正参数文件 (.xml)")->required();
     app.add_option("--camL", camL,    "左相机文件路径")->required();
@@ -33,6 +34,8 @@ int main(int argc, char *argv[])
     app.add_option("-o,--output", outPath, "输出点云路径 (.ply)")->required();
     app.add_option("--intensity-image", intensityImagePath,
                    "可选：与视差图同尺寸的灰度影像，用于写入 intensity 属性");
+    app.add_option("--valid-mask", validMaskPath,
+                   "可选：与视差图同尺寸的 8 位有效掩码（非零表示有效）");
 
     float maxError = 0.01f;
     int   threads  = 4;
@@ -84,11 +87,33 @@ int main(int argc, char *argv[])
 
     fprintf(stdout, "三角化: %s -> %s\n", dispPath.c_str(), outPath.c_str());
 
-    // 有效掩码: 视差 > 0
-    cv::Mat validMask(disparity.size(), CV_8UC1);
-    for (int y = 0; y < disparity.rows; ++y)
-        for (int x = 0; x < disparity.cols; ++x)
-            validMask.at<uchar>(y, x) = (disparity.at<float>(y, x) > 0) ? 255 : 0;
+    cv::Mat validMask;
+    if (!validMaskPath.empty())
+    {
+        validMask = xjw::common::io::readImage(validMaskPath, cv::IMREAD_GRAYSCALE);
+        if (validMask.empty())
+            cli::fatal("无法加载有效掩码: " + validMaskPath, cli::EXIT_IO_ERR);
+        if (validMask.size() != disparity.size())
+            cli::fatal("有效掩码尺寸与视差图不一致: " + validMaskPath, cli::EXIT_ARG_ERR);
+        cv::Mat binaryValidMask;
+        cv::compare(validMask, 0, binaryValidMask, cv::CMP_NE);
+        validMask = binaryValidMask;
+    }
+    else
+    {
+        // Without an explicit mask, zero remains the legacy invalid sentinel.
+        // Both positive and negative finite disparities are geometrically valid.
+        validMask = cv::Mat(disparity.size(), CV_8UC1, cv::Scalar(0));
+        for (int y = 0; y < disparity.rows; ++y)
+        {
+            for (int x = 0; x < disparity.cols; ++x)
+            {
+                const float value = disparity.at<float>(y, x);
+                validMask.at<uchar>(y, x) =
+                    std::isfinite(value) && value != 0.0f ? 255 : 0;
+            }
+        }
+    }
 
     // 三角化
     xjw::mvs::TriangulationConfig triCfg;
@@ -97,6 +122,10 @@ int main(int argc, char *argv[])
 
     auto result = xjw::mvs::DisparityTriangulator::triangulate(
         disparity, validMask, H1inv, H2inv, camLObj, camRObj, triCfg);
+    if (!result.errorMessage.empty())
+    {
+        cli::fatal("三角化失败: " + result.errorMessage, cli::EXIT_ALGO_ERR);
+    }
 
     if (verbose)
     {

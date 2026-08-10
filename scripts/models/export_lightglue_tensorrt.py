@@ -14,7 +14,7 @@ the mathematically equivalent double-softmax assignment in its own postprocessor
 from __future__ import annotations
 
 import argparse
-import hashlib
+import inspect
 import json
 import os
 import subprocess
@@ -27,13 +27,33 @@ from typing import Any
 import numpy as np
 import torch
 
+from model_provenance import (
+    git_source_revision,
+    installed_tool_versions,
+    invalidate_provenance,
+    provenance_path,
+    require_provenance,
+    sha256_file,
+    source_file_records,
+    validate_provenance,
+    write_json_atomic,
+    write_provenance,
+)
+
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CACHE_DIR = ROOT / "build" / "model_cache" / "lightglue_tensorrt"
 OFFICIAL_WEIGHTS_ID = "sift_lightglue:v0.1_arxiv"
+OFFICIAL_WEIGHTS_RELEASE = "v0.1_arxiv"
+OFFICIAL_WEIGHTS_NAME = "sift_lightglue_v0-1_arxiv.pth"
+OFFICIAL_WEIGHTS_URL = (
+    "https://github.com/cvg/LightGlue/releases/download/"
+    f"{OFFICIAL_WEIGHTS_RELEASE}/sift_lightglue.pth"
+)
+EXPORTER_SCHEMA_VERSION = 1
 
 
-def add_lightglue_to_path() -> None:
+def add_lightglue_to_path() -> Path | None:
     candidates: list[Path] = []
     configured = os.environ.get("LIGHTGLUE_REPO", "").strip()
     if configured:
@@ -49,10 +69,11 @@ def add_lightglue_to_path() -> None:
     for candidate in candidates:
         if (candidate / "lightglue" / "__init__.py").exists():
             sys.path.insert(0, str(candidate))
-            return
+            return candidate.resolve()
+    return None
 
 
-add_lightglue_to_path()
+LIGHTGLUE_SOURCE_ROOT = add_lightglue_to_path()
 from lightglue import LightGlue  # noqa: E402
 
 
@@ -144,12 +165,130 @@ class SiftLightGlueScoreModel(torch.nn.Module):
         return similarity, matchability0, matchability1
 
 
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def exporter_tool_versions() -> dict[str, str]:
+    return installed_tool_versions(
+        {
+            "lightglue": "lightglue",
+            "modelopt": "nvidia-modelopt",
+            "numpy": "numpy",
+            "onnx": "onnx",
+            "onnxscript": "onnxscript",
+            "tensorrt": "tensorrt",
+            "torch": "torch",
+        }
+    )
+
+
+def resolve_weights_source(weights_path: Path | None) -> list[dict[str, Any]]:
+    if weights_path is not None:
+        return source_file_records({weights_path.name: weights_path})
+
+    torch.hub.load_state_dict_from_url(
+        OFFICIAL_WEIGHTS_URL,
+        map_location="cpu",
+        file_name=OFFICIAL_WEIGHTS_NAME,
+    )
+    cached = Path(torch.hub.get_dir()) / "checkpoints" / OFFICIAL_WEIGHTS_NAME
+    if not cached.is_file():
+        raise FileNotFoundError(
+            "Official LightGlue weights were loaded but the cached checkpoint "
+            f"cannot be found: {cached}"
+        )
+    records = source_file_records({OFFICIAL_WEIGHTS_NAME: cached})
+    records[0]["source_id"] = OFFICIAL_WEIGHTS_ID
+    records[0]["source_url"] = OFFICIAL_WEIGHTS_URL
+    return records
+
+
+def lightglue_source_revision() -> dict[str, Any]:
+    implementation_file = inspect.getsourcefile(LightGlue)
+    implementation = (
+        git_source_revision(LIGHTGLUE_SOURCE_ROOT)
+        if LIGHTGLUE_SOURCE_ROOT is not None
+        else {"commit": "installed-package", "dirty": None, "dirty_diff_sha256": None}
+    )
+    if implementation_file is not None and Path(implementation_file).is_file():
+        implementation = {
+            **implementation,
+            "source_file": Path(implementation_file).name,
+            "source_file_sha256": sha256_file(Path(implementation_file)),
+        }
+    return {
+        "model_release": OFFICIAL_WEIGHTS_RELEASE,
+        "implementation": implementation,
+    }
+
+
+def base_onnx_contract(
+    weights: list[dict[str, Any]], bucket_keypoints: int
+) -> dict[str, Any]:
+    dynamic = bucket_keypoints <= 0
+    return {
+        "artifact_kind": "lightglue_sift_base_onnx",
+        "exporter": {
+            "name": Path(__file__).name,
+            "schema_version": EXPORTER_SCHEMA_VERSION,
+            "script_sha256": sha256_file(Path(__file__)),
+        },
+        "source": {
+            "repository": "cvg/LightGlue",
+            "revision": lightglue_source_revision(),
+            "weights": weights,
+        },
+        "model": {
+            "id": "sift_lightglue",
+            "configuration": {
+                "descriptor_dimension": 128,
+                "add_scale_orientation": True,
+                "depth_confidence": -1,
+                "width_confidence": -1,
+                "flash_attention": False,
+            },
+        },
+        "input": {
+            "keypoints": "[1,K,4] float32",
+            "descriptors": "[1,K,128] float32",
+            "image_size": "[1,2] float32",
+            "valid": "[1,K] bool",
+        },
+        "profile": {
+            "dynamic_keypoints": dynamic,
+            "bucket_keypoints": bucket_keypoints,
+            "minimum": 1 if dynamic else bucket_keypoints,
+            "maximum": 65536 if dynamic else bucket_keypoints,
+        },
+        "opset": 20,
+        "precision": "fp32",
+        "tools": exporter_tool_versions(),
+    }
+
+
+def fp16_onnx_contract(
+    base_path: Path,
+    base_contract: dict[str, Any],
+    calibration_count: int,
+    bucket_keypoints: int,
+) -> dict[str, Any]:
+    return {
+        **base_contract,
+        "artifact_kind": "lightglue_sift_fp16_onnx",
+        "precision": "fp16",
+        "conversion": {
+            "source_onnx": {
+                "file": base_path.name,
+                "sha256": sha256_file(base_path),
+            },
+            "modelopt_autocast": {
+                "calibration_keypoints": calibration_count,
+                "calibration_pair_keypoints": (
+                    bucket_keypoints if bucket_keypoints > 0 else calibration_count + 7
+                ),
+                "keep_io_types": True,
+                "low_precision_type": "fp16",
+                "providers": ["cpu"],
+            },
+        },
+    }
 
 
 def sample_inputs(count0: int, count1: int) -> tuple[torch.Tensor, ...]:
@@ -184,13 +323,19 @@ def export_onnx(
     weights_path: Path | None,
     output_path: Path,
     bucket_keypoints: int,
+    contract: dict[str, Any],
     force: bool,
 ) -> None:
-    if output_path.exists() and not force:
-        print(f"reuse ONNX: {output_path}")
+    validation = validate_provenance(output_path, contract)
+    if validation.valid and not force:
+        print(f"reuse provenance-validated ONNX: {output_path}")
         return
+    if output_path.exists() and not force:
+        print(f"re-export ONNX because cached provenance is invalid: {validation.reason}")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    invalidate_provenance(output_path)
+    output_path.unlink(missing_ok=True)
     model = SiftLightGlueScoreModel(weights_path).eval()
     sample_count0 = bucket_keypoints if bucket_keypoints > 0 else 32
     sample_count1 = bucket_keypoints if bucket_keypoints > 0 else 40
@@ -233,6 +378,7 @@ def export_onnx(
             external_data=False,
             optimize=False,
         )
+    write_provenance(output_path, contract)
     print(f"exported ONNX in {time.perf_counter() - started:.2f}s: {output_path}")
 
 
@@ -256,13 +402,22 @@ def convert_fp16(
     output_path: Path,
     calibration_count: int,
     bucket_keypoints: int,
+    contract: dict[str, Any],
     force: bool,
 ) -> None:
-    if output_path.exists() and not force:
-        print(f"reuse mixed-precision ONNX: {output_path}")
+    validation = validate_provenance(output_path, contract)
+    if validation.valid and not force:
+        print(f"reuse provenance-validated mixed-precision ONNX: {output_path}")
         return
+    if output_path.exists() and not force:
+        print(
+            "re-convert mixed-precision ONNX because cached provenance is invalid: "
+            f"{validation.reason}"
+        )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    invalidate_provenance(output_path)
+    output_path.unlink(missing_ok=True)
     DEFAULT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(
         prefix="plascan_lightglue_", dir=DEFAULT_CACHE_DIR
@@ -301,6 +456,7 @@ def convert_fp16(
             "converted strongly typed FP16 ONNX in "
             f"{time.perf_counter() - started:.2f}s: {output_path}"
         )
+    write_provenance(output_path, contract)
 
 
 def tensor_rt_environment() -> dict[str, Any]:
@@ -447,6 +603,9 @@ def main() -> int:
     if args.bucket_keypoints < 0:
         raise ValueError("bucket-keypoints must be non-negative")
 
+    weights_source = resolve_weights_source(weights_path)
+    base_contract = base_onnx_contract(weights_source, args.bucket_keypoints)
+
     shape_tag = (
         f"bucket{args.bucket_keypoints}"
         if args.bucket_keypoints > 0
@@ -470,19 +629,27 @@ def main() -> int:
             weights_path,
             onnx_path,
             args.bucket_keypoints,
+            base_contract,
             args.force,
         )
-    elif not onnx_path.is_file():
-        raise FileNotFoundError(f"ONNX model not found: {onnx_path}")
+    else:
+        require_provenance(onnx_path, base_contract)
 
     build_onnx_path = onnx_path
     if args.precision == "fp16":
         build_onnx_path = onnx_path.with_name(f"{onnx_path.stem}_fp16.onnx")
+        converted_contract = fp16_onnx_contract(
+            onnx_path,
+            base_contract,
+            args.calibration_keypoints,
+            args.bucket_keypoints,
+        )
         convert_fp16(
             onnx_path,
             build_onnx_path,
             args.calibration_keypoints,
             args.bucket_keypoints,
+            converted_contract,
             args.force,
         )
 
@@ -491,13 +658,10 @@ def main() -> int:
 
     environment = tensor_rt_environment()
     cache_key = {
-        "schema": 2,
-        "weights_source": (
-            {"path": str(weights_path), "sha256": sha256_file(weights_path)}
-            if weights_path is not None
-            else {"official": OFFICIAL_WEIGHTS_ID}
-        ),
+        "schema": 3,
+        "weights_source": weights_source,
         "onnx_sha256": sha256_file(build_onnx_path),
+        "onnx_provenance_sha256": sha256_file(provenance_path(build_onnx_path)),
         "precision": args.precision,
         "bucket_keypoints": args.bucket_keypoints,
         "profile": {
@@ -505,16 +669,30 @@ def main() -> int:
             "optimum": args.opt_keypoints,
             "maximum": args.max_keypoints,
         },
+        "workspace_bytes": int(args.workspace_gib * 1024 * 1024 * 1024),
         "builder_optimization_level": args.builder_optimization_level,
         "max_aux_streams": args.max_aux_streams,
         **environment,
     }
     metadata_path = engine_path.with_suffix(engine_path.suffix + ".json")
     if engine_path.is_file() and metadata_path.is_file() and not args.force:
-        existing = json.loads(metadata_path.read_text(encoding="utf-8"))
-        if all(existing.get(key) == value for key, value in cache_key.items()):
+        try:
+            existing = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing = {}
+        if not isinstance(existing, dict):
+            existing = {}
+        contract_matches = all(
+            existing.get(key) == value for key, value in cache_key.items()
+        )
+        artifact_matches = (
+            existing.get("engine_sha256") == sha256_file(engine_path)
+            and existing.get("engine_bytes") == engine_path.stat().st_size
+        )
+        if contract_matches and artifact_matches:
             print(f"reuse TensorRT engine: {engine_path}")
             return 0
+        print("rebuild TensorRT engine because metadata or artifact hash is stale")
 
     build_seconds = build_engine(
         build_onnx_path,
@@ -532,9 +710,7 @@ def main() -> int:
         "engine_bytes": engine_path.stat().st_size,
         "build_seconds": build_seconds,
     }
-    metadata_path.write_text(
-        json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    write_json_atomic(metadata_path, metadata)
     print(
         f"built TensorRT {args.precision} engine in {build_seconds:.2f}s: "
         f"{engine_path} ({engine_path.stat().st_size / (1024 * 1024):.1f} MiB)"

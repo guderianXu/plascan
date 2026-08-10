@@ -15,6 +15,13 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPTS_ROOT = Path(__file__).resolve().parents[1]
+if str(SCRIPTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_ROOT))
+
+from executable_resolver import resolve_explicit_executable
+
+
 DEFAULT_ROOT = REPO_ROOT / "testData" / "photogrammetry_benchmarks"
 DEFAULT_OUTPUT = REPO_ROOT / "build" / "benchmark_runs" / "photogrammetry_benchmarks"
 
@@ -169,8 +176,9 @@ def main(argv: list[str] | None = None) -> int:
         "datasets": [],
     }
 
-    if not args.dry_run and not args.cli.exists():
-        print(f"three_d_reconstruction_cli not found: {args.cli}", file=sys.stderr)
+    cli_path = resolve_explicit_executable(args.cli)
+    if not args.dry_run and not cli_path.is_file():
+        print(f"three_d_reconstruction_cli not found: {cli_path}", file=sys.stderr)
         print("请先编译: cmake --build build --target three_d_reconstruction_cli", file=sys.stderr)
         summary["status"] = "failed"
         summary["reason"] = f"CLI not found: {args.cli}"
@@ -181,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
     for dataset in datasets:
         run_output_dir = output_root / dataset.dataset_id / args.stage
         command = build_reconstruction_command(
-            cli_path=args.cli.resolve(),
+            cli_path=cli_path.resolve(),
             list_file=dataset.list_file,
             output_dir=run_output_dir,
             stage=args.stage,

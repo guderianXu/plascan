@@ -38,6 +38,7 @@
 #include <QPointer>
 #include <QJsonDocument>
 #include <QJsonArray>
+#include <QMutexLocker>
 #include <QSaveFile>
 #include <QScopeGuard>
 #include <QDateTime>
@@ -56,6 +57,73 @@ using xjw::common::project::ProjectResourceIndex;
 using xjw::common::project::ProjectLock;
 using xjw::common::project::ProjectSharedImageStore;
 
+quint64 xjw::common::project::ProjectPersistenceCommitCoordinator::
+    currentGeneration() const
+{
+    return _generation.load(std::memory_order_acquire);
+}
+
+quint64 xjw::common::project::ProjectPersistenceCommitCoordinator::
+    advanceGeneration()
+{
+    return _generation.fetch_add(1, std::memory_order_acq_rel) + 1;
+}
+
+quint64 xjw::common::project::ProjectPersistenceCommitCoordinator::
+    advanceGenerationAfterCurrentCommit()
+{
+    const QMutexLocker locker(&_commitMutex);
+    return _generation.fetch_add(1, std::memory_order_acq_rel) + 1;
+}
+
+bool xjw::common::project::ProjectPersistenceCommitCoordinator::runIfCurrent(
+    quint64 generation,
+    const std::function<void()> &commit)
+{
+    if (!commit
+        || generation != _generation.load(std::memory_order_acquire))
+    {
+        return false;
+    }
+    const QMutexLocker locker(&_commitMutex);
+    if (generation != _generation.load(std::memory_order_acquire))
+    {
+        return false;
+    }
+    commit();
+    return generation == _generation.load(std::memory_order_acquire);
+}
+
+bool ProjectResourceCleanupPersistence::isValid() const
+{
+    return _generation != 0
+        && !_projectPath.trimmed().isEmpty()
+        && _commitUpdated
+        && _commitOriginal;
+}
+
+bool ProjectResourceCleanupPersistence::commitUpdated(
+    QString *errorMsg,
+    bool *archiveCommitted) const
+{
+    if (archiveCommitted)
+    {
+        *archiveCommitted = false;
+    }
+    return _commitUpdated && _commitUpdated(errorMsg, archiveCommitted);
+}
+
+bool ProjectResourceCleanupPersistence::commitOriginal(
+    QString *errorMsg,
+    bool *archiveCommitted) const
+{
+    if (archiveCommitted)
+    {
+        *archiveCommitted = false;
+    }
+    return _commitOriginal && _commitOriginal(errorMsg, archiveCommitted);
+}
+
 struct ProjectData::PersistenceSnapshot
 {
     PersistenceMode mode = PersistenceMode::TemporaryOnly;
@@ -71,6 +139,11 @@ struct ProjectData::PersistenceSnapshot
     QJsonObject config;
     QJsonObject uiState;
     QJsonObject resourceIndex;
+    std::shared_ptr<
+        xjw::common::project::ProjectPersistenceCommitCoordinator>
+        commitCoordinator;
+    quint64 commitGeneration = 0;
+    quint64 sessionGeneration = 0;
     bool resultsLoaded = false;
     bool writeCoreToArchive = false;
     bool writeResultsToArchive = false;
@@ -84,7 +157,12 @@ struct ProjectData::PersistenceResult
 {
     PersistenceMode mode = PersistenceMode::TemporaryOnly;
     QString projectPath;
+    QString chunkId;
+    int chunkDirectory = 0;
     QString errorMessage;
+    quint64 commitGeneration = 0;
+    quint64 sessionGeneration = 0;
+    bool stale = false;
     bool success = false;
     bool archiveRequested = false;
     bool archiveSuccess = false;
@@ -328,10 +406,85 @@ bool ensureImageUuids(QJsonObject *core)
     return changed;
 }
 
+bool jsonArrayContains(const QJsonArray &array, const QJsonValue &needle)
+{
+    for (const QJsonValue &value : array)
+    {
+        if (value == needle)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+QJsonObject mergeCleanupRollback(const QJsonObject &current,
+                                 const QJsonObject &original,
+                                 const QJsonObject &updated)
+{
+    QJsonObject merged = current;
+    for (auto it = original.constBegin(); it != original.constEnd(); ++it)
+    {
+        const QString &key = it.key();
+        const QJsonValue originalValue = it.value();
+        const QJsonValue updatedValue = updated.value(key);
+        if (originalValue == updatedValue)
+        {
+            continue;
+        }
+        if (originalValue.isArray() && updatedValue.isArray())
+        {
+            const QJsonArray originalArray = originalValue.toArray();
+            const QJsonArray updatedArray = updatedValue.toArray();
+            QJsonArray currentArray = merged.value(key).toArray();
+            for (const QJsonValue &value : originalArray)
+            {
+                if (!jsonArrayContains(updatedArray, value)
+                    && !jsonArrayContains(currentArray, value))
+                {
+                    currentArray.append(value);
+                }
+            }
+            merged[key] = currentArray;
+            continue;
+        }
+        if (merged.value(key) == updatedValue)
+        {
+            merged[key] = originalValue;
+        }
+    }
+    return merged;
+}
+
+QMutex &projectOpenPreflightMutex()
+{
+    static QMutex mutex;
+    return mutex;
+}
+
+ProjectData::ProjectOpenPreflight &projectOpenPreflight()
+{
+    static ProjectData::ProjectOpenPreflight preflight;
+    return preflight;
+}
+
+bool runProjectOpenPreflight(const QString &projectPath,
+                             QString *errorMessage)
+{
+    ProjectData::ProjectOpenPreflight preflight;
+    {
+        const QMutexLocker locker(&projectOpenPreflightMutex());
+        preflight = projectOpenPreflight();
+    }
+    return !preflight || preflight(projectPath, errorMessage);
+}
+
 } // namespace
 
 ProjectData::ProjectData(QObject *parent)
     : QObject(parent)
+    , _persistenceCommitCoordinator(std::make_shared<
+          xjw::common::project::ProjectPersistenceCommitCoordinator>())
 {
     // 防抖归档写入定时器：将多次 appendIpfind/appendIpmatch/setImageCameras 合并为一次 ZIP 写入
     _archiveSyncTimer = new QTimer(this);
@@ -345,11 +498,26 @@ ProjectData::ProjectData(QObject *parent)
 
 ProjectData::~ProjectData()
 {
-    _shuttingDown = true;
     if (_archiveSyncTimer)
     {
         _archiveSyncTimer->stop();
     }
+    if (!_projectPath.isEmpty())
+    {
+        QString persistenceError;
+        if (drainPersistenceForClose(&persistenceError))
+        {
+            ProjectSharedImageStore(_projectPath).releaseReservations(
+                _filesManager.getAllImages());
+        }
+        else
+        {
+            LOG_ERROR(QStringLiteral(
+                "项目析构前无法持久化最新归档或临时恢复快照: %1")
+                          .arg(persistenceError));
+        }
+    }
+    _shuttingDown = true;
     if (_persistencePool)
     {
         _persistencePool->clear();
@@ -359,6 +527,18 @@ ProjectData::~ProjectData()
     {
         ProjectWorkspaceStore(_projectPath).releaseRuntime();
     }
+    if (_projectLock)
+    {
+        _projectLock->release();
+        _projectLock.reset();
+    }
+}
+
+void ProjectData::installProjectOpenPreflight(
+    ProjectOpenPreflight preflight)
+{
+    const QMutexLocker locker(&projectOpenPreflightMutex());
+    projectOpenPreflight() = std::move(preflight);
 }
 
 void ProjectData::markDirtyIfRequested(bool markDirty)
@@ -382,6 +562,12 @@ void ProjectData::scheduleArchiveSync(bool coreDirty,
                                       bool uiStateDirty,
                                       bool workspaceDirty)
 {
+    if ((coreDirty || resultsDirty || configDirty || uiStateDirty
+         || workspaceDirty)
+        && _persistenceCommitCoordinator)
+    {
+        _persistenceCommitCoordinator->advanceGeneration();
+    }
     if (coreDirty)
     {
         _coreFileDirtyForArchive = true;
@@ -418,6 +604,12 @@ void ProjectData::scheduleArchiveSync(bool coreDirty,
 
 bool ProjectData::createProject(const QString &plascanPath, const QString &projectName)
 {
+    if (_resourceCleanupPersistenceGeneration != 0)
+    {
+        LOG_WARN(QStringLiteral(
+            "资源清理事务提交期间拒绝创建新项目"));
+        return false;
+    }
     const QString dataDirectory =
         ProjectPackageLayout::dataDirectory(plascanPath);
     const QString archivePath =
@@ -445,6 +637,7 @@ bool ProjectData::createProject(const QString &plascanPath, const QString &proje
     }
     const auto cleanupCreatedProject = [&]()
     {
+        ProjectWorkspaceStore(plascanPath).releaseRuntime();
         if (newProjectLock)
         {
             newProjectLock->release();
@@ -553,10 +746,19 @@ bool ProjectData::createProject(const QString &plascanPath, const QString &proje
     // 和待归档状态统一失效，防止旧项目资源进入新项目。
     if (hasProject())
     {
-        closeProject();
+        QString closeError;
+        if (!closeProject(&closeError))
+        {
+            LOG_ERROR(QStringLiteral(
+                "创建项目时无法安全关闭当前会话: %1")
+                          .arg(closeError));
+            cleanupCreatedProject();
+            return false;
+        }
     }
 
     // 步骤6：更新内存状态
+    ++_sessionGeneration;
     _projectLock = std::move(newProjectLock);
     _projectPath = plascanPath;
     _activeChunkId = initialChunk.id;
@@ -583,6 +785,15 @@ bool ProjectData::createProject(const QString &plascanPath, const QString &proje
 
 bool ProjectData::openProject(const QString &plascanPath, QString *errorMsg)
 {
+    if (_resourceCleanupPersistenceGeneration != 0)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral(
+                "资源清理任务正在提交，请稍后打开项目");
+        }
+        return false;
+    }
     const ProjectOpenSnapshot snapshot = loadProjectOpenSnapshot(plascanPath);
     return openProjectFromSnapshot(snapshot, errorMsg);
 }
@@ -821,6 +1032,15 @@ ProjectOpenSnapshot ProjectData::loadProjectOpenSnapshot(const QString &plascanP
     ProjectOpenSnapshot snapshot;
     snapshot.projectPath = QDir::cleanPath(QFileInfo(plascanPath).absoluteFilePath());
 
+    QString recoveryError;
+    if (!runProjectOpenPreflight(snapshot.projectPath, &recoveryError))
+    {
+        snapshot.errorMessage = recoveryError.isEmpty()
+            ? QStringLiteral("项目打开前恢复未完成")
+            : QStringLiteral("项目打开前恢复失败: %1").arg(recoveryError);
+        return snapshot;
+    }
+
     QString layoutError;
     if (ProjectPackageLayout::resolveMetadataArchive(
             snapshot.projectPath, &layoutError).isEmpty())
@@ -1015,6 +1235,15 @@ ProjectResultsSnapshot ProjectData::loadProjectResultsSnapshot(const QString &pl
 
 bool ProjectData::openProjectFromSnapshot(const ProjectOpenSnapshot &snapshot, QString *errorMsg)
 {
+    if (_resourceCleanupPersistenceGeneration != 0)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral(
+                "资源清理任务正在提交，已拒绝切换项目快照");
+        }
+        return false;
+    }
     if (!snapshot.success)
     {
         if (errorMsg)
@@ -1075,7 +1304,22 @@ bool ProjectData::openProjectFromSnapshot(const ProjectOpenSnapshot &snapshot, Q
 
     if (!reuseLock && hasProject())
     {
-        closeProject();
+        QString closeError;
+        if (!closeProject(&closeError))
+        {
+            workspace.releaseRuntime();
+            if (replacementLock)
+            {
+                replacementLock->release();
+            }
+            if (errorMsg)
+            {
+                *errorMsg = QStringLiteral(
+                    "无法安全关闭当前项目，未切换到目标项目: %1")
+                                .arg(closeError);
+            }
+            return false;
+        }
     }
     if (replacementLock)
     {
@@ -1085,6 +1329,11 @@ bool ProjectData::openProjectFromSnapshot(const ProjectOpenSnapshot &snapshot, Q
     {
         _archiveSyncTimer->stop();
     }
+    if (_persistenceCommitCoordinator)
+    {
+        _persistenceCommitCoordinator->advanceGenerationAfterCurrentCommit();
+    }
+    ++_sessionGeneration;
 
     _projectPath = snapshot.projectPath;
     _activeChunkId = snapshot.chunkId;
@@ -1098,6 +1347,10 @@ bool ProjectData::openProjectFromSnapshot(const ProjectOpenSnapshot &snapshot, Q
     _coreFileDirtyForArchive = false;
     _configDirtyForArchive = false;
     _uiStateDirtyForArchive = false;
+    _workspaceDirtyForArchive = false;
+    _fullSavePending = false;
+    _archiveSyncPending = false;
+    _temporarySavePending = false;
     _isDirty = false;
 
     const QJsonObject filesMeta = snapshot.filesMeta.isEmpty()
@@ -1203,6 +1456,11 @@ ProjectData::PersistenceSnapshot ProjectData::createPersistenceSnapshot(
     }
     snapshot.config = _configManager.data();
     snapshot.uiState = _projectUiState;
+    snapshot.commitCoordinator = _persistenceCommitCoordinator;
+    snapshot.commitGeneration = _persistenceCommitCoordinator
+        ? _persistenceCommitCoordinator->currentGeneration()
+        : 0;
+    snapshot.sessionGeneration = _sessionGeneration;
 
     if (mode == PersistenceMode::FullSave)
     {
@@ -1222,6 +1480,13 @@ ProjectData::PersistenceSnapshot ProjectData::createPersistenceSnapshot(
         snapshot.writeWorkspaceIndex = _workspaceDirtyForArchive;
         snapshot.writeTemporary = true;
     }
+    else if (mode == PersistenceMode::CleanupCommit)
+    {
+        snapshot.writeCoreToArchive = true;
+        snapshot.writeResultsToArchive = _resultsLoaded;
+        snapshot.writeWorkspaceIndex = true;
+        snapshot.writeTemporary = true;
+    }
     else
     {
         snapshot.writeTemporary = true;
@@ -1235,6 +1500,10 @@ ProjectData::PersistenceResult ProjectData::persistSnapshot(
     PersistenceResult result;
     result.mode = snapshot.mode;
     result.projectPath = snapshot.projectPath;
+    result.chunkId = snapshot.chunkId;
+    result.chunkDirectory = snapshot.chunkDirectory;
+    result.commitGeneration = snapshot.commitGeneration;
+    result.sessionGeneration = snapshot.sessionGeneration;
     result.includedCore = snapshot.writeCoreToArchive;
     result.includedResults = snapshot.writeResultsToArchive;
     result.includedConfig = snapshot.writeConfigToArchive;
@@ -1306,46 +1575,69 @@ ProjectData::PersistenceResult ProjectData::persistSnapshot(
         || !chunkSections.isEmpty()
         || snapshot.writeUiStateToArchive;
     result.archiveSuccess = true;
-    ProjectChunkStore chunkStore(snapshot.projectPath);
-    if (!chunkSections.isEmpty())
+    const auto commitArchive = [&]()
     {
-        result.archiveSuccess = chunkStore.writeChunkSections(
-            snapshot.chunkDirectory,
-            chunkSections,
-            &result.errorMessage);
-    }
-    if (result.archiveSuccess && snapshot.writeUiStateToArchive)
-    {
-        result.archiveSuccess = chunkStore.saveProjectUiState(
-            snapshot.uiState, &result.errorMessage);
-    }
-    if (result.archiveSuccess && workspaceIndexRequested)
-    {
-        result.archiveSuccess =
-            ProjectSharedImageStore(snapshot.projectPath)
-                .pruneUnreferenced(&result.errorMessage);
-    }
-    if (result.archiveSuccess
-        && snapshot.mode == PersistenceMode::FullSave)
-    {
-        result.archiveSuccess =
-            ProjectPackageLayout::pruneEmptyOptionalDirectories(
-                snapshot.projectPath,
-                snapshot.chunkDirectory,
-                &result.errorMessage);
-    }
-
-    if (result.archiveSuccess
-        && snapshot.mode == PersistenceMode::FullSave)
-    {
-        ProjectWorkspaceStore workspace(
-            snapshot.projectPath, snapshot.chunkDirectory);
-        QString cleanupError;
-        if (!workspace.validateProjectLayout(&cleanupError))
+        ProjectChunkStore chunkStore(snapshot.projectPath);
+        if (!chunkSections.isEmpty())
         {
-            result.archiveSuccess = false;
-            result.errorMessage = cleanupError;
+            result.archiveSuccess = chunkStore.writeChunkSections(
+                snapshot.chunkDirectory,
+                chunkSections,
+                &result.errorMessage);
         }
+        if (result.archiveSuccess && snapshot.writeUiStateToArchive)
+        {
+            result.archiveSuccess = chunkStore.saveProjectUiState(
+                snapshot.uiState, &result.errorMessage);
+        }
+        if (result.archiveSuccess && result.archiveRequested)
+        {
+            QString garbageCollectionError;
+            if (!ProjectSharedImageStore(snapshot.projectPath)
+                     .pruneUnreferenced(&garbageCollectionError))
+            {
+                LOG_WARN(
+                    QStringLiteral(
+                        "共享影像 GC 暂未完成，将在后续保存重试（项目 %1）: %2")
+                        .arg(snapshot.projectPath,
+                             garbageCollectionError));
+            }
+        }
+        if (result.archiveSuccess
+            && snapshot.mode == PersistenceMode::FullSave)
+        {
+            result.archiveSuccess =
+                ProjectPackageLayout::pruneEmptyOptionalDirectories(
+                    snapshot.projectPath,
+                    snapshot.chunkDirectory,
+                    &result.errorMessage);
+        }
+
+        if (result.archiveSuccess
+            && snapshot.mode == PersistenceMode::FullSave)
+        {
+            ProjectWorkspaceStore workspace(
+                snapshot.projectPath, snapshot.chunkDirectory);
+            QString cleanupError;
+            if (!workspace.validateProjectLayout(&cleanupError))
+            {
+                result.archiveSuccess = false;
+                result.errorMessage = cleanupError;
+            }
+        }
+    };
+    if (result.archiveRequested
+        && snapshot.commitCoordinator
+        && !snapshot.commitCoordinator->runIfCurrent(
+            snapshot.commitGeneration, commitArchive))
+    {
+        result.stale = true;
+        result.success = true;
+        return result;
+    }
+    if (result.archiveRequested && !snapshot.commitCoordinator)
+    {
+        commitArchive();
     }
 
     const bool shouldWriteTemporary =
@@ -1355,43 +1647,59 @@ ProjectData::PersistenceResult ProjectData::persistSnapshot(
     result.temporarySuccess = !shouldWriteTemporary;
     if (shouldWriteTemporary)
     {
-        QString temporaryError;
-        bool temporarySuccess = writeFileAtomically(
-            snapshot.temporaryCorePath,
-            QJsonDocument(snapshot.core).toJson(QJsonDocument::Compact),
-            &temporaryError);
-        if (temporarySuccess && snapshot.resultsLoaded)
+        const auto commitTemporary = [&]()
         {
-            const QByteArray resultsJson =
-                QJsonDocument(snapshot.results).toJson(QJsonDocument::Compact);
-            temporarySuccess = writeFileAtomically(
-                snapshot.temporaryResultsPath,
-                qCompress(resultsJson, 1),
+            QString temporaryError;
+            bool temporarySuccess = writeFileAtomically(
+                snapshot.temporaryCorePath,
+                QJsonDocument(snapshot.core).toJson(QJsonDocument::Compact),
                 &temporaryError);
-        }
-        if (temporarySuccess)
-        {
-            temporarySuccess = writeFileAtomically(
-                snapshot.temporaryConfigPath,
-                QJsonDocument(snapshot.config).toJson(QJsonDocument::Compact),
-                &temporaryError);
-        }
-        if (temporarySuccess)
-        {
-            temporarySuccess = writeFileAtomically(
-                snapshot.temporaryUiStatePath,
-                QJsonDocument(snapshot.uiState)
-                    .toJson(QJsonDocument::Compact),
-                &temporaryError);
-        }
-        result.temporarySuccess = temporarySuccess;
-        if (!temporarySuccess)
-        {
-            if (!result.errorMessage.isEmpty())
+            if (temporarySuccess && snapshot.resultsLoaded)
             {
-                result.errorMessage += QStringLiteral("; ");
+                const QByteArray resultsJson = QJsonDocument(snapshot.results)
+                                                   .toJson(QJsonDocument::Compact);
+                temporarySuccess = writeFileAtomically(
+                    snapshot.temporaryResultsPath,
+                    qCompress(resultsJson, 1),
+                    &temporaryError);
             }
-            result.errorMessage += temporaryError;
+            if (temporarySuccess)
+            {
+                temporarySuccess = writeFileAtomically(
+                    snapshot.temporaryConfigPath,
+                    QJsonDocument(snapshot.config).toJson(
+                        QJsonDocument::Compact),
+                    &temporaryError);
+            }
+            if (temporarySuccess)
+            {
+                temporarySuccess = writeFileAtomically(
+                    snapshot.temporaryUiStatePath,
+                    QJsonDocument(snapshot.uiState)
+                        .toJson(QJsonDocument::Compact),
+                    &temporaryError);
+            }
+            result.temporarySuccess = temporarySuccess;
+            if (!temporarySuccess)
+            {
+                if (!result.errorMessage.isEmpty())
+                {
+                    result.errorMessage += QStringLiteral("; ");
+                }
+                result.errorMessage += temporaryError;
+            }
+        };
+        if (snapshot.commitCoordinator
+            && !snapshot.commitCoordinator->runIfCurrent(
+                snapshot.commitGeneration, commitTemporary))
+        {
+            result.stale = true;
+            result.success = true;
+            return result;
+        }
+        if (!snapshot.commitCoordinator)
+        {
+            commitTemporary();
         }
     }
 
@@ -1409,22 +1717,17 @@ ProjectData::PersistenceResult ProjectData::persistSnapshot(
 
 void ProjectData::startNextPersistence()
 {
-    if (_shuttingDown || _persistenceRunning || !_persistencePool)
+    if (_shuttingDown
+        || _persistenceRunning
+        || _resourceCleanupPersistenceGeneration != 0
+        || !_persistencePool)
     {
         return;
     }
 
     PersistenceMode mode = PersistenceMode::TemporaryOnly;
     PersistenceSnapshot snapshot;
-    bool hasDetachedSnapshot = false;
-    if (_detachedPersistenceSnapshot)
-    {
-        snapshot = std::move(*_detachedPersistenceSnapshot);
-        _detachedPersistenceSnapshot.reset();
-        mode = snapshot.mode;
-        hasDetachedSnapshot = true;
-    }
-    else if (_fullSavePending)
+    if (_fullSavePending)
     {
         mode = PersistenceMode::FullSave;
         _fullSavePending = false;
@@ -1446,7 +1749,7 @@ void ProjectData::startNextPersistence()
         return;
     }
 
-    if (!hasDetachedSnapshot && _projectPath.trimmed().isEmpty())
+    if (_projectPath.trimmed().isEmpty())
     {
         if (mode == PersistenceMode::FullSave)
         {
@@ -1455,43 +1758,42 @@ void ProjectData::startNextPersistence()
         return;
     }
 
-    if (!hasDetachedSnapshot)
+    snapshot = createPersistenceSnapshot(mode);
+    if (mode == PersistenceMode::FullSave)
     {
-        snapshot = createPersistenceSnapshot(mode);
-        if (mode == PersistenceMode::FullSave)
+        _coreFileDirtyForArchive = false;
+        _resultsDirtyForArchive = false;
+        _configDirtyForArchive = false;
+        _uiStateDirtyForArchive = false;
+        _workspaceDirtyForArchive = false;
+    }
+    else if (mode == PersistenceMode::ArchiveSync)
+    {
+        if (snapshot.writeCoreToArchive)
         {
             _coreFileDirtyForArchive = false;
-            _resultsDirtyForArchive = false;
-            _configDirtyForArchive = false;
-            _uiStateDirtyForArchive = false;
-            _workspaceDirtyForArchive = false;
         }
-        else if (mode == PersistenceMode::ArchiveSync)
+        if (snapshot.writeResultsToArchive)
         {
-            if (snapshot.writeCoreToArchive)
-            {
-                _coreFileDirtyForArchive = false;
-            }
-            if (snapshot.writeResultsToArchive)
-            {
-                _resultsDirtyForArchive = false;
-            }
-            if (snapshot.writeConfigToArchive)
-            {
-                _configDirtyForArchive = false;
-            }
-            if (snapshot.writeUiStateToArchive)
-            {
-                _uiStateDirtyForArchive = false;
-            }
-            if (snapshot.writeWorkspaceIndex)
-            {
-                _workspaceDirtyForArchive = false;
-            }
+            _resultsDirtyForArchive = false;
+        }
+        if (snapshot.writeConfigToArchive)
+        {
+            _configDirtyForArchive = false;
+        }
+        if (snapshot.writeUiStateToArchive)
+        {
+            _uiStateDirtyForArchive = false;
+        }
+        if (snapshot.writeWorkspaceIndex)
+        {
+            _workspaceDirtyForArchive = false;
         }
     }
 
     _persistenceRunning = true;
+    _runningPersistenceGeneration = snapshot.commitGeneration;
+    _runningPersistenceSessionGeneration = snapshot.sessionGeneration;
     QPointer<ProjectData> self(this);
     (void)QtConcurrent::run(
         _persistencePool,
@@ -1518,11 +1820,65 @@ void ProjectData::startNextPersistence()
 
 void ProjectData::handlePersistenceFinished(PersistenceResult result)
 {
-    _persistenceRunning = false;
+    if (_persistenceRunning
+        && result.commitGeneration == _runningPersistenceGeneration
+        && result.sessionGeneration
+            == _runningPersistenceSessionGeneration)
+    {
+        _persistenceRunning = false;
+        _runningPersistenceGeneration = 0;
+        _runningPersistenceSessionGeneration = 0;
+    }
     const bool sameProject =
         QDir::cleanPath(result.projectPath) == QDir::cleanPath(_projectPath);
+    const bool sameSession = sameProject
+        && result.sessionGeneration == _sessionGeneration
+        && result.chunkId == _activeChunkId
+        && result.chunkDirectory == _activeChunkDirectory;
+    const bool currentCommitGeneration = !_persistenceCommitCoordinator
+        || result.commitGeneration
+            == _persistenceCommitCoordinator->currentGeneration();
+    if (result.stale || !currentCommitGeneration)
+    {
+        if (sameSession)
+        {
+            _coreFileDirtyForArchive =
+                _coreFileDirtyForArchive || result.includedCore;
+            _resultsDirtyForArchive =
+                _resultsDirtyForArchive || result.includedResults;
+            _configDirtyForArchive =
+                _configDirtyForArchive || result.includedConfig;
+            _uiStateDirtyForArchive =
+                _uiStateDirtyForArchive || result.includedUiState;
+            _workspaceDirtyForArchive =
+                _workspaceDirtyForArchive || result.includedWorkspace;
+            const bool hasArchiveState = result.includedCore
+                || result.includedResults
+                || result.includedConfig
+                || result.includedUiState
+                || result.includedWorkspace;
+            _archiveSyncPending = _archiveSyncPending || hasArchiveState;
+            _temporarySavePending = _temporarySavePending
+                || result.temporaryRequested;
+            if (_archiveSyncTimer && hasArchiveState)
+            {
+                _archiveSyncTimer->start(2000);
+            }
+        }
+        LOG_INFO(QStringLiteral(
+            "忽略已被更新操作取代的项目持久化快照（代次 %1）")
+                     .arg(result.commitGeneration));
+        if (sameSession && result.mode == PersistenceMode::FullSave)
+        {
+            emit projectSaveCompleted(
+                false,
+                QStringLiteral("保存期间项目已更新，请重新保存"));
+        }
+        startNextPersistence();
+        return;
+    }
 
-    if (sameProject && result.archiveRequested && !result.archiveSuccess)
+    if (sameSession && result.archiveRequested && !result.archiveSuccess)
     {
         _coreFileDirtyForArchive =
             _coreFileDirtyForArchive || result.includedCore;
@@ -1540,7 +1896,7 @@ void ProjectData::handlePersistenceFinished(PersistenceResult result)
         }
     }
 
-    if (sameProject && result.archiveSuccess && result.projectUriMetadata)
+    if (sameSession && result.archiveSuccess && result.projectUriMetadata)
     {
         ProjectWorkspaceStore workspace(
             _projectPath, _activeChunkDirectory);
@@ -1591,7 +1947,7 @@ void ProjectData::handlePersistenceFinished(PersistenceResult result)
         }
         else
         {
-            if (sameProject)
+            if (sameSession)
             {
                 const bool hasNewChanges =
                     _coreFileDirtyForArchive
@@ -1620,11 +1976,96 @@ void ProjectData::handlePersistenceFinished(PersistenceResult result)
     startNextPersistence();
 }
 
+bool ProjectData::drainPersistenceForClose(QString *errorMessage)
+{
+    if (_projectPath.trimmed().isEmpty())
+    {
+        return true;
+    }
+    const bool workerWasRunning = _persistenceRunning;
+    if (_persistencePool && workerWasRunning)
+    {
+        _persistencePool->waitForDone();
+        _persistenceRunning = false;
+        _runningPersistenceGeneration = 0;
+        _runningPersistenceSessionGeneration = 0;
+    }
+
+    const bool needsDurableSnapshot = workerWasRunning
+        || _isDirty
+        || _coreFileDirtyForArchive
+        || _resultsDirtyForArchive
+        || _configDirtyForArchive
+        || _uiStateDirtyForArchive
+        || _workspaceDirtyForArchive
+        || _fullSavePending
+        || _archiveSyncPending
+        || _temporarySavePending;
+    if (!needsDurableSnapshot)
+    {
+        return true;
+    }
+
+    const quint64 closeGeneration = _persistenceCommitCoordinator
+        ? _persistenceCommitCoordinator->
+              advanceGenerationAfterCurrentCommit()
+        : 0;
+    _coreFileDirtyForArchive = true;
+    _resultsDirtyForArchive = _resultsLoaded;
+    _configDirtyForArchive = true;
+    _uiStateDirtyForArchive = true;
+    _workspaceDirtyForArchive = true;
+
+    PersistenceSnapshot archiveSnapshot = createPersistenceSnapshot(
+        PersistenceMode::ArchiveSync);
+    archiveSnapshot.commitGeneration = closeGeneration;
+    const PersistenceResult archiveResult = persistSnapshot(
+        std::move(archiveSnapshot));
+    if (archiveResult.archiveSuccess && !archiveResult.stale)
+    {
+        return true;
+    }
+    if (archiveResult.temporaryRequested
+        && archiveResult.temporarySuccess
+        && !archiveResult.stale)
+    {
+        return true;
+    }
+
+    PersistenceSnapshot temporarySnapshot = createPersistenceSnapshot(
+        PersistenceMode::TemporaryOnly);
+    temporarySnapshot.commitGeneration = closeGeneration;
+    const PersistenceResult temporaryResult = persistSnapshot(
+        std::move(temporarySnapshot));
+    if (temporaryResult.success && !temporaryResult.stale)
+    {
+        return true;
+    }
+    if (errorMessage)
+    {
+        *errorMessage = temporaryResult.errorMessage.isEmpty()
+            ? archiveResult.errorMessage
+            : temporaryResult.errorMessage;
+        if (errorMessage->isEmpty())
+        {
+            *errorMessage = QStringLiteral(
+                "关闭项目前无法持久化最新恢复快照");
+        }
+    }
+    return false;
+}
+
 void ProjectData::saveProjectAsync()
 {
     if (_projectPath.trimmed().isEmpty())
     {
         emit projectSaveCompleted(false, QStringLiteral("没有打开的项目"));
+        return;
+    }
+    if (_resourceCleanupPersistenceGeneration != 0)
+    {
+        emit projectSaveCompleted(
+            false, QStringLiteral("资源清理任务正在提交，请稍后保存"));
         return;
     }
     if (_archiveSyncTimer)
@@ -1641,6 +2082,10 @@ void ProjectData::scheduleTemporaryMetadataSave()
     {
         return;
     }
+    if (_persistenceCommitCoordinator)
+    {
+        _persistenceCommitCoordinator->advanceGeneration();
+    }
     _temporarySavePending = true;
     startNextPersistence();
 }
@@ -1649,6 +2094,15 @@ bool ProjectData::saveProject(QString *errorMsg)
 {
     if (_projectPath.isEmpty()) {
         if (errorMsg) *errorMsg = QStringLiteral("没有打开的项目");
+        return false;
+    }
+    if (_resourceCleanupPersistenceGeneration != 0)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral(
+                "资源清理任务正在提交，请稍后保存");
+        }
         return false;
     }
 
@@ -1715,15 +2169,14 @@ bool ProjectData::saveProject(QString *errorMsg)
         }
         return false;
     }
+    QString garbageCollectionError;
     if (!ProjectSharedImageStore(_projectPath)
-             .pruneUnreferenced(&err))
+             .pruneUnreferenced(&garbageCollectionError))
     {
-        if (errorMsg)
-        {
-            *errorMsg =
-                QStringLiteral("清理共享影像库失败: %1").arg(err);
-        }
-        return false;
+        LOG_WARN(
+            QStringLiteral(
+                "共享影像 GC 暂未完成，将在后续保存重试（项目 %1）: %2")
+                .arg(_projectPath, garbageCollectionError));
     }
     if (!ProjectPackageLayout::pruneEmptyOptionalDirectories(
             _projectPath, _activeChunkDirectory, &err))
@@ -1773,27 +2226,50 @@ bool ProjectData::saveProject(QString *errorMsg)
     return true;
 }
 
-void ProjectData::closeProject()
+bool ProjectData::closeProject(QString *errorMsg)
 {
+    if (errorMsg)
+    {
+        errorMsg->clear();
+    }
+    if (_resourceCleanupPersistenceGeneration != 0)
+    {
+        const QString message = QStringLiteral(
+            "资源清理事务提交期间拒绝关闭项目，以保持项目锁有效");
+        LOG_WARN(message);
+        if (errorMsg)
+        {
+            *errorMsg = message;
+        }
+        return false;
+    }
     const QString closingProjectPath = _projectPath;
     if (_archiveSyncTimer)
     {
         _archiveSyncTimer->stop();
     }
-    if (!_projectPath.trimmed().isEmpty()
-        && (_isDirty
-            || _coreFileDirtyForArchive
-            || _resultsDirtyForArchive
-            || _configDirtyForArchive
-            || _uiStateDirtyForArchive
-            || _workspaceDirtyForArchive
-            || _temporarySavePending))
+    QString persistenceError;
+    if (!drainPersistenceForClose(&persistenceError))
     {
-        _detachedPersistenceSnapshot =
-            std::make_unique<PersistenceSnapshot>(
-                createPersistenceSnapshot(PersistenceMode::TemporaryOnly));
-        _temporarySavePending = false;
-        startNextPersistence();
+        LOG_ERROR(QStringLiteral(
+            "项目关闭前持久化失败，继续保持项目锁：%1")
+                      .arg(persistenceError));
+        if (_archiveSyncTimer)
+        {
+            _archiveSyncTimer->start(5000);
+        }
+        if (errorMsg)
+        {
+            *errorMsg = persistenceError;
+        }
+        return false;
+    }
+    ++_sessionGeneration;
+    const QStringList closingImagePaths = _filesManager.getAllImages();
+    if (!closingProjectPath.isEmpty())
+    {
+        ProjectSharedImageStore(closingProjectPath).releaseReservations(
+            closingImagePaths);
     }
     _projectPath.clear();
     _activeChunkId.clear();
@@ -1817,10 +2293,6 @@ void ProjectData::closeProject()
     {
         ProjectWorkspaceStore(closingProjectPath).releaseRuntime();
     }
-    if (_persistencePool && _persistenceRunning)
-    {
-        _persistencePool->waitForDone();
-    }
     if (_projectLock)
     {
         _projectLock->release();
@@ -1828,6 +2300,7 @@ void ProjectData::closeProject()
     }
     emit projectClosed();
     emit chunkListChanged(QJsonArray(), QString());
+    return true;
 }
 
 // 防抖定时器回调：把最新快照交给串行持久化线程。
@@ -2033,6 +2506,10 @@ bool ProjectData::loadTemporaryMetadata()
 
 bool ProjectData::saveTemporaryMetadata()
 {
+    if (_resourceCleanupPersistenceGeneration != 0)
+    {
+        return false;
+    }
     QString filesPath = tempFilesPath();
     QString configPath = tempConfigPath();
     if (filesPath.isEmpty() || configPath.isEmpty())
@@ -2073,6 +2550,207 @@ bool ProjectData::saveTemporaryMetadata()
         &error);
 }
 
+bool ProjectData::commitResourceCleanupMetadata(
+    const QJsonObject &metadata,
+    QString *errorMsg,
+    bool *archiveCommitted)
+{
+    if (archiveCommitted)
+    {
+        *archiveCommitted = false;
+    }
+    if (_projectPath.trimmed().isEmpty()
+        || !_persistenceCommitCoordinator)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("没有可提交资源清理的活动项目");
+        }
+        return false;
+    }
+    if (_resourceCleanupPersistenceGeneration != 0)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("已有资源清理事务正在提交");
+        }
+        return false;
+    }
+
+    const quint64 cleanupGeneration =
+        _persistenceCommitCoordinator->
+            advanceGenerationAfterCurrentCommit();
+    updateMetadata(metadata, false);
+
+    PersistenceSnapshot snapshot = createPersistenceSnapshot(
+        PersistenceMode::CleanupCommit);
+    snapshot.commitGeneration = cleanupGeneration;
+    PersistenceResult result = persistSnapshot(std::move(snapshot));
+    if (archiveCommitted)
+    {
+        *archiveCommitted = result.archiveSuccess && !result.stale;
+    }
+    if (!result.success || result.stale)
+    {
+        _coreFileDirtyForArchive = true;
+        _resultsDirtyForArchive = _resultsLoaded;
+        _workspaceDirtyForArchive = true;
+        if (errorMsg)
+        {
+            *errorMsg = result.errorMessage.isEmpty()
+                ? QStringLiteral("资源清理元数据提交被其它更新取代")
+                : result.errorMessage;
+        }
+        return false;
+    }
+
+    _coreFileDirtyForArchive = false;
+    _resultsDirtyForArchive = false;
+    _workspaceDirtyForArchive = false;
+    markDirtyIfRequested(true);
+    return true;
+}
+
+ProjectResourceCleanupPersistence
+ProjectData::prepareResourceCleanupPersistence(
+    const QJsonObject &updatedMetadata)
+{
+    ProjectResourceCleanupPersistence persistence;
+    if (_projectPath.trimmed().isEmpty()
+        || !_persistenceCommitCoordinator
+        || _resourceCleanupPersistenceGeneration != 0)
+    {
+        return persistence;
+    }
+
+    persistence._generation =
+        _persistenceCommitCoordinator->
+            advanceGenerationAfterCurrentCommit();
+    _resourceCleanupPersistenceGeneration = persistence._generation;
+    if (_archiveSyncTimer)
+    {
+        _archiveSyncTimer->stop();
+    }
+    persistence._projectPath = _projectPath;
+    persistence._chunkId = _activeChunkId;
+    persistence._chunkDirectory = _activeChunkDirectory;
+    persistence._originalMetadata = _filesManager.data();
+    persistence._updatedMetadata = updatedMetadata;
+    persistence._wasDirty = _isDirty;
+
+    PersistenceSnapshot originalSnapshot = createPersistenceSnapshot(
+        PersistenceMode::CleanupCommit);
+    originalSnapshot.commitGeneration = persistence._generation;
+    updateMetadata(updatedMetadata, false);
+    PersistenceSnapshot updatedSnapshot = createPersistenceSnapshot(
+        PersistenceMode::CleanupCommit);
+    updatedSnapshot.commitGeneration = persistence._generation;
+    markDirtyIfRequested(true);
+
+    const auto makeCommit = [](PersistenceSnapshot snapshot)
+    {
+        return [snapshot = std::move(snapshot)](
+                   QString *errorMsg,
+                   bool *archiveCommitted) mutable
+        {
+            const PersistenceResult result = ProjectData::persistSnapshot(
+                snapshot);
+            if (archiveCommitted)
+            {
+                *archiveCommitted = result.archiveSuccess && !result.stale;
+            }
+            if (!result.success || result.stale)
+            {
+                if (errorMsg)
+                {
+                    *errorMsg = result.errorMessage.isEmpty()
+                        ? QStringLiteral(
+                            "资源清理持久化快照已被更新操作取代")
+                        : result.errorMessage;
+                }
+                return false;
+            }
+            return true;
+        };
+    };
+    persistence._commitUpdated = makeCommit(std::move(updatedSnapshot));
+    persistence._commitOriginal = makeCommit(std::move(originalSnapshot));
+    return persistence;
+}
+
+bool ProjectData::finalizeResourceCleanupPersistence(
+    const ProjectResourceCleanupPersistence &persistence,
+    bool keepUpdatedMetadata,
+    bool metadataStateCommitted)
+{
+    if (!persistence.isValid()
+        || !_persistenceCommitCoordinator
+        || QDir::cleanPath(persistence._projectPath)
+            != QDir::cleanPath(_projectPath)
+        || persistence._chunkId != _activeChunkId
+        || persistence._chunkDirectory != _activeChunkDirectory)
+    {
+        return false;
+    }
+    if (_resourceCleanupPersistenceGeneration != persistence._generation)
+    {
+        return false;
+    }
+    const bool generationCurrent = persistence._generation
+        == _persistenceCommitCoordinator->currentGeneration();
+    const QJsonObject currentMetadata = _filesManager.data();
+    const QJsonObject finalMetadata = keepUpdatedMetadata
+        ? currentMetadata
+        : mergeCleanupRollback(currentMetadata,
+                               persistence._originalMetadata,
+                               persistence._updatedMetadata);
+    const QJsonObject &committedMetadata = keepUpdatedMetadata
+        ? persistence._updatedMetadata
+        : persistence._originalMetadata;
+    const bool hasConcurrentMetadataChanges =
+        finalMetadata != committedMetadata;
+
+    if (hasConcurrentMetadataChanges)
+    {
+        updateMetadata(finalMetadata, true);
+    }
+    else if (!keepUpdatedMetadata)
+    {
+        updateMetadata(finalMetadata, false);
+    }
+
+    const bool finalMetadataDurable = metadataStateCommitted
+        && !hasConcurrentMetadataChanges;
+    _coreFileDirtyForArchive = _coreFileDirtyForArchive
+        || !finalMetadataDurable;
+    _resultsDirtyForArchive = _resultsDirtyForArchive
+        || (_resultsLoaded && !finalMetadataDurable);
+    _workspaceDirtyForArchive = _workspaceDirtyForArchive
+        || !finalMetadataDurable;
+    if (keepUpdatedMetadata || hasConcurrentMetadataChanges)
+    {
+        markDirtyIfRequested(true);
+    }
+    else if (_isDirty != persistence._wasDirty)
+    {
+        _isDirty = persistence._wasDirty;
+        emit dirtyStateChanged(_isDirty);
+    }
+    if (!finalMetadataDurable && _archiveSyncTimer)
+    {
+        _archiveSyncTimer->start(2000);
+    }
+    _resourceCleanupPersistenceGeneration = 0;
+    _archiveSyncPending = _archiveSyncPending
+        || _coreFileDirtyForArchive
+        || _resultsDirtyForArchive
+        || _configDirtyForArchive
+        || _uiStateDirtyForArchive
+        || _workspaceDirtyForArchive;
+    startNextPersistence();
+    return generationCurrent;
+}
+
 void ProjectData::clearTemporaryMetadata()
 {
     auto removeIfExists = [](const QString &p) {
@@ -2111,6 +2789,8 @@ bool ProjectData::addImages(const QStringList &imagePaths, QString *errorMsg)
 
     QStringList importedPaths;
     importedPaths.reserve(imagePaths.size());
+    QStringList reservedPaths;
+    reservedPaths.reserve(imagePaths.size());
     int skipped = 0;
     for (const QString &srcPath : imagePaths) {
         const QString absPath = QFileInfo(srcPath).absoluteFilePath();
@@ -2122,14 +2802,18 @@ bool ProjectData::addImages(const QStringList &imagePaths, QString *errorMsg)
                 &projectImagePath,
                 errorMsg))
         {
+            ProjectSharedImageStore(_projectPath)
+                .releaseReservations(reservedPaths);
             return false;
         }
-
         // 跳过已存在的重复图片
         if (existingPaths.contains(projectImagePath)) {
             ++skipped;
+            ProjectSharedImageStore(_projectPath)
+                .releaseReservations({projectImagePath});
             continue;
         }
+        reservedPaths.append(projectImagePath);
         existingPaths.insert(projectImagePath); // 防止同批次内重复
         importedPaths.append(projectImagePath);
     }
@@ -2163,12 +2847,20 @@ bool ProjectData::addImagesFromSharedStore(const QStringList &projectImagePaths,
     }
 
     int skipped = std::max(0, previouslySkipped);
+    QStringList publishedPaths;
     for (const QString &projectImagePath : projectImagePaths)
     {
         const QString cleanPath = QDir::cleanPath(projectImagePath.trimmed());
-        if (cleanPath.isEmpty() || existingPaths.contains(cleanPath))
+        if (cleanPath.isEmpty())
         {
             ++skipped;
+            continue;
+        }
+        if (existingPaths.contains(cleanPath))
+        {
+            ++skipped;
+            ProjectSharedImageStore(_projectPath)
+                .releaseReservations({cleanPath});
             continue;
         }
         if (!QFileInfo(cleanPath).isFile())
@@ -2177,16 +2869,26 @@ bool ProjectData::addImagesFromSharedStore(const QStringList &projectImagePaths,
             {
                 *errorMsg = QStringLiteral("共享影像不存在: %1").arg(cleanPath);
             }
+            ProjectSharedImageStore(_projectPath)
+                .releaseReservations(projectImagePaths);
             return false;
         }
 
         existingPaths.insert(cleanPath);
+        publishedPaths.append(cleanPath);
         QJsonObject image;
         image["image_uuid"] = QUuid::createUuid().toString(QUuid::WithoutBraces);
         image["path"] = cleanPath;
         image["type"] = "shared";
         image["added_at"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
         images.append(image);
+    }
+
+    ProjectSharedImageStore sharedImageStore(_projectPath);
+    if (!sharedImageStore.publishReferences(publishedPaths, errorMsg))
+    {
+        sharedImageStore.releaseReservations(projectImagePaths);
+        return false;
     }
 
     if (skipped > 0 && errorMsg)

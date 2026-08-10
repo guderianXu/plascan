@@ -228,7 +228,27 @@ MatchPhotosStageReport FeatureStage::run(
         }
 
         PreparedFeatureImage prepared;
-        if (!queue.take(&prepared))
+        bool preparedAvailable = false;
+        try
+        {
+            preparedAvailable = queue.take(&prepared);
+        }
+        catch (const std::exception &exception)
+        {
+            return makeFeatureReport(
+                MatchPhotosStageStatus::Failed,
+                QStringLiteral("影像预取 worker 失败：%1")
+                    .arg(QString::fromUtf8(exception.what())),
+                extractedCount);
+        }
+        catch (...)
+        {
+            return makeFeatureReport(
+                MatchPhotosStageStatus::Failed,
+                QStringLiteral("影像预取 worker 发生未知错误"),
+                extractedCount);
+        }
+        if (!preparedAvailable)
         {
             return makeFeatureReport(MatchPhotosStageStatus::Failed,
                                      QStringLiteral("影像预取队列提前结束"),

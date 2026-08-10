@@ -135,9 +135,21 @@ bool ProjectUiCommands::saveProject() const
 
 void ProjectUiCommands::closeProject() const
 {
-    if (_projectData)
+    if (!_projectData)
     {
-        _projectData->closeProject();
+        return;
+    }
+
+    QString error;
+    if (!_projectData->closeProject(&error))
+    {
+        QMessageBox::critical(
+            _parentWidget,
+            QStringLiteral("关闭项目失败"),
+            error.isEmpty()
+                ? QStringLiteral("无法安全持久化当前项目，项目仍保持打开。")
+                : QStringLiteral("无法安全关闭项目：%1\n项目仍保持打开。")
+                      .arg(error));
     }
 }
 

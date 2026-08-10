@@ -4,6 +4,8 @@
 // =============================================================================
 #include "BlockMatcher.h"
 #include "CostFunctions.h"
+#include "SubpixelRefiner.h"
+#include <algorithm>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -20,8 +22,12 @@ DisparityResult BlockMatcher::compute(const cv::Mat &left, const cv::Mat &right)
     CV_Assert(left.type() == CV_8UC1 && right.type() == CV_8UC1);
     CV_Assert(left.size() == right.size());
 
-    int imgW = left.cols, imgH = left.rows;
-    int numDisp = _config.maxDisparity - _config.minDisparity;
+    const int imgW = left.cols;
+    const int imgH = left.rows;
+    if (_config.maxDisparity <= _config.minDisparity || left.empty())
+    {
+        return {};
+    }
 
     CostVolume volume;
 #ifdef DM_ENABLE_CUDA
@@ -45,37 +51,36 @@ DisparityResult BlockMatcher::compute(const cv::Mat &left, const cv::Mat &right)
     result.disparity  = cv::Mat(imgH, imgW, CV_32FC1, cv::Scalar(0));
     result.confidence = cv::Mat(imgH, imgW, CV_32FC1, cv::Scalar(0));
     result.validMask  = cv::Mat(imgH, imgW, CV_8UC1, cv::Scalar(0));
+    const int threadCount = std::max(1, _config.numThreads);
 
     #ifdef _OPENMP
-    #pragma omp parallel for num_threads(_config.numThreads)
+    #pragma omp parallel for num_threads(threadCount)
     #endif
     for (int y = 0; y < imgH; ++y)
     {
         for (int x = 0; x < imgW; ++x)
         {
-            float bestCost = 1e20f, secondBest = 1e20f;
-            int bestDisp = 0;
-            for (int dIdx = 0; dIdx < numDisp; ++dIdx)
+            const BestDisparity selection = selectBestDisparity(volume, y, x);
+            if (!selection.valid)
             {
-                float c = volume[dIdx].at<float>(y, x);
-                if (c < bestCost)
-                {
-                    secondBest = bestCost;
-                    bestCost = c;
-                    bestDisp = _config.minDisparity + dIdx;
-                }
-                else if (c < secondBest)
-                {
-                    secondBest = c;
-                }
+                continue;
             }
-            result.disparity.at<float>(y, x) = static_cast<float>(bestDisp);
-            if (bestCost > 0)
-            {
-                result.confidence.at<float>(y, x) = (secondBest - bestCost) / bestCost;
-            }
+
+            result.disparity.at<float>(y, x) = static_cast<float>(selection.disparity);
+            result.confidence.at<float>(y, x) = selection.confidence;
             result.validMask.at<uchar>(y, x) = 1;
         }
+    }
+
+    if (_config.subpixel != SubpixelMode::None)
+    {
+        SubpixelRefiner refiner(_config);
+        result.disparity = refiner.refine(
+            result.disparity,
+            volume,
+            _config.minDisparity,
+            _config.maxDisparity,
+            result.validMask);
     }
     return result;
 }

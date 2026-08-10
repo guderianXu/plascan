@@ -1,0 +1,9 @@
+find_package(GTest REQUIRED)
+include(GoogleTest)
+
+add_executable(test_common_safe_worker_group test_safe_worker_group.cpp)
+target_link_libraries(test_common_safe_worker_group PRIVATE
+  plascan_common_concurrency
+  GTest::gtest_main
+)
+gtest_discover_tests(test_common_safe_worker_group DISCOVERY_MODE PRE_TEST)

@@ -3,6 +3,7 @@
 #include "MatchGeometryVerifier.h"
 #include "MatchPhotosParallelism.h"
 #include "MatchPhotosRuntime.h"
+#include "concurrency/SafeWorkerGroup.h"
 
 #include <QCryptographicHash>
 #include <QElapsedTimer>
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <exception>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -324,13 +326,13 @@ MatchPhotosStageReport GeometryVerifyStage::run(
     QElapsedTimer timer;
     timer.start();
 
-    std::vector<std::thread> workers;
-    workers.reserve(static_cast<std::size_t>(workerCount));
-    for (int worker = 0; worker < workerCount; ++worker)
+    try
     {
-        workers.emplace_back([&]()
+        xjw::common::concurrency::runWorkerGroup(
+            static_cast<std::size_t>(workerCount),
+            [&](std::stop_token stopToken)
         {
-            while (!shouldCancelMatchPhotos(context))
+            while (!stopToken.stop_requested() && !shouldCancelMatchPhotos(context))
             {
                 const int workIndex = nextIndex.fetch_add(1);
                 if (workIndex >= static_cast<int>(workIndices.size()))
@@ -354,8 +356,12 @@ MatchPhotosStageReport GeometryVerifyStage::run(
                     totalInliers.fetch_add(record.geometricInlierCount);
                 }
 
-                const int done = ++completed;
+                if (stopToken.stop_requested())
+                {
+                    break;
+                }
                 std::lock_guard lock(callbackMutex);
+                const int done = ++completed;
                 reportMatchPhotosProgress(
                     context,
                     QStringLiteral("geometry"),
@@ -369,9 +375,19 @@ MatchPhotosStageReport GeometryVerifyStage::run(
             }
         });
     }
-    for (std::thread &worker : workers)
+    catch (const std::exception &error)
     {
-        worker.join();
+        return makeGeometryReport(
+            MatchPhotosStageStatus::Failed,
+            QStringLiteral("几何验证 worker 异常：%1")
+                .arg(QString::fromUtf8(error.what())),
+            passedPairs.load());
+    }
+    catch (...)
+    {
+        return makeGeometryReport(MatchPhotosStageStatus::Failed,
+                                  QStringLiteral("几何验证 worker 发生未知异常"),
+                                  passedPairs.load());
     }
 
     if (shouldCancelMatchPhotos(context))

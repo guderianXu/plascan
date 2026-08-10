@@ -8,6 +8,7 @@
 #include "MatchPhotosMaskSupport.h"
 #include "MatchPhotosParallelism.h"
 #include "MatchPhotosRuntime.h"
+#include "concurrency/SafeWorkerGroup.h"
 #include "cuda_sift/CudaSiftAlgorithm.h"
 #include "io/PathIO.h"
 #include "lightglue/LightGlueFeatureBudget.h"
@@ -27,7 +28,7 @@
 #include <exception>
 #include <memory>
 #include <mutex>
-#include <thread>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -694,14 +695,13 @@ MatchPhotosStageReport MatchingStage::run(
     std::atomic_int nextWork{0};
     std::atomic_int completed{reusedPairs};
     std::atomic_int failedPairs{0};
-    std::atomic_bool stop{false};
     std::mutex resultMutex;
     QString fatalError;
-    std::vector<std::thread> workers;
-    workers.reserve(static_cast<std::size_t>(workerCount));
-    for (int worker = 0; worker < workerCount; ++worker)
+    try
     {
-        workers.emplace_back([&]()
+        xjw::common::concurrency::runWorkerGroup(
+            static_cast<std::size_t>(workerCount),
+            [&](std::stop_token stopToken)
         {
             QString createError;
             std::unique_ptr<image_matching::IImageMatchingAlgorithm> algorithm =
@@ -711,16 +711,11 @@ MatchPhotosStageReport MatchingStage::run(
                     &createError);
             if (!algorithm)
             {
-                std::lock_guard lock(resultMutex);
-                if (fatalError.isEmpty())
-                {
-                    fatalError = createError;
-                }
-                stop.store(true);
-                return;
+                throw std::runtime_error(createError.toStdString());
             }
 
-            while (!stop.load() && !shouldCancelMatchPhotos(context))
+            while (!stopToken.stop_requested() &&
+                   !shouldCancelMatchPhotos(context))
             {
                 const int workIndex = nextWork.fetch_add(1);
                 if (workIndex >= static_cast<int>(work.size()))
@@ -789,8 +784,13 @@ MatchPhotosStageReport MatchingStage::run(
                     }
                 }
 
-                const int done = ++completed;
+                if (stopToken.stop_requested() ||
+                    shouldCancelMatchPhotos(context))
+                {
+                    break;
+                }
                 std::lock_guard lock(resultMutex);
+                const int done = ++completed;
                 reportMatchPhotosProgress(
                     context,
                     QStringLiteral("matching"),
@@ -805,9 +805,21 @@ MatchPhotosStageReport MatchingStage::run(
             }
         });
     }
-    for (std::thread &worker : workers)
+    catch (const std::exception &error)
     {
-        worker.join();
+        return makeMatchingReport(
+            MatchPhotosStageStatus::Failed,
+            QStringLiteral("%1 匹配 worker 异常：%2")
+                .arg(algorithmPlan.displayName, QString::fromUtf8(error.what())),
+            completed.load());
+    }
+    catch (...)
+    {
+        return makeMatchingReport(
+            MatchPhotosStageStatus::Failed,
+            QStringLiteral("%1 匹配 worker 发生未知异常")
+                .arg(algorithmPlan.displayName),
+            completed.load());
     }
 
     if (shouldCancelMatchPhotos(context))

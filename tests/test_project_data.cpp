@@ -14,11 +14,14 @@
 
 #include <QDir>
 #include <QDirIterator>
+#include <QCoreApplication>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLockFile>
+#include <QSemaphore>
 #include <QTemporaryDir>
 #include <QtConcurrent/QtConcurrentRun>
 
@@ -1037,6 +1040,434 @@ TEST(ProjectDataTest, ConcurrentSharedImageImportsKeepSingleContentAddressedFile
     EXPECT_EQ(fileCount, 1);
 }
 
+TEST(ProjectDataTest, SharedImageLeaseSurvivesOldSnapshotAndGcNeedsTwoGenerations)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString projectPath = tempProjectPath(dir);
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(
+        projectPath, QStringLiteral("shared-image-lease")));
+
+    const QString sourcePath = QDir(dir.path()).filePath(
+        QStringLiteral("source/leased-image.tif"));
+    writeTestFile(sourcePath, QByteArray("leased-image-content"));
+
+    struct ImportResult
+    {
+        bool success = false;
+        QString resourceUri;
+        QString materializedPath;
+        QString errorMessage;
+    };
+    QSemaphore copyCompleted;
+    QSemaphore allowImportTaskToFinish;
+    QFuture<ImportResult> importFuture = QtConcurrent::run(
+        [&]()
+        {
+            ImportResult result;
+            result.success = ProjectSharedImageStore(projectPath).importImage(
+                sourcePath,
+                &result.resourceUri,
+                &result.materializedPath,
+                &result.errorMessage);
+            copyCompleted.release();
+            allowImportTaskToFinish.acquire();
+            return result;
+        });
+
+    // 固定“复制和 reservation 已完成，元数据尚未发布”的窗口，让旧归档
+    // 快照执行一次 GC；不依赖 sleep 或调度概率。
+    copyCompleted.acquire();
+    QString oldSnapshotError;
+    const bool oldSnapshotSaved = project.saveProject(&oldSnapshotError);
+    allowImportTaskToFinish.release();
+    importFuture.waitForFinished();
+    const ImportResult imported = importFuture.result();
+
+    ASSERT_TRUE(imported.success) << qPrintable(imported.errorMessage);
+    ASSERT_TRUE(oldSnapshotSaved) << qPrintable(oldSnapshotError);
+    ASSERT_TRUE(QFileInfo(imported.materializedPath).isFile());
+
+    const QString sharedImageLockPath =
+        QDir(ProjectPackageLayout::dataDirectory(projectPath)).filePath(
+            QStringLiteral(".shared-images.lock"));
+    QLockFile competingProcessLock(sharedImageLockPath);
+    competingProcessLock.setStaleLockTime(0);
+    EXPECT_FALSE(competingProcessLock.tryLock(0))
+        << "active reservation 必须跨进程持有共享影像同步锁";
+
+    QString error;
+    ASSERT_TRUE(project.addImagesFromSharedStore(
+        {imported.materializedPath}, 0, &error)) << qPrintable(error);
+    ASSERT_TRUE(project.saveProject(&error)) << qPrintable(error);
+    ASSERT_TRUE(QFileInfo(imported.materializedPath).isFile());
+    QLockFile afterCommitLock(sharedImageLockPath);
+    afterCommitLock.setStaleLockTime(0);
+    ASSERT_TRUE(afterCommitLock.tryLock(0))
+        << "包含 URI 的归档提交后应释放跨进程 lease";
+    afterCommitLock.unlock();
+
+    ASSERT_TRUE(project.removeResource(imported.materializedPath));
+    ASSERT_TRUE(project.saveProject(&error)) << qPrintable(error);
+    EXPECT_TRUE(QFileInfo(imported.materializedPath).isFile())
+        << "第一个未引用代次只能写入 tombstone";
+
+    // 同一个 Chunk id+revision token 反复 GC 不构成新的已提交代次。
+    ASSERT_TRUE(ProjectSharedImageStore(projectPath).pruneUnreferenced(&error))
+        << qPrintable(error);
+    ASSERT_TRUE(ProjectSharedImageStore(projectPath).pruneUnreferenced(&error))
+        << qPrintable(error);
+    EXPECT_TRUE(QFileInfo(imported.materializedPath).isFile())
+        << "重复处理同一个 committed generation 不得提前删除";
+
+    ASSERT_TRUE(project.saveProject(&error)) << qPrintable(error);
+    EXPECT_FALSE(QFileInfo::exists(imported.materializedPath))
+        << "连续两个未引用代次后才允许删除共享实体";
+}
+
+TEST(ProjectDataTest, SharedImageGcFailureDoesNotFailCommittedSave)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString projectPath = tempProjectPath(dir);
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(
+        projectPath, QStringLiteral("shared-image-gc-warning")));
+
+    // 用同名目录稳定阻断 QSaveFile 状态写入，模拟可重试 GC 失败。
+    const QString statePath =
+        QDir(ProjectPackageLayout::dataDirectory(projectPath)).filePath(
+            QStringLiteral(".shared-image-gc.json"));
+    ASSERT_TRUE(QDir().mkpath(statePath));
+
+    const QString sourcePath = QDir(dir.path()).filePath(
+        QStringLiteral("source/gc-warning-image.tif"));
+    writeTestFile(sourcePath, QByteArray("gc-warning-image-content"));
+    QString error;
+    ASSERT_TRUE(project.addImages({sourcePath}, &error)) << qPrintable(error);
+
+    error.clear();
+    EXPECT_TRUE(project.saveProject(&error)) << qPrintable(error);
+    EXPECT_TRUE(error.isEmpty()) << qPrintable(error);
+    EXPECT_TRUE(QFileInfo(project.getAllImages().constFirst()).isFile());
+}
+
+TEST(ProjectDataTest, InvalidTemporaryMetadataStopsSharedImageDeletion)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString projectPath = tempProjectPath(dir);
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(
+        projectPath, QStringLiteral("invalid-temporary-gc-guard")));
+
+    const QString sourcePath = QDir(dir.path()).filePath(
+        QStringLiteral("source/invalid-temporary-image.tif"));
+    writeTestFile(sourcePath, QByteArray("invalid-temporary-image-content"));
+    QString error;
+    ASSERT_TRUE(project.addImages({sourcePath}, &error)) << qPrintable(error);
+    ASSERT_TRUE(project.saveProject(&error)) << qPrintable(error);
+    const QString managedImagePath = project.getAllImages().constFirst();
+
+    ASSERT_TRUE(project.removeResource(managedImagePath));
+    ASSERT_TRUE(project.saveProject(&error)) << qPrintable(error);
+    ASSERT_TRUE(QFileInfo::exists(managedImagePath));
+
+    writeTestFile(ProjectIO::tempFilesPath(projectPath), QByteArray("{broken"));
+    QJsonObject config = chunkSection(
+        projectPath, PortableProjectFormat::ProjectConfigSection);
+    config[QStringLiteral("gc_guard_generation")] = 2;
+    ASSERT_TRUE(ProjectChunkStore(projectPath).writeChunkSections(
+        project.activeChunkDirectory(),
+        {{QString::fromLatin1(
+              PortableProjectFormat::ProjectConfigSection),
+          config}},
+        &error)) << qPrintable(error);
+
+    error.clear();
+    EXPECT_FALSE(
+        ProjectSharedImageStore(projectPath).pruneUnreferenced(&error));
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_TRUE(QFileInfo::exists(managedImagePath))
+        << "无效临时恢复元数据存在时必须保守停止 GC";
+}
+
+TEST(ProjectDataTest, DuplicateSharedImageImportReleasesItsReservation)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString projectPath = tempProjectPath(dir);
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(
+        projectPath, QStringLiteral("duplicate-shared-image")));
+
+    const QString sourcePath = QDir(dir.path()).filePath(
+        QStringLiteral("source/duplicate-image.tif"));
+    writeTestFile(sourcePath, QByteArray("duplicate-image-content"));
+    QString error;
+    ASSERT_TRUE(project.addImages({sourcePath}, &error)) << qPrintable(error);
+    ASSERT_TRUE(project.saveProject(&error)) << qPrintable(error);
+
+    error.clear();
+    ASSERT_TRUE(project.addImages({sourcePath}, &error)) << qPrintable(error);
+    EXPECT_EQ(error, QStringLiteral("已跳过 1 张重复图片"));
+
+    const QString lockPath =
+        QDir(ProjectPackageLayout::dataDirectory(projectPath)).filePath(
+            QStringLiteral(".shared-images.lock"));
+    QLockFile competingProcessLock(lockPath);
+    competingProcessLock.setStaleLockTime(0);
+    EXPECT_TRUE(competingProcessLock.tryLock(0))
+        << "被跳过的重复导入不得遗留 active reservation";
+}
+
+TEST(ProjectDataTest,
+     DuplicateBeforeLaterFailureDoesNotReleasePendingReservation)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString projectPath = tempProjectPath(dir);
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(
+        projectPath, QStringLiteral("duplicate-before-failure")));
+
+    const QString sourcePath = QDir(dir.path()).filePath(
+        QStringLiteral("source/pending-image.tif"));
+    writeTestFile(sourcePath, QByteArray("pending-image-content"));
+    QString error;
+    ASSERT_TRUE(project.addImages({sourcePath}, &error)) << qPrintable(error);
+
+    error.clear();
+    const QString missingPath = QDir(dir.path()).filePath(
+        QStringLiteral("source/missing-image.tif"));
+    EXPECT_FALSE(project.addImages({sourcePath, missingPath}, &error));
+    EXPECT_FALSE(error.isEmpty());
+
+    const QString lockPath =
+        QDir(ProjectPackageLayout::dataDirectory(projectPath)).filePath(
+            QStringLiteral(".shared-images.lock"));
+    QLockFile competingProcessLock(lockPath);
+    competingProcessLock.setStaleLockTime(0);
+    EXPECT_FALSE(competingProcessLock.tryLock(0))
+        << "后续导入失败不得释放首轮尚未提交的 reservation";
+
+    ASSERT_TRUE(project.saveProject(&error)) << qPrintable(error);
+    QLockFile afterCommitLock(lockPath);
+    afterCommitLock.setStaleLockTime(0);
+    EXPECT_TRUE(afterCommitLock.tryLock(0));
+}
+
+TEST(ProjectDataTest,
+     CloseDrainsLatestSnapshotAndReleasesSharedImageLeaseWithoutEvents)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString projectPath = tempProjectPath(dir);
+    const QString sourcePath = QDir(dir.path()).filePath(
+        QStringLiteral("source/close-barrier-image.tif"));
+    writeTestFile(sourcePath, QByteArray("close-barrier-image-content"));
+    QString temporaryFilesPath;
+    QString managedImagePath;
+    {
+        ProjectData project;
+        ASSERT_TRUE(project.createProject(
+            projectPath, QStringLiteral("close-barrier")));
+        QJsonObject metadata = project.metadata();
+        metadata[QStringLiteral("close_barrier_marker")] =
+            QStringLiteral("durable-before-unlock");
+        project.updateMetadata(metadata, true);
+
+        QString error;
+        ASSERT_TRUE(project.addImages({sourcePath}, &error))
+            << qPrintable(error);
+        const QStringList images = project.getAllImages();
+        ASSERT_EQ(images.size(), 1);
+        managedImagePath = images.first();
+        temporaryFilesPath = ProjectIO::tempFilesPath(projectPath);
+
+        ASSERT_TRUE(project.closeProject());
+        EXPECT_FALSE(project.hasProject());
+    }
+
+    QFile temporaryFiles(temporaryFilesPath);
+    ASSERT_TRUE(temporaryFiles.open(QIODevice::ReadOnly));
+    const QJsonDocument document = QJsonDocument::fromJson(
+        temporaryFiles.readAll());
+    ASSERT_TRUE(document.isObject());
+    EXPECT_EQ(document.object().value(
+                  QStringLiteral("close_barrier_marker")).toString(),
+              QStringLiteral("durable-before-unlock"));
+    EXPECT_TRUE(QFileInfo::exists(managedImagePath));
+
+    const QString lockPath =
+        QDir(ProjectPackageLayout::dataDirectory(projectPath)).filePath(
+            QStringLiteral(".shared-images.lock"));
+    QLockFile competingProcessLock(lockPath);
+    competingProcessLock.setStaleLockTime(0);
+    EXPECT_TRUE(competingProcessLock.tryLock(0))
+        << "close must release this session's shared-image lease";
+}
+
+TEST(ProjectDataTest,
+     DestructorDrainsLatestSnapshotAndReleasesSharedImageLeaseWithoutEvents)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString projectPath = tempProjectPath(dir);
+    const QString sourcePath = QDir(dir.path()).filePath(
+        QStringLiteral("source/destructor-barrier-image.tif"));
+    writeTestFile(sourcePath, QByteArray("destructor-barrier-image-content"));
+    QString temporaryFilesPath;
+    QString managedImagePath;
+    {
+        ProjectData project;
+        ASSERT_TRUE(project.createProject(
+            projectPath, QStringLiteral("destructor-barrier")));
+        QJsonObject metadata = project.metadata();
+        metadata[QStringLiteral("destructor_barrier_marker")] =
+            QStringLiteral("durable-before-destruction");
+        project.updateMetadata(metadata, true);
+
+        QString error;
+        ASSERT_TRUE(project.addImages({sourcePath}, &error))
+            << qPrintable(error);
+        managedImagePath = project.getAllImages().constFirst();
+        temporaryFilesPath = ProjectIO::tempFilesPath(projectPath);
+    }
+
+    QFile temporaryFiles(temporaryFilesPath);
+    ASSERT_TRUE(temporaryFiles.open(QIODevice::ReadOnly));
+    const QJsonDocument document = QJsonDocument::fromJson(
+        temporaryFiles.readAll());
+    ASSERT_TRUE(document.isObject());
+    EXPECT_EQ(document.object().value(
+                  QStringLiteral("destructor_barrier_marker")).toString(),
+              QStringLiteral("durable-before-destruction"));
+    EXPECT_TRUE(QFileInfo::exists(managedImagePath));
+
+    const QString lockPath =
+        QDir(ProjectPackageLayout::dataDirectory(projectPath)).filePath(
+            QStringLiteral(".shared-images.lock"));
+    QLockFile competingProcessLock(lockPath);
+    competingProcessLock.setStaleLockTime(0);
+    EXPECT_TRUE(competingProcessLock.tryLock(0))
+        << "destructor must release this session's shared-image lease";
+}
+
+TEST(ProjectDataTest,
+     CloseThenImmediateReopenIgnoresLatePersistenceCallback)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString projectPath = tempProjectPath(dir);
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(
+        projectPath, QStringLiteral("immediate-reopen")));
+    QJsonObject metadata = project.metadata();
+    metadata[QStringLiteral("reopen_marker")] =
+        QStringLiteral("latest-session");
+    project.updateMetadata(metadata, true);
+
+    QString error;
+    ASSERT_TRUE(project.closeProject(&error)) << qPrintable(error);
+    ASSERT_TRUE(project.openProject(projectPath, &error)) << qPrintable(error);
+
+    QCoreApplication::processEvents();
+
+    EXPECT_EQ(QDir::cleanPath(project.currentProjectPath()),
+              QDir::cleanPath(projectPath));
+    EXPECT_EQ(project.metadata().value(
+                  QStringLiteral("reopen_marker")).toString(),
+              QStringLiteral("latest-session"));
+    EXPECT_FALSE(project.isDirty())
+        << "上一会话的 queued completion 不得污染重开后的会话";
+}
+
+TEST(ProjectDataTest, FailedCloseDoesNotReplaceActiveProjectSession)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString sourceProjectPath = QDir(dir.path()).filePath(
+        QStringLiteral("source.plascan"));
+    const QString targetProjectPath = QDir(dir.path()).filePath(
+        QStringLiteral("target.plascan"));
+    {
+        ProjectData targetCreator;
+        ASSERT_TRUE(targetCreator.createProject(
+            targetProjectPath, QStringLiteral("target")));
+        ASSERT_TRUE(targetCreator.closeProject());
+    }
+
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(
+        sourceProjectPath, QStringLiteral("source")));
+    QString error;
+    ASSERT_TRUE(project.saveProject(&error)) << qPrintable(error);
+    QCoreApplication::processEvents();
+
+    QJsonObject metadata = project.metadata();
+    metadata[QStringLiteral("unsaved_close_marker")] = true;
+    project.updateMetadata(metadata, true);
+
+    const QString chunkArchivePath =
+        defaultChunkArchivePath(sourceProjectPath);
+    const QString archiveBackupPath =
+        chunkArchivePath + QStringLiteral(".close-test-backup");
+    ASSERT_TRUE(QFile::rename(chunkArchivePath, archiveBackupPath));
+    ASSERT_TRUE(QDir().mkpath(chunkArchivePath));
+    const QString temporaryFilesPath =
+        ProjectIO::tempFilesPath(sourceProjectPath);
+    QFile::remove(temporaryFilesPath);
+    ASSERT_TRUE(QDir().mkpath(temporaryFilesPath));
+
+    const QString failedCreatePath = QDir(dir.path()).filePath(
+        QStringLiteral("must-not-replace.plascan"));
+    EXPECT_FALSE(project.createProject(
+        failedCreatePath, QStringLiteral("must-not-replace")));
+    EXPECT_EQ(QDir::cleanPath(project.currentProjectPath()),
+              QDir::cleanPath(sourceProjectPath));
+    EXPECT_FALSE(QFileInfo::exists(failedCreatePath));
+    EXPECT_FALSE(QFileInfo::exists(
+        ProjectPackageLayout::dataDirectory(failedCreatePath)));
+
+    error.clear();
+    EXPECT_FALSE(project.openProject(targetProjectPath, &error));
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_EQ(QDir::cleanPath(project.currentProjectPath()),
+              QDir::cleanPath(sourceProjectPath));
+    EXPECT_TRUE(project.metadata().value(
+        QStringLiteral("unsaved_close_marker")).toBool());
+
+    {
+        ProjectData targetReopened;
+        ASSERT_TRUE(targetReopened.openProject(targetProjectPath, &error))
+            << qPrintable(error);
+        ASSERT_TRUE(targetReopened.closeProject(&error)) << qPrintable(error);
+    }
+
+    ASSERT_TRUE(QDir(temporaryFilesPath).removeRecursively());
+    ASSERT_TRUE(QDir(chunkArchivePath).removeRecursively());
+    ASSERT_TRUE(QFile::rename(archiveBackupPath, chunkArchivePath));
+
+    ProjectData competingSourceSession;
+    error.clear();
+    EXPECT_FALSE(competingSourceSession.openProject(
+        sourceProjectPath, &error));
+    EXPECT_FALSE(error.isEmpty());
+
+    ASSERT_TRUE(project.closeProject(&error)) << qPrintable(error);
+}
+
 TEST(ProjectDataTest, SplitProjectReopensAllWorkflowAssetsAfterPairMoves)
 {
     QTemporaryDir dir;
@@ -1289,7 +1720,7 @@ TEST(ProjectDataTest, RejectsLegacyMonolithicProjectWithoutChangingIt)
         ProjectPackageLayout::dataDirectory(projectPath)));
 }
 
-TEST(ProjectDataTest, RemovingImportedImageDeletesWorkspaceEntryOnNextSave)
+TEST(ProjectDataTest, RemovingImportedImageDeletesAfterTwoCommittedGenerations)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
@@ -1320,21 +1751,27 @@ TEST(ProjectDataTest, RemovingImportedImageDeletesWorkspaceEntryOnNextSave)
     ASSERT_TRUE(project.removeResource(materializedImages.at(0)));
     EXPECT_TRUE(QFileInfo::exists(materializedImages.at(0)));
     ASSERT_TRUE(project.saveProject(&error)) << qPrintable(error);
+    EXPECT_TRUE(QFileInfo::exists(materializedImages.at(0)))
+        << "首个未引用代次只登记 tombstone";
+
+    {
+        PlascanArchive archive(
+            defaultChunkArchivePath(projectPath),
+            PlascanArchivePathType::DirectArchive);
+        ASSERT_TRUE(archive.isValid());
+        EXPECT_FALSE(archive.containsEntry(archivedEntry));
+
+        const QJsonObject indexObject = chunkSection(
+            projectPath, PortableProjectFormat::ResourceIndexSection);
+        QString indexError;
+        const ProjectResourceIndex index =
+            ProjectResourceIndex::fromJson(indexObject, &indexError);
+        ASSERT_TRUE(indexError.isEmpty()) << qPrintable(indexError);
+        EXPECT_TRUE(index.isEmpty());
+    }
+
+    ASSERT_TRUE(project.saveProject(&error)) << qPrintable(error);
     EXPECT_FALSE(QFileInfo::exists(materializedImages.at(0)));
-
-    PlascanArchive archive(
-        defaultChunkArchivePath(projectPath),
-        PlascanArchivePathType::DirectArchive);
-    ASSERT_TRUE(archive.isValid());
-    EXPECT_FALSE(archive.containsEntry(archivedEntry));
-
-    const QJsonObject indexObject = chunkSection(
-        projectPath, PortableProjectFormat::ResourceIndexSection);
-    QString indexError;
-    const ProjectResourceIndex index =
-        ProjectResourceIndex::fromJson(indexObject, &indexError);
-    ASSERT_TRUE(indexError.isEmpty()) << qPrintable(indexError);
-    EXPECT_TRUE(index.isEmpty());
 }
 
 TEST(ProjectDataTest, PackResourcePersistsFilesAndDirectoriesInsideProject)
@@ -1858,6 +2295,58 @@ TEST(ProjectDataTest, UpdateMetadataPersistsResultsWithoutPriorFullMetadataLoad)
     EXPECT_FALSE(core.contains(QStringLiteral("dem_results")));
     ASSERT_TRUE(results.contains(QStringLiteral("dem_results")));
     EXPECT_EQ(results.value(QStringLiteral("dem_results")).toArray().size(), 1);
+}
+
+TEST(ProjectDataTest,
+     FullMetadataMutationPreservesLazilyArchivedModelAndOtherResults)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString projectPath = tempProjectPath(dir);
+    {
+        ProjectData project;
+        ASSERT_TRUE(project.createProject(projectPath, QStringLiteral("demo")));
+        QJsonObject metadata = project.coreFilesMeta();
+        metadata[QStringLiteral("model_results")] = QJsonArray{
+            QJsonObject{{QStringLiteral("model_run_id"),
+                         QStringLiteral("existing-model")},
+                        {QStringLiteral("model_ply"),
+                         QStringLiteral("/tmp/existing-model.ply")}}
+        };
+        metadata[QStringLiteral("dem_results")] = singleRecord(
+            QStringLiteral("existing-dem"),
+            QStringLiteral("dem_tif"),
+            QStringLiteral("/tmp/existing-dem.tif"));
+        project.updateMetadata(metadata, true);
+        QString error;
+        ASSERT_TRUE(project.saveProject(&error)) << qPrintable(error);
+    }
+
+    ProjectData reopened;
+    QString error;
+    ASSERT_TRUE(reopened.openProject(projectPath, &error))
+        << qPrintable(error);
+    EXPECT_FALSE(reopened.metadata().contains(QStringLiteral("model_results")));
+
+    QJsonObject fullMetadata = reopened.metadataIncludingResults();
+    QJsonArray models = fullMetadata.value(
+        QStringLiteral("model_results")).toArray();
+    ASSERT_EQ(models.size(), 1);
+    models.append(QJsonObject{
+        {QStringLiteral("model_run_id"), QStringLiteral("new-model")},
+        {QStringLiteral("model_ply"), QStringLiteral("/tmp/new-model.ply")}
+    });
+    fullMetadata[QStringLiteral("model_results")] = models;
+    reopened.updateMetadata(fullMetadata, true);
+    ASSERT_TRUE(reopened.saveProject(&error)) << qPrintable(error);
+
+    const QJsonObject results = chunkSection(
+        projectPath, PortableProjectFormat::ProjectResultsSection);
+    EXPECT_EQ(results.value(QStringLiteral("model_results")).toArray().size(),
+              2);
+    EXPECT_EQ(results.value(QStringLiteral("dem_results")).toArray().size(),
+              1);
 }
 
 TEST(ProjectDataTest, UpsertResultRecordPersistsThroughProjectDataContract)

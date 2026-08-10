@@ -6,7 +6,10 @@ target_include_directories(intersection PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../camera
 )
 
-target_link_libraries(intersection PUBLIC camera)
+target_link_libraries(intersection
+    PUBLIC camera
+    PRIVATE plascan_common_concurrency
+)
 
 # Build a demo executable inside the intersection subproject so this CMake
 # can be used independently to produce the example binary.

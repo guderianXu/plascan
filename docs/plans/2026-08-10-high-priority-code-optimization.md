@@ -4,7 +4,11 @@
 
 复核基线：`0fb3b125`
 
-状态：待实施
+状态：实现与本地门禁已完成（等待提交后的 GitHub required checks）
+
+实施范围：SAFE-01～03、MODEL-01～02、DM-01～04、CONC-01～03、MVS-01～02、BUILD-01～02
+与 CI-01 均已落地行为测试和实现；阶段 6 中与本轮 P1 无直接依赖的 GUI 分页及存储哈希去重仍保留为
+后续维护项。最终完成状态以本文验证矩阵和 GitHub required checks 全部通过为准。
 
 ## 目标与边界
 
@@ -271,6 +275,12 @@ DepthMapFusion；随后迁移 SurfaceReconstructor 和其余同类裸 worker。
 - 模型“分割成区块”在后端实现前先禁用或明确标注未支持，不能继续提交无效参数。
 - 拆分本计划触及的超大测试文件，将源码字符串契约替换为路径安全、异步生命周期和算法行为测试。
 - 合并 `ProjectResourceStore` 连续重复的 SHA-256 校验，并记录导入目标 mtime，减少大文件打开开销。
+- 为相机目录与密集点云覆盖发布增加跨进程崩溃恢复标记，关闭“旧产物移入备份、新产物尚未改名”之间
+  被强杀时需要人工恢复备份的窗口；当前实现已经保证普通 IO 异常回滚，但不把双重 rename 宣称为断电原子。
+- 为模型产物已经发布、元数据尚未最终提交的窗口增加启动时孤儿 run 扫描；继续保留当前所有权标记和
+  会话代次保护，禁止无证明递归删除。
+- CLI-only Dense 长任务补充统一取消令牌；MVS 已在解码、掩模、预处理与缓存等待边界检查取消，但单次
+  OpenCV/GDAL 解码调用本身仍受第三方 API 的不可中断时长限制。
 
 ## 验证矩阵
 
@@ -321,6 +331,20 @@ cmake --build build\headless-smoke --target reconstruct_pipeline_cli
 
 Linux/GCC 使用对应 `linux-vcpkg-release` preset 在 Linux 环境或 CI 中执行。CUDA 改动还需使用
 `windows-vcpkg-cuda-release` 构建，并在具备设备的环境运行 CPU/CUDA 一致性和模型 smoke test。
+
+### 2026-08-10 本地验证结果
+
+- Windows/MSVC + CUDA/TensorRT 完整构建通过。
+- CTest 全量门禁 2411/2411 通过；此前仅剩的共享影像两代 tombstone 测试和 MVS 私有成员源码契约测试
+  已修正，并分别定向复测 1/1 通过。
+- Windows package smoke 通过，包含 BiRefNet 两项模型资产校验和 87 个运行时 DLL 校验。
+- Headless smoke 通过：在 GUI、GUI 测试、Conda、CUDA、TensorRT 全关闭且 cache 注入伪 Conda 路径时，
+  `PLASCAN_EFFECTIVE_CONDA_PREFIX` 为空、构建图无 GUI 目标，`reconstruct_pipeline_cli` 成功生成。
+- Python `unittest discover` 115/115 通过；本轮 9 个 Python 脚本通过 `py_compile`。
+- Dense Match/CLI 65/65、MVS 相关 95/95、项目清理/项目数据/模型生命周期组合 85/85 通过；CUDA
+  代价函数与 CPU parity 门禁通过。
+- LoMa-R K1024/K2048/K3840 三个 manifest 均为 644 字节，SHA-256 与 `models-v1.1.0` 发布清单一致。
+- Linux/GCC 由提交后的 GitHub required checks 验证；其结果将在本计划完成状态中收口。
 
 ## 推荐提交顺序
 

@@ -87,5 +87,18 @@ if(BUILD_TESTS)
 		)
 		target_include_directories(test_camera_format_converter PRIVATE ${CMAKE_SOURCE_DIR}/src/core/camera)
 		gtest_discover_tests(test_camera_format_converter)
+
+		# 覆盖输出祖先/别名保护及目录事务的回滚与残留清理。
+		add_executable(test_camera_format_converter_safety
+			test/CameraFormatConverterSafety_tests.cpp
+		)
+		target_link_libraries(test_camera_format_converter_safety PRIVATE
+			camera
+			GTest::gtest_main
+		)
+		target_include_directories(test_camera_format_converter_safety PRIVATE
+			${CMAKE_SOURCE_DIR}/src/core/camera
+		)
+		gtest_discover_tests(test_camera_format_converter_safety)
 	endif()
 endif()

@@ -15,15 +15,30 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <iomanip>
+#include <map>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
+#include <utility>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <sys/stat.h>
+#endif
+
+#include <QFileInfo>
 #include <zip.h>
 
 namespace xjw::camera
@@ -1593,6 +1608,17 @@ void writeTsai(const std::filesystem::path &path, const CameraRecord &record)
         out << formatNumber(record.rotationCameraToWorld[i]);
     }
     out << "\n";
+
+    out.flush();
+    if (!out)
+    {
+        throw std::runtime_error("无法完整写入 tsai 文件: " + path.string());
+    }
+    out.close();
+    if (!out)
+    {
+        throw std::runtime_error("无法关闭 tsai 文件: " + path.string());
+    }
 }
 
 void writeSummary(const std::filesystem::path &summaryPath,
@@ -1631,49 +1657,616 @@ void writeSummary(const std::filesystem::path &summaryPath,
     }
     out << "]\n";
     out << "}\n";
+
+    out.flush();
+    if (!out)
+    {
+        throw std::runtime_error("无法完整写入 summary.json: " + summaryPath.string());
+    }
+    out.close();
+    if (!out)
+    {
+        throw std::runtime_error("无法关闭 summary.json: " + summaryPath.string());
+    }
 }
 
-bool directoryIsEmpty(const std::filesystem::path &path)
+bool directoryIsEmpty(const std::filesystem::path &path, std::error_code *error)
 {
-    return std::filesystem::is_directory(path) && std::filesystem::directory_iterator(path)
-        == std::filesystem::directory_iterator();
+    std::filesystem::directory_iterator iterator(path, *error);
+    if (*error)
+    {
+        return false;
+    }
+    return iterator == std::filesystem::directory_iterator();
 }
 
-void prepareOutputDirectory(const std::filesystem::path &sourceDir,
-                            const std::filesystem::path &outputDir,
-                            bool overwrite)
+std::string pathForMessage(const std::filesystem::path &path)
+{
+    return xjw::common::io::toUtf8Path(path);
+}
+
+std::filesystem::path uniqueSiblingPath(const std::filesystem::path &outputDir,
+                                        const std::string &purpose)
+{
+    static std::atomic<unsigned long long> sequence{0};
+    const auto tick = static_cast<unsigned long long>(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    const std::filesystem::path parent = outputDir.parent_path();
+
+    for (unsigned int attempt = 0; attempt < 256; ++attempt)
+    {
+        const unsigned long long id = sequence.fetch_add(1, std::memory_order_relaxed);
+        const std::string name = ".plascan-camera-" + purpose + "-"
+            + std::to_string(tick) + "-" + std::to_string(id) + "-" + std::to_string(attempt);
+        const std::filesystem::path candidate = parent / name;
+
+        std::error_code exists_error;
+        const bool exists = std::filesystem::exists(candidate, exists_error);
+        if (exists_error)
+        {
+            throw std::runtime_error("无法检查事务临时路径: " + pathForMessage(candidate)
+                                     + " (" + exists_error.message() + ")");
+        }
+        if (!exists)
+        {
+            return candidate;
+        }
+    }
+
+    throw std::runtime_error("无法为输出目录分配唯一事务路径: " + pathForMessage(outputDir));
+}
+
+std::filesystem::path createUniqueSiblingDirectory(const std::filesystem::path &outputDir,
+                                                   const std::string &purpose)
+{
+    for (unsigned int attempt = 0; attempt < 256; ++attempt)
+    {
+        const std::filesystem::path candidate = uniqueSiblingPath(outputDir, purpose);
+        std::error_code error;
+        if (std::filesystem::create_directory(candidate, error))
+        {
+            return candidate;
+        }
+        if (error && error != std::errc::file_exists)
+        {
+            throw std::runtime_error("无法创建事务目录: " + pathForMessage(candidate)
+                                     + " (" + error.message() + ")");
+        }
+    }
+    throw std::runtime_error("无法创建唯一事务目录: " + pathForMessage(outputDir));
+}
+
+class OutputDirectoryTransaction
+{
+public:
+    OutputDirectoryTransaction(std::filesystem::path outputDir, bool overwrite)
+        : _outputDir(std::move(outputDir)),
+          _overwrite(overwrite)
+    {
+        std::error_code error;
+        _outputExisted = std::filesystem::exists(_outputDir, error);
+        if (error)
+        {
+            throw std::runtime_error("无法检查输出目录: " + pathForMessage(_outputDir)
+                                     + " (" + error.message() + ")");
+        }
+
+        if (_outputExisted)
+        {
+            const bool is_directory = std::filesystem::is_directory(_outputDir, error);
+            if (error)
+            {
+                throw std::runtime_error("无法检查输出目录类型: " + pathForMessage(_outputDir)
+                                         + " (" + error.message() + ")");
+            }
+            if (!is_directory)
+            {
+                throw std::runtime_error("输出路径已存在且不是目录: " + pathForMessage(_outputDir));
+            }
+
+            const bool is_empty = directoryIsEmpty(_outputDir, &error);
+            if (error)
+            {
+                throw std::runtime_error("无法检查输出目录内容: " + pathForMessage(_outputDir)
+                                         + " (" + error.message() + ")");
+            }
+            if (!is_empty && !overwrite)
+            {
+                throw std::runtime_error("输出目录非空，请使用 --overwrite 覆盖: "
+                                         + pathForMessage(_outputDir));
+            }
+        }
+
+        const std::filesystem::path parent = _outputDir.parent_path();
+        std::filesystem::create_directories(parent, error);
+        if (error)
+        {
+            throw std::runtime_error("无法创建输出父目录: " + pathForMessage(parent)
+                                     + " (" + error.message() + ")");
+        }
+
+        _stagingDir = createUniqueSiblingDirectory(_outputDir, "stage");
+
+        const bool created_cameras = std::filesystem::create_directory(_stagingDir / "cameras", error);
+        if (error || !created_cameras)
+        {
+            std::error_code cleanup_error;
+            std::filesystem::remove_all(_stagingDir, cleanup_error);
+            throw std::runtime_error("无法创建相机暂存目录: " + pathForMessage(_stagingDir / "cameras")
+                                     + (error ? " (" + error.message() + ")" : ""));
+        }
+    }
+
+    OutputDirectoryTransaction(const OutputDirectoryTransaction &) = delete;
+    OutputDirectoryTransaction &operator=(const OutputDirectoryTransaction &) = delete;
+
+    ~OutputDirectoryTransaction()
+    {
+        if (!_committed)
+        {
+            rollbackNoThrow();
+        }
+    }
+
+    const std::filesystem::path &stagingDir() const
+    {
+        return _stagingDir;
+    }
+
+    void commit()
+    {
+        std::error_code error;
+        const bool output_exists_now = std::filesystem::exists(_outputDir, error);
+        if (error)
+        {
+            throw std::runtime_error("无法在提交前复检输出目录: "
+                                     + pathForMessage(_outputDir)
+                                     + " (" + error.message() + ")");
+        }
+        if (!_outputExisted && output_exists_now)
+        {
+            throw std::runtime_error(
+                "相机转换期间输出路径被其它任务创建，已拒绝覆盖: "
+                + pathForMessage(_outputDir));
+        }
+        if (_outputExisted && !output_exists_now)
+        {
+            _outputExisted = false;
+        }
+        if (_outputExisted)
+        {
+            const bool is_directory = std::filesystem::is_directory(
+                _outputDir, error);
+            if (error || !is_directory)
+            {
+                throw std::runtime_error(
+                    "相机转换期间输出目录类型发生变化，已拒绝提交: "
+                    + pathForMessage(_outputDir)
+                    + (error ? " (" + error.message() + ")" : ""));
+            }
+            if (!_overwrite)
+            {
+                const bool is_empty = directoryIsEmpty(_outputDir, &error);
+                if (error || !is_empty)
+                {
+                    throw std::runtime_error(
+                        "相机转换期间非覆盖输出目录出现新内容，已拒绝提交: "
+                        + pathForMessage(_outputDir)
+                        + (error ? " (" + error.message() + ")" : ""));
+                }
+            }
+        }
+
+        if (_outputExisted)
+        {
+            _backupDir = createUniqueSiblingDirectory(_outputDir, "backup");
+            try
+            {
+                _previousOutputPath = _backupDir / "previous-output";
+            }
+            catch (...)
+            {
+                std::error_code cleanup_error;
+                std::filesystem::remove_all(_backupDir, cleanup_error);
+                _backupDir.clear();
+                throw;
+            }
+            std::filesystem::rename(_outputDir, _previousOutputPath, error);
+            if (error)
+            {
+                std::error_code cleanup_error;
+                std::filesystem::remove_all(_backupDir, cleanup_error);
+                _backupDir.clear();
+                throw std::runtime_error("无法备份原输出目录: " + pathForMessage(_outputDir)
+                                         + " (" + error.message() + ")");
+            }
+            _backupActive = true;
+        }
+
+        std::filesystem::rename(_stagingDir, _outputDir, error);
+        if (error)
+        {
+            const std::error_code install_error = error;
+            bool restored_previous_output = false;
+            if (_backupActive)
+            {
+                error.clear();
+                std::filesystem::rename(
+                    _previousOutputPath, _outputDir, error);
+                if (error)
+                {
+                    // 保留备份供人工恢复；析构时不再重试 rename，
+                    // 避免返回给调用方的路径在异常后又改变。
+                    _preserveBackupOnDestruction = true;
+                    throw std::runtime_error(
+                        "无法提交相机转换输出: "
+                        + pathForMessage(_outputDir) + " ("
+                        + install_error.message() + ")；旧输出自动恢复也失败，"
+                        "完整备份保留在: "
+                        + pathForMessage(_previousOutputPath) + " ("
+                        + error.message() + ")");
+                }
+                _backupActive = false;
+                restored_previous_output = true;
+                std::error_code cleanup_error;
+                std::filesystem::remove_all(_backupDir, cleanup_error);
+                _backupDir.clear();
+            }
+            throw std::runtime_error(
+                "无法提交相机转换输出: "
+                + pathForMessage(_outputDir) + " ("
+                + install_error.message() + ")"
+                + (restored_previous_output ? "；旧输出已恢复" : ""));
+        }
+
+        // stage 已经成为最终输出后，新结果就是唯一可信的完整产物。此后即使
+        // 旧备份清理部分失败也不能再拿可能残缺的备份覆盖新输出。
+        _committed = true;
+        _stagingDir.clear();
+
+        if (_backupActive && !_preserveBackupOnDestruction)
+        {
+            std::filesystem::remove_all(_backupDir, error);
+            if (error)
+            {
+                _backupCleanupError = error;
+                return;
+            }
+            _backupActive = false;
+            _backupDir.clear();
+        }
+    }
+
+    const std::filesystem::path &retainedBackupPath() const
+    {
+        return _backupDir;
+    }
+
+    const std::error_code &backupCleanupError() const
+    {
+        return _backupCleanupError;
+    }
+
+private:
+    void rollbackNoThrow() noexcept
+    {
+        std::error_code ignored_error;
+        if (_backupActive && !_preserveBackupOnDestruction)
+        {
+            std::filesystem::rename(_previousOutputPath, _outputDir, ignored_error);
+            if (!ignored_error)
+            {
+                std::filesystem::remove_all(_backupDir, ignored_error);
+                _backupActive = false;
+            }
+        }
+
+        if (!_stagingDir.empty())
+        {
+            ignored_error.clear();
+            std::filesystem::remove_all(_stagingDir, ignored_error);
+        }
+    }
+
+    std::filesystem::path _outputDir;
+    std::filesystem::path _stagingDir;
+    std::filesystem::path _backupDir;
+    std::filesystem::path _previousOutputPath;
+    std::error_code _backupCleanupError;
+    bool _outputExisted = false;
+    bool _overwrite = false;
+    bool _backupActive = false;
+    bool _committed = false;
+    bool _preserveBackupOnDestruction = false;
+};
+
+std::filesystem::path validateOutputDirectory(
+    const std::filesystem::path &outputDir,
+    const std::vector<std::filesystem::path> &inputDependencies)
 {
     if (outputDir.empty())
     {
         throw std::runtime_error("输出目录不能为空");
     }
-
-    std::error_code ec;
-    if (std::filesystem::exists(sourceDir, ec) && std::filesystem::exists(outputDir, ec)
-        && std::filesystem::equivalent(sourceDir, outputDir, ec))
+    if (inputDependencies.empty())
     {
-        // 该保护必须早于 remove_all，防止 overwrite 把输入相机/影像来源删除。
-        throw std::runtime_error("输出目录不能等于输入相机目录: " + outputDir.string());
+        throw std::runtime_error("内部错误：缺少相机转换输入依赖");
     }
 
-    if (std::filesystem::exists(outputDir))
+    const QFileInfo raw_output_info(
+        xjw::common::io::fromFilesystemPath(outputDir));
+    if (raw_output_info.isSymLink() || raw_output_info.isJunction())
     {
-        if (!std::filesystem::is_directory(outputDir))
-        {
-            throw std::runtime_error("输出路径已存在且不是目录: " + outputDir.string());
-        }
-        if (!directoryIsEmpty(outputDir))
-        {
-            if (!overwrite)
-            {
-                throw std::runtime_error("输出目录非空，请使用 --overwrite 覆盖: " + outputDir.string());
-            }
-            // overwrite 的契约是重建完整产物目录，而不是混合旧相机和新结果。
-            std::filesystem::remove_all(outputDir);
-        }
+        throw std::runtime_error("输出目录不能是符号链接或目录联接: "
+                                 + pathForMessage(outputDir));
     }
 
-    std::filesystem::create_directories(outputDir / "cameras");
+    std::filesystem::path normalized_output;
+    for (const std::filesystem::path &dependency : inputDependencies)
+    {
+        const xjw::common::io::SafePathComparison comparison =
+            xjw::common::io::comparePathsSafely(outputDir, dependency);
+        if (!comparison.valid)
+        {
+            throw std::runtime_error("无法安全比较输出与输入路径: " + pathForMessage(outputDir)
+                                     + " / " + pathForMessage(dependency)
+                                     + " (" + comparison.error.message() + ")");
+        }
+        if (comparison.firstIsRoot)
+        {
+            throw std::runtime_error("输出目录不能是文件系统根目录: "
+                                     + pathForMessage(comparison.normalizedFirst));
+        }
+        if (comparison.equivalent || comparison.firstIsAncestorOfSecond)
+        {
+            throw std::runtime_error("输出目录不能等于或包含输入路径: "
+                                     + pathForMessage(dependency));
+        }
+        normalized_output = comparison.normalizedFirst;
+    }
+    return normalized_output;
+}
+
+struct EquivalentFileIdentity
+{
+    bool available = false;
+    std::uint64_t device = 0;
+    std::uint64_t file = 0;
+};
+
+struct SourceImageIdentity
+{
+    std::filesystem::path sourcePath;
+    std::filesystem::path normalizedPath;
+    std::filesystem::file_type entryType =
+        std::filesystem::file_type::none;
+    std::filesystem::file_type resolvedType =
+        std::filesystem::file_type::none;
+    std::uintmax_t size = 0;
+    std::filesystem::file_time_type lastWriteTime;
+    EquivalentFileIdentity equivalentIdentity;
+};
+
+bool sameEquivalentFileIdentity(const EquivalentFileIdentity &left,
+                                const EquivalentFileIdentity &right)
+{
+    return left.available && right.available
+        && left.device == right.device
+        && left.file == right.file;
+}
+
+EquivalentFileIdentity readEquivalentFileIdentity(
+    const std::filesystem::path &path)
+{
+    EquivalentFileIdentity identity;
+#ifdef _WIN32
+    const HANDLE handle = CreateFileW(
+        path.c_str(),
+        FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    if (handle == INVALID_HANDLE_VALUE)
+    {
+        return identity;
+    }
+    BY_HANDLE_FILE_INFORMATION information{};
+    const BOOL success = GetFileInformationByHandle(handle, &information);
+    CloseHandle(handle);
+    if (!success)
+    {
+        return identity;
+    }
+    identity.available = true;
+    identity.device = information.dwVolumeSerialNumber;
+    identity.file = (static_cast<std::uint64_t>(
+                         information.nFileIndexHigh)
+                     << 32U)
+        | information.nFileIndexLow;
+#else
+    struct stat information{};
+    if (::stat(path.c_str(), &information) != 0)
+    {
+        return identity;
+    }
+    identity.available = true;
+    identity.device = static_cast<std::uint64_t>(information.st_dev);
+    identity.file = static_cast<std::uint64_t>(information.st_ino);
+#endif
+    return identity;
+}
+
+SourceImageIdentity readSourceImageIdentity(
+    const std::filesystem::path &imagePath)
+{
+    SourceImageIdentity identity;
+    identity.sourcePath = imagePath;
+    identity.equivalentIdentity = readEquivalentFileIdentity(imagePath);
+
+    std::error_code error;
+    const std::filesystem::file_status entry_status =
+        std::filesystem::symlink_status(imagePath, error);
+    if (error)
+    {
+        if (error == std::errc::no_such_file_or_directory)
+        {
+            throw std::runtime_error(
+                "相机记录引用的影像不存在: "
+                + pathForMessage(imagePath));
+        }
+        throw std::runtime_error(
+            "无法检查相机记录引用的影像: " + pathForMessage(imagePath)
+            + " (" + error.message() + ")");
+    }
+    if (entry_status.type() == std::filesystem::file_type::not_found)
+    {
+        throw std::runtime_error(
+            "相机记录引用的影像不存在: " + pathForMessage(imagePath));
+    }
+    identity.entryType = entry_status.type();
+
+    const std::filesystem::file_status resolved_status =
+        std::filesystem::status(imagePath, error);
+    if (error || resolved_status.type() != std::filesystem::file_type::regular)
+    {
+        throw std::runtime_error(
+            "相机记录引用的影像解析后不是普通文件: "
+            + pathForMessage(imagePath)
+            + (error ? " (" + error.message() + ")" : ""));
+    }
+    identity.resolvedType = resolved_status.type();
+
+    identity.normalizedPath = std::filesystem::canonical(imagePath, error);
+    if (error)
+    {
+        throw std::runtime_error(
+            "无法规范化相机记录引用的影像: "
+            + pathForMessage(imagePath) + " (" + error.message() + ")");
+    }
+    identity.size = std::filesystem::file_size(
+        identity.normalizedPath, error);
+    if (error)
+    {
+        throw std::runtime_error(
+            "无法读取相机记录引用的影像大小: "
+            + pathForMessage(imagePath) + " (" + error.message() + ")");
+    }
+    identity.lastWriteTime = std::filesystem::last_write_time(
+        identity.normalizedPath, error);
+    if (error)
+    {
+        throw std::runtime_error(
+            "无法读取相机记录引用的影像修改时间: "
+            + pathForMessage(imagePath) + " (" + error.message() + ")");
+    }
+
+    const EquivalentFileIdentity identity_after_read =
+        readEquivalentFileIdentity(imagePath);
+    if (identity.equivalentIdentity.available
+        && !sameEquivalentFileIdentity(
+            identity.equivalentIdentity, identity_after_read))
+    {
+        throw std::runtime_error(
+            "检查期间相机记录引用的影像发生变化: "
+            + pathForMessage(imagePath));
+    }
+    if (identity_after_read.available)
+    {
+        identity.equivalentIdentity = identity_after_read;
+    }
+    return identity;
+}
+
+std::vector<SourceImageIdentity> validateImageDependencies(
+    const std::filesystem::path &sourceDir,
+    const std::vector<CameraRecord> &records)
+{
+    std::vector<SourceImageIdentity> identities;
+    identities.reserve(records.size());
+    for (const CameraRecord &record : records)
+    {
+        const std::filesystem::path image_path = sourceDir / record.imageName;
+        identities.push_back(readSourceImageIdentity(image_path));
+    }
+    return identities;
+}
+
+void revalidateImageDependencies(
+    const std::vector<SourceImageIdentity> &expectedIdentities)
+{
+    for (const SourceImageIdentity &expected : expectedIdentities)
+    {
+        SourceImageIdentity current;
+        try
+        {
+            current = readSourceImageIdentity(expected.sourcePath);
+        }
+        catch (const std::exception &exception)
+        {
+            throw std::runtime_error(
+                "提交前复检源影像失败: "
+                + pathForMessage(expected.sourcePath)
+                + " (" + exception.what() + ")");
+        }
+
+        std::error_code equivalent_error;
+        const bool equivalent = std::filesystem::equivalent(
+            expected.normalizedPath,
+            current.normalizedPath,
+            equivalent_error);
+        const bool native_identity_changed =
+            expected.equivalentIdentity.available
+            && !sameEquivalentFileIdentity(
+                expected.equivalentIdentity,
+                current.equivalentIdentity);
+        if (equivalent_error
+            || !equivalent
+            || expected.entryType != current.entryType
+            || expected.resolvedType != current.resolvedType
+            || expected.size != current.size
+            || expected.lastWriteTime != current.lastWriteTime
+            || native_identity_changed)
+        {
+            throw std::runtime_error(
+                "提交前源影像已删除、替换或修改，拒绝发布转换结果: "
+                + pathForMessage(expected.sourcePath));
+        }
+    }
+}
+
+void validateCameraOutputNames(const std::vector<CameraRecord> &records)
+{
+    std::map<QString, std::string> image_by_output_name;
+    for (const CameraRecord &record : records)
+    {
+        const std::filesystem::path output_name(record.cameraFileName);
+        const bool contains_separator = record.cameraFileName.find('/') != std::string::npos
+            || record.cameraFileName.find('\\') != std::string::npos;
+        const bool contains_nul = record.cameraFileName.find('\0') != std::string::npos;
+        if (output_name.empty() || contains_separator || contains_nul
+            || output_name.is_absolute() || output_name.has_root_name()
+            || output_name.has_root_directory() || output_name.has_parent_path()
+            || output_name != output_name.filename()
+            || output_name == "." || output_name == "..")
+        {
+            throw std::runtime_error("相机输出文件名必须是安全的单个文件名: "
+                                     + record.cameraFileName + " (影像 " + record.imageName + ")");
+        }
+
+        QString output_key = xjw::common::io::fromFilesystemPath(output_name);
+#ifdef _WIN32
+        output_key = output_key.toCaseFolded();
+#endif
+        const auto [existing, inserted] = image_by_output_name.emplace(output_key, record.imageName);
+        if (!inserted)
+        {
+            throw std::runtime_error("多个相机记录映射到同一输出文件: "
+                                     + record.cameraFileName + " (影像 " + existing->second
+                                     + " 与 " + record.imageName + ")");
+        }
+    }
 }
 
 } // namespace
@@ -1783,33 +2376,55 @@ CameraConversionResult convertCameraDataset(const CameraConversionOptions &optio
             result.datasetId = result.sourceDir.filename().string();
         }
 
-        // 相机记录解析完成且影像根已定位后才触碰输出目录；逐记录影像存在性
-        // 仍在下方写出循环中验证，因此失败结果可能保留部分产物。
-        prepareOutputDirectory(result.sourceDir, options.outputDir, options.overwrite);
+        // 在创建暂存目录前解析并验证全部影像依赖。输出不得等于或包含
+        // input/source/任一影像，避免 overwrite 通过祖先目录或别名删除输入。
+        const std::vector<SourceImageIdentity> image_identities =
+            validateImageDependencies(result.sourceDir, records);
+        std::vector<std::filesystem::path> input_dependencies;
+        input_dependencies.reserve(image_identities.size() + 2);
+        input_dependencies.push_back(options.inputPath);
+        input_dependencies.push_back(result.sourceDir);
+        for (const SourceImageIdentity &identity : image_identities)
+        {
+            input_dependencies.push_back(identity.sourcePath);
+        }
+        const std::filesystem::path normalized_output =
+            validateOutputDirectory(options.outputDir, input_dependencies);
+        result.outputDir = normalized_output;
+        result.imageCameraList = normalized_output / "image_camera.lis";
+        result.summaryPath = normalized_output / "summary.json";
+        validateCameraOutputNames(records);
 
-        std::ofstream listFile = xjw::common::io::openOutputFile(result.imageCameraList,
+        // 全部产物先写同一文件系统上的同级暂存目录；只有完整写入后才以
+        // rename 切换到目标目录。已有输出先改名备份，安装前失败由析构回滚。
+        OutputDirectoryTransaction transaction(normalized_output, options.overwrite);
+        const std::filesystem::path staging_dir = transaction.stagingDir();
+
+        std::ofstream listFile = xjw::common::io::openOutputFile(staging_dir / "image_camera.lis",
                                                                  std::ios::out | std::ios::trunc);
         if (!listFile)
         {
             throw std::runtime_error("无法写入 image_camera.lis: " + result.imageCameraList.string());
         }
 
-        const std::filesystem::path camerasDir = options.outputDir / "cameras";
-        for (const CameraRecord &record : records)
+        const std::filesystem::path staged_cameras_dir = staging_dir / "cameras";
+        std::vector<std::filesystem::path> final_camera_files;
+        final_camera_files.reserve(records.size());
+        for (size_t index = 0; index < records.size(); ++index)
         {
-            const std::filesystem::path imagePath = result.sourceDir / record.imageName;
-            if (!std::filesystem::exists(imagePath))
-            {
-                throw std::runtime_error("相机记录引用的影像不存在: " + imagePath.string());
-            }
+            const CameraRecord &record = records[index];
+            const std::filesystem::path &image_path =
+                image_identities[index].sourcePath;
+            const std::filesystem::path final_tsai_path = normalized_output / "cameras"
+                / record.cameraFileName;
+            const std::filesystem::path staged_tsai_path = staged_cameras_dir / record.cameraFileName;
 
-            const std::filesystem::path tsaiPath = camerasDir / record.cameraFileName;
-            writeTsai(tsaiPath, record);
-            result.writtenCameraFiles.push_back(tsaiPath);
+            writeTsai(staged_tsai_path, record);
+            final_camera_files.push_back(final_tsai_path);
 
             // 每行严格对应“影像 token + 相机 token”，路径相对输出根并独立转义。
-            listFile << shellQuote(relativeToken(imagePath, options.outputDir)) << " "
-                     << shellQuote(relativeToken(tsaiPath, options.outputDir)) << "\n";
+            listFile << shellQuote(relativeToken(image_path, normalized_output)) << " "
+                     << shellQuote(relativeToken(final_tsai_path, normalized_output)) << "\n";
 
             // 在统一 summary 中加影像名前缀，便于用户定位有损转换来源。
             for (const std::string &warning : record.warnings)
@@ -1817,16 +2432,42 @@ CameraConversionResult convertCameraDataset(const CameraConversionOptions &optio
                 result.warnings.push_back(record.imageName + ": " + warning);
             }
         }
+        listFile.flush();
+        if (!listFile)
+        {
+            throw std::runtime_error("无法完整写入 image_camera.lis: "
+                                     + pathForMessage(result.imageCameraList));
+        }
         listFile.close();
+        if (!listFile)
+        {
+            throw std::runtime_error("无法关闭 image_camera.lis: "
+                                     + pathForMessage(result.imageCameraList));
+        }
 
         result.cameraCount = static_cast<int>(records.size());
-        writeSummary(result.summaryPath, result);
+        writeSummary(staging_dir / "summary.json", result);
+        if (options.beforeCommitHook)
+        {
+            options.beforeCommitHook();
+        }
+        revalidateImageDependencies(image_identities);
+        transaction.commit();
+        if (transaction.backupCleanupError())
+        {
+            result.retainedBackupPath = transaction.retainedBackupPath();
+            result.warnings.push_back(
+                "新输出已成功安装，但旧输出备份清理不完整；请人工检查: "
+                + pathForMessage(result.retainedBackupPath)
+                + " (" + transaction.backupCleanupError().message() + ")");
+        }
+        result.writtenCameraFiles = std::move(final_camera_files);
         result.success = true;
     }
     catch (const std::exception &exc)
     {
-        // 公开 API 把内部异常折叠为结构化失败，GUI/CLI 无需跨线程传播异常。
-        // 已写出的部分文件不会在这里自动清理，调用方必须以 success 为准。
+        // 公开 API 把内部异常折叠为结构化失败，GUI/CLI 无需跨线程传播异常；
+        // stage 安装前的失败会在栈展开时清理暂存并恢复旧输出。
         result.errorMessage = exc.what();
         result.success = false;
     }

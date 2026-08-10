@@ -333,6 +333,8 @@ void ProjectTaskStatusController::finishTask(TaskStatusWidget *status,
 
 void ProjectTaskStatusController::resetTaskProgress()
 {
+    const bool keepModelCancellationVisible =
+        _projectManager && _projectManager->isModelGenerationRunning();
     for (TaskStatusWidget *status : {
              _meshStatus,
              _pointCloudStatus,
@@ -342,12 +344,20 @@ void ProjectTaskStatusController::resetTaskProgress()
              _imageImportStatus,
              _photoListStatus})
     {
-        if (status)
+        if (status
+            && !(keepModelCancellationVisible && status == _meshStatus))
         {
             status->finish();
         }
     }
     _taskbarProgress->clearTasks();
+    if (keepModelCancellationVisible && _meshStatus)
+    {
+        _taskbarProgress->updateTask(
+            QStringLiteral("mesh"),
+            _meshStatus->progressValue(),
+            std::max(1, _meshStatus->progressMaximum()));
+    }
     refreshDashboard();
 }
 

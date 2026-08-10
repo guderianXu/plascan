@@ -223,17 +223,42 @@ ImageImportBatch importImagesToSharedStore(
             return item;
         });
 
+    QStringList successfulReservations;
+    successfulReservations.reserve(imported.size());
+    QString firstImportError;
+    bool importFailed = false;
     for (const ImageImportItem &item : imported)
     {
-        if (!item.success)
+        if (item.success)
         {
-            batch.errorMessage = item.errorMessage;
-            return batch;
+            successfulReservations.append(item.projectImagePath);
         }
+        else
+        {
+            importFailed = true;
+            if (firstImportError.isEmpty())
+            {
+                firstImportError = item.errorMessage;
+            }
+        }
+    }
+    if (importFailed)
+    {
+        batch.errorMessage = firstImportError.isEmpty()
+            ? QStringLiteral("共享影像导入失败")
+            : firstImportError;
+        xjw::common::project::ProjectSharedImageStore(projectPath)
+            .releaseReservations(successfulReservations);
+        return batch;
+    }
 
+    xjw::common::project::ProjectSharedImageStore sharedImageStore(projectPath);
+    for (const ImageImportItem &item : imported)
+    {
         if (existingPaths.contains(item.projectImagePath))
         {
             ++batch.skipped;
+            sharedImageStore.releaseReservations({item.projectImagePath});
         }
         else
         {
@@ -472,8 +497,14 @@ ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
     // 连接ProjectData信号
     if (_projectData)
     {
+        xjw::gui::project::ProjectResourceCleanupService::
+            installAutomaticRecovery(_projectData);
         const auto advanceSessionGeneration = [this]()
         {
+            if (_modelManager)
+            {
+                _modelManager->cancelActiveTask();
+            }
             if (_atCancelFlag)
             {
                 _atCancelFlag->store(true, std::memory_order_relaxed);
@@ -517,7 +548,15 @@ ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
     connect(_lifecycleController, &ProjectLifecycleController::projectCreated,
             this, &ProjectManager::projectCreated);
     connect(_lifecycleController, &ProjectLifecycleController::projectOpenStarted,
-            this, &ProjectManager::projectOpenStarted);
+            this,
+            [this](const QString &projectPath)
+            {
+                if (_modelManager)
+                {
+                    _modelManager->cancelActiveTask();
+                }
+                emit projectOpenStarted(projectPath);
+            });
     connect(_lifecycleController, &ProjectLifecycleController::projectOpenProgressChanged,
             this, &ProjectManager::projectOpenProgressChanged);
     connect(_lifecycleController, &ProjectLifecycleController::projectOpenFinished,
@@ -634,6 +673,22 @@ ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
 
 ProjectManager::~ProjectManager()
 {
+    waitForResourceCleanup();
+}
+
+void ProjectManager::waitForResourceCleanup()
+{
+    if (!_resourceCleanupRunning)
+    {
+        return;
+    }
+    _resourceCleanupFuture.waitForFinished();
+    if (_resourceCleanupShutdownFinalize)
+    {
+        _resourceCleanupShutdownFinalize();
+        _resourceCleanupShutdownFinalize = {};
+    }
+    _resourceCleanupRunning = false;
 }
 
 //==============================================================================
@@ -642,26 +697,55 @@ ProjectManager::~ProjectManager()
 
 void ProjectManager::createNewProject()
 {
+    if (rejectLifecycleChangeDuringResourceCleanup(
+            QStringLiteral("新建项目")))
+    {
+        return;
+    }
     _lifecycleController->createNewProject();
 }
 
 void ProjectManager::openProject()
 {
+    if (rejectLifecycleChangeDuringResourceCleanup(
+            QStringLiteral("打开项目")))
+    {
+        return;
+    }
     _lifecycleController->openProject();
 }
 
 void ProjectManager::openProjectFromPath(const QString &plascanPath)
 {
+    if (rejectLifecycleChangeDuringResourceCleanup(
+            QStringLiteral("打开项目")))
+    {
+        return;
+    }
     _lifecycleController->openProjectFromPath(plascanPath);
 }
 
 void ProjectManager::saveProject()
 {
+    if (rejectLifecycleChangeDuringResourceCleanup(
+            QStringLiteral("保存项目")))
+    {
+        return;
+    }
     _lifecycleController->saveProject();
 }
 
 void ProjectManager::closeProject()
 {
+    if (rejectLifecycleChangeDuringResourceCleanup(
+            QStringLiteral("关闭项目")))
+    {
+        return;
+    }
+    if (_modelManager)
+    {
+        _modelManager->cancelActiveTask();
+    }
     _lifecycleController->closeProject();
 }
 
@@ -1651,6 +1735,14 @@ void ProjectManager::deleteGeneratedData(const QString &section, const QStringLi
     {
         return;
     }
+    if (_resourceCleanupRunning)
+    {
+        QMessageBox::information(
+            _parent,
+            QStringLiteral("删除数据"),
+            QStringLiteral("已有资源清理任务正在运行，请等待完成后再试。"));
+        return;
+    }
     if (section == QStringLiteral("照片"))
     {
         QMessageBox::information(_parent,
@@ -1700,48 +1792,162 @@ void ProjectManager::deleteGeneratedData(const QString &section, const QStringLi
         return;
     }
 
-    const auto cleanupResult = xjw::gui::project::ProjectResourceCleanupService::cleanupGeneratedData(_projectData,
-                                                                                                       section,
-                                                                                                       resourcePaths);
-    if (cleanupResult.unsupportedSection)
+    const auto presentResult = [this, section](
+                                   const xjw::gui::project::ResourceCleanupResult &cleanupResult)
     {
-        QMessageBox::warning(_parent,
-                             QStringLiteral("删除数据"),
-                             QStringLiteral("当前分组暂不支持删除数据：%1").arg(section));
+        if (cleanupResult.unsupportedSection)
+        {
+            QMessageBox::warning(
+                _parent,
+                QStringLiteral("删除数据"),
+                QStringLiteral("当前分组暂不支持删除数据：%1").arg(section));
+            return;
+        }
+
+        if (!cleanupResult.success && !cleanupResult.errorMessage.isEmpty())
+        {
+            QMessageBox::warning(
+                _parent,
+                QStringLiteral("删除数据"),
+                QStringLiteral("删除失败：%1")
+                    .arg(cleanupResult.errorMessage));
+            return;
+        }
+
+        if (cleanupResult.noMatchedRecords)
+        {
+            QMessageBox::information(
+                _parent,
+                QStringLiteral("删除数据"),
+                QStringLiteral("未找到可删除的%1数据记录。")
+                    .arg(section));
+            return;
+        }
+
+        if (cleanupResult.failedPaths.isEmpty()
+            && cleanupResult.errorMessage.isEmpty())
+        {
+            QMessageBox::information(
+                _parent,
+                QStringLiteral("删除数据"),
+                QStringLiteral("已删除 %1 项%2数据。")
+                    .arg(cleanupResult.removedCount)
+                    .arg(section));
+            return;
+        }
+
+        QString detail = cleanupResult.errorMessage;
+        if (!cleanupResult.failedPaths.isEmpty())
+        {
+            if (!detail.isEmpty())
+            {
+                detail += QLatin1Char('\n');
+            }
+            detail += cleanupResult.failedPaths.join(QStringLiteral("\n"));
+        }
+        QMessageBox::warning(
+            _parent,
+            QStringLiteral("删除数据"),
+            QStringLiteral(
+                "已移除 %1 项%2数据记录，但部分物理清理将在后续重试：\n%3")
+                .arg(cleanupResult.removedCount)
+                .arg(section)
+                .arg(detail));
+    };
+
+    _resourceCleanupRunning = true;
+    QPointer<QWidget> requestWidget(qobject_cast<QWidget *>(sender()));
+    if (requestWidget)
+    {
+        requestWidget->setEnabled(false);
+    }
+
+    const auto prepared =
+        xjw::gui::project::ProjectResourceCleanupService::
+            prepareGeneratedDataCleanup(_projectData, section, resourcePaths);
+    if (!prepared.requiresExecution())
+    {
+        _resourceCleanupRunning = false;
+        if (requestWidget)
+        {
+            requestWidget->setEnabled(true);
+        }
+        presentResult(prepared.preparationResult());
         return;
     }
 
-    if (!cleanupResult.success && !cleanupResult.errorMessage.isEmpty())
-    {
-        QMessageBox::warning(_parent,
-                             QStringLiteral("删除数据"),
-                             QStringLiteral("删除失败：%1").arg(cleanupResult.errorMessage));
-        return;
-    }
+    const auto session = currentSessionContext();
+    const QString taskId = QStringLiteral("resource_cleanup");
+    auto shutdownResult = std::make_shared<
+        xjw::gui::project::ResourceCleanupResult>(
+            prepared.preparationResult());
+    const QPointer<ProjectData> cleanupProjectData(_projectData);
+    _resourceCleanupShutdownFinalize =
+        [cleanupProjectData,
+         prepared,
+         requestWidget,
+         shutdownResult]()
+        {
+            if (cleanupProjectData)
+            {
+                xjw::gui::project::ProjectResourceCleanupService::
+                    finalizePreparedCleanup(
+                        cleanupProjectData.data(),
+                        prepared,
+                        *shutdownResult);
+            }
+            if (requestWidget)
+            {
+                requestWidget->setEnabled(true);
+            }
+        };
+    emit backgroundTaskProgressChanged(taskId, 0, 0);
+    _resourceCleanupFuture = xjw::gui::tasks::runGuardedWithOutcome(
+        this,
+        [prepared, shutdownResult]()
+        {
+            const auto result =
+                xjw::gui::project::ProjectResourceCleanupService::
+                executePreparedCleanup(prepared);
+            *shutdownResult = result;
+            return result;
+        },
+        [prepared, presentResult, requestWidget, session, taskId](
+            ProjectManager *self,
+            xjw::gui::tasks::TaskOutcome<
+                xjw::gui::project::ResourceCleanupResult> outcome) mutable
+        {
+            xjw::gui::project::ResourceCleanupResult cleanupResult =
+                prepared.preparationResult();
+            if (outcome.succeeded())
+            {
+                cleanupResult = std::move(*outcome.value);
+            }
+            else
+            {
+                cleanupResult.success = false;
+                cleanupResult.errorMessage = outcome.errorMessage;
+            }
 
-    if (cleanupResult.noMatchedRecords)
-    {
-        QMessageBox::information(_parent,
-                                 QStringLiteral("删除数据"),
-                                 QStringLiteral("未找到可删除的%1数据记录。").arg(section));
-        return;
-    }
-
-    if (cleanupResult.failedPaths.isEmpty())
-    {
-        QMessageBox::information(_parent,
-                                 QStringLiteral("删除数据"),
-                                 QStringLiteral("已删除 %1 项%2数据。").arg(cleanupResult.removedCount).arg(section));
-    }
-    else
-    {
-        QMessageBox::warning(_parent,
-                             QStringLiteral("删除数据"),
-                             QStringLiteral("已移除 %1 项%2数据记录，但以下文件/目录删除失败：\n%3")
-                                 .arg(cleanupResult.removedCount)
-                                 .arg(section)
-                                 .arg(cleanupResult.failedPaths.join(QStringLiteral("\n"))));
-    }
+            const bool finalized =
+                xjw::gui::project::ProjectResourceCleanupService::
+                    finalizePreparedCleanup(
+                        self->_projectData, prepared, cleanupResult);
+            self->_resourceCleanupShutdownFinalize = {};
+            self->_resourceCleanupRunning = false;
+            if (requestWidget)
+            {
+                requestWidget->setEnabled(true);
+            }
+            emit self->backgroundTaskFinished(taskId);
+            if (!self->isCurrentSession(session) || !finalized)
+            {
+                LOG_INFO(QStringLiteral(
+                    "资源清理完成时项目会话或持久化代次已变化，忽略旧任务 UI 结果"));
+                return;
+            }
+            presentResult(cleanupResult);
+        });
 }
 
 void ProjectManager::packResource(const QString &resourcePath)
@@ -1766,6 +1972,11 @@ QJsonObject ProjectManager::loadUiSettings() const
 
 void ProjectManager::createChunk()
 {
+    if (rejectLifecycleChangeDuringResourceCleanup(
+            QStringLiteral("新建 Chunk")))
+    {
+        return;
+    }
     if (!_projectData || !_projectData->hasProject())
     {
         return;
@@ -1794,6 +2005,11 @@ void ProjectManager::createChunk()
 
 void ProjectManager::renameChunk(const QString &chunkId)
 {
+    if (rejectLifecycleChangeDuringResourceCleanup(
+            QStringLiteral("重命名 Chunk")))
+    {
+        return;
+    }
     if (!_projectData || chunkId.trimmed().isEmpty())
     {
         return;
@@ -1833,6 +2049,11 @@ void ProjectManager::renameChunk(const QString &chunkId)
 
 void ProjectManager::removeChunk(const QString &chunkId)
 {
+    if (rejectLifecycleChangeDuringResourceCleanup(
+            QStringLiteral("删除 Chunk")))
+    {
+        return;
+    }
     if (!_projectData || chunkId.trimmed().isEmpty())
     {
         return;
@@ -1872,9 +2093,22 @@ void ProjectManager::removeChunk(const QString &chunkId)
 
 void ProjectManager::switchChunk(const QString &chunkId)
 {
+    if (rejectLifecycleChangeDuringResourceCleanup(
+            QStringLiteral("切换 Chunk")))
+    {
+        return;
+    }
     if (!_projectData || chunkId.trimmed().isEmpty())
     {
         return;
+    }
+    if (_projectData->activeChunkId() == chunkId.trimmed())
+    {
+        return;
+    }
+    if (_modelManager)
+    {
+        _modelManager->cancelActiveTask();
     }
     QString error;
     if (!_projectData->switchChunk(chunkId, &error))
@@ -1884,6 +2118,21 @@ void ProjectManager::switchChunk(const QString &chunkId)
             QStringLiteral("切换 Chunk 失败"),
             error);
     }
+}
+
+bool ProjectManager::rejectLifecycleChangeDuringResourceCleanup(
+    const QString &operation) const
+{
+    if (!_resourceCleanupRunning)
+    {
+        return false;
+    }
+    QMessageBox::information(
+        _parent,
+        QStringLiteral("资源清理进行中"),
+        QStringLiteral("资源清理任务完成前无法%1，请稍候。")
+            .arg(operation));
+    return true;
 }
 
 void ProjectManager::saveUiSettings(const QJsonObject &settings)
@@ -1931,6 +2180,11 @@ bool ProjectManager::isCurrentSession(
     const xjw::gui::project::ProjectSessionContext &context) const
 {
     return context.matches(currentSessionContext());
+}
+
+bool ProjectManager::isModelGenerationRunning() const
+{
+    return _modelManager && _modelManager->isRunning();
 }
 
 QJsonObject ProjectManager::currentMeta() const

@@ -268,6 +268,8 @@ core/
 │   ├── MvsWorkspaceManifest.h/cpp # 深度帧状态、产物路径、相机/影像/配置 hash 和 source plan
 │   ├── MvsSourcePlanner.h/cpp  # shared tracks / 几何内点 / 覆盖率 / baseline 选源
 │   ├── MvsImagePreprocessor.h/cpp # 原图去畸变并生成正深度、零畸变的 Camera 工作值
+│   ├── MvsImageMetadataProbe.h/cpp # 不解码像素的 GDAL 影像头尺寸探测，供全流程内存规划
+│   ├── MvsImageCache.h/MvsImageCache.cpp/MvsImageFrame.cpp # provider、single-flight、RAII lease 与分配去重
 │   ├── DepthPyramidPolicy.h/cpp # 从最终质量档生成 4D/2D/D 三级 PatchMatch 调度
 │   ├── MvsSceneClassifier.h/cpp # 根据相机布局、光轴和稀疏云厚度判定环拍/航测场景
 │   ├── DepthPyramidPropagation.h/cpp # 父层深度中心、不确定半径和边缘感知传播
@@ -280,7 +282,7 @@ core/
 │   ├── DepthProvenance.h/cpp # 最终有效深度的原生/定向/跨视测量/锚定插值来源编码与统计
 │   ├── DepthFrameQualityGate.h/cpp # 深度帧 Accepted/ValidationOnly/Rejected 质量门控
 │   ├── DepthConsistencyCache.h/cpp # 有内存预算的 LRU source 邻域多视一致性缓存
-│   ├── DepthMemoryPolicy.h/cpp # 多视一致性峰值内存估算、动态安全余量与流式模式决策
+│   ├── DepthMemoryPolicy.h/cpp # 图像/深度/可见图/保存队列/后端 staging 饱和估算与 eager/bounded 决策
 │   ├── DepthGeometryConsistency.h/cpp # 断边邻域搜索、相机基线自适应往返验证与一致性投票
 │   ├── DepthPoseAlignmentRefiner.h/cpp # 锚定尺度的鲁棒点到平面局部 SE(3) 派生位姿细化
 │   ├── DepthPoseRefinementStage.h/cpp # 默认关闭的跨视深度候选采样、安全门与派生相机输出
@@ -294,6 +296,7 @@ core/
 │   ├── DepthComputeScheduler.h/cpp # CPU/CUDA/OpenCL 统一 worker 与优先级帧调度
 │   ├── GpuDeviceLease.h/cpp     # 按 PCI 物理设备标识实施跨 GUI/CLI 进程的 GPU 独占租约
 │   ├── DepthMapGenerator.h/cpp # 深度图估计、取消检查、raw depth/confidence/几何支持度/valid mask 写盘
+│   ├── MvsVisibilityGraphBuilder.h/cpp # 稀疏共视图、可取消精确 bitset 计数及大视图集有界角度覆盖采样
 │   ├── DepthMapFusion.h/cpp    # 深度图融合 → 密集点云，支持 manifest source plan 和流式融合
 │   ├── DepthFrameUtils.h/cpp   # 深度帧存储与按指定输出目录选择批次
 │   ├── EpipolarRectifier.h/cpp # 极线校正
@@ -377,6 +380,7 @@ core/
 │   ├── VisibilityOccupancyDistanceField/BoundaryExtractor/SurfaceBuilder.* # 闭合载体距离场、边界和表面构造
 │   ├── VisibilityOccupancyCarrierSubdivision/Fairer/FieldProjector.* # 保拓扑载体细分、平滑和距离场投影
 │   ├── VisualHullReconstructor.h/cpp # 显式 legacy/诊断 Visual Hull 路径
+│   ├── ModelOutputPolicy.h/cpp    # 模型/纹理 run 隔离目录、所有权标记与未发布目录安全回收
 │   ├── ModelWorkflowService.h/cpp  # 模型工作流服务；保留 PLY 几何并可写 OBJ/MTL/相机纹理图集
 ├── terrain/                    # 地形产品 (DEM/DOM) 和质量栅格
 │   ├── DemDomTypes.h           # DEM/DOM 类型
@@ -628,6 +632,9 @@ gui/
 │       ├── ProjectDenseWorkflowConfig.h             # 旧包含路径兼容层；实现已迁移到 core/project_workflows
 │       ├── ProjectReferenceDatasets.h               # 旧包含路径兼容层；参考数据业务已迁移到 core/project_workflows
 │       ├── ProjectDepthBatchLineage.h/cpp           # 路径无关的深度输入签名与旧批次逐帧相机核验
+│       ├── ProjectModelResultPolicy.h/cpp            # 模型 schema v2、默认版本迁移及完整产物登记策略
+│       ├── ProjectModelTaskLifecycle.h/cpp           # 模型任务身份、会话门控、取消与未发布 run 回收
+│       ├── ProjectRunArtifactValidator.h/cpp         # 发布前 run 诊断身份、路径归属和实体产物校验
 │       ├── ProjectModelWorkflowPolicy.h/cpp         # 模型线程预算及深度批次完整性/代次兼容策略
 │       ├── ProjectSessionContext.h                  # 异步写回会话身份（项目、Chunk、generation）
 │       ├── ProjectOpenGuard.h/cpp                   # 统一项目已打开前置检查和用户提示
@@ -707,7 +714,11 @@ GNSS/IMU/POS 观测独立存入 `assets/camera_references/camera_reference_set.j
 项目配置按应用设置、工作流配置、项目视图状态和运行时缓存四层管理，避免机器路径混入工程。
 Chunk 保存将核心、结果、配置和资源索引合并为一次 `doc.json` 更新，并推进 `revision`；
 资源索引按引用集合和文件大小/修改时间增量维护。工程打开期间持有
-`.files/.plascan.lock`，避免 GUI/CLI 并发覆盖。共享影像只在所有 Chunk 都解除引用后清理。
+`.files/.plascan.lock`，避免 GUI/CLI 并发覆盖。`ProjectData` 的关闭/析构路径先同步 drain 最新归档，
+归档失败时写完整临时恢复快照，成功后才释放 reservation、运行工作区和项目锁；关闭失败会让
+create/open 保留原会话。异步持久化结果同时按提交代次与会话代次仲裁，旧会话 queued callback
+不会污染同路径重开后的状态。共享影像只在所有 Chunk 和有效临时恢复快照都解除引用后清理；
+临时元数据存在但不可验证时 GC 保守中止。
 格式结构、路径安全规则和拒绝策略见
 [`docs/project/PLASCAN_PROJECT_FORMAT.md`](project/PLASCAN_PROJECT_FORMAT.md)。
 
@@ -1190,9 +1201,12 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
 
 - `src/common/project/ProjectSessionModel.*`、`ProjectDocumentModel.*` 和三类项目配置管理器负责
   QtCore 项目会话、文档分域与持久化；`src/gui/project/data` 只保留必要的旧包含路径兼容头，GUI 配置层
-  直接使用 common 中的项目配置接口。
+  直接使用 common 中的项目配置接口。资源清理模块安装的 path-only open preflight 会在
+  `ProjectData` 解析归档和校验资源索引前恢复事务区产物，避免缺失资源先阻断恢复入口。
 - `src/core/project_workflows` 负责 DEM/正射、稀疏点后处理、点云参数/输入准备、参考数据检查和
-  生成资源清理，通过独立 `project_workflows` 目标供 GUI、CLI 和测试复用。
+  生成资源清理，通过独立 `project_workflows` 目标供 GUI、CLI 和测试复用。资源清理按
+  `ProjectResourceCleanup{Plan,Artifacts,Transaction,TransactionManifest,Purge,Recovery}` 拆分计划、产物边界、
+  WAL 事务、不可逆清除态和启动恢复职责，worker 仅消费不可变计划，不访问 GUI 或 `ProjectData` QObject。
 - `ProjectManager` 以门面形式持有项目生命周期、蒙版、点云、稀疏重建、模型、地形产品和相机设置
   控制器。GUI 中不存在“稠密重建管理器”；`ProjectPointCloudWorkflowController` 只协调深度估计与点云融合。
 - `MainWindow` 按布局、菜单绑定、项目绑定和 UI 状态拆分实现；项目打开/保存展示由

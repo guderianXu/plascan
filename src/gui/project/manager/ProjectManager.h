@@ -31,11 +31,13 @@
 #include <QString>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QFuture>
 #include <QMap>
 #include <QPointer>
 #include <QStringList>
 
 #include <atomic>
+#include <functional>
 #include <memory>
 
 class QWidget;
@@ -64,6 +66,9 @@ public:
     // 构造时注入依赖：数据层(ProjectData)、父窗口(parent)
     explicit ProjectManager(ProjectData *projectData, QWidget *parent = nullptr);
     ~ProjectManager() override;
+    // 主窗口销毁其 QObject children 前调用，确保 ProjectData 的项目锁
+    // 不会先于不可取消的资源清理 worker 释放。
+    void waitForResourceCleanup();
 
 signals:
     // === 项目状态变化信号（转发自 ProjectData） ===
@@ -332,6 +337,7 @@ public slots:
     QString currentProjectPath() const;                 // 当前 .plascan 路径
     xjw::gui::project::ProjectSessionContext currentSessionContext() const;
     bool isCurrentSession(const xjw::gui::project::ProjectSessionContext &context) const;
+    bool isModelGenerationRunning() const;
     QJsonObject currentMeta() const;                    // 当前运行时元数据快照（含 results）
     QJsonObject coreProjectMeta() const;                // 仅核心数据（images+camera），无需惰性加载，速度极快
     QStringList getImagesByCategory(const QString &category) const; // 按类别获取影像
@@ -370,6 +376,9 @@ private:
     QJsonObject _pendingAutomaticModelSettings;
     bool _automaticModelDepthPreparationActive = false;
     bool _imageImportActive = false;
+    bool _resourceCleanupRunning = false;
+    QFuture<void> _resourceCleanupFuture;
+    std::function<void()> _resourceCleanupShutdownFinalize;
 
     // AT/SFM 取消标志（跨线程共享）
     std::shared_ptr<std::atomic<bool>> _atCancelFlag;
@@ -390,4 +399,6 @@ private:
     void startImageImport(const QStringList &imagePaths,
                           const QString &sourceLabel);
     void importProjectAsset(bool modelAsset);
+    bool rejectLifecycleChangeDuringResourceCleanup(
+        const QString &operation) const;
 };

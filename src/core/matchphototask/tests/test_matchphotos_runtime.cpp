@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -95,6 +96,18 @@ QString createLoMaRPackage(const QString &directory,
     return manifestPath;
 }
 
+QString fileSha256(const QString &path)
+{
+    QFile file(path);
+    EXPECT_TRUE(file.open(QIODevice::ReadOnly));
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    while (!file.atEnd())
+    {
+        hash.addData(file.read(1024 * 1024));
+    }
+    return QString::fromLatin1(hash.result().toHex());
+}
+
 QString createPortableLoMaRPackage(const QString &directory,
                                    int keypoints = 1024,
                                    int featureKeypoints = 3840)
@@ -120,7 +133,11 @@ QString createPortableLoMaRPackage(const QString &directory,
         {QStringLiteral("input_height"), 784},
         {QStringLiteral("keypoint_count"), keypoints},
         {QStringLiteral("feature_keypoint_count"), featureKeypoints},
-        {QStringLiteral("descriptor_dimension"), 256}};
+        {QStringLiteral("descriptor_dimension"), 256},
+        {QStringLiteral("feature_onnx_sha256"),
+         fileSha256(QDir(directory).filePath(featureName))},
+        {QStringLiteral("matcher_onnx_sha256"),
+         fileSha256(QDir(directory).filePath(matcherName))}};
     const QString manifestPath = QDir(directory).filePath(
         QStringLiteral("loma_r_k%1_fp16.json").arg(keypoints));
     QFile file(manifestPath);
@@ -176,6 +193,71 @@ TEST(MatchPhotosRuntimeTest, ResolvesPortableLoMaRPackageWithoutBuildingEngine)
     EXPECT_TRUE(resolved.matcherEnginePath.isEmpty());
     EXPECT_EQ(resolved.keypointCount, 1024);
     EXPECT_EQ(resolved.featureKeypointCount, 3840);
+}
+
+TEST(MatchPhotosRuntimeTest, RejectsPortableLoMaRPackageWithoutDeclaredHashes)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString manifestPath = createPortableLoMaRPackage(directory.path());
+    QFile manifestFile(manifestPath);
+    ASSERT_TRUE(manifestFile.open(QIODevice::ReadOnly));
+    QJsonObject manifest = QJsonDocument::fromJson(manifestFile.readAll()).object();
+    manifestFile.close();
+    manifest.remove(QStringLiteral("feature_onnx_sha256"));
+    ASSERT_TRUE(manifestFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    manifestFile.write(QJsonDocument(manifest).toJson(QJsonDocument::Compact));
+    manifestFile.close();
+
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.lomaRTensorRtPackagePath = manifestPath;
+    const auto resolved = xjw::matchphotos::resolveLoMaRTensorRtPackage(
+        options, 1024, false);
+
+    EXPECT_FALSE(resolved.isValid());
+    EXPECT_TRUE(resolved.errorMessage.contains(QStringLiteral("feature_onnx_sha256")));
+}
+
+TEST(MatchPhotosRuntimeTest, RejectsFeatureHashMismatchBeforeTensorRtBuild)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString manifestPath = createPortableLoMaRPackage(directory.path());
+    QFile feature(directory.filePath(QStringLiteral("loma_r_features_k3840_fp16.onnx")));
+    ASSERT_TRUE(feature.open(QIODevice::Append));
+    ASSERT_GT(feature.write("tampered"), 0);
+    feature.close();
+
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.lomaRTensorRtPackagePath = manifestPath;
+    const auto resolved = xjw::matchphotos::resolveLoMaRTensorRtPackage(
+        options, 1024, true);
+
+    EXPECT_FALSE(resolved.isValid());
+    EXPECT_TRUE(resolved.errorMessage.contains(QStringLiteral("feature ONNX")));
+    EXPECT_TRUE(resolved.errorMessage.contains(QStringLiteral("SHA-256")));
+    EXPECT_TRUE(resolved.errorMessage.contains(QStringLiteral("不匹配")));
+}
+
+TEST(MatchPhotosRuntimeTest, RejectsMatcherHashMismatchBeforeTensorRtBuild)
+{
+    QTemporaryDir directory;
+    ASSERT_TRUE(directory.isValid());
+    const QString manifestPath = createPortableLoMaRPackage(directory.path());
+    QFile matcher(directory.filePath(QStringLiteral("loma_r_matcher_dynamic_fp16.onnx")));
+    ASSERT_TRUE(matcher.open(QIODevice::Append));
+    ASSERT_GT(matcher.write("tampered"), 0);
+    matcher.close();
+
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.lomaRTensorRtPackagePath = manifestPath;
+    const auto resolved = xjw::matchphotos::resolveLoMaRTensorRtPackage(
+        options, 1024, true);
+
+    EXPECT_FALSE(resolved.isValid());
+    EXPECT_TRUE(resolved.errorMessage.contains(QStringLiteral("matcher ONNX")));
+    EXPECT_TRUE(resolved.errorMessage.contains(QStringLiteral("SHA-256")));
+    EXPECT_TRUE(resolved.errorMessage.contains(QStringLiteral("不匹配")));
 }
 
 TEST(MatchPhotosRuntimeTest, RejectsIncompleteLoMaRTensorRtPackage)

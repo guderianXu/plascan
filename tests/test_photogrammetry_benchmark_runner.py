@@ -16,6 +16,33 @@ SPEC.loader.exec_module(runner)
 
 
 class PhotogrammetryBenchmarkRunnerTest(unittest.TestCase):
+    def test_explicit_cli_without_suffix_resolves_windows_executable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            requested = Path(tmp) / "three_d_reconstruction_cli"
+            executable = requested.with_suffix(".exe")
+            executable.write_bytes(b"")
+
+            self.assertEqual(
+                runner.resolve_explicit_executable(requested),
+                executable,
+            )
+
+    def test_default_cli_resolves_multiconfig_release_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            requested = Path(tmp) / "bin" / "three_d_reconstruction_cli"
+            executable = (
+                requested.parent
+                / "Release"
+                / "three_d_reconstruction_cli.exe"
+            )
+            executable.parent.mkdir(parents=True)
+            executable.write_bytes(b"")
+
+            self.assertEqual(
+                runner.resolve_explicit_executable(requested),
+                executable,
+            )
+
     def test_dry_run_discovers_prepared_dataset_and_writes_planned_command(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "benchmarks"

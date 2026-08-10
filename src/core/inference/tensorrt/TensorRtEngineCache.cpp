@@ -160,6 +160,11 @@ namespace xjw::inference::detail
         {
             return false;
         }
+        const QString expected_engine_hash = object.value(QStringLiteral("engine_sha256")).toString();
+        if (expected_engine_hash.size() != 64 || sha256File(enginePath, nullptr) != expected_engine_hash)
+        {
+            return false;
+        }
         result->environmentSummary = object.value(QStringLiteral("environment_summary")).toString();
         result->precision = object.value(QStringLiteral("precision")).toString() == QStringLiteral("fp16")
                                 ? TensorRtBuildPrecision::Fp16
@@ -177,6 +182,26 @@ namespace xjw::inference::detail
                             std::size_t engineBytes,
                             QString* errorMessage)
     {
+        const QFileInfo engine_info(result.enginePath);
+        if (!engine_info.isFile() || engine_info.size() != static_cast<qint64>(engineBytes))
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("TensorRT engine 写入后尺寸不一致：%1").arg(result.enginePath);
+            }
+            return false;
+        }
+        QString hash_error;
+        const QString engine_hash = sha256File(result.enginePath, &hash_error);
+        if (engine_hash.isEmpty())
+        {
+            if (errorMessage)
+            {
+                *errorMessage = hash_error;
+            }
+            return false;
+        }
+
         QJsonObject metadata = identity;
         metadata[QStringLiteral("cache_fingerprint")] = result.cacheFingerprint;
         metadata[QStringLiteral("onnx_file")] = onnxFileName;
@@ -185,6 +210,7 @@ namespace xjw::inference::detail
         metadata[QStringLiteral("environment_summary")] = result.environmentSummary;
         metadata[QStringLiteral("build_seconds")] = buildSeconds;
         metadata[QStringLiteral("engine_bytes")] = static_cast<double>(engineBytes);
+        metadata[QStringLiteral("engine_sha256")] = engine_hash;
         metadata[QStringLiteral("io_tensors")] = tensorInfoToJson(result.ioTensors);
 
         QSaveFile metadata_file(metadataPath);

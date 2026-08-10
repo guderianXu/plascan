@@ -19,9 +19,13 @@
 #include <QString>
 #include <QJsonObject>
 #include <QMap>
+#include <QMutex>
 #include <QStringList>
 #include <QTimer>
+#include <QtGlobal>
 
+#include <atomic>
+#include <functional>
 #include <memory>
 
 #include "project/ProjectDocumentModel.h"
@@ -31,6 +35,25 @@ class QThreadPool;
 namespace xjw::common::project
 {
 class ProjectLock;
+
+// Serializes the final filesystem commit of persistence snapshots. A cleanup
+// advances the generation before committing its metadata, so an older worker
+// can no longer overwrite the cleanup snapshot after the artifacts are gone.
+class ProjectPersistenceCommitCoordinator final
+{
+public:
+    quint64 currentGeneration() const;
+    quint64 advanceGeneration();
+    // Resource cleanup must not start moving artifacts until a filesystem
+    // commit that already passed the generation check has left the lock.
+    quint64 advanceGenerationAfterCurrentCommit();
+    bool runIfCurrent(quint64 generation,
+                      const std::function<void()> &commit);
+
+private:
+    QMutex _commitMutex;
+    std::atomic<quint64> _generation{1};
+};
 }
 
 struct ProjectOpenSnapshot
@@ -58,6 +81,29 @@ struct ProjectResultsSnapshot
     bool hasResults = false;
 };
 
+class ProjectResourceCleanupPersistence final
+{
+public:
+    bool isValid() const;
+    bool commitUpdated(QString *errorMsg = nullptr,
+                       bool *archiveCommitted = nullptr) const;
+    bool commitOriginal(QString *errorMsg = nullptr,
+                        bool *archiveCommitted = nullptr) const;
+
+private:
+    friend class ProjectData;
+
+    quint64 _generation = 0;
+    QString _projectPath;
+    QString _chunkId;
+    int _chunkDirectory = 0;
+    QJsonObject _originalMetadata;
+    QJsonObject _updatedMetadata;
+    bool _wasDirty = false;
+    std::function<bool(QString *, bool *)> _commitUpdated;
+    std::function<bool(QString *, bool *)> _commitOriginal;
+};
+
 // ProjectData: 轻量级项目数据管理类
 // 职责:
 // 1. 项目文件(.plascan)的读写
@@ -69,8 +115,15 @@ class ProjectData : public QObject
     Q_OBJECT
 
 public:
+    using ProjectOpenPreflight =
+        std::function<bool(const QString &, QString *)>;
+
     explicit ProjectData(QObject *parent = nullptr);
     ~ProjectData() override;
+
+    // Storage workflows can install a path-only recovery step that runs
+    // before resource-index validation in loadProjectOpenSnapshot().
+    static void installProjectOpenPreflight(ProjectOpenPreflight preflight);
 
     // === 项目基本信息 ===
     QString currentProjectPath() const { return _projectPath; }
@@ -94,8 +147,8 @@ public:
     bool saveProject(QString *errorMsg = nullptr);
     // GUI 使用的异步保存入口；完成后发出 projectSaveCompleted。
     void saveProjectAsync();
-    // 关闭当前项目
-    void closeProject();
+    // 关闭当前项目；仅在最新状态已同步到归档或临时恢复快照后释放项目锁。
+    bool closeProject(QString *errorMsg = nullptr);
 
     // === Chunk 管理 ===
     bool createChunk(const QString &name,
@@ -127,6 +180,17 @@ public:
     bool loadTemporaryMetadata();
     // 保存运行时元数据到临时目录
     bool saveTemporaryMetadata();
+    // 将资源清理后的元数据作为新的持久化代次同步提交到归档和恢复快照。
+    // 旧后台 worker 在提交边界会被代次检查拒绝，返回成功后调用方才可清空事务区。
+    bool commitResourceCleanupMetadata(const QJsonObject &metadata,
+                                       QString *errorMsg = nullptr,
+                                       bool *archiveCommitted = nullptr);
+    ProjectResourceCleanupPersistence prepareResourceCleanupPersistence(
+        const QJsonObject &updatedMetadata);
+    bool finalizeResourceCleanupPersistence(
+        const ProjectResourceCleanupPersistence &persistence,
+        bool keepUpdatedMetadata,
+        bool metadataStateCommitted);
     // 合并并异步写入临时恢复数据。
     void scheduleTemporaryMetadataSave();
     // 删除临时元数据
@@ -234,7 +298,8 @@ private:
     {
         FullSave,
         ArchiveSync,
-        TemporaryOnly
+        TemporaryOnly,
+        CleanupCommit
     };
     struct PersistenceSnapshot;
     struct PersistenceResult;
@@ -260,11 +325,17 @@ private:
     bool _workspaceDirtyForArchive{false};          // workspace/ 资源索引需更新
     QThreadPool *_persistencePool{};
     bool _persistenceRunning{false};
+    quint64 _runningPersistenceGeneration{0};
+    quint64 _runningPersistenceSessionGeneration{0};
+    quint64 _sessionGeneration{0};
     bool _fullSavePending{false};
     bool _archiveSyncPending{false};
     bool _temporarySavePending{false};
+    quint64 _resourceCleanupPersistenceGeneration{0};
     bool _shuttingDown{false};
-    std::unique_ptr<PersistenceSnapshot> _detachedPersistenceSnapshot;
+    std::shared_ptr<
+        xjw::common::project::ProjectPersistenceCommitCoordinator>
+        _persistenceCommitCoordinator;
     std::unique_ptr<xjw::common::project::ProjectLock> _projectLock;
 
     // 惰性加载 results：仅在首次访问时读取 project_results.json
@@ -281,6 +352,7 @@ private:
     static PersistenceResult persistSnapshot(PersistenceSnapshot snapshot);
     void startNextPersistence();
     void handlePersistenceFinished(PersistenceResult result);
+    bool drainPersistenceForClose(QString *errorMessage);
 
     // 辅助方法
     QString projectDir() const;        // 返回项目目录(.plascan文件所在目录)

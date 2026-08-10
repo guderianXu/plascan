@@ -25,6 +25,11 @@ public:
     bool validateProjectLayout(QString *errorMessage = nullptr) const;
     bool materializeMetadata(QJsonObject *metadata,
                              QString *errorMessage = nullptr) const;
+    // Recovery preflight resolves project:// paths without validating the
+    // resource index, because staged artifacts may intentionally be absent.
+    bool materializeMetadataForRecovery(
+        QJsonObject *metadata,
+        QString *errorMessage = nullptr) const;
 
     bool stagePackedResource(const QString &sourcePath,
                              QString *stagedPath,

@@ -27,12 +27,14 @@ struct TriangulationResult
     int totalPixels = 0;
     int validPoints = 0;
     double medianError = 0.0;
+    std::string errorMessage;
 };
 
 class DisparityTriangulator
 {
 public:
-    // Disparity-based triangulation (original)
+    // The disparity map belongs to the left rectified image and follows
+    // d = x_left - x_right, so the right sample is x_left - d.
     static TriangulationResult triangulate(
         const cv::Mat &disparity,
         const cv::Mat &validMask,

@@ -574,6 +574,56 @@ MvsSourcePlan planMvsSourceViewsVerifiedFirst(
     return result;
 }
 
+std::vector<int> planMvsRepairSourceViews(
+    const std::vector<int> &preferredSources,
+    const std::vector<bool> &sourceEligibility,
+    int refIndex,
+    int requestedSourceCount)
+{
+    const int view_count = static_cast<int>(sourceEligibility.size());
+    if (refIndex < 0 || refIndex >= view_count || view_count <= 1)
+    {
+        return {};
+    }
+
+    const int maximum_source_count = std::min(16, view_count - 1);
+    const int minimum_source_count = std::min(2, maximum_source_count);
+    const int target_count = std::clamp(
+        requestedSourceCount, minimum_source_count, maximum_source_count);
+
+    std::vector<int> sources;
+    sources.reserve(static_cast<std::size_t>(target_count));
+    auto append_source = [&](int source_index)
+    {
+        if (static_cast<int>(sources.size()) >= target_count ||
+            source_index < 0 || source_index >= view_count || source_index == refIndex ||
+            !sourceEligibility[static_cast<std::size_t>(source_index)] ||
+            std::find(sources.begin(), sources.end(), source_index) != sources.end())
+        {
+            return;
+        }
+        sources.push_back(source_index);
+    };
+
+    for (int source_index : preferredSources)
+    {
+        append_source(source_index);
+        if (static_cast<int>(sources.size()) >= target_count)
+        {
+            return sources;
+        }
+    }
+
+    for (int distance = 1;
+         distance < view_count && static_cast<int>(sources.size()) < target_count;
+         ++distance)
+    {
+        append_source((refIndex - distance + view_count) % view_count);
+        append_source((refIndex + distance) % view_count);
+    }
+    return sources;
+}
+
 std::vector<MvsSourcePairQuality> filterMvsSourcePairQualitiesForImages(
     const std::vector<MvsSourcePairQuality> &qualities,
     const std::vector<std::string> &imagePaths)

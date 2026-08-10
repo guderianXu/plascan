@@ -54,6 +54,10 @@ MainWindow::MainWindow(QWidget *parent)
 
 MainWindow::~MainWindow()
 {
+    if (_projectManager)
+    {
+        _projectManager->waitForResourceCleanup();
+    }
     delete _ui;
 }
 

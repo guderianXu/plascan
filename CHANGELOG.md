@@ -12,6 +12,10 @@
   和 ImageNet 归一化，C++ 运行时对原始 logits 执行 sigmoid；仅支持 TensorRT GPU，不提供 CPU 回退。
 - 新增独立模型 Release `models-v1.2.0`，只发布 `BiRefNet_dynamic_1024.onnx` 及其 provenance；
   U2Net、LightGlue 和 LoMa-R 的既有资产继续固定在 `models-v1.1.0`，不会被增量 Release 隐式替换。
+- 新增跨平台安全路径比较、RAII worker group、模型版本化输出策略、MVS 稀疏共视图与有界单飞影像缓存，
+  为路径发布、并行异常传播和大规模项目内存预算提供可复用基础设施。
+- LightGlue 与 LoMa-R 导出产物新增 provenance sidecar 和唯一 LoMa-R package composer；运行时在构建
+  TensorRT engine 前校验实际 ONNX 的 SHA-256、权重、导出参数和工具版本。
 
 ### 优化
 
@@ -21,11 +25,26 @@
   GPU、TensorRT 和构建参数指纹在用户缓存中构建 FP16/FP32 engine，安装树禁止写入或夹带 `.engine`。
   RTX 4060 Laptop 8 GiB / TensorRT 10.15 的干净部署门禁已验证 FP16 首建（约 43 分 51 秒）和第二进程
   缓存复用（约 33.6 秒），首次使用应预留约 45 分钟。
+- MVS 深度算法修订到第 31 版：超过 32 视图时按每个参考视图保留确定性的真实共视证据，以稀疏邻接图
+  取代 worker 级 N×N 矩阵；在像素解码前完成灰度、掩模、深度、保存队列和后端 staging 内存规划，
+  超预算项目使用带租约的有界缓存，避免按视图数全量预载。
+- 项目共享影像导入、归档发布和 GC 使用项目级同步与跨进程 lease；孤儿文件经过两个已提交代次的
+  tombstone 后才删除，可信临时恢复快照中的引用也会阻止回收。
+- CMake 统一有效 Conda 前缀，GUI/GUI 测试关闭时不再查找或链接对应依赖；工作流脚本支持 Windows
+  `.exe` 解析，Python 测试注册完整性、Windows/Linux CPU 构建测试和 headless 配置进入 CI 门禁。
 
 ### 修复
 
 - OpenCV vcpkg 依赖固定为 CPU-only DNN，移除 `opencv-dnn-cuda` 和 cuDNN 构建/分发链路；部署门禁拒绝
   OpenCV CUDA ABI、cuDNN DLL 和绑定开发机的预生成 TensorRT engine。
+- 相机格式转换、密集点云细化和对应 CLI 改为同目录 staging、完整产物校验、备份替换与异常回滚；拒绝
+  输入/输出别名、祖先目录、链接逃逸和危险根目录，并在相机输出提交前复检全部源影像身份。
+- 项目资源清理改为受管路径计划与 WAL 事务：外部/共享/未证明所有权的目录不递归删除，元数据提交失败
+  可恢复原产物；关闭项目会等待持久化并在归档失败时保留恢复快照、会话与项目锁。
+- 自研 BM/SGM 统一为左参考 `d = x_left - x_right`、半开视差范围和显式有效假设；修复无效零代价、
+  SGM 多方向状态污染、反向范围/左右一致性符号、负视差三角化及 CUDA 大尺寸索引溢出和异常显存泄漏。
+- 模型“新建版本/替换默认”现在都写入隔离 run 目录并在模型、纹理和诊断完整校验后追加记录；项目或
+  Chunk 切换、关闭和析构会取消旧任务，过期回调不能发布文件、覆盖新会话状态或误报成功。
 
 ## v1.1.7 - 2026-08-10
 

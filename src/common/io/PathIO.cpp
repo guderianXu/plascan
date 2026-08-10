@@ -7,6 +7,8 @@
 #include <QIODevice>
 #include <QSaveFile>
 
+#include <system_error>
+
 namespace xjw::common::io
 {
 namespace
@@ -43,6 +45,92 @@ bool ensureParentDirectory(const QString &path, QString *errorMessage)
 
     setError(errorMessage, QStringLiteral("无法创建父目录: %1").arg(parentPath));
     return false;
+}
+
+bool normalizePathForSafety(const std::filesystem::path &path,
+                            std::filesystem::path *normalized,
+                            std::error_code *error)
+{
+    if (path.empty())
+    {
+        *error = std::make_error_code(std::errc::invalid_argument);
+        return false;
+    }
+
+    std::error_code current_error;
+    const std::filesystem::path absolute_path = std::filesystem::absolute(path, current_error);
+    if (current_error)
+    {
+        *error = current_error;
+        return false;
+    }
+
+    std::filesystem::path canonical_path = std::filesystem::weakly_canonical(absolute_path, current_error);
+    if (current_error || canonical_path.empty() || !canonical_path.is_absolute())
+    {
+        *error = current_error ? current_error : std::make_error_code(std::errc::invalid_argument);
+        return false;
+    }
+
+    *normalized = canonical_path.lexically_normal();
+    error->clear();
+    return true;
+}
+
+bool pathComponentEquals(const std::filesystem::path &first,
+                         const std::filesystem::path &second)
+{
+#ifdef _WIN32
+    return QString::fromStdWString(first.native()).compare(QString::fromStdWString(second.native()),
+                                                            Qt::CaseInsensitive) == 0;
+#else
+    return first == second;
+#endif
+}
+
+bool pathComponentsEqual(const std::filesystem::path &first,
+                         const std::filesystem::path &second)
+{
+    auto first_it = first.begin();
+    auto second_it = second.begin();
+    for (; first_it != first.end() && second_it != second.end(); ++first_it, ++second_it)
+    {
+        if (!pathComponentEquals(*first_it, *second_it))
+        {
+            return false;
+        }
+    }
+    return first_it == first.end() && second_it == second.end();
+}
+
+bool isStrictPathAncestor(const std::filesystem::path &ancestor,
+                          const std::filesystem::path &descendant)
+{
+    auto ancestor_it = ancestor.begin();
+    auto descendant_it = descendant.begin();
+    for (; ancestor_it != ancestor.end() && descendant_it != descendant.end();
+         ++ancestor_it, ++descendant_it)
+    {
+        if (!pathComponentEquals(*ancestor_it, *descendant_it))
+        {
+            return false;
+        }
+    }
+    return ancestor_it == ancestor.end() && descendant_it != descendant.end();
+}
+
+bool pathExistsForSafety(const std::filesystem::path &path,
+                         bool *exists,
+                         std::error_code *error)
+{
+    std::error_code current_error;
+    *exists = std::filesystem::exists(path, current_error);
+    if (current_error)
+    {
+        *error = current_error;
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -106,6 +194,52 @@ QString fromFilesystemPath(const std::filesystem::path &path)
     const std::string nativePath = path.string();
     return QString::fromUtf8(nativePath.data(), static_cast<int>(nativePath.size()));
 #endif
+}
+
+SafePathComparison comparePathsSafely(const std::filesystem::path &first,
+                                      const std::filesystem::path &second)
+{
+    SafePathComparison comparison;
+    if (!normalizePathForSafety(first, &comparison.normalizedFirst, &comparison.error)
+        || !normalizePathForSafety(second, &comparison.normalizedSecond, &comparison.error))
+    {
+        return comparison;
+    }
+
+    bool first_exists = false;
+    bool second_exists = false;
+    if (!pathExistsForSafety(comparison.normalizedFirst, &first_exists, &comparison.error)
+        || !pathExistsForSafety(comparison.normalizedSecond, &second_exists, &comparison.error))
+    {
+        return comparison;
+    }
+
+    comparison.equivalent = pathComponentsEqual(comparison.normalizedFirst,
+                                                 comparison.normalizedSecond);
+    if (!comparison.equivalent && first_exists && second_exists)
+    {
+        std::error_code equivalent_error;
+        comparison.equivalent = std::filesystem::equivalent(comparison.normalizedFirst,
+                                                             comparison.normalizedSecond,
+                                                             equivalent_error);
+        if (equivalent_error)
+        {
+            comparison.error = equivalent_error;
+            return comparison;
+        }
+    }
+
+    comparison.firstIsAncestorOfSecond = !comparison.equivalent
+        && isStrictPathAncestor(comparison.normalizedFirst, comparison.normalizedSecond);
+    comparison.secondIsAncestorOfFirst = !comparison.equivalent
+        && isStrictPathAncestor(comparison.normalizedSecond, comparison.normalizedFirst);
+    comparison.firstIsRoot = !comparison.normalizedFirst.root_path().empty()
+        && pathComponentsEqual(comparison.normalizedFirst, comparison.normalizedFirst.root_path());
+    comparison.secondIsRoot = !comparison.normalizedSecond.root_path().empty()
+        && pathComponentsEqual(comparison.normalizedSecond, comparison.normalizedSecond.root_path());
+    comparison.error.clear();
+    comparison.valid = true;
+    return comparison;
 }
 
 std::ifstream openInputFile(const QString &path, std::ios::openmode mode)

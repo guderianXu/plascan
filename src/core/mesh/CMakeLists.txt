@@ -58,6 +58,7 @@ add_library(meshing STATIC
     TextureVisibilityEvaluator.cpp
     TextureChartBuilder.cpp
     TextureAtlasBaker.cpp
+    ModelOutputPolicy.cpp
     ModelWorkflowService.cpp
 )
 
@@ -98,6 +99,7 @@ target_link_libraries(meshing
     PRIVATE
         mvs
         plapoint::plapoint
+        plascan_common_concurrency
         plascan_common_io
         Qt6::Core
         Qt6::Gui

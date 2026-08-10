@@ -128,6 +128,12 @@ MvsSourcePlan planMvsSourceViewsVerifiedFirst(
     const std::vector<MvsSourceCandidate> &candidates,
     const MvsSourcePlannerOptions &options);
 
+std::vector<int> planMvsRepairSourceViews(
+    const std::vector<int> &preferredSources,
+    const std::vector<bool> &sourceEligibility,
+    int refIndex,
+    int requestedSourceCount);
+
 std::vector<MvsSourcePairQuality> filterMvsSourcePairQualitiesForImages(
     const std::vector<MvsSourcePairQuality> &qualities,
     const std::vector<std::string> &imagePaths);

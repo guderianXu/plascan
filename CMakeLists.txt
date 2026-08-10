@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.25)
 
 # 必须在 project() 之前设置, 覆盖 conda gcc 的旧 ABI 默认值
 # conda OpenCV/GTest 用新 ABI, PyTorch 2.5.1 也跟随
@@ -51,26 +51,41 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 include(PlascanDependencyPaths)
 
 # ── conda/PyTorch 前缀 (可选, Docker/系统构建不需要) ──
-if(NOT DEFINED PLASCAN_CONDA_PREFIX)
-  set(_p "$ENV{CONDA_PREFIX}")
-  if(_p AND EXISTS "${_p}/targets/x86_64-linux/include")
-    set(PLASCAN_CONDA_PREFIX "${_p}" CACHE PATH "Conda environment prefix")
-  elseif(EXISTS "$ENV{HOME}/anaconda3/envs/plascan")
-    set(PLASCAN_CONDA_PREFIX "$ENV{HOME}/anaconda3/envs/plascan" CACHE PATH "Conda env prefix")
-  else()
-    set(PLASCAN_CONDA_PREFIX "" CACHE PATH "Conda env prefix (empty = system build)")
+# 关闭 conda 时不得读取 cache 或环境中的前缀，避免系统/vcpkg 构建被污染。
+set(_plascan_effective_conda_prefix "")
+if(PLASCAN_ENABLE_CONDA)
+  if(PLASCAN_CONDA_PREFIX)
+    set(_plascan_effective_conda_prefix "${PLASCAN_CONDA_PREFIX}")
+  elseif(DEFINED ENV{CONDA_PREFIX} AND NOT "$ENV{CONDA_PREFIX}" STREQUAL "")
+    set(_plascan_effective_conda_prefix "$ENV{CONDA_PREFIX}")
   endif()
 endif()
-message(STATUS "plascan: CONDA_PREFIX = ${PLASCAN_CONDA_PREFIX}")
+file(TO_CMAKE_PATH
+  "${_plascan_effective_conda_prefix}"
+  _plascan_effective_conda_prefix)
+set(PLASCAN_EFFECTIVE_CONDA_PREFIX
+  "${_plascan_effective_conda_prefix}"
+  CACHE INTERNAL "Effective conda prefix used by PlaScan" FORCE)
+if(PLASCAN_EFFECTIVE_CONDA_PREFIX)
+  message(STATUS
+    "plascan: effective conda prefix = ${PLASCAN_EFFECTIVE_CONDA_PREFIX}")
+elseif(PLASCAN_ENABLE_CONDA)
+  message(STATUS "plascan: conda enabled without a configured prefix")
+else()
+  message(STATUS "plascan: conda dependency discovery disabled")
+endif()
 
-plascan_configure_mixed_toolchain_binutils("${PLASCAN_CONDA_PREFIX}")
-plascan_apply_mixed_toolchain_binutils_to_scope()
+plascan_configure_dependency_paths()
 
 # 全局启用 CUDA（各子模块不需要单独 enable_language）。
 # PLASCAN_ENABLE_CUDA=OFF 用于持续验证真实 CPU 后端，避免因开发机安装了 CUDA 而无法覆盖该路径。
 if(PLASCAN_ENABLE_CUDA)
   # conda nvcc 不在默认 PATH 中，显式指定路径。
-  set(PLASCAN_CONDA_NVCC "${PLASCAN_CONDA_PREFIX}/bin/nvcc")
+  set(PLASCAN_CONDA_NVCC "")
+  if(PLASCAN_EFFECTIVE_CONDA_PREFIX)
+    set(PLASCAN_CONDA_NVCC
+      "${PLASCAN_EFFECTIVE_CONDA_PREFIX}/bin/nvcc")
+  endif()
   if(NOT DEFINED CMAKE_CUDA_COMPILER OR NOT CMAKE_CUDA_COMPILER)
     if(EXISTS "${PLASCAN_CONDA_NVCC}")
       set(CMAKE_CUDA_COMPILER "${PLASCAN_CONDA_NVCC}" CACHE FILEPATH "CUDA compiler")
@@ -96,18 +111,39 @@ endif()
 
 # 系统工具链构建时可优先补充系统库路径；全 conda 工具链构建必须避免污染 conda sysroot。
 set(_plascan_use_system_library_path_default ON)
-if(PLASCAN_CONDA_PREFIX)
+if(PLASCAN_EFFECTIVE_CONDA_PREFIX)
   set(_plascan_use_system_library_path_default OFF)
 endif()
-option(PLASCAN_USE_SYSTEM_LIBRARY_PATH
-  "Prepend /usr/lib/x86_64-linux-gnu to linker search paths for system toolchain builds"
-  ${_plascan_use_system_library_path_default})
+if(NOT DEFINED PLASCAN_USE_SYSTEM_LIBRARY_PATH)
+  set(PLASCAN_USE_SYSTEM_LIBRARY_PATH
+    ${_plascan_use_system_library_path_default}
+    CACHE BOOL
+    "Prepend /usr/lib/x86_64-linux-gnu to linker search paths for system toolchain builds")
+  set(PLASCAN_AUTO_SYSTEM_LIBRARY_PATH_VALUE
+    ${_plascan_use_system_library_path_default}
+    CACHE INTERNAL "Last automatic system library path default" FORCE)
+elseif(DEFINED PLASCAN_AUTO_SYSTEM_LIBRARY_PATH_VALUE
+       AND "${PLASCAN_USE_SYSTEM_LIBRARY_PATH}" STREQUAL
+           "${PLASCAN_AUTO_SYSTEM_LIBRARY_PATH_VALUE}")
+  set(PLASCAN_USE_SYSTEM_LIBRARY_PATH
+    ${_plascan_use_system_library_path_default}
+    CACHE BOOL
+    "Prepend /usr/lib/x86_64-linux-gnu to linker search paths for system toolchain builds" FORCE)
+  set(PLASCAN_AUTO_SYSTEM_LIBRARY_PATH_VALUE
+    ${_plascan_use_system_library_path_default}
+    CACHE INTERNAL "Last automatic system library path default" FORCE)
+elseif(DEFINED PLASCAN_AUTO_SYSTEM_LIBRARY_PATH_VALUE)
+  # A value that differs from the last automatic value was explicitly chosen.
+  unset(PLASCAN_AUTO_SYSTEM_LIBRARY_PATH_VALUE CACHE)
+endif()
 
-if(PLASCAN_USE_SYSTEM_LIBRARY_PATH AND EXISTS "/usr/lib/x86_64-linux-gnu")
+if(PLASCAN_USE_SYSTEM_LIBRARY_PATH
+   AND NOT PLASCAN_EFFECTIVE_CONDA_PREFIX
+   AND EXISTS "/usr/lib/x86_64-linux-gnu")
   link_directories(BEFORE "/usr/lib/x86_64-linux-gnu")
   set(CMAKE_EXE_LINKER_FLAGS "-L/usr/lib/x86_64-linux-gnu ${CMAKE_EXE_LINKER_FLAGS}")
   set(CMAKE_SHARED_LINKER_FLAGS "-L/usr/lib/x86_64-linux-gnu ${CMAKE_SHARED_LINKER_FLAGS}")
-elseif(PLASCAN_CONDA_PREFIX)
+elseif(PLASCAN_EFFECTIVE_CONDA_PREFIX)
   message(STATUS "plascan: skipping system library path injection for conda toolchain")
 endif()
 
@@ -123,12 +159,12 @@ string(REPLACE "-D_GLIBCXX_USE_CXX11_ABI=0" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAG
 message(STATUS "plascan: C++11 ABI enabled")
 
 # CUDA runtime + toolkit 头文件 (conda 环境才需要, 系统构建跳过)
-if(PLASCAN_CONDA_PREFIX AND EXISTS "${PLASCAN_CONDA_PREFIX}")
+if(PLASCAN_EFFECTIVE_CONDA_PREFIX AND EXISTS "${PLASCAN_EFFECTIVE_CONDA_PREFIX}")
   # targets 必须在 cu13 之前, 否则 nvcc 13.1 会找到 cu13 的 13.0 版 cuda_runtime_api.h
-  include_directories("${PLASCAN_CONDA_PREFIX}/targets/x86_64-linux/include")
+  include_directories("${PLASCAN_EFFECTIVE_CONDA_PREFIX}/targets/x86_64-linux/include")
 
   file(GLOB _plascan_cu13_dirs LIST_DIRECTORIES true
-    "${PLASCAN_CONDA_PREFIX}/lib/python3.*/site-packages/nvidia/cu13/include")
+    "${PLASCAN_EFFECTIVE_CONDA_PREFIX}/lib/python3.*/site-packages/nvidia/cu13/include")
   if(_plascan_cu13_dirs)
     list(GET _plascan_cu13_dirs 0 _plascan_cu13_include)
     include_directories("${_plascan_cu13_include}")
@@ -139,11 +175,11 @@ endif()
 
 option(BUILD_TESTS "Build unit tests" ON)
 option(PLASCAN_BUILD_GUI "Build the Qt GUI application" ON)
+option(PLASCAN_BUILD_GUI_TESTS "Build tests that require the Qt GUI stack" ON)
 if(BUILD_TESTS)
   enable_testing()
 endif()
 
-plascan_configure_dependency_paths()
 include(PlascanPackages)
 include(PlascanQtRuntime)
 include(PlascanTensorRtRuntime)
@@ -152,7 +188,7 @@ include(PlascanWindowsRuntime)
 # 为运行时 NVRTC builtins 解析补充 conda/pip CUDA 库目录。
 # 典型问题：libnvrtc.so 能加载，但 dlopen("libnvrtc-builtins.so.*") 在默认搜索路径中找不到。
 set(PLASCAN_EXTRA_NVRTC_RPATHS "")
-set(_plascan_runtime_prefix "${PLASCAN_CONDA_PREFIX}")
+set(_plascan_runtime_prefix "${PLASCAN_EFFECTIVE_CONDA_PREFIX}")
 
 if(_plascan_runtime_prefix AND EXISTS "${_plascan_runtime_prefix}")
   set(_plascan_nvrtc_candidates
@@ -205,10 +241,11 @@ endif()
 if(VCPKG_TARGET_TRIPLET)
   message(STATUS "  VCPKG_TARGET_TRIPLET = ${VCPKG_TARGET_TRIPLET}")
 endif()
-if(PLASCAN_CONDA_PREFIX)
-  message(STATUS "  PLASCAN_CONDA_PREFIX = ${PLASCAN_CONDA_PREFIX}")
-elseif(DEFINED ENV{CONDA_PREFIX})
-  message(STATUS "  CONDA_PREFIX = $ENV{CONDA_PREFIX}")
+if(PLASCAN_EFFECTIVE_CONDA_PREFIX)
+  message(STATUS
+    "  PLASCAN_EFFECTIVE_CONDA_PREFIX = ${PLASCAN_EFFECTIVE_CONDA_PREFIX}")
+elseif(NOT PLASCAN_ENABLE_CONDA)
+  message(STATUS "  Conda dependency discovery = disabled")
 endif()
 if(CUDAToolkit_ROOT)
   message(STATUS "  CUDAToolkit_ROOT = ${CUDAToolkit_ROOT}")
@@ -252,7 +289,9 @@ add_subdirectory(src/common)
 add_subdirectory(src/core)
 
 # GUI模块
-add_subdirectory(src/gui)
+if(PLASCAN_BUILD_GUI)
+  add_subdirectory(src/gui)
+endif()
 
 # CLI 工具
 add_subdirectory(src/cli)

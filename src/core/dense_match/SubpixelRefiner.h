@@ -18,12 +18,14 @@ public:
 
     cv::Mat refine(const cv::Mat &disparityInt,
                    const CostVolume &costVolume,
-                   int minDisp, int maxDisp);
+                   int minDisp, int maxDisp,
+                   const cv::Mat &validMask = cv::Mat());
 
 private:
     cv::Mat refineParabola(const cv::Mat &disp,
                            const CostVolume &costVol,
-                           int minDisp, int maxDisp);
+                           int minDisp, int maxDisp,
+                           const cv::Mat &validMask);
 
     DenseMatchConfig _config;
 };

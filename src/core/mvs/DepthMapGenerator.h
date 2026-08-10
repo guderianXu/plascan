@@ -18,11 +18,14 @@
 #include "DepthGapTargetedRecovery.h"
 #include "DepthResidualReestimation.h"
 #include "DepthMissingReason.h"
+#include "DepthMemoryPolicy.h"
+#include "MvsImageCache.h"
 #include "MvsQualityReport.h"
 #include "MvsSceneClassifier.h"
 #include "DenseCloudBuilder.h"
 #include "DensePointCloudCUDA.h"
 #include "MvsSourcePlanner.h"
+#include "MvsVisibilityGraphBuilder.h"
 #include "MvsViewSelection.h"
 #include "MvsWorkspaceManifest.h"
 #include "SparseCloudPreprocessor.h"
@@ -396,9 +399,19 @@ private:
     void markManifestFrameFailed(int frameIndex, const QString &error);
     bool persistWorkspaceManifest(QString *errorMsg = nullptr);
 
-    /// 预加载所有图像到内存，避免逐帧重复磁盘读取
-    void preloadImages();
-    void refreshViewImageDimensionsFromCache();
+    /// 在任何全量像素解码前从影像头部补齐尺寸，并配置统一图像 provider。
+    bool probeImageMetadata(QString *errorMessage);
+    bool initializeImageProvider(
+        const MvsPipelineMemoryPolicyDecision &decision,
+        QString *errorMessage);
+    bool preloadImages(QString *errorMessage = nullptr);
+    bool loadMvsImageFrame(int frameIndex,
+                           const std::atomic_bool *cancelFlag,
+                           MvsImageFrame *frame,
+                           std::string *errorMessage);
+    MvsImageCache::ImageLease acquireImageFrame(
+        int frameIndex,
+        std::string *errorMessage = nullptr);
 
     std::vector<CameraView> _views;
     SparseCloud _sparse;
@@ -418,21 +431,14 @@ private:
     std::vector<DepthFrameResult> _depthFrames;
     std::vector<uint8_t> _skipFrameMask;
 
-    /// 图像缓存（灰度图，预加载一次复用多次）
-    std::vector<cv::Mat> _grayCache;
-
-    /// 已完成正深度归一化/去畸变的 MVS 输入；无畸变时与灰度缓存共享像素存储
-    std::vector<cv::Mat> _mvsPreparedGrayCache;
-    std::vector<Camera> _mvsPreparedCameras;
-
-    /// 最终有效区域掩码（CV_8U，255=有效）。优先使用项目蒙版，无项目蒙版时回退内容检测。
-    std::vector<cv::Mat> _validRegionMasks;
-    std::vector<uint8_t> _projectMaskLoaded;
+    /// 统一 MVS 图像 provider。eager 模式常驻全部帧，bounded 模式仅保留当前 worker 的引用帧和源帧。
+    std::unique_ptr<MvsImageCache> _imageCache;
+    MvsPipelineMemoryPolicyDecision _pipelineMemoryDecision;
 
     /// MVS 稀疏点可见性与源视图缓存；runInBackground 中预计算一次，帧 worker 仅读取
     std::vector<FrameMvsCache> _frameCaches;
     std::vector<uint64_t> _visibilityBits;
-    std::vector<int> _pairCommonCounts;
+    std::vector<std::vector<MvsVisibilityNeighbor>> _visibilityAdjacency;
     size_t _visibilityWordCount = 0;
     bool _frameCachesReady = false;
 

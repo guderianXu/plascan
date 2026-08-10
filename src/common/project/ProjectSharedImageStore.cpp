@@ -1,22 +1,20 @@
 #include "project/ProjectSharedImageStore.h"
+#include "project/ProjectSharedImageStoreInternal.h"
 
 #include "project/PortableProjectFormat.h"
-#include "project/ProjectChunkStore.h"
 #include "project/ProjectPackageLayout.h"
 
 #include <QCryptographicHash>
 #include <QDir>
-#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
-#include <QJsonArray>
-#include <QJsonObject>
 #include <QMutex>
 #include <QMutexLocker>
 #include <QSaveFile>
+#include <QScopeGuard>
 #include <QSet>
 
-#include <array>
+#include <memory>
 
 namespace xjw::common::project
 {
@@ -80,13 +78,6 @@ QString safeFileName(const QString &path)
     return name.isEmpty() ? QStringLiteral("image.bin") : name;
 }
 
-QMutex &mutexForChecksum(const QString &checksum)
-{
-    constexpr std::size_t MutexCount = 64;
-    static std::array<QMutex, MutexCount> mutexes;
-    return mutexes.at(qHash(checksum) % MutexCount);
-}
-
 bool copyAtomically(const QString &source,
                     const QString &destination,
                     QString *errorMessage)
@@ -127,36 +118,6 @@ bool copyAtomically(const QString &source,
     return true;
 }
 
-void collectSharedUris(const QJsonValue &value, QSet<QString> *entries)
-{
-    if (value.isString())
-    {
-        const QString entry =
-            PortableProjectFormat::entryPathFromResourceUri(value.toString());
-        if (entry.startsWith(QStringLiteral("shared/images/")))
-        {
-            entries->insert(entry);
-        }
-        return;
-    }
-    if (value.isArray())
-    {
-        for (const QJsonValue &item : value.toArray())
-        {
-            collectSharedUris(item, entries);
-        }
-        return;
-    }
-    if (value.isObject())
-    {
-        const QJsonObject object = value.toObject();
-        for (auto it = object.constBegin(); it != object.constEnd(); ++it)
-        {
-            collectSharedUris(it.value(), entries);
-        }
-    }
-}
-
 } // namespace
 
 ProjectSharedImageStore::ProjectSharedImageStore(const QString &projectPath)
@@ -182,15 +143,29 @@ bool ProjectSharedImageStore::importImage(
                  QStringLiteral("待导入影像不存在: %1").arg(sourcePath));
         return false;
     }
+    // 外部源文件的只读哈希不触碰共享库，可并行执行；从检查目标目录开始
+    // 才进入项目级发布边界。
     const QString checksum = fileSha256(source.absoluteFilePath(), errorMessage);
     if (checksum.isEmpty())
     {
         return false;
     }
 
-    // 同一内容的影像会落入相同哈希目录。锁定对应分片，避免并发导入时
-    // 多个线程同时观察到空目录并各自写入一份文件。
-    QMutexLocker<QMutex> checksumLock(&mutexForChecksum(checksum));
+    // 复制、引用发布与 GC 共用同一个项目级同步边界。reservation 与
+    // 原子复制在同一临界区完成，GC 不会观察到“文件已出现但尚未保留”。
+    const std::shared_ptr<detail::SharedImageSynchronization> synchronization =
+        detail::synchronizationForProject(_projectPath);
+    QMutexLocker<QMutex> projectLock(&synchronization->mutex);
+    if (!detail::ensureCrossProcessLeaseLock(
+            _projectPath, synchronization, errorMessage))
+    {
+        return false;
+    }
+    const auto releaseUnusedLock = qScopeGuard(
+        [&]()
+        {
+            detail::releaseCrossProcessLeaseLockIfUnused(synchronization);
+        });
 
     const QString hashDirectory =
         QDir(ProjectPackageLayout::sharedImagesDirectory(_projectPath))
@@ -218,6 +193,16 @@ bool ProjectSharedImageStore::importImage(
         {
             return false;
         }
+        if (fileSha256(destination, errorMessage) != checksum)
+        {
+            QFile::remove(destination);
+            QDir().rmdir(hashDirectory);
+            setError(errorMessage,
+                     QStringLiteral(
+                         "共享影像源文件在导入期间发生变化，已取消导入: %1")
+                         .arg(source.absoluteFilePath()));
+            return false;
+        }
     }
 
     const QString entry = QDir::fromNativeSeparators(
@@ -230,11 +215,94 @@ bool ProjectSharedImageStore::importImage(
                  QStringLiteral("无法生成共享影像 URI: %1").arg(destination));
         return false;
     }
+    ++synchronization->activeReservations[entry];
     if (materializedPath)
     {
         *materializedPath = destination;
     }
     return true;
+}
+
+bool ProjectSharedImageStore::publishReferences(
+    const QStringList &references,
+    QString *errorMessage) const
+{
+    if (errorMessage)
+    {
+        errorMessage->clear();
+    }
+    const std::shared_ptr<detail::SharedImageSynchronization> synchronization =
+        detail::synchronizationForProject(_projectPath);
+    QMutexLocker<QMutex> projectLock(&synchronization->mutex);
+    if (!detail::ensureCrossProcessLeaseLock(
+            _projectPath, synchronization, errorMessage))
+    {
+        return false;
+    }
+    const auto releaseUnusedLock = qScopeGuard(
+        [&]()
+        {
+            detail::releaseCrossProcessLeaseLockIfUnused(synchronization);
+        });
+
+    QSet<QString> entries;
+    for (const QString &reference : references)
+    {
+        const QString entry = detail::entryForReference(
+            _projectPath, reference);
+        if (entry.isEmpty())
+        {
+            setError(errorMessage,
+                     QStringLiteral("共享影像引用不属于当前项目: %1")
+                         .arg(reference));
+            return false;
+        }
+        const QString path = QDir(
+            ProjectPackageLayout::dataDirectory(_projectPath)).filePath(entry);
+        if (!QFileInfo(path).isFile())
+        {
+            setError(errorMessage,
+                     QStringLiteral("共享影像引用不存在: %1").arg(reference));
+            return false;
+        }
+        entries.insert(entry);
+    }
+
+    for (const QString &entry : entries)
+    {
+        if (!synchronization->activeReservations.contains(entry))
+        {
+            synchronization->activeReservations.insert(entry, 1);
+        }
+    }
+    return true;
+}
+
+void ProjectSharedImageStore::releaseReservations(
+    const QStringList &references) const
+{
+    const std::shared_ptr<detail::SharedImageSynchronization> synchronization =
+        detail::synchronizationForProject(_projectPath);
+    QMutexLocker<QMutex> projectLock(&synchronization->mutex);
+    for (const QString &reference : references)
+    {
+        const QString entry = detail::entryForReference(
+            _projectPath, reference);
+        auto it = synchronization->activeReservations.find(entry);
+        if (it == synchronization->activeReservations.end())
+        {
+            continue;
+        }
+        if (*it <= 1)
+        {
+            synchronization->activeReservations.erase(it);
+        }
+        else
+        {
+            --(*it);
+        }
+    }
+    detail::releaseCrossProcessLeaseLockIfUnused(synchronization);
 }
 
 QString ProjectSharedImageStore::materialize(
@@ -264,62 +332,10 @@ QString ProjectSharedImageStore::materialize(
 
 bool ProjectSharedImageStore::pruneUnreferenced(QString *errorMessage) const
 {
-    ProjectChunkStore store(_projectPath);
-    const QList<ProjectChunkRecord> chunks = store.chunks(errorMessage);
-    if (chunks.isEmpty())
-    {
-        return false;
-    }
-    QSet<QString> referenced;
-    for (const ProjectChunkRecord &chunk : chunks)
-    {
-        QJsonObject document;
-        if (!store.readChunkDocument(
-                chunk.directory, &document, errorMessage))
-        {
-            return false;
-        }
-        collectSharedUris(document, &referenced);
-    }
-
-    const QString root =
-        ProjectPackageLayout::sharedImagesDirectory(_projectPath);
-    if (!QFileInfo(root).isDir())
-    {
-        return true;
-    }
-    QDirIterator iterator(
-        root,
-        QDir::Files | QDir::NoDotAndDotDot,
-        QDirIterator::Subdirectories);
-    const QDir dataRoot(
-        ProjectPackageLayout::dataDirectory(_projectPath));
-    while (iterator.hasNext())
-    {
-        const QString path = iterator.next();
-        const QString entry = QDir::fromNativeSeparators(
-            dataRoot.relativeFilePath(path));
-        if (!referenced.contains(entry) && !QFile::remove(path))
-        {
-            setError(errorMessage,
-                     QStringLiteral("无法清理未引用共享影像: %1").arg(path));
-            return false;
-        }
-    }
-
-    QDir imagesRoot(root);
-    const QFileInfoList hashDirectories = imagesRoot.entryInfoList(
-        QDir::Dirs | QDir::NoDotAndDotDot);
-    for (const QFileInfo &directory : hashDirectories)
-    {
-        QDir hashDirectory(directory.absoluteFilePath());
-        if (hashDirectory.entryList(
-                QDir::AllEntries | QDir::NoDotAndDotDot).isEmpty())
-        {
-            imagesRoot.rmdir(directory.fileName());
-        }
-    }
-    return true;
+    return detail::pruneSharedImages(
+        _projectPath,
+        detail::synchronizationForProject(_projectPath),
+        errorMessage);
 }
 
 } // namespace xjw::common::project

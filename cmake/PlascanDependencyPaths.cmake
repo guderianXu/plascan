@@ -79,6 +79,32 @@ endfunction()
 
 function(plascan_configure_mixed_toolchain_binutils conda_prefix)
     if(WIN32 OR APPLE OR NOT conda_prefix OR NOT EXISTS "${conda_prefix}")
+        if(PLASCAN_USE_SYSTEM_BINUTILS_FOR_MIXED_TOOLCHAIN)
+            foreach(_flagVar IN ITEMS
+                    CMAKE_EXE_LINKER_FLAGS
+                    CMAKE_SHARED_LINKER_FLAGS
+                    CMAKE_MODULE_LINKER_FLAGS)
+                string(REPLACE "-B/usr/bin " "" _cleanFlags "${${_flagVar}}")
+                string(REPLACE "-B/usr/bin" "" _cleanFlags "${_cleanFlags}")
+                string(STRIP "${_cleanFlags}" _cleanFlags)
+                set(${_flagVar} "${_cleanFlags}" CACHE STRING "" FORCE)
+                set(${_flagVar} "${_cleanFlags}" PARENT_SCOPE)
+            endforeach()
+            string(REPLACE "-Xcompiler=-B/usr/bin " "" _cleanCudaFlags "${CMAKE_CUDA_FLAGS}")
+            string(REPLACE "-Xcompiler=-B/usr/bin" "" _cleanCudaFlags "${_cleanCudaFlags}")
+            string(STRIP "${_cleanCudaFlags}" _cleanCudaFlags)
+            set(CMAKE_CUDA_FLAGS "${_cleanCudaFlags}" CACHE STRING "" FORCE)
+            set(CMAKE_CUDA_FLAGS "${_cleanCudaFlags}" PARENT_SCOPE)
+
+            # project() has already enabled the languages when this helper is
+            # called.  Keep the valid tools CMake discovered (including the
+            # system tools selected for the mixed configuration): clearing
+            # them here would not trigger compiler detection again in the same
+            # build tree and could leave static-library rules without an
+            # archiver.  The CUDA host override is safe to retain for the same
+            # reason; only the flags added specifically for mixed mode need to
+            # be withdrawn.
+        endif()
         set(PLASCAN_USE_SYSTEM_BINUTILS_FOR_MIXED_TOOLCHAIN OFF CACHE BOOL
             "Use system binutils when system compilers are combined with conda dependencies" FORCE)
         return()
@@ -192,23 +218,56 @@ function(plascan_configure_dependency_paths)
         endif()
     endif()
 
-    set(_condaPrefix "${PLASCAN_CONDA_PREFIX}")
-    if(NOT _condaPrefix AND DEFINED ENV{CONDA_PREFIX})
-        set(_condaPrefix "$ENV{CONDA_PREFIX}")
+    set(_condaPrefix "${PLASCAN_EFFECTIVE_CONDA_PREFIX}")
+    set(_autoCudaRoot "")
+    if(_condaPrefix)
+        plascan_find_cuda_root_from_prefix("${_condaPrefix}" _autoCudaRoot)
+    endif()
+
+    if(PLASCAN_AUTO_CONDA_CUDA_ROOT AND
+       NOT "${PLASCAN_AUTO_CONDA_CUDA_ROOT}" STREQUAL "${_autoCudaRoot}")
+        set(_autoCondaCudaRoot "${PLASCAN_AUTO_CONDA_CUDA_ROOT}")
+        foreach(_cudaVar IN ITEMS
+                CMAKE_CUDA_COMPILER
+                CMAKE_CUDA_HOST_COMPILER
+                CUDAToolkit_ROOT
+                CUDA_TOOLKIT_ROOT_DIR
+                CUDAToolkit_INCLUDE_DIR
+                CUDA_INCLUDE_DIRS)
+            if(DEFINED ${_cudaVar} AND NOT "${${_cudaVar}}" STREQUAL "")
+                plascan_path_is_under_prefix(
+                    "${${_cudaVar}}" "${_autoCondaCudaRoot}" _isAutoCondaPath)
+                if(_isAutoCondaPath)
+                    unset(${_cudaVar} CACHE)
+                    set(${_cudaVar} "" PARENT_SCOPE)
+                endif()
+            endif()
+        endforeach()
+        string(REPLACE
+            "-I${_autoCondaCudaRoot}/include " "" _cleanCudaFlags
+            "${CMAKE_CUDA_FLAGS}")
+        string(REPLACE
+            "-I${_autoCondaCudaRoot}/include" "" _cleanCudaFlags
+            "${_cleanCudaFlags}")
+        string(STRIP "${_cleanCudaFlags}" _cleanCudaFlags)
+        set(CMAKE_CUDA_FLAGS "${_cleanCudaFlags}" CACHE STRING "" FORCE)
+        set(CMAKE_CUDA_FLAGS "${_cleanCudaFlags}" PARENT_SCOPE)
+        unset(PLASCAN_AUTO_CONDA_CUDA_ROOT CACHE)
     endif()
 
     plascan_configure_mixed_toolchain_binutils("${_condaPrefix}")
     plascan_apply_mixed_toolchain_binutils_to_scope()
 
-    if(PLASCAN_ENABLE_CONDA AND _condaPrefix)
+    if(_condaPrefix)
         plascan_append_prefix_if_exists("${_condaPrefix}")
         plascan_append_prefix_if_exists("${_condaPrefix}/lib/cmake")
         plascan_append_prefix_if_exists("${_condaPrefix}/share/cmake")
         plascan_append_prefix_if_exists("${_condaPrefix}/lib")
         list(APPEND _providerSummary "conda:${_condaPrefix}")
 
-        plascan_find_cuda_root_from_prefix("${_condaPrefix}" _autoCudaRoot)
         if(_autoCudaRoot)
+            set(PLASCAN_AUTO_CONDA_CUDA_ROOT "${_autoCudaRoot}"
+                CACHE INTERNAL "CUDA root inferred from the conda prefix" FORCE)
             set(ENV{CUDA_HOME} "${_autoCudaRoot}")
             set(ENV{CUDA_PATH} "${_autoCudaRoot}")
             set(ENV{CUDA_BIN_PATH} "${_autoCudaRoot}/bin")
@@ -237,4 +296,35 @@ function(plascan_configure_dependency_paths)
     list(REMOVE_DUPLICATES _providerSummary)
     set(PLASCAN_DEPENDENCY_PROVIDER_SUMMARY "${_providerSummary}" PARENT_SCOPE)
     set(CMAKE_PREFIX_PATH "${CMAKE_PREFIX_PATH}" PARENT_SCOPE)
+
+    # The binutils helpers intentionally run inside this function so they can
+    # share the effective provider state. Forward their ordinary variables one
+    # more scope so project() and target generation actually consume them.
+    foreach(_scopeVar IN ITEMS
+            CMAKE_LINKER
+            CMAKE_AR
+            CMAKE_RANLIB
+            CMAKE_NM
+            CMAKE_CUDA_COMPILER
+            CMAKE_CUDA_HOST_COMPILER
+            CUDAToolkit_ROOT
+            CUDA_TOOLKIT_ROOT_DIR
+            CUDAToolkit_INCLUDE_DIR
+            CUDA_INCLUDE_DIRS
+            CMAKE_CUDA_FLAGS
+            CMAKE_EXE_LINKER_FLAGS
+            CMAKE_SHARED_LINKER_FLAGS
+            CMAKE_MODULE_LINKER_FLAGS)
+        if(DEFINED ${_scopeVar})
+            set(${_scopeVar} "${${_scopeVar}}" PARENT_SCOPE)
+        endif()
+    endforeach()
+    foreach(_lang IN ITEMS C CXX CUDA)
+        foreach(_archiveAction IN ITEMS CREATE APPEND FINISH)
+            set(_archiveVar "CMAKE_${_lang}_ARCHIVE_${_archiveAction}")
+            if(DEFINED ${_archiveVar})
+                set(${_archiveVar} "${${_archiveVar}}" PARENT_SCOPE)
+            endif()
+        endforeach()
+    endforeach()
 endfunction()

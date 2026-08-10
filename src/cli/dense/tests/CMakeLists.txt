@@ -2,6 +2,13 @@ add_plascan_cli_contract_test(test_dense_cli
     test_dense_cli.cpp
 )
 
+if(TARGET dense_match_cli)
+    target_compile_definitions(test_dense_cli PRIVATE
+        PLASCAN_DENSE_MATCH_CLI_PATH="$<TARGET_FILE:dense_match_cli>"
+    )
+    add_dependencies(test_dense_cli dense_match_cli)
+endif()
+
 if(TARGET dense_cloud_refine_cli)
     target_compile_definitions(test_dense_cli PRIVATE
         PLASCAN_DENSE_CLOUD_REFINE_CLI_PATH="$<TARGET_FILE:dense_cloud_refine_cli>"

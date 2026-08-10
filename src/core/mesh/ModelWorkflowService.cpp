@@ -24,6 +24,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QSaveFile>
+#include <QScopeGuard>
 #include <QTextStream>
 
 #include <opencv2/imgcodecs.hpp>
@@ -31,6 +32,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <exception>
 #include <vector>
 
 namespace xjw::mesh::workflow
@@ -38,6 +40,166 @@ namespace xjw::mesh::workflow
 
 namespace
 {
+
+bool cancellationRequested(const std::function<bool()> &isCancelled)
+{
+    return isCancelled && isCancelled();
+}
+
+WorkflowResult cancelledWorkflowResult()
+{
+    WorkflowResult result;
+    result.errorMessage = QStringLiteral("模型生成已取消");
+    result.payload[QStringLiteral("cancelled")] = true;
+    return result;
+}
+
+bool isNonEmptyFile(const QString &path)
+{
+    const QFileInfo info(path);
+    return !path.trimmed().isEmpty() && info.isFile() && info.size() > 0;
+}
+
+bool validateModelRunArtifacts(const QJsonObject &payload,
+                               QString *errorMessage)
+{
+    const QString modelPly = payload.value(
+        QStringLiteral("model_ply")).toString();
+    if (!isNonEmptyFile(modelPly))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral(
+                "模型运行未生成完整的 PLY 产物：%1").arg(modelPly);
+        }
+        return false;
+    }
+
+    const QString finalModel = payload.value(
+        QStringLiteral("final_model_path")).toString();
+    if (!isNonEmptyFile(finalModel))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral(
+                "模型运行的最终产物不存在或为空：%1").arg(finalModel);
+        }
+        return false;
+    }
+
+    for (const QString &key : {
+             QStringLiteral("model_obj"),
+             QStringLiteral("model_mtl"),
+             QStringLiteral("texture_png")})
+    {
+        const QString path = payload.value(key).toString().trimmed();
+        if (!path.isEmpty() && !isNonEmptyFile(path))
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral(
+                    "模型运行产物不完整（%1）：%2").arg(key, path);
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
+bool writeRunDiagnostics(WorkflowResult *result,
+                         const QString &diagnosticsPath,
+                         const QString &diagnosticsType)
+{
+    QJsonObject diagnostics = result->payload;
+    diagnostics[QStringLiteral("schema_version")] = 1;
+    diagnostics[QStringLiteral("diagnostics_type")] = diagnosticsType;
+    diagnostics[QStringLiteral("ok")] = true;
+    const QByteArray diagnosticsBytes = QJsonDocument(diagnostics).toJson(
+        QJsonDocument::Indented);
+
+    QSaveFile diagnosticsFile(diagnosticsPath);
+    if (!diagnosticsFile.open(QIODevice::WriteOnly)
+        || diagnosticsFile.write(diagnosticsBytes) != diagnosticsBytes.size()
+        || !diagnosticsFile.commit()
+        || !isNonEmptyFile(diagnosticsPath))
+    {
+        result->ok = false;
+        result->errorMessage = QStringLiteral(
+            "无法原子写入模型运行诊断：%1（%2）")
+            .arg(diagnosticsPath, diagnosticsFile.errorString());
+        return false;
+    }
+    return true;
+}
+
+bool finalizeModelRun(WorkflowResult *result,
+                      ModelOutputPolicy policy,
+                      const QString &runId,
+                      const QString &runOutputRoot)
+{
+    if (!result || !result->ok)
+    {
+        return false;
+    }
+
+    result->payload[QStringLiteral("model_run_id")] = runId;
+    result->payload[QStringLiteral("model_output_policy")] =
+        modelOutputPolicyName(policy);
+    result->payload[QStringLiteral("model_run_directory")] = runOutputRoot;
+    result->payload[QStringLiteral("model_artifact_directory")] =
+        QDir(runOutputRoot).filePath(QStringLiteral("products"));
+
+    QString validationError;
+    if (!validateModelRunArtifacts(result->payload, &validationError))
+    {
+        result->ok = false;
+        result->errorMessage = validationError;
+        return false;
+    }
+
+    const QString diagnosticsPath = QDir(runOutputRoot).filePath(
+        QStringLiteral("model_result.json"));
+    result->payload[QStringLiteral("model_diagnostics_path")] =
+        diagnosticsPath;
+    return writeRunDiagnostics(result,
+                               diagnosticsPath,
+                               QStringLiteral("model"));
+}
+
+bool finalizeTextureRun(WorkflowResult *result,
+                        const QString &runId,
+                        const QString &runOutputRoot)
+{
+    if (!result || !result->ok)
+    {
+        return false;
+    }
+
+    result->payload[QStringLiteral("texture_run_id")] = runId;
+    result->payload[QStringLiteral("texture_run_directory")] = runOutputRoot;
+    for (const QString &key : {
+             QStringLiteral("model_obj"),
+             QStringLiteral("model_mtl"),
+             QStringLiteral("texture_png")})
+    {
+        const QString path = result->payload.value(key).toString().trimmed();
+        if (!isNonEmptyFile(path))
+        {
+            result->ok = false;
+            result->errorMessage = QStringLiteral(
+                "纹理运行产物不完整（%1）：%2").arg(key, path);
+            return false;
+        }
+    }
+
+    const QString diagnosticsPath = QDir(runOutputRoot).filePath(
+        QStringLiteral("texture_result.json"));
+    result->payload[QStringLiteral("texture_diagnostics_path")] =
+        diagnosticsPath;
+    return writeRunDiagnostics(result,
+                               diagnosticsPath,
+                               QStringLiteral("texture"));
+}
 
 struct RefinementQualityGuardResult
 {
@@ -346,17 +508,34 @@ WorkflowResult saveMeshAndOptionalTexture(const xjw::mesh::TriMesh &mesh,
                                           bool export_obj,
                                           const xjw::mesh::TextureMappingConfig &texture,
                                           const std::function<void(const QString &, int)> &progress,
+                                          const std::function<bool()> &isCancelled,
                                           const QVector<MeshColorView> *camera_views = nullptr)
 {
+    if (cancellationRequested(isCancelled))
+    {
+        return cancelledWorkflowResult();
+    }
     WorkflowResult result;
     const QString products_dir = QDir(output_root).filePath(QStringLiteral("products"));
     QDir().mkpath(products_dir);
+    if (cancellationRequested(isCancelled))
+    {
+        return cancelledWorkflowResult();
+    }
     const QString mesh_ply_path = QDir(products_dir).filePath(QStringLiteral("model_from_mesh.ply"));
     std::string mesh_error;
+    if (cancellationRequested(isCancelled))
+    {
+        return cancelledWorkflowResult();
+    }
     if (!mesh.savePLY(xjw::common::io::toUtf8Path(mesh_ply_path), &mesh_error))
     {
         result.errorMessage = QStringLiteral("网格保存失败: %1").arg(QString::fromStdString(mesh_error));
         return result;
+    }
+    if (cancellationRequested(isCancelled))
+    {
+        return cancelledWorkflowResult();
     }
 
     result.payload[QStringLiteral("mesh_ply")] = mesh_ply_path;
@@ -374,8 +553,13 @@ WorkflowResult saveMeshAndOptionalTexture(const xjw::mesh::TriMesh &mesh,
 
     if (export_obj)
     {
+        if (cancellationRequested(isCancelled))
+        {
+            return cancelledWorkflowResult();
+        }
         std::string texture_error;
         xjw::mesh::TextureMappingConfig texture_config = texture;
+        texture_config.isCancelled = isCancelled;
         if (progress)
         {
             texture_config.progressFn = [progress](const std::string &stage, int percent)
@@ -411,8 +595,16 @@ WorkflowResult saveMeshAndOptionalTexture(const xjw::mesh::TriMesh &mesh,
         {
             result.payload[QStringLiteral("texture_warning")] = QString::fromStdString(texture_error);
         }
+        if (cancellationRequested(isCancelled))
+        {
+            return cancelledWorkflowResult();
+        }
     }
 
+    if (cancellationRequested(isCancelled))
+    {
+        return cancelledWorkflowResult();
+    }
     assignFinalModelFields(&result.payload, export_obj);
     result.ok = true;
     return result;
@@ -3403,6 +3595,10 @@ PointCloudQualityReport evaluatePointCloudQuality(const QString &pointCloudPath,
 
 WorkflowResult buildMeshAndOptionalTexture(const MeshBuildRequest &request)
 {
+    if (cancellationRequested(request.isCancelled))
+    {
+        return cancelledWorkflowResult();
+    }
     WorkflowResult result;
 
     if (request.pointCloudPath.trimmed().isEmpty())
@@ -3412,6 +3608,7 @@ WorkflowResult buildMeshAndOptionalTexture(const MeshBuildRequest &request)
     }
 
     xjw::mesh::ReconstructionConfig reconstruction = request.reconstruction;
+    reconstruction.isCancelled = request.isCancelled;
     if (request.progress)
     {
         reconstruction.progressFn = [cb = request.progress](const std::string &stage, float fraction) {
@@ -3429,8 +3626,16 @@ WorkflowResult buildMeshAndOptionalTexture(const MeshBuildRequest &request)
             &meshError,
             &meshAlgorithm))
     {
+        if (cancellationRequested(request.isCancelled))
+        {
+            return cancelledWorkflowResult();
+        }
         result.errorMessage = QStringLiteral("网格重建失败: %1").arg(QString::fromStdString(meshError));
         return result;
+    }
+    if (cancellationRequested(request.isCancelled))
+    {
+        return cancelledWorkflowResult();
     }
 
     return saveMeshAndOptionalTexture(mesh,
@@ -3438,11 +3643,16 @@ WorkflowResult buildMeshAndOptionalTexture(const MeshBuildRequest &request)
                                       request.outputRoot,
                                       request.exportObj,
                                       request.texture,
-                                      request.progress);
+                                      request.progress,
+                                      request.isCancelled);
 }
 
 WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
 {
+    if (cancellationRequested(request.isCancelled))
+    {
+        return cancelledWorkflowResult();
+    }
     WorkflowResult result;
     const QString mode = depthReconstructionModeFromSettings(request.settings);
     result.payload[QStringLiteral("actual_mesh_algorithm")] = mode;
@@ -4765,6 +4975,10 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 const QString products_path =
                     QDir(output_root).filePath(QStringLiteral("products"));
                 QDir().mkpath(products_path);
+                if (cancellationRequested(request.isCancelled))
+                {
+                    return cancelledWorkflowResult();
+                }
                 const QString tsdf_candidate_path =
                     QDir(products_path).filePath(
                         QStringLiteral("depth_tsdf_detail_candidate.ply"));
@@ -4782,6 +4996,10 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                     result.payload[QStringLiteral(
                         "depth_tsdf_detail_candidate_error")] =
                         QString::fromUtf8(candidate_error);
+                }
+                if (cancellationRequested(request.isCancelled))
+                {
+                    return cancelledWorkflowResult();
                 }
                 output_mesh = &orbital_completion.mesh;
                 output_algorithm =
@@ -6003,12 +6221,21 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                                             request.exportObj,
                                             request.texture,
                                             output_progress,
+                                            request.isCancelled,
                                             &texture_views);
+        if (cancellationRequested(request.isCancelled))
+        {
+            return cancelledWorkflowResult();
+        }
         const QJsonObject output_payload = result.payload;
         mergePayload(diagnostics, &result.payload);
         mergePayload(output_payload, &result.payload);
         if (result.ok && !tsdf.boundaryAttributionDebugMesh.empty())
         {
+            if (cancellationRequested(request.isCancelled))
+            {
+                return cancelledWorkflowResult();
+            }
             const QString debug_ply_path = QDir(
                 QDir(output_root).filePath(QStringLiteral("products")))
                 .filePath(QStringLiteral("boundary_attribution_debug.ply"));
@@ -6026,9 +6253,17 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                     "boundary_attribution_debug_error")] =
                     QString::fromUtf8(debug_error);
             }
+            if (cancellationRequested(request.isCancelled))
+            {
+                return cancelledWorkflowResult();
+            }
         }
         if (result.ok && !tsdf.acquisitionGapReport.isEmpty())
         {
+            if (cancellationRequested(request.isCancelled))
+            {
+                return cancelledWorkflowResult();
+            }
             const QString report_path = QDir(
                 QDir(output_root).filePath(QStringLiteral("products")))
                 .filePath(QStringLiteral("acquisition_gap_report.json"));
@@ -6063,10 +6298,18 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                     "acquisition_gap_report_error")] =
                     report_file.errorString();
             }
+            if (cancellationRequested(request.isCancelled))
+            {
+                return cancelledWorkflowResult();
+            }
         }
         if (result.ok && request.progress)
         {
             request.progress(QStringLiteral("模型生成完成"), 100);
+        }
+        if (cancellationRequested(request.isCancelled))
+        {
+            return cancelledWorkflowResult();
         }
         return result;
     }
@@ -6125,7 +6368,12 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                                             output_root,
                                             request.exportObj,
                                             request.texture,
-                                            request.progress);
+                                            request.progress,
+                                            request.isCancelled);
+        if (cancellationRequested(request.isCancelled))
+        {
+            return cancelledWorkflowResult();
+        }
         mergePayload(diagnostics, &result.payload);
         return result;
     }
@@ -6157,6 +6405,7 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
     meshRequest.reconstruction = request.reconstruction;
     meshRequest.exportObj = request.exportObj;
     meshRequest.texture = request.texture;
+    meshRequest.isCancelled = request.isCancelled;
     meshRequest.progress = request.progress;
 
     const QJsonObject diagnostics = result.payload;
@@ -6168,6 +6417,10 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
 
 WorkflowResult buildModel(const ModelBuildRequest &request)
 {
+    if (cancellationRequested(request.isCancelled))
+    {
+        return cancelledWorkflowResult();
+    }
     const auto started_at = std::chrono::steady_clock::now();
     const QString source_data = request.sourceData.trimmed().isEmpty()
         ? QStringLiteral("point_cloud")
@@ -6176,40 +6429,118 @@ WorkflowResult buildModel(const ModelBuildRequest &request)
         reconstructionConfigFromModelSettings(request.settings);
 
     WorkflowResult result;
-    if (source_data == QStringLiteral("depth_maps"))
+    const ModelOutputPolicy outputPolicy = request.outputPolicy.value_or(
+        modelOutputPolicyFromSettings(request.settings));
+    const QString baseOutputRoot = QDir::cleanPath(
+        request.outputRoot.trimmed());
+    QString runId;
+    QString effectiveOutputRoot;
+    if (!createModelRunOutputDirectory(baseOutputRoot,
+                                       request.runId,
+                                       &runId,
+                                       &effectiveOutputRoot,
+                                       &result.errorMessage))
     {
-        DepthMapMeshBuildRequest depth_request;
-        depth_request.depthMapSourcePath = request.depthMapSourcePath.trimmed().isEmpty()
-            ? request.requestedSourcePath
-            : request.depthMapSourcePath;
-        depth_request.reusableDenseCloudPath = request.sourcePointCloudPath;
-        depth_request.outputRoot = request.outputRoot;
-        depth_request.settings = request.settings;
-        depth_request.reconstruction = reconstruction;
-        depth_request.exportObj = false;
-        depth_request.texture = defaultTextureConfig();
-        depth_request.texture.isCancelled = request.isCancelled;
-        depth_request.isCancelled = request.isCancelled;
-        depth_request.progress = request.progress;
-        result = buildMeshFromDepthMaps(depth_request);
+        return result;
     }
-    else
+
+    bool ownsUnpublishedRun = true;
+    const auto cleanupRun = [&]()
     {
-        MeshBuildRequest mesh_request;
-        mesh_request.pointCloudPath = request.sourcePointCloudPath.trimmed().isEmpty()
-            ? request.requestedSourcePath
-            : request.sourcePointCloudPath;
-        mesh_request.outputRoot = request.outputRoot;
-        mesh_request.reconstruction = reconstruction;
-        mesh_request.exportObj = false;
-        mesh_request.texture = defaultTextureConfig();
-        mesh_request.progress = request.progress;
-        result = buildMeshAndOptionalTexture(mesh_request);
+        QString cleanupError;
+        if (!ownsUnpublishedRun
+            || removeUnpublishedModelRunDirectory(baseOutputRoot,
+                                                  runId,
+                                                  effectiveOutputRoot,
+                                                  &cleanupError))
+        {
+            ownsUnpublishedRun = false;
+            return QString();
+        }
+        return cleanupError;
+    };
+    const auto cleanupGuard = qScopeGuard(
+        [&cleanupRun]()
+        {
+            cleanupRun();
+        });
+    const auto discardRun = [&cleanupRun](WorkflowResult failedResult)
+    {
+        const QString cleanupError = cleanupRun();
+        if (!cleanupError.isEmpty())
+        {
+            failedResult.payload[QStringLiteral("run_cleanup_failed")] = true;
+            failedResult.payload[QStringLiteral("run_cleanup_error")] =
+                cleanupError;
+            if (failedResult.errorMessage.isEmpty())
+            {
+                failedResult.errorMessage = QStringLiteral(
+                    "模型运行失败，且未能清理隔离目录：%1")
+                                                .arg(cleanupError);
+            }
+            else
+            {
+                failedResult.errorMessage += QStringLiteral(
+                    "；未能清理隔离目录：%1").arg(cleanupError);
+            }
+        }
+        return failedResult;
+    };
+    if (cancellationRequested(request.isCancelled))
+    {
+        return discardRun(cancelledWorkflowResult());
+    }
+    try
+    {
+        if (source_data == QStringLiteral("depth_maps"))
+        {
+            DepthMapMeshBuildRequest depth_request;
+            depth_request.depthMapSourcePath = request.depthMapSourcePath.trimmed().isEmpty()
+                ? request.requestedSourcePath
+                : request.depthMapSourcePath;
+            depth_request.reusableDenseCloudPath = request.sourcePointCloudPath;
+            depth_request.outputRoot = effectiveOutputRoot;
+            depth_request.settings = request.settings;
+            depth_request.reconstruction = reconstruction;
+            depth_request.exportObj = false;
+            depth_request.texture = defaultTextureConfig();
+            depth_request.texture.isCancelled = request.isCancelled;
+            depth_request.isCancelled = request.isCancelled;
+            depth_request.progress = request.progress;
+            result = buildMeshFromDepthMaps(depth_request);
+        }
+        else
+        {
+            MeshBuildRequest mesh_request;
+            mesh_request.pointCloudPath = request.sourcePointCloudPath.trimmed().isEmpty()
+                ? request.requestedSourcePath
+                : request.sourcePointCloudPath;
+            mesh_request.outputRoot = effectiveOutputRoot;
+            mesh_request.reconstruction = reconstruction;
+            mesh_request.exportObj = false;
+            mesh_request.texture = defaultTextureConfig();
+            mesh_request.isCancelled = request.isCancelled;
+            mesh_request.progress = request.progress;
+            result = buildMeshAndOptionalTexture(mesh_request);
+        }
+    }
+    catch (const std::exception &exception)
+    {
+        result.errorMessage = QStringLiteral("模型生成异常: %1").arg(
+            QString::fromUtf8(exception.what()));
+    }
+    catch (...)
+    {
+        result.errorMessage = QStringLiteral("模型生成发生未知异常");
     }
 
     result.payload[QStringLiteral("model_core_elapsed_ms")] =
         static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - started_at).count());
+    if (cancellationRequested(request.isCancelled))
+    {
+        return discardRun(cancelledWorkflowResult());
+    }
     if (result.ok)
     {
         result.payload[QStringLiteral("source_data")] = source_data;
@@ -6222,12 +6553,31 @@ WorkflowResult buildModel(const ModelBuildRequest &request)
                     ? request.requestedSourcePath
                     : request.depthMapSourcePath;
         }
+        finalizeModelRun(&result,
+                         outputPolicy,
+                         runId,
+                         effectiveOutputRoot);
+        if (cancellationRequested(request.isCancelled))
+        {
+            return discardRun(cancelledWorkflowResult());
+        }
     }
+
+    if (!result.ok)
+    {
+        return discardRun(result);
+    }
+
+    ownsUnpublishedRun = false;
     return result;
 }
 
 WorkflowResult buildTextureOnly(const TextureBuildRequest &request)
 {
+    if (cancellationRequested(request.isCancelled))
+    {
+        return cancelledWorkflowResult();
+    }
     WorkflowResult result;
 
     if (request.meshPath.trimmed().isEmpty())
@@ -6249,10 +6599,18 @@ WorkflowResult buildTextureOnly(const TextureBuildRequest &request)
     std::string textureError;
     if (!request.depthMapSourcePath.trimmed().isEmpty())
     {
+        if (cancellationRequested(request.isCancelled))
+        {
+            return cancelledWorkflowResult();
+        }
         const QVector<DepthFrameArtifact> artifacts =
             DepthMapMeshBuilder::discoverDepthFrames(request.depthMapSourcePath);
         const DepthTsdfFrameLoadResult loaded = DepthTsdfSurfaceBuilder::loadFrames(
             artifacts);
+        if (cancellationRequested(request.isCancelled))
+        {
+            return cancelledWorkflowResult();
+        }
         if (!loaded.ok)
         {
             result.errorMessage = QStringLiteral("无法加载相机纹理源: %1").arg(loaded.errorMessage);
@@ -6289,6 +6647,11 @@ WorkflowResult buildTextureOnly(const TextureBuildRequest &request)
             &textureError);
     }
 
+    if (cancellationRequested(request.isCancelled))
+    {
+        return cancelledWorkflowResult();
+    }
+
     if (!result.ok)
     {
         result.errorMessage = QString::fromStdString(textureError);
@@ -6296,6 +6659,21 @@ WorkflowResult buildTextureOnly(const TextureBuildRequest &request)
     }
 
     result.payload = textureResultToJson(textureResult, &textureConfig);
+    result.payload[QStringLiteral("source_model_path")] = request.meshPath;
+    if (!request.textureRunId.trimmed().isEmpty())
+    {
+        if (cancellationRequested(request.isCancelled))
+        {
+            return cancelledWorkflowResult();
+        }
+        finalizeTextureRun(&result,
+                           request.textureRunId.trimmed(),
+                           request.outputDir);
+        if (cancellationRequested(request.isCancelled))
+        {
+            return cancelledWorkflowResult();
+        }
+    }
     return result;
 }
 

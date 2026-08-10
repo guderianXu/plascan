@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+    tags:
+      - 'v*'
     paths-ignore:
       - '**/*.md'
       - 'docs/**'
@@ -11,6 +13,13 @@ on:
     paths-ignore:
       - '**/*.md'
       - 'docs/**'
+  workflow_dispatch:
+    inputs:
+      enable_windows_cuda:
+        description: 'Run the CUDA/TensorRT smoke test and Windows release packaging on a provisioned self-hosted runner'
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -95,6 +104,58 @@ jobs:
           ccache --zero-stats
           ccache --show-config
 
+      - name: Verify headless and conda-off isolation
+        env:
+          CONDA_PREFIX: ${{ runner.temp }}/plascan-poison-conda
+        run: |
+          set -o pipefail
+          cmake -S . -B build-headless -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTS=ON \
+            -DPLASCAN_BUILD_GUI=OFF \
+            -DPLASCAN_BUILD_GUI_TESTS=OFF \
+            -DPLASCAN_ENABLE_CONDA=OFF \
+            -DPLASCAN_ENABLE_VCPKG=OFF \
+            -DPLASCAN_ENABLE_CUDA=OFF \
+            -DPLASCAN_ENABLE_TENSORRT=OFF 2>&1 | tee headless-configure.log
+          if grep -F "${CONDA_PREFIX}" headless-configure.log; then
+            echo "::error title=Conda isolation failed::Disabled conda prefix leaked into CMake configuration"
+            exit 1
+          fi
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          cache_path = Path("build-headless/CMakeCache.txt")
+          cache_text = cache_path.read_text(encoding="utf-8", errors="replace")
+          cache = {}
+          for line in cache_text.splitlines():
+              if not line or line.startswith(("//", "#")) or "=" not in line:
+                  continue
+              key_and_type, value = line.split("=", 1)
+              key = key_and_type.split(":", 1)[0]
+              cache[key] = value
+
+          effective_conda = cache.get("PLASCAN_EFFECTIVE_CONDA_PREFIX")
+          if effective_conda is None:
+              raise SystemExit("PLASCAN_EFFECTIVE_CONDA_PREFIX is missing from CMakeCache.txt")
+          if effective_conda:
+              raise SystemExit(
+                  "Disabled conda prefix leaked into CMakeCache.txt: " + effective_conda
+              )
+          poison_prefix = os.environ["CONDA_PREFIX"].replace("\\", "/")
+          if poison_prefix in cache_text.replace("\\", "/"):
+              raise SystemExit("Poison conda prefix appears in CMakeCache.txt")
+
+          for component in ("Qt6Test_DIR", "Qt6Widgets_DIR", "Qt6ShaderTools_DIR", "Qt6GuiPrivate_DIR"):
+              value = cache.get(component, "")
+              if value and not value.endswith("-NOTFOUND"):
+                  raise SystemExit(
+                      f"Headless configure unexpectedly discovered {component}: {value}"
+                  )
+          PY
+          cmake --build build-headless --parallel 2 --target reconstruct_pipeline_cli
+
       - name: Configure
         run: |
           set -o pipefail
@@ -127,8 +188,7 @@ jobs:
           set -o pipefail
           if ! xvfb-run -a env QT_QPA_PLATFORM=offscreen \
             python3 scripts/env/run_tests.py --test-dir build --output-on-failure \
-            --timeout 120 \
-            -E 'TerrainDemDomTest\.TerrainPipelineGeneratesDemDomFromDirectory' 2>&1 | tee test.log; then
+            --timeout 120 2>&1 | tee test.log; then
             filtered_msg="$(grep -Ei 'failed|failure|error|exception|segmentation|timeout|not run|[0-9]+% tests passed' test.log | tail -n 120 || true)"
             if [ -z "$filtered_msg" ]; then
               filtered_msg="$(tail -n 80 test.log)"
@@ -141,3 +201,277 @@ jobs:
       - name: Show compiler cache statistics
         if: always()
         run: ccache --show-stats
+
+  windows-msvc-cpu:
+    runs-on: windows-2025
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Configure MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure vcpkg binary cache
+        shell: pwsh
+        run: |
+          if (-not $env:VCPKG_INSTALLATION_ROOT) {
+            throw "GitHub runner did not provide VCPKG_INSTALLATION_ROOT"
+          }
+          $binaryCache = Join-Path $env:RUNNER_TEMP "vcpkg-binary-cache"
+          New-Item -ItemType Directory -Force -Path $binaryCache | Out-Null
+          "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "VCPKG_BINARY_SOURCES=clear;files,$binaryCache,readwrite" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Restore vcpkg caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/vcpkg-binary-cache
+            build/windows-vcpkg-release/vcpkg_installed
+          key: vcpkg-${{ runner.os }}-msvc-cpu-${{ hashFiles('vcpkg.json', 'cmake/vcpkg-overlays/**') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-msvc-cpu-
+
+      - name: Install Python test dependencies
+        run: python -m pip install --disable-pip-version-check numpy scipy
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake --preset windows-vcpkg-release `
+            -DPLASCAN_BUNDLE_RUNTIME=OFF `
+            -DPLASCAN_ENABLE_CUDA=OFF `
+            -DPLASCAN_ENABLE_TENSORRT=OFF
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build --preset windows-vcpkg-release --parallel 2
+
+      - name: Add vcpkg runtime to PATH
+        shell: pwsh
+        run: |
+          $runtimePath = Join-Path $env:GITHUB_WORKSPACE "build/windows-vcpkg-release/vcpkg_installed/x64-windows/bin"
+          $runtimePath | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Test
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python scripts/env/run_tests.py `
+            --test-dir build/windows-vcpkg-release `
+            --output-on-failure `
+            --timeout 180
+
+  linux-package-deb:
+    needs: build-test
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install package build dependencies
+        timeout-minutes: 15
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf \
+            autoconf-archive \
+            automake \
+            bison \
+            build-essential \
+            ca-certificates \
+            cmake \
+            curl \
+            flex \
+            gfortran \
+            git \
+            libgl1-mesa-dev \
+            libtool \
+            libx11-dev \
+            libxcb-cursor-dev \
+            libxcb-xinerama0-dev \
+            libxext-dev \
+            libxft-dev \
+            libxi-dev \
+            libxinerama-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libxrandr-dev \
+            libxrender-dev \
+            nasm \
+            ninja-build \
+            patchelf \
+            pkg-config \
+            python3 \
+            tar \
+            unzip \
+            zip
+
+      - name: Configure pinned vcpkg
+        run: |
+          vcpkg_root="${RUNNER_TEMP}/plascan-vcpkg"
+          git clone --filter=blob:none https://github.com/microsoft/vcpkg.git "${vcpkg_root}"
+          git -C "${vcpkg_root}" checkout 3c5d90a305ff00ca841f085a74a7ce74ee777dee
+          "${vcpkg_root}/bootstrap-vcpkg.sh" -disableMetrics
+          binary_cache="${RUNNER_TEMP}/plascan-vcpkg-binary-cache"
+          mkdir -p "${binary_cache}"
+          echo "VCPKG_ROOT=${vcpkg_root}" >> "${GITHUB_ENV}"
+          echo "VCPKG_BINARY_SOURCES=clear;files,${binary_cache},readwrite" >> "${GITHUB_ENV}"
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/plascan-vcpkg-binary-cache
+          key: vcpkg-${{ runner.os }}-linux-package-${{ hashFiles('vcpkg.json', 'cmake/vcpkg-overlays/**') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-linux-package-
+
+      - name: Download portable release models
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p resources/models/lightglue_tensorrt
+          gh release download models-v1.1.0 --repo "${GITHUB_REPOSITORY}" \
+            --pattern U2Net_v1.onnx --dir resources/models --clobber
+          gh release download models-v1.1.0 --repo "${GITHUB_REPOSITORY}" \
+            --pattern lightglue_sift_bucket4096.onnx \
+            --dir resources/models/lightglue_tensorrt --clobber
+
+      - name: Build validated DEB
+        run: cmake --workflow --preset linux-package-deb
+
+      - name: Upload DEB and checksum
+        uses: actions/upload-artifact@v4
+        with:
+          name: plascan-linux-deb-${{ github.ref_name }}
+          path: |
+            build/linux-vcpkg-package-release/packages/release/*.deb
+            build/linux-vcpkg-package-release/packages/release/*.deb.sha256
+          if-no-files-found: error
+
+  windows-cuda-smoke:
+    if: github.event_name == 'workflow_dispatch' && inputs.enable_windows_cuda == true
+    runs-on: [self-hosted, windows, x64, cuda, tensorrt]
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Download smoke-test models
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force `
+            resources/models,resources/models/lightglue_tensorrt,resources/models/birefnet_dynamic | Out-Null
+          gh release download models-v1.1.0 --repo $env:GITHUB_REPOSITORY `
+            --pattern U2Net_v1.onnx --dir resources/models --clobber
+          gh release download models-v1.1.0 --repo $env:GITHUB_REPOSITORY `
+            --pattern lightglue_sift_bucket4096.onnx `
+            --dir resources/models/lightglue_tensorrt --clobber
+          gh release download models-v1.2.0 --repo $env:GITHUB_REPOSITORY `
+            --pattern BiRefNet_dynamic_1024.onnx `
+            --dir resources/models/birefnet_dynamic --clobber
+          gh release download models-v1.2.0 --repo $env:GITHUB_REPOSITORY `
+            --pattern BiRefNet_dynamic_1024.provenance.json `
+            --dir resources/models/birefnet_dynamic --clobber
+
+      - name: Run CUDA and TensorRT smoke tests
+        shell: pwsh
+        run: |
+          $vcpkgRoot = if ($env:VCPKG_ROOT) { $env:VCPKG_ROOT } else { "C:\BuildTools\VC\vcpkg" }
+          "VCPKG_ROOT=$vcpkgRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $buildParameters = @{
+            SourceDir = $env:GITHUB_WORKSPACE
+            BuildDir = Join-Path $env:GITHUB_WORKSPACE "build\windows-vcpkg-cuda-release"
+            VcpkgRoot = $vcpkgRoot
+            CleanConfigure = $true
+            InstallDeps = $true
+            RunTests = $true
+            CTestRegex = "TensorRt|U2Net|BiRefNet|SuperPoint|Feature|Match|DenseMatch|Mvs|Sfm"
+            RunU2NetTensorRtDeploymentTest = $true
+            RunBiRefNetTensorRtDeploymentTest = $true
+          }
+          if ($env:CUDA_PATH) { $buildParameters["CudaRoot"] = $env:CUDA_PATH }
+          if ($env:TENSORRT_ROOT) { $buildParameters["TensorRtRoot"] = $env:TENSORRT_ROOT }
+          & scripts/build_win/build_windows_cuda.ps1 @buildParameters
+
+  windows-package-release:
+    needs: windows-cuda-smoke
+    if: github.event_name == 'workflow_dispatch' && inputs.enable_windows_cuda == true
+    runs-on: [self-hosted, windows, x64, cuda, tensorrt]
+    timeout-minutes: 480
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Download complete release model set
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force `
+            resources/models,resources/models/lightglue_tensorrt,resources/models/loma_r_tensorrt,resources/models/birefnet_dynamic | Out-Null
+          gh release download models-v1.1.0 --repo $env:GITHUB_REPOSITORY `
+            --pattern U2Net_v1.onnx --dir resources/models --clobber
+          gh release download models-v1.1.0 --repo $env:GITHUB_REPOSITORY `
+            --pattern lightglue_sift_bucket4096.onnx `
+            --dir resources/models/lightglue_tensorrt --clobber
+          gh release download models-v1.1.0 --repo $env:GITHUB_REPOSITORY `
+            --pattern "loma_r_*" --dir resources/models/loma_r_tensorrt --clobber
+          gh release download models-v1.2.0 --repo $env:GITHUB_REPOSITORY `
+            --pattern BiRefNet_dynamic_1024.onnx `
+            --dir resources/models/birefnet_dynamic --clobber
+          gh release download models-v1.2.0 --repo $env:GITHUB_REPOSITORY `
+            --pattern BiRefNet_dynamic_1024.provenance.json `
+            --dir resources/models/birefnet_dynamic --clobber
+
+      - name: Seed validated CUDA build tree
+        shell: pwsh
+        run: |
+          $vcpkgRoot = if ($env:VCPKG_ROOT) { $env:VCPKG_ROOT } else { "C:\BuildTools\VC\vcpkg" }
+          "VCPKG_ROOT=$vcpkgRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $buildParameters = @{
+            SourceDir = $env:GITHUB_WORKSPACE
+            BuildDir = Join-Path $env:GITHUB_WORKSPACE "build\windows-vcpkg-cuda-release"
+            VcpkgRoot = $vcpkgRoot
+            CleanConfigure = $true
+            InstallDeps = $true
+            RunTests = $true
+            CTestRegex = "TensorRt|U2Net|BiRefNet|SuperPoint|Feature|Match|DenseMatch|Mvs|Sfm"
+            RunU2NetTensorRtDeploymentTest = $true
+            RunBiRefNetTensorRtDeploymentTest = $true
+          }
+          if ($env:CUDA_PATH) { $buildParameters["CudaRoot"] = $env:CUDA_PATH }
+          if ($env:TENSORRT_ROOT) { $buildParameters["TensorRtRoot"] = $env:TENSORRT_ROOT }
+          & scripts/build_win/build_windows_cuda.ps1 @buildParameters
+
+      - name: Build Windows release installer
+        shell: pwsh
+        run: cmake --workflow --preset windows-package-release
+
+      - name: Upload Windows installer and checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: plascan-windows-cuda-${{ github.ref_name }}
+          path: build/windows-vcpkg-cuda-release/packages/release/*
+          if-no-files-found: error
+
+  # A Linux CUDA/TensorRT gate is intentionally deferred until the repository
+  # has a provisioned self-hosted runner carrying linux/x64/cuda/tensorrt labels.

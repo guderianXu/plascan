@@ -1,10 +1,9 @@
 #pragma once
 
+#include "ProjectModelTaskLifecycle.h"
+
 #include <QObject>
 #include <QJsonObject>
-
-#include <atomic>
-#include <memory>
 
 class QWidget;
 class ProjectData;
@@ -19,11 +18,14 @@ public:
                                  ProjectData *projectData,
                                  QWidget *parentWidget,
                                  QObject *parent = nullptr);
+    ~ProjectModelManager() override;
 
     bool startMeshReconstructionAsync(const QJsonObject &settings);
     void startTextureMappingAsync(const QJsonObject &settings);
     void cancelActiveTask();
     bool isRunning() const;
+    bool acceptsTaskCallback(
+        const xjw::gui::project::ProjectModelTaskPtr &task) const;
 
 signals:
     void meshProgressChanged(const QString &stage, int percent);
@@ -33,6 +35,5 @@ private:
     ProjectManager *_owner = nullptr;
     ProjectData *_projectData = nullptr;
     QWidget *_parentWidget = nullptr;
-    bool _isRunning = false;
-    std::shared_ptr<std::atomic_bool> _activeCancelFlag;
+    xjw::gui::project::ProjectModelTaskLifecycle _taskLifecycle;
 };

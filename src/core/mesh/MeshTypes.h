@@ -82,6 +82,8 @@ struct ReconstructionConfig
     float voxelSimplifyFactor = 1.8f;
     bool  verbose          = true;
 
+    // 取消回调：在加载、预处理、重建和后处理阶段边界查询。
+    std::function<bool()> isCancelled;
     // 进度回调：参数为 (阶段描述, 0.0~1.0 进度)
     std::function<void(const std::string &stage, float progress)> progressFn;
 };

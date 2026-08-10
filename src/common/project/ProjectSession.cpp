@@ -8,6 +8,7 @@
 #include "project/ProjectResourceStore.h"
 #include "project/ProjectSharedImageStore.h"
 #include "project/ProjectWorkspaceStore.h"
+#include "Logger.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -381,6 +382,7 @@ bool ProjectSession::mergeImages(const QJsonArray &images,
         QStringLiteral("images")).toArray();
     QMap<QString, int> existingByPath;
     QSet<QString> usedIds;
+    QStringList importedSharedPaths;
     for (int index = 0; index < merged.size(); ++index)
     {
         QJsonObject image = merged.at(index).toObject();
@@ -423,9 +425,12 @@ bool ProjectSession::mergeImages(const QJsonArray &images,
                     &sharedPath,
                     errorMessage))
             {
+                ProjectSharedImageStore(_projectPath)
+                    .releaseReservations(importedSharedPaths);
                 return false;
             }
             path = normalizedImagePath(sharedPath);
+            importedSharedPaths.append(path);
         }
         incoming[QStringLiteral("path")] = path;
         if (!incoming.contains(QStringLiteral("name")))
@@ -464,6 +469,13 @@ bool ProjectSession::mergeImages(const QJsonArray &images,
         merged.append(incoming);
     }
 
+    ProjectSharedImageStore sharedImageStore(_projectPath);
+    if (!sharedImageStore.publishReferences(
+            importedSharedPaths, errorMessage))
+    {
+        sharedImageStore.releaseReservations(importedSharedPaths);
+        return false;
+    }
     _projectFiles[QStringLiteral("images")] = merged;
     return true;
 }
@@ -635,10 +647,14 @@ bool ProjectSession::save(QString *errorMessage)
     {
         return false;
     }
+    QString garbageCollectionError;
     if (!ProjectSharedImageStore(_projectPath)
-             .pruneUnreferenced(errorMessage))
+             .pruneUnreferenced(&garbageCollectionError))
     {
-        return false;
+        LOG_WARN(
+            QStringLiteral(
+                "共享影像 GC 暂未完成，将在后续保存重试（项目 %1）: %2")
+                .arg(_projectPath, garbageCollectionError));
     }
     return ProjectPackageLayout::pruneEmptyOptionalDirectories(
         _projectPath, _activeChunk.directory, errorMessage);

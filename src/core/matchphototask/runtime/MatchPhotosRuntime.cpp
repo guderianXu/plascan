@@ -9,6 +9,7 @@
 #include "project/ProjectMetadata.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -122,6 +123,84 @@ QStringList loMaRTensorRtModelDirectories()
     return tensorRtModelDirectories(QStringLiteral("loma_r_tensorrt"));
 }
 
+QString fileSha256(const QString &path, QString *errorMessage)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("无法读取 ONNX 文件：%1（%2）")
+                                .arg(path, file.errorString());
+        }
+        return QString();
+    }
+
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    while (!file.atEnd())
+    {
+        const QByteArray block = file.read(1024 * 1024);
+        if (block.isEmpty() && file.error() != QFileDevice::NoError)
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("读取 ONNX 文件失败：%1（%2）")
+                                    .arg(path, file.errorString());
+            }
+            return QString();
+        }
+        hash.addData(block);
+    }
+    return QString::fromLatin1(hash.result().toHex());
+}
+
+bool validateDeclaredOnnxSha256(const QJsonObject &manifest,
+                                const QString &field,
+                                const QString &onnxPath,
+                                const QString &displayName,
+                                bool hashArtifact,
+                                QString *errorMessage)
+{
+    const QString declared = manifest.value(field).toString().trimmed().toLower();
+    static const QRegularExpression shaPattern(QStringLiteral("^[0-9a-f]{64}$"));
+    if (!shaPattern.match(declared).hasMatch())
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral(
+                "LoMa-R schema 2 manifest 缺少或包含无效的 %1 SHA-256 声明（字段 %2）")
+                                .arg(displayName, field);
+        }
+        return false;
+    }
+    if (!hashArtifact)
+    {
+        return true;
+    }
+
+    QString hashError;
+    const QString actual = fileSha256(onnxPath, &hashError);
+    if (actual.isEmpty())
+    {
+        if (errorMessage)
+        {
+            *errorMessage = hashError;
+        }
+        return false;
+    }
+    if (actual != declared)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral(
+                "LoMa-R %1 SHA-256 不匹配：manifest 声明 %2，实际文件 %3 为 %4")
+                                .arg(displayName, declared, onnxPath, actual);
+        }
+        return false;
+    }
+    return true;
+}
+
 image_matching::TensorRtEngineBuildResult buildOnnxEngine(
     const QString &onnxPath,
     const QString &cacheDirectory,
@@ -216,6 +295,30 @@ ResolvedLoMaRTensorRtPackage parseLoMaRPackage(const QString &manifestPath,
                                           .toString(QStringLiteral("fp16"))
                                           .trimmed()
                                           .toLower();
+        if (precisionText != QLatin1String("fp16") &&
+            precisionText != QLatin1String("fp32"))
+        {
+            resolved.errorMessage = QStringLiteral(
+                "LoMa-R schema 2 manifest 的 precision 必须是 fp16 或 fp32");
+            return resolved;
+        }
+        if (!validateDeclaredOnnxSha256(
+                object,
+                QStringLiteral("feature_onnx_sha256"),
+                resolved.featureOnnxPath,
+                QStringLiteral("feature ONNX"),
+                prepareEngines,
+                &resolved.errorMessage) ||
+            !validateDeclaredOnnxSha256(
+                object,
+                QStringLiteral("matcher_onnx_sha256"),
+                resolved.matcherOnnxPath,
+                QStringLiteral("matcher ONNX"),
+                prepareEngines,
+                &resolved.errorMessage))
+        {
+            return resolved;
+        }
         if (prepareEngines)
         {
             const auto precision = precisionText == QLatin1String("fp32")
@@ -638,6 +741,11 @@ ResolvedLoMaRTensorRtPackage resolveLoMaRTensorRtPackage(
             QDir::Name);
         for (const QString &name : discovered)
         {
+            if (name.endsWith(QStringLiteral(".provenance.json"),
+                              Qt::CaseInsensitive))
+            {
+                continue;
+            }
             if (!names.contains(name, Qt::CaseInsensitive))
             {
                 names.append(name);

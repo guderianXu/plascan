@@ -1,5 +1,7 @@
 #include "DepthCrossViewHoleRepair.h"
 
+#include "concurrency/SafeWorkerGroup.h"
+
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
@@ -7,7 +9,6 @@
 #include <cmath>
 #include <limits>
 #include <queue>
-#include <thread>
 
 #if defined(_OPENMP)
 #include <omp.h>
@@ -52,45 +53,51 @@ void parallelForRows(int row_count,
 #if defined(_OPENMP)
     if (!omp_in_parallel())
     {
+        xjw::common::concurrency::WorkerFailureState failure_state;
 #pragma omp parallel for schedule(dynamic, 1) num_threads(workers)
         for (int row = 0; row < row_count; ++row)
         {
-            if (cancelled && cancelled->load(std::memory_order_relaxed))
+            if (failure_state.stopRequested() ||
+                (cancelled && cancelled->load(std::memory_order_relaxed)))
             {
                 continue;
             }
-            fn(row);
+            try
+            {
+                fn(row);
+            }
+            catch (...)
+            {
+                // captureCurrentException is noexcept, so no exception crosses
+                // the OpenMP runtime boundary.
+                failure_state.captureCurrentException();
+            }
         }
+        failure_state.rethrowIfFailed();
         return;
     }
 #endif
 
     std::atomic<int> next_row{0};
-    std::vector<std::thread> threads;
-    threads.reserve(static_cast<std::size_t>(workers));
-    for (int worker = 0; worker < workers; ++worker)
+    xjw::common::concurrency::runWorkerGroup(
+        static_cast<std::size_t>(workers),
+        [&](std::stop_token stop_token)
     {
-        threads.emplace_back([&]()
+        for (;;)
         {
-            for (;;)
+            if (stop_token.stop_requested() ||
+                (cancelled && cancelled->load(std::memory_order_relaxed)))
             {
-                if (cancelled && cancelled->load(std::memory_order_relaxed))
-                {
-                    break;
-                }
-                const int row = next_row.fetch_add(1, std::memory_order_relaxed);
-                if (row >= row_count)
-                {
-                    break;
-                }
-                fn(row);
+                break;
             }
-        });
-    }
-    for (std::thread &thread : threads)
-    {
-        thread.join();
-    }
+            const int row = next_row.fetch_add(1, std::memory_order_relaxed);
+            if (row >= row_count)
+            {
+                break;
+            }
+            fn(row);
+        }
+    });
 }
 
 void addStats(DominantDepthLayerSelectionStats &target,

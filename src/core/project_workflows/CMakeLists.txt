@@ -2,6 +2,12 @@ add_library(project_workflows STATIC
     PointCloudInputPreparation.cpp
     PointCloudWorkflowConfig.cpp
     ProjectResourceCleanup.cpp
+    ProjectResourceCleanupArtifacts.cpp
+    ProjectResourceCleanupPlan.cpp
+    ProjectResourceCleanupPurge.cpp
+    ProjectResourceCleanupRecovery.cpp
+    ProjectResourceCleanupTransaction.cpp
+    ProjectResourceCleanupTransactionManifest.cpp
     ProjectWorkflowOperations.cpp
     ReferenceDatasetWorkflow.cpp
 )

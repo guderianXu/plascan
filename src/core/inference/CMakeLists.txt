@@ -3,6 +3,7 @@ project(plascan_inference LANGUAGES CXX)
 
 add_library(plascan_inference STATIC
     tensorrt/TensorRtCapabilities.h
+    tensorrt/TensorRtEngineCache.cpp
     tensorrt/TensorRtEngineCache.h
     tensorrt/TensorRtEngineBuilder.h
     tensorrt/TensorRtTensorInfo.cpp
@@ -13,7 +14,6 @@ if(PLASCAN_ENABLE_TENSORRT)
     target_sources(plascan_inference PRIVATE
         tensorrt/TensorRtCapabilities.cpp
         tensorrt/TensorRtBuildSupport.h
-        tensorrt/TensorRtEngineCache.cpp
         tensorrt/TensorRtEngineBuilder.cpp
         tensorrt/TensorRtNetworkBuilder.cpp
         tensorrt/TensorRtNetworkBuilder.h

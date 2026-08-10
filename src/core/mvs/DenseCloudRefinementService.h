@@ -22,6 +22,7 @@ struct DenseCloudRefinementResult
     std::string mode;
     TerrainHeightSpikeFilterReport report;
     std::vector<TerrainHeightSpikeFilterReport> passReports;
+    std::vector<std::string> warnings;
 };
 
 bool refineDenseCloud(const DenseCloudRefinementRequest &request,

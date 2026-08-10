@@ -1,10 +1,14 @@
 #include "DenseCloudRefinementService.h"
+#include "DenseCloudArtifactValidation.h"
 #include "io/PathIO.h"
 
 #include <plapoint/io/ply_io.h>
 
 #include <QDir>
 #include <QFileInfo>
+#include <QLockFile>
+#include <QTemporaryDir>
+#include <QUuid>
 
 #include <algorithm>
 #include <cmath>
@@ -12,8 +16,10 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace
@@ -103,6 +109,333 @@ void ensureParentDirectory(const std::string &path)
         std::filesystem::create_directories(parent);
     }
 }
+
+std::filesystem::path filesystemPath(const std::string &path)
+{
+    return xjw::common::io::toFilesystemPath(xjw::common::io::fromUtf8Path(path));
+}
+
+std::filesystem::path validateInputAndOutputPaths(const std::string &input_path,
+                                                  const std::string &output_path)
+{
+    const std::filesystem::path raw_output = filesystemPath(output_path);
+    std::error_code status_error;
+    const std::filesystem::file_status output_status =
+        std::filesystem::symlink_status(raw_output, status_error);
+    if (status_error
+        && status_error != std::errc::no_such_file_or_directory)
+    {
+        throw std::runtime_error(
+            "无法检查细化点云输出路径类型: " + status_error.message());
+    }
+    if (!status_error && std::filesystem::is_symlink(output_status))
+    {
+        throw std::runtime_error(
+            "细化点云输出不能是符号链接或目录联接: " + output_path);
+    }
+
+    const xjw::common::io::SafePathComparison comparison =
+        xjw::common::io::comparePathsSafely(filesystemPath(input_path),
+                                            raw_output);
+    if (!comparison.valid)
+    {
+        throw std::runtime_error(
+            "无法安全比较输入和输出路径: " + comparison.error.message());
+    }
+    if (comparison.equivalent)
+    {
+        throw std::runtime_error("输入和输出点云路径不能相同: " + input_path);
+    }
+    return comparison.normalizedSecond;
+}
+
+QString refinementLockPath(const std::filesystem::path &output_path)
+{
+    const QFileInfo output_info(
+        xjw::common::io::fromFilesystemPath(output_path));
+    return QDir(output_info.absolutePath()).filePath(
+        QStringLiteral(".%1.refine.lock").arg(output_info.fileName()));
+}
+
+class RefinementOutputLock
+{
+public:
+    explicit RefinementOutputLock(const std::filesystem::path &output_path)
+        : _lock(refinementLockPath(output_path))
+    {
+        if (_lock.tryLock(0))
+        {
+            return;
+        }
+
+        if (_lock.error() != QLockFile::LockFailedError)
+        {
+            throw std::runtime_error(
+                "无法创建或访问细化点云输出锁文件: "
+                + xjw::common::io::toUtf8Path(_lock.fileName()));
+        }
+
+        qint64 process_id = 0;
+        QString host_name;
+        QString application_name;
+        const bool has_owner = _lock.getLockInfo(
+            &process_id, &host_name, &application_name);
+        std::string owner;
+        if (has_owner)
+        {
+            owner = " (pid=" + std::to_string(process_id)
+                + ", host=" + xjw::common::io::toUtf8Path(host_name)
+                + ", app=" + xjw::common::io::toUtf8Path(application_name) + ")";
+        }
+        throw std::runtime_error(
+            "细化点云输出正在被另一个任务写入: "
+            + xjw::common::io::toUtf8Path(output_path) + owner);
+    }
+
+    RefinementOutputLock(const RefinementOutputLock &) = delete;
+    RefinementOutputLock &operator=(const RefinementOutputLock &) = delete;
+
+private:
+    QLockFile _lock;
+};
+
+std::filesystem::path createBackupDirectory(
+    const std::filesystem::path &output_path)
+{
+    const QString output_name = xjw::common::io::fromFilesystemPath(
+        output_path.filename());
+    for (int attempt = 0; attempt < 256; ++attempt)
+    {
+        const QString token = QUuid::createUuid().toString(
+            QUuid::WithoutBraces);
+        const QString candidate_name = QStringLiteral(".%1.backup-%2")
+                                           .arg(output_name, token);
+        const std::filesystem::path candidate = output_path.parent_path()
+            / xjw::common::io::toFilesystemPath(candidate_name);
+        std::error_code error;
+        if (std::filesystem::create_directory(candidate, error))
+        {
+            return candidate;
+        }
+        if (error && error != std::errc::file_exists)
+        {
+            throw std::runtime_error(
+                "无法创建细化点云备份目录: "
+                + xjw::common::io::toUtf8Path(candidate)
+                + " (" + error.message() + ")");
+        }
+    }
+    throw std::runtime_error("无法分配唯一的细化点云备份目录");
+}
+
+class StagedOutputPublisher
+{
+public:
+    StagedOutputPublisher(std::filesystem::path staged_path,
+                          std::filesystem::path output_path)
+        : _stagedPath(std::move(staged_path)),
+          _outputPath(std::move(output_path))
+    {
+    }
+
+    StagedOutputPublisher(const StagedOutputPublisher &) = delete;
+    StagedOutputPublisher &operator=(const StagedOutputPublisher &) = delete;
+
+    ~StagedOutputPublisher()
+    {
+        if (!_committed)
+        {
+            rollbackNoThrow();
+        }
+    }
+
+    std::string publish(std::size_t expected_vertex_count)
+    {
+        std::string validation_error;
+        if (!xjw::mvs::detail::validateDenseCloudPlyArtifact(
+                _stagedPath, expected_vertex_count, &validation_error))
+        {
+            throw std::runtime_error(
+                "细化点云临时产物校验失败: " + validation_error);
+        }
+
+        std::error_code error;
+        const std::filesystem::file_status output_status =
+            std::filesystem::symlink_status(_outputPath, error);
+        if (error && error != std::errc::no_such_file_or_directory)
+        {
+            throw std::runtime_error(
+                "无法检查细化点云输出路径: " + error.message());
+        }
+        const bool output_exists = !error && std::filesystem::exists(output_status);
+        if (output_exists && std::filesystem::is_symlink(output_status))
+        {
+            throw std::runtime_error(
+                "细化点云输出在发布前变成了符号链接，已拒绝替换: "
+                + xjw::common::io::toUtf8Path(_outputPath));
+        }
+        if (output_exists && !std::filesystem::is_regular_file(output_status))
+        {
+            throw std::runtime_error(
+                "细化点云输出路径已存在且不是文件: "
+                + xjw::common::io::toUtf8Path(_outputPath));
+        }
+
+        if (output_exists)
+        {
+            _backupDirectory = createBackupDirectory(_outputPath);
+            _backupDirectoryCreated = true;
+            _backupPath = _backupDirectory / "previous-output.ply";
+            std::filesystem::rename(_outputPath, _backupPath, error);
+            if (error)
+            {
+                std::error_code cleanup_error;
+                std::filesystem::remove_all(_backupDirectory, cleanup_error);
+                _backupDirectoryCreated = false;
+                throw std::runtime_error(
+                    "无法备份已有细化点云输出: " + error.message());
+            }
+            _backupActive = true;
+        }
+
+        error.clear();
+        std::filesystem::rename(_stagedPath, _outputPath, error);
+        if (error)
+        {
+            const std::error_code install_error = error;
+            bool restored_previous_output = false;
+            if (_backupActive)
+            {
+                error.clear();
+                std::filesystem::rename(_backupPath, _outputPath, error);
+                if (error)
+                {
+                    _preserveBackupOnDestruction = true;
+                    throw std::runtime_error(
+                        "无法发布细化点云输出: " + install_error.message()
+                        + "; 原输出自动恢复也失败，完整备份保留在 "
+                        + xjw::common::io::toUtf8Path(_backupPath)
+                        + ": " + error.message());
+                }
+                _backupActive = false;
+                restored_previous_output = true;
+                std::error_code cleanup_error;
+                std::filesystem::remove_all(_backupDirectory, cleanup_error);
+                _backupDirectoryCreated = static_cast<bool>(cleanup_error);
+            }
+            throw std::runtime_error(
+                "无法发布细化点云输出: " + install_error.message()
+                + (restored_previous_output ? "; 原输出已恢复"
+                                            : std::string()));
+        }
+        _installed = true;
+        _committed = true;
+
+        if (_backupActive && !_preserveBackupOnDestruction)
+        {
+            std::filesystem::remove_all(_backupDirectory, error);
+            if (error)
+            {
+                return "新点云已发布，但旧输出备份清理未完成；残留路径为 "
+                    + xjw::common::io::toUtf8Path(_backupDirectory)
+                    + ": " + error.message();
+            }
+            _backupActive = false;
+            _backupDirectoryCreated = false;
+        }
+        return {};
+    }
+
+private:
+    void rollbackNoThrow() noexcept
+    {
+        std::error_code error;
+        if (_installed)
+        {
+            std::filesystem::remove(_outputPath, error);
+            if (error)
+            {
+                return;
+            }
+            _installed = false;
+        }
+        if (_backupActive)
+        {
+            if (_preserveBackupOnDestruction)
+            {
+                return;
+            }
+            std::filesystem::rename(_backupPath, _outputPath, error);
+            if (!error)
+            {
+                std::filesystem::remove_all(_backupDirectory, error);
+                _backupActive = false;
+                _backupDirectoryCreated = false;
+            }
+        }
+        else if (_backupDirectoryCreated)
+        {
+            std::filesystem::remove_all(_backupDirectory, error);
+            _backupDirectoryCreated = false;
+        }
+    }
+
+    std::filesystem::path _stagedPath;
+    std::filesystem::path _outputPath;
+    std::filesystem::path _backupDirectory;
+    std::filesystem::path _backupPath;
+    bool _backupActive = false;
+    bool _backupDirectoryCreated = false;
+    bool _installed = false;
+    bool _committed = false;
+    bool _preserveBackupOnDestruction = false;
+};
+
+class RefinementWorkspace
+{
+public:
+    explicit RefinementWorkspace(const std::filesystem::path &output_path)
+    {
+        const QFileInfo output_info(
+            xjw::common::io::fromFilesystemPath(output_path));
+        const QString parent_path = output_info.absolutePath();
+        if (!QDir().mkpath(parent_path))
+        {
+            throw std::runtime_error(
+                "无法创建细化点云输出目录: "
+                + xjw::common::io::toUtf8Path(parent_path));
+        }
+
+        const QString base_name = output_info.completeBaseName().isEmpty()
+            ? QStringLiteral("dense_cloud")
+            : output_info.completeBaseName();
+        _directory = std::make_unique<QTemporaryDir>(
+            QDir(parent_path).filePath(
+                QStringLiteral(".%1.refine-XXXXXX").arg(base_name)));
+        if (!_directory->isValid())
+        {
+            throw std::runtime_error(
+                "无法创建细化点云临时目录: "
+                + xjw::common::io::toUtf8Path(parent_path));
+        }
+
+        _stagedOutput = QDir(_directory->path()).filePath(QStringLiteral("result.ply"));
+    }
+
+    std::string stagedOutput() const
+    {
+        return xjw::common::io::toUtf8Path(_stagedOutput);
+    }
+
+    std::filesystem::path stagedOutputPath() const
+    {
+        return xjw::common::io::toFilesystemPath(_stagedOutput);
+    }
+
+private:
+    std::unique_ptr<QTemporaryDir> _directory;
+    QString _stagedOutput;
+};
 
 double medianSorted(const std::vector<float> &values)
 {
@@ -701,6 +1034,16 @@ bool refineBinaryPlyStreaming(const std::string &input_path,
             writeBinaryPlyPointRecord(out, record, header);
         }
     });
+    out.flush();
+    if (!out)
+    {
+        throw std::runtime_error("Failed to finish writing PLY file: " + output_path);
+    }
+    out.close();
+    if (!out)
+    {
+        throw std::runtime_error("Failed to close PLY file: " + output_path);
+    }
 
     local_report.outputPoints = kept_count;
     local_report.removedPoints = local_report.inputPoints - local_report.outputPoints;
@@ -843,20 +1186,47 @@ bool refineDenseCloud(const DenseCloudRefinementRequest &request,
         }
         return false;
     }
+    if (errorMessage)
+    {
+        errorMessage->clear();
+    }
+    *result = DenseCloudRefinementResult{};
 
     try
     {
+        const std::filesystem::path normalized_output =
+            validateInputAndOutputPaths(request.inputPath, request.outputPath);
+        std::error_code parent_error;
+        std::filesystem::create_directories(normalized_output.parent_path(),
+                                            parent_error);
+        if (parent_error)
+        {
+            throw std::runtime_error(
+                "无法创建细化点云输出目录: "
+                + xjw::common::io::toUtf8Path(normalized_output.parent_path())
+                + " (" + parent_error.message() + ")");
+        }
+        RefinementOutputLock output_lock(normalized_output);
+        RefinementWorkspace workspace(normalized_output);
+        const std::string staged_output = workspace.stagedOutput();
         const int passCount = std::clamp(request.filterPasses, 1, 8);
         const int streamingChunkMb = std::clamp(request.streamingChunkMb, 1, 2048);
-        result->passReports.clear();
         if (refineBinaryPlyStreamingPasses(request.inputPath,
-                                           request.outputPath,
+                                           staged_output,
                                            streamingChunkMb,
                                            passCount,
                                            request.filterOptions,
                                            &result->report,
                                            &result->passReports))
         {
+            StagedOutputPublisher publisher(
+                workspace.stagedOutputPath(), normalized_output);
+            const std::string warning = publisher.publish(
+                result->report.outputPoints);
+            if (!warning.empty())
+            {
+                result->warnings.push_back(warning);
+            }
             result->mode = "streaming";
             return true;
         }
@@ -881,10 +1251,16 @@ bool refineDenseCloud(const DenseCloudRefinementRequest &request,
         }
         result->report = combinePassReports(result->passReports);
 
-        ensureParentDirectory(request.outputPath);
-        plapoint::io::writePly<float>(xjw::common::io::toNativeNarrowPath(request.outputPath),
+        plapoint::io::writePly<float>(xjw::common::io::toNativeNarrowPath(staged_output),
                                       refined,
                                       plapoint::io::PlyFormat::BinaryLE);
+        StagedOutputPublisher publisher(
+            workspace.stagedOutputPath(), normalized_output);
+        const std::string warning = publisher.publish(refined.size());
+        if (!warning.empty())
+        {
+            result->warnings.push_back(warning);
+        }
         result->mode = "in_memory";
         return true;
     }

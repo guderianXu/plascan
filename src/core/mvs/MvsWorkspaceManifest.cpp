@@ -742,6 +742,10 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
     root.insert(QStringLiteral("scene_profile"), static_cast<int>(config.sceneProfile));
     root.insert(QStringLiteral("depth_filter_mode"), static_cast<int>(config.depthFilterMode));
     root.insert(QStringLiteral("adaptive_depth_filter_mode"), config.adaptiveDepthFilterMode);
+    root.insert(QStringLiteral("resolved_image_cache_strategy"),
+                QString::fromStdString(config.resolvedImageCacheStrategy));
+    root.insert(QStringLiteral("resolved_image_cache_capacity"),
+                config.resolvedImageCacheCapacity);
     root.insert(QStringLiteral("enable_adaptive_geometry_evidence"),
                 config.enableAdaptiveGeometryEvidence);
     const DepthPoseRefinementOptions &pose_refinement =

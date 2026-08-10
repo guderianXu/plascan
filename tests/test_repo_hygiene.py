@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -10,12 +11,25 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def workflow_job_block(workflow_text, job_name):
+    match = re.search(
+        rf"(?ms)^  {re.escape(job_name)}:\n(?P<body>.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+        workflow_text,
+    )
+    if match is None:
+        raise AssertionError(f"GitHub Actions job is missing: {job_name}")
+    return match.group(0)
+
+
 class RepoHygieneTest(unittest.TestCase):
     def test_full_pipeline_entrypoint_is_registered_in_ctest(self):
         cmake = (ROOT / "tests" / "CMakeLists.txt").read_text(encoding="utf-8")
 
-        self.assertIn("FullPipelineEntrypointTest", cmake)
-        self.assertIn("tests.test_full_pipeline_entrypoint", cmake)
+        self.assertIn(
+            "plascan_add_python_unittest(FullPipelineEntrypointTest "
+            "test_full_pipeline_entrypoint)",
+            cmake,
+        )
 
     def test_license_file_matches_readme_license(self):
         license_path = ROOT / "LICENSE"
@@ -34,7 +48,23 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("cmake -S . -B build", text)
         self.assertIn("cmake --build build", text)
         self.assertIn("python3 scripts/env/run_tests.py --test-dir build", text)
-        self.assertNotIn("-DPLASCAN_BUILD_GUI=OFF", text)
+        self.assertIn("cmake -S . -B build-headless", text)
+        self.assertIn("-DPLASCAN_BUILD_GUI=OFF", text)
+        self.assertIn("-DPLASCAN_BUILD_GUI_TESTS=OFF", text)
+        self.assertIn("CONDA_PREFIX: ${{ runner.temp }}/plascan-poison-conda", text)
+        self.assertIn('grep -F "${CONDA_PREFIX}" headless-configure.log', text)
+        self.assertIn('Path("build-headless/CMakeCache.txt")', text)
+        self.assertIn('cache.get("PLASCAN_EFFECTIVE_CONDA_PREFIX")', text)
+        for forbidden_qt_cache_entry in [
+            "Qt6Test_DIR",
+            "Qt6Widgets_DIR",
+            "Qt6ShaderTools_DIR",
+            "Qt6GuiPrivate_DIR",
+        ]:
+            self.assertIn(forbidden_qt_cache_entry, text)
+        self.assertIn("windows-msvc-cpu:", text)
+        self.assertIn("cmake --preset windows-vcpkg-release", text)
+        self.assertIn("--test-dir build/windows-vcpkg-release", text)
         self.assertIn("uses: jurplel/install-qt-action@v4", text)
         self.assertIn("version: '6.8.3'", text)
         self.assertIn("modules: 'qtshadertools'", text)
@@ -53,6 +83,95 @@ class RepoHygieneTest(unittest.TestCase):
         packages_text = (ROOT / "cmake" / "PlascanPackages.cmake").read_text(encoding="utf-8")
         self.assertIn("find_package(Qt6 6.7 REQUIRED", packages_text)
         self.assertIn("pkg_check_modules(APRILTAG REQUIRED IMPORTED_TARGET GLOBAL apriltag)", packages_text)
+
+    def test_release_packages_are_gated_by_platform_tests(self):
+        workflow_path = ROOT / ".github" / "workflows" / "ci.yml"
+        text = workflow_path.read_text(encoding="utf-8")
+
+        linux_package = workflow_job_block(text, "linux-package-deb")
+        self.assertRegex(linux_package, r"(?m)^    needs: build-test$")
+        self.assertIn(
+            "startsWith(github.ref, 'refs/tags/v') || "
+            "github.event_name == 'workflow_dispatch'",
+            linux_package,
+        )
+        self.assertIn("cmake --workflow --preset linux-package-deb", linux_package)
+        self.assertRegex(linux_package, r"(?m)^            gfortran \\$")
+        self.assertIn("models-v1.1.0", linux_package)
+        self.assertIn("--pattern U2Net_v1.onnx", linux_package)
+        self.assertIn("--pattern lightglue_sift_bucket4096.onnx", linux_package)
+        self.assertNotIn("models-v1.2.0", linux_package)
+        self.assertNotIn("BiRefNet_dynamic_1024.onnx", linux_package)
+        self.assertNotIn("BiRefNet_dynamic_1024.provenance.json", linux_package)
+        self.assertIn("*.deb.sha256", linux_package)
+        self.assertIn("if-no-files-found: error", linux_package)
+
+        windows_smoke = workflow_job_block(text, "windows-cuda-smoke")
+        self.assertIn(
+            "github.event_name == 'workflow_dispatch' && "
+            "inputs.enable_windows_cuda == true",
+            windows_smoke,
+        )
+        self.assertIn(
+            "runs-on: [self-hosted, windows, x64, cuda, tensorrt]",
+            windows_smoke,
+        )
+        self.assertIn("scripts/build_win/build_windows_cuda.ps1", windows_smoke)
+        self.assertIn("RunTests = $true", windows_smoke)
+        expected_cuda_ctest_regex = (
+            'CTestRegex = "TensorRt|U2Net|BiRefNet|SuperPoint|Feature|Match|DenseMatch|Mvs|Sfm"'
+        )
+        self.assertIn(expected_cuda_ctest_regex, windows_smoke)
+        self.assertIn("RunU2NetTensorRtDeploymentTest = $true", windows_smoke)
+        self.assertIn("RunBiRefNetTensorRtDeploymentTest = $true", windows_smoke)
+        self.assertIn('$buildParameters["CudaRoot"]', windows_smoke)
+        self.assertIn('$buildParameters["TensorRtRoot"]', windows_smoke)
+        self.assertNotIn("$buildParameters.CudaRoot", windows_smoke)
+        self.assertNotIn("$buildParameters.TensorRtRoot", windows_smoke)
+
+        windows_package = workflow_job_block(text, "windows-package-release")
+        self.assertRegex(windows_package, r"(?m)^    needs: windows-cuda-smoke$")
+        self.assertIn("cmake --workflow --preset windows-package-release", windows_package)
+        self.assertIn("scripts/build_win/build_windows_cuda.ps1", windows_package)
+        self.assertIn("RunTests = $true", windows_package)
+        self.assertIn(expected_cuda_ctest_regex, windows_package)
+        self.assertIn("RunU2NetTensorRtDeploymentTest = $true", windows_package)
+        self.assertIn("RunBiRefNetTensorRtDeploymentTest = $true", windows_package)
+        self.assertIn('$buildParameters["CudaRoot"]', windows_package)
+        self.assertIn('$buildParameters["TensorRtRoot"]', windows_package)
+        self.assertNotIn("$buildParameters.CudaRoot", windows_package)
+        self.assertNotIn("$buildParameters.TensorRtRoot", windows_package)
+        for model_pattern in [
+            "U2Net_v1.onnx",
+            "lightglue_sift_bucket4096.onnx",
+            '"loma_r_*"',
+        ]:
+            self.assertIn(model_pattern, windows_package)
+        self.assertIn("if-no-files-found: error", windows_package)
+
+        birefnet_assets = [
+            "BiRefNet_dynamic_1024.onnx",
+            "BiRefNet_dynamic_1024.provenance.json",
+        ]
+        for cuda_job in [windows_smoke, windows_package]:
+            self.assertEqual(cuda_job.count("gh release download models-v1.2.0"), 2)
+            self.assertIn("resources/models/birefnet_dynamic", cuda_job)
+            for asset in birefnet_assets:
+                with self.subTest(cuda_job=cuda_job.splitlines()[0], asset=asset):
+                    self.assertEqual(cuda_job.count(f"--pattern {asset}"), 1)
+
+        non_cuda_workflow = text.replace(windows_smoke, "").replace(windows_package, "")
+        self.assertNotIn("models-v1.2.0", non_cuda_workflow)
+        for asset in birefnet_assets:
+            self.assertNotIn(asset, non_cuda_workflow)
+
+        self.assertIn("enable_windows_cuda:", text)
+        self.assertIn("type: boolean", text)
+        self.assertIn(
+            "A Linux CUDA/TensorRT gate is intentionally deferred until the repository",
+            text,
+        )
+        self.assertNotIn("vcpkg-configuration.json", text)
 
     def test_github_actions_uses_current_checkout_action(self):
         workflow_path = ROOT / ".github" / "workflows" / "ci.yml"

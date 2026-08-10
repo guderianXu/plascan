@@ -1,6 +1,9 @@
 #include "Intersection.h"
 
+#include "concurrency/SafeWorkerGroup.h"
+
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <limits>
 #include <thread>
@@ -251,11 +254,10 @@ Intersection::Result Intersection::intersectPair(const Camera &cam1,
 }
 
 /*
- * 批量三角化：将点集合划分为若干块并为每块创建线程进行并行计算。
+ * 批量三角化：工作线程从共享索引队列领取点并行计算。
  * 设计要点：
- *  - 使用 std::thread 而非更复杂的线程池以保持实现简单且跨平台；
- *  - chunk 分块策略为均匀划分，线程数默认使用硬件并发度（hardware_concurrency），
- *    但不会超过样本数。
+ *  - RAII worker group 捕获首个异常，即使线程部分创建失败也会先 join；
+ *  - 线程数默认使用硬件并发度，但不会超过样本数。
  *  - 每个线程对其负责的区间内逐点调用 intersectPair，因此单点函数的鲁棒性
  *    直接传导到批量结果。
  */
@@ -278,34 +280,27 @@ std::vector<Intersection::Result> Intersection::intersectBatch(const Camera &cam
     // 不要创建多于样本数的线程
     threads = std::min<unsigned int>(threads, static_cast<unsigned int>(n));
 
-    std::vector<std::thread> workers;
-    workers.reserve(threads);
-
-    const size_t chunk = (n + threads - 1) / threads; // 划分块大小（向上取整）
-    for (unsigned int tid = 0; tid < threads; ++tid) {
-        const size_t begin = tid * chunk;
-        const size_t end = std::min(n, begin + chunk);
-        if (begin >= end) {
-            continue;
-        }
-
-        // 每个线程处理 [begin, end) 区间的点
-        workers.emplace_back([&, begin, end]() {
-            for (size_t i = begin; i < end; ++i) {
-                out[i] = intersectPair(cam1,
-                                       pts1[i].first,
-                                       pts1[i].second,
-                                       cam2,
-                                       pts2[i].first,
-                                       pts2[i].second);
+    std::atomic_size_t nextIndex{0};
+    xjw::common::concurrency::runWorkerGroup(
+        static_cast<std::size_t>(threads),
+        [&](std::stop_token stopToken)
+        {
+            while (!stopToken.stop_requested())
+            {
+                const std::size_t index = nextIndex.fetch_add(
+                    1, std::memory_order_relaxed);
+                if (index >= n)
+                {
+                    break;
+                }
+                out[index] = intersectPair(cam1,
+                                           pts1[index].first,
+                                           pts1[index].second,
+                                           cam2,
+                                           pts2[index].first,
+                                           pts2[index].second);
             }
         });
-    }
-
-    // 等待所有线程完成
-    for (auto &worker : workers) {
-        worker.join();
-    }
     return out;
 }
 

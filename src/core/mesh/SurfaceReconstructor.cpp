@@ -2,6 +2,7 @@
 #include "PointCloudPreprocess.h"
 #include "SurfaceReconstructorHeightGrid.h"
 #include "SurfaceReconstructorPostprocess.h"
+#include "concurrency/SafeWorkerGroup.h"
 #include "io/PathIO.h"
 
 #include <plapoint/core/point_cloud.h>
@@ -22,6 +23,7 @@
 #include <new>
 #include <numeric>
 #include <string>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -344,26 +346,22 @@ bool estimateStreamingBoundsParallel(const std::string &cloudPath,
 
     const int workerCount = activeChunkWorkerCount(requestedThreads, chunks.size());
     std::atomic<std::size_t> nextChunk{0};
-    std::atomic<bool> failed{false};
     std::vector<StreamingBounds> localBounds(static_cast<std::size_t>(workerCount));
-    std::vector<std::string> errors(static_cast<std::size_t>(workerCount));
-    std::vector<std::thread> workers;
-    workers.reserve(static_cast<std::size_t>(workerCount));
-
-    for (int worker = 0; worker < workerCount; ++worker)
+    try
     {
-        workers.emplace_back([&, worker]() {
+        xjw::common::concurrency::runWorkerGroup(
+            static_cast<std::size_t>(workerCount),
+            [&](std::size_t worker, std::stop_token stopToken)
+        {
             std::ifstream file = xjw::common::io::openInputFile(cloudPath);
             if (!file)
             {
-                errors[static_cast<std::size_t>(worker)] = "无法打开 PLY 文件";
-                failed.store(true, std::memory_order_relaxed);
-                return;
+                throw std::runtime_error("无法打开 PLY 文件");
             }
 
             std::vector<char> buffer;
-            StreamingBounds &local = localBounds[static_cast<std::size_t>(worker)];
-            while (!failed.load(std::memory_order_relaxed))
+            StreamingBounds &local = localBounds[worker];
+            while (!stopToken.stop_requested())
             {
                 const std::size_t chunkIndex = nextChunk.fetch_add(1, std::memory_order_relaxed);
                 if (chunkIndex >= chunks.size())
@@ -374,17 +372,16 @@ bool estimateStreamingBoundsParallel(const std::string &cloudPath,
                 std::string chunkError;
                 if (!readPlyChunkFromStream(file, header, chunks[chunkIndex], &buffer, &chunkError))
                 {
-                    errors[static_cast<std::size_t>(worker)] = chunkError.empty() ? "读取 PLY 顶点分块失败" : chunkError;
-                    failed.store(true, std::memory_order_relaxed);
-                    break;
+                    throw std::runtime_error(
+                        chunkError.empty() ? "读取 PLY 顶点分块失败" : chunkError);
                 }
 
                 const char *data = buffer.data();
                 const std::uint64_t stride = static_cast<std::uint64_t>(header.vertexStride);
                 for (std::uint64_t i = 0; i < chunks[chunkIndex].vertexCount; ++i)
                 {
-                    const detail::PointXYZRGB point = readPointFromPlyRecord(data + static_cast<std::size_t>(i * stride),
-                                                                             header);
+                    const detail::PointXYZRGB point = readPointFromPlyRecord(
+                        data + static_cast<std::size_t>(i * stride), header);
                     if (!isFinitePoint(point))
                     {
                         continue;
@@ -400,28 +397,19 @@ bool estimateStreamingBoundsParallel(const std::string &cloudPath,
             }
         });
     }
-
-    for (std::thread &worker : workers)
-    {
-        if (worker.joinable())
-        {
-            worker.join();
-        }
-    }
-
-    if (failed.load(std::memory_order_relaxed))
+    catch (const std::exception &error)
     {
         if (errorMsg)
         {
-            *errorMsg = "并行扫描 PLY 顶点失败";
-            for (const std::string &error : errors)
-            {
-                if (!error.empty())
-                {
-                    *errorMsg = error;
-                    break;
-                }
-            }
+            *errorMsg = "并行扫描 PLY 顶点失败: " + std::string(error.what());
+        }
+        return false;
+    }
+    catch (...)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "并行扫描 PLY 顶点发生未知 worker 异常";
         }
         return false;
     }
@@ -610,25 +598,21 @@ bool accumulateStreamingGridParallel(const std::string &cloudPath,
     }
 
     std::atomic<std::size_t> nextChunk{0};
-    std::atomic<bool> failed{false};
-    std::vector<std::string> errors(static_cast<std::size_t>(workerCount));
-    std::vector<std::thread> workers;
-    workers.reserve(static_cast<std::size_t>(workerCount));
-
-    for (int worker = 0; worker < workerCount; ++worker)
+    try
     {
-        workers.emplace_back([&, worker]() {
+        xjw::common::concurrency::runWorkerGroup(
+            static_cast<std::size_t>(workerCount),
+            [&](std::size_t worker, std::stop_token stopToken)
+        {
             std::ifstream file = xjw::common::io::openInputFile(cloudPath);
             if (!file)
             {
-                errors[static_cast<std::size_t>(worker)] = "无法打开 PLY 文件";
-                failed.store(true, std::memory_order_relaxed);
-                return;
+                throw std::runtime_error("无法打开 PLY 文件");
             }
 
             std::vector<char> buffer;
-            std::vector<StreamingGridCell> &workerCells = localCells[static_cast<std::size_t>(worker)];
-            while (!failed.load(std::memory_order_relaxed))
+            std::vector<StreamingGridCell> &workerCells = localCells[worker];
+            while (!stopToken.stop_requested())
             {
                 const std::size_t chunkIndex = nextChunk.fetch_add(1, std::memory_order_relaxed);
                 if (chunkIndex >= chunks.size())
@@ -639,17 +623,16 @@ bool accumulateStreamingGridParallel(const std::string &cloudPath,
                 std::string chunkError;
                 if (!readPlyChunkFromStream(file, header, chunks[chunkIndex], &buffer, &chunkError))
                 {
-                    errors[static_cast<std::size_t>(worker)] = chunkError.empty() ? "读取 PLY 顶点分块失败" : chunkError;
-                    failed.store(true, std::memory_order_relaxed);
-                    break;
+                    throw std::runtime_error(
+                        chunkError.empty() ? "读取 PLY 顶点分块失败" : chunkError);
                 }
 
                 const char *data = buffer.data();
                 const std::uint64_t stride = static_cast<std::uint64_t>(header.vertexStride);
                 for (std::uint64_t i = 0; i < chunks[chunkIndex].vertexCount; ++i)
                 {
-                    const detail::PointXYZRGB point = readPointFromPlyRecord(data + static_cast<std::size_t>(i * stride),
-                                                                             header);
+                    const detail::PointXYZRGB point = readPointFromPlyRecord(
+                        data + static_cast<std::size_t>(i * stride), header);
                     std::size_t index = 0;
                     if (!pointToStreamingGridIndex(point, grid, &index) || index >= workerCells.size())
                     {
@@ -660,28 +643,19 @@ bool accumulateStreamingGridParallel(const std::string &cloudPath,
             }
         });
     }
-
-    for (std::thread &worker : workers)
-    {
-        if (worker.joinable())
-        {
-            worker.join();
-        }
-    }
-
-    if (failed.load(std::memory_order_relaxed))
+    catch (const std::exception &error)
     {
         if (errorMsg)
         {
-            *errorMsg = "并行构建流式地形网格失败";
-            for (const std::string &error : errors)
-            {
-                if (!error.empty())
-                {
-                    *errorMsg = error;
-                    break;
-                }
-            }
+            *errorMsg = "并行构建流式地形网格失败: " + std::string(error.what());
+        }
+        return false;
+    }
+    catch (...)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "并行构建流式地形网格发生未知 worker 异常";
         }
         return false;
     }
@@ -1429,6 +1403,23 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
             config.progressFn(stage, p);
         }
     };
+    auto cancelled = [&]()
+    {
+        if (!config.isCancelled || !config.isCancelled())
+        {
+            return false;
+        }
+        if (errorMsg)
+        {
+            *errorMsg = "模型生成已取消";
+        }
+        return true;
+    };
+
+    if (cancelled())
+    {
+        return false;
+    }
 
     TriMesh mesh;
     bool usedHeightGridFallback = false;
@@ -1440,6 +1431,10 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
     PlyHeader streamingHeader;
     std::string streamingHeaderError;
     const bool hasStreamingHeader = parseBinaryPlyHeader(cloudPath, &streamingHeader, &streamingHeaderError);
+    if (cancelled())
+    {
+        return false;
+    }
     const int maxInputPoints = std::max(0, config.maxInputPointsForMeshing);
     if (hasStreamingHeader && maxInputPoints > 0 &&
         streamingHeader.vertexCount > static_cast<std::uint64_t>(maxInputPoints))
@@ -1457,12 +1452,20 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
                          " > " + std::to_string(maxInputPoints) +
                          ")，自动切换为流式地形网格...",
                      0.03f);
+            if (cancelled())
+            {
+                return false;
+            }
             if (!reconstructStreamingHeightGridFromPly(cloudPath,
                                                        streamingHeader,
                                                        config,
                                                        &mesh,
                                                        errorMsg,
                                                        progress))
+            {
+                return false;
+            }
+            if (cancelled())
             {
                 return false;
             }
@@ -1483,10 +1486,22 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
 
     std::vector<detail::PointXYZRGB> points;
     auto buildHeightGridMesh = [&](float buildProgress, float fillProgress, float triangulateProgress) {
+        if (cancelled())
+        {
+            return false;
+        }
         usedHeightGridFallback = true;
         selectedAlgorithm = "height_grid";
         progress("正在构建高度格网...", buildProgress);
+        if (cancelled())
+        {
+            return false;
+        }
         detail::HeightGrid hg = detail::buildHeightGrid(points, config);
+        if (cancelled())
+        {
+            return false;
+        }
         if (hg.nx < 4 || hg.ny < 4)
         {
             if (errorMsg)
@@ -1499,12 +1514,24 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
         if (config.fillHoles)
         {
             progress("正在填充空洞...", fillProgress);
+            if (cancelled())
+            {
+                return false;
+            }
             detail::fillHoles(&hg, std::max(0, config.holeFillPasses));
+            if (cancelled())
+            {
+                return false;
+            }
         }
 
         progress("正在三角分割...", triangulateProgress);
+        if (cancelled())
+        {
+            return false;
+        }
         detail::heightGridToMesh(hg, points, config, &mesh);
-        return !mesh.empty();
+        return !cancelled() && !mesh.empty();
     };
     auto minUsefulPoissonFaces = [&]() {
         constexpr int usable_face_cap = 96;
@@ -1514,8 +1541,16 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
     if (!streamingMeshBuilt)
     {
         progress("正在加载点云...", 0.04f);
+        if (cancelled())
+        {
+            return false;
+        }
         std::string loadError;
         points = loadPointsForMeshing(cloudPath, config, &loadError, progress);
+        if (cancelled())
+        {
+            return false;
+        }
         if (points.size() < 100)
         {
             if (errorMsg)
@@ -1531,18 +1566,34 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
         if (config.enableDenoise)
         {
             progress("正在点云去噪...", 0.08f);
+            if (cancelled())
+            {
+                return false;
+            }
             points = detail::statisticalDenoisePoints(points,
                                                        std::clamp(config.denoiseK, 8, 64),
                                                        std::clamp(config.denoiseStdMul, 0.6f, 3.0f),
                                                        baseVoxel * 2.0f,
                                                        config.preprocessingDevice);
+            if (cancelled())
+            {
+                return false;
+            }
         }
 
         if (config.enableDownsample)
         {
             progress("正在点云下采样...", 0.12f);
+            if (cancelled())
+            {
+                return false;
+            }
             const float voxelSize = baseVoxel * std::clamp(config.downsampleVoxelScale, 0.4f, 2.5f);
             points = detail::voxelDownsamplePoints(points, voxelSize, config.preprocessingDevice);
+            if (cancelled())
+            {
+                return false;
+            }
         }
 
         if (points.size() < 120)
@@ -1558,6 +1609,10 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
         if (config.forcePoisson)
         {
             progress("正在执行 Poisson 重建...", 0.30f);
+            if (cancelled())
+            {
+                return false;
+            }
             try
             {
                 const std::size_t poisson_input_points = points.size();
@@ -1570,6 +1625,10 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
                         &points,
                         config.kNormals,
                         config.preprocessingDevice);
+                    if (cancelled())
+                    {
+                        return false;
+                    }
                 }
                 const std::size_t valid_points_after_repair = validPoissonPointCount(points);
                 if (valid_points_after_repair < 120)
@@ -1626,6 +1685,10 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
                     {
                         progress("正在统一闭合曲面法线方向...", 0.31f);
                         orientNormalsOutwardFromCentroid(&points, config.poissonThreads);
+                        if (cancelled())
+                        {
+                            return false;
+                        }
                     }
                     else
                     {
@@ -1639,6 +1702,10 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
                 poisson.setDepth(recommendedPoissonDepth(points.size(), config.poissonDepth));
                 poisson.setProcessingDevice(config.poissonSolverDevice);
                 auto [verts, faces] = poisson.reconstruct();
+                if (cancelled())
+                {
+                    return false;
+                }
                 const auto &poisson_report = poisson.lastReport();
                 const auto device_name = [](plapoint::ProcessingDevice device)
                 {
@@ -1666,9 +1733,17 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
                 progress("正在传递网格顶点颜色...", 0.50f);
                 convertPoissonResultToMesh(verts, faces, poissonCloudPtr, &mesh);
                 detail::weldCoincidentVertices(&mesh, 1.0e-6f);
+                if (cancelled())
+                {
+                    return false;
+                }
             }
             catch (const std::exception &e)
             {
+                if (cancelled())
+                {
+                    return false;
+                }
                 mesh = TriMesh{};
                 const std::string reason = std::string(e.what()).empty() ? "unknown error" : e.what();
                 poissonFailureReason = reason;
@@ -1692,6 +1767,10 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
                     liteConfig.simplifyTargetFaces = std::max(config.simplifyTargetFaces * 2, 80000);
                     liteConfig.voxelSimplifyFactor = std::clamp(config.voxelSimplifyFactor * 0.85f, 1.0f, 2.4f);
                     detail::simplifyVoxelMeshAdaptive(&mesh, liteConfig, baseVoxel);
+                    if (cancelled())
+                    {
+                        return false;
+                    }
                 }
             }
         }
@@ -1731,12 +1810,28 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
     }
 
     progress("正在清理退化面...", 0.64f);
+    if (cancelled())
+    {
+        return false;
+    }
     detail::removeDegenerateFaces(&mesh);
+    if (cancelled())
+    {
+        return false;
+    }
 
     if (config.cleanSmallComponents)
     {
         progress("正在清理碎片连通体...", 0.70f);
+        if (cancelled())
+        {
+            return false;
+        }
         detail::removeSmallConnectedComponents(&mesh, std::max(2, config.minComponentFaces));
+        if (cancelled())
+        {
+            return false;
+        }
         if (selectedAlgorithm == "poisson" && mesh.faceCount() < minUsefulPoissonFaces())
         {
             if (!config.allowHeightGridFallback)
@@ -1760,6 +1855,10 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
             }
             detail::removeDegenerateFaces(&mesh);
             detail::removeSmallConnectedComponents(&mesh, std::max(2, config.minComponentFaces));
+            if (cancelled())
+            {
+                return false;
+            }
         }
         if (mesh.empty())
         {
@@ -1774,13 +1873,25 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
     if (selectedAlgorithm == "poisson" && config.fillHoles)
     {
         progress("正在修复小边界孔洞...", 0.73f);
+        if (cancelled())
+        {
+            return false;
+        }
         const int max_boundary_edges = std::clamp(config.holeFillPasses * 8, 16, 256);
         detail::fillSmallBoundaryHoles(
             &mesh, max_boundary_edges, 0.0f, nullptr, nullptr);
         detail::removeDegenerateFaces(&mesh);
+        if (cancelled())
+        {
+            return false;
+        }
     }
 
     progress("正在平滑网格...", usedLateHeightGridFallback ? 0.80f : 0.75f);
+    if (cancelled())
+    {
+        return false;
+    }
     int smoothIters = config.smoothIterations;
     float smoothLambda = config.smoothLambda;
     if (!usedHeightGridFallback)
@@ -1789,11 +1900,27 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
         smoothLambda = std::clamp(config.smoothLambda * 0.58f, 0.08f, 0.32f);
     }
     detail::taubinSmooth(&mesh, smoothIters, smoothLambda);
+    if (cancelled())
+    {
+        return false;
+    }
 
     progress("正在重算法线...", 0.90f);
+    if (cancelled())
+    {
+        return false;
+    }
     detail::recomputeNormals(&mesh);
+    if (cancelled())
+    {
+        return false;
+    }
 
     progress("网格重建完成", 1.0f);
+    if (cancelled())
+    {
+        return false;
+    }
     if (algorithmUsed)
     {
         *algorithmUsed = selectedAlgorithm.empty() ? "unknown" : selectedAlgorithm;

@@ -185,6 +185,102 @@ TEST(TriangulateCli, WritesAbsoluteWorldCoordinates)
 #endif
 }
 
+TEST(TriangulateCli, AcceptsFiniteNegativeDisparityWithoutExplicitMask)
+{
+#ifndef PLASCAN_TRIANGULATE_CLI_PATH
+    GTEST_SKIP() << "triangulate_cli path is not configured";
+#else
+    auto tempDir = makeUniqueTempDir();
+    ASSERT_TRUE(tempDir->isValid());
+    const fs::path root = tempDir->path().toStdString();
+
+    const fs::path leftCamera = root / "left.tsai";
+    const fs::path rightCamera = root / "right.tsai";
+    const fs::path rectPath = root / "rect.xml";
+    const fs::path disparityPath = root / "negative_disp.tif";
+    const fs::path outPath = root / "negative_cloud.ply";
+
+    writeCamera(leftCamera, 0.0);
+    writeCamera(rightCamera, -1.0);
+
+    cv::Mat disparity(101, 101, CV_32FC1, cv::Scalar(0.0f));
+    disparity.at<float>(50, 50) = -10.0f;
+    ASSERT_TRUE(cv::imwrite(disparityPath.string(), disparity));
+
+    cv::FileStorage fsOut(rectPath.string(), cv::FileStorage::WRITE);
+    ASSERT_TRUE(fsOut.isOpened());
+    fsOut << "H1inv" << cv::Mat::eye(3, 3, CV_64F);
+    fsOut << "H2inv" << cv::Mat::eye(3, 3, CV_64F);
+    fsOut.release();
+
+    const QStringList arguments{
+        QStringLiteral("--disparity"), QString::fromStdString(disparityPath.string()),
+        QStringLiteral("--rect"), QString::fromStdString(rectPath.string()),
+        QStringLiteral("--camL"), QString::fromStdString(leftCamera.string()),
+        QStringLiteral("--camR"), QString::fromStdString(rightCamera.string()),
+        QStringLiteral("--output"), QString::fromStdString(outPath.string()),
+        QStringLiteral("--threads"), QStringLiteral("1")
+    };
+    ASSERT_EQ(runTriangulateCli(arguments), 0);
+
+    const auto vertex = readFirstPlyVertex(outPath);
+    EXPECT_NEAR(vertex[0], 0.0, 1e-6);
+    EXPECT_NEAR(vertex[1], 0.0, 1e-6);
+    EXPECT_NEAR(vertex[2], 10.0, 1e-6);
+#endif
+}
+
+TEST(TriangulateCli, HonorsExplicitValidMask)
+{
+#ifndef PLASCAN_TRIANGULATE_CLI_PATH
+    GTEST_SKIP() << "triangulate_cli path is not configured";
+#else
+    auto tempDir = makeUniqueTempDir();
+    ASSERT_TRUE(tempDir->isValid());
+    const fs::path root = tempDir->path().toStdString();
+
+    const fs::path leftCamera = root / "left.tsai";
+    const fs::path rightCamera = root / "right.tsai";
+    const fs::path rectPath = root / "rect.xml";
+    const fs::path disparityPath = root / "disp.tif";
+    const fs::path validMaskPath = root / "valid.png";
+    const fs::path outPath = root / "masked_cloud.ply";
+
+    writeCamera(leftCamera, 0.0);
+    writeCamera(rightCamera, 1.0);
+
+    cv::Mat disparity(101, 101, CV_32FC1, cv::Scalar(0.0f));
+    disparity.at<float>(50, 50) = 10.0f;
+    disparity.at<float>(50, 60) = 10.0f;
+    ASSERT_TRUE(cv::imwrite(disparityPath.string(), disparity));
+    cv::Mat validMask(101, 101, CV_8UC1, cv::Scalar(0));
+    validMask.at<uchar>(50, 60) = 255;
+    ASSERT_TRUE(cv::imwrite(validMaskPath.string(), validMask));
+
+    cv::FileStorage fsOut(rectPath.string(), cv::FileStorage::WRITE);
+    ASSERT_TRUE(fsOut.isOpened());
+    fsOut << "H1inv" << cv::Mat::eye(3, 3, CV_64F);
+    fsOut << "H2inv" << cv::Mat::eye(3, 3, CV_64F);
+    fsOut.release();
+
+    const QStringList arguments{
+        QStringLiteral("--disparity"), QString::fromStdString(disparityPath.string()),
+        QStringLiteral("--valid-mask"), QString::fromStdString(validMaskPath.string()),
+        QStringLiteral("--rect"), QString::fromStdString(rectPath.string()),
+        QStringLiteral("--camL"), QString::fromStdString(leftCamera.string()),
+        QStringLiteral("--camR"), QString::fromStdString(rightCamera.string()),
+        QStringLiteral("--output"), QString::fromStdString(outPath.string()),
+        QStringLiteral("--threads"), QStringLiteral("1")
+    };
+    ASSERT_EQ(runTriangulateCli(arguments), 0);
+
+    const auto vertex = readFirstPlyVertex(outPath);
+    EXPECT_NEAR(vertex[0], 1.0, 1e-6);
+    EXPECT_NEAR(vertex[1], 0.0, 1e-6);
+    EXPECT_NEAR(vertex[2], 10.0, 1e-6);
+#endif
+}
+
 TEST(TriangulateCli, WritesIntensityWhenImageProvided)
 {
 #ifndef PLASCAN_TRIANGULATE_CLI_PATH

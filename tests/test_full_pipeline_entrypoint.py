@@ -1,5 +1,7 @@
 import importlib.util
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -31,7 +33,12 @@ class FullPipelineEntrypointTest(unittest.TestCase):
         expected_build_dir = Path("/tmp/plascan-build")
         if not expected_build_dir.is_absolute():
             expected_build_dir = pipeline.repo_root() / expected_build_dir
-        expected_tool = expected_build_dir / "bin" / "reconstruct_pipeline_cli"
+        executable_name = (
+            "reconstruct_pipeline_cli.exe"
+            if os.name == "nt"
+            else "reconstruct_pipeline_cli"
+        )
+        expected_tool = expected_build_dir / "bin" / executable_name
         expected_output_dir = Path("/tmp/out")
         if not expected_output_dir.is_absolute():
             expected_output_dir = Path.cwd() / expected_output_dir
@@ -56,6 +63,29 @@ class FullPipelineEntrypointTest(unittest.TestCase):
             cmd = pipeline.build_command(args)
 
         self.assertIn("--force", cmd)
+
+    def test_windows_multiconfig_executable_is_resolved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            build_dir = Path(tmp)
+            executable = (
+                build_dir
+                / "bin"
+                / "Release"
+                / "reconstruct_pipeline_cli.exe"
+            )
+            executable.parent.mkdir(parents=True)
+            executable.write_bytes(b"")
+            args = pipeline.parse_args([
+                "input.lis",
+                "--build-dir",
+                str(build_dir),
+                "--output-dir",
+                str(build_dir / "out"),
+            ])
+
+            cmd = pipeline.build_command(args)
+
+            self.assertEqual(Path(cmd[0]), executable)
 
     def test_removed_legacy_flag_is_rejected(self):
         with self.assertRaises(SystemExit):

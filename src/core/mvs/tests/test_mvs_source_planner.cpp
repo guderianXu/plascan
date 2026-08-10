@@ -11,6 +11,7 @@ using xjw::mvs::MvsSourceTier;
 using xjw::mvs::MvsSourceVerificationStatus;
 using xjw::mvs::planMvsSourceViews;
 using xjw::mvs::planMvsSourceViewsVerifiedFirst;
+using xjw::mvs::planMvsRepairSourceViews;
 using xjw::mvs::filterMvsSourcePairQualitiesForImages;
 
 namespace
@@ -37,6 +38,45 @@ MvsSourceCandidate candidate(int viewIndex,
 }
 
 } // namespace
+
+TEST(MvsSourcePlanner, RepairSourcesRespectRequestedCountForPreferredSources)
+{
+    std::vector<int> preferredSources;
+    for (int source_index = 0; source_index < 12; ++source_index)
+    {
+        preferredSources.push_back(source_index);
+    }
+    const std::vector<bool> sourceEligibility(13, true);
+
+    const auto sources = planMvsRepairSourceViews(
+        preferredSources, sourceEligibility, 12, 4);
+
+    EXPECT_EQ(sources, (std::vector<int>{0, 1, 2, 3}));
+}
+
+TEST(MvsSourcePlanner, RepairSourcesFilterInvalidDuplicateAndIneligiblePreferredSources)
+{
+    std::vector<bool> sourceEligibility(8, true);
+    sourceEligibility[2] = false;
+    sourceEligibility[6] = false;
+
+    const auto sources = planMvsRepairSourceViews(
+        {-1, 8, 4, 2, 1, 1, 6, 7}, sourceEligibility, 4, 2);
+
+    EXPECT_EQ(sources, (std::vector<int>{1, 7}));
+}
+
+TEST(MvsSourcePlanner, RepairSourcesBackfillShortfallFromAlternatingSequenceNeighbors)
+{
+    std::vector<bool> sourceEligibility(8, true);
+    sourceEligibility[3] = false;
+    sourceEligibility[6] = false;
+
+    const auto sources = planMvsRepairSourceViews(
+        {2, 2, 3}, sourceEligibility, 4, 4);
+
+    EXPECT_EQ(sources, (std::vector<int>{2, 5, 1, 7}));
+}
 
 TEST(MvsSourcePlanner, FiltersRemovedImageReferencesBeforeEnablingVerifiedPairGate)
 {

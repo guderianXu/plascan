@@ -56,6 +56,12 @@ bool FeaturePreparationQueue::take(PreparedFeatureImage *prepared)
     }
     if (_buffer.empty())
     {
+        const std::exception_ptr producerFailure = _producerFailure;
+        lock.unlock();
+        if (producerFailure)
+        {
+            std::rethrow_exception(producerFailure);
+        }
         return false;
     }
 
@@ -98,54 +104,64 @@ bool FeaturePreparationQueue::cancellationRequested() const
 
 void FeaturePreparationQueue::produce()
 {
-    for (const FeaturePreparationRequest &request : _requests)
+    try
     {
+        for (const FeaturePreparationRequest &request : _requests)
         {
-            std::unique_lock<std::mutex> lock(_mutex);
-            _notFull.wait(lock,
-                          [this]()
-                          {
-                              return _stopRequested ||
-                                  cancellationRequested() ||
-                                  static_cast<int>(_buffer.size()) < _capacity;
-                          });
-            if (_stopRequested || cancellationRequested())
             {
-                break;
+                std::unique_lock<std::mutex> lock(_mutex);
+                _notFull.wait(lock,
+                              [this]()
+                              {
+                                  return _stopRequested ||
+                                      cancellationRequested() ||
+                                      static_cast<int>(_buffer.size()) < _capacity;
+                              });
+                if (_stopRequested || cancellationRequested())
+                {
+                    break;
+                }
             }
-        }
 
-        PreparedFeatureImage prepared;
-        try
-        {
-            prepared = _prepareFunction(request);
-        }
-        catch (const std::exception &exception)
-        {
-            prepared.index = request.index;
-            prepared.imagePath = request.imagePath;
-            prepared.featurePath = request.featurePath;
-            prepared.errorMessage = QString::fromUtf8(exception.what());
-        }
-        catch (...)
-        {
-            prepared.index = request.index;
-            prepared.imagePath = request.imagePath;
-            prepared.featurePath = request.featurePath;
-            prepared.errorMessage = QStringLiteral("未知的影像预取错误");
-        }
-
-        {
-            std::lock_guard<std::mutex> lock(_mutex);
-            if (_stopRequested || cancellationRequested())
+            PreparedFeatureImage prepared;
+            try
             {
-                break;
+                prepared = _prepareFunction(request);
             }
-            _buffer.push_back(std::move(prepared));
-            _peakBufferedCount =
-                std::max(_peakBufferedCount, static_cast<int>(_buffer.size()));
+            catch (const std::exception &exception)
+            {
+                prepared.index = request.index;
+                prepared.imagePath = request.imagePath;
+                prepared.featurePath = request.featurePath;
+                prepared.errorMessage = QString::fromUtf8(exception.what());
+            }
+            catch (...)
+            {
+                prepared.index = request.index;
+                prepared.imagePath = request.imagePath;
+                prepared.featurePath = request.featurePath;
+                prepared.errorMessage = QStringLiteral("未知的影像预取错误");
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(_mutex);
+                if (_stopRequested || cancellationRequested())
+                {
+                    break;
+                }
+                _buffer.push_back(std::move(prepared));
+                _peakBufferedCount =
+                    std::max(_peakBufferedCount, static_cast<int>(_buffer.size()));
+            }
+            _notEmpty.notify_one();
         }
-        _notEmpty.notify_one();
+    }
+    catch (...)
+    {
+        // No exception may escape the std::thread entry point. The consumer
+        // rethrows at the owning stage boundary after already-buffered work.
+        std::lock_guard<std::mutex> lock(_mutex);
+        _producerFailure = std::current_exception();
     }
 
     {

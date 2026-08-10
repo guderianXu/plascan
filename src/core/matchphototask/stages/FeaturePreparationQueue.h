@@ -8,6 +8,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <exception>
 #include <functional>
 #include <mutex>
 #include <thread>
@@ -87,10 +88,12 @@ private:
     std::condition_variable _notEmpty;
     std::condition_variable _notFull;
     std::deque<PreparedFeatureImage> _buffer;
-    std::thread _producer;
+    std::exception_ptr _producerFailure;
     bool _stopRequested = false;
     bool _finished = false;
     int _peakBufferedCount = 0;
+    // 必须最后构造：线程入口会立即访问上面的全部同步状态。
+    std::thread _producer;
 };
 
 } // namespace matchphotos

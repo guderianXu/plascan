@@ -65,5 +65,9 @@ target_link_libraries(matchphototask PUBLIC
     sfm
 )
 
+target_link_libraries(matchphototask PRIVATE
+    plascan_common_concurrency
+)
+
 target_compile_definitions(matchphototask PRIVATE PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_compile_features(matchphototask PUBLIC cxx_std_20)

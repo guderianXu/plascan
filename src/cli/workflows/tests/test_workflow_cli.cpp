@@ -947,8 +947,18 @@ TEST(MeshReconstructCliGTest, BuildsModelFromGuiStyleSettingsJson)
     expectContainsAll(result.stdoutText, {
         R"("ok": true)",
         R"("mesh_algorithm": "height_grid")",
+        R"("model_output_policy": "create_versioned_result")",
+        R"("model_run_id": )",
     });
-    EXPECT_TRUE(QFileInfo::exists(QDir(output_dir).filePath(QStringLiteral("products/model_from_mesh.ply"))));
+    const QDir runs_dir(QDir(output_dir).filePath(QStringLiteral("model_runs")));
+    const QStringList run_directories = runs_dir.entryList(
+        QDir::Dirs | QDir::NoDotAndDotDot);
+    ASSERT_EQ(run_directories.size(), 1);
+    const QString run_root = runs_dir.filePath(run_directories.front());
+    EXPECT_TRUE(QFileInfo::exists(
+        QDir(run_root).filePath(QStringLiteral("products/model_from_mesh.ply"))));
+    EXPECT_TRUE(QFileInfo::exists(
+        QDir(run_root).filePath(QStringLiteral("model_result.json"))));
 }
 
 TEST(ThreeDReconstructionCliContractTest, TargetExistsAndThreeDOnlyModeSkipsTerrain)

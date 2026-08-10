@@ -417,3 +417,132 @@ TEST(DisparityTriangulator, TransposedRectifiedDepthTriangulationKeepsLowReproje
     ASSERT_EQ(result.validPoints, 1);
     EXPECT_LT(result.medianError, 2.0f);
 }
+
+TEST(DisparityTriangulator, LeftReferenceDisparityReprojectsToRightAtXMinusD)
+{
+    constexpr int imageSize = 256;
+    constexpr int leftX = 128;
+    constexpr int imageY = 128;
+    constexpr float disparity = 80.0f;
+    Camera leftCamera = makeCamera(128.0, 128.0, 0.0);
+    Camera rightCamera = makeCamera(128.0, 128.0, 0.2);
+    cv::Mat identityStorage = cv::Mat::zeros(3, 4, CV_64F);
+    identityStorage.at<double>(0, 0) = 1.0;
+    identityStorage.at<double>(1, 1) = 1.0;
+    identityStorage.at<double>(2, 2) = 1.0;
+    const cv::Mat identity = identityStorage(cv::Rect(0, 0, 3, 3));
+    ASSERT_FALSE(identity.isContinuous());
+
+    cv::Mat disparityMap(imageSize, imageSize, CV_32F, cv::Scalar(0.0f));
+    cv::Mat validMask(imageSize, imageSize, CV_8U, cv::Scalar(0));
+    disparityMap.at<float>(imageY, leftX) = disparity;
+    validMask.at<uint8_t>(imageY, leftX) = 255;
+
+    TriangulationConfig config;
+    config.maxTriangulationError = 0.01f;
+    config.numThreads = 1;
+    const TriangulationResult result = DisparityTriangulator::triangulate(
+        disparityMap,
+        validMask,
+        identity,
+        identity,
+        leftCamera,
+        rightCamera,
+        config);
+
+    ASSERT_EQ(result.validPoints, 1);
+    const cv::Vec3d localPoint = result.pointCloud.at<cv::Vec3d>(imageY, leftX);
+    const double world[3] = {
+        localPoint[0] + result.pointOffset[0],
+        localPoint[1] + result.pointOffset[1],
+        localPoint[2] + result.pointOffset[2]};
+    double leftProjection[2] = {0.0, 0.0};
+    double rightProjection[2] = {0.0, 0.0};
+    ASSERT_TRUE(leftCamera.projectWorldPoint(world, leftProjection));
+    ASSERT_TRUE(rightCamera.projectWorldPoint(world, rightProjection));
+
+    EXPECT_NEAR(leftProjection[0], leftX, 0.25);
+    EXPECT_NEAR(leftProjection[1], imageY, 0.25);
+    EXPECT_NEAR(rightProjection[0], leftX - disparity, 0.25);
+    EXPECT_NEAR(rightProjection[1], imageY, 0.25);
+}
+
+TEST(DisparityTriangulator, RejectsInvalidDisparityInputContractsBeforeWorkersStart)
+{
+    const Camera leftCamera = makeCamera(2.0, 2.0, 0.0);
+    const Camera rightCamera = makeCamera(2.0, 2.0, 0.2);
+    const cv::Mat identity = cv::Mat::eye(3, 3, CV_64F);
+    const cv::Mat disparity(4, 4, CV_32FC1, cv::Scalar(1.0f));
+    const cv::Mat validMask(4, 4, CV_8UC1, cv::Scalar(255));
+
+    const TriangulationResult wrongType = DisparityTriangulator::triangulate(
+        cv::Mat(4, 4, CV_16UC1, cv::Scalar(1)),
+        validMask,
+        identity,
+        identity,
+        leftCamera,
+        rightCamera);
+    EXPECT_NE(wrongType.errorMessage.find("CV_32FC1"), std::string::npos);
+    EXPECT_TRUE(wrongType.pointCloud.empty());
+
+    const TriangulationResult wrongMask = DisparityTriangulator::triangulate(
+        disparity,
+        cv::Mat(3, 4, CV_8UC1, cv::Scalar(255)),
+        identity,
+        identity,
+        leftCamera,
+        rightCamera);
+    EXPECT_NE(wrongMask.errorMessage.find("尺寸"), std::string::npos);
+    EXPECT_TRUE(wrongMask.pointCloud.empty());
+
+    const TriangulationResult wrongHomography = DisparityTriangulator::triangulate(
+        disparity,
+        validMask,
+        cv::Mat::eye(2, 3, CV_64F),
+        identity,
+        leftCamera,
+        rightCamera);
+    EXPECT_NE(wrongHomography.errorMessage.find("3x3"), std::string::npos);
+    EXPECT_TRUE(wrongHomography.pointCloud.empty());
+
+    const TriangulationResult invalidCamera = DisparityTriangulator::triangulate(
+        disparity,
+        validMask,
+        identity,
+        identity,
+        Camera(),
+        rightCamera);
+    EXPECT_NE(invalidCamera.errorMessage.find("左相机"), std::string::npos);
+    EXPECT_TRUE(invalidCamera.pointCloud.empty());
+}
+
+TEST(DisparityTriangulator, RejectsInvalidDepthInputContractsBeforeWorkersStart)
+{
+    const Camera leftCamera = makeCamera(2.0, 2.0, 0.0);
+    const Camera rightCamera = makeCamera(2.0, 2.0, 0.2);
+    const cv::Mat identity = cv::Mat::eye(3, 3, CV_64F);
+    const cv::Mat depth(4, 4, CV_32FC1, cv::Scalar(2.0f));
+    const cv::Mat validMask(4, 4, CV_8UC1, cv::Scalar(255));
+
+    const TriangulationResult wrongMaskType =
+        DisparityTriangulator::triangulateFromDepth(
+            depth,
+            cv::Mat(4, 4, CV_32FC1, cv::Scalar(1.0f)),
+            identity,
+            leftCamera,
+            rightCamera,
+            leftCamera);
+    EXPECT_NE(wrongMaskType.errorMessage.find("CV_8UC1"), std::string::npos);
+    EXPECT_TRUE(wrongMaskType.pointCloud.empty());
+
+    const TriangulationResult wrongHomographyType =
+        DisparityTriangulator::triangulateFromDepth(
+            depth,
+            validMask,
+            cv::Mat::eye(3, 3, CV_32F),
+            leftCamera,
+            rightCamera,
+            leftCamera);
+    EXPECT_NE(wrongHomographyType.errorMessage.find("CV_64FC1"), std::string::npos);
+    EXPECT_TRUE(wrongHomographyType.pointCloud.empty());
+}

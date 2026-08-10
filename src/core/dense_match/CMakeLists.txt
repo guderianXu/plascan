@@ -54,7 +54,7 @@ if(DM_HAS_CUDA)
     )
     target_compile_definitions(dense_match PUBLIC DM_ENABLE_CUDA=1)
     target_compile_options(dense_match PRIVATE
-        $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math -O3>
+        $<$<COMPILE_LANGUAGE:CUDA>:-O3>
     )
 endif()
 

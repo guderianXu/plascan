@@ -11,6 +11,10 @@ namespace xjw
 namespace mvs
 {
 
+/// Returns true when MVS preparation must allocate a distinct undistorted image.
+/// The result depends only on camera metadata and is safe to use before decoding.
+bool mvsImagePreparationRequiresDistinctPixels(const Camera &camera) noexcept;
+
 /**
  * @brief 将原始影像转换为 MVS 使用的正深度、无畸变针孔影像。
  * @param source 原始影像，支持 OpenCV remap 接受的任意通道数。

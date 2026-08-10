@@ -9,6 +9,7 @@
 
 #include "DepthMapFusion.h"
 #include "MvsImagePreprocessor.h"
+#include "concurrency/SafeWorkerGroup.h"
 #include "io/PathIO.h"
 #include "Logger.h"
 #include <opencv2/imgproc.hpp>
@@ -16,6 +17,7 @@
 #include <cmath>
 #include <algorithm>
 #include <array>
+#include <exception>
 #include <numeric>
 #include <cstdio>
 #include <queue>
@@ -942,19 +944,17 @@ bool DepthMapFusion::fuseTwoViewSingleObservationFast(
         const int frameWorkers = resolveFusionWorkerCount(workerCount, H);
         std::atomic<int> nextRow{0};
         std::vector<std::vector<FusedPoint>> workerOutputs(static_cast<std::size_t>(frameWorkers));
-        std::vector<std::thread> threads;
-        threads.reserve(static_cast<std::size_t>(frameWorkers));
-
-        for (int worker = 0; worker < frameWorkers; ++worker)
+        xjw::common::concurrency::runWorkerGroup(
+            static_cast<std::size_t>(frameWorkers),
+            [&](std::size_t worker, std::stop_token stopToken)
         {
-            threads.emplace_back([&, worker]() {
-                auto &localPoints = workerOutputs[static_cast<std::size_t>(worker)];
+                auto &localPoints = workerOutputs[worker];
                 localPoints.reserve(static_cast<std::size_t>(W) *
                                     static_cast<std::size_t>(std::max(1, H / frameWorkers + 1)));
 
                 for (;;)
                 {
-                    if (isFusionCancelled(_config))
+                    if (stopToken.stop_requested() || isFusionCancelled(_config))
                     {
                         break;
                     }
@@ -1108,13 +1108,7 @@ bool DepthMapFusion::fuseTwoViewSingleObservationFast(
                         _filteredDepths[fi].at<float>(row, col) = depth;
                     }
                 }
-            });
-        }
-
-        for (std::thread &thread : threads)
-        {
-            thread.join();
-        }
+        });
         if (isFusionCancelled(_config))
         {
             return false;
@@ -1324,19 +1318,17 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
     };
 
     std::vector<std::vector<FusedPoint>> workerOutputs(static_cast<std::size_t>(workerCount));
-    std::vector<std::thread> threads;
-    threads.reserve(static_cast<std::size_t>(workerCount));
-
-    for (int worker = 0; worker < workerCount; ++worker)
+    xjw::common::concurrency::runWorkerGroup(
+        static_cast<std::size_t>(workerCount),
+        [&](std::size_t worker, std::stop_token stopToken)
     {
-        threads.emplace_back([&, worker]() {
-            auto &localPoints = workerOutputs[static_cast<std::size_t>(worker)];
+            auto &localPoints = workerOutputs[worker];
             localPoints.reserve(static_cast<std::size_t>(W) *
                                 static_cast<std::size_t>(std::max(1, H / workerCount + 1)));
 
             for (;;)
             {
-                if (isFusionCancelled(_config))
+                if (stopToken.stop_requested() || isFusionCancelled(_config))
                 {
                     break;
                 }
@@ -1571,13 +1563,7 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
                                static_cast<float>(row) / static_cast<float>(std::max(1, H)));
                 }
             }
-        });
-    }
-
-    for (std::thread &thread : threads)
-    {
-        thread.join();
-    }
+    });
 
     if (isFusionCancelled(_config))
     {
@@ -1615,11 +1601,20 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
         _config.enableLowYieldFallback = false;
 
         std::vector<FusedPoint> fallbackPoints;
-        const bool fallbackOk = fuseFirstFrameObservationsFast(frames,
-                                                               geom,
-                                                               colorProvider,
-                                                               fallbackPoints,
-                                                               progressCb);
+        bool fallbackOk = false;
+        try
+        {
+            fallbackOk = fuseFirstFrameObservationsFast(frames,
+                                                        geom,
+                                                        colorProvider,
+                                                        fallbackPoints,
+                                                        progressCb);
+        }
+        catch (...)
+        {
+            _config = savedConfig;
+            throw;
+        }
         _config = savedConfig;
 
         if (!fallbackOk)
@@ -1762,11 +1757,31 @@ bool DepthMapFusion::fuse(
         auto colorProvider = [&colorCache](int frameIdx) {
             return colorCache.get(frameIdx);
         };
-        const bool fastOk = fuseFirstFrameObservationsFast(frames,
-                                                           geom,
-                                                           colorProvider,
-                                                           fusedPoints,
-                                                           progressCb);
+        bool fastOk = false;
+        try
+        {
+            fastOk = fuseFirstFrameObservationsFast(frames,
+                                                    geom,
+                                                    colorProvider,
+                                                    fusedPoints,
+                                                    progressCb);
+        }
+        catch (const std::exception &error)
+        {
+            if (errorMsg)
+            {
+                *errorMsg = "深度图融合 worker 异常: " + std::string(error.what());
+            }
+            return false;
+        }
+        catch (...)
+        {
+            if (errorMsg)
+            {
+                *errorMsg = "深度图融合 worker 发生未知异常";
+            }
+            return false;
+        }
         if (!fastOk && isFusionCancelled(_config) && errorMsg)
         {
             *errorMsg = "用户取消深度图融合";
@@ -1825,11 +1840,31 @@ bool DepthMapFusion::fuse(
 
     if (!_config.fuseOnlyFirstFrame && NF == 2 && _config.minNumPixels <= 1)
     {
-        const bool fastOk = fuseTwoViewSingleObservationFast(frames,
-                                                             geom,
-                                                             colorProvider,
-                                                             fusedPoints,
-                                                             progressCb);
+        bool fastOk = false;
+        try
+        {
+            fastOk = fuseTwoViewSingleObservationFast(frames,
+                                                      geom,
+                                                      colorProvider,
+                                                      fusedPoints,
+                                                      progressCb);
+        }
+        catch (const std::exception &error)
+        {
+            if (errorMsg)
+            {
+                *errorMsg = "深度图融合 worker 异常: " + std::string(error.what());
+            }
+            return false;
+        }
+        catch (...)
+        {
+            if (errorMsg)
+            {
+                *errorMsg = "深度图融合 worker 发生未知异常";
+            }
+            return false;
+        }
         if (!fastOk && isFusionCancelled(_config) && errorMsg)
         {
             *errorMsg = "用户取消深度图融合";

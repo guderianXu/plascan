@@ -340,6 +340,11 @@ bool runOriginalDepthPath(const cv::Mat &grayL,
     emit owner->progressChanged("Triangulation", 0.6f);
     TriangulationResult triResult = DisparityTriangulator::triangulateFromDepth(
         depthMap, validMask, cv::Mat::eye(3, 3, CV_64F), leftCamera, rightCamera, pdmL, config.triangulation);
+    if (!triResult.errorMessage.empty())
+    {
+        res.errorMsg = triResult.errorMessage;
+        return false;
+    }
 
     return writeOutputs(grayL, leftCamera, rightCamera, pdmL, outputDir, config, res, triResult,
                         cv::Mat::eye(3, 3, CV_64F), owner);
@@ -538,6 +543,11 @@ bool runRectifiedDisparityPath(const cv::Mat &grayL,
     triCfg.transposed = rect.transposed;
     TriangulationResult triResult = DisparityTriangulator::triangulateFromDepth(
         depthLeft, validMask, rect.H1inv, leftCamera, rightCamera, leftRectCam, triCfg);
+    if (!triResult.errorMessage.empty())
+    {
+        res.errorMsg = triResult.errorMessage;
+        return false;
+    }
 
     return writeOutputs(rectLeftImage, leftCamera, rightCamera, leftRectCam, outputDir, config, res,
                         triResult, rect.H1inv, owner);

@@ -10,6 +10,8 @@
 #include "DenseMatchTypes.h"
 
 #include <opencv2/core.hpp>
+#include <exception>
+#include <new>
 #include <string>
 
 int main(int argc, char *argv[])
@@ -129,13 +131,45 @@ int main(int argc, char *argv[])
     }
 
     xjw::dense_match::DenseMatchService service(cfg);
-    auto result = service.process();
+    xjw::dense_match::DisparityResult result;
+    try
+    {
+        result = service.process();
+    }
+    catch (const std::bad_alloc &error)
+    {
+        cli::fatal(
+            "密集匹配主机内存分配失败: 视差=[" + std::to_string(minDisp) + ','
+                + std::to_string(maxDisp) + "): " + error.what(),
+            cli::EXIT_ALGO_ERR);
+    }
+    catch (const cv::Exception &error)
+    {
+        cli::fatal(
+            "密集匹配 CUDA/OpenCV 执行失败: 视差=[" + std::to_string(minDisp) + ','
+                + std::to_string(maxDisp) + "): " + error.what(),
+            cli::EXIT_ALGO_ERR);
+    }
+    catch (const std::exception &error)
+    {
+        cli::fatal(
+            "密集匹配执行失败: 视差=[" + std::to_string(minDisp) + ','
+                + std::to_string(maxDisp) + "): " + error.what(),
+            cli::EXIT_ALGO_ERR);
+    }
 
     if (result.disparity.empty())
-        cli::fatal("密集匹配失败: 视差图为空", cli::EXIT_ALGO_ERR);
+    {
+        const std::string detail = service.lastError().empty()
+            ? "视差图为空"
+            : service.lastError();
+        cli::fatal("密集匹配失败: " + detail, cli::EXIT_ALGO_ERR);
+    }
 
     if (!xjw::dense_match::DenseMatchService::saveDisparity(result, outPath))
+    {
         cli::fatal("无法保存视差图: " + outPath, cli::EXIT_IO_ERR);
+    }
 
     fprintf(stdout, "视差图已保存: %s\n", outPath.c_str());
     return cli::EXIT_OK;

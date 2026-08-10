@@ -16,6 +16,8 @@ struct DenseMatchConfig
     CostFunction    costFunc   = CostFunction::CensusTransform;
     SubpixelMode    subpixel   = SubpixelMode::Parabola;
 
+    // Left-reference convention: d = x_left - x_right.  The configured
+    // search interval is [minDisparity, maxDisparity).
     int minDisparity = 0;
     int maxDisparity = 256;
 

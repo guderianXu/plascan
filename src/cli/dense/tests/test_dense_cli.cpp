@@ -1,5 +1,71 @@
 #include "CliTestSupport.h"
 
+#include <QLockFile>
+
+#include <filesystem>
+
+#ifndef PLASCAN_DENSE_MATCH_CLI_PATH
+#define PLASCAN_DENSE_MATCH_CLI_PATH ""
+#endif
+
+namespace
+{
+
+constexpr int kArgumentErrorExitCode = 1;
+constexpr int kAlgorithmErrorExitCode = 3;
+
+} // namespace
+
+TEST(DenseMatchCliGTest, RejectsExtremeKernelSizesBeforeAllocation)
+{
+    const QString exe = executablePath(PLASCAN_DENSE_MATCH_CLI_PATH);
+    SKIP_IF_MISSING_EXECUTABLE(exe);
+
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString input = QDir(tempDir.path()).filePath(QStringLiteral("pixel.pgm"));
+    QByteArray pgm("P5\n1 1\n255\n");
+    pgm.append(static_cast<char>(1));
+    writeBytesFile(input, pgm);
+
+    const QString correlationOutput = QDir(tempDir.path()).filePath(
+        QStringLiteral("correlation-overflow.tif"));
+    const CliResult correlationResult = runCli(exe, {
+        QStringLiteral("--left"), input,
+        QStringLiteral("--right"), input,
+        QStringLiteral("--output"), correlationOutput,
+        QStringLiteral("--kernel-w"), QStringLiteral("2147483647"),
+        QStringLiteral("--kernel-h"), QStringLiteral("1"),
+        QStringLiteral("--no-cuda"),
+    });
+    EXPECT_EQ(correlationResult.exitCode, kAlgorithmErrorExitCode)
+        << qPrintable(combinedOutput(correlationResult));
+    expectContainsAll(combinedOutput(correlationResult), {
+        "size=1x1",
+        "disparity=[0,256)",
+        "correlation kernels",
+    });
+    EXPECT_FALSE(QFileInfo::exists(correlationOutput));
+
+    const QString medianOutput = QDir(tempDir.path()).filePath(
+        QStringLiteral("median-overflow.tif"));
+    const CliResult medianResult = runCli(exe, {
+        QStringLiteral("--left"), input,
+        QStringLiteral("--right"), input,
+        QStringLiteral("--output"), medianOutput,
+        QStringLiteral("--median-filter"), QStringLiteral("2147483647"),
+        QStringLiteral("--no-cuda"),
+    });
+    EXPECT_EQ(medianResult.exitCode, kAlgorithmErrorExitCode)
+        << qPrintable(combinedOutput(medianResult));
+    expectContainsAll(combinedOutput(medianResult), {
+        "size=1x1",
+        "disparity=[0,256)",
+        "median filter size",
+    });
+    EXPECT_FALSE(QFileInfo::exists(medianOutput));
+}
+
 TEST(DenseCloudRefineCliGTest, SourceExposesQualityFilterOptions)
 {
     const QString cmake = readSourceFile(QStringLiteral("src/cli/dense/CMakeLists.txt"));
@@ -133,4 +199,222 @@ TEST(DenseCloudRefineCliGTest, StreamingCliPreservesPlyScalarProperties)
     EXPECT_EQ(report.value(QStringLiteral("mode")).toString(), QStringLiteral("streaming"));
     EXPECT_EQ(report.value(QStringLiteral("input_points")).toInt(), 4);
     EXPECT_EQ(report.value(QStringLiteral("output_points")).toInt(), 4);
+}
+
+TEST(DenseCloudRefineCliGTest, RejectsReportPathThatAliasesInputWithoutChangingSource)
+{
+    const QString exe = executablePath(PLASCAN_DENSE_CLOUD_REFINE_CLI_PATH);
+    SKIP_IF_MISSING_EXECUTABLE(exe);
+
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString inputPly = QDir(tempDir.path()).filePath(QStringLiteral("input.ply"));
+    const QString outputPly = QDir(tempDir.path()).filePath(QStringLiteral("output.ply"));
+    writeBinaryPly(inputPly, {
+        {0.0f, 0.0f, 0.0f},
+        {1.0f, 0.0f, 0.0f},
+        {0.0f, 1.0f, 0.0f},
+    });
+    QFile input(inputPly);
+    ASSERT_TRUE(input.open(QIODevice::ReadOnly));
+    const QByteArray originalBytes = input.readAll();
+    input.close();
+
+    const CliResult result = runCli(exe, {
+        QStringLiteral("--input"), inputPly,
+        QStringLiteral("--output"), outputPly,
+        QStringLiteral("--report-json"),
+        QDir(tempDir.path()).filePath(QStringLiteral("./input.ply")),
+    });
+
+    EXPECT_EQ(result.exitCode, kArgumentErrorExitCode) << qPrintable(combinedOutput(result));
+    EXPECT_FALSE(QFileInfo::exists(outputPly));
+    ASSERT_TRUE(input.open(QIODevice::ReadOnly));
+    EXPECT_EQ(input.readAll(), originalBytes);
+}
+
+TEST(DenseCloudRefineCliGTest, RejectsReportPathThatAliasesOutput)
+{
+    const QString exe = executablePath(PLASCAN_DENSE_CLOUD_REFINE_CLI_PATH);
+    SKIP_IF_MISSING_EXECUTABLE(exe);
+
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString inputPly = QDir(tempDir.path()).filePath(QStringLiteral("input.ply"));
+    const QString outputPly = QDir(tempDir.path()).filePath(QStringLiteral("output.ply"));
+    writeBinaryPly(inputPly, {
+        {0.0f, 0.0f, 0.0f},
+        {1.0f, 0.0f, 0.0f},
+        {0.0f, 1.0f, 0.0f},
+    });
+
+    const CliResult result = runCli(exe, {
+        QStringLiteral("--input"), inputPly,
+        QStringLiteral("--output"), outputPly,
+        QStringLiteral("--report-json"),
+        QDir(tempDir.path()).filePath(QStringLiteral("./output.ply")),
+    });
+
+    EXPECT_EQ(result.exitCode, kArgumentErrorExitCode) << qPrintable(combinedOutput(result));
+    EXPECT_FALSE(QFileInfo::exists(outputPly));
+}
+
+TEST(DenseCloudRefineCliGTest, ReportFailureKeepsExistingOutputAndReport)
+{
+    const QString exe = executablePath(PLASCAN_DENSE_CLOUD_REFINE_CLI_PATH);
+    SKIP_IF_MISSING_EXECUTABLE(exe);
+
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString inputPly = QDir(tempDir.path()).filePath(QStringLiteral("input.ply"));
+    const QString outputPly = QDir(tempDir.path()).filePath(QStringLiteral("output.ply"));
+    const QString reportDirectory = QDir(tempDir.path()).filePath(QStringLiteral("report.json"));
+    writeBinaryPly(inputPly, {
+        {0.0f, 0.0f, 0.0f},
+        {1.0f, 0.0f, 0.0f},
+        {0.0f, 1.0f, 0.0f},
+    });
+    QFile oldOutput(outputPly);
+    ASSERT_TRUE(oldOutput.open(QIODevice::WriteOnly));
+    ASSERT_EQ(oldOutput.write("old-output"), 10);
+    oldOutput.close();
+    ASSERT_TRUE(QDir().mkpath(reportDirectory));
+    QFile reportSentinel(QDir(reportDirectory).filePath(QStringLiteral("keep.txt")));
+    ASSERT_TRUE(reportSentinel.open(QIODevice::WriteOnly));
+    ASSERT_EQ(reportSentinel.write("old-report"), 10);
+    reportSentinel.close();
+
+    const CliResult result = runCli(exe, {
+        QStringLiteral("--input"), inputPly,
+        QStringLiteral("--output"), outputPly,
+        QStringLiteral("--report-json"), reportDirectory,
+        QStringLiteral("--disable-terrain-spike-filter"),
+        QStringLiteral("--terrain-filter-passes"), QStringLiteral("1"),
+    });
+
+    EXPECT_EQ(result.exitCode, 2) << qPrintable(combinedOutput(result));
+    ASSERT_TRUE(oldOutput.open(QIODevice::ReadOnly));
+    EXPECT_EQ(oldOutput.readAll(), QByteArray("old-output"));
+    ASSERT_TRUE(reportSentinel.open(QIODevice::ReadOnly));
+    EXPECT_EQ(reportSentinel.readAll(), QByteArray("old-report"));
+}
+
+TEST(DenseCloudRefineCliGTest, NormalizesMissingIntermediateOutputComponents)
+{
+    const QString exe = executablePath(PLASCAN_DENSE_CLOUD_REFINE_CLI_PATH);
+    SKIP_IF_MISSING_EXECUTABLE(exe);
+
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString inputPly = QDir(tempDir.path()).filePath(QStringLiteral("input.ply"));
+    const QString normalizedOutput = QDir(tempDir.path()).filePath(QStringLiteral("output.ply"));
+    const QString normalizedReport = QDir(tempDir.path()).filePath(QStringLiteral("report.json"));
+    const QString aliasedOutput = QDir(tempDir.path()).filePath(
+        QStringLiteral("missing/../output.ply"));
+    const QString aliasedReport = QDir(tempDir.path()).filePath(
+        QStringLiteral("other-missing/../report.json"));
+    writeBinaryPly(inputPly, {
+        {0.0f, 0.0f, 0.0f},
+        {1.0f, 0.0f, 0.0f},
+        {0.0f, 1.0f, 0.0f},
+    });
+
+    const CliResult result = runCli(exe, {
+        QStringLiteral("--input"), inputPly,
+        QStringLiteral("--output"), aliasedOutput,
+        QStringLiteral("--report-json"), aliasedReport,
+        QStringLiteral("--disable-terrain-spike-filter"),
+        QStringLiteral("--terrain-filter-passes"), QStringLiteral("1"),
+    });
+
+    EXPECT_EQ(result.exitCode, 0) << qPrintable(combinedOutput(result));
+    EXPECT_TRUE(QFileInfo::exists(normalizedOutput));
+    ASSERT_TRUE(QFileInfo::exists(normalizedReport));
+    EXPECT_EQ(readJsonObject(normalizedReport).value(QStringLiteral("output")).toString(),
+              QDir::toNativeSeparators(normalizedOutput));
+}
+
+TEST(DenseCloudRefineCliGTest, ReportLockKeepsBothExistingArtifactsUnchanged)
+{
+    const QString exe = executablePath(PLASCAN_DENSE_CLOUD_REFINE_CLI_PATH);
+    SKIP_IF_MISSING_EXECUTABLE(exe);
+
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString inputPly = QDir(tempDir.path()).filePath(QStringLiteral("input.ply"));
+    const QString outputPly = QDir(tempDir.path()).filePath(QStringLiteral("output.ply"));
+    const QString reportJson = QDir(tempDir.path()).filePath(QStringLiteral("report.json"));
+    writeBinaryPly(inputPly, {
+        {0.0f, 0.0f, 0.0f},
+        {1.0f, 0.0f, 0.0f},
+        {0.0f, 1.0f, 0.0f},
+    });
+    QFile output(outputPly);
+    ASSERT_TRUE(output.open(QIODevice::WriteOnly));
+    ASSERT_EQ(output.write("old-output"), 10);
+    output.close();
+    QFile report(reportJson);
+    ASSERT_TRUE(report.open(QIODevice::WriteOnly));
+    ASSERT_EQ(report.write("old-report"), 10);
+    report.close();
+
+    QLockFile reportLock(QDir(tempDir.path()).filePath(
+        QStringLiteral(".report.json.refine.lock")));
+    ASSERT_TRUE(reportLock.tryLock(0));
+    const CliResult result = runCli(exe, {
+        QStringLiteral("--input"), inputPly,
+        QStringLiteral("--output"), outputPly,
+        QStringLiteral("--report-json"), reportJson,
+        QStringLiteral("--disable-terrain-spike-filter"),
+    });
+
+    EXPECT_EQ(result.exitCode, 2) << qPrintable(combinedOutput(result));
+    ASSERT_TRUE(output.open(QIODevice::ReadOnly));
+    EXPECT_EQ(output.readAll(), QByteArray("old-output"));
+    ASSERT_TRUE(report.open(QIODevice::ReadOnly));
+    EXPECT_EQ(report.readAll(), QByteArray("old-report"));
+}
+
+TEST(DenseCloudRefineCliGTest, RejectsLinkedOutputWithoutTouchingTarget)
+{
+    const QString exe = executablePath(PLASCAN_DENSE_CLOUD_REFINE_CLI_PATH);
+    SKIP_IF_MISSING_EXECUTABLE(exe);
+
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString inputPly = QDir(tempDir.path()).filePath(QStringLiteral("input.ply"));
+    const QString targetPly = QDir(tempDir.path()).filePath(QStringLiteral("target.ply"));
+    const QString linkedOutput = QDir(tempDir.path()).filePath(QStringLiteral("output.ply"));
+    const QString reportJson = QDir(tempDir.path()).filePath(QStringLiteral("report.json"));
+    writeBinaryPly(inputPly, {
+        {0.0f, 0.0f, 0.0f},
+        {1.0f, 0.0f, 0.0f},
+        {0.0f, 1.0f, 0.0f},
+    });
+    QFile target(targetPly);
+    ASSERT_TRUE(target.open(QIODevice::WriteOnly));
+    ASSERT_EQ(target.write("preserve-target"), 15);
+    target.close();
+
+    std::error_code linkError;
+    std::filesystem::create_symlink(
+        std::filesystem::u8path(targetPly.toUtf8().toStdString()),
+        std::filesystem::u8path(linkedOutput.toUtf8().toStdString()),
+        linkError);
+    if (linkError)
+    {
+        return;
+    }
+
+    const CliResult result = runCli(exe, {
+        QStringLiteral("--input"), inputPly,
+        QStringLiteral("--output"), linkedOutput,
+        QStringLiteral("--report-json"), reportJson,
+    });
+
+    EXPECT_EQ(result.exitCode, kArgumentErrorExitCode)
+        << qPrintable(combinedOutput(result));
+    ASSERT_TRUE(target.open(QIODevice::ReadOnly));
+    EXPECT_EQ(target.readAll(), QByteArray("preserve-target"));
+    EXPECT_FALSE(QFileInfo::exists(reportJson));
 }

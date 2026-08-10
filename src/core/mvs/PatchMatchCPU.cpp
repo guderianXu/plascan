@@ -7,6 +7,7 @@
 #include "PatchMatchPhotometricCost.h"
 
 #include "Logger.h"
+#include "concurrency/SafeWorkerGroup.h"
 
 #include <opencv2/imgproc.hpp>
 
@@ -15,9 +16,10 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <random>
-#include <thread>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -399,7 +401,7 @@ float cpuEvalHypCost(int col,
 }
 
 template <typename Fn>
-void cpuParallelForLines(int lineCount, int workerCount, Fn &&fn)
+void cpuParallelForLinesUnchecked(int lineCount, int workerCount, Fn &&fn)
 {
     if (lineCount <= 0)
     {
@@ -415,28 +417,49 @@ void cpuParallelForLines(int lineCount, int workerCount, Fn &&fn)
     }
 
     std::atomic<int> nextLine{0};
-    std::vector<std::thread> workers;
-    workers.reserve(static_cast<size_t>(workerCount));
-    for (int workerIndex = 0; workerIndex < workerCount; ++workerIndex)
+    xjw::common::concurrency::runWorkerGroup(
+        static_cast<std::size_t>(workerCount),
+        [&](std::stop_token stopToken)
     {
-        workers.emplace_back([&]() {
-            while (true)
-            {
-                const int line = nextLine.fetch_add(1);
-                if (line >= lineCount)
-                {
-                    break;
-                }
-                fn(line);
-            }
-        });
-    }
-    for (std::thread &worker : workers)
-    {
-        if (worker.joinable())
+        while (!stopToken.stop_requested())
         {
-            worker.join();
+            const int line = nextLine.fetch_add(1);
+            if (line >= lineCount)
+            {
+                break;
+            }
+            fn(line);
         }
+    });
+}
+
+template <typename Fn>
+bool cpuParallelForLines(int lineCount,
+                         int workerCount,
+                         std::string *errorMsg,
+                         Fn &&fn)
+{
+    try
+    {
+        cpuParallelForLinesUnchecked(
+            lineCount, workerCount, std::forward<Fn>(fn));
+        return true;
+    }
+    catch (const std::exception &error)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "PatchMatch CPU worker failed: " + std::string(error.what());
+        }
+        return false;
+    }
+    catch (...)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "PatchMatch CPU worker failed with an unknown exception";
+        }
+        return false;
     }
 }
 
@@ -619,7 +642,8 @@ bool PatchMatchDepthEstimator::estimateCPU(
     cv::Mat confS(H, W, CV_32F, cv::Scalar(-1.f));
     cv::Mat normalS(H, W, CV_32FC3, cv::Scalar(0.f, 0.f, -1.f));
 
-    cpuParallelForLines(H, cpuThreadCount, [&](int row) {
+    if (!cpuParallelForLines(H, cpuThreadCount, errorMsg, [&](int row)
+    {
         std::mt19937 rng(static_cast<uint32_t>(42ULL + static_cast<unsigned long long>(row)));
         for (int col = 0; col < W; ++col)
         {
@@ -629,15 +653,21 @@ bool PatchMatchDepthEstimator::estimateCPU(
             const CpuNormal normal = cpuGenerateRandomNormal(row, col, invK, rng);
             normalS.at<cv::Vec3f>(row, col) = cv::Vec3f(normal[0], normal[1], normal[2]);
         }
-    });
+    }))
+    {
+        return false;
+    }
 
     auto clampDepth = [&](int row, int column, float depth) {
         const auto [local_near, local_far] = depthBounds(row, column);
         return std::max(local_near, std::min(local_far, depth));
     };
 
-    auto runColumnSweep = [&](bool topToBottom, unsigned long long seed, float perturbation) {
-        cpuParallelForLines(W, cpuThreadCount, [&](int col) {
+    auto runColumnSweep = [&](bool topToBottom,
+                              unsigned long long seed,
+                              float perturbation)
+    {
+        return cpuParallelForLines(W, cpuThreadCount, errorMsg, [&](int col) {
             std::mt19937 rng(static_cast<uint32_t>(seed + static_cast<unsigned long long>(col)));
             const int rowStart = topToBottom ? 0 : (H - 1);
             const int rowEnd = topToBottom ? H : -1;
@@ -730,8 +760,11 @@ bool PatchMatchDepthEstimator::estimateCPU(
         });
     };
 
-    auto runRowSweep = [&](bool leftToRight, unsigned long long seed, float perturbation) {
-        cpuParallelForLines(H, cpuThreadCount, [&](int row) {
+    auto runRowSweep = [&](bool leftToRight,
+                           unsigned long long seed,
+                           float perturbation)
+    {
+        return cpuParallelForLines(H, cpuThreadCount, errorMsg, [&](int row) {
             std::mt19937 rng(static_cast<uint32_t>(seed + static_cast<unsigned long long>(row)));
             const int colStart = leftToRight ? 0 : (W - 1);
             const int colEnd = leftToRight ? W : -1;
@@ -832,17 +865,20 @@ bool PatchMatchDepthEstimator::estimateCPU(
             return false;
         }
 
-        const unsigned long long baseSeed = static_cast<unsigned long long>(iter + 1) * 999983ULL;
-        runColumnSweep(true, baseSeed, perturbation);
-        runColumnSweep(false, baseSeed + 111111ULL, perturbation);
-        runRowSweep(true, baseSeed + 222222ULL, perturbation);
-        runRowSweep(false, baseSeed + 333333ULL, perturbation);
+        const unsigned long long baseSeed =
+            static_cast<unsigned long long>(iter + 1) * 999983ULL;
+        if (!runColumnSweep(true, baseSeed, perturbation) ||
+            !runColumnSweep(false, baseSeed + 111111ULL, perturbation) ||
+            !runRowSweep(true, baseSeed + 222222ULL, perturbation) ||
+            !runRowSweep(false, baseSeed + 333333ULL, perturbation))
+        {
+            return false;
+        }
         perturbation = std::max(perturbation * 0.5f, 0.02f);
     }
 
-    if (config.enablePhotometricUniqueness)
-    {
-        cpuParallelForLines(H, cpuThreadCount, [&](int row)
+    if (config.enablePhotometricUniqueness &&
+        !cpuParallelForLines(H, cpuThreadCount, errorMsg, [&](int row)
         {
             float *confidence_row = confS.ptr<float>(row);
             const float *depth_row = depthS.ptr<float>(row);
@@ -896,7 +932,9 @@ bool PatchMatchDepthEstimator::estimateCPU(
                         config.photometricUniquenessMinimumMargin,
                         config.photometricUniquenessMinimumConfidenceScale);
             }
-        });
+        }))
+    {
+        return false;
     }
 
     for (int row = 0; row < H; ++row)

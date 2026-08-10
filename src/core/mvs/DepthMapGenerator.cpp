@@ -4,6 +4,8 @@
 // =============================================================================
 
 #include "DepthMapGenerator.h"
+
+#include "concurrency/SafeWorkerGroup.h"
 #include "DepthComputeScheduler.h"
 #include "DenseCloudBuilder.h"
 #include "DepthConsistencyCache.h"
@@ -18,8 +20,10 @@
 #include "EpipolarRectifier.h"
 #include "CameraBaseline.h"
 #include "MvsImagePreprocessor.h"
+#include "MvsImageMetadataProbe.h"
 #include "MvsQualityReport.h"
 #include "MvsSourcePlanner.h"
+#include "MvsVisibilityGraphBuilder.h"
 #include "MvsViewSelection.h"
 #include "Logger.h"
 #include "io/PathIO.h"
@@ -648,6 +652,21 @@ std::vector<DepthMemoryFrameSize> depthMemoryFrameSizes(
         frameSizes.push_back({view.imageWidth, view.imageHeight});
     }
     return frameSizes;
+}
+
+std::vector<MvsImageMemoryFrame> imageMemoryFrames(
+    const std::vector<CameraView> &views)
+{
+    std::vector<MvsImageMemoryFrame> frames;
+    frames.reserve(views.size());
+    for (const CameraView &view : views)
+    {
+        frames.push_back({
+            view.imageWidth,
+            view.imageHeight,
+            !mvsImagePreparationRequiresDistinctPixels(view.camera)});
+    }
+    return frames;
 }
 
 int maximumConsistencySourceViews(const DepthGenConfig &config)
@@ -1657,29 +1676,20 @@ void parallelForRows(int rowCount, int workerCount, Fn &&fn)
     }
 
     std::atomic<int> nextRow{0};
-    std::vector<std::thread> threads;
-    threads.reserve(static_cast<size_t>(workers));
-    for (int worker = 0; worker < workers; ++worker)
+    xjw::common::concurrency::runWorkerGroup(
+        static_cast<std::size_t>(workers),
+        [&](std::stop_token stopToken)
     {
-        threads.emplace_back([&]() {
-            for (;;)
-            {
-                const int row = nextRow.fetch_add(1);
-                if (row >= rowCount)
-                {
-                    break;
-                }
-                fn(row);
-            }
-        });
-    }
-    for (std::thread &thread : threads)
-    {
-        if (thread.joinable())
+        while (!stopToken.stop_requested())
         {
-            thread.join();
+            const int row = nextRow.fetch_add(1);
+            if (row >= rowCount)
+            {
+                break;
+            }
+            fn(row);
         }
-    }
+    });
 }
 
 int resolvedTotalCpuThreadBudget(const DepthGenConfig &config)
@@ -1770,35 +1780,20 @@ std::vector<int> orbitalHoleRepairSourceIndices(
     int viewCount,
     int requestedSourceCount)
 {
-    std::vector<int> sources;
-    const int target_count = std::clamp(
-        requestedSourceCount, 2, std::min(16, std::max(2, viewCount - 1)));
-    auto append_source = [&](int source_index)
+    std::vector<bool> source_eligibility(
+        static_cast<std::size_t>(std::max(0, viewCount)), false);
+    const int available_frame_count = std::min(
+        viewCount, static_cast<int>(frames.size()));
+    for (int frame_index = 0; frame_index < available_frame_count; ++frame_index)
     {
-        if (source_index < 0 || source_index >= viewCount || source_index == refIdx ||
-            source_index >= static_cast<int>(frames.size()) ||
-            !frames[source_index].eligibleAsConsistencySource() ||
-            std::find(sources.begin(), sources.end(), source_index) != sources.end())
-        {
-            return;
-        }
-        sources.push_back(source_index);
-    };
-    for (int source_index : consistencySources)
-    {
-        append_source(source_index);
+        source_eligibility[static_cast<std::size_t>(frame_index)] =
+            frames[static_cast<std::size_t>(frame_index)].eligibleAsConsistencySource();
     }
-    for (int distance = 1;
-         distance < viewCount && static_cast<int>(sources.size()) < target_count;
-         ++distance)
-    {
-        append_source((refIdx - distance + viewCount) % viewCount);
-        if (static_cast<int>(sources.size()) < target_count)
-        {
-            append_source((refIdx + distance) % viewCount);
-        }
-    }
-    return sources;
+    return planMvsRepairSourceViews(
+        consistencySources,
+        source_eligibility,
+        refIdx,
+        requestedSourceCount);
 }
 
 bool isCudaMemoryFailure(const std::string &message)
@@ -2959,7 +2954,7 @@ void DepthMapGenerator::clearFrameCaches()
 {
     _frameCaches.clear();
     _visibilityBits.clear();
-    _pairCommonCounts.clear();
+    _visibilityAdjacency.clear();
     _visibilityWordCount = 0;
     _frameCachesReady = false;
 }
@@ -2987,6 +2982,11 @@ bool DepthMapGenerator::isSparsePointVisibleInFrame(int viewIdx, size_t pointInd
 
 void DepthMapGenerator::prepareFrameCaches()
 {
+    if (_cancelled.load(std::memory_order_relaxed))
+    {
+        clearFrameCaches();
+        return;
+    }
     if (_frameCachesReady)
     {
         return;
@@ -2995,9 +2995,9 @@ void DepthMapGenerator::prepareFrameCaches()
     const int NV = static_cast<int>(_views.size());
     const size_t pointCount = _sparse.points.size();
     _frameCaches.assign(static_cast<size_t>(std::max(0, NV)), FrameMvsCache{});
-    _visibilityWordCount = (pointCount + 63) / 64;
-    _visibilityBits.assign(static_cast<size_t>(std::max(0, NV)) * _visibilityWordCount, 0);
-    _pairCommonCounts.assign(static_cast<size_t>(std::max(0, NV)) * static_cast<size_t>(std::max(0, NV)), 0);
+    _visibilityWordCount = 0;
+    _visibilityBits.clear();
+    _visibilityAdjacency.assign(static_cast<size_t>(std::max(0, NV)), {});
 
     if (NV <= 0 || pointCount == 0)
     {
@@ -3006,151 +3006,7 @@ void DepthMapGenerator::prepareFrameCaches()
     }
 
     const auto start = Clock::now();
-    constexpr int kMaxPairViewsPerPoint = 32;
     constexpr size_t kParallelVisibilityPointThreshold = 20000;
-
-    struct VisibilityCacheShard
-    {
-        explicit VisibilityCacheShard(int viewCount)
-            : visiblePointIndicesByView(static_cast<size_t>(std::max(0, viewCount)))
-            , pairCommonCounts(static_cast<size_t>(std::max(0, viewCount))
-                                   * static_cast<size_t>(std::max(0, viewCount)),
-                               0)
-        {
-        }
-
-        std::vector<std::vector<size_t>> visiblePointIndicesByView;
-        std::vector<int> pairCommonCounts;
-    };
-
-    int visibilityWorkerCount = 1;
-#ifdef _OPENMP
-    {
-        const int hwThreads = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
-        const int requested = resolvedTotalCpuThreadBudget(_config);
-        visibilityWorkerCount = pointCount >= kParallelVisibilityPointThreshold && NV > 1
-            ? std::clamp(std::min(requested, hwThreads), 1, 16)
-            : 1;
-    }
-#endif
-
-    std::vector<VisibilityCacheShard> visibilityShards;
-    visibilityShards.reserve(static_cast<size_t>(visibilityWorkerCount));
-    for (int workerIndex = 0; workerIndex < visibilityWorkerCount; ++workerIndex)
-    {
-        visibilityShards.emplace_back(NV);
-    }
-
-#pragma omp parallel num_threads(visibilityWorkerCount) if(visibilityWorkerCount > 1)
-    {
-        int workerIndex = 0;
-#ifdef _OPENMP
-        workerIndex = omp_get_thread_num();
-#endif
-        VisibilityCacheShard &shard = visibilityShards[static_cast<size_t>(workerIndex)];
-        std::vector<int> visibleViews;
-        visibleViews.reserve(std::min(NV, kMaxPairViewsPerPoint));
-        std::vector<int> pairViews;
-        pairViews.reserve(kMaxPairViewsPerPoint);
-
-#pragma omp for schedule(static)
-        for (long long pointIndexSigned = 0; pointIndexSigned < static_cast<long long>(pointCount); ++pointIndexSigned)
-        {
-            const size_t pointIndex = static_cast<size_t>(pointIndexSigned);
-            visibleViews.clear();
-            const auto &point = _sparse.points[pointIndex];
-            for (int viewIdx = 0; viewIdx < NV; ++viewIdx)
-            {
-                if (!isMvsSparsePointVisibleInView(_views[viewIdx], point))
-                {
-                    continue;
-                }
-
-                shard.visiblePointIndicesByView[static_cast<size_t>(viewIdx)].push_back(pointIndex);
-                visibleViews.push_back(viewIdx);
-            }
-
-            if (visibleViews.size() < 2)
-            {
-                continue;
-            }
-
-            pairViews.clear();
-            if (static_cast<int>(visibleViews.size()) <= kMaxPairViewsPerPoint)
-            {
-                pairViews.assign(visibleViews.begin(), visibleViews.end());
-            }
-            else
-            {
-                for (int sample = 0; sample < kMaxPairViewsPerPoint; ++sample)
-                {
-                    const size_t idx = static_cast<size_t>(sample) * visibleViews.size()
-                                       / static_cast<size_t>(kMaxPairViewsPerPoint);
-                    pairViews.push_back(visibleViews[std::min(idx, visibleViews.size() - 1)]);
-                }
-            }
-
-            for (size_t a = 0; a < pairViews.size(); ++a)
-            {
-                for (size_t b = a + 1; b < pairViews.size(); ++b)
-                {
-                    const int ia = pairViews[a];
-                    const int ib = pairViews[b];
-                    ++shard.pairCommonCounts[static_cast<size_t>(ia) * NV + ib];
-                    ++shard.pairCommonCounts[static_cast<size_t>(ib) * NV + ia];
-                }
-            }
-        }
-    }
-
-    auto mergeVisibilityCacheShards = [&]()
-    {
-        for (int viewIdx = 0; viewIdx < NV; ++viewIdx)
-        {
-            size_t visibleCount = 0;
-            for (const VisibilityCacheShard &shard : visibilityShards)
-            {
-                visibleCount += shard.visiblePointIndicesByView[static_cast<size_t>(viewIdx)].size();
-            }
-
-            auto &visible = _frameCaches[static_cast<size_t>(viewIdx)].visiblePointIndices;
-            visible.reserve(visibleCount);
-            for (const VisibilityCacheShard &shard : visibilityShards)
-            {
-                const auto &localVisible = shard.visiblePointIndicesByView[static_cast<size_t>(viewIdx)];
-                visible.insert(visible.end(), localVisible.begin(), localVisible.end());
-            }
-        }
-
-        for (VisibilityCacheShard &shard : visibilityShards)
-        {
-            for (size_t idx = 0; idx < _pairCommonCounts.size(); ++idx)
-            {
-                _pairCommonCounts[idx] += shard.pairCommonCounts[idx];
-            }
-        }
-    };
-    mergeVisibilityCacheShards();
-
-    auto buildVisibilityBitsFromFrameCaches = [&]()
-    {
-        const bool parallelBuildVisibilityBits = NV > 8 && pointCount >= kParallelVisibilityPointThreshold;
-#pragma omp parallel for schedule(static) if(parallelBuildVisibilityBits)
-        for (int viewIdx = 0; viewIdx < NV; ++viewIdx)
-        {
-            const auto &visible = _frameCaches[static_cast<size_t>(viewIdx)].visiblePointIndices;
-            const size_t viewOffset = static_cast<size_t>(viewIdx) * _visibilityWordCount;
-            for (size_t pointIndex : visible)
-            {
-                const size_t word = pointIndex / 64;
-                const size_t bit = pointIndex % 64;
-                _visibilityBits[viewOffset + word] |= (uint64_t{1} << bit);
-            }
-        }
-    };
-    buildVisibilityBitsFromFrameCaches();
-
-    _frameCachesReady = true;
     std::vector<std::string> activeImagePaths;
     std::vector<QString> activeImagePathKeys;
     activeImagePaths.reserve(_views.size());
@@ -3164,6 +3020,57 @@ void DepthMapGenerator::prepareFrameCaches()
         filterMvsSourcePairQualitiesForImages(_config.sourcePairQualities, activeImagePaths);
     const MvsSourcePairQualityLookup pairQualityLookup =
         buildMvsSourcePairQualityLookup(activePairQualities);
+
+    MvsVisibilityGraphBuildOptions visibilityOptions;
+    const int hardwareThreadCount = static_cast<int>(
+        std::max(1U, std::thread::hardware_concurrency()));
+    const int requestedThreadCount = resolvedTotalCpuThreadBudget(_config);
+    visibilityOptions.workerCount = pointCount >= kParallelVisibilityPointThreshold && NV > 1
+        ? std::clamp(std::min(requestedThreadCount, hardwareThreadCount), 1, 16)
+        : 1;
+    visibilityOptions.cancelFlag = &_cancelled;
+
+    std::unordered_map<std::string, int> viewIndexByPathKey;
+    viewIndexByPathKey.reserve(activeImagePathKeys.size());
+    for (int viewIndex = 0; viewIndex < NV; ++viewIndex)
+    {
+        viewIndexByPathKey.emplace(
+            activeImagePathKeys[static_cast<std::size_t>(viewIndex)].toStdString(),
+            viewIndex);
+    }
+    for (const MvsSourcePairQuality &quality : activePairQualities)
+    {
+        if (!quality.verified)
+        {
+            continue;
+        }
+        const auto first = viewIndexByPathKey.find(
+            normalizedMvsPathKey(quality.imageA).toStdString());
+        const auto second = viewIndexByPathKey.find(
+            normalizedMvsPathKey(quality.imageB).toStdString());
+        if (first != viewIndexByPathKey.end() && second != viewIndexByPathKey.end())
+        {
+            visibilityOptions.requiredPairs.push_back({first->second, second->second});
+        }
+    }
+
+    MvsVisibilityGraph visibilityGraph = MvsVisibilityGraphBuilder::build(
+        _views, _sparse, visibilityOptions);
+    if (visibilityGraph.cancelled || _cancelled.load(std::memory_order_relaxed))
+    {
+        clearFrameCaches();
+        return;
+    }
+    _visibilityWordCount = visibilityGraph.statistics.visibilityWordCount;
+    _visibilityBits = std::move(visibilityGraph.visibilityBits);
+    _visibilityAdjacency = std::move(visibilityGraph.neighborsByView);
+    for (int viewIndex = 0; viewIndex < NV; ++viewIndex)
+    {
+        _frameCaches[static_cast<std::size_t>(viewIndex)].visiblePointIndices =
+            std::move(visibilityGraph.visiblePointIndicesByView[static_cast<std::size_t>(viewIndex)]);
+    }
+    _frameCachesReady = true;
+
     const bool hasSourcePairQuality = !pairQualityLookup.qualitiesByPairKey.empty();
     const bool requireVerifiedSourcePairs = _config.requireVerifiedSourcePairs && hasSourcePairQuality;
     const int minVerifiedPairInliers = std::max(1, _config.minSourcePairGeometricInliers);
@@ -3239,30 +3146,41 @@ void DepthMapGenerator::prepareFrameCaches()
             int viewIndex = -1;
             int commonVisiblePoints = 0;
             int sequenceDistance = 0;
+            bool verifiedPair = false;
         };
 
         std::vector<RankedSourceCandidate> rankedSourceCandidates;
-        rankedSourceCandidates.reserve(static_cast<size_t>(std::max(0, NV - 1)));
-        for (int sourceIdx = 0; sourceIdx < NV; ++sourceIdx)
+        const auto &visibilityNeighbors =
+            _visibilityAdjacency[static_cast<std::size_t>(refIdx)];
+        rankedSourceCandidates.reserve(visibilityNeighbors.size());
+        for (const MvsVisibilityNeighbor &neighbor : visibilityNeighbors)
         {
-            if (sourceIdx == refIdx)
+            const MvsSourcePairQuality *pairQuality =
+                pairQualityLookup.findNormalized(
+                    activeImagePathKeys[static_cast<std::size_t>(refIdx)],
+                    activeImagePathKeys[static_cast<std::size_t>(neighbor.viewIndex)]);
+            const bool verifiedPair = pairQuality && pairQuality->verified;
+            if (neighbor.sharedTrackCount <= 0 && !verifiedPair)
             {
                 continue;
             }
 
-            const int common = _pairCommonCounts[static_cast<size_t>(refIdx) * NV + sourceIdx];
-            if (common <= 0)
-            {
-                continue;
-            }
-
-            rankedSourceCandidates.push_back({sourceIdx, common, std::abs(sourceIdx - refIdx)});
+            rankedSourceCandidates.push_back({
+                neighbor.viewIndex,
+                neighbor.sharedTrackCount,
+                std::abs(neighbor.viewIndex - refIdx),
+                verifiedPair
+            });
         }
 
         std::sort(rankedSourceCandidates.begin(),
                   rankedSourceCandidates.end(),
                   [](const RankedSourceCandidate &a, const RankedSourceCandidate &b)
                   {
+                      if (a.verifiedPair != b.verifiedPair)
+                      {
+                          return a.verifiedPair;
+                      }
                       if (a.commonVisiblePoints != b.commonVisiblePoints)
                       {
                           return a.commonVisiblePoints > b.commonVisiblePoints;
@@ -3598,252 +3516,360 @@ std::vector<size_t> DepthMapGenerator::visibleSparsePointIndicesForFrame(
 // =============================================================================
 // 预加载所有图像到灰度缓存，避免逐帧重复从磁盘读取
 // =============================================================================
-void DepthMapGenerator::preloadImages()
+bool DepthMapGenerator::probeImageMetadata(QString *errorMessage)
 {
-    const auto preload_start = Clock::now();
-    const int NV = static_cast<int>(_views.size());
-    _grayCache.resize(NV);
-    _mvsPreparedGrayCache.clear();
-    _mvsPreparedGrayCache.resize(NV);
-    _mvsPreparedCameras.clear();
-    _mvsPreparedCameras.resize(NV);
-    _validRegionMasks.resize(NV);
-    _projectMaskLoaded.assign(static_cast<size_t>(NV), 0);
-
-    const int workerCount = preloadImagesWorkerCount(
-        NV, resolvedTotalCpuThreadBudget(_config));
-    LOG_DEBUG("[MVS][预加载] workers=%d views=%d", workerCount, NV);
-    if (workerCount <= 0)
+    for (int index = 0; index < static_cast<int>(_views.size()); ++index)
     {
-        return;
-    }
-
-    std::atomic<int> nextImage{0};
-    std::atomic<int> preparedImageCount{0};
-    std::atomic<int> undistortedImageCount{0};
-    auto preloadOneImage = [this,
-                            NV,
-                            &nextImage,
-                            &preparedImageCount,
-                            &undistortedImageCount]()
-    {
-        for (;;)
+        if (_cancelled.load(std::memory_order_relaxed))
         {
-            if (_cancelled.load())
+            if (errorMessage)
             {
-                break;
+                *errorMessage = QStringLiteral("影像头部探测已取消");
             }
-
-            const int i = nextImage.fetch_add(1);
-            if (i >= NV)
-            {
-                break;
-            }
-
-            _grayCache[i] = xjw::common::io::readImage(_views[i].imagePath, cv::IMREAD_GRAYSCALE);
-            if (_grayCache[i].empty())
-            {
-                LOG_WARN(QStringLiteral("[MVS] 警告: 无法读取图像 %1: %2").arg(i).arg(QString::fromStdString(_views[i].imagePath)));
-                continue;
-            }
-
-            const std::string &project_mask_path = _views[static_cast<size_t>(i)].validRegionMaskPath;
-            if (!project_mask_path.empty())
-            {
-                const cv::Mat project_mask = xjw::common::io::readImage(
-                    project_mask_path,
-                    cv::IMREAD_GRAYSCALE);
-                if (!project_mask.empty())
-                {
-                    _validRegionMasks[static_cast<size_t>(i)] = projectMaskToValidMask(
-                        project_mask,
-                        _grayCache[static_cast<size_t>(i)].size());
-                    bool content_refined = false;
-                    float retained_ratio = 1.0f;
-                    if (_effectiveSceneProfile == MvsSceneProfile::OrbitalObject)
-                    {
-                        _validRegionMasks[static_cast<size_t>(i)] =
-                            refineOrbitalProjectValidMask(
-                                _grayCache[static_cast<size_t>(i)],
-                                _validRegionMasks[static_cast<size_t>(i)],
-                                &content_refined,
-                                &retained_ratio);
-                    }
-                    _projectMaskLoaded[static_cast<size_t>(i)] = 1;
-                    const int valid_pixels = cv::countNonZero(
-                        _validRegionMasks[static_cast<size_t>(i)]);
-                    const int total_pixels = _validRegionMasks[static_cast<size_t>(i)].rows *
-                                             _validRegionMasks[static_cast<size_t>(i)].cols;
-                    LOG_DEBUG(QStringLiteral("[MVS][预加载] 图像 %1: 使用项目蒙版，有效区域 %2/%3 (%4%)")
-                                 .arg(i)
-                                 .arg(valid_pixels)
-                                 .arg(total_pixels)
-                                 .arg(total_pixels > 0
-                                          ? 100.0 * static_cast<double>(valid_pixels) / total_pixels
-                                          : 0.0,
-                                      0,
-                                      'f',
-                                      1));
-                    if (content_refined)
-                    {
-                        LOG_DEBUG(QStringLiteral(
-                                     "[MVS][预加载] 图像 %1: 暗背景内部开口细化，保留项目有效区 %2%")
-                                     .arg(i)
-                                     .arg(100.0 * static_cast<double>(retained_ratio),
-                                          0,
-                                          'f',
-                                          1));
-                    }
-                }
-                else
-                {
-                    LOG_WARN(QStringLiteral("[MVS] 图像 %1: 项目蒙版读取失败，回退内容区域检测: %2")
-                                 .arg(i)
-                                 .arg(QString::fromStdString(project_mask_path)));
-                }
-            }
-
-            // 无项目蒙版时，才在 CLAHE 增强前自动检测内容区域。
-            // gamma/CLAHE 会抬高黑边亮度，因此检测必须基于原始灰度图。
-            if (_projectMaskLoaded[static_cast<size_t>(i)] == 0)
-            {
-                float coverage = 0.f;
-                double otsuThresh = 0.0;
-                int adaptiveThresh = 0;
-                _validRegionMasks[static_cast<size_t>(i)] = buildContentMask(
-                    _grayCache[static_cast<size_t>(i)],
-                    &coverage,
-                    &otsuThresh,
-                    &adaptiveThresh);
-
-                const int totalPx = _grayCache[i].rows * _grayCache[i].cols;
-                const int contentPx = static_cast<int>(std::round(coverage * totalPx));
-                if (_validRegionMasks[static_cast<size_t>(i)].empty())
-                {
-                    LOG_DEBUG(
-                        "[MVS][预加载] 图像 %d: 内容掩码覆盖 %.1f%%，"
-                        "自动跳过过滤 (Otsu=%.0f adaptiveThresh=%d)",
-                        i,
-                        coverage * 100.0f,
-                        otsuThresh,
-                        adaptiveThresh);
-                }
-                else
-                {
-                    LOG_DEBUG(
-                        "[MVS][预加载] 图像 %d: 内容掩码 "
-                        "(Otsu=%.0f adaptiveThresh=%d): %d/%d (%.1f%%)",
-                        i, otsuThresh, adaptiveThresh, contentPx, totalPx,
-                        coverage * 100.0f);
-                }
-            }
-
-            // ── 自适应对比度增强 (CLAHE) ──────────────────────────────────
-            // 暗场/低对比度图像（均值 < 40）的像素方差极小，NCC 分母接近 0，
-            // 导致 PatchMatch 无法区分正确/错误深度假设 → 全图噪声。
-            // CLAHE 局部均衡化可在不影响已有纹理的前提下大幅提升暗区对比度。
-            double imgMean = cv::mean(_grayCache[i])[0];
-            if (imgMean < 80.0)
-            {
-                cv::Mat enhanced;
-                if (imgMean < 30.0)
-                {
-                    // 极暗图像（航空影像常见）：先做 gamma 校正提升暗区可见度，
-                    // 再用高 clipLimit CLAHE 进一步增强局部对比度。
-                    // gamma=0.4 将 [0,255] 非线性映射，使暗部细节显现。
-                    cv::Mat floatImg;
-                    _grayCache[i].convertTo(floatImg, CV_32F, 1.0 / 255.0);
-                    cv::pow(floatImg, 0.4, floatImg);
-                    floatImg.convertTo(enhanced, CV_8U, 255.0);
-                    auto clahe = cv::createCLAHE(8.0, cv::Size(8, 8));
-                    clahe->apply(enhanced, enhanced);
-                }
-                else
-                {
-                    // 中等暗度：标准 CLAHE
-                    auto clahe = cv::createCLAHE(4.0, cv::Size(8, 8));
-                    clahe->apply(_grayCache[i], enhanced);
-                }
-                double newMean = cv::mean(enhanced)[0];
-                LOG_DEBUG(
-                    "[MVS][预加载] 图像 %d: 低对比度 mean=%.1f，"
-                    "应用 CLAHE 后 mean=%.1f",
-                    i, imgMean, newMean);
-                _grayCache[i] = enhanced;
-            }
-            else
-            {
-                LOG_DEBUG("[MVS][预加载] 图像 %d/%d: %dx%d mean=%.1f",
-                          i + 1, NV, _grayCache[i].cols, _grayCache[i].rows, imgMean);
-            }
-
-            std::string preparation_error;
-            if (!prepareMvsImage(_grayCache[static_cast<std::size_t>(i)],
-                                 _views[static_cast<std::size_t>(i)].camera,
-                                 &_mvsPreparedGrayCache[static_cast<std::size_t>(i)],
-                                 &_mvsPreparedCameras[static_cast<std::size_t>(i)],
-                                 &preparation_error))
-            {
-                LOG_WARN(QStringLiteral("[MVS][预加载] 图像 %1 的 MVS 预处理失败，"
-                                        "帧执行时重试：%2")
-                             .arg(i)
-                             .arg(QString::fromStdString(preparation_error)));
-            }
-            else
-            {
-                preparedImageCount.fetch_add(1, std::memory_order_relaxed);
-                if (_mvsPreparedGrayCache[static_cast<std::size_t>(i)].data !=
-                    _grayCache[static_cast<std::size_t>(i)].data)
-                {
-                    undistortedImageCount.fetch_add(1, std::memory_order_relaxed);
-                }
-            }
+            return false;
         }
-    };
 
-    std::vector<std::thread> preloadWorkers;
-    preloadWorkers.reserve(static_cast<size_t>(workerCount));
-    for (int workerIndex = 0; workerIndex < workerCount; ++workerIndex)
-    {
-        preloadWorkers.emplace_back(preloadOneImage);
-    }
-
-    for (std::thread &worker : preloadWorkers)
-    {
-        if (worker.joinable())
+        MvsImageMetadata metadata;
+        std::string probeError;
+        if (!probeMvsImageMetadata(
+                _views[static_cast<std::size_t>(index)].imagePath,
+                &metadata,
+                &probeError))
         {
-            worker.join();
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("无法读取影像 %1 的头部尺寸：%2")
+                                    .arg(index)
+                                    .arg(QString::fromStdString(probeError));
+            }
+            return false;
         }
+
+        CameraView &view = _views[static_cast<std::size_t>(index)];
+        if ((view.imageWidth > 0 && view.imageWidth != metadata.width) ||
+            (view.imageHeight > 0 && view.imageHeight != metadata.height))
+        {
+            LOG_WARN(QStringLiteral(
+                         "[MVS][内存规划] 视图 %1 声明尺寸 %2x%3 与影像头 %4x%5 不一致，"
+                         "以内嵌元数据为准")
+                         .arg(index)
+                         .arg(view.imageWidth)
+                         .arg(view.imageHeight)
+                         .arg(metadata.width)
+                         .arg(metadata.height));
+        }
+        view.imageWidth = metadata.width;
+        view.imageHeight = metadata.height;
     }
-    LOG_INFO(QStringLiteral("[MVS][预加载] MVS 输入缓存完成: prepared=%1/%2 "
-                            "undistorted=%3 elapsed=%4 ms")
-                 .arg(preparedImageCount.load(std::memory_order_relaxed))
-                 .arg(NV)
-                 .arg(undistortedImageCount.load(std::memory_order_relaxed))
-                 .arg(elapsedMs(preload_start, Clock::now()), 0, 'f', 1));
+
+    if (errorMessage)
+    {
+        errorMessage->clear();
+    }
+    return true;
 }
 
-void DepthMapGenerator::refreshViewImageDimensionsFromCache()
+bool DepthMapGenerator::loadMvsImageFrame(
+    int frameIndex,
+    const std::atomic_bool *cancelFlag,
+    MvsImageFrame *frame,
+    std::string *errorMessage)
 {
-    int updatedCount = 0;
-    const int count = std::min(static_cast<int>(_views.size()), static_cast<int>(_grayCache.size()));
-    for (int i = 0; i < count; ++i)
+    if (!frame || frameIndex < 0 || frameIndex >= static_cast<int>(_views.size()))
     {
-        CameraView &view = _views[static_cast<size_t>(i)];
-        const cv::Mat &image = _grayCache[static_cast<size_t>(i)];
-        if ((view.imageWidth <= 0 || view.imageHeight <= 0) && !image.empty())
+        if (errorMessage)
         {
-            view.imageWidth = image.cols;
-            view.imageHeight = image.rows;
-            ++updatedCount;
+            *errorMessage = "MVS image loader received an invalid frame";
+        }
+        return false;
+    }
+
+    const auto cancelled = [cancelFlag]()
+    {
+        return cancelFlag && cancelFlag->load(std::memory_order_relaxed);
+    };
+    const auto stopIfCancelled = [&](const char *message)
+    {
+        if (!cancelled())
+        {
+            return false;
+        }
+        if (errorMessage)
+        {
+            *errorMessage = message;
+        }
+        return true;
+    };
+    if (stopIfCancelled("MVS image load cancelled"))
+    {
+        return false;
+    }
+
+    const CameraView &view = _views[static_cast<std::size_t>(frameIndex)];
+    frame->gray = xjw::common::io::readImage(
+        view.imagePath, cv::IMREAD_GRAYSCALE);
+    if (frame->gray.empty())
+    {
+        if (errorMessage)
+        {
+            *errorMessage = "无法解码影像: " + view.imagePath;
+        }
+        return false;
+    }
+    if (stopIfCancelled("MVS image load cancelled"))
+    {
+        return false;
+    }
+
+    if (!view.validRegionMaskPath.empty())
+    {
+        const cv::Mat projectMask = xjw::common::io::readImage(
+            view.validRegionMaskPath, cv::IMREAD_GRAYSCALE);
+        if (stopIfCancelled("MVS project mask load cancelled"))
+        {
+            return false;
+        }
+        if (!projectMask.empty())
+        {
+            frame->validMask = projectMaskToValidMask(
+                projectMask, frame->gray.size());
+            if (stopIfCancelled("MVS project mask preparation cancelled"))
+            {
+                return false;
+            }
+            bool contentRefined = false;
+            float retainedRatio = 1.0f;
+            if (_effectiveSceneProfile == MvsSceneProfile::OrbitalObject)
+            {
+                frame->validMask = refineOrbitalProjectValidMask(
+                    frame->gray,
+                    frame->validMask,
+                    &contentRefined,
+                    &retainedRatio);
+            }
+            if (stopIfCancelled("MVS project mask refinement cancelled"))
+            {
+                return false;
+            }
+            frame->projectMaskLoaded = true;
+            if (contentRefined)
+            {
+                LOG_DEBUG(QStringLiteral(
+                              "[MVS][图像缓存] 视图 %1 暗背景蒙版细化后保留 %2%")
+                              .arg(frameIndex)
+                              .arg(100.0 * static_cast<double>(retainedRatio),
+                                   0,
+                                   'f',
+                                   1));
+            }
+        }
+        else
+        {
+            LOG_WARN(QStringLiteral(
+                         "[MVS][图像缓存] 视图 %1 项目蒙版读取失败，"
+                         "回退内容区域检测: %2")
+                         .arg(frameIndex)
+                         .arg(QString::fromStdString(view.validRegionMaskPath)));
         }
     }
 
-    if (updatedCount > 0)
+    if (!frame->projectMaskLoaded)
     {
-        LOG_INFO(QStringLiteral("[MVS] 已从预加载图像补齐 %1 个视图尺寸，用于深度图内存预算")
-                     .arg(updatedCount));
+        float coverage = 0.0f;
+        double otsuThreshold = 0.0;
+        int adaptiveThreshold = 0;
+        frame->validMask = buildContentMask(
+            frame->gray,
+            &coverage,
+            &otsuThreshold,
+            &adaptiveThreshold);
+        if (stopIfCancelled("MVS content mask preparation cancelled"))
+        {
+            return false;
+        }
+        LOG_DEBUG(
+            "[MVS][图像缓存] 视图 %d 内容掩码 coverage=%.1f%% "
+            "Otsu=%.0f adaptive_threshold=%d",
+            frameIndex,
+            coverage * 100.0f,
+            otsuThreshold,
+            adaptiveThreshold);
     }
+
+    const double imageMean = cv::mean(frame->gray)[0];
+    if (stopIfCancelled("MVS image statistics cancelled"))
+    {
+        return false;
+    }
+    if (imageMean < 80.0)
+    {
+        cv::Mat enhanced;
+        if (imageMean < 30.0)
+        {
+            cv::Mat floatImage;
+            frame->gray.convertTo(floatImage, CV_32F, 1.0 / 255.0);
+            cv::pow(floatImage, 0.4, floatImage);
+            floatImage.convertTo(enhanced, CV_8U, 255.0);
+            if (stopIfCancelled("MVS image enhancement cancelled"))
+            {
+                return false;
+            }
+            cv::createCLAHE(8.0, cv::Size(8, 8))->apply(
+                enhanced, enhanced);
+        }
+        else
+        {
+            cv::createCLAHE(4.0, cv::Size(8, 8))->apply(
+                frame->gray, enhanced);
+        }
+        frame->gray = std::move(enhanced);
+    }
+    if (stopIfCancelled("MVS image preprocessing cancelled"))
+    {
+        return false;
+    }
+
+    std::string preparationError;
+    if (!prepareMvsImage(frame->gray,
+                         view.camera,
+                         &frame->preparedGray,
+                         &frame->preparedCamera,
+                         &preparationError))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = "影像 MVS 预处理失败: " + preparationError;
+        }
+        return false;
+    }
+    if (stopIfCancelled("MVS image preparation cancelled"))
+    {
+        frame->preparedGray.release();
+        return false;
+    }
+
+    if (errorMessage)
+    {
+        errorMessage->clear();
+    }
+    return true;
+}
+
+bool DepthMapGenerator::initializeImageProvider(
+    const MvsPipelineMemoryPolicyDecision &decision,
+    QString *errorMessage)
+{
+    if (decision.imageStrategy == MvsImageCacheStrategy::Insufficient ||
+        decision.imageCacheCapacity == 0)
+    {
+        if (errorMessage)
+        {
+            const std::string_view strategy = mvsImageCacheStrategyName(
+                decision.imageStrategy);
+            *errorMessage = QStringLiteral(
+                "MVS 内存不足: required=%1 GiB available=%2 GiB strategy=%3。"
+                "visibility=%4 GiB (bitset=%5 GiB visible_index=%6 GiB "
+                "pairs=%7 GiB nominated=%8 GiB adjacency=%9 GiB "
+                "pair_bound=%10 saturated=%11)。"
+                "请降低 gpuFrameWorkerCount/cpuFrameWorkerCount、numSourceViews、"
+                "输入分辨率或质量档位，或减少输入视图/稀疏点规模后重试")
+                                .arg(bytesToGiB(decision.requiredBytes), 0, 'f', 2)
+                                .arg(bytesToGiB(decision.availableBytes), 0, 'f', 2)
+                                .arg(QString::fromLatin1(
+                                    strategy.data(),
+                                    static_cast<int>(strategy.size())))
+                                .arg(bytesToGiB(
+                                    decision.estimate.visibility.totalBytes), 0, 'f', 2)
+                                .arg(bytesToGiB(
+                                    decision.estimate.visibility.visibilityBitsetBytes), 0, 'f', 2)
+                                .arg(bytesToGiB(
+                                    decision.estimate.visibility.visibleIndexBytes), 0, 'f', 2)
+                                .arg(bytesToGiB(
+                                    decision.estimate.visibility.pairBytes), 0, 'f', 2)
+                                .arg(bytesToGiB(
+                                    decision.estimate.visibility.nominatedPeerBytes), 0, 'f', 2)
+                                .arg(bytesToGiB(
+                                    decision.estimate.visibility.adjacencyBytes), 0, 'f', 2)
+                                .arg(decision.estimate.visibility.candidatePairUpperBound)
+                                .arg(decision.estimate.visibility.saturated
+                                         ? QStringLiteral("true")
+                                         : QStringLiteral("false"));
+        }
+        return false;
+    }
+
+    _pipelineMemoryDecision = decision;
+    _imageCache = std::make_unique<MvsImageCache>(
+        _views.size(),
+        decision.imageCacheCapacity,
+        [this](int frameIndex,
+               const std::atomic_bool *cancelFlag,
+               MvsImageFrame *frame,
+               std::string *loaderError)
+        {
+            return loadMvsImageFrame(
+                frameIndex, cancelFlag, frame, loaderError);
+        });
+    if (errorMessage)
+    {
+        errorMessage->clear();
+    }
+    return true;
+}
+
+bool DepthMapGenerator::preloadImages(QString *errorMessage)
+{
+    if (!_imageCache)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("MVS 图像 provider 尚未初始化");
+        }
+        return false;
+    }
+    if (_pipelineMemoryDecision.imageStrategy != MvsImageCacheStrategy::Eager)
+    {
+        return true;
+    }
+
+    const auto preloadStart = Clock::now();
+    std::string preloadError;
+    const int workerCount = preloadImagesWorkerCount(
+        static_cast<int>(_views.size()), resolvedTotalCpuThreadBudget(_config));
+    if (!_imageCache->preloadAll(
+            workerCount, &_cancelled, &preloadError))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("MVS 影像 eager 预加载失败：%1")
+                                .arg(QString::fromStdString(preloadError));
+        }
+        return false;
+    }
+
+    LOG_INFO(QStringLiteral(
+                 "[MVS][图像缓存] eager 预加载完成: resident=%1/%2 "
+                 "bytes=%3 GiB elapsed=%4 ms")
+                 .arg(_imageCache->residentCount())
+                 .arg(_imageCache->frameCount())
+                 .arg(bytesToGiB(_imageCache->residentBytes()), 0, 'f', 2)
+                 .arg(elapsedMs(preloadStart, Clock::now()), 0, 'f', 1));
+    return true;
+}
+
+MvsImageCache::ImageLease DepthMapGenerator::acquireImageFrame(
+    int frameIndex,
+    std::string *errorMessage)
+{
+    if (!_imageCache)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = "MVS image provider is not initialized";
+        }
+        return {};
+    }
+    return _imageCache->acquire(frameIndex, &_cancelled, errorMessage);
 }
 
 // =============================================================================
@@ -4995,48 +5021,21 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
         return result;
     }
 
-    // 使用预加载的灰度图缓存（无磁盘 I/O）
-    cv::Mat refImg;
-    if (refIdx >= 0 && refIdx < (int)_grayCache.size() && !_grayCache[refIdx].empty()) {
-        refImg = _grayCache[refIdx];  // 浅拷贝，零开销
-    } else {
-        refImg = xjw::common::io::readImage(refView.imagePath, cv::IMREAD_GRAYSCALE);
-    }
-    if (refImg.empty()) {
-        result.errorMsg = "无法读取参考帧图像: " + refView.imagePath;
+    std::string referenceLoadError;
+    MvsImageCache::ImageLease referenceLease = acquireImageFrame(
+        refIdx, &referenceLoadError);
+    if (!referenceLease)
+    {
+        result.errorMsg = "无法获取参考帧图像: " + refView.imagePath +
+            " (" + referenceLoadError + ")";
         return result;
     }
     if (cancelled("读取参考影像后"))
     {
         return result;
     }
-    Camera refCam;
-    const bool has_prepared_reference =
-        refIdx >= 0 &&
-        refIdx < static_cast<int>(_mvsPreparedGrayCache.size()) &&
-        refIdx < static_cast<int>(_mvsPreparedCameras.size()) &&
-        !_mvsPreparedGrayCache[static_cast<std::size_t>(refIdx)].empty() &&
-        _mvsPreparedCameras[static_cast<std::size_t>(refIdx)].isValid();
-    if (has_prepared_reference)
-    {
-        refImg = _mvsPreparedGrayCache[static_cast<std::size_t>(refIdx)];
-        refCam = _mvsPreparedCameras[static_cast<std::size_t>(refIdx)];
-    }
-    else
-    {
-        cv::Mat prepared_ref_image;
-        std::string preprocess_error;
-        if (!prepareMvsImage(refImg,
-                             refView.camera,
-                             &prepared_ref_image,
-                             &refCam,
-                             &preprocess_error))
-        {
-            result.errorMsg = "参考帧预处理失败: " + preprocess_error;
-            return result;
-        }
-        refImg = std::move(prepared_ref_image);
-    }
+    cv::Mat refImg = referenceLease->preparedGray;
+    const Camera refCam = referenceLease->preparedCamera;
     const int W = refImg.cols;
     const int H = refImg.rows;
 
@@ -5046,6 +5045,8 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
     std::vector<cv::Mat> srcGrays;
     std::vector<Camera> srcCams;
     std::vector<int> sourceIndices;
+    std::vector<MvsImageCache::ImageLease> sourceLeases;
+    sourceLeases.reserve(static_cast<std::size_t>(std::max(0, numSrc)));
 
     const std::vector<int> selectedSources = sourceViewIndicesForFrame(refIdx, numSrc);
     for (int si : selectedSources)
@@ -5054,45 +5055,18 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
         {
             continue;
         }
-        cv::Mat srcImg;
-        if (si >= 0 && si < (int)_grayCache.size() && !_grayCache[si].empty()) {
-            srcImg = _grayCache[si];
-        } else {
-            srcImg = xjw::common::io::readImage(_views[si].imagePath, cv::IMREAD_GRAYSCALE);
-        }
-        if (srcImg.empty())
+        std::string sourceLoadError;
+        MvsImageCache::ImageLease sourceLease = acquireImageFrame(
+            si, &sourceLoadError);
+        if (!sourceLease)
         {
+            LOG_WARN(QStringLiteral("[MVS] 跳过源帧 %1：图像 provider 获取失败：%2")
+                         .arg(si)
+                         .arg(QString::fromStdString(sourceLoadError)));
             continue;
         }
-
-        Camera sourceCamera;
-        const bool has_prepared_source =
-            si < static_cast<int>(_mvsPreparedGrayCache.size()) &&
-            si < static_cast<int>(_mvsPreparedCameras.size()) &&
-            !_mvsPreparedGrayCache[static_cast<std::size_t>(si)].empty() &&
-            _mvsPreparedCameras[static_cast<std::size_t>(si)].isValid();
-        if (has_prepared_source)
-        {
-            srcImg = _mvsPreparedGrayCache[static_cast<std::size_t>(si)];
-            sourceCamera = _mvsPreparedCameras[static_cast<std::size_t>(si)];
-        }
-        else
-        {
-            cv::Mat prepared_source_image;
-            std::string source_preprocess_error;
-            if (!prepareMvsImage(srcImg,
-                                 _views[si].camera,
-                                 &prepared_source_image,
-                                 &sourceCamera,
-                                 &source_preprocess_error))
-            {
-                LOG_WARN(QStringLiteral("[MVS] 跳过源帧 %1：影像预处理失败：%2")
-                             .arg(si)
-                             .arg(QString::fromStdString(source_preprocess_error)));
-                continue;
-            }
-            srcImg = std::move(prepared_source_image);
-        }
+        cv::Mat srcImg = sourceLease->preparedGray;
+        Camera sourceCamera = sourceLease->preparedCamera;
         if (srcImg.cols != W || srcImg.rows != H)
         {
             const double scaleX = static_cast<double>(W) / std::max(1, srcImg.cols);
@@ -5103,6 +5077,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
         srcGrays.push_back(srcImg);
         srcCams.push_back(sourceCamera);
         sourceIndices.push_back(si);
+        sourceLeases.push_back(std::move(sourceLease));
         if (static_cast<int>(srcGrays.size()) >= numSrc) break;
     }
 
@@ -5280,30 +5255,23 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
     std::vector<cv::Mat> workSrcGrays = srcGrays;
     Camera workRefCam = refCam;
     std::vector<Camera> workSrcCams = srcCams;
-    cv::Mat referenceValidMask;
-    if (refIdx >= 0 && refIdx < static_cast<int>(_validRegionMasks.size()))
-    {
-        referenceValidMask = _validRegionMasks[static_cast<size_t>(refIdx)];
-    }
+    cv::Mat referenceValidMask = referenceLease->validMask;
     std::vector<cv::Mat> source_valid_masks;
     source_valid_masks.reserve(sourceIndices.size());
     bool has_source_valid_mask = false;
-    for (const int source_index : sourceIndices)
+    for (std::size_t sourceOrdinal = 0;
+         sourceOrdinal < sourceIndices.size();
+         ++sourceOrdinal)
     {
-        cv::Mat source_mask;
-        if (source_index >= 0 &&
-            source_index < static_cast<int>(_validRegionMasks.size()))
+        cv::Mat source_mask = sourceLeases[sourceOrdinal]->validMask;
+        if (!source_mask.empty() && source_mask.size() != cv::Size(W, H))
         {
-            source_mask = _validRegionMasks[static_cast<std::size_t>(source_index)];
-            if (!source_mask.empty() && source_mask.size() != cv::Size(W, H))
-            {
-                cv::resize(source_mask,
-                           source_mask,
-                           cv::Size(W, H),
-                           0.0,
-                           0.0,
-                           cv::INTER_NEAREST);
-            }
+            cv::resize(source_mask,
+                       source_mask,
+                       cv::Size(W, H),
+                       0.0,
+                       0.0,
+                       cv::INTER_NEAREST);
         }
         has_source_valid_mask = has_source_valid_mask || !source_mask.empty();
         source_valid_masks.push_back(std::move(source_mask));
@@ -5312,9 +5280,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
     {
         source_valid_masks.clear();
     }
-    const bool has_project_mask = refIdx >= 0 &&
-                                  refIdx < static_cast<int>(_projectMaskLoaded.size()) &&
-                                  _projectMaskLoaded[static_cast<size_t>(refIdx)] != 0;
+    const bool has_project_mask = referenceLease->projectMaskLoaded;
     if (has_project_mask)
     {
         result.maskSource = "project";
@@ -5589,37 +5555,13 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
     stageStart = Clock::now();
     cv::Mat effectiveReferenceMask;
     {
-        const bool hasPreloadedMaskSlot = refIdx >= 0 && refIdx < static_cast<int>(_validRegionMasks.size());
-        if (hasPreloadedMaskSlot && !_validRegionMasks[static_cast<size_t>(refIdx)].empty())
+        if (!referenceLease->validMask.empty())
         {
-            effectiveReferenceMask = _validRegionMasks[static_cast<size_t>(refIdx)];
-        }
-        else if (hasPreloadedMaskSlot)
-        {
-            LOG_DEBUG("[MVS][帧 %d][掩码] 内容掩码已自动跳过", refIdx);
+            effectiveReferenceMask = referenceLease->validMask;
         }
         else
         {
-            float coverage = 0.f;
-            double otsuThresh = 0.0;
-            int adaptiveThresh = 0;
-            effectiveReferenceMask = buildContentMask(
-                refImg, &coverage, &otsuThresh, &adaptiveThresh);
-            if (effectiveReferenceMask.empty())
-            {
-                LOG_DEBUG("[MVS][帧 %d][掩码] 覆盖=%.1f%%，自动跳过内容掩码过滤",
-                          refIdx,
-                          coverage * 100.0f);
-            }
-            else
-            {
-                LOG_WARN("[MVS][帧 %d][掩码] 预加载掩码不可用，现场生成: coverage=%.1f%% otsu=%.0f "
-                         "adaptive_threshold=%d",
-                         refIdx,
-                         coverage * 100.0f,
-                         otsuThresh,
-                         adaptiveThresh);
-            }
+            LOG_DEBUG("[MVS][帧 %d][掩码] 内容掩码已自动跳过", refIdx);
         }
 
         if (!effectiveReferenceMask.empty())
@@ -6406,6 +6348,19 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                     : nullptr);
         }
         cv::Mat anchored_interpolation_mask;
+        std::string referenceImageError;
+        MvsImageCache::ImageLease referenceImageLease = acquireImageFrame(
+            i, &referenceImageError);
+        const cv::Mat *referenceGray = referenceImageLease
+            ? &referenceImageLease->preparedGray
+            : nullptr;
+        if (!referenceImageLease)
+        {
+            LOG_WARN(QStringLiteral(
+                         "[MVS][帧 %1][一致性] 参考影像不可用，跳过影像引导修复：%2")
+                         .arg(i)
+                         .arg(QString::fromStdString(referenceImageError)));
+        }
         emit progressChanged(
             QStringLiteral("多视一致性：帧 %1/%2，修复内部缺口")
                 .arg(i + 1)
@@ -6424,8 +6379,7 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                 &source_inverse_depth_sum,
                 &source_inverse_depth_squared_sum,
                 &camI,
-                i >= 0 && i < static_cast<int>(_grayCache.size())
-                    ? &_grayCache[static_cast<std::size_t>(i)] : nullptr,
+                referenceGray,
                 &anchored_interpolation_mask,
                 rowWorkers,
                 &_cancelled);
@@ -6651,7 +6605,7 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
     {
         return;
     }
-    if (static_cast<int>(_grayCache.size()) != view_count)
+    if (!_imageCache)
     {
         LOG_WARN("[MVS][残余重估] 图像缓存不可用，跳过一致性后局部重估");
         return;
@@ -6711,10 +6665,21 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
         PendingResidualRecovery &recovery =
             pending[static_cast<std::size_t>(frame_index)];
         if (!frame.eligibleForConsistencyCheck() || !frame.depthMap ||
-            frame.depthMap->empty() ||
-            _grayCache[static_cast<std::size_t>(frame_index)].empty())
+            frame.depthMap->empty())
         {
             recovery.stats.skippedReason = QStringLiteral("frame_unavailable");
+            return;
+        }
+        std::string referenceImageError;
+        MvsImageCache::ImageLease referenceImageLease = acquireImageFrame(
+            frame_index, &referenceImageError);
+        if (!referenceImageLease)
+        {
+            recovery.stats.skippedReason = QStringLiteral("reference_image_unavailable");
+            LOG_WARN(QStringLiteral(
+                         "[MVS][帧 %1][残余重估] 参考影像不可用：%2")
+                         .arg(frame_index)
+                         .arg(QString::fromStdString(referenceImageError)));
             return;
         }
         const Camera reference_camera = frame.cameraModel.isValid()
@@ -6749,12 +6714,25 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
         std::vector<cv::Mat> source_images;
         std::vector<Camera> source_cameras;
         std::vector<cv::Mat> source_masks;
+        std::vector<MvsImageCache::ImageLease> sourceImageLeases;
+        sourceImageLeases.reserve(source_indices.size());
         for (const int source_index : source_indices)
         {
             if (source_index < 0 || source_index >= view_count ||
-                frozen_depths[static_cast<std::size_t>(source_index)].empty() ||
-                _grayCache[static_cast<std::size_t>(source_index)].empty())
+                frozen_depths[static_cast<std::size_t>(source_index)].empty())
             {
+                continue;
+            }
+            std::string sourceImageError;
+            MvsImageCache::ImageLease sourceImageLease = acquireImageFrame(
+                source_index, &sourceImageError);
+            if (!sourceImageLease)
+            {
+                LOG_WARN(QStringLiteral(
+                             "[MVS][帧 %1][残余重估] 源影像 %2 不可用：%3")
+                             .arg(frame_index)
+                             .arg(source_index)
+                             .arg(QString::fromStdString(sourceImageError)));
                 continue;
             }
             const Camera source_camera =
@@ -6772,14 +6750,14 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
                 &_cancelled));
             source_sector_ids.push_back(cameraBaselineSector(
                 reference_camera, source_camera));
-            source_images.push_back(
-                _grayCache[static_cast<std::size_t>(source_index)]);
+            source_images.push_back(sourceImageLease->preparedGray);
             source_cameras.push_back(source_camera);
             source_masks.push_back(
                 _depthFrames[source_index].supportRegionMask &&
                     !_depthFrames[source_index].supportRegionMask->empty()
                 ? *_depthFrames[source_index].supportRegionMask
                 : cv::Mat(source_images.back().size(), CV_8UC1, cv::Scalar(255)));
+            sourceImageLeases.push_back(std::move(sourceImageLease));
         }
         const DepthResidualReestimationTarget target =
             buildDepthResidualReestimationTarget(
@@ -6866,7 +6844,7 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
             if (estimatePatchMatchWithAdaptiveCuda(
                     "post-consistency residual PatchMatch",
                     frame_index,
-                    _grayCache[static_cast<std::size_t>(frame_index)],
+                    referenceImageLease->preparedGray,
                     group_images,
                     reference_camera,
                     group_cameras,
@@ -7128,6 +7106,21 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             LOG_WARN(QStringLiteral("[MVS] %1").arg(message));
             emit errorOccurred(message);
             return false;
+        }
+
+        std::string referenceImageError;
+        MvsImageCache::ImageLease referenceImageLease = acquireImageFrame(
+            frame_index, &referenceImageError);
+        const cv::Mat *referenceGray = referenceImageLease
+            ? &referenceImageLease->preparedGray
+            : nullptr;
+        if (!referenceImageLease)
+        {
+            LOG_WARN(QStringLiteral(
+                         "[MVS][帧 %1][流式一致性] 参考影像不可用，"
+                         "跳过影像引导修复：%2")
+                         .arg(frame_index)
+                         .arg(QString::fromStdString(referenceImageError)));
         }
 
         cv::Mat filtered_depth = reference->depth.clone();
@@ -7430,8 +7423,7 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 &source_inverse_depth_sum,
                 &source_inverse_depth_squared_sum,
                 &reference_camera,
-                frame_index >= 0 && frame_index < static_cast<int>(_grayCache.size())
-                    ? &_grayCache[static_cast<std::size_t>(frame_index)] : nullptr,
+                referenceGray,
                 &anchored_interpolation_mask,
                 row_workers,
                 &_cancelled);
@@ -7520,13 +7512,15 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
         cv::Mat residual_reestimated_mask;
         if (_config.enablePostConsistencyResidualReestimation &&
             _effectiveSceneProfile == MvsSceneProfile::OrbitalObject &&
-            static_cast<int>(_grayCache.size()) == view_count)
+            referenceImageLease)
         {
             std::vector<cv::Mat> residual_projected_sources;
             std::vector<int> residual_sector_ids;
             std::vector<cv::Mat> residual_source_images;
             std::vector<Camera> residual_source_cameras;
             std::vector<cv::Mat> residual_source_masks;
+            std::vector<MvsImageCache::ImageLease> residualSourceImageLeases;
+            residualSourceImageLeases.reserve(repair_source_indices.size());
             for (int source_ordinal = 0;
                  source_ordinal < static_cast<int>(projected_sources.size());
                  ++source_ordinal)
@@ -7536,9 +7530,20 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 const cv::Mat &projected = projected_sources[
                     static_cast<std::size_t>(source_ordinal)];
                 if (projected.empty() || source_index < 0 ||
-                    source_index >= view_count ||
-                    _grayCache[static_cast<std::size_t>(source_index)].empty())
+                    source_index >= view_count)
                 {
+                    continue;
+                }
+                std::string sourceImageError;
+                MvsImageCache::ImageLease sourceImageLease = acquireImageFrame(
+                    source_index, &sourceImageError);
+                if (!sourceImageLease)
+                {
+                    LOG_WARN(QStringLiteral(
+                                 "[MVS][帧 %1][流式残余重估] 源影像 %2 不可用：%3")
+                                 .arg(frame_index)
+                                 .arg(source_index)
+                                 .arg(QString::fromStdString(sourceImageError)));
                     continue;
                 }
                 const Camera source_camera =
@@ -7548,8 +7553,7 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 residual_projected_sources.push_back(projected);
                 residual_sector_ids.push_back(cameraBaselineSector(
                     reference_camera, source_camera));
-                residual_source_images.push_back(
-                    _grayCache[static_cast<std::size_t>(source_index)]);
+                residual_source_images.push_back(sourceImageLease->preparedGray);
                 residual_source_cameras.push_back(source_camera);
                 residual_source_masks.push_back(
                     _depthFrames[source_index].supportRegionMask &&
@@ -7559,6 +7563,7 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                           residual_source_images.back().size(),
                           CV_8UC1,
                           cv::Scalar(255)));
+                residualSourceImageLeases.push_back(std::move(sourceImageLease));
             }
             DepthResidualReestimationOptions residual_options;
             residual_options.maximumLayerInverseDepthRelativeSpread =
@@ -7654,7 +7659,7 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                     if (estimatePatchMatchWithAdaptiveCuda(
                             "streaming post-consistency residual PatchMatch",
                             frame_index,
-                            _grayCache[static_cast<std::size_t>(frame_index)],
+                            referenceImageLease->preparedGray,
                             group_images,
                             reference_camera,
                             group_cameras,
@@ -9494,11 +9499,7 @@ void DepthMapGenerator::emitFinishedOnce(bool success)
 
 void DepthMapGenerator::clearRuntimeCachesAfterFailure()
 {
-    _grayCache.clear();
-    _mvsPreparedGrayCache.clear();
-    _mvsPreparedCameras.clear();
-    _validRegionMasks.clear();
-    _projectMaskLoaded.clear();
+    _imageCache.reset();
     clearFrameCaches();
     releaseStoredDepthFramePixelStorage(_depthFrames);
 
@@ -9535,6 +9536,11 @@ void DepthMapGenerator::runInBackground()
         [this](const QString &message)
         {
             clearRuntimeCachesAfterFailure();
+            if (_cancelled.load(std::memory_order_relaxed))
+            {
+                emitFinishedOnce(false);
+                return;
+            }
             LOG_ERROR(QStringLiteral("[MVS] %1").arg(message));
             emit errorOccurred(message);
             emitFinishedOnce(false);
@@ -9822,14 +9828,194 @@ void DepthMapGenerator::runInBackgroundImpl()
     LOG_INFO(QStringLiteral("[MVS] %1").arg(backend_message));
     emit progressChanged(backend_message, 0.0f);
 
+    emit progressChanged(
+        QStringLiteral("读取 %1 张影像头部并规划内存...").arg(NV),
+        0.0f);
+    QString imagePlanningError;
+    if (!probeImageMetadata(&imagePlanningError))
+    {
+        if (!_cancelled.load())
+        {
+            LOG_ERROR(QStringLiteral("[MVS] %1").arg(imagePlanningError));
+            emit errorOccurred(imagePlanningError);
+        }
+        emitFinishedOnce(false);
+        return;
+    }
+
+    const SystemMemorySnapshot initialMemory = querySystemMemorySnapshot();
+    const DepthMemoryPolicyDecision initialMemoryDecision = evaluateDepthMemoryPolicy(
+        _views, _config, _effectiveSceneProfile, initialMemory);
+    const uint64_t largestFrameBytes = largestDepthFrameBytes(_views);
+    const int plannedMaximumFrameWorkers = std::min(
+        std::max(4, static_cast<int>(physicalAcceleratorWorkers.size())),
+        std::max(1, NV));
+    const int plannedPhysicalCudaWorkers = static_cast<int>(std::count_if(
+        physicalAcceleratorWorkers.begin(),
+        physicalAcceleratorWorkers.end(),
+        [](const DepthComputeWorker &worker)
+        {
+            return worker.backend == DepthComputeBackend::Cuda;
+        }));
+    const int plannedPhysicalOpenClWorkers = static_cast<int>(std::count_if(
+        physicalAcceleratorWorkers.begin(),
+        physicalAcceleratorWorkers.end(),
+        [](const DepthComputeWorker &worker)
+        {
+            return worker.backend == DepthComputeBackend::OpenCl;
+        }));
+    const int plannedAcceleratorHostSlots =
+        (plannedPhysicalCudaWorkers > 0
+             ? std::max(plannedPhysicalCudaWorkers, _config.gpuFrameWorkerCount)
+             : 0) +
+        (plannedPhysicalOpenClWorkers > 0
+             ? std::max(plannedPhysicalOpenClWorkers, _config.gpuFrameWorkerCount)
+             : 0);
+    const int plannedFrameWorkerCount = effectiveBackend == DepthComputeBackend::Cpu
+        ? std::clamp(
+              std::max(1, _config.cpuFrameWorkerCount),
+              1,
+              plannedMaximumFrameWorkers)
+        : std::clamp(
+              plannedAcceleratorHostSlots,
+              1,
+              plannedMaximumFrameWorkers);
+    const std::size_t plannedConcurrentWorkers = static_cast<std::size_t>(
+        std::max(plannedFrameWorkerCount,
+                 _config.enablePostConsistencyResidualReestimation
+                     ? std::min(2, std::max(1, NV))
+                     : 1));
+    constexpr uint64_t kPlannedMaximumResidentSaveTasks = 6;
+    const uint64_t plannedSaveQueueBytes = saturatingMultiplyBytes(
+        estimatedSaveQueueProducerBytes(largestFrameBytes),
+        kPlannedMaximumResidentSaveTasks);
+    const uint64_t plannedBackendStagingBytes = saturatingMultiplyBytes(
+        initialMemoryDecision.estimate.transientFrameBytes,
+        static_cast<uint64_t>(std::max<std::size_t>(
+            2, plannedConcurrentWorkers)));
+    const std::vector<MvsImageMemoryFrame> plannedImageFrames =
+        imageMemoryFrames(_views);
+    const std::size_t plannedRequiredVisibilityPairCount = static_cast<std::size_t>(
+        std::count_if(
+            _config.sourcePairQualities.begin(),
+            _config.sourcePairQualities.end(),
+            [](const MvsSourcePairQuality &quality)
+            {
+                return quality.verified;
+            }));
+    const MvsVisibilityMemoryEstimate plannedVisibilityMemory =
+        estimateMvsVisibilityGraphMemory(
+            _views.size(),
+            _sparse.points.size(),
+            kMvsVisibilityFullPairViewLimit,
+            kMvsVisibilityMaximumSampledPeersPerView,
+            plannedRequiredVisibilityPairCount);
+    const MvsPipelineMemoryPolicyDecision pipelineMemoryDecision =
+        decideMvsPipelineMemoryPolicy(
+            plannedImageFrames,
+            initialMemoryDecision.estimate,
+            _config.adaptiveDepthCacheMemory,
+            maximumConsistencySourceViews(_config),
+            plannedConcurrentWorkers,
+            plannedSaveQueueBytes,
+            plannedBackendStagingBytes,
+            initialMemory.valid ? initialMemory.totalPhysicalBytes : 0,
+            initialMemory.valid ? initialMemory.availablePhysicalBytes : 0,
+            _config.maxDepthCacheRamFraction,
+            _config.minFreeRamBytes,
+            plannedVisibilityMemory);
+    const std::string_view imageStrategy = mvsImageCacheStrategyName(
+        pipelineMemoryDecision.imageStrategy);
+    _config.resolvedImageCacheStrategy.assign(
+        imageStrategy.data(), imageStrategy.size());
+    _config.resolvedImageCacheCapacity = static_cast<int>(
+        pipelineMemoryDecision.imageCacheCapacity);
+
+    if (!initializeImageProvider(pipelineMemoryDecision, &imagePlanningError))
+    {
+        if (_cancelled.load(std::memory_order_relaxed))
+        {
+            _imageCache.reset();
+            clearFrameCaches();
+            emitFinishedOnce(false);
+            return;
+        }
+        LOG_ERROR(QStringLiteral("[MVS] %1").arg(imagePlanningError));
+        emit errorOccurred(imagePlanningError);
+        emitFinishedOnce(false);
+        return;
+    }
+    LOG_INFO(QStringLiteral(
+                 "[MVS][内存规划] strategy=%1 capacity=%2/%3 required=%4 GiB "
+                 "available=%5 GiB gray=%6 GiB prepared=%7 GiB mask=%8 GiB "
+                 "depth=%9 GiB save_queue=%10 GiB backend_staging=%11 GiB "
+                 "visibility=%12 GiB visibility_bitset=%13 GiB "
+                 "visibility_indices=%14 GiB visibility_pairs=%15 GiB "
+                 "visibility_nominated=%16 GiB visibility_adjacency=%17 GiB "
+                 "visibility_pair_bound=%18 saturated=%19")
+                 .arg(QString::fromLatin1(
+                     imageStrategy.data(), static_cast<int>(imageStrategy.size())))
+                 .arg(pipelineMemoryDecision.imageCacheCapacity)
+                 .arg(NV)
+                 .arg(bytesToGiB(pipelineMemoryDecision.requiredBytes), 0, 'f', 2)
+                 .arg(bytesToGiB(pipelineMemoryDecision.availableBytes), 0, 'f', 2)
+                 .arg(bytesToGiB(pipelineMemoryDecision.estimate.grayBytes), 0, 'f', 2)
+                 .arg(bytesToGiB(pipelineMemoryDecision.estimate.preparedBytes), 0, 'f', 2)
+                 .arg(bytesToGiB(pipelineMemoryDecision.estimate.maskBytes), 0, 'f', 2)
+                 .arg(bytesToGiB(
+                     pipelineMemoryDecision.retainAllDepthFrames
+                         ? pipelineMemoryDecision.estimate.depthResidentBytes
+                         : pipelineMemoryDecision.estimate.depthStreamingBytes),
+                      0,
+                      'f',
+                      2)
+                 .arg(bytesToGiB(pipelineMemoryDecision.estimate.saveQueueBytes), 0, 'f', 2)
+                 .arg(bytesToGiB(pipelineMemoryDecision.estimate.backendStagingBytes), 0, 'f', 2)
+                 .arg(bytesToGiB(
+                     pipelineMemoryDecision.estimate.visibility.totalBytes), 0, 'f', 2)
+                 .arg(bytesToGiB(
+                     pipelineMemoryDecision.estimate.visibility.visibilityBitsetBytes), 0, 'f', 2)
+                 .arg(bytesToGiB(
+                     pipelineMemoryDecision.estimate.visibility.visibleIndexBytes), 0, 'f', 2)
+                 .arg(bytesToGiB(
+                     pipelineMemoryDecision.estimate.visibility.pairBytes), 0, 'f', 2)
+                 .arg(bytesToGiB(
+                     pipelineMemoryDecision.estimate.visibility.nominatedPeerBytes), 0, 'f', 2)
+                 .arg(bytesToGiB(
+                     pipelineMemoryDecision.estimate.visibility.adjacencyBytes), 0, 'f', 2)
+                 .arg(pipelineMemoryDecision.estimate.visibility.candidatePairUpperBound)
+                 .arg(pipelineMemoryDecision.estimate.visibility.saturated
+                          ? QStringLiteral("true")
+                          : QStringLiteral("false")));
+
     initializeWorkspaceManifest();
 
-    // ── 预加载所有图像（一次性磁盘 I/O，后续全从内存读取）────────────────────
-    emit progressChanged(QString("预加载 %1 张图像...").arg(NV), 0.f);
-    preloadImages();
-    refreshViewImageDimensionsFromCache();
+    if (pipelineMemoryDecision.imageStrategy == MvsImageCacheStrategy::Eager)
+    {
+        emit progressChanged(QString("预加载 %1 张图像...").arg(NV), 0.f);
+    }
+    else
+    {
+        emit progressChanged(
+            QStringLiteral("使用有界影像缓存（容量 %1/%2）")
+                .arg(pipelineMemoryDecision.imageCacheCapacity)
+                .arg(NV),
+            0.0f);
+    }
+    if (!preloadImages(&imagePlanningError))
+    {
+        if (!_cancelled.load())
+        {
+            LOG_ERROR(QStringLiteral("[MVS] %1").arg(imagePlanningError));
+            emit errorOccurred(imagePlanningError);
+        }
+        _imageCache.reset();
+        emitFinishedOnce(false);
+        return;
+    }
     if (_cancelled.load())
     {
+        _imageCache.reset();
         clearFrameCaches();
         emitFinishedOnce(false);
         return;
@@ -9839,6 +10025,7 @@ void DepthMapGenerator::runInBackgroundImpl()
     prepareFrameCaches();
     if (_cancelled.load())
     {
+        _imageCache.reset();
         clearFrameCaches();
         emitFinishedOnce(false);
         return;
@@ -9846,12 +10033,8 @@ void DepthMapGenerator::runInBackgroundImpl()
 
     _depthFrames.resize(NV);
     const bool savePreviewPng = !_outputDir.empty();
-    const SystemMemorySnapshot initialMemory = querySystemMemorySnapshot();
-    const DepthMemoryPolicyDecision initialMemoryDecision = evaluateDepthMemoryPolicy(
-        _views, _config, _effectiveSceneProfile, initialMemory);
-    const uint64_t largestFrameBytes = largestDepthFrameBytes(_views);
-    const bool retainDepthFrames = !_config.adaptiveDepthCacheMemory ||
-                                   initialMemoryDecision.retainAllFrames;
+    const bool retainDepthFrames =
+        pipelineMemoryDecision.retainAllDepthFrames;
     const QString memoryPolicyReason = _config.adaptiveDepthCacheMemory
         ? depthMemoryPolicyReason(initialMemoryDecision, initialMemory)
         : QStringLiteral("adaptiveDepthCacheMemory=false，按配置保留全部深度帧");
@@ -9879,6 +10062,7 @@ void DepthMapGenerator::runInBackgroundImpl()
         {
             emit errorOccurred(QStringLiteral("无法创建深度一致性缓存目录：%1")
                                    .arg(QString::fromStdString(_consistencyDepthDirectory)));
+            _imageCache.reset();
             clearFrameCaches();
             emitFinishedOnce(false);
             return;
@@ -9952,24 +10136,11 @@ void DepthMapGenerator::runInBackgroundImpl()
             continue;
         }
 
-        float resolutionScore = 0.f;
-        if (i >= 0 && i < static_cast<int>(_grayCache.size()) && !_grayCache[i].empty())
-        {
-            resolutionScore = static_cast<float>(_grayCache[i].cols * _grayCache[i].rows);
-        }
-
-        float contentRatio = 0.5f;
-        if (i >= 0 && i < static_cast<int>(_validRegionMasks.size()) &&
-            !_validRegionMasks[static_cast<size_t>(i)].empty())
-        {
-            const cv::Mat &valid_region_mask = _validRegionMasks[static_cast<size_t>(i)];
-            const int totalPx = valid_region_mask.rows * valid_region_mask.cols;
-            if (totalPx > 0)
-            {
-                contentRatio = static_cast<float>(cv::countNonZero(valid_region_mask)) /
-                               static_cast<float>(totalPx);
-            }
-        }
+        const CameraView &priorityView = _views[static_cast<std::size_t>(i)];
+        const float resolutionScore = static_cast<float>(
+            static_cast<double>(priorityView.imageWidth) *
+            static_cast<double>(priorityView.imageHeight));
+        constexpr float contentRatio = 0.5f;
 
         const int leftNeighbors = i;
         const int rightNeighbors = (NV - 1) - i;
@@ -10008,6 +10179,7 @@ void DepthMapGenerator::runInBackgroundImpl()
                                     .arg(backendName);
         LOG_ERROR(QStringLiteral("[MVS] %1").arg(message));
         emit errorOccurred(message);
+        _imageCache.reset();
         clearFrameCaches();
         emitFinishedOnce(false);
         return;
@@ -10170,6 +10342,7 @@ void DepthMapGenerator::runInBackgroundImpl()
                                     .arg(transientReserveFrameWorkers);
         LOG_ERROR(QStringLiteral("[MVS] %1").arg(message));
         emit errorOccurred(message);
+        _imageCache.reset();
         clearFrameCaches();
         emitFinishedOnce(false);
         return;
@@ -10686,16 +10859,7 @@ void DepthMapGenerator::runInBackgroundImpl()
     {
         saveQueue.cancel();
         saveQueue.stop();
-        _grayCache.clear();
-        _grayCache.shrink_to_fit();
-        _mvsPreparedGrayCache.clear();
-        _mvsPreparedGrayCache.shrink_to_fit();
-        _mvsPreparedCameras.clear();
-        _mvsPreparedCameras.shrink_to_fit();
-        _validRegionMasks.clear();
-        _validRegionMasks.shrink_to_fit();
-        _projectMaskLoaded.clear();
-        _projectMaskLoaded.shrink_to_fit();
+        _imageCache.reset();
         clearFrameCaches();
         emitFinishedOnce(false);
         return;
@@ -10705,6 +10869,7 @@ void DepthMapGenerator::runInBackgroundImpl()
     {
         saveQueue.cancel();
         saveQueue.stop();
+        _imageCache.reset();
         clearFrameCaches();
         emitFinishedOnce(false);
         return;
@@ -10734,17 +10899,6 @@ void DepthMapGenerator::runInBackgroundImpl()
         }
     }
 
-    // 释放图像缓存（深度估计完毕后不再需要）
-    _grayCache.clear();
-    _grayCache.shrink_to_fit();
-    _mvsPreparedGrayCache.clear();
-    _mvsPreparedGrayCache.shrink_to_fit();
-    _mvsPreparedCameras.clear();
-    _mvsPreparedCameras.shrink_to_fit();
-    _validRegionMasks.clear();
-    _validRegionMasks.shrink_to_fit();
-    _projectMaskLoaded.clear();
-    _projectMaskLoaded.shrink_to_fit();
     clearFrameCaches();
 
     // ── 阶段 1.5：双视图深度图左右一致性检查 ────────────────────────────────
@@ -10757,6 +10911,7 @@ void DepthMapGenerator::runInBackgroundImpl()
         {
             saveQueue.cancel();
             saveQueue.stop();
+            _imageCache.reset();
             emitFinishedOnce(false);
             return;
         }
@@ -10766,28 +10921,14 @@ void DepthMapGenerator::runInBackgroundImpl()
     {
         emit progressChanged(QStringLiteral("准备流式深度一致性检查..."),
                              static_cast<float>(NV) / (NV + 3));
-        if (_config.enablePostConsistencyResidualReestimation &&
-            _effectiveSceneProfile == MvsSceneProfile::OrbitalObject)
-        {
-            preloadImages();
-        }
         if (!crossCheckDepthConsistencyStreaming())
         {
             saveQueue.cancel();
             saveQueue.stop();
+            _imageCache.reset();
             emitFinishedOnce(false);
             return;
         }
-        _grayCache.clear();
-        _grayCache.shrink_to_fit();
-        _mvsPreparedGrayCache.clear();
-        _mvsPreparedGrayCache.shrink_to_fit();
-        _mvsPreparedCameras.clear();
-        _mvsPreparedCameras.shrink_to_fit();
-        _validRegionMasks.clear();
-        _validRegionMasks.shrink_to_fit();
-        _projectMaskLoaded.clear();
-        _projectMaskLoaded.shrink_to_fit();
     }
 
     // Experimental, default-off stage. It only emits derived camera candidates
@@ -10802,6 +10943,7 @@ void DepthMapGenerator::runInBackgroundImpl()
             {
                 saveQueue.cancel();
                 saveQueue.stop();
+                _imageCache.reset();
                 emitFinishedOnce(false);
                 return;
             }
@@ -10891,6 +11033,7 @@ void DepthMapGenerator::runInBackgroundImpl()
             {
                 saveQueue.cancel();
                 saveQueue.stop();
+                _imageCache.reset();
                 emitFinishedOnce(false);
                 return;
             }
@@ -10902,22 +11045,12 @@ void DepthMapGenerator::runInBackgroundImpl()
             emit progressChanged(
                 QStringLiteral("最终残余空洞局部重估..."),
                 static_cast<float>(NV + 1) / (NV + 3));
-            preloadImages();
             recoverResidualDepthAfterConsistency();
-            _grayCache.clear();
-            _grayCache.shrink_to_fit();
-            _mvsPreparedGrayCache.clear();
-            _mvsPreparedGrayCache.shrink_to_fit();
-            _mvsPreparedCameras.clear();
-            _mvsPreparedCameras.shrink_to_fit();
-            _validRegionMasks.clear();
-            _validRegionMasks.shrink_to_fit();
-            _projectMaskLoaded.clear();
-            _projectMaskLoaded.shrink_to_fit();
             if (_cancelled.load())
             {
                 saveQueue.cancel();
                 saveQueue.stop();
+                _imageCache.reset();
                 emitFinishedOnce(false);
                 return;
             }
@@ -10988,6 +11121,7 @@ void DepthMapGenerator::runInBackgroundImpl()
         {
             saveQueue.cancel();
             saveQueue.stop();
+            _imageCache.reset();
             emitFinishedOnce(false);
             return;
         }
@@ -10996,6 +11130,7 @@ void DepthMapGenerator::runInBackgroundImpl()
             anyFailure = true;
         }
     }
+    _imageCache.reset();
     saveQueue.stop();
 
     if (_cancelled.load())

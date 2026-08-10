@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.25)
 
 #==============================================================================
 # PlaScan GUI 模块
@@ -145,6 +145,10 @@ endif()
 
 if(TARGET mvs)
   target_link_libraries(gui_project PRIVATE mvs)
+endif()
+
+if(TARGET meshing)
+  target_link_libraries(gui_project PRIVATE meshing)
 endif()
 
 if(TARGET aerial_triangulation)

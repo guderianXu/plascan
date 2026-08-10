@@ -8,20 +8,27 @@ include_guard(GLOBAL)
 # ==============================================================================
 
 # ── Qt6 ───────────────────────────────────────────────────────────────────────
-# 合并所有模块所需组件（Network 用于异步下载可选模型资源）。
-set(PLASCAN_QT_COMPONENTS
-  Core Gui Widgets Network Concurrent ShaderTools ShaderToolsTools)
-if(WIN32)
+# 核心库和 CLI 只依赖公开 Qt 组件；GUI 关闭时不触发 Widgets、
+# ShaderTools 或私有 Gui 模块的发现。
+set(PLASCAN_QT_COMPONENTS Core Gui Network Concurrent)
+if(PLASCAN_BUILD_GUI)
+  list(APPEND PLASCAN_QT_COMPONENTS Widgets ShaderTools ShaderToolsTools)
+  if(BUILD_TESTS AND PLASCAN_BUILD_GUI_TESTS)
+    list(APPEND PLASCAN_QT_COMPONENTS Test)
+  endif()
+endif()
+if(WIN32 AND PLASCAN_BUILD_GUI)
   # vcpkg exposes private Qt modules as explicit Qt6 components.
   list(APPEND PLASCAN_QT_COMPONENTS GuiPrivate)
 endif()
+list(REMOVE_DUPLICATES PLASCAN_QT_COMPONENTS)
 find_package(Qt6 6.7 REQUIRED COMPONENTS ${PLASCAN_QT_COMPONENTS})
-if(NOT TARGET Qt6::GuiPrivate)
+if(PLASCAN_BUILD_GUI AND NOT TARGET Qt6::GuiPrivate)
   # Qt's vcpkg package exports private modules as standalone package configs on
   # Linux instead of loading them with the public Qt6 component set.
   find_package(Qt6GuiPrivate ${Qt6_VERSION} CONFIG QUIET)
 endif()
-if(NOT TARGET Qt6::GuiPrivate)
+if(PLASCAN_BUILD_GUI AND NOT TARGET Qt6::GuiPrivate)
   message(FATAL_ERROR
     "PlaScan requires the Qt GuiPrivate target. Install the Qt base private development package.")
 endif()

@@ -4102,11 +4102,10 @@ TEST(CodeStyleTest, DepthMapGeneratorUsesLowerCamelPrivateMemberNames)
         QStringLiteral("std::string _outputDir;"),
         QStringLiteral("std::vector<DepthFrameResult> _depthFrames;"),
         QStringLiteral("std::vector<uint8_t> _skipFrameMask;"),
-        QStringLiteral("std::vector<cv::Mat> _grayCache;"),
-        QStringLiteral("std::vector<cv::Mat> _validRegionMasks;"),
+        QStringLiteral("std::unique_ptr<MvsImageCache> _imageCache;"),
         QStringLiteral("std::vector<FrameMvsCache> _frameCaches;"),
         QStringLiteral("std::vector<uint64_t> _visibilityBits;"),
-        QStringLiteral("std::vector<int> _pairCommonCounts;"),
+        QStringLiteral("std::vector<std::vector<MvsVisibilityNeighbor>> _visibilityAdjacency;"),
         QStringLiteral("size_t _visibilityWordCount = 0;"),
         QStringLiteral("bool _frameCachesReady = false;"),
         QStringLiteral("QString _workspaceManifestPath;"),
@@ -4129,11 +4128,10 @@ TEST(CodeStyleTest, DepthMapGeneratorUsesLowerCamelPrivateMemberNames)
         QStringLiteral("m_outputDir"),
         QStringLiteral("m_depthFrames"),
         QStringLiteral("m_skipFrameMask"),
-        QStringLiteral("m_grayCache"),
-        QStringLiteral("m_contentMasks"),
+        QStringLiteral("m_imageCache"),
         QStringLiteral("m_frameCaches"),
         QStringLiteral("m_visibilityBits"),
-        QStringLiteral("m_pairCommonCounts"),
+        QStringLiteral("m_visibilityAdjacency"),
         QStringLiteral("m_visibilityWordCount"),
         QStringLiteral("m_frameCachesReady"),
         QStringLiteral("m_workspaceManifestPath"),
@@ -12228,13 +12226,21 @@ TEST(ProjectResourceCleanupServiceTest, DeletesAllDepthLevelsWithoutDeletingSour
     ASSERT_TRUE(projectData.createProject(projectPath, QStringLiteral("depth_cleanup")));
 
     const QString sourcePhoto = tempDir.filePath(QStringLiteral("source.png"));
-    const QString finalDepth = tempDir.filePath(QStringLiteral("depth_0.bin"));
-    const QString finalMask = tempDir.filePath(QStringLiteral("depth_0_mask.png"));
-    const QString level2Depth = tempDir.filePath(QStringLiteral("depth_0_level_2.bin"));
-    const QString level2Support = tempDir.filePath(QStringLiteral("depth_0_level_2_support.bin"));
-    const QString level2Uncertainty = tempDir.filePath(QStringLiteral("depth_0_level_2_uncertainty.bin"));
-    const QString level2Mask = tempDir.filePath(QStringLiteral("depth_0_level_2_mask.png"));
-    const QString level2Preview = tempDir.filePath(QStringLiteral("depth_0_level_2.png"));
+    const QString managedOutput = QDir(
+        xjw::common::project::ProjectIO::projectRootFromPlascan(projectPath))
+        .filePath(QStringLiteral("reconstruction/mvs/depth_cleanup"));
+    ASSERT_TRUE(QDir().mkpath(managedOutput));
+    const QString finalDepth = QDir(managedOutput).filePath(QStringLiteral("depth_0.bin"));
+    const QString finalMask = QDir(managedOutput).filePath(QStringLiteral("depth_0_mask.png"));
+    const QString level2Depth = QDir(managedOutput).filePath(QStringLiteral("depth_0_level_2.bin"));
+    const QString level2Support = QDir(managedOutput).filePath(
+        QStringLiteral("depth_0_level_2_support.bin"));
+    const QString level2Uncertainty = QDir(managedOutput).filePath(
+        QStringLiteral("depth_0_level_2_uncertainty.bin"));
+    const QString level2Mask = QDir(managedOutput).filePath(
+        QStringLiteral("depth_0_level_2_mask.png"));
+    const QString level2Preview = QDir(managedOutput).filePath(
+        QStringLiteral("depth_0_level_2.png"));
     const QStringList geometryEvidenceKeys{
         QStringLiteral("raw_geometry_support_path"),
         QStringLiteral("raw_geometry_source_mask_path"),
@@ -12256,9 +12262,9 @@ TEST(ProjectResourceCleanupServiceTest, DeletesAllDepthLevelsWithoutDeletingSour
         level2Preview};
     for (const QString &key : geometryEvidenceKeys)
     {
-        const QString finalPath = tempDir.filePath(
+        const QString finalPath = QDir(managedOutput).filePath(
             QStringLiteral("final_%1.bin").arg(key));
-        const QString level2Path = tempDir.filePath(
+        const QString level2Path = QDir(managedOutput).filePath(
             QStringLiteral("level_2_%1.bin").arg(key));
         finalGeometryEvidence.insert(key, finalPath);
         level2GeometryEvidence.insert(key, level2Path);
@@ -12331,6 +12337,61 @@ TEST(TiePointResultIntegrationTest, ProjectManagerRoutesTiePointDeletionToDedica
     ASSERT_GT(methodEnd, methodStart);
     const QString method = source.mid(methodStart, methodEnd - methodStart);
     EXPECT_TRUE(method.contains(QStringLiteral("ProjectTiePointResultService::deleteAll")));
+    EXPECT_TRUE(method.contains(QStringLiteral("prepareGeneratedDataCleanup")));
+    EXPECT_TRUE(method.contains(QStringLiteral("runGuardedWithOutcome")));
+    EXPECT_TRUE(method.contains(QStringLiteral("executePreparedCleanup")));
+    EXPECT_TRUE(method.contains(QStringLiteral("finalizePreparedCleanup")));
+    EXPECT_TRUE(method.contains(QStringLiteral("_resourceCleanupFuture =")));
+    EXPECT_TRUE(method.contains(QStringLiteral("requestWidget->setEnabled(false)")));
+    EXPECT_TRUE(method.contains(QStringLiteral(
+        "backgroundTaskProgressChanged(taskId, 0, 0)")));
+    EXPECT_FALSE(method.contains(QStringLiteral(
+        "cleanupGeneratedData(_projectData")));
+    const int finalizeIndex = method.lastIndexOf(
+        QStringLiteral("finalizePreparedCleanup"));
+    const int unlockIndex = method.indexOf(
+        QStringLiteral("_resourceCleanupRunning = false"),
+        finalizeIndex);
+    EXPECT_GE(finalizeIndex, 0);
+    EXPECT_GT(unlockIndex, finalizeIndex);
+}
+
+TEST(TiePointResultIntegrationTest,
+     ResourceCleanupGuardsProjectLockLifecycleAndManagerDestruction)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    const QString header = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectManager.h"));
+    const QString mainWindow = readProjectSourceFile(
+        QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(mainWindow.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("QFuture<void> _resourceCleanupFuture")));
+    EXPECT_TRUE(source.contains(QStringLiteral(
+        "_resourceCleanupFuture.waitForFinished()")));
+    EXPECT_TRUE(mainWindow.contains(QStringLiteral(
+        "_projectManager->waitForResourceCleanup()")));
+    EXPECT_GE(source.count(QStringLiteral(
+                  "rejectLifecycleChangeDuringResourceCleanup(")),
+              8);
+    for (const QString &operation : {
+             QStringLiteral("新建项目"),
+             QStringLiteral("打开项目"),
+             QStringLiteral("保存项目"),
+             QStringLiteral("关闭项目"),
+             QStringLiteral("新建 Chunk"),
+             QStringLiteral("重命名 Chunk"),
+             QStringLiteral("删除 Chunk"),
+             QStringLiteral("切换 Chunk")
+         })
+    {
+        EXPECT_TRUE(source.contains(
+            QStringLiteral("QStringLiteral(\"%1\")").arg(operation)))
+            << qPrintable(operation);
+    }
 }
 
 TEST(ProjectMetadataOperationsTest, ResolveLatestDenseCloudPrefersCleanedProductionCloudForMeshing)

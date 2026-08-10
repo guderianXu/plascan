@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -87,4 +88,33 @@ TEST(FeaturePreparationQueueTest, StopsPreparingAfterCancellation)
     }
 
     EXPECT_LT(preparedCount.load(), 40);
+}
+
+TEST(FeaturePreparationQueueTest, ConvertsPreparationExceptionToOrderedError)
+{
+    std::atomic_bool cancel{false};
+    xjw::matchphotos::FeaturePreparationQueue queue(
+        makeRequests(2),
+        1,
+        &cancel,
+        [](const xjw::matchphotos::FeaturePreparationRequest &request)
+        {
+            if (request.index == 0)
+            {
+                throw std::runtime_error("injected preparation failure");
+            }
+            xjw::matchphotos::PreparedFeatureImage prepared;
+            prepared.index = request.index;
+            return prepared;
+        });
+
+    xjw::matchphotos::PreparedFeatureImage failed;
+    ASSERT_TRUE(queue.take(&failed));
+    EXPECT_EQ(failed.index, 0);
+    EXPECT_EQ(failed.errorMessage,
+              QStringLiteral("injected preparation failure"));
+
+    xjw::matchphotos::PreparedFeatureImage succeeded;
+    ASSERT_TRUE(queue.take(&succeeded));
+    EXPECT_EQ(succeeded.index, 1);
 }

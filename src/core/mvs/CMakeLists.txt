@@ -24,6 +24,7 @@ endif()
 # ── 源文件 ────────────────────────────────────────────────────────────────────
 set(MVS_CXX_SOURCES
     AdaptiveGeometryEvidencePolicy.cpp
+    DenseCloudArtifactValidation.cpp
     DenseCloudRefinementService.cpp
     DenseCloudQualityFilter.cpp
     DepthCompletenessMetrics.cpp
@@ -49,8 +50,12 @@ set(MVS_CXX_SOURCES
     DepthComputeScheduler.cpp
     GpuDeviceLease.cpp
     MvsSourcePlanner.cpp
+    MvsVisibilityGraphBuilder.cpp
     MvsQualityReport.cpp
     MvsSceneClassifier.cpp
+    MvsImageCache.cpp
+    MvsImageFrame.cpp
+    MvsImageMetadataProbe.cpp
     MvsImagePreprocessor.cpp
     MvsWorkspaceManifest.cpp
     MvsWorkspaceReplay.cpp
@@ -75,6 +80,7 @@ set(MVS_CXX_SOURCES
 
 set(MVS_HEADERS
     AdaptiveGeometryEvidencePolicy.h
+    DenseCloudArtifactValidation.h
     DenseCloudRefinementService.h
     DenseCloudQualityFilter.h
     DepthCompletenessMetrics.h
@@ -93,8 +99,11 @@ set(MVS_HEADERS
     DepthPoseRefinementStage.h
     MvsTypes.h
     MvsSourcePlanner.h
+    MvsVisibilityGraphBuilder.h
     MvsQualityReport.h
     MvsSceneClassifier.h
+    MvsImageCache.h
+    MvsImageMetadataProbe.h
     MvsImagePreprocessor.h
     MvsViewSelection.h
     MvsWorkspaceManifest.h
@@ -195,6 +204,7 @@ target_link_libraries(mvs
         plapoint::plapoint
         Qt6::Core
     PRIVATE
+        plascan_common_concurrency
         plascan_common_string_utils
         Qt6::Concurrent
         ${OpenCV_LIBS}
@@ -236,6 +246,22 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/src/core/mvs
         )
         gtest_discover_tests(test_mvs_image_preprocessor)
+
+        add_executable(test_mvs_image_cache
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_image_cache.cpp
+        )
+        set_target_properties(test_mvs_image_cache PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
+        )
+        target_link_libraries(test_mvs_image_cache PRIVATE
+            mvs
+            GTest::gtest_main
+            ${OpenCV_LIBS}
+        )
+        target_include_directories(test_mvs_image_cache PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/core/mvs
+        )
+        gtest_discover_tests(test_mvs_image_cache DISCOVERY_MODE PRE_TEST)
 
         add_executable(test_mvs_depth_pyramid
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_depth_pyramid.cpp
@@ -486,6 +512,18 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/src/core/mvs
         )
         gtest_discover_tests(test_mvs_source_planner)
+
+        add_executable(test_mvs_visibility_graph_builder
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_visibility_graph_builder.cpp
+        )
+        target_link_libraries(test_mvs_visibility_graph_builder PRIVATE
+            mvs
+            GTest::gtest_main
+        )
+        target_include_directories(test_mvs_visibility_graph_builder PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/core/mvs
+        )
+        gtest_discover_tests(test_mvs_visibility_graph_builder)
 
         add_executable(test_dense_cloud_quality_filter
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_dense_cloud_quality_filter.cpp

@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import stat
 import sys
 import tarfile
 import time
@@ -12,7 +14,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
@@ -30,6 +32,8 @@ class Resource:
     size_hint: str = ""
     large: bool = False
     note: str = ""
+    expected_bytes: int = 0
+    expected_sha256: str = ""
 
 
 @dataclass(frozen=True)
@@ -531,10 +535,44 @@ def write_manifest(
         "workflow_tags": list(dataset.workflow_tags),
         "resources": resource_entries,
     }
-    (dataset_dir / "manifest.json").write_text(
+    manifest_path = dataset_dir / "manifest.json"
+    temporary_path = manifest_path.with_suffix(".json.tmp")
+    temporary_path.write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
+    temporary_path.replace(manifest_path)
+
+
+def recorded_resource_contracts(dataset_dir: Path) -> dict[str, tuple[int, str]]:
+    manifest_path = dataset_dir / "manifest.json"
+    if not manifest_path.exists():
+        return {}
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Invalid existing download manifest {manifest_path}: {exc}") from exc
+
+    contracts: dict[str, tuple[int, str]] = {}
+    resources = manifest.get("resources", [])
+    if not isinstance(resources, list):
+        raise RuntimeError(f"Invalid resources list in download manifest: {manifest_path}")
+    for entry in resources:
+        if not isinstance(entry, dict):
+            continue
+        filename = str(entry.get("filename", "")).strip()
+        digest = str(entry.get("sha256", "")).strip().lower()
+        try:
+            size_bytes = int(entry.get("size_bytes", 0))
+        except (TypeError, ValueError):
+            continue
+        if filename and size_bytes >= 0 and len(digest) == 64:
+            try:
+                int(digest, 16)
+            except ValueError:
+                continue
+            contracts[filename] = (size_bytes, digest)
+    return contracts
 
 
 def write_manual_instructions(dataset: Dataset, dataset_dir: Path, entries: list[dict[str, object]]) -> None:
@@ -579,13 +617,45 @@ def parse_content_length(headers: object) -> int:
         return 0
 
     try:
-        return int(value)
+        parsed = int(value)
+        return parsed if parsed >= 0 else 0
     except ValueError:
         return 0
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def validate_resource_file(resource: Resource, path: Path) -> tuple[int, str]:
+    size_bytes = path.stat().st_size
+    digest = sha256_file(path)
+    if resource.expected_bytes > 0 and size_bytes != resource.expected_bytes:
+        raise ValueError(
+            f"Size mismatch for {resource.filename}: expected "
+            f"{resource.expected_bytes}, got {size_bytes}"
+        )
+    expected_sha256 = resource.expected_sha256.strip().lower()
+    if expected_sha256 and digest.lower() != expected_sha256:
+        raise ValueError(
+            f"SHA-256 mismatch for {resource.filename}: expected "
+            f"{expected_sha256}, got {digest}"
+        )
+    return size_bytes, digest
+
+
 def download_url(resource: Resource, output_path: Path, timeout: int, retries: int, overwrite: bool) -> str:
     if output_path.exists() and not overwrite:
+        try:
+            validate_resource_file(resource, output_path)
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(
+                f"Cached resource validation failed for {resource.filename}: {exc}"
+            ) from exc
         print(f"exists: {resource.filename} -> {output_path}", flush=True)
         return "exists"
 
@@ -631,10 +701,16 @@ def download_url(resource: Resource, output_path: Path, timeout: int, retries: i
                             print(f"  {resource.filename}: {format_bytes(downloaded)}", flush=True)
                         last_reported = downloaded
 
+            if total_size > 0 and downloaded != total_size:
+                raise ValueError(
+                    f"Content-Length mismatch for {resource.filename}: "
+                    f"expected {total_size}, got {downloaded}"
+                )
+            validate_resource_file(resource, part_path)
             part_path.replace(output_path)
             print(f"done: {resource.filename} -> {output_path}", flush=True)
             return "downloaded"
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
             last_error = exc
             if part_path.exists():
                 part_path.unlink()
@@ -645,14 +721,40 @@ def download_url(resource: Resource, output_path: Path, timeout: int, retries: i
     raise RuntimeError(f"Failed to download {resource.url}: {last_error}")
 
 
-def safe_extract_tar(archive: Path, destination: Path) -> None:
+def validated_member_path(destination: Path, member_name: str) -> Path:
+    if not member_name or "\0" in member_name:
+        raise RuntimeError("Archive contains an empty or invalid member name")
     destination_resolved = destination.resolve()
+    member_path = (destination / member_name).resolve()
+    if destination_resolved not in [member_path, *member_path.parents]:
+        raise RuntimeError(f"Unsafe archive member path: {member_name}")
+    return member_path
+
+
+def safe_extract_tar(archive: Path, destination: Path) -> None:
     with tarfile.open(archive, "r:*") as tar:
         for member in tar.getmembers():
-            member_path = (destination / member.name).resolve()
-            if destination_resolved not in [member_path, *member_path.parents]:
-                raise RuntimeError(f"Unsafe tar member path: {member.name}")
+            validated_member_path(destination, member.name)
+            if member.issym() or member.islnk():
+                raise RuntimeError(
+                    f"Archive links are not allowed: {member.name} -> {member.linkname}"
+                )
+            if not (member.isfile() or member.isdir()):
+                raise RuntimeError(f"Unsupported tar member type: {member.name}")
         tar.extractall(destination)
+
+
+def safe_extract_zip(archive: Path, destination: Path) -> None:
+    with zipfile.ZipFile(archive) as zipped:
+        for member in zipped.infolist():
+            validated_member_path(destination, member.filename)
+            unix_mode = member.external_attr >> 16
+            file_type = stat.S_IFMT(unix_mode)
+            if stat.S_ISLNK(unix_mode):
+                raise RuntimeError(f"Archive links are not allowed: {member.filename}")
+            if not member.is_dir() and file_type not in (0, stat.S_IFREG):
+                raise RuntimeError(f"Unsupported zip member type: {member.filename}")
+        zipped.extractall(destination)
 
 
 def extract_archive(archive: Path, destination: Path) -> str:
@@ -660,8 +762,7 @@ def extract_archive(archive: Path, destination: Path) -> str:
     destination.mkdir(parents=True, exist_ok=True)
 
     if archive.suffix.lower() == ".zip":
-        with zipfile.ZipFile(archive) as zipped:
-            zipped.extractall(destination)
+        safe_extract_zip(archive, destination)
         return "extracted"
 
     if archive.suffix.lower() == ".tar" or suffixes in {".tar.gz", ".tar.bz2", ".tar.xz"}:
@@ -685,6 +786,7 @@ def download_dataset(
     retries: int,
 ) -> None:
     dataset_dir = target_root / dataset.dataset_id
+    recorded_contracts = {} if dry_run else recorded_resource_contracts(dataset_dir)
     resource_entries: list[dict[str, object]] = []
     manual_entries: list[dict[str, object]] = []
 
@@ -717,8 +819,25 @@ def download_dataset(
             manual_entries.append(entry)
             continue
 
-        status = download_url(resource, archive_path, timeout=timeout, retries=retries, overwrite=overwrite)
+        effective_resource = resource
+        if not overwrite and resource.filename in recorded_contracts:
+            recorded_size, recorded_sha256 = recorded_contracts[resource.filename]
+            effective_resource = replace(
+                resource,
+                expected_bytes=resource.expected_bytes or recorded_size,
+                expected_sha256=resource.expected_sha256 or recorded_sha256,
+            )
+        status = download_url(
+            effective_resource,
+            archive_path,
+            timeout=timeout,
+            retries=retries,
+            overwrite=overwrite,
+        )
         entry = resource_to_manifest(resource, status, archive_path)
+        size_bytes, digest = validate_resource_file(resource, archive_path)
+        entry["size_bytes"] = size_bytes
+        entry["sha256"] = digest
 
         if extract:
             print(f"{dataset.dataset_id}: extract {resource.filename}", flush=True)

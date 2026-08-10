@@ -1,275 +1,82 @@
 #include "ProjectResourceCleanup.h"
 
+#include "ProjectResourceCleanupPlan.h"
+
+#include "Logger.h"
 #include "project/ProjectSessionModel.h"
-#include "project/ProjectIO.h"
-
-#include <QDir>
-#include <QFile>
-#include <QFileInfo>
-#include <QJsonArray>
-#include <QJsonObject>
-#include <QSet>
-
-#include <algorithm>
 
 namespace xjw::core::project
 {
-namespace
-{
 
-QString normalizedProjectPath(const QString &projectRoot, const QString &path)
+struct PreparedResourceCleanup::Impl
 {
-    if (path.trimmed().isEmpty())
-    {
-        return QString();
-    }
+    detail::ResourceCleanupPlan plan;
+    ProjectResourceCleanupPersistence persistence;
+};
 
-    QFileInfo info(path);
-    if (info.isAbsolute())
-    {
-        return QDir::cleanPath(info.absoluteFilePath());
-    }
-    return QDir::cleanPath(QDir(projectRoot).filePath(path));
+bool PreparedResourceCleanup::requiresExecution() const
+{
+    return static_cast<bool>(_impl);
 }
 
-QString dataSectionToArrayKey(const QString &section)
+const ResourceCleanupResult &
+PreparedResourceCleanup::preparationResult() const
 {
-    if (section == QStringLiteral("观测网络")) return QStringLiteral("observation_network_results");
-    if (section == QStringLiteral("连接点")) return QStringLiteral("aerial_triangulation_results");
-    if (section == QStringLiteral("深度图")) return QStringLiteral("depth_map_results");
-    if (section == QStringLiteral("稠密点云")) return QStringLiteral("dense_cloud_results");
-    if (section == QStringLiteral("3D模型")) return QStringLiteral("model_results");
-    if (section == QStringLiteral("DEM")) return QStringLiteral("dem_results");
-    if (section == QStringLiteral("正射影像")) return QStringLiteral("ortho_results");
-    return QString();
+    return _preparationResult;
 }
 
-QString primaryPathForSectionRecord(const QString &section,
-                                    const QJsonObject &record,
-                                    const QString &projectRoot)
+void ProjectResourceCleanupService::installAutomaticRecovery(
+    ProjectData *projectData)
 {
-    QString path;
-    if (section == QStringLiteral("连接点"))
-    {
-        path = record.value(QStringLiteral("files")).toObject().value(QStringLiteral("sparse_cloud_xyz")).toString();
-    }
-    else if (section == QStringLiteral("深度图"))
-    {
-        path = record.value(QStringLiteral("depth_png")).toString();
-        if (path.isEmpty()) path = record.value(QStringLiteral("raw_depth_path")).toString();
-        if (path.isEmpty()) path = record.value(QStringLiteral("valid_mask_path")).toString();
-        if (path.isEmpty()) path = record.value(QStringLiteral("preview_path")).toString();
-    }
-    else if (section == QStringLiteral("稠密点云"))
-    {
-        path = record.value(QStringLiteral("dense_cloud_xyz")).toString();
-    }
-    else if (section == QStringLiteral("3D模型"))
-    {
-        path = record.value(QStringLiteral("final_model_path")).toString();
-        if (path.isEmpty()) path = record.value(QStringLiteral("model_obj")).toString();
-        if (path.isEmpty()) path = record.value(QStringLiteral("model_ply")).toString();
-    }
-    else if (section == QStringLiteral("DEM"))
-    {
-        path = record.value(QStringLiteral("dem_tif")).toString();
-    }
-    else if (section == QStringLiteral("正射影像"))
-    {
-        path = record.value(QStringLiteral("output_path")).toString();
-    }
-    return normalizedProjectPath(projectRoot, path);
-}
-
-void appendUniquePath(QStringList *paths, const QString &path)
-{
-    if (!paths) return;
-
-    const QString clean = QDir::cleanPath(path);
-    if (!clean.isEmpty() && !paths->contains(clean))
-    {
-        paths->append(clean);
-    }
-}
-
-void collectSectionRecordArtifacts(const QString &section,
-                                   const QJsonObject &record,
-                                   const QString &projectRoot,
-                                   QStringList *filePaths,
-                                   QStringList *dirPaths)
-{
-    if (section == QStringLiteral("连接点"))
-    {
-        const QJsonObject files = record.value(QStringLiteral("files")).toObject();
-        for (auto it = files.begin(); it != files.end(); ++it)
+    ProjectData::installProjectOpenPreflight(
+        [](const QString &projectPath, QString *errorMessage)
         {
-            if (it.value().isString())
-            {
-                appendUniquePath(filePaths, normalizedProjectPath(projectRoot, it.value().toString()));
-            }
+            return detail::recoverPendingResourceCleanupTransactionsBeforeOpen(
+                projectPath, errorMessage);
+        });
+    if (!projectData
+        || projectData->property(
+            "plascan_resource_cleanup_recovery_installed").toBool())
+    {
+        return;
+    }
+    projectData->setProperty(
+        "plascan_resource_cleanup_recovery_installed", true);
+    const auto recover = [projectData]()
+    {
+        ResourceCleanupResult recovery;
+        if (!detail::recoverPendingResourceCleanupTransactions(
+                projectData, &recovery))
+        {
+            LOG_WARN(QStringLiteral(
+                "项目清理事务自动恢复失败：%1")
+                         .arg(recovery.errorMessage));
         }
-        appendUniquePath(dirPaths,
-                         normalizedProjectPath(projectRoot,
-                                               record.value(QStringLiteral("output_dir")).toString()));
-        return;
-    }
-
-    if (section == QStringLiteral("深度图"))
+    };
+    QObject::connect(projectData,
+                     &ProjectData::projectOpened,
+                     projectData,
+                     [recover](const QString &)
+                     {
+                         recover();
+                     });
+    QObject::connect(projectData,
+                     &ProjectData::activeChunkChanged,
+                     projectData,
+                     [recover](const QString &, const QString &, int)
+                     {
+                         recover();
+                     });
+    if (projectData->hasProject())
     {
-        const auto collectDepthPaths = [&](const QJsonObject &depthArtifact)
-        {
-            for (const QString &key : {
-                     QStringLiteral("depth_png"),
-                     QStringLiteral("raw_depth_path"),
-                     QStringLiteral("raw_confidence_path"),
-                     QStringLiteral("raw_support_count_path"),
-                     QStringLiteral("raw_uncertainty_path"),
-                     QStringLiteral("raw_geometry_support_path"),
-                     QStringLiteral("raw_geometry_source_mask_path"),
-                     QStringLiteral("raw_inverse_depth_mean_path"),
-                     QStringLiteral("raw_inverse_depth_spread_path"),
-                     QStringLiteral("raw_adaptive_geometry_support_weight_path"),
-                     QStringLiteral("raw_adaptive_geometry_effective_view_count_path"),
-                     QStringLiteral("raw_adaptive_geometry_conflict_ratio_path"),
-                     QStringLiteral("raw_adaptive_geometry_conflict_weight_path"),
-                     QStringLiteral("valid_mask_path"),
-                     QStringLiteral("support_mask_path"),
-                     QStringLiteral("missing_reason_path"),
-                     QStringLiteral("missing_reason_preview_path"),
-                     QStringLiteral("targeted_gap_recovered_mask_path"),
-                     QStringLiteral("depth_provenance_path"),
-                     QStringLiteral("normal_map_path"),
-                     QStringLiteral("raw_normal_path"),
-                     QStringLiteral("preview_path"),
-                     QStringLiteral("confidence_preview_path")})
-            {
-                appendUniquePath(filePaths,
-                                 normalizedProjectPath(projectRoot,
-                                                       depthArtifact.value(key).toString()));
-            }
-        };
-        collectDepthPaths(record);
-        for (const QJsonValue &levelValue : record.value(QStringLiteral("pyramid_levels")).toArray())
-        {
-            collectDepthPaths(levelValue.toObject());
-        }
-        return;
-    }
-
-    if (section == QStringLiteral("稠密点云"))
-    {
-        appendUniquePath(filePaths,
-                         normalizedProjectPath(projectRoot,
-                                               record.value(QStringLiteral("dense_cloud_xyz")).toString()));
-        for (const QJsonValue &value : record.value(QStringLiteral("imported_dependencies")).toArray())
-        {
-            const QString dependency = normalizedProjectPath(projectRoot, value.toString());
-            appendUniquePath(filePaths, dependency);
-            appendUniquePath(dirPaths, QFileInfo(dependency).absolutePath());
-        }
-        appendUniquePath(dirPaths,
-                         normalizedProjectPath(projectRoot,
-                                               record.value(QStringLiteral("import_directory")).toString()));
-        return;
-    }
-
-    if (section == QStringLiteral("3D模型"))
-    {
-        const QStringList modelKeys = {
-            QStringLiteral("final_model_path"),
-            QStringLiteral("model_obj"),
-            QStringLiteral("model_mtl"),
-            QStringLiteral("model_ply"),
-            QStringLiteral("texture_png"),
-            QStringLiteral("texture_image")
-        };
-        for (const QString &key : modelKeys)
-        {
-            appendUniquePath(filePaths, normalizedProjectPath(projectRoot, record.value(key).toString()));
-        }
-        for (const QJsonValue &value : record.value(QStringLiteral("imported_dependencies")).toArray())
-        {
-            const QString dependency = normalizedProjectPath(projectRoot, value.toString());
-            appendUniquePath(filePaths, dependency);
-            appendUniquePath(dirPaths, QFileInfo(dependency).absolutePath());
-        }
-        appendUniquePath(dirPaths,
-                         normalizedProjectPath(projectRoot,
-                                               record.value(QStringLiteral("import_directory")).toString()));
-
-        const QString texturePath =
-            normalizedProjectPath(projectRoot, record.value(QStringLiteral("texture_png")).toString());
-        if (!texturePath.isEmpty())
-        {
-            appendUniquePath(dirPaths, QFileInfo(texturePath).absolutePath());
-        }
-        return;
-    }
-
-    if (section == QStringLiteral("DEM"))
-    {
-        appendUniquePath(filePaths,
-                         normalizedProjectPath(projectRoot,
-                                               record.value(QStringLiteral("dem_tif")).toString()));
-        appendUniquePath(dirPaths,
-                         normalizedProjectPath(projectRoot,
-                                               record.value(QStringLiteral("output_dir")).toString()));
-        return;
-    }
-
-    if (section == QStringLiteral("正射影像"))
-    {
-        appendUniquePath(filePaths,
-                         normalizedProjectPath(projectRoot,
-                                               record.value(QStringLiteral("output_path")).toString()));
+        recover();
     }
 }
 
-bool removeFileIfPresent(const QString &path)
-{
-    if (path.isEmpty())
-    {
-        return true;
-    }
-
-    const QFileInfo info(path);
-    if (!info.exists())
-    {
-        return true;
-    }
-
-    if (info.isDir())
-    {
-        return QDir(path).removeRecursively();
-    }
-
-    return QFile::remove(path);
-}
-
-void removeDirectoryIfEmpty(const QString &path)
-{
-    if (path.isEmpty())
-    {
-        return;
-    }
-
-    QDir dir(path);
-    if (!dir.exists())
-    {
-        return;
-    }
-
-    if (dir.entryList(QDir::NoDotAndDotDot | QDir::AllEntries).isEmpty())
-    {
-        dir.rmdir(path);
-    }
-}
-
-} // namespace
-
-ResourceCleanupResult ProjectResourceCleanupService::cleanupGeneratedData(ProjectData *projectData,
-                                                                          const QString &section,
-                                                                          const QStringList &resourcePaths)
+ResourceCleanupResult ProjectResourceCleanupService::cleanupGeneratedData(
+    ProjectData *projectData,
+    const QString &section,
+    const QStringList &resourcePaths)
 {
     ResourceCleanupResult result;
 
@@ -278,118 +85,137 @@ ResourceCleanupResult ProjectResourceCleanupService::cleanupGeneratedData(Projec
         result.errorMessage = QStringLiteral("ProjectData 未初始化");
         return result;
     }
-
+    if (!detail::recoverPendingResourceCleanupTransactions(projectData,
+                                                           &result))
+    {
+        return result;
+    }
     if (resourcePaths.isEmpty())
     {
         result.errorMessage = QStringLiteral("待删除资源为空");
         return result;
     }
 
-    result.sectionArrayKey = dataSectionToArrayKey(section);
+    result.sectionArrayKey = detail::cleanupSectionArrayKey(section);
     if (result.sectionArrayKey.isEmpty())
     {
         result.unsupportedSection = true;
         return result;
     }
 
-    const QString projectRoot =
-        xjw::common::project::ProjectIO::projectRootFromPlascan(
-            projectData->currentProjectPath());
-    QJsonObject meta = projectData->metadata();
-    const QJsonArray sourceArray = meta.value(result.sectionArrayKey).toArray();
-    QJsonArray keptArray;
-    QStringList filePathsToDelete;
-    QStringList dirPathsToTrim;
-
-    QSet<QString> normalizedTargets;
-    QSet<int> indexTargets;
-    for (const QString &path : resourcePaths)
+    detail::ResourceCleanupPlan plan;
+    if (!detail::buildResourceCleanupPlan(projectData,
+                                          section,
+                                          resourcePaths,
+                                          &plan,
+                                          &result.errorMessage))
     {
-        if (section == QStringLiteral("观测网络"))
-        {
-            bool ok = false;
-            const int index = path.toInt(&ok);
-            if (ok)
-            {
-                indexTargets.insert(index);
-            }
-        }
-        else
-        {
-            normalizedTargets.insert(normalizedProjectPath(projectRoot, path));
-        }
+        return result;
     }
 
-    for (int index = 0; index < sourceArray.size(); ++index)
-    {
-        const QJsonObject record = sourceArray.at(index).toObject();
-        bool shouldDelete = false;
-        if (section == QStringLiteral("观测网络"))
-        {
-            shouldDelete = indexTargets.contains(index);
-        }
-        else
-        {
-            const QString primaryPath = primaryPathForSectionRecord(section, record, projectRoot);
-            shouldDelete = normalizedTargets.contains(primaryPath);
-        }
-
-        if (!shouldDelete)
-        {
-            keptArray.append(record);
-            continue;
-        }
-
-        ++result.removedCount;
-        collectSectionRecordArtifacts(section, record, projectRoot, &filePathsToDelete, &dirPathsToTrim);
-    }
-
-    if (result.removedCount <= 0)
+    result.removedCount = plan.removedCount;
+    result.preservedExternalPaths = plan.preservedExternalPaths;
+    result.preservedSharedPaths = plan.preservedSharedPaths;
+    result.preservedUnsafePaths = plan.preservedUnsafePaths;
+    if (plan.removedCount <= 0)
     {
         result.noMatchedRecords = true;
         return result;
     }
 
-    meta[result.sectionArrayKey] = keptArray;
-    projectData->updateMetadata(meta, true);
-    projectData->scheduleTemporaryMetadataSave();
-
-    for (const QString &filePath : filePathsToDelete)
-    {
-        if (!removeFileIfPresent(filePath))
-        {
-            result.failedPaths.append(filePath);
-        }
-    }
-
-    std::sort(dirPathsToTrim.begin(), dirPathsToTrim.end(), [](const QString &lhs, const QString &rhs) {
-        return lhs.size() > rhs.size();
-    });
-    dirPathsToTrim.removeDuplicates();
-
-    for (const QString &dirPath : dirPathsToTrim)
-    {
-        const QFileInfo dirInfo(dirPath);
-        if (!dirInfo.exists())
-        {
-            continue;
-        }
-
-        if (section == QStringLiteral("连接点") || section == QStringLiteral("DEM"))
-        {
-            if (!removeFileIfPresent(dirPath))
-            {
-                result.failedPaths.append(dirPath);
-            }
-        }
-        else
-        {
-            removeDirectoryIfEmpty(dirPath);
-        }
-    }
-
-    result.success = true;
+    detail::executeResourceCleanupPlan(projectData, plan, &result);
     return result;
+}
+
+PreparedResourceCleanup
+ProjectResourceCleanupService::prepareGeneratedDataCleanup(
+    ProjectData *projectData,
+    const QString &section,
+    const QStringList &resourcePaths)
+{
+    PreparedResourceCleanup prepared;
+    ResourceCleanupResult &result = prepared._preparationResult;
+    if (!projectData)
+    {
+        result.errorMessage = QStringLiteral("ProjectData 未初始化");
+        return prepared;
+    }
+    if (!detail::recoverPendingResourceCleanupTransactions(projectData,
+                                                           &result))
+    {
+        return prepared;
+    }
+    if (resourcePaths.isEmpty())
+    {
+        result.errorMessage = QStringLiteral("待删除资源为空");
+        return prepared;
+    }
+
+    result.sectionArrayKey = detail::cleanupSectionArrayKey(section);
+    if (result.sectionArrayKey.isEmpty())
+    {
+        result.unsupportedSection = true;
+        return prepared;
+    }
+
+    auto impl = std::make_shared<PreparedResourceCleanup::Impl>();
+    if (!detail::buildResourceCleanupPlan(projectData,
+                                          section,
+                                          resourcePaths,
+                                          &impl->plan,
+                                          &result.errorMessage))
+    {
+        return prepared;
+    }
+    result.removedCount = impl->plan.removedCount;
+    result.preservedExternalPaths = impl->plan.preservedExternalPaths;
+    result.preservedSharedPaths = impl->plan.preservedSharedPaths;
+    result.preservedUnsafePaths = impl->plan.preservedUnsafePaths;
+    if (impl->plan.removedCount <= 0)
+    {
+        result.noMatchedRecords = true;
+        return prepared;
+    }
+
+    impl->persistence = projectData->prepareResourceCleanupPersistence(
+        impl->plan.updatedMetadata);
+    if (!impl->persistence.isValid())
+    {
+        result.errorMessage = QStringLiteral(
+            "无法准备资源清理持久化任务");
+        return prepared;
+    }
+    prepared._impl = std::move(impl);
+    return prepared;
+}
+
+ResourceCleanupResult
+ProjectResourceCleanupService::executePreparedCleanup(
+    const PreparedResourceCleanup &prepared)
+{
+    ResourceCleanupResult result = prepared._preparationResult;
+    if (!prepared._impl)
+    {
+        return result;
+    }
+    detail::executePreparedResourceCleanupPlan(
+        prepared._impl->persistence,
+        prepared._impl->plan,
+        &result);
+    return result;
+}
+
+bool ProjectResourceCleanupService::finalizePreparedCleanup(
+    ProjectData *projectData,
+    const PreparedResourceCleanup &prepared,
+    const ResourceCleanupResult &result)
+{
+    return projectData
+        && prepared._impl
+        && projectData->finalizeResourceCleanupPersistence(
+            prepared._impl->persistence,
+            result.success,
+            result.metadataStateCommitted);
 }
 
 } // namespace xjw::core::project

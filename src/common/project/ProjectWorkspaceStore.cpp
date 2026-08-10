@@ -867,3 +867,28 @@ bool ProjectWorkspaceStore::materializeMetadata(
                     .toObject();
     return success;
 }
+
+bool ProjectWorkspaceStore::materializeMetadataForRecovery(
+    QJsonObject *metadata,
+    QString *errorMessage) const
+{
+    if (!metadata)
+    {
+        setError(errorMessage, QStringLiteral("待解析项目元数据为空"));
+        return false;
+    }
+    const QString root = runtimeRoot(errorMessage);
+    if (root.isEmpty())
+    {
+        return false;
+    }
+    bool success = true;
+    *metadata = materializedValue(
+                    *metadata,
+                    root,
+                    ProjectPackageLayout::dataDirectory(_projectPath),
+                    errorMessage,
+                    &success)
+                    .toObject();
+    return success;
+}

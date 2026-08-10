@@ -11,6 +11,13 @@ import time
 from pathlib import Path
 
 
+SCRIPTS_ROOT = Path(__file__).resolve().parents[1]
+if str(SCRIPTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_ROOT))
+
+from executable_resolver import resolve_build_executable
+
+
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
@@ -36,13 +43,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def command_path(build_dir: Path, name: str) -> Path:
-    direct = build_dir / name
-    if direct.exists():
-        return direct
-    return build_dir / "bin" / name
-
-
 def build_command(args: argparse.Namespace) -> list[str]:
     root = repo_root()
     build_dir = args.build_dir if args.build_dir.is_absolute() else root / args.build_dir
@@ -54,7 +54,7 @@ def build_command(args: argparse.Namespace) -> list[str]:
     elif not output_dir.is_absolute():
         output_dir = (Path.cwd() / output_dir).resolve()
 
-    tool = command_path(build_dir, "reconstruct_pipeline_cli")
+    tool = resolve_build_executable(build_dir, "reconstruct_pipeline_cli")
     cmd = [
         str(tool),
         str(args.list_file.resolve()),

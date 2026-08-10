@@ -21,7 +21,7 @@ bool isFiniteDistortion(const Camera::Distortion &distortion)
         && std::isfinite(distortion.tangentialP2);
 }
 
-bool hasDistortion(const Camera::Distortion &distortion)
+bool hasDistortion(const Camera::Distortion &distortion) noexcept
 {
     constexpr double epsilon = 1e-15;
     return std::fabs(distortion.radialK1) > epsilon
@@ -32,6 +32,11 @@ bool hasDistortion(const Camera::Distortion &distortion)
 }
 
 } // namespace
+
+bool mvsImagePreparationRequiresDistinctPixels(const Camera &camera) noexcept
+{
+    return hasDistortion(camera.distortion());
+}
 
 bool prepareMvsImage(const cv::Mat &source,
                      const Camera &sourceCamera,

@@ -8,6 +8,7 @@ PlaScan 只使用一种工程格式，并采用与 Metashape `.psx + .files` 相
 project.plascan
 project.files/
 ├── project.zip
+├── .shared-image-gc.json       # 按需创建的共享影像 tombstone 代次状态
 ├── shared/
 │   └── images/
 │       └── <sha256>/
@@ -49,6 +50,7 @@ project.files/
 | 项目索引 | `project.files/project.zip/doc.json` | 工程身份、Chunk 索引、项目 UI 状态 |
 | Chunk 元数据 | `project.files/<number>/chunk.zip` | 核心、结果、工作流配置、资源索引 |
 | 共享影像 | `project.files/shared/images/` | 按 SHA-256 跨 Chunk 去重的原始影像 |
+| 共享影像 GC 状态 | `project.files/.shared-image-gc.json` | 原子写入的已提交代次和 tombstone |
 | Chunk 数据 | `project.files/<number>/` | 特征、匹配、相机旁置文件和工作流产物 |
 
 `project.zip` 只包含一个项目级文档：
@@ -311,13 +313,27 @@ Python、CUDA、模型搜索目录等机器相关配置不能写成工程资源�
 
 添加影像时立即计算 SHA-256 并复制到 `shared/images/<sha256>/`。多个 Chunk 导入内容
 相同的影像时引用同一个 URI，而不是引用某个可删除 Chunk 的目录。只有全部 Chunk 都
-不再引用时才清理共享实体。无法便携化的运行诊断路径写成
+不再引用时才清理共享实体。复制完成时会立即建立进程内 active reservation，直到包含
+该 URI 的 Chunk 归档代次成功提交；导入、引用发布和共享影像 GC 使用同一个项目级同步
+边界。未引用实体会先记录到 `.files/.shared-image-gc.json`，只有连续两个已提交代次均未
+引用且没有 active reservation 时才物理删除；该状态文件使用原子替换写入。GC 失败只
+记录可重试警告，不会把已经成功提交的项目保存改判为失败。已提交代次由排序后的
+`Chunk id + revision` 生成稳定 token，同一 token 的重复 GC 不会推进 tombstone。有效的
+`.plascan_tmp/project_files.json` 引用也会阻止删除，覆盖“归档失败但恢复快照已落盘并释放
+reservation”的窗口；如果该临时文件存在但不是可信普通文件、不可读、超过 64 MiB 或 JSON 无效，
+GC 会保守中止而不是按无引用处理。无法便携化
+的运行诊断路径写成
 `plascan-diagnostic:///<path-token>/<label>`，不保留原电脑盘符。
 
 ## 保存与崩溃恢复
 
 `ProjectData` 在内存中维护项目状态。GUI 修改先写入
 `.files/<number>/.plascan_tmp/`，再由串行持久化线程防抖同步当前 `chunk.zip`。
+关闭项目或直接析构会先等待已启动的持久化 worker，再同步提交包含最新内存状态的归档快照；
+归档失败时以完整临时恢复快照作为后备。只有其中至少一种持久化成功后，才释放共享影像
+reservation、运行工作区和 `.plascan.lock`。关闭失败会保留原会话和项目锁，新建/打开目标项目
+必须中止切换。异步快照同时携带持久化代次和会话代次，因此旧会话迟到的 queued completion
+不能给同路径重开后的新会话恢复 dirty/pending 状态。
 
 显式保存步骤：
 
@@ -328,12 +344,15 @@ Python、CUDA、模型搜索目录等机器相关配置不能写成工程资源�
 4. 将核心、结果、配置和资源索引合并成完整 Chunk `doc.json`。
 5. 单次原子替换 `chunk.zip` 条目并推进 Chunk `revision`。
 6. 项目 UI 或 Chunk 索引变化时替换根 `doc.json`。
+7. 归档提交成功后推进共享影像 GC 代次并尝试清理已连续两代无引用的 tombstone。
 
 Chunk 内尚未创建的计划路径也会转换为项目 URI。外部目录不递归复制，报告中只保留
 去盘符的诊断标识，避免工程自包含循环。
 
 工程打开期间持有 `.files/.plascan.lock`。GUI 与 CLI、两个 CLI 或两个 GUI 不能同时写
-同一个工程。
+同一个工程，这是共享影像跨进程正确性的主排他边界。共享影像 active reservation 还会持有
+临时 `.files/.shared-images.lock`，为直接调用共享库的协作进程提供第二层排他；包含 URI 的归档
+提交后才释放该 lease 锁，异常退出遗留锁沿用项目锁的 30 秒恢复窗口。
 
 删除项目影像或资源时会删除 `.files` 中对应文件并更新索引。
 
@@ -354,9 +373,50 @@ OBJ、PLY。OBJ 中的 `mtllib` 及 MTL 引用的常见纹理会在不越出源�
 - `vertex_count`、`face_count`、`has_vertex_colors`：扫描文件得到的实际统计；
 - 模型另含 `has_material`、`textured`，并在存在时写入 `model_mtl`、`texture_image`。
 
-删除工作区中的对应“稠密点云”或“3D模型”结果时，清理服务会删除上述依赖并逐层移除空导入
-目录。点云记录可被现有 DEM 与正射对话框直接选择；带 RGB 的点云可生成局部平面或小天体全球
-投影 DOM。
+删除工作区中的对应“稠密点云”或“3D模型”结果时，清理服务会逐一删除上述已列举且位于当前
+Chunk 受管根目录内的非共享依赖。只有 `model_run_directory/model_run_id/model_runs` 或
+`texture_run_directory/texture_run_id/texture_runs` 的 ID 和末两级目录严格匹配，或记录引用通过
+校验的 `ownership_manifest_path` 时，才允许递归清理该记录的专属目录；普通 `output_dir`、旧版
+`import_directory` 以及仅携带通用 `run_id` 的目录都只移除列举文件，目录和未列举文件保持不变。
+点云记录可被现有 DEM 与正射对话框直接选择；带 RGB 的点云可生成局部平面或小天体全球投影
+DOM。
+
+`ownership_manifest_path` 若存在，必须指向候选目录内部的普通 JSON 文件，且文件不超过 1 MiB。
+清理器只接受 `type: "plascan_owned_directory"`、`schema_version: 1`、`run_id` 与结果记录一致，
+并且 `owned_directory` 规范化身份与候选目录完全相同的清单。清单、目录或其祖先涉及符号链接、
+Windows junction、外部路径或当前 Chunk 的结构保护目录时，仍不得递归清理。
+
+物理清理采用当前 Chunk 根目录下的
+`.plascan_cleanup_trash/<transaction-id>/transaction.json` 恢复事务。清单以原子替换写入，包含
+项目路径、Chunk UUID/数字目录、受管根目录，以及每个产物的 `source`、`destination`、类型和
+`planned/staged` 状态。事务区还保存 `original_metadata.json`、`updated_metadata.json`，清单记录
+两者的 SHA-256；恢复前会重新校验文件大小、哈希与 JSON 类型。每次移动前先登记 `planned`，移动
+成功后再登记 `staged`，因此进程在任一移动边界退出后仍能恢复。事务状态为 `staging` 时，下次
+清理会按逆序把产物移回原路径；若当前元数据仍匹配 WAL 中的原状态或清理后状态，还会持久化恢复
+原元数据，覆盖“新元数据已提交但 committed 标记尚未落盘”的崩溃窗口。若当前元数据已经是第三种
+新状态，只恢复物理产物，不覆盖后续编辑。状态为 `metadata_committed` 时仍会先与 WAL 仲裁：当前
+元数据等于清理后状态才清空事务区；若回到原状态则恢复产物并重新提交原元数据；第三种状态采用保守
+恢复，避免删除后来重新引用的唯一产物。恢复时会重新核对项目与 Chunk 身份、路径边界、文件类型和
+链接/Windows junction，任何越界或不确定状态都会停止清理并保留事务区供人工检查。
+项目打开会在解析归档、初始化运行工作区和校验资源索引之前执行只依赖项目路径的事务恢复预检，
+先把因崩溃停留在事务区的受管产物恢复到原位；项目状态载入后再完成元数据仲裁和事务区清理。
+
+事务已经完成元数据仲裁、只剩不可逆物理清除时，会先把整个事务目录原子改名到同一 Chunk 下的
+`.plascan_cleanup_purging/.purging-<uuid>/`，再递归删除。该命名空间位于活动 WAL 事务区之外；即使进程
+在递归删除中途退出、清单或元数据快照已被删除，下次打开也只会按严格目录名和实体目录边界继续删除，
+不会把残留重新解释为待回滚事务。清除根目录或候选项若是符号链接、Windows junction 或越界路径，
+恢复会停止且不会跟随链接删除外部内容。
+
+清理元数据提交会在提交锁内等待当前文件提交完成，再独占推进项目持久化代次。后台保存快照只有在
+提交锁内仍属于当前代次时才能替换 Chunk 归档或 `.plascan_tmp`；清理操作确认新代次的归档和恢复快照
+均成功后，才把事务标记为
+`metadata_committed` 并清空事务区。被清理代次取代的旧 worker 会恢复其未完成的 dirty 标记，
+但不能在清理成功后写回旧资源引用。
+
+GUI 发起清理后，文件哈希、事务搬移、Chunk 归档提交和共享影像 GC 在受保护的后台任务中执行；
+资源树会暂时禁用重复删除入口并显示后台任务进度。任务完成前禁止新建、打开、保存、关闭项目以及
+新建、重命名、删除或切换 Chunk，确保工程锁不会在事务 worker 仍访问文件时释放。应用退出销毁
+项目管理器时会等待该不可中途取消的事务完成并执行最终元数据回填。
 
 ## CLI 工程会话
 
@@ -384,11 +444,38 @@ OBJ、PLY。OBJ 中的 `mtllib` 及 MTL 引用的常见纹理会在不越出源�
 - `reconstruction_parameters`：表面类型、插值、严格体积掩模、颜色计算、模型质量档位、
   独立的深度质量档位、目标面数和模型处理时间；
 - `software_version`：生成模型时的 PlaScan 版本；
-- `model_property_schema_version`：模型属性快照结构版本，当前为 `1`；
+- `model_property_schema_version`：模型属性快照结构版本，当前为 `2`；
+- `model_run_id`：本次模型运行的唯一 ID；对应目录必须位于当前 Chunk 受管根内，且末两级严格为
+  `model_runs/<model_run_id>/`，目录名与 ID 不一致时不得递归清理；
+- `model_output_policy`：模型结果登记策略，值为 `create_versioned_result` 或
+  `replace_default`；两种策略均创建独立运行目录并追加结果记录；
+- `is_default_model`：当前纹理化等后续流程使用的默认模型标记；同一时刻只有一个完整且仍存在的
+  模型应为 `true`；
+- `model_run_directory`、`model_artifact_directory`：模型运行专属目录及其产品目录；
+- `.plascan_task_run.json`：运行目录创建时原子写入的所有权标记，记录任务 ID、运行集合和结构版本；
+  取消或会话过期时，只有目录层级、任务 ID 与该标记全部一致，且目录树不含链接或联接点，才允许
+  递归清理未发布目录；
+- `model_diagnostics_path`：模型文件校验成功后原子发布的本次运行诊断 JSON；
+- `texture_run_id`、`texture_run_directory`、`texture_diagnostics_path`：独立纹理运行的 ID、
+  `texture_runs/<texture_run_id>/` 专属目录和诊断 JSON；
 - `tsdf_required_bytes`：TSDF 布局的内存分配估算，不等同于操作系统观测到的进程峰值内存。
 
 旧工程中不存在的字段保持缺失，GUI 显示“不可用”；能够从仍存在的模型文件或深度记录可靠
-恢复的文件大小、深度参数和软件版本会在读取时补充显示，但不会静默改写工程。
+恢复的文件大小、深度参数和软件版本会在读取时补充显示，但不会静默改写工程。首次成功登记
+schema v2 模型时，如果旧 `model_results` 尚无默认标记，则把数组中最后一个仍存在的旧模型
+标记为默认；新建版本不会改变该默认项。`replace_default` 也不覆盖或删除旧模型运行目录，而是等
+新模型、可选纹理/MTL 和诊断文件全部验证完成后，仅把旧记录的 `is_default_model` 设为 `false`，
+并把新追加记录设为默认。
+
+发布 schema v2 记录前会解析诊断 JSON，并核对 `ok`、`diagnostics_type`、run ID、实体 run 目录以及
+记录与诊断中的产物路径；所有本次生成的产物都必须存在且归属于对应 run。模型诊断类型必须为
+`model`，独立纹理 run 的诊断类型必须为 `texture`。这些发布约束不影响旧项目中缺少 run 元数据的
+已有记录读取。
+
+独立纹理更新沿用模型记录中的 `model_run_id` 与 `model_diagnostics_path`，每次写入新的
+`texture_runs/<texture_run_id>/`，不原地覆盖旧纹理目录。只有 OBJ、MTL、PNG 和
+`texture_diagnostics_path` 均存在且非空后才更新默认模型记录；失败或取消时旧纹理字段和旧版本
+文件保持可用，本次尚未登记的隔离运行目录按上述所有权规则回收。
 
 模型质量与深度质量分别记录。`ultra` 模型默认请求 `highest` 深度，`high`、`medium`、`low`
 模型分别请求同名深度档位。生成模型时，只有已有深度批次的质量不低于本次请求时才允许复用；

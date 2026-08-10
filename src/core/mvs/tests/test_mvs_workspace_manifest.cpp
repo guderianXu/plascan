@@ -976,6 +976,12 @@ TEST(MvsWorkspaceManifest, DepthConfigHashChangesWhenRelevantSettingsChange)
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
         changed.fusion.maxLocalDepthOutlierRemovalRatio -= 0.01f;
     });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.resolvedImageCacheStrategy = "bounded";
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.resolvedImageCacheCapacity += 1;
+    });
 
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
         changed.inputSignature = "at-generation-2";

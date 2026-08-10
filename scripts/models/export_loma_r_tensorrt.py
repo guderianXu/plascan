@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Export the official LoMa-R pipeline to PlaScan TensorRT engines.
+"""Export the official LoMa-R pipeline to PlaScan portable model artifacts.
 
 The source architecture is loaded from a local LoMa-R checkout.  Four official
 checkpoints are required locally and this script never downloads weights.  The
-result contains a per-image DaD + DeDoDe-G feature engine, a LoMa-R matcher
-engine, and a manifest that prevents incompatible engines from being combined.
+portable result contains one shared K3840 DaD + DeDoDe-G feature ONNX, one
+dynamic LoMa-R matcher ONNX, and three validated K-bucket manifests. Optional
+local TensorRT engines are diagnostic artifacts and are never package inputs.
 
 LoMa-R source: https://github.com/davnords/loma (MIT; matcher derives from
 LightGlue under Apache-2.0).  Checkpoint redistribution is intentionally left
@@ -14,9 +15,6 @@ to the model authors; PlaScan stores only generated local artifacts.
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
-import os
 from pathlib import Path
 import sys
 from types import MethodType
@@ -24,6 +22,24 @@ from urllib.parse import urlparse
 
 import torch
 import torch.nn.functional as functional
+
+from compose_loma_r_package import (
+    FEATURE_KEYPOINT_COUNT,
+    PACKAGE_KEYPOINT_BUCKETS,
+    compose_package,
+    require_matcher_only_feature,
+)
+from model_provenance import (
+    git_source_revision,
+    installed_tool_versions,
+    invalidate_provenance,
+    provenance_path,
+    require_provenance,
+    sha256_file,
+    source_file_records,
+    validate_provenance,
+    write_provenance,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -34,36 +50,150 @@ REQUIRED_WEIGHTS = (
     "dedode_descriptor_G.pth",
     "dinov2_vitl14_pretrain.pth",
 )
-TENSORRT_TOPK_MAX = 3840
+FEATURE_WEIGHTS = (
+    "dad.pth",
+    "dedode_descriptor_G.pth",
+    "dinov2_vitl14_pretrain.pth",
+)
+MATCHER_WEIGHTS = ("loma_R.pth",)
+MATCHER_EXPORT_SAMPLE_KEYPOINTS = 1024
+EXPORTER_SCHEMA_VERSION = 1
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Export DaD + DeDoDe-G + LoMa-R to TensorRT"
+        description="Export the validated portable DaD + DeDoDe-G + LoMa-R package"
     )
     parser.add_argument("--loma-repo", type=Path, required=True)
     parser.add_argument("--weights-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--input-size", type=int, default=784)
-    parser.add_argument("--keypoints", type=int, default=2048)
+    parser.add_argument(
+        "--keypoints",
+        type=int,
+        default=FEATURE_KEYPOINT_COUNT,
+        help=(
+            "Shared feature capacity. The portable package contract requires 3840; "
+            "the option is retained only for explicit compatibility checks."
+        ),
+    )
     parser.add_argument("--precision", choices=("fp16", "fp32"), default="fp16")
     parser.add_argument("--workspace-gib", type=float, default=8.0)
     parser.add_argument("--onnx-only", action="store_true")
     parser.add_argument(
         "--matcher-only",
         action="store_true",
-        help="reuse an existing feature engine and rebuild only the matcher",
+        help="validate the existing feature ONNX and export/reuse only the matcher",
     )
     parser.add_argument("--force", action="store_true")
     return parser.parse_args()
 
 
-def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+def exporter_tool_versions() -> dict[str, str]:
+    return installed_tool_versions(
+        {
+            "einops": "einops",
+            "modelopt": "nvidia-modelopt",
+            "onnx": "onnx",
+            "onnxscript": "onnxscript",
+            "tensorrt": "tensorrt",
+            "torch": "torch",
+        }
+    )
+
+
+def checkpoint_records(weights_dir: Path, names: tuple[str, ...]) -> list[dict[str, object]]:
+    return source_file_records({name: weights_dir / name for name in names})
+
+
+def common_contract(
+    repo: Path,
+    weights_dir: Path,
+    checkpoint_names: tuple[str, ...],
+    precision: str,
+) -> dict[str, object]:
+    return {
+        "exporter": {
+            "name": Path(__file__).name,
+            "schema_version": EXPORTER_SCHEMA_VERSION,
+            "script_sha256": sha256_file(Path(__file__)),
+            "external_data": True,
+            "dynamo": False,
+        },
+        "source": {
+            "repository": "davnords/loma",
+            "revision": git_source_revision(repo),
+            "checkpoints": checkpoint_records(weights_dir, checkpoint_names),
+        },
+        "opset": 18,
+        "precision": precision,
+        "onnx_io_precision": "fp32",
+        "tools": exporter_tool_versions(),
+    }
+
+
+def feature_onnx_contract(
+    repo: Path,
+    weights_dir: Path,
+    input_size: int,
+    precision: str,
+) -> dict[str, object]:
+    return {
+        **common_contract(repo, weights_dir, FEATURE_WEIGHTS, precision),
+        "artifact_kind": "loma_r_feature_onnx",
+        "model": {
+            "id": "loma_r_feature",
+            "configuration": {
+                "detector": "DaD",
+                "descriptor": "DeDoDe-G/DINOv2-ViT-L14",
+                "descriptor_dimension": 256,
+            },
+        },
+        "input": {
+            "layout": "NCHW",
+            "shape": [1, 3, input_size, input_size],
+            "width": input_size,
+            "height": input_size,
+            "dtype": "float32",
+        },
+        "profile": {
+            "feature_keypoint_count": FEATURE_KEYPOINT_COUNT,
+            "dynamic_input": False,
+        },
+    }
+
+
+def matcher_onnx_contract(
+    repo: Path,
+    weights_dir: Path,
+    precision: str,
+) -> dict[str, object]:
+    return {
+        **common_contract(repo, weights_dir, MATCHER_WEIGHTS, precision),
+        "artifact_kind": "loma_r_matcher_onnx",
+        "model": {
+            "id": "loma_r_matcher",
+            "configuration": {
+                "descriptor_dimension": 256,
+                "rotation_invariant": True,
+            },
+        },
+        "input": {
+            "keypoints": "[1,K,2] float32",
+            "descriptors": "[1,K,256] float32",
+            "valid": "[1,K] bool",
+        },
+        "profile": {
+            "keypoints": {
+                "dynamic": True,
+                "minimum": 1,
+                "optimum": 2048,
+                "maximum": FEATURE_KEYPOINT_COUNT,
+                "package_buckets": list(PACKAGE_KEYPOINT_BUCKETS),
+                "export_sample": MATCHER_EXPORT_SAMPLE_KEYPOINTS,
+            }
+        },
+    }
 
 
 def load_model(repo: Path, weights_dir: Path) -> torch.nn.Module:
@@ -183,7 +313,7 @@ class FeatureWrapper(torch.nn.Module):
 class MatcherWrapper(torch.nn.Module):
     """TensorRT-friendly LoMa-R forward with dynamic keypoint count."""
 
-    def __init__(self, model: torch.nn.Module, keypoints: int):
+    def __init__(self, model: torch.nn.Module):
         super().__init__()
         self.model = model
         self.heads = int(model.cfg.num_heads)
@@ -314,9 +444,12 @@ def export_onnx(
     path: Path,
     input_names: list[str],
     output_names: list[str],
+    contract: dict[str, object],
     dynamic_axes: dict[str, dict[int, str]] | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    invalidate_provenance(path)
+    path.unlink(missing_ok=True)
     torch.onnx.export(
         model,
         inputs,
@@ -329,9 +462,30 @@ def export_onnx(
         dynamo=False,
         external_data=True,
     )
+    write_provenance(path, contract)
 
 
-def build_engine(onnx_path: Path, engine_path: Path, precision: str, workspace: int) -> None:
+def needs_export(
+    path: Path,
+    contract: dict[str, object],
+    force: bool,
+) -> bool:
+    validation = validate_provenance(path, contract)
+    if validation.valid and not force:
+        print(f"reuse provenance-validated ONNX: {path}")
+        return False
+    if path.exists() and not force:
+        print(f"re-export {path.name} because cached provenance is invalid: {validation.reason}")
+    return True
+
+
+def build_engine(
+    onnx_path: Path,
+    engine_path: Path,
+    precision: str,
+    workspace: int,
+    fixed_keypoints: int = 0,
+) -> None:
     import tensorrt as trt  # pylint: disable=import-outside-toplevel
 
     logger = trt.Logger(trt.Logger.WARNING)
@@ -349,132 +503,196 @@ def build_engine(onnx_path: Path, engine_path: Path, precision: str, workspace: 
         if not builder.platform_has_fast_fp16:
             raise RuntimeError("The selected GPU does not provide fast FP16 TensorRT kernels")
         config.set_flag(trt.BuilderFlag.FP16)
+    if fixed_keypoints > 0:
+        profile = builder.create_optimization_profile()
+        shapes = {
+            "keypoints0": (1, fixed_keypoints, 2),
+            "keypoints1": (1, fixed_keypoints, 2),
+            "descriptors0": (1, fixed_keypoints, 256),
+            "descriptors1": (1, fixed_keypoints, 256),
+            "valid0": (1, fixed_keypoints),
+            "valid1": (1, fixed_keypoints),
+        }
+        for name, shape in shapes.items():
+            if profile.set_shape(name, shape, shape, shape) is False:
+                raise RuntimeError(f"Cannot set TensorRT optimization profile for {name}")
+        profile_index = config.add_optimization_profile(profile)
+        if profile_index is not None and profile_index < 0:
+            raise RuntimeError("Cannot add the LoMa-R TensorRT optimization profile")
     serialized = builder.build_serialized_network(network, config)
     if serialized is None:
         raise RuntimeError(f"TensorRT failed to build {engine_path.name}")
     engine_path.write_bytes(bytes(serialized))
 
 
+def build_engine_with_provenance(
+    onnx_path: Path,
+    engine_path: Path,
+    precision: str,
+    workspace: int,
+    fixed_keypoints: int,
+    force: bool,
+) -> None:
+    onnx_document = require_provenance(onnx_path)
+    contract = {
+        "artifact_kind": "loma_r_tensorrt_engine",
+        "source_onnx": onnx_document["artifact"],
+        "source_provenance_sha256": sha256_file(provenance_path(onnx_path)),
+        "precision": precision,
+        "profile": {"fixed_keypoints": fixed_keypoints},
+        "workspace_bytes": workspace,
+        "gpu": {
+            "name": torch.cuda.get_device_name(torch.cuda.current_device()),
+            "compute_capability": ".".join(
+                str(value) for value in torch.cuda.get_device_capability()
+            ),
+        },
+        "tools": exporter_tool_versions(),
+    }
+    validation = validate_provenance(engine_path, contract)
+    if validation.valid and not force:
+        print(f"reuse provenance-validated TensorRT engine: {engine_path}")
+        return
+    if engine_path.exists() and not force:
+        print(f"rebuild {engine_path.name}: {validation.reason}")
+    invalidate_provenance(engine_path)
+    engine_path.unlink(missing_ok=True)
+    build_engine(
+        onnx_path,
+        engine_path,
+        precision,
+        workspace,
+        fixed_keypoints=fixed_keypoints,
+    )
+    write_provenance(engine_path, contract)
+
+
 def main() -> None:
     args = parse_args()
-    if not torch.cuda.is_available():
-        raise RuntimeError("LoMa-R TensorRT export requires an NVIDIA CUDA device")
-    # ONNX tracing does not need cuDNN kernels. Disabling cuDNN here also keeps
-    # export usable on Windows machines where a system cuDNN DLL shadows the
-    # version bundled with the selected PyTorch wheel. TensorRT remains the
-    # production inference backend and is unaffected by this setting.
-    torch.backends.cudnn.enabled = False
     if args.input_size <= 0 or args.input_size % 14 != 0:
         raise ValueError("--input-size must be positive and divisible by DINOv2 patch size 14")
-    if args.keypoints <= 0:
-        raise ValueError("--keypoints must be positive")
-    if args.keypoints > TENSORRT_TOPK_MAX:
+    if args.keypoints != FEATURE_KEYPOINT_COUNT:
         raise ValueError(
-            f"--keypoints cannot exceed {TENSORRT_TOPK_MAX}: TensorRT 10.x "
-            "ITopK does not support a larger static K"
+            f"--keypoints must be {FEATURE_KEYPOINT_COUNT}; the portable package "
+            "uses one shared K3840 feature ONNX and three matcher profiles"
+        )
+
+    repo = args.loma_repo.resolve()
+    weights_dir = args.weights_dir.resolve()
+    source_dir = repo / "src"
+    if not (source_dir / "loma" / "loma.py").is_file():
+        raise FileNotFoundError(f"LoMa-R source tree not found: {source_dir}")
+    missing = [name for name in REQUIRED_WEIGHTS if not (weights_dir / name).is_file()]
+    if missing:
+        raise FileNotFoundError(
+            f"Missing LoMa-R checkpoints in {weights_dir}: {', '.join(missing)}"
         )
 
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    suffix = f"k{args.keypoints}_{args.precision}"
-    feature_onnx = output / f"loma_r_features_{suffix}.onnx"
-    matcher_onnx = output / f"loma_r_matcher_{suffix}.onnx"
-    feature_engine = output / f"loma_r_features_{suffix}.engine"
-    matcher_engine = output / f"loma_r_matcher_{suffix}.engine"
-    # 档位写入文件名，使多个静态 K 的模型包可以共存于标准模型目录。
-    manifest = output / f"loma_r_{suffix}.json"
-    generated = ((matcher_onnx, matcher_engine) if args.matcher_only else
-                 (feature_onnx, matcher_onnx, feature_engine, matcher_engine, manifest))
-    if not args.force and any(path.exists() for path in generated):
-        raise FileExistsError("Output exists; use --force to replace the LoMa-R package")
+    feature_onnx = output / (
+        f"loma_r_features_k{FEATURE_KEYPOINT_COUNT}_{args.precision}.onnx"
+    )
+    matcher_onnx = output / f"loma_r_matcher_dynamic_{args.precision}.onnx"
+    feature_contract = feature_onnx_contract(
+        repo, weights_dir, args.input_size, args.precision
+    )
+    matcher_contract = matcher_onnx_contract(repo, weights_dir, args.precision)
 
-    model = load_model(args.loma_repo.resolve(), args.weights_dir.resolve())
+    if args.matcher_only:
+        require_matcher_only_feature(feature_onnx, feature_contract)
+        export_feature = False
+    else:
+        export_feature = needs_export(feature_onnx, feature_contract, args.force)
+    export_matcher = needs_export(matcher_onnx, matcher_contract, args.force)
+
+    if export_feature or export_matcher:
+        if not torch.cuda.is_available():
+            raise RuntimeError("LoMa-R ONNX export requires an NVIDIA CUDA device")
+        # ONNX tracing does not need cuDNN kernels. Disabling cuDNN also avoids
+        # a system cuDNN DLL shadowing the version bundled with the Torch wheel.
+        torch.backends.cudnn.enabled = False
+        model = load_model(repo, weights_dir)
+    else:
+        model = None
+
     size = args.input_size
-    count = args.keypoints
-    make_dinov2_position_encoding_exportable(model, size)
-    image = torch.zeros((1, 3, size, size), device="cuda", dtype=torch.float32)
-    keypoints = torch.zeros((1, count, 2), device="cuda", dtype=torch.float32)
-    descriptors = torch.zeros((1, count, 256), device="cuda", dtype=torch.float32)
-    valid = torch.ones((1, count), device="cuda", dtype=torch.bool)
-
-    if not args.matcher_only:
+    if export_feature:
+        assert model is not None
+        make_dinov2_position_encoding_exportable(model, size)
+        image = torch.zeros((1, 3, size, size), device="cuda", dtype=torch.float32)
         export_onnx(
-            FeatureWrapper(model, count).eval(),
+            FeatureWrapper(model, FEATURE_KEYPOINT_COUNT).eval(),
             (image,),
             feature_onnx,
             ["image"],
             ["keypoints", "keypoint_scores", "descriptors"],
+            feature_contract,
         )
-    export_onnx(
-        MatcherWrapper(model, count).eval(),
-        (keypoints, keypoints, descriptors, descriptors, valid, valid),
-        matcher_onnx,
-        ["keypoints0", "keypoints1", "descriptors0", "descriptors1", "valid0", "valid1"],
-        ["scores"],
-        dynamic_axes={
-            "keypoints0": {1: "keypoint_count"},
-            "keypoints1": {1: "keypoint_count"},
-            "descriptors0": {1: "keypoint_count"},
-            "descriptors1": {1: "keypoint_count"},
-            "valid0": {1: "keypoint_count"},
-            "valid1": {1: "keypoint_count"},
-            "scores": {1: "keypoint_count", 2: "keypoint_count"},
-        },
-    )
-    if args.onnx_only:
-        # Release 仅发布可移植 ONNX。目标机器根据该清单构建与本机
-        # TensorRT/GPU 兼容的 engine，不能在这里写入导出机的 plan 路径。
-        metadata = {
-            "schema_version": 2,
-            "algorithm_id": "loma_r",
-            "algorithm_version": 1,
-            "source": "LoMa-R (DaD + DeDoDe-G/DINOv2 + LoMa-R)",
-            "precision": args.precision,
-            "input_width": size,
-            "input_height": size,
-            "keypoint_count": count,
-            "feature_keypoint_count": count,
-            "descriptor_dimension": 256,
-            "feature_onnx": feature_onnx.name,
-            "matcher_onnx": matcher_onnx.name,
-            "feature_onnx_sha256": sha256(feature_onnx),
-            "matcher_onnx_sha256": sha256(matcher_onnx),
-            "checkpoints": {
-                name: sha256(args.weights_dir / name) for name in REQUIRED_WEIGHTS
+    if export_matcher:
+        assert model is not None
+        count = MATCHER_EXPORT_SAMPLE_KEYPOINTS
+        keypoints = torch.zeros((1, count, 2), device="cuda", dtype=torch.float32)
+        descriptors = torch.zeros((1, count, 256), device="cuda", dtype=torch.float32)
+        valid = torch.ones((1, count), device="cuda", dtype=torch.bool)
+        export_onnx(
+            MatcherWrapper(model).eval(),
+            (keypoints, keypoints, descriptors, descriptors, valid, valid),
+            matcher_onnx,
+            [
+                "keypoints0",
+                "keypoints1",
+                "descriptors0",
+                "descriptors1",
+                "valid0",
+                "valid1",
+            ],
+            ["scores"],
+            matcher_contract,
+            dynamic_axes={
+                "keypoints0": {1: "keypoint_count"},
+                "keypoints1": {1: "keypoint_count"},
+                "descriptors0": {1: "keypoint_count"},
+                "descriptors1": {1: "keypoint_count"},
+                "valid0": {1: "keypoint_count"},
+                "valid1": {1: "keypoint_count"},
+                "scores": {1: "keypoint_count", 2: "keypoint_count"},
             },
-        }
-        manifest.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-        print(f"Portable ONNX package written to {manifest}")
+        )
+
+    manifests = compose_package(feature_onnx, matcher_onnx, output)
+    print("Portable LoMa-R package written:")
+    for manifest in manifests:
+        print(f"  {manifest}")
+    if args.onnx_only:
         return
 
+    if not torch.cuda.is_available():
+        raise RuntimeError("LoMa-R TensorRT engine build requires an NVIDIA CUDA device")
     workspace = int(max(1.0, args.workspace_gib) * 1024**3)
+    feature_engine = output / (
+        f"loma_r_features_k{FEATURE_KEYPOINT_COUNT}_{args.precision}.engine"
+    )
+    matcher_engine = output / (
+        f"loma_r_matcher_k{FEATURE_KEYPOINT_COUNT}_{args.precision}.engine"
+    )
     if not args.matcher_only:
-        build_engine(feature_onnx, feature_engine, args.precision, workspace)
-    build_engine(matcher_onnx, matcher_engine, args.precision, workspace)
-    if not feature_engine.is_file():
-        raise FileNotFoundError(
-            f"Feature engine required for manifest was not found: {feature_engine}"
+        build_engine_with_provenance(
+            feature_onnx,
+            feature_engine,
+            args.precision,
+            workspace,
+            fixed_keypoints=0,
+            force=args.force,
         )
-    metadata = {
-        "schema_version": 1,
-        "algorithm_id": "loma_r",
-        "algorithm_version": 1,
-        "source": "LoMa-R (DaD + DeDoDe-G/DINOv2 + LoMa-R)",
-        "precision": args.precision,
-        "input_width": size,
-        "input_height": size,
-        "keypoint_count": count,
-        "descriptor_dimension": 256,
-        "feature_engine": feature_engine.name,
-        "matcher_engine": matcher_engine.name,
-        "feature_engine_sha256": sha256(feature_engine),
-        "matcher_engine_sha256": sha256(matcher_engine),
-        "checkpoints": {name: sha256(args.weights_dir / name) for name in REQUIRED_WEIGHTS},
-        "gpu": torch.cuda.get_device_name(torch.cuda.current_device()),
-        "tensorrt": __import__("tensorrt").__version__,
-    }
-    manifest.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-    print(f"LoMa-R TensorRT package written to {manifest}")
+    build_engine_with_provenance(
+        matcher_onnx,
+        matcher_engine,
+        args.precision,
+        workspace,
+        fixed_keypoints=FEATURE_KEYPOINT_COUNT,
+        force=args.force,
+    )
 
 
 if __name__ == "__main__":

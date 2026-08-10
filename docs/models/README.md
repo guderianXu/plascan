@@ -83,13 +83,17 @@ TensorRT。BiRefNet 仅支持 TensorRT，不提供 OpenCV CPU 回退。TensorRT 
 
 SIFT 由 CUDA 实现提取，不需要权重文件。LightGlue Release 发布固定 K4096 的 FP32 ONNX，不包含
 TorchScript matcher 或 CPU 回退。程序首次匹配时在后台构建本机 engine，后续直接复用环境指纹缓存。
+导出器会为基础 FP32 ONNX 及 ModelOpt 转换后的 FP16 ONNX 分别写入
+`<artifact>.provenance.json`。sidecar 记录 artifact SHA-256、上游权重 SHA-256、LightGlue revision、
+模型配置、输入/profile、opset、精度和 Torch/ONNX/ModelOpt/TensorRT 工具版本。已有 ONNX 只有在
+sidecar 契约与当前导出参数完全一致且 artifact 哈希匹配时才会复用；`--skip-export` 不满足契约时直接报错。
 
 ```powershell
 python scripts\env\setup_python_runtime.py --device cuda --cuda-wheel cu130
 .\.venv\Scripts\python.exe -m pip install tensorrt-cu13 nvidia-modelopt onnx onnxscript
 .\.venv\Scripts\python.exe scripts\models\export_lightglue_tensorrt.py `
-    --engine build\model_cache\lightglue_tensorrt\lightglue_sift_fp32.engine `
-    --precision fp32 --bucket-keypoints 4096
+    --onnx build\model_cache\lightglue_tensorrt\lightglue_sift_bucket4096.onnx `
+    --precision fp32 --bucket-keypoints 4096 --skip-build
 ```
 
 运行时按以下顺序寻找 ONNX 或历史本机 engine：
@@ -110,6 +114,11 @@ K3840 特征 ONNX、动态 K 匹配 ONNX 和三个 K 桶 manifest 组成：
 - `matcher_onnx`：输入动态 K 的两组关键点、描述子和有效位，输出 `[1,K,K]` 匹配概率矩阵；
 - manifest：记录特征容量、匹配 K、输入尺寸、描述子维度、精度和两个 ONNX 的 SHA-256。
 
+feature 与 matcher ONNX 各自携带独立的 provenance sidecar。feature 只归属 DaD、DeDoDe-G 和
+DINOv2 checkpoints，matcher 只归属 `loma_R.pth`；二者都记录 LoMa-R 源码 revision、artifact 哈希、
+模型配置、输入/profile、opset、精度和工具版本。包 manifest 只从实际消费的两个 ONNX 及其已校验
+sidecar 推导，不复制本次 CLI 参数或把 matcher-only 的新 checkpoint 误记到旧 feature 上。
+
 导出需要本地 LoMa-R 源码以及以下官方权重，不会自动下载或提交权重：
 
 - `loma_R.pth`
@@ -123,19 +132,27 @@ K3840 特征 ONNX、动态 K 匹配 ONNX 和三个 K 桶 manifest 组成：
     --loma-repo E:\code\matching-experiments\loma-r `
     --weights-dir E:\models\loma-r `
     --output-dir build\model_cache\loma_r_tensorrt `
-    --input-size 784 --keypoints 2048 --precision fp16
+    --input-size 784 --keypoints 3840 --precision fp16 --onnx-only
 ```
 
-发布构建以 `--keypoints 3840 --onnx-only` 导出共享特征模型和动态 matcher，再生成
-`loma_r_k1024_fp16.json`、`loma_r_k2048_fp16.json`、`loma_r_k3840_fp16.json` 三个清单。
+上述唯一 package composer 一次生成 `loma_r_features_k3840_fp16.onnx`、
+`loma_r_matcher_dynamic_fp16.onnx`，以及 `loma_r_k1024_fp16.json`、
+`loma_r_k2048_fp16.json`、`loma_r_k3840_fp16.json` 三个清单，不需要也不允许手工重命名或修改 JSON。
+已有产物 sidecar 缺失、契约变化或 artifact 哈希不符时会自动重导出；`--matcher-only` 会先严格校验
+既有 feature provenance，不兼容时明确拒绝。也可单独运行 `compose_loma_r_package.py` 对已导出的
+两个 ONNX 重新组合清单，但该入口同样要求文件名和 sidecar 契约完全匹配。
 TensorRT 10.x 的 `ITopK` 最多支持 3840，特征 engine 始终输出 3840 个候选；运行时依据清单截取
 特征并将动态 matcher 分别构建为 K1024、K2048 或 K3840 的固定 profile。
+`MatchPhotosRuntime` 在调用 TensorRT Builder 前会重新计算两个 ONNX 的 SHA-256，并与 schema 2
+manifest 的 `feature_onnx_sha256`、`matcher_onnx_sha256` 比较；缺失、格式错误或内容不匹配均会停止构建
+并报告具体 artifact。
 
 运行时按以下顺序寻找 manifest：
 
 1. `MatchPhotosOptions::lomaRTensorRtPackagePath`；
 2. 环境变量 `PLASCAN_LOMA_R_TENSORRT_PACKAGE`；
-3. 标准模型目录中的全部 `loma_r*.json`；运行时按手动档位或 GPU 总显存选择最合适的 K。
+3. 标准模型目录中的全部 LoMa-R package manifest（自动排除 `.provenance.json` sidecar）；运行时按手动
+   档位或 GPU 总显存选择最合适的 K。
 
 自动档位为：显存小于 8 GiB 使用 K1024，8 至 12 GiB 使用 K2048，12 GiB 及以上使用
 K3840。GUI 的“工作流程设置 -> 空中三角测量 -> LoMa-R 特征档位”可以手动覆盖；显式 manifest

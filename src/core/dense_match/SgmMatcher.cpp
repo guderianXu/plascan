@@ -3,8 +3,11 @@
 // 功能: 半全局/多全局立体匹配器 CPU 实现
 // =============================================================================
 #include "SgmMatcher.h"
+#include "SubpixelRefiner.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <vector>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -12,70 +15,175 @@
 namespace xjw::dense_match
 {
 
-static const int SGM_DIRS[8][2] = {
-    {1, 0}, {0, 1}, {1, 1}, {1, -1},
-    {-1, 0}, {0, -1}, {-1, -1}, {-1, 1}
-};
-
-SgmMatcher::SgmMatcher(const DenseMatchConfig &cfg) : _config(cfg)
+namespace
 {
+
+constexpr std::array<SgmDirection, 8> kSgmDirections = {{
+    {1, 0},
+    {-1, 0},
+    {0, 1},
+    {0, -1},
+    {1, 1},
+    {-1, -1},
+    {1, -1},
+    {-1, 1}}};
+
+bool isInside(int x, int y, int width, int height)
+{
+    return x >= 0 && x < width && y >= 0 && y < height;
 }
 
-void SgmMatcher::aggregatePath(CostVolume &L, const CostVolume &C,
-                               int imgW, int imgH, int numDisp,
-                               int dirX, int dirY) const
+bool isUsablePathCost(float cost)
 {
-    int startY = (dirY > 0) ? 0 : imgH - 1;
-    int endY   = (dirY > 0) ? imgH : -1;
-    int stepY  = (dirY > 0) ? 1 : -1;
-    int startX = (dirX > 0) ? 0 : imgW - 1;
-    int endX   = (dirX > 0) ? imgW : -1;
-    int stepX  = (dirX > 0) ? 1 : -1;
+    return std::isfinite(cost) && cost < kInvalidCost;
+}
 
-    float p1 = static_cast<float>(_config.p1);
-    float p2 = static_cast<float>(_config.p2);
+void aggregateDirection(CostVolume &aggregate,
+                        const CostVolume &costVolume,
+                        float p1,
+                        float p2,
+                        SgmDirection direction)
+{
+    const int width = costVolume[0].cols;
+    const int height = costVolume[0].rows;
+    const int numDisparities = static_cast<int>(costVolume.size());
+    std::vector<float> previous(static_cast<std::size_t>(numDisparities), kInvalidCost);
+    std::vector<float> current(static_cast<std::size_t>(numDisparities), kInvalidCost);
 
-    for (int y = startY; y != endY; y += stepY)
+    for (int startY = 0; startY < height; ++startY)
     {
-        for (int x = startX; x != endX; x += stepX)
+        for (int startX = 0; startX < width; ++startX)
         {
-            int px = x - dirX;
-            int py = y - dirY;
-
-            if (px >= 0 && px < imgW && py >= 0 && py < imgH)
+            const int predecessorX = startX - direction.x;
+            const int predecessorY = startY - direction.y;
+            if (isInside(predecessorX, predecessorY, width, height))
             {
-                float minPrev = 1e20f;
-                for (int d = 0; d < numDisp; ++d)
+                continue;
+            }
+
+            std::fill(previous.begin(), previous.end(), kInvalidCost);
+            bool hasPreviousPixel = false;
+            int x = startX;
+            int y = startY;
+            while (isInside(x, y, width, height))
+            {
+                float minimumPrevious = kInvalidCost;
+                if (hasPreviousPixel)
                 {
-                    float v = L[d].at<float>(py, px);
-                    if (v < minPrev)
+                    for (float cost : previous)
                     {
-                        minPrev = v;
+                        if (isUsablePathCost(cost))
+                        {
+                            minimumPrevious = std::min(minimumPrevious, cost);
+                        }
                     }
                 }
 
-                for (int d = 0; d < numDisp; ++d)
+                std::fill(current.begin(), current.end(), kInvalidCost);
+                for (int disparityIndex = 0; disparityIndex < numDisparities; ++disparityIndex)
                 {
-                    float l0 = L[d].at<float>(py, px);
-                    float l1 = (d > 0)
-                        ? L[d - 1].at<float>(py, px) + p1 : 1e20f;
-                    float l2 = (d < numDisp - 1)
-                        ? L[d + 1].at<float>(py, px) + p1 : 1e20f;
-                    float l3 = minPrev + p2;
-                    float minL = std::min({l0, l1, l2, l3});
-                    L[d].at<float>(y, x) +=
-                        C[d].at<float>(y, x) + minL - minPrev;
+                    const std::size_t index = static_cast<std::size_t>(disparityIndex);
+                    if (!costVolume.isValid(index, y, x))
+                    {
+                        continue;
+                    }
+
+                    const float matchingCost = costVolume[index].at<float>(y, x);
+                    if (!isUsablePathCost(matchingCost))
+                    {
+                        aggregate[index].at<float>(y, x) = kInvalidCost;
+                        continue;
+                    }
+
+                    float pathCost = matchingCost;
+                    if (hasPreviousPixel && isUsablePathCost(minimumPrevious))
+                    {
+                        float transitionCost = minimumPrevious + p2;
+                        if (isUsablePathCost(previous[index]))
+                        {
+                            transitionCost = std::min(transitionCost, previous[index]);
+                        }
+                        if (disparityIndex > 0
+                            && isUsablePathCost(previous[index - 1]))
+                        {
+                            transitionCost = std::min(
+                                transitionCost,
+                                previous[index - 1] + p1);
+                        }
+                        if (disparityIndex + 1 < numDisparities
+                            && isUsablePathCost(previous[index + 1]))
+                        {
+                            transitionCost = std::min(
+                                transitionCost,
+                                previous[index + 1] + p1);
+                        }
+                        pathCost += transitionCost - minimumPrevious;
+                    }
+
+                    current[index] = pathCost;
+                    float &aggregatedCost = aggregate[index].at<float>(y, x);
+                    if (isUsablePathCost(aggregatedCost))
+                    {
+                        aggregatedCost += pathCost;
+                    }
                 }
-            }
-            else
-            {
-                for (int d = 0; d < numDisp; ++d)
-                {
-                    L[d].at<float>(y, x) += C[d].at<float>(y, x);
-                }
+
+                previous.swap(current);
+                hasPreviousPixel = true;
+                x += direction.x;
+                y += direction.y;
             }
         }
     }
+}
+
+} // namespace
+
+CostVolume aggregateSgmCostVolume(const CostVolume &costVolume,
+                                  int p1,
+                                  int p2,
+                                  const std::vector<SgmDirection> &directions)
+{
+    if (costVolume.empty())
+    {
+        return {};
+    }
+
+    CostVolume aggregate(
+        costVolume.minDisparity(),
+        costVolume.maxDisparity(),
+        costVolume[0].size());
+    for (std::size_t disparityIndex = 0;
+         disparityIndex < aggregate.size();
+         ++disparityIndex)
+    {
+        aggregate[disparityIndex].setTo(
+            0.0f,
+            aggregate.hypothesisValidMask(disparityIndex));
+    }
+
+    const float smallPenalty = static_cast<float>(std::max(0, p1));
+    const float largePenalty = static_cast<float>(std::max(std::max(0, p2), p1));
+    for (const SgmDirection direction : directions)
+    {
+        if ((direction.x == 0 && direction.y == 0)
+            || std::abs(direction.x) > 1
+            || std::abs(direction.y) > 1)
+        {
+            continue;
+        }
+        aggregateDirection(
+            aggregate,
+            costVolume,
+            smallPenalty,
+            largePenalty,
+            direction);
+    }
+    return aggregate;
+}
+
+SgmMatcher::SgmMatcher(const DenseMatchConfig &cfg) : _config(cfg)
+{
 }
 
 DisparityResult SgmMatcher::compute(const cv::Mat &left, const cv::Mat &right)
@@ -85,9 +193,7 @@ DisparityResult SgmMatcher::compute(const cv::Mat &left, const cv::Mat &right)
 
     int imgW = left.cols;
     int imgH = left.rows;
-    int numDisp = _config.maxDisparity - _config.minDisparity;
-
-    if (numDisp <= 0)
+    if (_config.maxDisparity <= _config.minDisparity)
     {
         DisparityResult empty;
         empty.disparity = cv::Mat();
@@ -95,6 +201,11 @@ DisparityResult SgmMatcher::compute(const cv::Mat &left, const cv::Mat &right)
         empty.validMask = cv::Mat();
         return empty;
     }
+    const int numDisp = checkedCostVolumeBufferLayout(
+        imgW,
+        imgH,
+        _config.minDisparity,
+        _config.maxDisparity).numDisparities;
 
     CostVolume C;
 #ifdef DM_ENABLE_CUDA
@@ -114,12 +225,6 @@ DisparityResult SgmMatcher::compute(const cv::Mat &left, const cv::Mat &right)
             _config.costFunc, _config.numThreads);
     }
 
-    CostVolume L(numDisp);
-    for (int d = 0; d < numDisp; ++d)
-    {
-        L[d] = cv::Mat(imgH, imgW, CV_32FC1, cv::Scalar(0));
-    }
-
     int numDirs = _config.sgmDirections;
     if (numDirs < 1)
     {
@@ -130,48 +235,51 @@ DisparityResult SgmMatcher::compute(const cv::Mat &left, const cv::Mat &right)
         numDirs = 8;
     }
 
-    for (int dir = 0; dir < numDirs; ++dir)
+    std::vector<SgmDirection> directions;
+    directions.reserve(static_cast<std::size_t>(numDirs));
+    for (int directionIndex = 0; directionIndex < numDirs; ++directionIndex)
     {
-        aggregatePath(L, C, imgW, imgH, numDisp,
-                      SGM_DIRS[dir][0], SGM_DIRS[dir][1]);
+        directions.push_back(kSgmDirections[static_cast<std::size_t>(directionIndex)]);
     }
+    CostVolume aggregate = aggregateSgmCostVolume(C, _config.p1, _config.p2, directions);
 
     DisparityResult result;
     result.disparity  = cv::Mat(imgH, imgW, CV_32FC1);
     result.confidence = cv::Mat(imgH, imgW, CV_32FC1);
     result.validMask  = cv::Mat(imgH, imgW, CV_8UC1);
+    const int threadCount = std::max(1, _config.numThreads);
 
 #ifdef _OPENMP
-    #pragma omp parallel for num_threads(_config.numThreads)
+    #pragma omp parallel for num_threads(threadCount)
 #endif
     for (int y = 0; y < imgH; ++y)
     {
         for (int x = 0; x < imgW; ++x)
         {
-            float bestCost = 1e20f;
-            float secondBest = 1e20f;
-            int bestDisp = 0;
-
-            for (int dIdx = 0; dIdx < numDisp; ++dIdx)
+            const BestDisparity selection = selectBestDisparity(aggregate, y, x);
+            if (!selection.valid)
             {
-                float c = L[dIdx].at<float>(y, x);
-                if (c < bestCost)
-                {
-                    secondBest = bestCost;
-                    bestCost = c;
-                    bestDisp = _config.minDisparity + dIdx;
-                }
-                else if (c < secondBest)
-                {
-                    secondBest = c;
-                }
+                result.disparity.at<float>(y, x) = 0.0f;
+                result.confidence.at<float>(y, x) = 0.0f;
+                result.validMask.at<uchar>(y, x) = 0;
+                continue;
             }
 
-            result.disparity.at<float>(y, x) = static_cast<float>(bestDisp);
-            result.confidence.at<float>(y, x) =
-                (bestCost > 0) ? (secondBest - bestCost) / bestCost : 0.0f;
+            result.disparity.at<float>(y, x) = static_cast<float>(selection.disparity);
+            result.confidence.at<float>(y, x) = selection.confidence;
             result.validMask.at<uchar>(y, x) = 1;
         }
+    }
+
+    if (_config.subpixel != SubpixelMode::None)
+    {
+        SubpixelRefiner refiner(_config);
+        result.disparity = refiner.refine(
+            result.disparity,
+            aggregate,
+            _config.minDisparity,
+            _config.maxDisparity,
+            result.validMask);
     }
 
     return result;

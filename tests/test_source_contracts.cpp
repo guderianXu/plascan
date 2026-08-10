@@ -951,20 +951,28 @@ TEST(GuiAlgorithmAlignmentContractTest, GenerateModelBlockControlsAreBoundToSett
     });
 }
 
-TEST(MvsSchedulerContractTest, VisibilityAndSourceViewCachesAvoidRedundantWork)
+TEST(MvsSchedulerContractTest, UsesDedicatedVisibilityBuilderAndBudget)
 {
     const QString header = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.h"));
     const QString scheduler = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString visibilityHeader = readSourceFile(
+        QStringLiteral("src/core/mvs/MvsVisibilityGraphBuilder.h"));
+    const QString visibilityBuilder = readSourceFile(
+        QStringLiteral("src/core/mvs/MvsVisibilityGraphBuilder.cpp"));
+    const QString memoryPolicy = readSourceFile(
+        QStringLiteral("src/core/mvs/DepthMemoryPolicy.cpp"));
 
     expectContainsAll(header, {
         "FrameMvsCache",
         "prepareFrameCaches",
         "_visibilityBits",
-        "_pairCommonCounts",
         "sourceSharedPointIndices",
     });
     expectContainsAll(scheduler, {
         "prepareFrameCaches();",
+        "MvsVisibilityGraphBuilder::build",
+        "estimateMvsVisibilityGraphMemory",
+        "plannedVisibilityMemory",
         "sourceViewIndicesForFrame",
         "visibleSparsePointIndicesForFrame",
         "sourceSharedPointIndices.reserve",
@@ -972,6 +980,32 @@ TEST(MvsSchedulerContractTest, VisibilityAndSourceViewCachesAvoidRedundantWork)
         "sourceIndicesMatchCachedPrefix",
     });
     expectNotContainsAll(scheduler, {"selectMvsSourceViewIndices(_views, _sparse, refIdx, numSrc)"});
+
+    expectContainsAll(visibilityHeader, {
+        "MvsVisibilityGraphBuildOptions",
+        "requiredPairs",
+        "geometryPreferredPeersByView",
+        "cancelFlag",
+        "cooperativeCheckpointHook",
+        "buildGeometryPeerShortlist",
+    });
+    expectContainsAll(visibilityBuilder, {
+        "buildCompletePairs = viewCount <= fullPairLimit",
+        "cancellationRequested(options)",
+        "(pointIndex & 255U)",
+        "(viewIndex & 255U)",
+        "(word & 255U)",
+        "std::popcount",
+        "buildGeometryPeerShortlist",
+    });
+    expectNotContainsAll(visibilityBuilder, {
+        "visibleViews.size() <= fullPairLimit",
+    });
+    expectContainsAll(memoryPolicy, {
+        "estimateMvsVisibilityGraphMemory",
+        "visibilityEstimate.totalBytes",
+        "estimate.visibility = visibilityEstimate",
+    });
 
     const QString visibleBlock =
         sectionBetween(scheduler, "std::vector<size_t> DepthMapGenerator::visibleSparsePointIndicesForFrame", "// =============================================================================");
@@ -982,25 +1016,13 @@ TEST(MvsSchedulerContractTest, VisibilityAndSourceViewCachesAvoidRedundantWork)
     const QString frameCacheBlock =
         sectionBetween(scheduler, "void DepthMapGenerator::prepareFrameCaches()", "std::vector<int> DepthMapGenerator::sourceViewIndicesForFrame");
     expectContainsAll(frameCacheBlock, {
-        "VisibilityCacheShard",
-        "visibilityWorkerCount",
-        "#pragma omp parallel",
-        "#pragma omp for",
-        "shard.visiblePointIndicesByView",
-        "shard.pairCommonCounts",
-        "mergeVisibilityCacheShards",
-        "buildVisibilityBitsFromFrameCaches",
+        "visibilityOptions.cancelFlag = &_cancelled",
+        "MvsVisibilityGraphBuilder::build",
+        "visibilityGraph.cancelled",
+        "visibilityGraph.neighborsByView",
         "rankedSourceCandidates",
         "desiredSourceCount",
-        "currentSourceScoreCutoff",
-        "remaining candidates are sorted by common count",
-        "candidate.commonVisiblePoints <= currentSourceScoreCutoff",
     });
-    expectNotContainsAll(frameCacheBlock, {
-        "_frameCaches[static_cast<size_t>(viewIdx)].visiblePointIndices.push_back(pointIndex);",
-    });
-    EXPECT_LT(indexOfOrFail(frameCacheBlock, "candidate.commonVisiblePoints <= currentSourceScoreCutoff"),
-              indexOfOrFail(frameCacheBlock, "sampledMedianAngle(refIdx, candidate.viewIndex)"));
 }
 
 TEST(MvsSchedulerContractTest, LargeHybridBatchKeepsBoundedOpenClFullFrame)

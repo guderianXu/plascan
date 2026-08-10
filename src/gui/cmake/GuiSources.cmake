@@ -106,6 +106,9 @@ set(GUI_PROJECT_SOURCES
   project/support/ProjectCameraInitialization.cpp
   project/support/ProjectDashboardSummary.cpp
   project/support/ProjectDepthBatchLineage.cpp
+  project/support/ProjectModelResultPolicy.cpp
+  project/support/ProjectModelTaskLifecycle.cpp
+  project/support/ProjectRunArtifactValidator.cpp
   project/support/ProjectModelWorkflowPolicy.cpp
   project/support/ProjectMetadataOperations.cpp
   project/support/ProjectOpenGuard.cpp

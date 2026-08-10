@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ModelOutputPolicy.h"
 #include "SurfaceReconstructor.h"
 #include "TextureMapper.h"
 
@@ -7,6 +8,7 @@
 #include <QString>
 
 #include <functional>
+#include <optional>
 
 namespace xjw::mesh
 {
@@ -23,6 +25,7 @@ struct MeshBuildRequest
     xjw::mesh::ReconstructionConfig reconstruction;
     bool exportObj = false;
     xjw::mesh::TextureMappingConfig texture;
+    std::function<bool()> isCancelled;
     std::function<void(const QString &, int)> progress;
 };
 
@@ -43,6 +46,7 @@ struct TextureBuildRequest
 {
     QString meshPath;
     QString outputDir;
+    QString textureRunId;
     QString depthMapSourcePath;
     xjw::mesh::TextureMappingConfig texture;
     bool allowVertexColorFallback = false;
@@ -58,6 +62,8 @@ struct ModelBuildRequest
     QString depthMapSourcePath;
     QString outputRoot;
     QJsonObject settings;
+    std::optional<ModelOutputPolicy> outputPolicy;
+    QString runId;
     std::function<bool()> isCancelled;
     std::function<void(const QString &, int)> progress;
 };

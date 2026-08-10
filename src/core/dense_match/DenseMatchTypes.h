@@ -36,6 +36,7 @@ enum class SubpixelMode
 
 struct DisparityResult
 {
+    // Left-reference disparity: d = x_left - x_right.
     cv::Mat disparity;
     cv::Mat confidence;
     cv::Mat validMask;

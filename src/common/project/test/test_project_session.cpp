@@ -346,6 +346,19 @@ TEST(ProjectSessionTest, SharesIdenticalImagesAcrossChunks)
         << qPrintable(error);
     ASSERT_TRUE(store.removeChunk(second.id, &error))
         << qPrintable(error);
+    EXPECT_EQ(
+        QDir(ProjectPackageLayout::sharedImagesDirectory(projectPath))
+            .entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot).size(),
+        1);
+
+    // The first committed generation without references only establishes the
+    // tombstone. A later durable chunk revision must confirm that the image is
+    // still unreachable before the shared-image GC may delete it.
+    ProjectSession thirdSession;
+    ASSERT_TRUE(thirdSession.open(projectPath, &error))
+        << qPrintable(error);
+    ASSERT_TRUE(thirdSession.save(&error)) << qPrintable(error);
+    thirdSession.close();
     EXPECT_TRUE(
         QDir(ProjectPackageLayout::sharedImagesDirectory(projectPath))
             .entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot).isEmpty());

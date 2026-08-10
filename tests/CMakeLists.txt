@@ -7,8 +7,19 @@ include(CheckLanguage)
 # ── GTest ────────────────────────────────────────────────────────────────────
 find_package(GTest REQUIRED)
 include(GoogleTest)
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Test Widgets Network Concurrent)
+set(PLASCAN_TEST_QT_COMPONENTS Core Gui Network Concurrent)
+if(PLASCAN_BUILD_GUI AND PLASCAN_BUILD_GUI_TESTS)
+    list(APPEND PLASCAN_TEST_QT_COMPONENTS Widgets Test)
+endif()
+find_package(Qt6 REQUIRED COMPONENTS ${PLASCAN_TEST_QT_COMPONENTS})
 find_package(Python3 COMPONENTS Interpreter)
+
+add_test(
+    NAME CMakeDependencyPathsTest
+    COMMAND ${CMAKE_COMMAND}
+        -DPLASCAN_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/test_dependency_paths.cmake
+)
 
 # 验证开发构建实际携带可加载的 Qt TLS 后端。真实 HTTPS 请求默认跳过，可通过
 # PLASCAN_TEST_HTTPS_URL 在集成验证时显式启用，避免离线环境下的常规 ctest 不稳定。
@@ -527,18 +538,20 @@ target_include_directories(test_bundle_adjust_service_lidar PRIVATE
 )
 gtest_discover_tests(test_bundle_adjust_service_lidar)
 
-add_executable(test_planetary_laser_preview
-    test_planetary_laser_preview.cpp
-)
-target_link_libraries(test_planetary_laser_preview PRIVATE
-    gui_project
-    Qt6::Core
-    GTest::gtest_main
-)
-target_include_directories(test_planetary_laser_preview PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/gui/project/support
-)
-gtest_discover_tests(test_planetary_laser_preview)
+if(PLASCAN_BUILD_GUI AND PLASCAN_BUILD_GUI_TESTS)
+    add_executable(test_planetary_laser_preview
+        test_planetary_laser_preview.cpp
+    )
+    target_link_libraries(test_planetary_laser_preview PRIVATE
+        gui_project
+        Qt6::Core
+        GTest::gtest_main
+    )
+    target_include_directories(test_planetary_laser_preview PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/gui/project/support
+    )
+    gtest_discover_tests(test_planetary_laser_preview)
+endif()
 
 add_executable(test_reference_dataset_planetary_laser
     test_reference_dataset_planetary_laser.cpp
@@ -577,9 +590,21 @@ target_include_directories(test_project_data PRIVATE
 )
 gtest_discover_tests(test_project_data)
 
+add_executable(test_project_resource_cleanup
+    test_project_resource_cleanup.cpp
+)
+target_link_libraries(test_project_resource_cleanup PRIVATE
+    project_workflows
+    plascan_common_project
+    Qt6::Core
+    GTest::gtest_main
+)
+gtest_discover_tests(test_project_resource_cleanup)
+
 # ==============================================================================
 # test_gui_project_utils — GUI project 工具与三角化服务
 # ==============================================================================
+if(PLASCAN_BUILD_GUI AND PLASCAN_BUILD_GUI_TESTS)
 set(MARKER_PANEL_TEST_SOURCES)
 set(MARKER_PANEL_REQUIRED_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/test_marker_panels.cpp
@@ -936,120 +961,61 @@ if(GDAL_INCLUDE_DIRS)
 endif()
 add_test(NAME test_layer_renderer_batched_overlay
          COMMAND test_layer_renderer_batched_overlay)
-
-if(Python3_Interpreter_FOUND)
-    add_test(
-        NAME FullPipelineEntrypointTest
-        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_full_pipeline_entrypoint
-    )
-    set_tests_properties(FullPipelineEntrypointTest PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-
-    add_test(
-        NAME RepoHygieneTest
-        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_repo_hygiene
-    )
-    set_tests_properties(RepoHygieneTest PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-
-    add_test(
-        NAME PythonRuntimeSetupTest
-        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_setup_python_runtime
-    )
-    set_tests_properties(PythonRuntimeSetupTest PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-
-    add_test(
-        NAME DownloadPhotogrammetryTestDataTest
-        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_download_photogrammetry_testdata
-    )
-    set_tests_properties(DownloadPhotogrammetryTestDataTest PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-
-    add_test(
-        NAME PreparePhotogrammetryBenchmarksTest
-        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_prepare_photogrammetry_benchmarks
-    )
-    set_tests_properties(PreparePhotogrammetryBenchmarksTest PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-
-    add_test(
-        NAME ValidateLidarBaInputsTest
-        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_validate_lidar_ba_inputs
-    )
-    set_tests_properties(ValidateLidarBaInputsTest PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-
-    add_test(
-        NAME PrepareLidarBaAbBenchmarkTest
-        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_prepare_lidar_ba_ab_benchmark
-    )
-    set_tests_properties(PrepareLidarBaAbBenchmarkTest PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-
-    add_test(
-        NAME CompareLidarBaAbResultsTest
-        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_compare_lidar_ba_ab_results
-    )
-    set_tests_properties(CompareLidarBaAbResultsTest PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-
-    add_test(
-        NAME PhotogrammetryBenchmarkRunnerTest
-        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_photogrammetry_benchmark_runner
-    )
-    set_tests_properties(PhotogrammetryBenchmarkRunnerTest PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-
-    add_test(
-        NAME PrepareMunFrlLidarBaProjectTest
-        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_prepare_mun_frl_lidar_ba_project
-    )
-    set_tests_properties(PrepareMunFrlLidarBaProjectTest PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-
-    add_test(
-        NAME EstimateLidarNormalsTest
-        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_estimate_lidar_normals
-    )
-    set_tests_properties(EstimateLidarNormalsTest PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-
-    add_test(
-        NAME TestParallelismRunnerTest
-        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_run_tests
-    )
-    set_tests_properties(TestParallelismRunnerTest PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-
-    add_test(
-        NAME PrepareTanksIgnatiusLidarBaTest
-        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_prepare_tanks_ignatius_lidar_ba
-    )
-    set_tests_properties(PrepareTanksIgnatiusLidarBaTest PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-
-    add_test(
-        NAME SummarizeMvsDepthProvenanceTest
-        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_summarize_mvs_depth_provenance
-    )
-    set_tests_properties(SummarizeMvsDepthProvenanceTest PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
 endif()
+
+function(plascan_add_python_unittest test_name module_name)
+    set_property(DIRECTORY APPEND PROPERTY
+        PLASCAN_REGISTERED_PYTHON_TEST_MODULES "${module_name}")
+    if(Python3_Interpreter_FOUND)
+        add_test(
+            NAME "${test_name}"
+            COMMAND ${Python3_EXECUTABLE} -B -m unittest "tests.${module_name}"
+        )
+        set_tests_properties("${test_name}" PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
+    endif()
+endfunction()
+
+plascan_add_python_unittest(FullPipelineEntrypointTest test_full_pipeline_entrypoint)
+plascan_add_python_unittest(RepoHygieneTest test_repo_hygiene)
+plascan_add_python_unittest(PythonRuntimeSetupTest test_setup_python_runtime)
+plascan_add_python_unittest(DownloadPhotogrammetryTestDataTest test_download_photogrammetry_testdata)
+plascan_add_python_unittest(PreparePhotogrammetryBenchmarksTest test_prepare_photogrammetry_benchmarks)
+plascan_add_python_unittest(ValidateLidarBaInputsTest test_validate_lidar_ba_inputs)
+plascan_add_python_unittest(PrepareLidarBaAbBenchmarkTest test_prepare_lidar_ba_ab_benchmark)
+plascan_add_python_unittest(CompareLidarBaAbResultsTest test_compare_lidar_ba_ab_results)
+plascan_add_python_unittest(PhotogrammetryBenchmarkRunnerTest test_photogrammetry_benchmark_runner)
+plascan_add_python_unittest(PrepareMunFrlLidarBaProjectTest test_prepare_mun_frl_lidar_ba_project)
+plascan_add_python_unittest(EstimateLidarNormalsTest test_estimate_lidar_normals)
+plascan_add_python_unittest(TestParallelismRunnerTest test_run_tests)
+plascan_add_python_unittest(PrepareTanksIgnatiusLidarBaTest test_prepare_tanks_ignatius_lidar_ba)
+plascan_add_python_unittest(SummarizeMvsDepthProvenanceTest test_summarize_mvs_depth_provenance)
+plascan_add_python_unittest(ModelProvenanceTest test_model_provenance)
+plascan_add_python_unittest(BundleAdjustmentCudaContractsTest test_ba_cuda_contracts)
+plascan_add_python_unittest(ComparePointCloudToLidarTest test_compare_point_cloud_to_lidar)
+plascan_add_python_unittest(DemGridToHeightPlyTest test_dem_grid_to_height_ply)
+plascan_add_python_unittest(VerifyMarkerPdfTest test_verify_marker_pdf)
+
+get_property(PLASCAN_REGISTERED_PYTHON_TEST_MODULES DIRECTORY PROPERTY
+    PLASCAN_REGISTERED_PYTHON_TEST_MODULES)
+file(GLOB PLASCAN_PYTHON_TEST_FILES
+    RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test_*.py")
+foreach(python_test_file IN LISTS PLASCAN_PYTHON_TEST_FILES)
+    get_filename_component(python_test_module "${python_test_file}" NAME_WE)
+    if(NOT python_test_module IN_LIST PLASCAN_REGISTERED_PYTHON_TEST_MODULES)
+        message(FATAL_ERROR
+            "Python test ${python_test_file} is not registered with CTest. "
+            "Add a plascan_add_python_unittest() call.")
+    endif()
+endforeach()
+foreach(python_test_module IN LISTS PLASCAN_REGISTERED_PYTHON_TEST_MODULES)
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${python_test_module}.py")
+        message(FATAL_ERROR
+            "Registered Python test module is missing: ${python_test_module}.py")
+    endif()
+endforeach()
 
 # ==============================================================================
 # test_mesh_reconstructor — 点云到网格重建降级路径
@@ -1085,6 +1051,38 @@ target_include_directories(test_mesh_reconstructor PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/mesh
 )
 gtest_discover_tests(test_mesh_reconstructor)
+
+add_executable(test_model_output_policy
+    test_model_output_policy.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectModelResultPolicy.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectRunArtifactValidator.cpp
+)
+target_link_libraries(test_model_output_policy PRIVATE
+    meshing
+    plapoint::plapoint
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_model_output_policy PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/mesh
+    ${CMAKE_SOURCE_DIR}/src/gui/project/support
+)
+gtest_discover_tests(test_model_output_policy)
+
+add_executable(test_project_model_task_lifecycle
+    test_project_model_task_lifecycle.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectModelTaskLifecycle.cpp
+)
+target_link_libraries(test_project_model_task_lifecycle PRIVATE
+    meshing
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_project_model_task_lifecycle PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/mesh
+    ${CMAKE_SOURCE_DIR}/src/gui/project/support
+)
+gtest_discover_tests(test_project_model_task_lifecycle)
 
 add_executable(test_depth_measured_support_connectivity
     test_depth_measured_support_connectivity.cpp
@@ -1163,7 +1161,8 @@ target_compile_definitions(test_camera_scene_render_contracts PRIVATE
 )
 gtest_discover_tests(test_camera_scene_render_contracts)
 
-if(PLASCAN_QT_HAS_VULKAN AND NOT APPLE)
+if(PLASCAN_BUILD_GUI AND PLASCAN_BUILD_GUI_TESTS AND
+   PLASCAN_QT_HAS_VULKAN AND NOT APPLE)
     add_executable(test_camera_scene_rhi_smoke
         test_camera_scene_rhi_smoke.cpp
     )
@@ -1195,7 +1194,7 @@ if(PLASCAN_QT_HAS_VULKAN AND NOT APPLE)
     unset(_PLASCAN_RHI_SMOKE_PLATFORM)
 else()
     message(STATUS
-        "test_camera_scene_rhi_smoke disabled: this platform's Qt build does not expose Vulkan")
+        "test_camera_scene_rhi_smoke disabled: GUI tests or Qt Vulkan support are unavailable")
 endif()
 
 add_executable(test_tie_point_visualization
