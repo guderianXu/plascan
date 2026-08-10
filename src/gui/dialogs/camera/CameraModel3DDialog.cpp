@@ -103,7 +103,7 @@ void CameraModel3DDialog::reloadFromProject()
         ? tr("，相机名称已抽样显示")
         : QString();
     _summaryLabel->setText(
-        tr("相机数量: %1%2（左键平移，右键旋转，滚轮缩放）")
+        tr("相机数量: %1%2（左键旋转，右键平移，滚轮缩放）")
             .arg(poses.size())
             .arg(labelHint));
 }

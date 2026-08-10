@@ -60,7 +60,7 @@ TEST(CameraSceneRenderContractTest, DrawsBackgroundBeforeGeometryAndForegroundAf
     EXPECT_GT(second_image_draw, foreground);
 }
 
-TEST(CameraSceneInteractionContractTest, UsesMetashapeStyleNavigationOutsideTheGizmo)
+TEST(CameraSceneInteractionContractTest, UsesStableOrbitOutsideTheGizmo)
 {
     const QString header =
         readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
@@ -83,21 +83,23 @@ TEST(CameraSceneInteractionContractTest, UsesMetashapeStyleNavigationOutsideTheG
     const QString moveBlock = source.mid(moveStart, releaseStart - moveStart);
 
     EXPECT_TRUE(header.contains(QStringLiteral("enum class LeftDragMode")));
-    EXPECT_TRUE(header.contains(QStringLiteral("Pan,")));
     EXPECT_TRUE(header.contains(QStringLiteral("Orbit,")));
     EXPECT_TRUE(header.contains(QStringLiteral("GizmoOrbit,")));
     EXPECT_TRUE(pressBlock.contains(QStringLiteral(
-        "_leftDragMode = LeftDragMode::Pan")));
-    EXPECT_TRUE(pressBlock.contains(QStringLiteral(
         "_leftDragMode = LeftDragMode::Orbit")));
+    EXPECT_FALSE(pressBlock.contains(QStringLiteral("LeftDragMode::Pan")));
     EXPECT_TRUE(pressBlock.contains(QStringLiteral("_rightDragging = true")));
     EXPECT_TRUE(pressBlock.contains(QStringLiteral("isInsideRotationGizmo")));
     EXPECT_TRUE(moveBlock.contains(QStringLiteral(
         "_manualSelecting && (event->buttons() & Qt::LeftButton)")));
     EXPECT_TRUE(moveBlock.contains(QStringLiteral("applyOrbitDrag(delta)")));
+    EXPECT_TRUE(moveBlock.contains(QStringLiteral(
+        "_rightDragging && (event->buttons() & Qt::RightButton)")));
+    EXPECT_TRUE(moveBlock.contains(QStringLiteral(
+        "_sceneOffsetPx += QPointF(delta.x(), delta.y())")));
     EXPECT_TRUE(viewMath.contains(QStringLiteral("orbitSceneViewRotation")));
     EXPECT_TRUE(taskStatus.contains(QStringLiteral("鼠标左键拖拽框选")));
-    EXPECT_TRUE(taskStatus.contains(QStringLiteral("右键拖拽可环绕查看")));
+    EXPECT_TRUE(taskStatus.contains(QStringLiteral("右键或中键拖拽可平移")));
 }
 
 TEST(CameraSceneRenderContractTest, AvoidsPerFrameSortingForOpaqueDepthWrittenThumbnails)

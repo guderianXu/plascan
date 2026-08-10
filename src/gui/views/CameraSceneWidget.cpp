@@ -4,7 +4,7 @@
 // 内容:
 //   - CameraSceneWidget：Qt RHI 三维渲染控件
 //       · 点云 / PLY 模型 / 相机平面卡片渲染（QRhiBuffer + .qsb shader）
-//       · Metashape 风格画布导航（左键平移、右键/ Ctrl+左键环绕）
+//       · 画布导航（左键/ Ctrl+左键稳定环绕，右键或中键平移）
 //       · 中央 Arcball + X/Y/Z 单轴环旋转、滚轮缩放
 //       · 透明 QWidget 覆盖层（Gizmo 环、坐标轴、相机卡片、欧拉角）
 // =============================================================================
@@ -348,7 +348,7 @@ CameraSceneWidget::CameraSceneWidget(QWidget *parent)
     _viewRot = QQuaternion::fromEulerAngles(-25.0f, 35.0f, 0.0f); // 默认斜视角
     setFocusPolicy(Qt::StrongFocus);
     setToolTip(tr(
-        "左键拖动平移；右键或 Ctrl+左键拖动环绕；滚轮缩放；中央轨迹球用于自由/单轴旋转"));
+        "左键或 Ctrl+左键拖动环绕；右键或中键拖动平移；滚轮缩放；中央轨迹球用于自由/单轴旋转"));
     updateCursor();
     const int ideal_threads = std::max(1, QThread::idealThreadCount());
     _maximumCameraImageLoads = std::clamp((ideal_threads + 1) / 2, 4, 12);
@@ -2345,8 +2345,8 @@ void CameraSceneWidget::clampSceneOffset()
 }
 
 // 根据当前的悬停轴/拖拽状态更新鼠标光标样式：
-//   - 左键画布平移/中键平移 → 四向移动光标
-//   - 右键/ Ctrl+左键环绕  → 闭合手型光标
+//   - 右键/中键平移          → 四向移动光标
+//   - 左键/ Ctrl+左键环绕    → 闭合手型光标
 //   - Gizmo 自由旋转中      → 闭合手型光标
 //   - 悬停/拖拽 X/Y/Z 环 → 带颜色和字母的自定义圆形光标
 //   - 默认              → 开放手型光标
@@ -2370,16 +2370,14 @@ void CameraSceneWidget::updateCursor()
         return QCursor(pm, 12, 12);
     };
 
-    if (_middleDragging
-        || (_leftDragging && _leftDragMode == LeftDragMode::Pan))
+    if (_middleDragging || _rightDragging)
     {
         setCursor(Qt::SizeAllCursor);
         return;
     }
-    if (_rightDragging
-        || (_leftDragging
-            && (_leftDragMode == LeftDragMode::Orbit
-                || _leftDragMode == LeftDragMode::GizmoOrbit)))
+    if (_leftDragging
+        && (_leftDragMode == LeftDragMode::Orbit
+            || _leftDragMode == LeftDragMode::GizmoOrbit))
     {
         setCursor(Qt::ClosedHandCursor);
         return;
@@ -5609,7 +5607,7 @@ void CameraSceneWidget::mousePressEvent(QMouseEvent *event)
         }
         else
         {
-            _leftDragMode = LeftDragMode::Pan;
+            _leftDragMode = LeftDragMode::Orbit;
         }
         updateCursor();
         event->accept();
@@ -5651,12 +5649,7 @@ void CameraSceneWidget::mouseMoveEvent(QMouseEvent *event)
     if (_leftDragging && (event->buttons() & Qt::LeftButton))
     {
         navigation_handled = true;
-        if (_leftDragMode == LeftDragMode::Pan)
-        {
-            _sceneOffsetPx += QPointF(delta.x(), delta.y());
-            clampSceneOffset();
-        }
-        else if (_leftDragMode == LeftDragMode::Orbit)
+        if (_leftDragMode == LeftDragMode::Orbit)
         {
             applyOrbitDrag(delta);
             rotation_changed = true;
@@ -5703,8 +5696,8 @@ void CameraSceneWidget::mouseMoveEvent(QMouseEvent *event)
     else if (_rightDragging && (event->buttons() & Qt::RightButton))
     {
         navigation_handled = true;
-        applyOrbitDrag(delta);
-        rotation_changed = true;
+        _sceneOffsetPx += QPointF(delta.x(), delta.y());
+        clampSceneOffset();
     }
     else if (_middleDragging && (event->buttons() & Qt::MiddleButton))
     {

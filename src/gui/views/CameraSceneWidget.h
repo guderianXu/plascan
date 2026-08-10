@@ -65,7 +65,7 @@ class QResizeEvent;
 // 使用 QRhiBuffer + .qsb shader（顶点色、Phong 光照和 UV 纹理 shader）
 // 功能包括：
 //   - 渲染相机姿态（位置+相机卡片）、点云（xyz）、PLY 网格和 OBJ/MTL 纹理模型
-//   - Metashape 风格画布导航：左键平移、右键/ Ctrl+左键环绕、滚轮缩放
+//   - 画布导航：左键/ Ctrl+左键稳定环绕，右键或中键平移，滚轮缩放
 //   - 中央轨迹球 Arcball 自由旋转和 X/Y/Z 单轴环旋转
 //   - 实时显示坐标轴指示器和欧拉角信息
 // =============================================================================
@@ -210,7 +210,6 @@ private:
     enum class LeftDragMode
     {
         None,
-        Pan,
         Orbit,
         GizmoOrbit,
         GizmoAxis
@@ -696,7 +695,7 @@ private:
     HoverAxis _dragAxis = HoverAxis::None;    // 当前拖拽激活的轴
     bool _leftDragging = false;               // 左键导航或 Gizmo 拖拽
     bool _middleDragging = false;             // 中键平移
-    bool _rightDragging = false;              // 右键画布环绕
+    bool _rightDragging = false;              // 右键画布平移
     LeftDragMode _leftDragMode = LeftDragMode::None;
     QVector2D _dragAxisDir;                   // 单轴旋转时的切线方向（屏幕空间）
     // Arcball 按下时记录的状态（用于从初始旋转叠加增量，避免浮点漂移）

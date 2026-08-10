@@ -243,7 +243,7 @@ void CameraSceneWidget::paintOverlay(QPainter &painter)
 
         painter.setPen(QColor(235, 80, 80));
         QString manual_status = tr(
-            "手动剔除：左键框选，右键环绕，中键平移，前进侧键删除，Ctrl+Z 撤销（已选 %1）")
+            "手动剔除：左键框选，右键/中键平移，中央轨迹球旋转，前进侧键删除，Ctrl+Z 撤销（已选 %1）")
             .arg(static_cast<int>(_manualPreviewIndices.size()));
         if (_manualSelectionRunning)
         {
