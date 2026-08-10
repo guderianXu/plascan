@@ -47,8 +47,8 @@ TEST(SfmSearchPolicyTest, ResolvesAutomaticThreadBudgetFromHardware)
 TEST(SfmSearchPolicyTest, BoundsOnlyLargeFocalSearchProblems)
 {
     EXPECT_EQ(xjw::aerial_triangulation::focalProbeRegistrationLimit(96), 0);
-    EXPECT_EQ(xjw::aerial_triangulation::focalProbeRegistrationLimit(97), 64);
-    EXPECT_EQ(xjw::aerial_triangulation::focalProbeRegistrationLimit(444), 64);
+    EXPECT_EQ(xjw::aerial_triangulation::focalProbeRegistrationLimit(97), 24);
+    EXPECT_EQ(xjw::aerial_triangulation::focalProbeRegistrationLimit(444), 24);
 }
 
 TEST(SfmSearchPolicyTest, ScalesIntermediateBundleAdjustmentForLargeProjects)
@@ -306,15 +306,15 @@ TEST(SfmSearchPolicyTest, AdaptiveFocalSweepCoversNarrowFieldOfViewCameras)
     EXPECT_NE(std::find(scales.begin(), scales.end(), 1.05), scales.end());
 }
 
-TEST(SfmSearchPolicyTest, CoarseFocalSweepUsesEightDeterministicRangeAnchors)
+TEST(SfmSearchPolicyTest, LightweightFocalEstimateUsesFiveDeterministicRangeAnchors)
 {
     const std::vector<double> scales =
         xjw::aerial_triangulation::adaptiveFocalCoarseScaleCandidates();
 
-    ASSERT_EQ(scales.size(), 8u);
+    ASSERT_EQ(scales.size(), 5u);
     EXPECT_TRUE(std::is_sorted(scales.cbegin(), scales.cend()));
     EXPECT_NE(std::find(scales.cbegin(), scales.cend(), 0.55), scales.cend());
-    EXPECT_NE(std::find(scales.cbegin(), scales.cend(), 1.2), scales.cend());
+    EXPECT_NE(std::find(scales.cbegin(), scales.cend(), 1.0), scales.cend());
     EXPECT_NE(std::find(scales.cbegin(), scales.cend(), 5.2), scales.cend());
     EXPECT_NE(std::find(scales.cbegin(), scales.cend(), 9.0), scales.cend());
 }

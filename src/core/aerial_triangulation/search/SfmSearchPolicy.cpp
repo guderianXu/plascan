@@ -118,9 +118,10 @@ SfmWorkerBudget allocateWorkers(int candidateCount, int totalThreads)
 
 int focalProbeRegistrationLimit(int totalImages)
 {
-    // 小型环拍数据需要完整闭环才能可靠区分焦距；超过 96 张后，64 台已注册相机
-    // 足以形成稳定局部摄影测量网，同时把每个候选的 BA 规模限制在可交互范围。
-    return totalImages > 96 ? std::min(totalImages, 64) : 0;
+    // 小型环拍数据需要完整闭环才能可靠区分焦距。大工程先用 24 台相机形成
+    // 轻量局部网估计焦距区间，胜出尺度再全量重放；失败时仍有全尺度兜底。
+    // 这避免无先验时默认把每个焦距候选都扩展到 64 台相机。
+    return totalImages > 96 ? std::min(totalImages, 24) : 0;
 }
 
 SfmBaSchedule resolveSfmBaSchedule(int totalImages,
@@ -270,9 +271,9 @@ std::vector<double> adaptiveFocalScaleCandidates()
 
 std::vector<double> adaptiveFocalCoarseScaleCandidates()
 {
-    // 八个锚点覆盖完整尺度表的关键摄影测量区间。9 倍尺度必须留在第一阶段，
-    // 避免 ONC-T 等长焦行星相机只有在普通焦距候选胜出后才有机会被评估。
-    return {0.55, 0.85, 1.0, 1.2, 2.4, 4.0, 5.2, 9.0};
+    // 五个几何锚点用于轻量估计；仍覆盖广角、普通摄影、远摄与约 9 倍影像宽度
+    // 的行星长焦。成功后只细化最佳邻域，失败才进入完整 18 尺度兜底。
+    return {0.55, 1.0, 2.4, 5.2, 9.0};
 }
 
 std::vector<double> adaptiveFocalRefinementScaleCandidates(

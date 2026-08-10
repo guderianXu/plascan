@@ -98,9 +98,10 @@ class SfmBundleAdjustCoordinator
         int activeCameraCount,
         double opticalAxisConcentration);
 
-    /// 周期全局 BA 限制为两轮；最终精化保留用户配置轮数。
+    /// 大型工程周期全局 BA 限制为一轮；小工程最多两轮，最终精化保留配置轮数。
     static int iterativeGlobalBaRoundLimit(int configuredRounds,
-                                           bool finalRefinement);
+                                           bool finalRefinement,
+                                           int activeCameraCount);
 
     /// 累计多轮自适应模型诊断；已应用模型不会被后续 no-op 或跳过轮覆盖。
     static SfmAdaptiveCameraModelDiagnosticMergeResult

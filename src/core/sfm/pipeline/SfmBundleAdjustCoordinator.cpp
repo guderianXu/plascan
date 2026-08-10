@@ -313,10 +313,15 @@ bool SfmBundleAdjustCoordinator::shouldAcceptTrackConsolidation(
 
 int SfmBundleAdjustCoordinator::iterativeGlobalBaRoundLimit(
     int configuredRounds,
-    bool finalRefinement)
+    bool finalRefinement,
+    int activeCameraCount)
 {
     const int safe_rounds = std::max(1, configuredRounds);
-    return finalRefinement ? safe_rounds : std::min(2, safe_rounds);
+    if (finalRefinement)
+    {
+        return safe_rounds;
+    }
+    return activeCameraCount > 96 ? 1 : std::min(2, safe_rounds);
 }
 
 SfmAdaptiveCameraModelDiagnosticMergeResult
@@ -1983,10 +1988,11 @@ void IncrementalSfm::iterativeGlobalBA(bool finalRefinement)
         SfmBundleAdjustCoordinator(*this).consolidateInputTracksForFinalBa();
     }
 
+    const int registered_count = static_cast<int>(_reconstruction->numRegisteredImages());
     int maxRounds = SfmBundleAdjustCoordinator::iterativeGlobalBaRoundLimit(
         _sfmOptions.iterativeBARounds,
-        finalRefinement);
-    const int registered_count = static_cast<int>(_reconstruction->numRegisteredImages());
+        finalRefinement,
+        registered_count);
     const int repeat_threshold = std::max(2, _sfmOptions.hierarchicalBATargetBlockSize / 2);
     const bool hierarchical_schedule_active = HierarchicalBundleAdjuster::shouldRun(
         _sfmOptions.enableHierarchicalBA,

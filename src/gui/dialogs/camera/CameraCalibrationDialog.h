@@ -3,6 +3,7 @@
 #include "CameraCalibrationData.h"
 
 #include <QDialog>
+#include <QJsonObject>
 #include <QVector>
 
 class QLabel;
@@ -23,6 +24,7 @@ public:
 signals:
     void importCameraForImageRequested(const QString &imagePath);
     void batchImportRequested();
+    void initializeIntrinsicsRequested(const QJsonObject &settings);
     void clearCamerasRequested(const QStringList &imagePaths);
 
 private slots:
@@ -30,6 +32,7 @@ private slots:
     void updateCameraActionAvailability();
     void requestImportForSelectedPhoto();
     void requestBatchImport();
+    void requestInitializeIntrinsics();
     void requestClearSelectedCameras();
 
 private:
@@ -61,5 +64,6 @@ private:
     QLabel *_summaryLabel = nullptr;
     QPushButton *_importSelectedButton = nullptr;
     QPushButton *_batchImportButton = nullptr;
+    QPushButton *_initializeIntrinsicsButton = nullptr;
     QPushButton *_clearSelectedButton = nullptr;
 };

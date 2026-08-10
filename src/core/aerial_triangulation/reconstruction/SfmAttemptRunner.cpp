@@ -297,9 +297,9 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
     std::optional<Logger::ScopedThreadMinimumLevel> coarseLogFilter;
     if (input.coarseFocalEvaluation)
     {
-        // 粗焦距候选会并行产生大量逐相机 INFO 日志。同步文件 sink 每行都会
-        // flush 并持有全局锁，因此这里只保留警告和错误；胜出后的正式重建仍输出完整日志。
-        coarseLogFilter.emplace(Logger::Warn);
+        // 焦距候选会并行产生大量逐相机 INFO/WARN。PnP 失败在候选阶段只是评分
+        // 证据，不是生产故障；统一由 Pipeline 汇总，正式重建仍输出完整 WARN。
+        coarseLogFilter.emplace(Logger::Error);
     }
 
     // 阶段 1：把持久化多视轨迹转换为 SfM 需要的每影像关键点和 pairwise matches。

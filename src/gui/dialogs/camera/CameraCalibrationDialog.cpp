@@ -4,8 +4,11 @@
 
 #include <QAbstractItemView>
 #include <QColor>
+#include <QCheckBox>
 #include <QDialogButtonBox>
+#include <QDoubleSpinBox>
 #include <QFileInfo>
+#include <QFormLayout>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QItemSelectionModel>
@@ -27,6 +30,79 @@
 
 namespace
 {
+
+std::optional<QJsonObject> promptForCameraIntrinsics(QWidget *parent)
+{
+    QDialog dialog(parent);
+    dialog.setWindowTitle(QObject::tr("输入真实相机内参"));
+    dialog.setMinimumWidth(460);
+
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *description = new QLabel(
+        QObject::tr("参数使用像素单位，并应用到项目全部影像。适用于行星相机、实验室标定相机"
+                    "或其它无法从 EXIF 获得可靠焦距的影像。cx/cy 设为 -1 时使用影像中心。"),
+        &dialog);
+    description->setWordWrap(true);
+    layout->addWidget(description);
+
+    auto *form = new QFormLayout();
+    const auto makeSpin = [&dialog](double minimum,
+                                    double maximum,
+                                    double value,
+                                    int decimals)
+    {
+        auto *spin = new QDoubleSpinBox(&dialog);
+        spin->setRange(minimum, maximum);
+        spin->setDecimals(decimals);
+        spin->setValue(value);
+        spin->setKeyboardTracking(false);
+        return spin;
+    };
+    QDoubleSpinBox *fx = makeSpin(0.001, 100000000.0, 1000.0, 6);
+    QDoubleSpinBox *fy = makeSpin(0.001, 100000000.0, 1000.0, 6);
+    QDoubleSpinBox *cx = makeSpin(-1.0, 100000000.0, -1.0, 6);
+    QDoubleSpinBox *cy = makeSpin(-1.0, 100000000.0, -1.0, 6);
+    QDoubleSpinBox *k1 = makeSpin(-10.0, 10.0, 0.0, 10);
+    QDoubleSpinBox *k2 = makeSpin(-10.0, 10.0, 0.0, 10);
+    QDoubleSpinBox *p1 = makeSpin(-10.0, 10.0, 0.0, 10);
+    QDoubleSpinBox *p2 = makeSpin(-10.0, 10.0, 0.0, 10);
+    form->addRow(QObject::tr("fx (px)"), fx);
+    form->addRow(QObject::tr("fy (px)"), fy);
+    form->addRow(QObject::tr("cx (px)"), cx);
+    form->addRow(QObject::tr("cy (px)"), cy);
+    form->addRow(QObject::tr("k1"), k1);
+    form->addRow(QObject::tr("k2"), k2);
+    form->addRow(QObject::tr("p1"), p1);
+    form->addRow(QObject::tr("p2"), p2);
+    layout->addLayout(form);
+
+    auto *overwrite = new QCheckBox(QObject::tr("覆盖已有相机内参"), &dialog);
+    layout->addWidget(overwrite);
+    auto *buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
+        &dialog);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    if (dialog.exec() != QDialog::Accepted)
+    {
+        return std::nullopt;
+    }
+
+    QJsonObject settings;
+    settings.insert(QStringLiteral("applyScope"), 0);
+    settings.insert(QStringLiteral("overwriteExisting"), overwrite->isChecked());
+    settings.insert(QStringLiteral("distortionModel"), QStringLiteral("Brown (k1, k2, p1, p2)"));
+    settings.insert(QStringLiteral("fx"), fx->value());
+    settings.insert(QStringLiteral("fy"), fy->value());
+    settings.insert(QStringLiteral("cx"), cx->value());
+    settings.insert(QStringLiteral("cy"), cy->value());
+    settings.insert(QStringLiteral("k1"), k1->value());
+    settings.insert(QStringLiteral("k2"), k2->value());
+    settings.insert(QStringLiteral("p1"), p1->value());
+    settings.insert(QStringLiteral("p2"), p2->value());
+    return settings;
+}
 
 struct ParameterDescriptor
 {
@@ -348,7 +424,7 @@ void CameraCalibrationDialog::buildInterface()
     auto *intro = new QLabel(
         tr("“初始”是本次空三开始时使用的内方位先验；“调整”是连接点与束平差得到的内方位结果。"
            "cx/cy 按相对图像中心的像素偏移显示。本窗口不显示外方位 R/C；下方按钮用于导入或清除"
-           "项目相机参数。导航/GNSS 参考请在左侧“参考”面板管理。"),
+           "项目相机参数，也可直接输入真实内参。导航/GNSS 参考请在左侧“参考”面板管理。"),
         this);
     intro->setWordWrap(true);
     intro->setStyleSheet(QStringLiteral(
@@ -427,10 +503,16 @@ void CameraCalibrationDialog::buildInterface()
     _importSelectedButton->setObjectName(QStringLiteral("cameraCalibrationImportSelectedButton"));
     _batchImportButton = new QPushButton(tr("按文件名批量导入…"), this);
     _batchImportButton->setObjectName(QStringLiteral("cameraCalibrationBatchImportButton"));
+    _initializeIntrinsicsButton = new QPushButton(tr("输入真实内参…"), this);
+    _initializeIntrinsicsButton->setObjectName(
+        QStringLiteral("cameraCalibrationInitializeIntrinsicsButton"));
+    _initializeIntrinsicsButton->setToolTip(
+        tr("输入 fx/fy、主点和 Brown 畸变参数，应用到项目全部影像"));
     _clearSelectedButton = new QPushButton(tr("清除所选相机"), this);
     _clearSelectedButton->setObjectName(QStringLiteral("cameraCalibrationClearSelectedButton"));
     cameraActions->addWidget(_importSelectedButton);
     cameraActions->addWidget(_batchImportButton);
+    cameraActions->addWidget(_initializeIntrinsicsButton);
     cameraActions->addWidget(_clearSelectedButton);
     cameraActions->addStretch(1);
     root->addLayout(cameraActions);
@@ -447,6 +529,8 @@ void CameraCalibrationDialog::buildInterface()
             this, &CameraCalibrationDialog::requestImportForSelectedPhoto);
     connect(_batchImportButton, &QPushButton::clicked,
             this, &CameraCalibrationDialog::requestBatchImport);
+    connect(_initializeIntrinsicsButton, &QPushButton::clicked,
+            this, &CameraCalibrationDialog::requestInitializeIntrinsics);
     connect(_clearSelectedButton, &QPushButton::clicked,
             this, &CameraCalibrationDialog::requestClearSelectedCameras);
 }
@@ -702,6 +786,10 @@ void CameraCalibrationDialog::updateCameraActionAvailability()
     {
         _batchImportButton->setEnabled(_hasProject && _hasProjectImages);
     }
+    if (_initializeIntrinsicsButton)
+    {
+        _initializeIntrinsicsButton->setEnabled(_hasProject && _hasProjectImages);
+    }
     if (_clearSelectedButton)
     {
         _clearSelectedButton->setEnabled(
@@ -723,6 +811,19 @@ void CameraCalibrationDialog::requestBatchImport()
     if (_hasProject && _hasProjectImages)
     {
         emit batchImportRequested();
+    }
+}
+
+void CameraCalibrationDialog::requestInitializeIntrinsics()
+{
+    if (!_hasProject || !_hasProjectImages)
+    {
+        return;
+    }
+    const std::optional<QJsonObject> settings = promptForCameraIntrinsics(this);
+    if (settings.has_value())
+    {
+        emit initializeIntrinsicsRequested(*settings);
     }
 }
 

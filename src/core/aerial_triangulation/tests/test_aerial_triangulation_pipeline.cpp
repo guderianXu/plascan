@@ -223,7 +223,7 @@ TEST(AerialTriangulationPipelineTest, ParallelizesCoarseFocalSearchWithinThreadB
 
     const int expectedWorkers = std::min(
         static_cast<int>(
-            xjw::aerial_triangulation::adaptiveFocalCoarseScaleCandidates().size()),
+            xjw::aerial_triangulation::adaptiveFocalCoarseScaleCandidates().size()) + 1,
         xjw::aerial_triangulation::resolveSfmThreadBudget(input.threads));
 
     const auto result =
@@ -280,10 +280,10 @@ TEST(AerialTriangulationPipelineTest, CompleteCoarseModelOnlyEvaluatesTopSeedNei
     EXPECT_FALSE(result.sfmDiagnostics.value(
         QStringLiteral("focal_search_exhaustive_fallback")).toBool());
     EXPECT_EQ(result.sfmDiagnostics.value(
-        QStringLiteral("focal_search_coarse_candidate_count")).toInt(), 8);
+        QStringLiteral("focal_search_coarse_candidate_count")).toInt(), 6);
     EXPECT_EQ(result.sfmDiagnostics.value(
         QStringLiteral("focal_search_refinement_candidate_count")).toInt(), 3);
-    EXPECT_EQ(attemptCount.load(), 11);
+    EXPECT_EQ(attemptCount.load(), 9);
     EXPECT_LT(attemptCount.load(),
               static_cast<int>(
                   xjw::aerial_triangulation::adaptiveFocalScaleCandidates().size()));
@@ -395,7 +395,7 @@ TEST(AerialTriangulationPipelineTest, LargeDatasetProbesCandidatesAndReplaysOnly
                          input.maxRegisteredImages});
         xjw::aerial_triangulation::SfmAttemptExecutionResult execution;
         execution.result.success = true;
-        execution.result.numRegisteredImages = input.coarseFocalEvaluation ? 64 : 444;
+        execution.result.numRegisteredImages = input.coarseFocalEvaluation ? 24 : 444;
         execution.result.numPoints3D =
             std::abs(input.estimatedFocalScale - 5.2) < 1.0e-9 ? 2400 : 1000;
         execution.result.meanReprojError =
@@ -428,13 +428,13 @@ TEST(AerialTriangulationPipelineTest, LargeDatasetProbesCandidatesAndReplaysOnly
     for (int index = 0; index + 1 < attempts.size(); ++index)
     {
         EXPECT_TRUE(attempts.at(index).coarse);
-        EXPECT_EQ(attempts.at(index).maxRegisteredImages, 64);
+        EXPECT_EQ(attempts.at(index).maxRegisteredImages, 24);
     }
     EXPECT_FALSE(attempts.back().coarse);
     EXPECT_EQ(attempts.back().maxRegisteredImages, 0);
     EXPECT_DOUBLE_EQ(attempts.back().focalScale, 5.2);
     EXPECT_EQ(result.sfmDiagnostics.value(
-        QStringLiteral("focal_probe_registration_limit")).toInt(), 64);
+        QStringLiteral("focal_probe_registration_limit")).toInt(), 24);
     EXPECT_TRUE(result.sfmDiagnostics.value(
         QStringLiteral("focal_probe_full_replay")).toBool());
 }

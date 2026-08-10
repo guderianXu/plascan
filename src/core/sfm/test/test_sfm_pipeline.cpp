@@ -267,9 +267,10 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest, DefersPeriodicGlobalBaNearFinalRefine
 
 TEST(SfmBundleAdjustCoordinatorPolicyTest, LimitsOnlyPeriodicGlobalBaRounds)
 {
-    EXPECT_EQ(SfmBundleAdjustCoordinator::iterativeGlobalBaRoundLimit(4, false), 2);
-    EXPECT_EQ(SfmBundleAdjustCoordinator::iterativeGlobalBaRoundLimit(4, true), 4);
-    EXPECT_EQ(SfmBundleAdjustCoordinator::iterativeGlobalBaRoundLimit(1, false), 1);
+    EXPECT_EQ(SfmBundleAdjustCoordinator::iterativeGlobalBaRoundLimit(4, false, 96), 2);
+    EXPECT_EQ(SfmBundleAdjustCoordinator::iterativeGlobalBaRoundLimit(4, false, 222), 1);
+    EXPECT_EQ(SfmBundleAdjustCoordinator::iterativeGlobalBaRoundLimit(4, true, 444), 4);
+    EXPECT_EQ(SfmBundleAdjustCoordinator::iterativeGlobalBaRoundLimit(1, false, 444), 1);
 }
 
 TEST(SfmBundleAdjustCoordinatorPolicyTest, ReducesOnlyVeryLargeWellSupportedGlobalNetwork)

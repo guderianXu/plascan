@@ -20,6 +20,7 @@
 #include "reconstruction/SfmReconstruction.h"
 #include "search/AdaptiveFocalSearch.h"
 #include "search/SfmSearchPolicy.h"
+#include "log/Logger.h"
 
 #include <QElapsedTimer>
 #include <QFileInfo>
@@ -705,6 +706,24 @@ FocalSearchBatchResult runFocalSearchBatch(
     {
         worker.join();
     }
+    int successfulCandidates = 0;
+    int registeredMaximum = 0;
+    for (const SfmAttemptExecutionResult &candidate : batch.executions)
+    {
+        successfulCandidates += candidate.result.success ? 1 : 0;
+        registeredMaximum = std::max(
+            registeredMaximum,
+            candidate.result.numRegisteredImages);
+    }
+    Logger::instance()->infof(
+        "[SFM] focal_probe_summary stage=%s candidates=%d success=%d failed=%d "
+        "maxRegistered=%d registrationLimit=%d",
+        stageName.toUtf8().constData(),
+        candidateCount,
+        successfulCandidates,
+        candidateCount - successfulCandidates,
+        registeredMaximum,
+        focalProbeLimit);
     if (progressFn)
     {
         progressFn(QStringLiteral("%1：已完成 %2/%2 个候选")

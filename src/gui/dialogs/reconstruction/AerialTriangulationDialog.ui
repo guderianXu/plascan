@@ -212,7 +212,7 @@
       <item row="6" column="0" colspan="2">
        <widget class="QCheckBox" name="m_reuseExistingMatchesCheck">
         <property name="text">
-         <string>重用现有匹配</string>
+         <string>复用兼容匹配（无则自动生成）</string>
         </property>
        </widget>
       </item>

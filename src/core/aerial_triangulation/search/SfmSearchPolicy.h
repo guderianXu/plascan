@@ -74,7 +74,7 @@ struct SfmCandidateSummary
 /// 按候选数拆分全部逻辑线程；空闲线程作为余数分配给前几个 worker。
 SfmWorkerBudget allocateWorkers(int candidateCount, int totalThreads);
 
-/// 大规模无先验焦距搜索的注册上限；0 表示数据规模较小，应完整评估候选。
+/// 大规模无先验轻量焦距估计的注册上限；0 表示数据规模较小，应完整评估候选。
 int focalProbeRegistrationLimit(int totalImages);
 
 /// 根据工程规模放宽中间 BA 调度；最终全局 BA 不由该策略裁剪。
@@ -103,7 +103,7 @@ std::vector<int> replayCandidateIndices(
 /// 返回覆盖广角、普通相机、长焦/行星相机的无量纲焦距初始化集合。
 std::vector<double> adaptiveFocalScaleCandidates();
 
-/// 返回第一阶段代表尺度；保持广角、常用航测焦距和约 9 倍影像宽度的长焦锚点。
+/// 返回轻量估计代表尺度；保持广角、常用摄影焦距和约 9 倍影像宽度的长焦锚点。
 std::vector<double> adaptiveFocalCoarseScaleCandidates();
 
 /**

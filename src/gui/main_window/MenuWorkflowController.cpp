@@ -1969,6 +1969,16 @@ void MenuWorkflowController::openCameraCalibrationDialog()
         }
     });
     connect(dialog,
+            &CameraCalibrationDialog::initializeIntrinsicsRequested,
+            this,
+            [this, reopenAfterChange, sessionIsCurrent](const QJsonObject &settings)
+    {
+        if (sessionIsCurrent())
+        {
+            reopenAfterChange(_projectManager->initializeCamerasFromIntrinsics(settings));
+        }
+    });
+    connect(dialog,
             &CameraCalibrationDialog::clearCamerasRequested,
             this,
             [this, reopenAfterChange, sessionIsCurrent](const QStringList &imagePaths)

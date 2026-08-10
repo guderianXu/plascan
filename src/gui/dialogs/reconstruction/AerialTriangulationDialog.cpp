@@ -115,8 +115,8 @@ void AerialTriangulationDialog::setupUi()
                        "并将最佳焦距固定用于重建。"));
     _ui->m_reuseExistingMatchesCheck->setChecked(true);
     _ui->m_reuseExistingMatchesCheck->setToolTip(
-        QStringLiteral("重置当前对齐时保留并复用兼容的特征、匹配和连接点缓存，只重新执行 SfM/BA。"
-                       "取消勾选后才会删除当前影像对应的匹配缓存并重新提取、匹配和整理连接点。"));
+        QStringLiteral("这是缓存策略，不表示当前工程一定已有匹配：存在兼容缓存时只重新执行 SfM/BA；"
+                       "没有缓存或缓存不完整时会自动生成缺失匹配。取消勾选会强制删除并重建全部匹配缓存。"));
     _ui->m_lockInputCameraPosesCheck->setChecked(false);
     _ui->m_lockInputCameraPosesCheck->setToolTip(
         QStringLiteral("使用项目中已导入的相机内外参，并在空三和 BA 中保持外参不变。"
