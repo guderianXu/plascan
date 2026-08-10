@@ -138,6 +138,7 @@ TEST(CameraFormatConverterSafetyTest, RejectsAliasThatContainsInput)
 
     std::error_code error;
     std::filesystem::create_directory_symlink(real_output, alias_output, error);
+    const bool alias_is_link = !error;
     if (error)
     {
         // 无符号链接权限时改用等价的词法别名，保证 Windows 默认环境也执行
@@ -148,7 +149,14 @@ TEST(CameraFormatConverterSafetyTest, RejectsAliasThatContainsInput)
     const auto result = xjw::camera::convertCameraDataset(conversionOptions(source, alias_output));
 
     EXPECT_FALSE(result.success);
-    EXPECT_NE(result.errorMessage.find("等于或包含输入路径"), std::string::npos);
+    if (alias_is_link)
+    {
+        EXPECT_NE(result.errorMessage.find("符号链接或目录联接"), std::string::npos);
+    }
+    else
+    {
+        EXPECT_NE(result.errorMessage.find("等于或包含输入路径"), std::string::npos);
+    }
     EXPECT_TRUE(std::filesystem::exists(source / "image.png"));
 }
 
