@@ -30,7 +30,7 @@ TEST(ImageMatchingRegistryTest, ExposesBuiltInAlgorithmCapabilities)
     EXPECT_EQ(sift->version, kSiftLightGlueAlgorithmVersion);
     EXPECT_EQ(cudaSift->version, kCudaSiftAlgorithmVersion);
     EXPECT_EQ(cudaSift->inputModel, AlgorithmInputModel::ReusableFeatures);
-    EXPECT_TRUE(cudaSift->requiresCuda);
+    EXPECT_FALSE(cudaSift->requiresCuda);
     EXPECT_TRUE(cudaSift->suppliesStableFeatureIds);
     EXPECT_FALSE(cudaSift->requiresColorInput);
     EXPECT_EQ(loma->version, kLoMaRAlgorithmVersion);
@@ -54,18 +54,17 @@ TEST(ImageMatchingRegistryTest, ReportsTensorRtRequirementWhenCreatingUnavailabl
 }
 #endif
 
-#if !defined(PLASCAN_HAS_CUDA_SIFT)
-TEST(ImageMatchingRegistryTest, ReportsCudaRequirementWhenCudaSiftIsUnavailable)
+TEST(ImageMatchingRegistryTest, CreatesCudaSiftForCpuFallbackWithoutExternalModel)
 {
+    ImageMatchingRuntimeConfig config;
+    config.forceCpuSift = true;
+    config.allowCpuSiftFallback = true;
     QString error;
     const std::unique_ptr<IImageMatchingAlgorithm> algorithm =
-        ImageMatchingRegistry::create(QStringLiteral("cuda_sift"),
-                                      ImageMatchingRuntimeConfig{},
+        ImageMatchingRegistry::create(QStringLiteral("cuda_sift"), config,
                                       &error);
-    EXPECT_EQ(algorithm, nullptr);
-    EXPECT_TRUE(error.contains(QStringLiteral("CUDA SIFT"))) << error.toStdString();
+    EXPECT_NE(algorithm, nullptr) << error.toStdString();
 }
-#endif
 
 TEST(ImageMatchingRegistryTest, RejectsUnknownAlgorithmWithoutFallback)
 {

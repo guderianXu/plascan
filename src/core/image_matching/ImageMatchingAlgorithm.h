@@ -60,6 +60,7 @@ struct ImageMatchingRuntimeConfig
     int modelInputHeight = 0;
     int descriptorDimension = 0;
     bool allowCpuSiftFallback = false;
+    bool forceCpuSift = false;
     QByteArray configFingerprint;
     QByteArray modelFingerprint;
 };

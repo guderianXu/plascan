@@ -1,6 +1,6 @@
 /**
  * @file cli_feature_match.cpp
- * @brief 两幅原始影像的统一 CUDA 匹配入口。
+ * @brief 两幅原始影像的统一特征匹配入口。
  *
  * 本 CLI 不再接受或生成中间特征文件。两幅影像的 SIFT 特征只存在于本次
  * MatchPhotosTask 的内存缓存中，最终匹配按“一幅影像一个 `.pimatch` 分片”
@@ -32,6 +32,7 @@ int main(int argc, char *argv[])
     std::string outputDirectoryArg;
     std::string enginePathArg;
     std::string algorithmIdArg = "sift_lightglue";
+    std::string deviceArg = "auto";
     int maxKeypoints = 40000;
     int maxImageDim = 0;
     int cudaDevice = 0;
@@ -53,6 +54,8 @@ int main(int argc, char *argv[])
     app.add_option("--max-image-dim", maxImageDim,
                    "提取输入最长边，0 表示保持原始分辨率");
     app.add_option("--cuda-device", cudaDevice, "CUDA 设备 ID");
+    app.add_option("--device", deviceArg, "计算设备: auto, cpu, cuda")
+        ->check(CLI::IsMember({"auto", "cpu", "cuda"}));
     app.add_option("-t,--match-threshold", matchThreshold, "匹配置信度阈值");
     app.add_option("--geometry-threshold", geometryThreshold,
                    "几何验证像素残差阈值");
@@ -87,7 +90,18 @@ int main(int argc, char *argv[])
     xjw::matchphotos::MatchPhotosOptions options;
     options.algorithmId = QString::fromStdString(algorithmIdArg).trimmed().toLower();
     options.profile = xjw::matchphotos::MatchPhotosProfile::HighAccuracy;
-    options.device = xjw::matchphotos::ComputeDevice::Cuda;
+    if (deviceArg == "cpu")
+    {
+        options.device = xjw::matchphotos::ComputeDevice::Cpu;
+    }
+    else if (deviceArg == "cuda")
+    {
+        options.device = xjw::matchphotos::ComputeDevice::Cuda;
+    }
+    else
+    {
+        options.device = xjw::matchphotos::ComputeDevice::Auto;
+    }
     if (options.algorithmId == QLatin1String("loma_r"))
     {
         options.lomaRTensorRtPackagePath = QString::fromStdString(enginePathArg);

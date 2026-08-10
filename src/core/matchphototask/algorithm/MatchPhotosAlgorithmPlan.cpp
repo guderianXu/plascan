@@ -22,6 +22,12 @@ QString algorithmPlanSummary(const MatchPhotosAlgorithmPlan &plan)
     {
         summary += QStringLiteral("，优先 CUDA");
     }
+    if (plan.executionBackend == MatchPhotosExecutionBackend::Cpu)
+    {
+        summary += plan.backendFallback
+            ? QStringLiteral("，已自动回退 CPU")
+            : QStringLiteral("，CPU 后端");
+    }
     if (plan.enableGuidedMatching)
     {
         summary += QStringLiteral("，启用引导匹配");

@@ -1,4 +1,5 @@
 #include "cuda_sift/CudaSiftMatchFilter.h"
+#include "cuda_sift/CudaSiftAlgorithm.h"
 
 #include <gtest/gtest.h>
 
@@ -58,6 +59,40 @@ TEST(CudaSiftMatchFilterTest, KeepsAmbiguousMutualCandidatesForGeometryVerificat
 
     ASSERT_EQ(result.cvMatches.size(), 1U);
     EXPECT_FLOAT_EQ(result.matchingScores0[0], 0.88f);
+}
+
+TEST(CudaSiftMatchFilterTest, CpuBackendMatchesNormalizedSiftDescriptors)
+{
+    FeatureSet features0;
+    features0.imageWidth = 100;
+    features0.imageHeight = 100;
+    features0.keypoints = {cv::KeyPoint(10.0f, 10.0f, 1.0f),
+                           cv::KeyPoint(20.0f, 20.0f, 1.0f)};
+    features0.scores = {1.0f, 1.0f};
+    features0.descriptors = cv::Mat::zeros(2, 128, CV_32F);
+    features0.descriptors.at<float>(0, 0) = 512.0f;
+    features0.descriptors.at<float>(1, 1) = 256.0f;
+
+    FeatureSet features1;
+    features1.imageWidth = 100;
+    features1.imageHeight = 100;
+    features1.keypoints = features0.keypoints;
+    features1.scores = features0.scores;
+    features1.descriptors = cv::Mat::zeros(2, 128, CV_32F);
+    features1.descriptors.at<float>(0, 1) = 1.0f;
+    features1.descriptors.at<float>(1, 0) = 1.0f;
+
+    ImageMatchingRuntimeConfig config;
+    config.forceCpuSift = true;
+    config.allowCpuSiftFallback = true;
+    config.matchThreshold = 0.15f;
+    CudaSiftAlgorithm algorithm(config);
+
+    const MatchResult result = algorithm.matchFeatures(features0, features1);
+
+    ASSERT_EQ(result.cvMatches.size(), 2U);
+    EXPECT_EQ(result.matches0[0], 1);
+    EXPECT_EQ(result.matches0[1], 0);
 }
 
 } // namespace

@@ -14,6 +14,10 @@ class MatchPhotosAlgorithmSelector
 {
 public:
     static MatchPhotosAlgorithmPlan select(const MatchPhotosOptions &options);
+    static MatchPhotosAlgorithmPlan resolveExecutionBackend(
+        const MatchPhotosOptions &options,
+        MatchPhotosAlgorithmPlan plan,
+        bool cudaSiftAvailable);
 };
 
 } // namespace matchphotos

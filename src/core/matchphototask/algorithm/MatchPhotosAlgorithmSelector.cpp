@@ -139,5 +139,46 @@ MatchPhotosAlgorithmPlan MatchPhotosAlgorithmSelector::select(const MatchPhotosO
     return plan;
 }
 
+MatchPhotosAlgorithmPlan MatchPhotosAlgorithmSelector::resolveExecutionBackend(
+    const MatchPhotosOptions &options,
+    MatchPhotosAlgorithmPlan plan,
+    bool cudaSiftAvailable)
+{
+    if (!plan.valid || plan.algorithmId != QLatin1String("cuda_sift"))
+    {
+        return plan;
+    }
+
+    if (options.device == ComputeDevice::Cpu)
+    {
+        plan.executionBackend = MatchPhotosExecutionBackend::Cpu;
+        plan.requiresCuda = false;
+        plan.preferCuda = false;
+        plan.backendReason = QStringLiteral("用户指定 OpenCV CPU SIFT 回退后端");
+        return plan;
+    }
+    if (cudaSiftAvailable)
+    {
+        plan.executionBackend = MatchPhotosExecutionBackend::Cuda;
+        plan.backendReason = QStringLiteral("CUDA SIFT 设备预检通过");
+        return plan;
+    }
+    if (options.device == ComputeDevice::Cuda)
+    {
+        plan.valid = false;
+        plan.validationError = QStringLiteral(
+            "已显式指定 CUDA，但 CUDA SIFT 设备不可用；如需 CPU 回退请选择自动或 CPU");
+        return plan;
+    }
+
+    plan.executionBackend = MatchPhotosExecutionBackend::Cpu;
+    plan.requiresCuda = false;
+    plan.preferCuda = false;
+    plan.backendFallback = true;
+    plan.backendReason = QStringLiteral(
+        "CUDA SIFT 设备不可用，已自动回退 OpenCV CPU SIFT");
+    return plan;
+}
+
 } // namespace matchphotos
 } // namespace xjw

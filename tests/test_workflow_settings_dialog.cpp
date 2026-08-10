@@ -105,6 +105,7 @@ TEST(WorkflowSettingsDialogTest, CudaSiftRequiresNoExternalModel)
               QStringLiteral("cuda_sift"));
     ASSERT_NE(resourceStatus, nullptr);
     EXPECT_TRUE(resourceStatus->text().contains(QStringLiteral("无需下载模型")));
+    EXPECT_TRUE(resourceStatus->text().contains(QStringLiteral("回退")));
 }
 
 TEST(WorkflowSettingsDialogTest, SwitchesAndPersistsAlgorithmSpecificTensorRtResources)

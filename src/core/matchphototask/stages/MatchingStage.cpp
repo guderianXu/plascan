@@ -291,6 +291,14 @@ MatchPhotosMatchRecord makeRecord(
     record.settings[QStringLiteral("algorithm_id")] = record.algorithmId;
     record.settings[QStringLiteral("algorithm_version")] =
         static_cast<int>(record.algorithmVersion);
+    const bool siftMutual =
+        plan.algorithmId == QLatin1String(image_matching::kCudaSiftAlgorithmId);
+    record.settings[QStringLiteral("matching_backend")] = siftMutual
+        ? (plan.executionBackend == MatchPhotosExecutionBackend::Cuda
+               ? QStringLiteral("cuda_sift")
+               : QStringLiteral("opencv_cpu_sift_bf"))
+        : plan.algorithmId;
+    record.settings[QStringLiteral("backend_fallback")] = plan.backendFallback;
     record.settings[QStringLiteral("match_reused")] = reused;
     record.settings[QStringLiteral("geometry_cache_reusable")] = geometryReusable;
     record.settings[QStringLiteral("geometry_config_fingerprint")] =
@@ -351,6 +359,9 @@ MatchPhotosStageReport MatchingStage::run(
     image_matching::ImageMatchingRuntimeConfig runtime;
     runtime.cudaDevice = options.cudaDevice;
     runtime.maxKeypoints = algorithmPlan.maxKeypoints;
+    runtime.forceCpuSift =
+        algorithmPlan.executionBackend == MatchPhotosExecutionBackend::Cpu;
+    runtime.allowCpuSiftFallback = runtime.forceCpuSift;
     QString modelName;
     QByteArray engineFingerprint;
     int matcherBudget = 0;
@@ -427,8 +438,15 @@ MatchPhotosStageReport MatchingStage::run(
         matcherBudget = 0;
         runtime.maxMatcherKeypoints = 0;
         runtime.matchThreshold = effectiveThreshold;
-        modelName = QStringLiteral("内置 cudaSift");
-        engineFingerprint = sha256(QByteArrayLiteral("builtin:cuda_sift:v1"));
+        const bool useCudaBackend =
+            algorithmPlan.executionBackend == MatchPhotosExecutionBackend::Cuda;
+        modelName = useCudaBackend
+            ? QStringLiteral("内置 cudaSift")
+            : QStringLiteral("OpenCV CPU SIFT + BFMatcher");
+        engineFingerprint = sha256(
+            useCudaBackend
+                ? QByteArrayLiteral("builtin:cuda_sift:v2")
+                : QByteArrayLiteral("builtin:opencv_cpu_sift_bf:v2"));
     }
     else
     {
@@ -563,7 +581,7 @@ MatchPhotosStageReport MatchingStage::run(
     const LightGlueParallelismDecision parallelism = resolveLightGlueParallelism(
         options.cudaParallelPairs,
         static_cast<int>(work.size()),
-        true,
+        algorithmPlan.executionBackend == MatchPhotosExecutionBackend::Cuda,
         parallelismBudget,
         gpuMemory);
     const int workerCount = work.empty() ? 0 : std::max(1, parallelism.effectiveWorkers);
@@ -571,10 +589,13 @@ MatchPhotosStageReport MatchingStage::run(
     reportMatchPhotosProgress(
         context,
         QStringLiteral("matching"),
-        QStringLiteral("%1：%2 对待计算，%3 对复用，CUDA worker %4")
+        QStringLiteral("%1：%2 对待计算，%3 对复用，%4 worker %5")
             .arg(algorithmPlan.displayName)
             .arg(static_cast<int>(work.size()))
             .arg(reusedPairs)
+            .arg(algorithmPlan.executionBackend == MatchPhotosExecutionBackend::Cuda
+                     ? QStringLiteral("CUDA")
+                     : QStringLiteral("CPU"))
             .arg(workerCount),
         reusedPairs,
         totalPairs);
@@ -602,7 +623,8 @@ MatchPhotosStageReport MatchingStage::run(
             reusedPairs);
     }
 
-    if (options.device == ComputeDevice::Cpu)
+    if (options.device == ComputeDevice::Cpu &&
+        algorithmPlan.algorithmId != QLatin1String(image_matching::kCudaSiftAlgorithmId))
     {
         return makeMatchingReport(MatchPhotosStageStatus::Failed,
                                   QStringLiteral("当前匹配算法 %1 仅支持 TensorRT/CUDA")
@@ -666,7 +688,8 @@ MatchPhotosStageReport MatchingStage::run(
             1,
             1);
     }
-    // CUDA SIFT 使用编译进程序的匹配内核，不需要准备外部模型或 engine。
+    // SIFT 双向匹配使用内置 CUDA 内核或 OpenCV CPU 后端，
+    // 两者都不需要准备外部模型或 engine。
 
     std::atomic_int nextWork{0};
     std::atomic_int completed{reusedPairs};
@@ -819,13 +842,16 @@ MatchPhotosStageReport MatchingStage::run(
     return makeMatchingReport(
         MatchPhotosStageStatus::Completed,
         QStringLiteral("%1 匹配完成：%2/%3 对，原始匹配 %4，复用 %5，"
-                       "失败 %6，CUDA worker %7，模型 %8")
+                       "失败 %6，%7 worker %8，模型 %9")
             .arg(algorithmPlan.displayName)
             .arg(matchedPairs)
             .arg(totalPairs)
             .arg(totalMatches)
             .arg(reusedPairs)
             .arg(failedPairs.load())
+            .arg(algorithmPlan.executionBackend == MatchPhotosExecutionBackend::Cuda
+                     ? QStringLiteral("CUDA")
+                     : QStringLiteral("CPU"))
             .arg(workerCount)
             .arg(modelName),
         matchedPairs);

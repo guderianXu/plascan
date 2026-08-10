@@ -76,7 +76,7 @@ LightGlueParallelismDecision resolveLightGlueParallelism(
     const int boundedPairCount = std::max(1, pairCount);
     if (!useCuda)
     {
-        decision.reason = QStringLiteral("CPU LightGlue 固定使用单 worker");
+        decision.reason = QStringLiteral("CPU 匹配固定使用单 worker");
         return decision;
     }
 

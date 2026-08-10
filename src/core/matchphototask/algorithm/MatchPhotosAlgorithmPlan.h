@@ -9,6 +9,12 @@ namespace xjw
 namespace matchphotos
 {
 
+enum class MatchPhotosExecutionBackend
+{
+    Cuda,
+    Cpu
+};
+
 // MatchPhotosTask 的已解析算法计划。算法身份由注册表中的 id + version 唯一确定，
 // 不再暴露“特征算法 + 匹配算法 + 文件后缀”的历史组合。
 struct MatchPhotosAlgorithmPlan
@@ -25,6 +31,9 @@ struct MatchPhotosAlgorithmPlan
     bool rotationRobust = false;
     bool requiresColorInput = false;
     bool enableGuidedMatching = false;
+    MatchPhotosExecutionBackend executionBackend = MatchPhotosExecutionBackend::Cuda;
+    bool backendFallback = false;
+    QString backendReason;
 
     int maxImageDim = 2048;
     int maxKeypoints = 8192;

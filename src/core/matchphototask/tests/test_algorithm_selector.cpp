@@ -2,6 +2,8 @@
 
 #include <gtest/gtest.h>
 
+#include <utility>
+
 TEST(MatchPhotosAlgorithmSelectorTest, DefaultUsesRegisteredSiftLightGlue)
 {
     xjw::matchphotos::MatchPhotosOptions options;
@@ -55,10 +57,57 @@ TEST(MatchPhotosAlgorithmSelectorTest, SelectsRegisteredCudaSift)
 
     EXPECT_TRUE(plan.valid) << qPrintable(plan.validationError);
     EXPECT_EQ(plan.algorithmId, QStringLiteral("cuda_sift"));
-    EXPECT_EQ(plan.displayName, QStringLiteral("CUDA SIFT 匹配"));
+    EXPECT_EQ(plan.displayName, QStringLiteral("CUDA SIFT 匹配（可回退 CPU）"));
     EXPECT_TRUE(plan.extractsFeaturesInMemory);
-    EXPECT_TRUE(plan.requiresCuda);
+    EXPECT_FALSE(plan.requiresCuda);
     EXPECT_TRUE(plan.rotationRobust);
+}
+
+TEST(MatchPhotosAlgorithmSelectorTest, AutoFallsBackToCpuWhenCudaSiftIsUnavailable)
+{
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.algorithmId = QStringLiteral("cuda_sift");
+
+    auto plan = xjw::matchphotos::MatchPhotosAlgorithmSelector::select(options);
+    plan = xjw::matchphotos::MatchPhotosAlgorithmSelector::resolveExecutionBackend(
+        options, std::move(plan), false);
+
+    EXPECT_TRUE(plan.valid) << qPrintable(plan.validationError);
+    EXPECT_EQ(plan.executionBackend,
+              xjw::matchphotos::MatchPhotosExecutionBackend::Cpu);
+    EXPECT_TRUE(plan.backendFallback);
+    EXPECT_FALSE(plan.requiresCuda);
+    EXPECT_TRUE(plan.backendReason.contains(QStringLiteral("自动回退")));
+}
+
+TEST(MatchPhotosAlgorithmSelectorTest, ExplicitCudaDoesNotSilentlyFallBack)
+{
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.algorithmId = QStringLiteral("cuda_sift");
+    options.device = xjw::matchphotos::ComputeDevice::Cuda;
+
+    auto plan = xjw::matchphotos::MatchPhotosAlgorithmSelector::select(options);
+    plan = xjw::matchphotos::MatchPhotosAlgorithmSelector::resolveExecutionBackend(
+        options, std::move(plan), false);
+
+    EXPECT_FALSE(plan.valid);
+    EXPECT_TRUE(plan.validationError.contains(QStringLiteral("显式指定 CUDA")));
+}
+
+TEST(MatchPhotosAlgorithmSelectorTest, ExplicitCpuUsesCpuSiftBackend)
+{
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.algorithmId = QStringLiteral("cuda_sift");
+    options.device = xjw::matchphotos::ComputeDevice::Cpu;
+
+    auto plan = xjw::matchphotos::MatchPhotosAlgorithmSelector::select(options);
+    plan = xjw::matchphotos::MatchPhotosAlgorithmSelector::resolveExecutionBackend(
+        options, std::move(plan), true);
+
+    EXPECT_TRUE(plan.valid) << qPrintable(plan.validationError);
+    EXPECT_EQ(plan.executionBackend,
+              xjw::matchphotos::MatchPhotosExecutionBackend::Cpu);
+    EXPECT_FALSE(plan.backendFallback);
 }
 
 TEST(MatchPhotosAlgorithmSelectorTest, RejectsCpuForCudaOnlyAlgorithm)

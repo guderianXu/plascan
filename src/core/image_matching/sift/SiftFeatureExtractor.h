@@ -14,7 +14,7 @@ namespace xjw::image_matching
 class SiftFeatureExtractor
 {
 public:
-    static bool isCudaAvailable();
+    static bool isCudaAvailable(int deviceIndex = 0);
 
     /**
      * @brief 提取 SIFT 并恢复到原始影像坐标系。

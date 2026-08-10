@@ -11,7 +11,7 @@ namespace xjw::image_matching
 {
 
 inline constexpr const char *kCudaSiftAlgorithmId = "cuda_sift";
-inline constexpr std::uint32_t kCudaSiftAlgorithmVersion = 1;
+inline constexpr std::uint32_t kCudaSiftAlgorithmVersion = 2;
 
 class CudaSiftAlgorithm final : public IImageMatchingAlgorithm
 {

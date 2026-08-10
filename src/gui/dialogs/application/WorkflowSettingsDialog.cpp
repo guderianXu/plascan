@@ -428,7 +428,8 @@ void WorkflowSettingsDialog::refreshAlgorithmControls()
         palette.setColor(QPalette::WindowText, QColor(35, 110, 70));
         _matchingResourceStatusLabel->setPalette(palette);
         _matchingResourceStatusLabel->setText(
-            QStringLiteral("内置 CUDA SIFT，无需下载模型；匹配全部已提取关键点"));
+            QStringLiteral("内置 SIFT，无需下载模型；自动优先 CUDA，"
+                           "CUDA 不可用时回退 OpenCV CPU"));
         _downloadModelButton->setVisible(false);
     }
     else
@@ -509,7 +510,8 @@ void WorkflowSettingsDialog::refreshMatchingResourceStatus()
         palette.setColor(QPalette::WindowText, QColor(35, 110, 70));
         _matchingResourceStatusLabel->setPalette(palette);
         _matchingResourceStatusLabel->setText(
-            QStringLiteral("内置 CUDA SIFT，无需下载模型；匹配全部已提取关键点"));
+            QStringLiteral("内置 SIFT，无需下载模型；自动优先 CUDA，"
+                           "CUDA 不可用时回退 OpenCV CPU"));
         _downloadModelButton->setVisible(false);
         return;
     }

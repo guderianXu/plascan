@@ -26,6 +26,8 @@ add_library(image_matching STATIC
     MatchResult.h
     geometry/MatchGeometryVerifier.cpp
     geometry/MatchGeometryVerifier.h
+    cuda_sift/CudaSiftAlgorithm.cpp
+    cuda_sift/CudaSiftAlgorithm.h
     cuda_sift/CudaSiftMatchFilter.cpp
     cuda_sift/CudaSiftMatchFilter.h
     sift/SiftFeatureExtractor.cpp
@@ -70,13 +72,6 @@ if(NOT TARGET plascan_cudasift AND CMAKE_CUDA_COMPILER AND
    EXISTS "${CMAKE_SOURCE_DIR}/3rdparty/cudasift/CMakeLists.txt")
     add_subdirectory("${CMAKE_SOURCE_DIR}/3rdparty/cudasift"
                      "${CMAKE_BINARY_DIR}/3rdparty/cudasift")
-endif()
-
-if(TARGET plascan_cudasift)
-    target_sources(image_matching PRIVATE
-        cuda_sift/CudaSiftAlgorithm.cpp
-        cuda_sift/CudaSiftAlgorithm.h
-    )
 endif()
 
 target_include_directories(image_matching PUBLIC

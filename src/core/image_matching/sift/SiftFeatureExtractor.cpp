@@ -230,12 +230,29 @@ FeatureSet extractCuda(const ImageFeatureInput &input,
 
 } // namespace
 
-bool SiftFeatureExtractor::isCudaAvailable()
+bool SiftFeatureExtractor::isCudaAvailable(int deviceIndex)
 {
 #if defined(PLASCAN_HAS_CUDA_SIFT)
     int count = 0;
-    return cudaGetDeviceCount(&count) == cudaSuccess && count > 0;
+    if (cudaGetDeviceCount(&count) != cudaSuccess ||
+        deviceIndex < 0 || deviceIndex >= count)
+    {
+        return false;
+    }
+
+    int previousDevice = 0;
+    const bool restoreDevice = cudaGetDevice(&previousDevice) == cudaSuccess;
+    const cudaError_t selectStatus = cudaSetDevice(deviceIndex);
+    const cudaError_t initializeStatus = selectStatus == cudaSuccess
+        ? cudaFree(nullptr)
+        : selectStatus;
+    if (restoreDevice && previousDevice != deviceIndex)
+    {
+        cudaSetDevice(previousDevice);
+    }
+    return initializeStatus == cudaSuccess;
 #else
+    (void)deviceIndex;
     return false;
 #endif
 }
@@ -259,7 +276,7 @@ FeatureSet SiftFeatureExtractor::extract(const ImageFeatureInput &input,
     }
 
 #if defined(PLASCAN_HAS_CUDA_SIFT)
-    if (isCudaAvailable())
+    if (!runtime.forceCpuSift && isCudaAvailable(runtime.cudaDevice))
     {
         try
         {

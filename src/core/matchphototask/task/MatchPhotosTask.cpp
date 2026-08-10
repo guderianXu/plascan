@@ -10,7 +10,9 @@
 #include "OverlapAnalyzer.h"
 #include "TrackBuildStage.h"
 #include "VocabularyOverlapRetriever.h"
+#include "cuda_sift/CudaSiftAlgorithm.h"
 #include "io/PathIO.h"
+#include "sift/SiftFeatureExtractor.h"
 
 #include <QFileInfo>
 
@@ -33,9 +35,19 @@ MatchPhotosStageReport makeAlgorithmSelectionReport(const MatchPhotosAlgorithmPl
     report.displayName = QStringLiteral("算法选择");
     report.status = plan.valid ? MatchPhotosStageStatus::Completed
                                : MatchPhotosStageStatus::Failed;
-    report.message = plan.valid
-        ? QStringLiteral("%1：%2").arg(algorithmPlanSummary(plan), plan.reason)
-        : plan.validationError;
+    if (plan.valid)
+    {
+        report.message = QStringLiteral("%1：%2")
+                             .arg(algorithmPlanSummary(plan), plan.reason);
+        if (!plan.backendReason.isEmpty())
+        {
+            report.message += QStringLiteral("；%1").arg(plan.backendReason);
+        }
+    }
+    else
+    {
+        report.message = plan.validationError;
+    }
     return report;
 }
 
@@ -423,6 +435,15 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
     }
 
     result.algorithmPlan = MatchPhotosAlgorithmSelector::select(_options);
+    if (result.algorithmPlan.valid &&
+        result.algorithmPlan.algorithmId ==
+            QLatin1String(image_matching::kCudaSiftAlgorithmId))
+    {
+        result.algorithmPlan = MatchPhotosAlgorithmSelector::resolveExecutionBackend(
+            _options,
+            std::move(result.algorithmPlan),
+            image_matching::SiftFeatureExtractor::isCudaAvailable(_options.cudaDevice));
+    }
     const QString algorithmName = result.algorithmPlan.displayName.isEmpty()
         ? result.algorithmPlan.algorithmId
         : result.algorithmPlan.displayName;
@@ -439,7 +460,12 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
     }
     reportMatchPhotosProgress(runtimeContext,
                               QStringLiteral("algorithm_selection"),
-                              QStringLiteral("连接点算法已确定: %1").arg(algorithmName),
+                              result.algorithmPlan.backendReason.isEmpty()
+                                  ? QStringLiteral("连接点算法已确定: %1")
+                                        .arg(algorithmName)
+                                  : QStringLiteral("连接点算法已确定: %1；%2")
+                                        .arg(algorithmName,
+                                             result.algorithmPlan.backendReason),
                               1,
                               1);
 

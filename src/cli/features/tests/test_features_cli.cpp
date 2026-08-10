@@ -75,6 +75,7 @@ TEST(FeatureMatchCliGTest, ExposesOnlyRawImagePimatchContract)
         "--left",
         "--right",
         "--output-dir",
+        "--device",
         "sift_lightglue",
         "cuda_sift",
         "MatchPhotosTask",
@@ -97,6 +98,7 @@ TEST(FeatureMatchCliGTest, ExposesOnlyRawImagePimatchContract)
         "--left",
         "--right",
         "--output-dir",
+        "--device",
         "sift_lightglue",
         "cuda_sift",
     });

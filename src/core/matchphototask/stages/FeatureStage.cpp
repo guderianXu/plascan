@@ -6,6 +6,7 @@
 #include "FeaturePreparationQueue.h"
 #include "io/PathIO.h"
 #include "ImageMatchingRegistry.h"
+#include "cuda_sift/CudaSiftAlgorithm.h"
 #include "loma_r/LoMaRAlgorithm.h"
 
 #include <QElapsedTimer>
@@ -245,8 +246,9 @@ MatchPhotosStageReport FeatureStage::run(
         runtime.maxKeypoints = prepared.effectiveKeypointLimit;
         runtime.removeBorders = algorithmPlan.featureRemoveBorders;
         runtime.siftDetectionThreshold = algorithmPlan.siftDetectionThreshold;
-        // 注册算法均要求 CUDA。不能静默切换到另一实现后仍沿用相同算法版本。
-        runtime.allowCpuSiftFallback = false;
+        runtime.forceCpuSift =
+            algorithmPlan.executionBackend == MatchPhotosExecutionBackend::Cpu;
+        runtime.allowCpuSiftFallback = runtime.forceCpuSift;
         if (algorithmPlan.algorithmId == QLatin1String(image_matching::kLoMaRAlgorithmId))
         {
             runtime.tensorRtFeatureEnginePath = loma_package.featureEnginePath;
@@ -325,7 +327,16 @@ MatchPhotosStageReport FeatureStage::run(
                 prepared.effectiveKeypointLimit;
             settings[QStringLiteral("image_width")] = prepared.originalWidth;
             settings[QStringLiteral("image_height")] = prepared.originalHeight;
-            settings[QStringLiteral("feature_cuda_enabled")] = algorithmPlan.requiresCuda;
+            settings[QStringLiteral("feature_cuda_enabled")] =
+                algorithmPlan.executionBackend == MatchPhotosExecutionBackend::Cuda;
+            const bool siftMutual = algorithmPlan.algorithmId ==
+                QLatin1String(image_matching::kCudaSiftAlgorithmId);
+            settings[QStringLiteral("feature_backend")] = siftMutual
+                ? (algorithmPlan.executionBackend == MatchPhotosExecutionBackend::Cuda
+                       ? QStringLiteral("cuda_sift")
+                       : QStringLiteral("opencv_cpu_sift"))
+                : algorithmPlan.algorithmId;
+            settings[QStringLiteral("backend_fallback")] = algorithmPlan.backendFallback;
             settings[QStringLiteral("feature_prepare_ms")] =
                 static_cast<double>(prepared.preparationMs);
             settings[QStringLiteral("feature_extract_ms")] =
@@ -358,8 +369,9 @@ MatchPhotosStageReport FeatureStage::run(
         QStringLiteral("%1 特征提取完成：%2 张，全部保存在任务内存中，%3")
             .arg(algorithmPlan.displayName)
             .arg(extractedCount)
-            .arg(algorithmPlan.requiresCuda ? QStringLiteral("CUDA")
-                                            : QStringLiteral("CPU")),
+            .arg(algorithmPlan.executionBackend == MatchPhotosExecutionBackend::Cuda
+                     ? QStringLiteral("CUDA")
+                     : QStringLiteral("OpenCV CPU")),
         extractedCount);
 }
 

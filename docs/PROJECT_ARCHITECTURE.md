@@ -134,7 +134,7 @@ core/
 │   ├── ImageMatchFile.h/cpp    # 逐影像 `.pimatch` v1 唯一二进制读写器
 │   ├── ImageMatchIndexFile.h/cpp # 与 payload 签名绑定的轻量 `.pidx` 邻接索引及增量缓存
 │   ├── ImageMatchRepository.h/cpp # 对称写入、完整指纹键缓存和按影像查询
-│   ├── sift/                   # CUDA SIFT 提取
+│   ├── sift/                   # CUDA SIFT 提取与 OpenCV CPU 回退
 │   ├── lightglue/              # TensorRT LightGlue 固定桶推理与后处理
 │   ├── sift_lightglue/         # CUDA SIFT + LightGlue 组合与注册实现
 │   ├── loma_r/                 # TensorRT DaD/DeDoDe-G 特征与 LoMa-R 匹配
@@ -171,7 +171,7 @@ core/
 │   │   ├── MatchPhotosMaskSupport.h/cpp # 连接点流程蒙版路径解析、关键点/连接点过滤
 │   │   └── MatchPhotosParallelism.h/cpp # CUDA 显存预算、LightGlue worker 和几何验证并发解析
 │   ├── stages/
-│   │   ├── FeatureStage.h/cpp       # CUDA SIFT 提取到任务内存，不生成特征文件
+│   │   ├── FeatureStage.h/cpp       # SIFT CUDA/CPU 提取到任务内存，不生成特征文件
 │   │   ├── MatchingStage.h/cpp      # TensorRT LightGlue 匹配并提交逐影像 `.pimatch`
 │   │   ├── GeometryVerifyStage.h/cpp # 调用 MatchGeometryVerifier 并填入残差/标志
 │   │   ├── TrackBuildStage.h/cpp    # 连接点轨迹阶段边界，委托 tie_points 管理最终多视图 track

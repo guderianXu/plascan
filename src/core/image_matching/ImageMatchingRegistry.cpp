@@ -15,9 +15,7 @@ namespace xjw::image_matching
 void registerSiftLightGlueAlgorithm();
 void registerLoMaRAlgorithm();
 #endif
-#if defined(PLASCAN_HAS_CUDA_SIFT)
 void registerCudaSiftAlgorithm();
-#endif
 
 namespace
 {
@@ -86,30 +84,6 @@ void registerUnavailableTensorRtAlgorithms()
 }
 #endif
 
-#if !defined(PLASCAN_HAS_CUDA_SIFT)
-void registerUnavailableCudaSiftAlgorithm()
-{
-    ImageMatchingAlgorithmDescriptor descriptor;
-    descriptor.id = QStringLiteral("cuda_sift");
-    descriptor.displayName = QStringLiteral("CUDA SIFT 匹配");
-    descriptor.version = 1;
-    descriptor.inputModel = AlgorithmInputModel::ReusableFeatures;
-    descriptor.requiresCuda = true;
-    descriptor.suppliesStableFeatureIds = true;
-
-    QString ignoredError;
-    ImageMatchingRegistry::registerAlgorithm(
-        descriptor,
-        [](const ImageMatchingRuntimeConfig &)
-            -> std::unique_ptr<IImageMatchingAlgorithm>
-        {
-            throw std::runtime_error(
-                "CUDA SIFT 算法不可用：PlaScan 构建时未启用 CUDA SIFT");
-        },
-        &ignoredError);
-}
-#endif
-
 void ensureBuiltInAlgorithms()
 {
     static std::once_flag once;
@@ -121,11 +95,7 @@ void ensureBuiltInAlgorithms()
 #else
         registerUnavailableTensorRtAlgorithms();
 #endif
-#if defined(PLASCAN_HAS_CUDA_SIFT)
         registerCudaSiftAlgorithm();
-#else
-        registerUnavailableCudaSiftAlgorithm();
-#endif
     });
 }
 
