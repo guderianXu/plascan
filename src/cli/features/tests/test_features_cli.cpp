@@ -76,6 +76,7 @@ TEST(FeatureMatchCliGTest, ExposesOnlyRawImagePimatchContract)
         "--right",
         "--output-dir",
         "sift_lightglue",
+        "cuda_sift",
         "MatchPhotosTask",
         ".pimatch",
     });
@@ -97,6 +98,7 @@ TEST(FeatureMatchCliGTest, ExposesOnlyRawImagePimatchContract)
         "--right",
         "--output-dir",
         "sift_lightglue",
+        "cuda_sift",
     });
     expectNotContainsAll(combinedOutput(result), {"--sp1", "--sp2", " bf"});
 }

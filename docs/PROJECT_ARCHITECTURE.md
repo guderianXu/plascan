@@ -128,7 +128,7 @@ core/
 │
 ├── image_matching/             # 唯一局部特征/匹配/持久化模块
 │   ├── ImageMatchingAlgorithm.h/cpp # 可扩展算法接口、能力和版本契约
-│   ├── ImageMatchingRegistry.h/cpp  # 算法注册入口；sift_lightglue / loma_r
+│   ├── ImageMatchingRegistry.h/cpp  # 算法注册入口；sift_lightglue / cuda_sift / loma_r
 │   ├── FeatureSet.h/cpp        # 任务内关键点与描述子，不持久化
 │   ├── ImageMatchTypes.h/cpp   # 观测、邻接变体、置信度、残差和标志位
 │   ├── ImageMatchFile.h/cpp    # 逐影像 `.pimatch` v1 唯一二进制读写器

@@ -8,6 +8,7 @@ add_library(plascan_cudasift STATIC
   cudaSiftH.cu
   cudaSiftH.h
   cudautils.h
+  matching.cu
 )
 
 target_include_directories(plascan_cudasift

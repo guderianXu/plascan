@@ -43,6 +43,7 @@ constexpr auto kReconstructionWorkflowId = "reconstruction";
 constexpr auto kDemWorkflowId = "dem";
 constexpr auto kOrthomosaicWorkflowId = "orthomosaic";
 constexpr auto kSiftLightGlueAlgorithmId = "sift_lightglue";
+constexpr auto kCudaSiftAlgorithmId = "cuda_sift";
 constexpr auto kLoMaRAlgorithmId = "loma_r";
 constexpr int kWorkflowSettingsVersion = 5;
 
@@ -266,6 +267,8 @@ void WorkflowSettingsDialog::setupUi()
     aerialForm->addRow(QStringLiteral("模型资源:"), enginePathRow);
 
     _matchingResourceStatusLabel = new QLabel(aerialGroup);
+    _matchingResourceStatusLabel->setObjectName(
+        QStringLiteral("aerialMatchingResourceStatusLabel"));
     _matchingResourceStatusLabel->setWordWrap(true);
     _matchingResourceStatusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
     aerialForm->addRow(QStringLiteral("当前生效:"), _matchingResourceStatusLabel);
@@ -407,16 +410,26 @@ void WorkflowSettingsDialog::setCurrentWorkflow(int index)
 void WorkflowSettingsDialog::refreshAlgorithmControls()
 {
     const QString algorithmId = _matchingAlgorithmCombo->currentData().toString();
-    const bool supported = algorithmId == QLatin1String(kSiftLightGlueAlgorithmId) ||
+    const bool modelBacked = algorithmId == QLatin1String(kSiftLightGlueAlgorithmId) ||
         algorithmId == QLatin1String(kLoMaRAlgorithmId);
-    _matchingResourceEdit->setEnabled(supported);
-    _matchingResourceBrowseButton->setEnabled(supported);
-    _downloadModelButton->setEnabled(supported);
+    const bool cudaSift = algorithmId == QLatin1String(kCudaSiftAlgorithmId);
+    _matchingResourceEdit->setEnabled(modelBacked);
+    _matchingResourceBrowseButton->setEnabled(modelBacked);
+    _downloadModelButton->setEnabled(modelBacked);
     _lomaRKeypointBudgetCombo->setEnabled(
         algorithmId == QLatin1String(kLoMaRAlgorithmId));
-    if (supported)
+    if (modelBacked)
     {
         refreshMatchingResourceStatus();
+    }
+    else if (cudaSift)
+    {
+        QPalette palette = _matchingResourceStatusLabel->palette();
+        palette.setColor(QPalette::WindowText, QColor(35, 110, 70));
+        _matchingResourceStatusLabel->setPalette(palette);
+        _matchingResourceStatusLabel->setText(
+            QStringLiteral("内置 CUDA SIFT，无需下载模型；匹配全部已提取关键点"));
+        _downloadModelButton->setVisible(false);
     }
     else
     {
@@ -441,10 +454,16 @@ void WorkflowSettingsDialog::switchAlgorithmResource()
     }
     _currentAlgorithmId = _matchingAlgorithmCombo->currentData().toString();
     const QSignalBlocker block(_matchingResourceEdit);
-    _matchingResourceEdit->setText(
-        _currentAlgorithmId == QLatin1String(kLoMaRAlgorithmId)
-            ? _lomaRPackagePath
-            : _lightGlueEnginePath);
+    QString resourcePath;
+    if (_currentAlgorithmId == QLatin1String(kLoMaRAlgorithmId))
+    {
+        resourcePath = _lomaRPackagePath;
+    }
+    else if (_currentAlgorithmId == QLatin1String(kSiftLightGlueAlgorithmId))
+    {
+        resourcePath = _lightGlueEnginePath;
+    }
+    _matchingResourceEdit->setText(resourcePath);
     refreshAlgorithmControls();
 }
 
@@ -474,7 +493,7 @@ void WorkflowSettingsDialog::refreshMatchingResourceStatus()
                   .arg(resolved.inputHeight)
             : resolved.errorMessage;
     }
-    else
+    else if (algorithmId == QLatin1String(kSiftLightGlueAlgorithmId))
     {
         options.lightGlueTensorRtEnginePath = _matchingResourceEdit->text().trimmed();
         const auto resolved = xjw::matchphotos::resolveLightGlueTensorRtEngine(
@@ -483,6 +502,16 @@ void WorkflowSettingsDialog::refreshMatchingResourceStatus()
         detail = resolved.bucketKeypoints > 0
             ? QStringLiteral("  [K=%1]").arg(resolved.bucketKeypoints)
             : QString();
+    }
+    else if (algorithmId == QLatin1String(kCudaSiftAlgorithmId))
+    {
+        QPalette palette = _matchingResourceStatusLabel->palette();
+        palette.setColor(QPalette::WindowText, QColor(35, 110, 70));
+        _matchingResourceStatusLabel->setPalette(palette);
+        _matchingResourceStatusLabel->setText(
+            QStringLiteral("内置 CUDA SIFT，无需下载模型；匹配全部已提取关键点"));
+        _downloadModelButton->setVisible(false);
+        return;
     }
 
     QPalette palette = _matchingResourceStatusLabel->palette();

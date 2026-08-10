@@ -21,8 +21,8 @@ void ReconstructionCliOptions::addTo(CLI::App &app)
     app.add_option("--device", device, "SFM backend: auto, cpu, cuda")
         ->check(CLI::IsMember({"auto", "cpu", "cuda"}));
     app.add_option("--sfm-matching-algorithm", sfmMatchingAlgorithmId,
-                   "SFM image matching algorithm id: sift_lightglue or loma_r")
-        ->check(CLI::IsMember({"sift_lightglue", "loma_r"}));
+                   "SFM image matching algorithm id: sift_lightglue, cuda_sift, or loma_r")
+        ->check(CLI::IsMember({"sift_lightglue", "cuda_sift", "loma_r"}));
     app.add_option("--sfm-lightglue-engine", sfmLightGlueEnginePath,
                    "TensorRT LightGlue .engine; empty enables model-directory lookup");
     app.add_option("--sfm-loma-r-package", sfmLoMaRTensorRtPackagePath,

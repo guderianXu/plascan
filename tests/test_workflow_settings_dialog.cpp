@@ -65,6 +65,7 @@ TEST(WorkflowSettingsDialogTest, ExposesFourWorkflowPagesAndLabelsUnavailableSet
               QStringLiteral("aerial_triangulation"));
     EXPECT_TRUE(workflowPages->currentWidget()->isEnabled());
     EXPECT_GE(algorithmSelector->findData(QStringLiteral("sift_lightglue")), 0);
+    EXPECT_GE(algorithmSelector->findData(QStringLiteral("cuda_sift")), 0);
     EXPECT_GE(algorithmSelector->findData(QStringLiteral("loma_r")), 0);
 
     workflowSelector->setCurrentIndex(
@@ -75,6 +76,35 @@ TEST(WorkflowSettingsDialogTest, ExposesFourWorkflowPagesAndLabelsUnavailableSet
     ASSERT_NE(unavailableMessage, nullptr);
     EXPECT_TRUE(unavailableMessage->text().contains(QStringLiteral("尚未开放")));
     EXPECT_TRUE(workflowPages->currentWidget()->findChildren<QComboBox *>().isEmpty());
+}
+
+TEST(WorkflowSettingsDialogTest, CudaSiftRequiresNoExternalModel)
+{
+    WorkflowSettingsDialog dialog;
+    auto *algorithmSelector = dialog.findChild<QComboBox *>(
+        QStringLiteral("aerialMatchingAlgorithmCombo"));
+    auto *resourceEdit = dialog.findChild<QLineEdit *>(
+        QStringLiteral("aerialMatchingResourceEdit"));
+    auto *resourceStatus = dialog.findChild<QLabel *>(
+        QStringLiteral("aerialMatchingResourceStatusLabel"));
+    auto *downloadButton = dialog.findChild<QPushButton *>(
+        QStringLiteral("aerialDownloadModelButton"));
+    ASSERT_NE(algorithmSelector, nullptr);
+    ASSERT_NE(resourceEdit, nullptr);
+    ASSERT_NE(downloadButton, nullptr);
+
+    const int cudaSiftIndex = algorithmSelector->findData(QStringLiteral("cuda_sift"));
+    ASSERT_GE(cudaSiftIndex, 0);
+    algorithmSelector->setCurrentIndex(cudaSiftIndex);
+
+    EXPECT_FALSE(resourceEdit->isEnabled());
+    EXPECT_TRUE(downloadButton->isHidden());
+    EXPECT_EQ(aerialSettings(dialog.collectSettings())
+                  .value(QStringLiteral("algorithm_id"))
+                  .toString(),
+              QStringLiteral("cuda_sift"));
+    ASSERT_NE(resourceStatus, nullptr);
+    EXPECT_TRUE(resourceStatus->text().contains(QStringLiteral("无需下载模型")));
 }
 
 TEST(WorkflowSettingsDialogTest, SwitchesAndPersistsAlgorithmSpecificTensorRtResources)

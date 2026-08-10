@@ -45,7 +45,7 @@ struct MatchPhotosOptions
     // 或在测试、批处理中强制使用确定性模式。
     PairSelectionPolicy pairPolicy = makePairSelectionPolicy(PairSelectionPreset::Auto);
 
-    // 组合算法通过统一注册表选择。当前只注册 sift_lightglue；以后增加算法时，
+    // 组合算法通过统一注册表选择。当前注册 sift_lightglue、cuda_sift 和 loma_r；
     // 新实现只需实现 IImageMatchingAlgorithm 并注册，不再增加特征/匹配双重 token。
     QString algorithmId = QStringLiteral("sift_lightglue");
     // 蒙版应用阶段：none=不使用，keypoints=提取后过滤关键点，tiepoints=匹配后过滤连接点。

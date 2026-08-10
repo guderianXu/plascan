@@ -8,6 +8,7 @@
 #include "MatchPhotosMaskSupport.h"
 #include "MatchPhotosParallelism.h"
 #include "MatchPhotosRuntime.h"
+#include "cuda_sift/CudaSiftAlgorithm.h"
 #include "io/PathIO.h"
 #include "lightglue/LightGlueFeatureBudget.h"
 #include "loma_r/LoMaRAlgorithm.h"
@@ -383,7 +384,8 @@ MatchPhotosStageReport MatchingStage::run(
         modelName = QFileInfo(plannedLoMaRPackage.manifestPath).fileName();
         engineFingerprint = modelFingerprint(loMaRModelIdentityPaths(plannedLoMaRPackage));
     }
-    else
+    else if (algorithmPlan.algorithmId ==
+             QLatin1String(image_matching::kSiftLightGlueAlgorithmId))
     {
         const int requestedMatcherBudget =
             image_matching::resolveSiftLightGlueKeypointBudget(
@@ -416,6 +418,23 @@ MatchPhotosStageReport MatchingStage::run(
         modelName = plannedLightGlueEngine.name;
         engineFingerprint = modelFingerprint(
             lightGlueModelIdentityPath(plannedLightGlueEngine));
+    }
+    else if (algorithmPlan.algorithmId ==
+             QLatin1String(image_matching::kCudaSiftAlgorithmId))
+    {
+        // CUDA SIFT 不受固定 TensorRT K 桶限制，0 表示匹配本次任务实际提取的
+        // 全部特征。算法版本和内置实现身份仍进入缓存键，避免误用旧算法结果。
+        matcherBudget = 0;
+        runtime.maxMatcherKeypoints = 0;
+        runtime.matchThreshold = effectiveThreshold;
+        modelName = QStringLiteral("内置 cudaSift");
+        engineFingerprint = sha256(QByteArrayLiteral("builtin:cuda_sift:v1"));
+    }
+    else
+    {
+        return makeMatchingReport(
+            MatchPhotosStageStatus::Failed,
+            QStringLiteral("未实现匹配运行时：%1").arg(algorithmPlan.algorithmId));
     }
     const QByteArray configurationFingerprint = rawMatchConfigurationFingerprint(
         options, algorithmPlan, matcherBudget, effectiveThreshold, engineFingerprint);
@@ -521,11 +540,31 @@ MatchPhotosStageReport MatchingStage::run(
 
     // 并发度按真正缺失的 pair 计算。warm-cache 仅缺一对时不能仍创建多个
     // TensorRT execution context；全命中则明确为 0，并在下面直接返回。
+    int parallelismBudget = matcherBudget;
+    if (algorithmPlan.algorithmId == QLatin1String(image_matching::kCudaSiftAlgorithmId))
+    {
+        // 全量 CUDA SIFT 匹配的计算量随特征数平方增长。使用真正缓存的最大特征
+        // 数估算并发，避免 guided/per-megapixel 模式下 plan.maxKeypoints=0 时
+        // 被误判成小任务并同时启动四个重型 matcher。
+        for (const WorkItem &item : work)
+        {
+            const auto features0 = context.featureCache->find(item.pair.image0Path);
+            const auto features1 = context.featureCache->find(item.pair.image1Path);
+            if (features0)
+            {
+                parallelismBudget = std::max(parallelismBudget, features0->size());
+            }
+            if (features1)
+            {
+                parallelismBudget = std::max(parallelismBudget, features1->size());
+            }
+        }
+    }
     const LightGlueParallelismDecision parallelism = resolveLightGlueParallelism(
         options.cudaParallelPairs,
         static_cast<int>(work.size()),
         true,
-        matcherBudget,
+        parallelismBudget,
         gpuMemory);
     const int workerCount = work.empty() ? 0 : std::max(1, parallelism.effectiveWorkers);
 
@@ -592,7 +631,8 @@ MatchPhotosStageReport MatchingStage::run(
         runtime.tensorRtFeatureEnginePath = package.featureEnginePath;
         runtime.tensorRtMatcherEnginePath = package.matcherEnginePath;
     }
-    else
+    else if (algorithmPlan.algorithmId ==
+             QLatin1String(image_matching::kSiftLightGlueAlgorithmId))
     {
         reportMatchPhotosProgress(
             context,
@@ -626,6 +666,7 @@ MatchPhotosStageReport MatchingStage::run(
             1,
             1);
     }
+    // CUDA SIFT 使用编译进程序的匹配内核，不需要准备外部模型或 engine。
 
     std::atomic_int nextWork{0};
     std::atomic_int completed{reusedPairs};

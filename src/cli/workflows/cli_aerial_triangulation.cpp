@@ -323,8 +323,8 @@ int main(int argc, char *argv[])
     app.add_option("--device", deviceArg, "计算设备: auto, cpu, cuda");
     app.add_option("--reference-mode", referenceModeArg, "参考预选模式: source-code/source, estimated, sequence");
     app.add_option("--algorithm-id", algorithmIdArg,
-                   "统一影像匹配算法 ID: sift_lightglue, loma_r")
-        ->check(CLI::IsMember({"sift_lightglue", "loma_r"}));
+                   "统一影像匹配算法 ID: sift_lightglue, cuda_sift, loma_r")
+        ->check(CLI::IsMember({"sift_lightglue", "cuda_sift", "loma_r"}));
     app.add_option("--lightglue-engine", lightGlueEngineArg,
                    "TensorRT LightGlue .engine；留空时按模型目录自动查找");
     app.add_option("--loma-r-package", lomaRPackageArg,

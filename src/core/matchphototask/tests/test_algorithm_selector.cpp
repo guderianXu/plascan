@@ -46,6 +46,21 @@ TEST(MatchPhotosAlgorithmSelectorTest, SelectsRegisteredLoMaR)
     EXPECT_TRUE(plan.rotationRobust);
 }
 
+TEST(MatchPhotosAlgorithmSelectorTest, SelectsRegisteredCudaSift)
+{
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.algorithmId = QStringLiteral("cuda_sift");
+
+    const auto plan = xjw::matchphotos::MatchPhotosAlgorithmSelector::select(options);
+
+    EXPECT_TRUE(plan.valid) << qPrintable(plan.validationError);
+    EXPECT_EQ(plan.algorithmId, QStringLiteral("cuda_sift"));
+    EXPECT_EQ(plan.displayName, QStringLiteral("CUDA SIFT 匹配"));
+    EXPECT_TRUE(plan.extractsFeaturesInMemory);
+    EXPECT_TRUE(plan.requiresCuda);
+    EXPECT_TRUE(plan.rotationRobust);
+}
+
 TEST(MatchPhotosAlgorithmSelectorTest, RejectsCpuForCudaOnlyAlgorithm)
 {
     xjw::matchphotos::MatchPhotosOptions options;

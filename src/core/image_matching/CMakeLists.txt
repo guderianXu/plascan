@@ -26,6 +26,8 @@ add_library(image_matching STATIC
     MatchResult.h
     geometry/MatchGeometryVerifier.cpp
     geometry/MatchGeometryVerifier.h
+    cuda_sift/CudaSiftMatchFilter.cpp
+    cuda_sift/CudaSiftMatchFilter.h
     sift/SiftFeatureExtractor.cpp
     sift/SiftFeatureExtractor.h
     lightglue/LightGlueFeatureBudget.h
@@ -70,10 +72,18 @@ if(NOT TARGET plascan_cudasift AND CMAKE_CUDA_COMPILER AND
                      "${CMAKE_BINARY_DIR}/3rdparty/cudasift")
 endif()
 
+if(TARGET plascan_cudasift)
+    target_sources(image_matching PRIVATE
+        cuda_sift/CudaSiftAlgorithm.cpp
+        cuda_sift/CudaSiftAlgorithm.h
+    )
+endif()
+
 target_include_directories(image_matching PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/lightglue
     ${CMAKE_CURRENT_SOURCE_DIR}/geometry
+    ${CMAKE_CURRENT_SOURCE_DIR}/cuda_sift
     ${CMAKE_CURRENT_SOURCE_DIR}/sift
     ${CMAKE_CURRENT_SOURCE_DIR}/sift_lightglue
     ${CMAKE_CURRENT_SOURCE_DIR}/loma_r
@@ -134,4 +144,14 @@ if(BUILD_TESTS)
         ${OpenCV_LIBS}
     )
     add_test(NAME MatchGeometryVerifierTest COMMAND test_match_geometry_verifier)
+
+    add_executable(test_cuda_sift_match_filter
+        tests/test_cuda_sift_match_filter.cpp
+    )
+    target_link_libraries(test_cuda_sift_match_filter PRIVATE
+        GTest::gtest
+        GTest::gtest_main
+        image_matching
+    )
+    add_test(NAME CudaSiftMatchFilterTest COMMAND test_cuda_sift_match_filter)
 endif()

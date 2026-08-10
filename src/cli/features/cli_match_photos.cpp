@@ -338,8 +338,8 @@ int main(int argc, char *argv[])
     app.add_option("--quality", qualityArg, "精度预设: auto, fast, high, highest, difficult, cpu, cuda");
     app.add_option("--device", deviceArg, "计算设备: auto, cpu, cuda");
     app.add_option("--algorithm-id", algorithmIdArg,
-                   "统一影像匹配算法 ID: sift_lightglue, loma_r")
-        ->check(CLI::IsMember({"sift_lightglue", "loma_r"}));
+                   "统一影像匹配算法 ID: sift_lightglue, cuda_sift, loma_r")
+        ->check(CLI::IsMember({"sift_lightglue", "cuda_sift", "loma_r"}));
     app.add_option("--lightglue-engine", lightGlueEngineArg,
                    "LightGlue .onnx（推荐）或兼容的本机 .engine；留空时按模型目录自动查找");
     app.add_option("--loma-r-package", lomaRPackageArg,

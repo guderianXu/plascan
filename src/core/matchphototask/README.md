@@ -7,7 +7,8 @@
 
 当前框架：
 
-- `algorithm/` 负责类 Metashape 策略到注册算法计划的映射，当前支持 `sift_lightglue` 和 `loma_r`。
+- `algorithm/` 负责类 Metashape 策略到注册算法计划的映射，当前支持
+  `sift_lightglue`、`cuda_sift` 和 `loma_r`。
 - `pair_selection/` 负责影像对类型、影像对选择策略和 `PairSelector`。
 - `runtime/` 负责任务级 SIFT 内存缓存、ONNX 资源解析、本机 TensorRT engine 缓存、蒙版约束和 GUI 写回所需记录。
 - `task/` 负责 `MatchPhotosTask`、选项、上下文和结果报告。
