@@ -647,6 +647,7 @@ QT_QPA_PLATFORM=offscreen ./build/tests/test_gui_project_utils
 | 文档 | 内容 |
 |------|------|
 | `docs/PROJECT_ARCHITECTURE.md` | 完整目录树、模块职责、数据流、技术债务 |
+| `docs/plans/2026-08-10-high-priority-code-optimization.md` | 数据安全、密集匹配、并发、MVS 与构建门禁优化计划 |
 | `CONTEXT.md` | 当前环境、构建状态、系统依赖 |
 | `docs/BUILD_MACOS.md` | macOS Apple Silicon 构建指南 |
 | `docs/superpowers/specs/` | 功能规格说明 |
