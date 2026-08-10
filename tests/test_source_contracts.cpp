@@ -1186,7 +1186,7 @@ TEST(MvsHeterogeneousSchedulingContractTest,
     expectContainsAll(scheduler_wiring, {
         "const bool benefitAwareScheduling = heterogeneousAuto",
         "DepthComputeScheduler computeScheduler",
-        "benefitAwareScheduling, acceleratorWorkers",
+        "acceleratorWorkers,\n        schedulingPolicy",
     });
 
     expectContainsAll(scheduler_header + scheduler_source, {
