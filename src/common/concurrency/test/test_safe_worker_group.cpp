@@ -63,12 +63,12 @@ TEST(SafeWorkerGroupTest, WorkerExceptionIsRethrownAfterEveryWorkerJoins)
             {
                 std::this_thread::yield();
             }
-            if (stopToken.stop_requested())
-            {
-                return;
-            }
             if (workerIndex == 0)
             {
+                if (stopToken.stop_requested())
+                {
+                    return;
+                }
                 throw std::runtime_error("worker sentinel");
             }
             while (!stopToken.stop_requested())
