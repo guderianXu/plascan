@@ -1,4 +1,6 @@
 #include "MaskGenerator.h"
+#include "birefnet/BiRefNetImageProcessing.h"
+#include "birefnet/BiRefNetMaskGenerator.h"
 #include "u2net/U2NetMaskGenerator.h"
 
 #include <gtest/gtest.h>
@@ -65,6 +67,33 @@ namespace
             return configured;
         }
         return (std::filesystem::temp_directory_path() / "PlaScanU2NetTestEngines").string();
+    }
+
+    bool isPathInsideDirectory(const std::filesystem::path& path,
+                               const std::filesystem::path& directory)
+    {
+        std::error_code pathError;
+        const std::filesystem::path canonicalPath = std::filesystem::weakly_canonical(path, pathError);
+        if (pathError)
+        {
+            return false;
+        }
+
+        std::error_code directoryError;
+        const std::filesystem::path canonicalDirectory =
+            std::filesystem::weakly_canonical(directory, directoryError);
+        if (directoryError)
+        {
+            return false;
+        }
+
+        const std::filesystem::path relative = canonicalPath.lexically_relative(canonicalDirectory);
+        if (relative.empty())
+        {
+            return canonicalPath == canonicalDirectory;
+        }
+        const auto first = relative.begin();
+        return !relative.is_absolute() && first != relative.end() && *first != "..";
     }
 
     double foregroundMaskIou(const cv::Mat& lhs, const cv::Mat& rhs)
@@ -307,6 +336,151 @@ TEST(MaskComposerTest, OperationsMatchMetashapeStyleMaskComposition)
     EXPECT_EQ(intersected.at<uchar>(1, 1), 255);
     EXPECT_EQ(differed.at<uchar>(0, 0), 0);
     EXPECT_EQ(differed.at<uchar>(1, 1), 0);
+}
+
+TEST(BiRefNetImageProcessingTest, LetterboxesWithoutChangingSourceAspectRatio)
+{
+    const cv::Mat image(80, 100, CV_8UC3, cv::Scalar(10, 20, 30));
+    xjw::mask::BiRefNetLetterbox letterbox;
+
+    const cv::Mat blob = xjw::mask::makeBiRefNetBlob(
+        image, xjw::mask::kBiRefNetDynamicInputSize, &letterbox);
+
+    ASSERT_FALSE(blob.empty());
+    ASSERT_EQ(blob.dims, 4);
+    EXPECT_EQ(blob.size[0], 1);
+    EXPECT_EQ(blob.size[1], 3);
+    EXPECT_EQ(blob.size[2], xjw::mask::kBiRefNetDynamicInputSize);
+    EXPECT_EQ(blob.size[3], xjw::mask::kBiRefNetDynamicInputSize);
+    EXPECT_EQ(letterbox.sourceSize, image.size());
+    EXPECT_EQ(letterbox.resizedSize.width, 1024);
+    EXPECT_EQ(letterbox.resizedSize.height, 819);
+    EXPECT_EQ(letterbox.left, 0);
+    EXPECT_EQ(letterbox.top, 102);
+    EXPECT_TRUE(letterbox.isValid());
+}
+
+TEST(BiRefNetImageProcessingTest, ConvertsRawLogitsWithSigmoidWithoutPerImageMinMax)
+{
+    const int shape[] = {1, 1, 1, 3};
+    cv::Mat logits(4, shape, CV_32F);
+    logits.ptr<float>()[0] = -2.0f;
+    logits.ptr<float>()[1] = 0.0f;
+    logits.ptr<float>()[2] = 2.0f;
+
+    const cv::Mat probability = xjw::mask::biRefNetProbabilityFromOutput(logits);
+
+    ASSERT_EQ(probability.rows, 1);
+    ASSERT_EQ(probability.cols, 3);
+    EXPECT_NEAR(probability.at<float>(0, 0), 0.1192029f, 1e-6f);
+    EXPECT_NEAR(probability.at<float>(0, 1), 0.5f, 1e-6f);
+    EXPECT_NEAR(probability.at<float>(0, 2), 0.8807971f, 1e-6f);
+}
+
+TEST(BiRefNetImageProcessingTest, RestoresLetterboxAndKeepsSeparateForegroundRegions)
+{
+    cv::Mat probability(1024, 1024, CV_32F, cv::Scalar(0.0f));
+    probability(cv::Rect(100, 350, 160, 180)).setTo(0.9f);
+    probability(cv::Rect(700, 420, 120, 140)).setTo(0.9f);
+    const xjw::mask::BiRefNetLetterbox letterbox{
+        cv::Size(200, 100), cv::Size(1024, 512), 1024, 0, 256};
+
+    const cv::Mat mask = xjw::mask::makeBiRefNetMask(
+        probability, letterbox, 0.5f, 0, 4, false);
+
+    ASSERT_EQ(mask.size(), letterbox.sourceSize);
+    EXPECT_EQ(mask.type(), CV_8UC1);
+    EXPECT_EQ(mask.at<uchar>(40, 35), 0);
+    EXPECT_EQ(mask.at<uchar>(50, 145), 0);
+    EXPECT_EQ(mask.at<uchar>(5, 100), 255);
+}
+
+TEST(BiRefNetMaskGeneratorTest, ContractIsFixed1024TensorRtOnly)
+{
+    const xjw::mask::BiRefNetMaskGeneratorConfig config;
+
+    EXPECT_EQ(xjw::mask::biRefNetDynamicDefaultModelFileName(), "BiRefNet_dynamic_1024.onnx");
+    EXPECT_EQ(config.backend, xjw::mask::BiRefNetBackendType::Auto);
+    EXPECT_EQ(config.inputSize, 1024);
+    EXPECT_FLOAT_EQ(config.foregroundThreshold, 0.5f);
+    EXPECT_EQ(config.morphologyRadius, 0);
+    EXPECT_FALSE(config.keepLargestComponent);
+    EXPECT_TRUE(config.preferFp16);
+    EXPECT_EQ(xjw::mask::parseBiRefNetBackendType("cuda"),
+              xjw::mask::BiRefNetBackendType::TensorRt);
+    EXPECT_FALSE(xjw::mask::parseBiRefNetBackendType("cpu").has_value());
+}
+
+TEST(BiRefNetMaskGeneratorIntegrationTest, OnnxModelRunsOnTensorRtWhenExplicitlyEnabled)
+{
+    const char* enabled = std::getenv("PLASCAN_BIREFNET_INTEGRATION");
+    if (!enabled || std::string(enabled) != "1")
+    {
+        GTEST_SKIP() << "Set PLASCAN_BIREFNET_INTEGRATION=1 to run the real BiRefNet TensorRT test.";
+    }
+
+    const char* model = std::getenv("PLASCAN_BIREFNET_MODEL");
+    if (!model || !*model)
+    {
+        FAIL() << "PLASCAN_BIREFNET_MODEL must name the fixed 1024x1024 BiRefNet ONNX model.";
+    }
+    const std::filesystem::path onnxPath(model);
+    if (!std::filesystem::is_regular_file(onnxPath))
+    {
+        FAIL() << "PLASCAN_BIREFNET_MODEL does not exist or is not a file: " << onnxPath.string();
+    }
+
+    const char* cache = std::getenv("PLASCAN_BIREFNET_ENGINE_CACHE");
+    if (!cache || !*cache)
+    {
+        FAIL() << "PLASCAN_BIREFNET_ENGINE_CACHE must name an isolated writable engine cache.";
+    }
+    const std::filesystem::path cacheDirectory(cache);
+
+    const xjw::mask::BiRefNetInferenceCapabilities capabilities =
+        xjw::mask::detectBiRefNetInferenceCapabilities();
+    if (!capabilities.tensorRtAvailable)
+    {
+        FAIL() << "PLASCAN_BIREFNET_INTEGRATION=1 requires TensorRT/CUDA: "
+               << capabilities.summary;
+    }
+
+    xjw::mask::BiRefNetMaskGeneratorConfig config;
+    config.modelPath = onnxPath.string();
+    config.backend = xjw::mask::BiRefNetBackendType::TensorRt;
+    config.engineCacheDirectory = cacheDirectory.string();
+
+    try
+    {
+        const cv::Mat image = makeAsteroidLikeImage();
+        xjw::mask::BiRefNetMaskGenerator generator(config);
+        const xjw::mask::BiRefNetMaskResult result = generator.generate(image);
+
+        std::cout << "[BiRefNetTensorRtTest] engine_reused="
+                  << (result.engineReused ? "yes" : "no")
+                  << "; engine_path=" << result.enginePath << '\n';
+
+        ASSERT_FALSE(result.mask.empty());
+        EXPECT_EQ(result.mask.type(), CV_8UC1);
+        EXPECT_EQ(result.mask.size(), image.size());
+        EXPECT_TRUE(result.usedCuda);
+        EXPECT_EQ(result.requestedBackend, xjw::mask::BiRefNetBackendType::TensorRt);
+        EXPECT_EQ(result.actualBackend, xjw::mask::BiRefNetBackendType::TensorRt);
+        EXPECT_TRUE(result.precision == xjw::mask::BiRefNetInferencePrecision::Fp16 ||
+                    result.precision == xjw::mask::BiRefNetInferencePrecision::Fp32);
+        EXPECT_EQ(result.outputName, "output_image");
+        EXPECT_EQ(result.modelSha256.size(), 64U);
+        EXPECT_EQ(result.modelSha256, generator.modelSha256());
+        ASSERT_FALSE(result.enginePath.empty());
+        EXPECT_TRUE(std::filesystem::is_regular_file(result.enginePath));
+        EXPECT_TRUE(isPathInsideDirectory(result.enginePath, cacheDirectory));
+        EXPECT_FALSE(isPathInsideDirectory(result.enginePath, onnxPath.parent_path()));
+    }
+    catch (const std::exception& error)
+    {
+        FAIL() << "BiRefNet TensorRT integration failed: " << error.what() << "; "
+               << capabilities.summary;
+    }
 }
 
 TEST(U2NetMaskGeneratorTest, ReportsCpuAndTensorRtCapabilities)

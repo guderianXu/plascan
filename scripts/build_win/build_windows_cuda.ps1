@@ -18,6 +18,7 @@ param(
     [switch] $BuildOnly,
     [switch] $RunTests,
     [switch] $RunU2NetTensorRtDeploymentTest,
+    [switch] $RunBiRefNetTensorRtDeploymentTest,
     [switch] $RunU2NetCudaDeploymentTest,
     [switch] $CleanConfigure,
     [switch] $CleanRootCache,
@@ -1448,6 +1449,7 @@ if (-not $BuildOnly)
         "-DPLASCAN_CONDA_PREFIX=",
         "-DPLASCAN_ENABLE_VCPKG=ON",
         "-DPLASCAN_BUNDLE_RUNTIME=ON",
+        "-DPLASCAN_BUNDLE_BIREFNET_DYNAMIC=ON",
         "-DBUILD_TESTS=ON",
         "-DPLASCAN_ENABLE_TENSORRT=ON",
         "-DTensorRT_ROOT=$tensorRtRootCMake",
@@ -1546,6 +1548,43 @@ if ($RunU2NetTensorRtDeploymentTest)
     Assert-ExistingPath $deploymentTestScript "U2Net TensorRT deployment test script"
     & $deploymentTestScript -BuildDir $BuildDir `
         -ModelPath (Join-Path $SourceDir "resources\models\U2Net_v1.onnx")
+}
+
+if ($RunBiRefNetTensorRtDeploymentTest)
+{
+    if ($ConfigureOnly)
+    {
+        throw "RunBiRefNetTensorRtDeploymentTest requires a build; do not combine it with ConfigureOnly."
+    }
+
+    $packageSmokeRoot = Join-Path $BuildDir "package-smoke\PlaScan"
+    if (Test-Path -LiteralPath $packageSmokeRoot)
+    {
+        if (-not (Test-PathUnder -Path $packageSmokeRoot -Parent $BuildDir))
+        {
+            throw "Refusing to clean a package-smoke tree outside the build directory: $packageSmokeRoot"
+        }
+        Remove-Item -LiteralPath $packageSmokeRoot -Recurse -Force
+    }
+
+    $deploymentBuildArgs = @(
+        "--build", $BuildDir,
+        "--config", "Release",
+        "--parallel", "$Jobs",
+        "--target", "test_mask_generation", "plascan_package_smoke"
+    )
+    $deploymentBuildExitCode = 0
+    Invoke-NativeCommand -FilePath $CMakeExe -Arguments $deploymentBuildArgs `
+        -ExitCode ([ref]$deploymentBuildExitCode)
+    if ($deploymentBuildExitCode -ne 0)
+    {
+        throw "BiRefNet package-smoke staging failed with exit code $deploymentBuildExitCode"
+    }
+
+    $deploymentTestScript = Join-Path $SourceDir `
+        "scripts\build_win\test_birefnet_tensorrt_deployment.ps1"
+    Assert-ExistingPath $deploymentTestScript "BiRefNet TensorRT deployment test script"
+    & $deploymentTestScript -BuildDir $BuildDir -InstallRoot $packageSmokeRoot
 }
 
 if ($RunTests)

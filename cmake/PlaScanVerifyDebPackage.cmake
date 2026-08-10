@@ -84,13 +84,34 @@ if(NOT _contents_result EQUAL 0)
     "dpkg-deb --contents failed for ${_deb_package}: ${_contents_error}")
 endif()
 
-foreach(_required_path IN ITEMS
+set(_required_paths
     "./opt/plascan/bin/plascan_gui.bin"
     "./opt/plascan/resources/models/U2Net_v1.onnx"
     "./opt/plascan/resources/models/lightglue_tensorrt/lightglue_sift_bucket4096.onnx"
     "./usr/bin/plascan"
     "./usr/share/applications/plascan.desktop"
     "${_expected_doc_path}")
+set(_birefnet_paths
+    "./opt/plascan/resources/models/birefnet_dynamic/BiRefNet_dynamic_1024.onnx"
+    "./opt/plascan/resources/models/birefnet_dynamic/BiRefNet_dynamic_1024.provenance.json"
+    "./opt/plascan/share/plascan/models/BiRefNet_NOTICE.md"
+    "./opt/plascan/share/plascan/models/BiRefNet-MIT.txt"
+    "./opt/plascan/share/plascan/models/models-v1.2.0.sha256")
+if(PLASCAN_EXPECTED_DEB_PACKAGE_VARIANT STREQUAL "cuda")
+  list(APPEND _required_paths ${_birefnet_paths})
+else()
+  foreach(_unexpected_birefnet_path IN LISTS _birefnet_paths)
+    string(FIND "${_contents}" "${_unexpected_birefnet_path}"
+      _unexpected_birefnet_index)
+    if(NOT _unexpected_birefnet_index EQUAL -1)
+      message(FATAL_ERROR
+        "Portable CPU DEB must not contain BiRefNet Dynamic: "
+        "${_unexpected_birefnet_path}")
+    endif()
+  endforeach()
+endif()
+
+foreach(_required_path IN LISTS _required_paths)
   string(FIND "${_contents}" "${_required_path}" _path_index)
   if(_path_index EQUAL -1)
     message(FATAL_ERROR

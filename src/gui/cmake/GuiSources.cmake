@@ -117,6 +117,7 @@ set(GUI_PROJECT_SOURCES
   project/support/ProjectWorkflowReports.cpp
   project/manager/ProjectManager.cpp
   project/manager/ProjectLifecycleController.cpp
+  project/manager/ProjectMaskInferenceAdapter.cpp
   project/manager/ProjectMaskWorkflowController.cpp
   project/manager/ProjectPointCloudWorkflowController.cpp
   project/manager/ProjectModelManager.cpp

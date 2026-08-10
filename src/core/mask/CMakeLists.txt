@@ -1,5 +1,8 @@
 add_library(mask
     MaskGenerator.cpp
+    birefnet/BiRefNetImageProcessing.cpp
+    birefnet/BiRefNetMaskGenerator.cpp
+    birefnet/BiRefNetTensorRtBackend.cpp
     u2net/U2NetImageProcessing.cpp
     u2net/U2NetMaskGenerator.cpp
     u2net/U2NetOpenCvCpuBackend.cpp

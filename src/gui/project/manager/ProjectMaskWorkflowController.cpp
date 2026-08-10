@@ -4,15 +4,13 @@
 #include "GuiTaskRunner.h"
 #include "Logger.h"
 #include "MaskGenerator.h"
+#include "ProjectMaskInferenceAdapter.h"
 #include "ProjectData.h"
 #include "project/ProjectIO.h"
 #include "project/ProjectMetadata.h"
 #include "ProjectMetadataOperations.h"
 #include "ProjectOpenGuard.h"
-#include "u2net/U2NetMaskGenerator.h"
 #include "io/PathIO.h"
-#include "model/ModelFileResolver.h"
-#include "model/U2NetModelCatalog.h"
 
 #include "OpenCvCompat.h"
 #include <opencv2/imgcodecs.hpp>
@@ -25,12 +23,10 @@
 #include <QMessageBox>
 #include <QPointer>
 #include <QSet>
-#include <QStandardPaths>
 
-#include <algorithm>
 #include <atomic>
+#include <exception>
 #include <memory>
-#include <optional>
 
 namespace
 {
@@ -40,12 +36,16 @@ namespace
         QMap<QString, QJsonObject> recordsByImage;
         QStringList generatedImages;
         QStringList errors;
+        QString inferenceModelId;
+        QString inferenceModelFileName;
         QString inferenceBackend;
         QString inferenceDevice;
         QString inferencePrecision;
         QString inferenceEnvironment;
         QString modelSha256;
         QString deviceFallbackReason;
+        QString enginePath;
+        int inferenceInputSize = 0;
         bool engineReused = false;
         bool cancelled = false;
     };
@@ -106,48 +106,6 @@ namespace
             }
         }
         return selected.isEmpty() ? allImages : selected;
-    }
-
-    std::optional<xjw::mask::U2NetMaskGeneratorConfig> u2netConfig(const QJsonObject& settings, QString* error)
-    {
-        const xjw::common::model::ModelFileResolver resolver;
-        const auto status = xjw::common::model::u2netModelStatus(resolver);
-        if (!status.isInstalled)
-        {
-            if (error)
-            {
-                *error = QStringLiteral("未找到 U2Net ONNX 模型：U2Net_v1.onnx。"
-                                        "请放到 PLASCAN_MODEL_DIR 或 resources/models。");
-            }
-            return std::nullopt;
-        }
-
-        xjw::mask::U2NetMaskGeneratorConfig config;
-        const QByteArray modelPath = QDir::toNativeSeparators(status.modelPath).toUtf8();
-        config.modelPath = std::string(modelPath.constData(), static_cast<std::size_t>(modelPath.size()));
-        QString backend_token = settings.value(QStringLiteral("u2net_backend")).toString().trimmed();
-        if (backend_token.isEmpty())
-        {
-            backend_token = settings.value(QStringLiteral("u2net_device")).toString(QStringLiteral("auto")).trimmed();
-        }
-        if (backend_token == QLatin1String("cuda"))
-        {
-            backend_token = QStringLiteral("tensorrt");
-        }
-        const auto backend = xjw::mask::parseU2NetBackendType(backend_token.toStdString());
-        config.backend = backend.value_or(xjw::mask::U2NetBackendType::Auto);
-        config.allowDeviceFallback = settings.value(QStringLiteral("u2net_allow_fallback")).toBool(false);
-        config.inputSize = xjw::mask::kU2NetModelInputSize;
-        config.foregroundThreshold = static_cast<float>(
-            std::clamp(settings.value(QStringLiteral("u2net_mask_threshold")).toDouble(0.5), 0.01, 0.99));
-        config.morphologyRadius = 1;
-        config.minComponentArea = 64;
-        config.keepLargestComponent = true;
-        config.preferFp16 = true;
-        config.engineCacheDirectory = QDir(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation))
-                                          .filePath(QStringLiteral("models/u2net/engines"))
-                                          .toStdString();
-        return config;
     }
 
 } // namespace
@@ -272,49 +230,62 @@ void ProjectMaskWorkflowController::openDialogForImages(const QStringList& reque
             const auto operation = maskOperation(settings);
             const QString method =
                 settings.value(QStringLiteral("method")).toString(QStringLiteral("black_background"));
-            const bool useU2Net = method == QLatin1String("u2net");
-            std::unique_ptr<xjw::mask::U2NetMaskGenerator> u2net;
-            if (useU2Net)
+            const bool useAiMask = method == QLatin1String("u2net") ||
+                                   method == QLatin1String("birefnet_dynamic");
+            std::unique_ptr<xjw::gui::project::ProjectMaskInferenceAdapter> inference;
+            if (useAiMask)
             {
                 QString error;
-                auto config = u2netConfig(settings, &error);
-                if (!config)
+                inference = xjw::gui::project::ProjectMaskInferenceAdapter::create(
+                    method,
+                    settings,
+                    [guard, projectPath, chunkId, cancellation, total = targets.size()](
+                        const std::string& status_message)
+                    {
+                        const QString message = QString::fromStdString(status_message);
+                        xjw::gui::tasks::postGuarded(
+                            guard,
+                            [message, projectPath, chunkId, cancellation, total](auto* self)
+                            {
+                                if (!cancellation.isCancellationRequested() &&
+                                    self->matchesSession(projectPath, chunkId))
+                                {
+                                    emit self->progressChanged(
+                                        QStringLiteral("准备 AI 蒙版：%1").arg(message), 0, total);
+                                }
+                            });
+                    },
+                    &error);
+                if (!inference)
                 {
                     result.errors << error;
                     return result;
                 }
-                config->statusCallback = [guard, projectPath, chunkId, cancellation, total = targets.size()](
-                                             const std::string& status_message)
-                {
-                    const QString message = QString::fromStdString(status_message);
-                    xjw::gui::tasks::postGuarded(
-                        guard,
-                        [message, projectPath, chunkId, cancellation, total](auto* self)
-                        {
-                            if (!cancellation.isCancellationRequested() && self->matchesSession(projectPath, chunkId))
-                            {
-                                emit self->progressChanged(QStringLiteral("准备 U2Net：%1").arg(message), 0, total);
-                            }
-                        });
-                };
-                try
-                {
-                    u2net = std::make_unique<xjw::mask::U2NetMaskGenerator>(*config);
-                    result.modelSha256 = QString::fromStdString(u2net->modelSha256());
-                    LOG_INFO(
-                        QStringLiteral("U2Net ONNX 蒙版模型已加载: model=U2Net_v1.onnx "
-                                       "backend=%1 device=%2 precision=%3 reused=%4 env=%5")
-                            .arg(QString::fromStdString(xjw::mask::u2netBackendTypeToken(u2net->actualBackend())),
-                                 QString::fromStdString(u2net->deviceLabel()),
-                                 QString::fromStdString(xjw::mask::u2netInferencePrecisionToken(u2net->precision())),
-                                 u2net->engineReused() ? QStringLiteral("true") : QStringLiteral("false"),
-                                 QString::fromStdString(u2net->environmentSummary())));
-                }
-                catch (const std::exception& e)
-                {
-                    result.errors << QStringLiteral("U2Net ONNX 模型加载失败：%1").arg(QString::fromUtf8(e.what()));
-                    return result;
-                }
+
+                const xjw::gui::project::ProjectMaskInferenceResult metadata = inference->metadata();
+                result.inferenceModelId = metadata.modelId;
+                result.inferenceModelFileName = metadata.modelFileName;
+                result.modelSha256 = metadata.modelSha256;
+                result.inferenceBackend = metadata.backend;
+                result.inferenceDevice = metadata.device;
+                result.inferencePrecision = metadata.precision;
+                result.inferenceEnvironment = metadata.environment;
+                result.deviceFallbackReason = metadata.fallbackReason;
+                result.enginePath = metadata.enginePath;
+                result.inferenceInputSize = metadata.inputSize;
+                result.engineReused = metadata.engineReused;
+                LOG_INFO(
+                    QStringLiteral("AI ONNX 蒙版模型已加载: model_id=%1 file=%2 backend=%3 "
+                                   "device=%4 precision=%5 input=%6 reused=%7 engine=%8 env=%9")
+                        .arg(result.inferenceModelId,
+                             result.inferenceModelFileName,
+                             result.inferenceBackend,
+                             result.inferenceDevice,
+                             result.inferencePrecision)
+                        .arg(result.inferenceInputSize)
+                        .arg(result.engineReused ? QStringLiteral("true") : QStringLiteral("false"),
+                             result.enginePath,
+                             result.inferenceEnvironment));
             }
 
             int completed = 0;
@@ -347,20 +318,24 @@ void ProjectMaskWorkflowController::openDialogForImages(const QStringList& reque
                 }
 
                 cv::Mat generated;
+                xjw::gui::project::ProjectMaskInferenceResult inference_result;
                 try
                 {
-                    if (useU2Net)
+                    if (useAiMask)
                     {
-                        const xjw::mask::U2NetMaskResult u2net_result = u2net->generate(source);
-                        generated = u2net_result.mask;
-                        result.inferenceBackend =
-                            QString::fromStdString(xjw::mask::u2netBackendTypeToken(u2net_result.actualBackend));
-                        result.inferenceDevice = QString::fromStdString(u2net_result.deviceLabel);
-                        result.inferencePrecision =
-                            QString::fromStdString(xjw::mask::u2netInferencePrecisionToken(u2net_result.precision));
-                        result.inferenceEnvironment = QString::fromStdString(u2net_result.environmentSummary);
-                        result.deviceFallbackReason = QString::fromStdString(u2net_result.fallbackReason);
-                        result.engineReused = u2net_result.engineReused;
+                        inference_result = inference->generate(source);
+                        generated = inference_result.mask;
+                        result.inferenceModelId = inference_result.modelId;
+                        result.inferenceModelFileName = inference_result.modelFileName;
+                        result.modelSha256 = inference_result.modelSha256;
+                        result.inferenceBackend = inference_result.backend;
+                        result.inferenceDevice = inference_result.device;
+                        result.inferencePrecision = inference_result.precision;
+                        result.inferenceEnvironment = inference_result.environment;
+                        result.deviceFallbackReason = inference_result.fallbackReason;
+                        result.enginePath = inference_result.enginePath;
+                        result.inferenceInputSize = inference_result.inputSize;
+                        result.engineReused = inference_result.engineReused;
                     }
                     else
                     {
@@ -394,12 +369,19 @@ void ProjectMaskWorkflowController::openDialogForImages(const QStringList& reque
                 QJsonObject record;
                 record.insert(QStringLiteral("mask_path"), QDir::cleanPath(maskPath));
                 record.insert(QStringLiteral("mask_method"), method);
-                if (useU2Net)
+                if (useAiMask)
                 {
-                    record.insert(QStringLiteral("mask_inference_backend"), result.inferenceBackend);
-                    record.insert(QStringLiteral("mask_inference_device"), result.inferenceDevice);
-                    record.insert(QStringLiteral("mask_inference_precision"), result.inferencePrecision);
-                    record.insert(QStringLiteral("mask_model_sha256"), result.modelSha256);
+                    record.insert(QStringLiteral("mask_model_id"), inference_result.modelId);
+                    record.insert(QStringLiteral("mask_model_file_name"), inference_result.modelFileName);
+                    record.insert(QStringLiteral("mask_model_sha256"), inference_result.modelSha256);
+                    record.insert(QStringLiteral("mask_model_input_size"), inference_result.inputSize);
+                    record.insert(QStringLiteral("mask_inference_backend"), inference_result.backend);
+                    record.insert(QStringLiteral("mask_inference_device"), inference_result.device);
+                    record.insert(QStringLiteral("mask_inference_precision"), inference_result.precision);
+                    record.insert(QStringLiteral("mask_inference_environment"), inference_result.environment);
+                    record.insert(QStringLiteral("mask_inference_fallback_reason"), inference_result.fallbackReason);
+                    record.insert(QStringLiteral("mask_engine_cache_path"), inference_result.enginePath);
+                    record.insert(QStringLiteral("mask_engine_cache_reused"), inference_result.engineReused);
                 }
                 record.insert(QStringLiteral("mask_updated_at"), QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
                 result.recordsByImage.insert(xjw::common::project::normalizePath(imagePath), record);
@@ -469,8 +451,11 @@ void ProjectMaskWorkflowController::openDialogForImages(const QStringList& reque
             }
             if (!result.inferenceDevice.isEmpty())
             {
-                message += QStringLiteral("\nU2Net 实际推理：%1 / %2 / %3")
-                               .arg(result.inferenceBackend, result.inferenceDevice, result.inferencePrecision);
+                message += QStringLiteral("\nAI 实际推理：%1 / %2 / %3 / %4")
+                               .arg(result.inferenceModelId,
+                                    result.inferenceBackend,
+                                    result.inferenceDevice,
+                                    result.inferencePrecision);
                 if (result.inferenceBackend == QLatin1String("tensorrt"))
                 {
                     message += result.engineReused ? QStringLiteral("（已复用本机 engine）")
@@ -482,14 +467,16 @@ void ProjectMaskWorkflowController::openDialogForImages(const QStringList& reque
                 message += QStringLiteral("\n后端回退原因：%1").arg(result.deviceFallbackReason);
             }
             QMessageBox::information(self->_parentWidget, QStringLiteral("生成蒙版"), message);
-            LOG_INFO(QStringLiteral("蒙版生成完成: count=%1 dir=%2 backend=%3 device=%4 "
-                                    "precision=%5 reused=%6 env=%7 fallback=%8")
+            LOG_INFO(QStringLiteral("蒙版生成完成: count=%1 dir=%2 model=%3 backend=%4 device=%5 "
+                                    "precision=%6 reused=%7 engine=%8 env=%9 fallback=%10")
                          .arg(result.generatedImages.size())
                          .arg(masksDir,
+                              result.inferenceModelId,
                               result.inferenceBackend,
                               result.inferenceDevice,
-                              result.inferencePrecision,
-                              result.engineReused ? QStringLiteral("true") : QStringLiteral("false"),
+                              result.inferencePrecision)
+                         .arg(result.engineReused ? QStringLiteral("true") : QStringLiteral("false"),
+                              result.enginePath,
                               result.inferenceEnvironment,
                               result.deviceFallbackReason));
         });

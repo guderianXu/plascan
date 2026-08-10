@@ -1,65 +1,81 @@
 # 模型与推理资源
 
-PlaScan 生产构建使用 TensorRT 匹配资源和 U2Net ONNX 蒙版模型，不链接 LibTorch。Python PyTorch 只用于
-开发机上的模型导出，不进入 C++ 运行时或安装包。
+PlaScan 生产构建使用 TensorRT 匹配资源，以及 BiRefNet Dynamic/U2Net ONNX 蒙版模型，不链接
+LibTorch。Python PyTorch 只用于开发机上的模型导出，不进入 C++ 运行时或安装包。
 
 ## 预构建模型下载
 
-工作流程设置会检测当前匹配算法的模型资源。资源缺失时可点击“下载模型”，程序从
-[`models-v1.1.0`](https://github.com/guderianXu/plascan/releases/tag/models-v1.1.0) Release 下载
-ONNX/manifest，并逐文件验证长度与 SHA-256。最终用户不需要 Python；PlaScan 的 C++ TensorRT
-Builder 会在首次使用时生成当前机器专用 engine。
+工作流程设置和“生成蒙版”对话框会检测当前算法的模型资源。资源缺失时可点击“下载模型”；程序按
+独立且不可变的模型 Release 逐文件验证长度与 SHA-256：
 
-- 源码树运行：写入 `resources/models/lightglue_tensorrt` 或
-  `resources/models/loma_r_tensorrt`；
+- [`models-v1.1.0`](https://github.com/guderianXu/plascan/releases/tag/models-v1.1.0)：U2Net、LightGlue
+  和 LoMa-R 既有资产；
+- [`models-v1.2.0`](https://github.com/guderianXu/plascan/releases/tag/models-v1.2.0)：仅包含
+  BiRefNet Dynamic ONNX 和 provenance，不重复或替换 v1.1.0 资产。
+
+最终用户不需要 Python/PyTorch；PlaScan 的 C++ TensorRT Builder 会在首次使用时生成当前机器专用 engine。
+
+- 源码树运行：写入 `resources/models/birefnet_dynamic`、`resources/models/lightglue_tensorrt` 或
+  `resources/models/loma_r_tensorrt`；U2Net 位于 `resources/models`；
 - 安装版运行：写入 `QStandardPaths::AppLocalDataLocation/models` 下的算法子目录，避免安装目录无写权限；
 - 设置 `PLASCAN_MODEL_DIR`：优先写入该目录下的算法子目录，适合共享模型盘或自定义部署；调用方必须
   保证该目录可写，写入失败时程序不会静默改用其它缓存目录。
 
 engine 缓存键包含 ONNX SHA-256、TensorRT 完整版本、GPU Compute Capability、精度、工作区和
 优化级别。缓存根与模型发现路径解耦：安装版使用 `QStandardPaths::AppLocalDataLocation/models`；
-U2Net 写入 `u2net/engines/<fingerprint>`，LightGlue 和 LoMa-R 写入各自的
+U2Net 写入 `u2net/engines/<fingerprint>`，BiRefNet 写入 `birefnet_dynamic/engines/<fingerprint>`，
+LightGlue 和 LoMa-R 写入各自的
 `engines/<fingerprint>` 子目录。随包 ONNX 即使位于 `Program Files` 或 `/opt/plascan`，也不会被写入。
 更换显卡或 TensorRT 后会进入新缓存目录并重新构建，不会反序列化旧机器的 plan。
 Windows 安装包必须携带 `nvinfer`、`nvonnxparser` 和对应架构的
 `nvinfer_builder_resource_*.dll`；源码构建则必须把完整 TensorRT SDK 传给 `TensorRT_ROOT`。
-Release 全部资产的离线校验值见 `docs/models/models-v1.1.0.sha256`。
+Release 全部资产的离线校验值分别见 `models-v1.1.0.sha256` 和 `models-v1.2.0.sha256`。
 
 ## CPack 内置模型
 
-`PLASCAN_BUNDLE_ONNX_MODELS` 默认开启，安装 U2Net 与 LightGlue；Windows CUDA 打包 preset 另外开启
-`PLASCAN_BUNDLE_LOMA_R_MODELS`，把完整的 LoMa-R 便携包一并安装。模型均使用只读安装布局：
+`PLASCAN_BUNDLE_ONNX_MODELS` 默认开启，安装 U2Net 与 LightGlue；Windows/Linux CUDA 打包 preset
+开启 `PLASCAN_BUNDLE_BIREFNET_DYNAMIC`，Windows CUDA 还开启 `PLASCAN_BUNDLE_LOMA_R_MODELS`。
+模型均使用只读安装布局：
 
 ```text
 resources/models/U2Net_v1.onnx
+resources/models/birefnet_dynamic/BiRefNet_dynamic_1024.onnx
+resources/models/birefnet_dynamic/BiRefNet_dynamic_1024.provenance.json
 resources/models/lightglue_tensorrt/lightglue_sift_bucket4096.onnx
 resources/models/loma_r_tensorrt/loma_r_features_k3840_fp16.onnx
 resources/models/loma_r_tensorrt/loma_r_matcher_dynamic_fp16.onnx
 resources/models/loma_r_tensorrt/loma_r_k{1024,2048,3840}_fp16.json
 share/plascan/models/{Apache-2.0.txt,U2Net_NOTICE.md,LightGlue_NOTICE.md,LoMa-R_NOTICE.md,models-v1.1.0.sha256}
+share/plascan/models/{BiRefNet-MIT.txt,BiRefNet_NOTICE.md,models-v1.2.0.sha256}
 ```
 
-默认输入为源码树中的同名文件；模型不进入 Git 历史，发布机构建前需从 `models-v1.1.0` Release 准备。
-也可以设置 `PLASCAN_U2NET_ONNX_PATH`、`PLASCAN_LIGHTGLUE_ONNX_PATH` 或
-`PLASCAN_LOMA_R_MODEL_DIR` 使用外部缓存。普通配置和编译不强制读取大模型；安装/CPack 阶段会执行
-完整校验，任一文件缺失、长度不符或 SHA-256 不符都会失败。LoMa-R 使用显式五文件白名单，任何本机
-`.engine` 都不会进入安装包。开发用无模型安装树可显式关闭对应开关，但不能标记为开箱可用发行包。
+默认输入为源码树中的同名文件；模型不进入 Git 历史。发布机构建前从 `models-v1.1.0` 准备原有模型，
+从 `models-v1.2.0` 准备 BiRefNet 两项资产。
+也可以设置 `PLASCAN_U2NET_ONNX_PATH`、`PLASCAN_LIGHTGLUE_ONNX_PATH`、
+`PLASCAN_LOMA_R_MODEL_DIR` 或 `PLASCAN_BIREFNET_DYNAMIC_MODEL_DIR` 使用外部缓存。普通配置和编译
+不强制读取大模型；安装/CPack 阶段会执行
+完整校验，任一文件缺失、长度不符或 SHA-256 不符都会失败。LoMa-R 使用显式五文件白名单，BiRefNet
+使用 ONNX/provenance 两文件白名单；任何本机 `.engine` 都不会进入安装包。开发用无模型安装树可显式
+关闭对应开关，但不能标记为开箱可用发行包。
 
 干净 clone 可在仓库根目录使用 GitHub CLI 准备默认输入：
 
 ```powershell
 New-Item -ItemType Directory -Force `
-  resources\models\lightglue_tensorrt,resources\models\loma_r_tensorrt | Out-Null
+  resources\models\birefnet_dynamic,resources\models\lightglue_tensorrt,resources\models\loma_r_tensorrt | Out-Null
 gh release download models-v1.1.0 -R guderianXu/plascan `
   -p U2Net_v1.onnx -D resources/models --clobber
 gh release download models-v1.1.0 -R guderianXu/plascan `
   -p lightglue_sift_bucket4096.onnx -D resources/models/lightglue_tensorrt --clobber
 gh release download models-v1.1.0 -R guderianXu/plascan `
   -p 'loma_r_*' -D resources/models/loma_r_tensorrt --clobber
+gh release download models-v1.2.0 -R guderianXu/plascan `
+  -p 'BiRefNet_dynamic_1024.*' -D resources/models/birefnet_dynamic --clobber
 ```
 
-内置 U2Net 可由 OpenCV DNN CPU 加载，也可像 LightGlue 与 LoMa-R 一样在 NVIDIA GPU 上使用 TensorRT。
-TensorRT 路径要求 CUDA、ONNX Parser 和目标 GPU 架构对应的 builder resource；Windows 发布包应捆绑
+内置 U2Net 可由 OpenCV DNN CPU 加载，也可像 BiRefNet、LightGlue 与 LoMa-R 一样在 NVIDIA GPU 上使用
+TensorRT。BiRefNet 仅支持 TensorRT，不提供 OpenCV CPU 回退。TensorRT 路径要求 CUDA、ONNX Parser
+和目标 GPU 架构对应的 builder resource；Windows 发布包应捆绑
 这些运行时，Linux 包则需捆绑或明确要求目标机安装兼容版本。安装包只分发便携 ONNX，绝不能包含开发机
 生成的 `.engine`，也不再为了 U2Net 携带 cuDNN。
 
@@ -137,6 +153,66 @@ LoMa-R 来源为 `davnords/loma`。其主体代码采用 MIT 许可，匹配器�
 
 找不到资源、TensorRT/GPU 不兼容或显式选择 CPU 时会明确失败，不会静默切换算法。Windows 部署需要
 与构建版本一致的 `nvinfer_10.dll`、`nvonnxparser_10.dll` 和 builder resource。
+
+## BiRefNet Dynamic ONNX 蒙版
+
+“生成蒙版”中的“AI: BiRefNet Dynamic（推荐）”使用 `ZhengPeng7/BiRefNet_dynamic` 的固定生产部署契约：
+
+- 输入 `input_image`：`1×3×1024×1024` RGB float32，opset 17；
+- 输出 `output_image`：`1×1×1024×1024` float32 前景 logits；
+- 原图保持宽高比缩放并居中 letterbox，空白区域填 0；RGB 转为 `[0,1]` 后使用 ImageNet
+  `mean=(0.485,0.456,0.406)`、`std=(0.229,0.224,0.225)` 归一化；
+- C++ 后处理对 raw logits 逐像素执行 sigmoid，不做逐图 min/max 归一化；随后裁掉 letterbox padding、
+  恢复原图尺寸并按前景阈值生成 PlaScan 排除蒙版。
+
+该模型只支持 TensorRT GPU。运行时优先构建 FP16 engine，不支持 FP16 时尝试 FP32；TensorRT、CUDA 或
+受支持 NVIDIA GPU 不可用时明确失败，不会回退 OpenCV CPU。安装包和最终用户运行时不需要 Python、
+PyTorch、LibTorch 或 Hugging Face 依赖；它们只用于开发机导出和等价性验证。
+
+独立 Release `models-v1.2.0` **只包含以下两个资产**；U2Net、LightGlue 和 LoMa-R 仍从
+`models-v1.1.0` 获取：
+
+| 资产 | 字节数 | SHA-256 |
+|------|-------:|---------|
+| `BiRefNet_dynamic_1024.onnx` | 972558911 | `3af7fe29f80be80e12595671293c877af6767cae71566a8765face68965f0742` |
+| `BiRefNet_dynamic_1024.provenance.json` | 1688 | `9e100509b59aedfeabd0aabc7277009b0d620803b27f482abb2e28220de8d4ff` |
+
+provenance 固定上游 revision `280306042f57b7a33854319da62fd86aaa89ec4c`、原始
+`model.safetensors` 的大小/SHA-256、导出器来源、opset、I/O 契约、工具版本和等价性指标。发布模型可由
+以下脚本重新导出；`--skip-checker` 和 `--skip-runtime-check` 不能用于 Release 资产：
+
+本次 Release provenance 记录的实际工具链为 Python 3.11.9、PyTorch 2.5.1+cpu、torchvision
+0.20.1+cpu、transformers 4.45.2、ONNX 1.17.0 和 ONNX Runtime 1.20.1；需要逐字节复现时应固定这些版本。
+
+```powershell
+python scripts\env\setup_python_runtime.py --device cpu
+.\.venv\Scripts\python.exe -m pip install `
+  "transformers==4.45.2" "onnx==1.17.0" "onnxruntime==1.20.1"
+.\.venv\Scripts\python.exe scripts\models\export_birefnet_dynamic_onnx.py `
+  --output resources\models\birefnet_dynamic\BiRefNet_dynamic_1024.onnx
+```
+
+本次已完成的导出验证：
+
+- `onnx.checker.check_model` 通过，模型为单文件、无 external data 和自定义算子域；
+- ONNX Runtime CPU 与 PyTorch raw logits 对比：最大绝对误差 `0.000234127`，平均绝对误差
+  `0.0000155839`。
+
+真实 TensorRT 干净环境部署验证已通过：RTX 4060 Laptop 8 GiB、TensorRT 10.15 使用 FP16，首次
+engine 构建加推理耗时 `2631483 ms`（43 分 51 秒），生成的 engine 为 `540031644` bytes；第二个进程
+复用同一 engine 并完成推理耗时 `33573 ms`。实际后端为 TensorRT，输出张量为 `output_image`；engine
+位于隔离的用户临时缓存，模型目录和安装树均未产生 `.engine`。首次构建受 GPU、TensorRT 和磁盘性能
+影响，在同级 8 GiB GPU 上应预留约 45 分钟。发布前使用以下命令复现门禁：
+
+```powershell
+pwsh scripts\build_win\build_windows_cuda.ps1 `
+  -Target test_mask_generation -RunBiRefNetTensorRtDeploymentTest
+```
+
+该门禁从 `package-smoke` 读取已安装运行时和模型，测试程序及 GTest DLL 只放在包外临时夹具；在清除
+外部 CUDA/TensorRT/vcpkg/Python 路径并隔离用户缓存后执行两次进程：第一次必须新建 engine，第二次
+必须复用同一路径，同时确认 engine 只写用户缓存且安装树不变。
+模型来源、固定权重和 MIT 许可说明见 [`BiRefNet_NOTICE.md`](BiRefNet_NOTICE.md)。
 
 ## U2Net ONNX 蒙版
 

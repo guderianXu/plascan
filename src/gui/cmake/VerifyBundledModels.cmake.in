@@ -52,3 +52,61 @@ if("@PLASCAN_VERIFY_BUNDLE_LOMA_R_MODELS@" STREQUAL "ON")
     EXPECTED_SHA256 "@PLASCAN_LOMA_R_MANIFEST_K3840_SHA256@"
   )
 endif()
+
+if("@PLASCAN_VERIFY_BUNDLE_BIREFNET_DYNAMIC@" STREQUAL "ON")
+  plascan_verify_bundled_model(
+    LABEL "BiRefNet Dynamic 1024 ONNX source"
+    FILE "@PLASCAN_BUNDLED_BIREFNET_DYNAMIC_ONNX@"
+    EXPECTED_SIZE "@PLASCAN_BIREFNET_DYNAMIC_ONNX_SIZE@"
+    EXPECTED_SHA256 "@PLASCAN_BIREFNET_DYNAMIC_ONNX_SHA256@"
+  )
+  plascan_verify_bundled_model(
+    LABEL "BiRefNet Dynamic provenance source"
+    FILE "@PLASCAN_BUNDLED_BIREFNET_DYNAMIC_PROVENANCE@"
+    EXPECTED_SIZE "@PLASCAN_BIREFNET_DYNAMIC_PROVENANCE_SIZE@"
+    EXPECTED_SHA256 "@PLASCAN_BIREFNET_DYNAMIC_PROVENANCE_SHA256@"
+  )
+endif()
+
+if("@PLASCAN_VERIFY_INSTALLED_BIREFNET_DYNAMIC@" STREQUAL "ON")
+  set(_plascan_physical_prefix "${CMAKE_INSTALL_PREFIX}")
+  if(DEFINED ENV{DESTDIR} AND NOT "$ENV{DESTDIR}" STREQUAL "")
+    set(_plascan_destdir "$ENV{DESTDIR}")
+    string(REGEX REPLACE "[/\\\\]$" "" _plascan_destdir "${_plascan_destdir}")
+    if(CMAKE_INSTALL_PREFIX MATCHES "^[/\\\\]")
+      set(_plascan_physical_prefix "${_plascan_destdir}${CMAKE_INSTALL_PREFIX}")
+    else()
+      set(_plascan_physical_prefix "${_plascan_destdir}/${CMAKE_INSTALL_PREFIX}")
+    endif()
+  endif()
+  string(REGEX REPLACE "[/\\\\]$" "" _plascan_physical_prefix
+    "${_plascan_physical_prefix}")
+  set(_plascan_birefnet_install_dir
+    "${_plascan_physical_prefix}/resources/models/birefnet_dynamic")
+
+  plascan_verify_bundled_model(
+    LABEL "installed BiRefNet Dynamic 1024 ONNX"
+    FILE "${_plascan_birefnet_install_dir}/BiRefNet_dynamic_1024.onnx"
+    EXPECTED_SIZE "@PLASCAN_BIREFNET_DYNAMIC_ONNX_SIZE@"
+    EXPECTED_SHA256 "@PLASCAN_BIREFNET_DYNAMIC_ONNX_SHA256@"
+  )
+  plascan_verify_bundled_model(
+    LABEL "installed BiRefNet Dynamic provenance"
+    FILE "${_plascan_birefnet_install_dir}/BiRefNet_dynamic_1024.provenance.json"
+    EXPECTED_SIZE "@PLASCAN_BIREFNET_DYNAMIC_PROVENANCE_SIZE@"
+    EXPECTED_SHA256 "@PLASCAN_BIREFNET_DYNAMIC_PROVENANCE_SHA256@"
+  )
+
+  foreach(_plascan_birefnet_notice IN ITEMS
+      BiRefNet_NOTICE.md
+      BiRefNet-MIT.txt
+      models-v1.2.0.sha256)
+    set(_plascan_birefnet_notice_path
+      "${_plascan_physical_prefix}/share/plascan/models/${_plascan_birefnet_notice}")
+    if(NOT EXISTS "${_plascan_birefnet_notice_path}")
+      message(FATAL_ERROR
+        "Installed BiRefNet attribution file is missing: "
+        "${_plascan_birefnet_notice_path}")
+    endif()
+  endforeach()
+endif()

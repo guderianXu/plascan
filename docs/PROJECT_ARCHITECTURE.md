@@ -57,7 +57,8 @@ common/
 ├── model/
 │   ├── ModelFileResolver.h/cpp # 区分源码运行、安装包和用户数据目录的模型搜索/安装位置
 │   ├── ModelAssetCatalog.h/cpp # GitHub Release 模型资产 URL、大小、SHA-256 和兼容性目录
-│   └── U2NetModelCatalog.h/cpp # U2Net ONNX 文件名、实际路径和安装状态
+│   ├── U2NetModelCatalog.h/cpp # U2Net ONNX 文件名、实际路径和安装状态
+│   └── BiRefNetModelCatalog.h/cpp # BiRefNet Dynamic ONNX 文件名、实际路径和安装状态
 ├── project/
 │   ├── ProjectIO.h/cpp # 项目目录、临时缓存、资源和产物路径规则
 │   ├── ProjectArtifactIO.cpp # 基于规范化影像路径哈希的项目产物寻址
@@ -221,15 +222,20 @@ core/
 │
 ├── mask/                       # 照片蒙版生成与合成
 │   ├── MaskGenerator.h/cpp     # 黑背景/亮度阈值蒙版、蒙版合成和轮廓提取
-│   └── u2net/                  # U2Net ONNX 自动蒙版子模块
-│       ├── U2NetMaskGenerator.h/cpp # Auto/TensorRT/OpenCV CPU 后端选择、回退策略与状态
-│       ├── U2NetTensorRtBackend.cpp # ONNX 首次构建/复用本机 engine 并执行 GPU 推理
-│       ├── U2NetOpenCvCpuBackend.cpp # 永久 CPU-only 的 OpenCV DNN 回退实现
-│       └── U2NetImageProcessing.h/cpp # 两后端共享的预处理和掩膜后处理
+│   ├── u2net/                  # U2Net ONNX 自动蒙版子模块
+│   │   ├── U2NetMaskGenerator.h/cpp # Auto/TensorRT/OpenCV CPU 后端选择、回退策略与状态
+│   │   ├── U2NetTensorRtBackend.cpp # ONNX 首次构建/复用本机 engine 并执行 GPU 推理
+│   │   ├── U2NetOpenCvCpuBackend.cpp # 永久 CPU-only 的 OpenCV DNN 回退实现
+│   │   └── U2NetImageProcessing.h/cpp # 两后端共享的预处理和掩膜后处理
+│   └── birefnet/               # BiRefNet Dynamic 推荐自动蒙版子模块
+│       ├── BiRefNetMaskGenerator.h/cpp # 固定 1024、TensorRT-only 契约、能力与结果元数据
+│       ├── BiRefNetInferenceBackend.h # TensorRT 后端接口和实际设备/精度/engine 元数据
+│       ├── BiRefNetTensorRtBackend.cpp # FP16/FP32 本机 engine 首建、缓存复用与 GPU 推理
+│       └── BiRefNetImageProcessing.h/cpp # ImageNet+letterbox、raw logits sigmoid 与原尺寸恢复
 │
-│   U2Net 发布边界：安装包只携带可移植 ONNX；TensorRT engine 在目标机首次使用时写入用户本地应用
-│   数据目录的 `models/u2net/engines/<fingerprint>`，不写回安装树也不进入安装包。OpenCV 不链接
-│   CUDA/cuDNN，Windows 便携包不分发 cuDNN DLL。
+│   AI 蒙版发布边界：安装包只携带可移植 ONNX（BiRefNet 另带 provenance）；TensorRT engine 在目标机
+│   首次使用时分别写入用户本地应用数据目录的 `models/{u2net,birefnet_dynamic}/engines/<fingerprint>`，
+│   不写回安装树也不进入安装包。OpenCV 不链接 CUDA/cuDNN，Windows 便携包不分发 cuDNN DLL。
 │
 ├── sfm/                        # Structure-from-Motion
 │   ├── common/                 # SfM 公共类型和共享并查集
@@ -567,6 +573,7 @@ gui/
 │   │   ├── CameraCalibrationDialog.h/cpp # 初始/调整内参、释放状态、相机分组与照片列表
 │   │   └── CameraModel3DDialog.h/cpp      # 独立三维预览的轻量对话框外壳
 │   ├── image/                  # 蒙版等单影像处理
+│   │   └── GenerateMaskDialog.h/cpp # 经典/U2Net/BiRefNet 方法、真实设备/尺寸、模型状态与下载入口
 │   ├── reconstruction/         # 空三、模型、纹理、DEM/正射工作流程
 │   │   ├── MapProjectDialog.h/cpp         # 正射对话框生命周期、运行进度与取消
 │   │   ├── MapProjectDialogLayout.cpp     # 投影、参数、区域、输出和进度分组布局
@@ -598,6 +605,7 @@ gui/
 │   │   ├── ProjectManager.h/cpp # 项目管理器；含参考激光 JSON 导入、frame/坐标系确认和 BA 启动
 │   │   ├── ProjectLifecycleController.h/cpp          # 创建、异步打开/结果加载、保存与关闭
 │   │   ├── ProjectMaskWorkflowController.h/cpp       # 蒙版对话框、异步生成、取消及结果登记
+│   │   ├── ProjectMaskInferenceAdapter.h/cpp         # U2Net/BiRefNet 后端适配和实际模型/设备/engine 元数据
 │   │   ├── ProjectSparseReconstructionManager.h/cpp  # 稀疏重建管理
 │   │   ├── ProjectPointCloudWorkflowController.h/cpp # 点云工作流协调：深度估计/复用、流式融合与结果登记
 │   │   ├── ProjectModelManager.h/cpp                 # 从已有点云/深度图生成模型，不隐式启动稠密流程

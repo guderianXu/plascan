@@ -1,3 +1,4 @@
+#include "model/BiRefNetModelCatalog.h"
 #include "model/ModelFileResolver.h"
 #include "model/ModelAssetCatalog.h"
 #include "model/U2NetModelCatalog.h"
@@ -279,6 +280,17 @@ TEST(ModelAssetCatalogTest, TensorRtCacheRespectsConfiguredModelRoot)
 
 TEST(ModelAssetCatalogTest, DefinesPortableOnnxReleasePackages)
 {
+    const auto expect_release_urls = [](const xjw::common::model::ModelAssetPackage &package)
+    {
+        const QString release_url = QStringLiteral(
+            "https://github.com/guderianXu/plascan/releases/download/") +
+            package.releaseTag + QStringLiteral("/");
+        for (const auto &file : package.files)
+        {
+            EXPECT_EQ(file.downloadUrl, release_url + file.fileName);
+        }
+    };
+
     const auto u2net = xjw::common::model::u2NetOnnxPackage();
     ASSERT_TRUE(u2net.isValid());
     ASSERT_EQ(u2net.files.size(), 1);
@@ -286,6 +298,7 @@ TEST(ModelAssetCatalogTest, DefinesPortableOnnxReleasePackages)
     EXPECT_EQ(u2net.totalBytes(), 175997641);
     EXPECT_EQ(u2net.files.front().sha256,
               QStringLiteral("8d10d2f3bb75ae3b6d527c77944fc5e7dcd94b29809d47a739a7a728a912b491"));
+    expect_release_urls(u2net);
 
     const auto light_glue = xjw::common::model::lightGlueTensorRtPackage();
     EXPECT_TRUE(light_glue.isValid());
@@ -293,16 +306,74 @@ TEST(ModelAssetCatalogTest, DefinesPortableOnnxReleasePackages)
     EXPECT_EQ(light_glue.totalBytes(), 51072656);
     EXPECT_EQ(light_glue.releaseTag, QStringLiteral("models-v1.1.0"));
     EXPECT_TRUE(light_glue.entryPointFile.endsWith(QStringLiteral(".onnx")));
+    expect_release_urls(light_glue);
+
+    const auto birefnet = xjw::common::model::biRefNetDynamicOnnxPackage();
+    ASSERT_TRUE(birefnet.isValid());
+    EXPECT_EQ(birefnet.id, QStringLiteral("birefnet_dynamic_1024"));
+    EXPECT_EQ(birefnet.packageDirectory, QStringLiteral("birefnet_dynamic"));
+    EXPECT_EQ(birefnet.entryPointFile, QStringLiteral("BiRefNet_dynamic_1024.onnx"));
+    EXPECT_EQ(birefnet.releaseTag, QStringLiteral("models-v1.2.0"));
+    ASSERT_EQ(birefnet.files.size(), 2);
+    EXPECT_EQ(birefnet.totalBytes(), 972560599);
+    EXPECT_EQ(birefnet.files[0].fileName,
+              QStringLiteral("BiRefNet_dynamic_1024.onnx"));
+    EXPECT_EQ(birefnet.files[0].bytes, 972558911);
+    EXPECT_EQ(birefnet.files[0].sha256,
+              QStringLiteral(
+                  "3af7fe29f80be80e12595671293c877af6767cae71566a8765face68965f0742"));
+    EXPECT_EQ(birefnet.files[1].fileName,
+              QStringLiteral("BiRefNet_dynamic_1024.provenance.json"));
+    EXPECT_EQ(birefnet.files[1].bytes, 1688);
+    EXPECT_EQ(birefnet.files[1].sha256,
+              QStringLiteral(
+                  "9e100509b59aedfeabd0aabc7277009b0d620803b27f482abb2e28220de8d4ff"));
+    expect_release_urls(birefnet);
 
     const auto loma_r = xjw::common::model::loMaRTensorRtPackage(2048);
     EXPECT_TRUE(loma_r.isValid());
     EXPECT_EQ(loma_r.files.size(), 3);
     EXPECT_EQ(loma_r.totalBytes(), 1364462782);
     EXPECT_EQ(loma_r.entryPointFile, QStringLiteral("loma_r_k2048_fp16.json"));
+    expect_release_urls(loma_r);
     for (const auto &file : loma_r.files)
     {
         EXPECT_TRUE(file.downloadUrl.contains(QStringLiteral("models-v1.1.0")));
         EXPECT_EQ(file.sha256.size(), 64);
         EXPECT_GT(file.bytes, 0);
     }
+}
+
+TEST(BiRefNetModelCatalogTest, RequiresOnnxAndProvenanceInTheSameDirectory)
+{
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    const QString model_root = QDir(temp_dir.path()).filePath(QStringLiteral("models"));
+    const QString model_directory =
+        QDir(model_root).filePath(QStringLiteral("birefnet_dynamic"));
+    const QString onnx_path =
+        QDir(model_directory).filePath(QStringLiteral("BiRefNet_dynamic_1024.onnx"));
+    const QString provenance_path = QDir(model_directory).filePath(
+        QStringLiteral("BiRefNet_dynamic_1024.provenance.json"));
+    writeFile(onnx_path);
+
+    xjw::common::model::ModelFileSearchOptions options;
+    options.sourceRoot = QDir(temp_dir.path()).filePath(QStringLiteral("missing_source"));
+    options.applicationDir = QDir(temp_dir.path()).filePath(QStringLiteral("missing_app"));
+    options.userModelDir = model_root;
+    options.environmentVariable.clear();
+    const xjw::common::model::ModelFileResolver resolver(options);
+
+    const auto incomplete = xjw::common::model::biRefNetDynamicModelStatus(resolver);
+    EXPECT_FALSE(incomplete.isInstalled);
+    EXPECT_EQ(QDir::cleanPath(incomplete.modelPath), QDir::cleanPath(onnx_path));
+    EXPECT_TRUE(incomplete.missingFiles.contains(
+        QStringLiteral("BiRefNet_dynamic_1024.provenance.json")));
+
+    writeFile(provenance_path);
+    const auto installed = xjw::common::model::biRefNetDynamicModelStatus(resolver);
+    EXPECT_TRUE(installed.isInstalled);
+    EXPECT_EQ(QDir::cleanPath(installed.provenancePath), QDir::cleanPath(provenance_path));
+    EXPECT_TRUE(installed.missingFiles.isEmpty());
 }

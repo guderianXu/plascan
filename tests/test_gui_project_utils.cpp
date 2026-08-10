@@ -7158,6 +7158,10 @@ TEST(GenerateMaskDialogTest, ShowsOnlyParametersForSelectedMethod)
     selectMethod(QStringLiteral("u2net"));
     EXPECT_TRUE(thresholdPanel->isHidden());
     EXPECT_FALSE(u2netPanel->isHidden());
+
+    selectMethod(QStringLiteral("birefnet_dynamic"));
+    EXPECT_TRUE(thresholdPanel->isHidden());
+    EXPECT_FALSE(u2netPanel->isHidden());
 }
 
 TEST(MainMenuTest, ProvidesPythonRuntimeUpdateAction)
@@ -7211,6 +7215,56 @@ TEST(GenerateMaskDialogTest, ExposesU2NetTensorRtAndOpenCvCpuSettings)
     EXPECT_FALSE(settings.value(QStringLiteral("u2net_allow_fallback")).toBool());
     EXPECT_EQ(settings.value(QStringLiteral("u2net_input_size")).toInt(), 320);
     EXPECT_DOUBLE_EQ(settings.value(QStringLiteral("u2net_mask_threshold")).toDouble(), 0.5);
+    EXPECT_EQ(settings.value(QStringLiteral("ai_backend")).toString(), QStringLiteral("auto"));
+    EXPECT_FALSE(settings.value(QStringLiteral("ai_allow_fallback")).toBool());
+    EXPECT_EQ(settings.value(QStringLiteral("ai_input_size")).toInt(), 320);
+    EXPECT_DOUBLE_EQ(settings.value(QStringLiteral("ai_mask_threshold")).toDouble(), 0.5);
+}
+
+TEST(GenerateMaskDialogTest, ExposesBiRefNetDynamicAsFixedTensorRtOnlyModel)
+{
+    GenerateMaskDialog dialog(QStringList{QStringLiteral("a.png")});
+    auto *methodCombo = dialog.findChild<QComboBox *>(QStringLiteral("methodCombo"));
+    auto *deviceCombo = dialog.findChild<QComboBox *>(QStringLiteral("u2netDeviceCombo"));
+    auto *fallbackCheck = dialog.findChild<QCheckBox *>(QStringLiteral("u2netAllowFallbackCheck"));
+    auto *inputSizeSpin = dialog.findChild<QSpinBox *>(QStringLiteral("u2netInputSizeSpin"));
+    auto *thresholdSpin = dialog.findChild<QDoubleSpinBox *>(QStringLiteral("u2netMaskThresholdSpin"));
+    auto *statusLabel = dialog.findChild<QLabel *>(QStringLiteral("u2netModelStatusLabel"));
+
+    ASSERT_NE(methodCombo, nullptr);
+    ASSERT_NE(deviceCombo, nullptr);
+    ASSERT_NE(fallbackCheck, nullptr);
+    ASSERT_NE(inputSizeSpin, nullptr);
+    ASSERT_NE(thresholdSpin, nullptr);
+    ASSERT_NE(statusLabel, nullptr);
+
+    const int biRefNetIndex = methodCombo->findData(QStringLiteral("birefnet_dynamic"));
+    ASSERT_GE(biRefNetIndex, 0);
+    methodCombo->setCurrentIndex(biRefNetIndex);
+
+    EXPECT_EQ(deviceCombo->count(), 1);
+    EXPECT_EQ(deviceCombo->currentData().toString(), QStringLiteral("tensorrt"));
+    EXPECT_LT(deviceCombo->findData(QStringLiteral("cpu")), 0);
+    EXPECT_FALSE(fallbackCheck->isEnabled());
+    EXPECT_TRUE(fallbackCheck->isHidden());
+    EXPECT_FALSE(fallbackCheck->isChecked());
+    EXPECT_EQ(inputSizeSpin->value(), 1024);
+    EXPECT_FALSE(inputSizeSpin->isEnabled());
+    EXPECT_DOUBLE_EQ(thresholdSpin->value(), 0.5);
+    EXPECT_TRUE(statusLabel->text().contains(QStringLiteral("TensorRT")));
+
+    const QJsonObject settings = dialog.collectSettings();
+    EXPECT_EQ(settings.value(QStringLiteral("method")).toString(), QStringLiteral("birefnet_dynamic"));
+    EXPECT_EQ(settings.value(QStringLiteral("ai_backend")).toString(), QStringLiteral("tensorrt"));
+    EXPECT_FALSE(settings.value(QStringLiteral("ai_allow_fallback")).toBool());
+    EXPECT_EQ(settings.value(QStringLiteral("ai_input_size")).toInt(), 1024);
+    EXPECT_DOUBLE_EQ(settings.value(QStringLiteral("ai_mask_threshold")).toDouble(), 0.5);
+
+    methodCombo->setCurrentIndex(methodCombo->findData(QStringLiteral("u2net")));
+    EXPECT_GE(deviceCombo->findData(QStringLiteral("auto")), 0);
+    EXPECT_GE(deviceCombo->findData(QStringLiteral("tensorrt")), 0);
+    EXPECT_GE(deviceCombo->findData(QStringLiteral("cpu")), 0);
+    EXPECT_EQ(inputSizeSpin->value(), 320);
 }
 
 TEST(GenerateMaskDialogTest, OffersVerifiedDownloadWhenU2NetModelIsMissing)
@@ -7246,6 +7300,61 @@ TEST(GenerateMaskDialogTest, OffersVerifiedDownloadWhenU2NetModelIsMissing)
     EXPECT_FALSE(buttons->button(QDialogButtonBox::Ok)->isEnabled());
 }
 
+TEST(GenerateMaskDialogTest, OffersVerifiedDownloadWhenBiRefNetDynamicModelIsMissing)
+{
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    xjw::common::model::ModelFileSearchOptions options;
+    options.sourceRoot = QDir(temp_dir.path()).filePath(QStringLiteral("missing_source"));
+    options.applicationDir = QDir(temp_dir.path()).filePath(QStringLiteral("installed/bin"));
+    options.userModelDir = QDir(temp_dir.path()).filePath(QStringLiteral("user_models"));
+    options.environmentVariable = QStringLiteral("PLASCAN_TEST_UNUSED_BIREFNET_DIR");
+
+    GenerateMaskDialog dialog(QStringList{QStringLiteral("a.png")}, QString(), nullptr, options);
+    auto *method_combo = dialog.findChild<QComboBox *>(QStringLiteral("methodCombo"));
+    auto *status_label = dialog.findChild<QLabel *>(QStringLiteral("u2netModelStatusLabel"));
+    auto *download_button = dialog.findChild<QPushButton *>(QStringLiteral("u2netDownloadButton"));
+    auto *device_combo = dialog.findChild<QComboBox *>(QStringLiteral("u2netDeviceCombo"));
+    auto *input_size_spin = dialog.findChild<QSpinBox *>(QStringLiteral("u2netInputSizeSpin"));
+    auto *buttons = dialog.findChild<QDialogButtonBox *>(QStringLiteral("maskDialogButtons"));
+    ASSERT_NE(method_combo, nullptr);
+    ASSERT_NE(status_label, nullptr);
+    ASSERT_NE(download_button, nullptr);
+    ASSERT_NE(device_combo, nullptr);
+    ASSERT_NE(input_size_spin, nullptr);
+    ASSERT_NE(buttons, nullptr);
+
+    const int bi_ref_net_index = method_combo->findData(QStringLiteral("birefnet_dynamic"));
+    ASSERT_GE(bi_ref_net_index, 0);
+    method_combo->setCurrentIndex(bi_ref_net_index);
+
+    EXPECT_TRUE(status_label->text().contains(QStringLiteral("未安装")))
+        << status_label->text().toStdString();
+    EXPECT_TRUE(status_label->text().contains(QStringLiteral("BiRefNet_dynamic_1024.onnx")))
+        << status_label->text().toStdString();
+    EXPECT_TRUE(status_label->text().contains(QStringLiteral("TensorRT")))
+        << status_label->text().toStdString();
+    EXPECT_TRUE(download_button->text().contains(QStringLiteral("BiRefNet Dynamic")));
+    EXPECT_FALSE(download_button->isHidden());
+    EXPECT_TRUE(download_button->isEnabled());
+    EXPECT_EQ(device_combo->count(), 1);
+    EXPECT_EQ(device_combo->currentData().toString(), QStringLiteral("tensorrt"));
+    EXPECT_EQ(input_size_spin->value(), 1024);
+    EXPECT_FALSE(buttons->button(QDialogButtonBox::Ok)->isEnabled());
+}
+
+TEST(GenerateMaskDialogTest, DownloadsBiRefNetDynamicThroughVerifiedModelPackage)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/dialogs/image/GenerateMaskDialog.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("biRefNetDynamicOnnxPackage()")));
+    EXPECT_TRUE(source.contains(QStringLiteral("ModelPackageDownloadDialog::downloadPackage")));
+    EXPECT_TRUE(source.contains(QStringLiteral("modelPackageInstallDirectory(package, resolver)")));
+}
+
 TEST(GenerateMaskWorkflowTest, ProjectManagerUsesCommonIoForTiffMaskGeneration)
 {
     const QString source = readProjectSourceFile(
@@ -7266,13 +7375,16 @@ TEST(GenerateMaskWorkflowTest, ProjectManagerUsesCommonIoForTiffMaskGeneration)
         << "Mask generation must not use QImage for source TIFF reading; use common/io PathIO instead.";
 }
 
-TEST(GenerateMaskWorkflowTest, U2NetMaskGenerationUsesTensorRtWithOpenCvCpuFallback)
+TEST(GenerateMaskWorkflowTest, AiMaskGenerationUsesSharedInferenceAdapter)
 {
     const QString source = readProjectSourceFile(
         QStringLiteral("src/gui/project/manager/ProjectMaskWorkflowController.cpp"));
     const QString cmake = readProjectSourceFile(QStringLiteral("src/core/mask/CMakeLists.txt"));
+    const QString adapter = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectMaskInferenceAdapter.cpp"));
     ASSERT_FALSE(source.isEmpty());
     ASSERT_FALSE(cmake.isEmpty());
+    ASSERT_FALSE(adapter.isEmpty());
 
     const int start = source.indexOf(QStringLiteral("void ProjectMaskWorkflowController::openDialogForImages"));
     const int end = source.indexOf(QStringLiteral("void ProjectMaskWorkflowController::cancelActiveTask"), start);
@@ -7280,26 +7392,33 @@ TEST(GenerateMaskWorkflowTest, U2NetMaskGenerationUsesTensorRtWithOpenCvCpuFallb
     ASSERT_GT(end, start);
 
     const QString block = source.mid(start, end - start);
-    EXPECT_TRUE(source.contains(QStringLiteral("#include \"u2net/U2NetMaskGenerator.h\"")));
-    EXPECT_TRUE(source.contains(QStringLiteral("#include \"model/U2NetModelCatalog.h\"")));
+    EXPECT_TRUE(source.contains(QStringLiteral("#include \"ProjectMaskInferenceAdapter.h\"")));
+    EXPECT_TRUE(adapter.contains(QStringLiteral("#include \"u2net/U2NetMaskGenerator.h\"")));
+    EXPECT_TRUE(adapter.contains(QStringLiteral("#include \"birefnet/BiRefNetMaskGenerator.h\"")));
     EXPECT_TRUE(cmake.contains(QStringLiteral("u2net/U2NetMaskGenerator.cpp")))
         << "U2Net should live in src/core/mask/u2net as its own mask submodule.";
+    EXPECT_TRUE(cmake.contains(QStringLiteral("birefnet/BiRefNetMaskGenerator.cpp")))
+        << "BiRefNet should live in src/core/mask/birefnet as its own mask submodule.";
     EXPECT_TRUE(readProjectSourceFile(QStringLiteral("src/core/mask/u2net/U2NetMaskGenerator.h"))
                     .contains(QStringLiteral("class U2NetMaskGenerator")));
-    EXPECT_TRUE(readProjectSourceFile(QStringLiteral("src/core/mask/u2net/U2NetMaskGenerator.cpp"))
-                    .contains(QStringLiteral("#include \"U2NetMaskGenerator.h\"")));
-    EXPECT_TRUE(source.contains(QStringLiteral("u2netConfig")));
+    EXPECT_TRUE(readProjectSourceFile(QStringLiteral("src/core/mask/birefnet/BiRefNetMaskGenerator.h"))
+                    .contains(QStringLiteral("class BiRefNetMaskGenerator")));
     EXPECT_TRUE(block.contains(QStringLiteral("method == QLatin1String(\"u2net\")")));
-    EXPECT_TRUE(block.contains(QStringLiteral("xjw::mask::U2NetMaskGenerator")));
-    EXPECT_TRUE(block.contains(QStringLiteral("u2net->generate(source)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("method == QLatin1String(\"birefnet_dynamic\")")));
+    EXPECT_TRUE(block.contains(QStringLiteral("ProjectMaskInferenceAdapter::create")));
+    EXPECT_TRUE(block.contains(QStringLiteral("inference->generate(source)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("mask_model_id")));
+    EXPECT_TRUE(block.contains(QStringLiteral("mask_model_file_name")));
+    EXPECT_TRUE(block.contains(QStringLiteral("mask_model_sha256")));
+    EXPECT_TRUE(block.contains(QStringLiteral("mask_model_input_size")));
     EXPECT_TRUE(block.contains(QStringLiteral("mask_inference_device")));
     EXPECT_TRUE(block.contains(QStringLiteral("mask_inference_backend")));
     EXPECT_TRUE(block.contains(QStringLiteral("mask_inference_precision")));
-    EXPECT_TRUE(block.contains(QStringLiteral("U2Net 实际推理")));
-    EXPECT_TRUE(block.contains(QStringLiteral("U2Net_v1.onnx")));
-    EXPECT_TRUE(block.contains(QStringLiteral("u2netBackendTypeToken")));
-    EXPECT_TRUE(block.contains(QStringLiteral("u2netInferencePrecisionToken")));
-    EXPECT_TRUE(block.contains(QStringLiteral("engineReused()")));
+    EXPECT_TRUE(block.contains(QStringLiteral("mask_inference_environment")));
+    EXPECT_TRUE(block.contains(QStringLiteral("mask_inference_fallback_reason")));
+    EXPECT_TRUE(block.contains(QStringLiteral("mask_engine_cache_path")));
+    EXPECT_TRUE(block.contains(QStringLiteral("mask_engine_cache_reused")));
+    EXPECT_TRUE(block.contains(QStringLiteral("AI 实际推理")));
 }
 
 TEST(GenerateMaskWorkflowTest, RunsMaskGenerationOffGuiThreadWithTaskStatusProgress)

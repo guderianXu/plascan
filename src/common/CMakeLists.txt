@@ -25,6 +25,7 @@ add_library(plascan_common_string_utils STATIC
 )
 
 add_library(plascan_common_model STATIC
+  model/BiRefNetModelCatalog.cpp
   model/ModelAssetCatalog.cpp
   model/ModelFileResolver.cpp
   model/U2NetModelCatalog.cpp

@@ -37,6 +37,13 @@ git push origin v1.1.7
 - `CHANGELOG.md`
 - `docs/releases/vX.Y.Z*.md`
 
+模型 tag `models-vX.Y.Z` 还必须同步维护：
+
+- `docs/releases/models-vX.Y.Z.md`
+- `docs/models/models-vX.Y.Z.sha256`
+- `docs/models/README.md` 中的来源版本、精确字节数、SHA-256、许可和部署契约
+- 客户端 `ModelAssetCatalog` 与 CPack 安装门禁中的同一组不可变资产元数据
+
 版本文档至少包含：
 
 - 新增
@@ -56,6 +63,24 @@ GitHub Release 说明从对应 `docs/releases/vX.Y.Z*.md` 摘要生成，并保�
 - 验证命令
 - 已知问题
 - 下载或打包说明
+
+## 模型 Release
+
+模型 Release 与应用版本独立，必须设为非 Latest，并遵循以下边界：
+
+- 不得覆盖或重新上传已发布的同名资产；任何字节变化都必须递增 `models-vX.Y.Z`；
+- 每个 Release 文档列出它实际包含的完整资产白名单，不得让客户端假定新 Release 重发全部历史模型；
+- `models-v1.1.0` 继续唯一承载 U2Net、LightGlue 和 LoMa-R；`models-v1.2.0` 只承载
+  `BiRefNet_dynamic_1024.onnx` 与 `BiRefNet_dynamic_1024.provenance.json`；
+- 上传前后分别核对文件字节数和 SHA-256，并确认 GitHub Release 资产列表没有遗漏、旧文件或 `.engine`；
+- ONNX 与 provenance/manifest 必须来自同一次已验证导出，禁止手工改写 sidecar 或为了匹配目录而重命名。
+
+`models-v1.2.0` 当前资产契约：
+
+| 资产 | 字节数 | SHA-256 |
+|------|-------:|---------|
+| `BiRefNet_dynamic_1024.onnx` | 972558911 | `3af7fe29f80be80e12595671293c877af6767cae71566a8765face68965f0742` |
+| `BiRefNet_dynamic_1024.provenance.json` | 1688 | `9e100509b59aedfeabd0aabc7277009b0d620803b27f482abb2e28220de8d4ff` |
 
 ## Windows 一键打包
 
@@ -111,7 +136,8 @@ rootfs 位于 `build/linux-vcpkg-package-release/package-smoke/rootfs`，DEB 与
 XCB/offscreen 插件、GDAL/PROJ 数据、可迁移 RUNPATH、模型哈希和 DEB 内容门禁；不得通过关闭
 `PLASCAN_VERIFY_LINUX_PACKAGE_RUNTIME` 绕过失败。
 
-当前影像匹配和 U2Net GPU 后端需要 CUDA/TensorRT。构建机先准备 CUDA 13.1、TensorRT 10.15.1
+当前影像匹配、U2Net GPU 后端和 BiRefNet Dynamic 需要 CUDA/TensorRT。构建机先准备 CUDA 13.1、
+TensorRT 10.15.1
 CUDA 13.1 变体、ONNX parser 开发库、完整 Builder/runtime 和 NVIDIA Ubuntu 软件源，再运行：
 
 ```bash
@@ -125,12 +151,13 @@ Ubuntu 仓库。`plascan` 与 `plascan-cuda` 使用相同安装路径并声明�
 
 Linux 发布额外检查：
 
-- `dpkg-deb --field/--contents` 确认包名、版本、`amd64`、依赖、桌面入口及两份 ONNX，且不含 headers、
-  静态库或 CMake exports；
+- `dpkg-deb --field/--contents` 确认包名、版本、`amd64`、依赖和桌面入口；通用包包含 U2Net/LightGlue
+  两份 ONNX，CUDA 包另含 BiRefNet ONNX/provenance，且均不含 headers、静态库或 CMake exports；
 - 在没有源码、vcpkg 和构建目录的环境通过 `/usr/bin/plascan` 启动 GUI，并确认所有 ELF/Qt plugins
   的 `ldd` 无 `not found`、RUNPATH 不含构建机绝对路径；
 - 使用包内 U2Net 完成一次 CPU 掩模；CUDA 包还要从包内 LightGlue ONNX 首次生成 engine、完成匹配并
-  验证缓存复用；安装树保持只读且不包含预生成 `.engine`；
+  验证缓存复用，并从包内 BiRefNet ONNX 完成首次蒙版推理和第二进程缓存复用；安装树保持只读且不包含
+  预生成 `.engine`；
 - 安装和卸载后确认桌面数据库与图标缓存可正常刷新。
 
 ## CPack 模型门禁
@@ -138,13 +165,16 @@ Linux 发布额外检查：
 对外发布的可掩模、可匹配安装包必须保持 `PLASCAN_BUNDLE_ONNX_MODELS=ON`，并在打包前准备
 `models-v1.1.0` 中的 U2Net 与 LightGlue ONNX。Windows CUDA 安装包还必须保持
 `PLASCAN_BUNDLE_LOMA_R_MODELS=ON`，准备 LoMa-R 两个共享 ONNX 和三个 K 档 manifest。
+Windows/Linux CUDA 安装包必须保持 `PLASCAN_BUNDLE_BIREFNET_DYNAMIC=ON`，并从 `models-v1.2.0`
+准备 BiRefNet ONNX 和 provenance；不得在 v1.2.0 中寻找或复制 v1.1.0 的原有模型。
 `cmake --install`/CPack 的大小和 SHA-256 校验必须通过；模型缺失或校验失败时不得关闭门禁后继续发布。
 
 发布验证至少包括：
 
-- 解包 ZIP/TGZ/DEB；对 INNOSETUP 执行静默安装或检查 CPack staging。Linux 包确认 U2Net/LightGlue
-  两份 ONNX；Windows CUDA 包确认 U2Net、LightGlue 与 LoMa-R 五文件模型包共七项资产位于约定路径，
-  哈希与 `docs/models/models-v1.1.0.sha256` 一致，并包含三份模型 notice 和 `Apache-2.0.txt`；
+- 解包 ZIP/TGZ/DEB；对 INNOSETUP 执行静默安装或检查 CPack staging。通用包确认 U2Net/LightGlue；
+  CUDA 包另确认 BiRefNet ONNX/provenance；Windows CUDA 包还确认 LoMa-R 五文件包。原有七项资产的
+  哈希必须与 `docs/models/models-v1.1.0.sha256` 一致，BiRefNet 两项必须与
+  `docs/models/models-v1.2.0.sha256` 一致，并包含相应 notice、Apache-2.0 和 BiRefNet MIT 许可；
 - 确认安装包不含任何本机生成的 `.engine`；
 - Windows INNOSETUP 的 `.exe` 与每个 `-N.bin` 分卷都必须小于 2 GiB，并与
   `-INNOSETUP.sha256` 一起显式上传；发布前逐项核对清单，避免漏传分卷，也不要通配整个包目录
@@ -157,3 +187,9 @@ Linux 发布额外检查：
   `build_windows_cuda.ps1 -Target test_mask_generation -RunU2NetTensorRtDeploymentTest`，确认 OpenCV ABI
   不含 `cuda/cudnn/dnn-cuda`、安装树没有 cuDNN 或预生成 engine，并在无外部 SDK PATH 的全新缓存中
   从 ONNX 完成 TensorRT engine 首次构建和真实推理。
+- Windows CUDA 发布包还必须执行
+  `build_windows_cuda.ps1 -Target test_mask_generation -RunBiRefNetTensorRtDeploymentTest`；第一次进程必须
+  从内置 ONNX 新建 engine，第二次进程必须报告缓存复用，两个进程都只能写隔离的用户缓存。
+  `models-v1.2.0` 基线已在 RTX 4060 Laptop 8 GiB / TensorRT 10.15 / FP16 通过：首次构建加推理
+  `2631483 ms`（43 分 51 秒），第二进程复用 `33573 ms`，engine `540031644` bytes；后续 Release 仍须
+  在其实际 staging 上重跑，不能沿用历史结果代替当前制品验证。

@@ -23,6 +23,16 @@ set(_plugin_root "${_physical_prefix}/plugins")
 set(_u2net_model "${_physical_prefix}/resources/models/U2Net_v1.onnx")
 set(_lightglue_model
     "${_physical_prefix}/resources/models/lightglue_tensorrt/lightglue_sift_bucket4096.onnx")
+set(_birefnet_model
+    "${_physical_prefix}/resources/models/birefnet_dynamic/BiRefNet_dynamic_1024.onnx")
+set(_birefnet_provenance
+    "${_physical_prefix}/resources/models/birefnet_dynamic/BiRefNet_dynamic_1024.provenance.json")
+set(_birefnet_package_paths
+    "${_birefnet_model}"
+    "${_birefnet_provenance}"
+    "${_physical_prefix}/share/plascan/models/BiRefNet_NOTICE.md"
+    "${_physical_prefix}/share/plascan/models/BiRefNet-MIT.txt"
+    "${_physical_prefix}/share/plascan/models/models-v1.2.0.sha256")
 
 set(_required_paths
     "${_app_bin}"
@@ -36,6 +46,17 @@ set(_required_paths
     "${_root}/usr/bin/plascan"
     "${_root}/usr/share/applications/plascan.desktop"
     "${_root}/usr/share/icons/hicolor/256x256/apps/plascan.png")
+if("@PLASCAN_BUNDLE_BIREFNET_DYNAMIC@" STREQUAL "ON")
+    list(APPEND _required_paths ${_birefnet_package_paths})
+else()
+    foreach(_unexpected_birefnet_path IN LISTS _birefnet_package_paths)
+        if(EXISTS "${_unexpected_birefnet_path}")
+            message(FATAL_ERROR
+                "[verify-linux-runtime] CPU package must not contain BiRefNet Dynamic: "
+                "${_unexpected_birefnet_path}")
+        endif()
+    endforeach()
+endif()
 foreach(_required_path IN LISTS _required_paths)
     if(NOT EXISTS "${_required_path}")
         message(FATAL_ERROR
@@ -67,6 +88,26 @@ if(NOT _lightglue_size EQUAL @PLASCAN_LIGHTGLUE_ONNX_SIZE@ OR
    NOT _lightglue_sha256 STREQUAL "@PLASCAN_LIGHTGLUE_ONNX_SHA256@")
     message(FATAL_ERROR
         "[verify-linux-runtime] installed LightGlue ONNX failed size/SHA-256 verification")
+endif()
+if("@PLASCAN_BUNDLE_BIREFNET_DYNAMIC@" STREQUAL "ON")
+    file(SIZE "${_birefnet_model}" _birefnet_size)
+    file(SHA256 "${_birefnet_model}" _birefnet_sha256)
+    if(NOT _birefnet_size EQUAL @PLASCAN_BIREFNET_DYNAMIC_ONNX_SIZE@ OR
+       NOT _birefnet_sha256 STREQUAL "@PLASCAN_BIREFNET_DYNAMIC_ONNX_SHA256@")
+        message(FATAL_ERROR
+            "[verify-linux-runtime] installed BiRefNet Dynamic ONNX failed "
+            "size/SHA-256 verification")
+    endif()
+    file(SIZE "${_birefnet_provenance}" _birefnet_provenance_size)
+    file(SHA256 "${_birefnet_provenance}" _birefnet_provenance_sha256)
+    if(NOT _birefnet_provenance_size EQUAL
+           @PLASCAN_BIREFNET_DYNAMIC_PROVENANCE_SIZE@ OR
+       NOT _birefnet_provenance_sha256 STREQUAL
+           "@PLASCAN_BIREFNET_DYNAMIC_PROVENANCE_SHA256@")
+        message(FATAL_ERROR
+            "[verify-linux-runtime] installed BiRefNet Dynamic provenance failed "
+            "size/SHA-256 verification")
+    endif()
 endif()
 
 file(GLOB_RECURSE _engine_files

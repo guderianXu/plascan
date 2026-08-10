@@ -31,8 +31,8 @@ public:
 private slots:
     void updateThresholdState();
     void updateMethodState();
-    void updateU2NetStatusText();
-    void downloadU2NetModel();
+    void updateAiModelStatusText();
+    void downloadAiModel();
 
 private:
     QStringList _selectedImages;
@@ -55,4 +55,5 @@ private:
     QDoubleSpinBox *_u2netMaskThresholdSpin{};
     QLabel *_selectionLabel{};
     QDialogButtonBox *_buttons{};
+    QString _configuredAiMethod;
 };

@@ -13,6 +13,8 @@ option(PLASCAN_BUNDLE_ONNX_MODELS
   "Bundle verified U2Net and portable LightGlue ONNX models into install/package" ON)
 option(PLASCAN_BUNDLE_LOMA_R_MODELS
   "Bundle verified portable LoMa-R ONNX models and manifests into install/package" OFF)
+option(PLASCAN_BUNDLE_BIREFNET_DYNAMIC
+  "Bundle verified BiRefNet Dynamic ONNX and provenance into TensorRT packages" OFF)
 option(PLASCAN_VERIFY_LINUX_PACKAGE_RUNTIME
   "Fail Linux install/package staging when the bundled runtime is not relocatable" OFF)
 option(PLASCAN_LINUX_REQUIRE_XCB_PLUGIN
@@ -61,10 +63,24 @@ set(PLASCAN_LIGHTGLUE_ONNX_PATH
 set(PLASCAN_LOMA_R_MODEL_DIR
   "${CMAKE_SOURCE_DIR}/resources/models/loma_r_tensorrt"
   CACHE PATH "Directory containing portable LoMa-R ONNX models and manifests")
+set(PLASCAN_BIREFNET_DYNAMIC_MODEL_DIR
+  "${CMAKE_SOURCE_DIR}/resources/models/birefnet_dynamic"
+  CACHE PATH "Directory containing BiRefNet Dynamic ONNX and provenance assets")
 
 if(PLASCAN_BUNDLE_LOMA_R_MODELS AND NOT PLASCAN_BUNDLE_ONNX_MODELS)
   message(FATAL_ERROR
     "PLASCAN_BUNDLE_LOMA_R_MODELS requires PLASCAN_BUNDLE_ONNX_MODELS=ON")
+endif()
+
+if(PLASCAN_BUNDLE_BIREFNET_DYNAMIC)
+  if(NOT PLASCAN_BUNDLE_ONNX_MODELS)
+    message(FATAL_ERROR
+      "PLASCAN_BUNDLE_BIREFNET_DYNAMIC requires PLASCAN_BUNDLE_ONNX_MODELS=ON")
+  endif()
+  if(NOT PLASCAN_ENABLE_TENSORRT)
+    message(FATAL_ERROR
+      "PLASCAN_BUNDLE_BIREFNET_DYNAMIC requires PLASCAN_ENABLE_TENSORRT=ON")
+  endif()
 endif()
 
 install(TARGETS plascan_gui
@@ -152,6 +168,18 @@ if(PLASCAN_BUNDLE_ONNX_MODELS)
       "${PLASCAN_BUNDLED_LOMA_R_MODEL_DIR}/loma_r_k3840_fp16.json")
   endif()
 
+  if(PLASCAN_BUNDLE_BIREFNET_DYNAMIC)
+    get_filename_component(PLASCAN_BUNDLED_BIREFNET_DYNAMIC_MODEL_DIR
+      "${PLASCAN_BIREFNET_DYNAMIC_MODEL_DIR}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
+    file(TO_CMAKE_PATH
+      "${PLASCAN_BUNDLED_BIREFNET_DYNAMIC_MODEL_DIR}"
+      PLASCAN_BUNDLED_BIREFNET_DYNAMIC_MODEL_DIR)
+    set(PLASCAN_BUNDLED_BIREFNET_DYNAMIC_ONNX
+      "${PLASCAN_BUNDLED_BIREFNET_DYNAMIC_MODEL_DIR}/BiRefNet_dynamic_1024.onnx")
+    set(PLASCAN_BUNDLED_BIREFNET_DYNAMIC_PROVENANCE
+      "${PLASCAN_BUNDLED_BIREFNET_DYNAMIC_MODEL_DIR}/BiRefNet_dynamic_1024.provenance.json")
+  endif()
+
   set(PLASCAN_U2NET_ONNX_SIZE "175997641")
   set(PLASCAN_U2NET_ONNX_SHA256
     "8d10d2f3bb75ae3b6d527c77944fc5e7dcd94b29809d47a739a7a728a912b491")
@@ -171,6 +199,12 @@ if(PLASCAN_BUNDLE_ONNX_MODELS)
     "68ae6a68bb184375285d486384344b7a6500195d5f372e96c8b429bd8787c91e")
   set(PLASCAN_LOMA_R_MANIFEST_K3840_SHA256
     "5d55026fe3e0bc59bb93bc997d928ec46940905e22c7836b831a859e1dae2715")
+  set(PLASCAN_BIREFNET_DYNAMIC_ONNX_SIZE "972558911")
+  set(PLASCAN_BIREFNET_DYNAMIC_ONNX_SHA256
+    "3af7fe29f80be80e12595671293c877af6767cae71566a8765face68965f0742")
+  set(PLASCAN_BIREFNET_DYNAMIC_PROVENANCE_SIZE "1688")
+  set(PLASCAN_BIREFNET_DYNAMIC_PROVENANCE_SHA256
+    "9e100509b59aedfeabd0aabc7277009b0d620803b27f482abb2e28220de8d4ff")
 
   foreach(_model_prefix IN ITEMS U2NET LIGHTGLUE)
     if(EXISTS "${PLASCAN_BUNDLED_${_model_prefix}_ONNX}")
@@ -201,12 +235,31 @@ if(PLASCAN_BUNDLE_ONNX_MODELS)
     endforeach()
   endif()
 
+  if(PLASCAN_BUNDLE_BIREFNET_DYNAMIC)
+    foreach(_birefnet_asset IN ITEMS
+        PLASCAN_BUNDLED_BIREFNET_DYNAMIC_ONNX
+        PLASCAN_BUNDLED_BIREFNET_DYNAMIC_PROVENANCE)
+      if(EXISTS "${${_birefnet_asset}}")
+        message(STATUS "CPack will bundle BiRefNet Dynamic asset: ${${_birefnet_asset}}")
+      else()
+        message(STATUS
+          "Bundled BiRefNet Dynamic asset is not present during configure; "
+          "install/CPack will require: ${${_birefnet_asset}}")
+      endif()
+    endforeach()
+  endif()
+
   set(_plascan_verify_models_script
     "${CMAKE_CURRENT_BINARY_DIR}/VerifyBundledModels.cmake")
   set(PLASCAN_VERIFY_BUNDLE_ONNX_MODELS ON)
   set(PLASCAN_VERIFY_BUNDLE_LOMA_R_MODELS OFF)
+  set(PLASCAN_VERIFY_BUNDLE_BIREFNET_DYNAMIC OFF)
+  set(PLASCAN_VERIFY_INSTALLED_BIREFNET_DYNAMIC OFF)
   if(PLASCAN_BUNDLE_LOMA_R_MODELS)
     set(PLASCAN_VERIFY_BUNDLE_LOMA_R_MODELS ON)
+  endif()
+  if(PLASCAN_BUNDLE_BIREFNET_DYNAMIC)
+    set(PLASCAN_VERIFY_BUNDLE_BIREFNET_DYNAMIC ON)
   endif()
   configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyBundledModels.cmake.in"
@@ -233,6 +286,13 @@ if(PLASCAN_BUNDLE_ONNX_MODELS)
       DESTINATION resources/models/loma_r_tensorrt
       COMPONENT Runtime)
   endif()
+  if(PLASCAN_BUNDLE_BIREFNET_DYNAMIC)
+    install(FILES
+      "${PLASCAN_BUNDLED_BIREFNET_DYNAMIC_ONNX}"
+      "${PLASCAN_BUNDLED_BIREFNET_DYNAMIC_PROVENANCE}"
+      DESTINATION resources/models/birefnet_dynamic
+      COMPONENT Runtime)
+  endif()
 
   set(_plascan_model_notices
     "${CMAKE_SOURCE_DIR}/docs/models/Apache-2.0.txt"
@@ -243,10 +303,31 @@ if(PLASCAN_BUNDLE_ONNX_MODELS)
     list(APPEND _plascan_model_notices
       "${CMAKE_SOURCE_DIR}/docs/models/LoMa-R_NOTICE.md")
   endif()
+  if(PLASCAN_BUNDLE_BIREFNET_DYNAMIC)
+    list(APPEND _plascan_model_notices
+      "${CMAKE_SOURCE_DIR}/docs/models/BiRefNet_NOTICE.md"
+      "${CMAKE_SOURCE_DIR}/docs/models/BiRefNet-MIT.txt"
+      "${CMAKE_SOURCE_DIR}/docs/models/models-v1.2.0.sha256")
+  endif()
   install(FILES ${_plascan_model_notices}
     DESTINATION share/plascan/models
     COMPONENT Runtime)
   unset(_plascan_model_notices)
+
+  if(PLASCAN_BUNDLE_BIREFNET_DYNAMIC)
+    set(_plascan_verify_installed_models_script
+      "${CMAKE_CURRENT_BINARY_DIR}/VerifyInstalledBundledModels.cmake")
+    set(PLASCAN_VERIFY_BUNDLE_ONNX_MODELS OFF)
+    set(PLASCAN_VERIFY_BUNDLE_LOMA_R_MODELS OFF)
+    set(PLASCAN_VERIFY_BUNDLE_BIREFNET_DYNAMIC OFF)
+    set(PLASCAN_VERIFY_INSTALLED_BIREFNET_DYNAMIC ON)
+    configure_file(
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyBundledModels.cmake.in"
+      "${_plascan_verify_installed_models_script}"
+      @ONLY)
+    install(SCRIPT "${_plascan_verify_installed_models_script}"
+      COMPONENT Runtime)
+  endif()
 
   install(CODE [=[
     set(_plascan_physical_prefix "${CMAKE_INSTALL_PREFIX}")

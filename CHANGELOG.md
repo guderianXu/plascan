@@ -8,11 +8,19 @@
 
 - U2Net 蒙版新增 TensorRT FP16/FP32 后端：发布包分发可移植 ONNX，首次使用时在用户本地应用数据目录
   构建并按模型、GPU 和 TensorRT 环境指纹缓存本机 engine；OpenCV DNN CPU 继续作为明确回退路径。
+- 新增推荐的 BiRefNet Dynamic 蒙版：部署契约固定为 `1×3×1024×1024`，使用保持宽高比的 letterbox
+  和 ImageNet 归一化，C++ 运行时对原始 logits 执行 sigmoid；仅支持 TensorRT GPU，不提供 CPU 回退。
+- 新增独立模型 Release `models-v1.2.0`，只发布 `BiRefNet_dynamic_1024.onnx` 及其 provenance；
+  U2Net、LightGlue 和 LoMa-R 的既有资产继续固定在 `models-v1.1.0`，不会被增量 Release 隐式替换。
 
 ### 优化
 
 - Windows CUDA 免安装部署现在收集并校验 TensorRT runtime、ONNX parser、plugin、全部 builder resource
   以及所需 CUDA DLL，可在没有 CUDA Toolkit、TensorRT SDK、vcpkg 和 Python 的目标机首次构建 U2Net engine。
+- BiRefNet Dynamic 生产运行不依赖 PyTorch；安装包只携带可移植 ONNX 和 provenance，首次使用时按模型、
+  GPU、TensorRT 和构建参数指纹在用户缓存中构建 FP16/FP32 engine，安装树禁止写入或夹带 `.engine`。
+  RTX 4060 Laptop 8 GiB / TensorRT 10.15 的干净部署门禁已验证 FP16 首建（约 43 分 51 秒）和第二进程
+  缓存复用（约 33.6 秒），首次使用应预留约 45 分钟。
 
 ### 修复
 

@@ -192,6 +192,12 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("Assert-U2NetTensorRtDeployment", text)
         self.assertIn("RunU2NetTensorRtDeploymentTest", text)
         self.assertIn("RunU2NetCudaDeploymentTest", text)
+        self.assertIn("RunBiRefNetTensorRtDeploymentTest", text)
+        self.assertIn("-DPLASCAN_BUNDLE_BIREFNET_DYNAMIC=ON", text)
+        self.assertIn('Join-Path $BuildDir "package-smoke\\PlaScan"', text)
+        self.assertIn('"test_mask_generation",', text)
+        self.assertIn('"plascan_package_smoke"', text)
+        self.assertIn("test_birefnet_tensorrt_deployment.ps1", text)
         self.assertIn("VCPKG_APPLOCAL_DEPS=OFF", text)
         self.assertIn("Resolve-ReparseTargetPath", text)
         self.assertIn("CMAKE_MAKE_PROGRAM=$(Convert-ToCMakePath $ninjaExe)", text)
@@ -236,6 +242,44 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("nvinfer_builder_resource_*.dll", deployment_test)
         self.assertIn('Name -like "cudnn*.dll"', deployment_test)
         self.assertIn("it may have been skipped", deployment_test)
+
+        birefnet_deployment_test = (
+            ROOT
+            / "scripts"
+            / "build_win"
+            / "test_birefnet_tensorrt_deployment.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("EnvironmentVariables.Clear()", birefnet_deployment_test)
+        self.assertIn(
+            "BiRefNetMaskGeneratorIntegrationTest."
+            "OnnxModelRunsOnTensorRtWhenExplicitlyEnabled",
+            birefnet_deployment_test,
+        )
+        self.assertIn(
+            'EnvironmentVariables["PLASCAN_BIREFNET_INTEGRATION"] = "1"',
+            birefnet_deployment_test,
+        )
+        self.assertIn(
+            'EnvironmentVariables["PLASCAN_BIREFNET_MODEL"] = $ModelPath',
+            birefnet_deployment_test,
+        )
+        self.assertIn(
+            'EnvironmentVariables["PLASCAN_BIREFNET_ENGINE_CACHE"] = $EngineCache',
+            birefnet_deployment_test,
+        )
+        self.assertIn('"package-smoke\\PlaScan"', birefnet_deployment_test)
+        self.assertIn(
+            '"resources\\models\\birefnet_dynamic\\BiRefNet_dynamic_1024.onnx"',
+            birefnet_deployment_test,
+        )
+        self.assertIn(
+            '"resources\\models\\birefnet_dynamic\\BiRefNet_dynamic_1024.provenance.json"',
+            birefnet_deployment_test,
+        )
+        self.assertIn("Assert-NoEngineArtifacts $InstallRoot", birefnet_deployment_test)
+        self.assertIn("engine_reused\\s*=\\s*$ExpectedReuse", birefnet_deployment_test)
+        self.assertIn('-ExpectedReuse "no"', birefnet_deployment_test)
+        self.assertIn('-ExpectedReuse "yes"', birefnet_deployment_test)
 
     def test_gui_build_deploys_vcpkg_runtime_dlls(self):
         module = (ROOT / "cmake" / "PlascanWindowsRuntime.cmake").read_text(

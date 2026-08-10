@@ -9,28 +9,23 @@ namespace xjw::common::model
 namespace
 {
 
-constexpr auto kModelReleaseTag = "models-v1.1.0";
-constexpr auto kReleaseBaseUrl =
-    "https://github.com/guderianXu/plascan/releases/download/models-v1.1.0/";
+constexpr auto kPortableModelReleaseTag = "models-v1.1.0";
+constexpr auto kBiRefNetModelReleaseTag = "models-v1.2.0";
+constexpr auto kReleaseDownloadBaseUrl =
+    "https://github.com/guderianXu/plascan/releases/download/";
 constexpr auto kCompatibility =
     "发布包仅包含可移植 ONNX，不包含任何开发机生成的 TensorRT engine。"
     "PlaScan 首次使用时会依据本机 TensorRT 完整版本和 GPU Compute Capability 构建并缓存 engine。";
 
-ModelAssetFile asset(const char *name, qint64 bytes, const char *sha256)
-{
-    ModelAssetFile file;
-    file.fileName = QString::fromLatin1(name);
-    file.downloadUrl = QString::fromLatin1(kReleaseBaseUrl) + file.fileName;
-    file.sha256 = QString::fromLatin1(sha256);
-    file.bytes = bytes;
-    return file;
-}
-
-ModelAssetFile asset(const QString &name, qint64 bytes, const char *sha256)
+ModelAssetFile asset(const QString &releaseTag,
+                     const QString &name,
+                     qint64 bytes,
+                     const char *sha256)
 {
     ModelAssetFile file;
     file.fileName = name;
-    file.downloadUrl = QString::fromLatin1(kReleaseBaseUrl) + file.fileName;
+    file.downloadUrl = QString::fromLatin1(kReleaseDownloadBaseUrl) + releaseTag +
+        QStringLiteral("/") + file.fileName;
     file.sha256 = QString::fromLatin1(sha256);
     file.bytes = bytes;
     return file;
@@ -74,10 +69,11 @@ ModelAssetPackage lightGlueTensorRtPackage()
     package.displayName = QStringLiteral("CUDA SIFT + LightGlue ONNX（K4096）");
     package.packageDirectory = QStringLiteral("lightglue_tensorrt");
     package.entryPointFile = QStringLiteral("lightglue_sift_bucket4096.onnx");
-    package.releaseTag = QString::fromLatin1(kModelReleaseTag);
+    package.releaseTag = QString::fromLatin1(kPortableModelReleaseTag);
     package.compatibilitySummary = QString::fromUtf8(kCompatibility);
     package.files = {
-        asset("lightglue_sift_bucket4096.onnx",
+        asset(package.releaseTag,
+              QStringLiteral("lightglue_sift_bucket4096.onnx"),
               51072656,
               "773d3de316c37e8d408312d39139352b45e2a93ba055e59cfa2806c5d54ede69"),
     };
@@ -91,14 +87,40 @@ ModelAssetPackage u2NetOnnxPackage()
     package.displayName = QStringLiteral("U2Net v1 ONNX 蒙版模型");
     package.packageDirectory = QStringLiteral(".");
     package.entryPointFile = QStringLiteral("U2Net_v1.onnx");
-    package.releaseTag = QString::fromLatin1(kModelReleaseTag);
+    package.releaseTag = QString::fromLatin1(kPortableModelReleaseTag);
     package.compatibilitySummary = QStringLiteral(
         "OpenCV DNN CPU 可直接使用；NVIDIA GPU 使用本机首次构建的 TensorRT engine。"
         "模型来源于 U-2-Net（Apache-2.0）。");
     package.files = {
-        asset("U2Net_v1.onnx",
+        asset(package.releaseTag,
+              QStringLiteral("U2Net_v1.onnx"),
               175997641,
               "8d10d2f3bb75ae3b6d527c77944fc5e7dcd94b29809d47a739a7a728a912b491"),
+    };
+    return package;
+}
+
+ModelAssetPackage biRefNetDynamicOnnxPackage()
+{
+    ModelAssetPackage package;
+    package.id = QStringLiteral("birefnet_dynamic_1024");
+    package.displayName = QStringLiteral("BiRefNet Dynamic 1024 ONNX 蒙版模型");
+    package.packageDirectory = QStringLiteral("birefnet_dynamic");
+    package.entryPointFile = QStringLiteral("BiRefNet_dynamic_1024.onnx");
+    package.releaseTag = QString::fromLatin1(kBiRefNetModelReleaseTag);
+    package.compatibilitySummary = QStringLiteral(
+        "仅支持 PlaScan TensorRT 后端；发布包包含可移植 ONNX 和来源清单，不包含本机 engine。"
+        "首次使用时会按本机 TensorRT 和 GPU Compute Capability 构建并缓存 engine。"
+        "模型来源于 BiRefNet（MIT）。");
+    package.files = {
+        asset(package.releaseTag,
+              QStringLiteral("BiRefNet_dynamic_1024.onnx"),
+              972558911,
+              "3af7fe29f80be80e12595671293c877af6767cae71566a8765face68965f0742"),
+        asset(package.releaseTag,
+              QStringLiteral("BiRefNet_dynamic_1024.provenance.json"),
+              1688,
+              "9e100509b59aedfeabd0aabc7277009b0d620803b27f482abb2e28220de8d4ff"),
     };
     return package;
 }
@@ -111,7 +133,7 @@ ModelAssetPackage loMaRTensorRtPackage(int keypointBudget)
     package.displayName = QStringLiteral("LoMa-R ONNX（K%1）").arg(budget);
     package.packageDirectory = QStringLiteral("loma_r_tensorrt");
     package.entryPointFile = QStringLiteral("loma_r_k%1_fp16.json").arg(budget);
-    package.releaseTag = QString::fromLatin1(kModelReleaseTag);
+    package.releaseTag = QString::fromLatin1(kPortableModelReleaseTag);
     package.compatibilitySummary = QString::fromUtf8(kCompatibility);
 
     const QString manifestName = QStringLiteral("loma_r_k%1_fp16.json").arg(budget);
@@ -121,13 +143,15 @@ ModelAssetPackage loMaRTensorRtPackage(int keypointBudget)
                ? "68ae6a68bb184375285d486384344b7a6500195d5f372e96c8b429bd8787c91e"
                : "db3b242ed7cda10e16fd7c304844c1f809a3b37bc40af10a81c7248ca9e51aea");
     package.files = {
-        asset("loma_r_features_k3840_fp16.onnx",
+        asset(package.releaseTag,
+              QStringLiteral("loma_r_features_k3840_fp16.onnx"),
               1318960639,
               "2b2671850f6a79f071a171eb9b523a8807474bcde19b5ded0191b9593ed97e19"),
-        asset("loma_r_matcher_dynamic_fp16.onnx",
+        asset(package.releaseTag,
+              QStringLiteral("loma_r_matcher_dynamic_fp16.onnx"),
               45501499,
               "5c91444393c2245e66553e8f493e5b35dc39e8a099b9988a684391fdcdf90195"),
-        asset(manifestName, 644, manifestHash),
+        asset(package.releaseTag, manifestName, 644, manifestHash),
     };
     return package;
 }

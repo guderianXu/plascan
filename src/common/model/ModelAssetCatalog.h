@@ -49,6 +49,9 @@ ModelAssetPackage lightGlueTensorRtPackage();
 /// 返回跨平台 OpenCV DNN 可加载的 U2Net v1 ONNX 蒙版模型。
 ModelAssetPackage u2NetOnnxPackage();
 
+/// 返回由 TensorRT 运行的 BiRefNet Dynamic 1024 ONNX 蒙版模型及来源清单。
+ModelAssetPackage biRefNetDynamicOnnxPackage();
+
 /// 返回 LoMa-R 共享特征/动态匹配 ONNX 与指定 K 桶清单。
 ModelAssetPackage loMaRTensorRtPackage(int keypointBudget);
 
