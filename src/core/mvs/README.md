@@ -120,8 +120,9 @@ live under `src/core/mvs/tests/`.
   different APIs. Explicit CUDA or OpenCL requests remain strict and never silently substitute another backend.
 - Heterogeneous scheduling is frame-level: one depth map remains on one device, while different reference frames
   may run concurrently on CUDA discrete GPUs and OpenCL integrated GPUs. Every selected physical accelerator is
-  represented before host preparation lanes are duplicated, and each physical GPU retains one kernel execution
-  lane. Progress reports physical GPU count separately from active host slots.
+  represented before host preparation lanes are duplicated. CUDA and discrete OpenCL devices retain one kernel
+  execution lane; a unified-memory OpenCL GPU uses at most two persistent lanes so an independent frame can cover
+  long Windows driver submission gaps. Progress reports physical GPU count separately from active host slots.
 - Auto reserves an initial calibration frame for each participating accelerator and tracks an exponential moving
   average of its frame time. Faster devices naturally claim more work. Near the queue tail, a slower device stops
   claiming frames when its projected completion time, including in-flight work, is no better than the fastest
@@ -148,10 +149,11 @@ live under `src/core/mvs/tests/`.
   each frame. GUI project metadata reports the combined batch as `hybrid`; Auto may reuse either a compatible
   uniform batch or a compatible hybrid batch, while an explicit backend may reuse only the same uniform family.
 - The OpenCL C 1.2 backend runs inverse-depth initialization, stateful plane PatchMatch, multi-source NCC,
-  mask-aware sampling, depth hints, coarse-to-fine refinement, and confidence filtering. Each OpenCL GPU has one
-  command-queue/kernel lane. With the default two-stage host pipeline, a second worker prepares the next frame and
-  post-consistency residual hypothesis while the current queue is busy, but cannot submit a competing kernel. Scaled float images and
-  all OpenCL buffers are bounded/reused, and reference patches are tiled in work-group local memory. Every quality
+  mask-aware sampling, depth hints, coarse-to-fine refinement, and confidence filtering. Discrete OpenCL GPUs have
+  one command-queue/kernel lane; unified-memory GPUs have two bounded lanes. With the default two-stage host
+  pipeline, a second worker prepares the next frame and can submit it to the second integrated-GPU lane while the
+  first queue is stalled or busy. Scaled float images and all OpenCL buffers are bounded/reused, and reference
+  patches are tiled in work-group local memory. Every quality
   profile retains its configured full inverse-depth hypothesis count, including inside propagated priors, followed
   by 13 refinement samples; the program does not use relaxed-math compilation. CPU
   packing and post-processing remain outside lane ownership. CPU execution

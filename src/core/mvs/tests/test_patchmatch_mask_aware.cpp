@@ -455,7 +455,7 @@ TEST(PatchMatchBackendAlignmentTest, CudaAndOpenClAlignAtHintUpperBoundaryWhenAv
     xjw::mvs::PatchMatchDepthEstimator::cleanupOpenClResources();
 }
 
-TEST(PatchMatchMaskAwareTest, OpenClConcurrentWorkersSerializeAndReuseCachedInputs)
+TEST(PatchMatchMaskAwareTest, OpenClConcurrentWorkersPipelineAndReuseCachedInputs)
 {
     const std::vector<xjw::mvs::OpenClDeviceInfo> devices =
         xjw::mvs::PatchMatchDepthEstimator::openClDevices();

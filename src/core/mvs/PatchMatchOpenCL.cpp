@@ -285,12 +285,13 @@ struct OpenClRuntime
         std::uint64_t lastUse = 0;
     };
 
-    static constexpr std::size_t kExecutionLaneCount = 1;
+    static constexpr std::size_t kMaximumExecutionLaneCount = 2;
 
     cl_context context = nullptr;
     cl_program program = nullptr;
     bool hostUnifiedMemory = false;
-    std::array<ExecutionLane, kExecutionLaneCount> lanes;
+    std::array<ExecutionLane, kMaximumExecutionLaneCount> lanes;
+    std::size_t activeLaneCount = 1;
     std::mutex laneMutex;
     std::condition_variable laneAvailable;
     std::mutex imageCacheMutex;
@@ -409,7 +410,8 @@ std::optional<OpenClExecutionLaneLease> acquireOpenClExecutionLane(
     runtime->laneAvailable.wait(lock, [&]()
     {
         return (cancelFlag && cancelFlag->load(std::memory_order_relaxed)) ||
-            std::any_of(runtime->lanes.begin(), runtime->lanes.end(),
+            std::any_of(runtime->lanes.begin(),
+                        runtime->lanes.begin() + runtime->activeLaneCount,
                         [](const OpenClRuntime::ExecutionLane &lane)
                         {
                             return !lane.busy;
@@ -419,7 +421,7 @@ std::optional<OpenClExecutionLaneLease> acquireOpenClExecutionLane(
     {
         return std::nullopt;
     }
-    for (std::size_t index = 0; index < runtime->lanes.size(); ++index)
+    for (std::size_t index = 0; index < runtime->activeLaneCount; ++index)
     {
         if (!runtime->lanes[index].busy)
         {
@@ -636,6 +638,13 @@ std::shared_ptr<OpenClRuntime> openClRuntimeForDevice(
 
     auto runtime = std::make_shared<OpenClRuntime>();
     runtime->hostUnifiedMemory = device.hostUnifiedMemory;
+    // A second queue lets another frame occupy an integrated GPU while the
+    // Windows OpenCL driver leaves long submission gaps between full-resolution
+    // PatchMatch kernels. Discrete GPUs retain one lane, while unified-memory
+    // devices are strictly capped at two persistent workspaces.
+    runtime->activeLaneCount = device.hostUnifiedMemory
+        ? OpenClRuntime::kMaximumExecutionLaneCount
+        : 1;
     runtime->imageCacheLimitBytes = std::clamp<std::size_t>(
         static_cast<std::size_t>(device.info.globalMemoryBytes / 8),
         128ull * 1024ull * 1024ull,
@@ -706,8 +715,11 @@ std::shared_ptr<OpenClRuntime> openClRuntimeForDevice(
         }
         return nullptr;
     }
-    for (OpenClRuntime::ExecutionLane &lane : runtime->lanes)
+    for (std::size_t lane_index = 0;
+         lane_index < runtime->activeLaneCount;
+         ++lane_index)
     {
+        OpenClRuntime::ExecutionLane &lane = runtime->lanes[lane_index];
         lane.queue = clCreateCommandQueue(
             runtime->context, device.device, CL_QUEUE_PROFILING_ENABLE, &error);
         if (error != CL_SUCCESS || !lane.queue)
@@ -1288,9 +1300,9 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     const float cx = static_cast<float>(reference_intrinsics.principalX) * scale;
     const float cy = static_cast<float>(reference_intrinsics.principalY) * scale;
 
-    // A single execution lane retains all input/output buffers. On integrated
-    // GPUs this removes per-level clCreateBuffer/clReleaseMemObject churn while
-    // the host image cache avoids repeating resize and float conversion.
+    // Each bounded execution lane retains its input/output buffers. Integrated
+    // GPUs use two lanes so independent frames can overlap driver submission
+    // gaps; discrete devices keep one. The host cache remains shared.
     const auto slot_wait_start = std::chrono::steady_clock::now();
     std::optional<OpenClExecutionLaneLease> lane_lease =
         acquireOpenClExecutionLane(runtime, config.cancelFlag);
@@ -1676,7 +1688,7 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
         runtime->accumulatedQueueMilliseconds += queue_ms;
         runtime->accumulatedKernelActiveMilliseconds += kernel_active_ms;
     }
-    LOG_INFO("[MVS][PatchMatch][OpenCL] device=%s lane=%zu unified=%d retained=%.1fMiB "
+    LOG_INFO("[MVS][PatchMatch][OpenCL] device=%s lane=%zu/%zu unified=%d retained=%.1fMiB "
              "image_cache=%d/%d %.1fMiB "
              "size=%dx%d sources=%d sample_budget=%d valid=%d/%d "
              "prepare=%.1f ms wait=%.1f ms setup=%.1f ms queue=%.1f ms "
@@ -1685,6 +1697,7 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
              "post=%.1f ms total=%.1f ms",
              selected_device->info.name.c_str(),
              execution_lane_index,
+             runtime->activeLaneCount,
              runtime->hostUnifiedMemory ? 1 : 0,
              static_cast<double>(retained_buffer_bytes) / (1024.0 * 1024.0),
              (reference_cache_hit ? 1 : 0) + source_cache_hits,

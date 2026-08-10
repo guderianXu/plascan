@@ -45,8 +45,8 @@ MVS 深度计算不保留 Vulkan Compute 接口，GUI 的 Vulkan 图形渲染不
 
 - 使用 OpenCL C 1.2 kernel 实现并行逆深度搜索、局部细化、多源 NCC、有效蒙版、稀疏深度提示和
   光度唯一性置信度，运行时兼容 OpenCL 1.2 及以上驱动。
-- 每个 OpenCL GPU 缓存独立 context、command queue、program 和 kernel；设备内部串行提交，设备之间
-  可并行领取帧。
+- 每个 OpenCL GPU 缓存独立 context 和 program；离散设备保留单 command queue，统一内存核显最多保留
+  两条有界 command queue/kernel lane，以交错独立帧覆盖驱动提交空档；不同设备仍可并行领取帧。
 - Auto 同时探测 CUDA 和 OpenCL；OpenCL 必须先通过 context 创建与 PatchMatch kernel 在线编译
   预检才能加入 worker 池。同一物理 GPU 如果同时通过 CUDA/OpenCL 暴露，则按 PCI 物理标识去重并
   优先保留 CUDA 路径；因此 NVIDIA 独显不会被重复计数，AMD/Intel 核显仍可与它并行。
@@ -73,8 +73,9 @@ CPU 不通过 OpenCL 执行。现有 C++/OpenMP 路径没有 JIT、驱动与主�
 - worker 池先为每块选中的物理 GPU 保留一个执行来源，再增加同设备主机准备槽，使下一帧的
   CPU 准备和上传可与当前帧 kernel 重叠。Auto 可同时建立 CUDA 和 OpenCL worker，但不会在已有 GPU
   worker 时再混入 CPU worker。
-- 每块 CUDA/OpenCL GPU 都只有一个设备执行槽，避免 kernel、显存带宽和核显共享内存过度竞争；第二个
-  主机帧槽只负责提前准备下一帧。OpenCL 共享 context/program，但只创建一个 command queue/kernel。
+- 每块 CUDA 和离散 OpenCL GPU 保持一个设备执行槽；统一内存 OpenCL 核显最多使用两个持久执行槽，
+  与两个主机帧槽一一对应，在一条 Windows 驱动队列出现长提交空档时由另一帧补位。两槽共享
+  context/program，buffer 高水位固定为两套，不会随帧数继续增长。
 - OpenCL 按输入影像存储身份与工作分辨率缓存缩放后的 float 影像，并复用全部输入/输出 buffer；参考
   patch 由 work-group 协作载入 local memory，深度假设采用粗到细搜索。相机/蒙版打包和 OpenCV 后处理
   仍在执行槽外完成。
@@ -104,7 +105,7 @@ CPU 不通过 OpenCL 执行。现有 C++/OpenMP 路径没有 JIT、驱动与主�
   或 `post` 偏高，则应继续优化 CPU 数据准备或后处理；`queue-kernel` 偏高则指向驱动/JIT/排队开销。
 - OpenCL 批次结束时汇总首个队列开始至末个队列结束的 `queue_occupancy`、`inter_call_idle`、
   `queue_non_kernel` 与 `end_to_end_kernel_duty`。一致性后残余深度重估也复用双主机槽，但内部像素线程
-  预算按槽数均分，避免 CPU 过度订阅；设备执行槽和 command queue 仍各只有一个。
+  预算按槽数均分，避免 CPU 过度订阅；统一内存设备最多两条 command queue，其他设备仍为一条。
 
 ## 可行性结论
 

@@ -433,6 +433,35 @@ TEST(DepthComputeSchedulerTest, ConcurrentOpenClSlotsKeepOnePhysicalFrameInFligh
               contender_count - 1);
 }
 
+TEST(DepthComputeSchedulerTest, BoundedOpenClPipelineAllowsTwoPhysicalFramesInFlight)
+{
+    const DepthComputeWorker cuda_worker{DepthComputeBackend::Cuda, 0};
+    const DepthComputeWorker opencl_worker{DepthComputeBackend::OpenCl, 1};
+    DepthComputeSchedulingPolicy policy;
+    policy.maximumOpenClInFlightTasksPerDevice = 2;
+    DepthComputeScheduler scheduler(
+        {{1, 4.0f}, {2, 3.0f}, {3, 2.0f}, {4, 1.0f}},
+        false,
+        {cuda_worker, opencl_worker, opencl_worker},
+        policy);
+
+    const DepthTaskClaim first = scheduler.claimNext(opencl_worker);
+    const DepthTaskClaim second = scheduler.claimNext(opencl_worker);
+    ASSERT_EQ(first.status, DepthTaskClaimStatus::Task);
+    ASSERT_EQ(second.status, DepthTaskClaimStatus::Task);
+    EXPECT_NE(first.viewIndex, second.viewIndex);
+    EXPECT_EQ(scheduler.claimNext(opencl_worker).status,
+              DepthTaskClaimStatus::Retry);
+
+    ASSERT_TRUE(scheduler.complete(
+        opencl_worker,
+        first.viewIndex,
+        std::chrono::milliseconds(10),
+        true).accepted);
+    EXPECT_EQ(scheduler.claimNext(opencl_worker).status,
+              DepthTaskClaimStatus::Task);
+}
+
 TEST(DepthComputeSchedulerTest, FastOpenClMayClaimNormalFrameAfterFloor)
 {
     const DepthComputeWorker cuda_worker{DepthComputeBackend::Cuda, 0};

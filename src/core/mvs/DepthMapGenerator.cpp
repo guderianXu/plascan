@@ -10105,8 +10105,9 @@ void DepthMapGenerator::runInBackgroundImpl()
     }
 
     // ── 阶段一：有界三段流水线 ──────────────────────────────────────────────
-    // 两个 GPU 主机帧槽并行执行 CPU 准备/后处理；每个物理 GPU 只允许一个
-    // kernel 执行槽。产物由 saveQueue 在第三段异步落盘。
+    // 两个 GPU 主机帧槽并行执行 CPU 准备/后处理；统一内存 OpenCL GPU
+    // 最多使用两个执行槽交错驱动空洞，其他物理 GPU 保持单执行槽。
+    // 产物由 saveQueue 在第三段异步落盘。
     int skippedFrames = 0;
     for (size_t i = 0; i < _skipFrameMask.size(); ++i)
     {
@@ -10227,7 +10228,7 @@ void DepthMapGenerator::runInBackgroundImpl()
             physicalCudaWorkers,
             physicalOpenClWorkers);
     schedulingPolicy.maximumOpenClInFlightTasksPerDevice =
-        benefitAwareScheduling && physicalOpenClWorkers > 0 ? 1 : 0;
+        benefitAwareScheduling && physicalOpenClWorkers > 0 ? 2 : 0;
     DepthComputeScheduler computeScheduler(
         std::move(frameTasks),
         benefitAwareScheduling,

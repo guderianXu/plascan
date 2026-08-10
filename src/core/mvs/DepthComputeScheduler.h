@@ -103,10 +103,9 @@ struct DepthComputeSchedulingPolicy
     /// Per physical OpenCL device. A value of one lets a sufficiently large
     /// hybrid batch measure and retain one useful complete iGPU frame.
     int guaranteedOpenClFullFramesPerDevice = 0;
-    /// Duplicate host preparation slots share one physical OpenCL queue. Keep
-    /// their frame backlog bounded so a slow iGPU cannot create a long tail.
-    /// Zero leaves legacy callers unlimited; the hybrid generator explicitly
-    /// selects one for its bounded iGPU lane.
+    /// Duplicate host preparation slots share a bounded set of physical OpenCL
+    /// queues. Keep their frame backlog bounded so a slow iGPU cannot create a
+    /// long tail. Zero leaves legacy callers unlimited.
     int maximumOpenClInFlightTasksPerDevice = 0;
 };
 
