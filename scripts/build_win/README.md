@@ -114,6 +114,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File E:\code\plascan\scripts\buil
 powershell -NoProfile -ExecutionPolicy Bypass -File E:\code\plascan\scripts\build_win\build_windows_cuda.ps1 -BuildOnly -RunTests -Jobs 8
 ```
 
+`-RunTests` 默认以逻辑核数量的一半并行运行 CTest；例如 32 个逻辑核默认使用 16 个测试 worker。
+需要控制测试并发时使用 `-CTestJobs <n>`，它与只控制编译并发的 `-Jobs <n>` 相互独立。
+
 ## 输出位置
 
 主要可执行文件：
@@ -173,6 +176,7 @@ cmake --workflow --preset windows-package-release
 | `-Target <name>` | 只构建指定 CMake target，例如 `plascan_gui`。 |
 | `-CTestRegex <regex>` | `ctest -R` 过滤表达式。 |
 | `-Jobs <n>` | 并行构建线程数，默认 CPU 核心数。 |
+| `-CTestJobs <n>` | CTest 并发数，默认逻辑核数量的一半；`CTEST_PARALLEL_LEVEL` 可覆盖默认值。 |
 | `-ConfigureOnly` | 只配置，不构建。 |
 | `-BuildOnly` | 只构建，不配置。 |
 | `-RunTests` | 构建后运行 CTest。 |

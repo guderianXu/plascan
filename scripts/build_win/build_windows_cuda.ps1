@@ -13,6 +13,7 @@ param(
     [string] $Target = "",
     [string] $CTestRegex = "",
     [int] $Jobs = 0,
+    [int] $CTestJobs = 0,
     [switch] $ConfigureOnly,
     [switch] $BuildOnly,
     [switch] $RunTests,
@@ -1331,6 +1332,23 @@ if ($Jobs -le 0)
     $Jobs = [Math]::Max(1, [Environment]::ProcessorCount)
 }
 
+if ($CTestJobs -le 0)
+{
+    $configuredCTestJobs = 0
+    if (-not [string]::IsNullOrWhiteSpace($env:CTEST_PARALLEL_LEVEL))
+    {
+        [void] [int]::TryParse($env:CTEST_PARALLEL_LEVEL, [ref] $configuredCTestJobs)
+    }
+    if ($configuredCTestJobs -gt 0)
+    {
+        $CTestJobs = $configuredCTestJobs
+    }
+    else
+    {
+        $CTestJobs = [Math]::Max(1, [int] [Math]::Floor([Environment]::ProcessorCount / 2))
+    }
+}
+
 if ($CleanRootCache)
 {
     $rootCacheItems = @(
@@ -1634,7 +1652,12 @@ if ($RunTests)
     $ctestExe = Join-Path (Split-Path -Parent $CMakeExe) "ctest.exe"
     Assert-ExistingPath $ctestExe "CTest"
 
-    $ctestArgs = @("--test-dir", $BuildDir, "-C", "Release", "--output-on-failure")
+    $ctestArgs = @(
+        "--test-dir", $BuildDir,
+        "-C", "Release",
+        "--output-on-failure",
+        "--parallel", "$CTestJobs"
+    )
     if (-not [string]::IsNullOrWhiteSpace($CTestRegex))
     {
         $ctestArgs += @("-R", $CTestRegex)

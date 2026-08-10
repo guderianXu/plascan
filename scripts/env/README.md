@@ -108,6 +108,16 @@ Configure, build, test, and package:
 python scripts/env/configure_with_env.py --build-type release --build --test --package
 ```
 
+`--test` 默认使用逻辑核数量的一半并行运行 CTest，可通过 `--test-jobs <n>` 或
+`CTEST_PARALLEL_LEVEL` 覆盖。只运行已有构建树中的测试时，使用统一测试入口：
+
+```bash
+python scripts/env/run_tests.py --test-dir build/linux-vcpkg-release --output-on-failure
+```
+
+Windows、Linux 都使用 `max(1, logical_cpus // 2)` 作为默认并发数；其余参数会原样转发给 CTest，
+也可以直接传入原生 `--parallel <n>` 或 `-j<n>` 覆盖。
+
 The configure script passes `CUDAToolkit_ROOT` and `CUDA_TOOLKIT_ROOT_DIR` to CMake when
 those values exist in `plascan-env.json`. It also
 reads `plascan-vcpkg.json` when present and exports `VCPKG_ROOT` for presets that use the

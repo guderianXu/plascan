@@ -1027,6 +1027,14 @@ if(Python3_Interpreter_FOUND)
     )
 
     add_test(
+        NAME TestParallelismRunnerTest
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_run_tests
+    )
+    set_tests_properties(TestParallelismRunnerTest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
         NAME PrepareTanksIgnatiusLidarBaTest
         COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_prepare_tanks_ignatius_lidar_ba
     )

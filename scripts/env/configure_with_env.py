@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 
 from env_common import default_output_dir, fail, host_platform, load_env_json, merged_environment, quote_command
+from run_tests import build_ctest_command
 
 
 def default_preset(build_type: str) -> str:
@@ -70,6 +71,7 @@ def main() -> None:
     parser.add_argument("--preset", help="Override CMake configure preset")
     parser.add_argument("--build", action="store_true", help="Run cmake --build after configure")
     parser.add_argument("--test", action="store_true", help="Run ctest after configure/build")
+    parser.add_argument("--test-jobs", type=int, help="Override the default half-CPU CTest worker count")
     parser.add_argument("--package", action="store_true", help="Run cpack after configure/build")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("cmake_args", nargs="*", help="Additional -D arguments passed to configure")
@@ -100,7 +102,8 @@ def main() -> None:
     if args.build:
         run(["cmake", "--build", "--preset", preset], args.dry_run, env)
     if args.test:
-        run(["ctest", "--preset", preset], args.dry_run, env)
+        test_cmd = build_ctest_command(["--preset", preset], jobs=args.test_jobs, environment=env)
+        run(test_cmd, args.dry_run, env)
     if args.package:
         run(["cpack", "--preset", preset], args.dry_run, env)
 

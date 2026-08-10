@@ -233,6 +233,14 @@ function Set-PlascanWindowsBuildEnvironment
     $env:QT_PLUGIN_PATH = Convert-ToCMakePath $qtPluginsRoot
     $env:QT_QPA_PLATFORM_PLUGIN_PATH = Convert-ToCMakePath $qtPlatformsRoot
 
+    if ([string]::IsNullOrWhiteSpace($env:CTEST_PARALLEL_LEVEL))
+    {
+        $env:CTEST_PARALLEL_LEVEL = [Math]::Max(
+            1,
+            [int] [Math]::Floor([Environment]::ProcessorCount / 2)
+        ).ToString()
+    }
+
     if ($HeadlessQt)
     {
         $env:QT_QPA_PLATFORM = "offscreen"

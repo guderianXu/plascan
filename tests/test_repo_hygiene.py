@@ -33,7 +33,7 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("submodules: recursive", text)
         self.assertIn("cmake -S . -B build", text)
         self.assertIn("cmake --build build", text)
-        self.assertIn("ctest --test-dir build", text)
+        self.assertIn("python3 scripts/env/run_tests.py --test-dir build", text)
         self.assertNotIn("-DPLASCAN_BUILD_GUI=OFF", text)
         self.assertIn("uses: jurplel/install-qt-action@v4", text)
         self.assertIn("version: '6.8.3'", text)

@@ -29,19 +29,18 @@ cd plascan
 系统已经安装好依赖时，可直接配置本机构建目录：
 
 ```bash
-mkdir build && cd build
-cmake .. -DBUILD_TESTS=ON
-cmake --build . -j$(nproc)
-ctest --output-on-failure
+cmake -S . -B build -DBUILD_TESTS=ON
+cmake --build build -j$(nproc)
+python scripts/env/run_tests.py --test-dir build --output-on-failure
 ```
 
 GUI 需要 Qt 6.7 或更高版本（使用 `QRhiWidget`）。Ubuntu 24.04 等只提供较旧 Qt 的环境仍可构建核心库、
 CLI 和非 GUI 测试：
 
 ```bash
-cmake .. -DBUILD_TESTS=ON -DPLASCAN_BUILD_GUI=OFF
-cmake --build . -j$(nproc)
-ctest --output-on-failure
+cmake -S . -B build -DBUILD_TESTS=ON -DPLASCAN_BUILD_GUI=OFF
+cmake --build build -j$(nproc)
+python scripts/env/run_tests.py --test-dir build --output-on-failure
 ```
 
 项目通过 git submodule 引用自研点云库 [plapoint](https://github.com/guderianXu/plapoint) 和矩阵库 [plamatrix](https://github.com/guderianXu/plamatrix)，无需额外安装。
@@ -56,7 +55,7 @@ Linux:
 export VCPKG_ROOT=/path/to/vcpkg
 cmake --preset linux-vcpkg-release
 cmake --build --preset linux-vcpkg-release
-ctest --preset linux-vcpkg-release
+python scripts/env/run_tests.py --preset linux-vcpkg-release
 cpack --preset linux-vcpkg-release
 ```
 
@@ -107,7 +106,7 @@ Windows 通用 Release/ZIP（不等同于完整 CUDA/TensorRT 发布环境）：
 $env:VCPKG_ROOT = "C:\src\vcpkg"
 cmake --preset windows-vcpkg-release
 cmake --build --preset windows-vcpkg-release
-ctest --preset windows-vcpkg-release
+python scripts\env\run_tests.py --preset windows-vcpkg-release
 cpack --preset windows-vcpkg-release
 ```
 
@@ -619,7 +618,9 @@ git push origin main
 
 ```bash
 cmake --build build --target test_ortho_generation test_map_project_dialog test_gui_project_utils test_mesh_reconstructor test_terrain_dem_dom plascan_gui -j$(nproc)
-ctest --test-dir build -R "OrthoGeneration|OrthoGridPlanner|OrthoProjector|MapProjectDialog" --output-on-failure
+python scripts/env/run_tests.py --test-dir build \
+  -R "OrthoGeneration|OrthoGridPlanner|OrthoProjector|MapProjectDialog" \
+  --output-on-failure
 QT_QPA_PLATFORM=offscreen ./build/tests/test_map_project_dialog
 QT_QPA_PLATFORM=offscreen ./build/tests/test_gui_project_utils
 ./build/tests/test_mesh_reconstructor

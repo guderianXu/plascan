@@ -95,8 +95,8 @@ cmake --build . -j$(nproc)
 按改动范围优先跑相关测试，再决定是否跑全量：
 
 ```bash
-ctest --output-on-failure -R 'SuperPoint|Feature|Match|DenseMatch|Mvs|Sfm|Terrain|Gui'
-ctest --output-on-failure
+python ../scripts/env/run_tests.py --test-dir . --output-on-failure -R 'SuperPoint|Feature|Match|DenseMatch|Mvs|Sfm|Terrain|Gui'
+python ../scripts/env/run_tests.py --test-dir . --output-on-failure
 ```
 
 也可直接运行单个测试二进制，例如：
@@ -164,7 +164,7 @@ python scripts\env\setup_python_runtime.py --device cuda --cuda-wheel cu130
 - 若修改了版本、tag 或 Release 内容，同步维护 `CHANGELOG.md` 和 `docs/releases/` 下的对应版本文档；没有相关文件时应先创建。
 - commit 前必须重新检查 `git status --short`，确认提交内容只包含当前任务相关文件。
 - 每次向 GitHub 推送 commit、分支或 tag 前，必须先完成与改动范围相匹配的本地构建、测试和静态检查；不得把 GitHub CI 当作本地基本验证的替代品。
-- 涉及 C++、CMake 或测试代码时，push 前必须以 GitHub CI 的构建和测试命令为基准，在本地完成充分验证；除相关目标和定向测试外，还必须运行可执行的本地全量测试（优先使用 `ctest --output-on-failure`）。开发过程中使用的 `-R`、`--gtest_filter` 或单个测试程序只能作为快速反馈，不能作为 push 前的唯一测试依据。
+- 涉及 C++、CMake 或测试代码时，push 前必须以 GitHub CI 的构建和测试命令为基准，在本地完成充分验证；除相关目标和定向测试外，还必须运行可执行的本地全量测试（从 `build` 目录运行时优先使用 `python ../scripts/env/run_tests.py --test-dir . --output-on-failure`，默认使用一半逻辑核）。开发过程中使用的 `-R`、`--gtest_filter` 或单个测试程序只能作为快速反馈，不能作为 push 前的唯一测试依据。
 - Windows 上完成 MSVC 构建、相关测试和可执行的本地全量测试后即可 push；WSL/GCC 不是 Windows 推送前置条件。推送后仍须等待 GitHub Actions 中配置的 Windows、Linux 或其它 required checks 全部通过。
 - 本地全量测试存在失败、未解释的跳过项、测试发现错误或运行环境缺失时，不得 push。应先修复代码或本地测试环境并重新验证；若确因外部依赖导致无法完成，必须停止推送并向用户说明具体阻塞，获得明确许可后才能例外处理。CI 失败后的修复在再次 push 前也必须重新执行上述完整本地验证。
 - 每次 push 后必须检查该 commit 对应的 GitHub Actions / required checks，并等待全部 CI 检查通过。可使用 `gh run list --commit <sha>`、`gh run watch <run-id> --exit-status` 或 `gh pr checks --watch`；不得只确认 push 成功就结束任务。

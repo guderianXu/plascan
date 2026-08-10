@@ -1,6 +1,6 @@
 # PlaScan 项目架构文档
 
-行星表面摄影测量处理系统。最后更新: 2026-08-09。
+行星表面摄影测量处理系统。最后更新: 2026-08-10。
 
 ## 顶层目录
 
@@ -26,6 +26,9 @@ plascan/
 ├── CMakeLists.txt  # 根构建文件
 └── CLAUDE.md       # AI 助手配置 (代码规范, 项目约定)
 ```
+
+`scripts/env/run_tests.py` 是跨平台统一测试入口：默认以逻辑核数量的一半并行执行 CTest，并允许通过
+`CTEST_PARALLEL_LEVEL`、`--jobs` 或原生 CTest `--parallel/-j` 参数覆盖。
 
 ## 代码规范
 
