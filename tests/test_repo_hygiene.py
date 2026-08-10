@@ -64,6 +64,8 @@ class RepoHygieneTest(unittest.TestCase):
             self.assertIn(forbidden_qt_cache_entry, text)
         self.assertIn("windows-msvc-cpu:", text)
         self.assertIn("cmake --preset windows-vcpkg-release", text)
+        self.assertIn("runs-on: windows-2022", text)
+        self.assertNotIn("runs-on: windows-2025", text)
         self.assertIn("--test-dir build/windows-vcpkg-release", text)
         self.assertIn("-DVCPKG_HOST_TRIPLET=x64-windows-ci-release", text)
         self.assertIn("-DVCPKG_TARGET_TRIPLET=x64-windows-ci-release", text)

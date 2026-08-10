@@ -203,7 +203,10 @@ jobs:
         run: ccache --show-stats
 
   windows-msvc-cpu:
-    runs-on: windows-2025
+    # Keep the CPU gate on the documented MSVC 2022 baseline. The VS 18
+    # flang bundled by windows-2025 currently miscompiles lapack-reference
+    # 3.12.1 during the vcpkg manifest install.
+    runs-on: windows-2022
     timeout-minutes: 180
 
     steps:
