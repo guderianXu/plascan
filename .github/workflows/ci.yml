@@ -249,6 +249,7 @@ jobs:
             -DPLASCAN_BUNDLE_RUNTIME=OFF `
             -DPLASCAN_ENABLE_CUDA=OFF `
             -DPLASCAN_ENABLE_TENSORRT=OFF `
+            -DVCPKG_MANIFEST_NO_DEFAULT_FEATURES=ON `
             -DVCPKG_HOST_TRIPLET=x64-windows-ci-release `
             -DVCPKG_OVERLAY_TRIPLETS="$env:GITHUB_WORKSPACE/cmake/vcpkg-triplets" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-ci-release

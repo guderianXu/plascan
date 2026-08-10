@@ -69,6 +69,7 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("--test-dir build/windows-vcpkg-release", text)
         self.assertIn("-DVCPKG_HOST_TRIPLET=x64-windows-ci-release", text)
         self.assertIn("-DVCPKG_TARGET_TRIPLET=x64-windows-ci-release", text)
+        self.assertIn("-DVCPKG_MANIFEST_NO_DEFAULT_FEATURES=ON", text)
         self.assertIn("cmake/vcpkg-triplets", text)
         self.assertIn("vcpkg_installed/x64-windows-ci-release/bin", text)
         self.assertIn("'cmake/vcpkg-triplets/**'", text)
@@ -100,6 +101,21 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("set(VCPKG_CRT_LINKAGE dynamic)", triplet_text)
         self.assertIn("set(VCPKG_LIBRARY_LINKAGE dynamic)", triplet_text)
         self.assertIn("set(VCPKG_BUILD_TYPE release)", triplet_text)
+
+        manifest = json.loads((ROOT / "vcpkg.json").read_text(encoding="utf-8"))
+        self.assertIn("ceres-suitesparse", manifest["default-features"])
+        self.assertIn("ceres-suitesparse", manifest["features"])
+        production_ceres_features = manifest["features"]["ceres-suitesparse"]["dependencies"][0][
+            "features"
+        ]
+        self.assertEqual(["lapack", "suitesparse"], production_ceres_features)
+        ceres_dependency = next(
+            dependency
+            for dependency in manifest["dependencies"]
+            if isinstance(dependency, dict) and dependency.get("name") == "ceres"
+        )
+        self.assertFalse(ceres_dependency["default-features"])
+        self.assertNotIn("features", ceres_dependency)
 
     def test_release_packages_are_gated_by_platform_tests(self):
         workflow_path = ROOT / ".github" / "workflows" / "ci.yml"

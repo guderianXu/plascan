@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import unittest
 
@@ -21,9 +22,18 @@ class BaCudaContractsTest(unittest.TestCase):
         self.assertIn("manifestFeaturesValue", script)
         self.assertIn("VCPKG_MANIFEST_FEATURES=$manifestFeaturesValue", script)
 
-        manifest = read_text("vcpkg.json")
-        self.assertIn('"lapack"', manifest)
-        self.assertIn('"suitesparse"', manifest)
+        manifest = json.loads(read_text("vcpkg.json"))
+        self.assertIn("ceres-suitesparse", manifest["default-features"])
+        suitesparse_dependencies = manifest["features"]["ceres-suitesparse"][
+            "dependencies"
+        ]
+        self.assertTrue(
+            any(
+                dependency.get("name") == "ceres"
+                and "suitesparse" in dependency.get("features", [])
+                for dependency in suitesparse_dependencies
+            )
+        )
 
     def test_aerial_triangulation_cuda_requests_auto_ba_with_cuda_thresholds(self):
         source = read_text(

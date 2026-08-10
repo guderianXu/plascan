@@ -4,6 +4,11 @@
   "version-string": "1.1.7",
   "builtin-baseline": "3c5d90a305ff00ca841f085a74a7ce74ee777dee",
   "dependencies": [
+    "apriltag",
+    {
+      "name": "ceres",
+      "default-features": false
+    },
     {
       "name": "gdal",
       "default-features": false,
@@ -14,17 +19,8 @@
         "zstd"
       ]
     },
-    {
-      "name": "ceres",
-      "features": [
-        "lapack",
-        "suitesparse"
-      ]
-    },
-    "apriltag",
     "gtest",
     "libzip",
-    "openmesh",
     "opencl",
     {
       "name": "opencv",
@@ -42,6 +38,7 @@
         "tiff"
       ]
     },
+    "openmesh",
     {
       "name": "qtbase",
       "default-features": false,
@@ -73,8 +70,11 @@
       "platform": "linux"
     },
     "qtshadertools",
-    "vulkan",
-    "tiff"
+    "tiff",
+    "vulkan"
+  ],
+  "default-features": [
+    "ceres-suitesparse"
   ],
   "features": {
     "ceres-cuda": {
@@ -82,8 +82,22 @@
       "dependencies": [
         {
           "name": "ceres",
+          "default-features": false,
           "features": [
             "cuda"
+          ]
+        }
+      ]
+    },
+    "ceres-suitesparse": {
+      "description": "Enable Ceres SuiteSparse and LAPACK linear algebra in production builds.",
+      "dependencies": [
+        {
+          "name": "ceres",
+          "default-features": false,
+          "features": [
+            "lapack",
+            "suitesparse"
           ]
         }
       ]
