@@ -364,7 +364,7 @@ core/
 │   ├── MeshAcquisitionGapReport.h/cpp # 开放边根因、12×3 表面方位、逐帧来源覆盖与补拍/重算建议 JSON
 │   ├── MeshIsotropicRemesher.h/cpp # 内部高长宽比区域的短边合并、长边拆分与拓扑/法向保护
 │   ├── IsoSurfaceTopology.h/cpp # 等值面共享边/共享面键、渐近判别和歧义统计
-│   ├── ConsistentIsoSurfaceExtractor.h/cpp # 项目自有共享顶点一致等值面实验提取器
+│   ├── ConsistentIsoSurfaceExtractor.h/cpp # 默认共享网格边顶点的一致等值面提取器；避免组件过滤误删三角面
 │   ├── Mc33IsoSurfaceExtractor.h/cpp # 可选 MC33 拓扑无歧义等值面适配器
 │   ├── DepthMapMeshBuilder.h/cpp # 深度帧 manifest/相机产物加载；缺最终层时按清单安全回退最高可用金字塔层
 │   ├── DepthFusionFramePolicy.h/cpp # 环拍视角覆盖度量及防连续视角缺口的帧准入策略

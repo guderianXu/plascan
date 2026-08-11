@@ -1220,6 +1220,10 @@ public:
                                       int resolution,
                                       bool includeColor,
                                       int nestedResolution = 0);
+    static bool isCatastrophicComponentFilterLoss(
+        int inputFaceCount,
+        int outputFaceCount,
+        int minimumComponentFaces);
     static DepthTsdfResult validateAllocation(const std::array<float, 3> &boundsMin,
                                               const std::array<float, 3> &boundsMax,
                                               const DepthTsdfOptions &options);

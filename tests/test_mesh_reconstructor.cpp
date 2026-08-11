@@ -457,6 +457,23 @@ TEST(DepthTsdfSurfaceBuilderTest, UsesLargestComponentRelativeCleanupByDefault)
     EXPECT_FLOAT_EQ(options.openMeshSmoothingFeatureAngleDegrees, 120.0f);
 }
 
+TEST(DepthTsdfSurfaceBuilderTest,
+     RejectsOnlyCatastrophicComponentFilterLoss)
+{
+    EXPECT_TRUE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::
+            isCatastrophicComponentFilterLoss(215918, 1, 64));
+    EXPECT_FALSE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::
+            isCatastrophicComponentFilterLoss(215918, 1000, 64));
+    EXPECT_FALSE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::
+            isCatastrophicComponentFilterLoss(100, 1, 64));
+    EXPECT_FALSE(
+        xjw::mesh::DepthTsdfSurfaceBuilder::
+            isCatastrophicComponentFilterLoss(10000, 100, 64));
+}
+
 TEST(DepthTsdfSurfaceBuilderTest, SubpixelSamplingInterpolatesOnlyOneDepthSurface)
 {
     const cv::Mat depth = (cv::Mat_<float>(2, 2) << 2.00f, 2.02f,
@@ -6576,6 +6593,38 @@ TEST(MeshPostprocessTest, WeldsCoincidentVerticesBeforeComponentFiltering)
     EXPECT_EQ(mesh.faceCount(), 2);
 }
 
+TEST(MeshPostprocessTest,
+     AbsoluteToleranceWeldsLargeOffsetMarchingCubesVertices)
+{
+    xjw::mesh::TriMesh mesh;
+    mesh.vertices.resize(6);
+    mesh.vertices[0].x = 5.0f;
+    mesh.vertices[0].y = 0.0f;
+    mesh.vertices[1].x = 5.001f;
+    mesh.vertices[1].y = 0.0f;
+    mesh.vertices[2].x = 5.0f;
+    mesh.vertices[2].y = 0.001f;
+    mesh.vertices[3].x = std::nextafter(5.001f, 6.0f);
+    mesh.vertices[3].y = 0.0f;
+    mesh.vertices[4].x = 5.001f;
+    mesh.vertices[4].y = 0.001f;
+    mesh.vertices[5].x = std::nextafter(5.0f, 6.0f);
+    mesh.vertices[5].y = 0.001f;
+    mesh.faces = {
+        xjw::mesh::Triangle{{0, 1, 2}},
+        xjw::mesh::Triangle{{3, 4, 5}},
+    };
+
+    xjw::mesh::detail::weldCoincidentVertices(
+        &mesh,
+        1.0e-6f,
+        2.0e-6f);
+    xjw::mesh::detail::removeSmallConnectedComponents(&mesh, 2);
+
+    EXPECT_EQ(mesh.vertexCount(), 4);
+    EXPECT_EQ(mesh.faceCount(), 2);
+}
+
 TEST(MeshReconstructorTest, WeldedPoissonMeshSurvivesOversizedComponentThreshold)
 {
     namespace fs = std::filesystem;
@@ -6821,6 +6870,28 @@ TEST(MeshWorkflowSettingsTest, DepthMapsDefaultToDepthTsdf)
 
     EXPECT_EQ(xjw::mesh::workflow::depthReconstructionModeFromSettings(settings),
               QStringLiteral("depth_tsdf"));
+}
+
+TEST(MeshWorkflowSettingsTest,
+     DepthTsdfDefaultsToSharedVertexIsoSurfaceExtraction)
+{
+    const QJsonObject settings{
+        {QStringLiteral("tsdfOpenMeshSimplification"), false}};
+    const auto defaults =
+        xjw::mesh::workflow::depthTsdfOptionsFromSettings(settings, 320);
+
+    EXPECT_TRUE(defaults.enableConsistentIsoSurfaceExtraction);
+    EXPECT_FALSE(defaults.enableMc33IsoSurfaceExtraction);
+
+    QJsonObject explicit_fallback = settings;
+    explicit_fallback[QStringLiteral("tsdfConsistentIsoSurfaceExtraction")] =
+        false;
+    const auto fallback =
+        xjw::mesh::workflow::depthTsdfOptionsFromSettings(
+            explicit_fallback,
+            320);
+    EXPECT_FALSE(fallback.enableConsistentIsoSurfaceExtraction);
+    EXPECT_FALSE(fallback.enableMc33IsoSurfaceExtraction);
 }
 
 TEST(MeshWorkflowSettingsTest,

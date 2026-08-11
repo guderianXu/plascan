@@ -1442,12 +1442,18 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
                                    options.measuredSupportMaximumSingleVoteAbsoluteTsdf)),
         0.0f,
         1.0f);
-    options.enableConsistentIsoSurfaceExtraction = settings.value(
-        QStringLiteral("tsdfConsistentIsoSurfaceExtraction")).toBool(false);
+    const bool consistent_extraction_explicitly_enabled =
+        settings.contains(QStringLiteral("tsdfConsistentIsoSurfaceExtraction")) &&
+        settings.value(QStringLiteral("tsdfConsistentIsoSurfaceExtraction"))
+            .toBool(false);
     options.enableMc33IsoSurfaceExtraction = settings.value(
         QStringLiteral("tsdfMc33IsoSurfaceExtraction")).toBool(
             options.enableOpenMeshSimplification &&
+            !consistent_extraction_explicitly_enabled &&
             Mc33IsoSurfaceExtractor::isAvailable());
+    options.enableConsistentIsoSurfaceExtraction = settings.value(
+        QStringLiteral("tsdfConsistentIsoSurfaceExtraction"))
+        .toBool(!options.enableMc33IsoSurfaceExtraction);
     options.mc33RequireSupportedSignChange = settings.value(
         QStringLiteral("tsdfMc33RequireSupportedSignChange")).toBool(true);
     options.enableGeometryZeroCrossingRecovery = settings.value(

@@ -1047,7 +1047,7 @@ void CameraSceneWidget::loadPointCloudFromXyzInternal(const QString &xyzPath,
 // 从 PLY 文件异步加载网格模型或点云。
 void CameraSceneWidget::loadModelFromPly(const QString &plyPath)
 {
-    loadModelFromPlyInternal(plyPath, false, false, false);
+    loadModelFromPlyInternal(plyPath, false, true, false);
 }
 
 void CameraSceneWidget::loadPointCloudFromPly(const QString &plyPath)
@@ -1070,7 +1070,7 @@ void CameraSceneWidget::loadModelFromPlyInternal(const QString &plyPath,
 
 void CameraSceneWidget::loadModelFromObj(const QString &objPath)
 {
-    loadModelFromObjInternal(objPath, false, false, false);
+    loadModelFromObjInternal(objPath, false, true, false);
 }
 
 void CameraSceneWidget::loadPointCloudFromObj(const QString &objPath)

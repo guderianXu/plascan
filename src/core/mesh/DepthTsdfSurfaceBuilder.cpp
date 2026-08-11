@@ -1956,6 +1956,20 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::validateAllocation(
     return result;
 }
 
+bool DepthTsdfSurfaceBuilder::isCatastrophicComponentFilterLoss(
+    int inputFaceCount,
+    int outputFaceCount,
+    int minimumComponentFaces)
+{
+    const int minimum_viable_component_faces = std::clamp(
+        minimumComponentFaces,
+        2,
+        64);
+    return inputFaceCount >= 256 &&
+        outputFaceCount < minimum_viable_component_faces &&
+        static_cast<std::int64_t>(outputFaceCount) * 1000 < inputFaceCount;
+}
+
 DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
     const QVector<DepthFrameArtifact> &artifacts,
     int requestedWorkerCount)
@@ -7957,7 +7971,21 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         !options.enableConsistentIsoSurfaceExtraction &&
         !options.enableMc33IsoSurfaceExtraction)
     {
-        detail::weldCoincidentVertices(&result.mesh, 1.0e-6f);
+        const float maximum_voxel_size = std::max(
+            {result.layout.voxelSize[0],
+             result.layout.voxelSize[1],
+             result.layout.voxelSize[2]});
+        detail::weldCoincidentVertices(
+            &result.mesh,
+            1.0e-6f,
+            maximum_voxel_size * 2.0e-3f);
+        const int faces_before_post_weld_cleanup = result.mesh.faceCount();
+        detail::removeDegenerateFaces(
+            &result.mesh,
+            minimum_degenerate_face_area);
+        result.statistics.initialDegenerateRemovedFaceCount += std::max(
+            0,
+            faces_before_post_weld_cleanup - result.mesh.faceCount());
     }
     const int faces_before_component_filter = result.mesh.faceCount();
     reportProgress(
@@ -7972,6 +8000,20 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         0,
         faces_before_component_filter - result.mesh.faceCount());
     result.statistics.componentFilteredFaceCount = result.mesh.faceCount();
+    const bool catastrophic_component_loss =
+        isCatastrophicComponentFilterLoss(
+            faces_before_component_filter,
+            result.mesh.faceCount(),
+            options.minimumComponentFaces);
+    if (catastrophic_component_loss)
+    {
+        result.errorMessage = QStringLiteral(
+            "TSDF 网格连通性异常：组件过滤前 %1 面，过滤后仅 %2 面。"
+            "这通常表示等值面顶点未正确共享或焊接，已停止保存退化模型。")
+            .arg(faces_before_component_filter)
+            .arg(result.mesh.faceCount());
+        return result;
+    }
     reportProgress(
         QStringLiteral("正在统计清理后边界（%1 面）...")
             .arg(result.mesh.faceCount()),
@@ -9395,9 +9437,12 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
     result.statistics.postSimplificationFaceCount = result.mesh.faceCount();
     reportProgress(QStringLiteral("网格简化完成，正在重算法线..."), 93);
     detail::recomputeNormals(&result.mesh);
-    if (result.mesh.empty())
+    if (result.mesh.empty() || result.mesh.faceCount() < 2)
     {
-        result.errorMessage = QStringLiteral("TSDF cleanup removed all mesh components");
+        result.errorMessage = QStringLiteral(
+            "TSDF cleanup produced an unusable mesh (%1 vertices, %2 faces)")
+            .arg(result.mesh.vertexCount())
+            .arg(result.mesh.faceCount());
         return result;
     }
     if (postprocessCancelled())

@@ -295,9 +295,12 @@ void keepLargestConnectedComponent(TriMesh *mesh)
 
 } // namespace
 
-void weldCoincidentVertices(TriMesh *mesh, float relativeTolerance)
+void weldCoincidentVertices(TriMesh *mesh,
+                            float relativeTolerance,
+                            float absoluteTolerance)
 {
-    if (!mesh || mesh->vertices.empty() || relativeTolerance <= 0.0f)
+    if (!mesh || mesh->vertices.empty() ||
+        (relativeTolerance <= 0.0f && absoluteTolerance <= 0.0f))
     {
         return;
     }
@@ -323,7 +326,10 @@ void weldCoincidentVertices(TriMesh *mesh, float relativeTolerance)
     }
 
     const float span = std::max({max_x - min_x, max_y - min_y, max_z - min_z, 1.0e-6f});
-    const float tolerance = std::max(span * relativeTolerance, 1.0e-8f);
+    const float tolerance = std::max(
+        {span * std::max(0.0f, relativeTolerance),
+         std::max(0.0f, absoluteTolerance),
+         1.0e-8f});
     const float tolerance_squared = tolerance * tolerance;
 
     std::unordered_map<VertexCell, std::vector<int>, VertexCellHash> cells;

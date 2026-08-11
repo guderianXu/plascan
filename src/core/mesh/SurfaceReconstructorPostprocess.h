@@ -21,7 +21,9 @@ void simplifyVoxelMeshAdaptive(TriMesh *mesh,
                                float maximumNormalClusterAngleDegrees = 180.0f,
                                const std::vector<std::uint8_t> *
                                    protectedBoundaryVertices = nullptr);
-void weldCoincidentVertices(TriMesh *mesh, float relativeTolerance);
+void weldCoincidentVertices(TriMesh *mesh,
+                            float relativeTolerance,
+                            float absoluteTolerance = 0.0f);
 void removeDegenerateFaces(TriMesh *mesh, float minimumArea = 5.0e-9f);
 int compactReferencedVertices(TriMesh *mesh);
 void removeSmallConnectedComponents(TriMesh *mesh,

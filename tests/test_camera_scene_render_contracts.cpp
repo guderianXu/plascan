@@ -493,6 +493,38 @@ TEST(CameraSceneRenderContractTest, SceneLoadsAreSingleFlightAndLatestOnly)
         "self->pumpTiePointMetadataLoad()")));
 }
 
+TEST(CameraSceneRenderContractTest, ModelLoadsFitTheViewToGeometry)
+{
+    const QString source =
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
+    const qsizetype ply_start = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::loadModelFromPly("));
+    const qsizetype point_cloud_start = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::loadPointCloudFromPly("),
+        ply_start);
+    const qsizetype obj_start = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::loadModelFromObj("),
+        point_cloud_start);
+    const qsizetype obj_point_cloud_start = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::loadPointCloudFromObj("),
+        obj_start);
+    ASSERT_GE(ply_start, 0);
+    ASSERT_GT(point_cloud_start, ply_start);
+    ASSERT_GT(obj_start, point_cloud_start);
+    ASSERT_GT(obj_point_cloud_start, obj_start);
+
+    const QString ply_block = source.mid(
+        ply_start,
+        point_cloud_start - ply_start);
+    const QString obj_block = source.mid(
+        obj_start,
+        obj_point_cloud_start - obj_start);
+    EXPECT_TRUE(ply_block.contains(QStringLiteral(
+        "loadModelFromPlyInternal(plyPath, false, true, false)")));
+    EXPECT_TRUE(obj_block.contains(QStringLiteral(
+        "loadModelFromObjInternal(objPath, false, true, false)")));
+}
+
 TEST(CameraSceneRenderContractTest, ResourceUpdateBatchRollsBackUntilSubmitted)
 {
     const QString header =
