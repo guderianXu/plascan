@@ -67,6 +67,10 @@ struct FaceAssignment
     bool optimized = false;
 };
 
+bool passesUnaryQualityFloor(const FaceAssignment &assignment,
+                             const FaceCandidate &candidate,
+                             float replacement_ratio);
+
 struct TextureChart
 {
     int index = -1;
@@ -74,6 +78,7 @@ struct TextureChart
     QVector<int> faces;
     QRect sourceBounds;
     QRect atlasBounds;
+    QRect atlasContentBounds;
     float atlasScale = 1.0f;
 };
 

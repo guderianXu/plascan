@@ -58,6 +58,7 @@ add_library(meshing STATIC
     TextureSourcePreprocessor.cpp
     TextureVisibilityEvaluator.cpp
     TextureChartBuilder.cpp
+    TextureAtlasSampling.cpp
     TextureAtlasBaker.cpp
     ModelOutputPolicy.cpp
     ModelWorkflowService.cpp

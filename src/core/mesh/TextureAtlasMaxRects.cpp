@@ -237,10 +237,10 @@ TextureAtlasTryPackStatus tryPackMaxRects(
     std::uint64_t operations = 0;
     for (TextureAtlasItem &item : ordered)
     {
-        const int width = std::max(1, static_cast<int>(
-            std::ceil(static_cast<double>(item.requestedSize.width()) * scale)));
-        const int height = std::max(1, static_cast<int>(
-            std::ceil(static_cast<double>(item.requestedSize.height()) * scale)));
+        const int width = scaledAtlasItemDimension(
+            item.requestedSize.width(), item.fixedPadding, scale);
+        const int height = scaledAtlasItemDimension(
+            item.requestedSize.height(), item.fixedPadding, scale);
         Placement best;
         for (int index = 0; index < free_rectangles.size(); ++index)
         {

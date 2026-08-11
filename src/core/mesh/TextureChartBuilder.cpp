@@ -19,7 +19,6 @@ bool cancelled(const TextureMappingConfig &config)
 bool projectedBounds(const PreparedView &view,
                      const QVector<FaceGeometry> &geometry,
                      const QVector<int> &faces,
-                     int padding,
                      QRect *bounds)
 {
     double minimum_x = view.colorBgr.cols;
@@ -45,19 +44,19 @@ bool projectedBounds(const PreparedView &view,
     }
 
     const int left = std::clamp(
-        static_cast<int>(std::floor(minimum_x)) - padding,
+        static_cast<int>(std::floor(minimum_x)),
         0,
         view.colorBgr.cols - 1);
     const int top = std::clamp(
-        static_cast<int>(std::floor(minimum_y)) - padding,
+        static_cast<int>(std::floor(minimum_y)),
         0,
         view.colorBgr.rows - 1);
     const int right = std::clamp(
-        static_cast<int>(std::ceil(maximum_x)) + padding,
+        static_cast<int>(std::ceil(maximum_x)),
         0,
         view.colorBgr.cols - 1);
     const int bottom = std::clamp(
-        static_cast<int>(std::ceil(maximum_y)) + padding,
+        static_cast<int>(std::ceil(maximum_y)),
         0,
         view.colorBgr.rows - 1);
     *bounds = QRect(QPoint(left, top), QPoint(right, bottom));
@@ -149,7 +148,6 @@ bool buildAndPackCharts(const TextureMappingConfig &config,
         if (!projectedBounds(data->views[chart.primaryView],
                              data->geometry,
                              chart.faces,
-                             padding,
                              &chart.sourceBounds))
         {
             if (errorMsg)
@@ -173,7 +171,8 @@ bool buildAndPackCharts(const TextureMappingConfig &config,
     items.reserve(data->charts.size());
     for (const TextureChart &chart : data->charts)
     {
-        items.push_back({chart.index, chart.sourceBounds.size(), QRect()});
+        items.push_back(
+            {chart.index, chart.sourceBounds.size(), QRect(), padding});
     }
     const int atlas_size = std::clamp(config.textureSize, 1024, 16384);
     const int fallback_width = std::clamp(padding * 2 + 2, 8, 130);
@@ -218,11 +217,12 @@ bool buildAndPackCharts(const TextureMappingConfig &config,
     {
         TextureChart &chart = data->charts[item.id];
         chart.atlasBounds = item.packedRect;
-        chart.atlasScale = std::min(
-            static_cast<float>(item.packedRect.width()) /
-                std::max(chart.sourceBounds.width(), 1),
-            static_cast<float>(item.packedRect.height()) /
-                std::max(chart.sourceBounds.height(), 1));
+        chart.atlasContentBounds = QRect(
+            item.packedRect.x() + padding,
+            item.packedRect.y() + padding,
+            item.packedRect.width() - padding * 2,
+            item.packedRect.height() - padding * 2);
+        chart.atlasScale = packing.scale;
     }
 
     QVector<float> densities;

@@ -2,7 +2,7 @@
 
 更新日期：2026-08-11
 
-状态：阶段 1 核心实现完成；仓库级门禁待清除无关 GUI 阻塞
+状态：阶段 1 完成；阶段 4 第一批质量修复完成，仓库级门禁待清除并行改动阻塞
 
 实施对象：`camera_projected_atlas_v4`
 
@@ -141,6 +141,22 @@ required checks 验证，不能把单平台结果表述为双平台已通过。
   `CameraModel3DDialogTest.ObjLoadingShowsSingleFlightProgressOverlay`，来自并行进行的 OBJ GUI 改动，
   与纹理模块无依赖关系。完整 GUI 重链接还被正在运行的 `plascan.exe` 锁定；在两项外部状态清除前
   不推送本阶段提交。
+
+### 2026-08-11 阶段 4 第一批质量实施记录
+
+- 烘焙阶段新增逐纹素深度、置信度、支持掩膜和双线性有效采样足迹复核；明确深度冲突继续拒绝，
+  局部深度缺失时仅允许已经通过严格面级证据的主视图做低权重最终回退，避免把遮挡颜色带回图集，
+  同时防止稀疏深度空洞形成大片黑纹素。
+- Natural 融合改为真实观测颜色的加权 medoid 与 Cauchy 鲁棒权重；离群过滤始终保留 medoid，
+  不再用逐通道中值构造输入中不存在的颜色。WeightedAverage 保持普通加权均值语义。
+- 严格执行 `maximumBlendedViews`，并将 ICM 与小岛合并的替换质量下限固定到初始最优 unary score，
+  防止多轮优化按已降低的 `primaryScore` 继续级联降质。
+- UV 统一按 `atlasSize` 归一化以匹配硬件 texel-center 采样；chart 的 source 紧致区域与最终 atlas
+  固定像素 padding 分离，缩小 chart 时不再把隔离边距一并压缩。
+- 边缘挤出无论小孔填充开关均会执行，并和锐化一起限制在各自 chart ROI 内，避免相邻 chart 串色、
+  黑边和跨 chart 高通污染。
+- MSVC 构建 `test_mesh_reconstructor` 通过；`TextureMapperTest.*` 为 27/27 通过，完整测试程序为
+  324 通过、5 项按缺少 MC33 依赖预期跳过；纹理/网格相关 CTest 为 54/54 通过。
 
 ## 推荐提交顺序
 

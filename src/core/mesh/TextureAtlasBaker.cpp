@@ -1,5 +1,7 @@
 #include "TextureMappingV4Internal.h"
 
+#include "TextureAtlasSampling.h"
+
 #include "io/PathIO.h"
 
 #include <plapoint/io/obj_io.h>
@@ -27,31 +29,9 @@ namespace xjw::mesh::texture_v4
 namespace
 {
 
-struct WeightedColor
-{
-    cv::Vec3f color{};
-    float weight = 0.0f;
-};
-
 bool cancelled(const TextureMappingConfig &config)
 {
     return config.isCancelled && config.isCancelled();
-}
-
-cv::Vec3f bilinearColor(const cv::Mat &image, double x, double y)
-{
-    const int left = std::clamp(static_cast<int>(std::floor(x)), 0, image.cols - 1);
-    const int top = std::clamp(static_cast<int>(std::floor(y)), 0, image.rows - 1);
-    const int right = std::min(left + 1, image.cols - 1);
-    const int bottom = std::min(top + 1, image.rows - 1);
-    const float fx = static_cast<float>(x - left);
-    const float fy = static_cast<float>(y - top);
-    const cv::Vec3f first = image.at<cv::Vec3b>(top, left);
-    const cv::Vec3f second = image.at<cv::Vec3b>(top, right);
-    const cv::Vec3f third = image.at<cv::Vec3b>(bottom, left);
-    const cv::Vec3f fourth = image.at<cv::Vec3b>(bottom, right);
-    return (first * (1.0f - fx) + second * fx) * (1.0f - fy) +
-           (third * (1.0f - fx) + fourth * fx) * fy;
 }
 
 float colorDistance(const cv::Vec3f &left, const cv::Vec3f &right)
@@ -60,57 +40,17 @@ float colorDistance(const cv::Vec3f &left, const cv::Vec3f &right)
     return std::sqrt(difference.dot(difference));
 }
 
-cv::Vec3f medianColor(const std::vector<WeightedColor> &samples)
+const FaceCandidate *candidateForView(const FaceAssignment &assignment,
+                                      int viewIndex)
 {
-    cv::Vec3f median;
-    for (int channel = 0; channel < 3; ++channel)
-    {
-        std::vector<float> values;
-        values.reserve(samples.size());
-        for (const WeightedColor &sample : samples)
+    const auto candidate = std::find_if(
+        assignment.candidates.begin(),
+        assignment.candidates.end(),
+        [viewIndex](const FaceCandidate &value)
         {
-            values.push_back(sample.color[channel]);
-        }
-        std::sort(values.begin(), values.end());
-        median[channel] = values[values.size() / 2];
-    }
-    return median;
-}
-
-bool sampleView(const PreparedView &view,
-                const std::array<double, 3> &world,
-                float candidate_score,
-                int padding,
-                WeightedColor *sample)
-{
-    double pixel[2]{};
-    double depth = 0.0;
-    if (!view.colorCamera.projectWorldPointWithDepth(
-            world.data(), pixel, depth) ||
-        pixel[0] < 0.0 || pixel[1] < 0.0 ||
-        pixel[0] > view.colorBgr.cols - 1.0 ||
-        pixel[1] > view.colorBgr.rows - 1.0)
-    {
-        return false;
-    }
-    const int column = static_cast<int>(std::lround(pixel[0]));
-    const int row = static_cast<int>(std::lround(pixel[1]));
-    const float support_distance =
-        view.supportDistance.at<float>(
-            std::clamp(row, 0, view.supportDistance.rows - 1),
-            std::clamp(column, 0, view.supportDistance.cols - 1));
-    if (support_distance <= 0.0f)
-    {
-        return false;
-    }
-    sample->color = bilinearColor(view.colorBgr, pixel[0], pixel[1]) *
-        view.exposureGain;
-    const float border_weight = std::clamp(
-        support_distance / std::max(static_cast<float>(padding), 1.0f),
-        0.10f,
-        1.0f);
-    sample->weight = std::max(candidate_score, 1.0e-8f) * border_weight;
-    return true;
+            return value.viewIndex == viewIndex;
+        });
+    return candidate == assignment.candidates.end() ? nullptr : &*candidate;
 }
 
 bool barycentric(double x,
@@ -142,53 +82,6 @@ bool barycentric(double x,
            (*weights)[2] >= tolerance;
 }
 
-cv::Vec3b blendSamples(std::vector<WeightedColor> samples,
-                       const TextureMappingConfig &config,
-                       TextureMappingResult *result)
-{
-    if (samples.empty())
-    {
-        return {};
-    }
-    if (config.blendMode == TextureBlendMode::BestView)
-    {
-        samples.resize(1);
-    }
-    else if (config.enableGhostFilter && samples.size() >= 3)
-    {
-        const cv::Vec3f median = medianColor(samples);
-        samples.erase(
-            std::remove_if(samples.begin(), samples.end(), [&](const auto &sample)
-            {
-                if (colorDistance(sample.color, median) <=
-                    config.ghostColorThreshold)
-                {
-                    return false;
-                }
-                ++result->rejectedColorOutlierCount;
-                return true;
-            }),
-            samples.end());
-    }
-    if (samples.empty())
-    {
-        return {};
-    }
-
-    cv::Vec3f color{};
-    float total_weight = 0.0f;
-    for (const WeightedColor &sample : samples)
-    {
-        color += sample.color * sample.weight;
-        total_weight += sample.weight;
-    }
-    color *= 1.0f / std::max(total_weight, 1.0e-8f);
-    return cv::Vec3b(
-        cv::saturate_cast<std::uint8_t>(color[0]),
-        cv::saturate_cast<std::uint8_t>(color[1]),
-        cv::saturate_cast<std::uint8_t>(color[2]));
-}
-
 cv::Vec3b fallbackColor(const PlaPointCloud &mesh)
 {
     if (!mesh.hasColors() || !mesh.colors() || mesh.colors()->rows() == 0)
@@ -211,21 +104,33 @@ cv::Vec3b fallbackColor(const PlaPointCloud &mesh)
         static_cast<std::uint8_t>(red / count));
 }
 
-void expandPadding(cv::Mat *atlas, cv::Mat *mask, int padding)
+void expandPadding(cv::Mat *atlas,
+                   cv::Mat *mask,
+                   const QRect &bounds,
+                   int padding)
 {
-    if (padding <= 0)
+    cv::Rect roi(
+        bounds.x(), bounds.y(), bounds.width(), bounds.height());
+    roi &= cv::Rect(0, 0, atlas->cols, atlas->rows);
+    if (padding <= 0 || roi.empty())
+    {
+        return;
+    }
+    cv::Mat atlas_roi = (*atlas)(roi);
+    cv::Mat mask_roi = (*mask)(roi);
+    if (cv::countNonZero(mask_roi) == 0)
     {
         return;
     }
     cv::Mat expanded_mask;
     const int kernel_size = padding * 2 + 1;
-    cv::dilate(*mask,
+    cv::dilate(mask_roi,
                expanded_mask,
                cv::getStructuringElement(
                    cv::MORPH_ELLIPSE, cv::Size(kernel_size, kernel_size)));
 
-    cv::Mat distance_source(mask->size(), CV_8UC1, cv::Scalar(255));
-    distance_source.setTo(0, *mask);
+    cv::Mat distance_source(mask_roi.size(), CV_8UC1, cv::Scalar(255));
+    distance_source.setTo(0, mask_roi);
     cv::Mat distance;
     cv::Mat labels;
     cv::distanceTransform(
@@ -240,44 +145,58 @@ void expandPadding(cv::Mat *atlas, cv::Mat *mask, int padding)
     cv::minMaxLoc(labels, nullptr, &maximum_label_value);
     const int maximum_label = static_cast<int>(maximum_label_value);
     std::vector<cv::Vec3b> colors(static_cast<std::size_t>(maximum_label + 1));
-    for (int row = 0; row < mask->rows; ++row)
+    for (int row = 0; row < mask_roi.rows; ++row)
     {
-        for (int column = 0; column < mask->cols; ++column)
+        for (int column = 0; column < mask_roi.cols; ++column)
         {
-            if (mask->at<std::uint8_t>(row, column) != 0)
+            if (mask_roi.at<std::uint8_t>(row, column) != 0)
             {
                 colors[labels.at<int>(row, column)] =
-                    atlas->at<cv::Vec3b>(row, column);
+                    atlas_roi.at<cv::Vec3b>(row, column);
             }
         }
     }
-    for (int row = 0; row < mask->rows; ++row)
+    for (int row = 0; row < mask_roi.rows; ++row)
     {
-        for (int column = 0; column < mask->cols; ++column)
+        for (int column = 0; column < mask_roi.cols; ++column)
         {
-            if (mask->at<std::uint8_t>(row, column) == 0 &&
+            if (mask_roi.at<std::uint8_t>(row, column) == 0 &&
                 expanded_mask.at<std::uint8_t>(row, column) != 0)
             {
-                atlas->at<cv::Vec3b>(row, column) =
+                atlas_roi.at<cv::Vec3b>(row, column) =
                     colors[labels.at<int>(row, column)];
             }
         }
     }
-    *mask = std::move(expanded_mask);
+    expanded_mask.copyTo(mask_roi);
 }
 
-void sharpenTexture(cv::Mat *atlas, const cv::Mat &mask, float strength)
+void sharpenTexture(cv::Mat *atlas,
+                    const cv::Mat &mask,
+                    const QRect &bounds,
+                    float strength)
 {
-    if (strength <= 0.0f)
+    cv::Rect roi(
+        bounds.x(), bounds.y(), bounds.width(), bounds.height());
+    roi &= cv::Rect(0, 0, atlas->cols, atlas->rows);
+    if (strength <= 0.0f || roi.empty())
     {
         return;
     }
+    cv::Mat atlas_roi = (*atlas)(roi);
+    const cv::Mat mask_roi = mask(roi);
     cv::Mat blurred;
-    cv::GaussianBlur(*atlas, blurred, cv::Size(), 1.0);
+    cv::GaussianBlur(
+        atlas_roi,
+        blurred,
+        cv::Size(),
+        1.0,
+        1.0,
+        cv::BORDER_REPLICATE | cv::BORDER_ISOLATED);
     cv::Mat sharpened;
     cv::addWeighted(
-        *atlas, 1.0 + strength, blurred, -strength, 0.0, sharpened);
-    sharpened.copyTo(*atlas, mask);
+        atlas_roi, 1.0 + strength, blurred, -strength, 0.0, sharpened);
+    sharpened.copyTo(atlas_roi, mask_roi);
 }
 
 bool writeMaterial(const QString &path)
@@ -361,7 +280,8 @@ bool commitFiles(
     return true;
 }
 
-double estimateSeamDifference(const PipelineData &data)
+double estimateSeamDifference(const PipelineData &data,
+                              const TextureMappingConfig &config)
 {
     double difference_sum = 0.0;
     int sample_count = 0;
@@ -381,10 +301,30 @@ double estimateSeamDifference(const PipelineData &data)
                 continue;
             }
             const auto &world = data.geometry[face_index].centroid;
+            const FaceCandidate *first_candidate = candidateForView(
+                data.assignments[face_index], view_index);
+            const FaceCandidate *second_candidate = candidateForView(
+                data.assignments[neighbor], neighbor_view);
+            if (!first_candidate || !second_candidate)
+            {
+                continue;
+            }
             WeightedColor first;
             WeightedColor second;
-            if (sampleView(data.views[view_index], world, 1.0f, 1, &first) &&
-                sampleView(data.views[neighbor_view], world, 1.0f, 1, &second))
+            if (sampleTextureView(data.views[view_index],
+                                  world,
+                                  *first_candidate,
+                                  config,
+                                  data.medianEdgeLength,
+                                  1,
+                                  &first) == TextureSampleStatus::Sampled &&
+                sampleTextureView(data.views[neighbor_view],
+                                  world,
+                                  *second_candidate,
+                                  config,
+                                  data.medianEdgeLength,
+                                  1,
+                                  &second) == TextureSampleStatus::Sampled)
             {
                 difference_sum += colorDistance(first.color, second.color);
                 ++sample_count;
@@ -421,10 +361,11 @@ bool bakeAndExport(const std::string &productsDir,
     plamatrix::DenseMatrix<int, plamatrix::Device::CPU> texture_indices(
         static_cast<plamatrix::Index>(face_count), 3);
     const float fallback_u =
-        (1.0f + fallback_size * 0.5f) / static_cast<float>(atlas_size - 1);
+        atlasCoordinateToNormalizedUv(
+            1.0 + fallback_size * 0.5, atlas_size);
     const float fallback_v =
-        1.0f - (1.0f + fallback_size * 0.5f) /
-            static_cast<float>(atlas_size - 1);
+        1.0f - atlasCoordinateToNormalizedUv(
+            1.0 + fallback_size * 0.5, atlas_size);
     std::vector<std::array<float, 2>> texture_coordinate_values{
         {fallback_u, fallback_v}
     };
@@ -470,9 +411,9 @@ bool bakeAndExport(const std::string &productsDir,
                     continue;
                 }
                 atlas_triangle[corner] = QPointF(
-                    chart.atlasBounds.x() +
+                    chart.atlasContentBounds.x() +
                         (pixel[0] - chart.sourceBounds.x()) * chart.atlasScale,
-                    chart.atlasBounds.y() +
+                    chart.atlasContentBounds.y() +
                         (pixel[1] - chart.sourceBounds.y()) * chart.atlasScale);
                 const std::uint64_t key =
                     (static_cast<std::uint64_t>(
@@ -491,16 +432,10 @@ bool bakeAndExport(const std::string &productsDir,
                     texture_index =
                         static_cast<int>(texture_coordinate_values.size());
                     texture_coordinate_values.push_back({
-                        std::clamp(
-                            static_cast<float>(atlas_triangle[corner].x()) /
-                                (atlas_size - 1),
-                            0.0f,
-                            1.0f),
-                        1.0f - std::clamp(
-                            static_cast<float>(atlas_triangle[corner].y()) /
-                                (atlas_size - 1),
-                            0.0f,
-                            1.0f)});
+                        atlasCoordinateToNormalizedUv(
+                            atlas_triangle[corner].x(), atlas_size),
+                        1.0f - atlasCoordinateToNormalizedUv(
+                            atlas_triangle[corner].y(), atlas_size)});
                     texture_index_by_chart_vertex.emplace(key, texture_index);
                 }
                 texture_indices.setValue(face_index, corner, texture_index);
@@ -557,16 +492,30 @@ bool bakeAndExport(const std::string &productsDir,
                         config.blendMode == TextureBlendMode::BestView
                         ? 1
                         : std::clamp(config.maximumBlendedViews, 1, 8);
+                    WeightedColor missing_primary_sample;
+                    bool has_missing_primary_sample = false;
                     auto append_sample = [&](const FaceCandidate &candidate)
                     {
                         WeightedColor sample;
-                        if (sampleView(data->views[candidate.viewIndex],
-                                       world,
-                                       candidate.score,
-                                       padding,
-                                       &sample))
+                        const TextureSampleStatus status = sampleTextureView(
+                            data->views[candidate.viewIndex],
+                            world,
+                            candidate,
+                            config,
+                            data->medianEdgeLength,
+                            padding,
+                            &sample);
+                        if (status == TextureSampleStatus::Sampled)
                         {
                             samples.push_back(sample);
+                        }
+                        else if (status ==
+                                     TextureSampleStatus::MissingDepthEvidence &&
+                                 candidate.strict &&
+                                 candidate.viewIndex == assignment.primaryView)
+                        {
+                            missing_primary_sample = sample;
+                            has_missing_primary_sample = true;
                         }
                     };
                     const auto primary_candidate = std::find_if(
@@ -582,22 +531,27 @@ bool bakeAndExport(const std::string &productsDir,
                     }
                     for (const FaceCandidate &candidate : assignment.candidates)
                     {
+                        if (static_cast<int>(samples.size()) >= maximum_samples)
+                        {
+                            break;
+                        }
                         if (candidate.viewIndex == assignment.primaryView)
                         {
                             continue;
                         }
                         append_sample(candidate);
-                        if (static_cast<int>(samples.size()) >= maximum_samples)
-                        {
-                            break;
-                        }
+                    }
+                    if (samples.empty() && has_missing_primary_sample)
+                    {
+                        samples.push_back(missing_primary_sample);
                     }
                     if (samples.empty())
                     {
                         continue;
                     }
                     atlas.at<cv::Vec3b>(row, column) =
-                        blendSamples(std::move(samples), config, result);
+                        blendTextureSamples(
+                            std::move(samples), config, result);
                     filled_mask.at<std::uint8_t>(row, column) = 255;
                 }
             }
@@ -611,16 +565,19 @@ bool bakeAndExport(const std::string &productsDir,
         }
     }
 
-    if (config.holeFillMode != TextureHoleFillMode::Disabled)
+    if (config.progressFn)
     {
-        if (config.progressFn)
-        {
-            config.progressFn("正在扩展纹理边界并填充小孔...", 88);
-        }
-        expandPadding(&atlas, &filled_mask, padding);
+        config.progressFn("正在扩展纹理块边界并执行局部锐化...", 88);
     }
-    sharpenTexture(
-        &atlas, filled_mask, std::clamp(config.sharpeningStrength, 0.0f, 2.0f));
+    for (const TextureChart &chart : data->charts)
+    {
+        expandPadding(&atlas, &filled_mask, chart.atlasBounds, padding);
+        sharpenTexture(
+            &atlas,
+            filled_mask,
+            chart.atlasBounds,
+            std::clamp(config.sharpeningStrength, 0.0f, 2.0f));
+    }
     plamatrix::DenseMatrix<float, plamatrix::Device::CPU> texture_coordinates(
         static_cast<plamatrix::Index>(texture_coordinate_values.size()), 2);
     for (std::size_t index = 0;
@@ -728,7 +685,7 @@ bool bakeAndExport(const std::string &productsDir,
     result->modelMtlPath = xjw::common::io::toUtf8Path(mtl_path);
     result->texturePngPath = xjw::common::io::toUtf8Path(texture_path);
     result->textureSize = atlas_size;
-    result->seamColorDifference = estimateSeamDifference(*data);
+    result->seamColorDifference = estimateSeamDifference(*data, config);
     if (config.progressFn)
     {
         config.progressFn("纹理模型生成完成", 100);

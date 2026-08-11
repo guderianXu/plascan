@@ -12,6 +12,19 @@
 
 namespace xjw::mesh::texture_v4
 {
+
+bool passesUnaryQualityFloor(const FaceAssignment &assignment,
+                             const FaceCandidate &candidate,
+                             float replacement_ratio)
+{
+    if (assignment.candidates.isEmpty())
+    {
+        return false;
+    }
+    return candidate.score >=
+        assignment.candidates.front().score * replacement_ratio;
+}
+
 namespace
 {
 
@@ -414,9 +427,10 @@ void mergeSmallLabelIslands(const TextureMappingConfig &config,
             const FaceAssignment &assignment = data->assignments[face_index];
             const FaceCandidate *candidate =
                 candidateForView(assignment, target_label);
-            if (!candidate ||
-                candidate->score < assignment.primaryScore *
-                    config.coherentReplacementRatio)
+            if (!candidate || !passesUnaryQualityFloor(
+                    assignment,
+                    *candidate,
+                    config.coherentReplacementRatio))
             {
                 can_merge = false;
                 break;
@@ -570,9 +584,10 @@ bool selectTextureViews(const TextureMappingConfig &config,
             for (const int label : labels)
             {
                 const FaceCandidate *candidate = candidateForView(assignment, label);
-                if (!candidate ||
-                    candidate->score < assignment.primaryScore *
-                        config.coherentReplacementRatio)
+                if (!candidate || !passesUnaryQualityFloor(
+                        assignment,
+                        *candidate,
+                        config.coherentReplacementRatio))
                 {
                     continue;
                 }

@@ -106,16 +106,21 @@ TextureAtlasTryPackStatus tryPackShelves(
             return TextureAtlasTryPackStatus::Cancelled;
         }
         TextureAtlasItem &item = ordered[item_index];
-        const int width = std::max(1, static_cast<int>(
-            std::ceil(static_cast<double>(item.requestedSize.width()) * scale)));
-        const int height = std::max(1, static_cast<int>(
-            std::ceil(static_cast<double>(item.requestedSize.height()) * scale)));
+        const int width = detail::scaledAtlasItemDimension(
+            item.requestedSize.width(), item.fixedPadding, scale);
+        const int height = detail::scaledAtlasItemDimension(
+            item.requestedSize.height(), item.fixedPadding, scale);
         if (width > available_width || height > atlas_size)
         {
             return TextureAtlasTryPackStatus::DoesNotFit;
         }
 
-        const auto best = shelves_by_remaining_width.lower_bound({width, -1});
+        auto best = shelves_by_remaining_width.lower_bound({width, -1});
+        while (best != shelves_by_remaining_width.end() &&
+               shelves[best->second].height < height)
+        {
+            ++best;
+        }
         int shelf_index = -1;
         if (best != shelves_by_remaining_width.end())
         {
@@ -210,27 +215,48 @@ TextureAtlasPackingResult TextureAtlasPacker::pack(
     }
 
     long double requested_area = 0.0L;
+    long double minimum_packed_area = 0.0L;
     double dimension_scale_bound = 1.0;
     const int available_width = atlasSize - reservedLeft;
     for (const TextureAtlasItem &item : items)
     {
-        if (item.id < 0 || item.requestedSize.isEmpty())
+        if (item.id < 0 || item.requestedSize.isEmpty() ||
+            item.fixedPadding < 0)
+        {
+            return result;
+        }
+        if (item.fixedPadding > (available_width - 1) / 2 ||
+            item.fixedPadding > (atlasSize - 1) / 2)
+        {
+            return result;
+        }
+        const int horizontal_content_space =
+            available_width - item.fixedPadding * 2;
+        const int vertical_content_space =
+            atlasSize - item.fixedPadding * 2;
+        if (horizontal_content_space < 1 || vertical_content_space < 1)
         {
             return result;
         }
         requested_area += static_cast<long double>(itemArea(item));
+        const long double minimum_width = 1.0L + item.fixedPadding * 2.0L;
+        minimum_packed_area += minimum_width * minimum_width;
         dimension_scale_bound = std::min(
             dimension_scale_bound,
-            static_cast<double>(available_width) /
+            static_cast<double>(horizontal_content_space) /
                 item.requestedSize.width());
         dimension_scale_bound = std::min(
             dimension_scale_bound,
-            static_cast<double>(atlasSize) /
+            static_cast<double>(vertical_content_space) /
                 item.requestedSize.height());
     }
     const qint64 available_area =
         static_cast<qint64>(atlasSize - reservedLeft) * atlasSize;
     if (static_cast<qint64>(items.size()) > available_area)
+    {
+        return result;
+    }
+    if (minimum_packed_area > static_cast<long double>(available_area))
     {
         return result;
     }
@@ -241,8 +267,8 @@ TextureAtlasPackingResult TextureAtlasPacker::pack(
         {1.0L,
          area_scale_bound,
          static_cast<long double>(dimension_scale_bound)}));
-    // At this scale every valid input dimension is rounded up to one pixel,
-    // so the shelf fallback always starts from a known feasible state.
+    // At this scale every content dimension is rounded up to one pixel.  The
+    // fixed atlas padding remains intact and can still make the set infeasible.
     float low = std::numeric_limits<float>::denorm_min();
     const QVector<TextureAtlasItem> shelf_ordered = orderForShelves(items);
     const bool use_max_rects =

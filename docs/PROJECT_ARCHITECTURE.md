@@ -347,7 +347,8 @@ core/
 │   ├── TextureChartBuilder.cpp # 按相机标签连通域构建投影 chart
 │   ├── TextureAtlasPacker.h/cpp # 自适应 MaxRects/shelf chart 图集调度与缩放搜索
 │   ├── TextureAtlasMaxRects.cpp # 有操作预算的确定性无旋转 MaxRects 实现
-│   ├── TextureAtlasBaker.cpp   # 多视图融合、鬼影过滤、填充、锐化及 OBJ/MTL/PNG 输出
+│   ├── TextureAtlasSampling.h/cpp # 逐纹素深度/掩膜复核、实样本 medoid 与 Natural 鲁棒融合
+│   ├── TextureAtlasBaker.cpp   # 图集光栅化、边界填充、锐化及 OBJ/MTL/PNG 输出
 │   ├── MeshColorizer.h/cpp     # 网格遮挡检查、鲁棒多视图顶点着色及孤立色斑清理
 │   ├── MeshFaceColorOptimizer.h/cpp # 实验性按面主视图投票与共享顶点一致着色
 │   ├── MeshQuadricSimplifier.h/cpp # 目标面数驱动、边界/锐边/翻转约束的 QEM 自适应简化

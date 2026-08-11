@@ -25,6 +25,7 @@
 #include "SparseTgvSolver.h"
 #include "TextureMapper.h"
 #include "TextureAtlasPacker.h"
+#include "TextureAtlasSampling.h"
 #include "VisualHullReconstructor.h"
 #include "VisualHullFieldEvaluator.h"
 #include "VisualHullDepthRefiner.h"
@@ -60,6 +61,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace xjw::core::project
@@ -123,6 +125,27 @@ xjw::mesh::MeshColorView makeTextureTestView(const cv::Scalar &color)
     view.depthValidMask = cv::Mat(36, 48, CV_8UC1, cv::Scalar(255));
     view.supportMask = cv::Mat(36, 48, CV_8UC1, cv::Scalar(255));
     return view;
+}
+
+bool textureAtlasContainsBluePatch(const std::string &path)
+{
+    const cv::Mat atlas = cv::imread(path, cv::IMREAD_COLOR);
+    if (atlas.empty())
+    {
+        return false;
+    }
+    for (int row = 0; row < atlas.rows; ++row)
+    {
+        for (int column = 0; column < atlas.cols; ++column)
+        {
+            const cv::Vec3b color = atlas.at<cv::Vec3b>(row, column);
+            if (color[0] > 220 && color[2] < 20)
+            {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 QVector<xjw::mesh::DepthTsdfFrame> makeSyntheticPlaneFrames(bool addRejections)
@@ -8465,6 +8488,28 @@ TEST(TextureMapperTest, AtlasPackerIsDeterministicAndAvoidsOverlap)
     }
 }
 
+TEST(TextureMapperTest, AtlasPackerKeepsPaddingInAtlasPixels)
+{
+    const QVector<xjw::mesh::TextureAtlasItem> items{
+        {0, QSize(100, 50), QRect(), 8}
+    };
+
+    const auto packed = xjw::mesh::TextureAtlasPacker::pack(items, 64, 0);
+
+    ASSERT_TRUE(packed.ok);
+    ASSERT_EQ(packed.items.size(), 1);
+    EXPECT_NEAR(packed.scale, 0.48f, 1.0e-4f);
+    EXPECT_EQ(packed.items.front().packedRect.size(), QSize(64, 40));
+    EXPECT_EQ(
+        packed.items.front().packedRect.width() -
+            static_cast<int>(std::ceil(100.0f * packed.scale)),
+        16);
+    EXPECT_EQ(
+        packed.items.front().packedRect.height() -
+            static_cast<int>(std::ceil(50.0f * packed.scale)),
+        16);
+}
+
 TEST(TextureMapperTest, AtlasPackerUsesFragmentedSpaceWithoutDownscaling)
 {
     const QVector<xjw::mesh::TextureAtlasItem> items{
@@ -8791,6 +8836,184 @@ TEST(TextureMapperTest, CameraAtlasUsesPerFaceProjectedUvWithoutPlanarOverlap)
     EXPECT_NE(obj_buffer.str().find("usemtl material0"), std::string::npos);
 }
 
+TEST(TextureMapperTest, CameraAtlasExtrudesEdgesWhenHoleFillIsDisabled)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() /
+        "plascan_texture_disabled_hole_fill_padding_test";
+    fs::remove_all(root);
+    fs::create_directories(root);
+    const fs::path mesh_path = writeTextureTestTriangle(root);
+    const auto view = makeTextureTestView(cv::Scalar(255, 255, 255));
+
+    xjw::mesh::TextureMappingConfig config;
+    config.textureSize = 1024;
+    config.imageDownscale = 1;
+    config.holeFillMode = xjw::mesh::TextureHoleFillMode::Disabled;
+    config.sharpeningStrength = 0.0f;
+    xjw::mesh::TextureMappingResult result;
+    std::string error;
+    ASSERT_TRUE(
+        xjw::mesh::TextureMapper::generateCameraTexturedModelFromMeshFile(
+            mesh_path.string(),
+            root.string(),
+            config,
+            QVector<xjw::mesh::MeshColorView>{view},
+            &result,
+            &error)) << error;
+
+    const cv::Mat atlas = cv::imread(result.texturePngPath, cv::IMREAD_COLOR);
+    ASSERT_FALSE(atlas.empty());
+    int white_texels = 0;
+    for (int row = 0; row < atlas.rows; ++row)
+    {
+        for (int column = 0; column < atlas.cols; ++column)
+        {
+            const cv::Vec3b color = atlas.at<cv::Vec3b>(row, column);
+            if (color[0] == 255 && color[1] == 255 && color[2] == 255)
+            {
+                ++white_texels;
+            }
+        }
+    }
+    EXPECT_GT(white_texels, 150);
+}
+
+TEST(TextureMapperTest, AtlasUvUsesHardwareTexelCenterConvention)
+{
+    EXPECT_FLOAT_EQ(
+        xjw::mesh::texture_v4::atlasCoordinateToNormalizedUv(900.5, 1024),
+        900.5f / 1024.0f);
+    EXPECT_FLOAT_EQ(
+        xjw::mesh::texture_v4::atlasCoordinateToNormalizedUv(1024.0, 1024),
+        1.0f);
+}
+
+TEST(TextureMapperTest, NaturalBlendKeepsAnObservedColorAsRobustCenter)
+{
+    using xjw::mesh::texture_v4::WeightedColor;
+    const std::vector<WeightedColor> samples{
+        {cv::Vec3f(255.0f, 0.0f, 0.0f), 1.0f},
+        {cv::Vec3f(0.0f, 255.0f, 0.0f), 1.0f},
+        {cv::Vec3f(0.0f, 0.0f, 255.0f), 1.0f}};
+    xjw::mesh::TextureMappingConfig config;
+    config.blendMode = xjw::mesh::TextureBlendMode::Natural;
+    config.enableGhostFilter = true;
+    config.ghostColorThreshold = 36.0f;
+    xjw::mesh::TextureMappingResult result;
+
+    const cv::Vec3b color =
+        xjw::mesh::texture_v4::blendTextureSamples(samples, config, &result);
+
+    EXPECT_EQ(color[0], 255);
+    EXPECT_EQ(color[1], 0);
+    EXPECT_EQ(color[2], 0);
+    EXPECT_EQ(result.rejectedColorOutlierCount, 2U);
+}
+
+TEST(TextureMapperTest, NaturalBlendDownweightsAConflictingSecondaryView)
+{
+    using xjw::mesh::texture_v4::WeightedColor;
+    const std::vector<WeightedColor> samples{
+        {cv::Vec3f(0.0f, 0.0f, 220.0f), 1.0f},
+        {cv::Vec3f(200.0f, 0.0f, 20.0f), 0.8f}};
+    xjw::mesh::TextureMappingConfig natural_config;
+    natural_config.blendMode = xjw::mesh::TextureBlendMode::Natural;
+    natural_config.enableGhostFilter = false;
+    xjw::mesh::TextureMappingConfig average_config = natural_config;
+    average_config.blendMode = xjw::mesh::TextureBlendMode::WeightedAverage;
+    xjw::mesh::TextureMappingResult result;
+
+    const cv::Vec3b natural = xjw::mesh::texture_v4::blendTextureSamples(
+        samples, natural_config, &result);
+    const cv::Vec3b average = xjw::mesh::texture_v4::blendTextureSamples(
+        samples, average_config, &result);
+
+    EXPECT_LT(natural[0], average[0]);
+    EXPECT_GT(natural[2], average[2]);
+}
+
+TEST(TextureMapperTest, PerTexelSamplingRechecksDepthAndBilinearSupport)
+{
+    using xjw::mesh::texture_v4::TextureSampleStatus;
+    auto source = makeTextureTestView(cv::Scalar(20, 40, 220));
+    xjw::mesh::texture_v4::PreparedView prepared;
+    prepared.evidenceCamera = source.camera;
+    prepared.colorCamera = source.camera;
+    prepared.colorBgr = source.colorBgr;
+    prepared.supportDistance = cv::Mat(
+        source.colorBgr.size(), CV_32FC1, cv::Scalar(10.0f));
+    prepared.depth = &source.depth;
+    prepared.confidence = &source.confidence;
+    prepared.depthValidMask = &source.depthValidMask;
+    prepared.supportMask = &source.supportMask;
+
+    xjw::mesh::texture_v4::FaceCandidate candidate;
+    candidate.viewIndex = 0;
+    candidate.score = 1.0f;
+    candidate.strict = true;
+    xjw::mesh::TextureMappingConfig config;
+    const std::array<double, 3> world{{0.01, 0.0, 2.0}};
+    xjw::mesh::texture_v4::WeightedColor sample;
+
+    EXPECT_EQ(xjw::mesh::texture_v4::sampleTextureView(
+                  prepared, world, candidate, config, 0.1, 8, &sample),
+              TextureSampleStatus::Sampled);
+
+    source.depth.at<float>(18, 24) = 1.0f;
+    EXPECT_EQ(xjw::mesh::texture_v4::sampleTextureView(
+                  prepared, world, candidate, config, 0.1, 8, &sample),
+              TextureSampleStatus::Rejected);
+
+    source.depth.at<float>(18, 24) = 2.0f;
+    prepared.supportDistance.at<float>(18, 25) = 0.0f;
+    EXPECT_EQ(xjw::mesh::texture_v4::sampleTextureView(
+                  prepared, world, candidate, config, 0.1, 8, &sample),
+              TextureSampleStatus::Rejected);
+
+    prepared.supportDistance.at<float>(18, 25) = 10.0f;
+    source.depthValidMask.at<std::uint8_t>(18, 24) = 0;
+    EXPECT_EQ(xjw::mesh::texture_v4::sampleTextureView(
+                  prepared, world, candidate, config, 0.1, 8, &sample),
+              TextureSampleStatus::MissingDepthEvidence);
+
+    source.depthValidMask.at<std::uint8_t>(18, 24) = 255;
+    prepared.supportDistance.at<float>(18, 25) = 0.0f;
+    const std::array<double, 3> integer_pixel_world{{0.0, 0.0, 2.0}};
+    EXPECT_EQ(xjw::mesh::texture_v4::sampleTextureView(
+                  prepared,
+                  integer_pixel_world,
+                  candidate,
+                  config,
+                  0.1,
+                  8,
+                  &sample),
+              TextureSampleStatus::Sampled);
+}
+
+TEST(TextureMapperTest, CoherenceQualityFloorDoesNotCascadeAcrossPasses)
+{
+    xjw::mesh::texture_v4::FaceAssignment assignment;
+    for (const auto &[view_index, score] :
+         std::array<std::pair<int, float>, 3>{{
+             {0, 1.0f},
+             {1, 0.70f},
+             {2, 0.46f}}})
+    {
+        xjw::mesh::texture_v4::FaceCandidate candidate;
+        candidate.viewIndex = view_index;
+        candidate.score = score;
+        assignment.candidates.push_back(candidate);
+    }
+    assignment.primaryView = 1;
+    assignment.primaryScore = 0.70f;
+
+    EXPECT_TRUE(xjw::mesh::texture_v4::passesUnaryQualityFloor(
+        assignment, assignment.candidates[1], 0.65f));
+    EXPECT_FALSE(xjw::mesh::texture_v4::passesUnaryQualityFloor(
+        assignment, assignment.candidates[2], 0.65f));
+}
+
 TEST(TextureMapperTest, NaturalBlendRejectsColorOutlier)
 {
     namespace fs = std::filesystem;
@@ -8835,6 +9058,135 @@ TEST(TextureMapperTest, NaturalBlendRejectsColorOutlier)
         }
     }
     EXPECT_TRUE(found_robust_red_texel);
+}
+
+TEST(TextureMapperTest, MaximumBlendedViewsOneUsesOnlyPrimarySample)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() /
+        "plascan_texture_single_blended_view_test";
+    fs::remove_all(root);
+    fs::create_directories(root);
+    const fs::path mesh_path = writeTextureTestTriangle(root);
+    const auto primary = makeTextureTestView(cv::Scalar(0, 0, 240));
+    const auto secondary = makeTextureTestView(cv::Scalar(0, 240, 0));
+    const auto tertiary = makeTextureTestView(cv::Scalar(240, 0, 0));
+
+    xjw::mesh::TextureMappingConfig config;
+    config.textureSize = 1024;
+    config.imageDownscale = 1;
+    config.maximumBlendedViews = 1;
+    config.blendMode = xjw::mesh::TextureBlendMode::WeightedAverage;
+    config.holeFillMode = xjw::mesh::TextureHoleFillMode::Disabled;
+    config.enableGhostFilter = false;
+    config.sharpeningStrength = 0.0f;
+    xjw::mesh::TextureMappingResult result;
+    std::string error;
+    ASSERT_TRUE(
+        xjw::mesh::TextureMapper::generateCameraTexturedModelFromMeshFile(
+            mesh_path.string(),
+            root.string(),
+            config,
+            QVector<xjw::mesh::MeshColorView>{
+                primary, secondary, tertiary},
+            &result,
+            &error)) << error;
+
+    const cv::Mat atlas = cv::imread(result.texturePngPath, cv::IMREAD_COLOR);
+    ASSERT_FALSE(atlas.empty());
+    bool found_primary_texel = false;
+    for (int row = 0; row < atlas.rows && !found_primary_texel; ++row)
+    {
+        for (int column = 0; column < atlas.cols; ++column)
+        {
+            const cv::Vec3b color = atlas.at<cv::Vec3b>(row, column);
+            if (color[2] >= 235 && color[1] <= 5 && color[0] <= 5)
+            {
+                found_primary_texel = true;
+                break;
+            }
+        }
+    }
+    EXPECT_TRUE(found_primary_texel);
+}
+
+TEST(TextureMapperTest, CameraAtlasRejectsLocalizedOcclusionDuringBake)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() /
+        "plascan_texture_local_occlusion_test";
+    fs::remove_all(root);
+    fs::create_directories(root);
+    const fs::path mesh_path = writeTextureTestTriangle(root);
+    auto primary = makeTextureTestView(cv::Scalar(0, 0, 240));
+    const auto secondary = makeTextureTestView(cv::Scalar(0, 0, 240));
+    primary.colorBgr(cv::Rect(26, 13, 3, 3)).setTo(cv::Scalar(240, 0, 0));
+
+    xjw::mesh::TextureMappingConfig config;
+    config.textureSize = 1024;
+    config.imageDownscale = 1;
+    config.edgeLengthDepthTolerance = 0.1f;
+    config.blendMode = xjw::mesh::TextureBlendMode::BestView;
+    config.holeFillMode = xjw::mesh::TextureHoleFillMode::Disabled;
+    config.sharpeningStrength = 0.0f;
+    xjw::mesh::TextureMappingResult visible_result;
+    std::string error;
+    ASSERT_TRUE(
+        xjw::mesh::TextureMapper::generateCameraTexturedModelFromMeshFile(
+            mesh_path.string(),
+            (root / "visible").string(),
+            config,
+            QVector<xjw::mesh::MeshColorView>{primary, secondary},
+            &visible_result,
+            &error)) << error;
+    ASSERT_TRUE(textureAtlasContainsBluePatch(visible_result.texturePngPath));
+
+    primary.depth(cv::Rect(25, 12, 5, 5)).setTo(1.0f);
+    xjw::mesh::TextureMappingResult occluded_result;
+    error.clear();
+    ASSERT_TRUE(
+        xjw::mesh::TextureMapper::generateCameraTexturedModelFromMeshFile(
+            mesh_path.string(),
+            (root / "occluded").string(),
+            config,
+            QVector<xjw::mesh::MeshColorView>{primary, secondary},
+            &occluded_result,
+            &error)) << error;
+    EXPECT_EQ(occluded_result.mappedFaceCount, 1);
+    EXPECT_FALSE(textureAtlasContainsBluePatch(occluded_result.texturePngPath));
+}
+
+TEST(TextureMapperTest, CameraAtlasFallsBackForMissingLocalDepthEvidence)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() /
+        "plascan_texture_missing_local_depth_test";
+    fs::remove_all(root);
+    fs::create_directories(root);
+    const fs::path mesh_path = writeTextureTestTriangle(root);
+    auto primary = makeTextureTestView(cv::Scalar(0, 0, 240));
+    primary.colorBgr(cv::Rect(26, 13, 3, 3)).setTo(cv::Scalar(240, 0, 0));
+    primary.depthValidMask(cv::Rect(25, 12, 5, 5)).setTo(0);
+
+    xjw::mesh::TextureMappingConfig config;
+    config.textureSize = 1024;
+    config.imageDownscale = 1;
+    config.blendMode = xjw::mesh::TextureBlendMode::BestView;
+    config.holeFillMode = xjw::mesh::TextureHoleFillMode::Disabled;
+    config.sharpeningStrength = 0.0f;
+    xjw::mesh::TextureMappingResult result;
+    std::string error;
+    ASSERT_TRUE(
+        xjw::mesh::TextureMapper::generateCameraTexturedModelFromMeshFile(
+            mesh_path.string(),
+            root.string(),
+            config,
+            QVector<xjw::mesh::MeshColorView>{primary},
+            &result,
+            &error)) << error;
+
+    EXPECT_EQ(result.mappedFaceCount, 1);
+    EXPECT_TRUE(textureAtlasContainsBluePatch(result.texturePngPath));
 }
 
 TEST(TextureMapperTest, CameraTextureMappingHonorsCancellation)

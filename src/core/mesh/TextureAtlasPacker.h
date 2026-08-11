@@ -14,6 +14,7 @@ struct TextureAtlasItem
     int id = -1;
     QSize requestedSize;
     QRect packedRect;
+    int fixedPadding = 0;
 };
 
 struct TextureAtlasPackingResult
