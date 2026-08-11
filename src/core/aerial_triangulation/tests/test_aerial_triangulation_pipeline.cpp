@@ -949,6 +949,8 @@ TEST(AerialTriangulationPipelineTest, FlagsParallelCurvedBlockWithoutAbsoluteCon
         true, 0.9706, 0.0740, true));
     EXPECT_FALSE(AerialTriangulationPipeline::shouldFlagAerialDomingRisk(
         true, 0.75, 0.0740, false));
+    EXPECT_TRUE(AerialTriangulationPipeline::shouldFlagAerialDomingRisk(
+        true, 0.9909, 0.0331, false));
     EXPECT_FALSE(AerialTriangulationPipeline::shouldFlagAerialDomingRisk(
         true, 0.9706, 0.02, false));
     EXPECT_FALSE(AerialTriangulationPipeline::shouldFlagAerialDomingRisk(

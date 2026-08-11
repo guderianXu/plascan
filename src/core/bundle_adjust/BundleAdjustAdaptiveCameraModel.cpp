@@ -487,6 +487,30 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
     BAAdaptiveCameraModelAssessment result;
     result.cameraCount = static_cast<int>(cameras.size());
     result.trackCount = static_cast<int>(tracks.size());
+    result.hasAbsoluteGeometryConstraint = std::any_of(
+        tracks.begin(), tracks.end(), [](const BATrack &track)
+        {
+            return std::any_of(
+                track.controlPointConstraints.begin(),
+                track.controlPointConstraints.end(),
+                [](const BAControlPointConstraint &constraint)
+                {
+                    return std::isfinite(constraint.sigmaMeters) &&
+                           constraint.sigmaMeters > 0.0 &&
+                           std::isfinite(constraint.weight) &&
+                           constraint.weight > 0.0;
+                });
+        });
+    if (options && !result.hasAbsoluteGeometryConstraint)
+    {
+        result.hasAbsoluteGeometryConstraint = std::any_of(
+            options->cameraPosePriors.begin(),
+            options->cameraPosePriors.end(),
+            [](const BACameraPosePrior &prior)
+            {
+                return prior.enabled;
+            });
+    }
     if (cameras.size() < 3 || tracks.empty())
     {
         result.reason = "insufficient_camera_or_track_support";
@@ -559,6 +583,9 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
                 BAAdaptiveCameraModelAssessment groupAssessment =
                     assessAdaptiveCameraModel(
                         groupCameras, groupTracks, &ungroupedOptions);
+                combined.unanchoredParallelAerialGuardApplied =
+                    combined.unanchoredParallelAerialGuardApplied ||
+                    groupAssessment.unanchoredParallelAerialGuardApplied;
                 for (std::size_t index = 0;
                      index < kBAIntrinsicParameterCount;
                      ++index)
@@ -1181,6 +1208,22 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
                result.normalizedRadiusP90 >= 0.46 &&
                result.occupiedPeripheralSectors >= 7);
 
+    // 无 GCP/相机位姿约束的近纯俯视航摄块中，径向畸变、主点和宽高比与
+    // 相机层/地表的低频弯曲高度相关。此时信息矩阵只能说明参数能降低像方
+    // 残差，不能证明它不会用“穹顶”解释残差，因此只保留焦距尺度。
+    result.unanchoredParallelAerialGuardApplied =
+        !result.hasAbsoluteGeometryConstraint &&
+        result.activeCameraCount >= 20 &&
+        result.opticalAxisConcentration >= 0.97;
+    if (result.unanchoredParallelAerialGuardApplied)
+    {
+        const bool focalEnabled = result.enabled[
+            parameterIndex(BAIntrinsicParameter::FocalLength)];
+        result.enabled.fill(false);
+        result.enabled[parameterIndex(BAIntrinsicParameter::FocalLength)] =
+            focalEnabled;
+    }
+
     // 自标定模型只要释放任何畸变/主点参数，就必须保留焦距共同吸收一阶尺度。
     if (enabledIntrinsicParameterCount(result.enabled) > 0)
     {
@@ -1188,7 +1231,9 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
     }
     result.modelName = adaptiveCameraModelName(result.enabled);
     const bool fieldNormalized = result.lowOrderDistortionScale > 1.0 + 1.0e-9;
-    result.reason = result.opticalAxisConcentration >= 0.90
+    result.reason = result.unanchoredParallelAerialGuardApplied
+        ? "unanchored_parallel_aerial_focal_only_doming_guard"
+        : result.opticalAxisConcentration >= 0.90
         ? (fieldNormalized
                ? "weak_parallel_geometry_field_normalized_parameter_reliability"
                : "weak_parallel_geometry_parameter_reliability")
@@ -1278,6 +1323,80 @@ bool applyAdaptiveCameraModel(
         ? lowOrderScale
         : 1.0;
     return enabledIntrinsicParameterCount(effective) > 0;
+}
+
+bool restoreInactiveAdaptiveIntrinsics(
+    std::vector<Camera> *cameras,
+    const std::vector<Camera> &stableReferences,
+    const BAIntrinsicParameterMask &activeMask)
+{
+    if (!cameras || cameras->size() != stableReferences.size())
+    {
+        return false;
+    }
+    const auto active = [&](BAIntrinsicParameter parameter)
+    {
+        return activeMask[parameterIndex(parameter)];
+    };
+    for (std::size_t index = 0; index < cameras->size(); ++index)
+    {
+        Camera &camera = (*cameras)[index];
+        const Camera &reference = stableReferences[index];
+        const Camera::Intrinsics currentIntrinsics = camera.intrinsics();
+        const Camera::Intrinsics referenceIntrinsics = reference.intrinsics();
+
+        const double focalX = active(BAIntrinsicParameter::FocalLength)
+            ? currentIntrinsics.focalX
+            : referenceIntrinsics.focalX;
+        double focalY = currentIntrinsics.focalY;
+        if (!active(BAIntrinsicParameter::FocalAspectRatio))
+        {
+            const double referenceAspect =
+                referenceIntrinsics.focalX > 1.0e-12
+                ? referenceIntrinsics.focalY / referenceIntrinsics.focalX
+                : 1.0;
+            focalY = focalX * referenceAspect;
+        }
+        else if (!active(BAIntrinsicParameter::FocalLength))
+        {
+            const double currentAspect = currentIntrinsics.focalX > 1.0e-12
+                ? currentIntrinsics.focalY / currentIntrinsics.focalX
+                : 1.0;
+            focalY = focalX * currentAspect;
+        }
+        const double principalX = active(BAIntrinsicParameter::PrincipalPointX)
+            ? currentIntrinsics.principalX
+            : referenceIntrinsics.principalX;
+        const double principalY = active(BAIntrinsicParameter::PrincipalPointY)
+            ? currentIntrinsics.principalY
+            : referenceIntrinsics.principalY;
+        camera.setIntrinsics(focalX, focalY, principalX, principalY);
+
+        Camera::Distortion distortion = camera.distortion();
+        const Camera::Distortion referenceDistortion = reference.distortion();
+        if (!active(BAIntrinsicParameter::RadialK1))
+        {
+            distortion.radialK1 = referenceDistortion.radialK1;
+        }
+        if (!active(BAIntrinsicParameter::RadialK2))
+        {
+            distortion.radialK2 = referenceDistortion.radialK2;
+        }
+        if (!active(BAIntrinsicParameter::RadialK3))
+        {
+            distortion.radialK3 = referenceDistortion.radialK3;
+        }
+        if (!active(BAIntrinsicParameter::TangentialP1))
+        {
+            distortion.tangentialP1 = referenceDistortion.tangentialP1;
+        }
+        if (!active(BAIntrinsicParameter::TangentialP2))
+        {
+            distortion.tangentialP2 = referenceDistortion.tangentialP2;
+        }
+        camera.setDistortion(distortion);
+    }
+    return true;
 }
 
 } // namespace xjw

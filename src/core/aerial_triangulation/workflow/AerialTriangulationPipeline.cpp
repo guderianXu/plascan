@@ -746,7 +746,7 @@ bool AerialTriangulationPipeline::shouldFlagAerialDomingRisk(
            std::isfinite(opticalAxisConcentration) &&
            opticalAxisConcentration >= 0.90 &&
            std::isfinite(cameraCenterNormalSpanRmsRatio) &&
-           cameraCenterNormalSpanRmsRatio >= 0.04;
+           cameraCenterNormalSpanRmsRatio >= 0.025;
 }
 
 AerialTriangulationPipeline::AerialTriangulationPipeline(

@@ -1044,6 +1044,15 @@ void IncrementalSfm::runBundleAdjust(
         adaptiveCameraModelAssessment = assessAdaptiveCameraModel(
             baCameras, baTracks, &baOpt);
         applyAdaptiveCameraModel(adaptiveCameraModelAssessment, &baOpt);
+        if (!baOpt.sharedIntrinsicReferenceCameras.empty() &&
+            !restoreInactiveAdaptiveIntrinsics(
+                &baCameras,
+                baOpt.sharedIntrinsicReferenceCameras,
+                baOpt.sharedIntrinsicParameterMask))
+        {
+            Logger::instance()->warn(
+                "[BA] adaptive intrinsic restore skipped: stable reference size mismatch");
+        }
         adaptiveCameraModelFittingEvaluated = true;
         effectiveIntrinsicParameterMask = baOpt.sharedIntrinsicParameterMask;
         effectiveAdaptiveCameraModel = adaptiveCameraModelName(
@@ -1070,7 +1079,8 @@ void IncrementalSfm::runBundleAdjust(
             "reason=%s geometry=%.4f opticalAxis=%.4f triAngle=%.3f "
             "radiusP90=%.4f peripheralRadius=%.4f distortionScale=%.3f "
             "sectors=%d/8 cameras=%d/%d observations=%d "
-            "multiView=%.4f axisBalance=%.4f parameters=%s",
+            "multiView=%.4f axisBalance=%.4f absoluteConstraint=%s "
+            "domingGuard=%s parameters=%s",
             adaptiveCameraModelAssessment.valid ? "true" : "false",
             effectiveAdaptiveCameraModel.c_str(),
             adaptiveCameraModelAssessment.reason.c_str(),
@@ -1086,6 +1096,12 @@ void IncrementalSfm::runBundleAdjust(
             adaptiveCameraModelAssessment.observationCount,
             adaptiveCameraModelAssessment.multiViewTrackRatio,
             adaptiveCameraModelAssessment.imageAxisBalance,
+            adaptiveCameraModelAssessment.hasAbsoluteGeometryConstraint
+                ? "true"
+                : "false",
+            adaptiveCameraModelAssessment.unanchoredParallelAerialGuardApplied
+                ? "true"
+                : "false",
             parameterSummary.str().c_str());
     }
     const bool seedSharedFocal = sharedIntrinsicParameterEnabled(

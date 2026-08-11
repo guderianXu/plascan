@@ -26,6 +26,8 @@ struct BAAdaptiveCameraModelAssessment
     int observationCount = 0;
     int multiViewTrackCount = 0;
     int occupiedPeripheralSectors = 0;
+    bool hasAbsoluteGeometryConstraint = false;
+    bool unanchoredParallelAerialGuardApplied = false;
     double opticalAxisConcentration = 1.0;
     double medianTriangulationAngleDegrees = 0.0;
     double multiViewTrackRatio = 0.0;
@@ -68,5 +70,14 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
 bool applyAdaptiveCameraModel(
     const BAAdaptiveCameraModelAssessment &assessment,
     BAOptions *options);
+
+/**
+ * @brief 把自适应模型已关闭的参数恢复到稳定输入标定，避免跨轮残留旧自由度。
+ * @return 输入尺寸有效且完成恢复时返回 true。
+ */
+bool restoreInactiveAdaptiveIntrinsics(
+    std::vector<Camera> *cameras,
+    const std::vector<Camera> &stableReferences,
+    const BAIntrinsicParameterMask &activeMask);
 
 } // namespace xjw
