@@ -9054,12 +9054,12 @@ TEST(AerialTriangulationDialogTest, UsesMetashapeStyleDefaultsAndCollectsSetting
     ASSERT_EQ(referenceSourceCombo->count(), 3);
     EXPECT_EQ(referenceSourceCombo->itemText(0), QStringLiteral("导入参考"));
     EXPECT_EQ(referenceSourceCombo->itemData(0).toString(), QStringLiteral("source_code"));
-    EXPECT_EQ(referenceSourceCombo->itemText(1), QStringLiteral("已估位姿"));
+    EXPECT_EQ(referenceSourceCombo->itemText(1), QStringLiteral("已有 SfM 查漏"));
     EXPECT_EQ(referenceSourceCombo->itemData(1).toString(), QStringLiteral("estimated"));
     EXPECT_EQ(referenceSourceCombo->itemText(2), QStringLiteral("照片序列"));
     EXPECT_EQ(referenceSourceCombo->itemData(2).toString(), QStringLiteral("sequence"));
     EXPECT_TRUE(referenceSourceCombo->itemData(0, Qt::ToolTipRole).toString().contains(QStringLiteral("相机文件")));
-    EXPECT_TRUE(referenceSourceCombo->itemData(1, Qt::ToolTipRole).toString().contains(QStringLiteral("已有对齐")));
+    EXPECT_TRUE(referenceSourceCombo->itemData(1, Qt::ToolTipRole).toString().contains(QStringLiteral("稀疏点共视")));
     EXPECT_TRUE(referenceSourceCombo->itemData(2, Qt::ToolTipRole).toString().contains(QStringLiteral("影像顺序")));
 
     EXPECT_FALSE(advancedToggle->isChecked());

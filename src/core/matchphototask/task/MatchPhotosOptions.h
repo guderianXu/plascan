@@ -28,6 +28,12 @@ enum class ComputeDevice
     Cuda
 };
 
+enum class ReferencePreselectionGeometry
+{
+    GroundFootprint,
+    SparseScene
+};
+
 struct MatchPhotosOptions
 {
     MatchPhotosProfile profile = MatchPhotosProfile::Auto;
@@ -74,6 +80,10 @@ struct MatchPhotosOptions
     bool useExplicitKeypointLimit = false;
     bool useGenericPreselection = true;
     bool useReferencePreselection = false;
+    // 导入外方位默认按地面/球面覆盖分析；已有 SfM 位姿必须使用稀疏场景
+    // 共视和视锥重叠，不能把任意三维/环拍场景强行投影到地球表面。
+    ReferencePreselectionGeometry referencePreselectionGeometry =
+        ReferencePreselectionGeometry::GroundFootprint;
     bool excludeStationaryTiePoints = true;
     // 复用与当前影像指纹、算法版本和配置指纹完全一致的 `.pimatch` 数据。
     // 特征本身不再持久化，因此“重置对齐 + 复用匹配”不会重新提取 SIFT。

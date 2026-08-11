@@ -165,7 +165,8 @@ core/
 │   ├── pair_selection/
 │   │   ├── PairTypes.h/cpp          # PairCandidate、PairSource、pair key 规范
 │   │   ├── PairSelectionPolicy.h/cpp # 自动/全量/序列/手动等候选策略
-│   │   └── PairSelector.h/cpp       # 合并手动、全量、序列、相机重叠和词汇召回候选
+│   │   ├── PairSelector.h/cpp       # 合并手动、全量、序列、相机重叠和词汇召回候选
+│   │   └── SparseSceneOverlapAnalyzer.h/cpp # 由已有 SfM 稀疏点共视和相机视锥补充候选对
 │   ├── runtime/
 │   │   ├── MatchPhotosRuntime.h/cpp # ONNX/manifest 解析、本机 engine 准备和配置指纹
 │   │   ├── MatchPhotosFeatureCache.h/cpp # 一次任务内的有界 SIFT 特征缓存
@@ -434,6 +435,11 @@ SfM 位姿和稀疏重建状态；默认仍复用影像身份、算法版本、�
 变体及连接点。只有用户取消“重用现有匹配”或缓存缺失/不兼容时，workflow 才调用
 `MatchPhotosTask` 按工作流设置执行 SIFT + LightGlue 或 LoMa-R，并整理多视连接点。GUI 与
 `aerial_triangulation_cli` 不再各自实现连接点补齐逻辑，也不允许 SfM 回退读取旧成对缓存。
+
+“已有 SfM 查漏”把当前相机位姿和 `sfm_sparse_points.json` 作为上一轮解算证据：先按稀疏点观测建立
+共视关系，再将稀疏场景的鲁棒包围体采样投影到相机视锥，补回共视点不足但几何上仍有重叠的影像对。
+该模式不使用地球参考球面；旧 SfM 数据缺失或不完整时安全退回自动/序列候选。对内向环拍且相机间距
+连续的数据，workflow 会自动保留闭环序列位姿恢复，但候选对仍由已有 SfM 查漏而不是退回纯序列匹配。
 
 连接点阶段的 GPU 调度按真实资源而不是 CPU 线程数决定：CUDA SIFT 保持单执行上下文并由
 任务级预取队列重叠 CPU 解码；LightGlue 每个 worker 独占 engine context 和 stream，自动并发受可用显存约束，

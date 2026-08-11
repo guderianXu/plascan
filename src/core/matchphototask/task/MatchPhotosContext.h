@@ -24,6 +24,7 @@ struct MatchPhotosContext
     QString matchDirectory;
     PairSelectionInput pairInput;
     QMap<QString, xjw::Camera> referenceCameras;
+    QString referenceSparsePointsPath;
     // 影像路径到蒙版路径的映射。键可以是绝对路径、文件名或 baseName，运行时会做宽松匹配。
     QMap<QString, QString> maskPaths;
     // 特征只在本次任务内存在。调用方通常无需设置，MatchPhotosTask 会创建并在

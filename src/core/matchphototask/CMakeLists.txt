@@ -10,6 +10,8 @@ add_library(matchphototask STATIC
     pair_selection/PairSelectionPolicy.h
     pair_selection/PairSelector.cpp
     pair_selection/PairSelector.h
+    pair_selection/SparseSceneOverlapAnalyzer.cpp
+    pair_selection/SparseSceneOverlapAnalyzer.h
     pair_selection/PairTypes.cpp
     pair_selection/PairTypes.h
     runtime/MatchPhotosRuntime.cpp

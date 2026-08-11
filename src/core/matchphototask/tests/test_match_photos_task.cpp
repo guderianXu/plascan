@@ -2,12 +2,20 @@
 #include "MatchPhotosAlgorithmSelector.h"
 #include "MatchPhotosTask.h"
 #include "MatchingStage.h"
+#include "SparseSceneOverlapAnalyzer.h"
+#include "io/PathIO.h"
 
 #include <gtest/gtest.h>
 
 #include <QDir>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QTemporaryDir>
+
+#include <algorithm>
+#include <array>
+#include <vector>
 
 TEST(MatchPhotosTaskTest, PlanOnlyUsesUnifiedAlgorithmWithoutWritingIntermediateFiles)
 {
@@ -65,6 +73,136 @@ TEST(MatchPhotosGeometryGateTest, RequiresStrongSupportForSmallInlierSets)
     EXPECT_TRUE(xjw::matchphotos::passesGeometryQualityGate(25, 20, 20));
     EXPECT_TRUE(xjw::matchphotos::passesGeometryQualityGate(200, 64, 20));
     EXPECT_FALSE(xjw::matchphotos::passesGeometryQualityGate(100, 19, 20));
+}
+
+TEST(MatchPhotosSparseSceneOverlapTest, UsesCovisibilityAndFrustumForUnobservedPairs)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    std::vector<xjw::OverlapImageInput> images;
+    for (int index = 0; index < 3; ++index)
+    {
+        xjw::Camera camera;
+        camera.setIntrinsics(100.0, 100.0, 50.0, 50.0);
+        camera.setPose({{1.0, 0.0, 0.0,
+                         0.0, 1.0, 0.0,
+                         0.0, 0.0, 1.0}},
+                       {{0.5 * (index - 1), 0.0, 0.0}});
+        xjw::OverlapImageInput input;
+        input.imagePath = QStringLiteral("image_%1.png").arg(index).toStdString();
+        input.camera = camera;
+        input.width = 100;
+        input.height = 100;
+        images.push_back(input);
+    }
+
+    QJsonArray points;
+    for (int index = 0; index < 40; ++index)
+    {
+        const double x = -0.8 + 1.6 * (index % 8) / 7.0;
+        const double y = -0.6 + 1.2 * (index / 8) / 4.0;
+        QJsonArray observations;
+        observations.append(QJsonObject{{QStringLiteral("image_id"), 0}});
+        observations.append(QJsonObject{{QStringLiteral("image_id"), 1}});
+        points.append(QJsonObject{
+            {QStringLiteral("point_xyz"), QJsonArray{x, y, 5.0}},
+            {QStringLiteral("observations"), observations}});
+    }
+    const QString sidecarPath = QDir(tempDir.path()).filePath(QStringLiteral("sfm_sparse_points.json"));
+    QString writeError;
+    ASSERT_TRUE(xjw::common::io::writeFileBytesAtomic(
+        sidecarPath,
+        QJsonDocument(QJsonObject{{QStringLiteral("points"), points}})
+            .toJson(QJsonDocument::Compact),
+        &writeError)) << qPrintable(writeError);
+
+    xjw::OverlapAnalysisResult overlap;
+    xjw::matchphotos::SparseSceneOverlapStats stats;
+    QString error;
+    ASSERT_TRUE(xjw::matchphotos::SparseSceneOverlapAnalyzer::analyzeFile(
+        sidecarPath,
+        images,
+        xjw::matchphotos::SparseSceneOverlapOptions{},
+        &overlap,
+        &stats,
+        &error)) << qPrintable(error);
+
+    EXPECT_EQ(stats.validPointCount, 40);
+    EXPECT_GE(stats.covisibilityPairCount, 1);
+    EXPECT_GE(stats.frustumPairCount, 3);
+    ASSERT_EQ(overlap.pairs.size(), 3u);
+    const auto hasPair = [&](int indexA, int indexB)
+    {
+        return std::any_of(overlap.pairs.cbegin(), overlap.pairs.cend(), [&](const auto &pair)
+        {
+            return pair.indexA == indexA && pair.indexB == indexB;
+        });
+    };
+    EXPECT_TRUE(hasPair(0, 1));
+    EXPECT_TRUE(hasPair(0, 2)) << "没有共同旧轨迹的相机仍应由稀疏场景视锥重叠召回";
+    EXPECT_TRUE(hasPair(1, 2));
+}
+
+TEST(MatchPhotosSparseSceneOverlapTest, RejectsOpposingFrustaWithoutCovisibility)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    std::vector<xjw::OverlapImageInput> images;
+    const std::array<std::array<double, 9>, 2> rotations{{
+        {{0.0, 0.0, -1.0,
+          -1.0, 0.0, 0.0,
+          0.0, 1.0, 0.0}},
+        {{0.0, 0.0, 1.0,
+          1.0, 0.0, 0.0,
+          0.0, 1.0, 0.0}}}};
+    for (int index = 0; index < 2; ++index)
+    {
+        xjw::Camera camera;
+        camera.setIntrinsics(100.0, 100.0, 50.0, 50.0);
+        camera.setPose(rotations[static_cast<std::size_t>(index)],
+                       {{index == 0 ? 5.0 : -5.0, 0.0, 0.0}});
+        double centerPixel[2]{};
+        const std::array<double, 3> origin{{0.0, 0.0, 0.0}};
+        ASSERT_TRUE(camera.projectWorldPoint(origin.data(), centerPixel));
+        xjw::OverlapImageInput input;
+        input.imagePath = QStringLiteral("opposite_%1.png").arg(index).toStdString();
+        input.camera = camera;
+        input.width = 100;
+        input.height = 100;
+        images.push_back(input);
+    }
+
+    QJsonArray points;
+    for (int index = 0; index < 40; ++index)
+    {
+        const double y = -0.5 + (index % 8) / 7.0;
+        const double z = -0.5 + (index / 8) / 4.0;
+        points.append(QJsonObject{
+            {QStringLiteral("point_xyz"), QJsonArray{0.0, y, z}},
+            {QStringLiteral("observations"),
+             QJsonArray{QJsonObject{{QStringLiteral("image_id"), index % 2}}}}});
+    }
+    const QString sidecarPath = QDir(tempDir.path()).filePath(QStringLiteral("sfm_sparse_points.json"));
+    QString writeError;
+    ASSERT_TRUE(xjw::common::io::writeFileBytesAtomic(
+        sidecarPath,
+        QJsonDocument(QJsonObject{{QStringLiteral("points"), points}})
+            .toJson(QJsonDocument::Compact),
+        &writeError)) << qPrintable(writeError);
+
+    xjw::OverlapAnalysisResult overlap;
+    QString error;
+    EXPECT_FALSE(xjw::matchphotos::SparseSceneOverlapAnalyzer::analyzeFile(
+        sidecarPath,
+        images,
+        xjw::matchphotos::SparseSceneOverlapOptions{},
+        &overlap,
+        nullptr,
+        &error));
+    EXPECT_TRUE(error.isEmpty());
+    EXPECT_TRUE(overlap.pairs.empty());
 }
 
 TEST(MatchPhotosGeometryCacheTest, FingerprintCoversEveryGeometryOption)

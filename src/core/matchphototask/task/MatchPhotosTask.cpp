@@ -8,6 +8,7 @@
 #include "MatchPhotosRuntime.h"
 #include "MatchingStage.h"
 #include "OverlapAnalyzer.h"
+#include "SparseSceneOverlapAnalyzer.h"
 #include "TrackBuildStage.h"
 #include "VocabularyOverlapRetriever.h"
 #include "cuda_sift/CudaSiftAlgorithm.h"
@@ -291,8 +292,13 @@ bool cameraForImage(const MatchPhotosContext &context,
 bool buildReferencePreselection(const MatchPhotosContext &context,
                                 const MatchPhotosOptions &options,
                                 OverlapAnalysisResult *result,
-                                MatchPhotosStageReport *report)
+                                MatchPhotosStageReport *report,
+                                bool *usable)
 {
+    if (usable)
+    {
+        *usable = false;
+    }
     if (!options.useReferencePreselection || options.planOnly)
     {
         if (report)
@@ -344,6 +350,50 @@ bool buildReferencePreselection(const MatchPhotosContext &context,
         inputs.push_back(std::move(input));
     }
 
+    if (options.referencePreselectionGeometry ==
+        ReferencePreselectionGeometry::SparseScene)
+    {
+        SparseSceneOverlapStats stats;
+        QString sparseError;
+        const bool analyzed = !context.referenceSparsePointsPath.trimmed().isEmpty() &&
+            QFileInfo::exists(context.referenceSparsePointsPath) &&
+            SparseSceneOverlapAnalyzer::analyzeFile(
+                context.referenceSparsePointsPath,
+                inputs,
+                SparseSceneOverlapOptions{},
+                result,
+                &stats,
+                &sparseError);
+        if (!analyzed)
+        {
+            if (report)
+            {
+                const QString reason = sparseError.isEmpty()
+                    ? QStringLiteral("没有可用的已有 SfM 稀疏点场景")
+                    : sparseError;
+                *report = makeReferencePreselectionReport(
+                    MatchPhotosStageStatus::Skipped,
+                    QStringLiteral("已有 SfM 查漏不可用：%1；将使用通用/序列安全回退")
+                        .arg(reason),
+                    0);
+            }
+            return true;
+        }
+
+        if (usable)
+        {
+            *usable = true;
+        }
+        if (report)
+        {
+            *report = makeReferencePreselectionReport(
+                MatchPhotosStageStatus::Completed,
+                stats.detail,
+                result ? static_cast<int>(result->pairs.size()) : 0);
+        }
+        return true;
+    }
+
     OverlapAnalysisOptions overlapOptions;
     overlapOptions.groundModel = OverlapGroundModel::ReferenceSphere;
     overlapOptions.neighborFactor = 2.0;
@@ -363,6 +413,11 @@ bool buildReferencePreselection(const MatchPhotosContext &context,
                 0);
         }
         return false;
+    }
+
+    if (usable)
+    {
+        *usable = true;
     }
 
     if (report)
@@ -504,12 +559,6 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
         effectiveOptions.useReferencePreselection = false;
     }
     pairPolicy.includeVocabularyOverlap = effectiveOptions.useGenericPreselection;
-    pairPolicy.includeCameraOverlap = effectiveOptions.useReferencePreselection;
-    if (!effectiveOptions.useGenericPreselection && !effectiveOptions.useReferencePreselection &&
-        pairPolicy.mode == PairSelectionMode::Auto)
-    {
-        pairPolicy.mode = PairSelectionMode::Exhaustive;
-    }
 
     VocabularyOverlapResult vocabularyOverlap;
     MatchPhotosStageReport vocabularyReport;
@@ -542,12 +591,17 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
 
     OverlapAnalysisResult cameraOverlap;
     MatchPhotosStageReport referenceReport;
+    bool referencePreselectionUsable = false;
     reportMatchPhotosProgress(runtimeContext,
                               QStringLiteral("reference_preselection"),
                               QStringLiteral("参考预选：检查相机参考"),
                               0,
                               1);
-    if (!buildReferencePreselection(runtimeContext, effectiveOptions, &cameraOverlap, &referenceReport))
+    if (!buildReferencePreselection(runtimeContext,
+                                    effectiveOptions,
+                                    &cameraOverlap,
+                                    &referenceReport,
+                                    &referencePreselectionUsable))
     {
         result.stages.push_back(referenceReport);
         result.success = false;
@@ -560,9 +614,21 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
                               referenceReport.message,
                               1,
                               1);
-    if (effectiveOptions.useReferencePreselection)
+    const bool requestedReferenceUnavailable =
+        effectiveOptions.useReferencePreselection && !referencePreselectionUsable;
+    if (effectiveOptions.useReferencePreselection && referencePreselectionUsable)
     {
         pairInput.cameraOverlapResult = &cameraOverlap;
+    }
+    else
+    {
+        effectiveOptions.useReferencePreselection = false;
+    }
+    pairPolicy.includeCameraOverlap = effectiveOptions.useReferencePreselection;
+    if (!effectiveOptions.useGenericPreselection && !effectiveOptions.useReferencePreselection &&
+        pairPolicy.mode == PairSelectionMode::Auto && !requestedReferenceUnavailable)
+    {
+        pairPolicy.mode = PairSelectionMode::Exhaustive;
     }
 
     reportMatchPhotosProgress(runtimeContext,

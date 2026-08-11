@@ -75,7 +75,7 @@ void AerialTriangulationDialog::setupUi()
 
     _ui->m_referenceSourceCombo->clear();
     _ui->m_referenceSourceCombo->addItem(QStringLiteral("导入参考"), QStringLiteral("source_code"));
-    _ui->m_referenceSourceCombo->addItem(QStringLiteral("已估位姿"), QStringLiteral("estimated"));
+    _ui->m_referenceSourceCombo->addItem(QStringLiteral("已有 SfM 查漏"), QStringLiteral("estimated"));
     _ui->m_referenceSourceCombo->addItem(QStringLiteral("照片序列"), QStringLiteral("sequence"));
     _ui->m_referenceSourceCombo->setItemData(
         0,
@@ -83,7 +83,8 @@ void AerialTriangulationDialog::setupUi()
         Qt::ToolTipRole);
     _ui->m_referenceSourceCombo->setItemData(
         1,
-        QStringLiteral("使用当前已有对齐结果中的估计相机位姿生成候选匹配对。"),
+        QStringLiteral("使用当前 SfM 相机、稀疏点共视和场景视锥重叠查找遗漏或薄弱影像对；"
+                       "不使用地球球面。重置对齐时旧位姿仅用于查漏，不直接作为新解初值。"),
         Qt::ToolTipRole);
     _ui->m_referenceSourceCombo->setItemData(
         2,

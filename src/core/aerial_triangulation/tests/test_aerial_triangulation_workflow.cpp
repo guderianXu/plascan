@@ -7,6 +7,8 @@
 #include <QFile>
 #include <QTemporaryDir>
 
+#include <cmath>
+
 namespace
 {
 
@@ -22,6 +24,19 @@ xjw::aerial_triangulation::AerialTriangulationOptions makeBaseOptions(
     options.assetsDir = QDir(root).filePath(QStringLiteral("assets"));
     options.matchingAlgorithmId = QStringLiteral("sift_lightglue");
     return options;
+}
+
+xjw::Camera makeInwardRingCamera(double angle)
+{
+    const double cosine = std::cos(angle);
+    const double sine = std::sin(angle);
+    xjw::Camera camera;
+    camera.setIntrinsics(1200.0, 1200.0, 320.0, 240.0);
+    camera.setPose({{sine, 0.0, -cosine,
+                     -cosine, 0.0, -sine,
+                     0.0, 1.0, 0.0}},
+                   {{5.0 * cosine, 5.0 * sine, 0.0}});
+    return camera;
 }
 
 } // namespace
@@ -191,6 +206,44 @@ TEST(AerialTriangulationWorkflowTest, EstimatedPosePreselectionBoundsReferenceAn
     EXPECT_EQ(resolved.tiePointOptions.pairPolicy.vocabularyTopKPerImage, 4);
     EXPECT_EQ(resolved.resolvedSettings.value(QStringLiteral("pair_planning_mode")).toString(),
               QStringLiteral("estimated"));
+    EXPECT_EQ(resolved.tiePointOptions.referencePreselectionGeometry,
+              xjw::matchphotos::ReferencePreselectionGeometry::SparseScene);
+    EXPECT_EQ(resolved.tiePointContext.referenceSparsePointsPath,
+              QDir(options.outputDir).filePath(QStringLiteral("sfm_sparse/sfm_sparse_points.json")));
+}
+
+TEST(AerialTriangulationWorkflowTest, EstimatedInwardRingKeepsClosedSequenceGeometry)
+{
+    QTemporaryDir tempDir;
+    auto options = makeBaseOptions(tempDir.path());
+    options.images.clear();
+    options.referencePreselection = true;
+    options.referenceMode = QStringLiteral("estimated");
+    for (int index = 0; index < 8; ++index)
+    {
+        const QString image = QDir(tempDir.path())
+            .filePath(QStringLiteral("ring_%1.png").arg(index));
+        options.images.append(image);
+        options.referenceCameras.insert(
+            image,
+            makeInwardRingCamera(2.0 * 3.14159265358979323846 * index / 8.0));
+    }
+
+    const auto resolved =
+        xjw::aerial_triangulation::AerialTriangulationWorkflow::resolveConfig(options);
+
+    EXPECT_TRUE(resolved.tiePointOptions.useReferencePreselection);
+    EXPECT_NE(resolved.tiePointOptions.pairPolicy.mode,
+              xjw::matchphotos::PairSelectionMode::Sequence)
+        << "已估位姿仍应按稀疏场景规划配对，而不是退化为纯序列窗口";
+    EXPECT_TRUE(resolved.pipelineInput.useSequencePoseRecovery);
+    EXPECT_TRUE(resolved.pipelineInput.sequenceLoopClosure);
+    EXPECT_EQ(resolved.resolvedSettings.value(QStringLiteral("sequence_geometry_source")).toString(),
+              QStringLiteral("estimated_pose_detected"));
+    EXPECT_LT(resolved.resolvedSettings
+                  .value(QStringLiteral("estimated_sequence_optical_axis_concentration"))
+                  .toDouble(),
+              0.1);
 }
 
 TEST(AerialTriangulationWorkflowTest, MissingTiePointsRunsMatchPhotosBeforePipeline)

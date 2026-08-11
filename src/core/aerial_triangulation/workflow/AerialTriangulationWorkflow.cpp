@@ -21,8 +21,11 @@
 #include <QSet>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <limits>
 #include <utility>
+#include <vector>
 
 namespace xjw::aerial_triangulation
 {
@@ -105,6 +108,149 @@ matchphotos::ComputeDevice computeDevice(const QString &device)
         return matchphotos::ComputeDevice::Cuda;
     }
     return matchphotos::ComputeDevice::Auto;
+}
+
+struct ClosedSequenceEvidence
+{
+    bool detected = false;
+    double opticalAxisConcentration = 1.0;
+    double inwardAxisMedian = -1.0;
+    double adjacentDistanceMadRatio = 1.0;
+    double adjacentDistanceMaximumRatio = std::numeric_limits<double>::infinity();
+};
+
+double median(std::vector<double> values)
+{
+    if (values.empty())
+    {
+        return 0.0;
+    }
+    std::sort(values.begin(), values.end());
+    return 0.5 * (values[(values.size() - 1) / 2] + values[values.size() / 2]);
+}
+
+double vectorNorm(const std::array<double, 3> &value)
+{
+    return std::sqrt(value[0] * value[0] + value[1] * value[1] + value[2] * value[2]);
+}
+
+const Camera *referenceCameraForImage(const QMap<QString, Camera> &cameras,
+                                      const QString &image)
+{
+    const auto direct = cameras.constFind(image);
+    if (direct != cameras.constEnd())
+    {
+        return &direct.value();
+    }
+    const QString normalized = QDir::fromNativeSeparators(QDir::cleanPath(image));
+    for (auto it = cameras.constBegin(); it != cameras.constEnd(); ++it)
+    {
+        if (QDir::fromNativeSeparators(QDir::cleanPath(it.key()))
+                .compare(normalized, Qt::CaseInsensitive) == 0)
+        {
+            return &it.value();
+        }
+    }
+    return nullptr;
+}
+
+ClosedSequenceEvidence detectEstimatedClosedSequence(
+    const QStringList &images,
+    const QMap<QString, Camera> &referenceCameras)
+{
+    ClosedSequenceEvidence evidence;
+    if (images.size() < 6 || referenceCameras.size() < images.size())
+    {
+        return evidence;
+    }
+
+    std::vector<std::array<double, 3>> centers;
+    std::vector<std::array<double, 3>> axes;
+    centers.reserve(static_cast<std::size_t>(images.size()));
+    axes.reserve(static_cast<std::size_t>(images.size()));
+    std::array<double, 3> meanCenter{};
+    std::array<double, 3> meanAxis{};
+    for (const QString &image : images)
+    {
+        const Camera *referenceCamera = referenceCameraForImage(referenceCameras, image);
+        if (!referenceCamera || !referenceCamera->isValid())
+        {
+            return evidence;
+        }
+        const Camera camera = referenceCamera->normalizedForPositiveDepth();
+        const auto center = camera.cameraCenter();
+        const auto rotation = camera.cameraToWorldRotation();
+        const std::array<double, 3> axis{{rotation[2], rotation[5], rotation[8]}};
+        centers.push_back(center);
+        axes.push_back(axis);
+        for (int dimension = 0; dimension < 3; ++dimension)
+        {
+            meanCenter[dimension] += center[dimension];
+            meanAxis[dimension] += axis[dimension];
+        }
+    }
+    for (int dimension = 0; dimension < 3; ++dimension)
+    {
+        meanCenter[dimension] /= images.size();
+        meanAxis[dimension] /= images.size();
+    }
+    evidence.opticalAxisConcentration = vectorNorm(meanAxis);
+
+    std::vector<double> inwardDots;
+    std::vector<double> adjacentDistances;
+    inwardDots.reserve(centers.size());
+    adjacentDistances.reserve(centers.size());
+    for (std::size_t index = 0; index < centers.size(); ++index)
+    {
+        std::array<double, 3> towardMean{{
+            meanCenter[0] - centers[index][0],
+            meanCenter[1] - centers[index][1],
+            meanCenter[2] - centers[index][2]}};
+        const double towardNorm = vectorNorm(towardMean);
+        const double axisNorm = vectorNorm(axes[index]);
+        if (towardNorm <= 1.0e-12 || axisNorm <= 1.0e-12)
+        {
+            return evidence;
+        }
+        inwardDots.push_back((towardMean[0] * axes[index][0] +
+                              towardMean[1] * axes[index][1] +
+                              towardMean[2] * axes[index][2]) /
+                             (towardNorm * axisNorm));
+
+        const auto &next = centers[(index + 1) % centers.size()];
+        const std::array<double, 3> delta{{
+            centers[index][0] - next[0],
+            centers[index][1] - next[1],
+            centers[index][2] - next[2]}};
+        const double distance = vectorNorm(delta);
+        if (!std::isfinite(distance) || distance <= 1.0e-12)
+        {
+            return evidence;
+        }
+        adjacentDistances.push_back(distance);
+    }
+
+    evidence.inwardAxisMedian = median(std::move(inwardDots));
+    const double adjacentMedian = median(adjacentDistances);
+    std::vector<double> deviations;
+    deviations.reserve(adjacentDistances.size());
+    double maximumDistance = 0.0;
+    for (double distance : adjacentDistances)
+    {
+        deviations.push_back(std::abs(distance - adjacentMedian));
+        maximumDistance = std::max(maximumDistance, distance);
+    }
+    if (adjacentMedian <= 1.0e-12)
+    {
+        return evidence;
+    }
+    evidence.adjacentDistanceMadRatio = median(std::move(deviations)) / adjacentMedian;
+    evidence.adjacentDistanceMaximumRatio = maximumDistance / adjacentMedian;
+    evidence.detected = evidence.opticalAxisConcentration < 0.85 &&
+        evidence.inwardAxisMedian >= 0.5 &&
+        evidence.adjacentDistanceMadRatio <= 0.35 &&
+        evidence.adjacentDistanceMaximumRatio <= 2.5;
+    return evidence;
 }
 
 /**
@@ -220,14 +366,21 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     pipeline.useProjectCameraPoses = !options.resetAlignment;
     pipeline.adaptiveCameraModelFitting = options.adaptiveCameraModelFitting;
     pipeline.lockInputCameraPoses = options.lockInputCameraPoses;
+    const QString normalizedReferenceMode = normalizedToken(
+        options.referenceMode, QStringLiteral("source_code"));
     const bool usesPhotoSequence = options.referencePreselection &&
-        normalizedToken(options.referenceMode, QStringLiteral("source_code")) == QStringLiteral("sequence");
+        normalizedReferenceMode == QStringLiteral("sequence");
+    const ClosedSequenceEvidence estimatedSequence =
+        options.referencePreselection && normalizedReferenceMode == QStringLiteral("estimated")
+        ? detectEstimatedClosedSequence(options.images, options.referenceCameras)
+        : ClosedSequenceEvidence{};
+    const bool usesSequenceGeometry = usesPhotoSequence || estimatedSequence.detected;
     // “照片序列”提供稳定的相邻位姿插值/外推初值，但不代表相机中心必须满足等距轨迹。
     // 位姿恢复与硬距离门控必须解耦：前者帮助连续航带跨过弱纹理帧，后者在环拍、变焦
     // 或物体旋转序列上反而可能误拒绝正确 PnP，因此保持默认关闭。
-    pipeline.useSequencePoseRecovery = usesPhotoSequence;
+    pipeline.useSequencePoseRecovery = usesSequenceGeometry;
     pipeline.enforceSequencePoseConsistency = false;
-    pipeline.sequenceLoopClosure = usesPhotoSequence;
+    pipeline.sequenceLoopClosure = usesSequenceGeometry;
     pipeline.useInitialPairHint = options.useInitialPairHint;
     pipeline.initialImageId1 = options.initialImageId1;
     pipeline.initialImageId2 = options.initialImageId2;
@@ -297,6 +450,9 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     // 使用索引窗口和首尾闭环，不伪造参考相机文件。
     const QString referenceMode = normalizedToken(options.referenceMode,
                                                    QStringLiteral("source_code"));
+    tieOptions.referencePreselectionGeometry = referenceMode == QStringLiteral("estimated")
+        ? matchphotos::ReferencePreselectionGeometry::SparseScene
+        : matchphotos::ReferencePreselectionGeometry::GroundFootprint;
     const bool hasReference = !options.referenceCameras.isEmpty() ||
         (!options.cameraPaths.isEmpty() && options.cameraPaths.size() == options.images.size());
     QString pairPlanningMode = options.genericPreselection ? QStringLiteral("generic")
@@ -342,6 +498,8 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     tieContext.pairInput.images = options.images;
     tieContext.pairInput.manualPairKeys = options.allowedPairs;
     tieContext.referenceCameras = options.referenceCameras;
+    tieContext.referenceSparsePointsPath = QDir(QDir::cleanPath(options.outputDir))
+        .filePath(QStringLiteral("sfm_sparse/sfm_sparse_points.json"));
     tieContext.maskPaths = options.maskPaths;
     tieContext.cancelFlag = options.cancelFlag.get();
     if (options.progressFn)
@@ -379,6 +537,27 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
                     tieOptions.pairPolicy.vocabularyTopKPerImage);
     settings.insert(QStringLiteral("sequence_pair_window"), tieOptions.pairPolicy.sequenceWindow);
     settings.insert(QStringLiteral("sequence_loop_closure"), pipeline.sequenceLoopClosure);
+    settings.insert(QStringLiteral("sequence_geometry_source"),
+                    usesPhotoSequence
+                        ? QStringLiteral("explicit_sequence")
+                        : (estimatedSequence.detected
+                               ? QStringLiteral("estimated_pose_detected")
+                               : QStringLiteral("none")));
+    settings.insert(QStringLiteral("estimated_sequence_optical_axis_concentration"),
+                    estimatedSequence.opticalAxisConcentration);
+    settings.insert(QStringLiteral("estimated_sequence_inward_axis_median"),
+                    estimatedSequence.inwardAxisMedian);
+    settings.insert(QStringLiteral("estimated_sequence_adjacent_mad_ratio"),
+                    estimatedSequence.adjacentDistanceMadRatio);
+    settings.insert(QStringLiteral("estimated_sequence_adjacent_maximum_ratio"),
+                    std::isfinite(estimatedSequence.adjacentDistanceMaximumRatio)
+                        ? estimatedSequence.adjacentDistanceMaximumRatio
+                        : 0.0);
+    settings.insert(QStringLiteral("reference_overlap_geometry"),
+                    tieOptions.referencePreselectionGeometry ==
+                            matchphotos::ReferencePreselectionGeometry::SparseScene
+                        ? QStringLiteral("sparse_scene_covisibility_frustum")
+                        : QStringLiteral("ground_reference_sphere"));
     settings.insert(QStringLiteral("keypoint_limit"), options.keypointLimit);
     settings.insert(QStringLiteral("tiepoint_limit"), options.tiepointLimit);
     settings.insert(QStringLiteral("mask_apply_mode"), tieOptions.maskApplyMode);
