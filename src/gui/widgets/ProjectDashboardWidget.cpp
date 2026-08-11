@@ -280,6 +280,7 @@ void ProjectDashboardWidget::setTaskSnapshots(const QJsonArray &tasks)
 {
     _taskSnapshots = tasks;
     updateTaskTable();
+    emit taskSnapshotsChanged(_taskSnapshots);
 }
 
 void ProjectDashboardWidget::clear()
@@ -287,6 +288,7 @@ void ProjectDashboardWidget::clear()
     _taskSnapshots = QJsonArray();
     updateTables(QJsonObject());
     updateTaskTable();
+    emit taskSnapshotsChanged(_taskSnapshots);
 }
 
 void ProjectDashboardWidget::updateTaskTable()

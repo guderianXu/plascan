@@ -301,7 +301,7 @@ void CreatePointCloudDialog::updateAvailability()
     }
 
     const QString device_summary = tr(
-        "深度估计：%1；点云处理：%2。实际选择会显示在任务进度和日志中。")
+        "深度估计：%1；点云处理：%2。实际选择会显示在任务进度和控制台中。")
                                        .arg(_mvsBackendCombo->currentText(),
                                             _pointCloudBackendCombo->currentText());
     _statusLabel->setText((_hasReusableDepthMaps

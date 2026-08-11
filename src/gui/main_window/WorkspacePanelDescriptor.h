@@ -7,6 +7,7 @@ enum class WorkspacePanelId
 {
     Workspace,
     Properties,
+    Work,
     Photos,
     Log,
     MainToolbar
@@ -51,11 +52,17 @@ inline WorkspacePanelDescriptor workspacePanelDescriptor(WorkspacePanelId id)
                 QStringLiteral("photos_visible"),
                 true,
                 true};
+    case WorkspacePanelId::Work:
+        return {id,
+                WorkspacePanelKind::Dock,
+                QStringLiteral("work_visible"),
+                true,
+                true};
     case WorkspacePanelId::Log:
         return {id,
                 WorkspacePanelKind::Dock,
                 QStringLiteral("log_visible"),
-                false,
+                true,
                 false};
     case WorkspacePanelId::MainToolbar:
         return {id,

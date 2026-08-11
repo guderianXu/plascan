@@ -1295,7 +1295,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(
         if (!orthoRun.ok)
         {
             const QString error = orthoRun.error.trimmed().isEmpty()
-                ? QStringLiteral("正射影像生成遇到未知错误，请检查日志。")
+                ? QStringLiteral("正射影像生成遇到未知错误，请检查控制台。")
                 : orthoRun.error;
             emit manager->orthoPipelineFinished(false, error, orthoRun.payload);
             return;

@@ -10,6 +10,7 @@
 
 #include <QComboBox>
 #include <QFile>
+#include <QFontDatabase>
 #include <QTextStream>
 #include <QFileDialog>
 #include <QDir>
@@ -20,6 +21,8 @@
 #include <QTextCursor>
 #include <QTextEdit>
 #include <QPushButton>
+#include <QStyle>
+#include <QTextDocument>
 
 /**
  * @brief 构造函数：创建 UI 布局，初始化所有子控件，并注册 Logger sink。
@@ -52,6 +55,20 @@ LogPanel::LogPanel(QWidget *parent)
     _saveBtn = ui.m_saveBtn;
     _text = ui.m_text;
 
+    _levelCombo->setMaximumWidth(110);
+    _clearBtn->setText(QString());
+    _clearBtn->setIcon(style()->standardIcon(QStyle::SP_TrashIcon));
+    _clearBtn->setToolTip(tr("清空控制台"));
+    _saveBtn->setText(QString());
+    _saveBtn->setIcon(style()->standardIcon(QStyle::SP_DialogSaveButton));
+    _saveBtn->setToolTip(tr("保存控制台输出"));
+    _text->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    _text->setLineWrapMode(QTextEdit::NoWrap);
+    _text->setFrameShape(QFrame::NoFrame);
+    _text->setUndoRedoEnabled(false);
+    _text->document()->setMaximumBlockCount(20000);
+    _text->setPlaceholderText(tr("处理信息和诊断输出将显示在这里"));
+
     _levelCombo->setCurrentIndex(static_cast<int>(_displayLevel));
     connect(_levelCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &LogPanel::onLevelChanged);
@@ -60,7 +77,7 @@ LogPanel::LogPanel(QWidget *parent)
 
     connect(_saveBtn, &QPushButton::clicked, this, [this]() {
         QString p = QFileDialog::getSaveFileName(
-            this, tr("保存日志为"), QDir::homePath(), tr("文本文件 (*.txt);;所有文件 (*)"));
+            this, tr("保存控制台输出"), QDir::homePath(), tr("文本文件 (*.txt);;所有文件 (*)"));
         if (!p.isEmpty()) saveLogsToFile(p);
     });
 
@@ -105,7 +122,7 @@ QSize LogPanel::minimumSizeHint() const
 
 QSize LogPanel::sizeHint() const
 {
-    return QSize(720, 220);
+    return QSize(720, 180);
 }
 
 /**

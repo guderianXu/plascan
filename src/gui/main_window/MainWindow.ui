@@ -203,7 +203,7 @@
   </widget>
   <widget class="QDockWidget" name="logDock">
    <property name="windowTitle">
-    <string>日志</string>
+    <string>控制台</string>
    </property>
    <property name="allowedAreas">
     <set>Qt::AllDockWidgetAreas</set>
@@ -325,7 +325,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>日志</string>
+    <string>控制台</string>
    </property>
   </action>
   <action name="actionAddPhoto">

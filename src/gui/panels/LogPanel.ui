@@ -12,19 +12,19 @@
   </property>
   <layout class="QVBoxLayout" name="mainLayout">
    <property name="spacing">
-    <number>4</number>
+    <number>2</number>
    </property>
    <property name="leftMargin">
-    <number>4</number>
+    <number>2</number>
    </property>
    <property name="topMargin">
-    <number>4</number>
+    <number>2</number>
    </property>
    <property name="rightMargin">
-    <number>4</number>
+    <number>2</number>
    </property>
    <property name="bottomMargin">
-    <number>4</number>
+    <number>2</number>
    </property>
    <item>
     <layout class="QHBoxLayout" name="topLayout">
@@ -34,7 +34,7 @@
      <item>
       <widget class="QLabel" name="levelLabel">
        <property name="text">
-        <string>显示等级:</string>
+        <string>级别:</string>
        </property>
       </widget>
      </item>
@@ -80,6 +80,15 @@
      </item>
      <item>
       <widget class="QPushButton" name="m_clearBtn">
+       <property name="maximumSize">
+        <size>
+         <width>28</width>
+         <height>28</height>
+        </size>
+       </property>
+       <property name="flat">
+        <bool>true</bool>
+       </property>
        <property name="text">
         <string>清空</string>
        </property>
@@ -87,6 +96,15 @@
      </item>
      <item>
       <widget class="QPushButton" name="m_saveBtn">
+       <property name="maximumSize">
+        <size>
+         <width>28</width>
+         <height>28</height>
+        </size>
+       </property>
+       <property name="flat">
+        <bool>true</bool>
+       </property>
        <property name="text">
         <string>保存</string>
        </property>

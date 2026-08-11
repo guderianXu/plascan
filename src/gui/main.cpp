@@ -59,7 +59,7 @@ public:
                       exception.what());
             QMessageBox::critical(nullptr,
                                   QStringLiteral("PlaScan 运行异常"),
-                                  QStringLiteral("发生未处理的标准异常：\n%1\n\n请查看日志获取详细信息。")
+                                  QStringLiteral("发生未处理的标准异常：\n%1\n\n请查看控制台获取详细信息。")
                                       .arg(QString::fromLocal8Bit(exception.what())));
             return false;
         }
@@ -69,7 +69,7 @@ public:
             LOG_ERROR("Unhandled unknown exception in Qt event loop. receiver=%s", receiverClass);
             QMessageBox::critical(nullptr,
                                   QStringLiteral("PlaScan 运行异常"),
-                                  QStringLiteral("发生未处理的未知异常。\n\n请查看日志获取详细信息。"));
+                                  QStringLiteral("发生未处理的未知异常。\n\n请查看控制台获取详细信息。"));
             return false;
         }
     }
@@ -230,7 +230,7 @@ int main(int argc, char *argv[])
         LOG_ERROR("Fatal startup std::exception: %s", exception.what());
         QMessageBox::critical(nullptr,
                               QStringLiteral("PlaScan 启动失败"),
-                              QStringLiteral("启动时捕获到异常：\n%1\n\n请查看日志并反馈该信息。")
+                              QStringLiteral("启动时捕获到异常：\n%1\n\n请查看控制台并反馈该信息。")
                                   .arg(QString::fromLocal8Bit(exception.what())));
         return EXIT_FAILURE;
     }
@@ -239,7 +239,7 @@ int main(int argc, char *argv[])
         LOG_ERROR("Fatal startup unknown exception.");
         QMessageBox::critical(nullptr,
                               QStringLiteral("PlaScan 启动失败"),
-                              QStringLiteral("启动时捕获到未知异常。\n\n请查看日志并反馈该信息。"));
+                              QStringLiteral("启动时捕获到未知异常。\n\n请查看控制台并反馈该信息。"));
         return EXIT_FAILURE;
     }
 }

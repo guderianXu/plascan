@@ -19,7 +19,7 @@
 
 namespace
 {
-constexpr int ProjectDockLayoutVersion = 3;
+constexpr int ProjectDockLayoutVersion = 4;
 }
 
 QJsonObject MainWindow::currentProjectMeta() const
@@ -239,7 +239,7 @@ QJsonObject MainWindow::currentUiSettingsSnapshot() const
 
 void MainWindow::restoreDefaultProjectDockLayout()
 {
-    if (!_workspaceDock || !_propertiesDock || !_photosDock)
+    if (!_workspaceDock || !_propertiesDock || !_workDock || !_photosDock || !_logDock)
     {
         return;
     }
@@ -247,7 +247,11 @@ void MainWindow::restoreDefaultProjectDockLayout()
     addDockWidget(Qt::LeftDockWidgetArea, _workspaceDock);
     addDockWidget(Qt::LeftDockWidgetArea, _propertiesDock);
     splitDockWidget(_workspaceDock, _propertiesDock, Qt::Vertical);
+    addDockWidget(Qt::BottomDockWidgetArea, _workDock);
     addDockWidget(Qt::BottomDockWidgetArea, _photosDock);
+    addDockWidget(Qt::BottomDockWidgetArea, _logDock);
+    tabifyDockWidget(_workDock, _photosDock);
+    tabifyDockWidget(_photosDock, _logDock);
 
     if (_workspacePanels)
     {
@@ -257,7 +261,9 @@ void MainWindow::restoreDefaultProjectDockLayout()
     {
         _workspaceDock->setVisible(true);
         _propertiesDock->setVisible(true);
+        _workDock->setVisible(true);
         _photosDock->setVisible(true);
+        _logDock->setVisible(true);
         _workspaceDock->raise();
         _propertiesDock->raise();
         _photosDock->raise();
@@ -319,11 +325,15 @@ QString MainWindow::currentBottomPanelKey() const
 {
     if (_logDock && _logDock->isVisible())
     {
-        return QStringLiteral("log");
+        return QStringLiteral("console");
     }
     if (_photosDock && _photosDock->isVisible())
     {
         return QStringLiteral("photos");
+    }
+    if (_workDock && _workDock->isVisible())
+    {
+        return QStringLiteral("work");
     }
     return QStringLiteral("none");
 }

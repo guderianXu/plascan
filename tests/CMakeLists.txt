@@ -689,6 +689,7 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/WorkspaceSectionIcons.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/PhotoStripWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/ProjectDashboardWidget.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/WorkPanelWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/SelectionPropertiesWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/TaskStatusWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/HenuBrandWidget.cpp

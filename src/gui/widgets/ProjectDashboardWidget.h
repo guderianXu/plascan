@@ -19,6 +19,9 @@ public slots:
     void setTaskSnapshots(const QJsonArray &tasks);
     void clear();
 
+signals:
+    void taskSnapshotsChanged(const QJsonArray &tasks);
+
 private:
     void setupUi();
     void updateTables(const QJsonObject &meta);

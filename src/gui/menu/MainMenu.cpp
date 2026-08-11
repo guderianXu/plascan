@@ -824,6 +824,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         setManagedWindowActions(
             {_toggleWorkspaceAct,
              _togglePropertiesAct,
+             _toggleWorkAct,
              _togglePhotosAct,
              _toggleLogAct},
             {_toggleMainToolbarAct});
@@ -834,6 +835,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         {
             _toggleWorkspaceAct->setIcon(style->standardIcon(QStyle::SP_DirHomeIcon));
             _togglePropertiesAct->setIcon(style->standardIcon(QStyle::SP_FileDialogDetailedView));
+            _toggleWorkAct->setIcon(style->standardIcon(QStyle::SP_ComputerIcon));
             _togglePhotosAct->setIcon(style->standardIcon(QStyle::SP_FileDialogContentsView));
             _toggleLogAct->setIcon(style->standardIcon(QStyle::SP_FileDialogInfoView));
             _toggleMainToolbarAct->setIcon(
@@ -1191,6 +1193,13 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                      tr("属性"),
                                                      true);
         _togglePropertiesAct->setToolTip(tr("显示或隐藏选择对象属性面板"));
+        _toggleWorkAct = ensureCheckableAction(_mainWindow,
+                                               windowActionParent,
+                                               nullptr,
+                                               QStringLiteral("actionToggleWork"),
+                                               tr("工作"),
+                                               true);
+        _toggleWorkAct->setToolTip(tr("显示或隐藏后台工作面板"));
         _togglePhotosAct = ensureCheckableAction(_mainWindow,
                                                  windowActionParent,
                                                  nullptr,
@@ -1204,12 +1213,12 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                   windowActionParent,
                                                   nullptr,
                                                   QStringLiteral("actionToggleLog"),
-                                                  tr("日志"),
-                                                  false);
+                                                  tr("控制台"),
+                                                  true);
         }
-        _toggleLogAct->setText(tr("日志"));
+        _toggleLogAct->setText(tr("控制台"));
         _toggleLogAct->setCheckable(true);
-        _toggleLogAct->setToolTip(tr("显示或隐藏日志面板"));
+        _toggleLogAct->setToolTip(tr("显示或隐藏控制台"));
         _toggleMainToolbarAct = ensureCheckableAction(_mainWindow,
                                                       windowActionParent,
                                                       nullptr,
@@ -1224,7 +1233,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
             QStringLiteral("actionRestoreDefaultWindowLayout"),
             tr("恢复默认窗口布局"));
         _restoreDefaultWindowLayoutAct->setToolTip(
-            tr("恢复工作区、属性、照片、日志和主工具栏的默认布局"));
+            tr("恢复工作区、属性、工作、照片、控制台和主工具栏的默认布局"));
         QObject *viewActionParent = viewMenu
             ? static_cast<QObject *>(viewMenu)
             : static_cast<QObject *>(_mainWindow);
@@ -1815,6 +1824,13 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                  tr("属性"),
                                                  true);
     _togglePropertiesAct->setToolTip(tr("显示或隐藏选择对象属性面板"));
+    _toggleWorkAct = ensureCheckableAction(_mainWindow,
+                                           windowMenu,
+                                           windowMenu,
+                                           QStringLiteral("actionToggleWork"),
+                                           tr("工作"),
+                                           true);
+    _toggleWorkAct->setToolTip(tr("显示或隐藏后台工作面板"));
     _togglePhotosAct = ensureCheckableAction(_mainWindow,
                                              windowMenu,
                                              windowMenu,
@@ -1822,11 +1838,11 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                              tr("照片"),
                                              true);
     _togglePhotosAct->setToolTip(tr("显示或隐藏照片面板"));
-    _toggleLogAct = new QAction(tr("日志"), windowMenu);
+    _toggleLogAct = new QAction(tr("控制台"), windowMenu);
     _toggleLogAct->setCheckable(true);  // 可切换：勾选时面板可见
-    _toggleLogAct->setChecked(false);
+    _toggleLogAct->setChecked(true);
     _toggleLogAct->setObjectName(QStringLiteral("actionToggleLog"));
-    _toggleLogAct->setToolTip(tr("显示或隐藏日志面板"));
+    _toggleLogAct->setToolTip(tr("显示或隐藏控制台"));
     _toggleMainToolbarAct = new QAction(tr("主工具栏"), windowMenu);
     _toggleMainToolbarAct->setObjectName(QStringLiteral("actionToggleMainToolbar"));
     _toggleMainToolbarAct->setCheckable(true);
@@ -1836,7 +1852,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     _restoreDefaultWindowLayoutAct->setObjectName(
         QStringLiteral("actionRestoreDefaultWindowLayout"));
     _restoreDefaultWindowLayoutAct->setToolTip(
-        tr("恢复工作区、属性、照片、日志和主工具栏的默认布局"));
+        tr("恢复工作区、属性、工作、照片、控制台和主工具栏的默认布局"));
 
     // ---- 工作流程菜单 ----
     // 提供高层一键式处理流程入口，适合不需要分步调试的普通用户
@@ -2318,4 +2334,5 @@ QAction *MainMenu::exportMatchedPairsAction() const  { return _exportMatchedPair
 
 QAction *MainMenu::toggleWorkspaceAction() const { return _toggleWorkspaceAct; }
 QAction *MainMenu::togglePropertiesAction() const { return _togglePropertiesAct; }
+QAction *MainMenu::toggleWorkAction() const { return _toggleWorkAct; }
 QAction *MainMenu::togglePhotosAction() const { return _togglePhotosAct; }

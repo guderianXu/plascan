@@ -57,6 +57,7 @@
 #include "FeatureResidualLoader.h"
 #include "PhotoStripWidget.h"
 #include "ProjectDashboardWidget.h"
+#include "WorkPanelWidget.h"
 #include "ProjectManager.h"
 #include "ProjectPointCloudWorkflowController.h"
 #include "ProjectTaskStatusController.h"
@@ -113,6 +114,7 @@
 #include <QMetaObject>
 #include <QFileInfo>
 #include <QPushButton>
+#include <QProgressBar>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QScrollArea>
@@ -7971,8 +7973,9 @@ TEST(MainMenuTest, WindowMenuUsesCompactNativeActions)
     EXPECT_EQ(actionTexts,
               QStringList({QStringLiteral("工作区"),
                            QStringLiteral("属性"),
+                           QStringLiteral("工作"),
                            QStringLiteral("照片"),
-                           QStringLiteral("日志"),
+                           QStringLiteral("控制台"),
                            QStringLiteral("主工具栏"),
                            QStringLiteral("河南大学校徽"),
                            QStringLiteral("恢复默认窗口布局")}));
@@ -8075,6 +8078,8 @@ TEST(WorkspacePanelControllerTest, StableDescriptorsDefinePersistenceAndRequired
         workspacePanelDescriptor(WorkspacePanelId::Properties);
     const auto photos =
         workspacePanelDescriptor(WorkspacePanelId::Photos);
+    const auto work =
+        workspacePanelDescriptor(WorkspacePanelId::Work);
     const auto log =
         workspacePanelDescriptor(WorkspacePanelId::Log);
     const auto toolbar =
@@ -8083,15 +8088,18 @@ TEST(WorkspacePanelControllerTest, StableDescriptorsDefinePersistenceAndRequired
     EXPECT_EQ(workspace.settingKey, QStringLiteral("workspace_visible"));
     EXPECT_EQ(properties.settingKey, QStringLiteral("properties_visible"));
     EXPECT_EQ(photos.settingKey, QStringLiteral("photos_visible"));
+    EXPECT_EQ(work.settingKey, QStringLiteral("work_visible"));
     EXPECT_EQ(log.settingKey, QStringLiteral("log_visible"));
     EXPECT_EQ(toolbar.settingKey, QStringLiteral("main_toolbar_visible"));
     EXPECT_TRUE(workspace.requiredForProject);
     EXPECT_TRUE(properties.requiredForProject);
     EXPECT_TRUE(photos.requiredForProject);
+    EXPECT_TRUE(work.requiredForProject);
     EXPECT_FALSE(log.requiredForProject);
     EXPECT_FALSE(toolbar.requiredForProject);
     EXPECT_TRUE(workspace.defaultVisible);
-    EXPECT_FALSE(log.defaultVisible);
+    EXPECT_TRUE(work.defaultVisible);
+    EXPECT_TRUE(log.defaultVisible);
     EXPECT_EQ(workspace.kind, WorkspacePanelKind::Dock);
     EXPECT_EQ(log.kind, WorkspacePanelKind::Dock);
     EXPECT_EQ(toolbar.kind, WorkspacePanelKind::ToolBar);
@@ -10218,6 +10226,66 @@ TEST(ProjectDashboardWidgetTest, ShowsReadOnlyRunningTaskSnapshots)
     EXPECT_TRUE(taskTable->item(0, 0)->text().contains(QStringLiteral("MVS")));
     EXPECT_TRUE(taskTable->item(0, 1)->text().contains(QStringLiteral("正在估计深度图")));
     EXPECT_TRUE(taskTable->item(0, 2)->text().contains(QStringLiteral("32/100")));
+}
+
+TEST(WorkPanelWidgetTest, MirrorsOnlyActiveTasksWithCompactProgress)
+{
+    ProjectDashboardWidget dashboard;
+    WorkPanelWidget workPanel;
+    QObject::connect(&dashboard,
+                     &ProjectDashboardWidget::taskSnapshotsChanged,
+                     &workPanel,
+                     &WorkPanelWidget::setTaskSnapshots);
+
+    dashboard.setTaskSnapshots(QJsonArray{
+        QJsonObject{{QStringLiteral("name"), QStringLiteral("创建点云")},
+                    {QStringLiteral("status_text"), QStringLiteral("正在融合")},
+                    {QStringLiteral("active"), true},
+                    {QStringLiteral("progress_value"), 42},
+                    {QStringLiteral("progress_maximum"), 100}},
+        QJsonObject{{QStringLiteral("name"), QStringLiteral("已完成工作")},
+                    {QStringLiteral("status_text"), QStringLiteral("完成")},
+                    {QStringLiteral("active"), false},
+                    {QStringLiteral("cancelling"), false}}});
+
+    auto *table = workPanel.findChild<QTableWidget *>(
+        QStringLiteral("workPanelTaskTable"));
+    ASSERT_NE(table, nullptr);
+    ASSERT_EQ(table->rowCount(), 1);
+    EXPECT_EQ(table->item(0, 0)->text(), QStringLiteral("创建点云"));
+    EXPECT_EQ(table->item(0, 1)->text(), QStringLiteral("正在融合"));
+    auto *progress = qobject_cast<QProgressBar *>(table->cellWidget(0, 2));
+    ASSERT_NE(progress, nullptr);
+    EXPECT_EQ(progress->value(), 42);
+    EXPECT_EQ(progress->maximum(), 100);
+
+    dashboard.setTaskSnapshots({});
+    EXPECT_EQ(table->rowCount(), 0);
+    auto *emptyLabel = workPanel.findChild<QLabel *>(
+        QStringLiteral("workPanelEmptyLabel"));
+    ASSERT_NE(emptyLabel, nullptr);
+    EXPECT_TRUE(emptyLabel->text().contains(QStringLiteral("没有正在运行")));
+}
+
+TEST(MainWindowLayoutTest, DefaultsToMetashapeStyleBottomPanels)
+{
+    const QString layout = readProjectSourceFile(
+        QStringLiteral("src/gui/main_window/MainWindowLayout.cpp"));
+    const QString state = readProjectSourceFile(
+        QStringLiteral("src/gui/main_window/MainWindowUiState.cpp"));
+    const QString ui = readProjectSourceFile(
+        QStringLiteral("src/gui/main_window/MainWindow.ui"));
+
+    ASSERT_FALSE(layout.isEmpty());
+    ASSERT_FALSE(state.isEmpty());
+    ASSERT_FALSE(ui.isEmpty());
+    EXPECT_TRUE(layout.contains(QStringLiteral("new QDockWidget(tr(\"工作\")")));
+    EXPECT_TRUE(layout.contains(
+        QStringLiteral("setTabPosition(Qt::BottomDockWidgetArea, QTabWidget::South)")));
+    EXPECT_TRUE(state.contains(QStringLiteral("tabifyDockWidget(_workDock, _photosDock)")));
+    EXPECT_TRUE(state.contains(QStringLiteral("tabifyDockWidget(_photosDock, _logDock)")));
+    EXPECT_TRUE(state.contains(QStringLiteral("constexpr int ProjectDockLayoutVersion = 4")));
+    EXPECT_TRUE(ui.contains(QStringLiteral("<string>控制台</string>")));
 }
 
 TEST(ProjectDashboardWidgetTest, MainWindowMirrorsTaskStatusSnapshotsReadOnly)

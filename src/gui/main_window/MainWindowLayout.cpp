@@ -5,7 +5,9 @@
 #include "Logger.h"
 #include "MainMenu.h"
 #include "PhotoStripWidget.h"
+#include "ProjectDashboardWidget.h"
 #include "SelectionPropertiesWidget.h"
+#include "WorkPanelWidget.h"
 #include "WorkspaceCenterWidget.h"
 
 #include <QAction>
@@ -19,6 +21,7 @@
 namespace
 {
 constexpr int SelectionPropertiesMinHeight = 80;
+constexpr int WorkDockMinHeight = 90;
 constexpr int PhotosDockMinHeight = 90;
 constexpr int DockMinWidth = 160;
 constexpr int DockMinHeight = 80;
@@ -62,15 +65,16 @@ void MainWindow::setupUi()
                    | QMainWindow::AllowTabbedDocks
                    | QMainWindow::GroupedDragging);
     // 左下角归左侧 Dock 区域，使“工作区 + 资源属性”占据完整左列。
-    // 照片 Dock 因而只位于中央视图下方，与三维/二维视图组成右列。
+    // 工作、照片和控制台组成中央视图下方的一组标签页。
     setCorner(Qt::BottomLeftCorner, Qt::LeftDockWidgetArea);
+    setTabPosition(Qt::BottomDockWidgetArea, QTabWidget::South);
 
     _log = _ui->logPanel;
     _logDock = _ui->logDock;
     configureMovableDock(_logDock);
     _logDock->setVisible(false);
 
-    LOG_INFO("%s", qUtf8Printable(tr("日志面板已就绪")));
+    LOG_INFO("%s", qUtf8Printable(tr("控制台已就绪")));
 
 }
 
@@ -118,6 +122,19 @@ void MainWindow::setupSelectionPanels()
     configureMovableDock(_propertiesDock);
     _propertiesDock->setWidget(_selectionProperties);
 
+    _workPanel = new WorkPanelWidget(this);
+    _workPanel->setMinimumHeight(WorkDockMinHeight);
+    _workPanel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+    connect(_dashboard,
+            &ProjectDashboardWidget::taskSnapshotsChanged,
+            _workPanel,
+            &WorkPanelWidget::setTaskSnapshots);
+
+    _workDock = new QDockWidget(tr("工作"), this);
+    _workDock->setObjectName(QStringLiteral("workDock"));
+    configureMovableDock(_workDock);
+    _workDock->setWidget(_workPanel);
+
     _photoStrip = new PhotoStripWidget(this);
     _photoStrip->setMinimumHeight(PhotosDockMinHeight);
     _photoStrip->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
@@ -131,7 +148,7 @@ void MainWindow::setupSelectionPanels()
 }
 
 // ============================================================
-//  setupLogDock — 日志面板 Dock 标题栏与菜单状态同步
+//  setupLogDock — 控制台 Dock 标题栏与菜单状态同步
 // ============================================================
 
 void MainWindow::setupLogDock()

@@ -4,7 +4,7 @@
 // 说明:
 //   PlaScan 应用的顶层主窗口类（QMainWindow 派生）。
 //   负责：
-//   - 初始化并持有所有顶层 UI 组件（数据树、画布、日志面板等）
+//   - 初始化并持有所有顶层 UI 组件（数据树、画布、工作、照片、控制台等）
 //   - 创建 ProjectManager、MenuWorkflowController 等业务对象
 //   - 将菜单动作信号连接到对应的业务槽
 //   - 持久化/恢复窗口、面板的 UI 设置（JSON 格式）
@@ -12,7 +12,7 @@
 //
 //   布局结构（从左到右）:
 //     中央: WorkspaceCenterWidget（影像画布 / 模型视图）
-//     停靠面板: 工作区、资源属性、照片、日志
+//     停靠面板: 工作区、资源属性，以及下方的工作、照片、控制台
 // =============================================================================
 
 #pragma once
@@ -21,7 +21,7 @@
 #include <QJsonObject>
 
 // MainWindow: PlaScan 主窗口
-// 布局：中央工作区 + 可停靠的工作区、属性、照片、日志面板
+// 布局：中央工作区 + 可停靠的工作区、属性、工作、照片、控制台面板
 
 class DataTreeWidget;
 class QSplitter;
@@ -42,6 +42,7 @@ class ReferencePanelWidget;
 class WorkspaceCenterWidget;
 class PhotoStripWidget;
 class SelectionPropertiesWidget;
+class WorkPanelWidget;
 class QDragEnterEvent;
 class QDropEvent;
 class QWidgetAction;
@@ -83,9 +84,9 @@ protected:
 
 private:
     // ---- 初始化（由构造函数按顺序调用）----
-    void setupUi();               // 创建核心布局：中央工作区、数据树、画布、日志面板
+    void setupUi();               // 创建核心布局：中央工作区、数据树、画布和控制台
     void setupSelectionPanels();
-    void setupLogDock();          // 初始化日志 Dock 标题栏与菜单状态同步
+    void setupLogDock();          // 初始化控制台 Dock 标题栏与菜单状态同步
     void setupHenanUniversityBrand();
     void setHenanUniversityBrandVisible(bool visible);
     void setupMenuConnections();  // 将菜单/工具栏 QAction 信号连接到对应的槽
@@ -121,8 +122,10 @@ private:
     QTabWidget*       _leftTabs{};                     // 工作区 Dock 内的选项卡容器（概览 | 工作区 | 参考）
     QDockWidget *_workspaceDock{};
     QDockWidget *_propertiesDock{};
+    QDockWidget *_workDock{};
     QDockWidget *_photosDock{};
     SelectionPropertiesWidget *_selectionProperties{};
+    WorkPanelWidget *_workPanel{};
     PhotoStripWidget *_photoStrip{};
     ProjectDashboardWidget* _dashboard{};              // 项目概览与工作流状态（只读）
     DataTreeWidget*   _dataTree{};                     // 工作区资源树（照片/匹配/点云/DEM 等分组）
@@ -140,7 +143,7 @@ public:
 private:
     HenuBrandWidget*  _henuBrandWidget{};              // 主工具栏中的河南大学校徽品牌区
     QWidgetAction*    _henuBrandAction{};              // 控制品牌区在工具栏中的可见性
-    LogPanel*         _log{};                          // 日志面板（日志 Dock 的内容 widget）
+    LogPanel*         _log{};                          // 控制台内容（复用统一日志数据源）
     MainMenu*         _mainMenu{};                     // 菜单栏封装对象（管理所有 QAction）
     AppConfigManager* _config{};                       // 应用级配置管理器（窗口状态/最近项目）
     ProjectData*      _projectData{};                  // 项目数据模型（元数据 + 文件索引）
@@ -150,7 +153,7 @@ private:
     xjw::gui::markers::MarkerWorkspaceController *_markerWorkspaceController{};
     xjw::gui::reference::CameraReferenceController *_cameraReferenceController{};
     xjw::gui::reference::ProjectCameraReferenceRepository *_cameraReferenceRepository{};
-    QDockWidget*      _logDock{};                      // 日志 Dock 窗口容器
+    QDockWidget*      _logDock{};                      // 控制台 Dock 窗口容器
     bool _applyingUiSettings{};                        // 正在恢复项目 UI，阻止中间态写回
     QJsonObject _imageViewRotations;                   // 按稳定 image_uuid 保存的查看旋转角度
     
@@ -168,8 +171,8 @@ private slots:
     // 参数: ui - 完整的 UI 设置 JSON 对象
     void applyUiSettings(const QJsonObject &ui);
 
-    // ---- 日志面板 ----
-    // onLogDisplayLevelChanged: 日志级别变化时将新级别写入项目 UI 设置
+    // ---- 控制台 ----
+    // onLogDisplayLevelChanged: 控制台显示级别变化时将新级别写入项目 UI 设置
     // 参数: lvl - Logger::Level 枚举的整数值
     void onLogDisplayLevelChanged(int lvl);
 

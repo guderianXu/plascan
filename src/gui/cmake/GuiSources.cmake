@@ -80,6 +80,7 @@ set(GUI_SOURCES
   widgets/WorkspaceSectionIcons.cpp
   widgets/PhotoStripWidget.cpp
   widgets/ProjectDashboardWidget.cpp
+  widgets/WorkPanelWidget.cpp
   widgets/ReferencePanelWidget.cpp
   widgets/ReferenceMarkerModels.cpp
   widgets/SelectionPropertiesWidget.cpp

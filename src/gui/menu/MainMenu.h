@@ -54,7 +54,7 @@ public:
 
     // ==== 面板开关动作 ====
 
-    /** @brief 返回"日志面板"显示/隐藏切换动作（可检查状态的 QAction）。 */
+    /** @brief 返回"控制台"显示/隐藏切换动作（可检查状态的 QAction）。 */
     QAction *toggleLogAction() const;
 
     /** @brief 返回"左侧工作区"显示/隐藏切换动作（可检查状态的 QAction）。 */
@@ -62,6 +62,9 @@ public:
 
     /** @brief 返回"属性面板"显示/隐藏切换动作（可检查状态的 QAction）。 */
     QAction *togglePropertiesAction() const;
+
+    /** @brief 返回"工作面板"显示/隐藏切换动作（可检查状态的 QAction）。 */
+    QAction *toggleWorkAction() const;
 
     /** @brief 返回"照片面板"显示/隐藏切换动作（可检查状态的 QAction）。 */
     QAction *togglePhotosAction() const;
@@ -364,8 +367,9 @@ private:
     // ---- 面板开关动作 ----
     QAction *_toggleWorkspaceAct{}; ///< 左侧工作区显示/隐藏
     QAction *_togglePropertiesAct{}; ///< 属性面板显示/隐藏
+    QAction *_toggleWorkAct{}; ///< 工作面板显示/隐藏
     QAction *_togglePhotosAct{}; ///< 照片面板显示/隐藏
-    QAction *_toggleLogAct{}; ///< 日志面板显示/隐藏
+    QAction *_toggleLogAct{}; ///< 控制台显示/隐藏
     QAction *_toggleMainToolbarAct{}; ///< 主工具栏显示/隐藏
     QAction *_restoreDefaultWindowLayoutAct{}; ///< 恢复默认 Dock 与工具栏布局
     QAction *_toggleFullScreenAct{}; ///< 全屏显示切换

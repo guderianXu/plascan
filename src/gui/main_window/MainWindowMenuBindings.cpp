@@ -28,6 +28,9 @@ void MainWindow::setupMenuConnections()
     _workspacePanels->registerDock(WorkspacePanelId::Properties,
                                    _mainMenu->togglePropertiesAction(),
                                    _propertiesDock);
+    _workspacePanels->registerDock(WorkspacePanelId::Work,
+                                   _mainMenu->toggleWorkAction(),
+                                   _workDock);
     _workspacePanels->registerDock(WorkspacePanelId::Photos,
                                    _mainMenu->togglePhotosAction(),
                                    _photosDock);

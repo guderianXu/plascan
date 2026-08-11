@@ -331,7 +331,9 @@ void MainWindow::applyUiSettings(const QJsonObject &ui)
         }
         else
         {
-            _workspacePanels->applyVisibility(settings);
+            // 布局版本升级或状态损坏时使用完整的新默认布局，避免旧项目中
+            // 保存的 log_visible=false 再次隐藏新命名的“控制台”标签。
+            _workspacePanels->restoreDefaultVisibility();
         }
     }
 
