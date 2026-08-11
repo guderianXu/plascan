@@ -36,7 +36,6 @@ QString referenceDatasetTypeLabel(QString type);
 QString referenceDatasetRoleLabel(QString role);
 QString resultPath(const QJsonObject &record, std::initializer_list<const char *> keys);
 int countObjectsWithPath(const QJsonArray &records, std::initializer_list<const char *> keys);
-int displayableSparseResultCount(const QJsonArray &atResults);
 QString imagePathFromValue(const QJsonValue &value);
 QString imagePathKey(QString path);
 bool jsonArrayHasAtLeast(const QJsonValue &value, int size);

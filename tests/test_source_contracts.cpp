@@ -233,7 +233,6 @@ TEST(SfmModuleContractTest, QualityMetricsAreQtFreeAndSerializationIsProjectOwne
     EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/sfm/quality/SfmQualityReport.cpp")));
     EXPECT_TRUE(sourceFileExists(QStringLiteral("src/core/sfm/quality/SfmQualityMetrics.h")));
     EXPECT_TRUE(sourceFileExists(QStringLiteral("src/core/sfm/quality/SfmQualityMetrics.cpp")));
-    EXPECT_TRUE(sourceFileExists(QStringLiteral("src/core/sfm/quality/SfmError.h")));
     EXPECT_TRUE(sourceFileExists(QStringLiteral("src/core/sfm/project/SfmQualityJsonSerializer.h")));
     EXPECT_TRUE(sourceFileExists(QStringLiteral("src/core/sfm/project/SfmQualityJsonSerializer.cpp")));
 
@@ -1423,7 +1422,6 @@ TEST(GuiDialogLayoutContractTest, DialogSourcesAreGroupedByDomain)
     });
     expectNotContainsAll(gui_sources, {
         "dialogs/application/AboutDialog.cpp",
-        "dialogs/camera/CameraModel3DDialog.cpp",
         "dialogs/reconstruction/GenerateModelDialog.cpp",
         "dialogs/tie_points/MatchViewerDialog.cpp",
     });
@@ -1435,7 +1433,6 @@ TEST(GuiDialogLayoutContractTest, DialogSourcesAreGroupedByDomain)
         "GUI_TIE_POINT_DIALOG_SOURCES",
         "GUI_SHARED_DIALOG_SOURCES",
         "dialogs/application/AboutDialog.cpp",
-        "dialogs/camera/CameraModel3DDialog.cpp",
         "dialogs/image/GenerateMaskDialog.cpp",
         "dialogs/reconstruction/CreatePointCloudDialog.cpp",
         "dialogs/reconstruction/GenerateModelDialog.cpp",

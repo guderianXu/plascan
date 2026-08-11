@@ -27,12 +27,8 @@ struct DenseMatchConfig
     int p1            = 8;
     int p2            = 32;
     int sgmDirections = 8;
-    int sgmCollarSize = 512;
 
     int pyramidLevels = 2;
-
-    int subpixelKernelW = 21;
-    int subpixelKernelH = 21;
 
     float lrCheckThreshold = 1.0f;
     int   medianFilterSize = 3;

@@ -53,7 +53,6 @@ void MainWindow::setupMenuConnections()
                 QJsonObject settings{{settingKey, visible}};
                 if (id == WorkspacePanelId::Log)
                 {
-                    settings[QStringLiteral("bottom_panel")] = currentBottomPanelKey();
                     if (visible && _log)
                     {
                         _log->loadFromLogFile();

@@ -53,7 +53,6 @@ struct FaceCandidate
 {
     int viewIndex = -1;
     float score = -1.0f;
-    float depthScore = 0.0f;
     float angleScore = 0.0f;
     float resolutionScore = 0.0f;
     bool strict = false;

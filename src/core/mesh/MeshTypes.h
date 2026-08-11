@@ -71,7 +71,6 @@ struct ReconstructionConfig
     int   streamingTileOverlapCells = 2;
     float streamingCellMaxStdDev = 0.0f; // <=0 表示按网格步长自动判断竖向毛刺
     int   kNormals         = 12;
-    int   kImplicit        = 10;
     float padding          = 0.05f;
     int   smoothIterations = 2;
     float smoothLambda     = 0.5f;

@@ -89,7 +89,6 @@ set(SFM_POSTPROCESS_SOURCES
 
 set(SFM_POSTPROCESS_HEADERS
     quality/SfmQualityMetrics.h
-    quality/SfmError.h
     filtering/SparsePointCloudWorkspace.h
     filtering/SparsePointCloudProcessor.h
 )

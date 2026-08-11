@@ -64,7 +64,6 @@ set(MVS_CXX_SOURCES
     DenseCloudBuilder.cpp
     DepthMapGenerator.cpp
     EpipolarRectifier.cpp
-    SparseCloudValidator.cpp
     SparseCloudPreprocessor.cpp
     DisparityTriangulator.cpp
     PointCloudArtifactIO.cpp
@@ -115,7 +114,6 @@ set(MVS_HEADERS
     PatchMatchPhotometricCost.h
     DensePointCloudCUDA.h
     EpipolarRectifier.h
-    SparseCloudValidator.h
     SparseCloudPreprocessor.h
     DisparityTriangulator.h
     PointCloudArtifactIO.h

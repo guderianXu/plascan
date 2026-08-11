@@ -324,7 +324,7 @@ TEST(ProjectDataTest, UiSettingsDoNotDirtyProjectContent)
 
     project.saveUiSettings(QJsonObject{
         {QStringLiteral("workspace_visible"), false},
-        {QStringLiteral("bottom_panel"), QStringLiteral("photos")}
+        {QStringLiteral("dock_layout_version"), 4}
     });
 
     EXPECT_FALSE(project.isDirty());
@@ -340,9 +340,9 @@ TEST(ProjectDataTest, UiSettingsDoNotDirtyProjectContent)
                      .value(QStringLiteral("workspace_visible"))
                      .toBool(true));
     EXPECT_EQ(reopened.loadUiSettings()
-                  .value(QStringLiteral("bottom_panel"))
-                  .toString(),
-              QStringLiteral("photos"));
+                  .value(QStringLiteral("dock_layout_version"))
+                  .toInt(),
+              4);
 }
 
 TEST(ProjectDataTest, CreatingProjectReplacesSessionWithoutImportingPreviousResources)

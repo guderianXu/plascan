@@ -34,7 +34,6 @@ struct MarkerDetectionProgress
     int imagesCompleted = 0;
     int imageCount = 0;
     int candidatesDetected = 0;
-    int markersMerged = 0;
     QString currentImage;
 };
 

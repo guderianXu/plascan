@@ -123,15 +123,6 @@ private:
         int H = 0;
     };
 
-    /// BFS 队列项
-    struct FusionData
-    {
-        int imageIdx;
-        int row;
-        int col;
-        int traversalDepth;
-    };
-
     /// 预计算每帧的投影几何
     void prepareGeometry(const std::vector<FusionFrameInput> &frames,
                          std::vector<FrameGeometry> &geom);

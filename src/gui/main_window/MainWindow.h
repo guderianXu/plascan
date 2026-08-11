@@ -107,8 +107,6 @@ private:
     // saveUiSetting: 将 partial 合并写入根 doc.json 的 ui_state 字段。
     // 参数: partial - 仅包含需更新键值对的 JSON 对象
     void saveUiSetting(const QJsonObject &partial);
-    // currentBottomPanelKey: 返回旧版 UI 设置使用的底部面板键名，dock 化后仅用于兼容保存。
-    QString currentBottomPanelKey() const;
     QString projectImageStateKey(const QString &imagePath) const;
     QString projectImagePathForStateKey(const QString &stateKey) const;
 

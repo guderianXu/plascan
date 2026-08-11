@@ -37,7 +37,6 @@ struct PreparedFeatureImage
     QString errorMessage;
 
     bool reused = false;
-    int existingKeypointCount = 0;
     int effectiveKeypointLimit = 0;
     int originalWidth = 0;
     int originalHeight = 0;

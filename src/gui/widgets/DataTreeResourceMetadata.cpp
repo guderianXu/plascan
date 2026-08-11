@@ -311,23 +311,4 @@ int countObjectsWithPath(const QJsonArray &records, std::initializer_list<const 
     return count;
 }
 
-int displayableSparseResultCount(const QJsonArray &atResults)
-{
-    int count = 0;
-    for (const QJsonValue &value : atResults)
-    {
-        if (!value.isObject())
-        {
-            continue;
-        }
-
-        const QJsonObject files = value.toObject().value(QStringLiteral("files")).toObject();
-        if (!files.value(QStringLiteral("sparse_cloud_xyz")).toString().trimmed().isEmpty())
-        {
-            ++count;
-        }
-    }
-    return count;
-}
-
 } // namespace xjw::gui::widgets::data_tree

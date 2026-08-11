@@ -219,7 +219,6 @@ QJsonObject MainWindow::currentUiSettingsSnapshot() const
     QJsonObject settings = _workspacePanels
         ? _workspacePanels->visibilitySnapshot()
         : QJsonObject{};
-    settings[QStringLiteral("bottom_panel")] = currentBottomPanelKey();
     settings[QStringLiteral("dock_layout_version")] = ProjectDockLayoutVersion;
     settings[QStringLiteral("dock_state")] = QString::fromLatin1(saveState().toBase64());
 
@@ -319,23 +318,6 @@ void MainWindow::saveUiSetting(const QJsonObject &partial)
         return;
     }
     _projectManager->saveUiSettings(partial);
-}
-
-QString MainWindow::currentBottomPanelKey() const
-{
-    if (_logDock && _logDock->isVisible())
-    {
-        return QStringLiteral("console");
-    }
-    if (_photosDock && _photosDock->isVisible())
-    {
-        return QStringLiteral("photos");
-    }
-    if (_workDock && _workDock->isVisible())
-    {
-        return QStringLiteral("work");
-    }
-    return QStringLiteral("none");
 }
 
 // Interest-point panel removed: onIpBtnClicked is a no-op now.

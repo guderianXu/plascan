@@ -240,7 +240,6 @@ FaceCandidate evaluateCandidate(const PreparedView &view,
         std::clamp(view.sharpnessWeight, 0.20f, 1.5f);
     return {view_index,
             score,
-            depth_score,
             angle_score,
             resolution_score,
             strict};

@@ -76,12 +76,6 @@ public slots:
     // 强制重新加载指定影像的匹配观测，用于重新生成 `.pimatch` 后刷新显示。
     void reloadInterestPoints(const QString &imagePath);
 
-    // 兼容现有 UI 调用；始终异步刷新，不在 GUI 线程读取匹配分片。
-    void immediateReloadInterestPoints(const QString &imagePath);
-
-    // 返回指定影像当前缓存的兴趣点（以 QVariantMap 列表形式，避免在头文件暴露内部类型）
-    QList<QVariantMap> getCachedInterestPointsAsVariant(const QString &imagePath) const;
-
     // 返回当前显示影像的路径（若未显示则为空）
     QString currentImagePath() const;
 

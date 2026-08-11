@@ -24,7 +24,6 @@
 #include <QMouseEvent>
 #include <QContextMenuEvent>
 #include <QScrollBar>
-#include <QVariantMap>
 #include <QFile>
 #include <QDataStream>
 #include <QPointF>
@@ -664,29 +663,6 @@ void CanvasWidget::reloadInterestPoints(const QString &imagePath)
         // 即使未开启叠加，也更新缓存以便后续打开影像时能立即得到最新数据
         startMatchObservationLoadForImage(imagePath);
     }
-}
-
-void CanvasWidget::immediateReloadInterestPoints(const QString &imagePath)
-{
-    reloadInterestPoints(imagePath);
-}
-
-QList<QVariantMap> CanvasWidget::getCachedInterestPointsAsVariant(const QString &imagePath) const
-{
-    QList<QVariantMap> out;
-    if (imagePath.trimmed().isEmpty()) return out;
-    const auto it = _matchObservationCache.find(matchObservationCacheKey(imagePath));
-    if (it == _matchObservationCache.end()) return out;
-    for (const auto &kp : it->second.second) {
-        QVariantMap m;
-        m.insert(QStringLiteral("x"), kp.pt.x);
-        m.insert(QStringLiteral("y"), kp.pt.y);
-        m.insert(QStringLiteral("size"), kp.size);
-        m.insert(QStringLiteral("angle"), kp.angle);
-        m.insert(QStringLiteral("response"), kp.response); // score
-        out.append(m);
-    }
-    return out;
 }
 
 QString CanvasWidget::matchObservationCacheKey(const QString &imagePath) const

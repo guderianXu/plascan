@@ -53,7 +53,6 @@ struct VisibilityOccupancyOptions
     bool repairNonManifoldConfigurations = false;
     int wellComposedRepairMaximumPasses = 8;
     std::size_t wellComposedRepairMaximumFilledSampleCount = 1024;
-    int signedDistanceMaximumSamples = 12;
     bool buildSignedDistanceSamples = true;
     int workerCount = 0;
     std::function<bool()> isCancelled;

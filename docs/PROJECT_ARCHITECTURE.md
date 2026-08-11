@@ -308,7 +308,6 @@ core/
 │   ├── DensePointCloudCUDA.cu  # 密集点云 CUDA
 │   ├── DenseCloudBuilder.h/cpp # 密集云构建器与点云过滤
 │   ├── SparseCloudPreprocessor.h/cpp  # 稀疏云预处理
-│   ├── SparseCloudValidator.h/cpp     # 稀疏云验证
 │   └── tests/                  # MVS 单元与流水线测试
 │       ├── test_mvs_rectifier.cpp
 │       ├── test_mvs_depth_pyramid.cpp
@@ -577,8 +576,7 @@ gui/
 │   │   └── reporting/GlobalTerrainReportPage.h/cpp # 当前 Chunk 全球 DEM/DOM 四联图与坐标警告
 │   ├── camera/                 # 相机校准前后对比、相机查看/转换、前方交汇、测量控制
 │   │   ├── CameraCalibrationData.h/cpp   # 固化空三输入先验/最终内参，按图像中心转换 cx/cy
-│   │   ├── CameraCalibrationDialog.h/cpp # 初始/调整内参、释放状态、相机分组与照片列表
-│   │   └── CameraModel3DDialog.h/cpp      # 独立三维预览的轻量对话框外壳
+│   │   └── CameraCalibrationDialog.h/cpp # 初始/调整内参、释放状态、相机分组与照片列表
 │   ├── image/                  # 蒙版等单影像处理
 │   │   └── GenerateMaskDialog.h/cpp # 经典/U2Net/BiRefNet 方法、真实设备/尺寸、模型状态与下载入口
 │   ├── reconstruction/         # 空三、模型、纹理、DEM/正射工作流程
@@ -1219,9 +1217,7 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
 - `MainWindow` 按布局、菜单绑定、项目绑定和 UI 状态拆分实现；项目打开/保存展示由
   `ProjectLifecyclePresenter` 管理，状态栏任务由 `ProjectTaskStatusController` 管理，特征点/残差显示配置由
   `FeatureVisualizationController` 管理。任务栏图标进度由 `ProjectTaskStatusController` 聚合项目打开、保存、
-  DEM、正射和后台重建任务，再通过平台适配器显示；非 Windows 平台保持无副作用。`CameraModel3DDialog`
-  只保留对话框装配，三维场景职责位于
-  `views/CameraSceneWidget`。
+  DEM、正射和后台重建任务，再通过平台适配器显示；非 Windows 平台保持无副作用。
   `DataTreeWidget` 按模型、填充、上下文菜单、资源元数据和相机对齐判定拆分实现。
 - 正射流程为 `MenuWorkflowController -> ProjectManager -> ProjectTerrainProductsManager ->`
   `project_workflows::runOrthoProduct`，请求在 GUI 边界转换为 `OrthoGenerationRequest`。

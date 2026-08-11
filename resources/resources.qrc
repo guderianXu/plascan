@@ -2,7 +2,6 @@
     <qresource prefix="/">
         <file>plascan.png</file>
         <file>styles/app.qss</file>
-        <file>icons/checkmark_white.svg</file>
         <file>icons/checkmark_white.xpm</file>
         <file>icons/henu_logo.png</file>
     </qresource>

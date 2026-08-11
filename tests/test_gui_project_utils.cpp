@@ -3616,28 +3616,18 @@ TEST(CodeStyleTest, LayerRendererUsesLowerCamelPrivateMemberNames)
     }
 }
 
-TEST(CodeStyleTest, CameraModel3DDialogUsesLowerCamelPrivateMemberNames)
+TEST(CodeStyleTest, CameraSceneWidgetUsesLowerCamelPrivateMemberNames)
 {
-    const QString header =
-        readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"))
-        + readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.h"));
-    const QString source =
-        readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"))
-        + readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
 
     const QRegularExpression legacyMemberPattern(QStringLiteral("\\bm_[A-Za-z0-9_]+"));
-    const QString sourceWithoutGeneratedUiObjects = QString(source)
-        .replace(QStringLiteral("form.m_scene"), QStringLiteral("form.scene"))
-        .replace(QStringLiteral("form.m_summaryLabel"), QStringLiteral("form.summaryLabel"));
     EXPECT_FALSE(header.contains(legacyMemberPattern))
-        << "CameraModel3DDialog private members should use _lowerCamelCase.";
-    EXPECT_FALSE(sourceWithoutGeneratedUiObjects.contains(legacyMemberPattern))
-        << "CameraModel3DDialog source should not reference m_ private members.";
-    EXPECT_TRUE(header.contains(QStringLiteral("ProjectManager *_projectManager = nullptr;")));
-    EXPECT_TRUE(source.contains(QStringLiteral("form.m_scene")));
-    EXPECT_TRUE(source.contains(QStringLiteral("form.m_summaryLabel")));
+        << "CameraSceneWidget private members should use _lowerCamelCase.";
+    EXPECT_FALSE(source.contains(legacyMemberPattern))
+        << "CameraSceneWidget source should not reference m_ private members.";
 }
 
 TEST(CodeStyleTest, LayerRendererHeaderKeepsLinesWithinStyleLimit)
@@ -4204,19 +4194,6 @@ TEST(CodeStyleTest, GroundBackProjectorUsesLowerCamelPrivateMemberNames)
         EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
         EXPECT_FALSE(source.contains(oldName)) << qPrintable(oldName);
     }
-}
-
-TEST(CodeStyleTest, SparseCloudValidatorUsesLowerCamelPrivateMemberNames)
-{
-    const QString header = readProjectSourceFile(QStringLiteral("src/core/mvs/SparseCloudValidator.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/SparseCloudValidator.cpp"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(header.contains(QStringLiteral("SparseCloudValidatorOptions _options;")));
-    EXPECT_TRUE(header.contains(QStringLiteral(": _options(opts)")));
-    EXPECT_FALSE(header.contains(QStringLiteral("m_opts")));
-    EXPECT_FALSE(source.contains(QStringLiteral("m_opts")));
 }
 
 TEST(CodeStyleTest, DepthMapFusionUsesLowerCamelPrivateMemberNames)
@@ -14431,7 +14408,7 @@ TEST(ProjectIOTest, ResolvesProjectRelativeAndAbsoluteResourcePaths)
               QDir::cleanPath(absolutePath));
 }
 
-TEST(CameraModel3DDialogTest, PlyFloatIntensityIsScaledToByteRange)
+TEST(CameraSceneWidgetTest, PlyFloatIntensityIsScaledToByteRange)
 {
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
@@ -14460,7 +14437,7 @@ TEST(CameraModel3DDialogTest, PlyFloatIntensityIsScaledToByteRange)
     EXPECT_EQ(cloud->colors()->getValue(0, 2), 128);
 }
 
-TEST(CameraModel3DDialogTest, ObjReaderAcceptsWhitespacePrefixedTriangularMesh)
+TEST(CameraSceneWidgetTest, ObjReaderAcceptsWhitespacePrefixedTriangularMesh)
 {
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
@@ -14494,7 +14471,7 @@ TEST(CameraModel3DDialogTest, ObjReaderAcceptsWhitespacePrefixedTriangularMesh)
     EXPECT_EQ(cloud->faces()->getValue(1, 2), 3);
 }
 
-TEST(CameraModel3DDialogTest, ObjReaderPreservesPerFaceTextureSeams)
+TEST(CameraSceneWidgetTest, ObjReaderPreservesPerFaceTextureSeams)
 {
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
@@ -14549,7 +14526,7 @@ TEST(CameraModel3DDialogTest, ObjReaderPreservesPerFaceTextureSeams)
     EXPECT_FLOAT_EQ(renderVertices[3 * 11 + 10], 0.25f);
 }
 
-TEST(CameraModel3DDialogTest, StreamingObjReaderReportsProgressAndPreservesGeometry)
+TEST(CameraSceneWidgetTest, StreamingObjReaderReportsProgressAndPreservesGeometry)
 {
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
@@ -14597,7 +14574,7 @@ TEST(CameraModel3DDialogTest, StreamingObjReaderReportsProgressAndPreservesGeome
     EXPECT_TRUE(stages.join(QLatin1Char(' ')).contains(QStringLiteral("流式解析")));
 }
 
-TEST(CameraModel3DDialogTest, OversizedMeshUsesChunkedPointLodWithoutChangingCloud)
+TEST(CameraSceneWidgetTest, OversizedMeshUsesChunkedPointLodWithoutChangingCloud)
 {
     ObjRenderCloud cloud(6);
     for (int index = 0; index < 6; ++index)
@@ -14645,7 +14622,7 @@ TEST(CameraModel3DDialogTest, OversizedMeshUsesChunkedPointLodWithoutChangingClo
     EXPECT_EQ(progress.back(), 98);
 }
 
-TEST(CameraModel3DDialogTest, StaticMeshPreparationPreservesSourceVertexColors)
+TEST(CameraSceneWidgetTest, StaticMeshPreparationPreservesSourceVertexColors)
 {
     ObjRenderCloud cloud(3);
     cloud.points()(0, 0) = 0.0f;
@@ -14689,7 +14666,7 @@ TEST(CameraModel3DDialogTest, StaticMeshPreparationPreservesSourceVertexColors)
     EXPECT_FALSE(prepareObjRenderData(cloud, false, &cancelled).isValid());
 }
 
-TEST(CameraModel3DDialogTest, ObjReaderBenchmarkUsesConfiguredModel)
+TEST(CameraSceneWidgetTest, ObjReaderBenchmarkUsesConfiguredModel)
 {
     const QString objPath = qEnvironmentVariable("PLASCAN_OBJ_BENCHMARK_PATH");
     if (objPath.isEmpty())
@@ -14728,7 +14705,7 @@ TEST(CameraModel3DDialogTest, ObjReaderBenchmarkUsesConfiguredModel)
               << " faces\n";
 }
 
-TEST(CameraModel3DDialogTest, ObjLoadingShowsSingleFlightProgressOverlay)
+TEST(CameraSceneWidgetTest, ObjLoadingShowsSingleFlightProgressOverlay)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     ASSERT_FALSE(source.isEmpty());
@@ -14742,13 +14719,15 @@ TEST(CameraModel3DDialogTest, ObjLoadingShowsSingleFlightProgressOverlay)
     EXPECT_TRUE(objBlock.contains(QStringLiteral("正在加载 %1 模型")));
     EXPECT_TRUE(objBlock.contains(QStringLiteral("SceneLoadFormat::Obj")));
     EXPECT_TRUE(objBlock.contains(QStringLiteral("loadObjWithMaterialTexture")));
-    EXPECT_TRUE(objBlock.contains(QStringLiteral("emit plyLoadProgressChanged(_loadGen, 0")));
+    EXPECT_TRUE(objBlock.contains(QStringLiteral(
+        "_plyLoadProgressPercent = request.format == SceneLoadFormat::Obj ? -1 : 0")));
+    EXPECT_TRUE(objBlock.contains(QStringLiteral("emit plyLoadProgressChanged(")));
     EXPECT_TRUE(objBlock.contains(QStringLiteral("_sceneLoadWorkerActive")));
     EXPECT_TRUE(objBlock.contains(QStringLiteral("三维数据加载失败或文件为空")));
     EXPECT_FALSE(objBlock.contains(QStringLiteral("QMetaObject::invokeMethod(self.data()")));
 }
 
-TEST(CameraModel3DDialogTest, ObjMaterialTextureUsesFaceUvRhiPipeline)
+TEST(CameraSceneWidgetTest, ObjMaterialTextureUsesFaceUvRhiPipeline)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const QString preparationSource = readProjectSourceFile(
@@ -14783,7 +14762,7 @@ TEST(CameraModel3DDialogTest, ObjMaterialTextureUsesFaceUvRhiPipeline)
     EXPECT_FALSE(fragmentShader.contains(QStringLiteral("0.55 + 0.75 * diff")));
 }
 
-TEST(CameraModel3DDialogTest, ModelViewMinimumSizeDoesNotLimitDockResizing)
+TEST(CameraSceneWidgetTest, ModelViewMinimumSizeDoesNotLimitDockResizing)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     ASSERT_FALSE(source.isEmpty());
@@ -14793,19 +14772,16 @@ TEST(CameraModel3DDialogTest, ModelViewMinimumSizeDoesNotLimitDockResizing)
     EXPECT_FALSE(source.contains(QStringLiteral("setMinimumSize(760, 520)")));
 }
 
-TEST(CameraModel3DDialogTest, UsesCameraToWorldRotationWithoutTransposeForCards)
+TEST(WorkspaceCenterWidgetTest, UsesCameraToWorldRotationWithoutTransposeForCards)
 {
-    const QString dialogSource = readProjectSourceFile(QStringLiteral("src/gui/dialogs/camera/CameraModel3DDialog.cpp"));
     const QString workspaceSource = readProjectSourceFile(QStringLiteral("src/gui/widgets/WorkspaceCenterWidget.cpp"));
-    ASSERT_FALSE(dialogSource.isEmpty());
     ASSERT_FALSE(workspaceSource.isEmpty());
 
-    const QString combined = dialogSource + workspaceSource;
-    EXPECT_FALSE(combined.contains(QStringLiteral("pose.rotation = rotation.transposed();")));
-    EXPECT_TRUE(combined.contains(QStringLiteral("pose.rotation = rotation;")));
+    EXPECT_FALSE(workspaceSource.contains(QStringLiteral("pose.rotation = rotation.transposed();")));
+    EXPECT_TRUE(workspaceSource.contains(QStringLiteral("pose.rotation = rotation;")));
 }
 
-TEST(CameraModel3DDialogTest, CameraPhotoPlanesUseDepthTestedQrhiGeometry)
+TEST(CameraSceneWidgetTest, CameraPhotoPlanesUseDepthTestedQrhiGeometry)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     ASSERT_FALSE(source.isEmpty());
@@ -14817,7 +14793,7 @@ TEST(CameraModel3DDialogTest, CameraPhotoPlanesUseDepthTestedQrhiGeometry)
     EXPECT_FALSE(source.contains(QStringLiteral("drawImageOnCameraPlane")));
 }
 
-TEST(CameraModel3DDialogTest, LargeBinaryPlyLoadsEveryPointWithoutPreviewSampling)
+TEST(CameraSceneWidgetTest, LargeBinaryPlyLoadsEveryPointWithoutPreviewSampling)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
@@ -14842,7 +14818,7 @@ TEST(CameraModel3DDialogTest, LargeBinaryPlyLoadsEveryPointWithoutPreviewSamplin
     EXPECT_TRUE(header.contains(QStringLiteral("plyLoadProgressChanged")));
 }
 
-TEST(CameraModel3DDialogTest, PlyLoadProgressDoesNotRegressAfterFinished)
+TEST(CameraSceneWidgetTest, PlyLoadProgressDoesNotRegressAfterFinished)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
     ASSERT_FALSE(source.isEmpty());

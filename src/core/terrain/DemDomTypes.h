@@ -133,20 +133,6 @@ struct DemGridData
 };
 
 /**
- * @brief DEM 产物摘要。
- */
-struct DemArtifacts
-{
-    QString demPath;
-    QString previewPath;
-    QString denseCloudPath;
-    QString meshPath;
-    int densePointCount = 0;
-    int meshVertexCount = 0;
-    int meshFaceCount = 0;
-};
-
-/**
  * @brief DEM 质量栅格产物。
  */
 struct DemQualityArtifacts
@@ -155,17 +141,6 @@ struct DemQualityArtifacts
     QString countPath;
     QString confidencePath;
     QString coveragePath;
-};
-
-/**
- * @brief DOM 产物摘要。
- */
-struct DomArtifacts
-{
-    QString domPath;
-    int sourceImageCount = 0;
-    int width = 0;
-    int height = 0;
 };
 
 /**

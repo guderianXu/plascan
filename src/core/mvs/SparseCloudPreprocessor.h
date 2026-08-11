@@ -19,14 +19,6 @@ namespace xjw
 namespace mvs
 {
 
-struct PreprocessOptions
-{
-    float reprojectThresh = 2.0f;    ///< 重投影误差阈值（像素），超过此值的点被过滤
-    float outlierRadius   = 1.0f;    ///< 离群值搜索半径
-    int   minNeighbors    = 3;       ///< 半径内最少邻居数（否则视为离群）
-    int   minPoints       = 500;     ///< 过滤后最少有效点数
-};
-
 struct PreprocessResult
 {
     int rawCount      = 0;    ///< 原始点数
