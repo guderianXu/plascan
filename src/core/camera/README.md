@@ -1,8 +1,18 @@
-# Camera 与 Tsai 相机文件说明
+# Camera 与相机模型说明
 
-`src/core/camera` 负责 PlaScan 的统一针孔相机模型、ASP/Tsai 文本文件读写、外部相机格式转换、相机基线几何计算，以及面向 MVS 的正深度工作相机生成。
+`src/core/camera` 负责 PlaScan 的公共相机几何、静态针孔与行星线阵模型、ASP/Tsai 文本文件读写、外部相机格式转换、相机基线几何计算，以及面向 MVS 的正深度工作相机生成。
 
 `CameraBaseline` 统一提供两相机光心距离、指定空间点的三角交会角，以及物理前方条件成立时的平均深度/基线比。SfM、MVS 等上层流程应通过该类共享基线定义，而不是重复实现光心距离与夹角计算。
+
+## 相机模型分层
+
+- `CameraModel` 是只读公共几何抽象，只统一像点到空间射线、空间点到像点、图像尺寸和世界坐标系名称。公共像点一律使用 OpenCV 零基像素中心 `(0, 0)`。
+- `FramePinholeCamera` 是静态面阵实现，按值持有现有 `Camera`。现有面阵 SfM、BA 和 MVS 继续直接使用 `Camera`，因此引入多态边界不会改变已有数值流程。
+- `PlanetaryLineScanCamera` 是时变推扫实现。每个像点的成像射线都包含该行曝光时刻对应的光心、方向和 TDB 秒；其 CSM 像素中心入口仍作为线阵专用 API 保留。
+
+ISIS 控制网常见的左上像素中心 `(1, 1)` 不属于公共接口。导入层应先完成 ISIS/CSM/OpenCV 半像素换算，再调用对应模型，不能在 `CameraModel` 内隐式猜测来源格式。
+
+项目的 `project_config.camera_model_policy` 保存当前 Chunk 的模型策略：默认值 `frame_pinhole` 保持旧项目和现有流程兼容，线阵策略使用 `isis_usgscsm_linescan`。当前阶段只建立模型类型、公共几何和项目配置边界；普通“空中三角测量”仍走既有面阵流程，后续需显式接入线阵控制网、初始化和专用 BA 后才能形成完整线阵稀疏重建流程。
 
 ## 1. 坐标系和单位约定
 
@@ -243,7 +253,10 @@ if (!camera.saveToFile("output.tsai"))
 
 ## 4. 相关文件
 
+- `CameraModel.h/.cpp`：面阵与线阵共享的只读几何接口。
+- `FramePinholeCamera.h/.cpp`：现有静态 `Camera` 的拥有式公共模型实现。
 - `Camera.h/.cpp`：Tsai 相机状态、投影、反畸变和文件读写。
+- `PlanetaryLineScanCamera*.h/.cpp`：USGSCSM ISD、逐行时间、时变姿轨和行星固连系投影。
 - `CameraFormatConverter.h/.cpp`：Middlebury、EPFL、COLMAP、Metashape 等外部格式转换。
 - `../mvs/MvsImagePreprocessor.h/.cpp`：将带畸变原图和 `Camera` 转换为 MVS 使用的无畸变影像及工作相机。
-- `test/`：Camera、Tsai 加载和格式转换测试。
+- `test/`：公共相机几何、Camera、线阵、Tsai 加载和格式转换测试。

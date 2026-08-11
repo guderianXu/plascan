@@ -103,8 +103,10 @@ core/
 ├── CMakeLists.txt              # 注册所有子模块
 │
 ├── camera/                     # 相机模型
-│   ├── Camera.h/cpp            # 唯一相机模型：内参、Brown-Conrady 畸变、位姿和正深度归一化
-│   ├── PlanetaryLineScanCamera*.h/cpp # USGSCSM ISD 逐行时间、月固系时变姿轨与 LRO NAC 投影
+│   ├── CameraModel.h/cpp       # 面阵/线阵共享的只读像点、射线和空间点投影抽象
+│   ├── FramePinholeCamera.h/cpp # 按值持有现有 Camera 的静态面阵公共模型实现
+│   ├── Camera.h/cpp            # 既有 Tsai/Brown-Conrady 面阵状态及 SfM/BA 数值接口
+│   ├── PlanetaryLineScanCamera*.h/cpp # CameraModel 线阵实现、USGSCSM ISD、逐行时间与月固系时变姿轨
 │   ├── CameraBaseline.h/cpp    # 相机中心基线、指定点三角交会角和平均深度/基线比
 │   ├── CameraFormatConverter.h/cpp # Middlebury/EPFL 等外部相机 -> tsai + image_camera.lis
 │   ├── ProjectCameraIO.h/cpp   # Camera JSON/TSAI 与项目元数据适配
@@ -702,7 +704,9 @@ gui/
 PlaScan 工程采用 Metashape 式 `name.plascan + name.files` 结构。
 `ProjectPackageLayout` 只接受类型和版本严格匹配的 4.0.0 描述文件，并拒绝旧单体 ZIP；
 `name.files/project.zip` 只保存一个 `doc.json`，其中包含稳定 `project_id`、Chunk 索引
-和项目 UI 状态。每个 Chunk 由稳定 UUID 标识，并映射到 `1/`、`2/`、`3/` 等数字目录；
+和项目 UI 状态。Chunk 的 `project_config.camera_model_policy` 记录相机模型策略；缺失时默认
+`frame_pinhole`，显式线阵值为 `isis_usgscsm_linescan`，未知非空值拒绝解释。每个 Chunk 由稳定 UUID
+标识，并映射到 `1/`、`2/`、`3/` 等数字目录；
 目录号由持久化的 `next_chunk_directory` 单调分配，删除后不复用。Chunk 的核心元数据、
 结果、配置和资源索引位于其 `chunk.zip/doc.json` 的独立字段。原始影像位于工程级
 `.files/shared/images/<sha256>/`，其他大型成果直接位于对应数字目录。共享影像库、

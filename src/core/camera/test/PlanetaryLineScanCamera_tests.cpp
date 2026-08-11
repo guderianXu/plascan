@@ -213,6 +213,51 @@ TEST(PlanetaryLineScanCameraProjection, IterativeGroundToImageFindsPushbroomLine
     EXPECT_NEAR(opencv_image.sample, csm_image.sample - 0.5, 1.0e-8);
 }
 
+TEST(PlanetaryLineScanCameraModel, ImplementsCommonOpenCvGeometry)
+{
+    QTemporaryDir directory;
+    Camera camera;
+    std::string error;
+    ASSERT_TRUE(loadSyntheticCamera(&directory, &camera, &error)) << error;
+
+    const xjw::CameraModel &model = camera;
+    EXPECT_EQ(model.modelType(), xjw::CameraModelType::PlanetaryLineScan);
+    ASSERT_TRUE(model.imageSize().has_value());
+    EXPECT_EQ(model.imageSize()->samples, 200);
+    EXPECT_EQ(model.imageSize()->lines, 100);
+    EXPECT_EQ(model.worldFrameName(), "MOON_ME");
+
+    const xjw::CameraImageCoordinate pixel{99.5, 50.0};
+    xjw::CameraImagingRay common_ray;
+    Camera::ImagingRay direct_ray;
+    ASSERT_TRUE(model.rayForPixel(pixel, &common_ray));
+    ASSERT_TRUE(camera.pixelRayBodyFixed(
+        pixel.sample,
+        pixel.line,
+        Camera::PixelConvention::OpenCvZeroBased,
+        &direct_ray));
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        EXPECT_NEAR(common_ray.originMeters[axis],
+                    direct_ray.centerBodyFixedMeters[axis],
+                    1.0e-12);
+        EXPECT_NEAR(common_ray.direction[axis],
+                    direct_ray.directionBodyFixed[axis],
+                    1.0e-12);
+    }
+    ASSERT_TRUE(common_ray.ephemerisTimeSeconds.has_value());
+    EXPECT_DOUBLE_EQ(*common_ray.ephemerisTimeSeconds,
+                     direct_ray.ephemerisTimeSeconds);
+
+    xjw::CameraGroundProjection projection;
+    ASSERT_TRUE(model.groundToImage({0.0, 0.0, 1000.0}, &projection));
+    EXPECT_NEAR(projection.image.sample, 99.5, 1.0e-8);
+    EXPECT_NEAR(projection.image.line, 50.0, 1.0e-8);
+    EXPECT_NEAR(projection.positiveDepthMeters, 1000.0, 1.0e-9);
+    ASSERT_TRUE(projection.ephemerisTimeSeconds.has_value());
+    EXPECT_NEAR(*projection.ephemerisTimeSeconds, 1000.005, 1.0e-12);
+}
+
 TEST(PlanetaryLineScanCameraFixture, LroIsdUsesMoonMeMetersAndTimeDependentPose)
 {
     const std::filesystem::path fixture = std::filesystem::path(PLANETARY_TEST_DATA_DIR)

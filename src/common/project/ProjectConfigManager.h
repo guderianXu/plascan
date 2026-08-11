@@ -11,14 +11,41 @@
  *
  * 设计原则：
  *   - 本类拥有底层 QJsonObject 数据，子管理器作为"视图"操作特定段落。
- *   - 对外提供语义化的 uiSettings/workflowSettings 访问接口，隐藏内部 JSON 键名。
+ *   - 对外提供语义化的相机模型和 workflowSettings 访问接口，隐藏内部 JSON 键名。
  *   - defaultConfig() + mergeWithDefaults() 保证新建项目或旧版配置文件
  *     升级时所有字段均具备合理默认值。
  */
 
 #include <QJsonObject>
+#include <QString>
+
+#include <optional>
 
 #include "ProjectWorkflowConfigManager.h"
+
+/**
+ * @brief 项目处理时采用的相机模型策略。
+ *
+ * 该策略随项目持久化，只负责选择几何模型类别；具体相机参数仍由
+ * 各自的相机模型和处理流程管理。
+ */
+enum class ProjectCameraModelPolicy
+{
+    FramePinhole,
+    IsisUsgsCsmLineScan
+};
+
+/** @brief 将相机模型策略转换为稳定的项目配置 token。 */
+QString projectCameraModelPolicyToken(ProjectCameraModelPolicy policy);
+
+/**
+ * @brief 解析项目配置中的相机模型 token。
+ *
+ * 缺失或空 token 按旧项目兼容规则解释为面阵针孔模型；未知的非空
+ * token 返回 std::nullopt，防止项目被静默按错误模型处理。
+ */
+std::optional<ProjectCameraModelPolicy> parseProjectCameraModelPolicy(
+    const QString &token);
 
 /**
  * @class ProjectConfigManager
@@ -57,9 +84,9 @@ public:
      * @brief 生成包含所有字段默认值的标准配置对象。
      *
      * 汇集 ProjectWorkflowConfigManager::defaultWorkflowSettings()，
-     * 形成标准 project_config 字段结构。
+     * 与默认相机模型策略共同形成标准 project_config 字段结构。
      *
-     * @return 含有 "ui" 和 "workflow" 段的默认配置 QJsonObject。
+     * @return 含有 "camera_model_policy" 和 "workflow" 的默认配置对象。
      */
     static QJsonObject defaultConfig();
 
@@ -73,6 +100,15 @@ public:
      * @return      合并后包含所有键的完整配置对象。
      */
     static QJsonObject mergeWithDefaults(const QJsonObject &input);
+
+    /**
+     * @brief 获取当前项目的相机模型策略。
+     * @return 已识别的策略；未知的非空 token 返回 std::nullopt。
+     */
+    std::optional<ProjectCameraModelPolicy> cameraModelPolicy() const;
+
+    /** @brief 设置当前项目的相机模型策略。 */
+    void setCameraModelPolicy(ProjectCameraModelPolicy policy);
 
     /**
      * @brief 获取指定处理步骤的工作流参数。

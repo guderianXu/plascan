@@ -3819,7 +3819,7 @@ TEST(CodeStyleTest, CameraStoresGroupedStateAsSingleSourceOfTruth)
     }
 }
 
-TEST(CodeStyleTest, CameraIsTheOnlyPublicCameraModel)
+TEST(CodeStyleTest, StaticCameraKeepsPositiveDepthValueSemantics)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/core/camera/Camera.h"));
     const QString source = readProjectSourceFile(QStringLiteral("src/core/camera/Camera.cpp"));

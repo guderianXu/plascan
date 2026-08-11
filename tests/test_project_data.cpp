@@ -550,6 +550,48 @@ TEST(ProjectDataTest, NewProjectCreatesMetashapeStyleSplitLayout)
         QVector<QString>{QStringLiteral("doc.json")});
 }
 
+TEST(ProjectDataTest, CameraModelPolicyDefaultsAndPersists)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString projectPath = tempProjectPath(dir);
+    {
+        ProjectData project;
+        ASSERT_TRUE(project.createProject(
+            projectPath, QStringLiteral("相机模型策略")));
+
+        ASSERT_TRUE(project.cameraModelPolicy().has_value());
+        EXPECT_EQ(project.cameraModelPolicy().value(),
+                  ProjectCameraModelPolicy::FramePinhole);
+        EXPECT_FALSE(project.isDirty());
+
+        project.setCameraModelPolicy(ProjectCameraModelPolicy::FramePinhole);
+        EXPECT_FALSE(project.isDirty());
+
+        project.setCameraModelPolicy(
+            ProjectCameraModelPolicy::IsisUsgsCsmLineScan);
+        EXPECT_TRUE(project.isDirty());
+
+        QString error;
+        ASSERT_TRUE(project.saveProject(&error)) << qPrintable(error);
+    }
+
+    const QJsonObject archived_config = chunkSection(
+        projectPath, PortableProjectFormat::ProjectConfigSection);
+    EXPECT_EQ(
+        archived_config.value(QStringLiteral("camera_model_policy")).toString(),
+        QStringLiteral("isis_usgscsm_linescan"));
+
+    ProjectData reopened;
+    QString error;
+    ASSERT_TRUE(reopened.openProject(projectPath, &error))
+        << qPrintable(error);
+    ASSERT_TRUE(reopened.cameraModelPolicy().has_value());
+    EXPECT_EQ(reopened.cameraModelPolicy().value(),
+              ProjectCameraModelPolicy::IsisUsgsCsmLineScan);
+}
+
 TEST(ProjectDataTest, FullSavePrunesOnlyEmptyLegacyWorkflowDirectories)
 {
     QTemporaryDir dir;

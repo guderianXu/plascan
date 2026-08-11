@@ -27,6 +27,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <optional>
 
 #include "project/ProjectDocumentModel.h"
 #include "project/ProjectConfigManager.h"
@@ -173,6 +174,8 @@ public:
     void updateMetadata(const QJsonObject &meta, bool markDirty = true);
     // 更新配置数据
     void updateConfig(const QJsonObject &config, bool markDirty = true);
+    std::optional<ProjectCameraModelPolicy> cameraModelPolicy() const;
+    void setCameraModelPolicy(ProjectCameraModelPolicy policy);
     QJsonObject projectUiState() const { return _projectUiState; }
     void updateProjectUiState(const QJsonObject &state,
                               bool markDirty = true);

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CameraModel.h"
+
 #include <array>
 #include <string>
 #include <vector>
@@ -15,7 +17,7 @@ namespace xjw
  * seconds. The P0 implementation supports the USGS Astro line-scanner model
  * and the LRO LROC NAC optical-distortion model used by the ISIS lidar fixture.
  */
-class PlanetaryLineScanCamera
+class PlanetaryLineScanCamera final : public CameraModel
 {
 public:
     using Vector3 = std::array<double, 3>;
@@ -77,7 +79,14 @@ public:
     PlanetaryLineScanCamera() = default;
 
     bool loadFromIsd(const std::string &path, std::string *errorMessage = nullptr);
-    bool isValid() const { return _isLoaded; }
+    CameraModelType modelType() const noexcept override;
+    bool isValid() const noexcept override { return _isLoaded; }
+    std::optional<CameraImageSize> imageSize() const noexcept override;
+    std::string_view worldFrameName() const noexcept override;
+    bool rayForPixel(const CameraImageCoordinate &pixel,
+                     CameraImagingRay *ray) const override;
+    bool groundToImage(const Vector3 &groundBodyFixedMeters,
+                       CameraGroundProjection *projection) const override;
 
     int imageLines() const { return _imageLines; }
     int imageSamples() const { return _imageSamples; }

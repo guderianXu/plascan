@@ -2432,6 +2432,24 @@ void ProjectData::updateConfig(const QJsonObject &config, bool markDirty)
     }
 }
 
+std::optional<ProjectCameraModelPolicy> ProjectData::cameraModelPolicy() const
+{
+    return _configManager.cameraModelPolicy();
+}
+
+void ProjectData::setCameraModelPolicy(ProjectCameraModelPolicy policy)
+{
+    const std::optional<ProjectCameraModelPolicy> current_policy =
+        _configManager.cameraModelPolicy();
+    if (current_policy.has_value() && current_policy.value() == policy)
+    {
+        return;
+    }
+
+    _configManager.setCameraModelPolicy(policy);
+    updateConfig(_configManager.data());
+}
+
 void ProjectData::updateProjectUiState(const QJsonObject &state,
                                        bool markDirty)
 {

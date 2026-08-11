@@ -1,4 +1,5 @@
 #include "project/ProjectMetadata.h"
+#include "project/ProjectConfigManager.h"
 
 #include <QJsonArray>
 #include <QJsonObject>
@@ -96,6 +97,50 @@ TEST(ProjectMetadataTest, MatchesImageReferencePathOrNameAgainstDisplayToken)
     EXPECT_FALSE(imageReferenceMatchesToken(QStringLiteral("E:/data/a.png"),
                                             QStringLiteral("a.png"),
                                             QStringLiteral("b.png")));
+}
+
+TEST(ProjectConfigManagerTest, DefaultsToFramePinholeCameraModel)
+{
+    ProjectConfigManager config;
+    config.setData(ProjectConfigManager::defaultConfig());
+
+    ASSERT_TRUE(config.cameraModelPolicy().has_value());
+    EXPECT_EQ(config.cameraModelPolicy().value(),
+              ProjectCameraModelPolicy::FramePinhole);
+    EXPECT_EQ(config.data().value(QStringLiteral("camera_model_policy")).toString(),
+              QStringLiteral("frame_pinhole"));
+}
+
+TEST(ProjectConfigManagerTest, SuppliesFramePinholeDefaultToLegacyConfig)
+{
+    ProjectConfigManager config;
+    config.setData(ProjectConfigManager::mergeWithDefaults(QJsonObject{}));
+
+    ASSERT_TRUE(config.cameraModelPolicy().has_value());
+    EXPECT_EQ(config.cameraModelPolicy().value(),
+              ProjectCameraModelPolicy::FramePinhole);
+}
+
+TEST(ProjectConfigManagerTest, PreservesExplicitLineScanCameraModel)
+{
+    const QJsonObject input{
+        {QStringLiteral("camera_model_policy"),
+         QStringLiteral("isis_usgscsm_linescan")}};
+    ProjectConfigManager config;
+    config.setData(ProjectConfigManager::mergeWithDefaults(input));
+
+    ASSERT_TRUE(config.cameraModelPolicy().has_value());
+    EXPECT_EQ(config.cameraModelPolicy().value(),
+              ProjectCameraModelPolicy::IsisUsgsCsmLineScan);
+}
+
+TEST(ProjectConfigManagerTest, RejectsUnknownNonEmptyCameraModelToken)
+{
+    ProjectConfigManager config;
+    config.setData(QJsonObject{
+        {QStringLiteral("camera_model_policy"), QStringLiteral("unknown")}});
+
+    EXPECT_FALSE(config.cameraModelPolicy().has_value());
 }
 
 TEST(ProjectMetadataTest, RejectsAmbiguousFileNameAndStemTokens)

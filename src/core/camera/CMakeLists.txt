@@ -1,15 +1,19 @@
 # 生产静态库：Camera/Tsai I/O、坐标归一化和外部格式转换器。
 add_library(camera STATIC
+	CameraModel.cpp
 	Camera.cpp
+	FramePinholeCamera.cpp
 	PlanetaryLineScanCamera.cpp
 	PlanetaryLineScanCameraIsd.cpp
 	PlanetaryLineScanProjection.cpp
+	PlanetaryLineScanCameraModel.cpp
 	CameraBaseline.cpp
 	CameraIntrinsicPrior.cpp
 	CameraFormatConverter.cpp
 	ProjectCameraIO.cpp
 )
 target_include_directories(camera PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(camera PUBLIC cxx_std_20)
 target_link_libraries(camera
 	PUBLIC plascan_common_io
 	PRIVATE plascan_common_string_utils ${PLASCAN_LIBZIP_TARGET}
@@ -25,7 +29,10 @@ if(BUILD_TESTS)
 	if(GTest_FOUND)
 		include(GoogleTest)
 		# 纯合成内参与投影测试；include 指向模块根以保持 #include "Camera.h" 稳定。
-		add_executable(test_camera_unit test/Camera_tests.cpp)
+		add_executable(test_camera_unit
+			test/Camera_tests.cpp
+			test/CameraModel_tests.cpp
+		)
 		target_link_libraries(test_camera_unit PRIVATE
 			camera
 			GTest::gtest_main
