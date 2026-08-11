@@ -48,6 +48,7 @@
 #include <QStringList>
 #include <QTemporaryDir>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -8432,8 +8433,11 @@ TEST(TextureMapperTest, AtlasPackerIsDeterministicAndAvoidsOverlap)
         {2, QSize(128, 128), QRect()},
         {3, QSize(90, 300), QRect()}
     };
+    QVector<xjw::mesh::TextureAtlasItem> reversed_items = items;
+    std::reverse(reversed_items.begin(), reversed_items.end());
     const auto first = xjw::mesh::TextureAtlasPacker::pack(items, 1024, 16);
-    const auto second = xjw::mesh::TextureAtlasPacker::pack(items, 1024, 16);
+    const auto second = xjw::mesh::TextureAtlasPacker::pack(
+        reversed_items, 1024, 16);
 
     ASSERT_TRUE(first.ok);
     ASSERT_TRUE(second.ok);
@@ -8442,7 +8446,14 @@ TEST(TextureMapperTest, AtlasPackerIsDeterministicAndAvoidsOverlap)
     EXPECT_GT(first.occupancy, 0.0);
     for (int index = 0; index < first.items.size(); ++index)
     {
+        EXPECT_EQ(first.items[index].id, index);
         EXPECT_EQ(first.items[index].packedRect, second.items[index].packedRect);
+        EXPECT_EQ(first.items[index].packedRect.width(),
+                  static_cast<int>(std::ceil(
+                      items[index].requestedSize.width() * first.scale)));
+        EXPECT_EQ(first.items[index].packedRect.height(),
+                  static_cast<int>(std::ceil(
+                      items[index].requestedSize.height() * first.scale)));
         EXPECT_GE(first.items[index].packedRect.left(), 16);
         EXPECT_LE(first.items[index].packedRect.right(), 1023);
         EXPECT_LE(first.items[index].packedRect.bottom(), 1023);
@@ -8450,6 +8461,119 @@ TEST(TextureMapperTest, AtlasPackerIsDeterministicAndAvoidsOverlap)
         {
             EXPECT_FALSE(first.items[index].packedRect.intersects(
                 first.items[other].packedRect));
+        }
+    }
+}
+
+TEST(TextureMapperTest, AtlasPackerUsesFragmentedSpaceWithoutDownscaling)
+{
+    const QVector<xjw::mesh::TextureAtlasItem> items{
+        {0, QSize(15, 47), QRect()},
+        {1, QSize(31, 26), QRect()},
+        {2, QSize(31, 27), QRect()},
+        {3, QSize(9, 34), QRect()}
+    };
+
+    const auto packed = xjw::mesh::TextureAtlasPacker::pack(items, 64, 0);
+
+    ASSERT_TRUE(packed.ok);
+    ASSERT_EQ(packed.items.size(), items.size());
+    EXPECT_FLOAT_EQ(packed.scale, 1.0f);
+    for (int index = 0; index < packed.items.size(); ++index)
+    {
+        EXPECT_EQ(packed.items[index].id, index);
+        EXPECT_EQ(packed.items[index].packedRect.size(),
+                  items[index].requestedSize);
+        for (int other = index + 1; other < packed.items.size(); ++other)
+        {
+            EXPECT_FALSE(packed.items[index].packedRect.intersects(
+                packed.items[other].packedRect));
+        }
+    }
+}
+
+TEST(TextureMapperTest, AtlasPackerSearchesNonMonotonicMaxRectsStates)
+{
+    const QVector<xjw::mesh::TextureAtlasItem> items{
+        {0, QSize(43, 29), QRect()},
+        {1, QSize(14, 55), QRect()},
+        {2, QSize(37, 29), QRect()},
+        {3, QSize(5, 59), QRect()},
+        {4, QSize(56, 6), QRect()},
+        {5, QSize(55, 2), QRect()}
+    };
+
+    const auto packed = xjw::mesh::TextureAtlasPacker::pack(items, 28, 0);
+
+    ASSERT_TRUE(packed.ok);
+    ASSERT_EQ(packed.items.size(), items.size());
+    EXPECT_GE(packed.scale, 0.399f);
+    for (int index = 0; index < packed.items.size(); ++index)
+    {
+        EXPECT_GE(packed.items[index].packedRect.left(), 0);
+        EXPECT_GE(packed.items[index].packedRect.top(), 0);
+        EXPECT_LE(packed.items[index].packedRect.right(), 27);
+        EXPECT_LE(packed.items[index].packedRect.bottom(), 27);
+        for (int other = index + 1; other < packed.items.size(); ++other)
+        {
+            EXPECT_FALSE(packed.items[index].packedRect.intersects(
+                packed.items[other].packedRect));
+        }
+    }
+}
+
+TEST(TextureMapperTest, AtlasPackerUsesAllSpaceAfterReservedRegion)
+{
+    const QVector<xjw::mesh::TextureAtlasItem> items{
+        {0, QSize(48, 64), QRect()}
+    };
+
+    const auto packed = xjw::mesh::TextureAtlasPacker::pack(items, 64, 16);
+
+    ASSERT_TRUE(packed.ok);
+    ASSERT_EQ(packed.items.size(), 1);
+    EXPECT_FLOAT_EQ(packed.scale, 1.0f);
+    EXPECT_EQ(packed.items.front().packedRect, QRect(16, 0, 48, 64));
+    EXPECT_DOUBLE_EQ(packed.occupancy, 1.0);
+}
+
+TEST(TextureMapperTest, AtlasPackerFindsLargestUniformScale)
+{
+    const QVector<xjw::mesh::TextureAtlasItem> items{
+        {0, QSize(100, 50), QRect()}
+    };
+
+    const auto packed = xjw::mesh::TextureAtlasPacker::pack(items, 64, 0);
+
+    ASSERT_TRUE(packed.ok);
+    ASSERT_EQ(packed.items.size(), 1);
+    EXPECT_NEAR(packed.scale, 0.64f, 1.0e-4f);
+    EXPECT_EQ(packed.items.front().packedRect.size(), QSize(64, 32));
+}
+
+TEST(TextureMapperTest, AtlasPackerFallsBackFromAValidMinimumScale)
+{
+    QVector<xjw::mesh::TextureAtlasItem> items;
+    for (int index = 0; index < 4; ++index)
+    {
+        items.push_back({index, QSize(1000000, 300000), QRect()});
+    }
+
+    const auto packed = xjw::mesh::TextureAtlasPacker::pack(items, 8192, 0);
+
+    ASSERT_TRUE(packed.ok);
+    ASSERT_EQ(packed.items.size(), items.size());
+    EXPECT_GT(packed.scale, 0.0068f);
+    for (int index = 0; index < packed.items.size(); ++index)
+    {
+        EXPECT_GE(packed.items[index].packedRect.left(), 0);
+        EXPECT_GE(packed.items[index].packedRect.top(), 0);
+        EXPECT_LE(packed.items[index].packedRect.right(), 8191);
+        EXPECT_LE(packed.items[index].packedRect.bottom(), 8191);
+        for (int other = index + 1; other < packed.items.size(); ++other)
+        {
+            EXPECT_FALSE(packed.items[index].packedRect.intersects(
+                packed.items[other].packedRect));
         }
     }
 }
@@ -8489,6 +8613,37 @@ TEST(TextureMapperTest, AtlasPackerHandlesManyFragmentedChartsPromptly)
     }
 }
 
+TEST(TextureMapperTest, AtlasPackerBoundsAdaptiveWorkForMediumCharts)
+{
+    QVector<xjw::mesh::TextureAtlasItem> items;
+    constexpr int item_count = 4096;
+    items.reserve(item_count);
+    for (int index = 0; index < item_count; ++index)
+    {
+        const int width = 8 + (index * 37) % 173;
+        const int height = 6 + (index * 53) % 149;
+        items.push_back({index, QSize(width, height), QRect()});
+    }
+
+    const auto started_at = std::chrono::steady_clock::now();
+    const auto packed = xjw::mesh::TextureAtlasPacker::pack(
+        items, 4096, 16);
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - started_at);
+
+    ASSERT_TRUE(packed.ok);
+    ASSERT_FALSE(packed.cancelled);
+    ASSERT_EQ(packed.items.size(), item_count);
+    EXPECT_LT(elapsed.count(), 10000);
+    for (const auto &item : packed.items)
+    {
+        EXPECT_GE(item.packedRect.left(), 16);
+        EXPECT_GE(item.packedRect.top(), 0);
+        EXPECT_LE(item.packedRect.right(), 4095);
+        EXPECT_LE(item.packedRect.bottom(), 4095);
+    }
+}
+
 TEST(TextureMapperTest, AtlasPackerCanCancelLargePackingJob)
 {
     QVector<xjw::mesh::TextureAtlasItem> items;
@@ -8514,6 +8669,37 @@ TEST(TextureMapperTest, AtlasPackerCanCancelLargePackingJob)
     EXPECT_FALSE(packed.ok);
     EXPECT_TRUE(packed.cancelled);
     EXPECT_GE(cancellation_checks, 2);
+    EXPECT_TRUE(packed.items.isEmpty());
+    EXPECT_DOUBLE_EQ(packed.occupancy, 0.0);
+}
+
+TEST(TextureMapperTest, AtlasPackerCanCancelMaxRectsJob)
+{
+    QVector<xjw::mesh::TextureAtlasItem> items;
+    constexpr int item_count = 1024;
+    items.reserve(item_count);
+    for (int index = 0; index < item_count; ++index)
+    {
+        items.push_back({index,
+                         QSize(16 + index % 37, 12 + index % 31),
+                         QRect()});
+    }
+
+    int cancellation_checks = 0;
+    const auto packed = xjw::mesh::TextureAtlasPacker::pack(
+        items,
+        4096,
+        16,
+        [&cancellation_checks]()
+        {
+            return ++cancellation_checks >= 2;
+        });
+
+    EXPECT_FALSE(packed.ok);
+    EXPECT_TRUE(packed.cancelled);
+    EXPECT_GE(cancellation_checks, 2);
+    EXPECT_TRUE(packed.items.isEmpty());
+    EXPECT_DOUBLE_EQ(packed.occupancy, 0.0);
 }
 
 TEST(TextureMapperTest, ParsesStableDialogSettingsIntoV4Configuration)

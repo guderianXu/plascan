@@ -54,6 +54,7 @@ add_library(meshing STATIC
     CameraTextureMapper.cpp
     CameraTextureMapperV4.cpp
     TextureAtlasPacker.cpp
+    TextureAtlasMaxRects.cpp
     TextureSourcePreprocessor.cpp
     TextureVisibilityEvaluator.cpp
     TextureChartBuilder.cpp

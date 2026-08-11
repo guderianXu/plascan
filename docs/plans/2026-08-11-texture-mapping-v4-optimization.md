@@ -1,0 +1,155 @@
+# PlaScan 多视图纹理 v4 优化计划
+
+更新日期：2026-08-11
+
+状态：阶段 1 核心实现完成；仓库级门禁待清除无关 GUI 阻塞
+
+实施对象：`camera_projected_atlas_v4`
+
+## 目标与边界
+
+本计划在不改变相机模型、深度证据语义和 OBJ/MTL/PNG 输出格式的前提下，提升多视图纹理生成的
+清晰度、接缝稳定性、图集利用率和大项目吞吐。所有性能优化都必须保持确定性、取消响应、失败信息和
+未映射面安全回退行为。
+
+首轮不引入 GPU 专用实现，不改变已有项目文件格式，不自动回退到 v3，也不把没有相机证据的
+`vertex_color_planar_bake` 冒充多视图纹理。
+
+## 当前基线与已确认问题
+
+当前流水线依次执行源影像准备、逐面候选视图评估、ICM 标签优化、连通投影 chart 构建、图集打包和
+逐纹素多视图烘焙。代码审计确认以下优化点：
+
+| ID | 优先级 | 问题 | 影响 |
+|---|---|---|---|
+| ATLAS-01 | P1 | 当前 shelf packing 无法复用 shelf 内部竖向碎片 | 降低统一缩放比例和有效纹素密度 |
+| ATLAS-02 | P1 | 面积上界固定乘以 `0.96`，成功时不再尝试更大尺度 | 可完整装入的 chart 仍无条件损失最多 4% 线性分辨率 |
+| VIS-01 | P1 | 候选评估为串行 `face × view`，每项包含多次投影和 7 点证据采样 | 大模型和多相机项目耗时近似乘法增长 |
+| VIS-02 | P1 | 所有候选完整排序后才截取 Top-K，宽松恢复会再次扫描全部相机 | 产生不必要计算和临时内存 |
+| ICM-01 | P1 | ICM 每轮重复投影并采样共享边颜色差 | 标签优化重复工作随面邻接和迭代次数放大 |
+| BAKE-01 | P1 | 每个纹素构造动态 `vector`，中值颜色每通道再次分配并排序 | 烘焙热点存在大量微小堆分配 |
+| BAKE-02 | P1 | `maximumBlendedViews=1` 时仍可能追加次视图 | 配置上限语义不严格 |
+| CHART-01 | P2 | 连通 chart 使用完整投影 AABB，细长或凹形区域留下大量空白 | 图集空间和烘焙工作量浪费 |
+| CHART-02 | P2 | padding 位于 source bounds 内并随全局比例缩小 | 低比例图集可能不足以隔离双线性采样边界 |
+| BLEND-01 | P2 | Natural 与 WeightedAverage 当前共用相同加权均值核心 | UI 算法语义区分不足，复杂曝光下接缝仍明显 |
+| VIS-03 | P2 | 固定 7 点证据对超大或高遮挡三角面覆盖不足 | 局部遮挡可能漏检并形成鬼影 |
+
+## 验收指标
+
+### 正确性与确定性
+
+- 相同输入、线程数和配置下，主视图标签、UV、OBJ/MTL 和纹理 PNG 像素保持确定。
+- 图集矩形不重叠、不越过 `reservedLeft`，输出顺序按 chart ID 稳定，不允许隐式旋转。
+- 取消后不发布部分结果，进度不得到达 100%，错误路径保持可定位。
+- `mapped/unmapped/rejected` 统计在纯性能优化前后保持一致。
+
+### 质量
+
+- 中小规模 chart 集合的统一打包尺度不得低于旧 shelf；碎片夹具达到 `scale=1.0`。
+- 实际数据记录 atlas scale、occupancy、中位纹素密度和 seam color difference。
+- 后续 Natural 优化以接缝色差下降为主指标，不以模糊纹理换取表面连续。
+
+### 性能与资源
+
+- 24 万 chart 合成门禁保持 10 秒内完成，避免自由矩形列表失控。
+- Visibility 与 Baker 阶段分别记录耗时、候选评估数和有效纹素采样数。
+- 完成 CPU 并行阶段后，代表性多核机器上的纹理总耗时 p50 目标至少提升 2 倍。
+- 峰值内存估算保持可解释；并行化不得按线程复制完整图集或全部相机影像。
+
+## 分阶段实施
+
+### 阶段 0：固定基准与诊断
+
+- 为 prepare、visibility、ICM、chart、pack 和 bake 增加阶段耗时。
+- 记录有效 worker 数、候选评估数、纹素采样数、图集方法和回退原因。
+- 固定小型确定性夹具、碎片图集夹具、24 万 chart 压力夹具和一个真实多相机数据集。
+
+### 阶段 1：自适应图集打包
+
+- 中小规模 chart 使用确定性、禁止旋转的 MaxRects Best Short Side Fit。
+- 固定排序、评分和坐标规则；内部使用半开矩形，输出时再转换为 `QRect`。
+- 设置 chart 数、自由矩形数和操作次数上限；超过预算时从头回退现有 shelf，不续用半成品布局。
+- 跨尺度共享 MaxRects 操作预算，并从保证生成 1 像素矩形的有效下界启动 shelf 回退，避免极端源尺寸
+  造成超长搜索或错误报告“无法装入”。
+- 大规模 chart 直接使用 shelf，保留 24 万 chart 的有界时间复杂度。
+- 先尝试理论最大统一尺度，移除无条件 `0.96` 折损，并复用最佳成功布局。
+- MaxRects 启发式成功状态不具备尺度单调性；中小规模按整数矩形尺寸变化断点从高到低搜索，不能用普通
+  二分永久排除更高的可行区间。
+
+完成条件：碎片夹具和满幅 `reservedLeft` 夹具达到 `scale=1.0`；确定性、取消、无重叠和大规模门禁通过。
+
+### 阶段 2：候选视图评估并行化
+
+- 将逐面候选评估改为静态分块并行，所有拒绝统计使用 worker-local 计数后确定性归并。
+- 用固定容量 Top-K 插入替代完整候选排序。
+- 预先建立每面可能覆盖的相机短名单；不得用粗筛选改变严格可见性结果。
+- 保持串行参考路径用于小夹具 parity 测试和问题定位。
+
+完成条件：标签、候选顺序和统计与参考路径一致；多核可扩展且取消延迟有界。
+
+### 阶段 3：ICM 代价缓存与烘焙器无分配化
+
+- 缓存共享边在候选标签组合下的颜色接缝代价，避免每轮重复相机投影。
+- 将每纹素动态样本容器改为固定容量数组，使用固定容量中值选择。
+- 严格执行 `maximumBlendedViews`，预排 primary-first 候选。
+- 按互不重叠的 chart 或 tile 并行烘焙，避免共享像素写竞争和整图线程副本。
+
+完成条件：输出逐像素一致；代表性场景的 ICM 与 Baker 阶段耗时显著下降，峰值内存不回退。
+
+### 阶段 4：接缝与遮挡质量
+
+- 为 Natural 模式实现与普通加权平均明确不同的鲁棒融合策略，并补充曝光补偿和接缝能量测试。
+- 对大投影三角面按面积或深度梯度增加自适应内部证据点。
+- 评估局部颜色增益/偏置或低频接缝平衡；校正必须限制在有效重叠区域。
+- 将 padding 从可缩放内容区域中分离，保证最终图集像素边距下限。
+
+完成条件：真实数据的接缝色差和鬼影率下降，清晰度指标不低于基线。
+
+### 阶段 5：超大项目与多图集
+
+- 对无法在单张 16384 图集中保持目标纹素密度的项目支持多 atlas/material 输出。
+- 评估分块影像缓存、按需解码和 GPU 投影/采样；CPU 路径继续作为兼容基线。
+- 在模型 manifest 中记录算法 revision、图集数量、打包方法和质量统计，阻止不兼容缓存复用。
+
+## 阶段 1 验证矩阵
+
+```powershell
+cmake --build build\windows-vcpkg-cuda-release --config Release --target test_mesh_reconstructor --parallel 8
+build\windows-vcpkg-cuda-release\tests\test_mesh_reconstructor.exe `
+  --gtest_filter='TextureMapperTest.AtlasPacker*'
+python scripts\env\run_tests.py `
+  --test-dir build\windows-vcpkg-cuda-release `
+  --output-on-failure `
+  -R 'TextureMapper|MeshReconstructor'
+python scripts\env\run_tests.py `
+  --test-dir build\windows-vcpkg-cuda-release `
+  --output-on-failure
+```
+
+Windows/MSVC 完成本地构建、定向测试和可执行的全量测试后方可推送。Linux/GCC 由对应环境或 GitHub
+required checks 验证，不能把单平台结果表述为双平台已通过。
+
+### 2026-08-11 阶段 1 实施记录
+
+- 已实现 4096 个 chart 以内的确定性无旋转 MaxRects BSSF；超过 chart、自由矩形、单次操作或跨尺度
+  总操作预算时，从头回退 shelf。
+- 已移除理论尺度固定乘以 `0.96` 的分辨率折损；尺度搜索覆盖启发式非单调回归，并以 1×1 像素
+  状态作为保证可行的 shelf 下界。
+- MSVC 专项测试 `TextureMapperTest.AtlasPacker*` 为 10/10 通过；纹理/网格定向 CTest 为 44/44 通过。
+  24 万 chart 用例约 0.29 秒，4096 chart 预算用例约 0.02 秒。
+- 修正 PROJ 数据路径后的全量 CTest 共保留 1 项失败：
+  `CameraModel3DDialogTest.ObjLoadingShowsSingleFlightProgressOverlay`，来自并行进行的 OBJ GUI 改动，
+  与纹理模块无依赖关系。完整 GUI 重链接还被正在运行的 `plascan.exe` 锁定；在两项外部状态清除前
+  不推送本阶段提交。
+
+## 推荐提交顺序
+
+1. 自适应 MaxRects/Shelf、缩放搜索修复和打包器行为测试。
+2. 阶段耗时与诊断字段。
+3. Visibility 确定性并行和 Top-K。
+4. ICM 接缝代价缓存。
+5. Baker 固定容量样本与并行化。
+6. Natural 融合、遮挡采样和 padding 质量改进。
+7. 多图集和超大项目资源策略。
+
+每个提交只承担一种主要算法风险，并在进入下一阶段前保存质量与性能对比。

@@ -28,6 +28,9 @@ struct TextureAtlasPackingResult
 class TextureAtlasPacker
 {
 public:
+    /**
+     * @brief Pack unrotated charts with bounded MaxRects and a large-input shelf fallback.
+     */
     static TextureAtlasPackingResult pack(const QVector<TextureAtlasItem> &items,
                                           int atlasSize,
                                           int reservedLeft = 0,

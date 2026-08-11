@@ -345,7 +345,8 @@ core/
 │   ├── TextureSourcePreprocessor.cpp # 原图/证据相机、清晰度、曝光和网格邻接准备
 │   ├── TextureVisibilityEvaluator.cpp # 七点证据检查、top-K 评分、ICM 与小孤岛合并
 │   ├── TextureChartBuilder.cpp # 按相机标签连通域构建投影 chart
-│   ├── TextureAtlasPacker.h/cpp # 确定性 MaxRects chart 图集打包
+│   ├── TextureAtlasPacker.h/cpp # 自适应 MaxRects/shelf chart 图集调度与缩放搜索
+│   ├── TextureAtlasMaxRects.cpp # 有操作预算的确定性无旋转 MaxRects 实现
 │   ├── TextureAtlasBaker.cpp   # 多视图融合、鬼影过滤、填充、锐化及 OBJ/MTL/PNG 输出
 │   ├── MeshColorizer.h/cpp     # 网格遮挡检查、鲁棒多视图顶点着色及孤立色斑清理
 │   ├── MeshFaceColorOptimizer.h/cpp # 实验性按面主视图投票与共享顶点一致着色

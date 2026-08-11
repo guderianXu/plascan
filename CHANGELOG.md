@@ -19,6 +19,9 @@
 
 ### 优化
 
+- 多视图纹理 v4 图集打包改为有界的自适应 MaxRects/shelf：中小规模 chart 可复用碎片空间，
+  超大 chart 集保持线性级回退；统一尺度移除固定 4% 折损，并补齐确定性、取消、极端尺寸和
+  24 万 chart 性能门禁。
 - Windows CUDA 免安装部署现在收集并校验 TensorRT runtime、ONNX parser、plugin、全部 builder resource
   以及所需 CUDA DLL，可在没有 CUDA Toolkit、TensorRT SDK、vcpkg 和 Python 的目标机首次构建 U2Net engine。
 - BiRefNet Dynamic 生产运行不依赖 PyTorch；安装包只携带可移植 ONNX 和 provenance，首次使用时按模型、
