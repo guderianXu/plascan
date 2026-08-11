@@ -3207,6 +3207,25 @@ bool shouldUseOrbitalVisualHullCompletion(bool orbitalWorkspace,
            boundary_ratio > 0.025;
 }
 
+int selectOrbitalTsdfRetryResolution(int currentResolution,
+                                     bool completenessAvailable,
+                                     double medianRecall,
+                                     double p10Recall,
+                                     double minimumMedianRecall,
+                                     double minimumP10Recall)
+{
+    if (!completenessAvailable || currentResolution <= 96 ||
+        !std::isfinite(medianRecall) || !std::isfinite(p10Recall) ||
+        !std::isfinite(minimumMedianRecall) ||
+        !std::isfinite(minimumP10Recall) ||
+        medianRecall >= minimumMedianRecall && p10Recall >= minimumP10Recall)
+    {
+        return 0;
+    }
+
+    return 96;
+}
+
 int meshResolutionFromSettings(const QJsonObject &settings)
 {
     const double requestedResolution = settings.value(QStringLiteral("meshResolution")).toDouble(0.0);
@@ -3755,14 +3774,16 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 maximumReliableOrbitalResolution(
                     loaded.frames, options.resolution));
         }
-        const int tsdf_progress_end = request.exportObj ? 84 : 96;
+        const int tsdf_progress_end = request.exportObj ? 84 : 92;
+        const int initial_tsdf_progress_end =
+            orbital_workspace && !request.exportObj ? 70 : tsdf_progress_end;
         if (request.progress)
         {
             options.progress = [progress = request.progress,
-                                tsdf_progress_end](const QString &stage, int percent)
+                                initial_tsdf_progress_end](const QString &stage, int percent)
             {
                 const int bounded_percent = std::clamp(percent, 0, 100);
-                progress(stage, bounded_percent * tsdf_progress_end / 100);
+                progress(stage, bounded_percent * initial_tsdf_progress_end / 100);
             };
         }
         options.isCancelled = request.isCancelled;
@@ -3864,9 +3885,144 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
         const auto tsdf_started_at = std::chrono::steady_clock::now();
         DepthTsdfResult tsdf = DepthTsdfSurfaceBuilder::build(
             loaded.frames, build_options);
+        bool effective_observation_only_surface =
+            interpolationIsDisabled(request.settings);
+        DepthMapVisualHullPreflightResult cached_visual_hull_preflight;
+        bool visual_hull_preflight_performed = false;
+        const bool adaptive_completeness_retry_enabled =
+            request.settings.value(QStringLiteral(
+                "tsdfOrbitalAdaptiveCompletenessRetry")).toBool(true);
+        const int retry_resolution =
+            tsdf.ok && orbital_workspace && adaptive_completeness_retry_enabled
+            ? selectOrbitalTsdfRetryResolution(
+                  options.resolution,
+                  tsdf.statistics.depthCompletenessAvailable,
+                  tsdf.statistics.depthCompletenessMedianFrameRecall,
+                  tsdf.statistics.depthCompletenessP10FrameRecall,
+                  options.minimumDepthCompletenessMedianRecall,
+                  options.minimumDepthCompletenessP10Recall)
+            : 0;
+        result.payload[QStringLiteral(
+            "configured_orbital_adaptive_completeness_retry")] =
+            adaptive_completeness_retry_enabled;
+        result.payload[QStringLiteral(
+            "orbital_adaptive_completeness_retry_attempted")] =
+            retry_resolution > 0;
+        if (retry_resolution > 0)
+        {
+            result.payload[QStringLiteral(
+                "orbital_adaptive_completeness_initial_resolution")] =
+                options.resolution;
+            result.payload[QStringLiteral(
+                "orbital_adaptive_completeness_initial_median_recall")] =
+                tsdf.statistics.depthCompletenessMedianFrameRecall;
+            result.payload[QStringLiteral(
+                "orbital_adaptive_completeness_initial_p10_recall")] =
+                tsdf.statistics.depthCompletenessP10FrameRecall;
+            result.payload[QStringLiteral(
+                "orbital_adaptive_completeness_retry_resolution")] =
+                retry_resolution;
+            if (request.progress)
+            {
+                request.progress(
+                    QStringLiteral(
+                        "高分辨率 TSDF 与深度观测不一致（中位/P10=%1/%2），"
+                        "正在复用已加载深度帧以 %3 分辨率重建...")
+                        .arg(tsdf.statistics.depthCompletenessMedianFrameRecall,
+                             0,
+                             'f',
+                             4)
+                        .arg(tsdf.statistics.depthCompletenessP10FrameRecall,
+                             0,
+                             'f',
+                             4)
+                        .arg(retry_resolution),
+                    initial_tsdf_progress_end);
+            }
+
+            QJsonObject retry_settings = request.settings;
+            retry_settings[QStringLiteral("meshResolution")] = retry_resolution;
+            bool retry_disabled_interpolation = false;
+            if (!effective_observation_only_surface && retry_resolution == 96)
+            {
+                cached_visual_hull_preflight =
+                    DepthMapMeshBuilder::inspectVisualHullApplicability(
+                        request.depthMapSourcePath);
+                visual_hull_preflight_performed = true;
+                retry_disabled_interpolation =
+                    !cached_visual_hull_preflight.applicable;
+                if (retry_disabled_interpolation)
+                {
+                    retry_settings[QStringLiteral("interpolation")] =
+                        QStringLiteral("disabled");
+                }
+            }
+            result.payload[QStringLiteral(
+                "orbital_adaptive_completeness_retry_disabled_interpolation")] =
+                retry_disabled_interpolation;
+            DepthTsdfOptions retry_options = depthTsdfOptionsFromSettings(
+                retry_settings, retry_resolution);
+            if (retry_disabled_interpolation)
+            {
+                retry_options.useEvidenceAwareBounds = false;
+            }
+            applyOrbitalDepthTsdfDefaults(
+                retry_settings,
+                &retry_options,
+                maximumReliableOrbitalResolution(
+                    loaded.frames, retry_resolution));
+            retry_options.isCancelled = request.isCancelled;
+            if (request.progress)
+            {
+                retry_options.progress = [progress = request.progress,
+                                          initial_tsdf_progress_end,
+                                          tsdf_progress_end](const QString &stage,
+                                                             int percent)
+                {
+                    const int bounded_percent = std::clamp(percent, 0, 100);
+                    progress(
+                        stage,
+                        initial_tsdf_progress_end +
+                            bounded_percent *
+                                (tsdf_progress_end - initial_tsdf_progress_end) /
+                                100);
+                };
+            }
+            DepthTsdfOptions retry_build_options = retry_options;
+            if (defer_depth_completeness_gate)
+            {
+                retry_build_options.enforceDepthCompletenessGate = false;
+            }
+            DepthTsdfResult retry_tsdf = DepthTsdfSurfaceBuilder::build(
+                loaded.frames, retry_build_options);
+            result.payload[QStringLiteral(
+                "orbital_adaptive_completeness_retry_succeeded")] =
+                retry_tsdf.ok;
+            if (retry_tsdf.ok)
+            {
+                result.payload[QStringLiteral(
+                    "orbital_adaptive_completeness_retry_gate_passed")] =
+                    retry_tsdf.statistics.depthCompletenessGatePassed;
+                options = std::move(retry_options);
+                build_options = std::move(retry_build_options);
+                tsdf = std::move(retry_tsdf);
+                effective_observation_only_surface =
+                    retry_disabled_interpolation ||
+                    effective_observation_only_surface;
+            }
+        }
         result.payload[QStringLiteral("depth_tsdf_build_elapsed_ms")] =
             static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - tsdf_started_at).count());
+        result.payload[QStringLiteral("configured_tsdf_resolution")] =
+            options.resolution;
+        result.payload[QStringLiteral("effective_interpolation")] =
+            effective_observation_only_surface
+            ? QStringLiteral("disabled")
+            : request.settings.value(QStringLiteral("interpolation"))
+                  .toString(QStringLiteral("enabled"));
+        result.payload[QStringLiteral("configured_evidence_aware_bounds")] =
+            options.useEvidenceAwareBounds;
         mergePayload(DepthTsdfSurfaceBuilder::statisticsToJson(tsdf), &result.payload);
         result.payload[QStringLiteral(
             "base_depth_completeness_available")] =
@@ -3920,11 +4076,11 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
             request.settings.value(QStringLiteral(
                 "tsdfOrbitalVisualHullCompletion")).toBool(true);
         const bool observation_only_surface =
-            interpolationIsDisabled(request.settings);
+            effective_observation_only_surface;
         const bool orbital_visual_hull_completion_enabled =
             orbital_visual_hull_completion_configured &&
             !observation_only_surface;
-        const bool orbital_visual_hull_completion_requested =
+        const bool orbital_visual_hull_completion_candidate =
             shouldUseOrbitalVisualHullCompletion(
                 orbital_workspace,
                 orbital_visual_hull_completion_configured,
@@ -3932,6 +4088,21 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                 tsdf.statistics.depthCompletenessAggregateRecall,
                 tsdf.statistics.boundaryEdgeCountAfter,
                 tsdf.mesh.faceCount());
+        DepthMapVisualHullPreflightResult visual_hull_preflight =
+            cached_visual_hull_preflight;
+        if (orbital_visual_hull_completion_candidate)
+        {
+            if (!visual_hull_preflight_performed)
+            {
+                visual_hull_preflight =
+                    DepthMapMeshBuilder::inspectVisualHullApplicability(
+                        request.depthMapSourcePath);
+                visual_hull_preflight_performed = true;
+            }
+        }
+        const bool orbital_visual_hull_completion_requested =
+            orbital_visual_hull_completion_candidate &&
+            visual_hull_preflight.applicable;
         result.payload[QStringLiteral(
             "requested_orbital_visual_hull_completion")] =
             orbital_visual_hull_completion_configured;
@@ -3945,6 +4116,15 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
         result.payload[QStringLiteral(
             "orbital_visual_hull_completion_requested")] =
             orbital_visual_hull_completion_requested;
+        result.payload[QStringLiteral(
+            "orbital_visual_hull_preflight_candidate_frames")] =
+            visual_hull_preflight.candidateFrameCount;
+        result.payload[QStringLiteral(
+            "orbital_visual_hull_preflight_inspected_frames")] =
+            visual_hull_preflight.inspectedFrameCount;
+        result.payload[QStringLiteral(
+            "orbital_visual_hull_preflight_usable_views")] =
+            visual_hull_preflight.usableViewCount;
         if (request.progress)
         {
             request.progress(
@@ -3953,6 +4133,13 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                     ? QStringLiteral(
                           "插值已禁用：排除插值深度，保留深度/轮廓/可见性约束的连续表面；"
                           "跳过无约束环拍视觉外壳补全")
+                    : orbital_visual_hull_completion_candidate &&
+                              !visual_hull_preflight.applicable
+                    ? QStringLiteral(
+                          "环拍外壳补全已跳过：抽样检查 %1 个视图，仅 %2 个具备"
+                          "清晰前景轮廓（至少需要 6 个）")
+                          .arg(visual_hull_preflight.inspectedFrameCount)
+                          .arg(visual_hull_preflight.usableViewCount)
                     : orbital_visual_hull_completion_requested
                     ? QStringLiteral(
                           "基础表面不完整，正在启动环拍视觉外壳补全...")
@@ -3991,17 +4178,20 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
             std::function<void(const QString &, int)> completion_progress;
             if (request.progress)
             {
-                completion_progress = [progress = request.progress](
-                                          const QString &stage, int percent)
+                completion_progress = [progress = request.progress,
+                                       tsdf_progress_end](const QString &stage,
+                                                          int percent)
                 {
+                    const int bounded_percent = std::clamp(percent, 0, 100);
                     progress(
                         stage,
-                        96 + std::clamp(percent, 0, 100) / 100);
+                        tsdf_progress_end +
+                            bounded_percent * (96 - tsdf_progress_end) / 100);
                 };
             }
             orbital_completion = DepthMapMeshBuilder::buildVisualHull(
                 request.depthMapSourcePath,
-                request.reconstruction.resolution,
+                options.resolution,
                 completion_options,
                 completion_progress);
             result.payload[QStringLiteral(

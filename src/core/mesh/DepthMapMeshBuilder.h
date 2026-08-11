@@ -71,6 +71,14 @@ struct DepthMapVisualHullResult
     TriMesh mesh;
 };
 
+struct DepthMapVisualHullPreflightResult
+{
+    int candidateFrameCount = 0;
+    int inspectedFrameCount = 0;
+    int usableViewCount = 0;
+    bool applicable = false;
+};
+
 struct DepthMapVisualHullOptions
 {
     bool strictVolumetricMasks = false;
@@ -86,6 +94,10 @@ class DepthMapMeshBuilder
 {
 public:
     static QVector<DepthFrameArtifact> discoverDepthFrames(const QString &sourcePath);
+    static DepthMapVisualHullPreflightResult inspectVisualHullApplicability(
+        const QString &sourcePath,
+        int maximumInspectedFrames = 24,
+        int minimumUsableViews = 6);
     static DepthMapVisualHullResult buildVisualHull(
         const QString &sourcePath,
         int resolution,

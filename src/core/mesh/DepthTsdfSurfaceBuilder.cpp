@@ -2667,7 +2667,8 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFramesSequential(
 }
 
 DepthTsdfBoundsResult DepthTsdfSurfaceBuilder::estimateBounds(
-    const QVector<DepthTsdfFrame> &frames)
+    const QVector<DepthTsdfFrame> &frames,
+    bool use_evidence_aware_bounds)
 {
     constexpr std::uint64_t minimum_trusted_sample_count = 500;
     constexpr double minimum_trusted_sample_ratio = 0.10;
@@ -2750,12 +2751,16 @@ DepthTsdfBoundsResult DepthTsdfSurfaceBuilder::estimateBounds(
         return result;
     }
     const bool sufficient_trusted_samples =
+        use_evidence_aware_bounds &&
         result.trustedSampleCount >= minimum_trusted_sample_count &&
         static_cast<double>(result.trustedSampleCount) >=
             static_cast<double>(result.candidateSampleCount) * minimum_trusted_sample_ratio;
     result.usedEvidenceAwareSamples = sufficient_trusted_samples;
-    result.fellBackToCandidateSamples = !sufficient_trusted_samples;
-    result.selectionReason = sufficient_trusted_samples
+    result.fellBackToCandidateSamples =
+        use_evidence_aware_bounds && !sufficient_trusted_samples;
+    result.selectionReason = !use_evidence_aware_bounds
+        ? QStringLiteral("candidate_samples_requested")
+        : sufficient_trusted_samples
         ? QStringLiteral("trusted_multiview_evidence")
         : (result.trustedSampleCount < minimum_trusted_sample_count
                ? QStringLiteral("insufficient_trusted_sample_count")
@@ -4978,7 +4983,8 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             retained_frames.push_back(frames[frame_index]);
         }
     }
-    const DepthTsdfBoundsResult bounds = estimateBounds(retained_frames);
+    const DepthTsdfBoundsResult bounds = estimateBounds(
+        retained_frames, options.useEvidenceAwareBounds);
     if (!bounds.ok)
     {
         result.errorMessage = bounds.errorMessage;

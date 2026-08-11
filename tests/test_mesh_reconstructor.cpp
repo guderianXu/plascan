@@ -2720,6 +2720,18 @@ TEST(DepthTsdfSurfaceBuilderTest,
     EXPECT_LT(bounds.trustedSampleCount, bounds.candidateSampleCount);
     EXPECT_GT(bounds.trustedSampleCount, 500u);
     EXPECT_GT(bounds.minimum[2], 1.5f);
+
+    const auto candidate_bounds =
+        xjw::mesh::DepthTsdfSurfaceBuilder::estimateBounds(frames, false);
+    ASSERT_TRUE(candidate_bounds.ok)
+        << candidate_bounds.errorMessage.toStdString();
+    EXPECT_FALSE(candidate_bounds.usedEvidenceAwareSamples);
+    EXPECT_FALSE(candidate_bounds.fellBackToCandidateSamples);
+    EXPECT_EQ(candidate_bounds.selectionReason,
+              QStringLiteral("candidate_samples_requested"));
+    EXPECT_EQ(candidate_bounds.sampleCount,
+              candidate_bounds.candidateSampleCount);
+    EXPECT_LT(candidate_bounds.minimum[2], 1.0f);
 }
 
 TEST(DepthTsdfSurfaceBuilderTest,
@@ -8159,6 +8171,42 @@ TEST(MeshWorkflowSettingsTest, OrbitalVisualHullCompletionCatchesResidualOpenSur
         true, true, true, 0.60, 10000, 100000));
 }
 
+TEST(MeshWorkflowSettingsTest, OrbitalTsdfRetryUsesSafeResolutionForSevereCollapse)
+{
+    EXPECT_EQ(
+        xjw::mesh::workflow::selectOrbitalTsdfRetryResolution(
+            320, true, 0.1328, 0.0062, 0.75, 0.40),
+        96);
+    EXPECT_EQ(
+        xjw::mesh::workflow::selectOrbitalTsdfRetryResolution(
+            160, true, 0.3972, 0.2111, 0.75, 0.40),
+        96);
+}
+
+TEST(MeshWorkflowSettingsTest, OrbitalTsdfRetryPreservesPassingAndMinimumResolutionMeshes)
+{
+    EXPECT_EQ(
+        xjw::mesh::workflow::selectOrbitalTsdfRetryResolution(
+            320, true, 0.90, 0.70, 0.75, 0.40),
+        0);
+    EXPECT_EQ(
+        xjw::mesh::workflow::selectOrbitalTsdfRetryResolution(
+            96, true, 0.10, 0.01, 0.75, 0.40),
+        0);
+    EXPECT_EQ(
+        xjw::mesh::workflow::selectOrbitalTsdfRetryResolution(
+            320, false, 0.10, 0.01, 0.75, 0.40),
+        0);
+}
+
+TEST(MeshWorkflowSettingsTest, OrbitalTsdfRetryUsesSafeResolutionForModerateFailures)
+{
+    EXPECT_EQ(
+        xjw::mesh::workflow::selectOrbitalTsdfRetryResolution(
+            320, true, 0.60, 0.30, 0.75, 0.40),
+        96);
+}
+
 TEST(DepthMapMeshBuilderTest, VisualHullDefaultsUseBoundedSurfaceSmoothing)
 {
     const xjw::mesh::DepthMapVisualHullOptions options;
@@ -8345,12 +8393,74 @@ TEST(DepthMapMeshBuilderTest, DoesNotTreatFullFrameAerialImagesAsStudioSilhouett
     manifest << "]}";
     manifest.close();
 
+    const auto preflight =
+        xjw::mesh::DepthMapMeshBuilder::inspectVisualHullApplicability(
+            QString::fromStdString(root.string()));
+    EXPECT_FALSE(preflight.applicable);
+    EXPECT_EQ(preflight.candidateFrameCount, 6);
+    EXPECT_EQ(preflight.inspectedFrameCount, 6);
+    EXPECT_EQ(preflight.usableViewCount, 0);
+
     const auto result = xjw::mesh::DepthMapMeshBuilder::buildVisualHull(
         QString::fromStdString(root.string()), 96);
 
     EXPECT_FALSE(result.applicable);
     EXPECT_FALSE(result.ok);
     EXPECT_EQ(result.usableViewCount, 0);
+}
+
+TEST(DepthMapMeshBuilderTest, VisualHullPreflightAcceptsStudioSilhouettes)
+{
+    namespace fs = std::filesystem;
+    const fs::path root =
+        fs::temp_directory_path() / "plascan_depth_mesh_studio_preflight_test";
+    fs::remove_all(root);
+    fs::create_directories(root);
+    std::ofstream manifest(root / "mvs_manifest.json");
+    manifest << "{\"frames\":[";
+    for (int index = 0; index < 8; ++index)
+    {
+        const std::string image_name =
+            "studio_" + std::to_string(index) + ".png";
+        const std::string depth_name =
+            "depth_" + std::to_string(index) + ".bin";
+        cv::Mat studio_image(96, 128, CV_8UC3, cv::Scalar(8, 8, 8));
+        cv::ellipse(
+            studio_image,
+            cv::Point(64, 48),
+            cv::Size(25, 32),
+            0.0,
+            0.0,
+            360.0,
+            cv::Scalar(210, 210, 210),
+            cv::FILLED);
+        ASSERT_TRUE(cv::imwrite((root / image_name).string(), studio_image));
+        std::ofstream(root / depth_name).put('\0');
+        if (index > 0)
+        {
+            manifest << ',';
+        }
+        manifest << "{\"ref_index\":" << index
+                 << ",\"status\":\"completed\",\"ref_image\":\"" << image_name
+                 << "\",\"raw_depth_path\":\"" << depth_name
+                 << "\",\"grid_width\":128,\"grid_height\":96,\"camera_model\":{"
+                    "\"fx\":90,\"fy\":90,\"cx\":64,\"cy\":48,"
+                    "\"rotation_world_to_camera\":[1,0,0,0,1,0,0,0,1],"
+                    "\"translation_world_to_camera\":[0,0,3],"
+                    "\"camera_center\":[0,0,-3]}}";
+    }
+    manifest << "]}";
+    manifest.close();
+
+    const auto preflight =
+        xjw::mesh::DepthMapMeshBuilder::inspectVisualHullApplicability(
+            QString::fromStdString(root.string()));
+
+    EXPECT_TRUE(preflight.applicable);
+    EXPECT_EQ(preflight.candidateFrameCount, 8);
+    EXPECT_EQ(preflight.inspectedFrameCount, 6);
+    EXPECT_EQ(preflight.usableViewCount, 6);
+    fs::remove_all(root);
 }
 
 TEST(DepthMapMeshBuilderTest, UsesExistingDenseCloudWhenPresent)

@@ -49,6 +49,7 @@ struct DepthTsdfFrame
 struct DepthTsdfOptions
 {
     int resolution = 320;
+    bool useEvidenceAwareBounds = true;
     float truncationVoxels = 7.5f;
     float surfaceSupportBandVoxels = 0.0f;
     bool enableUncertaintyAdaptiveTruncation = false;
@@ -1230,7 +1231,9 @@ public:
     static DepthTsdfFrameLoadResult loadFrames(
         const QVector<DepthFrameArtifact> &artifacts,
         int requestedWorkerCount = 0);
-    static DepthTsdfBoundsResult estimateBounds(const QVector<DepthTsdfFrame> &frames);
+    static DepthTsdfBoundsResult estimateBounds(
+        const QVector<DepthTsdfFrame> &frames,
+        bool useEvidenceAwareBounds = true);
     static DepthTsdfObservationSample sampleObservation(
         const DepthTsdfFrame &frame,
         const cv::Mat &effectiveDepthValidMask,

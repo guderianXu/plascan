@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <mutex>
 #include <numeric>
 #include <thread>
 #include <unordered_map>
@@ -672,6 +673,9 @@ bool VisualHullReconstructor::reconstruct(const std::vector<VisualHullView> &vie
     const float stepY = (config.boundsMax[1] - config.boundsMin[1]) / resolution;
     const float stepZ = (config.boundsMax[2] - config.boundsMin[2]) / resolution;
     std::atomic_bool cancelled{false};
+    std::atomic<int> completed_layer_count{0};
+    std::mutex progress_mutex;
+    int reported_progress_percent = 5;
     const int workers = resolveWorkerCount(config.workerCount);
     const std::vector<detail::PreparedVisualHullView>
         prepared_field_views =
@@ -727,6 +731,23 @@ bool VisualHullReconstructor::reconstruct(const std::vector<VisualHullView> &vie
                            config)
                            ? -1.0f
                            : 1.0f);
+            }
+        }
+        const int completed_layers =
+            completed_layer_count.fetch_add(1, std::memory_order_relaxed) + 1;
+        const int progress_percent =
+            5 + completed_layers * 65 / gridSize;
+        if (config.progressFn)
+        {
+            std::lock_guard<std::mutex> lock(progress_mutex);
+            if (progress_percent > reported_progress_percent)
+            {
+                reported_progress_percent = progress_percent;
+                config.progressFn(
+                    "正在评估多视轮廓体素（" +
+                        std::to_string(completed_layers) + "/" +
+                        std::to_string(gridSize) + " 层）...",
+                    static_cast<float>(progress_percent) / 100.0f);
             }
         }
     }

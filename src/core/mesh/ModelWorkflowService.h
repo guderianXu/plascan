@@ -97,6 +97,12 @@ bool shouldUseOrbitalVisualHullCompletion(bool orbitalWorkspace,
                                           double aggregateProjectionRecall,
                                           int boundaryEdgeCount,
                                           int faceCount);
+int selectOrbitalTsdfRetryResolution(int currentResolution,
+                                     bool completenessAvailable,
+                                     double medianRecall,
+                                     double p10Recall,
+                                     double minimumMedianRecall,
+                                     double minimumP10Recall);
 xjw::mesh::ReconstructionConfig reconstructionConfigFromModelSettings(const QJsonObject &settings);
 xjw::mesh::ReconstructionConfig reconstructionConfigForDenseScene(int requestedResolution,
                                                                    bool aerialTerrain,

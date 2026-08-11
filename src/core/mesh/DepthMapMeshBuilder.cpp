@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <unordered_map>
 #include <vector>
 
@@ -359,6 +360,18 @@ cv::Mat buildSilhouetteMask(const cv::Mat &color_image,
     return mask;
 }
 
+bool isUsableStudioSilhouette(const cv::Mat &color_image)
+{
+    float coverage = 0.0f;
+    float border_coverage = 1.0f;
+    float border_luminance = 255.0f;
+    const cv::Mat silhouette = buildSilhouetteMask(
+        color_image, &coverage, &border_coverage, &border_luminance);
+    return !silhouette.empty() && border_luminance <= 55.0f &&
+           coverage >= 0.03f && coverage <= 0.80f &&
+           border_coverage <= 0.30f;
+}
+
 int countEnclosedMaskHoles(const cv::Mat &mask)
 {
     if (mask.empty() || mask.type() != CV_8UC1)
@@ -629,6 +642,51 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
         return left.refIndex < right.refIndex;
     });
     return frames;
+}
+
+DepthMapVisualHullPreflightResult DepthMapMeshBuilder::inspectVisualHullApplicability(
+    const QString &source_path,
+    int maximum_inspected_frames,
+    int minimum_usable_views)
+{
+    DepthMapVisualHullPreflightResult result;
+    const QVector<DepthFrameArtifact> frames = discoverDepthFrames(source_path);
+    QVector<const DepthFrameArtifact *> candidates;
+    candidates.reserve(frames.size());
+    for (const DepthFrameArtifact &frame : frames)
+    {
+        if (frame.hasCameraModel && !frame.refImage.isEmpty())
+        {
+            candidates.push_back(&frame);
+        }
+    }
+
+    result.candidateFrameCount = candidates.size();
+    const int inspection_limit = std::min(
+        std::max(1, maximum_inspected_frames),
+        result.candidateFrameCount);
+    const int required_views = std::max(1, minimum_usable_views);
+    for (int sample_index = 0; sample_index < inspection_limit; ++sample_index)
+    {
+        const int candidate_index = static_cast<int>(
+            static_cast<std::int64_t>(sample_index) * result.candidateFrameCount /
+            inspection_limit);
+        const DepthFrameArtifact &frame = *candidates[candidate_index];
+        const cv::Mat color = xjw::common::io::readImage(
+            xjw::common::io::toUtf8Path(frame.refImage),
+            cv::IMREAD_REDUCED_COLOR_8);
+        ++result.inspectedFrameCount;
+        if (!color.empty() && isUsableStudioSilhouette(color))
+        {
+            ++result.usableViewCount;
+            if (result.usableViewCount >= required_views)
+            {
+                result.applicable = true;
+                break;
+            }
+        }
+    }
+    return result;
 }
 
 DepthMapVisualHullResult DepthMapMeshBuilder::buildVisualHull(
