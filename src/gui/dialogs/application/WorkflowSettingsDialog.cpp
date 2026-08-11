@@ -840,8 +840,8 @@ void WorkflowSettingsDialog::refreshModelComputePolicy()
     {
         available = _openClAvailable;
         policy = QStringLiteral(
-            "深度图估计和点云预处理仅使用 OpenCL；不会调用 CUDA。"
-            "当前尚无 OpenCL Poisson 求解器，该步骤会使用 CPU。");
+            "深度图估计、点云预处理和 Poisson 稀疏求解仅使用 OpenCL；"
+            "不会调用 CUDA。网格提取等串行阶段仍在 CPU 执行。");
     }
     else
     {

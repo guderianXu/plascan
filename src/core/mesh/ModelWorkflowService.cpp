@@ -3273,9 +3273,7 @@ xjw::mesh::ReconstructionConfig reconstructionConfigFromModelSettings(const QJso
     else if (compute_mode == QStringLiteral("opencl"))
     {
         config.preprocessingDevice = plapoint::ProcessingDevice::OpenCL;
-        // PlaPoint currently has no OpenCL Poisson linear solver. Explicit
-        // OpenCL mode must not silently invoke CUDA, so this stage stays CPU.
-        config.poissonSolverDevice = plapoint::ProcessingDevice::CPU;
+        config.poissonSolverDevice = plapoint::ProcessingDevice::OpenCL;
     }
     else if (compute_mode == QStringLiteral("hybrid"))
     {
@@ -3301,6 +3299,8 @@ xjw::mesh::ReconstructionConfig reconstructionConfigFromModelSettings(const QJso
     config.allowHeightGridFallback = surfaceType == QStringLiteral("height_field");
     config.orientNormalsForClosedSurface = surfaceType == QStringLiteral("arbitrary_3d");
     config.poissonDepth = qBound(7, settings.value(QStringLiteral("octreeDepth")).toInt(10), 12);
+    config.poissonSolverIterations = qBound(
+        1, settings.value(QStringLiteral("poissonSolverIterations")).toInt(200), 2000);
     config.poissonThreads = qBound(1, settings.value(QStringLiteral("threads")).toInt(8), 128);
 
     const double pointWeight =

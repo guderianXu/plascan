@@ -1700,6 +1700,7 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
                 plapoint::mesh::PoissonReconstruction<float> poisson;
                 poisson.setInputCloud(poissonCloudPtr);
                 poisson.setDepth(recommendedPoissonDepth(points.size(), config.poissonDepth));
+                poisson.setSolverIterations(std::max(1, config.poissonSolverIterations));
                 poisson.setProcessingDevice(config.poissonSolverDevice);
                 auto [verts, faces] = poisson.reconstruct();
                 if (cancelled())

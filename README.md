@@ -400,8 +400,10 @@ SOR/Radius、Voxel、Normals 和 HeightGrid 的输入输出驻留主机，并仍
 协方差/SVD 等阶段。它可让非 NVIDIA GPU 参与计算，但是否快于原生 CPU 取决于点数、属性和驱动，
 需以真实数据 benchmark 为准；超大近二维地表云或病态分布触发工作量保护时，Auto 会记录原因并回退
 CPU，显式 OpenCL 则明确报错。
-这层基础设施不代表 PlaMatrix 已提供 OpenCL GEMM、SVD、CSR 或稀疏 PCG。Poisson 求解后端与点云
-预处理独立，当前自动在 CUDA 和 CPU 之间选择；因此显式 OpenCL 仍可用于前处理，而不会被误传给 Poisson。
+PlaMatrix 还提供 CPU-owned CSR 系统的 OpenCL Jacobi-PCG：矩阵和向量一次上传，稀疏乘法、预条件、
+向量更新和分层归约在 GPU 执行，仅回读每轮收敛标量和最终解。Poisson 求解后端与点云预处理独立，
+自动按 CUDA → OpenCL → CPU 选择；显式 OpenCL 会严格使用 OpenCL，设备或求解失败时明确报错。
+这层基础设施尚不代表 PlaMatrix 已提供通用 OpenCL GEMM 或 SVD。
 多块 OpenCL GPU 并存时，可用 `PLAMATRIX_OPENCL_DEVICE_INDEX` 指定 PlaMatrix 枚举出的稳定设备索引；
 未设置时会优先选择独立显卡和计算单元较多的设备。兼容期仍接受旧的
 `PLAPOINT_OPENCL_DEVICE_INDEX`，但仅在对应 PlaMatrix 环境变量未设置时作为回退。
@@ -620,6 +622,7 @@ python scripts/models/export_birefnet_dynamic_onnx.py --help
 | CUDA 加速 | ✅ | ✅ | ❌ (MPS via PyTorch) |
 | MVS PatchMatch | CUDA/OpenCL/CPU | CUDA/OpenCL/CPU | CPU |
 | 点云预处理 | CUDA/OpenCL/CPU | CUDA/OpenCL/CPU | CPU |
+| Poisson 稀疏 PCG | CUDA/OpenCL/CPU | CUDA/OpenCL/CPU | CPU |
 | dense_match MGM/SGM | CUDA + CPU | CUDA + CPU | CPU only |
 | CUDA SIFT + TensorRT LightGlue | CUDA | CUDA | 不支持 |
 | TensorRT LoMa-R | CUDA | CUDA | 不支持 |
@@ -630,7 +633,7 @@ python scripts/models/export_birefnet_dynamic_onnx.py --help
 | CPack 打包 | ZIP/INNOSETUP | TGZ/DEB | TGZ |
 | Docker 构建 | — | ✅ | — |
 
-Windows/Linux 上的 AMD 与 Intel GPU 可通过 OpenCL 运行 MVS PatchMatch 和上述 PlaPoint 点云阶段；
+Windows/Linux 上的 AMD 与 Intel GPU 可通过 OpenCL 运行 MVS PatchMatch、点云阶段和 Poisson 稀疏求解；
 标准影像到模型的稀疏特征前端目前仍依赖 NVIDIA CUDA/TensorRT，因此尚不是全链路无 NVIDIA 方案。
 
 ## 开发

@@ -36,6 +36,7 @@
 #include <plapoint/io/obj_io.h>
 #include <plapoint/io/ply_io.h>
 #include <plapoint/mesh/marching_cubes.h>
+#include <plapoint/opencl/opencl_runtime.h>
 
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -5926,8 +5927,12 @@ TEST(MeshReconstructorTest, ForcePoissonUsesInputNormalsWhenPresent)
     EXPECT_EQ(algorithmUsed, "poisson");
 }
 
-TEST(MeshReconstructorTest, OpenClPreferenceDoesNotSelectUnsupportedPoissonSolver)
+TEST(MeshReconstructorTest, ExplicitOpenClPoissonSolverProducesMesh)
 {
+    if (!plapoint::opencl::hasUsableOpenClDevice())
+    {
+        GTEST_SKIP() << "No usable OpenCL GPU";
+    }
     namespace fs = std::filesystem;
     const fs::path root = fs::temp_directory_path() / "plascan_mesh_poisson_backend_test";
     const fs::path plyPath = writeSpherePointCloudWithNormals(root);
@@ -5935,7 +5940,7 @@ TEST(MeshReconstructorTest, OpenClPreferenceDoesNotSelectUnsupportedPoissonSolve
     xjw::mesh::ReconstructionConfig config = fallbackMeshConfig();
     config.poissonDepth = 4;
     config.preprocessingDevice = plapoint::ProcessingDevice::OpenCL;
-    config.poissonSolverDevice = plapoint::ProcessingDevice::CPU;
+    config.poissonSolverDevice = plapoint::ProcessingDevice::OpenCL;
     config.enableDenoise = false;
     config.enableDownsample = false;
     config.allowHeightGridFallback = false;
@@ -6789,11 +6794,13 @@ TEST(MeshWorkflowSettingsTest, MapsModelComputeModesToIndependentGpuStages)
     const auto opencl_config =
         xjw::mesh::workflow::reconstructionConfigFromModelSettings(
             QJsonObject{{QStringLiteral("compute_mode"),
-                         QStringLiteral("opencl")}});
+                         QStringLiteral("opencl")},
+                        {QStringLiteral("poissonSolverIterations"), 321}});
     EXPECT_EQ(opencl_config.preprocessingDevice,
               plapoint::ProcessingDevice::OpenCL);
     EXPECT_EQ(opencl_config.poissonSolverDevice,
-              plapoint::ProcessingDevice::CPU);
+              plapoint::ProcessingDevice::OpenCL);
+    EXPECT_EQ(opencl_config.poissonSolverIterations, 321);
 
     const auto hybrid_config =
         xjw::mesh::workflow::reconstructionConfigFromModelSettings(

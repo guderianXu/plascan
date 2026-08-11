@@ -889,9 +889,10 @@ PlaPoint 的 CPU-owned 高层接口对稀疏/稠密点云预处理独立执行 C
 基础设施由 PlaMatrix 提供，要求 OpenCL C 1.2，包括设备枚举与选择、context/command queue、
 program cache、device buffer 和执行封装；PlaPoint 只保留点云领域 kernel。第一阶段这些高层算法的
 输入输出仍驻留 CPU，主机索引、
-排序、属性聚合和协方差/SVD 等阶段尚未全部迁移到设备端；PlaMatrix 也尚未宣称支持 OpenCL GEMM、SVD、
-CSR 或稀疏 PCG。Poisson 的稀疏 PCG 后端与预处理设备独立，仍由 PlaMatrix 的 CUDA/CPU 后端承担，
-避免把显式 OpenCL 预处理请求传给不支持的求解器。
+排序、属性聚合和协方差/SVD 等阶段尚未全部迁移到设备端；PlaMatrix 尚未宣称支持 OpenCL GEMM 或 SVD。
+Poisson 的稀疏 PCG 后端与预处理设备独立，可使用 PlaMatrix 的 CUDA、OpenCL 或 CPU 后端。OpenCL
+路径一次上传 CPU-owned CSR 系统，在设备端执行 SpMV、Jacobi 预条件、向量更新和分层归约；显式
+OpenCL 严格失败，Auto 则按 CUDA → OpenCL → CPU 回退并保留未收敛迭代结果作为下一后端初值。
 
 `depth_tsdf` 直接消费深度帧，不经过密集点云。深度产物统一存储物理前向的正 camera-Z；
 `DepthRayMetric` 按像素反投影换算离轴欧氏射线距离，并以对称半像素边界射线估计横纵世界像素足迹，
