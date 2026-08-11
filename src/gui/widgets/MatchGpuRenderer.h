@@ -69,15 +69,18 @@ private:
                         QString *errorMessage);
 
     QScopedPointer<QRhiBuffer> _vertexBuffer;
+    QScopedPointer<QRhiBuffer> _endpointMeshBuffer;
     QScopedPointer<QRhiBuffer> _uniformBuffer;
     QScopedPointer<QRhiShaderResourceBindings> _bindings;
     QScopedPointer<QRhiGraphicsPipeline> _linePipeline;
     QScopedPointer<QRhiGraphicsPipeline> _pointPipeline;
     QByteArray _pendingVertexData;
+    QByteArray _pendingEndpointMeshData;
     quint64 _uploadedGeneration = 0;
     quint32 _vertexCapacityBytes = 0;
     quint32 _lineVertexCount = 0;
-    quint32 _pointVertexCount = 0;
+    quint32 _endpointInstanceCount = 0;
+    quint32 _endpointMeshVertexCount = 0;
     qreal _pipelineLineWidth = -1.0;
     int _sampleCount = 1;
 };

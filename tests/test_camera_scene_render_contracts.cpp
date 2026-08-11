@@ -144,6 +144,8 @@ TEST(CameraSceneRenderContractTest, LargeCameraImagesUseContinuousBoundedPrefetc
     EXPECT_TRUE(source.contains(QStringLiteral("正在加载相机影像 %1/%2")));
     EXPECT_TRUE(header.contains(QStringLiteral("RhiCameraThumbnailAtlasPage")));
     EXPECT_TRUE(source.contains(QStringLiteral("subresource.setDestinationTopLeft")));
+    EXPECT_TRUE(source.contains(QStringLiteral("atlas_upload_entries[page_index].append")));
+    EXPECT_TRUE(source.contains(QStringLiteral("upload_description.setEntries")));
     EXPECT_TRUE(source.contains(QStringLiteral("atlas_instances")));
     EXPECT_TRUE(source.contains(QStringLiteral("QRhiVertexInputBinding::PerInstance")));
 }

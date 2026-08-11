@@ -22,9 +22,7 @@ MatchLineOverlay::MatchLineOverlay(QWidget *parent)
     , _visibilityCacheValid(false)
     , _renderCacheValid(false)
 {
-#if defined(Q_OS_WIN)
-    setApi(QRhiWidget::Api::Direct3D11);
-#elif defined(Q_OS_MACOS)
+#if defined(Q_OS_MACOS)
     setApi(QRhiWidget::Api::Metal);
 #else
     setApi(QRhiWidget::Api::Vulkan);

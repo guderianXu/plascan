@@ -59,6 +59,7 @@ if(PLASCAN_BUILD_GUI)
       shaders/camera_scene_camera.vert
       shaders/camera_scene_camera_leader.vert
       shaders/match_overlay.vert
+      shaders/match_overlay_endpoint.vert
       shaders/match_overlay.frag
   )
 endif()

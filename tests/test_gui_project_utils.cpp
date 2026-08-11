@@ -11913,8 +11913,11 @@ TEST(MatchViewerResponsivenessTest, LimitsDefaultSparseRenderingWork)
     EXPECT_TRUE(gpuRendererSource.contains(QStringLiteral("commandBuffer->draw")));
     EXPECT_TRUE(overlaySource.contains(QStringLiteral("_leftSpatialIndex")));
     EXPECT_TRUE(overlayHeader.contains(QStringLiteral("public QRhiWidget")));
-    EXPECT_TRUE(overlaySource.contains(QStringLiteral("QRhiWidget::Api::Direct3D11")));
+    EXPECT_TRUE(overlaySource.contains(QStringLiteral("QRhiWidget::Api::Vulkan")));
     EXPECT_TRUE(overlaySource.contains(QStringLiteral("Qt::WA_AlwaysStackOnTop")));
+    EXPECT_TRUE(gpuRendererSource.contains(QStringLiteral("QRhiVertexInputBinding::PerInstance")));
+    EXPECT_TRUE(gpuRendererSource.contains(QStringLiteral("QRhiGraphicsPipeline::Triangles")));
+    EXPECT_FALSE(gpuRendererSource.contains(QStringLiteral("QRhiGraphicsPipeline::Points")));
     EXPECT_EQ(overlaySource.count(QStringLiteral("mapToGlobal")), 1);
     EXPECT_EQ(overlaySource.count(QStringLiteral("mapFromGlobal")), 1);
     EXPECT_TRUE(dualViewerSource.contains(QStringLiteral("setInterval(16)")));

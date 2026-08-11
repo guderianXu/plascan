@@ -4254,6 +4254,7 @@ bool CameraSceneWidget::ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *u
     const int atlas_slots_per_page = atlas_columns * atlas_rows;
     const QList<int> pending_thumbnail_indices =
         _pendingThumbnailPoseIndices.values();
+    QHash<int, QVector<QRhiTextureUploadEntry>> atlas_upload_entries;
     for (const int pose_index : pending_thumbnail_indices)
     {
         if (!_showCameraThumbnails || pose_index < 0 || pose_index >= _poses.size())
@@ -4300,9 +4301,8 @@ bool CameraSceneWidget::ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *u
         }
         QRhiTextureSubresourceUploadDescription subresource(upload_image);
         subresource.setDestinationTopLeft(destination);
-        updates->uploadTexture(
-            page->texture.data(),
-            QRhiTextureUploadDescription({QRhiTextureUploadEntry(0, 0, subresource)}));
+        atlas_upload_entries[page_index].append(
+            QRhiTextureUploadEntry(0, 0, subresource));
         page->uploadedPoseIndices.insert(pose_index);
         page->imageSizes.insert(pose_index, upload_image.size());
         _thumbnailPoseIndicesPendingCommit.insert(pose_index);
@@ -4310,6 +4310,25 @@ bool CameraSceneWidget::ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *u
             cameraPlaneImageKey(pose.imagePath, planeMode));
         _thumbnailPipeline.instancesDirty = true;
     }
+    for (auto uploads = atlas_upload_entries.cbegin();
+         uploads != atlas_upload_entries.cend();
+         ++uploads)
+    {
+        const int page_index = uploads.key();
+        if (page_index < 0 || page_index >= _thumbnailPipeline.atlasPages.size())
+        {
+            continue;
+        }
+        const auto &page = _thumbnailPipeline.atlasPages.at(page_index);
+        if (page && page->texture && !uploads.value().isEmpty())
+        {
+            QRhiTextureUploadDescription upload_description;
+            upload_description.setEntries(
+                uploads.value().cbegin(), uploads.value().cend());
+            updates->uploadTexture(page->texture.data(), upload_description);
+        }
+    }
+
     if (!_thumbnailPipeline.solidResource
         || !_thumbnailPipeline.solidResource->bindings)
     {
