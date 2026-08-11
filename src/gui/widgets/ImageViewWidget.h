@@ -12,7 +12,7 @@
 class QGraphicsView;
 class QGraphicsScene;
 class QGraphicsPixmapItem;
-class QGraphicsEllipseItem;
+class MatchPointBatchItem;
 
 // ImageViewWidget: 单个独立的图像查看视图
 // 职责：
@@ -62,12 +62,14 @@ public:
     
     // 根据掩码设置匹配点的可见性（与覆盖层可见匹配同步）
     void setMatchVisibilityMask(const QVector<bool> &mask);
+    void setVisibleMatchIndices(const QVector<int> &indices);
     
     // 获取当前图像路径
     QString imagePath() const { return _imagePath; }
 
     // 返回当前场景中点图元数量（用于外部同步可见性掩码的大小）
-    int matchItemCount() const { return _pointItems.size(); }
+    int matchItemCount() const { return _matchPoints.size(); }
+    int visibleMatchPointCount() const;
 
 signals:
     // 视图变换变化（缩放、平移）
@@ -92,14 +94,13 @@ private slots:
 
 private:
     void setupView();
-    void updatePointsVisibility();
     
     QGraphicsView *_view;
     QGraphicsScene *_scene;
     QGraphicsPixmapItem *_imageItem;
     
     QVector<QPointF> _matchPoints;
-    QVector<QGraphicsEllipseItem*> _pointItems;
+    MatchPointBatchItem *_matchPointItem = nullptr;
     
     QString _imagePath;
     QSet<QFutureWatcher<QImage> *> _imageLoadWatchers;

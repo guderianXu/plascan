@@ -12,6 +12,7 @@
 #include <QTimer>
 #include <QMessageBox>
 #include <QDebug>
+#include <QtConcurrent/QtConcurrent>
 
 #include <algorithm>
 
@@ -146,6 +147,18 @@ void DualImageViewer::setShowAllMatches(bool showAll)
 
 DualImageViewer::~DualImageViewer()
 {
+    const QSet<QFutureWatcher<MatchParseResult> *> watchers = _matchLoadWatchers;
+    for (QFutureWatcher<MatchParseResult> *watcher : watchers)
+    {
+        disconnect(watcher, nullptr, nullptr, nullptr);
+        watcher->cancel();
+    }
+    for (QFutureWatcher<MatchParseResult> *watcher : watchers)
+    {
+        watcher->waitForFinished();
+    }
+    _matchLoadWatchers.clear();
+
     // 停止并断开延迟更新定时器，防止在widget销毁后触发回调
     if (_overlayUpdateTimer) {
         _overlayUpdateTimer->stop();
@@ -220,6 +233,7 @@ void DualImageViewer::setMarkerMeasurement(const QString &anchorImage,
                                            const QPointF &anchorPixel,
                                            const std::optional<QPointF> &candidatePixel)
 {
+    ++_matchLoadGeneration;
     const QVector<QPointF> anchor_points{anchorPixel};
     const QVector<QPointF> candidate_points = candidatePixel.has_value()
         ? QVector<QPointF>{candidatePixel.value()}
@@ -243,47 +257,78 @@ bool DualImageViewer::loadMatchPair(const QString &imgA, const QString &imgB,
                                     std::uint32_t algorithmVersion,
                                     const QByteArray &configFingerprint)
 {
-    if (matchFile.trimmed().isEmpty()) {
-        loadMatchPair(imgA, imgB, QVector<QPointF>{}, QVector<QPointF>{});
+    const quint64 generation = ++_matchLoadGeneration;
+    if (matchFile.trimmed().isEmpty())
+    {
+        applyMatchPairData(imgA, imgB, QVector<QPointF>{}, QVector<QPointF>{});
         return true;
     }
 
-    // 解析匹配文件
-    QVector<QPointF> ptsA, ptsB;
-    QVector<bool> inlier_mask;
-    if (!parseMatchFile(matchFile,
-                        imgA,
-                        imgB,
-                        algorithmId,
-                        algorithmVersion,
-                        configFingerprint,
-                        ptsA,
-                        ptsB,
-                        inlier_mask)) {
-        emit loadFailed(tr("无法解析匹配文件：%1").arg(matchFile));
-        return false;
-    }
-    
-    // 加载图像和匹配点
-    loadMatchPair(imgA, imgB, ptsA, ptsB);
-    if (inlier_mask.size() == ptsA.size())
+    QFuture<MatchParseResult> future = QtConcurrent::run(
+        [matchFile, imgA, imgB, algorithmId, algorithmVersion, configFingerprint]()
+        {
+            return parseMatchFile(matchFile,
+                                  imgA,
+                                  imgB,
+                                  algorithmId,
+                                  algorithmVersion,
+                                  configFingerprint);
+        });
+    auto *watcher = new QFutureWatcher<MatchParseResult>(this);
+    _matchLoadWatchers.insert(watcher);
+    QPointer<DualImageViewer> self(this);
+    connect(watcher, &QFutureWatcher<MatchParseResult>::finished,
+            watcher, [self, watcher, generation, imgA, imgB, matchFile]()
     {
-        _overlay->setInlierMask(inlier_mask);
-        const int valid_count = static_cast<int>(std::count(
-            inlier_mask.cbegin(), inlier_mask.cend(), true));
-        emit matchValidityLoaded(valid_count, inlier_mask.size() - valid_count);
-    }
-    else
-    {
-        _overlay->setInlierMask(QVector<bool>());
-        emit matchValidityLoaded(-1, -1);
-    }
+        if (self)
+        {
+            self->_matchLoadWatchers.remove(watcher);
+        }
+        const MatchParseResult result = watcher->result();
+        watcher->deleteLater();
+        if (!self || generation != self->_matchLoadGeneration)
+        {
+            return;
+        }
+        if (!result.success)
+        {
+            emit self->loadFailed(result.error.isEmpty()
+                ? self->tr("无法解析匹配文件：%1").arg(matchFile)
+                : result.error);
+            return;
+        }
+
+        self->applyMatchPairData(imgA, imgB, result.pointsA, result.pointsB);
+        if (result.inlierMask.size() == result.pointsA.size())
+        {
+            self->_overlay->setInlierMask(result.inlierMask);
+            const int valid_count = static_cast<int>(std::count(
+                result.inlierMask.cbegin(), result.inlierMask.cend(), true));
+            emit self->matchValidityLoaded(
+                valid_count, result.inlierMask.size() - valid_count);
+        }
+        else
+        {
+            self->_overlay->setInlierMask(QVector<bool>());
+            emit self->matchValidityLoaded(-1, -1);
+        }
+    });
+    watcher->setFuture(future);
     return true;
 }
 
 void DualImageViewer::loadMatchPair(const QString &imgA, const QString &imgB,
                                     const QVector<QPointF> &ptsA,
                                     const QVector<QPointF> &ptsB)
+{
+    ++_matchLoadGeneration;
+    applyMatchPairData(imgA, imgB, ptsA, ptsB);
+}
+
+void DualImageViewer::applyMatchPairData(const QString &imgA,
+                                         const QString &imgB,
+                                         const QVector<QPointF> &ptsA,
+                                         const QVector<QPointF> &ptsB)
 {
     // 加载图像
     if (!_leftView->loadImage(imgA)) {
@@ -345,6 +390,7 @@ void DualImageViewer::resetBothViews()
 
 void DualImageViewer::clearViewer()
 {
+    ++_matchLoadGeneration;
     _matchPtsA.clear();
     _matchPtsB.clear();
     if (_leftView)
@@ -382,6 +428,7 @@ void DualImageViewer::resizeEvent(QResizeEvent *event)
 {
     QWidget::resizeEvent(event);
     updateOverlayGeometry();
+    scheduleOverlayUpdate();
 }
 
 void DualImageViewer::onLeftViewChanged(const QTransform &transform)
@@ -413,6 +460,10 @@ void DualImageViewer::scheduleOverlayUpdate()
 
 void DualImageViewer::updateOverlayNow()
 {
+    if (_overlayUpdateTimer)
+    {
+        _overlayUpdateTimer->stop();
+    }
     updateOverlayGeometry();
     // 防护：若组件已经被删除或指针失效则不进行更新
     if (!_overlay || !_leftView || !_rightView) return;
@@ -422,28 +473,9 @@ void DualImageViewer::updateOverlayNow()
     }
     _overlay->updateOverlay();
     
-    // 同步点的可见性：仅显示在两边都可见的匹配点
-    QVector<int> vis = _overlay->visibleMatches();
-
-    // 为避免使用不正确的大小（可能导致大内存分配），使用视图中实际的点图元数量
-    int leftCount = _leftView ? _leftView->matchItemCount() : 0;
-    int rightCount = _rightView ? _rightView->matchItemCount() : 0;
-    int useCount = qMax(leftCount, rightCount);
-    if (useCount <= 0) return;
-
-    // 端点必须与实际可见连线使用同一索引集合。空集合表示当前没有可显示
-    // 的连线，而不是“未设置筛选”，因此此时保持全部端点隐藏。
-    QVector<bool> mask(useCount, false);
-    for (int idx : vis)
-    {
-        if (idx >= 0 && idx < useCount)
-        {
-            mask[idx] = true;
-        }
-    }
-
-    if (_leftView) _leftView->setMatchVisibilityMask(mask);
-    if (_rightView) _rightView->setMatchVisibilityMask(mask);
+    const QVector<int> visible_matches = _overlay->visibleMatches();
+    _leftView->setVisibleMatchIndices(visible_matches);
+    _rightView->setVisibleMatchIndices(visible_matches);
 }
 
 void DualImageViewer::updateOverlayGeometry()
@@ -459,26 +491,23 @@ void DualImageViewer::updateOverlayGeometry()
     }
 }
 
-bool DualImageViewer::parseMatchFile(const QString &matchFile,
-                                     const QString &imgA,
-                                     const QString &imgB,
-                                     const QString &algorithmId,
-                                     std::uint32_t algorithmVersion,
-                                     const QByteArray &configFingerprint,
-                                     QVector<QPointF> &ptsA,
-                                     QVector<QPointF> &ptsB,
-                                     QVector<bool> &inlierMask)
+DualImageViewer::MatchParseResult DualImageViewer::parseMatchFile(
+    const QString &matchFile,
+    const QString &imgA,
+    const QString &imgB,
+    const QString &algorithmId,
+    std::uint32_t algorithmVersion,
+    const QByteArray &configFingerprint)
 {
-    ptsA.clear();
-    ptsB.clear();
-    inlierMask.clear();
+    MatchParseResult result;
 
     xjw::image_matching::ImageMatchShard shard;
     QString read_error;
     if (!xjw::image_matching::ImageMatchFile::read(matchFile, &shard, &read_error))
     {
         qWarning() << "无法读取匹配分片:" << matchFile << read_error;
-        return false;
+        result.error = tr("无法读取匹配文件 %1：%2").arg(matchFile, read_error);
+        return result;
     }
 
     const bool owner_is_a = identityMatchesImage(shard.owner, imgA);
@@ -486,7 +515,8 @@ bool DualImageViewer::parseMatchFile(const QString &matchFile,
     if (!owner_is_a && !owner_is_b)
     {
         qWarning() << "匹配分片 owner 与查看影像不一致:" << shard.owner.path;
-        return false;
+        result.error = tr("匹配文件与当前影像不一致：%1").arg(matchFile);
+        return result;
     }
     const QString peer_image = owner_is_a ? imgB : imgA;
 
@@ -509,12 +539,13 @@ bool DualImageViewer::parseMatchFile(const QString &matchFile,
     }
     if (!selected_block)
     {
-        return false;
+        result.error = tr("匹配文件中没有当前像对的数据：%1").arg(matchFile);
+        return result;
     }
 
-    ptsA.reserve(static_cast<int>(selected_block->matches.size()));
-    ptsB.reserve(static_cast<int>(selected_block->matches.size()));
-    inlierMask.reserve(static_cast<int>(selected_block->matches.size()));
+    result.pointsA.reserve(static_cast<int>(selected_block->matches.size()));
+    result.pointsB.reserve(static_cast<int>(selected_block->matches.size()));
+    result.inlierMask.reserve(static_cast<int>(selected_block->matches.size()));
     for (const xjw::image_matching::MatchRecord &match : selected_block->matches)
     {
         const xjw::image_matching::KeypointObservation *owner_observation =
@@ -526,10 +557,16 @@ bool DualImageViewer::parseMatchFile(const QString &matchFile,
 
         const QPointF owner_point(owner_observation->x, owner_observation->y);
         const QPointF peer_point(match.peerX, match.peerY);
-        ptsA.append(owner_is_a ? owner_point : peer_point);
-        ptsB.append(owner_is_a ? peer_point : owner_point);
-        inlierMask.append(xjw::image_matching::hasFlag(
+        result.pointsA.append(owner_is_a ? owner_point : peer_point);
+        result.pointsB.append(owner_is_a ? peer_point : owner_point);
+        result.inlierMask.append(xjw::image_matching::hasFlag(
             match.flags, xjw::image_matching::MatchRecordFlag::GeometryInlier));
     }
-    return !ptsA.isEmpty() && ptsA.size() == ptsB.size();
+    result.success = !result.pointsA.isEmpty()
+        && result.pointsA.size() == result.pointsB.size();
+    if (!result.success)
+    {
+        result.error = tr("匹配文件中没有可显示的匹配点：%1").arg(matchFile);
+    }
+    return result;
 }

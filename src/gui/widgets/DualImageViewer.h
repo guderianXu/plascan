@@ -6,6 +6,8 @@
 #include <QPointF>
 #include <QPointer>
 #include <QByteArray>
+#include <QFutureWatcher>
+#include <QSet>
 
 #include <cstdint>
 #include <optional>
@@ -105,20 +107,30 @@ private slots:
     void updateOverlayNow();
 
 private:
+    struct MatchParseResult
+    {
+        bool success = false;
+        QString error;
+        QVector<QPointF> pointsA;
+        QVector<QPointF> pointsB;
+        QVector<bool> inlierMask;
+    };
+
     void setupLayout();
     void connectSignals();
     void updateOverlayGeometry();
+    void applyMatchPairData(const QString &imgA,
+                            const QString &imgB,
+                            const QVector<QPointF> &ptsA,
+                            const QVector<QPointF> &ptsB);
     
     // 解析一个 `.pimatch` 分片中的目标邻接变体。
-    bool parseMatchFile(const QString &matchFile,
-                        const QString &imgA,
-                        const QString &imgB,
-                        const QString &algorithmId,
-                        std::uint32_t algorithmVersion,
-                        const QByteArray &configFingerprint,
-                        QVector<QPointF> &ptsA,
-                        QVector<QPointF> &ptsB,
-                        QVector<bool> &inlierMask);
+    static MatchParseResult parseMatchFile(const QString &matchFile,
+                                           const QString &imgA,
+                                           const QString &imgB,
+                                           const QString &algorithmId,
+                                           std::uint32_t algorithmVersion,
+                                           const QByteArray &configFingerprint);
 
 private:
     QPointer<ImageViewWidget> _leftView;
@@ -136,4 +148,6 @@ private:
     
     // 延迟更新定时器（性能优化）
     QTimer *_overlayUpdateTimer;
+    QSet<QFutureWatcher<MatchParseResult> *> _matchLoadWatchers;
+    quint64 _matchLoadGeneration = 0;
 };

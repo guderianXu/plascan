@@ -4,6 +4,12 @@
 #include <QVector>
 #include <QPointF>
 #include <QColor>
+#include <QLineF>
+#include <QTransform>
+
+#include <array>
+
+#include "MatchSpatialIndex.h"
 
 class ImageViewWidget;
 
@@ -49,13 +55,14 @@ public:
     // 获取当前可见匹配（由外部组件查询以同步点的可见性）
     QVector<int> visibleMatches() const;
     // 五彩斑斓模式设置
-    void setRainbowMode(bool enabled) { _rainbowMode = enabled; update(); }
+    void setRainbowMode(bool enabled);
     bool rainbowMode() const { return _rainbowMode; }
     // 高亮/展示控制：仅显示指定索引（当启用时，覆盖层只绘制这些索引）
     void setHighlightedIndices(const QVector<int> &indices);
     void clearHighlightedIndices();
     void setShowOnlyHighlighted(bool onlyHighlighted);
     bool showOnlyHighlighted() const { return _showOnlyHighlighted; }
+    int renderedLineCount() const;
 
 signals:
     void visibleMatchesChanged();
@@ -70,14 +77,9 @@ protected:
 private:
     // 计算哪些匹配点在可见区域内（返回索引列表）
     QVector<int> getVisibleMatches() const;
-    
-    // 将场景坐标转换为此覆盖层的屏幕坐标
-    QPointF sceneToScreen(const QPointF &scenePos, 
-                          ImageViewWidget *view) const;
-    
-    // 检查点是否在视图的可见区域内
-    bool isPointVisible(const QPointF &scenePos, 
-                        ImageViewWidget *view) const;
+    QTransform sceneToOverlayTransform(ImageViewWidget *view) const;
+    void rebuildRenderCache() const;
+    void invalidateGeometryCache();
 
 private:
     ImageViewWidget *_leftView;
@@ -86,6 +88,8 @@ private:
     QVector<QPointF> _ptsA;
     QVector<QPointF> _ptsB;
     QVector<bool> _inlierMask;
+    xjw::gui::match_viewer::MatchSpatialIndex _leftSpatialIndex;
+    xjw::gui::match_viewer::MatchSpatialIndex _rightSpatialIndex;
     
     // 显示选项
     QColor _lineColor;
@@ -104,5 +108,15 @@ private:
 private:
     // 缓存：当前可见的匹配索引
     mutable QVector<int> _cachedVisibleMatches;
-    mutable bool _cacheValid;
+    mutable bool _visibilityCacheValid;
+    mutable bool _renderCacheValid;
+    mutable QVector<QLineF> _defaultLines;
+    mutable QVector<QLineF> _inlierLines;
+    mutable QVector<QLineF> _outlierLines;
+    mutable QVector<QPointF> _defaultEndpoints;
+    mutable QVector<QPointF> _inlierEndpoints;
+    mutable QVector<QPointF> _outlierEndpoints;
+    static constexpr int RainbowBatchCount = 64;
+    mutable std::array<QVector<QLineF>, RainbowBatchCount> _rainbowLines;
+    mutable std::array<QVector<QPointF>, RainbowBatchCount> _rainbowEndpoints;
 };

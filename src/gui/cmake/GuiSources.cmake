@@ -86,6 +86,8 @@ set(GUI_SOURCES
   widgets/SelectionPropertiesWidget.cpp
   widgets/ImageViewWidget.cpp
   widgets/ImageViewWidget.ui
+  widgets/MatchPointBatchItem.cpp
+  widgets/MatchSpatialIndex.cpp
   widgets/MatchLineOverlay.cpp
   widgets/DisparityHeatmapOverlay.cpp
   widgets/TaskStatusWidget.cpp

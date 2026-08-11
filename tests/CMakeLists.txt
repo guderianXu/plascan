@@ -678,6 +678,8 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/DualImageViewer.ui
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/ImageViewWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/ImageViewWidget.ui
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/MatchPointBatchItem.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/MatchSpatialIndex.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/MatchLineOverlay.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/DisparityHeatmapOverlay.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeWidget.cpp

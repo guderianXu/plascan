@@ -3,9 +3,10 @@
 
 #include <QPainter>
 #include <QPen>
-#include <QBrush>
 #include <QGraphicsView>
-#include <QSet>
+#include <QWidget>
+
+#include <algorithm>
 #include <cmath>
 
 MatchLineOverlay::MatchLineOverlay(QWidget *parent)
@@ -20,7 +21,8 @@ MatchLineOverlay::MatchLineOverlay(QWidget *parent)
     , _showEndPoints(true)
     , _rainbowMode(false)
     , _showOnlyHighlighted(false)
-    , _cacheValid(false)
+    , _visibilityCacheValid(false)
+    , _renderCacheValid(false)
 {
     // 设置为透明背景，鼠标事件穿透
     setAttribute(Qt::WA_TransparentForMouseEvents);
@@ -36,7 +38,7 @@ MatchLineOverlay::~MatchLineOverlay()
 void MatchLineOverlay::setHighlightedIndices(const QVector<int> &indices)
 {
     _highlightIndices = indices;
-    _cacheValid = false;
+    invalidateGeometryCache();
     update();
     emit visibleMatchesChanged();
 }
@@ -44,7 +46,7 @@ void MatchLineOverlay::setHighlightedIndices(const QVector<int> &indices)
 void MatchLineOverlay::clearHighlightedIndices()
 {
     _highlightIndices.clear();
-    _cacheValid = false;
+    invalidateGeometryCache();
     update();
     emit visibleMatchesChanged();
 }
@@ -57,7 +59,7 @@ void MatchLineOverlay::setShowOnlyHighlighted(bool onlyHighlighted)
     }
 
     _showOnlyHighlighted = onlyHighlighted;
-    _cacheValid = false;
+    invalidateGeometryCache();
     update();
     emit visibleMatchesChanged();
 }
@@ -67,22 +69,7 @@ void MatchLineOverlay::setViewWidgets(ImageViewWidget *leftView, ImageViewWidget
     _leftView = leftView;
     _rightView = rightView;
     
-    // 连接视图变化信号
-    if (_leftView) {
-        connect(_leftView, &ImageViewWidget::viewTransformChanged,
-            this, &MatchLineOverlay::updateOverlay, Qt::QueuedConnection);
-        connect(_leftView, &ImageViewWidget::visibleRectChanged,
-                this, &MatchLineOverlay::updateOverlay);
-    }
-    
-    if (_rightView) {
-        connect(_rightView, &ImageViewWidget::viewTransformChanged,
-            this, &MatchLineOverlay::updateOverlay, Qt::QueuedConnection);
-        connect(_rightView, &ImageViewWidget::visibleRectChanged,
-                this, &MatchLineOverlay::updateOverlay);
-    }
-    
-    _cacheValid = false;
+    invalidateGeometryCache();
 }
 
 void MatchLineOverlay::setMatches(const QVector<QPointF> &ptsA, 
@@ -90,7 +77,9 @@ void MatchLineOverlay::setMatches(const QVector<QPointF> &ptsA,
 {
     _ptsA = ptsA;
     _ptsB = ptsB;
-    _cacheValid = false;
+    _leftSpatialIndex.build(_ptsA);
+    _rightSpatialIndex.build(_ptsB);
+    invalidateGeometryCache();
     update();
     emit visibleMatchesChanged();
 }
@@ -98,7 +87,7 @@ void MatchLineOverlay::setMatches(const QVector<QPointF> &ptsA,
 void MatchLineOverlay::setInlierMask(const QVector<bool> &inlierMask)
 {
     _inlierMask = inlierMask;
-    _cacheValid = false;
+    invalidateGeometryCache();
     update();
     emit visibleMatchesChanged();
 }
@@ -124,7 +113,7 @@ void MatchLineOverlay::setOpacity(qreal opacity)
 void MatchLineOverlay::setMaxDisplayCount(int maxCount)
 {
     _maxDisplayCount = maxCount;
-    _cacheValid = false;
+    invalidateGeometryCache();
     update();
     emit visibleMatchesChanged();
 }
@@ -132,7 +121,7 @@ void MatchLineOverlay::setMaxDisplayCount(int maxCount)
 void MatchLineOverlay::setShowOnlyInliers(bool onlyInliers)
 {
     _showOnlyInliers = onlyInliers;
-    _cacheValid = false;
+    invalidateGeometryCache();
     update();
     emit visibleMatchesChanged();
 }
@@ -143,184 +132,150 @@ void MatchLineOverlay::setShowEndPoints(bool show)
     update();
 }
 
+void MatchLineOverlay::setRainbowMode(bool enabled)
+{
+    if (_rainbowMode == enabled)
+    {
+        return;
+    }
+    _rainbowMode = enabled;
+    _renderCacheValid = false;
+    update();
+}
+
 void MatchLineOverlay::updateOverlay()
 {
-    _cacheValid = false;
+    invalidateGeometryCache();
     update();
 }
 
 void MatchLineOverlay::paintEvent(QPaintEvent *event)
 {
     Q_UNUSED(event);
-    
-    if (!_leftView || !_rightView) return;
-    if (_ptsA.isEmpty() || _ptsB.isEmpty()) return;
-    if (_ptsA.size() != _ptsB.size()) return;
-    
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing, false);
-    
-    // 设置透明度
-    painter.setOpacity(_opacity);
-    
-    // 获取可见的匹配
-    QVector<int> visibleMatches;
-    if (_showOnlyHighlighted && _highlightIndices.isEmpty()) {
+    if (!_leftView || !_rightView || _ptsA.isEmpty() || _ptsA.size() != _ptsB.size())
+    {
         return;
     }
-    if (_showOnlyHighlighted && !_highlightIndices.isEmpty()) {
-        // 只显示高亮索引（仍然需要校验索引合法性和可见性）
-        for (int idx : _highlightIndices) {
-            if (idx >= 0 && idx < _ptsA.size()) {
-                // 仅当在可见区域内才绘制
-                if (isPointVisible(_ptsA[idx], _leftView) && isPointVisible(_ptsB[idx], _rightView)) {
-                    visibleMatches.append(idx);
-                }
-            }
-        }
-    } else {
-        visibleMatches = getVisibleMatches();
+    if (!_renderCacheValid)
+    {
+        rebuildRenderCache();
     }
 
-    if (visibleMatches.isEmpty()) return;
-    
-    // 绘制连接线
-    QPen linePen;
-    linePen.setWidthF(_lineWidth);
-    linePen.setCosmetic(true);
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, false);
+    painter.setOpacity(_opacity);
 
-    // 如果启用五彩斑斓模式，则为每条线计算不同颜色
-    if (_rainbowMode) {
-        int total = visibleMatches.size();
-        int i = 0;
-        for (int idx : visibleMatches) {
-            QPointF ptA = _ptsA[idx];
-            QPointF ptB = _ptsB[idx];
-
-            QPointF screenA = sceneToScreen(ptA, _leftView);
-            QPointF screenB = sceneToScreen(ptB, _rightView);
-
-            // 计算基于索引的色相（0.0 - 1.0）
-            double t = (total > 1) ? (double)i / (double)(total - 1) : 0.0;
-            QColor c = QColor::fromHsvF(t, 1.0, 1.0);
-            linePen.setColor(c);
-            painter.setPen(linePen);
-            painter.setBrush(c);
-            painter.drawLine(screenA, screenB);
-
-            if (_showEndPoints) {
-                painter.drawEllipse(screenA, 2, 2);
-                painter.drawEllipse(screenB, 2, 2);
-            }
-            ++i;
+    const auto draw_batch = [this, &painter](const QVector<QLineF> &lines,
+                                              const QVector<QPointF> &endpoints,
+                                              const QColor &color)
+    {
+        if (lines.isEmpty())
+        {
+            return;
         }
-    } else {
-        const bool hasValidityMask = !_inlierMask.isEmpty();
-        const QColor inlierColor(0, 80, 255);
-        const QColor outlierColor(255, 0, 0);
-
-        for (int idx : visibleMatches) {
-            QPointF ptA = _ptsA[idx];
-            QPointF ptB = _ptsB[idx];
-
-            // 转换为屏幕坐标
-            QPointF screenA = sceneToScreen(ptA, _leftView);
-            QPointF screenB = sceneToScreen(ptB, _rightView);
-
-            QColor drawColor = _lineColor;
-            if (hasValidityMask)
-            {
-                drawColor = idx < _inlierMask.size() && _inlierMask[idx]
-                    ? inlierColor
-                    : outlierColor;
-            }
-            linePen.setColor(drawColor);
-            painter.setPen(linePen);
-
-            // 绘制连接线
-            painter.drawLine(screenA, screenB);
-
-            // 可选：绘制端点
-            if (_showEndPoints) {
-                painter.setBrush(drawColor);
-                painter.drawEllipse(screenA, 2, 2);
-                painter.drawEllipse(screenB, 2, 2);
-            }
+        QPen line_pen(color, _lineWidth);
+        line_pen.setCosmetic(true);
+        painter.setPen(line_pen);
+        painter.drawLines(lines.constData(), lines.size());
+        if (_showEndPoints && !endpoints.isEmpty())
+        {
+            QPen endpoint_pen(color, 4.0, Qt::SolidLine, Qt::RoundCap);
+            endpoint_pen.setCosmetic(true);
+            painter.setPen(endpoint_pen);
+            painter.drawPoints(endpoints.constData(), endpoints.size());
         }
+    };
+
+    if (_rainbowMode)
+    {
+        for (int batch = 0; batch < RainbowBatchCount; ++batch)
+        {
+            const qreal hue = static_cast<qreal>(batch) / RainbowBatchCount;
+            draw_batch(_rainbowLines.at(batch),
+                       _rainbowEndpoints.at(batch),
+                       QColor::fromHsvF(hue, 1.0, 1.0));
+        }
+        return;
     }
+
+    draw_batch(_defaultLines, _defaultEndpoints, _lineColor);
+    draw_batch(_inlierLines, _inlierEndpoints, QColor(0, 80, 255));
+    draw_batch(_outlierLines, _outlierEndpoints, QColor(255, 0, 0));
 }
 
 QVector<int> MatchLineOverlay::getVisibleMatches() const
 {
-    if (_cacheValid) {
-        return _cachedVisibleMatches;
-    }
-    
-    _cachedVisibleMatches.clear();
-    
-    if (!_leftView || !_rightView) return _cachedVisibleMatches;
-    if (_showOnlyHighlighted && _highlightIndices.isEmpty()) {
-        _cacheValid = true;
-        return _cachedVisibleMatches;
-    }
-    
-    QSet<int> highlightedSet;
-    if (_showOnlyHighlighted && !_highlightIndices.isEmpty())
+    if (_visibilityCacheValid)
     {
-        highlightedSet.reserve(_highlightIndices.size());
-        for (int idx : _highlightIndices)
-        {
-            highlightedSet.insert(idx);
-        }
+        return _cachedVisibleMatches;
     }
-    
-    // 遍历所有匹配点
-    for (int i = 0; i < _ptsA.size(); ++i) {
-        // 如果只显示内点，检查内点标记
-        if (_showOnlyInliers && !_inlierMask.isEmpty()) {
-            if (i >= _inlierMask.size() || !_inlierMask[i]) {
-                continue;
+    _cachedVisibleMatches.clear();
+
+    if (!_leftView || !_rightView || _ptsA.size() != _ptsB.size())
+    {
+        _visibilityCacheValid = true;
+        return _cachedVisibleMatches;
+    }
+    const QRectF left_rect = _leftView->visibleSceneRect();
+    const QRectF right_rect = _rightView->visibleSceneRect();
+    const auto accepted = [this, &left_rect, &right_rect](int index)
+    {
+        if (index < 0 || index >= _ptsA.size())
+        {
+            return false;
+        }
+        if (_showOnlyInliers && !_inlierMask.isEmpty()
+            && (index >= _inlierMask.size() || !_inlierMask.at(index)))
+        {
+            return false;
+        }
+        return left_rect.contains(_ptsA.at(index)) && right_rect.contains(_ptsB.at(index));
+    };
+
+    if (_showOnlyHighlighted)
+    {
+        for (int index : _highlightIndices)
+        {
+            if (accepted(index))
+            {
+                _cachedVisibleMatches.append(index);
             }
         }
-        // 如果设置了高亮集合且只显示高亮，则跳过非高亮索引
-        if (_showOnlyHighlighted && !_highlightIndices.isEmpty()) {
-            if (!highlightedSet.contains(i)) continue;
-        }
-        
-        const bool leftVisible = isPointVisible(_ptsA[i], _leftView);
-        const bool rightVisible = isPointVisible(_ptsB[i], _rightView);
-        if (!leftVisible || !rightVisible)
-        {
-            continue;
-        }
-
-        _cachedVisibleMatches.append(i);
-
-        // 限制最大数量
-        if (_maxDisplayCount > 0 &&
-            _cachedVisibleMatches.size() >= _maxDisplayCount) {
-            break;
-        }
     }
-    
-    _cacheValid = true;
+    else
+    {
+        const int left_estimate = _leftSpatialIndex.estimatedCandidateCount(left_rect);
+        const int right_estimate = _rightSpatialIndex.estimatedCandidateCount(right_rect);
+        const bool query_left = left_estimate <= right_estimate;
+        const xjw::gui::match_viewer::MatchSpatialIndex &index =
+            query_left ? _leftSpatialIndex : _rightSpatialIndex;
+        _cachedVisibleMatches = index.query(
+            query_left ? left_rect : right_rect,
+            _maxDisplayCount,
+            accepted);
+    }
+
+    _visibilityCacheValid = true;
     return _cachedVisibleMatches;
 }
 
-QPointF MatchLineOverlay::sceneToScreen(const QPointF &scenePos, 
-                                        ImageViewWidget *view) const
+QTransform MatchLineOverlay::sceneToOverlayTransform(ImageViewWidget *view) const
 {
-    if (!view || !view->view()) return QPointF();
-
-    // 场景坐标 -> 视图坐标
-    const QPoint viewPos = view->view()->mapFromScene(scenePos);
-
-    // 视图坐标 -> 全局坐标
-    const QPoint globalPos = view->view()->viewport()->mapToGlobal(viewPos);
-
-    // 全局坐标 -> 覆盖层坐标
-    const QPoint localPos = this->mapFromGlobal(globalPos);
-    return QPointF(localPos);
+    if (!view || !view->view() || !view->view()->viewport())
+    {
+        return {};
+    }
+    const QTransform viewport_transform = view->view()->viewportTransform();
+    const QPoint viewport_origin = view->view()->viewport()->mapTo(this, QPoint(0, 0));
+    return QTransform(viewport_transform.m11(),
+                      viewport_transform.m12(),
+                      viewport_transform.m13(),
+                      viewport_transform.m21(),
+                      viewport_transform.m22(),
+                      viewport_transform.m23(),
+                      viewport_transform.m31() + viewport_origin.x(),
+                      viewport_transform.m32() + viewport_origin.y(),
+                      viewport_transform.m33());
 }
 
 QVector<int> MatchLineOverlay::visibleMatches() const
@@ -328,12 +283,65 @@ QVector<int> MatchLineOverlay::visibleMatches() const
     return getVisibleMatches();
 }
 
-bool MatchLineOverlay::isPointVisible(const QPointF &scenePos, 
-                                      ImageViewWidget *view) const
+int MatchLineOverlay::renderedLineCount() const
 {
-    if (!view || !view->view()) return false;
+    return getVisibleMatches().size();
+}
 
-    QGraphicsView *graphicsView = view->view();
-    const QPoint viewportPoint = graphicsView->mapFromScene(scenePos);
-    return graphicsView->viewport()->rect().contains(viewportPoint);
+void MatchLineOverlay::rebuildRenderCache() const
+{
+    _defaultLines.clear();
+    _inlierLines.clear();
+    _outlierLines.clear();
+    _defaultEndpoints.clear();
+    _inlierEndpoints.clear();
+    _outlierEndpoints.clear();
+    for (QVector<QLineF> &lines : _rainbowLines)
+    {
+        lines.clear();
+    }
+    for (QVector<QPointF> &points : _rainbowEndpoints)
+    {
+        points.clear();
+    }
+
+    const QVector<int> visible_matches = getVisibleMatches();
+    const QTransform left_transform = sceneToOverlayTransform(_leftView);
+    const QTransform right_transform = sceneToOverlayTransform(_rightView);
+    const bool has_validity_mask = !_inlierMask.isEmpty();
+    for (int position = 0; position < visible_matches.size(); ++position)
+    {
+        const int index = visible_matches.at(position);
+        const QPointF left_point = left_transform.map(_ptsA.at(index));
+        const QPointF right_point = right_transform.map(_ptsB.at(index));
+        const QLineF line(left_point, right_point);
+
+        QVector<QLineF> *lines = &_defaultLines;
+        QVector<QPointF> *endpoints = &_defaultEndpoints;
+        if (_rainbowMode)
+        {
+            const int batch = visible_matches.size() > 1
+                ? std::min(RainbowBatchCount - 1,
+                           static_cast<int>(position * RainbowBatchCount
+                                            / visible_matches.size()))
+                : 0;
+            lines = &_rainbowLines.at(batch);
+            endpoints = &_rainbowEndpoints.at(batch);
+        }
+        else if (has_validity_mask && index < _inlierMask.size())
+        {
+            lines = _inlierMask.at(index) ? &_inlierLines : &_outlierLines;
+            endpoints = _inlierMask.at(index) ? &_inlierEndpoints : &_outlierEndpoints;
+        }
+        lines->append(line);
+        endpoints->append(left_point);
+        endpoints->append(right_point);
+    }
+    _renderCacheValid = true;
+}
+
+void MatchLineOverlay::invalidateGeometryCache()
+{
+    _visibilityCacheValid = false;
+    _renderCacheValid = false;
 }

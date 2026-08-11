@@ -2,11 +2,11 @@
 
 #include "ui_ImageViewWidget.h"
 #include "LayerRenderer.h"
+#include "MatchPointBatchItem.h"
 
 #include <QGraphicsView>
 #include <QGraphicsScene>
 #include <QGraphicsPixmapItem>
-#include <QGraphicsEllipseItem>
 #include <QWheelEvent>
 #include <QScrollBar>
 #include <QImage>
@@ -54,6 +54,8 @@ void ImageViewWidget::setupView()
     _scene = new QGraphicsScene(this);
     _view = ui.m_view;
     _view->setScene(_scene);
+    _matchPointItem = new MatchPointBatchItem();
+    _scene->addItem(_matchPointItem);
     
     // 设置视图属性
     _view->setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
@@ -136,43 +138,19 @@ void ImageViewWidget::clearImage()
 
 void ImageViewWidget::setMatchPoints(const QVector<QPointF> &points)
 {
-    clearMatchPoints();
     _matchPoints = points;
-    
-    // 创建点图元
-    QPen pen(Qt::red);
-    pen.setWidth(2);
-    QBrush brush(Qt::red);
-    
-    // 使用固定屏幕像素大小的点标记，避免在高缩放下遮挡图像细节。
-    const qreal screenPointSize = 8.0; // 屏幕像素大小
-
-    constexpr int maxInitialPointItems = 20000;
-    const int pointCount = static_cast<int>(points.size());
-    const int pointItemCount = std::min(pointCount, maxInitialPointItems);
-
-    for (int i = 0; i < pointItemCount; ++i) {
-        const QPointF &pt = points[i];
-        QGraphicsEllipseItem *item = _scene->addEllipse(
-            -screenPointSize / 2.0, -screenPointSize / 2.0,
-            screenPointSize, screenPointSize,
-            pen, brush);
-        item->setZValue(10); // 确保在图像上方
-        item->setData(0, i); // 存储索引
-        // 忽略视图变换，使点在屏幕上保持恒定像素大小
-        item->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
-        item->setPos(pt);
-        _pointItems.append(item);
+    if (_matchPointItem)
+    {
+        _matchPointItem->setPoints(points);
     }
 }
 
 void ImageViewWidget::clearMatchPoints()
 {
-    for (QGraphicsEllipseItem *item : _pointItems) {
-        _scene->removeItem(item);
-        delete item;
+    if (_matchPointItem)
+    {
+        _matchPointItem->clear();
     }
-    _pointItems.clear();
     _matchPoints.clear();
     _highlightedIndex = -1;
 }
@@ -228,49 +206,62 @@ void ImageViewWidget::setTransform(const QTransform &transform)
 void ImageViewWidget::highlightPoint(int index)
 {
     clearHighlight();
-    
-    if (index >= 0 && index < _pointItems.size()) {
+    if (index >= 0 && index < _matchPoints.size())
+    {
         _highlightedIndex = index;
-        QGraphicsEllipseItem *item = _pointItems[index];
-        
-        // 高亮显示（放大、改变颜色）
-        QPen pen(Qt::yellow);
-        pen.setWidth(3);
-        item->setPen(pen);
-        item->setBrush(QBrush(Qt::yellow));
-        item->setZValue(20);
-        
+        if (_matchPointItem)
+        {
+            _matchPointItem->setHighlightedIndex(index);
+        }
     }
 }
 
 void ImageViewWidget::clearHighlight()
 {
-    if (_highlightedIndex >= 0 && _highlightedIndex < _pointItems.size()) {
-        QGraphicsEllipseItem *item = _pointItems[_highlightedIndex];
-        QPen pen(Qt::red);
-        pen.setWidth(2);
-        item->setPen(pen);
-        item->setBrush(QBrush(Qt::red));
-        item->setZValue(10);
-        
-        _highlightedIndex = -1;
+    _highlightedIndex = -1;
+    if (_matchPointItem)
+    {
+        _matchPointItem->setHighlightedIndex(-1);
     }
 }
 
 void ImageViewWidget::setMatchVisibilityMask(const QVector<bool> &mask)
 {
     // mask长度可能小于点数；若mask为空则显示所有点
-    if (mask.isEmpty()) {
-        for (QGraphicsEllipseItem *item : _pointItems) item->setVisible(true);
-        return;
+    QVector<int> visible_indices;
+    visible_indices.reserve(std::min(mask.size(), _matchPoints.size()));
+    if (mask.isEmpty())
+    {
+        visible_indices.reserve(_matchPoints.size());
+        for (int index = 0; index < _matchPoints.size(); ++index)
+        {
+            visible_indices.append(index);
+        }
     }
+    else
+    {
+        for (int index = 0; index < mask.size() && index < _matchPoints.size(); ++index)
+        {
+            if (mask.at(index))
+            {
+                visible_indices.append(index);
+            }
+        }
+    }
+    setVisibleMatchIndices(visible_indices);
+}
 
-    for (int i = 0; i < _pointItems.size(); ++i) {
-        QGraphicsEllipseItem *item = _pointItems[i];
-        if (!item) continue;
-        bool vis = (i < mask.size()) ? mask[i] : false;
-        item->setVisible(vis);
+void ImageViewWidget::setVisibleMatchIndices(const QVector<int> &indices)
+{
+    if (_matchPointItem)
+    {
+        _matchPointItem->setVisibleIndices(indices);
     }
+}
+
+int ImageViewWidget::visibleMatchPointCount() const
+{
+    return _matchPointItem ? _matchPointItem->visiblePointCount() : 0;
 }
 
 bool ImageViewWidget::eventFilter(QObject *obj, QEvent *event)
@@ -321,9 +312,12 @@ bool ImageViewWidget::eventFilter(QObject *obj, QEvent *event)
                 const qreal threshold = 14.0; // 屏幕像素
                 int closestIdx = -1;
                 qreal closestDist = threshold + 1.0;
-                for (int i = 0; i < _pointItems.size(); ++i) {
-                    if (!_pointItems[i] || !_pointItems[i]->isVisible()) continue;
-                    const QPointF screenPt = _view->mapFromScene(_pointItems[i]->pos());
+                const QVector<int> visible_indices = _matchPointItem
+                    ? _matchPointItem->visibleIndices()
+                    : QVector<int>{};
+                for (int i : visible_indices) {
+                    if (i < 0 || i >= _matchPoints.size()) continue;
+                    const QPointF screenPt = _view->mapFromScene(_matchPoints.at(i));
                     const QPointF d = screenPt - QPointF(me->pos());
                     const qreal dist = std::sqrt(d.x()*d.x() + d.y()*d.y());
                     if (dist < closestDist) {
@@ -345,22 +339,4 @@ void ImageViewWidget::onViewChanged()
 {
     emit viewTransformChanged(currentTransform());
     emit visibleRectChanged(visibleSceneRect());
-    updatePointsVisibility();
-}
-
-void ImageViewWidget::updatePointsVisibility()
-{
-    // 可以根据缩放级别调整点的大小
-    qreal zoom = currentTransform().m11();
-    qreal pointSize = 6.0 / qMax(1.0, zoom * 0.5);
-
-    for (QGraphicsEllipseItem *item : _pointItems) {
-        if (!item) continue;
-        // 跳过设置为忽略变换的点（这些点为固定屏幕像素大小）
-        if (item->flags() & QGraphicsItem::ItemIgnoresTransformations) continue;
-
-        QPointF center = item->rect().center();
-        item->setRect(center.x() - pointSize/2, center.y() - pointSize/2,
-                      pointSize, pointSize);
-    }
 }

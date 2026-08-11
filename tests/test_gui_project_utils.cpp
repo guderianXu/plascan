@@ -52,6 +52,8 @@
 #include "DualImageViewer.h"
 #include "ImageViewWidget.h"
 #include "MatchLineOverlay.h"
+#include "MatchPointBatchItem.h"
+#include "MatchSpatialIndex.h"
 #include "DepthOverlayData.h"
 #include "DepthOverlayController.h"
 #include "FeatureResidualLoader.h"
@@ -94,7 +96,6 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QGroupBox>
-#include <QGraphicsEllipseItem>
 #include <QGraphicsItem>
 #include <QGraphicsScene>
 #include <QGraphicsView>
@@ -3180,7 +3181,8 @@ TEST(CodeStyleTest, MatchLineOverlayUsesLowerCamelPrivateMemberNames)
         QStringLiteral("bool _showOnlyHighlighted;"),
         QStringLiteral("QVector<int> _highlightIndices;"),
         QStringLiteral("mutable QVector<int> _cachedVisibleMatches;"),
-        QStringLiteral("mutable bool _cacheValid;"),
+        QStringLiteral("mutable bool _visibilityCacheValid;"),
+        QStringLiteral("mutable bool _renderCacheValid;"),
     };
     for (const QString &expectedMember : expectedMembers)
     {
@@ -3224,7 +3226,7 @@ TEST(CodeStyleTest, ImageViewWidgetUsesLowerCamelPrivateMemberNames)
         QStringLiteral("QGraphicsScene *_scene;"),
         QStringLiteral("QGraphicsPixmapItem *_imageItem;"),
         QStringLiteral("QVector<QPointF> _matchPoints;"),
-        QStringLiteral("QVector<QGraphicsEllipseItem*> _pointItems;"),
+        QStringLiteral("MatchPointBatchItem *_matchPointItem = nullptr;"),
         QStringLiteral("QString _imagePath;"),
         QStringLiteral("int _highlightedIndex;"),
     };
@@ -11927,15 +11929,22 @@ TEST(MatchViewerResponsivenessTest, LimitsDefaultSparseRenderingWork)
 {
     const QString imageViewSource = readProjectSourceFile(QStringLiteral("src/gui/widgets/ImageViewWidget.cpp"));
     const QString overlaySource = readProjectSourceFile(QStringLiteral("src/gui/widgets/MatchLineOverlay.cpp"));
+    const QString dualViewerSource = readProjectSourceFile(QStringLiteral("src/gui/widgets/DualImageViewer.cpp"));
     const QString dialogSource = readProjectSourceFile(QStringLiteral("src/gui/dialogs/tie_points/MatchViewerDialog.cpp"));
     ASSERT_FALSE(imageViewSource.isEmpty());
     ASSERT_FALSE(overlaySource.isEmpty());
+    ASSERT_FALSE(dualViewerSource.isEmpty());
     ASSERT_FALSE(dialogSource.isEmpty());
 
-    EXPECT_TRUE(imageViewSource.contains(QStringLiteral("constexpr int maxInitialPointItems = 20000")))
-        << "Large match files must not create one QGraphicsEllipseItem per match on the GUI thread.";
-    EXPECT_TRUE(imageViewSource.contains(QStringLiteral("const int pointCount = static_cast<int>(points.size())")));
-    EXPECT_TRUE(imageViewSource.contains(QStringLiteral("const int pointItemCount = std::min(pointCount, maxInitialPointItems)")));
+    EXPECT_TRUE(imageViewSource.contains(QStringLiteral("new MatchPointBatchItem")));
+    EXPECT_FALSE(imageViewSource.contains(QStringLiteral("QGraphicsEllipseItem")))
+        << "Large match files must use one batch item per image.";
+    EXPECT_TRUE(overlaySource.contains(QStringLiteral("painter.drawLines")));
+    EXPECT_TRUE(overlaySource.contains(QStringLiteral("_leftSpatialIndex")));
+    EXPECT_FALSE(overlaySource.contains(QStringLiteral("mapToGlobal")));
+    EXPECT_FALSE(overlaySource.contains(QStringLiteral("mapFromGlobal")));
+    EXPECT_TRUE(dualViewerSource.contains(QStringLiteral("setInterval(16)")));
+    EXPECT_TRUE(dualViewerSource.contains(QStringLiteral("QtConcurrent::run")));
     EXPECT_TRUE(overlaySource.contains(QStringLiteral("_maxDisplayCount(5000)")))
         << "Sparse match lines should have a finite default draw budget.";
     EXPECT_FALSE(dialogSource.contains(QStringLiteral("_maxCountSpin->setValue(0);")))
@@ -11966,22 +11975,65 @@ TEST(MatchViewerEndpointVisibilityTest, HidesAllEndpointsWhenNoMatchLineIsVisibl
     viewer.overlay()->setShowOnlyInliers(true);
     QTest::qWait(30);
 
-    auto visiblePointCount = [](ImageViewWidget *imageView)
-    {
-        int count = 0;
-        const QList<QGraphicsItem *> items = imageView->view()->scene()->items();
-        for (QGraphicsItem *item : items)
-        {
-            if (qgraphicsitem_cast<QGraphicsEllipseItem *>(item) && item->isVisible())
-            {
-                ++count;
-            }
-        }
-        return count;
-    };
+    EXPECT_EQ(viewer.leftView()->visibleMatchPointCount(), 0);
+    EXPECT_EQ(viewer.rightView()->visibleMatchPointCount(), 0);
+}
 
-    EXPECT_EQ(visiblePointCount(viewer.leftView()), 0);
-    EXPECT_EQ(visiblePointCount(viewer.rightView()), 0);
+TEST(MatchViewerBatchPointTest, UsesOneGraphicsItemForManyPoints)
+{
+    ImageViewWidget image_view;
+    QVector<QPointF> points;
+    points.reserve(50000);
+    for (int index = 0; index < 50000; ++index)
+    {
+        points.append(QPointF(index % 1000, index / 1000));
+    }
+    image_view.setMatchPoints(points);
+    image_view.setVisibleMatchIndices({1, 100, 1000});
+
+    int batch_item_count = 0;
+    for (QGraphicsItem *item : image_view.view()->scene()->items())
+    {
+        if (dynamic_cast<MatchPointBatchItem *>(item))
+        {
+            ++batch_item_count;
+        }
+    }
+    EXPECT_EQ(batch_item_count, 1);
+    EXPECT_EQ(image_view.matchItemCount(), points.size());
+    EXPECT_EQ(image_view.visibleMatchPointCount(), 3);
+}
+
+TEST(MatchSpatialIndexTest, VisitsOnlyCellsInsideVisibleRegion)
+{
+    QVector<QPointF> points;
+    for (int y = 0; y < 100; ++y)
+    {
+        for (int x = 0; x < 100; ++x)
+        {
+            points.append(QPointF(x * 20.0, y * 20.0));
+        }
+    }
+
+    xjw::gui::match_viewer::MatchSpatialIndex index(100.0);
+    index.build(points);
+    const QRectF visible_rect(400.0, 600.0, 200.0, 200.0);
+    int visited_candidates = 0;
+    const QVector<int> visible = index.query(
+        visible_rect,
+        0,
+        [&points, &visible_rect](int pointIndex)
+        {
+            return visible_rect.contains(points.at(pointIndex));
+        },
+        &visited_candidates);
+
+    EXPECT_FALSE(visible.isEmpty());
+    EXPECT_LT(visited_candidates, points.size());
+    for (int point_index : visible)
+    {
+        EXPECT_TRUE(visible_rect.contains(points.at(point_index)));
+    }
 }
 
 TEST(CodeStyleTest, MatchViewerDialogUsesLowerCamelPrivateMemberNames)
