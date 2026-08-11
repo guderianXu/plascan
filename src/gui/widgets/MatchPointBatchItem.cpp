@@ -21,16 +21,19 @@ void MatchPointBatchItem::paint(QPainter *painter,
                                 const QStyleOptionGraphicsItem *,
                                 QWidget *)
 {
-    if (!painter || _visiblePoints.isEmpty())
+    if (!painter)
     {
         return;
     }
 
     painter->setRenderHint(QPainter::Antialiasing, true);
-    QPen point_pen(Qt::red, 8.0, Qt::SolidLine, Qt::RoundCap);
-    point_pen.setCosmetic(true);
-    painter->setPen(point_pen);
-    painter->drawPoints(_visiblePoints);
+    if (_pointPaintingEnabled && !_visiblePoints.isEmpty())
+    {
+        QPen point_pen(Qt::red, 8.0, Qt::SolidLine, Qt::RoundCap);
+        point_pen.setCosmetic(true);
+        painter->setPen(point_pen);
+        painter->drawPoints(_visiblePoints);
+    }
 
     if (_highlightedIndex >= 0 && _highlightedIndex < _points.size())
     {
@@ -80,6 +83,12 @@ void MatchPointBatchItem::setVisibleIndices(const QVector<int> &indices)
 void MatchPointBatchItem::setHighlightedIndex(int index)
 {
     _highlightedIndex = index >= 0 && index < _points.size() ? index : -1;
+    update();
+}
+
+void MatchPointBatchItem::setPointPaintingEnabled(bool enabled)
+{
+    _pointPaintingEnabled = enabled;
     update();
 }
 

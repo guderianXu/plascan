@@ -18,6 +18,7 @@ public:
     void setPoints(const QVector<QPointF> &points);
     void setVisibleIndices(const QVector<int> &indices);
     void setHighlightedIndex(int index);
+    void setPointPaintingEnabled(bool enabled);
     void clear();
 
     int pointCount() const;
@@ -33,4 +34,5 @@ private:
     QPolygonF _visiblePoints;
     QRectF _bounds;
     int _highlightedIndex = -1;
+    bool _pointPaintingEnabled = true;
 };

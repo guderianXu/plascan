@@ -1,6 +1,6 @@
 #pragma once
 
-#include <QWidget>
+#include <QRhiWidget>
 #include <QVector>
 #include <QPointF>
 #include <QColor>
@@ -10,6 +10,7 @@
 #include <array>
 
 #include "MatchSpatialIndex.h"
+#include "MatchGpuRenderer.h"
 
 class ImageViewWidget;
 
@@ -19,7 +20,7 @@ class ImageViewWidget;
 // - 只绘制可见区域内的连接线以提高性能
 // - 支持视觉样式配置（颜色、宽度、透明度）
 // - 支持过滤（只显示内点、限制最大数量）
-class MatchLineOverlay : public QWidget
+class MatchLineOverlay : public QRhiWidget
 {
     Q_OBJECT
 
@@ -72,7 +73,9 @@ public slots:
     void updateOverlay();
 
 protected:
-    void paintEvent(QPaintEvent *event) override;
+    void initialize(QRhiCommandBuffer *commandBuffer) override;
+    void render(QRhiCommandBuffer *commandBuffer) override;
+    void releaseResources() override;
 
 private:
     // 计算哪些匹配点在可见区域内（返回索引列表）
@@ -80,6 +83,7 @@ private:
     QTransform sceneToOverlayTransform(ImageViewWidget *view) const;
     void rebuildRenderCache() const;
     void invalidateGeometryCache();
+    QVector<MatchGpuLineBatch> gpuBatches() const;
 
 private:
     ImageViewWidget *_leftView;
@@ -113,10 +117,10 @@ private:
     mutable QVector<QLineF> _defaultLines;
     mutable QVector<QLineF> _inlierLines;
     mutable QVector<QLineF> _outlierLines;
-    mutable QVector<QPointF> _defaultEndpoints;
-    mutable QVector<QPointF> _inlierEndpoints;
-    mutable QVector<QPointF> _outlierEndpoints;
     static constexpr int RainbowBatchCount = 64;
     mutable std::array<QVector<QLineF>, RainbowBatchCount> _rainbowLines;
-    mutable std::array<QVector<QPointF>, RainbowBatchCount> _rainbowEndpoints;
+    MatchGpuRenderer _gpuRenderer;
+    mutable quint64 _gpuGeneration = 1;
+    bool _rhiReady = false;
+    QString _renderError;
 };

@@ -259,6 +259,14 @@ void ImageViewWidget::setVisibleMatchIndices(const QVector<int> &indices)
     }
 }
 
+void ImageViewWidget::setMatchPointsVisible(bool visible)
+{
+    if (_matchPointItem)
+    {
+        _matchPointItem->setPointPaintingEnabled(visible);
+    }
+}
+
 int ImageViewWidget::visibleMatchPointCount() const
 {
     return _matchPointItem ? _matchPointItem->visiblePointCount() : 0;

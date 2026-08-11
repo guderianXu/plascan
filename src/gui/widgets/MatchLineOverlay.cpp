@@ -1,16 +1,14 @@
 #include "MatchLineOverlay.h"
 #include "ImageViewWidget.h"
 
-#include <QPainter>
-#include <QPen>
 #include <QGraphicsView>
-#include <QWidget>
+#include <QDebug>
 
 #include <algorithm>
 #include <cmath>
 
 MatchLineOverlay::MatchLineOverlay(QWidget *parent)
-    : QWidget(parent)
+    : QRhiWidget(parent)
     , _leftView(nullptr)
     , _rightView(nullptr)
     , _lineColor(Qt::yellow)
@@ -24,10 +22,20 @@ MatchLineOverlay::MatchLineOverlay(QWidget *parent)
     , _visibilityCacheValid(false)
     , _renderCacheValid(false)
 {
-    // 设置为透明背景，鼠标事件穿透
+#if defined(Q_OS_WIN)
+    setApi(QRhiWidget::Api::Direct3D11);
+#elif defined(Q_OS_MACOS)
+    setApi(QRhiWidget::Api::Metal);
+#else
+    setApi(QRhiWidget::Api::Vulkan);
+#endif
+    setSampleCount(1);
+
+    // RHI 覆盖层由窗口合成器置于双图视口上方，透明区域保留下层影像。
     setAttribute(Qt::WA_TransparentForMouseEvents);
-    setAttribute(Qt::WA_NoSystemBackground);
     setAttribute(Qt::WA_TranslucentBackground);
+    setAttribute(Qt::WA_AlwaysStackOnTop);
+    setAttribute(Qt::WA_OpaquePaintEvent, false);
     setAutoFillBackground(false);
 }
 
@@ -68,7 +76,14 @@ void MatchLineOverlay::setViewWidgets(ImageViewWidget *leftView, ImageViewWidget
 {
     _leftView = leftView;
     _rightView = rightView;
-    
+    if (_leftView)
+    {
+        _leftView->setMatchPointsVisible(false);
+    }
+    if (_rightView)
+    {
+        _rightView->setMatchPointsVisible(false);
+    }
     invalidateGeometryCache();
 }
 
@@ -95,6 +110,7 @@ void MatchLineOverlay::setInlierMask(const QVector<bool> &inlierMask)
 void MatchLineOverlay::setLineColor(const QColor &color)
 {
     _lineColor = color;
+    ++_gpuGeneration;
     update();
 }
 
@@ -107,6 +123,7 @@ void MatchLineOverlay::setLineWidth(qreal width)
 void MatchLineOverlay::setOpacity(qreal opacity)
 {
     _opacity = qBound(0.0, opacity, 1.0);
+    ++_gpuGeneration;
     update();
 }
 
@@ -129,6 +146,7 @@ void MatchLineOverlay::setShowOnlyInliers(bool onlyInliers)
 void MatchLineOverlay::setShowEndPoints(bool show)
 {
     _showEndPoints = show;
+    ++_gpuGeneration;
     update();
 }
 
@@ -140,6 +158,7 @@ void MatchLineOverlay::setRainbowMode(bool enabled)
     }
     _rainbowMode = enabled;
     _renderCacheValid = false;
+    ++_gpuGeneration;
     update();
 }
 
@@ -149,10 +168,21 @@ void MatchLineOverlay::updateOverlay()
     update();
 }
 
-void MatchLineOverlay::paintEvent(QPaintEvent *event)
+void MatchLineOverlay::initialize(QRhiCommandBuffer *commandBuffer)
 {
-    Q_UNUSED(event);
-    if (!_leftView || !_rightView || _ptsA.isEmpty() || _ptsA.size() != _ptsB.size())
+    Q_UNUSED(commandBuffer);
+    _renderError.clear();
+    _rhiReady = _gpuRenderer.initialize(
+        rhi(), renderTarget(), sampleCount(), _lineWidth, &_renderError);
+    if (!_rhiReady)
+    {
+        qWarning() << _renderError;
+    }
+}
+
+void MatchLineOverlay::render(QRhiCommandBuffer *commandBuffer)
+{
+    if (!_rhiReady || !rhi() || !renderTarget())
     {
         return;
     }
@@ -161,46 +191,25 @@ void MatchLineOverlay::paintEvent(QPaintEvent *event)
         rebuildRenderCache();
     }
 
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing, false);
-    painter.setOpacity(_opacity);
-
-    const auto draw_batch = [this, &painter](const QVector<QLineF> &lines,
-                                              const QVector<QPointF> &endpoints,
-                                              const QColor &color)
+    if (!_gpuRenderer.render(rhi(),
+                             renderTarget(),
+                             commandBuffer,
+                             size(),
+                             gpuBatches(),
+                             _showEndPoints,
+                             _opacity,
+                             _gpuGeneration,
+                             _lineWidth,
+                             &_renderError))
     {
-        if (lines.isEmpty())
-        {
-            return;
-        }
-        QPen line_pen(color, _lineWidth);
-        line_pen.setCosmetic(true);
-        painter.setPen(line_pen);
-        painter.drawLines(lines.constData(), lines.size());
-        if (_showEndPoints && !endpoints.isEmpty())
-        {
-            QPen endpoint_pen(color, 4.0, Qt::SolidLine, Qt::RoundCap);
-            endpoint_pen.setCosmetic(true);
-            painter.setPen(endpoint_pen);
-            painter.drawPoints(endpoints.constData(), endpoints.size());
-        }
-    };
-
-    if (_rainbowMode)
-    {
-        for (int batch = 0; batch < RainbowBatchCount; ++batch)
-        {
-            const qreal hue = static_cast<qreal>(batch) / RainbowBatchCount;
-            draw_batch(_rainbowLines.at(batch),
-                       _rainbowEndpoints.at(batch),
-                       QColor::fromHsvF(hue, 1.0, 1.0));
-        }
-        return;
+        qWarning() << _renderError;
     }
+}
 
-    draw_batch(_defaultLines, _defaultEndpoints, _lineColor);
-    draw_batch(_inlierLines, _inlierEndpoints, QColor(0, 80, 255));
-    draw_batch(_outlierLines, _outlierEndpoints, QColor(255, 0, 0));
+void MatchLineOverlay::releaseResources()
+{
+    _gpuRenderer.release();
+    _rhiReady = false;
 }
 
 QVector<int> MatchLineOverlay::getVisibleMatches() const
@@ -266,7 +275,8 @@ QTransform MatchLineOverlay::sceneToOverlayTransform(ImageViewWidget *view) cons
         return {};
     }
     const QTransform viewport_transform = view->view()->viewportTransform();
-    const QPoint viewport_origin = view->view()->viewport()->mapTo(this, QPoint(0, 0));
+    const QPoint viewport_origin = mapFromGlobal(
+        view->view()->viewport()->mapToGlobal(QPoint(0, 0)));
     return QTransform(viewport_transform.m11(),
                       viewport_transform.m12(),
                       viewport_transform.m13(),
@@ -293,16 +303,9 @@ void MatchLineOverlay::rebuildRenderCache() const
     _defaultLines.clear();
     _inlierLines.clear();
     _outlierLines.clear();
-    _defaultEndpoints.clear();
-    _inlierEndpoints.clear();
-    _outlierEndpoints.clear();
     for (QVector<QLineF> &lines : _rainbowLines)
     {
         lines.clear();
-    }
-    for (QVector<QPointF> &points : _rainbowEndpoints)
-    {
-        points.clear();
     }
 
     const QVector<int> visible_matches = getVisibleMatches();
@@ -317,7 +320,6 @@ void MatchLineOverlay::rebuildRenderCache() const
         const QLineF line(left_point, right_point);
 
         QVector<QLineF> *lines = &_defaultLines;
-        QVector<QPointF> *endpoints = &_defaultEndpoints;
         if (_rainbowMode)
         {
             const int batch = visible_matches.size() > 1
@@ -326,16 +328,12 @@ void MatchLineOverlay::rebuildRenderCache() const
                                             / visible_matches.size()))
                 : 0;
             lines = &_rainbowLines.at(batch);
-            endpoints = &_rainbowEndpoints.at(batch);
         }
         else if (has_validity_mask && index < _inlierMask.size())
         {
             lines = _inlierMask.at(index) ? &_inlierLines : &_outlierLines;
-            endpoints = _inlierMask.at(index) ? &_inlierEndpoints : &_outlierEndpoints;
         }
         lines->append(line);
-        endpoints->append(left_point);
-        endpoints->append(right_point);
     }
     _renderCacheValid = true;
 }
@@ -344,4 +342,36 @@ void MatchLineOverlay::invalidateGeometryCache()
 {
     _visibilityCacheValid = false;
     _renderCacheValid = false;
+    ++_gpuGeneration;
+}
+
+QVector<MatchGpuLineBatch> MatchLineOverlay::gpuBatches() const
+{
+    QVector<MatchGpuLineBatch> batches;
+    if (_rainbowMode)
+    {
+        batches.reserve(RainbowBatchCount);
+        for (int batch = 0; batch < RainbowBatchCount; ++batch)
+        {
+            if (!_rainbowLines.at(batch).isEmpty())
+            {
+                const qreal hue = static_cast<qreal>(batch) / RainbowBatchCount;
+                batches.append({&_rainbowLines.at(batch), QColor::fromHsvF(hue, 1.0, 1.0)});
+            }
+        }
+        return batches;
+    }
+    if (!_defaultLines.isEmpty())
+    {
+        batches.append({&_defaultLines, _lineColor});
+    }
+    if (!_inlierLines.isEmpty())
+    {
+        batches.append({&_inlierLines, QColor(0, 80, 255)});
+    }
+    if (!_outlierLines.isEmpty())
+    {
+        batches.append({&_outlierLines, QColor(255, 0, 0)});
+    }
+    return batches;
 }

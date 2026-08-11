@@ -680,6 +680,7 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/ImageViewWidget.ui
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/MatchPointBatchItem.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/MatchSpatialIndex.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/MatchGpuRenderer.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/MatchLineOverlay.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/DisparityHeatmapOverlay.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeWidget.cpp
@@ -699,6 +700,15 @@ add_executable(test_gui_project_utils
 set_target_properties(test_gui_project_utils PROPERTIES
     AUTOMOC ON
     AUTOUIC ON
+)
+qt_add_shaders(test_gui_project_utils match_overlay_test_shaders
+    PREFIX
+        "/shaders"
+    BASE
+        "${CMAKE_SOURCE_DIR}/src/gui/shaders"
+    FILES
+        ${CMAKE_SOURCE_DIR}/src/gui/shaders/match_overlay.vert
+        ${CMAKE_SOURCE_DIR}/src/gui/shaders/match_overlay.frag
 )
 if(MSVC)
     target_compile_options(test_gui_project_utils PRIVATE /bigobj)
@@ -721,6 +731,7 @@ target_link_libraries(test_gui_project_utils PRIVATE
     Qt6::Core
     Qt6::Concurrent
     Qt6::Gui
+    Qt6::GuiPrivate
     Qt6::Network
     Qt6::Test
     Qt6::Widgets

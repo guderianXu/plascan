@@ -63,6 +63,7 @@ public:
     // 根据掩码设置匹配点的可见性（与覆盖层可见匹配同步）
     void setMatchVisibilityMask(const QVector<bool> &mask);
     void setVisibleMatchIndices(const QVector<int> &indices);
+    void setMatchPointsVisible(bool visible);
     
     // 获取当前图像路径
     QString imagePath() const { return _imagePath; }

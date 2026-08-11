@@ -593,6 +593,7 @@ gui/
 │   ├── CanvasWidget.h/cpp              # 2D 影像/图层渲染画布；整体视图旋转不修改影像或摄影测量坐标
 │   ├── MatchPointBatchItem.h/cpp       # 匹配查看器单图元批量端点绘制，避免逐点 QGraphicsItem
 │   ├── MatchSpatialIndex.h/cpp         # 匹配点二维网格索引与可视区域候选查询
+│   ├── MatchGpuRenderer.h/cpp          # 基于 QRhi 的匹配线与端点 GPU 批量渲染器
 │   ├── ImageViewWidget.h/cpp           # 2D 影像缩放/平移控件
 │   ├── DualImageViewer.h/cpp           # 双图并列查看器，显式选择稀疏连线或左右影像视差目标
 │   ├── MatchLineOverlay.h/cpp          # 匹配线叠加层 (稀疏 → 连线)

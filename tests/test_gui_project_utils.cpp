@@ -11893,21 +11893,29 @@ TEST(MatchViewerVariantSwitchTest, ExposesCompactVariantComboAndReloadsSparseMat
 TEST(MatchViewerResponsivenessTest, LimitsDefaultSparseRenderingWork)
 {
     const QString imageViewSource = readProjectSourceFile(QStringLiteral("src/gui/widgets/ImageViewWidget.cpp"));
+    const QString overlayHeader = readProjectSourceFile(QStringLiteral("src/gui/widgets/MatchLineOverlay.h"));
     const QString overlaySource = readProjectSourceFile(QStringLiteral("src/gui/widgets/MatchLineOverlay.cpp"));
+    const QString gpuRendererSource = readProjectSourceFile(QStringLiteral("src/gui/widgets/MatchGpuRenderer.cpp"));
     const QString dualViewerSource = readProjectSourceFile(QStringLiteral("src/gui/widgets/DualImageViewer.cpp"));
     const QString dialogSource = readProjectSourceFile(QStringLiteral("src/gui/dialogs/tie_points/MatchViewerDialog.cpp"));
     ASSERT_FALSE(imageViewSource.isEmpty());
+    ASSERT_FALSE(overlayHeader.isEmpty());
     ASSERT_FALSE(overlaySource.isEmpty());
+    ASSERT_FALSE(gpuRendererSource.isEmpty());
     ASSERT_FALSE(dualViewerSource.isEmpty());
     ASSERT_FALSE(dialogSource.isEmpty());
 
     EXPECT_TRUE(imageViewSource.contains(QStringLiteral("new MatchPointBatchItem")));
     EXPECT_FALSE(imageViewSource.contains(QStringLiteral("QGraphicsEllipseItem")))
         << "Large match files must use one batch item per image.";
-    EXPECT_TRUE(overlaySource.contains(QStringLiteral("painter.drawLines")));
+    EXPECT_TRUE(gpuRendererSource.contains(QStringLiteral("updateDynamicBuffer")));
+    EXPECT_TRUE(gpuRendererSource.contains(QStringLiteral("commandBuffer->draw")));
     EXPECT_TRUE(overlaySource.contains(QStringLiteral("_leftSpatialIndex")));
-    EXPECT_FALSE(overlaySource.contains(QStringLiteral("mapToGlobal")));
-    EXPECT_FALSE(overlaySource.contains(QStringLiteral("mapFromGlobal")));
+    EXPECT_TRUE(overlayHeader.contains(QStringLiteral("public QRhiWidget")));
+    EXPECT_TRUE(overlaySource.contains(QStringLiteral("QRhiWidget::Api::Direct3D11")));
+    EXPECT_TRUE(overlaySource.contains(QStringLiteral("Qt::WA_AlwaysStackOnTop")));
+    EXPECT_EQ(overlaySource.count(QStringLiteral("mapToGlobal")), 1);
+    EXPECT_EQ(overlaySource.count(QStringLiteral("mapFromGlobal")), 1);
     EXPECT_TRUE(dualViewerSource.contains(QStringLiteral("setInterval(16)")));
     EXPECT_TRUE(dualViewerSource.contains(QStringLiteral("QtConcurrent::run")));
     EXPECT_TRUE(overlaySource.contains(QStringLiteral("_maxDisplayCount(5000)")))
