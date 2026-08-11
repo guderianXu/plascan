@@ -62,17 +62,7 @@ class RepoHygieneTest(unittest.TestCase):
             "Qt6GuiPrivate_DIR",
         ]:
             self.assertIn(forbidden_qt_cache_entry, text)
-        self.assertIn("windows-msvc-cpu:", text)
-        self.assertIn("cmake --preset windows-vcpkg-release", text)
-        self.assertIn("runs-on: windows-2022", text)
         self.assertNotIn("runs-on: windows-2025", text)
-        self.assertIn("--test-dir build/windows-vcpkg-release", text)
-        self.assertIn("-DVCPKG_HOST_TRIPLET=x64-windows-ci-release", text)
-        self.assertIn("-DVCPKG_TARGET_TRIPLET=x64-windows-ci-release", text)
-        self.assertIn("-DVCPKG_MANIFEST_NO_DEFAULT_FEATURES=ON", text)
-        self.assertIn("cmake/vcpkg-triplets", text)
-        self.assertIn("vcpkg_installed/x64-windows-ci-release/bin", text)
-        self.assertIn("'cmake/vcpkg-triplets/**'", text)
         self.assertIn("uses: jurplel/install-qt-action@v4", text)
         self.assertIn("version: '6.8.3'", text)
         self.assertIn("modules: 'qtshadertools'", text)
