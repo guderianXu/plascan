@@ -31,24 +31,18 @@
 #include "ProjectSurveyControl.h"
 #include "ProjectWorkflowUtils.h"
 #include "ProjectWorkflowReports.h"
-#include "ProjectDenseWorkflowConfig.h"
+#include "PointCloudWorkflowConfig.h"
 #include "camera/SurveyControlDialog.h"
 #include "GuiTaskRunner.h"
 #include "Logger.h"
 #include "filtering/SparsePointCloudProcessor.h"
 #include "FileDialogStateManager.h"
 #include "Camera.h"
-#include "DepthMapFusion.h"
-#include "DepthMapGenerator.h"
-#include "SparseCloudPreprocessor.h"
-#include "DenseCloudBuilder.h"
 #include "Intersection.h"
 #include "BundleAdjust.h"
 #include "LaserConstraintMap.h"
 #include "PlanetaryLaserJson.h"
 #include "io/PathIO.h"
-#include "SparseCloudValidator.h"
-#include "SurfaceReconstructor.h"
 
 
 #include <QMessageBox>
@@ -2846,15 +2840,15 @@ void ProjectManager::startGenerateModelAsync(const QJsonObject &settings)
         settings.value(QStringLiteral("force_depth_recompute")).toBool(false);
     const QString requested_depth_quality = settings.value(
         QStringLiteral("depthQualityProfile")).toString(
-            xjw::gui::project::depthQualityProfileForModelQuality(
+            xjw::core::project::depthQualityProfileForModelQuality(
                 settings.value(QStringLiteral("quality")).toString(
                     QStringLiteral("high"))));
     const QString stored_depth_quality = storedDepthBatchQualityProfile(
         _projectData->metadata(), depth_source);
     const bool stored_depth_quality_insufficient =
         !stored_depth_quality.isEmpty() &&
-        xjw::gui::project::depthQualityRank(stored_depth_quality) <
-            xjw::gui::project::depthQualityRank(requested_depth_quality);
+        xjw::core::project::depthQualityRank(stored_depth_quality) <
+            xjw::core::project::depthQualityRank(requested_depth_quality);
     const auto stored_depth_compatibility =
         source_data == QStringLiteral("depth_maps") && !depth_source.isEmpty()
             ? xjw::gui::project::assessStoredDepthBatchCompatibility(

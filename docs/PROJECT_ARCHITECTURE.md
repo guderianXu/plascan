@@ -304,17 +304,11 @@ core/
 │   ├── DepthMapFusion.h/cpp    # 深度图融合 → 密集点云，支持 manifest source plan 和流式融合
 │   ├── DepthFrameUtils.h/cpp   # 深度帧存储与按指定输出目录选择批次
 │   ├── EpipolarRectifier.h/cpp # 极线校正
-│   ├── DisparityFilter.h/cpp   # 视差滤波
 │   ├── DisparityTriangulator.h/cpp  # 视差三角化
 │   ├── DensePointCloudCUDA.cu  # 密集点云 CUDA
 │   ├── DenseCloudBuilder.h/cpp # 密集云构建器与点云过滤
 │   ├── SparseCloudPreprocessor.h/cpp  # 稀疏云预处理
 │   ├── SparseCloudValidator.h/cpp     # 稀疏云验证
-│   ├── StereoDenseCloudPipeline.h/cpp # 立体密集云流水线 (主入口)
-│   ├── StereoDenseCloudPipelineOutput.h/cpp  # 流水线输出
-│   ├── StereoDenseCloudPipelinePaths.h/cpp   # 流水线路径管理
-│   ├── PointCloudTifIO.h/cpp   # 点云 TIFF I/O
-│   ├── AspPointCloudMetrics.h/cpp  # ASP 兼容点云指标
 │   └── tests/                  # MVS 单元与流水线测试
 │       ├── test_mvs_rectifier.cpp
 │       ├── test_mvs_depth_pyramid.cpp
@@ -629,18 +623,14 @@ gui/
 │   │   └── ProjectUiCommands.h/cpp                   # UI 命令
 │   ├── services/
 │   │   ├── BundleAdjustService.h/cpp                 # BA 服务；解析/装配行星 range shot 并写独立摘要
-│   │   ├── ProjectBaInputBuilder.h/cpp               # BA 输入构建
 │   │   ├── ProjectCameraImportService.h/cpp          # 相机导入
 │   │   ├── MetashapeCameraReferenceImporter.h/cpp    # WGS84 相机参考与 GNSS 杆臂 TXT 严格解析
-│   │   ├── ProjectTriangulationService.h/cpp         # 三角化服务
 │   │   ├── ProjectResourceCleanupService.h           # 旧包含路径兼容层；实现位于 core/project_workflows
 │   │   └── ProjectTiePointResultService.h/cpp        # 单一当前连接点、覆盖清理与真实删除
 │   └── support/                 # 支持/辅助类
-│       ├── ProjectSupportUtils.h/cpp               # 通用工具
 │       ├── ProjectBundleAdjustExecution.h/cpp       # BA 执行
 │       ├── ProjectBundleAdjustWorkflow.h/cpp        # BA 工作流
 │       ├── ProjectCameraInitialization.h/cpp        # 相机初始化
-│       ├── ProjectDenseWorkflowConfig.h             # 旧包含路径兼容层；实现已迁移到 core/project_workflows
 │       ├── ProjectReferenceDatasets.h               # 旧包含路径兼容层；参考数据业务已迁移到 core/project_workflows
 │       ├── ProjectDepthBatchLineage.h/cpp           # 路径无关的深度输入签名与旧批次逐帧相机核验
 │       ├── ProjectModelResultPolicy.h/cpp            # 模型 schema v2、默认版本迁移及完整产物登记策略
@@ -655,7 +645,7 @@ gui/
 │       ├── ProjectSfmWorkflow.h/cpp                 # SfM 工作流
 │       ├── ProjectSparseWorkflow.h/cpp              # 稀疏工作流
 │       ├── ProjectSurveyControl.h/cpp               # GCP/检查点/比例尺 CSV/Agisoft TXT 导入与 sidecar 摘要
-│       ├── ProjectWorkflowUtils.h/cpp               # 工作流工具
+│       ├── ProjectWorkflowUtils.h                   # 旧包含路径兼容层；实现位于 core/project_workflows
 │       └── ProjectWorkflowReports.h/cpp             # 工作流报告
 │
 ├── tasks/                      # 异步任务执行器
@@ -744,27 +734,31 @@ GUI 不猜测补齐；用户需通过 `bundle_adjust_cli --laser-range-isis-*` �
 ### 菜单结构
 
 ```
-文件          视图    工作流程          重建                      工具              帮助
-├新建         ├放大  ├添加照片/文件夹   ├稀疏重建                ├重叠度获取       └关于
-├打开         ├缩小  ├空中三角测量     │├特征点提取              ├前方交汇精度检验
-├保存         ├重置  ├创建密集点云     │├获取重叠对...           │├检测交汇
-├最近打开     ├操控球├生成模型         │├创建连接点              │└查看结果
-├导入         ├特征点├创建 DEM         │├构建观测网络...         ├手动点云剔除
-│├导入点云... │可视化├生成正射影像     │├初始化相机位姿...       ├连接点查看
-│└导入模型... └窗口  ├生成纹理         │├生成初始稀疏点云...     ├相机校准...
-├导出                                  │├光束法平差优化...       ├相机格式转换...
-├最小化                                │└稀疏点云后处理...       └查看工作流程报告
-└退出                                  ├密集重建
-                                       │├密集匹配...
-                                       │├深度图估计...
-                                       │├深度图融合...
-                                       │└密集点云后处理...
-                                       └（模型生成统一由“工作流程 → 生成模型”进入）
+PlaScan 菜单栏
+├─ 文件
+│  ├─ 新建 / 打开 / 保存 / 最近打开
+│  ├─ 导入 → 导入点云... / 导入模型...
+│  └─ 导出 / 退出
+├─ 视图
+│  └─ 影像、模型与窗口显示控制
+├─ 工作流程
+│  ├─ 添加照片 / 添加文件夹
+│  ├─ 空中三角测量...
+│  ├─ 创建点云... / 生成模型... / 生成纹理...
+│  ├─ 创建 DEM / 生成正射影像
+│  └─ 设置...
+├─ 模型
+│  └─ 显示/隐藏项目及模型显示模式
+├─ 工具
+│  ├─ 连接点 / 标记 / 前方交汇精度检验
+│  ├─ 手动点云剔除 / 相机校准 / 相机格式转换
+│  └─ 参考 DEM/LiDAR 导入与精度检查
+└─ 帮助
 ```
 
 模型生成仍由一个统一入口负责几何重建；已经存在模型时，可通过“工作流程 → 生成纹理”独立重建
-OBJ/MTL/PNG 纹理产物。旧网格重建和模型导出对话框仍作为内部兼容组件保留，不再出现在“重建”
-菜单，避免两套几何入口产生不同设置和结果。
+OBJ/MTL/PNG 纹理产物。旧网格重建、模型导出对话框及顶层“重建”菜单均已删除，
+避免两套几何入口产生不同设置和结果。
 
 “文件 → 导入”只读取 Metashape 已导出的标准成果，不解析 `.psx`、`.oc3` 等内部格式。点云
 支持带顶点色的 OBJ、PLY、XYZ，导入后登记到 `dense_cloud_results`，可直接作为 DEM 或点云
@@ -804,9 +798,9 @@ DOM 输入；模型支持 OBJ、PLY，OBJ 的 MTL 与其引用纹理会一起复
 ```text
 MenuWorkflowController
   -> MapProjectDialog（DEM/彩色点云、投影参考、输出估算、进度与取消）
-  -> ProjectManager -> ProjectTaskDispatcher
-  -> ProjectTerrainProductsManager -> GuiTaskRunner::runGuarded
-  -> ProjectWorkflowUtils::runOrthoProduct
+  -> ProjectManager -> ProjectTerrainProductsManager
+  -> GuiTaskRunner::runGuardedWithOutcome
+  -> core/project_workflows::runOrthoProduct
   -> TerrainPipeline -> OrthoGenerationOptions
        ├─ DEM + Images -> OrthoProjector
        └─ PointCloud + PointColors -> PointCloudDomGenerator
@@ -1197,7 +1191,6 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
 | 问题 | 位置 | 建议 |
 |------|------|------|
 | 三维场景实现仍较大 | `gui/views/CameraSceneWidget.cpp` | 覆盖层、几何准备与点云编辑已拆分；继续将相机图集资源生命周期提取为独立渲染器 |
-| `mvs/` 和 `dense_match/` 有重复逻辑 | `SubpixelRefiner` 两个版本 | 统一到 `dense_match/` |
 | 空三真实数据回归仍需扩大 | `core/aerial_triangulation` | 持续加入环拍、航带、弱纹理和控制点数据集 |
 | 构建依赖 4 个系统符号链接 | `/lib64/libm.so.6`, `libnvrtc-builtins.so.13.0` 等 | 见 `CONTEXT.md` 系统依赖 |
 

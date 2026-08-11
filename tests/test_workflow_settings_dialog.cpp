@@ -38,13 +38,13 @@ QJsonObject modelSettings(const QJsonObject &settings)
 TEST(WorkflowSettingsDialogTest, DefaultsUseWorkflowScopedSchema)
 {
     const QJsonObject settings = WorkflowSettingsDialog::defaultSettings();
-    EXPECT_EQ(settings.value(QStringLiteral("workflow_settings_version")).toInt(), 6);
+    EXPECT_EQ(settings.value(QStringLiteral("workflow_settings_version")).toInt(), 7);
     EXPECT_EQ(settings.value(QStringLiteral("selected_workflow")).toString(),
               QStringLiteral("aerial_triangulation"));
 
     const QJsonObject workflows = settings.value(QStringLiteral("workflows")).toObject();
     EXPECT_TRUE(workflows.contains(QStringLiteral("aerial_triangulation")));
-    EXPECT_TRUE(workflows.contains(QStringLiteral("reconstruction")));
+    EXPECT_FALSE(workflows.contains(QStringLiteral("reconstruction")));
     EXPECT_TRUE(workflows.contains(QStringLiteral("generate_model")));
     EXPECT_TRUE(workflows.contains(QStringLiteral("dem")));
     EXPECT_TRUE(workflows.contains(QStringLiteral("orthomosaic")));
@@ -75,7 +75,7 @@ TEST(WorkflowSettingsDialogTest, ExposesModelGenerationComputeModesAndDeviceDete
     ASSERT_NE(workflowPages, nullptr);
     ASSERT_NE(algorithmSelector, nullptr);
     ASSERT_NE(downloadButton, nullptr);
-    EXPECT_EQ(workflowSelector->count(), 5);
+    EXPECT_EQ(workflowSelector->count(), 4);
     EXPECT_EQ(workflowSelector->currentData().toString(),
               QStringLiteral("aerial_triangulation"));
     EXPECT_TRUE(workflowPages->currentWidget()->isEnabled());
@@ -131,14 +131,6 @@ TEST(WorkflowSettingsDialogTest, ExposesModelGenerationComputeModesAndDeviceDete
             QString::fromStdString(device.vendor)));
     }
 
-    workflowSelector->setCurrentIndex(
-        workflowSelector->findData(QStringLiteral("reconstruction")));
-    EXPECT_TRUE(workflowPages->currentWidget()->isEnabled());
-    auto *unavailableMessage = workflowPages->currentWidget()->findChild<QLabel *>(
-        QStringLiteral("workflowUnavailableMessage_reconstruction"));
-    ASSERT_NE(unavailableMessage, nullptr);
-    EXPECT_TRUE(unavailableMessage->text().contains(QStringLiteral("尚未开放")));
-    EXPECT_TRUE(workflowPages->currentWidget()->findChildren<QComboBox *>().isEmpty());
 }
 
 TEST(WorkflowSettingsDialogTest, NormalizesModelGenerationComputeMode)
@@ -258,15 +250,27 @@ TEST(WorkflowSettingsDialogTest, MigratesLegacyFlatSettingsWithoutKeepingTuningF
         QStringLiteral("D:/legacy/lightglue.engine");
     legacy[QStringLiteral("threads")] = 24;
     legacy[QStringLiteral("geometry_max_iterations")] = 25000;
+    legacy[QStringLiteral("selected_workflow")] = QStringLiteral("reconstruction");
+    legacy[QStringLiteral("workflows")] = QJsonObject{
+        {QStringLiteral("reconstruction"),
+         QJsonObject{{QStringLiteral("quality"), QStringLiteral("legacy")}}},
+        {QStringLiteral("future_workflow"),
+         QJsonObject{{QStringLiteral("enabled"), true}}}};
 
     dialog.applySettings(legacy);
     const QJsonObject collected = dialog.collectSettings();
-    EXPECT_EQ(collected.value(QStringLiteral("workflow_settings_version")).toInt(), 6);
+    EXPECT_EQ(collected.value(QStringLiteral("workflow_settings_version")).toInt(), 7);
     EXPECT_EQ(
         aerialSettings(collected).value(QStringLiteral("lightglue_tensorrt_engine")).toString(),
         QStringLiteral("D:/legacy/lightglue.engine"));
     EXPECT_FALSE(collected.contains(QStringLiteral("threads")));
     EXPECT_FALSE(collected.contains(QStringLiteral("geometry_max_iterations")));
+    EXPECT_EQ(collected.value(QStringLiteral("selected_workflow")).toString(),
+              QStringLiteral("aerial_triangulation"));
+    const QJsonObject collected_workflows =
+        collected.value(QStringLiteral("workflows")).toObject();
+    EXPECT_FALSE(collected_workflows.contains(QStringLiteral("reconstruction")));
+    EXPECT_TRUE(collected_workflows.contains(QStringLiteral("future_workflow")));
 }
 
 int main(int argc, char **argv)

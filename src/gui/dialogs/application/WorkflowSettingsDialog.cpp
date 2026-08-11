@@ -43,17 +43,17 @@ namespace
 {
 
 constexpr auto kAerialWorkflowId = "aerial_triangulation";
-constexpr auto kReconstructionWorkflowId = "reconstruction";
 constexpr auto kModelGenerationWorkflowId = "generate_model";
 constexpr auto kDemWorkflowId = "dem";
 constexpr auto kOrthomosaicWorkflowId = "orthomosaic";
+constexpr auto kRetiredReconstructionWorkflowId = "reconstruction";
 constexpr auto kSiftLightGlueAlgorithmId = "sift_lightglue";
 constexpr auto kCudaSiftAlgorithmId = "cuda_sift";
 constexpr auto kLoMaRAlgorithmId = "loma_r";
 constexpr auto kCudaComputeMode = "cuda";
 constexpr auto kOpenClComputeMode = "opencl";
 constexpr auto kHybridComputeMode = "hybrid";
-constexpr int kWorkflowSettingsVersion = 6;
+constexpr int kWorkflowSettingsVersion = 7;
 
 struct WorkflowEntry
 {
@@ -63,7 +63,6 @@ struct WorkflowEntry
 
 constexpr WorkflowEntry kWorkflowEntries[] = {
     {kAerialWorkflowId, "空中三角测量"},
-    {kReconstructionWorkflowId, "三维重建"},
     {kModelGenerationWorkflowId, "生成模型"},
     {kDemWorkflowId, "创建 DEM"},
     {kOrthomosaicWorkflowId, "生成正射影像"}};
@@ -115,7 +114,8 @@ QJsonObject normalizedSettings(const QJsonObject &settings)
     QJsonObject normalizedWorkflows = normalized.value(QStringLiteral("workflows")).toObject();
     for (auto it = workflows.constBegin(); it != workflows.constEnd(); ++it)
     {
-        if (it.value().isObject())
+        if (it.key() != QLatin1String(kRetiredReconstructionWorkflowId) &&
+            it.value().isObject())
         {
             normalizedWorkflows.insert(it.key(), it.value());
         }
@@ -162,7 +162,6 @@ QJsonObject WorkflowSettingsDialog::defaultSettings()
 {
     QJsonObject workflows;
     workflows[QString::fromLatin1(kAerialWorkflowId)] = defaultAerialSettings();
-    workflows[QString::fromLatin1(kReconstructionWorkflowId)] = QJsonObject();
     workflows[QString::fromLatin1(kModelGenerationWorkflowId)] =
         defaultModelGenerationSettings();
     workflows[QString::fromLatin1(kDemWorkflowId)] = QJsonObject();
@@ -318,9 +317,6 @@ void WorkflowSettingsDialog::setupUi()
     aerialLayout->addWidget(aerialGroup);
     aerialLayout->addStretch(1);
     _workflowPages->addWidget(aerialPage);
-
-    _workflowPages->addWidget(makeUnavailableWorkflowPage(
-        QString::fromLatin1(kReconstructionWorkflowId), QStringLiteral("三维重建"), _workflowPages));
 
     auto *model_page = new QWidget(_workflowPages);
     model_page->setObjectName(QStringLiteral("workflowPage_generate_model"));

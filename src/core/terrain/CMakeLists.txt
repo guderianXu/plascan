@@ -183,7 +183,4 @@ if(BUILD_TESTS)
 
     gtest_discover_tests(test_small_body_global_products)
 
-    # terrain_stereo_test / stereo_pipeline_test / stereo_pipeline_benchmark
-    # require the old pointcloud module which has been removed.
-    # Re-enable after migrating these tests to plapoint.
 endif()

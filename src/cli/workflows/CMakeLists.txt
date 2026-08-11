@@ -91,8 +91,6 @@ function(add_reconstruction_workflow_cli name)
             ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
             ${CMAKE_SOURCE_DIR}/src/core/sfm
             ${CMAKE_SOURCE_DIR}/src/core/terrain
-            ${CMAKE_SOURCE_DIR}/src/gui
-            ${CMAKE_SOURCE_DIR}/src/gui/compat
             ${OpenCV_INCLUDE_DIRS}
         COMPILE_DEFINITIONS PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
         WITH_NVRTC_RPATH

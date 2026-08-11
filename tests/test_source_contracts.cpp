@@ -1486,6 +1486,64 @@ TEST(GuiArchitectureContractTest, PointCloudWorkflowControllerOnlyCoordinatesCor
         QStringLiteral("src/gui/project/manager/ProjectTaskDispatcher.cpp")));
 }
 
+TEST(MvsArchitectureContractTest, ObsoleteStereoDenseCloudPipelineIsRemoved)
+{
+    for (const char *path : {
+             "src/core/mvs/StereoDenseCloudPipeline.h",
+             "src/core/mvs/StereoDenseCloudPipeline.cpp",
+             "src/core/mvs/StereoDenseCloudPipelineOutput.h",
+             "src/core/mvs/StereoDenseCloudPipelineOutput.cpp",
+             "src/core/mvs/StereoDenseCloudPipelinePaths.h",
+             "src/core/mvs/StereoDenseCloudPipelinePaths.cpp",
+             "src/core/mvs/AspPointCloudMetrics.h",
+             "src/core/mvs/AspPointCloudMetrics.cpp",
+             "src/core/mvs/DisparityFilter.h",
+             "src/core/mvs/DisparityFilter.cpp",
+             "src/core/mvs/PointCloudTifIO.h",
+             "src/core/mvs/PointCloudTifIO.cpp",
+             "src/core/mvs/SubpixelRefiner.h",
+             "src/core/mvs/SubpixelRefiner.cpp",
+             "src/core/terrain/tests/terrain_stereo_test.cpp",
+             "src/core/terrain/tests/stereo_pipeline_test.cpp",
+             "src/core/terrain/tests/stereo_pipeline_benchmark.cpp",
+         })
+    {
+        EXPECT_FALSE(sourceFileExists(utf8(path))) << path;
+    }
+
+    const QString mvsCmake = readSourceFile(QStringLiteral("src/core/mvs/CMakeLists.txt"));
+    EXPECT_FALSE(mvsCmake.contains(QStringLiteral("StereoDenseCloudPipeline")));
+}
+
+TEST(ProjectWorkflowContractTest, LegacyDenseWorkflowConfigShimsAreRemoved)
+{
+    EXPECT_FALSE(sourceFileExists(
+        QStringLiteral("src/core/project_workflows/ProjectDenseWorkflowConfig.h")));
+    EXPECT_FALSE(sourceFileExists(
+        QStringLiteral("src/gui/project/support/ProjectDenseWorkflowConfig.h")));
+
+    const QString cliCmake =
+        readSourceFile(QStringLiteral("src/cli/workflows/CMakeLists.txt"));
+    EXPECT_FALSE(cliCmake.contains(QStringLiteral("src/gui")));
+}
+
+TEST(GuiArchitectureContractTest, DenseMatchDiagnosticLibraryIsNotLinkedIntoGui)
+{
+    const QString guiCmake = readSourceFile(QStringLiteral("src/gui/CMakeLists.txt"))
+        + readSourceFile(QStringLiteral("src/gui/cmake/GuiCoreLinking.cmake"));
+
+    EXPECT_FALSE(guiCmake.contains(QStringLiteral("dense_match")));
+}
+
+TEST(CoreArchitectureContractTest, IntersectionDemoIsRemoved)
+{
+    const QString intersectionCmake =
+        readSourceFile(QStringLiteral("src/core/intersection/CMakeLists.txt"));
+
+    EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/intersection/intersection_demo.cpp")));
+    EXPECT_FALSE(intersectionCmake.contains(QStringLiteral("intersection_demo")));
+}
+
 TEST(GuiArchitectureContractTest, AsyncTasksExposeSharedCancellationVocabulary)
 {
     const QString runner = readSourceFile(QStringLiteral("src/gui/tasks/GuiTaskRunner.h"));

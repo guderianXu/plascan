@@ -4,7 +4,7 @@
 #include "MvsSourcePlanner.h"
 #include "MvsWorkspaceManifest.h"
 #include "MvsWorkspaceReplay.h"
-#include "ProjectDenseWorkflowConfig.h"
+#include "PointCloudWorkflowConfig.h"
 #include "SparseCloudPreprocessor.h"
 #include "io/PathIO.h"
 
@@ -454,10 +454,10 @@ int main(int argc, char **argv)
         {QStringLiteral("saveIntermediatePyramidLevels"), saveLevels},
         {QStringLiteral("pipeline_mode"), true}
     };
-    const xjw::gui::project::DenseGenerationSettings settings =
-        xjw::gui::project::denseGenerationSettingsFromJson(settingsJson);
+    const xjw::core::project::DenseGenerationSettings settings =
+        xjw::core::project::denseGenerationSettingsFromJson(settingsJson);
     xjw::mvs::DepthGenConfig config =
-        xjw::gui::project::buildDepthGenConfig(
+        xjw::core::project::buildDepthGenConfig(
             settings, static_cast<int>(views.size()));
     config.runFusion = false;
     config.saveIntermediateDepthMaps = true;

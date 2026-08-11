@@ -99,7 +99,6 @@ set(PLASCAN_GUI_INCLUDE_DIRECTORIES
   ${CMAKE_SOURCE_DIR}/src/core/matchphototask/runtime
   ${CMAKE_SOURCE_DIR}/src/core/matchphototask/task
   ${CMAKE_SOURCE_DIR}/src/core/image_matching
-  ${CMAKE_SOURCE_DIR}/src/core/dense_match
   ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
   ${CMAKE_SOURCE_DIR}/src/common
   ${OpenCV_INCLUDE_DIRS}

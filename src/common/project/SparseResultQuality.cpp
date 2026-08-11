@@ -370,11 +370,11 @@ QString sparseResultBlockingReason(const QJsonObject &record)
     const QString kind = sparseResultKind(record);
     if (kind == kSparseResultKindPairwisePreview)
     {
-        return QStringLiteral("当前结果是两视初始三角化预览云，不能作为正式航测稀疏点云。请先运行三维重建/空三。");
+        return QStringLiteral("当前结果是两视初始三角化预览云，不能作为正式航测稀疏点云。请先运行空中三角测量。");
     }
     if (!quality.value(QStringLiteral("ba_applied")).toBool(false))
     {
-        return QStringLiteral("当前稀疏点云没有光束法平差质量标记，请先运行三维重建/空三。");
+        return QStringLiteral("当前稀疏点云没有光束法平差质量标记，请先运行空中三角测量。");
     }
     if (registeredImageCount(quality) < 2)
     {

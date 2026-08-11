@@ -24,7 +24,7 @@ class WorkflowSettingsDialog final : public QDialog
 public:
     explicit WorkflowSettingsDialog(QWidget *parent = nullptr);
 
-    /// 返回 v6 工作流程分组配置，包含算法资源和生成模型计算模式。
+    /// 返回 v7 工作流程分组配置，包含算法资源和生成模型计算模式。
     static QJsonObject defaultSettings();
 
     /**
@@ -38,10 +38,10 @@ public:
     /// 提取并规范化生成模型设置；计算模式为 cuda/opencl/hybrid 之一。
     static QJsonObject modelGenerationSettings(const QJsonObject &settings);
 
-    /// 从项目级 JSON 恢复控件，旧版配置会在内存中迁移到 v6。
+    /// 从项目级 JSON 恢复控件，旧版配置会在内存中迁移到 v7。
     void applySettings(const QJsonObject &settings);
 
-    /// 收集按工作流程分组的 v6 配置。
+    /// 收集按工作流程分组的 v7 配置。
     QJsonObject collectSettings() const;
 
 private:

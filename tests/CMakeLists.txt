@@ -1103,9 +1103,6 @@ target_include_directories(test_depth_measured_support_connectivity PRIVATE
 )
 gtest_discover_tests(test_depth_measured_support_connectivity)
 
-# pointcloud 模块测试迁移到 src/core/pointcloud/tests，
-# 不再在全局 tests 目录内维护该测试源码。
-
 # ==============================================================================
 # test_camera_scene_view_math — 三维相机视角选择、深度排序与校准投影
 # ==============================================================================

@@ -66,15 +66,8 @@ set(MVS_CXX_SOURCES
     EpipolarRectifier.cpp
     SparseCloudValidator.cpp
     SparseCloudPreprocessor.cpp
-    SubpixelRefiner.cpp
-    DisparityFilter.cpp
     DisparityTriangulator.cpp
-    PointCloudTifIO.cpp
     PointCloudArtifactIO.cpp
-    StereoDenseCloudPipelineOutput.cpp
-    StereoDenseCloudPipelinePaths.cpp
-    AspPointCloudMetrics.cpp
-    StereoDenseCloudPipeline.cpp
     StreamingDepthFusionService.cpp
 )
 
@@ -124,21 +117,13 @@ set(MVS_HEADERS
     EpipolarRectifier.h
     SparseCloudValidator.h
     SparseCloudPreprocessor.h
-    SubpixelRefiner.h
-    DisparityFilter.h
     DisparityTriangulator.h
-    PointCloudTifIO.h
     PointCloudArtifactIO.h
-    StereoDenseCloudPipelineOutput.h
-    StereoDenseCloudPipelinePaths.h
-    AspPointCloudMetrics.h
-    StereoDenseCloudPipeline.h
     StreamingDepthFusionService.h
 )
 
 set(MVS_QOBJECT_HEADERS
     DepthMapGenerator.h
-    StereoDenseCloudPipeline.h
 )
 
 qt6_wrap_cpp(MVS_MOC_SOURCES

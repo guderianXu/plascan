@@ -26,7 +26,7 @@
 #include "ProjectWorkflowUtils.h"
 #include "ProjectResultRecords.h"
 #include "ProjectMetadataOperations.h"
-#include "ProjectDenseWorkflowConfig.h"
+#include "PointCloudWorkflowConfig.h"
 #include "ProjectModelWorkflowPolicy.h"
 #include "runtime/PythonRuntimeLocator.h"
 #include "json/JsonObjectMerge.h"
@@ -2535,11 +2535,11 @@ TEST(GenerateModelDialogTest, PropagatesWorkflowComputeModeToDepthAndModelStages
               QStringLiteral("opencl"));
 
     const auto depth_settings =
-        xjw::gui::project::denseGenerationSettingsFromJson(settings);
+        xjw::core::project::denseGenerationSettingsFromJson(settings);
     EXPECT_EQ(depth_settings.patchMatchBackend,
               xjw::mvs::PatchMatchBackend::OpenCl);
     const auto depth_config =
-        xjw::gui::project::buildDepthGenConfig(depth_settings, 12);
+        xjw::core::project::buildDepthGenConfig(depth_settings, 12);
     EXPECT_EQ(depth_config.patchMatch.backend,
               xjw::mvs::PatchMatchBackend::OpenCl);
 
@@ -2563,7 +2563,7 @@ TEST(GenerateModelDialogTest, PropagatesWorkflowComputeModeToDepthAndModelStages
               QStringLiteral("auto"));
 
     const auto hybrid_depth_settings =
-        xjw::gui::project::denseGenerationSettingsFromJson(hybrid_settings);
+        xjw::core::project::denseGenerationSettingsFromJson(hybrid_settings);
     EXPECT_EQ(hybrid_depth_settings.patchMatchBackend,
               xjw::mvs::PatchMatchBackend::Auto);
 }
@@ -4233,20 +4233,6 @@ TEST(CodeStyleTest, DepthMapFusionUsesLowerCamelPrivateMemberNames)
     EXPECT_FALSE(source.contains(QStringLiteral("m_filteredDepths")));
 }
 
-TEST(CodeStyleTest, AspPointCloudMetricsSourceKeepsLinesWithinStyleLimit)
-{
-    const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/AspPointCloudMetrics.cpp"));
-    ASSERT_FALSE(source.isEmpty());
-
-    const QStringList lines = source.split(QLatin1Char('\n'));
-    for (int i = 0; i < lines.size(); ++i)
-    {
-        EXPECT_LE(lines.at(i).size(), 120)
-            << "AspPointCloudMetrics.cpp:" << (i + 1)
-            << " has " << lines.at(i).size() << " characters";
-    }
-}
-
 TEST(CodeStyleTest, DepthMapGeneratorUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.h"));
@@ -4321,27 +4307,6 @@ TEST(CodeStyleTest, LaserConstraintMapUsesLowerCamelPrivateMemberNames)
     const QStringList oldMemberNames = {
         QStringLiteral("m_samples"),
         QStringLiteral("m_index"),
-    };
-    for (const QString &oldName : oldMemberNames)
-    {
-        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
-        EXPECT_FALSE(source.contains(oldName)) << qPrintable(oldName);
-    }
-}
-
-TEST(CodeStyleTest, StereoDenseCloudPipelineUsesLowerCamelPrivateMemberNames)
-{
-    const QString header = readProjectSourceFile(QStringLiteral("src/core/mvs/StereoDenseCloudPipeline.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/StereoDenseCloudPipeline.cpp"));
-    ASSERT_FALSE(header.isEmpty());
-    ASSERT_FALSE(source.isEmpty());
-
-    EXPECT_TRUE(header.contains(QStringLiteral("StereoPipelineConfig _config;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("bool _cancelled = false;")));
-
-    const QStringList oldMemberNames = {
-        QStringLiteral("m_config"),
-        QStringLiteral("m_cancelled"),
     };
     for (const QString &oldName : oldMemberNames)
     {
@@ -9363,10 +9328,10 @@ TEST(AerialTriangulationDialogTest, CheckedBoxesUseCheckmarkIcon)
 
 TEST(DepthQualityProfileTest, MapsStableIdsToFinalDownsample)
 {
-    using xjw::gui::project::DepthQualityProfile;
-    using xjw::gui::project::depthQualityDownsample;
-    using xjw::gui::project::depthQualityProfileFromId;
-    using xjw::gui::project::depthQualityProfileId;
+    using xjw::core::project::DepthQualityProfile;
+    using xjw::core::project::depthQualityDownsample;
+    using xjw::core::project::depthQualityProfileFromId;
+    using xjw::core::project::depthQualityProfileId;
 
     EXPECT_EQ(depthQualityDownsample(DepthQualityProfile::Highest), 1);
     EXPECT_EQ(depthQualityDownsample(DepthQualityProfile::High), 2);
@@ -9378,14 +9343,14 @@ TEST(DepthQualityProfileTest, MapsStableIdsToFinalDownsample)
     EXPECT_EQ(depthQualityProfileId(DepthQualityProfile::Medium), QStringLiteral("medium"));
     EXPECT_EQ(depthQualityProfileFromId(QStringLiteral("high")), DepthQualityProfile::High);
     EXPECT_EQ(depthQualityProfileFromId(QStringLiteral("unknown")), DepthQualityProfile::Medium);
-    EXPECT_EQ(xjw::gui::project::depthQualityProfileForModelQuality(
+    EXPECT_EQ(xjw::core::project::depthQualityProfileForModelQuality(
                   QStringLiteral("ultra")),
               QStringLiteral("highest"));
-    EXPECT_EQ(xjw::gui::project::depthQualityProfileForModelQuality(
+    EXPECT_EQ(xjw::core::project::depthQualityProfileForModelQuality(
                   QStringLiteral("high")),
               QStringLiteral("high"));
-    EXPECT_GT(xjw::gui::project::depthQualityRank(QStringLiteral("highest")),
-              xjw::gui::project::depthQualityRank(QStringLiteral("medium")));
+    EXPECT_GT(xjw::core::project::depthQualityRank(QStringLiteral("highest")),
+              xjw::core::project::depthQualityRank(QStringLiteral("medium")));
 }
 
 TEST(DepthQualityProfileTest, ExplicitDepthProfileOverridesMeshProfile)
@@ -9395,7 +9360,7 @@ TEST(DepthQualityProfileTest, ExplicitDepthProfileOverridesMeshProfile)
         {QStringLiteral("depthQualityProfile"), QStringLiteral("highest")}
     };
 
-    const auto settings = xjw::gui::project::denseGenerationSettingsFromJson(json);
+    const auto settings = xjw::core::project::denseGenerationSettingsFromJson(json);
     EXPECT_EQ(settings.qualityProfile, QStringLiteral("highest"));
     EXPECT_DOUBLE_EQ(settings.resScale, 1.0);
     EXPECT_EQ(settings.iterations, 16);
@@ -9412,7 +9377,7 @@ TEST(DepthQualityProfileTest, ExplicitSettingsAreNotRaisedByDefaultProfile)
     json[QStringLiteral("confidence")] = 0.25;
     json[QStringLiteral("minConfidence")] = 0.30;
 
-    const auto settings = xjw::gui::project::denseGenerationSettingsFromJson(json);
+    const auto settings = xjw::core::project::denseGenerationSettingsFromJson(json);
     EXPECT_EQ(settings.qualityProfile, QStringLiteral("medium"));
     EXPECT_EQ(settings.minViews, 3);
     EXPECT_EQ(settings.minConsistentViews, 2);
@@ -9425,14 +9390,14 @@ TEST(DenseWorkflowConfigTest, MediumProfileFillsMissingProductionDefaults)
     QJsonObject legacySettings;
     legacySettings[QStringLiteral("qualityProfile")] = QStringLiteral("medium");
 
-    const auto settings = xjw::gui::project::denseGenerationSettingsFromJson(legacySettings);
+    const auto settings = xjw::core::project::denseGenerationSettingsFromJson(legacySettings);
     EXPECT_EQ(settings.qualityProfile, QStringLiteral("medium"));
     EXPECT_EQ(settings.minViews, 6);
     EXPECT_EQ(settings.minConsistentViews, 3);
     EXPECT_FLOAT_EQ(settings.patchMatchConfidence, 0.60f);
     EXPECT_FLOAT_EQ(settings.fusionMinConfidence, 0.65f);
 
-    const auto config = xjw::gui::project::buildDepthGenConfig(settings, 444);
+    const auto config = xjw::core::project::buildDepthGenConfig(settings, 444);
     EXPECT_GE(config.numSourceViews, 6);
     EXPECT_GE(config.patchMatch.numSourceViews, 6);
     EXPECT_EQ(config.fusion.minConsistentViews, 3);
@@ -9443,11 +9408,11 @@ TEST(DenseWorkflowConfigTest, LowProfileKeepsThreeSourceViews)
     QJsonObject previewSettings;
     previewSettings[QStringLiteral("qualityProfile")] = QStringLiteral("low");
 
-    const auto settings = xjw::gui::project::denseGenerationSettingsFromJson(previewSettings);
+    const auto settings = xjw::core::project::denseGenerationSettingsFromJson(previewSettings);
     EXPECT_EQ(settings.qualityProfile, QStringLiteral("low"));
     EXPECT_EQ(settings.minViews, 3);
 
-    const auto config = xjw::gui::project::buildDepthGenConfig(settings, 444);
+    const auto config = xjw::core::project::buildDepthGenConfig(settings, 444);
     EXPECT_EQ(config.numSourceViews, 3);
 }
 
@@ -9458,8 +9423,8 @@ TEST(DenseWorkflowConfigTest, MapsAdaptiveDepthPyramidSettings)
     json[QStringLiteral("depthFilterMode")] = QStringLiteral("aggressive");
     json[QStringLiteral("saveIntermediatePyramidLevels")] = true;
 
-    const auto settings = xjw::gui::project::denseGenerationSettingsFromJson(json);
-    const auto config = xjw::gui::project::buildDepthGenConfig(settings, 9);
+    const auto settings = xjw::core::project::denseGenerationSettingsFromJson(json);
+    const auto config = xjw::core::project::buildDepthGenConfig(settings, 9);
 
     EXPECT_EQ(config.sceneProfile, xjw::mvs::MvsSceneProfile::AerialTerrain);
     EXPECT_EQ(config.depthFilterMode, xjw::mvs::DepthFilterMode::Aggressive);
@@ -9473,8 +9438,8 @@ TEST(DenseWorkflowConfigTest, AutoDepthFilterKeepsAdaptiveMode)
     json[QStringLiteral("sceneProfile")] = QStringLiteral("orbital_object");
     json[QStringLiteral("depthFilterMode")] = QStringLiteral("auto");
 
-    const auto settings = xjw::gui::project::denseGenerationSettingsFromJson(json);
-    const auto config = xjw::gui::project::buildDepthGenConfig(settings, 16);
+    const auto settings = xjw::core::project::denseGenerationSettingsFromJson(json);
+    const auto config = xjw::core::project::buildDepthGenConfig(settings, 16);
 
     EXPECT_EQ(config.sceneProfile, xjw::mvs::MvsSceneProfile::OrbitalObject);
     EXPECT_EQ(config.depthFilterMode, xjw::mvs::DepthFilterMode::Moderate);
@@ -9490,10 +9455,10 @@ TEST(DenseWorkflowConfigTest, MapsExplicitOpenClPatchMatchBackend)
         {QStringLiteral("patchMatchBackend"), QStringLiteral("opencl")}
     };
 
-    const auto settings = xjw::gui::project::denseGenerationSettingsFromJson(json);
+    const auto settings = xjw::core::project::denseGenerationSettingsFromJson(json);
     EXPECT_EQ(settings.patchMatchBackend, xjw::mvs::PatchMatchBackend::OpenCl);
 
-    const auto config = xjw::gui::project::buildDepthGenConfig(settings, 12);
+    const auto config = xjw::core::project::buildDepthGenConfig(settings, 12);
     EXPECT_EQ(config.patchMatch.backend, xjw::mvs::PatchMatchBackend::OpenCl);
     EXPECT_GT(config.gpuFrameWorkerCount, 0);
 }
@@ -9564,8 +9529,8 @@ TEST(DenseWorkflowConfigTest, MapsMultiHypothesisTargetedGapRecovery)
     json[QStringLiteral("postConsistencyResidualMaximumLayerSpread")] = 0.02;
     json[QStringLiteral("postConsistencyResidualMaximumPriorRadius")] = 0.07;
 
-    const auto settings = xjw::gui::project::denseGenerationSettingsFromJson(json);
-    const auto config = xjw::gui::project::buildDepthGenConfig(settings, 16);
+    const auto settings = xjw::core::project::denseGenerationSettingsFromJson(json);
+    const auto config = xjw::core::project::buildDepthGenConfig(settings, 16);
 
     EXPECT_EQ(config.targetedGapRecoverySourceCount, 8);
     EXPECT_EQ(config.targetedGapRecoveryHypothesisCount, 3);
@@ -9587,8 +9552,8 @@ TEST(DenseWorkflowConfigTest, ExplicitThreadBudgetIsNotCappedAtSeven)
     json[QStringLiteral("threads")] = 8;
     json[QStringLiteral("cuda")] = true;
 
-    const auto settings = xjw::gui::project::denseGenerationSettingsFromJson(json);
-    const auto config = xjw::gui::project::buildDepthGenConfig(settings, 16);
+    const auto settings = xjw::core::project::denseGenerationSettingsFromJson(json);
+    const auto config = xjw::core::project::buildDepthGenConfig(settings, 16);
     const int hardware_threads = static_cast<int>(
         std::max(1u, std::thread::hardware_concurrency()));
     const int expected_threads = std::min(8, hardware_threads);
@@ -9617,8 +9582,8 @@ TEST(DenseWorkflowConfigTest, CpuThreadBudgetIsSharedWithinSelectedBackendFamily
     json[QStringLiteral("gpu_frame_workers")] = 2;
     json[QStringLiteral("cpu_frame_workers")] = 2;
 
-    const auto settings = xjw::gui::project::denseGenerationSettingsFromJson(json);
-    const auto config = xjw::gui::project::buildDepthGenConfig(settings, 16);
+    const auto settings = xjw::core::project::denseGenerationSettingsFromJson(json);
+    const auto config = xjw::core::project::buildDepthGenConfig(settings, 16);
     const int hardware_threads = static_cast<int>(
         std::max(1u, std::thread::hardware_concurrency()));
     const int expected_threads = std::min(8, hardware_threads);
@@ -9631,14 +9596,14 @@ TEST(DenseWorkflowConfigTest, CpuThreadBudgetIsSharedWithinSelectedBackendFamily
 
 TEST(DenseWorkflowConfigTest, MissingThreadSettingReservesTwoLogicalProcessors)
 {
-    const auto settings = xjw::gui::project::denseGenerationSettingsFromJson(
+    const auto settings = xjw::core::project::denseGenerationSettingsFromJson(
         QJsonObject{});
     const int hardware_threads = static_cast<int>(
         std::max(1u, std::thread::hardware_concurrency()));
     const int expected_threads = std::max(1, hardware_threads - 2);
 
     EXPECT_EQ(settings.threads, expected_threads);
-    const auto config = xjw::gui::project::buildDepthGenConfig(settings, 16);
+    const auto config = xjw::core::project::buildDepthGenConfig(settings, 16);
     EXPECT_EQ(config.totalCpuThreadBudget, expected_threads);
 }
 
