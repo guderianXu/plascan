@@ -103,7 +103,7 @@ bool invertRegularizedPointInformation(
 }
 
 bool pointProjectionJacobian(
-    const Camera &camera,
+    const FramePinholeCamera &camera,
     const double *cameraPoint,
     double x,
     double y,
@@ -116,7 +116,7 @@ bool pointProjectionJacobian(
     {
         return false;
     }
-    const Camera::Distortion distortion = camera.distortion();
+    const FramePinholeCamera::Distortion distortion = camera.distortion();
     const double r2 = x * x + y * y;
     const double r4 = r2 * r2;
     const double radial = 1.0 + distortion.radialK1 * r2 +
@@ -480,7 +480,7 @@ std::string adaptiveCameraModelName(const BAIntrinsicParameterMask &mask)
 }
 
 BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
-    const std::vector<Camera> &cameras,
+    const std::vector<FramePinholeCamera> &cameras,
     const std::vector<BATrack> &tracks,
     const BAOptions *options)
 {
@@ -538,7 +538,7 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
             for (const int groupId : groupIds)
             {
                 std::vector<int> cameraRemap(cameras.size(), -1);
-                std::vector<Camera> groupCameras;
+                std::vector<FramePinholeCamera> groupCameras;
                 for (std::size_t cameraIndex = 0;
                      cameraIndex < cameras.size();
                      ++cameraIndex)
@@ -611,14 +611,14 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
         }
     }
 
-    std::vector<Camera> normalizedCameras;
+    std::vector<FramePinholeCamera> normalizedCameras;
     normalizedCameras.reserve(cameras.size());
     std::vector<double> focalSamples;
     focalSamples.reserve(cameras.size());
     int validCameraCount = 0;
-    for (const Camera &sourceCamera : cameras)
+    for (const FramePinholeCamera &sourceCamera : cameras)
     {
-        const Camera camera = sourceCamera.normalizedForPositiveDepth();
+        const FramePinholeCamera camera = sourceCamera.normalizedForPositiveDepth();
         normalizedCameras.push_back(camera);
         if (!camera.isValid() || !std::isfinite(camera.focalX()) ||
             !std::isfinite(camera.focalY()) || camera.focalX() <= 1.0e-9 ||
@@ -683,7 +683,7 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
             {
                 continue;
             }
-            const Camera &camera = normalizedCameras[
+            const FramePinholeCamera &camera = normalizedCameras[
                 static_cast<std::size_t>(observation.cameraIndex)];
             double pixel[2] = {0.0, 0.0};
             if (!camera.isValid() ||
@@ -734,7 +734,7 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
             {
                 continue;
             }
-            const Camera &camera = normalizedCameras[
+            const FramePinholeCamera &camera = normalizedCameras[
                 static_cast<std::size_t>(observation.cameraIndex)];
             if (!camera.isValid() || camera.focalX() <= 1.0e-9 ||
                 camera.focalY() <= 1.0e-9)
@@ -759,7 +759,7 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
             {
                 continue;
             }
-            const Camera::Distortion distortion = camera.distortion();
+            const FramePinholeCamera::Distortion distortion = camera.distortion();
             const double r4 = r2 * r2;
             const double r6 = r4 * r2;
             const double radial = 1.0 + distortion.radialK1 * r2 +
@@ -1324,8 +1324,8 @@ bool applyAdaptiveCameraModel(
 }
 
 bool restoreInactiveAdaptiveIntrinsics(
-    std::vector<Camera> *cameras,
-    const std::vector<Camera> &stableReferences,
+    std::vector<FramePinholeCamera> *cameras,
+    const std::vector<FramePinholeCamera> &stableReferences,
     const BAIntrinsicParameterMask &activeMask)
 {
     if (!cameras || cameras->size() != stableReferences.size())
@@ -1338,10 +1338,10 @@ bool restoreInactiveAdaptiveIntrinsics(
     };
     for (std::size_t index = 0; index < cameras->size(); ++index)
     {
-        Camera &camera = (*cameras)[index];
-        const Camera &reference = stableReferences[index];
-        const Camera::Intrinsics currentIntrinsics = camera.intrinsics();
-        const Camera::Intrinsics referenceIntrinsics = reference.intrinsics();
+        FramePinholeCamera &camera = (*cameras)[index];
+        const FramePinholeCamera &reference = stableReferences[index];
+        const FramePinholeCamera::Intrinsics currentIntrinsics = camera.intrinsics();
+        const FramePinholeCamera::Intrinsics referenceIntrinsics = reference.intrinsics();
 
         const double focalX = active(BAIntrinsicParameter::FocalLength)
             ? currentIntrinsics.focalX
@@ -1370,8 +1370,8 @@ bool restoreInactiveAdaptiveIntrinsics(
             : referenceIntrinsics.principalY;
         camera.setIntrinsics(focalX, focalY, principalX, principalY);
 
-        Camera::Distortion distortion = camera.distortion();
-        const Camera::Distortion referenceDistortion = reference.distortion();
+        FramePinholeCamera::Distortion distortion = camera.distortion();
+        const FramePinholeCamera::Distortion referenceDistortion = reference.distortion();
         if (!active(BAIntrinsicParameter::RadialK1))
         {
             distortion.radialK1 = referenceDistortion.radialK1;

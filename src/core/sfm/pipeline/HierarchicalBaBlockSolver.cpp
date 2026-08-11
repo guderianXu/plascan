@@ -29,7 +29,7 @@ BlockOutcome solveBlock(std::size_t block_index,
     const std::unordered_set<ImageId> overlap_ids(
         block.overlapImageIds.begin(), block.overlapImageIds.end());
     std::unordered_map<ImageId, int> camera_index;
-    std::vector<Camera> cameras;
+    std::vector<FramePinholeCamera> cameras;
     cameras.reserve(outcome.cameraIds.size());
     for (ImageId image_id : outcome.cameraIds)
     {

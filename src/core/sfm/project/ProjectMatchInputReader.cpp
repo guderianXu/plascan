@@ -238,7 +238,7 @@ bool readProjectMatchInput(const QJsonObject &meta,
             continue;
         }
 
-        xjw::Camera camera;
+        xjw::FramePinholeCamera camera;
         if (!xjw::common::project::cameraFromJson(
                 object.value(QStringLiteral("camera")).toObject(), &camera))
         {

@@ -98,6 +98,22 @@ TEST(ProjectCommonModuleContractTest, DeletedGuiProjectIoDirectoryIsNotAnInclude
     EXPECT_FALSE(buildDefinitions.contains(QStringLiteral("src/gui/project/io")));
 }
 
+TEST(CameraModelContractTest, LegacyCameraClassIsRemoved)
+{
+    EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/camera/Camera.h")));
+    EXPECT_FALSE(sourceFileExists(QStringLiteral("src/core/camera/Camera.cpp")));
+
+    const QString frameCameraHeader =
+        readSourceFile(QStringLiteral("src/core/camera/FramePinholeCamera.h"));
+    expectContainsAll(frameCameraHeader, {
+        "class FramePinholeCamera final : public CameraModel",
+        "struct Intrinsics",
+        "struct Distortion",
+        "struct Pose",
+    });
+    EXPECT_FALSE(frameCameraHeader.contains(QStringLiteral("using Camera =")));
+}
+
 TEST(GuiStyleContractTest, WorkspaceTreeUsesApplicationColorsInsteadOfSystemPalette)
 {
     const QString treeSource =
@@ -1059,8 +1075,8 @@ TEST(MvsDepthArtifactContractTest, OptionalTargetedRecoveryMaskIsCheckedBeforeRe
 
 TEST(MvsSchedulerContractTest, SparseHintsUseProjectedSamplesAndPrescaledPatchMatchInputs)
 {
-    const QString cameraHeader = readSourceFile(QStringLiteral("src/core/camera/Camera.h"));
-    const QString cameraSource = readSourceFile(QStringLiteral("src/core/camera/Camera.cpp"));
+    const QString cameraHeader = readSourceFile(QStringLiteral("src/core/camera/FramePinholeCamera.h"));
+    const QString cameraSource = readSourceFile(QStringLiteral("src/core/camera/FramePinholeCamera.cpp"));
     const QString header = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.h"));
     const QString scheduler = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
     const QString pyramid = readSourceFile(QStringLiteral("src/core/mvs/DepthPyramidEstimator.cpp"));
@@ -1126,7 +1142,7 @@ TEST(MvsSchedulerContractTest, SparseHintsUseProjectedSamplesAndPrescaledPatchMa
 
     expectContainsAll(cameraHeader, {"projectWorldPointWithDepth"});
     expectContainsAll(cameraSource, {
-        "Camera::projectWorldPointWithDepth",
+        "FramePinholeCamera::projectWorldPointWithDepth",
         "worldToCameraFromCameraToWorldPose(world, camera_point)",
         "applyTsaiDistortion(",
     });

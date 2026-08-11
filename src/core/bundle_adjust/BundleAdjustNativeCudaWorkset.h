@@ -31,7 +31,7 @@ struct WorksetBuildResult
  * 轨迹至少需要两个正权重有效观测且来自两台不同相机。零权重、非有限权重、
  * 非有限坐标和越界相机观测都会被跳过。
  */
-WorksetBuildResult buildWorkset(const std::vector<Camera> &cameras,
+WorksetBuildResult buildWorkset(const std::vector<FramePinholeCamera> &cameras,
                                 const std::vector<BATrack> &tracks,
                                 const BAOptions &options);
 

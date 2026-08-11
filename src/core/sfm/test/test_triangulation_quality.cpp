@@ -6,13 +6,13 @@
 
 TEST(TriangulationQualityTest, ComputesMinimumCameraRayAngle)
 {
-    xjw::Camera left;
+    xjw::FramePinholeCamera left;
     left.setIntrinsics(100.0, 100.0, 0.0, 0.0);
     left.setPose({1.0, 0.0, 0.0,
                   0.0, 1.0, 0.0,
                   0.0, 0.0, 1.0},
                  {-1.0, 0.0, 0.0});
-    xjw::Camera right = left;
+    xjw::FramePinholeCamera right = left;
     right.setCameraCenter({1.0, 0.0, 0.0});
 
     xjw::BATrack track;
@@ -27,7 +27,7 @@ TEST(TriangulationQualityTest, ComputesMinimumCameraRayAngle)
 
 TEST(TriangulationQualityTest, ComputesPairRmsReprojectionError)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(100.0, 100.0, 0.0, 0.0);
     camera.setPose({1.0, 0.0, 0.0,
                     0.0, 1.0, 0.0,

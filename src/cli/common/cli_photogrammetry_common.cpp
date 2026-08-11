@@ -504,9 +504,9 @@ QStringList cameraPathsForService(const std::vector<PhotogrammetryInputItem> &it
     return paths;
 }
 
-QMap<QString, xjw::Camera> referenceCameraMap(const std::vector<PhotogrammetryInputItem> &items)
+QMap<QString, xjw::FramePinholeCamera> referenceCameraMap(const std::vector<PhotogrammetryInputItem> &items)
 {
-    QMap<QString, xjw::Camera> cameras;
+    QMap<QString, xjw::FramePinholeCamera> cameras;
     for (const PhotogrammetryInputItem &item : items)
     {
         if (!item.hasLoadedCamera || !item.camera.isValid())
@@ -519,7 +519,7 @@ QMap<QString, xjw::Camera> referenceCameraMap(const std::vector<PhotogrammetryIn
     return cameras;
 }
 
-QJsonObject cameraToJson(const xjw::Camera &camera)
+QJsonObject cameraToJson(const xjw::FramePinholeCamera &camera)
 {
     QJsonObject object;
     if (!camera.isValid())

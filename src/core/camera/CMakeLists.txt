@@ -1,8 +1,8 @@
-# 生产静态库：Camera/Tsai I/O、坐标归一化和外部格式转换器。
+# 生产静态库：面阵/线阵相机、Tsai I/O、坐标归一化和外部格式转换器。
 add_library(camera STATIC
 	CameraModel.cpp
-	Camera.cpp
 	FramePinholeCamera.cpp
+	FramePinholeCameraModel.cpp
 	PlanetaryLineScanCamera.cpp
 	PlanetaryLineScanCameraIsd.cpp
 	PlanetaryLineScanProjection.cpp
@@ -28,9 +28,9 @@ if(BUILD_TESTS)
 	find_package(GTest QUIET)
 	if(GTest_FOUND)
 		include(GoogleTest)
-		# 纯合成内参与投影测试；include 指向模块根以保持 #include "Camera.h" 稳定。
+		# 纯合成内参与投影测试；include 指向模块根以保持公共相机头路径稳定。
 		add_executable(test_camera_unit
-			test/Camera_tests.cpp
+			test/FramePinholeCamera_tests.cpp
 			test/CameraModel_tests.cpp
 		)
 		target_link_libraries(test_camera_unit PRIVATE

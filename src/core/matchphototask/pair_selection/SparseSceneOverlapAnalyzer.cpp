@@ -144,9 +144,9 @@ std::vector<int> projectionSampleIndices(const std::vector<SparsePoint> &points,
     return sampled;
 }
 
-std::array<double, 3> normalizedViewingDirection(const Camera &source)
+std::array<double, 3> normalizedViewingDirection(const FramePinholeCamera &source)
 {
-    const Camera camera = source.normalizedForPositiveDepth();
+    const FramePinholeCamera camera = source.normalizedForPositiveDepth();
     const auto rotation = camera.cameraToWorldRotation();
     std::array<double, 3> direction{{rotation[2], rotation[5], rotation[8]}};
     const double norm = std::hypot(direction[0], direction[1], direction[2]);

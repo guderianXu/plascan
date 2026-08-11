@@ -1,6 +1,6 @@
 #include "DepthMapMeshBuilder.h"
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "DepthFrameUtils.h"
 #include "VisualHullReconstructor.h"
 #include "io/PathIO.h"
@@ -75,7 +75,7 @@ bool parseDoubleArray(const QJsonValue &value, double *output, int count)
     return true;
 }
 
-bool parseCameraModel(const QJsonObject &object, Camera *camera)
+bool parseCameraModel(const QJsonObject &object, FramePinholeCamera *camera)
 {
     if (!camera || object.isEmpty())
     {
@@ -105,13 +105,13 @@ bool parseCameraModel(const QJsonObject &object, Camera *camera)
         worldToCamera[1], worldToCamera[4], worldToCamera[7],
         worldToCamera[2], worldToCamera[5], worldToCamera[8]
     }};
-    Camera parsed;
+    FramePinholeCamera parsed;
     parsed.setIntrinsics(focalX,
                          focalY,
                          object.value(QStringLiteral("cx")).toDouble(),
                          object.value(QStringLiteral("cy")).toDouble());
     parsed.setPose(cameraToWorld, center);
-    parsed.setDistortion(Camera::Distortion{});
+    parsed.setDistortion(FramePinholeCamera::Distortion{});
     *camera = parsed;
     return true;
 }
@@ -214,13 +214,13 @@ void attachLegacyReportCameras(const QDir &directory, QVector<DepthFrameArtifact
         {
             continue;
         }
-        Camera camera;
+        FramePinholeCamera camera;
         if (!camera.loadFromFile(xjw::common::io::toUtf8Path(it->second)))
         {
             continue;
         }
-        Camera model = camera.normalizedForPositiveDepth();
-        model.setDistortion(Camera::Distortion{});
+        FramePinholeCamera model = camera.normalizedForPositiveDepth();
+        model.setDistortion(FramePinholeCamera::Distortion{});
         const cv::Mat image = xjw::common::io::readImage(
             xjw::common::io::toUtf8Path(frame.refImage), cv::IMREAD_GRAYSCALE);
         if (!image.empty() && frame.gridWidth > 0 && frame.gridHeight > 0 &&

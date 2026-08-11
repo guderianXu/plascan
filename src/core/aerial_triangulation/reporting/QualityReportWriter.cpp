@@ -183,7 +183,7 @@ CollectedSparseQuality collectSparseQuality(const SfmReconstruction &reconstruct
             if (reconstruction.hasCamera(element.imageId))
             {
                 double projected[2]{};
-                const Camera &camera = reconstruction.camera(element.imageId);
+                const FramePinholeCamera &camera = reconstruction.camera(element.imageId);
                 const bool projectedOk = camera.projectWorldPoint(point.xyz.data(), projected) ||
                     camera.projectWorldPointSigned(point.xyz.data(), projected);
                 if (projectedOk && std::isfinite(projected[0]) && std::isfinite(projected[1]))

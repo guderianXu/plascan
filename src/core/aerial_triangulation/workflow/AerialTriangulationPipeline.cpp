@@ -212,7 +212,7 @@ AerialBlockGeometry evaluateAerialBlockGeometry(const SfmReconstruction &reconst
     std::array<double, 3> meanAxis{{0.0, 0.0, 0.0}};
     for (const ImageId imageId : imageIds)
     {
-        const Camera camera = reconstruction.camera(imageId).normalizedForPositiveDepth();
+        const FramePinholeCamera camera = reconstruction.camera(imageId).normalizedForPositiveDepth();
         const auto center = camera.cameraCenter();
         const auto rotation = camera.cameraToWorldRotation();
         for (int axis = 0; axis < 3; ++axis)
@@ -274,7 +274,7 @@ bool hasAbsoluteGeometryConstraint(
 /**
  * @brief 判断每张影像是否都有可直接使用的可信内参。
  *
- * 独立相机文件优先；工程内参必须带可信来源且能反序列化为有效 Camera。
+ * 独立相机文件优先；工程内参必须带可信来源且能反序列化为有效 FramePinholeCamera。
  * 由上一次 SfM 写回的 intrinsic_source=sfm_estimated 不作为新一轮初始化真值。
  */
 bool hasCompleteExternalCameraFiles(const PreparedAerialTriangulationInput &input)
@@ -286,7 +286,7 @@ bool hasCompleteExternalCameraFiles(const PreparedAerialTriangulationInput &inpu
             {
                 return false;
             }
-            Camera camera;
+            FramePinholeCamera camera;
             return camera.loadFromFile(xjw::common::io::toUtf8Path(path)) &&
                    camera.isValid();
         });
@@ -317,7 +317,7 @@ bool hasCompleteCameraIntrinsicPrior(
         }
         const QJsonObject cameraObject =
             metadata.value().value(QStringLiteral("camera")).toObject();
-        Camera camera;
+        FramePinholeCamera camera;
         if (!isTrustedProjectCameraIntrinsic(cameraObject) ||
             !xjw::common::project::cameraFromJson(cameraObject, &camera) ||
             !camera.isValid())
@@ -354,7 +354,7 @@ bool hasCompleteKnownCameraPosePrior(
         }
         const QJsonObject cameraObject =
             metadata.value().value(QStringLiteral("camera")).toObject();
-        Camera camera;
+        FramePinholeCamera camera;
         if (cameraObject.value(
                 QStringLiteral("pose_initialized_as_identity")).toBool(false) ||
             !xjw::common::project::cameraFromJson(cameraObject, &camera) ||

@@ -4,7 +4,7 @@
 //
 //         本服务负责将光束法平差的纯算法逻辑与 GUI 层（ProjectManager）解耦。
 //         调用方（ProjectManager）负责：
-//           1. 从项目元数据中加载相机参数 → xjw::Camera 列表
+//           1. 从项目元数据中加载相机参数 → xjw::FramePinholeCamera 列表
 //           2. 从 sidecar JSON 匹配文件构建 BA 轨迹 → xjw::BATrack 列表
 //           3. 调用 BundleAdjustService::run() 执行平差
 //           4. 将返回的 pendingCamUpdates 通过 ProjectData 写回项目
@@ -15,7 +15,7 @@
 #pragma once
 
 #include "BundleAdjust.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "PlanetaryLaserJson.h"
 #include "quality/MarkerQualityReport.h"
 
@@ -157,7 +157,7 @@ public:
     // @param opts      平差选项（见 BaServiceOptions 各字段说明）
     // @return          BaServiceResult（含平差结果 JSON 与待提交相机参数）
     static BaServiceResult run(
-        const std::vector<xjw::Camera>&  cameras,
+        const std::vector<xjw::FramePinholeCamera>&  cameras,
         std::vector<xjw::BATrack>&       tracks,
         const BaServiceOptions&          opts
     );

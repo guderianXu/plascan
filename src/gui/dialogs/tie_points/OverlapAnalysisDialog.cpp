@@ -96,7 +96,7 @@ void OverlapAnalysisDialog::browseDemPath()
 // runAnalysis: 执行影像重叠度分析的主逻辑
 // 流程：
 //   1. 从项目元数据获取影像列表
-//   2. 遍历界面上勾选的影像，解析 Camera 参数
+//   2. 遍历界面上勾选的影像，解析 FramePinholeCamera 参数
 //   3. （可选）加载 DEM XYZ 文件或使用固定高程值
 //   4. 调用 OverlapAnalyzer::analyze 计算两两影像重叠评分
 //   5. 将结果填入 _resultTable 表格
@@ -125,7 +125,7 @@ void OverlapAnalysisDialog::runAnalysis()
             continue;
         }
 
-        xjw::Camera cam;
+        xjw::FramePinholeCamera cam;
         if (!xjw::common::project::imageCameraFromEntry(imageMetaByPath.value(path), &cam))
         {
             continue;

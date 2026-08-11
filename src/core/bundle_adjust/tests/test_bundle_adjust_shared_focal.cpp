@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "BundleAdjust.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 #include <array>
 #include <cmath>
@@ -11,9 +11,9 @@
 namespace
 {
 
-xjw::Camera makeCamera(double cx, double cy, double cz, double focal)
+xjw::FramePinholeCamera makeCamera(double cx, double cy, double cz, double focal)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(focal, focal, 512.0, 384.0);
     camera.setPose({{1.0, 0.0, 0.0,
                      0.0, 1.0, 0.0,
@@ -22,7 +22,7 @@ xjw::Camera makeCamera(double cx, double cy, double cz, double focal)
     return camera;
 }
 
-xjw::Camera makeCameraWithIntrinsics(double cameraX,
+xjw::FramePinholeCamera makeCameraWithIntrinsics(double cameraX,
                                      double cameraY,
                                      double cameraZ,
                                      double focalX,
@@ -30,12 +30,12 @@ xjw::Camera makeCameraWithIntrinsics(double cameraX,
                                      double principalX,
                                      double principalY)
 {
-    xjw::Camera camera = makeCamera(cameraX, cameraY, cameraZ, focalX);
+    xjw::FramePinholeCamera camera = makeCamera(cameraX, cameraY, cameraZ, focalX);
     camera.setIntrinsics(focalX, focalY, principalX, principalY);
     return camera;
 }
 
-bool projectPoint(const xjw::Camera &camera,
+bool projectPoint(const xjw::FramePinholeCamera &camera,
                   const std::array<double, 3> &point,
                   double *u,
                   double *v)
@@ -51,7 +51,7 @@ bool projectPoint(const xjw::Camera &camera,
     return true;
 }
 
-xjw::BATrack makeTrack(const std::vector<xjw::Camera> &truthCameras,
+xjw::BATrack makeTrack(const std::vector<xjw::FramePinholeCamera> &truthCameras,
                        const std::array<double, 3> &truth)
 {
     xjw::BATrack track;
@@ -69,7 +69,7 @@ xjw::BATrack makeTrack(const std::vector<xjw::Camera> &truthCameras,
     return track;
 }
 
-std::vector<xjw::BATrack> makeSharedFocalTracks(const std::vector<xjw::Camera> &truthCameras)
+std::vector<xjw::BATrack> makeSharedFocalTracks(const std::vector<xjw::FramePinholeCamera> &truthCameras)
 {
     std::vector<xjw::BATrack> tracks;
     for (int y = 0; y < 5; ++y)
@@ -92,7 +92,7 @@ std::vector<xjw::BATrack> makeSharedFocalTracks(const std::vector<xjw::Camera> &
 }
 
 std::vector<xjw::BATrack> makeWideCalibrationTracks(
-    const std::vector<xjw::Camera> &truthCameras)
+    const std::vector<xjw::FramePinholeCamera> &truthCameras)
 {
     std::vector<xjw::BATrack> tracks;
     for (int y = -6; y <= 6; ++y)
@@ -118,13 +118,13 @@ std::vector<xjw::BATrack> makeWideCalibrationTracks(
 
 TEST(BundleAdjustSharedFocalTest, SharedFocalRefinementImprovesWrongNoCameraInitialFocal)
 {
-    const std::vector<xjw::Camera> truthCameras{
+    const std::vector<xjw::FramePinholeCamera> truthCameras{
         makeCamera(-2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, -2.0, 0.0, 1500.0),
         makeCamera(2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, 2.0, 0.0, 1500.0),
     };
-    const std::vector<xjw::Camera> initialCameras{
+    const std::vector<xjw::FramePinholeCamera> initialCameras{
         makeCamera(-2.0, 0.0, 0.0, 900.0),
         makeCamera(0.0, -2.0, 0.0, 900.0),
         makeCamera(2.0, 0.0, 0.0, 900.0),
@@ -164,13 +164,13 @@ TEST(BundleAdjustSharedFocalTest, CeresJointlyRefinesSharedFocalAndPoints)
         GTEST_SKIP() << "Ceres CPU backend is not available";
     }
 
-    const std::vector<xjw::Camera> truthCameras{
+    const std::vector<xjw::FramePinholeCamera> truthCameras{
         makeCamera(-2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, -2.0, 0.0, 1500.0),
         makeCamera(2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, 2.0, 0.0, 1500.0),
     };
-    const std::vector<xjw::Camera> initialCameras{
+    const std::vector<xjw::FramePinholeCamera> initialCameras{
         makeCamera(-2.0, 0.0, 0.0, 900.0),
         makeCamera(0.0, -2.0, 0.0, 900.0),
         makeCamera(2.0, 0.0, 0.0, 900.0),
@@ -209,13 +209,13 @@ TEST(BundleAdjustSharedFocalTest, CeresUsesOneAbsoluteFocalForHeterogeneousInput
         GTEST_SKIP() << "Ceres CPU backend is not available";
     }
 
-    const std::vector<xjw::Camera> truthCameras{
+    const std::vector<xjw::FramePinholeCamera> truthCameras{
         makeCamera(-2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, -2.0, 0.0, 1500.0),
         makeCamera(2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, 2.0, 0.0, 1500.0),
     };
-    const std::vector<xjw::Camera> initialCameras{
+    const std::vector<xjw::FramePinholeCamera> initialCameras{
         makeCamera(-2.0, 0.0, 0.0, 800.0),
         makeCamera(0.0, -2.0, 0.0, 900.0),
         makeCamera(2.0, 0.0, 0.0, 1000.0),
@@ -245,7 +245,7 @@ TEST(BundleAdjustSharedFocalTest, CeresUsesOneAbsoluteFocalForHeterogeneousInput
     const double refinedFocal = result.refinedCameras.front().focalX();
     EXPECT_GT(refinedFocal, 1200.0);
     EXPECT_LT(refinedFocal, 1700.0);
-    for (const xjw::Camera &camera : result.refinedCameras)
+    for (const xjw::FramePinholeCamera &camera : result.refinedCameras)
     {
         EXPECT_NEAR(camera.focalX(), refinedFocal, 1e-6);
     }
@@ -291,13 +291,13 @@ TEST(BundleAdjustSharedFocalTest, CeresRefinesIndependentCalibrationGroups)
         GTEST_SKIP() << "Ceres CPU backend is not available";
     }
 
-    const std::vector<xjw::Camera> truthCameras{
+    const std::vector<xjw::FramePinholeCamera> truthCameras{
         makeCamera(-2.0, 0.0, 0.0, 1200.0),
         makeCamera(0.0, -2.0, 0.0, 1200.0),
         makeCamera(2.0, 0.0, 0.0, 1800.0),
         makeCamera(0.0, 2.0, 0.0, 1800.0),
     };
-    const std::vector<xjw::Camera> initialCameras{
+    const std::vector<xjw::FramePinholeCamera> initialCameras{
         makeCamera(-2.0, 0.0, 0.0, 900.0),
         makeCamera(0.0, -2.0, 0.0, 900.0),
         makeCamera(2.0, 0.0, 0.0, 900.0),
@@ -344,13 +344,13 @@ TEST(BundleAdjustSharedFocalTest, StagedSelfCalibrationReportsTwoSolveStages)
         GTEST_SKIP() << "Ceres CPU backend is not available";
     }
 
-    const std::vector<xjw::Camera> truthCameras{
+    const std::vector<xjw::FramePinholeCamera> truthCameras{
         makeCamera(-2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, -2.0, 0.0, 1500.0),
         makeCamera(2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, 2.0, 0.0, 1500.0),
     };
-    const std::vector<xjw::Camera> initialCameras{
+    const std::vector<xjw::FramePinholeCamera> initialCameras{
         makeCamera(-2.0, 0.0, 0.0, 900.0),
         makeCamera(0.0, -2.0, 0.0, 900.0),
         makeCamera(2.0, 0.0, 0.0, 900.0),
@@ -379,7 +379,7 @@ TEST(BundleAdjustSharedFocalTest, StagedSelfCalibrationReportsTwoSolveStages)
 
 TEST(BundleAdjustSharedFocalTest, RejectsCalibrationGroupCountMismatch)
 {
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-1.0, 0.0, 0.0, 900.0),
         makeCamera(1.0, 0.0, 0.0, 900.0),
     };
@@ -406,13 +406,13 @@ TEST(BundleAdjustSharedFocalTest, CeresRecoversBoundedSharedPinholeIntrinsics)
         GTEST_SKIP() << "Ceres CPU backend is not available";
     }
 
-    const std::vector<xjw::Camera> truthCameras{
+    const std::vector<xjw::FramePinholeCamera> truthCameras{
         makeCameraWithIntrinsics(-2.0, 0.0, 0.0, 1500.0, 1530.0, 485.0, 420.0),
         makeCameraWithIntrinsics(0.0, -2.0, 0.0, 1500.0, 1530.0, 485.0, 420.0),
         makeCameraWithIntrinsics(2.0, 0.0, 0.0, 1500.0, 1530.0, 485.0, 420.0),
         makeCameraWithIntrinsics(0.0, 2.0, 0.0, 1500.0, 1530.0, 485.0, 420.0),
     };
-    const std::vector<xjw::Camera> initialCameras{
+    const std::vector<xjw::FramePinholeCamera> initialCameras{
         makeCameraWithIntrinsics(-2.0, 0.0, 0.0, 1400.0, 1400.0, 512.0, 384.0),
         makeCameraWithIntrinsics(0.0, -2.0, 0.0, 1400.0, 1400.0, 512.0, 384.0),
         makeCameraWithIntrinsics(2.0, 0.0, 0.0, 1400.0, 1400.0, 512.0, 384.0),
@@ -446,7 +446,7 @@ TEST(BundleAdjustSharedFocalTest, CeresRecoversBoundedSharedPinholeIntrinsics)
 
     ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
     ASSERT_EQ(result.refinedCameras.size(), initialCameras.size());
-    const xjw::Camera &camera = result.refinedCameras.front();
+    const xjw::FramePinholeCamera &camera = result.refinedCameras.front();
     EXPECT_NEAR(camera.focalX(), 1500.0, 15.0);
     EXPECT_NEAR(camera.focalY(), 1530.0, 20.0);
     EXPECT_NEAR(camera.principalX(), 485.0, 8.0);
@@ -458,7 +458,7 @@ TEST(BundleAdjustSharedFocalTest, CeresRecoversBoundedSharedPinholeIntrinsics)
 
 TEST(BundleAdjustSharedFocalTest, RejectsPrincipalPointRefinementWithoutSharedFocal)
 {
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-1.0, 0.0, 0.0, 900.0),
         makeCamera(1.0, 0.0, 0.0, 900.0),
     };
@@ -484,17 +484,17 @@ TEST(BundleAdjustSharedFocalTest, CeresRecoversBoundedSharedBrownConradyDistorti
         GTEST_SKIP() << "Ceres CPU backend is not available";
     }
 
-    std::vector<xjw::Camera> truthCameras{
+    std::vector<xjw::FramePinholeCamera> truthCameras{
         makeCamera(-2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, -2.0, 0.0, 1500.0),
         makeCamera(2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, 2.0, 0.0, 1500.0),
     };
-    for (xjw::Camera &camera : truthCameras)
+    for (xjw::FramePinholeCamera &camera : truthCameras)
     {
         camera.setDistortion(-0.12, 0.035, 0.08, 0.003, -0.002);
     }
-    const std::vector<xjw::Camera> initialCameras{
+    const std::vector<xjw::FramePinholeCamera> initialCameras{
         makeCamera(-2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, -2.0, 0.0, 1500.0),
         makeCamera(2.0, 0.0, 0.0, 1500.0),
@@ -531,7 +531,7 @@ TEST(BundleAdjustSharedFocalTest, CeresRecoversBoundedSharedBrownConradyDistorti
     ASSERT_EQ(result.usedBackend, xjw::BABackend::CeresCpu) << result.backendMessage;
     EXPECT_EQ(result.selfCalibrationStagesRun, 3);
     ASSERT_FALSE(result.refinedCameras.empty());
-    const xjw::Camera::Distortion distortion =
+    const xjw::FramePinholeCamera::Distortion distortion =
         result.refinedCameras.front().distortion();
     EXPECT_NEAR(distortion.radialK1, -0.12, 0.02);
     EXPECT_NEAR(distortion.radialK2, 0.035, 0.03);
@@ -551,23 +551,23 @@ TEST(BundleAdjustSharedFocalTest, CeresLowOrderModeKeepsHighOrderDistortionFixed
         GTEST_SKIP() << "Ceres CPU backend is not available";
     }
 
-    std::vector<xjw::Camera> truthCameras{
+    std::vector<xjw::FramePinholeCamera> truthCameras{
         makeCamera(-2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, -2.0, 0.0, 1500.0),
         makeCamera(2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, 2.0, 0.0, 1500.0),
     };
-    for (xjw::Camera &camera : truthCameras)
+    for (xjw::FramePinholeCamera &camera : truthCameras)
     {
         camera.setDistortion(-0.10, 0.0, 0.0, 0.0, 0.0);
     }
-    std::vector<xjw::Camera> initialCameras{
+    std::vector<xjw::FramePinholeCamera> initialCameras{
         makeCamera(-2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, -2.0, 0.0, 1500.0),
         makeCamera(2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, 2.0, 0.0, 1500.0),
     };
-    for (xjw::Camera &camera : initialCameras)
+    for (xjw::FramePinholeCamera &camera : initialCameras)
     {
         camera.setDistortion(0.0, 0.012, -0.018, 0.001, -0.002);
     }
@@ -592,7 +592,7 @@ TEST(BundleAdjustSharedFocalTest, CeresLowOrderModeKeepsHighOrderDistortionFixed
 
     ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
     ASSERT_FALSE(result.refinedCameras.empty());
-    const xjw::Camera::Distortion distortion =
+    const xjw::FramePinholeCamera::Distortion distortion =
         result.refinedCameras.front().distortion();
     EXPECT_NEAR(distortion.radialK1, -0.10, 0.02);
     EXPECT_DOUBLE_EQ(distortion.radialK2, 0.012);
@@ -604,13 +604,13 @@ TEST(BundleAdjustSharedFocalTest, CeresLowOrderModeKeepsHighOrderDistortionFixed
 
 TEST(BundleAdjustSharedFocalTest, LegacyRespectsDisabledFocalParameterMask)
 {
-    const std::vector<xjw::Camera> truthCameras{
+    const std::vector<xjw::FramePinholeCamera> truthCameras{
         makeCamera(-2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, -2.0, 0.0, 1500.0),
         makeCamera(2.0, 0.0, 0.0, 1500.0),
         makeCamera(0.0, 2.0, 0.0, 1500.0),
     };
-    const std::vector<xjw::Camera> initialCameras{
+    const std::vector<xjw::FramePinholeCamera> initialCameras{
         makeCamera(-2.0, 0.0, 0.0, 900.0),
         makeCamera(0.0, -2.0, 0.0, 900.0),
         makeCamera(2.0, 0.0, 0.0, 900.0),
@@ -647,14 +647,14 @@ TEST(BundleAdjustSharedFocalTest, LegacyRespectsDisabledFocalParameterMask)
 
 TEST(BundleAdjustSharedFocalTest, LegacyProjectsWarmStartIntoStableFocalBounds)
 {
-    const std::vector<xjw::Camera> referenceCameras{
+    const std::vector<xjw::FramePinholeCamera> referenceCameras{
         makeCamera(-2.0, 0.0, 0.0, 1000.0),
         makeCamera(0.0, -2.0, 0.0, 1000.0),
         makeCamera(2.0, 0.0, 0.0, 1000.0),
         makeCamera(0.0, 2.0, 0.0, 1000.0),
     };
-    std::vector<xjw::Camera> warmCameras = referenceCameras;
-    for (xjw::Camera &camera : warmCameras)
+    std::vector<xjw::FramePinholeCamera> warmCameras = referenceCameras;
+    for (xjw::FramePinholeCamera &camera : warmCameras)
     {
         camera.setIntrinsics(1200.0, 900.0, 512.0, 384.0);
     }
@@ -677,7 +677,7 @@ TEST(BundleAdjustSharedFocalTest, LegacyProjectsWarmStartIntoStableFocalBounds)
     ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
     ASSERT_EQ(result.refinedCameras.size(), warmCameras.size());
     EXPECT_NEAR(result.refinedSharedFocalScale, 1.05, 1.0e-12);
-    for (const xjw::Camera &camera : result.refinedCameras)
+    for (const xjw::FramePinholeCamera &camera : result.refinedCameras)
     {
         EXPECT_NEAR(camera.focalX(), 1050.0, 1.0e-8);
         EXPECT_NEAR(camera.focalY(), 787.5, 1.0e-8);
@@ -686,7 +686,7 @@ TEST(BundleAdjustSharedFocalTest, LegacyProjectsWarmStartIntoStableFocalBounds)
 
 TEST(BundleAdjustSharedFocalTest, LegacyRejectsMultipleCalibrationGroups)
 {
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-2.0, 0.0, 0.0, 1000.0),
         makeCamera(0.0, -2.0, 0.0, 1000.0),
         makeCamera(2.0, 0.0, 0.0, 1200.0),
@@ -718,7 +718,7 @@ TEST(BundleAdjustSharedFocalTest,
         GTEST_SKIP() << "Ceres CPU backend is not available";
     }
 
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-2.0, 0.0, 0.0, 1000.0),
         makeCamera(0.0, -2.0, 0.0, 1000.0),
         makeCamera(2.0, 0.0, 0.0, 1200.0),
@@ -753,7 +753,7 @@ TEST(BundleAdjustSharedFocalTest,
         GTEST_SKIP() << "Ceres CPU backend is not available";
     }
 
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-2.0, 0.0, 0.0, 1000.0),
         makeCamera(0.0, -2.0, 0.0, 1000.0),
         makeCamera(2.0, 0.0, 0.0, 1000.0),

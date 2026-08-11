@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "graph/CorrespondenceGraph.h"
 #include "reconstruction/SfmReconstruction.h"
 #include "tracks/CorrespondenceTrackThinner.h"
@@ -10,9 +10,9 @@
 namespace
 {
 
-xjw::Camera makeCamera(double cx, double cy, double cz)
+xjw::FramePinholeCamera makeCamera(double cx, double cy, double cz)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(1200.0, 1200.0, 512.0, 384.0);
     const std::array<double, 9> rotation = {1.0, 0.0, 0.0,
                                             0.0, 1.0, 0.0,
@@ -22,7 +22,7 @@ xjw::Camera makeCamera(double cx, double cy, double cz)
     return camera;
 }
 
-xjw::FeatureKeypoint projectPoint(const xjw::Camera &camera, const std::array<double, 3> &xyz)
+xjw::FeatureKeypoint projectPoint(const xjw::FramePinholeCamera &camera, const std::array<double, 3> &xyz)
 {
     const double worldPoint[3] = {xyz[0], xyz[1], xyz[2]};
     double projected[2] = {0.0, 0.0};
@@ -322,9 +322,9 @@ TEST(MultiViewTrackBuilderTest, ExcludesStationaryTracksWhenEnabled)
 
 TEST(KnownPoseMultiViewTriangulationTest, CreatesSingleThreeViewTrack)
 {
-    const xjw::Camera camera0 = makeCamera(0.0, 0.0, 0.0);
-    const xjw::Camera camera1 = makeCamera(8.0, 0.0, 0.0);
-    const xjw::Camera camera2 = makeCamera(16.0, 0.0, 0.0);
+    const xjw::FramePinholeCamera camera0 = makeCamera(0.0, 0.0, 0.0);
+    const xjw::FramePinholeCamera camera1 = makeCamera(8.0, 0.0, 0.0);
+    const xjw::FramePinholeCamera camera2 = makeCamera(16.0, 0.0, 0.0);
     const std::array<double, 3> xyz = {4.0, 0.5, 40.0};
 
     xjw::SfmReconstruction reconstruction;
@@ -368,14 +368,14 @@ TEST(KnownPoseMultiViewTriangulationTest, CreatesSingleThreeViewTrack)
 
 TEST(KnownPoseMultiViewTriangulationTest, SplitsGeometryInconsistentComponent)
 {
-    const xjw::Camera camera0 = makeCamera(0.0, 0.0, 0.0);
-    const xjw::Camera camera1 = makeCamera(8.0, 0.0, 0.0);
-    const xjw::Camera camera2 = makeCamera(80.0, 0.0, 0.0);
-    const xjw::Camera camera3 = makeCamera(88.0, 0.0, 0.0);
+    const xjw::FramePinholeCamera camera0 = makeCamera(0.0, 0.0, 0.0);
+    const xjw::FramePinholeCamera camera1 = makeCamera(8.0, 0.0, 0.0);
+    const xjw::FramePinholeCamera camera2 = makeCamera(80.0, 0.0, 0.0);
+    const xjw::FramePinholeCamera camera3 = makeCamera(88.0, 0.0, 0.0);
     const std::array<double, 3> leftPoint = {4.0, 0.5, 40.0};
     const std::array<double, 3> rightPoint = {84.0, -0.5, 40.0};
 
-    const std::vector<xjw::Camera> cameras{camera0, camera1, camera2, camera3};
+    const std::vector<xjw::FramePinholeCamera> cameras{camera0, camera1, camera2, camera3};
 
     xjw::SfmReconstruction reconstruction;
     for (xjw::ImageId imageId = 0; imageId < static_cast<xjw::ImageId>(cameras.size()); ++imageId)
@@ -418,10 +418,10 @@ TEST(KnownPoseMultiViewTriangulationTest, SplitsGeometryInconsistentComponent)
 
 TEST(KnownPoseMultiViewTriangulationTest, RefinesNoisyThreeViewTrackBeforeRejectingObservation)
 {
-    const xjw::Camera camera0 = makeCamera(0.0, 0.0, 0.0);
-    const xjw::Camera camera1 = makeCamera(8.0, 0.0, 0.0);
-    const xjw::Camera camera2 = makeCamera(16.0, 0.0, 0.0);
-    const std::vector<xjw::Camera> cameras{camera0, camera1, camera2};
+    const xjw::FramePinholeCamera camera0 = makeCamera(0.0, 0.0, 0.0);
+    const xjw::FramePinholeCamera camera1 = makeCamera(8.0, 0.0, 0.0);
+    const xjw::FramePinholeCamera camera2 = makeCamera(16.0, 0.0, 0.0);
+    const std::vector<xjw::FramePinholeCamera> cameras{camera0, camera1, camera2};
     const std::vector<xjw::FeatureKeypoint> observations{
         {632.324869f, 398.877649f},
         {391.894366f, 398.785406f},
@@ -475,7 +475,7 @@ TEST(KnownPoseMultiViewTriangulationTest, ConsistentLongTrackUsesSingleMultiview
 
     for (xjw::ImageId imageId = 0; imageId < kImageCount; ++imageId)
     {
-        const xjw::Camera camera = makeCamera(static_cast<double>(imageId), 0.0, 0.0);
+        const xjw::FramePinholeCamera camera = makeCamera(static_cast<double>(imageId), 0.0, 0.0);
         xjw::ImageData image;
         image.id = imageId;
         image.keypoints.push_back(projectPoint(camera, xyz));
@@ -503,8 +503,8 @@ TEST(KnownPoseMultiViewTriangulationTest, ConsistentLongTrackUsesSingleMultiview
 
 TEST(IncrementalTriangulationTest, DoesNotReuseObservationOwnedByExistingPoint)
 {
-    const xjw::Camera camera0 = makeCamera(0.0, 0.0, 0.0);
-    const xjw::Camera camera1 = makeCamera(8.0, 0.0, 0.0);
+    const xjw::FramePinholeCamera camera0 = makeCamera(0.0, 0.0, 0.0);
+    const xjw::FramePinholeCamera camera1 = makeCamera(8.0, 0.0, 0.0);
     const std::array<double, 3> existingPoint = {0.5, 0.2, 40.0};
     const std::array<double, 3> differentPoint = {6.0, 2.0, 35.0};
 

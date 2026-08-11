@@ -33,7 +33,7 @@ buildPointCloud(const std::vector<DensePoint> &cloud);
 std::vector<DensePoint> DenseCloudBuilder::unproject(
     const cv::Mat                 &depth,
     const cv::Mat                 &mask,
-    const Camera                   &cam,
+    const FramePinholeCamera                   &cam,
     const cv::Mat                 &colorImg,
     const DenseCloudOptions &options)
 {

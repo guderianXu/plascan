@@ -2,7 +2,7 @@
  * @file BundleAdjustCeres.cpp
  * @brief Ceres 联合相机、三维点和可选标定组共享内参 BA 后端。
  *
- * 公共 Camera 使用 camera-to-world 旋转 Rcw 和世界系中心 C；Ceres 参数块内部
+ * 公共 FramePinholeCamera 使用 camera-to-world 旋转 Rcw 和世界系中心 C；Ceres 参数块内部
  * 转换为 angle-axis world-to-camera 加平移。每条像点观测形成二维残差块，点和
  * 相机的稀疏耦合由 Schur 求解器处理。求解结果返回前仍经过与其他后端一致的
  * 正深度、轨迹有效率和 RMS 质量门控。
@@ -283,7 +283,7 @@ struct LaserPlaneResidual
 
 struct LaserRangeResidual
 {
-    Camera camera;
+    FramePinholeCamera camera;
     BALaserRangeConstraint constraint;
     double sqrtWeight = 1.0;
 
@@ -413,7 +413,7 @@ struct ScaleBarResidual
 
 struct PosePriorResidual
 {
-    Camera camera;
+    FramePinholeCamera camera;
     BACameraPosePrior prior;
     double weight = 1.0;
 
@@ -489,7 +489,7 @@ struct PosePriorResidual
 
 struct CameraPlaneResidual
 {
-    Camera camera;
+    FramePinholeCamera camera;
     std::array<double, 3> point;
     std::array<double, 3> normal;
     double referenceSignedDistance = 0.0;
@@ -672,7 +672,7 @@ bool isCeresCudaBackendCompiled()
 #endif
 }
 
-BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
+BAResult optimizePointsWithCeres(const std::vector<FramePinholeCamera> &cameras,
                                  const std::vector<BATrack> &tracks,
                                  const BAOptions &options,
                                  bool requestGpu)
@@ -680,7 +680,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
     BAResult result;
     result.totalTracks = static_cast<int>(tracks.size());
     result.refinedCameras = cameras;
-    const std::vector<Camera> &intrinsicReferenceCameras =
+    const std::vector<FramePinholeCamera> &intrinsicReferenceCameras =
         options.sharedIntrinsicReferenceCameras.empty()
             ? cameras
             : options.sharedIntrinsicReferenceCameras;
@@ -902,7 +902,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
     // 在创建残差前一次性填满缓存，后续不再改变容量；Problem 比缓存晚声明，
     // 因而残差持有的指针在求解和 Problem 析构期间始终有效。
     projectionCameras.reserve(cameras.size());
-    for (const Camera &camera : cameras)
+    for (const FramePinholeCamera &camera : cameras)
     {
         projectionCameras.push_back(xjw::ba::makeProjectionCamera(camera));
     }
@@ -962,7 +962,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
          cameraIndex < projectionCameras.size();
          ++cameraIndex)
     {
-        const Camera::Intrinsics reference =
+        const FramePinholeCamera::Intrinsics reference =
             intrinsicReferenceCameras[cameraIndex].intrinsics();
         if (activeSharedIntrinsicParameters[static_cast<std::size_t>(
                 BAIntrinsicParameter::PrincipalPointX)])
@@ -1008,11 +1008,11 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
     std::vector<IntrinsicGroupSamples> referenceSamplesByGroup(
         groupIdToParameterIndex.size());
     const auto appendAbsoluteSamples = [](
-        const Camera &camera,
+        const FramePinholeCamera &camera,
         IntrinsicGroupSamples *samples)
     {
-        const Camera::Intrinsics intrinsics = camera.intrinsics();
-        const Camera::Distortion distortion = camera.distortion();
+        const FramePinholeCamera::Intrinsics intrinsics = camera.intrinsics();
+        const FramePinholeCamera::Distortion distortion = camera.distortion();
         if (std::isfinite(intrinsics.focalX) && intrinsics.focalX > 0.0)
         {
             samples->focal.push_back(intrinsics.focalX);
@@ -1057,8 +1057,8 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         appendAbsoluteSamples(cameras[cameraIndex], &initialSamples);
         appendAbsoluteSamples(
             intrinsicReferenceCameras[cameraIndex], &referenceSamples);
-        const Camera::Intrinsics initial = cameras[cameraIndex].intrinsics();
-        const Camera::Intrinsics reference =
+        const FramePinholeCamera::Intrinsics initial = cameras[cameraIndex].intrinsics();
+        const FramePinholeCamera::Intrinsics reference =
             intrinsicReferenceCameras[cameraIndex].intrinsics();
         if (std::isfinite(initial.principalX) &&
             std::isfinite(reference.principalX))
@@ -2035,7 +2035,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                              : BASolveStatus::Success;
     result.solutionUsable = true;
 
-    // 阶段 5：把局部参数解码回 PlaScan Camera/BARefinedPoint。随后必须调用统一
+    // 阶段 5：把局部参数解码回 PlaScan FramePinholeCamera/BARefinedPoint。随后必须调用统一
     // 终结器重算正深度和 RMS，Ceres 的 solution usable 不能替代摄影测量质量检查。
     double focalScaleSum = 0.0;
     double aspectScaleSum = 0.0;
@@ -2053,13 +2053,13 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         result.refinedCameras[ci].applyDeltaPose(cameraDeltas[ci].data());
         if (refineSharedIntrinsics)
         {
-            const Camera::Intrinsics intrinsics = result.refinedCameras[ci].intrinsics();
-            const Camera::Intrinsics referenceIntrinsics =
+            const FramePinholeCamera::Intrinsics intrinsics = result.refinedCameras[ci].intrinsics();
+            const FramePinholeCamera::Intrinsics referenceIntrinsics =
                 intrinsicReferenceCameras[ci].intrinsics();
             const size_t groupIndex =
                 static_cast<size_t>(calibrationParameterByCamera[ci]);
             const auto &parameters = sharedIntrinsicsParameters[groupIndex];
-            const Camera::Distortion sourceDistortion =
+            const FramePinholeCamera::Distortion sourceDistortion =
                 result.refinedCameras[ci].distortion();
             const double focalPixels =
                 activeSharedIntrinsicParameters[static_cast<std::size_t>(
@@ -2124,7 +2124,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                 focalPixels * focalAspect,
                 principalX,
                 principalY);
-            Camera::Distortion distortion = sourceDistortion;
+            FramePinholeCamera::Distortion distortion = sourceDistortion;
             distortion.radialK1 = radialK1;
             distortion.radialK2 = radialK2;
             distortion.radialK3 = radialK3;

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "DemDomTypes.h"
 #include "OrthoGenerationOptions.h"
 
@@ -22,7 +22,7 @@ struct OrthoImageInput
     QString imageId;
     QString imagePath;
     QString exclusionMaskPath;
-    Camera camera;
+    FramePinholeCamera camera;
 };
 
 struct OrthoOutputGrid

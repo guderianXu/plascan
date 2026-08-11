@@ -43,7 +43,7 @@ float edge(float ax, float ay, float bx, float by, float px, float py)
 
 bool projectTriangle(const xjw::mesh::TriMesh &mesh,
                      const xjw::mesh::Triangle &face,
-                     const xjw::Camera &camera,
+                     const xjw::FramePinholeCamera &camera,
                      const cv::Size &image_size,
                      ProjectedTriangle *projected)
 {
@@ -119,7 +119,7 @@ std::uint8_t colorByte(float value)
 
 ModelRenderResult ModelMeshRenderer::render(
     const xjw::mesh::TriMesh &mesh,
-    const xjw::Camera &camera,
+    const xjw::FramePinholeCamera &camera,
     const cv::Size &imageSize) const
 {
     ModelRenderResult result;

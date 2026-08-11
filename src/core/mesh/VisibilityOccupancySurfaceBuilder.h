@@ -1,7 +1,7 @@
 #pragma once
 
 #include "BinaryGridMinCutSolver.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 #include <opencv2/core/mat.hpp>
 
@@ -16,7 +16,7 @@ namespace xjw::mesh
 
 struct VisibilityOccupancyFrameView
 {
-    const Camera *camera = nullptr;
+    const FramePinholeCamera *camera = nullptr;
     const cv::Mat *depth = nullptr;
     const cv::Mat *confidence = nullptr;
     const cv::Mat *depthValidMask = nullptr;

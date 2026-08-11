@@ -9,7 +9,7 @@
 
 #include <gtest/gtest.h>
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "CameraFormatConverter.h"
 
 #include <filesystem>
@@ -94,7 +94,7 @@ TEST(CameraFormatConverterTest, MiddleburyParConvertsToTsaiAndImageCameraList)
     EXPECT_NE(lis.find("dinoSR0001.png cameras/dinoSR0001.tsai"), std::string::npos);
     EXPECT_NE(lis.find("dinoSR0002.png cameras/dinoSR0002.tsai"), std::string::npos);
 
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     ASSERT_TRUE(camera.loadFromFile((options.outputDir / "cameras" / "dinoSR0001.tsai").string()));
     EXPECT_DOUBLE_EQ(camera.focalX(), 120.0);
     EXPECT_DOUBLE_EQ(camera.focalY(), 130.0);
@@ -156,7 +156,7 @@ TEST(CameraFormatConverterTest, EpflCameraConvertsWithSkewWarning)
     ASSERT_FALSE(result.warnings.empty());
     EXPECT_NE(result.warnings.front().find("skew"), std::string::npos);
 
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     ASSERT_TRUE(camera.loadFromFile((options.outputDir / "cameras" / "rdimage.000.ppm.tsai").string()));
     EXPECT_DOUBLE_EQ(camera.focalX(), 3954.75);
     EXPECT_DOUBLE_EQ(camera.focalY(), 3948.0);
@@ -216,7 +216,7 @@ TEST(CameraFormatConverterTest, ColmapTextConvertsSiblingImagesToTsaiAndImageCam
     EXPECT_NE(lis.find("../south-building/images/P1180141.JPG cameras/P1180141.tsai"), std::string::npos);
     EXPECT_NE(lis.find("../south-building/images/P1180142.JPG cameras/P1180142.tsai"), std::string::npos);
 
-    xjw::Camera first;
+    xjw::FramePinholeCamera first;
     ASSERT_TRUE(first.loadFromFile((options.outputDir / "cameras" / "P1180141.tsai").string()));
     EXPECT_DOUBLE_EQ(first.focalX(), 2559.68);
     EXPECT_DOUBLE_EQ(first.focalY(), 2559.68);
@@ -228,7 +228,7 @@ TEST(CameraFormatConverterTest, ColmapTextConvertsSiblingImagesToTsaiAndImageCam
     EXPECT_DOUBLE_EQ(firstCenter[1], -20.0);
     EXPECT_DOUBLE_EQ(firstCenter[2], -30.0);
 
-    xjw::Camera second;
+    xjw::FramePinholeCamera second;
     ASSERT_TRUE(second.loadFromFile((options.outputDir / "cameras" / "P1180142.tsai").string()));
     EXPECT_DOUBLE_EQ(second.focalX(), 2600.0);
     EXPECT_DOUBLE_EQ(second.focalY(), 2610.0);
@@ -356,7 +356,7 @@ TEST(CameraFormatConverterTest, MetashapeXmlConvertsDepthImagesProject)
     EXPECT_NE(lis.find("../depth_images/Depthimages/AERIAL_f001_002.JPG cameras/AERIAL_f001_002.tsai"),
               std::string::npos);
 
-    xjw::Camera first;
+    xjw::FramePinholeCamera first;
     ASSERT_TRUE(first.loadFromFile((options.outputDir / "cameras" / "IMG_0001.tsai").string()));
     EXPECT_DOUBLE_EQ(first.focalX(), 500.0);
     EXPECT_DOUBLE_EQ(first.focalY(), 500.0);
@@ -374,7 +374,7 @@ TEST(CameraFormatConverterTest, MetashapeXmlConvertsDepthImagesProject)
     EXPECT_DOUBLE_EQ(firstCenter[1], 2.0);
     EXPECT_DOUBLE_EQ(firstCenter[2], 3.0);
 
-    xjw::Camera second;
+    xjw::FramePinholeCamera second;
     ASSERT_TRUE(second.loadFromFile((options.outputDir / "cameras" / "IMG_0002.tsai").string()));
     const auto secondCenter = second.cameraCenter();
     EXPECT_DOUBLE_EQ(secondCenter[0], 4.0);

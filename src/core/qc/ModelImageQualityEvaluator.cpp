@@ -67,8 +67,8 @@ QString csvEscaped(QString value)
     return value;
 }
 
-xjw::Camera scaledCamera(
-    const xjw::Camera &camera,
+xjw::FramePinholeCamera scaledCamera(
+    const xjw::FramePinholeCamera &camera,
     double scale_x,
     double scale_y)
 {
@@ -925,7 +925,7 @@ ModelImageQualityResult ModelImageQualityEvaluator::evaluate(
             ? validation.cameraWidth : original_size.width;
         const int camera_height = validation.cameraHeight > 0
             ? validation.cameraHeight : original_size.height;
-        const xjw::Camera camera = scaledCamera(
+        const xjw::FramePinholeCamera camera = scaledCamera(
             validation.camera,
             static_cast<double>(render_size.width) / static_cast<double>(camera_width),
             static_cast<double>(render_size.height) / static_cast<double>(camera_height));

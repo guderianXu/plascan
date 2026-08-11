@@ -13,9 +13,9 @@ namespace xjw
 namespace mvs
 {
 
-static cv::Mat buildK(const Camera &camera)
+static cv::Mat buildK(const FramePinholeCamera &camera)
 {
-    const Camera::Intrinsics intrinsics = camera.intrinsics();
+    const FramePinholeCamera::Intrinsics intrinsics = camera.intrinsics();
     cv::Mat K = cv::Mat::eye(3, 3, CV_64F);
     K.at<double>(0, 0) = intrinsics.focalX;
     K.at<double>(0, 2) = intrinsics.principalX;
@@ -24,7 +24,7 @@ static cv::Mat buildK(const Camera &camera)
     return K;
 }
 
-static cv::Mat buildRcw(const Camera &camera)
+static cv::Mat buildRcw(const FramePinholeCamera &camera)
 {
     const std::array<double, 9> rotation = camera.worldToCameraRotation();
     cv::Mat R(3, 3, CV_64F);
@@ -35,7 +35,7 @@ static cv::Mat buildRcw(const Camera &camera)
     return R;
 }
 
-static cv::Mat buildT(const Camera &camera)
+static cv::Mat buildT(const FramePinholeCamera &camera)
 {
     const std::array<double, 3> translation = camera.worldToCameraTranslation();
     cv::Mat t(3, 1, CV_64F);
@@ -58,9 +58,9 @@ static std::array<double, 9> toArray9(const cv::Mat &matrix)
     return values;
 }
 
-static bool hasLensDistortion(const Camera &camera)
+static bool hasLensDistortion(const FramePinholeCamera &camera)
 {
-    const Camera::Distortion distortion = camera.distortion();
+    const FramePinholeCamera::Distortion distortion = camera.distortion();
     constexpr double epsilon = 1e-15;
     return std::fabs(distortion.radialK1) > epsilon
         || std::fabs(distortion.radialK2) > epsilon
@@ -69,24 +69,24 @@ static bool hasLensDistortion(const Camera &camera)
         || std::fabs(distortion.tangentialP2) > epsilon;
 }
 
-static Camera cameraFromWorldToCamera(const Camera &source,
+static FramePinholeCamera cameraFromWorldToCamera(const FramePinholeCamera &source,
                                      const cv::Mat &rotationWorldToCamera,
                                      double focalX,
                                      double focalY,
                                      double principalX,
                                      double principalY)
 {
-    Camera result;
+    FramePinholeCamera result;
     result.setIntrinsics(focalX, focalY, principalX, principalY);
     result.setPixelPitch(source.pixelPitch());
     result.setPose(toArray9(rotationWorldToCamera.t()), source.cameraCenter());
     result.setAxisDirections(1, 1);
     result.setDepthAxisFlipped(false);
-    result.setDistortion(Camera::Distortion{});
+    result.setDistortion(FramePinholeCamera::Distortion{});
     return result;
 }
 
-static Camera buildRectifiedCamera(const Camera &source,
+static FramePinholeCamera buildRectifiedCamera(const FramePinholeCamera &source,
                                    const cv::Mat &rectRotation,
                                    const cv::Mat &projection)
 {
@@ -100,14 +100,14 @@ static Camera buildRectifiedCamera(const Camera &source,
                                    projection.at<double>(1, 2));
 }
 
-static Camera transposeRectifiedCamera(const Camera &source)
+static FramePinholeCamera transposeRectifiedCamera(const FramePinholeCamera &source)
 {
     cv::Mat rotation = buildRcw(source);
     for (int column = 0; column < 3; ++column)
     {
         std::swap(rotation.at<double>(0, column), rotation.at<double>(1, column));
     }
-    const Camera::Intrinsics intrinsics = source.intrinsics();
+    const FramePinholeCamera::Intrinsics intrinsics = source.intrinsics();
     return cameraFromWorldToCamera(source,
                                    rotation,
                                    intrinsics.focalY,
@@ -119,8 +119,8 @@ static Camera transposeRectifiedCamera(const Camera &source)
 bool EpipolarRectifier::rectify(
     const cv::Mat &imgLeft,
     const cv::Mat &imgRight,
-    const Camera &camLeft,
-    const Camera &camRight,
+    const FramePinholeCamera &camLeft,
+    const FramePinholeCamera &camRight,
     RectifiedPair &result,
     std::string *errorMsg)
 {
@@ -148,7 +148,7 @@ bool EpipolarRectifier::rectify(
     if (camLeft.uAxisSign() != 1 || camLeft.vAxisSign() != 1 || camLeft.depthAxisFlipped()
         || camRight.uAxisSign() != 1 || camRight.vAxisSign() != 1 || camRight.depthAxisFlipped())
     {
-        if (errorMsg) *errorMsg = "极线校正要求正深度规范化 Camera";
+        if (errorMsg) *errorMsg = "极线校正要求正深度规范化 FramePinholeCamera";
         return false;
     }
 

@@ -33,8 +33,8 @@ void rememberObservation(std::map<IndexedFeatureKey, IndexedObservation> *observ
                           IndexedObservation{cameraIndex, pixel});
 }
 
-std::array<double, 3> midpointBetweenCameras(const xjw::Camera &cameraA,
-                                             const xjw::Camera &cameraB)
+std::array<double, 3> midpointBetweenCameras(const xjw::FramePinholeCamera &cameraA,
+                                             const xjw::FramePinholeCamera &cameraB)
 {
     const auto centerA = cameraA.cameraCenter();
     const auto centerB = cameraB.cameraCenter();
@@ -46,7 +46,7 @@ std::array<double, 3> midpointBetweenCameras(const xjw::Camera &cameraA,
 xjw::BATrack makeBaTrackFromIndexedTrack(
     const xjw::Track &track,
     const std::map<IndexedFeatureKey, IndexedObservation> &observationsByIndexedFeature,
-    const std::vector<xjw::Camera> &cameras)
+    const std::vector<xjw::FramePinholeCamera> &cameras)
 {
     xjw::BATrack baTrack;
     std::vector<IndexedObservation> observations;
@@ -130,9 +130,9 @@ void appendBaTracks(const ProjectMatchInput &input, BaInputBuildResult *result)
     std::map<IndexedFeatureKey, IndexedObservation> observationsByIndexedFeature;
     for (const ProjectMatchPair &pair : input.pairs)
     {
-        const xjw::Camera &cameraA = input.cameras.at(
+        const xjw::FramePinholeCamera &cameraA = input.cameras.at(
             static_cast<std::size_t>(pair.cameraIndexA));
-        const xjw::Camera &cameraB = input.cameras.at(
+        const xjw::FramePinholeCamera &cameraB = input.cameras.at(
             static_cast<std::size_t>(pair.cameraIndexB));
 
         if (pair.indexed)

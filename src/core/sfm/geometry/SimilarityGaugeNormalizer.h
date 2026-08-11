@@ -10,7 +10,7 @@
  */
 
 #include "BundleAdjust.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 #include <string>
 #include <vector>
@@ -32,10 +32,10 @@ struct SimilarityGaugeNormalizationResult
  * 做同一尺度变换。相机旋转和内参保持不变，因此不会改变重投影几何。
  */
 SimilarityGaugeNormalizationResult normalizeSimilarityGauge(
-    const std::vector<Camera> &referenceCameras,
+    const std::vector<FramePinholeCamera> &referenceCameras,
     int anchorCameraIndex,
     int scaleCameraIndex,
-    std::vector<Camera> *refinedCameras,
+    std::vector<FramePinholeCamera> *refinedCameras,
     std::vector<BARefinedPoint> *refinedPoints);
 
 } // namespace xjw

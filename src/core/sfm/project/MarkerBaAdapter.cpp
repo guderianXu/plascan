@@ -26,7 +26,7 @@ int cameraIndexForMarkerProjection(const control_points::MarkerProjection &proje
 }
 
 bool triangulateMarkerTrack(const xjw::BATrack &track,
-                            const std::vector<xjw::Camera> &cameras,
+                            const std::vector<xjw::FramePinholeCamera> &cameras,
                             std::array<double, 3> *point)
 {
     if (!point)
@@ -165,7 +165,7 @@ void appendMarkerBaInput(const MarkerBaInput *input,
     }
     const control_points::SimilarityTransform3D &transform =
         result->markerControlNetwork.transform;
-    for (xjw::Camera &camera : result->cameras)
+    for (xjw::FramePinholeCamera &camera : result->cameras)
     {
         camera.setPose(transform.rotate(camera.cameraToWorldRotation()),
                        transform.apply(camera.cameraCenter()));

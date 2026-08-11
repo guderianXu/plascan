@@ -19,7 +19,7 @@
 namespace xjw::detail::native_cuda
 {
 
-/// 将世界点投影到像素；相机外参采用 Rcw/C，与公共 Camera 约定一致。
+/// 将世界点投影到像素；相机外参采用 Rcw/C，与公共 FramePinholeCamera 约定一致。
 __device__ inline bool projectDevice(const DeviceCamera &camera, const double point[3], double pixel[2])
 {
     const double dx = point[0] - camera.cameraCenter[0];

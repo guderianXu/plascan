@@ -16,7 +16,7 @@ class QTabWidget;
 class DualImageViewer;
 
 namespace xjw {
-class Camera;
+class FramePinholeCamera;
 }
 
 class ForwardIntersectionCheckDialog : public QDialog
@@ -42,7 +42,7 @@ private:
     void setupUi();
     void loadImagesWithCamera();
     bool collectAutoPointPairs(QVector<QPointF> *pts1, QVector<QPointF> *pts2, QString *sourceInfo);
-    bool buildCameraFromImageMeta(const QJsonObject &imgObj, xjw::Camera *cam, QString *errorMsg) const;
+    bool buildCameraFromImageMeta(const QJsonObject &imgObj, xjw::FramePinholeCamera *cam, QString *errorMsg) const;
     QJsonObject findImageMetaByPath(const QString &imagePath) const;
     void refreshViewer(bool reloadImages);
     void refreshPairTable();

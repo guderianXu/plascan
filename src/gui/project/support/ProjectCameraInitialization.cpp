@@ -218,7 +218,7 @@ QJsonObject makeInitializedCameraMeta(double fx,
                                       const QString &distortionModel,
                                       const QSize &imageSize)
 {
-    xjw::Camera cam;
+    xjw::FramePinholeCamera cam;
     cam.setPose(std::array<double, 9>{1,0,0,0,1,0,0,0,1}, std::array<double, 3>{0,0,0});
     cam.setIntrinsics(fx, fy, cx, cy);
     cam.setAxisDirections(1, 1);

@@ -134,7 +134,7 @@ double vectorNorm(const std::array<double, 3> &value)
     return std::sqrt(value[0] * value[0] + value[1] * value[1] + value[2] * value[2]);
 }
 
-const Camera *referenceCameraForImage(const QMap<QString, Camera> &cameras,
+const FramePinholeCamera *referenceCameraForImage(const QMap<QString, FramePinholeCamera> &cameras,
                                       const QString &image)
 {
     const auto direct = cameras.constFind(image);
@@ -156,7 +156,7 @@ const Camera *referenceCameraForImage(const QMap<QString, Camera> &cameras,
 
 ClosedSequenceEvidence detectEstimatedClosedSequence(
     const QStringList &images,
-    const QMap<QString, Camera> &referenceCameras)
+    const QMap<QString, FramePinholeCamera> &referenceCameras)
 {
     ClosedSequenceEvidence evidence;
     if (images.size() < 6 || referenceCameras.size() < images.size())
@@ -172,12 +172,12 @@ ClosedSequenceEvidence detectEstimatedClosedSequence(
     std::array<double, 3> meanAxis{};
     for (const QString &image : images)
     {
-        const Camera *referenceCamera = referenceCameraForImage(referenceCameras, image);
+        const FramePinholeCamera *referenceCamera = referenceCameraForImage(referenceCameras, image);
         if (!referenceCamera || !referenceCamera->isValid())
         {
             return evidence;
         }
-        const Camera camera = referenceCamera->normalizedForPositiveDepth();
+        const FramePinholeCamera camera = referenceCamera->normalizedForPositiveDepth();
         const auto center = camera.cameraCenter();
         const auto rotation = camera.cameraToWorldRotation();
         const std::array<double, 3> axis{{rotation[2], rotation[5], rotation[8]}};

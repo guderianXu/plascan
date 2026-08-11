@@ -19,9 +19,9 @@ cv::Matx33d rotationZ(double angle)
         0.0, 0.0, 1.0);
 }
 
-xjw::Camera makeCamera(double center_z)
+xjw::FramePinholeCamera makeCamera(double center_z)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(80.0, 80.0, 31.5, 31.5);
     camera.setPose(
         std::array<double, 9>{
@@ -316,14 +316,14 @@ TEST(DepthPoseRefinementStageTest, ProjectionCoverageGateCanVetoOptimizerCandida
 
 TEST(DepthPoseRefinementStageTest, DerivedCameraPreservesCorrectedCameraCoordinates)
 {
-    xjw::Camera camera = makeCamera(0.0);
+    xjw::FramePinholeCamera camera = makeCamera(0.0);
     camera.setCameraCenter(std::array<double, 3>{0.3, -0.2, 0.5});
     xjw::mvs::DepthPoseAlignmentCorrection correction;
     correction.accepted = true;
     correction.pivotWorld = cv::Vec3d(0.1, 0.2, -0.3);
     correction.rotation = rotationZ(0.12);
     correction.translation = cv::Vec3d(0.02, -0.01, 0.03);
-    const xjw::Camera derived =
+    const xjw::FramePinholeCamera derived =
         xjw::mvs::DepthPoseRefinementStage::deriveCameraCandidate(
             camera, correction);
 

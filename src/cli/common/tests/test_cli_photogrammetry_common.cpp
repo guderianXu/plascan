@@ -11,9 +11,9 @@ namespace
 
 using xjw::cli::parsePhotogrammetryListLine;
 
-xjw::Camera makeFinalCamera(double centerX)
+xjw::FramePinholeCamera makeFinalCamera(double centerX)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(900.0, 905.0, 320.0, 240.0);
     camera.setPixelPitch(0.01);
     camera.setPose({1.0, 0.0, 0.0,

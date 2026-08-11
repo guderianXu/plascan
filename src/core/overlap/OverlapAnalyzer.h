@@ -78,7 +78,7 @@ struct OverlapImageInput
     std::string imagePath;
 
     // 该影像对应的相机标定参数（内参 + 外参）
-    Camera camera;
+    FramePinholeCamera camera;
 
     // 影像宽度（像素），用于计算中心像素坐标及四角坐标
     int width = 0;

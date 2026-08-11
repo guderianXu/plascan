@@ -48,7 +48,7 @@ QVector<CameraSceneWidget::CameraPose> cameraPosesFromImages(const QJsonArray &i
     for (const QJsonValue &value : images)
     {
         const QJsonObject imageObject = value.toObject();
-        xjw::Camera camera;
+        xjw::FramePinholeCamera camera;
         if (!xjw::common::project::imageCameraFromEntry(imageObject, &camera))
         {
             continue;
@@ -56,7 +56,7 @@ QVector<CameraSceneWidget::CameraPose> cameraPosesFromImages(const QJsonArray &i
 
         const std::array<double, 3> cameraCenter = camera.cameraCenter();
         const std::array<double, 9> cameraToWorldRotation = camera.cameraToWorldRotation();
-        const xjw::Camera::Intrinsics intrinsics = camera.intrinsics();
+        const xjw::FramePinholeCamera::Intrinsics intrinsics = camera.intrinsics();
         const QJsonObject cameraObject = imageObject.value(QStringLiteral("camera")).toObject();
 
         CameraSceneWidget::CameraPose pose;

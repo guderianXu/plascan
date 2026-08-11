@@ -41,7 +41,7 @@ std::array<double, 3> cross(
         lhs[0] * rhs[1] - lhs[1] * rhs[0]};
 }
 
-xjw::Camera makeLookAtCamera(const std::array<double, 3> &center)
+xjw::FramePinholeCamera makeLookAtCamera(const std::array<double, 3> &center)
 {
     const std::array<double, 3> forward =
         normalize({-center[0], -center[1], -center[2]});
@@ -65,7 +65,7 @@ xjw::Camera makeLookAtCamera(const std::array<double, 3> &center)
         }
     }
 
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(80.0, 80.0, 32.0, 32.0);
     camera.setPose(camera_to_world, center);
     return camera;
@@ -73,7 +73,7 @@ xjw::Camera makeLookAtCamera(const std::array<double, 3> &center)
 
 struct SyntheticFrame
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     cv::Mat depth;
     cv::Mat confidence;
     cv::Mat valid;

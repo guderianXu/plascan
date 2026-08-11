@@ -37,7 +37,7 @@
 #include "Logger.h"
 #include "filtering/SparsePointCloudProcessor.h"
 #include "FileDialogStateManager.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "Intersection.h"
 #include "BundleAdjust.h"
 #include "LaserConstraintMap.h"
@@ -2777,13 +2777,13 @@ bool ProjectManager::clearImageCameras(const QStringList &imagePaths,
     return _projectData->clearImageCameras(imagePaths, updatedCount, errorMsg);
 }
 
-QMap<QString, xjw::Camera> ProjectManager::getCamerasForImages(
+QMap<QString, xjw::FramePinholeCamera> ProjectManager::getCamerasForImages(
         const QStringList &images,
         bool *hasCamerasForAll) const
 {
     if (hasCamerasForAll) *hasCamerasForAll = true;
 
-    QMap<QString, xjw::Camera> result;
+    QMap<QString, xjw::FramePinholeCamera> result;
     if (!_projectData)
     {
         if (hasCamerasForAll) *hasCamerasForAll = false;
@@ -2804,7 +2804,7 @@ QMap<QString, xjw::Camera> ProjectManager::getCamerasForImages(
             continue;
         }
 
-        xjw::Camera cam;
+        xjw::FramePinholeCamera cam;
         if (!xjw::common::project::imageCameraFromEntry(imageMeta, &cam))
         {
             if (hasCamerasForAll) *hasCamerasForAll = false;

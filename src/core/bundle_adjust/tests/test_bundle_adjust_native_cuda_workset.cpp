@@ -9,9 +9,9 @@
 namespace
 {
 
-xjw::Camera makeCamera(double cx = 0.0)
+xjw::FramePinholeCamera makeCamera(double cx = 0.0)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(1000.0, 1000.0, 320.0, 240.0);
     camera.setPose({{1.0, 0.0, 0.0,
                      0.0, 1.0, 0.0,
@@ -24,7 +24,7 @@ xjw::Camera makeCamera(double cx = 0.0)
 
 TEST(NativeCudaWorksetTest, BuildsContiguousWorksetFromValidTracks)
 {
-    std::vector<xjw::Camera> cameras{makeCamera(), makeCamera(1.0)};
+    std::vector<xjw::FramePinholeCamera> cameras{makeCamera(), makeCamera(1.0)};
     xjw::BATrack track;
     track.initialPoint = {{0.0, 0.0, 5.0}};
     track.observations.push_back({0, 320.0, 240.0, 1.0});
@@ -42,7 +42,7 @@ TEST(NativeCudaWorksetTest, BuildsContiguousWorksetFromValidTracks)
 
 TEST(NativeCudaWorksetTest, PreservesCameraDepthAxisConvention)
 {
-    std::vector<xjw::Camera> cameras{makeCamera(), makeCamera(1.0)};
+    std::vector<xjw::FramePinholeCamera> cameras{makeCamera(), makeCamera(1.0)};
     cameras[1].setDepthAxisFlipped(true);
 
     xjw::BATrack track;
@@ -60,7 +60,7 @@ TEST(NativeCudaWorksetTest, PreservesCameraDepthAxisConvention)
 
 TEST(NativeCudaWorksetTest, FiltersInvalidTracksAndKeepsOriginalTrackIndex)
 {
-    std::vector<xjw::Camera> cameras{makeCamera(), makeCamera(1.0)};
+    std::vector<xjw::FramePinholeCamera> cameras{makeCamera(), makeCamera(1.0)};
 
     xjw::BATrack invalidPoint;
     invalidPoint.initialPoint = {{0.0, 0.0, std::numeric_limits<double>::quiet_NaN()}};
@@ -93,7 +93,7 @@ TEST(NativeCudaWorksetTest, FiltersInvalidTracksAndKeepsOriginalTrackIndex)
 
 TEST(NativeCudaWorksetTest, IgnoresZeroAndNonFiniteObservationWeights)
 {
-    std::vector<xjw::Camera> cameras{
+    std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(), makeCamera(1.0), makeCamera(2.0)};
     xjw::BATrack track;
     track.initialPoint = {{0.0, 0.0, 5.0}};
@@ -112,7 +112,7 @@ TEST(NativeCudaWorksetTest, IgnoresZeroAndNonFiniteObservationWeights)
 
 TEST(NativeCudaWorksetTest, RejectsUnsupportedSoftConstraints)
 {
-    std::vector<xjw::Camera> cameras{makeCamera(), makeCamera(1.0)};
+    std::vector<xjw::FramePinholeCamera> cameras{makeCamera(), makeCamera(1.0)};
     xjw::BATrack track;
     track.initialPoint = {{0.0, 0.0, 5.0}};
     track.observations.push_back({0, 320.0, 240.0, 1.0});

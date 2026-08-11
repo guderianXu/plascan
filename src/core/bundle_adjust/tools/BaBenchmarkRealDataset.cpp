@@ -1,6 +1,6 @@
 #include "BaBenchmarkRealDataset.h"
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 #include <QFile>
 #include <QJsonArray>
@@ -83,7 +83,7 @@ std::vector<std::string> tokenizeListLine(const std::string &line)
     return tokens;
 }
 
-std::vector<Camera> loadCameras(const std::filesystem::path &listPath)
+std::vector<FramePinholeCamera> loadCameras(const std::filesystem::path &listPath)
 {
     QFile file(toQString(listPath));
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
@@ -91,7 +91,7 @@ std::vector<Camera> loadCameras(const std::filesystem::path &listPath)
         throw std::runtime_error("无法读取相机列表: " + file.errorString().toStdString());
     }
 
-    std::vector<Camera> cameras;
+    std::vector<FramePinholeCamera> cameras;
     const std::filesystem::path base = std::filesystem::absolute(listPath).parent_path();
     int lineNumber = 0;
     while (!file.atEnd())
@@ -114,7 +114,7 @@ std::vector<Camera> loadCameras(const std::filesystem::path &listPath)
             cameraPath = base / cameraPath;
         }
         cameraPath = cameraPath.lexically_normal();
-        Camera camera;
+        FramePinholeCamera camera;
         if (!camera.loadFromFile(toQString(cameraPath).toUtf8().toStdString()))
         {
             throw std::runtime_error("无法加载 TSAI 相机: " + toQString(cameraPath).toStdString());

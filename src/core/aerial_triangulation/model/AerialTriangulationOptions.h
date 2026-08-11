@@ -9,7 +9,7 @@
  * PreparedAerialTriangulationInput。SfM 管线不得重新解释特征/匹配参数。
  */
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "common/SfmTypes.h"
 
 #include <QJsonObject>
@@ -87,7 +87,7 @@ struct AerialTriangulationOptions
     QString assetsDir; ///< 可覆盖工程 assets 根目录。
     QString matchDir; ///< 可覆盖逐影像 `.pimatch` 分片目录。
     QMap<QString, QString> maskPaths; ///< 影像规范路径到蒙版路径。
-    QMap<QString, Camera> referenceCameras; ///< 影像路径到可信参考相机。
+    QMap<QString, FramePinholeCamera> referenceCameras; ///< 影像路径到可信参考相机。
     float featureGrayscaleMin = 5.0f / 255.0f; ///< 特征前端灰度有效下限。
     float featureGrayscaleMax = 1.0f; ///< 特征前端灰度有效上限。
 

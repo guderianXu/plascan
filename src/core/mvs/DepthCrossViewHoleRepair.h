@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "DepthAnchoredHoleInterpolator.h"
 
 #include <QJsonObject>
@@ -75,8 +75,8 @@ struct DominantDepthLayerSelectionStats
 
 cv::Mat projectSourceDepthToReference(
     const cv::Mat &sourceDepth,
-    const Camera &sourceCamera,
-    const Camera &referenceCamera,
+    const FramePinholeCamera &sourceCamera,
+    const FramePinholeCamera &referenceCamera,
     const cv::Size &referenceSize,
     float maximumProjectionDistancePixels,
     std::uint64_t *projectedCandidateCount = nullptr,
@@ -115,7 +115,7 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
     cv::Mat *geometrySourceMask = nullptr,
     cv::Mat *sourceInverseDepthSum = nullptr,
     cv::Mat *sourceInverseDepthSquaredSum = nullptr,
-    const Camera *referenceCamera = nullptr,
+    const FramePinholeCamera *referenceCamera = nullptr,
     const cv::Mat *guideGray = nullptr,
     cv::Mat *anchoredInterpolationMask = nullptr,
     int rowWorkerCount = 1,

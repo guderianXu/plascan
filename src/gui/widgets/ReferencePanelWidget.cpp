@@ -305,18 +305,18 @@ void ReferencePanelWidget::applyMode(xjw::gui::reference::ReferenceDisplayMode m
         _cameraTree->expandAll();
     }
 
-    using Camera = xjw::gui::reference::CameraReferenceTreeModel;
+    using CameraTreeModel = xjw::gui::reference::CameraReferenceTreeModel;
     using Marker = xjw::gui::reference::MarkerReferenceTreeModel;
     using Scale = xjw::gui::reference::ScaleBarReferenceTreeModel;
-    QList<int> cameraColumns{Camera::LabelColumn, Camera::XColumn, Camera::YColumn,
-                             Camera::ZColumn, Camera::YawColumn, Camera::PitchColumn,
-                             Camera::RollColumn, Camera::StatusColumn, Camera::EnabledColumn};
+    QList<int> cameraColumns{CameraTreeModel::LabelColumn, CameraTreeModel::XColumn, CameraTreeModel::YColumn,
+                             CameraTreeModel::ZColumn, CameraTreeModel::YawColumn, CameraTreeModel::PitchColumn,
+                             CameraTreeModel::RollColumn, CameraTreeModel::StatusColumn, CameraTreeModel::EnabledColumn};
     QList<int> markerColumns{Marker::LabelColumn};
     QList<int> scaleColumns{Scale::LabelColumn};
     if (mode == xjw::gui::reference::ReferenceDisplayMode::Source)
     {
-        cameraColumns.insert(7, Camera::HorizontalAccuracyColumn);
-        cameraColumns.insert(8, Camera::VerticalAccuracyColumn);
+        cameraColumns.insert(7, CameraTreeModel::HorizontalAccuracyColumn);
+        cameraColumns.insert(8, CameraTreeModel::VerticalAccuracyColumn);
         markerColumns << Marker::SourceXColumn << Marker::SourceYColumn
                       << Marker::SourceZColumn << Marker::AccuracyXColumn
                       << Marker::AccuracyYColumn << Marker::AccuracyZColumn
@@ -335,7 +335,7 @@ void ReferencePanelWidget::applyMode(xjw::gui::reference::ReferenceDisplayMode m
         markerColumns << Marker::ResidualColumn;
         scaleColumns << Scale::ResidualColumn;
     }
-    showOnlyColumns(_cameraTree, cameraColumns, Camera::ColumnCount);
+    showOnlyColumns(_cameraTree, cameraColumns, CameraTreeModel::ColumnCount);
     showOnlyColumns(_markerTree, markerColumns, Marker::ColumnCount);
     showOnlyColumns(_scaleBarTree, scaleColumns, Scale::ColumnCount);
     updateActionAvailability();

@@ -11,7 +11,7 @@ class Mat;
 
 namespace xjw
 {
-class Camera;
+class FramePinholeCamera;
 }
 
 namespace xjw::mesh
@@ -28,7 +28,7 @@ struct DepthTsdfLayout;
  */
 struct DepthTsdfNarrowBandFrameView
 {
-    const Camera *camera = nullptr;
+    const FramePinholeCamera *camera = nullptr;
     const cv::Mat *depth = nullptr;
     const cv::Mat *depthValidMask = nullptr;
     const cv::Mat *supportMask = nullptr;

@@ -1,6 +1,6 @@
 #include "ProjectCameraIO.h"
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 #include <QJsonObject>
 
@@ -11,9 +11,9 @@ namespace
 
 using namespace xjw::common::project;
 
-xjw::Camera makeCamera()
+xjw::FramePinholeCamera makeCamera()
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsicsMillimeters(35.0, 35.5, 0.2, -0.1, 0.005);
     camera.setAxisDirections(-1, 1);
     camera.setDepthAxisFlipped(true);
@@ -27,10 +27,10 @@ xjw::Camera makeCamera()
 
 TEST(ProjectCameraIOTest, RoundTripsCameraJson)
 {
-    const xjw::Camera source = makeCamera();
+    const xjw::FramePinholeCamera source = makeCamera();
     const QJsonObject json = cameraToJson(source);
 
-    xjw::Camera restored;
+    xjw::FramePinholeCamera restored;
     ASSERT_TRUE(cameraFromJson(json, &restored));
     EXPECT_TRUE(restored.isValid());
     EXPECT_DOUBLE_EQ(restored.focalXMillimeters(), source.focalXMillimeters());
@@ -46,7 +46,7 @@ TEST(ProjectCameraIOTest, ReadsCameraFromImageEntry)
         {QStringLiteral("path"), QStringLiteral("image.tif")},
         {QStringLiteral("camera"), cameraToJson(makeCamera())}};
 
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     EXPECT_TRUE(imageCameraFromEntry(image, &camera));
     EXPECT_TRUE(camera.isValid());
 }

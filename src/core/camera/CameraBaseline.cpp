@@ -36,7 +36,7 @@ double vectorLength(const std::array<double, 3> &vector)
     return std::sqrt(vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]);
 }
 
-double physicalDepth(const Camera &camera, const std::array<double, 3> &worldPoint)
+double physicalDepth(const FramePinholeCamera &camera, const std::array<double, 3> &worldPoint)
 {
     const std::array<double, 3> center = camera.cameraCenter();
     const std::array<double, 9> rotation = camera.cameraToWorldRotation();
@@ -49,7 +49,7 @@ double physicalDepth(const Camera &camera, const std::array<double, 3> &worldPoi
 
 } // namespace
 
-CameraBaseline CameraBaseline::evaluate(const Camera &first, const Camera &second)
+CameraBaseline CameraBaseline::evaluate(const FramePinholeCamera &first, const FramePinholeCamera &second)
 {
     CameraBaseline result;
     const std::array<double, 3> firstCenter = first.cameraCenter();
@@ -71,8 +71,8 @@ CameraBaseline CameraBaseline::evaluate(const Camera &first, const Camera &secon
     return result;
 }
 
-CameraBaseline CameraBaseline::evaluate(const Camera &first,
-                                        const Camera &second,
+CameraBaseline CameraBaseline::evaluate(const FramePinholeCamera &first,
+                                        const FramePinholeCamera &second,
                                         const std::array<double, 3> &worldPoint)
 {
     CameraBaseline result = evaluate(first, second);

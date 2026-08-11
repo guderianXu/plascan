@@ -19,7 +19,7 @@
 #include <string>
 #include <vector>
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 namespace xjw
 {
@@ -352,7 +352,7 @@ struct BAOptions
     /// cameras 等长且 reference[i] 对应 cameras[i] 的同一像素坐标系。多轮 BA 可
     /// 更新求解初值，同时继续相对同一参考设置焦距/宽高比范围、主点偏移和 Ceres 先验；
     /// Brown-Conrady 畸变硬边界仍是绝对范围。
-    std::vector<Camera> sharedIntrinsicReferenceCameras;
+    std::vector<FramePinholeCamera> sharedIntrinsicReferenceCameras;
     /// 是否先固定共享内参稳定相机/三维点，再释放各标定组内参。
     bool stageSharedFocalRefinement = true;
     /// 分阶段自标定中用于固定焦距预热的迭代比例。
@@ -625,7 +625,7 @@ struct BAResult
 
     std::vector<BARefinedPoint> points;   ///< 每条轨迹对应的点优化结果（与输入 tracks 索引一一对应）
     std::vector<BARefinedLaserRangeShot> laserRangeShots; ///< 与输入独立测距 shot 一一对应
-    std::vector<Camera> refinedCameras;   ///< 优化后的相机列表（与输入 cameras 長度相同）
+    std::vector<FramePinholeCamera> refinedCameras;   ///< 优化后的相机列表（与输入 cameras 長度相同）
 };
 
 /**
@@ -650,7 +650,7 @@ public:
     static BABackendCapabilities backendCapabilities(BABackend backend);
 
     /// 统计 BA 实际可用的问题规模。
-    static BAProblemStats summarizeProblem(const std::vector<Camera> &cameras,
+    static BAProblemStats summarizeProblem(const std::vector<FramePinholeCamera> &cameras,
                                            const std::vector<BATrack> &tracks);
 
     /// 根据问题规模与配置选择实际执行后端。
@@ -676,7 +676,7 @@ public:
      * @param options  优化选项（可选，默认使用 BAOptions）
      * @return         BAResult 结个，包含优化后点坐标、相机位姿及误差统计
      */
-    static BAResult optimizePoints(const std::vector<Camera> &cameras,
+    static BAResult optimizePoints(const std::vector<FramePinholeCamera> &cameras,
                                    const std::vector<BATrack> &tracks,
                                    const BAOptions &options = BAOptions());
 };

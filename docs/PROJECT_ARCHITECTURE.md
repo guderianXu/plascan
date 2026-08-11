@@ -104,14 +104,13 @@ core/
 │
 ├── camera/                     # 相机模型
 │   ├── CameraModel.h/cpp       # 面阵/线阵共享的只读像点、射线和空间点投影抽象
-│   ├── FramePinholeCamera.h/cpp # 按值持有现有 Camera 的静态面阵公共模型实现
-│   ├── Camera.h/cpp            # 既有 Tsai/Brown-Conrady 面阵状态及 SfM/BA 数值接口
+│   ├── FramePinholeCamera*.h/cpp # CameraModel 面阵实现及 Tsai/Brown-Conrady 状态、投影和文件 IO
 │   ├── PlanetaryLineScanCamera*.h/cpp # CameraModel 线阵实现、USGSCSM ISD、逐行时间与月固系时变姿轨
 │   ├── CameraBaseline.h/cpp    # 相机中心基线、指定点三角交会角和平均深度/基线比
 │   ├── CameraFormatConverter.h/cpp # Middlebury/EPFL 等外部相机 -> tsai + image_camera.lis
-│   ├── ProjectCameraIO.h/cpp   # Camera JSON/TSAI 与项目元数据适配
+│   ├── ProjectCameraIO.h/cpp   # FramePinholeCamera JSON/TSAI 与项目元数据适配
 │   └── test/                      # 相机测试与诊断程序
-│       ├── Camera_tests.cpp
+│       ├── FramePinholeCamera_tests.cpp
 │       ├── CameraBaseline_tests.cpp
 │       ├── CameraFormatConverter_tests.cpp
 │       ├── test_tsai_loader.cpp
@@ -201,11 +200,11 @@ core/
 │   ├── BundleAdjustCeres.h/cpp # Ceres CPU/CUDA 后端，联合普通 track、激光测距/落点及其它物方约束
 │   ├── BundleAdjustCeresPlanning.h/cpp # Dense/Sparse/Iterative Schur 规划和 CUDA 显存预算
 │   ├── BundleAdjustAdaptiveCameraModel.h/cpp # 基于粗解几何、像面覆盖和约化信息矩阵的逐内参可靠性策略
-│   ├── BundleAdjustProjection.h/cpp # 与 Camera 一致的模板投影模型和共享相机快照转换
+│   ├── BundleAdjustProjection.h/cpp # 与 FramePinholeCamera 一致的模板投影模型和共享相机快照转换
 │   ├── BundleAdjustValidation.h/cpp # 输入、标定组和 gauge 校验/规范化
 │   ├── BundleAdjustQuality.h/cpp # 跨后端正深度、离群点统计和物方约束质量门控
 │   ├── BundleAdjustNativeCuda.h/cpp/.cu # PlaScan 自研 CUDA 后端入口和 GPU 点块求解
-│   ├── BundleAdjustNativeCudaWorkset.h/cpp # 将 Camera/BATrack 扁平化为 CUDA 连续工作集
+│   ├── BundleAdjustNativeCudaWorkset.h/cpp # 将 FramePinholeCamera/BATrack 扁平化为 CUDA 连续工作集
 │   ├── BundleAdjustNativeCudaTypes.h / *Kernels.cuh # CUDA 侧数据类型、点块 kernel 和设备函数
 │   ├── README.md               # 调用链、后端能力、状态、规范与质量门控
 │   ├── tools/                  # BA 后端基准及真实 sfm_sparse_points/TSAI 重放加载器
@@ -274,7 +273,7 @@ core/
 │   ├── PointCloudArtifactIO.h/cpp # 稠密点云 PLY 目录创建、法向策略和二进制写出
 │   ├── MvsWorkspaceManifest.h/cpp # 深度帧状态、产物路径、相机/影像/配置 hash 和 source plan
 │   ├── MvsSourcePlanner.h/cpp  # shared tracks / 几何内点 / 覆盖率 / baseline 选源
-│   ├── MvsImagePreprocessor.h/cpp # 原图去畸变并生成正深度、零畸变的 Camera 工作值
+│   ├── MvsImagePreprocessor.h/cpp # 原图去畸变并生成正深度、零畸变的 FramePinholeCamera 工作值
 │   ├── MvsImageMetadataProbe.h/cpp # 不解码像素的 GDAL 影像头尺寸探测，供全流程内存规划
 │   ├── MvsImageCache.h/MvsImageCache.cpp/MvsImageFrame.cpp # provider、single-flight、RAII lease 与分配去重
 │   ├── DepthPyramidPolicy.h/cpp # 从最终质量档生成 4D/2D/D 三级 PatchMatch 调度
@@ -518,7 +517,7 @@ line-scan 拒绝；`tests/test_planetary_laser_preview.cpp` 覆盖 GUI 预览和
 60 次上限，后续已有可复用镜头种子时恢复配置迭代数。局部/分块固定内参子问题不携带全局位置式参考，
 且不允许 Legacy 做不等价模型回退。
 
-`bundle_adjust` 的 `native_cuda` 后端已接入统一 BA 接口和质量门控。当前实现把有效 Camera/BATrack
+`bundle_adjust` 的 `native_cuda` 后端已接入统一 BA 接口和质量门控。当前实现把有效 FramePinholeCamera/BATrack
 观测扁平化为 CUDA 工作集，在固定相机投影下优化三维点块；能力表明确标记它不更新相机和共享焦距，
 因此需要联合相机 BA 时 Auto 不会选择该后端。Ceres CPU/CUDA 在同一非线性问题中联合优化相机、三维点
 和分组共享焦距；CPU 按问题规模选择 Dense/Sparse/Iterative Schur，CUDA dense 求解前执行显存预算。

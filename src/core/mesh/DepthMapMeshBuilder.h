@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "MeshTypes.h"
 #include "VisualHullReconstructor.h"
 
@@ -47,7 +47,7 @@ struct DepthFrameArtifact
     QStringList qualityReasons;
     int gridWidth = 0;
     int gridHeight = 0;
-    Camera cameraModel;
+    FramePinholeCamera cameraModel;
     bool hasCameraModel = false;
     bool pyramidFallback = false;
 };

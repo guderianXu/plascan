@@ -7,7 +7,7 @@
 ## 相机模型分层
 
 - `CameraModel` 是只读公共几何抽象，只统一像点到空间射线、空间点到像点、图像尺寸和世界坐标系名称。公共像点一律使用 OpenCV 零基像素中心 `(0, 0)`。
-- `FramePinholeCamera` 是静态面阵实现，按值持有现有 `Camera`。现有面阵 SfM、BA 和 MVS 继续直接使用 `Camera`，因此引入多态边界不会改变已有数值流程。
+- `FramePinholeCamera` 是静态面阵具体实现，直接保存 Tsai/Brown-Conrady 内外参、投影、反投影和文件读写状态。面阵 SfM、BA 和 MVS 使用该值类型。
 - `PlanetaryLineScanCamera` 是时变推扫实现。每个像点的成像射线都包含该行曝光时刻对应的光心、方向和 TDB 秒；其 CSM 像素中心入口仍作为线阵专用 API 保留。
 
 ISIS 控制网常见的左上像素中心 `(1, 1)` 不属于公共接口。导入层应先完成 ISIS/CSM/OpenCV 半像素换算，再调用对应模型，不能在 `CameraModel` 内隐式猜测来源格式。
@@ -16,7 +16,7 @@ ISIS 控制网常见的左上像素中心 `(1, 1)` 不属于公共接口。导�
 
 ## 1. 坐标系和单位约定
 
-`Camera` 使用以下约定：
+`FramePinholeCamera` 使用以下约定：
 
 - `cameraToWorldRotation` 是行优先存储的 3×3 旋转矩阵 `R_cw`，表示相机坐标系到世界坐标系的旋转。
 - `cameraCenter` 是世界坐标系中的相机光心 `C`，PlaScan 工程中通常使用米（m）。
@@ -133,14 +133,14 @@ v = vAxisSign * focalY * yd + principalY
 
 `saveToFile()` 会把运行态像素内参乘以 `pixelPitch` 后写回文件，并将方向写成标量。它输出参数行，不补写 `VERSION_3/PINHOLE/TSAI` 文件头。
 
-## 3. Camera 类使用方法
+## 3. FramePinholeCamera 类使用方法
 
 ### 3.1 从 Tsai 文件加载并投影
 
 ```cpp
-#include "camera/Camera.h"
+#include "camera/FramePinholeCamera.h"
 
-xjw::Camera camera;
+xjw::FramePinholeCamera camera;
 if (!camera.loadFromFile("camera.tsai"))
 {
     // 文件不存在、字段缺失或参数非法。
@@ -158,26 +158,26 @@ if (camera.projectWorldPoint(world_point, pixel))
 ### 3.2 读取结构化参数
 
 ```cpp
-const xjw::Camera::Intrinsics intrinsics = camera.intrinsics();
-const xjw::Camera::Distortion distortion = camera.distortion();
-const xjw::Camera::Pose pose = camera.pose();
+const xjw::FramePinholeCamera::Intrinsics intrinsics = camera.intrinsics();
+const xjw::FramePinholeCamera::Distortion distortion = camera.distortion();
+const xjw::FramePinholeCamera::Pose pose = camera.pose();
 
 const double fx_pixels = intrinsics.focalX;
 const double k1 = distortion.radialK1;
 const std::array<double, 3> center = pose.cameraCenter;
 ```
 
-这些 getter 返回值快照。修改返回对象不会修改 `Camera`，应使用 setter 更新相机状态。
+这些 getter 返回值快照。修改返回对象不会修改 `FramePinholeCamera`，应使用 setter 更新相机状态。
 
 ### 3.3 手动建立相机
 
 ```cpp
-xjw::Camera camera;
+xjw::FramePinholeCamera camera;
 camera.setIntrinsics(7000.0, 7000.0, 3000.0, 2000.0);
 camera.setPixelPitch(0.005);
 camera.setAxisDirections(1, 1);
 
-xjw::Camera::Distortion distortion;
+xjw::FramePinholeCamera::Distortion distortion;
 distortion.radialK1 = -0.01;
 distortion.radialK2 = 0.001;
 camera.setDistortion(distortion);
@@ -229,18 +229,18 @@ if (camera.undistortPixel(distorted_pixel, normalized))
 ### 3.6 图像缩放后的内参
 
 ```cpp
-xjw::Camera half_resolution = camera.scaledIntrinsics(0.5, 0.5);
+xjw::FramePinholeCamera half_resolution = camera.scaledIntrinsics(0.5, 0.5);
 ```
 
-该方法缩放 `focalX/focalY/principalX/principalY`，不改变位姿、畸变或物理 `pixelPitch`。
+该方法缩放 `focalX/focalY/principalX/principalY`；已设置的影像尺寸也会同步缩放。位姿、畸变、世界坐标系名称和物理 `pixelPitch` 保持不变。
 
 ### 3.7 生成正深度工作相机
 
 ```cpp
-xjw::Camera positive = camera.normalizedForPositiveDepth();
+xjw::FramePinholeCamera positive = camera.normalizedForPositiveDepth();
 ```
 
-返回值仍是完整的 `Camera`，会把 u/v/w 轴方向折叠到外参中，使有效点统一满足 `Z_cam > 0`，同时保持原投影和 Brown-Conrady 畸变等价。MVS 若需要无畸变针孔几何，必须先使用 `prepareMvsImage()` 重映射影像；该函数会同时返回正深度、零畸变且与输出影像严格对应的工作相机。
+返回值仍是完整的 `FramePinholeCamera`，会把 u/v/w 轴方向折叠到外参中，使有效点统一满足 `Z_cam > 0`，同时保持原投影和 Brown-Conrady 畸变等价。MVS 若需要无畸变针孔几何，必须先使用 `prepareMvsImage()` 重映射影像；该函数会同时返回正深度、零畸变且与输出影像严格对应的工作相机。
 
 ### 3.8 保存 Tsai 参数
 
@@ -254,9 +254,8 @@ if (!camera.saveToFile("output.tsai"))
 ## 4. 相关文件
 
 - `CameraModel.h/.cpp`：面阵与线阵共享的只读几何接口。
-- `FramePinholeCamera.h/.cpp`：现有静态 `Camera` 的拥有式公共模型实现。
-- `Camera.h/.cpp`：Tsai 相机状态、投影、反畸变和文件读写。
+- `FramePinholeCamera.h/.cpp` 与 `FramePinholeCameraModel.cpp`：Tsai/Brown-Conrady 静态面阵状态、投影、反投影、文件读写及 `CameraModel` 公共接口。
 - `PlanetaryLineScanCamera*.h/.cpp`：USGSCSM ISD、逐行时间、时变姿轨和行星固连系投影。
 - `CameraFormatConverter.h/.cpp`：Middlebury、EPFL、COLMAP、Metashape 等外部格式转换。
-- `../mvs/MvsImagePreprocessor.h/.cpp`：将带畸变原图和 `Camera` 转换为 MVS 使用的无畸变影像及工作相机。
-- `test/`：公共相机几何、Camera、线阵、Tsai 加载和格式转换测试。
+- `../mvs/MvsImagePreprocessor.h/.cpp`：将带畸变原图和 `FramePinholeCamera` 转换为 MVS 使用的无畸变影像及工作相机。
+- `test/`：公共相机几何、面阵、线阵、Tsai 加载和格式转换测试。

@@ -15,7 +15,7 @@
 //      e) 过滤低质量三维点和坏帧
 //   4. 输出最终重建结果
 //
-// 依赖模块：Camera, Intersection,
+// 依赖模块：FramePinholeCamera, Intersection,
 //           BundleAdjust, PnpSolver, Triangulator
 // ============================================================
 
@@ -28,7 +28,7 @@
 #include "registration/PriorTrack.h"
 
 #include "BundleAdjust.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 #include <array>
 #include <functional>
@@ -350,7 +350,7 @@ class IncrementalSfm
      * @param camera     预设相机对象（至少包含 fu/fv/cu/cv 内参）
      * @param keypoints  该图像的特征点列表
      */
-    void addImageWithCamera(ImageId id, const std::string &imagePath, const Camera &camera,
+    void addImageWithCamera(ImageId id, const std::string &imagePath, const FramePinholeCamera &camera,
                             const std::vector<FeatureKeypoint> &keypoints);
 
     /**
@@ -407,11 +407,11 @@ class IncrementalSfm
     /// 输入的相机文件路径（imageId → cameraPath）
     std::unordered_map<ImageId, std::string> _cameraPaths;
 
-    /// 预设的相机对象（imageId → Camera），由 addImageWithCamera 填充
-    std::unordered_map<ImageId, Camera> _preloadedCameras;
+    /// 预设的相机对象（imageId → FramePinholeCamera），由 addImageWithCamera 填充
+    std::unordered_map<ImageId, FramePinholeCamera> _preloadedCameras;
 
     /// 整次增量重建生命周期内稳定的自标定参考；后续全局/重试 BA 不重新锚定已优化内参。
-    std::unordered_map<ImageId, Camera> _stableIntrinsicReferenceByImageId;
+    std::unordered_map<ImageId, FramePinholeCamera> _stableIntrinsicReferenceByImageId;
 
     /// 最近一次内部操作的错误描述（供 run() 写入 result.summary）
     std::string _lastErrorMessage;
@@ -515,13 +515,13 @@ class IncrementalSfm
      * @param cam      输出相机对象
      * @return 成功返回 true
      */
-    bool getCamera(ImageId imageId, Camera &cam) const;
+    bool getCamera(ImageId imageId, FramePinholeCamera &cam) const;
 
     void materializePriorTracks();
     void applyPriorTrackDiagnostics(IncrementalSfmResult *result) const;
     void applyControlNetworkDiagnostics(IncrementalSfmResult *result) const;
     bool tryApplyControlNetwork(const std::vector<ImageId> &baImageIds,
-                                std::vector<Camera> *baCameras);
+                                std::vector<FramePinholeCamera> *baCameras);
     const control_points::PriorTrack *priorTrack(const std::string &markerId) const;
     void tagPriorTrackSource(Track *track) const;
 
@@ -529,7 +529,7 @@ class IncrementalSfm
         const std::vector<ImageId> &imageIds) const;
 
     void alignReconstructionToKnownPosePriors(const std::vector<ImageId> &imageIds,
-                                              std::vector<Camera> *baCameras);
+                                              std::vector<FramePinholeCamera> *baCameras);
 
     void refineKnownCameraPosesWithPnp();
 
@@ -547,7 +547,7 @@ class IncrementalSfm
      * @param cam         输出相机对象
      * @return 成功返回 true
      */
-    bool loadCamera(const std::string &cameraPath, Camera &cam) const;
+    bool loadCamera(const std::string &cameraPath, FramePinholeCamera &cam) const;
 
     /**
      * @brief 返回多个初始像对候选（按匹配数降序排序）。
@@ -631,13 +631,13 @@ class IncrementalSfm
      * @brief 检查 PnP 结果是否破坏照片序列的局部相机中心距离。
      */
     bool validateSequencePoseConsistency(ImageId imageId,
-                                         const Camera &candidateCamera,
+                                         const FramePinholeCamera &candidateCamera,
                                          std::string *reason) const;
 
     /**
      * @brief 使用已注册的序列相邻相机为 PnP 生成外参初值。
      */
-    bool makeSequenceInitialPoseGuess(ImageId imageId, Camera *guessCamera) const;
+    bool makeSequenceInitialPoseGuess(ImageId imageId, FramePinholeCamera *guessCamera) const;
 
     /**
      * @brief 执行光束法平差。
@@ -653,7 +653,7 @@ class IncrementalSfm
     void runBundleAdjust(
         bool localOnly = false,
         const std::vector<ImageId> &anchorIds = {},
-        const std::vector<Camera> *stableIntrinsicReferences = nullptr,
+        const std::vector<FramePinholeCamera> *stableIntrinsicReferences = nullptr,
         bool allowCalibrationSeedSearch = true);
 
     /**

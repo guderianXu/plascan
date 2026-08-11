@@ -4,7 +4,7 @@
 
 TEST(OpenCvCameraAdapterTest, BuildsSignedAndPositiveDepthIntrinsics)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(100.0, 200.0, 10.0, 20.0);
     camera.setAxisDirections(-1, 1);
     camera.setDepthAxisFlipped(true);
@@ -22,7 +22,7 @@ TEST(OpenCvCameraAdapterTest, BuildsSignedAndPositiveDepthIntrinsics)
 
 TEST(OpenCvCameraAdapterTest, BuildsPhysicalSignedProjectionMatrix)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(100.0, 200.0, 10.0, 20.0);
     camera.setPose({1.0, 0.0, 0.0,
                     0.0, 1.0, 0.0,

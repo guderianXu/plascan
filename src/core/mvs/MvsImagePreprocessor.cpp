@@ -12,7 +12,7 @@ namespace mvs
 namespace
 {
 
-bool isFiniteDistortion(const Camera::Distortion &distortion)
+bool isFiniteDistortion(const FramePinholeCamera::Distortion &distortion)
 {
     return std::isfinite(distortion.radialK1)
         && std::isfinite(distortion.radialK2)
@@ -21,7 +21,7 @@ bool isFiniteDistortion(const Camera::Distortion &distortion)
         && std::isfinite(distortion.tangentialP2);
 }
 
-bool hasDistortion(const Camera::Distortion &distortion) noexcept
+bool hasDistortion(const FramePinholeCamera::Distortion &distortion) noexcept
 {
     constexpr double epsilon = 1e-15;
     return std::fabs(distortion.radialK1) > epsilon
@@ -33,15 +33,15 @@ bool hasDistortion(const Camera::Distortion &distortion) noexcept
 
 } // namespace
 
-bool mvsImagePreparationRequiresDistinctPixels(const Camera &camera) noexcept
+bool mvsImagePreparationRequiresDistinctPixels(const FramePinholeCamera &camera) noexcept
 {
     return hasDistortion(camera.distortion());
 }
 
 bool prepareMvsImage(const cv::Mat &source,
-                     const Camera &sourceCamera,
+                     const FramePinholeCamera &sourceCamera,
                      cv::Mat *prepared,
-                     Camera *preparedCamera,
+                     FramePinholeCamera *preparedCamera,
                      std::string *errorMessage)
 {
     if (prepared == nullptr || preparedCamera == nullptr)
@@ -60,9 +60,9 @@ bool prepareMvsImage(const cv::Mat &source,
         return false;
     }
 
-    Camera normalized = sourceCamera.normalizedForPositiveDepth();
-    const Camera::Intrinsics intrinsics = normalized.intrinsics();
-    const Camera::Distortion distortion = normalized.distortion();
+    FramePinholeCamera normalized = sourceCamera.normalizedForPositiveDepth();
+    const FramePinholeCamera::Intrinsics intrinsics = normalized.intrinsics();
+    const FramePinholeCamera::Distortion distortion = normalized.distortion();
     if (!(intrinsics.focalX > 0.0) || !(intrinsics.focalY > 0.0)
         || !std::isfinite(intrinsics.focalX) || !std::isfinite(intrinsics.focalY)
         || !std::isfinite(intrinsics.principalX) || !std::isfinite(intrinsics.principalY)
@@ -117,7 +117,7 @@ bool prepareMvsImage(const cv::Mat &source,
         return false;
     }
 
-    normalized.setDistortion(Camera::Distortion{});
+    normalized.setDistortion(FramePinholeCamera::Distortion{});
     *preparedCamera = normalized;
     if (errorMessage) errorMessage->clear();
     return true;

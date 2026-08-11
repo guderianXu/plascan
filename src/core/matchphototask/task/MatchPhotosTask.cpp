@@ -265,7 +265,7 @@ MatchPhotosStageReport makeReferencePreselectionReport(MatchPhotosStageStatus st
 
 bool cameraForImage(const MatchPhotosContext &context,
                     const QString &imagePath,
-                    Camera *camera)
+                    FramePinholeCamera *camera)
 {
     if (!camera)
     {
@@ -316,7 +316,7 @@ bool buildReferencePreselection(const MatchPhotosContext &context,
     inputs.reserve(static_cast<std::size_t>(context.pairInput.images.size()));
     for (const QString &imagePath : context.pairInput.images)
     {
-        Camera camera;
+        FramePinholeCamera camera;
         if (!cameraForImage(context, imagePath, &camera))
         {
             if (report)

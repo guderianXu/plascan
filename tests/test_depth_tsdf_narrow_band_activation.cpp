@@ -1,4 +1,4 @@
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "DepthTsdfNarrowBandActivation.h"
 #include "DepthTsdfSurfaceBuilder.h"
 
@@ -26,9 +26,9 @@ xjw::mesh::DepthTsdfLayout makeLayout()
     return layout;
 }
 
-xjw::Camera makeCamera()
+xjw::FramePinholeCamera makeCamera()
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(4.0, 4.0, 2.0, 2.0);
     camera.setPose(
         {1.0, 0.0, 0.0,
@@ -49,7 +49,7 @@ xjw::mesh::DepthTsdfNarrowBandActivationOptions makeOptions()
 }
 
 xjw::mesh::DepthTsdfNarrowBandFrameView makeView(
-    const xjw::Camera &camera,
+    const xjw::FramePinholeCamera &camera,
     const cv::Mat &depth,
     const cv::Mat *depth_valid,
     const cv::Mat *support)
@@ -66,7 +66,7 @@ xjw::mesh::DepthTsdfNarrowBandFrameView makeView(
 
 TEST(DepthTsdfNarrowBandActivationTest, ActivatesOnlyBlocksNearSurface)
 {
-    const xjw::Camera camera = makeCamera();
+    const xjw::FramePinholeCamera camera = makeCamera();
     cv::Mat depth = cv::Mat::zeros(5, 5, CV_32FC1);
     cv::Mat valid = cv::Mat::zeros(5, 5, CV_8UC1);
     cv::Mat support(5, 5, CV_8UC1, cv::Scalar(255));
@@ -92,7 +92,7 @@ TEST(DepthTsdfNarrowBandActivationTest, ActivatesOnlyBlocksNearSurface)
 
 TEST(DepthTsdfNarrowBandActivationTest, InvalidAndUnsupportedPixelsStayUnknown)
 {
-    const xjw::Camera camera = makeCamera();
+    const xjw::FramePinholeCamera camera = makeCamera();
     cv::Mat depth = cv::Mat::zeros(5, 5, CV_32FC1);
     cv::Mat valid = cv::Mat::zeros(5, 5, CV_8UC1);
     cv::Mat support(5, 5, CV_8UC1, cv::Scalar(255));
@@ -117,7 +117,7 @@ TEST(DepthTsdfNarrowBandActivationTest, InvalidAndUnsupportedPixelsStayUnknown)
 
 TEST(DepthTsdfNarrowBandActivationTest, HaloExpandsFromCoreBlocksOnce)
 {
-    const xjw::Camera camera = makeCamera();
+    const xjw::FramePinholeCamera camera = makeCamera();
     cv::Mat depth = cv::Mat::zeros(5, 5, CV_32FC1);
     cv::Mat valid = cv::Mat::zeros(5, 5, CV_8UC1);
     depth.at<float>(2, 2) = 2.0f;
@@ -143,7 +143,7 @@ TEST(DepthTsdfNarrowBandActivationTest, HaloExpandsFromCoreBlocksOnce)
 
 TEST(DepthTsdfNarrowBandActivationTest, CancellationLeavesNoPartialMask)
 {
-    const xjw::Camera camera = makeCamera();
+    const xjw::FramePinholeCamera camera = makeCamera();
     cv::Mat depth(5, 5, CV_32FC1, cv::Scalar(2.0f));
     auto options = makeOptions();
     options.isCancelled = []()

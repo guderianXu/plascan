@@ -10,7 +10,7 @@
 #include "PointCloudDomGenerator.h"
 #include "SmallBodyGlobalProductGenerator.h"
 #include "projection/AsteroidProjection.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "io/PathIO.h"
 
 #include <plapoint/core/point_cloud.h>
@@ -1393,7 +1393,7 @@ bool TerrainPipeline::generateFromObjMtlWithAsteroidProjections(
 }
 
 bool TerrainPipeline::generateDemFromDepthMaps(const std::vector<cv::Mat> &depthMaps,
-                                               const std::vector<Camera> &cameras,
+                                               const std::vector<FramePinholeCamera> &cameras,
                                                const QString &outputDir,
                                                QJsonObject *result,
                                                QString *errorMsg)

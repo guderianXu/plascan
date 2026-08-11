@@ -2,14 +2,14 @@
 
 /**
  * @file OpenCvCameraAdapter.h
- * @brief PlaScan Camera 与 OpenCV 标定/PnP坐标约定的集中转换。
+ * @brief PlaScan FramePinholeCamera 与 OpenCV 标定/PnP坐标约定的集中转换。
  *
  * PlaScan 保存 camera-to-world 旋转 Rcw 和相机中心 C；OpenCV 使用
  * world-to-camera 的 `Xc = Rwc * X + t`，其中 `Rwc = Rcw^T`、`t = -Rwc*C`。
  * 深度轴翻转和像素轴符号只能在本适配层处理，调用方不得再次手工取逆或翻轴。
  */
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 #include <opencv2/core.hpp>
 
@@ -19,10 +19,10 @@ namespace xjw
 {
 
 /**
- * @brief 由 Camera 构造 OpenCV 3x3 内参矩阵。
+ * @brief 由 FramePinholeCamera 构造 OpenCV 3x3 内参矩阵。
  * @param positiveDepthConvention true 时把 PlaScan 的 -Z 前向相机改写为 OpenCV +Z 前向。
  */
-cv::Mat openCvCameraMatrix(const Camera &camera, bool positiveDepthConvention);
+cv::Mat openCvCameraMatrix(const FramePinholeCamera &camera, bool positiveDepthConvention);
 
 /// 低层内参转换重载，参数单位均为像素。
 cv::Mat openCvCameraMatrix(double focalX,
@@ -45,7 +45,7 @@ cv::Mat openCvTvecFromCameraPose(
     const std::array<double, 3> &cameraCenter,
     bool depthAxisFlipped);
 
-/// 构造与 Camera::projectWorldPoint 同约定的 3x4 投影矩阵 `K[Rwc|t]`。
-cv::Mat openCvProjectionMatrix(const Camera &camera);
+/// 构造与 FramePinholeCamera::projectWorldPoint 同约定的 3x4 投影矩阵 `K[Rwc|t]`。
+cv::Mat openCvProjectionMatrix(const FramePinholeCamera &camera);
 
 } // namespace xjw

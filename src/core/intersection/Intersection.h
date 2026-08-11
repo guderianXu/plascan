@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 namespace xjw {
 
@@ -63,10 +63,10 @@ public:
     //   u2, v2     - 第二张影像上对应的像素坐标
     // 返回值：Result 结构体，若成功则 valid=true
     // --------------------------------------------------------
-    static Result intersectPair(const Camera &cam1,
+    static Result intersectPair(const FramePinholeCamera &cam1,
                                 double u1,
                                 double v1,
-                                const Camera &cam2,
+                                const FramePinholeCamera &cam2,
                                 double u2,
                                 double v2);
 
@@ -81,9 +81,9 @@ public:
     //   numThreads - 使用的线程数，0 表示自动使用硬件并发度
     // 返回值：与输入等长的 Result 向量
     // --------------------------------------------------------
-    static std::vector<Result> intersectBatch(const Camera &cam1,
+    static std::vector<Result> intersectBatch(const FramePinholeCamera &cam1,
                                               const std::vector<std::pair<double, double>> &pts1,
-                                              const Camera &cam2,
+                                              const FramePinholeCamera &cam2,
                                               const std::vector<std::pair<double, double>> &pts2,
                                               unsigned int numThreads = 0);
 };

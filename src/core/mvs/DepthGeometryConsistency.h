@@ -51,10 +51,10 @@ struct AdaptiveGeometryEvidenceMaps
 };
 
 ProjectedDepthConsistencyResult evaluateProjectedDepthConsistency(
-    const Camera &referenceCamera,
+    const FramePinholeCamera &referenceCamera,
     const cv::Point2f &referencePixel,
     float referenceDepth,
-    const Camera &sourceCamera,
+    const FramePinholeCamera &sourceCamera,
     const cv::Mat &sourceDepth,
     float relativeThreshold,
     int searchRadius = 1,
@@ -70,11 +70,11 @@ ProjectedDepthConsistencyResult evaluateProjectedDepthConsistency(
  * order or vote accumulation semantics.
  */
 ProjectedDepthConsistencyResult evaluateProjectedDepthConsistencyFromReferenceWorld(
-    const Camera &referenceCamera,
+    const FramePinholeCamera &referenceCamera,
     const cv::Point2f &referencePixel,
     float referenceDepth,
     const std::array<double, 3> &referenceWorld,
-    const Camera &sourceCamera,
+    const FramePinholeCamera &sourceCamera,
     const cv::Mat &sourceDepth,
     float relativeThreshold,
     int searchRadius = 1,

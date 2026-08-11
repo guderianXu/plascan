@@ -80,11 +80,11 @@ inline bool isFinite3(const std::array<double, 3> &a)
 
 // 将像素坐标 (u,v) 转换为世界坐标系下的射线方向向量（已归一化）
 // 说明：
-//  1) 使用 Camera 的 Brown-Conrady 反投影恢复未畸变归一化像平面点 (x,y,1)
+//  1) 使用 FramePinholeCamera 的 Brown-Conrady 反投影恢复未畸变归一化像平面点 (x,y,1)
 //  2) 使用相机的 R（这里 R 约定为 cam->world）乘以相机坐标向量得到
 //     世界方向（未归一化），再做归一化返回。归一化是为了数值稳定和
 //     在后续最小距离解中简化符号（令 a = d1·d1 ≈ 1）
-inline std::array<double, 3> pixelToWorldRay(const Camera &cam, double u, double v)
+inline std::array<double, 3> pixelToWorldRay(const FramePinholeCamera &cam, double u, double v)
 {
     const double pixel[2] = {u, v};
     double normalized[2] = {0.0, 0.0};
@@ -144,10 +144,10 @@ inline double angleDegrees(const std::array<double, 3> &d1, const std::array<dou
  *  - 最后计算重投影残差（把 X 投影回两个相机像平面，比较与原始观测像素差）
  */
 
-Intersection::Result Intersection::intersectPair(const Camera &cam1,
+Intersection::Result Intersection::intersectPair(const FramePinholeCamera &cam1,
                                                  double u1,
                                                  double v1,
-                                                 const Camera &cam2,
+                                                 const FramePinholeCamera &cam2,
                                                  double u2,
                                                  double v2)
 {
@@ -261,9 +261,9 @@ Intersection::Result Intersection::intersectPair(const Camera &cam1,
  *  - 每个线程对其负责的区间内逐点调用 intersectPair，因此单点函数的鲁棒性
  *    直接传导到批量结果。
  */
-std::vector<Intersection::Result> Intersection::intersectBatch(const Camera &cam1,
+std::vector<Intersection::Result> Intersection::intersectBatch(const FramePinholeCamera &cam1,
                                                                const std::vector<std::pair<double, double>> &pts1,
-                                                               const Camera &cam2,
+                                                               const FramePinholeCamera &cam2,
                                                                const std::vector<std::pair<double, double>> &pts2,
                                                                unsigned int numThreads) {
     const size_t n = std::min(pts1.size(), pts2.size());

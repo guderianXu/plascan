@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "project/BaInputBuilder.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "model/MarkerSet.h"
 
 #include <QJsonArray>
@@ -11,9 +11,9 @@
 namespace
 {
 
-xjw::Camera makeCamera(double cx)
+xjw::FramePinholeCamera makeCamera(double cx)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
     camera.setPose({{1.0, 0.0, 0.0,
                      0.0, 1.0, 0.0,
@@ -22,7 +22,7 @@ xjw::Camera makeCamera(double cx)
     return camera;
 }
 
-QJsonObject cameraToJson(const xjw::Camera &camera)
+QJsonObject cameraToJson(const xjw::FramePinholeCamera &camera)
 {
     const auto intrinsics = camera.intrinsics();
     const auto center = camera.cameraCenter();
@@ -52,7 +52,7 @@ QJsonObject cameraToJson(const xjw::Camera &camera)
     return object;
 }
 
-QJsonObject imageEntry(const QString &path, const xjw::Camera &camera)
+QJsonObject imageEntry(const QString &path, const xjw::FramePinholeCamera &camera)
 {
     QJsonObject object;
     object[QStringLiteral("path")] = path;
@@ -60,7 +60,7 @@ QJsonObject imageEntry(const QString &path, const xjw::Camera &camera)
     return object;
 }
 
-QPointF project(const xjw::Camera &camera, const std::array<double, 3> &point)
+QPointF project(const xjw::FramePinholeCamera &camera, const std::array<double, 3> &point)
 {
     const double xyz[3] = {point[0], point[1], point[2]};
     double uv[2] = {0.0, 0.0};
@@ -193,7 +193,7 @@ TEST(BaInputBuilderMarkerSet, AppliesAbsoluteOrientationAndExcludesChecksFromCon
     const QString image0 = QStringLiteral("E:/images/img_001.jpg");
     const QString image1 = QStringLiteral("E:/images/img_002.jpg");
     const QString image2 = QStringLiteral("E:/images/img_003.jpg");
-    const std::vector<xjw::Camera> cameras = {
+    const std::vector<xjw::FramePinholeCamera> cameras = {
         makeCamera(-2.0), makeCamera(0.0), makeCamera(2.0)};
     const QStringList image_paths{image0, image1, image2};
     const QStringList image_ids{QStringLiteral("uuid-0"),

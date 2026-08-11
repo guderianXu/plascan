@@ -358,7 +358,7 @@ target_include_directories(test_bundle_adjust_lidar_constraints PRIVATE
 gtest_discover_tests(test_bundle_adjust_lidar_constraints)
 
 # ==============================================================================
-# test_bundle_adjust_projection — BA AutoDiff 投影模型与 Camera 投影一致性
+# test_bundle_adjust_projection — BA AutoDiff 投影模型与 FramePinholeCamera 投影一致性
 # ==============================================================================
 add_executable(test_bundle_adjust_projection
     ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust/tests/test_bundle_adjust_projection.cpp

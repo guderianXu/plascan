@@ -4,7 +4,7 @@
  * @file SfmBundleAdjustCoordinator.h
  * @brief SfM 状态与独立 bundle_adjust 模块之间的适配/调度层。
  *
- * 协调器从当前 SfmReconstruction 构造 Camera/BATrack，选择局部或全局相机集合，
+ * 协调器从当前 SfmReconstruction 构造 FramePinholeCamera/BATrack，选择局部或全局相机集合，
  * 调用 BundleAdjust 公共入口，再将通过质量门控的相机和点原子写回重建。
  */
 
@@ -112,13 +112,13 @@ class SfmBundleAdjustCoordinator
     /// 多起点预览改变了 warm start 后，只重算相对本轮输入的实际应用数量。
     /// 焦距尺度、宽高比和主点等指标仍保留求解器给出的稳定参考语义。
     static void refreshCalibrationSeedApplicationCount(
-        const std::vector<Camera> &before,
+        const std::vector<FramePinholeCamera> &before,
         BAResult *result);
 
     /// 判断当前内参是否已包含可复用的焦距或 k1 种子，避免后续迭代重复多起点预览。
     static bool hasReusableCalibrationSeed(
-        const std::vector<Camera> &current,
-        const std::vector<Camera> &stableReferences,
+        const std::vector<FramePinholeCamera> &current,
+        const std::vector<FramePinholeCamera> &stableReferences,
         bool focalEnabled,
         bool radialK1Enabled);
 
@@ -127,16 +127,16 @@ class SfmBundleAdjustCoordinator
                                               bool hasReusableSeed);
 
     /// 首次见到影像时保存内参参考，后续独立全局 BA 调用仍按 ImageId 复用原锚点。
-    static std::vector<Camera> buildPersistentIntrinsicReferences(
+    static std::vector<FramePinholeCamera> buildPersistentIntrinsicReferences(
         const std::vector<ImageId> &imageIds,
-        const std::vector<Camera> &current,
-        std::unordered_map<ImageId, Camera> *referencesByImageId);
+        const std::vector<FramePinholeCamera> &current,
+        std::unordered_map<ImageId, FramePinholeCamera> *referencesByImageId);
 
     /// 按相机计算两轮内参最大归一化变化，避免多标定组反向变化在全局平均中抵消。
     static double maximumCameraIntrinsicChange(
-        const std::vector<Camera> &previous,
-        const std::vector<Camera> &current,
-        const std::vector<Camera> &stableReferences);
+        const std::vector<FramePinholeCamera> &previous,
+        const std::vector<FramePinholeCamera> &current,
+        const std::vector<FramePinholeCamera> &stableReferences);
 
   private:
     IncrementalSfm &_owner;

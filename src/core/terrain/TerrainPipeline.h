@@ -15,7 +15,7 @@ namespace cv { class Mat; }
 namespace xjw
 {
 
-class Camera;
+class FramePinholeCamera;
 
 /**
  * @brief 地形产品生成流水线外观类。
@@ -52,7 +52,7 @@ public:
      * DEM 尺寸与参考深度图一致，覆盖率接近 100%。
      */
     static bool generateDemFromDepthMaps(const std::vector<cv::Mat> &depthMaps,
-                                         const std::vector<Camera> &cameras,
+                                         const std::vector<FramePinholeCamera> &cameras,
                                          const QString &outputDir,
                                          QJsonObject *result,
                                          QString *errorMsg = nullptr);

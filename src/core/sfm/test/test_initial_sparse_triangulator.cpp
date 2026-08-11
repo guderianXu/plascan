@@ -5,7 +5,7 @@
 #include <gtest/gtest.h>
 
 #include "BundleAdjust.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "triangulation/InitialSparsePointFilter.h"
 
 #include <array>
@@ -13,9 +13,9 @@
 
 namespace {
 
-xjw::Camera makeCamera(double cx, double cy, double cz)
+xjw::FramePinholeCamera makeCamera(double cx, double cy, double cz)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(1200.0, 1200.0, 512.0, 384.0);
     const std::array<double, 9> rotation = {1.0, 0.0, 0.0,
                                             0.0, 1.0, 0.0,
@@ -25,7 +25,7 @@ xjw::Camera makeCamera(double cx, double cy, double cz)
     return camera;
 }
 
-bool projectPoint(const xjw::Camera &camera,
+bool projectPoint(const xjw::FramePinholeCamera &camera,
                   const std::array<double, 3> &xyz,
                   double *u,
                   double *v)
@@ -51,8 +51,8 @@ bool projectPoint(const xjw::Camera &camera,
 
 TEST(InitialSparsePointCloudTriangulatorTest, KeepsValidTracks)
 {
-    const xjw::Camera camera0 = makeCamera(0.0, 0.0, 0.0);
-    const xjw::Camera camera1 = makeCamera(8.0, 0.0, 0.0);
+    const xjw::FramePinholeCamera camera0 = makeCamera(0.0, 0.0, 0.0);
+    const xjw::FramePinholeCamera camera1 = makeCamera(8.0, 0.0, 0.0);
     const std::array<double, 3> xyz = {4.0, 0.5, 40.0};
 
     double u0 = 0.0;
@@ -72,7 +72,7 @@ TEST(InitialSparsePointCloudTriangulatorTest, KeepsValidTracks)
     options.maxReprojErrorPx = 2.0;
 
     const auto result = xjw::InitialSparsePointFilter::filter(
-        std::vector<xjw::Camera>{camera0, camera1},
+        std::vector<xjw::FramePinholeCamera>{camera0, camera1},
         std::vector<xjw::BATrack>{track},
         options);
 
@@ -83,8 +83,8 @@ TEST(InitialSparsePointCloudTriangulatorTest, KeepsValidTracks)
 
 TEST(InitialSparsePointCloudTriangulatorTest, RejectsLargeReprojectionError)
 {
-    const xjw::Camera camera0 = makeCamera(0.0, 0.0, 0.0);
-    const xjw::Camera camera1 = makeCamera(8.0, 0.0, 0.0);
+    const xjw::FramePinholeCamera camera0 = makeCamera(0.0, 0.0, 0.0);
+    const xjw::FramePinholeCamera camera1 = makeCamera(8.0, 0.0, 0.0);
     const std::array<double, 3> xyz = {4.0, 0.5, 40.0};
 
     double u0 = 0.0;
@@ -104,7 +104,7 @@ TEST(InitialSparsePointCloudTriangulatorTest, RejectsLargeReprojectionError)
     options.maxReprojErrorPx = 2.0;
 
     const auto result = xjw::InitialSparsePointFilter::filter(
-        std::vector<xjw::Camera>{camera0, camera1},
+        std::vector<xjw::FramePinholeCamera>{camera0, camera1},
         std::vector<xjw::BATrack>{track},
         options);
 

@@ -20,7 +20,7 @@ bool isCancelled(const std::atomic_bool *cancelFlag)
     return cancelFlag && cancelFlag->load(std::memory_order_relaxed);
 }
 
-bool finiteCamera(const Camera &camera)
+bool finiteCamera(const FramePinholeCamera &camera)
 {
     if (!camera.isValid()
         || !std::isfinite(camera.focalX())

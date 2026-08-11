@@ -47,10 +47,10 @@ std::array<double, 3> transformPoint(const std::array<double, 3> &point,
 } // namespace
 
 SimilarityGaugeNormalizationResult normalizeSimilarityGauge(
-    const std::vector<Camera> &referenceCameras,
+    const std::vector<FramePinholeCamera> &referenceCameras,
     int anchorCameraIndex,
     int scaleCameraIndex,
-    std::vector<Camera> *refinedCameras,
+    std::vector<FramePinholeCamera> *refinedCameras,
     std::vector<BARefinedPoint> *refinedPoints)
 {
     SimilarityGaugeNormalizationResult result;
@@ -111,8 +111,8 @@ SimilarityGaugeNormalizationResult normalizeSimilarityGauge(
     }
 
     // 先在副本中完成全部变换，失败路径不会部分修改 BA 输出。
-    std::vector<Camera> normalizedCameras = *refinedCameras;
-    for (Camera &camera : normalizedCameras)
+    std::vector<FramePinholeCamera> normalizedCameras = *refinedCameras;
+    for (FramePinholeCamera &camera : normalizedCameras)
     {
         const auto center = camera.cameraCenter();
         if (!finitePoint(center))

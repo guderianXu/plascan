@@ -498,7 +498,7 @@ ImageId IncrementalSfm::selectNextImage() const
 bool IncrementalSfm::registerImage(ImageId imageId)
 {
     // 加载相机内参
-    Camera cam;
+    FramePinholeCamera cam;
     if (!getCamera(imageId, cam))
     {
         _lastErrorMessage = "getCamera(" + std::to_string(imageId) + ") failed";
@@ -573,7 +573,7 @@ bool IncrementalSfm::registerImage(ImageId imageId)
 
     // 标准 PnP 失败后，才使用相邻序号相机插值/外推的初值进行一次确定性恢复。
     // 恢复仍必须通过真实 3D-2D 重投影内点门槛，不会直接接受外推位姿。
-    Camera sequenceGuessCamera = cam;
+    FramePinholeCamera sequenceGuessCamera = cam;
     if (!pnpResult.success && makeSequenceInitialPoseGuess(imageId, &sequenceGuessCamera))
     {
         PnpOptions recoveryOptions = pnpOptions;
@@ -826,7 +826,7 @@ double IncrementalSfm::registeredSequenceAdjacentDistanceMedian(ImageId excluded
 }
 
 bool IncrementalSfm::validateSequencePoseConsistency(ImageId imageId,
-                                                     const Camera &candidateCamera,
+                                                     const FramePinholeCamera &candidateCamera,
                                                      std::string *reason) const
 {
     if (!_sfmOptions.enforceSequencePoseConsistency || !_reconstruction ||
@@ -906,7 +906,7 @@ bool IncrementalSfm::validateSequencePoseConsistency(ImageId imageId,
     return true;
 }
 
-bool IncrementalSfm::makeSequenceInitialPoseGuess(ImageId imageId, Camera *guessCamera) const
+bool IncrementalSfm::makeSequenceInitialPoseGuess(ImageId imageId, FramePinholeCamera *guessCamera) const
 {
     if (!guessCamera || !_sfmOptions.useSequencePoseRecovery || !_reconstruction ||
         _reconstruction->numRegisteredImages() < 2)

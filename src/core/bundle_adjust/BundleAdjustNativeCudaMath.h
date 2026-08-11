@@ -32,7 +32,7 @@ struct ObservationLinearization
     double weightedCost = 0.0;
 };
 
-/// 使用与 Camera::projectWorldPoint 一致的正深度和 Brown-Conrady 模型投影世界点。
+/// 使用与 FramePinholeCamera::projectWorldPoint 一致的正深度和 Brown-Conrady 模型投影世界点。
 ProjectionResult projectHost(const HostCamera &camera, const std::array<double, 3> &point);
 
 /// 计算像素 [u,v] 对世界点 [X,Y,Z] 的 2x3 解析雅可比，按行写入 6 个 double。

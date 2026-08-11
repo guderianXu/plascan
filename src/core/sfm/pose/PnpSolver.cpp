@@ -15,7 +15,7 @@ PnpResult PnpSolver::solve(const std::vector<std::array<double, 3>> &worldPoints
                            double cv, int uDir, int vDir, bool depthFlipped, const PnpOptions &options)
 {
     return solveWithDistortion(worldPoints, imagePoints, fu, fv, cu, cv, uDir, vDir, depthFlipped,
-                               Camera::Distortion{}, options);
+                               FramePinholeCamera::Distortion{}, options);
 }
 
 PnpResult PnpSolver::solveWithDistortion(
@@ -28,7 +28,7 @@ PnpResult PnpSolver::solveWithDistortion(
     int uDir,
     int vDir,
     bool depthFlipped,
-    const Camera::Distortion &distortion,
+    const FramePinholeCamera::Distortion &distortion,
     const PnpOptions &options)
 {
     PnpResult result;
@@ -224,7 +224,7 @@ PnpResult PnpSolver::solveWithDistortion(
 }
 
 PnpResult PnpSolver::solveWithCamera(const std::vector<std::array<double, 3>> &worldPoints,
-                                     const std::vector<std::array<double, 2>> &imagePoints, const Camera &cam,
+                                     const std::vector<std::array<double, 2>> &imagePoints, const FramePinholeCamera &cam,
                                      const PnpOptions &options)
 {
     return solveWithDistortion(worldPoints, imagePoints,

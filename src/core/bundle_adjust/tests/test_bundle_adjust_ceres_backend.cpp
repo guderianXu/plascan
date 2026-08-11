@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "BundleAdjust.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 #include <algorithm>
 #include <array>
@@ -13,9 +13,9 @@
 namespace
 {
 
-xjw::Camera makeCamera(double cx, double cy, double cz)
+xjw::FramePinholeCamera makeCamera(double cx, double cy, double cz)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
     camera.setPose({{1.0, 0.0, 0.0,
                      0.0, 1.0, 0.0,
@@ -24,7 +24,7 @@ xjw::Camera makeCamera(double cx, double cy, double cz)
     return camera;
 }
 
-bool projectPoint(const xjw::Camera &camera, const std::array<double, 3> &point, double *u, double *v)
+bool projectPoint(const xjw::FramePinholeCamera &camera, const std::array<double, 3> &point, double *u, double *v)
 {
     const double world[3] = {point[0], point[1], point[2]};
     double pixel[2] = {0.0, 0.0};
@@ -54,7 +54,7 @@ double huberBlockCost(double squaredResidualNorm, double delta)
     return delta * std::sqrt(squaredResidualNorm) - 0.5 * delta * delta;
 }
 
-double reprojectionHuberCost(const std::vector<xjw::Camera> &cameras,
+double reprojectionHuberCost(const std::vector<xjw::FramePinholeCamera> &cameras,
                              const xjw::BATrack &track,
                              const std::array<double, 3> &point,
                              double delta)
@@ -80,7 +80,7 @@ double reprojectionHuberCost(const std::vector<xjw::Camera> &cameras,
 }
 
 std::array<double, 3> laserOrigin(
-    const xjw::Camera &camera,
+    const xjw::FramePinholeCamera &camera,
     const std::array<double, 3> &leverArmCameraMeters)
 {
     const std::array<double, 3> center = camera.cameraCenter();
@@ -98,7 +98,7 @@ std::array<double, 3> laserOrigin(
     return origin;
 }
 
-xjw::BATrack makeTrack(const std::vector<xjw::Camera> &cameras,
+xjw::BATrack makeTrack(const std::vector<xjw::FramePinholeCamera> &cameras,
                        const std::array<double, 3> &truth,
                        const std::array<double, 3> &initial)
 {
@@ -123,7 +123,7 @@ TEST(BundleAdjustCeresBackendTest, CeresCpuBackendOptimizesPointAndReportsBacken
 {
     ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
 
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-8.0, 0.0, 0.0),
         makeCamera(8.0, 0.0, 0.0),
         makeCamera(0.0, 8.0, 0.0),
@@ -164,7 +164,7 @@ TEST(BundleAdjustCeresBackendTest, StatisticalLaserWeightReducesPointToPlaneDist
 {
     ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
 
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-2.0, 0.0, 0.0),
         makeCamera(2.0, 0.0, 0.0),
         makeCamera(0.0, 2.0, 0.0),
@@ -196,7 +196,7 @@ TEST(BundleAdjustCeresBackendTest, StationaryNonzeroResidualIsUsable)
 {
     ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
 
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-2.0, 0.0, 0.0),
         makeCamera(2.0, 0.0, 0.0),
     };
@@ -225,7 +225,7 @@ TEST(BundleAdjustCeresBackendTest, InitialGrossTrackGateKeepsPathologicalTrackOu
 {
     ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
 
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-2.0, 0.0, 0.0),
         makeCamera(2.0, 0.0, 0.0),
     };
@@ -258,7 +258,7 @@ TEST(BundleAdjustCeresBackendTest, ProgressCancellationDoesNotPublishPartialSolu
 {
     ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
 
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-8.0, 0.0, 0.0),
         makeCamera(8.0, 0.0, 0.0),
         makeCamera(0.0, 8.0, 0.0),
@@ -303,7 +303,7 @@ TEST(BundleAdjustCeresBackendTest, ProgressNeverExceedsConfiguredIterationCount)
 {
     ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
 
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-8.0, 0.0, 0.0),
         makeCamera(8.0, 0.0, 0.0),
         makeCamera(0.0, 8.0, 0.0),
@@ -342,7 +342,7 @@ TEST(BundleAdjustCeresBackendTest, SharedReprojectionHuberMatchesManualRobustCos
 {
     ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
 
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-8.0, 0.0, 0.0),
         makeCamera(8.0, 0.0, 0.0),
         makeCamera(0.0, 8.0, 0.0),
@@ -388,7 +388,7 @@ TEST(BundleAdjustCeresBackendTest, CeresPointOnlyUsesDenseQrSolver)
 {
     ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
 
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-8.0, 0.0, 0.0),
         makeCamera(8.0, 0.0, 0.0),
         makeCamera(0.0, 8.0, 0.0),
@@ -421,12 +421,12 @@ TEST(BundleAdjustCeresBackendTest, AutoDiffPosePriorStabilizesCameraCenter)
 {
     ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
 
-    const std::vector<xjw::Camera> truthCameras{
+    const std::vector<xjw::FramePinholeCamera> truthCameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
         makeCamera(0.0, 1.0, 0.0),
     };
-    std::vector<xjw::Camera> initialCameras = truthCameras;
+    std::vector<xjw::FramePinholeCamera> initialCameras = truthCameras;
     initialCameras[1] = makeCamera(1.6, 0.2, 0.0);
 
     std::vector<xjw::BATrack> tracks;
@@ -475,7 +475,7 @@ TEST(BundleAdjustCeresBackendTest, FixedTrackConstrainsProblemWithoutMovingPoint
 {
     ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
 
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -506,7 +506,7 @@ TEST(BundleAdjustCeresBackendTest, CameraPlaneConstraintOnlyRemovesNormalDrift)
 {
     ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
 
-    std::vector<xjw::Camera> cameras{
+    std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-2.0, 0.0, 0.0),
         makeCamera(2.0, 0.0, 0.0),
         makeCamera(0.0, 2.0, 1.2),
@@ -550,7 +550,7 @@ TEST(BundleAdjustCeresBackendTest, CameraLayerReferencePreservesLegitimateNonPla
 {
     ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
 
-    std::vector<xjw::Camera> cameras{
+    std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-2.0, 0.0, 0.0),
         makeCamera(2.0, 0.0, 0.0),
         makeCamera(0.0, 2.0, 1.2),
@@ -595,7 +595,7 @@ TEST(BundleAdjustCeresBackendTest, LegacyRequestDoesNotSilentlyIgnoreCameraPlane
 {
     ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
 
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
         makeCamera(0.0, 1.0, 0.4),
@@ -636,7 +636,7 @@ TEST(BundleAdjustCeresBackendTest, CeresFiltersInvalidWeightsAndRejectsDuplicate
 {
     ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
 
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-8.0, 0.0, 0.0),
         makeCamera(8.0, 0.0, 0.0),
         makeCamera(0.0, 8.0, 0.0),
@@ -678,7 +678,7 @@ TEST(BundleAdjustCeresBackendTest, CeresFiltersInvalidWeightsAndRejectsDuplicate
 
 TEST(BundleAdjustCeresBackendTest, LargePointOnlyCeresRequestFallsBackToLegacy)
 {
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-8.0, 0.0, 0.0),
         makeCamera(8.0, 0.0, 0.0),
         makeCamera(0.0, 8.0, 0.0),
@@ -701,7 +701,7 @@ TEST(BundleAdjustCeresBackendTest, LargePointOnlyCeresRequestFallsBackToLegacy)
 
 TEST(BundleAdjustCeresBackendTest, CeresCudaRequestFallsBackWhenCudaSolverIsUnavailable)
 {
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-8.0, 0.0, 0.0),
         makeCamera(8.0, 0.0, 0.0),
         makeCamera(0.0, 8.0, 0.0),
@@ -735,7 +735,7 @@ TEST(BundleAdjustCeresBackendTest, CeresCudaRequestFallsBackWhenCudaSolverIsUnav
 
 TEST(BundleAdjustCeresBackendTest, NativeCudaRequestFallsBackWhenBackendUnavailable)
 {
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -784,7 +784,7 @@ TEST(BundleAdjustCeresBackendTest, CeresCpuReportsControlPointConstraintStats)
     options.controlPointHuberDeltaMeters = 10.0;
     options.maxIterations = 25;
 
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(0.0, 0.0, 0.0),
     };
@@ -811,7 +811,7 @@ TEST(BundleAdjustCeresBackendTest, CeresDoesNotCountTracksWithNonFiniteRms)
     options.enablePointFilter = false;
     options.maxIterations = 3;
 
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -828,7 +828,7 @@ TEST(BundleAdjustCeresBackendTest, CeresCudaAndCpuReachComparableRms)
 {
     ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
 
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-8.0, 0.0, 0.0),
         makeCamera(8.0, 0.0, 0.0),
         makeCamera(0.0, 8.0, 0.0),
@@ -860,7 +860,7 @@ TEST(BundleAdjustCeresBackendTest, FreeLaserShotUsesOnlyRealMeasuredImagesAndDoe
 {
     ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
 
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-2.0, 0.0, 0.0),
         makeCamera(2.0, 0.0, 0.0),
     };
@@ -925,8 +925,8 @@ TEST(BundleAdjustCeresBackendTest, LaserRangeLeverArmUsesUpdatedCameraRotation)
 {
     ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
 
-    const xjw::Camera camera = makeCamera(0.0, 0.0, 0.0);
-    const std::vector<xjw::Camera> cameras{camera};
+    const xjw::FramePinholeCamera camera = makeCamera(0.0, 0.0, 0.0);
+    const std::vector<xjw::FramePinholeCamera> cameras{camera};
     const std::array<double, 3> leverArm{{1.0, 0.0, 0.0}};
     const std::array<double, 3> truthLaserOrigin{{0.0, 1.0, 0.0}};
     const std::vector<std::array<double, 3>> targetPoints{
@@ -996,7 +996,7 @@ TEST(BundleAdjustCeresBackendTest, ConstrainedLaserPointUsesFullSqrtInformationP
 {
     ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
 
-    const std::vector<xjw::Camera> cameras{makeCamera(0.0, 0.0, 0.0)};
+    const std::vector<xjw::FramePinholeCamera> cameras{makeCamera(0.0, 0.0, 0.0)};
     const std::array<double, 3> truth{{0.2, -0.1, 10.0}};
     xjw::BALaserRangeConstraint shot;
     shot.cameraIndex = 0;
@@ -1033,7 +1033,7 @@ TEST(BundleAdjustCeresBackendTest, ConstrainedLaserPointUsesFullSqrtInformationP
 
 TEST(BundleAdjustLaserRangeValidationTest, RejectsInvalidShotFieldsAndUnobservableFreePoint)
 {
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -1132,7 +1132,7 @@ TEST(BundleAdjustLaserRangeBackendTest, AutoRequiresCeresAndUnsupportedBackendsD
                      xjw::BABackend::NativeCuda)
                      .supportsLaserRangeConstraints);
 
-    const std::vector<xjw::Camera> cameras{makeCamera(0.0, 0.0, 0.0)};
+    const std::vector<xjw::FramePinholeCamera> cameras{makeCamera(0.0, 0.0, 0.0)};
     xjw::BALaserRangeConstraint shot;
     shot.cameraIndex = 0;
     shot.initialPoint = {{0.0, 0.0, 10.0}};
@@ -1162,7 +1162,7 @@ TEST(BundleAdjustLaserRangeBackendTest, AutoQualityRejectionNeverFallsBackWithou
 {
     ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
 
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };

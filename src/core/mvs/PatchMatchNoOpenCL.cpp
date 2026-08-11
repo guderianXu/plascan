@@ -41,8 +41,8 @@ void PatchMatchDepthEstimator::cleanupOpenClResources()
 bool PatchMatchDepthEstimator::estimateOpenCL(
     const cv::Mat &,
     const std::vector<cv::Mat> &,
-    const Camera &,
-    const std::vector<Camera> &,
+    const FramePinholeCamera &,
+    const std::vector<FramePinholeCamera> &,
     float,
     float,
     const PatchMatchConfig &,

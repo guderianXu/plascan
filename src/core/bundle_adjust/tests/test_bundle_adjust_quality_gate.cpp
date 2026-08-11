@@ -3,7 +3,7 @@
 #include "BundleAdjust.h"
 #include "BundleAdjustQuality.h"
 #include "BundleAdjustValidation.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 #include <array>
 #include <cmath>
@@ -13,9 +13,9 @@
 namespace
 {
 
-xjw::Camera makeCamera(double cx, double cy, double cz)
+xjw::FramePinholeCamera makeCamera(double cx, double cy, double cz)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
     camera.setPose({{1.0, 0.0, 0.0,
                      0.0, 1.0, 0.0,
@@ -24,7 +24,7 @@ xjw::Camera makeCamera(double cx, double cy, double cz)
     return camera;
 }
 
-bool projectPoint(const xjw::Camera &camera, const std::array<double, 3> &point, double *u, double *v)
+bool projectPoint(const xjw::FramePinholeCamera &camera, const std::array<double, 3> &point, double *u, double *v)
 {
     const double world[3] = {point[0], point[1], point[2]};
     double pixel[2] = {0.0, 0.0};
@@ -37,7 +37,7 @@ bool projectPoint(const xjw::Camera &camera, const std::array<double, 3> &point,
     return true;
 }
 
-xjw::BATrack makeTrack(const std::vector<xjw::Camera> &cameras,
+xjw::BATrack makeTrack(const std::vector<xjw::FramePinholeCamera> &cameras,
                        const std::array<double, 3> &truth,
                        const std::array<double, 3> &initial)
 {
@@ -76,7 +76,7 @@ TEST(BundleAdjustQualityGateTest, AutoPointOnlyProblemUsesLegacyCpu)
 
 TEST(BundleAdjustValidationTest, ProblemSummaryCountsOnlyUsableObservations)
 {
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -119,7 +119,7 @@ TEST(BundleAdjustQualityGateTest, AutoDoesNotSelectNativeCudaForPointOnlyProblem
 
 TEST(BundleAdjustQualityGateTest, ExplicitNativeCudaFallsBackWhenControlPointsEnabled)
 {
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -149,7 +149,7 @@ TEST(BundleAdjustQualityGateTest, AutoRejectsCeresCandidateWhenQualityGateFails)
         GTEST_SKIP() << "Ceres backend is not available in this build";
     }
 
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-5.0, 0.0, 0.0),
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(5.0, 0.0, 0.0),
@@ -193,7 +193,7 @@ TEST(BundleAdjustQualityGateTest, AutoRejectsCeresCandidateWhenQualityGateFails)
 
 TEST(BundleAdjustConvergenceTest, ExactLegacyProblemStopsAfterMinimumConvergenceRounds)
 {
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -242,7 +242,7 @@ TEST(BundleAdjustQualityGateTest, AdaptiveFilterUsesAbsoluteFloorAndMedianScale)
 
 TEST(BundleAdjustQualityGateTest, FinalizerRejectsTrackBehindAnyObservationCamera)
 {
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -271,7 +271,7 @@ TEST(BundleAdjustQualityGateTest, FinalizerRejectsTrackBehindAnyObservationCamer
 
 TEST(BundleAdjustQualityGateTest, JointBaWithoutGaugeConstraintIsRejected)
 {
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -309,7 +309,7 @@ TEST(BundleAdjustQualityGateTest, ConstraintRegressionIsRejected)
 
 TEST(BundleAdjustValidationTest, RejectsNonPositiveFiniteDifferenceStep)
 {
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -333,7 +333,7 @@ TEST(BundleAdjustValidationTest, RejectsNonPositiveFiniteDifferenceStep)
 
 TEST(BundleAdjustValidationTest, RejectsInvalidFixedTrackIndices)
 {
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -360,7 +360,7 @@ TEST(BundleAdjustValidationTest, RejectsInvalidFixedTrackIndices)
 
 TEST(BundleAdjustFixedTrackTest, LegacyKeepsFixedPointWhileOptimizingOtherTracks)
 {
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -389,7 +389,7 @@ TEST(BundleAdjustFixedTrackTest, LegacyKeepsFixedPointWhileOptimizingOtherTracks
 
 TEST(BundleAdjustValidationTest, IgnoresLegacyFlagsDisabledByIntrinsicMask)
 {
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -412,7 +412,7 @@ TEST(BundleAdjustValidationTest, IgnoresLegacyFlagsDisabledByIntrinsicMask)
 
 TEST(BundleAdjustValidationTest, RejectsMismatchedStableIntrinsicReferences)
 {
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -436,7 +436,7 @@ TEST(BundleAdjustValidationTest, RejectsMismatchedStableIntrinsicReferences)
 TEST(BundleAdjustValidationTest,
      RejectsMismatchedCalibrationGroupsWhenIntrinsicsAreFixed)
 {
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -459,7 +459,7 @@ TEST(BundleAdjustValidationTest,
 TEST(BundleAdjustValidationTest,
      RejectsMismatchedStableReferencesWhenIntrinsicsAreFixed)
 {
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -481,7 +481,7 @@ TEST(BundleAdjustValidationTest,
 
 TEST(BundleAdjustQualityGateTest, ConstraintStatsExcludeRejectedTracksFromBothSides)
 {
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -523,7 +523,7 @@ TEST(BundleAdjustQualityGateTest, ConstraintStatsExcludeRejectedTracksFromBothSi
 
 TEST(BundleAdjustValidationTest, LaserPlanesDoNotBypassAutoGaugeAnchors)
 {
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -545,7 +545,7 @@ TEST(BundleAdjustValidationTest, LaserPlanesDoNotBypassAutoGaugeAnchors)
 
 TEST(BundleAdjustValidationTest, SinglePosePriorDoesNotClaimAbsoluteScale)
 {
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };
@@ -566,7 +566,7 @@ TEST(BundleAdjustValidationTest, SinglePosePriorDoesNotClaimAbsoluteScale)
 
 TEST(BundleAdjustValidationTest, SingleControlPointStillRequiresRigidCameraAnchor)
 {
-    const std::vector<xjw::Camera> cameras{
+    const std::vector<xjw::FramePinholeCamera> cameras{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
     };

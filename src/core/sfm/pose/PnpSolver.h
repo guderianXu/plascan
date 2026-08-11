@@ -8,13 +8,13 @@
 // 使用 OpenCV 的 solvePnPRansac 估计相机的绝对位姿（R, t）。
 //
 // 输出采用 PlaScan 约定：
-//   - R 为 camera-to-world 旋转矩阵（与 Camera.h 一致）
+//   - R 为 camera-to-world 旋转矩阵（与 FramePinholeCamera.h 一致）
 //   - C 为相机中心在世界坐标系中的位置
 //
 // 参考：COLMAP 的 absolute_pose.h，简化适配。
 // ============================================================
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 #include <array>
 #include <vector>
@@ -90,10 +90,10 @@ struct PnpResult
 {
     bool success = false; ///< 是否成功求解
 
-    /// camera-to-world 旋转矩阵（行优先 3×3），与 `Camera::cameraToWorldRotation()` 一致
+    /// camera-to-world 旋转矩阵（行优先 3×3），与 `FramePinholeCamera::cameraToWorldRotation()` 一致
     std::array<double, 9> R{{1, 0, 0, 0, 1, 0, 0, 0, 1}};
 
-    /// 相机中心在世界坐标系中的位置，与 `Camera::cameraCenter()` 一致
+    /// 相机中心在世界坐标系中的位置，与 `FramePinholeCamera::cameraCenter()` 一致
     std::array<double, 3> C{{0, 0, 0}};
 
     int numInliers = 0;     ///< RANSAC 内点数
@@ -135,7 +135,7 @@ class PnpSolver
                            const PnpOptions &options = PnpOptions());
 
     /**
-     * @brief 使用已有 Camera 内参从 3D-2D 对应关系估计绝对位姿。
+     * @brief 使用已有 FramePinholeCamera 内参从 3D-2D 对应关系估计绝对位姿。
      *
      * @param worldPoints   三维点坐标列表
      * @param imagePoints   对应的图像像素坐标列表
@@ -144,7 +144,7 @@ class PnpSolver
      * @return PnpResult    求解结果
      */
     static PnpResult solveWithCamera(const std::vector<std::array<double, 3>> &worldPoints,
-                                     const std::vector<std::array<double, 2>> &imagePoints, const Camera &cam,
+                                     const std::vector<std::array<double, 2>> &imagePoints, const FramePinholeCamera &cam,
                                      const PnpOptions &options = PnpOptions());
 
   private:
@@ -158,7 +158,7 @@ class PnpSolver
         int uDir,
         int vDir,
         bool depthFlipped,
-        const Camera::Distortion &distortion,
+        const FramePinholeCamera::Distortion &distortion,
         const PnpOptions &options);
 };
 

@@ -3,7 +3,7 @@
 #include "CliJsonIO.h"
 #include "CliOutputPolicy.h"
 #include "CliPathUtils.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 #include <QDir>
 #include <QJsonArray>
@@ -23,7 +23,7 @@ struct PhotogrammetryInputItem
     QString cameraPath;
     bool hasCameraPath = false;
     bool hasLoadedCamera = false;
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
 };
 
 struct PhotogrammetryListOptions
@@ -47,9 +47,9 @@ bool readPhotogrammetryImageList(const QString &listPath,
 
 QStringList imagePaths(const std::vector<PhotogrammetryInputItem> &items);
 QStringList cameraPathsForService(const std::vector<PhotogrammetryInputItem> &items);
-QMap<QString, xjw::Camera> referenceCameraMap(const std::vector<PhotogrammetryInputItem> &items);
+QMap<QString, xjw::FramePinholeCamera> referenceCameraMap(const std::vector<PhotogrammetryInputItem> &items);
 
-QJsonObject cameraToJson(const xjw::Camera &camera);
+QJsonObject cameraToJson(const xjw::FramePinholeCamera &camera);
 QJsonArray inputItemsToJson(const std::vector<PhotogrammetryInputItem> &items);
 QJsonArray inputPairsToJson(const std::vector<PhotogrammetryInputItem> &items);
 QJsonObject projectMetaFromInputItems(const std::vector<PhotogrammetryInputItem> &items);

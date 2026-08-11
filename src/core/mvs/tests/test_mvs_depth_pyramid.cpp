@@ -130,8 +130,8 @@ TEST(MvsDepthPyramidEstimatorTest, ResizesReferenceAndSourceMasksAtEveryLevel)
     cv::Mat source_mask(6, 8, CV_8U, cv::Scalar(0));
     source_mask(cv::Rect(4, 0, 4, 6)).setTo(cv::Scalar(255));
     request.sourceValidMasks = {source_mask};
-    request.referenceCamera = xjw::Camera();
-    request.sourceCameras = {xjw::Camera()};
+    request.referenceCamera = xjw::FramePinholeCamera();
+    request.sourceCameras = {xjw::FramePinholeCamera()};
     request.zNear = 1.0f;
     request.zFar = 3.0f;
     request.pyramidConfig.activeLevelCount = 1;
@@ -160,7 +160,7 @@ TEST(MvsDepthPyramidEstimatorTest,
     xjw::mvs::DepthPyramidRequest request;
     request.referenceImage = cv::Mat(5, 7, CV_8U, cv::Scalar(100));
     request.sourceImages = {request.referenceImage};
-    request.sourceCameras = {xjw::Camera()};
+    request.sourceCameras = {xjw::FramePinholeCamera()};
     request.zNear = 1.0f;
     request.zFar = 20.0f;
     request.pyramidConfig.activeLevelCount = 2;

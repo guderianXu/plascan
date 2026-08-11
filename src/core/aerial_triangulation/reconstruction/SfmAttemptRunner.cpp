@@ -118,7 +118,7 @@ bool cameraMetadataHasUsablePose(const QJsonObject &cameraObject)
            !cameraObject.value(QStringLiteral("pose_initialized_as_identity")).toBool(false);
 }
 
-Camera cameraWithIdentityPose(Camera camera)
+FramePinholeCamera cameraWithIdentityPose(FramePinholeCamera camera)
 {
     camera.setPose({1.0, 0.0, 0.0,
                     0.0, 1.0, 0.0,
@@ -348,7 +348,7 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
             {
                 return false;
             }
-            Camera camera;
+            FramePinholeCamera camera;
             return camera.loadFromFile(xjw::common::io::toUtf8Path(path)) &&
                    camera.isValid();
         });
@@ -364,7 +364,7 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
         for (auto it = imageMetadata.cbegin(); it != imageMetadata.cend(); ++it)
         {
             const QJsonObject cameraObject = it.value().value(QStringLiteral("camera")).toObject();
-            Camera camera;
+            FramePinholeCamera camera;
             if (!cameraObject.isEmpty() &&
                 xjw::common::project::cameraFromJson(cameraObject, &camera) &&
                 camera.isValid())
@@ -435,7 +435,7 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
             std::max(sfmOptions.pnpOptions.relaxedMinNumInliers, 24);
     }
 
-    // 阶段 3：创建影像节点。重置对齐时工程 Camera 只保留内参并将外参置为单位位姿。
+    // 阶段 3：创建影像节点。重置对齐时工程 FramePinholeCamera 只保留内参并将外参置为单位位姿。
     IncrementalSfm sfm(sfmOptions);
     QMap<QString, ImageId> imageIdByPath;
     for (int index = 0; index < input.images.size(); ++index)
@@ -460,7 +460,7 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
         if ((input.useProjectCameraIntrinsics || input.useProjectCameraPoses) &&
             projectCamera != projectCameraByPath.cend())
         {
-            Camera camera;
+            FramePinholeCamera camera;
             if (xjw::common::project::cameraFromJson(projectCamera.value(), &camera) &&
                 camera.isValid())
             {
@@ -487,7 +487,7 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
         }
         const double focal = std::max(imageSize.width(), imageSize.height()) *
             std::max(0.1, input.estimatedFocalScale);
-        Camera camera;
+        FramePinholeCamera camera;
         camera.setIntrinsics(focal,
                              focal,
                              imageSize.width() * 0.5,
@@ -700,7 +700,7 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
             {
                 continue;
             }
-            const Camera &camera = execution.reconstruction->camera(image_id);
+            const FramePinholeCamera &camera = execution.reconstruction->camera(image_id);
             const double focal_x = camera.focalX();
             const double focal_y = camera.focalY();
             if (std::isfinite(focal_x) && focal_x > 0.0 &&

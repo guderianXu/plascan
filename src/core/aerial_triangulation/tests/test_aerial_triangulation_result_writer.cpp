@@ -1,7 +1,7 @@
 #include "reporting/AerialTriangulationResultWriter.h"
 #include "reporting/QualityReportWriter.h"
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "reconstruction/SfmReconstruction.h"
 
 #include <gtest/gtest.h>
@@ -39,13 +39,13 @@ TEST(AerialTriangulationResultWriterTest, WritesSparseCloudSidecarAndQualityMeta
     imageBData.imagePath = imageBPath.toStdString();
     reconstruction->addImage(imageBData);
 
-    xjw::Camera cameraA;
+    xjw::FramePinholeCamera cameraA;
     cameraA.setIntrinsics(70.0, 70.0, 32.0, 24.0);
     cameraA.setPose({1.0, 0.0, 0.0,
                      0.0, 1.0, 0.0,
                      0.0, 0.0, 1.0},
                     {-0.5, 0.0, 0.0});
-    xjw::Camera cameraB = cameraA;
+    xjw::FramePinholeCamera cameraB = cameraA;
     cameraB.setCameraCenter({0.5, 0.0, 0.0});
     reconstruction->registerImage(0, cameraA);
     reconstruction->registerImage(1, cameraB);

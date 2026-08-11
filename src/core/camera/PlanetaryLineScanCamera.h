@@ -12,7 +12,7 @@ namespace xjw
 /**
  * @brief Time-dependent planetary pushbroom camera loaded from a USGSCSM ISD.
  *
- * This class is intentionally separate from the static Tsai Camera. Positions
+ * This class is intentionally separate from the static Tsai FramePinholeCamera. Positions
  * and ground coordinates use target body-fixed metres; ephemeris times use TDB
  * seconds. The P0 implementation supports the USGS Astro line-scanner model
  * and the LRO LROC NAC optical-distortion model used by the ISIS lidar fixture.

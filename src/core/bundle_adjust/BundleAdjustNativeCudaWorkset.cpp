@@ -19,7 +19,7 @@ bool finitePoint(const std::array<double, 3> &point)
            std::isfinite(point[2]);
 }
 
-HostCamera makeHostCamera(const Camera &camera)
+HostCamera makeHostCamera(const FramePinholeCamera &camera)
 {
     const xjw::ba::ProjectionCamera projection = xjw::ba::makeProjectionCamera(camera);
 
@@ -129,7 +129,7 @@ bool hasUnsupportedConstraints(const std::vector<BATrack> &tracks,
     return false;
 }
 
-WorksetBuildResult buildWorkset(const std::vector<Camera> &cameras,
+WorksetBuildResult buildWorkset(const std::vector<FramePinholeCamera> &cameras,
                                 const std::vector<BATrack> &tracks,
                                 const BAOptions &options)
 {

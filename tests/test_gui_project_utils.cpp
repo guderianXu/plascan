@@ -75,7 +75,7 @@
 #include "ObjStreamingLoader.h"
 #include "LayerImageLoader.h"
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "DemDomIO.h"
 #include "io/ImageIO.h"
 #include "io/PathIO.h"
@@ -753,10 +753,10 @@ TEST(CanvasDepthOverlayTest, ShowsCurrentFrameAsSoonAsItsDepthRecordArrives)
 
 namespace {
 
-xjw::Camera makeCamera(double cx, double cy, double cz,
+xjw::FramePinholeCamera makeCamera(double cx, double cy, double cz,
                        double fu = 1200.0, double fv = 1200.0)
 {
-    xjw::Camera cam;
+    xjw::FramePinholeCamera cam;
     cam.setIntrinsics(fu, fv, 512.0, 384.0);
     const std::array<double, 9> rotation = {1.0, 0.0, 0.0,
                                             0.0, 1.0, 0.0,
@@ -766,7 +766,7 @@ xjw::Camera makeCamera(double cx, double cy, double cz,
     return cam;
 }
 
-bool projectPoint(const xjw::Camera &camera,
+bool projectPoint(const xjw::FramePinholeCamera &camera,
                   const std::array<double, 3> &xyz,
                   double *u,
                   double *v)
@@ -1241,7 +1241,7 @@ TEST(ProjectDataAsyncOpenTest, OpensProjectFromSnapshotAndAppliesResultsLater)
     EXPECT_EQ(reopened.metadata().value(QStringLiteral("image_match_results")).toArray().size(), 1);
 }
 
-QJsonObject buildImageEntry(const QString &path, const xjw::Camera &camera)
+QJsonObject buildImageEntry(const QString &path, const xjw::FramePinholeCamera &camera)
 {
     QJsonObject imageObject;
     imageObject[QStringLiteral("path")] = path;
@@ -1633,14 +1633,14 @@ TEST(ProjectResultRecordsTest, DenseCloudAndMeshRecordsKeepDistinctProductKinds)
 
 TEST(ProjectSupportUtilsTest, CameraJsonRoundTripPreservesUnitsAndDepthDirection)
 {
-    xjw::Camera sourceCamera = makeCamera(1.25, -2.5, 3.75, 1200.0, 1195.0);
+    xjw::FramePinholeCamera sourceCamera = makeCamera(1.25, -2.5, 3.75, 1200.0, 1195.0);
     sourceCamera.setAxisDirections(-1, 1);
     sourceCamera.setDepthAxisFlipped(true);
     sourceCamera.setDistortion(0.01, -0.001, 0.0001, 0.0002, -0.0003);
 
     const QJsonObject cameraJson = xjw::common::project::cameraToJson(sourceCamera);
 
-    xjw::Camera restoredCamera;
+    xjw::FramePinholeCamera restoredCamera;
     ASSERT_TRUE(xjw::common::project::cameraFromJson(cameraJson, &restoredCamera));
 
     EXPECT_DOUBLE_EQ(restoredCamera.focalX(), sourceCamera.focalX());
@@ -2122,7 +2122,7 @@ TEST(ModelWorkflowPolicyTest, StoredDepthBatchCompatibilityVerifiesLegacyCameras
     QTemporaryDir temp_dir;
     ASSERT_TRUE(temp_dir.isValid());
 
-    const std::array<xjw::Camera, 2> cameras{
+    const std::array<xjw::FramePinholeCamera, 2> cameras{
         makeCamera(1.0, 2.0, 3.0),
         makeCamera(-1.0, 2.5, 3.5)};
     QJsonArray images;
@@ -3776,10 +3776,10 @@ TEST(CodeStyleTest, ProjectDashboardWidgetUsesLowerCamelPrivateMemberNames)
     }
 }
 
-TEST(CodeStyleTest, CameraStoresGroupedStateAsSingleSourceOfTruth)
+TEST(CodeStyleTest, FramePinholeCameraStoresGroupedStateAsSingleSourceOfTruth)
 {
-    const QString header = readProjectSourceFile(QStringLiteral("src/core/camera/Camera.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/core/camera/Camera.cpp"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/core/camera/FramePinholeCamera.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/camera/FramePinholeCamera.cpp"));
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
 
@@ -3821,15 +3821,15 @@ TEST(CodeStyleTest, CameraStoresGroupedStateAsSingleSourceOfTruth)
 
 TEST(CodeStyleTest, StaticCameraKeepsPositiveDepthValueSemantics)
 {
-    const QString header = readProjectSourceFile(QStringLiteral("src/core/camera/Camera.h"));
-    const QString source = readProjectSourceFile(QStringLiteral("src/core/camera/Camera.cpp"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/core/camera/FramePinholeCamera.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/camera/FramePinholeCamera.cpp"));
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
 
-    EXPECT_TRUE(header.contains(QStringLiteral("Camera normalizedForPositiveDepth() const;")));
-    EXPECT_TRUE(header.contains(QStringLiteral("Camera scaledIntrinsics(double scaleX, double scaleY) const;")));
-    EXPECT_TRUE(source.contains(QStringLiteral("Camera Camera::normalizedForPositiveDepth() const")));
-    EXPECT_TRUE(source.contains(QStringLiteral("Camera Camera::scaledIntrinsics")));
+    EXPECT_TRUE(header.contains(QStringLiteral("FramePinholeCamera normalizedForPositiveDepth() const;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("FramePinholeCamera scaledIntrinsics(double scaleX, double scaleY) const;")));
+    EXPECT_TRUE(source.contains(QStringLiteral("FramePinholeCamera FramePinholeCamera::normalizedForPositiveDepth() const")));
+    EXPECT_TRUE(source.contains(QStringLiteral("FramePinholeCamera FramePinholeCamera::scaledIntrinsics")));
 }
 
 TEST(CodeStyleTest, MultiViewTrackBuilderUsesLowerCamelPrivateMemberNames)
@@ -11235,8 +11235,8 @@ TEST(TriangulationServiceTest, ExportsInitialSparseCloud)
     const QString image0Path = QDir(tempDir.path()).filePath(QStringLiteral("1.jpg"));
     const QString image1Path = QDir(tempDir.path()).filePath(QStringLiteral("2.jpg"));
 
-    const xjw::Camera camera0 = makeCamera(0.0, 0.0, 0.0);
-    const xjw::Camera camera1 = makeCamera(8.0, 0.0, 0.0);
+    const xjw::FramePinholeCamera camera0 = makeCamera(0.0, 0.0, 0.0);
+    const xjw::FramePinholeCamera camera1 = makeCamera(8.0, 0.0, 0.0);
 
     const std::vector<std::array<double, 3>> points = {
         {3.0, -1.0, 35.0},
@@ -11324,9 +11324,9 @@ TEST(TriangulationServiceTest, UsesBinaryShardFeatureIdsForMultiViewTracks)
     const QString image1Path = QDir(tempDir.path()).filePath(QStringLiteral("2.jpg"));
     const QString image2Path = QDir(tempDir.path()).filePath(QStringLiteral("3.jpg"));
 
-    const xjw::Camera camera0 = makeCamera(0.0, 0.0, 0.0);
-    const xjw::Camera camera1 = makeCamera(8.0, 0.0, 0.0);
-    const xjw::Camera camera2 = makeCamera(16.0, 0.0, 0.0);
+    const xjw::FramePinholeCamera camera0 = makeCamera(0.0, 0.0, 0.0);
+    const xjw::FramePinholeCamera camera1 = makeCamera(8.0, 0.0, 0.0);
+    const xjw::FramePinholeCamera camera2 = makeCamera(16.0, 0.0, 0.0);
     const std::array<double, 3> point = {6.0, 0.5, 36.0};
 
     double u0 = 0.0;
@@ -14784,9 +14784,11 @@ TEST(CameraSceneWidgetTest, ObjMaterialTextureUsesFaceUvRhiPipeline)
     EXPECT_TRUE(vertexShader.contains(QStringLiteral("aColor")));
     EXPECT_TRUE(fragmentShader.contains(QStringLiteral("sampler2D modelTexture")));
     EXPECT_TRUE(fragmentShader.contains(QStringLiteral("texture(modelTexture, vTexCoord)")));
-    EXPECT_TRUE(fragmentShader.contains(QStringLiteral("hasVertexColor")));
-    EXPECT_TRUE(fragmentShader.contains(QStringLiteral("textureWeight")));
-    EXPECT_TRUE(fragmentShader.contains(QStringLiteral("srgbToLinear")));
+    EXPECT_TRUE(fragmentShader.contains(QStringLiteral(
+        "fragColor = vec4(textureColor, 1.0)")));
+    EXPECT_FALSE(fragmentShader.contains(QStringLiteral("vColor")));
+    EXPECT_FALSE(fragmentShader.contains(QStringLiteral("textureWeight")));
+    EXPECT_FALSE(fragmentShader.contains(QStringLiteral("srgbToLinear")));
     EXPECT_FALSE(fragmentShader.contains(QStringLiteral("0.55 + 0.75 * diff")));
 }
 

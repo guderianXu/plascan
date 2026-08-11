@@ -1,4 +1,4 @@
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "DepthRayMetric.h"
 
 #include <gtest/gtest.h>
@@ -12,9 +12,9 @@ namespace xjw::mesh
 namespace
 {
 
-Camera makeCamera()
+FramePinholeCamera makeCamera()
 {
-    Camera camera;
+    FramePinholeCamera camera;
     camera.setIntrinsics(100.0, 100.0, 0.0, 0.0);
     camera.setPose(
         {1.0, 0.0, 0.0,
@@ -72,7 +72,7 @@ TEST(DepthRayMetricTest, OffAxisPixelSeparatesCameraZAndRayDistance)
 
 TEST(DepthRayMetricTest, FlippedDepthAxisKeepsPositiveDepthConvention)
 {
-    Camera camera = makeCamera();
+    FramePinholeCamera camera = makeCamera();
     camera.setCameraCenter({1.0, 2.0, 3.0});
     camera.setDepthAxisFlipped(true);
 
@@ -99,11 +99,11 @@ TEST(DepthRayMetricTest, FlippedDepthAxisKeepsPositiveDepthConvention)
 
 TEST(DepthRayMetricTest, RejectsInvalidCameraDepthPixelAndOffset)
 {
-    const Camera invalid_camera;
+    const FramePinholeCamera invalid_camera;
     EXPECT_FALSE(DepthRayMetric::evaluate(
         invalid_camera, {0.0, 0.0}, 1.0).valid);
 
-    const Camera camera = makeCamera();
+    const FramePinholeCamera camera = makeCamera();
     EXPECT_FALSE(DepthRayMetric::evaluate(camera, {0.0, 0.0}, 0.0).valid);
     EXPECT_FALSE(DepthRayMetric::evaluate(camera, {0.0, 0.0}, -1.0).valid);
     EXPECT_FALSE(DepthRayMetric::evaluate(

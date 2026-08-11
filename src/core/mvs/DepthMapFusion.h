@@ -118,7 +118,7 @@ private:
         float P[12];       ///< 3×4 投影矩阵 K * [R|T]
         float invP[12];    ///< 3×4 逆投影矩阵
         float invR[9];     ///< R_cw^T = R_wc
-        Camera cameraModel;
+        FramePinholeCamera cameraModel;
         int W = 0;
         int H = 0;
     };

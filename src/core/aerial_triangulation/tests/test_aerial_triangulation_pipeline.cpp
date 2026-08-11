@@ -4,7 +4,7 @@
 #include "search/SfmSearchPolicy.h"
 #include "workflow/AerialTriangulationPipeline.h"
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 #include <gtest/gtest.h>
 
@@ -26,8 +26,8 @@ namespace
 void writeKnownPoseTiePoints(const QString &path,
                              const QString &imageA,
                              const QString &imageB,
-                             const xjw::Camera &cameraA,
-                             const xjw::Camera &cameraB)
+                             const xjw::FramePinholeCamera &cameraA,
+                             const xjw::FramePinholeCamera &cameraB)
 {
     QJsonArray tracks;
     for (int featureIndex = 0; featureIndex < 30; ++featureIndex)
@@ -901,13 +901,13 @@ TEST(AerialTriangulationPipelineTest, RunsSfmAndWritesPreparedReconstruction)
     ASSERT_TRUE(QImage(640, 480, QImage::Format_Grayscale8).save(imageA));
     ASSERT_TRUE(QImage(640, 480, QImage::Format_Grayscale8).save(imageB));
 
-    xjw::Camera cameraA;
+    xjw::FramePinholeCamera cameraA;
     cameraA.setIntrinsics(700.0, 700.0, 320.0, 240.0);
     cameraA.setPose({1.0, 0.0, 0.0,
                      0.0, 1.0, 0.0,
                      0.0, 0.0, 1.0},
                     {-0.5, 0.0, 0.0});
-    xjw::Camera cameraB = cameraA;
+    xjw::FramePinholeCamera cameraB = cameraA;
     cameraB.setCameraCenter({0.5, 0.0, 0.0});
     const QString cameraAPath = QDir(tempDir.path()).filePath(QStringLiteral("a.tsai"));
     const QString cameraBPath = QDir(tempDir.path()).filePath(QStringLiteral("b.tsai"));

@@ -6,7 +6,7 @@
 //
 // 存储内容：
 //   - 所有图像数据（ImageData）及其注册状态
-//   - 所有相机模型（Camera）
+//   - 所有相机模型（FramePinholeCamera）
 //   - 所有三维点（ScenePoint3D）
 //   - 对应关系图引用
 //
@@ -16,7 +16,7 @@
 // ============================================================
 
 #include "common/SfmTypes.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 #include <string>
 #include <unordered_map>
@@ -77,7 +77,7 @@ public:
      * @param imageId  图像 ID
      * @param camera   该图像对应的相机参数
      */
-    void registerImage(ImageId imageId, const Camera &camera);
+    void registerImage(ImageId imageId, const FramePinholeCamera &camera);
 
     /**
      * @brief 取消注册图像（标记为未注册，并移除关联相机）。
@@ -90,16 +90,16 @@ public:
     // ============================================================
 
     /// 获取图像对应的相机（可修改）
-    Camera &camera(ImageId imageId);
+    FramePinholeCamera &camera(ImageId imageId);
 
     /// 获取图像对应的相机（只读）
-    const Camera &camera(ImageId imageId) const;
+    const FramePinholeCamera &camera(ImageId imageId) const;
 
     /// 判断图像是否有关联相机
     bool hasCamera(ImageId imageId) const;
 
-    /// 获取所有相机（imageId → Camera）
-    const std::unordered_map<ImageId, Camera> &cameras() const
+    /// 获取所有相机（imageId → FramePinholeCamera）
+    const std::unordered_map<ImageId, FramePinholeCamera> &cameras() const
     {
         return cameraMap;
     }
@@ -179,8 +179,8 @@ private:
     /// 图像数据表 (imageId → ImageData)
     std::unordered_map<ImageId, ImageData> imageDataMap;
 
-    /// 相机表 (imageId → Camera)，仅已注册图像才有
-    std::unordered_map<ImageId, Camera> cameraMap;
+    /// 相机表 (imageId → FramePinholeCamera)，仅已注册图像才有
+    std::unordered_map<ImageId, FramePinholeCamera> cameraMap;
 
     /// 三维点表 (point3DId → ScenePoint3D)
     std::unordered_map<Point3DId, ScenePoint3D> point3DMap;

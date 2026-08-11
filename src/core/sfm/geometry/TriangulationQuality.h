@@ -9,7 +9,7 @@
  */
 
 #include "BundleAdjust.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 #include <array>
 #include <limits>
@@ -31,27 +31,27 @@ struct PairIntersectionCandidate
  * 采用最小值是保守质量指标：任一参与观测的极弱基线都会降低该 track 可信度。
  * 没有两台正深度相机形成有效几何时返回 0。
  */
-double minimumTriangulationAngleDeg(const std::vector<Camera> &cameras,
+double minimumTriangulationAngleDeg(const std::vector<FramePinholeCamera> &cameras,
                                     const BATrack &track,
                                     const std::array<double, 3> &worldPoint);
 
 /// 计算同一世界点在两幅影像上的均方根像素重投影误差。
-double pairRmsReprojectionErrorPx(const Camera &cameraA,
+double pairRmsReprojectionErrorPx(const FramePinholeCamera &cameraA,
                                   const std::array<double, 2> &pixelA,
-                                  const Camera &cameraB,
+                                  const FramePinholeCamera &cameraB,
                                   const std::array<double, 2> &pixelB,
                                   const std::array<double, 3> &worldPoint);
 
 /**
  * @brief 在历史深度轴可能错误时尝试四种双相机方向组合并选择最低 RMS 候选。
  *
- * 该回退只用于生成可继续优化的初值，不会修改输入 Camera。最终解仍必须经过
+ * 该回退只用于生成可继续优化的初值，不会修改输入 FramePinholeCamera。最终解仍必须经过
  * 正深度、基线角和重投影门控，不能把“某方向可投影”等同于相机元数据正确。
  */
 PairIntersectionCandidate triangulatePairWithDirectionFallback(
-    const Camera &cameraA,
+    const FramePinholeCamera &cameraA,
     const std::array<double, 2> &pixelA,
-    const Camera &cameraB,
+    const FramePinholeCamera &cameraB,
     const std::array<double, 2> &pixelB);
 
 } // namespace xjw

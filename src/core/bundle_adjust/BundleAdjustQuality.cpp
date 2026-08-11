@@ -90,7 +90,7 @@ ConstraintStats computeLaserStats(
     return stats;
 }
 
-double computedLaserRange(const Camera &camera,
+double computedLaserRange(const FramePinholeCamera &camera,
                           const std::array<double, 3> &leverArmCameraMeters,
                           const std::array<double, 3> &point)
 {
@@ -113,8 +113,8 @@ double computedLaserRange(const Camera &camera,
     return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
 
-void updateLaserRangeStats(const std::vector<Camera> &inputCameras,
-                           const std::vector<Camera> &refinedCameras,
+void updateLaserRangeStats(const std::vector<FramePinholeCamera> &inputCameras,
+                           const std::vector<FramePinholeCamera> &refinedCameras,
                            const BAOptions &options,
                            BAResult *result)
 {
@@ -301,8 +301,8 @@ ConstraintStats computeScaleBarStats(
     return stats;
 }
 
-void updateConstraintStats(const std::vector<Camera> &inputCameras,
-                           const std::vector<Camera> &refinedCameras,
+void updateConstraintStats(const std::vector<FramePinholeCamera> &inputCameras,
+                           const std::vector<FramePinholeCamera> &refinedCameras,
                            const std::vector<BATrack> &tracks,
                            const BAOptions &options,
                            BAResult *result)
@@ -342,7 +342,7 @@ void updateConstraintStats(const std::vector<Camera> &inputCameras,
     }
 }
 
-double strictTrackRms(const std::vector<Camera> &cameras,
+double strictTrackRms(const std::vector<FramePinholeCamera> &cameras,
                       const BATrack &track,
                       const std::array<double, 3> &point)
 {
@@ -449,7 +449,7 @@ double adaptivePointFilterThreshold(const std::vector<double> &pointRms,
     return std::max(threshold, medianFactor * median);
 }
 
-void finalizeBundleAdjustResult(const std::vector<Camera> &inputCameras,
+void finalizeBundleAdjustResult(const std::vector<FramePinholeCamera> &inputCameras,
                                 const std::vector<BATrack> &tracks,
                                 const BAOptions &options,
                                 BAResult *result)
@@ -464,7 +464,7 @@ void finalizeBundleAdjustResult(const std::vector<Camera> &inputCameras,
     {
         result->points.resize(tracks.size());
     }
-    const std::vector<Camera> &refinedCameras =
+    const std::vector<FramePinholeCamera> &refinedCameras =
         result->refinedCameras.size() == inputCameras.size()
             ? result->refinedCameras
             : inputCameras;

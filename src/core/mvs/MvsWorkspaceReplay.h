@@ -18,7 +18,7 @@ struct MvsPairAuditSummary
     int missingStatisticsPairCount = 0;
 };
 
-bool cameraFromMvsWorkspaceJson(const QJsonObject &object, Camera *camera);
+bool cameraFromMvsWorkspaceJson(const QJsonObject &object, FramePinholeCamera *camera);
 
 bool loadMvsReplayViews(const QString &manifestPath,
                         const QString &maskDirectory,

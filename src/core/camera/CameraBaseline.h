@@ -3,7 +3,7 @@
 #include <array>
 #include <optional>
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 namespace xjw
 {
@@ -19,11 +19,11 @@ class CameraBaseline
 {
 public:
     /// 仅根据两个相机光心计算物理基线长度。
-    static CameraBaseline evaluate(const Camera &first, const Camera &second);
+    static CameraBaseline evaluate(const FramePinholeCamera &first, const FramePinholeCamera &second);
 
     /// 额外计算指定空间点的观测夹角、前方性和深度/基线比。
-    static CameraBaseline evaluate(const Camera &first,
-                                   const Camera &second,
+    static CameraBaseline evaluate(const FramePinholeCamera &first,
+                                   const FramePinholeCamera &second,
                                    const std::array<double, 3> &worldPoint);
 
     /// 两个光心均为有限数且不重合时返回 true。

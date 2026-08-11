@@ -32,7 +32,7 @@ bool hasCompleteEvidence(const DepthPoseRefinementFrame &frame)
         frame.adaptiveConflictRatio.size() == size;
 }
 
-bool unproject(const Camera &camera,
+bool unproject(const FramePinholeCamera &camera,
                int column,
                int row,
                float depth,
@@ -54,7 +54,7 @@ bool unproject(const Camera &camera,
     return cv::checkRange(*world);
 }
 
-cv::Matx33d cameraToWorldRotation(const Camera &camera)
+cv::Matx33d cameraToWorldRotation(const FramePinholeCamera &camera)
 {
     const std::array<double, 9> values = camera.cameraToWorldRotation();
     return cv::Matx33d(
@@ -528,8 +528,8 @@ DepthPoseRefinementStageResult DepthPoseRefinementStage::buildCandidates(
     return result;
 }
 
-Camera DepthPoseRefinementStage::deriveCameraCandidate(
-    const Camera &camera,
+FramePinholeCamera DepthPoseRefinementStage::deriveCameraCandidate(
+    const FramePinholeCamera &camera,
     const DepthPoseAlignmentCorrection &correction)
 {
     if (!camera.isValid() || !correction.accepted)
@@ -538,7 +538,7 @@ Camera DepthPoseRefinementStage::deriveCameraCandidate(
     }
     const cv::Matx33d old_camera_to_world = cameraToWorldRotation(camera);
     // The requested world-to-camera update is R_wc' = R_wc * Q^T.
-    // Camera stores R_cw, so the equivalent update is R_cw' = Q * R_cw.
+    // FramePinholeCamera stores R_cw, so the equivalent update is R_cw' = Q * R_cw.
     const cv::Matx33d new_camera_to_world =
         correction.rotation * old_camera_to_world;
     const std::array<double, 3> old_center_array = camera.cameraCenter();
@@ -547,7 +547,7 @@ Camera DepthPoseRefinementStage::deriveCameraCandidate(
     const cv::Vec3d new_center =
         correction.rotation * (old_center - correction.pivotWorld) +
         correction.pivotWorld + correction.translation;
-    Camera derived = camera;
+    FramePinholeCamera derived = camera;
     derived.setPose(
         std::array<double, 9>{
             new_camera_to_world(0, 0), new_camera_to_world(0, 1),

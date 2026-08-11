@@ -2,7 +2,7 @@
  * @file IncrementalSfmDetail.cpp
  * @brief 增量 SfM 的无状态几何、候选评分和坐标系对齐辅助实现。
  *
- * 本文件不持有重建流程状态。所有旋转均采用 Camera 的 camera-to-world 行主序约定；
+ * 本文件不持有重建流程状态。所有旋转均采用 FramePinholeCamera 的 camera-to-world 行主序约定；
  * 相似变换采用 `target = scale * R * source + translation`。这些函数被初始对试算、
  * 已知位姿三角化和参考相机绝对定向共同使用。
  */
@@ -249,7 +249,7 @@ KnownPoseTriangulationPolicy resolveKnownPoseTriangulationPolicy(
         }
 
         const ImageData &image = reconstruction->image(imageId);
-        const Camera &camera = reconstruction->camera(imageId);
+        const FramePinholeCamera &camera = reconstruction->camera(imageId);
 
         for (FeatureIdx featureIdx = 0; featureIdx < static_cast<FeatureIdx>(image.keypoints.size()); ++featureIdx)
         {
@@ -269,7 +269,7 @@ KnownPoseTriangulationPolicy resolveKnownPoseTriangulationPolicy(
                     continue;
                 }
 
-                const Camera &otherCamera = reconstruction->camera(correspondence.imageId);
+                const FramePinholeCamera &otherCamera = reconstruction->camera(correspondence.imageId);
                 const auto &keypoint = image.keypoints[featureIdx];
                 const auto &otherKeypoint = otherImage.keypoints[correspondence.featureIdx];
                 const auto triResult = Intersection::intersectPair(camera,
@@ -358,8 +358,8 @@ bool knownPoseMatchPassesGeometry(const SfmReconstruction &reconstruction,
         return false;
     }
 
-    const Camera &camera = reconstruction.camera(imageId);
-    const Camera &otherCamera = reconstruction.camera(otherImageId);
+    const FramePinholeCamera &camera = reconstruction.camera(imageId);
+    const FramePinholeCamera &otherCamera = reconstruction.camera(otherImageId);
     const FeatureKeypoint &keypoint = image.keypoints[match.idx1];
     const FeatureKeypoint &otherKeypoint = otherImage.keypoints[match.idx2];
     // Intersection 同时检查两相机正深度，并返回双视交会角和 RMS。

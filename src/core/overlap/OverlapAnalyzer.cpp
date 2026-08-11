@@ -107,7 +107,7 @@ bool centerRayWorldDirection(const xjw::OverlapImageInput &image, std::array<dou
         return false;
     }
 
-    const xjw::Camera &camera = image.camera;
+    const xjw::FramePinholeCamera &camera = image.camera;
     const double fu = camera.focalX();
     const double fv = camera.focalY();
     if (std::abs(fu) < 1e-12 || std::abs(fv) < 1e-12)

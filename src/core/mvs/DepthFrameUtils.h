@@ -2,7 +2,7 @@
 
 #include "result/OperationResult.h"
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "DepthMapFusion.h"
 #include "MvsWorkspaceManifest.h"
 
@@ -82,7 +82,7 @@ std::vector<int> storedFusionSourceIndices(const std::vector<StoredDepthFrameRec
 bool downsampleFusionFrameForMaxDimension(xjw::mvs::FusionFrameInput *frame,
                                           int fusionMaxImageDim);
 FusionFrameBuildResult buildStoredFusionFrame(const StoredDepthFrameRecord &stored,
-                                              const xjw::Camera &camera,
+                                              const xjw::FramePinholeCamera &camera,
                                               const xjw::mvs::FusionConfig &fusionConfig,
                                               int viewCount,
                                               int fusionMaxImageDim = 0);

@@ -63,9 +63,9 @@ struct HostPinholeCamera
     std::array<float, 3> translationWorldToCamera{};
 };
 
-HostPinholeCamera makeHostPinholeCamera(const Camera &camera, int downsampleFactor)
+HostPinholeCamera makeHostPinholeCamera(const FramePinholeCamera &camera, int downsampleFactor)
 {
-    const Camera::Intrinsics intrinsics = camera.intrinsics();
+    const FramePinholeCamera::Intrinsics intrinsics = camera.intrinsics();
     const std::array<double, 9> rotation = camera.worldToCameraRotation();
     const std::array<double, 3> translation = camera.worldToCameraTranslation();
     const float scale = 1.0f / static_cast<float>(std::max(1, downsampleFactor));
@@ -1958,8 +1958,8 @@ __global__ void kernelFinalizeDepth(
 bool PatchMatchDepthEstimator::estimateGPU(
     const cv::Mat                &refGray,
     const std::vector<cv::Mat>   &srcGrays,
-    const Camera                   &refCam,
-    const std::vector<Camera>      &srcCams,
+    const FramePinholeCamera                   &refCam,
+    const std::vector<FramePinholeCamera>      &srcCams,
     float zNear, float zFar,
     const PatchMatchConfig       &config,
     cv::Mat                      &depthOut,

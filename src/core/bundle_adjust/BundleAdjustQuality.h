@@ -41,7 +41,7 @@ double adaptivePointFilterThreshold(const std::vector<double> &pointRms,
  * 若后端声称成功但最终没有任何有效 track，结果会被降级为 NumericalFailure。
  * 这样可防止“数值求解成功、摄影测量结果不可用”继续流入 SfM。
  */
-void finalizeBundleAdjustResult(const std::vector<Camera> &inputCameras,
+void finalizeBundleAdjustResult(const std::vector<FramePinholeCamera> &inputCameras,
                                 const std::vector<BATrack> &tracks,
                                 const BAOptions &options,
                                 BAResult *result);

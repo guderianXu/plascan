@@ -25,7 +25,7 @@ bool isCeresCudaBackendCompiled();
  * `options` 必须已经通过 validateAndNormalizeBundleAdjustOptions。
  * 返回结果保留实际后端、回退原因和求解统计，随后由公共层执行统一质量门控。
  */
-BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
+BAResult optimizePointsWithCeres(const std::vector<FramePinholeCamera> &cameras,
                                  const std::vector<BATrack> &tracks,
                                  const BAOptions &options,
                                  bool requestGpu);

@@ -4,7 +4,7 @@
 
 namespace xjw
 {
-class Camera;
+class FramePinholeCamera;
 }
 
 namespace xjw::mesh
@@ -45,7 +45,7 @@ public:
      * symmetrically against the two half-pixel boundary rays.
      */
     static DepthRayMetricSample evaluate(
-        const Camera &camera,
+        const FramePinholeCamera &camera,
         const std::array<double, 2> &pixel,
         double positiveCameraZDepth);
 

@@ -39,7 +39,7 @@ QJsonObject rotationToYprDegrees(const std::array<double, 9> &rotation)
 
 } // namespace
 
-QJsonObject cameraToJson(const xjw::Camera &camera)
+QJsonObject cameraToJson(const xjw::FramePinholeCamera &camera)
 {
     const auto intrinsics = camera.intrinsics();
     const auto distortion = camera.distortion();
@@ -100,7 +100,7 @@ bool parseTsaiCamera(const QString &tsai_path,
         return false;
     }
 
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     if (!camera.loadFromFile(xjw::common::io::toUtf8Path(tsai_path)) || !camera.isValid())
     {
         if (error_message)
@@ -113,7 +113,7 @@ bool parseTsaiCamera(const QString &tsai_path,
     return true;
 }
 
-bool cameraFromJson(const QJsonObject &camera_object, xjw::Camera *camera)
+bool cameraFromJson(const QJsonObject &camera_object, xjw::FramePinholeCamera *camera)
 {
     if (!camera || camera_object.isEmpty())
     {
@@ -177,7 +177,7 @@ bool cameraFromJson(const QJsonObject &camera_object, xjw::Camera *camera)
     return true;
 }
 
-bool imageCameraFromEntry(const QJsonObject &image_object, xjw::Camera *camera)
+bool imageCameraFromEntry(const QJsonObject &image_object, xjw::FramePinholeCamera *camera)
 {
     return cameraFromJson(image_object.value(QStringLiteral("camera")).toObject(), camera);
 }

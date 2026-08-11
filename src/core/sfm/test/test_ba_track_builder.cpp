@@ -5,9 +5,9 @@
 namespace
 {
 
-xjw::Camera makeCamera(const std::array<double, 3> &center)
+xjw::FramePinholeCamera makeCamera(const std::array<double, 3> &center)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(100.0, 100.0, 0.0, 0.0);
     camera.setPose({1.0, 0.0, 0.0,
                     0.0, 1.0, 0.0,

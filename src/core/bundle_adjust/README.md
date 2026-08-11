@@ -106,7 +106,7 @@ PlaScan 仅参考这一公开概念；本文所述判据、评分与阈值均为
 - LiDAR 点到面权重采用统计权重 `1/sigma^2`；Ceres 同时缩放残差和 Huber 阈值，使其物理米制
   阈值及目标函数与 Legacy 一致。仅“存在 LiDAR 平面”不再被视为完整 7 自由度 gauge，
   联合 BA 默认仍使用与纯影像分支相同的相机锚点。
-- 点的前后方由 `Camera::positiveDepth()` / `isPointInFront()` 定义，后端不得直接把原始相机 Z
+- 点的前后方由 `FramePinholeCamera::positiveDepth()` / `isPointInFront()` 定义，后端不得直接把原始相机 Z
   当作跨相机格式的统一正深度。
 
 ## 验证

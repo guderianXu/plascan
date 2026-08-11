@@ -54,7 +54,7 @@ struct DepthFrameResult
 {
     int refViewIdx = -1;  ///< 参考帧在 views 数组中的下标
     bool depthFlippedZ = false;
-    Camera cameraModel;  ///< 与输出深度栅格严格对应的正深度、零畸变工作相机
+    FramePinholeCamera cameraModel;  ///< 与输出深度栅格严格对应的正深度、零畸变工作相机
     std::vector<int> sourceViewIndices;  ///< PatchMatch 实际使用的源视图下标，用于限制一致性检查范围
     std::vector<MvsSourcePlanEntry> sourceViewPlan; ///< 实际源视图的可审计几何选择依据
     int requestedSourceViewCount = 0; ///< 选择阶段请求的源视图数，不随缓存释放丢失
@@ -84,7 +84,7 @@ struct DepthFrameResult
     QJsonObject targetedGapRecoveryDiagnostics; ///< 缺口定向 PatchMatch 请求、接受和拒绝统计
     QJsonObject residualReestimationDiagnostics; ///< 一致性后残余缺口局部实测恢复统计
     QJsonObject poseRefinementDiagnostics; ///< 深度约束位姿细化候选与安全门诊断
-    Camera derivedCameraModel; ///< 可选派生相机候选；绝不覆盖 cameraModel 或项目相机
+    FramePinholeCamera derivedCameraModel; ///< 可选派生相机候选；绝不覆盖 cameraModel 或项目相机
     std::vector<DepthLevelSummary> pyramidLevels; ///< 三级深度估计逐层摘要
     std::vector<DepthLevelResult> intermediatePyramidLevels; ///< 可选的 L3/L2 调试结果
     DepthMapQualityMetrics qualityMetrics; ///< 帧级覆盖、连通性与搜索边界统计
@@ -218,7 +218,7 @@ public:
     /// 将同一帧可见稀疏点投影一次，供 hint 与支撑掩码在不同工作分辨率复用
     static std::vector<ProjectedSparseDepthSample> collectProjectedSparseDepthSamples(
         const SparseCloud &sparse,
-        const Camera &camera,
+        const FramePinholeCamera &camera,
         int imageWidth,
         int imageHeight,
         const std::vector<size_t> &visiblePointIndices);
@@ -369,7 +369,7 @@ private:
                                             int H,
                                             const std::vector<size_t> &visiblePointIndices) const;
     cv::Mat buildHintDepthForCamera(int refIdx,
-                                    const Camera &camera,
+                                    const FramePinholeCamera &camera,
                                     int W,
                                     int H,
                                     const std::vector<size_t> &visiblePointIndices) const;
@@ -379,7 +379,7 @@ private:
                                                     int H,
                                                     const std::vector<size_t> &visiblePointIndices) const;
     cv::Mat buildSparseSupportMaskForCamera(int refIdx,
-                                            const Camera &camera,
+                                            const FramePinholeCamera &camera,
                                             int W,
                                             int H,
                                             const std::vector<size_t> &visiblePointIndices) const;

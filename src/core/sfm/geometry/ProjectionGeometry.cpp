@@ -6,7 +6,7 @@
 namespace xjw
 {
 
-ProjectionResult projectForReprojection(const Camera &camera,
+ProjectionResult projectForReprojection(const FramePinholeCamera &camera,
                                         const std::array<double, 3> &worldPoint)
 {
     ProjectionResult result;
@@ -30,7 +30,7 @@ ProjectionResult projectForReprojection(const Camera &camera,
     return result;
 }
 
-double reprojectionErrorPx(const Camera &camera,
+double reprojectionErrorPx(const FramePinholeCamera &camera,
                            const std::array<double, 3> &worldPoint,
                            const std::array<double, 2> &observedPixel)
 {

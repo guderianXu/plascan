@@ -5,13 +5,14 @@
 
 #include <cmath>
 #include <memory>
+#include <utility>
 
 namespace
 {
 
-xjw::Camera makeFrameCamera(bool flipDepthAxis = false)
+xjw::FramePinholeCamera makeFrameCamera(bool flipDepthAxis = false)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(800.0, 850.0, 320.0, 240.0);
     camera.setPose({1.0, 0.0, 0.0,
                     0.0, 1.0, 0.0,
@@ -43,8 +44,11 @@ TEST(CameraModel, DefaultFrameModelIsInvalid)
 
 TEST(CameraModel, FrameModelExposesOwnedCameraGeometryPolymorphically)
 {
-    std::unique_ptr<xjw::CameraModel> model = std::make_unique<xjw::FramePinholeCamera>(
-        makeFrameCamera(), xjw::CameraImageSize{640, 480}, "LOCAL_TEST_FRAME");
+    xjw::FramePinholeCamera camera = makeFrameCamera();
+    camera.setImageSize(xjw::CameraImageSize{640, 480});
+    camera.setWorldFrameName("LOCAL_TEST_FRAME");
+    std::unique_ptr<xjw::CameraModel> model =
+        std::make_unique<xjw::FramePinholeCamera>(std::move(camera));
 
     ASSERT_TRUE(model->isValid());
     ASSERT_TRUE(model->imageSize().has_value());
@@ -68,6 +72,27 @@ TEST(CameraModel, FrameModelExposesOwnedCameraGeometryPolymorphically)
     EXPECT_NEAR(projection.image.line, 240.0, 1.0e-12);
     EXPECT_NEAR(projection.positiveDepthMeters, 10.0, 1.0e-12);
     EXPECT_FALSE(projection.ephemerisTimeSeconds.has_value());
+}
+
+TEST(CameraModel, FrameModelPreservesAndScalesMetadataWithValueSemantics)
+{
+    xjw::FramePinholeCamera camera = makeFrameCamera();
+    camera.setImageSize(xjw::CameraImageSize{640, 480});
+    camera.setWorldFrameName("LOCAL_TEST_FRAME");
+
+    const xjw::FramePinholeCamera scaled = camera.scaledIntrinsics(0.5, 0.25);
+    ASSERT_TRUE(scaled.imageSize().has_value());
+    EXPECT_EQ(scaled.imageSize()->samples, 320);
+    EXPECT_EQ(scaled.imageSize()->lines, 120);
+    EXPECT_EQ(scaled.worldFrameName(), "LOCAL_TEST_FRAME");
+    EXPECT_DOUBLE_EQ(scaled.focalX(), 400.0);
+    EXPECT_DOUBLE_EQ(scaled.focalY(), 212.5);
+
+    const xjw::FramePinholeCamera copied = scaled;
+    ASSERT_TRUE(copied.imageSize().has_value());
+    EXPECT_EQ(copied.imageSize()->samples, 320);
+    EXPECT_EQ(copied.imageSize()->lines, 120);
+    EXPECT_EQ(copied.worldFrameName(), "LOCAL_TEST_FRAME");
 }
 
 TEST(CameraModel, FrameRayRoundTripsWithDistortionAndFlippedDepth)

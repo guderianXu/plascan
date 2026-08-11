@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "PairSelector.h"
 
 #include <QMap>
@@ -23,7 +23,7 @@ struct MatchPhotosContext
     QString workingDirectory;
     QString matchDirectory;
     PairSelectionInput pairInput;
-    QMap<QString, xjw::Camera> referenceCameras;
+    QMap<QString, xjw::FramePinholeCamera> referenceCameras;
     QString referenceSparsePointsPath;
     // 影像路径到蒙版路径的映射。键可以是绝对路径、文件名或 baseName，运行时会做宽松匹配。
     QMap<QString, QString> maskPaths;

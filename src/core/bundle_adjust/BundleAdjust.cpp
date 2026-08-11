@@ -82,13 +82,13 @@ inline double huberLoss(double residualNorm, double delta)
 }
 
 /**
- * @brief 封装 Camera::project，将 std::array<double,3> 格式的三维点投影到图像坐标。
+ * @brief 封装 FramePinholeCamera::project，将 std::array<double,3> 格式的三维点投影到图像坐标。
  * @param cam  相机对象
  * @param X    三维点（数组格式）
  * @param uv   输出像素坐标
  * @return 投影成功返回 true
  */
-bool projectPoint(const Camera &cam, const std::array<double, 3> &X, double uv[2])
+bool projectPoint(const FramePinholeCamera &cam, const std::array<double, 3> &X, double uv[2])
 {
     const double world[3] = {X[0], X[1], X[2]};
     return cam.projectWorldPoint(world, uv);
@@ -149,7 +149,7 @@ const BACameraPosePrior *cameraPosePriorForIndex(const BAOptions &opt, int camer
     return prior.enabled ? &prior : nullptr;
 }
 
-std::array<double, 6> cameraPosePriorResidual(const Camera &cam,
+std::array<double, 6> cameraPosePriorResidual(const FramePinholeCamera &cam,
                                               const BACameraPosePrior &prior)
 {
     std::array<double, 6> residual{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
@@ -174,7 +174,7 @@ std::array<double, 6> cameraPosePriorResidual(const Camera &cam,
     return residual;
 }
 
-double cameraPosePriorResidualNorm(const Camera &cam,
+double cameraPosePriorResidualNorm(const FramePinholeCamera &cam,
                                    const BACameraPosePrior &prior)
 {
     const auto residual = cameraPosePriorResidual(cam, prior);
@@ -249,7 +249,7 @@ bool solveLinearSystem(const std::vector<double> &matrix,
  * @param X      当前三维点坐标
  * @return       RMS 误差（像素），无有效观测时返回 NaN
  */
-double computeTrackRms(const std::vector<Camera> &cams, const BATrack &track, const std::array<double, 3> &X)
+double computeTrackRms(const std::vector<FramePinholeCamera> &cams, const BATrack &track, const std::array<double, 3> &X)
 {
     double sum2 = 0.0;
     int cnt = 0;
@@ -329,7 +329,7 @@ bool scaleBarOtherEndpoint(const BAScaleBarConstraint &constraint,
     return true;
 }
 
-double computeTrackAcceptanceCost(const std::vector<Camera> &cams,
+double computeTrackAcceptanceCost(const std::vector<FramePinholeCamera> &cams,
                                   const BATrack &track,
                                   const std::array<double, 3> &X,
                                   const BAOptions &opt,
@@ -447,7 +447,7 @@ double computeTrackAcceptanceCost(const std::vector<Camera> &cams,
  * @param opt    优化选项
  * @return       点优化结果（BARefinedPoint）
  */
-BARefinedPoint optimizeOnePoint(const std::vector<Camera> &cams,
+BARefinedPoint optimizeOnePoint(const std::vector<FramePinholeCamera> &cams,
                                 const BATrack &track,
                                 const BAOptions &opt,
                                 int trackIndex,
@@ -474,7 +474,7 @@ BARefinedPoint optimizeOnePoint(const std::vector<Camera> &cams,
             {
                 continue;
             }
-            const Camera &cam = cams[obs.cameraIndex];
+            const FramePinholeCamera &cam = cams[obs.cameraIndex];
 
             double uv[2] = {0.0, 0.0};
             if (!projectPoint(cam, X, uv))
@@ -705,7 +705,7 @@ BARefinedPoint optimizeOnePoint(const std::vector<Camera> &cams,
  * @return             至少更新了一次相机位姿时返回 true
  */
 /// @brief 计算单台相机在所有观测上的重投影 RMS。
-static double computeCameraCost(const Camera &cam, int cameraIndex,
+static double computeCameraCost(const FramePinholeCamera &cam, int cameraIndex,
                                const std::vector<BATrack> &tracks,
                                const std::vector<BARefinedPoint> &points,
                                const BAOptions &opt)
@@ -737,7 +737,7 @@ static double computeCameraCost(const Camera &cam, int cameraIndex,
     return residualCount > 0 ? cost : std::numeric_limits<double>::infinity();
 }
 
-bool optimizeOneCamera(Camera *cam,
+bool optimizeOneCamera(FramePinholeCamera *cam,
                        int cameraIndex,
                        const std::vector<BATrack> &tracks,
                        const std::vector<BARefinedPoint> &points,
@@ -778,7 +778,7 @@ bool optimizeOneCamera(Camera *cam,
                 // 对 [rx, ry, rz, tx, ty, tz] 做中央差分，构造 2x6 雅可比（精度 O(h²)）。
                 double J[2][6] = {{0,0,0,0,0,0},{0,0,0,0,0,0}};
                 for (int k = 0; k < 6; ++k) {
-                    Camera tmpP = *cam, tmpM = *cam;
+                    FramePinholeCamera tmpP = *cam, tmpM = *cam;
                     double deltaP[6] = {0,0,0,0,0,0};
                     double deltaM[6] = {0,0,0,0,0,0};
                     deltaP[k] = +eps;
@@ -815,8 +815,8 @@ bool optimizeOneCamera(Camera *cam,
                 double J[6][6] = {};
                 for (int k = 0; k < 6; ++k)
                 {
-                    Camera tmpP = *cam;
-                    Camera tmpM = *cam;
+                    FramePinholeCamera tmpP = *cam;
+                    FramePinholeCamera tmpM = *cam;
                     double deltaP[6] = {0, 0, 0, 0, 0, 0};
                     double deltaM[6] = {0, 0, 0, 0, 0, 0};
                     deltaP[k] = +eps;
@@ -866,7 +866,7 @@ bool optimizeOneCamera(Camera *cam,
         if (!solveLinearSystem(H, rhs, 6, &dx)) break;
 
         // 试探性应用步长
-        Camera tmpCam = *cam;
+        FramePinholeCamera tmpCam = *cam;
         double delta[6] = {dx[0], dx[1], dx[2], dx[3], dx[4], dx[5]};
         tmpCam.applyDeltaPose(delta);
 
@@ -892,16 +892,16 @@ bool optimizeOneCamera(Camera *cam,
     return anyUpdated;
 }
 
-double averageSharedFocalScale(const std::vector<Camera> &cameras,
-                               const std::vector<Camera> &referenceCameras)
+double averageSharedFocalScale(const std::vector<FramePinholeCamera> &cameras,
+                               const std::vector<FramePinholeCamera> &referenceCameras)
 {
     double sum = 0.0;
     int count = 0;
     const size_t n = std::min(cameras.size(), referenceCameras.size());
     for (size_t i = 0; i < n; ++i)
     {
-        const Camera &camera = cameras[i];
-        const Camera &reference = referenceCameras[i];
+        const FramePinholeCamera &camera = cameras[i];
+        const FramePinholeCamera &reference = referenceCameras[i];
         if (std::isfinite(camera.focalX()) && std::isfinite(reference.focalX()) &&
             std::abs(reference.focalX()) > 1e-12)
         {
@@ -912,14 +912,14 @@ double averageSharedFocalScale(const std::vector<Camera> &cameras,
     return count > 0 ? sum / static_cast<double>(count) : 1.0;
 }
 
-void applySharedFocalScale(std::vector<Camera> *cameras, double scale)
+void applySharedFocalScale(std::vector<FramePinholeCamera> *cameras, double scale)
 {
     if (!cameras || !(scale > 0.0) || !std::isfinite(scale))
     {
         return;
     }
 
-    for (Camera &camera : *cameras)
+    for (FramePinholeCamera &camera : *cameras)
     {
         camera.setIntrinsics(camera.focalX() * scale,
                              camera.focalY() * scale,
@@ -928,7 +928,7 @@ void applySharedFocalScale(std::vector<Camera> *cameras, double scale)
     }
 }
 
-double computeSharedFocalAcceptanceCost(const std::vector<Camera> &cameras,
+double computeSharedFocalAcceptanceCost(const std::vector<FramePinholeCamera> &cameras,
                                         const std::vector<BATrack> &tracks,
                                         const std::vector<BARefinedPoint> &points,
                                         double huberDelta)
@@ -969,7 +969,7 @@ double computeSharedFocalAcceptanceCost(const std::vector<Camera> &cameras,
     return count > 0 ? cost : std::numeric_limits<double>::infinity();
 }
 
-void recomputePointRmsForCurrentCameras(const std::vector<Camera> &cameras,
+void recomputePointRmsForCurrentCameras(const std::vector<FramePinholeCamera> &cameras,
                                         const std::vector<BATrack> &tracks,
                                         std::vector<BARefinedPoint> *points)
 {
@@ -998,8 +998,8 @@ struct SharedFocalOptimizationResult
     double sharedScale = 1.0;
 };
 
-SharedFocalOptimizationResult optimizeSharedFocalScale(std::vector<Camera> *cameras,
-                                                       const std::vector<Camera> &referenceCameras,
+SharedFocalOptimizationResult optimizeSharedFocalScale(std::vector<FramePinholeCamera> *cameras,
+                                                       const std::vector<FramePinholeCamera> &referenceCameras,
                                                        const std::vector<BATrack> &tracks,
                                                        std::vector<BARefinedPoint> *points,
                                                        const BAOptions &opt)
@@ -1059,7 +1059,7 @@ SharedFocalOptimizationResult optimizeSharedFocalScale(std::vector<Camera> *came
                     continue;
                 }
 
-                const Camera &camera = (*cameras)[static_cast<size_t>(observation.cameraIndex)];
+                const FramePinholeCamera &camera = (*cameras)[static_cast<size_t>(observation.cameraIndex)];
                 double uv[2] = {0.0, 0.0};
                 if (!projectPoint(camera, point.point, uv))
                 {
@@ -1107,7 +1107,7 @@ SharedFocalOptimizationResult optimizeSharedFocalScale(std::vector<Camera> *came
             break;
         }
 
-        std::vector<Camera> trialCameras = *cameras;
+        std::vector<FramePinholeCamera> trialCameras = *cameras;
         const double trialStepScale = std::exp(delta);
         applySharedFocalScale(&trialCameras, trialStepScale);
         const double trialCost =
@@ -1364,7 +1364,7 @@ bool legacyIsBetterThanCandidate(const BAResult &candidate,
     return false;
 }
 
-BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
+BAResult optimizePointsLegacyImpl(const std::vector<FramePinholeCamera> &cameras,
                                   const std::vector<BATrack> &tracks,
                                   const BAOptions &options)
 {
@@ -1376,7 +1376,7 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
     result.ceresLinearSolverName = "none";
     // 将相机列表拷贝到结果中，在优化过程中来回修改
     result.refinedCameras = cameras;
-    const std::vector<Camera> &intrinsicReferenceCameras =
+    const std::vector<FramePinholeCamera> &intrinsicReferenceCameras =
         options.sharedIntrinsicReferenceCameras.empty()
             ? cameras
             : options.sharedIntrinsicReferenceCameras;
@@ -1722,7 +1722,7 @@ bool BundleAdjust::isBackendAvailable(BABackend backend)
     return false;
 }
 
-BAProblemStats BundleAdjust::summarizeProblem(const std::vector<Camera> &cameras,
+BAProblemStats BundleAdjust::summarizeProblem(const std::vector<FramePinholeCamera> &cameras,
                                               const std::vector<BATrack> &tracks)
 {
     return detail::summarizeUsableProblem(cameras, tracks);
@@ -1819,7 +1819,7 @@ BABackend BundleAdjust::selectBackendForProblem(const BAProblemStats &stats,
     return decideBackendForProblem(stats, options).backend;
 }
 
-BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
+BAResult BundleAdjust::optimizePoints(const std::vector<FramePinholeCamera> &cameras,
                                       const std::vector<BATrack> &tracks,
                                       const BAOptions &requestedOptions)
 {

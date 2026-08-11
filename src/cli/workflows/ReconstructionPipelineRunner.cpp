@@ -15,7 +15,7 @@
 #include "cli_photogrammetry_common.h"
 #include "CliConsole.h"
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "DenseCloudQualityFilter.h"
 #include "DepthFrameUtils.h"
 #include "DepthMapFusion.h"
@@ -840,7 +840,7 @@ bool loadFusionFrameFromDepthMap(const QString &mvsDir,
     const xjw::mvs::CameraView &view = views[static_cast<std::size_t>(frameIndex)];
     frame->sourceCamera = view.camera;
     frame->cameraModel = view.camera.normalizedForPositiveDepth();
-    frame->cameraModel.setDistortion(xjw::Camera::Distortion{});
+    frame->cameraModel.setDistortion(xjw::FramePinholeCamera::Distortion{});
     frame->imgW = depth.cols;
     frame->imgH = depth.rows;
     frame->imagePath = view.imagePath;
@@ -1666,10 +1666,10 @@ xjw::cli::ReconstructionCliOptions options;
     }
 
     const auto sparsePreprocessStart = std::chrono::steady_clock::now();
-    QMap<QString, xjw::Camera> cameraByImage;
+    QMap<QString, xjw::FramePinholeCamera> cameraByImage;
     for (auto it = sfmResult.pendingCamUpdates.constBegin(); it != sfmResult.pendingCamUpdates.constEnd(); ++it)
     {
-        xjw::Camera camera;
+        xjw::FramePinholeCamera camera;
         const QString imagePath = xjw::cli::cleanAbsolutePath(it.key());
         if (xjw::common::project::cameraFromJson(it.value(), &camera) && camera.isValid())
         {
@@ -1696,7 +1696,7 @@ xjw::cli::ReconstructionCliOptions options;
     int project_mask_count = 0;
     for (const QString &imagePath : registeredImagePaths)
     {
-        const xjw::Camera camera = cameraByImage.value(imagePath);
+        const xjw::FramePinholeCamera camera = cameraByImage.value(imagePath);
         if (!camera.isValid())
         {
             continue;

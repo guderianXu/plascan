@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "BundleAdjustProjection.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 #ifdef PLASCAN_TEST_HAS_CERES
 #  include <ceres/jet.h>
@@ -11,7 +11,7 @@
 
 TEST(BundleAdjustProjectionTest, MatchesCameraProjectWorldPointForTsaiCamera)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(1000.0, 980.0, 512.0, 384.0);
     camera.setPose({{1.0, 0.0, 0.0,
                      0.0, 1.0, 0.0,
@@ -34,7 +34,7 @@ TEST(BundleAdjustProjectionTest, MatchesCameraProjectWorldPointForTsaiCamera)
 
 TEST(BundleAdjustProjectionTest, PoseDeltaProjectionMatchesCameraUpdate)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(900.0, 870.0, 320.0, 240.0);
     camera.setPose({{0.995004165278, -0.099833416647, 0.0,
                      0.099833416647, 0.995004165278, 0.0,
@@ -46,7 +46,7 @@ TEST(BundleAdjustProjectionTest, PoseDeltaProjectionMatchesCameraUpdate)
     const double delta[6] = {0.025, -0.018, 0.011, 0.12, -0.08, 0.04};
     const double world[3] = {2.5, -0.6, 24.0};
 
-    xjw::Camera updated = camera;
+    xjw::FramePinholeCamera updated = camera;
     updated.applyDeltaPose(delta);
     double expected[2] = {0.0, 0.0};
     ASSERT_TRUE(updated.projectWorldPoint(world, expected));
@@ -62,7 +62,7 @@ TEST(BundleAdjustProjectionTest, PoseDeltaProjectionMatchesCameraUpdate)
 
 TEST(BundleAdjustProjectionTest, SharedIntrinsicsProjectionMatchesCameraUpdate)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(800.0, 760.0, 400.0, 300.0);
     camera.setPose({{1.0, 0.0, 0.0,
                      0.0, 1.0, 0.0,
@@ -75,7 +75,7 @@ TEST(BundleAdjustProjectionTest, SharedIntrinsicsProjectionMatchesCameraUpdate)
         std::log(960.0), std::log(912.0 / 960.0), 0.0, 0.0,
         -0.02, 0.003, -0.0004, 0.0002, -0.0003};
 
-    xjw::Camera updated = camera;
+    xjw::FramePinholeCamera updated = camera;
     updated.applyDeltaPose(delta);
     updated.setIntrinsics(960.0, 912.0, 400.0, 300.0);
     updated.setDistortion(-0.02, 0.003, -0.0004, 0.0002, -0.0003);
@@ -94,7 +94,7 @@ TEST(BundleAdjustProjectionTest, SharedIntrinsicsProjectionMatchesCameraUpdate)
 #ifdef PLASCAN_TEST_HAS_CERES
 TEST(BundleAdjustProjectionTest, AutoDiffProjectionRejectsPointBehindPhysicalCamera)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(800.0, 800.0, 320.0, 240.0);
     camera.setPose({{1.0, 0.0, 0.0,
                      0.0, 1.0, 0.0,

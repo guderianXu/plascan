@@ -7,7 +7,7 @@
 // =============================================================================
 #include "BundleAdjustService.h"
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "BundleAdjust.h"
 #include "LaserConstraintAssociation.h"
 #include "LaserConstraintMap.h"
@@ -214,7 +214,7 @@ void generateEvalPlots(
 // BundleAdjustService::run  — 光束法平差核心流程
 // ──────────────────────────────────────────────────────────────────────────────
 BaServiceResult BundleAdjustService::run(
-    const std::vector<xjw::Camera>& cameras,
+    const std::vector<xjw::FramePinholeCamera>& cameras,
     std::vector<xjw::BATrack>&      tracks,
     const BaServiceOptions&         opts
 )
@@ -916,7 +916,7 @@ BaServiceResult BundleAdjustService::run(
                 {
                     continue;
                 }
-                const Camera &camera = observation.cameraIndex < static_cast<int>(baResult.refinedCameras.size())
+                const FramePinholeCamera &camera = observation.cameraIndex < static_cast<int>(baResult.refinedCameras.size())
                     ? baResult.refinedCameras[static_cast<size_t>(observation.cameraIndex)]
                     : cameras[static_cast<size_t>(observation.cameraIndex)];
                 double projected[2] = {0.0, 0.0};

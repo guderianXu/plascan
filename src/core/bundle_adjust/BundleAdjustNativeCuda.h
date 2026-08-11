@@ -26,7 +26,7 @@ bool isNativeCudaRuntimeAvailable(int deviceId, std::string *message);
  * 返回值尚需经过 finalizeBundleAdjustResult 的统一质量复核；调用方不得只依据
  * CUDA 核成功标志认定摄影测量解可用。
  */
-BAResult optimizePointsWithNativeCuda(const std::vector<Camera> &cameras,
+BAResult optimizePointsWithNativeCuda(const std::vector<FramePinholeCamera> &cameras,
                                       const std::vector<BATrack> &tracks,
                                       const BAOptions &options);
 

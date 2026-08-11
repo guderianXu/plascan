@@ -3,7 +3,7 @@
 #include "ProjectCameraIO.h"
 #include "project/ProjectCommonUtils.h"
 
-#include <Camera.h>
+#include <FramePinholeCamera.h>
 
 #include <algorithm>
 #include <cmath>
@@ -117,7 +117,7 @@ CameraIntrinsicPriorSanitizationResult sanitizeProjectCameraIntrinsicPriors(
             continue;
         }
 
-        Camera camera;
+        FramePinholeCamera camera;
         if (!xjw::common::project::cameraFromJson(cameraIt.value(), &camera) || !camera.isValid())
         {
             continue;

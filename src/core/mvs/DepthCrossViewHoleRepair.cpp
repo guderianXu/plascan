@@ -149,7 +149,7 @@ int bitCount(std::uint16_t mask)
 bool surfaceNormalAt(const cv::Mat &depth,
                      int row,
                      int column,
-                     const Camera &camera,
+                     const FramePinholeCamera &camera,
                      cv::Vec3f *normal)
 {
     if (!normal || depth.type() != CV_32FC1 || !camera.isValid() ||
@@ -206,7 +206,7 @@ bool normalsAgree(const cv::Mat &surface,
                   int first_column,
                   int second_row,
                   int second_column,
-                  const Camera &camera,
+                  const FramePinholeCamera &camera,
                   float maximum_angle_degrees)
 {
     cv::Vec3f first;
@@ -293,8 +293,8 @@ bool agreesWithLocalReference(const cv::Mat &reference_depth,
 
 cv::Mat projectSourceDepthToReference(
     const cv::Mat &source_depth,
-    const Camera &source_camera,
-    const Camera &reference_camera,
+    const FramePinholeCamera &source_camera,
+    const FramePinholeCamera &reference_camera,
     const cv::Size &reference_size,
     float maximum_projection_distance_pixels,
     std::uint64_t *projected_candidate_count,
@@ -702,7 +702,7 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
     cv::Mat *geometry_source_mask,
     cv::Mat *source_inverse_depth_sum,
     cv::Mat *source_inverse_depth_squared_sum,
-    const Camera *reference_camera,
+    const FramePinholeCamera *reference_camera,
     const cv::Mat *guide_gray,
     cv::Mat *anchored_interpolation_mask,
     int row_worker_count,

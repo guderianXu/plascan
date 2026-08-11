@@ -81,7 +81,7 @@ QString normalizedReferencePreselectionSource(const QJsonObject &settings)
     return source == QStringLiteral("estimated_pose") ? QStringLiteral("estimated") : source;
 }
 
-QMap<QString, xjw::Camera> referenceCamerasForMode(ProjectManager *projectManager,
+QMap<QString, xjw::FramePinholeCamera> referenceCamerasForMode(ProjectManager *projectManager,
                                                    const QStringList &images,
                                                    const QJsonObject &projectMeta,
                                                    const QString &requestedMode,
@@ -97,7 +97,7 @@ QMap<QString, xjw::Camera> referenceCamerasForMode(ProjectManager *projectManage
     }
 
     bool loadedAll = false;
-    const QMap<QString, xjw::Camera> allCameras =
+    const QMap<QString, xjw::FramePinholeCamera> allCameras =
         projectManager->getCamerasForImages(images, &loadedAll);
     if (!loadedAll)
     {
@@ -110,7 +110,7 @@ QMap<QString, xjw::Camera> referenceCamerasForMode(ProjectManager *projectManage
     const QMap<QString, QJsonObject> imageMetaByPath =
         xjw::common::project::projectImageMetaByPath(projectMeta, true);
     const QJsonArray imageEntries = xjw::common::project::projectImageEntries(projectMeta);
-    QMap<QString, xjw::Camera> filtered;
+    QMap<QString, xjw::FramePinholeCamera> filtered;
     for (const QString &imagePath : images)
     {
         const QString normalized = xjw::common::project::normalizePath(imagePath);
@@ -1736,7 +1736,7 @@ void MenuWorkflowController::openMapProjectDialog()
             dlg->setProjectRoot(projectRoot);
         }
 
-        const QMap<QString, xjw::Camera> cameraMap =
+        const QMap<QString, xjw::FramePinholeCamera> cameraMap =
             _projectManager->getCamerasForImages(images);
         int maskReadyCount = 0;
         for (const QString &imagePath : images)

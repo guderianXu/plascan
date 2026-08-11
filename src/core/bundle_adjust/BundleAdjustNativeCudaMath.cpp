@@ -33,7 +33,7 @@ ProjectionResult projectHost(const HostCamera &camera, const std::array<double, 
     }
 
     // 即使相机前方定义为 -Z，透视除法仍使用带符号 zCam；u/v 轴方向由
-    // uAxisSign/vAxisSign 单独编码，必须与 Camera::projectWorldPoint 保持一致。
+    // uAxisSign/vAxisSign 单独编码，必须与 FramePinholeCamera::projectWorldPoint 保持一致。
     const double x = xCam / zCam;
     const double y = yCam / zCam;
     const double r2 = x * x + y * y;

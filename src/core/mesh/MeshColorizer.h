@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "MeshTypes.h"
 
 #include <QVector>
@@ -14,8 +14,8 @@ namespace xjw::mesh
 
 struct MeshColorView
 {
-    Camera camera; ///< 深度、置信度与掩模所在分辨率的相机。
-    Camera colorCamera; ///< 可选，颜色图所在分辨率的相机；无效时回退到 camera。
+    FramePinholeCamera camera; ///< 深度、置信度与掩模所在分辨率的相机。
+    FramePinholeCamera colorCamera; ///< 可选，颜色图所在分辨率的相机；无效时回退到 camera。
     cv::Mat colorBgr;
     cv::Mat depth;
     cv::Mat confidence;

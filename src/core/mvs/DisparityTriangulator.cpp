@@ -73,7 +73,7 @@ bool applyHomography(const cv::Mat &H, double u, double v,
     return std::isfinite(ox) && std::isfinite(oy);
 }
 
-std::array<double, 3> pixelToWorldRay(const Camera &cam, double u, double v)
+std::array<double, 3> pixelToWorldRay(const FramePinholeCamera &cam, double u, double v)
 {
     const double x = (u - cam.principalX()) / (cam.uAxisSign() * cam.focalX());
     const double y = (v - cam.principalY()) / (cam.vAxisSign() * cam.focalY());
@@ -173,7 +173,7 @@ bool prepareHomography(const cv::Mat &input,
     return true;
 }
 
-bool validateCamera(const Camera &camera, const char *name, std::string &error)
+bool validateCamera(const FramePinholeCamera &camera, const char *name, std::string &error)
 {
     if (!camera.isValid()
         || !std::isfinite(camera.focalX())
@@ -235,8 +235,8 @@ bool validateConfig(const TriangulationConfig &config, std::string &error)
     return true;
 }
 
-bool validateStereoBaseline(const Camera &left,
-                            const Camera &right,
+bool validateStereoBaseline(const FramePinholeCamera &left,
+                            const FramePinholeCamera &right,
                             std::string &error)
 {
     const double baseline = norm3(sub3(left.cameraCenter(), right.cameraCenter()));
@@ -255,8 +255,8 @@ TriangulationResult DisparityTriangulator::triangulate(
     const cv::Mat &validMask,
     const cv::Mat &H1inv,
     const cv::Mat &H2inv,
-    const Camera &camL,
-    const Camera &camR,
+    const FramePinholeCamera &camL,
+    const FramePinholeCamera &camR,
     const TriangulationConfig &cfg)
 {
     TriangulationResult result;
@@ -497,9 +497,9 @@ TriangulationResult DisparityTriangulator::triangulateFromDepth(
     const cv::Mat &depthMap,
     const cv::Mat &validMask,
     const cv::Mat &H1inv,
-    const Camera &camL,
-    const Camera &camR,
-    const Camera &rectCam,
+    const FramePinholeCamera &camL,
+    const FramePinholeCamera &camR,
+    const FramePinholeCamera &rectCam,
     const TriangulationConfig &cfg)
 {
     TriangulationResult result;

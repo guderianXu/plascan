@@ -6,7 +6,7 @@
 #include "ProjectCameraIO.h"
 #include "project/ProjectMatchCatalog.h"
 #include "project/ProjectMetadata.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "ImageViewWidget.h"
 #include "MatchLineOverlay.h"
 #include "DualImageViewer.h"
@@ -126,8 +126,8 @@ struct IntersectionBatchCandidate
     bool camera2DepthFlipped = false;
 };
 
-IntersectionBatchCandidate evaluateIntersectionBatch(const xjw::Camera &camera1,
-                                                     const xjw::Camera &camera2,
+IntersectionBatchCandidate evaluateIntersectionBatch(const xjw::FramePinholeCamera &camera1,
+                                                     const xjw::FramePinholeCamera &camera2,
                                                      const QVector<QPointF> &points1,
                                                      const QVector<QPointF> &points2)
 {
@@ -169,8 +169,8 @@ IntersectionBatchCandidate evaluateIntersectionBatch(const xjw::Camera &camera1,
     return candidate;
 }
 
-IntersectionBatchCandidate selectBestIntersectionBatch(const xjw::Camera &baseCamera1,
-                                                       const xjw::Camera &baseCamera2,
+IntersectionBatchCandidate selectBestIntersectionBatch(const xjw::FramePinholeCamera &baseCamera1,
+                                                       const xjw::FramePinholeCamera &baseCamera2,
                                                        const QVector<QPointF> &points1,
                                                        const QVector<QPointF> &points2)
 {
@@ -179,8 +179,8 @@ IntersectionBatchCandidate selectBestIntersectionBatch(const xjw::Camera &baseCa
 
     for (int flipMask = 0; flipMask < 4; ++flipMask)
     {
-        xjw::Camera camera1 = baseCamera1;
-        xjw::Camera camera2 = baseCamera2;
+        xjw::FramePinholeCamera camera1 = baseCamera1;
+        xjw::FramePinholeCamera camera2 = baseCamera2;
         if ((flipMask & 0x1) != 0)
         {
             camera1.setDepthAxisFlipped(!camera1.depthAxisFlipped());
@@ -388,7 +388,7 @@ bool ForwardIntersectionCheckDialog::collectAutoPointPairs(QVector<QPointF> *pts
 }
 
 bool ForwardIntersectionCheckDialog::buildCameraFromImageMeta(const QJsonObject &imgObj,
-                                                              xjw::Camera *cam,
+                                                              xjw::FramePinholeCamera *cam,
                                                               QString *errorMsg) const
 {
     if (!cam) return false;
@@ -974,8 +974,8 @@ void ForwardIntersectionCheckDialog::onRunCheck()
         return;
     }
 
-    xjw::Camera cam1;
-    xjw::Camera cam2;
+    xjw::FramePinholeCamera cam1;
+    xjw::FramePinholeCamera cam2;
     QString err;
     if (!buildCameraFromImageMeta(imgObj1, &cam1, &err) || !buildCameraFromImageMeta(imgObj2, &cam2, &err)) {
         QMessageBox::critical(this, tr("错误"), err);

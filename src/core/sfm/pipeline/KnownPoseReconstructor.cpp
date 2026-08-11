@@ -46,12 +46,12 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
     auto imageIds = _reconstruction->allImageIds();
     std::sort(imageIds.begin(), imageIds.end());
 
-    // 阶段 1：已知位姿路径不执行初始对/PnP，直接把每台可信 Camera 注册到同一
+    // 阶段 1：已知位姿路径不执行初始对/PnP，直接把每台可信 FramePinholeCamera 注册到同一
     // 重建中。任何缺失相机都使该路径失败，不能混入任意估计位姿。
     int registeredCount = 0;
     for (ImageId imageId : imageIds)
     {
-        Camera camera;
+        FramePinholeCamera camera;
         if (!getCamera(imageId, camera))
         {
             result.summary = "Failed to load known camera pose for image " + std::to_string(imageId);
@@ -497,12 +497,12 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
 // 内部：加载相机
 // ============================================================
 
-bool IncrementalSfm::loadCamera(const std::string &cameraPath, Camera &cam) const
+bool IncrementalSfm::loadCamera(const std::string &cameraPath, FramePinholeCamera &cam) const
 {
     return cam.loadFromFile(cameraPath);
 }
 
-bool IncrementalSfm::getCamera(ImageId imageId, Camera &cam) const
+bool IncrementalSfm::getCamera(ImageId imageId, FramePinholeCamera &cam) const
 {
     // 优先使用预设相机对象
     auto pit = _preloadedCameras.find(imageId);
@@ -523,13 +523,13 @@ bool IncrementalSfm::getCamera(ImageId imageId, Camera &cam) const
 std::vector<BACameraPosePrior> IncrementalSfm::buildCameraPosePriorsFromInputCameras(
     const std::vector<ImageId> &imageIds) const
 {
-    std::vector<Camera> inputCameras;
+    std::vector<FramePinholeCamera> inputCameras;
     inputCameras.reserve(imageIds.size());
     std::vector<std::array<double, 3>> inputCenters;
     inputCenters.reserve(imageIds.size());
     for (ImageId imageId : imageIds)
     {
-        Camera inputCamera;
+        FramePinholeCamera inputCamera;
         if (getCamera(imageId, inputCamera))
         {
             inputCenters.push_back(inputCamera.cameraCenter());
@@ -547,7 +547,7 @@ std::vector<BACameraPosePrior> IncrementalSfm::buildCameraPosePriorsFromInputCam
     for (size_t i = 0; i < imageIds.size(); ++i)
     {
         BACameraPosePrior prior;
-        const Camera &inputCamera = inputCameras[i];
+        const FramePinholeCamera &inputCamera = inputCameras[i];
         if (inputCamera.isValid())
         {
             prior.enabled = true;
@@ -563,7 +563,7 @@ std::vector<BACameraPosePrior> IncrementalSfm::buildCameraPosePriorsFromInputCam
 }
 
 void IncrementalSfm::alignReconstructionToKnownPosePriors(const std::vector<ImageId> &imageIds,
-                                                          std::vector<Camera> *baCameras)
+                                                          std::vector<FramePinholeCamera> *baCameras)
 {
     if (!baCameras || imageIds.size() != baCameras->size() || imageIds.size() < 3)
     {
@@ -576,7 +576,7 @@ void IncrementalSfm::alignReconstructionToKnownPosePriors(const std::vector<Imag
     inputCenters.reserve(imageIds.size());
     for (size_t i = 0; i < imageIds.size(); ++i)
     {
-        Camera inputCamera;
+        FramePinholeCamera inputCamera;
         if (!getCamera(imageIds[i], inputCamera))
         {
             continue;
@@ -679,7 +679,7 @@ void IncrementalSfm::alignReconstructionToKnownPosePriors(const std::vector<Imag
         {
             continue;
         }
-        Camera &camera = _reconstruction->camera(imageId);
+        FramePinholeCamera &camera = _reconstruction->camera(imageId);
         camera.setPose(multiplyRotation(transform.rotation, camera.cameraToWorldRotation()),
                        transformPoint(transform, camera.cameraCenter()));
     }
@@ -723,13 +723,13 @@ void IncrementalSfm::refineKnownCameraPosesWithPnp()
 
     // 输入相机和相机中心范围在整轮 PnP 中保持不变。一次加载可避免 .tsai
     // 路径在逐影像循环中被重复打开，并将原来的 O(N^2) 相机读取降为 O(N)。
-    std::unordered_map<ImageId, Camera> inputCameras;
+    std::unordered_map<ImageId, FramePinholeCamera> inputCameras;
     inputCameras.reserve(imageIds.size());
     std::vector<std::array<double, 3>> inputCenters;
     inputCenters.reserve(imageIds.size());
     for (ImageId imageId : imageIds)
     {
-        Camera inputCamera;
+        FramePinholeCamera inputCamera;
         if (getCamera(imageId, inputCamera))
         {
             inputCenters.push_back(inputCamera.cameraCenter());
@@ -817,14 +817,14 @@ void IncrementalSfm::refineKnownCameraPosesWithPnp()
         pnpOptions.minNumInliers = std::min(pnpOptions.minNumInliers, static_cast<int>(worldPoints.size()));
         pnpOptions.minInlierRatio = std::min(pnpOptions.minInlierRatio, 0.10);
 
-        const Camera before = _reconstruction->camera(imageId);
+        const FramePinholeCamera before = _reconstruction->camera(imageId);
         const PnpResult pnp = PnpSolver::solveWithCamera(worldPoints, imagePoints, before, pnpOptions);
         if (!pnp.success)
         {
             continue;
         }
 
-        Camera candidate = before;
+        FramePinholeCamera candidate = before;
         candidate.setPose(pnp.R, pnp.C);
         const auto inputCameraIt = inputCameras.find(imageId);
         if (inputCameraIt != inputCameras.end() &&

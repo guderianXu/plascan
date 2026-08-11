@@ -488,7 +488,7 @@ bool downsampleFusionFrameForMaxDimension(xjw::mvs::FusionFrameInput *frame,
 }
 
 FusionFrameBuildResult buildStoredFusionFrame(const StoredDepthFrameRecord &stored,
-                                              const xjw::Camera &camera,
+                                              const xjw::FramePinholeCamera &camera,
                                               const xjw::mvs::FusionConfig &fusionConfig,
                                               int viewCount,
                                               int fusionMaxImageDim)
@@ -497,7 +497,7 @@ FusionFrameBuildResult buildStoredFusionFrame(const StoredDepthFrameRecord &stor
     const auto total_start = std::chrono::steady_clock::now();
     result.frame.sourceCamera = camera;
     result.frame.cameraModel = camera.normalizedForPositiveDepth();
-    result.frame.cameraModel.setDistortion(xjw::Camera::Distortion{});
+    result.frame.cameraModel.setDistortion(xjw::FramePinholeCamera::Distortion{});
     result.frame.imgW = stored.gridWidth;
     result.frame.imgH = stored.gridHeight;
     result.frame.imagePath = xjw::common::io::toUtf8Path(stored.refImage);

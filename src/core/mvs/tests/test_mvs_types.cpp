@@ -4,8 +4,8 @@
 // 测试内容：
 //   1. PatchMatchConfig 默认值验证（优化后的参数）
 //   2. FusionConfig 默认值验证
-//   3. Camera 正深度归一化与投影
-//   4. Camera 投影-反投影一致性
+//   3. FramePinholeCamera 正深度归一化与投影
+//   4. FramePinholeCamera 投影-反投影一致性
 //   5. 深度图后处理参数验证
 // ============================================================
 
@@ -13,7 +13,7 @@
 #include "MvsQualityReport.h"
 #include "MvsTypes.h"
 #include "MvsViewSelection.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 #include <QJsonObject>
 
@@ -25,7 +25,7 @@ using namespace xjw::mvs;
 namespace
 {
 
-xjw::Camera makeCamera(double fu,
+xjw::FramePinholeCamera makeCamera(double fu,
                        double fv,
                        double cu,
                        double cv,
@@ -35,7 +35,7 @@ xjw::Camera makeCamera(double fu,
                        const double center[3],
                        bool depthAxisFlipped)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     std::array<double, 9> rotation{{
         r_wc[0], r_wc[1], r_wc[2],
         r_wc[3], r_wc[4], r_wc[5],
@@ -287,7 +287,7 @@ TEST(MvsQualityReportTest, DetectsLocalDepthSpikesEvenWithHighConfidence)
     EXPECT_TRUE(json.value(QStringLiteral("has_local_depth_outliers")).toBool(false));
 }
 
-// ─── Camera 正深度归一化测试 ────────────────────────────────
+// ─── FramePinholeCamera 正深度归一化测试 ────────────────────────────────
 
 // 从显式 ASP/Tsai 语义参数构造正深度模型
 TEST(CameraPositiveDepthTest, FromCameraBasic)
@@ -296,13 +296,13 @@ TEST(CameraPositiveDepthTest, FromCameraBasic)
     double R_wc[9] = {1,0,0, 0,1,0, 0,0,1}; // identity
     double C[3] = {0, 0, 0};
 
-    xjw::Camera camera = makeCamera(
+    xjw::FramePinholeCamera camera = makeCamera(
         1000.0, 1000.0,
         512.0, 384.0,
         1, 1,
         R_wc, C,
         false);
-    const xjw::Camera cam = camera.normalizedForPositiveDepth();
+    const xjw::FramePinholeCamera cam = camera.normalizedForPositiveDepth();
 
     EXPECT_TRUE(cam.isValid());
     EXPECT_DOUBLE_EQ(cam.focalX(), 1000.0);
@@ -407,7 +407,7 @@ TEST(CameraPositiveDepthTest, DepthFlippedZ)
 // 从真实 .tsai 构造正深度模型
 TEST(CameraPositiveDepthTest, FromRealTsaiCamera)
 {
-    xjw::Camera cam;
+    xjw::FramePinholeCamera cam;
     std::string path;
 #ifdef TEST_DATA_DIR
     path = std::string(TEST_DATA_DIR) + "/tsai/1.tsai";
@@ -421,7 +421,7 @@ TEST(CameraPositiveDepthTest, FromRealTsaiCamera)
 
     auto C = cam.cameraCenter();
 
-    const xjw::Camera ccam = cam.normalizedForPositiveDepth();
+    const xjw::FramePinholeCamera ccam = cam.normalizedForPositiveDepth();
 
     EXPECT_TRUE(ccam.isValid());
     EXPECT_GT(ccam.focalX(), 0.0);

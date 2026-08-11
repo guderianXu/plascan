@@ -166,10 +166,10 @@ QJsonObject normalizedCalibration(const QJsonObject &camera, const QSize &imageS
         principalX /= pitch;
         principalY /= pitch;
     }
-    xjw::Camera parsed;
+    xjw::FramePinholeCamera parsed;
     if (xjw::common::project::cameraFromJson(camera, &parsed) && parsed.isValid())
     {
-        const xjw::Camera::Intrinsics intrinsics = parsed.intrinsics();
+        const xjw::FramePinholeCamera::Intrinsics intrinsics = parsed.intrinsics();
         focalX = intrinsics.focalX;
         focalY = intrinsics.focalY;
         principalX = intrinsics.principalX;
@@ -231,7 +231,7 @@ QJsonObject automaticInitialCalibration(const QSize &imageSize, double focalScal
 
 bool isUsableProjectCamera(const QJsonObject &camera)
 {
-    xjw::Camera parsed;
+    xjw::FramePinholeCamera parsed;
     return xjw::common::project::cameraFromJson(camera, &parsed) && parsed.isValid();
 }
 

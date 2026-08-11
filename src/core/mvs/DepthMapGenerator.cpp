@@ -87,10 +87,10 @@ QJsonArray doubleArrayToJson(const double *values, int count)
     return array;
 }
 
-Camera mvsPinholeCamera(const Camera &camera)
+FramePinholeCamera mvsPinholeCamera(const FramePinholeCamera &camera)
 {
-    Camera result = camera.normalizedForPositiveDepth();
-    result.setDistortion(Camera::Distortion{});
+    FramePinholeCamera result = camera.normalizedForPositiveDepth();
+    result.setDistortion(FramePinholeCamera::Distortion{});
     return result;
 }
 
@@ -106,9 +106,9 @@ cv::Mat restoreNativePyramidArtifact(const cv::Mat &artifact, const cv::Size &wo
     return restored;
 }
 
-QJsonObject cameraModelToJson(const Camera &camera)
+QJsonObject cameraModelToJson(const FramePinholeCamera &camera)
 {
-    const Camera::Intrinsics intrinsics = camera.intrinsics();
+    const FramePinholeCamera::Intrinsics intrinsics = camera.intrinsics();
     const std::array<double, 9> rotation = camera.worldToCameraRotation();
     const std::array<double, 3> translation = camera.worldToCameraTranslation();
     const std::array<double, 3> center = camera.cameraCenter();
@@ -313,7 +313,7 @@ QString makeMvsDepthInputHash(const DepthGenConfig &config,
         addHashValue(&hash, image_size);
         addHashValue(&hash, image_modified);
 
-        const xjw::Camera::Intrinsics intrinsics = view.camera.intrinsics();
+        const xjw::FramePinholeCamera::Intrinsics intrinsics = view.camera.intrinsics();
         addHashValue(&hash, intrinsics.focalX);
         addHashValue(&hash, intrinsics.focalY);
         addHashValue(&hash, intrinsics.principalX);
@@ -322,7 +322,7 @@ QString makeMvsDepthInputHash(const DepthGenConfig &config,
         addHashValue(&hash, intrinsics.uAxisSign);
         addHashValue(&hash, intrinsics.vAxisSign);
 
-        const xjw::Camera::Distortion distortion = view.camera.distortion();
+        const xjw::FramePinholeCamera::Distortion distortion = view.camera.distortion();
         addHashValue(&hash, distortion.radialK1);
         addHashValue(&hash, distortion.radialK2);
         addHashValue(&hash, distortion.radialK3);
@@ -1841,8 +1841,8 @@ bool estimatePatchMatchWithAdaptiveCuda(
     int refIdx,
     const cv::Mat &refGray,
     const std::vector<cv::Mat> &srcGrays,
-    const Camera &refCam,
-    const std::vector<Camera> &srcCams,
+    const FramePinholeCamera &refCam,
+    const std::vector<FramePinholeCamera> &srcCams,
     float zNear,
     float zFar,
     const PatchMatchConfig &config,
@@ -2015,8 +2015,8 @@ float sourceGeometryReliabilityWeight(const DepthFrameResult &reference_frame,
     return std::clamp(entry->sourceQualityScore, 0.05f, 1.0f);
 }
 
-int cameraBaselineSector(const Camera &reference_camera,
-                         const Camera &source_camera)
+int cameraBaselineSector(const FramePinholeCamera &reference_camera,
+                         const FramePinholeCamera &source_camera)
 {
     const std::array<double, 3> reference_center =
         reference_camera.cameraCenter();
@@ -2041,14 +2041,14 @@ int cameraBaselineSector(const Camera &reference_camera,
 struct DepthConsistencySourceInput
 {
     cv::Mat depth;
-    Camera camera;
+    FramePinholeCamera camera;
     cv::Mat confidence;
     float reliabilityWeight = 1.0f;
     int sourceOrdinal = -1;
 };
 
 void accumulateDepthConsistency(const cv::Mat &referenceDepth,
-                                const Camera &referenceCamera,
+                                const FramePinholeCamera &referenceCamera,
                                 const std::vector<DepthConsistencySourceInput> &sources,
                                 float relativeThreshold,
                                 int rowWorkers,
@@ -3916,7 +3916,7 @@ bool DepthMapGenerator::estimateDepthRangeFromVisiblePoints(
     float &zFar) const
 {
     const CameraView &ref = _views[refIdx];
-    const Camera cam = mvsPinholeCamera(ref.camera);
+    const FramePinholeCamera cam = mvsPinholeCamera(ref.camera);
 
     std::vector<float> depths;
     depths.reserve(visiblePointIndices.size());
@@ -4054,7 +4054,7 @@ cv::Mat DepthMapGenerator::buildHintDepthFromVisiblePoints(
 
 cv::Mat DepthMapGenerator::buildHintDepthForCamera(
     int refIdx,
-    const Camera &camera,
+    const FramePinholeCamera &camera,
     int W,
     int H,
     const std::vector<size_t> &visiblePointIndices) const
@@ -4066,7 +4066,7 @@ cv::Mat DepthMapGenerator::buildHintDepthForCamera(
 
 std::vector<ProjectedSparseDepthSample> DepthMapGenerator::collectProjectedSparseDepthSamples(
     const SparseCloud &sparse,
-    const Camera &camera,
+    const FramePinholeCamera &camera,
     int imageWidth,
     int imageHeight,
     const std::vector<size_t> &visiblePointIndices)
@@ -4320,7 +4320,7 @@ cv::Mat DepthMapGenerator::buildSparseSupportMask(const std::vector<CameraView> 
         return cv::Mat();
     }
 
-    const Camera cam = mvsPinholeCamera(views[refIdx].camera);
+    const FramePinholeCamera cam = mvsPinholeCamera(views[refIdx].camera);
     if (!cam.isValid())
     {
         return cv::Mat();
@@ -4470,7 +4470,7 @@ cv::Mat DepthMapGenerator::buildSparseSupportMaskFromVisiblePoints(
 
 cv::Mat DepthMapGenerator::buildSparseSupportMaskForCamera(
     int refIdx,
-    const Camera &camera,
+    const FramePinholeCamera &camera,
     int W,
     int H,
     const std::vector<size_t> &visiblePointIndices) const
@@ -5035,7 +5035,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
         return result;
     }
     cv::Mat refImg = referenceLease->preparedGray;
-    const Camera refCam = referenceLease->preparedCamera;
+    const FramePinholeCamera refCam = referenceLease->preparedCamera;
     const int W = refImg.cols;
     const int H = refImg.rows;
 
@@ -5043,7 +5043,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
     const int NV = static_cast<int>(_views.size());
     int numSrc = std::min(config.numSourceViews, NV - 1);
     std::vector<cv::Mat> srcGrays;
-    std::vector<Camera> srcCams;
+    std::vector<FramePinholeCamera> srcCams;
     std::vector<int> sourceIndices;
     std::vector<MvsImageCache::ImageLease> sourceLeases;
     sourceLeases.reserve(static_cast<std::size_t>(std::max(0, numSrc)));
@@ -5066,7 +5066,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
             continue;
         }
         cv::Mat srcImg = sourceLease->preparedGray;
-        Camera sourceCamera = sourceLease->preparedCamera;
+        FramePinholeCamera sourceCamera = sourceLease->preparedCamera;
         if (srcImg.cols != W || srcImg.rows != H)
         {
             const double scaleX = static_cast<double>(W) / std::max(1, srcImg.cols);
@@ -5253,8 +5253,8 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
     bool useRectified = false;
     cv::Mat workRefImg = refImg;
     std::vector<cv::Mat> workSrcGrays = srcGrays;
-    Camera workRefCam = refCam;
-    std::vector<Camera> workSrcCams = srcCams;
+    FramePinholeCamera workRefCam = refCam;
+    std::vector<FramePinholeCamera> workSrcCams = srcCams;
     cv::Mat referenceValidMask = referenceLease->validMask;
     std::vector<cv::Mat> source_valid_masks;
     source_valid_masks.reserve(sourceIndices.size());
@@ -5677,7 +5677,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(
                 const std::vector<int> &source_group =
                     source_groups[static_cast<std::size_t>(hypothesis_index)];
                 std::vector<cv::Mat> recovery_images;
-                std::vector<Camera> recovery_cameras;
+                std::vector<FramePinholeCamera> recovery_cameras;
                 std::vector<cv::Mat> recovery_source_masks;
                 recovery_images.reserve(source_group.size());
                 recovery_cameras.reserve(source_group.size());
@@ -6117,7 +6117,7 @@ void DepthMapGenerator::crossCheckDepthConsistency()
             continue;
         }
         cv::Mat &depthI = *_depthFrames[i].depthMap;
-        const Camera camI = _depthFrames[i].cameraModel.isValid()
+        const FramePinholeCamera camI = _depthFrames[i].cameraModel.isValid()
             ? _depthFrames[i].cameraModel
             : mvsPinholeCamera(_views[i].camera);
 
@@ -6206,7 +6206,7 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                 continue;
             }
             const cv::Mat &depthJ = origDepths[j];
-            const Camera camJ = _depthFrames[j].cameraModel.isValid()
+            const FramePinholeCamera camJ = _depthFrames[j].cameraModel.isValid()
                 ? _depthFrames[j].cameraModel
                 : mvsPinholeCamera(_views[j].camera);
 
@@ -6682,7 +6682,7 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
                          .arg(QString::fromStdString(referenceImageError)));
             return;
         }
-        const Camera reference_camera = frame.cameraModel.isValid()
+        const FramePinholeCamera reference_camera = frame.cameraModel.isValid()
             ? frame.cameraModel
             : mvsPinholeCamera(_views[frame_index].camera);
         const std::vector<int> source_indices = orbitalHoleRepairSourceIndices(
@@ -6712,7 +6712,7 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
         std::vector<cv::Mat> projected_sources;
         std::vector<int> source_sector_ids;
         std::vector<cv::Mat> source_images;
-        std::vector<Camera> source_cameras;
+        std::vector<FramePinholeCamera> source_cameras;
         std::vector<cv::Mat> source_masks;
         std::vector<MvsImageCache::ImageLease> sourceImageLeases;
         sourceImageLeases.reserve(source_indices.size());
@@ -6735,7 +6735,7 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
                              .arg(QString::fromStdString(sourceImageError)));
                 continue;
             }
-            const Camera source_camera =
+            const FramePinholeCamera source_camera =
                 _depthFrames[source_index].cameraModel.isValid()
                 ? _depthFrames[source_index].cameraModel
                 : mvsPinholeCamera(_views[source_index].camera);
@@ -6816,7 +6816,7 @@ void DepthMapGenerator::recoverResidualDepthAfterConsistency()
         for (const std::vector<int> &source_group : source_groups)
         {
             std::vector<cv::Mat> group_images;
-            std::vector<Camera> group_cameras;
+            std::vector<FramePinholeCamera> group_cameras;
             std::vector<cv::Mat> group_masks;
             for (const int source_ordinal : source_group)
             {
@@ -7136,7 +7136,7 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
         cv::Mat filtered_confidence = reference->confidence.empty()
             ? cv::Mat()
             : reference->confidence.clone();
-        const Camera reference_camera = _depthFrames[frame_index].cameraModel.isValid()
+        const FramePinholeCamera reference_camera = _depthFrames[frame_index].cameraModel.isValid()
             ? _depthFrames[frame_index].cameraModel
             : mvsPinholeCamera(_views[frame_index].camera);
         const std::vector<int> source_indices = consistencySourceIndicesForFrame(
@@ -7535,7 +7535,7 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             std::vector<cv::Mat> residual_projected_sources;
             std::vector<int> residual_sector_ids;
             std::vector<cv::Mat> residual_source_images;
-            std::vector<Camera> residual_source_cameras;
+            std::vector<FramePinholeCamera> residual_source_cameras;
             std::vector<cv::Mat> residual_source_masks;
             std::vector<MvsImageCache::ImageLease> residualSourceImageLeases;
             residualSourceImageLeases.reserve(repair_source_indices.size());
@@ -7564,7 +7564,7 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                                  .arg(QString::fromStdString(sourceImageError)));
                     continue;
                 }
-                const Camera source_camera =
+                const FramePinholeCamera source_camera =
                     _depthFrames[source_index].cameraModel.isValid()
                     ? _depthFrames[source_index].cameraModel
                     : mvsPinholeCamera(_views[source_index].camera);
@@ -7647,7 +7647,7 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 for (const std::vector<int> &source_group : source_groups)
                 {
                     std::vector<cv::Mat> group_images;
-                    std::vector<Camera> group_cameras;
+                    std::vector<FramePinholeCamera> group_cameras;
                     std::vector<cv::Mat> group_masks;
                     for (const int source_ordinal : source_group)
                     {

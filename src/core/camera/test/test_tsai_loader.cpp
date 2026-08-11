@@ -13,7 +13,7 @@
 // ============================================================
 
 #include <gtest/gtest.h>
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 #include <cmath>
 #include <string>
@@ -47,9 +47,9 @@ static double vecLength(const double v[3])
 // ─── 测试用例 ─────────────────────────────────────────────────
 
 // 1. 加载单个 .tsai 文件并验证有效性
-TEST(CameraTest, LoadFromTsaiFile)
+TEST(FramePinholeCameraTest, LoadFromTsaiFile)
 {
-    Camera cam;
+    FramePinholeCamera cam;
     std::string path = testDataDir() + "/tsai/1.tsai";
     ASSERT_TRUE(cam.loadFromFile(path))
         << "Failed to load camera file: " << path;
@@ -57,9 +57,9 @@ TEST(CameraTest, LoadFromTsaiFile)
 }
 
 // 2. 加载后内参不为零
-TEST(CameraTest, IntrinsicsNonZero)
+TEST(FramePinholeCameraTest, IntrinsicsNonZero)
 {
-    Camera cam;
+    FramePinholeCamera cam;
     ASSERT_TRUE(cam.loadFromFile(testDataDir() + "/tsai/1.tsai"));
 
     EXPECT_GT(std::abs(cam.focalX()), 1e-6);
@@ -69,10 +69,10 @@ TEST(CameraTest, IntrinsicsNonZero)
     EXPECT_GT(std::abs(cam.principalY()), 0.0);
 }
 
-TEST(CameraTest, MetricIntrinsicAccessorsConsistent)
+TEST(FramePinholeCameraTest, MetricIntrinsicAccessorsConsistent)
 {
     // mm accessor 应严格等于运行态 pixel 值乘回 pitch，验证 I/O 单位边界。
-    Camera cam;
+    FramePinholeCamera cam;
     ASSERT_TRUE(cam.loadFromFile(testDataDir() + "/tsai/1.tsai"));
 
     EXPECT_GT(cam.pixelPitch(), 0.0);
@@ -83,9 +83,9 @@ TEST(CameraTest, MetricIntrinsicAccessorsConsistent)
 }
 
 // 3. 旋转矩阵正交性验证 (R * R^T ≈ I)
-TEST(CameraTest, RotationOrthogonality)
+TEST(FramePinholeCameraTest, RotationOrthogonality)
 {
-    Camera cam;
+    FramePinholeCamera cam;
     ASSERT_TRUE(cam.loadFromFile(testDataDir() + "/tsai/1.tsai"));
 
     auto R = cam.cameraToWorldRotation();
@@ -104,9 +104,9 @@ TEST(CameraTest, RotationOrthogonality)
 }
 
 // 4. 旋转矩阵行列式 = +1（右手系）
-TEST(CameraTest, RotationDeterminant)
+TEST(FramePinholeCameraTest, RotationDeterminant)
 {
-    Camera cam;
+    FramePinholeCamera cam;
     ASSERT_TRUE(cam.loadFromFile(testDataDir() + "/tsai/1.tsai"));
 
     auto R = cam.cameraToWorldRotation();
@@ -118,9 +118,9 @@ TEST(CameraTest, RotationDeterminant)
 }
 
 // 5. 投影：相机前方的点应投影成功
-TEST(CameraTest, ProjectPointInFront)
+TEST(FramePinholeCameraTest, ProjectPointInFront)
 {
-    Camera cam;
+    FramePinholeCamera cam;
     ASSERT_TRUE(cam.loadFromFile(testDataDir() + "/tsai/1.tsai"));
 
     auto C = cam.cameraCenter();
@@ -146,9 +146,9 @@ TEST(CameraTest, ProjectPointInFront)
 }
 
 // 6. 用 R_cw 的光轴方向构造世界点，验证 worldToCamera 后得到正深度
-TEST(CameraTest, WorldToCameraConsistency)
+TEST(FramePinholeCameraTest, WorldToCameraConsistency)
 {
-    Camera cam;
+    FramePinholeCamera cam;
     ASSERT_TRUE(cam.loadFromFile(testDataDir() + "/tsai/1.tsai"));
 
     auto C = cam.cameraCenter();
@@ -170,7 +170,7 @@ TEST(CameraTest, WorldToCameraConsistency)
 }
 
 // 7. 批量加载所有可用相机文件
-TEST(CameraTest, LoadAllAvailableCameras)
+TEST(FramePinholeCameraTest, LoadAllAvailableCameras)
 {
     // 遍历而不硬编码文件数量，使新增回归相机自动进入批量加载验证。
     std::string tsaiDir = testDataDir() + "/tsai";
@@ -183,14 +183,14 @@ TEST(CameraTest, LoadAllAvailableCameras)
         if (!entry.is_regular_file() || entry.path().extension() != ".tsai")
             continue;
 
-        Camera cam;
+        FramePinholeCamera cam;
         std::string path = entry.path().string();
 
         if (cam.loadFromFile(path)) {
-            EXPECT_TRUE(cam.isValid()) << "Camera " << path << " loaded but invalid";
+            EXPECT_TRUE(cam.isValid()) << "FramePinholeCamera " << path << " loaded but invalid";
             auto C = cam.cameraCenter();
             double dist = std::sqrt(C[0]*C[0] + C[1]*C[1] + C[2]*C[2]);
-            EXPECT_GT(dist, 1.0) << "Camera " << path << " center too close to origin";
+            EXPECT_GT(dist, 1.0) << "FramePinholeCamera " << path << " center too close to origin";
             ++loaded;
         } else {
             ++failed;
@@ -203,7 +203,7 @@ TEST(CameraTest, LoadAllAvailableCameras)
 }
 
 // 8. 多相机中心距离合理性
-TEST(CameraTest, CameraCentersReasonable)
+TEST(FramePinholeCameraTest, CameraCentersReasonable)
 {
     // 这是数据集级 sanity check：相机中心不应全部重合，也不应出现数量级爆炸。
     std::string tsaiDir = testDataDir() + "/tsai";
@@ -213,7 +213,7 @@ TEST(CameraTest, CameraCentersReasonable)
         if (!entry.is_regular_file() || entry.path().extension() != ".tsai")
             continue;
 
-        Camera cam;
+        FramePinholeCamera cam;
         if (!cam.loadFromFile(entry.path().string())) continue;
         auto C = cam.cameraCenter();
         centers.push_back({C[0], C[1], C[2]});
@@ -237,7 +237,7 @@ TEST(CameraTest, CameraCentersReasonable)
     // 最近相机对距离应 > 0（不重叠）
     EXPECT_GT(minDist, 0.0) << "Some cameras have identical positions";
     // 最远相机对距离应有限
-    EXPECT_LT(maxDist, 1e8) << "Camera baseline seems unreasonably large";
+    EXPECT_LT(maxDist, 1e8) << "FramePinholeCamera baseline seems unreasonably large";
 
     // 3 个以上相机时验证距离比值合理
     if (centers.size() >= 3) {
@@ -246,10 +246,10 @@ TEST(CameraTest, CameraCentersReasonable)
 }
 
 // 9. 设置内参后投影一致性
-TEST(CameraTest, SetIntrinsicsAndProject)
+TEST(FramePinholeCameraTest, SetIntrinsicsAndProject)
 {
     // 不经过文件 I/O，直接验证 setter 建立的标准针孔相机能把轴线点投到主点。
-    Camera cam;
+    FramePinholeCamera cam;
     // 设置简单针孔相机
     cam.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
     // 设置单位旋转，中心在原点

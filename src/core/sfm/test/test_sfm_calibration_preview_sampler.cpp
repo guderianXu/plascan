@@ -10,9 +10,9 @@
 namespace
 {
 
-xjw::Camera makeCamera()
+xjw::FramePinholeCamera makeCamera()
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(1000.0, 1000.0, 500.0, 400.0);
     camera.setPose({{1.0, 0.0, 0.0,
                      0.0, 1.0, 0.0,
@@ -25,7 +25,7 @@ xjw::Camera makeCamera()
 
 TEST(SfmCalibrationPreviewSamplerTest, BalancesCamerasAndImageRadiusDeterministically)
 {
-    const std::vector<xjw::Camera> cameras(4, makeCamera());
+    const std::vector<xjw::FramePinholeCamera> cameras(4, makeCamera());
     std::vector<xjw::BATrack> tracks;
     for (int camera_index = 0; camera_index < 4; ++camera_index)
     {
@@ -74,7 +74,7 @@ TEST(SfmCalibrationPreviewSamplerTest, BalancesCamerasAndImageRadiusDeterministi
 
 TEST(SfmCalibrationPreviewSamplerTest, ReturnsAllTracksWhenBelowLimit)
 {
-    const std::vector<xjw::Camera> cameras(1, makeCamera());
+    const std::vector<xjw::FramePinholeCamera> cameras(1, makeCamera());
     std::vector<xjw::BATrack> tracks(3);
     const std::vector<std::size_t> selected =
         xjw::sfm_calibration_preview::selectTrackIndices(

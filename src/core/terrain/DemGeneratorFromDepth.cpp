@@ -41,7 +41,7 @@ static void unprojectPixel(int col, int row, double depth,
 }
 
 bool DemGenerator::generateFromDepthMaps(const std::vector<cv::Mat> &depthMaps,
-                                         const std::vector<Camera> &cameras,
+                                         const std::vector<FramePinholeCamera> &cameras,
                                          const DemGenerationOptions &options,
                                          DemGridData *demGrid,
                                          QString *errorMsg)
@@ -65,7 +65,7 @@ bool DemGenerator::generateFromDepthMaps(const std::vector<cv::Mat> &depthMaps,
     }
 
     const cv::Mat &refDepth = depthMaps[0];
-    const Camera &refCam = cameras[0];
+    const FramePinholeCamera &refCam = cameras[0];
     if (refDepth.empty())
     {
         if (errorMsg) *errorMsg = "Reference depth map is empty";
@@ -140,7 +140,7 @@ bool DemGenerator::generateFromDepthMaps(const std::vector<cv::Mat> &depthMaps,
     {
         if (depthMaps[vi].empty()) continue;
         const cv::Mat &secDepth = depthMaps[vi];
-        const Camera &secCam = cameras[vi];
+        const FramePinholeCamera &secCam = cameras[vi];
         const auto R2 = secCam.cameraToWorldRotation();
         const auto C2 = secCam.cameraCenter();
         const double fx2 = secCam.focalX();

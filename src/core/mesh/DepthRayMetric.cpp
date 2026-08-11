@@ -1,6 +1,6 @@
 #include "DepthRayMetric.h"
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 #include <algorithm>
 #include <cmath>
@@ -48,7 +48,7 @@ std::array<double, 3> cross(
 }
 
 bool unproject(
-    const Camera &camera,
+    const FramePinholeCamera &camera,
     const std::array<double, 2> &pixel,
     double depth,
     std::array<double, 3> *world)
@@ -74,7 +74,7 @@ bool unproject(
 }
 
 bool makeUnitRay(
-    const Camera &camera,
+    const FramePinholeCamera &camera,
     const std::array<double, 2> &pixel,
     const std::array<double, 3> &center,
     std::array<double, 3> *unit_ray)
@@ -106,7 +106,7 @@ double pointToRayDistance(
 }
 
 bool footprintForAxis(
-    const Camera &camera,
+    const FramePinholeCamera &camera,
     const std::array<double, 2> &pixel,
     const std::array<double, 3> &center,
     const std::array<double, 3> &world_point,
@@ -185,7 +185,7 @@ bool pointAtDistances(
 } // namespace
 
 DepthRayMetricSample DepthRayMetric::evaluate(
-    const Camera &camera,
+    const FramePinholeCamera &camera,
     const std::array<double, 2> &pixel,
     double positive_camera_z_depth)
 {

@@ -72,7 +72,7 @@ bool isNativeCudaRuntimeAvailable(int deviceId, std::string *message)
 #endif
 }
 
-BAResult optimizePointsWithNativeCuda(const std::vector<Camera> &cameras,
+BAResult optimizePointsWithNativeCuda(const std::vector<FramePinholeCamera> &cameras,
                                       const std::vector<BATrack> &tracks,
                                       const BAOptions &options)
 {

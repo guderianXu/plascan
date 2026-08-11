@@ -26,11 +26,11 @@ xjw::aerial_triangulation::AerialTriangulationOptions makeBaseOptions(
     return options;
 }
 
-xjw::Camera makeInwardRingCamera(double angle)
+xjw::FramePinholeCamera makeInwardRingCamera(double angle)
 {
     const double cosine = std::cos(angle);
     const double sine = std::sin(angle);
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(1200.0, 1200.0, 320.0, 240.0);
     camera.setPose({{sine, 0.0, -cosine,
                      -cosine, 0.0, -sine,
@@ -196,7 +196,7 @@ TEST(AerialTriangulationWorkflowTest, EstimatedPosePreselectionBoundsReferenceAn
     options.referenceMode = QStringLiteral("estimated");
     options.genericPreselection = true;
     options.quality = QStringLiteral("highest");
-    options.referenceCameras.insert(options.images.front(), xjw::Camera{});
+    options.referenceCameras.insert(options.images.front(), xjw::FramePinholeCamera{});
 
     const auto resolved =
         xjw::aerial_triangulation::AerialTriangulationWorkflow::resolveConfig(options);

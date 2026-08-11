@@ -1,6 +1,6 @@
 #pragma once
 
-#include "camera/Camera.h"
+#include "camera/FramePinholeCamera.h"
 
 #include <opencv2/core.hpp>
 
@@ -21,7 +21,7 @@ struct MvsImageFrame
 {
     cv::Mat gray;
     cv::Mat preparedGray;
-    Camera preparedCamera;
+    FramePinholeCamera preparedCamera;
     cv::Mat validMask;
     bool projectMaskLoaded = false;
 

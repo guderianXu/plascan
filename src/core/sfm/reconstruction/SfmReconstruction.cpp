@@ -90,7 +90,7 @@ size_t SfmReconstruction::numRegisteredImages() const
     return count;
 }
 
-void SfmReconstruction::registerImage(ImageId imageId, const Camera &camera)
+void SfmReconstruction::registerImage(ImageId imageId, const FramePinholeCamera &camera)
 {
     auto it = imageDataMap.find(imageId);
     if (it == imageDataMap.end())
@@ -115,7 +115,7 @@ void SfmReconstruction::deregisterImage(ImageId imageId)
 // 相机管理
 // ============================================================
 
-Camera &SfmReconstruction::camera(ImageId imageId)
+FramePinholeCamera &SfmReconstruction::camera(ImageId imageId)
 {
     auto it = cameraMap.find(imageId);
     if (it == cameraMap.end())
@@ -125,7 +125,7 @@ Camera &SfmReconstruction::camera(ImageId imageId)
     return it->second;
 }
 
-const Camera &SfmReconstruction::camera(ImageId imageId) const
+const FramePinholeCamera &SfmReconstruction::camera(ImageId imageId) const
 {
     auto it = cameraMap.find(imageId);
     if (it == cameraMap.end())

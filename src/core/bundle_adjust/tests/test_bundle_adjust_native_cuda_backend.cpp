@@ -1,5 +1,5 @@
 #include "BundleAdjust.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 #include <gtest/gtest.h>
 
@@ -8,9 +8,9 @@
 namespace
 {
 
-xjw::Camera makeCamera(double cx)
+xjw::FramePinholeCamera makeCamera(double cx)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(1000.0, 1000.0, 320.0, 240.0);
     camera.setPose({{1.0, 0.0, 0.0,
                      0.0, 1.0, 0.0,
@@ -28,7 +28,7 @@ TEST(NativeCudaBackendTest, ExplicitBackendReportsActiveWorkset)
         GTEST_SKIP() << "native_cuda backend is not available in this build";
     }
 
-    std::vector<xjw::Camera> cameras{makeCamera(0.0), makeCamera(1.0), makeCamera(2.0)};
+    std::vector<xjw::FramePinholeCamera> cameras{makeCamera(0.0), makeCamera(1.0), makeCamera(2.0)};
     xjw::BATrack track;
     track.initialPoint = {{0.1, 0.0, 8.0}};
     track.observations.push_back({0, 332.5, 240.0, 1.0});
@@ -67,7 +67,7 @@ TEST(NativeCudaBackendTest, ReducesReprojectionRmsOnSyntheticGlobalProblem)
         GTEST_SKIP() << "native_cuda backend is not available in this build";
     }
 
-    std::vector<xjw::Camera> cameras{makeCamera(0.0), makeCamera(1.0), makeCamera(2.0), makeCamera(3.0)};
+    std::vector<xjw::FramePinholeCamera> cameras{makeCamera(0.0), makeCamera(1.0), makeCamera(2.0), makeCamera(3.0)};
     std::vector<xjw::BATrack> tracks;
     for (int i = 0; i < 40; ++i)
     {

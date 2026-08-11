@@ -54,9 +54,9 @@ xjw::DemGridData makeProjectionDemGrid()
     return grid;
 }
 
-xjw::Camera makeProjectionCamera(double centerZ = -10.0)
+xjw::FramePinholeCamera makeProjectionCamera(double centerZ = -10.0)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(10.0, 10.0, 32.0, 32.0);
     camera.setPose(
         std::array<double, 9>{
@@ -758,7 +758,7 @@ TEST(OrthoProjectorTest, ReportsSelectedImageWithoutCameraInsteadOfSkippingIt)
     ASSERT_TRUE(directory.isValid());
     xjw::OrthoImageInput invalid = writeProjectionInput(
         &directory, QStringLiteral("missing_camera.png"), cv::Scalar(1, 2, 3));
-    invalid.camera = xjw::Camera();
+    invalid.camera = xjw::FramePinholeCamera();
     const xjw::OrthoImageInput valid = writeProjectionInput(
         &directory, QStringLiteral("valid_camera.png"), cv::Scalar(4, 5, 6));
 

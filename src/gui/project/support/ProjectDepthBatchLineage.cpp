@@ -80,7 +80,7 @@ QJsonObject fallbackCameraGeometry(const QJsonObject &cameraObject)
 
 QJsonObject canonicalCameraGeometry(const QJsonObject &cameraObject)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     if (!xjw::common::project::cameraFromJson(cameraObject, &camera) ||
         !camera.isValid())
     {
@@ -171,7 +171,7 @@ bool depthCameraMatchesProjectImage(
     const xjw::core::project::StoredDepthFrameRecord &frame,
     const QJsonObject &image)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     if (frame.cameraModel.isEmpty() ||
         !xjw::common::project::cameraFromJson(
             image.value(QStringLiteral("camera")).toObject(), &camera) ||

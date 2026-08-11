@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "PatchMatchCUDA.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 #include <opencv2/imgproc.hpp>
 
@@ -24,7 +24,7 @@ struct CudaPatchMatchRunStats
     double elapsedMs = 0.0;
 };
 
-xjw::Camera makeCamera(double fu,
+xjw::FramePinholeCamera makeCamera(double fu,
                        double fv,
                        double cu,
                        double cv,
@@ -34,7 +34,7 @@ xjw::Camera makeCamera(double fu,
                        const double center[3],
                        bool depthAxisFlipped)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     std::array<double, 9> rotation{{
         r_wc[0], r_wc[1], r_wc[2],
         r_wc[3], r_wc[4], r_wc[5],
@@ -85,8 +85,8 @@ cv::Mat makeShiftedImage(const cv::Mat &image, int disparity)
 CudaPatchMatchRunStats executeCudaPatchMatchCase(
     const cv::Mat &refGray,
     const cv::Mat &srcGray,
-    const xjw::Camera &refCam,
-    const xjw::Camera &srcCam,
+    const xjw::FramePinholeCamera &refCam,
+    const xjw::FramePinholeCamera &srcCam,
     bool useParallelSweep,
     int iterations,
     double expectedDepth = 10.0)
@@ -109,7 +109,7 @@ CudaPatchMatchRunStats executeCudaPatchMatchCase(
         refGray,
         std::vector<cv::Mat>{srcGray},
         refCam,
-        std::vector<xjw::Camera>{srcCam},
+        std::vector<xjw::FramePinholeCamera>{srcCam},
         5.0f,
         15.0f,
         config,
@@ -216,7 +216,7 @@ TEST(PatchMatchCpuRegressionTest, RecoversFrontoParallelPlaneAtExpectedDepth)
         refGray,
         std::vector<cv::Mat>{srcGray},
         refCam,
-        std::vector<xjw::Camera>{srcCam},
+        std::vector<xjw::FramePinholeCamera>{srcCam},
         5.0f,
         15.0f,
         config,

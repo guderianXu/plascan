@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "PointCloudAlignment.h"
 
 #include <opencv2/core.hpp>
@@ -110,7 +110,7 @@ struct ModelValidationView
 {
     QString id;
     QString imagePath;
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     int cameraWidth = 0;
     int cameraHeight = 0;
     QString depthPath;

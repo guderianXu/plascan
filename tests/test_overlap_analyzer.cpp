@@ -9,9 +9,9 @@
 namespace
 {
 
-xjw::Camera makeDownLookingCamera(double x, double y, double z)
+xjw::FramePinholeCamera makeDownLookingCamera(double x, double y, double z)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(100.0, 100.0, 50.0, 50.0);
     camera.setPose(std::array<double, 9>{{
                        1.0, 0.0, 0.0,
@@ -21,7 +21,7 @@ xjw::Camera makeDownLookingCamera(double x, double y, double z)
     return camera;
 }
 
-xjw::OverlapImageInput makeImage(const std::string &path, const xjw::Camera &camera)
+xjw::OverlapImageInput makeImage(const std::string &path, const xjw::FramePinholeCamera &camera)
 {
     xjw::OverlapImageInput input;
     input.imagePath = path;

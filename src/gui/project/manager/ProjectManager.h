@@ -22,7 +22,7 @@
 // =============================================================================
 #pragma once
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "project/ProjectDocumentModel.h"
 #include "ProjectSessionContext.h"
 #include "ProjectTerrainRequests.h"
@@ -347,10 +347,10 @@ public slots:
     void discardTemporaryMeta();                        // 删除临时缓存文件
     // 刷新重建质量报告，并将报告注册到工作区目录树。
     void refreshReconstructionQualityReport();
-    // 为指定影像列表中每张影像加载对应的 xjw::Camera 对象；
+    // 为指定影像列表中每张影像加载对应的 xjw::FramePinholeCamera 对象；
     // hasCamerasForAll 出参为 true 表示列表中每张影像均有有效相机参数。
-    // 返回值： 影像路径 → Camera 的映射（已成功解析的影像）
-    QMap<QString, xjw::Camera> getCamerasForImages(
+    // 返回值： 影像路径 → FramePinholeCamera 的映射（已成功解析的影像）
+    QMap<QString, xjw::FramePinholeCamera> getCamerasForImages(
             const QStringList &images,
             bool *hasCamerasForAll = nullptr) const;
     

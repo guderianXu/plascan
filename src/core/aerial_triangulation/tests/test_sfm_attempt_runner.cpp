@@ -1,7 +1,7 @@
 #include "reconstruction/SfmAttemptRunner.h"
 #include "reconstruction/MarkerPriorLoader.h"
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "io/MarkerSetStore.h"
 
 #include <gtest/gtest.h>
@@ -33,8 +33,8 @@ void writeJson(const QString &path, const QJsonObject &object)
 
 QJsonObject makeKnownPoseTiePoints(const QString &imageA,
                                    const QString &imageB,
-                                   const xjw::Camera &cameraA,
-                                   const xjw::Camera &cameraB)
+                                   const xjw::FramePinholeCamera &cameraA,
+                                   const xjw::FramePinholeCamera &cameraB)
 {
     QJsonArray tracks;
     int featureIndex = 0;
@@ -265,13 +265,13 @@ TEST(SfmAttemptRunnerTest, RunsKnownPoseSfmFromPreparedTiePointGraph)
     ASSERT_TRUE(QImage(640, 480, QImage::Format_Grayscale8).save(imageA));
     ASSERT_TRUE(QImage(640, 480, QImage::Format_Grayscale8).save(imageB));
 
-    xjw::Camera cameraA;
+    xjw::FramePinholeCamera cameraA;
     cameraA.setIntrinsics(700.0, 700.0, 320.0, 240.0);
     cameraA.setPose({1.0, 0.0, 0.0,
                      0.0, 1.0, 0.0,
                      0.0, 0.0, 1.0},
                     {-0.5, 0.0, 0.0});
-    xjw::Camera cameraB;
+    xjw::FramePinholeCamera cameraB;
     cameraB.setIntrinsics(700.0, 700.0, 320.0, 240.0);
     cameraB.setPose({1.0, 0.0, 0.0,
                      0.0, 1.0, 0.0,

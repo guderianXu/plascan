@@ -24,8 +24,8 @@ using PlaPointCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
 struct PreparedView
 {
     int sourceIndex = -1;
-    Camera evidenceCamera;
-    Camera colorCamera;
+    FramePinholeCamera evidenceCamera;
+    FramePinholeCamera colorCamera;
     cv::Mat colorBgr;
     cv::Mat gray;
     cv::Mat supportDistance;

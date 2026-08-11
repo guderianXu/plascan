@@ -138,7 +138,7 @@ MvsSceneClassification classifyMvsScene(const std::vector<CameraView> &views,
 
     for (const CameraView &view : views)
     {
-        const Camera camera = view.camera.normalizedForPositiveDepth();
+        const FramePinholeCamera camera = view.camera.normalizedForPositiveDepth();
         if (!camera.isValid())
         {
             continue;

@@ -9,7 +9,7 @@
  * BA/SfM 不再解析文件名，也不再依赖成对 `.match` 或 JSON sidecar。
  */
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "common/SfmTypes.h"
 
 #include <QJsonObject>
@@ -58,7 +58,7 @@ struct ProjectMatchInputDiagnostics
 /// 工程读取阶段的完整输出；成员数组共享同一相机索引空间。
 struct ProjectMatchInput
 {
-    std::vector<xjw::Camera> cameras; ///< 当前选中影像的相机，顺序稳定。
+    std::vector<xjw::FramePinholeCamera> cameras; ///< 当前选中影像的相机，顺序稳定。
     QStringList imagePathByIndex; ///< 与 cameras 一一对应的规范影像路径。
     QMap<QString, QJsonObject> beforeCamMeta; ///< BA/SfM 前相机 JSON，用于事务式回写。
     QMap<QString, int> cameraIndexByPath; ///< 规范路径/受支持别名到相机下标。

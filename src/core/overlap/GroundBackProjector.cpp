@@ -146,7 +146,7 @@ double DemSurface::meanHeight() const
 //          ray_world = R * ray_cam
 //     ⑤ 归一化：dir = ray_world / ||ray_world||
 // ============================================================
-bool GroundBackProjector::pixelRayWorld(const Camera &camera,
+bool GroundBackProjector::pixelRayWorld(const FramePinholeCamera &camera,
                                         double u,
                                         double v,
                                         std::array<double, 3> *origin,
@@ -211,7 +211,7 @@ bool GroundBackProjector::pixelRayWorld(const Camera &camera,
 //     - |dir.z| 不能接近 0（否则射线与高程面平行，无交点或无穷远）
 //     - t > 0（交点必须在相机前方，t ≤ 0 表示面在相机后方）
 // ============================================================
-bool GroundBackProjector::backProjectToFixedZ(const Camera &camera,
+bool GroundBackProjector::backProjectToFixedZ(const FramePinholeCamera &camera,
                                               double u,
                                               double v,
                                               double fixedZ,
@@ -258,7 +258,7 @@ bool GroundBackProjector::backProjectToFixedZ(const Camera &camera,
 //   迭代限制：最多 32 次，收敛条件 |diff| < 1e-3（毫米级精度）
 //   退化处理：若 DEM 查询失败则将 t 扩大 1.3 倍继续搜索
 // ============================================================
-bool GroundBackProjector::backProjectWithDem(const Camera &camera,
+bool GroundBackProjector::backProjectWithDem(const FramePinholeCamera &camera,
                                              double u,
                                              double v,
                                              const DemSurface &dem,
@@ -337,7 +337,7 @@ bool GroundBackProjector::backProjectWithDem(const Camera &camera,
 // 函数：GroundBackProjector::backProjectToSphere
 // 功能：射线与基准球面求交（解析二次方程）。
 // ============================================================
-bool GroundBackProjector::backProjectToSphere(const Camera &camera,
+bool GroundBackProjector::backProjectToSphere(const FramePinholeCamera &camera,
                                               double u,
                                               double v,
                                               const ReferenceSphereSurface &sphere,
@@ -415,7 +415,7 @@ bool GroundBackProjector::backProjectToSphere(const Camera &camera,
 //     - 否则：使用相机主点（cu, cv）作为退化情况的备选
 //   地面模型选择：useFixedZ=true 用固定高程面，否则用 DEM（需有效）
 // ============================================================
-bool GroundBackProjector::imageCenterToGround(const Camera &camera,
+bool GroundBackProjector::imageCenterToGround(const FramePinholeCamera &camera,
                                               int imageWidth,
                                               int imageHeight,
                                               const DemSurface *dem,
@@ -436,7 +436,7 @@ bool GroundBackProjector::imageCenterToGround(const Camera &camera,
     return backProjectWithDem(camera, u, v, *dem, ground, errorMsg);
 }
 
-bool GroundBackProjector::imageCenterToSphere(const Camera &camera,
+bool GroundBackProjector::imageCenterToSphere(const FramePinholeCamera &camera,
                                               int imageWidth,
                                               int imageHeight,
                                               const ReferenceSphereSurface &sphere,
@@ -458,7 +458,7 @@ bool GroundBackProjector::imageCenterToSphere(const Camera &camera,
 //   用途：此半径用于重叠度分析中邻域搜索的初始半径估计。
 //         搜索半径 = neighborFactor * radius * 2.5（见 OverlapAnalyzer）
 // ============================================================
-bool GroundBackProjector::estimateFootprintRadius(const Camera &camera,
+bool GroundBackProjector::estimateFootprintRadius(const FramePinholeCamera &camera,
                                                   int imageWidth,
                                                   int imageHeight,
                                                   const DemSurface *dem,
@@ -512,7 +512,7 @@ bool GroundBackProjector::estimateFootprintRadius(const Camera &camera,
     return true;
 }
 
-bool GroundBackProjector::estimateFootprintRadiusOnSphere(const Camera &camera,
+bool GroundBackProjector::estimateFootprintRadiusOnSphere(const FramePinholeCamera &camera,
                                                           int imageWidth,
                                                           int imageHeight,
                                                           const ReferenceSphereSurface &sphere,

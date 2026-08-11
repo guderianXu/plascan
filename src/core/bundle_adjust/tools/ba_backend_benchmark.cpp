@@ -50,9 +50,9 @@ struct RealDatasetOptions
     std::string backends = "ceres_cpu";
     BenchmarkSettings settings;
 };
-xjw::Camera makeCamera(double cx, double cy, double cz)
+xjw::FramePinholeCamera makeCamera(double cx, double cy, double cz)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
     camera.setPose({{1.0, 0.0, 0.0,
                      0.0, 1.0, 0.0,
@@ -60,9 +60,9 @@ xjw::Camera makeCamera(double cx, double cy, double cz)
                    {{cx, cy, cz}});
     return camera;
 }
-std::vector<xjw::Camera> makeCameras(int count)
+std::vector<xjw::FramePinholeCamera> makeCameras(int count)
 {
-    std::vector<xjw::Camera> cameras;
+    std::vector<xjw::FramePinholeCamera> cameras;
     cameras.reserve(static_cast<std::size_t>(count));
     for (int i = 0; i < count; ++i)
     {
@@ -71,7 +71,7 @@ std::vector<xjw::Camera> makeCameras(int count)
     }
     return cameras;
 }
-std::vector<xjw::BATrack> makeTracks(const std::vector<xjw::Camera> &cameras,
+std::vector<xjw::BATrack> makeTracks(const std::vector<xjw::FramePinholeCamera> &cameras,
                                      int trackCount,
                                      int viewsPerTrack)
 {
@@ -174,7 +174,7 @@ void enableFullSharedCameraModel(xjw::BAOptions *options)
 
 CameraModelRunInfo configureCameraModel(
     const BenchmarkSettings &settings,
-    const std::vector<xjw::Camera> &cameras,
+    const std::vector<xjw::FramePinholeCamera> &cameras,
     const std::vector<xjw::BATrack> &tracks,
     xjw::BAOptions *options)
 {
@@ -250,7 +250,7 @@ void runCase(const std::string &name,
 {
     for (int repetition = 1; repetition <= settings.repetitions; ++repetition)
     {
-        std::vector<xjw::Camera> cameras = dataset.cameras;
+        std::vector<xjw::FramePinholeCamera> cameras = dataset.cameras;
         std::vector<xjw::BATrack> tracks = dataset.tracks;
         xjw::BAOptions options;
         options.backend = backend;

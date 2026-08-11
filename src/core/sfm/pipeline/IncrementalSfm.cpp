@@ -3,7 +3,7 @@
  * @brief 增量 SfM 的输入装配、主状态机和人工控制网络接入。
  *
  * 未知位姿路径依次执行：对应图构建、初始像对试算、增量 PnP、三角化和 BA；
- * 已知位姿路径委托 KnownPoseReconstructor。Camera 内部始终使用 camera-to-world
+ * 已知位姿路径委托 KnownPoseReconstructor。FramePinholeCamera 内部始终使用 camera-to-world
  * 旋转和世界系相机中心，OpenCV 的 world-to-camera 约定只在适配层出现。
  */
 
@@ -103,7 +103,7 @@ void IncrementalSfm::addImage(ImageId id, const std::string &imagePath, const st
     _cameraPaths[id] = cameraPath;
 }
 
-void IncrementalSfm::addImageWithCamera(ImageId id, const std::string &imagePath, const Camera &camera,
+void IncrementalSfm::addImageWithCamera(ImageId id, const std::string &imagePath, const FramePinholeCamera &camera,
                                         const std::vector<FeatureKeypoint> &keypoints)
 {
     ImageData data;
@@ -354,7 +354,7 @@ const control_points::PriorTrack *IncrementalSfm::priorTrack(const std::string &
 }
 
 bool IncrementalSfm::tryApplyControlNetwork(const std::vector<ImageId> &baImageIds,
-                                            std::vector<Camera> *baCameras)
+                                            std::vector<FramePinholeCamera> *baCameras)
 {
     if (_controlNetworkApplied || !baCameras || baImageIds.size() != baCameras->size())
     {
@@ -397,7 +397,7 @@ bool IncrementalSfm::tryApplyControlNetwork(const std::vector<ImageId> &baImageI
     for (ImageId image_id : _reconstruction->registeredImageIds())
     {
         if (!_reconstruction->hasCamera(image_id)) continue;
-        Camera &camera = _reconstruction->camera(image_id);
+        FramePinholeCamera &camera = _reconstruction->camera(image_id);
         camera.setPose(_controlNetworkTransform.rotate(camera.cameraToWorldRotation()),
                        _controlNetworkTransform.apply(camera.cameraCenter()));
     }

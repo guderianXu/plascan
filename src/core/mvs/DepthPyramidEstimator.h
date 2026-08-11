@@ -20,8 +20,8 @@ struct PatchMatchBackendRequest
     cv::Mat referenceValidMask;
     std::vector<cv::Mat> sourceImages;
     std::vector<cv::Mat> sourceValidMasks;
-    Camera referenceCamera;
-    std::vector<Camera> sourceCameras;
+    FramePinholeCamera referenceCamera;
+    std::vector<FramePinholeCamera> sourceCameras;
     float zNear = 0.0f;
     float zFar = 0.0f;
     DepthPyramidLevelConfig levelConfig;
@@ -59,8 +59,8 @@ struct DepthPyramidRequest
     std::vector<cv::Mat> sourceImages;
     std::vector<cv::Mat> sourceValidMasks;
     cv::Mat guideImage;
-    Camera referenceCamera;
-    std::vector<Camera> sourceCameras;
+    FramePinholeCamera referenceCamera;
+    std::vector<FramePinholeCamera> sourceCameras;
     float zNear = 0.0f;
     float zFar = 0.0f;
     DepthPyramidConfig pyramidConfig;

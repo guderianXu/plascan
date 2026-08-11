@@ -59,7 +59,7 @@ std::string adaptiveCameraModelName(const BAIntrinsicParameterMask &mask);
 
 /// 从粗略相机/点解评估各共享内参的可观测性与可靠性。
 BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
-    const std::vector<Camera> &cameras,
+    const std::vector<FramePinholeCamera> &cameras,
     const std::vector<BATrack> &tracks,
     const BAOptions *options = nullptr);
 
@@ -76,8 +76,8 @@ bool applyAdaptiveCameraModel(
  * @return 输入尺寸有效且完成恢复时返回 true。
  */
 bool restoreInactiveAdaptiveIntrinsics(
-    std::vector<Camera> *cameras,
-    const std::vector<Camera> &stableReferences,
+    std::vector<FramePinholeCamera> *cameras,
+    const std::vector<FramePinholeCamera> &stableReferences,
     const BAIntrinsicParameterMask &activeMask);
 
 } // namespace xjw

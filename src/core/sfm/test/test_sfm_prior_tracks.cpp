@@ -10,9 +10,9 @@
 namespace
 {
 
-xjw::Camera makeCamera(double centerX)
+xjw::FramePinholeCamera makeCamera(double centerX)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(900.0, 900.0, 512.0, 384.0);
     camera.setPose({1.0, 0.0, 0.0,
                     0.0, 1.0, 0.0,
@@ -22,7 +22,7 @@ xjw::Camera makeCamera(double centerX)
 }
 
 xjw::control_points::PriorObservation observation(xjw::ImageId imageId,
-                                                   const xjw::Camera &camera,
+                                                   const xjw::FramePinholeCamera &camera,
                                                    const std::array<double, 3> &point,
                                                    xjw::control_points::PriorObservationState state)
 {
@@ -58,7 +58,7 @@ TEST(SfmPriorTrackTest, InjectsPinnedTracksWithoutChangingFeatureCaches)
     options.triangulatorOptions.minTriAngle = 0.1;
     options.triangulatorOptions.maxReprojError = 1.0;
 
-    const std::vector<xjw::Camera> cameras = {makeCamera(-2.0), makeCamera(0.0), makeCamera(2.0)};
+    const std::vector<xjw::FramePinholeCamera> cameras = {makeCamera(-2.0), makeCamera(0.0), makeCamera(2.0)};
     xjw::IncrementalSfm sfm(options);
     for (xjw::ImageId imageId = 0; imageId < cameras.size(); ++imageId)
     {
@@ -103,7 +103,7 @@ TEST(SfmPriorTrackTest, RejectsPredictedBlockedStaleAndDuplicateImageObservation
     xjw::IncrementalSfmOptions options;
     options.useKnownCameraPoses = true;
     options.iterativeBARounds = 1;
-    const std::vector<xjw::Camera> cameras = {makeCamera(-1.0), makeCamera(1.0)};
+    const std::vector<xjw::FramePinholeCamera> cameras = {makeCamera(-1.0), makeCamera(1.0)};
     xjw::IncrementalSfm sfm(options);
     sfm.addImageWithCamera(0, "a.png", cameras[0], {});
     sfm.addImageWithCamera(1, "b.png", cameras[1], {});
@@ -157,7 +157,7 @@ TEST(SfmPriorTrackTest, AppliesControlNetworkButKeepsCheckPointsOutOfBaConstrain
     options.triangulatorOptions.minTriAngle = 0.1;
     options.triangulatorOptions.maxReprojError = 1.0;
 
-    const std::vector<xjw::Camera> cameras = {makeCamera(-2.0), makeCamera(0.0), makeCamera(2.0)};
+    const std::vector<xjw::FramePinholeCamera> cameras = {makeCamera(-2.0), makeCamera(0.0), makeCamera(2.0)};
     xjw::IncrementalSfm sfm(options);
     for (xjw::ImageId imageId = 0; imageId < cameras.size(); ++imageId)
     {

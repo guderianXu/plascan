@@ -167,9 +167,9 @@ QStringList selectedImagesFromRecord(const QJsonObject &record)
     return images;
 }
 
-bool cameraForImage(const QMap<QString, xjw::Camera> &cameras,
+bool cameraForImage(const QMap<QString, xjw::FramePinholeCamera> &cameras,
                     const QString &imagePath,
-                    xjw::Camera *camera)
+                    xjw::FramePinholeCamera *camera)
 {
     if (!camera)
     {
@@ -186,7 +186,7 @@ bool cameraForImage(const QMap<QString, xjw::Camera> &cameras,
 
 bool buildMvsViews(const QString &projectPath,
                    const QStringList &images,
-                   const QMap<QString, xjw::Camera> &cameras,
+                   const QMap<QString, xjw::FramePinholeCamera> &cameras,
                    std::vector<xjw::mvs::CameraView> *views,
                    QString *errorMessage)
 {
@@ -451,7 +451,7 @@ bool ProjectPointCloudWorkflowController::startWorkflow(
     }
 
     bool all_cameras = false;
-    const QMap<QString, xjw::Camera> cameras =
+    const QMap<QString, xjw::FramePinholeCamera> cameras =
         _owner->getCamerasForImages(context->selectedImages, &all_cameras);
     QString view_error;
     if (!all_cameras || !buildMvsViews(context->session.projectPath,
@@ -743,7 +743,7 @@ void ProjectPointCloudWorkflowController::startFusion(
         frame_images.push_back(frame.refImage);
     }
     bool all_cameras = false;
-    const QMap<QString, xjw::Camera> cameras =
+    const QMap<QString, xjw::FramePinholeCamera> cameras =
         _owner->getCamerasForImages(frame_images, &all_cameras);
     if (!all_cameras)
     {
@@ -779,7 +779,7 @@ void ProjectPointCloudWorkflowController::startFusion(
                     xjw::mvs::FusionFrameInput *frame,
                     std::string *error_message)
                 {
-                    xjw::Camera camera;
+                    xjw::FramePinholeCamera camera;
                     if (!cameraForImage(cameras,
                                         stored.frames[static_cast<std::size_t>(index)].refImage,
                                         &camera))

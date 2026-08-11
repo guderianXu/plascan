@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "BundleAdjust.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 #include <array>
 #include <cmath>
@@ -10,9 +10,9 @@
 namespace
 {
 
-xjw::Camera makeCamera()
+xjw::FramePinholeCamera makeCamera()
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
     camera.setPose({{1.0, 0.0, 0.0,
                      0.0, 1.0, 0.0,
@@ -46,7 +46,7 @@ double pointToLaserPlaneDistance(const std::array<double, 3> &point)
 
 TEST(BundleAdjustLidarConstraintTest, LaserPlaneConstraintReducesPointToPlaneDistance)
 {
-    const std::vector<xjw::Camera> cameras{makeCamera(), makeCamera()};
+    const std::vector<xjw::FramePinholeCamera> cameras{makeCamera(), makeCamera()};
     const std::vector<xjw::BATrack> tracks{makeDepthAmbiguousTrack()};
 
     xjw::BAOptions options;
@@ -70,7 +70,7 @@ TEST(BundleAdjustLidarConstraintTest, LaserPlaneConstraintReducesPointToPlaneDis
 
 TEST(BundleAdjustLidarConstraintTest, DisabledLaserPlaneConstraintLeavesDepthAmbiguousPointUnchanged)
 {
-    const std::vector<xjw::Camera> cameras{makeCamera(), makeCamera()};
+    const std::vector<xjw::FramePinholeCamera> cameras{makeCamera(), makeCamera()};
     const std::vector<xjw::BATrack> tracks{makeDepthAmbiguousTrack()};
 
     xjw::BAOptions options;

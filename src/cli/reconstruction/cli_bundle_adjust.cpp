@@ -331,7 +331,7 @@ QString buildStatusMessage(xjw::core::project::BaInputBuildStatus status,
     }
 }
 
-xjw::gui::BaServiceResult runOneBa(const std::vector<xjw::Camera> &cameras,
+xjw::gui::BaServiceResult runOneBa(const std::vector<xjw::FramePinholeCamera> &cameras,
                                    const std::vector<xjw::BATrack> &tracks,
                                    const xjw::core::project::BaInputBuildResult &input,
                                    xjw::gui::BaServiceOptions options)

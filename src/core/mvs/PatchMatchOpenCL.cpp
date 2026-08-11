@@ -887,18 +887,18 @@ cv::Mat scaledBinaryMask(const cv::Mat *mask, const cv::Size &size)
     return binary.isContinuous() ? binary : binary.clone();
 }
 
-std::vector<float> sourceCameraData(const Camera &reference,
-                                    const std::vector<Camera> &sources,
+std::vector<float> sourceCameraData(const FramePinholeCamera &reference,
+                                    const std::vector<FramePinholeCamera> &sources,
                                     int downsampleFactor)
 {
     const float scale = 1.0f / static_cast<float>(std::max(1, downsampleFactor));
-    const Camera::Intrinsics reference_intrinsics = reference.intrinsics();
+    const FramePinholeCamera::Intrinsics reference_intrinsics = reference.intrinsics();
     const std::array<double, 9> reference_rotation = reference.worldToCameraRotation();
     const std::array<double, 3> reference_translation = reference.worldToCameraTranslation();
     std::vector<float> result(sources.size() * 16, 0.0f);
     for (std::size_t source_index = 0; source_index < sources.size(); ++source_index)
     {
-        const Camera::Intrinsics intrinsics = sources[source_index].intrinsics();
+        const FramePinholeCamera::Intrinsics intrinsics = sources[source_index].intrinsics();
         const std::array<double, 9> rotation = sources[source_index].worldToCameraRotation();
         const std::array<double, 3> translation = sources[source_index].worldToCameraTranslation();
         float *data = result.data() + source_index * 16;
@@ -1078,8 +1078,8 @@ void PatchMatchDepthEstimator::cleanupOpenClResources()
 bool PatchMatchDepthEstimator::estimateOpenCL(
     const cv::Mat &refGray,
     const std::vector<cv::Mat> &srcGrays,
-    const Camera &refCam,
-    const std::vector<Camera> &srcCams,
+    const FramePinholeCamera &refCam,
+    const std::vector<FramePinholeCamera> &srcCams,
     float zNear,
     float zFar,
     const PatchMatchConfig &config,
@@ -1293,7 +1293,7 @@ bool PatchMatchDepthEstimator::estimateOpenCL(
     const int source_mask_flag = has_source_masks ? 1 : 0;
     const int hint_flag = has_hint ? 1 : 0;
     const int hint_radius_flag = has_hint_radius ? 1 : 0;
-    const Camera::Intrinsics reference_intrinsics = refCam.intrinsics();
+    const FramePinholeCamera::Intrinsics reference_intrinsics = refCam.intrinsics();
     const float scale = 1.0f / static_cast<float>(downsample_factor);
     const float inv_fx = 1.0f / (static_cast<float>(reference_intrinsics.focalX) * scale);
     const float inv_fy = 1.0f / (static_cast<float>(reference_intrinsics.focalY) * scale);

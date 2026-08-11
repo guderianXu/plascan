@@ -11,7 +11,7 @@ namespace xjw::ba_benchmark
 
 struct BenchmarkDataset
 {
-    std::vector<Camera> cameras;
+    std::vector<FramePinholeCamera> cameras;
     std::vector<BATrack> tracks;
     std::size_t observations = 0;
 };

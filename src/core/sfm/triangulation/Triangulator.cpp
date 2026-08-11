@@ -488,8 +488,8 @@ bool Triangulator::triangulatePair(ImageId imgId1, FeatureIdx featIdx1, ImageId 
         return false;
     }
 
-    const Camera &cam1 = _reconstruction.camera(imgId1);
-    const Camera &cam2 = _reconstruction.camera(imgId2);
+    const FramePinholeCamera &cam1 = _reconstruction.camera(imgId1);
+    const FramePinholeCamera &cam2 = _reconstruction.camera(imgId2);
 
     const ImageData &img1 = _reconstruction.image(imgId1);
     const ImageData &img2 = _reconstruction.image(imgId2);
@@ -530,7 +530,7 @@ double Triangulator::computeReprojError(const std::array<double, 3> &xyz, ImageI
     {
         return 1e9;
     }
-    const Camera &cam = _reconstruction.camera(imageId);
+    const FramePinholeCamera &cam = _reconstruction.camera(imageId);
     const ImageData &img = _reconstruction.image(imageId);
 
     if (featureIdx >= img.keypoints.size())
@@ -587,7 +587,7 @@ int Triangulator::filterPoints(double maxReprojError, double minTriAngle)
                 {
                     continue;
                 }
-                const Camera &ci = _reconstruction.camera(elems[i].imageId);
+                const FramePinholeCamera &ci = _reconstruction.camera(elems[i].imageId);
                 auto Ci = ci.cameraCenter();
 
                 for (size_t j = i + 1; j < elems.size(); ++j)
@@ -596,7 +596,7 @@ int Triangulator::filterPoints(double maxReprojError, double minTriAngle)
                     {
                         continue;
                     }
-                    const Camera &cj = _reconstruction.camera(elems[j].imageId);
+                    const FramePinholeCamera &cj = _reconstruction.camera(elems[j].imageId);
                     auto Cj = cj.cameraCenter();
 
                     double v0[3] = {pt.xyz[0] - Ci[0], pt.xyz[1] - Ci[1], pt.xyz[2] - Ci[2]};
@@ -776,7 +776,7 @@ bool Triangulator::hasPositiveDepth(const std::array<double, 3> &xyz, ImageId im
 {
     if (!_reconstruction.hasCamera(imageId))
         return false;
-    const Camera &cam = _reconstruction.camera(imageId);
+    const FramePinholeCamera &cam = _reconstruction.camera(imageId);
     const double world[3] = {xyz[0], xyz[1], xyz[2]};
     return cam.isPointInFront(world);
 }
@@ -793,7 +793,7 @@ double Triangulator::computeMaxTriangulationAngle(const std::array<double, 3> &x
             continue;
         }
 
-        const Camera &cameraI = _reconstruction.camera(observations[i].imageId);
+        const FramePinholeCamera &cameraI = _reconstruction.camera(observations[i].imageId);
         const auto centerI = cameraI.cameraCenter();
 
         for (size_t j = i + 1; j < observations.size(); ++j)
@@ -803,7 +803,7 @@ double Triangulator::computeMaxTriangulationAngle(const std::array<double, 3> &x
                 continue;
             }
 
-            const Camera &cameraJ = _reconstruction.camera(observations[j].imageId);
+            const FramePinholeCamera &cameraJ = _reconstruction.camera(observations[j].imageId);
             const auto centerJ = cameraJ.cameraCenter();
 
             const double rayI[3] = {xyz[0] - centerI[0], xyz[1] - centerI[1], xyz[2] - centerI[2]};
@@ -841,7 +841,7 @@ bool Triangulator::triangulateMultiView(const std::vector<TrackElement> &observa
             continue;
         if (!_reconstruction.hasCamera(elem.imageId))
             continue;
-        const Camera &cam = _reconstruction.camera(elem.imageId);
+        const FramePinholeCamera &cam = _reconstruction.camera(elem.imageId);
         const ImageData &img = _reconstruction.image(elem.imageId);
         if (elem.featureIdx >= img.keypoints.size())
             continue;

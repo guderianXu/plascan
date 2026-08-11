@@ -6,9 +6,9 @@
 namespace
 {
 
-xjw::Camera makeCamera()
+xjw::FramePinholeCamera makeCamera()
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(40.0, 42.0, 32.0, 24.0);
     camera.setPose({1.0, 0.0, 0.0,
                     0.0, 1.0, 0.0,
@@ -36,7 +36,7 @@ cv::Mat makeGradientImage()
 TEST(MvsImagePreprocessor, RejectsEmptyImageAndInvalidCamera)
 {
     cv::Mat prepared;
-    xjw::Camera prepared_camera;
+    xjw::FramePinholeCamera prepared_camera;
     std::string error;
 
     EXPECT_FALSE(xjw::mvs::prepareMvsImage(
@@ -45,19 +45,19 @@ TEST(MvsImagePreprocessor, RejectsEmptyImageAndInvalidCamera)
 
     error.clear();
     EXPECT_FALSE(xjw::mvs::prepareMvsImage(
-        makeGradientImage(), xjw::Camera(), &prepared, &prepared_camera, &error));
+        makeGradientImage(), xjw::FramePinholeCamera(), &prepared, &prepared_camera, &error));
     EXPECT_FALSE(error.empty());
 }
 
 TEST(MvsImagePreprocessor, ZeroDistortionOnlyNormalizesCameraAxes)
 {
-    xjw::Camera source_camera = makeCamera();
+    xjw::FramePinholeCamera source_camera = makeCamera();
     source_camera.setAxisDirections(-1, 1);
     source_camera.setDepthAxisFlipped(true);
     const cv::Mat source = makeGradientImage();
 
     cv::Mat prepared;
-    xjw::Camera prepared_camera;
+    xjw::FramePinholeCamera prepared_camera;
     std::string error;
     ASSERT_TRUE(xjw::mvs::prepareMvsImage(
         source, source_camera, &prepared, &prepared_camera, &error)) << error;
@@ -70,12 +70,12 @@ TEST(MvsImagePreprocessor, ZeroDistortionOnlyNormalizesCameraAxes)
 
 TEST(MvsImagePreprocessor, BrownDistortionRemapsPixelsAndClearsOutputDistortion)
 {
-    xjw::Camera source_camera = makeCamera();
+    xjw::FramePinholeCamera source_camera = makeCamera();
     source_camera.setDistortion(0.35, -0.08, 0.01, 0.006, -0.004);
     const cv::Mat source = makeGradientImage();
 
     cv::Mat prepared;
-    xjw::Camera prepared_camera;
+    xjw::FramePinholeCamera prepared_camera;
     std::string error;
     ASSERT_TRUE(xjw::mvs::prepareMvsImage(
         source, source_camera, &prepared, &prepared_camera, &error)) << error;
@@ -83,7 +83,7 @@ TEST(MvsImagePreprocessor, BrownDistortionRemapsPixelsAndClearsOutputDistortion)
     EXPECT_EQ(prepared.size(), source.size());
     EXPECT_EQ(prepared.type(), source.type());
     EXPECT_GT(cv::norm(source, prepared, cv::NORM_INF), 0.0);
-    const xjw::Camera::Distortion distortion = prepared_camera.distortion();
+    const xjw::FramePinholeCamera::Distortion distortion = prepared_camera.distortion();
     EXPECT_DOUBLE_EQ(distortion.radialK1, 0.0);
     EXPECT_DOUBLE_EQ(distortion.radialK2, 0.0);
     EXPECT_DOUBLE_EQ(distortion.radialK3, 0.0);

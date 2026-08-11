@@ -13,7 +13,7 @@
 
 构建目标与依赖方向如下：
 
-- `sfm_core`：核心算法，不链接 Qt；依赖 Camera、Intersection、BundleAdjust、纯 C++ `control_network`、OpenCV 和 PlaPoint/PlaMatrix。
+- `sfm_core`：核心算法，不链接 Qt；依赖 `camera`、`intersection`、`bundle_adjust`、纯 C++ `control_network`、OpenCV 和 PlaPoint/PlaMatrix。
 - `sfm_postprocess`：质量指标和稀疏点云后处理，不链接 Qt；依赖 `sfm_core` 和 PlaPoint。
 - `sfm_project`：项目文件和 JSON 适配，可链接 Qt；依赖前两层。
 - `sfm`：仅聚合以上三个目标的 `INTERFACE` target，不包含转发头、类型别名或兼容实现。
@@ -61,7 +61,7 @@
 - 分层 BA 对跨块轨迹固定三维坐标但保留像方残差，使块内相机受到块外结构约束；失败尝试也参与模型增长间隔判定。
 - 首轮镜头多起点预览使用相机/像面半径均衡轨迹子集；后续轮次有可复用内参种子后恢复用户配置的 BA 迭代上限。
 - 有控制点、比例尺或已知位姿约束时，绝对约束优先，不重复施加无尺度规范。
-- 相机前后方判断统一调用 `Camera::positiveDepth()` / `isPointInFront()`；投影、三角化、BA 后过滤
+- 相机前后方判断统一调用 `FramePinholeCamera::positiveDepth()` / `isPointInFront()`；投影、三角化、BA 后过滤
   和 flipped-depth 相机不再各自解释原始相机 Z。
 - BA 返回 `BASolveStatus` 和 `solutionUsable`。取消、数值失败或不支持配置不会回写相机和三维点。
 

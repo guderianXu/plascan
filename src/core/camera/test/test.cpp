@@ -7,7 +7,7 @@
 // 旋转正交性/行列式、逐点投影结果，并沿解析出的光轴构造一个自检点。
 // ============================================================
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -51,14 +51,14 @@ int main(int argc, char** argv)
     std::string camfile = argv[1];
     std::string ptsfile = argv[2];
 
-    xjw::Camera cam;
+    xjw::FramePinholeCamera cam;
     if (!cam.loadFromFile(camfile))
     {
         std::cerr << "无法加载相机文件: " << camfile << "\n";
         return 2;
     }
 
-    // Camera 暴露的是行优先 R_cw。R*R^T 和 det(R) 可快速发现转置、
+    // FramePinholeCamera 暴露的是行优先 R_cw。R*R^T 和 det(R) 可快速发现转置、
     // 非正交或反射矩阵问题，而不依赖具体世界点。
     auto R = cam.cameraToWorldRotation();
     auto C = cam.cameraCenter();

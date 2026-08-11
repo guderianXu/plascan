@@ -8,7 +8,7 @@
 #include "project/ProjectMatchCatalog.h"
 #include "project/ProjectMetadata.h"
 #include "geometry/MarkerProjectionPredictor.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "io/PathIO.h"
 
 #include <QComboBox>
@@ -161,10 +161,10 @@ void MarkerFocusMeasurementDialog::generateGeometryPredictions()
     for (const QJsonValue &value : images)
     {
         const QJsonObject image = value.toObject();
-        xjw::Camera camera_model;
+        xjw::FramePinholeCamera camera_model;
         if (!xjw::common::project::imageCameraFromEntry(image, &camera_model)
             || !camera_model.isValid()) continue;
-        const xjw::Camera positive = camera_model.normalizedForPositiveDepth();
+        const xjw::FramePinholeCamera positive = camera_model.normalizedForPositiveDepth();
         if (!positive.isValid()) continue;
 
         control_points::MarkerCamera camera;

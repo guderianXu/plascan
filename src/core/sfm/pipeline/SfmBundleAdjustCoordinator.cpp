@@ -48,7 +48,7 @@ struct AerialCameraPlaneEstimate
 };
 
 AerialCameraPlaneEstimate estimateAerialCameraPlane(
-    const std::vector<Camera> &cameras)
+    const std::vector<FramePinholeCamera> &cameras)
 {
     AerialCameraPlaneEstimate estimate;
     if (cameras.size() < 3)
@@ -57,9 +57,9 @@ AerialCameraPlaneEstimate estimateAerialCameraPlane(
     }
 
     std::array<double, 3> meanAxis{{0.0, 0.0, 0.0}};
-    for (const Camera &sourceCamera : cameras)
+    for (const FramePinholeCamera &sourceCamera : cameras)
     {
-        const Camera camera = sourceCamera.normalizedForPositiveDepth();
+        const FramePinholeCamera camera = sourceCamera.normalizedForPositiveDepth();
         const auto center = camera.cameraCenter();
         const auto rotation = camera.cameraToWorldRotation();
         for (int axis = 0; axis < 3; ++axis)
@@ -80,7 +80,7 @@ AerialCameraPlaneEstimate estimateAerialCameraPlane(
         meanAxis[2] * meanAxis[2]);
 
     cv::Matx33d covariance = cv::Matx33d::zeros();
-    for (const Camera &camera : cameras)
+    for (const FramePinholeCamera &camera : cameras)
     {
         const auto center = camera.cameraCenter();
         const cv::Vec3d delta(center[0] - estimate.center[0],
@@ -122,7 +122,7 @@ AerialCameraPlaneEstimate estimateAerialCameraPlane(
 }
 
 double cameraLayerReferenceDriftRms(
-    const std::vector<Camera> &cameras,
+    const std::vector<FramePinholeCamera> &cameras,
     const BACameraPlaneConstraint &constraint)
 {
     if (cameras.empty() ||
@@ -349,7 +349,7 @@ SfmBundleAdjustCoordinator::mergeAdaptiveCameraModelDiagnostics(
 }
 
 void SfmBundleAdjustCoordinator::refreshCalibrationSeedApplicationCount(
-    const std::vector<Camera> &before,
+    const std::vector<FramePinholeCamera> &before,
     BAResult *result)
 {
     if (!result || before.size() != result->refinedCameras.size())
@@ -360,11 +360,11 @@ void SfmBundleAdjustCoordinator::refreshCalibrationSeedApplicationCount(
     int changedCount = 0;
     for (std::size_t index = 0; index < before.size(); ++index)
     {
-        const Camera::Intrinsics initial = before[index].intrinsics();
-        const Camera::Intrinsics refined =
+        const FramePinholeCamera::Intrinsics initial = before[index].intrinsics();
+        const FramePinholeCamera::Intrinsics refined =
             result->refinedCameras[index].intrinsics();
-        const Camera::Distortion initialDistortion = before[index].distortion();
-        const Camera::Distortion refinedDistortion =
+        const FramePinholeCamera::Distortion initialDistortion = before[index].distortion();
+        const FramePinholeCamera::Distortion refinedDistortion =
             result->refinedCameras[index].distortion();
         const bool changed =
             std::abs(refined.focalX - initial.focalX) >
@@ -387,8 +387,8 @@ void SfmBundleAdjustCoordinator::refreshCalibrationSeedApplicationCount(
 }
 
 bool SfmBundleAdjustCoordinator::hasReusableCalibrationSeed(
-    const std::vector<Camera> &current,
-    const std::vector<Camera> &stableReferences,
+    const std::vector<FramePinholeCamera> &current,
+    const std::vector<FramePinholeCamera> &stableReferences,
     bool focalEnabled,
     bool radialK1Enabled)
 {
@@ -401,8 +401,8 @@ bool SfmBundleAdjustCoordinator::hasReusableCalibrationSeed(
     {
         if (focalEnabled)
         {
-            const Camera::Intrinsics value = current[index].intrinsics();
-            const Camera::Intrinsics reference =
+            const FramePinholeCamera::Intrinsics value = current[index].intrinsics();
+            const FramePinholeCamera::Intrinsics reference =
                 stableReferences[index].intrinsics();
             if (std::abs(value.focalX - reference.focalX) >
                     1.0e-8 * std::max(1.0, std::abs(reference.focalX)) ||
@@ -414,8 +414,8 @@ bool SfmBundleAdjustCoordinator::hasReusableCalibrationSeed(
         }
         if (radialK1Enabled)
         {
-            const Camera::Distortion value = current[index].distortion();
-            const Camera::Distortion reference =
+            const FramePinholeCamera::Distortion value = current[index].distortion();
+            const FramePinholeCamera::Distortion reference =
                 stableReferences[index].distortion();
             if (std::abs(value.radialK1) > 1.0e-8 ||
                 std::abs(reference.radialK1) > 1.0e-8)
@@ -435,18 +435,18 @@ int SfmBundleAdjustCoordinator::selfCalibrationIterationBudget(
     return hasReusableSeed ? safe_iterations : std::max(60, safe_iterations);
 }
 
-std::vector<Camera>
+std::vector<FramePinholeCamera>
 SfmBundleAdjustCoordinator::buildPersistentIntrinsicReferences(
     const std::vector<ImageId> &imageIds,
-    const std::vector<Camera> &current,
-    std::unordered_map<ImageId, Camera> *referencesByImageId)
+    const std::vector<FramePinholeCamera> &current,
+    std::unordered_map<ImageId, FramePinholeCamera> *referencesByImageId)
 {
     if (!referencesByImageId || imageIds.size() != current.size())
     {
         return {};
     }
 
-    std::vector<Camera> references;
+    std::vector<FramePinholeCamera> references;
     references.reserve(current.size());
     for (std::size_t index = 0; index < imageIds.size(); ++index)
     {
@@ -459,9 +459,9 @@ SfmBundleAdjustCoordinator::buildPersistentIntrinsicReferences(
 }
 
 double SfmBundleAdjustCoordinator::maximumCameraIntrinsicChange(
-    const std::vector<Camera> &previous,
-    const std::vector<Camera> &current,
-    const std::vector<Camera> &stableReferences)
+    const std::vector<FramePinholeCamera> &previous,
+    const std::vector<FramePinholeCamera> &current,
+    const std::vector<FramePinholeCamera> &stableReferences)
 {
     if (previous.empty() || previous.size() != current.size() ||
         previous.size() != stableReferences.size())
@@ -472,13 +472,13 @@ double SfmBundleAdjustCoordinator::maximumCameraIntrinsicChange(
     double maximumChange = 0.0;
     for (std::size_t index = 0; index < current.size(); ++index)
     {
-        const Camera::Intrinsics before = previous[index].intrinsics();
-        const Camera::Intrinsics after = current[index].intrinsics();
-        const Camera::Intrinsics reference =
+        const FramePinholeCamera::Intrinsics before = previous[index].intrinsics();
+        const FramePinholeCamera::Intrinsics after = current[index].intrinsics();
+        const FramePinholeCamera::Intrinsics reference =
             stableReferences[index].intrinsics();
-        const Camera::Distortion beforeDistortion =
+        const FramePinholeCamera::Distortion beforeDistortion =
             previous[index].distortion();
-        const Camera::Distortion afterDistortion =
+        const FramePinholeCamera::Distortion afterDistortion =
             current[index].distortion();
         const double focalScale = std::max(
             {1.0, std::abs(reference.focalX), std::abs(reference.focalY)});
@@ -661,7 +661,7 @@ bool SfmBundleAdjustCoordinator::consolidateInputTracksForFinalBa()
 void IncrementalSfm::runBundleAdjust(
     bool localOnly,
     const std::vector<ImageId> &anchorIds,
-    const std::vector<Camera> *stableIntrinsicReferences,
+    const std::vector<FramePinholeCamera> *stableIntrinsicReferences,
     bool allowCalibrationSeedSearch)
 {
     const char *scopeName = localOnly ? "local" : "global";
@@ -836,7 +836,7 @@ void IncrementalSfm::runBundleAdjust(
 
     // 构造 imageId → BA 内部相机索引的映射
     std::unordered_map<ImageId, int> idToIdx;
-    std::vector<Camera> baCameras;
+    std::vector<FramePinholeCamera> baCameras;
     for (size_t i = 0; i < baImageIds.size(); ++i)
     {
         idToIdx[baImageIds[i]] = static_cast<int>(i);
@@ -1276,7 +1276,7 @@ void IncrementalSfm::runBundleAdjust(
             constraint.normal = cameraPlaneBefore.normal;
             constraint.referenceSignedDistances.clear();
             constraint.referenceSignedDistances.reserve(baCameras.size());
-            for (const Camera &camera : baCameras)
+            for (const FramePinholeCamera &camera : baCameras)
             {
                 const auto center = camera.cameraCenter();
                 constraint.referenceSignedDistances.push_back(
@@ -1494,12 +1494,12 @@ void IncrementalSfm::runBundleAdjust(
                 std::launch::async,
                 [&, seed]()
                 {
-                    std::vector<Camera> seedCameras = baCameras;
-                    for (Camera &camera : seedCameras)
+                    std::vector<FramePinholeCamera> seedCameras = baCameras;
+                    for (FramePinholeCamera &camera : seedCameras)
                     {
                         if (seedSharedFocal)
                         {
-                            const Camera::Intrinsics intrinsics = camera.intrinsics();
+                            const FramePinholeCamera::Intrinsics intrinsics = camera.intrinsics();
                             camera.setIntrinsics(
                                 intrinsics.focalX * seed.focalScale,
                                 intrinsics.focalY * seed.focalScale,
@@ -1508,7 +1508,7 @@ void IncrementalSfm::runBundleAdjust(
                         }
                         if (seedSharedK1)
                         {
-                            Camera::Distortion distortion = camera.distortion();
+                            FramePinholeCamera::Distortion distortion = camera.distortion();
                             distortion.radialK1 = seed.radialK1;
                             camera.setDistortion(distortion);
                         }
@@ -1797,9 +1797,9 @@ void IncrementalSfm::runBundleAdjust(
         {
             // 未注册影像的 PnP 会从预载相机读取内参。单一镜头组完成全局自标定后，
             // 将同一组内参同步过去，避免最终重试继续使用零畸变/旧焦距。
-            const Camera &calibratedCamera = baResult.refinedCameras.front();
-            const Camera::Intrinsics calibratedIntrinsics = calibratedCamera.intrinsics();
-            const Camera::Distortion calibratedDistortion = calibratedCamera.distortion();
+            const FramePinholeCamera &calibratedCamera = baResult.refinedCameras.front();
+            const FramePinholeCamera::Intrinsics calibratedIntrinsics = calibratedCamera.intrinsics();
+            const FramePinholeCamera::Distortion calibratedDistortion = calibratedCamera.distortion();
             for (auto &[imageId, camera] : _preloadedCameras)
             {
                 (void)imageId;
@@ -1843,7 +1843,7 @@ void IncrementalSfm::runBundleAdjust(
                 if (!_reconstruction->hasCamera(elem.imageId))
                     continue;
 
-                const Camera &cam = _reconstruction->camera(elem.imageId);
+                const FramePinholeCamera &cam = _reconstruction->camera(elem.imageId);
                 const ImageData &imgData = _reconstruction->image(elem.imageId);
                 if (elem.featureIdx >= imgData.keypoints.size())
                     continue;
@@ -1913,7 +1913,7 @@ void IncrementalSfm::runBundleAdjust(
                 if (!_reconstruction->hasCamera(elem.imageId))
                     continue;
 
-                const Camera &cam = _reconstruction->camera(elem.imageId);
+                const FramePinholeCamera &cam = _reconstruction->camera(elem.imageId);
                 const ImageData &imgData = _reconstruction->image(elem.imageId);
                 if (elem.featureIdx >= imgData.keypoints.size())
                     continue;
@@ -2175,13 +2175,13 @@ void IncrementalSfm::iterativeGlobalBA(bool finalRefinement)
     std::vector<ImageId> iterativeImageIds =
         _reconstruction->registeredImageIds();
     std::sort(iterativeImageIds.begin(), iterativeImageIds.end());
-    std::vector<Camera> currentIntrinsicCameras;
+    std::vector<FramePinholeCamera> currentIntrinsicCameras;
     currentIntrinsicCameras.reserve(iterativeImageIds.size());
     for (const ImageId imageId : iterativeImageIds)
     {
         currentIntrinsicCameras.push_back(_reconstruction->camera(imageId));
     }
-    std::vector<Camera> iterativeIntrinsicReferences =
+    std::vector<FramePinholeCamera> iterativeIntrinsicReferences =
         _sfmOptions.baOptions.sharedIntrinsicReferenceCameras;
     if (iterativeIntrinsicReferences.empty())
     {
@@ -2193,7 +2193,7 @@ void IncrementalSfm::iterativeGlobalBA(bool finalRefinement)
     }
 
     size_t prevNumPoints = _reconstruction->numPoints3D();
-    std::vector<Camera> previousRoundIntrinsicCameras;
+    std::vector<FramePinholeCamera> previousRoundIntrinsicCameras;
 
     for (int round = 0; round < maxRounds; ++round)
     {
@@ -2313,7 +2313,7 @@ int IncrementalSfm::filterNegativeDepthPoints()
             if (!_reconstruction->hasCamera(elem.imageId))
                 continue;
 
-            const Camera &cam = _reconstruction->camera(elem.imageId);
+            const FramePinholeCamera &cam = _reconstruction->camera(elem.imageId);
             const double world[3] = {xyz[0], xyz[1], xyz[2]};
             if (!cam.isPointInFront(world))
             {

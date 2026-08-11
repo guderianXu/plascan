@@ -10,7 +10,7 @@
 namespace xjw
 {
 
-double minimumTriangulationAngleDeg(const std::vector<Camera> &cameras,
+double minimumTriangulationAngleDeg(const std::vector<FramePinholeCamera> &cameras,
                                     const BATrack &track,
                                     const std::array<double, 3> &worldPoint)
 {
@@ -60,9 +60,9 @@ double minimumTriangulationAngleDeg(const std::vector<Camera> &cameras,
     return std::isfinite(minimumAngleDeg) ? minimumAngleDeg : 0.0;
 }
 
-double pairRmsReprojectionErrorPx(const Camera &cameraA,
+double pairRmsReprojectionErrorPx(const FramePinholeCamera &cameraA,
                                   const std::array<double, 2> &pixelA,
-                                  const Camera &cameraB,
+                                  const FramePinholeCamera &cameraB,
                                   const std::array<double, 2> &pixelB,
                                   const std::array<double, 3> &worldPoint)
 {
@@ -76,9 +76,9 @@ double pairRmsReprojectionErrorPx(const Camera &cameraA,
 }
 
 PairIntersectionCandidate triangulatePairWithDirectionFallback(
-    const Camera &cameraA,
+    const FramePinholeCamera &cameraA,
     const std::array<double, 2> &pixelA,
-    const Camera &cameraB,
+    const FramePinholeCamera &cameraB,
     const std::array<double, 2> &pixelB)
 {
     PairIntersectionCandidate bestCandidate;
@@ -86,8 +86,8 @@ PairIntersectionCandidate triangulatePairWithDirectionFallback(
     // 输入相机保持不变，后续严格正深度检查仍会暴露元数据问题。
     for (int flipMask = 0; flipMask < 4; ++flipMask)
     {
-        Camera testCameraA = cameraA;
-        Camera testCameraB = cameraB;
+        FramePinholeCamera testCameraA = cameraA;
+        FramePinholeCamera testCameraB = cameraB;
         if ((flipMask & 0x1) != 0)
         {
             testCameraA.setDepthAxisFlipped(!testCameraA.depthAxisFlipped());

@@ -3,7 +3,7 @@
 #include "DemDomTypes.h"
 
 #include <plapoint/core/point_cloud.h>
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 #include <QString>
 #include <opencv2/core.hpp>
@@ -43,7 +43,7 @@ public:
      * @return 成功返回 true，失败返回 false
      */
     static bool generateFromDepthMaps(const std::vector<cv::Mat> &depthMaps,
-                                      const std::vector<Camera> &cameras,
+                                      const std::vector<FramePinholeCamera> &cameras,
                                       const DemGenerationOptions &options,
                                       DemGridData *demGrid,
                                       QString *errorMsg = nullptr);

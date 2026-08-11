@@ -3,11 +3,11 @@
 namespace xjw::ba
 {
 
-ProjectionCamera makeProjectionCamera(const Camera &camera)
+ProjectionCamera makeProjectionCamera(const FramePinholeCamera &camera)
 {
     ProjectionCamera out;
-    const Camera::Intrinsics intrinsics = camera.intrinsics();
-    const Camera::Distortion distortion = camera.distortion();
+    const FramePinholeCamera::Intrinsics intrinsics = camera.intrinsics();
+    const FramePinholeCamera::Distortion distortion = camera.distortion();
     out.cameraToWorldRotation = camera.cameraToWorldRotation();
     out.cameraCenter = camera.cameraCenter();
     out.focalX = intrinsics.focalX;

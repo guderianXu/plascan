@@ -1,7 +1,7 @@
 #pragma once
 
 #include "DepthPoseAlignmentRefiner.h"
-#include "camera/Camera.h"
+#include "camera/FramePinholeCamera.h"
 
 #include <opencv2/core.hpp>
 
@@ -31,7 +31,7 @@ struct DepthPoseRefinementOptions
 struct DepthPoseRefinementFrame
 {
     int cameraIndex = -1;
-    Camera camera;
+    FramePinholeCamera camera;
     cv::Mat depthMap;
     cv::Mat normalMap;
     cv::Mat confidence;
@@ -56,7 +56,7 @@ struct DepthPoseRefinementCandidate
     double correctionRotationDegrees = 0.0;
     std::string reason;
     DepthPoseAlignmentCorrection correction;
-    Camera derivedCamera;
+    FramePinholeCamera derivedCamera;
 };
 
 struct DepthPoseRefinementStageResult
@@ -75,8 +75,8 @@ public:
         const std::vector<DepthPoseRefinementFrame> &frames,
         const DepthPoseRefinementOptions &options = {});
 
-    static Camera deriveCameraCandidate(
-        const Camera &camera,
+    static FramePinholeCamera deriveCameraCandidate(
+        const FramePinholeCamera &camera,
         const DepthPoseAlignmentCorrection &correction);
 };
 

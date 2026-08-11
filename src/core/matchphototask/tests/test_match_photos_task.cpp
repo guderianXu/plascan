@@ -83,7 +83,7 @@ TEST(MatchPhotosSparseSceneOverlapTest, UsesCovisibilityAndFrustumForUnobservedP
     std::vector<xjw::OverlapImageInput> images;
     for (int index = 0; index < 3; ++index)
     {
-        xjw::Camera camera;
+        xjw::FramePinholeCamera camera;
         camera.setIntrinsics(100.0, 100.0, 50.0, 50.0);
         camera.setPose({{1.0, 0.0, 0.0,
                          0.0, 1.0, 0.0,
@@ -159,7 +159,7 @@ TEST(MatchPhotosSparseSceneOverlapTest, RejectsOpposingFrustaWithoutCovisibility
           0.0, 1.0, 0.0}}}};
     for (int index = 0; index < 2; ++index)
     {
-        xjw::Camera camera;
+        xjw::FramePinholeCamera camera;
         camera.setIntrinsics(100.0, 100.0, 50.0, 50.0);
         camera.setPose(rotations[static_cast<std::size_t>(index)],
                        {{index == 0 ? 5.0 : -5.0, 0.0, 0.0}});

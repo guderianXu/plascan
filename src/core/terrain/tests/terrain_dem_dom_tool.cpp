@@ -1,5 +1,5 @@
 #include "TerrainPipeline.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 #include <QFile>
 #include <QFileInfo>
@@ -41,7 +41,7 @@ bool tryParseResolution(const char *value, double *resolution)
     return true;
 }
 
-QJsonObject cameraToJson(const xjw::Camera &camera)
+QJsonObject cameraToJson(const xjw::FramePinholeCamera &camera)
 {
     const auto intrinsics = camera.intrinsics();
     const auto distortion = camera.distortion();
@@ -138,7 +138,7 @@ bool readImageCameraList(const QString &listPath,
 
         const QString imagePath = QFileInfo(parts.at(0)).absoluteFilePath();
         const QString cameraPath = QFileInfo(parts.at(1)).absoluteFilePath();
-        xjw::Camera camera;
+        xjw::FramePinholeCamera camera;
         if (!camera.loadFromFile(cameraPath.toStdString()) || !camera.isValid())
         {
             if (error)

@@ -11,7 +11,7 @@ class ModelMeshRenderer
 {
 public:
     ModelRenderResult render(const xjw::mesh::TriMesh &mesh,
-                             const xjw::Camera &camera,
+                             const xjw::FramePinholeCamera &camera,
                              const cv::Size &imageSize) const;
 };
 

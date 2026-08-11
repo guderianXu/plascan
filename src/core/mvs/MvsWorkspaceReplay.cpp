@@ -104,7 +104,7 @@ QString replayImageIdentity(const QString &path)
 
 } // namespace
 
-bool cameraFromMvsWorkspaceJson(const QJsonObject &object, Camera *camera)
+bool cameraFromMvsWorkspaceJson(const QJsonObject &object, FramePinholeCamera *camera)
 {
     if (!camera || object.isEmpty())
     {
@@ -138,10 +138,10 @@ bool cameraFromMvsWorkspaceJson(const QJsonObject &object, Camera *camera)
         worldToCamera[2], worldToCamera[5], worldToCamera[8]
     }};
 
-    Camera parsed;
+    FramePinholeCamera parsed;
     parsed.setIntrinsics(focalX, focalY, principalX, principalY);
     parsed.setPose(cameraToWorld, center);
-    parsed.setDistortion(Camera::Distortion{});
+    parsed.setDistortion(FramePinholeCamera::Distortion{});
     if (!parsed.isValid())
     {
         return false;

@@ -97,7 +97,7 @@ struct CameraToWrite
 {
     QString imagePath;
     QString fileName;
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
 };
 
 } // namespace
@@ -166,7 +166,7 @@ bool exportFinalBaCameras(const QStringList &images,
                 QStringLiteral("无法导出最终 BA 相机：正式模型没有影像对应的相机: %1").arg(image),
                 errorMessage);
         }
-        xjw::Camera camera;
+        xjw::FramePinholeCamera camera;
         if (!xjw::common::project::cameraFromJson(metadata.value(), &camera) || !camera.isValid())
         {
             return fail(

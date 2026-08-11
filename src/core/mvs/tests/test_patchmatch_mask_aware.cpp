@@ -93,9 +93,9 @@ constexpr int kHeight = 49;
 constexpr int kDisparity = 5;
 constexpr float kExpectedDepth = 10.0f;
 
-xjw::Camera makeCamera(double center_x)
+xjw::FramePinholeCamera makeCamera(double center_x)
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(50.0, 50.0, kWidth * 0.5, kHeight * 0.5);
     camera.setPose(
         std::array<double, 9>{1.0, 0.0, 0.0,
@@ -179,7 +179,7 @@ EstimateResult estimateMaskedPlane(xjw::mvs::PatchMatchBackend backend,
         reference,
         std::vector<cv::Mat>{source},
         makeCamera(0.0),
-        std::vector<xjw::Camera>{makeCamera(1.0)},
+        std::vector<xjw::FramePinholeCamera>{makeCamera(1.0)},
         5.0f,
         15.0f,
         config,

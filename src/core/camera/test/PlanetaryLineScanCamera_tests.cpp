@@ -12,7 +12,7 @@
 namespace
 {
 
-using Camera = xjw::PlanetaryLineScanCamera;
+using LineScanCamera = xjw::PlanetaryLineScanCamera;
 
 const char *kSyntheticIsd = R"JSON({
   "image_lines": 100,
@@ -51,7 +51,7 @@ const char *kSyntheticIsd = R"JSON({
   }
 })JSON";
 
-bool loadSyntheticCamera(QTemporaryDir *directory, Camera *camera, std::string *error)
+bool loadSyntheticCamera(QTemporaryDir *directory, LineScanCamera *camera, std::string *error)
 {
     if (!directory->isValid())
     {
@@ -73,7 +73,7 @@ bool loadSyntheticCamera(QTemporaryDir *directory, Camera *camera, std::string *
 TEST(PlanetaryLineScanCameraIsd, ParsesRequiredUsgsCsmFields)
 {
     QTemporaryDir directory;
-    Camera camera;
+    LineScanCamera camera;
     std::string error;
     ASSERT_TRUE(loadSyntheticCamera(&directory, &camera, &error)) << error;
     EXPECT_TRUE(camera.isValid());
@@ -101,7 +101,7 @@ TEST(PlanetaryLineScanCameraIsd, RejectsUnacknowledgedInterpolationModel)
     ASSERT_EQ(file.write(isd), isd.size());
     file.close();
 
-    Camera camera;
+    LineScanCamera camera;
     std::string error;
     EXPECT_FALSE(camera.loadFromIsd(path.toUtf8().toStdString(), &error));
     EXPECT_NE(error.find("interpolation_method='lagrange'"), std::string::npos) << error;
@@ -110,30 +110,30 @@ TEST(PlanetaryLineScanCameraIsd, RejectsUnacknowledgedInterpolationModel)
 TEST(PlanetaryLineScanCameraTime, PreservesCsmAndOpenCvPixelCenterConventions)
 {
     QTemporaryDir directory;
-    Camera camera;
+    LineScanCamera camera;
     std::string error;
     ASSERT_TRUE(loadSyntheticCamera(&directory, &camera, &error)) << error;
 
     double csm_et = 0.0;
     double opencv_et = 0.0;
-    ASSERT_TRUE(camera.absoluteEtForLine(0.5, Camera::PixelConvention::CsmPixelCenter, &csm_et));
-    ASSERT_TRUE(camera.absoluteEtForLine(0.0, Camera::PixelConvention::OpenCvZeroBased, &opencv_et));
+    ASSERT_TRUE(camera.absoluteEtForLine(0.5, LineScanCamera::PixelConvention::CsmPixelCenter, &csm_et));
+    ASSERT_TRUE(camera.absoluteEtForLine(0.0, LineScanCamera::PixelConvention::OpenCvZeroBased, &opencv_et));
     EXPECT_DOUBLE_EQ(csm_et, 999.505);
     EXPECT_DOUBLE_EQ(opencv_et, csm_et);
 
     double csm_line = 0.0;
     double opencv_line = 0.0;
-    ASSERT_TRUE(camera.lineForAbsoluteEt(csm_et, Camera::PixelConvention::CsmPixelCenter, &csm_line));
-    ASSERT_TRUE(camera.lineForAbsoluteEt(csm_et, Camera::PixelConvention::OpenCvZeroBased, &opencv_line));
+    ASSERT_TRUE(camera.lineForAbsoluteEt(csm_et, LineScanCamera::PixelConvention::CsmPixelCenter, &csm_line));
+    ASSERT_TRUE(camera.lineForAbsoluteEt(csm_et, LineScanCamera::PixelConvention::OpenCvZeroBased, &opencv_line));
     EXPECT_NEAR(csm_line, 0.5, 1.0e-12);
     EXPECT_NEAR(opencv_line, 0.0, 1.0e-12);
-    EXPECT_FALSE(camera.absoluteEtForLine(-0.01, Camera::PixelConvention::OpenCvZeroBased, &opencv_et));
+    EXPECT_FALSE(camera.absoluteEtForLine(-0.01, LineScanCamera::PixelConvention::OpenCvZeroBased, &opencv_et));
 }
 
 TEST(PlanetaryLineScanCameraOptics, FocalDistortionAndRayRoundTrip)
 {
     QTemporaryDir directory;
-    Camera camera;
+    LineScanCamera camera;
     std::string error;
     ASSERT_TRUE(loadSyntheticCamera(&directory, &camera, &error)) << error;
 
@@ -141,7 +141,7 @@ TEST(PlanetaryLineScanCameraOptics, FocalDistortionAndRayRoundTrip)
     std::array<double, 2> undistorted{};
     std::array<double, 2> restored{};
     ASSERT_TRUE(camera.pixelToDistortedFocalPlane(
-        110.0, Camera::PixelConvention::CsmPixelCenter, &distorted));
+        110.0, LineScanCamera::PixelConvention::CsmPixelCenter, &distorted));
     EXPECT_NEAR(distorted[0], 0.0, 1.0e-15);
     EXPECT_NEAR(distorted[1], 0.1, 1.0e-15);
     ASSERT_TRUE(camera.removeOpticalDistortion(distorted, &undistorted));
@@ -149,12 +149,12 @@ TEST(PlanetaryLineScanCameraOptics, FocalDistortionAndRayRoundTrip)
     EXPECT_NEAR(restored[0], distorted[0], 1.0e-12);
     EXPECT_NEAR(restored[1], distorted[1], 1.0e-10);
 
-    Camera::ImagingRay csm_ray;
-    Camera::ImagingRay opencv_ray;
+    LineScanCamera::ImagingRay csm_ray;
+    LineScanCamera::ImagingRay opencv_ray;
     ASSERT_TRUE(camera.pixelRayBodyFixed(
-        110.0, 50.5, Camera::PixelConvention::CsmPixelCenter, &csm_ray));
+        110.0, 50.5, LineScanCamera::PixelConvention::CsmPixelCenter, &csm_ray));
     ASSERT_TRUE(camera.pixelRayBodyFixed(
-        109.5, 50.0, Camera::PixelConvention::OpenCvZeroBased, &opencv_ray));
+        109.5, 50.0, LineScanCamera::PixelConvention::OpenCvZeroBased, &opencv_ray));
     for (int axis = 0; axis < 3; ++axis)
     {
         EXPECT_NEAR(csm_ray.centerBodyFixedMeters[axis], opencv_ray.centerBodyFixedMeters[axis], 1.0e-12);
@@ -167,44 +167,44 @@ TEST(PlanetaryLineScanCameraOptics, FocalDistortionAndRayRoundTrip)
 TEST(PlanetaryLineScanCameraProjection, FixedLineResidualSupportsBundleAdjustmentBias)
 {
     QTemporaryDir directory;
-    Camera camera;
+    LineScanCamera camera;
     std::string error;
     ASSERT_TRUE(loadSyntheticCamera(&directory, &camera, &error)) << error;
-    const Camera::Vector3 ground{{0.0, 0.0, 1000.0}};
+    const LineScanCamera::Vector3 ground{{0.0, 0.0, 1000.0}};
 
-    Camera::FixedLineProjection nominal;
+    LineScanCamera::FixedLineProjection nominal;
     ASSERT_TRUE(camera.projectAtObservedLine(
-        ground, 50.5, Camera::PixelConvention::CsmPixelCenter, &nominal));
+        ground, 50.5, LineScanCamera::PixelConvention::CsmPixelCenter, &nominal));
     EXPECT_NEAR(nominal.sample, 100.0, 1.0e-10);
     EXPECT_NEAR(nominal.detectorLineResidualPixels, 0.0, 1.0e-9);
     EXPECT_NEAR(nominal.sensorDepthMeters, 1000.0, 1.0e-9);
 
-    const Camera::PoseBias translated = Camera::bodyFixedSmallAngleBias(
+    const LineScanCamera::PoseBias translated = LineScanCamera::bodyFixedSmallAngleBias(
         {0.0, 0.0, 0.0}, {10.0, 0.0, 0.0});
-    Camera::FixedLineProjection biased;
+    LineScanCamera::FixedLineProjection biased;
     ASSERT_TRUE(camera.projectAtObservedLine(
-        ground, 50.5, Camera::PixelConvention::CsmPixelCenter, &biased, translated));
+        ground, 50.5, LineScanCamera::PixelConvention::CsmPixelCenter, &biased, translated));
     EXPECT_NEAR(biased.detectorLineResidualPixels, -100.0, 1.0e-8);
 }
 
 TEST(PlanetaryLineScanCameraProjection, IterativeGroundToImageFindsPushbroomLine)
 {
     QTemporaryDir directory;
-    Camera camera;
+    LineScanCamera camera;
     std::string error;
     ASSERT_TRUE(loadSyntheticCamera(&directory, &camera, &error)) << error;
-    const Camera::Vector3 ground{{0.0, 0.0, 1000.0}};
+    const LineScanCamera::Vector3 ground{{0.0, 0.0, 1000.0}};
 
-    Camera::ImageCoordinate csm_image;
-    Camera::ImageCoordinate opencv_image;
-    Camera::ImageCoordinate configured_image;
-    Camera::GroundToImageOptions options;
+    LineScanCamera::ImageCoordinate csm_image;
+    LineScanCamera::ImageCoordinate opencv_image;
+    LineScanCamera::ImageCoordinate configured_image;
+    LineScanCamera::GroundToImageOptions options;
     ASSERT_TRUE(camera.groundToImage(
-        ground, Camera::PixelConvention::CsmPixelCenter, &csm_image));
+        ground, LineScanCamera::PixelConvention::CsmPixelCenter, &csm_image));
     ASSERT_TRUE(camera.groundToImage(
-        ground, Camera::PixelConvention::OpenCvZeroBased, &opencv_image));
+        ground, LineScanCamera::PixelConvention::OpenCvZeroBased, &opencv_image));
     ASSERT_TRUE(camera.groundToImage(
-        ground, Camera::PixelConvention::CsmPixelCenter, &configured_image, options));
+        ground, LineScanCamera::PixelConvention::CsmPixelCenter, &configured_image, options));
     EXPECT_NEAR(csm_image.line, 50.5, 1.0e-8);
     EXPECT_NEAR(csm_image.sample, 100.0, 1.0e-8);
     EXPECT_NEAR(configured_image.line, csm_image.line, 1.0e-12);
@@ -216,7 +216,7 @@ TEST(PlanetaryLineScanCameraProjection, IterativeGroundToImageFindsPushbroomLine
 TEST(PlanetaryLineScanCameraModel, ImplementsCommonOpenCvGeometry)
 {
     QTemporaryDir directory;
-    Camera camera;
+    LineScanCamera camera;
     std::string error;
     ASSERT_TRUE(loadSyntheticCamera(&directory, &camera, &error)) << error;
 
@@ -229,12 +229,12 @@ TEST(PlanetaryLineScanCameraModel, ImplementsCommonOpenCvGeometry)
 
     const xjw::CameraImageCoordinate pixel{99.5, 50.0};
     xjw::CameraImagingRay common_ray;
-    Camera::ImagingRay direct_ray;
+    LineScanCamera::ImagingRay direct_ray;
     ASSERT_TRUE(model.rayForPixel(pixel, &common_ray));
     ASSERT_TRUE(camera.pixelRayBodyFixed(
         pixel.sample,
         pixel.line,
-        Camera::PixelConvention::OpenCvZeroBased,
+        LineScanCamera::PixelConvention::OpenCvZeroBased,
         &direct_ray));
     for (int axis = 0; axis < 3; ++axis)
     {
@@ -268,7 +268,7 @@ TEST(PlanetaryLineScanCameraFixture, LroIsdUsesMoonMeMetersAndTimeDependentPose)
         GTEST_SKIP() << "Optional downloaded ISIS LRO fixture is not present";
     }
 
-    Camera camera;
+    LineScanCamera camera;
     std::string error;
     ASSERT_TRUE(camera.loadFromIsd(fixture.string(), &error)) << error;
     EXPECT_EQ(camera.imageLines(), 52224);
@@ -282,12 +282,12 @@ TEST(PlanetaryLineScanCameraFixture, LroIsdUsesMoonMeMetersAndTimeDependentPose)
     constexpr double pi = 3.14159265358979323846;
     const double latitude = latitude_degrees * pi / 180.0;
     const double longitude = longitude_degrees * pi / 180.0;
-    const Camera::Vector3 ground{{
+    const LineScanCamera::Vector3 ground{{
         radius_meters * std::cos(latitude) * std::cos(longitude),
         radius_meters * std::cos(latitude) * std::sin(longitude),
         radius_meters * std::sin(latitude)
     }};
-    Camera::Vector3 center{};
+    LineScanCamera::Vector3 center{};
     ASSERT_TRUE(camera.sensorCenterBodyFixedAtEt(shot_et, &center));
     const double dx = ground[0] - center[0];
     const double dy = ground[1] - center[1];
@@ -295,21 +295,21 @@ TEST(PlanetaryLineScanCameraFixture, LroIsdUsesMoonMeMetersAndTimeDependentPose)
     const double range = std::sqrt(dx * dx + dy * dy + dz * dz);
     EXPECT_NEAR(range, 56552.95, 0.15);
 
-    Camera::FixedLineProjection fixed_line;
+    LineScanCamera::FixedLineProjection fixed_line;
     ASSERT_TRUE(camera.projectAtObservedLine(
         ground, 18995.176438712828 - 0.5,
-        Camera::PixelConvention::CsmPixelCenter, &fixed_line));
+        LineScanCamera::PixelConvention::CsmPixelCenter, &fixed_line));
     EXPECT_NEAR(fixed_line.detectorLineResidualPixels, 0.0, 20.0);
     EXPECT_NEAR(fixed_line.sample, 4979.609104416888 - 0.5, 5.0);
 
-    Camera::ImageCoordinate projected;
+    LineScanCamera::ImageCoordinate projected;
     ASSERT_TRUE(camera.groundToImage(
-        ground, Camera::PixelConvention::CsmPixelCenter, &projected));
+        ground, LineScanCamera::PixelConvention::CsmPixelCenter, &projected));
     EXPECT_NEAR(projected.line, 18995.176438712828 - 0.5, 20.0);
     EXPECT_NEAR(projected.sample, 4979.609104416888 - 0.5, 5.0);
 
-    Camera::Matrix3 first_rotation{};
-    Camera::Matrix3 last_rotation{};
+    LineScanCamera::Matrix3 first_rotation{};
+    LineScanCamera::Matrix3 last_rotation{};
     ASSERT_TRUE(camera.sensorToBodyFixedAtEt(317845261.8, &first_rotation));
     ASSERT_TRUE(camera.sensorToBodyFixedAtEt(317845280.8, &last_rotation));
     EXPECT_GT(std::abs(first_rotation[0] - last_rotation[0]), 1.0e-4);

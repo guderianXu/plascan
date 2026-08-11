@@ -8,7 +8,7 @@
 #include "cli_common.h"
 #include "EpipolarRectifier.h"
 #include "MvsImagePreprocessor.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "io/PathIO.h"
 
 #include <opencv2/imgcodecs.hpp>
@@ -34,7 +34,7 @@ int main(int argc, char *argv[])
     CLI11_PARSE(app, argc, argv);
 
     // 加载相机
-    xjw::Camera camLObj, camRObj;
+    xjw::FramePinholeCamera camLObj, camRObj;
     if (!camLObj.loadFromFile(camL))
         cli::fatal("无法加载左相机: " + camL, cli::EXIT_IO_ERR);
     if (!camRObj.loadFromFile(camR))
@@ -53,8 +53,8 @@ int main(int argc, char *argv[])
 
     cv::Mat preparedLeft;
     cv::Mat preparedRight;
-    xjw::Camera preparedLeftCamera;
-    xjw::Camera preparedRightCamera;
+    xjw::FramePinholeCamera preparedLeftCamera;
+    xjw::FramePinholeCamera preparedRightCamera;
     std::string preprocessError;
     if (!xjw::mvs::prepareMvsImage(left,
                                    camLObj,

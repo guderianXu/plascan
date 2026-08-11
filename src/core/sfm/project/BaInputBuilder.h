@@ -8,7 +8,7 @@
  * 追加完整标记系统。输出把求解输入、统计和结果回写绑定放在同一索引空间中。
  */
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "BundleAdjust.h"
 #include "model/MarkerSet.h"
 #include "project/ProjectMatchInputReader.h"
@@ -40,7 +40,7 @@ enum class BaInputBuildStatus
  */
 struct BaInputBuildResult
 {
-    std::vector<xjw::Camera> cameras; ///< BA 输入相机。
+    std::vector<xjw::FramePinholeCamera> cameras; ///< BA 输入相机。
     QStringList imagePathByIndex; ///< 相机索引到影像路径。
     QMap<QString, QJsonObject> beforeCamMeta; ///< 更新前相机 JSON 快照。
     std::vector<xjw::BATrack> tracks; ///< 自动连接点和人工控制轨迹。

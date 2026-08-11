@@ -1,6 +1,6 @@
 #pragma once
 
-#include "camera/Camera.h"
+#include "camera/FramePinholeCamera.h"
 #include "MvsTypes.h"
 #include <opencv2/core.hpp>
 #include <array>
@@ -40,8 +40,8 @@ public:
         const cv::Mat &validMask,
         const cv::Mat &H1inv,
         const cv::Mat &H2inv,
-        const Camera &camL,
-        const Camera &camR,
+        const FramePinholeCamera &camL,
+        const FramePinholeCamera &camR,
         const TriangulationConfig &cfg = {});
 
     // Depth-based triangulation: unproject rectified depth using camera model
@@ -49,9 +49,9 @@ public:
         const cv::Mat &depthMap,
         const cv::Mat &validMask,
         const cv::Mat &H1inv,
-        const Camera &camL,
-        const Camera &camR,
-        const Camera &rectCamL,
+        const FramePinholeCamera &camL,
+        const FramePinholeCamera &camR,
+        const FramePinholeCamera &rectCamL,
         const TriangulationConfig &cfg = {});
 };
 

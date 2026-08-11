@@ -85,7 +85,7 @@ __global__ void kernelUnproject(
 std::vector<DensePoint> DensePointCloudCUDA::unprojectGPU(
     const cv::Mat                 &depth,
     const cv::Mat                 &mask,
-    const Camera                    &cam,
+    const FramePinholeCamera                    &cam,
     const cv::Mat                 &colorImg,
     float                          minDepth,
     float                          maxDepth,
@@ -150,7 +150,7 @@ std::vector<DensePoint> DensePointCloudCUDA::unprojectGPU(
 
     {
         CamParams cparam;
-        const Camera::Intrinsics intrinsics = cam.intrinsics();
+        const FramePinholeCamera::Intrinsics intrinsics = cam.intrinsics();
         const std::array<double, 9> rotation = cam.worldToCameraRotation();
         const std::array<double, 3> translation = cam.worldToCameraTranslation();
         cparam.fx = static_cast<float>(intrinsics.focalX);

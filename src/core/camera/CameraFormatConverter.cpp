@@ -1577,7 +1577,7 @@ void writeTsai(const std::filesystem::path &path, const CameraRecord &record)
         throw std::runtime_error("无法写入 tsai 文件: " + path.string());
     }
 
-    // CameraRecord 的 K 已是像素单位，因此写 pitch=1，使 Camera 读取时
+    // CameraRecord 的 K 已是像素单位，因此写 pitch=1，使 FramePinholeCamera 读取时
     // 除以 pitch 后仍得到原始 fx/fy/cx/cy。
     out << "VERSION_3\n";
     out << "PINHOLE\n";

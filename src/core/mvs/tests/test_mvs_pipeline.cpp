@@ -19,7 +19,7 @@
 #include "MvsSceneClassifier.h"
 #include "MvsQualityReport.h"
 #include "SparseCloudPreprocessor.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 #include <plamatrix/dense/dense_matrix.h>
 #include <plapoint/core/point_cloud.h>
@@ -66,12 +66,12 @@ cv::Mat makeShifted(const cv::Mat &src, int d)
     return dst;
 }
 
-xjw::Camera makeMvsCamera(double fu, double fv,
+xjw::FramePinholeCamera makeMvsCamera(double fu, double fv,
                           double cu, double cv,
                           const double Rwc[9],
                           const double C[3])
 {
-    xjw::Camera cam;
+    xjw::FramePinholeCamera cam;
     std::array<double, 9> R{Rwc[0],Rwc[1],Rwc[2],Rwc[3],Rwc[4],Rwc[5],Rwc[6],Rwc[7],Rwc[8]};
     std::array<double, 3> Cv{C[0],C[1],C[2]};
     cam.setIntrinsics(fu, fv, cu, cv);
@@ -1538,9 +1538,9 @@ TEST(DepthGeometryConsistencyTest, FindsSubpixelNeighborAndVerifiesRoundTrip)
                                     0.0, 0.0, 1.0};
     constexpr double reference_center[3] = {0.0, 0.0, 0.0};
     constexpr double source_center[3] = {0.05, 0.0, 0.0};
-    const xjw::Camera reference_camera = makeMvsCamera(
+    const xjw::FramePinholeCamera reference_camera = makeMvsCamera(
         100.0, 100.0, 4.0, 4.0, identity, reference_center);
-    const xjw::Camera source_camera = makeMvsCamera(
+    const xjw::FramePinholeCamera source_camera = makeMvsCamera(
         100.0, 100.0, 4.0, 4.0, identity, source_center);
 
     const cv::Point2f reference_pixel(4.0f, 4.0f);
@@ -1610,9 +1610,9 @@ TEST(DepthGeometryConsistencyTest,
                                     0.0, 0.0, 1.0};
     constexpr double reference_center[3] = {0.0, 0.0, 0.0};
     constexpr double source_center[3] = {1.0, 0.0, 0.0};
-    const xjw::Camera reference_camera = makeMvsCamera(
+    const xjw::FramePinholeCamera reference_camera = makeMvsCamera(
         100.0, 100.0, 20.0, 20.0, identity, reference_center);
-    const xjw::Camera source_camera = makeMvsCamera(
+    const xjw::FramePinholeCamera source_camera = makeMvsCamera(
         100.0, 100.0, 20.0, 20.0, identity, source_center);
     cv::Mat source_depth(41, 41, CV_32F, cv::Scalar(0.0f));
     source_depth.at<float>(20, 10) = 10.0f;
@@ -1648,9 +1648,9 @@ TEST(DepthGeometryConsistencyTest,
                                     0.0, 0.0, 1.0};
     constexpr double reference_center[3] = {0.0, 0.0, 0.0};
     constexpr double source_center[3] = {0.25, 0.0, 0.0};
-    const xjw::Camera reference_camera = makeMvsCamera(
+    const xjw::FramePinholeCamera reference_camera = makeMvsCamera(
         120.0, 120.0, 16.0, 16.0, identity, reference_center);
-    const xjw::Camera source_camera = makeMvsCamera(
+    const xjw::FramePinholeCamera source_camera = makeMvsCamera(
         120.0, 120.0, 16.0, 16.0, identity, source_center);
     const cv::Point2f reference_pixel(16.0f, 16.0f);
     constexpr float reference_depth = 12.0f;
@@ -1710,10 +1710,10 @@ TEST(DepthGeometryConsistencyTest,
                                     0.0, 1.0, 0.0,
                                     0.0, 0.0, 1.0};
     constexpr double reference_center[3] = {0.0, 0.0, 0.0};
-    const xjw::Camera reference_camera = makeMvsCamera(
+    const xjw::FramePinholeCamera reference_camera = makeMvsCamera(
         100.0, 100.0, 20.0, 20.0, identity, reference_center);
 
-    const xjw::Camera coincident_camera = makeMvsCamera(
+    const xjw::FramePinholeCamera coincident_camera = makeMvsCamera(
         100.0, 100.0, 20.0, 20.0, identity, reference_center);
     cv::Mat coincident_depth(41, 41, CV_32F, cv::Scalar(0.0f));
     coincident_depth.at<float>(20, 20) = 10.0f;
@@ -1731,7 +1731,7 @@ TEST(DepthGeometryConsistencyTest,
     EXPECT_NEAR(coincident.jointWorldPixelFootprint, 0.1f, 1.0e-6f);
 
     constexpr double collinear_center[3] = {0.0, 0.0, 1.0};
-    const xjw::Camera collinear_camera = makeMvsCamera(
+    const xjw::FramePinholeCamera collinear_camera = makeMvsCamera(
         100.0, 100.0, 20.0, 20.0, identity, collinear_center);
     cv::Mat collinear_depth(41, 41, CV_32F, cv::Scalar(0.0f));
     collinear_depth.at<float>(20, 20) = 9.0f;
@@ -1757,9 +1757,9 @@ TEST(DepthGeometryConsistencyTest,
                                     0.0, 0.0, 1.0};
     constexpr double reference_center[3] = {0.0, 0.0, 0.0};
     constexpr double source_center[3] = {1.0, 0.0, 0.0};
-    const xjw::Camera reference_camera = makeMvsCamera(
+    const xjw::FramePinholeCamera reference_camera = makeMvsCamera(
         100.0, 100.0, 20.0, 20.0, identity, reference_center);
-    const xjw::Camera source_camera = makeMvsCamera(
+    const xjw::FramePinholeCamera source_camera = makeMvsCamera(
         100.0, 100.0, 20.0, 20.0, identity, source_center);
     const cv::Mat source_depth(41, 41, CV_32F, cv::Scalar(0.0f));
 

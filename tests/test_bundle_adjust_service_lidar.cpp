@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "BundleAdjustService.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 #include <QDir>
 #include <QJsonArray>
@@ -15,9 +15,9 @@
 namespace
 {
 
-xjw::Camera makeCamera()
+xjw::FramePinholeCamera makeCamera()
 {
-    xjw::Camera camera;
+    xjw::FramePinholeCamera camera;
     camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
     camera.setPose({{1.0, 0.0, 0.0,
                      0.0, 1.0, 0.0,
@@ -78,7 +78,7 @@ TEST(BundleAdjustServiceLidarTest, RunLoadsLaserCloudAndWritesLaserSummary)
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::Camera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::FramePinholeCamera> cameras{makeCamera(), makeCamera()};
     std::vector<xjw::BATrack> tracks{makeTrack()};
 
     xjw::gui::BaServiceOptions options;
@@ -112,7 +112,7 @@ TEST(BundleAdjustServiceLidarTest, RunAppliesQualityWeightWithoutMultiplyingUser
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::Camera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::FramePinholeCamera> cameras{makeCamera(), makeCamera()};
     std::vector<xjw::BATrack> tracks{makeTrack()};
 
     xjw::gui::BaServiceOptions options;
@@ -145,7 +145,7 @@ TEST(BundleAdjustServiceLidarTest, RunDerivesStatisticalWeightFromSigma)
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::Camera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::FramePinholeCamera> cameras{makeCamera(), makeCamera()};
     std::vector<xjw::BATrack> tracks{makeTrack()};
     xjw::gui::BaServiceOptions options;
     options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("ba"));
@@ -181,7 +181,7 @@ TEST(BundleAdjustServiceLidarTest, RunRejectsWritebackWhenAllLaserConstraintsAre
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::Camera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::FramePinholeCamera> cameras{makeCamera(), makeCamera()};
     std::vector<xjw::BATrack> tracks{makeTrack()};
     tracks.front().observations[0].u += 1000.0;
     tracks.front().observations[1].u -= 1000.0;
@@ -216,7 +216,7 @@ TEST(BundleAdjustServiceLidarTest, RunUsesXyzLaserCloudAsHeightPlanesWhenExplici
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::Camera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::FramePinholeCamera> cameras{makeCamera(), makeCamera()};
     std::vector<xjw::BATrack> tracks{makeTrack()};
 
     xjw::gui::BaServiceOptions options;
@@ -252,7 +252,7 @@ TEST(BundleAdjustServiceLidarTest, RunWritesControlPointConstraintSummary)
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::Camera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::FramePinholeCamera> cameras{makeCamera(), makeCamera()};
     std::vector<xjw::BATrack> tracks{makeTrack()};
 
     xjw::BAControlPointConstraint constraint;
@@ -293,7 +293,7 @@ TEST(BundleAdjustServiceLidarTest, RunWritesScaleBarConstraintSummary)
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::Camera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::FramePinholeCamera> cameras{makeCamera(), makeCamera()};
     std::vector<xjw::BATrack> tracks{makeTrack(), makeTrack()};
     tracks[0].initialPoint = {{0.0, 0.0, 10.0}};
     tracks[1].initialPoint = {{12.0, 0.0, 10.0}};
@@ -341,7 +341,7 @@ TEST(BundleAdjustServiceMarkerTest, WritesSeparateControlAndCheckResiduals)
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::Camera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::FramePinholeCamera> cameras{makeCamera(), makeCamera()};
     std::vector<xjw::BATrack> tracks{makeTrack(), makeTrack()};
     tracks[0].initialPoint = {{0.0, 0.0, 10.0}};
     tracks[1].initialPoint = {{2.0, 0.0, 10.0}};
@@ -389,7 +389,7 @@ TEST(BundleAdjustServiceLidarTest, RunFailsClearlyWhenLaserCloudPathIsMissing)
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::Camera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::FramePinholeCamera> cameras{makeCamera(), makeCamera()};
     std::vector<xjw::BATrack> tracks{makeTrack()};
 
     xjw::gui::BaServiceOptions options;
@@ -411,7 +411,7 @@ TEST(BundleAdjustServiceLidarTest, RunFailsWhenNoTrackCanAssociateWithLaserCloud
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
-    std::vector<xjw::Camera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::FramePinholeCamera> cameras{makeCamera(), makeCamera()};
     std::vector<xjw::BATrack> tracks{makeTrack()};
     xjw::gui::BaServiceOptions options;
     options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("ba"));

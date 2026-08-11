@@ -15,9 +15,9 @@ struct CameraTrack
     double normalizedRadius = 0.0;
 };
 
-double normalizedRadius(const Camera &camera, const BAObservation &observation)
+double normalizedRadius(const FramePinholeCamera &camera, const BAObservation &observation)
 {
-    const Camera::Intrinsics intrinsics = camera.intrinsics();
+    const FramePinholeCamera::Intrinsics intrinsics = camera.intrinsics();
     const double focal_x = std::max(1.0, std::abs(intrinsics.focalX));
     const double focal_y = std::max(1.0, std::abs(intrinsics.focalY));
     const double x = (observation.u - intrinsics.principalX) / focal_x;
@@ -29,7 +29,7 @@ double normalizedRadius(const Camera &camera, const BAObservation &observation)
 } // namespace
 
 std::vector<std::size_t> selectTrackIndices(
-    const std::vector<Camera> &cameras,
+    const std::vector<FramePinholeCamera> &cameras,
     const std::vector<BATrack> &tracks,
     std::size_t maximumTrackCount)
 {

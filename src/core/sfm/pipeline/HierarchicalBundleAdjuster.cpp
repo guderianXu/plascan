@@ -372,7 +372,7 @@ HierarchicalBaRunSummary HierarchicalBundleAdjuster::run()
     });
     const GlobalReprojectionState global_before =
         evaluateGlobalReprojection(*_owner._reconstruction);
-    std::unordered_map<ImageId, Camera> camera_snapshots;
+    std::unordered_map<ImageId, FramePinholeCamera> camera_snapshots;
     std::vector<PointSnapshot> point_snapshots;
     int candidate_applied_blocks = 0;
     int candidate_updated_cameras = 0;

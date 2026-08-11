@@ -5,7 +5,7 @@
 #include "DomGenerator.h"
 #include "ObjMtlLoader.h"
 #include "TerrainPipeline.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 
 #include <filesystem>
 #include <fstream>
@@ -235,9 +235,9 @@ protected:
         return stdDev[0] * stdDev[0];
     }
 
-    static Camera makeDepthDemCamera(double tx)
+    static FramePinholeCamera makeDepthDemCamera(double tx)
     {
-        Camera camera;
+        FramePinholeCamera camera;
         camera.setIntrinsics(16.0, 16.0, 4.0, 4.0);
         const std::array<double, 9> rotation{
             1.0, 0.0, 0.0,
@@ -592,7 +592,7 @@ TEST_F(TerrainDemDomTest, TerrainPipelineDepthDemWritesQualityProductPaths)
     std::vector<cv::Mat> depthMaps{
         cv::Mat(8, 8, CV_32FC1, cv::Scalar(10.0f)),
         cv::Mat(8, 8, CV_32FC1, cv::Scalar(10.0f))};
-    std::vector<Camera> cameras{
+    std::vector<FramePinholeCamera> cameras{
         makeDepthDemCamera(0.0),
         makeDepthDemCamera(0.05)};
 

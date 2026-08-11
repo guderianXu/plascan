@@ -70,7 +70,7 @@ float medianScalar2(float first, float second, bool hasSecond)
     return hasSecond ? std::max(first, second) : first;
 }
 
-bool projectWorldPoint(const Camera &camera,
+bool projectWorldPoint(const FramePinholeCamera &camera,
                        float worldX,
                        float worldY,
                        float worldZ,
@@ -89,7 +89,7 @@ bool projectWorldPoint(const Camera &camera,
     return true;
 }
 
-bool unprojectPixel(const Camera &camera,
+bool unprojectPixel(const FramePinholeCamera &camera,
                     float pixelX,
                     float pixelY,
                     float depth,
@@ -109,7 +109,7 @@ bool unprojectPixel(const Camera &camera,
     return true;
 }
 
-float positiveDepth(const Camera &camera, float worldX, float worldY, float worldZ)
+float positiveDepth(const FramePinholeCamera &camera, float worldX, float worldY, float worldZ)
 {
     const double world[3] = {worldX, worldY, worldZ};
     double camera_point[3] = {0.0, 0.0, 0.0};
@@ -153,11 +153,11 @@ public:
         }
         if (!image.empty())
         {
-            const Camera &source_camera = m_frames[frameIdx].sourceCamera.isValid()
+            const FramePinholeCamera &source_camera = m_frames[frameIdx].sourceCamera.isValid()
                 ? m_frames[frameIdx].sourceCamera
                 : m_frames[frameIdx].cameraModel;
             cv::Mat prepared;
-            Camera prepared_camera;
+            FramePinholeCamera prepared_camera;
             if (prepareMvsImage(image, source_camera, &prepared, &prepared_camera))
             {
                 image = std::move(prepared);
@@ -367,12 +367,12 @@ void DepthMapFusion::prepareGeometry(
 
     for (int fi = 0; fi < NF; ++fi)
     {
-        const Camera &cam = frames[fi].cameraModel;
+        const FramePinholeCamera &cam = frames[fi].cameraModel;
         FrameGeometry &g = geom[fi];
         g.cameraModel = cam;
         g.W = frames[fi].imgW;
         g.H = frames[fi].imgH;
-        const Camera::Intrinsics intrinsics = cam.intrinsics();
+        const FramePinholeCamera::Intrinsics intrinsics = cam.intrinsics();
         const std::array<double, 9> rotation = cam.worldToCameraRotation();
         const std::array<double, 3> translation = cam.worldToCameraTranslation();
 

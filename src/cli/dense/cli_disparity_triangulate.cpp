@@ -7,7 +7,7 @@
 // =============================================================================
 #include "cli_common.h"
 #include "DisparityTriangulator.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "io/PathIO.h"
 
 #include <plapoint/core/point_cloud.h>
@@ -79,7 +79,7 @@ int main(int argc, char *argv[])
     fs.release();
 
     // 加载相机
-    xjw::Camera camLObj, camRObj;
+    xjw::FramePinholeCamera camLObj, camRObj;
     if (!camLObj.loadFromFile(camL))
         cli::fatal("无法加载左相机: " + camL, cli::EXIT_IO_ERR);
     if (!camRObj.loadFromFile(camR))

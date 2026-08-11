@@ -4,7 +4,7 @@
  * @file BundleAdjustNativeCudaTypes.h
  * @brief native CUDA BA 的主机侧扁平数据布局。
  *
- * 这些结构是通用 Camera/BATrack 与设备 POD 结构之间的中间表示。索引均指向当前
+ * 这些结构是通用 FramePinholeCamera/BATrack 与设备 POD 结构之间的中间表示。索引均指向当前
  * Workset，而 `originalTrackIndex` 用于恢复调用方顺序。
  */
 

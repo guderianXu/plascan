@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "DepthMapMeshBuilder.h"
 #include "MeshTopologyQuality.h"
 #include "MeshTypes.h"
@@ -25,7 +25,7 @@ struct DepthTsdfFrame
 {
     int refIndex = -1;
     QString refImage;
-    Camera camera;
+    FramePinholeCamera camera;
     cv::Mat depth;
     cv::Mat confidence;
     cv::Mat geometrySupportCount;

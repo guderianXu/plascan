@@ -36,7 +36,7 @@ bool observationIsUsable(const BAObservation &observation,
                          std::size_t cameraCount);
 
 /// 统计至少由两台相机提供有效观测的实际可用 BA 问题规模。
-BAProblemStats summarizeUsableProblem(const std::vector<Camera> &cameras,
+BAProblemStats summarizeUsableProblem(const std::vector<FramePinholeCamera> &cameras,
                                       const std::vector<BATrack> &tracks);
 
 /**
@@ -56,7 +56,7 @@ BAProblemStats summarizeUsableProblem(const std::vector<Camera> &cameras,
  * @return `ok=true` 表示输入可进入后端；否则 status/message 说明拒绝原因。
  */
 BundleAdjustValidationResult validateAndNormalizeBundleAdjustOptions(
-    const std::vector<Camera> &cameras,
+    const std::vector<FramePinholeCamera> &cameras,
     const std::vector<BATrack> &tracks,
     const BAOptions &requestedOptions,
     BAOptions *normalizedOptions);

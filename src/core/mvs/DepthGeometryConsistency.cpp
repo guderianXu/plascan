@@ -15,7 +15,7 @@ namespace mvs
 namespace
 {
 
-float worldPixelFootprint(const Camera &camera, double positive_depth)
+float worldPixelFootprint(const FramePinholeCamera &camera, double positive_depth)
 {
     const double focal_product =
         std::fabs(camera.focalX() * camera.focalY());
@@ -61,7 +61,7 @@ bool normalizeVector(double value[3])
 }
 
 float referenceHorizontalPixelFootprint(
-    const Camera &camera,
+    const FramePinholeCamera &camera,
     const cv::Point2f &pixel,
     double positive_depth,
     const double world[3])
@@ -105,9 +105,9 @@ float referenceHorizontalPixelFootprint(
 }
 
 bool triangulatedEpipolarPixelFootprint(
-    const Camera &reference_camera,
+    const FramePinholeCamera &reference_camera,
     const double reference_world[3],
-    const Camera &source_camera,
+    const FramePinholeCamera &source_camera,
     float *footprint)
 {
     if (!footprint)
@@ -260,11 +260,11 @@ bool triangulatedEpipolarPixelFootprint(
 }
 
 float jointWorldPixelFootprint(
-    const Camera &reference_camera,
+    const FramePinholeCamera &reference_camera,
     const cv::Point2f &reference_pixel,
     float reference_depth,
     const double reference_world[3],
-    const Camera &source_camera,
+    const FramePinholeCamera &source_camera,
     float source_depth)
 {
     const float reference_fallback =
@@ -296,11 +296,11 @@ float jointWorldPixelFootprint(
 }
 
 void assignContinuousMetrics(
-    const Camera &reference_camera,
+    const FramePinholeCamera &reference_camera,
     const cv::Point2f &reference_pixel,
     float reference_depth,
     const double reference_world[3],
-    const Camera &source_camera,
+    const FramePinholeCamera &source_camera,
     const cv::Point &source_pixel,
     float source_depth,
     ProjectedDepthConsistencyResult *result)
@@ -355,10 +355,10 @@ void assignContinuousMetrics(
 } // namespace
 
 ProjectedDepthConsistencyResult evaluateProjectedDepthConsistency(
-    const Camera &referenceCamera,
+    const FramePinholeCamera &referenceCamera,
     const cv::Point2f &referencePixel,
     float referenceDepth,
-    const Camera &sourceCamera,
+    const FramePinholeCamera &sourceCamera,
     const cv::Mat &sourceDepth,
     float relativeThreshold,
     int searchRadius,
@@ -395,11 +395,11 @@ ProjectedDepthConsistencyResult evaluateProjectedDepthConsistency(
 }
 
 ProjectedDepthConsistencyResult evaluateProjectedDepthConsistencyFromReferenceWorld(
-    const Camera &referenceCamera,
+    const FramePinholeCamera &referenceCamera,
     const cv::Point2f &referencePixel,
     float referenceDepth,
     const std::array<double, 3> &referenceWorld,
-    const Camera &sourceCamera,
+    const FramePinholeCamera &sourceCamera,
     const cv::Mat &sourceDepth,
     float relativeThreshold,
     int searchRadius,

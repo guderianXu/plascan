@@ -118,8 +118,8 @@ public:
     static bool estimate(
         const cv::Mat                          &refGray,
         const std::vector<cv::Mat>             &srcGrays,
-        const Camera                           &refCam,
-        const std::vector<Camera>              &srcCams,
+        const FramePinholeCamera                           &refCam,
+        const std::vector<FramePinholeCamera>              &srcCams,
         float                                   zNear,
         float                                   zFar,
         const PatchMatchConfig                 &config,
@@ -135,8 +135,8 @@ private:
     static bool estimateGPU(
         const cv::Mat                          &refGray,
         const std::vector<cv::Mat>             &srcGrays,
-        const Camera                           &refCam,
-        const std::vector<Camera>              &srcCams,
+        const FramePinholeCamera                           &refCam,
+        const std::vector<FramePinholeCamera>              &srcCams,
         float zNear, float zFar,
         const PatchMatchConfig       &config,
         cv::Mat &depthOut, cv::Mat *confOut,
@@ -149,8 +149,8 @@ private:
     static bool estimateCPU(
         const cv::Mat                          &refGray,
         const std::vector<cv::Mat>             &srcGrays,
-        const Camera                           &refCam,
-        const std::vector<Camera>              &srcCams,
+        const FramePinholeCamera                           &refCam,
+        const std::vector<FramePinholeCamera>              &srcCams,
         float zNear, float zFar,
         const PatchMatchConfig       &config,
         cv::Mat &depthOut, cv::Mat *confOut,
@@ -163,8 +163,8 @@ private:
     static bool estimateOpenCL(
         const cv::Mat                          &refGray,
         const std::vector<cv::Mat>             &srcGrays,
-        const Camera                           &refCam,
-        const std::vector<Camera>              &srcCams,
+        const FramePinholeCamera                           &refCam,
+        const std::vector<FramePinholeCamera>              &srcCams,
         float zNear, float zFar,
         const PatchMatchConfig       &config,
         cv::Mat &depthOut, cv::Mat *confOut,

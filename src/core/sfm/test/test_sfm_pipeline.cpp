@@ -23,7 +23,7 @@
 #include "reconstruction/SfmReconstruction.h"
 #include "common/SfmTypes.h"
 #include "graph/CorrespondenceGraph.h"
-#include "Camera.h"
+#include "FramePinholeCamera.h"
 #include "BundleAdjust.h"
 #include "triangulation/Triangulator.h"
 
@@ -93,8 +93,8 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest,
 TEST(SfmBundleAdjustCoordinatorPolicyTest,
      CalibrationSeedRefreshPreservesStableReferenceMetrics)
 {
-    std::vector<Camera> before(2);
-    for (Camera &camera : before)
+    std::vector<FramePinholeCamera> before(2);
+    for (FramePinholeCamera &camera : before)
     {
         camera.setIntrinsics(1000.0, 1010.0, 512.0, 384.0);
     }
@@ -102,7 +102,7 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest,
     result.refinedCameras = before;
     result.refinedCameras[0].setIntrinsics(
         980.0, 989.8, 512.0, 384.0);
-    Camera::Distortion distortion = result.refinedCameras[0].distortion();
+    FramePinholeCamera::Distortion distortion = result.refinedCameras[0].distortion();
     distortion.radialK1 = -0.02;
     result.refinedCameras[0].setDistortion(distortion);
     result.refinedSharedFocalScale = 1.234;
@@ -125,12 +125,12 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest,
 TEST(SfmBundleAdjustCoordinatorPolicyTest,
      FocalOnlyRefinementCountsAsReusableCalibrationSeed)
 {
-    std::vector<Camera> references(2);
-    for (Camera &camera : references)
+    std::vector<FramePinholeCamera> references(2);
+    for (FramePinholeCamera &camera : references)
     {
         camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
     }
-    std::vector<Camera> current = references;
+    std::vector<FramePinholeCamera> current = references;
     current[0].setIntrinsics(980.0, 980.0, 512.0, 384.0);
 
     EXPECT_TRUE(SfmBundleAdjustCoordinator::hasReusableCalibrationSeed(
@@ -140,7 +140,7 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest,
     EXPECT_FALSE(SfmBundleAdjustCoordinator::hasReusableCalibrationSeed(
         current, references, false, true));
 
-    Camera::Distortion distortion = current[0].distortion();
+    FramePinholeCamera::Distortion distortion = current[0].distortion();
     distortion.radialK1 = -0.02;
     current[0].setDistortion(distortion);
     EXPECT_TRUE(SfmBundleAdjustCoordinator::hasReusableCalibrationSeed(
@@ -165,23 +165,23 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest,
      PersistentIntrinsicReferencesSurviveIndependentGlobalBaCalls)
 {
     const std::vector<ImageId> firstIds{2, 5};
-    std::vector<Camera> firstCameras(2);
-    for (Camera &camera : firstCameras)
+    std::vector<FramePinholeCamera> firstCameras(2);
+    for (FramePinholeCamera &camera : firstCameras)
     {
         camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
     }
-    std::unordered_map<ImageId, Camera> referencesByImageId;
-    const std::vector<Camera> firstReferences =
+    std::unordered_map<ImageId, FramePinholeCamera> referencesByImageId;
+    const std::vector<FramePinholeCamera> firstReferences =
         SfmBundleAdjustCoordinator::buildPersistentIntrinsicReferences(
             firstIds, firstCameras, &referencesByImageId);
     ASSERT_EQ(firstReferences.size(), 2u);
 
-    std::vector<Camera> secondCameras = firstCameras;
-    for (Camera &camera : secondCameras)
+    std::vector<FramePinholeCamera> secondCameras = firstCameras;
+    for (FramePinholeCamera &camera : secondCameras)
     {
         camera.setIntrinsics(1100.0, 1100.0, 512.0, 384.0);
     }
-    const std::vector<Camera> secondReferences =
+    const std::vector<FramePinholeCamera> secondReferences =
         SfmBundleAdjustCoordinator::buildPersistentIntrinsicReferences(
             firstIds, secondCameras, &referencesByImageId);
     ASSERT_EQ(secondReferences.size(), 2u);
@@ -189,9 +189,9 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest,
     EXPECT_DOUBLE_EQ(secondReferences[1].focalX(), 1000.0);
 
     const std::vector<ImageId> retryIds{2, 5, 9};
-    secondCameras.push_back(Camera{});
+    secondCameras.push_back(FramePinholeCamera{});
     secondCameras.back().setIntrinsics(900.0, 900.0, 512.0, 384.0);
-    const std::vector<Camera> retryReferences =
+    const std::vector<FramePinholeCamera> retryReferences =
         SfmBundleAdjustCoordinator::buildPersistentIntrinsicReferences(
             retryIds, secondCameras, &referencesByImageId);
     ASSERT_EQ(retryReferences.size(), 3u);
@@ -203,13 +203,13 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest,
 TEST(SfmBundleAdjustCoordinatorPolicyTest,
      IntrinsicConvergenceDoesNotAverageOpposingCalibrationGroups)
 {
-    std::vector<Camera> references(2);
-    for (Camera &camera : references)
+    std::vector<FramePinholeCamera> references(2);
+    for (FramePinholeCamera &camera : references)
     {
         camera.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
     }
-    const std::vector<Camera> previous = references;
-    std::vector<Camera> current = references;
+    const std::vector<FramePinholeCamera> previous = references;
+    std::vector<FramePinholeCamera> current = references;
     current[0].setIntrinsics(1010.0, 1010.0, 512.0, 384.0);
     current[1].setIntrinsics(990.0, 990.0, 512.0, 384.0);
 
@@ -351,10 +351,10 @@ TEST(HierarchicalBundleAdjusterPolicyTest, RejectsGloballyInconsistentMerge)
 namespace {
 
 /// 创建一个简单的 pinhole 相机（焦距 1000px, 主点 512x384, 位于 (cx,cy,cz)）
-Camera makeCamera(double cx, double cy, double cz,
+FramePinholeCamera makeCamera(double cx, double cy, double cz,
                   double fu = 1000.0, double fv = 1000.0)
 {
-    Camera cam;
+    FramePinholeCamera cam;
     cam.setIntrinsics(fu, fv, 512.0, 384.0);
     // identity rotation, camera at (cx,cy,cz)
     std::array<double,9> R = {1,0,0, 0,1,0, 0,0,1};
@@ -364,7 +364,7 @@ Camera makeCamera(double cx, double cy, double cz,
 }
 
 /// 将世界点投影到相机上，返回 (u, v)；成功返回 true
-bool projectPoint(const Camera &cam, double wx, double wy, double wz,
+bool projectPoint(const FramePinholeCamera &cam, double wx, double wy, double wz,
                   double &u, double &v)
 {
     double world[3] = {wx, wy, wz};
@@ -379,7 +379,7 @@ struct SyntheticPoint {
     double x, y, z;
 };
 
-double centerDistance(const Camera &a, const Camera &b)
+double centerDistance(const FramePinholeCamera &a, const FramePinholeCamera &b)
 {
     const auto ca = a.cameraCenter();
     const auto cb = b.cameraCenter();
@@ -392,7 +392,7 @@ double centerDistance(const Camera &a, const Camera &b)
 TEST(HierarchicalBaBlockSolverTest, KeepsCrossBlockTrackFixedAsCameraConstraint)
 {
     SfmReconstruction reconstruction;
-    const std::array<Camera, 3> cameras{{
+    const std::array<FramePinholeCamera, 3> cameras{{
         makeCamera(-1.0, 0.0, 0.0),
         makeCamera(1.0, 0.0, 0.0),
         makeCamera(0.0, 1.0, 0.0),
@@ -452,7 +452,7 @@ std::vector<SyntheticPoint> generatePoints(int n, double cx, double cy, double c
 
 /// 从合成 3D 点生成两幅图像的特征点和匹配
 void buildSyntheticMatches(
-    const Camera &cam1, const Camera &cam2,
+    const FramePinholeCamera &cam1, const FramePinholeCamera &cam2,
     const std::vector<SyntheticPoint> &points3D,
     std::vector<FeatureKeypoint> &kpts1,
     std::vector<FeatureKeypoint> &kpts2,
@@ -485,7 +485,7 @@ void buildSyntheticMatches(
     }
 }
 
-void buildKnownPoseTracks(const std::vector<Camera> &cameras,
+void buildKnownPoseTracks(const std::vector<FramePinholeCamera> &cameras,
                           const std::vector<SyntheticPoint> &points3D,
                           std::vector<std::vector<FeatureKeypoint>> &keypoints,
                           std::vector<FeatureMatch> &matches01,
@@ -503,7 +503,7 @@ void buildKnownPoseTracks(const std::vector<Camera> &cameras,
         projections.reserve(cameras.size());
 
         bool visibleInAll = true;
-        for (const Camera &camera : cameras)
+        for (const FramePinholeCamera &camera : cameras)
         {
             double u = 0.0;
             double v = 0.0;
@@ -534,7 +534,7 @@ void buildKnownPoseTracks(const std::vector<Camera> &cameras,
     }
 }
 
-void buildIndexedKeypoints(const std::vector<Camera> &cameras,
+void buildIndexedKeypoints(const std::vector<FramePinholeCamera> &cameras,
                            const std::vector<SyntheticPoint> &points3D,
                            std::vector<std::vector<FeatureKeypoint>> &keypoints)
 {
@@ -546,7 +546,7 @@ void buildIndexedKeypoints(const std::vector<Camera> &cameras,
         projections.reserve(cameras.size());
 
         bool visibleInAll = true;
-        for (const Camera &camera : cameras)
+        for (const FramePinholeCamera &camera : cameras)
         {
             double u = 0.0;
             double v = 0.0;
@@ -608,8 +608,8 @@ protected:
 TEST_F(SfmInitTest, SuccessfulInitWithCorrectIntrinsics)
 {
     // 两台相机，baseline 10 单位
-    Camera cam1 = makeCamera(0, 0, 0);
-    Camera cam2 = makeCamera(10, 0, 0);
+    FramePinholeCamera cam1 = makeCamera(0, 0, 0);
+    FramePinholeCamera cam2 = makeCamera(10, 0, 0);
 
     // 在 Z=50 附近生成 200 个 3D 点
     auto points = generatePoints(200, 5, 0, 50, 5.0);
@@ -635,8 +635,8 @@ TEST_F(SfmInitTest, SuccessfulInitWithCorrectIntrinsics)
 // 2. 匹配不足时 → 优雅失败（不崩溃）
 TEST_F(SfmInitTest, GracefulFailureWithInsufficientMatches)
 {
-    Camera cam1 = makeCamera(0, 0, 0);
-    Camera cam2 = makeCamera(10, 0, 0);
+    FramePinholeCamera cam1 = makeCamera(0, 0, 0);
+    FramePinholeCamera cam2 = makeCamera(10, 0, 0);
 
     // 只有 3 个匹配不够
     std::vector<FeatureKeypoint> kpts1 = {{100, 200}, {300, 400}, {500, 600}};
@@ -658,7 +658,7 @@ TEST_F(SfmInitTest, GracefulFailureWithInsufficientMatches)
 // 3. 单幅图像 → 优雅失败
 TEST_F(SfmInitTest, SingleImageFails)
 {
-    Camera cam = makeCamera(0, 0, 0);
+    FramePinholeCamera cam = makeCamera(0, 0, 0);
     std::vector<FeatureKeypoint> kpts = {{100, 200}};
 
     IncrementalSfm sfm(opts);
@@ -684,9 +684,9 @@ TEST_F(SfmInitTest, MultiCandidateRetry)
 {
     // 创建 3 幅图像：0和1的匹配主要是共线的（容易导致 chirality failure），
     // 0和2的匹配是良好的三角化几何
-    Camera cam0 = makeCamera(0, 0, 0);
-    Camera cam1 = makeCamera(0.001, 0, 0);  // 几乎重合 → 差的几何
-    Camera cam2 = makeCamera(10, 0, 0);     // 良好基线
+    FramePinholeCamera cam0 = makeCamera(0, 0, 0);
+    FramePinholeCamera cam1 = makeCamera(0.001, 0, 0);  // 几乎重合 → 差的几何
+    FramePinholeCamera cam2 = makeCamera(10, 0, 0);     // 良好基线
 
     auto points = generatePoints(200, 5, 0, 50, 5.0);
 
@@ -721,7 +721,7 @@ TEST_F(SfmInitTest, LoadCameraFromTsaiFile)
     std::string imgDir  = std::string(TEST_DATA_DIR) + "/img/";
 
     // 验证测试数据存在
-    Camera testCam;
+    FramePinholeCamera testCam;
     bool loaded = testCam.loadFromFile(tsaiDir + "1.tsai");
     if (!loaded) {
         GTEST_SKIP() << "Test data not available at " << tsaiDir;
@@ -751,7 +751,7 @@ TEST_F(SfmInitTest, KnownCameraPoseModeRegistersAllImagesAndRunsStableBA)
     opts.filterMaxReprojError = 0.5;
     opts.filterMinTriAngle = 0.1;
 
-    std::vector<Camera> cameras = {
+    std::vector<FramePinholeCamera> cameras = {
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(2.0, 0.0, 0.0),
         makeCamera(4.0, 0.0, 0.0),
@@ -802,12 +802,12 @@ TEST_F(SfmInitTest, KnownCameraPoseModeRunsGlobalBAAndRefinesNoisyPose)
     opts.baOptions.maxCameraIterations = 6;
     opts.baOptions.filterMaxReprojError = 5.0;
 
-    const std::vector<Camera> trueCameras = {
+    const std::vector<FramePinholeCamera> trueCameras = {
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(2.0, 0.0, 0.0),
         makeCamera(4.0, 0.0, 0.0),
     };
-    std::vector<Camera> inputCameras = trueCameras;
+    std::vector<FramePinholeCamera> inputCameras = trueCameras;
     inputCameras[1] = makeCamera(2.18, 0.0, 0.0);
 
     const auto points = generatePoints(120, 2.0, 0.0, 70.0, 1.5, 37);
@@ -834,7 +834,7 @@ TEST_F(SfmInitTest, KnownCameraPoseModeRunsGlobalBAAndRefinesNoisyPose)
     EXPECT_GT(result.baTracksOptimized, 0);
     EXPECT_GE(result.baRmsBefore, result.baRmsAfter);
 
-    const Camera &refinedCamera = result.reconstruction->camera(1);
+    const FramePinholeCamera &refinedCamera = result.reconstruction->camera(1);
     EXPECT_LT(centerDistance(refinedCamera, trueCameras[1]),
               centerDistance(inputCameras[1], trueCameras[1]));
 }
@@ -850,7 +850,7 @@ TEST_F(SfmInitTest, LockedKnownCameraPoseModeKeepsInputExtrinsicsExact)
     opts.filterMaxReprojError = 0.5;
     opts.filterMinTriAngle = 0.1;
 
-    const std::vector<Camera> cameras = {
+    const std::vector<FramePinholeCamera> cameras = {
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(2.0, 0.0, 0.0),
         makeCamera(4.0, 0.0, 0.0),
@@ -892,7 +892,7 @@ TEST_F(SfmInitTest, KnownCameraPoseModeRejectsAllTwoViewOutputWhenMultiViewTrack
     opts.filterMinTriAngle = 0.1;
     opts.filterMinTrackLen = 2;
 
-    std::vector<Camera> cameras = {
+    std::vector<FramePinholeCamera> cameras = {
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(8.0, 0.0, 0.0),
         makeCamera(16.0, 0.0, 0.0),
@@ -936,7 +936,7 @@ TEST_F(SfmInitTest, KnownCameraPoseModeRejectsAlmostAllTwoViewOutputWhenMultiVie
     opts.filterMinTriAngle = 0.1;
     opts.filterMinTrackLen = 2;
 
-    std::vector<Camera> cameras = {
+    std::vector<FramePinholeCamera> cameras = {
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(8.0, 0.0, 0.0),
         makeCamera(16.0, 0.0, 0.0),
@@ -977,7 +977,7 @@ TEST_F(SfmInitTest, KnownCameraPoseModeAdaptsTriangulationAngleForNarrowBaseline
 {
     opts.useKnownCameraPoses = true;
 
-    std::vector<Camera> cameras = {
+    std::vector<FramePinholeCamera> cameras = {
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(0.35, 0.0, 0.0),
     };
@@ -1039,7 +1039,7 @@ class BAFilterTest : public ::testing::Test {
 protected:
     /// 构造一个带有离群点的合成 BA 场景
     struct SyntheticBA {
-        std::vector<Camera> cameras;
+        std::vector<FramePinholeCamera> cameras;
         std::vector<BATrack> tracks;
         int numGoodPoints = 0;
         int numOutliers = 0;
@@ -1195,7 +1195,7 @@ TEST_F(BAFilterTest, DisabledFilterKeepsAllPoints)
 // 4. 空场景不崩溃
 TEST_F(BAFilterTest, EmptyScene)
 {
-    std::vector<Camera> cameras;
+    std::vector<FramePinholeCamera> cameras;
     std::vector<BATrack> tracks;
 
     BAOptions opts;
@@ -1208,7 +1208,7 @@ TEST_F(BAFilterTest, EmptyScene)
 // 5. 单相机场景不崩溃
 TEST_F(BAFilterTest, SingleCamera)
 {
-    std::vector<Camera> cameras = {makeCamera(0, 0, 0)};
+    std::vector<FramePinholeCamera> cameras = {makeCamera(0, 0, 0)};
     BATrack track;
     track.initialPoint = {5, 0, 50};
     track.observations.push_back({0, 512.0, 384.0});
@@ -1254,7 +1254,7 @@ TEST_F(BAFilterTest, HuberDeltaSensitivity)
 
 TEST_F(BAFilterTest, ObservationWeightsReduceInfluenceOfLowConfidenceOutlier)
 {
-    const std::vector<Camera> cameras = {
+    const std::vector<FramePinholeCamera> cameras = {
         makeCamera(-8.0, 0.0, 0.0),
         makeCamera(8.0, 0.0, 0.0),
         makeCamera(0.0, 8.0, 0.0),
@@ -1382,9 +1382,9 @@ TEST_F(SfmPipelineTest, ThreeImageIncremental)
     opts.hierarchicalBATargetBlockSize = 2;
     opts.hierarchicalBAOverlapImages = 2;
     opts.hierarchicalBAMaxIterations = 2;
-    Camera cam0 = makeCamera(0, 0, 0);
-    Camera cam1 = makeCamera(10, 0, 0);
-    Camera cam2 = makeCamera(20, 0, 0);
+    FramePinholeCamera cam0 = makeCamera(0, 0, 0);
+    FramePinholeCamera cam1 = makeCamera(10, 0, 0);
+    FramePinholeCamera cam2 = makeCamera(20, 0, 0);
     opts.baOptions.sharedIntrinsicReferenceCameras = {cam0, cam1, cam2};
 
     auto points = generatePoints(300, 10, 0, 50, 5.0);
@@ -1466,7 +1466,7 @@ TEST_F(SfmPipelineTest, FailedHighVisibilityImageIsRetriedAfterModelGrows)
     opts.triangulatorOptions.continueMaxReprojError = 8.0;
     opts.triangulatorOptions.completeMaxReprojError = 8.0;
 
-    const std::vector<Camera> cameras = {
+    const std::vector<FramePinholeCamera> cameras = {
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(6.0, 0.0, 0.0),
         makeCamera(12.0, 0.0, 0.0),
@@ -1536,7 +1536,7 @@ TEST_F(SfmPipelineTest, SequenceModePrefersAdjacentInitialPairOverStrongerCrossS
     opts.iterativeBARounds = 1;
     opts.filterMinTrackLen = 1;
 
-    const std::vector<Camera> cameras{
+    const std::vector<FramePinholeCamera> cameras{
         makeCamera(0.0, 0.0, 0.0),
         makeCamera(10.0, 0.0, 0.0),
         makeCamera(20.0, 0.0, 0.0),
@@ -1577,8 +1577,8 @@ TEST_F(SfmPipelineTest, SequenceModePrefersAdjacentInitialPairOverStrongerCrossS
 // 2. 进度回调正常工作
 TEST_F(SfmPipelineTest, ProgressCallbackWorks)
 {
-    Camera cam0 = makeCamera(0, 0, 0);
-    Camera cam1 = makeCamera(10, 0, 0);
+    FramePinholeCamera cam0 = makeCamera(0, 0, 0);
+    FramePinholeCamera cam1 = makeCamera(10, 0, 0);
 
     auto points = generatePoints(200, 5, 0, 50, 5.0);
 
@@ -1607,8 +1607,8 @@ TEST_F(SfmPipelineTest, ProgressCallbackWorks)
 // 3. 进度回调中止 → 停止重建
 TEST_F(SfmPipelineTest, ProgressCallbackAbort)
 {
-    Camera cam0 = makeCamera(0, 0, 0);
-    Camera cam1 = makeCamera(10, 0, 0);
+    FramePinholeCamera cam0 = makeCamera(0, 0, 0);
+    FramePinholeCamera cam1 = makeCamera(10, 0, 0);
 
     auto points = generatePoints(200, 5, 0, 50, 5.0);
 
@@ -1653,8 +1653,8 @@ TEST(NegativeDepthTest, FilterRemovesBehindCameraPoints)
     img1.point3DIds.resize(10, kInvalidPoint3DId);
     recon.addImage(img1);
 
-    Camera cam0 = makeCamera(0, 0, 0);
-    Camera cam1 = makeCamera(10, 0, 0);
+    FramePinholeCamera cam0 = makeCamera(0, 0, 0);
+    FramePinholeCamera cam1 = makeCamera(10, 0, 0);
     recon.registerImage(0, cam0);
     recon.registerImage(1, cam1);
 
@@ -1683,7 +1683,7 @@ TEST(NegativeDepthTest, FilterRemovesBehindCameraPoints)
         const auto &pt = recon.point3D(pid);
         for (const auto &elem : pt.track.elements) {
             if (!recon.hasCamera(elem.imageId)) continue;
-            const Camera &cam = recon.camera(elem.imageId);
+            const FramePinholeCamera &cam = recon.camera(elem.imageId);
             const double world[3] = {pt.xyz[0], pt.xyz[1], pt.xyz[2]};
             double cameraPoint[3] = {0.0, 0.0, 0.0};
             cam.worldToCamera(world, cameraPoint);
@@ -1703,7 +1703,7 @@ TEST(ObservationFilterTest, BAInvalidPointWithGoodObservations)
     // 构造一个场景：3 个观测中有 1 个坏观测
     // BA 标记整个点为 invalid，但观测级过滤应保留缩短后的轨迹
 
-    std::vector<Camera> cameras;
+    std::vector<FramePinholeCamera> cameras;
     cameras.push_back(makeCamera(0, 0, 0));
     cameras.push_back(makeCamera(10, 0, 0));
     cameras.push_back(makeCamera(20, 0, 0));
@@ -1751,7 +1751,7 @@ TEST(ObservationFilterTest, BAInvalidPointWithGoodObservations)
 TEST(IterativeBATest, ConvergesWithMultipleRounds)
 {
     // 创建合成场景
-    std::vector<Camera> cameras = {makeCamera(0, 0, 0), makeCamera(10, 0, 0)};
+    std::vector<FramePinholeCamera> cameras = {makeCamera(0, 0, 0), makeCamera(10, 0, 0)};
     auto points = generatePoints(100, 5, 0, 50, 5.0);
 
     std::vector<BATrack> tracks;
@@ -1794,7 +1794,7 @@ TEST(IterativeBATest, ConvergesWithMultipleRounds)
 TEST(OutlierTypeTest, LargeReprojErrorOutliers)
 {
     // 离群类型 1：3D 坐标正确但观测坐标错误（匹配错误）
-    std::vector<Camera> cameras = {makeCamera(0, 0, 0), makeCamera(10, 0, 0)};
+    std::vector<FramePinholeCamera> cameras = {makeCamera(0, 0, 0), makeCamera(10, 0, 0)};
     std::vector<BATrack> tracks;
 
     // 好点
@@ -1841,7 +1841,7 @@ TEST(OutlierTypeTest, LargeReprojErrorOutliers)
 TEST(OutlierTypeTest, WrongTriangulationOutliers)
 {
     // 离群类型 2：3D 坐标错误（错误三角化），观测坐标来自正确位置
-    std::vector<Camera> cameras = {makeCamera(0, 0, 0), makeCamera(10, 0, 0)};
+    std::vector<FramePinholeCamera> cameras = {makeCamera(0, 0, 0), makeCamera(10, 0, 0)};
     std::vector<BATrack> tracks;
 
     // 好点
@@ -1894,7 +1894,7 @@ protected:
     SfmReconstruction recon;
     CorrespondenceGraph graph;
 
-    Camera cam0, cam1, cam2;
+    FramePinholeCamera cam0, cam1, cam2;
 
     void SetUp() override {
         cam0 = makeCamera(0, 0, 0);
@@ -1903,7 +1903,7 @@ protected:
     }
 
     /// 添加一幅已注册图像
-    void addRegisteredImage(ImageId id, const Camera &cam, int numKpts = 10) {
+    void addRegisteredImage(ImageId id, const FramePinholeCamera &cam, int numKpts = 10) {
         ImageData img;
         img.id = id;
         img.imagePath = "img" + std::to_string(id) + ".png";
@@ -2166,7 +2166,7 @@ TEST_F(RetriangulationTest, ParallelPostProcessingMatchesSerialResults)
 TEST_F(RetriangulationTest, CompleteTracksSkipsNegativeDepth)
 {
     // cam0 在原点朝 +Z 方向，cam3 在 Z=-100 朝 -Z 方向
-    Camera cam3;
+    FramePinholeCamera cam3;
     cam3.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
     // 旋转 180° 使相机朝 -Z （绕 Y 旋转 180°: R = [-1,0,0, 0,1,0, 0,0,-1]）
     cam3.setPose({-1,0,0, 0,1,0, 0,0,-1}, {0, 0, -100});
@@ -2250,12 +2250,12 @@ TEST_F(RetriangulationTest, CompleteTracksDoesNotAddSecondFeatureFromSameImage)
 
 TEST_F(RetriangulationTest, CompleteTracksUsesWorldToCameraDepthForRotatedCamera)
 {
-    Camera baseCam = makeCamera(0, 0, -50);
+    FramePinholeCamera baseCam = makeCamera(0, 0, -50);
 
-    Camera rotatedCam;
+    FramePinholeCamera rotatedCam;
     rotatedCam.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
-    // Camera-to-world rotation around X by +90 degrees. The world point below
-    // has positive depth via Camera::worldToCamera(), but the old row-based
+    // FramePinholeCamera-to-world rotation around X by +90 degrees. The world point below
+    // has positive depth via FramePinholeCamera::worldToCamera(), but the old row-based
     // depth formula reports it as negative.
     rotatedCam.setPose({1, 0, 0, 0, 0, -1, 0, 1, 0}, {0, 0, 0});
 

@@ -124,7 +124,7 @@ double squaredDistance(const std::array<double, 3> &left,
     return squared_distance;
 }
 
-bool hasPosePriorBaselineToFixedCamera(const std::vector<Camera> &cameras,
+bool hasPosePriorBaselineToFixedCamera(const std::vector<FramePinholeCamera> &cameras,
                                        const BAOptions &options,
                                        const std::set<int> &fixedCameras)
 {
@@ -154,7 +154,7 @@ bool hasPosePriorBaselineToFixedCamera(const std::vector<Camera> &cameras,
     return false;
 }
 
-bool hasControlPointBaselineToFixedCamera(const std::vector<Camera> &cameras,
+bool hasControlPointBaselineToFixedCamera(const std::vector<FramePinholeCamera> &cameras,
                                           const std::vector<BATrack> &tracks,
                                           const BAOptions &options,
                                           const std::set<int> &fixedCameras)
@@ -284,7 +284,7 @@ bool hasUsableScaleBar(const std::vector<BATrack> &tracks,
         });
 }
 
-int farthestCameraFrom(const std::vector<Camera> &cameras,
+int farthestCameraFrom(const std::vector<FramePinholeCamera> &cameras,
                        int anchorIndex,
                        const std::set<int> &excluded)
 {
@@ -351,7 +351,7 @@ bool observationDataIsUsable(const BAObservation &observation)
            sanitizedObservationWeight(observation) > 0.0;
 }
 
-BAProblemStats summarizeUsableProblem(const std::vector<Camera> &cameras,
+BAProblemStats summarizeUsableProblem(const std::vector<FramePinholeCamera> &cameras,
                                       const std::vector<BATrack> &tracks)
 {
     BAProblemStats stats;
@@ -398,7 +398,7 @@ BAProblemStats summarizeUsableProblem(const std::vector<Camera> &cameras,
 }
 
 BundleAdjustValidationResult validateAndNormalizeBundleAdjustOptions(
-    const std::vector<Camera> &cameras,
+    const std::vector<FramePinholeCamera> &cameras,
     const std::vector<BATrack> &tracks,
     const BAOptions &requestedOptions,
     BAOptions *normalizedOptions)
@@ -523,10 +523,10 @@ BundleAdjustValidationResult validateAndNormalizeBundleAdjustOptions(
     if (std::any_of(
             requestedOptions.sharedIntrinsicReferenceCameras.begin(),
             requestedOptions.sharedIntrinsicReferenceCameras.end(),
-            [](const Camera &camera)
+            [](const FramePinholeCamera &camera)
             {
-                const Camera::Intrinsics intrinsics = camera.intrinsics();
-                const Camera::Distortion distortion = camera.distortion();
+                const FramePinholeCamera::Intrinsics intrinsics = camera.intrinsics();
+                const FramePinholeCamera::Distortion distortion = camera.distortion();
                 return !camera.isValid() ||
                        !std::isfinite(intrinsics.focalX) ||
                        !std::isfinite(intrinsics.focalY) ||
@@ -643,7 +643,7 @@ BundleAdjustValidationResult validateAndNormalizeBundleAdjustOptions(
                     BASolveStatus::InvalidInput,
                     prefix + "必须包含有限落点/杆臂/时间以及正的 range、sigma 和 weight");
             }
-            const Camera &camera = cameras[static_cast<size_t>(constraint.cameraIndex)];
+            const FramePinholeCamera &camera = cameras[static_cast<size_t>(constraint.cameraIndex)];
             const std::array<double, 3> cameraCenter = camera.cameraCenter();
             const std::array<double, 9> cameraToWorld =
                 camera.cameraToWorldRotation();

@@ -262,7 +262,7 @@ std::vector<std::pair<ImageId, ImageId>> IncrementalSfm::selectInitialPairCandid
 bool IncrementalSfm::initializeFromPair(ImageId id1, ImageId id2)
 {
     // 加载两台相机内参
-    Camera cam1, cam2;
+    FramePinholeCamera cam1, cam2;
     if (!getCamera(id1, cam1))
     {
         _lastErrorMessage = "getCamera(" + std::to_string(id1) + ") failed";
