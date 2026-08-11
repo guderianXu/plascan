@@ -31,6 +31,7 @@ if(MSVC)
     $<$<COMPILE_LANGUAGE:CXX>:/permissive->
     $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/utf-8>
     $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/Zc:__cplusplus>
+    $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/Zc:preprocessor>
     $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/permissive->
   )
   add_compile_definitions(_USE_MATH_DEFINES NOMINMAX)

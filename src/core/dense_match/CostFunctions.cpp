@@ -629,8 +629,12 @@ CostVolume computeCostVolume(const cv::Mat &left, const cv::Mat &right,
     const uchar *lPtr = contiguousLeft.ptr<uchar>();
     const uchar *rPtr = contiguousRight.ptr<uchar>();
 
-#ifdef _OPENMP
+#if defined(_OPENMP) && _OPENMP >= 200805
     #pragma omp parallel for num_threads(threadCount) collapse(2)
+#elif defined(_OPENMP)
+    // OpenMP 2.0 (including MSVC's current frontend) has no collapse clause.
+    // Parallelizing image rows preserves the same result without warning C4849.
+    #pragma omp parallel for num_threads(threadCount)
 #endif
     for (int y = 0; y < imgH; ++y)
     {

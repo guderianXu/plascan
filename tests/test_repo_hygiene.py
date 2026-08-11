@@ -258,7 +258,8 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("CMAKE_CUDA_HOST_COMPILER", text)
         self.assertIn("$msvcCudaHostCompiler", text)
         self.assertIn("CUDAHOSTCXX", text)
-        self.assertIn("--compiler-bindir", text)
+        self.assertIn('"-UCMAKE_CUDA_FLAGS"', text)
+        self.assertNotIn("-DCMAKE_CUDA_FLAGS=--compiler-bindir", text)
         self.assertIn("$env:SystemRoot", text)
         self.assertIn('$system32Dir = Join-Path $systemRoot "System32"', text)
         self.assertIn("$system32Dir", text)
@@ -617,6 +618,35 @@ class RepoHygieneTest(unittest.TestCase):
                 )
                 self.assertGreater(discovery_guard, 0)
                 self.assertGreater(application_start, discovery_guard)
+
+    def test_build_warning_exceptions_are_capability_scoped(self):
+        root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        dense_costs = (
+            ROOT / "src" / "core" / "dense_match" / "CostFunctions.cpp"
+        ).read_text(encoding="utf-8")
+        mvs_cmake = (ROOT / "src" / "core" / "mvs" / "CMakeLists.txt").read_text(
+            encoding="utf-8"
+        )
+        packages = (ROOT / "cmake" / "PlascanPackages.cmake").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("-Xcompiler=/Zc:preprocessor", root_cmake)
+        self.assertIn("defined(_OPENMP) && _OPENMP >= 200805", dense_costs)
+        self.assertIn("-diag-suppress=940,1394", mvs_cmake)
+        self.assertIn("QT_NO_PRIVATE_MODULE_WARNING ON", packages)
+        self.assertIn("target_compile_options(plamatrix PRIVATE", packages)
+        self.assertIn("$<$<COMPILE_LANGUAGE:CXX>:/wd4849>", packages)
+        self.assertIn("target_compile_options(plapoint PRIVATE", packages)
+        self.assertIn("--expt-relaxed-constexpr -diag-suppress=550", packages)
+
+        windows_cuda_build = (
+            ROOT / "scripts" / "build_win" / "build_windows_cuda.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"-UCMAKE_CUDA_FLAGS"', windows_cuda_build)
+        self.assertNotIn(
+            "-DCMAKE_CUDA_FLAGS=--compiler-bindir", windows_cuda_build
+        )
 
 
 if __name__ == "__main__":

@@ -1361,14 +1361,12 @@ Set-IsolatedBuildEnvironment `
 
 $msvcCompilerPathEntries = @(Resolve-MsvcCompilerPathEntries $VcpkgRoot)
 $msvcCudaHostCompiler = ""
-$msvcCudaHostCompilerDir = ""
 if ($msvcCompilerPathEntries.Count -gt 0)
 {
     $candidateCompiler = Join-Path $msvcCompilerPathEntries[0] "cl.exe"
     if (Test-Path -LiteralPath $candidateCompiler)
     {
         $msvcCudaHostCompiler = Convert-ToCMakePath (Resolve-FullPath $candidateCompiler)
-        $msvcCudaHostCompilerDir = Convert-ToCMakePath (Resolve-FullPath $msvcCompilerPathEntries[0])
         $env:CUDAHOSTCXX = $msvcCudaHostCompiler
     }
 }
@@ -1433,6 +1431,10 @@ if (-not $BuildOnly)
         "-DCMAKE_MAKE_PROGRAM=$(Convert-ToCMakePath $ninjaExe)",
         "-DCMAKE_RC_COMPILER=$(Convert-ToCMakePath $windowsSdkRc)",
         "-DCMAKE_MT=$(Convert-ToCMakePath $windowsSdkMt)",
+        # CMAKE_CUDA_HOST_COMPILER below makes CMake emit the single required
+        # -ccbin option. Clear the legacy manual compiler-bindir cache entry so
+        # existing build trees do not pass the host compiler twice to nvcc.
+        "-UCMAKE_CUDA_FLAGS",
         "-UVCPKG_MANIFEST_FEATURES",
         "-UVCPKG_OVERLAY_PORTS",
         "-UQt6*_DIR",
@@ -1465,10 +1467,6 @@ if (-not $BuildOnly)
     {
         $configureArgs += "-DCMAKE_CXX_COMPILER=$msvcCudaHostCompiler"
         $configureArgs += "-DCMAKE_CUDA_HOST_COMPILER=$msvcCudaHostCompiler"
-    }
-    if (-not [string]::IsNullOrWhiteSpace($msvcCudaHostCompilerDir))
-    {
-        $configureArgs += "-DCMAKE_CUDA_FLAGS=--compiler-bindir=$msvcCudaHostCompilerDir"
     }
     $manifestFeaturesValue = ""
     if ($EnableCeresCudaBa)

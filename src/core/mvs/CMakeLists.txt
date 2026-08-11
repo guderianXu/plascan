@@ -179,6 +179,13 @@ if(MVS_HAS_CUDA)
     target_compile_options(mvs PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math -O3>
     )
+    if(MSVC)
+        # NVCC misdiagnoses Qt6 comparison conversion operators and exported
+        # value members while parsing the host side of these CUDA units.
+        target_compile_options(mvs PRIVATE
+            $<$<COMPILE_LANGUAGE:CUDA>:-diag-suppress=940,1394>
+        )
+    endif()
 endif()
 
 if(MVS_HAS_OPENCL)

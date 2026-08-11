@@ -22,6 +22,12 @@ if(WIN32 AND PLASCAN_BUILD_GUI)
   list(APPEND PLASCAN_QT_COMPONENTS GuiPrivate)
 endif()
 list(REMOVE_DUPLICATES PLASCAN_QT_COMPONENTS)
+if(PLASCAN_BUILD_GUI)
+  # CameraSceneWidget intentionally uses QRhi private APIs and PlaScan ships
+  # the matching Qt runtime. Confirm that version lock once at this boundary
+  # instead of repeating Qt's private-module warning on every configure.
+  set(QT_NO_PRIVATE_MODULE_WARNING ON)
+endif()
 find_package(Qt6 6.7 REQUIRED COMPONENTS ${PLASCAN_QT_COMPONENTS})
 if(PLASCAN_BUILD_GUI AND NOT TARGET Qt6::GuiPrivate)
   # Qt's vcpkg package exports private modules as standalone package configs on
@@ -145,10 +151,26 @@ endif()
 set(PLAPOINT_WITH_OPENCL ${PLAMATRIX_WITH_OPENCL}
   CACHE BOOL "Build PlaPoint OpenCL acceleration on PlaMatrix" FORCE)
 add_subdirectory(${CMAKE_SOURCE_DIR}/3rdparty/plamatrix ${CMAKE_BINARY_DIR}/3rdparty/plamatrix)
+if(MSVC)
+  # PlaMatrix has a portable OpenMP collapse pragma that MSVC treats as an
+  # ignored-clause warning. Keep the suppression scoped to the third-party
+  # target; PlaScan sources still report C4849 normally.
+  target_compile_options(plamatrix PRIVATE
+    $<$<COMPILE_LANGUAGE:CXX>:/wd4849>
+  )
+endif()
 message(STATUS "plascan: using plamatrix from 3rdparty/")
 
 # ── plapoint (submodule) ───────────────────────────────────────────────────────
 add_subdirectory(${CMAKE_SOURCE_DIR}/3rdparty/plapoint ${CMAKE_BINARY_DIR}/3rdparty/plapoint)
+if(MSVC AND PLAPOINT_WITH_CUDA)
+  # PlaPoint deliberately uses host constexpr limits in device helpers. NVCC
+  # also reports #550 for variables consumed in discarded if-constexpr paths.
+  # Keep both compatibility settings confined to this third-party CUDA target.
+  target_compile_options(plapoint PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr -diag-suppress=550>
+  )
+endif()
 message(STATUS "plascan: using plapoint from 3rdparty/")
 
 # ── OpenMP ────────────────────────────────────────────────────────────────────
