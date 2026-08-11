@@ -64,14 +64,14 @@ WorkPanelWidget::WorkPanelWidget(QWidget *parent)
 void WorkPanelWidget::setTaskSnapshots(const QJsonArray &tasks)
 {
     _taskTable->setRowCount(0);
-    for (const QJsonValue &value : tasks)
+    for (const QJsonValue &snapshot : tasks)
     {
-        if (!value.isObject())
+        if (!snapshot.isObject())
         {
             continue;
         }
 
-        const QJsonObject task = value.toObject();
+        const QJsonObject task = snapshot.toObject();
         if (!task.value(QStringLiteral("active")).toBool(false)
             && !task.value(QStringLiteral("cancelling")).toBool(false))
         {
@@ -87,7 +87,7 @@ void WorkPanelWidget::setTaskSnapshots(const QJsonArray &tasks)
                             1,
                             readOnlyItem(task.value(QStringLiteral("status_text")).toString()));
 
-        const int value = task.value(QStringLiteral("progress_value")).toInt(-1);
+        const int progress_value = task.value(QStringLiteral("progress_value")).toInt(-1);
         const int maximum = task.value(QStringLiteral("progress_maximum")).toInt(-1);
         auto *progress = new QProgressBar(_taskTable);
         progress->setObjectName(QStringLiteral("workPanelProgress"));
@@ -96,7 +96,7 @@ void WorkPanelWidget::setTaskSnapshots(const QJsonArray &tasks)
         if (maximum > 0)
         {
             progress->setRange(0, maximum);
-            progress->setValue(std::clamp(value, 0, maximum));
+            progress->setValue(std::clamp(progress_value, 0, maximum));
         }
         else
         {
