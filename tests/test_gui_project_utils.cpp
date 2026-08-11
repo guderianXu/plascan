@@ -5514,7 +5514,7 @@ TEST(CameraCalibrationDataTest, DoesNotInferAcrossConflictingResolutions)
         comparisons.begin(), comparisons.end(), [&](const QJsonValue &value)
         {
             return value.toObject().value(QStringLiteral("path")).toString() ==
-                   unknownPath;
+                   xjw::common::project::normalizePath(unknownPath);
         });
     ASSERT_NE(unknown, comparisons.end());
     EXPECT_LE(unknown->toObject()
