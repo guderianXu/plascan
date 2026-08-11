@@ -2531,6 +2531,15 @@ TEST(GenerateModelDialogTest, PropagatesWorkflowComputeModeToDepthAndModelStages
     EXPECT_EQ(settings.value(QStringLiteral("processingDevice")).toString(),
               QStringLiteral("opencl"));
 
+    const auto depth_settings =
+        xjw::gui::project::denseGenerationSettingsFromJson(settings);
+    EXPECT_EQ(depth_settings.patchMatchBackend,
+              xjw::mvs::PatchMatchBackend::OpenCl);
+    const auto depth_config =
+        xjw::gui::project::buildDepthGenConfig(depth_settings, 12);
+    EXPECT_EQ(depth_config.patchMatch.backend,
+              xjw::mvs::PatchMatchBackend::OpenCl);
+
     GenerateModelDialog hybrid_dialog;
     hybrid_dialog.applySettings(QJsonObject{
         {QStringLiteral("compute_mode"), QStringLiteral("hybrid")}});
@@ -2549,6 +2558,11 @@ TEST(GenerateModelDialogTest, PropagatesWorkflowComputeModeToDepthAndModelStages
         QStringLiteral("auto"));
     EXPECT_EQ(hybrid_settings.value(QStringLiteral("processingDevice")).toString(),
               QStringLiteral("auto"));
+
+    const auto hybrid_depth_settings =
+        xjw::gui::project::denseGenerationSettingsFromJson(hybrid_settings);
+    EXPECT_EQ(hybrid_depth_settings.patchMatchBackend,
+              xjw::mvs::PatchMatchBackend::Auto);
 }
 
 TEST(TerrainPipelineAsyncTest, TerrainProductsManagerDropsBlockingUiWrappers)

@@ -319,15 +319,17 @@ DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &setti
             : settings.value(QStringLiteral("min_confidence")).toDouble(0.20));
     parsed.useCuda = settings.value(QStringLiteral("cuda")).toBool(true);
     const bool has_backend_key = settings.contains(QStringLiteral("patchMatchBackend")) ||
+        settings.contains(QStringLiteral("patch_match_backend")) ||
         settings.contains(QStringLiteral("patchmatch_backend")) ||
         settings.contains(QStringLiteral("mvsBackend")) ||
         settings.contains(QStringLiteral("mvs_backend"));
     const QString patch_match_backend = settings.value(
         QStringLiteral("patchMatchBackend")).toString(
-            settings.value(QStringLiteral("patchmatch_backend")).toString(
-                settings.value(QStringLiteral("mvsBackend")).toString(
-                    settings.value(QStringLiteral("mvs_backend")).toString(
-                        QStringLiteral("auto"))))).trimmed().toLower();
+            settings.value(QStringLiteral("patch_match_backend")).toString(
+                settings.value(QStringLiteral("patchmatch_backend")).toString(
+                    settings.value(QStringLiteral("mvsBackend")).toString(
+                        settings.value(QStringLiteral("mvs_backend")).toString(
+                            QStringLiteral("auto")))))).trimmed().toLower();
     if (patch_match_backend == QStringLiteral("cpu"))
     {
         parsed.patchMatchBackend = xjw::mvs::PatchMatchBackend::Cpu;
