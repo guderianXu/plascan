@@ -1208,20 +1208,18 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
                result.normalizedRadiusP90 >= 0.46 &&
                result.occupiedPeripheralSectors >= 7);
 
-    // 无 GCP/相机位姿约束的近纯俯视航摄块中，径向畸变、主点和宽高比与
-    // 相机层/地表的低频弯曲高度相关。此时信息矩阵只能说明参数能降低像方
-    // 残差，不能证明它不会用“穹顶”解释残差，因此只保留焦距尺度。
+    // 无 GCP/相机位姿约束的近俯视航摄块中，焦距、径向畸变、主点和宽高比
+    // 都会与航高及地表的低频弯曲耦合。此时信息矩阵只能说明参数能降低像方
+    // 残差，不能证明它不会用“穹顶”解释残差，因此保持导入内参不变。
+    // 0.90 与上面的弱平行几何分界保持一致，避免首轮尚未达到 0.97 时先释放
+    // 内参、待几何已经弯曲后才触发保护。
     result.unanchoredParallelAerialGuardApplied =
         !result.hasAbsoluteGeometryConstraint &&
         result.activeCameraCount >= 20 &&
-        result.opticalAxisConcentration >= 0.97;
+        result.opticalAxisConcentration >= 0.90;
     if (result.unanchoredParallelAerialGuardApplied)
     {
-        const bool focalEnabled = result.enabled[
-            parameterIndex(BAIntrinsicParameter::FocalLength)];
         result.enabled.fill(false);
-        result.enabled[parameterIndex(BAIntrinsicParameter::FocalLength)] =
-            focalEnabled;
     }
 
     // 自标定模型只要释放任何畸变/主点参数，就必须保留焦距共同吸收一阶尺度。
@@ -1232,7 +1230,7 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
     result.modelName = adaptiveCameraModelName(result.enabled);
     const bool fieldNormalized = result.lowOrderDistortionScale > 1.0 + 1.0e-9;
     result.reason = result.unanchoredParallelAerialGuardApplied
-        ? "unanchored_parallel_aerial_focal_only_doming_guard"
+        ? "unanchored_parallel_aerial_fixed_intrinsics_doming_guard"
         : result.opticalAxisConcentration >= 0.90
         ? (fieldNormalized
                ? "weak_parallel_geometry_field_normalized_parameter_reliability"

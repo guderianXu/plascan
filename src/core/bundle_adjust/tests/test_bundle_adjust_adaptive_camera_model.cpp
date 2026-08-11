@@ -122,6 +122,23 @@ std::vector<xjw::Camera> aerialCameras()
     return cameras;
 }
 
+std::vector<xjw::Camera> weaklyParallelAerialCameras()
+{
+    std::vector<xjw::Camera> cameras;
+    for (int row = -2; row <= 2; ++row)
+    {
+        for (int column = -2; column <= 2; ++column)
+        {
+            const Vec3 center{{column * 2.2, row * 2.2, 15.0}};
+            const double offset = ((row + column) & 1) == 0 ? 5.0 : -5.0;
+            cameras.push_back(makeLookAtCamera(
+                center,
+                {{center[0] + offset, center[1], 0.0}}));
+        }
+    }
+    return cameras;
+}
+
 std::vector<Vec3> narrowAerialPoints()
 {
     std::vector<Vec3> points;
@@ -247,7 +264,7 @@ bool enabled(
 } // namespace
 
 TEST(BundleAdjustAdaptiveCameraModelTest,
-     UnanchoredParallelAerialBlockUsesFocalOnlyDomingGuard)
+     UnanchoredParallelAerialBlockKeepsIntrinsicsFixed)
 {
     const std::vector<xjw::Camera> cameras = aerialCameras();
     const std::vector<xjw::BATrack> tracks = makeTracks(cameras, aerialPoints());
@@ -260,7 +277,7 @@ TEST(BundleAdjustAdaptiveCameraModelTest,
     EXPECT_GT(assessment.opticalAxisConcentration, 0.99);
     EXPECT_FALSE(assessment.hasAbsoluteGeometryConstraint);
     EXPECT_TRUE(assessment.unanchoredParallelAerialGuardApplied);
-    EXPECT_TRUE(enabled(assessment, xjw::BAIntrinsicParameter::FocalLength));
+    EXPECT_FALSE(enabled(assessment, xjw::BAIntrinsicParameter::FocalLength));
     EXPECT_FALSE(enabled(assessment, xjw::BAIntrinsicParameter::RadialK1));
     EXPECT_FALSE(enabled(assessment, xjw::BAIntrinsicParameter::FocalAspectRatio));
     EXPECT_FALSE(enabled(assessment, xjw::BAIntrinsicParameter::PrincipalPointX));
@@ -269,10 +286,44 @@ TEST(BundleAdjustAdaptiveCameraModelTest,
     EXPECT_FALSE(enabled(assessment, xjw::BAIntrinsicParameter::RadialK3));
     EXPECT_FALSE(enabled(assessment, xjw::BAIntrinsicParameter::TangentialP1));
     EXPECT_FALSE(enabled(assessment, xjw::BAIntrinsicParameter::TangentialP2));
-    EXPECT_EQ(assessment.modelName, "f");
+    EXPECT_EQ(assessment.modelName, "fixed");
     EXPECT_EQ(
         assessment.reason,
-        "unanchored_parallel_aerial_focal_only_doming_guard");
+        "unanchored_parallel_aerial_fixed_intrinsics_doming_guard");
+}
+
+TEST(BundleAdjustAdaptiveCameraModelTest,
+     WeaklyParallelUnanchoredAerialBlockKeepsIntrinsicsFixedFromFirstRound)
+{
+    const std::vector<xjw::Camera> cameras = weaklyParallelAerialCameras();
+    const std::vector<xjw::BATrack> tracks = makeTracks(cameras, aerialPoints());
+    ASSERT_GT(tracks.size(), 100u);
+
+    const xjw::BAAdaptiveCameraModelAssessment assessment =
+        xjw::assessAdaptiveCameraModel(cameras, tracks);
+
+    ASSERT_TRUE(assessment.valid);
+    EXPECT_GE(assessment.opticalAxisConcentration, 0.90);
+    EXPECT_LT(assessment.opticalAxisConcentration, 0.97);
+    EXPECT_FALSE(assessment.hasAbsoluteGeometryConstraint);
+    EXPECT_TRUE(assessment.unanchoredParallelAerialGuardApplied);
+    EXPECT_EQ(xjw::enabledIntrinsicParameterCount(assessment.enabled), 0);
+    EXPECT_EQ(assessment.modelName, "fixed");
+    EXPECT_EQ(
+        assessment.reason,
+        "unanchored_parallel_aerial_fixed_intrinsics_doming_guard");
+
+    xjw::BAOptions options;
+    options.refineSharedFocalLength = true;
+    options.refineSharedFocalAspectRatio = true;
+    options.refineSharedPrincipalPoint = true;
+    options.refineSharedRadialDistortion = true;
+    options.refineSharedHighOrderDistortion = true;
+    EXPECT_FALSE(xjw::applyAdaptiveCameraModel(assessment, &options));
+    EXPECT_EQ(
+        xjw::enabledIntrinsicParameterCount(
+            options.sharedIntrinsicParameterMask),
+        0);
 }
 
 TEST(BundleAdjustAdaptiveCameraModelTest,
@@ -319,10 +370,10 @@ TEST(BundleAdjustAdaptiveCameraModelTest,
     EXPECT_LT(assessment.peripheralRadiusThreshold, 0.10);
     EXPECT_GT(assessment.lowOrderDistortionScale, 1.0);
     EXPECT_GE(assessment.occupiedPeripheralSectors, 4);
-    EXPECT_TRUE(enabled(assessment, xjw::BAIntrinsicParameter::FocalLength));
+    EXPECT_FALSE(enabled(assessment, xjw::BAIntrinsicParameter::FocalLength));
     EXPECT_TRUE(assessment.unanchoredParallelAerialGuardApplied);
     EXPECT_FALSE(enabled(assessment, xjw::BAIntrinsicParameter::RadialK1));
-    EXPECT_EQ(assessment.modelName, "f");
+    EXPECT_EQ(assessment.modelName, "fixed");
 
     xjw::BAOptions options;
     options.refineSharedFocalLength = true;
@@ -330,10 +381,10 @@ TEST(BundleAdjustAdaptiveCameraModelTest,
     options.refineSharedPrincipalPoint = true;
     options.refineSharedRadialDistortion = true;
     options.refineSharedHighOrderDistortion = true;
-    ASSERT_TRUE(xjw::applyAdaptiveCameraModel(assessment, &options));
+    EXPECT_FALSE(xjw::applyAdaptiveCameraModel(assessment, &options));
     EXPECT_DOUBLE_EQ(options.sharedLowOrderDistortionScale, 1.0);
     const double appliedScale = options.sharedLowOrderDistortionScale;
-    ASSERT_TRUE(xjw::applyAdaptiveCameraModel(assessment, &options));
+    EXPECT_FALSE(xjw::applyAdaptiveCameraModel(assessment, &options));
     EXPECT_DOUBLE_EQ(options.sharedLowOrderDistortionScale, appliedScale);
 }
 
@@ -357,7 +408,7 @@ TEST(BundleAdjustAdaptiveCameraModelTest, InactiveObliqueCamerasDoNotChangeGeome
         static_cast<int>(activeCameraCount));
     EXPECT_GT(assessment.opticalAxisConcentration, 0.99);
     EXPECT_TRUE(assessment.unanchoredParallelAerialGuardApplied);
-    EXPECT_EQ(assessment.modelName, "f");
+    EXPECT_EQ(assessment.modelName, "fixed");
 }
 
 TEST(BundleAdjustAdaptiveCameraModelTest, ConvergentMultiHeightOrbitReleasesMoreParameters)
@@ -579,7 +630,7 @@ TEST(BundleAdjustAdaptiveCameraModelTest, CalibrationGroupsUseConservativeInters
         assessment.reason,
         "calibration_group_conservative_intersection");
     EXPECT_TRUE(assessment.unanchoredParallelAerialGuardApplied);
-    EXPECT_TRUE(enabled(assessment, xjw::BAIntrinsicParameter::FocalLength));
+    EXPECT_FALSE(enabled(assessment, xjw::BAIntrinsicParameter::FocalLength));
     EXPECT_FALSE(enabled(assessment, xjw::BAIntrinsicParameter::RadialK1));
     EXPECT_FALSE(enabled(
         assessment, xjw::BAIntrinsicParameter::FocalAspectRatio));

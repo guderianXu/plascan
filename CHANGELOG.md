@@ -40,6 +40,8 @@
 
 ### 修复
 
+- 无 GCP/绝对位姿约束的近俯视航摄块从首轮全局平差起保持导入内参固定，不再让焦距、主点和径向畸变
+  与航高及低频地表弯曲耦合；弱平行几何保护阈值覆盖实测约 `0.95` 光轴集中度，避免空三形成穹顶。
 - OpenCV vcpkg 依赖固定为 CPU-only DNN，移除 `opencv-dnn-cuda` 和 cuDNN 构建/分发链路；部署门禁拒绝
   OpenCV CUDA ABI、cuDNN DLL 和绑定开发机的预生成 TensorRT engine。
 - 相机格式转换、密集点云细化和对应 CLI 改为同目录 staging、完整产物校验、备份替换与异常回滚；拒绝
