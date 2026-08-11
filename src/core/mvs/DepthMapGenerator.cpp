@@ -8262,9 +8262,13 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             const QString targeted_recovered_path = storage_dir.filePath(
                 QStringLiteral("depth_%1_targeted_gap_recovered_mask.png")
                     .arg(replacement.frameIndex));
-            cv::Mat targeted_recovered = xjw::common::io::readImage(
-                xjw::common::io::toUtf8Path(targeted_recovered_path),
-                cv::IMREAD_GRAYSCALE);
+            cv::Mat targeted_recovered;
+            if (QFileInfo::exists(targeted_recovered_path))
+            {
+                targeted_recovered = xjw::common::io::readImage(
+                    xjw::common::io::toUtf8Path(targeted_recovered_path),
+                    cv::IMREAD_GRAYSCALE);
+            }
             if (!targeted_recovered.empty() &&
                 targeted_recovered.type() == CV_8UC1 &&
                 targeted_recovered.size() == filtered_depth.size())

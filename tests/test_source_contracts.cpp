@@ -1039,6 +1039,25 @@ TEST(MvsSchedulerContractTest, LargeHybridBatchKeepsBoundedOpenClFullFrame)
     });
 }
 
+TEST(MvsDepthArtifactContractTest, OptionalTargetedRecoveryMaskIsCheckedBeforeRead)
+{
+    const QString source =
+        readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString targetedRecoveryLoad = sectionBetween(
+        source,
+        "const QString targeted_recovered_path = storage_dir.filePath(",
+        "const QString provenance_path = storage_dir.filePath(");
+
+    expectContainsAll(targetedRecoveryLoad, {
+        "QFileInfo::exists(targeted_recovered_path)",
+        "xjw::common::io::readImage(",
+    });
+    EXPECT_LT(indexOfOrFail(targetedRecoveryLoad,
+                            "QFileInfo::exists(targeted_recovered_path)"),
+              indexOfOrFail(targetedRecoveryLoad,
+                            "xjw::common::io::readImage("));
+}
+
 TEST(MvsSchedulerContractTest, SparseHintsUseProjectedSamplesAndPrescaledPatchMatchInputs)
 {
     const QString cameraHeader = readSourceFile(QStringLiteral("src/core/camera/Camera.h"));
