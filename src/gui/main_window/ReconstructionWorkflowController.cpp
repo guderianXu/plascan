@@ -1,5 +1,6 @@
 #include "ReconstructionWorkflowController.h"
 
+#include "application/WorkflowSettingsDialog.h"
 #include "project/SparseResultQuality.h"
 #include "reconstruction/CreatePointCloudDialog.h"
 #include "reconstruction/GenerateModelDialog.h"
@@ -13,6 +14,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QMainWindow>
+#include <QSignalBlocker>
 
 ReconstructionWorkflowController::ReconstructionWorkflowController(
     QMainWindow *mainWindow,
@@ -373,6 +375,16 @@ void ReconstructionWorkflowController::openGenerateModelDialog()
 
     if (_projectManager)
     {
+        if (!_workflowSettingsStore)
+        {
+            _workflowSettingsStore = new DialogSettingStore(
+                DialogSettingKeys::WorkflowSettings, this);
+        }
+        _workflowSettingsStore->setProjectPath(projectPath());
+        const QSignalBlocker block_dialog(dialog);
+        dialog->applySettings(
+            WorkflowSettingsDialog::modelGenerationSettings(
+                _workflowSettingsStore->load()));
         dialog->setSourceCandidates(
             buildGenerateModelSourceCandidates(_projectManager->currentMeta()));
     }

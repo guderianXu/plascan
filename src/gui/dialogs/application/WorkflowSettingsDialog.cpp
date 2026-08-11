@@ -12,6 +12,7 @@
 #include "MatchPhotosParallelism.h"
 #include "MatchPhotosOptions.h"
 #include "MatchPhotosRuntime.h"
+#include "PatchMatchCUDA.h"
 #include "model/ModelAssetCatalog.h"
 #include "model/ModelFileResolver.h"
 
@@ -28,7 +29,9 @@
 #include <QLineEdit>
 #include <QPalette>
 #include <QPushButton>
+#include <QSet>
 #include <QSignalBlocker>
+#include <QStandardItemModel>
 #include <QStackedWidget>
 #include <QStyle>
 #include <QToolButton>
@@ -40,12 +43,16 @@ namespace
 
 constexpr auto kAerialWorkflowId = "aerial_triangulation";
 constexpr auto kReconstructionWorkflowId = "reconstruction";
+constexpr auto kModelGenerationWorkflowId = "generate_model";
 constexpr auto kDemWorkflowId = "dem";
 constexpr auto kOrthomosaicWorkflowId = "orthomosaic";
 constexpr auto kSiftLightGlueAlgorithmId = "sift_lightglue";
 constexpr auto kCudaSiftAlgorithmId = "cuda_sift";
 constexpr auto kLoMaRAlgorithmId = "loma_r";
-constexpr int kWorkflowSettingsVersion = 5;
+constexpr auto kCudaComputeMode = "cuda";
+constexpr auto kOpenClComputeMode = "opencl";
+constexpr auto kHybridComputeMode = "hybrid";
+constexpr int kWorkflowSettingsVersion = 6;
 
 struct WorkflowEntry
 {
@@ -56,6 +63,7 @@ struct WorkflowEntry
 constexpr WorkflowEntry kWorkflowEntries[] = {
     {kAerialWorkflowId, "空中三角测量"},
     {kReconstructionWorkflowId, "三维重建"},
+    {kModelGenerationWorkflowId, "生成模型"},
     {kDemWorkflowId, "创建 DEM"},
     {kOrthomosaicWorkflowId, "生成正射影像"}};
 
@@ -66,6 +74,14 @@ QJsonObject defaultAerialSettings()
     settings[QStringLiteral("lightglue_tensorrt_engine")] = QString();
     settings[QStringLiteral("loma_r_tensorrt_package")] = QString();
     settings[QStringLiteral("loma_r_keypoint_budget")] = 0;
+    return settings;
+}
+
+QJsonObject defaultModelGenerationSettings()
+{
+    QJsonObject settings;
+    settings[QStringLiteral("compute_mode")] =
+        QString::fromLatin1(kHybridComputeMode);
     return settings;
 }
 
@@ -105,6 +121,8 @@ QJsonObject normalizedSettings(const QJsonObject &settings)
     }
     normalizedWorkflows[QString::fromLatin1(kAerialWorkflowId)] =
         WorkflowSettingsDialog::aerialTriangulationSettings(settings);
+    normalizedWorkflows[QString::fromLatin1(kModelGenerationWorkflowId)] =
+        WorkflowSettingsDialog::modelGenerationSettings(settings);
     normalized[QStringLiteral("workflows")] = normalizedWorkflows;
     return normalized;
 }
@@ -144,6 +162,8 @@ QJsonObject WorkflowSettingsDialog::defaultSettings()
     QJsonObject workflows;
     workflows[QString::fromLatin1(kAerialWorkflowId)] = defaultAerialSettings();
     workflows[QString::fromLatin1(kReconstructionWorkflowId)] = QJsonObject();
+    workflows[QString::fromLatin1(kModelGenerationWorkflowId)] =
+        defaultModelGenerationSettings();
     workflows[QString::fromLatin1(kDemWorkflowId)] = QJsonObject();
     workflows[QString::fromLatin1(kOrthomosaicWorkflowId)] = QJsonObject();
 
@@ -191,13 +211,35 @@ QJsonObject WorkflowSettingsDialog::aerialTriangulationSettings(const QJsonObjec
     return aerial;
 }
 
+QJsonObject WorkflowSettingsDialog::modelGenerationSettings(
+    const QJsonObject &settings)
+{
+    const QJsonObject workflows = settings.value(
+        QStringLiteral("workflows")).toObject();
+    const QJsonObject source = workflows.value(
+        QString::fromLatin1(kModelGenerationWorkflowId)).toObject();
+
+    QJsonObject model_settings = defaultModelGenerationSettings();
+    const QString compute_mode = source.value(QStringLiteral("compute_mode"))
+        .toString()
+        .trimmed()
+        .toLower();
+    if (compute_mode == QLatin1String(kCudaComputeMode) ||
+        compute_mode == QLatin1String(kOpenClComputeMode) ||
+        compute_mode == QLatin1String(kHybridComputeMode))
+    {
+        model_settings[QStringLiteral("compute_mode")] = compute_mode;
+    }
+    return model_settings;
+}
+
 void WorkflowSettingsDialog::setupUi()
 {
     setWindowTitle(QStringLiteral("工作流程设置"));
     xjw::gui::dialogs::configureWorkflowParameterDialog(this);
     setModal(true);
-    resize(680, 360);
-    setMinimumSize(580, 320);
+    resize(720, 500);
+    setMinimumSize(620, 420);
 
     auto *rootLayout = new QVBoxLayout(this);
     rootLayout->setContentsMargins(20, 18, 20, 18);
@@ -278,6 +320,58 @@ void WorkflowSettingsDialog::setupUi()
 
     _workflowPages->addWidget(makeUnavailableWorkflowPage(
         QString::fromLatin1(kReconstructionWorkflowId), QStringLiteral("三维重建"), _workflowPages));
+
+    auto *model_page = new QWidget(_workflowPages);
+    model_page->setObjectName(QStringLiteral("workflowPage_generate_model"));
+    auto *model_layout = new QVBoxLayout(model_page);
+    model_layout->setContentsMargins(0, 0, 0, 0);
+    auto *model_group = new QGroupBox(QStringLiteral("生成模型"), model_page);
+    auto *model_form = new QFormLayout(model_group);
+    model_form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+
+    _modelComputeModeCombo = new QComboBox(model_group);
+    _modelComputeModeCombo->setObjectName(
+        QStringLiteral("modelComputeModeCombo"));
+    xjw::gui::dialogs::configureWorkflowComboBox(_modelComputeModeCombo);
+    _modelComputeModeCombo->addItem(
+        QStringLiteral("只用 CUDA"), QString::fromLatin1(kCudaComputeMode));
+    _modelComputeModeCombo->addItem(
+        QStringLiteral("只用 OpenCL"), QString::fromLatin1(kOpenClComputeMode));
+    _modelComputeModeCombo->addItem(
+        QStringLiteral("混合使用 CUDA + OpenCL"),
+        QString::fromLatin1(kHybridComputeMode));
+    model_form->addRow(QStringLiteral("计算模式:"), _modelComputeModeCombo);
+
+    _cudaDeviceStatusLabel = new QLabel(model_group);
+    _cudaDeviceStatusLabel->setObjectName(
+        QStringLiteral("modelCudaDeviceStatusLabel"));
+    _cudaDeviceStatusLabel->setWordWrap(true);
+    _cudaDeviceStatusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    model_form->addRow(QStringLiteral("CUDA 设备:"), _cudaDeviceStatusLabel);
+
+    _openClDeviceStatusLabel = new QLabel(model_group);
+    _openClDeviceStatusLabel->setObjectName(
+        QStringLiteral("modelOpenClDeviceStatusLabel"));
+    _openClDeviceStatusLabel->setWordWrap(true);
+    _openClDeviceStatusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    model_form->addRow(QStringLiteral("OpenCL 设备:"), _openClDeviceStatusLabel);
+
+    _modelComputePolicyLabel = new QLabel(model_group);
+    _modelComputePolicyLabel->setObjectName(
+        QStringLiteral("modelComputePolicyLabel"));
+    _modelComputePolicyLabel->setWordWrap(true);
+    _modelComputePolicyLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    model_form->addRow(QStringLiteral("实际策略:"), _modelComputePolicyLabel);
+
+    _detectComputeDevicesButton = new QPushButton(
+        QStringLiteral("重新检测设备"), model_group);
+    _detectComputeDevicesButton->setObjectName(
+        QStringLiteral("modelDetectComputeDevicesButton"));
+    model_form->addRow(QString(), _detectComputeDevicesButton);
+    model_layout->addWidget(model_group);
+    model_layout->addStretch(1);
+    _workflowPages->addWidget(model_page);
+
     _workflowPages->addWidget(makeUnavailableWorkflowPage(
         QString::fromLatin1(kDemWorkflowId), QStringLiteral("创建 DEM"), _workflowPages));
     _workflowPages->addWidget(makeUnavailableWorkflowPage(
@@ -314,6 +408,14 @@ void WorkflowSettingsDialog::setupUi()
     });
     connect(_downloadModelButton, &QPushButton::clicked,
             this, &WorkflowSettingsDialog::downloadCurrentModelPackage);
+    connect(_modelComputeModeCombo,
+            qOverload<int>(&QComboBox::currentIndexChanged),
+            this,
+            [this]() { refreshModelComputePolicy(); });
+    connect(_detectComputeDevicesButton,
+            &QPushButton::clicked,
+            this,
+            &WorkflowSettingsDialog::refreshModelComputeDevices);
 
     auto *buttons = new QDialogButtonBox(
         QDialogButtonBox::RestoreDefaults | QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
@@ -362,8 +464,15 @@ void WorkflowSettingsDialog::applySettings(const QJsonObject &requestedSettings)
     const int budgetIndex = _lomaRKeypointBudgetCombo->findData(
         aerial.value(QStringLiteral("loma_r_keypoint_budget")).toInt());
     _lomaRKeypointBudgetCombo->setCurrentIndex(budgetIndex >= 0 ? budgetIndex : 0);
+
+    const QJsonObject model_settings = modelGenerationSettings(_appliedSettings);
+    const int compute_mode_index = _modelComputeModeCombo->findData(
+        model_settings.value(QStringLiteral("compute_mode")).toString());
+    _modelComputeModeCombo->setCurrentIndex(
+        compute_mode_index >= 0 ? compute_mode_index : 2);
     _currentAlgorithmId.clear();
     switchAlgorithmResource();
+    refreshModelComputeDevices();
     setCurrentWorkflow(_workflowCombo->currentIndex());
 }
 
@@ -395,6 +504,12 @@ QJsonObject WorkflowSettingsDialog::collectSettings() const
     aerial[QStringLiteral("loma_r_keypoint_budget")] =
         _lomaRKeypointBudgetCombo->currentData().toInt();
     workflows[QString::fromLatin1(kAerialWorkflowId)] = aerial;
+    QJsonObject model_settings = workflows.value(
+        QString::fromLatin1(kModelGenerationWorkflowId)).toObject();
+    model_settings[QStringLiteral("compute_mode")] =
+        _modelComputeModeCombo->currentData().toString();
+    workflows[QString::fromLatin1(kModelGenerationWorkflowId)] =
+        model_settings;
     settings[QStringLiteral("workflows")] = workflows;
     return settings;
 }
@@ -569,4 +684,181 @@ void WorkflowSettingsDialog::downloadCurrentModelPackage()
     _matchingResourceEdit->setText(
         xjw::common::model::modelPackageEntryPoint(package, resolver));
     refreshMatchingResourceStatus();
+}
+
+void WorkflowSettingsDialog::refreshModelComputeDevices()
+{
+    if (!_modelComputeModeCombo || !_cudaDeviceStatusLabel ||
+        !_openClDeviceStatusLabel)
+    {
+        return;
+    }
+
+    QStringList cuda_lines;
+    QSet<QString> cuda_identities;
+    const int cuda_device_count =
+        xjw::mvs::PatchMatchDepthEstimator::cudaDeviceCount();
+    for (int device_index = 0;
+         device_index < cuda_device_count;
+         ++device_index)
+    {
+        const QString name = QString::fromStdString(
+            xjw::mvs::PatchMatchDepthEstimator::cudaDeviceName(device_index));
+        if (name.isEmpty())
+        {
+            continue;
+        }
+        cuda_lines.append(QStringLiteral("[%1] %2").arg(device_index).arg(name));
+        const QString identity = QString::fromStdString(
+            xjw::mvs::PatchMatchDepthEstimator::cudaDeviceIdentity(device_index));
+        if (!identity.isEmpty())
+        {
+            cuda_identities.insert(identity);
+        }
+    }
+    _cudaAvailable = !cuda_lines.isEmpty();
+
+    QStringList opencl_lines;
+    int independent_opencl_devices = 0;
+    const std::vector<xjw::mvs::OpenClDeviceInfo> opencl_devices =
+        xjw::mvs::PatchMatchDepthEstimator::openClDevices();
+    for (const xjw::mvs::OpenClDeviceInfo &device : opencl_devices)
+    {
+        const QString identity = QString::fromStdString(
+            device.physicalDeviceIdentity);
+        const bool duplicates_cuda = !identity.isEmpty() &&
+            cuda_identities.contains(identity);
+        if (!duplicates_cuda)
+        {
+            ++independent_opencl_devices;
+        }
+        const double memory_gib = static_cast<double>(device.globalMemoryBytes) /
+            (1024.0 * 1024.0 * 1024.0);
+        QString detail = QStringLiteral("[%1] %2 · %3 · %4 CU")
+            .arg(device.index)
+            .arg(QString::fromStdString(device.vendor))
+            .arg(QString::fromStdString(device.name))
+            .arg(device.computeUnits);
+        if (memory_gib > 0.0)
+        {
+            detail += QStringLiteral(" · %1 GiB").arg(memory_gib, 0, 'f', 1);
+        }
+        if (duplicates_cuda)
+        {
+            detail += QStringLiteral("（与 CUDA 为同一物理设备，混合模式会去重）");
+        }
+        opencl_lines.append(detail);
+    }
+    _openClAvailable = !opencl_lines.isEmpty();
+    _hybridAvailable = _cudaAvailable && independent_opencl_devices > 0;
+
+    QPalette cuda_palette = _cudaDeviceStatusLabel->palette();
+    cuda_palette.setColor(
+        QPalette::WindowText,
+        _cudaAvailable ? QColor(35, 110, 70) : QColor(180, 45, 45));
+    _cudaDeviceStatusLabel->setPalette(cuda_palette);
+    _cudaDeviceStatusLabel->setText(
+        _cudaAvailable
+            ? QStringLiteral("可用，共 %1 个设备\n%2")
+                  .arg(cuda_lines.size())
+                  .arg(cuda_lines.join(QLatin1Char('\n')))
+            : QStringLiteral("不可用：当前构建或驱动未提供可用 CUDA 设备"));
+
+    QPalette opencl_palette = _openClDeviceStatusLabel->palette();
+    opencl_palette.setColor(
+        QPalette::WindowText,
+        _openClAvailable ? QColor(35, 110, 70) : QColor(180, 45, 45));
+    _openClDeviceStatusLabel->setPalette(opencl_palette);
+    _openClDeviceStatusLabel->setText(
+        _openClAvailable
+            ? QStringLiteral("可用，共 %1 个设备\n%2")
+                  .arg(opencl_lines.size())
+                  .arg(opencl_lines.join(QLatin1Char('\n')))
+            : QStringLiteral(
+                  "不可用：未检测到同时支持运行和在线编译的 OpenCL GPU"));
+
+    auto set_mode_enabled = [this](const char *mode, bool enabled)
+    {
+        const int index = _modelComputeModeCombo->findData(
+            QString::fromLatin1(mode));
+        auto *model = qobject_cast<QStandardItemModel *>(
+            _modelComputeModeCombo->model());
+        if (model && index >= 0)
+        {
+            if (QStandardItem *item = model->item(index))
+            {
+                item->setEnabled(enabled);
+            }
+        }
+    };
+    set_mode_enabled(kCudaComputeMode, _cudaAvailable);
+    set_mode_enabled(kOpenClComputeMode, _openClAvailable);
+    set_mode_enabled(kHybridComputeMode, _hybridAvailable);
+
+    const QString selected_mode = _modelComputeModeCombo->currentData().toString();
+    const bool selected_available =
+        (selected_mode == QLatin1String(kCudaComputeMode) && _cudaAvailable) ||
+        (selected_mode == QLatin1String(kOpenClComputeMode) && _openClAvailable) ||
+        (selected_mode == QLatin1String(kHybridComputeMode) && _hybridAvailable);
+    if (!selected_available)
+    {
+        const QString fallback_mode = _hybridAvailable
+            ? QString::fromLatin1(kHybridComputeMode)
+            : (_cudaAvailable
+                   ? QString::fromLatin1(kCudaComputeMode)
+                   : (_openClAvailable
+                          ? QString::fromLatin1(kOpenClComputeMode)
+                          : selected_mode));
+        const int fallback_index = _modelComputeModeCombo->findData(fallback_mode);
+        if (fallback_index >= 0)
+        {
+            _modelComputeModeCombo->setCurrentIndex(fallback_index);
+        }
+    }
+    _modelComputeModeCombo->setEnabled(_cudaAvailable || _openClAvailable);
+    refreshModelComputePolicy();
+}
+
+void WorkflowSettingsDialog::refreshModelComputePolicy()
+{
+    if (!_modelComputeModeCombo || !_modelComputePolicyLabel)
+    {
+        return;
+    }
+
+    const QString mode = _modelComputeModeCombo->currentData().toString();
+    QString policy;
+    bool available = false;
+    if (mode == QLatin1String(kCudaComputeMode))
+    {
+        available = _cudaAvailable;
+        policy = QStringLiteral(
+            "深度图估计、点云预处理和可用的模型求解阶段仅使用 CUDA；"
+            "不会调度 OpenCL 设备。");
+    }
+    else if (mode == QLatin1String(kOpenClComputeMode))
+    {
+        available = _openClAvailable;
+        policy = QStringLiteral(
+            "深度图估计和点云预处理仅使用 OpenCL；不会调用 CUDA。"
+            "当前尚无 OpenCL Poisson 求解器，该步骤会使用 CPU。");
+    }
+    else
+    {
+        available = _hybridAvailable;
+        policy = QStringLiteral(
+            "深度图估计会并行调度 CUDA 与独立 OpenCL GPU；"
+            "同一物理显卡的重复接口会自动去重。模型预处理优先 OpenCL，"
+            "Poisson 求解使用 CUDA。");
+    }
+
+    QPalette palette = _modelComputePolicyLabel->palette();
+    palette.setColor(
+        QPalette::WindowText,
+        available ? QColor(35, 80, 120) : QColor(180, 45, 45));
+    _modelComputePolicyLabel->setPalette(palette);
+    _modelComputePolicyLabel->setText(
+        available
+            ? policy
+            : QStringLiteral("当前机器不满足该模式：") + policy);
 }

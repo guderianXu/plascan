@@ -6775,6 +6775,36 @@ TEST(MeshWorkflowSettingsTest, ArbitrarySourceKeepsPoissonAndHonorsFaceBudget)
     EXPECT_GE(config.smoothIterations, 4);
 }
 
+TEST(MeshWorkflowSettingsTest, MapsModelComputeModesToIndependentGpuStages)
+{
+    const auto cuda_config =
+        xjw::mesh::workflow::reconstructionConfigFromModelSettings(
+            QJsonObject{{QStringLiteral("compute_mode"),
+                         QStringLiteral("cuda")}});
+    EXPECT_EQ(cuda_config.preprocessingDevice,
+              plapoint::ProcessingDevice::CUDA);
+    EXPECT_EQ(cuda_config.poissonSolverDevice,
+              plapoint::ProcessingDevice::CUDA);
+
+    const auto opencl_config =
+        xjw::mesh::workflow::reconstructionConfigFromModelSettings(
+            QJsonObject{{QStringLiteral("compute_mode"),
+                         QStringLiteral("opencl")}});
+    EXPECT_EQ(opencl_config.preprocessingDevice,
+              plapoint::ProcessingDevice::OpenCL);
+    EXPECT_EQ(opencl_config.poissonSolverDevice,
+              plapoint::ProcessingDevice::CPU);
+
+    const auto hybrid_config =
+        xjw::mesh::workflow::reconstructionConfigFromModelSettings(
+            QJsonObject{{QStringLiteral("compute_mode"),
+                         QStringLiteral("hybrid")}});
+    EXPECT_EQ(hybrid_config.preprocessingDevice,
+              plapoint::ProcessingDevice::OpenCL);
+    EXPECT_EQ(hybrid_config.poissonSolverDevice,
+              plapoint::ProcessingDevice::CUDA);
+}
+
 TEST(MeshWorkflowSettingsTest, DepthMapsDefaultToDepthTsdf)
 {
     const QJsonObject settings{

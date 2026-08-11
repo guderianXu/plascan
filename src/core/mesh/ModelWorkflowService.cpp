@@ -3254,6 +3254,39 @@ xjw::mesh::ReconstructionConfig reconstructionConfigFromModelSettings(const QJso
 {
     xjw::mesh::ReconstructionConfig config;
 
+    QString compute_mode = settings.value(QStringLiteral("compute_mode"))
+        .toString()
+        .trimmed()
+        .toLower();
+    if (compute_mode.isEmpty())
+    {
+        compute_mode = settings.value(QStringLiteral("processingDevice"))
+            .toString()
+            .trimmed()
+            .toLower();
+    }
+    if (compute_mode == QStringLiteral("cuda"))
+    {
+        config.preprocessingDevice = plapoint::ProcessingDevice::CUDA;
+        config.poissonSolverDevice = plapoint::ProcessingDevice::CUDA;
+    }
+    else if (compute_mode == QStringLiteral("opencl"))
+    {
+        config.preprocessingDevice = plapoint::ProcessingDevice::OpenCL;
+        // PlaPoint currently has no OpenCL Poisson linear solver. Explicit
+        // OpenCL mode must not silently invoke CUDA, so this stage stays CPU.
+        config.poissonSolverDevice = plapoint::ProcessingDevice::CPU;
+    }
+    else if (compute_mode == QStringLiteral("hybrid"))
+    {
+        // Split independent model stages so both physical GPUs stay useful:
+        // OpenCL handles point preprocessing/height grids while CUDA handles
+        // the Poisson solve. Automatic depth generation independently uses
+        // PatchMatch Auto, which schedules CUDA and OpenCL frame workers.
+        config.preprocessingDevice = plapoint::ProcessingDevice::OpenCL;
+        config.poissonSolverDevice = plapoint::ProcessingDevice::CUDA;
+    }
+
     const QString surfaceType =
         settings.value(QStringLiteral("surface_type")).toString(QStringLiteral("arbitrary_3d"));
     config.resolution = meshResolutionFromSettings(settings);

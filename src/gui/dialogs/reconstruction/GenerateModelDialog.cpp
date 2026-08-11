@@ -33,6 +33,7 @@ constexpr const char *kDepthQualityProfile = "depth_quality_profile";
 constexpr const char *kDepthBatchCompatible = "depth_batch_compatible";
 constexpr const char *kDepthBatchCompatibilityReason =
     "depth_batch_compatibility_reason";
+constexpr const char *kComputeMode = "compute_mode";
 
 QString defaultSourceLabel(const QString &sourceData)
 {
@@ -332,6 +333,28 @@ void GenerateModelDialog::applySettings(const QJsonObject &settings)
     _pendingSourceData = settings.value(QLatin1String(kSourceData)).toString();
     _pendingSourcePath = settings.value(QLatin1String(kSourcePath)).toString(
         settings.value(QStringLiteral("denseCloudPath")).toString());
+    QString compute_mode = settings.value(QLatin1String(kComputeMode))
+        .toString()
+        .trimmed()
+        .toLower();
+    if (compute_mode.isEmpty())
+    {
+        const QString backend = settings.value(
+            QStringLiteral("patch_match_backend")).toString(
+                settings.value(QStringLiteral("processingDevice")).toString())
+            .trimmed()
+            .toLower();
+        compute_mode = backend == QStringLiteral("cuda") ||
+                backend == QStringLiteral("opencl")
+            ? backend
+            : QStringLiteral("hybrid");
+    }
+    if (compute_mode == QStringLiteral("cuda") ||
+        compute_mode == QStringLiteral("opencl") ||
+        compute_mode == QStringLiteral("hybrid"))
+    {
+        _computeMode = compute_mode;
+    }
 
     const QString surfaceType = settings.value(QStringLiteral("surface_type")).toString();
     if (!surfaceType.isEmpty())
@@ -523,6 +546,15 @@ QJsonObject GenerateModelDialog::collectSettings() const
         (sourceData == QStringLiteral("depth_maps") &&
          !reuse_depth_maps);
     settings[QStringLiteral("replaceDefaultModel")] = _replaceDefaultCheck->isChecked();
+    settings[QLatin1String(kComputeMode)] = _computeMode;
+    settings[QStringLiteral("patch_match_backend")] =
+        _computeMode == QStringLiteral("hybrid")
+            ? QStringLiteral("auto")
+            : _computeMode;
+    settings[QStringLiteral("processingDevice")] =
+        _computeMode == QStringLiteral("hybrid")
+            ? QStringLiteral("auto")
+            : _computeMode;
 
     if (sourceData == QStringLiteral("point_cloud")
         || sourceData == QStringLiteral("tie_points")

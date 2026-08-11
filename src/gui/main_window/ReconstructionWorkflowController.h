@@ -110,4 +110,5 @@ private:
     DialogSettingStore *_createPointCloudStore = nullptr;
     DialogSettingStore *_generateModelStore = nullptr;
     DialogSettingStore *_texStore          = nullptr;
+    DialogSettingStore *_workflowSettingsStore = nullptr;
 };

@@ -823,6 +823,7 @@ add_executable(test_workflow_settings_dialog
 )
 target_link_libraries(test_workflow_settings_dialog PRIVATE
     matchphototask
+    mvs
     plascan_common_model
     Qt6::Core
     Qt6::Gui
@@ -835,6 +836,7 @@ target_include_directories(test_workflow_settings_dialog PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/matchphototask
     ${CMAKE_SOURCE_DIR}/src/core/matchphototask/runtime
     ${CMAKE_SOURCE_DIR}/src/core/matchphototask/task
+    ${CMAKE_SOURCE_DIR}/src/core/mvs
 )
 gtest_discover_tests(test_workflow_settings_dialog
     DISCOVERY_TIMEOUT 60

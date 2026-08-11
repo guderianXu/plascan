@@ -4,6 +4,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QMetaObject>
+#include <QString>
 
 class QCheckBox;
 class QComboBox;
@@ -59,6 +60,7 @@ private:
     QJsonArray _candidates;
     QString _pendingSourceData;
     QString _pendingSourcePath;
+    QString _computeMode = QStringLiteral("hybrid");
     bool _hasReusableDepthMaps = false;
     bool _reuseDepthMapsRequested = true;
 

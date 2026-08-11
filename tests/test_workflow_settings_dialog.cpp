@@ -1,4 +1,5 @@
 #include "application/WorkflowSettingsDialog.h"
+#include "PatchMatchCUDA.h"
 
 #include <QApplication>
 #include <QComboBox>
@@ -24,18 +25,27 @@ QJsonObject aerialSettings(const QJsonObject &settings)
         .toObject();
 }
 
+QJsonObject modelSettings(const QJsonObject &settings)
+{
+    return settings.value(QStringLiteral("workflows"))
+        .toObject()
+        .value(QStringLiteral("generate_model"))
+        .toObject();
+}
+
 } // namespace
 
 TEST(WorkflowSettingsDialogTest, DefaultsUseWorkflowScopedSchema)
 {
     const QJsonObject settings = WorkflowSettingsDialog::defaultSettings();
-    EXPECT_EQ(settings.value(QStringLiteral("workflow_settings_version")).toInt(), 5);
+    EXPECT_EQ(settings.value(QStringLiteral("workflow_settings_version")).toInt(), 6);
     EXPECT_EQ(settings.value(QStringLiteral("selected_workflow")).toString(),
               QStringLiteral("aerial_triangulation"));
 
     const QJsonObject workflows = settings.value(QStringLiteral("workflows")).toObject();
     EXPECT_TRUE(workflows.contains(QStringLiteral("aerial_triangulation")));
     EXPECT_TRUE(workflows.contains(QStringLiteral("reconstruction")));
+    EXPECT_TRUE(workflows.contains(QStringLiteral("generate_model")));
     EXPECT_TRUE(workflows.contains(QStringLiteral("dem")));
     EXPECT_TRUE(workflows.contains(QStringLiteral("orthomosaic")));
 
@@ -45,11 +55,13 @@ TEST(WorkflowSettingsDialogTest, DefaultsUseWorkflowScopedSchema)
     EXPECT_TRUE(aerial.value(QStringLiteral("lightglue_tensorrt_engine")).toString().isEmpty());
     EXPECT_TRUE(aerial.value(QStringLiteral("loma_r_tensorrt_package")).toString().isEmpty());
     EXPECT_EQ(aerial.value(QStringLiteral("loma_r_keypoint_budget")).toInt(), 0);
+    EXPECT_EQ(modelSettings(settings).value(QStringLiteral("compute_mode")).toString(),
+              QStringLiteral("hybrid"));
     EXPECT_FALSE(settings.contains(QStringLiteral("threads")));
     EXPECT_FALSE(settings.contains(QStringLiteral("geometry_max_iterations")));
 }
 
-TEST(WorkflowSettingsDialogTest, ExposesFourWorkflowPagesAndLabelsUnavailableSettings)
+TEST(WorkflowSettingsDialogTest, ExposesModelGenerationComputeModesAndDeviceDetection)
 {
     WorkflowSettingsDialog dialog;
     auto *workflowSelector = dialog.findChild<QComboBox *>(QStringLiteral("workflowSelector"));
@@ -63,13 +75,61 @@ TEST(WorkflowSettingsDialogTest, ExposesFourWorkflowPagesAndLabelsUnavailableSet
     ASSERT_NE(workflowPages, nullptr);
     ASSERT_NE(algorithmSelector, nullptr);
     ASSERT_NE(downloadButton, nullptr);
-    EXPECT_EQ(workflowSelector->count(), 4);
+    EXPECT_EQ(workflowSelector->count(), 5);
     EXPECT_EQ(workflowSelector->currentData().toString(),
               QStringLiteral("aerial_triangulation"));
     EXPECT_TRUE(workflowPages->currentWidget()->isEnabled());
     EXPECT_GE(algorithmSelector->findData(QStringLiteral("sift_lightglue")), 0);
     EXPECT_GE(algorithmSelector->findData(QStringLiteral("cuda_sift")), 0);
     EXPECT_GE(algorithmSelector->findData(QStringLiteral("loma_r")), 0);
+
+    workflowSelector->setCurrentIndex(
+        workflowSelector->findData(QStringLiteral("generate_model")));
+    auto *computeMode = workflowPages->currentWidget()->findChild<QComboBox *>(
+        QStringLiteral("modelComputeModeCombo"));
+    auto *cudaStatus = workflowPages->currentWidget()->findChild<QLabel *>(
+        QStringLiteral("modelCudaDeviceStatusLabel"));
+    auto *openClStatus = workflowPages->currentWidget()->findChild<QLabel *>(
+        QStringLiteral("modelOpenClDeviceStatusLabel"));
+    auto *policy = workflowPages->currentWidget()->findChild<QLabel *>(
+        QStringLiteral("modelComputePolicyLabel"));
+    auto *detectButton = workflowPages->currentWidget()->findChild<QPushButton *>(
+        QStringLiteral("modelDetectComputeDevicesButton"));
+    ASSERT_NE(computeMode, nullptr);
+    ASSERT_NE(cudaStatus, nullptr);
+    ASSERT_NE(openClStatus, nullptr);
+    ASSERT_NE(policy, nullptr);
+    ASSERT_NE(detectButton, nullptr);
+    EXPECT_EQ(computeMode->count(), 3);
+    EXPECT_GE(computeMode->findData(QStringLiteral("cuda")), 0);
+    EXPECT_GE(computeMode->findData(QStringLiteral("opencl")), 0);
+    EXPECT_GE(computeMode->findData(QStringLiteral("hybrid")), 0);
+    EXPECT_FALSE(cudaStatus->text().isEmpty());
+    EXPECT_FALSE(openClStatus->text().isEmpty());
+    EXPECT_FALSE(policy->text().isEmpty());
+
+    const int cuda_device_count =
+        xjw::mvs::PatchMatchDepthEstimator::cudaDeviceCount();
+    for (int device_index = 0;
+         device_index < cuda_device_count;
+         ++device_index)
+    {
+        const QString device_name = QString::fromStdString(
+            xjw::mvs::PatchMatchDepthEstimator::cudaDeviceName(device_index));
+        if (!device_name.isEmpty())
+        {
+            EXPECT_TRUE(cudaStatus->text().contains(device_name));
+        }
+    }
+    const auto opencl_devices =
+        xjw::mvs::PatchMatchDepthEstimator::openClDevices();
+    for (const xjw::mvs::OpenClDeviceInfo &device : opencl_devices)
+    {
+        EXPECT_TRUE(openClStatus->text().contains(
+            QString::fromStdString(device.name)));
+        EXPECT_TRUE(openClStatus->text().contains(
+            QString::fromStdString(device.vendor)));
+    }
 
     workflowSelector->setCurrentIndex(
         workflowSelector->findData(QStringLiteral("reconstruction")));
@@ -79,6 +139,28 @@ TEST(WorkflowSettingsDialogTest, ExposesFourWorkflowPagesAndLabelsUnavailableSet
     ASSERT_NE(unavailableMessage, nullptr);
     EXPECT_TRUE(unavailableMessage->text().contains(QStringLiteral("尚未开放")));
     EXPECT_TRUE(workflowPages->currentWidget()->findChildren<QComboBox *>().isEmpty());
+}
+
+TEST(WorkflowSettingsDialogTest, NormalizesModelGenerationComputeMode)
+{
+    QJsonObject settings = WorkflowSettingsDialog::defaultSettings();
+    QJsonObject workflows = settings.value(QStringLiteral("workflows")).toObject();
+    workflows[QStringLiteral("generate_model")] = QJsonObject{
+        {QStringLiteral("compute_mode"), QStringLiteral("OPENCL")}};
+    settings[QStringLiteral("workflows")] = workflows;
+
+    EXPECT_EQ(WorkflowSettingsDialog::modelGenerationSettings(settings)
+                  .value(QStringLiteral("compute_mode"))
+                  .toString(),
+              QStringLiteral("opencl"));
+
+    workflows[QStringLiteral("generate_model")] = QJsonObject{
+        {QStringLiteral("compute_mode"), QStringLiteral("invalid")}};
+    settings[QStringLiteral("workflows")] = workflows;
+    EXPECT_EQ(WorkflowSettingsDialog::modelGenerationSettings(settings)
+                  .value(QStringLiteral("compute_mode"))
+                  .toString(),
+              QStringLiteral("hybrid"));
 }
 
 TEST(WorkflowSettingsDialogTest, CudaSiftRequiresNoExternalModel)
@@ -179,7 +261,7 @@ TEST(WorkflowSettingsDialogTest, MigratesLegacyFlatSettingsWithoutKeepingTuningF
 
     dialog.applySettings(legacy);
     const QJsonObject collected = dialog.collectSettings();
-    EXPECT_EQ(collected.value(QStringLiteral("workflow_settings_version")).toInt(), 5);
+    EXPECT_EQ(collected.value(QStringLiteral("workflow_settings_version")).toInt(), 6);
     EXPECT_EQ(
         aerialSettings(collected).value(QStringLiteral("lightglue_tensorrt_engine")).toString(),
         QStringLiteral("D:/legacy/lightglue.engine"));

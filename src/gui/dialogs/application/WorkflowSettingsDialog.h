@@ -24,7 +24,7 @@ class WorkflowSettingsDialog final : public QDialog
 public:
     explicit WorkflowSettingsDialog(QWidget *parent = nullptr);
 
-    /// 返回 v5 工作流程分组配置，包含算法专用 TensorRT 资源路径和 LoMa-R 档位。
+    /// 返回 v6 工作流程分组配置，包含算法资源和生成模型计算模式。
     static QJsonObject defaultSettings();
 
     /**
@@ -35,10 +35,13 @@ public:
      */
     static QJsonObject aerialTriangulationSettings(const QJsonObject &settings);
 
-    /// 从项目级 JSON 恢复控件，旧版配置会在内存中迁移到 v5。
+    /// 提取并规范化生成模型设置；计算模式为 cuda/opencl/hybrid 之一。
+    static QJsonObject modelGenerationSettings(const QJsonObject &settings);
+
+    /// 从项目级 JSON 恢复控件，旧版配置会在内存中迁移到 v6。
     void applySettings(const QJsonObject &settings);
 
-    /// 收集按工作流程分组的 v5 配置。
+    /// 收集按工作流程分组的 v6 配置。
     QJsonObject collectSettings() const;
 
 private:
@@ -56,6 +59,10 @@ private:
     void refreshMatchingResourceStatus();
     /// 下载当前算法所需的预构建 TensorRT 包，并将入口文件写回设置。
     void downloadCurrentModelPackage();
+    /// 枚举 CUDA/OpenCL 设备并刷新模式可用性和设备摘要。
+    void refreshModelComputeDevices();
+    /// 根据选中的生成模型计算模式显示实际阶段路由。
+    void refreshModelComputePolicy();
 
     QComboBox *_workflowCombo = nullptr;
     QStackedWidget *_workflowPages = nullptr;
@@ -65,6 +72,14 @@ private:
     QToolButton *_matchingResourceBrowseButton = nullptr;
     QPushButton *_downloadModelButton = nullptr;
     QLabel *_matchingResourceStatusLabel = nullptr;
+    QComboBox *_modelComputeModeCombo = nullptr;
+    QLabel *_cudaDeviceStatusLabel = nullptr;
+    QLabel *_openClDeviceStatusLabel = nullptr;
+    QLabel *_modelComputePolicyLabel = nullptr;
+    QPushButton *_detectComputeDevicesButton = nullptr;
+    bool _cudaAvailable = false;
+    bool _openClAvailable = false;
+    bool _hybridAvailable = false;
     QString _currentAlgorithmId;
     QString _lightGlueEnginePath;
     QString _lomaRPackagePath;

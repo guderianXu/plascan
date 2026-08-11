@@ -2506,6 +2506,51 @@ TEST(GenerateModelDialogTest, AcceptsBeforeDispatchingModelWorkflow)
               QStringLiteral("PLY"));
 }
 
+TEST(GenerateModelDialogTest, PropagatesWorkflowComputeModeToDepthAndModelStages)
+{
+    const QJsonObject depth_maps{
+        {QStringLiteral("source_data"), QStringLiteral("depth_maps")},
+        {QStringLiteral("source_label"), QStringLiteral("深度图")},
+        {QStringLiteral("source_path"), QStringLiteral("E:/tmp/mvs_output")},
+        {QStringLiteral("display"), QStringLiteral("深度图 - mvs_output")},
+        {QStringLiteral("supported"), true}};
+
+    GenerateModelDialog dialog;
+    dialog.applySettings(QJsonObject{
+        {QStringLiteral("compute_mode"), QStringLiteral("opencl")}});
+    dialog.setSourceCandidates(QJsonArray{depth_maps});
+
+    QSignalSpy run_spy(&dialog, &GenerateModelDialog::runRequested);
+    ASSERT_TRUE(QMetaObject::invokeMethod(&dialog, "onRun", Qt::DirectConnection));
+    ASSERT_EQ(run_spy.count(), 1);
+    const QJsonObject settings = run_spy.at(0).at(0).toJsonObject();
+    EXPECT_EQ(settings.value(QStringLiteral("compute_mode")).toString(),
+              QStringLiteral("opencl"));
+    EXPECT_EQ(settings.value(QStringLiteral("patch_match_backend")).toString(),
+              QStringLiteral("opencl"));
+    EXPECT_EQ(settings.value(QStringLiteral("processingDevice")).toString(),
+              QStringLiteral("opencl"));
+
+    GenerateModelDialog hybrid_dialog;
+    hybrid_dialog.applySettings(QJsonObject{
+        {QStringLiteral("compute_mode"), QStringLiteral("hybrid")}});
+    hybrid_dialog.setSourceCandidates(QJsonArray{depth_maps});
+    QSignalSpy hybrid_run_spy(
+        &hybrid_dialog, &GenerateModelDialog::runRequested);
+    ASSERT_TRUE(QMetaObject::invokeMethod(
+        &hybrid_dialog, "onRun", Qt::DirectConnection));
+    ASSERT_EQ(hybrid_run_spy.count(), 1);
+    const QJsonObject hybrid_settings =
+        hybrid_run_spy.at(0).at(0).toJsonObject();
+    EXPECT_EQ(hybrid_settings.value(QStringLiteral("compute_mode")).toString(),
+              QStringLiteral("hybrid"));
+    EXPECT_EQ(
+        hybrid_settings.value(QStringLiteral("patch_match_backend")).toString(),
+        QStringLiteral("auto"));
+    EXPECT_EQ(hybrid_settings.value(QStringLiteral("processingDevice")).toString(),
+              QStringLiteral("auto"));
+}
+
 TEST(TerrainPipelineAsyncTest, TerrainProductsManagerDropsBlockingUiWrappers)
 {
     const QString header = readProjectSourceFile(
