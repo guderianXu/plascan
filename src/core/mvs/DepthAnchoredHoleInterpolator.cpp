@@ -286,43 +286,75 @@ DepthAnchoredHoleInterpolationStats interpolateAnchoredInternalDepthHoles(
             boundary_inverse_depths.end());
         const float initial_inverse_depth =
             boundary_inverse_depths[boundary_inverse_depths.size() / 2];
-        cv::Mat inverse_values(depth.size(), CV_32FC1, cv::Scalar(0.0f));
+        // Components are independent and bounded by their connected-component
+        // rectangle. Allocating an image-sized scratch matrix for every small
+        // hole made full-resolution streaming consistency repeatedly commit
+        // tens of MiB even when the component covered only a few pixels.
+        cv::Mat inverse_values(height, width, CV_32FC1, cv::Scalar(0.0f));
         for (const cv::Point &pixel : pixels)
         {
-            inverse_values.at<float>(pixel.y, pixel.x) = initial_inverse_depth;
+            inverse_values.at<float>(pixel.y - top, pixel.x - left) =
+                initial_inverse_depth;
+        }
+        std::vector<cv::Vec4f> guide_weights(
+            pixels.size(), cv::Vec4f::all(0.0f));
+        std::vector<cv::Vec4b> component_neighbors(
+            pixels.size(), cv::Vec4b::all(0));
+        std::vector<cv::Vec4f> boundary_inverse_depth(
+            pixels.size(), cv::Vec4f::all(0.0f));
+        for (std::size_t pixel_index = 0;
+             pixel_index < pixels.size();
+             ++pixel_index)
+        {
+            const cv::Point &pixel = pixels[pixel_index];
+            const float center_guide = guide.at<float>(pixel.y, pixel.x);
+            for (int offset_index = 0; offset_index < 4; ++offset_index)
+            {
+                const int neighbor_row = pixel.y + offsets[offset_index][0];
+                const int neighbor_column = pixel.x + offsets[offset_index][1];
+                guide_weights[pixel_index][offset_index] = std::exp(
+                    -std::fabs(
+                        center_guide -
+                        guide.at<float>(neighbor_row, neighbor_column)) /
+                    guide_sigma);
+                if (labels.at<int>(neighbor_row, neighbor_column) == label)
+                {
+                    component_neighbors[pixel_index][offset_index] = 1;
+                    continue;
+                }
+                const float neighbor_depth =
+                    depth.at<float>(neighbor_row, neighbor_column);
+                boundary_inverse_depth[pixel_index][offset_index] =
+                    isValidDepth(neighbor_depth) ? 1.0f / neighbor_depth : 0.0f;
+            }
         }
 
         for (int iteration = 0; iteration < maximum_iterations; ++iteration)
         {
             float maximum_delta = 0.0f;
-            for (const cv::Point &pixel : pixels)
+            for (std::size_t pixel_index = 0;
+                 pixel_index < pixels.size();
+                 ++pixel_index)
             {
+                const cv::Point &pixel = pixels[pixel_index];
                 float weighted_sum = 0.0f;
                 float weight_sum = 0.0f;
-                const float center_guide = guide.at<float>(pixel.y, pixel.x);
-                for (const auto &offset : offsets)
+                for (int offset_index = 0; offset_index < 4; ++offset_index)
                 {
-                    const int neighbor_row = pixel.y + offset[0];
-                    const int neighbor_column = pixel.x + offset[1];
-                    float neighbor_inverse_depth = 0.0f;
-                    if (labels.at<int>(neighbor_row, neighbor_column) == label)
+                    const int neighbor_row =
+                        pixel.y + offsets[offset_index][0];
+                    const int neighbor_column =
+                        pixel.x + offsets[offset_index][1];
+                    const float neighbor_inverse_depth =
+                        component_neighbors[pixel_index][offset_index] != 0
+                        ? inverse_values.at<float>(
+                              neighbor_row - top, neighbor_column - left)
+                        : boundary_inverse_depth[pixel_index][offset_index];
+                    if (neighbor_inverse_depth <= 0.0f)
                     {
-                        neighbor_inverse_depth =
-                            inverse_values.at<float>(neighbor_row, neighbor_column);
+                        continue;
                     }
-                    else
-                    {
-                        const float neighbor_depth =
-                            depth.at<float>(neighbor_row, neighbor_column);
-                        if (!isValidDepth(neighbor_depth))
-                        {
-                            continue;
-                        }
-                        neighbor_inverse_depth = 1.0f / neighbor_depth;
-                    }
-                    const float guide_difference = std::fabs(
-                        center_guide - guide.at<float>(neighbor_row, neighbor_column));
-                    const float weight = std::exp(-guide_difference / guide_sigma);
+                    const float weight = guide_weights[pixel_index][offset_index];
                     weighted_sum += weight * neighbor_inverse_depth;
                     weight_sum += weight;
                 }
@@ -330,7 +362,8 @@ DepthAnchoredHoleInterpolationStats interpolateAnchoredInternalDepthHoles(
                 {
                     continue;
                 }
-                float &stored = inverse_values.at<float>(pixel.y, pixel.x);
+                float &stored = inverse_values.at<float>(
+                    pixel.y - top, pixel.x - left);
                 const float updated = weighted_sum / weight_sum;
                 maximum_delta = std::max(maximum_delta, std::fabs(updated - stored));
                 stored = updated;
@@ -343,7 +376,8 @@ DepthAnchoredHoleInterpolationStats interpolateAnchoredInternalDepthHoles(
 
         for (const cv::Point &pixel : pixels)
         {
-            const float inverse_depth = inverse_values.at<float>(pixel.y, pixel.x);
+            const float inverse_depth = inverse_values.at<float>(
+                pixel.y - top, pixel.x - left);
             if (!std::isfinite(inverse_depth) || inverse_depth <= 1.0e-8f)
             {
                 continue;

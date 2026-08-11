@@ -7054,6 +7054,10 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
         QString filteredAdaptiveSupportWeightPath;
         QString filteredAdaptiveEffectiveViewCountPath;
         QString filteredAdaptiveConflictRatioPath;
+        QString filteredCrossViewRepairedMaskPath;
+        QString filteredResidualReestimatedMaskPath;
+        QString filteredDepthProvenancePath;
+        QString filteredMissingReasonPath;
         int frameIndex = -1;
     };
     std::vector<PendingDepthReplacement> pending_replacements;
@@ -7075,6 +7079,10 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 QFile::remove(replacement.filteredAdaptiveEffectiveViewCountPath);
                 QFile::remove(replacement.filteredAdaptiveConflictRatioPath);
             }
+            QFile::remove(replacement.filteredCrossViewRepairedMaskPath);
+            QFile::remove(replacement.filteredResidualReestimatedMaskPath);
+            QFile::remove(replacement.filteredDepthProvenancePath);
+            QFile::remove(replacement.filteredMissingReasonPath);
         }
     };
 
@@ -7083,6 +7091,7 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
 
     for (int frame_index = 0; frame_index < view_count; ++frame_index)
     {
+        const auto frame_start = Clock::now();
         if (_cancelled.load())
         {
             remove_pending_files();
@@ -7308,6 +7317,7 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             }
         }
         flush_consistency_batch();
+        const auto source_stage_end = Clock::now();
 
         cv::Mat repair_mask = _depthFrames[frame_index].supportRegionMask &&
                 !_depthFrames[frame_index].supportRegionMask->empty()
@@ -7403,6 +7413,7 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 &filtered_depth,
                 filtered_confidence.empty() ? nullptr : &filtered_confidence);
         }
+        const auto layer_stage_end = Clock::now();
         cv::Mat anchored_interpolation_mask;
         emit progressChanged(
             QStringLiteral("流式多视一致性：帧 %1/%2，修复内部缺口")
@@ -7508,12 +7519,19 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             restoration_mask);
         _depthFrames[frame_index].depthCompleteness.restoredFromPrefilterCount +=
             restored_count;
+        const auto repair_stage_end = Clock::now();
         DepthResidualReestimationStats residual_stats;
         cv::Mat residual_reestimated_mask;
         if (_config.enablePostConsistencyResidualReestimation &&
             _effectiveSceneProfile == MvsSceneProfile::OrbitalObject &&
             referenceImageLease)
         {
+            emit progressChanged(
+                QStringLiteral("流式多视一致性：帧 %1/%2，残余缺口局部重估")
+                    .arg(frame_index + 1)
+                    .arg(view_count),
+                static_cast<float>(completed_frames) /
+                    static_cast<float>(std::max(1, view_count)));
             std::vector<cv::Mat> residual_projected_sources;
             std::vector<int> residual_sector_ids;
             std::vector<cv::Mat> residual_source_images;
@@ -7746,6 +7764,13 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                         residual_reestimated_mask);
             }
         }
+        const auto residual_stage_end = Clock::now();
+        emit progressChanged(
+            QStringLiteral("流式多视一致性：帧 %1/%2，深度后处理")
+                .arg(frame_index + 1)
+                .arg(view_count),
+            static_cast<float>(completed_frames) /
+                static_cast<float>(std::max(1, view_count)));
         if (!filtered_confidence.empty())
         {
             filtered_confidence.setTo(0.0f, filtered_depth <= 0.0f);
@@ -7911,6 +7936,13 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             geometry_evidence.supportCount,
             contradicted_votes);
         const cv::Mat &geometry_support = geometry_evidence.supportCount;
+        const auto postprocess_stage_end = Clock::now();
+        emit progressChanged(
+            QStringLiteral("流式多视一致性：帧 %1/%2，写入结果")
+                .arg(frame_index + 1)
+                .arg(view_count),
+            static_cast<float>(completed_frames) /
+                static_cast<float>(std::max(1, view_count)));
 
         const QString original_path = storage_dir.filePath(
             QStringLiteral("depth_%1.bin").arg(frame_index));
@@ -7944,6 +7976,44 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                   "depth_%1_adaptive_geometry_conflict_ratio_consistency.bin")
                   .arg(frame_index))
             : QString();
+        const QString filtered_cross_view_repaired_mask_path = storage_dir.filePath(
+            QStringLiteral("depth_%1_cross_view_repaired_consistency.bin")
+                .arg(frame_index));
+        const QString filtered_residual_reestimated_mask_path = storage_dir.filePath(
+            QStringLiteral("depth_%1_residual_reestimated_consistency.bin")
+                .arg(frame_index));
+        const QString filtered_depth_provenance_path = storage_dir.filePath(
+            QStringLiteral("depth_%1_provenance_consistency.bin")
+                .arg(frame_index));
+        const QString filtered_missing_reason_path = storage_dir.filePath(
+            QStringLiteral("depth_%1_missing_reason_consistency.bin")
+                .arg(frame_index));
+
+        PendingDepthReplacement replacement;
+        replacement.originalPath = original_path;
+        replacement.filteredPath = filtered_path;
+        replacement.originalConfidencePath = original_confidence_path;
+        replacement.filteredConfidencePath = filtered_confidence.empty()
+            ? QString() : filtered_confidence_path;
+        replacement.filteredGeometrySupportPath = filtered_geometry_support_path;
+        replacement.filteredGeometrySourceMaskPath =
+            filtered_geometry_source_mask_path;
+        replacement.filteredInverseDepthMeanPath = filtered_inverse_depth_mean_path;
+        replacement.filteredInverseDepthSpreadPath = filtered_inverse_depth_spread_path;
+        replacement.filteredAdaptiveSupportWeightPath =
+            filtered_adaptive_support_weight_path;
+        replacement.filteredAdaptiveEffectiveViewCountPath =
+            filtered_adaptive_effective_view_count_path;
+        replacement.filteredAdaptiveConflictRatioPath =
+            filtered_adaptive_conflict_ratio_path;
+        replacement.filteredCrossViewRepairedMaskPath =
+            filtered_cross_view_repaired_mask_path;
+        replacement.filteredResidualReestimatedMaskPath =
+            filtered_residual_reestimated_mask_path;
+        replacement.filteredDepthProvenancePath = filtered_depth_provenance_path;
+        replacement.filteredMissingReasonPath = filtered_missing_reason_path;
+        replacement.frameIndex = frame_index;
+        pending_replacements.push_back(replacement);
         const xjw::common::OperationResult write_result =
             xjw::core::project::writeDepthMatStorage(filtered_path, filtered_depth);
         if (!write_result.ok)
@@ -8041,20 +8111,58 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 return false;
             }
         }
-        pending_replacements.push_back({original_path,
-                                        filtered_path,
-                                        original_confidence_path,
-                                        filtered_confidence.empty()
-                                            ? QString()
-                                            : filtered_confidence_path,
-                                        filtered_geometry_support_path,
-                                        filtered_geometry_source_mask_path,
-                                        filtered_inverse_depth_mean_path,
-                                        filtered_inverse_depth_spread_path,
-                                        filtered_adaptive_support_weight_path,
-                                        filtered_adaptive_effective_view_count_path,
-                                        filtered_adaptive_conflict_ratio_path,
-                                        frame_index});
+        auto write_optional_pixel_map = [](
+            const QString &path,
+            const QSharedPointer<cv::Mat> &matrix)
+            -> xjw::common::OperationResult
+        {
+            if (!matrix || matrix->empty())
+            {
+                QFile::remove(path);
+                return {true, QString()};
+            }
+            return xjw::core::project::writeDepthMatStorage(path, *matrix);
+        };
+        const xjw::common::OperationResult repaired_mask_result =
+            write_optional_pixel_map(
+                filtered_cross_view_repaired_mask_path,
+                _depthFrames[frame_index].crossViewRepairedMask);
+        const xjw::common::OperationResult residual_mask_result =
+            write_optional_pixel_map(
+                filtered_residual_reestimated_mask_path,
+                _depthFrames[frame_index].residualReestimatedMask);
+        const xjw::common::OperationResult provenance_result =
+            write_optional_pixel_map(
+                filtered_depth_provenance_path,
+                _depthFrames[frame_index].depthProvenance);
+        const xjw::common::OperationResult missing_reason_result =
+            write_optional_pixel_map(
+                filtered_missing_reason_path,
+                _depthFrames[frame_index].missingReasonMap);
+        if (!repaired_mask_result.ok || !residual_mask_result.ok ||
+            !provenance_result.ok || !missing_reason_result.ok)
+        {
+            const QString message = !repaired_mask_result.ok
+                ? repaired_mask_result.errorMessage
+                : (!residual_mask_result.ok
+                       ? residual_mask_result.errorMessage
+                       : (!provenance_result.ok
+                              ? provenance_result.errorMessage
+                              : missing_reason_result.errorMessage));
+            remove_pending_files();
+            emit errorOccurred(message);
+            return false;
+        }
+
+        // The transactional temporary files now own these per-frame pixel
+        // products. Keeping all masks resident until every frame completed was
+        // responsible for the linear, stair-step memory growth in streaming
+        // consistency. Metadata and diagnostics remain in DepthFrameResult.
+        _depthFrames[frame_index].crossViewRepairedMask.clear();
+        _depthFrames[frame_index].residualReestimatedMask.clear();
+        _depthFrames[frame_index].depthProvenance.clear();
+        _depthFrames[frame_index].missingReasonMap.clear();
+        const auto write_stage_end = Clock::now();
 
         ++completed_frames;
         const float ratio = static_cast<float>(completed_frames) /
@@ -8064,7 +8172,9 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             ratio);
         LOG_INFO(QStringLiteral(
                      "[MVS] 流式一致性 frame=%1 workers=%2 valid=%3->%4 sources=%5 "
-                     "twoSource=%6/%7 cache=%8/%9 MiB")
+                     "twoSource=%6/%7 cache=%8/%9 MiB "
+                     "timing_ms(source=%10 layer=%11 repair=%12 residual=%13 "
+                     "post=%14 write=%15 total=%16)")
                      .arg(frame_index)
                      .arg(row_workers)
                      .arg(valid_before)
@@ -8073,7 +8183,14 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                      .arg(repair_stats.twoSourceGrownPixelCount)
                      .arg(repair_stats.twoSourceCandidatePixelCount)
                      .arg(cache.currentBytes() / (1024 * 1024))
-                     .arg(cache.memoryBudgetBytes() / (1024 * 1024)));
+                     .arg(cache.memoryBudgetBytes() / (1024 * 1024))
+                     .arg(elapsedMs(frame_start, source_stage_end), 0, 'f', 1)
+                     .arg(elapsedMs(source_stage_end, layer_stage_end), 0, 'f', 1)
+                     .arg(elapsedMs(layer_stage_end, repair_stage_end), 0, 'f', 1)
+                     .arg(elapsedMs(repair_stage_end, residual_stage_end), 0, 'f', 1)
+                     .arg(elapsedMs(residual_stage_end, postprocess_stage_end), 0, 'f', 1)
+                     .arg(elapsedMs(postprocess_stage_end, write_stage_end), 0, 'f', 1)
+                     .arg(elapsedMs(frame_start, write_stage_end), 0, 'f', 1));
     }
 
     for (const PendingDepthReplacement &replacement : pending_replacements)
@@ -8167,6 +8284,64 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                 artifact_result.depthProvenance =
                     QSharedPointer<cv::Mat>::create(provenance);
             }
+            auto load_optional_pixel_map = [filtered_depth](
+                const QString &path,
+                QSharedPointer<cv::Mat> &target)
+                -> xjw::common::OperationResult
+            {
+                if (path.isEmpty() || !QFileInfo::exists(path))
+                {
+                    target.clear();
+                    return {true, QString()};
+                }
+                cv::Mat matrix;
+                const xjw::common::OperationResult result =
+                    xjw::core::project::loadDepthMatStorage(path, &matrix);
+                if (!result.ok)
+                {
+                    return result;
+                }
+                if (matrix.type() != CV_8UC1 ||
+                    matrix.size() != filtered_depth.size())
+                {
+                    return {
+                        false,
+                        QStringLiteral("流式一致性像素图格式无效：%1")
+                            .arg(path)};
+                }
+                target = QSharedPointer<cv::Mat>::create(std::move(matrix));
+                return {true, QString()};
+            };
+            const xjw::common::OperationResult repaired_mask_result =
+                load_optional_pixel_map(
+                    replacement.filteredCrossViewRepairedMaskPath,
+                    artifact_result.crossViewRepairedMask);
+            const xjw::common::OperationResult residual_mask_result =
+                load_optional_pixel_map(
+                    replacement.filteredResidualReestimatedMaskPath,
+                    artifact_result.residualReestimatedMask);
+            const xjw::common::OperationResult provenance_result =
+                load_optional_pixel_map(
+                    replacement.filteredDepthProvenancePath,
+                    artifact_result.depthProvenance);
+            const xjw::common::OperationResult missing_reason_result =
+                load_optional_pixel_map(
+                    replacement.filteredMissingReasonPath,
+                    artifact_result.missingReasonMap);
+            if (!repaired_mask_result.ok || !residual_mask_result.ok ||
+                !provenance_result.ok || !missing_reason_result.ok)
+            {
+                const QString message = !repaired_mask_result.ok
+                    ? repaired_mask_result.errorMessage
+                    : (!residual_mask_result.ok
+                           ? residual_mask_result.errorMessage
+                           : (!provenance_result.ok
+                                  ? provenance_result.errorMessage
+                                  : missing_reason_result.errorMessage));
+                remove_pending_files();
+                emit errorOccurred(message);
+                return false;
+            }
             cv::Mat geometry_support;
             const xjw::common::OperationResult geometry_support_result =
                 xjw::core::project::loadDepthMatStorage(
@@ -8252,6 +8427,7 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                                          artifact_result,
                                          QStringLiteral("一致性过滤后")))
             {
+                remove_pending_files();
                 return false;
             }
             QFile::remove(replacement.filteredGeometrySupportPath);
@@ -8261,6 +8437,10 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             QFile::remove(replacement.filteredAdaptiveSupportWeightPath);
             QFile::remove(replacement.filteredAdaptiveEffectiveViewCountPath);
             QFile::remove(replacement.filteredAdaptiveConflictRatioPath);
+            QFile::remove(replacement.filteredCrossViewRepairedMaskPath);
+            QFile::remove(replacement.filteredResidualReestimatedMaskPath);
+            QFile::remove(replacement.filteredDepthProvenancePath);
+            QFile::remove(replacement.filteredMissingReasonPath);
         }
     }
     LOG_INFO(QStringLiteral(
