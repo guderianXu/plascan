@@ -3497,6 +3497,7 @@ TEST(CodeStyleTest, LogPanelUsesLowerCamelPrivateMemberNames)
         QStringLiteral("QTextEdit *_text{nullptr};"),
         QStringLiteral("QPushButton *_clearBtn{nullptr};"),
         QStringLiteral("QPushButton *_saveBtn{nullptr};"),
+        QStringLiteral("QWidget *_toolOverlay{nullptr};"),
         QStringLiteral("int _sinkId{0};"),
     };
     for (const QString &expectedMember : expectedMembers)
@@ -3519,14 +3520,19 @@ TEST(CodeStyleTest, LogPanelUsesLowerCamelPrivateMemberNames)
         EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
     }
 
-    EXPECT_TRUE(source.contains(QStringLiteral("ui.m_clearBtn"))) << "Qt Designer object name must stay stable";
-    EXPECT_TRUE(source.contains(QStringLiteral("ui.m_saveBtn"))) << "Qt Designer object name must stay stable";
+    EXPECT_TRUE(source.contains(QStringLiteral("consoleToolOverlay")));
+    EXPECT_TRUE(source.contains(QStringLiteral("new QPushButton(_toolOverlay)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("clearConsoleButton")));
+    EXPECT_TRUE(source.contains(QStringLiteral("saveConsoleButton")));
     EXPECT_TRUE(source.contains(QStringLiteral("ui.m_text"))) << "Qt Designer object name must stay stable";
 
     const QString ui = readProjectSourceFile(QStringLiteral("src/gui/panels/LogPanel.ui"));
     EXPECT_FALSE(ui.contains(QStringLiteral("levelLabel")));
     EXPECT_FALSE(ui.contains(QStringLiteral("m_levelCombo")));
     EXPECT_FALSE(ui.contains(QStringLiteral("级别:")));
+    EXPECT_FALSE(ui.contains(QStringLiteral("topLayout")));
+    EXPECT_FALSE(ui.contains(QStringLiteral("m_clearBtn")));
+    EXPECT_FALSE(ui.contains(QStringLiteral("m_saveBtn")));
 }
 
 TEST(CodeStyleTest, DataTreeWidgetUsesLowerCamelPrivateMemberNames)

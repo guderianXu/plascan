@@ -8,7 +8,7 @@
  * 它向全局 Logger 注册回调，并完整显示控制台输出。
  *
  * 主要布局：
- * - 顶部工具栏：清空按钮、保存按钮；
+ * - 右上角悬浮操作：清空按钮、保存按钮，不占用纵向布局；
  * - 主体区域  ：只读 QTextEdit，实时追加显示日志文本。
  *
  * 线程安全说明：
@@ -24,10 +24,11 @@
 
 class QPushButton;
 class QTextEdit;
+class QEvent;
 
 /**
  * @class LogPanel
- * @brief 控制台面板，包含紧凑工具栏与可滚动文本区。
+ * @brief 控制台面板，包含悬浮操作按钮与可滚动文本区。
  *
  * 注册 Logger sink，将完整输出追加到文本区，并提供清空和另存为操作。
  */
@@ -92,7 +93,12 @@ public slots:
      */
     bool saveLogsToFile(const QString &filePath);
 
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
 private:
+    void updateToolOverlayGeometry();
+
     /** @brief 只读文本区，用于显示完整的控制台输出。 */
     QTextEdit *_text{nullptr};
 
@@ -101,6 +107,9 @@ private:
 
     /** @brief 将日志另存为文件的按钮。 */
     QPushButton *_saveBtn{nullptr};
+
+    /** @brief 悬浮在文本区右上角的紧凑操作按钮容器，不占用纵向布局。 */
+    QWidget *_toolOverlay{nullptr};
 
     /** @brief 注册到全局 Logger 的 sink 令牌，析构时用于注销。 */
     int _sinkId{0};

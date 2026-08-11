@@ -12,6 +12,8 @@
 #include <QTextStream>
 #include <QFileDialog>
 #include <QDir>
+#include <QEvent>
+#include <QHBoxLayout>
 #include <QIODevice>
 #include <QMetaObject>
 #include <QPointer>
@@ -21,15 +23,15 @@
 #include <QStyle>
 #include <QTextDocument>
 
+#include <algorithm>
+
 /**
  * @brief 构造函数：创建 UI 布局，初始化所有子控件，并注册 Logger sink。
  *
  * 布局结构：
  * ┌──────────────────────────────────────────┐
- * │                         [清空]  [保存]     │  ← topLayout
- * ├──────────────────────────────────────────┤
  * │                                          │
- * │           只读日志文本区（_text）         │  ← QTextEdit
+ * │           只读日志文本区（_text） [按钮]  │  ← 按钮悬浮，不占布局高度
  * │                                          │
  * └──────────────────────────────────────────┘
  *
@@ -46,14 +48,30 @@ LogPanel::LogPanel(QWidget *parent)
     Ui::LogPanel ui;
     ui.setupUi(this);
 
-    _clearBtn = ui.m_clearBtn;
-    _saveBtn = ui.m_saveBtn;
     _text = ui.m_text;
 
+    _toolOverlay = new QWidget(_text->viewport());
+    _toolOverlay->setObjectName(QStringLiteral("consoleToolOverlay"));
+    _toolOverlay->setAttribute(Qt::WA_TranslucentBackground);
+    auto *tool_layout = new QHBoxLayout(_toolOverlay);
+    tool_layout->setContentsMargins(0, 0, 0, 0);
+    tool_layout->setSpacing(2);
+
+    _clearBtn = new QPushButton(_toolOverlay);
+    _clearBtn->setObjectName(QStringLiteral("clearConsoleButton"));
+    _saveBtn = new QPushButton(_toolOverlay);
+    _saveBtn->setObjectName(QStringLiteral("saveConsoleButton"));
+    tool_layout->addWidget(_clearBtn);
+    tool_layout->addWidget(_saveBtn);
+
     _clearBtn->setText(QString());
+    _clearBtn->setFixedSize(24, 24);
+    _clearBtn->setFlat(true);
     _clearBtn->setIcon(style()->standardIcon(QStyle::SP_TrashIcon));
     _clearBtn->setToolTip(tr("清空控制台"));
     _saveBtn->setText(QString());
+    _saveBtn->setFixedSize(24, 24);
+    _saveBtn->setFlat(true);
     _saveBtn->setIcon(style()->standardIcon(QStyle::SP_DialogSaveButton));
     _saveBtn->setToolTip(tr("保存控制台输出"));
     _text->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
@@ -62,6 +80,9 @@ LogPanel::LogPanel(QWidget *parent)
     _text->setUndoRedoEnabled(false);
     _text->document()->setMaximumBlockCount(20000);
     _text->setPlaceholderText(tr("处理信息和诊断输出将显示在这里"));
+    _text->viewport()->installEventFilter(this);
+    _toolOverlay->setFixedSize(_toolOverlay->sizeHint());
+    updateToolOverlayGeometry();
 
     connect(_clearBtn, &QPushButton::clicked, this, &LogPanel::clearLogs);
 
@@ -113,6 +134,28 @@ QSize LogPanel::minimumSizeHint() const
 QSize LogPanel::sizeHint() const
 {
     return QSize(720, 180);
+}
+
+bool LogPanel::eventFilter(QObject *watched, QEvent *event)
+{
+    if (_text && watched == _text->viewport() && event->type() == QEvent::Resize)
+    {
+        updateToolOverlayGeometry();
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void LogPanel::updateToolOverlayGeometry()
+{
+    if (!_text || !_toolOverlay)
+    {
+        return;
+    }
+    constexpr int margin = 2;
+    _toolOverlay->move(
+        std::max(0, _text->viewport()->width() - _toolOverlay->width() - margin),
+        margin);
+    _toolOverlay->raise();
 }
 
 /**
