@@ -157,20 +157,46 @@ void ImageViewWidget::clearMatchPoints()
 
 void ImageViewWidget::zoomIn()
 {
-    qreal factor = currentTransform().m11();
-    if (factor < MAX_ZOOM) {
-        _view->scale(1.2, 1.2);
-        onViewChanged();
-    }
+    applyZoom(1.2);
 }
 
 void ImageViewWidget::zoomOut()
 {
-    qreal factor = currentTransform().m11();
-    if (factor > MIN_ZOOM) {
-        _view->scale(1.0 / 1.2, 1.0 / 1.2);
-        onViewChanged();
+    applyZoom(1.0 / 1.2);
+}
+
+void ImageViewWidget::applyZoom(qreal scaleFactor)
+{
+    const QTransform transform = currentTransform();
+    const qreal current_zoom = std::hypot(transform.m11(), transform.m12());
+    if (!std::isfinite(current_zoom) || !std::isfinite(scaleFactor)
+        || current_zoom <= 0.0 || scaleFactor <= 0.0 || qFuzzyCompare(scaleFactor, 1.0))
+    {
+        return;
     }
+
+    // fitInView() can legitimately produce a scale below MIN_ZOOM for very tall
+    // strip images. Only block movement farther outside the bounds so zooming
+    // back toward the supported range always remains possible.
+    if ((scaleFactor > 1.0 && current_zoom >= MAX_ZOOM)
+        || (scaleFactor < 1.0 && current_zoom <= MIN_ZOOM))
+    {
+        return;
+    }
+
+    qreal bounded_factor = scaleFactor;
+    const qreal requested_zoom = current_zoom * scaleFactor;
+    if (requested_zoom > MAX_ZOOM)
+    {
+        bounded_factor = MAX_ZOOM / current_zoom;
+    }
+    else if (requested_zoom < MIN_ZOOM && current_zoom >= MIN_ZOOM)
+    {
+        bounded_factor = MIN_ZOOM / current_zoom;
+    }
+
+    _view->scale(bounded_factor, bounded_factor);
+    onViewChanged();
 }
 
 void ImageViewWidget::fitToView()
@@ -287,19 +313,9 @@ bool ImageViewWidget::eventFilter(QObject *obj, QEvent *event)
         // 计算缩放因子
         qreal scaleFactor = delta > 0 ? 1.15 : (1.0 / 1.15);
         
-        // 获取当前缩放级别
-        qreal currentZoom = currentTransform().m11();
-        qreal newZoom = currentZoom * scaleFactor;
-        
-        // 限制缩放范围 (0.1x ~ 20x)
-        if (newZoom < 0.1 || newZoom > 20.0) {
-            return true;
-        }
-        
         // 执行缩放（以鼠标位置为中心）
         _view->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
-        _view->scale(scaleFactor, scaleFactor);
-        onViewChanged();
+        applyZoom(scaleFactor);
         
             return true; // 阻止事件继续传播
         }

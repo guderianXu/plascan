@@ -95,6 +95,7 @@ private slots:
 
 private:
     void setupView();
+    void applyZoom(qreal scaleFactor);
     
     QGraphicsView *_view;
     QGraphicsScene *_scene;

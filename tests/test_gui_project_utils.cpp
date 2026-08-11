@@ -134,6 +134,7 @@
 #include <QUrl>
 #include <QWidget>
 #include <QWidgetAction>
+#include <QWheelEvent>
 #include <QStandardItemModel>
 #include <QSignalSpy>
 #include <QTableWidget>
@@ -11903,6 +11904,33 @@ TEST(MatchViewerResponsivenessTest, LimitsDefaultSparseRenderingWork)
         << "Sparse match lines should have a finite default draw budget.";
     EXPECT_FALSE(dialogSource.contains(QStringLiteral("_maxCountSpin->setValue(0);")))
         << "Opening a large match file must not auto-switch the viewer back to unlimited rendering.";
+}
+
+TEST(MatchViewerZoomTest, TallStripImageCanZoomInBelowNormalMinimumScale)
+{
+    ImageViewWidget image_view;
+    image_view.resize(500, 500);
+    image_view.show();
+    QCoreApplication::processEvents();
+
+    QGraphicsView *view = image_view.view();
+    ASSERT_NE(view, nullptr);
+    view->setTransform(QTransform::fromScale(0.016, 0.016));
+    const qreal initial_zoom = image_view.currentTransform().m11();
+    ASSERT_LT(initial_zoom, 0.05);
+
+    QWheelEvent zoom_event(
+        QPointF(100.0, 100.0),
+        QPointF(100.0, 100.0),
+        QPoint(),
+        QPoint(0, 120),
+        Qt::NoButton,
+        Qt::NoModifier,
+        Qt::NoScrollPhase,
+        false);
+    QCoreApplication::sendEvent(view->viewport(), &zoom_event);
+
+    EXPECT_GT(image_view.currentTransform().m11(), initial_zoom);
 }
 
 TEST(MatchViewerEndpointVisibilityTest, HidesAllEndpointsWhenNoMatchLineIsVisible)
