@@ -7779,7 +7779,8 @@ TEST(MeshWorkflowSettingsTest, OrbitalDepthRefinementDefaultsOnAndHonorsOverride
         false));
 }
 
-TEST(MeshWorkflowSettingsTest, OrbitalOpenMeshPolicyKeepsGeometryProfileAt170K)
+TEST(MeshWorkflowSettingsTest,
+     OrbitalAdaptiveResolutionPreservesRequestedFaceBudgetAt170K)
 {
     const QJsonObject settings{
         {QStringLiteral("simplifyTargetFaces"), 170000}
@@ -7792,7 +7793,7 @@ TEST(MeshWorkflowSettingsTest, OrbitalOpenMeshPolicyKeepsGeometryProfileAt170K)
 
     EXPECT_TRUE(options.enableOpenMeshSimplification);
     EXPECT_EQ(options.resolution, 256);
-    EXPECT_EQ(options.simplifyTargetFaces, 75556);
+    EXPECT_EQ(options.simplifyTargetFaces, 170000);
     EXPECT_FALSE(options.enableSurfacePatchSupport);
     EXPECT_FALSE(options.enableGeometryVerifiedBoundaryRecovery);
     EXPECT_FLOAT_EQ(options.truncationVoxels, 7.5f);
@@ -7802,6 +7803,22 @@ TEST(MeshWorkflowSettingsTest, OrbitalOpenMeshPolicyKeepsGeometryProfileAt170K)
     EXPECT_FALSE(options.enableGeometryZeroCrossingCellSheets);
     EXPECT_FALSE(options.enableContourBandZeroCrossingSupport);
     EXPECT_TRUE(options.enableAdaptiveTgvRegularization);
+}
+
+TEST(MeshWorkflowSettingsTest,
+     OrbitalAdaptiveResolutionPreservesRequestedFaceBudgetAt240K)
+{
+    const QJsonObject settings{
+        {QStringLiteral("simplifyTargetFaces"), 240000}
+    };
+    auto options =
+        xjw::mesh::workflow::depthTsdfOptionsFromSettings(settings, 384);
+
+    xjw::mesh::workflow::applyOrbitalDepthTsdfDefaults(
+        settings, &options, 192);
+
+    EXPECT_EQ(options.resolution, 192);
+    EXPECT_EQ(options.simplifyTargetFaces, 240000);
 }
 
 TEST(MeshWorkflowSettingsTest,

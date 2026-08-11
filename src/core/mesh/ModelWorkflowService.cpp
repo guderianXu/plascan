@@ -2803,25 +2803,13 @@ void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
             "tsdfOrbitalAdaptiveResolution")).toBool(true) &&
         maximumReliableResolution > 0)
     {
-        const int requested_resolution = options->resolution;
         options->resolution = std::min(
             options->resolution, maximumReliableResolution);
-        if (options->resolution < requested_resolution &&
-            options->simplifyTargetFaces > 0)
-        {
-            const double resolution_ratio =
-                static_cast<double>(options->resolution) /
-                static_cast<double>(requested_resolution);
-            const int uncertainty_matched_face_budget =
-                std::max(
-                    60000,
-                    static_cast<int>(std::lround(
-                        options->simplifyTargetFaces *
-                        resolution_ratio * resolution_ratio)));
-            options->simplifyTargetFaces = std::min(
-                options->simplifyTargetFaces,
-                uncertainty_matched_face_budget);
-        }
+        // The requested face count is an upper bound, while the extracted
+        // surface already becomes naturally smaller at a lower voxel
+        // resolution. Scaling the face budget by the resolution ratio applies
+        // the same detail reduction twice and can turn a 200k-face orbital
+        // surface into an unexpected 60k-face result.
     }
     if (!settings.contains(QStringLiteral("tsdfTruncationVoxels")))
     {
