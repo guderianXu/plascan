@@ -399,10 +399,12 @@ PlaPoint 在这些公共设施之上只保留点云领域 kernel。第一阶段�
 SOR/Radius、Voxel、Normals 和 HeightGrid 的输入输出驻留主机，并仍包含主机建索引、排序、属性聚合或
 协方差/SVD 等阶段。它可让非 NVIDIA GPU 参与计算，但是否快于原生 CPU 取决于点数、属性和驱动，
 需以真实数据 benchmark 为准；超大近二维地表云或病态分布触发工作量保护时，Auto 会记录原因并回退
-CPU，显式 OpenCL 则明确报错。
+CPU，显式 OpenCL 则明确报错。“只用 OpenCL”会自动忽略 NVIDIA 的 OpenCL 接口，仅调度 AMD、Intel 等
+非 NVIDIA OpenCL 设备；如果没有这类设备，则直接报告设备不可用，不会回退 CUDA。
 PlaMatrix 还提供 CPU-owned CSR 系统的 OpenCL Jacobi-PCG：矩阵和向量一次上传，稀疏乘法、预条件、
 向量更新和分层归约在 GPU 执行，仅回读每轮收敛标量和最终解。Poisson 求解后端与点云预处理独立，
-自动按 CUDA → OpenCL → CPU 选择；显式 OpenCL 会严格使用 OpenCL，设备或求解失败时明确报错。
+自动按 CUDA → OpenCL → CPU 选择；显式 OpenCL 会严格使用选中的非 NVIDIA OpenCL 设备，设备或求解
+失败时明确报错。
 这层基础设施尚不代表 PlaMatrix 已提供通用 OpenCL GEMM 或 SVD。
 多块 OpenCL GPU 并存时，可用 `PLAMATRIX_OPENCL_DEVICE_INDEX` 指定 PlaMatrix 枚举出的稳定设备索引；
 未设置时会优先选择独立显卡和计算单元较多的设备。兼容期仍接受旧的

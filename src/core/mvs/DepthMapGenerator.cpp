@@ -9879,6 +9879,20 @@ void DepthMapGenerator::runInBackgroundImpl()
         {
             continue;
         }
+        if (configuredBackend == PatchMatchBackend::OpenCl &&
+            isNvidiaOpenClVendor(device.vendor))
+        {
+            const QString device_name = QString::fromStdString(device.name);
+            acceleratorPreparationFailures.push_back(
+                QStringLiteral(
+                    "显式 OpenCL 模式已忽略 NVIDIA 设备 %1；NVIDIA 仅保留给 CUDA 模式")
+                    .arg(device_name));
+            LOG_INFO(QStringLiteral(
+                         "[MVS] 显式 OpenCL 模式忽略 NVIDIA 接口: index=%1 device=%2")
+                         .arg(device.index)
+                         .arg(device_name));
+            continue;
+        }
 
         const GpuDeviceDescriptor descriptor{
             device.physicalDeviceIdentity,

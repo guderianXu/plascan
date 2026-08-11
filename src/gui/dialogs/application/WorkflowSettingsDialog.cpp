@@ -9,6 +9,7 @@
 #include "shared/WorkflowParameterDialogStyle.h"
 
 #include "ImageMatchingRegistry.h"
+#include "GpuDeviceLease.h"
 #include "MatchPhotosParallelism.h"
 #include "MatchPhotosOptions.h"
 #include "MatchPhotosRuntime.h"
@@ -719,6 +720,7 @@ void WorkflowSettingsDialog::refreshModelComputeDevices()
     _cudaAvailable = !cuda_lines.isEmpty();
 
     QStringList opencl_lines;
+    int eligible_opencl_devices = 0;
     int independent_opencl_devices = 0;
     const std::vector<xjw::mvs::OpenClDeviceInfo> opencl_devices =
         xjw::mvs::PatchMatchDepthEstimator::openClDevices();
@@ -726,9 +728,15 @@ void WorkflowSettingsDialog::refreshModelComputeDevices()
     {
         const QString identity = QString::fromStdString(
             device.physicalDeviceIdentity);
+        const bool ignored_nvidia =
+            xjw::mvs::isNvidiaOpenClVendor(device.vendor);
         const bool duplicates_cuda = !identity.isEmpty() &&
             cuda_identities.contains(identity);
-        if (!duplicates_cuda)
+        if (!ignored_nvidia)
+        {
+            ++eligible_opencl_devices;
+        }
+        if (!ignored_nvidia && !duplicates_cuda)
         {
             ++independent_opencl_devices;
         }
@@ -743,13 +751,17 @@ void WorkflowSettingsDialog::refreshModelComputeDevices()
         {
             detail += QStringLiteral(" · %1 GiB").arg(memory_gib, 0, 'f', 1);
         }
-        if (duplicates_cuda)
+        if (ignored_nvidia)
+        {
+            detail += QStringLiteral("（NVIDIA，显式 OpenCL 模式自动忽略）");
+        }
+        else if (duplicates_cuda)
         {
             detail += QStringLiteral("（与 CUDA 为同一物理设备，混合模式会去重）");
         }
         opencl_lines.append(detail);
     }
-    _openClAvailable = !opencl_lines.isEmpty();
+    _openClAvailable = eligible_opencl_devices > 0;
     _hybridAvailable = _cudaAvailable && independent_opencl_devices > 0;
 
     QPalette cuda_palette = _cudaDeviceStatusLabel->palette();
@@ -771,11 +783,16 @@ void WorkflowSettingsDialog::refreshModelComputeDevices()
     _openClDeviceStatusLabel->setPalette(opencl_palette);
     _openClDeviceStatusLabel->setText(
         _openClAvailable
-            ? QStringLiteral("可用，共 %1 个设备\n%2")
+            ? QStringLiteral("可用，%1 个非 NVIDIA 设备（共检测到 %2 个）\n%3")
+                  .arg(eligible_opencl_devices)
                   .arg(opencl_lines.size())
                   .arg(opencl_lines.join(QLatin1Char('\n')))
-            : QStringLiteral(
-                  "不可用：未检测到同时支持运行和在线编译的 OpenCL GPU"));
+            : (opencl_lines.isEmpty()
+                   ? QStringLiteral(
+                         "不可用：未检测到同时支持运行和在线编译的 OpenCL GPU")
+                   : QStringLiteral(
+                         "不可用：仅检测到 NVIDIA OpenCL 设备，已按策略忽略\n%1")
+                         .arg(opencl_lines.join(QLatin1Char('\n')))));
 
     auto set_mode_enabled = [this](const char *mode, bool enabled)
     {
@@ -841,7 +858,7 @@ void WorkflowSettingsDialog::refreshModelComputePolicy()
         available = _openClAvailable;
         policy = QStringLiteral(
             "深度图估计、点云预处理和 Poisson 稀疏求解仅使用 OpenCL；"
-            "不会调用 CUDA。网格提取等串行阶段仍在 CPU 执行。");
+            "自动忽略 NVIDIA 设备且不会调用 CUDA。网格提取等串行阶段仍在 CPU 执行。");
     }
     else
     {

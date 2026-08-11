@@ -118,6 +118,8 @@ live under `src/core/mvs/tests/`.
   the device name is matched to the CUDA inventory; an unresolved NVIDIA OpenCL interface is conservatively skipped
   while CUDA is active. The same NVIDIA GPU therefore cannot acquire two leases or two execution lanes through
   different APIs. Explicit CUDA or OpenCL requests remain strict and never silently substitute another backend.
+  Explicit OpenCL mode also excludes every NVIDIA OpenCL interface, keeping NVIDIA devices exclusively on the CUDA
+  path; at least one non-NVIDIA OpenCL GPU is therefore required for that mode.
 - Heterogeneous scheduling is frame-level: one depth map remains on one device, while different reference frames
   may run concurrently on CUDA discrete GPUs and OpenCL integrated GPUs. Every selected physical accelerator is
   represented before host preparation lanes are duplicated. CUDA and discrete OpenCL devices retain one kernel

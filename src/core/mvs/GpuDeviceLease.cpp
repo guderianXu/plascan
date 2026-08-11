@@ -113,6 +113,11 @@ std::string normalizedGpuDeviceName(const std::string &name)
     return normalizedAlphanumeric(name);
 }
 
+bool isNvidiaOpenClVendor(const std::string &openClVendor)
+{
+    return normalizedAlphanumeric(openClVendor).find("nvidia") != std::string::npos;
+}
+
 bool shouldSkipUnstableOpenClCudaAlias(const std::string &openClVendor,
                                        const std::string &physicalIdentity,
                                        bool cudaSelected)
@@ -122,8 +127,7 @@ bool shouldSkipUnstableOpenClCudaAlias(const std::string &openClVendor,
         return false;
     }
 
-    const std::string normalized_vendor = normalizedAlphanumeric(openClVendor);
-    return normalized_vendor.find("nvidia") != std::string::npos;
+    return isNvidiaOpenClVendor(openClVendor);
 }
 
 } // namespace mvs

@@ -22,7 +22,9 @@
 #include <QStandardPaths>
 #include <QTimer>
 #include "MainWindow.h"
+#include "GpuDeviceLease.h"
 #include "Logger.h"
+#include "PatchMatchCUDA.h"
 #include "application/PythonRuntimeDialog.h"
 #include "platform/ProjectFileIntegration.h"
 #include "runtime/PythonRuntimeManager.h"
@@ -30,8 +32,11 @@
 // 抑制 libtiff 读取 GDAL 写入的 GeoTIFF 时产生的 tag 42113 (GDAL_NODATA) 警告
 #include <tiffio.h>
 
+#include <algorithm>
 #include <clocale>
 #include <exception>
+#include <limits>
+#include <vector>
 
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
@@ -126,6 +131,30 @@ bool bindPythonRuntime()
     LOG_INFO("PlaScan Python runtime bound: %s", encoded_path.constData());
     return true;
 }
+
+void configureOpenClDevicePolicy()
+{
+    const std::vector<xjw::mvs::OpenClDeviceInfo> devices =
+        xjw::mvs::PatchMatchDepthEstimator::openClDevices();
+    const auto selected = std::find_if(
+        devices.cbegin(), devices.cend(), [](const xjw::mvs::OpenClDeviceInfo &device)
+        {
+            return !xjw::mvs::isNvidiaOpenClVendor(device.vendor);
+        });
+    if (selected == devices.cend())
+    {
+        qputenv("PLAMATRIX_OPENCL_DEVICE_INDEX",
+                QByteArray::number(std::numeric_limits<int>::max()));
+        LOG_WARN("PlaScan OpenCL policy found no non-NVIDIA GPU; NVIDIA OpenCL devices are ignored");
+        return;
+    }
+
+    qputenv("PLAMATRIX_OPENCL_DEVICE_INDEX", QByteArray::number(selected->index));
+    LOG_INFO("PlaScan OpenCL policy selected non-NVIDIA device: index=%d vendor=%s device=%s",
+             selected->index,
+             selected->vendor.c_str(),
+             selected->name.c_str());
+}
 } // namespace
 
 // main - 程序入口
@@ -182,6 +211,7 @@ int main(int argc, char *argv[])
     QDir(baseDir).mkpath(QStringLiteral("logs"));
     Logger::instance()->setLogDirectory(QDir(baseDir).filePath(QStringLiteral("logs")));
     LOG_INFO("PlaScan GUI started");
+    configureOpenClDevicePolicy();
 
     const auto association_result =
         xjw::gui::platform::ensureProjectFileAssociation(QCoreApplication::applicationFilePath());

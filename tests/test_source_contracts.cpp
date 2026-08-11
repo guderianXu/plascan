@@ -1218,9 +1218,13 @@ TEST(MvsHeterogeneousSchedulingContractTest,
         readSourceFile(QStringLiteral("src/core/mvs/DepthComputeScheduler.cpp"));
     const QString opencl_source =
         readSourceFile(QStringLiteral("src/core/mvs/PatchMatchOpenCL.cpp"));
+    const QString gui_main =
+        readSourceFile(QStringLiteral("src/gui/main.cpp"));
 
     expectContainsAll(generator, {
         "const bool probeOpenCl = configuredBackend == PatchMatchBackend::OpenCl ||",
+        "configuredBackend == PatchMatchBackend::OpenCl &&",
+        "isNvidiaOpenClVendor(device.vendor)",
         "selectedPhysicalDeviceIdentities.contains(descriptor.physicalIdentity)",
         "shouldSkipUnstableOpenClCudaAlias",
         "const bool heterogeneousAuto = configuredBackend == PatchMatchBackend::Auto",
@@ -1263,6 +1267,11 @@ TEST(MvsHeterogeneousSchedulingContractTest,
         "cudaPhysicalIdentityForOpenClName",
         "normalizedGpuDeviceName",
         "fallbackGpuPhysicalIdentity",
+    });
+    expectContainsAll(gui_main, {
+        "configureOpenClDevicePolicy",
+        "PLAMATRIX_OPENCL_DEVICE_INDEX",
+        "isNvidiaOpenClVendor(device.vendor)",
     });
 }
 

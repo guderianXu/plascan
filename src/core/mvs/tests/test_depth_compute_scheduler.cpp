@@ -29,6 +29,7 @@ using xjw::mvs::GpuDeviceLeaseSet;
 using xjw::mvs::buildDepthComputeWorkerPool;
 using xjw::mvs::depthComputeWorkerFromId;
 using xjw::mvs::fallbackGpuPhysicalIdentity;
+using xjw::mvs::isNvidiaOpenClVendor;
 using xjw::mvs::isUsableOpenClPatchMatchDevice;
 using xjw::mvs::normalizedGpuDeviceName;
 using xjw::mvs::recommendedOpenClFullFrameFloorPerDevice;
@@ -1531,6 +1532,14 @@ TEST(GpuDeviceLeaseTest, ConservativelySkipsUnstableNvidiaOpenClCudaAlias)
         "Advanced Micro Devices, Inc.", "name:amdradeon:1", true));
     EXPECT_FALSE(shouldSkipUnstableOpenClCudaAlias(
         "NVIDIA Corporation", "name:nvidiageforcertx5080:0", false));
+}
+
+TEST(GpuDeviceLeaseTest, IdentifiesNvidiaOpenClVendorsForExplicitModeFiltering)
+{
+    EXPECT_TRUE(isNvidiaOpenClVendor("NVIDIA Corporation"));
+    EXPECT_TRUE(isNvidiaOpenClVendor("  nViDiA  "));
+    EXPECT_FALSE(isNvidiaOpenClVendor("Advanced Micro Devices, Inc."));
+    EXPECT_FALSE(isNvidiaOpenClVendor("Intel(R) Corporation"));
 }
 
 TEST(GpuDeviceLeaseTest, NormalizesCrossApiDeviceNames)
