@@ -25,6 +25,7 @@ struct CameraCalibrationRecord
     QString initialSource;
     QString adjustmentStatus;
     QStringList optimizedParameters;
+    QJsonObject parameterReliability;
     bool requiresReview = false;
 };
 

@@ -338,6 +338,9 @@ struct BAOptions
     double sharedRadialK3PriorSigma = 0.15;
     double sharedTangentialP1PriorSigma = 0.01;
     double sharedTangentialP2PriorSigma = 0.01;
+    /// 窄视场下把 k1/p1/p2 系数换算到统一参考像场的尺度。默认 1；
+    /// 自适应模型按观测半径设置，Ceres 在边界和先验中一次性应用，避免多轮复合。
+    double sharedLowOrderDistortionScale = 1.0;
     /// 单次 LM 试探允许的最大焦距倍率，限制内参更新步长。
     double maxSharedFocalStepScale = 1.20;
     /// 每轮外层 BA 中共享焦距优化的最大内部迭代次数。

@@ -1059,7 +1059,8 @@ void IncrementalSfm::runBundleAdjust(
         Logger::instance()->infof(
             "[BA] adaptive_camera_model scope=global valid=%s model=%s "
             "reason=%s geometry=%.4f opticalAxis=%.4f triAngle=%.3f "
-            "radiusP90=%.4f sectors=%d/8 cameras=%d/%d observations=%d "
+            "radiusP90=%.4f peripheralRadius=%.4f distortionScale=%.3f "
+            "sectors=%d/8 cameras=%d/%d observations=%d "
             "multiView=%.4f axisBalance=%.4f parameters=%s",
             adaptiveCameraModelAssessment.valid ? "true" : "false",
             effectiveAdaptiveCameraModel.c_str(),
@@ -1068,6 +1069,8 @@ void IncrementalSfm::runBundleAdjust(
             adaptiveCameraModelAssessment.opticalAxisConcentration,
             adaptiveCameraModelAssessment.medianTriangulationAngleDegrees,
             adaptiveCameraModelAssessment.normalizedRadiusP90,
+            adaptiveCameraModelAssessment.peripheralRadiusThreshold,
+            adaptiveCameraModelAssessment.lowOrderDistortionScale,
             adaptiveCameraModelAssessment.occupiedPeripheralSectors,
             adaptiveCameraModelAssessment.activeCameraCount,
             adaptiveCameraModelAssessment.cameraCount,

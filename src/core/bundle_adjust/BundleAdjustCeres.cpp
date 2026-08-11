@@ -1192,6 +1192,9 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
 
     if (refineSharedIntrinsics)
     {
+        const double lowOrderDistortionScale = std::max(
+            1.0,
+            options.sharedLowOrderDistortionScale);
         const double minimumScale = std::max(1e-6, options.minSharedFocalScale);
         const double maximumScale =
             std::max(minimumScale, options.maxSharedFocalScale);
@@ -1294,11 +1297,11 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                 BAIntrinsicParameter::TangentialP2,
             }};
             const std::array<double, 5> distortionBounds{{
-                options.maxSharedRadialK1Abs,
+                options.maxSharedRadialK1Abs * lowOrderDistortionScale,
                 options.maxSharedRadialK2Abs,
                 options.maxSharedRadialK3Abs,
-                options.maxSharedTangentialP1Abs,
-                options.maxSharedTangentialP2Abs,
+                options.maxSharedTangentialP1Abs * lowOrderDistortionScale,
+                options.maxSharedTangentialP2Abs * lowOrderDistortionScale,
             }};
             for (std::size_t distortionIndex = 0;
                  distortionIndex < distortionParameters.size();
@@ -1364,7 +1367,8 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                                    ? 1.0 / principalSigma
                                    : 0.0,
                               parameterIsEnabled(BAIntrinsicParameter::RadialK1)
-                                   ? 1.0 / options.sharedRadialK1PriorSigma
+                                   ? 1.0 / (options.sharedRadialK1PriorSigma *
+                                            lowOrderDistortionScale)
                                    : 0.0,
                               parameterIsEnabled(BAIntrinsicParameter::RadialK2)
                                    ? 1.0 / options.sharedRadialK2PriorSigma
@@ -1374,11 +1378,13 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
                                    : 0.0,
                               parameterIsEnabled(
                                    BAIntrinsicParameter::TangentialP1)
-                                   ? 1.0 / options.sharedTangentialP1PriorSigma
+                                   ? 1.0 / (options.sharedTangentialP1PriorSigma *
+                                            lowOrderDistortionScale)
                                    : 0.0,
                               parameterIsEnabled(
                                    BAIntrinsicParameter::TangentialP2)
-                                   ? 1.0 / options.sharedTangentialP2PriorSigma
+                                   ? 1.0 / (options.sharedTangentialP2PriorSigma *
+                                            lowOrderDistortionScale)
                                    : 0.0}}});
                 problem.AddResidualBlock(prior, nullptr, parameter);
             }

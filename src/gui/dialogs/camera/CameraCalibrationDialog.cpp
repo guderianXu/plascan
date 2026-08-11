@@ -261,6 +261,28 @@ bool parameterWasOptimized(
     return false;
 }
 
+std::optional<double> parameterReliability(
+    const QVector<xjw::gui::camera_calibration::CameraCalibrationRecord> &records,
+    const QVector<int> &indices,
+    const QString &key)
+{
+    const QString diagnosticKey =
+        key == QStringLiteral("fu") || key == QStringLiteral("fv")
+        ? QStringLiteral("f")
+        : key;
+    for (const int index : indices)
+    {
+        const QJsonValue value = records.at(index)
+                                     .parameterReliability
+                                     .value(diagnosticKey);
+        if (value.isDouble())
+        {
+            return std::clamp(value.toDouble(), 0.0, 1.0);
+        }
+    }
+    return std::nullopt;
+}
+
 QString initialSourceLabel(const QString &source)
 {
     if (source == QStringLiteral("automatic_focal_seed"))
@@ -424,7 +446,8 @@ void CameraCalibrationDialog::buildInterface()
     auto *intro = new QLabel(
         tr("“初始”是本次空三开始时使用的内方位先验；“调整”是连接点与束平差得到的内方位结果。"
            "cx/cy 按相对图像中心的像素偏移显示。本窗口不显示外方位 R/C；下方按钮用于导入或清除"
-           "项目相机参数，也可直接输入真实内参。导航/GNSS 参考请在左侧“参考”面板管理。"),
+           "项目相机参数，也可直接输入真实内参。左侧按相机模型、影像分辨率和初始参数来源整理显示，"
+           "不是按调整后焦距自动拆分。导航/GNSS 参考请在左侧“参考”面板管理。"),
         this);
     intro->setWordWrap(true);
     intro->setStyleSheet(QStringLiteral(
@@ -549,7 +572,9 @@ void CameraCalibrationDialog::buildGroups()
         const QString resolution = record.imageWidth > 0 && record.imageHeight > 0
             ? QStringLiteral("%1×%2").arg(record.imageWidth).arg(record.imageHeight)
             : tr("分辨率未记录");
-        groupedIndices[model + QLatin1Char('|') + resolution].append(index);
+        const QString source = initialSourceLabel(record.initialSource);
+        groupedIndices[model + QLatin1Char('|') + resolution +
+                       QLatin1Char('|') + source].append(index);
     }
 
     int groupNumber = 1;
@@ -557,11 +582,12 @@ void CameraCalibrationDialog::buildGroups()
     {
         const QStringList parts = it.key().split(QLatin1Char('|'));
         CameraGroup group;
-        group.label = tr("相机组 %1 · %2\n%3 张照片，%4")
+        group.label = tr("相机组 %1 · %2\n%3 张照片，%4 · %5")
                           .arg(groupNumber++)
                           .arg(parts.value(0))
                           .arg(it.value().size())
-                          .arg(parts.value(1));
+                          .arg(parts.value(1))
+                          .arg(parts.value(2));
         group.recordIndices = it.value();
         _groups.append(group);
 
@@ -569,7 +595,7 @@ void CameraCalibrationDialog::buildGroups()
             style()->standardIcon(QStyle::SP_ComputerIcon),
             group.label,
             _cameraGroups);
-        item->setSizeHint(QSize(item->sizeHint().width(), 54));
+        item->setSizeHint(QSize(item->sizeHint().width(), 62));
     }
 }
 
@@ -640,6 +666,10 @@ void CameraCalibrationDialog::populateParameterTables(const CameraGroup &group)
             _records,
             group.recordIndices,
             parameter.key);
+        const auto reliability = parameterReliability(
+            _records,
+            group.recordIndices,
+            parameter.key);
 
         _initialParameters->setItem(row, 0, readOnlyItem(parameter.label));
         _initialParameters->setItem(row, 1, readOnlyItem(formatValue(initial)));
@@ -674,12 +704,17 @@ void CameraCalibrationDialog::populateParameterTables(const CameraGroup &group)
                                                 : QColor(35, 135, 70)));
         }
         _adjustedParameters->setItem(row, 3, deltaItem);
-        _adjustedParameters->setItem(
-            row,
-            4,
-            readOnlyItem(!adjusted.has_value()
-                             ? tr("无调整记录")
-                             : (optimized ? tr("已优化") : tr("固定/未释放"))));
+        QString parameterStatus = tr("无调整记录");
+        if (adjusted.has_value())
+        {
+            parameterStatus = optimized ? tr("已优化") : tr("固定/未释放");
+            if (!optimized && reliability.has_value())
+            {
+                parameterStatus = tr("固定/未释放（可靠度 %1%）")
+                                      .arg(*reliability * 100.0, 0, 'f', 0);
+            }
+        }
+        _adjustedParameters->setItem(row, 4, readOnlyItem(parameterStatus));
     }
 }
 

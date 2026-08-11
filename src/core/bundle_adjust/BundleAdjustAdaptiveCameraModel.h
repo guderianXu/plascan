@@ -31,6 +31,8 @@ struct BAAdaptiveCameraModelAssessment
     double multiViewTrackRatio = 0.0;
     double normalizedRadiusP90 = 0.0;
     double maximumNormalizedRadius = 0.0;
+    double peripheralRadiusThreshold = 0.30;
+    double lowOrderDistortionScale = 1.0;
     double geometryStrength = 0.0;
     double observationSupport = 0.0;
     double peripheralCoverage = 0.0;

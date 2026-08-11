@@ -17,6 +17,9 @@ namespace
 constexpr double kPi = 3.14159265358979323846;
 constexpr int kRadiusHistogramBins = 160;
 constexpr double kMaximumHistogramRadius = 2.0;
+constexpr double kReferenceLowOrderDistortionRadius = 0.30;
+constexpr double kMinimumObservableDistortionRadius = 0.025;
+constexpr double kMaximumLowOrderDistortionScale = 64.0;
 
 using InformationMatrix = std::array<
     std::array<double, kBAIntrinsicParameterCount>,
@@ -25,6 +28,7 @@ using CalibrationPointMatrix = std::array<
     std::array<double, 3>,
     kBAIntrinsicParameterCount>;
 using PointInformationMatrix = std::array<std::array<double, 3>, 3>;
+using RadiusHistogram = std::array<int, kRadiusHistogramBins>;
 
 std::size_t parameterIndex(BAIntrinsicParameter parameter)
 {
@@ -190,7 +194,7 @@ double finiteMedian(std::vector<double> values)
 }
 
 double radiusQuantile(
-    const std::array<int, kRadiusHistogramBins> &histogram,
+    const RadiusHistogram &histogram,
     int sampleCount,
     double quantile)
 {
@@ -213,6 +217,25 @@ double radiusQuantile(
         }
     }
     return kMaximumHistogramRadius;
+}
+
+int radiusHistogramBin(double radius)
+{
+    return std::clamp(
+        static_cast<int>(
+            radius / kMaximumHistogramRadius * kRadiusHistogramBins),
+        0,
+        kRadiusHistogramBins - 1);
+}
+
+int histogramCountAtOrAbove(const RadiusHistogram &histogram,
+                            double radius)
+{
+    const int firstBin = radiusHistogramBin(radius);
+    return std::accumulate(
+        histogram.begin() + firstBin,
+        histogram.end(),
+        0);
 }
 
 bool solveSmallLinearSystem(
@@ -585,7 +608,7 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
         return result;
     }
     const double referenceFocal = std::max(1.0, finiteMedian(focalSamples));
-    const std::array<double, kBAIntrinsicParameterCount> canonicalSteps{{
+    std::array<double, kBAIntrinsicParameterCount> canonicalSteps{{
         0.01,
         0.01,
         referenceFocal * 0.01,
@@ -600,13 +623,8 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
     InformationMatrix normalMatrix{};
     double totalWeight = 0.0;
     int centralObservationCount = 0;
-    int peripheralObservationCount = 0;
-    int leftCount = 0;
-    int rightCount = 0;
-    int upperCount = 0;
-    int lowerCount = 0;
-    std::array<bool, 8> occupiedSectors{};
-    std::array<int, kRadiusHistogramBins> radiusHistogram{};
+    RadiusHistogram radiusHistogram{};
+    std::array<RadiusHistogram, 8> sectorRadiusHistograms{};
     std::vector<bool> activeCameras(cameras.size(), false);
     std::vector<double> triangulationAngles;
     triangulationAngles.reserve(tracks.size());
@@ -799,47 +817,23 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
             ++validTrackObservationCount;
             result.maximumNormalizedRadius =
                 std::max(result.maximumNormalizedRadius, radius);
-            const int histogramBin = std::clamp(
-                static_cast<int>(
-                    radius / kMaximumHistogramRadius *
-                    kRadiusHistogramBins),
-                0,
-                kRadiusHistogramBins - 1);
+            const int histogramBin = radiusHistogramBin(radius);
             ++radiusHistogram[static_cast<std::size_t>(histogramBin)];
             if (radius <= 0.15)
             {
                 ++centralObservationCount;
             }
-            if (radius >= 0.30)
+            double angle = std::atan2(y, x);
+            if (angle < 0.0)
             {
-                ++peripheralObservationCount;
-                double angle = std::atan2(y, x);
-                if (angle < 0.0)
-                {
-                    angle += 2.0 * kPi;
-                }
-                const int sector = std::clamp(
-                    static_cast<int>(angle * 8.0 / (2.0 * kPi)),
-                    0,
-                    7);
-                occupiedSectors[static_cast<std::size_t>(sector)] = true;
+                angle += 2.0 * kPi;
             }
-            if (x <= -0.15)
-            {
-                ++leftCount;
-            }
-            else if (x >= 0.15)
-            {
-                ++rightCount;
-            }
-            if (y <= -0.15)
-            {
-                ++upperCount;
-            }
-            else if (y >= 0.15)
-            {
-                ++lowerCount;
-            }
+            const int sector = std::clamp(
+                static_cast<int>(angle * 8.0 / (2.0 * kPi)),
+                0,
+                7);
+            ++sectorRadiusHistograms[static_cast<std::size_t>(sector)]
+                                    [static_cast<std::size_t>(histogramBin)];
 
             if (viewingRayCount < static_cast<int>(viewingRays.size()))
             {
@@ -946,10 +940,32 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
         }
     }
 
-    result.occupiedPeripheralSectors = static_cast<int>(std::count(
-        occupiedSectors.begin(), occupiedSectors.end(), true));
     result.normalizedRadiusP90 = radiusQuantile(
         radiusHistogram, result.observationCount, 0.90);
+    const double resolvedRadius = std::max(
+        kMinimumObservableDistortionRadius,
+        result.normalizedRadiusP90);
+    result.peripheralRadiusThreshold = std::min(
+        kReferenceLowOrderDistortionRadius,
+        std::max(
+            kMaximumHistogramRadius / kRadiusHistogramBins,
+            0.65 * result.normalizedRadiusP90));
+    result.lowOrderDistortionScale = std::clamp(
+        std::pow(kReferenceLowOrderDistortionRadius / resolvedRadius, 2.0),
+        1.0,
+        kMaximumLowOrderDistortionScale);
+
+    std::array<int, 8> peripheralSectorCounts{};
+    for (std::size_t sector = 0; sector < peripheralSectorCounts.size(); ++sector)
+    {
+        peripheralSectorCounts[sector] = histogramCountAtOrAbove(
+            sectorRadiusHistograms[sector],
+            result.peripheralRadiusThreshold);
+    }
+    result.occupiedPeripheralSectors = static_cast<int>(std::count_if(
+        peripheralSectorCounts.begin(),
+        peripheralSectorCounts.end(),
+        [](int count) { return count > 0; }));
     result.medianTriangulationAngleDegrees =
         finiteMedian(std::move(triangulationAngles));
     result.multiViewTrackRatio = activeTrackCount <= 0
@@ -996,6 +1012,12 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
     result.valid = true;
     result.incrementalInformationScore =
         incrementalInformationScore(normalMatrix);
+    canonicalSteps[parameterIndex(BAIntrinsicParameter::RadialK1)] *=
+        result.lowOrderDistortionScale;
+    canonicalSteps[parameterIndex(BAIntrinsicParameter::TangentialP1)] *=
+        result.lowOrderDistortionScale;
+    canonicalSteps[parameterIndex(BAIntrinsicParameter::TangentialP2)] *=
+        result.lowOrderDistortionScale;
     for (std::size_t index = 0; index < kBAIntrinsicParameterCount; ++index)
     {
         const double response = std::sqrt(
@@ -1018,6 +1040,9 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
     const double support = clampScore(
         static_cast<double>(result.observationCount) /
         static_cast<double>(std::max(500, result.activeCameraCount * 40)));
+    const int peripheralObservationCount = histogramCountAtOrAbove(
+        radiusHistogram,
+        result.peripheralRadiusThreshold);
     const double peripheralRatio =
         static_cast<double>(peripheralObservationCount) /
         static_cast<double>(result.observationCount);
@@ -1028,6 +1053,20 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
     const double centralCoverage = clampScore(centralRatio / 0.03);
     const double sectorCoverage = clampScore(
         static_cast<double>(result.occupiedPeripheralSectors) / 8.0);
+    const int rightCount = peripheralSectorCounts[0] +
+                           peripheralSectorCounts[1] +
+                           peripheralSectorCounts[7];
+    const int leftCount = peripheralSectorCounts[3] +
+                          peripheralSectorCounts[4] +
+                          peripheralSectorCounts[5];
+    const int lowerCount = peripheralSectorCounts[0] +
+                           peripheralSectorCounts[1] +
+                           peripheralSectorCounts[2] +
+                           peripheralSectorCounts[3];
+    const int upperCount = peripheralSectorCounts[4] +
+                           peripheralSectorCounts[5] +
+                           peripheralSectorCounts[6] +
+                           peripheralSectorCounts[7];
     const double horizontalBalance = balancedRatio(leftCount, rightCount);
     const double verticalBalance = balancedRatio(upperCount, lowerCount);
     const double axisBalance = std::sqrt(
@@ -1074,7 +1113,7 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
               result.geometryStrength);
     result.reliability[parameterIndex(BAIntrinsicParameter::RadialK1)] =
         score(BAIntrinsicParameter::RadialK1,
-              0.55 * peripheralCoverage + 0.45 * broadRadius,
+              0.55 * peripheralCoverage + 0.45 * sectorCoverage,
               0.45 + 0.55 * result.geometryStrength);
     result.reliability[parameterIndex(BAIntrinsicParameter::RadialK2)] =
         score(BAIntrinsicParameter::RadialK2,
@@ -1106,7 +1145,7 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
     enable(BAIntrinsicParameter::FocalLength, 0.52, true);
     enable(BAIntrinsicParameter::RadialK1,
            0.53,
-           result.normalizedRadiusP90 >= 0.22 &&
+           result.normalizedRadiusP90 >= kMinimumObservableDistortionRadius &&
                result.occupiedPeripheralSectors >= 4);
     enable(BAIntrinsicParameter::FocalAspectRatio,
            0.61,
@@ -1129,10 +1168,12 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
     enable(BAIntrinsicParameter::TangentialP1,
            0.65,
            result.geometryStrength >= 0.55 && axisBalance >= 0.55 &&
+               result.normalizedRadiusP90 >= kMinimumObservableDistortionRadius &&
                result.occupiedPeripheralSectors >= 6);
     enable(BAIntrinsicParameter::TangentialP2,
            0.65,
            result.geometryStrength >= 0.55 && axisBalance >= 0.55 &&
+               result.normalizedRadiusP90 >= kMinimumObservableDistortionRadius &&
                result.occupiedPeripheralSectors >= 6);
     enable(BAIntrinsicParameter::RadialK3,
            0.70,
@@ -1146,9 +1187,14 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
         result.enabled[parameterIndex(BAIntrinsicParameter::FocalLength)] = true;
     }
     result.modelName = adaptiveCameraModelName(result.enabled);
+    const bool fieldNormalized = result.lowOrderDistortionScale > 1.0 + 1.0e-9;
     result.reason = result.opticalAxisConcentration >= 0.90
-        ? "weak_parallel_geometry_parameter_reliability"
-        : "convergent_geometry_parameter_reliability";
+        ? (fieldNormalized
+               ? "weak_parallel_geometry_field_normalized_parameter_reliability"
+               : "weak_parallel_geometry_parameter_reliability")
+        : (fieldNormalized
+               ? "convergent_geometry_field_normalized_parameter_reliability"
+               : "convergent_geometry_parameter_reliability");
     return result;
 }
 
@@ -1220,6 +1266,17 @@ bool applyAdaptiveCameraModel(
         options->sharedRadialK1PriorSigma = std::min(
             options->sharedRadialK1PriorSigma, 0.05);
     }
+    const double lowOrderScale = std::clamp(
+        assessment.lowOrderDistortionScale,
+        1.0,
+        kMaximumLowOrderDistortionScale);
+    const bool lowOrderDistortionEnabled =
+        effective[parameterIndex(BAIntrinsicParameter::RadialK1)] ||
+        effective[parameterIndex(BAIntrinsicParameter::TangentialP1)] ||
+        effective[parameterIndex(BAIntrinsicParameter::TangentialP2)];
+    options->sharedLowOrderDistortionScale = lowOrderDistortionEnabled
+        ? lowOrderScale
+        : 1.0;
     return enabledIntrinsicParameterCount(effective) > 0;
 }
 

@@ -58,7 +58,9 @@ xjw::Camera makeLookAtCamera(
 
 std::vector<xjw::BATrack> makeTracks(
     const std::vector<xjw::Camera> &cameras,
-    const std::vector<Vec3> &points)
+    const std::vector<Vec3> &points,
+    int imageWidth = 1024,
+    int imageHeight = 768)
 {
     std::vector<xjw::BATrack> tracks;
     for (const Vec3 &point : points)
@@ -72,8 +74,8 @@ std::vector<xjw::BATrack> makeTracks(
             const double world[3] = {point[0], point[1], point[2]};
             double pixel[2] = {0.0, 0.0};
             if (!cameras[cameraIndex].projectWorldPoint(world, pixel) ||
-                pixel[0] < 16.0 || pixel[0] > 1008.0 ||
-                pixel[1] < 16.0 || pixel[1] > 752.0)
+                pixel[0] < 16.0 || pixel[0] > imageWidth - 16.0 ||
+                pixel[1] < 16.0 || pixel[1] > imageHeight - 16.0)
             {
                 continue;
             }
@@ -120,6 +122,41 @@ std::vector<xjw::Camera> aerialCameras()
     return cameras;
 }
 
+std::vector<Vec3> narrowAerialPoints()
+{
+    std::vector<Vec3> points;
+    for (int row = -8; row <= 8; ++row)
+    {
+        for (int column = -10; column <= 10; ++column)
+        {
+            points.push_back({{
+                static_cast<double>(column) * 0.035,
+                static_cast<double>(row) * 0.035,
+                0.01 * std::sin(column * 0.35) * std::cos(row * 0.30)}});
+        }
+    }
+    return points;
+}
+
+std::vector<xjw::Camera> narrowAerialCameras()
+{
+    std::vector<xjw::Camera> cameras;
+    for (int row = -2; row <= 2; ++row)
+    {
+        for (int column = -2; column <= 2; ++column)
+        {
+            const Vec3 center{{column * 0.12, row * 0.12, 15.0}};
+            xjw::Camera camera = makeLookAtCamera(
+                center,
+                {{center[0], center[1], 0.0}},
+                48000.0);
+            camera.setIntrinsics(48000.0, 48000.0, 1939.0, 1444.0);
+            cameras.push_back(camera);
+        }
+    }
+    return cameras;
+}
+
 std::vector<Vec3> orbitalPoints()
 {
     std::vector<Vec3> points;
@@ -159,6 +196,47 @@ std::vector<xjw::Camera> orbitalCameras()
     return cameras;
 }
 
+std::vector<Vec3> narrowOrbitalPoints()
+{
+    std::vector<Vec3> points;
+    for (int depth = -2; depth <= 2; ++depth)
+    {
+        for (int row = -6; row <= 6; ++row)
+        {
+            for (int column = -6; column <= 6; ++column)
+            {
+                points.push_back({{
+                    column * 0.06,
+                    row * 0.055,
+                    depth * 0.08 + 0.01 * std::sin(column + row)}});
+            }
+        }
+    }
+    return points;
+}
+
+std::vector<xjw::Camera> narrowOrbitalCameras()
+{
+    std::vector<xjw::Camera> cameras;
+    constexpr int count = 24;
+    constexpr double pi = 3.14159265358979323846;
+    for (int index = 0; index < count; ++index)
+    {
+        const double angle = 2.0 * pi * index / count;
+        const double height = 0.8 * std::sin(2.0 * angle);
+        const Vec3 center{{12.0 * std::cos(angle),
+                           12.0 * std::sin(angle),
+                           height}};
+        xjw::Camera camera = makeLookAtCamera(
+            center,
+            {{0.0, 0.0, 0.0}},
+            48000.0);
+        camera.setIntrinsics(48000.0, 48000.0, 1939.0, 1444.0);
+        cameras.push_back(camera);
+    }
+    return cameras;
+}
+
 bool enabled(
     const xjw::BAAdaptiveCameraModelAssessment &assessment,
     xjw::BAIntrinsicParameter parameter)
@@ -189,6 +267,52 @@ TEST(BundleAdjustAdaptiveCameraModelTest, ParallelAerialBlockUsesLowOrderModel)
     EXPECT_FALSE(enabled(assessment, xjw::BAIntrinsicParameter::TangentialP1));
     EXPECT_FALSE(enabled(assessment, xjw::BAIntrinsicParameter::TangentialP2));
     EXPECT_EQ(assessment.modelName, "f+k1");
+}
+
+TEST(BundleAdjustAdaptiveCameraModelTest,
+     NarrowFieldBlockUsesFieldNormalizedLowOrderDistortion)
+{
+    const std::vector<xjw::Camera> cameras = narrowAerialCameras();
+    const std::vector<xjw::BATrack> tracks = makeTracks(
+        cameras,
+        narrowAerialPoints(),
+        3878,
+        2888);
+    ASSERT_GT(tracks.size(), 100u);
+
+    const xjw::BAAdaptiveCameraModelAssessment assessment =
+        xjw::assessAdaptiveCameraModel(cameras, tracks);
+
+    ASSERT_TRUE(assessment.valid);
+    EXPECT_LT(assessment.normalizedRadiusP90, 0.10);
+    EXPECT_GT(assessment.normalizedRadiusP90, 0.025);
+    EXPECT_LT(assessment.peripheralRadiusThreshold, 0.10);
+    EXPECT_GT(assessment.lowOrderDistortionScale, 1.0);
+    EXPECT_GE(assessment.occupiedPeripheralSectors, 4);
+    EXPECT_TRUE(enabled(assessment, xjw::BAIntrinsicParameter::FocalLength));
+    EXPECT_TRUE(enabled(assessment, xjw::BAIntrinsicParameter::RadialK1))
+        << "reliability="
+        << assessment.reliability[static_cast<std::size_t>(
+               xjw::BAIntrinsicParameter::RadialK1)]
+        << " sensitivity="
+        << assessment.sensitivity[static_cast<std::size_t>(
+               xjw::BAIntrinsicParameter::RadialK1)]
+        << " information="
+        << assessment.incrementalInformationScore[static_cast<std::size_t>(
+               xjw::BAIntrinsicParameter::RadialK1)];
+    EXPECT_EQ(assessment.modelName, "f+k1");
+
+    xjw::BAOptions options;
+    options.refineSharedFocalLength = true;
+    options.refineSharedFocalAspectRatio = true;
+    options.refineSharedPrincipalPoint = true;
+    options.refineSharedRadialDistortion = true;
+    options.refineSharedHighOrderDistortion = true;
+    ASSERT_TRUE(xjw::applyAdaptiveCameraModel(assessment, &options));
+    EXPECT_GT(options.sharedLowOrderDistortionScale, 1.0);
+    const double appliedScale = options.sharedLowOrderDistortionScale;
+    ASSERT_TRUE(xjw::applyAdaptiveCameraModel(assessment, &options));
+    EXPECT_DOUBLE_EQ(options.sharedLowOrderDistortionScale, appliedScale);
 }
 
 TEST(BundleAdjustAdaptiveCameraModelTest, InactiveObliqueCamerasDoNotChangeGeometry)
@@ -244,6 +368,104 @@ TEST(BundleAdjustAdaptiveCameraModelTest, ConvergentMultiHeightOrbitReleasesMore
         xjw::enabledIntrinsicParameterCount(assessment.enabled),
         2);
     EXPECT_NE(assessment.modelName, "f+k1");
+}
+
+TEST(BundleAdjustAdaptiveCameraModelTest,
+     NarrowConvergentBlockCanReleaseTangentialDistortion)
+{
+    const std::vector<xjw::Camera> cameras = narrowOrbitalCameras();
+    const std::vector<xjw::BATrack> tracks = makeTracks(
+        cameras,
+        narrowOrbitalPoints(),
+        3878,
+        2888);
+    ASSERT_GT(tracks.size(), 200u);
+
+    const xjw::BAAdaptiveCameraModelAssessment assessment =
+        xjw::assessAdaptiveCameraModel(cameras, tracks);
+
+    ASSERT_TRUE(assessment.valid);
+    EXPECT_LT(assessment.normalizedRadiusP90, 0.10);
+    EXPECT_GT(assessment.geometryStrength, 0.55);
+    EXPECT_GE(assessment.occupiedPeripheralSectors, 6);
+    EXPECT_TRUE(enabled(assessment, xjw::BAIntrinsicParameter::RadialK1));
+    EXPECT_TRUE(enabled(assessment, xjw::BAIntrinsicParameter::TangentialP1))
+        << "reliability="
+        << assessment.reliability[static_cast<std::size_t>(
+               xjw::BAIntrinsicParameter::TangentialP1)]
+        << " sensitivity="
+        << assessment.sensitivity[static_cast<std::size_t>(
+               xjw::BAIntrinsicParameter::TangentialP1)]
+        << " axisBalance=" << assessment.imageAxisBalance;
+    EXPECT_TRUE(enabled(assessment, xjw::BAIntrinsicParameter::TangentialP2))
+        << "reliability="
+        << assessment.reliability[static_cast<std::size_t>(
+               xjw::BAIntrinsicParameter::TangentialP2)]
+        << " sensitivity="
+        << assessment.sensitivity[static_cast<std::size_t>(
+               xjw::BAIntrinsicParameter::TangentialP2)]
+        << " axisBalance=" << assessment.imageAxisBalance;
+}
+
+TEST(BundleAdjustAdaptiveCameraModelTest,
+     NarrowFieldCeresCanEstimateLargeK1Coefficient)
+{
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+    {
+        GTEST_SKIP() << "Ceres CPU backend is not available";
+    }
+
+    const std::vector<xjw::Camera> referenceCameras = narrowAerialCameras();
+    std::vector<xjw::Camera> truthCameras = referenceCameras;
+    for (xjw::Camera &camera : truthCameras)
+    {
+        camera.setDistortion(1.05, 0.0, 0.0, 0.0, 0.0);
+    }
+    std::vector<xjw::BATrack> tracks = makeTracks(
+        truthCameras,
+        narrowAerialPoints(),
+        3878,
+        2888);
+    ASSERT_GT(tracks.size(), 100u);
+    for (xjw::BATrack &track : tracks)
+    {
+        track.controlPointConstraints.push_back(
+            {track.initialPoint, 1.0e-4, 1.0, 0});
+    }
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::CeresCpu;
+    options.allowBackendFallback = false;
+    options.refineCameraPose = false;
+    options.refineSharedFocalLength = true;
+    options.refineSharedRadialDistortion = true;
+    options.enableControlPointConstraints = true;
+    options.enablePointFilter = false;
+    options.stageSharedFocalRefinement = false;
+    options.sharedIntrinsicReferenceCameras = referenceCameras;
+    options.minSharedFocalScale = 1.0;
+    options.maxSharedFocalScale = 1.0;
+    options.maxIterations = 30;
+
+    const xjw::BAAdaptiveCameraModelAssessment assessment =
+        xjw::assessAdaptiveCameraModel(referenceCameras, tracks, &options);
+    ASSERT_TRUE(enabled(assessment, xjw::BAIntrinsicParameter::RadialK1));
+    ASSERT_TRUE(xjw::applyAdaptiveCameraModel(assessment, &options));
+    ASSERT_GT(
+        options.maxSharedRadialK1Abs * options.sharedLowOrderDistortionScale,
+        1.05);
+
+    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(
+        referenceCameras,
+        tracks,
+        options);
+
+    ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
+    ASSERT_FALSE(result.refinedCameras.empty());
+    EXPECT_NEAR(
+        result.refinedCameras.front().distortion().radialK1,
+        1.05,
+        0.08);
 }
 
 TEST(BundleAdjustAdaptiveCameraModelTest, OpposingCollinearRaysRemainDegenerate)

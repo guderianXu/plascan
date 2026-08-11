@@ -5405,6 +5405,126 @@ TEST(CameraCalibrationDataTest, BuildsMetashapeStyleInitialAndAdjustedIntrinsics
                     .contains(QStringLiteral("f")));
 }
 
+TEST(CameraCalibrationDataTest, InfersMissingResolutionFromSameCameraModel)
+{
+    const QString firstPath = QStringLiteral("D:/images/nas_001.tif");
+    const QString secondPath = QStringLiteral("D:/images/nas_002.tif");
+    const QJsonObject metadata{
+        {QStringLiteral("images"), QJsonArray{
+            QJsonObject{{QStringLiteral("path"), firstPath},
+                        {QStringLiteral("width"), 3878},
+                        {QStringLiteral("height"), 2888}},
+            QJsonObject{{QStringLiteral("path"), secondPath}}}}};
+    const auto adjustedCamera = [](bool recordsResolution)
+    {
+        QJsonObject camera{
+            {QStringLiteral("model"), QStringLiteral("tsai")},
+            {QStringLiteral("fu"), 42658.0},
+            {QStringLiteral("fv"), 42658.0},
+            {QStringLiteral("cu"), 1939.0},
+            {QStringLiteral("cv"), 1444.0}};
+        if (recordsResolution)
+        {
+            camera.insert(QStringLiteral("image_width"), 3878);
+            camera.insert(QStringLiteral("image_height"), 2888);
+        }
+        return camera;
+    };
+    const QJsonObject diagnostics{
+        {QStringLiteral("adaptive_camera_model_fitting"), true},
+        {QStringLiteral("adaptive_camera_model_fitting_applied"), true},
+        {QStringLiteral("ba_intrinsic_parameter_enabled"),
+         QJsonObject{{QStringLiteral("f"), true},
+                     {QStringLiteral("k1"), true}}},
+        {QStringLiteral("ba_intrinsic_parameter_reliability"),
+         QJsonObject{{QStringLiteral("f"), 0.91},
+                     {QStringLiteral("k1"), 0.78},
+                     {QStringLiteral("p1"), 0.42}}}};
+
+    const QJsonArray comparisons =
+        xjw::gui::camera_calibration::buildCameraCalibrationComparison(
+            metadata,
+            QMap<QString, QJsonObject>{{firstPath, adjustedCamera(true)},
+                                       {secondPath, adjustedCamera(false)}},
+            diagnostics);
+    ASSERT_EQ(comparisons.size(), 2);
+    for (const QJsonValue &value : comparisons)
+    {
+        const QJsonObject adjusted = value.toObject()
+                                         .value(QStringLiteral("adjusted_camera"))
+                                         .toObject();
+        EXPECT_EQ(adjusted.value(QStringLiteral("image_width")).toInt(), 3878);
+        EXPECT_EQ(adjusted.value(QStringLiteral("image_height")).toInt(), 2888);
+        EXPECT_DOUBLE_EQ(adjusted.value(QStringLiteral("cx")).toDouble(), 0.0);
+        EXPECT_DOUBLE_EQ(adjusted.value(QStringLiteral("cy")).toDouble(), 0.0);
+        EXPECT_DOUBLE_EQ(
+            value.toObject()
+                .value(QStringLiteral("parameter_reliability"))
+                .toObject()
+                .value(QStringLiteral("k1"))
+                .toDouble(),
+            0.78);
+    }
+
+    const QJsonObject report{{QStringLiteral("camera_comparison"), comparisons}};
+    const auto records = xjw::gui::camera_calibration::buildCameraCalibrationRecords(
+        metadata,
+        report);
+    ASSERT_EQ(records.size(), 2);
+    EXPECT_TRUE(std::all_of(records.begin(), records.end(), [](const auto &record)
+    {
+        return record.imageWidth == 3878 && record.imageHeight == 2888;
+    }));
+    EXPECT_DOUBLE_EQ(
+        records.front().parameterReliability
+            .value(QStringLiteral("p1"))
+            .toDouble(),
+        0.42);
+}
+
+TEST(CameraCalibrationDataTest, DoesNotInferAcrossConflictingResolutions)
+{
+    const QJsonObject cameraA{
+        {QStringLiteral("model"), QStringLiteral("tsai")},
+        {QStringLiteral("fu"), 1000.0},
+        {QStringLiteral("fv"), 1000.0},
+        {QStringLiteral("cu"), 500.0},
+        {QStringLiteral("cv"), 400.0},
+        {QStringLiteral("image_width"), 1000},
+        {QStringLiteral("image_height"), 800}};
+    QJsonObject cameraB = cameraA;
+    cameraB.insert(QStringLiteral("image_width"), 2000);
+    cameraB.insert(QStringLiteral("image_height"), 1600);
+    QJsonObject cameraUnknown = cameraA;
+    cameraUnknown.remove(QStringLiteral("image_width"));
+    cameraUnknown.remove(QStringLiteral("image_height"));
+    const QString firstPath = QStringLiteral("D:/images/a.tif");
+    const QString secondPath = QStringLiteral("D:/images/b.tif");
+    const QString unknownPath = QStringLiteral("D:/images/c.tif");
+
+    const QJsonArray comparisons =
+        xjw::gui::camera_calibration::buildCameraCalibrationComparison(
+            {},
+            QMap<QString, QJsonObject>{{firstPath, cameraA},
+                                       {secondPath, cameraB},
+                                       {unknownPath, cameraUnknown}},
+            {});
+    ASSERT_EQ(comparisons.size(), 3);
+    const auto unknown = std::find_if(
+        comparisons.begin(), comparisons.end(), [&](const QJsonValue &value)
+        {
+            return value.toObject().value(QStringLiteral("path")).toString() ==
+                   unknownPath;
+        });
+    ASSERT_NE(unknown, comparisons.end());
+    EXPECT_LE(unknown->toObject()
+                  .value(QStringLiteral("adjusted_camera"))
+                  .toObject()
+                  .value(QStringLiteral("image_width"))
+                  .toInt(),
+              0);
+}
+
 TEST(CameraCalibrationDataTest, CompletedLegacySfmReportDoesNotRelabelAdjustedAsInitial)
 {
     const QJsonObject camera{
