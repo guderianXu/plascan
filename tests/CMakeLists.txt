@@ -711,7 +711,6 @@ qt_add_shaders(test_gui_project_utils match_overlay_test_shaders
         "${CMAKE_SOURCE_DIR}/src/gui/shaders"
     FILES
         ${CMAKE_SOURCE_DIR}/src/gui/shaders/match_overlay.vert
-        ${CMAKE_SOURCE_DIR}/src/gui/shaders/match_overlay_endpoint.vert
         ${CMAKE_SOURCE_DIR}/src/gui/shaders/match_overlay.frag
 )
 if(MSVC)
