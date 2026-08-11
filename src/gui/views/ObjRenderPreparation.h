@@ -1,14 +1,38 @@
 #pragma once
 
 #include <QByteArray>
+#include <QString>
+#include <QVector>
 
+#include <algorithm>
 #include <atomic>
+#include <functional>
 
 #include <plapoint/core/point_cloud.h>
 
 #include "TiePointVisualization.h"
 
 using ObjRenderCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+using ObjPrepareProgressCallback = std::function<void(int, const QString &)>;
+
+struct ObjRenderPreparationLimits
+{
+    std::size_t maximumFullMeshVertices = 12'000'000;
+    std::size_t maximumFullMeshFaces = 24'000'000;
+    std::size_t maximumPreviewPoints = 4'000'000;
+    std::size_t previewPointsPerChunk = 262'144;
+};
+
+struct ObjPointPreviewChunk
+{
+    QByteArray vertexData;
+    int vertexCount = 0;
+
+    bool isValid() const
+    {
+        return vertexCount > 0 && !vertexData.isEmpty();
+    }
+};
 
 struct ObjRenderPreparation
 {
@@ -32,13 +56,27 @@ struct ObjRenderPreparation
 
     bool hasTexture = false;
     bool hasVertexColors = false;
+    bool isPointPreview = false;
+    std::size_t sourceVertexCount = 0;
+    std::size_t sourceFaceCount = 0;
+    QVector<ObjPointPreviewChunk> pointPreviewChunks;
     xjw::gui::tie_points::ScalarRange elevationRange;
 
     bool isValid() const
     {
-        return vertexCount > 0 && triangleIndexCount > 0
-            && strideBytes > 0 && !vertexData.isEmpty()
-            && !triangleIndexData.isEmpty();
+        if (isPointPreview)
+        {
+            return vertexCount > 0 && strideBytes > 0
+                && !pointPreviewChunks.isEmpty()
+                && std::all_of(pointPreviewChunks.cbegin(),
+                               pointPreviewChunks.cend(),
+                               [](const ObjPointPreviewChunk &chunk)
+                               {
+                                   return chunk.isValid();
+                               });
+        }
+        return vertexCount > 0 && triangleIndexCount > 0 && strideBytes > 0
+            && !vertexData.isEmpty() && !triangleIndexData.isEmpty();
     }
 
     bool hasTexturedGeometry() const
@@ -50,4 +88,6 @@ struct ObjRenderPreparation
 
 ObjRenderPreparation prepareObjRenderData(const ObjRenderCloud &cloud,
                                           bool textureImageAvailable,
-                                          const std::atomic_bool *cancellationFlag = nullptr);
+                                          const std::atomic_bool *cancellationFlag = nullptr,
+                                          const ObjPrepareProgressCallback &progress = {},
+                                          const ObjRenderPreparationLimits &limits = {});

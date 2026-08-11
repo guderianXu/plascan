@@ -11,6 +11,7 @@
 #include "CameraSceneWidget.h"
 #include "CameraSceneViewMath.h"
 #include "ObjRenderPreparation.h"
+#include "ObjStreamingLoader.h"
 #include "PointCloudEditPreparation.h"
 #include "PointCloudSnapshotIO.h"
 #include "SceneGeometryPreparation.h"
@@ -60,7 +61,6 @@
 #include <string>
 #include <plapoint/io/xyz_io.h>
 #include <plapoint/io/ply_io.h>
-#include <plapoint/io/obj_io.h>
 
 namespace
 {
@@ -218,8 +218,10 @@ SceneLoadTaskResult loadObjWithMaterialTexture(
     SceneLoadTaskResult result;
     QElapsedTimer timer;
     timer.start();
-    result.cloud = plapoint::io::readObj<float>(
-        xjw::common::io::toNativeNarrowPath(obj_path));
+    result.cloud = readObjStreaming(
+        xjw::common::io::toNativeNarrowPath(obj_path),
+        progress,
+        cancellationFlag);
     result.parseElapsedMs = timer.elapsed();
     if ((is_cancelled && is_cancelled())
         || !result.cloud || result.cloud->size() == 0)
@@ -268,7 +270,10 @@ SceneLoadTaskResult loadObjWithMaterialTexture(
     if (result.cloud->hasFaces())
     {
         result.renderPreparation = prepareObjRenderData(
-            *result.cloud, !result.textureImage.isNull(), cancellationFlag);
+            *result.cloud,
+            !result.textureImage.isNull(),
+            cancellationFlag,
+            progress);
         result.spatialSummary = prepareCloudSpatialSummary(
             *result.cloud, cancellationFlag);
     }
@@ -358,6 +363,16 @@ CameraSceneWidget::CameraSceneWidget(QWidget *parent)
     _overlayWidget->show();
     _overlayWidget->raise();
 
+    _loadProgressAnimationTimer = new QTimer(this);
+    _loadProgressAnimationTimer->setInterval(40);
+    connect(_loadProgressAnimationTimer, &QTimer::timeout, this, [this]()
+    {
+        if (_loading && _plyLoadProgressPercent < 0)
+        {
+            requestOverlayUpdate();
+        }
+    });
+
     connect(this, &CameraSceneWidget::plyLoadProgressChanged,
             this, [this](int generation, int percent, const QString &statusText)
     {
@@ -370,8 +385,16 @@ CameraSceneWidget::CameraSceneWidget(QWidget *parent)
             return;
         }
         _loading = percent < 100;
-        _plyLoadProgressPercent = qBound(0, percent, 100);
+        _plyLoadProgressPercent = percent < 0 ? -1 : qBound(0, percent, 100);
         _plyLoadProgressText = statusText;
+        if (_loading && _plyLoadProgressPercent < 0)
+        {
+            _loadProgressAnimationTimer->start();
+        }
+        else
+        {
+            _loadProgressAnimationTimer->stop();
+        }
         update();
     }, Qt::QueuedConnection);
     connect(this, &QRhiWidget::renderFailed, this, [this]()
@@ -780,8 +803,7 @@ void CameraSceneWidget::clearProjectScene()
     resetView();
 }
 
-// Reader API 本身不可中断；协作标志会跳过后续渲染准备，single-flight
-// 保证同一时刻最多只有一个大文件解析任务占用 CPU 和内存。
+// single-flight 保证同一时刻最多只有一个大文件解析任务占用 CPU 和内存。
 void CameraSceneWidget::cancelPendingLoad()
 {
     ++_loadGen;
@@ -805,6 +827,10 @@ void CameraSceneWidget::cancelPendingLoad()
     _loading = false;
     _plyLoadProgressPercent = -1;
     _plyLoadProgressText.clear();
+    if (_loadProgressAnimationTimer)
+    {
+        _loadProgressAnimationTimer->stop();
+    }
     _fitViewAfterLoad = false;
 }
 
@@ -832,6 +858,8 @@ void CameraSceneWidget::clearPreparedGeometry()
     _preparedPointVertexCount = 0;
     _preparedPointChunks.clear();
     _pointChunks.clear();
+    _meshPointPreviewChunks.clear();
+    _meshIsPointPreview = false;
     _pointScalarBuffer.vertexData.clear();
     _pointScalarBuffer.vertexCount = 0;
     _manualHighlightPointBuffer.vertexData.clear();
@@ -1115,15 +1143,17 @@ void CameraSceneWidget::requestSceneLoad(SceneLoadRequest request)
     _cacheDirty = true;
     _gpuDirty = true;
     _loading = true;
-    _plyLoadProgressPercent = 0;
+    _plyLoadProgressPercent = request.format == SceneLoadFormat::Obj ? -1 : 0;
     const QString format_name = request.format == SceneLoadFormat::Xyz
         ? QStringLiteral("XYZ")
         : request.format == SceneLoadFormat::Ply
             ? QStringLiteral("PLY")
             : QStringLiteral("OBJ");
-    _plyLoadProgressText = request.pointCloudResource
-        ? tr("正在加载 %1 点云...").arg(format_name)
-        : tr("正在加载 %1 模型...").arg(format_name);
+    _plyLoadProgressText = request.format == SceneLoadFormat::Obj
+        ? tr("正在流式读取 OBJ，文件较大时可能需要数分钟...")
+        : request.pointCloudResource
+            ? tr("正在加载 %1 点云...").arg(format_name)
+            : tr("正在加载 %1 模型...").arg(format_name);
     _pendingSceneLoad = std::move(request);
     update();
     LOG_INFO(QStringLiteral("[3D] 正在加载 %1 %2: %3")
@@ -1132,7 +1162,8 @@ void CameraSceneWidget::requestSceneLoad(SceneLoadRequest request)
                           ? QStringLiteral("点云")
                           : QStringLiteral("模型"),
                       _pendingSceneLoad->path));
-    emit plyLoadProgressChanged(_loadGen, 0, _plyLoadProgressText);
+    emit plyLoadProgressChanged(
+        _loadGen, _plyLoadProgressPercent, _plyLoadProgressText);
     pumpSceneLoad();
 }
 
@@ -1158,7 +1189,9 @@ void CameraSceneWidget::pumpSceneLoad()
 
     xjw::gui::tasks::runGuardedWithOutcome(
         this,
-        [request, cancellation]() -> SceneLoadTaskResult
+        [request,
+         cancellation,
+         progressOwner = QPointer<CameraSceneWidget>(this)]() -> SceneLoadTaskResult
         {
             auto is_cancelled = [cancellation]()
             {
@@ -1168,6 +1201,33 @@ void CameraSceneWidget::pumpSceneLoad()
             {
                 return {};
             }
+            const auto report_progress =
+                [progressOwner, generation = request.generation, cancellation](
+                    int percent,
+                    const QString &stage)
+            {
+                if (cancellation->load(std::memory_order_relaxed))
+                {
+                    return;
+                }
+                xjw::gui::tasks::postGuarded(
+                    progressOwner,
+                    [generation, percent, stage, cancellation](CameraSceneWidget *self)
+                    {
+                        if (generation != self->_loadGen
+                            || cancellation != self->_sceneLoadCancellation
+                            || cancellation->load(std::memory_order_relaxed))
+                        {
+                            return;
+                        }
+                        emit self->plyLoadProgressChanged(generation, percent, stage);
+                    });
+            };
+            const auto report_obj_progress =
+                [report_progress](int percent, const QString &stage)
+            {
+                report_progress(percent < 80 ? -1 : percent, stage);
+            };
 
             if (request.format == SceneLoadFormat::Xyz)
             {
@@ -1186,14 +1246,19 @@ void CameraSceneWidget::pumpSceneLoad()
             if (!request.pointCloudResource)
             {
                 return loadObjWithMaterialTexture(
-                    request.path, {}, is_cancelled, cancellation.get());
+                    request.path,
+                    report_obj_progress,
+                    is_cancelled,
+                    cancellation.get());
             }
 
             SceneLoadTaskResult result;
             QElapsedTimer timer;
             timer.start();
-            result.cloud = plapoint::io::readObj<float>(
-                xjw::common::io::toNativeNarrowPath(request.path));
+            result.cloud = readObjStreaming(
+                xjw::common::io::toNativeNarrowPath(request.path),
+                report_obj_progress,
+                cancellation.get());
             result.parseElapsedMs = timer.elapsed();
             if (is_cancelled() || !result.cloud || result.cloud->size() == 0)
             {
@@ -1203,7 +1268,10 @@ void CameraSceneWidget::pumpSceneLoad()
             if (result.cloud->hasFaces())
             {
                 result.renderPreparation = prepareObjRenderData(
-                    *result.cloud, false, cancellation.get());
+                    *result.cloud,
+                    false,
+                    cancellation.get(),
+                    report_progress);
                 result.spatialSummary = prepareCloudSpatialSummary(
                     *result.cloud, cancellation.get());
             }
@@ -1229,6 +1297,7 @@ void CameraSceneWidget::pumpSceneLoad()
                 self->_loading = false;
                 self->_plyLoadProgressPercent = -1;
                 self->_plyLoadProgressText.clear();
+                self->_loadProgressAnimationTimer->stop();
                 self->_fitViewAfterLoad = false;
             }
 
@@ -1251,6 +1320,15 @@ void CameraSceneWidget::pumpSceneLoad()
                     {
                         self->_preparedMesh = std::move(result.renderPreparation);
                         self->applyCloudSpatialSummary(result.spatialSummary);
+                        if (self->_preparedMesh.isPointPreview)
+                        {
+                            self->_renderWarning = self->tr(
+                                "模型规模为 %1 个顶点 / %2 个面；已自动使用 %3 个采样点的分块 LOD 代理显示，原始模型未修改。")
+                                .arg(self->_preparedMesh.sourceVertexCount)
+                                .arg(self->_preparedMesh.sourceFaceCount)
+                                .arg(self->_preparedMesh.vertexCount);
+                            LOG_WARN(QStringLiteral("[3D] %1").arg(self->_renderWarning));
+                        }
                     }
                     else
                     {
@@ -2432,6 +2510,8 @@ void CameraSceneWidget::initialize(QRhiCommandBuffer *cb)
     _meshTrianglePipeline.fragmentShaderPath = QStringLiteral(":/shaders/camera_scene_mesh.frag.qsb");
     _meshWireframePipeline.vertexShaderPath = _meshTrianglePipeline.vertexShaderPath;
     _meshWireframePipeline.fragmentShaderPath = _meshTrianglePipeline.fragmentShaderPath;
+    _meshPointPreviewPipeline.vertexShaderPath = _meshTrianglePipeline.vertexShaderPath;
+    _meshPointPreviewPipeline.fragmentShaderPath = _meshTrianglePipeline.fragmentShaderPath;
     _texturedMeshPipeline.vertexShaderPath =
         QStringLiteral(":/shaders/camera_scene_textured_mesh.vert.qsb");
     _texturedMeshPipeline.fragmentShaderPath =
@@ -2451,6 +2531,7 @@ void CameraSceneWidget::releaseResources()
     releasePipelineResources(&_colorLinePipeline);
     releasePipelineResources(&_meshTrianglePipeline);
     releasePipelineResources(&_meshWireframePipeline);
+    releasePipelineResources(&_meshPointPreviewPipeline);
     releaseTexturedMeshPipelineResources();
     releaseImagePipelineResources();
     releaseCameraThumbnailPipelineResources();
@@ -2480,6 +2561,14 @@ void CameraSceneWidget::releaseGeometryBufferResources()
     _manualHighlightBuffersReleasePending = false;
     _meshBuffer.vertexBuffer.reset();
     _texturedMeshBuffer.vertexBuffer.reset();
+    for (const QSharedPointer<RhiMeshPointPreviewChunk> &chunk
+         : std::as_const(_meshPointPreviewChunks))
+    {
+        if (chunk)
+        {
+            chunk->points.vertexBuffer.reset();
+        }
+    }
     _meshTriangleIndices.indexBuffer.reset();
     _meshWireframeIndices.indexBuffer.reset();
     _lineBuffer.vertexBuffer.reset();
@@ -2807,6 +2896,8 @@ bool CameraSceneWidget::uploadGpuData()
     _meshVertCount = 0;
     _meshHasFaces = false;
     _meshHasTexture = false;
+    _meshIsPointPreview = false;
+    _meshPointPreviewChunks.clear();
     if (_cloud.size() > 0 && _cloud.hasFaces())
     {
         if (!_preparedMesh.isValid())
@@ -2816,22 +2907,40 @@ bool CameraSceneWidget::uploadGpuData()
                     .arg(_cloud.size())
                     .arg(_cloud.faces()->rows()));
         }
-        assignByteBuffer(_meshBuffer,
-                         _preparedMesh.vertexData,
-                         _preparedMesh.vertexCount,
-                         _preparedMesh.strideBytes);
-        assignIndexBuffer(_meshTriangleIndices,
-                          _preparedMesh.triangleIndexData,
-                          _preparedMesh.triangleIndexCount);
-        assignIndexBuffer(_meshWireframeIndices,
-                          _preparedMesh.wireframeIndexData,
-                          _preparedMesh.wireframeIndexCount);
-        if (_preparedMesh.hasTexturedGeometry())
+        if (_preparedMesh.isPointPreview)
         {
-            assignByteBuffer(_texturedMeshBuffer,
-                             _preparedMesh.texturedVertexData,
-                             _preparedMesh.texturedVertexCount,
-                             _preparedMesh.texturedStrideBytes);
+            for (const ObjPointPreviewChunk &preparedChunk
+                 : std::as_const(_preparedMesh.pointPreviewChunks))
+            {
+                QSharedPointer<RhiMeshPointPreviewChunk> chunk(
+                    new RhiMeshPointPreviewChunk);
+                assignByteBuffer(chunk->points,
+                                 preparedChunk.vertexData,
+                                 preparedChunk.vertexCount,
+                                 _preparedMesh.strideBytes);
+                _meshPointPreviewChunks.push_back(std::move(chunk));
+            }
+            _meshIsPointPreview = !_meshPointPreviewChunks.isEmpty();
+        }
+        else
+        {
+            assignByteBuffer(_meshBuffer,
+                             _preparedMesh.vertexData,
+                             _preparedMesh.vertexCount,
+                             _preparedMesh.strideBytes);
+            assignIndexBuffer(_meshTriangleIndices,
+                              _preparedMesh.triangleIndexData,
+                              _preparedMesh.triangleIndexCount);
+            assignIndexBuffer(_meshWireframeIndices,
+                              _preparedMesh.wireframeIndexData,
+                              _preparedMesh.wireframeIndexCount);
+            if (_preparedMesh.hasTexturedGeometry())
+            {
+                assignByteBuffer(_texturedMeshBuffer,
+                                 _preparedMesh.texturedVertexData,
+                                 _preparedMesh.texturedVertexCount,
+                                 _preparedMesh.texturedStrideBytes);
+            }
         }
         _meshVertCount = _preparedMesh.vertexCount;
         _meshHasFaces = _preparedMesh.triangleIndexCount > 0;
@@ -4201,7 +4310,6 @@ bool CameraSceneWidget::ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *u
             cameraPlaneImageKey(pose.imagePath, planeMode));
         _thumbnailPipeline.instancesDirty = true;
     }
-
     if (!_thumbnailPipeline.solidResource
         || !_thumbnailPipeline.solidResource->bindings)
     {
@@ -4761,7 +4869,22 @@ void CameraSceneWidget::drawSceneGeometry(QRhiCommandBuffer *cb,
         0.0f,
         0.0f};
     apply_scalar_range(&uniforms, _modelElevationRange);
-    if (_modelColorMode == ModelColorMode::Wireframe && _meshHasFaces)
+    if (_meshIsPointPreview)
+    {
+        uniforms.lightDirPointSize[3] = 1.6f * float(devicePixelRatioF());
+        for (const QSharedPointer<RhiMeshPointPreviewChunk> &chunk
+             : std::as_const(_meshPointPreviewChunks))
+        {
+            if (chunk)
+            {
+                drawRhiBuffer(cb,
+                              &chunk->points,
+                              &_meshPointPreviewPipeline,
+                              uniforms);
+            }
+        }
+    }
+    else if (_modelColorMode == ModelColorMode::Wireframe && _meshHasFaces)
     {
         drawIndexedRhiBuffer(cb,
                              &_meshBuffer,
@@ -4840,6 +4963,10 @@ void CameraSceneWidget::render(QRhiCommandBuffer *cb)
                         _meshBuffer.strideBytes > 0
                             ? _meshBuffer.strideBytes
                             : 9 * int(sizeof(float)),
+                        true) ||
+        !ensurePipeline(&_meshPointPreviewPipeline,
+                        int(QRhiGraphicsPipeline::Points),
+                        9 * int(sizeof(float)),
                         true))
     {
         requestOverlayUpdate();
@@ -4889,6 +5016,15 @@ void CameraSceneWidget::render(QRhiCommandBuffer *cb)
     {
         abort_update_batch();
         return;
+    }
+    for (const QSharedPointer<RhiMeshPointPreviewChunk> &chunk
+         : std::as_const(_meshPointPreviewChunks))
+    {
+        if (!chunk || !ensureRhiBuffer(&chunk->points, updates))
+        {
+            abort_update_batch();
+            return;
+        }
     }
     const bool textureRequired = _modelColorMode == ModelColorMode::Texture
         && _meshHasTexture;

@@ -650,7 +650,10 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/tie_points/CreateTiePointsDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/tie_points/ThinTiePointsDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/tie_points/CleanTiePointsDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/views/ObjPointPreviewPreparation.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/ObjRenderPreparation.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/views/ObjStreamingLoader.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/views/ObjStreamingLoaderAssembly.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/menu/ToolbarButton.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/menu/MainMenu.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/main_window/ModelDropSupport.cpp
@@ -708,6 +711,7 @@ qt_add_shaders(test_gui_project_utils match_overlay_test_shaders
         "${CMAKE_SOURCE_DIR}/src/gui/shaders"
     FILES
         ${CMAKE_SOURCE_DIR}/src/gui/shaders/match_overlay.vert
+        ${CMAKE_SOURCE_DIR}/src/gui/shaders/match_overlay_endpoint.vert
         ${CMAKE_SOURCE_DIR}/src/gui/shaders/match_overlay.frag
 )
 if(MSVC)

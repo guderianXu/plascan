@@ -1240,7 +1240,8 @@ TEST(CameraSceneRenderContractTest, ImportedPointCloudsUsePointCloudLoadersAndFi
         objLoaderStart,
         tiePointLoaderStart - objLoaderStart);
     EXPECT_TRUE(objLoaderBlock.contains(QStringLiteral("if (!request.pointCloudResource)")));
-    EXPECT_TRUE(objLoaderBlock.contains(QStringLiteral("plapoint::io::readObj<float>")));
+    EXPECT_TRUE(objLoaderBlock.contains(QStringLiteral("readObjStreaming(")));
+    EXPECT_TRUE(objLoaderBlock.contains(QStringLiteral("report_obj_progress")));
     EXPECT_TRUE(objLoaderBlock.contains(QStringLiteral(
         "&& !request.pointCloudResource\n"
         "                        && !result.textureWarning.isEmpty())")));
@@ -1263,6 +1264,31 @@ TEST(CameraSceneRenderContractTest, ImportedPointCloudsUsePointCloudLoadersAndFi
     EXPECT_TRUE(sceneSource.contains(QStringLiteral(
         "drawPointCloud(cb, uniforms, clipMatrix);")));
     EXPECT_FALSE(sceneSource.contains(QStringLiteral("drawPointCloudOverlay(painter);")));
+}
+
+TEST(CameraSceneRenderContractTest, LargeObjUsesIndeterminateReadAndChunkedPointLod)
+{
+    const QString header =
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.h"));
+    const QString source =
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidget.cpp"));
+    const QString legends =
+        readProjectFile(QStringLiteral("src/gui/views/CameraSceneWidgetLegends.cpp"));
+
+    EXPECT_TRUE(source.contains(QStringLiteral(
+        "request.format == SceneLoadFormat::Obj ? -1 : 0")));
+    EXPECT_TRUE(source.contains(QStringLiteral(
+        "report_progress(percent < 80 ? -1 : percent, stage)")));
+    EXPECT_TRUE(source.contains(QStringLiteral(
+        "_loadProgressAnimationTimer->setInterval(40)")));
+    EXPECT_TRUE(legends.contains(QStringLiteral(
+        "const bool indeterminate = _plyLoadProgressPercent < 0")));
+    EXPECT_TRUE(header.contains(QStringLiteral(
+        "QVector<QSharedPointer<RhiMeshPointPreviewChunk>> _meshPointPreviewChunks")));
+    EXPECT_TRUE(source.contains(QStringLiteral(
+        "int(QRhiGraphicsPipeline::Points)")));
+    EXPECT_TRUE(source.contains(QStringLiteral(
+        "for (const ObjPointPreviewChunk &preparedChunk")));
 }
 
 TEST(CameraSceneRenderContractTest, PointCloudUsesOwnBoundsAndPixelSizedFloorPivot)

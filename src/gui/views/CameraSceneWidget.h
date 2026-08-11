@@ -58,6 +58,7 @@ class QRhiSampler;
 class QRhiShaderResourceBindings;
 class QRhiTexture;
 class QResizeEvent;
+class QTimer;
 
 // =============================================================================
 // CameraSceneWidget
@@ -420,6 +421,11 @@ private:
         int pointCount = 0;
     };
 
+    struct RhiMeshPointPreviewChunk
+    {
+        RhiBufferSet points;
+    };
+
     struct RhiImagePipelineSet
     {
         QScopedPointer<QRhiBuffer> vertexBuffer;
@@ -618,8 +624,10 @@ private:
     RhiBufferSet _texturedMeshBuffer;
     RhiIndexBufferSet _meshTriangleIndices;
     RhiIndexBufferSet _meshWireframeIndices;
+    QVector<QSharedPointer<RhiMeshPointPreviewChunk>> _meshPointPreviewChunks;
     int _meshVertCount = 0;
     bool _meshHasFaces = true;  ///< false 时用点图元绘制含法向量点云
+    bool _meshIsPointPreview = false;
     ObjRenderPreparation _preparedMesh;
     bool _preparedPointBuffer = false;
     QByteArray _preparedPointVertexData;
@@ -635,6 +643,7 @@ private:
     RhiPipelineSet _colorLinePipeline;
     RhiPipelineSet _meshTrianglePipeline;
     RhiPipelineSet _meshWireframePipeline;
+    RhiPipelineSet _meshPointPreviewPipeline;
     RhiTexturedMeshPipelineSet _texturedMeshPipeline;
     RhiImagePipelineSet _imagePipeline;
     RhiCameraThumbnailPipelineSet _thumbnailPipeline;
@@ -686,6 +695,7 @@ private:
     bool _sceneLoadWorkerActive = false;
     int    _plyLoadProgressPercent = -1;
     QString _plyLoadProgressText;
+    QTimer *_loadProgressAnimationTimer = nullptr;
     bool _fitViewAfterLoad = false;
     QQuaternion _viewRot;                     // 当前视图旋转四元数
     double _zoomScale = 1.0;                  // 当前缩放系数（影响相机到场景中心的距离）

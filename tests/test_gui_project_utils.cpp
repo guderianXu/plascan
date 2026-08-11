@@ -72,6 +72,7 @@
 #include "TaskStatusWidget.h"
 #include "TaskbarProgressController.h"
 #include "ObjRenderPreparation.h"
+#include "ObjStreamingLoader.h"
 #include "LayerImageLoader.h"
 
 #include "Camera.h"
@@ -14474,7 +14475,13 @@ TEST(CameraModel3DDialogTest, ObjReaderAcceptsWhitespacePrefixedTriangularMesh)
     stream.flush();
     file.close();
 
-    auto cloud = plapoint::io::readObj<float>(objPath.toStdString());
+    QVector<int> loadProgress;
+    auto cloud = readObjStreaming(
+        xjw::common::io::toNativeNarrowPath(objPath),
+        [&loadProgress](int percent, const QString &)
+        {
+            loadProgress.push_back(percent);
+        });
     ASSERT_TRUE(cloud != nullptr);
     EXPECT_EQ(cloud->size(), 4u);
     ASSERT_TRUE(cloud->hasFaces());
@@ -14539,6 +14546,102 @@ TEST(CameraModel3DDialogTest, ObjReaderPreservesPerFaceTextureSeams)
     EXPECT_FLOAT_EQ(renderVertices[3 * 11 + 10], 0.25f);
 }
 
+TEST(CameraModel3DDialogTest, StreamingObjReaderReportsProgressAndPreservesGeometry)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString objPath = QDir(tempDir.path()).filePath(QStringLiteral("streamed.obj"));
+    QFile file(objPath);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Text));
+    QTextStream stream(&file);
+    stream << "mtllib streamed.mtl\n"
+           << "v 0 0 0 1 0 0\n"
+           << "v 1 0 0 0 1 0\n"
+           << "v 1 1 0 0 0 1\n"
+           << "v 0 1 0 1 1 1\n"
+           << "vt 0 0\n"
+           << "vt 1 0\n"
+           << "vt 1 1\n"
+           << "vt 0 1\n"
+           << "f 1/1 2/2 3/3 4/4\n";
+    stream.flush();
+    file.close();
+
+    QVector<int> percentages;
+    QStringList stages;
+    const auto cloud = readObjStreaming(
+        xjw::common::io::toNativeNarrowPath(objPath),
+        [&percentages, &stages](int percent, const QString &stage)
+        {
+            percentages.push_back(percent);
+            stages.push_back(stage);
+        });
+
+    ASSERT_NE(cloud, nullptr);
+    EXPECT_EQ(cloud->size(), 4u);
+    ASSERT_TRUE(cloud->hasFaces());
+    EXPECT_EQ(cloud->faces()->rows(), 2);
+    ASSERT_TRUE(cloud->hasColors());
+    EXPECT_EQ(cloud->colors()->getValue(0, 0), 255);
+    ASSERT_TRUE(cloud->hasTextureCoords());
+    ASSERT_TRUE(cloud->hasFaceTextureIndices());
+    EXPECT_EQ(cloud->faceTextureIndices()->getValue(1, 2), 3);
+    EXPECT_EQ(cloud->materialLibraryFile(), "streamed.mtl");
+    ASSERT_FALSE(percentages.isEmpty());
+    EXPECT_EQ(percentages.back(), 80);
+    EXPECT_TRUE(std::is_sorted(percentages.cbegin(), percentages.cend()));
+    EXPECT_TRUE(stages.join(QLatin1Char(' ')).contains(QStringLiteral("流式解析")));
+}
+
+TEST(CameraModel3DDialogTest, OversizedMeshUsesChunkedPointLodWithoutChangingCloud)
+{
+    ObjRenderCloud cloud(6);
+    for (int index = 0; index < 6; ++index)
+    {
+        cloud.points()(index, 0) = float(index);
+        cloud.points()(index, 1) = float(index % 2);
+        cloud.points()(index, 2) = float(index) * 0.5f;
+    }
+    plamatrix::DenseMatrix<int, plamatrix::Device::CPU> faces(2, 3);
+    faces(0, 0) = 0;
+    faces(0, 1) = 1;
+    faces(0, 2) = 2;
+    faces(1, 0) = 3;
+    faces(1, 1) = 4;
+    faces(1, 2) = 5;
+    cloud.setFaces(std::move(faces));
+
+    ObjRenderPreparationLimits limits;
+    limits.maximumFullMeshVertices = 3;
+    limits.maximumFullMeshFaces = 10;
+    limits.maximumPreviewPoints = 4;
+    limits.previewPointsPerChunk = 2;
+    QVector<int> progress;
+    const ObjRenderPreparation prepared = prepareObjRenderData(
+        cloud,
+        false,
+        nullptr,
+        [&progress](int percent, const QString &)
+        {
+            progress.push_back(percent);
+        },
+        limits);
+
+    ASSERT_TRUE(prepared.isValid());
+    EXPECT_TRUE(prepared.isPointPreview);
+    EXPECT_EQ(prepared.sourceVertexCount, 6u);
+    EXPECT_EQ(prepared.sourceFaceCount, 2u);
+    EXPECT_EQ(prepared.vertexCount, 4);
+    ASSERT_EQ(prepared.pointPreviewChunks.size(), 2);
+    EXPECT_EQ(prepared.pointPreviewChunks.at(0).vertexCount, 2);
+    EXPECT_EQ(prepared.pointPreviewChunks.at(1).vertexCount, 2);
+    EXPECT_EQ(cloud.size(), 6u);
+    EXPECT_EQ(cloud.faces()->rows(), 2);
+    ASSERT_FALSE(progress.isEmpty());
+    EXPECT_EQ(progress.back(), 98);
+}
+
 TEST(CameraModel3DDialogTest, StaticMeshPreparationPreservesSourceVertexColors)
 {
     ObjRenderCloud cloud(3);
@@ -14594,7 +14697,13 @@ TEST(CameraModel3DDialogTest, ObjReaderBenchmarkUsesConfiguredModel)
 
     QElapsedTimer timer;
     timer.start();
-    auto cloud = plapoint::io::readObj<float>(objPath.toStdString());
+    QVector<int> loadProgress;
+    auto cloud = readObjStreaming(
+        xjw::common::io::toNativeNarrowPath(objPath),
+        [&loadProgress](int percent, const QString &)
+        {
+            loadProgress.push_back(percent);
+        });
     const qint64 parseElapsedMs = timer.elapsed();
 
     ASSERT_TRUE(cloud != nullptr);
@@ -14604,6 +14713,8 @@ TEST(CameraModel3DDialogTest, ObjReaderBenchmarkUsesConfiguredModel)
     const ObjRenderPreparation prepared = prepareObjRenderData(*cloud, true);
     const qint64 prepareElapsedMs = timer.elapsed();
     ASSERT_TRUE(prepared.isValid());
+    ASSERT_FALSE(loadProgress.isEmpty());
+    EXPECT_EQ(loadProgress.back(), 80);
     RecordProperty("obj_parse_elapsed_ms", parseElapsedMs);
     RecordProperty("obj_prepare_elapsed_ms", prepareElapsedMs);
     RecordProperty("obj_vertex_count", static_cast<qint64>(cloud->size()));

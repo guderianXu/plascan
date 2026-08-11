@@ -4,6 +4,7 @@
 // =============================================================================
 #include "CameraSceneWidget.h"
 
+#include <QDateTime>
 #include <QLinearGradient>
 #include <QPainter>
 #include <QtMath>
@@ -181,7 +182,7 @@ void CameraSceneWidget::drawModelLegend(QPainter &painter) const
 
 void CameraSceneWidget::drawPlyLoadProgressOverlay(QPainter &painter)
 {
-    if (!_loading || _plyLoadProgressPercent < 0)
+    if (!_loading)
     {
         return;
     }
@@ -194,7 +195,17 @@ void CameraSceneWidget::drawPlyLoadProgressOverlay(QPainter &painter)
 
     const QRectF panel(24.0, height() - 72.0, panelWidth, 48.0);
     const QRectF bar(panel.left() + 16.0, panel.bottom() - 16.0, panel.width() - 32.0, 6.0);
-    const qreal fillWidth = bar.width() * qBound(0, _plyLoadProgressPercent, 100) / 100.0;
+    const bool indeterminate = _plyLoadProgressPercent < 0;
+    const qreal fillWidth = indeterminate
+        ? qMax<qreal>(32.0, bar.width() * 0.24)
+        : bar.width() * qBound(0, _plyLoadProgressPercent, 100) / 100.0;
+    qreal fillLeft = bar.left();
+    if (indeterminate)
+    {
+        const qreal travel = qMax<qreal>(0.0, bar.width() - fillWidth);
+        const qreal phase = (QDateTime::currentMSecsSinceEpoch() % 1600) / 800.0;
+        fillLeft += travel * (phase <= 1.0 ? phase : 2.0 - phase);
+    }
 
     painter.save();
     painter.setPen(QPen(QColor(70, 82, 96, 160), 1.0));
@@ -211,18 +222,20 @@ void CameraSceneWidget::drawPlyLoadProgressOverlay(QPainter &painter)
                             20.0),
                      Qt::AlignVCenter | Qt::AlignLeft,
                      title);
-    painter.drawText(QRectF(panel.right() - 70.0,
-                            panel.top() + 8.0,
-                            54.0,
-                            20.0),
-                     Qt::AlignVCenter | Qt::AlignRight,
-                     QStringLiteral("%1%").arg(qBound(0, _plyLoadProgressPercent, 100)));
+    if (!indeterminate)
+    {
+        painter.drawText(
+            QRectF(panel.right() - 70.0, panel.top() + 8.0, 54.0, 20.0),
+            Qt::AlignVCenter | Qt::AlignRight,
+            QStringLiteral("%1%").arg(qBound(0, _plyLoadProgressPercent, 100)));
+    }
 
     painter.setPen(Qt::NoPen);
     painter.setBrush(QColor(218, 226, 238));
     painter.drawRoundedRect(bar, 3.0, 3.0);
     painter.setBrush(QColor(36, 115, 218));
-    painter.drawRoundedRect(QRectF(bar.left(), bar.top(), fillWidth, bar.height()), 3.0, 3.0);
+    painter.drawRoundedRect(
+        QRectF(fillLeft, bar.top(), fillWidth, bar.height()), 3.0, 3.0);
     painter.restore();
 }
 

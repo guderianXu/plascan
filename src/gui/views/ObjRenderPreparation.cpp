@@ -1,4 +1,5 @@
 #include "ObjRenderPreparation.h"
+#include "ObjPointPreviewPreparation.h"
 
 #include <QVector3D>
 
@@ -81,7 +82,9 @@ bool hasValidTextureCoordinates(const ObjRenderCloud &cloud,
 
 ObjRenderPreparation prepareObjRenderData(const ObjRenderCloud &cloud,
                                           bool textureImageAvailable,
-                                          const std::atomic_bool *cancellationFlag)
+                                          const std::atomic_bool *cancellationFlag,
+                                          const ObjPrepareProgressCallback &progress,
+                                          const ObjRenderPreparationLimits &limits)
 {
     ObjRenderPreparation result;
     if (cloud.size() == 0 || !cloud.hasFaces()
@@ -94,6 +97,18 @@ ObjRenderPreparation prepareObjRenderData(const ObjRenderCloud &cloud,
 
     const auto *faces = cloud.faces();
     const std::size_t vertex_count = cloud.size();
+    const std::size_t face_count = static_cast<std::size_t>(faces->rows());
+    if (limits.maximumPreviewPoints == 0 || limits.previewPointsPerChunk == 0)
+    {
+        return {};
+    }
+    if (vertex_count > limits.maximumFullMeshVertices
+        || face_count > limits.maximumFullMeshFaces)
+    {
+        return prepareObjPointPreview(cloud, cancellationFlag, progress, limits);
+    }
+    result.sourceVertexCount = vertex_count;
+    result.sourceFaceCount = face_count;
     result.hasTexture = textureImageAvailable
         && hasValidTextureCoordinates(cloud, cancellationFlag);
     if (isCancellationRequested(cancellationFlag))

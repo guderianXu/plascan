@@ -67,7 +67,10 @@ set(GUI_SOURCES
   views/CameraSceneWidget.cpp
   views/CameraSceneWidgetLegends.cpp
   views/CameraSceneWidgetOverlay.cpp
+  views/ObjPointPreviewPreparation.cpp
   views/ObjRenderPreparation.cpp
+  views/ObjStreamingLoader.cpp
+  views/ObjStreamingLoaderAssembly.cpp
   views/TiePointVisualization.cpp
   widgets/CanvasWidget.cpp
   widgets/DataTreeWidget.cpp
