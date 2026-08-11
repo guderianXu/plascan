@@ -629,25 +629,18 @@ void enforceNoDepthInterpolationPolicy(
     // “插值禁用” applies to depth observations, not to the construction of a
     // continuous surface between measured samples. Exclude every path that
     // invents depth pixels or performs an unconstrained visual-hull fill, while
-    // retaining the orbital visibility-occupancy carrier and geometry-verified
+    // retaining the orbital visibility-occupancy prior and geometry-verified
     // boundary recovery. Those paths are bounded by depth, silhouettes and
     // free-space visibility and match the user-facing semantics of building a
-    // mesh without interpolating the source depth maps.
+    // mesh without interpolating the source depth maps. The occupancy grid is
+    // deliberately kept as a topology/sign prior: directly extracting its
+    // low-resolution cell boundary quantizes orbital geometry and cannot be
+    // repaired by later triangle subdivision.
     options->fillSmallBoundaryHoles = false;
     options->enableSilhouetteAwareFinalHoleFill = false;
     options->enableVisibilityConstrainedFinalHoleFill = false;
     options->enableTinyBoundaryLoopCollapse = false;
     options->enableVisualHullSignedDistanceCompletion = false;
-    if (!settings.contains(QStringLiteral(
-            "tsdfVisibilityOccupancyCellBoundaryExtraction")))
-    {
-        // In no-depth-interpolation mode, extract the visibility carrier
-        // itself instead of cutting it back to only the high-resolution TSDF
-        // narrow band. The carrier is already constrained by measured depth,
-        // silhouettes and free space, remains closed by construction, and is
-        // subsequently projected toward measured depth under topology guards.
-        options->visibilityOccupancyCellBoundaryExtraction = true;
-    }
     options->allowInvalidNearestPixelRecovery = false;
     options->excludeAnchoredInterpolationObservations = true;
     options->adaptiveTgvRecoverUnsupportedSamples = false;

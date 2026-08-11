@@ -7537,7 +7537,7 @@ TEST(MeshWorkflowSettingsTest, DepthTsdfInterpolationControlsBoundedHoleFilling)
 }
 
 TEST(MeshWorkflowSettingsTest,
-     DisabledInterpolationRetainsConstrainedOrbitalSurfaceCarrier)
+     DisabledInterpolationRetainsHighResolutionOrbitalSurface)
 {
     const QJsonObject settings{
         {QStringLiteral("interpolation"), QStringLiteral("disabled")},
@@ -7555,7 +7555,7 @@ TEST(MeshWorkflowSettingsTest,
     EXPECT_FALSE(options.enableVisibilityConstrainedFinalHoleFill);
     EXPECT_FALSE(options.enableTinyBoundaryLoopCollapse);
     EXPECT_TRUE(options.enableVisibilityOccupancyCompletion);
-    EXPECT_TRUE(options.visibilityOccupancyCellBoundaryExtraction);
+    EXPECT_FALSE(options.visibilityOccupancyCellBoundaryExtraction);
     EXPECT_FALSE(options.enableVisualHullSignedDistanceCompletion);
     EXPECT_TRUE(options.enableOrbitalGapBoundaryRecovery);
     EXPECT_TRUE(options.enableOrbitalGapAdaptiveTruncation);
@@ -7572,6 +7572,24 @@ TEST(MeshWorkflowSettingsTest,
     EXPECT_TRUE(options.enableDepthCompletenessDiagnostics);
     EXPECT_TRUE(options.enforceDepthCompletenessGate);
     EXPECT_FALSE(options.mc33RequireSupportedSignChange);
+}
+
+TEST(MeshWorkflowSettingsTest,
+     DisabledInterpolationHonorsExplicitOccupancyBoundaryExtraction)
+{
+    const QJsonObject settings{
+        {QStringLiteral("interpolation"), QStringLiteral("disabled")},
+        {QStringLiteral("simplifyTargetFaces"), 60000},
+        {QStringLiteral("tsdfVisibilityOccupancyCellBoundaryExtraction"), true}
+    };
+    auto options =
+        xjw::mesh::workflow::depthTsdfOptionsFromSettings(settings, 384);
+
+    xjw::mesh::workflow::applyOrbitalDepthTsdfDefaults(
+        settings, &options, 256);
+
+    EXPECT_TRUE(options.enableVisibilityOccupancyCompletion);
+    EXPECT_TRUE(options.visibilityOccupancyCellBoundaryExtraction);
 }
 
 TEST(MeshWorkflowSettingsTest,
@@ -7593,7 +7611,7 @@ TEST(MeshWorkflowSettingsTest,
 
     EXPECT_FALSE(options.fillSmallBoundaryHoles);
     EXPECT_TRUE(options.enableVisibilityOccupancyCompletion);
-    EXPECT_TRUE(options.visibilityOccupancyCellBoundaryExtraction);
+    EXPECT_FALSE(options.visibilityOccupancyCellBoundaryExtraction);
     EXPECT_FALSE(options.enableVisualHullSignedDistanceCompletion);
     EXPECT_TRUE(options.enableOrbitalGapBoundaryRecovery);
     EXPECT_TRUE(options.enableOrbitalGapAdaptiveTruncation);
