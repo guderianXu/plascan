@@ -15,7 +15,6 @@ namespace
 {
 
 constexpr int kMaximumLightGlueWorkers = 4;
-constexpr int kMaximumGeometryWorkers = 8;
 constexpr int kMinimumGeometryPairsPerWorker = 2;
 constexpr int kLoMaRNormalKeypoints = 1024;
 constexpr int kLoMaRHighKeypoints = 2048;
@@ -157,13 +156,8 @@ int resolveGeometryVerificationWorkers(int pairCount,
     }
 
     const int workersByItems = pairCount / kMinimumGeometryPairsPerWorker;
-    return std::max(
-        1,
-        std::min({
-            workersByItems,
-            static_cast<int>(hardwareThreads),
-            kMaximumGeometryWorkers,
-        }));
+    const int workersByCpu = std::max(1, static_cast<int>(hardwareThreads / 2));
+    return std::max(1, std::min(workersByItems, workersByCpu));
 }
 
 bool isCudaOutOfMemoryError(const QString &message)

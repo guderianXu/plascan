@@ -121,11 +121,14 @@ TEST(MatchPhotosParallelismTest, MissingTelemetryUsesConservativeLoMaRBucket)
     EXPECT_EQ(xjw::matchphotos::resolveLoMaRKeypointBudget(40000, 0, {}), 1024);
 }
 
-TEST(MatchPhotosParallelismTest, GeometryVerificationUsesBoundedCpuPairParallelism)
+TEST(MatchPhotosParallelismTest, GeometryVerificationUsesHalfLogicalCpuPairParallelism)
 {
     EXPECT_EQ(
         xjw::matchphotos::resolveGeometryVerificationWorkers(120, 32),
-        8);
+        16);
+    EXPECT_EQ(
+        xjw::matchphotos::resolveGeometryVerificationWorkers(120, 15),
+        7);
     EXPECT_EQ(
         xjw::matchphotos::resolveGeometryVerificationWorkers(8, 32),
         4);
@@ -135,6 +138,9 @@ TEST(MatchPhotosParallelismTest, GeometryVerificationKeepsSmallOrUnknownHostsSer
 {
     EXPECT_EQ(
         xjw::matchphotos::resolveGeometryVerificationWorkers(2, 32),
+        1);
+    EXPECT_EQ(
+        xjw::matchphotos::resolveGeometryVerificationWorkers(120, 1),
         1);
     EXPECT_EQ(
         xjw::matchphotos::resolveGeometryVerificationWorkers(120, 0),

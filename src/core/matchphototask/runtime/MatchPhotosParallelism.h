@@ -47,7 +47,7 @@ int resolveLoMaRKeypointBudget(int requestedKeypoints,
                                int configuredBudget,
                                const MatchPhotosGpuMemoryInfo &memory);
 
-// USAC 自身保持单线程和固定随机种子，在像对层做有界 CPU 并行。
+// USAC 自身保持单线程和固定随机种子，在像对层使用一半逻辑 CPU 并行。
 // 每个 worker 至少分配两个像对，避免小任务被线程启动开销吞噬。
 int resolveGeometryVerificationWorkers(int pairCount,
                                        unsigned int hardwareThreads);
