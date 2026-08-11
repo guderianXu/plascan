@@ -43,7 +43,6 @@
 #include "ProjectCameraIO.h"
 #include "project/ProjectMatchCatalog.h"
 #include "project/ProjectMetadata.h"
-#include "LogPanel.h"
 #include "MainMenu.h"
 #include "MenuWorkflowController.h"
 #include "ReconstructionWorkflowController.h"
@@ -74,7 +73,6 @@
 #include "ProjectLifecyclePresenter.h"
 #include "tie_points/ThinTiePointsDialog.h"
 #include "LayerRenderer.h"
-#include "Logger.h"
 #include "ModelDropSupport.h"
 #include "MarkerWorkspaceController.h"
 #include "MarkerReferencePanel.h"
@@ -390,11 +388,6 @@ void MainWindow::setupProjectManager()
                 {QStringLiteral("image_view_rotations"), _imageViewRotations}
             });
         });
-    }
-
-    if (_log)
-    {
-        connect(_log, &LogPanel::displayLevelChanged, this, &MainWindow::onLogDisplayLevelChanged);
     }
 
     if (_config)

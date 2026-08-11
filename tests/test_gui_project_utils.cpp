@@ -3494,10 +3494,8 @@ TEST(CodeStyleTest, LogPanelUsesLowerCamelPrivateMemberNames)
 
     const QStringList expectedMembers = {
         QStringLiteral("QTextEdit *_text{nullptr};"),
-        QStringLiteral("QComboBox *_levelCombo{nullptr};"),
         QStringLiteral("QPushButton *_clearBtn{nullptr};"),
         QStringLiteral("QPushButton *_saveBtn{nullptr};"),
-        QStringLiteral("Logger::Level _displayLevel{Logger::Debug};"),
         QStringLiteral("int _sinkId{0};"),
     };
     for (const QString &expectedMember : expectedMembers)
@@ -3507,10 +3505,8 @@ TEST(CodeStyleTest, LogPanelUsesLowerCamelPrivateMemberNames)
 
     const QStringList oldMemberNames = {
         QStringLiteral("m_text"),
-        QStringLiteral("m_levelCombo"),
         QStringLiteral("m_clearBtn"),
         QStringLiteral("m_saveBtn"),
-        QStringLiteral("m_displayLevel"),
         QStringLiteral("m_sinkId"),
     };
     for (const QString &oldName : oldMemberNames)
@@ -3522,10 +3518,14 @@ TEST(CodeStyleTest, LogPanelUsesLowerCamelPrivateMemberNames)
         EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
     }
 
-    EXPECT_TRUE(source.contains(QStringLiteral("ui.m_levelCombo"))) << "Qt Designer object name must stay stable";
     EXPECT_TRUE(source.contains(QStringLiteral("ui.m_clearBtn"))) << "Qt Designer object name must stay stable";
     EXPECT_TRUE(source.contains(QStringLiteral("ui.m_saveBtn"))) << "Qt Designer object name must stay stable";
     EXPECT_TRUE(source.contains(QStringLiteral("ui.m_text"))) << "Qt Designer object name must stay stable";
+
+    const QString ui = readProjectSourceFile(QStringLiteral("src/gui/panels/LogPanel.ui"));
+    EXPECT_FALSE(ui.contains(QStringLiteral("levelLabel")));
+    EXPECT_FALSE(ui.contains(QStringLiteral("m_levelCombo")));
+    EXPECT_FALSE(ui.contains(QStringLiteral("级别:")));
 }
 
 TEST(CodeStyleTest, DataTreeWidgetUsesLowerCamelPrivateMemberNames)

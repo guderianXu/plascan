@@ -2,13 +2,11 @@
  * @file LogPanel.cpp
  * @brief LogPanel 的实现文件。
  *
- * 包含 UI 布局初始化、Logger 回调注册、日志过滤显示、清空和保存等全部实现逻辑。
- * LogPanel 实现：包含级别选择控件与文本区，注册全局 Logger sink 并在 UI 中显示日志。
+ * 包含 UI 布局初始化、Logger 回调注册、完整输出显示、清空和保存等实现逻辑。
  */
 #include "LogPanel.h"
 #include "ui_LogPanel.h"
 
-#include <QComboBox>
 #include <QFile>
 #include <QFontDatabase>
 #include <QTextStream>
@@ -17,7 +15,6 @@
 #include <QIODevice>
 #include <QMetaObject>
 #include <QPointer>
-#include <QStringList>
 #include <QTextCursor>
 #include <QTextEdit>
 #include <QPushButton>
@@ -29,7 +26,7 @@
  *
  * 布局结构：
  * ┌──────────────────────────────────────────┐
- * │ 显示等级: [下拉框]   [清空]  [保存]       │  ← topLayout
+ * │                         [清空]  [保存]     │  ← topLayout
  * ├──────────────────────────────────────────┤
  * │                                          │
  * │           只读日志文本区（_text）         │  ← QTextEdit
@@ -38,7 +35,6 @@
  *
  * 关键连接：
  * - Logger sink → LogPanel::appendLog（invokeMethod 排队到 UI 线程）
- * - _levelCombo::currentIndexChanged → LogPanel::onLevelChanged
  * - _clearBtn::clicked → LogPanel::clearLogs
  * - _saveBtn::clicked → 打开文件保存对话框 → saveLogsToFile
  *
@@ -50,12 +46,10 @@ LogPanel::LogPanel(QWidget *parent)
     Ui::LogPanel ui;
     ui.setupUi(this);
 
-    _levelCombo = ui.m_levelCombo;
     _clearBtn = ui.m_clearBtn;
     _saveBtn = ui.m_saveBtn;
     _text = ui.m_text;
 
-    _levelCombo->setMaximumWidth(110);
     _clearBtn->setText(QString());
     _clearBtn->setIcon(style()->standardIcon(QStyle::SP_TrashIcon));
     _clearBtn->setToolTip(tr("清空控制台"));
@@ -68,10 +62,6 @@ LogPanel::LogPanel(QWidget *parent)
     _text->setUndoRedoEnabled(false);
     _text->document()->setMaximumBlockCount(20000);
     _text->setPlaceholderText(tr("处理信息和诊断输出将显示在这里"));
-
-    _levelCombo->setCurrentIndex(static_cast<int>(_displayLevel));
-    connect(_levelCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &LogPanel::onLevelChanged);
 
     connect(_clearBtn, &QPushButton::clicked, this, &LogPanel::clearLogs);
 
@@ -126,30 +116,6 @@ QSize LogPanel::sizeHint() const
 }
 
 /**
- * @brief 同步更新面板的最低显示等级和下拉框的选中状态。
- * @param level 新的最低显示等级。
- */
-void LogPanel::setDisplayLevel(Logger::Level level)
-{
-    _displayLevel = level;
-    _levelCombo->setCurrentIndex(static_cast<int>(level));
-}
-
-/**
- * @brief 响应等级下拉框选项变更：更新内部状态并通知外部监听者。
- *
- * 发出 displayLevelChanged 信号，使外部（如项目设置管理器）
- * 能将新的等级持久化到配置文件中。
- *
- * @param index 下拉框当前选中索引，直接对应 Logger::Level 枚举值。
- */
-void LogPanel::onLevelChanged(int index)
-{
-    _displayLevel = static_cast<Logger::Level>(index);
-    emit displayLevelChanged(index); // 通知外部持久化新等级
-}
-
-/**
  * @brief 便捷方法：将一行未格式化文本以 Info 级别追加到面板。
  * @param text 要追加的文本内容。
  */
@@ -161,10 +127,6 @@ void LogPanel::append(const QString &text)
 /**
  * @brief 追加一行已格式化日志到文本区（Logger 回调的 UI 线程处理槽）。
  *
- * UI 过滤策略：
- * - 仅在面板中过滤显示，磁盘上的完整日志不受影响；
- * - level < _displayLevel 时直接返回，不追加到文本区。
- *
  * 追加方式：
  * - moveCursor(End) + insertPlainText 比 append() 更高效（不触发段落格式化）；
  * - ensureCursorVisible 保证新日志自动滚动到可视区域底部。
@@ -174,9 +136,7 @@ void LogPanel::append(const QString &text)
  */
 void LogPanel::appendLog(const QString &formatted, int level)
 {
-    // UI 过滤：仅显示达到或超过最低等级的日志条目
-    if (level < static_cast<int>(_displayLevel))
-        return;
+    Q_UNUSED(level);
 
     _text->moveCursor(QTextCursor::End);    // 将光标移到末尾
     _text->insertPlainText(formatted);       // 追加文本
@@ -222,10 +182,7 @@ bool LogPanel::saveLogsToFile(const QString &filePath)
  * 2. 如果超过 2 MB，则 seek 到末尾前 2 MB 处，跳过第一行（可能是不完整行），
  *    再读取剩余内容，避免首行数据残缺。
  *
- * 过滤策略：
- * - 按行解析，查找 "] [LEVEL]" 模式提取日志级别；
- * - 仅追加级别 ≥ _displayLevel 的行；
- * - 最终批量 insertPlainText，减少 UI 重绘次数。
+ * 读取结果会批量插入文本区，减少 UI 重绘次数。
  *
  * 使用场景：打开已有项目时，将上次运行留下的历史日志回填到面板。
  */
@@ -257,44 +214,10 @@ void LogPanel::loadFromLogFile()
     }
     f.close();
 
-    if (!data.isEmpty()) {
-        // 将字节数据解码为 UTF-8 字符串，按换行符拆分为行列表
-        QString content = QString::fromUtf8(data);
-        QStringList lines = content.split('\n', Qt::KeepEmptyParts);
-        QString toInsert;
-
-        for (const QString &ln : lines) {
-            if (ln.trimmed().isEmpty()) continue; // 跳过空行
-
-            // 解析日志级别：期望格式 "[ISO时间] [LEVEL] message"
-            // 在 "] [" 处定位级别字段的起始位置
-            int p = ln.indexOf("] [");
-            int lvl = static_cast<int>(Logger::Info); // 默认视为 Info 级别
-            if (p != -1) {
-                int start = p + 3; // 跳过 "] ["
-                int end = ln.indexOf(']', start);
-                if (end != -1 && end > start) {
-                    // 提取级别字符串并映射到枚举值
-                    QString lstr = ln.mid(start, end - start).trimmed();
-                    if      (lstr == QLatin1String("DEBUG")) lvl = static_cast<int>(Logger::Debug);
-                    else if (lstr == QLatin1String("INFO"))  lvl = static_cast<int>(Logger::Info);
-                    else if (lstr == QLatin1String("WARN"))  lvl = static_cast<int>(Logger::Warn);
-                    else if (lstr == QLatin1String("ERROR")) lvl = static_cast<int>(Logger::Error);
-                }
-            }
-
-            // 按当前显示等级过滤：只追加达到或超过阈值的行
-            if (lvl >= static_cast<int>(_displayLevel)) {
-                toInsert.append(ln);
-                toInsert.append('\n');
-            }
-        }
-
-        // 批量插入，减少多次单行插入带来的 UI 重绘开销
-        if (!toInsert.isEmpty()) {
-            _text->moveCursor(QTextCursor::End);
-            _text->insertPlainText(toInsert);
-            _text->ensureCursorVisible();
-        }
+    if (!data.isEmpty())
+    {
+        _text->moveCursor(QTextCursor::End);
+        _text->insertPlainText(QString::fromUtf8(data));
+        _text->ensureCursorVisible();
     }
 }

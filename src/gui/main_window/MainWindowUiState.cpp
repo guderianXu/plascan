@@ -347,17 +347,6 @@ QString MainWindow::currentBottomPanelKey() const
 // Interest-point info UI removed: related slots are no-ops / deleted.
 
 // ============================================================
-//  菜单联动持久化槽
-// ============================================================
-
-void MainWindow::onLogDisplayLevelChanged(int lvl)
-{
-    QJsonObject s;
-    s[QStringLiteral("log_display_level")] = lvl;
-    saveUiSetting(s);
-}
-
-// ============================================================
 //  项目管理响应槽
 // ============================================================
 

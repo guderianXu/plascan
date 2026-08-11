@@ -167,14 +167,9 @@ private slots:
     void onProjectClosed();
 
     // ---- UI 设置恢复 ----
-    // applyUiSettings: 根据从项目文件加载的 JSON 恢复各 UI 状态（面板可见性、日志级别等）
+    // applyUiSettings: 根据从项目文件加载的 JSON 恢复各 UI 状态（面板可见性等）
     // 参数: ui - 完整的 UI 设置 JSON 对象
     void applyUiSettings(const QJsonObject &ui);
-
-    // ---- 控制台 ----
-    // onLogDisplayLevelChanged: 控制台显示级别变化时将新级别写入项目 UI 设置
-    // 参数: lvl - Logger::Level 枚举的整数值
-    void onLogDisplayLevelChanged(int lvl);
 
 public slots:
     // 使用与“打开项目”和“最近项目”相同的异步流程打开指定工程。

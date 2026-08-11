@@ -29,39 +29,8 @@
    <item>
     <layout class="QHBoxLayout" name="topLayout">
      <property name="spacing">
-      <number>6</number>
+      <number>2</number>
      </property>
-     <item>
-      <widget class="QLabel" name="levelLabel">
-       <property name="text">
-        <string>级别:</string>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="QComboBox" name="m_levelCombo">
-       <item>
-        <property name="text">
-         <string>Debug</string>
-        </property>
-       </item>
-       <item>
-        <property name="text">
-         <string>Info</string>
-        </property>
-       </item>
-       <item>
-        <property name="text">
-         <string>Warn</string>
-        </property>
-       </item>
-       <item>
-        <property name="text">
-         <string>Error</string>
-        </property>
-       </item>
-      </widget>
-     </item>
      <item>
       <spacer name="topSpacer">
        <property name="orientation">
@@ -82,8 +51,8 @@
       <widget class="QPushButton" name="m_clearBtn">
        <property name="maximumSize">
         <size>
-         <width>28</width>
-         <height>28</height>
+         <width>24</width>
+         <height>24</height>
         </size>
        </property>
        <property name="flat">
@@ -98,8 +67,8 @@
       <widget class="QPushButton" name="m_saveBtn">
        <property name="maximumSize">
         <size>
-         <width>28</width>
-         <height>28</height>
+         <width>24</width>
+         <height>24</height>
         </size>
        </property>
        <property name="flat">

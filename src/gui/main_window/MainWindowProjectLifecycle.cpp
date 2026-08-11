@@ -4,7 +4,6 @@
 #include "CanvasWidget.h"
 #include "DataTreeWidget.h"
 #include "LogPanel.h"
-#include "Logger.h"
 #include "MainMenu.h"
 #include "MarkerFocusMeasurementDialog.h"
 #include "MarkerWorkspaceController.h"
@@ -335,12 +334,6 @@ void MainWindow::applyUiSettings(const QJsonObject &ui)
             // 保存的 log_visible=false 再次隐藏新命名的“控制台”标签。
             _workspacePanels->restoreDefaultVisibility();
         }
-    }
-
-    if (settings.contains(QStringLiteral("log_display_level")) && _log)
-    {
-        int lvl = settings.value(QStringLiteral("log_display_level")).toInt(static_cast<int>(Logger::Info));
-        _log->setDisplayLevel(static_cast<Logger::Level>(lvl));
     }
 
     if (_logDock && !_logDock->isHidden() && _log)
