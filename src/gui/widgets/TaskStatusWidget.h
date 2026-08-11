@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QElapsedTimer>
 #include <QWidget>
 
 class QLabel;
@@ -26,6 +27,7 @@ public:
     QString statusText() const;
     int progressValue() const;
     int progressMaximum() const;
+    qint64 elapsedMilliseconds() const;
 
 signals:
     void cancelRequested();
@@ -38,6 +40,7 @@ private:
     QToolButton *_cancelButton = nullptr;
     QString _cancelText;
     QString _cancellingText;
+    QElapsedTimer _elapsedTimer;
     bool _active = false;
     bool _cancelling = false;
 };

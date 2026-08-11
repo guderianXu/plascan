@@ -61,6 +61,10 @@ void TaskStatusWidget::setLabelMinimumWidth(int width)
 
 void TaskStatusWidget::begin(const QString &statusText, int minimum, int maximum)
 {
+    if (!_active)
+    {
+        _elapsedTimer.start();
+    }
     _active = true;
     _cancelling = false;
     _statusLabel->setText(statusText);
@@ -89,6 +93,7 @@ void TaskStatusWidget::finish()
 {
     _active = false;
     _cancelling = false;
+    _elapsedTimer.invalidate();
     _cancelButton->setEnabled(true);
     _cancelButton->setText(_cancelText);
     hide();
@@ -117,6 +122,11 @@ int TaskStatusWidget::progressValue() const
 int TaskStatusWidget::progressMaximum() const
 {
     return _progressBar->maximum();
+}
+
+qint64 TaskStatusWidget::elapsedMilliseconds() const
+{
+    return _elapsedTimer.isValid() ? _elapsedTimer.elapsed() : 0;
 }
 
 void TaskStatusWidget::markCancelling()

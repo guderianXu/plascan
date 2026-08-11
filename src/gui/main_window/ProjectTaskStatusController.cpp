@@ -381,6 +381,7 @@ void ProjectTaskStatusController::refreshDashboard()
         record.insert(QStringLiteral("cancelling"), status->isCancelling());
         record.insert(QStringLiteral("progress_value"), status->progressValue());
         record.insert(QStringLiteral("progress_maximum"), status->progressMaximum());
+        record.insert(QStringLiteral("elapsed_ms"), status->elapsedMilliseconds());
         tasks.append(record);
     };
     append(tr("网格重建"), _meshStatus);

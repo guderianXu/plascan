@@ -602,7 +602,7 @@ gui/
 │   ├── MatchLineOverlay.h/cpp          # 匹配线叠加层 (稀疏 → 连线)
 │   ├── DisparityHeatmapOverlay.h/cpp   # 异步视差热力图，按目标 viewport 变换做像素配准
 │   ├── PhotoStripWidget.h/cpp          # 可视区缩略图、有界预取队列与 LRU 缓存
-│   ├── WorkPanelWidget.h/cpp           # 下方工作面板，展示运行中任务、状态和进度
+│   ├── WorkPanelWidget.h/cpp           # 下方工作面板，展示运行中任务、实时用时和进度
 │   ├── DataTreeWidget.h/cpp            # Metashape 式工作区汇总 → Chunk → 资源分组树
 │   ├── WorkspaceSectionIcons.h/cpp     # 工作区、Chunk、影像及成果类型语义图标
 │   ├── ReferencePanelWidget.h/cpp      # 相机参考、标记、标尺三段树及源值/估计值/误差模式

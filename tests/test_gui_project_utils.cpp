@@ -3091,6 +3091,7 @@ TEST(CodeStyleTest, TaskStatusWidgetUsesLowerCamelPrivateMemberNames)
         QStringLiteral("QToolButton *_cancelButton = nullptr;"),
         QStringLiteral("QString _cancelText;"),
         QStringLiteral("QString _cancellingText;"),
+        QStringLiteral("QElapsedTimer _elapsedTimer;"),
         QStringLiteral("bool _active = false;"),
         QStringLiteral("bool _cancelling = false;"),
     };
@@ -9686,6 +9687,8 @@ TEST(TaskStatusWidgetTest, ShowsProgressAndPreservesCancellingState)
     EXPECT_EQ(widget.statusText(), QStringLiteral("特征匹配 0/5"));
     EXPECT_EQ(widget.progressValue(), 0);
     EXPECT_EQ(widget.progressMaximum(), 5);
+    QTest::qWait(20);
+    EXPECT_GE(widget.elapsedMilliseconds(), 10);
 
     widget.updateProgress(QStringLiteral("特征匹配 2/5"), 2);
     EXPECT_EQ(widget.statusText(), QStringLiteral("特征匹配 2/5"));
@@ -10241,6 +10244,7 @@ TEST(WorkPanelWidgetTest, MirrorsOnlyActiveTasksWithCompactProgress)
         QJsonObject{{QStringLiteral("name"), QStringLiteral("创建点云")},
                     {QStringLiteral("status_text"), QStringLiteral("正在融合")},
                     {QStringLiteral("active"), true},
+                    {QStringLiteral("elapsed_ms"), 3723000},
                     {QStringLiteral("progress_value"), 42},
                     {QStringLiteral("progress_maximum"), 100}},
         QJsonObject{{QStringLiteral("name"), QStringLiteral("已完成工作")},
@@ -10252,8 +10256,12 @@ TEST(WorkPanelWidgetTest, MirrorsOnlyActiveTasksWithCompactProgress)
         QStringLiteral("workPanelTaskTable"));
     ASSERT_NE(table, nullptr);
     ASSERT_EQ(table->rowCount(), 1);
+    EXPECT_EQ(table->horizontalHeaderItem(1)->text(), QStringLiteral("用时"));
     EXPECT_EQ(table->item(0, 0)->text(), QStringLiteral("创建点云"));
-    EXPECT_EQ(table->item(0, 1)->text(), QStringLiteral("正在融合"));
+    EXPECT_EQ(table->item(0, 1)->text(), QStringLiteral("01:02:03"));
+    EXPECT_FALSE(table->item(0, 1)->text().contains(QStringLiteral("正在融合")));
+    const QString initialElapsedText = table->item(0, 1)->text();
+    QTRY_VERIFY_WITH_TIMEOUT(table->item(0, 1)->text() != initialElapsedText, 1500);
     auto *progress = qobject_cast<QProgressBar *>(table->cellWidget(0, 2));
     ASSERT_NE(progress, nullptr);
     EXPECT_EQ(progress->value(), 42);
