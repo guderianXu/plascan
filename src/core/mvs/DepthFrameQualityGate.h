@@ -103,6 +103,8 @@ DepthConsistencyEvidence classifyDepthConsistencyEvidence(float expectedDepth,
 
 DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input);
 
+bool hasReliableOrbitalFusionCore(const DepthFrameQualityInput &input);
+
 const char *depthFrameAcceptanceId(DepthFrameAcceptance acceptance);
 
 } // namespace mvs

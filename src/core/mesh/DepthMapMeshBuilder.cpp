@@ -528,11 +528,10 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
                     manifest_algorithm_revision);
             const QJsonObject depthQuality = object.value(QStringLiteral("depth_quality")).toObject();
             const QJsonObject qualityDecision = object.value(QStringLiteral("quality_decision")).toObject();
-            frame.acceptance = object.value(QStringLiteral("acceptance")).toString(
-                qualityDecision.value(QStringLiteral("acceptance")).toString());
-            frame.fusionEligible = object.contains(QStringLiteral("fusion_eligible"))
-                ? object.value(QStringLiteral("fusion_eligible")).toBool()
-                : frame.acceptance != QStringLiteral("rejected");
+            const xjw::mvs::MvsDepthFrameQualification qualification =
+                xjw::mvs::qualifyMvsDepthFrameArtifact(object);
+            frame.acceptance = qualification.acceptance;
+            frame.fusionEligible = qualification.fusionEligible;
             frame.validCoverage = object.value(QStringLiteral("valid_coverage")).toDouble(
                 depthQuality.value(QStringLiteral("valid_coverage")).toDouble(-1.0));
             const QJsonObject depthCompleteness =

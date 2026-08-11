@@ -189,13 +189,13 @@ StoredDepthFramesResult collectStoredDepthFramesInDirectory(const QJsonArray &de
             record.value(QStringLiteral("reconstruction_generation_id")).toString();
         frame.cameraModel = record.value(QStringLiteral("camera_model")).toObject();
         frame.sceneProfile = record.value(QStringLiteral("scene_profile")).toString();
-        frame.acceptance = record.value(QStringLiteral("acceptance")).toString(
-            record.value(QStringLiteral("quality_decision"))
-                .toObject()
-                .value(QStringLiteral("acceptance"))
-                .toString());
-        frame.fusionEligibilityKnown = record.contains(QStringLiteral("fusion_eligible"));
-        frame.fusionEligible = record.value(QStringLiteral("fusion_eligible")).toBool(false);
+        const xjw::mvs::MvsDepthFrameQualification qualification =
+            xjw::mvs::qualifyMvsDepthFrameArtifact(record);
+        frame.acceptance = qualification.acceptance;
+        frame.fusionEligibilityKnown =
+            record.contains(QStringLiteral("fusion_eligible"))
+            || qualification.reclassified;
+        frame.fusionEligible = qualification.fusionEligible;
         frame.gridWidth = record.value(QStringLiteral("grid_width")).toInt();
         frame.gridHeight = record.value(QStringLiteral("grid_height")).toInt();
         if (!frame.refImage.isEmpty() && depthFrameArtifactsExist(frame))

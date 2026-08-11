@@ -1,5 +1,6 @@
 #include "MvsWorkspaceManifest.h"
 
+#include "DepthFrameQualityGate.h"
 #include "MvsTypes.h"
 
 #include <QCollator>
@@ -52,6 +53,100 @@ QJsonArray stringListToJsonArray(const QStringList &strings)
     }
     return array;
 }
+
+bool hasOnlyLegacyFusionPostprocessReason(const QJsonArray &reasons)
+{
+    if (reasons.isEmpty())
+    {
+        return false;
+    }
+    for (const QJsonValue &value : reasons)
+    {
+        const QString reason = value.toString();
+        if (reason != QStringLiteral("destructive_fusion_postprocess_collapse")
+            && reason != QStringLiteral("fusion_postprocess_coverage_loss"))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool hasFiniteRatio(const QJsonObject &object, const QString &name)
+{
+    const QJsonValue value = object.value(name);
+    return value.isDouble() && std::isfinite(value.toDouble());
+}
+}
+
+MvsDepthFrameQualification qualifyMvsDepthFrameArtifact(
+    const QJsonObject &artifact)
+{
+    const QJsonObject quality_decision = artifact.value(
+        QStringLiteral("quality_decision")).toObject();
+    MvsDepthFrameQualification qualification;
+    qualification.acceptance = artifact.value(
+        QStringLiteral("acceptance")).toString(
+            quality_decision.value(QStringLiteral("acceptance")).toString());
+    qualification.fusionEligible = artifact.contains(
+        QStringLiteral("fusion_eligible"))
+        ? artifact.value(QStringLiteral("fusion_eligible")).toBool()
+        : qualification.acceptance == QStringLiteral("accepted");
+
+    if (qualification.fusionEligible
+        || artifact.value(QStringLiteral("status")).toString()
+            != QStringLiteral("completed")
+        || artifact.value(QStringLiteral("scene_profile")).toString()
+            != QStringLiteral("orbital_object")
+        || !hasOnlyLegacyFusionPostprocessReason(
+            quality_decision.value(QStringLiteral("reasons")).toArray()))
+    {
+        return qualification;
+    }
+
+    const QJsonObject depth_quality = artifact.value(
+        QStringLiteral("depth_quality")).toObject();
+    const QJsonObject depth_completeness = artifact.value(
+        QStringLiteral("depth_completeness")).toObject();
+    if (!hasFiniteRatio(artifact, QStringLiteral("valid_coverage"))
+        || !hasFiniteRatio(depth_quality, QStringLiteral("largest_component_ratio"))
+        || !hasFiniteRatio(depth_quality, QStringLiteral("mean_confidence"))
+        || !hasFiniteRatio(depth_quality, QStringLiteral("depth_at_search_boundary_ratio"))
+        || !hasFiniteRatio(depth_completeness,
+                           QStringLiteral("consistency_retention_ratio"))
+        || !hasFiniteRatio(depth_completeness,
+                           QStringLiteral("fusion_postprocess_retention_ratio")))
+    {
+        return qualification;
+    }
+
+    DepthFrameQualityInput input;
+    input.sceneProfile = MvsSceneProfile::OrbitalObject;
+    input.validCoverage = static_cast<float>(artifact.value(
+        QStringLiteral("valid_coverage")).toDouble());
+    input.largestComponentRatio = static_cast<float>(depth_quality.value(
+        QStringLiteral("largest_component_ratio")).toDouble());
+    input.meanConfidence = static_cast<float>(depth_quality.value(
+        QStringLiteral("mean_confidence")).toDouble());
+    input.multiViewConsistency = std::clamp(
+        static_cast<float>(depth_completeness.value(
+            QStringLiteral("consistency_retention_ratio")).toDouble()),
+        0.0f,
+        1.0f);
+    input.depthAtSearchBoundaryRatio = static_cast<float>(depth_quality.value(
+        QStringLiteral("depth_at_search_boundary_ratio")).toDouble());
+    input.fusionPostprocessRetentionRatio = static_cast<float>(
+        depth_completeness.value(
+            QStringLiteral("fusion_postprocess_retention_ratio")).toDouble());
+    if (!hasReliableOrbitalFusionCore(input))
+    {
+        return qualification;
+    }
+
+    qualification.acceptance = QStringLiteral("accepted");
+    qualification.fusionEligible = true;
+    qualification.reclassified = true;
+    return qualification;
 }
 
 QJsonObject MvsDepthFrameRecord::toJson() const

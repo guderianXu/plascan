@@ -11,6 +11,13 @@ namespace xjw::mvs
 
 struct DepthGenConfig;
 
+struct MvsDepthFrameQualification
+{
+    QString acceptance;
+    bool fusionEligible = false;
+    bool reclassified = false;
+};
+
 // Increment whenever a production depth algorithm change makes persisted
 // depth maps unsuitable for transparent reuse by a newer build.
 inline constexpr int kMvsDepthAlgorithmRevision = 31;
@@ -97,6 +104,9 @@ struct MvsDepthFrameRecord
     QJsonObject toJson() const;
     static MvsDepthFrameRecord fromJson(const QJsonObject &object);
 };
+
+MvsDepthFrameQualification qualifyMvsDepthFrameArtifact(
+    const QJsonObject &artifact);
 
 class MvsWorkspaceManifest
 {

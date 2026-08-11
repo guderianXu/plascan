@@ -59,6 +59,8 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#elif defined(__linux__)
+#include <sys/sysinfo.h>
 #endif
 
 namespace xjw::mesh
@@ -89,6 +91,13 @@ std::uint64_t availablePhysicalMemoryBytes()
     if (GlobalMemoryStatusEx(&status))
     {
         return static_cast<std::uint64_t>(status.ullAvailPhys);
+    }
+#elif defined(__linux__)
+    struct sysinfo status{};
+    if (sysinfo(&status) == 0)
+    {
+        return static_cast<std::uint64_t>(status.freeram)
+            * static_cast<std::uint64_t>(status.mem_unit);
     }
 #endif
     return 0;
@@ -1119,6 +1128,120 @@ bool canPromoteHealthyOrbitalValidationFrame(const DepthFrameArtifact &artifact)
         && hasOnlyRecoverableOrbitalQualityReasons(artifact);
 }
 
+bool canLoadDepthFrameArtifact(const DepthFrameArtifact &artifact)
+{
+    const bool recovered_rejected_frame =
+        canUseRejectedOrbitalFrameAsAuxiliary(artifact);
+    const bool promoted_validation_frame =
+        canPromoteHealthyOrbitalValidationFrame(artifact);
+    const bool validation_only =
+        (artifact.acceptance == QStringLiteral("validation_only")
+         && !promoted_validation_frame)
+        || recovered_rejected_frame;
+    const bool quality_override = validation_only || promoted_validation_frame;
+    return (artifact.status.isEmpty()
+            || artifact.status == QStringLiteral("completed"))
+        && (artifact.fusionEligible || quality_override)
+        && (artifact.acceptance != QStringLiteral("rejected")
+            || recovered_rejected_frame)
+        && artifact.acceptance != QStringLiteral("failed");
+}
+
+std::uint64_t estimatedResidentDepthFrameBytes(
+    const DepthFrameArtifact &artifact)
+{
+    // Full orbital evidence keeps eight float fields, two uint16 fields,
+    // four byte masks, and a BGR source image resident for each frame.
+    constexpr std::uint64_t kResidentBytesPerPixel = 39u;
+    std::uint64_t pixel_count = 0;
+    std::uint64_t estimated_bytes = 0;
+    if (artifact.gridWidth > 0 && artifact.gridHeight > 0
+        && checkedMultiply(
+            static_cast<std::uint64_t>(artifact.gridWidth),
+            static_cast<std::uint64_t>(artifact.gridHeight),
+            &pixel_count)
+        && checkedMultiply(pixel_count,
+                           kResidentBytesPerPixel,
+                           &estimated_bytes))
+    {
+        return estimated_bytes;
+    }
+
+    const qint64 depth_file_bytes = QFileInfo(artifact.depthPath).size();
+    if (depth_file_bytes <= 0
+        || static_cast<std::uint64_t>(depth_file_bytes)
+            > std::numeric_limits<std::uint64_t>::max() / 10u)
+    {
+        return 0u;
+    }
+    return static_cast<std::uint64_t>(depth_file_bytes) * 10u;
+}
+
+QVector<DepthFrameArtifact> selectMemoryBoundedDepthFrameArtifacts(
+    const QVector<DepthFrameArtifact> &artifacts)
+{
+    QVector<DepthFrameArtifact> usable;
+    usable.reserve(artifacts.size());
+    for (const DepthFrameArtifact &artifact : artifacts)
+    {
+        if (canLoadDepthFrameArtifact(artifact))
+        {
+            usable.push_back(artifact);
+        }
+    }
+    if (usable.size() <= 3)
+    {
+        return usable;
+    }
+
+    const std::uint64_t available_bytes = availablePhysicalMemoryBytes();
+    std::uint64_t maximum_frame_bytes = 0;
+    for (const DepthFrameArtifact &artifact : usable)
+    {
+        maximum_frame_bytes = std::max(
+            maximum_frame_bytes,
+            estimatedResidentDepthFrameBytes(artifact));
+    }
+    if (available_bytes == 0 || maximum_frame_bytes == 0)
+    {
+        return usable;
+    }
+
+    // Leave memory for the TSDF volume, extraction buffers, Qt, and temporary
+    // matrix decoders. The retained frames are sampled uniformly in acquisition
+    // order so an orbital ring keeps angular coverage instead of a contiguous arc.
+    const std::uint64_t frame_budget_bytes = available_bytes * 55u / 100u;
+    const int usable_count = static_cast<int>(usable.size());
+    const int maximum_frame_count = std::clamp(
+        static_cast<int>(std::min<std::uint64_t>(
+            static_cast<std::uint64_t>(usable_count),
+            frame_budget_bytes / maximum_frame_bytes)),
+        3,
+        usable_count);
+    if (maximum_frame_count >= usable_count)
+    {
+        return usable;
+    }
+
+    std::sort(usable.begin(), usable.end(),
+              [](const DepthFrameArtifact &lhs,
+                 const DepthFrameArtifact &rhs)
+              {
+                  return lhs.refIndex < rhs.refIndex;
+              });
+    QVector<DepthFrameArtifact> selected;
+    selected.reserve(maximum_frame_count);
+    for (int slot = 0; slot < maximum_frame_count; ++slot)
+    {
+        const qint64 numerator =
+            static_cast<qint64>(2 * slot + 1) * usable.size();
+        const int index = static_cast<int>(
+            numerator / (2 * maximum_frame_count));
+        selected.push_back(usable[index]);
+    }
+    return selected;
+}
+
 bool loadFloatMatrix(const QString &path, cv::Mat *matrix, QString *reason)
 {
     if (!matrix)
@@ -1983,8 +2106,10 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
             std::chrono::steady_clock::now() - started_at).count();
         return result;
     }
-    const int artifact_count = static_cast<int>(artifacts.size());
-    result.discoveredArtifactCount = artifact_count;
+    result.discoveredArtifactCount = static_cast<int>(artifacts.size());
+    const QVector<DepthFrameArtifact> selected_artifacts =
+        selectMemoryBoundedDepthFrameArtifacts(artifacts);
+    const int artifact_count = static_cast<int>(selected_artifacts.size());
 
     int maximum_workers = 1;
 #ifdef MESHING_OPENMP
@@ -2034,7 +2159,7 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
         try
         {
             partial_results[result_index] = loadFramesSequential(
-                QVector<DepthFrameArtifact>{artifacts[artifact_index]},
+                QVector<DepthFrameArtifact>{selected_artifacts[artifact_index]},
                 0);
             if (!partial_results[result_index].ok)
             {
@@ -2061,14 +2186,14 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
             catch (const std::exception &error)
             {
                 partial.errorMessage = frameArtifactError(
-                    artifacts[artifact_index],
+                    selected_artifacts[artifact_index],
                     QStringLiteral("unexpected loading exception: %1")
                         .arg(QString::fromUtf8(error.what())));
             }
             catch (...)
             {
                 partial.errorMessage = frameArtifactError(
-                    artifacts[artifact_index],
+                    selected_artifacts[artifact_index],
                     QStringLiteral("unexpected non-standard loading exception"));
             }
         }

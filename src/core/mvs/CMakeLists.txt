@@ -450,6 +450,7 @@ if(BUILD_TESTS)
 
         add_executable(test_mvs_pipeline
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_pipeline.cpp
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_depth_frame_quality_gate.cpp
         )
         if(CMAKE_CUDA_COMPILER)
             set_target_properties(test_mvs_pipeline PROPERTIES

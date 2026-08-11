@@ -235,14 +235,18 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
         decision.reasons.emplace_back("output_filter_coverage_loss");
     }
 
+    const bool reliable_orbital_fusion_core =
+        hasReliableOrbitalFusionCore(input);
     if (input.fusionPostprocessRetentionRatio >= 0.0f
-        && input.fusionPostprocessRetentionRatio < 0.75f)
+        && input.fusionPostprocessRetentionRatio < 0.75f
+        && !reliable_orbital_fusion_core)
     {
         lowerAcceptance(DepthFrameAcceptance::Rejected, decision);
         decision.reasons.emplace_back("destructive_fusion_postprocess_collapse");
     }
     else if (input.fusionPostprocessRetentionRatio >= 0.0f
-             && input.fusionPostprocessRetentionRatio < 0.90f)
+             && input.fusionPostprocessRetentionRatio < 0.90f
+             && !reliable_orbital_fusion_core)
     {
         lowerAcceptance(DepthFrameAcceptance::ValidationOnly, decision);
         decision.reasons.emplace_back("fusion_postprocess_coverage_loss");
@@ -317,6 +321,20 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
         decision.reasons.emplace_back("quality_gate_passed");
     }
     return decision;
+}
+
+bool hasReliableOrbitalFusionCore(const DepthFrameQualityInput &input)
+{
+    // Large orbital sequences can create a broad pre-filter hypothesis set.
+    // Removing weak hypotheses is not a frame collapse when the remaining
+    // surface is still broad, confident, multi-view consistent, and coherent.
+    return input.sceneProfile == MvsSceneProfile::OrbitalObject
+        && input.fusionPostprocessRetentionRatio >= 0.40f
+        && input.validCoverage >= 0.30f
+        && input.meanConfidence >= 0.70f
+        && input.multiViewConsistency >= 0.45f
+        && input.largestComponentRatio >= 0.15f
+        && input.depthAtSearchBoundaryRatio <= 0.45f;
 }
 
 const char *depthFrameAcceptanceId(DepthFrameAcceptance acceptance)
