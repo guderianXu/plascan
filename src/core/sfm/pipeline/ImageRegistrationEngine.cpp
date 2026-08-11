@@ -415,6 +415,7 @@ void IncrementalSfm::resetForInitialPairTrial(const SfmReconstruction &baseRecon
     _lastGlobalBACameraModelSectorCoverage = 0.0;
     _lastGlobalBACameraModelImageAxisBalance = 0.0;
     _lastHierarchicalBAImageCount = 0;
+    _lastHierarchicalBAAttemptImageCount = 0;
     _lastHierarchicalBAPlannedBlocks = 0;
     _lastHierarchicalBAAppliedBlocks = 0;
     _lastHierarchicalBAUpdatedCameras = 0;

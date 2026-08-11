@@ -1150,6 +1150,13 @@ static bool isCameraFixed(int ci, const BAOptions &options)
     return false;
 }
 
+static bool isTrackFixed(int ti, const BAOptions &options)
+{
+    return std::binary_search(options.fixedTrackIndices.begin(),
+                              options.fixedTrackIndices.end(),
+                              ti);
+}
+
 static bool isCancelled(const BAOptions &options)
 {
     return options.cancelFlag && options.cancelFlag->load(std::memory_order_relaxed);
@@ -1476,6 +1483,12 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
             if (isCancelled(options)) continue;
             const size_t si = static_cast<size_t>(i);
             if (!result.points[si].valid) continue;   // 离群点跳过
+            if (isTrackFixed(i, options))
+            {
+                result.points[si].rmsAfter = computeTrackRms(
+                    result.refinedCameras, tracks[si], result.points[si].point);
+                continue;
+            }
             BARefinedPoint p = optimizeOnePoint(result.refinedCameras, tracks[si], options, i, &pointSnapshot);
             // 优化失败时回落到初始坐标
             if (!p.valid && plamatrix::isFinite(plamatrix::Vec3<double>(tracks[si].initialPoint)))
@@ -1555,6 +1568,7 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
                 if (isCancelled(options)) continue;
                 auto &p = result.points[static_cast<size_t>(i)];
                 if (!p.valid) continue;
+                if (isTrackFixed(i, options)) continue;
                 if (std::isfinite(p.rmsAfter) && p.rmsAfter > adaptThresh)
                 {
                     p.valid = false;   // 标记为离群点
@@ -2072,6 +2086,7 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
         const BABackendCapabilities capabilities = backendCapabilities(BABackend::NativeCuda);
         const bool unsupportedConfiguration =
             (options.refineCameraPose && !capabilities.refinesCameraPose) ||
+            !options.fixedTrackIndices.empty() ||
             (sharedIntrinsicParameterEnabled(
                  options, BAIntrinsicParameter::FocalLength) &&
              !capabilities.refinesSharedFocalLength) ||
@@ -2105,7 +2120,8 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
         if (unsupportedConfiguration)
         {
             const std::string message =
-                "native_cuda 当前仅支持固定相机的三维点优化，不能执行请求的联合 BA";
+                "native_cuda 当前仅支持全部三维点可变的固定相机优化，"
+                "不能执行请求的联合 BA 或固定轨迹配置";
             if (!options.allowBackendFallback)
             {
                 BAResult result;

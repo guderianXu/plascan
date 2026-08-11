@@ -122,6 +122,10 @@ class SfmBundleAdjustCoordinator
         bool focalEnabled,
         bool radialK1Enabled);
 
+    /// 首次共享内参精化保留充足预算；已有可复用种子时恢复调用方配置。
+    static int selfCalibrationIterationBudget(int configuredIterations,
+                                              bool hasReusableSeed);
+
     /// 首次见到影像时保存内参参考，后续独立全局 BA 调用仍按 ImageId 复用原锚点。
     static std::vector<Camera> buildPersistentIntrinsicReferences(
         const std::vector<ImageId> &imageIds,

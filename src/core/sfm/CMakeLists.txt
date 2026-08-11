@@ -22,6 +22,7 @@ set(SFM_CORE_SOURCES
     pipeline/HierarchicalBaBlockSolver.cpp
     pipeline/HierarchicalBundleAdjuster.cpp
     pipeline/KnownPoseReconstructor.cpp
+    pipeline/SfmCalibrationPreviewSampler.cpp
     pipeline/SfmBundleAdjustCoordinator.cpp
     ReferenceTerrainPrior.cpp
 )
@@ -49,6 +50,7 @@ set(SFM_CORE_HEADERS
     pipeline/HierarchicalBaBlockSolver.h
     pipeline/HierarchicalBundleAdjuster.h
     pipeline/KnownPoseReconstructor.h
+    pipeline/SfmCalibrationPreviewSampler.h
     pipeline/SfmBundleAdjustCoordinator.h
     ReferenceTerrainPrior.h
 )

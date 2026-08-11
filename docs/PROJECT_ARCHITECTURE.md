@@ -253,6 +253,10 @@ core/
 │   │   └── InitialSparsePointFilter.h/cpp  # 已有相机/轨迹的初始稀疏点过滤
 │   ├── reconstruction/SfmReconstruction.h/cpp  # SfM 重建器
 │   ├── pipeline/               # IncrementalSfm 编排及初始对/注册/已知位姿/BA 组件
+│   │   ├── HierarchicalBaBlockSolver.h/cpp # 块问题装配与跨块固定轨迹约束
+│   │   ├── HierarchicalBundleAdjuster.h/cpp # 共视分块并行求解、唯一写回与全局门控
+│   │   ├── SfmCalibrationPreviewSampler.h/cpp # 自标定候选的相机/像面半径均衡抽样
+│   │   └── SfmBundleAdjustCoordinator.h/cpp # 局部/全局 BA 调度、镜头种子与结果写回
 │   ├── quality/                # 无 Qt 的稀疏重建质量指标
 │   ├── filtering/              # PlaPoint 稀疏点云工作区和后处理
 │   ├── project/                # Qt JSON、控制点/标记和 BA 输入适配
@@ -495,7 +499,9 @@ line-scan 拒绝；`tests/test_planetary_laser_preview.cpp` 覆盖 GUI 预览和
 `SimilarityGaugeNormalizer` 在全局 BA 后恢复确定性锚点和初始基线尺度；有控制点或比例尺时由绝对约束接管规范。
 注册相机达到大型问题阈值后，`CovisibilityPartitioner` 按已验证匹配数划分唯一核心和重叠边界，
 `HierarchicalBundleAdjuster` 在总线程预算内并行执行块内 BA。重叠相机固定在同一进入坐标系，核心相机和
-三维点按唯一所有权写回；`HierarchicalBaBlockSolver` 负责单块问题装配、gauge 固定与质量门控。
+三维点按唯一所有权写回；同时被块外已注册相机观测的跨块轨迹保持三维坐标固定，但仍以
+重投影残差约束块内相机，避免独立改点造成合并接缝。`HierarchicalBaBlockSolver` 负责单块问题装配、gauge 固定与质量门控。
+无论上次分块是否通过全局门控，都要等模型增长达到半个目标块后才再试，避免在相邻周期重复支付失败成本。
 周期完整全局 BA 由该块级稳定化替代，最终只执行一次共享内参与块间接缝精化。
 该调度只依赖共视网络和计算规模，不按航测、转台、相机编号或轨迹形状推断场景。
 最终共享内参 BA 同样不硬分类“对地/环拍”：`BundleAdjustAdaptiveCameraModel` 在粗解上对
@@ -505,7 +511,9 @@ line-scan 拒绝；`tests/test_planetary_laser_preview.cpp` 覆盖 GUI 预览和
 输入标定；多轮重三角化/BA 对已应用状态做累计，后续 no-op 不会把前轮有效自标定误判成失败。多起点与
 迭代轮次可沿用上一轮内参作为数值初值，但所有相对边界和弱先验都锚定到 `IncrementalSfm::run()`
 生命周期内按影像 ID 保存的首次有效标定参考，周期性、最终和重试全局 BA 不会逐调用复合漂移；单次迭代的多起点
-只在首轮执行，局部/分块固定内参子问题不携带全局位置式参考，且不允许 Legacy 做不等价模型回退。
+只在首轮执行，并通过 `SfmCalibrationPreviewSampler` 限制为确定性的相机/像面半径均衡子集；第一轮保留
+60 次上限，后续已有可复用镜头种子时恢复配置迭代数。局部/分块固定内参子问题不携带全局位置式参考，
+且不允许 Legacy 做不等价模型回退。
 
 `bundle_adjust` 的 `native_cuda` 后端已接入统一 BA 接口和质量门控。当前实现把有效 Camera/BATrack
 观测扁平化为 CUDA 工作集，在固定相机投影下优化三维点块；能力表明确标记它不更新相机和共享焦距，

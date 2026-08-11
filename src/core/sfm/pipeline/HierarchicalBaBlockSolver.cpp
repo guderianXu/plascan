@@ -42,6 +42,7 @@ BlockOutcome solveBlock(std::size_t block_index,
     }
 
     std::vector<BATrack> tracks;
+    std::vector<int> fixed_track_indices;
     const std::vector<Point3DId> all_point_ids = reconstruction.allPoint3DIds();
     tracks.reserve(all_point_ids.size() / 2);
     for (Point3DId point_id : all_point_ids)
@@ -54,10 +55,18 @@ BlockOutcome solveBlock(std::size_t block_index,
         BATrack track;
         track.initialPoint = point.xyz;
         bool touches_core = false;
+        bool crosses_block = false;
         for (const TrackElement &element : point.track.elements)
         {
+            crosses_block = crosses_block ||
+                (reconstruction.hasCamera(element.imageId) &&
+                 core_ids.count(element.imageId) == 0);
             const auto index = camera_index.find(element.imageId);
-            if (index == camera_index.end() || !reconstruction.hasImage(element.imageId))
+            if (!reconstruction.hasImage(element.imageId))
+            {
+                continue;
+            }
+            if (index == camera_index.end())
             {
                 continue;
             }
@@ -73,8 +82,13 @@ BlockOutcome solveBlock(std::size_t block_index,
         }
         if (touches_core && track.observations.size() >= 2)
         {
+            const int track_index = static_cast<int>(tracks.size());
             tracks.push_back(std::move(track));
             outcome.pointIds.push_back(point_id);
+            if (crosses_block)
+            {
+                fixed_track_indices.push_back(track_index);
+            }
         }
     }
     if (tracks.empty())
@@ -101,6 +115,8 @@ BlockOutcome solveBlock(std::size_t block_index,
     options.scaleBarConstraints.clear();
     options.cameraPlaneConstraint = {};
     options.fixedCameraIndices.clear();
+    options.fixedTrackIndices = std::move(fixed_track_indices);
+    outcome.fixedTrackCount = static_cast<int>(options.fixedTrackIndices.size());
 
     for (ImageId image_id : outcome.cameraIds)
     {

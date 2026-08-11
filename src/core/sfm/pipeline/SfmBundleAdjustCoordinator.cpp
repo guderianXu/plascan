@@ -1,6 +1,7 @@
 #include "SfmBundleAdjustCoordinator.h"
 #include "HierarchicalBundleAdjuster.h"
 #include "IncrementalSfmDetail.h"
+#include "SfmCalibrationPreviewSampler.h"
 #include "geometry/OpenCvCameraAdapter.h"
 #include "geometry/SimilarityGaugeNormalizer.h"
 #include "BundleAdjustAdaptiveCameraModel.h"
@@ -424,6 +425,14 @@ bool SfmBundleAdjustCoordinator::hasReusableCalibrationSeed(
         }
     }
     return false;
+}
+
+int SfmBundleAdjustCoordinator::selfCalibrationIterationBudget(
+    int configuredIterations,
+    bool hasReusableSeed)
+{
+    const int safe_iterations = std::max(1, configuredIterations);
+    return hasReusableSeed ? safe_iterations : std::max(60, safe_iterations);
 }
 
 std::vector<Camera>
@@ -1109,16 +1118,17 @@ void IncrementalSfm::runBundleAdjust(
     bool hasRefinedLensSeed = false;
     if (refiningSharedCameraModel)
     {
-        // 最终自标定通常只占整条 SfM 的数十秒，但 20 次迭代不足以让焦距和
-        // 五项畸变在大型弱几何块中稳定。只提高完整注册后的共享内参 BA 预算；
-        // 局部、周期和块内 BA 仍保持原预算。
-        baOpt.maxIterations = std::max(baOpt.maxIterations, 60);
         hasRefinedLensSeed =
             SfmBundleAdjustCoordinator::hasReusableCalibrationSeed(
                 baCameras,
                 baOpt.sharedIntrinsicReferenceCameras,
                 seedSharedFocal,
                 seedSharedK1);
+        // 首轮自标定需要充足预算离开零畸变初值；后续稳定化轮次已有
+        // 可复用镜头种子，恢复调用方配置，避免每轮都被强制抬高到 60 次。
+        baOpt.maxIterations =
+            SfmBundleAdjustCoordinator::selfCalibrationIterationBudget(
+                baOpt.maxIterations, hasRefinedLensSeed);
         if (hasRefinedLensSeed || !allowCalibrationSeedSearch)
         {
             // 后续“重三角化—再平差”轮次已有稳定镜头种子，不重复固定内参预热，
@@ -1388,6 +1398,65 @@ void IncrementalSfm::runBundleAdjust(
         baCameras.size() >= 50 && baTracks.size() >= 1000)
     {
         usedCalibrationSeedSearch = true;
+        const std::size_t preview_limit =
+            _sfmOptions.selfCalibrationPreviewMaxTracks > 0
+                ? static_cast<std::size_t>(
+                      _sfmOptions.selfCalibrationPreviewMaxTracks)
+                : baTracks.size();
+        const std::vector<std::size_t> preview_track_indices =
+            sfm_calibration_preview::selectTrackIndices(
+                baCameras, baTracks, preview_limit);
+        std::vector<BATrack> preview_tracks;
+        preview_tracks.reserve(preview_track_indices.size());
+        for (const std::size_t track_index : preview_track_indices)
+        {
+            preview_tracks.push_back(baTracks[track_index]);
+        }
+        BAOptions preview_options = baOpt;
+        std::vector<int> preview_index_by_full_track(baTracks.size(), -1);
+        for (std::size_t preview_index = 0;
+             preview_index < preview_track_indices.size();
+             ++preview_index)
+        {
+            preview_index_by_full_track[preview_track_indices[preview_index]] =
+                static_cast<int>(preview_index);
+        }
+        preview_options.fixedTrackIndices.clear();
+        for (const int full_index : baOpt.fixedTrackIndices)
+        {
+            if (full_index >= 0 &&
+                full_index < static_cast<int>(preview_index_by_full_track.size()) &&
+                preview_index_by_full_track[static_cast<std::size_t>(full_index)] >= 0)
+            {
+                preview_options.fixedTrackIndices.push_back(
+                    preview_index_by_full_track[static_cast<std::size_t>(full_index)]);
+            }
+        }
+        preview_options.scaleBarConstraints.clear();
+        for (const BAScaleBarConstraint &constraint : baOpt.scaleBarConstraints)
+        {
+            if (constraint.trackIndexA < 0 || constraint.trackIndexB < 0 ||
+                constraint.trackIndexA >= static_cast<int>(preview_index_by_full_track.size()) ||
+                constraint.trackIndexB >= static_cast<int>(preview_index_by_full_track.size()))
+            {
+                continue;
+            }
+            const int preview_a = preview_index_by_full_track[
+                static_cast<std::size_t>(constraint.trackIndexA)];
+            const int preview_b = preview_index_by_full_track[
+                static_cast<std::size_t>(constraint.trackIndexB)];
+            if (preview_a < 0 || preview_b < 0)
+            {
+                continue;
+            }
+            BAScaleBarConstraint remapped = constraint;
+            remapped.trackIndexA = preview_a;
+            remapped.trackIndexB = preview_b;
+            preview_options.scaleBarConstraints.push_back(remapped);
+        }
+        preview_options.enableScaleBarConstraints =
+            baOpt.enableScaleBarConstraints &&
+            !preview_options.scaleBarConstraints.empty();
         struct CalibrationSeed
         {
             double focalScale = 1.0;
@@ -1428,13 +1497,13 @@ void IncrementalSfm::runBundleAdjust(
                             camera.setDistortion(distortion);
                         }
                     }
-                    BAOptions candidateOptions = baOpt;
+                    BAOptions candidateOptions = preview_options;
                     candidateOptions.numThreads = candidateThreads;
                     candidateOptions.maxIterations = candidateIterations;
                     candidateOptions.progressCallback = {};
                     candidateOptions.logIterationProgress = false;
                     return BundleAdjust::optimizePoints(
-                        seedCameras, baTracks, candidateOptions);
+                        seedCameras, preview_tracks, candidateOptions);
                 }));
         }
 
@@ -1467,23 +1536,25 @@ void IncrementalSfm::runBundleAdjust(
         }
         Logger::instance()->infof(
             "[BA] self_calibration_seed selected=%d candidates=%zu "
-            "previewIterations=%d threadsPerCandidate=%d",
+            "previewTracks=%zu/%zu previewIterations=%d threadsPerCandidate=%d",
             bestIndex,
             seeds.size(),
+            preview_tracks.size(),
+            baTracks.size(),
             candidateIterations,
             candidateThreads);
         if (bestIndex >= 0 && baResult.solutionUsable &&
             baResult.refinedCameras.size() == baCameras.size() &&
-            baResult.points.size() == baTracks.size())
+            baResult.points.size() == preview_tracks.size())
         {
             std::vector<BATrack> warmTracks = baTracks;
-            for (std::size_t index = 0; index < warmTracks.size(); ++index)
+            for (std::size_t index = 0; index < preview_track_indices.size(); ++index)
             {
                 const BARefinedPoint &point = baResult.points[index];
                 if (point.valid && std::isfinite(point.point[0]) &&
                     std::isfinite(point.point[1]) && std::isfinite(point.point[2]))
                 {
-                    warmTracks[index].initialPoint = point.point;
+                    warmTracks[preview_track_indices[index]].initialPoint = point.point;
                 }
             }
             Logger::instance()->infof(
@@ -1494,6 +1565,12 @@ void IncrementalSfm::runBundleAdjust(
                 baOpt.maxIterations);
             baResult = BundleAdjust::optimizePoints(
                 baResult.refinedCameras, warmTracks, baOpt);
+        }
+        else
+        {
+            Logger::instance()->warn(
+                "[BA] self_calibration_seed no usable preview; falling back to full refinement");
+            baResult = BundleAdjust::optimizePoints(baCameras, baTracks, baOpt);
         }
     }
     else

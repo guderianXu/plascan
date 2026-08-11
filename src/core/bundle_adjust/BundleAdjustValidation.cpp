@@ -839,6 +839,23 @@ BundleAdjustValidationResult validateAndNormalizeBundleAdjustOptions(
         }
     }
 
+    std::set<int> fixedTracks;
+    for (const int index : requestedOptions.fixedTrackIndices)
+    {
+        if (index < 0 || index >= static_cast<int>(tracks.size()))
+        {
+            return invalid(BASolveStatus::InvalidInput,
+                           "BA 输入验证失败: 固定轨迹索引越界");
+        }
+        if (!fixedTracks.insert(index).second)
+        {
+            return invalid(BASolveStatus::InvalidInput,
+                           "BA 输入验证失败: 固定轨迹索引重复");
+        }
+    }
+    std::sort(normalizedOptions->fixedTrackIndices.begin(),
+              normalizedOptions->fixedTrackIndices.end());
+
     if (!requestedOptions.refineCameraPose ||
         requestedOptions.gaugePolicy == BAGaugePolicy::CallerManaged ||
         cameras.empty())

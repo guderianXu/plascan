@@ -331,6 +331,62 @@ TEST(BundleAdjustValidationTest, RejectsNonPositiveFiniteDifferenceStep)
     EXPECT_NE(result.backendMessage.find("有限差分"), std::string::npos);
 }
 
+TEST(BundleAdjustValidationTest, RejectsInvalidFixedTrackIndices)
+{
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-1.0, 0.0, 0.0),
+        makeCamera(1.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> point{{0.0, 0.0, 5.0}};
+    const std::vector<xjw::BATrack> tracks{
+        makeTrack(cameras, point, point),
+    };
+
+    xjw::BAOptions requested;
+    requested.refineCameraPose = false;
+    requested.fixedTrackIndices = {0, 0};
+    xjw::BAOptions normalized;
+    auto validation = xjw::detail::validateAndNormalizeBundleAdjustOptions(
+        cameras, tracks, requested, &normalized);
+    EXPECT_FALSE(validation.ok);
+    EXPECT_NE(validation.message.find("重复"), std::string::npos);
+
+    requested.fixedTrackIndices = {1};
+    validation = xjw::detail::validateAndNormalizeBundleAdjustOptions(
+        cameras, tracks, requested, &normalized);
+    EXPECT_FALSE(validation.ok);
+    EXPECT_NE(validation.message.find("越界"), std::string::npos);
+}
+
+TEST(BundleAdjustFixedTrackTest, LegacyKeepsFixedPointWhileOptimizingOtherTracks)
+{
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-1.0, 0.0, 0.0),
+        makeCamera(1.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> truth{{0.0, 0.0, 5.0}};
+    const std::array<double, 3> fixed_initial{{0.3, -0.2, 6.0}};
+    const std::array<double, 3> free_initial{{-0.4, 0.3, 6.5}};
+    std::vector<xjw::BATrack> tracks{
+        makeTrack(cameras, truth, fixed_initial),
+        makeTrack(cameras, truth, free_initial),
+    };
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::LegacyCpu;
+    options.refineCameraPose = false;
+    options.fixedTrackIndices = {0};
+    options.enablePointFilter = false;
+    options.maxIterations = 3;
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(cameras, tracks, options);
+
+    ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
+    ASSERT_EQ(result.points.size(), tracks.size());
+    EXPECT_EQ(result.points[0].point, fixed_initial);
+    EXPECT_NE(result.points[1].point, free_initial);
+}
+
 TEST(BundleAdjustValidationTest, IgnoresLegacyFlagsDisabledByIntrinsicMask)
 {
     const std::vector<xjw::Camera> cameras{

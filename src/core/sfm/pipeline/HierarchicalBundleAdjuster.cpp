@@ -192,13 +192,16 @@ HierarchicalBaRunSummary HierarchicalBundleAdjuster::run()
 
     const int repeat_threshold = std::max(
         2, _owner._sfmOptions.hierarchicalBATargetBlockSize / 2);
-    if (_owner._lastHierarchicalBAImageCount > 0 &&
-        registered_count - _owner._lastHierarchicalBAImageCount < repeat_threshold)
+    const int previous_attempt_count = std::max(
+        _owner._lastHierarchicalBAImageCount,
+        _owner._lastHierarchicalBAAttemptImageCount);
+    if (previous_attempt_count > 0 &&
+        registered_count - previous_attempt_count < repeat_threshold)
     {
         Logger::instance()->infof(
             "[BA] hierarchical skipped reason=model_growth_too_small registered=%d previous=%d threshold=%d",
             registered_count,
-            _owner._lastHierarchicalBAImageCount,
+            previous_attempt_count,
             repeat_threshold);
         return summary;
     }
@@ -218,6 +221,7 @@ HierarchicalBaRunSummary HierarchicalBundleAdjuster::run()
     }
 
     summary.attempted = true;
+    _owner._lastHierarchicalBAAttemptImageCount = registered_count;
     summary.plannedBlocks = static_cast<int>(blocks.size());
     const auto started = std::chrono::steady_clock::now();
     const unsigned int hardware_threads = std::max(1u, std::thread::hardware_concurrency());
@@ -378,11 +382,13 @@ HierarchicalBaRunSummary HierarchicalBundleAdjuster::run()
         if (!outcome.accepted)
         {
             Logger::instance()->warnf(
-                "[BA] hierarchical block rejected block=%zu status=%s rms=%.6f->%.6f",
+                "[BA] hierarchical block rejected block=%zu status=%s rms=%.6f->%.6f "
+                "fixedBoundaryTracks=%d",
                 outcome.blockIndex,
                 BundleAdjust::solveStatusName(outcome.result.solveStatus),
                 outcome.result.meanRmsBefore,
-                outcome.result.meanRmsAfter);
+                outcome.result.meanRmsAfter,
+                outcome.fixedTrackCount);
             continue;
         }
         ++candidate_applied_blocks;

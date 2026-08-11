@@ -15,6 +15,7 @@ struct BlockOutcome
     std::size_t blockIndex = 0;
     std::vector<ImageId> cameraIds;
     std::vector<Point3DId> pointIds;
+    int fixedTrackCount = 0;
     BAResult result;
     bool accepted = false;
 };

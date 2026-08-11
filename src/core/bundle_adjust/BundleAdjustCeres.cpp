@@ -63,6 +63,13 @@ bool isCameraFixed(int cameraIndex, const BAOptions &options)
                      cameraIndex) != options.fixedCameraIndices.end();
 }
 
+bool isTrackFixed(int trackIndex, const BAOptions &options)
+{
+    return std::binary_search(options.fixedTrackIndices.begin(),
+                              options.fixedTrackIndices.end(),
+                              trackIndex);
+}
+
 #ifdef PLASCAN_BA_HAS_CERES
 
 // -------------------------------------------------------------------------
@@ -1409,6 +1416,10 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
 
         pointParams[ti] = tracks[ti].initialPoint;
         problem.AddParameterBlock(pointParams[ti].data(), 3);
+        if (isTrackFixed(static_cast<int>(ti), options))
+        {
+            problem.SetParameterBlockConstant(pointParams[ti].data());
+        }
         for (const BAObservation &observation : tracks[ti].observations)
         {
             if (!observationIsUsable(observation, cameras.size()))

@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 
 #include "pipeline/HierarchicalBundleAdjuster.h"
+#include "pipeline/HierarchicalBaBlockSolver.h"
 #include "pipeline/IncrementalSfm.h"
 #include "pipeline/SfmBundleAdjustCoordinator.h"
 #include "reconstruction/SfmReconstruction.h"
@@ -144,6 +145,20 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest,
     current[0].setDistortion(distortion);
     EXPECT_TRUE(SfmBundleAdjustCoordinator::hasReusableCalibrationSeed(
         current, references, false, true));
+}
+
+TEST(SfmBundleAdjustCoordinatorPolicyTest,
+     ReusesConfiguredIterationBudgetAfterCalibrationSeedExists)
+{
+    EXPECT_EQ(
+        SfmBundleAdjustCoordinator::selfCalibrationIterationBudget(20, false),
+        60);
+    EXPECT_EQ(
+        SfmBundleAdjustCoordinator::selfCalibrationIterationBudget(20, true),
+        20);
+    EXPECT_EQ(
+        SfmBundleAdjustCoordinator::selfCalibrationIterationBudget(80, true),
+        80);
 }
 
 TEST(SfmBundleAdjustCoordinatorPolicyTest,
@@ -372,6 +387,51 @@ double centerDistance(const Camera &a, const Camera &b)
     const double dy = ca[1] - cb[1];
     const double dz = ca[2] - cb[2];
     return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+TEST(HierarchicalBaBlockSolverTest, KeepsCrossBlockTrackFixedAsCameraConstraint)
+{
+    SfmReconstruction reconstruction;
+    const std::array<Camera, 3> cameras{{
+        makeCamera(-1.0, 0.0, 0.0),
+        makeCamera(1.0, 0.0, 0.0),
+        makeCamera(0.0, 1.0, 0.0),
+    }};
+    const std::array<double, 3> point{{0.2, -0.1, 8.0}};
+    ScenePoint3D scene_point;
+    scene_point.xyz = point;
+    for (ImageId image_id = 0; image_id < cameras.size(); ++image_id)
+    {
+        double u = 0.0;
+        double v = 0.0;
+        ASSERT_TRUE(projectPoint(
+            cameras[image_id], point[0], point[1], point[2], u, v));
+        ImageData image;
+        image.id = image_id;
+        image.keypoints.push_back(
+            {static_cast<float>(u), static_cast<float>(v)});
+        image.point3DIds.push_back(kInvalidPoint3DId);
+        reconstruction.addImage(image);
+        reconstruction.registerImage(image_id, cameras[image_id]);
+        scene_point.track.elements.push_back({image_id, 0});
+    }
+    reconstruction.addPoint3DWithTrack(point, scene_point.track);
+
+    CovisibilityBlock block;
+    block.coreImageIds = {0, 1};
+    block.overlapImageIds = {2};
+    BAOptions options;
+    options.backend = BABackend::LegacyCpu;
+    options.refineCameraPose = true;
+    options.maxIterations = 2;
+    const hierarchical_ba_detail::BlockOutcome outcome =
+        hierarchical_ba_detail::solveBlock(
+            0, block, reconstruction, options, 1, false);
+
+    EXPECT_EQ(outcome.fixedTrackCount, 1);
+    ASSERT_TRUE(outcome.accepted) << outcome.result.backendMessage;
+    ASSERT_EQ(outcome.result.points.size(), 1U);
+    EXPECT_EQ(outcome.result.points[0].point, point);
 }
 
 /// 生成 N 个在两个相机前方的随机 3D 点

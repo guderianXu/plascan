@@ -156,6 +156,8 @@ struct IncrementalSfmOptions
     int hierarchicalBAMaxConcurrentBlocks = 0;
     /// BA 选项
     BAOptions baOptions;
+    /// 共享内参多起点粗筛最多使用的相机/像面均衡轨迹数，<=0 表示使用全部。
+    int selfCalibrationPreviewMaxTracks = 24000;
     /// 是否按当前重建几何和影像覆盖逐项选择可观测的共享内参。
     bool adaptiveCameraModelFitting = false;
     /// 共享内参自标定时，是否保留进入 BA 前每台相机相对参考层的法向偏移。
@@ -466,6 +468,8 @@ class IncrementalSfm
     double _lastGlobalBACameraModelImageAxisBalance = 0.0;
     /// 上次成功执行分层 BA 时的已注册相机数，避免同一模型重复分块。
     int _lastHierarchicalBAImageCount = 0;
+    /// 上次实际启动分层 BA 时的已注册相机数，失败后也限制高频重试。
+    int _lastHierarchicalBAAttemptImageCount = 0;
     int _lastHierarchicalBAPlannedBlocks = 0;
     int _lastHierarchicalBAAppliedBlocks = 0;
     int _lastHierarchicalBAUpdatedCameras = 0;

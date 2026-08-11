@@ -471,6 +471,37 @@ TEST(BundleAdjustCeresBackendTest, AutoDiffPosePriorStabilizesCameraCenter)
     EXPECT_LT(after, before * 0.1);
 }
 
+TEST(BundleAdjustCeresBackendTest, FixedTrackConstrainsProblemWithoutMovingPoint)
+{
+    ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));
+
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(-1.0, 0.0, 0.0),
+        makeCamera(1.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> truth{{0.0, 0.0, 8.0}};
+    const std::array<double, 3> fixed_initial{{0.3, -0.2, 9.0}};
+    const std::array<double, 3> free_initial{{-0.4, 0.3, 9.5}};
+    std::vector<xjw::BATrack> tracks{
+        makeTrack(cameras, truth, fixed_initial),
+        makeTrack(cameras, truth, free_initial),
+    };
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::CeresCpu;
+    options.refineCameraPose = false;
+    options.fixedTrackIndices = {0};
+    options.enablePointFilter = false;
+    options.maxIterations = 5;
+    const xjw::BAResult result =
+        xjw::BundleAdjust::optimizePoints(cameras, tracks, options);
+
+    ASSERT_TRUE(result.solutionUsable) << result.backendMessage;
+    ASSERT_EQ(result.points.size(), tracks.size());
+    EXPECT_EQ(result.points[0].point, fixed_initial);
+    EXPECT_NE(result.points[1].point, free_initial);
+}
+
 TEST(BundleAdjustCeresBackendTest, CameraPlaneConstraintOnlyRemovesNormalDrift)
 {
     ASSERT_TRUE(xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu));

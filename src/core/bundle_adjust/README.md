@@ -96,6 +96,8 @@ PlaScan 仅参考这一公开概念；本文所述判据、评分与阈值均为
 
 - 单目 SfM 的全局 7 自由度规范由 `SfmBundleAdjustCoordinator` 和
   `SimilarityGaugeNormalizer` 管理，不在各后端内用不同方式重复实现。
+- `fixedTrackIndices` 使轨迹的三维点参数块保持常量，但不删除其对相机的重投影残差；
+  Ceres 和 Legacy 后端语义一致，Native CUDA 显式拒绝或回退该配置。
 - Legacy 的法方程线性化与 LM trial step 使用同一个 Huber robust cost。
 - Legacy、Ceres 和 Native CUDA 统一执行正深度检查、基于全局中位数的自适应点过滤与结果统计。
 - 后端选择和求解规划只统计有限像点、正权重且形成双相机轨迹的有效观测；零权重、负权重和
