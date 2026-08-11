@@ -301,11 +301,24 @@ void ProjectTaskStatusController::updatePercentTask(TaskStatusWidget *status,
                                                     bool appendIntermediatePercent,
                                                     const QString &taskId)
 {
+    if (percent < 0)
+    {
+        if (!status->isActive() || status->progressMaximum() != 0)
+        {
+            status->begin(stage, 0, 0);
+        }
+        status->updateProgress(stage, 0);
+        _taskbarProgress->updateTask(taskId, 0, 0);
+        refreshDashboard();
+        _statusBar->showMessage(QString());
+        return;
+    }
+
     const int value = std::clamp(percent, 0, 100);
     const QString text = appendIntermediatePercent && value > 0 && value < 100
         ? QStringLiteral("%1 %2%").arg(stage).arg(value)
         : stage;
-    if (!status->isActive())
+    if (!status->isActive() || status->progressMaximum() != 100)
     {
         status->begin(text, 0, 100);
     }

@@ -12,6 +12,7 @@
 #include <QStringList>
 
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 namespace xjw::inference
@@ -28,6 +29,16 @@ namespace xjw::inference
         QString name;
         std::vector<std::int64_t> dimensions;
     };
+
+    struct TensorRtEngineBuildProgress
+    {
+        QString message;
+        int current = 0;
+        int maximum = 0; ///< 0 表示 TensorRT 未提供可验证百分比，应显示忙碌状态。
+    };
+
+    using TensorRtEngineBuildProgressCallback =
+        std::function<void(const TensorRtEngineBuildProgress&)>;
 
     struct TensorRtEngineBuildRequest
     {
@@ -47,6 +58,7 @@ namespace xjw::inference
         std::vector<TensorRtInputShape> inputShapes;
         QStringList requiredOutputNames;
         QJsonObject fingerprintAttributes;
+        TensorRtEngineBuildProgressCallback progressCallback;
 
         /**
          * @deprecated LoMa-R 旧调用面的兼容字段。新代码应使用 inputShapes。
@@ -59,6 +71,7 @@ namespace xjw::inference
         QString enginePath;
         QString metadataPath;
         QString cacheFingerprint;
+        QString cacheDecision;
         QString environmentSummary;
         QString errorMessage;
         TensorRtBuildPrecision precision = TensorRtBuildPrecision::Fp32;

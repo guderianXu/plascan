@@ -27,6 +27,11 @@ namespace xjw::inference::detail
     QJsonObject makeCacheIdentity(const TensorRtEngineBuildRequest& request,
                                   const TensorRtCacheIdentityOptions& options);
     QString fingerprintCacheIdentity(const QJsonObject& identity);
+    QString describeEngineCacheMiss(const QString& cacheRoot,
+                                    const QString& engineName,
+                                    const QString& currentMetadataPath,
+                                    const QString& currentEnginePath,
+                                    const QJsonObject& currentIdentity);
 
     bool loadMatchingEngineMetadata(const QString& metadataPath,
                                     const QString& enginePath,

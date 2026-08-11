@@ -12,6 +12,7 @@ namespace xjw::image_matching
 
     using TensorRtBuildPrecision = inference::TensorRtBuildPrecision;
     using TensorRtInputShape = inference::TensorRtInputShape;
+    using TensorRtEngineBuildProgress = inference::TensorRtEngineBuildProgress;
     using TensorRtEngineBuildRequest = inference::TensorRtEngineBuildRequest;
     using TensorRtEngineBuildResult = inference::TensorRtEngineBuildResult;
     using TensorRtTensorMode = inference::TensorRtTensorMode;

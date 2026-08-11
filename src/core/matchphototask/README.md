@@ -39,6 +39,9 @@
 - LightGlue ONNX 可通过 `lightGlueTensorRtEnginePath` 显式传入，也可由
   `PLASCAN_LIGHTGLUE_TENSORRT_ENGINE` 指定。运行时按 ONNX 内容、本机 TensorRT 完整版本和 GPU
   Compute Capability 构建环境指纹缓存；历史本机 engine 仅保留读取兼容。
+- 准备 TensorRT engine 时会显示 ONNX 校验、缓存检查、解析、构建、I/O 校验和写入阶段；缓存未命中会
+  给出格式升级或环境字段变化等具体原因。TensorRT 内核搜索没有可信百分比，该阶段使用忙碌进度并持续
+  显示真实已耗时，同时每 30 秒写入一次控制台日志。
 - 匹配阶段加载本机缓存的 TensorRT engine。最终结果由 `ImageMatchRepository` 对称提交为“一幅影像一个
   `.pimatch` 分片”，同一文件保存所有相邻影像，并按算法版本与配置变体隔离本影像观测、模型指纹、
   置信度和残差，避免不同特征编号空间互相覆盖。

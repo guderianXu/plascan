@@ -116,12 +116,17 @@ int tiePointProgress(const QString &stageId, int current, int maximum)
 {
     struct Range { const char *id; int first; int last; };
     static constexpr Range ranges[] = {
-        {"algorithm_selection", 1, 3}, {"feature", 3, 16},
-        {"generic_preselection", 16, 21}, {"reference_preselection", 21, 25},
+        {"algorithm_selection", 1, 3}, {"model_prepare", 3, 8},
+        {"feature", 8, 18}, {"generic_preselection", 18, 22},
+        {"reference_preselection", 22, 25},
         {"pair_selection", 25, 28}, {"matching", 28, 33},
         {"geometry", 33, 34}, {"track_build", 34, 35}, {"guided_matching", 34, 35}};
     Range selected{"unknown", 1, 35};
     const QString token = normalizedToken(stageId, QStringLiteral("unknown"));
+    if (token == QStringLiteral("model_prepare") && maximum <= 0)
+    {
+        return -1;
+    }
     for (const Range &range : ranges)
     {
         if (token == QLatin1String(range.id))

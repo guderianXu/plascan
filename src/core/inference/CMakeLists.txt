@@ -32,6 +32,7 @@ if(PLASCAN_ENABLE_TENSORRT)
     )
     target_link_libraries(plascan_inference PRIVATE
         plascan_common_io
+        plascan_common_log
     )
     target_compile_definitions(plascan_inference PUBLIC PLASCAN_HAS_TENSORRT=1)
 else()

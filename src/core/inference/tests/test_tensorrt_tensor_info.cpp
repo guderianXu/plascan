@@ -1,7 +1,10 @@
 #include "inference/tensorrt/TensorRtEngineCache.h"
 #include "inference/tensorrt/TensorRtTensorInfo.h"
 
+#include <QDir>
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QTemporaryDir>
 
 #include <gtest/gtest.h>
@@ -104,6 +107,89 @@ namespace
                                                                         engine_path,
                                                                         stored_result.cacheFingerprint,
                                                                         &loaded_result));
+    }
+
+    TEST(TensorRtEngineCacheTest, ExplainsLegacyMetadataRebuild)
+    {
+        QTemporaryDir temporary_directory;
+        ASSERT_TRUE(temporary_directory.isValid());
+        const QString legacy_directory =
+            temporary_directory.filePath(QStringLiteral("legacy-fingerprint"));
+        ASSERT_TRUE(QDir().mkpath(legacy_directory));
+        const QString engine_name = QStringLiteral("feature.engine");
+        const QString legacy_engine = QDir(legacy_directory).filePath(engine_name);
+        QFile engine_file(legacy_engine);
+        ASSERT_TRUE(engine_file.open(QIODevice::WriteOnly));
+        ASSERT_EQ(engine_file.write("legacy-engine"), 13);
+        engine_file.close();
+
+        const QJsonObject legacy_identity = {
+            {QStringLiteral("schema"), 1},
+            {QStringLiteral("onnx_sha256"), QStringLiteral("same-model")},
+            {QStringLiteral("tensorrt"), QStringLiteral("10.16.0.72")}};
+        QFile metadata_file(legacy_engine + QStringLiteral(".json"));
+        ASSERT_TRUE(metadata_file.open(QIODevice::WriteOnly));
+        ASSERT_GT(metadata_file.write(QJsonDocument(legacy_identity).toJson()), 0);
+        metadata_file.close();
+
+        const QJsonObject current_identity = {
+            {QStringLiteral("schema"), 2},
+            {QStringLiteral("onnx_sha256"), QStringLiteral("same-model")},
+            {QStringLiteral("tensorrt"), QStringLiteral("10.16.0.72")}};
+        const QString current_directory =
+            temporary_directory.filePath(QStringLiteral("current-fingerprint"));
+        const QString current_engine = QDir(current_directory).filePath(engine_name);
+        const QString reason = xjw::inference::detail::describeEngineCacheMiss(
+            temporary_directory.path(),
+            engine_name,
+            current_engine + QStringLiteral(".json"),
+            current_engine,
+            current_identity);
+
+        EXPECT_TRUE(reason.contains(QStringLiteral("旧缓存格式 v1")));
+        EXPECT_TRUE(reason.contains(QStringLiteral("当前要求 v2")));
+        EXPECT_TRUE(reason.contains(QStringLiteral("完整性和 I/O 元数据")));
+    }
+
+    TEST(TensorRtEngineCacheTest, NamesChangedCacheIdentityFields)
+    {
+        QTemporaryDir temporary_directory;
+        ASSERT_TRUE(temporary_directory.isValid());
+        const QString previous_directory =
+            temporary_directory.filePath(QStringLiteral("previous-fingerprint"));
+        ASSERT_TRUE(QDir().mkpath(previous_directory));
+        const QString engine_name = QStringLiteral("matcher.engine");
+        const QString previous_engine = QDir(previous_directory).filePath(engine_name);
+        QFile engine_file(previous_engine);
+        ASSERT_TRUE(engine_file.open(QIODevice::WriteOnly));
+        ASSERT_EQ(engine_file.write("engine"), 6);
+        engine_file.close();
+
+        QJsonObject previous_identity = {
+            {QStringLiteral("schema"), 2},
+            {QStringLiteral("onnx_sha256"), QStringLiteral("same-model")},
+            {QStringLiteral("cuda_driver"), 13000},
+            {QStringLiteral("input_shapes"), QJsonArray{1, 1024, 2}}};
+        QFile metadata_file(previous_engine + QStringLiteral(".json"));
+        ASSERT_TRUE(metadata_file.open(QIODevice::WriteOnly));
+        ASSERT_GT(metadata_file.write(QJsonDocument(previous_identity).toJson()), 0);
+        metadata_file.close();
+
+        QJsonObject current_identity = previous_identity;
+        current_identity.insert(QStringLiteral("cuda_driver"), 13010);
+        current_identity.insert(QStringLiteral("input_shapes"), QJsonArray{1, 2048, 2});
+        const QString current_engine = QDir(
+            temporary_directory.filePath(QStringLiteral("current-fingerprint")))
+                                           .filePath(engine_name);
+        const QString reason = xjw::inference::detail::describeEngineCacheMiss(
+            temporary_directory.path(),
+            engine_name,
+            current_engine + QStringLiteral(".json"),
+            current_engine,
+            current_identity);
+
+        EXPECT_TRUE(reason.contains(QStringLiteral("CUDA 驱动版本")));
+        EXPECT_TRUE(reason.contains(QStringLiteral("输入形状")));
     }
 
 } // namespace

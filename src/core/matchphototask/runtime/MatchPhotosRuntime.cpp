@@ -205,9 +205,11 @@ image_matching::TensorRtEngineBuildResult buildOnnxEngine(
     const QString &onnxPath,
     const QString &cacheDirectory,
     const QString &engineName,
+    const QString &displayName,
     image_matching::TensorRtBuildPrecision precision,
     int cudaDevice,
-    int fixedKeypointCount = 0)
+    int fixedKeypointCount,
+    const ModelPreparationProgressCallback &progressCallback)
 {
     image_matching::TensorRtEngineBuildRequest request;
     request.onnxPath = onnxPath;
@@ -216,12 +218,24 @@ image_matching::TensorRtEngineBuildResult buildOnnxEngine(
     request.precision = precision;
     request.cudaDevice = cudaDevice;
     request.fixedKeypointCount = fixedKeypointCount;
+    if (progressCallback)
+    {
+        request.progressCallback = [progressCallback, displayName](
+                                       const image_matching::TensorRtEngineBuildProgress &progress)
+        {
+            progressCallback(
+                QStringLiteral("%1：%2").arg(displayName, progress.message),
+                progress.current,
+                progress.maximum);
+        };
+    }
     return image_matching::ensureTensorRtEngine(request);
 }
 
 ResolvedLoMaRTensorRtPackage parseLoMaRPackage(const QString &manifestPath,
                                                int cudaDevice,
-                                               bool prepareEngines)
+                                               bool prepareEngines,
+                                               const ModelPreparationProgressCallback &progressCallback)
 {
     ResolvedLoMaRTensorRtPackage resolved;
     const QFileInfo manifestInfo(manifestPath);
@@ -321,6 +335,24 @@ ResolvedLoMaRTensorRtPackage parseLoMaRPackage(const QString &manifestPath,
         }
         if (prepareEngines)
         {
+            constexpr int kEnginePreparationSteps = 6;
+            constexpr int kPackagePreparationSteps = 2 * kEnginePreparationSteps;
+            const auto packageProgress = [&progressCallback](int offset)
+            {
+                if (!progressCallback)
+                {
+                    return ModelPreparationProgressCallback();
+                }
+                return ModelPreparationProgressCallback(
+                    [progressCallback, offset, total = kPackagePreparationSteps](
+                        const QString &message, int current, int maximum)
+                    {
+                        progressCallback(
+                            message,
+                            maximum <= 0 ? 0 : offset + current,
+                            maximum <= 0 ? 0 : total);
+                    });
+            };
             const auto precision = precisionText == QLatin1String("fp32")
                 ? image_matching::TensorRtBuildPrecision::Fp32
                 : image_matching::TensorRtBuildPrecision::Fp16;
@@ -340,8 +372,11 @@ ResolvedLoMaRTensorRtPackage parseLoMaRPackage(const QString &manifestPath,
                 resolved.featureOnnxPath,
                 cacheDirectory,
                 QStringLiteral("loma_r_features_%1.engine").arg(featureSuffix),
+                QStringLiteral("LoMa-R 特征 engine"),
                 precision,
-                cudaDevice);
+                cudaDevice,
+                0,
+                packageProgress(0));
             if (!featureBuild.isValid())
             {
                 resolved.errorMessage = QStringLiteral("LoMa-R 特征 engine 本机构建失败：%1")
@@ -352,9 +387,11 @@ ResolvedLoMaRTensorRtPackage parseLoMaRPackage(const QString &manifestPath,
                 resolved.matcherOnnxPath,
                 cacheDirectory,
                 QStringLiteral("loma_r_matcher_%1.engine").arg(matcherSuffix),
+                QStringLiteral("LoMa-R 匹配 engine"),
                 precision,
                 cudaDevice,
-                matcherCount);
+                matcherCount,
+                packageProgress(kEnginePreparationSteps));
             if (!matcherBuild.isValid())
             {
                 resolved.errorMessage = QStringLiteral("LoMa-R 匹配 engine 本机构建失败：%1")
@@ -523,7 +560,7 @@ void reportMatchPhotosProgress(const MatchPhotosContext &context,
         context.progressCallback(stageId,
                                  message,
                                  std::max(0, current),
-                                 std::max(1, maximum));
+                                 std::max(0, maximum));
     }
 }
 
@@ -580,7 +617,8 @@ bool resolveMatchPhotosPair(const MatchPhotosContext &context,
 ResolvedLightGlueTensorRtEngine resolveLightGlueTensorRtEngine(
     const MatchPhotosOptions &options,
     int preferredKeypoints,
-    bool prepareEngine)
+    bool prepareEngine,
+    const ModelPreparationProgressCallback &progressCallback)
 {
     ResolvedLightGlueTensorRtEngine resolved;
     QString configured = options.lightGlueTensorRtEnginePath.trimmed();
@@ -607,8 +645,11 @@ ResolvedLightGlueTensorRtEngine resolveLightGlueTensorRtEngine(
                 common::model::modelPackageEngineCacheDirectory(
                     common::model::lightGlueTensorRtPackage()),
                 info.completeBaseName() + QStringLiteral("_fp32.engine"),
+                QStringLiteral("LightGlue engine"),
                 image_matching::TensorRtBuildPrecision::Fp32,
-                options.cudaDevice);
+                options.cudaDevice,
+                0,
+                progressCallback);
             if (build.isValid())
             {
                 resolved.path = build.enginePath;
@@ -670,8 +711,11 @@ ResolvedLightGlueTensorRtEngine resolveLightGlueTensorRtEngine(
             common::model::modelPackageEngineCacheDirectory(
                 common::model::lightGlueTensorRtPackage()),
             info.completeBaseName() + QStringLiteral("_fp32.engine"),
+            QStringLiteral("LightGlue engine"),
             image_matching::TensorRtBuildPrecision::Fp32,
-            options.cudaDevice);
+            options.cudaDevice,
+            0,
+            progressCallback);
         if (build.isValid())
         {
             resolved.path = build.enginePath;
@@ -707,7 +751,8 @@ QString resolveLightGlueTensorRtEnginePath(const MatchPhotosOptions &options,
 ResolvedLoMaRTensorRtPackage resolveLoMaRTensorRtPackage(
     const MatchPhotosOptions &options,
     int preferredKeypoints,
-    bool prepareEngines)
+    bool prepareEngines,
+    const ModelPreparationProgressCallback &progressCallback)
 {
     QString configured = options.lomaRTensorRtPackagePath.trimmed();
     if (configured.isEmpty())
@@ -716,7 +761,8 @@ ResolvedLoMaRTensorRtPackage resolveLoMaRTensorRtPackage(
     }
     if (!configured.isEmpty())
     {
-        return parseLoMaRPackage(configured, options.cudaDevice, prepareEngines);
+        return parseLoMaRPackage(
+            configured, options.cudaDevice, prepareEngines, progressCallback);
     }
 
     const int targetKeypoints = resolveLoMaRKeypointBudget(
@@ -765,7 +811,7 @@ ResolvedLoMaRTensorRtPackage resolveLoMaRTensorRtPackage(
             }
             visitedManifests.insert(identity);
             ResolvedLoMaRTensorRtPackage resolved = parseLoMaRPackage(
-                candidate, options.cudaDevice, false);
+                candidate, options.cudaDevice, false, {});
             if (!resolved.isValid())
             {
                 if (firstPackageError.isEmpty())
@@ -796,7 +842,7 @@ ResolvedLoMaRTensorRtPackage resolveLoMaRTensorRtPackage(
         if (prepareEngines)
         {
             ResolvedLoMaRTensorRtPackage prepared = parseLoMaRPackage(
-                best.manifestPath, options.cudaDevice, true);
+                best.manifestPath, options.cudaDevice, true, progressCallback);
             prepared.searchedDirectories = unresolved.searchedDirectories;
             return prepared;
         }

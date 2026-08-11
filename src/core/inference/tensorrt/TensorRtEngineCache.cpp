@@ -1,8 +1,10 @@
 #include "TensorRtEngineCache.h"
 
 #include <QCryptographicHash>
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QSaveFile>
@@ -77,6 +79,76 @@ namespace xjw::inference::detail
             return result;
         }
 
+        QJsonObject readJsonObject(const QString& path)
+        {
+            QFile file(path);
+            if (!file.open(QIODevice::ReadOnly))
+            {
+                return {};
+            }
+            const QJsonDocument document = QJsonDocument::fromJson(file.readAll());
+            return document.isObject() ? document.object() : QJsonObject();
+        }
+
+        QString identityFieldName(const QString& field)
+        {
+            static const QHash<QString, QString> names = {
+                {QStringLiteral("onnx_sha256"), QStringLiteral("ONNX 模型内容")},
+                {QStringLiteral("tensorrt"), QStringLiteral("TensorRT 版本")},
+                {QStringLiteral("cuda_runtime"), QStringLiteral("CUDA 运行时版本")},
+                {QStringLiteral("cuda_driver"), QStringLiteral("CUDA 驱动版本")},
+                {QStringLiteral("compute_capability"), QStringLiteral("GPU 架构")},
+                {QStringLiteral("precision"), QStringLiteral("构建精度")},
+                {QStringLiteral("workspace_bytes"), QStringLiteral("构建工作区")},
+                {QStringLiteral("builder_optimization_level"), QStringLiteral("优化等级")},
+                {QStringLiteral("maximum_auxiliary_streams"), QStringLiteral("辅助流数量")},
+                {QStringLiteral("input_shapes"), QStringLiteral("输入形状")},
+                {QStringLiteral("required_outputs"), QStringLiteral("输出约束")},
+                {QStringLiteral("attributes"), QStringLiteral("模型属性")}};
+            return names.value(field, field);
+        }
+
+        QString describeIdentityDifference(const QJsonObject& previous,
+                                           const QJsonObject& current)
+        {
+            const int previous_schema = previous.value(QStringLiteral("schema")).toInt(-1);
+            const int current_schema = current.value(QStringLiteral("schema")).toInt(-1);
+            if (previous_schema != current_schema)
+            {
+                return QStringLiteral(
+                    "检测到旧缓存格式 v%1，当前要求 v%2；旧缓存缺少新版完整性和 I/O 元数据")
+                    .arg(previous_schema)
+                    .arg(current_schema);
+            }
+
+            static const QStringList fields = {
+                QStringLiteral("onnx_sha256"),
+                QStringLiteral("tensorrt"),
+                QStringLiteral("cuda_runtime"),
+                QStringLiteral("cuda_driver"),
+                QStringLiteral("compute_capability"),
+                QStringLiteral("precision"),
+                QStringLiteral("workspace_bytes"),
+                QStringLiteral("builder_optimization_level"),
+                QStringLiteral("maximum_auxiliary_streams"),
+                QStringLiteral("input_shapes"),
+                QStringLiteral("required_outputs"),
+                QStringLiteral("attributes")};
+            QStringList differences;
+            for (const QString& field : fields)
+            {
+                if (previous.value(field) != current.value(field))
+                {
+                    differences.append(identityFieldName(field));
+                }
+            }
+            if (differences.isEmpty())
+            {
+                return QStringLiteral("已有缓存未通过 engine 尺寸、哈希或 I/O 完整性校验");
+            }
+            return QStringLiteral("缓存身份发生变化：%1").arg(differences.join(QStringLiteral("、")));
+        }
+
     } // namespace
 
     QString sha256File(const QString& path, QString* errorMessage)
@@ -136,6 +208,51 @@ namespace xjw::inference::detail
         return QString::fromLatin1(
             QCryptographicHash::hash(QJsonDocument(identity).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256)
                 .toHex());
+    }
+
+    QString describeEngineCacheMiss(const QString& cacheRoot,
+                                    const QString& engineName,
+                                    const QString& currentMetadataPath,
+                                    const QString& currentEnginePath,
+                                    const QJsonObject& currentIdentity)
+    {
+        if (QFileInfo::exists(currentMetadataPath) || QFileInfo::exists(currentEnginePath))
+        {
+            return QStringLiteral("当前缓存未通过 engine 尺寸、哈希或 I/O 完整性校验");
+        }
+
+        const QDir root(cacheRoot);
+        const QFileInfoList directories = root.entryInfoList(
+            QDir::Dirs | QDir::NoDotAndDotDot, QDir::Time);
+        QJsonObject best_candidate;
+        for (const QFileInfo& directory : directories)
+        {
+            const QString metadata_path =
+                QDir(directory.absoluteFilePath()).filePath(engineName + QStringLiteral(".json"));
+            const QString engine_path =
+                QDir(directory.absoluteFilePath()).filePath(engineName);
+            if (!QFileInfo::exists(engine_path))
+            {
+                continue;
+            }
+            const QJsonObject candidate = readJsonObject(metadata_path);
+            if (candidate.isEmpty())
+            {
+                continue;
+            }
+            if (candidate.value(QStringLiteral("onnx_sha256")) ==
+                currentIdentity.value(QStringLiteral("onnx_sha256")))
+            {
+                return describeIdentityDifference(candidate, currentIdentity);
+            }
+            if (best_candidate.isEmpty())
+            {
+                best_candidate = candidate;
+            }
+        }
+        return best_candidate.isEmpty()
+                   ? QStringLiteral("未找到可复用的本机 engine 缓存（首次构建）")
+                   : describeIdentityDifference(best_candidate, currentIdentity);
     }
 
     bool loadMatchingEngineMetadata(const QString& metadataPath,

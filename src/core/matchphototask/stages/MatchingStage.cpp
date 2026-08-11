@@ -636,8 +636,14 @@ MatchPhotosStageReport MatchingStage::run(
     // 固定；若扫描期间模型发生变化，宁可显式失败并让用户重试，也不能混用键。
     if (algorithmPlan.algorithmId == QLatin1String(image_matching::kLoMaRAlgorithmId))
     {
+        const ModelPreparationProgressCallback progress_callback =
+            [&context](const QString &message, int current, int maximum)
+        {
+            reportMatchPhotosProgress(
+                context, QStringLiteral("model_prepare"), message, current, maximum);
+        };
         const ResolvedLoMaRTensorRtPackage package = resolveLoMaRTensorRtPackage(
-            options, algorithmPlan.maxKeypoints, true);
+            options, algorithmPlan.maxKeypoints, true, progress_callback);
         if (!package.isValid())
         {
             return makeMatchingReport(
@@ -663,8 +669,15 @@ MatchPhotosStageReport MatchingStage::run(
             QStringLiteral("正在为冷匹配准备 LightGlue TensorRT engine"),
             0,
             1);
+        const ModelPreparationProgressCallback progress_callback =
+            [&context](const QString &message, int current, int maximum)
+        {
+            reportMatchPhotosProgress(
+                context, QStringLiteral("model_prepare"), message, current, maximum);
+        };
         const ResolvedLightGlueTensorRtEngine engine =
-            resolveLightGlueTensorRtEngine(options, matcherBudget, true);
+            resolveLightGlueTensorRtEngine(
+                options, matcherBudget, true, progress_callback);
         if (!engine.isValid())
         {
             return makeMatchingReport(

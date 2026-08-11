@@ -3,6 +3,7 @@
 #include "TensorRtBuildSupport.h"
 #include "TensorRtEngineCache.h"
 #include "TensorRtNetworkBuilder.h"
+#include "log/Logger.h"
 
 #include <NvInfer.h>
 #include <NvOnnxParser.h>
@@ -16,7 +17,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
+#include <thread>
 
 namespace xjw::inference
 {
@@ -66,6 +69,34 @@ namespace xjw::inference
             return false;
         }
 
+        void reportBuildProgress(const TensorRtEngineBuildRequest& request,
+                                 const QString& message,
+                                 int current,
+                                 int maximum) noexcept
+        {
+            if (!request.progressCallback)
+            {
+                return;
+            }
+            try
+            {
+                request.progressCallback({message, current, maximum});
+            }
+            catch (...)
+            {
+                LOG_WARN(QStringLiteral("TensorRT engine 进度回调抛出异常，已忽略"));
+            }
+        }
+
+        QString elapsedBuildText(qint64 seconds)
+        {
+            if (seconds < 60)
+            {
+                return QStringLiteral("%1 秒").arg(seconds);
+            }
+            return QStringLiteral("%1 分 %2 秒").arg(seconds / 60).arg(seconds % 60);
+        }
+
     } // namespace
 
     QString tensorRtBuildPrecisionName(TensorRtBuildPrecision precision)
@@ -77,6 +108,7 @@ namespace xjw::inference
     {
         TensorRtEngineBuildResult result;
         result.precision = request.precision;
+        reportBuildProgress(request, QStringLiteral("检查 ONNX 文件和 CUDA 环境"), 0, 6);
         const QFileInfo onnx_info(request.onnxPath);
         if (!onnx_info.isFile())
         {
@@ -98,6 +130,12 @@ namespace xjw::inference
             return result;
         }
 
+        reportBuildProgress(
+            request,
+            QStringLiteral("计算 ONNX SHA-256（%1 MB）")
+                .arg(onnx_info.size() / (1024 * 1024)),
+            1,
+            6);
         QString hash_error;
         const QString onnx_hash = detail::sha256File(onnx_info.absoluteFilePath(), &hash_error);
         if (onnx_hash.isEmpty())
@@ -154,6 +192,7 @@ namespace xjw::inference
         result.enginePath = QDir(fingerprint_directory).filePath(engine_name);
         result.metadataPath = result.enginePath + QStringLiteral(".json");
 
+        reportBuildProgress(request, QStringLiteral("检查本机 engine 缓存和构建锁"), 2, 6);
         QLockFile lock(result.enginePath + QStringLiteral(".lock"));
         lock.setStaleLockTime(30 * 60 * 1000);
         if (!lock.tryLock(30 * 60 * 1000))
@@ -166,9 +205,29 @@ namespace xjw::inference
                 result.metadataPath, result.enginePath, result.cacheFingerprint, &result))
         {
             result.reused = true;
+            result.cacheDecision = QStringLiteral("命中缓存：%1（指纹 %2）")
+                                       .arg(engine_name, result.cacheFingerprint.left(12));
+            LOG_INFO(QStringLiteral("TensorRT engine %1；路径=%2")
+                         .arg(result.cacheDecision, result.enginePath));
+            reportBuildProgress(request, result.cacheDecision, 6, 6);
             return result;
         }
 
+        result.cacheDecision = detail::describeEngineCacheMiss(
+            cache_root,
+            engine_name,
+            result.metadataPath,
+            result.enginePath,
+            identity);
+        LOG_INFO(QStringLiteral("TensorRT engine 需要重新生成：%1；目标=%2")
+                     .arg(result.cacheDecision, result.enginePath));
+        reportBuildProgress(
+            request,
+            QStringLiteral("需要重新生成：%1").arg(result.cacheDecision),
+            2,
+            6);
+
+        reportBuildProgress(request, QStringLiteral("解析 ONNX 并配置 TensorRT 网络"), 3, 6);
         detail::TensorRtBuildLogger logger;
         detail::TensorRtPtr<nvinfer1::IBuilder> builder(nvinfer1::createInferBuilder(logger));
         if (!builder)
@@ -226,7 +285,54 @@ namespace xjw::inference
         }
 
         const auto started = std::chrono::steady_clock::now();
+        const QString building_message = QStringLiteral(
+            "TensorRT 正在搜索并编译最优内核（不提供可验证百分比）");
+        reportBuildProgress(request, building_message, 0, 0);
+        LOG_INFO(QStringLiteral("TensorRT engine 开始构建：%1").arg(result.enginePath));
+        std::jthread heartbeat;
+        if (request.progressCallback)
+        {
+            const TensorRtEngineBuildProgressCallback callback = request.progressCallback;
+            const QString heartbeat_engine_name = engine_name;
+            heartbeat = std::jthread(
+                [callback, started, building_message, heartbeat_engine_name](std::stop_token stop_token)
+                {
+                    while (!stop_token.stop_requested())
+                    {
+                        std::this_thread::sleep_for(std::chrono::seconds(1));
+                        if (stop_token.stop_requested())
+                        {
+                            break;
+                        }
+                        const qint64 elapsed_seconds =
+                            std::chrono::duration_cast<std::chrono::seconds>(
+                                std::chrono::steady_clock::now() - started)
+                                .count();
+                        try
+                        {
+                            callback({QStringLiteral("%1，已耗时 %2")
+                                          .arg(building_message, elapsedBuildText(elapsed_seconds)),
+                                      0,
+                                      0});
+                        }
+                        catch (...)
+                        {
+                        }
+                        if (elapsed_seconds > 0 && elapsed_seconds % 30 == 0)
+                        {
+                            LOG_INFO(QStringLiteral("TensorRT engine 构建中：%1，已耗时 %2")
+                                         .arg(heartbeat_engine_name,
+                                              elapsedBuildText(elapsed_seconds)));
+                        }
+                    }
+                });
+        }
         detail::TensorRtPtr<nvinfer1::IHostMemory> serialized(builder->buildSerializedNetwork(*network, *config));
+        heartbeat.request_stop();
+        if (heartbeat.joinable())
+        {
+            heartbeat.join();
+        }
         if (!serialized)
         {
             result.errorMessage = QStringLiteral("TensorRT 构建 engine 失败：%1").arg(logger.errors());
@@ -234,6 +340,7 @@ namespace xjw::inference
             return result;
         }
         const double build_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+        reportBuildProgress(request, QStringLiteral("校验生成的 engine I/O"), 4, 6);
         result.ioTensors =
             detail::inspectEngine(serialized->data(), serialized->size(), input_shapes, logger, &result.errorMessage);
         if (result.ioTensors.empty())
@@ -246,6 +353,7 @@ namespace xjw::inference
             return result;
         }
 
+        reportBuildProgress(request, QStringLiteral("写入 engine 和完整性元数据"), 5, 6);
         QSaveFile engine_file(result.enginePath);
         if (!engine_file.open(QIODevice::WriteOnly) ||
             engine_file.write(static_cast<const char*>(serialized->data()), static_cast<qint64>(serialized->size())) !=
@@ -268,6 +376,14 @@ namespace xjw::inference
         {
             QFile::remove(result.enginePath);
             result.enginePath.clear();
+        }
+        else
+        {
+            const QString completed = QStringLiteral("engine 已生成并缓存，耗时 %1")
+                                          .arg(elapsedBuildText(
+                                              static_cast<qint64>(std::llround(build_seconds))));
+            LOG_INFO(QStringLiteral("TensorRT %1：%2").arg(completed, result.enginePath));
+            reportBuildProgress(request, completed, 6, 6);
         }
         return result;
     }

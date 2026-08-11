@@ -17,8 +17,14 @@
 #include <QString>
 #include <QStringList>
 
+#include <functional>
+
 namespace xjw::matchphotos
 {
+
+// maximum=0 表示底层没有可信百分比，调用方应显示忙碌状态和 message 中的真实耗时。
+using ModelPreparationProgressCallback =
+    std::function<void(const QString &, int, int)>;
 
 struct ResolvedImagePair
 {
@@ -99,7 +105,8 @@ bool resolveMatchPhotosPair(const MatchPhotosContext &context,
 ResolvedLightGlueTensorRtEngine resolveLightGlueTensorRtEngine(
     const MatchPhotosOptions &options,
     int preferredKeypoints = 0,
-    bool prepareEngine = true);
+    bool prepareEngine = true,
+    const ModelPreparationProgressCallback &progressCallback = {});
 
 // 保留轻量路径接口供既有调用者使用；新代码需要桶容量时应使用上面的完整结果。
 QString resolveLightGlueTensorRtEnginePath(const MatchPhotosOptions &options,
@@ -108,7 +115,8 @@ QString resolveLightGlueTensorRtEnginePath(const MatchPhotosOptions &options,
 ResolvedLoMaRTensorRtPackage resolveLoMaRTensorRtPackage(
     const MatchPhotosOptions &options,
     int preferredKeypoints = 0,
-    bool prepareEngines = true);
+    bool prepareEngines = true,
+    const ModelPreparationProgressCallback &progressCallback = {});
 
 int resolveFeatureKeypointLimit(const MatchPhotosOptions &options,
                                 const MatchPhotosAlgorithmPlan &plan,

@@ -122,10 +122,17 @@ MatchPhotosStageReport FeatureStage::run(
         reportMatchPhotosProgress(
             context,
             QStringLiteral("model_prepare"),
-            QStringLiteral("正在检查 LoMa-R ONNX，并为当前 TensorRT/GPU 准备本机 engine"),
+            QStringLiteral("正在检查 LoMa-R ONNX 和本机 TensorRT engine 缓存"),
             0,
-            1);
-        loma_package = resolveLoMaRTensorRtPackage(options, algorithmPlan.maxKeypoints);
+            12);
+        const ModelPreparationProgressCallback progress_callback =
+            [&context](const QString &message, int current, int maximum)
+        {
+            reportMatchPhotosProgress(
+                context, QStringLiteral("model_prepare"), message, current, maximum);
+        };
+        loma_package = resolveLoMaRTensorRtPackage(
+            options, algorithmPlan.maxKeypoints, true, progress_callback);
         if (!loma_package.isValid())
         {
             return makeFeatureReport(
@@ -138,8 +145,8 @@ MatchPhotosStageReport FeatureStage::run(
             QStringLiteral("model_prepare"),
             QStringLiteral("LoMa-R 本机 TensorRT engine 已就绪：%1")
                 .arg(loma_package.environmentSummary),
-            1,
-            1);
+            12,
+            12);
     }
 
     const bool applyMask = shouldApplyMasksToKeypoints(options);
