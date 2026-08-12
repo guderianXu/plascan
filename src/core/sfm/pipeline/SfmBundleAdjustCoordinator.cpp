@@ -2,6 +2,7 @@
 #include "HierarchicalBundleAdjuster.h"
 #include "IncrementalSfmDetail.h"
 #include "SfmCalibrationPreviewSampler.h"
+#include "geometry/TriangulationQuality.h"
 #include "geometry/OpenCvCameraAdapter.h"
 #include "geometry/SimilarityGaugeNormalizer.h"
 #include "BundleAdjustAdaptiveCameraModel.h"
@@ -146,6 +147,73 @@ double cameraLayerReferenceDriftRms(
     return std::sqrt(squaredSum / static_cast<double>(cameras.size()));
 }
 
+bool retriangulateTrackInitialPoint(
+    const std::vector<FramePinholeCamera> &cameras,
+    BATrack *track)
+{
+    if (!track || track->observations.size() < 2)
+    {
+        return false;
+    }
+
+    const BAObservation *best_left = nullptr;
+    const BAObservation *best_right = nullptr;
+    double largest_baseline_squared = 0.0;
+    for (std::size_t left_index = 0;
+         left_index < track->observations.size();
+         ++left_index)
+    {
+        const BAObservation &left = track->observations[left_index];
+        if (left.cameraIndex < 0 ||
+            left.cameraIndex >= static_cast<int>(cameras.size()))
+        {
+            continue;
+        }
+        const auto left_center =
+            cameras[static_cast<std::size_t>(left.cameraIndex)].cameraCenter();
+        for (std::size_t right_index = left_index + 1;
+             right_index < track->observations.size();
+             ++right_index)
+        {
+            const BAObservation &right = track->observations[right_index];
+            if (right.cameraIndex < 0 ||
+                right.cameraIndex >= static_cast<int>(cameras.size()))
+            {
+                continue;
+            }
+            const auto right_center =
+                cameras[static_cast<std::size_t>(right.cameraIndex)].cameraCenter();
+            const double dx = right_center[0] - left_center[0];
+            const double dy = right_center[1] - left_center[1];
+            const double dz = right_center[2] - left_center[2];
+            const double baseline_squared = dx * dx + dy * dy + dz * dz;
+            if (baseline_squared > largest_baseline_squared)
+            {
+                largest_baseline_squared = baseline_squared;
+                best_left = &left;
+                best_right = &right;
+            }
+        }
+    }
+    if (!best_left || !best_right || largest_baseline_squared <= 1.0e-20)
+    {
+        return false;
+    }
+
+    const PairIntersectionCandidate candidate =
+        triangulatePairWithDirectionFallback(
+            cameras[static_cast<std::size_t>(best_left->cameraIndex)],
+            {{best_left->u, best_left->v}},
+            cameras[static_cast<std::size_t>(best_right->cameraIndex)],
+            {{best_right->u, best_right->v}});
+    if (!candidate.valid)
+    {
+        return false;
+    }
+    track->initialPoint = candidate.point;
+    return true;
+}
+
 } // namespace
 
 SfmBundleAdjustCoordinator::SfmBundleAdjustCoordinator(IncrementalSfm &owner)
@@ -203,6 +271,25 @@ bool SfmBundleAdjustCoordinator::shouldUseLowOrderAerialSelfCalibration(
            refiningSharedRadialDistortion && activeCameraCount >= 20 &&
            std::isfinite(opticalAxisConcentration) &&
            opticalAxisConcentration >= 0.90;
+}
+
+bool SfmBundleAdjustCoordinator::shouldCorrectUnanchoredAerialDoming(
+    bool localOnly,
+    bool hasAbsoluteConstraint,
+    bool completeRegistration,
+    bool hasTrustedFocalPrior,
+    bool refiningRadialK1Only,
+    int activeCameraCount,
+    double opticalAxisConcentration,
+    double cameraCenterNormalSpanRmsRatio)
+{
+    return !localOnly && !hasAbsoluteConstraint && completeRegistration &&
+           hasTrustedFocalPrior && refiningRadialK1Only &&
+           activeCameraCount >= 20 &&
+           std::isfinite(opticalAxisConcentration) &&
+           opticalAxisConcentration >= 0.90 &&
+           std::isfinite(cameraCenterNormalSpanRmsRatio) &&
+           cameraCenterNormalSpanRmsRatio >= 0.0;
 }
 
 bool SfmBundleAdjustCoordinator::hasIterativeGlobalBaConverged(
@@ -1218,6 +1305,7 @@ void IncrementalSfm::runBundleAdjust(
     }
     AerialCameraPlaneEstimate cameraPlaneBefore;
     bool cameraPlaneConstraintActive = false;
+    bool flattenAerialCameraLayer = false;
     const bool hasCameraLayerAbsoluteConstraint =
         control_constraint_count > 0 || control_scale_bar_count > 0 ||
         !baOpt.cameraPosePriors.empty();
@@ -1230,6 +1318,97 @@ void IncrementalSfm::runBundleAdjust(
                         return prior.enabled;
                     });
     cameraPlaneBefore = estimateAerialCameraPlane(baCameras);
+    const bool refining_trusted_focal_k1_only =
+        baOpt.hasTrustedSharedFocalPrior &&
+        sharedIntrinsicParameterEnabled(
+            baOpt, BAIntrinsicParameter::RadialK1) &&
+        !sharedIntrinsicParameterEnabled(
+            baOpt, BAIntrinsicParameter::FocalLength) &&
+        enabledIntrinsicParameterCount(
+            baOpt.sharedIntrinsicParameterMask) == 1;
+    if (_sfmOptions.correctUnanchoredAerialDoming &&
+        cameraPlaneBefore.valid &&
+        BundleAdjust::isBackendAvailable(BABackend::CeresCpu) &&
+        SfmBundleAdjustCoordinator::shouldCorrectUnanchoredAerialDoming(
+            localOnly,
+            hasAerialSelfCalibrationAbsoluteConstraint,
+            refineSharedIntrinsics,
+            baOpt.hasTrustedSharedFocalPrior,
+            refining_trusted_focal_k1_only,
+            static_cast<int>(baCameras.size()),
+            cameraPlaneBefore.opticalAxisConcentration,
+            cameraPlaneBefore.normalToSpanRmsRatio))
+    {
+        BACameraPlaneConstraint &constraint = baOpt.cameraPlaneConstraint;
+        constraint.enabled = true;
+        constraint.normal = cameraPlaneBefore.normal;
+        const bool flatten_curved_layer =
+            cameraPlaneBefore.normalToSpanRmsRatio >= 0.025;
+        flattenAerialCameraLayer = flatten_curved_layer;
+        if (flatten_curved_layer)
+        {
+            // 明显弯曲时让目标平面通过固定规范相机，避免固定相机自身无法满足
+            // 约束；k1 负责吸收原先被外参穹顶解释的径向像差。
+            constraint.point = baCameras.front().cameraCenter();
+            constraint.referenceSignedDistances.assign(baCameras.size(), 0.0);
+        }
+        else
+        {
+            // 首轮修平之后的后续 BA 不能撤掉约束，否则 k1 与外参会再次交换
+            // 低频弯曲。对已经平坦的相机层只保持本轮形状，不继续强制压平。
+            constraint.point = cameraPlaneBefore.center;
+            constraint.referenceSignedDistances.clear();
+            constraint.referenceSignedDistances.reserve(baCameras.size());
+            for (const FramePinholeCamera &camera : baCameras)
+            {
+                const auto center = camera.cameraCenter();
+                constraint.referenceSignedDistances.push_back(
+                    constraint.normal[0] * (center[0] - constraint.point[0]) +
+                    constraint.normal[1] * (center[1] - constraint.point[1]) +
+                    constraint.normal[2] * (center[2] - constraint.point[2]));
+            }
+        }
+        constraint.sigmaMeters = std::max(
+            1.0e-6,
+            cameraPlaneBefore.spanRms *
+                _sfmOptions.cameraLayerPreservationSigmaFraction);
+        const std::size_t observation_count = std::accumulate(
+            baTracks.begin(),
+            baTracks.end(),
+            std::size_t{0},
+            [](std::size_t total, const BATrack &track)
+            {
+                return total + track.observations.size();
+            });
+        const double observations_per_camera =
+            static_cast<double>(observation_count) /
+            static_cast<double>(std::max<std::size_t>(1, baCameras.size()));
+        // 一个相机只有一个层约束，却通常有数千个像点残差。按每台相机平均
+        // 观测数归一化，避免固定权重在大工程中随影像/连接点数增长而失效。
+        constraint.weight = std::max(
+            _sfmOptions.cameraLayerPreservationWeight,
+            observations_per_camera);
+        baOpt.cameraPlaneHuberDelta = 0.0;
+        baOpt.backend = BABackend::CeresCpu;
+        // 大幅改变外参/畸变时，仍基于旧几何立即按点 RMS 标 invalid 会把尚未
+        // 重三角化的点网误删。修正轮保留全部 BA 点，随后由统一的重三角化和
+        // 几何过滤在新相机模型下重新评估。
+        baOpt.enablePointFilter = false;
+        cameraPlaneConstraintActive = true;
+        Logger::instance()->infof(
+            "[BA] aerial_doming_correction scope=global cameras=%zu "
+            "mode=%s model=fixed_focal+k1 opticalAxis=%.6f "
+            "normalSpanRmsRatio=%.9f normalRms=%.6f spanRms=%.6f "
+            "sigma=%.6f weight=%.3f",
+            baCameras.size(),
+            flatten_curved_layer ? "flatten" : "preserve",
+            cameraPlaneBefore.opticalAxisConcentration,
+            cameraPlaneBefore.normalToSpanRmsRatio,
+            cameraPlaneBefore.normalRms,
+            cameraPlaneBefore.spanRms,
+            constraint.sigmaMeters,
+            constraint.weight);
+    }
     const bool lowOrderAerialSelfCalibration =
         !_sfmOptions.adaptiveCameraModelFitting &&
         cameraPlaneBefore.valid &&
@@ -1256,7 +1435,8 @@ void IncrementalSfm::runBundleAdjust(
             baOpt.sharedFocalPriorSigma,
             baOpt.sharedRadialK1PriorSigma);
     }
-    if (_sfmOptions.preserveCameraLayerDuringSelfCalibration &&
+    if (!cameraPlaneConstraintActive &&
+        _sfmOptions.preserveCameraLayerDuringSelfCalibration &&
         BundleAdjust::isBackendAvailable(BABackend::CeresCpu))
     {
         const bool stableParallelCameraLayer =
@@ -1344,6 +1524,57 @@ void IncrementalSfm::runBundleAdjust(
         if (!hasAbsolutePoseConstraint)
         {
             baOpt.fixedCameraIndices = {0};
+            if (cameraPlaneConstraintActive && baCameras.size() >= 2)
+            {
+                const auto anchor_center = baCameras.front().cameraCenter();
+                int scale_camera_index = -1;
+                double farthest_squared_distance = 0.0;
+                for (int index = 1;
+                     index < static_cast<int>(baCameras.size());
+                     ++index)
+                {
+                    const auto center =
+                        baCameras[static_cast<std::size_t>(index)].cameraCenter();
+                    const double dx = center[0] - anchor_center[0];
+                    const double dy = center[1] - anchor_center[1];
+                    const double dz = center[2] - anchor_center[2];
+                    const double squared_distance = dx * dx + dy * dy + dz * dz;
+                    if (squared_distance > farthest_squared_distance)
+                    {
+                        farthest_squared_distance = squared_distance;
+                        scale_camera_index = index;
+                    }
+                }
+                if (scale_camera_index >= 0 && farthest_squared_distance > 1.0e-20)
+                {
+                    baOpt.fixedCameraIndices.push_back(scale_camera_index);
+                    if (flattenAerialCameraLayer)
+                    {
+                        // 自动 gauge 会固定远端相机的完整位姿。保留 PCA 层法向，
+                        // 只让该固定光心保持当前法向偏移；为迁就单个锚点旋转整个
+                        // 目标平面会把修正方向带离真实相机层。
+                        const auto scale_center =
+                            baCameras[static_cast<std::size_t>(scale_camera_index)]
+                                .cameraCenter();
+                        BACameraPlaneConstraint &constraint =
+                            baOpt.cameraPlaneConstraint;
+                        constraint.referenceSignedDistances[
+                            static_cast<std::size_t>(scale_camera_index)] =
+                            constraint.normal[0] *
+                                (scale_center[0] - constraint.point[0]) +
+                            constraint.normal[1] *
+                                (scale_center[1] - constraint.point[1]) +
+                            constraint.normal[2] *
+                                (scale_center[2] - constraint.point[2]);
+                    }
+                    Logger::instance()->infof(
+                        "[BA] aerial_doming_gauge anchor=0 scaleCamera=%d "
+                        "baseline=%.6f targetPlaneCompatible=%s",
+                        scale_camera_index,
+                        std::sqrt(farthest_squared_distance),
+                        flattenAerialCameraLayer ? "true" : "preserved_layer");
+                }
+            }
         }
     }
 
@@ -1351,6 +1582,7 @@ void IncrementalSfm::runBundleAdjust(
     // 记录一条非退化基线，并在求解后对全部相机中心和点做同一 Sim(3) 尺度恢复。
     if (baOpt.refineCameraPose &&
         !hasAbsoluteScaleConstraint &&
+        !cameraPlaneConstraintActive &&
         baOpt.fixedCameraIndices.size() == 1)
     {
         const int anchorIndex = baOpt.fixedCameraIndices.front();
@@ -1564,21 +1796,55 @@ void IncrementalSfm::runBundleAdjust(
             baResult.points.size() == preview_tracks.size())
         {
             std::vector<BATrack> warmTracks = baTracks;
-            for (std::size_t index = 0; index < preview_track_indices.size(); ++index)
+            int retriangulated_track_count = 0;
+            if (cameraPlaneConstraintActive)
             {
-                const BARefinedPoint &point = baResult.points[index];
-                if (point.valid && std::isfinite(point.point[0]) &&
-                    std::isfinite(point.point[1]) && std::isfinite(point.point[2]))
+                // 预览解已经改变相机层和 k1。全量点若仍携带旧穹顶坐标进入
+                // BA，会产生大面积负深度/高残差并被误判为离群点。先用预览解
+                // 的相机对全部普通轨迹重新交会，再进入全量联合优化。
+#pragma omp parallel for schedule(dynamic, 256) reduction(+ : retriangulated_track_count)
+                for (int index = 0;
+                     index < static_cast<int>(warmTracks.size());
+                     ++index)
                 {
-                    warmTracks[preview_track_indices[index]].initialPoint = point.point;
+                    if (std::find(
+                            baOpt.fixedTrackIndices.begin(),
+                            baOpt.fixedTrackIndices.end(),
+                            index) != baOpt.fixedTrackIndices.end())
+                    {
+                        continue;
+                    }
+                    if (retriangulateTrackInitialPoint(
+                            baResult.refinedCameras,
+                            &warmTracks[static_cast<std::size_t>(index)]))
+                    {
+                        ++retriangulated_track_count;
+                    }
+                }
+            }
+            else
+            {
+                for (std::size_t index = 0;
+                     index < preview_track_indices.size();
+                     ++index)
+                {
+                    const BARefinedPoint &point = baResult.points[index];
+                    if (point.valid && std::isfinite(point.point[0]) &&
+                        std::isfinite(point.point[1]) &&
+                        std::isfinite(point.point[2]))
+                    {
+                        warmTracks[preview_track_indices[index]].initialPoint =
+                            point.point;
+                    }
                 }
             }
             Logger::instance()->infof(
                 "[BA] self_calibration_seed full_refinement seed=%d threads=%d "
-                "iterations=%d",
+                "iterations=%d retriangulatedTracks=%d",
                 bestIndex,
                 baOpt.numThreads,
-                baOpt.maxIterations);
+                baOpt.maxIterations,
+                retriangulated_track_count);
             baResult = BundleAdjust::optimizePoints(
                 baResult.refinedCameras, warmTracks, baOpt);
         }

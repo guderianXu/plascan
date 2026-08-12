@@ -2,7 +2,9 @@
 
 #include <plapoint/filters/preprocessing.h>
 
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace xjw 
@@ -10,6 +12,9 @@ namespace xjw
 
 struct SparsePointCloudPoint 
 {
+    static constexpr std::size_t kInvalidSourceIndex =
+        std::numeric_limits<std::size_t>::max();
+
     double x = 0.0;
     double y = 0.0;
     double z = 0.0;
@@ -20,6 +25,8 @@ struct SparsePointCloudPoint
     std::uint8_t red = 255;
     std::uint8_t green = 255;
     std::uint8_t blue = 255;
+    /// 输入点数组中的稳定索引，过滤和空间清理期间必须原样保留。
+    std::size_t sourceIndex = kInvalidSourceIndex;
 };
 
 struct SparsePointCloudFilterOptions 

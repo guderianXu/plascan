@@ -410,6 +410,58 @@ TEST(BundleAdjustValidationTest, IgnoresLegacyFlagsDisabledByIntrinsicMask)
     EXPECT_TRUE(validation.ok) << validation.message;
 }
 
+TEST(BundleAdjustValidationTest, AcceptsTrustedFixedFocalRadialK1Only)
+{
+    const std::vector<xjw::FramePinholeCamera> cameras{
+        makeCamera(-1.0, 0.0, 0.0),
+        makeCamera(1.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> point{{0.0, 0.0, 5.0}};
+    const std::vector<xjw::BATrack> tracks{
+        makeTrack(cameras, point, point)};
+    xjw::BAOptions options;
+    options.refineSharedFocalLength = false;
+    options.refineSharedRadialDistortion = true;
+    options.hasTrustedSharedFocalPrior = true;
+    options.useSharedIntrinsicParameterMask = true;
+    options.sharedIntrinsicParameterMask.fill(false);
+    options.sharedIntrinsicParameterMask[
+        static_cast<std::size_t>(xjw::BAIntrinsicParameter::RadialK1)] = true;
+    xjw::BAOptions normalized;
+
+    const xjw::detail::BundleAdjustValidationResult validation =
+        xjw::detail::validateAndNormalizeBundleAdjustOptions(
+            cameras, tracks, options, &normalized);
+
+    EXPECT_TRUE(validation.ok) << validation.message;
+}
+
+TEST(BundleAdjustValidationTest, RejectsUntrustedFixedFocalRadialK1Only)
+{
+    const std::vector<xjw::FramePinholeCamera> cameras{
+        makeCamera(-1.0, 0.0, 0.0),
+        makeCamera(1.0, 0.0, 0.0),
+    };
+    const std::array<double, 3> point{{0.0, 0.0, 5.0}};
+    const std::vector<xjw::BATrack> tracks{
+        makeTrack(cameras, point, point)};
+    xjw::BAOptions options;
+    options.refineSharedFocalLength = false;
+    options.refineSharedRadialDistortion = true;
+    options.useSharedIntrinsicParameterMask = true;
+    options.sharedIntrinsicParameterMask.fill(false);
+    options.sharedIntrinsicParameterMask[
+        static_cast<std::size_t>(xjw::BAIntrinsicParameter::RadialK1)] = true;
+    xjw::BAOptions normalized;
+
+    const xjw::detail::BundleAdjustValidationResult validation =
+        xjw::detail::validateAndNormalizeBundleAdjustOptions(
+            cameras, tracks, options, &normalized);
+
+    EXPECT_FALSE(validation.ok);
+    EXPECT_EQ(validation.status, xjw::BASolveStatus::InvalidInput);
+}
+
 TEST(BundleAdjustValidationTest, RejectsMismatchedStableIntrinsicReferences)
 {
     const std::vector<xjw::FramePinholeCamera> cameras{

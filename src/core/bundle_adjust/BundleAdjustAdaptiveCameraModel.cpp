@@ -1209,8 +1209,9 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
                result.occupiedPeripheralSectors >= 7);
 
     // 无 GCP/相机位姿约束的近俯视航摄块中，焦距、径向畸变、主点和宽高比
-    // 都会与航高及地表的低频弯曲耦合。此时信息矩阵只能说明参数能降低像方
-    // 残差，不能证明它不会用“穹顶”解释残差，因此保持导入内参不变。
+    // 都会与航高及地表的低频弯曲耦合。没有可信焦距时保持导入内参不变；
+    // 批次一致的 EXIF/固定镜头焦距可保持固定，只释放最可控的共享 k1，随后
+    // 由 SfM 协调器的航摄层约束阻止 k1 再用穹顶解释残差。
     // 0.90 与上面的弱平行几何分界保持一致，避免首轮尚未达到 0.97 时先释放
     // 内参、待几何已经弯曲后才触发保护。
     result.unanchoredParallelAerialGuardApplied =
@@ -1219,17 +1220,31 @@ BAAdaptiveCameraModelAssessment assessAdaptiveCameraModel(
         result.opticalAxisConcentration >= 0.90;
     if (result.unanchoredParallelAerialGuardApplied)
     {
+        const bool trusted_focal_k1 =
+            options && options->hasTrustedSharedFocalPrior &&
+            result.enabled[parameterIndex(BAIntrinsicParameter::RadialK1)];
         result.enabled.fill(false);
+        result.enabled[parameterIndex(BAIntrinsicParameter::RadialK1)] =
+            trusted_focal_k1;
     }
 
     // 自标定模型只要释放任何畸变/主点参数，就必须保留焦距共同吸收一阶尺度。
-    if (enabledIntrinsicParameterCount(result.enabled) > 0)
+    // 唯一例外是可信焦距航摄保护：此时固定焦距正是解除焦距—航高耦合的锚点。
+    const bool trusted_focal_k1_only =
+        result.unanchoredParallelAerialGuardApplied && options &&
+        options->hasTrustedSharedFocalPrior &&
+        result.enabled[parameterIndex(BAIntrinsicParameter::RadialK1)] &&
+        enabledIntrinsicParameterCount(result.enabled) == 1;
+    if (enabledIntrinsicParameterCount(result.enabled) > 0 &&
+        !trusted_focal_k1_only)
     {
         result.enabled[parameterIndex(BAIntrinsicParameter::FocalLength)] = true;
     }
     result.modelName = adaptiveCameraModelName(result.enabled);
     const bool fieldNormalized = result.lowOrderDistortionScale > 1.0 + 1.0e-9;
-    result.reason = result.unanchoredParallelAerialGuardApplied
+    result.reason = trusted_focal_k1_only
+        ? "unanchored_parallel_aerial_trusted_focal_k1_doming_correction"
+        : result.unanchoredParallelAerialGuardApplied
         ? "unanchored_parallel_aerial_fixed_intrinsics_doming_guard"
         : result.opticalAxisConcentration >= 0.90
         ? (fieldNormalized
@@ -1270,7 +1285,12 @@ bool applyAdaptiveCameraModel(
         {
             return enabled;
         });
-    if (anyExtended)
+    const bool allow_trusted_focal_k1_only =
+        options->hasTrustedSharedFocalPrior &&
+        assessment.unanchoredParallelAerialGuardApplied &&
+        effective[parameterIndex(BAIntrinsicParameter::RadialK1)] &&
+        enabledIntrinsicParameterCount(effective) == 1;
+    if (anyExtended && !allow_trusted_focal_k1_only)
     {
         const std::size_t focalIndex =
             parameterIndex(BAIntrinsicParameter::FocalLength);

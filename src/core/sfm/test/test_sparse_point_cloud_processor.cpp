@@ -134,3 +134,63 @@ TEST(SparsePointCloudProcessorTest, RefineMatchesOptimizeWrapper)
     EXPECT_EQ(refineResult.removedTotal, optimizeResult.removedTotal);
     ASSERT_EQ(refineResult.rounds.size(), optimizeResult.rounds.size());
 }
+
+TEST(SparsePointCloudProcessorTest, FilteringPreservesSourceIndices)
+{
+    std::vector<SparsePointCloudPoint> points = {
+        makePoint(0.0, 0.0, 0.0, 0.5, 3.0, 1),
+        makePoint(1.0, 0.0, 0.0, 0.5, 3.0, 3),
+        makePoint(2.0, 0.0, 0.0, 0.5, 3.0, 4)
+    };
+    points[0].sourceIndex = 7;
+    points[1].sourceIndex = 11;
+    points[2].sourceIndex = 19;
+
+    SparsePointCloudFilterOptions options;
+    options.filterByReprojError = false;
+    options.filterByTrackLen = true;
+    options.minTrackLen = 3;
+    options.filterByTriAngle = false;
+    options.filterByStatistical = false;
+    options.filterByDensity = false;
+
+    const SparsePointCloudFilterStats stats =
+        SparsePointCloudProcessor::filter(&points, options);
+
+    EXPECT_EQ(stats.removedByTrackLen, 1);
+    ASSERT_EQ(points.size(), 2u);
+    EXPECT_EQ(points[0].sourceIndex, 11u);
+    EXPECT_EQ(points[1].sourceIndex, 19u);
+}
+
+TEST(SparsePointCloudProcessorTest, ZeroReprojectionThresholdIsAppliedWithoutClearingAllPoints)
+{
+    std::vector<SparsePointCloudPoint> points = {
+        makePoint(0.0, 0.0, 0.0, 0.0, 3.0, 3),
+        makePoint(1.0, 0.0, 0.0, 0.1, 3.0, 3),
+        makePoint(2.0, 0.0, 0.0, 0.2, 3.0, 3)
+    };
+
+    SparsePointCloudFilterOptions options;
+    options.filterByReprojError = true;
+    options.maxReprojError = 0.0;
+    options.filterByTrackLen = false;
+    options.filterByTriAngle = false;
+    options.filterByStatistical = false;
+    options.filterByDensity = false;
+
+    SparsePointCloudFilterStats stats =
+        SparsePointCloudProcessor::filter(&points, options);
+
+    EXPECT_EQ(stats.removedByReprojError, 2);
+    ASSERT_EQ(points.size(), 1u);
+    EXPECT_DOUBLE_EQ(points.front().rmsReprojPx, 0.0);
+
+    points = {
+        makePoint(0.0, 0.0, 0.0, 0.1, 3.0, 3),
+        makePoint(1.0, 0.0, 0.0, 0.2, 3.0, 3)
+    };
+    stats = SparsePointCloudProcessor::filter(&points, options);
+    EXPECT_EQ(stats.removedByReprojError, 0);
+    EXPECT_EQ(points.size(), 2u);
+}

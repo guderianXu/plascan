@@ -452,11 +452,23 @@ BundleAdjustValidationResult validateAndNormalizeBundleAdjustOptions(
         parameterEnabled(BAIntrinsicParameter::RadialK3) ||
         parameterEnabled(BAIntrinsicParameter::TangentialP1) ||
         parameterEnabled(BAIntrinsicParameter::TangentialP2);
-    if (extendedSharedIntrinsicEnabled && !sharedFocalEnabled)
+    const bool trustedFixedFocalRadialK1Only =
+        requestedOptions.hasTrustedSharedFocalPrior &&
+        parameterEnabled(BAIntrinsicParameter::RadialK1) &&
+        !parameterEnabled(BAIntrinsicParameter::FocalAspectRatio) &&
+        !parameterEnabled(BAIntrinsicParameter::PrincipalPointX) &&
+        !parameterEnabled(BAIntrinsicParameter::PrincipalPointY) &&
+        !parameterEnabled(BAIntrinsicParameter::RadialK2) &&
+        !parameterEnabled(BAIntrinsicParameter::RadialK3) &&
+        !parameterEnabled(BAIntrinsicParameter::TangentialP1) &&
+        !parameterEnabled(BAIntrinsicParameter::TangentialP2);
+    if (extendedSharedIntrinsicEnabled && !sharedFocalEnabled &&
+        !trustedFixedFocalRadialK1Only)
     {
         return invalid(
             BASolveStatus::InvalidInput,
-            "BA 输入验证失败: 宽高比或主点优化以及径向畸变优化必须同时启用共享焦距优化");
+            "BA 输入验证失败: 除可信固定焦距的单一 k1 模型外，宽高比、"
+            "主点优化或畸变优化必须同时启用共享焦距优化");
     }
     if (!std::isfinite(requestedOptions.minSharedFocalAspectScale) ||
         !std::isfinite(requestedOptions.maxSharedFocalAspectScale) ||

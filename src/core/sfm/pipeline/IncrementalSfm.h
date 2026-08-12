@@ -132,6 +132,8 @@ struct IncrementalSfmOptions
     bool retryUnregisteredAfterFinalBA = true;
     /// 最终 BA 后最多执行的缺口注册轮数。
     int maxFinalRegistrationRetryPasses = 2;
+    /// 近垂直航测主块完成最终 BA 后，是否摘除少量光轴离群相机并基于稳定主网重新 PnP。
+    bool repairParallelAerialPoseOutliers = false;
     // --- 三角化选项 ---
     TriangulatorOptions triangulatorOptions;
 
@@ -162,6 +164,8 @@ struct IncrementalSfmOptions
     bool adaptiveCameraModelFitting = false;
     /// 共享内参自标定时，是否保留进入 BA 前每台相机相对参考层的法向偏移。
     bool preserveCameraLayerDuringSelfCalibration = false;
+    /// 无绝对控制且焦距可信时，是否通过共面航摄层约束把穹顶从外参转移到共享 k1。
+    bool correctUnanchoredAerialDoming = false;
     /// 参考层漂移约束 sigma 相对相机中心总体 RMS 跨度的比例。
     double cameraLayerPreservationSigmaFraction = 0.01;
     /// 参考层漂移约束整体权重；约束只作用于一个弱主成分方向。
@@ -227,6 +231,8 @@ struct IncrementalSfmResult
     int hierarchicalBAAppliedBlocks = 0; ///< 最近一次通过质量门控并写回的块数。
     int hierarchicalBAUpdatedCameras = 0; ///< 最近一次块级写回的核心相机数。
     double hierarchicalBATotalSeconds = 0.0; ///< 最近一次分层 BA 总耗时。
+    int aerialPoseOutliersDetected = 0; ///< 最终航测相机姿态审计发现的离群相机数。
+    int aerialPoseOutliersRepaired = 0; ///< 经主网约束重新 PnP 成功的离群相机数。
 
     // ── 光束法平差统计（最终一轮全局 BA 的结果）──
     double baRmsBefore = 0.0;  ///< 最终 BA 前的平均重投影 RMS（px）
@@ -474,6 +480,8 @@ class IncrementalSfm
     int _lastHierarchicalBAAppliedBlocks = 0;
     int _lastHierarchicalBAUpdatedCameras = 0;
     double _lastHierarchicalBATotalSeconds = 0.0;
+    int _lastAerialPoseOutliersDetected = 0;
+    int _lastAerialPoseOutliersRepaired = 0;
 
     /// 输入匹配在稀疏化后形成的完整多视轨迹。增量注册期间保留其组件身份，
     /// 最终全局 BA 前用于修复被逐像三角化拆散的二视图点网。
@@ -600,7 +608,9 @@ class IncrementalSfm
      * @param imageId  待注册图像 ID
      * @return 成功返回 true
      */
-    bool registerImage(ImageId imageId);
+    bool registerImage(ImageId imageId,
+                       bool preferSequencePrior = false,
+                       bool forceSequenceConsistency = false);
 
     /**
      * @brief 最终全局 BA 后重试仍未注册、且已有序列邻居的影像。
@@ -608,6 +618,9 @@ class IncrementalSfm
      * 仅接受真实 PnP 位姿；成功后重新三角化并再次执行全局 BA。
      */
     int retryUnregisteredImagesAfterFinalBA(int totalImages);
+
+    /// 从高集中度航摄主块中摘除少量姿态离群分支，并以主网三维点重新注册。
+    int repairParallelAerialPoseOutliersAfterFinalBA();
 
     /**
      * @brief 用最近的已注册序列相机辅助连续缺口补位。
@@ -632,7 +645,8 @@ class IncrementalSfm
      */
     bool validateSequencePoseConsistency(ImageId imageId,
                                          const FramePinholeCamera &candidateCamera,
-                                         std::string *reason) const;
+                                         std::string *reason,
+                                         bool force = false) const;
 
     /**
      * @brief 使用已注册的序列相邻相机为 PnP 生成外参初值。

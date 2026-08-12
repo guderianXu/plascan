@@ -98,6 +98,18 @@ class SfmBundleAdjustCoordinator
         int activeCameraCount,
         double opticalAxisConcentration);
 
+    /// 可信焦距的近俯视块联合估计 k1 时持续稳定相机层；明显弯曲的首轮修平，
+    /// 后续轮次保持已经修正的层形状，避免外参与 k1 再次交换低频弯曲。
+    static bool shouldCorrectUnanchoredAerialDoming(
+        bool localOnly,
+        bool hasAbsoluteConstraint,
+        bool completeRegistration,
+        bool hasTrustedFocalPrior,
+        bool refiningRadialK1Only,
+        int activeCameraCount,
+        double opticalAxisConcentration,
+        double cameraCenterNormalSpanRmsRatio);
+
     /// 大型工程周期全局 BA 限制为一轮；小工程最多两轮，最终精化保留配置轮数。
     static int iterativeGlobalBaRoundLimit(int configuredRounds,
                                            bool finalRefinement,

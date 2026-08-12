@@ -221,14 +221,20 @@ void configureSfmOptions(const PreparedAerialTriangulationInput &input,
     }
     options->baOptions.filterMaxReprojError = options->filterMaxReprojError;
 
-    // 不能把进入自标定前的相机层形状当作真值：错误的零畸变初值本身就可能
-    // 已经形成 dome/bowl。保持此正则关闭，任意环拍、立面和自由轨迹均只受
-    // 重投影与镜头参数弱先验约束，不引入无人机/平面场景假设。
+    // 通用的“保留当前相机层”仍关闭，因为零畸变初值可能已经形成 dome/bowl。
+    // 仅当批次元数据给出可信焦距时，最终全局 BA 才允许启用独立的航摄穹顶
+    // 修正：固定焦距、只估计 k1，并把明显弯曲的近俯视相机层约束到共面层。
     options->preserveCameraLayerDuringSelfCalibration = false;
+    options->correctUnanchoredAerialDoming = input.hasTrustedFocalPrior;
+    options->baOptions.hasTrustedSharedFocalPrior = input.hasTrustedFocalPrior;
 
     options->useSequencePoseRecovery = input.useSequencePoseRecovery;
     options->enforceSequencePoseConsistency = input.enforceSequencePoseConsistency;
     options->sequenceLoopClosure = input.sequenceLoopClosure;
+    options->repairParallelAerialPoseOutliers =
+        input.hasTrustedFocalPrior &&
+        input.useSequencePoseRecovery &&
+        !input.sequenceLoopClosure;
     if (input.adaptiveCameraModelFitting)
     {
         options->adaptiveCameraModelFitting = true;
@@ -587,6 +593,13 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
                        sfmResult.hierarchicalBAUpdatedCameras);
     diagnostics.insert(QStringLiteral("hierarchical_ba_total_seconds"),
                        sfmResult.hierarchicalBATotalSeconds);
+    diagnostics.insert(QStringLiteral("aerial_pose_outliers_detected"),
+                       sfmResult.aerialPoseOutliersDetected);
+    diagnostics.insert(QStringLiteral("aerial_pose_outliers_repaired"),
+                       sfmResult.aerialPoseOutliersRepaired);
+    diagnostics.insert(QStringLiteral("aerial_pose_outliers_rejected"),
+                       sfmResult.aerialPoseOutliersDetected -
+                           sfmResult.aerialPoseOutliersRepaired);
     diagnostics.insert(QStringLiteral("ba_refined_intrinsic_count"),
                        sfmResult.baRefinedIntrinsicCount);
     diagnostics.insert(QStringLiteral("ba_adaptive_camera_model_fitting_evaluated"),

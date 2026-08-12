@@ -167,7 +167,7 @@ TEST(AerialTriangulationWorkflowTest, RecordsEffectiveCudaPairConcurrencyAfterMa
               2);
 }
 
-TEST(AerialTriangulationWorkflowTest, SequenceModeOnlyChangesPairSelectionPolicy)
+TEST(AerialTriangulationWorkflowTest, SequenceModeUsesLinearPairWindow)
 {
     QTemporaryDir tempDir;
     auto options = makeBaseOptions(tempDir.path());
@@ -181,11 +181,14 @@ TEST(AerialTriangulationWorkflowTest, SequenceModeOnlyChangesPairSelectionPolicy
     EXPECT_EQ(resolved.tiePointOptions.pairPolicy.mode,
               xjw::matchphotos::PairSelectionMode::Sequence);
     EXPECT_EQ(resolved.tiePointOptions.pairPolicy.sequenceWindow, 6);
-    EXPECT_TRUE(resolved.tiePointOptions.pairPolicy.closeSequenceLoop);
+    EXPECT_FALSE(resolved.tiePointOptions.pairPolicy.closeSequenceLoop);
     EXPECT_FALSE(resolved.tiePointOptions.useReferencePreselection);
     EXPECT_TRUE(resolved.pipelineInput.useSequencePoseRecovery);
     EXPECT_FALSE(resolved.pipelineInput.enforceSequencePoseConsistency);
-    EXPECT_TRUE(resolved.pipelineInput.sequenceLoopClosure);
+    EXPECT_FALSE(resolved.pipelineInput.sequenceLoopClosure);
+    EXPECT_FALSE(resolved.resolvedSettings
+                     .value(QStringLiteral("sequence_loop_closure"))
+                     .toBool());
 }
 
 TEST(AerialTriangulationWorkflowTest, EstimatedPosePreselectionBoundsReferenceAndVocabularyPairs)
@@ -238,6 +241,9 @@ TEST(AerialTriangulationWorkflowTest, EstimatedInwardRingKeepsClosedSequenceGeom
         << "已估位姿仍应按稀疏场景规划配对，而不是退化为纯序列窗口";
     EXPECT_TRUE(resolved.pipelineInput.useSequencePoseRecovery);
     EXPECT_TRUE(resolved.pipelineInput.sequenceLoopClosure);
+    EXPECT_TRUE(resolved.resolvedSettings
+                     .value(QStringLiteral("sequence_loop_closure"))
+                     .toBool());
     EXPECT_EQ(resolved.resolvedSettings.value(QStringLiteral("sequence_geometry_source")).toString(),
               QStringLiteral("estimated_pose_detected"));
     EXPECT_LT(resolved.resolvedSettings

@@ -18,6 +18,7 @@
 
 #include "pipeline/HierarchicalBundleAdjuster.h"
 #include "pipeline/HierarchicalBaBlockSolver.h"
+#include "pipeline/ImageRegistrationEngine.h"
 #include "pipeline/IncrementalSfm.h"
 #include "pipeline/SfmBundleAdjustCoordinator.h"
 #include "reconstruction/SfmReconstruction.h"
@@ -41,6 +42,24 @@ TEST(SfmBundleAdjustCoordinatorPolicyTest, CameraLayerPreservationIsOptIn)
 {
     const IncrementalSfmOptions options;
     EXPECT_FALSE(options.preserveCameraLayerDuringSelfCalibration);
+    EXPECT_FALSE(options.correctUnanchoredAerialDoming);
+}
+
+TEST(SfmBundleAdjustCoordinatorPolicyTest,
+     StabilizesEveryTrustedFocalUnanchoredAerialCalibrationRound)
+{
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldCorrectUnanchoredAerialDoming(
+        false, false, true, true, true, 444, 0.9504, 0.0974));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldCorrectUnanchoredAerialDoming(
+        false, true, true, true, true, 444, 0.9504, 0.0974));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldCorrectUnanchoredAerialDoming(
+        false, false, true, false, true, 444, 0.9504, 0.0974));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldCorrectUnanchoredAerialDoming(
+        false, false, true, true, false, 444, 0.9504, 0.0974));
+    EXPECT_TRUE(SfmBundleAdjustCoordinator::shouldCorrectUnanchoredAerialDoming(
+        false, false, true, true, true, 444, 0.9504, 0.0200));
+    EXPECT_FALSE(SfmBundleAdjustCoordinator::shouldCorrectUnanchoredAerialDoming(
+        false, false, true, true, true, 444, 0.7500, 0.0974));
 }
 
 TEST(SfmBundleAdjustCoordinatorPolicyTest,
@@ -1029,6 +1048,105 @@ TEST(SfmOptionsTest, NewOptionsDefaults)
 
     EXPECT_TRUE(opts.filterNegativeDepth)
         << "Negative depth filtering should be enabled by default";
+    EXPECT_FALSE(opts.repairParallelAerialPoseOutliers)
+        << "Aerial pose repair should only be enabled by the aerial workflow";
+}
+
+TEST(ImageRegistrationEngineTest, DetectsSmallParallelAerialPoseBranch)
+{
+    SfmReconstruction reconstruction;
+    constexpr ImageId imageCount = 32;
+    constexpr double degreesToRadians = 0.0174532925199432957692;
+    for (ImageId imageId = 0; imageId < imageCount; ++imageId)
+    {
+        ImageData image;
+        image.id = imageId;
+        reconstruction.addImage(image);
+
+        FramePinholeCamera camera;
+        camera.setIntrinsics(1000.0, 1000.0, 500.0, 400.0);
+        double angle = 0.0;
+        if (imageId == 2 || imageId == 3)
+        {
+            angle = 28.0 * degreesToRadians;
+        }
+        const double cosine = std::cos(angle);
+        const double sine = std::sin(angle);
+        camera.setPose({cosine, 0.0, sine,
+                        0.0, 1.0, 0.0,
+                        -sine, 0.0, cosine},
+                       {static_cast<double>(imageId), 0.0, 10.0});
+        reconstruction.registerImage(imageId, camera);
+    }
+
+    const std::vector<ImageId> outliers =
+        ImageRegistrationEngine::findParallelAerialPoseOutliers(reconstruction);
+    EXPECT_EQ(outliers, (std::vector<ImageId>{2, 3}));
+}
+
+TEST(ImageRegistrationEngineTest, ExpandsSmoothShouldersAroundStrongPoseOutliers)
+{
+    SfmReconstruction reconstruction;
+    constexpr ImageId imageCount = 32;
+    constexpr double degreesToRadians = 0.0174532925199432957692;
+    for (ImageId imageId = 0; imageId < imageCount; ++imageId)
+    {
+        ImageData image;
+        image.id = imageId;
+        reconstruction.addImage(image);
+
+        double angleDegrees = 0.0;
+        if (imageId == 2 || imageId == 3)
+        {
+            angleDegrees = 28.0;
+        }
+        else if (imageId == 1 || imageId == 4)
+        {
+            angleDegrees = 16.0;
+        }
+        const double angle = angleDegrees * degreesToRadians;
+        const double cosine = std::cos(angle);
+        const double sine = std::sin(angle);
+        FramePinholeCamera camera;
+        camera.setIntrinsics(1000.0, 1000.0, 500.0, 400.0);
+        camera.setPose({cosine, 0.0, sine,
+                        0.0, 1.0, 0.0,
+                        -sine, 0.0, cosine},
+                       {static_cast<double>(imageId), 0.0, 10.0});
+        reconstruction.registerImage(imageId, camera);
+    }
+
+    const std::vector<ImageId> outliers =
+        ImageRegistrationEngine::findParallelAerialPoseOutliers(reconstruction);
+    EXPECT_EQ(outliers, (std::vector<ImageId>{1, 2, 3, 4}));
+}
+
+TEST(ImageRegistrationEngineTest, SkipsNonParallelCameraNetwork)
+{
+    SfmReconstruction reconstruction;
+    constexpr ImageId imageCount = 24;
+    constexpr double pi = 3.14159265358979323846;
+    for (ImageId imageId = 0; imageId < imageCount; ++imageId)
+    {
+        ImageData image;
+        image.id = imageId;
+        reconstruction.addImage(image);
+
+        FramePinholeCamera camera;
+        camera.setIntrinsics(1000.0, 1000.0, 500.0, 400.0);
+        const double angle = 2.0 * pi * static_cast<double>(imageId) /
+            static_cast<double>(imageCount);
+        const double cosine = std::cos(angle);
+        const double sine = std::sin(angle);
+        camera.setPose({cosine, 0.0, sine,
+                        0.0, 1.0, 0.0,
+                        -sine, 0.0, cosine},
+                       {static_cast<double>(imageId), 0.0, 10.0});
+        reconstruction.registerImage(imageId, camera);
+    }
+
+    EXPECT_TRUE(ImageRegistrationEngine::findParallelAerialPoseOutliers(
+        reconstruction).empty());
 }
 
 // ═══════════════════════════════════════════════════════════════

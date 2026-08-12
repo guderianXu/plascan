@@ -309,6 +309,9 @@ struct BAOptions
     /// 是否在径向畸变自标定中继续释放 k2/k3/p1/p2。关闭时仅优化 k1，
     /// 适用于近乎平行的对地航摄块，避免高阶畸变与场景穹顶互相补偿。
     bool refineSharedHighOrderDistortion = true;
+    /// 共享焦距是否来自批次一致的可信 EXIF/固定镜头先验。仅在航摄穹顶保护中
+    /// 允许固定该焦距并单独估计低阶 k1；普通无标定问题仍要求焦距共同参与。
+    bool hasTrustedSharedFocalPrior = false;
     /// 是否使用逐参数共享内参掩码。false 保持上述兼容开关的旧行为；true 时
     /// 兼容开关定义允许的最大模型，本掩码再冻结可靠性不足的单个参数。
     bool useSharedIntrinsicParameterMask = false;

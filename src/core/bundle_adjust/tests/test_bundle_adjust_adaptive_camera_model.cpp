@@ -327,6 +327,47 @@ TEST(BundleAdjustAdaptiveCameraModelTest,
 }
 
 TEST(BundleAdjustAdaptiveCameraModelTest,
+     TrustedFocalWeaklyParallelAerialBlockEstimatesOnlyRadialK1)
+{
+    const std::vector<xjw::FramePinholeCamera> cameras =
+        weaklyParallelAerialCameras();
+    const std::vector<xjw::BATrack> tracks = makeTracks(cameras, aerialPoints());
+    ASSERT_GT(tracks.size(), 100u);
+
+    xjw::BAOptions options;
+    options.refineSharedFocalLength = true;
+    options.refineSharedFocalAspectRatio = true;
+    options.refineSharedPrincipalPoint = true;
+    options.refineSharedRadialDistortion = true;
+    options.refineSharedHighOrderDistortion = true;
+    options.hasTrustedSharedFocalPrior = true;
+
+    const xjw::BAAdaptiveCameraModelAssessment assessment =
+        xjw::assessAdaptiveCameraModel(cameras, tracks, &options);
+
+    ASSERT_TRUE(assessment.valid);
+    EXPECT_GE(assessment.opticalAxisConcentration, 0.90);
+    EXPECT_LT(assessment.opticalAxisConcentration, 0.97);
+    EXPECT_TRUE(assessment.unanchoredParallelAerialGuardApplied);
+    EXPECT_FALSE(enabled(assessment, xjw::BAIntrinsicParameter::FocalLength));
+    EXPECT_TRUE(enabled(assessment, xjw::BAIntrinsicParameter::RadialK1));
+    EXPECT_EQ(xjw::enabledIntrinsicParameterCount(assessment.enabled), 1);
+    EXPECT_EQ(assessment.modelName, "k1");
+    EXPECT_EQ(
+        assessment.reason,
+        "unanchored_parallel_aerial_trusted_focal_k1_doming_correction");
+
+    ASSERT_TRUE(xjw::applyAdaptiveCameraModel(assessment, &options));
+    EXPECT_FALSE(options.refineSharedFocalLength);
+    EXPECT_TRUE(options.refineSharedRadialDistortion);
+    EXPECT_FALSE(options.refineSharedHighOrderDistortion);
+    EXPECT_EQ(
+        xjw::enabledIntrinsicParameterCount(
+            options.sharedIntrinsicParameterMask),
+        1);
+}
+
+TEST(BundleAdjustAdaptiveCameraModelTest,
      ControlledParallelAerialBlockMayEstimateLowOrderDistortion)
 {
     const std::vector<xjw::FramePinholeCamera> cameras = aerialCameras();

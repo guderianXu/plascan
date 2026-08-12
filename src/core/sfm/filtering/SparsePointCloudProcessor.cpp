@@ -46,7 +46,7 @@ double medianValue(std::vector<double> values)
 int filterByMaxReprojError(std::vector<SparsePointCloudPoint> *points,
                            double maxReprojError)
 {
-    if (!points || maxReprojError <= 0.0)
+    if (!points || maxReprojError < 0.0)
     {
         return 0;
     }

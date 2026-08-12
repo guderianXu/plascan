@@ -34,6 +34,145 @@ ImageRegistrationEngine::ImageRegistrationEngine(IncrementalSfm &owner)
 {
 }
 
+std::vector<ImageId> ImageRegistrationEngine::findParallelAerialPoseOutliers(
+    const SfmReconstruction &reconstruction,
+    double minimumAxisConcentration,
+    double minimumAngularDeviationDegrees)
+{
+    const std::vector<ImageId> image_ids = reconstruction.registeredImageIds();
+    if (image_ids.size() < 12)
+    {
+        return {};
+    }
+
+    std::vector<std::array<double, 3>> axes;
+    std::vector<ImageId> valid_ids;
+    axes.reserve(image_ids.size());
+    valid_ids.reserve(image_ids.size());
+    std::array<double, 3> mean_axis{{0.0, 0.0, 0.0}};
+    for (const ImageId image_id : image_ids)
+    {
+        if (!reconstruction.hasCamera(image_id))
+        {
+            continue;
+        }
+        const auto rotation = reconstruction.camera(image_id)
+                                  .normalizedForPositiveDepth()
+                                  .cameraToWorldRotation();
+        std::array<double, 3> axis{{rotation[2], rotation[5], rotation[8]}};
+        const double norm = std::sqrt(
+            axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]);
+        if (!(norm > 1.0e-12) || !std::isfinite(norm))
+        {
+            continue;
+        }
+        for (int component = 0; component < 3; ++component)
+        {
+            axis[component] /= norm;
+            mean_axis[component] += axis[component];
+        }
+        axes.push_back(axis);
+        valid_ids.push_back(image_id);
+    }
+    if (axes.size() < 12)
+    {
+        return {};
+    }
+
+    const double mean_norm = std::sqrt(
+        mean_axis[0] * mean_axis[0] +
+        mean_axis[1] * mean_axis[1] +
+        mean_axis[2] * mean_axis[2]);
+    const double concentration = mean_norm / static_cast<double>(axes.size());
+    if (!std::isfinite(concentration) ||
+        concentration < std::clamp(minimumAxisConcentration, 0.0, 1.0) ||
+        !(mean_norm > 1.0e-12))
+    {
+        return {};
+    }
+    for (double &component : mean_axis)
+    {
+        component /= mean_norm;
+    }
+
+    constexpr double radians_to_degrees = 57.2957795130823208768;
+    std::vector<double> angular_deviations;
+    angular_deviations.reserve(axes.size());
+    for (const auto &axis : axes)
+    {
+        const double dot = std::clamp(
+            axis[0] * mean_axis[0] +
+                axis[1] * mean_axis[1] +
+                axis[2] * mean_axis[2],
+            -1.0,
+            1.0);
+        angular_deviations.push_back(std::acos(dot) * radians_to_degrees);
+    }
+    const double median_deviation = percentile(angular_deviations, 0.5);
+    std::vector<double> absolute_deviations;
+    absolute_deviations.reserve(angular_deviations.size());
+    for (const double deviation : angular_deviations)
+    {
+        absolute_deviations.push_back(std::fabs(deviation - median_deviation));
+    }
+    const double mad = percentile(absolute_deviations, 0.5);
+    const double threshold = std::max(
+        std::max(1.0, minimumAngularDeviationDegrees),
+        median_deviation + 6.0 * std::max(0.5, mad));
+
+    std::unordered_map<ImageId, double> deviation_by_id;
+    deviation_by_id.reserve(valid_ids.size());
+    std::unordered_set<ImageId> outlier_ids;
+    for (std::size_t index = 0; index < valid_ids.size(); ++index)
+    {
+        deviation_by_id.emplace(valid_ids[index], angular_deviations[index]);
+        if (angular_deviations[index] > threshold)
+        {
+            outlier_ids.insert(valid_ids[index]);
+        }
+    }
+
+    // 强离群相机经常不是孤立点，而是一小段内部姿态平滑、整体方向错误的刚性分支。
+    // 只摘除超过强阈值的中心帧，会让它们重新 PnP 时继续以两侧的错误肩部为锚。
+    // 采用滞回阈值沿输入序列扩展，直到回到主航摄方向，再整体摘除并从稳定边界恢复。
+    const double branch_expansion_threshold = std::max(
+        12.0,
+        median_deviation + 3.0 * std::max(0.5, mad));
+    const std::vector<ImageId> strong_outliers(outlier_ids.begin(), outlier_ids.end());
+    for (const ImageId seed_id : strong_outliers)
+    {
+        ImageId candidate_id = seed_id;
+        while (candidate_id > 0)
+        {
+            --candidate_id;
+            const auto deviation_it = deviation_by_id.find(candidate_id);
+            if (deviation_it == deviation_by_id.end() ||
+                deviation_it->second <= branch_expansion_threshold)
+            {
+                break;
+            }
+            outlier_ids.insert(candidate_id);
+        }
+
+        candidate_id = seed_id;
+        while (candidate_id + 1 < reconstruction.numImages())
+        {
+            ++candidate_id;
+            const auto deviation_it = deviation_by_id.find(candidate_id);
+            if (deviation_it == deviation_by_id.end() ||
+                deviation_it->second <= branch_expansion_threshold)
+            {
+                break;
+            }
+            outlier_ids.insert(candidate_id);
+        }
+    }
+
+    std::vector<ImageId> outliers(outlier_ids.begin(), outlier_ids.end());
+    std::sort(outliers.begin(), outliers.end());
+    return outliers;
+}
+
 IncrementalSfmResult ImageRegistrationEngine::run(int totalImages,
                                                   SfmProgressCallback progressCb)
 {
@@ -181,6 +320,7 @@ IncrementalSfmResult IncrementalSfm::runRegistrationFromCurrentInitialization(
     {
         SfmBundleAdjustCoordinator(*this).iterative(true);
         retryUnregisteredImagesAfterFinalBA(totalImages);
+        repairParallelAerialPoseOutliersAfterFinalBA();
 
         // 过滤轨迹长度过短的不可靠三维点
         Triangulator finalTri(*_reconstruction,
@@ -214,6 +354,8 @@ IncrementalSfmResult IncrementalSfm::runRegistrationFromCurrentInitialization(
     result.hierarchicalBAAppliedBlocks = _lastHierarchicalBAAppliedBlocks;
     result.hierarchicalBAUpdatedCameras = _lastHierarchicalBAUpdatedCameras;
     result.hierarchicalBATotalSeconds = _lastHierarchicalBATotalSeconds;
+    result.aerialPoseOutliersDetected = _lastAerialPoseOutliersDetected;
+    result.aerialPoseOutliersRepaired = _lastAerialPoseOutliersRepaired;
 
     if (!_permanentlyFailedImages.empty())
     {
@@ -364,6 +506,155 @@ int IncrementalSfm::retryUnregisteredImagesAfterFinalBA(int totalImages)
     return registeredByRetry;
 }
 
+int IncrementalSfm::repairParallelAerialPoseOutliersAfterFinalBA()
+{
+    _lastAerialPoseOutliersDetected = 0;
+    _lastAerialPoseOutliersRepaired = 0;
+    if (!_sfmOptions.repairParallelAerialPoseOutliers ||
+        !_sfmOptions.correctUnanchoredAerialDoming ||
+        !_sfmOptions.useSequencePoseRecovery ||
+        _sfmOptions.sequenceLoopClosure ||
+        !_reconstruction || _isAborted || _controlNetworkApplied ||
+        _reconstruction->numRegisteredImages() < 32)
+    {
+        return 0;
+    }
+
+    const std::vector<ImageId> outliers =
+        ImageRegistrationEngine::findParallelAerialPoseOutliers(*_reconstruction);
+    const std::size_t maximumOutliers = std::max<std::size_t>(
+        2,
+        static_cast<std::size_t>(std::ceil(
+            static_cast<double>(_reconstruction->numRegisteredImages()) * 0.05)));
+    if (outliers.empty())
+    {
+        return 0;
+    }
+    if (outliers.size() > maximumOutliers)
+    {
+        Logger::instance()->warnf(
+            "[SFM] Parallel-aerial pose audit found %zu/%zu outliers; "
+            "repair skipped because this is not a small isolated branch",
+            outliers.size(),
+            _reconstruction->numRegisteredImages());
+        return 0;
+    }
+
+    _lastAerialPoseOutliersDetected = static_cast<int>(outliers.size());
+    std::ostringstream imageList;
+    for (std::size_t index = 0; index < outliers.size(); ++index)
+    {
+        if (index > 0)
+        {
+            imageList << ',';
+        }
+        imageList << outliers[index];
+        _reconstruction->deregisterImage(outliers[index]);
+    }
+    Logger::instance()->warnf(
+        "[SFM] Parallel-aerial pose audit isolated %zu camera(s): [%s]",
+        outliers.size(),
+        imageList.str().c_str());
+
+    // 删除仅由错误分支支撑的三维点，再让稳定主网单独收敛。仍被主网至少两幅
+    // 影像观测的点会保留，供随后受序列先验约束的 PnP 使用。
+    Triangulator stableTriangulator(*_reconstruction,
+                                    _correspondenceGraph,
+                                    _sfmOptions.baOptions.numThreads);
+    const int removedBranchPoints = stableTriangulator.filterShortTracks(2);
+    Logger::instance()->infof(
+        "[SFM] Parallel-aerial pose repair removed %d branch-only point(s)",
+        removedBranchPoints);
+    SfmBundleAdjustCoordinator(*this).iterative(true);
+    invalidateVisibilityCache();
+
+    std::unordered_set<ImageId> pending(outliers.begin(), outliers.end());
+    for (std::size_t pass = 0; pass < outliers.size() && !pending.empty() && !_isAborted; ++pass)
+    {
+        rebuildVisibilityCache();
+        auto directNeighborCount = [&](ImageId imageId)
+        {
+            int count = 0;
+            if (imageId > 0 && _reconstruction->isRegistered(imageId - 1))
+            {
+                ++count;
+            }
+            if (imageId + 1 < _reconstruction->numImages() &&
+                _reconstruction->isRegistered(imageId + 1))
+            {
+                ++count;
+            }
+            return count;
+        };
+
+        int registeredThisPass = 0;
+        std::unordered_set<ImageId> attemptedThisPass;
+        while (!_isAborted)
+        {
+            std::vector<ImageId> candidates;
+            for (const ImageId imageId : pending)
+            {
+                if (attemptedThisPass.count(imageId) == 0 &&
+                    directNeighborCount(imageId) > 0)
+                {
+                    candidates.push_back(imageId);
+                }
+            }
+            if (candidates.empty())
+            {
+                break;
+            }
+            std::stable_sort(candidates.begin(), candidates.end(), [&](ImageId lhs, ImageId rhs)
+            {
+                const int lhsNeighbors = directNeighborCount(lhs);
+                const int rhsNeighbors = directNeighborCount(rhs);
+                if (lhsNeighbors != rhsNeighbors)
+                {
+                    return lhsNeighbors > rhsNeighbors;
+                }
+                return _visibilityCache[lhs] > _visibilityCache[rhs];
+            });
+
+            const ImageId imageId = candidates.front();
+            attemptedThisPass.insert(imageId);
+            if (!registerImage(imageId, true, true))
+            {
+                continue;
+            }
+
+            const std::vector<Point3DId> previousPointIds =
+                _reconstruction->image(imageId).point3DIds;
+            Triangulator triangulator(*_reconstruction,
+                                      _correspondenceGraph,
+                                      _sfmOptions.baOptions.numThreads);
+            triangulator.triangulateImage(imageId, _sfmOptions.triangulatorOptions);
+            updateVisibilityCacheForImage(imageId, previousPointIds);
+            pending.erase(imageId);
+            ++registeredThisPass;
+            Logger::instance()->infof(
+                "[SFM] Parallel-aerial pose repair registered image %u (%zu remaining)",
+                imageId,
+                pending.size());
+        }
+
+        if (registeredThisPass == 0)
+        {
+            break;
+        }
+        SfmBundleAdjustCoordinator(*this).iterative(true);
+        invalidateVisibilityCache();
+    }
+
+    _lastAerialPoseOutliersRepaired =
+        _lastAerialPoseOutliersDetected - static_cast<int>(pending.size());
+    Logger::instance()->infof(
+        "[SFM] Parallel-aerial pose repair completed: detected=%d repaired=%d rejected=%zu",
+        _lastAerialPoseOutliersDetected,
+        _lastAerialPoseOutliersRepaired,
+        pending.size());
+    return _lastAerialPoseOutliersRepaired;
+}
+
 void IncrementalSfm::resetForInitialPairTrial(const SfmReconstruction &baseReconstruction)
 {
     // 多初始像对评估时，每个 seed 必须重置到同一份输入影像/匹配，
@@ -420,6 +711,8 @@ void IncrementalSfm::resetForInitialPairTrial(const SfmReconstruction &baseRecon
     _lastHierarchicalBAAppliedBlocks = 0;
     _lastHierarchicalBAUpdatedCameras = 0;
     _lastHierarchicalBATotalSeconds = 0.0;
+    _lastAerialPoseOutliersDetected = 0;
+    _lastAerialPoseOutliersRepaired = 0;
     _finalTrackConsolidationAttempted = false;
     _controlNetworkApplied = false;
     _controlNetworkResult = {};
@@ -495,7 +788,9 @@ ImageId IncrementalSfm::selectNextImage() const
 // 内部：注册图像（PnP）
 // ============================================================
 
-bool IncrementalSfm::registerImage(ImageId imageId)
+bool IncrementalSfm::registerImage(ImageId imageId,
+                                   bool preferSequencePrior,
+                                   bool forceSequenceConsistency)
 {
     // 加载相机内参
     FramePinholeCamera cam;
@@ -561,21 +856,20 @@ bool IncrementalSfm::registerImage(ImageId imageId)
         return false;
     }
 
-    // 先执行不带运动模型的标准 PnP。照片序列外推对非等速航带只是弱先验，
-    // 若一开始就用它预过滤观测，会把原本可由全局 PnP 注册的相机排除。
     PnpOptions pnpOptions = _sfmOptions.pnpOptions;
     pnpOptions.ransacSeed = opencv_compat::stableRansacSeed(
         imageId,
         static_cast<std::uint32_t>(_reconstruction->numRegisteredImages()),
         static_cast<std::uint32_t>(worldPts.size()));
-    PnpResult pnpResult = PnpSolver::solveWithCamera(worldPts, imagePts, cam, pnpOptions);
     bool usedSequenceRecovery = false;
-
-    // 标准 PnP 失败后，才使用相邻序号相机插值/外推的初值进行一次确定性恢复。
-    // 恢复仍必须通过真实 3D-2D 重投影内点门槛，不会直接接受外推位姿。
-    FramePinholeCamera sequenceGuessCamera = cam;
-    if (!pnpResult.success && makeSequenceInitialPoseGuess(imageId, &sequenceGuessCamera))
+    auto solveSequenceRecovery = [&]()
     {
+        FramePinholeCamera sequenceGuessCamera = cam;
+        if (!makeSequenceInitialPoseGuess(imageId, &sequenceGuessCamera))
+        {
+            return PnpResult{};
+        }
+        usedSequenceRecovery = true;
         PnpOptions recoveryOptions = pnpOptions;
         recoveryOptions.useInitialPose = true;
         recoveryOptions.initialCameraToWorldRotation = sequenceGuessCamera.cameraToWorldRotation();
@@ -630,9 +924,29 @@ bool IncrementalSfm::registerImage(ImageId imageId)
                 std::max(recoveryOptions.minNumInliers,
                          sequenceMinInliers);
         }
-        pnpResult = PnpSolver::solveWithCamera(
-            worldPts, imagePts, cam, recoveryOptions);
-        usedSequenceRecovery = true;
+        return PnpSolver::solveWithCamera(worldPts, imagePts, cam, recoveryOptions);
+    };
+
+    PnpResult pnpResult;
+    if (preferSequencePrior)
+    {
+        // 最终离群修复时主网已经稳定。先用序列预测过滤远距离重复纹理形成的
+        // 伪 2D-3D 对应；若预测不适用于真实转弯，再退回标准全局 PnP。
+        pnpResult = solveSequenceRecovery();
+        if (!pnpResult.success)
+        {
+            pnpResult = PnpSolver::solveWithCamera(worldPts, imagePts, cam, pnpOptions);
+        }
+    }
+    else
+    {
+        // 常规增量阶段仍先执行不带运动模型的标准 PnP，避免序列外推妨碍
+        // 非等速航带或真实转弯。标准解失败后才进入确定性序列恢复。
+        pnpResult = PnpSolver::solveWithCamera(worldPts, imagePts, cam, pnpOptions);
+        if (!pnpResult.success)
+        {
+            pnpResult = solveSequenceRecovery();
+        }
     }
     if (!pnpResult.success)
     {
@@ -666,7 +980,8 @@ bool IncrementalSfm::registerImage(ImageId imageId)
     // 应用 PnP 结果更新相机外参
     cam.setPose(pnpResult.R, pnpResult.C);
     std::string sequenceConsistencyReason;
-    if (!validateSequencePoseConsistency(imageId, cam, &sequenceConsistencyReason))
+    if (!validateSequencePoseConsistency(
+            imageId, cam, &sequenceConsistencyReason, forceSequenceConsistency))
     {
         _lastErrorMessage = "sequence distance check failed: " + sequenceConsistencyReason;
         Logger::instance()->warnf("[SFM] Image %u sequence distance rejected: %s",
@@ -827,9 +1142,10 @@ double IncrementalSfm::registeredSequenceAdjacentDistanceMedian(ImageId excluded
 
 bool IncrementalSfm::validateSequencePoseConsistency(ImageId imageId,
                                                      const FramePinholeCamera &candidateCamera,
-                                                     std::string *reason) const
+                                                     std::string *reason,
+                                                     bool force) const
 {
-    if (!_sfmOptions.enforceSequencePoseConsistency || !_reconstruction ||
+    if ((!_sfmOptions.enforceSequencePoseConsistency && !force) || !_reconstruction ||
         _reconstruction->numRegisteredImages() < 3)
     {
         return true;
@@ -873,6 +1189,89 @@ bool IncrementalSfm::validateSequencePoseConsistency(ImageId imageId,
             *reason = "no registered sequence neighbor";
         }
         return false;
+    }
+
+    if (force)
+    {
+        const auto candidateRotation = candidateCamera.normalizedForPositiveDepth()
+                                           .cameraToWorldRotation();
+        const std::array<double, 3> candidateAxis{{
+            candidateRotation[2], candidateRotation[5], candidateRotation[8]}};
+        constexpr double radiansToDegrees = 57.2957795130823208768;
+        constexpr double maximumNeighborAxisAngleDegrees = 15.0;
+        std::array<double, 3> main_axis{{0.0, 0.0, 0.0}};
+        int main_axis_samples = 0;
+        for (const ImageId registered_id : _reconstruction->registeredImageIds())
+        {
+            if (!_reconstruction->hasCamera(registered_id))
+            {
+                continue;
+            }
+            const auto rotation = _reconstruction->camera(registered_id)
+                                      .normalizedForPositiveDepth()
+                                      .cameraToWorldRotation();
+            main_axis[0] += rotation[2];
+            main_axis[1] += rotation[5];
+            main_axis[2] += rotation[8];
+            ++main_axis_samples;
+        }
+        const double main_axis_norm = std::sqrt(
+            main_axis[0] * main_axis[0] +
+            main_axis[1] * main_axis[1] +
+            main_axis[2] * main_axis[2]);
+        if (main_axis_samples >= 12 && main_axis_norm > 1.0e-12 &&
+            std::isfinite(main_axis_norm))
+        {
+            for (double &component : main_axis)
+            {
+                component /= main_axis_norm;
+            }
+            const double dot = std::clamp(
+                candidateAxis[0] * main_axis[0] +
+                    candidateAxis[1] * main_axis[1] +
+                    candidateAxis[2] * main_axis[2],
+                -1.0,
+                1.0);
+            const double angle = std::acos(dot) * radiansToDegrees;
+            if (!std::isfinite(angle) || angle > maximumNeighborAxisAngleDegrees)
+            {
+                if (reason)
+                {
+                    std::ostringstream oss;
+                    oss << "image=" << imageId
+                        << ", mainOpticalAxisAngle=" << angle
+                        << ", maximum=" << maximumNeighborAxisAngleDegrees;
+                    *reason = oss.str();
+                }
+                return false;
+            }
+        }
+        for (const ImageId neighborId : registeredNeighbors)
+        {
+            const auto neighborRotation = _reconstruction->camera(neighborId)
+                                              .normalizedForPositiveDepth()
+                                              .cameraToWorldRotation();
+            const double dot = std::clamp(
+                candidateAxis[0] * neighborRotation[2] +
+                    candidateAxis[1] * neighborRotation[5] +
+                    candidateAxis[2] * neighborRotation[8],
+                -1.0,
+                1.0);
+            const double angle = std::acos(dot) * radiansToDegrees;
+            if (!std::isfinite(angle) || angle > maximumNeighborAxisAngleDegrees)
+            {
+                if (reason)
+                {
+                    std::ostringstream oss;
+                    oss << "image=" << imageId
+                        << ", neighbor=" << neighborId
+                        << ", opticalAxisAngle=" << angle
+                        << ", maximum=" << maximumNeighborAxisAngleDegrees;
+                    *reason = oss.str();
+                }
+                return false;
+            }
+        }
     }
 
     const double medianDistance = registeredSequenceAdjacentDistanceMedian(imageId);

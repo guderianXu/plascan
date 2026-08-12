@@ -375,12 +375,16 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
         ? detectEstimatedClosedSequence(options.images, options.referenceCameras)
         : ClosedSequenceEvidence{};
     const bool usesSequenceGeometry = usesPhotoSequence || estimatedSequence.detected;
+    const bool usesClosedSequenceGeometry = estimatedSequence.detected;
     // “照片序列”提供稳定的相邻位姿插值/外推初值，但不代表相机中心必须满足等距轨迹。
     // 位姿恢复与硬距离门控必须解耦：前者帮助连续航带跨过弱纹理帧，后者在环拍、变焦
     // 或物体旋转序列上反而可能误拒绝正确 PnP，因此保持默认关闭。
     pipeline.useSequencePoseRecovery = usesSequenceGeometry;
     pipeline.enforceSequencePoseConsistency = false;
-    pipeline.sequenceLoopClosure = usesSequenceGeometry;
+    // “照片序列”只说明输入顺序可靠，不说明最后一张与第一张相邻。把普通航带
+    // 强制闭环会在序列两端制造高优先级伪边，使首尾几张照片形成低残差但错误的
+    // 刚性分支。只有已有位姿明确检测到环拍时才启用首尾闭环。
+    pipeline.sequenceLoopClosure = usesClosedSequenceGeometry;
     pipeline.useInitialPairHint = options.useInitialPairHint;
     pipeline.initialImageId1 = options.initialImageId1;
     pipeline.initialImageId2 = options.initialImageId2;
@@ -446,8 +450,8 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     // 只有完全相同的蒙版输入才能命中，因此无需再无条件禁用安全缓存复用。
     tieOptions.reuseExistingMatches = options.reuseExistingMatches;
 
-    // 第五阶段：解析 pair 预选。无参考相机时不得启用位姿参考预选；照片序列
-    // 使用索引窗口和首尾闭环，不伪造参考相机文件。
+    // 第五阶段：解析 pair 预选。无参考相机时不得启用位姿参考预选；普通照片
+    // 序列只使用线性索引窗口，不把首尾伪装成相邻影像。
     const QString referenceMode = normalizedToken(options.referenceMode,
                                                    QStringLiteral("source_code"));
     tieOptions.referencePreselectionGeometry = referenceMode == QStringLiteral("estimated")
@@ -461,7 +465,7 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     {
         tieOptions.pairPolicy.mode = matchphotos::PairSelectionMode::Sequence;
         tieOptions.pairPolicy.sequenceWindow = sequenceWindowForQuality(options.quality);
-        tieOptions.pairPolicy.closeSequenceLoop = true;
+        tieOptions.pairPolicy.closeSequenceLoop = false;
         tieOptions.useReferencePreselection = false;
         pairPlanningMode = QStringLiteral("sequence");
     }

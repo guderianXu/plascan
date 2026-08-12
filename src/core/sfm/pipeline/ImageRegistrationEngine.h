@@ -25,6 +25,17 @@ class ImageRegistrationEngine
      */
     IncrementalSfmResult run(int totalImages, SfmProgressCallback progressCb);
 
+    /**
+     * @brief 查找近垂直、高光轴集中度相机块中的小规模姿态离群项。
+     *
+     * 该判据只看相机光轴，不把低重投影误差误当成全局位姿正确性；调用方还需
+     * 结合序列模式、绝对约束和离群比例决定是否执行自动修复。
+     */
+    static std::vector<ImageId> findParallelAerialPoseOutliers(
+        const SfmReconstruction &reconstruction,
+        double minimumAxisConcentration = 0.98,
+        double minimumAngularDeviationDegrees = 20.0);
+
   private:
     IncrementalSfm &_owner;
 };
