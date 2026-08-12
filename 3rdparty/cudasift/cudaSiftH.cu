@@ -68,10 +68,10 @@ float *AllocSiftTempMemory(int width, int height, int numOctaves, bool scaleUp)
   return memoryTmp;
 }
 
-void FreeSiftTempMemory(float *memoryTmp)
+void FreeSiftTempMemory(float *memoryTmp) noexcept
 {
   if (memoryTmp)
-    safeCall(cudaFree(memoryTmp));
+    cleanupCall(cudaFree(memoryTmp));
 }
 
 void ExtractSift(SiftData &siftData, CudaImage &img, int numOctaves, double initBlur, float thresh, float lowestScale, bool scaleUp, float *tempMemory) 
@@ -265,13 +265,15 @@ void InitSiftData(SiftData &data, int num, bool host, bool dev)
 #endif
 }
 
-void FreeSiftData(SiftData &data)
+void FreeSiftData(SiftData &data) noexcept
 {
 #ifdef MANAGEDMEM
-  safeCall(cudaFree(data.m_data));
+  if (data.m_data!=NULL)
+    cleanupCall(cudaFree(data.m_data));
+  data.m_data = NULL;
 #else
   if (data.d_data!=NULL)
-    safeCall(cudaFree(data.d_data));
+    cleanupCall(cudaFree(data.d_data));
   data.d_data = NULL;
   if (data.h_data!=NULL)
     free(data.h_data);

@@ -322,7 +322,7 @@ __global__ void FindMaxCorr10(SiftPoint *sift1, SiftPoint *sift2, int numPts1, i
   int idx = ty*M7W + tx;
   int ix = idx%(M7W/NRX);
   int iy = idx/(M7W/NRX);
-  for (int bp2=0;bp2<numPts2 - M7H + 1;bp2+=M7H) {
+  for (int bp2=0;bp2<numPts2;bp2+=M7H) {
     for (int j=ty;j<M7H;j+=M7H/M7R) {      
       int p2 = min(bp2 + j, numPts2 - 1);
       for (int d=tx;d<NDIM/4;d+=M7W)
@@ -351,10 +351,13 @@ __global__ void FindMaxCorr10(SiftPoint *sift1, SiftPoint *sift2, int numPts1, i
       }
       for (int dy=0;dy<M7R;dy++) {
 	for (int i=0;i<NRX;i++) {
-	  if (score[dy][i]>max_score[i]) {
+	  const int candidate = bp2 + M7R*iy + dy;
+	  if (candidate>=numPts2)
+	    continue;
+	  if (index[i]<0 || score[dy][i]>max_score[i]) {
 	    sec_score[i] = max_score[i];
 	    max_score[i] = score[dy][i];     
-	    index[i] = min(bp2 + M7R*iy + dy, numPts2-1);
+	    index[i] = candidate;
 	  } else if (score[dy][i]>sec_score[i])
 	    sec_score[i] = score[dy][i]; 
 	}
@@ -375,7 +378,7 @@ __global__ void FindMaxCorr10(SiftPoint *sift1, SiftPoint *sift2, int numPts1, i
   }
   __syncthreads();
   
-  if (ty==0) {
+  if (ty==0 && bp1 + tx<numPts1) {
     float max_score = scores1[tx];
     float sec_score = scores2[tx];
     int index = indices[tx];

@@ -138,7 +138,7 @@ struct SiftDataGuard
         InitSiftData(data, maxPoints, true, true);
     }
 
-    ~SiftDataGuard()
+    ~SiftDataGuard() noexcept
     {
         FreeSiftData(data);
     }
@@ -155,7 +155,7 @@ struct TempMemoryGuard
     {
     }
 
-    ~TempMemoryGuard()
+    ~TempMemoryGuard() noexcept
     {
         FreeSiftTempMemory(data);
     }

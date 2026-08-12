@@ -137,7 +137,9 @@ VocabularyOverlapConfig makeVocabularyConfig(const MatchPhotosOptions &options,
     config.connectComponents = true;
     config.useSequenceFallback = true;
     config.sequenceWindow = std::max(1, options.pairPolicy.sequenceWindow);
-    config.closeSequenceLoop = true;
+    // 通用预选的序列兜底必须沿用调用方对线性/闭环序列的声明。无条件闭环会
+    // 把航带末端与开头加入词汇候选，形成外观自洽但空间错误的首尾分支。
+    config.closeSequenceLoop = options.pairPolicy.closeSequenceLoop;
     config.geometryCheck = false;
     config.useCuda = options.device == ComputeDevice::Cuda ||
         (options.device == ComputeDevice::Auto && plan.preferCuda);

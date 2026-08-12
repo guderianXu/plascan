@@ -1,14 +1,49 @@
 #include "cuda_sift/CudaSiftMatchFilter.h"
 #include "cuda_sift/CudaSiftAlgorithm.h"
+#include "sift/SiftFeatureExtractor.h"
 
 #include <gtest/gtest.h>
 
+#include <cmath>
+#include <cstdint>
 #include <limits>
 
 namespace xjw::image_matching
 {
 namespace
 {
+
+FeatureSet makeCudaSiftFeatures(int count)
+{
+    FeatureSet features;
+    features.imageWidth = 1024;
+    features.imageHeight = 1024;
+    features.sourceAlgorithm = "sift";
+    features.keypoints.reserve(static_cast<std::size_t>(count));
+    features.scores.assign(static_cast<std::size_t>(count), 1.0f);
+    features.descriptors = cv::Mat::zeros(count, 128, CV_32F);
+    for (int index = 0; index < count; ++index)
+    {
+        features.keypoints.emplace_back(static_cast<float>(index % 1024),
+                                        static_cast<float>(index / 1024),
+                                        1.0f);
+        float *descriptor = features.descriptors.ptr<float>(index);
+        std::uint32_t state = static_cast<std::uint32_t>(index + 1);
+        float squaredNorm = 0.0f;
+        for (int dimension = 0; dimension < 128; ++dimension)
+        {
+            state = state * 1664525U + 1013904223U;
+            descriptor[dimension] = static_cast<float>((state >> 8U) & 0xffffU) / 65535.0f;
+            squaredNorm += descriptor[dimension] * descriptor[dimension];
+        }
+        const float inverseNorm = 1.0f / std::sqrt(squaredNorm);
+        for (int dimension = 0; dimension < 128; ++dimension)
+        {
+            descriptor[dimension] *= inverseNorm;
+        }
+    }
+    return features;
+}
 
 TEST(CudaSiftMatchFilterTest, KeepsOnlyMutualMatchesAboveConfidenceThreshold)
 {
@@ -93,6 +128,28 @@ TEST(CudaSiftMatchFilterTest, CpuBackendMatchesNormalizedSiftDescriptors)
     ASSERT_EQ(result.cvMatches.size(), 2U);
     EXPECT_EQ(result.matches0[0], 1);
     EXPECT_EQ(result.matches0[1], 0);
+}
+
+TEST(CudaSiftMatchFilterTest, CudaBackendHandlesPartialQueryAndCandidateTiles)
+{
+    if (!SiftFeatureExtractor::isCudaAvailable(0))
+    {
+        GTEST_SKIP() << "CUDA SIFT device is unavailable";
+    }
+
+    ImageMatchingRuntimeConfig config;
+    config.cudaDevice = 0;
+    config.forceCpuSift = false;
+    config.allowCpuSiftFallback = false;
+    config.matchThreshold = 0.15f;
+    CudaSiftAlgorithm algorithm(config);
+
+    const MatchResult result = algorithm.matchFeatures(
+        makeCudaSiftFeatures(607), makeCudaSiftFeatures(531));
+
+    EXPECT_EQ(result.matches0.size(), 607U);
+    EXPECT_EQ(result.matchingScores0.size(), 607U);
+    EXPECT_EQ(result.numMatches, 531);
 }
 
 } // namespace

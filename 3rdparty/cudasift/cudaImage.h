@@ -16,7 +16,7 @@ public:
   bool h_internalAlloc;
 public:
   CudaImage();
-  ~CudaImage();
+  ~CudaImage() noexcept;
   void Allocate(int width, int height, int pitch, bool withHost, float *devMem = NULL, float *hostMem = NULL);
   double Download();
   double Readback();

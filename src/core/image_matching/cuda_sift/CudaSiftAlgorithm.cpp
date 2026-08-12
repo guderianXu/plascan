@@ -73,7 +73,7 @@ public:
 #endif
     }
 
-    ~SiftDataBuffer()
+    ~SiftDataBuffer() noexcept
     {
         FreeSiftData(_data);
     }

@@ -39,16 +39,16 @@ CudaImage::CudaImage() :
 
 }
 
-CudaImage::~CudaImage()
+CudaImage::~CudaImage() noexcept
 {
   if (d_internalAlloc && d_data!=NULL) 
-    safeCall(cudaFree(d_data));
+    cleanupCall(cudaFree(d_data));
   d_data = NULL;
   if (h_internalAlloc && h_data!=NULL) 
     free(h_data);
   h_data = NULL;
   if (t_data!=NULL) 
-    safeCall(cudaFreeArray((cudaArray *)t_data));
+    cleanupCall(cudaFreeArray((cudaArray *)t_data));
   t_data = NULL;
 }
   

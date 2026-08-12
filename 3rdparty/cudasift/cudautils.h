@@ -11,6 +11,7 @@
 #endif
 
 #define safeCall(err)       __safeCall(err, __FILE__, __LINE__)
+#define cleanupCall(err)    __cleanupCall(err, __FILE__, __LINE__)
 #define safeThreadSync()    __safeThreadSync(__FILE__, __LINE__)
 #define checkMsg(msg)       __checkMsg(msg, __FILE__, __LINE__)
 
@@ -19,6 +20,14 @@ inline void __safeCall(cudaError err, const char *file, const int line)
   if (cudaSuccess != err) {
     throw std::runtime_error(std::string("CudaSift runtime API error in file <") + file + ">, line " +
                              std::to_string(line) + ": " + cudaGetErrorString(err));
+  }
+}
+
+inline void __cleanupCall(cudaError err, const char *file, const int line) noexcept
+{
+  if (cudaSuccess != err) {
+    std::fprintf(stderr, "CudaSift cleanup error in file <%s>, line %d: %s\n",
+                 file, line, cudaGetErrorString(err));
   }
 }
 
